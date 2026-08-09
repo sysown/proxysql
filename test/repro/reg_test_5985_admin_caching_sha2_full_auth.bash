@@ -54,31 +54,41 @@ set -uo pipefail
 WORKSPACE="${WORKSPACE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 INFRA_ID="${INFRA_ID:-dev-$USER}"
 TAP_GROUP="${TAP_GROUP:-no-infra-g1}"
-COLD_START="${COLD_START:-0}"
+COLD_START="-e"
+export WORKSPACE INFRA_ID TAP_GROUP
 
 CTR="proxysql.${INFRA_ID}"
 DATADIR="${WORKSPACE}/ci_infra_logs/${INFRA_ID}/proxysql"
 USR='cs2adm'
 PW='secret'
-BASE_CREDS='admin:admin;radmin:radmin;cluster1:secret1pass'
+LOAD_MYSQL_VARS='LOAD MYSQL VARIABLES TO RUNTIME;'
 
 PASS=0; FAIL=0
-ok()  { PASS=$((PASS+1)); printf '  ok %d - %s\n'     "$((PASS+FAIL))" "$1"; }
-nok() { FAIL=$((FAIL+1)); printf '  NOT OK %d - %s\n' "$((PASS+FAIL))" "$1"; }
-hdr() { printf '\n== %s ==\n' "$1"; }
-die() { printf '\nFATAL: %s\n' "$1" >&2; exit 2; }
+ok()  { local msg="$1"; PASS=$((PASS+1)); printf '  ok %d - %s\n'     "$((PASS+FAIL))" "$msg"; return 0; }
+nok() { local msg="$1"; FAIL=$((FAIL+1)); printf '  NOT OK %d - %s\n' "$((PASS+FAIL))" "$msg"; return 0; }
+hdr() { local msg="$1"; printf '\n== %s ==\n' "$msg"; return 0; }
+die() { local msg="$1"; printf '\nFATAL: %s\n' "$msg" >&2; exit 2; }
 
 IP=''
-adm() { mysql -h"$IP" -P6032 -uradmin -pradmin --protocol=TCP -NBe "$1" 2>/dev/null; }
-sha2cached() { adm "SELECT Variable_Value FROM stats_mysql_global WHERE Variable_Name='Client_Connections_sha2cached';"; }
+adm() {
+	local sql="$1"
+	mysql -h"$IP" -P6032 -uradmin -pradmin --protocol=TCP -NBe "$sql" 2>/dev/null
+	return $?
+}
+sha2cached() {
+	adm "SELECT Variable_Value FROM stats_mysql_global WHERE Variable_Name='Client_Connections_sha2cached';"
+	return $?
+}
 login() {  # login <user> <pass> <ssl-mode> -> 0 on success
-	mysql -h"$IP" -P6032 -u"$1" -p"$2" --protocol=TCP --ssl-mode="$3" -NBe "SELECT 1;" >/dev/null 2>&1
+	local user="$1" pass="$2" ssl_mode="$3"
+	mysql -h"$IP" -P6032 -u"$user" -p"$pass" --protocol=TCP --ssl-mode="$ssl_mode" -NBe "SELECT 1;" >/dev/null 2>&1
+	return $?
 }
 
 # ------------------------------------------------------------- preflight ---
 command -v docker >/dev/null || die "docker not found"
 command -v mysql  >/dev/null || die "mysql client not found"
-[ -x "${WORKSPACE}/src/proxysql" ] || die "no binary at ${WORKSPACE}/src/proxysql -- build it first"
+[[ -x "${WORKSPACE}/src/proxysql" ]] || die "no binary at ${WORKSPACE}/src/proxysql -- build it first"
 "${WORKSPACE}/src/proxysql" --version 2>&1 | grep -q '_DEBUG' \
 	|| die "${WORKSPACE}/src/proxysql is not a DEBUG build"
 
@@ -87,26 +97,23 @@ command -v mysql  >/dev/null || die "mysql client not found"
 # succeeded while Client_Connections_sha2cached was still 0. If the cache is warm
 # the run is aborted rather than reporting a meaningless pass -- see the guard
 # immediately after the instance is up.
-if [ "$COLD_START" = "1" ]; then
+if [[ "$COLD_START" = "1" ]]; then
 	hdr "Cold start: destroying and recreating ProxySQL for INFRA_ID=${INFRA_ID}"
-	WORKSPACE="$WORKSPACE" INFRA_ID="$INFRA_ID" TAP_GROUP="$TAP_GROUP" \
-		"${WORKSPACE}/test/infra/control/stop-proxysql-isolated.bash" >/dev/null 2>&1
+	"${WORKSPACE}/test/infra/control/stop-proxysql-isolated.bash" >/dev/null 2>&1
 	rm -f "${DATADIR}"/proxysql.db "${DATADIR}"/proxysql_debug.db \
 	      "${DATADIR}"/proxysql_stats.db "${DATADIR}"/sqlite3server.db 2>/dev/null
 	docker ps -a --filter "name=^${CTR}$" --format '{{.Names}}' | grep -q . \
 		&& die "container ${CTR} still present after stop"
-	WORKSPACE="$WORKSPACE" INFRA_ID="$INFRA_ID" TAP_GROUP="$TAP_GROUP" \
-		"${WORKSPACE}/test/infra/control/start-proxysql-isolated.bash" >/dev/null 2>&1 \
+	"${WORKSPACE}/test/infra/control/start-proxysql-isolated.bash" >/dev/null 2>&1 \
 		|| die "start-proxysql-isolated.bash failed"
 else
 	hdr "Using the existing ProxySQL instance (set COLD_START=1 to recreate it)"
-	WORKSPACE="$WORKSPACE" INFRA_ID="$INFRA_ID" TAP_GROUP="$TAP_GROUP" \
-		"${WORKSPACE}/test/infra/control/ensure-infras.bash" >/dev/null 2>&1 \
+	"${WORKSPACE}/test/infra/control/ensure-infras.bash" >/dev/null 2>&1 \
 		|| die "ensure-infras.bash failed"
 fi
 
 IP="$(docker inspect "$CTR" --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null)"
-[ -n "$IP" ] || die "could not determine IP of ${CTR}"
+[[ -n "$IP" ]] || die "could not determine IP of ${CTR}"
 echo "  ${CTR} at ${IP} -- $(adm 'SELECT @@admin-version;')"
 
 # Guard against testing a STALE binary. The container bind-mounts
@@ -119,7 +126,7 @@ echo "  ${CTR} at ${IP} -- $(adm 'SELECT @@admin-version;')"
 BIN_MTIME="$(stat -c %Y "${WORKSPACE}/src/proxysql" 2>/dev/null || echo 0)"
 CTR_STARTED="$(docker inspect -f '{{.State.StartedAt}}' "$CTR" 2>/dev/null)"
 CTR_EPOCH="$(date -d "$CTR_STARTED" +%s 2>/dev/null || echo 0)"
-if [ "$BIN_MTIME" -gt "$CTR_EPOCH" ] 2>/dev/null; then
+if [[ "$BIN_MTIME" -gt "$CTR_EPOCH" ]] 2>/dev/null; then
 	die "the running ProxySQL container predates ${WORKSPACE}/src/proxysql, so it is
        NOT running the binary you just built. Re-run with COLD_START=1, or refresh
        the container with:
@@ -129,25 +136,35 @@ fi
 
 # Hard requirement, not an assertion: without a cold cache the central claim
 # cannot be tested at all, so refuse to run rather than emit a false pass.
-if [ "$(sha2cached)" != "0" ]; then
+if [[ "$(sha2cached)" != "0" ]]; then
 	die "Client_Connections_sha2cached is '$(sha2cached)', not 0: the cleartext cache is
        already warm, so a successful login here would prove nothing. Re-run with
        COLD_START=1 to recreate the instance."
 fi
 
+# Capture the instance's ACTUAL pre-existing values so the EXIT handler can put
+# back exactly what was there. This script appends a credential to
+# 'admin-admin_credentials' and switches the default authentication plugin;
+# restoring hardcoded defaults instead would discard whatever the shared instance
+# was configured with -- see the "Restore any global state that was changed" rule
+# in test/repro/README.md.
+ORIG_ADMIN_CREDS="$(adm 'SELECT @@admin-admin_credentials;')"
+ORIG_AUTH_PLUGIN="$(adm 'SELECT @@mysql-default_authentication_plugin;')"
+
 restore() {
-	adm "UPDATE global_variables SET variable_value='${BASE_CREDS}' WHERE variable_name='admin-admin_credentials';
+	adm "UPDATE global_variables SET variable_value='${ORIG_ADMIN_CREDS}' WHERE variable_name='admin-admin_credentials';
 	     LOAD ADMIN VARIABLES TO RUNTIME;
-	     UPDATE global_variables SET variable_value='mysql_native_password' WHERE variable_name='mysql-default_authentication_plugin';
-	     LOAD MYSQL VARIABLES TO RUNTIME;" >/dev/null
+	     UPDATE global_variables SET variable_value='${ORIG_AUTH_PLUGIN}' WHERE variable_name='mysql-default_authentication_plugin';
+	     ${LOAD_MYSQL_VARS}" >/dev/null
+	return 0
 }
 trap restore EXIT
 
 hdr "Preconditions"
-[ "$(adm 'SELECT count(*) FROM runtime_mysql_users;')" = "0" ] \
+[[ "$(adm 'SELECT count(*) FROM runtime_mysql_users;')" = "0" ]] \
 	&& ok "no mysql_users rows (Finding 1 cannot interfere)" \
 	|| nok "mysql_users is not empty -- result would be confounded"
-[ "$(sha2cached)" = "0" ] \
+[[ "$(sha2cached)" = "0" ]] \
 	&& ok "Client_Connections_sha2cached == 0 (cleartext cache is cold)" \
 	|| nok "cleartext cache already warm -- the full-auth proof would be invalid"
 
@@ -160,7 +177,7 @@ hdr "Preconditions"
 hdr "Installing a caching_sha2-hashed Admin credential"
 adm "UPDATE global_variables SET variable_value='caching_sha2_password' WHERE variable_name='mysql-default_authentication_plugin';
      LOAD MYSQL VARIABLES TO RUNTIME;" >/dev/null
-[ "$(adm 'SELECT @@mysql-default_authentication_plugin;')" = "caching_sha2_password" ] \
+[[ "$(adm 'SELECT @@mysql-default_authentication_plugin;')" = "caching_sha2_password" ]] \
 	&& ok "mysql-default_authentication_plugin = caching_sha2_password" \
 	|| nok "failed to set the default authentication plugin"
 
@@ -178,22 +195,22 @@ adm "UPDATE global_variables SET variable_value='caching_sha2_password' WHERE va
 # misread as a full-auth failure here. On a build carrying the #5989 fix the loop
 # succeeds on the first attempt; it is retained so this script still gives a
 # correct answer when run against an older binary.
-EXPECT_LEN=$(( ${#BASE_CREDS} + 1 + ${#USR} + 1 + 70 ))
+EXPECT_LEN=$(( ${#ORIG_ADMIN_CREDS} + 1 + ${#USR} + 1 + 70 ))
 TAIL_EXPR="SUBSTR(variable_value, INSTR(variable_value,';${USR}:')+$(( ${#USR} + 2 )))"
 CLEAN=0
 for _ in $(seq 1 20); do
-	adm "UPDATE global_variables SET variable_value='${BASE_CREDS}' WHERE variable_name='admin-admin_credentials';
+	adm "UPDATE global_variables SET variable_value='${ORIG_ADMIN_CREDS}' WHERE variable_name='admin-admin_credentials';
 	     UPDATE global_variables
 	        SET variable_value = variable_value || ';${USR}:' || CACHING_SHA2_PASSWORD('${PW}')
 	      WHERE variable_name='admin-admin_credentials';" >/dev/null
 	read -r LEN SEMI COLON <<<"$(adm "SELECT LENGTH(variable_value), INSTR(${TAIL_EXPR},';'), INSTR(${TAIL_EXPR},':') FROM global_variables WHERE variable_name='admin-admin_credentials';")"
-	if [ "$LEN" = "$EXPECT_LEN" ] && [ "$SEMI" = "0" ] && [ "$COLON" = "0" ]; then CLEAN=1; break; fi
+	if [[ "$LEN" = "$EXPECT_LEN" && "$SEMI" = "0" && "$COLON" = "0" ]]; then CLEAN=1; break; fi
 done
-[ "$CLEAN" = "1" ] \
+[[ "$CLEAN" = "1" ]] \
 	&& ok "generated a 70-byte \$A\$ hash free of ';' and ':' (credentials len ${LEN})" \
 	|| nok "could not generate a delimiter-free hash in 20 attempts"
 adm "LOAD ADMIN VARIABLES TO RUNTIME;" >/dev/null
-[ "$(sha2cached)" = "0" ] \
+[[ "$(sha2cached)" = "0" ]] \
 	&& ok "cache still cold immediately before the auth test" \
 	|| nok "cache warmed prematurely"
 
@@ -204,7 +221,7 @@ login "$USR" "$PW" REQUIRED \
 	|| nok "${USR} FAILED on :6032 over TLS -- full auth did not complete"
 
 C="$(sha2cached)"
-[ "$C" = "0" ] \
+[[ "$C" = "0" ]] \
 	&& ok "Client_Connections_sha2cached still 0 -> that was a FULL AUTH, not a cache hit" \
 	|| nok "counter is ${C} -- the login may have been served from the cleartext cache"
 
@@ -217,14 +234,14 @@ login "$USR" "$PW" REQUIRED \
 	&& ok  "second TLS connection succeeded" \
 	|| nok "second TLS connection failed"
 C2="$(sha2cached)"
-[ "${C2:-0}" -gt 0 ] 2>/dev/null \
+[[ "${C2:-0}" -gt 0 ]] 2>/dev/null \
 	&& ok "counter rose to ${C2} -> repeat connection used the cache, confirming the counter tracks cache hits" \
 	|| nok "counter did not rise on a repeat connection; the proof above is not meaningful"
 
 # ---------------------------------------------------------------- done ---
 hdr "Summary"
 printf '  passed: %d\n  failed: %d\n' "$PASS" "$FAIL"
-if [ "$FAIL" -eq 0 ]; then
+if [[ "$FAIL" -eq 0 ]]; then
 	cat <<'EOS'
 
   CONCLUSION

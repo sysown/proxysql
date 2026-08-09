@@ -1709,7 +1709,7 @@ int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyPr
 		if ((*myds)->switching_auth_stage == 5 && *pkt == 2) {
 			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
 				"Session=%p , DS=%p , user='%s' . Client requested the caching_sha2_password RSA public key\n",
-				(*myds), (*myds)->sess, vars1.user);
+				(*myds)->sess, (*myds), vars1.user);
 			proxy_error(
 				"User '%s'@'%s' requested the caching_sha2_password RSA public key, which ProxySQL does not"
 				" serve. Connect using TLS instead.\n",

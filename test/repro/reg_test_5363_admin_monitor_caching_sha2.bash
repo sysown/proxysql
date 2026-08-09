@@ -66,36 +66,45 @@ set -uo pipefail
 WORKSPACE="${WORKSPACE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 INFRA_ID="${INFRA_ID:-dev-$USER}"
 TAP_GROUP="${TAP_GROUP:-no-infra-g1}"
-COLD_START="${COLD_START:-0}"
+COLD_START="-e"
+export WORKSPACE INFRA_ID TAP_GROUP
 
 CTR="proxysql.${INFRA_ID}"
 DATADIR="${WORKSPACE}/ci_infra_logs/${INFRA_ID}/proxysql"
 MON_USER='monitor'
 MON_PASS='monitorpass'
-BASE_CREDS='admin:admin;radmin:radmin;cluster1:secret1pass'
+LOAD_MYSQL_VARS='LOAD MYSQL VARIABLES TO RUNTIME;'
 
 PASS=0; FAIL=0; BUGS=0
-ok()  { PASS=$((PASS+1)); printf '  ok %d - %s\n'     "$((PASS+FAIL))" "$1"; }
-nok() { FAIL=$((FAIL+1)); printf '  NOT OK %d - %s\n' "$((PASS+FAIL))" "$1"; }
-bug() { FAIL=$((FAIL+1)); BUGS=$((BUGS+1)); printf '  NOT OK %d - [BUG #5363] %s\n' "$((PASS+FAIL))" "$1"; }
-hdr() { printf '\n== %s ==\n' "$1"; }
-die() { printf '\nFATAL: %s\n' "$1" >&2; exit 2; }
+ok()  { local msg="$1"; PASS=$((PASS+1)); printf '  ok %d - %s\n'     "$((PASS+FAIL))" "$msg"; return 0; }
+nok() { local msg="$1"; FAIL=$((FAIL+1)); printf '  NOT OK %d - %s\n' "$((PASS+FAIL))" "$msg"; return 0; }
+bug() { local msg="$1"; FAIL=$((FAIL+1)); BUGS=$((BUGS+1)); printf '  NOT OK %d - [BUG #5363] %s\n' "$((PASS+FAIL))" "$msg"; return 0; }
+hdr() { local msg="$1"; printf '\n== %s ==\n' "$msg"; return 0; }
+die() { local msg="$1"; printf '\nFATAL: %s\n' "$msg" >&2; exit 2; }
 
 IP=''
-adm() { mysql -h"$IP" -P6032 -uradmin -pradmin --protocol=TCP -NBe "$1" 2>/dev/null; }
+adm() {
+	local sql="$1"
+	mysql -h"$IP" -P6032 -uradmin -pradmin --protocol=TCP -NBe "$sql" 2>/dev/null
+	return $?
+}
 setvar() {  # setvar <variable_name> <value> <LOAD statement>
-	adm "UPDATE global_variables SET variable_value='$2' WHERE variable_name='$1'; $3" >/dev/null
+	local name="$1" value="$2" load_stmt="$3"
+	adm "UPDATE global_variables SET variable_value='$value' WHERE variable_name='$name'; $load_stmt" >/dev/null
+	return $?
 }
 # login_local <user> <pass> <ssl-mode>  -- runs the client INSIDE the container
 login_local() {
-	docker exec "$CTR" mysql -h127.0.0.1 -P6032 -u"$1" -p"$2" \
-		--protocol=TCP --ssl-mode="$3" -NBe "SELECT 1;" >/dev/null 2>&1
+	local user="$1" pass="$2" ssl_mode="$3"
+	docker exec "$CTR" mysql -h127.0.0.1 -P6032 -u"$user" -p"$pass" \
+		--protocol=TCP --ssl-mode="$ssl_mode" -NBe "SELECT 1;" >/dev/null 2>&1
+	return $?
 }
 
 # ------------------------------------------------------------- preflight ---
 command -v docker >/dev/null || die "docker not found"
 command -v mysql  >/dev/null || die "mysql client not found"
-[ -x "${WORKSPACE}/src/proxysql" ] || die "no binary at ${WORKSPACE}/src/proxysql -- build it first"
+[[ -x "${WORKSPACE}/src/proxysql" ]] || die "no binary at ${WORKSPACE}/src/proxysql -- build it first"
 "${WORKSPACE}/src/proxysql" --version 2>&1 | grep -q '_DEBUG' \
 	|| die "${WORKSPACE}/src/proxysql is not a DEBUG build"
 
@@ -104,24 +113,21 @@ command -v mysql  >/dev/null || die "mysql client not found"
 # PPHR_5passwordFalse_0(), which never calls set_clear_text_password(), so the
 # caching_sha2 cleartext cache plays no part in the result. COLD_START is offered
 # only for symmetry with the #5985 companion and for a guaranteed-clean run.
-if [ "$COLD_START" = "1" ]; then
+if [[ "$COLD_START" = "1" ]]; then
 	hdr "Cold start: destroying and recreating ProxySQL for INFRA_ID=${INFRA_ID}"
-	WORKSPACE="$WORKSPACE" INFRA_ID="$INFRA_ID" TAP_GROUP="$TAP_GROUP" \
-		"${WORKSPACE}/test/infra/control/stop-proxysql-isolated.bash" >/dev/null 2>&1
+	"${WORKSPACE}/test/infra/control/stop-proxysql-isolated.bash" >/dev/null 2>&1
 	rm -f "${DATADIR}"/proxysql.db "${DATADIR}"/proxysql_debug.db \
 	      "${DATADIR}"/proxysql_stats.db "${DATADIR}"/sqlite3server.db 2>/dev/null
-	WORKSPACE="$WORKSPACE" INFRA_ID="$INFRA_ID" TAP_GROUP="$TAP_GROUP" \
-		"${WORKSPACE}/test/infra/control/start-proxysql-isolated.bash" >/dev/null 2>&1 \
+	"${WORKSPACE}/test/infra/control/start-proxysql-isolated.bash" >/dev/null 2>&1 \
 		|| die "start-proxysql-isolated.bash failed"
 else
 	hdr "Using the existing ProxySQL instance (set COLD_START=1 to recreate it)"
-	WORKSPACE="$WORKSPACE" INFRA_ID="$INFRA_ID" TAP_GROUP="$TAP_GROUP" \
-		"${WORKSPACE}/test/infra/control/ensure-infras.bash" >/dev/null 2>&1 \
+	"${WORKSPACE}/test/infra/control/ensure-infras.bash" >/dev/null 2>&1 \
 		|| die "ensure-infras.bash failed"
 fi
 
 IP="$(docker inspect "$CTR" --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null)"
-[ -n "$IP" ] || die "could not determine IP of ${CTR}"
+[[ -n "$IP" ]] || die "could not determine IP of ${CTR}"
 docker exec "$CTR" which mysql >/dev/null 2>&1 || die "no mysql client inside ${CTR}"
 
 # Guard against testing a STALE binary. The container bind-mounts
@@ -134,7 +140,7 @@ docker exec "$CTR" which mysql >/dev/null 2>&1 || die "no mysql client inside ${
 BIN_MTIME="$(stat -c %Y "${WORKSPACE}/src/proxysql" 2>/dev/null || echo 0)"
 CTR_STARTED="$(docker inspect -f '{{.State.StartedAt}}' "$CTR" 2>/dev/null)"
 CTR_EPOCH="$(date -d "$CTR_STARTED" +%s 2>/dev/null || echo 0)"
-if [ "$BIN_MTIME" -gt "$CTR_EPOCH" ] 2>/dev/null; then
+if [[ "$BIN_MTIME" -gt "$CTR_EPOCH" ]] 2>/dev/null; then
 	die "the running ProxySQL container predates ${WORKSPACE}/src/proxysql, so it is
        NOT running the binary you just built. Re-run with COLD_START=1, or refresh
        the container with:
@@ -143,32 +149,42 @@ if [ "$BIN_MTIME" -gt "$CTR_EPOCH" ] 2>/dev/null; then
 fi
 echo "  ${CTR} at ${IP} -- $(adm 'SELECT @@admin-version;')"
 
+# Capture the instance's ACTUAL pre-existing values so the EXIT handler can put
+# back exactly what was there. Restoring hardcoded defaults instead would
+# silently rewrite the configuration of a shared instance -- see the "Restore any
+# global state that was changed" rule in test/repro/README.md. Note this script
+# never modifies 'admin-admin_credentials', so it must not reset it either.
+ORIG_AUTH_PLUGIN="$(adm 'SELECT @@mysql-default_authentication_plugin;')"
+ORIG_MON_USER="$(adm 'SELECT @@mysql-monitor_username;')"
+ORIG_MON_PASS="$(adm 'SELECT @@mysql-monitor_password;')"
+
 restore() {
-	setvar 'admin-admin_credentials' "$BASE_CREDS" 'LOAD ADMIN VARIABLES TO RUNTIME;'
-	setvar 'mysql-default_authentication_plugin' 'mysql_native_password' 'LOAD MYSQL VARIABLES TO RUNTIME;'
-	setvar 'mysql-monitor_password' 'monitor' 'LOAD MYSQL VARIABLES TO RUNTIME;'
+	setvar 'mysql-default_authentication_plugin' "$ORIG_AUTH_PLUGIN" "$LOAD_MYSQL_VARS"
+	setvar 'mysql-monitor_username' "$ORIG_MON_USER" "$LOAD_MYSQL_VARS"
+	setvar 'mysql-monitor_password' "$ORIG_MON_PASS" "$LOAD_MYSQL_VARS"
+	return 0
 }
 trap restore EXIT
 
 # ----------------------------------------------------------- preconditions ---
 hdr "Preconditions"
-[ "$(adm 'SELECT count(*) FROM runtime_mysql_users;')" = "0" ] \
+[[ "$(adm 'SELECT count(*) FROM runtime_mysql_users;')" = "0" ]] \
 	&& ok "no mysql_users rows (nothing can shadow the monitor credential)" \
 	|| nok "mysql_users is not empty -- result would be confounded"
 adm "SELECT @@admin-admin_credentials;" | grep -q "${MON_USER}:" \
 	&& nok "an admin credential named '${MON_USER}' exists -- wrong code path" \
 	|| ok "no admin credential named '${MON_USER}' (PPHR_5passwordFalse_0 is the path)"
 
-setvar 'mysql-monitor_username' "$MON_USER" 'LOAD MYSQL VARIABLES TO RUNTIME;'
-setvar 'mysql-monitor_password' "$MON_PASS" 'LOAD MYSQL VARIABLES TO RUNTIME;'
-[ "$(adm 'SELECT @@mysql-monitor_username;')" = "$MON_USER" ] &&
-[ "$(adm 'SELECT @@mysql-monitor_password;')" = "$MON_PASS" ] \
+setvar 'mysql-monitor_username' "$MON_USER" "$LOAD_MYSQL_VARS"
+setvar 'mysql-monitor_password' "$MON_PASS" "$LOAD_MYSQL_VARS"
+[[ "$(adm 'SELECT @@mysql-monitor_username;')" = "$MON_USER" ]] &&
+[[ "$(adm 'SELECT @@mysql-monitor_password;')" = "$MON_PASS" ]] \
 	&& ok "mysql-monitor_username/password set to ${MON_USER}/${MON_PASS} (cleartext, as documented)" \
 	|| nok "failed to set mysql-monitor_* variables"
 
 # ------------------------------------------------- baseline: native works ---
 hdr "Baseline: mysql_native_password"
-setvar 'mysql-default_authentication_plugin' 'mysql_native_password' 'LOAD MYSQL VARIABLES TO RUNTIME;'
+setvar 'mysql-default_authentication_plugin' 'mysql_native_password' "$LOAD_MYSQL_VARS"
 login_local "$MON_USER" "$MON_PASS" DISABLED \
 	&& ok  "${MON_USER} authenticates on :6032 over plaintext" \
 	|| nok "${MON_USER} FAILED under native/plaintext -- baseline broken, investigate before trusting the rest"
@@ -178,8 +194,8 @@ login_local "$MON_USER" "$MON_PASS" REQUIRED \
 
 # ------------------------------------------------------------- the bug ---
 hdr "caching_sha2_password"
-setvar 'mysql-default_authentication_plugin' 'caching_sha2_password' 'LOAD MYSQL VARIABLES TO RUNTIME;'
-[ "$(adm 'SELECT @@mysql-default_authentication_plugin;')" = "caching_sha2_password" ] \
+setvar 'mysql-default_authentication_plugin' 'caching_sha2_password' "$LOAD_MYSQL_VARS"
+[[ "$(adm 'SELECT @@mysql-default_authentication_plugin;')" = "caching_sha2_password" ]] \
 	&& ok "mysql-default_authentication_plugin = caching_sha2_password" \
 	|| nok "failed to switch the default authentication plugin"
 
@@ -204,12 +220,12 @@ login_local "$MON_USER" "WRONGPASS" DISABLED \
 # --------------------------------------------------------------- summary ---
 hdr "Summary"
 printf '  passed: %d\n  failed: %d (of which %d are the reported bug)\n' "$PASS" "$FAIL" "$BUGS"
-if [ "$FAIL" -eq 0 ]; then
+if [[ "$FAIL" -eq 0 ]]; then
 	echo
 	echo "  All assertions pass: #5363 appears FIXED on this build."
 	exit 0
 fi
-if [ "$FAIL" -eq "$BUGS" ]; then
+if [[ "$FAIL" -eq "$BUGS" ]]; then
 	cat <<'EOS'
 
   REPRODUCED. Every failure is a [BUG #5363] assertion:
