@@ -257,9 +257,13 @@ int main() {
 			) &&
 			run_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 		const char* rejected_update_info = mysql_info(admin);
+		diag("Rejected grouped RSA LOAD info: %s",
+			rejected_update_info != nullptr ? rejected_update_info : "(null)");
+		// The Admin interface refreshes known variables from runtime before reading
+		// global_variables, so this external LOAD submits all three grouped RSA rows.
 		ok(rejected_update_ok && rejected_update_info != nullptr &&
-			string(rejected_update_info).find("Rejected: 1") != string::npos,
-			"Grouped RSA rejection counts only the submitted configuration variable");
+			string(rejected_update_info).find("Rejected: 3") != string::npos,
+			"Grouped RSA rejection reports all submitted configuration variables");
 
 		string restored_runtime_auto_generate;
 		ok(query_scalar(
