@@ -21,5 +21,6 @@ concurrency:
 
 jobs:
   run:
+    if: ${{ !github.event.pull_request || !github.event.pull_request.head.repo.fork }}
     uses: sysown/proxysql/.github/workflows/ci-trigger.yml@GH-Actions
     secrets: inherit
