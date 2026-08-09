@@ -160,6 +160,7 @@ jobs:
 #        ls -l proxysql/test/tap
 
     - name: Build
+      timeout-minutes: 90
       id: build
       if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
       run: |

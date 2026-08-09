@@ -187,6 +187,7 @@ jobs:
         test/infra/control/ensure-infras.bash
 
     - name: Run legacy-g2 tests (GenAI + Coverage)
+      timeout-minutes: 90
       run: |
         cd proxysql
         export INFRA_ID="ci-legacy-g2-genai"

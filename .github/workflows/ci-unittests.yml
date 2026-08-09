@@ -115,6 +115,7 @@ jobs:
         file proxysql/src/proxysql
 
     - name: Run unit-tests-g1
+      timeout-minutes: 90
       run: |
         cd proxysql
         export INFRA_ID="ci-unittests"

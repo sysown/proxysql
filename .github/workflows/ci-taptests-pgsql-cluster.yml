@@ -193,6 +193,7 @@ jobs:
         test/infra/control/ensure-infras.bash
 
     - name: Run test_cluster_sync_pgsql-t
+      timeout-minutes: 90
       run: |
         cd proxysql
         export INFRA_ID="ci-taptests-pgsql-cluster"
