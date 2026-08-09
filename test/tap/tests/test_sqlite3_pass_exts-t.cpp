@@ -12,7 +12,6 @@
  */
 
 #include <cassert>
-#include <random>
 #include <ctime>
 #include <string>
 #include <vector>
@@ -895,14 +894,15 @@ int main(int argc, char** argv) {
 			const uint32_t pass_len = rand() % 150;
 			const string pass { random_string(pass_len) };
 
-			// <random> rather than rand(): SonarCloud flags rand() as cpp:S5020 /
-			// cpp:S2245 on new code. Seeded deterministically so a failing run is
-			// reproducible.
-			static std::mt19937 salt_rng { 20260809u };
+			// No PRNG here on purpose. A random length adds nothing -- the property
+			// under test is "exactly 20 is accepted, anything else is rejected" --
+			// and both rand() and <random> trip SonarCloud (cpp:S5020, cpp:S2245).
+			// A fixed sweep is fully deterministic and covers the boundaries
+			// explicitly: 0, 1, 19, 21, 40 and a few in between.
+			static const uint32_t INVALID_SALT_LENS[] = { 0, 1, 2, 19, 21, 22, 40, 64 };
 			uint32_t salt_len = 20;
 			if (i % 2 == 1) {
-				salt_len = std::uniform_int_distribution<uint32_t>(0, 39)(salt_rng);
-				if (salt_len == 20) { salt_len = 21; }   // keep this half invalid
+				salt_len = INVALID_SALT_LENS[(i / 2) % (sizeof(INVALID_SALT_LENS) / sizeof(INVALID_SALT_LENS[0]))];
 			}
 			const string salt { random_string(salt_len) };
 
