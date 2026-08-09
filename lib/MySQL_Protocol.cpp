@@ -1238,7 +1238,7 @@ bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigne
 		password = ch_account.password;
 #endif /* PROXYSQLCLICKHOUSE */
 	} else {
-		account_details = GloMyAuth->lookup((char*)userinfo->username, USERNAME_FRONTEND, dup_details);
+		account_details = GloMyAuth->lookup((char*)userinfo->username, cred_scope_for_session(session_type), dup_details);
 		password = account_details.password;
 	}
 	// FIXME: add support for default schema and fast forward , issues #255 and #256
@@ -1259,7 +1259,7 @@ bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigne
 				if (ret) {
 					if (account_details.sha1_pass==NULL) {
 						// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
-						GloMyAuth->set_SHA1((char *)userinfo->username, USERNAME_FRONTEND,reply);
+						GloMyAuth->set_SHA1((char *)userinfo->username, cred_scope_for_session(session_type),reply);
 					}
 					if (userinfo->sha1_pass) free(userinfo->sha1_pass);
 					userinfo->sha1_pass=sha1_pass_hex(reply);
@@ -1328,7 +1328,7 @@ bool MySQL_Protocol::verify_user_pass(
 				ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
 				if (ret) {
 					if (sha1_pass==NULL) {
-						GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,reply);
+						GloMyAuth->set_SHA1((char *)user, cred_scope_for_session(session_type),reply);
 					}
 					if (userinfo->sha1_pass) free(userinfo->sha1_pass);
 					userinfo->sha1_pass=sha1_pass_hex(reply);
@@ -1346,7 +1346,7 @@ bool MySQL_Protocol::verify_user_pass(
 				if (strcasecmp(double_hashed_password,password)==0) {
 					ret = true;
 					if (sha1_pass==NULL) {
-						GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,md1_buf);
+						GloMyAuth->set_SHA1((char *)user, cred_scope_for_session(session_type),md1_buf);
 					}
 					if (userinfo->sha1_pass)
 						free(userinfo->sha1_pass);
@@ -1460,7 +1460,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		ch_account_to_my(account_details, ch_account_details);
 #endif /* PROXYSQLCLICKHOUSE */
 	} else {
-		account_details = GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, dup_details);
+		account_details = GloMyAuth->lookup((char *)user, cred_scope_for_session(session_type), dup_details);
 	}
 
 	/**
@@ -2256,6 +2256,9 @@ void MySQL_Protocol::PPHR_5passwordFalse_auth2(
 						if (attr1.sha1_pass==NULL) {
 							// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
 							// TODO: CHECK these usages of 'reply'
+							// USERNAME_FRONTEND, not the session scope: this is the LDAP
+							// path, which only ever backs frontend users -- an ADMIN/STATS
+							// session never reaches it.
 							GloMyAuth->set_SHA1((char *)userinfo->username, USERNAME_FRONTEND,reply);
 						}
 						if (userinfo->sha1_pass) free(userinfo->sha1_pass);
@@ -2356,7 +2359,7 @@ void MySQL_Protocol::PPHR_7auth1(
 		if (ret) {
 			if (attr1.sha1_pass==NULL) {
 				// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
-				GloMyAuth->set_SHA1((char *)vars1.user, USERNAME_FRONTEND,reply);
+				GloMyAuth->set_SHA1((char *)vars1.user, cred_scope_for_session(session_type),reply);
 			}
 			if (userinfo->sha1_pass)
 				free(userinfo->sha1_pass);
@@ -2397,7 +2400,7 @@ void MySQL_Protocol::PPHR_7auth2(
 			ret = true;
 			if (attr1.sha1_pass==NULL) {
 				// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
-				GloMyAuth->set_SHA1((char *)vars1.user, USERNAME_FRONTEND,md1_buf);
+				GloMyAuth->set_SHA1((char *)vars1.user, cred_scope_for_session(session_type),md1_buf);
 			}
 			if (userinfo->sha1_pass)
 				free(userinfo->sha1_pass);
@@ -3214,7 +3217,7 @@ __do_auth:
 		ch_account_to_my(account_details, ch_account);
 #endif /* PROXYSQLCLICKHOUSE */
 	} else {
-		account_details = GloMyAuth->lookup((char*)vars1.user, USERNAME_FRONTEND, dup_details);
+		account_details = GloMyAuth->lookup((char*)vars1.user, cred_scope_for_session(session_type), dup_details);
 	}
 
 	vars1.password = get_password(account_details, PASSWORD_TYPE::PRIMARY);
