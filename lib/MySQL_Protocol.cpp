@@ -1361,7 +1361,9 @@ bool MySQL_Protocol::verify_user_pass(
 				ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
 				if (ret) {
 					if (sha1_pass==NULL) {
-						GloMyAuth->set_SHA1((char *)user, cred_scope_for_session(session_type),reply);
+						// const_cast rather than a C-style cast: set_SHA1() takes char*
+						// but does not modify the username (cpp:M23_090).
+						GloMyAuth->set_SHA1(const_cast<char*>(user), cred_scope_for_session(session_type),reply);
 					}
 					if (userinfo->sha1_pass) free(userinfo->sha1_pass);
 					userinfo->sha1_pass=sha1_pass_hex(reply);
@@ -1379,7 +1381,7 @@ bool MySQL_Protocol::verify_user_pass(
 				if (strcasecmp(double_hashed_password,password)==0) {
 					ret = true;
 					if (sha1_pass==NULL) {
-						GloMyAuth->set_SHA1((char *)user, cred_scope_for_session(session_type),md1_buf);
+						GloMyAuth->set_SHA1(const_cast<char*>(user), cred_scope_for_session(session_type),md1_buf);
 					}
 					if (userinfo->sha1_pass)
 						free(userinfo->sha1_pass);
