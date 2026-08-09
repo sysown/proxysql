@@ -318,7 +318,9 @@ jobs:
         echo "No coverage report was produced; skipping Codecov upload."
 
     - name: Upload coverage to Codecov
+      id: codecov_1
       if: ${{ !cancelled() && steps.cov.outputs.found == '1' }}
+      continue-on-error: true
       uses: codecov/codecov-action@v4
       with:
         codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
@@ -334,6 +336,55 @@ jobs:
         fail_ci_if_error: false
         verbose: true
 
+    - name: Wait before Codecov retry 1
+      if: ${{ !cancelled() && steps.codecov_1.outcome == 'failure' }}
+      run: sleep 15
+
+    - name: Upload coverage to Codecov (retry 1)
+      id: codecov_2
+      if: ${{ !cancelled() && steps.codecov_1.outcome == 'failure' }}
+      continue-on-error: true
+      uses: codecov/codecov-action@v4
+      with:
+        codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
+        override_commit: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+        files: proxysql/ci_infra_logs/ci-basictests/coverage-report/ci-basictests.info
+        flags: integration-tests
+        name: tap-basictests-coverage
+        use_oidc: true
+        disable_search: true
+        plugins: noop
+        root_dir: proxysql
+        disable_file_fixes: true
+        fail_ci_if_error: false
+        verbose: true
+
+    - name: Wait before Codecov retry 2
+      if: ${{ !cancelled() && steps.codecov_2.outcome == 'failure' }}
+      run: sleep 45
+
+    - name: Upload coverage to Codecov (retry 2)
+      id: codecov_3
+      if: ${{ !cancelled() && steps.codecov_2.outcome == 'failure' }}
+      continue-on-error: true
+      uses: codecov/codecov-action@v4
+      with:
+        codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
+        override_commit: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+        files: proxysql/ci_infra_logs/ci-basictests/coverage-report/ci-basictests.info
+        flags: integration-tests
+        name: tap-basictests-coverage
+        use_oidc: true
+        disable_search: true
+        plugins: noop
+        root_dir: proxysql
+        disable_file_fixes: true
+        fail_ci_if_error: false
+        verbose: true
+
+    - name: Report Codecov upload failure
+      if: ${{ !cancelled() && steps.codecov_3.outcome == 'failure' }}
+      run: echo "::warning::Codecov upload failed after 3 attempts; tests were unaffected."
     - uses: LouisBrunner/checks-action@v2.0.0
       if: always()
       with:

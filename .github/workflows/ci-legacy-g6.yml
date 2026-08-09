@@ -301,6 +301,9 @@ jobs:
         echo "No coverage report was produced; skipping Codecov upload."
 
     - name: Upload coverage to Codecov
+      id: codecov_1
+      if: ${{ !cancelled() && hashFiles('proxysql/ci_infra_logs/**/coverage-report/*.info') != '' }}
+      continue-on-error: true
       # Send the LCOV .info file fastcov produces in run-tests-isolated.bash
       # (under proxysql/ci_infra_logs/ci-legacy-g6/coverage-report/) to
       # Codecov. The proxysql binary was built WITHGCOV=1 (-tap-genai-gcov
@@ -318,7 +321,6 @@ jobs:
       # whole TAP group; `!cancelled()` so coverage uploads even when
       # the test step itself reported a failure (partial coverage is
       # still useful diagnostically).
-      if: ${{ !cancelled() && hashFiles('proxysql/ci_infra_logs/**/coverage-report/*.info') != '' }}
       uses: codecov/codecov-action@v4
       with:
         codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
@@ -348,6 +350,55 @@ jobs:
         fail_ci_if_error: false
         verbose: true
 
+    - name: Wait before Codecov retry 1
+      if: ${{ !cancelled() && steps.codecov_1.outcome == 'failure' }}
+      run: sleep 15
+
+    - name: Upload coverage to Codecov (retry 1)
+      id: codecov_2
+      if: ${{ !cancelled() && steps.codecov_1.outcome == 'failure' }}
+      continue-on-error: true
+      uses: codecov/codecov-action@v4
+      with:
+        codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
+        override_commit: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+        files: proxysql/ci_infra_logs/ci-legacy-g6/coverage-report/ci-legacy-g6.info
+        flags: integration-tests
+        name: tap-legacy-g6-coverage
+        use_oidc: true
+        disable_search: true
+        plugins: noop
+        root_dir: proxysql
+        disable_file_fixes: true
+        fail_ci_if_error: false
+        verbose: true
+
+    - name: Wait before Codecov retry 2
+      if: ${{ !cancelled() && steps.codecov_2.outcome == 'failure' }}
+      run: sleep 45
+
+    - name: Upload coverage to Codecov (retry 2)
+      id: codecov_3
+      if: ${{ !cancelled() && steps.codecov_2.outcome == 'failure' }}
+      continue-on-error: true
+      uses: codecov/codecov-action@v4
+      with:
+        codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
+        override_commit: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+        files: proxysql/ci_infra_logs/ci-legacy-g6/coverage-report/ci-legacy-g6.info
+        flags: integration-tests
+        name: tap-legacy-g6-coverage
+        use_oidc: true
+        disable_search: true
+        plugins: noop
+        root_dir: proxysql
+        disable_file_fixes: true
+        fail_ci_if_error: false
+        verbose: true
+
+    - name: Report Codecov upload failure
+      if: ${{ !cancelled() && steps.codecov_3.outcome == 'failure' }}
+      run: echo "::warning::Codecov upload failed after 3 attempts; tests were unaffected."
     - uses: LouisBrunner/checks-action@v2.0.0
       continue-on-error: true
       if: ${{ always() && steps.checks.outputs.check_id != '' }}
