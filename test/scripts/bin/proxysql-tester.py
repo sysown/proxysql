@@ -886,7 +886,15 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
                     self.padmin_command(f"LOGENTRY '{TAP} test {fo_num+1}/{len(tap_tests)} \'{os.path.basename(fo_cmd)}\' timed out after {tap_timeout} seconds'")
                     # Drain any remaining output
                     for line in fop.stdout:
-                        log.debug(f"msg: {line.decode('utf-8').strip()}")
+                        log.debug(f"msg: {line.decode('utf-8', 'replace').strip()}")
+                    # Reap the child. kill() signals but does not wait, so
+                    # returncode stays None until we do -- and the shared exit
+                    # path below evaluates abs(int(fop.returncode)), which
+                    # raises TypeError on None. That path was unreachable while
+                    # the timeout could never fire; now that it can, a timed-out
+                    # test would abort the whole group instead of failing one
+                    # test. wait() yields -SIGKILL, so the test scores non-zero.
+                    fop.wait()
                 except Exception as e:
                     log.critical(f"TAP test {fo_num+1}/{len(tap_tests)} '{os.path.basename(fo_cmd)}' - test threw an exception !!!: {e}")
                     self.padmin_command(f"LOGENTRY '{TAP} test {fo_num+1}/{len(tap_tests)} \'{os.path.basename(fo_cmd)}\' - test threw an exception !!!'")
