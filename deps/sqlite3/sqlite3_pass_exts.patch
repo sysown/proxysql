@@ -1,6 +1,6 @@
 --- sqlite3.c	2024-03-22 19:22:47.046093173 +0100
 +++ sqlite3-pass-exts.c	2024-03-22 19:24:09.557303716 +0100
-@@ -26275,6 +26275,228 @@
+@@ -26275,6 +26275,235 @@
    sqlite3ResultStrAccum(context, &sRes);
  }
  
@@ -48,7 +48,14 @@
 +
 +	if (argc >= 2) {
 +		int salt_size = sqlite3_value_bytes(argv[1]);
-+		if (salt_size <= 0 || salt_size > DEF_SALT_SIZE) {
++		/* The salt must be EXACTLY DEF_SALT_SIZE. The stored '$A$rrr$' hash has no
++		 * delimiter after the salt, so verification reads it back positionally with
++		 * substr(7,20) (see PPHR_verify_sha2/PPHR_sha2full in MySQL_Protocol.cpp).
++		 * A shorter salt makes that read take salt + the first bytes of the digest,
++		 * so the hash can never verify: it is accepted here, stored without error,
++		 * and then every login fails with a generic 'Access denied'. Reject it at
++		 * generation instead of emitting a credential that cannot work. */
++		if (salt_size != DEF_SALT_SIZE) {
 +			return 1;
 +		}
 +	}
@@ -115,7 +122,7 @@
 + * @param argc Number of arguments; 1, 2, or 3.
 + * @param argv Argument list:
 + *   1. Password to be hashed; len > 0, type 'SQLITE_TEXT'.
-+ *   2. Optional salt; len in (0,20], type 'SQLITE_TEXT' or 'SQLITE_BLOB'. Random if omitted.
++ *   2. Optional salt; len EXACTLY 20, type 'SQLITE_TEXT' or 'SQLITE_BLOB'. Random if omitted.
 + *   3. Optional rounds; integer in [5000,4095000] in steps of 1000 (matches MySQL's
 + *      caching_sha2_password_digest_rounds). Defaults to 5000 when omitted.
 + */
@@ -229,7 +236,7 @@
  /*
  ** current_time()
  **
-@@ -133230,6 +133452,10 @@
+@@ -133230,6 +133459,10 @@
      FUNCTION(substr,             3, 0, 0, substrFunc       ),
      FUNCTION(substring,          2, 0, 0, substrFunc       ),
      FUNCTION(substring,          3, 0, 0, substrFunc       ),
