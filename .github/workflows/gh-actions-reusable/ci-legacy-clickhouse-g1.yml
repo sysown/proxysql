@@ -47,7 +47,7 @@ jobs:
 
     - name: Cache restore src
       id: cache-src
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         key: ${{ env.BLDCACHE }}
         fail-on-cache-miss: true
@@ -56,7 +56,7 @@ jobs:
 
     - name: Cache restore test
       id: cache-test
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         key: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu22-tap_test
         fail-on-cache-miss: true

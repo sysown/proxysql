@@ -48,7 +48,7 @@ jobs:
 
     - name: Restore simulation build
       id: simulator-build
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         key: ${{ env.BUILD_CACHE_KEY }}
         path: ${{ env.RUNTIME_CACHE_DIR }}
@@ -97,7 +97,7 @@ jobs:
         persist-credentials: false
 
     - name: Restore simulation build
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         key: ${{ env.BUILD_CACHE_KEY }}
         fail-on-cache-miss: true
