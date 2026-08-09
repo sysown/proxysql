@@ -3183,16 +3183,17 @@ void ProxySQL_Admin::flush_tsdb_variables___runtime_to_database(SQLite3DB *db, b
 		// Bind and execute for query_a
 		rc = (*proxy_sqlite3_bind_text)(u_stmt_a.get(), 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 		rc = (*proxy_sqlite3_bind_text)(u_stmt_a.get(), 2, safe_val, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-		rc = (*proxy_sqlite3_step)(u_stmt_a.get());
-		if (rc != SQLITE_DONE) { ASSERT_SQLITE_OK(rc, db); }
+		// A locked database is a runtime condition, not a programming error:
+		// retry it like every other flush does. Stepping raw and passing the
+		// result to ASSERT_SQLITE_OK() aborted the daemon on SQLITE_BUSY.
+		SAFE_SQLITE3_STEP2(u_stmt_a.get());
 		rc = (*proxy_sqlite3_reset)(u_stmt_a.get()); ASSERT_SQLITE_OK(rc, db);
 		rc = (*proxy_sqlite3_clear_bindings)(u_stmt_a.get()); ASSERT_SQLITE_OK(rc, db);
 
 		if (runtime) {
 			rc = (*proxy_sqlite3_bind_text)(u_stmt_b.get(), 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 			rc = (*proxy_sqlite3_bind_text)(u_stmt_b.get(), 2, safe_val, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-			rc = (*proxy_sqlite3_step)(u_stmt_b.get());
-			if (rc != SQLITE_DONE) { ASSERT_SQLITE_OK(rc, db); }
+			SAFE_SQLITE3_STEP2(u_stmt_b.get());
 			rc = (*proxy_sqlite3_reset)(u_stmt_b.get()); ASSERT_SQLITE_OK(rc, db);
 			rc = (*proxy_sqlite3_clear_bindings)(u_stmt_b.get()); ASSERT_SQLITE_OK(rc, db);
 		}
