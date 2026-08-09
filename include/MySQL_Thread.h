@@ -817,6 +817,16 @@ class MySQL_Threads_Handler
  	void wrunlock();
 	/** @brief Commit staged variables and report grouped variables that retained prior values. */
 	MySQLThreadsCommitResult commit();
+	/**
+	 * @brief Atomically replace and commit a registered integer variable.
+	 *
+	 * The previous value is read and the replacement is staged and committed while
+	 * holding the handler write lock. The caller must supply a valid value for a
+	 * registered integer variable.
+	 *
+	 * @return The variable value observed before the replacement.
+	 */
+	int set_int_variable_and_commit(const char* name, const char* value);
 	char *get_variable(char *name);
 	bool set_variable(char *name, const char *value);
 	char **get_variables_list();

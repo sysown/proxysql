@@ -149,6 +149,19 @@ static void test_caching_sha2_rsa_commit_is_atomic() {
 		ok(handler.caching_sha2_rsa()->acquire() == nullptr,
 			"intentional RSA unavailability publishes no snapshot");
 
+		const int previous_poll_timeout =
+			handler.set_int_variable_and_commit("poll_timeout", "10");
+		ok(previous_poll_timeout > 0 &&
+			handler.get_variable_int("poll_timeout") == 10,
+			"atomic variable update returns the previous value and commits the replacement");
+		const std::string restored_poll_timeout = std::to_string(previous_poll_timeout);
+		const int temporary_poll_timeout = handler.set_int_variable_and_commit(
+			"poll_timeout", restored_poll_timeout.c_str()
+		);
+		ok(temporary_poll_timeout == 10 &&
+			handler.get_variable_int("poll_timeout") == previous_poll_timeout,
+			"atomic variable update restores the prior value");
+
 		handler.set_variable(auto_name, "true");
 		const MySQLThreadsCommitResult invalid_empty = handler.commit();
 		ok(has_all_rejected_rsa_variables(invalid_empty.rejected_variables),
@@ -320,7 +333,7 @@ static void test_caching_sha2_rsa_rejection_restores_database_values(MySQL_Threa
 
 int main() {
 #ifdef PROXYSQL31
-	plan(28);
+	plan(30);
 #else
 	plan(4);
 #endif

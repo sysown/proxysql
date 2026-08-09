@@ -1596,6 +1596,24 @@ void MySQL_Threads_Handler::wrunlock() {
 	pthread_rwlock_unlock(&rwlock);
 }
 
+int MySQL_Threads_Handler::set_int_variable_and_commit(
+	const char* name, const char* value
+) {
+	wrlock();
+	struct WriteUnlockGuard {
+		MySQL_Threads_Handler& handler;
+		~WriteUnlockGuard() { handler.wrunlock(); }
+	} unlock_guard { *this };
+
+	const int previous_value = get_variable_int(name);
+	const bool variable_set = set_variable(const_cast<char*>(name), value);
+	assert(variable_set);
+	if (variable_set) {
+		(void)commit();
+	}
+	return previous_value;
+}
+
 MySQLThreadsCommitResult MySQL_Threads_Handler::commit() {
 	MySQLThreadsCommitResult commit_result;
 #ifdef PROXYSQL31
