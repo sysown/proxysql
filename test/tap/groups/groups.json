@@ -330,6 +330,7 @@
   "test_ansi_quotes_group_replication-t" : [ "mysql84-gr-g1","mysql90-gr-g1","mysql91-gr-g1","mysql92-gr-g1","mysql93-gr-g1","mysql95-gr-g1" ],
   "test_auth_methods-t" : [ "mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2","mysql84-g7","mysql90-g2","mysql95-g2" ],
   "test_frontend_x509_auth-t" : [ "legacy-g6", "mysql84-g6", "mysql90-g1", "mysql95-g1", "@proxysql_min_version:3.1" ],
+  "test_frontend_x509_passthrough-t" : [ "mysql84-g4", "mysql90-g4", "mysql95-g4", "@proxysql_min_version:3.1" ],
   "test_frontend_x509_tier_gate-t" : [ "legacy-g6", "mysql84-g6", "mysql90-g1", "mysql95-g1" ],
   "test_auto_increment_delay_multiplex-t" : [ "legacy-g7","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2","mysql84-g7","mysql90-g2","mysql95-g2" ],
   "test_backend_conn_ping-t" : [ "legacy-g7","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2","mysql84-g7","mysql90-g2","mysql95-g2" ],

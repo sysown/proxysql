@@ -2907,10 +2907,35 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 	// caching_sha2_password full-auth exchange and ultimately schedules a
 	// backend probe via AUTHENTICATING_BACKEND_FOR_CLIENT.
 	{
+	#ifdef PROXYSQL31
+		const bool raw_empty_pw_case =
+			mysql_thread___passthrough_auth_empty_password
+			&& vars1.password != NULL
+			&& vars1.password[0] == '\0';
+
+		frontend_certificate_policy_result row_policy {};
+		if (raw_empty_pw_case) {
+			row_policy = evaluate_frontend_certificate_policy(
+				*myds, account_details.attributes, vars1.user,
+				frontend_auth_context::PASSTHROUGH, __LINE__, __func__);
+		}
+
+		const bool empty_pw_case = raw_empty_pw_case && !row_policy.has_spiffe_id;
+
+		if (mysql_thread___passthrough_auth_enabled
+			&& empty_pw_case
+			&& !row_policy.allowed) {
+			return false;
+		}
+	#else
 		const bool empty_pw_case =
 			mysql_thread___passthrough_auth_empty_password
 			&& vars1.password != NULL
 			&& strlen(vars1.password) == 0;
+	#endif
+		// Unknown-user pass-through has no mysql_users row and therefore no
+		// per-user require_x509 attribute. Its transport gate remains
+		// mysql-passthrough_auth_require_tls.
 		const bool unknown_user_case =
 			mysql_thread___passthrough_auth_unknown_users
 			&& vars1.password == NULL;
