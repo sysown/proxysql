@@ -383,13 +383,13 @@ int update_and_check(
 		}
 
 		{
-			sprintf(buf1,"NULL");
-			sprintf(buf2,"NULL");
+			snprintf(buf1,sizeof(buf1),"NULL");
+			snprintf(buf2,sizeof(buf2),"NULL");
 
 			if (dur)
-				sprintf(buf1, "%ld", *dur);
+				snprintf(buf1,sizeof(buf1), "%ld", *dur);
 			if (!is_null[3])
-				sprintf(buf2, "%d", i_duration);
+				snprintf(buf2,sizeof(buf2), "%d", i_duration);
 			diag("'duration' expected/retrieved: %s , %s", buf1, buf2);
 			if (strcmp(buf1,buf2)==0)
 				matches++;
@@ -397,20 +397,20 @@ int update_and_check(
 
 		{
 			if (end_time) {
-				sprintf(buf1,"%d:%d:%d", end_time->hour, end_time->minute, end_time->second);
+				snprintf(buf1,sizeof(buf1),"%d:%d:%d", end_time->hour, end_time->minute, end_time->second);
 			} else {
-				sprintf(buf1,"NULL");
+				snprintf(buf1,sizeof(buf1),"NULL");
 			}
 			if (is_null[4]) {
-				sprintf(buf2,"NULL");
+				snprintf(buf2,sizeof(buf2),"NULL");
 			} else {
-				sprintf(buf2,"%d:%d:%d", ts_end_time.hour, ts_end_time.minute, ts_end_time.second);
+				snprintf(buf2,sizeof(buf2),"%d:%d:%d", ts_end_time.hour, ts_end_time.minute, ts_end_time.second);
 			}
 			if (strcmp(buf1,buf2)==0)
 				matches++;
 			diag("'end_time' expected/retrieved: %s , %s", buf1, buf2);
-			sprintf(buf1,"NULL");
-			sprintf(buf2,"NULL");
+			snprintf(buf1,sizeof(buf1),"NULL");
+			snprintf(buf2,sizeof(buf2),"NULL");
 		}
 
 		{
@@ -434,13 +434,13 @@ int update_and_check(
 		}
 
 		{
-			sprintf(buf1,"NULL");
-			sprintf(buf2,"NULL");
+			snprintf(buf1,sizeof(buf1),"NULL");
+			snprintf(buf2,sizeof(buf2),"NULL");
 
 			if (mapping_id)
-				sprintf(buf1, "%d", *mapping_id);
+				snprintf(buf1,sizeof(buf1), "%d", *mapping_id);
 			if (!is_null[7])
-				sprintf(buf2, "%d", i_mapping_id);
+				snprintf(buf2,sizeof(buf2), "%d", i_mapping_id);
 			diag("'mapping_id' expected/retrieved: %s , %s", buf1, buf2);
 			if (strcmp(buf1,buf2)==0)
 				matches++;
@@ -468,20 +468,20 @@ int update_and_check(
 
 		{
 			if (st_time) {
-				sprintf(buf1,"%d:%d:%d", st_time->hour, st_time->minute, st_time->second);
+				snprintf(buf1,sizeof(buf1),"%d:%d:%d", st_time->hour, st_time->minute, st_time->second);
 			} else {
-				sprintf(buf1,"NULL");
+				snprintf(buf1,sizeof(buf1),"NULL");
 			}
 			if (is_null[10]) {
-				sprintf(buf2,"NULL");
+				snprintf(buf2,sizeof(buf2),"NULL");
 			} else {
-				sprintf(buf2,"%d:%d:%d", ts_st_time.hour, ts_st_time.minute, ts_st_time.second);
+				snprintf(buf2,sizeof(buf2),"%d:%d:%d", ts_st_time.hour, ts_st_time.minute, ts_st_time.second);
 			}
 			if (strcmp(buf1,buf2)==0)
 				matches++;
 			diag("'st_time' expected/retrieved: %s , %s", buf1, buf2);
-			sprintf(buf1,"NULL");
-			sprintf(buf2,"NULL");
+			snprintf(buf1,sizeof(buf1),"NULL");
+			snprintf(buf2,sizeof(buf2),"NULL");
 		}
 
 		{
