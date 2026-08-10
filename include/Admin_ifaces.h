@@ -137,8 +137,11 @@ class admin_main_loop_listeners {
 		ifaces=reset_ifaces(ifaces);
 		i=0;
 	for ( token = tokenize( &tok ) ; token && i < MAX_IFACES ; token = tokenize( &tok ) ) {
-		size_t token_len = strlen(token);
 		ifaces[i] = strdup(token);
+		if (ifaces[i] == NULL) {
+			free_tokenizer( &tok );
+			return false;
+		}
 		i++;
 	}
 		free_tokenizer( &tok );
