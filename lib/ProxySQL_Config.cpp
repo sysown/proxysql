@@ -1449,11 +1449,12 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
 			rows++;
 		}
 	}
-	if (root.exists("mysql_servers_ssl_params")==true) { // mysql_servers_ssl_params
-		const Setting &mysql_servers_ssl_params = root["mysql_servers_ssl_params"];
-		int count = mysql_servers_ssl_params.getLength();
-		char *q=(char *)"INSERT OR REPLACE INTO mysql_servers_ssl_params (hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_capath, ssl_crl, ssl_crlpath, ssl_cipher, tls_version, comment) VALUES ('%s', %d, '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')";
-		for (i=0; i< count; i++) {
+		if (root.exists("mysql_servers_ssl_params")==true) { // mysql_servers_ssl_params
+			const Setting &mysql_servers_ssl_params = root["mysql_servers_ssl_params"];
+			int count = mysql_servers_ssl_params.getLength();
+			char *q=(char *)"INSERT OR REPLACE INTO mysql_servers_ssl_params (hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_capath, ssl_crl, ssl_crlpath, ssl_cipher, tls_version, comment) VALUES ('%s', %d, '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')";
+			const size_t q_len = strlen(q);
+			for (i=0; i< count; i++) {
 			const Setting &line = mysql_servers_ssl_params[i];
 			string hostname = "";
 			int port = 3306;
@@ -1484,12 +1485,23 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
 			line.lookupValue("comment", comment);
 			char *o1=strdup(comment.c_str());
 			char *o=escape_string_single_quotes(o1, false);
+			const size_t hostname_len = hostname.length();
+			const size_t username_len = username.length();
+			const size_t ssl_ca_len = ssl_ca.length();
+			const size_t ssl_cert_len = ssl_cert.length();
+			const size_t ssl_key_len = ssl_key.length();
+			const size_t ssl_capath_len = ssl_capath.length();
+			const size_t ssl_crl_len = ssl_crl.length();
+			const size_t ssl_crlpath_len = ssl_crlpath.length();
+			const size_t ssl_cipher_len = ssl_cipher.length();
+			const size_t tls_version_len = tls_version.length();
+			const size_t escaped_comment_len = strlen(o);
 			char *query=(char *)malloc(
-				strlen(q)
-				+ hostname.length() + username.length()
-				+ ssl_ca.length() + ssl_cert.length() + ssl_key.length() + ssl_capath.length()
-				+ ssl_crl.length() + ssl_crlpath.length() + ssl_cipher.length() + tls_version.length()
-				+ strlen(o) + 32);
+				q_len
+				+ hostname_len + username_len
+				+ ssl_ca_len + ssl_cert_len + ssl_key_len + ssl_capath_len
+				+ ssl_crl_len + ssl_crlpath_len + ssl_cipher_len + tls_version_len
+				+ escaped_comment_len + 32);
 			sprintf(query, q,
 				hostname.c_str() , port , username.c_str() ,
 				ssl_ca.c_str() , ssl_cert.c_str() , ssl_key.c_str() , ssl_capath.c_str() ,
@@ -2278,6 +2290,7 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 		const Setting &pgsql_servers_ssl_params = root["pgsql_servers_ssl_params"];
 		int count = pgsql_servers_ssl_params.getLength();
 		char *q=(char *)"INSERT OR REPLACE INTO pgsql_servers_ssl_params (hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_crl, ssl_crlpath, ssl_protocol_version_range, comment) VALUES ('%s', %d, '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')";
+		const size_t q_len = strlen(q);
 		for (i=0; i< count; i++) {
 			const Setting &line = pgsql_servers_ssl_params[i];
 			string hostname = "";
@@ -2305,11 +2318,20 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 			line.lookupValue("comment", comment);
 			char *o1=strdup(comment.c_str());
 			char *o=escape_string_single_quotes(o1, false);
+			const size_t hostname_len = hostname.length();
+			const size_t username_len = username.length();
+			const size_t ssl_ca_len = ssl_ca.length();
+			const size_t ssl_cert_len = ssl_cert.length();
+			const size_t ssl_key_len = ssl_key.length();
+			const size_t ssl_crl_len = ssl_crl.length();
+			const size_t ssl_crlpath_len = ssl_crlpath.length();
+			const size_t ssl_protocol_version_range_len = ssl_protocol_version_range.length();
+			const size_t escaped_comment_len = strlen(o);
 			size_t query_len = (
-				strlen(q)
-				+ hostname.length() + username.length()
-				+ ssl_ca.length() + ssl_cert.length() + ssl_key.length()
-				+ ssl_crl.length() + ssl_crlpath.length() + ssl_protocol_version_range.length() + strlen(o) + 64
+				q_len
+				+ hostname_len + username_len
+				+ ssl_ca_len + ssl_cert_len + ssl_key_len
+				+ ssl_crl_len + ssl_crlpath_len + ssl_protocol_version_range_len + escaped_comment_len + 64
 			);
 			char *query=(char *)malloc(query_len);
 			snprintf(query, query_len, q, hostname.c_str(), port, username.c_str(), ssl_ca.c_str(), ssl_cert.c_str(), ssl_key.c_str(), ssl_crl.c_str(), ssl_crlpath.c_str(), ssl_protocol_version_range.c_str(), o);
@@ -2896,7 +2918,11 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_Fast_Routing_from_configfile() {
 		rule.lookupValue("comment", comment);
 		char *o1 = strdup(comment.c_str());
 		char *o = escape_string_single_quotes(o1, false);
-		size_t query_len = strlen(q) + strlen(username.c_str()) + strlen(schemaname.c_str()) + strlen(o) + 64;
+		const size_t q_len = strlen(q);
+		const size_t username_len = username.size();
+		const size_t schemaname_len = schemaname.size();
+		const size_t escaped_comment_len = strlen(o);
+		size_t query_len = q_len + username_len + schemaname_len + escaped_comment_len + 64;
 		char *query = (char *)malloc(query_len);
 		snprintf(query, query_len, q, username.c_str(), schemaname.c_str(), flagIN, destination_hostgroup, o);
 		admindb->execute(query);
@@ -2932,7 +2958,11 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_Fast_Routing_from_configfile() {
 		rule.lookupValue("comment", comment);
 		char *o1 = strdup(comment.c_str());
 		char *o = escape_string_single_quotes(o1, false);
-		size_t query_len = strlen(q) + strlen(username.c_str()) + strlen(database.c_str()) + strlen(o) + 64;
+		const size_t q_len = strlen(q);
+		const size_t username_len = username.size();
+		const size_t database_len = database.size();
+		const size_t escaped_comment_len = strlen(o);
+		size_t query_len = q_len + username_len + database_len + escaped_comment_len + 64;
 		char *query = (char *)malloc(query_len);
 		snprintf(query, query_len, q, username.c_str(), database.c_str(), flagIN, destination_hostgroup, o);
 		admindb->execute(query);
@@ -2968,7 +2998,12 @@ int ProxySQL_Config::Read_MySQL_Firewall_from_configfile() {
 			u.lookupValue("comment", comment);
 			char *o1=strdup(comment.c_str());
 			char *o=escape_string_single_quotes(o1, false);
-			size_t query_len = strlen(q) + strlen(username.c_str()) + strlen(client_address.c_str()) + strlen(mode.c_str()) + strlen(o) + 32;
+			const size_t q_len = strlen(q);
+			const size_t username_len = username.size();
+			const size_t client_address_len = client_address.size();
+			const size_t mode_len = mode.size();
+			const size_t escaped_comment_len = strlen(o);
+			size_t query_len = q_len + username_len + client_address_len + mode_len + escaped_comment_len + 32;
 			char *query=(char *)malloc(query_len);
 			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), mode.c_str(), o);
 			admindb->execute(query);
@@ -3001,7 +3036,13 @@ int ProxySQL_Config::Read_MySQL_Firewall_from_configfile() {
 			r.lookupValue("comment", comment);
 			char *o1=strdup(comment.c_str());
 			char *o=escape_string_single_quotes(o1, false);
-			size_t query_len = strlen(q) + strlen(username.c_str()) + strlen(client_address.c_str()) + strlen(schemaname.c_str()) + strlen(digest.c_str()) + strlen(o) + 64;
+			const size_t q_len = strlen(q);
+			const size_t username_len = username.size();
+			const size_t client_address_len = client_address.size();
+			const size_t schemaname_len = schemaname.size();
+			const size_t digest_len = digest.size();
+			const size_t escaped_comment_len = strlen(o);
+			size_t query_len = q_len + username_len + client_address_len + schemaname_len + digest_len + escaped_comment_len + 64;
 			char *query=(char *)malloc(query_len);
 			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), schemaname.c_str(), flagIN, digest.c_str(), o);
 			admindb->execute(query);
@@ -3022,7 +3063,9 @@ int ProxySQL_Config::Read_MySQL_Firewall_from_configfile() {
 			std::string fingerprint="";
 			f.lookupValue("active", active);
 			f.lookupValue("fingerprint", fingerprint);
-			size_t query_len = strlen(q) + strlen(fingerprint.c_str()) + 16;
+			const size_t q_len = strlen(q);
+			const size_t fingerprint_len = fingerprint.size();
+			size_t query_len = q_len + fingerprint_len + 16;
 			char *query=(char *)malloc(query_len);
 			snprintf(query, query_len, q, active, fingerprint.c_str());
 			admindb->execute(query);
@@ -3058,7 +3101,12 @@ int ProxySQL_Config::Read_PgSQL_Firewall_from_configfile() {
 			u.lookupValue("comment", comment);
 			char *o1=strdup(comment.c_str());
 			char *o=escape_string_single_quotes(o1, false);
-			size_t query_len = strlen(q) + strlen(username.c_str()) + strlen(client_address.c_str()) + strlen(mode.c_str()) + strlen(o) + 32;
+			const size_t q_len = strlen(q);
+			const size_t username_len = username.size();
+			const size_t client_address_len = client_address.size();
+			const size_t mode_len = mode.size();
+			const size_t escaped_comment_len = strlen(o);
+			size_t query_len = q_len + username_len + client_address_len + mode_len + escaped_comment_len + 32;
 			char *query=(char *)malloc(query_len);
 			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), mode.c_str(), o);
 			admindb->execute(query);
@@ -3091,7 +3139,13 @@ int ProxySQL_Config::Read_PgSQL_Firewall_from_configfile() {
 			r.lookupValue("comment", comment);
 			char *o1=strdup(comment.c_str());
 			char *o=escape_string_single_quotes(o1, false);
-			size_t query_len = strlen(q) + strlen(username.c_str()) + strlen(client_address.c_str()) + strlen(database.c_str()) + strlen(digest.c_str()) + strlen(o) + 64;
+			const size_t q_len = strlen(q);
+			const size_t username_len = username.size();
+			const size_t client_address_len = client_address.size();
+			const size_t database_len = database.size();
+			const size_t digest_len = digest.size();
+			const size_t escaped_comment_len = strlen(o);
+			size_t query_len = q_len + username_len + client_address_len + database_len + digest_len + escaped_comment_len + 64;
 			char *query=(char *)malloc(query_len);
 			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), database.c_str(), flagIN, digest.c_str(), o);
 			admindb->execute(query);
@@ -3112,7 +3166,9 @@ int ProxySQL_Config::Read_PgSQL_Firewall_from_configfile() {
 			std::string fingerprint="";
 			f.lookupValue("active", active);
 			f.lookupValue("fingerprint", fingerprint);
-			size_t query_len = strlen(q) + strlen(fingerprint.c_str()) + 16;
+			const size_t q_len = strlen(q);
+			const size_t fingerprint_len = fingerprint.size();
+			size_t query_len = q_len + fingerprint_len + 16;
 			char *query=(char *)malloc(query_len);
 			snprintf(query, query_len, q, active, fingerprint.c_str());
 			admindb->execute(query);
