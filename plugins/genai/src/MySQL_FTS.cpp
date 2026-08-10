@@ -27,7 +27,8 @@ int MySQL_FTS::init() {
 	// Initialize database connection
 	db = new SQLite3DB();
 	std::vector<char> path_buf(db_path.size() + 1);
-	memcpy(path_buf.data(), db_path.c_str(), db_path.size() + 1);
+	memcpy(path_buf.data(), db_path.c_str(), db_path.size());
+	path_buf[db_path.size()] = '\0';
 	int rc = db->open(path_buf.data(), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 	if (rc != SQLITE_OK) {
 		proxy_error("Failed to open FTS database at %s: %d\n", db_path.c_str(), rc);
