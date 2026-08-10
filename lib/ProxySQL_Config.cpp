@@ -240,8 +240,9 @@ int ProxySQL_Config::Read_MySQL_Users_from_configfile(std::string& error) {
 		user.lookupValue("comment", comment);
 		char *o1=strdup(comment.c_str());
 		char *o=escape_string_single_quotes(o1, false);
-		char *query=(char *)malloc(strlen(q)+strlen(username.c_str())+strlen(password.c_str())+strlen(o)+strlen(attributes.c_str())+128);
-		sprintf(query,q, username.c_str(), password.c_str(), active, use_ssl, default_hostgroup, default_schema.c_str(), schema_locked, transaction_persistent, fast_forward, max_connections, attributes.c_str(), o);
+		const char* safe_comment = o ? o : "";
+		char *query=(char *)malloc(strlen(q)+strlen(username.c_str())+strlen(password.c_str())+strlen(safe_comment)+strlen(attributes.c_str())+128);
+		sprintf(query,q, username.c_str(), password.c_str(), active, use_ssl, default_hostgroup, default_schema.c_str(), schema_locked, transaction_persistent, fast_forward, max_connections, attributes.c_str(), safe_comment);
 		admindb->execute(query);
 		if (o!=o1) free(o);
 		free(o1);
@@ -1394,8 +1395,9 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
 			server.lookupValue("comment", comment);
 			char *o1=strdup(comment.c_str());
 			char *o=escape_string_single_quotes(o1, false);
-			char *query=(char *)malloc(strlen(q)+strlen(status.c_str())+strlen(address.c_str())+strlen(o)+128);
-			sprintf(query,q, address.c_str(), port, gtid_port, hostgroup, compression, weight, status.c_str(), max_connections, max_replication_lag, use_ssl, max_latency_ms, o);
+			const char* safe_comment = o ? o : "";
+			char *query=(char *)malloc(strlen(q)+strlen(status.c_str())+strlen(address.c_str())+strlen(safe_comment)+128);
+			sprintf(query,q, address.c_str(), port, gtid_port, hostgroup, compression, weight, status.c_str(), max_connections, max_replication_lag, use_ssl, max_latency_ms, safe_comment);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
 			if (o!=o1) free(o);
@@ -1437,8 +1439,10 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
 			}
 			char *t1=strdup(check_type.c_str());
 			char *t=escape_string_single_quotes(t1, false);
-			char *query=(char *)malloc(strlen(q)+strlen(o)+strlen(t)+32);
-			sprintf(query,q, writer_hostgroup, reader_hostgroup, o, t);
+			const char* safe_comment = o ? o : "";
+			const char* safe_check_type = t ? t : "";
+			char *query=(char *)malloc(strlen(q)+strlen(safe_comment)+strlen(safe_check_type)+32);
+			sprintf(query,q, writer_hostgroup, reader_hostgroup, safe_comment, safe_check_type);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
 			if (o!=o1) free(o);
@@ -1495,7 +1499,8 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
 			const size_t ssl_crlpath_len = ssl_crlpath.length();
 			const size_t ssl_cipher_len = ssl_cipher.length();
 			const size_t tls_version_len = tls_version.length();
-			const size_t escaped_comment_len = strlen(o);
+			const char* safe_comment = o ? o : "";
+			const size_t escaped_comment_len = strlen(safe_comment);
 			char *query=(char *)malloc(
 				q_len
 				+ hostname_len + username_len
@@ -1506,7 +1511,7 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
 				hostname.c_str() , port , username.c_str() ,
 				ssl_ca.c_str() , ssl_cert.c_str() , ssl_key.c_str() , ssl_capath.c_str() ,
 				ssl_crl.c_str() , ssl_crlpath.c_str() , ssl_cipher.c_str() , tls_version.c_str() ,
-				o);
+							 safe_comment);
 			admindb->execute(query);
 			if (o!=o1) free(o);
 			free(o1);
@@ -1551,8 +1556,9 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
                         line.lookupValue("comment", comment);
                         char *o1=strdup(comment.c_str());
                         char *o=escape_string_single_quotes(o1, false);
-                        char *query=(char *)malloc(strlen(q)+strlen(o)+128); // 128 vs sizeof(int)*8
-                        sprintf(query,q, writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, o);
+                        const char* safe_comment = o ? o : "";
+                        char *query=(char *)malloc(strlen(q)+strlen(safe_comment)+128); // 128 vs sizeof(int)*8
+                        sprintf(query,q, writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, safe_comment);
                         //fprintf(stderr, "%s\n", query);
                         admindb->execute(query);
                         if (o!=o1) free(o);
@@ -1598,8 +1604,9 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
                     line.lookupValue("comment", comment);
                     char *o1=strdup(comment.c_str());
                     char *o=escape_string_single_quotes(o1, false);
-                    char *query=(char *)malloc(strlen(q)+strlen(o)+128); // 128 vs sizeof(int)*8
-                    sprintf(query,q, writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, o);
+                    const char* safe_comment = o ? o : "";
+                    char *query=(char *)malloc(strlen(q)+strlen(safe_comment)+128); // 128 vs sizeof(int)*8
+                    sprintf(query,q, writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, safe_comment);
                     //fprintf(stderr, "%s\n", query);
                     admindb->execute(query);
                     if (o!=o1) free(o);
@@ -1653,8 +1660,10 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
                     char *o=escape_string_single_quotes(o1, false);
                     char *p1=strdup(domain_name.c_str());
                     char *p=escape_string_single_quotes(p1, false);
-                    char *query=(char *)malloc(strlen(q)+strlen(o)+strlen(p)+256); // 128 vs sizeof(int)*8
-                    sprintf(query,q, writer_hostgroup, reader_hostgroup, active, aurora_port, p, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, autopurge_missing_checks, o);
+                    const char* safe_comment = o ? o : "";
+                    const char* safe_domain = p ? p : "";
+                    char *query=(char *)malloc(strlen(q)+strlen(safe_comment)+strlen(safe_domain)+256); // 128 vs sizeof(int)*8
+                    sprintf(query,q, writer_hostgroup, reader_hostgroup, active, aurora_port, safe_domain, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, autopurge_missing_checks, safe_comment);
                     //fprintf(stderr, "%s\n", query);
                     admindb->execute(query);
                     if (o!=o1) free(o);
@@ -1709,8 +1718,9 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
                     line.lookupValue("comment", comment);
                     char *o1=strdup(comment.c_str());
                     char *o=escape_string_single_quotes(o1, false);
-                    char *query=(char *)malloc(strlen(q)+strlen(o)+256); // 128 vs sizeof(int)*8
-                    sprintf(query,q, writer_hostgroup, reader_hostgroup, green_writer_str, green_reader_str, active, writer_is_also_reader, check_interval_ms, check_timeout_ms, o);
+                    const char* safe_comment = o ? o : "";
+                    char *query=(char *)malloc(strlen(q)+strlen(safe_comment)+256); // 128 vs sizeof(int)*8
+                    sprintf(query,q, writer_hostgroup, reader_hostgroup, green_writer_str, green_reader_str, active, writer_is_also_reader, check_interval_ms, check_timeout_ms, safe_comment);
                     admindb->execute(query);
                     if (o!=o1) free(o);
                     free(o1);
@@ -1881,8 +1891,9 @@ int ProxySQL_Config::Read_ProxySQL_Servers_from_configfile(std::string& error) {
 			server.lookupValue("comment", comment);
 			char *o1=strdup(comment.c_str());
 			char *o=escape_string_single_quotes(o1, false);
-			char *query=(char *)malloc(strlen(q)+strlen(address.c_str())+strlen(o)+128);
-			sprintf(query, q, address.c_str(), port, weight, o);
+			const char* safe_comment = o ? o : "";
+			char *query=(char *)malloc(strlen(q)+strlen(address.c_str())+strlen(safe_comment)+128);
+			sprintf(query, q, address.c_str(), port, weight, safe_comment);
 			proxy_info("Cluster: Adding ProxySQL Servers %s:%d from config file\n", address.c_str(), port);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
@@ -2147,8 +2158,9 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 			server.lookupValue("comment", comment);
 			char* o1 = strdup(comment.c_str());
 			char* o = escape_string_single_quotes(o1, false);
-			char* query = (char*)malloc(strlen(q) + strlen(status.c_str()) + strlen(address.c_str()) + strlen(o) + 128);
-			sprintf(query, q, address.c_str(), port, hostgroup, compression, weight, status.c_str(), max_connections, max_replication_lag, use_ssl, max_latency_ms, o);
+			const char* safe_comment = o ? o : "";
+			char* query = (char*)malloc(strlen(q) + strlen(status.c_str()) + strlen(address.c_str()) + strlen(safe_comment) + 128);
+			sprintf(query, q, address.c_str(), port, hostgroup, compression, weight, status.c_str(), max_connections, max_replication_lag, use_ssl, max_latency_ms, safe_comment);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
 			if (o != o1) free(o);
@@ -2190,8 +2202,10 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 			}
 			char* t1 = strdup(check_type.c_str());
 			char* t = escape_string_single_quotes(t1, false);
-			char* query = (char*)malloc(strlen(q) + strlen(o) + strlen(t) + 32);
-			sprintf(query, q, writer_hostgroup, reader_hostgroup, o, t);
+			const char* safe_comment = o ? o : "";
+			const char* safe_check_type = t ? t : "";
+			char* query = (char*)malloc(strlen(q) + strlen(safe_comment) + strlen(safe_check_type) + 32);
+			sprintf(query, q, writer_hostgroup, reader_hostgroup, safe_comment, safe_check_type);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
 			if (o != o1) free(o);
@@ -2326,7 +2340,8 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 			const size_t ssl_crl_len = ssl_crl.length();
 			const size_t ssl_crlpath_len = ssl_crlpath.length();
 			const size_t ssl_protocol_version_range_len = ssl_protocol_version_range.length();
-			const size_t escaped_comment_len = strlen(o);
+			const char* safe_comment = o ? o : "";
+			const size_t escaped_comment_len = strlen(safe_comment);
 			size_t query_len = (
 				q_len
 				+ hostname_len + username_len
@@ -2334,7 +2349,7 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 				+ ssl_crl_len + ssl_crlpath_len + ssl_protocol_version_range_len + escaped_comment_len + 64
 			);
 			char *query=(char *)malloc(query_len);
-			snprintf(query, query_len, q, hostname.c_str(), port, username.c_str(), ssl_ca.c_str(), ssl_cert.c_str(), ssl_key.c_str(), ssl_crl.c_str(), ssl_crlpath.c_str(), ssl_protocol_version_range.c_str(), o);
+			snprintf(query, query_len, q, hostname.c_str(), port, username.c_str(), ssl_ca.c_str(), ssl_cert.c_str(), ssl_key.c_str(), ssl_crl.c_str(), ssl_crlpath.c_str(), ssl_protocol_version_range.c_str(), safe_comment);
 			admindb->execute(query);
 			if (o != o1) free(o);
 			free(o1);
@@ -2431,8 +2446,9 @@ int ProxySQL_Config::Read_PgSQL_Users_from_configfile(std::string& error) {
 		user.lookupValue("comment", comment);
 		char* o1 = strdup(comment.c_str());
 		char* o = escape_string_single_quotes(o1, false);
-		char* query = (char*)malloc(strlen(q) + strlen(username.c_str()) + strlen(password.c_str()) + strlen(o) + strlen(attributes.c_str()) + 128);
-		sprintf(query, q, username.c_str(), password.c_str(), active, use_ssl, default_hostgroup, transaction_persistent, fast_forward, max_connections, attributes.c_str(), o);
+		const char* safe_comment = o ? o : "";
+		char* query = (char*)malloc(strlen(q) + strlen(username.c_str()) + strlen(password.c_str()) + strlen(safe_comment) + strlen(attributes.c_str()) + 128);
+		sprintf(query, q, username.c_str(), password.c_str(), active, use_ssl, default_hostgroup, transaction_persistent, fast_forward, max_connections, attributes.c_str(), safe_comment);
 		admindb->execute(query);
 		if (o != o1) free(o);
 		free(o1);
@@ -2921,10 +2937,11 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_Fast_Routing_from_configfile() {
 		const size_t q_len = strlen(q);
 		const size_t username_len = username.size();
 		const size_t schemaname_len = schemaname.size();
-		const size_t escaped_comment_len = strlen(o);
+		const char* safe_comment = o ? o : "";
+		const size_t escaped_comment_len = strlen(safe_comment);
 		size_t query_len = q_len + username_len + schemaname_len + escaped_comment_len + 64;
 		char *query = (char *)malloc(query_len);
-		snprintf(query, query_len, q, username.c_str(), schemaname.c_str(), flagIN, destination_hostgroup, o);
+		snprintf(query, query_len, q, username.c_str(), schemaname.c_str(), flagIN, destination_hostgroup, safe_comment);
 		admindb->execute(query);
 		if (o != o1) free(o);
 		free(o1);
@@ -2961,10 +2978,11 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_Fast_Routing_from_configfile() {
 		const size_t q_len = strlen(q);
 		const size_t username_len = username.size();
 		const size_t database_len = database.size();
-		const size_t escaped_comment_len = strlen(o);
+		const char* safe_comment = o ? o : "";
+		const size_t escaped_comment_len = strlen(safe_comment);
 		size_t query_len = q_len + username_len + database_len + escaped_comment_len + 64;
 		char *query = (char *)malloc(query_len);
-		snprintf(query, query_len, q, username.c_str(), database.c_str(), flagIN, destination_hostgroup, o);
+		snprintf(query, query_len, q, username.c_str(), database.c_str(), flagIN, destination_hostgroup, safe_comment);
 		admindb->execute(query);
 		if (o != o1) free(o);
 		free(o1);
@@ -3002,10 +3020,11 @@ int ProxySQL_Config::Read_MySQL_Firewall_from_configfile() {
 			const size_t username_len = username.size();
 			const size_t client_address_len = client_address.size();
 			const size_t mode_len = mode.size();
-			const size_t escaped_comment_len = strlen(o);
+			const char* safe_comment = o ? o : "";
+			const size_t escaped_comment_len = strlen(safe_comment);
 			size_t query_len = q_len + username_len + client_address_len + mode_len + escaped_comment_len + 32;
 			char *query=(char *)malloc(query_len);
-			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), mode.c_str(), o);
+			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), mode.c_str(), safe_comment);
 			admindb->execute(query);
 			if (o != o1) free(o);
 			free(o1);
@@ -3041,10 +3060,11 @@ int ProxySQL_Config::Read_MySQL_Firewall_from_configfile() {
 			const size_t client_address_len = client_address.size();
 			const size_t schemaname_len = schemaname.size();
 			const size_t digest_len = digest.size();
-			const size_t escaped_comment_len = strlen(o);
+			const char* safe_comment = o ? o : "";
+			const size_t escaped_comment_len = strlen(safe_comment);
 			size_t query_len = q_len + username_len + client_address_len + schemaname_len + digest_len + escaped_comment_len + 64;
 			char *query=(char *)malloc(query_len);
-			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), schemaname.c_str(), flagIN, digest.c_str(), o);
+			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), schemaname.c_str(), flagIN, digest.c_str(), safe_comment);
 			admindb->execute(query);
 			if (o != o1) free(o);
 			free(o1);
@@ -3105,10 +3125,11 @@ int ProxySQL_Config::Read_PgSQL_Firewall_from_configfile() {
 			const size_t username_len = username.size();
 			const size_t client_address_len = client_address.size();
 			const size_t mode_len = mode.size();
-			const size_t escaped_comment_len = strlen(o);
+			const char* safe_comment = o ? o : "";
+			const size_t escaped_comment_len = strlen(safe_comment);
 			size_t query_len = q_len + username_len + client_address_len + mode_len + escaped_comment_len + 32;
 			char *query=(char *)malloc(query_len);
-			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), mode.c_str(), o);
+			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), mode.c_str(), safe_comment);
 			admindb->execute(query);
 			if (o != o1) free(o);
 			free(o1);
@@ -3144,10 +3165,11 @@ int ProxySQL_Config::Read_PgSQL_Firewall_from_configfile() {
 			const size_t client_address_len = client_address.size();
 			const size_t database_len = database.size();
 			const size_t digest_len = digest.size();
-			const size_t escaped_comment_len = strlen(o);
+			const char* safe_comment = o ? o : "";
+			const size_t escaped_comment_len = strlen(safe_comment);
 			size_t query_len = q_len + username_len + client_address_len + database_len + digest_len + escaped_comment_len + 64;
 			char *query=(char *)malloc(query_len);
-			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), database.c_str(), flagIN, digest.c_str(), o);
+			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), database.c_str(), flagIN, digest.c_str(), safe_comment);
 			admindb->execute(query);
 			if (o != o1) free(o);
 			free(o1);
