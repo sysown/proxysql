@@ -89,11 +89,12 @@ MARIADB_CHARSET_INFO * proxysql_find_charset_collate_names(const char *csname_, 
 	} else {
 		csname = csname_;
 	}
-	if (strncasecmp(collatename_,(const char *)"utf8mb3", 7)==0) {
-		memcpy(buf,(const char *)"utf8",4);
-		snprintf(buf+4, sizeof(buf)-4, "%s", collatename_ + 7);
-		collatename = buf;
-	} else {
+		if (strncasecmp(collatename_,(const char *)"utf8mb3", 7)==0) {
+			memcpy(buf, "utf8", 4);
+			buf[4] = '\0';
+			snprintf(buf + 4, sizeof(buf) - 4, "%s", collatename_ + 7);
+			collatename = buf;
+		} else {
 		collatename = collatename_;
 	}
 	do {
