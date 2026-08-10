@@ -702,8 +702,10 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 		}
 		if (strlen(tbh)>=3 && tbh[0]=='`' && tbh[strlen(tbh)-1]=='`') { // tablename is quoted
 			char *tbh_tmp=(char *)malloc(strlen(tbh)-1);
-			strncpy(tbh_tmp,tbh+1,strlen(tbh)-2);
-			tbh_tmp[strlen(tbh)-2]=0;
+			size_t tbh_len = strlen(tbh);
+			size_t quoted_len = tbh_len - 2;
+			memcpy(tbh_tmp, tbh + 1, quoted_len);
+			tbh_tmp[quoted_len] = 0;
 			free(tbh);
 			tbh=tbh_tmp;
 		}
