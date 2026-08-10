@@ -3437,7 +3437,13 @@ bool MySQL_Protocol::verify_user_attributes(int calling_line, const char *callin
 						re2::RE2 subject_alt_regex(str_spiffe_regex, opts);
 
 						ret = re2::RE2::FullMatch((*myds)->x509_subject_alt_name, subject_alt_regex);
-					} else if (strncmp(spiffe_val.c_str(), "spiffe://", strlen("spiffe://"))==0) {
+					} else if (
+						strncmp(
+							spiffe_val.c_str(),
+							"spiffe://",
+							sizeof("spiffe://") - 1
+						)==0
+					) {
 						if (strcmp(spiffe_val.c_str(), (*myds)->x509_subject_alt_name)==0) {
 							ret = true;
 						}
