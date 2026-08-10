@@ -315,17 +315,18 @@ void PG_pkt::write_DataRow(const char *tupdesc, ...) {
 			val = tmp;
 		} else if (tupdesc[i] == 's') {
 			val = va_arg(ap, char *);
-		} else if (tupdesc[i] == 'b') {
-			int blen = va_arg(ap, int);
-			if (blen >= 0) {
-				uint8_t *bval = va_arg(ap, uint8_t *);
-				size_t required = 2 + blen * 2 + 1;
-				tmp2 = (char *)malloc(required);
-				memcpy(tmp2, "\\x", 3);
-				for (int j = 0; j < blen; j++)
-					sprintf(tmp2 + (2 + j * 2), "%02x", bval[j]);
-				val = tmp2;
-			} else {
+				} else if (tupdesc[i] == 'b') {
+					int blen = va_arg(ap, int);
+					if (blen >= 0) {
+						uint8_t *bval = va_arg(ap, uint8_t *);
+						size_t required = 2 + blen * 2 + 1;
+						tmp2 = (char *)malloc(required);
+						memcpy(tmp2, "\\x", 2);
+						tmp2[2] = '\0';
+						for (int j = 0; j < blen; j++)
+							snprintf(tmp2 + (2 + j * 2), 3, "%02x", bval[j]);
+						val = tmp2;
+					} else {
 				(void) va_arg(ap, uint8_t *);
 				val = NULL;
 			}
