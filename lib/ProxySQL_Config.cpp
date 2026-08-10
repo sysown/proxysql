@@ -1448,7 +1448,7 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
 			const size_t safe_comment_len = safe_strlen(safe_comment);
 			const size_t query_len = query_base_len + status_len + address_len + safe_comment_len + 128;
 			char *query=(char *)malloc(query_len);
-			sprintf(query,q, address.c_str(), port, gtid_port, hostgroup, compression, weight, status.c_str(), max_connections, max_replication_lag, use_ssl, max_latency_ms, safe_comment);
+				snprintf(query, query_len, q, address.c_str(), port, gtid_port, hostgroup, compression, weight, status.c_str(), max_connections, max_replication_lag, use_ssl, max_latency_ms, safe_comment);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
 			if (o!=o1) free(o);
@@ -1497,7 +1497,7 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
 			const size_t safe_check_type_len = safe_strlen(safe_check_type);
 			const size_t query_len = query_base_len + safe_comment_len + safe_check_type_len + 32;
 			char *query=(char *)malloc(query_len);
-			sprintf(query,q, writer_hostgroup, reader_hostgroup, safe_comment, safe_check_type);
+				snprintf(query, query_len, q, writer_hostgroup, reader_hostgroup, safe_comment, safe_check_type);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
 			if (o!=o1) free(o);
@@ -1616,7 +1616,7 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
 			const size_t safe_comment_len = safe_strlen(safe_comment);
 			const size_t query_len = query_base_len + safe_comment_len + 128; // 128 vs sizeof(int)*8
 			char *query=(char *)malloc(query_len);
-			sprintf(query,q, writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, safe_comment);
+				snprintf(query, query_len, q, writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, safe_comment);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
 			if (o!=o1) free(o);
@@ -1667,7 +1667,7 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
                     const size_t safe_comment_len = safe_strlen(safe_comment);
                     const size_t query_len = query_base_len + safe_comment_len + 128; // 128 vs sizeof(int)*8
                     char *query=(char *)malloc(query_len);
-                    sprintf(query,q, writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, safe_comment);
+					snprintf(query, query_len, q, writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, safe_comment);
                     //fprintf(stderr, "%s\n", query);
                     admindb->execute(query);
                     if (o!=o1) free(o);
@@ -1728,7 +1728,7 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
                     const size_t safe_domain_len = safe_strlen(safe_domain);
                     const size_t query_len = query_base_len + safe_comment_len + safe_domain_len + 256; // 128 vs sizeof(int)*8
                     char *query=(char *)malloc(query_len);
-                    sprintf(query,q, writer_hostgroup, reader_hostgroup, active, aurora_port, safe_domain, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, autopurge_missing_checks, safe_comment);
+					snprintf(query, query_len, q, writer_hostgroup, reader_hostgroup, active, aurora_port, safe_domain, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, autopurge_missing_checks, safe_comment);
                     //fprintf(stderr, "%s\n", query);
                     admindb->execute(query);
                     if (o!=o1) free(o);
@@ -1788,7 +1788,7 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
                     const size_t safe_comment_len = safe_strlen(safe_comment);
                     const size_t query_len = query_base_len + safe_comment_len + 256; // 128 vs sizeof(int)*8
                     char *query=(char *)malloc(query_len);
-                    sprintf(query,q, writer_hostgroup, reader_hostgroup, green_writer_str.c_str(), green_reader_str.c_str(), active, writer_is_also_reader, check_interval_ms, check_timeout_ms, safe_comment);
+					snprintf(query, query_len, q, writer_hostgroup, reader_hostgroup, green_writer_str.c_str(), green_reader_str.c_str(), active, writer_is_also_reader, check_interval_ms, check_timeout_ms, safe_comment);
                     admindb->execute(query);
                     if (o!=o1) free(o);
                     free(o1);
@@ -1966,7 +1966,7 @@ int ProxySQL_Config::Read_ProxySQL_Servers_from_configfile(std::string& error) {
 			const size_t safe_comment_len = safe_strlen(safe_comment);
 			const size_t query_len = query_base_len + address_len + safe_comment_len + 128;
 			char *query=(char *)malloc(query_len);
-			sprintf(query, q, address.c_str(), port, weight, safe_comment);
+			snprintf(query, query_len, q, address.c_str(), port, weight, safe_comment);
 			proxy_info("Cluster: Adding ProxySQL Servers %s:%d from config file\n", address.c_str(), port);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
@@ -2238,7 +2238,7 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 			const size_t safe_comment_len = safe_strlen(safe_comment);
 			const size_t query_len = query_base_len + status_len + address_len + safe_comment_len + 128;
 			char* query = (char*)malloc(query_len);
-			sprintf(query, q, address.c_str(), port, hostgroup, compression, weight, status.c_str(), max_connections, max_replication_lag, use_ssl, max_latency_ms, safe_comment);
+				snprintf(query, query_len, q, address.c_str(), port, hostgroup, compression, weight, status.c_str(), max_connections, max_replication_lag, use_ssl, max_latency_ms, safe_comment);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
 			if (o != o1) free(o);
@@ -2287,7 +2287,7 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 			const size_t safe_check_type_len = safe_strlen(safe_check_type);
 			const size_t query_len = query_base_len + safe_comment_len + safe_check_type_len + 32;
 			char* query = (char*)malloc(query_len);
-			sprintf(query, q, writer_hostgroup, reader_hostgroup, safe_comment, safe_check_type);
+				snprintf(query, query_len, q, writer_hostgroup, reader_hostgroup, safe_comment, safe_check_type);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
 			if (o != o1) free(o);
