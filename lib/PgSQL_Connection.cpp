@@ -3518,6 +3518,20 @@ bool PgSQL_Connection::is_connection_in_reusable_state() const {
 	// byte tracked natively.
 	PGTransactionStatusType txn_status;
 	if (native_mode) {
+		// A connection whose socket is already gone, or that never completed its
+		// handshake, can never be reused -- whatever native_txn_status still says.
+		//
+		// native_teardown() closes the fd and sets it to -1 on every failure path
+		// but does not touch native_txn_status, so a connection that died during
+		// authentication still reports its initial 'I' here. That mapped to
+		// PQTRANS_IDLE and made this function answer "reusable", so
+		// destroy_MySQL_Connection_From_Pool() took its reset-and-re-pool branch
+		// instead of destroying. The dead object (fd == -1) went back into the
+		// pool, and the next session to pick it up aborted the whole process on
+		// the `default: assert(0)` in PgSQL_Connection::handler().
+		if (fd == -1 || native_connected == false) {
+			return false;
+		}
 		switch (native_txn_status) {
 			case 'I': txn_status = PQTRANS_IDLE; break;
 			case 'T': txn_status = PQTRANS_INTRANS; break;
