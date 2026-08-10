@@ -23,11 +23,18 @@
 #include <resolv.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include <random>
 
 #include <fcntl.h>
 #include <sys/utsname.h>
 
 #include "tap.h"
+
+static int random_replication_lag_seconds() {
+	static thread_local std::random_device random_source;
+	static thread_local std::uniform_int_distribution<int> distribution(10, 39);
+	return distribution(random_source);
+}
 
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
 #define SELECT_VERSION_COMMENT_LEN 32
@@ -206,7 +213,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 			if (strstr(query_no_space,(char *)"Seconds_Behind_Master")) {
 				l_free(0, query);
 				const std::string formatted_query = cstr_format(
-					"SELECT %d as Seconds_Behind_Master", rand()%30+10
+					"SELECT %d as Seconds_Behind_Master", random_replication_lag_seconds()
 				).str;
 				query = l_strdup(formatted_query.c_str());
 			}

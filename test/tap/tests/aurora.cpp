@@ -386,7 +386,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		c_split_2(query_no_space+strAl,".",&dbh,&tbh);
 
 		if (std::string_view(tbh).empty()) {
-			free(tbh);
+			l_free(0, tbh);
 			tbh=dbh;
 			dbh=strdup("main");
 		}
@@ -409,13 +409,13 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 			+ ".sqlite_master WHERE type='table' AND name='" + tbh + "'";
 		char *buff = l_strdup(table_query.c_str());
 		if (!buff) {
-			free(tbh);
-			free(dbh);
+			l_free(0, tbh);
+			l_free(0, dbh);
 			l_free(query_length, query);
 			return;
 		}
-		free(tbh);
-		free(dbh);
+		l_free(0, tbh);
+		l_free(0, dbh);
 		l_free(query_length,query);
 		query=buff;
 		query_length=table_query.size()+1;

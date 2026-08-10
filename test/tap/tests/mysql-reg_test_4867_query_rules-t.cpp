@@ -136,11 +136,11 @@ char* psprintf(const char* fmt, ...) {
 
 char* escape_str(MYSQL* mysql, const char* str) {
     if (!str) return strdup("NULL");
-    char* escaped = (char*)malloc(2 * strlen(str) + 1);
-    mysql_real_escape_string(mysql, escaped, str, strlen(str));
-    size_t len = strlen(escaped);
-    char* result = (char*)malloc(len + 3);
-    snprintf(result, len + 3, "'%s'", escaped);
+    const size_t input_len = strlen(str);
+    char* escaped = (char*)malloc(2 * input_len + 1);
+    const unsigned long escaped_len = mysql_real_escape_string(mysql, escaped, str, input_len);
+    char* result = (char*)malloc(escaped_len + 3);
+    snprintf(result, escaped_len + 3, "'%s'", escaped);
     free(escaped);
     return result;
 }

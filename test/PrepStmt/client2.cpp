@@ -91,16 +91,16 @@ int main() {
 		bl=strlen(buff);
 		uint64_t hash=local_stmts->compute_hash(0,(char *)USER,(char *)SCHEMA,buff,bl);
 		MySQL_STMT_Global_info *a=GloMyStmt->find_prepared_statement_by_hash(hash);
-		if (a==NULL) {
-			if (mysql_stmt_prepare(stmt[i], buff, bl)) {
-				fprintf(stderr, " mysql_stmt_prepare(), failed: %s\n" , mysql_stmt_error(stmt[i]));
-				exit(EXIT_FAILURE);
-			}
-			uint32_t stmid=GloMyStmt->add_prepared_statement(0,(char *)USER,(char *)SCHEMA,buff,bl,stmt[i]);
-			if (NUMPRO < 32)
-				fprintf(stdout, "SERVER_statement_id=%lu , PROXY_statement_id=%u\n", stmt[i]->stmt_id, stmid);
-			local_stmts->insert(stmid,stmt[i]);
-			}
+		if (a != NULL)
+			continue;
+		if (mysql_stmt_prepare(stmt[i], buff, bl)) {
+			fprintf(stderr, " mysql_stmt_prepare(), failed: %s\n" , mysql_stmt_error(stmt[i]));
+			exit(EXIT_FAILURE);
+		}
+		uint32_t stmid=GloMyStmt->add_prepared_statement(0,(char *)USER,(char *)SCHEMA,buff,bl,stmt[i]);
+		if (NUMPRO < 32)
+			fprintf(stdout, "SERVER_statement_id=%lu , PROXY_statement_id=%u\n", stmt[i]->stmt_id, stmid);
+		local_stmts->insert(stmid,stmt[i]);
 		}
 	fprintf(stdout, "Prepared statements: %u client, %u proxy/server. ", NUMPREP, GloMyStmt->total_prepared_statements());
 	fprintf(stdout, "Created in: ");

@@ -277,6 +277,14 @@ class sqlite3server_main_loop_listeners {
 
 static sqlite3server_main_loop_listeners S_amll;
 
+#if defined(TEST_READONLY) || defined(TEST_RDS_BGD)
+static void ensure_readonly_table(SQLite3_Server *server, MySQL_Session *sess) {
+	if (server->readonly_map_size() == 0) {
+		server->load_readonly_table(sess);
+	}
+}
+#endif
+
 #ifdef TEST_GROUPREP
 /**
  * @brief Helper function that checks if the supplied string
@@ -1023,10 +1031,8 @@ __run_query:
 					&& query_no_space_length > k_select_read_only_len+5) {
 						pthread_mutex_lock(&GloSQLite3Server->test_readonly_mutex);
 							// the current test doesn't try to simulate failures, therefore it will return immediately
-							if (GloSQLite3Server->readonly_map_size() == 0) {
-								// probably never initialized
-								GloSQLite3Server->load_readonly_table(sess);
-							}
+							// Load the test table lazily on its first use.
+							ensure_readonly_table(GloSQLite3Server, sess);
 							int rc = GloSQLite3Server->readonly_test_value(query_no_space+k_select_read_only_len);
 							l_free(query_length, query);
 							const std::string formatted_query = cstr_format("SELECT %d as read_only", rc).str;

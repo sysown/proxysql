@@ -1848,8 +1848,8 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
 					char *ecs = escape_string_single_quotes(cs, false);
 					const char* safe_escaped = ecs ? ecs : "";
 					values +=  std::string("'") + safe_escaped + "'";
-					if (cs != ecs) free(cs);
-					if (ecs) free(ecs);
+					if (cs != ecs) l_free(0, cs);
+					l_free(0, ecs);
 				}
 			};
 
@@ -2012,33 +2012,30 @@ int ProxySQL_Config::Write_Global_Variables_to_configfile(std::string& data) {
 	if (error) {
 		proxy_error("Error on read from global_variables : %s\n", error);
 		return -1;
-	} else {
-		if (sqlite_resultset) {
-			std::string prefix;
+	}
+	if (sqlite_resultset == nullptr)
+		return 0;
 
-			for (auto r : sqlite_resultset->rows) {
-				std::string input(r->fields[0]);
-				std::string p1 = input.substr(0, input.find("-"));
-				if (prefix.empty()) {
-					prefix = input.substr(0, input.find("-"));
-					data += prefix + "_variables =\n{\n";
-				} else {
-					if (p1.compare(prefix)) {
-						prefix = p1;
-						data += "}\n\n" + prefix + "_variables = \n{\n";
-					}
-				}
-				if (r->fields[1] && r->fields[1][0] != '\0') {
-					std::stringstream ss;
-					ss << "\t" << r->fields[0] + p1.size() + 1 << "=\"" << r->fields[1] << "\"\n";
-					data += ss.str();
-				}
-			}
-
-			if (!prefix.empty())
-				data += "}\n";
+	std::string prefix;
+	for (auto r : sqlite_resultset->rows) {
+		std::string input(r->fields[0]);
+		std::string p1 = input.substr(0, input.find("-"));
+		if (prefix.empty()) {
+			prefix = p1;
+			data += prefix + "_variables =\n{\n";
+		} else if (p1.compare(prefix)) {
+			prefix = p1;
+			data += "}\n\n" + prefix + "_variables = \n{\n";
+		}
+		if (r->fields[1] && r->fields[1][0] != '\0') {
+			std::stringstream ss;
+			ss << "\t" << r->fields[0] + p1.size() + 1 << "=\"" << r->fields[1] << "\"\n";
+			data += ss.str();
 		}
 	}
+
+	if (!prefix.empty())
+		data += "}\n";
 
 	if (sqlite_resultset)
 		delete sqlite_resultset;

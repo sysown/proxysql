@@ -60,7 +60,7 @@ public:
 
 private:
 	Command_Counter* commands_counters[MYSQL_COM_QUERY___NONE];
-	static bool _is_valid_gtid(char* gtid, size_t gtid_len);
+	static bool _is_valid_gtid(const char* gtid, size_t gtid_len);
 	static MySQL_Query_Processor_Rule_t* new_query_rule(const MySQL_Query_Processor_Rule_t* mqr);
 
 	inline
@@ -82,7 +82,7 @@ private:
 			return;
 		}
 		size_t l = strlen(value);
-		if (!_is_valid_gtid((char*)value, l)) {
+		if (!_is_valid_gtid(value, l)) {
 			proxy_warning("Invalid min_gtid value=%s\n", value);
 			return;
 		}

@@ -566,11 +566,11 @@ __exit__query_parser_command_type:
 	return ret;
 }
 
-bool MySQL_Query_Processor::_is_valid_gtid(char* gtid, size_t gtid_len) {
+bool MySQL_Query_Processor::_is_valid_gtid(const char* gtid, size_t gtid_len) {
 	if (gtid_len < 3) {
 		return false;
 	}
-	char* sep_pos = index(gtid, ':');
+	const char* sep_pos = index(gtid, ':');
 	if (sep_pos == NULL) {
 		return false;
 	}
