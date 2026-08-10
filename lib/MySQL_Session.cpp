@@ -592,21 +592,15 @@ bool Query_Info::is_select_NOT_for_update() {
 				return false;
 			}
 			p=QP;
-			char buf[129];
+			std::string buf;
 			if (ql>=128) { // for long query, just check the last 128 bytes
 				p+=ql-128;
-				memcpy(buf,p,128);
-				buf[128]=0;
+				buf.assign(p, 128);
 			} else {
-				memcpy(buf,p,ql);
-				buf[ql]=0;
+				buf.assign(p, ql);
 			}
-			if (strcasestr(buf," FOR ")) {
-				if (strcasestr(buf," FOR UPDATE ")) {
-					__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
-					return false;
-				}
-				if (strcasestr(buf," FOR SHARE ")) {
+			if (strcasestr((char*)buf.c_str()," FOR ")) {
+				if (strcasestr((char*)buf.c_str()," FOR UPDATE ") || strcasestr((char*)buf.c_str()," FOR SHARE ")) {
 					__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
 					return false;
 				}
@@ -616,7 +610,6 @@ bool Query_Info::is_select_NOT_for_update() {
 	bool_is_select_NOT_for_update=true;
 	return true;
 }
-
 
 void MySQL_Session::set_status(enum session_status e) {
 	if (e==session_status___NONE) {
@@ -7797,13 +7790,14 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					// SET  @@SESSION.sql_mode = CONCAT(CONCAT(@@sql_mode, ',STRICT_ALL_TABLES'), ',NO_AUTO_VALUE_ON_ZERO'),  @@SESSION.sql_auto_is_null = 0, @@SESSION.wait_timeout = 2147483
 					// this is not a complete solution. A right solution involves true parsing
 					size_t query_no_space_length = nq.length();
-					char *query_no_space=(char *)malloc(query_no_space_length+1);
-					memcpy(query_no_space,nq.c_str(),query_no_space_length);
-					query_no_space[query_no_space_length]='\0';
-					query_no_space_length=remove_spaces(query_no_space);
+					std::string query_no_space = nq;
+					if (query_no_space.empty()) {
+						query_no_space_length = 0;
+					} else {
+						query_no_space_length = remove_spaces(&query_no_space[0]);
+					}
 
-					string nq1 = string(query_no_space);
-					free(query_no_space);
+					string nq1 = query_no_space;
 					RE2::GlobalReplace(&nq1,(char *)"SESSION.",(char *)"");
 					RE2::GlobalReplace(&nq1,(char *)"SESSION ",(char *)"");
 					RE2::GlobalReplace(&nq1,(char *)"session.",(char *)"");
