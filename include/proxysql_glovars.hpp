@@ -50,7 +50,7 @@ class ProxySQL_Checksum_Value {
 	}
 	void set_checksum(char *c) {
 		memset(checksum,0,ProxySQL_Checksum_Value_LENGTH);
-		strncpy(checksum,c,ProxySQL_Checksum_Value_LENGTH);
+		memcpy(checksum,c,ProxySQL_Checksum_Value_LENGTH);
 		replace_checksum_zeros(checksum);
 	}
 	~ProxySQL_Checksum_Value() {
