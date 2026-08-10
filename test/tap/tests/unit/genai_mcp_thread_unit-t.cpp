@@ -35,10 +35,9 @@
 /*  Helper: get a variable value as std::string                        */
 /* ------------------------------------------------------------------ */
 static std::string get_var(MCP_Threads_Handler& h, const char* name) {
-	char buf[4096] = {0};
-	int rc = h.get_variable(name, buf, sizeof(buf));
-	if (rc != 0) return "__ERROR__";
-	return std::string(buf);
+	std::string value;
+	if (!h.get_variable_string(name, value)) return "__ERROR__";
+	return value;
 }
 
 /* ================================================================== */
@@ -363,8 +362,10 @@ static void test_null_safety(MCP_Threads_Handler& h) {
 
 	ok(h.get_variable(nullptr, buf, sizeof(buf)) == -1,
 	   "get_variable(nullptr, buf) = -1");
-	ok(h.get_variable("enabled", nullptr, 0) == -1,
+	ok(h.get_variable("enabled", nullptr, sizeof(buf)) == -1,
 	   "get_variable(enabled, nullptr) = -1");
+	ok(h.get_variable("enabled", buf, 0) == -1,
+	   "get_variable(enabled, buf, 0) = -1");
 	ok(h.get_variable(nullptr, nullptr, 0) == -1,
 	   "get_variable(nullptr, nullptr) = -1");
 
@@ -374,6 +375,23 @@ static void test_null_safety(MCP_Threads_Handler& h) {
 	   "set_variable(enabled, nullptr) = -1");
 	ok(h.set_variable(nullptr, nullptr) == -1,
 	   "set_variable(nullptr, nullptr) = -1");
+}
+
+/**
+ * @brief Bounded get_variable() rejects values that would be truncated.
+ */
+static void test_bounded_get_variable(MCP_Threads_Handler& h) {
+	const std::string long_value(4096, 'x');
+	ok(h.set_variable("config_endpoint_auth", long_value.c_str()) == 0,
+	   "set long config_endpoint_auth value");
+
+	char buf[16];
+	memset(buf, 'x', sizeof(buf));
+	ok(h.get_variable("config_endpoint_auth", buf, sizeof(buf)) == -1 && buf[0] == '\0',
+	   "get_variable rejects and clears a truncated value");
+
+	ok(h.set_variable("config_endpoint_auth", "") == 0,
+	   "reset config_endpoint_auth after bounded read test");
 }
 
 /**
@@ -450,7 +468,8 @@ static void test_wrlock_wrunlock(MCP_Threads_Handler& h) {
  * String variables:      7 vars * 6 tests each = 42
  * has_variable:          13
  * get_variables_list:    2 + 14 = 16
- * Null safety:           6
+ * Null safety:           7
+ * Bounded get_variable:  3
  * get_variable_string:   2
  * Get unknown:           2
  * Set unknown:           2
@@ -458,9 +477,9 @@ static void test_wrlock_wrunlock(MCP_Threads_Handler& h) {
  * Load target auth null: 1
  * wrlock/wrunlock:       1
  * -------------------------------------------------
- * Total:                 199
+ * Total:                 203
  */
-static const int TOTAL_TESTS = 199;
+static const int TOTAL_TESTS = 203;
 
 int main() {
 	plan(TOTAL_TESTS);
@@ -477,6 +496,7 @@ int main() {
 	test_has_variable(handler);
 	test_get_variables_list(handler);
 	test_null_safety(handler);
+	test_bounded_get_variable(handler);
 	test_get_variable_string_contract(handler);
 	test_get_unknown_variable(handler);
 	test_set_unknown_variable(handler);
