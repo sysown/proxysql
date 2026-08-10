@@ -98,7 +98,7 @@ jobs:
 
     steps:
 
-    - uses: LouisBrunner/checks-action@v2.0.0
+    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
       id: checks
       continue-on-error: true
       if: always()
@@ -399,7 +399,7 @@ jobs:
     - name: Report Codecov upload failure
       if: ${{ !cancelled() && steps.codecov_3.outcome == 'failure' }}
       run: echo "::warning::Codecov upload failed after 3 attempts; tests were unaffected."
-    - uses: LouisBrunner/checks-action@v2.0.0
+    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
       continue-on-error: true
       if: ${{ always() && steps.checks.outputs.check_id != '' }}
       with:
