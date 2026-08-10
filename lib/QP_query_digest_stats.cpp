@@ -25,6 +25,19 @@ static void my_itoa(char s[], unsigned long long n)
      reverse(s);
 }
 
+static char *store_or_duplicate_query_digest_value(char *fixed_buf, size_t fixed_buf_len, const char *input) {
+    if (input == NULL) {
+        return NULL;
+    }
+    size_t input_len = strlen(input);
+    if (input_len < fixed_buf_len) {
+        memcpy(fixed_buf, input, input_len);
+        fixed_buf[input_len] = '\0';
+        return fixed_buf;
+    }
+    return strdup(input);
+}
+
 
 QP_query_digest_stats::QP_query_digest_stats(const char* _user, const char* _schema, uint64_t _digest, const char* _digest_text,
 	int _hid, const char* _client_addr, int query_digests_max_digest_length) {
@@ -33,30 +46,9 @@ QP_query_digest_stats::QP_query_digest_stats(const char* _user, const char* _sch
 	if (_digest_text) {
 		digest_text=strndup(_digest_text, query_digests_max_digest_length);
 	}
-	size_t _user_len = strlen(_user);
-	if (_user_len < sizeof(username_buf)) {
-		memcpy(username_buf, _user, _user_len);
-		username_buf[_user_len] = '\0';
-		username = username_buf;
-	} else {
-		username = strdup(_user);
-	}
-	size_t _schema_len = strlen(_schema);
-	if (_schema_len < sizeof(schemaname_buf)) {
-		memcpy(schemaname_buf, _schema, _schema_len);
-		schemaname_buf[_schema_len] = '\0';
-		schemaname = schemaname_buf;
-	} else {
-		schemaname = strdup(_schema);
-	}
-	size_t _client_addr_len = strlen(_client_addr);
-	if (_client_addr_len < sizeof(client_address_buf)) {
-		memcpy(client_address_buf, _client_addr, _client_addr_len);
-		client_address_buf[_client_addr_len] = '\0';
-		client_address = client_address_buf;
-	} else {
-		client_address = strdup(_client_addr);
-	}
+	username = store_or_duplicate_query_digest_value(username_buf, sizeof(username_buf), _user);
+	schemaname = store_or_duplicate_query_digest_value(schemaname_buf, sizeof(schemaname_buf), _schema);
+	client_address = store_or_duplicate_query_digest_value(client_address_buf, sizeof(client_address_buf), _client_addr);
 	count_star = 0;
 	first_seen = 0;
 	last_seen = 0;
