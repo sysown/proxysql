@@ -194,22 +194,37 @@ class sqlite3server_main_loop_listeners {
 
 	bool update_ifaces(char *list, char ***_ifaces) {
 		wrlock();
-		int i;
-		char **ifaces=*_ifaces;
+		int i = 0;
+		char **old_ifaces = *_ifaces;
+		char **new_ifaces = (char **)calloc(MAX_IFACES, sizeof(char *));
 		tokenizer_t tok;
 		tokenizer( &tok, list, ";", TOKENIZER_NO_EMPTIES );
 		const char* token;
-		ifaces=reset_ifaces(ifaces);
-		i=0;
-	for ( token = tokenize( &tok ) ; token && i < MAX_IFACES ; token = tokenize( &tok ) ) {
-		char *token_copy = strdup(token);
-		if (token_copy == NULL) {
+		if (new_ifaces == NULL) {
 			free_tokenizer( &tok );
+			wrunlock();
 			return false;
 		}
-		ifaces[i]=token_copy;
-		i++;
-	}
+		for ( token = tokenize( &tok ) ; token && i < MAX_IFACES ; token = tokenize( &tok ) ) {
+			new_ifaces[i] = strdup(token);
+			if (new_ifaces[i] == NULL) {
+				for (int j = 0; j < i; ++j) {
+					free(new_ifaces[j]);
+				}
+				free(new_ifaces);
+				free_tokenizer( &tok );
+				wrunlock();
+				return false;
+			}
+			i++;
+		}
+		if (old_ifaces != NULL) {
+			for (int j = 0; j < MAX_IFACES; ++j) {
+				free(old_ifaces[j]);
+			}
+			free(old_ifaces);
+		}
+		*_ifaces = new_ifaces;
 		free_tokenizer( &tok );
 		version++;
 		wrunlock();
