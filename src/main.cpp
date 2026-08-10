@@ -890,28 +890,28 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 	free(t);
 
 	GloVars.admindb=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"proxysql.db")+2);
-	sprintf(GloVars.admindb,"%s/%s",GloVars.datadir, (char *)"proxysql.db");
+	snprintf(GloVars.admindb, strlen(GloVars.datadir)+strlen((char *)"proxysql.db")+2, "%s/%s", GloVars.datadir, (char *)"proxysql.db");
 
 	GloVars.sqlite3serverdb=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"sqlite3server.db")+2);
-	sprintf(GloVars.sqlite3serverdb,"%s/%s",GloVars.datadir, (char *)"sqlite3server.db");
+	snprintf(GloVars.sqlite3serverdb, strlen(GloVars.datadir)+strlen((char *)"sqlite3server.db")+2, "%s/%s", GloVars.datadir, (char *)"sqlite3server.db");
 
 	GloVars.statsdb_disk=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"proxysql_stats.db")+2);
-	sprintf(GloVars.statsdb_disk,"%s/%s",GloVars.datadir, (char *)"proxysql_stats.db");
+	snprintf(GloVars.statsdb_disk, strlen(GloVars.datadir)+strlen((char *)"proxysql_stats.db")+2, "%s/%s", GloVars.datadir, (char *)"proxysql_stats.db");
 
 	if (GloVars.errorlog == NULL) {
 		GloVars.errorlog=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"proxysql.log")+2);
-		sprintf(GloVars.errorlog,"%s/%s",GloVars.datadir, (char *)"proxysql.log");
+		snprintf(GloVars.errorlog, strlen(GloVars.datadir)+strlen((char *)"proxysql.log")+2, "%s/%s", GloVars.datadir, (char *)"proxysql.log");
 	}
 
 	if (GloVars.pid == NULL) {
 		GloVars.pid=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"proxysql.pid")+2);
-		sprintf(GloVars.pid,"%s/%s",GloVars.datadir, (char *)"proxysql.pid");
+		snprintf(GloVars.pid, strlen(GloVars.datadir)+strlen((char *)"proxysql.pid")+2, "%s/%s", GloVars.datadir, (char *)"proxysql.pid");
 	}
 
 	if (GloVars.__cmd_proxysql_initial==true) {
 		std::cerr << "Renaming database file " << GloVars.admindb << endl;
 		char *newpath=(char *)malloc(strlen(GloVars.admindb)+8);
-		sprintf(newpath,"%s.bak",GloVars.admindb);
+		snprintf(newpath, strlen(GloVars.admindb)+5, "%s.bak", GloVars.admindb);
 		rename(GloVars.admindb,newpath);	// FIXME: should we check return value, or ignore whatever it successed or not?
 	}
 
@@ -2047,7 +2047,7 @@ bool ProxySQL_daemonize_phase3() {
 		if (GloVars.__cmd_proxysql_initial==true) {
 			std::cerr << "Renaming database file " << GloVars.admindb << endl;
 			char *newpath=(char *)malloc(strlen(GloVars.admindb)+8);
-			sprintf(newpath,"%s.bak",GloVars.admindb);
+			snprintf(newpath, strlen(GloVars.admindb)+5, "%s.bak", GloVars.admindb);
 			rename(GloVars.admindb,newpath);	// FIXME: should we check return value, or ignore whatever it successed or not?
 		}
 		parent_close_error_log();
@@ -3146,7 +3146,7 @@ int main(int argc, const char * argv[]) {
 					memset(binary_sha1, 0, SHA_DIGEST_LENGTH*2+1);
 					char buf[SHA_DIGEST_LENGTH*2 + 1];
 					for (int i=0; i < SHA_DIGEST_LENGTH; i++) {
-						sprintf((char*)&(buf[i*2]), "%02x", temp[i]);
+						snprintf((char*)&(buf[i*2]), 3, "%02x", temp[i]);
 					}
 					memcpy(binary_sha1, buf, SHA_DIGEST_LENGTH*2);
 					munmap(fb,statbuf.st_size);
