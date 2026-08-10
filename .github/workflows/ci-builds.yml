@@ -577,7 +577,7 @@ jobs:
 
     - name: Upload handoff (src)
       if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ci-builds-handoff-${{ env.SHA }}-${{ matrix.dist }}${{ matrix.type }}-src
         retention-days: 1
@@ -587,7 +587,7 @@ jobs:
 
     - name: Upload handoff (test)
       if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ci-builds-handoff-${{ env.SHA }}-${{ matrix.dist }}${{ matrix.type }}-test
         retention-days: 1
@@ -598,7 +598,7 @@ jobs:
 
     - name: Upload handoff (matrix)
       if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ci-builds-handoff-${{ env.SHA }}-${{ matrix.dist }}${{ matrix.type }}-matrix
         retention-days: 1
@@ -611,7 +611,7 @@ jobs:
       # Only the debian12-dbg build feeds the 3p suites, and they consume bin
       # only. bin is large (.git/ + binaries/), so don't ship it for -tap.
       if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-dbg') }}
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ci-builds-handoff-${{ env.SHA }}-${{ matrix.dist }}${{ matrix.type }}-bin
         retention-days: 1
@@ -630,7 +630,7 @@ jobs:
 
     - name: Archive artifacts
       if: ${{ inputs.trusted && failure() && !cancelled() }}
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ci-builds-${{ env.SHA }}-run#${{ github.run_number }}-${{ matrix.dist }}${{ matrix.type }}
         path: |

@@ -200,7 +200,7 @@ jobs:
 
     - name: Archive artifacts logs
       if: ${{ failure() && !cancelled() }}
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ${{ github.workflow }}-${{ env.SHA }}-logs-run#${{ github.run_number }}
         path: |
@@ -208,7 +208,7 @@ jobs:
           
     - name: Archive artifacts bin
       if: ${{ failure() && !cancelled() }}
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ${{ github.workflow }}-${{ env.SHA }}-bin-run#${{ github.run_number }}
         path: |
