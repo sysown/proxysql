@@ -112,6 +112,12 @@ static frontend_certificate_policy_result evaluate_frontend_certificate_policy(
 	}
 
 	if (spiffe_id == attrs.end()) return result;
+	if (context == frontend_auth_context::COM_CHANGE_USER) {
+		proxy_error("%d:%s(): COM_CHANGE_USER target %s has a SPIFFE identity\n",
+			calling_line, calling_func, username);
+		result.allowed = false;
+		return result;
+	}
 	if (!spiffe_id->is_string()) {
 		proxy_error("%d:%s(): Invalid spiffe_id type for user %s\n", calling_line, calling_func, username);
 		result.allowed = false;
@@ -1590,6 +1596,16 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		}
 	}
 
+#ifdef PROXYSQL31
+	if ((*myds)->frontend_authenticated_via_spiffe) {
+		proxy_error(
+			"Client %s:%d cannot run COM_CHANGE_USER after SPIFFE authentication\n",
+			(*myds)->addr.addr, (*myds)->addr.port);
+		free(pass);
+		return false;
+	}
+#endif
+
 	account_details_t account_details {};
 	dup_account_details_t dup_details { false, true, true };
 	enum proxysql_session_type session_type = (*myds)->sess->session_type;
@@ -1663,10 +1679,28 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	 */
 	char* password = get_password(account_details, PASSWORD_TYPE::PRIMARY);
 
+#ifdef PROXYSQL31
+	const auto target_policy = evaluate_frontend_certificate_policy(
+		*myds,
+		account_details.attributes,
+		user,
+		frontend_auth_context::COM_CHANGE_USER,
+		__LINE__, __func__);
+	if (!target_policy.allowed || target_policy.has_spiffe_id) {
+		if (pass) { free(pass); pass = NULL; }
+		if (password) { free(password); password = NULL; }
+		free_account_details(account_details);
+		return false;
+	}
+#endif
+
 	if (mysql_thread___passthrough_auth_enabled
 		&& mysql_thread___passthrough_auth_empty_password
 		&& password != NULL
 		&& password[0] == '\0'
+	#ifdef PROXYSQL31
+		&& !target_policy.has_spiffe_id
+	#endif
 		&& (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE)) {
 		// Rationale for the pre-mutation ordering and the two eligible
 		// cases is documented on the doxygen block above this gate.
@@ -1782,6 +1816,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		// set the default charset for this session
 		(*myds)->sess->default_charset = charset;
 		if ((*myds)->sess->user_attributes) {
+#ifndef PROXYSQL31
 			if (user_attributes_has_spiffe(__LINE__, __func__, user)) {
 				// if SPIFFE was used, CHANGE_USER is not allowed.
 				// This because when SPIFFE is used, the password it is not relevant,
@@ -1793,6 +1828,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 				ret = false;
 				return ret;
 			}
+#endif
 
 			char* user_attributes = (*myds)->sess->user_attributes;
 			if (strlen(user_attributes)) {
@@ -1824,6 +1860,11 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		mysql_variables.client_set_value(sess, SQL_CHARACTER_SET_CONNECTION, ss.str().c_str());
 		mysql_variables.client_set_value(sess, SQL_COLLATION_CONNECTION, ss.str().c_str());
 	}
+#ifdef PROXYSQL31
+	if (ret) {
+		(*myds)->frontend_authenticated_via_spiffe = false;
+	}
+#endif
 	return ret;
 }
 
@@ -3590,6 +3631,7 @@ bool MySQL_Protocol::verify_user_attributes(int calling_line, const char *callin
 #endif
 }
 
+#ifndef PROXYSQL31
 bool MySQL_Protocol::user_attributes_has_spiffe(int calling_line, const char *calling_func, const unsigned char *user) {
 	bool ret = false;
 	if ((*myds)->sess->user_attributes) {
@@ -3610,6 +3652,7 @@ bool MySQL_Protocol::user_attributes_has_spiffe(int calling_line, const char *ca
 	}
 	return ret;
 }
+#endif
 
 void * MySQL_Protocol::Query_String_to_packet(uint8_t sid, std::string *s, unsigned int *l) {
 	mysql_hdr hdr;
