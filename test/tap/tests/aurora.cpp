@@ -24,6 +24,7 @@
 #include <resolv.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include <random>
 
 #include <fcntl.h>
 #include <sys/utsname.h>
@@ -41,6 +42,12 @@
 #define READ_ONLY_ON "\x01\x00\x00\x01\x02\x23\x00\x00\x02\x03\x64\x65\x66\x00\x00\x00\x0d\x56\x61\x72\x69\x61\x62\x6c\x65\x5f\x6e\x61\x6d\x65\x00\x0c\x21\x00\x0f\x00\x00\x00\xfd\x01\x00\x1f\x00\x00\x1b\x00\x00\x03\x03\x64\x65\x66\x00\x00\x00\x05\x56\x61\x6c\x75\x65\x00\x0c\x21\x00\x0f\x00\x00\x00\xfd\x01\x00\x1f\x00\x00\x05\x00\x00\x04\xfe\x00\x00\x02\x00\x0d\x00\x00\x05\x09\x72\x65\x61\x64\x5f\x6f\x6e\x6c\x79\x02\x4f\x4e\x05\x00\x00\x06\xfe\x00\x00\x02\x00"
 
 extern SQLite3_Server *GloSQLite3Server;
+
+static int random_replication_lag_seconds() {
+	static thread_local std::random_device random_source;
+	static thread_local std::uniform_int_distribution<int> distribution(10, 39);
+	return distribution(random_source);
+}
 
 void SQLite3_Server::init_aurora_ifaces_string(std::string& s) {
 	if(!s.empty())
@@ -466,7 +473,7 @@ __run_query:
 				free(query);
 				char *a = (char *)"SELECT %d as Seconds_Behind_Master";
 				query = (char *)malloc(strlen(a)+4);
-				snprintf(query, strlen(a)+4, a, rand()%30+10);
+				snprintf(query, strlen(a)+4, a, random_replication_lag_seconds());
 			}
 		}
 		SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
