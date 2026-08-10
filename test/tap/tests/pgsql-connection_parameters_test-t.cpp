@@ -64,14 +64,10 @@ PGConnPtr createNewConnection(ConnType conn_type, const std::string& parameters 
     return PGConnPtr(conn, &PQfinish);
 }
 
-bool executeQueries(PGconn* conn, const std::vector<std::string>& queries) {
-    auto fnResultType = [](const char* query) -> int {
-        const char* fs = strchr(query, ' ');
-        size_t qtlen = strlen(query);
-        if (fs != NULL) {
-            qtlen = (fs - query) + 1;
-        }
-        std::string query_type(query, qtlen - 1);
+	bool executeQueries(PGconn* conn, const std::vector<std::string>& queries) {
+	    auto fnResultType = [](const char* query) -> int {
+	        const size_t qtlen = strcspn(query, " \t\r\n");
+	        std::string query_type(query, qtlen);
         for (char& c : query_type) {
             c = static_cast<char>(toupper((unsigned char)c));
         }
@@ -310,6 +306,9 @@ void send_startup_message(int sock, const std::vector<std::pair<std::string, std
 	        memcpy(msg + offset, params[i].second.c_str(), val_len);
 	        offset += val_len;
 	        msg[offset++] = '\0';
+	    }
+	    if (offset >= sizeof(msg)) {
+	        return;
 	    }
 	    msg[offset++] = '\0';
 
