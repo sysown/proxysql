@@ -166,7 +166,7 @@ void * mysql_thread() {
 		// for comparison, we run also queries in TEXT protocol
 		cpu_timer t;
 		for (i=0; i<NUMPREP*LOOPS; i++) {
-		snprintf(buff,sizeof(buff),"SELECT %u + %u",i,(uint32_t)mt_rand()%NUMPRO);
+		snprintf(buff,sizeof(buff),"SELECT %d + %u",i,(uint32_t)mt_rand()%NUMPRO);
 			bl=strlen(buff);
 			int rc=mysql_real_query(mysql,buff,bl);
 			if (rc) {
