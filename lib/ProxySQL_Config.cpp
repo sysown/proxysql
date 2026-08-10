@@ -53,7 +53,7 @@ ProxySQL_Config:: ~ProxySQL_Config() {
 
 void ProxySQL_Config::addField(std::string& data, const char* name, const char* value, const char* dq) {
 	std::stringstream ss;
-	if (!value || !strlen(value)) return;
+	if (value == NULL || value[0] == 0) return;
 
 	// Escape the double quotes in all the fields contents
 	std::string esc_value { value };
@@ -93,7 +93,9 @@ void ProxySQL_Config::addField(std::string& data, const char* name, const char* 
 int ProxySQL_Config::Read_Global_Variables_from_configfile(const char *prefix) {
 	if (prefix == NULL) return 0;
 	const Setting& root = GloVars.confFile->cfg.getRoot();
-	char *groupname=(char *)malloc(strlen(prefix)+strlen((char *)"_variables")+1);
+	const size_t prefix_len = strlen(prefix);
+	const size_t suffix_len = sizeof("_variables") - 1;
+	char *groupname=(char *)malloc(prefix_len + suffix_len + 1);
 	sprintf(groupname,"%s%s",prefix,"_variables");
 	if (root.exists(groupname)==false) {
 		free(groupname);
@@ -103,7 +105,6 @@ int ProxySQL_Config::Read_Global_Variables_from_configfile(const char *prefix) {
 	int count = group.getLength();
 	//fprintf(stderr, "Found %d %s_variables\n",count, prefix);
 	int i;
-	size_t prefix_len = strlen(prefix);
 	admindb->execute("PRAGMA foreign_keys = OFF");
 	// Prepare statement once for all inserts
 	auto [rc, stmt] = admindb->prepare_v2("INSERT OR REPLACE INTO global_variables VALUES (?1, ?2)");
@@ -527,6 +528,7 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 		char *comment_escaped = escape_string_single_quotes(comment_escaped_raw, false);
 
 		const char *q = id_exists ? q_with_id : q_without_id;
+		const size_t query_base_len = strlen(q);
 		const std::string active_str = std::to_string(active);
 		const std::string timeout_ms_str = std::to_string(timeout_ms);
 		const std::string id_str = id_exists ? std::to_string(id) : std::string();
@@ -534,14 +536,18 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 		const char* safe_uri_escaped = uri_escaped ? uri_escaped : "";
 		const char* safe_script_escaped = script_escaped ? script_escaped : "";
 		const char* safe_comment_escaped = comment_escaped ? comment_escaped : "";
+		const size_t safe_method_len = strlen(safe_method_escaped);
+		const size_t safe_uri_len = strlen(safe_uri_escaped);
+		const size_t safe_script_len = strlen(safe_script_escaped);
+		const size_t safe_comment_len = strlen(safe_comment_escaped);
 		size_t query_len =
-			strlen(q) +
+			query_base_len +
 			active_str.size() +
 			timeout_ms_str.size() +
-			strlen(safe_method_escaped) +
-			strlen(safe_uri_escaped) +
-			strlen(safe_script_escaped) +
-			strlen(safe_comment_escaped) +
+			safe_method_len +
+			safe_uri_len +
+			safe_script_len +
+			safe_comment_len +
 			40 +
 			(id_exists ? id_str.size() : 0);
 		char *query=(char *)malloc(query_len);
@@ -1988,7 +1994,7 @@ int ProxySQL_Config::Write_Global_Variables_to_configfile(std::string& data) {
 						data += "}\n\n" + prefix + "_variables = \n{\n";
 					}
 				}
-				if (r->fields[1] && strlen(r->fields[1])) {
+				if (r->fields[1] && r->fields[1][0] != '\0') {
 					std::stringstream ss;
 					ss << "\t" << r->fields[0] + p1.size() + 1 << "=\"" << r->fields[1] << "\"\n";
 					data += ss.str();
@@ -2751,8 +2757,9 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 		const std::string multiplex_str = std::to_string(multiplex);
 		const std::string log_str = std::to_string(log);
 		const std::string apply_str = std::to_string(apply);
+		const size_t q_len = strlen(q);
 		size_t query_len =
-			strlen(q) +
+			q_len +
 			rule_id_str.size() +
 			active_str.size() +
 			flagIN_str.size() +
