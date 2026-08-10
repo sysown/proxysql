@@ -248,14 +248,14 @@ int insert_and_check(MYSQL_STMT *stmti, MYSQL_STMT *stmts, int id, char *name1, 
 		}
 		char buf1[256], buf2[256];
 		if (ts1) {
-			snprintf(buf1,sizeof(buf1),"%d:%d:%d", ts1->hour, ts1->minute, ts1->second);
+			snprintf(buf1,sizeof(buf1),"%u:%u:%u", ts1->hour, ts1->minute, ts1->second);
 		} else {
 			snprintf(buf1,sizeof(buf1),"NULL");
 		}
 		if (is_null[2]) {
 			snprintf(buf2,sizeof(buf2),"NULL");
 		} else {
-			snprintf(buf2,sizeof(buf2),"%d:%d:%d", ts_res1.hour, ts_res1.minute, ts_res1.second);
+			snprintf(buf2,sizeof(buf2),"%u:%u:%u", ts_res1.hour, ts_res1.minute, ts_res1.second);
 		}
 		if (strcmp(buf1,buf2)==0)
 			matches++;
@@ -277,14 +277,14 @@ int insert_and_check(MYSQL_STMT *stmti, MYSQL_STMT *stmts, int id, char *name1, 
 			matches++;
 		}
 		if (ts2) {
-			snprintf(buf1,sizeof(buf1),"%d:%d:%d", ts2->hour, ts2->minute, ts2->second);
+			snprintf(buf1,sizeof(buf1),"%u:%u:%u", ts2->hour, ts2->minute, ts2->second);
 		} else {
 			snprintf(buf1,sizeof(buf1),"NULL");
 		}
 		if (is_null[5]) {
 			snprintf(buf2,sizeof(buf2),"NULL");
 		} else {
-			snprintf(buf2,sizeof(buf2),"%d:%d:%d", ts_res2.hour, ts_res2.minute, ts_res2.second);
+			snprintf(buf2,sizeof(buf2),"%u:%u:%u", ts_res2.hour, ts_res2.minute, ts_res2.second);
 		}
 		if (strcmp(buf1,buf2)==0)
 			matches++;
