@@ -281,8 +281,9 @@ void PgSQL_ErrorInfo_Ext::reset() {
 }
 
 void PgSQL_Error_Helper::fill_error_info(PgSQL_ErrorInfo& err_info, const char* code, const char* msg, const char* severity) {
-	strncpy(err_info.sqlstate, code, 5);
-	err_info.sqlstate[5] = '\0';
+	size_t sqlstate_len = strnlen(code, 5);
+	memcpy(err_info.sqlstate, code, sqlstate_len);
+	err_info.sqlstate[sqlstate_len] = '\0';
 	err_info.severity = PgSQL_Error_Helper::identify_error_severity(severity);
 	err_info.code = PgSQL_Error_Helper::identify_error_code(code);
 	err_info.type = PgSQL_Error_Helper::identify_error_class(code);
