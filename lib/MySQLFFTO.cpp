@@ -272,7 +272,7 @@ void MySQLFFTO::report_query_stats(const std::string& query, unsigned long long 
 		((query.length() < QUERY_DIGEST_BUF) ? qp.buf : NULL), &opts);
 	if (digest_text) {
 		qp.digest_text = digest_text;
-		const int digest_len = static_cast<int>(std::string_view(digest_text).size());
+		const int digest_len = static_cast<int>(strnlen(digest_text, mysql_thread___query_digests_max_digest_length));
 		qp.digest = SpookyHash::Hash64(digest_text, digest_len, 0);
 	    char* ca = (char*)"";
         if (mysql_thread___query_digests_track_hostname && m_session->client_myds->addr.addr) ca = m_session->client_myds->addr.addr;
