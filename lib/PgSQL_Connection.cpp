@@ -52,10 +52,10 @@ uint64_t PgSQL_Connection_userinfo::compute_hash() {
 	size_t dbname_len = dbname ? strlen(dbname) : 0;
 	size_t l = username_len + password_len + dbname_len;
 // two random seperator
-#define COMPUTE_HASH_DELIMITER_1 "-ujhtgf76y576574fhYTRDF345wdt-"
-#define COMPUTE_HASH_DELIMITER_2 "-8k7jrhtrgJHRgrefgreyhtRFewg6-"
-	size_t delimiter1_len = strlen(COMPUTE_HASH_DELIMITER_1);
-	size_t delimiter2_len = strlen(COMPUTE_HASH_DELIMITER_2);
+	constexpr char delimiter1[] = "-ujhtgf76y576574fhYTRDF345wdt-";
+	constexpr char delimiter2[] = "-8k7jrhtrgJHRgrefgreyhtRFewg6-";
+	size_t delimiter1_len = sizeof(delimiter1) - 1;
+	size_t delimiter2_len = sizeof(delimiter2) - 1;
 	l += delimiter1_len + delimiter2_len;
 
 	std::string hash_input;
@@ -63,14 +63,14 @@ uint64_t PgSQL_Connection_userinfo::compute_hash() {
 	if (username) {
 		hash_input.append(username, username_len);
 	}
-	hash_input.append(COMPUTE_HASH_DELIMITER_1);
+	hash_input.append(delimiter1);
 	if (password) {
 		hash_input.append(password, password_len);
 	}
 	if (dbname) {
 		hash_input.append(dbname, dbname_len);
 	}
-	hash_input.append(COMPUTE_HASH_DELIMITER_2);
+	hash_input.append(delimiter2);
 	return SpookyHash::Hash64(hash_input.data(), hash_input.size(), 0);
 }
 
