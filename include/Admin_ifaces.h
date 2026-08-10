@@ -44,6 +44,39 @@ class ifaces_desc {
 
 class admin_main_loop_listeners {
 	private:
+	struct tokenizer_owner {
+		tokenizer_t value;
+
+		explicit tokenizer_owner(char *list) {
+			tokenizer(&value, list, ";", TOKENIZER_NO_EMPTIES);
+		}
+
+		~tokenizer_owner() {
+			free_tokenizer(&value);
+		}
+	};
+
+	struct interface_array_owner {
+		char **value;
+
+		explicit interface_array_owner(char **value_) : value(value_) {}
+
+		~interface_array_owner() {
+			if (value) {
+				for (int i = 0; i < MAX_IFACES; ++i) {
+					free(value[i]);
+				}
+				free(value);
+			}
+		}
+
+		char **release() {
+			char **released = value;
+			value = nullptr;
+			return released;
+		}
+	};
+
 	int version;
 #ifdef PA_PTHREAD_MUTEX
 	pthread_rwlock_t rwlock;
@@ -129,38 +162,28 @@ class admin_main_loop_listeners {
 
 	bool update_ifaces(char *list, char ***_ifaces) {
 		wrlock();
-		int i = 0;
 		char **old_ifaces = *_ifaces;
-		char **new_ifaces = (char **)calloc(MAX_IFACES, sizeof(char *));
-		tokenizer_t tok;
-		tokenizer( &tok, list, ";", TOKENIZER_NO_EMPTIES );
-		const char* token;
-		if (new_ifaces == NULL) {
-			free_tokenizer( &tok );
+		interface_array_owner replacement((char **)calloc(MAX_IFACES, sizeof(char *)));
+		if (replacement.value == nullptr) {
 			wrunlock();
 			return false;
 		}
-		for ( token = tokenize( &tok ) ; token && i < MAX_IFACES ; token = tokenize( &tok ) ) {
-			new_ifaces[i] = strdup(token);
-			if (new_ifaces[i] == NULL) {
-				for (int j = 0; j < i; ++j) {
-					free(new_ifaces[j]);
-				}
-				free(new_ifaces);
-				free_tokenizer( &tok );
+
+		tokenizer_owner tokens(list);
+		int i = 0;
+		for (const char *token = tokenize(&tokens.value);
+			token && i < MAX_IFACES;
+			token = tokenize(&tokens.value)) {
+			replacement.value[i] = strdup(token);
+			if (replacement.value[i] == nullptr) {
 				wrunlock();
 				return false;
 			}
 			i++;
 		}
-		if (old_ifaces != NULL) {
-			for (int j = 0; j < MAX_IFACES; ++j) {
-				free(old_ifaces[j]);
-			}
-			free(old_ifaces);
-		}
-		*_ifaces = new_ifaces;
-		free_tokenizer( &tok );
+
+		interface_array_owner previous(old_ifaces);
+		*_ifaces = replacement.release();
 		version++;
 		wrunlock();
 		return true;
