@@ -467,11 +467,9 @@ bool pgsql_variable_validate_search_path(const char* value, const params_t* para
 	size_t value_len = strlen(value); // NOSONAR
 	if (value_len > SIZE_MAX - 1) return false;
 
-	char* normalized = (char*)malloc(value_len + 1);
-	if (normalized == nullptr) return false;
-	normalized[0] = '\0';
+	std::string normalized;
+	normalized.reserve(value_len + 1);
 
-	size_t norm_pos = 0;
 	bool first = true;
 	bool result = true;
 
@@ -537,18 +535,15 @@ bool pgsql_variable_validate_search_path(const char* value, const params_t* para
 			if (!result) break;
 		}
 
-		// add to normalized
 		if (!first) {
-			normalized[norm_pos++] = ',';
+			normalized.push_back(',');
 		}
 		first = false;
 
 		// append the part bytes
 		if (part_len > 0) {
-			memcpy(normalized + norm_pos, part_start, part_len);
-			norm_pos += part_len;
+			normalized.append(part_start, part_len);
 		}
-		normalized[norm_pos] = '\0';
 
 		// skip whitespace after part
 		while (*token && fast_isspace(*token)) token++;
@@ -565,12 +560,10 @@ bool pgsql_variable_validate_search_path(const char* value, const params_t* para
 
 	if (result) {
 		if (transformed_value) {
-			*transformed_value = normalized;
+			*transformed_value = strdup(normalized.c_str());
 		} else {
-			free(normalized);
+			// no output requested; keep as no-op
 		}
-	} else {
-		free(normalized);
 	}
 
 	return result;
