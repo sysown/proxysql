@@ -1,6 +1,7 @@
 
 #include <openssl/evp.h>
 #include <openssl/rand.h>
+#include <limits>
 #include "proxysql.h"
 #include "cpp.h"
 #include "PgSQL_Authentication.h"
@@ -200,18 +201,11 @@ void PG_pkt::write_RowDescription(const char *tupdesc, ...) {
 void SQLite3_to_Postgres(PtrSizeArray *psa, SQLite3_result *result, char *error, int affected_rows, const char *query_type, bool send_ready_for_query,
 	char txn_state) {
 	assert(psa != NULL);
-	const char *fs = strchr(query_type, ' ');
-	int qtlen = strlen(query_type);
-	if (fs != NULL) {
-		qtlen = (fs - query_type) + 1;
-	}
-	std::string buf(query_type, qtlen - 1);
-	{
-		char *s = &buf[0];
-		while (*s) {
-			*s = toupper((unsigned char) *s);
-			s++;
-		}
+	const char *query = query_type ? query_type : "";
+	const size_t command_len = strcspn(query, " \t\r\n");
+	std::string buf(query, command_len);
+	for (char& c : buf) {
+		c = static_cast<char>(toupper((unsigned char)c));
 	}
 	if (result) {
 		int ncol = result->columns;
@@ -249,9 +243,8 @@ void SQLite3_to_Postgres(PtrSizeArray *psa, SQLite3_result *result, char *error,
 		}
 
 		if (buf == "SELECT") {
-			char tmpbuf[128];
-			sprintf(tmpbuf,"%s %d", buf.c_str(), result->rows_count);
-			pkt.write_generic('C', "s", tmpbuf);
+			const std::string completion_tag = buf + " " + std::to_string(result->rows_count);
+			pkt.write_generic('C', "s", completion_tag.c_str());
 		} else {
 			pkt.write_CommandComplete(buf.c_str());
 		}
@@ -276,13 +269,12 @@ void SQLite3_to_Postgres(PtrSizeArray *psa, SQLite3_result *result, char *error,
 */
 			// see https://www.postgresql.org/docs/current/protocol-message-formats.html
 		} else {
-			char tmpbuf[128];
 			if (buf == "INSERT") {
-				sprintf(tmpbuf,"%s 0 %d", buf.c_str(), affected_rows);
-				pkt.write_generic('C', "s", tmpbuf);
+				const std::string completion_tag = buf + " 0 " + std::to_string(affected_rows);
+				pkt.write_generic('C', "s", completion_tag.c_str());
 			} else if (buf == "UPDATE" || buf == "DELETE") {
-				sprintf(tmpbuf,"%s %d", buf.c_str(), affected_rows);
-				pkt.write_generic('C', "s", tmpbuf);
+				const std::string completion_tag = buf + " " + std::to_string(affected_rows);
+				pkt.write_generic('C', "s", completion_tag.c_str());
 			} else {
 				pkt.write_CommandComplete(buf.c_str());
 			}
@@ -315,20 +307,23 @@ void PG_pkt::write_DataRow(const char *tupdesc, ...) {
 			val = va_arg(ap, char *);
 				} else if (tupdesc[i] == 'b') {
 					int blen = va_arg(ap, int);
-					if (blen >= 0) {
-						uint8_t *bval = va_arg(ap, uint8_t *);
-						size_t required = 2 + blen * 2 + 1;
-						tmp2 = (char *)malloc(required);
-						tmp2[0] = '\\';
-						tmp2[1] = 'x';
-						tmp2[2] = '\0';
-						for (int j = 0; j < blen; j++)
-							snprintf(tmp2 + (2 + j * 2), 3, "%02x", bval[j]);
-						val = tmp2;
-					} else {
-				(void) va_arg(ap, uint8_t *);
-				val = NULL;
-			}
+					uint8_t *bval = va_arg(ap, uint8_t *);
+					if (blen >= 0 && (bval != nullptr || blen == 0)) {
+						const size_t byte_len = static_cast<size_t>(blen);
+						const size_t max_byte_len = (std::numeric_limits<size_t>::max() - 3) / 2;
+						if (byte_len <= max_byte_len) {
+							const size_t required = 2 + byte_len * 2 + 1;
+							tmp2 = (char *)malloc(required);
+							if (tmp2 != nullptr) {
+								tmp2[0] = '\\';
+								tmp2[1] = 'x';
+								tmp2[2] = '\0';
+								for (size_t j = 0; j < byte_len; j++)
+									snprintf(tmp2 + (2 + j * 2), 3, "%02x", bval[j]);
+								val = tmp2;
+							}
+						}
+					}
 		} else if (tupdesc[i] == 'T') {
 			usec_t time = va_arg(ap, usec_t);
 			val = format_time_s(time, tmp, sizeof(tmp));
@@ -1610,6 +1605,9 @@ char* extract_tag_from_query(const char* query) {
 	constexpr size_t deallocate_prepare_all_len = sizeof("DEALLOCATE PREPARE ALL") - 1;
 	constexpr size_t discard_all_len = sizeof("DISCARD ALL") - 1;
 
+	if (query == nullptr) {
+		return strdup("");
+	}
 	size_t qtlen = strlen(query);
 	if ((qtlen > create_table_len) && strncasecmp(query, "CREATE TABLE AS", create_table_len) == 0) {
 		return strdup("SELECT");
@@ -1620,18 +1618,10 @@ char* extract_tag_from_query(const char* query) {
 	} else if ((qtlen >= discard_all_len) && (strncasecmp(query, "DISCARD ALL", discard_all_len) == 0)) {
 		return strdup("DISCARD ALL");
 	} else {
-		const char* fs = strchr(query, ' ');
-
-		if (fs != NULL) {
-			qtlen = (fs - query) + 1;
-		}
-		std::string buf(query, qtlen - 1);
-		{
-			char* s = &buf[0];
-			while (*s) {
-				*s = toupper((unsigned char)*s);
-				s++;
-			}
+		qtlen = strcspn(query, " \t\r\n");
+		std::string buf(query, qtlen);
+		for (char& c : buf) {
+			c = static_cast<char>(toupper((unsigned char)c));
 		}
 
 		return strdup(buf.c_str());
