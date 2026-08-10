@@ -210,7 +210,7 @@ int MCP_Threads_Handler::get_variable(const char* name, char* val) {
 	pthread_rwlock_unlock(&rwlock);
 
 	if (rc == 0) {
-		sprintf(val, "%s", out.c_str());
+		snprintf(val, 1024, "%s", out.c_str());
 	}
 	return rc;
 }
