@@ -318,25 +318,49 @@ uint64_t MySQL_Connection_userinfo::compute_hash() {
 	size_t delimiter2_len = strlen(_COMPUTE_HASH_DEL2_);
 	l += delimiter1_len;
 	l += delimiter2_len;
-	char *buf=(char *)malloc(l+1);
-	l=0;
-	if (username) {
-		memcpy(buf+l,username,username_len);
-		l+=username_len;
+	size_t hash_input_length = l;
+	char *buf=(char *)malloc(hash_input_length+1);
+	if (!buf) {
+		return 0;
 	}
-	memcpy(buf+l,_COMPUTE_HASH_DEL1_,delimiter1_len);
-	l+=delimiter1_len;
+	size_t copied = 0;
+	if (username) {
+		if (copied + username_len > hash_input_length) {
+			free(buf);
+			return 0;
+		}
+		memcpy(buf + copied, username, username_len);
+		copied += username_len;
+	}
+	if (copied + delimiter1_len > hash_input_length) {
+		free(buf);
+		return 0;
+	}
+	memcpy(buf + copied, _COMPUTE_HASH_DEL1_, delimiter1_len);
+	copied += delimiter1_len;
 	if (password) {
-		memcpy(buf+l,password,password_len);
-		l+=password_len;
+		if (copied + password_len > hash_input_length) {
+			free(buf);
+			return 0;
+		}
+		memcpy(buf + copied, password, password_len);
+		copied += password_len;
 	}
 	if (schemaname) {
-		memcpy(buf+l,schemaname,schemaname_len);
-		l+=schemaname_len;
+		if (copied + schemaname_len > hash_input_length) {
+			free(buf);
+			return 0;
+		}
+		memcpy(buf + copied, schemaname, schemaname_len);
+		copied += schemaname_len;
 	}
-	memcpy(buf+l,_COMPUTE_HASH_DEL2_,delimiter2_len);
-	l+=delimiter2_len;
-	hash=SpookyHash::Hash64(buf,l,0);
+	if (copied + delimiter2_len > hash_input_length) {
+		free(buf);
+		return 0;
+	}
+	memcpy(buf + copied, _COMPUTE_HASH_DEL2_, delimiter2_len);
+	copied += delimiter2_len;
+	hash=SpookyHash::Hash64(buf,copied,0);
 	free(buf);
 	return hash;
 }
