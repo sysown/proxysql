@@ -21,12 +21,18 @@
 
 #include "proxysql.h"
 #include "MySQL_Protocol.h"
+#include "MySQL_Data_Stream.h"
+#include "mysql_connection.h"
 #include "MySQL_encode.h"
 #include "c_tokenizer.h"
 #include "gen_utils.h"
 
+#include <openssl/crypto.h>
+
 #include <cstring>
 #include <climits>
+
+mf_unique_ptr<const char> get_masked_pass(const char* pass);
 
 // ============================================================================
 // 1. MySQL length-encoded integer decoding
@@ -217,6 +223,110 @@ static void test_mysql_hdr() {
 		"mysql_hdr: max pkt_length (16MB-1)");
 }
 
+#ifdef PROXYSQL31
+static void test_auth_more_data_packet() {
+	MySQL_Data_Stream stream;
+	stream.PSarrayOUT = new PtrSizeArray();
+	stream.pkt_sid = 7;
+	MySQL_Data_Stream *stream_pointer = &stream;
+	MySQL_Protocol protocol;
+	protocol.myds = &stream_pointer;
+	const unsigned char public_key[] = "-----BEGIN PUBLIC KEY-----\nkey\n-----END PUBLIC KEY-----\n";
+	const size_t public_key_length = sizeof(public_key) - 1;
+
+	ok(protocol.generate_auth_more_data(public_key, public_key_length),
+		"AuthMoreData reports successful packet construction");
+
+	ok(stream.PSarrayOUT->len == 1,
+		"AuthMoreData queues exactly one packet");
+	const PtrSize_t packet = stream.PSarrayOUT->pdata[0];
+	const mysql_hdr *header = static_cast<const mysql_hdr *>(packet.ptr);
+	ok(packet.size == sizeof(mysql_hdr) + 1 + public_key_length &&
+		header->pkt_length == 1 + public_key_length && header->pkt_id == 8,
+		"AuthMoreData header accounts for marker and exact data length");
+	const unsigned char *payload = static_cast<const unsigned char *>(packet.ptr) + sizeof(mysql_hdr);
+	ok(payload[0] == 0x01,
+		"AuthMoreData payload starts with the 0x01 protocol marker");
+	ok(memcmp(payload + 1, public_key, public_key_length) == 0 &&
+		packet.size == sizeof(mysql_hdr) + 1 + public_key_length,
+		"AuthMoreData carries public PEM bytes without a terminating NUL");
+
+	l_free(packet.size, packet.ptr);
+	stream.PSarrayOUT->len = 0;
+}
+
+static void test_caching_sha2_stage5_payload_validation() {
+	auto run_stage5 = [](
+		bool encrypted,
+		unsigned char *payload,
+		size_t payload_length,
+		std::string* recovered = nullptr,
+		bool* pass_is_sensitive = nullptr
+	) {
+		MySQL_Data_Stream stream;
+		stream.myds_type = MYDS_FRONTEND;
+		stream.myconn = new MySQL_Connection();
+		stream.myconn->userinfo->username = strdup("rsa-stage5-user");
+		stream.switching_auth_stage = 5;
+		stream.switching_auth_type = AUTH_MYSQL_CACHING_SHA2_PASSWORD;
+		stream.encrypted = encrypted;
+		MySQL_Data_Stream *stream_pointer = &stream;
+		MySQL_Protocol protocol;
+		protocol.myds = &stream_pointer;
+		MyProt_tmp_auth_vars vars;
+		bool authenticated = true;
+		const int result = protocol.PPHR_1(
+			payload, static_cast<unsigned int>(sizeof(mysql_hdr) + payload_length),
+			authenticated, vars
+		);
+		if (recovered != nullptr && vars.pass != nullptr) {
+			recovered->assign(reinterpret_cast<const char *>(vars.pass), vars.pass_len);
+		}
+		if (pass_is_sensitive != nullptr) {
+			*pass_is_sensitive = vars.pass_is_sensitive;
+		}
+		if (vars.pass != nullptr) {
+			OPENSSL_cleanse(vars.pass, vars.pass_len + 1);
+		}
+		free(vars.pass);
+		return result;
+	};
+
+	unsigned char raw_cleartext[] = { 's', 'e', 'c', 'r', 'e', 't', '\0' };
+	ok(run_stage5(false, raw_cleartext, sizeof(raw_cleartext)) == 1,
+		"non-TLS caching_sha2 stage 5 rejects raw cleartext instead of bypassing RSA");
+
+	// A NUL exists just beyond the declared payload. An unbounded strlen()
+	// incorrectly accepts this packet by reading outside its protocol length.
+	unsigned char unterminated_storage[] = { 'n', 'o', '\0' };
+	ok(run_stage5(true, unterminated_storage, 2) == 1,
+		"caching_sha2 stage 5 rejects a payload without an in-bounds trailing NUL");
+
+	unsigned char tls_cleartext[] = { 's', 'e', 'c', 'r', 'e', 't', '\0' };
+	std::string recovered;
+	bool pass_is_sensitive = false;
+	ok(run_stage5(
+		true, tls_cleartext, sizeof(tls_cleartext), &recovered, &pass_is_sensitive
+	) == 2 && recovered == "secret",
+		"TLS caching_sha2 stage 5 accepts exactly one trailing-NUL cleartext payload");
+	ok(pass_is_sensitive,
+		"TLS caching_sha2 stage 5 marks copied cleartext for cleansing");
+}
+
+static void test_internal_session_redacts_password() {
+	MySQL_Data_Stream stream;
+	stream.myds_type = MYDS_FRONTEND;
+	stream.myconn = new MySQL_Connection();
+	stream.myconn->userinfo->username = strdup("rsa-dump-user");
+	stream.myconn->userinfo->password = strdup("recovered-rsa-secret");
+	nlohmann::json internal_session;
+	stream.get_client_myds_info_json(internal_session);
+	const std::string serialized = internal_session.dump();
+	ok(serialized.find("recovered-rsa-secret") == std::string::npos,
+		"internal-session JSON never exposes a frontend password");
+}
+#endif
+
 // ============================================================================
 // 4. CPY3 and CPY8 byte copy helpers
 // ============================================================================
@@ -347,6 +457,16 @@ static void test_escape_single_quotes() {
 	free(escaped3);
 }
 
+static void test_password_log_redaction() {
+	auto short_password = get_masked_pass("xy");
+	auto long_password = get_masked_pass("a-much-longer-secret");
+
+	ok(strcmp(short_password.get(), "(redacted)") == 0,
+		"password logging fully redacts short credentials");
+	ok(strcmp(long_password.get(), "(redacted)") == 0,
+		"password logging fully redacts long credentials");
+}
+
 /**
  * @brief Test mywildcmp() — wildcard pattern matching with % and _.
  */
@@ -357,13 +477,13 @@ static void test_wildcard_matching() {
 
 	// % matches any sequence
 	ok(mywildcmp("hel%", "hello") == true,
-		"wildcard: % suffix matches");
+		"wildcard: %% suffix matches");
 	ok(mywildcmp("%llo", "hello") == true,
-		"wildcard: % prefix matches");
+		"wildcard: %% prefix matches");
 	ok(mywildcmp("%ll%", "hello") == true,
-		"wildcard: % on both sides matches");
+		"wildcard: %% on both sides matches");
 	ok(mywildcmp("%", "anything") == true,
-		"wildcard: lone % matches anything");
+		"wildcard: lone %% matches anything");
 
 	// _ matches single character
 	ok(mywildcmp("h_llo", "hello") == true,
@@ -375,7 +495,7 @@ static void test_wildcard_matching() {
 	ok(mywildcmp("hello", "world") == false,
 		"wildcard: no match on different strings");
 	ok(mywildcmp("hel%", "world") == false,
-		"wildcard: % prefix doesn't match unrelated");
+		"wildcard: %% prefix doesn't match unrelated");
 	ok(mywildcmp("h_llo", "hllo") == false,
 		"wildcard: _ requires exactly one char");
 
@@ -383,7 +503,7 @@ static void test_wildcard_matching() {
 	ok(mywildcmp("", "") == true,
 		"wildcard: empty pattern matches empty string");
 	ok(mywildcmp("%", "") == true,
-		"wildcard: % matches empty string");
+		"wildcard: %% matches empty string");
 }
 
 // ============================================================================
@@ -391,7 +511,11 @@ static void test_wildcard_matching() {
 // ============================================================================
 
 int main() {
-	plan(43);
+#ifdef PROXYSQL31
+	plan(55);
+#else
+	plan(45);
+#endif
 
 	test_init_minimal();
 
@@ -405,6 +529,11 @@ int main() {
 
 	// Packet header
 	test_mysql_hdr();                        // 3 tests
+#ifdef PROXYSQL31
+	test_auth_more_data_packet();            // 5 tests
+	test_caching_sha2_stage5_payload_validation(); // 4 tests
+	test_internal_session_redacts_password(); // 1 test
+#endif
 
 	// Byte copy helpers
 	test_cpy3();                             // 2 tests
@@ -416,8 +545,9 @@ int main() {
 
 	// String utilities
 	test_escape_single_quotes();             // 3 tests
+	test_password_log_redaction();            // 2 tests
 	test_wildcard_matching();                // 12 tests
-	// Total: 3+2+1+2+6+1+3+2+2+4+2+3+12 = 43
+	// Total on the stable tier: 3+2+1+2+6+1+3+2+2+4+2+3+2+12 = 45
 
 	test_cleanup_minimal();
 
