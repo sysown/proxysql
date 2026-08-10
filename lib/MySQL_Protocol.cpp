@@ -1415,7 +1415,9 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	// Validate each field before consuming it to avoid malformed-packet reads and writes.
 	const unsigned char *user_ptr = pkt + cur;
 	const size_t user_remaining = packet_end - user_ptr;
-	const size_t user_len = strnlen(reinterpret_cast<const char*>(user_ptr), user_remaining);
+	const size_t user_len = static_cast<size_t>(
+		(user_ptr >= packet_end ? packet_end : reinterpret_cast<const unsigned char*>(memchr(user_ptr, '\0', user_remaining))) - user_ptr
+	);
 	if (user_len == user_remaining) {
 		return false;
 	}
@@ -1443,7 +1445,11 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	}
 	const char *db_ptr = reinterpret_cast<const char*>(pkt + cur);
 	const size_t db_remaining = packet_end - (pkt + cur);
-	const size_t db_len = strnlen(db_ptr, db_remaining);
+	const size_t db_len = static_cast<size_t>(
+		(reinterpret_cast<const unsigned char*>(memchr(db_ptr, '\0', db_remaining)) == NULL)
+			? db_remaining
+			: reinterpret_cast<const unsigned char*>(memchr(db_ptr, '\0', db_remaining)) - (pkt + cur)
+	);
 	if (db_len == db_remaining) {
 		free(pass);
 		return false;
@@ -1462,7 +1468,11 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	int capabilities = (*myds)->sess->client_myds->myconn->options.client_flag;
 	if (capabilities & CLIENT_PLUGIN_AUTH && pkt + cur < packet_end) {
 		const char *auth_plugin_ptr = reinterpret_cast<const char*>(pkt + cur);
-		const size_t auth_plugin_len = strnlen(auth_plugin_ptr, packet_end - (pkt + cur));
+		const size_t auth_plugin_len = static_cast<size_t>(
+			(reinterpret_cast<const unsigned char*>(memchr(auth_plugin_ptr, '\0', packet_end - (pkt + cur))) == NULL)
+				? (packet_end - (pkt + cur))
+				: reinterpret_cast<const unsigned char*>(memchr(auth_plugin_ptr, '\0', packet_end - (pkt + cur))) - (pkt + cur)
+		);
 		if (auth_plugin_len == static_cast<size_t>(packet_end - (pkt + cur))) {
 			free(pass);
 			return false;
