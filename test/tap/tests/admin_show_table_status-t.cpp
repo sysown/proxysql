@@ -12,6 +12,7 @@
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
+#include "proxysql_utils.h"
 
 using std::string;
 
@@ -75,17 +76,21 @@ int main() {
 			return -1;
 		}
 		const size_t query_len = strlen(queries[0]) + it->size() + 1;
-		char *query = (char *) malloc(query_len);
+		mf_unique_ptr<char> query { (char *)malloc(query_len) };
+		if (!query) {
+			fprintf(stderr, "Unable to allocate query buffer\n");
+			mysql_close(proxysql_admin);
+			return -1;
+		}
 		for (std::vector<const char *>::iterator it2 = queries.begin(); it2 != queries.end(); it2++) {
-			snprintf(query, query_len, *it2, it->c_str());
-			diag("Running query: %s", query);
-			MYSQL_QUERY(proxysql_admin, query);
+			snprintf(query.get(), query_len, *it2, it->c_str());
+			diag("Running query: %s", query.get());
+			MYSQL_QUERY(proxysql_admin, query.get());
 			MYSQL_RES* proxy_res = mysql_store_result(proxysql_admin);
 			unsigned long rows = proxy_res->row_count;
 			ok(rows == 1 , "SHOW TABLE STATUS %s generated %lu row(s)", it->c_str(), rows);
 			mysql_free_result(proxy_res);
 		}
-		free(query);
 		mysql_close(proxysql_admin);
 	}
 
