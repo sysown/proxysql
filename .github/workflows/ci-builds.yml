@@ -459,7 +459,7 @@ jobs:
     - name: Cache save bin
       id: cache-save-bin
       if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' }}
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         key: ${{ env.BLDCACHE }}_bin
         enableCrossOsArchive: true
@@ -468,7 +468,7 @@ jobs:
     - name: Cache save src
       id: cache-save-src
       if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         key: ${{ env.BLDCACHE }}_src
         enableCrossOsArchive: true
@@ -524,7 +524,7 @@ jobs:
     - name: Cache save test
       id: cache-save-test
       if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         key: ${{ env.BLDCACHE }}_test
         enableCrossOsArchive: true
@@ -533,7 +533,7 @@ jobs:
     - name: Cache save matrix
       id: cache-save-matrix
       if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         key: ${{ env.BLDCACHE }}_matrix
         enableCrossOsArchive: true
