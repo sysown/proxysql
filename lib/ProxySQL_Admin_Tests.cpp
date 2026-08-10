@@ -6,6 +6,7 @@
 #include <memory>
 #include <vector>       // std::vector
 #include <unordered_set>
+#include <cstring>
 
 #include "MySQL_Data_Stream.h"
 
@@ -91,8 +92,8 @@ int ProxySQL_Test___GenerateRandomQueryInDigestTable(int n) {
 	char * schemaname_buf = (char *)malloc(64);
 	//ui.username = username_buf;
 	//ui.schemaname = schemaname_buf;
-	strcpy(username_buf,"user_name_");
-	strcpy(schemaname_buf,"shard_name_");
+	memcpy(username_buf, "user_name_", sizeof("user_name_"));
+	memcpy(schemaname_buf, "shard_name_", sizeof("shard_name_"));
 	bool orig_norm = mysql_thread___query_digests_normalize_digest_text;
 	for (int i=0; i<n; i++) {
 		if (i%10 == 0) {

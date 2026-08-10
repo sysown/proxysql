@@ -321,7 +321,7 @@ void PG_pkt::write_DataRow(const char *tupdesc, ...) {
 				uint8_t *bval = va_arg(ap, uint8_t *);
 				size_t required = 2 + blen * 2 + 1;
 				tmp2 = (char *)malloc(required);
-				strcpy(tmp2, "\\x");
+				memcpy(tmp2, "\\x", 3);
 				for (int j = 0; j < blen; j++)
 					sprintf(tmp2 + (2 + j * 2), "%02x", bval[j]);
 				val = tmp2;

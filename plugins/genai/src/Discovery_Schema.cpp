@@ -57,7 +57,7 @@ int Discovery_Schema::init() {
 	// Initialize database connection
 	db = new SQLite3DB();
 	char path_buf[db_path.size() + 1];
-	strcpy(path_buf, db_path.c_str());
+	memcpy(path_buf, db_path.c_str(), db_path.size() + 1);
 	int rc = db->open(path_buf, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 	if (rc != SQLITE_OK) {
 		proxy_error("Failed to open discovery catalog database at %s: %d\n", db_path.c_str(), rc);

@@ -1681,12 +1681,12 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
                     char green_writer_str[24];
                     char green_reader_str[24];
                     if (line.lookupValue("green_writer_hostgroup", green_writer_hostgroup)==false) {
-                        strcpy(green_writer_str, "NULL");
+                        memcpy(green_writer_str, "NULL", sizeof("NULL"));
                     } else {
                         snprintf(green_writer_str, sizeof(green_writer_str), "%d", green_writer_hostgroup);
                     }
                     if (line.lookupValue("green_reader_hostgroup", green_reader_hostgroup)==false) {
-                        strcpy(green_reader_str, "NULL");
+                        memcpy(green_reader_str, "NULL", sizeof("NULL"));
                     } else {
                         snprintf(green_reader_str, sizeof(green_reader_str), "%d", green_reader_hostgroup);
                     }

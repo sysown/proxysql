@@ -23,7 +23,7 @@ void tokenizer(tokenizer_t *result, const char* s, const char* delimiters, int e
 		if (result->s_length > (PROXYSQL_TOKENIZER_BUFFSIZE-1)) {
 			result->s = strdup(s);
 		} else {
-			strcpy(result->buffer,s);
+			memcpy(result->buffer, s, result->s_length + 1);
 			result->s = result->buffer;
 		}
 	}
@@ -2641,4 +2641,3 @@ char* mysql_query_strip_comments(char *s, int _len, bool lowercase) {
 
 	return r;
 }
-

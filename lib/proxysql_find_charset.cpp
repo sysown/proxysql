@@ -7,6 +7,7 @@
 #include "proxysql_structs.h"
 ///////////////////////////////////////////////////////////////////////////////
 
+#include <stdio.h>
 #include <string.h>
 
 const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr) {
@@ -90,7 +91,7 @@ MARIADB_CHARSET_INFO * proxysql_find_charset_collate_names(const char *csname_, 
 	}
 	if (strncasecmp(collatename_,(const char *)"utf8mb3", 7)==0) {
 		memcpy(buf,(const char *)"utf8",4);
-		strcpy(buf+4,collatename_+7);
+		snprintf(buf+4, sizeof(buf)-4, "%s", collatename_ + 7);
 		collatename = buf;
 	} else {
 		collatename = collatename_;

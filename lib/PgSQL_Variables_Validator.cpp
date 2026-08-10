@@ -266,7 +266,9 @@ bool pgsql_variable_validate_maintenance_work_mem_v2(const char* value, const pa
 
 	/* Handle default unit (kB) if no unit specified */
 	if (unit_len == 0) {
-		strcpy(unit, "kB");
+		unit[0] = 'k';
+		unit[1] = 'B';
+		unit[2] = '\0';
 		multiplier = 1024;
 	}
 	else {
@@ -277,23 +279,32 @@ bool pgsql_variable_validate_maintenance_work_mem_v2(const char* value, const pa
 
 		/* Validate unit and set multiplier */
 		if (unit_len == 1 && u[0] == 'b') {
-			strcpy(unit, "B");
+			unit[0] = 'B';
+			unit[1] = '\0';
 			multiplier = 1;
 		}
 		else if (strcmp(u, "kb") == 0) {
-			strcpy(unit, "kB");
+			unit[0] = 'k';
+			unit[1] = 'B';
+			unit[2] = '\0';
 			multiplier = 1024;
 		}
 		else if (strcmp(u, "mb") == 0) {
-			strcpy(unit, "MB");
+			unit[0] = 'M';
+			unit[1] = 'B';
+			unit[2] = '\0';
 			multiplier = 1024 * 1024;
 		}
 		else if (strcmp(u, "gb") == 0) {
-			strcpy(unit, "GB");
+			unit[0] = 'G';
+			unit[1] = 'B';
+			unit[2] = '\0';
 			multiplier = 1024ULL * 1024 * 1024;
 		}
 		else if (strcmp(u, "tb") == 0) {
-			strcpy(unit, "TB");
+			unit[0] = 'T';
+			unit[1] = 'B';
+			unit[2] = '\0';
 			multiplier = 1024ULL * 1024 * 1024 * 1024;
 		}
 		else {
@@ -364,7 +375,9 @@ bool pgsql_variable_validate_maintenance_work_mem_v3(const char* value, const pa
 
 	// Default to kB if no unit specified
 	if (unit_len == 0) {
-		strcpy(unit, "kB");
+		unit[0] = 'k';
+		unit[1] = 'B';
+		unit[2] = '\0';
 		multiplier = 1024;
 	}
 	else {
@@ -375,23 +388,32 @@ bool pgsql_variable_validate_maintenance_work_mem_v3(const char* value, const pa
 
 		// Validate units and set multipliers
 		if (unit_len == 1 && u[0] == 'b') {
-			strcpy(unit, "B");
+			unit[0] = 'B';
+			unit[1] = '\0';
 			multiplier = 1;
 		}
 		else if (strcmp(u, "kb") == 0) {
-			strcpy(unit, "kB");
+			unit[0] = 'k';
+			unit[1] = 'B';
+			unit[2] = '\0';
 			multiplier = 1024;
 		}
 		else if (strcmp(u, "mb") == 0) {
-			strcpy(unit, "MB");
+			unit[0] = 'M';
+			unit[1] = 'B';
+			unit[2] = '\0';
 			multiplier = 1024 * 1024;
 		}
 		else if (strcmp(u, "gb") == 0) {
-			strcpy(unit, "GB");
+			unit[0] = 'G';
+			unit[1] = 'B';
+			unit[2] = '\0';
 			multiplier = 1024ULL * 1024 * 1024;
 		}
 		else if (strcmp(u, "tb") == 0) {
-			strcpy(unit, "TB");
+			unit[0] = 'T';
+			unit[1] = 'B';
+			unit[2] = '\0';
 			multiplier = 1024ULL * 1024 * 1024 * 1024;
 		}
 		else {

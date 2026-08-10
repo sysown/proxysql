@@ -592,7 +592,7 @@ static void process_component_checksum(
 	checksum.last_updated = now;
 
 	if (strcmp(checksum.checksum, row[3])) {
-		strcpy(checksum.checksum, row[3]);
+		snprintf(checksum.checksum, ProxySQL_Checksum_Value_LENGTH, "%s", row[3] ? row[3] : "");
 		checksum.last_changed = now;
 		checksum.diff_check = 1;
 		const char* no_sync_message = NULL;

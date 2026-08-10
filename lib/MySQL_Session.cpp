@@ -1293,7 +1293,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			Hdr.pkt_length=pkt_2.size-5;
 			memcpy((char *)pkt_2.ptr+4,(char *)pkt->ptr+4,1);
 			memcpy(pkt_2.ptr,&Hdr,sizeof(mysql_hdr));
-			strcpy((char *)pkt_2.ptr+5,(char *)"SET NAMES ");
+			memcpy((char *)pkt_2.ptr+5, "SET NAMES ", 10);
 			memcpy((char *)pkt_2.ptr+15,idx+1,pkt->size-1-(idx-(char *)pkt->ptr));
 			l_free(pkt->size,pkt->ptr);
 			pkt->size=pkt_2.size;
@@ -1317,7 +1317,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			Hdr.pkt_length=pkt_2.size-5;
 			memcpy((char *)pkt_2.ptr+4,(char *)pkt->ptr+4,1);
 			memcpy(pkt_2.ptr,&Hdr,sizeof(mysql_hdr));
-			strcpy((char *)pkt_2.ptr+5,(char *)"SET NAMES ");
+			memcpy((char *)pkt_2.ptr+5, "SET NAMES ", 10);
 			memcpy((char *)pkt_2.ptr+15,idx+1,pkt->size-1-(idx-(char *)pkt->ptr));
 			l_free(pkt->size,pkt->ptr);
 			pkt->size=pkt_2.size;

@@ -48,35 +48,35 @@ PgSQL_Connection_userinfo::~PgSQL_Connection_userinfo() {
 
 uint64_t PgSQL_Connection_userinfo::compute_hash() {
 	int l=0;
-	if (username)
-		l+=strlen(username);
-	if (password)
-		l+=strlen(password);
-	if (dbname)
-		l+=strlen(dbname);
+	size_t username_len = username ? strlen(username) : 0;
+	size_t password_len = password ? strlen(password) : 0;
+	size_t dbname_len = dbname ? strlen(dbname) : 0;
+	l = username_len + password_len + dbname_len;
 // two random seperator
 #define _COMPUTE_HASH_DEL1_	"-ujhtgf76y576574fhYTRDF345wdt-"
 #define _COMPUTE_HASH_DEL2_	"-8k7jrhtrgJHRgrefgreyhtRFewg6-"
-	l+=strlen(_COMPUTE_HASH_DEL1_);
-	l+=strlen(_COMPUTE_HASH_DEL2_);
+	size_t delimiter1_len = strlen(_COMPUTE_HASH_DEL1_);
+	size_t delimiter2_len = strlen(_COMPUTE_HASH_DEL2_);
+	l += delimiter1_len;
+	l += delimiter2_len;
 	char *buf=(char *)malloc(l+1);
 	l=0;
 	if (username) {
-		strcpy(buf+l,username);
-		l+=strlen(username);
+		memcpy(buf+l, username, username_len);
+		l += username_len;
 	}
-	strcpy(buf+l,_COMPUTE_HASH_DEL1_);
-	l+=strlen(_COMPUTE_HASH_DEL1_);
+	memcpy(buf+l,_COMPUTE_HASH_DEL1_,delimiter1_len);
+	l += delimiter1_len;
 	if (password) {
-		strcpy(buf+l,password);
-		l+=strlen(password);
+		memcpy(buf+l, password, password_len);
+		l += password_len;
 	}
 	if (dbname) {
-		strcpy(buf+l, dbname);
-		l+=strlen(dbname);
+		memcpy(buf+l, dbname, dbname_len);
+		l += dbname_len;
 	}
-	strcpy(buf+l,_COMPUTE_HASH_DEL2_);
-	l+=strlen(_COMPUTE_HASH_DEL2_);
+	memcpy(buf+l,_COMPUTE_HASH_DEL2_,delimiter2_len);
+	l += delimiter2_len;
 	hash=SpookyHash::Hash64(buf,l,0);
 	free(buf);
 	return hash;

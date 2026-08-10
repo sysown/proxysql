@@ -292,10 +292,12 @@ void send_startup_message(int sock, const std::vector<std::pair<std::string, std
     offset += 4;
 
     for (int i = 0; i < param_count; i++) {
-        strcpy(msg + offset, params[i].first.c_str());
-        offset += params[i].first.size() + 1;
-        strcpy(msg + offset, params[i].second.c_str());
-        offset += params[i].second.size() + 1;
+        size_t key_len = params[i].first.size();
+        size_t val_len = params[i].second.size();
+        memcpy(msg + offset, params[i].first.c_str(), key_len + 1);
+        offset += key_len + 1;
+        memcpy(msg + offset, params[i].second.c_str(), val_len + 1);
+        offset += val_len + 1;
     }
     msg[offset++] = '\0';
 

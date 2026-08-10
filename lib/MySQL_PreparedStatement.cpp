@@ -21,33 +21,41 @@ const int PS_GLOBAL_STATUS_FIELD_NUM = 9;
 static uint64_t stmt_compute_hash(char *user,
                                   char *schema, char *query,
                                   unsigned int query_length) {
-	int l = 0;
-	l += strlen(user);
-	l += strlen(schema);
+	size_t l = 0;
+	size_t user_len = strlen(user);
+	size_t schema_len = strlen(schema);
 // two random seperators
 #define _COMPUTE_HASH_DEL1_ "-ujhtgf76y576574fhYTRDFwdt-"
 #define _COMPUTE_HASH_DEL2_ "-8k7jrhtrgJHRgrefgreRFewg6-"
-	l += strlen(_COMPUTE_HASH_DEL1_);
-	l += strlen(_COMPUTE_HASH_DEL2_);
+	size_t delimiter1_len = strlen(_COMPUTE_HASH_DEL1_);
+	size_t delimiter2_len = strlen(_COMPUTE_HASH_DEL2_);
+	l += user_len;
+	l += schema_len;
+	l += delimiter1_len;
+	l += delimiter2_len;
 	l += query_length;
 	char *buf = (char *)malloc(l);
 	l = 0;
 
 	// write user
-	strcpy(buf + l, user);
-	l += strlen(user);
+	if (user_len) {
+		memcpy(buf + l, user, user_len);
+		l += user_len;
+	}
 
 	// write delimiter1
-	strcpy(buf + l, _COMPUTE_HASH_DEL1_);
-	l += strlen(_COMPUTE_HASH_DEL1_);
+	memcpy(buf + l, _COMPUTE_HASH_DEL1_, delimiter1_len);
+	l += delimiter1_len;
 
 	// write schema
-	strcpy(buf + l, schema);
-	l += strlen(schema);
+	if (schema_len) {
+		memcpy(buf + l, schema, schema_len);
+		l += schema_len;
+	}
 
 	// write delimiter2
-	strcpy(buf + l, _COMPUTE_HASH_DEL2_);
-	l += strlen(_COMPUTE_HASH_DEL2_);
+	memcpy(buf + l, _COMPUTE_HASH_DEL2_, delimiter2_len);
+	l += delimiter2_len;
 
 	// write query
 	memcpy(buf + l, query, query_length);

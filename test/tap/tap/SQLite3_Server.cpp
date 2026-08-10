@@ -202,8 +202,9 @@ class sqlite3server_main_loop_listeners {
 		ifaces=reset_ifaces(ifaces);
 		i=0;
 		for ( token = tokenize( &tok ) ; token && i < MAX_IFACES ; token = tokenize( &tok ) ) {
-			ifaces[i]=(char *)malloc(strlen(token)+1);
-			strcpy(ifaces[i],token);
+			size_t token_len = strlen(token);
+			ifaces[i]=(char *)malloc(token_len+1);
+			memcpy(ifaces[i], token, token_len+1);
 			i++;
 		}
 		free_tokenizer( &tok );
