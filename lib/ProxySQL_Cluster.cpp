@@ -591,16 +591,10 @@ static void process_component_checksum(
 	checksum.epoch = atoll(row[2]);
 	checksum.last_updated = now;
 
-	if (strcmp(checksum.checksum, row[3])) {
-		const char *checksum_source = row[3] ? row[3] : "";
-		size_t checksum_len = strlen(checksum_source);
-		if (checksum_len >= ProxySQL_Checksum_Value_LENGTH) {
-			memcpy(checksum.checksum, checksum_source, ProxySQL_Checksum_Value_LENGTH - 1);
-			checksum.checksum[ProxySQL_Checksum_Value_LENGTH - 1] = '\0';
-		} else {
-			memcpy(checksum.checksum, checksum_source, checksum_len + 1);
-		}
-		checksum.last_changed = now;
+		if (strcmp(checksum.checksum, row[3])) {
+			const char *checksum_source = row[3] ? row[3] : "";
+			snprintf(checksum.checksum, sizeof(checksum.checksum), "%s", checksum_source);
+			checksum.last_changed = now;
 		checksum.diff_check = 1;
 		const char* no_sync_message = NULL;
 
