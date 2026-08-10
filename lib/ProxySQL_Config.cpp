@@ -43,6 +43,32 @@ static void format_query(char *query, size_t query_len, const char *format, Args
 	query[copy_len] = '\0';
 }
 
+static void append_config_field(std::string& fields, std::string& values,
+		bool& is_first_field, const std::string& field_name,
+		const std::string& field_value, bool is_int) {
+	if (!is_first_field) {
+		fields += ", ";
+		values += ", ";
+	} else {
+		is_first_field = false;
+	}
+	fields += field_name;
+
+	if (is_int) {
+		values += field_value;
+		return;
+	}
+
+	char *cs = strdup(field_value.c_str());
+	char *ecs = escape_string_single_quotes(cs, false);
+	const char* safe_escaped = ecs ? ecs : "";
+	values += std::string("'") + safe_escaped + "'";
+	if (cs != ecs) {
+		l_free(0, cs);
+	}
+	l_free(0, ecs);
+}
+
 const char* config_header = "########################################################################################\n"
 							"# This config file is parsed using libconfig , and its grammar is described in:\n"
 							"# http://www.hyperrealm.com/libconfig/libconfig_manual.html#Configuration-File-Grammar\n"
@@ -1830,73 +1856,50 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
 			std::string fields = "";
 			std::string values = "";
 
-			auto process_field = [&](const std::string &field_name, const std::string &field_value, int is_int) {
-				if (!is_first_field) {
-					fields += ", ";
-					values += ", ";
-				}
-				else {
-					is_first_field = false;
-				}
-				fields += field_name;
-
-				if (is_int) {
-					values += field_value;
-				}
-				else {
-					char *cs = strdup(field_value.c_str());
-					char *ecs = escape_string_single_quotes(cs, false);
-					const char* safe_escaped = ecs ? ecs : "";
-					values +=  std::string("'") + safe_escaped + "'";
-					if (cs != ecs) l_free(0, cs);
-					l_free(0, ecs);
-				}
-			};
-
 			// Only inserting/updating fields which are in configuration file.
 			// Fields default will be from table schema.
 
 			// Parsing integer field
 			if (hostgroup_attributes.lookupValue("hostgroup_id", integer_val) ) {
-				process_field("hostgroup_id", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "hostgroup_id", to_string(integer_val), true);
 			}
 			else {
 				proxy_error("Admin: detected a mysql_hostgroup_attributes in config file without a mandatory hostgroup_id.\n");
 				continue;
 			}
 			if (hostgroup_attributes.lookupValue("max_num_online_servers", integer_val)) {
-				process_field("max_num_online_servers", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "max_num_online_servers", to_string(integer_val), true);
 			}
 			if (hostgroup_attributes.lookupValue("autocommit", integer_val)) {
-				process_field("autocommit", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "autocommit", to_string(integer_val), true);
 			}
 			if (hostgroup_attributes.lookupValue("free_connections_pct", integer_val)) {
-				process_field("free_connections_pct", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "free_connections_pct", to_string(integer_val), true);
 			}
 			if (hostgroup_attributes.lookupValue("multiplex", integer_val)) {
-				process_field("multiplex", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "multiplex", to_string(integer_val), true);
 			}
 			if (hostgroup_attributes.lookupValue("connection_warming", integer_val)) {
-				process_field("connection_warming", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "connection_warming", to_string(integer_val), true);
 			}
 			if (hostgroup_attributes.lookupValue("throttle_connections_per_sec", integer_val)) {
-				process_field("throttle_connections_per_sec", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "throttle_connections_per_sec", to_string(integer_val), true);
 			}
 			// Parsing string field
 			if (hostgroup_attributes.lookupValue("init_connect", string_val)) {
-				process_field("init_connect", string_val, false);
+				append_config_field(fields, values, is_first_field, "init_connect", string_val, false);
 			}
 			if (hostgroup_attributes.lookupValue("ignore_session_variables", string_val)) {
-				process_field("ignore_session_variables", string_val, false);
+				append_config_field(fields, values, is_first_field, "ignore_session_variables", string_val, false);
 			}
 			if (hostgroup_attributes.lookupValue("hostgroup_settings", string_val)) {
-				process_field("hostgroup_settings", string_val, false);
+				append_config_field(fields, values, is_first_field, "hostgroup_settings", string_val, false);
 			}
 			if (hostgroup_attributes.lookupValue("servers_defaults", string_val)) {
-				process_field("servers_defaults", string_val, false);
+				append_config_field(fields, values, is_first_field, "servers_defaults", string_val, false);
 			}
 			if (hostgroup_attributes.lookupValue("comment", string_val)) {
-				process_field("comment", string_val, false);
+				append_config_field(fields, values, is_first_field, "comment", string_val, false);
 			}
 
 			std::string s_query = "INSERT OR REPLACE INTO mysql_hostgroup_attributes (";
@@ -2328,67 +2331,45 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 			std::string fields = "";
 			std::string values = "";
 
-			auto process_field = [&](const std::string &field_name, const std::string &field_value, int is_int) {
-				if (!is_first_field) {
-					fields += ", ";
-					values += ", ";
-				}
-				else {
-					is_first_field = false;
-				}
-				fields += field_name;
-				if (is_int) {
-					values += field_value;
-				}
-				else {
-					char *cs = strdup(field_value.c_str());
-					char *ecs = escape_string_single_quotes(cs, false);
-					const char* safe_escaped = ecs ? ecs : "";
-					values += std::string("'") + safe_escaped + "'";
-					if (cs != ecs) free(cs);
-					if (ecs) free(ecs);
-				}
-			};
-
 			if (hostgroup_attributes.lookupValue("hostgroup_id", integer_val)) {
-				process_field("hostgroup_id", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "hostgroup_id", to_string(integer_val), true);
 			}
 			else {
 				proxy_error("Admin: detected a pgsql_hostgroup_attributes in config file without a mandatory hostgroup_id.\n");
 				continue;
 			}
 			if (hostgroup_attributes.lookupValue("max_num_online_servers", integer_val)) {
-				process_field("max_num_online_servers", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "max_num_online_servers", to_string(integer_val), true);
 			}
 			if (hostgroup_attributes.lookupValue("autocommit", integer_val)) {
-				process_field("autocommit", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "autocommit", to_string(integer_val), true);
 			}
 			if (hostgroup_attributes.lookupValue("free_connections_pct", integer_val)) {
-				process_field("free_connections_pct", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "free_connections_pct", to_string(integer_val), true);
 			}
 			if (hostgroup_attributes.lookupValue("multiplex", integer_val)) {
-				process_field("multiplex", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "multiplex", to_string(integer_val), true);
 			}
 			if (hostgroup_attributes.lookupValue("connection_warming", integer_val)) {
-				process_field("connection_warming", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "connection_warming", to_string(integer_val), true);
 			}
 			if (hostgroup_attributes.lookupValue("throttle_connections_per_sec", integer_val)) {
-				process_field("throttle_connections_per_sec", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "throttle_connections_per_sec", to_string(integer_val), true);
 			}
 			if (hostgroup_attributes.lookupValue("init_connect", string_val)) {
-				process_field("init_connect", string_val, false);
+				append_config_field(fields, values, is_first_field, "init_connect", string_val, false);
 			}
 			if (hostgroup_attributes.lookupValue("ignore_session_variables", string_val)) {
-				process_field("ignore_session_variables", string_val, false);
+				append_config_field(fields, values, is_first_field, "ignore_session_variables", string_val, false);
 			}
 			if (hostgroup_attributes.lookupValue("hostgroup_settings", string_val)) {
-				process_field("hostgroup_settings", string_val, false);
+				append_config_field(fields, values, is_first_field, "hostgroup_settings", string_val, false);
 			}
 			if (hostgroup_attributes.lookupValue("servers_defaults", string_val)) {
-				process_field("servers_defaults", string_val, false);
+				append_config_field(fields, values, is_first_field, "servers_defaults", string_val, false);
 			}
 			if (hostgroup_attributes.lookupValue("comment", string_val)) {
-				process_field("comment", string_val, false);
+				append_config_field(fields, values, is_first_field, "comment", string_val, false);
 			}
 
 			std::string s_query = "INSERT OR REPLACE INTO pgsql_hostgroup_attributes (";
