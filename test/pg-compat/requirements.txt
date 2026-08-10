@@ -1,8 +1,14 @@
-psycopg[binary]==3.2.*
-asyncpg==0.30.*
-# >=9.0.3: GHSA-6w46-j5rx-g56g (insecure tmpdir handling) affects every release
-# before 9.0.3, so no 8.x pin can pick up the fix. The suite uses only stable
-# APIs (fixtures, parametrize, skip/fail, pytest_collection_modifyitems), and
-# pytest 9 requires Python >=3.10 which the 3.11 base image satisfies.
-pytest>=9.0.3,<10
-tomli==2.*
+# Exact pins, not ranges: the image is a test fixture whose results must be
+# reproducible across reruns, and a resolved-version lock is what lets a
+# rebuild months from now reproduce a past failure. Versions are the newest
+# in each line that was previously specified as a range.
+#
+# pytest 9.0.3+ is a security floor, not just a bump: GHSA-6w46-j5rx-g56g
+# (insecure tmpdir handling) affects every release before 9.0.3, so no 8.x
+# pin could pick up the fix. The suite uses only stable APIs (fixtures,
+# parametrize, skip/fail, pytest_collection_modifyitems) and pytest 9
+# requires Python >=3.10, which the 3.11 base image satisfies.
+psycopg[binary]==3.2.13
+asyncpg==0.30.0
+pytest==9.1.1
+tomli==2.4.1

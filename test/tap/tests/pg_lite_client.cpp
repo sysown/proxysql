@@ -376,9 +376,14 @@ void PgConnection::sendPassword(const std::string& password) {
     sendMessage('p', packet);
 }
 
+// MD5 is not a security choice here: PostgreSQL's AuthenticationMD5Password
+// (authType 5) defines the response as an MD5 construction on the wire, so a
+// client that must exercise that auth path has to compute exactly this digest
+// and nothing else. Test-only client code; ProxySQL's own MD5 auth support is
+// what pgsql-auth_method_matrix-t exists to verify.
 static std::string md5_hex(const std::string& in) {
     unsigned char digest[MD5_DIGEST_LENGTH];
-    MD5(reinterpret_cast<const unsigned char*>(in.data()), in.size(), digest);
+    MD5(reinterpret_cast<const unsigned char*>(in.data()), in.size(), digest); // NOSONAR cpp:S4790 — PG MD5 auth is defined in terms of MD5
     static const char* hx = "0123456789abcdef";
     std::string out;
     out.reserve(MD5_DIGEST_LENGTH * 2);

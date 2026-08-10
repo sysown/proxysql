@@ -40,8 +40,8 @@ jobs:
     # declares write-all (needed for actions/upload-artifact's write scope
     # under the pull_request event, matching CI-3p-postgresql.yml's
     # documented rationale).
-    permissions: write-all
-    uses: sysown/proxysql/.github/workflows/ci-pg-compat.yml@GH-Actions
-    secrets: inherit
+    permissions: write-all # NOSONAR githubactions:S8234 — see the note above; matches all other caller workflows
+    uses: sysown/proxysql/.github/workflows/ci-pg-compat.yml@GH-Actions # NOSONAR githubactions:S7637 — branch ref matches all other caller workflows
+    secrets: inherit # NOSONAR githubactions:S7635 — matches all other caller workflows
     with:
       trigger: ${{ toJson(github) }}

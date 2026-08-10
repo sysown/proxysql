@@ -14,7 +14,10 @@ WORKDIR /src
 # below is the SHA-256 of the jar whose SHA-1 matches the published digest.)
 ARG PGJDBC_VERSION=42.7.4
 ARG PGJDBC_SHA256=188976721ead8e8627eb6d8389d500dccc0c9bebd885268a3047180274a6031e
-RUN curl -fsSLo /pgjdbc.jar "https://repo1.maven.org/maven2/org/postgresql/postgresql/${PGJDBC_VERSION}/postgresql-${PGJDBC_VERSION}.jar" \
+# --proto/--proto-redir '=https': -L follows redirects, and without these a
+# redirect could downgrade the transfer to plaintext HTTP.
+RUN curl -fsSL --proto '=https' --proto-redir '=https' \
+        -o /pgjdbc.jar "https://repo1.maven.org/maven2/org/postgresql/postgresql/${PGJDBC_VERSION}/postgresql-${PGJDBC_VERSION}.jar" \
  && echo "${PGJDBC_SHA256}  /pgjdbc.jar" | sha256sum -c -
 COPY drivers/java/Behaviors.java .
 RUN javac --release 17 -cp /pgjdbc.jar Behaviors.java -d /out
@@ -23,10 +26,13 @@ RUN javac --release 17 -cp /pgjdbc.jar Behaviors.java -d /out
 FROM node:22-bookworm-slim AS nodebuild
 WORKDIR /app
 COPY drivers/node/package.json drivers/node/package-lock.json* ./
-# The `npm install` fallback must never be reached in normal operation
-# (package-lock.json is committed, so `npm ci` succeeds); it exists only
-# for first-bootstrap before a lockfile exists.
-RUN npm ci --omit=dev || npm install --omit=dev
+# No `|| npm install` fallback: package-lock.json is committed, so `npm ci`
+# always succeeds, and the fallback only ever fired when the lockfile was
+# missing -- resolving fresh, unlocked versions precisely when reproducibility
+# mattered most. Failing loudly is the correct behaviour there.
+# --ignore-scripts: `pg` needs no lifecycle scripts, so nothing from the
+# dependency tree gets to execute at install time.
+RUN npm ci --omit=dev --ignore-scripts
 COPY drivers/node/behaviors.js .
 
 # ---- Prisma deps + client generation (ORM tier, SP3-Task 5) ----
@@ -42,12 +48,19 @@ FROM node:22-bookworm-slim AS prismabuild
 WORKDIR /app
 COPY drivers/prisma/package.json drivers/prisma/package-lock.json* ./
 # devDependencies (the prisma CLI) are REQUIRED here for `prisma generate`,
-# so this is a full install, not --omit=dev. The `npm install` fallback must
-# never be reached in normal operation (package-lock.json is committed).
-RUN npm ci || npm install
+# so this is a full install, not --omit=dev. No `|| npm install` fallback --
+# package-lock.json is committed (see the node stage for the rationale).
+# --ignore-scripts is safe here even though @prisma/client's postinstall
+# normally runs `prisma generate`: the explicit `prisma generate` below does
+# that job, so the only effect is that no dependency executes code at install
+# time.
+RUN npm ci --ignore-scripts
 COPY drivers/prisma/schema.prisma drivers/prisma/behaviors.mjs ./
 ENV PGCOMPAT_PRISMA_URL="postgresql://build:build@localhost:5432/build?sslmode=disable"
-RUN npx prisma generate
+# --no-install: run ONLY the prisma CLI already pinned by package-lock.json.
+# Bare `npx` silently fetches an unpinned package from the registry when the
+# binary is missing locally, which would defeat the lockfile.
+RUN npx --no-install prisma generate
 
 # ---- Final: python base + JRE + node runtime + artifacts ----
 FROM python:3.11-slim
@@ -60,8 +73,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=nodebuild /usr/local/bin/node /usr/local/bin/node
 WORKDIR /pg-compat
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY . .
+# --only-binary :all: installs from wheels exclusively, so no package gets to
+# run a setup.py at install time; every pin in requirements.txt publishes a
+# manylinux/pure-python wheel. --require-hashes is deliberately NOT used: it
+# would need a full transitive hash lock (pip-compile), which is a bigger
+# change than this PR should carry.
+RUN pip install --no-cache-dir --only-binary :all: -r requirements.txt
+# Copy exactly what the suite needs rather than `COPY . .`, which would sweep
+# in the build context wholesale -- README/SPIKE notes, the driver sources
+# already compiled into the earlier stages, run-pg-compat.bash (a host-side
+# script), local __pycache__, and anything untracked that happens to be
+# sitting in the directory.
+COPY conftest.py pytest.ini xfail.toml ./
+COPY harness/ ./harness/
+COPY behaviors/ ./behaviors/
+COPY cases/ ./cases/
+COPY tests/ ./tests/
+# drivers/: only the Python tier is needed at runtime -- tests/test_behaviors.py
+# imports drivers.python.adapter in-process, whereas the go/java/node/prisma
+# tiers are compiled or installed in the earlier stages and arrive via their own
+# COPY --from lines below. drivers/__init__.py is required for the package import.
+COPY drivers/__init__.py ./drivers/
+COPY drivers/python/ ./drivers/python/
 # Language artifacts under /pg-compat/bin with uniform CLI wrappers.
 COPY --from=gobuild /out/behaviors-go /pg-compat/bin/behaviors-go
 COPY --from=javabuild /out/ /pg-compat/bin/java-classes/
@@ -79,4 +112,12 @@ RUN printf '#!/bin/sh\nexec java -cp /pg-compat/bin/java-classes:/pg-compat/bin/
  && printf '#!/bin/sh\nexec node /pg-compat/node-app/behaviors.js "$@"\n' > /pg-compat/bin/behaviors-node \
  && printf '#!/bin/sh\nexec node /pg-compat/prisma-app/behaviors.mjs "$@"\n' > /pg-compat/bin/behaviors-prisma \
  && chmod +x /pg-compat/bin/behaviors-*
+# Drop privileges: nothing here needs root at runtime. This suite exists to
+# execute third-party driver code (pgx, pgjdbc, node-postgres, Prisma) against
+# a live backend, so running it unprivileged bounds what a compromised
+# dependency can reach. /pg-compat is chowned because pytest writes
+# .pytest_cache and __pycache__ into the rootdir.
+RUN useradd --create-home --uid 10001 pgcompat \
+ && chown -R pgcompat:pgcompat /pg-compat
+USER pgcompat
 ENTRYPOINT ["pytest", "-q"]
