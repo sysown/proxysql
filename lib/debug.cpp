@@ -255,6 +255,7 @@ extern "C" void proxy_debug_func(
 						);
 					}
 				}
+				free(realname);
 			}
 			free(strings);
 		}
