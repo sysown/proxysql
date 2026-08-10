@@ -1032,8 +1032,8 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 			}
 
 			PgCredentials stored_user_info{ '\0' };
-			strncpy(stored_user_info.name, user, MAX_USERNAME);
-			strncpy(stored_user_info.passwd, password, MAX_PASSWORD);
+			snprintf(stored_user_info.name, sizeof(stored_user_info.name), "%.*s", (int)(sizeof(stored_user_info.name) - 1), user);
+			snprintf(stored_user_info.passwd, sizeof(stored_user_info.passwd), "%.*s", (int)(sizeof(stored_user_info.passwd) - 1), password);
 
 			if (!(*myds)->scram_state->server_nonce) {
 				/* process as SASLInitialResponse */
