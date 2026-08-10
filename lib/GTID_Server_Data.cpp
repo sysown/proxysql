@@ -355,14 +355,21 @@ bool GTID_Server_Data::read_next_gtid() {
 					}
 				j++;
 				if (j%2 == 1) { // we are reading the uuid
-					char *p = uuid_server;
-					for (unsigned int k=0; k<strlen(subtoken); k++) {
-						if (subtoken[k]!='-') {
-							*p = subtoken[k];
-							p++;
+					size_t uuid_len = 0;
+					for (const char *uuid_char = subtoken; *uuid_char; ++uuid_char) {
+						if (*uuid_char == '-') {
+							continue;
 						}
+						if (uuid_len + 1 >= sizeof(uuid_server)) {
+							invalid_msg = true;
+							break;
+						}
+						uuid_server[uuid_len++] = *uuid_char;
 					}
-					*p = '\0';
+					if (invalid_msg) {
+						break;
+					}
+					uuid_server[uuid_len] = '\0';
 				} else { // we are reading the trxid or trxid range
 					TrxId_Interval iv(trxid_t(0));
 					if (!TrxId_Interval::parse(subtoken, &iv)) {
