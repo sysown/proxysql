@@ -261,7 +261,8 @@ bool ProxyProtocolInfo::is_client_in_any_subnet(const struct sockaddr* client_ad
 	// Create a copy of the subnet list to avoid modifying the original string
 	size_t subnet_list_len = strlen(subnet_list);
 	char* subnet_list_copy = new char[subnet_list_len + 1];
-	memcpy(subnet_list_copy, subnet_list, subnet_list_len + 1);
+	memcpy(subnet_list_copy, subnet_list, subnet_list_len);
+	subnet_list_copy[subnet_list_len] = '\0';
 
 	char* token = strtok(subnet_list_copy, ","); // Get the first subnet
 	while (token != NULL) {
@@ -371,7 +372,8 @@ bool ProxyProtocolInfo::is_valid_subnet_list(const char* subnet_list) {
 	// Create a copy of the string to avoid modifying the original
 	size_t subnet_list_len = strlen(subnet_list);
 	char* subnet_list_copy = new char[subnet_list_len + 1];
-	memcpy(subnet_list_copy, subnet_list, subnet_list_len + 1);
+	memcpy(subnet_list_copy, subnet_list, subnet_list_len);
+	subnet_list_copy[subnet_list_len] = '\0';
 
 	// Tokenize the string using ',' as the delimiter
 	char* token = strtok(subnet_list_copy, ",");
