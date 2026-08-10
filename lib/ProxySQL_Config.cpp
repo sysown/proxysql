@@ -91,6 +91,7 @@ void ProxySQL_Config::addField(std::string& data, const char* name, const char* 
  * @see ProxySQL_Config::Write_Global_Variables_to_configfile()
  */
 int ProxySQL_Config::Read_Global_Variables_from_configfile(const char *prefix) {
+	if (prefix == NULL) return 0;
 	const Setting& root = GloVars.confFile->cfg.getRoot();
 	char *groupname=(char *)malloc(strlen(prefix)+strlen((char *)"_variables")+1);
 	sprintf(groupname,"%s%s",prefix,"_variables");
@@ -522,14 +523,18 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 		const std::string active_str = std::to_string(active);
 		const std::string timeout_ms_str = std::to_string(timeout_ms);
 		const std::string id_str = id_exists ? std::to_string(id) : std::string();
+		const char* safe_method_escaped = method_escaped ? method_escaped : "";
+		const char* safe_uri_escaped = uri_escaped ? uri_escaped : "";
+		const char* safe_script_escaped = script_escaped ? script_escaped : "";
+		const char* safe_comment_escaped = comment_escaped ? comment_escaped : "";
 		int query_len=0;
 		query_len+=strlen(q) +
 			strlen(active_str.c_str()) +
 			strlen(timeout_ms_str.c_str()) +
-			strlen(method_escaped) +
-			strlen(uri_escaped) +
-			strlen(script_escaped) +
-			strlen(comment_escaped) +
+			strlen(safe_method_escaped) +
+			strlen(safe_uri_escaped) +
+			strlen(safe_script_escaped) +
+			strlen(safe_comment_escaped) +
 			40;
 		if (id_exists) {
 			query_len += strlen(id_str.c_str());
@@ -551,19 +556,19 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 			snprintf(query, query_len, q,
 				id, active,
 				timeout_ms,
-				method_escaped,
-				uri_escaped,
-				script_escaped,
-				comment_escaped
+				safe_method_escaped,
+				safe_uri_escaped,
+				safe_script_escaped,
+				safe_comment_escaped
 			);
 		} else {
 			snprintf(query, query_len, q,
 				active,
 				timeout_ms,
-				method_escaped,
-				uri_escaped,
-				script_escaped,
-				comment_escaped
+				safe_method_escaped,
+				safe_uri_escaped,
+				safe_script_escaped,
+				safe_comment_escaped
 			);
 		}
 		admindb->execute(query);
@@ -1757,9 +1762,10 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
 				else {
 					char *cs = strdup(field_value.c_str());
 					char *ecs = escape_string_single_quotes(cs, false);
-					values +=  std::string("'") + ecs + "'";
+					const char* safe_escaped = ecs ? ecs : "";
+					values +=  std::string("'") + safe_escaped + "'";
 					if (cs != ecs) free(cs);
-					free(ecs);
+					if (ecs) free(ecs);
 				}
 			};
 
@@ -2243,9 +2249,10 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 				else {
 					char *cs = strdup(field_value.c_str());
 					char *ecs = escape_string_single_quotes(cs, false);
-					values += std::string("'") + ecs + "'";
+					const char* safe_escaped = ecs ? ecs : "";
+					values += std::string("'") + safe_escaped + "'";
 					if (cs != ecs) free(cs);
-					free(ecs);
+					if (ecs) free(ecs);
 				}
 			};
 
