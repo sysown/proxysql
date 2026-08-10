@@ -71,6 +71,8 @@ jobs:
 #          echo "Aquired lock '${LOCK^^}' by '${{ github.workflow }}'"
 #        fi
 
+
+
   builds:
     # Route to the self-hosted proxysql-ci pool only when: the actor is renecannao
     # (trusted) AND this workflow is listed in the SELFHOSTED_WORKFLOWS repo variable.
@@ -157,10 +159,26 @@ jobs:
     #   ##[error]File was unable to be removed Error: EACCES: permission denied,
     #   unlink '.../proxysql/deps/prometheus-cpp/.../.bazelignore'
     # and the job fails before it even builds. Reclaim ownership for the runner
-    # user first so checkout can clean. No-op on ephemeral GitHub-hosted runners.
+    # user first so checkout can clean. GitHub-hosted runners use an ephemeral
+    # workspace and do not need this privileged operation.
     - name: Reclaim workspace ownership (self-hosted contamination guard)
-      if: ${{ inputs.trusted && steps.cache-check.outputs.cache-hit != 'true' }}
-      run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
+      if: ${{ inputs.trusted && runner.environment == 'self-hosted' && steps.cache-check.outputs.cache-hit != 'true' }}
+      run: |
+        set -euo pipefail
+        runner_uid="$(id -u)"
+        runner_gid="$(id -g)"
+        workspace="${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is not set}"
+
+        echo ">>> reclaiming self-hosted workspace ownership: ${workspace}"
+        sudo -n chown -R "${runner_uid}:${runner_gid}" "${workspace}"
+        sudo -n chmod -R u+rwX "${workspace}"
+
+        remaining="$(sudo -n find "${workspace}" ! -uid "${runner_uid}" -print -quit)"
+        if [ -n "${remaining}" ]; then
+          echo "::error::workspace still contains files not owned by the runner: ${remaining}"
+          sudo -n find "${workspace}" ! -uid "${runner_uid}" -print | head -n 20
+          exit 1
+        fi
 
     - name: Checkout repository
       if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
@@ -622,11 +640,27 @@ jobs:
 
     # Undo the root ownership the dockerized build left behind, so (a) the next
     # job on this self-hosted runner can clean/checkout without EACCES and (b)
-    # the failure-path artifact upload below can read the whole tree. Runs on
-    # every outcome; no-op on GitHub-hosted runners.
+    # the failure-path artifact upload below can read the whole tree. Run on
+    # every outcome and fail loudly if cleanup cannot be completed; silently
+    # ignoring this step only defers the failure to the next job's checkout.
     - name: Reclaim workspace ownership (leave runner clean)
-      if: ${{ inputs.trusted && always() }}
-      run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
+      if: ${{ inputs.trusted && runner.environment == 'self-hosted' && always() }}
+      run: |
+        set -euo pipefail
+        runner_uid="$(id -u)"
+        runner_gid="$(id -g)"
+        workspace="${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is not set}"
+
+        echo ">>> returning self-hosted workspace ownership to the runner: ${workspace}"
+        sudo -n chown -R "${runner_uid}:${runner_gid}" "${workspace}"
+        sudo -n chmod -R u+rwX "${workspace}"
+
+        remaining="$(sudo -n find "${workspace}" ! -uid "${runner_uid}" -print -quit)"
+        if [ -n "${remaining}" ]; then
+          echo "::error::workspace cleanup incomplete; first foreign-owned path: ${remaining}"
+          sudo -n find "${workspace}" ! -uid "${runner_uid}" -print | head -n 20
+          exit 1
+        fi
 
     - name: Archive artifacts
       if: ${{ inputs.trusted && failure() && !cancelled() }}
@@ -669,4 +703,3 @@ jobs:
 #        else
 #          echo "Not locked '${LOCK^^}'"
 #        fi
-
