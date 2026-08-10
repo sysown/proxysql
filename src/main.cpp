@@ -3122,8 +3122,7 @@ int main(int argc, const char * argv[]) {
 			// Resolve symlinks to get the real path
 			char resolved[PATH_MAX];
 			if (realpath(buff, resolved) != NULL) {
-				strncpy(buff, resolved, sizeof(buff) - 1);
-				buff[sizeof(buff) - 1] = '\0';
+				snprintf(buff, sizeof(buff), "%s", resolved);
 			}
 			len = strlen(buff);
 		}
