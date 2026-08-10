@@ -23,6 +23,26 @@ static inline size_t safe_strlen(const char *s) {
     return len;
 }
 
+template <typename... Args>
+static void format_query(char *query, size_t query_len, const char *format, Args... args) {
+	if (query == nullptr || query_len == 0) {
+		return;
+	}
+
+	std::string formatted;
+	if (string_format(format, formatted, args...) < 0) {
+		query[0] = '\0';
+		return;
+	}
+
+	size_t copy_len = formatted.size();
+	if (copy_len >= query_len) {
+		copy_len = query_len - 1;
+	}
+	memcpy(query, formatted.data(), copy_len);
+	query[copy_len] = '\0';
+}
+
 const char* config_header = "########################################################################################\n"
 							"# This config file is parsed using libconfig , and its grammar is described in:\n"
 							"# http://www.hyperrealm.com/libconfig/libconfig_manual.html#Configuration-File-Grammar\n"
@@ -107,10 +127,10 @@ int ProxySQL_Config::Read_Global_Variables_from_configfile(const char *prefix) {
 	const Setting& root = GloVars.confFile->cfg.getRoot();
 	const size_t prefix_len = safe_strlen(prefix);
 	const size_t suffix_len = sizeof("_variables") - 1;
-	char *groupname=(char *)malloc(prefix_len + suffix_len + 1);
+        char *groupname=(char *)l_alloc(prefix_len + suffix_len + 1);
 	sprintf(groupname,"%s%s",prefix,"_variables");
 	if (root.exists(groupname)==false) {
-		free(groupname);
+		l_free(0, groupname);
 	return 0;
 	}
 	const Setting &group = root[(const char *)groupname];
@@ -123,7 +143,7 @@ int ProxySQL_Config::Read_Global_Variables_from_configfile(const char *prefix) {
 	if (rc != SQLITE_OK) {
 		proxy_error("Failed to prepare statement for global_variables insert: %d\n", rc);
 		admindb->execute("PRAGMA foreign_keys = ON");
-		free(groupname);
+		l_free(0, groupname);
 		return 0;
 	}
 	for (i=0; i< count; i++) {
@@ -160,7 +180,7 @@ int ProxySQL_Config::Read_Global_Variables_from_configfile(const char *prefix) {
 	}
 	// Statement automatically finalized when stmt goes out of scope
 	admindb->execute("PRAGMA foreign_keys = ON");
-	free(groupname);
+	l_free(0, groupname);
 	return i;
 }
 
@@ -261,12 +281,12 @@ int ProxySQL_Config::Read_MySQL_Users_from_configfile(std::string& error) {
 		const size_t safe_comment_len = safe_strlen(safe_comment);
 		const size_t attributes_len = attributes.size();
 		const size_t query_len = query_base_len + username_len + password_len + default_schema.size() + safe_comment_len + attributes_len + 128;
-		char *query=(char *)malloc(query_len);
-		snprintf(query, query_len, q, username.c_str(), password.c_str(), active, use_ssl, default_hostgroup, default_schema.c_str(), schema_locked, transaction_persistent, fast_forward, max_connections, attributes.c_str(), safe_comment);
+		char *query=(char *)l_alloc(query_len);
+		format_query(query, query_len, q, username.c_str(), password.c_str(), active, use_ssl, default_hostgroup, default_schema.c_str(), schema_locked, transaction_persistent, fast_forward, max_connections, attributes.c_str(), safe_comment);
 		admindb->execute(query);
 		if (o!=o1) free(o);
 		free(o1);
-		free(query);
+		l_free(0, query);
 		rows++;
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
@@ -382,7 +402,7 @@ int ProxySQL_Config::Read_Scheduler_from_configfile() {
 		const size_t query_len = query_base_len + id_str.size() + active_str.size() + interval_ms_str.size() +
 			filename_len + (arg1_len + 4) + (arg2_len + 4) + (arg3_len + 4) + (arg4_len + 4) + (arg5_len + 4) +
 			comment_len + 40;
-		char *query=(char *)malloc(query_len);
+		char *query=(char *)l_alloc(query_len);
 		if (arg1_exists)
 			arg1="\'" + arg1 + "\'";
 		else
@@ -404,7 +424,7 @@ int ProxySQL_Config::Read_Scheduler_from_configfile() {
 		else
 			arg5 = "NULL";
 
-		sprintf(query, q,
+		format_query(query, query_len, q,
 			id, active,
 			interval_ms,
 			filename.c_str(),
@@ -416,7 +436,7 @@ int ProxySQL_Config::Read_Scheduler_from_configfile() {
 			comment.c_str()
 		);
 		admindb->execute(query);
-		free(query);
+		l_free(0, query);
 		rows++;
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
@@ -562,7 +582,7 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 			safe_comment_len +
 			40 +
 			(id_exists ? id_str.size() : 0);
-		char *query=(char *)malloc(query_len);
+		char *query=(char *)l_alloc(query_len);
 		if (query == NULL) {
 			proxy_error("Admin: unable to allocate memory while loading restapi routes from config file\n");
 			if (method_escaped != method_escaped_raw) free(method_escaped);
@@ -576,7 +596,7 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 			continue;
 		}
 		if (id_exists) {
-			snprintf(query, query_len, q,
+			format_query(query, query_len, q,
 				id, active,
 				timeout_ms,
 				safe_method_escaped,
@@ -585,7 +605,7 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 				safe_comment_escaped
 			);
 		} else {
-			snprintf(query, query_len, q,
+			format_query(query, query_len, q,
 				active,
 				timeout_ms,
 				safe_method_escaped,
@@ -603,7 +623,7 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 		free(uri_escaped_raw);
 		free(script_escaped_raw);
 		free(comment_escaped_raw);
-		free(query);
+		l_free(0, query);
 		rows++;
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
@@ -989,7 +1009,7 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 				( attributes_exists ? attributes.size() : 0 ) + 4 +
 				( comment_exists ? comment.size() : 0 ) + 4 +
 				64;
-		char *query=(char *)malloc(query_len);
+		char *query=(char *)l_alloc(query_len);
 		if (username_exists)
 			username="\"" + username + "\"";
 		else
@@ -1046,7 +1066,7 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 			comment = "NULL";
 
 
-		sprintf(query, q,
+		format_query(query, query_len, q,
 			rule_id, active,
 			username.c_str(),
 			schemaname.c_str(),
@@ -1084,7 +1104,7 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 		);
 		//fprintf(stderr, "%s\n", query);
 		admindb->execute(query);
-		free(query);
+		l_free(0, query);
 		rows++;
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
@@ -1447,13 +1467,13 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
 			const size_t address_len = address.size();
 			const size_t safe_comment_len = safe_strlen(safe_comment);
 			const size_t query_len = query_base_len + status_len + address_len + safe_comment_len + 128;
-			char *query=(char *)malloc(query_len);
-				snprintf(query, query_len, q, address.c_str(), port, gtid_port, hostgroup, compression, weight, status.c_str(), max_connections, max_replication_lag, use_ssl, max_latency_ms, safe_comment);
+			char *query=(char *)l_alloc(query_len);
+				format_query(query, query_len, q, address.c_str(), port, gtid_port, hostgroup, compression, weight, status.c_str(), max_connections, max_replication_lag, use_ssl, max_latency_ms, safe_comment);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
 			if (o!=o1) free(o);
 			free(o1);
-			free(query);
+			l_free(0, query);
 			rows++;
 		}
 	}
@@ -1496,15 +1516,15 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
 			const size_t safe_comment_len = safe_strlen(safe_comment);
 			const size_t safe_check_type_len = safe_strlen(safe_check_type);
 			const size_t query_len = query_base_len + safe_comment_len + safe_check_type_len + 32;
-			char *query=(char *)malloc(query_len);
-				snprintf(query, query_len, q, writer_hostgroup, reader_hostgroup, safe_comment, safe_check_type);
+			char *query=(char *)l_alloc(query_len);
+				format_query(query, query_len, q, writer_hostgroup, reader_hostgroup, safe_comment, safe_check_type);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
 			if (o!=o1) free(o);
 			free(o1);
 			if (t!=t1) free(t);
 			free(t1);
-			free(query);
+			l_free(0, query);
 			rows++;
 		}
 	}
@@ -1556,13 +1576,14 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
 			const size_t tls_version_len = tls_version.length();
 			const char* safe_comment = o ? o : "";
 			const size_t escaped_comment_len = safe_strlen(safe_comment);
-			char *query=(char *)malloc(
+			const size_t query_len =
 				q_len
 				+ hostname_len + username_len
 				+ ssl_ca_len + ssl_cert_len + ssl_key_len + ssl_capath_len
 				+ ssl_crl_len + ssl_crlpath_len + ssl_cipher_len + tls_version_len
-				+ escaped_comment_len + 32);
-			sprintf(query, q,
+				+ escaped_comment_len + 32;
+			char *query=(char *)l_alloc(query_len);
+			format_query(query, query_len, q,
 				hostname.c_str() , port , username.c_str() ,
 				ssl_ca.c_str() , ssl_cert.c_str() , ssl_key.c_str() , ssl_capath.c_str() ,
 				ssl_crl.c_str() , ssl_crlpath.c_str() , ssl_cipher.c_str() , tls_version.c_str() ,
@@ -1570,7 +1591,7 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
 			admindb->execute(query);
 			if (o!=o1) free(o);
 			free(o1);
-			free(query);
+			l_free(0, query);
 			rows++;
 		}
 	}
@@ -1615,13 +1636,13 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
 			const size_t query_base_len = safe_strlen(q);
 			const size_t safe_comment_len = safe_strlen(safe_comment);
 			const size_t query_len = query_base_len + safe_comment_len + 128; // 128 vs sizeof(int)*8
-			char *query=(char *)malloc(query_len);
-				snprintf(query, query_len, q, writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, safe_comment);
+			char *query=(char *)l_alloc(query_len);
+				format_query(query, query_len, q, writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, safe_comment);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
 			if (o!=o1) free(o);
 			free(o1);
-			free(query);
+			l_free(0, query);
 			rows++;
 		}
 	}
@@ -1666,13 +1687,13 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
                     const size_t query_base_len = safe_strlen(q);
                     const size_t safe_comment_len = safe_strlen(safe_comment);
                     const size_t query_len = query_base_len + safe_comment_len + 128; // 128 vs sizeof(int)*8
-                    char *query=(char *)malloc(query_len);
-					snprintf(query, query_len, q, writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, safe_comment);
+                    char *query=(char *)l_alloc(query_len);
+					format_query(query, query_len, q, writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, safe_comment);
                     //fprintf(stderr, "%s\n", query);
                     admindb->execute(query);
                     if (o!=o1) free(o);
                     free(o1);
-                    free(query);
+                    l_free(0, query);
                     rows++;
             }
     }
@@ -1727,15 +1748,15 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
                     const size_t safe_comment_len = safe_strlen(safe_comment);
                     const size_t safe_domain_len = safe_strlen(safe_domain);
                     const size_t query_len = query_base_len + safe_comment_len + safe_domain_len + 256; // 128 vs sizeof(int)*8
-                    char *query=(char *)malloc(query_len);
-					snprintf(query, query_len, q, writer_hostgroup, reader_hostgroup, active, aurora_port, safe_domain, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, autopurge_missing_checks, safe_comment);
+                    char *query=(char *)l_alloc(query_len);
+					format_query(query, query_len, q, writer_hostgroup, reader_hostgroup, active, aurora_port, safe_domain, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, autopurge_missing_checks, safe_comment);
                     //fprintf(stderr, "%s\n", query);
                     admindb->execute(query);
                     if (o!=o1) free(o);
                     free(o1);
                     if (p!=p1) free(p);
                     free(p1);
-                    free(query);
+                    l_free(0, query);
                     rows++;
             }
     }
@@ -1787,12 +1808,12 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
                     const size_t query_base_len = safe_strlen(q);
                     const size_t safe_comment_len = safe_strlen(safe_comment);
                     const size_t query_len = query_base_len + safe_comment_len + 256; // 128 vs sizeof(int)*8
-                    char *query=(char *)malloc(query_len);
-					snprintf(query, query_len, q, writer_hostgroup, reader_hostgroup, green_writer_str.c_str(), green_reader_str.c_str(), active, writer_is_also_reader, check_interval_ms, check_timeout_ms, safe_comment);
+                    char *query=(char *)l_alloc(query_len);
+					format_query(query, query_len, q, writer_hostgroup, reader_hostgroup, green_writer_str.c_str(), green_reader_str.c_str(), active, writer_is_also_reader, check_interval_ms, check_timeout_ms, safe_comment);
                     admindb->execute(query);
                     if (o!=o1) free(o);
                     free(o1);
-                    free(query);
+                    l_free(0, query);
                     rows++;
             }
     }
@@ -1965,14 +1986,14 @@ int ProxySQL_Config::Read_ProxySQL_Servers_from_configfile(std::string& error) {
 			const size_t address_len = address.size();
 			const size_t safe_comment_len = safe_strlen(safe_comment);
 			const size_t query_len = query_base_len + address_len + safe_comment_len + 128;
-			char *query=(char *)malloc(query_len);
-			snprintf(query, query_len, q, address.c_str(), port, weight, safe_comment);
+			char *query=(char *)l_alloc(query_len);
+				format_query(query, query_len, q, address.c_str(), port, weight, safe_comment);
 			proxy_info("Cluster: Adding ProxySQL Servers %s:%d from config file\n", address.c_str(), port);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
 			if (o!=o1) free(o);
 			free(o1);
-			free(query);
+			l_free(0, query);
 			rows++;
 		}
 	}
@@ -2237,13 +2258,13 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 			const size_t address_len = address.size();
 			const size_t safe_comment_len = safe_strlen(safe_comment);
 			const size_t query_len = query_base_len + status_len + address_len + safe_comment_len + 128;
-			char* query = (char*)malloc(query_len);
-				snprintf(query, query_len, q, address.c_str(), port, hostgroup, compression, weight, status.c_str(), max_connections, max_replication_lag, use_ssl, max_latency_ms, safe_comment);
+			char* query = (char*)l_alloc(query_len);
+				format_query(query, query_len, q, address.c_str(), port, hostgroup, compression, weight, status.c_str(), max_connections, max_replication_lag, use_ssl, max_latency_ms, safe_comment);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
 			if (o != o1) free(o);
 			free(o1);
-			free(query);
+			l_free(0, query);
 			rows++;
 		}
 	}
@@ -2286,15 +2307,15 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 			const size_t safe_comment_len = safe_strlen(safe_comment);
 			const size_t safe_check_type_len = safe_strlen(safe_check_type);
 			const size_t query_len = query_base_len + safe_comment_len + safe_check_type_len + 32;
-			char* query = (char*)malloc(query_len);
-				snprintf(query, query_len, q, writer_hostgroup, reader_hostgroup, safe_comment, safe_check_type);
+			char* query = (char*)l_alloc(query_len);
+				format_query(query, query_len, q, writer_hostgroup, reader_hostgroup, safe_comment, safe_check_type);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
 			if (o != o1) free(o);
 			free(o1);
 			if (t != t1) free(t);
 			free(t1);
-			free(query);
+			l_free(0, query);
 			rows++;
 		}
 	}
@@ -2431,12 +2452,12 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 				+ ssl_ca_len + ssl_cert_len + ssl_key_len
 				+ ssl_crl_len + ssl_crlpath_len + ssl_protocol_version_range_len + escaped_comment_len + 64
 			);
-			char *query=(char *)malloc(query_len);
-			snprintf(query, query_len, q, hostname.c_str(), port, username.c_str(), ssl_ca.c_str(), ssl_cert.c_str(), ssl_key.c_str(), ssl_crl.c_str(), ssl_crlpath.c_str(), ssl_protocol_version_range.c_str(), safe_comment);
+			char *query=(char *)l_alloc(query_len);
+				format_query(query, query_len, q, hostname.c_str(), port, username.c_str(), ssl_ca.c_str(), ssl_cert.c_str(), ssl_key.c_str(), ssl_crl.c_str(), ssl_crlpath.c_str(), ssl_protocol_version_range.c_str(), safe_comment);
 			admindb->execute(query);
 			if (o != o1) free(o);
 			free(o1);
-			free(query);
+			l_free(0, query);
 			rows++;
 		}
 	}
@@ -2536,12 +2557,12 @@ int ProxySQL_Config::Read_PgSQL_Users_from_configfile(std::string& error) {
 		const size_t safe_comment_len = safe_strlen(safe_comment);
 		const size_t attributes_len = attributes.size();
 		const size_t query_len = query_base_len + username_len + password_len + safe_comment_len + attributes_len + 128;
-		char* query = (char*)malloc(query_len);
-		snprintf(query, query_len, q, username.c_str(), password.c_str(), active, use_ssl, default_hostgroup, transaction_persistent, fast_forward, max_connections, attributes.c_str(), safe_comment);
+		char* query = (char*)l_alloc(query_len);
+		format_query(query, query_len, q, username.c_str(), password.c_str(), active, use_ssl, default_hostgroup, transaction_persistent, fast_forward, max_connections, attributes.c_str(), safe_comment);
 		admindb->execute(query);
 		if (o != o1) free(o);
 		free(o1);
-		free(query);
+		l_free(0, query);
 		rows++;
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
@@ -2808,7 +2829,7 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 			(attributes_exists ? attributes.size() : 0) + 4 +
 			(comment_exists ? comment.size() : 0) + 4 +
 			64;
-		char* query = (char*)malloc(query_len);
+		char* query = (char*)l_alloc(query_len);
 		if (username_exists)
 			username = "\"" + username + "\"";
 		else
@@ -2865,7 +2886,7 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 			comment = "NULL";
 
 
-		sprintf(query, q,
+		format_query(query, query_len, q,
 			rule_id, active,
 			username.c_str(),
 			database.c_str(),
@@ -2902,7 +2923,7 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 		);
 		//fprintf(stderr, "%s\n", query);
 		admindb->execute(query);
-		free(query);
+		l_free(0, query);
 		rows++;
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
@@ -3050,12 +3071,12 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_Fast_Routing_from_configfile() {
 		const char* safe_comment = o ? o : "";
 		const size_t escaped_comment_len = safe_strlen(safe_comment);
 		size_t query_len = q_len + username_len + schemaname_len + escaped_comment_len + 64;
-		char *query = (char *)malloc(query_len);
-		snprintf(query, query_len, q, username.c_str(), schemaname.c_str(), flagIN, destination_hostgroup, safe_comment);
+		char *query = (char *)l_alloc(query_len);
+			format_query(query, query_len, q, username.c_str(), schemaname.c_str(), flagIN, destination_hostgroup, safe_comment);
 		admindb->execute(query);
 		if (o != o1) free(o);
 		free(o1);
-		free(query);
+		l_free(0, query);
 		rows++;
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
@@ -3091,12 +3112,12 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_Fast_Routing_from_configfile() {
 		const char* safe_comment = o ? o : "";
 		const size_t escaped_comment_len = safe_strlen(safe_comment);
 		size_t query_len = q_len + username_len + database_len + escaped_comment_len + 64;
-		char *query = (char *)malloc(query_len);
-		snprintf(query, query_len, q, username.c_str(), database.c_str(), flagIN, destination_hostgroup, safe_comment);
+		char *query = (char *)l_alloc(query_len);
+			format_query(query, query_len, q, username.c_str(), database.c_str(), flagIN, destination_hostgroup, safe_comment);
 		admindb->execute(query);
 		if (o != o1) free(o);
 		free(o1);
-		free(query);
+		l_free(0, query);
 		rows++;
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
@@ -3133,12 +3154,12 @@ int ProxySQL_Config::Read_MySQL_Firewall_from_configfile() {
 			const char* safe_comment = o ? o : "";
 				const size_t escaped_comment_len = safe_strlen(safe_comment);
 			size_t query_len = q_len + username_len + client_address_len + mode_len + escaped_comment_len + 32;
-			char *query=(char *)malloc(query_len);
-			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), mode.c_str(), safe_comment);
+			char *query=(char *)l_alloc(query_len);
+			format_query(query, query_len, q, active, username.c_str(), client_address.c_str(), mode.c_str(), safe_comment);
 			admindb->execute(query);
 			if (o != o1) free(o);
 			free(o1);
-			free(query);
+			l_free(0, query);
 			rows++;
 		}
 	}
@@ -3173,12 +3194,12 @@ int ProxySQL_Config::Read_MySQL_Firewall_from_configfile() {
 			const char* safe_comment = o ? o : "";
 			const size_t escaped_comment_len = safe_strlen(safe_comment);
 			size_t query_len = q_len + username_len + client_address_len + schemaname_len + digest_len + escaped_comment_len + 64;
-			char *query=(char *)malloc(query_len);
-			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), schemaname.c_str(), flagIN, digest.c_str(), safe_comment);
+			char *query=(char *)l_alloc(query_len);
+			format_query(query, query_len, q, active, username.c_str(), client_address.c_str(), schemaname.c_str(), flagIN, digest.c_str(), safe_comment);
 			admindb->execute(query);
 			if (o != o1) free(o);
 			free(o1);
-			free(query);
+			l_free(0, query);
 			rows++;
 		}
 	}
@@ -3196,10 +3217,10 @@ int ProxySQL_Config::Read_MySQL_Firewall_from_configfile() {
 			const size_t q_len = safe_strlen(q);
 			const size_t fingerprint_len = fingerprint.size();
 			size_t query_len = q_len + fingerprint_len + 16;
-			char *query=(char *)malloc(query_len);
-			snprintf(query, query_len, q, active, fingerprint.c_str());
+			char *query=(char *)l_alloc(query_len);
+			format_query(query, query_len, q, active, fingerprint.c_str());
 			admindb->execute(query);
-			free(query);
+			l_free(0, query);
 			rows++;
 		}
 	}
@@ -3238,12 +3259,12 @@ int ProxySQL_Config::Read_PgSQL_Firewall_from_configfile() {
 			const char* safe_comment = o ? o : "";
 			const size_t escaped_comment_len = safe_strlen(safe_comment);
 			size_t query_len = q_len + username_len + client_address_len + mode_len + escaped_comment_len + 32;
-			char *query=(char *)malloc(query_len);
-			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), mode.c_str(), safe_comment);
+			char *query=(char *)l_alloc(query_len);
+			format_query(query, query_len, q, active, username.c_str(), client_address.c_str(), mode.c_str(), safe_comment);
 			admindb->execute(query);
 			if (o != o1) free(o);
 			free(o1);
-			free(query);
+			l_free(0, query);
 			rows++;
 		}
 	}
@@ -3278,12 +3299,12 @@ int ProxySQL_Config::Read_PgSQL_Firewall_from_configfile() {
 			const char* safe_comment = o ? o : "";
 			const size_t escaped_comment_len = safe_strlen(safe_comment);
 			size_t query_len = q_len + username_len + client_address_len + database_len + digest_len + escaped_comment_len + 64;
-			char *query=(char *)malloc(query_len);
-			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), database.c_str(), flagIN, digest.c_str(), safe_comment);
+			char *query=(char *)l_alloc(query_len);
+			format_query(query, query_len, q, active, username.c_str(), client_address.c_str(), database.c_str(), flagIN, digest.c_str(), safe_comment);
 			admindb->execute(query);
 			if (o != o1) free(o);
 			free(o1);
-			free(query);
+			l_free(0, query);
 			rows++;
 		}
 	}
@@ -3301,10 +3322,10 @@ int ProxySQL_Config::Read_PgSQL_Firewall_from_configfile() {
 			const size_t q_len = safe_strlen(q);
 			const size_t fingerprint_len = fingerprint.size();
 			size_t query_len = q_len + fingerprint_len + 16;
-			char *query=(char *)malloc(query_len);
-			snprintf(query, query_len, q, active, fingerprint.c_str());
+			char *query=(char *)l_alloc(query_len);
+			format_query(query, query_len, q, active, fingerprint.c_str());
 			admindb->execute(query);
-			free(query);
+			l_free(0, query);
 			rows++;
 		}
 	}

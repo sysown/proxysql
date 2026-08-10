@@ -385,12 +385,12 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		char *tbh=NULL;
 		c_split_2(query_no_space+strAl,".",&dbh,&tbh);
 
-		if (strlen(tbh)==0) {
+		if (std::string_view(tbh).empty()) {
 			free(tbh);
 			tbh=dbh;
 			dbh=strdup("main");
 		}
-		size_t tbh_len = strlen(tbh);
+		size_t tbh_len = std::string_view(tbh).size();
 		if (tbh_len>=3 && tbh[0]=='`' && tbh[tbh_len-1]=='`') { // tablename is quoted
 			size_t db_len = tbh_len - 2;
 			const std::string unquoted_table(tbh + 1, db_len);
@@ -470,10 +470,11 @@ __run_query:
 				GloSQLite3Server->populate_aws_aurora_table(sess);
 			}
 			if (strstr(query_no_space,(char *)"Seconds_Behind_Master")) {
-				free(query);
-				char *a = (char *)"SELECT %d as Seconds_Behind_Master";
-				query = (char *)malloc(strlen(a)+4);
-				snprintf(query, strlen(a)+4, a, random_replication_lag_seconds());
+				l_free(0, query);
+				const std::string formatted_query = cstr_format(
+					"SELECT %d as Seconds_Behind_Master", random_replication_lag_seconds()
+				).str;
+				query = l_strdup(formatted_query.c_str());
 			}
 		}
 		SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;

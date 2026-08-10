@@ -74,9 +74,8 @@ int next_val(ValueGenerator* vg) {
 }
 
 char* unique_str(ValueGenerator* vg, const char* field) {
-    char* str = (char*)malloc(32);
-    snprintf(str, 32, "%s_%d", field, next_val(vg));
-    return str;
+    const std::string value = std::string(field) + "_" + std::to_string(next_val(vg));
+    return strdup(value.c_str());
 }
 
 char* unique_ip(ValueGenerator* vg) {

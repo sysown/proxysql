@@ -204,10 +204,11 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 				GloSQLite3Server->populate_galera_table(sess);
 			}
 			if (strstr(query_no_space,(char *)"Seconds_Behind_Master")) {
-				free(query);
-				char *a = (char *)"SELECT %d as Seconds_Behind_Master";
-				query = (char *)malloc(strlen(a)+4);
-				snprintf(query, strlen(a)+4, a, rand()%30+10);
+				l_free(0, query);
+				const std::string formatted_query = cstr_format(
+					"SELECT %d as Seconds_Behind_Master", rand()%30+10
+				).str;
+				query = l_strdup(formatted_query.c_str());
 			}
 		}
 		SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
