@@ -180,7 +180,7 @@ jobs:
 
     - name: Summary output
       if: ${{ !cancelled() }}
-      uses: hoverkraft-tech/ci-github-common/actions/set-matrix-output@0.14.0
+      uses: hoverkraft-tech/ci-github-common/actions/set-matrix-output@d6367a8f0299d93cca9b42e287a56d2157f72060 # 0.14.0
       with:
         value: ${{ env.SUMMARY }}
         artifact-name: ${{ github.run_number }}-${{ matrix.infradb }}-summary
@@ -214,7 +214,7 @@ jobs:
     steps:
       - name: Collect summary
         id: collect
-        uses: hoverkraft-tech/ci-github-common/actions/get-matrix-outputs@0.14.0
+        uses: hoverkraft-tech/ci-github-common/actions/get-matrix-outputs@d6367a8f0299d93cca9b42e287a56d2157f72060 # 0.14.0
         with:
           artifact-name: ${{ github.run_number }}-${{ matrix.infradb }}-summary
           remove-artifact: true
