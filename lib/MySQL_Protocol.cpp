@@ -41,9 +41,9 @@ extern ClickHouse_Authentication *GloClickHouseAuth;
 
 mf_unique_ptr<const char> get_masked_pass(const char* pass) {
 	char* tmp_pass = strdup(pass);
-	int lpass = strlen(tmp_pass);
+	const size_t lpass = strlen(tmp_pass);
 
-	for (int i=2; i<lpass-1; i++) {
+	for (size_t i=2; i<lpass-1; i++) {
 		tmp_pass[i] = '*';
 	}
 
@@ -1586,10 +1586,11 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	(*myds)->sess->user_attributes=account_details.attributes;
 	account_details.attributes = nullptr;
 
-	if (password==NULL) {
+	if (password == NULL) {
 		ret=false;
 	} else {
-		if (pass_len==0 && strlen(password)==0) {
+		const size_t password_len = std::string_view{password}.size();
+		if (pass_len==0 && password_len==0) {
 			ret=true;
 		} else {
 			// If pass not sent within 'COM_CHANGE_USER' packet, an 'Auth Switch Request'
@@ -2366,9 +2367,9 @@ static bool caching_sha2_fast_auth_verify(
 	unsigned char c[SHA256_DIGEST_LENGTH+20];
 	unsigned char d[SHA256_DIGEST_LENGTH];
 	unsigned char e[SHA256_DIGEST_LENGTH];
-	const char* safe_cleartext_password = cleartext_password ? cleartext_password : "";
-	const size_t cleartext_password_len = strlen(safe_cleartext_password);
-	SHA256((const unsigned char *)safe_cleartext_password, cleartext_password_len, a);
+	const std::string_view safe_cleartext_password = cleartext_password ? std::string_view{cleartext_password} : std::string_view{};
+	const size_t cleartext_password_len = safe_cleartext_password.size();
+	SHA256(reinterpret_cast<const unsigned char *>(safe_cleartext_password.data()), cleartext_password_len, a);
 	SHA256(a, SHA256_DIGEST_LENGTH, b);
 	memcpy(c,b,SHA256_DIGEST_LENGTH);
 	memcpy(c+SHA256_DIGEST_LENGTH, scramble, 20);
@@ -2484,7 +2485,8 @@ bool MySQL_Protocol::PPHR_verify_sha2(
 			free(double_hashed_password);
 		} else if (passformat == AUTH_MYSQL_CACHING_SHA2_PASSWORD) {
 			if (vars1.password == NULL) return false;
-			assert(strlen(vars1.password) == 70);
+			const std::string_view vars1_password = vars1.password ? std::string_view{vars1.password} : std::string_view{};
+			assert(vars1_password.size() == 70);
 			string sp = string(vars1.password);
 			// MySQL stores rounds as 3-char zero-padded uppercase hex of (rounds/1000).
 			// See sql/auth/sha2_password.cc::Caching_sha2_password::digest_round_separator():
@@ -2547,7 +2549,8 @@ void MySQL_Protocol::PPHR_sha2full(
 				assert(0);
 				return;
 			}
-			assert(strlen(vars1.password) == 70);
+			const std::string_view vars1_password = vars1.password ? std::string_view{vars1.password} : std::string_view{};
+			assert(vars1_password.size() == 70);
 			string sp = string(vars1.password);
 			// MySQL stores rounds as 3-char zero-padded uppercase hex of (rounds/1000) — see
 			// PPHR_verify_sha2() above for the upstream format reference. Must parse base-16.
@@ -2623,7 +2626,8 @@ void MySQL_Protocol::PPHR_passthrough_init(MyProt_tmp_auth_vars& vars1) {
 		// run), so it becomes the auth password for mysql_real_connect_start.
 		if ((*myds)->passthrough_cleartext) {
 			char* passthrough_cleartext = (*myds)->passthrough_cleartext;
-			const size_t passthrough_cleartext_len = passthrough_cleartext ? strlen(passthrough_cleartext) : 0;
+			const std::string_view passthrough_cleartext_view = passthrough_cleartext ? std::string_view{passthrough_cleartext} : std::string_view{};
+			const size_t passthrough_cleartext_len = passthrough_cleartext_view.size();
 			if (passthrough_cleartext_len) {
 				memset(passthrough_cleartext, 0, passthrough_cleartext_len);
 			}
@@ -2767,7 +2771,8 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 	// backend probe via AUTHENTICATING_BACKEND_FOR_CLIENT.
 	{
 		const char* safe_pass = vars1.password ? (const char*)vars1.password : "";
-		const size_t vars1_password_len = strlen(safe_pass);
+		const std::string_view safe_pass_view = safe_pass ? std::string_view{safe_pass} : std::string_view{};
+		const size_t vars1_password_len = safe_pass_view.size();
 		const bool empty_pw_case =
 			mysql_thread___passthrough_auth_empty_password
 			&& vars1.password != NULL
@@ -3061,12 +3066,12 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 				PPHR_5passwordFalse_auth2(ret, vars1, reply, account_details);
 			}
 		}
-	} else {
-		// update 'MySQL_Session' info using 'account_details'; transfers ownership of:
-		//  - 'ad::default_schema', 'ad::attributes'
-		PPHR_5passwordTrue(ret, vars1, reply, account_details);
-		const char* safe_vars1_password = vars1.password ? vars1.password : "";
-		const size_t vars1_password_len = strlen(safe_vars1_password);
+		} else {
+			// update 'MySQL_Session' info using 'account_details'; transfers ownership of:
+			//  - 'ad::default_schema', 'ad::attributes'
+			PPHR_5passwordTrue(ret, vars1, reply, account_details);
+			const std::string_view safe_vars1_password = vars1.password ? std::string_view{vars1.password} : std::string_view{};
+			const size_t vars1_password_len = safe_vars1_password.size();
 
 		if (vars1.pass_len==0 && vars1_password_len==0) {
 			ret=true;
@@ -3086,7 +3091,7 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 #endif // debug
 			if (auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD
 				&& vars1_password_len == 70
-				&& strncasecmp(safe_vars1_password,"$A$0",4)==0
+				&& strncasecmp(safe_vars1_password.data(),"$A$0",4)==0
 			) {
 				// We have a hashed caching_sha2_password
 				PPHR_sha2full(ret, vars1, AUTH_MYSQL_CACHING_SHA2_PASSWORD, vars1.passtype);
