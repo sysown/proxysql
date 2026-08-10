@@ -421,7 +421,7 @@ json Config_Tool_Handler::handle_get_config(const std::string& var_name) {
 	}
 
 	char val[1024];
-	if (mcp_handler->get_variable(var_name.c_str(), val) == 0) {
+	if (mcp_handler->get_variable(var_name.c_str(), val, sizeof(val)) == 0) {
 		json result;
 		result["variable_name"] = var_name;
 		result["value"] = val;
@@ -548,7 +548,7 @@ json Config_Tool_Handler::handle_list_variables(const std::string& filter) {
 		}
 
 		char val[1024];
-		if (mcp_handler->get_variable(var_name.c_str(), val) == 0) {
+		if (mcp_handler->get_variable(var_name.c_str(), val, sizeof(val)) == 0) {
 			json var;
 			var["name"] = var_name;
 			var["value"] = val;
