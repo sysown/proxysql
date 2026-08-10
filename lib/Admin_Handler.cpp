@@ -3205,27 +3205,27 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	// handle special queries from Cluster
 	// for bug #1188 , ProxySQL Admin needs to know the exact query
 
-	if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
-		string tn = "";
-		if (!strncasecmp(CLUSTER_QUERY_RUNTIME_MYSQL_SERVERS, query_no_space, strlen(CLUSTER_QUERY_RUNTIME_MYSQL_SERVERS))) {
-			tn = "cluster_mysql_servers";
-		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS))) {
-			tn = "mysql_replication_hostgroups";
-		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS))) {
-			tn = "mysql_group_replication_hostgroups";
-		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_GALERA, query_no_space, strlen(CLUSTER_QUERY_MYSQL_GALERA))) {
-			tn = "mysql_galera_hostgroups";
-		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_AWS_AURORA, query_no_space, strlen(CLUSTER_QUERY_MYSQL_AWS_AURORA))) {
-			tn = "mysql_aws_aurora_hostgroups";
-		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_HOSTGROUP_ATTRIBUTES, query_no_space, strlen(CLUSTER_QUERY_MYSQL_HOSTGROUP_ATTRIBUTES))) {
-			tn = "mysql_hostgroup_attributes";
-		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_SERVERS_SSL_PARAMS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_SERVERS_SSL_PARAMS))) {
-			tn = "mysql_servers_ssl_params";
-		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_AWS_RDS_BGD, query_no_space, strlen(CLUSTER_QUERY_MYSQL_AWS_RDS_BGD))) {
-			tn = "mysql_aws_rds_bgd_hostgroups";
-		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_SERVERS_V2, query_no_space, strlen(CLUSTER_QUERY_MYSQL_SERVERS_V2))) {
-			tn = "mysql_servers_v2";
-		}
+		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
+			string tn = "";
+			if (!strncasecmp(CLUSTER_QUERY_RUNTIME_MYSQL_SERVERS, query_no_space, sizeof(CLUSTER_QUERY_RUNTIME_MYSQL_SERVERS) - 1)) {
+				tn = "cluster_mysql_servers";
+			} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS) - 1)) {
+				tn = "mysql_replication_hostgroups";
+			} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS) - 1)) {
+				tn = "mysql_group_replication_hostgroups";
+			} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_GALERA, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_GALERA) - 1)) {
+				tn = "mysql_galera_hostgroups";
+			} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_AWS_AURORA, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_AWS_AURORA) - 1)) {
+				tn = "mysql_aws_aurora_hostgroups";
+			} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_HOSTGROUP_ATTRIBUTES, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_HOSTGROUP_ATTRIBUTES) - 1)) {
+				tn = "mysql_hostgroup_attributes";
+			} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_SERVERS_SSL_PARAMS, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_SERVERS_SSL_PARAMS) - 1)) {
+				tn = "mysql_servers_ssl_params";
+			} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_AWS_RDS_BGD, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_AWS_RDS_BGD) - 1)) {
+				tn = "mysql_aws_rds_bgd_hostgroups";
+			} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_SERVERS_V2, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_SERVERS_V2) - 1)) {
+				tn = "mysql_servers_v2";
+			}
 		if (tn != "") {
 			GloAdmin->mysql_servers_wrlock();
 			resultset = MyHGM->get_current_mysql_table(tn);
@@ -3271,15 +3271,15 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 
 	if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 		string tn = "";
-		if (!strncasecmp(CLUSTER_QUERY_RUNTIME_PGSQL_SERVERS, query_no_space, strlen(CLUSTER_QUERY_RUNTIME_PGSQL_SERVERS))) {
+		if (!strncasecmp(CLUSTER_QUERY_RUNTIME_PGSQL_SERVERS, query_no_space, sizeof(CLUSTER_QUERY_RUNTIME_PGSQL_SERVERS) - 1)) {
 			tn = "cluster_pgsql_servers";
-		} else if (!strncasecmp(CLUSTER_QUERY_PGSQL_REPLICATION_HOSTGROUPS, query_no_space, strlen(CLUSTER_QUERY_PGSQL_REPLICATION_HOSTGROUPS))) {
+		} else if (!strncasecmp(CLUSTER_QUERY_PGSQL_REPLICATION_HOSTGROUPS, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_REPLICATION_HOSTGROUPS) - 1)) {
 			tn = "pgsql_replication_hostgroups";
-		} else if (!strncasecmp(CLUSTER_QUERY_PGSQL_HOSTGROUP_ATTRIBUTES, query_no_space, strlen(CLUSTER_QUERY_PGSQL_HOSTGROUP_ATTRIBUTES))) {
+		} else if (!strncasecmp(CLUSTER_QUERY_PGSQL_HOSTGROUP_ATTRIBUTES, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_HOSTGROUP_ATTRIBUTES) - 1)) {
 			tn = "pgsql_hostgroup_attributes";
-		} else if (!strncasecmp(CLUSTER_QUERY_PGSQL_SERVERS_V2, query_no_space, strlen(CLUSTER_QUERY_PGSQL_SERVERS_V2))) {
+		} else if (!strncasecmp(CLUSTER_QUERY_PGSQL_SERVERS_V2, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_SERVERS_V2) - 1)) {
 			tn = "pgsql_servers_v2";
-		} else if (!strncasecmp(CLUSTER_QUERY_PGSQL_SERVERS_SSL_PARAMS, query_no_space, strlen(CLUSTER_QUERY_PGSQL_SERVERS_SSL_PARAMS))) {
+		} else if (!strncasecmp(CLUSTER_QUERY_PGSQL_SERVERS_SSL_PARAMS, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_SERVERS_SSL_PARAMS) - 1)) {
 			tn = "pgsql_servers_ssl_params";
 		}
 		if (tn != "") {
@@ -3322,7 +3322,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		}
 	}
 
-	if (!strncasecmp(CLUSTER_QUERY_MYSQL_USERS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_USERS))) {
+	if (!strncasecmp(CLUSTER_QUERY_MYSQL_USERS, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_USERS) - 1)) {
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) {
 			pthread_mutex_lock(&users_mutex);
 			resultset = GloMyAuth->get_current_mysql_users();
@@ -3335,7 +3335,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		}
 	}
 
-	if (!strncasecmp(CLUSTER_QUERY_PGSQL_USERS, query_no_space, strlen(CLUSTER_QUERY_PGSQL_USERS))) {
+	if (!strncasecmp(CLUSTER_QUERY_PGSQL_USERS, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_USERS) - 1)) {
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) {
 			pthread_mutex_lock(&users_mutex);
 			resultset = GloPgAuth->get_current_pgsql_users();
@@ -3349,7 +3349,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	}
 
 	if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
-		if (!strncasecmp(CLUSTER_QUERY_MYSQL_QUERY_RULES, query_no_space, strlen(CLUSTER_QUERY_MYSQL_QUERY_RULES))) {
+		if (!strncasecmp(CLUSTER_QUERY_MYSQL_QUERY_RULES, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_QUERY_RULES) - 1)) {
 			GloMyQPro->wrlock();
 			resultset = GloMyQPro->get_current_query_rules_inner();
 			if (resultset == NULL) {
@@ -3369,7 +3369,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 				goto __run_query;
 			}
 		}
-		if (!strncasecmp(CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING, query_no_space, strlen(CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING))) {
+		if (!strncasecmp(CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING) - 1)) {
 			GloMyQPro->wrlock();
 			resultset = GloMyQPro->get_current_query_rules_fast_routing_inner();
 			if (resultset == NULL) {
@@ -3392,7 +3392,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	}
 
 	if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
-		if (!strncasecmp(CLUSTER_QUERY_PGSQL_QUERY_RULES, query_no_space, strlen(CLUSTER_QUERY_PGSQL_QUERY_RULES))) {
+		if (!strncasecmp(CLUSTER_QUERY_PGSQL_QUERY_RULES, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_QUERY_RULES) - 1)) {
 			GloPgQPro->wrlock();
 			resultset = GloPgQPro->get_current_query_rules_inner();
 			if (resultset == NULL) {
@@ -3415,7 +3415,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 				goto __run_query;
 			}
 		}
-		if (!strncasecmp(CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING, query_no_space, strlen(CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING))) {
+		if (!strncasecmp(CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING) - 1)) {
 			GloPgQPro->wrlock();
 			resultset = GloPgQPro->get_current_query_rules_fast_routing_inner();
 			if (resultset == NULL) {
@@ -3440,7 +3440,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		}
 	}
 
-	if (!strncasecmp(CLUSTER_QUERY_PGSQL_VARIABLES, query_no_space, strlen(CLUSTER_QUERY_PGSQL_VARIABLES))) {
+	if (!strncasecmp(CLUSTER_QUERY_PGSQL_VARIABLES, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_VARIABLES) - 1)) {
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) {
 			pthread_mutex_lock(&GloVars.checksum_mutex);
 			GloAdmin->flush_pgsql_variables___runtime_to_database(GloAdmin->admindb, false, false, false, true, true);
