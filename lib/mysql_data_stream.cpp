@@ -401,8 +401,8 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 		if (passthrough_cleartext) {
 			// Best-effort scrub before free; the cleartext password should
 			// not linger in freed heap memory.
-			const char* safe_cleartext = passthrough_cleartext ? passthrough_cleartext : "";
-			const size_t cleartext_len = strlen(safe_cleartext);
+			const std::string_view cleartext = passthrough_cleartext;
+			const size_t cleartext_len = cleartext.size();
 			if (cleartext_len) {
 				memset(passthrough_cleartext, 0, cleartext_len);
 			}
