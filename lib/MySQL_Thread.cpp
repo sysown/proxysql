@@ -1606,7 +1606,7 @@ int MySQL_Threads_Handler::set_int_variable_and_commit(
 	} unlock_guard { *this };
 
 	const int previous_value = get_variable_int(name);
-	const bool variable_set = set_variable(const_cast<char*>(name), value);
+	const bool variable_set = set_variable(name, value);
 	assert(variable_set);
 	if (variable_set) {
 		(void)commit();
@@ -1972,7 +1972,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
  * @param name The name of the variable to retrieve.
  * @return The value of the variable as a char pointer, or NULL if the variable does not exist.
  */
-char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public function, accessible from admin
+char * MySQL_Threads_Handler::get_variable(const char *name) {	// this is the public function, accessible from admin
 //VALGRIND_DISABLE_ERROR_REPORTING;
 #define INTBUFSIZE	4096
 	char intbuf[INTBUFSIZE];
@@ -2162,7 +2162,7 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
  * @param value The new value for the variable, passed as a const char pointer.
  * @return True if the variable was successfully updated, false otherwise.
  */
-bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// this is the public function, accessible from admin
+bool MySQL_Threads_Handler::set_variable(const char *name, const char *value) {	// this is the public function, accessible from admin
 	if (!value) return false;
 	size_t vallen=strlen(value);
 

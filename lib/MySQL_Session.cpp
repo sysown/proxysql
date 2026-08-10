@@ -6528,7 +6528,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE_
 				(client_myds->myconn->userinfo->password ? "YES" : "NO")
 			);
 		}
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL, _pid, 1045,(char *)"28000", error_message.c_str(), true);
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, _pid, 1045, "28000", error_message.c_str(), true);
 		proxy_error("%s\n", error_message.c_str());
 #ifdef PROXYSQL31
 		if (frontend_auth_error != MySQLFrontendAuthError::CACHING_SHA2_RSA_UNAVAILABLE)

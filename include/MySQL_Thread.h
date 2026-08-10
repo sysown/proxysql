@@ -827,8 +827,8 @@ class MySQL_Threads_Handler
 	 * @return The variable value observed before the replacement.
 	 */
 	int set_int_variable_and_commit(const char* name, const char* value);
-	char *get_variable(char *name);
-	bool set_variable(char *name, const char *value);
+	char *get_variable(const char *name);
+	bool set_variable(const char *name, const char *value);
 	char **get_variables_list();
 	bool has_variable(const char * name);
 #ifdef PROXYSQL31

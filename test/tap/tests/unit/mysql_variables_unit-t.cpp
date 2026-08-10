@@ -4,6 +4,7 @@
 #include "MySQL_Thread.h"
 #include "ProxySQL_Statistics.hpp"
 #include "proxysql_admin.h"
+#include "proxysql_utils.h"
 #include "sqlite3db.h"
 #ifdef PROXYSQL31
 #include "MySQL_Caching_Sha2_RSA.h"
@@ -11,6 +12,7 @@
 
 #include <cstring>
 #include <fcntl.h>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -18,6 +20,15 @@
 
 extern ProxySQL_Admin* GloAdmin;
 extern ProxySQL_Statistics* GloProxyStats;
+
+static void free_variables_list(char **variables) {
+	if (variables != nullptr) {
+		for (char **current = variables; *current != nullptr; ++current) {
+			free(*current); // NOSONAR: get_variables_list() transfers strdup-owned C strings.
+		}
+		free(variables); // NOSONAR: get_variables_list() transfers its malloc-owned array.
+	}
+}
 
 static bool contains_variable(char **variables, const char *name) {
 	for (char **current = variables; current != nullptr && *current != nullptr; ++current) {
@@ -63,26 +74,18 @@ static void test_mysql_integer_variables_are_registered() {
 	char auto_generate_name[] = "caching_sha2_password_auto_generate_rsa_keys";
 	char private_path_name[] = "caching_sha2_password_private_key_path";
 	char public_path_name[] = "caching_sha2_password_public_key_path";
-	char *auto_generate = handler.get_variable(auto_generate_name);
-	char *private_path = handler.get_variable(private_path_name);
-	char *public_path = handler.get_variable(public_path_name);
-	ok(auto_generate != nullptr && strcmp(auto_generate, "true") == 0,
+	mf_unique_ptr<char> auto_generate { handler.get_variable(auto_generate_name) };
+	mf_unique_ptr<char> private_path { handler.get_variable(private_path_name) };
+	mf_unique_ptr<char> public_path { handler.get_variable(public_path_name) };
+	ok(auto_generate != nullptr && strcmp(auto_generate.get(), "true") == 0,
 		"caching_sha2 RSA auto-generation defaults to true");
-	ok(private_path != nullptr && strcmp(private_path, "proxysql-caching-sha2-private-key.pem") == 0,
+	ok(private_path != nullptr && strcmp(private_path.get(), "proxysql-caching-sha2-private-key.pem") == 0,
 		"caching_sha2 RSA private-key path has the compiled default");
-	ok(public_path != nullptr && strcmp(public_path, "proxysql-caching-sha2-public-key.pem") == 0,
+	ok(public_path != nullptr && strcmp(public_path.get(), "proxysql-caching-sha2-public-key.pem") == 0,
 		"caching_sha2 RSA public-key path has the compiled default");
-	free(auto_generate);
-	free(private_path);
-	free(public_path);
 #endif
 
-	if (variables) {
-		for (char **p = variables; *p != nullptr; ++p) {
-			free(*p);
-		}
-		free(reinterpret_cast<void *>(variables));
-	}
+	free_variables_list(variables);
 #ifdef PROXYSQL31
 	test_caching_sha2_rsa_rejection_restores_database_values(handler);
 #endif
@@ -102,35 +105,21 @@ static void test_mysql_integer_boolean_aliases() {
 		handler.get_variable_int(variable_name) == 0,
 		"aws_blue_green_deployment_auto_discovery accepts false");
 
-	if (variables) {
-		for (char **p = variables; *p != nullptr; ++p) {
-			free(*p);
-		}
-		free(reinterpret_cast<void *>(variables));
-	}
+	free_variables_list(variables);
 	test_globals_cleanup();
 }
 
 #ifdef PROXYSQL31
-static void free_variables_list(char **variables) {
-	if (variables != nullptr) {
-		for (char **current = variables; *current != nullptr; ++current) {
-			free(*current);
-		}
-		free(variables);
-	}
-}
-
 static void test_caching_sha2_rsa_commit_is_atomic() {
 	test_globals_init();
-	char path_template[] = "/tmp/proxysql-mth-caching-sha2-rsa-XXXXXX";
-	char *temporary_directory = mkdtemp(path_template); // NOSONAR(cpp:S5443): mkdtemp atomically creates a unique owner-only test directory.
+	char path_template[] = "/tmp/proxysql-mth-caching-sha2-rsa-XXXXXX"; // NOSONAR: mkdtemp creates this test directory atomically with owner-only permissions.
+	char *temporary_directory = mkdtemp(path_template);
 	ok(temporary_directory != nullptr, "created an isolated handler RSA directory");
 	if (temporary_directory == nullptr) {
 		test_globals_cleanup();
 		return;
 	}
-	free(GloVars.datadir);
+	free(GloVars.datadir); // NOSONAR: test_globals_init() initializes this legacy C-owned field.
 	GloVars.datadir = strdup(temporary_directory);
 
 	{
@@ -168,13 +157,11 @@ static void test_caching_sha2_rsa_commit_is_atomic() {
 			"invalid grouped RSA reload rejects all three variables");
 		ok(handler.get_variable_int(auto_name) == 0,
 			"invalid grouped reload restores the accepted boolean value");
-		char *restored_private = handler.get_variable(private_name);
-		char *restored_public = handler.get_variable(public_name);
-		ok(restored_private != nullptr && restored_private[0] == '\0' &&
-			restored_public != nullptr && restored_public[0] == '\0',
+		mf_unique_ptr<char> restored_private { handler.get_variable(private_name) };
+		mf_unique_ptr<char> restored_public { handler.get_variable(public_name) };
+		ok(restored_private != nullptr && restored_private.get()[0] == '\0' &&
+			restored_public != nullptr && restored_public.get()[0] == '\0',
 			"invalid grouped reload restores both accepted paths");
-		free(restored_private);
-		free(restored_public);
 
 		handler.set_variable(auto_name, "true");
 		handler.set_variable(private_name, "rsa-private.pem");
@@ -193,12 +180,11 @@ static void test_caching_sha2_rsa_commit_is_atomic() {
 			"commit rejects a partial on-disk key pair as one grouped update");
 		ok(handler.caching_sha2_rsa()->acquire() == generated_snapshot,
 			"rejected handler reload preserves the previously published snapshot");
-		char *restored_public_after_partial = handler.get_variable(public_name);
+		mf_unique_ptr<char> restored_public_after_partial { handler.get_variable(public_name) };
 		ok(handler.get_variable_int(auto_name) == 1 &&
 			restored_public_after_partial != nullptr &&
-			strcmp(restored_public_after_partial, "rsa-public.pem") == 0,
+			strcmp(restored_public_after_partial.get(), "rsa-public.pem") == 0,
 			"rejected handler reload restores all prior accepted runtime values");
-		free(restored_public_after_partial);
 	}
 
 	const std::string default_private =
@@ -218,14 +204,12 @@ static void test_caching_sha2_rsa_commit_is_atomic() {
 		char auto_name[] = "caching_sha2_password_auto_generate_rsa_keys";
 		char private_name[] = "caching_sha2_password_private_key_path";
 		char public_name[] = "caching_sha2_password_public_key_path";
-		char *fallback_private = handler.get_variable(private_name);
-		char *fallback_public = handler.get_variable(public_name);
+		mf_unique_ptr<char> fallback_private { handler.get_variable(private_name) };
+		mf_unique_ptr<char> fallback_public { handler.get_variable(public_name) };
 		ok(handler.get_variable_int(auto_name) == 0 &&
-			fallback_private != nullptr && fallback_private[0] == '\0' &&
-			fallback_public != nullptr && fallback_public[0] == '\0',
+			fallback_private != nullptr && fallback_private.get()[0] == '\0' &&
+			fallback_public != nullptr && fallback_public.get()[0] == '\0',
 			"failed initial defaults adopt an explicit TLS-only runtime configuration");
-		free(fallback_private);
-		free(fallback_public);
 	}
 	unlink(default_private.c_str());
 
@@ -238,18 +222,15 @@ static void test_caching_sha2_rsa_commit_is_atomic() {
 }
 
 static std::string query_variable(SQLite3DB* db, const char* table, const char* name) {
-	char* error = nullptr;
+	char* raw_error = nullptr;
 	const std::string query = std::string("SELECT variable_value FROM ") + table +
 		" WHERE variable_name='" + name + "'";
-	SQLite3_result* result = db->execute_statement(query.c_str(), &error);
+	std::unique_ptr<SQLite3_result> result { db->execute_statement(query.c_str(), &raw_error) };
+	mf_unique_ptr<char> error { raw_error };
 	std::string value;
 	if (result != nullptr && result->rows_count == 1 && result->rows[0]->fields[0] != nullptr) {
 		value = result->rows[0]->fields[0];
 	}
-	if (error != nullptr) {
-		free(error);
-	}
-	delete result;
 	return value;
 }
 
@@ -264,16 +245,18 @@ static void test_caching_sha2_rsa_rejection_restores_database_values(MySQL_Threa
 	handler.set_variable(public_name, "");
 	handler.commit();
 
-	const std::string statsdb_path = "/tmp/proxysql-mysql-variables-unit-stats-" +
-		std::to_string(getpid()) + ".db";
 	char* previous_statsdb_path = GloVars.statsdb_disk;
-	GloVars.statsdb_disk = strdup(statsdb_path.c_str());
-	GloProxyStats = new ProxySQL_Statistics();
+	mf_unique_ptr<char> in_memory_statsdb { strdup(":memory:") };
+	GloVars.statsdb_disk = in_memory_statsdb.get();
+	auto proxy_stats = std::make_unique<ProxySQL_Statistics>();
+	GloProxyStats = proxy_stats.get();
 	GloProxyStats->init();
-	ProxySQL_Admin* admin = new ProxySQL_Admin();
-	admin->admindb = new SQLite3DB();
+	ProxySQL_Admin* admin = new ProxySQL_Admin(); // NOSONAR: this process-scoped partial fixture cannot invoke the production shutdown destructor.
+	auto admin_db = std::make_unique<SQLite3DB>();
+	admin->admindb = admin_db.get();
+	char in_memory_admin_db[] = ":memory:";
 	admin->admindb->open(
-		(char*)":memory:", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
+		in_memory_admin_db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
 	);
 	admin->admindb->execute(
 		"CREATE TABLE global_variables (variable_name VARCHAR NOT NULL PRIMARY KEY, variable_value VARCHAR NOT NULL)"
@@ -288,10 +271,10 @@ static void test_caching_sha2_rsa_rejection_restores_database_values(MySQL_Threa
 	GloAdmin = admin;
 
 	const FlushVariableStats stats = admin->load_mysql_variables_to_runtime();
-	char* restored_runtime_auto_generate = handler.get_variable(auto_name);
+	mf_unique_ptr<char> restored_runtime_auto_generate { handler.get_variable(auto_name) };
 	ok(stats.records == 1 && stats.updated == 0 && stats.rejected == 1,
 		"Grouped RSA rejection counts only the submitted database variable");
-	ok(restored_runtime_auto_generate != nullptr && strcmp(restored_runtime_auto_generate, "false") == 0,
+	ok(restored_runtime_auto_generate != nullptr && strcmp(restored_runtime_auto_generate.get(), "false") == 0,
 		"Grouped RSA rejection restores the accepted runtime value");
 	ok(query_variable(
 		admin->admindb, "global_variables", "mysql-caching_sha2_password_auto_generate_rsa_keys"
@@ -301,7 +284,6 @@ static void test_caching_sha2_rsa_rejection_restores_database_values(MySQL_Threa
 		admin->admindb, "runtime_global_variables", "mysql-caching_sha2_password_auto_generate_rsa_keys"
 	) == "false",
 		"Grouped RSA rejection publishes the accepted value to runtime_global_variables");
-	free(restored_runtime_auto_generate);
 
 	admin->admindb->execute("DELETE FROM global_variables");
 	admin->admindb->execute(
@@ -319,15 +301,11 @@ static void test_caching_sha2_rsa_rejection_restores_database_values(MySQL_Threa
 
 	GloAdmin = nullptr;
 	GloMTH = nullptr;
-	delete admin->admindb;
 	admin->admindb = nullptr;
-	delete GloProxyStats;
+	admin_db.reset();
 	GloProxyStats = nullptr;
-	free(GloVars.statsdb_disk);
+	proxy_stats.reset();
 	GloVars.statsdb_disk = previous_statsdb_path;
-	unlink(statsdb_path.c_str());
-	unlink((statsdb_path + "-wal").c_str());
-	unlink((statsdb_path + "-shm").c_str());
 }
 #endif
 

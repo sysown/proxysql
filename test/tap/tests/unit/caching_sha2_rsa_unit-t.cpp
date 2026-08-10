@@ -26,8 +26,8 @@
 class TempDir {
 public:
 	TempDir() {
-		char path_template[] = "/tmp/proxysql-caching-sha2-rsa-XXXXXX";
-		char* created = mkdtemp(path_template); // NOSONAR(cpp:S5443): mkdtemp atomically creates a unique owner-only test directory.
+		char path_template[] = "/tmp/proxysql-caching-sha2-rsa-XXXXXX"; // NOSONAR: mkdtemp creates this test directory atomically with owner-only permissions.
+		char* created = mkdtemp(path_template);
 		if (created != nullptr) {
 			path_ = created;
 		}
@@ -644,7 +644,11 @@ int main() {
 			publication_lock_contended = false;
 			publication_reload_finished = false;
 		}
-		std::thread publication_reload([&]() {
+		std::thread publication_reload([
+			&publication_result,
+			&publication_observer,
+			&publication_config
+		]() {
 			publication_result = publication_observer.reload(publication_config);
 			{
 				std::lock_guard<std::mutex> lock(publication_lock_observer_mutex);

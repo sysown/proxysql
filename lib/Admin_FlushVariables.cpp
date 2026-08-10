@@ -597,14 +597,14 @@ FlushVariableStats ProxySQL_Admin::flush_mysql_variables___database_to_runtime(S
 			ASSERT_SQLITE_OK(rc, db);
 			sqlite3_stmt* statement = statement_unique.get();
 			for (const std::string& variable_name : commit_result.rejected_variables) {
-				char* value = GloMTH->get_variable(const_cast<char*>(variable_name.c_str()));
+				mf_unique_ptr<char> value { GloMTH->get_variable(variable_name.c_str()) };
 				const std::string qualified_name = "mysql-" + variable_name;
 				rc = (*proxy_sqlite3_bind_text)(
 					statement, 1, qualified_name.c_str(), -1, SQLITE_TRANSIENT
 				);
 				ASSERT_SQLITE_OK(rc, db);
 				rc = (*proxy_sqlite3_bind_text)(
-					statement, 2, value != nullptr ? value : "", -1, SQLITE_TRANSIENT
+					statement, 2, value != nullptr ? value.get() : "", -1, SQLITE_TRANSIENT
 				);
 				ASSERT_SQLITE_OK(rc, db);
 				SAFE_SQLITE3_STEP2(statement);
@@ -612,7 +612,6 @@ FlushVariableStats ProxySQL_Admin::flush_mysql_variables___database_to_runtime(S
 				ASSERT_SQLITE_OK(rc, db);
 				rc = (*proxy_sqlite3_reset)(statement);
 				ASSERT_SQLITE_OK(rc, db);
-				free(value);
 			}
 		}
 		GloMTH->wrunlock();
