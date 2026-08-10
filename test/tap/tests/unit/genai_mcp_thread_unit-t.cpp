@@ -36,7 +36,7 @@
 /* ------------------------------------------------------------------ */
 static std::string get_var(MCP_Threads_Handler& h, const char* name) {
 	char buf[4096] = {0};
-	int rc = h.get_variable(name, buf);
+	int rc = h.get_variable(name, buf, sizeof(buf));
 	if (rc != 0) return "__ERROR__";
 	return std::string(buf);
 }
@@ -361,11 +361,11 @@ static void test_get_variables_list(MCP_Threads_Handler& h) {
 static void test_null_safety(MCP_Threads_Handler& h) {
 	char buf[256];
 
-	ok(h.get_variable(nullptr, buf) == -1,
+	ok(h.get_variable(nullptr, buf, sizeof(buf)) == -1,
 	   "get_variable(nullptr, buf) = -1");
-	ok(h.get_variable("enabled", nullptr) == -1,
+	ok(h.get_variable("enabled", nullptr, 0) == -1,
 	   "get_variable(enabled, nullptr) = -1");
-	ok(h.get_variable(nullptr, nullptr) == -1,
+	ok(h.get_variable(nullptr, nullptr, 0) == -1,
 	   "get_variable(nullptr, nullptr) = -1");
 
 	ok(h.set_variable(nullptr, "true") == -1,
@@ -392,9 +392,9 @@ static void test_get_variable_string_contract(MCP_Threads_Handler& h) {
  */
 static void test_get_unknown_variable(MCP_Threads_Handler& h) {
 	char buf[256];
-	ok(h.get_variable("nonexistent", buf) == -1,
+	ok(h.get_variable("nonexistent", buf, sizeof(buf)) == -1,
 	   "get_variable(nonexistent) = -1");
-	ok(h.get_variable("", buf) == -1,
+	ok(h.get_variable("", buf, sizeof(buf)) == -1,
 	   "get_variable(empty) = -1");
 }
 
