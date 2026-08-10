@@ -104,7 +104,13 @@ int listen_on_unix(char *path, int backlog) {
 
 	memset(&serveraddr, 0, sizeof(serveraddr));
 	serveraddr.sun_family = AF_UNIX;
-	snprintf(serveraddr.sun_path, sizeof(serveraddr.sun_path), "%s", path);
+	const int path_len = snprintf(serveraddr.sun_path, sizeof(serveraddr.sun_path), "%s", path);
+	if (path_len < 0 || (size_t)path_len >= sizeof(serveraddr.sun_path)) {
+		close(sd);
+		errno = (path_len < 0) ? EINVAL : ENAMETOOLONG;
+		proxy_error("Unix Socket path is too long: %s\n", path);
+		return -1;
+	}
 
 	// call bind() to bind the socket on the specified file
 	if ( bind(sd, (struct sockaddr *)&serveraddr, sizeof(struct sockaddr_un)) != 0 ) {
