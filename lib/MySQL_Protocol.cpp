@@ -1055,7 +1055,9 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   rand_st.seed2=rand()%rand_st.max_value;
 
   memcpy(_ptr+l, &protocol_version, sizeof(protocol_version)); l+=sizeof(protocol_version);
-  memcpy(_ptr+l, mysql_thread___server_version, strlen(mysql_thread___server_version)); l+=strlen(mysql_thread___server_version)+1;
+  const char* server_version = mysql_thread___server_version ? mysql_thread___server_version : "";
+  const size_t server_version_len = strlen(server_version);
+  memcpy(_ptr+l, server_version, server_version_len); l+=server_version_len+1;
   memcpy(_ptr+l, &thread_id, sizeof(uint32_t)); l+=sizeof(uint32_t);
 //#ifdef MARIADB_BASE_VERSION
 //  proxy_create_random_string(myds->myconn->myconn.scramble_buff+0,8,(struct my_rnd_struct *)&rand_st);

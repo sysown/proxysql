@@ -640,17 +640,24 @@ bool admin_handler_command_kill_mysql_connection(uint32_t session_thd_id, S* ses
 template <typename S>
 bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_space_length, S* sess, ProxySQL_Admin *pa) {
 
+	static const char cmd_coredump[] = "PROXYSQL COREDUMP";
+	static const size_t cmd_coredump_len = sizeof(cmd_coredump) - 1;
+	static const char cmd_coredump_compressed[] = "PROXYSQL COMPRESSEDCOREDUMP";
+	static const size_t cmd_coredump_compressed_len = sizeof(cmd_coredump_compressed) - 1;
+	static const char cmd_cluster_node_uuid[] = "PROXYSQL CLUSTER_NODE_UUID ";
+	static const size_t cmd_cluster_node_uuid_len = sizeof(cmd_cluster_node_uuid) - 1;
+
 #if (defined(__i386__) || defined(__x86_64__) || defined(__ARM_ARCH_3__) || defined(__mips__)) && defined(__linux)
-	// currently only support x86-32, x86-64, ARM, and MIPS on Linux
-	if (!(strncasecmp("PROXYSQL COREDUMP", query_no_space, strlen("PROXYSQL COREDUMP")))) {
-		string filename = "core";
-		if (query_no_space_length > strlen("PROXYSQL COREDUMP")) {
-			if (query_no_space[strlen("PROXYSQL COREDUMP")] == ' ') {
-				filename = string(query_no_space+strlen("PROXYSQL COREDUMP "));
-			} else {
-				filename = "";
+		// currently only support x86-32, x86-64, ARM, and MIPS on Linux
+		if (!(strncasecmp(cmd_coredump, query_no_space, cmd_coredump_len))) {
+			string filename = "core";
+			if (query_no_space_length > (unsigned int)cmd_coredump_len) {
+				if (query_no_space[cmd_coredump_len] == ' ') {
+					filename = string(query_no_space + cmd_coredump_len + 1);
+				} else {
+					filename = "";
+				}
 			}
-		}
 		if (filename == "") {
 			proxy_error("Received incorrect PROXYSQL COREDUMP command: %s\n", query_no_space);
 		} else {
@@ -661,17 +668,17 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			string msg = "Coredump: " + filename;
 			SPA->send_ok_msg_to_client(sess, (char *)msg.c_str(), 0, query_no_space);
 			return false;
-		}
-	}
-	if (!(strncasecmp("PROXYSQL COMPRESSEDCOREDUMP", query_no_space, strlen("PROXYSQL COMPRESSEDCOREDUMP")))) {
-		string filename = "core";
-		if (query_no_space_length > strlen("PROXYSQL COMPRESSEDCOREDUMP")) {
-			if (query_no_space[strlen("PROXYSQL COMPRESSEDCOREDUMP")] == ' ') {
-				filename = string(query_no_space+strlen("PROXYSQL COMPRESSEDCOREDUMP "));
-			} else {
-				filename = "";
 			}
 		}
+		if (!(strncasecmp(cmd_coredump_compressed, query_no_space, cmd_coredump_compressed_len))) {
+			string filename = "core";
+			if (query_no_space_length > (unsigned int)cmd_coredump_compressed_len) {
+				if (query_no_space[cmd_coredump_compressed_len] == ' ') {
+					filename = string(query_no_space + cmd_coredump_compressed_len + 1);
+				} else {
+					filename = "";
+				}
+			}
 		if (filename == "") {
 			proxy_error("Received incorrect PROXYSQL COMPRESSEDCOREDUMP command: %s\n", query_no_space);
 		} else {
@@ -686,8 +693,8 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	}
 #endif
 
-	if (!(strncasecmp("PROXYSQL CLUSTER_NODE_UUID ", query_no_space, strlen("PROXYSQL CLUSTER_NODE_UUID ")))) {
-		int l = strlen("PROXYSQL CLUSTER_NODE_UUID ");
+		if (!(strncasecmp(cmd_cluster_node_uuid, query_no_space, cmd_cluster_node_uuid_len))) {
+			int l = cmd_cluster_node_uuid_len;
 		if (sess->client_myds->addr.port == 0) {
 			proxy_warning("Received PROXYSQL CLUSTER_NODE_UUID not from TCP socket. Exiting client\n");
 			SPA->send_error_msg_to_client(sess, (char *)"Received PROXYSQL CLUSTER_NODE_UUID not from TCP socket");
