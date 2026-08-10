@@ -64,7 +64,7 @@ int main(int argc, char** argv) {
 			char query[128]{};
 			diag("Generating simulated traffic...");
 			for (unsigned int i=0; i < QUERY_COUNT; i++) {
-				snprintf(query, sizeof(query), "DO /*#%d#*/ %d", i, i);
+				snprintf(query, sizeof(query), "DO /*#%u#*/ %u", i, i);
 				MYSQL_QUERY(proxysql, query);
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			}
