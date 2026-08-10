@@ -90,7 +90,7 @@ void * mysql_thread() {
 			fprintf(stderr, " mysql_stmt_init(), out of memory\n");
 			exit(EXIT_FAILURE);
 		}
-		sprintf(buff,"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
+		snprintf(buff,sizeof(buff),"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
 		bl=strlen(buff);
 		uint64_t hash=local_stmts->compute_hash(0,(char *)USER,(char *)SCHEMA,buff,bl);
 		MySQL_STMT_Global_info *a=GloMyStmt->find_prepared_statement_by_hash(hash);
@@ -112,7 +112,7 @@ void * mysql_thread() {
 		unsigned int founds=0;
 		cpu_timer t;
 		for (i=0; i<NUMPREP*LOOPS; i++) {
-			sprintf(buff,"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
+		snprintf(buff,sizeof(buff),"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
 			bl=strlen(buff);
 			//uint64_t hash=local_stmts->compute_hash(0,(char *)USER,(char *)SCHEMA,buff,bl);
 			//MySQL_STMT_Global_info *a=GloMyStmt->find_prepared_statement_by_hash(hash);
@@ -124,7 +124,7 @@ void * mysql_thread() {
 		unsigned int founds=0;
 		cpu_timer t;
 		for (i=0; i<NUMPREP*LOOPS; i++) {
-			sprintf(buff,"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
+		snprintf(buff,sizeof(buff),"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
 			bl=strlen(buff);
 			uint64_t hash=local_stmts->compute_hash(0,(char *)USER,(char *)SCHEMA,buff,bl);
 			//MySQL_STMT_Global_info *a=GloMyStmt->find_prepared_statement_by_hash(hash);
@@ -136,7 +136,7 @@ void * mysql_thread() {
 		unsigned int founds=0;
 		cpu_timer t;
 		for (i=0; i<NUMPREP*LOOPS; i++) {
-			sprintf(buff,"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
+		snprintf(buff,sizeof(buff),"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
 			bl=strlen(buff);
 			uint64_t hash=local_stmts->compute_hash(0,(char *)USER,(char *)SCHEMA,buff,bl);
 			MySQL_STMT_Global_info *a=GloMyStmt->find_prepared_statement_by_hash(hash);
@@ -166,7 +166,7 @@ void * mysql_thread() {
 		// for comparison, we run also queries in TEXT protocol
 		cpu_timer t;
 		for (i=0; i<NUMPREP*LOOPS; i++) {
-			sprintf(buff,"SELECT %u + %u",i,(uint32_t)mt_rand()%NUMPRO);
+		snprintf(buff,sizeof(buff),"SELECT %u + %u",i,(uint32_t)mt_rand()%NUMPRO);
 			bl=strlen(buff);
 			int rc=mysql_real_query(mysql,buff,bl);
 			if (rc) {
