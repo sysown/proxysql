@@ -207,7 +207,7 @@ void * my_conn_thread(void *arg) {
 		usleep(sleepDelay * 1000);
 
 		char query[128];
-		sprintf(query, "SELECT /* %p %s */ %d;", mysql, paddress.c_str(), sleepDelay);
+		snprintf(query, sizeof(query), "SELECT /* %p %s */ %d;", mysql, paddress.c_str(), sleepDelay);
 		if (mysql_query(mysql,query)) {
 			select_ERR++;
 			__sync_fetch_and_add(&g_select_ERR,1);
