@@ -584,7 +584,9 @@ std::tuple<bool, enum SERVER_TYPE, time_t> parse_command_purge_query_digests(cha
 	if (prefix) {
 		match = true;
 
-		if (strstr(prefix, "_pgsql_") != nullptr) {
+		const std::string_view prefix_sv(prefix, prefix_len);
+		const std::string_view pgsql_tag("_pgsql_");
+		if (prefix_sv.find(pgsql_tag) != std::string_view::npos) {
 			server_type = SERVER_TYPE_PGSQL;
 		}
 
@@ -1057,7 +1059,12 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		return false;
 	}
 
-	if (!strcasecmp("PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE", query_no_space)) {
+	static const char *flush_pass_query = "PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE";
+	static const size_t flush_pass_query_len = sizeof("PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE") - 1;
+	if (
+		query_no_space_length == static_cast<int>(flush_pass_query_len)
+		&& !strncasecmp(flush_pass_query, query_no_space, flush_pass_query_len)
+	) {
 		proxy_info("Received PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE command\n");
 		ProxySQL_Admin *SPA = (ProxySQL_Admin *)pa;
 		if (GloMyPTAuthCache) {
