@@ -2,6 +2,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#ifdef DEBUG
+#include <cassert>
+#endif
 
 static inline uint32_t be32(const unsigned char* p) {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
@@ -42,6 +45,26 @@ void PgSQL_Backend_Msg_Framer::feed(const unsigned char* data, size_t n) {
             pos = 0;
         }
     }
+
+#ifdef DEBUG
+    // Everything below pos has already been framed and copied out to the client
+    // -- it is finished with. If the compaction above stops reclaiming it, those
+    // dead bytes stay in the buffer while feed() keeps appending above them, and
+    // it grows for the whole result set. next() has a cheap rewind for this, but
+    // it only fires when a drain lands exactly on len, which for a 2049-byte row
+    // read in 16384-byte chunks first happens after 33 MB. Measured: 58 MB of
+    // delivered rows retained on one connection, and held for the connection's
+    // whole life because cap never shrinks.
+    //
+    // After compaction one of these always holds: pos == 0 (the dead prefix was
+    // reclaimed) or pos < live (not yet worth the move). That is the compaction
+    // condition restated, so correct code cannot trip it -- and it fires on the
+    // first feed after a drain, not once tens of MB have piled up.
+    //
+    // MUST stay #ifdef DEBUG: NDEBUG is not set anywhere in this build, so a
+    // bare assert() would stay live in release and abort a production proxy.
+    assert(pos == 0 || pos < len - pos);
+#endif
 
     if (n > SIZE_MAX - len) { failed = true; return; }   // would overflow len+n
     if (len + n > cap) {
