@@ -62,6 +62,41 @@ jobs:
       - name: Build ProxySQL (debug, PROXYSQL31)
         run: PROXYSQL31=1 make -j$(nproc) debug
 
+      # start-proxysql-isolated.bash runs ProxySQL (and its filesystem helpers)
+      # from the LOCAL-ONLY tag `proxysql-ci-base:latest`, which nothing on a
+      # fresh runner provides -- without this step infra startup dies before a
+      # single pg-compat test runs. Every sibling TAP workflow pulls the image
+      # from GHCR and retags it; this mirrors ci-legacy-g4.yml, retry loop
+      # included, because both the login and the pull have been observed to
+      # fail transiently with a client timeout.
+      - name: Log in to GHCR and pull CI base image
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          attempt=0
+          max_attempts=5
+          while [ $attempt -lt $max_attempts ]; do
+            attempt=$((attempt + 1))
+            echo ">>> GHCR login+pull attempt ${attempt}/${max_attempts}"
+            if echo "$GHCR_TOKEN" | docker login ghcr.io \
+                -u "$GHCR_USER" --password-stdin \
+                && docker pull ghcr.io/sysown/proxysql-ci-base:latest; then
+              echo ">>> GHCR login+pull OK on attempt ${attempt}"
+              docker tag ghcr.io/sysown/proxysql-ci-base:latest \
+                  proxysql-ci-base:latest
+              exit 0
+            fi
+            if [ $attempt -lt $max_attempts ]; then
+              sleep_for=$((attempt * 10))
+              echo ">>> attempt ${attempt} failed; sleeping ${sleep_for}s"
+              sleep $sleep_for
+            fi
+          done
+          echo ">>> all ${max_attempts} GHCR attempts failed"
+          exit 1
+
       # Stand up the pg-compat infra: dbdeployer PG17 primary+2-replica
       # backend, Toxiproxy sidecar, and the ProxySQL container built above
       # (ensure-infras.bash starts ProxySQL itself via

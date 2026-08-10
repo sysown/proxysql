@@ -49,6 +49,16 @@ def _parse_meta(sql):
     return skip, only
 
 
+def baseline_name(name):
+    """The direct target a proxy target must be compared against.
+
+    Single definition shared by the target filter in ``_run`` and the assertion
+    in ``compare``: if the two disagreed about which baseline a proxy target
+    needs, ``_run`` could omit exactly the target ``compare`` then demands.
+    """
+    return "direct_binary" if name.endswith("binary") else "direct_text"
+
+
 def _matches_any(name, patterns):
     # Shell-style globbing, so a documented pattern such as "proxy_native_*"
     # actually selects the native targets. fnmatchcase (not fnmatch) keeps
@@ -117,14 +127,29 @@ def _run(stmts, targets, admin, skip, only):
     # guarantees the global is put back even if a target raises mid-loop.
     saved = admin.snapshot([NATIVE_VAR]) if native_present else None
     try:
+        selected = [
+            t for t in targets
+            if t.available
+            and not _matches_any(t.name, skip)
+            and (not only or _matches_any(t.name, only))
+        ]
+        # An only/skip list that selects proxy targets but drops their direct
+        # baselines would make compare() report "baseline unavailable" and fail
+        # the case no matter how transparent the proxy actually is -- the
+        # documented `only-targets: proxy_native_*` names no direct target at
+        # all. The baselines are what the assertion is *against*, not part of
+        # what is being selected, so pull each selected proxy target's
+        # format-matched baseline back in regardless of the filters.
+        chosen = {t.name for t in selected}
+        needed = {baseline_name(t.name) for t in selected if not t.name.startswith("direct")}
+        by_name = {t.name: t for t in targets}
+        for name in sorted(needed - chosen):
+            t = by_name.get(name)
+            if t is not None and t.available:
+                selected.append(t)
+
         results = {}
-        for t in targets:
-            if not t.available:
-                continue
-            if _matches_any(t.name, skip):
-                continue
-            if only and not _matches_any(t.name, only):
-                continue
+        for t in selected:
             results[t.name] = _run_on(t, stmts, admin, native_present)
         return results
     finally:
@@ -164,14 +189,11 @@ def compare(results):
     ``results`` are compared, each against its direct baseline (which is always
     available). Returns ``(ok, detail_text)``.
     """
-    def base(name):
-        return "direct_binary" if name.endswith("binary") else "direct_text"
-
     diffs = []
     for name in sorted(results):
         if name.startswith("direct"):
             continue
-        b_name = base(name)
+        b_name = baseline_name(name)
         b = results.get(b_name)
         if b is None:
             diffs.append(f"{name}: format-matched baseline {b_name} unavailable")

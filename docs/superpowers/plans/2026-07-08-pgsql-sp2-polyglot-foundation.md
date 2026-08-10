@@ -558,9 +558,17 @@ import psycopg
 
 def _parse(case_file):
     sql = open(case_file).read()
+    # Metadata regexes run on the ORIGINAL text, comment lines included.
     skip = set(re.findall(r"--\s*skip-targets:\s*(.+)", sql))
     only = set(re.findall(r"--\s*only-targets:\s*(.+)", sql))
-    stmts = [s.strip() for s in sql.split(";") if s.strip() and not s.strip().startswith("--")]
+    # Strip comment lines PER LINE *before* splitting on ";". Filtering
+    # ";"-delimited chunks that start with "--" instead discards an ENTIRE case
+    # whose first line is a metadata comment: with one trailing ";" the whole
+    # file is a single chunk beginning with "--", so the comment AND the SQL are
+    # thrown away together and zero statements run -- a vacuous pass. Every
+    # shipped case starts with such a comment, so this is not a corner case.
+    body = "\n".join(l for l in sql.splitlines() if not l.strip().startswith("--"))
+    stmts = [s.strip() for s in body.split(";") if s.strip()]
     return stmts, (skip.pop().split() if skip else []), (only.pop().split() if only else [])
 
 def _run_on(target, stmts, admin):

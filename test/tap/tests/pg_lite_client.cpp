@@ -462,8 +462,7 @@ void PgConnection::doSASLAuth(const std::string& password,
         free(client_first); free_scram_state(st);
         throw PgException("scram: " + extractErrorMessage(buffer));
     }
-    if (type != AUTH_TYPE || buffer.size() < 4 ||
-        ntohl(*reinterpret_cast<int32_t*>(buffer.data())) != 11) {
+    if (type != AUTH_TYPE || buffer.size() < 4 || readAuthType(buffer) != 11) {
         free(client_first); free_scram_state(st);
         throw PgException("expected AuthenticationSASLContinue(11)");
     }
@@ -492,8 +491,7 @@ void PgConnection::doSASLAuth(const std::string& password,
         free(client_first); free(client_final); free_scram_state(st);
         throw PgException("scram: " + extractErrorMessage(buffer));
     }
-    if (type != AUTH_TYPE || buffer.size() < 4 ||
-        ntohl(*reinterpret_cast<int32_t*>(buffer.data())) != 12) {
+    if (type != AUTH_TYPE || buffer.size() < 4 || readAuthType(buffer) != 12) {
         free(client_first); free(client_final); free_scram_state(st);
         throw PgException("expected AuthenticationSASLFinal(12)");
     }
@@ -511,8 +509,7 @@ void PgConnection::doSASLAuth(const std::string& password,
     // 5) Expect AuthenticationOk (0).
     readMessage(type, buffer);
     if (type == ERROR_RESPONSE) throw PgException("scram: " + extractErrorMessage(buffer));
-    if (type == AUTH_TYPE && buffer.size() >= 4 &&
-        ntohl(*reinterpret_cast<int32_t*>(buffer.data())) == 0) return;
+    if (type == AUTH_TYPE && buffer.size() >= 4 && readAuthType(buffer) == 0) return;
     throw PgException("scram: no AuthenticationOk after SASLFinal");
 }
 

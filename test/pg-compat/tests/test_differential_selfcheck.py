@@ -89,6 +89,22 @@ def test_target_filter_supports_globs():
     assert not diff._matches_any("direct_text", [])
 
 
+def test_baseline_is_never_filtered_out():
+    """A target filter must not drop the baseline the assertion needs.
+
+    ``compare()`` checks each proxy target against its format-matched direct
+    baseline and reports "baseline unavailable" when it is missing. Since
+    ``only-targets``/``skip-targets`` name proxy targets (the documented
+    example is ``proxy_native_*``), a filter applied naively removes both
+    direct targets and the case then fails no matter how transparent the
+    proxy is. Needs no infra: this pins the pairing rule itself.
+    """
+    assert diff.baseline_name("proxy_native_binary") == "direct_binary"
+    assert diff.baseline_name("proxy_libpq_binary") == "direct_binary"
+    assert diff.baseline_name("proxy_native_text") == "direct_text"
+    assert diff.baseline_name("proxy_libpq_text") == "direct_text"
+
+
 def test_file_pipeline_executes_real_statements(admin):
     """Guard against vacuous passes on the FILE-based path.
 
