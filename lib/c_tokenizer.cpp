@@ -12,12 +12,21 @@ extern __thread int  mysql_thread___query_digests_grouping_limit;
 extern __thread int  mysql_thread___query_digests_groups_grouping_limit;
 extern __thread bool mysql_thread___query_digests_keep_comment;
 
+static inline size_t tokenizer_strlen(const char* s) {
+	size_t len = 0;
+	if (s == NULL) return 0;
+	while (s[len]) {
+		++len;
+	}
+	return len;
+}
+
 void tokenizer(tokenizer_t *result, const char* s, const char* delimiters, int empties )
 {
 
 	//tokenizer_t result;
 
-	result->s_length = ( (s && delimiters) ? strlen(s) : 0 );
+	result->s_length = ( (s && delimiters) ? tokenizer_strlen(s) : 0 );
 	result->s = NULL;
 	if (result->s_length) {
 		if (result->s_length > (PROXYSQL_TOKENIZER_BUFFSIZE-1)) {
