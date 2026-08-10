@@ -124,6 +124,12 @@ int main(int argc, char **argv) { // NOSONAR: benchmark tool, cognitive complexi
     /* Launch threads */
     pthread_t *tids = calloc(threads, sizeof(pthread_t));
     struct thread_arg *args = calloc(threads, sizeof(struct thread_arg));
+    if (tids == NULL || args == NULL) {
+        fprintf(stderr, "Unable to allocate benchmark thread state\n");
+        free(tids);
+        free(args);
+        return 1;
+    }
 
     struct timespec wall0, wall1;
     clock_gettime(CLOCK_MONOTONIC, &wall0);
