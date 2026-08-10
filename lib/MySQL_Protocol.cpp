@@ -57,6 +57,9 @@ static const char *plugins[3] = {
 	"mysql_clear_password",
 	"caching_sha2_password",
 };
+static constexpr size_t PLUGIN_MYSQL_NATIVE_LEN = sizeof("mysql_native_password") - 1;
+static constexpr size_t PLUGIN_MYSQL_CLEAR_LEN = sizeof("mysql_clear_password") - 1;
+static constexpr size_t PLUGIN_MYSQL_CACHING_SHA2_LEN = sizeof("caching_sha2_password") - 1;
 
 #include "MySQL_encode.h"
 
@@ -90,7 +93,8 @@ char* get_password(account_details_t& ad, PASSWORD_TYPE::E passtype) {
 
 #ifdef DEBUG
 void debug_spiffe_id(const unsigned char *user, const char *attributes, int __line, const char *__func) {
-	if (attributes!=NULL && strlen(attributes)) {
+	const size_t attributes_len = (attributes ? strlen(attributes) : 0);
+	if (attributes_len) {
 		json j = nlohmann::json::parse(attributes);
 		auto spiffe_id = j.find("spiffe_id");
 		if (spiffe_id != j.end()) {
@@ -1315,11 +1319,11 @@ bool MySQL_Protocol::verify_user_pass(
 	reply[SHA_DIGEST_LENGTH]='\0';
 	auth_plugin_id = AUTH_UNKNOWN_PLUGIN; // default
 
-	if (strncmp((char *)auth_plugin,plugins[0],strlen(plugins[0]))==0) { // mysql_native_password
+	if (strncmp((char *)auth_plugin,plugins[0],PLUGIN_MYSQL_NATIVE_LEN)==0) { // mysql_native_password
 		auth_plugin_id = AUTH_MYSQL_NATIVE_PASSWORD;
-	} else if (strncmp((char *)auth_plugin,plugins[1],strlen(plugins[1]))==0) { // mysql_clear_password
+	} else if (strncmp((char *)auth_plugin,plugins[1],PLUGIN_MYSQL_CLEAR_LEN)==0) { // mysql_clear_password
 		auth_plugin_id = AUTH_MYSQL_CLEAR_PASSWORD;
-	} else if (strncmp((char *)auth_plugin,plugins[2],strlen(plugins[2]))==0) { // caching_sha2_password
+	} else if (strncmp((char *)auth_plugin,plugins[2],PLUGIN_MYSQL_CACHING_SHA2_LEN)==0) { // caching_sha2_password
 		//auth_plugin_id = 2; // FIXME: this is temporary, because yet not supported
 		auth_plugin_id = AUTH_MYSQL_CACHING_SHA2_PASSWORD; // FIXME: this is temporary, because yet not supported . It must become 3
 	}
@@ -1635,7 +1639,10 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 
 		userinfo->username=strdup((const char *)user);
 		userinfo->password=strdup((const char *)password);
-		if (db) userinfo->set_schemaname(db,strlen(db));
+	const size_t db_len = (db ? strlen(db) : 0);
+	if (db) {
+		userinfo->set_schemaname(db, db_len);
+	}
 	} else {
 		// we always duplicate username and password, or crashes happen
 		userinfo->username=strdup((const char *)user);
@@ -1651,14 +1658,14 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		// we need to process charset if present in CHANGE_USER
 		uint16_t charset=0;
 		int bytes_processed = (db-(char *)pkt);
-		bytes_processed += strlen(db) + 1;
-		int bytes_left = len - bytes_processed;
-		if (bytes_left > 2) {
-			char *p = db;
-			p += strlen(db);
-			p++; // null byte
-			memcpy(&charset, p, sizeof(charset));
-		}
+	bytes_processed += db_len + 1;
+	int bytes_left = len - bytes_processed;
+	if (bytes_left > 2) {
+		char *p = db;
+		p += db_len;
+		p++; // null byte
+		memcpy(&charset, p, sizeof(charset));
+	}
 		// see bug #810
 		if (charset==0) {
 			const MARIADB_CHARSET_INFO *ci = NULL;
@@ -1988,11 +1995,11 @@ void MySQL_Protocol::PPHR_3(MyProt_tmp_auth_vars& vars1) { // detect plugin id
 	proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' , auth_plugin_id=%d\n", (*myds), (*myds)->sess, vars1.user, auth_plugin_id);
 
 	if (auth_plugin_id == AUTH_UNKNOWN_PLUGIN) {
-		if (strncmp((char *)vars1.auth_plugin,plugins[0],strlen(plugins[0]))==0) { // mysql_native_password
+		if (strncmp((char *)vars1.auth_plugin,plugins[0],PLUGIN_MYSQL_NATIVE_LEN)==0) { // mysql_native_password
 			auth_plugin_id = AUTH_MYSQL_NATIVE_PASSWORD;
-		} else if (strncmp((char *)vars1.auth_plugin,plugins[1],strlen(plugins[1]))==0) { // mysql_clear_password
+		} else if (strncmp((char *)vars1.auth_plugin,plugins[1],PLUGIN_MYSQL_CLEAR_LEN)==0) { // mysql_clear_password
 			auth_plugin_id = AUTH_MYSQL_CLEAR_PASSWORD;
-		} else if (strncmp((char *)vars1.auth_plugin,plugins[2],strlen(plugins[2]))==0) { // caching_sha2_password
+		} else if (strncmp((char *)vars1.auth_plugin,plugins[2],PLUGIN_MYSQL_CACHING_SHA2_LEN)==0) { // caching_sha2_password
 			if (sent_auth_plugin_id == AUTH_MYSQL_NATIVE_PASSWORD) {
 				// if we send mysql_native_password as default authentication plugin we do not support
 				// clients using caching_sha2_password , thus we define "unknown plugin" and force the
