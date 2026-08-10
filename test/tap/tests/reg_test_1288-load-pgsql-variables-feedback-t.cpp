@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
 		if (snap) {
 			MYSQL_ROW row = mysql_fetch_row(snap);
 			if (row && row[0]) {
-				strncpy(original_pgsql_max_conn, row[0], sizeof(original_pgsql_max_conn) - 1);
+				snprintf(original_pgsql_max_conn, sizeof(original_pgsql_max_conn), "%s", row[0]);
 			}
 			mysql_free_result(snap);
 		}
