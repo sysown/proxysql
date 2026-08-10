@@ -2749,7 +2749,6 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 		const std::string delay_str = std::to_string(delay);
 		const std::string sticky_conn_str = std::to_string(sticky_conn);
 		const std::string multiplex_str = std::to_string(multiplex);
-		const std::string gtid_from_hostgroup_str = std::to_string(gtid_from_hostgroup);
 		const std::string log_str = std::to_string(log);
 		const std::string apply_str = std::to_string(apply);
 		size_t query_len =
@@ -2783,7 +2782,6 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 			(OK_msg_exists ? OK_msg.size() : 0) + 4 +
 			sticky_conn_str.size() + 4 +
 			multiplex_str.size() + 4 +
-			gtid_from_hostgroup_str.size() + 4 +
 			log_str.size() + 4 +
 			apply_str.size() + 4 +
 			(attributes_exists ? attributes.size() : 0) + 4 +
