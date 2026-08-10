@@ -1784,7 +1784,8 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 	auto scrub_cleartext = [&]() {
 		if (client_myds && client_myds->passthrough_cleartext) {
 			const char* cleartext = client_myds->passthrough_cleartext;
-			const size_t cleartext_len = cleartext ? strlen(cleartext) : 0;
+			const std::string_view cleartext_view = cleartext ? std::string_view{cleartext} : std::string_view{};
+			const size_t cleartext_len = cleartext_view.size();
 			if (cleartext_len) {
 				memset(client_myds->passthrough_cleartext, 0, cleartext_len);
 			}
@@ -1946,10 +1947,10 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 		// SIGSEGVs. set_schemaname is NULL-safe: when len==0 it falls back to
 		// mysql_thread___default_schema.
 	if (client_myds->myconn->userinfo->schemaname == NULL) {
-		const char* safe_default_schema = default_schema ? default_schema : "";
-		const size_t default_schema_len = strlen(safe_default_schema);
+		const std::string_view safe_default_schema = default_schema ? std::string_view{default_schema} : std::string_view{};
+		const size_t default_schema_len = safe_default_schema.size();
 		client_myds->myconn->userinfo->set_schemaname(
-			safe_default_schema, default_schema_len);
+			safe_default_schema.data(), default_schema_len);
 	}
 
 		// Return the authed backend connection to the pool. It is valid and
@@ -1968,10 +1969,10 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 	if (mybe && mybe->server_myds && mybe->server_myds->myconn) {
 		MySQL_Connection_userinfo *bui = mybe->server_myds->myconn->userinfo;
 		if (bui && bui->schemaname == NULL) {
-			const char* safe_default_schema = default_schema ? default_schema : "";
-			const size_t default_schema_len = strlen(safe_default_schema);
+			const std::string_view safe_default_schema = default_schema ? std::string_view{default_schema} : std::string_view{};
+			const size_t default_schema_len = safe_default_schema.size();
 			bui->set_schemaname(
-				safe_default_schema, default_schema_len);
+				safe_default_schema.data(), default_schema_len);
 		}
 		mybe->server_myds->return_MySQL_Connection_To_Pool();
 	}
