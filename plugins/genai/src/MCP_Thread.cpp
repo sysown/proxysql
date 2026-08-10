@@ -168,8 +168,8 @@ void MCP_Threads_Handler::wrunlock() {
 	pthread_rwlock_unlock(&rwlock);
 }
 
-int MCP_Threads_Handler::get_variable(const char* name, char* val) {
-	if (!name || !val)
+int MCP_Threads_Handler::get_variable(const char* name, char* val, size_t val_size) {
+	if (!name || !val || val_size == 0)
 		return -1;
 
 	pthread_rwlock_rdlock(&rwlock);
@@ -210,7 +210,7 @@ int MCP_Threads_Handler::get_variable(const char* name, char* val) {
 	pthread_rwlock_unlock(&rwlock);
 
 	if (rc == 0) {
-		snprintf(val, 1024, "%s", out.c_str());
+		snprintf(val, val_size, "%s", out.c_str());
 	}
 	return rc;
 }
