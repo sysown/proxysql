@@ -92,8 +92,10 @@ int ProxySQL_Test___GenerateRandomQueryInDigestTable(int n) {
 	char * schemaname_buf = (char *)malloc(64);
 	//ui.username = username_buf;
 	//ui.schemaname = schemaname_buf;
-	memcpy(username_buf, "user_name_", sizeof("user_name_"));
-	memcpy(schemaname_buf, "shard_name_", sizeof("shard_name_"));
+	memcpy(username_buf, "user_name_", 10);
+	username_buf[10] = '\0';
+	memcpy(schemaname_buf, "shard_name_", 11);
+	schemaname_buf[11] = '\0';
 	bool orig_norm = mysql_thread___query_digests_normalize_digest_text;
 	for (int i=0; i<n; i++) {
 		if (i%10 == 0) {
