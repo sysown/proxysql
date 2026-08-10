@@ -77,6 +77,14 @@ private:
     uint64_t m_affected_rows {0};          ///< Accumulated affected rows for the current query.
     uint64_t m_rows_sent {0};              ///< Accumulated rows sent for the current query.
     bool m_current_finalize_on_sync {false}; ///< Whether current query finalizes on ReadyForQuery ('Z').
+    /// Whether the current query has received its own response terminator
+    /// (CommandComplete, EmptyQueryResponse or PortalSuspended). This, not
+    /// m_current_finalize_on_sync, is what qualifies a ReadyForQuery to
+    /// finalize: a ReadyForQuery left over from an earlier exchange can arrive
+    /// while a freshly activated query is still awaiting its first response,
+    /// and finalizing there would report zeroed counters and drop the real
+    /// response that follows.
+    bool m_response_seen {false};
 
     struct PendingQuery {
         std::string query;

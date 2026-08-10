@@ -206,6 +206,7 @@ handle_internal_build() {
     cd "${REPO_ROOT}"
     make -j"$(nproc)" GIT_VERSION_BASE="${GIT_VERSION_BASE}" testall
     make -j"$(nproc)" GIT_VERSION_BASE="${GIT_VERSION_BASE}" build_cluster_simulator
+    make -C test/deps/cluster_simulator -j"$(nproc)" check
     make -C test/tap -j"$(nproc)" GIT_VERSION="${GIT_VERSION_BASE}" tap
     make -C test/tap/tests -j"$(nproc)" \
         GIT_VERSION="${GIT_VERSION_BASE}" "${SIMULATOR_BINARIES[@]}"

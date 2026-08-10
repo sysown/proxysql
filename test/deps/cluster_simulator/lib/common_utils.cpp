@@ -353,36 +353,40 @@ bool check_present_and_type(const json& j, const std::vector<std::string>& path,
 	return res;
 }
 
-bool matching_server_status(const server_status& srv_st1, const server_status& srv_st2) {
+bool matching_server_status(const server_status& exp_srv_st, const server_status& act_srv_st) {
 	bool res = false;
 	bool same_hid_host =
-		std::get<0>(srv_st1) == std::get<0>(srv_st2) &&
-		std::get<1>(srv_st1) == std::get<1>(srv_st2) &&
-		std::get<2>(srv_st1) == std::get<2>(srv_st2);
+		std::get<0>(exp_srv_st) == std::get<0>(act_srv_st) &&
+		std::get<1>(exp_srv_st) == std::get<1>(act_srv_st) &&
+		std::get<2>(exp_srv_st) == std::get<2>(act_srv_st);
 
 	if (same_hid_host) {
 		std::vector<std::string> allowed_sts {
-			str_split(std::get<3>(srv_st1), '|')
+			str_split(std::get<3>(exp_srv_st), '|')
 		};
 
-		if (std::find(allowed_sts.begin(), allowed_sts.end(), std::get<3>(srv_st2)) != allowed_sts.end()) {
-			const int64_t exp_weight = std::get<MYSQL_SERVER_STATUS_T::WEIGHT>(srv_st1);
-			const int64_t exp_max_conns = std::get<MYSQL_SERVER_STATUS_T::MAX_CONNS>(srv_st1);
-			const int32_t exp_use_ssl = std::get<MYSQL_SERVER_STATUS_T::USE_SSL>(srv_st1);
-			const std::string exp_comment = std::get<MYSQL_SERVER_STATUS_T::COMMENT>(srv_st1);
+		if (std::find(allowed_sts.begin(), allowed_sts.end(), std::get<3>(act_srv_st)) != allowed_sts.end()) {
+			const int64_t exp_weight = std::get<MYSQL_SERVER_STATUS_T::WEIGHT>(exp_srv_st);
+			const int64_t exp_max_conns = std::get<MYSQL_SERVER_STATUS_T::MAX_CONNS>(exp_srv_st);
+			const int32_t exp_use_ssl = std::get<MYSQL_SERVER_STATUS_T::USE_SSL>(exp_srv_st);
+			const std::string& exp_comment = std::get<MYSQL_SERVER_STATUS_T::COMMENT>(exp_srv_st);
+			const bool exp_comment_is_set =
+				std::get<MYSQL_SERVER_STATUS_T::COMMENT_IS_SET>(exp_srv_st);
 
 			bool match = true;
 
 			if (exp_weight != -1) {
-				match = match && exp_weight == std::get<MYSQL_SERVER_STATUS_T::WEIGHT>(srv_st2);
+				match = match && exp_weight == std::get<MYSQL_SERVER_STATUS_T::WEIGHT>(act_srv_st);
 			}
 			if (exp_max_conns != -1) {
-				match = match && exp_max_conns == std::get<MYSQL_SERVER_STATUS_T::MAX_CONNS>(srv_st2);
+				match = match && exp_max_conns == std::get<MYSQL_SERVER_STATUS_T::MAX_CONNS>(act_srv_st);
 			}
 			if (exp_use_ssl != -1) {
-				match = match && exp_use_ssl == std::get<MYSQL_SERVER_STATUS_T::USE_SSL>(srv_st2);
+				match = match && exp_use_ssl == std::get<MYSQL_SERVER_STATUS_T::USE_SSL>(act_srv_st);
 			}
-			match = match && exp_comment == std::get<MYSQL_SERVER_STATUS_T::COMMENT>(srv_st2);
+			if (exp_comment_is_set) {
+				match = match && exp_comment == std::get<MYSQL_SERVER_STATUS_T::COMMENT>(act_srv_st);
+			}
 
 			res = match;
 		}
@@ -990,6 +994,7 @@ std::pair<int, std::string> extract_cluster_status(
 		int64_t max_conns = -1;
 		int32_t use_ssl = -1;
 		std::string comment {};
+		bool comment_is_set = false;
 
 		try {
 			hostgroup_id = m_mysql_server.at("hostgroup_id");
@@ -1008,13 +1013,24 @@ std::pair<int, std::string> extract_cluster_status(
 			}
 			if (m_mysql_server.contains("comment")) {
 				comment = m_mysql_server.at("comment");
+				comment_is_set = true;
 			}
 		} catch(const std::exception& e) {
 			return { EXIT_FAILURE, e.what() };
 		}
 
 		cluster_status.push_back(
-			std::make_tuple(hostgroup_id, hostname, port, status, weight, max_conns, use_ssl, comment)
+			std::make_tuple(
+				hostgroup_id,
+				hostname,
+				port,
+				status,
+				weight,
+				max_conns,
+				use_ssl,
+				comment,
+				comment_is_set
+			)
 		);
 	}
 
@@ -1088,10 +1104,11 @@ ordered_json cluster_status_to_json(const std::vector<server_status>& cluster_st
 			{ "status", std::get<3>(server_status) },
 		};
 
-		int64_t weight = std::get<MYSQL_SERVER_STATUS_T::WEIGHT>(server_status);
-		int64_t max_conns = std::get<MYSQL_SERVER_STATUS_T::MAX_CONNS>(server_status);
-		int64_t use_ssl = std::get<MYSQL_SERVER_STATUS_T::USE_SSL>(server_status);
-		string comment = std::get<MYSQL_SERVER_STATUS_T::COMMENT>(server_status);
+		const int64_t weight = std::get<MYSQL_SERVER_STATUS_T::WEIGHT>(server_status);
+		const int64_t max_conns = std::get<MYSQL_SERVER_STATUS_T::MAX_CONNS>(server_status);
+		const int64_t use_ssl = std::get<MYSQL_SERVER_STATUS_T::USE_SSL>(server_status);
+		const string& comment = std::get<MYSQL_SERVER_STATUS_T::COMMENT>(server_status);
+		const bool comment_is_set = std::get<MYSQL_SERVER_STATUS_T::COMMENT_IS_SET>(server_status);
 
 		if (weight != -1) {
 			srv_result["weight"] = weight;
@@ -1101,6 +1118,9 @@ ordered_json cluster_status_to_json(const std::vector<server_status>& cluster_st
 		}
 		if (use_ssl != -1) {
 			srv_result["use_ssl"] = use_ssl;
+		}
+		if (comment_is_set) {
+			srv_result["comment"] = comment;
 		}
 
 		result.push_back(srv_result);
