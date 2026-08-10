@@ -1783,8 +1783,8 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 	// probe resolves. Also clears auth_in_progress.
 	auto scrub_cleartext = [&]() {
 		if (client_myds && client_myds->passthrough_cleartext) {
-			memset(client_myds->passthrough_cleartext, 0,
-				strlen(client_myds->passthrough_cleartext));
+			const size_t cleartext_len = strlen(client_myds->passthrough_cleartext);
+			memset(client_myds->passthrough_cleartext, 0, cleartext_len);
 			free(client_myds->passthrough_cleartext);
 			client_myds->passthrough_cleartext = NULL;
 		}
@@ -1942,10 +1942,11 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 		// strcmp(client_schemaname, server_schemaname) -- strcmp(NULL, ...)
 		// SIGSEGVs. set_schemaname is NULL-safe: when len==0 it falls back to
 		// mysql_thread___default_schema.
-		if (client_myds->myconn->userinfo->schemaname == NULL) {
-			client_myds->myconn->userinfo->set_schemaname(
-				default_schema, default_schema ? strlen(default_schema) : 0);
-		}
+	if (client_myds->myconn->userinfo->schemaname == NULL) {
+		const size_t default_schema_len = default_schema ? strlen(default_schema) : 0;
+		client_myds->myconn->userinfo->set_schemaname(
+			default_schema, default_schema_len);
+	}
 
 		// Return the authed backend connection to the pool. It is valid and
 		// reusable; the client's first query re-acquires through the normal
@@ -1960,12 +1961,13 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 		// strdup userinfo->schemaname unconditionally. Ensure it is non-NULL on
 		// the backend conn before returning it, mirroring the client-side guard
 		// above (NULL-safe: len==0 falls back to mysql_thread___default_schema).
-		if (mybe && mybe->server_myds && mybe->server_myds->myconn) {
-			MySQL_Connection_userinfo *bui = mybe->server_myds->myconn->userinfo;
-			if (bui && bui->schemaname == NULL) {
-				bui->set_schemaname(
-					default_schema, default_schema ? strlen(default_schema) : 0);
-			}
+	if (mybe && mybe->server_myds && mybe->server_myds->myconn) {
+		MySQL_Connection_userinfo *bui = mybe->server_myds->myconn->userinfo;
+		if (bui && bui->schemaname == NULL) {
+			const size_t default_schema_len = default_schema ? strlen(default_schema) : 0;
+			bui->set_schemaname(
+				default_schema, default_schema_len);
+		}
 			mybe->server_myds->return_MySQL_Connection_To_Pool();
 		}
 
