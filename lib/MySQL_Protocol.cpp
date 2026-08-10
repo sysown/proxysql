@@ -3060,13 +3060,15 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 		// update 'MySQL_Session' info using 'account_details'; transfers ownership of:
 		//  - 'ad::default_schema', 'ad::attributes'
 		PPHR_5passwordTrue(ret, vars1, reply, account_details);
+		const char* safe_vars1_password = vars1.password ? vars1.password : "";
+		const size_t vars1_password_len = strlen(safe_vars1_password);
 
-		if (vars1.pass_len==0 && strlen(vars1.password)==0) {
+		if (vars1.pass_len==0 && vars1_password_len==0) {
 			ret=true;
 			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , password=''\n", (*myds), (*myds)->sess, vars1.user);
 		}
 		// For empty passwords client expects either 'OK' or 'ERR'
-		else if (vars1.pass_len == 0 && strlen(vars1.password) != 0) {
+		else if (vars1.pass_len == 0 && vars1_password_len != 0) {
 			ret=false;
 			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , password=''\n", (*myds), (*myds)->sess, vars1.user);
 		}
@@ -3077,12 +3079,9 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 				(*myds), (*myds)->sess, vars1.user, get_masked_pass(vars1.password).get(), auth_plugin_id
 			);
 #endif // debug
-			if (
-				auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD
-				&&
-				strlen(vars1.password) == 70
-				&&
-				strncasecmp(vars1.password,"$A$0",4)==0
+			if (auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD
+				&& vars1_password_len == 70
+				&& strncasecmp(safe_vars1_password,"$A$0",4)==0
 			) {
 				// We have a hashed caching_sha2_password
 				PPHR_sha2full(ret, vars1, AUTH_MYSQL_CACHING_SHA2_PASSWORD, vars1.passtype);
