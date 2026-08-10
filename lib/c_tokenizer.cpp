@@ -46,7 +46,7 @@ void tokenizer(tokenizer_t *result, const char* s, const char* delimiters, int e
 
 const char* free_tokenizer( tokenizer_t* tokenizer )
 {
-	if (tokenizer->s_length > (PROXYSQL_TOKENIZER_BUFFSIZE-1)) {
+	if (tokenizer->s && tokenizer->s != tokenizer->buffer) {
 		free(tokenizer->s);
 	}
 	tokenizer->s = NULL;
