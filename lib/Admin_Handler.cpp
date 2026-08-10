@@ -5233,13 +5233,14 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			tbh=dbh;
 			dbh=strdup("main");
 		}
-		if (strlen(tbh)>=3 && tbh[0]=='`' && tbh[strlen(tbh)-1]=='`') { // tablename is quoted
-			char *tbh_tmp=(char *)malloc(strlen(tbh)-1);
-			strncpy(tbh_tmp,tbh+1,strlen(tbh)-2);
-			tbh_tmp[strlen(tbh)-2]=0;
-			free(tbh);
-			tbh=tbh_tmp;
-		}
+	const size_t tbh_len = strlen(tbh);
+	if (tbh_len>=3 && tbh[0]=='`' && tbh[tbh_len-1]=='`') { // tablename is quoted
+		char *tbh_tmp=(char *)malloc(tbh_len-1);
+		strncpy(tbh_tmp,tbh+1,tbh_len-2);
+		tbh_tmp[tbh_len-2]=0;
+		free(tbh);
+		tbh=tbh_tmp;
+	}
 		int l=strBl+strlen(tbh)*3+strlen(dbh)-8;
 		char *buff=(char *)l_alloc(l+1);
 		snprintf(buff,l+1,strB,tbh,tbh,dbh,tbh);
