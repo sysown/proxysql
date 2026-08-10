@@ -223,32 +223,37 @@ enum sslstatus MySQL_Data_Stream::do_ssl_handshake() {
 	int n = SSL_do_handshake(ssl);
 	if (n == 1) {
 		//proxy_info("SSL handshake completed\n");
-		X509 *cert;
-		cert = SSL_get_peer_certificate(ssl);
+		X509 *cert = SSL_get_peer_certificate(ssl);
+#ifdef PROXYSQL31
+		client_cert_present = (cert != nullptr);
+		client_cert_verify_result = cert ? SSL_get_verify_result(ssl) : X509_V_OK;
+#endif
 		if (cert) {
 			GENERAL_NAMES *alt_names = (stack_st_GENERAL_NAME *)X509_get_ext_d2i((X509*)cert, NID_subject_alt_name, 0, 0);
-			int alt_name_count = sk_GENERAL_NAME_num(alt_names);
+			if (alt_names) {
+				int alt_name_count = sk_GENERAL_NAME_num(alt_names);
 
-			// Iterate all the SAN names, looking for SPIFFE identifier
-			for (int i = 0; i < alt_name_count; i++) {
-				GENERAL_NAME *san = sk_GENERAL_NAME_value(alt_names, i);
+				// Iterate all the SAN names, looking for SPIFFE identifier
+				for (int i = 0; i < alt_name_count; i++) {
+					GENERAL_NAME *san = sk_GENERAL_NAME_value(alt_names, i);
 
-				// We only care about URI names
-				if (san->type == GEN_URI) {
-					if (san->d.uniformResourceIdentifier->data) {
-						const char* resource_data =
-							reinterpret_cast<const char*>(san->d.uniformResourceIdentifier->data);
-						const char* spiffe_loc = strstr(resource_data, "spiffe");
+					// We only care about URI names
+					if (san->type == GEN_URI) {
+						if (san->d.uniformResourceIdentifier->data) {
+							const char* resource_data =
+								reinterpret_cast<const char*>(san->d.uniformResourceIdentifier->data);
+							const char* spiffe_loc = strstr(resource_data, "spiffe");
 
-						// First name starting with 'spiffe' is considered the match.
-						if (spiffe_loc == resource_data) {
-							x509_subject_alt_name = strdup(resource_data);
+							// First name starting with 'spiffe' is considered the match.
+							if (spiffe_loc == resource_data) {
+								x509_subject_alt_name = strdup(resource_data);
+							}
 						}
 					}
 				}
-			}
 
-			sk_GENERAL_NAME_pop_free(alt_names, GENERAL_NAME_free);
+				sk_GENERAL_NAME_pop_free(alt_names, GENERAL_NAME_free);
+			}
 			X509_free(cert);
 		} else {
 			// we currently disable this annoying error
@@ -258,12 +263,10 @@ enum sslstatus MySQL_Data_Stream::do_ssl_handshake() {
 		}
 		// In case the supplied certificate has a 'SAN'-'URI' identifier
 		// starting with 'spiffe', client certificate verification is performed.
-		if (x509_subject_alt_name != NULL) {
+		if (x509_subject_alt_name != NULL && SSL_get_verify_result(ssl) != X509_V_OK) {
 			long rc = SSL_get_verify_result(ssl);
-			if (rc != X509_V_OK) {
-				proxy_error("Disconnecting %s:%d: X509 client SSL certificate verify error: (%ld:%s)\n" , addr.addr, addr.port, rc, X509_verify_cert_error_string(rc));
-				return SSLSTATUS_FAIL;
-			}
+			proxy_error("Disconnecting %s:%d: X509 client SSL certificate verify error: (%ld:%s)\n" , addr.addr, addr.port, rc, X509_verify_cert_error_string(rc));
+			return SSLSTATUS_FAIL;
 		}
 	}
 	status = get_sslstatus(ssl, n);
@@ -347,6 +350,11 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	passthrough_cleartext = NULL;
 	tmp_charset = 0;
 	x509_subject_alt_name=NULL;
+#ifdef PROXYSQL31
+	client_cert_present=false;
+	client_cert_verify_result=X509_V_OK;
+	frontend_authenticated_via_spiffe=false;
+#endif
 	ssl=NULL;
 	rbio_ssl = NULL;
 	wbio_ssl = NULL;

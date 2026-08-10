@@ -58,6 +58,109 @@ static const char *plugins[3] = {
 	"caching_sha2_password",
 };
 
+#ifdef PROXYSQL31
+enum class frontend_auth_context : uint8_t {
+	INITIAL_HANDSHAKE,
+	COM_CHANGE_USER,
+	PASSTHROUGH
+};
+
+struct frontend_certificate_policy_result {
+	bool allowed { true };
+	bool has_spiffe_id { false };
+};
+
+static frontend_certificate_policy_result evaluate_frontend_certificate_policy(
+	MySQL_Data_Stream* myds,
+	const json& attrs,
+	const unsigned char* user,
+	frontend_auth_context context,
+	int calling_line,
+	const char* calling_func
+) {
+	frontend_certificate_policy_result result;
+	const char* username = user ? reinterpret_cast<const char*>(user) : "unknown";
+	if (!attrs.is_object()) {
+		proxy_error("%d:%s(): Invalid user attributes for user %s\n", calling_line, calling_func, username);
+		result.allowed = false;
+		return result;
+	}
+	const auto spiffe_id = attrs.find("spiffe_id");
+	result.has_spiffe_id = spiffe_id != attrs.end();
+
+	const auto require_x509 = attrs.find("require_x509");
+	if (require_x509 != attrs.end()) {
+		if (!require_x509->is_boolean()) {
+			proxy_error("%d:%s(): Invalid require_x509 type for user %s\n", calling_line, calling_func, username);
+			result.allowed = false;
+			return result;
+		}
+		if (require_x509->get<bool>()) {
+			result.allowed = myds
+				&& myds->encrypted
+				&& myds->ssl
+				&& myds->client_cert_present
+				&& myds->client_cert_verify_result == X509_V_OK;
+			if (!result.allowed) {
+				proxy_error("%d:%s(): Frontend X509 authentication error for user %s: context=%u cert_present=%s verify_result=%ld\n",
+					calling_line, calling_func, username, static_cast<unsigned>(context),
+					(myds && myds->client_cert_present) ? "yes" : "no",
+					myds ? myds->client_cert_verify_result : X509_V_ERR_UNSPECIFIED);
+				return result;
+			}
+		}
+	}
+
+	if (spiffe_id == attrs.end()) return result;
+	if (!spiffe_id->is_string()) {
+		proxy_error("%d:%s(): Invalid spiffe_id type for user %s\n", calling_line, calling_func, username);
+		result.allowed = false;
+		return result;
+	}
+
+	result.allowed = false;
+	const std::string spiffe_val = spiffe_id->get<std::string>();
+	if (myds && myds->x509_subject_alt_name) {
+		if (spiffe_val.rfind("!", 0) == 0 && spiffe_val.size() > 1) {
+			string str_spiffe_regex { spiffe_val.substr(1) };
+			re2::RE2::Options opts = re2::RE2::Options(RE2::Quiet);
+			re2::RE2 subject_alt_regex(str_spiffe_regex, opts);
+			result.allowed = re2::RE2::FullMatch(myds->x509_subject_alt_name, subject_alt_regex);
+		} else if (strncmp(spiffe_val.c_str(), "spiffe://", strlen("spiffe://")) == 0) {
+			result.allowed = strcmp(spiffe_val.c_str(), myds->x509_subject_alt_name) == 0;
+		}
+	}
+	if (!result.allowed) {
+		proxy_error("%d:%s(): SPIFFE Authentication error for user %s . spiffed_id expected : %s , received: %s\n",
+			calling_line, calling_func, username, spiffe_val.c_str(),
+			(myds && myds->x509_subject_alt_name) ? myds->x509_subject_alt_name : "none");
+	}
+	return result;
+}
+
+static frontend_certificate_policy_result evaluate_frontend_certificate_policy(
+	MySQL_Data_Stream* myds,
+	const char* attributes,
+	const unsigned char* user,
+	frontend_auth_context context,
+	int calling_line,
+	const char* calling_func
+) {
+	frontend_certificate_policy_result result;
+	if (!attributes || !*attributes) return result;
+
+	try {
+		const json attrs = json::parse(attributes);
+		return evaluate_frontend_certificate_policy(myds, attrs, user, context, calling_line, calling_func);
+	} catch (const nlohmann::json::exception& e) {
+		proxy_error("%d:%s(): Invalid user attributes for user %s: %s\n", calling_line, calling_func,
+			user ? reinterpret_cast<const char*>(user) : "unknown", e.what());
+		result.allowed = false;
+		return result;
+	}
+}
+#endif
+
 #include "MySQL_encode.h"
 
 char* get_password(account_details_t& ad, PASSWORD_TYPE::E passtype) {
@@ -91,13 +194,23 @@ char* get_password(account_details_t& ad, PASSWORD_TYPE::E passtype) {
 #ifdef DEBUG
 void debug_spiffe_id(const unsigned char *user, const char *attributes, int __line, const char *__func) {
 	if (attributes!=NULL && strlen(attributes)) {
-		json j = nlohmann::json::parse(attributes);
-		auto spiffe_id = j.find("spiffe_id");
-		if (spiffe_id != j.end()) {
-			std::string spiffe_val = j["spiffe_id"].get<std::string>();
-			proxy_info("%d:%s(): Attributes for user %s: %s . Spiffe_id: %s\n" , __line, __func, user, attributes, spiffe_val.c_str());
-		} else {
-			proxy_info("%d:%s(): Attributes for user %s: %s\n" , __line, __func, user, attributes);
+		try {
+			json j = nlohmann::json::parse(attributes);
+			if (!j.is_object()) {
+				proxy_info("%d:%s(): Invalid attributes for user %s: %s\n", __line, __func, user, attributes);
+				return;
+			}
+			auto spiffe_id = j.find("spiffe_id");
+			if (spiffe_id != j.end() && spiffe_id->is_string()) {
+				std::string spiffe_val = spiffe_id->get<std::string>();
+				proxy_info("%d:%s(): Attributes for user %s: %s . Spiffe_id: %s\n" , __line, __func, user, attributes, spiffe_val.c_str());
+			} else if (spiffe_id != j.end()) {
+				proxy_info("%d:%s(): Invalid spiffe_id for user %s: %s\n", __line, __func, user, attributes);
+			} else {
+				proxy_info("%d:%s(): Attributes for user %s: %s\n" , __line, __func, user, attributes);
+			}
+		} catch (const nlohmann::json::exception& e) {
+			proxy_info("%d:%s(): Invalid attributes for user %s: %s\n", __line, __func, user, e.what());
 		}
 	}
 }
@@ -3400,42 +3513,81 @@ __exit_process_pkt_handshake_response:
 }
 
 bool MySQL_Protocol::verify_user_attributes(int calling_line, const char *calling_func, const unsigned char *user) {
+#ifdef PROXYSQL31
+	const char* attributes = (*myds)->sess->user_attributes;
+	if (!attributes || !*attributes) {
+		const auto policy = evaluate_frontend_certificate_policy(
+			*myds, attributes, user, frontend_auth_context::INITIAL_HANDSHAKE, calling_line, calling_func);
+		if (!policy.allowed) return false;
+		(*myds)->frontend_authenticated_via_spiffe = policy.has_spiffe_id;
+		return true;
+	}
+	try {
+		const json attrs = json::parse(attributes);
+		const auto policy = evaluate_frontend_certificate_policy(
+			*myds, attrs, user, frontend_auth_context::INITIAL_HANDSHAKE, calling_line, calling_func);
+		if (!policy.allowed) return false;
+		(*myds)->frontend_authenticated_via_spiffe = policy.has_spiffe_id;
+		const auto default_transaction_isolation = attrs.find("default-transaction_isolation");
+		if (default_transaction_isolation != attrs.end() && default_transaction_isolation->is_string()) {
+			const std::string value = default_transaction_isolation->get<std::string>();
+			mysql_variables.client_set_value((*myds)->sess, SQL_ISOLATION_LEVEL, value.c_str());
+		}
+	} catch (const nlohmann::json::exception& e) {
+		proxy_error("%d:%s(): Invalid user attributes for user %s: %s\n", calling_line, calling_func,
+			user ? reinterpret_cast<const char*>(user) : "unknown", e.what());
+		return false;
+	}
+	return true;
+#else
 	bool ret = true;
 	if ((*myds)->sess->user_attributes) {
 		char *a = (*myds)->sess->user_attributes; // no copy, just pointer
 		if (strlen(a)) {
-			json j = nlohmann::json::parse(a);
-			auto spiffe_id = j.find("spiffe_id");
-			if (spiffe_id != j.end()) {
-				// at this point, we completely ignore any password specified so far
-				// we assume authentication failure so far
-				ret = false;
-				std::string spiffe_val = j["spiffe_id"].get<std::string>();
-				if ((*myds)->x509_subject_alt_name) {
-					if (spiffe_val.rfind("!", 0) == 0 && spiffe_val.size() > 1) {
-						string str_spiffe_regex { spiffe_val.substr(1) };
-						re2::RE2::Options opts = re2::RE2::Options(RE2::Quiet);
-						re2::RE2 subject_alt_regex(str_spiffe_regex, opts);
+			try {
+				json j = nlohmann::json::parse(a);
+				if (!j.is_object()) {
+					proxy_error("%d:%s(): Invalid user attributes for user %s\n", calling_line, calling_func, user);
+					return false;
+				}
+				auto spiffe_id = j.find("spiffe_id");
+				if (spiffe_id != j.end()) {
+					ret = false;
+					if (!spiffe_id->is_string()) {
+						proxy_error("%d:%s(): Invalid spiffe_id type for user %s\n", calling_line, calling_func, user);
+						return false;
+					}
+					std::string spiffe_val = spiffe_id->get<std::string>();
+					if ((*myds)->x509_subject_alt_name) {
+						if (spiffe_val.rfind("!", 0) == 0 && spiffe_val.size() > 1) {
+							string str_spiffe_regex { spiffe_val.substr(1) };
+							re2::RE2::Options opts = re2::RE2::Options(RE2::Quiet);
+							re2::RE2 subject_alt_regex(str_spiffe_regex, opts);
 
-						ret = re2::RE2::FullMatch((*myds)->x509_subject_alt_name, subject_alt_regex);
-					} else if (strncmp(spiffe_val.c_str(), "spiffe://", strlen("spiffe://"))==0) {
-						if (strcmp(spiffe_val.c_str(), (*myds)->x509_subject_alt_name)==0) {
-							ret = true;
+							ret = re2::RE2::FullMatch((*myds)->x509_subject_alt_name, subject_alt_regex);
+						} else if (strncmp(spiffe_val.c_str(), "spiffe://", strlen("spiffe://"))==0) {
+							if (strcmp(spiffe_val.c_str(), (*myds)->x509_subject_alt_name)==0) {
+								ret = true;
+							}
 						}
 					}
+					if (ret == false) {
+						proxy_error("%d:%s(): SPIFFE Authentication error for user %s . spiffed_id expected : %s , received: %s\n", calling_line, calling_func, user, spiffe_val.c_str(), ((*myds)->x509_subject_alt_name ? (*myds)->x509_subject_alt_name : "none"));
+					}
 				}
-				if (ret == false) {
-					proxy_error("%d:%s(): SPIFFE Authentication error for user %s . spiffed_id expected : %s , received: %s\n", calling_line, calling_func, user, spiffe_val.c_str(), ((*myds)->x509_subject_alt_name ? (*myds)->x509_subject_alt_name : "none"));
+				auto default_transaction_isolation = j.find("default-transaction_isolation");
+				if (default_transaction_isolation != j.end() && default_transaction_isolation->is_string()) {
+					std::string default_transaction_isolation_value = default_transaction_isolation->get<std::string>();
+					mysql_variables.client_set_value((*myds)->sess, SQL_ISOLATION_LEVEL, default_transaction_isolation_value.c_str());
 				}
-			}
-			auto default_transaction_isolation = j.find("default-transaction_isolation");
-			if (default_transaction_isolation != j.end()) {
-				std::string default_transaction_isolation_value = j["default-transaction_isolation"].get<std::string>();
-				mysql_variables.client_set_value((*myds)->sess, SQL_ISOLATION_LEVEL, default_transaction_isolation_value.c_str());
+			} catch (const nlohmann::json::exception& e) {
+				proxy_error("%d:%s(): Invalid user attributes for user %s: %s\n", calling_line, calling_func, user, e.what());
+				return false;
 			}
 		}
 	}
 	return ret;
+#endif
 }
 
 bool MySQL_Protocol::user_attributes_has_spiffe(int calling_line, const char *calling_func, const unsigned char *user) {
@@ -3443,10 +3595,16 @@ bool MySQL_Protocol::user_attributes_has_spiffe(int calling_line, const char *ca
 	if ((*myds)->sess->user_attributes) {
 		char *a = (*myds)->sess->user_attributes; // no copy, just pointer
 		if (strlen(a)) {
-			json j = nlohmann::json::parse(a);
-			auto spiffe_id = j.find("spiffe_id");
-			if (spiffe_id != j.end()) {
-				ret = true;
+			try {
+				json j = nlohmann::json::parse(a);
+				if (!j.is_object()) return false;
+				auto spiffe_id = j.find("spiffe_id");
+				if (spiffe_id != j.end()) {
+					ret = true;
+				}
+			} catch (const nlohmann::json::exception& e) {
+				proxy_error("%d:%s(): Invalid user attributes for user %s: %s\n", calling_line, calling_func, user, e.what());
+				return false;
 			}
 		}
 	}

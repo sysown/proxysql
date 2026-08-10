@@ -131,6 +131,11 @@ class MySQL_Data_Stream
 	MySQL_Session *sess;  // pointer to the session using this data stream
 	MySQL_Backend *mybe;  // if this is a connection to a mysql server, this points to a backend structure
 	char *x509_subject_alt_name;
+#ifdef PROXYSQL31
+	bool client_cert_present;
+	long client_cert_verify_result;
+	bool frontend_authenticated_via_spiffe;
+#endif
 	SSL *ssl;
 	BIO *rbio_ssl;
 	BIO *wbio_ssl;
