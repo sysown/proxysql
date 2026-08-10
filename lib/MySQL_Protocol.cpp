@@ -2483,6 +2483,7 @@ bool MySQL_Protocol::PPHR_verify_sha2(
 			}
 			free(double_hashed_password);
 		} else if (passformat == AUTH_MYSQL_CACHING_SHA2_PASSWORD) {
+			if (vars1.password == NULL) return false;
 			assert(strlen(vars1.password) == 70);
 			string sp = string(vars1.password);
 			// MySQL stores rounds as 3-char zero-padded uppercase hex of (rounds/1000).
@@ -2542,6 +2543,10 @@ void MySQL_Protocol::PPHR_sha2full(
 			}
 			free(double_hashed_password);
 		} else if (passformat == AUTH_MYSQL_CACHING_SHA2_PASSWORD) {
+			if (vars1.password == NULL) {
+				assert(0);
+				return;
+			}
 			assert(strlen(vars1.password) == 70);
 			string sp = string(vars1.password);
 			// MySQL stores rounds as 3-char zero-padded uppercase hex of (rounds/1000) — see
