@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <string>
+#include <algorithm>
 #include <sstream>
 #include <chrono>
 #include <thread>
@@ -153,7 +154,9 @@ bool encodeNumericBinary(uint8_t* out, const char* numStr) {
 
     // Combine integer and fractional parts into a single string of digits
     char combined[128] = { 0 };
-    strncpy(combined, numericPart, intPartLen);
+    size_t copy_len = std::min(intPartLen, sizeof(combined)-1);
+    memcpy(combined, numericPart, copy_len);
+    combined[copy_len] = 0;
     if (fracPartLen > 0) {
         strncat(combined, dotPos + 1, fracPartLen);
     }
@@ -173,7 +176,8 @@ bool encodeNumericBinary(uint8_t* out, const char* numStr) {
     // Parse the padded string into 4-digit groups
     for (size_t i = 0; i < paddedLen; i += 4) {
         char group[5] = { 0 }; // Temporary buffer for a group of up to 4 digits
-        strncpy(group, combined + i, 4);
+        memcpy(group, combined + i, 4);
+        group[4] = 0;
         digits[digitCount++] = static_cast<int16_t>(htons(static_cast<uint16_t>(atoi(group)))); // Convert group to 16-bit integer
     }
 
