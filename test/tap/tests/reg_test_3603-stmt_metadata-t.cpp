@@ -397,14 +397,14 @@ int update_and_check(
 
 		{
 			if (end_time) {
-				snprintf(buf1,sizeof(buf1),"%d:%d:%d", end_time->hour, end_time->minute, end_time->second);
+				snprintf(buf1,sizeof(buf1),"%u:%u:%u", end_time->hour, end_time->minute, end_time->second);
 			} else {
 				snprintf(buf1,sizeof(buf1),"NULL");
 			}
 			if (is_null[4]) {
 				snprintf(buf2,sizeof(buf2),"NULL");
 			} else {
-				snprintf(buf2,sizeof(buf2),"%d:%d:%d", ts_end_time.hour, ts_end_time.minute, ts_end_time.second);
+				snprintf(buf2,sizeof(buf2),"%u:%u:%u", ts_end_time.hour, ts_end_time.minute, ts_end_time.second);
 			}
 			if (strcmp(buf1,buf2)==0)
 				matches++;
@@ -468,14 +468,14 @@ int update_and_check(
 
 		{
 			if (st_time) {
-				snprintf(buf1,sizeof(buf1),"%d:%d:%d", st_time->hour, st_time->minute, st_time->second);
+				snprintf(buf1,sizeof(buf1),"%u:%u:%u", st_time->hour, st_time->minute, st_time->second);
 			} else {
 				snprintf(buf1,sizeof(buf1),"NULL");
 			}
 			if (is_null[10]) {
 				snprintf(buf2,sizeof(buf2),"NULL");
 			} else {
-				snprintf(buf2,sizeof(buf2),"%d:%d:%d", ts_st_time.hour, ts_st_time.minute, ts_st_time.second);
+				snprintf(buf2,sizeof(buf2),"%u:%u:%u", ts_st_time.hour, ts_st_time.minute, ts_st_time.second);
 			}
 			if (strcmp(buf1,buf2)==0)
 				matches++;
