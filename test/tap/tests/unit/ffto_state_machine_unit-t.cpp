@@ -9,6 +9,7 @@
 
 #include <cstring>
 #include <vector>
+#include <string_view>
 
 extern __thread int mysql_thread___ffto_max_buffer_size;
 extern __thread int pgsql_thread___ffto_max_buffer_size;
@@ -92,7 +93,7 @@ static void test_pgsql_ffto_simple_query_message() {
 	pgsql_thread___ffto_max_buffer_size = 16 * 1024 * 1024;
 	PgSQLFFTO ffto(nullptr);
 	const char* query = "SELECT 1";
-	size_t qlen = strlen(query) + 1;
+	const size_t qlen = std::string_view(query).size() + 1;
 	uint32_t msg_len = htonl((uint32_t)(qlen + 4));
 	std::vector<char> msg(1 + 4 + qlen);
 	msg[0] = 'Q';
@@ -124,7 +125,7 @@ static void test_pgsql_ffto_parse_message() {
 	 */
 	const char* query = "SELECT 1";
 	const size_t name_len = 1; /* empty name + NUL */
-	const size_t query_len = strlen(query) + 1;
+	const size_t query_len = std::string_view(query).size() + 1;
 	const size_t payload_len = name_len + query_len + 2;
 	const uint32_t wire_len = (uint32_t)(4 + payload_len);
 	uint32_t msg_len_be = htonl(wire_len);
