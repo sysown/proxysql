@@ -90,9 +90,7 @@ MARIADB_CHARSET_INFO * proxysql_find_charset_collate_names(const char *csname_, 
 		csname = csname_;
 	}
 		if (strncasecmp(collatename_,(const char *)"utf8mb3", 7)==0) {
-			memcpy(buf, "utf8", 4);
-			buf[4] = '\0';
-			snprintf(buf + 4, sizeof(buf) - 4, "%s", collatename_ + 7);
+			snprintf(buf, sizeof(buf), "utf8%s", collatename_ + 7);
 			collatename = buf;
 		} else {
 		collatename = collatename_;
