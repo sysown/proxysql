@@ -3612,10 +3612,6 @@ bool MySQL_Protocol::verify_user_attributes(int calling_line, const char *callin
 		if (strlen(a)) {
 			try {
 				json j = nlohmann::json::parse(a);
-				if (!j.is_object()) {
-					proxy_error("%d:%s(): Invalid user attributes for user %s\n", calling_line, calling_func, user);
-					return false;
-				}
 				auto spiffe_id = j.find("spiffe_id");
 				if (spiffe_id != j.end()) {
 					ret = false;

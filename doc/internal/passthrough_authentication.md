@@ -260,13 +260,15 @@ For a row-backed authentication attempt, the security ordering is:
 row lookup
   -> require_x509 / SPIFFE classification
   -> username allowlist
-  -> pass-through TLS gate
   -> cache lookup
+  -> on cache miss, pass-through TLS gate
   -> cleartext request
   -> backend probe
 ```
 
-Cold-probe completion sends the frontend OK from `MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT()`. Certificate policy must therefore be decided before dispatch, rather than relying only on the normal handshake epilogue. The frontend certificate is not sent to the backend, and this ordering does not change the unknown-user TLS transport gate into a per-user X.509 rule.
+Row-backed `require_x509` is evaluated before cache lookup, so the certificate policy applies identically on cold and warm paths. A warm cache hit is verified inline before the miss-only TLS gate. `mysql-passthrough_auth_require_tls` protects acquisition of the cleartext password and backend-probe dispatch on a cache miss; it does not reject an inline warm-cache hit.
+
+Cold-probe completion sends the frontend OK from `MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT()`. Certificate policy must therefore be decided before dispatch, rather than relying only on the normal handshake epilogue. The frontend certificate is not sent to the backend. Unknown-user pass-through has no row attributes and remains subject to the same existing global, miss-only TLS gate rather than a per-user X.509 rule.
 
 ### 7.2 Rate limiting
 

@@ -15,6 +15,7 @@
 
 static constexpr const char* USERNAME = "tap_x509_tier_gate";
 static constexpr const char* PASSWORD = "tap-x509-tier-password";
+static constexpr const char* NONOBJECT_USERNAME = "tap_x509_tier_nonobject";
 
 static bool do_query(MYSQL* mysql, const char* query) {
 	if (mysql_query(mysql, query) == 0) return true;
@@ -61,7 +62,7 @@ int main() {
 		return EXIT_FAILURE;
 	}
 
-	plan(5);
+	plan(6);
 	MYSQL* admin = mysql_init(NULL);
 	const bool admin_connected = admin && mysql_real_connect(admin, cl.host, cl.admin_username,
 		cl.admin_password, NULL, cl.admin_port, NULL, 0);
@@ -77,12 +78,14 @@ int main() {
 	ok(version_read, "Read ProxySQL admin-version as %d.%d", major, minor);
 
 	const bool user_provisioned = do_query(admin,
-		"DELETE FROM mysql_users WHERE username='tap_x509_tier_gate'") &&
+		"DELETE FROM mysql_users WHERE username IN "
+		"('tap_x509_tier_gate','tap_x509_tier_nonobject')") &&
 		do_query(admin,
 			"INSERT INTO mysql_users(username,password,default_hostgroup,active,attributes) VALUES "
-			"('tap_x509_tier_gate','tap-x509-tier-password',0,1,'{\"require_x509\":true}')") &&
+			"('tap_x509_tier_gate','tap-x509-tier-password',0,1,'{\"require_x509\":true}'),"
+			"('tap_x509_tier_nonobject','tap-x509-tier-password',0,1,'[]')") &&
 		do_query(admin, "LOAD MYSQL USERS TO RUNTIME");
-	ok(user_provisioned, "Provisioned the dedicated require_x509 tier-gate user");
+	ok(user_provisioned, "Provisioned the dedicated require_x509 tier-gate users");
 
 	const bool has_feature = major > 3 || (major == 3 && minor >= 1);
 	const unsigned int expected = has_feature ? ER_ACCESS_DENIED_ERROR : 0;
@@ -92,10 +95,17 @@ int main() {
 		"require_x509 is %s on ProxySQL %d.%d: expected errno=%u, got errno=%u",
 		has_feature ? "enforced" : "unrecognized", major, minor, expected, actual);
 
+	const unsigned int nonobject_actual = user_provisioned
+		? try_plaintext_frontend_connect(cl, NONOBJECT_USERNAME, PASSWORD) : UINT_MAX;
+	ok(nonobject_actual == expected,
+		"Valid non-object attributes are %s on ProxySQL %d.%d: expected errno=%u, got errno=%u",
+		has_feature ? "rejected" : "ignored", major, minor, expected, nonobject_actual);
+
 	const bool users_cleaned = do_query(admin,
-		"DELETE FROM mysql_users WHERE username='tap_x509_tier_gate'") &&
+		"DELETE FROM mysql_users WHERE username IN "
+		"('tap_x509_tier_gate','tap_x509_tier_nonobject')") &&
 		do_query(admin, "LOAD MYSQL USERS TO RUNTIME");
-	ok(users_cleaned, "Cleanup removed the dedicated require_x509 tier-gate user");
+	ok(users_cleaned, "Cleanup removed the dedicated require_x509 tier-gate users");
 	mysql_close(admin);
 	return exit_status();
 }
