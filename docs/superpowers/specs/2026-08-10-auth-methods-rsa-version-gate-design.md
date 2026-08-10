@@ -6,7 +6,7 @@ Make `test_auth_methods-t` expect non-TLS `caching_sha2_password` RSA full authe
 
 ## Runtime capability detection
 
-The test will query `SELECT @@version` through the already-established ProxySQL Admin connection. It will parse the leading major and minor numeric components and derive one capability flag:
+The test will query `SELECT @@version` through the already-established ProxySQL Admin connection. It will parse non-negative leading major and minor numeric components and derive one capability flag:
 
 - `false` for versions below 3.1;
 - `true` for versions 3.1 and newer.

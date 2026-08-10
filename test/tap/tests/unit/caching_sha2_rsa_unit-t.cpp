@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <memory>
 #ifdef __linux__
+#include <chrono>
 #include <condition_variable>
 #include <mutex>
 #endif
@@ -28,9 +29,10 @@ public:
 	TempDir() {
 		char path_template[] = "/tmp/proxysql-caching-sha2-rsa-XXXXXX"; // NOSONAR: mkdtemp creates this test directory atomically with owner-only permissions.
 		char* created = mkdtemp(path_template);
-		if (created != nullptr) {
-			path_ = created;
+		if (created == nullptr) {
+			BAIL_OUT("failed to create an isolated RSA test directory");
 		}
+		path_ = created;
 	}
 
 	~TempDir() {
@@ -659,10 +661,14 @@ int main() {
 		bool observed_contended_attempt = false;
 		{
 			std::unique_lock<std::mutex> lock(publication_lock_observer_mutex);
-			publication_lock_observer_cv.wait(lock, []() {
-				return publication_lock_attempted || publication_reload_finished;
-			});
-			observed_contended_attempt = publication_lock_attempted &&
+			const bool observer_signaled = publication_lock_observer_cv.wait_for(
+				lock,
+				std::chrono::seconds(5),
+				[]() {
+					return publication_lock_attempted || publication_reload_finished;
+				}
+			);
+			observed_contended_attempt = observer_signaled && publication_lock_attempted &&
 				publication_lock_contended && !publication_reload_finished;
 		}
 		ok(observed_contended_attempt,

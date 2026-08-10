@@ -159,13 +159,13 @@ bool parse_proxysql_version(const string& version, int& major, int& minor) {
 
 	const auto major_result = std::from_chars(first, last, parsed_major);
 	if (major_result.ec != std::errc() || major_result.ptr == first ||
-		major_result.ptr == last || *major_result.ptr != '.') {
+		major_result.ptr == last || *major_result.ptr != '.' || parsed_major < 0) {
 		return false;
 	}
 
 	const char* minor_first = major_result.ptr + 1;
 	const auto minor_result = std::from_chars(minor_first, last, parsed_minor);
-	if (minor_result.ec != std::errc() || minor_result.ptr == minor_first) {
+	if (minor_result.ec != std::errc() || minor_result.ptr == minor_first || parsed_minor < 0) {
 		return false;
 	}
 
@@ -1418,7 +1418,7 @@ int main(int argc, char** argv) {
 		+ non_warmup_tests_fail_count * NUM_CLIENT_THREADS
 		+ non_warmup_tests_scs_count * NUM_CLIENT_THREADS * 2
 		+ non_warmup_tests_scs_ratio
-		+ 9
+		+ 11
 		+ (cl.use_noise ? 4 : 0)
 	);
 
@@ -1432,6 +1432,14 @@ int main(int argc, char** argv) {
 	ok(
 		!parse_proxysql_version("invalid", version_major, version_minor),
 		"ProxySQL version parser rejects malformed versions"
+	);
+	ok(
+		!parse_proxysql_version("-3.1", version_major, version_minor),
+		"ProxySQL version parser rejects a negative major version"
+	);
+	ok(
+		!parse_proxysql_version("3.-1", version_major, version_minor),
+		"ProxySQL version parser rejects a negative minor version"
 	);
 	ok(!supports_caching_sha2_rsa(3, 0), "ProxySQL 3.0 retains the legacy RSA expectation");
 	ok(supports_caching_sha2_rsa(3, 1), "ProxySQL 3.1 enables RSA authentication expectations");

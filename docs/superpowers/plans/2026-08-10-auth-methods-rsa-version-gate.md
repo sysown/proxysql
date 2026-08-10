@@ -6,7 +6,7 @@
 
 **Architecture:** Read and parse the ProxySQL Admin `SELECT @@version` result once, then pass the derived RSA capability through the existing authentication expectation functions. Keep the legacy failure oracle below 3.1 and recognize the RSA packet exchange at or above 3.1.
 
-**Tech Stack:** C++11, MariaDB/MySQL C API, TAP test helpers.
+**Tech Stack:** C++17, MariaDB/MySQL C API, TAP test helpers.
 
 ## Global Constraints
 
@@ -29,7 +29,7 @@
 
 - [ ] **Step 1: Write failing boundary tests**
 
-Add TAP assertions with literal expectations for `2.7`, `3.0`, `3.1`, `4.0.11-113-g...`, and malformed input before defining the new helpers.
+Add TAP assertions with literal expectations for `2.7`, `3.0`, `3.1`, `4.0.11-113-g...`, negative components, and malformed input before defining the new helpers.
 
 - [ ] **Step 2: Run the focused build and verify RED**
 
