@@ -13,7 +13,14 @@
 #include <memory>
 
 static inline size_t safe_strlen(const char *s) {
-    return s ? std::char_traits<char>::length(s) : 0;
+    if (s == nullptr) {
+        return 0;
+    }
+    size_t len = 0;
+    while (s[len] != '\0') {
+        ++len;
+    }
+    return len;
 }
 
 const char* config_header = "########################################################################################\n"
