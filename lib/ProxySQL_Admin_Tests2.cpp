@@ -332,11 +332,13 @@ unsigned int ProxySQL_Admin::ProxySQL_Test___GenerateRandom_mysql_query_rules_fa
 	//ui.username = username_buf;
 	//ui.schemaname = schemaname_buf;
 	if (empty==false) {
-		memcpy(username_buf, "user_name_", sizeof("user_name_"));
+		memcpy(username_buf, "user_name_", 10);
+		username_buf[10] = '\0';
 	} else {
-		memcpy(username_buf, "", sizeof(""));
+		*username_buf = '\0';
 	}
-	memcpy(schemaname_buf, "shard_name_", sizeof("shard_name_"));
+	memcpy(schemaname_buf, "shard_name_", 11);
+	schemaname_buf[11] = '\0';
 	int _k;
 	for (unsigned int i=0; i<cnt; i++) {
 		_k = fastrand()%117 + 1;
