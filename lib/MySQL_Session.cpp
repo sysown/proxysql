@@ -1950,7 +1950,7 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 		const std::string_view safe_default_schema = default_schema ? std::string_view{default_schema} : std::string_view{};
 		const size_t default_schema_len = safe_default_schema.size();
 		client_myds->myconn->userinfo->set_schemaname(
-			safe_default_schema.data(), default_schema_len);
+			const_cast<char *>(safe_default_schema.data()), default_schema_len);
 	}
 
 		// Return the authed backend connection to the pool. It is valid and
@@ -1972,7 +1972,7 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 			const std::string_view safe_default_schema = default_schema ? std::string_view{default_schema} : std::string_view{};
 			const size_t default_schema_len = safe_default_schema.size();
 			bui->set_schemaname(
-				safe_default_schema.data(), default_schema_len);
+				const_cast<char *>(safe_default_schema.data()), default_schema_len);
 		}
 		mybe->server_myds->return_MySQL_Connection_To_Pool();
 	}
