@@ -391,7 +391,14 @@ bool GTID_Server_Data::read_next_gtid() {
 			events_read++;
 		}
 	} else {
-		size_t rec_msg_len = (l >= (int)sizeof(rec_msg)) ? (sizeof(rec_msg)-1) : (size_t)l;
+		if (l >= (int)sizeof(rec_msg)) {
+			pos += l + 1;
+			proxy_warning("GTID: oversized message from binlog reader on port %d for server %s:%d, disconnecting\n",
+				port, address, mysql_port);
+			active = false;
+			return false;
+		}
+		size_t rec_msg_len = (size_t)l;
 		memcpy(rec_msg, data + pos, rec_msg_len);
 		pos += l+1;
 		rec_msg[rec_msg_len] = 0;
@@ -408,7 +415,11 @@ bool GTID_Server_Data::read_next_gtid() {
 					}
 					ul = a-rec_msg-3;
 					{
-						size_t uuid_len = (ul >= 0 && (size_t)ul < sizeof(uuid_server)) ? (size_t)ul : (sizeof(uuid_server)-1);
+						if (ul < 0 || (size_t)ul >= sizeof(uuid_server)) {
+							invalid_msg = true;
+							break;
+						}
+						size_t uuid_len = (size_t)ul;
 						memcpy(uuid_server, rec_msg+3, uuid_len);
 						uuid_server[uuid_len] = 0;
 					}
@@ -427,7 +438,11 @@ bool GTID_Server_Data::read_next_gtid() {
 					}
 					ul = a-rec_msg-3;
 					{
-						size_t uuid_len = (ul >= 0 && (size_t)ul < sizeof(uuid_server)) ? (size_t)ul : (sizeof(uuid_server)-1);
+						if (ul < 0 || (size_t)ul >= sizeof(uuid_server)) {
+							invalid_msg = true;
+							break;
+						}
+						size_t uuid_len = (size_t)ul;
 						memcpy(uuid_server, rec_msg+3, uuid_len);
 						uuid_server[uuid_len] = 0;
 					}
