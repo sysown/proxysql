@@ -36,7 +36,7 @@ jobs:
     permissions: write-all
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # Inline build (CI-3p-* model, not the CI-trigger/CI-builds cache-chain
       # model used by the TAP families): no ccache pattern exists elsewhere
@@ -95,7 +95,7 @@ jobs:
 
       - name: Publish report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: pg-compat-report
           path: ${{ github.workspace }}/pg-compat-reports/pg-compat.xml

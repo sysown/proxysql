@@ -28,7 +28,7 @@ jobs:
 
     steps:
 
-    - uses: LouisBrunner/checks-action@v2.0.0
+    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
       id: checks
       if: always()
       with:
@@ -65,7 +65,7 @@ jobs:
       # off the private jenkins-build-scripts repo, so no GH_TOKEN_PROXYSQL PAT).
       # Sparse-checkout just that dir into proxysql/; the proxysql binary arrives
       # separately via the build handoff below (unpacked into the same proxysql/).
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         repository: ${{ github.repository }}
         ref: ${{ env.SHA }}
@@ -182,7 +182,7 @@ jobs:
 
     - name: Archive artifacts logs
       if: ${{ failure() && !cancelled() }}
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ${{ github.workflow }}-${{ env.SHA }}-logs-run#${{ github.run_number }}
         path: |
@@ -190,7 +190,7 @@ jobs:
           
     - name: Archive artifacts bin
       if: ${{ failure() && !cancelled() }}
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ${{ github.workflow }}-${{ env.SHA }}-bin-run#${{ github.run_number }}
         path: |
@@ -199,7 +199,7 @@ jobs:
           proxysql/libs/
 #          proxysql/deps/
             
-    - uses: LouisBrunner/checks-action@v2.0.0
+    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
       if: always()
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
