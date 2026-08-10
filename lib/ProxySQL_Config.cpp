@@ -2537,7 +2537,7 @@ int ProxySQL_Config::Read_PgSQL_Users_from_configfile(std::string& error) {
 		const size_t attributes_len = attributes.size();
 		const size_t query_len = query_base_len + username_len + password_len + safe_comment_len + attributes_len + 128;
 		char* query = (char*)malloc(query_len);
-		sprintf(query, q, username.c_str(), password.c_str(), active, use_ssl, default_hostgroup, transaction_persistent, fast_forward, max_connections, attributes.c_str(), safe_comment);
+		snprintf(query, query_len, q, username.c_str(), password.c_str(), active, use_ssl, default_hostgroup, transaction_persistent, fast_forward, max_connections, attributes.c_str(), safe_comment);
 		admindb->execute(query);
 		if (o != o1) free(o);
 		free(o1);
