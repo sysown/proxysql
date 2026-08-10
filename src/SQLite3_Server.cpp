@@ -224,22 +224,38 @@ class sqlite3server_main_loop_listeners {
 
 	bool update_ifaces(char *list, char ***_ifaces) {
 		wrlock();
-		int i;
-		char **ifaces=*_ifaces;
+		int i = 0;
+		char **old_ifaces = *_ifaces;
+		char **new_ifaces = (char **)calloc(MAX_IFACES, sizeof(char *));
 		tokenizer_t tok;
 		tokenizer( &tok, list, ";", TOKENIZER_NO_EMPTIES );
 		const char* token;
-		ifaces=reset_ifaces(ifaces);
-		i=0;
-	for ( token = tokenize( &tok ) ; token && i < MAX_IFACES ; token = tokenize( &tok ) ) {
-		char *token_copy = strdup(token);
-		if (token_copy == NULL) {
+		if (new_ifaces == NULL) {
 			free_tokenizer( &tok );
+			wrunlock();
 			return false;
 		}
-		ifaces[i]=token_copy;
+		for ( token = tokenize( &tok ) ; token && i < MAX_IFACES ; token = tokenize( &tok ) ) {
+		char *token_copy = strdup(token);
+		if (token_copy == NULL) {
+			for (int j = 0; j < i; ++j) {
+				free(new_ifaces[j]);
+			}
+			free(new_ifaces);
+			free_tokenizer( &tok );
+			wrunlock();
+			return false;
+		}
+		new_ifaces[i]=token_copy;
 		i++;
 	}
+		if (old_ifaces != NULL) {
+			for (int j = 0; j < MAX_IFACES; ++j) {
+				free(old_ifaces[j]);
+			}
+			free(old_ifaces);
+		}
+		*_ifaces = new_ifaces;
 		free_tokenizer( &tok );
 		version++;
 		wrunlock();
@@ -593,7 +609,12 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 			const size_t proxy_addr_len = proxy_addr ? strlen(proxy_addr) : 0;
 			const size_t query_len = a_len + proxy_addr_len + 1;
 			query = (char *)malloc(query_len);
-			snprintf(query, query_len, a, proxy_addr);
+			if (query == NULL) {
+				GloSQLite3Server->send_MySQL_ERR(&sess->client_myds->myprot, 1105, "Out of memory");
+				run_query = false;
+				goto __run_query;
+			}
+			snprintf(query, query_len, a, proxy_addr ? proxy_addr : "");
 #else
 			query=l_strdup("SELECT '(ProxySQL SQLite3 Server)'");
 #endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP || TEST_READONLY || TEST_REPLICATIONLAG || TEST_RDS_BGD
@@ -603,15 +624,27 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 	}
 
 	if (query_no_space_length==SELECT_DB_USER_LEN) {
-			if (!strncasecmp(SELECT_DB_USER, query_no_space, query_no_space_length)) {
+		if (!strncasecmp(SELECT_DB_USER, query_no_space, query_no_space_length)) {
 				l_free(query_length,query);
+				query = NULL;
 				char *query1=(char *)"SELECT \"admin\" AS 'DATABASE()', \"%s\" AS 'USER()'";
 				const char* username = sess->client_myds->myconn->userinfo->username;
 				size_t query2_length = strlen(query1) + (username ? strlen(username) : 0) + 1;
 				char *query2=(char *)malloc(query2_length);
+				if (query2 == NULL) {
+					GloSQLite3Server->send_MySQL_ERR(&sess->client_myds->myprot, 1105, "Out of memory");
+					run_query = false;
+					goto __run_query;
+				}
 				snprintf(query2, query2_length, query1, username ? username : "");
 				query=l_strdup(query2);
-				query_length=strlen(query2)+1;
+				if (query == NULL) {
+					free(query2);
+					GloSQLite3Server->send_MySQL_ERR(&sess->client_myds->myprot, 1105, "Out of memory");
+					run_query = false;
+					goto __run_query;
+				}
+				query_length=strlen(query)+1;
 				free(query2);
 				goto __run_query;
 			}
@@ -999,12 +1032,13 @@ __run_query:
 					}
 #endif // TEST_READONLY || TEST_RDS_BGD
 #ifdef TEST_REPLICATIONLAG
+				const bool replica_status = strncasecmp("SELECT REPLICA STATUS ", query_no_space, k_select_replica_status_len) == 0;
 				if (
 					strncasecmp("SELECT SLAVE STATUS ", query_no_space, k_select_slave_status_len) == 0
-					|| strncasecmp("SELECT REPLICA STATUS ", query_no_space, k_select_replica_status_len) == 0
+					|| replica_status
 				) {
 					uint64_t addr_offset {
-						strstr(query_no_space, "REPLICA") ?  k_select_replica_status_len : k_select_slave_status_len
+						replica_status ? k_select_replica_status_len : k_select_slave_status_len
 					};
 					if (strlen(query_no_space) > k_select_slave_status_len + 5) {
 						pthread_mutex_lock(&GloSQLite3Server->test_replicationlag_mutex);
@@ -1017,7 +1051,7 @@ __run_query:
 					free(query);
 
 						string SELECT { "SELECT " + (rc ? std::to_string(*rc) : string { "null" }) + " AS " };
-						SELECT += strstr(query_no_space, "REPLICA") ? "Seconds_Behind_Source" : "Seconds_Behind_Master";
+						SELECT += replica_status ? "Seconds_Behind_Source" : "Seconds_Behind_Master";
 
 						query = static_cast<char*>(malloc(SELECT.size() + 1));
 						snprintf(query, SELECT.size() + 1, "%s", SELECT.c_str());
