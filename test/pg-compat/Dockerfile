@@ -74,11 +74,10 @@ COPY --from=nodebuild /usr/local/bin/node /usr/local/bin/node
 WORKDIR /pg-compat
 COPY requirements.txt .
 # --only-binary :all: installs from wheels exclusively, so no package gets to
-# run a setup.py at install time; every pin in requirements.txt publishes a
-# manylinux/pure-python wheel. --require-hashes is deliberately NOT used: it
-# would need a full transitive hash lock (pip-compile), which is a bigger
-# change than this PR should carry.
-RUN pip install --no-cache-dir --only-binary :all: -r requirements.txt
+# run a setup.py at install time. --require-hashes then makes the install abort
+# unless every downloaded artifact -- direct and transitive -- matches a SHA-256
+# recorded in requirements.txt, which is fully locked for that purpose.
+RUN pip install --no-cache-dir --only-binary :all: --require-hashes -r requirements.txt
 # Copy exactly what the suite needs rather than `COPY . .`, which would sweep
 # in the build context wholesale -- README/SPIKE notes, the driver sources
 # already compiled into the earlier stages, run-pg-compat.bash (a host-side
