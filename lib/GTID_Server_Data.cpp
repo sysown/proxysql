@@ -391,9 +391,10 @@ bool GTID_Server_Data::read_next_gtid() {
 			events_read++;
 		}
 	} else {
-		strncpy(rec_msg,data+pos,l);
+		size_t rec_msg_len = (l >= (int)sizeof(rec_msg)) ? (sizeof(rec_msg)-1) : (size_t)l;
+		memcpy(rec_msg, data + pos, rec_msg_len);
 		pos += l+1;
-		rec_msg[l] = 0;
+		rec_msg[rec_msg_len] = 0;
 		bool invalid_msg = false;
 		if (rec_msg[0]=='I') {
 			char *a = NULL;
@@ -406,8 +407,11 @@ bool GTID_Server_Data::read_next_gtid() {
 						break;
 					}
 					ul = a-rec_msg-3;
-					strncpy(uuid_server,rec_msg+3,ul);
-					uuid_server[ul] = 0;
+					{
+						size_t uuid_len = (ul >= 0 && (size_t)ul < sizeof(uuid_server)) ? (size_t)ul : (sizeof(uuid_server)-1);
+						memcpy(uuid_server, rec_msg+3, uuid_len);
+						uuid_server[uuid_len] = 0;
+					}
 					gtid_executed.add((std::string)uuid_server, (trxid_t)atoll(a+1));
 					events_read++;
 					break;
@@ -422,8 +426,11 @@ bool GTID_Server_Data::read_next_gtid() {
 						break;
 					}
 					ul = a-rec_msg-3;
-					strncpy(uuid_server,rec_msg+3,ul);
-					uuid_server[ul] = 0;
+					{
+						size_t uuid_len = (ul >= 0 && (size_t)ul < sizeof(uuid_server)) ? (size_t)ul : (sizeof(uuid_server)-1);
+						memcpy(uuid_server, rec_msg+3, uuid_len);
+						uuid_server[uuid_len] = 0;
+					}
 					{
 						TrxId_Interval iv(trxid_t(0));
 						if (!TrxId_Interval::parse(a+1, &iv)) {
