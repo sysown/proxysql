@@ -21,73 +21,38 @@ const int PS_GLOBAL_STATUS_FIELD_NUM = 9;
 static uint64_t stmt_compute_hash(char *user,
                                   char *schema, char *query,
                                   unsigned int query_length) {
-	size_t l = 0;
-	size_t user_len = strlen(user);
-	size_t schema_len = strlen(schema);
+	size_t user_len = user ? strlen(user) : 0;
+	size_t schema_len = schema ? strlen(schema) : 0;
 // two random seperators
 #define _COMPUTE_HASH_DEL1_ "-ujhtgf76y576574fhYTRDFwdt-"
 #define _COMPUTE_HASH_DEL2_ "-8k7jrhtrgJHRgrefgreRFewg6-"
 	size_t delimiter1_len = strlen(_COMPUTE_HASH_DEL1_);
 	size_t delimiter2_len = strlen(_COMPUTE_HASH_DEL2_);
-	l += user_len;
-	l += schema_len;
-	l += delimiter1_len;
-	l += delimiter2_len;
-	l += query_length;
-	size_t hash_input_length = l;
-	char *buf = (char *)malloc(hash_input_length);
-	if (!buf) {
-		return 0;
-	}
-	size_t copied = 0;
+	size_t hash_input_length = user_len + schema_len + delimiter1_len + delimiter2_len + query_length;
+
+	std::string hash_input;
+	hash_input.reserve(hash_input_length);
 
 	// write user
-	if (user_len) {
-		if (copied + user_len > hash_input_length) {
-			free(buf);
-			return 0;
-		}
-		memcpy(buf + copied, user, user_len);
-		copied += user_len;
+	if (user) {
+		hash_input.append(user, user_len);
 	}
 
 	// write delimiter1
-	if (copied + delimiter1_len > hash_input_length) {
-		free(buf);
-		return 0;
-	}
-	memcpy(buf + copied, _COMPUTE_HASH_DEL1_, delimiter1_len);
-	copied += delimiter1_len;
+	hash_input.append(_COMPUTE_HASH_DEL1_);
 
 	// write schema
-	if (schema_len) {
-		if (copied + schema_len > hash_input_length) {
-			free(buf);
-			return 0;
-		}
-		memcpy(buf + copied, schema, schema_len);
-		copied += schema_len;
+	if (schema) {
+		hash_input.append(schema, schema_len);
 	}
 
 	// write delimiter2
-	if (copied + delimiter2_len > hash_input_length) {
-		free(buf);
-		return 0;
-	}
-	memcpy(buf + copied, _COMPUTE_HASH_DEL2_, delimiter2_len);
-	copied += delimiter2_len;
+	hash_input.append(_COMPUTE_HASH_DEL2_);
 
 	// write query
-	if (copied + query_length > hash_input_length) {
-		free(buf);
-		return 0;
-	}
-	memcpy(buf + copied, query, query_length);
-	copied += query_length;
+	hash_input.append(query, query_length);
 
-	uint64_t hash = SpookyHash::Hash64(buf, copied, 0);
-	free(buf);
-	return hash;
+	return SpookyHash::Hash64(hash_input.data(), hash_input.size(), 0);
 }
 
 void MySQL_STMT_Global_info::compute_hash() {
