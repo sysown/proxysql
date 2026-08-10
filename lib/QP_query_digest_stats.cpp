@@ -35,21 +35,24 @@ QP_query_digest_stats::QP_query_digest_stats(const char* _user, const char* _sch
 	}
 	size_t _user_len = strlen(_user);
 	if (_user_len < sizeof(username_buf)) {
-		memcpy(username_buf, _user, _user_len + 1);
+		memcpy(username_buf, _user, _user_len);
+		username_buf[_user_len] = '\0';
 		username = username_buf;
 	} else {
 		username = strdup(_user);
 	}
 	size_t _schema_len = strlen(_schema);
 	if (_schema_len < sizeof(schemaname_buf)) {
-		memcpy(schemaname_buf, _schema, _schema_len + 1);
+		memcpy(schemaname_buf, _schema, _schema_len);
+		schemaname_buf[_schema_len] = '\0';
 		schemaname = schemaname_buf;
 	} else {
 		schemaname = strdup(_schema);
 	}
 	size_t _client_addr_len = strlen(_client_addr);
 	if (_client_addr_len < sizeof(client_address_buf)) {
-		memcpy(client_address_buf, _client_addr, _client_addr_len + 1);
+		memcpy(client_address_buf, _client_addr, _client_addr_len);
+		client_address_buf[_client_addr_len] = '\0';
 		client_address = client_address_buf;
 	} else {
 		client_address = strdup(_client_addr);
