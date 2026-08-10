@@ -20,7 +20,8 @@ using status   = std::string;
 using comment  = std::string;
 
 using mysql_server_def = std::tuple<int, hostname, port, status, int, comment>;
-using server_status    = std::tuple<hg_id,hostname,port,status,int64_t,int64_t,int32_t,comment>;
+using server_status =
+	std::tuple<hg_id, hostname, port, status, int64_t, int64_t, int32_t, comment, bool>;
 struct MYSQL_SERVER_STATUS_T {
 	enum {
 		HG_ID,
@@ -30,7 +31,8 @@ struct MYSQL_SERVER_STATUS_T {
 		WEIGHT,
 		MAX_CONNS,
 		USE_SSL,
-		COMMENT
+		COMMENT,
+		COMMENT_IS_SET
 	};
 };
 
@@ -246,14 +248,17 @@ std::pair<int,std::string> gen_invalid_keys_err(
  */
 bool check_present_and_type(const json& j, const std::vector<std::string>& path, const json::value_t& type);
 /**
- * @brief Check that the supplied 'server_status' are both equal.
+ * @brief Check whether an actual server status satisfies an expected status.
  *
- * @param srv_st1 The first server status to check.
- * @param srv_st2 The second server status to check.
+ * Optional fields omitted from the expected status are wildcards. Fields that
+ * are present, including an explicitly empty comment, are compared exactly.
  *
- * @return 'true' if both server status are equal, 'false' otherwise.
+ * @param exp_srv_st The expected server status.
+ * @param act_srv_st The actual server status.
+ *
+ * @return 'true' if the actual status satisfies every expectation.
  */
-bool matching_server_status(const server_status& srv_st1, const server_status& srv_st2);
+bool matching_server_status(const server_status& exp_srv_st, const server_status& act_srv_st);
 /**
  * @brief Check that the both supplied cluster states are equal, or equivalent.
  *
