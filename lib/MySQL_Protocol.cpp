@@ -142,10 +142,10 @@ static bool spiffe_identity_matches(MySQL_Data_Stream* myds, const std::string& 
 		const string pattern { expected.substr(1) };
 		re2::RE2::Options opts { re2::RE2::Quiet };
 		re2::RE2 subject_alt_regex(pattern, opts);
-		return re2::RE2::FullMatch(myds->x509_subject_alt_name, subject_alt_regex);
+		return re2::RE2::FullMatch(myds->x509_subject_alt_name.get(), subject_alt_regex);
 	}
 	return expected.rfind("spiffe://", 0) == 0
-		&& expected == myds->x509_subject_alt_name;
+		&& expected == myds->x509_subject_alt_name.get();
 }
 
 static bool evaluate_spiffe_identity(
@@ -171,7 +171,7 @@ static bool evaluate_spiffe_identity(
 	if (!allowed) {
 		proxy_error("%d:%s(): SPIFFE Authentication error for user %s . spiffed_id expected : %s , received: %s\n",
 			calling_line, calling_func, username, expected.c_str(),
-			(myds && myds->x509_subject_alt_name) ? myds->x509_subject_alt_name : "none");
+			(myds && myds->x509_subject_alt_name) ? myds->x509_subject_alt_name.get() : "none");
 	}
 	return allowed;
 }
@@ -3823,15 +3823,15 @@ bool MySQL_Protocol::verify_user_attributes(int calling_line, const char *callin
 							re2::RE2::Options opts = re2::RE2::Options(RE2::Quiet);
 							re2::RE2 subject_alt_regex(str_spiffe_regex, opts);
 
-							ret = re2::RE2::FullMatch((*myds)->x509_subject_alt_name, subject_alt_regex);
+							ret = re2::RE2::FullMatch((*myds)->x509_subject_alt_name.get(), subject_alt_regex);
 						} else if (strncmp(spiffe_val.c_str(), "spiffe://", strlen("spiffe://"))==0) {
-							if (strcmp(spiffe_val.c_str(), (*myds)->x509_subject_alt_name)==0) {
+							if (strcmp(spiffe_val.c_str(), (*myds)->x509_subject_alt_name.get())==0) {
 								ret = true;
 							}
 						}
 					}
 					if (ret == false) {
-						proxy_error("%d:%s(): SPIFFE Authentication error for user %s . spiffed_id expected : %s , received: %s\n", calling_line, calling_func, user, spiffe_val.c_str(), ((*myds)->x509_subject_alt_name ? (*myds)->x509_subject_alt_name : "none"));
+						proxy_error("%d:%s(): SPIFFE Authentication error for user %s . spiffed_id expected : %s , received: %s\n", calling_line, calling_func, user, spiffe_val.c_str(), ((*myds)->x509_subject_alt_name ? (*myds)->x509_subject_alt_name.get() : "none"));
 					}
 				}
 				auto default_transaction_isolation = j.find("default-transaction_isolation");

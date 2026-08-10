@@ -218,7 +218,7 @@ void MySQL_Data_Stream::queue_encrypted_bytes(const char *buf, size_t len)	{
 	//proxy_info("New ssl_write_len size: %u\n", ssl_write_len);
 }
 
-static char* extract_first_spiffe_uri(const GENERAL_NAMES* alt_names) {
+static std::unique_ptr<char[]> extract_first_spiffe_uri(const GENERAL_NAMES* alt_names) {
 	static constexpr char SPIFFE_PREFIX[] = "spiffe";
 	const int alt_name_count = sk_GENERAL_NAME_num(alt_names);
 
@@ -233,9 +233,8 @@ static char* extract_first_spiffe_uri(const GENERAL_NAMES* alt_names) {
 		if (memcmp(data, SPIFFE_PREFIX, sizeof(SPIFFE_PREFIX) - 1) != 0) continue;
 		if (memchr(data, '\0', length) != nullptr) continue;
 
-		char* value = new (std::nothrow) char[static_cast<size_t>(length) + 1];
-		if (!value) return nullptr;
-		memcpy(value, data, length);
+		auto value = std::make_unique<char[]>(static_cast<size_t>(length) + 1);
+		memcpy(value.get(), data, length);
 		value[length] = '\0';
 		return value;
 	}
@@ -270,7 +269,7 @@ enum sslstatus MySQL_Data_Stream::do_ssl_handshake() {
 		}
 		// In case the supplied certificate has a 'SAN'-'URI' identifier
 		// starting with 'spiffe', client certificate verification is performed.
-		if (x509_subject_alt_name != NULL && SSL_get_verify_result(ssl) != X509_V_OK) {
+		if (x509_subject_alt_name && SSL_get_verify_result(ssl) != X509_V_OK) {
 			long rc = SSL_get_verify_result(ssl);
 			proxy_error("Disconnecting %s:%d: X509 client SSL certificate verify error: (%ld:%s)\n" , addr.addr, addr.port, rc, X509_verify_cert_error_string(rc));
 			return SSLSTATUS_FAIL;
@@ -356,7 +355,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	auth_in_progress = 0;
 	passthrough_cleartext = NULL;
 	tmp_charset = 0;
-	x509_subject_alt_name=NULL;
+	x509_subject_alt_name = nullptr;
 #ifdef PROXYSQL31
 	client_cert_present=false;
 	client_cert_verify_result=X509_V_OK;
@@ -508,8 +507,7 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 }
 
 void MySQL_Data_Stream::reset_frontend_certificate_evidence() {
-	delete[] x509_subject_alt_name;
-	x509_subject_alt_name = nullptr;
+	x509_subject_alt_name.reset();
 #ifdef PROXYSQL31
 	client_cert_present = false;
 	client_cert_verify_result = X509_V_OK;

@@ -196,7 +196,7 @@ static unsigned int try_frontend_connect(
 Add immutable-for-the-connection evidence beside `x509_subject_alt_name`:
 
 ```cpp
-char *x509_subject_alt_name;
+std::unique_ptr<char[]> x509_subject_alt_name;
 #ifdef PROXYSQL31
 bool client_cert_present;
 long client_cert_verify_result;
