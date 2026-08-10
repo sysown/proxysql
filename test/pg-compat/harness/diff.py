@@ -13,7 +13,11 @@ within the same result format.
 
 Case metadata (parsed from ``-- key: value`` comment lines):
   ``-- skip-targets: name1 name2``  targets to exclude
-  ``-- only-targets: name1 name2``  restrict to exactly these targets
+  ``-- only-targets: name1 name2``  restrict to these targets
+
+Both target lists are matched with shell-style globs (``fnmatch``), so
+``only-targets: proxy_native_*`` selects every native proxy target and a
+name with no wildcard character is still an exact match.
   ``-- transactional: false``       parsed for completeness; the shipped
                                     pure-SELECT cases are stateless so it is
                                     not acted on here.
@@ -28,6 +32,7 @@ handles absent targets -- only the proxy targets actually present in
 ``results`` are checked.
 """
 import re
+from fnmatch import fnmatchcase
 
 import psycopg
 
@@ -42,6 +47,15 @@ def _parse_meta(sql):
     for m in re.findall(r"--\s*only-targets:\s*(.+)", sql):
         only.update(m.split())
     return skip, only
+
+
+def _matches_any(name, patterns):
+    # Shell-style globbing, so a documented pattern such as "proxy_native_*"
+    # actually selects the native targets. fnmatchcase (not fnmatch) keeps
+    # matching case-sensitive and platform-independent; target names are
+    # lowercase identifiers, and a plain name with no metacharacter still
+    # compares as an exact match.
+    return any(fnmatchcase(name, p) for p in patterns)
 
 
 def _statements(sql):
@@ -107,9 +121,9 @@ def _run(stmts, targets, admin, skip, only):
         for t in targets:
             if not t.available:
                 continue
-            if t.name in skip:
+            if _matches_any(t.name, skip):
                 continue
-            if only and t.name not in only:
+            if only and not _matches_any(t.name, only):
                 continue
             results[t.name] = _run_on(t, stmts, admin, native_present)
         return results

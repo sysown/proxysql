@@ -52,5 +52,17 @@ def run(Adapter):
         # and use a table name distinct from other behaviors/tests
         # (tests/test_routing_oracle.py's own probe table is "oracle_w") so
         # runs never collide.
-        a.exec_simple(f"DROP TABLE IF EXISTS {TABLE}")
-        a.close()
+        #
+        # Roll back first: if any statement above raised between begin() and
+        # commit(), the session is left in PostgreSQL's aborted-transaction
+        # state, where DROP TABLE fails with "current transaction is aborted"
+        # -- so the table would leak AND the cleanup error would mask the real
+        # failure. The rollback is best-effort for the same reason.
+        try:
+            a.rollback()
+        except Exception:
+            pass
+        try:
+            a.exec_simple(f"DROP TABLE IF EXISTS {TABLE}")
+        finally:
+            a.close()

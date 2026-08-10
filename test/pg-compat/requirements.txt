@@ -1,4 +1,8 @@
 psycopg[binary]==3.2.*
 asyncpg==0.30.*
-pytest==8.*
+# >=9.0.3: GHSA-6w46-j5rx-g56g (insecure tmpdir handling) affects every release
+# before 9.0.3, so no 8.x pin can pick up the fix. The suite uses only stable
+# APIs (fixtures, parametrize, skip/fail, pytest_collection_modifyitems), and
+# pytest 9 requires Python >=3.10 which the 3.11 base image satisfies.
+pytest>=9.0.3,<10
 tomli==2.*

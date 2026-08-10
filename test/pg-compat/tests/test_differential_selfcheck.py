@@ -71,6 +71,24 @@ def test_engine_detects_divergence(admin):
         admin.query("LOAD PGSQL QUERY RULES TO RUNTIME")
 
 
+def test_target_filter_supports_globs():
+    """``only-targets``/``skip-targets`` are documented as glob patterns.
+
+    They were matched with exact set membership, so a documented pattern such
+    as ``only-targets: proxy_native_*`` matched nothing and silently skipped
+    EVERY target -- a case that appears to pass while running no targets at
+    all. Needs no infra: this pins the matcher itself.
+    """
+    assert diff._matches_any("proxy_native_binary", ["proxy_native_*"])
+    assert diff._matches_any("proxy_native_text", ["proxy_native_*"])
+    assert not diff._matches_any("proxy_libpq_text", ["proxy_native_*"])
+
+    # A plain name with no metacharacter must still be an exact match.
+    assert diff._matches_any("direct_text", ["direct_text"])
+    assert not diff._matches_any("direct_text", ["direct_tex"])
+    assert not diff._matches_any("direct_text", [])
+
+
 def test_file_pipeline_executes_real_statements(admin):
     """Guard against vacuous passes on the FILE-based path.
 
