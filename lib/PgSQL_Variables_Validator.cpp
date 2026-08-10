@@ -261,14 +261,12 @@ bool pgsql_variable_validate_maintenance_work_mem_v2(const char* value, const pa
 	/* Parse unit part */
 	const char* unit_ptr = endptr;
 	uint64_t multiplier;
-	char unit[3] = { 0 };
+	const char* unit = "kB"; // default unit
 	size_t unit_len = strlen(unit_ptr);
+	size_t actual_unit_len = 2;
 
 	/* Handle default unit (kB) if no unit specified */
 	if (unit_len == 0) {
-		unit[0] = 'k';
-		unit[1] = 'B';
-		unit[2] = '\0';
 		multiplier = 1024;
 	}
 	else {
@@ -279,32 +277,27 @@ bool pgsql_variable_validate_maintenance_work_mem_v2(const char* value, const pa
 
 		/* Validate unit and set multiplier */
 		if (unit_len == 1 && u[0] == 'b') {
-			unit[0] = 'B';
-			unit[1] = '\0';
+			unit = "B";
+			actual_unit_len = 1;
 			multiplier = 1;
 		}
 		else if (strcmp(u, "kb") == 0) {
-			unit[0] = 'k';
-			unit[1] = 'B';
-			unit[2] = '\0';
+			unit = "kB";
 			multiplier = 1024;
 		}
 		else if (strcmp(u, "mb") == 0) {
-			unit[0] = 'M';
-			unit[1] = 'B';
-			unit[2] = '\0';
+			unit = "MB";
+			actual_unit_len = 2;
 			multiplier = 1024 * 1024;
 		}
 		else if (strcmp(u, "gb") == 0) {
-			unit[0] = 'G';
-			unit[1] = 'B';
-			unit[2] = '\0';
+			unit = "GB";
+			actual_unit_len = 2;
 			multiplier = 1024ULL * 1024 * 1024;
 		}
 		else if (strcmp(u, "tb") == 0) {
-			unit[0] = 'T';
-			unit[1] = 'B';
-			unit[2] = '\0';
+			unit = "TB";
+			actual_unit_len = 2;
 			multiplier = 1024ULL * 1024 * 1024 * 1024;
 		}
 		else {
@@ -312,7 +305,6 @@ bool pgsql_variable_validate_maintenance_work_mem_v2(const char* value, const pa
 		}
 
 		/* Validate unit length matches parsed characters */
-		size_t actual_unit_len = (unit[1] == 'B') ? 2 : (unit[0] == 'B') ? 1 : 0;
 		if (strlen(unit_ptr) != actual_unit_len)
 			return false;
 	}
@@ -370,50 +362,44 @@ bool pgsql_variable_validate_maintenance_work_mem_v3(const char* value, const pa
 	// Parse unit
 	const char* unit_ptr = endptr;
 	uint64_t multiplier;
-	char unit[3] = { 0 };
+	const char* unit = "kB"; // default unit
 	size_t unit_len = strlen(unit_ptr);
+	size_t actual_unit_len = 2;
 
 	// Default to kB if no unit specified
 	if (unit_len == 0) {
-		unit[0] = 'k';
-		unit[1] = 'B';
-		unit[2] = '\0';
 		multiplier = 1024;
 	}
 	else {
 		// Convert unit to lowercase for validation
 		char u[3] = { 0 };
-		for (int i = 0; i < 2 && unit_ptr[i]; i++)
+		for (int i = 0; i < 2 && unit_ptr[i]; i++) {
 			u[i] = ::tolower((unsigned char)unit_ptr[i]);
+		}
 
 		// Validate units and set multipliers
 		if (unit_len == 1 && u[0] == 'b') {
-			unit[0] = 'B';
-			unit[1] = '\0';
+			unit = "B";
+			actual_unit_len = 1;
 			multiplier = 1;
 		}
 		else if (strcmp(u, "kb") == 0) {
-			unit[0] = 'k';
-			unit[1] = 'B';
-			unit[2] = '\0';
+			unit = "kB";
 			multiplier = 1024;
 		}
 		else if (strcmp(u, "mb") == 0) {
-			unit[0] = 'M';
-			unit[1] = 'B';
-			unit[2] = '\0';
+			unit = "MB";
+			actual_unit_len = 2;
 			multiplier = 1024 * 1024;
 		}
 		else if (strcmp(u, "gb") == 0) {
-			unit[0] = 'G';
-			unit[1] = 'B';
-			unit[2] = '\0';
+			unit = "GB";
+			actual_unit_len = 2;
 			multiplier = 1024ULL * 1024 * 1024;
 		}
 		else if (strcmp(u, "tb") == 0) {
-			unit[0] = 'T';
-			unit[1] = 'B';
-			unit[2] = '\0';
+			unit = "TB";
+			actual_unit_len = 2;
 			multiplier = 1024ULL * 1024 * 1024 * 1024;
 		}
 		else {
@@ -421,9 +407,9 @@ bool pgsql_variable_validate_maintenance_work_mem_v3(const char* value, const pa
 		}
 
 		// Validate unit length matches parsed characters
-		size_t expected_len = (unit[1] == 'B') ? 2 : (unit[0] == 'B') ? 1 : 0;
-		if (strlen(unit_ptr) != expected_len)
+		if (strlen(unit_ptr) != actual_unit_len) {
 			return false;
+		}
 	}
 
 	// Calculate total bytes with floating point
