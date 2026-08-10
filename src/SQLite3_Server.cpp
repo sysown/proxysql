@@ -858,11 +858,17 @@ __run_query:
 						}
 						delete control_result;
 
-							if (run_query && rds_bgd_table_check) {
-								const char* topology_sql = topology_present ? "SELECT 1" : "SELECT 1 WHERE 0";
-								l_free(query_length,query);
-								query=l_strdup(topology_sql);
-								query_length=strlen(topology_sql)+1;
+						if (run_query && rds_bgd_table_check) {
+							const char* topology_sql = topology_present ? "SELECT 1" : "SELECT 1 WHERE 0";
+							static constexpr size_t topology_sql_len =
+								sizeof("SELECT 1") - 1;
+							const size_t topology_len =
+								topology_present ?
+									topology_sql_len :
+									(sizeof("SELECT 1 WHERE 0") - 1);
+							l_free(query_length,query);
+							query=l_strdup(topology_sql);
+							query_length=topology_len + 1;
 						} else if (run_query && (configured_error != 0 || !topology_present)) {
 							const uint16_t error_code = configured_error
 								? static_cast<uint16_t>(configured_error) : 1146;
@@ -872,53 +878,53 @@ __run_query:
 							GloSQLite3Server->send_MySQL_ERR(
 								&sess->client_myds->myprot, error_code, error_msg);
 							run_query=false;
-							} else if (run_query) {
+						} else if (run_query) {
 							const std::string topology_query {
 								"SELECT id,endpoint,topology_port AS port,role,status "
 								"FROM RDS_BGD_TOPOLOGY WHERE " + predicate +
 								" ORDER BY row_order"
-								};
-								l_free(query_length,query);
-								query=l_strdup(topology_query.c_str());
-								query_length=topology_query.length()+1;
-							}
+							};
+							l_free(query_length,query);
+							query=l_strdup(topology_query.c_str());
+							query_length=topology_query.length()+1;
+						}
 					}
 				}
 			}
 
 #endif // TEST_RDS_BGD
-#ifdef TEST_AURORA
-			if (strstr(query_no_space,(char *)"REPLICA_HOST_STATUS")) {
-				pthread_mutex_lock(&GloSQLite3Server->aurora_mutex);
+				#ifdef TEST_AURORA
+				if (strstr(query_no_space,(char *)"REPLICA_HOST_STATUS")) {
+					pthread_mutex_lock(&GloSQLite3Server->aurora_mutex);
 
-				if (strcasestr(query_no_space, TEST_AURORA_MONITOR_BASE_QUERY)) {
-					string s_whg { query_no_space + strlen(TEST_AURORA_MONITOR_BASE_QUERY) };
-					uint32_t whg = atoi(s_whg.c_str());
+					if (strcasestr(query_no_space, TEST_AURORA_MONITOR_BASE_QUERY)) {
+						string s_whg { query_no_space + (sizeof(TEST_AURORA_MONITOR_BASE_QUERY) - 1) };
+						uint32_t whg = atoi(s_whg.c_str());
 
-					GloSQLite3Server->populate_aws_aurora_table(sess, whg);
-					vector<aurora_hg_info_t> hgs_info { get_hgs_info(GloAdmin->admindb) };
+						GloSQLite3Server->populate_aws_aurora_table(sess, whg);
+						vector<aurora_hg_info_t> hgs_info { get_hgs_info(GloAdmin->admindb) };
 
-					const auto match_writer = [&whg](const aurora_hg_info_t& hg_info) {
-						return std::get<AURORA_HG_INFO::WRITER_HG>(hg_info) == whg;
-					};
-					const auto hg_info_it = std::find_if(hgs_info.begin(), hgs_info.end(), match_writer);
-					string select_query {
-						"SELECT SERVER_ID,SESSION_ID,LAST_UPDATE_TIMESTAMP,REPLICA_LAG_IN_MILLISECONDS,CPU"
-							" FROM REPLICA_HOST_STATUS "
-					};
+						const auto match_writer = [&whg](const aurora_hg_info_t& hg_info) {
+							return std::get<AURORA_HG_INFO::WRITER_HG>(hg_info) == whg;
+						};
+						const auto hg_info_it = std::find_if(hgs_info.begin(), hgs_info.end(), match_writer);
+						string select_query {
+							"SELECT SERVER_ID,SESSION_ID,LAST_UPDATE_TIMESTAMP,REPLICA_LAG_IN_MILLISECONDS,CPU"
+								" FROM REPLICA_HOST_STATUS "
+						};
 
-					if (hg_info_it == hgs_info.end()) {
-						select_query += " LIMIT 0";
-					} else {
-						const string& domain_name { std::get<AURORA_HG_INFO::DOMAIN_NAME>(*hg_info_it) };
-						select_query += " WHERE DOMAIN_NAME='" + domain_name + "' ORDER BY SERVER_ID";
+						if (hg_info_it == hgs_info.end()) {
+							select_query += " LIMIT 0";
+						} else {
+							const string& domain_name { std::get<AURORA_HG_INFO::DOMAIN_NAME>(*hg_info_it) };
+							select_query += " WHERE DOMAIN_NAME='" + domain_name + "' ORDER BY SERVER_ID";
+						}
+
+						free(query);
+						query = static_cast<char*>(malloc(select_query.length() + 1));
+						memcpy(query, select_query.c_str(), select_query.length() + 1);
 					}
-
-					free(query);
-					query = static_cast<char*>(malloc(select_query.length() + 1));
-					memcpy(query, select_query.c_str(), select_query.length() + 1);
 				}
-			}
 #endif // TEST_AURORA
 #ifdef TEST_GALERA
 			if (strstr(query_no_space,(char *)"HOST_STATUS_GALERA")) {
