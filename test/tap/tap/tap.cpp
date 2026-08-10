@@ -435,28 +435,40 @@ static ulong start_timer(void)
 static void nice_time(double sec,char *buff, my_bool part_second)
 {
   ulong tmp;
+  size_t remaining = 53;  // per comment above: 52 chars + '\0'
+  char *p = buff;
+
   if (sec >= 3600.0*24)
   {
     tmp=(ulong) (sec/(3600.0*24));
     sec-=3600.0*24*tmp;
-    buff+= sprintf(buff, "%ld %s", tmp, tmp > 1 ? " days " : " day ");
+    int n = snprintf(p, remaining, "%ld %s", tmp, tmp > 1 ? " days " : " day ");
+    if (n < 0 || (size_t)n >= remaining) return;
+    p += n;
+    remaining -= n;
   }
   if (sec >= 3600.0)
   {
     tmp=(ulong) (sec/3600.0);
     sec-=3600.0*tmp;
-    buff+= sprintf(buff, "%ld %s", tmp, tmp > 1 ? " hours " : " hour ");
+    int n = snprintf(p, remaining, "%ld %s", tmp, tmp > 1 ? " hours " : " hour ");
+    if (n < 0 || (size_t)n >= remaining) return;
+    p += n;
+    remaining -= n;
   }
   if (sec >= 60.0)
   {
     tmp=(ulong) (sec/60.0);
     sec-=60.0*tmp;
-    buff+= sprintf(buff, "%ld min ", tmp);
+    int n = snprintf(p, remaining, "%ld min ", tmp);
+    if (n < 0 || (size_t)n >= remaining) return;
+    p += n;
+    remaining -= n;
   }
   if (part_second)
-    sprintf(buff,"%.2f sec",sec);
+    snprintf(p, remaining, "%.2f sec",sec);
   else
-    sprintf(buff,"%d sec",(int) sec);
+    snprintf(p, remaining,"%d sec",(int) sec);
 }
 
 
