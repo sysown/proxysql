@@ -67,6 +67,14 @@ static uint64_t extract_pg_rows_affected(const unsigned char* payload, size_t le
     return rows;
 }
 
+static size_t bounded_cstr_len(const char* s, size_t max_len) {
+    if (s == nullptr || max_len == 0) {
+        return 0;
+    }
+    const void* null_pos = memchr(s, '\0', max_len);
+    return null_pos ? static_cast<const char *>(null_pos) - s : max_len;
+}
+
 PgSQLFFTO::PgSQLFFTO(PgSQL_Session* session)
     : m_session(session), m_state(IDLE), m_query_start_time(0), m_affected_rows(0), m_rows_sent(0) {
     m_client_buffer.reserve(1024);
@@ -207,27 +215,27 @@ void PgSQLFFTO::process_client_message(char type, const unsigned char* payload, 
         track_query(std::string(reinterpret_cast<const char*>(payload), query_len), true);
     } else if (type == 'P') {
         const char* p = reinterpret_cast<const char*>(payload);
-        size_t name_len = strnlen(p, len);
+        size_t name_len = bounded_cstr_len(p, len);
         if (name_len >= len) return; // No null terminator
         std::string stmt_name(p, name_len);
         const char* query_ptr = p + name_len + 1;
         size_t rem = len - (name_len + 1);
-        size_t query_text_len = strnlen(query_ptr, rem);
+        size_t query_text_len = bounded_cstr_len(query_ptr, rem);
         if (query_text_len >= rem) return;
         m_statements[stmt_name] = std::string(query_ptr, query_text_len);
     } else if (type == 'B') {
         const char* p = reinterpret_cast<const char*>(payload);
-        size_t portal_len = strnlen(p, len);
+        size_t portal_len = bounded_cstr_len(p, len);
         if (portal_len >= len) return;
         std::string portal_name(p, portal_len);
         const char* stmt_ptr = p + portal_len + 1;
         size_t rem = len - (portal_len + 1);
-        size_t stmt_name_len = strnlen(stmt_ptr, rem);
+        size_t stmt_name_len = bounded_cstr_len(stmt_ptr, rem);
         if (stmt_name_len >= rem) return;
         m_portals[portal_name] = std::string(stmt_ptr, stmt_name_len);
     } else if (type == 'E') {
         const char* p = reinterpret_cast<const char*>(payload);
-        size_t portal_len = strnlen(p, len);
+        size_t portal_len = bounded_cstr_len(p, len);
         if (portal_len >= len) return;
         if (len < portal_len + 1 + 4) return; // portal name + '\0' + max-rows
         std::string portal_name(p, portal_len);
@@ -242,7 +250,7 @@ void PgSQLFFTO::process_client_message(char type, const unsigned char* payload, 
         if (len < 2) return;
         char close_type = static_cast<char>(payload[0]);
         const char* name_ptr = reinterpret_cast<const char*>(payload) + 1;
-        size_t name_len = strnlen(name_ptr, len - 1);
+        size_t name_len = bounded_cstr_len(name_ptr, len - 1);
         if (name_len >= len - 1) return;
         std::string name(name_ptr, name_len);
         if (close_type == 'S') m_statements.erase(name);
