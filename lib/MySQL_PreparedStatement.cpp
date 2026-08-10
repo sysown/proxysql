@@ -1,5 +1,6 @@
 #include "proxysql.h"
 #include "cpp.h"
+#include <string_view>
 
 #ifndef SPOOKYV2
 #include "SpookyV2.h"
@@ -21,8 +22,8 @@ const int PS_GLOBAL_STATUS_FIELD_NUM = 9;
 static uint64_t stmt_compute_hash(char *user,
                                   char *schema, char *query,
                                   unsigned int query_length) {
-	size_t user_len = user ? strlen(user) : 0;
-	size_t schema_len = schema ? strlen(schema) : 0;
+	size_t user_len = user ? std::string_view(user).size() : 0;
+	size_t schema_len = schema ? std::string_view(schema).size() : 0;
 // two random seperators
 #define _COMPUTE_HASH_DEL1_ "-ujhtgf76y576574fhYTRDFwdt-"
 #define _COMPUTE_HASH_DEL2_ "-8k7jrhtrgJHRgrefgreRFewg6-"

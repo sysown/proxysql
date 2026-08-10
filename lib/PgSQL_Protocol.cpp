@@ -2,6 +2,7 @@
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <limits>
+#include <locale>
 #include "proxysql.h"
 #include "cpp.h"
 #include "PgSQL_Authentication.h"
@@ -22,6 +23,31 @@ extern PgSQL_Authentication* GloPgAuth;
 #define INT4OID 23
 #define TEXTOID 25
 #define NUMERICOID 1700
+
+static char *encode_bytea(const uint8_t *data, int length) {
+	if (length < 0 || (data == nullptr && length != 0)) {
+		return nullptr;
+	}
+
+	const size_t byte_len = static_cast<size_t>(length);
+	const size_t max_byte_len = (std::numeric_limits<size_t>::max() - 3) / 2;
+	if (byte_len > max_byte_len) {
+		return nullptr;
+	}
+
+	const size_t required = 2 + byte_len * 2 + 1;
+	char *encoded = (char *)l_alloc(required);
+	if (encoded == nullptr) {
+		return nullptr;
+	}
+	encoded[0] = '\\';
+	encoded[1] = 'x';
+	encoded[2] = '\0';
+	for (size_t i = 0; i < byte_len; ++i) {
+		snprintf(encoded + 2 + i * 2, 3, "%02x", data[i]);
+	}
+	return encoded;
+}
 
 
 void PG_pkt::make_space(unsigned int len) {
@@ -205,7 +231,7 @@ void SQLite3_to_Postgres(PtrSizeArray *psa, SQLite3_result *result, char *error,
 	const size_t command_len = strcspn(query, " \t\r\n");
 	std::string buf(query, command_len);
 	for (char& c : buf) {
-		c = static_cast<char>(toupper((unsigned char)c));
+		c = std::toupper(c, std::locale::classic());
 	}
 	if (result) {
 		int ncol = result->columns;
@@ -306,24 +332,10 @@ void PG_pkt::write_DataRow(const char *tupdesc, ...) {
 		} else if (tupdesc[i] == 's') {
 			val = va_arg(ap, char *);
 				} else if (tupdesc[i] == 'b') {
-					int blen = va_arg(ap, int);
-					uint8_t *bval = va_arg(ap, uint8_t *);
-					if (blen >= 0 && (bval != nullptr || blen == 0)) {
-						const size_t byte_len = static_cast<size_t>(blen);
-						const size_t max_byte_len = (std::numeric_limits<size_t>::max() - 3) / 2;
-						if (byte_len <= max_byte_len) {
-							const size_t required = 2 + byte_len * 2 + 1;
-							tmp2 = (char *)malloc(required);
-							if (tmp2 != nullptr) {
-								tmp2[0] = '\\';
-								tmp2[1] = 'x';
-								tmp2[2] = '\0';
-								for (size_t j = 0; j < byte_len; j++)
-									snprintf(tmp2 + (2 + j * 2), 3, "%02x", bval[j]);
-								val = tmp2;
-							}
-						}
-					}
+					const int blen = va_arg(ap, int);
+					const uint8_t *bval = va_arg(ap, uint8_t *);
+					tmp2 = encode_bytea(bval, blen);
+					val = tmp2;
 		} else if (tupdesc[i] == 'T') {
 			usec_t time = va_arg(ap, usec_t);
 			val = format_time_s(time, tmp, sizeof(tmp));
@@ -337,7 +349,7 @@ void PG_pkt::write_DataRow(const char *tupdesc, ...) {
 			put_uint32(len);
 			put_bytes(val, len);
 			if (tmp2 != NULL) {
-				free(tmp2);
+				l_free(0, tmp2);
 				tmp2 = NULL;
 			}
 		} else {
@@ -1621,7 +1633,7 @@ char* extract_tag_from_query(const char* query) {
 		qtlen = strcspn(query, " \t\r\n");
 		std::string buf(query, qtlen);
 		for (char& c : buf) {
-			c = static_cast<char>(toupper((unsigned char)c));
+			c = std::toupper(c, std::locale::classic());
 		}
 
 		return strdup(buf.c_str());

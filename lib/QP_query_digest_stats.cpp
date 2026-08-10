@@ -29,7 +29,7 @@ static char *store_or_duplicate_query_digest_value(char *fixed_buf, size_t fixed
     if (input == NULL) {
         return NULL;
     }
-    size_t input_len = strlen(input);
+    size_t input_len = std::string_view(input).size();
     if (input_len < fixed_buf_len) {
         memcpy(fixed_buf, input, input_len);
         fixed_buf[input_len] = '\0';

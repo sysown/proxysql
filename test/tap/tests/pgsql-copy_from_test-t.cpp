@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <string>
+#include <string_view>
 #include <algorithm>
 #include <sstream>
 #include <chrono>
@@ -161,7 +162,7 @@ int encodeNumericBinary(uint8_t* out, const char* numStr) {
     memcpy(combined, numericPart, copy_len);
     combined[copy_len] = 0;
     if (fracPartLen > 0) {
-        size_t combined_len = strlen(combined);
+		size_t combined_len = copy_len;
         size_t copy_len_frac = fracPartLen;
         memcpy(combined + combined_len, dotPos + 1, copy_len_frac);
         combined[combined_len + copy_len_frac] = 0;
@@ -278,20 +279,20 @@ int is_string_in_result(PGresult* result, const char* target_str) {
         char full_row_str[1024] = { 0 }; // Buffer to reconstruct full row string
 
         // Reconstruct the row string (with tab and newline separators)
-        for (int j = 0; j < cols; j++) {
-            char* val = PQgetvalue(result, i, j);
-            size_t current_len = strlen(full_row_str);
-            size_t space_left = sizeof(full_row_str) - current_len;
+		size_t current_len = 0;
+		for (int j = 0; j < cols; j++) {
+			char* val = PQgetvalue(result, i, j);
+			size_t space_left = sizeof(full_row_str) - current_len;
             if (space_left == 0) {
                 break;
             }
             int nwritten = snprintf(full_row_str + current_len, space_left, "%s%s", val, (j < cols - 1) ? "\t" : "");
-            if (nwritten < 0 || (size_t)nwritten >= space_left) {
-                break;
-            }
-        }
-        size_t current_len = strlen(full_row_str);
-        size_t space_left = sizeof(full_row_str) - current_len;
+			if (nwritten < 0 || (size_t)nwritten >= space_left) {
+				break;
+			}
+			current_len += nwritten;
+		}
+		size_t space_left = sizeof(full_row_str) - current_len;
         if (space_left > 1) {
             snprintf(full_row_str + current_len, space_left, "\n");
         }

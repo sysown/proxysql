@@ -20,6 +20,7 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <locale>
 #include <string>
 #include <sstream>
 #include <chrono>
@@ -69,7 +70,7 @@ PGConnPtr createNewConnection(ConnType conn_type, const std::string& parameters 
 	        const size_t qtlen = strcspn(query, " \t\r\n");
 	        std::string query_type(query, qtlen);
         for (char& c : query_type) {
-            c = static_cast<char>(toupper((unsigned char)c));
+        c = std::toupper(c, std::locale::classic());
         }
 
         if (query_type == "SELECT") {

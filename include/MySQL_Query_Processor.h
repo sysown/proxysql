@@ -74,29 +74,29 @@ private:
 
 	inline
 	void query_parser_first_comment_extended(const char* key, const char* value, MySQL_Query_Processor_Output* qpo) {
-		if (!strcasecmp(key, "min_gtid")) {
-			if (mysql_thread___ignore_min_gtid_annotations) {
-				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Ignoring min_gtid=%s\n", value);
-			} else {
-				size_t l = strlen(value);
-				if (_is_valid_gtid((char*)value, l)) {
-					char* buf = (char*)malloc(l + 1);
-					if (buf == nullptr) {
-						proxy_warning("Unable to allocate memory for min_gtid=%s\n", value);
-						return;
-					}
-					memcpy(buf, value, l);
-					buf[l] = '\0';
-
-					if (qpo->min_gtid) {
-						free(qpo->min_gtid);
-					}
-					qpo->min_gtid = buf;
-				} else {
-					proxy_warning("Invalid min_gtid value=%s\n", value);
-				}
-			}
+		if (strcasecmp(key, "min_gtid")) {
+			return;
 		}
+		if (mysql_thread___ignore_min_gtid_annotations) {
+			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Ignoring min_gtid=%s\n", value);
+			return;
+		}
+		size_t l = strlen(value);
+		if (!_is_valid_gtid((char*)value, l)) {
+			proxy_warning("Invalid min_gtid value=%s\n", value);
+			return;
+		}
+		char* buf = (char*)l_alloc(l + 1);
+		if (buf == nullptr) {
+			proxy_warning("Unable to allocate memory for min_gtid=%s\n", value);
+			return;
+		}
+		memcpy(buf, value, l);
+		buf[l] = '\0';
+		if (qpo->min_gtid) {
+			l_free(0, qpo->min_gtid);
+		}
+		qpo->min_gtid = buf;
 	}
 
 	friend class Query_Processor;

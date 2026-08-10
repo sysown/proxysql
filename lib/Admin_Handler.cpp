@@ -1098,9 +1098,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		}
 	}
 
-	if (
-		(query_no_space_length==sizeof("PROXYSQL FLUSH CONFIGDB") - 1 && !strncasecmp("PROXYSQL FLUSH CONFIGDB",query_no_space, query_no_space_length)) // see #923
-	) {
+	if (query_no_space_length==sizeof("PROXYSQL FLUSH CONFIGDB") - 1 && !strncasecmp("PROXYSQL FLUSH CONFIGDB",query_no_space, query_no_space_length)) { // see #923
 		proxy_info("Received %s command\n", query_no_space);
 		proxy_warning("A misconfigured configdb will cause undefined behaviors\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -1352,8 +1350,8 @@ bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space
 		strstr(query_no_space, (char *)"mysql-default_authentication_plugin");
 	if (!skip_raw_query_log) { // issue #599
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received command %s\n", query_no_space);
-		if (strncasecmp(query_no_space,(char *)"set autocommit",sizeof("set autocommit") - 1)) {
-			if (strncasecmp(query_no_space,(char *)"SET @@session.autocommit",sizeof("SET @@session.autocommit") - 1)) {
+		if (strncasecmp(query_no_space,"set autocommit",sizeof("set autocommit") - 1)) {
+			if (strncasecmp(query_no_space,"SET @@session.autocommit",sizeof("SET @@session.autocommit") - 1)) {
 				char* masked_query = mask_sensitive_values_in_query(query_no_space);
 				proxy_info("Received command %s\n", masked_query);
 				free(masked_query);
@@ -5244,14 +5242,14 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		char *tbh=NULL;
 		c_split_2(query_no_space+strAl,".",&dbh,&tbh);
 
-		if (strlen(tbh)==0) {
+		if (std::string_view(tbh).empty()) {
 			free(tbh);
 			tbh=dbh;
 			dbh=strdup("main");
 		}
-	const size_t tbh_len = strlen(tbh);
+	const size_t tbh_len = std::string_view(tbh).size();
 	if (tbh_len>=3 && tbh[0]=='`' && tbh[tbh_len-1]=='`') { // tablename is quoted
-		char *tbh_tmp=(char *)malloc(tbh_len-1);
+		char *tbh_tmp=(char *)l_alloc(tbh_len-1);
 		size_t quoted_len = tbh_len - 2;
 		memcpy(tbh_tmp,tbh+1,quoted_len);
 		tbh_tmp[quoted_len]=0;

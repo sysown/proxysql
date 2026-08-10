@@ -261,7 +261,8 @@ bool ProxyProtocolInfo::is_client_in_any_subnet(const struct sockaddr* client_ad
 	// Create a copy of the subnet list to avoid modifying the original string
 	std::string subnet_list_copy(subnet_list);
 
-	char* token = strtok(&subnet_list_copy[0], ","); // Get the first subnet
+	char* saveptr = nullptr;
+	char* token = strtok_r(&subnet_list_copy[0], ",", &saveptr); // Get the first subnet
 	while (token != NULL) {
 		if (DEBUG_ProxyProtocolInfo==true)
 			std::cout << "Checking subnet: " << token << std::endl;
@@ -270,7 +271,7 @@ bool ProxyProtocolInfo::is_client_in_any_subnet(const struct sockaddr* client_ad
 				std::cout << "Client is in subnet: " << token << std::endl;
 			return true; // Client is in at least one subnet
 		}
-		token = strtok(NULL, ","); // Get the next subnet
+		token = strtok_r(nullptr, ",", &saveptr); // Get the next subnet
 	}
 	return false; // Client is not in any of the subnets
 }
@@ -368,13 +369,14 @@ bool ProxyProtocolInfo::is_valid_subnet_list(const char* subnet_list) {
 	std::string subnet_list_copy(subnet_list);
 
 	// Tokenize the string using ',' as the delimiter
-	char* token = strtok(&subnet_list_copy[0], ",");
+	char* saveptr = nullptr;
+	char* token = strtok_r(&subnet_list_copy[0], ",", &saveptr);
 	while (token != NULL) {
 		// Check if the token is a valid subnet
 		if (!is_valid_subnet(token)) {
 			return false; // Invalid subnet found
 		}
-		token = strtok(NULL, ","); // Get the next token
+		token = strtok_r(nullptr, ",", &saveptr); // Get the next token
 	}
 
 	return true; // All subnets are valid

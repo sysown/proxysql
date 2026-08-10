@@ -410,25 +410,23 @@ bool GTID_Server_Data::read_next_gtid() {
 		pos += l+1;
 		rec_msg[rec_msg_len] = 0;
 		bool invalid_msg = false;
+		auto copy_uuid = [&](char *delimiter) {
+			const int uuid_len = delimiter - (rec_msg + 3);
+			if (uuid_len < 0 || (size_t)uuid_len >= sizeof(uuid_server)) {
+				return false;
+			}
+			memcpy(uuid_server, rec_msg + 3, (size_t)uuid_len);
+			uuid_server[uuid_len] = 0;
+			return true;
+		};
 		if (rec_msg[0]=='I') {
 			char *a = NULL;
-			int ul = 0;
 			switch (rec_msg[1]) {
 				case '1': // single trxid with UUID
 					a = strchr(rec_msg+3,':');
-					if (a == NULL) {
+					if (a == NULL || !copy_uuid(a)) {
 						invalid_msg = true;
 						break;
-					}
-					ul = a-rec_msg-3;
-					{
-						if (ul < 0 || (size_t)ul >= sizeof(uuid_server)) {
-							invalid_msg = true;
-							break;
-						}
-						size_t uuid_len = (size_t)ul;
-						memcpy(uuid_server, rec_msg+3, uuid_len);
-						uuid_server[uuid_len] = 0;
 					}
 					gtid_executed.add((std::string)uuid_server, (trxid_t)atoll(a+1));
 					events_read++;
@@ -437,43 +435,31 @@ bool GTID_Server_Data::read_next_gtid() {
 					gtid_executed.add((std::string)uuid_server, (trxid_t)atoll(rec_msg+3));
 					events_read++;
 					break;
-				case '3': // trxid range with UUID
+				case '3': { // trxid range with UUID
 					a = strchr(rec_msg+3,':');
-					if (a == NULL) {
+					if (a == NULL || !copy_uuid(a)) {
 						invalid_msg = true;
 						break;
 					}
-					ul = a-rec_msg-3;
-					{
-						if (ul < 0 || (size_t)ul >= sizeof(uuid_server)) {
-							invalid_msg = true;
-							break;
-						}
-						size_t uuid_len = (size_t)ul;
-						memcpy(uuid_server, rec_msg+3, uuid_len);
-						uuid_server[uuid_len] = 0;
+					TrxId_Interval iv(trxid_t(0));
+					if (!TrxId_Interval::parse(a+1, &iv)) {
+						invalid_msg = true;
+						break;
 					}
-					{
-						TrxId_Interval iv(trxid_t(0));
-						if (!TrxId_Interval::parse(a+1, &iv)) {
-							invalid_msg = true;
-							break;
-						}
-						gtid_executed.add((std::string)uuid_server, iv);
-					}
+					gtid_executed.add((std::string)uuid_server, iv);
 					events_read++;
 					break;
-				case '4': // trxid range, reuse last UUID
-					{
-						TrxId_Interval iv(trxid_t(0));
-						if (!TrxId_Interval::parse(rec_msg+3, &iv)) {
-							invalid_msg = true;
-							break;
-						}
-						gtid_executed.add((std::string)uuid_server, iv);
+				}
+				case '4': { // trxid range, reuse last UUID
+					TrxId_Interval iv(trxid_t(0));
+					if (!TrxId_Interval::parse(rec_msg+3, &iv)) {
+						invalid_msg = true;
+						break;
 					}
+					gtid_executed.add((std::string)uuid_server, iv);
 					events_read++;
 					break;
+				}
 				default:
 					invalid_msg = true;
 			}

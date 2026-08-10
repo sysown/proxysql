@@ -2,6 +2,7 @@
 #include "PgSQL_Variables_Validator.h"
 #include "PgSQL_Session.h"
 #include "cpp.h"
+#include <string_view>
 
 /**
  * @brief Validates a boolean variable for PostgreSQL.
@@ -407,7 +408,7 @@ bool pgsql_variable_validate_maintenance_work_mem_v3(const char* value, const pa
 		}
 
 		// Validate unit length matches parsed characters
-		if (strlen(unit_ptr) != actual_unit_len) {
+		if (std::string_view(unit_ptr).size() != actual_unit_len) {
 			return false;
 		}
 	}

@@ -1,5 +1,6 @@
 
 #include <fcntl.h>
+#include <string_view>
 #include <sstream>
 #include <atomic>
 #include <memory>
@@ -47,9 +48,9 @@ PgSQL_Connection_userinfo::~PgSQL_Connection_userinfo() {
 }
 
 uint64_t PgSQL_Connection_userinfo::compute_hash() {
-	size_t username_len = username ? strlen(username) : 0;
-	size_t password_len = password ? strlen(password) : 0;
-	size_t dbname_len = dbname ? strlen(dbname) : 0;
+	size_t username_len = username ? std::string_view(username).size() : 0;
+	size_t password_len = password ? std::string_view(password).size() : 0;
+	size_t dbname_len = dbname ? std::string_view(dbname).size() : 0;
 	size_t l = username_len + password_len + dbname_len;
 // two random seperator
 	constexpr char delimiter1[] = "-ujhtgf76y576574fhYTRDF345wdt-";

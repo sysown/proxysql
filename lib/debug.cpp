@@ -243,9 +243,8 @@ extern "C" void proxy_debug_func(
 			int status;
 			char *realname=NULL;
 				realname=abi::__cxa_demangle(debugbuff, 0, 0, &status);
-				if (realname) {
-					size_t longdebugbuff2_len = strlen(longdebugbuff2);
-					if (longdebugbuff2_len < sizeof(longdebugbuff2) - 1) {
+				if (realname && strnlen(longdebugbuff2, sizeof(longdebugbuff2)) < sizeof(longdebugbuff2) - 1) {
+					size_t longdebugbuff2_len = strnlen(longdebugbuff2, sizeof(longdebugbuff2));
 						snprintf(
 							longdebugbuff2 + longdebugbuff2_len,
 							sizeof(longdebugbuff2) - longdebugbuff2_len,
@@ -253,9 +252,8 @@ extern "C" void proxy_debug_func(
 							strings[i],
 							realname
 						);
-					}
 				}
-				free(realname);
+				l_free(0, realname);
 			}
 			free(strings);
 		}
