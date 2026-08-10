@@ -89,7 +89,7 @@ jobs:
 
     # Initializes the CodeQL tools for scanning.
     - name: Initialize CodeQL
-      uses: github/codeql-action/init@v3
+      uses: github/codeql-action/init@c4dd10e44af883a891fe31ced449bcb4a6728b9b # v3
       with:
         languages: ${{ matrix.language }}
 #        checkout_path: proxysql/
@@ -116,7 +116,7 @@ jobs:
         make -j$(nproc) clickhouse
 
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v3
+      uses: github/codeql-action/analyze@c4dd10e44af883a891fe31ced449bcb4a6728b9b # v3
       with:
         checkout_path: proxysql/
       
