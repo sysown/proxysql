@@ -420,8 +420,8 @@ json Config_Tool_Handler::handle_get_config(const std::string& var_name) {
 		return create_error_response("MCP handler not initialized");
 	}
 
-	char val[1024];
-	if (mcp_handler->get_variable(var_name.c_str(), val, sizeof(val)) == 0) {
+	std::string val;
+	if (mcp_handler->get_variable_string(var_name.c_str(), val)) {
 		json result;
 		result["variable_name"] = var_name;
 		result["value"] = val;
@@ -547,8 +547,8 @@ json Config_Tool_Handler::handle_list_variables(const std::string& filter) {
 			}
 		}
 
-		char val[1024];
-		if (mcp_handler->get_variable(var_name.c_str(), val, sizeof(val)) == 0) {
+		std::string val;
+		if (mcp_handler->get_variable_string(var_name.c_str(), val)) {
 			json var;
 			var["name"] = var_name;
 			var["value"] = val;
