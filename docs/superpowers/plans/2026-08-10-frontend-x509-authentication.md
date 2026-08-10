@@ -2,14 +2,22 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add an additive `mysql_users.attributes.require_x509` frontend policy, preserve SPIFFE's stronger identity semantics across `COM_CHANGE_USER`, and enforce both policies consistently before pass-through cache lookup or backend probing.
+**Goal:** Add a `PROXYSQL31`-gated, additive `mysql_users.attributes.require_x509` frontend policy, preserve SPIFFE's stronger identity semantics across `COM_CHANGE_USER`, and enforce both policies consistently before pass-through cache lookup or backend probing.
 
-**Architecture:** Capture certificate presence and OpenSSL's verification result once, when the frontend TLS handshake completes, and retain that immutable connection evidence on `MySQL_Data_Stream`. Route initial login, `COM_CHANGE_USER`, and row-backed pass-through through one certificate-policy evaluator in `MySQL_Protocol.cpp`. Keep password verification additive for `require_x509`, keep SPIFFE identity-exclusive, reject SPIFFE and pass-through targets during `COM_CHANGE_USER`, and never attempt TLS renegotiation.
+**Architecture:** Under `PROXYSQL31`, capture certificate presence and OpenSSL's verification result once, when the frontend TLS handshake completes, retain that immutable connection evidence on `MySQL_Data_Stream`, and route initial login, `COM_CHANGE_USER`, and row-backed pass-through through one certificate-policy evaluator in `MySQL_Protocol.cpp`. A default v3.0 build does not define the new state or inspect `require_x509`; it retains the existing SPIFFE path. Keep password verification additive for `require_x509`, keep SPIFFE identity-exclusive, reject SPIFFE and pass-through targets during `COM_CHANGE_USER`, and never attempt TLS renegotiation.
 
 **Tech Stack:** C++17, OpenSSL, nlohmann/json, RE2, MySQL/MariaDB client libraries, ProxySQL TAP tests, GNU Make.
 
+**Design addendum:** `docs/superpowers/specs/2026-08-10-frontend-x509-proxysql31-gating-design.md`
+
 ## Global Constraints
 
+- The entire `require_x509` feature is available only when `PROXYSQL31` is defined; `PROXYSQL40=1` inherits it through the existing build hierarchy.
+- A stable v3.0.x build has no knowledge of `require_x509`: it does not define the new generic certificate-evidence fields and does not look up, parse, validate, log, or enforce the key.
+- A stable v3.0.x build preserves the pre-feature SPIFFE initial-authentication and `COM_CHANGE_USER` behavior.
+- Null-checking `GENERAL_NAMES*` and exception-safe/type-safe handling of the existing `spiffe_id` attribute are unconditional cross-tier hardening, not gated feature behavior.
+- Register the feature TAP test with `@proxysql_min_version:3.1`; separately prove with a focused compatibility test that v3.0 does not recognize the key.
+- Always run `make clean` before switching between default, `PROXYSQL31=1`, DEBUG, and release builds because the Makefiles do not reliably invalidate objects when feature flags change.
 - The new user attribute is exactly `"require_x509": true|false`; it does not add a column or change the `mysql_users` schema.
 - `require_x509=true` means both the existing password/auth-plugin check and a trusted frontend client certificate must succeed.
 - A trusted certificate means all three conditions are true on the current physical frontend connection: TLS is active, a peer certificate was presented, and `SSL_get_verify_result()` returned `X509_V_OK`.
@@ -144,7 +152,7 @@ static unsigned int try_frontend_connect(
   Add `test_frontend_x509_auth-t` beside the authentication tests in `test/tap/groups/groups.json`, using the same broad server groups as `reg_test_3504-change_user-t`:
 
   ```json
-  "test_frontend_x509_auth-t" : [ "legacy-g6", "mysql84-g6", "mysql90-g1", "mysql95-g1" ],
+  "test_frontend_x509_auth-t" : [ "legacy-g6", "mysql84-g6", "mysql90-g1", "mysql95-g1", "@proxysql_min_version:3.1" ],
   ```
 
   No `Makefile` source-list edit is needed: `test/tap/tests/Makefile:220` discovers every `*-t.cpp` through `wildcard`.
@@ -152,11 +160,13 @@ static unsigned int try_frontend_connect(
 - [ ] **Step 5: Build and run the new test to prove the feature is absent.**
 
   ```sh
+  make clean
+  PROXYSQL31=1 make -j4 debug
   make -C test/tap/tests test_frontend_x509_auth-t
-  cd test/tap/tests && ./test_frontend_x509_auth-t
+  # Run test_frontend_x509_auth-t against the PROXYSQL31 isolated runtime.
   ```
 
-  Expected before implementation: baseline cases pass, while at least plaintext/no-cert/untrusted `require_x509=true` cases incorrectly authenticate. Record the failing TAP assertion numbers in the commit message body.
+  Expected before implementation in a v3.1 build: baseline cases pass, while at least plaintext/no-cert/untrusted `require_x509=true` cases incorrectly authenticate. Record the failing TAP assertion numbers in the commit message body. A default v3.0 runtime is not valid RED evidence because that tier intentionally does not recognize the key.
 
 - [ ] **Step 6: Commit only the failing test and group registration.**
 
@@ -177,6 +187,8 @@ static unsigned int try_frontend_connect(
 - Modify: `lib/MySQL_Protocol.cpp:3402`
 - Modify: `lib/MySQL_Protocol.cpp:92`
 - Modify: `include/MySQL_Protocol.h:256`
+- Create: `test/tap/tests/test_frontend_x509_tier_gate-t.cpp`
+- Modify: `test/tap/groups/groups.json`
 - Test: `test/tap/tests/test_frontend_x509_auth-t.cpp`
 
 **Interfaces:**
@@ -185,13 +197,15 @@ Add immutable-for-the-connection evidence beside `x509_subject_alt_name`:
 
 ```cpp
 char *x509_subject_alt_name;
+#ifdef PROXYSQL31
 bool client_cert_present;
 long client_cert_verify_result;
 bool frontend_authenticated_via_spiffe;
+#endif
 SSL *ssl;
 ```
 
-Define the policy types at file scope in `lib/MySQL_Protocol.cpp`:
+Define the policy types at file scope in `lib/MySQL_Protocol.cpp`, entirely inside `#ifdef PROXYSQL31`:
 
 ```cpp
 enum class frontend_auth_context : uint8_t {
@@ -215,29 +229,92 @@ static frontend_certificate_policy_result evaluate_frontend_certificate_policy(
 );
 ```
 
-- [ ] **Step 1: Initialize the new data-stream fields.**
+The tier-gate TAP test owns these file-local helpers:
 
-  In `MySQL_Data_Stream::MySQL_Data_Stream()` initialize:
+```cpp
+static int get_proxy_version(MYSQL* admin, int& major, int& minor) {
+	if (mysql_query(admin,
+		"SELECT variable_value FROM global_variables "
+		"WHERE variable_name='admin-version'")) {
+		return EXIT_FAILURE;
+	}
+	MYSQL_RES* result = mysql_store_result(admin);
+	if (!result) {
+		return EXIT_FAILURE;
+	}
+	MYSQL_ROW row = mysql_fetch_row(result);
+	const int parsed = row && row[0]
+		? std::sscanf(row[0], "%d.%d", &major, &minor) : 0;
+	mysql_free_result(result);
+	return parsed == 2 ? EXIT_SUCCESS : EXIT_FAILURE;
+}
+
+static unsigned int try_plaintext_frontend_connect(
+	const CommandLine& cl,
+	const char* username,
+	const char* password
+);
+```
+
+- [ ] **Step 1: Add and establish a cross-tier compatibility regression.**
+
+  Create `test_frontend_x509_tier_gate-t.cpp`. Connect to the admin interface and read the running build from:
+
+  ```sql
+  SELECT variable_value
+    FROM global_variables
+   WHERE variable_name='admin-version'
+  ```
+
+  Parse the leading `major.minor` numbers. Provision one frontend user with a normal password and `attributes='{"require_x509":true}'`, then attempt a plaintext connection with the correct password:
+
+  ```cpp
+  const bool has_feature = major > 3 || (major == 3 && minor >= 1);
+  const unsigned int expected = has_feature ? ER_ACCESS_DENIED_ERROR : 0;
+  const unsigned int actual = try_frontend_connect(
+	cl, "tap_x509_tier_gate", "tap-x509-tier-password", false);
+  ok(actual == expected,
+	"require_x509 is %s on ProxySQL %d.%d: expected errno=%u, got errno=%u",
+	has_feature ? "enforced" : "unrecognized", major, minor, expected, actual);
+  ```
+
+  The test must plan an admin-version parse assertion, the tier-dependent authentication assertion, and cleanup assertions. It deletes only its dedicated row and restores no global variables. Register it without a minimum-version tag:
+
+  ```json
+  "test_frontend_x509_tier_gate-t" : [ "legacy-g6", "mysql84-g6", "mysql90-g1", "mysql95-g1" ],
+  ```
+
+  Update `test_frontend_x509_auth-t` registration to append `"@proxysql_min_version:3.1"`.
+
+  Run it first against a clean default v3.0 DEBUG build. On the pristine Task 1 base it establishes the compatibility baseline with `actual=0`; if an in-progress evaluator is already compiled into the stable tier it fails and exposes the missing gate. After Task 2 it must pass in both tiers, with opposite expected authentication results selected from `admin-version`.
+
+- [ ] **Step 2: Initialize the new data-stream fields only for Innovative-tier builds.**
+
+  Keep `x509_subject_alt_name` and `ssl` unconditional. Wrap only the new state in the class definition and constructor:
 
   ```cpp
   x509_subject_alt_name = nullptr;
+#ifdef PROXYSQL31
   client_cert_present = false;
   client_cert_verify_result = X509_V_OK;
   frontend_authenticated_via_spiffe = false;
+#endif
   ssl = nullptr;
   ```
 
   `client_cert_present` is required because OpenSSL's verification result alone does not distinguish “no certificate” from a successfully verified certificate. Do not clear these fields in `MySQL_Session::reset()`; they belong to the physical connection and must survive `COM_RESET_CONNECTION` and `COM_CHANGE_USER`.
 
-- [ ] **Step 2: Record verification state for every peer certificate, not only SPIFFE certificates.**
+- [ ] **Step 3: Record generic verification state only under `PROXYSQL31`, while hardening SAN handling in every tier.**
 
   Restructure the successful branch of `MySQL_Data_Stream::do_ssl_handshake()` as follows:
 
   ```cpp
   if (n == 1) {
 	X509* cert = SSL_get_peer_certificate(ssl);
+#ifdef PROXYSQL31
 	client_cert_present = (cert != nullptr);
 	client_cert_verify_result = cert ? SSL_get_verify_result(ssl) : X509_V_OK;
+#endif
 
 	if (cert) {
 		GENERAL_NAMES* alt_names = static_cast<GENERAL_NAMES*>(
@@ -249,7 +326,7 @@ static frontend_certificate_policy_result evaluate_frontend_certificate_policy(
 		X509_free(cert);
 	}
 
-	if (x509_subject_alt_name && client_cert_verify_result != X509_V_OK) {
+	if (x509_subject_alt_name && SSL_get_verify_result(ssl) != X509_V_OK) {
 		// Preserve the existing SPIFFE handshake-failure behavior.
 		return SSLSTATUS_FAIL;
 	}
@@ -258,9 +335,9 @@ static frontend_certificate_policy_result evaluate_frontend_certificate_policy(
 
   Guard `alt_names` before calling `sk_GENERAL_NAME_num()`. The trusted no-SAN certificate in Task 1 is specifically intended to exercise this null case and prevent a regression crash.
 
-- [ ] **Step 3: Implement strict, exception-safe attribute parsing.**
+- [ ] **Step 4: Implement strict, exception-safe attribute parsing behind the tier gate.**
 
-  The evaluator must:
+  Compile the shared evaluator only under `#ifdef PROXYSQL31`. It must:
 
   1. Treat null/empty attributes as allowed.
   2. Catch all `nlohmann::json::exception` values and fail closed.
@@ -269,7 +346,7 @@ static frontend_certificate_policy_result evaluate_frontend_certificate_policy(
   5. Require `spiffe_id` to be a string and fail closed otherwise.
   6. Reuse the current exact `spiffe://...` comparison and `!regex` full-match semantics with quiet RE2 options.
 
-  Make the `#ifdef DEBUG` `debug_spiffe_id()` helper follow the same `is_string()` and exception-safety rules. Otherwise a malformed `spiffe_id` can still terminate a debug build inside `PPHR_5passwordTrue()` before the common evaluator runs.
+  In every tier, make the `#ifdef DEBUG` `debug_spiffe_id()` helper follow the same `is_string()` and exception-safety rules. Otherwise a malformed `spiffe_id` can still terminate a debug build inside `PPHR_5passwordTrue()` before the common evaluator runs.
 
   Core `require_x509` check:
 
@@ -297,11 +374,12 @@ static frontend_certificate_policy_result evaluate_frontend_certificate_policy(
 
   Evaluate `require_x509` and `spiffe_id` conjunctively when both are present. Do not let a successful SPIFFE match overwrite a previous `require_x509` denial.
 
-- [ ] **Step 4: Make initial authentication use the evaluator.**
+- [ ] **Step 5: Make initial authentication select the tier-appropriate path.**
 
-  Replace the SPIFFE-only block in `verify_user_attributes()` with:
+  Use the common evaluator only in `PROXYSQL31` builds. Preserve the existing SPIFFE-only block verbatim in the stable `#else` path:
 
   ```cpp
+#ifdef PROXYSQL31
   const char* attributes = (*myds)->sess->user_attributes;
   const auto policy = evaluate_frontend_certificate_policy(
 	*myds, attributes, user,
@@ -311,28 +389,60 @@ static frontend_certificate_policy_result evaluate_frontend_certificate_policy(
 	return false;
   }
   (*myds)->frontend_authenticated_via_spiffe = policy.has_spiffe_id;
+#else
+  // Existing v3.0 SPIFFE-only attribute handling. Never inspect require_x509.
+#endif
   ```
 
   Retain the existing `default-transaction_isolation` application after policy success. Parse the JSON once in the function or pass a parsed object through a private helper; do not reintroduce uncaught `get<std::string>()` exceptions.
 
-  Remove `user_attributes_has_spiffe()` from `include/MySQL_Protocol.h` only after Task 3 moves its last call site to the common evaluator.
+  Task 3 will retain `user_attributes_has_spiffe()` only inside the stable `#ifndef PROXYSQL31` path, because that path must preserve the existing late SPIFFE target check. Innovative-tier code must use the common evaluator instead.
 
-- [ ] **Step 5: Run the initial-login test and focused TLS regression.**
+- [ ] **Step 6: Prove both tier behaviors and run focused TLS regressions.**
 
   ```sh
+  make clean
+  make -j4 debug
+  make -C test/tap/tests test_frontend_x509_tier_gate-t
+  INFRA_ID=x509-tier-stable TAP_GROUP=mysql84-g6 \
+    test/infra/control/start-proxysql-isolated.bash
+  INFRA_ID=x509-tier-stable TAP_GROUP=mysql84-g6 \
+    test/infra/control/ensure-infras.bash
+  WORKSPACE=$(pwd) INFRA_ID=x509-tier-stable TAP_GROUP=mysql84-g6 \
+    TEST_PY_TAP_INCL='^test_frontend_x509_tier_gate-t$' \
+    test/infra/control/run-tests-isolated.bash
+
+  make clean
+  PROXYSQL31=1 make -j4 debug
   make -C test/tap/tests test_frontend_x509_auth-t reg_test_4556-ssl_error_queue-t test_auth_methods-t
-  cd test/tap/tests && ./test_frontend_x509_auth-t
-  cd test/tap/tests && ./reg_test_4556-ssl_error_queue-t
-  cd test/tap/tests && ./test_auth_methods-t
+  INFRA_ID=x509-tier-31 TAP_GROUP=mysql84-g6 \
+    test/infra/control/start-proxysql-isolated.bash
+  INFRA_ID=x509-tier-31 TAP_GROUP=mysql84-g6 \
+    test/infra/control/ensure-infras.bash
+  WORKSPACE=$(pwd) INFRA_ID=x509-tier-31 TAP_GROUP=mysql84-g6 \
+    TEST_PY_TAP_INCL='^(test_frontend_x509_auth-t|test_frontend_x509_tier_gate-t)$' \
+    test/infra/control/run-tests-isolated.bash
+  INFRA_ID=x509-tier-31 TAP_GROUP=mysql84-g2 \
+    test/infra/control/ensure-infras.bash
+  WORKSPACE=$(pwd) INFRA_ID=x509-tier-31 TAP_GROUP=mysql84-g2 \
+    TEST_PY_TAP_INCL='^reg_test_4556-ssl_error_queue-t$' \
+    test/infra/control/run-tests-isolated.bash
+  INFRA_ID=x509-tier-31 TAP_GROUP=mysql84-g7 \
+    test/infra/control/ensure-infras.bash
+  WORKSPACE=$(pwd) INFRA_ID=x509-tier-31 TAP_GROUP=mysql84-g7 \
+    TEST_PY_TAP_INCL='^test_auth_methods-t$' \
+    test/infra/control/run-tests-isolated.bash
   ```
 
-  Expected: all Task 1 scenarios pass; ordinary TLS connections without a client certificate remain accepted; the SSL error queue regression remains green.
+  Expected: the v3.0 compatibility probe authenticates because the key is unrecognized. In the `PROXYSQL31` build, all Task 1 scenarios pass, ordinary TLS connections without a client certificate remain accepted, and the SSL error queue regression remains green.
 
-- [ ] **Step 6: Commit the handshake evidence and common evaluator.**
+- [ ] **Step 7: Commit the tier gate, handshake evidence, and common evaluator.**
 
   ```sh
   git add include/MySQL_Data_Stream.h include/MySQL_Protocol.h \
-    lib/mysql_data_stream.cpp lib/MySQL_Protocol.cpp
+    lib/mysql_data_stream.cpp lib/MySQL_Protocol.cpp \
+    test/tap/tests/test_frontend_x509_tier_gate-t.cpp \
+    test/tap/groups/groups.json
   git commit -m "feat: enforce per-user frontend X.509 policy"
   ```
 
@@ -403,7 +513,7 @@ static unsigned int try_change_user(
 
 - [ ] **Step 3: Reject a SPIFFE-authenticated source before target lookup side effects.**
 
-  At the start of `process_pkt_COM_CHANGE_USER()`, after safe packet parsing but before account state is copied, add:
+  Under `#ifdef PROXYSQL31`, at the start of `process_pkt_COM_CHANGE_USER()`, after safe packet parsing but before account state is copied, add:
 
   ```cpp
   if ((*myds)->frontend_authenticated_via_spiffe) {
@@ -419,7 +529,7 @@ static unsigned int try_change_user(
 
 - [ ] **Step 4: Evaluate the target account before session mutation or Auth Switch.**
 
-  Immediately after `GloMyAuth->lookup()` and `get_password(account_details, PRIMARY)`, but before assigning `default_hostgroup`, `transaction_persistent`, or `user_attributes`, evaluate:
+  Under `#ifdef PROXYSQL31`, immediately after `GloMyAuth->lookup()` and `get_password(account_details, PRIMARY)`, but before assigning `default_hostgroup`, `transaction_persistent`, or `user_attributes`, evaluate:
 
   ```cpp
   const auto target_policy = evaluate_frontend_certificate_policy(
@@ -439,11 +549,11 @@ static unsigned int try_change_user(
 
   Keep the existing pass-through-target check directly after this policy gate. Its eligibility must use `!target_policy.has_spiffe_id`, matching Task 4's initial-login logic.
 
-- [ ] **Step 5: Remove the late, target-attribute SPIFFE block.**
+- [ ] **Step 5: Keep the stable SPIFFE block and replace it only in Innovative-tier code.**
 
-  Delete the `user_attributes_has_spiffe()` call around current `lib/MySQL_Protocol.cpp:1671` and remove the method declaration/definition. That block is too late: it runs only after password success, after target attributes overwrite the session, and not uniformly before Auth Switch.
+  In `PROXYSQL31` builds, delete the `user_attributes_has_spiffe()` call around current `lib/MySQL_Protocol.cpp:1671`; the new source marker and early target evaluator replace it. In stable builds, retain that pre-feature block and compile the helper declaration/definition inside `#ifndef PROXYSQL31`. Stable behavior must not gain the new source-identity rule or inspect `require_x509`.
 
-  After successful change to a non-SPIFFE account, explicitly keep:
+  In `PROXYSQL31` builds, after successful change to a non-SPIFFE account, explicitly keep:
 
   ```cpp
   (*myds)->frontend_authenticated_via_spiffe = false;
@@ -454,6 +564,8 @@ static unsigned int try_change_user(
 - [ ] **Step 6: Run focused and existing change-user tests.**
 
   ```sh
+  make clean
+  PROXYSQL31=1 make -j4 debug
   make -C test/tap/tests test_frontend_x509_auth-t reg_test_3504-change_user-t \
     reg_test_3504-change_user_libmariadb_helper \
     reg_test_3504-change_user_libmysql_helper
@@ -584,7 +696,7 @@ Keep the helper header-only so the wildcard Makefile rules need no additional li
   Add:
 
   ```json
-  "test_frontend_x509_passthrough-t" : [ "mysql84-g4", "mysql90-g4", "mysql95-g4" ],
+  "test_frontend_x509_passthrough-t" : [ "mysql84-g4", "mysql90-g4", "mysql95-g4", "@proxysql_min_version:3.1" ],
   ```
 
   Then run:
@@ -598,7 +710,7 @@ Keep the helper header-only so the wildcard Makefile rules need no additional li
 
 - [ ] **Step 7: Compute policy before pass-through eligibility and side effects.**
 
-  At the top of the pass-through block in `PPHR_verify_password()`, retain the raw row state separately from effective eligibility:
+  At the top of the pass-through block in `PPHR_verify_password()`, keep the stable code unchanged. Under `#ifdef PROXYSQL31`, retain the raw row state separately from effective eligibility:
 
   ```cpp
   const bool raw_empty_pw_case =
@@ -638,6 +750,8 @@ Keep the helper header-only so the wildcard Makefile rules need no additional li
   - `PPHR_5passwordTrue()`, and
   - `PPHR_passthrough_init()`.
 
+  The `#else` branch must contain the existing empty-password pass-through classification and must not reference the evaluator, `require_x509`, or the new data-stream fields. Pass-through itself remains unarmable on v3.0 through its existing `MySQL_Threads_Handler::commit()` tier gate.
+
   When `raw_empty_pw_case && row_policy.has_spiffe_id`, skip all pass-through-only rejection/dispatch code and continue through the legacy empty-password branch. The common `verify_user_attributes()` epilogue then performs the SPIFFE identity match. Do not accept the backend password for this case: the configured frontend empty password remains the expected password input before SPIFFE validation.
 
 - [ ] **Step 8: Keep unknown-user semantics explicit.**
@@ -653,6 +767,8 @@ Keep the helper header-only so the wildcard Makefile rules need no additional li
 - [ ] **Step 9: Run pass-through and change-user regressions.**
 
   ```sh
+  make clean
+  PROXYSQL31=1 make -j4 debug
   make -C test/tap/tests \
     test_frontend_x509_passthrough-t \
     test_passthrough_auth_e2e-t \
@@ -699,7 +815,7 @@ Keep the helper header-only so the wildcard Makefile rules need no additional li
 
 - [ ] **Step 1: Add load-time diagnostics without turning malformed values into allow.**
 
-  In the existing JSON validation block in `MySQL_Authentication::add()`, inspect `require_x509`:
+  Under `#ifdef PROXYSQL31`, in the existing JSON validation block in `MySQL_Authentication::add()`, inspect `require_x509`:
 
   ```cpp
   const auto require_x509 = valid.find("require_x509");
@@ -711,7 +827,7 @@ Keep the helper header-only so the wildcard Makefile rules need no additional li
   }
   ```
 
-  Preserve the original attribute in runtime so the evaluator can fail closed. Do not erase the key, coerce strings/numbers, or replace all attributes with an empty string; each of those would turn a configuration error into an unintended allow.
+  Preserve the original attribute in runtime so the evaluator can fail closed. Do not erase the key, coerce strings/numbers, or replace all attributes with an empty string; each of those would turn a configuration error into an unintended allow. The stable path must not call `find("require_x509")` or emit a diagnostic for that key.
 
 - [ ] **Step 2: Extend the invalid-type TAP assertion.**
 
@@ -725,6 +841,8 @@ Keep the helper header-only so the wildcard Makefile rules need no additional li
 - [ ] **Step 3: Write the frontend X.509 operator guide.**
 
   `doc/frontend_x509_authentication.md` must include:
+
+  - Availability: the feature requires a v3.1.x Innovative-tier or v4.x build; v3.0.x does not recognize the key.
 
   - Configuration example:
 
@@ -764,6 +882,8 @@ Keep the helper header-only so the wildcard Makefile rules need no additional li
 - [ ] **Step 5: Run the config test and documentation checks.**
 
   ```sh
+  make clean
+  PROXYSQL31=1 make -j4 debug
   make -C test/tap/tests test_frontend_x509_auth-t
   cd test/tap/tests && ./test_frontend_x509_auth-t
   rg -n "require_x509|COM_CHANGE_USER|SPIFFE|pass-through|unknown" \
@@ -794,6 +914,7 @@ Keep the helper header-only so the wildcard Makefile rules need no additional li
 - Review: `lib/MySQL_Authentication.cpp`
 - Review: `lib/MySQL_Session.cpp`
 - Review: `test/tap/tests/test_frontend_x509_auth-t.cpp`
+- Review: `test/tap/tests/test_frontend_x509_tier_gate-t.cpp`
 - Review: `test/tap/tests/test_frontend_x509_passthrough-t.cpp`
 - Review: `test/tap/groups/groups.json`
 - Review: `doc/frontend_x509_authentication.md`
@@ -817,12 +938,15 @@ Keep the helper header-only so the wildcard Makefile rules need no additional li
   - Additional-password retry runs the same policy and cannot bypass it.
   - `COM_CHANGE_USER` evaluates source SPIFFE state and target attributes before Auth Switch and target session-attribute mutation.
   - Unknown-user pass-through remains unchanged and is never mistaken for an attribute-bearing row.
+  - Every new evaluator call and state access is inside a `PROXYSQL31` path; the stable path never inspects `require_x509`.
+  - The stable `COM_CHANGE_USER` path retains its pre-feature `user_attributes_has_spiffe()` behavior.
 
 - [ ] **Step 2: Audit certificate ownership and reset behavior.**
 
   Confirm:
 
-  - `client_cert_present`, `client_cert_verify_result`, and `frontend_authenticated_via_spiffe` are initialized exactly once per `MySQL_Data_Stream`.
+  - Under `PROXYSQL31`, `client_cert_present`, `client_cert_verify_result`, and `frontend_authenticated_via_spiffe` are initialized exactly once per `MySQL_Data_Stream`.
+  - Without `PROXYSQL31`, those three fields are not present in the class definition and no stable object file references them.
   - No OpenSSL/X509 pointer is retained; only scalar status and the existing duplicated URI string survive the handshake.
   - `GENERAL_NAMES` is freed only when non-null and `X509` is freed on every certificate branch.
   - `MySQL_Session::reset()` does not clear physical TLS evidence.
@@ -834,16 +958,55 @@ Keep the helper header-only so the wildcard Makefile rules need no additional li
   rg -n "user_attributes_has_spiffe|SSL_renegotiate|SSL_verify_client_post_handshake" \
     include lib src
   rg -n 'require_x509.*get<|spiffe_id.*get<' lib/MySQL_Protocol.cpp
+  rg -n -C 4 'PROXYSQL31|require_x509|client_cert_present|frontend_authenticated_via_spiffe' \
+    include/MySQL_Data_Stream.h include/MySQL_Protocol.h \
+    lib/mysql_data_stream.cpp lib/MySQL_Protocol.cpp lib/MySQL_Authentication.cpp
   ```
 
-  Expected: the stale helper and renegotiation calls are absent. Any remaining JSON `get<>` is guarded by an `is_boolean()`/`is_string()` check and an exception boundary.
+  Expected: no renegotiation call exists. `user_attributes_has_spiffe()` exists only in the stable `#ifndef PROXYSQL31` branch. Any remaining JSON `get<>` is guarded by an `is_boolean()`/`is_string()` check and an exception boundary.
 
-- [ ] **Step 4: Build ProxySQL and all focused tests from the current tree.**
+- [ ] **Step 4: Clean-build and test the stable v3.0 tier.**
 
   ```sh
-  make -j4
+  make clean
+  make -j4 debug
+  ./src/proxysql --version
+  make -C test/tap/tests \
+    test_frontend_x509_tier_gate-t \
+    test_auth_methods-t \
+    reg_test_3504-change_user-t \
+    reg_test_4556-ssl_error_queue-t
+
+  INFRA_ID=x509-final-stable TAP_GROUP=mysql84-g6 \
+    test/infra/control/start-proxysql-isolated.bash
+  INFRA_ID=x509-final-stable TAP_GROUP=mysql84-g6 \
+    test/infra/control/ensure-infras.bash
+  WORKSPACE=$(pwd) INFRA_ID=x509-final-stable TAP_GROUP=mysql84-g6 \
+    TEST_PY_TAP_INCL='^(test_frontend_x509_tier_gate-t|reg_test_3504-change_user-t)$' \
+    test/infra/control/run-tests-isolated.bash
+  INFRA_ID=x509-final-stable TAP_GROUP=mysql84-g2 \
+    test/infra/control/ensure-infras.bash
+  WORKSPACE=$(pwd) INFRA_ID=x509-final-stable TAP_GROUP=mysql84-g2 \
+    TEST_PY_TAP_INCL='^reg_test_4556-ssl_error_queue-t$' \
+    test/infra/control/run-tests-isolated.bash
+  INFRA_ID=x509-final-stable TAP_GROUP=mysql84-g7 \
+    test/infra/control/ensure-infras.bash
+  WORKSPACE=$(pwd) INFRA_ID=x509-final-stable TAP_GROUP=mysql84-g7 \
+    TEST_PY_TAP_INCL='^test_auth_methods-t$' \
+    test/infra/control/run-tests-isolated.bash
+  ```
+
+  Expected version prefix: `3.0`. Run the compatibility, ordinary-authentication, change-user, and TLS regression binaries against the stable isolated runtime. The tier-gate test must show that a correct-password plaintext login succeeds even though the row carries `{"require_x509":true}`. The feature test is excluded from stable groups by `@proxysql_min_version:3.1`.
+
+- [ ] **Step 5: Clean-build the Innovative tier and run the complete focused TAP matrix.**
+
+  ```sh
+  make clean
+  PROXYSQL31=1 make -j4 debug
+  ./src/proxysql --version
   make -C test/tap/tests \
     test_frontend_x509_auth-t \
+    test_frontend_x509_tier_gate-t \
     test_frontend_x509_passthrough-t \
     test_auth_methods-t \
     reg_test_3504-change_user-t \
@@ -851,24 +1014,42 @@ Keep the helper header-only so the wildcard Makefile rules need no additional li
     test_passthrough_auth_e2e-t \
     test_passthrough_auth_security-t \
     test_passthrough_auth_unknown_user-t
+
+  INFRA_ID=x509-final-31 TAP_GROUP=mysql84-g6 \
+    test/infra/control/start-proxysql-isolated.bash
+  INFRA_ID=x509-final-31 TAP_GROUP=mysql84-g6 \
+    test/infra/control/ensure-infras.bash
+  WORKSPACE=$(pwd) INFRA_ID=x509-final-31 TAP_GROUP=mysql84-g6 \
+    TEST_PY_TAP_INCL='^(test_frontend_x509_auth-t|test_frontend_x509_tier_gate-t|reg_test_3504-change_user-t)$' \
+    test/infra/control/run-tests-isolated.bash
+  INFRA_ID=x509-final-31 TAP_GROUP=mysql84-g4 \
+    test/infra/control/ensure-infras.bash
+  WORKSPACE=$(pwd) INFRA_ID=x509-final-31 TAP_GROUP=mysql84-g4 \
+    TEST_PY_TAP_INCL='^(test_frontend_x509_passthrough-t|test_passthrough_auth_e2e-t|test_passthrough_auth_security-t|test_passthrough_auth_unknown_user-t)$' \
+    test/infra/control/run-tests-isolated.bash
+  INFRA_ID=x509-final-31 TAP_GROUP=mysql84-g2 \
+    test/infra/control/ensure-infras.bash
+  WORKSPACE=$(pwd) INFRA_ID=x509-final-31 TAP_GROUP=mysql84-g2 \
+    TEST_PY_TAP_INCL='^reg_test_4556-ssl_error_queue-t$' \
+    test/infra/control/run-tests-isolated.bash
+  INFRA_ID=x509-final-31 TAP_GROUP=mysql84-g7 \
+    test/infra/control/ensure-infras.bash
+  WORKSPACE=$(pwd) INFRA_ID=x509-final-31 TAP_GROUP=mysql84-g7 \
+    TEST_PY_TAP_INCL='^test_auth_methods-t$' \
+    test/infra/control/run-tests-isolated.bash
   ```
 
-  Do not claim success from compilation alone; run the TAP binaries against the appropriate standard infrastructure groups.
+  Expected version prefix: `3.1`. Every TAP plan completes with zero failed assertions. The tier-gate test must now return 1045 for the same plaintext account. Record any environment-based certificate skips explicitly; CI's standard auto-generated CA must execute, not skip, the trusted-certificate and SPIFFE cases.
 
-- [ ] **Step 5: Run the complete focused TAP matrix.**
+  Confirm the v4 inheritance mechanically without creating a second X.509 gate:
 
   ```sh
-  cd test/tap/tests && ./test_frontend_x509_auth-t
-  cd test/tap/tests && ./test_frontend_x509_passthrough-t
-  cd test/tap/tests && ./test_auth_methods-t
-  cd test/tap/tests && ./reg_test_3504-change_user-t
-  cd test/tap/tests && ./reg_test_4556-ssl_error_queue-t
-  cd test/tap/tests && ./test_passthrough_auth_e2e-t
-  cd test/tap/tests && ./test_passthrough_auth_security-t
-  cd test/tap/tests && ./test_passthrough_auth_unknown_user-t
+  make PROXYSQL40=1 \
+    --eval='print-proxysql31: ; @printf "%s\n" "$(PROXYSQL31)"' \
+    print-proxysql31
   ```
 
-  Expected: every TAP plan completes with zero failed assertions. Record any environment-based certificate skips explicitly; CI's standard auto-generated CA must execute, not skip, the trusted-certificate and SPIFFE cases.
+  Expected output: `1`.
 
 - [ ] **Step 6: Run static diff hygiene checks.**
 
@@ -892,6 +1073,7 @@ Keep the helper header-only so the wildcard Makefile rules need no additional li
     lib/mysql_data_stream.cpp lib/MySQL_Protocol.cpp \
     lib/MySQL_Authentication.cpp lib/MySQL_Session.cpp \
     test/tap/tests/test_frontend_x509_auth-t.cpp \
+    test/tap/tests/test_frontend_x509_tier_gate-t.cpp \
     test/tap/tests/test_frontend_x509_passthrough-t.cpp \
     test/tap/groups/groups.json \
     doc/frontend_x509_authentication.md \
@@ -905,8 +1087,12 @@ Keep the helper header-only so the wildcard Makefile rules need no additional li
 
 ## Acceptance Matrix
 
+Except for the explicit stable-tier rows, every `require_x509` result and every new SPIFFE/`COM_CHANGE_USER` restriction below applies only when `PROXYSQL31` is defined.
+
 | Flow | Account policy | Connection evidence | Result |
 |---|---|---|---|
+| Stable v3.0 initial login | row contains `require_x509` | any | Key is unrecognized; existing password/SPIFFE behavior |
+| Stable v3.0 `COM_CHANGE_USER` | row contains `require_x509` | any | Existing pre-feature behavior; key is not inspected |
 | Initial login | none / `require_x509=false` | plaintext or TLS without cert | Existing password behavior |
 | Initial login | `require_x509=true` | plaintext | 1045 |
 | Initial login | `require_x509=true` | TLS, no cert | 1045 |
