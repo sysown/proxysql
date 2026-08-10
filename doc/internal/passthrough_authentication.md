@@ -77,6 +77,10 @@ When pass-through completes for a user not in `mysql_users`, no row is inserted.
 
 Because these are re-evaluated each connect, changing `mysql-passthrough_default_hg` immediately affects routing on the next connect from a cached unknown user — no cache flush required.
 
+### 3.6 Frontend certificate policy (v3.1+/v4 only)
+
+A row-backed frontend account can set `attributes.require_x509=true`. On v3.1+ and v4, that requires the configured password/authentication-plugin step and a trusted certificate on the physical frontend TLS connection. A SPIFFE row is excluded from pass-through because `spiffe_id` is an identity policy, not an empty-password pass-through signal. Unknown-user pass-through has no row or attributes object, so its existing `mysql-passthrough_auth_require_tls` transport gate is unchanged; it is not a per-user X.509 rule.
+
 ## 4. Protocol flow
 
 ### 4.1 `caching_sha2_password` (the primary case)
@@ -175,6 +179,8 @@ For Phase 1, `COM_CHANGE_USER` targeting a user that would require pass-through 
 
 Implementation: `process_pkt_COM_CHANGE_USER` in `lib/MySQL_Protocol.cpp` returns early with `ret=false` when the target's stored password is empty and the master gate is on. The check runs BEFORE the function's unconditional session-state mutations (`sess->default_hostgroup`, `transaction_persistent`, `user_attributes`) so a rejected attempt has no observable side effects on the already-authenticated session.
 
+The directions are intentionally asymmetric: a pass-through target is rejected even when the original connection carries a valid certificate, while a pass-through-authenticated source may change to an ordinary password-backed target. The SPIFFE source/target prohibition remains separate: an SPIFFE-authenticated source and every SPIFFE target are rejected. `COM_CHANGE_USER` relies on immutable certificate evidence from the original connection and never renegotiates TLS.
+
 May be revisited in a later phase if there's demand.
 
 ## 6. Probe details
@@ -247,6 +253,20 @@ The §8.4 invalidation eviction (a *later* 1045 during real query traffic agains
 | Backend DoS from runaway probes | Per-user/per-IP rate limits *plus* a global concurrency cap `mysql-passthrough_auth_max_inflight_probes` (default 100) |
 | Stale cached password after backend rotation | TTL + invalidate-on-backend-rejection during real traffic |
 | Unintended exposure of unknown-user code path | `mysql-passthrough_auth_unknown_users` defaults to `false`; `username_pattern` allowlist for further restriction |
+
+For a row-backed authentication attempt, the security ordering is:
+
+```text
+row lookup
+  -> require_x509 / SPIFFE classification
+  -> username allowlist
+  -> pass-through TLS gate
+  -> cache lookup
+  -> cleartext request
+  -> backend probe
+```
+
+Cold-probe completion sends the frontend OK from `MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT()`. Certificate policy must therefore be decided before dispatch, rather than relying only on the normal handshake epilogue. The frontend certificate is not sent to the backend, and this ordering does not change the unknown-user TLS transport gate into a per-user X.509 rule.
 
 ### 7.2 Rate limiting
 

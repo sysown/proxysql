@@ -7,7 +7,9 @@
  * validation policy, so that certificate must remain acceptable.
  */
 
+#include <fstream>
 #include <string>
+#include <unistd.h>
 
 #include "mysql.h"
 #include "mysqld_error.h"
@@ -15,7 +17,9 @@
 #include "tap.h"
 #include "command_line.h"
 #include "frontend_x509_test_utils.h"
+#include "utils.h"
 
+using std::fstream;
 using std::string;
 
 static constexpr const char* USER_NONE = "tap_x509_none";
@@ -30,6 +34,23 @@ static constexpr const char* PASSWORD = "tap-x509-password";
 static constexpr const char* WRONG_PASSWORD = "tap-x509-wrong-password";
 static constexpr const char* CHANGE_SOURCE_PASSWORD = "source-password";
 static constexpr const char* CHANGE_TARGET_PASSWORD = "target-password";
+static constexpr const char* BAD_TYPE_LOG_FINGERPRINT = "expected JSON boolean";
+static constexpr int MAX_LOG_CHECK_ATTEMPTS = 20;
+static constexpr useconds_t LOG_CHECK_RETRY_DELAY_US = 100000;
+
+static bool wait_for_log_line(fstream& log, const string& username, const string& fingerprint) {
+	string line;
+	for (int attempt = 0; attempt < MAX_LOG_CHECK_ATTEMPTS; ++attempt) {
+		log.clear(log.rdstate() & ~std::ios_base::eofbit & ~std::ios_base::failbit);
+		while (getline(log, line)) {
+			if (line.find(username) != string::npos && line.find(fingerprint) != string::npos) {
+				return true;
+			}
+		}
+		usleep(LOG_CHECK_RETRY_DELAY_US);
+	}
+	return false;
+}
 
 static unsigned int try_change_user(
 	MYSQL* connection,
@@ -85,12 +106,12 @@ int main() {
 	}
 
 	/*
-	 * 4 setup + 4 certificate fixtures + 9 initial-login probes + 8
+	 * 6 setup + 4 certificate fixtures + 9 initial-login probes + 8
 	 * COM_CHANGE_USER probes + 2 cleanup checks.
 	 * A custom environment whose CA private key cannot sign our certificate
 	 * emits TAP SKIPs only for the probes that need that trusted certificate.
 	 */
-	plan(27);
+	plan(29);
 
 	mysql_ptr admin { mysql_init(NULL) };
 	if (!admin || !mysql_real_connect(admin.get(), cl.host, cl.admin_username, cl.admin_password,
@@ -104,6 +125,14 @@ int main() {
 	const bool saved_passthrough = read_global_variable(
 		admin.get(), "mysql-passthrough_auth_enabled", original_passthrough_enabled);
 	ok(saved_passthrough, "Saved mysql-passthrough_auth_enabled before the test");
+
+	const string log_path { datadir + "/proxysql.log" };
+	fstream proxysql_log {};
+	const int log_res = open_file_and_seek_end(log_path, proxysql_log);
+	ok(log_res == EXIT_SUCCESS, "Opened ProxySQL log at '%s'", log_path.c_str());
+	if (log_res != EXIT_SUCCESS) {
+		return exit_status();
+	}
 
 	const bool passthrough_disabled = saved_passthrough &&
 		do_query(admin.get(), "SET mysql-passthrough_auth_enabled='false'") &&
@@ -127,6 +156,12 @@ int main() {
 			"('tap_spiffe_target','',0,1,'{\"spiffe_id\":\"spiffe://tap/target\"}')") &&
 		do_query(admin.get(), "LOAD MYSQL USERS TO RUNTIME");
 	ok(users_provisioned, "Provisioned dedicated frontend require_x509 users");
+
+	const bool bad_type_diagnostic_seen = wait_for_log_line(
+		proxysql_log, USER_BAD_TYPE, BAD_TYPE_LOG_FINGERPRINT);
+	ok(bad_type_diagnostic_seen,
+		"proxysql.log contains '%s' and '%s' after LOAD MYSQL USERS TO RUNTIME",
+		USER_BAD_TYPE, BAD_TYPE_LOG_FINGERPRINT);
 
 	temporary_certificate_directory certificate_directory;
 	if (!certificate_directory.valid()) {
