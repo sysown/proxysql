@@ -242,14 +242,22 @@ extern "C" void proxy_debug_func(
 			sscanf(strings[i], "%*[^(](%100[^+]", debugbuff);
 			int status;
 			char *realname=NULL;
-			realname=abi::__cxa_demangle(debugbuff, 0, 0, &status);
-			if (realname) {
-				sprintf(debugbuff," ---- %s : %s\n", strings[i], realname);
-				strcat(longdebugbuff2,debugbuff);
+				realname=abi::__cxa_demangle(debugbuff, 0, 0, &status);
+				if (realname) {
+					size_t longdebugbuff2_len = strlen(longdebugbuff2);
+					if (longdebugbuff2_len < sizeof(longdebugbuff2) - 1) {
+						snprintf(
+							longdebugbuff2 + longdebugbuff2_len,
+							sizeof(longdebugbuff2) - longdebugbuff2_len,
+							" ---- %s : %s\n",
+							strings[i],
+							realname
+						);
+					}
+				}
 			}
+			free(strings);
 		}
-		free(strings);
-	}
 #endif
 	pthread_mutex_lock(&debug_mutex);
 	if (debugdb_disk == NULL) {
