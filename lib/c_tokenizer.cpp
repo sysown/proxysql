@@ -29,12 +29,13 @@ void tokenizer(tokenizer_t *result, const char* s, const char* delimiters, int e
 	result->s_length = ( (s && delimiters) ? tokenizer_strlen(s) : 0 );
 	result->s = NULL;
 	if (result->s_length) {
-		if (result->s_length > (PROXYSQL_TOKENIZER_BUFFSIZE-1)) {
-			result->s = strdup(s);
-		} else {
-			memcpy(result->buffer, s, result->s_length + 1);
-			result->s = result->buffer;
-		}
+	if (result->s_length > (PROXYSQL_TOKENIZER_BUFFSIZE-1)) {
+		result->s = strdup(s);
+	} else {
+		memcpy(result->buffer, s, result->s_length);
+		result->buffer[result->s_length] = '\0';
+		result->s = result->buffer;
+	}
 	}
 	result->delimiters				= delimiters;
 	result->current					 = NULL;
