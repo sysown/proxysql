@@ -149,10 +149,26 @@ int main(int argc, char** argv) {
     }
     ok(pgc != NULL && pgc->isConnected(), "Connected via pg_lite_client");
 
-    /* Create test table via simple query */
+    /* Create test table via simple query.
+     *
+     * Each response MUST be consumed. execute() only writes the Query message;
+     * it does not read the reply, so firing three of them back-to-back leaves
+     * three unread ReadyForQuery messages in the socket. The next
+     * consumeInputUntilReady() -- the one after the Parse batch below -- stops
+     * at the FIRST ReadyForQuery it sees, which would be DROP TABLE's, not the
+     * one it is waiting for. From that point the client is a full exchange
+     * behind the server and keeps pipelining anyway, so an old ReadyForQuery is
+     * still in flight when the Bind/Execute batch starts. Whether that stray
+     * message reaches the proxy before or after the batch's first Execute is
+     * pure timing, which is exactly how this test failed intermittently in CI
+     * (SELECT/INSERT/UPDATE stats each shifted by one position) while passing
+     * locally. */
     pgc->execute("DROP TABLE IF EXISTS ffto_pg_pipe");
+    pgc->consumeInputUntilReady();
     pgc->execute("CREATE TABLE ffto_pg_pipe (id INT PRIMARY KEY, val TEXT)");
+    pgc->consumeInputUntilReady();
     pgc->execute("INSERT INTO ffto_pg_pipe VALUES (1,'a'), (2,'b'), (3,'c')");
+    pgc->consumeInputUntilReady();
 
     /* ================================================================
      * Scenario 1:  3 different queries pipelined before Sync

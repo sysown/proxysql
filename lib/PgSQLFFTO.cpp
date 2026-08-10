@@ -262,7 +262,30 @@ void PgSQLFFTO::process_server_message(char type, const unsigned char* payload, 
             finalize_current_query();
         }
     } else if (type == 'Z') {
-        finalize_current_query();
+        // ReadyForQuery terminates a SIMPLE-query exchange, so it is the
+        // finalizer for 'Q' queries -- their CommandComplete deliberately does
+        // not finalize (see the m_current_finalize_on_sync check above).
+        //
+        // It must NOT finalize an extended-protocol Execute. Those are
+        // finalized by their own CommandComplete, and in a pipelined batch
+        // several are queued at once. Finalizing one here reports it with
+        // zeroed counters and pops the queue, so every subsequent
+        // CommandComplete in the batch lands on the WRONG query and the last
+        // one is dropped entirely once the queue drains to IDLE -- silent,
+        // plausible-looking corruption of stats_pgsql_query_digest rather than
+        // an obvious failure.
+        //
+        // A stray ReadyForQuery reaching this point is not hypothetical: it
+        // only takes a client that pipelines a new batch without having read
+        // the responses to its previous exchange, at which point the earlier
+        // exchange's ReadyForQuery is still in flight and arrives while the
+        // new batch's first Execute is current. Ignoring it here makes the
+        // batch attribute correctly; the pending queue is still drained by the
+        // CommandCompletes that follow, and an ErrorResponse ('E' below) is
+        // what clears the queue when a batch really is abandoned.
+        if (m_current_finalize_on_sync) {
+            finalize_current_query();
+        }
     } else if (type == 'E') {
         if (!m_current_query.empty() && m_query_start_time != 0) {
             unsigned long long duration = monotonic_time() - m_query_start_time;
