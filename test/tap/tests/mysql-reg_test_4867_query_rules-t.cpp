@@ -75,21 +75,21 @@ int next_val(ValueGenerator* vg) {
 
 char* unique_str(ValueGenerator* vg, const char* field) {
     char* str = (char*)malloc(32);
-    sprintf(str, "%s_%d", field, next_val(vg));
+    snprintf(str, 32, "%s_%d", field, next_val(vg));
     return str;
 }
 
 char* unique_ip(ValueGenerator* vg) {
     char* ip = (char*)malloc(24);
     unsigned int octet = vg->base + vg->offset++;
-    sprintf(ip, "%u.%u.%u.%u",
+    snprintf(ip, 24, "%u.%u.%u.%u",
         octet % 256, (octet + 1) % 256, (octet + 2) % 256, (octet + 3) % 256);
     return ip;
 }
 
 char* unique_json(ValueGenerator* vg) {
     char* json = (char*)malloc(50);
-    sprintf(json, "{\"%s\":%d}", "unique_key", next_val(vg));
+    snprintf(json, 50, "{\"%s\":%d}", "unique_key", next_val(vg));
     return json;
 }
 
@@ -139,8 +139,9 @@ char* escape_str(MYSQL* mysql, const char* str) {
     if (!str) return strdup("NULL");
     char* escaped = (char*)malloc(2 * strlen(str) + 1);
     mysql_real_escape_string(mysql, escaped, str, strlen(str));
-    char* result = (char*)malloc(strlen(escaped) + 3);
-    sprintf(result, "'%s'", escaped);
+    size_t len = strlen(escaped);
+    char* result = (char*)malloc(len + 3);
+    snprintf(result, len + 3, "'%s'", escaped);
     free(escaped);
     return result;
 }
@@ -297,7 +298,7 @@ bool check_result(MYSQL_RES* res, RuleData* expected, bool runtime_table) {
 
         // converting digest to hex string
         char hex_string[20];
-        sprintf(hex_string, "0x%016X", expected->digest);
+        snprintf(hex_string, sizeof(hex_string), "0x%016X", expected->digest);
 
         if (strcmp(row[field_idx], hex_string ? hex_string : "") != 0) {
                 diag("Expected digest to be '%s', got '%s'", hex_string, row[field_idx]);
@@ -408,7 +409,7 @@ int main() {
     // Check rules in runtime table
     for (int i = 0; i < num_tests; i++) {
         char query[256];
-        sprintf(query, "SELECT * FROM runtime_mysql_query_rules WHERE rule_id = %d", rule_ids[i]);
+        snprintf(query, sizeof(query), "SELECT * FROM runtime_mysql_query_rules WHERE rule_id = %d", rule_ids[i]);
         MYSQL_QUERY_ON_ERR_CLEANUP(proxysql_admin, query);
         MYSQL_RES* res = mysql_store_result(proxysql_admin);
         if (!res || mysql_num_rows(res) == 0) {
@@ -429,7 +430,7 @@ int main() {
     // Check rules in runtime table
     for (int i = 0; i < num_tests; i++) {
         char query[256];
-        sprintf(query, "SELECT * FROM disk.mysql_query_rules WHERE rule_id = %d", rule_ids[i]);
+        snprintf(query, sizeof(query), "SELECT * FROM disk.mysql_query_rules WHERE rule_id = %d", rule_ids[i]);
 
         if (mysql_query(proxysql_admin, query)) {
             fprintf(stderr, "File %s, line %d, Error: %s (%s)\n", __FILE__, __LINE__, mysql_error(proxysql_admin), query);
