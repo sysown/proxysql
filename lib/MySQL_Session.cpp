@@ -894,8 +894,9 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 	if (pkt->size <= 5) { return false; }
 	char c=((char *)pkt->ptr)[5];
 	bool ret=false;
+	static constexpr size_t commit_len = sizeof("commit") - 1;
 	if (c=='c' || c=='C') {
-		if (pkt->size==strlen("commit")+5) {
+		if (pkt->size==commit_len+5) {
 			if (strncasecmp((char *)"commit",(char *)pkt->ptr+5,6)==0) {
 				__sync_fetch_and_add(&MyHGM->status.commit_cnt, 1);
 				ret=true;
@@ -903,7 +904,8 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 		}
 	} else {
 		if (c=='r' || c=='R') {
-			if (pkt->size==strlen("rollback")+5) {
+			static constexpr size_t rollback_len = sizeof("rollback") - 1;
+			if (pkt->size==rollback_len+5) {
 				if ( strncasecmp((char *)"rollback",(char *)pkt->ptr+5,8)==0 ) {
 					__sync_fetch_and_add(&MyHGM->status.rollback_cnt, 1);
 					ret=true;
@@ -976,14 +978,15 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 	autocommit_handled=false;
 	sending_set_autocommit=false;
-	size_t sal=strlen("set autocommit");
+	const size_t sal = sizeof("set autocommit") - 1;
+	const size_t set_session_autocommit_len = sizeof("SET @@session.autocommit") - 1;
 	char * _ptr = (char *)pkt->ptr;
 #ifdef DEBUG
 	string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Parsing SET command = %s\n", nqn.c_str());
 #endif
 	if ( pkt->size >= 7+sal) {
-		if (strncasecmp((char *)"SET @@session.autocommit",(char *)pkt->ptr+5,strlen((char *)"SET @@session.autocommit"))==0) {
+		if (strncasecmp((char *)"SET @@session.autocommit",(char *)pkt->ptr+5,set_session_autocommit_len)==0) {
 			memmove(_ptr+9, _ptr+19, pkt->size - 19);
 			memset(_ptr+pkt->size-10,' ',10);
 		}
@@ -1237,10 +1240,11 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		l_free(pkt->size,pkt->ptr);
 		return true;
 	}
-	if (pkt->size==strlen((char *)"select USER()")+5 && strncmp((char *)"select USER()",(char *)pkt->ptr+5,pkt->size-5)==0) {
+	constexpr size_t select_user_len = sizeof("select USER()") - 1;
+	if (pkt->size==select_user_len+5 && strncmp((char *)"select USER()",(char *)pkt->ptr+5,pkt->size-5)==0) {
 		// FIXME: this doesn't return AUTOCOMMIT or IN_TRANS
 		char *query1=(char *)"SELECT \"%s\" AS 'USER()'";
-		char *query2=(char *)malloc(strlen(query1)+strlen(client_myds->myconn->userinfo->username)+10);
+		char *query2=(char *)malloc((sizeof("SELECT \"%s\" AS 'USER()'") - 1) + strlen(client_myds->myconn->userinfo->username)+10);
 		sprintf(query2,query1,client_myds->myconn->userinfo->username);
 		char *error;
 		int cols;
@@ -1257,7 +1261,8 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		return true;
 	}
 	// MySQL client check command for dollars quote support, starting at version '8.1.0'. See #4300.
-	if ((pkt->size == strlen("SELECT $$") + 5) && strncasecmp("SELECT $$", (char*)pkt->ptr + 5, pkt->size - 5) == 0) {
+	static constexpr size_t select_dollar_quote_len = sizeof("SELECT $$") - 1;
+	if ((pkt->size == select_dollar_quote_len + 5) && strncasecmp("SELECT $$", (char*)pkt->ptr + 5, pkt->size - 5) == 0) {
 		pair<int,const char*> err_info { get_dollar_quote_error(mysql_thread___server_version) };
 
 		client_myds->DSS=STATE_QUERY_SENT_NET;
@@ -1339,8 +1344,9 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		const MARIADB_CHARSET_INFO * c;
 		char * collation_name_unstripped = NULL;
 		char * collation_name = NULL;
-		if (strcasestr(csname," COLLATE ")) {
-			collation_name_unstripped = strcasestr(csname," COLLATE ") + strlen(" COLLATE ");
+	if (strcasestr(csname," COLLATE ")) {
+		static constexpr size_t collate_prefix_len = sizeof(" COLLATE ") - 1;
+		collation_name_unstripped = strcasestr(csname," COLLATE ") + collate_prefix_len;
 			collation_name = trim_spaces_and_quotes_in_place(collation_name_unstripped);
 			char *_s1=index(csname,' ');
 			char *_s2=index(csname,'\'');
@@ -7976,11 +7982,12 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 	// handle case #1797
 	// handle case #2564
-       if ((pkt->size==SELECT_CONNECTION_ID_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_CONNECTION_ID,(char *)pkt->ptr+5,pkt->size-5)==0)) {
+	static constexpr size_t connection_id_len = sizeof("CONNECTION_ID()") - 1;
+	if ((pkt->size==SELECT_CONNECTION_ID_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_CONNECTION_ID,(char *)pkt->ptr+5,pkt->size-5)==0)) {
 		char buf[32];
 		char buf2[32];
 		sprintf(buf,"%u",thread_session_id);
-		int l0=strlen("CONNECTION_ID()");
+		int l0=connection_id_len;
 		memcpy(buf2,(char *)pkt->ptr+5+SELECT_CONNECTION_ID_LEN-l0,l0);
 		buf2[l0]=0;
 		unsigned int nTrx=NumActiveTransactions();
@@ -8050,22 +8057,24 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				(pkt->size==SELECT_LAST_INSERT_ID_FROM_DUAL_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_LAST_INSERT_ID_FROM_DUAL,(char *)pkt->ptr+5,pkt->size-5)==0)
 				||
 				(pkt->size==SELECT_LAST_INSERT_ID_LIMIT1_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_LAST_INSERT_ID_LIMIT1,(char *)pkt->ptr+5,pkt->size-5)==0)
-                ||
-                (pkt->size==SELECT_VARIABLE_IDENTITY_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_VARIABLE_IDENTITY,(char *)pkt->ptr+5,pkt->size-5)==0)
-                ||
-                (pkt->size==SELECT_VARIABLE_IDENTITY_LIMIT1_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_VARIABLE_IDENTITY_LIMIT1,(char *)pkt->ptr+5,pkt->size-5)==0)
+				||
+				(pkt->size==SELECT_VARIABLE_IDENTITY_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_VARIABLE_IDENTITY,(char *)pkt->ptr+5,pkt->size-5)==0)
+				||
+				(pkt->size==SELECT_VARIABLE_IDENTITY_LIMIT1_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_VARIABLE_IDENTITY_LIMIT1,(char *)pkt->ptr+5,pkt->size-5)==0)
 			) {
 				char buf[32];
 				sprintf(buf,"%llu",last_insert_id);
 				char buf2[32];
-                int l0=0;
-                if (strcasestr(dig,"LAST_INSERT_ID")){
-    				l0=strlen("LAST_INSERT_ID()");
-                    memcpy(buf2,(char *)pkt->ptr+5+SELECT_LAST_INSERT_ID_LEN-l0,l0);
-                }else if(strcasestr(dig,"@@IDENTITY")){
-                    l0=strlen("@@IDENTITY");
-                    memcpy(buf2,(char *)pkt->ptr+5+SELECT_VARIABLE_IDENTITY_LEN-l0,l0);
-                }
+				int l0=0;
+				if (strcasestr(dig,"LAST_INSERT_ID")){
+					static constexpr size_t last_insert_id_len = sizeof("LAST_INSERT_ID()") - 1;
+					l0=last_insert_id_len;
+					memcpy(buf2,(char *)pkt->ptr+5+SELECT_LAST_INSERT_ID_LEN-l0,l0);
+				}else if(strcasestr(dig,"@@IDENTITY")){
+					static constexpr size_t identity_len = sizeof("@@IDENTITY") - 1;
+					l0=identity_len;
+					memcpy(buf2,(char *)pkt->ptr+5+SELECT_VARIABLE_IDENTITY_LEN-l0,l0);
+				}
 				buf2[l0]=0;
 				unsigned int nTrx=NumActiveTransactions();
 				uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
@@ -9150,9 +9159,11 @@ void MySQL_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
 	if (client_myds->myconn->userinfo->fe_username==NULL)
 		return;
 	char *fe=client_myds->myconn->userinfo->fe_username;
+	constexpr size_t ldap_comment_prefix_len = sizeof(" /* %s=%s */") - 1;
 	char *a = (char *)" /* %s=%s */";
-	char *b = (char *)malloc(strlen(a)+strlen(fe)+strlen(mysql_thread___add_ldap_user_comment));
+	char *b = (char *)malloc(ldap_comment_prefix_len+strlen(fe)+strlen(mysql_thread___add_ldap_user_comment));
 	sprintf(b,a,mysql_thread___add_ldap_user_comment,fe);
+	const size_t b_len = strlen(b);
 	PtrSize_t _new_pkt;
 	_new_pkt.ptr = malloc(strlen(b) + _pkt->size);
 	memcpy(_new_pkt.ptr , _pkt->ptr, 5);
@@ -9162,27 +9173,28 @@ void MySQL_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
 	if (idx) {
 		size_t first_word_len = (char *)idx - (char *)_pkt->ptr - 5;
 		if (((char *)_pkt->ptr+5)[0]=='/' && ((char *)_pkt->ptr+5)[1]=='*') {
-			void* comment_endpos = memmem(static_cast<char*>(_pkt->ptr)+7, _pkt->size-7, "*/", strlen("*/"));
+			static constexpr size_t closing_comment_len = sizeof("*/") - 1;
+			void* comment_endpos = memmem(static_cast<char*>(_pkt->ptr)+7, _pkt->size-7, "*/", closing_comment_len);
 
 			if (comment_endpos == NULL || idx < comment_endpos) {
 				b[1]=' ';
 				b[2]=' ';
-				b[strlen(b)-1] = ' ';
-				b[strlen(b)-2] = ' ';
+				b[b_len-1] = ' ';
+				b[b_len-2] = ' ';
 			}
 		}
 		memcpy(_c, (char *)_pkt->ptr+5, first_word_len);
 		_c+= first_word_len;
-		memcpy(_c,b,strlen(b));
-		_c+= strlen(b);
+		memcpy(_c,b,b_len);
+		_c+= b_len;
 		memcpy(_c, (char *)idx, _pkt->size - 5 - first_word_len);
 	} else {
 		memcpy(_c, (char *)_pkt->ptr+5, _pkt->size-5);
 		_c+=_pkt->size-5;
-		memcpy(_c,b,strlen(b));
+		memcpy(_c,b,b_len);
 	}
 	l_free(_pkt->size,_pkt->ptr);
-	_pkt->size = _pkt->size + strlen(b);
+	_pkt->size = _pkt->size + b_len;
 	_pkt->ptr = _new_pkt.ptr;
 	free(b);
 	CurrentQuery.QueryLength = _pkt->size - 5;
