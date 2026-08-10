@@ -584,9 +584,13 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 		if (!strncasecmp(SELECT_VERSION_COMMENT, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
 #if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP) || defined(TEST_READONLY) || defined(TEST_REPLICATIONLAG) || defined(TEST_RDS_BGD)
-			char *a = (char *)"SELECT '(ProxySQL Automated Test Server) - %s'";
-			query = (char *)malloc(strlen(a)+strlen(sess->client_myds->proxy_addr.addr));
-			sprintf(query,a,sess->client_myds->proxy_addr.addr);
+			const char* a = "SELECT '(ProxySQL Automated Test Server) - %s'";
+			const char* proxy_addr = sess->client_myds->proxy_addr.addr;
+			const size_t a_len = strlen(a);
+			const size_t proxy_addr_len = proxy_addr ? strlen(proxy_addr) : 0;
+			const size_t query_len = a_len + proxy_addr_len + 1;
+			query = (char *)malloc(query_len);
+			snprintf(query, query_len, a, proxy_addr);
 #else
 			query=l_strdup("SELECT '(ProxySQL SQLite3 Server)'");
 #endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP || TEST_READONLY || TEST_REPLICATIONLAG || TEST_RDS_BGD
@@ -711,12 +715,12 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 			tbh=dbh;
 			dbh=strdup("main");
 		}
-		if (strlen(tbh)>=3 && tbh[0]=='`' && tbh[strlen(tbh)-1]=='`') { // tablename is quoted
-			char *tbh_tmp=(char *)malloc(strlen(tbh)-1);
 			size_t tbh_len = strlen(tbh);
-			size_t quoted_len = tbh_len - 2;
-			memcpy(tbh_tmp, tbh + 1, quoted_len);
-			tbh_tmp[quoted_len] = 0;
+			if (tbh_len>=3 && tbh[0]=='`' && tbh[tbh_len-1]=='`') { // tablename is quoted
+				const size_t quoted_len = tbh_len - 2;
+				char *tbh_tmp=(char *)malloc(quoted_len + 1);
+				memcpy(tbh_tmp, tbh + 1, quoted_len);
+				tbh_tmp[quoted_len] = 0;
 			free(tbh);
 			tbh=tbh_tmp;
 		}
