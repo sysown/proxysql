@@ -168,7 +168,7 @@ void * mysql_thread(int tid) {
 	cpu_timer t;
 	// in this loop we create only some the prepared statements
 	for (i=0; i<NUMPREP/100; i++) {
-		sprintf(buff,"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
+		snprintf(buff,sizeof(buff),"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
 		bl=strlen(buff);
 		uint64_t hash=local_stmts->compute_hash(0,(char *)USER,(char *)SCHEMA,buff,bl);
 		MySQL_STMT_Global_info *a=GloMyStmt->find_prepared_statement_by_hash(hash);
@@ -209,7 +209,7 @@ void * mysql_thread(int tid) {
 		unsigned int founds=0;
 		cpu_timer t;
 		for (i=0; i<NUMPREP*LOOPS; i++) {
-			sprintf(buff,"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
+		snprintf(buff,sizeof(buff),"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
 			bl=strlen(buff);
 			//uint64_t hash=local_stmts->compute_hash(0,(char *)USER,(char *)SCHEMA,buff,bl);
 			//MySQL_STMT_Global_info *a=GloMyStmt->find_prepared_statement_by_hash(hash);
@@ -221,7 +221,7 @@ void * mysql_thread(int tid) {
 		unsigned int founds=0;
 		cpu_timer t;
 		for (i=0; i<NUMPREP*LOOPS; i++) {
-			sprintf(buff,"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
+		snprintf(buff,sizeof(buff),"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
 			bl=strlen(buff);
 			uint64_t hash=local_stmts->compute_hash(0,(char *)USER,(char *)SCHEMA,buff,bl);
 			//MySQL_STMT_Global_info *a=GloMyStmt->find_prepared_statement_by_hash(hash);
@@ -233,7 +233,7 @@ void * mysql_thread(int tid) {
 		unsigned int founds=0;
 		cpu_timer t;
 		for (i=0; i<NUMPREP*LOOPS; i++) {
-			sprintf(buff,"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
+		snprintf(buff,sizeof(buff),"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
 			bl=strlen(buff);
 			uint64_t hash=local_stmts->compute_hash(0,(char *)USER,(char *)SCHEMA,buff,bl);
 			MySQL_STMT_Global_info *a=GloMyStmt->find_prepared_statement_by_hash(hash);
@@ -248,7 +248,7 @@ void * mysql_thread(int tid) {
 		unsigned int executed=0;
 		cpu_timer t;
 		for (i=0; i<NUMPREP*LOOPS; i++) {
-			sprintf(buff,"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
+		snprintf(buff,sizeof(buff),"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
 			bl=strlen(buff);
 			uint64_t hash=local_stmts->compute_hash(0,(char *)USER,(char *)SCHEMA,buff,bl);
 			MySQL_STMT_Global_info *a=GloMyStmt->find_prepared_statement_by_hash(hash);
