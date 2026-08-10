@@ -1288,21 +1288,28 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 	if ((pkt->size < 60) && (pkt->size > 38) && (strncasecmp((char *)"SET SESSION character_set_server",(char *)pkt->ptr+5,32)==0) ) { // issue #601
 		char *idx=NULL;
 		char *p=(char *)pkt->ptr+37;
-		idx=(char *)memchr(p,'=',pkt->size-37);
-		if (idx) { // we found =
-			PtrSize_t pkt_2;
-			pkt_2.size=5+strlen((char *)"SET NAMES ")+pkt->size-1-(idx-(char *)pkt->ptr);
-			pkt_2.ptr=l_alloc(pkt_2.size);
-			mysql_hdr Hdr;
-			memcpy(&Hdr,pkt->ptr,sizeof(mysql_hdr));
-			Hdr.pkt_length=pkt_2.size-5;
-			memcpy((char *)pkt_2.ptr+4,(char *)pkt->ptr+4,1);
-			memcpy(pkt_2.ptr,&Hdr,sizeof(mysql_hdr));
-			memcpy((char *)pkt_2.ptr+5, "SET NAMES ", 10);
-			memcpy((char *)pkt_2.ptr+15,idx+1,pkt->size-1-(idx-(char *)pkt->ptr));
-			l_free(pkt->size,pkt->ptr);
-			pkt->size=pkt_2.size;
-			pkt->ptr=pkt_2.ptr;
+			idx=(char *)memchr(p,'=',pkt->size-37);
+			if (idx) { // we found =
+				PtrSize_t pkt_2;
+				pkt_2.size=5+strlen((char *)"SET NAMES ")+pkt->size-1-(idx-(char *)pkt->ptr);
+				pkt_2.ptr=l_alloc(pkt_2.size);
+				mysql_hdr Hdr{};
+				{
+					const uint8_t *src = static_cast<const uint8_t *>(pkt->ptr);
+					Hdr.pkt_length = (static_cast<uint32_t>(src[0]) << 0)
+						| (static_cast<uint32_t>(src[1]) << 8)
+						| (static_cast<uint32_t>(src[2]) << 16);
+					Hdr.pkt_id = src[3];
+				}
+				Hdr.pkt_length=pkt_2.size-5;
+				memcpy((char *)pkt_2.ptr+4,(char *)pkt->ptr+4,1);
+				memcpy(pkt_2.ptr,&Hdr,sizeof(mysql_hdr));
+				memcpy((char *)pkt_2.ptr+5, "SET NAMES ", 10);
+				size_t value_len = pkt->size - 1 - (idx - (char *)pkt->ptr);
+				memcpy((char *)pkt_2.ptr+15,idx+1,value_len);
+				l_free(pkt->size,pkt->ptr);
+				pkt->size=pkt_2.size;
+				pkt->ptr=pkt_2.ptr;
 			// Fix 'use-after-free': To change the pointer of the 'PtrSize_t' being processed by
 			// 'MySQL_Session::handler' we are forced to update 'MySQL_Session::CurrentQuery'.
 			CurrentQuery.QueryPointer = static_cast<unsigned char*>(pkt_2.ptr);
@@ -1312,21 +1319,28 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 	if ((pkt->size < 60) && (pkt->size > 39) && (strncasecmp((char *)"SET SESSION character_set_results",(char *)pkt->ptr+5,33)==0) ) { // like the above
 		char *idx=NULL;
 		char *p=(char *)pkt->ptr+38;
-		idx=(char *)memchr(p,'=',pkt->size-38);
-		if (idx) { // we found =
-			PtrSize_t pkt_2;
-			pkt_2.size=5+strlen((char *)"SET NAMES ")+pkt->size-1-(idx-(char *)pkt->ptr);
-			pkt_2.ptr=l_alloc(pkt_2.size);
-			mysql_hdr Hdr;
-			memcpy(&Hdr,pkt->ptr,sizeof(mysql_hdr));
-			Hdr.pkt_length=pkt_2.size-5;
-			memcpy((char *)pkt_2.ptr+4,(char *)pkt->ptr+4,1);
-			memcpy(pkt_2.ptr,&Hdr,sizeof(mysql_hdr));
-			memcpy((char *)pkt_2.ptr+5, "SET NAMES ", 10);
-			memcpy((char *)pkt_2.ptr+15,idx+1,pkt->size-1-(idx-(char *)pkt->ptr));
-			l_free(pkt->size,pkt->ptr);
-			pkt->size=pkt_2.size;
-			pkt->ptr=pkt_2.ptr;
+			idx=(char *)memchr(p,'=',pkt->size-38);
+			if (idx) { // we found =
+				PtrSize_t pkt_2;
+				pkt_2.size=5+strlen((char *)"SET NAMES ")+pkt->size-1-(idx-(char *)pkt->ptr);
+				pkt_2.ptr=l_alloc(pkt_2.size);
+				mysql_hdr Hdr{};
+				{
+					const uint8_t *src = static_cast<const uint8_t *>(pkt->ptr);
+					Hdr.pkt_length = (static_cast<uint32_t>(src[0]) << 0)
+						| (static_cast<uint32_t>(src[1]) << 8)
+						| (static_cast<uint32_t>(src[2]) << 16);
+					Hdr.pkt_id = src[3];
+				}
+				Hdr.pkt_length=pkt_2.size-5;
+				memcpy((char *)pkt_2.ptr+4,(char *)pkt->ptr+4,1);
+				memcpy(pkt_2.ptr,&Hdr,sizeof(mysql_hdr));
+				memcpy((char *)pkt_2.ptr+5, "SET NAMES ", 10);
+				size_t value_len = pkt->size - 1 - (idx - (char *)pkt->ptr);
+				memcpy((char *)pkt_2.ptr+15,idx+1,value_len);
+				l_free(pkt->size,pkt->ptr);
+				pkt->size=pkt_2.size;
+				pkt->ptr=pkt_2.ptr;
 			// Fix 'use-after-free': To change the pointer of the 'PtrSize_t' being processed by
 			// 'MySQL_Session::handler' we are forced to update 'MySQL_Session::CurrentQuery'.
 			CurrentQuery.QueryPointer = static_cast<unsigned char*>(pkt_2.ptr);
