@@ -81,6 +81,158 @@ static bool read_global_variable(MYSQL* admin, const char* name, string& value) 
 	return found;
 }
 
+static void run_initial_login_checks(
+	const CommandLine& cl,
+	bool trusted_client_ready,
+	bool untrusted_client_ready,
+	const client_tls_material& trusted_client,
+	const client_tls_material& untrusted_client
+) {
+	ok(try_frontend_connect(cl, USER_NONE, PASSWORD, false) == 0,
+		"No require_x509 attribute permits plaintext authentication");
+	ok(try_frontend_connect(cl, USER_NONE, PASSWORD, true) == 0,
+		"No require_x509 attribute permits TLS authentication without a client certificate");
+	ok(try_frontend_connect(cl, USER_FALSE, PASSWORD, true) == 0,
+		"require_x509=false permits TLS authentication without a client certificate");
+	ok(try_frontend_connect(cl, USER_REQUIRED, PASSWORD, false) == ER_ACCESS_DENIED_ERROR,
+		"require_x509=true rejects plaintext authentication with ER_ACCESS_DENIED_ERROR");
+	ok(try_frontend_connect(cl, USER_REQUIRED, PASSWORD, true) == ER_ACCESS_DENIED_ERROR,
+		"require_x509=true rejects TLS authentication without a client certificate with ER_ACCESS_DENIED_ERROR");
+	ok(untrusted_client_ready &&
+		try_frontend_connect(cl, USER_REQUIRED, PASSWORD, true, &untrusted_client) == ER_ACCESS_DENIED_ERROR,
+		"require_x509=true rejects an untrusted client certificate with ER_ACCESS_DENIED_ERROR");
+	if (!trusted_client_ready) {
+		ok(true, "require_x509 trusted certificate success # SKIP trusted certificate fixture unavailable");
+		ok(true, "require_x509 trusted certificate wrong-password rejection # SKIP trusted certificate fixture unavailable");
+		ok(true, "string require_x509=true fails closed # SKIP trusted certificate fixture unavailable");
+		return;
+	}
+
+	ok(try_frontend_connect(cl, USER_REQUIRED, PASSWORD, true, &trusted_client) == 0,
+		"require_x509=true accepts a trusted client certificate without a SAN");
+	ok(try_frontend_connect(cl, USER_REQUIRED, WRONG_PASSWORD, true, &trusted_client) == ER_ACCESS_DENIED_ERROR,
+		"require_x509=true still rejects a wrong password with ER_ACCESS_DENIED_ERROR");
+	ok(try_frontend_connect(cl, USER_BAD_TYPE, PASSWORD, true, &trusted_client) == ER_ACCESS_DENIED_ERROR,
+		"string require_x509=true fails closed with ER_ACCESS_DENIED_ERROR");
+}
+
+static void run_change_user_checks(
+	const CommandLine& cl,
+	bool trusted_client_ready,
+	bool untrusted_client_ready,
+	bool spiffe_source_client_ready,
+	bool spiffe_target_client_ready,
+	const client_tls_material& trusted_client,
+	const client_tls_material& untrusted_client,
+	const client_tls_material& spiffe_source_client,
+	const client_tls_material& spiffe_target_client
+) {
+	{
+		mysql_ptr source { connect_frontend(cl, USER_CHANGE_SOURCE, CHANGE_SOURCE_PASSWORD, false) };
+		ok(source && try_change_user(source.get(), USER_CHANGE_TARGET, CHANGE_TARGET_PASSWORD) == ER_ACCESS_DENIED_ERROR,
+			"COM_CHANGE_USER from plaintext rejects require_x509=true with ER_ACCESS_DENIED_ERROR");
+	}
+	{
+		mysql_ptr source { connect_frontend(cl, USER_CHANGE_SOURCE, CHANGE_SOURCE_PASSWORD, true) };
+		ok(source && try_change_user(source.get(), USER_CHANGE_TARGET, CHANGE_TARGET_PASSWORD) == ER_ACCESS_DENIED_ERROR,
+			"COM_CHANGE_USER from TLS without a client certificate rejects require_x509=true with ER_ACCESS_DENIED_ERROR");
+	}
+	{
+		mysql_ptr source { connect_frontend(cl, USER_CHANGE_SOURCE, CHANGE_SOURCE_PASSWORD, true, &untrusted_client) };
+		ok(untrusted_client_ready && source &&
+			try_change_user(source.get(), USER_CHANGE_TARGET, CHANGE_TARGET_PASSWORD) == ER_ACCESS_DENIED_ERROR,
+			"COM_CHANGE_USER from an untrusted client certificate rejects require_x509=true with ER_ACCESS_DENIED_ERROR");
+	}
+	if (trusted_client_ready) {
+		mysql_ptr source { connect_frontend(cl, USER_CHANGE_SOURCE, CHANGE_SOURCE_PASSWORD, true, &trusted_client) };
+		ok(source && try_change_user(source.get(), USER_CHANGE_TARGET, CHANGE_TARGET_PASSWORD) == 0,
+			"COM_CHANGE_USER from a trusted client certificate accepts require_x509=true");
+	} else {
+		ok(true, "COM_CHANGE_USER trusted certificate require_x509 success # SKIP trusted certificate fixture unavailable");
+	}
+	if (trusted_client_ready) {
+		mysql_ptr source { connect_frontend(cl, USER_CHANGE_SOURCE, CHANGE_SOURCE_PASSWORD, true, &trusted_client) };
+		ok(source && try_change_user(source.get(), USER_CHANGE_TARGET, WRONG_PASSWORD) == ER_ACCESS_DENIED_ERROR,
+			"COM_CHANGE_USER require_x509=true still rejects a wrong target password with ER_ACCESS_DENIED_ERROR");
+	} else {
+		ok(true, "COM_CHANGE_USER trusted certificate wrong-password rejection # SKIP trusted certificate fixture unavailable");
+	}
+	if (trusted_client_ready) {
+		mysql_ptr source { connect_frontend(cl, USER_CHANGE_SOURCE, CHANGE_SOURCE_PASSWORD, true, &trusted_client) };
+		ok(source && try_change_user(source.get(), USER_NONE, PASSWORD) == 0,
+			"COM_CHANGE_USER from a trusted client certificate accepts an ordinary password target");
+	} else {
+		ok(true, "COM_CHANGE_USER ordinary target control # SKIP trusted certificate fixture unavailable");
+	}
+	if (spiffe_source_client_ready) {
+		mysql_ptr source { connect_frontend(cl, USER_SPIFFE_SOURCE, "", true, &spiffe_source_client) };
+		ok(source && try_change_user(source.get(), USER_NONE, PASSWORD) == ER_ACCESS_DENIED_ERROR,
+			"The first SPIFFE URI SAN authenticates the source and COM_CHANGE_USER rejects it");
+	} else {
+		ok(true, "COM_CHANGE_USER SPIFFE-authenticated source rejection # SKIP trusted SPIFFE source fixture unavailable");
+	}
+	if (spiffe_target_client_ready) {
+		mysql_ptr source { connect_frontend(cl, USER_CHANGE_SOURCE, CHANGE_SOURCE_PASSWORD, true, &spiffe_target_client) };
+		ok(source && try_change_user(source.get(), USER_SPIFFE_TARGET, "") == ER_ACCESS_DENIED_ERROR,
+			"COM_CHANGE_USER rejects a SPIFFE target with ER_ACCESS_DENIED_ERROR");
+	} else {
+		ok(true, "COM_CHANGE_USER SPIFFE target rejection # SKIP trusted SPIFFE target fixture unavailable");
+	}
+}
+
+struct frontend_certificate_fixtures {
+	client_tls_material trusted_client;
+	client_tls_material untrusted_client;
+	client_tls_material spiffe_source_client;
+	client_tls_material spiffe_target_client;
+	bool trusted_client_ready { false };
+	bool untrusted_client_ready { false };
+	bool spiffe_source_client_ready { false };
+	bool spiffe_target_client_ready { false };
+};
+
+static frontend_certificate_fixtures create_frontend_certificate_fixtures(
+	const temporary_certificate_directory& directory,
+	const string& ca,
+	const string& ca_key
+) {
+	frontend_certificate_fixtures fixtures;
+	fixtures.trusted_client_ready = directory.valid() &&
+		create_trusted_client_certificate(directory, ca, ca_key, fixtures.trusted_client);
+	if (!fixtures.trusted_client_ready) {
+		diag("Trusted client certificate fixture unavailable. This can happen when a custom CA certificate has no matching private key; trusted-certificate probes will be skipped.");
+	}
+	if (fixtures.trusted_client_ready) {
+		ok(true, "Trusted client certificate generated and verified");
+	} else if (directory.valid()) {
+		ok(true, "Trusted client certificate generated and verified # SKIP custom CA cannot sign the standard test client certificate");
+	} else {
+		ok(false, "Trusted client certificate generated and verified (temporary directory unavailable)");
+	}
+
+	fixtures.untrusted_client_ready = directory.valid() &&
+		create_untrusted_client_certificate(directory, ca, fixtures.untrusted_client);
+	ok(fixtures.untrusted_client_ready, "Untrusted self-signed client certificate generated");
+
+	fixtures.spiffe_source_client_ready = directory.valid() &&
+		create_spiffe_client_certificate(
+			directory, ca, ca_key, "spiffe-source",
+			"spiffe://tap/source,URI:spiffe://tap/secondary", 5928003,
+			fixtures.spiffe_source_client);
+	ok(true, fixtures.spiffe_source_client_ready
+		? "Trusted SPIFFE source client certificate generated and verified"
+		: "Trusted SPIFFE source client certificate generated and verified # SKIP custom CA cannot sign the SPIFFE source certificate");
+
+	fixtures.spiffe_target_client_ready = directory.valid() &&
+		create_spiffe_client_certificate(
+			directory, ca, ca_key, "spiffe-target", "spiffe://tap/target", 5928004,
+			fixtures.spiffe_target_client);
+	ok(true, fixtures.spiffe_target_client_ready
+		? "Trusted SPIFFE target client certificate generated and verified"
+		: "Trusted SPIFFE target client certificate generated and verified # SKIP custom CA cannot sign the SPIFFE target certificate");
+	return fixtures;
+}
+
 int main() {
 	CommandLine cl;
 
@@ -163,128 +315,21 @@ int main() {
 		"proxysql.log contains '%s' and '%s' after LOAD MYSQL USERS TO RUNTIME",
 		USER_BAD_TYPE, BAD_TYPE_LOG_FINGERPRINT);
 
-	temporary_certificate_directory certificate_directory;
+	temporary_certificate_directory certificate_directory { datadir };
 	if (!certificate_directory.valid()) {
 		diag("Could not create a temporary certificate directory: %s", strerror(errno));
 	}
-	client_tls_material trusted_client;
-	client_tls_material untrusted_client;
-	client_tls_material spiffe_source_client;
-	client_tls_material spiffe_target_client;
-	const bool trusted_client_ready = certificate_directory.valid() &&
-		create_trusted_client_certificate(certificate_directory, ca, ca_key, trusted_client);
-	if (!trusted_client_ready) {
-		diag("Trusted client certificate fixture unavailable. This can happen when a custom CA certificate has no matching private key; trusted-certificate probes will be skipped.");
-	}
-	if (trusted_client_ready) {
-		ok(true, "Trusted client certificate generated and verified");
-	} else if (certificate_directory.valid()) {
-		ok(true, "Trusted client certificate generated and verified # SKIP custom CA cannot sign the standard test client certificate");
-	} else {
-		ok(false, "Trusted client certificate generated and verified (temporary directory unavailable)");
-	}
+	const frontend_certificate_fixtures fixtures = create_frontend_certificate_fixtures(
+		certificate_directory, ca, ca_key);
 
-	const bool untrusted_client_ready = certificate_directory.valid() &&
-		create_untrusted_client_certificate(certificate_directory, ca, untrusted_client);
-	ok(untrusted_client_ready, "Untrusted self-signed client certificate generated");
-
-	const bool spiffe_source_client_ready = certificate_directory.valid() &&
-		create_spiffe_client_certificate(
-			certificate_directory, ca, ca_key, "spiffe-source", "spiffe://tap/source", 5928003,
-			spiffe_source_client);
-	if (spiffe_source_client_ready) {
-		ok(true, "Trusted SPIFFE source client certificate generated and verified");
-	} else {
-		ok(true, "Trusted SPIFFE source client certificate generated and verified # SKIP custom CA cannot sign the SPIFFE source certificate");
-	}
-	const bool spiffe_target_client_ready = certificate_directory.valid() &&
-		create_spiffe_client_certificate(
-			certificate_directory, ca, ca_key, "spiffe-target", "spiffe://tap/target", 5928004,
-			spiffe_target_client);
-	if (spiffe_target_client_ready) {
-		ok(true, "Trusted SPIFFE target client certificate generated and verified");
-	} else {
-		ok(true, "Trusted SPIFFE target client certificate generated and verified # SKIP custom CA cannot sign the SPIFFE target certificate");
-	}
-
-	ok(try_frontend_connect(cl, USER_NONE, PASSWORD, false) == 0,
-		"No require_x509 attribute permits plaintext authentication");
-	ok(try_frontend_connect(cl, USER_NONE, PASSWORD, true) == 0,
-		"No require_x509 attribute permits TLS authentication without a client certificate");
-	ok(try_frontend_connect(cl, USER_FALSE, PASSWORD, true) == 0,
-		"require_x509=false permits TLS authentication without a client certificate");
-	ok(try_frontend_connect(cl, USER_REQUIRED, PASSWORD, false) == ER_ACCESS_DENIED_ERROR,
-		"require_x509=true rejects plaintext authentication with ER_ACCESS_DENIED_ERROR");
-	ok(try_frontend_connect(cl, USER_REQUIRED, PASSWORD, true) == ER_ACCESS_DENIED_ERROR,
-		"require_x509=true rejects TLS authentication without a client certificate with ER_ACCESS_DENIED_ERROR");
-	ok(untrusted_client_ready &&
-		try_frontend_connect(cl, USER_REQUIRED, PASSWORD, true, &untrusted_client) == ER_ACCESS_DENIED_ERROR,
-		"require_x509=true rejects an untrusted client certificate with ER_ACCESS_DENIED_ERROR");
-	if (trusted_client_ready) {
-		ok(try_frontend_connect(cl, USER_REQUIRED, PASSWORD, true, &trusted_client) == 0,
-			"require_x509=true accepts a trusted client certificate without a SAN");
-		ok(try_frontend_connect(cl, USER_REQUIRED, WRONG_PASSWORD, true, &trusted_client) == ER_ACCESS_DENIED_ERROR,
-			"require_x509=true still rejects a wrong password with ER_ACCESS_DENIED_ERROR");
-		ok(try_frontend_connect(cl, USER_BAD_TYPE, PASSWORD, true, &trusted_client) == ER_ACCESS_DENIED_ERROR,
-			"string require_x509=true fails closed with ER_ACCESS_DENIED_ERROR");
-	} else {
-		ok(true, "require_x509 trusted certificate success # SKIP trusted certificate fixture unavailable");
-		ok(true, "require_x509 trusted certificate wrong-password rejection # SKIP trusted certificate fixture unavailable");
-		ok(true, "string require_x509=true fails closed # SKIP trusted certificate fixture unavailable");
-	}
-
-	{
-		mysql_ptr source { connect_frontend(cl, USER_CHANGE_SOURCE, CHANGE_SOURCE_PASSWORD, false) };
-		ok(source && try_change_user(source.get(), USER_CHANGE_TARGET, CHANGE_TARGET_PASSWORD) == ER_ACCESS_DENIED_ERROR,
-			"COM_CHANGE_USER from plaintext rejects require_x509=true with ER_ACCESS_DENIED_ERROR");
-	}
-	{
-		mysql_ptr source { connect_frontend(cl, USER_CHANGE_SOURCE, CHANGE_SOURCE_PASSWORD, true) };
-		// Reconnecting with trusted_client succeeds below; CHANGE_USER cannot acquire a certificate on this TLS connection.
-		ok(source && try_change_user(source.get(), USER_CHANGE_TARGET, CHANGE_TARGET_PASSWORD) == ER_ACCESS_DENIED_ERROR,
-			"COM_CHANGE_USER from TLS without a client certificate rejects require_x509=true with ER_ACCESS_DENIED_ERROR");
-	}
-	{
-		mysql_ptr source { connect_frontend(cl, USER_CHANGE_SOURCE, CHANGE_SOURCE_PASSWORD, true, &untrusted_client) };
-		ok(untrusted_client_ready && source &&
-			try_change_user(source.get(), USER_CHANGE_TARGET, CHANGE_TARGET_PASSWORD) == ER_ACCESS_DENIED_ERROR,
-			"COM_CHANGE_USER from an untrusted client certificate rejects require_x509=true with ER_ACCESS_DENIED_ERROR");
-	}
-	if (trusted_client_ready) {
-		mysql_ptr source { connect_frontend(cl, USER_CHANGE_SOURCE, CHANGE_SOURCE_PASSWORD, true, &trusted_client) };
-		ok(source && try_change_user(source.get(), USER_CHANGE_TARGET, CHANGE_TARGET_PASSWORD) == 0,
-			"COM_CHANGE_USER from a trusted client certificate accepts require_x509=true");
-	} else {
-		ok(true, "COM_CHANGE_USER trusted certificate require_x509 success # SKIP trusted certificate fixture unavailable");
-	}
-	if (trusted_client_ready) {
-		mysql_ptr source { connect_frontend(cl, USER_CHANGE_SOURCE, CHANGE_SOURCE_PASSWORD, true, &trusted_client) };
-		ok(source && try_change_user(source.get(), USER_CHANGE_TARGET, WRONG_PASSWORD) == ER_ACCESS_DENIED_ERROR,
-			"COM_CHANGE_USER require_x509=true still rejects a wrong target password with ER_ACCESS_DENIED_ERROR");
-	} else {
-		ok(true, "COM_CHANGE_USER trusted certificate wrong-password rejection # SKIP trusted certificate fixture unavailable");
-	}
-	if (trusted_client_ready) {
-		mysql_ptr source { connect_frontend(cl, USER_CHANGE_SOURCE, CHANGE_SOURCE_PASSWORD, true, &trusted_client) };
-		ok(source && try_change_user(source.get(), USER_NONE, PASSWORD) == 0,
-			"COM_CHANGE_USER from a trusted client certificate accepts an ordinary password target");
-	} else {
-		ok(true, "COM_CHANGE_USER ordinary target control # SKIP trusted certificate fixture unavailable");
-	}
-	if (spiffe_source_client_ready) {
-		mysql_ptr source { connect_frontend(cl, USER_SPIFFE_SOURCE, "", true, &spiffe_source_client) };
-		ok(source && try_change_user(source.get(), USER_NONE, PASSWORD) == ER_ACCESS_DENIED_ERROR,
-			"COM_CHANGE_USER rejects a SPIFFE-authenticated source identity with ER_ACCESS_DENIED_ERROR");
-	} else {
-		ok(true, "COM_CHANGE_USER SPIFFE-authenticated source rejection # SKIP trusted SPIFFE source fixture unavailable");
-	}
-	if (spiffe_target_client_ready) {
-		mysql_ptr source { connect_frontend(cl, USER_CHANGE_SOURCE, CHANGE_SOURCE_PASSWORD, true, &spiffe_target_client) };
-		ok(source && try_change_user(source.get(), USER_SPIFFE_TARGET, "") == ER_ACCESS_DENIED_ERROR,
-			"COM_CHANGE_USER rejects a SPIFFE target with ER_ACCESS_DENIED_ERROR");
-	} else {
-		ok(true, "COM_CHANGE_USER SPIFFE target rejection # SKIP trusted SPIFFE target fixture unavailable");
-	}
+	run_initial_login_checks(
+		cl, fixtures.trusted_client_ready, fixtures.untrusted_client_ready,
+		fixtures.trusted_client, fixtures.untrusted_client);
+	run_change_user_checks(
+		cl, fixtures.trusted_client_ready, fixtures.untrusted_client_ready,
+		fixtures.spiffe_source_client_ready, fixtures.spiffe_target_client_ready,
+		fixtures.trusted_client, fixtures.untrusted_client,
+		fixtures.spiffe_source_client, fixtures.spiffe_target_client);
 
 	const bool users_cleaned = do_query(admin.get(), "DELETE FROM mysql_users WHERE username IN (" + user_list + ")") &&
 		do_query(admin.get(), "LOAD MYSQL USERS TO RUNTIME");

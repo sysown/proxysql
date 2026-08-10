@@ -59,6 +59,15 @@ void cleanse_and_free_password(char*& password) {
 	}
 }
 
+void cleanse_and_free_auth_response(unsigned char*& response, size_t response_size) {
+	if (response != nullptr) {
+		OPENSSL_cleanse(response, response_size);
+		char* allocation = reinterpret_cast<char*>(response);
+		response = nullptr;
+		cleanse_and_free_password(allocation);
+	}
+}
+
 class ScopedStringCleanser {
 	std::string& value_;
 
@@ -97,6 +106,76 @@ struct frontend_certificate_policy_result {
 	bool has_spiffe_id { false };
 };
 
+static bool evaluate_require_x509(
+	MySQL_Data_Stream* myds,
+	const json& attrs,
+	const char* username,
+	frontend_auth_context context,
+	int calling_line,
+	const char* calling_func
+) {
+	const auto require_x509 = attrs.find("require_x509");
+	if (require_x509 == attrs.end()) return true;
+	if (!require_x509->is_boolean()) {
+		proxy_error("%d:%s(): Invalid require_x509 type for user %s\n", calling_line, calling_func, username);
+		return false;
+	}
+	if (!require_x509->get<bool>()) return true;
+
+	const bool allowed = myds
+		&& myds->encrypted
+		&& myds->ssl
+		&& myds->client_cert_present
+		&& myds->client_cert_verify_result == X509_V_OK;
+	if (!allowed) {
+		proxy_error("%d:%s(): Frontend X509 authentication error for user %s: context=%u cert_present=%s verify_result=%ld\n",
+			calling_line, calling_func, username, static_cast<unsigned>(context),
+			(myds && myds->client_cert_present) ? "yes" : "no",
+			myds ? myds->client_cert_verify_result : X509_V_ERR_UNSPECIFIED);
+	}
+	return allowed;
+}
+
+static bool spiffe_identity_matches(MySQL_Data_Stream* myds, const std::string& expected) {
+	if (!myds || !myds->x509_subject_alt_name) return false;
+	if (expected.rfind("!", 0) == 0 && expected.size() > 1) {
+		const string pattern { expected.substr(1) };
+		re2::RE2::Options opts { re2::RE2::Quiet };
+		re2::RE2 subject_alt_regex(pattern, opts);
+		return re2::RE2::FullMatch(myds->x509_subject_alt_name, subject_alt_regex);
+	}
+	return expected.rfind("spiffe://", 0) == 0
+		&& expected == myds->x509_subject_alt_name;
+}
+
+static bool evaluate_spiffe_identity(
+	MySQL_Data_Stream* myds,
+	const json::const_iterator& spiffe_id,
+	const char* username,
+	frontend_auth_context context,
+	int calling_line,
+	const char* calling_func
+) {
+	if (context == frontend_auth_context::COM_CHANGE_USER) {
+		proxy_error("%d:%s(): COM_CHANGE_USER target %s has a SPIFFE identity\n",
+			calling_line, calling_func, username);
+		return false;
+	}
+	if (!spiffe_id->is_string()) {
+		proxy_error("%d:%s(): Invalid spiffe_id type for user %s\n", calling_line, calling_func, username);
+		return false;
+	}
+
+	const std::string expected = spiffe_id->get<std::string>();
+	const bool allowed = spiffe_identity_matches(myds, expected);
+	if (!allowed) {
+		proxy_error("%d:%s(): SPIFFE Authentication error for user %s . spiffed_id expected : %s , received: %s\n",
+			calling_line, calling_func, username, expected.c_str(),
+			(myds && myds->x509_subject_alt_name) ? myds->x509_subject_alt_name : "none");
+	}
+	return allowed;
+}
+
 static frontend_certificate_policy_result evaluate_frontend_certificate_policy(
 	MySQL_Data_Stream* myds,
 	const json& attrs,
@@ -114,60 +193,12 @@ static frontend_certificate_policy_result evaluate_frontend_certificate_policy(
 	}
 	const auto spiffe_id = attrs.find("spiffe_id");
 	result.has_spiffe_id = spiffe_id != attrs.end();
-
-	const auto require_x509 = attrs.find("require_x509");
-	if (require_x509 != attrs.end()) {
-		if (!require_x509->is_boolean()) {
-			proxy_error("%d:%s(): Invalid require_x509 type for user %s\n", calling_line, calling_func, username);
-			result.allowed = false;
-			return result;
-		}
-		if (require_x509->get<bool>()) {
-			result.allowed = myds
-				&& myds->encrypted
-				&& myds->ssl
-				&& myds->client_cert_present
-				&& myds->client_cert_verify_result == X509_V_OK;
-			if (!result.allowed) {
-				proxy_error("%d:%s(): Frontend X509 authentication error for user %s: context=%u cert_present=%s verify_result=%ld\n",
-					calling_line, calling_func, username, static_cast<unsigned>(context),
-					(myds && myds->client_cert_present) ? "yes" : "no",
-					myds ? myds->client_cert_verify_result : X509_V_ERR_UNSPECIFIED);
-				return result;
-			}
-		}
-	}
-
+	result.allowed = evaluate_require_x509(
+		myds, attrs, username, context, calling_line, calling_func);
+	if (!result.allowed) return result;
 	if (spiffe_id == attrs.end()) return result;
-	if (context == frontend_auth_context::COM_CHANGE_USER) {
-		proxy_error("%d:%s(): COM_CHANGE_USER target %s has a SPIFFE identity\n",
-			calling_line, calling_func, username);
-		result.allowed = false;
-		return result;
-	}
-	if (!spiffe_id->is_string()) {
-		proxy_error("%d:%s(): Invalid spiffe_id type for user %s\n", calling_line, calling_func, username);
-		result.allowed = false;
-		return result;
-	}
-
-	result.allowed = false;
-	const std::string spiffe_val = spiffe_id->get<std::string>();
-	if (myds && myds->x509_subject_alt_name) {
-		if (spiffe_val.rfind("!", 0) == 0 && spiffe_val.size() > 1) {
-			string str_spiffe_regex { spiffe_val.substr(1) };
-			re2::RE2::Options opts = re2::RE2::Options(RE2::Quiet);
-			re2::RE2 subject_alt_regex(str_spiffe_regex, opts);
-			result.allowed = re2::RE2::FullMatch(myds->x509_subject_alt_name, subject_alt_regex);
-		} else if (strncmp(spiffe_val.c_str(), "spiffe://", strlen("spiffe://")) == 0) {
-			result.allowed = strcmp(spiffe_val.c_str(), myds->x509_subject_alt_name) == 0;
-		}
-	}
-	if (!result.allowed) {
-		proxy_error("%d:%s(): SPIFFE Authentication error for user %s . spiffed_id expected : %s , received: %s\n",
-			calling_line, calling_func, username, spiffe_val.c_str(),
-			(myds && myds->x509_subject_alt_name) ? myds->x509_subject_alt_name : "none");
-	}
+	result.allowed = evaluate_spiffe_identity(
+		myds, spiffe_id, username, context, calling_line, calling_func);
 	return result;
 }
 
@@ -1613,14 +1644,14 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	pass[pass_len]=0;
 	cur+=pass_len;
 	if (pkt + cur >= packet_end) {
-		free(pass);
+		cleanse_and_free_auth_response(pass, pass_len + 1);
 		return false;
 	}
 	const char *db_ptr = reinterpret_cast<const char*>(pkt + cur);
 	const size_t db_remaining = packet_end - (pkt + cur);
 	const size_t db_len = strnlen(db_ptr, db_remaining);
 	if (db_len == db_remaining) {
-		free(pass);
+		cleanse_and_free_auth_response(pass, pass_len + 1);
 		return false;
 	}
 	db=const_cast<char*>(db_ptr);
@@ -1628,7 +1659,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	cur += db_len + 1;
 	// Skip field 'character-set' (size 2)
 	if (static_cast<size_t>(packet_end - (pkt + cur)) < sizeof(uint16_t)) {
-		free(pass);
+		cleanse_and_free_auth_response(pass, pass_len + 1);
 		return false;
 	}
 	cur += 2;
@@ -1639,7 +1670,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		const char *auth_plugin_ptr = reinterpret_cast<const char*>(pkt + cur);
 		const size_t auth_plugin_len = strnlen(auth_plugin_ptr, packet_end - (pkt + cur));
 		if (auth_plugin_len == static_cast<size_t>(packet_end - (pkt + cur))) {
-			free(pass);
+			cleanse_and_free_auth_response(pass, pass_len + 1);
 			return false;
 		}
 		client_auth_plugin = const_cast<char*>(auth_plugin_ptr);
@@ -1659,7 +1690,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		proxy_error(
 			"Client %s:%d cannot run COM_CHANGE_USER after SPIFFE authentication\n",
 			(*myds)->addr.addr, (*myds)->addr.port);
-		free(pass);
+		cleanse_and_free_auth_response(pass, pass_len + 1);
 		return false;
 	}
 #endif
@@ -1745,8 +1776,8 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		frontend_auth_context::COM_CHANGE_USER,
 		__LINE__, __func__);
 	if (!target_policy.allowed || target_policy.has_spiffe_id) {
-		if (pass) { free(pass); pass = NULL; }
-		if (password) { free(password); password = NULL; }
+		cleanse_and_free_auth_response(pass, pass_len + 1);
+		cleanse_and_free_password(password);
 		free_account_details(account_details);
 		return false;
 	}
@@ -1767,7 +1798,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 			"(Phase 1 does not support pass-through via CHANGE_USER, spec §5.4)\n",
 			user ? (const char*)user : "(null)");
 		ret = false;
-		if (pass) { free(pass); pass = NULL; }
+		cleanse_and_free_auth_response(pass, pass_len + 1);
 		if (userinfo->username) free(userinfo->username);
 		userinfo->clear_password();
 		userinfo->username = strdup((const char *)user);
@@ -1816,10 +1847,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 			}
 		}
 	}
-	if (pass) {
-		free(pass);
-		pass=NULL;
-	}
+	cleanse_and_free_auth_response(pass, pass_len + 1);
 	if (userinfo->username) free(userinfo->username);
 	userinfo->clear_password();
 	if (ret==true) {

@@ -120,6 +120,141 @@ static int restore_server_ssl_states(MYSQL* admin, const vector<server_ssl_state
 	return rc;
 }
 
+static void emit_fixture_skips(int count, const char* message) {
+	for (int i = 0; i != count; ++i) ok(true, "%s # SKIP fixture unavailable", message);
+}
+
+static void expect_pass_through_rejection(
+	MYSQL* admin,
+	const CommandLine& cl,
+	const char* label,
+	const client_tls_material* identity
+) {
+	do_query(admin, "PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE");
+	const int64_t probes_before = read_metric(admin, "probes_attempted");
+	const int cache_before = cache_entries_for(admin, PT_USER);
+	const unsigned int err = try_frontend_connect(cl, PT_USER, PT_PASSWORD, true, identity);
+	const int64_t probes_after = read_metric(admin, "probes_attempted");
+	const int cache_after = cache_entries_for(admin, PT_USER);
+	ok(err == ER_ACCESS_DENIED_ERROR, "%s returns generic 1045 (errno=%u)", label, err);
+	ok(probes_before >= 0 && probes_after == probes_before, "%s leaves probes_attempted unchanged (%ld -> %ld)", label, probes_before, probes_after);
+	ok(cache_before == 0 && cache_after == 0, "%s creates no pass-through cache entry (%d -> %d)", label, cache_before, cache_after);
+}
+
+static void run_pass_through_row_checks(
+	MYSQL* admin,
+	const CommandLine& cl,
+	bool trusted_ready,
+	bool untrusted_ready,
+	const client_tls_material& trusted_client,
+	const client_tls_material& untrusted_client
+) {
+	expect_pass_through_rejection(admin, cl, "Cold TLS without client certificate", nullptr);
+	if (untrusted_ready) {
+		expect_pass_through_rejection(
+			admin, cl, "Cold TLS with untrusted client certificate", &untrusted_client);
+	} else {
+		emit_fixture_skips(3, "Cold untrusted-certificate controls");
+	}
+
+	if (trusted_ready) {
+		do_query(admin, "PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE");
+		const int64_t probes_before = read_metric(admin, "probes_attempted");
+		const unsigned int err = try_frontend_connect(cl, PT_USER, WRONG_PASSWORD, true, &trusted_client);
+		const int64_t probes_after = read_metric(admin, "probes_attempted");
+		ok(err == ER_ACCESS_DENIED_ERROR, "Trusted certificate with wrong backend password returns 1045 (errno=%u)", err);
+		ok(probes_before >= 0 && probes_after == probes_before + 1, "Trusted wrong-password probe increments probes_attempted exactly once (%ld -> %ld)", probes_before, probes_after);
+		ok(cache_entries_for(admin, PT_USER) == 0, "Trusted wrong-password probe leaves cache empty");
+
+		do_query(admin, "PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE");
+		const int64_t correct_before = read_metric(admin, "probes_attempted");
+		const unsigned int correct_err = try_frontend_connect(cl, PT_USER, PT_PASSWORD, true, &trusted_client);
+		const int64_t correct_after = read_metric(admin, "probes_attempted");
+		ok(correct_err == 0, "Trusted no-SAN certificate with correct backend password succeeds (errno=%u)", correct_err);
+		ok(correct_before >= 0 && correct_after == correct_before + 1, "Trusted correct-password probe increments probes_attempted exactly once (%ld -> %ld)", correct_before, correct_after);
+		ok(cache_entries_for(admin, PT_USER) == 1, "Trusted correct-password probe creates one cache entry");
+
+		const int64_t hits_before = read_metric(admin, "cache_hits");
+		const unsigned int no_cert_warm_err = try_frontend_connect(cl, PT_USER, PT_PASSWORD, true);
+		const int64_t hits_after = read_metric(admin, "cache_hits");
+		ok(no_cert_warm_err == ER_ACCESS_DENIED_ERROR, "Warm TLS without a client certificate returns 1045 (errno=%u)", no_cert_warm_err);
+		ok(hits_before >= 0 && hits_after == hits_before, "Warm no-certificate denial leaves cache_hits unchanged (%ld -> %ld)", hits_before, hits_after);
+
+		const int64_t trusted_hits_before = read_metric(admin, "cache_hits");
+		const unsigned int trusted_warm_err = try_frontend_connect(cl, PT_USER, PT_PASSWORD, true, &trusted_client);
+		const int64_t trusted_hits_after = read_metric(admin, "cache_hits");
+		ok(trusted_warm_err == 0, "Warm trusted certificate succeeds (errno=%u)", trusted_warm_err);
+		ok(trusted_hits_before >= 0 && trusted_hits_after == trusted_hits_before + 1, "Warm trusted certificate increments cache_hits exactly once (%ld -> %ld)", trusted_hits_before, trusted_hits_after);
+	} else {
+		emit_fixture_skips(10, "Trusted pass-through control");
+	}
+}
+
+static void expect_spiffe_rejection(
+	MYSQL* admin,
+	const CommandLine& cl,
+	const char* label,
+	const client_tls_material* identity
+) {
+	const int64_t probes_before = read_metric(admin, "probes_attempted");
+	const unsigned int err = try_frontend_connect(cl, SPIFFE_USER, "", true, identity);
+	const int64_t probes_after = read_metric(admin, "probes_attempted");
+	ok(err == ER_ACCESS_DENIED_ERROR, "%s returns generic 1045 (errno=%u)", label, err);
+	ok(probes_before >= 0 && probes_after == probes_before, "%s leaves probes_attempted unchanged (%ld -> %ld)", label, probes_before, probes_after);
+	ok(cache_entries_for(admin, SPIFFE_USER) == 0, "%s creates no SPIFFE cache entry", label);
+}
+
+static void run_spiffe_row_checks(
+	MYSQL* admin,
+	const CommandLine& cl,
+	bool trusted_ready,
+	bool spiffe_ready,
+	const client_tls_material& trusted_client,
+	const client_tls_material& spiffe_client
+) {
+	if (spiffe_ready) {
+		const int64_t probes_before = read_metric(admin, "probes_attempted");
+		const unsigned int err = try_frontend_connect(cl, SPIFFE_USER, "", true, &spiffe_client);
+		const int64_t probes_after = read_metric(admin, "probes_attempted");
+		ok(err == 0, "Matching SPIFFE URI-SAN with empty password succeeds (errno=%u)", err);
+		ok(probes_before >= 0 && probes_after == probes_before, "Matching SPIFFE path leaves probes_attempted unchanged (%ld -> %ld)", probes_before, probes_after);
+		ok(cache_entries_for(admin, SPIFFE_USER) == 0, "Matching SPIFFE path creates no cache entry");
+	} else {
+		emit_fixture_skips(3, "Matching SPIFFE path");
+	}
+
+	expect_spiffe_rejection(admin, cl, "SPIFFE row without client certificate", nullptr);
+	if (trusted_ready) {
+		expect_spiffe_rejection(
+			admin, cl, "SPIFFE row with mismatching trusted no-SAN certificate", &trusted_client);
+	} else {
+		emit_fixture_skips(3, "Mismatching SPIFFE path");
+	}
+}
+
+static void run_change_user_direction_checks(
+	MYSQL* admin,
+	const CommandLine& cl,
+	bool trusted_ready,
+	const client_tls_material& trusted_client
+) {
+	if (trusted_ready) {
+		mysql_ptr ordinary { connect_frontend(cl, cl.username, cl.password, true, &trusted_client) };
+		const int64_t probes_before = read_metric(admin, "probes_attempted");
+		const int rc = ordinary ? mysql_change_user(ordinary.get(), PT_USER, PT_PASSWORD, nullptr) : -1;
+		const unsigned int err = ordinary ? mysql_errno(ordinary.get()) : UINT_MAX;
+		const int64_t probes_after = read_metric(admin, "probes_attempted");
+		ok(rc != 0 && err == ER_ACCESS_DENIED_ERROR, "COM_CHANGE_USER to pass-through target remains generic 1045 (rc=%d errno=%u)", rc, err);
+		ok(probes_before >= 0 && probes_after == probes_before, "COM_CHANGE_USER pass-through target does not create a probe (%ld -> %ld)", probes_before, probes_after);
+
+		mysql_ptr pass_through { connect_frontend(cl, PT_USER, PT_PASSWORD, true, &trusted_client) };
+		const int direction_rc = pass_through ? mysql_change_user(pass_through.get(), PT_TARGET, TARGET_PASSWORD, nullptr) : -1;
+		ok(direction_rc == 0, "Pass-through-authenticated source can COM_CHANGE_USER to ordinary target (rc=%d)", direction_rc);
+	} else {
+		emit_fixture_skips(3, "COM_CHANGE_USER pass-through directionality");
+	}
+}
+
 int main() {
 	CommandLine cl;
 	const char* const datadir_env = getenv("REGULAR_INFRA_DATADIR");
@@ -207,7 +342,7 @@ int main() {
 	const string datadir { datadir_env };
 	const string ca { datadir + "/proxysql-ca.pem" };
 	const string ca_key { datadir + "/proxysql-key.pem" };
-	temporary_certificate_directory certificate_directory;
+	temporary_certificate_directory certificate_directory { datadir };
 	client_tls_material trusted_client;
 	client_tls_material untrusted_client;
 	client_tls_material spiffe_client;
@@ -229,100 +364,11 @@ int main() {
 		ok(true, "Generated trusted SPIFFE URI-SAN certificate # SKIP custom CA cannot sign fixture");
 	}
 
-	const auto expect_rejected_without_side_effects = [&](const char* label, const client_tls_material* identity) {
-		do_query(admin.get(), "PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE");
-		const int64_t probes_before = read_metric(admin.get(), "probes_attempted");
-		const int cache_before = cache_entries_for(admin.get(), PT_USER);
-		const unsigned int err = try_frontend_connect(cl, PT_USER, PT_PASSWORD, true, identity);
-		const int64_t probes_after = read_metric(admin.get(), "probes_attempted");
-		const int cache_after = cache_entries_for(admin.get(), PT_USER);
-		ok(err == ER_ACCESS_DENIED_ERROR, "%s returns generic 1045 (errno=%u)", label, err);
-		ok(probes_before >= 0 && probes_after == probes_before, "%s leaves probes_attempted unchanged (%ld -> %ld)", label, probes_before, probes_after);
-		ok(cache_before == 0 && cache_after == 0, "%s creates no pass-through cache entry (%d -> %d)", label, cache_before, cache_after);
-	};
-
-	expect_rejected_without_side_effects("Cold TLS without client certificate", nullptr);
-	if (untrusted_ready) {
-		expect_rejected_without_side_effects("Cold TLS with untrusted client certificate", &untrusted_client);
-	} else {
-		ok(true, "Cold TLS with untrusted client certificate returns 1045 # SKIP fixture unavailable");
-		ok(true, "Cold untrusted certificate leaves probes_attempted unchanged # SKIP fixture unavailable");
-		ok(true, "Cold untrusted certificate creates no cache entry # SKIP fixture unavailable");
-	}
-
-	if (trusted_ready) {
-		do_query(admin.get(), "PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE");
-		const int64_t probes_before = read_metric(admin.get(), "probes_attempted");
-		const unsigned int err = try_frontend_connect(cl, PT_USER, WRONG_PASSWORD, true, &trusted_client);
-		const int64_t probes_after = read_metric(admin.get(), "probes_attempted");
-		ok(err == ER_ACCESS_DENIED_ERROR, "Trusted certificate with wrong backend password returns 1045 (errno=%u)", err);
-		ok(probes_before >= 0 && probes_after == probes_before + 1, "Trusted wrong-password probe increments probes_attempted exactly once (%ld -> %ld)", probes_before, probes_after);
-		ok(cache_entries_for(admin.get(), PT_USER) == 0, "Trusted wrong-password probe leaves cache empty");
-
-		do_query(admin.get(), "PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE");
-		const int64_t correct_before = read_metric(admin.get(), "probes_attempted");
-		const unsigned int correct_err = try_frontend_connect(cl, PT_USER, PT_PASSWORD, true, &trusted_client);
-		const int64_t correct_after = read_metric(admin.get(), "probes_attempted");
-		ok(correct_err == 0, "Trusted no-SAN certificate with correct backend password succeeds (errno=%u)", correct_err);
-		ok(correct_before >= 0 && correct_after == correct_before + 1, "Trusted correct-password probe increments probes_attempted exactly once (%ld -> %ld)", correct_before, correct_after);
-		ok(cache_entries_for(admin.get(), PT_USER) == 1, "Trusted correct-password probe creates one cache entry");
-
-		const int64_t hits_before = read_metric(admin.get(), "cache_hits");
-		const unsigned int no_cert_warm_err = try_frontend_connect(cl, PT_USER, PT_PASSWORD, true);
-		const int64_t hits_after = read_metric(admin.get(), "cache_hits");
-		ok(no_cert_warm_err == ER_ACCESS_DENIED_ERROR, "Warm TLS without a client certificate returns 1045 (errno=%u)", no_cert_warm_err);
-		ok(hits_before >= 0 && hits_after == hits_before, "Warm no-certificate denial leaves cache_hits unchanged (%ld -> %ld)", hits_before, hits_after);
-
-		const int64_t trusted_hits_before = read_metric(admin.get(), "cache_hits");
-		const unsigned int trusted_warm_err = try_frontend_connect(cl, PT_USER, PT_PASSWORD, true, &trusted_client);
-		const int64_t trusted_hits_after = read_metric(admin.get(), "cache_hits");
-		ok(trusted_warm_err == 0, "Warm trusted certificate succeeds (errno=%u)", trusted_warm_err);
-		ok(trusted_hits_before >= 0 && trusted_hits_after == trusted_hits_before + 1, "Warm trusted certificate increments cache_hits exactly once (%ld -> %ld)", trusted_hits_before, trusted_hits_after);
-	} else {
-		for (int i = 0; i != 11; ++i) ok(true, "Trusted pass-through control # SKIP trusted certificate fixture unavailable");
-	}
-
-	if (spiffe_ready) {
-		const int64_t probes_before = read_metric(admin.get(), "probes_attempted");
-		const unsigned int err = try_frontend_connect(cl, SPIFFE_USER, "", true, &spiffe_client);
-		const int64_t probes_after = read_metric(admin.get(), "probes_attempted");
-		ok(err == 0, "Matching SPIFFE URI-SAN with empty password succeeds (errno=%u)", err);
-		ok(probes_before >= 0 && probes_after == probes_before, "Matching SPIFFE path leaves probes_attempted unchanged (%ld -> %ld)", probes_before, probes_after);
-		ok(cache_entries_for(admin.get(), SPIFFE_USER) == 0, "Matching SPIFFE path creates no cache entry");
-	} else {
-		for (int i = 0; i != 3; ++i) ok(true, "Matching SPIFFE path # SKIP trusted SPIFFE fixture unavailable");
-	}
-
-	const auto expect_spiffe_rejection = [&](const char* label, const client_tls_material* identity) {
-		const int64_t probes_before = read_metric(admin.get(), "probes_attempted");
-		const unsigned int err = try_frontend_connect(cl, SPIFFE_USER, "", true, identity);
-		const int64_t probes_after = read_metric(admin.get(), "probes_attempted");
-		ok(err == ER_ACCESS_DENIED_ERROR, "%s returns generic 1045 (errno=%u)", label, err);
-		ok(probes_before >= 0 && probes_after == probes_before, "%s leaves probes_attempted unchanged (%ld -> %ld)", label, probes_before, probes_after);
-		ok(cache_entries_for(admin.get(), SPIFFE_USER) == 0, "%s creates no SPIFFE cache entry", label);
-	};
-	expect_spiffe_rejection("SPIFFE row without client certificate", nullptr);
-	if (trusted_ready) {
-		expect_spiffe_rejection("SPIFFE row with mismatching trusted no-SAN certificate", &trusted_client);
-	} else {
-		for (int i = 0; i != 3; ++i) ok(true, "Mismatching SPIFFE path # SKIP trusted certificate fixture unavailable");
-	}
-
-	if (trusted_ready) {
-		mysql_ptr ordinary { connect_frontend(cl, cl.username, cl.password, true, &trusted_client) };
-		const int64_t probes_before = read_metric(admin.get(), "probes_attempted");
-		const int rc = ordinary ? mysql_change_user(ordinary.get(), PT_USER, PT_PASSWORD, nullptr) : -1;
-		const unsigned int err = ordinary ? mysql_errno(ordinary.get()) : UINT_MAX;
-		const int64_t probes_after = read_metric(admin.get(), "probes_attempted");
-		ok(rc != 0 && err == ER_ACCESS_DENIED_ERROR, "COM_CHANGE_USER to pass-through target remains generic 1045 (rc=%d errno=%u)", rc, err);
-		ok(probes_before >= 0 && probes_after == probes_before, "COM_CHANGE_USER pass-through target does not create a probe (%ld -> %ld)", probes_before, probes_after);
-
-		mysql_ptr pass_through { connect_frontend(cl, PT_USER, PT_PASSWORD, true, &trusted_client) };
-		const int direction_rc = pass_through ? mysql_change_user(pass_through.get(), PT_TARGET, TARGET_PASSWORD, nullptr) : -1;
-		ok(direction_rc == 0, "Pass-through-authenticated source can COM_CHANGE_USER to ordinary target (rc=%d)", direction_rc);
-	} else {
-		for (int i = 0; i != 3; ++i) ok(true, "COM_CHANGE_USER pass-through directionality # SKIP trusted certificate fixture unavailable");
-	}
+	run_pass_through_row_checks(
+		admin.get(), cl, trusted_ready, untrusted_ready, trusted_client, untrusted_client);
+	run_spiffe_row_checks(
+		admin.get(), cl, trusted_ready, spiffe_ready, trusted_client, spiffe_client);
+	run_change_user_direction_checks(admin.get(), cl, trusted_ready, trusted_client);
 
 	int cleanup_rc = EXIT_SUCCESS;
 	cleanup_rc |= do_query(backend.get(), string("DROP USER IF EXISTS '") + PT_USER + "'@'%'");

@@ -3,8 +3,8 @@
  * @brief Header-only TLS fixture helpers for frontend X.509 TAP tests.
  */
 
-#ifndef __FRONTEND_X509_TEST_UTILS_H
-#define __FRONTEND_X509_TEST_UTILS_H
+#ifndef FRONTEND_X509_TEST_UTILS_H
+#define FRONTEND_X509_TEST_UTILS_H
 
 #include <cerrno>
 #include <cstdio>
@@ -12,6 +12,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <limits.h>
 #include <sys/stat.h>
@@ -21,6 +22,7 @@
 
 #include "tap.h"
 #include "command_line.h"
+#include "proxysql_utils.h"
 
 using std::string;
 
@@ -38,41 +40,41 @@ struct mysql_closer {
 
 using mysql_ptr = std::unique_ptr<MYSQL, mysql_closer>;
 
-/** Quote one shell argument, including paths derived from the environment. */
-static inline string shell_quote(const string& value) {
-	string quoted { "'" };
-	for (const char c : value) {
-		if (c == '\'') {
-			quoted += "'\\''";
-		} else {
-			quoted += c;
-		}
+static inline bool run_openssl(const std::vector<string>& arguments) {
+	std::vector<const char*> argv;
+	argv.reserve(arguments.size());
+	string command { "openssl" };
+	for (const string& argument : arguments) {
+		argv.push_back(argument.c_str());
+		command += " " + argument;
 	}
-	quoted += "'";
-	return quoted;
-}
-
-static inline bool run_openssl(const string& command) {
 	diag("Running: %s", command.c_str());
-	const int status = system(command.c_str());
+
+	string standard_output;
+	string error_output;
+	const to_opts_t options { 30 * 1000 * 1000, 0, 0, 0 };
+	const int status = wexecvp("openssl", argv, options, standard_output, error_output);
 	if (status != 0) {
-		diag("openssl command failed with status %d", status);
+		diag("openssl command failed with status %d: %s%s", status,
+			standard_output.c_str(), error_output.c_str());
 		return false;
 	}
 	return true;
 }
 
 /**
- * Own exactly the path returned by mkdtemp(). Cleanup never follows a path
- * assembled from REGULAR_INFRA_DATADIR or another unchecked environment value.
+ * Own exactly the path returned by mkdtemp() below the isolated infra data
+ * directory. Cleanup removes only fixed fixture names below that owned path.
  */
 class temporary_certificate_directory {
 	string path_ {};
 
 public:
-	temporary_certificate_directory() {
-		char template_path[] = "/tmp/proxysql-require-x509-XXXXXX";
-		char* made = mkdtemp(template_path);
+	explicit temporary_certificate_directory(const string& parent_directory) {
+		const string template_value { parent_directory + "/proxysql-require-x509-XXXXXX" };
+		std::vector<char> template_path(template_value.begin(), template_value.end());
+		template_path.push_back('\0');
+		char* made = mkdtemp(template_path.data());
 		if (made) path_ = made;
 	}
 
@@ -91,6 +93,10 @@ public:
 		}
 		rmdir(path_.c_str());
 	}
+	temporary_certificate_directory(const temporary_certificate_directory&) = delete;
+	temporary_certificate_directory& operator=(const temporary_certificate_directory&) = delete;
+	temporary_certificate_directory(temporary_certificate_directory&&) = delete;
+	temporary_certificate_directory& operator=(temporary_certificate_directory&&) = delete;
 
 	bool valid() const { return !path_.empty(); }
 	const string& path() const { return path_; }
@@ -111,18 +117,15 @@ static inline bool create_trusted_client_certificate(
 	material.cert = directory.path() + "/trusted-client.pem";
 	material.ca = ca;
 
-	const bool req_ok = run_openssl(
-		"openssl req -new -newkey rsa:2048 -nodes -subj /CN=tap-require-x509"
-		" -keyout " + shell_quote(material.key) + " -out " + shell_quote(csr)
-	);
-	const bool sign_ok = req_ok && run_openssl(
-		"openssl x509 -req -days 1 -set_serial 5928001 -in " + shell_quote(csr) +
-		" -CA " + shell_quote(ca) + " -CAkey " + shell_quote(ca_key) +
-		" -out " + shell_quote(material.cert)
-	);
-	return sign_ok && run_openssl(
-		"openssl verify -CAfile " + shell_quote(ca) + " " + shell_quote(material.cert)
-	);
+	const bool req_ok = run_openssl({
+		"req", "-new", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=tap-require-x509",
+		"-keyout", material.key, "-out", csr
+	});
+	const bool sign_ok = req_ok && run_openssl({
+		"x509", "-req", "-days", "1", "-set_serial", "5928001", "-in", csr,
+		"-CA", ca, "-CAkey", ca_key, "-out", material.cert
+	});
+	return sign_ok && run_openssl({ "verify", "-CAfile", ca, material.cert });
 }
 
 static inline bool create_untrusted_client_certificate(
@@ -131,11 +134,11 @@ static inline bool create_untrusted_client_certificate(
 	material.key = directory.path() + "/untrusted-client.key";
 	material.cert = directory.path() + "/untrusted-client.pem";
 	material.ca = ca;
-	return run_openssl(
-		"openssl req -x509 -newkey rsa:2048 -nodes -days 1 -set_serial 5928002"
-		" -subj /CN=tap-untrusted -keyout " + shell_quote(material.key) +
-		" -out " + shell_quote(material.cert)
-	);
+	return run_openssl({
+		"req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+		"-set_serial", "5928002", "-subj", "/CN=tap-untrusted",
+		"-keyout", material.key, "-out", material.cert
+	});
 }
 
 static inline bool create_spiffe_client_certificate(
@@ -160,19 +163,16 @@ static inline bool create_spiffe_client_certificate(
 		return false;
 	}
 
-	const bool req_ok = run_openssl(
-		"openssl req -new -newkey rsa:2048 -nodes -subj /CN=" + string(name) +
-		" -keyout " + shell_quote(material.key) + " -out " + shell_quote(csr)
-	);
-	const bool sign_ok = req_ok && run_openssl(
-		"openssl x509 -req -days 1 -set_serial " + std::to_string(serial) +
-		" -in " + shell_quote(csr) + " -CA " + shell_quote(ca) +
-		" -CAkey " + shell_quote(ca_key) + " -extfile " + shell_quote(extfile) +
-		" -out " + shell_quote(material.cert)
-	);
-	return sign_ok && run_openssl(
-		"openssl verify -CAfile " + shell_quote(ca) + " " + shell_quote(material.cert)
-	);
+	const bool req_ok = run_openssl({
+		"req", "-new", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=" + string(name),
+		"-keyout", material.key, "-out", csr
+	});
+	const bool sign_ok = req_ok && run_openssl({
+		"x509", "-req", "-days", "1", "-set_serial", std::to_string(serial),
+		"-in", csr, "-CA", ca, "-CAkey", ca_key, "-extfile", extfile,
+		"-out", material.cert
+	});
+	return sign_ok && run_openssl({ "verify", "-CAfile", ca, material.cert });
 }
 
 /**
@@ -228,4 +228,4 @@ static inline unsigned int try_frontend_connect(
 	return mysql ? 0 : connection_error;
 }
 
-#endif /* __FRONTEND_X509_TEST_UTILS_H */
+#endif /* FRONTEND_X509_TEST_UTILS_H */

@@ -294,11 +294,11 @@ static unsigned int try_plaintext_frontend_connect(
 
   ```cpp
   x509_subject_alt_name = nullptr;
-#ifdef PROXYSQL31
+  #ifdef PROXYSQL31
   client_cert_present = false;
   client_cert_verify_result = X509_V_OK;
   frontend_authenticated_via_spiffe = false;
-#endif
+  #endif
   ssl = nullptr;
   ```
 
@@ -310,26 +310,26 @@ static unsigned int try_plaintext_frontend_connect(
 
   ```cpp
   if (n == 1) {
-	X509* cert = SSL_get_peer_certificate(ssl);
-#ifdef PROXYSQL31
-	client_cert_present = (cert != nullptr);
-	client_cert_verify_result = cert ? SSL_get_verify_result(ssl) : X509_V_OK;
-#endif
+    X509* cert = SSL_get_peer_certificate(ssl);
+  #ifdef PROXYSQL31
+    client_cert_present = (cert != nullptr);
+    client_cert_verify_result = cert ? SSL_get_verify_result(ssl) : X509_V_OK;
+  #endif
 
-	if (cert) {
-		GENERAL_NAMES* alt_names = static_cast<GENERAL_NAMES*>(
-			X509_get_ext_d2i(cert, NID_subject_alt_name, nullptr, nullptr));
-		if (alt_names) {
-			// Preserve the existing first spiffe:// URI extraction loop.
-			sk_GENERAL_NAME_pop_free(alt_names, GENERAL_NAME_free);
-		}
-		X509_free(cert);
-	}
+    if (cert) {
+      GENERAL_NAMES* alt_names = static_cast<GENERAL_NAMES*>(
+        X509_get_ext_d2i(cert, NID_subject_alt_name, nullptr, nullptr));
+      if (alt_names) {
+        // Preserve the existing first spiffe:// URI extraction loop.
+        sk_GENERAL_NAME_pop_free(alt_names, GENERAL_NAME_free);
+      }
+      X509_free(cert);
+    }
 
-	if (x509_subject_alt_name && SSL_get_verify_result(ssl) != X509_V_OK) {
-		// Preserve the existing SPIFFE handshake-failure behavior.
-		return SSLSTATUS_FAIL;
-	}
+    if (x509_subject_alt_name && SSL_get_verify_result(ssl) != X509_V_OK) {
+      // Preserve the existing SPIFFE handshake-failure behavior.
+      return SSLSTATUS_FAIL;
+    }
   }
   ```
 
@@ -379,19 +379,19 @@ static unsigned int try_plaintext_frontend_connect(
   Use the common evaluator only in `PROXYSQL31` builds. Preserve the existing SPIFFE-only block verbatim in the stable `#else` path:
 
   ```cpp
-#ifdef PROXYSQL31
+  #ifdef PROXYSQL31
   const char* attributes = (*myds)->sess->user_attributes;
   const auto policy = evaluate_frontend_certificate_policy(
-	*myds, attributes, user,
-	frontend_auth_context::INITIAL_HANDSHAKE,
-	calling_line, calling_func);
+    *myds, attributes, user,
+    frontend_auth_context::INITIAL_HANDSHAKE,
+    calling_line, calling_func);
   if (!policy.allowed) {
-	return false;
+    return false;
   }
   (*myds)->frontend_authenticated_via_spiffe = policy.has_spiffe_id;
-#else
+  #else
   // Existing v3.0 SPIFFE-only attribute handling. Never inspect require_x509.
-#endif
+  #endif
   ```
 
   Retain the existing `default-transaction_isolation` application after policy success. Parse the JSON once in the function or pass a parsed object through a private helper; do not reintroduce uncaught `get<std::string>()` exceptions.

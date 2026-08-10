@@ -218,12 +218,38 @@ void MySQL_Data_Stream::queue_encrypted_bytes(const char *buf, size_t len)	{
 	//proxy_info("New ssl_write_len size: %u\n", ssl_write_len);
 }
 
+static char* extract_first_spiffe_uri(const GENERAL_NAMES* alt_names) {
+	static constexpr char SPIFFE_PREFIX[] = "spiffe";
+	const int alt_name_count = sk_GENERAL_NAME_num(alt_names);
+
+	for (int i = 0; i < alt_name_count; ++i) {
+		const GENERAL_NAME* san = sk_GENERAL_NAME_value(alt_names, i);
+		if (!san || san->type != GEN_URI || !san->d.uniformResourceIdentifier) continue;
+
+		const ASN1_STRING* uri = san->d.uniformResourceIdentifier;
+		const unsigned char* data = ASN1_STRING_get0_data(uri);
+		const int length = ASN1_STRING_length(uri);
+		if (!data || length < static_cast<int>(sizeof(SPIFFE_PREFIX) - 1)) continue;
+		if (memcmp(data, SPIFFE_PREFIX, sizeof(SPIFFE_PREFIX) - 1) != 0) continue;
+		if (memchr(data, '\0', length) != nullptr) continue;
+
+		char* value = new (std::nothrow) char[static_cast<size_t>(length) + 1];
+		if (!value) return nullptr;
+		memcpy(value, data, length);
+		value[length] = '\0';
+		return value;
+	}
+
+	return nullptr;
+}
+
 enum sslstatus MySQL_Data_Stream::do_ssl_handshake() {
 	char buf[MY_SSL_BUFFER];
 	enum sslstatus status;
 	int n = SSL_do_handshake(ssl);
 	if (n == 1) {
 		//proxy_info("SSL handshake completed\n");
+		reset_frontend_certificate_evidence();
 		X509 *cert = SSL_get_peer_certificate(ssl);
 #ifdef PROXYSQL31
 		client_cert_present = (cert != nullptr);
@@ -232,27 +258,7 @@ enum sslstatus MySQL_Data_Stream::do_ssl_handshake() {
 		if (cert) {
 			GENERAL_NAMES *alt_names = (stack_st_GENERAL_NAME *)X509_get_ext_d2i((X509*)cert, NID_subject_alt_name, 0, 0);
 			if (alt_names) {
-				int alt_name_count = sk_GENERAL_NAME_num(alt_names);
-
-				// Iterate all the SAN names, looking for SPIFFE identifier
-				for (int i = 0; i < alt_name_count; i++) {
-					GENERAL_NAME *san = sk_GENERAL_NAME_value(alt_names, i);
-
-					// We only care about URI names
-					if (san->type == GEN_URI) {
-						if (san->d.uniformResourceIdentifier->data) {
-							const char* resource_data =
-								reinterpret_cast<const char*>(san->d.uniformResourceIdentifier->data);
-							const char* spiffe_loc = strstr(resource_data, "spiffe");
-
-							// First name starting with 'spiffe' is considered the match.
-							if (spiffe_loc == resource_data) {
-								x509_subject_alt_name = strdup(resource_data);
-							}
-						}
-					}
-				}
-
+				x509_subject_alt_name = extract_first_spiffe_uri(alt_names);
 				sk_GENERAL_NAME_pop_free(alt_names, GENERAL_NAME_free);
 			}
 			X509_free(cert);
@@ -498,10 +504,17 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 		CompPktOUT.pkt.ptr=NULL;
 		CompPktOUT.pkt.size=0;
 	}
-	if (x509_subject_alt_name) {
-		free(x509_subject_alt_name);
-		x509_subject_alt_name=NULL;
-	}
+	reset_frontend_certificate_evidence();
+}
+
+void MySQL_Data_Stream::reset_frontend_certificate_evidence() {
+	delete[] x509_subject_alt_name;
+	x509_subject_alt_name = nullptr;
+#ifdef PROXYSQL31
+	client_cert_present = false;
+	client_cert_verify_result = X509_V_OK;
+	frontend_authenticated_via_spiffe = false;
+#endif
 }
 
 // this function initializes a MySQL_Data_Stream 
@@ -534,6 +547,7 @@ void MySQL_Data_Stream::reinit_queues() {
 // this function initializes a MySQL_Data_Stream with arguments
 void MySQL_Data_Stream::init(enum MySQL_DS_type _type, MySQL_Session *_sess, int _fd) {
 	myds_type=_type;
+	if (_type == MYDS_FRONTEND) reset_frontend_certificate_evidence();
 	sess=_sess;
 	init();
 	fd=_fd;

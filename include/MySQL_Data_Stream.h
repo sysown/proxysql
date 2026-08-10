@@ -205,6 +205,7 @@ class MySQL_Data_Stream
 	MySQL_Data_Stream();
 	virtual ~MySQL_Data_Stream();
 	int array2buffer_full();
+	void reset_frontend_certificate_evidence();
 	void init();	// initialize the data stream
 	void init(enum MySQL_DS_type, MySQL_Session *, int); // initialize with arguments
 	void shut_soft();
