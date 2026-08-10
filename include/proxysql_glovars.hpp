@@ -48,9 +48,12 @@ class ProxySQL_Checksum_Value {
 		epoch = 0;
 		in_shutdown = false;
 	}
-	void set_checksum(char *c) {
+	void set_checksum(const char *c) {
 		memset(checksum,0,ProxySQL_Checksum_Value_LENGTH);
-		memcpy(checksum,c,ProxySQL_Checksum_Value_LENGTH);
+		if (c) {
+			const size_t length = strnlen(c, ProxySQL_Checksum_Value_LENGTH);
+			memcpy(checksum, c, length);
+		}
 		replace_checksum_zeros(checksum);
 	}
 	~ProxySQL_Checksum_Value() {
