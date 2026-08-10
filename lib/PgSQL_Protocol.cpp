@@ -205,11 +205,9 @@ void SQLite3_to_Postgres(PtrSizeArray *psa, SQLite3_result *result, char *error,
 	if (fs != NULL) {
 		qtlen = (fs - query_type) + 1;
 	}
-	char buf[qtlen];
-	memcpy(buf,query_type, qtlen-1);
-	buf[qtlen-1] = 0;
+	std::string buf(query_type, qtlen - 1);
 	{
-		char *s = buf;
+		char *s = &buf[0];
 		while (*s) {
 			*s = toupper((unsigned char) *s);
 			s++;
@@ -250,12 +248,12 @@ void SQLite3_to_Postgres(PtrSizeArray *psa, SQLite3_result *result, char *error,
 			pkt.to_PtrSizeArray(psa);
 		}
 
-		if (strcmp(buf,"SELECT") == 0) {
+		if (buf == "SELECT") {
 			char tmpbuf[128];
-			sprintf(tmpbuf,"%s %d", buf, result->rows_count);
+			sprintf(tmpbuf,"%s %d", buf.c_str(), result->rows_count);
 			pkt.write_generic('C', "s", tmpbuf);
 		} else {
-			pkt.write_CommandComplete(buf);
+			pkt.write_CommandComplete(buf.c_str());
 		}
 		pkt.to_PtrSizeArray(psa);
 		if (send_ready_for_query) pkt.write_ReadyForQuery(txn_state);
@@ -279,14 +277,14 @@ void SQLite3_to_Postgres(PtrSizeArray *psa, SQLite3_result *result, char *error,
 			// see https://www.postgresql.org/docs/current/protocol-message-formats.html
 		} else {
 			char tmpbuf[128];
-			if (strcmp(buf,"INSERT") == 0) {
-				sprintf(tmpbuf,"%s 0 %d", buf, affected_rows);
+			if (buf == "INSERT") {
+				sprintf(tmpbuf,"%s 0 %d", buf.c_str(), affected_rows);
 				pkt.write_generic('C', "s", tmpbuf);
-			} else if (strcmp(buf,"UPDATE") == 0 || strcmp(buf,"DELETE") == 0) {
-				sprintf(tmpbuf,"%s %d", buf, affected_rows);
+			} else if (buf == "UPDATE" || buf == "DELETE") {
+				sprintf(tmpbuf,"%s %d", buf.c_str(), affected_rows);
 				pkt.write_generic('C', "s", tmpbuf);
 			} else {
-				pkt.write_CommandComplete(buf);
+				pkt.write_CommandComplete(buf.c_str());
 			}
 		}
 		pkt.to_PtrSizeArray(psa);
@@ -321,7 +319,8 @@ void PG_pkt::write_DataRow(const char *tupdesc, ...) {
 						uint8_t *bval = va_arg(ap, uint8_t *);
 						size_t required = 2 + blen * 2 + 1;
 						tmp2 = (char *)malloc(required);
-						memcpy(tmp2, "\\x", 2);
+						tmp2[0] = '\\';
+						tmp2[1] = 'x';
 						tmp2[2] = '\0';
 						for (int j = 0; j < blen; j++)
 							snprintf(tmp2 + (2 + j * 2), 3, "%02x", bval[j]);
@@ -1626,18 +1625,16 @@ char* extract_tag_from_query(const char* query) {
 		if (fs != NULL) {
 			qtlen = (fs - query) + 1;
 		}
-		char buf[qtlen];
-		memcpy(buf, query, qtlen - 1);
-		buf[qtlen - 1] = 0;
+		std::string buf(query, qtlen - 1);
 		{
-			char* s = buf;
+			char* s = &buf[0];
 			while (*s) {
 				*s = toupper((unsigned char)*s);
 				s++;
 			}
 		}
 
-		return strdup(buf);
+		return strdup(buf.c_str());
 	}
 }
 
