@@ -12,6 +12,8 @@ using json = nlohmann::json;
 #include "re2/regexp.h"
 #include "mysqld_error.h"
 
+#include <openssl/crypto.h>
+
 #include "MySQL_Data_Stream.h"
 #include "MySQL_Query_Processor.h"
 #include "Query_Processor_ParserSQL.h"
@@ -74,10 +76,6 @@ using json = nlohmann::json;
 
 #define SHOW_STATUS_LIKE_SSL_VERSION "SHOW STATUS LIKE 'Ssl_version"
 #define SHOW_STATUS_LIKE_SSL_VERSION_LEN 29
-
-static constexpr size_t SHOW_WARNINGS_LEN = sizeof("SHOW WARNINGS") - 1;
-static constexpr size_t SQL_MODE_LEN = sizeof("@@sql_mode") - 1;
-static constexpr size_t SET_NAMES_LEN = sizeof("SET NAMES") - 1;
 
 #define EXPMARIA
 
@@ -596,15 +594,21 @@ bool Query_Info::is_select_NOT_for_update() {
 				return false;
 			}
 			p=QP;
-			std::string buf;
+			char buf[129];
 			if (ql>=128) { // for long query, just check the last 128 bytes
 				p+=ql-128;
-				buf.assign(p, 128);
+				memcpy(buf,p,128);
+				buf[128]=0;
 			} else {
-				buf.assign(p, ql);
+				memcpy(buf,p,ql);
+				buf[ql]=0;
 			}
-			if (strcasestr((char*)buf.c_str()," FOR ")) {
-				if (strcasestr((char*)buf.c_str()," FOR UPDATE ") || strcasestr((char*)buf.c_str()," FOR SHARE ")) {
+			if (strcasestr(buf," FOR ")) {
+				if (strcasestr(buf," FOR UPDATE ")) {
+					__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
+					return false;
+				}
+				if (strcasestr(buf," FOR SHARE ")) {
 					__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
 					return false;
 				}
@@ -614,6 +618,7 @@ bool Query_Info::is_select_NOT_for_update() {
 	bool_is_select_NOT_for_update=true;
 	return true;
 }
+
 
 void MySQL_Session::set_status(enum session_status e) {
 	if (e==session_status___NONE) {
@@ -891,9 +896,8 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 	if (pkt->size <= 5) { return false; }
 	char c=((char *)pkt->ptr)[5];
 	bool ret=false;
-	static constexpr size_t commit_len = sizeof("commit") - 1;
 	if (c=='c' || c=='C') {
-		if (pkt->size==commit_len+5) {
+		if (pkt->size==strlen("commit")+5) {
 			if (strncasecmp((char *)"commit",(char *)pkt->ptr+5,6)==0) {
 				__sync_fetch_and_add(&MyHGM->status.commit_cnt, 1);
 				ret=true;
@@ -901,8 +905,7 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 		}
 	} else {
 		if (c=='r' || c=='R') {
-			static constexpr size_t rollback_len = sizeof("rollback") - 1;
-			if (pkt->size==rollback_len+5) {
+			if (pkt->size==strlen("rollback")+5) {
 				if ( strncasecmp((char *)"rollback",(char *)pkt->ptr+5,8)==0 ) {
 					__sync_fetch_and_add(&MyHGM->status.rollback_cnt, 1);
 					ret=true;
@@ -975,15 +978,14 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 	autocommit_handled=false;
 	sending_set_autocommit=false;
-	const size_t sal = sizeof("set autocommit") - 1;
-	const size_t set_session_autocommit_len = sizeof("SET @@session.autocommit") - 1;
+	size_t sal=strlen("set autocommit");
 	char * _ptr = (char *)pkt->ptr;
 #ifdef DEBUG
 	string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Parsing SET command = %s\n", nqn.c_str());
 #endif
 	if ( pkt->size >= 7+sal) {
-		if (strncasecmp((char *)"SET @@session.autocommit",(char *)pkt->ptr+5,set_session_autocommit_len)==0) {
+		if (strncasecmp((char *)"SET @@session.autocommit",(char *)pkt->ptr+5,strlen((char *)"SET @@session.autocommit"))==0) {
 			memmove(_ptr+9, _ptr+19, pkt->size - 19);
 			memset(_ptr+pkt->size-10,' ',10);
 		}
@@ -1237,11 +1239,10 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		l_free(pkt->size,pkt->ptr);
 		return true;
 	}
-	constexpr size_t select_user_len = sizeof("select USER()") - 1;
-	if (pkt->size==select_user_len+5 && strncmp((char *)"select USER()",(char *)pkt->ptr+5,pkt->size-5)==0) {
+	if (pkt->size==strlen((char *)"select USER()")+5 && strncmp((char *)"select USER()",(char *)pkt->ptr+5,pkt->size-5)==0) {
 		// FIXME: this doesn't return AUTOCOMMIT or IN_TRANS
 		char *query1=(char *)"SELECT \"%s\" AS 'USER()'";
-		char *query2=(char *)malloc((sizeof("SELECT \"%s\" AS 'USER()'") - 1) + strlen(client_myds->myconn->userinfo->username)+10);
+		char *query2=(char *)malloc(strlen(query1)+strlen(client_myds->myconn->userinfo->username)+10);
 		sprintf(query2,query1,client_myds->myconn->userinfo->username);
 		char *error;
 		int cols;
@@ -1258,8 +1259,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		return true;
 	}
 	// MySQL client check command for dollars quote support, starting at version '8.1.0'. See #4300.
-	static constexpr size_t select_dollar_quote_len = sizeof("SELECT $$") - 1;
-	if ((pkt->size == select_dollar_quote_len + 5) && strncasecmp("SELECT $$", (char*)pkt->ptr + 5, pkt->size - 5) == 0) {
+	if ((pkt->size == strlen("SELECT $$") + 5) && strncasecmp("SELECT $$", (char*)pkt->ptr + 5, pkt->size - 5) == 0) {
 		pair<int,const char*> err_info { get_dollar_quote_error(mysql_thread___server_version) };
 
 		client_myds->DSS=STATE_QUERY_SENT_NET;
@@ -1285,28 +1285,21 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 	if ((pkt->size < 60) && (pkt->size > 38) && (strncasecmp((char *)"SET SESSION character_set_server",(char *)pkt->ptr+5,32)==0) ) { // issue #601
 		char *idx=NULL;
 		char *p=(char *)pkt->ptr+37;
-			idx=(char *)memchr(p,'=',pkt->size-37);
-			if (idx) { // we found =
-				PtrSize_t pkt_2;
-				pkt_2.size=5+strlen((char *)"SET NAMES ")+pkt->size-1-(idx-(char *)pkt->ptr);
-				pkt_2.ptr=l_alloc(pkt_2.size);
-				mysql_hdr Hdr{};
-				{
-					const uint8_t *src = static_cast<const uint8_t *>(pkt->ptr);
-					Hdr.pkt_length = (static_cast<uint32_t>(src[0]) << 0)
-						| (static_cast<uint32_t>(src[1]) << 8)
-						| (static_cast<uint32_t>(src[2]) << 16);
-					Hdr.pkt_id = src[3];
-				}
-				Hdr.pkt_length=pkt_2.size-5;
-				memcpy((char *)pkt_2.ptr+4,(char *)pkt->ptr+4,1);
-				memcpy(pkt_2.ptr,&Hdr,sizeof(mysql_hdr));
-				memcpy((char *)pkt_2.ptr+5, "SET NAMES ", 10);
-				size_t value_len = pkt->size - 1 - (idx - (char *)pkt->ptr);
-				memcpy((char *)pkt_2.ptr+15,idx+1,value_len);
-				l_free(pkt->size,pkt->ptr);
-				pkt->size=pkt_2.size;
-				pkt->ptr=pkt_2.ptr;
+		idx=(char *)memchr(p,'=',pkt->size-37);
+		if (idx) { // we found =
+			PtrSize_t pkt_2;
+			pkt_2.size=5+strlen((char *)"SET NAMES ")+pkt->size-1-(idx-(char *)pkt->ptr);
+			pkt_2.ptr=l_alloc(pkt_2.size);
+			mysql_hdr Hdr;
+			memcpy(&Hdr,pkt->ptr,sizeof(mysql_hdr));
+			Hdr.pkt_length=pkt_2.size-5;
+			memcpy((char *)pkt_2.ptr+4,(char *)pkt->ptr+4,1);
+			memcpy(pkt_2.ptr,&Hdr,sizeof(mysql_hdr));
+			strcpy((char *)pkt_2.ptr+5,(char *)"SET NAMES ");
+			memcpy((char *)pkt_2.ptr+15,idx+1,pkt->size-1-(idx-(char *)pkt->ptr));
+			l_free(pkt->size,pkt->ptr);
+			pkt->size=pkt_2.size;
+			pkt->ptr=pkt_2.ptr;
 			// Fix 'use-after-free': To change the pointer of the 'PtrSize_t' being processed by
 			// 'MySQL_Session::handler' we are forced to update 'MySQL_Session::CurrentQuery'.
 			CurrentQuery.QueryPointer = static_cast<unsigned char*>(pkt_2.ptr);
@@ -1316,28 +1309,21 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 	if ((pkt->size < 60) && (pkt->size > 39) && (strncasecmp((char *)"SET SESSION character_set_results",(char *)pkt->ptr+5,33)==0) ) { // like the above
 		char *idx=NULL;
 		char *p=(char *)pkt->ptr+38;
-			idx=(char *)memchr(p,'=',pkt->size-38);
-			if (idx) { // we found =
-				PtrSize_t pkt_2;
-				pkt_2.size=5+strlen((char *)"SET NAMES ")+pkt->size-1-(idx-(char *)pkt->ptr);
-				pkt_2.ptr=l_alloc(pkt_2.size);
-				mysql_hdr Hdr{};
-				{
-					const uint8_t *src = static_cast<const uint8_t *>(pkt->ptr);
-					Hdr.pkt_length = (static_cast<uint32_t>(src[0]) << 0)
-						| (static_cast<uint32_t>(src[1]) << 8)
-						| (static_cast<uint32_t>(src[2]) << 16);
-					Hdr.pkt_id = src[3];
-				}
-				Hdr.pkt_length=pkt_2.size-5;
-				memcpy((char *)pkt_2.ptr+4,(char *)pkt->ptr+4,1);
-				memcpy(pkt_2.ptr,&Hdr,sizeof(mysql_hdr));
-				memcpy((char *)pkt_2.ptr+5, "SET NAMES ", 10);
-				size_t value_len = pkt->size - 1 - (idx - (char *)pkt->ptr);
-				memcpy((char *)pkt_2.ptr+15,idx+1,value_len);
-				l_free(pkt->size,pkt->ptr);
-				pkt->size=pkt_2.size;
-				pkt->ptr=pkt_2.ptr;
+		idx=(char *)memchr(p,'=',pkt->size-38);
+		if (idx) { // we found =
+			PtrSize_t pkt_2;
+			pkt_2.size=5+strlen((char *)"SET NAMES ")+pkt->size-1-(idx-(char *)pkt->ptr);
+			pkt_2.ptr=l_alloc(pkt_2.size);
+			mysql_hdr Hdr;
+			memcpy(&Hdr,pkt->ptr,sizeof(mysql_hdr));
+			Hdr.pkt_length=pkt_2.size-5;
+			memcpy((char *)pkt_2.ptr+4,(char *)pkt->ptr+4,1);
+			memcpy(pkt_2.ptr,&Hdr,sizeof(mysql_hdr));
+			strcpy((char *)pkt_2.ptr+5,(char *)"SET NAMES ");
+			memcpy((char *)pkt_2.ptr+15,idx+1,pkt->size-1-(idx-(char *)pkt->ptr));
+			l_free(pkt->size,pkt->ptr);
+			pkt->size=pkt_2.size;
+			pkt->ptr=pkt_2.ptr;
 			// Fix 'use-after-free': To change the pointer of the 'PtrSize_t' being processed by
 			// 'MySQL_Session::handler' we are forced to update 'MySQL_Session::CurrentQuery'.
 			CurrentQuery.QueryPointer = static_cast<unsigned char*>(pkt_2.ptr);
@@ -1355,9 +1341,8 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		const MARIADB_CHARSET_INFO * c;
 		char * collation_name_unstripped = NULL;
 		char * collation_name = NULL;
-	if (strcasestr(csname," COLLATE ")) {
-		static constexpr size_t collate_prefix_len = sizeof(" COLLATE ") - 1;
-		collation_name_unstripped = strcasestr(csname," COLLATE ") + collate_prefix_len;
+		if (strcasestr(csname," COLLATE ")) {
+			collation_name_unstripped = strcasestr(csname," COLLATE ") + strlen(" COLLATE ");
 			collation_name = trim_spaces_and_quotes_in_place(collation_name_unstripped);
 			char *_s1=index(csname,' ');
 			char *_s2=index(csname,'\'');
@@ -1442,7 +1427,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 	}
 	// if query digest is disabled, warnings in ProxySQL are also deactivated,
 	// resulting in an empty response being sent to the client.
-	if ((pkt->size == 18) && (strncasecmp((char*)"SHOW WARNINGS", (char*)pkt->ptr + 5, SHOW_WARNINGS_LEN) == 0) &&
+	if ((pkt->size == 18) && (strncasecmp((char*)"SHOW WARNINGS", (char*)pkt->ptr + 5, 13) == 0) &&
 		CurrentQuery.QueryParserArgs.digest_text == nullptr) {
 		SQLite3_result* resultset = new SQLite3_result(3);
 		resultset->add_column_definition(SQLITE_TEXT, "Level");
@@ -1800,12 +1785,8 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 	// probe resolves. Also clears auth_in_progress.
 	auto scrub_cleartext = [&]() {
 		if (client_myds && client_myds->passthrough_cleartext) {
-			const char* cleartext = client_myds->passthrough_cleartext;
-			const std::string_view cleartext_view = cleartext ? std::string_view{cleartext} : std::string_view{};
-			const size_t cleartext_len = cleartext_view.size();
-			if (cleartext_len) {
-				memset(client_myds->passthrough_cleartext, 0, cleartext_len);
-			}
+			OPENSSL_cleanse(client_myds->passthrough_cleartext,
+				strlen(client_myds->passthrough_cleartext));
 			free(client_myds->passthrough_cleartext);
 			client_myds->passthrough_cleartext = NULL;
 		}
@@ -1936,7 +1917,7 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 		// Cache the verified credential. The cleartext (from
 		// passthrough_cleartext) was just used to auth the backend and is now
 		// proven valid.
-		GloMyPTAuthCache->insert(user_key, std::string(cleartext), audit_hg);
+		GloMyPTAuthCache->insert(user_key, cleartext, audit_hg);
 
 		// Mark the session: the credential on userinfo came from pass-through
 		// (now in the cache). Authorizes the §8.4 eviction hook to invalidate
@@ -1949,9 +1930,7 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 		// backend authenticated successfully we overwrite it with the real
 		// cleartext and recompute the hash, so the rest of the session (query
 		// routing, multiplexing, change-user checks) authenticates consistently.
-		if (client_myds->myconn->userinfo->password) {
-			free(client_myds->myconn->userinfo->password);
-		}
+		client_myds->myconn->userinfo->clear_password();
 		client_myds->myconn->userinfo->password = strdup(cleartext);
 		client_myds->myconn->userinfo->set(NULL, NULL, NULL, NULL);
 
@@ -1963,12 +1942,10 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 		// strcmp(client_schemaname, server_schemaname) -- strcmp(NULL, ...)
 		// SIGSEGVs. set_schemaname is NULL-safe: when len==0 it falls back to
 		// mysql_thread___default_schema.
-	if (client_myds->myconn->userinfo->schemaname == NULL) {
-		const std::string_view safe_default_schema = default_schema ? std::string_view{default_schema} : std::string_view{};
-		const size_t default_schema_len = safe_default_schema.size();
-		client_myds->myconn->userinfo->set_schemaname(
-			const_cast<char *>(safe_default_schema.data()), default_schema_len);
-	}
+		if (client_myds->myconn->userinfo->schemaname == NULL) {
+			client_myds->myconn->userinfo->set_schemaname(
+				default_schema, default_schema ? strlen(default_schema) : 0);
+		}
 
 		// Return the authed backend connection to the pool. It is valid and
 		// reusable; the client's first query re-acquires through the normal
@@ -1983,16 +1960,14 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 		// strdup userinfo->schemaname unconditionally. Ensure it is non-NULL on
 		// the backend conn before returning it, mirroring the client-side guard
 		// above (NULL-safe: len==0 falls back to mysql_thread___default_schema).
-	if (mybe && mybe->server_myds && mybe->server_myds->myconn) {
-		MySQL_Connection_userinfo *bui = mybe->server_myds->myconn->userinfo;
-		if (bui && bui->schemaname == NULL) {
-			const std::string_view safe_default_schema = default_schema ? std::string_view{default_schema} : std::string_view{};
-			const size_t default_schema_len = safe_default_schema.size();
-			bui->set_schemaname(
-				const_cast<char *>(safe_default_schema.data()), default_schema_len);
+		if (mybe && mybe->server_myds && mybe->server_myds->myconn) {
+			MySQL_Connection_userinfo *bui = mybe->server_myds->myconn->userinfo;
+			if (bui && bui->schemaname == NULL) {
+				bui->set_schemaname(
+					default_schema, default_schema ? strlen(default_schema) : 0);
+			}
+			mybe->server_myds->return_MySQL_Connection_To_Pool();
 		}
-		mybe->server_myds->return_MySQL_Connection_To_Pool();
-	}
 
 		// Frontend per-user connection accounting + max_connections
 		// enforcement (mirrors the normal handshake-completion path). Two
@@ -2152,9 +2127,7 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 	// handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection,
 	// which copies userinfo (including a real password) before connect.
 	mc->userinfo->set(client_myds->myconn->userinfo);
-	if (mc->userinfo->password) {
-		free(mc->userinfo->password);
-	}
+	mc->userinfo->clear_password();
 	mc->userinfo->password = strdup(cleartext);
 	mc->userinfo->set(NULL, NULL, NULL, NULL); // recompute hash
 
@@ -6488,6 +6461,10 @@ bool MySQL_Session::handler_again___multiple_statuses(int *rc) {
 
 void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE_WrongCredentials(PtrSize_t *pkt, bool *wrong_pass) {
 	l_free(pkt->size,pkt->ptr);
+#ifdef PROXYSQL31
+	const MySQLFrontendAuthError frontend_auth_error =
+		client_myds->myprot.consume_frontend_auth_error();
+#endif
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , DS=%p . Wrong credentials for frontend: disconnecting\n", this, client_myds);
 	*wrong_pass=true;
 	// FIXME: this should become close connection
@@ -6520,29 +6497,45 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE_
 		client_addr = strdup((char *)"");
 	}
 	if (client_myds->myconn->userinfo->username) {
-		char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100+strlen(client_addr));
+		std::string error_message;
 		//uint8_t _pid = 2;
 		//if (client_myds->switching_auth_stage) _pid+=2;
 		//if (is_encrypted) _pid++;
 		uint8_t _pid = client_myds->pkt_sid; _pid++;
 #ifdef DEBUG
 	if (client_myds->myconn->userinfo->password) {
-		char *tmp_pass=strdup(client_myds->myconn->userinfo->password);
-		int lpass = strlen(tmp_pass);
-		for (int i=2; i<lpass-1; i++) {
-			tmp_pass[i]='*';
-		}
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , DS=%p . Error: Access denied for user '%s'@'%s' , Password='%s'. Disconnecting\n", this, client_myds, client_myds->myconn->userinfo->username, client_addr, tmp_pass);
-		free(tmp_pass);
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+			"Session=%p , DS=%p . Error: Access denied for user '%s'@'%s' , Password='(redacted)'. Disconnecting\n",
+			this, client_myds, client_myds->myconn->userinfo->username, client_addr);
 	} else {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , DS=%p . Error: Access denied for user '%s'@'%s' . No password. Disconnecting\n", this, client_myds, client_myds->myconn->userinfo->username, client_addr);
 	}
 #endif // DEBUG
-		sprintf(_s,"ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL, _pid, 1045,(char *)"28000", _s, true);
-		proxy_error("ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)\n", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
-		free(_s);
-		__sync_fetch_and_add(&MyHGM->status.access_denied_wrong_password, 1);
+#ifdef PROXYSQL31
+		if (frontend_auth_error == MySQLFrontendAuthError::CACHING_SHA2_RSA_UNAVAILABLE) {
+			string_format(
+				"ProxySQL Error: Access denied for user '%s'@'%s': caching_sha2_password RSA key exchange is unavailable; use TLS or configure RSA keys",
+				error_message,
+				client_myds->myconn->userinfo->username, client_addr
+			);
+		} else
+#endif
+		{
+			string_format(
+				"ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)",
+				error_message,
+				client_myds->myconn->userinfo->username, client_addr,
+				(client_myds->myconn->userinfo->password ? "YES" : "NO")
+			);
+		}
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, _pid, 1045, "28000", error_message.c_str(), true);
+		proxy_error("%s\n", error_message.c_str());
+#ifdef PROXYSQL31
+		if (frontend_auth_error != MySQLFrontendAuthError::CACHING_SHA2_RSA_UNAVAILABLE)
+#endif
+		{
+			__sync_fetch_and_add(&MyHGM->status.access_denied_wrong_password, 1);
+		}
 	}
 	if (client_addr) {
 		free(client_addr);
@@ -6583,16 +6576,6 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		}
 	}
 
-	const size_t monitor_username_len = (mysql_thread___monitor_username ? strlen(mysql_thread___monitor_username) : 0);
-	const bool is_monitor_username =
-		(monitor_username_len > 0 &&
-			strncmp(
-				client_myds->myconn->userinfo->username,
-				mysql_thread___monitor_username,
-				monitor_username_len
-			 ) == 0
-		);
-
 	if (
 		//(client_myds->myprot.process_pkt_handshake_response((unsigned char *)pkt->ptr,pkt->size)==true)
 		(handshake_response_return == true)
@@ -6610,13 +6593,14 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			(default_hostgroup>=0 && ( session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE ) )
 			||
 			(
-					client_myds->encrypted==false
-					&& is_monitor_username
-				)
-			) // Do not delete this line. See bug #492
-		)	{
-			if (session_type == PROXYSQL_SESSION_ADMIN) {
-				if ((default_hostgroup < 0) || is_monitor_username ) {
+				client_myds->encrypted==false
+				&&
+				strncmp(client_myds->myconn->userinfo->username,mysql_thread___monitor_username,strlen(mysql_thread___monitor_username))==0
+			)
+		) // Do not delete this line. See bug #492
+	)	{
+		if (session_type == PROXYSQL_SESSION_ADMIN) {
+			if ( (default_hostgroup<0) || (strncmp(client_myds->myconn->userinfo->username,mysql_thread___monitor_username,strlen(mysql_thread___monitor_username))==0) ) {
 				if (default_hostgroup==STATS_HOSTGROUP) {
 					session_type = PROXYSQL_SESSION_STATS;
 				}
@@ -7270,7 +7254,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					match_regexes && (match_regexes[1]->match(dig))
 				)
 				||
-				( strncasecmp(dig,(char *)"SET NAMES", SET_NAMES_LEN) == 0)
+				( strncasecmp(dig,(char *)"SET NAMES", strlen((char *)"SET NAMES")) == 0)
 				||
 				( strcasestr(dig,(char *)"autocommit"))
 			) {
@@ -7355,7 +7339,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							while (v1 && (v2 = strstr(v1,(const char *)"@"))) {
 								// we found a @ . Maybe we need to lock hostgroup
 								proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Found @ in SQL_MODE . v2 = %s\n", v2);
-								if (strncasecmp(v2,(const char *)"@@sql_mode",SQL_MODE_LEN)) {
+								if (strncasecmp(v2,(const char *)"@@sql_mode",strlen((const char *)"@@sql_mode"))) {
 									unable_to_parse_set_statement(lock_hostgroup);
 									free(v1);
 									return false;
@@ -7803,14 +7787,13 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					// SET  @@SESSION.sql_mode = CONCAT(CONCAT(@@sql_mode, ',STRICT_ALL_TABLES'), ',NO_AUTO_VALUE_ON_ZERO'),  @@SESSION.sql_auto_is_null = 0, @@SESSION.wait_timeout = 2147483
 					// this is not a complete solution. A right solution involves true parsing
 					size_t query_no_space_length = nq.length();
-					std::string query_no_space = nq;
-					if (query_no_space.empty()) {
-						query_no_space_length = 0;
-					} else {
-						query_no_space_length = remove_spaces(&query_no_space[0]);
-					}
+					char *query_no_space=(char *)malloc(query_no_space_length+1);
+					memcpy(query_no_space,nq.c_str(),query_no_space_length);
+					query_no_space[query_no_space_length]='\0';
+					query_no_space_length=remove_spaces(query_no_space);
 
-					string nq1 = query_no_space;
+					string nq1 = string(query_no_space);
+					free(query_no_space);
 					RE2::GlobalReplace(&nq1,(char *)"SESSION.",(char *)"");
 					RE2::GlobalReplace(&nq1,(char *)"SESSION ",(char *)"");
 					RE2::GlobalReplace(&nq1,(char *)"session.",(char *)"");
@@ -7835,7 +7818,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								char *v2 = NULL;
 								while (v1 && (v2 = strstr(v1,(const char *)"@"))) {
 									// we found a @ . Maybe we need to lock hostgroup
-									if (strncasecmp(v2,(const char *)"@@sql_mode",SQL_MODE_LEN)) {
+									if (strncasecmp(v2,(const char *)"@@sql_mode",strlen((const char *)"@@sql_mode"))) {
 #ifdef DEBUG
 										string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
 										proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", nqn.c_str());
@@ -8003,12 +7986,11 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 	// handle case #1797
 	// handle case #2564
-	static constexpr size_t connection_id_len = sizeof("CONNECTION_ID()") - 1;
-	if ((pkt->size==SELECT_CONNECTION_ID_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_CONNECTION_ID,(char *)pkt->ptr+5,pkt->size-5)==0)) {
+       if ((pkt->size==SELECT_CONNECTION_ID_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_CONNECTION_ID,(char *)pkt->ptr+5,pkt->size-5)==0)) {
 		char buf[32];
 		char buf2[32];
 		sprintf(buf,"%u",thread_session_id);
-		int l0=connection_id_len;
+		int l0=strlen("CONNECTION_ID()");
 		memcpy(buf2,(char *)pkt->ptr+5+SELECT_CONNECTION_ID_LEN-l0,l0);
 		buf2[l0]=0;
 		unsigned int nTrx=NumActiveTransactions();
@@ -8078,24 +8060,22 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				(pkt->size==SELECT_LAST_INSERT_ID_FROM_DUAL_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_LAST_INSERT_ID_FROM_DUAL,(char *)pkt->ptr+5,pkt->size-5)==0)
 				||
 				(pkt->size==SELECT_LAST_INSERT_ID_LIMIT1_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_LAST_INSERT_ID_LIMIT1,(char *)pkt->ptr+5,pkt->size-5)==0)
-				||
-				(pkt->size==SELECT_VARIABLE_IDENTITY_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_VARIABLE_IDENTITY,(char *)pkt->ptr+5,pkt->size-5)==0)
-				||
-				(pkt->size==SELECT_VARIABLE_IDENTITY_LIMIT1_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_VARIABLE_IDENTITY_LIMIT1,(char *)pkt->ptr+5,pkt->size-5)==0)
+                ||
+                (pkt->size==SELECT_VARIABLE_IDENTITY_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_VARIABLE_IDENTITY,(char *)pkt->ptr+5,pkt->size-5)==0)
+                ||
+                (pkt->size==SELECT_VARIABLE_IDENTITY_LIMIT1_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_VARIABLE_IDENTITY_LIMIT1,(char *)pkt->ptr+5,pkt->size-5)==0)
 			) {
 				char buf[32];
 				sprintf(buf,"%llu",last_insert_id);
 				char buf2[32];
-				int l0=0;
-				if (strcasestr(dig,"LAST_INSERT_ID")){
-					static constexpr size_t last_insert_id_len = sizeof("LAST_INSERT_ID()") - 1;
-					l0=last_insert_id_len;
-					memcpy(buf2,(char *)pkt->ptr+5+SELECT_LAST_INSERT_ID_LEN-l0,l0);
-				}else if(strcasestr(dig,"@@IDENTITY")){
-					static constexpr size_t identity_len = sizeof("@@IDENTITY") - 1;
-					l0=identity_len;
-					memcpy(buf2,(char *)pkt->ptr+5+SELECT_VARIABLE_IDENTITY_LEN-l0,l0);
-				}
+                int l0=0;
+                if (strcasestr(dig,"LAST_INSERT_ID")){
+    				l0=strlen("LAST_INSERT_ID()");
+                    memcpy(buf2,(char *)pkt->ptr+5+SELECT_LAST_INSERT_ID_LEN-l0,l0);
+                }else if(strcasestr(dig,"@@IDENTITY")){
+                    l0=strlen("@@IDENTITY");
+                    memcpy(buf2,(char *)pkt->ptr+5+SELECT_VARIABLE_IDENTITY_LEN-l0,l0);
+                }
 				buf2[l0]=0;
 				unsigned int nTrx=NumActiveTransactions();
 				uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
@@ -9180,11 +9160,9 @@ void MySQL_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
 	if (client_myds->myconn->userinfo->fe_username==NULL)
 		return;
 	char *fe=client_myds->myconn->userinfo->fe_username;
-	constexpr size_t ldap_comment_prefix_len = sizeof(" /* %s=%s */") - 1;
 	char *a = (char *)" /* %s=%s */";
-	char *b = (char *)malloc(ldap_comment_prefix_len+strlen(fe)+strlen(mysql_thread___add_ldap_user_comment));
+	char *b = (char *)malloc(strlen(a)+strlen(fe)+strlen(mysql_thread___add_ldap_user_comment));
 	sprintf(b,a,mysql_thread___add_ldap_user_comment,fe);
-	const size_t b_len = strlen(b);
 	PtrSize_t _new_pkt;
 	_new_pkt.ptr = malloc(strlen(b) + _pkt->size);
 	memcpy(_new_pkt.ptr , _pkt->ptr, 5);
@@ -9194,28 +9172,27 @@ void MySQL_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
 	if (idx) {
 		size_t first_word_len = (char *)idx - (char *)_pkt->ptr - 5;
 		if (((char *)_pkt->ptr+5)[0]=='/' && ((char *)_pkt->ptr+5)[1]=='*') {
-			static constexpr size_t closing_comment_len = sizeof("*/") - 1;
-			void* comment_endpos = memmem(static_cast<char*>(_pkt->ptr)+7, _pkt->size-7, "*/", closing_comment_len);
+			void* comment_endpos = memmem(static_cast<char*>(_pkt->ptr)+7, _pkt->size-7, "*/", strlen("*/"));
 
 			if (comment_endpos == NULL || idx < comment_endpos) {
 				b[1]=' ';
 				b[2]=' ';
-				b[b_len-1] = ' ';
-				b[b_len-2] = ' ';
+				b[strlen(b)-1] = ' ';
+				b[strlen(b)-2] = ' ';
 			}
 		}
 		memcpy(_c, (char *)_pkt->ptr+5, first_word_len);
 		_c+= first_word_len;
-		memcpy(_c,b,b_len);
-		_c+= b_len;
+		memcpy(_c,b,strlen(b));
+		_c+= strlen(b);
 		memcpy(_c, (char *)idx, _pkt->size - 5 - first_word_len);
 	} else {
 		memcpy(_c, (char *)_pkt->ptr+5, _pkt->size-5);
 		_c+=_pkt->size-5;
-		memcpy(_c,b,b_len);
+		memcpy(_c,b,strlen(b));
 	}
 	l_free(_pkt->size,_pkt->ptr);
-	_pkt->size = _pkt->size + b_len;
+	_pkt->size = _pkt->size + strlen(b);
 	_pkt->ptr = _new_pkt.ptr;
 	free(b);
 	CurrentQuery.QueryLength = _pkt->size - 5;
@@ -9549,7 +9526,7 @@ char* MySQL_Session::get_current_query(int max_length) {
 			memcpy(res, query_ptr, cp_len);
 			memcpy(res + cp_len, "...", 3);
 		} else {
-			memcpy(res, query_ptr, query_len);
+			strncpy(res, query_ptr, query_len);
 		}
 		res[query_len] = '\0';
 	}

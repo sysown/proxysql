@@ -55,6 +55,8 @@ class MySQL_Connection_userinfo {
 	char *fe_username;
 	MySQL_Connection_userinfo();
 	~MySQL_Connection_userinfo();
+	/** @brief Cleanse and release the owned cleartext password, if present. */
+	void clear_password();
 	void set(char *, char *, char *, char *);
 	void set(MySQL_Connection_userinfo *);
 	bool set_schemaname(char *, int);

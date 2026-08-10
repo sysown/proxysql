@@ -169,6 +169,7 @@ void PgSQLFFTO::track_query(std::string query, bool finalize_on_sync) {
         m_current_finalize_on_sync = pending.finalize_on_sync;
         m_affected_rows = 0;
         m_rows_sent = 0;
+        m_response_seen = false;
         m_state = AWAITING_RESPONSE;
         return;
     }
@@ -182,6 +183,7 @@ void PgSQLFFTO::clear_current_query() {
     m_affected_rows = 0;
     m_rows_sent = 0;
     m_current_finalize_on_sync = false;
+    m_response_seen = false;
 }
 
 void PgSQLFFTO::activate_next_query() {
@@ -198,6 +200,7 @@ void PgSQLFFTO::activate_next_query() {
     m_current_finalize_on_sync = next_query.finalize_on_sync;
     m_affected_rows = 0;
     m_rows_sent = 0;
+    m_response_seen = false;
     m_state = AWAITING_RESPONSE;
 }
 
@@ -267,11 +270,56 @@ void PgSQLFFTO::process_server_message(char type, const unsigned char* payload, 
         uint64_t rows = extract_pg_rows_affected(payload, len, is_select);
         if (is_select) m_rows_sent += rows;
         else m_affected_rows += rows;
+        m_response_seen = true;
+        if (!m_current_finalize_on_sync) {
+            finalize_current_query();
+        }
+    } else if (type == 'I' || type == 's') {
+        // EmptyQueryResponse ('I') replaces CommandComplete when the query text
+        // is empty once comments/whitespace are stripped, and PortalSuspended
+        // ('s') replaces it when a row-limited Execute stops early. Both
+        // terminate the current query's response just as CommandComplete does,
+        // with no row counts to add. Without this, an extended Execute answered
+        // by either one would never be finalized -- neither branch below fires
+        // for it -- and the stalled query would block the pending queue and
+        // swallow the NEXT query's CommandComplete.
+        //
+        // ProxySQL does not emit PortalSuspended today (Execute's max-rows
+        // field is parsed but never acted on, issue #5900), so 's' is inert
+        // until that is fixed; handling it now costs two lines and avoids
+        // reintroducing the stall when it is.
+        m_response_seen = true;
         if (!m_current_finalize_on_sync) {
             finalize_current_query();
         }
     } else if (type == 'Z') {
-        finalize_current_query();
+        // ReadyForQuery terminates an exchange, and is the finalizer for SIMPLE
+        // queries -- their CommandComplete deliberately does not finalize (see
+        // the m_current_finalize_on_sync check above).
+        //
+        // The qualifying condition is m_response_seen, NOT
+        // m_current_finalize_on_sync. A ReadyForQuery belongs to the exchange
+        // that produced it, but the query that happens to be current when it
+        // arrives may already belong to the NEXT one: a client that pipelines
+        // without reading its replies leaves an earlier exchange's
+        // ReadyForQuery in flight, and an extended CommandComplete can activate
+        // the following queued query before it lands. Finalizing then reports
+        // that query with zeroed counters and pops the queue, so its real
+        // response is attributed to whatever comes after and the last response
+        // in the batch is dropped once the queue drains to IDLE -- silent,
+        // plausible-looking corruption of stats_pgsql_query_digest rather than
+        // an obvious failure.
+        //
+        // Gating on "has this query actually seen its own response terminator"
+        // is correct for every ordering: a simple query that got its
+        // CommandComplete finalizes here as before; an extended Execute has
+        // already finalized itself above and cannot still be current; and a
+        // query still awaiting its first response is left alone for the
+        // CommandComplete that is genuinely its own. An abandoned batch is
+        // still cleared by ErrorResponse ('E' below).
+        if (m_response_seen) {
+            finalize_current_query();
+        }
     } else if (type == 'E') {
         if (!m_current_query.empty() && m_query_start_time != 0) {
             unsigned long long duration = monotonic_time() - m_query_start_time;

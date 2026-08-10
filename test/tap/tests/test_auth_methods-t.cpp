@@ -19,6 +19,7 @@
  *  - Check for correct concurrent clear_text_pass caching ('caching_sha2_password').
  */
 
+#include <charconv>
 #include <cstring>
 #include <functional>
 #include <iostream>
@@ -150,6 +151,57 @@ using chk_exp_seq_scs_t = function<bool(const test_conf_t&, const test_creds_t&,
 
 FILE* F_SSLKEYLOGFILE = nullptr;
 
+bool parse_proxysql_version(const string& version, int& major, int& minor) {
+	const char* first = version.data();
+	const char* last = first + version.size();
+	int parsed_major = 0;
+	int parsed_minor = 0;
+
+	const auto major_result = std::from_chars(first, last, parsed_major);
+	if (major_result.ec != std::errc() || major_result.ptr == first ||
+		major_result.ptr == last || *major_result.ptr != '.' || parsed_major < 0) {
+		return false;
+	}
+
+	const char* minor_first = major_result.ptr + 1;
+	const auto minor_result = std::from_chars(minor_first, last, parsed_minor);
+	if (minor_result.ec != std::errc() || minor_result.ptr == minor_first || parsed_minor < 0) {
+		return false;
+	}
+
+	major = parsed_major;
+	minor = parsed_minor;
+	return true;
+}
+
+bool supports_caching_sha2_rsa(int major, int minor) {
+	return major > 3 || (major == 3 && minor >= 1);
+}
+
+bool get_proxysql_version(MYSQL* admin, string& version) {
+	if (mysql_query(admin, "SELECT @@version") != 0) {
+		diag("Failed to query ProxySQL version: %s", mysql_error(admin));
+		return false;
+	}
+
+	MYSQL_RES* result = mysql_store_result(admin);
+	if (result == nullptr) {
+		diag("Failed to read ProxySQL version result: %s", mysql_error(admin));
+		return false;
+	}
+
+	MYSQL_ROW row = mysql_fetch_row(result);
+	if (row == nullptr || row[0] == nullptr) {
+		diag("ProxySQL version query returned no version");
+		mysql_free_result(result);
+		return false;
+	}
+
+	version = row[0];
+	mysql_free_result(result);
+	return true;
+}
+
 void ssl_keylog_callback(SSL*, const char* line) {
 	if (!F_SSLKEYLOGFILE) { return; }
 
@@ -252,7 +304,8 @@ bool chk_exp_scs_basic(const test_conf_t& conf, const test_creds_t& creds) {
 bool chk_exp_seq_fail_except(
 	const test_conf_t& conf,
 	const test_creds_t& creds,
-	const user_auth_stats_t& auth_info
+	const user_auth_stats_t& auth_info,
+	bool supports_rsa
 ) {
 	// Short circuit for empty pass; no exceptional failures
 	if (is_empty_pass(creds.pass.get())) {
@@ -261,10 +314,17 @@ bool chk_exp_seq_fail_except(
 
 	// TODO: MAKE EXPLICIT TEST
 	//
-	// 'caching_sha2_password' auth should fail for NON-SSL if no previous scs auth:
+	// Before ProxySQL 3.1, 'caching_sha2_password' auth should fail for NON-SSL if no previous scs auth:
 	//  - No clear_text pass on ProxySQL side
-	//  - Full authentication is required
-	if (!conf.use_ssl && conf.hashed_pass && creds.info.auth == "caching_sha2_password") {
+	//  - RSA full authentication is unavailable
+	const bool rsa_auth_available =
+		supports_rsa &&
+		conf.req_auth == "caching_sha2_password" &&
+		conf.def_auth == "caching_sha2_password";
+	if (
+		!conf.use_ssl && conf.hashed_pass && creds.info.auth == "caching_sha2_password"
+		&& !rsa_auth_available
+	) {
 		if (creds.info.type == PASS_TYPE::PRIMARY) {
 			return auth_info.prim_pass_auths == 0;
 		} else {
@@ -279,6 +339,7 @@ bool chk_exp_seq_fail_except(
 	if (
 		!conf.use_ssl && conf.hashed_pass && creds.info.auth == "mysql_native_password"
 		&& conf.req_auth == "caching_sha2_password" && conf.def_auth == "caching_sha2_password"
+		&& !rsa_auth_available
 	) {
 		if (creds.info.type == PASS_TYPE::PRIMARY) {
 			return auth_info.prim_pass_auths == 0;
@@ -320,8 +381,13 @@ bool chk_exp_seq_fail_except(
 	return false;
 }
 
-bool chk_seq_exp_scs(const test_conf_t& conf, const test_creds_t& creds, const user_auth_stats_t& auth_info) {
-	return chk_exp_scs_basic(conf, creds) && !chk_exp_seq_fail_except(conf, creds, auth_info);
+bool chk_seq_exp_scs(
+	const test_conf_t& conf,
+	const test_creds_t& creds,
+	const user_auth_stats_t& auth_info,
+	bool supports_rsa
+) {
+	return chk_exp_scs_basic(conf, creds) && !chk_exp_seq_fail_except(conf, creds, auth_info, supports_rsa);
 }
 
 bool chk_exp_auth_switch(const test_conf_t& conf, const test_creds_t& creds) {
@@ -390,16 +456,15 @@ string get_exp_auth_switch(const test_conf_t& conf, const test_creds_t& creds, c
 	return exp_auth_switch_type;
 }
 
-bool detect_sha2_cached_auth(const sess_info_t& sess_info) {
+bool detect_sha2_cached_auth(const sess_info_t& sess_info, bool supports_rsa) {
 	return
 		sess_info.switching_auth_sent == -1 &&
-		sess_info.recv_pkts == 4 && sess_info.sent_pkts == 3;
+		sess_info.recv_pkts == 4 &&
+		(sess_info.sent_pkts == 3 || (supports_rsa && sess_info.sent_pkts == 4));
 }
 
-bool detect_sha2_full_auth(const sess_info_t& sess_info) {
-	return
-		sess_info.switching_auth_sent == -1 &&
-		sess_info.recv_pkts == 4 && sess_info.sent_pkts == 3;
+bool detect_sha2_full_auth(const sess_info_t& sess_info, bool supports_rsa) {
+	return detect_sha2_cached_auth(sess_info, supports_rsa);
 }
 
 bool chk_exp_sha2_full_auth(
@@ -448,16 +513,18 @@ bool chk_exp_sha2_full_auth(
 	}
 }
 
-bool chk_exp_fail_except_no_warmup(const test_conf_t& conf, const test_creds_t& creds) {
-	return chk_exp_seq_fail_except(conf, creds, user_auth_stats_t { {}, 0, 0 });
+bool chk_exp_fail_except_no_warmup(
+	const test_conf_t& conf, const test_creds_t& creds, bool supports_rsa
+) {
+	return chk_exp_seq_fail_except(conf, creds, user_auth_stats_t { {}, 0, 0 }, supports_rsa);
 }
 
-bool chk_exp_fail_no_warmup(const test_conf_t& conf, const test_creds_t& creds) {
-	return !chk_exp_scs_basic(conf, creds) || chk_exp_fail_except_no_warmup(conf, creds);
+bool chk_exp_fail_no_warmup(const test_conf_t& conf, const test_creds_t& creds, bool supports_rsa) {
+	return !chk_exp_scs_basic(conf, creds) || chk_exp_fail_except_no_warmup(conf, creds, supports_rsa);
 }
 
-bool chk_exp_scs_no_warmup(const test_conf_t& conf, const test_creds_t& creds) {
-	return chk_exp_scs_basic(conf, creds) && !chk_exp_fail_except_no_warmup(conf, creds);
+bool chk_exp_scs_no_warmup(const test_conf_t& conf, const test_creds_t& creds, bool supports_rsa) {
+	return chk_exp_scs_basic(conf, creds) && !chk_exp_fail_except_no_warmup(conf, creds, supports_rsa);
 }
 
 user_auth_stats_t update_auth_reg(MYSQL* mysql, const string& user, const char* pass, auth_reg_t& auth_reg) {
@@ -500,7 +567,8 @@ user_auth_stats_t update_auth_reg(MYSQL* mysql, const string& user, const char* 
 pair<uint64_t,uint64_t> count_exp_scs(
 	const vector<test_conf_t>& confs,
 	const vector<user_creds_t>& user_creds,
-	const vector<test_creds_t>& test_creds
+	const vector<test_creds_t>& test_creds,
+	bool supports_rsa
 ) {
 	pair<uint64_t,uint64_t> stats {};
 
@@ -518,7 +586,7 @@ pair<uint64_t,uint64_t> count_exp_scs(
 				continue;
 			}
 
-			bool exp_scs = chk_seq_exp_scs(conf, f_creds, it->second);
+			bool exp_scs = chk_seq_exp_scs(conf, f_creds, it->second, supports_rsa);
 
 			if (exp_scs) {
 				MYSQL* mock = mysql_init(NULL);
@@ -562,7 +630,11 @@ int config_mysql_conn(const CommandLine& cl, const test_conf_t& conf, MYSQL* pro
 }
 
 void test_creds_frontend_backend(
-	const CommandLine& cl, const test_conf_t& conf, const test_creds_t& creds, auth_reg_t& auth_reg
+	const CommandLine& cl,
+	const test_conf_t& conf,
+	const test_creds_t& creds,
+	auth_reg_t& auth_reg,
+	bool supports_rsa
 ) {
 	MYSQL* proxy = mysql_init(NULL);
 	int cflags = config_mysql_conn(cl, conf, proxy);
@@ -573,7 +645,7 @@ void test_creds_frontend_backend(
 	};
 
 	user_auth_stats_t auth_info { update_auth_reg(myconn, creds.name, creds.pass.get(), auth_reg) };
-	bool exp_success = chk_seq_exp_scs(conf, creds, auth_info);
+	bool exp_success = chk_seq_exp_scs(conf, creds, auth_info, supports_rsa);
 
 	if (exp_success) {
 		ok(
@@ -595,7 +667,7 @@ void test_creds_frontend_backend(
 		);
 
 		const bool exp_full_sha2 = chk_exp_sha2_full_auth(conf, creds, auth_info);
-		const bool act_full_sha2 = detect_sha2_full_auth(sess_info);
+		const bool act_full_sha2 = detect_sha2_full_auth(sess_info, supports_rsa);
 
 		ok(
 			exp_full_sha2 == act_full_sha2,
@@ -676,7 +748,7 @@ void test_creds_frontend(
 }
 
 user_auth_stats_t check_auth_creds(
-	const CommandLine& cl, const test_conf_t& conf, const test_creds_t& creds
+	const CommandLine& cl, const test_conf_t& conf, const test_creds_t& creds, bool supports_rsa
 ) {
 	MYSQL* proxy = mysql_init(NULL);
 	int cflags = config_mysql_conn(cl, conf, proxy);
@@ -695,7 +767,7 @@ user_auth_stats_t check_auth_creds(
 		sess_info_t sess_info { ext_sess_info(proxy) };
 		diag("Extracted session info    thread:`%lu`, sess_info:`%s`", th_id, to_string(sess_info).c_str());
 
-		bool full_sha2_auth = detect_sha2_cached_auth(sess_info);
+		bool full_sha2_auth = detect_sha2_cached_auth(sess_info, supports_rsa);
 
 		if (creds.info.type == PASS_TYPE::PRIMARY) {
 			auth_stats = user_auth_stats_t { user_def_t { creds.name }, 1, 0, full_sha2_auth };
@@ -913,15 +985,20 @@ vector<pair<test_conf_t, vector<test_creds_t>>> filter_tests(
 	return non_warmup_tests;
 }
 
-bool req_sha2_auth(const test_conf_t& conf, const test_creds_t& creds) {
+bool req_sha2_auth(const test_conf_t& conf, const test_creds_t& creds, bool supports_rsa) {
 	// otherwise SHA2 auth shouldn't take place
-	if (!is_empty_pass(creds.pass.get()) && conf.hashed_pass && conf.use_ssl) {
+	if (!is_empty_pass(creds.pass.get()) && conf.hashed_pass) {
 		if (creds.info.auth == "caching_sha2_password") {
-			return true;
+			return
+				conf.use_ssl ||
+				(supports_rsa &&
+				 conf.req_auth == "caching_sha2_password" &&
+				 conf.def_auth == "caching_sha2_password");
 		}
 		// current limitation; auth switch shouldn't be requested to 'caching_sha2_password'; since
 		// the pass isn't store as such; the real passtype should be requested
 		else if (
+			conf.use_ssl &&
 			conf.def_auth == "caching_sha2_password" && conf.req_auth == "caching_sha2_password"
 			&& creds.info.auth == "mysql_native_password"
 		) {
@@ -982,7 +1059,8 @@ int test_all_confs_creds(
 	const vector<test_conf_t>& all_conf_combs,
 	const vector<user_creds_t>& users_creds,
 	const vector<test_creds_t>& tests_creds,
-	uint64_t non_warmup_tests_scs_count
+	uint64_t non_warmup_tests_scs_count,
+	bool supports_rsa
 ) {
 	uint64_t auth_scs_total = 0;
 	uint64_t full_sha2_total = 0;
@@ -1014,19 +1092,20 @@ int test_all_confs_creds(
 		for (uint32_t i = 0; i < NUM_CLIENT_THREADS; i++) {
 			client_thds.push_back(
 				std::thread(
-					[&cl, &conf, &thds_auth_regs, &thds_exp_sha2_auths, i, &users_creds, &tests_creds] () {
+					[&cl, &conf, &thds_auth_regs, &thds_exp_sha2_auths, i, &users_creds, &tests_creds,
+					 supports_rsa] () {
 						auth_reg_t& auth_reg { thds_auth_regs[i] };
 
 						for (const auto& creds : tests_creds) {
 							test_creds_t f_creds { map_user_creds(users_creds, creds) };
-							user_auth_stats_t auth_stats { check_auth_creds(cl, conf, f_creds) };
+							user_auth_stats_t auth_stats { check_auth_creds(cl, conf, f_creds, supports_rsa) };
 
 							if (auth_stats.prim_pass_auths || auth_stats.addl_pass_auths) {
 								auto user_stats_it = auth_reg.find(f_creds.name);
 
 								if (user_stats_it != auth_reg.end()) {
 									if (
-										chk_exp_scs_basic(conf, f_creds) && req_sha2_auth(conf, f_creds)
+										chk_exp_scs_basic(conf, f_creds) && req_sha2_auth(conf, f_creds, supports_rsa)
 										&& user_stats_it->second.prim_pass_auths == 0
 									) {
 										thds_exp_sha2_auths[i] += 1;
@@ -1176,6 +1255,25 @@ int main(int argc, char** argv) {
 	}
 	diag("ProxySQL Admin connection successful.");
 
+	string proxysql_version;
+	int proxysql_major = 0;
+	int proxysql_minor = 0;
+	if (
+		!get_proxysql_version(admin, proxysql_version) ||
+		!parse_proxysql_version(proxysql_version, proxysql_major, proxysql_minor)
+	) {
+		diag("Unable to determine RSA expectations from ProxySQL version '%s'", proxysql_version.c_str());
+		mysql_close(mysql);
+		mysql_close(admin);
+		stop_internal_noise_threads();
+		return EXIT_FAILURE;
+	}
+	const bool supports_rsa = supports_caching_sha2_rsa(proxysql_major, proxysql_minor);
+	diag(
+		"ProxySQL version '%s': caching_sha2_password RSA full authentication %s",
+		proxysql_version.c_str(), supports_rsa ? "supported" : "unsupported"
+	);
+
 	// Setup SSLKEYLOGFILE for debugging purposes
 	if (getenv("SSLKEYLOGFILE") != nullptr) {
 		const string datadir { string { cl.workdir } + "/test_auth_methods_datadir" };
@@ -1268,20 +1366,28 @@ int main(int argc, char** argv) {
 		get_auth_conf_combs(def_auths, req_auths, hash_pass, use_ssl, use_comp)
 	};
 
-	const auto scs_stats { count_exp_scs(all_conf_combs, cbres.second, tests_creds) };
+	const auto scs_stats { count_exp_scs(all_conf_combs, cbres.second, tests_creds, supports_rsa) };
 
 	pair<uint64_t,uint64_t> rnd_scs_stats {};
 
 	if (getenv("TAP_DISABLE_SEQ_CHECKS_RAND_PASS") == nullptr) {
-		rnd_scs_stats = count_exp_scs(all_conf_combs, rnd_cbres.second, rnd_tests_creds);
+		rnd_scs_stats = count_exp_scs(all_conf_combs, rnd_cbres.second, rnd_tests_creds, supports_rsa);
 	}
 
 	// Partial logic tests; no-warmup, expected failure concurrent access
 	const vector<pair<test_conf_t, vector<test_creds_t>>> non_warmup_tests_fail {
-		filter_tests(all_conf_combs, cbres.second, tests_creds, chk_exp_fail_no_warmup)
+		filter_tests(all_conf_combs, cbres.second, tests_creds,
+			[supports_rsa] (const test_conf_t& conf, const test_creds_t& creds) {
+				return chk_exp_fail_no_warmup(conf, creds, supports_rsa);
+			}
+		)
 	};
 	const vector<pair<test_conf_t, vector<test_creds_t>>> non_warmup_tests_scs {
-		filter_tests(all_conf_combs, cbres.second, tests_creds, chk_exp_scs_no_warmup)
+		filter_tests(all_conf_combs, cbres.second, tests_creds,
+			[supports_rsa] (const test_conf_t& conf, const test_creds_t& creds) {
+				return chk_exp_scs_no_warmup(conf, creds, supports_rsa);
+			}
+		)
 	};
 
 	uint64_t non_warmup_tests_fail_count = 0;
@@ -1312,7 +1418,58 @@ int main(int argc, char** argv) {
 		+ non_warmup_tests_fail_count * NUM_CLIENT_THREADS
 		+ non_warmup_tests_scs_count * NUM_CLIENT_THREADS * 2
 		+ non_warmup_tests_scs_ratio
+		+ 11
 		+ (cl.use_noise ? 4 : 0)
+	);
+
+	int version_major = 0;
+	int version_minor = 0;
+	ok(
+		parse_proxysql_version("4.0.11-113-g855abce_DEBUG", version_major, version_minor)
+			&& version_major == 4 && version_minor == 0,
+		"ProxySQL version parser accepts build suffixes"
+	);
+	ok(
+		!parse_proxysql_version("invalid", version_major, version_minor),
+		"ProxySQL version parser rejects malformed versions"
+	);
+	ok(
+		!parse_proxysql_version("-3.1", version_major, version_minor),
+		"ProxySQL version parser rejects a negative major version"
+	);
+	ok(
+		!parse_proxysql_version("3.-1", version_major, version_minor),
+		"ProxySQL version parser rejects a negative minor version"
+	);
+	ok(!supports_caching_sha2_rsa(3, 0), "ProxySQL 3.0 retains the legacy RSA expectation");
+	ok(supports_caching_sha2_rsa(3, 1), "ProxySQL 3.1 enables RSA authentication expectations");
+	ok(supports_caching_sha2_rsa(4, 0), "ProxySQL versions after 3.1 enable RSA authentication expectations");
+
+	const test_conf_t rsa_conf {
+		"caching_sha2_password", "caching_sha2_password", true, false, false
+	};
+	const user_auth_stats_t no_previous_auth {};
+	const test_creds_t sha2_creds {
+		"sha2_user", MF_CHAR_("password"), { PASS_TYPE::PRIMARY, "caching_sha2_password" }
+	};
+	const test_creds_t native_creds {
+		"native_user", MF_CHAR_("password"), { PASS_TYPE::PRIMARY, "mysql_native_password" }
+	};
+	ok(
+		chk_exp_seq_fail_except(rsa_conf, sha2_creds, no_previous_auth, false),
+		"ProxySQL before 3.1 rejects initial non-TLS RSA auth for SHA-2 hashes"
+	);
+	ok(
+		chk_exp_seq_fail_except(rsa_conf, native_creds, no_previous_auth, false),
+		"ProxySQL before 3.1 rejects initial non-TLS RSA auth for native hashes"
+	);
+	ok(
+		!chk_exp_seq_fail_except(rsa_conf, sha2_creds, no_previous_auth, true),
+		"ProxySQL 3.1 accepts initial non-TLS RSA auth for SHA-2 hashes"
+	);
+	ok(
+		!chk_exp_seq_fail_except(rsa_conf, native_creds, no_previous_auth, true),
+		"ProxySQL 3.1 accepts initial non-TLS RSA auth for native hashes"
 	);
 
 	// sequential; verify correctness in the procedure; KNOWN passwords
@@ -1335,7 +1492,7 @@ int main(int argc, char** argv) {
 		for (const auto& creds : tests_creds) {
 			test_creds_t f_creds { map_user_creds(cbres.second, creds) };
 			diag("  * Testing Creds: %s", to_string(f_creds).c_str());
-			test_creds_frontend_backend(cl, conf, f_creds, auth_reg);
+			test_creds_frontend_backend(cl, conf, f_creds, auth_reg, supports_rsa);
 		}
 	}
 
@@ -1360,7 +1517,7 @@ int main(int argc, char** argv) {
 			for (const auto& creds : rnd_tests_creds) {
 				test_creds_t f_creds { map_user_creds(rnd_cbres.second, creds) };
 				diag("  * Testing Creds (RANDOM): %s", to_string(f_creds).c_str());
-				test_creds_frontend_backend(cl, conf, f_creds, auth_reg);
+				test_creds_frontend_backend(cl, conf, f_creds, auth_reg, supports_rsa);
 			}
 		}
 	}
@@ -1392,7 +1549,8 @@ int main(int argc, char** argv) {
 		diag("Starting frontend non-warmup ALL_COMBS tests; predicting SUCCESS/FAILURE ratio");
 
 		int res = test_all_confs_creds(
-			cl, admin, all_conf_combs, cbres.second, tests_creds, non_warmup_tests_scs_count
+			cl, admin, all_conf_combs, cbres.second, tests_creds, non_warmup_tests_scs_count,
+			supports_rsa
 		);
 
 		if (res) { goto cleanup; }

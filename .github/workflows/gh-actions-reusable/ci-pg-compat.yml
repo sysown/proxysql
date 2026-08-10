@@ -1,0 +1,165 @@
+# STAGED FILE -- this is the reusable half of the CI-pg-compat pair.
+# It is authored here (on v3.0, under gh-actions-reusable/) for review, but
+# it does NOT run from here. It must be merged to the `GH-Actions` branch
+# at path `.github/workflows/ci-pg-compat.yml` FIRST, before (or in the same
+# merge window as, but not after) the caller `.github/workflows/CI-pg-compat.yml`
+# lands on `v3.0` -- see doc/GH-Actions/README.md "Merge order" (~line 816):
+# a caller referencing `ci-pg-compat.yml@GH-Actions` before that file exists
+# on GH-Actions fails immediately with "Unable to resolve action". See the
+# two-branch caller/reusable split explained in doc/GH-Actions/README.md
+# (~lines 42-170): callers (`CI-*.yml`, uppercase) live on `v3.0`; reusables
+# (`ci-*.yml`, lowercase) live on `GH-Actions`.
+name: CI-pg-compat
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      trigger:
+        type: string
+
+# No env.SHA/trigger-JSON parsing here (unlike the workflow_run-triggered
+# reusables, e.g. ci-legacy-g4.yml): those need it because their caller is
+# invoked BY workflow_run, whose own github.sha is the default branch tip,
+# not the real source commit -- the real sha only exists inside the passed
+# `trigger` JSON. This caller triggers directly via pull_request/schedule/
+# workflow_dispatch, so github.sha here (a workflow_call callee inherits the
+# caller's context) already IS the right commit; `inputs.trigger` is kept
+# only for parity with the sibling callers' `with: trigger: ...` shape and
+# isn't parsed for a sha. checkout below uses actions/checkout@v4's default
+# ref (the triggering ref), so no untrusted github.event.* field is ever
+# substituted into a `ref:`.
+
+jobs:
+  pg-compat:
+    runs-on: ubuntu-22.04
+    # Generous budget: a from-scratch `PROXYSQL31=1 make debug` (deps -> lib
+    # -> src) on a 2-core GH-hosted runner is the dominant cost here (there
+    # is no build-cache restore in this job, unlike the CI-builds-fed TAP
+    # families -- this suite runs inline, like the CI-3p-* family, since its
+    # schedule/label triggers have no guaranteed prior CI-builds run to
+    # restore a cache from).
+    timeout-minutes: 120
+    permissions: write-all
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # This job only builds and tests; it never pushes. Leaving the job's
+          # write-all token persisted in .git/config would expose it to every
+          # subsequent step, including the third-party driver images this suite
+          # builds and runs.
+          persist-credentials: false
+
+      # Inline build (CI-3p-* model, not the CI-trigger/CI-builds cache-chain
+      # model used by the TAP families): no ccache pattern exists elsewhere
+      # in this repo's workflows (checked both branches) to reuse, so this
+      # is a plain build for v1. PROXYSQL31=1 is required -- bare `make`
+      # would leave FFTO/TSDB symbols out and is not what any tier actually
+      # ships; debug is required because the isolated harness
+      # (start-proxysql-isolated.bash / ensure-infras.bash) issues
+      # debug-only admin commands.
+      - name: Build ProxySQL (debug, PROXYSQL31)
+        run: PROXYSQL31=1 make -j$(nproc) debug
+
+      # start-proxysql-isolated.bash runs ProxySQL (and its filesystem helpers)
+      # from the LOCAL-ONLY tag `proxysql-ci-base:latest`, which nothing on a
+      # fresh runner provides -- without this step infra startup dies before a
+      # single pg-compat test runs. Every sibling TAP workflow pulls the image
+      # from GHCR and retags it; this mirrors ci-legacy-g4.yml, retry loop
+      # included, because both the login and the pull have been observed to
+      # fail transiently with a client timeout.
+      - name: Log in to GHCR and pull CI base image
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          attempt=0
+          max_attempts=5
+          while [ $attempt -lt $max_attempts ]; do
+            attempt=$((attempt + 1))
+            echo ">>> GHCR login+pull attempt ${attempt}/${max_attempts}"
+            if echo "$GHCR_TOKEN" | docker login ghcr.io \
+                -u "$GHCR_USER" --password-stdin \
+                && docker pull ghcr.io/sysown/proxysql-ci-base:latest; then
+              echo ">>> GHCR login+pull OK on attempt ${attempt}"
+              docker tag ghcr.io/sysown/proxysql-ci-base:latest \
+                  proxysql-ci-base:latest
+              exit 0
+            fi
+            if [ $attempt -lt $max_attempts ]; then
+              sleep_for=$((attempt * 10))
+              echo ">>> attempt ${attempt} failed; sleeping ${sleep_for}s"
+              sleep $sleep_for
+            fi
+          done
+          echo ">>> all ${max_attempts} GHCR attempts failed"
+          exit 1
+
+      # Stand up the pg-compat infra: dbdeployer PG17 primary+2-replica
+      # backend, Toxiproxy sidecar, and the ProxySQL container built above
+      # (ensure-infras.bash starts ProxySQL itself via
+      # start-proxysql-isolated.bash if it isn't already running -- see
+      # test/infra/control/ensure-infras.bash step 2). Never manage Docker
+      # by hand here; this script is the only supported entry point.
+      - name: Stand up infra (backends + Toxiproxy + ProxySQL)
+        env:
+          INFRA_ID: ci-${{ github.run_id }}
+          WORKSPACE: ${{ github.workspace }}
+          TAP_GROUP: pg-compat
+        run: test/infra/control/ensure-infras.bash
+
+      # Non-gating (discovery phase, spec sec 2.1): the suite's job right now
+      # is to build a failure inventory in xfail.toml, not to be all-green.
+      # `|| true` keeps this step (and therefore the job) from failing the
+      # workflow on real/uncatalogued divergences during discovery. Promote
+      # to gating by dropping `|| true` (and tightening xfail.toml) once the
+      # suite is green and stable -- see test/pg-compat/README.md.
+      #
+      # --junitxml path: run-pg-compat.bash's container runs with --rm, so a
+      # report written to the container's own filesystem (e.g. /tmp) would
+      # be destroyed on exit and never reach this runner -- traced and fixed
+      # in run-pg-compat.bash, which now bind-mounts a host directory
+      # (default "${WORKSPACE}/pg-compat-reports", override via
+      # PGCOMPAT_REPORT_DIR) to /pg-compat-reports inside the container.
+      # Writing the report there is what makes it visible to the upload
+      # step below.
+      - name: Run pg-compat suite (non-gating, discovery phase)
+        env:
+          INFRA_ID: ci-${{ github.run_id }}
+          WORKSPACE: ${{ github.workspace }}
+        run: test/pg-compat/run-pg-compat.bash --junitxml=/pg-compat-reports/pg-compat.xml -rxX || true
+
+      # The pg-compat container's default user is root, so the bind-mounted
+      # report directory is root-owned on the host afterwards; chown it back
+      # to the runner user before upload-artifact (which runs as the
+      # non-root runner account) tries to read it. Same pattern already
+      # used for docker-written logs in ci-3p-postgresql.yml.
+      - name: Fix report ownership
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}/pg-compat-reports" || true
+
+      - name: Publish report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pg-compat-report
+          path: ${{ github.workspace }}/pg-compat-reports/pg-compat.xml
+          if-no-files-found: warn
+
+      # Teardown always runs, mirroring ci-legacy-g4.yml's cleanup step:
+      # stop the ProxySQL container first, then tear down the backend +
+      # Toxiproxy infra. destroy-infras.bash is test/infra/control's
+      # documented teardown entry point (paired with ensure-infras.bash).
+      - name: Cleanup
+        if: always()
+        env:
+          INFRA_ID: ci-${{ github.run_id }}
+          WORKSPACE: ${{ github.workspace }}
+          TAP_GROUP: pg-compat
+        run: |
+          set +e
+          docker logs "proxysql.${INFRA_ID}" 2>&1 | tail -50 || true
+          test/infra/control/stop-proxysql-isolated.bash
+          test/infra/control/destroy-infras.bash

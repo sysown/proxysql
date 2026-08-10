@@ -14,6 +14,7 @@ using json = nlohmann::json;
 #include "MySQL_Data_Stream.h"
 
 #include "openssl/x509v3.h"
+#include <openssl/crypto.h>
 
 #define RESULTSET_BUFLEN_DS_16K 16000
 #define RESULTSET_BUFLEN_DS_1M 1000*1024
@@ -398,17 +399,13 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 		com_field_wild=NULL;
 	}
 
-		if (passthrough_cleartext) {
-			// Best-effort scrub before free; the cleartext password should
-			// not linger in freed heap memory.
-			const std::string_view cleartext = passthrough_cleartext;
-			const size_t cleartext_len = cleartext.size();
-			if (cleartext_len) {
-				memset(passthrough_cleartext, 0, cleartext_len);
-			}
-			free(passthrough_cleartext);
-			passthrough_cleartext = NULL;
-		}
+	if (passthrough_cleartext) {
+		// Scrub before free; the cleartext password should
+		// not linger in freed heap memory.
+		OPENSSL_cleanse(passthrough_cleartext, strlen(passthrough_cleartext));
+		free(passthrough_cleartext);
+		passthrough_cleartext = NULL;
+	}
 
 	proxy_debug(PROXY_DEBUG_NET,1, "Shutdown Data Stream. Session=%p, DataStream=%p\n" , sess, this);
 	PtrSize_t pkt;
@@ -1333,7 +1330,7 @@ int MySQL_Data_Stream::buffer2array() {
 							PROXY_info = new ProxyProtocolInfo(ppi);
 							// we take a copy of old address/port
 							if (addr.addr) {
-								snprintf(PROXY_info->proxy_address, sizeof(PROXY_info->proxy_address), "%s", addr.addr);
+								strncpy(PROXY_info->proxy_address, addr.addr, INET6_ADDRSTRLEN);
 								free(addr.addr);
 							}
 							PROXY_info->proxy_port = addr.port;
@@ -1354,7 +1351,7 @@ int MySQL_Data_Stream::buffer2array() {
 							// upstream LB consistently across all branches.
 							PROXY_info = new ProxyProtocolInfo(ppi);
 							if (addr.addr) {
-								snprintf(PROXY_info->proxy_address, sizeof(PROXY_info->proxy_address), "%s", addr.addr);
+								strncpy(PROXY_info->proxy_address, addr.addr, INET6_ADDRSTRLEN);
 							}
 							PROXY_info->proxy_port = addr.port;
 							if (addr.addr) {
@@ -1934,7 +1931,7 @@ void MySQL_Data_Stream::get_client_myds_info_json(json& j) {
 			jc1["userinfo"]["username"]   = ( myconn->userinfo->username   ? myconn->userinfo->username   : "" );
 			jc1["userinfo"]["schemaname"] = ( myconn->userinfo->schemaname ? myconn->userinfo->schemaname : "" );
 #ifdef DEBUG
-			jc1["userinfo"]["password"]   = ( myconn->userinfo->password   ? myconn->userinfo->password   : "" );
+			jc1["userinfo"]["password"]   = ( myconn->userinfo->password   ? "(redacted)" : "" );
 #endif
 		}
 		jc2["session_track_gtids"] = ( myconn->options.session_track_gtids ? myconn->options.session_track_gtids : "") ;

@@ -35,10 +35,17 @@ struct passthrough_entry_view {
 
 class MySQL_Passthrough_Auth_Cache {
 	private:
+		/** @brief Cache entry whose destructor cleanses its owned cleartext credential. */
 		struct entry_t {
 			std::string cleartext_password;
-			uint64_t learned_at_us;
-			int hostgroup_probed;
+			uint64_t learned_at_us { 0 };
+			int hostgroup_probed { 0 };
+			entry_t() = default;
+			~entry_t();
+			entry_t(const entry_t&) = delete;
+			entry_t& operator=(const entry_t&) = delete;
+			entry_t(entry_t&&) = delete;
+			entry_t& operator=(entry_t&&) = delete;
 		};
 		mutable pthread_rwlock_t lock;
 		std::unordered_map<std::string, entry_t> entries;
@@ -108,8 +115,11 @@ class MySQL_Passthrough_Auth_Cache {
 		// than ttl_s, the entry is evicted and a miss is returned.
 		bool lookup(const std::string& username, std::string& out_cleartext, uint32_t ttl_s);
 
-		// Insert or replace a cached credential.
-		void insert(const std::string& username, const std::string& cleartext, int hostgroup_probed);
+		/**
+		 * @brief Copy a non-null cleartext credential into the cache.
+		 * @details Replacing an entry cleanses the previously owned credential.
+		 */
+		void insert(const std::string& username, const char* cleartext, int hostgroup_probed);
 
 		// Evict a single entry. Returns true if the entry was present.
 		bool evict(const std::string& username);

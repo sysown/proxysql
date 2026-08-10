@@ -833,14 +833,12 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		char buf[32];
 
 		// ----- MySQL module stop -----
-		int admin_old_wait_timeout = GloMTH->get_variable_int((char*)"wait_timeout");
-		GloMTH->set_variable((char*)"wait_timeout", (char*)"0");
-		GloMTH->commit();
+		int admin_old_wait_timeout =
+			GloMTH->set_int_variable_and_commit("wait_timeout", "0");
 		GloMTH->signal_all_threads(0);
 		GloMTH->stop_listeners();
 		sprintf(buf, "%d", admin_old_wait_timeout);
-		GloMTH->set_variable((char*)"wait_timeout", buf);
-		GloMTH->commit();
+		(void)GloMTH->set_int_variable_and_commit("wait_timeout", buf);
 
 		// ----- PgSQL module stop -----
 		admin_old_wait_timeout = GloPTH->get_variable_int((char*)"wait_timeout");
@@ -891,17 +889,15 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		if (admin_proxysql_mysql_paused==false) {
 			// to speed up this process we first change poll_timeout to 10
 			// MySQL_thread will call poll() with a maximum timeout of 10ms
-			admin_old_wait_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
-			GloMTH->set_variable((char *)"poll_timeout",(char *)"10");
-			GloMTH->commit();
+			admin_old_wait_timeout =
+				GloMTH->set_int_variable_and_commit("poll_timeout", "10");
 			GloMTH->signal_all_threads(0);
 			GloMTH->stop_listeners();
 			admin_proxysql_mysql_paused=true;
 			// we now rollback poll_timeout
 			char buf[32];
 			sprintf(buf,"%d",admin_old_wait_timeout);
-			GloMTH->set_variable((char *)"poll_timeout",buf);
-			GloMTH->commit();
+			(void)GloMTH->set_int_variable_and_commit("poll_timeout", buf);
 		}
 
 		if (admin_proxysql_pgsql_paused == false) {
@@ -945,9 +941,8 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		if (admin_proxysql_mysql_paused==true) {
 			// to speed up this process we first change poll_timeout to 10
 			// MySQL_thread will call poll() with a maximum timeout of 10ms
-			admin_old_wait_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
-			GloMTH->set_variable((char *)"poll_timeout",(char *)"10");
-			GloMTH->commit();
+			admin_old_wait_timeout =
+				GloMTH->set_int_variable_and_commit("poll_timeout", "10");
 			GloMTH->signal_all_threads(0);
 			GloMTH->start_listeners();
 			//char buf[32];
@@ -958,8 +953,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			// we now rollback poll_timeout
 			char buf[32];
 			sprintf(buf,"%d",admin_old_wait_timeout);
-			GloMTH->set_variable((char *)"poll_timeout",buf);
-			GloMTH->commit();
+			(void)GloMTH->set_int_variable_and_commit("poll_timeout", buf);
 		}
 
 		if (admin_proxysql_pgsql_paused == true) {

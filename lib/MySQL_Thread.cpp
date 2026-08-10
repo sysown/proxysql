@@ -29,6 +29,9 @@ using json = nlohmann::json;
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Logger.hpp"
 #include "MySQL_Resolution.h"
+#ifdef PROXYSQL31
+#include "MySQL_Caching_Sha2_RSA.h"
+#endif
 
 #include <fcntl.h>
 #include <zstd.h>
@@ -490,6 +493,11 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"select_version_forwarding",
 	(char *)"keep_multiplexing_variables",
 	(char *)"default_authentication_plugin",
+#ifdef PROXYSQL31
+	(char *)"caching_sha2_password_auto_generate_rsa_keys",
+	(char *)"caching_sha2_password_private_key_path",
+	(char *)"caching_sha2_password_public_key_path",
+#endif
 	(char *)"passthrough_auth_enabled",
 	(char *)"passthrough_auth_empty_password",
 	(char *)"passthrough_auth_unknown_users",
@@ -1459,6 +1467,14 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.proxy_protocol_networks = strdup((char *)"");
 	variables.default_authentication_plugin=strdup((char *)"mysql_native_password");
 	variables.default_authentication_plugin_int = 0; // mysql_native_password
+#ifdef PROXYSQL31
+	variables.caching_sha2_password_auto_generate_rsa_keys = true;
+	variables.caching_sha2_password_private_key_path = strdup("proxysql-caching-sha2-private-key.pem");
+	variables.caching_sha2_password_public_key_path = strdup("proxysql-caching-sha2-public-key.pem");
+	caching_sha2_rsa_accepted_private_path_ = variables.caching_sha2_password_private_key_path;
+	caching_sha2_rsa_accepted_public_path_ = variables.caching_sha2_password_public_key_path;
+	caching_sha2_rsa_manager_ = std::make_unique<MySQL_Caching_Sha2_RSA>();
+#endif
 	variables.passthrough_auth_enabled = false;
 	variables.passthrough_auth_empty_password = true;
 	variables.passthrough_auth_unknown_users = false;
@@ -1580,7 +1596,103 @@ void MySQL_Threads_Handler::wrunlock() {
 	pthread_rwlock_unlock(&rwlock);
 }
 
-void MySQL_Threads_Handler::commit() {
+int MySQL_Threads_Handler::set_int_variable_and_commit(
+	const char* name, const char* value
+) {
+	wrlock();
+	struct WriteUnlockGuard {
+		MySQL_Threads_Handler& handler;
+		~WriteUnlockGuard() { handler.wrunlock(); }
+	} unlock_guard { *this };
+
+	const int previous_value = get_variable_int(name);
+	const bool variable_set = set_variable(name, value);
+	assert(variable_set);
+	if (variable_set) {
+		(void)commit();
+	}
+	return previous_value;
+}
+
+MySQLThreadsCommitResult MySQL_Threads_Handler::commit() {
+	MySQLThreadsCommitResult commit_result;
+#ifdef PROXYSQL31
+	const char *private_path = variables.caching_sha2_password_private_key_path != nullptr
+		? variables.caching_sha2_password_private_key_path : "";
+	const char *public_path = variables.caching_sha2_password_public_key_path != nullptr
+		? variables.caching_sha2_password_public_key_path : "";
+	MySQL_Caching_Sha2_RSA_Config rsa_config {
+		variables.caching_sha2_password_auto_generate_rsa_keys,
+		private_path,
+		public_path,
+		GloVars.datadir != nullptr ? GloVars.datadir : ""
+	};
+	MySQL_Caching_Sha2_RSA_Reload_Result rsa_reload = caching_sha2_rsa_manager_->reload(rsa_config);
+	if (rsa_reload.accepted) {
+		caching_sha2_rsa_accepted_auto_generate_ = rsa_config.auto_generate;
+		caching_sha2_rsa_accepted_private_path_ = rsa_config.private_key_path;
+		caching_sha2_rsa_accepted_public_path_ = rsa_config.public_key_path;
+		caching_sha2_rsa_config_initialized_ = true;
+	} else {
+		proxy_error("Rejected caching_sha2_password RSA key configuration: %s\n", rsa_reload.error.c_str());
+		commit_result.rejected_variables = {
+			"caching_sha2_password_auto_generate_rsa_keys",
+			"caching_sha2_password_private_key_path",
+			"caching_sha2_password_public_key_path"
+		};
+
+		if (!caching_sha2_rsa_config_initialized_) {
+			const std::string default_private_path = "proxysql-caching-sha2-private-key.pem";
+			const std::string default_public_path = "proxysql-caching-sha2-public-key.pem";
+			const bool candidate_is_default = rsa_config.auto_generate &&
+				rsa_config.private_key_path == default_private_path &&
+				rsa_config.public_key_path == default_public_path;
+			bool default_accepted = false;
+			std::string default_error = rsa_reload.error;
+			if (!candidate_is_default) {
+				MySQL_Caching_Sha2_RSA_Config fallback_config {
+					true,
+					default_private_path,
+					default_public_path,
+					rsa_config.datadir
+				};
+				const MySQL_Caching_Sha2_RSA_Reload_Result fallback = caching_sha2_rsa_manager_->reload(fallback_config);
+				default_accepted = fallback.accepted;
+				default_error = fallback.error;
+			}
+			if (default_accepted) {
+				caching_sha2_rsa_accepted_auto_generate_ = true;
+				caching_sha2_rsa_accepted_private_path_ = default_private_path;
+				caching_sha2_rsa_accepted_public_path_ = default_public_path;
+			} else {
+				MySQL_Caching_Sha2_RSA_Config disabled_config { false, "", "", rsa_config.datadir };
+				const MySQL_Caching_Sha2_RSA_Reload_Result disabled =
+					caching_sha2_rsa_manager_->reload(disabled_config);
+				if (!disabled.accepted) {
+					proxy_error("Failed to disable unavailable caching_sha2_password RSA configuration: %s\n",
+						disabled.error.c_str());
+				}
+				caching_sha2_rsa_accepted_auto_generate_ = false;
+				caching_sha2_rsa_accepted_private_path_.clear();
+				caching_sha2_rsa_accepted_public_path_.clear();
+				proxy_error(
+					"Default caching_sha2_password RSA key configuration is unavailable: %s. "
+					"RSA public-key authentication is disabled; TLS authentication remains available.\n",
+					default_error.c_str());
+			}
+			caching_sha2_rsa_config_initialized_ = true;
+		}
+
+		variables.caching_sha2_password_auto_generate_rsa_keys =
+			caching_sha2_rsa_accepted_auto_generate_;
+		free(variables.caching_sha2_password_private_key_path);
+		free(variables.caching_sha2_password_public_key_path);
+		variables.caching_sha2_password_private_key_path =
+			strdup(caching_sha2_rsa_accepted_private_path_.c_str());
+		variables.caching_sha2_password_public_key_path =
+			strdup(caching_sha2_rsa_accepted_public_path_.c_str());
+	}
+#endif
 	__sync_add_and_fetch(&__global_MySQL_Thread_Variables_version,1);
 	proxy_debug(PROXY_DEBUG_MYSQL_SERVER, 1, "Increasing version number to %d - all threads will notice this and refresh their variables\n", __global_MySQL_Thread_Variables_version);
 
@@ -1652,6 +1764,7 @@ void MySQL_Threads_Handler::commit() {
 			"doc/internal/passthrough_authentication.md §7.1.\n",
 			variables.passthrough_default_hg);
 	}
+	return commit_result;
 }
 
 
@@ -1780,6 +1893,10 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 	if (!strcmp(name,"resolution_family")) return strdup(variables.resolution_family);
 	if (!strcmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
 	if (!strcmp(name,"default_authentication_plugin")) return strdup(variables.default_authentication_plugin);
+#ifdef PROXYSQL31
+	if (!strcmp(name,"caching_sha2_password_private_key_path")) return strdup(variables.caching_sha2_password_private_key_path);
+	if (!strcmp(name,"caching_sha2_password_public_key_path")) return strdup(variables.caching_sha2_password_public_key_path);
+#endif
 	if (!strcmp(name,"passthrough_default_schema")) return strdup(variables.passthrough_default_schema ? variables.passthrough_default_schema : "");
 	if (!strcmp(name,"passthrough_auth_username_pattern")) return strdup(variables.passthrough_auth_username_pattern ? variables.passthrough_auth_username_pattern : "");
 	if (!strcmp(name,"proxy_protocol_networks")) return strdup(variables.proxy_protocol_networks);
@@ -1835,7 +1952,6 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 		}
 	}
 
-
 //VALGRIND_DISABLE_ERROR_REPORTING;
 	if (!strcmp(name,"stacksize")) return ( stacksize ? stacksize : DEFAULT_STACK_SIZE);
 	// LCOV_EXCL_START
@@ -1856,7 +1972,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
  * @param name The name of the variable to retrieve.
  * @return The value of the variable as a char pointer, or NULL if the variable does not exist.
  */
-char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public function, accessible from admin
+char * MySQL_Threads_Handler::get_variable(const char *name) {	// this is the public function, accessible from admin
 //VALGRIND_DISABLE_ERROR_REPORTING;
 #define INTBUFSIZE	4096
 	char intbuf[INTBUFSIZE];
@@ -1882,6 +1998,15 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 			return strdup((*v ? "true" : "false"));
 		}
 	}
+
+#ifdef PROXYSQL31
+	if (!strcasecmp(name,"caching_sha2_password_private_key_path")) {
+		return strdup(variables.caching_sha2_password_private_key_path);
+	}
+	if (!strcasecmp(name,"caching_sha2_password_public_key_path")) {
+		return strdup(variables.caching_sha2_password_public_key_path);
+	}
+#endif
 
 
 	if (!strcasecmp(name,"firewall_whitelist_errormsg")) {
@@ -2037,7 +2162,7 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
  * @param value The new value for the variable, passed as a const char pointer.
  * @return True if the variable was successfully updated, false otherwise.
  */
-bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// this is the public function, accessible from admin
+bool MySQL_Threads_Handler::set_variable(const char *name, const char *value) {	// this is the public function, accessible from admin
 	if (!value) return false;
 	size_t vallen=strlen(value);
 
@@ -2376,6 +2501,19 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		}
 	}
 
+#ifdef PROXYSQL31
+	if (!strcasecmp(name,"caching_sha2_password_private_key_path")) {
+		free(variables.caching_sha2_password_private_key_path);
+		variables.caching_sha2_password_private_key_path = strdup(value);
+		return true;
+	}
+	if (!strcasecmp(name,"caching_sha2_password_public_key_path")) {
+		free(variables.caching_sha2_password_public_key_path);
+		variables.caching_sha2_password_public_key_path = strdup(value);
+		return true;
+	}
+#endif
+
 
 	if (!strcasecmp(name,"keep_multiplexing_variables")) {
 		if (vallen) {
@@ -2691,6 +2829,10 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["passthrough_auth_empty_password"] = make_tuple(&variables.passthrough_auth_empty_password, false);
 		VariablesPointers_bool["passthrough_auth_unknown_users"]  = make_tuple(&variables.passthrough_auth_unknown_users,  false);
 		VariablesPointers_bool["passthrough_auth_require_tls"]    = make_tuple(&variables.passthrough_auth_require_tls,    false);
+#ifdef PROXYSQL31
+		VariablesPointers_bool["caching_sha2_password_auto_generate_rsa_keys"] =
+			make_tuple(&variables.caching_sha2_password_auto_generate_rsa_keys, false);
+#endif
 		// variables with special variable == true
 		// the input validation for these variables MUST be EXPLICIT
 		VariablesPointers_bool["have_compress"]      = make_tuple(&variables.have_compress,      true);
@@ -3274,6 +3416,10 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.server_version) free(variables.server_version);
 	if (variables.keep_multiplexing_variables) free(variables.keep_multiplexing_variables);
 	if (variables.default_authentication_plugin) free(variables.default_authentication_plugin);
+#ifdef PROXYSQL31
+	if (variables.caching_sha2_password_private_key_path) free(variables.caching_sha2_password_private_key_path);
+	if (variables.caching_sha2_password_public_key_path) free(variables.caching_sha2_password_public_key_path);
+#endif
 	if (variables.passthrough_default_schema) free(variables.passthrough_default_schema);
 	if (variables.passthrough_auth_username_pattern) free(variables.passthrough_auth_username_pattern);
 	if (variables.proxy_protocol_networks) free(variables.proxy_protocol_networks);

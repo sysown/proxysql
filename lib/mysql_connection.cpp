@@ -8,6 +8,7 @@ using json = nlohmann::json;
 //#include "SpookyV2.h"
 #include <fcntl.h>
 #include <sstream>
+#include <openssl/crypto.h>
 
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
@@ -266,9 +267,17 @@ MySQL_Connection_userinfo::MySQL_Connection_userinfo() {
 MySQL_Connection_userinfo::~MySQL_Connection_userinfo() {
 	if (username) free(username);
 	if (fe_username) free(fe_username);
-	if (password) free(password);
+	clear_password();
 	if (sha1_pass) free(sha1_pass);
 	if (schemaname) free(schemaname);
+}
+
+void MySQL_Connection_userinfo::clear_password() {
+	if (password != nullptr) {
+		OPENSSL_cleanse(password, strlen(password));
+		free(password);
+		password = nullptr;
+	}
 }
 
 void MySQL_Connection::compute_unknown_transaction_status() {
@@ -304,31 +313,40 @@ void MySQL_Connection::compute_unknown_transaction_status() {
  * @return Returns the computed hash value.
  */
 uint64_t MySQL_Connection_userinfo::compute_hash() {
-	size_t username_len = username ? strlen(username) : 0;
-	size_t password_len = password ? strlen(password) : 0;
-	size_t schemaname_len = schemaname ? strlen(schemaname) : 0;
-	size_t total_length = username_len + password_len + schemaname_len;
+	int l=0;
+	if (username)
+		l+=strlen(username);
+	if (password)
+		l+=strlen(password);
+	if (schemaname)
+		l+=strlen(schemaname);
 // two random seperator
 #define _COMPUTE_HASH_DEL1_	"-ujhtgf76y576574fhYTRDF345wdt-"
 #define _COMPUTE_HASH_DEL2_	"-8k7jrhtrgJHRgrefgreyhtRFewg6-"
-	size_t delimiter1_len = strlen(_COMPUTE_HASH_DEL1_);
-	size_t delimiter2_len = strlen(_COMPUTE_HASH_DEL2_);
-	total_length += delimiter1_len + delimiter2_len;
-
-	std::string hash_input;
-	hash_input.reserve(total_length);
+	l+=strlen(_COMPUTE_HASH_DEL1_);
+	l+=strlen(_COMPUTE_HASH_DEL2_);
+	char *buf=(char *)malloc(l+1);
+	l=0;
 	if (username) {
-		hash_input.append(username, username_len);
+		strcpy(buf+l,username);
+		l+=strlen(username);
 	}
-	hash_input.append(_COMPUTE_HASH_DEL1_);
+	strcpy(buf+l,_COMPUTE_HASH_DEL1_);
+	l+=strlen(_COMPUTE_HASH_DEL1_);
 	if (password) {
-		hash_input.append(password, password_len);
+		strcpy(buf+l,password);
+		l+=strlen(password);
 	}
 	if (schemaname) {
-		hash_input.append(schemaname, schemaname_len);
+		strcpy(buf+l,schemaname);
+		l+=strlen(schemaname);
 	}
-	hash_input.append(_COMPUTE_HASH_DEL2_);
-	return SpookyHash::Hash64(hash_input.data(), hash_input.size(), 0);
+	strcpy(buf+l,_COMPUTE_HASH_DEL2_);
+	l+=strlen(_COMPUTE_HASH_DEL2_);
+	hash=SpookyHash::Hash64(buf,l,0);
+	OPENSSL_cleanse(buf, l);
+	free(buf);
+	return hash;
 }
 
 void MySQL_Connection_userinfo::set(char *u, char *p, char *s, char *sh1) {
@@ -345,7 +363,7 @@ void MySQL_Connection_userinfo::set(char *u, char *p, char *s, char *sh1) {
 	if (p) {
 		if (password) {
 			if (strcmp(p,password)) {
-				free(password);
+				clear_password();
 				password=strdup(p);
 			}
 		} else {
