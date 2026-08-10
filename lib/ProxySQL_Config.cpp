@@ -1756,17 +1756,17 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
                         proxy_error("Admin: detected a mysql_aws_rds_bgd_hostgroups in config file without a mandatory reader_hostgroup\n");
                         continue;
                     }
-                    char green_writer_str[24];
-                    char green_reader_str[24];
+                    std::string green_writer_str;
+                    std::string green_reader_str;
                     if (line.lookupValue("green_writer_hostgroup", green_writer_hostgroup)==false) {
-                        memcpy(green_writer_str, "NULL", sizeof("NULL"));
+                        green_writer_str = "NULL";
                     } else {
-                        snprintf(green_writer_str, sizeof(green_writer_str), "%d", green_writer_hostgroup);
+                        green_writer_str = std::to_string(green_writer_hostgroup);
                     }
                     if (line.lookupValue("green_reader_hostgroup", green_reader_hostgroup)==false) {
-                        memcpy(green_reader_str, "NULL", sizeof("NULL"));
+                        green_reader_str = "NULL";
                     } else {
-                        snprintf(green_reader_str, sizeof(green_reader_str), "%d", green_reader_hostgroup);
+                        green_reader_str = std::to_string(green_reader_hostgroup);
                     }
                     if (line.lookupValue("active", active)==false) active=1;
                     if (line.lookupValue("writer_is_also_reader", writer_is_also_reader)==false) writer_is_also_reader=0;
@@ -1780,7 +1780,7 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
                     const size_t safe_comment_len = safe_strlen(safe_comment);
                     const size_t query_len = query_base_len + safe_comment_len + 256; // 128 vs sizeof(int)*8
                     char *query=(char *)malloc(query_len);
-                    sprintf(query,q, writer_hostgroup, reader_hostgroup, green_writer_str, green_reader_str, active, writer_is_also_reader, check_interval_ms, check_timeout_ms, safe_comment);
+                    sprintf(query,q, writer_hostgroup, reader_hostgroup, green_writer_str.c_str(), green_reader_str.c_str(), active, writer_is_also_reader, check_interval_ms, check_timeout_ms, safe_comment);
                     admindb->execute(query);
                     if (o!=o1) free(o);
                     free(o1);
