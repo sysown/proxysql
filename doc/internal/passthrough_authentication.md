@@ -301,7 +301,14 @@ Entry includes username, source IP, hostgroup probed, outcome. Useful for forens
 
 ### 7.5 RSA public key for non-TLS clients
 
-MySQL's `caching_sha2_password` allows non-TLS clients to encrypt the cleartext password with the server's RSA public key. If we want to support non-TLS pass-through, ProxySQL needs to publish a public key (`caching_sha2_password_public_key_path`) and decrypt with the matching private key. Phase 1 ships without this; clients must use TLS. Phase 2 may add RSA support if there's demand.
+ProxySQL 3.1 adds the frontend RSA public-key exchange for
+`caching_sha2_password`; see
+[`doc/caching_sha2_password_rsa.md`](../caching_sha2_password_rsa.md). This lets
+frontend users complete full authentication without TLS. Pass-through keeps
+its secure default (`mysql-passthrough_auth_require_tls=true`). If an operator
+explicitly disables that gate, the same RSA exchange can supply the cleartext
+credential used by the backend authentication probe; the public-key
+substitution warning in the linked document applies.
 
 ## 8. The cache
 

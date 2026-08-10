@@ -31,12 +31,13 @@ jobs:
   build:
     name: build
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
     outputs:
       groups: ${{ steps.simulator-groups.outputs.groups }}
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         fetch-depth: 0
         persist-credentials: false
@@ -47,7 +48,7 @@ jobs:
 
     - name: Restore simulation build
       id: simulator-build
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         key: ${{ env.BUILD_CACHE_KEY }}
         path: ${{ env.RUNTIME_CACHE_DIR }}
@@ -57,6 +58,7 @@ jobs:
       run: test/infra/control/cluster-simulator-ci.bash install
 
     - name: Build simulation test runtime
+      timeout-minutes: 90
       if: steps.simulator-build.outputs.cache-hit != 'true'
       run: test/infra/control/cluster-simulator-ci.bash build
 
@@ -69,7 +71,7 @@ jobs:
 
     - name: Save simulation build
       if: steps.simulator-build.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         key: ${{ env.BUILD_CACHE_KEY }}
         path: ${{ env.RUNTIME_CACHE_DIR }}
@@ -78,6 +80,7 @@ jobs:
     name: test / ${{ matrix.group }}
     needs: build
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -88,13 +91,13 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         fetch-depth: 0
         persist-credentials: false
 
     - name: Restore simulation build
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         key: ${{ env.BUILD_CACHE_KEY }}
         fail-on-cache-miss: true
@@ -113,6 +116,7 @@ jobs:
       run: test/infra/control/ensure-infras.bash
 
     - name: Run simulation tests
+      timeout-minutes: 90
       run: test/infra/control/run-tests-isolated.bash
 
     - name: Cleanup
@@ -123,7 +127,7 @@ jobs:
 
     - name: Archive failure logs
       if: ${{ failure() && !cancelled() }}
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ${{ matrix.group }}-${{ github.sha }}-logs-run${{ github.run_number }}
         path: ci_infra_logs/

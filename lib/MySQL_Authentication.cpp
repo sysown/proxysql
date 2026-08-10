@@ -9,13 +9,17 @@
 
 #include "MySQL_Authentication.hpp"
 
+#include <openssl/crypto.h>
+
 #ifndef SPOOKYV2
 #include "SpookyV2.h"
 #define SPOOKYV2
 #endif
 
+namespace {
+
 #ifdef PROXYSQL31
-static void validate_require_x509_attribute(
+void validate_require_x509_attribute(
 	const nlohmann::json& valid,
 	const char* username,
 	enum cred_username_type usertype
@@ -32,23 +36,24 @@ static void validate_require_x509_attribute(
 }
 #endif
 
-void free_account_details(account_details_t& ad) {
-	if (ad.password) {
-		free(ad.password);
-		ad.password = nullptr;
+void cleanse_and_free_password(char*& password) {
+	if (password != nullptr) {
+		OPENSSL_cleanse(password, strlen(password));
+		free(password);
+		password = nullptr;
 	}
+}
+
+} // namespace
+
+void free_account_details(account_details_t& ad) {
+	cleanse_and_free_password(ad.password);
 	if (ad.sha1_pass) {
 		free(ad.sha1_pass);
 		ad.sha1_pass=NULL;
 	}
-	if (ad.clear_text_password[PASSWORD_TYPE::PRIMARY]) {
-		free(ad.clear_text_password[PASSWORD_TYPE::PRIMARY]);
-		ad.clear_text_password[PASSWORD_TYPE::PRIMARY] = nullptr;
-	}
-	if (ad.clear_text_password[PASSWORD_TYPE::ADDITIONAL]) {
-		free(ad.clear_text_password[PASSWORD_TYPE::ADDITIONAL]);
-		ad.clear_text_password[PASSWORD_TYPE::ADDITIONAL] = nullptr;
-	}
+	cleanse_and_free_password(ad.clear_text_password[PASSWORD_TYPE::PRIMARY]);
+	cleanse_and_free_password(ad.clear_text_password[PASSWORD_TYPE::ADDITIONAL]);
 	if (ad.default_schema) {
 		free(ad.default_schema);
 		ad.default_schema = nullptr;
@@ -179,20 +184,14 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 		ad=lookup->second;
 		if (strcmp(ad->password,password)) {
 			// the password has changed
-			free(ad->password);
+			cleanse_and_free_password(ad->password);
 			ad->password=strdup(password);
 			if (ad->sha1_pass) {
 				free(ad->sha1_pass);
 				ad->sha1_pass=NULL;
 			}
-			if (ad->clear_text_password[0]) {
-				free(ad->clear_text_password[0]);
-				ad->clear_text_password[0]=NULL;
-			}
-			if (ad->clear_text_password[1]) {
-				free(ad->clear_text_password[1]);
-				ad->clear_text_password[1]=NULL;
-			}
+			cleanse_and_free_password(ad->clear_text_password[0]);
+			cleanse_and_free_password(ad->clear_text_password[1]);
 			// FIXME: if the password is a clear text password, automatically generate sha1_pass and clear_text_password
 		}
 		if (strcmp(ad->default_schema,default_schema)) {
@@ -545,10 +544,10 @@ bool MySQL_Authentication::del(char * username, enum cred_username_type usertype
 		cg.cred_array->remove_fast(ad);
 		cg.bt_map.erase(lookup);
 		free(ad->username);
-		free(ad->password);
+		cleanse_and_free_password(ad->password);
 		if (ad->sha1_pass) { free(ad->sha1_pass); ad->sha1_pass=NULL; }
-		if (ad->clear_text_password[0]) { free(ad->clear_text_password[0]); ad->clear_text_password[0]=NULL; }
-		if (ad->clear_text_password[1]) { free(ad->clear_text_password[1]); ad->clear_text_password[1]=NULL; }
+		cleanse_and_free_password(ad->clear_text_password[0]);
+		cleanse_and_free_password(ad->clear_text_password[1]);
 		free(ad->default_schema);
 		free(ad->attributes);
 		free(ad->comment);
@@ -622,18 +621,12 @@ bool MySQL_Authentication::set_clear_text_password(
 	if (lookup != cg.bt_map.end()) {
 		account_details_t *ad=lookup->second;
 		if (passtype == PASSWORD_TYPE::PRIMARY) {
-			if (ad->clear_text_password[0]) {
-				free(ad->clear_text_password[0]);
-				ad->clear_text_password[0]=NULL;
-			}
+			cleanse_and_free_password(ad->clear_text_password[0]);
 			if (clear_text_password) {
 				ad->clear_text_password[0] = strdup(clear_text_password);
 			}
 		} else {
-			if (ad->clear_text_password[1]) {
-				free(ad->clear_text_password[1]);
-				ad->clear_text_password[1]=NULL;
-			}
+			cleanse_and_free_password(ad->clear_text_password[1]);
 			if (clear_text_password) {
 				ad->clear_text_password[1] = strdup(clear_text_password);
 			}
@@ -750,16 +743,10 @@ bool MySQL_Authentication::_reset(enum cred_username_type usertype) {
 			account_details_t *ad=lookup->second;
 			cg.bt_map.erase(lookup);
 			free(ad->username);
-			free(ad->password);
+			cleanse_and_free_password(ad->password);
 			if (ad->sha1_pass) { free(ad->sha1_pass); ad->sha1_pass=NULL; }
-			if (ad->clear_text_password[0]) {
-				free(ad->clear_text_password[0]);
-				ad->clear_text_password[0] = NULL;
-			}
-			if (ad->clear_text_password[1]) {
-				free(ad->clear_text_password[1]);
-				ad->clear_text_password[1] = NULL;
-			}
+			cleanse_and_free_password(ad->clear_text_password[0]);
+			cleanse_and_free_password(ad->clear_text_password[1]);
 			free(ad->default_schema);
 			free(ad->comment);
 			free(ad->attributes);

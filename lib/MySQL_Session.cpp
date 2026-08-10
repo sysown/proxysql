@@ -12,6 +12,8 @@ using json = nlohmann::json;
 #include "re2/regexp.h"
 #include "mysqld_error.h"
 
+#include <openssl/crypto.h>
+
 #include "MySQL_Data_Stream.h"
 #include "MySQL_Query_Processor.h"
 #include "Query_Processor_ParserSQL.h"
@@ -1783,7 +1785,7 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 	// probe resolves. Also clears auth_in_progress.
 	auto scrub_cleartext = [&]() {
 		if (client_myds && client_myds->passthrough_cleartext) {
-			memset(client_myds->passthrough_cleartext, 0,
+			OPENSSL_cleanse(client_myds->passthrough_cleartext,
 				strlen(client_myds->passthrough_cleartext));
 			free(client_myds->passthrough_cleartext);
 			client_myds->passthrough_cleartext = NULL;
@@ -1915,7 +1917,7 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 		// Cache the verified credential. The cleartext (from
 		// passthrough_cleartext) was just used to auth the backend and is now
 		// proven valid.
-		GloMyPTAuthCache->insert(user_key, std::string(cleartext), audit_hg);
+		GloMyPTAuthCache->insert(user_key, cleartext, audit_hg);
 
 		// Mark the session: the credential on userinfo came from pass-through
 		// (now in the cache). Authorizes the §8.4 eviction hook to invalidate
@@ -1928,9 +1930,7 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 		// backend authenticated successfully we overwrite it with the real
 		// cleartext and recompute the hash, so the rest of the session (query
 		// routing, multiplexing, change-user checks) authenticates consistently.
-		if (client_myds->myconn->userinfo->password) {
-			free(client_myds->myconn->userinfo->password);
-		}
+		client_myds->myconn->userinfo->clear_password();
 		client_myds->myconn->userinfo->password = strdup(cleartext);
 		client_myds->myconn->userinfo->set(NULL, NULL, NULL, NULL);
 
@@ -2127,9 +2127,7 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 	// handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection,
 	// which copies userinfo (including a real password) before connect.
 	mc->userinfo->set(client_myds->myconn->userinfo);
-	if (mc->userinfo->password) {
-		free(mc->userinfo->password);
-	}
+	mc->userinfo->clear_password();
 	mc->userinfo->password = strdup(cleartext);
 	mc->userinfo->set(NULL, NULL, NULL, NULL); // recompute hash
 
@@ -6463,6 +6461,10 @@ bool MySQL_Session::handler_again___multiple_statuses(int *rc) {
 
 void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE_WrongCredentials(PtrSize_t *pkt, bool *wrong_pass) {
 	l_free(pkt->size,pkt->ptr);
+#ifdef PROXYSQL31
+	const MySQLFrontendAuthError frontend_auth_error =
+		client_myds->myprot.consume_frontend_auth_error();
+#endif
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , DS=%p . Wrong credentials for frontend: disconnecting\n", this, client_myds);
 	*wrong_pass=true;
 	// FIXME: this should become close connection
@@ -6495,29 +6497,45 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE_
 		client_addr = strdup((char *)"");
 	}
 	if (client_myds->myconn->userinfo->username) {
-		char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100+strlen(client_addr));
+		std::string error_message;
 		//uint8_t _pid = 2;
 		//if (client_myds->switching_auth_stage) _pid+=2;
 		//if (is_encrypted) _pid++;
 		uint8_t _pid = client_myds->pkt_sid; _pid++;
 #ifdef DEBUG
 	if (client_myds->myconn->userinfo->password) {
-		char *tmp_pass=strdup(client_myds->myconn->userinfo->password);
-		int lpass = strlen(tmp_pass);
-		for (int i=2; i<lpass-1; i++) {
-			tmp_pass[i]='*';
-		}
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , DS=%p . Error: Access denied for user '%s'@'%s' , Password='%s'. Disconnecting\n", this, client_myds, client_myds->myconn->userinfo->username, client_addr, tmp_pass);
-		free(tmp_pass);
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+			"Session=%p , DS=%p . Error: Access denied for user '%s'@'%s' , Password='(redacted)'. Disconnecting\n",
+			this, client_myds, client_myds->myconn->userinfo->username, client_addr);
 	} else {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , DS=%p . Error: Access denied for user '%s'@'%s' . No password. Disconnecting\n", this, client_myds, client_myds->myconn->userinfo->username, client_addr);
 	}
 #endif // DEBUG
-		sprintf(_s,"ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL, _pid, 1045,(char *)"28000", _s, true);
-		proxy_error("ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)\n", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
-		free(_s);
-		__sync_fetch_and_add(&MyHGM->status.access_denied_wrong_password, 1);
+#ifdef PROXYSQL31
+		if (frontend_auth_error == MySQLFrontendAuthError::CACHING_SHA2_RSA_UNAVAILABLE) {
+			string_format(
+				"ProxySQL Error: Access denied for user '%s'@'%s': caching_sha2_password RSA key exchange is unavailable; use TLS or configure RSA keys",
+				error_message,
+				client_myds->myconn->userinfo->username, client_addr
+			);
+		} else
+#endif
+		{
+			string_format(
+				"ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)",
+				error_message,
+				client_myds->myconn->userinfo->username, client_addr,
+				(client_myds->myconn->userinfo->password ? "YES" : "NO")
+			);
+		}
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, _pid, 1045, "28000", error_message.c_str(), true);
+		proxy_error("%s\n", error_message.c_str());
+#ifdef PROXYSQL31
+		if (frontend_auth_error != MySQLFrontendAuthError::CACHING_SHA2_RSA_UNAVAILABLE)
+#endif
+		{
+			__sync_fetch_and_add(&MyHGM->status.access_denied_wrong_password, 1);
+		}
 	}
 	if (client_addr) {
 		free(client_addr);
