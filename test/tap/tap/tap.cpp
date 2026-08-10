@@ -442,7 +442,7 @@ static void nice_time(double sec,char *buff, my_bool part_second)
   {
     tmp=(ulong) (sec/(3600.0*24));
     sec-=3600.0*24*tmp;
-    int n = snprintf(p, remaining, "%ld %s", tmp, tmp > 1 ? " days " : " day ");
+	int n = snprintf(p, remaining, "%lu %s", tmp, tmp > 1 ? " days " : " day ");
     if (n < 0 || (size_t)n >= remaining) return;
     p += n;
     remaining -= n;
@@ -451,7 +451,7 @@ static void nice_time(double sec,char *buff, my_bool part_second)
   {
     tmp=(ulong) (sec/3600.0);
     sec-=3600.0*tmp;
-    int n = snprintf(p, remaining, "%ld %s", tmp, tmp > 1 ? " hours " : " hour ");
+	int n = snprintf(p, remaining, "%lu %s", tmp, tmp > 1 ? " hours " : " hour ");
     if (n < 0 || (size_t)n >= remaining) return;
     p += n;
     remaining -= n;
@@ -460,7 +460,7 @@ static void nice_time(double sec,char *buff, my_bool part_second)
   {
     tmp=(ulong) (sec/60.0);
     sec-=60.0*tmp;
-    int n = snprintf(p, remaining, "%ld min ", tmp);
+	int n = snprintf(p, remaining, "%lu min ", tmp);
     if (n < 0 || (size_t)n >= remaining) return;
     p += n;
     remaining -= n;
