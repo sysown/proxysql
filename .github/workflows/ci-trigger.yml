@@ -36,8 +36,16 @@ jobs:
         
         echo "Trigger workflow_run[in_progress]: '${RUNNAME1}|${RUNNAME2}|${RUNNAME3}'"
         sleep 5
-        # this blocks until the run is finished
-        gh -R ${{ github.repository }} run watch -i 30 ${RUNID} >/dev/null
+        # This blocks until the run is finished. Propagate its result: the
+        # downstream workflow_run[completed] jobs intentionally require this
+        # trigger workflow to succeed before consuming CI-builds handoffs.
+        if gh -R ${{ github.repository }} run watch --exit-status -i 30 ${RUNID} >/dev/null; then
+          echo "CI-builds run ${RUNID} completed successfully"
+        else
+          watch_status=$?
+          echo "::error::CI-builds run ${RUNID} did not complete successfully (gh run watch exit ${watch_status})"
+          exit "${watch_status}"
+        fi
         sleep 5
 
     - name: Trigger workflow_run[completed]
