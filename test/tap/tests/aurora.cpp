@@ -257,8 +257,10 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		if (!strncasecmp(SELECT_VERSION_COMMENT, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
 			char *a = (char *)"SELECT '(ProxySQL Automated Test Server) - %s'";
-			query = (char *)malloc(strlen(a)+strlen(sess->client_myds->proxy_addr.addr));
-			sprintf(query,a,sess->client_myds->proxy_addr.addr);
+			const char* proxy_addr = sess->client_myds->proxy_addr.addr;
+			size_t query_len = strlen(a) + (proxy_addr ? strlen(proxy_addr) : 0);
+			query = (char *)malloc(query_len);
+			snprintf(query, query_len, a, proxy_addr ? proxy_addr : "");
 			query_length=strlen(query)+1;
 			goto __run_query;
 		}
@@ -268,8 +270,10 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		if (!strncasecmp(SELECT_DB_USER, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
 			char *query1=(char *)"SELECT \"admin\" AS 'DATABASE()', \"%s\" AS 'USER()'";
-			char *query2=(char *)malloc(strlen(query1)+strlen(sess->client_myds->myconn->userinfo->username)+10);
-			sprintf(query2,query1,sess->client_myds->myconn->userinfo->username);
+			const char* username = sess->client_myds->myconn->userinfo->username;
+			size_t query2_len = strlen(query1) + (username ? strlen(username) : 0) + 1;
+			char *query2=(char *)malloc(query2_len);
+			snprintf(query2, query2_len, query1, username ? username : "");
 			query=l_strdup(query2);
 			query_length=strlen(query2)+1;
 			free(query2);
@@ -292,7 +296,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		char *q=(char *)"SELECT '%s' AS '@@version'";
 		query_length=strlen(q)+20;
 		query=(char *)l_alloc(query_length);
-		sprintf(query,q,PROXYSQL_VERSION);
+		snprintf(query, query_length, q, PROXYSQL_VERSION);
 		goto __run_query;
 	}
 
@@ -301,7 +305,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		char *q=(char *)"SELECT '%s' AS 'version()'";
 		query_length=strlen(q)+20;
 		query=(char *)l_alloc(query_length);
-		sprintf(query,q,PROXYSQL_VERSION);
+		snprintf(query, query_length, q, PROXYSQL_VERSION);
 		goto __run_query;
 	}
 
@@ -444,7 +448,7 @@ __run_query:
 				free(query);
 				char *a = (char *)"SELECT %d as Seconds_Behind_Master";
 				query = (char *)malloc(strlen(a)+4);
-				sprintf(query,a,rand()%30+10);
+				snprintf(query, strlen(a)+4, a, rand()%30+10);
 			}
 		}
 		SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
