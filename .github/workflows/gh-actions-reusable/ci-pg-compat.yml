@@ -44,6 +44,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # This job only builds and tests; it never pushes. Leaving the job's
+          # write-all token persisted in .git/config would expose it to every
+          # subsequent step, including the third-party driver images this suite
+          # builds and runs.
+          persist-credentials: false
 
       # Inline build (CI-3p-* model, not the CI-trigger/CI-builds cache-chain
       # model used by the TAP families): no ccache pattern exists elsewhere

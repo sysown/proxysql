@@ -8,8 +8,14 @@ RUN CGO_ENABLED=0 go build -o /out/behaviors-go .
 FROM eclipse-temurin:21-jdk AS javabuild
 WORKDIR /src
 # Pin the driver version explicitly; record bumps in README's driver table.
+# PGJDBC_SHA256 must be updated together with PGJDBC_VERSION: verifying the
+# digest turns a silent substitution of the downloaded jar into a build failure.
+# (Maven Central publishes .sha1 but not .sha256 for this artifact, so the value
+# below is the SHA-256 of the jar whose SHA-1 matches the published digest.)
 ARG PGJDBC_VERSION=42.7.4
-RUN curl -fsSLo /pgjdbc.jar "https://repo1.maven.org/maven2/org/postgresql/postgresql/${PGJDBC_VERSION}/postgresql-${PGJDBC_VERSION}.jar"
+ARG PGJDBC_SHA256=188976721ead8e8627eb6d8389d500dccc0c9bebd885268a3047180274a6031e
+RUN curl -fsSLo /pgjdbc.jar "https://repo1.maven.org/maven2/org/postgresql/postgresql/${PGJDBC_VERSION}/postgresql-${PGJDBC_VERSION}.jar" \
+ && echo "${PGJDBC_SHA256}  /pgjdbc.jar" | sha256sum -c -
 COPY drivers/java/Behaviors.java .
 RUN javac --release 17 -cp /pgjdbc.jar Behaviors.java -d /out
 

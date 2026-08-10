@@ -21,15 +21,33 @@ ROOT_PASSWORD="${ROOT_PASSWORD:-$(echo -n "${INFRA_ID}" | sha256sum | head -c 10
 
 echo ">>> Configuring ProxySQL (${PROXY_CONTAINER}) for PGSQL Replication (automatic rw-split via Toxiproxy): ${INFRA}"
 
-# Wait for ProxySQL admin (MySQL protocol, port 6032) to be reachable.
+# Wait for ProxySQL admin (MySQL protocol, port 6032) to be reachable. Bounded:
+# docker-compose-init.bash re-execs itself under `timeout`, but ensure-infras.bash's
+# reconfigure path calls this script directly, where an unbounded loop would hang
+# the run instead of failing it.
+PROXY_WAIT_SECONDS="${PROXY_WAIT_SECONDS:-120}"
+waited=0
 while ! docker exec "${PROXY_CONTAINER}" mysql -uadmin -padmin -h127.0.0.1 -P6032 -e 'SELECT 1' >/dev/null 2>&1; do
+    if [ "${waited}" -ge "${PROXY_WAIT_SECONDS}" ]; then
+        echo " TIMEOUT"
+        echo "ERROR: ProxySQL admin on ${PROXY_CONTAINER} not reachable after ${PROXY_WAIT_SECONDS}s."
+        echo ">>> Container Logs:"
+        docker logs "${PROXY_CONTAINER}" 2>&1 | tail -n 50
+        exit 1
+    fi
     echo -n '.'
     sleep 1
+    waited=$((waited + 1))
 done
 
-# Pre-process the SQL template.
-SQL_TEMPLATE=$(cat ./conf/proxysql/infra-config.sql)
-SQL_CONTENT=$(eval "echo \"${SQL_TEMPLATE}\"")
+# Pre-process the SQL template. envsubst substitutes exactly the five variables
+# named below and leaves every other '$' alone; the previous eval-echo form ran
+# the template through the shell, so any quote, backtick or $(...) that a future
+# edit introduced into the SQL would be mangled or executed. envsubst reads only
+# EXPORTED variables, hence the explicit export of the .env-sourced WHG/RHG.
+export INFRA_ID INFRA WHG RHG ROOT_PASSWORD
+SQL_CONTENT=$(envsubst '${INFRA_ID} ${INFRA} ${WHG} ${RHG} ${ROOT_PASSWORD}' \
+    < "${SCRIPT_DIR}/../conf/proxysql/infra-config.sql")
 
 # Apply configuration via docker exec using psql (ProxySQL Admin supports PG
 # protocol on port 6132). ON_ERROR_STOP=1 makes psql abort with a non-zero

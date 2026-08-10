@@ -20,12 +20,9 @@ import java.util.Properties;
  * </ul>
  * No stdout output is required on pass.
  *
- * This is the SP3-Task-1 scaffold: only {@code connect} is implemented end
- * to end (open -&gt; SELECT 1 -&gt; assert first col == 1 -&gt; assert
- * client_encoding is UTF8 -&gt; close). The
- * other three behaviors are stubbed to exit 2 with "not implemented:
- * &lt;name&gt;" on stderr so Task 3 can fill in the method bodies below
- * without restructuring {@code dispatch()}.
+ * All four behaviors (connect, transactions, prepared, session_isolation)
+ * are implemented end to end; an unknown behavior name is the only exit-2
+ * case {@code dispatch()} produces.
  *
  * Env contract (read, never invent): PGCOMPAT_PROXY_HOST (default
  * "proxysql"), PGCOMPAT_PROXY_PORT (default "6133"); user/pass/db is

@@ -11,11 +11,9 @@
 //
 // No stdout output is required on pass.
 //
-// This is the SP3-Task-1 scaffold: only `connect` is implemented end to end
-// (open -> SELECT 1 -> assert first col == 1 -> assert client_encoding is
-// UTF8 -> close). The other three behaviors are stubbed to exit 2 with
-// "not implemented: <name>" on stderr so Tasks 2-4 can fill in the function
-// bodies below without restructuring dispatch().
+// All four behaviors (connect, transactions, prepared, session_isolation)
+// are implemented end to end; an unknown behavior name is the only exit-2
+// case dispatch() produces.
 //
 // Env contract (read, never invent): PGCOMPAT_PROXY_HOST (default
 // "proxysql"), PGCOMPAT_PROXY_PORT (default "6133"); user/pass/db is
@@ -26,20 +24,11 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 
 	"github.com/jackc/pgx/v5"
 )
-
-// errNotImplemented is the sentinel distinguishing "behavior not yet wired
-// up" (exit 2, infra/usage error) from a genuine assertion failure
-// (exit 1). Stub bodies wrap it with %w; dispatch() checks errors.Is, so
-// Task 2 replaces a stub body with a real implementation returning
-// ordinary errors and gets exit-1 semantics automatically -- a pure
-// body-fill, no dispatch changes.
-var errNotImplemented = errors.New("not implemented")
 
 func dsn() string {
 	host := os.Getenv("PGCOMPAT_PROXY_HOST")
@@ -304,9 +293,6 @@ func dispatch(behavior string) int {
 	}
 	if err := fn(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		if errors.Is(err, errNotImplemented) {
-			return 2
-		}
 		return 1
 	}
 	return 0

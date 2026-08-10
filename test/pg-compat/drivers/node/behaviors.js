@@ -11,11 +11,9 @@
  *             behavior, missing/invalid env, etc.)
  * No stdout output is required on pass.
  *
- * This is the SP3-Task-1 scaffold: only `connect` is implemented end to
- * end (open -> SELECT 1 -> assert first col == 1 -> assert client_encoding
- * is UTF8 -> close). The other three behaviors throw NotImplementedError
- * (exit 2) so Task 4 can fill in the function bodies below without
- * restructuring dispatch().
+ * All four behaviors (connect, transactions, prepared, session_isolation)
+ * are implemented end to end; an unknown behavior name is the only exit-2
+ * case dispatch() produces.
  *
  * Env contract (read, never invent): PGCOMPAT_PROXY_HOST (default
  * "proxysql"), PGCOMPAT_PROXY_PORT (default "6133"); user/pass/db is
@@ -34,13 +32,6 @@
 'use strict';
 
 const { Client } = require('pg');
-
-// Sentinel distinguishing "behavior not yet wired up" (exit 2, infra/usage
-// error) from a genuine assertion failure (exit 1). Stub bodies throw it;
-// dispatch()'s catch checks `instanceof`, so Task 4 replaces a stub body
-// with a real implementation throwing ordinary Errors and gets exit-1
-// semantics automatically -- a pure body-fill, no dispatch changes.
-class NotImplementedError extends Error {}
 
 function clientConfig() {
   return {
@@ -289,10 +280,6 @@ async function dispatch(behavior) {
   try {
     await fn();
   } catch (err) {
-    if (err instanceof NotImplementedError) {
-      process.stderr.write(`${err.message}\n`);
-      return 2;
-    }
     process.stderr.write(`${err && err.stack ? err.stack : err}\n`);
     return 1;
   }
