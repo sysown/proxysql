@@ -586,7 +586,8 @@ std::tuple<bool, enum SERVER_TYPE, time_t> parse_command_purge_query_digests(cha
 		}
 
 		// parse timestamp
-		mf_unique_ptr<char> ts_str(strdup(query + strlen(prefix)));
+		const size_t prefix_len = strlen(prefix);
+		mf_unique_ptr<char> ts_str(strdup(query + prefix_len));
 		char *ts_end = nullptr;
 		long long ts = strtoll(trim_spaces_in_place(ts_str.get()), &ts_end, 10);
 
@@ -1059,7 +1060,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 
 	{
 		static const char *pt_prefix = "PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE FOR USER ";
-		const size_t pt_prefix_len = strlen(pt_prefix);
+		static const size_t pt_prefix_len = sizeof("PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE FOR USER ") - 1;
 		if (query_no_space_length > pt_prefix_len
 			&& !strncasecmp(pt_prefix, query_no_space, pt_prefix_len)) {
 			const char *user_start = query_no_space + pt_prefix_len;
