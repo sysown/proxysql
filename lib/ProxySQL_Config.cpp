@@ -260,9 +260,9 @@ int ProxySQL_Config::Read_MySQL_Users_from_configfile(std::string& error) {
 		const size_t password_len = password.size();
 		const size_t safe_comment_len = safe_strlen(safe_comment);
 		const size_t attributes_len = attributes.size();
-		const size_t query_len = query_base_len + username_len + password_len + safe_comment_len + attributes_len + 128;
+		const size_t query_len = query_base_len + username_len + password_len + default_schema.size() + safe_comment_len + attributes_len + 128;
 		char *query=(char *)malloc(query_len);
-		sprintf(query,q, username.c_str(), password.c_str(), active, use_ssl, default_hostgroup, default_schema.c_str(), schema_locked, transaction_persistent, fast_forward, max_connections, attributes.c_str(), safe_comment);
+		snprintf(query, query_len, q, username.c_str(), password.c_str(), active, use_ssl, default_hostgroup, default_schema.c_str(), schema_locked, transaction_persistent, fast_forward, max_connections, attributes.c_str(), safe_comment);
 		admindb->execute(query);
 		if (o!=o1) free(o);
 		free(o1);
@@ -961,6 +961,7 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 				( client_addr_exists ? client_addr.size() : 0 ) + 4 +
 				( proxy_addr_exists ? proxy_addr.size() : 0 ) + 4 +
 				proxy_port_str.size() + 4 +
+				( digest_exists ? digest.size() : 0 ) + 4 +
 				( match_digest_exists ? match_digest.size() : 0 ) + 4 +
 				( match_pattern_exists ? match_pattern.size() : 0 ) + 4 +
 				negate_match_pattern_str.size() + 4 +
@@ -2780,6 +2781,7 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 			(client_addr_exists ? client_addr.size() : 0) + 4 +
 			(proxy_addr_exists ? proxy_addr.size() : 0) + 4 +
 			proxy_port_str.size() + 4 +
+			(digest_exists ? digest.size() : 0) + 4 +
 			(match_digest_exists ? match_digest.size() : 0) + 4 +
 			(match_pattern_exists ? match_pattern.size() : 0) + 4 +
 			negate_match_pattern_str.size() + 4 +
