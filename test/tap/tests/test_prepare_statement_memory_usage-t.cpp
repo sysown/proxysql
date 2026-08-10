@@ -204,8 +204,7 @@ int read_memory_usage(MYSQL* admin, MemoryUsage& memory, std::string& error) {
 	return EXIT_SUCCESS;
 }
 
-int read_stable_sample(MYSQL* admin, StableSample& sample, std::string& error) {
-	const uint64_t deadline {monotonic_time() + kStableSampleTimeoutUs};
+int read_stable_sample(MYSQL* admin, StableSample& sample, std::string& error, uint64_t deadline) {
 	StatementSnapshot before;
 	StatementSnapshot after;
 	while (monotonic_time() < deadline) {
@@ -213,6 +212,9 @@ int read_stable_sample(MYSQL* admin, StableSample& sample, std::string& error) {
 			read_memory_usage(admin, sample.memory, error) != EXIT_SUCCESS ||
 			read_statement_snapshot(admin, after, error) != EXIT_SUCCESS) {
 			return EXIT_FAILURE;
+		}
+		if (monotonic_time() >= deadline) {
+			break;
 		}
 		if (before == after) {
 			sample.statements = std::move(after);
@@ -223,6 +225,10 @@ int read_stable_sample(MYSQL* admin, StableSample& sample, std::string& error) {
 
 	error = "stable prepared-statement sample could not be obtained before the deadline";
 	return EXIT_FAILURE;
+}
+
+int read_stable_sample(MYSQL* admin, StableSample& sample, std::string& error) {
+	return read_stable_sample(admin, sample, error, monotonic_time() + kStableSampleTimeoutUs);
 }
 
 bool same_unrelated_statements(
@@ -275,14 +281,17 @@ struct MeasurementResult {
 	MemoryUsage before;
 	MemoryUsage after;
 	std::string error;
+	bool frontend_released {true};
 };
 
-int wait_for_client_release(MYSQL* admin, const std::string& target_query, std::string& error) {
-	const uint64_t deadline {monotonic_time() + kStableSampleTimeoutUs};
+int wait_for_client_release(MYSQL* admin, const std::string& target_query, std::string& error, uint64_t deadline) {
 	while (monotonic_time() < deadline) {
 		StatementSnapshot snapshot;
 		if (read_statement_snapshot(admin, snapshot, error) != EXIT_SUCCESS) {
 			return EXIT_FAILURE;
+		}
+		if (monotonic_time() >= deadline) {
+			break;
 		}
 
 		bool target_found {false};
@@ -307,12 +316,16 @@ int wait_for_client_release(MYSQL* admin, const std::string& target_query, std::
 	return EXIT_FAILURE;
 }
 
-MeasurementResult measure_once(MYSQL* admin, MYSQL* frontend, const std::string& query) {
+int wait_for_client_release(MYSQL* admin, const std::string& target_query, std::string& error) {
+	return wait_for_client_release(admin, target_query, error, monotonic_time() + kStableSampleTimeoutUs);
+}
+
+MeasurementResult measure_once(MYSQL* admin, MYSQL* frontend, const std::string& query, uint64_t deadline) {
 	MeasurementResult result;
 	result.query = query;
 
 	StableSample before;
-	if (read_stable_sample(admin, before, result.error) != EXIT_SUCCESS) {
+	if (read_stable_sample(admin, before, result.error, deadline) != EXIT_SUCCESS) {
 		return result;
 	}
 	result.before = before.memory;
@@ -329,7 +342,7 @@ MeasurementResult measure_once(MYSQL* admin, MYSQL* frontend, const std::string&
 	}
 
 	StableSample after;
-	const bool after_sampled {read_stable_sample(admin, after, result.error) == EXIT_SUCCESS};
+	const bool after_sampled {read_stable_sample(admin, after, result.error, deadline) == EXIT_SUCCESS};
 	if (after_sampled) {
 		result.after = after.memory;
 	}
@@ -338,14 +351,24 @@ MeasurementResult measure_once(MYSQL* admin, MYSQL* frontend, const std::string&
 		after_sampled ? describe_unrelated_statement_changes(before.statements, after.statements, query) : ""
 	};
 
-	if (mysql_stmt_close(stmt) != 0) {
-		result.error = "mysql_stmt_close failed: " + std::string(mysql_error(frontend));
+	const bool close_succeeded {mysql_stmt_close(stmt) == 0};
+	const std::string close_error {
+		close_succeeded ? "" : "mysql_stmt_close failed: " + std::string(mysql_error(frontend))
+	};
+	std::string release_error;
+	result.frontend_released = wait_for_client_release(admin, query, release_error, deadline) == EXIT_SUCCESS;
+	if (!result.frontend_released) {
+		result.error = release_error;
+		if (!close_succeeded) {
+			result.error = close_error + "; " + result.error;
+		}
+		return result;
+	}
+	if (!close_succeeded) {
+		result.error = close_error;
 		return result;
 	}
 	if (!after_sampled) {
-		return result;
-	}
-	if (wait_for_client_release(admin, query, result.error) != EXIT_SUCCESS) {
 		return result;
 	}
 	if (!uncontaminated) {
@@ -359,19 +382,23 @@ MeasurementResult measure_once(MYSQL* admin, MYSQL* frontend, const std::string&
 	return result;
 }
 
+MeasurementResult measure_once(MYSQL* admin, MYSQL* frontend, const std::string& query) {
+	return measure_once(admin, frontend, query, monotonic_time() + kStableSampleTimeoutUs);
+}
+
 MeasurementResult measure_new_statement(MYSQL* admin, MYSQL* frontend, uint64_t& sequence) {
 	const uint64_t deadline {monotonic_time() + kStableSampleTimeoutUs};
 	MeasurementResult result;
-	do {
+	while (monotonic_time() < deadline) {
 		const std::string query {
 			"SELECT 1 AS test_prepare_statement_memory_usage_" +
 			std::to_string(getpid()) + "_" + std::to_string(sequence++)
 		};
-		result = measure_once(admin, frontend, query);
+		result = measure_once(admin, frontend, query, deadline);
 		if (result.status != MeasurementStatus::kContaminated) {
 			return result;
 		}
-	} while (monotonic_time() < deadline);
+	}
 
 	result.error = "measurement deadline expired after contaminated samples: " + result.error;
 	return result;
@@ -380,12 +407,12 @@ MeasurementResult measure_new_statement(MYSQL* admin, MYSQL* frontend, uint64_t&
 MeasurementResult measure_existing_statement(MYSQL* admin, MYSQL* frontend, const std::string& query) {
 	const uint64_t deadline {monotonic_time() + kStableSampleTimeoutUs};
 	MeasurementResult result;
-	do {
-		result = measure_once(admin, frontend, query);
+	while (monotonic_time() < deadline) {
+		result = measure_once(admin, frontend, query, deadline);
 		if (result.status != MeasurementStatus::kContaminated) {
 			return result;
 		}
-	} while (monotonic_time() < deadline);
+	}
 
 	result.error = "measurement deadline expired after contaminated samples: " + result.error;
 	return result;
@@ -395,6 +422,15 @@ MeasurementResult failed_dependent_reuse(const MeasurementResult& new_measuremen
 	MeasurementResult result;
 	result.query = new_measurement.query;
 	result.error = "dependent reuse was not attempted because new-statement measurement failed: " + new_measurement.error;
+	return result;
+}
+
+MeasurementResult failed_frontend_settlement(const MeasurementResult& previous_measurement) {
+	MeasurementResult result;
+	result.query = previous_measurement.query;
+	result.error = "measurement was not attempted because client reference settlement was not confirmed: " +
+		previous_measurement.error;
+	result.frontend_released = false;
 	return result;
 }
 
@@ -452,19 +488,25 @@ int main(int argc, char** argv) {
 
 	uint64_t sequence {0};
 	const MeasurementResult first_new {measure_new_statement(proxysql_admin, proxysql, sequence)};
-	const MeasurementResult second_new {measure_new_statement(proxysql_admin, proxysql, sequence)};
+	const MeasurementResult second_new {
+		first_new.frontend_released
+			? measure_new_statement(proxysql_admin, proxysql, sequence)
+			: failed_frontend_settlement(first_new)
+	};
 	report_measurement(first_new, false);
 	report_measurement(second_new, false);
 
 	const MeasurementResult first_reuse {
-		first_new.status == MeasurementStatus::kAccepted
+		first_new.status == MeasurementStatus::kAccepted && second_new.frontend_released
 			? measure_existing_statement(proxysql_admin, proxysql, first_new.query)
-			: failed_dependent_reuse(first_new)
+			: (!second_new.frontend_released ? failed_frontend_settlement(second_new)
+				: failed_dependent_reuse(first_new))
 	};
 	const MeasurementResult second_reuse {
-		second_new.status == MeasurementStatus::kAccepted
+		second_new.status == MeasurementStatus::kAccepted && first_reuse.frontend_released
 			? measure_existing_statement(proxysql_admin, proxysql, second_new.query)
-			: failed_dependent_reuse(second_new)
+			: (!first_reuse.frontend_released ? failed_frontend_settlement(first_reuse)
+				: failed_dependent_reuse(second_new))
 	};
 	report_measurement(first_reuse, true);
 	report_measurement(second_reuse, true);
