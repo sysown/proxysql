@@ -257,12 +257,16 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 	if (query_no_space_length==SELECT_VERSION_COMMENT_LEN) {
 		if (!strncasecmp(SELECT_VERSION_COMMENT, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
-			char *a = (char *)"SELECT '(ProxySQL Automated Test Server) - %s'";
 			const char* proxy_addr = sess->client_myds->proxy_addr.addr;
-			size_t query_len = strlen(a) + (proxy_addr ? strlen(proxy_addr) : 0);
-			query = (char *)malloc(query_len);
-			snprintf(query, query_len, a, proxy_addr ? proxy_addr : "");
-			query_length=strlen(query)+1;
+			const std::string query_text =
+				std::string("SELECT '(ProxySQL Automated Test Server) - ")
+				+ (proxy_addr ? proxy_addr : "") + "'";
+			query = l_strdup(query_text.c_str());
+			if (!query) {
+				l_free(pkt->size-sizeof(mysql_hdr), query_no_space);
+				return;
+			}
+			query_length = query_text.size() + 1;
 			goto __run_query;
 		}
 	}
@@ -270,21 +274,16 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 	if (query_no_space_length==SELECT_DB_USER_LEN) {
 		if (!strncasecmp(SELECT_DB_USER, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
-			char *query1=(char *)"SELECT \"admin\" AS 'DATABASE()', \"%s\" AS 'USER()'";
 			const char* username = sess->client_myds->myconn->userinfo->username;
-			size_t query2_len = strlen(query1) + (username ? strlen(username) : 0) + 1;
-			mf_unique_ptr<char> query2 { (char *)malloc(query2_len) };
-			if (!query2) {
-				l_free(pkt->size-sizeof(mysql_hdr), query_no_space);
-				return;
-			}
-			snprintf(query2.get(), query2_len, query1, username ? username : "");
-			query=l_strdup(query2.get());
+			const std::string query_text =
+				std::string("SELECT \"admin\" AS 'DATABASE()', \"")
+				+ (username ? username : "") + "\" AS 'USER()'";
+			query = l_strdup(query_text.c_str());
 			if (!query) {
 				l_free(pkt->size-sizeof(mysql_hdr), query_no_space);
 				return;
 			}
-			query_length=strlen(query)+1;
+			query_length = query_text.size() + 1;
 			goto __run_query;
 		}
 	}
@@ -387,23 +386,32 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		size_t tbh_len = strlen(tbh);
 		if (tbh_len>=3 && tbh[0]=='`' && tbh[tbh_len-1]=='`') { // tablename is quoted
 			size_t db_len = tbh_len - 2;
-			mf_unique_ptr<char> tbh_tmp { (char *)malloc(db_len + 1) };
-			if (tbh_tmp) {
-				memcpy(tbh_tmp.get(), tbh + 1, db_len);
-				tbh_tmp.get()[db_len] = 0;
-				free(tbh);
-				tbh = tbh_tmp.release();
+			const std::string unquoted_table(tbh + 1, db_len);
+			free(tbh);
+			tbh = l_strdup(unquoted_table.c_str());
+			if (!tbh) {
+				free(dbh);
+				l_free(query_length, query);
+				return;
 			}
 		}
-		int l=strBl+strlen(tbh)*3+strlen(dbh)-8;
-		char *buff=(char *)l_alloc(l+1);
-		snprintf(buff,l+1,strB,tbh,tbh,dbh,tbh);
-		buff[l]=0;
+		const std::string table_query =
+			std::string("SELECT name AS 'table' , REPLACE(REPLACE(sql,' , ', X'2C0A20202020'),")
+			+ "'CREATE TABLE " + tbh + " (','CREATE TABLE " + tbh
+			+ " ('||X'0A20202020') AS 'Create Table' FROM " + dbh
+			+ ".sqlite_master WHERE type='table' AND name='" + tbh + "'";
+		char *buff = l_strdup(table_query.c_str());
+		if (!buff) {
+			free(tbh);
+			free(dbh);
+			l_free(query_length, query);
+			return;
+		}
 		free(tbh);
 		free(dbh);
 		l_free(query_length,query);
 		query=buff;
-		query_length=l+1;
+		query_length=table_query.size()+1;
 		goto __run_query;
 	}
 
