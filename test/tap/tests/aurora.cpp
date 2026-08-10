@@ -10,6 +10,7 @@
 #include "MySQL_Data_Stream.h"
 #include "query_processor.h"
 #include "SQLite3_Server.h"
+#include "proxysql_utils.h"
 
 #include <search.h>
 #include <stdlib.h>
@@ -272,11 +273,18 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 			char *query1=(char *)"SELECT \"admin\" AS 'DATABASE()', \"%s\" AS 'USER()'";
 			const char* username = sess->client_myds->myconn->userinfo->username;
 			size_t query2_len = strlen(query1) + (username ? strlen(username) : 0) + 1;
-			char *query2=(char *)malloc(query2_len);
-			snprintf(query2, query2_len, query1, username ? username : "");
-			query=l_strdup(query2);
-			query_length=strlen(query2)+1;
-			free(query2);
+			mf_unique_ptr<char> query2 { (char *)malloc(query2_len) };
+			if (!query2) {
+				l_free(pkt->size-sizeof(mysql_hdr), query_no_space);
+				return;
+			}
+			snprintf(query2.get(), query2_len, query1, username ? username : "");
+			query=l_strdup(query2.get());
+			if (!query) {
+				l_free(pkt->size-sizeof(mysql_hdr), query_no_space);
+				return;
+			}
+			query_length=strlen(query)+1;
 			goto __run_query;
 		}
 	}
@@ -379,11 +387,13 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		size_t tbh_len = strlen(tbh);
 		if (tbh_len>=3 && tbh[0]=='`' && tbh[tbh_len-1]=='`') { // tablename is quoted
 			size_t db_len = tbh_len - 2;
-			char *tbh_tmp=(char *)malloc(db_len+1);
-			memcpy(tbh_tmp,tbh+1,db_len);
-			tbh_tmp[db_len]=0;
-			free(tbh);
-			tbh=tbh_tmp;
+			mf_unique_ptr<char> tbh_tmp { (char *)malloc(db_len + 1) };
+			if (tbh_tmp) {
+				memcpy(tbh_tmp.get(), tbh + 1, db_len);
+				tbh_tmp.get()[db_len] = 0;
+				free(tbh);
+				tbh = tbh_tmp.release();
+			}
 		}
 		int l=strBl+strlen(tbh)*3+strlen(dbh)-8;
 		char *buff=(char *)l_alloc(l+1);
