@@ -5,7 +5,6 @@
  */
 
 #include <algorithm>
-#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -58,7 +57,7 @@ constexpr uint64_t kStableSampleTimeoutUs {5ULL * 1000ULL * 1000ULL};
 constexpr useconds_t kPollIntervalUs {10U * 1000U};
 
 bool parse_uint64(const std::string& text, const std::string& field, uint64_t& value, std::string& error) {
-	if (text.empty() || !std::all_of(text.begin(), text.end(), [](unsigned char c) { return std::isdigit(c) != 0; })) {
+	if (text.empty() || !std::all_of(text.begin(), text.end(), [](unsigned char c) { return c >= '0' && c <= '9'; })) {
 		error = "invalid numeric value for " + field + ": '" + text + "'";
 		return false;
 	}
@@ -216,15 +215,13 @@ int read_stable_sample(MYSQL* admin, StableSample& sample, std::string& error, u
 			read_statement_snapshot(admin, after, error) != EXIT_SUCCESS) {
 			return EXIT_FAILURE;
 		}
-		if (before != after) {
-			last_difference = describe_statement_changes(before, after);
-		}
-		if (monotonic_time() >= deadline) {
-			break;
-		}
 		if (before == after) {
 			sample.statements = std::move(after);
 			return EXIT_SUCCESS;
+		}
+		last_difference = describe_statement_changes(before, after);
+		if (monotonic_time() >= deadline) {
+			break;
 		}
 		usleep(kPollIntervalUs);
 	}
@@ -257,7 +254,7 @@ std::string describe_unrelated_statement_changes(
 std::string describe_statement_changes(const StatementSnapshot& before, const StatementSnapshot& after) {
 	std::ostringstream diagnostic;
 	bool first {true};
-	const auto append_change {[&](const std::string& description) {
+	const auto append_change {[&diagnostic, &first](const std::string& description) {
 		if (!first) {
 			diagnostic << ", ";
 		}
@@ -303,24 +300,19 @@ int wait_for_client_release(MYSQL* admin, const std::string& target_query, std::
 		if (read_statement_snapshot(admin, snapshot, error) != EXIT_SUCCESS) {
 			return EXIT_FAILURE;
 		}
-		if (monotonic_time() >= deadline) {
-			break;
-		}
-
-		bool target_found {false};
-		bool released {true};
+		bool client_reference_present {false};
 		for (const auto& [global_stmt_id, info] : snapshot) {
 			(void)global_stmt_id;
-			if (info.query == target_query) {
-				target_found = true;
-				if (info.ref_count_client != 0) {
-					released = false;
-					break;
-				}
+			if (info.query == target_query && info.ref_count_client != 0) {
+				client_reference_present = true;
+				break;
 			}
 		}
-		if (!target_found || released) {
+		if (!client_reference_present) {
 			return EXIT_SUCCESS;
+		}
+		if (monotonic_time() >= deadline) {
+			break;
 		}
 		usleep(kPollIntervalUs);
 	}
