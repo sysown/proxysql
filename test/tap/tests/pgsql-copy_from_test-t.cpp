@@ -135,7 +135,7 @@ void write_int16(uint8_t* dest, int16_t value) {
     dest[1] = value & 0xFF;
 }
 
-bool encodeNumericBinary(uint8_t* out, const char* numStr) {
+int encodeNumericBinary(uint8_t* out, const char* numStr) {
     int16_t numDigits = 0, weight = 0, sign = 0x0000, scale = 0;
     int16_t digits[64] = { 0 }; // Temporary storage for up to 64 4-digit groups
     size_t digitCount = 0;
@@ -154,12 +154,15 @@ bool encodeNumericBinary(uint8_t* out, const char* numStr) {
 
     // Combine integer and fractional parts into a single string of digits
     char combined[128] = { 0 };
-    size_t copy_len = std::min(intPartLen, sizeof(combined)-1);
+    if (intPartLen >= sizeof(combined) || fracPartLen > sizeof(combined) - 1 - intPartLen) {
+        return -1;
+    }
+    size_t copy_len = intPartLen;
     memcpy(combined, numericPart, copy_len);
     combined[copy_len] = 0;
     if (fracPartLen > 0) {
         size_t combined_len = strlen(combined);
-        size_t copy_len_frac = std::min(fracPartLen, sizeof(combined) - combined_len - 1);
+        size_t copy_len_frac = fracPartLen;
         memcpy(combined + combined_len, dotPos + 1, copy_len_frac);
         combined[combined_len + copy_len_frac] = 0;
     }
@@ -470,8 +473,13 @@ void testSTDIN_TEXT_BINARY(PGconn* admin_conn, PGconn* conn, std::fstream& f_pro
             } else if (columns_type[j] == NUMERIC) {
                 uint8_t* prev_pos = (row + offset);
                 offset += sizeof(int32_t);
-                bool has_digits = encodeNumericBinary(row + offset, data.c_str());
-                if (has_digits) {
+                int digit_count = encodeNumericBinary(row + offset, data.c_str());
+                if (digit_count < 0) {
+                    fprintf(stderr, "Numeric value is too long for the binary COPY test buffer: %s\n", data.c_str());
+                    success = false;
+                    break;
+                }
+                if (digit_count > 0) {
                     write_int32(prev_pos, 12);
                     offset += 12;
                 } else {
@@ -480,6 +488,9 @@ void testSTDIN_TEXT_BINARY(PGconn* admin_conn, PGconn* conn, std::fstream& f_pro
                 }
             }
         }
+		if (!success) {
+			break;
+		}
 
         bool last = (i == (test_data.size() - 1));
 
@@ -494,6 +505,9 @@ void testSTDIN_TEXT_BINARY(PGconn* admin_conn, PGconn* conn, std::fstream& f_pro
     }
 
     ok(success, "Copy data transmission should be successful");
+    if (!success) {
+        return;
+    }
 
     PGresult* res = PQgetResult(conn);
 
