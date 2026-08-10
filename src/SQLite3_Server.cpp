@@ -27,6 +27,7 @@
 #include <resolv.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include <random>
 #include <pthread.h>
 #ifndef SPOOKYV2
 #include "SpookyV2.h"
@@ -37,6 +38,14 @@
 #include <sys/utsname.h>
 
 using std::string;
+
+#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP) || defined(TEST_READONLY) || defined(TEST_REPLICATIONLAG) || defined(TEST_RDS_BGD)
+static int random_replication_lag_seconds() {
+	static thread_local std::random_device random_source;
+	static thread_local std::uniform_int_distribution<int> distribution(10, 39);
+	return distribution(random_source);
+}
+#endif
 
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
 #define SELECT_VERSION_COMMENT_LEN 32
@@ -1064,7 +1073,7 @@ __run_query:
 					free(query);
 					char *a = (char *)"SELECT %d as Seconds_Behind_Master";
 					query = (char *)malloc(strlen(a)+4);
-					snprintf(query, strlen(a)+4, a, rand()%30+10);
+					snprintf(query, strlen(a)+4, a, random_replication_lag_seconds());
 				}
 			}
 #endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP || TEST_READONLY || TEST_REPLICATIONLAG || TEST_RDS_BGD
