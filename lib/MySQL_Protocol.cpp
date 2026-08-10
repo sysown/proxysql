@@ -2364,8 +2364,9 @@ static bool caching_sha2_fast_auth_verify(
 	unsigned char c[SHA256_DIGEST_LENGTH+20];
 	unsigned char d[SHA256_DIGEST_LENGTH];
 	unsigned char e[SHA256_DIGEST_LENGTH];
-	const size_t cleartext_password_len = strlen(cleartext_password);
-	SHA256((const unsigned char *)cleartext_password, cleartext_password_len, a);
+	const char* safe_cleartext_password = cleartext_password ? cleartext_password : "";
+	const size_t cleartext_password_len = strlen(safe_cleartext_password);
+	SHA256((const unsigned char *)safe_cleartext_password, cleartext_password_len, a);
 	SHA256(a, SHA256_DIGEST_LENGTH, b);
 	memcpy(c,b,SHA256_DIGEST_LENGTH);
 	memcpy(c+SHA256_DIGEST_LENGTH, scramble, 20);
@@ -2614,8 +2615,11 @@ void MySQL_Protocol::PPHR_passthrough_init(MyProt_tmp_auth_vars& vars1) {
 		// userinfo->password at probe-acquire time (after the epilogue has
 		// run), so it becomes the auth password for mysql_real_connect_start.
 		if ((*myds)->passthrough_cleartext) {
-			const size_t passthrough_cleartext_len = strlen((*myds)->passthrough_cleartext);
-			memset((*myds)->passthrough_cleartext, 0, passthrough_cleartext_len);
+			char* passthrough_cleartext = (*myds)->passthrough_cleartext;
+			const size_t passthrough_cleartext_len = passthrough_cleartext ? strlen(passthrough_cleartext) : 0;
+			if (passthrough_cleartext_len) {
+				memset(passthrough_cleartext, 0, passthrough_cleartext_len);
+			}
 			free((*myds)->passthrough_cleartext);
 			(*myds)->passthrough_cleartext = NULL;
 		}
@@ -2755,12 +2759,12 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 	// caching_sha2_password full-auth exchange and ultimately schedules a
 	// backend probe via AUTHENTICATING_BACKEND_FOR_CLIENT.
 	{
-			const size_t vars1_password_len =
-				vars1.password != NULL ? strlen(vars1.password) : 0;
-			const bool empty_pw_case =
-				mysql_thread___passthrough_auth_empty_password
-				&& vars1.password != NULL
-				&& vars1_password_len == 0;
+		const char* safe_pass = vars1.password ? (const char*)vars1.password : "";
+		const size_t vars1_password_len = strlen(safe_pass);
+		const bool empty_pw_case =
+			mysql_thread___passthrough_auth_empty_password
+			&& vars1.password != NULL
+			&& vars1_password_len == 0;
 		const bool unknown_user_case =
 			mysql_thread___passthrough_auth_unknown_users
 			&& vars1.password == NULL;
