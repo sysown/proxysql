@@ -71,14 +71,15 @@ bool executeQueries(PGconn* conn, const std::vector<std::string>& queries) {
         if (fs != NULL) {
             qtlen = (fs - query) + 1;
         }
-        char buf[qtlen];
-        memcpy(buf, query, qtlen - 1);
-        buf[qtlen - 1] = 0;
+        std::string query_type(query, qtlen - 1);
+        for (char& c : query_type) {
+            c = static_cast<char>(toupper((unsigned char)c));
+        }
 
-        if (strncasecmp(buf, "SELECT", sizeof("SELECT") - 1) == 0) {
+        if (query_type == "SELECT") {
             return PGRES_TUPLES_OK;
         }
-        if (strncasecmp(buf, "COPY", sizeof("COPY") - 1) == 0) {
+        if (query_type == "COPY") {
             return PGRES_COPY_OUT;
         }
 
@@ -632,8 +633,8 @@ const char* escape_string_backslash_spaces(const char* input) {
 
     for (c = input; *c != '\0'; c++) {
         if ((*c == ' ')) {
-            memcpy(p, "\\\\", 2);
-            p += 2;
+            *p++ = '\\';
+            *p++ = '\\';
         }
         else if (*c == '\\') {
             *(p++) = '\\';
