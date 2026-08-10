@@ -22,15 +22,17 @@
 **Files:**
 - Create: `test/deps/cluster_simulator/tests/common_utils_unit-t.cpp`
 - Modify: `test/deps/cluster_simulator/Makefile`
+- Modify: `test/infra/control/cluster-simulator-ci.bash`
 
 **Interfaces:**
 - Consumes: `server_status`, `matching_server_status()`, and `cluster_status_to_json()` from `lib/common_utils.h`.
-- Produces: `common_utils_unit-t`, a focused TAP binary runnable with `make common_utils_unit-t && ./common_utils_unit-t`.
+- Produces: `common_utils_unit-t`, a focused TAP binary runnable through `make check` and executed by the cluster-simulator CI build.
 
 - [ ] **Step 1: Add assertions for omitted, explicit, different, and explicitly empty comments plus JSON projection.**
-- [ ] **Step 2: Build and run the focused binary.**
+- [ ] **Step 2: Add `make check` to the cluster-simulator CI build path.**
+- [ ] **Step 3: Build and run the focused binary.**
 
-  Run: `make -C test/deps/cluster_simulator common_utils_unit-t -j8 && test/deps/cluster_simulator/common_utils_unit-t`
+  Run: `make -C test/deps/cluster_simulator check -j"$(nproc)"`
 
   Expected: FAIL because the current tuple cannot distinguish omitted from explicitly empty comments and diagnostics omit comments.
 
