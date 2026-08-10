@@ -3783,10 +3783,15 @@ bool MySQL_Protocol::generate_COM_QUERY_from_COM_FIELD_LIST(PtrSize_t *pkt) {
 	a = memchr((void *)pkt_ptr, 0, o_pkt_size-5);
 	if (a==NULL) return false; // we failed to parse
 	char *tablename = strdup(pkt_ptr);
-	unsigned int wild_len = o_pkt_size - 5 - strlen(tablename) - 1;
+	if (tablename == nullptr) {
+		l_free(pkt->size, pkt->ptr);
+		return false;
+	}
+	const size_t tablename_len = strlen(tablename);
+	unsigned int wild_len = o_pkt_size - 5 - tablename_len - 1;
 	char *wild = NULL;
 	if (wild_len > 0) {
-		pkt_ptr+=strlen(tablename);
+		pkt_ptr += tablename_len;
 		pkt_ptr++;
 		wild=strndup(pkt_ptr,wild_len);
 	}
@@ -3800,10 +3805,11 @@ bool MySQL_Protocol::generate_COM_QUERY_from_COM_FIELD_LIST(PtrSize_t *pkt) {
 	}
 
 	char *qt = (char *)"SELECT * FROM `%s` WHERE 1=0";
-	q = (char *)malloc(strlen(qt)+strlen(tablename));
-	sprintf(q,qt,tablename);
+	size_t q_len = snprintf(NULL, 0, qt, tablename);
+	q = (char *)malloc(q_len + 1);
+	sprintf(q, qt, tablename);
 	l_free(pkt->size, pkt->ptr);
-	pkt->size = strlen(q)+5;
+	pkt->size = q_len + 5;
 	mysql_hdr Hdr;
 	Hdr.pkt_id=1;
 	Hdr.pkt_length = pkt->size - 4;
