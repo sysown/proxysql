@@ -114,7 +114,7 @@ Build the backend infra chosen in Task 1. Both variants must end at the same con
 - Create: `test/infra/infra-pgsql17-repl-3node/` (mirror `infra-pgsql17-repl/`, add a third `pgdb3` service).
 
 **Interfaces:**
-- Produces (both variants): DNS aliases and ports consumed by later tasks, published as env vars in the infra's `env.sh` — `PGCOMPAT_PRIMARY_HOST`, `PGCOMPAT_REPLICA1_HOST`, `PGCOMPAT_REPLICA2_HOST`, `PGCOMPAT_BACKEND_PORT`. (dbdeployer single-container → one host, three ports; native → three hosts, port 5432.)
+- Produces (both variants): DNS aliases and ports consumed by later tasks, published as env vars in the infra's `env.sh` — a `_HOST`/`_PORT` **pair per node**: `PGCOMPAT_PRIMARY_HOST`/`PGCOMPAT_PRIMARY_PORT`, `PGCOMPAT_REPLICA1_HOST`/`PGCOMPAT_REPLICA1_PORT`, `PGCOMPAT_REPLICA2_HOST`/`PGCOMPAT_REPLICA2_PORT`. There is deliberately **no** single `PGCOMPAT_BACKEND_PORT`: the dbdeployer variant puts all three nodes in one container on three different ports, so a shared port var cannot address the replicas. (dbdeployer → one host, three ports; native → three hosts, each on 5432.)
 
 - [ ] **Step 1: Scaffold the infra directory**
 
@@ -162,10 +162,15 @@ Create `test/tap/groups/pg-compat/env.sh` (group dir) exporting the endpoints an
 ```bash
 export INFRA_TYPE="infra-pgsql17-repl-3node"   # or infra-dbdeployer-pgsql17-repl
 export PGCOMPAT_PRIMARY_HOST="pgsql1.${INFRA_ID}"
+export PGCOMPAT_PRIMARY_PORT="5432"
 export PGCOMPAT_REPLICA1_HOST="pgsql2.${INFRA_ID}"
+export PGCOMPAT_REPLICA1_PORT="5432"
 export PGCOMPAT_REPLICA2_HOST="pgsql3.${INFRA_ID}"
-export PGCOMPAT_BACKEND_PORT="5432"
+export PGCOMPAT_REPLICA2_PORT="5432"
 ```
+Each node carries its own port so the same contract covers the dbdeployer
+variant, where all three nodes share `dbdeployer1` and differ only by port
+(16710/16711/16712).
 and `test/tap/groups/pg-compat/infras.lst` with the single infra name (per the `infras.lst` mechanism in `ensure-infras.bash`).
 
 - [ ] **Step 6: Bring it up and verify replication + extension**
@@ -369,8 +374,10 @@ NETWORK="${INFRA_ID}_backend"
 source "${WORKSPACE}/test/tap/groups/pg-compat/env.sh"
 docker build -t proxysql-pg-compat:latest "${WORKSPACE}/test/pg-compat"
 docker run --rm --network "${NETWORK}" \
-  -e INFRA_ID -e PGCOMPAT_PRIMARY_HOST -e PGCOMPAT_REPLICA1_HOST -e PGCOMPAT_REPLICA2_HOST \
-  -e PGCOMPAT_BACKEND_PORT -e PGCOMPAT_TOXI_ADMIN -e PGCOMPAT_TOXI_PRIMARY \
+  -e INFRA_ID -e PGCOMPAT_PRIMARY_HOST -e PGCOMPAT_PRIMARY_PORT \
+  -e PGCOMPAT_REPLICA1_HOST -e PGCOMPAT_REPLICA1_PORT \
+  -e PGCOMPAT_REPLICA2_HOST -e PGCOMPAT_REPLICA2_PORT \
+  -e PGCOMPAT_TOXI_ADMIN -e PGCOMPAT_TOXI_PRIMARY \
   -e PGCOMPAT_TOXI_REPLICA1 -e PGCOMPAT_TOXI_REPLICA2 \
   -e PGCOMPAT_PROXY_HOST="proxysql" -e PGCOMPAT_PROXY_PORT="6133" \
   -e PGCOMPAT_ADMIN_HOST="proxysql" -e PGCOMPAT_ADMIN_PORT="6132" \
@@ -519,7 +526,7 @@ def _dsn(host, port, dbname="testuser", user="testuser", pw="testuser"):
     return f"host={host} port={port} user={user} password={pw} dbname={dbname} sslmode=disable"
 
 def _proxy():   return _dsn(os.environ["PGCOMPAT_PROXY_HOST"], os.environ["PGCOMPAT_PROXY_PORT"])
-def _direct():  return _dsn(os.environ["PGCOMPAT_PRIMARY_HOST"], os.environ["PGCOMPAT_BACKEND_PORT"])
+def _direct():  return _dsn(os.environ["PGCOMPAT_PRIMARY_HOST"], os.environ["PGCOMPAT_PRIMARY_PORT"])
 
 @dataclass
 class Target:
@@ -545,6 +552,8 @@ def all_targets(admin):
 `test/pg-compat/harness/diff.py` — parses case metadata, sets the backend mode per target, runs, and compares status tag + column names + type OIDs + rows:
 ```python
 import re
+from fnmatch import fnmatchcase
+
 import psycopg
 
 def _parse(case_file):
@@ -572,8 +581,11 @@ def run_case(case_file, targets, admin=None):
     stmts, skip, only = _parse(case_file)
     results = {}
     for t in targets:
-        if t.name in skip: continue
-        if only and t.name not in only: continue
+        # Glob matching, so a documented pattern such as "proxy_native_*"
+        # actually selects the native targets; a plain name with no
+        # metacharacter still compares as an exact match.
+        if any(fnmatchcase(t.name, p) for p in skip): continue
+        if only and not any(fnmatchcase(t.name, p) for p in only): continue
         results[t.name] = _run_on(t, stmts, admin)
     return results
 
@@ -677,20 +689,22 @@ def test_select_lands_on_a_reader(proxy_conn):
 import os
 import psycopg
 
-def _c(host):
+def _c(host, port):
     return psycopg.connect(
-        f"host={host} port={os.environ['PGCOMPAT_BACKEND_PORT']} user=testuser password=testuser dbname=testuser sslmode=disable",
+        f"host={host} port={port} user=testuser password=testuser dbname=testuser sslmode=disable",
         autocommit=True)
 
+# Each backend carries its own port: under dbdeployer all three share a host
+# and differ only by port, so keying on host alone cannot reach the replicas.
 _BACKENDS = {
-    "primary":  "PGCOMPAT_PRIMARY_HOST",
-    "replica1": "PGCOMPAT_REPLICA1_HOST",
-    "replica2": "PGCOMPAT_REPLICA2_HOST",
+    "primary":  ("PGCOMPAT_PRIMARY_HOST",  "PGCOMPAT_PRIMARY_PORT"),
+    "replica1": ("PGCOMPAT_REPLICA1_HOST", "PGCOMPAT_REPLICA1_PORT"),
+    "replica2": ("PGCOMPAT_REPLICA2_HOST", "PGCOMPAT_REPLICA2_PORT"),
 }
 
 def reset_all():
-    for env in _BACKENDS.values():
-        with _c(os.environ[env]) as conn, conn.cursor() as cur:
+    for host_env, port_env in _BACKENDS.values():
+        with _c(os.environ[host_env], os.environ[port_env]) as conn, conn.cursor() as cur:
             cur.execute("SELECT pg_stat_statements_reset()")
 
 def calls_for(pattern):

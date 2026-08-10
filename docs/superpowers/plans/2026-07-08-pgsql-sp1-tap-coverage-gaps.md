@@ -557,32 +557,44 @@ static const std::vector<Case> cases = {
     { "bytea",       "SELECT '\\xdeadbeef'::bytea",        "\\xdeadbeef",    17   },
     { "uuid",        "SELECT '00000000-0000-0000-0000-000000000001'::uuid",
                                                            "00000000-0000-0000-0000-000000000001", 2950 },
-    { "timestamptz", "SELECT '2020-01-01 00:00:00+00'::timestamptz AT TIME ZONE 'UTC'",
-                                                           "2020-01-01 00:00:00", 1114 },
+    // A genuine timestamptz (OID 1184). Applying AT TIME ZONE 'UTC' would yield
+    // timestamp *without* time zone (OID 1114) and never exercise timestamptz at
+    // all; instead the session pins TimeZone=UTC so the text form is deterministic.
+    { "timestamptz", "SELECT '2020-01-01 00:00:00+00'::timestamptz",
+                                                           "2020-01-01 00:00:00+00", 1184 },
     { "jsonb",       "SELECT '{\"a\":1}'::jsonb",          "{\"a\": 1}",     3802 },
     { "int4_array",  "SELECT ARRAY[1,2,3]::int4[]",        "{1,2,3}",        1007 },
     { "inet",        "SELECT '192.168.0.1'::inet",         "192.168.0.1",    869  },
 };
 
-// Runs one case through pg_lite_client at the given result format (0=text,1=binary).
-// Returns true if the RowDescription OID matches; in text format also checks the value.
-static bool run_case(const Case& c, int16_t fmt, std::string& observed_value, int32_t& observed_oid);
+// Runs one case through pg_lite_client at the given result format (0=text,1=binary),
+// capturing the RowDescription OID + per-column format code and the raw DataRow bytes.
+static bool run_case(const Case& c, int16_t fmt, Observed& obs);
 
 int main(int argc, char** argv) {
     if (cl.getEnv()) return exit_status();
 
-    // For each case: 1 text assertion (value+oid) + 1 binary assertion (oid+format code).
+    // For each case: 1 text assertion (value+oid) + 1 binary assertion
+    // (oid + format code + exact payload bytes).
     plan((int)cases.size() * 2);
 
     for (const auto& c : cases) {
-        std::string v_text, v_bin; int32_t oid_text = 0, oid_bin = 0;
-        bool ok_text = run_case(c, 0, v_text, oid_text);
-        ok(ok_text && oid_text == c.expected_oid && v_text == c.expected_text,
-           "%s text: oid=%d value='%s'", c.label, oid_text, v_text.c_str());
+        Observed t;
+        bool ok_text = run_case(c, 0, t);
+        ok(ok_text && t.col_format == 0 && t.oid == c.expected_oid && t.text_value == c.expected_text,
+           "%s text: oid=%d value='%s'", c.label, t.oid, t.text_value.c_str());
 
-        bool ok_bin = run_case(c, 1, v_bin, oid_bin);
-        ok(ok_bin && oid_bin == c.expected_oid,
-           "%s binary: oid=%d (format code honored)", c.label, oid_bin);
+        // The binary half must compare the DataRow payload byte-for-byte against
+        // the expected encoding. Asserting only the OID is NOT enough: a silent
+        // text fallback, a truncated payload, or a byte-order regression all keep
+        // the OID intact and would pass. Each Case therefore carries the exact
+        // bytes PostgreSQL's *_send() emits for its literal.
+        Observed b;
+        bool ok_bin = run_case(c, 1, b);
+        ok(ok_bin && b.col_format == 1 && b.oid == c.expected_oid
+               && !b.is_null && to_hex(b.raw_bytes) == c.expected_binary_hex,
+           "%s binary: oid=%d payload=%s (expected %s)",
+           c.label, b.oid, to_hex(b.raw_bytes).c_str(), c.expected_binary_hex);
     }
     return exit_status();
 }
