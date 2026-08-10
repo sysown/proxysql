@@ -4,94 +4,456 @@
  * @details This test assesses the memory utilization of prepared statement metadata/backend cache memory.
  */
 
+#include <algorithm>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <map>
+#include <sstream>
+#include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
+#include <unistd.h>
 #include "mysql.h"
 #include "tap.h"
 #include "command_line.h"
 #include "proxysql_utils.h"
 #include "utils.h"
 
-enum ComparisonOperator {
-	kEqual = 0x00000001,
-	kGreaterThan = 0x00000002,
-	kLessThan = 0x00000004
+struct PreparedStatementInfo {
+	std::string schemaname;
+	std::string username;
+	std::string digest;
+	uint64_t ref_count_client {0};
+	uint64_t ref_count_server {0};
+	uint64_t num_columns {0};
+	uint64_t num_params {0};
+	std::string query;
+
+	bool operator==(const PreparedStatementInfo& rhs) const {
+		return schemaname == rhs.schemaname && username == rhs.username && digest == rhs.digest &&
+			ref_count_client == rhs.ref_count_client && ref_count_server == rhs.ref_count_server &&
+			num_columns == rhs.num_columns && num_params == rhs.num_params && query == rhs.query;
+	}
 };
 
-int get_prepare_stmt_mem_usage(MYSQL* admin, uint64_t& prep_stmt_metadata_mem, uint64_t& prep_stmt_backend_mem) {
-	prep_stmt_metadata_mem = prep_stmt_backend_mem = 0;
-	MYSQL_QUERY_T(admin, "SELECT variable_name, variable_value FROM stats_memory_metrics WHERE \
-		variable_name IN ('prepare_statement_metadata_memory', 'prepare_statement_backend_memory')");
-	MYSQL_RES* myres = mysql_store_result(admin);
-	while (MYSQL_ROW myrow = mysql_fetch_row(myres)) {
-		if (strncmp(myrow[0], "prepare_statement_metadata_memory", sizeof("prepare_statement_metadata_memory") - 1) == 0) {
-			prep_stmt_metadata_mem = std::stoull(myrow[1], nullptr, 10);
-		} else if (strncmp(myrow[0], "prepare_statement_backend_memory", sizeof("prepare_statement_backend_memory") - 1) == 0) {
-			prep_stmt_backend_mem = std::stoull(myrow[1], nullptr, 10);
+using StatementSnapshot = std::map<uint64_t, PreparedStatementInfo>;
+
+struct MemoryUsage {
+	uint64_t metadata {0};
+	uint64_t backend {0};
+};
+
+struct StableSample {
+	MemoryUsage memory;
+	StatementSnapshot statements;
+};
+
+namespace {
+
+constexpr uint64_t kStableSampleTimeoutUs {5ULL * 1000ULL * 1000ULL};
+constexpr useconds_t kPollIntervalUs {10U * 1000U};
+
+bool parse_uint64(const std::string& text, const std::string& field, uint64_t& value, std::string& error) {
+	if (text.empty() || !std::all_of(text.begin(), text.end(), [](unsigned char c) { return c >= '0' && c <= '9'; })) {
+		error = "invalid numeric value for " + field + ": '" + text + "'";
+		return false;
+	}
+
+	try {
+		size_t consumed {0};
+		const unsigned long long parsed {std::stoull(text, &consumed, 10)};
+		if (consumed != text.size()) {
+			error = "invalid numeric value for " + field + ": '" + text + "'";
+			return false;
+		}
+		value = static_cast<uint64_t>(parsed);
+		return true;
+	} catch (const std::invalid_argument&) {
+		error = "invalid numeric value for " + field + ": '" + text + "'";
+	} catch (const std::out_of_range&) {
+		error = "numeric value out of range for " + field + ": '" + text + "'";
+	}
+	return false;
+}
+
+bool read_query_rows(MYSQL* admin, const std::string& query, std::vector<mysql_res_row>& rows, std::string& error) {
+	auto result {mysql_query_ext_rows(admin, query)};
+	if (result.first != EXIT_SUCCESS) {
+		error = "Admin query failed (error " + std::to_string(result.first) + "): " + mysql_error(admin);
+		return false;
+	}
+	rows = std::move(result.second);
+	return true;
+}
+
+StatementSnapshot without_target_query(const StatementSnapshot& snapshot, const std::string& target_query) {
+	StatementSnapshot filtered {snapshot};
+	for (auto it {filtered.begin()}; it != filtered.end();) {
+		if (it->second.query == target_query) {
+			it = filtered.erase(it);
 		} else {
-			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, "Invalid resultset");
-			mysql_free_result(myres);
+			++it;
+		}
+	}
+	return filtered;
+}
+
+} // namespace
+
+int read_statement_snapshot(MYSQL* admin, StatementSnapshot& snapshot, std::string& error) {
+	static const std::string query {
+		"SELECT global_stmt_id, schemaname, username, digest, "
+		"ref_count_client, ref_count_server, num_columns, num_params, query "
+		"FROM stats_mysql_prepared_statements_info "
+		"ORDER BY global_stmt_id"
+	};
+
+	std::vector<mysql_res_row> rows;
+	if (!read_query_rows(admin, query, rows, error)) {
+		return EXIT_FAILURE;
+	}
+
+	StatementSnapshot parsed;
+	for (const auto& row : rows) {
+		if (row.size() != 9) {
+			error = "prepared-statement snapshot row has " + std::to_string(row.size()) + " fields; expected 9";
+			return EXIT_FAILURE;
+		}
+
+		PreparedStatementInfo info;
+		uint64_t global_stmt_id {0};
+		if (!parse_uint64(row[0], "global_stmt_id", global_stmt_id, error) ||
+			!parse_uint64(row[4], "ref_count_client", info.ref_count_client, error) ||
+			!parse_uint64(row[5], "ref_count_server", info.ref_count_server, error) ||
+			!parse_uint64(row[6], "num_columns", info.num_columns, error) ||
+			!parse_uint64(row[7], "num_params", info.num_params, error)) {
+			return EXIT_FAILURE;
+		}
+
+		info.schemaname = row[1];
+		info.username = row[2];
+		info.digest = row[3];
+		info.query = row[8];
+		if (!parsed.emplace(global_stmt_id, std::move(info)).second) {
+			error = "prepared-statement snapshot contains duplicate global_stmt_id " + std::to_string(global_stmt_id);
 			return EXIT_FAILURE;
 		}
 	}
-	mysql_free_result(myres);
+
+	snapshot = std::move(parsed);
 	return EXIT_SUCCESS;
 }
 
-int check_prepare_statement_mem_usage(MYSQL* proxysql_admin, MYSQL* proxysql, const char* query, int prep_stmt_metadata_mem_comp,
-	int prep_stmt_backend_mem_comp) {
-	uint64_t old_prep_stmt_metadata_mem, old_prep_stmt_backend_mem;
-	if (get_prepare_stmt_mem_usage(proxysql_admin, old_prep_stmt_metadata_mem, old_prep_stmt_backend_mem) == EXIT_FAILURE) {
+int read_memory_usage(MYSQL* admin, MemoryUsage& memory, std::string& error) {
+	static const std::string query {
+		"SELECT variable_name, variable_value FROM stats_memory_metrics WHERE "
+		"variable_name IN ('prepare_statement_metadata_memory', 'prepare_statement_backend_memory')"
+	};
+
+	std::vector<mysql_res_row> rows;
+	if (!read_query_rows(admin, query, rows, error)) {
 		return EXIT_FAILURE;
 	}
-	MYSQL_STMT* stmt = mysql_stmt_init(proxysql);
-	if (!stmt) {
-		diag("mysql_stmt_init(), out of memory\n");
-		return EXIT_FAILURE;
-	}
-	if (mysql_stmt_prepare(stmt, query, strlen(query))) {
-		diag("query: %s", query);
-		diag("mysql_stmt_prepare at line %d failed: %s", __LINE__, mysql_error(proxysql));
-		mysql_stmt_close(stmt);
-		return EXIT_FAILURE;
-	} else {
-		ok(true, "Prepare succeeded: %s", query);
-	}
-	uint64_t new_prep_stmt_metadata_mem, new_prep_stmt_backend_mem;
-	if (get_prepare_stmt_mem_usage(proxysql_admin, new_prep_stmt_metadata_mem, new_prep_stmt_backend_mem) == EXIT_FAILURE) {
-		mysql_stmt_close(stmt);
-		return EXIT_FAILURE;
-	}
-	auto fnCompare = [](const uint64_t& val1, const uint64_t& val2, int co) -> bool {
-		bool res = false;
-		if ((co & kLessThan) == kLessThan) {
-			if ((co & kEqual) == kEqual) {
-				res = (val1 >= val2);
-			} else {
-				res = (val1 > val2);
-			}
-		} else if ((co & kGreaterThan) == kGreaterThan) {
-			if ((co & kEqual) == kEqual) {
-				res = (val1 <= val2);
-			} else {
-				res = (val1 < val2);
-			}
-		} else {
-			res = (val1 == val2);
+
+	MemoryUsage parsed;
+	bool found_metadata {false};
+	bool found_backend {false};
+	for (const auto& row : rows) {
+		if (row.size() != 2) {
+			error = "memory metrics row has " + std::to_string(row.size()) + " fields; expected 2";
+			return EXIT_FAILURE;
 		}
-		return res;
-		};
 
-	ok(fnCompare(old_prep_stmt_metadata_mem, new_prep_stmt_metadata_mem, prep_stmt_metadata_mem_comp),
-		"Memory usage check [%d]. 'prepare_statement_metadata_memory':[%lu] [%lu]", prep_stmt_metadata_mem_comp,
-		old_prep_stmt_metadata_mem, new_prep_stmt_metadata_mem);
-	
-	ok(fnCompare(old_prep_stmt_backend_mem, new_prep_stmt_backend_mem, prep_stmt_backend_mem_comp),
-		"Memory usage check [%d]. 'prepare_statement_backend_memory':[%lu] [%lu]", prep_stmt_backend_mem_comp,
-		old_prep_stmt_backend_mem, new_prep_stmt_backend_mem);
+		uint64_t value {0};
+		if (row[0] == "prepare_statement_metadata_memory") {
+			if (found_metadata) {
+				error = "duplicate prepare_statement_metadata_memory metric";
+				return EXIT_FAILURE;
+			}
+			if (!parse_uint64(row[1], row[0], value, error)) {
+				return EXIT_FAILURE;
+			}
+			parsed.metadata = value;
+			found_metadata = true;
+		} else if (row[0] == "prepare_statement_backend_memory") {
+			if (found_backend) {
+				error = "duplicate prepare_statement_backend_memory metric";
+				return EXIT_FAILURE;
+			}
+			if (!parse_uint64(row[1], row[0], value, error)) {
+				return EXIT_FAILURE;
+			}
+			parsed.backend = value;
+			found_backend = true;
+		} else {
+			error = "unknown memory metric: '" + row[0] + "'";
+			return EXIT_FAILURE;
+		}
+	}
 
-	mysql_stmt_close(stmt);
-	usleep(10000);
+	if (!found_metadata || !found_backend || rows.size() != 2) {
+		error = "memory metrics result must contain exactly the metadata and backend metrics";
+		return EXIT_FAILURE;
+	}
+
+	memory = parsed;
 	return EXIT_SUCCESS;
+}
+
+std::string describe_statement_changes(const StatementSnapshot& before, const StatementSnapshot& after);
+
+int read_stable_sample(MYSQL* admin, StableSample& sample, std::string& error, uint64_t deadline) {
+	StatementSnapshot before;
+	StatementSnapshot after;
+	std::string last_difference;
+	while (monotonic_time() < deadline) {
+		if (read_statement_snapshot(admin, before, error) != EXIT_SUCCESS ||
+			read_memory_usage(admin, sample.memory, error) != EXIT_SUCCESS ||
+			read_statement_snapshot(admin, after, error) != EXIT_SUCCESS) {
+			return EXIT_FAILURE;
+		}
+		if (before == after) {
+			sample.statements = std::move(after);
+			return EXIT_SUCCESS;
+		}
+		last_difference = describe_statement_changes(before, after);
+		if (monotonic_time() >= deadline) {
+			break;
+		}
+		usleep(kPollIntervalUs);
+	}
+
+	error = "stable prepared-statement sample could not be obtained before the deadline";
+	if (!last_difference.empty()) {
+		error += "; last statement changes: " + last_difference;
+	}
+	return EXIT_FAILURE;
+}
+
+int read_stable_sample(MYSQL* admin, StableSample& sample, std::string& error) {
+	return read_stable_sample(admin, sample, error, monotonic_time() + kStableSampleTimeoutUs);
+}
+
+bool same_unrelated_statements(
+	const StatementSnapshot& before, const StatementSnapshot& after, const std::string& target_query
+) {
+	return without_target_query(before, target_query) == without_target_query(after, target_query);
+}
+
+std::string describe_unrelated_statement_changes(
+	const StatementSnapshot& before, const StatementSnapshot& after, const std::string& target_query
+) {
+	const StatementSnapshot before_unrelated {without_target_query(before, target_query)};
+	const StatementSnapshot after_unrelated {without_target_query(after, target_query)};
+	return describe_statement_changes(before_unrelated, after_unrelated);
+}
+
+std::string describe_statement_changes(const StatementSnapshot& before, const StatementSnapshot& after) {
+	std::ostringstream diagnostic;
+	bool first {true};
+	const auto append_change {[&diagnostic, &first](const std::string& description) {
+		if (!first) {
+			diagnostic << ", ";
+		}
+		diagnostic << description;
+		first = false;
+	}};
+
+	for (const auto& [global_stmt_id, info] : after) {
+		const auto before_it {before.find(global_stmt_id)};
+		if (before_it == before.end()) {
+			append_change("added global_stmt_id " + std::to_string(global_stmt_id));
+		} else if (!(before_it->second == info)) {
+			append_change("changed global_stmt_id " + std::to_string(global_stmt_id));
+		}
+	}
+	for (const auto& [global_stmt_id, info] : before) {
+		if (after.find(global_stmt_id) == after.end()) {
+			append_change("removed global_stmt_id " + std::to_string(global_stmt_id));
+		}
+	}
+
+	return first ? "no unrelated statement changes" : diagnostic.str();
+}
+
+enum class MeasurementStatus {
+	kAccepted,
+	kContaminated,
+	kError
+};
+
+struct MeasurementResult {
+	MeasurementStatus status {MeasurementStatus::kError};
+	std::string query;
+	MemoryUsage before;
+	MemoryUsage after;
+	std::string error;
+	bool frontend_released {true};
+};
+
+int wait_for_client_release(MYSQL* admin, const std::string& target_query, std::string& error, uint64_t deadline) {
+	while (monotonic_time() < deadline) {
+		StatementSnapshot snapshot;
+		if (read_statement_snapshot(admin, snapshot, error) != EXIT_SUCCESS) {
+			return EXIT_FAILURE;
+		}
+		bool client_reference_present {false};
+		for (const auto& [global_stmt_id, info] : snapshot) {
+			(void)global_stmt_id;
+			if (info.query == target_query && info.ref_count_client != 0) {
+				client_reference_present = true;
+				break;
+			}
+		}
+		if (!client_reference_present) {
+			return EXIT_SUCCESS;
+		}
+		if (monotonic_time() >= deadline) {
+			break;
+		}
+		usleep(kPollIntervalUs);
+	}
+
+	error = "client prepared-statement reference did not reach zero before the deadline for query: " + target_query;
+	return EXIT_FAILURE;
+}
+
+int wait_for_client_release(MYSQL* admin, const std::string& target_query, std::string& error) {
+	return wait_for_client_release(admin, target_query, error, monotonic_time() + kStableSampleTimeoutUs);
+}
+
+MeasurementResult measure_once(MYSQL* admin, MYSQL* frontend, const std::string& query, uint64_t deadline) {
+	MeasurementResult result;
+	result.query = query;
+
+	StableSample before;
+	if (read_stable_sample(admin, before, result.error, deadline) != EXIT_SUCCESS) {
+		return result;
+	}
+	result.before = before.memory;
+
+	MYSQL_STMT* stmt {mysql_stmt_init(frontend)};
+	if (!stmt) {
+		result.error = "mysql_stmt_init failed: " + std::string(mysql_error(frontend));
+		return result;
+	}
+	if (mysql_stmt_prepare(stmt, query.c_str(), query.size()) != 0) {
+		const std::string prepare_error {mysql_stmt_error(stmt)};
+		result.error = "mysql_stmt_prepare failed: " + prepare_error;
+		mysql_stmt_close(stmt);
+		return result;
+	}
+
+	StableSample after;
+	const bool after_sampled {read_stable_sample(admin, after, result.error, deadline) == EXIT_SUCCESS};
+	if (after_sampled) {
+		result.after = after.memory;
+	}
+	const bool uncontaminated {after_sampled && same_unrelated_statements(before.statements, after.statements, query)};
+	const std::string contamination {
+		after_sampled ? describe_unrelated_statement_changes(before.statements, after.statements, query) : ""
+	};
+
+	const bool close_succeeded {mysql_stmt_close(stmt) == 0};
+	const std::string close_error {
+		close_succeeded ? "" : "mysql_stmt_close failed: " + std::string(mysql_error(frontend))
+	};
+	std::string release_error;
+	result.frontend_released = wait_for_client_release(admin, query, release_error, deadline) == EXIT_SUCCESS;
+	if (!result.frontend_released) {
+		result.error = release_error;
+		if (!close_succeeded) {
+			result.error = close_error + "; " + result.error;
+		}
+		return result;
+	}
+	if (!close_succeeded) {
+		result.error = close_error;
+		return result;
+	}
+	if (!after_sampled) {
+		return result;
+	}
+	if (!uncontaminated) {
+		result.status = MeasurementStatus::kContaminated;
+		result.error = "unrelated prepared-statement rows changed: " + contamination;
+		return result;
+	}
+
+	result.status = MeasurementStatus::kAccepted;
+	return result;
+}
+
+MeasurementResult measure_once(MYSQL* admin, MYSQL* frontend, const std::string& query) {
+	return measure_once(admin, frontend, query, monotonic_time() + kStableSampleTimeoutUs);
+}
+
+MeasurementResult measure_new_statement(MYSQL* admin, MYSQL* frontend, uint64_t& sequence) {
+	const uint64_t deadline {monotonic_time() + kStableSampleTimeoutUs};
+	MeasurementResult result;
+	while (monotonic_time() < deadline) {
+		const std::string query {
+			"SELECT 1 AS test_prepare_statement_memory_usage_" +
+			std::to_string(getpid()) + "_" + std::to_string(sequence++)
+		};
+		result = measure_once(admin, frontend, query, deadline);
+		if (result.status != MeasurementStatus::kContaminated) {
+			return result;
+		}
+	}
+
+	result.error = "measurement deadline expired after contaminated samples: " + result.error;
+	return result;
+}
+
+MeasurementResult measure_existing_statement(MYSQL* admin, MYSQL* frontend, const std::string& query) {
+	const uint64_t deadline {monotonic_time() + kStableSampleTimeoutUs};
+	MeasurementResult result;
+	while (monotonic_time() < deadline) {
+		result = measure_once(admin, frontend, query, deadline);
+		if (result.status != MeasurementStatus::kContaminated) {
+			return result;
+		}
+	}
+
+	result.error = "measurement deadline expired after contaminated samples: " + result.error;
+	return result;
+}
+
+MeasurementResult failed_dependent_reuse(const MeasurementResult& new_measurement) {
+	MeasurementResult result;
+	result.query = new_measurement.query;
+	result.error = "dependent reuse was not attempted because new-statement measurement failed: " + new_measurement.error;
+	return result;
+}
+
+MeasurementResult failed_frontend_settlement(const MeasurementResult& previous_measurement) {
+	MeasurementResult result;
+	result.query = previous_measurement.query;
+	result.error = "measurement was not attempted because client reference settlement was not confirmed: " +
+		previous_measurement.error;
+	result.frontend_released = false;
+	return result;
+}
+
+void report_measurement(const MeasurementResult& result, bool expect_backend_equal) {
+	const bool accepted {result.status == MeasurementStatus::kAccepted};
+	const char* backend_expectation {expect_backend_equal ? "unchanged" : "did not decrease"};
+	if (!accepted && !result.error.empty()) {
+		diag("Prepared-statement measurement failed for %s: %s", result.query.c_str(), result.error.c_str());
+	}
+	ok(accepted, "Prepare succeeded with an uncontaminated sample: %s", result.query.c_str());
+	ok(accepted && result.after.metadata > result.before.metadata,
+		"Prepared-statement metadata memory increased: %lu -> %lu",
+		static_cast<unsigned long>(result.before.metadata), static_cast<unsigned long>(result.after.metadata));
+	ok(accepted && (expect_backend_equal
+		? result.after.backend == result.before.backend
+		: result.after.backend >= result.before.backend),
+		"Prepared-statement backend memory %s: %lu -> %lu", backend_expectation,
+		static_cast<unsigned long>(result.before.backend), static_cast<unsigned long>(result.after.backend));
 }
 
 int main(int argc, char** argv) {
@@ -132,17 +494,30 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	if (check_prepare_statement_mem_usage(proxysql_admin, proxysql, "SELECT 1", kGreaterThan, (kGreaterThan | kEqual)) == EXIT_FAILURE)
-		goto __cleanup;
+	uint64_t sequence {0};
+	const MeasurementResult first_new {measure_new_statement(proxysql_admin, proxysql, sequence)};
+	const MeasurementResult second_new {
+		first_new.frontend_released
+			? measure_new_statement(proxysql_admin, proxysql, sequence)
+			: failed_frontend_settlement(first_new)
+	};
+	report_measurement(first_new, false);
+	report_measurement(second_new, false);
 
-	if (check_prepare_statement_mem_usage(proxysql_admin, proxysql, "SELECT 2", kGreaterThan, (kGreaterThan | kEqual)) == EXIT_FAILURE)
-		goto __cleanup;
-
-	if (check_prepare_statement_mem_usage(proxysql_admin, proxysql, "SELECT 1", kGreaterThan, kEqual) == EXIT_FAILURE)
-		goto __cleanup;
-
-	if (check_prepare_statement_mem_usage(proxysql_admin, proxysql, "SELECT 2", kGreaterThan, kEqual) == EXIT_FAILURE)
-		goto __cleanup;
+	const MeasurementResult first_reuse {
+		first_new.status == MeasurementStatus::kAccepted && second_new.frontend_released
+			? measure_existing_statement(proxysql_admin, proxysql, first_new.query)
+			: (!second_new.frontend_released ? failed_frontend_settlement(second_new)
+				: failed_dependent_reuse(first_new))
+	};
+	const MeasurementResult second_reuse {
+		second_new.status == MeasurementStatus::kAccepted && first_reuse.frontend_released
+			? measure_existing_statement(proxysql_admin, proxysql, second_new.query)
+			: (!first_reuse.frontend_released ? failed_frontend_settlement(first_reuse)
+				: failed_dependent_reuse(second_new))
+	};
+	report_measurement(first_reuse, true);
+	report_measurement(second_reuse, true);
 
 __cleanup:
 	mysql_close(proxysql);
