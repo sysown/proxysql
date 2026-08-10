@@ -66,7 +66,6 @@ Run:
 export INFRA_ID="prepared-memory-red-20260810"
 export TAP_GROUP="mysql84-g8"
 ./test/infra/control/ensure-infras.bash
-./test/infra/control/start-proxysql-isolated.bash
 TEST_PY_TAP_INCL='^(test_noise_injection-t|test_prepare_statement_memory_usage-t)$' \
   ./test/infra/control/run-tests-isolated.bash
 ```
@@ -336,7 +335,6 @@ Run:
 export INFRA_ID="prepared-memory-green-20260810"
 export TAP_GROUP="mysql84-g8"
 ./test/infra/control/ensure-infras.bash
-./test/infra/control/start-proxysql-isolated.bash
 ```
 
 Expected: backend and `proxysql.prepared-memory-green-20260810` containers are
@@ -353,13 +351,17 @@ TEST_PY_TAP_INCL='^test_prepare_statement_memory_usage-t$' \
 
 Expected: exactly `1..12`, twelve `ok` assertions, and exit 0.
 
-- [ ] **Step 3: Restart ProxySQL and run the noise-to-memory ordering**
+- [ ] **Step 3: Clean, reprovision, and run the noise-to-memory ordering**
 
 Run:
 
 ```bash
+docker rm -f "test-runner.prepared-memory-green-20260810" >/dev/null 2>&1 || true
 INFRA_ID="prepared-memory-green-20260810" TAP_GROUP="mysql84-g8" \
-  ./test/infra/control/start-proxysql-isolated.bash
+  ./test/infra/control/destroy-infras.bash
+export INFRA_ID="prepared-memory-green-20260810"
+export TAP_GROUP="mysql84-g8"
+./test/infra/control/ensure-infras.bash
 TEST_PY_TAP_INCL='^(test_noise_injection-t|test_prepare_statement_memory_usage-t)$' \
   ./test/infra/control/run-tests-isolated.bash
 ```
