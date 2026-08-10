@@ -923,7 +923,8 @@ __run_query:
 
 						free(query);
 						query = static_cast<char*>(malloc(select_query.length() + 1));
-						memcpy(query, select_query.c_str(), select_query.length() + 1);
+						memcpy(query, select_query.c_str(), select_query.length());
+						query[select_query.length()] = '\0';
 					}
 				}
 #endif // TEST_AURORA
@@ -970,7 +971,8 @@ __run_query:
 					);
 
 					query = static_cast<char*>(malloc(select_as_query.length() + 1));
-					memcpy(query, select_as_query.c_str(), select_as_query.length() + 1);
+					memcpy(query, select_as_query.c_str(), select_as_query.length());
+					query[select_as_query.length()] = '\0';
 				}
 			}
 #endif // TEST_GROUPREP
