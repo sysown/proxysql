@@ -526,14 +526,16 @@ bool is_admin_command_or_alias(const std::vector<std::string>& cmds, char *query
 	return false;
 }
 
-const char * match_command_prefix(const std::vector<std::string>& cmd_prefix, char *query, int query_len) {
+const char * match_command_prefix(const std::vector<std::string>& cmd_prefix, char *query, int query_len, size_t &prefix_len) {
 	for (auto &prefix : cmd_prefix) {
 		if ((unsigned int) query_len >= prefix.length()
 			&& !strncasecmp(prefix.c_str(), query, prefix.length()))
 		{
+			prefix_len = prefix.length();
 			return prefix.c_str();
 		}
 	}
+	prefix_len = 0;
 
 	return nullptr;
 }
@@ -576,8 +578,9 @@ std::tuple<bool, enum SERVER_TYPE, time_t> parse_command_purge_query_digests(cha
 	bool match = false;
 	enum SERVER_TYPE server_type = SERVER_TYPE_MYSQL;
 	time_t last_seen = 0;
+	size_t prefix_len = 0;
 
-	const char *prefix = match_command_prefix(CMD_PREFIX_PURGE_QUERY_DIGESTS, query, query_len);
+	const char *prefix = match_command_prefix(CMD_PREFIX_PURGE_QUERY_DIGESTS, query, query_len, prefix_len);
 	if (prefix) {
 		match = true;
 
@@ -586,7 +589,6 @@ std::tuple<bool, enum SERVER_TYPE, time_t> parse_command_purge_query_digests(cha
 		}
 
 		// parse timestamp
-		const size_t prefix_len = strlen(prefix);
 		mf_unique_ptr<char> ts_str(strdup(query + prefix_len));
 		char *ts_end = nullptr;
 		long long ts = strtoll(trim_spaces_in_place(ts_str.get()), &ts_end, 10);
