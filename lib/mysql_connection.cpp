@@ -304,65 +304,31 @@ void MySQL_Connection::compute_unknown_transaction_status() {
  * @return Returns the computed hash value.
  */
 uint64_t MySQL_Connection_userinfo::compute_hash() {
-	size_t l=0;
 	size_t username_len = username ? strlen(username) : 0;
 	size_t password_len = password ? strlen(password) : 0;
 	size_t schemaname_len = schemaname ? strlen(schemaname) : 0;
-	l+=username_len;
-	l+=password_len;
-	l+=schemaname_len;
+	size_t total_length = username_len + password_len + schemaname_len;
 // two random seperator
 #define _COMPUTE_HASH_DEL1_	"-ujhtgf76y576574fhYTRDF345wdt-"
 #define _COMPUTE_HASH_DEL2_	"-8k7jrhtrgJHRgrefgreyhtRFewg6-"
 	size_t delimiter1_len = strlen(_COMPUTE_HASH_DEL1_);
 	size_t delimiter2_len = strlen(_COMPUTE_HASH_DEL2_);
-	l += delimiter1_len;
-	l += delimiter2_len;
-	size_t hash_input_length = l;
-	char *buf=(char *)malloc(hash_input_length+1);
-	if (!buf) {
-		return 0;
-	}
-	size_t copied = 0;
+	total_length += delimiter1_len + delimiter2_len;
+
+	std::string hash_input;
+	hash_input.reserve(total_length);
 	if (username) {
-		if (copied + username_len > hash_input_length) {
-			free(buf);
-			return 0;
-		}
-		memcpy(buf + copied, username, username_len);
-		copied += username_len;
+		hash_input.append(username, username_len);
 	}
-	if (copied + delimiter1_len > hash_input_length) {
-		free(buf);
-		return 0;
-	}
-	memcpy(buf + copied, _COMPUTE_HASH_DEL1_, delimiter1_len);
-	copied += delimiter1_len;
+	hash_input.append(_COMPUTE_HASH_DEL1_);
 	if (password) {
-		if (copied + password_len > hash_input_length) {
-			free(buf);
-			return 0;
-		}
-		memcpy(buf + copied, password, password_len);
-		copied += password_len;
+		hash_input.append(password, password_len);
 	}
 	if (schemaname) {
-		if (copied + schemaname_len > hash_input_length) {
-			free(buf);
-			return 0;
-		}
-		memcpy(buf + copied, schemaname, schemaname_len);
-		copied += schemaname_len;
+		hash_input.append(schemaname, schemaname_len);
 	}
-	if (copied + delimiter2_len > hash_input_length) {
-		free(buf);
-		return 0;
-	}
-	memcpy(buf + copied, _COMPUTE_HASH_DEL2_, delimiter2_len);
-	copied += delimiter2_len;
-	hash=SpookyHash::Hash64(buf,copied,0);
-	free(buf);
-	return hash;
+	hash_input.append(_COMPUTE_HASH_DEL2_);
+	return SpookyHash::Hash64(hash_input.data(), hash_input.size(), 0);
 }
 
 void MySQL_Connection_userinfo::set(char *u, char *p, char *s, char *sh1) {
