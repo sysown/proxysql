@@ -1,0 +1,7 @@
+# Keep dependency trees and generated Prisma artifacts out of the build
+# context: every driver's node_modules (and Prisma's generated client) are
+# produced INSIDE their multi-stage build steps, so shipping a host-built
+# copy in via `COPY . .` would bloat the image and risk a wrong-platform
+# query-engine binary. Report output is host-only too.
+**/node_modules
+pg-compat-reports

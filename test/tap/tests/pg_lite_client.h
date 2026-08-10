@@ -142,6 +142,7 @@ public:
     void disconnect();
     bool isConnected() const;
     inline int getSocket() const { return sock_; }
+    inline int getLastAuthType() const { return last_auth_type_; }
 
     void execute(const std::string& query);
     void executeParams(
@@ -207,10 +208,13 @@ private:
 	int timeout_ms_ = 0;
     std::string user_;
     std::string dbname_;
+    int last_auth_type_ = 0;
     
     void sendStartupPacket();
     void handleAuthentication(const std::string& password);
     void sendPassword(const std::string& password);
+    void sendMD5Password(const std::string& password, const uint8_t salt[4]);
+    void doSASLAuth(const std::string& password, const std::vector<uint8_t>& mechListMsg);
     
     
     void sendParse(const std::string& query, const std::string& stmtName, const std::vector<uint32_t>& paramType);

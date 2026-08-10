@@ -1,0 +1,60 @@
+# pg-compat xfail / finding catalogue
+#
+# This is a discovery-phase suite (spec sec 2.1): its job is to build a
+# living FAILURE INVENTORY, not to stay all-green by construction. Two
+# distinct kinds of entries live here:
+#
+# [[xfail]] -- a KNOWN DIVERGENCE that currently makes a specific test
+# fail. Each entry maps one failing test_id to a reason + tracking ref, and
+# conftest.py's pytest_collection_modifyitems() marks that test_id
+# xfail(strict=False):
+#   - the test still runs every time;
+#   - while the divergence persists it reports "xfailed" (expected
+#     failure), not "failed" -- the suite stays green without anyone
+#     loosening an assertion;
+#   - once the underlying bug is fixed the SAME test starts passing and is
+#     reported as "xpassed" (visible with -rxX) BECAUSE strict=false. That
+#     is the signal to remove the entry -- the fix landed and the divergence
+#     is closed. Do NOT flip to strict=true as a "fix": the point of this
+#     catalogue is that a fix is detected automatically by the run, not by
+#     someone remembering to update the toml first.
+#
+# Format (see harness/xfail.py for the loader):
+#
+#   [[xfail]]
+#   test_id = "tests/test_differential.py::test_case_is_transparent[002_bytea_json_array.sql]"
+#   mode = "native"          # libpq | native | both -- which backend-protocol axis (spec 2.2) this applies to
+#   reason = "proxy_native_binary bytea OID mismatch on the young native backend path"
+#   ref = "PR #5882"
+#
+# There are currently NO active xfail entries: the suite is all-green
+# (16 passed, 2 native-path skips pending PR #5882). The list below is
+# intentionally empty.
+
+# [[finding]] -- a REAL, VERIFIED ProxySQL behavioral difference that was
+# discovered while building this suite but that does NOT (today) fail any
+# test -- typically because the harness neutralizes it (e.g. by pinning a
+# session parameter so both sides of a differential comparison are
+# apples-to-apples). It has no test_id to attach an xfail marker to, so it
+# is recorded here instead, to make sure the finding isn't lost just
+# because nothing is currently red.
+#
+# Fields: summary, mode (libpq | native | both), detail, discovered_by, ref.
+
+[[finding]]
+summary = "ProxySQL imposes client_encoding=UTF8 on backend connections instead of inheriting the server default"
+mode = "libpq"
+detail = """
+Verified live on the sdd-sp2 infra against the SQL_ASCII dbdeployer backend:
+a DIRECT session's client_encoding defaults to SQL_ASCII (the initdb
+default), while a session THROUGH ProxySQL reports client_encoding=UTF8
+regardless of the backend's actual default (`SHOW client_encoding`: direct
+-> SQL_ASCII, via proxy -> UTF8). This is a session-default / parameter-
+transparency divergence, not a row-level query divergence, so it does not
+fail the differential engine's compare(). The harness neutralizes it by
+pinning client_encoding=UTF8 on EVERY target (proxy and direct alike) in
+harness/targets.py::_dsn() so runs are apples-to-apples; that pin is why
+this finding has no failing test_id to list under [[xfail]].
+"""
+discovered_by = "task 6 differential engine (SQL_ASCII backend)"
+ref = "SP-2 Task 6 report; candidate ProxySQL issue"
