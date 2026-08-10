@@ -179,7 +179,8 @@ FlushVariableStats ProxySQL_Admin::flush_GENERIC_variables__process__database_to
 	const std::unordered_set<std::string>& variables_to_delete_silently,
 	const std::unordered_set<std::string>& variables_deprecated,
 	const std::unordered_set<std::string>& variables_special_values,
-	std::function<void(const std::string&, const char *, SQLite3DB *)> special_variable_action
+	std::function<void(const std::string&, const char *, SQLite3DB *)> special_variable_action,
+	std::unordered_set<std::string>* accepted_variables
 ) {
 	FlushVariableStats stats;
 	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
@@ -256,6 +257,9 @@ FlushVariableStats ProxySQL_Admin::flush_GENERIC_variables__process__database_to
 				}
 		} else {
 			stats.updated++;
+			if (accepted_variables != nullptr) {
+				accepted_variables->emplace(v);
+			}
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
 			if (variables_special_values.count(v) > 0) {
 				if (special_variable_action != nullptr) {
@@ -465,6 +469,7 @@ FlushVariableStats ProxySQL_Admin::flush_mysql_variables___database_to_runtime(S
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
 	if (flush_GENERIC_variables__retrieve__database_to_runtime("mysql", error, cols, affected_rows, resultset) == true) {
+		std::unordered_set<std::string> accepted_database_variables;
 		GloMTH->wrlock();
 		char * previous_default_charset = GloMTH->get_variable_string((char *)"default_charset");
 		char * previous_default_collation_connection = GloMTH->get_variable_string((char *)"default_collation_connection");
@@ -501,7 +506,8 @@ FlushVariableStats ProxySQL_Admin::flush_mysql_variables___database_to_runtime(S
 				} else if (varname == "processlist_max_query_length") {
 					GloAdmin->variables.mysql_processlist.max_query_length = atoi(varvalue);
 				}
-			}
+			},
+			&accepted_database_variables
 		);
 		char q[1000];
 		char * default_charset = GloMTH->get_variable_string((char *)"default_charset");
@@ -574,7 +580,40 @@ FlushVariableStats ProxySQL_Admin::flush_mysql_variables___database_to_runtime(S
 		free(default_collation_connection);
 		free(previous_default_charset);
 		free(previous_default_collation_connection);
-		GloMTH->commit();
+		const MySQLThreadsCommitResult commit_result = GloMTH->commit();
+		if (!commit_result.rejected_variables.empty()) {
+			int rejected_variables_in_resultset = 0;
+			for (const std::string& variable_name : commit_result.rejected_variables) {
+				if (accepted_database_variables.count(variable_name) != 0) {
+					rejected_variables_in_resultset++;
+				}
+			}
+			stats.updated = std::max(0, stats.updated - rejected_variables_in_resultset);
+			stats.rejected += rejected_variables_in_resultset;
+
+			const char* query =
+				"INSERT OR REPLACE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)";
+			auto [rc, statement_unique] = db->prepare_v2(query);
+			ASSERT_SQLITE_OK(rc, db);
+			sqlite3_stmt* statement = statement_unique.get();
+			for (const std::string& variable_name : commit_result.rejected_variables) {
+				mf_unique_ptr<char> value { GloMTH->get_variable(variable_name.c_str()) };
+				const std::string qualified_name = "mysql-" + variable_name;
+				rc = (*proxy_sqlite3_bind_text)(
+					statement, 1, qualified_name.c_str(), -1, SQLITE_TRANSIENT
+				);
+				ASSERT_SQLITE_OK(rc, db);
+				rc = (*proxy_sqlite3_bind_text)(
+					statement, 2, value != nullptr ? value.get() : "", -1, SQLITE_TRANSIENT
+				);
+				ASSERT_SQLITE_OK(rc, db);
+				SAFE_SQLITE3_STEP2(statement);
+				rc = (*proxy_sqlite3_clear_bindings)(statement);
+				ASSERT_SQLITE_OK(rc, db);
+				rc = (*proxy_sqlite3_reset)(statement);
+				ASSERT_SQLITE_OK(rc, db);
+			}
+		}
 		GloMTH->wrunlock();
 
 		{
