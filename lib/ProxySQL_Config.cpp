@@ -355,19 +355,20 @@ int ProxySQL_Config::Read_Scheduler_from_configfile() {
 		sched.lookupValue("comment", comment);
 
 
-		int query_len=0;
-		query_len+=strlen(q) +
-			strlen(std::to_string(id).c_str()) +
-			strlen(std::to_string(active).c_str()) +
-			strlen(std::to_string(interval_ms).c_str()) +
-			strlen(filename.c_str()) +
-			( arg1_exists ? strlen(arg1.c_str()) : 0 ) + 4 +
-			( arg2_exists ? strlen(arg2.c_str()) : 0 ) + 4 +
-			( arg3_exists ? strlen(arg3.c_str()) : 0 ) + 4 +
-			( arg4_exists ? strlen(arg4.c_str()) : 0 ) + 4 +
-			( arg5_exists ? strlen(arg5.c_str()) : 0 ) + 4 +
-			strlen(comment.c_str()) +
-			40;
+		const size_t query_base_len = strlen(q);
+		const string id_str = to_string(id);
+		const string active_str = to_string(active);
+		const string interval_ms_str = to_string(interval_ms);
+		const size_t filename_len = filename.size();
+		const size_t arg1_len = arg1_exists ? arg1.size() : 0;
+		const size_t arg2_len = arg2_exists ? arg2.size() : 0;
+		const size_t arg3_len = arg3_exists ? arg3.size() : 0;
+		const size_t arg4_len = arg4_exists ? arg4.size() : 0;
+		const size_t arg5_len = arg5_exists ? arg5.size() : 0;
+		const size_t comment_len = comment.size();
+		const size_t query_len = query_base_len + id_str.size() + active_str.size() + interval_ms_str.size() +
+			filename_len + (arg1_len + 4) + (arg2_len + 4) + (arg3_len + 4) + (arg4_len + 4) + (arg5_len + 4) +
+			comment_len + 40;
 		char *query=(char *)malloc(query_len);
 		if (arg1_exists)
 			arg1="\'" + arg1 + "\'";
@@ -533,18 +534,16 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 		const char* safe_uri_escaped = uri_escaped ? uri_escaped : "";
 		const char* safe_script_escaped = script_escaped ? script_escaped : "";
 		const char* safe_comment_escaped = comment_escaped ? comment_escaped : "";
-		int query_len=0;
-		query_len+=strlen(q) +
-			strlen(active_str.c_str()) +
-			strlen(timeout_ms_str.c_str()) +
+		size_t query_len =
+			strlen(q) +
+			active_str.size() +
+			timeout_ms_str.size() +
 			strlen(safe_method_escaped) +
 			strlen(safe_uri_escaped) +
 			strlen(safe_script_escaped) +
 			strlen(safe_comment_escaped) +
-			40;
-		if (id_exists) {
-			query_len += strlen(id_str.c_str());
-		}
+			40 +
+			(id_exists ? id_str.size() : 0);
 		char *query=(char *)malloc(query_len);
 		if (query == NULL) {
 			proxy_error("Admin: unable to allocate memory while loading restapi routes from config file\n");
@@ -914,46 +913,63 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 		if (rule.lookupValue("attributes", attributes)) attributes_exists=true;
 
 
-		//if (user.lookupValue("default_schema", default_schema)==false) default_schema="";
-		int query_len=0;
-		query_len+=strlen(q) +
-			strlen(std::to_string(rule_id).c_str()) +
-			strlen(std::to_string(active).c_str()) +
-			( username_exists ? strlen(username.c_str()) : 0 ) + 4 +
-			( schemaname_exists ? strlen(schemaname.c_str()) : 0 ) + 4 +
-			strlen(std::to_string(flagIN).c_str()) + 4 +
-
-			( client_addr_exists ? strlen(client_addr.c_str()) : 0 ) + 4 +
-			( proxy_addr_exists ? strlen(proxy_addr.c_str()) : 0 ) + 4 +
-			strlen(std::to_string(proxy_port).c_str()) + 4 +
-
-			( match_digest_exists ? strlen(match_digest.c_str()) : 0 ) + 4 +
-			( match_pattern_exists ? strlen(match_pattern.c_str()) : 0 ) + 4 +
-			strlen(std::to_string(negate_match_pattern).c_str()) + 4 +
-			( re_modifiers_exists ? strlen(re_modifiers.c_str()) : 0 ) + 4 +
-			strlen(std::to_string(flagOUT).c_str()) + 4 +
-			( replace_pattern_exists ? strlen(replace_pattern.c_str()) : 0 ) + 4 +
-			strlen(std::to_string(destination_hostgroup).c_str()) + 4 +
-			strlen(std::to_string(cache_ttl).c_str()) + 4 +
-			strlen(std::to_string(cache_empty_result).c_str()) + 4 +
-			strlen(std::to_string(cache_timeout).c_str()) + 4 +
-			strlen(std::to_string(reconnect).c_str()) + 4 +
-			strlen(std::to_string(timeout).c_str()) + 4 +
-			strlen(std::to_string(next_query_flagIN).c_str()) + 4 +
-			strlen(std::to_string(mirror_flagOUT).c_str()) + 4 +
-			strlen(std::to_string(mirror_hostgroup).c_str()) + 4 +
-			strlen(std::to_string(retries).c_str()) + 4 +
-			strlen(std::to_string(delay).c_str()) + 4 +
-			( error_msg_exists ? strlen(error_msg.c_str()) : 0 ) + 4 +
-			( OK_msg_exists ? strlen(OK_msg.c_str()) : 0 ) + 4 +
-			strlen(std::to_string(sticky_conn).c_str()) + 4 +
-			strlen(std::to_string(multiplex).c_str()) + 4 +
-			strlen(std::to_string(gtid_from_hostgroup).c_str()) + 4 +
-			strlen(std::to_string(log).c_str()) + 4 +
-			strlen(std::to_string(apply).c_str()) + 4 +
-			( attributes_exists ? strlen(attributes.c_str()) : 0 ) + 4 +
-			( comment_exists ? strlen(comment.c_str()) : 0 ) + 4 +
-			64;
+			//if (user.lookupValue("default_schema", default_schema)==false) default_schema="";
+			const size_t query_base_len = strlen(q);
+			const string rule_id_str = to_string(rule_id);
+			const string active_str = to_string(active);
+			const string flagIN_str = to_string(flagIN);
+			const string proxy_port_str = to_string(proxy_port);
+			const string negate_match_pattern_str = to_string(negate_match_pattern);
+			const string flagOUT_str = to_string(flagOUT);
+			const string destination_hostgroup_str = to_string(destination_hostgroup);
+			const string cache_ttl_str = to_string(cache_ttl);
+			const string cache_empty_result_str = to_string(cache_empty_result);
+			const string cache_timeout_str = to_string(cache_timeout);
+			const string reconnect_str = to_string(reconnect);
+			const string timeout_str = to_string(timeout);
+			const string next_query_flagIN_str = to_string(next_query_flagIN);
+			const string mirror_flagOUT_str = to_string(mirror_flagOUT);
+			const string mirror_hostgroup_str = to_string(mirror_hostgroup);
+			const string retries_str = to_string(retries);
+			const string delay_str = to_string(delay);
+			const string sticky_conn_str = to_string(sticky_conn);
+			const string multiplex_str = to_string(multiplex);
+			const string gtid_from_hostgroup_str = to_string(gtid_from_hostgroup);
+			const string log_str = to_string(log);
+			const string apply_str = to_string(apply);
+			size_t query_len = query_base_len + rule_id_str.size() + active_str.size() + flagIN_str.size() +
+				( username_exists ? username.size() : 0 ) + 4 +
+				( schemaname_exists ? schemaname.size() : 0 ) + 4 +
+				( client_addr_exists ? client_addr.size() : 0 ) + 4 +
+				( proxy_addr_exists ? proxy_addr.size() : 0 ) + 4 +
+				proxy_port_str.size() + 4 +
+				( match_digest_exists ? match_digest.size() : 0 ) + 4 +
+				( match_pattern_exists ? match_pattern.size() : 0 ) + 4 +
+				negate_match_pattern_str.size() + 4 +
+				( re_modifiers_exists ? re_modifiers.size() : 0 ) + 4 +
+				flagOUT_str.size() + 4 +
+				( replace_pattern_exists ? replace_pattern.size() : 0 ) + 4 +
+				destination_hostgroup_str.size() + 4 +
+				cache_ttl_str.size() + 4 +
+				cache_empty_result_str.size() + 4 +
+				cache_timeout_str.size() + 4 +
+				reconnect_str.size() + 4 +
+				timeout_str.size() + 4 +
+				next_query_flagIN_str.size() + 4 +
+				mirror_flagOUT_str.size() + 4 +
+				mirror_hostgroup_str.size() + 4 +
+				retries_str.size() + 4 +
+				delay_str.size() + 4 +
+				( error_msg_exists ? error_msg.size() : 0 ) + 4 +
+				( OK_msg_exists ? OK_msg.size() : 0 ) + 4 +
+				sticky_conn_str.size() + 4 +
+				multiplex_str.size() + 4 +
+				gtid_from_hostgroup_str.size() + 4 +
+				log_str.size() + 4 +
+				apply_str.size() + 4 +
+				( attributes_exists ? attributes.size() : 0 ) + 4 +
+				( comment_exists ? comment.size() : 0 ) + 4 +
+				64;
 		char *query=(char *)malloc(query_len);
 		if (username_exists)
 			username="\"" + username + "\"";
@@ -2714,43 +2730,64 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 
 
 		//if (user.lookupValue("default_schema", default_schema)==false) default_schema="";
-		int query_len = 0;
-		query_len += strlen(q) +
-			strlen(std::to_string(rule_id).c_str()) +
-			strlen(std::to_string(active).c_str()) +
-			(username_exists ? strlen(username.c_str()) : 0) + 4 +
-			(database_exists ? strlen(database.c_str()) : 0) + 4 +
-			strlen(std::to_string(flagIN).c_str()) + 4 +
-
-			(client_addr_exists ? strlen(client_addr.c_str()) : 0) + 4 +
-			(proxy_addr_exists ? strlen(proxy_addr.c_str()) : 0) + 4 +
-			strlen(std::to_string(proxy_port).c_str()) + 4 +
-
-			(match_digest_exists ? strlen(match_digest.c_str()) : 0) + 4 +
-			(match_pattern_exists ? strlen(match_pattern.c_str()) : 0) + 4 +
-			strlen(std::to_string(negate_match_pattern).c_str()) + 4 +
-			(re_modifiers_exists ? strlen(re_modifiers.c_str()) : 0) + 4 +
-			strlen(std::to_string(flagOUT).c_str()) + 4 +
-			(replace_pattern_exists ? strlen(replace_pattern.c_str()) : 0) + 4 +
-			strlen(std::to_string(destination_hostgroup).c_str()) + 4 +
-			strlen(std::to_string(cache_ttl).c_str()) + 4 +
-			strlen(std::to_string(cache_empty_result).c_str()) + 4 +
-			strlen(std::to_string(cache_timeout).c_str()) + 4 +
-			strlen(std::to_string(reconnect).c_str()) + 4 +
-			strlen(std::to_string(timeout).c_str()) + 4 +
-			strlen(std::to_string(next_query_flagIN).c_str()) + 4 +
-			strlen(std::to_string(mirror_flagOUT).c_str()) + 4 +
-			strlen(std::to_string(mirror_hostgroup).c_str()) + 4 +
-			strlen(std::to_string(retries).c_str()) + 4 +
-			strlen(std::to_string(delay).c_str()) + 4 +
-			(error_msg_exists ? strlen(error_msg.c_str()) : 0) + 4 +
-			(OK_msg_exists ? strlen(OK_msg.c_str()) : 0) + 4 +
-			strlen(std::to_string(sticky_conn).c_str()) + 4 +
-			strlen(std::to_string(multiplex).c_str()) + 4 +
-			strlen(std::to_string(log).c_str()) + 4 +
-			strlen(std::to_string(apply).c_str()) + 4 +
-			(attributes_exists ? strlen(attributes.c_str()) : 0) + 4 +
-			(comment_exists ? strlen(comment.c_str()) : 0) + 4 +
+		const std::string rule_id_str = std::to_string(rule_id);
+		const std::string active_str = std::to_string(active);
+		const std::string flagIN_str = std::to_string(flagIN);
+		const std::string proxy_port_str = std::to_string(proxy_port);
+		const std::string negate_match_pattern_str = std::to_string(negate_match_pattern);
+		const std::string flagOUT_str = std::to_string(flagOUT);
+		const std::string destination_hostgroup_str = std::to_string(destination_hostgroup);
+		const std::string cache_ttl_str = std::to_string(cache_ttl);
+		const std::string cache_empty_result_str = std::to_string(cache_empty_result);
+		const std::string cache_timeout_str = std::to_string(cache_timeout);
+		const std::string reconnect_str = std::to_string(reconnect);
+		const std::string timeout_str = std::to_string(timeout);
+		const std::string next_query_flagIN_str = std::to_string(next_query_flagIN);
+		const std::string mirror_flagOUT_str = std::to_string(mirror_flagOUT);
+		const std::string mirror_hostgroup_str = std::to_string(mirror_hostgroup);
+		const std::string retries_str = std::to_string(retries);
+		const std::string delay_str = std::to_string(delay);
+		const std::string sticky_conn_str = std::to_string(sticky_conn);
+		const std::string multiplex_str = std::to_string(multiplex);
+		const std::string gtid_from_hostgroup_str = std::to_string(gtid_from_hostgroup);
+		const std::string log_str = std::to_string(log);
+		const std::string apply_str = std::to_string(apply);
+		size_t query_len =
+			strlen(q) +
+			rule_id_str.size() +
+			active_str.size() +
+			flagIN_str.size() +
+			(username_exists ? username.size() : 0) + 4 +
+			(database_exists ? database.size() : 0) + 4 +
+			(client_addr_exists ? client_addr.size() : 0) + 4 +
+			(proxy_addr_exists ? proxy_addr.size() : 0) + 4 +
+			proxy_port_str.size() + 4 +
+			(match_digest_exists ? match_digest.size() : 0) + 4 +
+			(match_pattern_exists ? match_pattern.size() : 0) + 4 +
+			negate_match_pattern_str.size() + 4 +
+			(re_modifiers_exists ? re_modifiers.size() : 0) + 4 +
+			flagOUT_str.size() + 4 +
+			(replace_pattern_exists ? replace_pattern.size() : 0) + 4 +
+			destination_hostgroup_str.size() + 4 +
+			cache_ttl_str.size() + 4 +
+			cache_empty_result_str.size() + 4 +
+			cache_timeout_str.size() + 4 +
+			reconnect_str.size() + 4 +
+			timeout_str.size() + 4 +
+			next_query_flagIN_str.size() + 4 +
+			mirror_flagOUT_str.size() + 4 +
+			mirror_hostgroup_str.size() + 4 +
+			retries_str.size() + 4 +
+			delay_str.size() + 4 +
+			(error_msg_exists ? error_msg.size() : 0) + 4 +
+			(OK_msg_exists ? OK_msg.size() : 0) + 4 +
+			sticky_conn_str.size() + 4 +
+			multiplex_str.size() + 4 +
+			gtid_from_hostgroup_str.size() + 4 +
+			log_str.size() + 4 +
+			apply_str.size() + 4 +
+			(attributes_exists ? attributes.size() : 0) + 4 +
+			(comment_exists ? comment.size() : 0) + 4 +
 			64;
 		char* query = (char*)malloc(query_len);
 		if (username_exists)
