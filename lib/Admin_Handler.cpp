@@ -1657,8 +1657,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		if (query_no_space_length>27) {
 			if (!strncasecmp(" TO RUNTIME", query_no_space+query_no_space_length-11, 11)) {
 				char *name=(char *)malloc(query_no_space_length-27+1);
-				strncpy(name,query_no_space+16,query_no_space_length-27);
-				name[query_no_space_length-27]=0;
+				size_t name_len = (size_t)(query_no_space_length - 27);
+				memcpy(name,query_no_space+16, name_len);
+				name[name_len]=0;
 				int i=0;
 				int s=strlen(name);
 				bool legitname=true;
@@ -4755,8 +4756,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 								temp_table[len] = '\0';
 
 								char* escaped = escape_string_single_quotes(temp_table, false);
-								strncpy(sess->describe_table_name, escaped, sizeof(sess->describe_table_name) - 1);
-								sess->describe_table_name[sizeof(sess->describe_table_name) - 1] = '\0';
+								snprintf(sess->describe_table_name, sizeof(sess->describe_table_name), "%s", escaped);
 								// Only free if escape_string_single_quotes allocated new memory
 								if (escaped != temp_table) {
 									free(escaped);
@@ -5241,8 +5241,9 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	const size_t tbh_len = strlen(tbh);
 	if (tbh_len>=3 && tbh[0]=='`' && tbh[tbh_len-1]=='`') { // tablename is quoted
 		char *tbh_tmp=(char *)malloc(tbh_len-1);
-		strncpy(tbh_tmp,tbh+1,tbh_len-2);
-		tbh_tmp[tbh_len-2]=0;
+		size_t quoted_len = tbh_len - 2;
+		memcpy(tbh_tmp,tbh+1,quoted_len);
+		tbh_tmp[quoted_len]=0;
 		free(tbh);
 		tbh=tbh_tmp;
 	}
