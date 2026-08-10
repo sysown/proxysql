@@ -81,6 +81,10 @@ private:
 				size_t l = strlen(value);
 				if (_is_valid_gtid((char*)value, l)) {
 					char* buf = (char*)malloc(l + 1);
+					if (buf == nullptr) {
+						proxy_warning("Unable to allocate memory for min_gtid=%s\n", value);
+						return;
+					}
 					memcpy(buf, value, l);
 					buf[l] = '\0';
 
