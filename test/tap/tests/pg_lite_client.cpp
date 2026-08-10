@@ -300,6 +300,17 @@ void PgConnection::sendStartupPacket() {
     writeBytes(fullPacket.data(), fullPacket.size());
 }
 
+// Reads the 4-byte authentication sub-type from an 'R' message payload.
+// Every read of this field must go through here: readMessage() refills the
+// buffer on each call, so the length has to be re-validated every time, and
+// memcpy avoids the unaligned/strict-aliasing read that a cast would do.
+static int32_t readAuthType(const std::vector<uint8_t>& buffer) {
+    if (buffer.size() < 4) throw PgException("Invalid authentication message");
+    int32_t netAuthType;
+    memcpy(&netAuthType, buffer.data(), 4);
+    return ntohl(netAuthType);
+}
+
 void PgConnection::handleAuthentication(const std::string& password) {
     char type;
     std::vector<uint8_t> buffer;
@@ -308,8 +319,7 @@ void PgConnection::handleAuthentication(const std::string& password) {
         readMessage(type, buffer);
 
         if (type == AUTH_TYPE) {
-            if (buffer.size() < 4) throw PgException("Invalid authentication message");
-            int32_t authType = ntohl(*reinterpret_cast<int32_t*>(buffer.data()));
+            int32_t authType = readAuthType(buffer);
             if (last_auth_type_ == 0 && authType != 0) last_auth_type_ = authType;
             if (authType == 0) {  // AuthenticationOK
                 return;
@@ -321,7 +331,7 @@ void PgConnection::handleAuthentication(const std::string& password) {
                 if (type == ERROR_RESPONSE)
                     throw PgException("Authentication error: " + extractErrorMessage(buffer));
                 if (type == AUTH_TYPE) {
-                    authType = ntohl(*reinterpret_cast<int32_t*>(buffer.data()));
+                    authType = readAuthType(buffer);
                     if (authType == 0) return;
                 }
             }
@@ -334,7 +344,7 @@ void PgConnection::handleAuthentication(const std::string& password) {
                 if (type == ERROR_RESPONSE)
                     throw PgException("Authentication error: " + extractErrorMessage(buffer));
                 if (type == AUTH_TYPE) {
-                    authType = ntohl(*reinterpret_cast<int32_t*>(buffer.data()));
+                    authType = readAuthType(buffer);
                     if (authType == 0) return;
                 }
             }
@@ -347,17 +357,14 @@ void PgConnection::handleAuthentication(const std::string& password) {
             }
         }
         else if (type == ERROR_RESPONSE) {
-            // Extract error message (field type 'M' is the message)
-            const char* ptr = reinterpret_cast<const char*>(buffer.data());
-            while (*ptr) ptr++;  // Skip severity
-            ptr++;
-            if (*ptr) {
-                std::string errorMsg(ptr);
+            // extractErrorMessage() walks the field list within the buffer bounds;
+            // the previous hand-rolled scan here ran off the end of a truncated or
+            // unterminated ErrorResponse.
+            const std::string errorMsg = extractErrorMessage(buffer);
+            if (!errorMsg.empty()) {
                 throw PgException("Authentication error: " + errorMsg);
             }
-            else {
-                throw PgException("Authentication error");
-            }
+            throw PgException("Authentication error");
         }
     }
 }

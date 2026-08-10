@@ -31,6 +31,17 @@ static bool set_frontend_auth_method(MYSQL* admin, int method) {
     return true;
 }
 
+// Every floor switch is a PRECONDITION for the assertions that follow it: if the
+// SET/LOAD silently fails, the previous floor is still in effect and the next
+// assertions test the wrong thing -- e.g. a "scram floor" check would actually be
+// exercising md5, and a wrong-password rejection could pass for the wrong reason.
+// So a failed switch aborts the test rather than being ignored.
+static void require_auth_method(MYSQL* admin, int method) {
+    if (!set_frontend_auth_method(admin, method)) {
+        BAIL_OUT("could not configure pgsql-authentication_method=%d (admin SET/LOAD failed)", method);
+    }
+}
+
 // Attempts a frontend login with pg_lite_client, running a query to prove the
 // session is usable. On success, observed_auth_type = the challenge type ProxySQL
 // presented (3=cleartext, 5=md5, 10=scram). Returns true on successful auth+query.
@@ -62,22 +73,21 @@ int main(int argc, char** argv) {
     if (!admin) BAIL_OUT("cannot reach admin");
 
     // --- Cleartext floor (method = 1) -> expect challenge type 3 on the wire ---
-    if (!set_frontend_auth_method(admin, 1))   // affects NEW frontend connections
-        BAIL_OUT("could not configure cleartext auth floor (admin SET/LOAD failed)");
+    require_auth_method(admin, 1);   // affects NEW frontend connections
     int auth_type = 0;
     bool logged_in = try_frontend_login(cl.pgsql_username, cl.pgsql_password, auth_type);
     ok(logged_in, "cleartext floor: login + query succeed");
     ok(auth_type == 3, "cleartext floor: ProxySQL presented challenge type 3 (got %d)", auth_type);
 
     // --- MD5 floor (method = 2) -> expect challenge type 5 on the wire ---
-    set_frontend_auth_method(admin, 2);
+    require_auth_method(admin, 2);
     int md5_auth = 0;
     ok(try_frontend_login(cl.pgsql_username, cl.pgsql_password, md5_auth),
        "md5 floor: login + query succeed");
     ok(md5_auth == 5, "md5 floor: ProxySQL presented challenge type 5 (got %d)", md5_auth);
 
     // --- SCRAM floor (method = 3) -> expect challenge type 10 on the wire ---
-    set_frontend_auth_method(admin, 3);
+    require_auth_method(admin, 3);
     int scram_auth = 0;
     ok(try_frontend_login(cl.pgsql_username, cl.pgsql_password, scram_auth),
        "scram floor: login + query succeed");
@@ -85,15 +95,20 @@ int main(int argc, char** argv) {
 
     // --- Wrong-password failure paths, one per floor (challenge type irrelevant) ---
     int ignore = 0;
-    set_frontend_auth_method(admin, 1);
+    require_auth_method(admin, 1);
     ok(!try_frontend_login(cl.pgsql_username, "wrong-pw", ignore), "cleartext floor: wrong password rejected");
-    set_frontend_auth_method(admin, 2);
+    require_auth_method(admin, 2);
     ok(!try_frontend_login(cl.pgsql_username, "wrong-pw", ignore), "md5 floor: wrong password rejected");
-    set_frontend_auth_method(admin, 3);
+    require_auth_method(admin, 3);
     ok(!try_frontend_login(cl.pgsql_username, "wrong-pw", ignore), "scram floor: wrong password rejected");
 
-    // restore default before exit
-    set_frontend_auth_method(admin, 3);
+    // Restore the default floor before exit. Not a BAIL_OUT -- every assertion has
+    // already run -- but it must not be silent either: leaving the instance on a
+    // non-default auth floor would corrupt whichever test in this group runs next.
+    if (!set_frontend_auth_method(admin, 3)) {
+        diag("WARNING: failed to restore pgsql-authentication_method=3; "
+             "the instance is left on a non-default auth floor");
+    }
     mysql_close(admin);
     return exit_status();
 }

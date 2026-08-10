@@ -9,6 +9,23 @@
 CommandLine cl;
 using PGConnPtr = std::unique_ptr<PGconn, decltype(&PQfinish)>;
 
+// Runs a cursor-lifecycle command and verifies it actually succeeded, always
+// clearing the PGresult. Previously these were fire-and-forget PQexec() calls:
+// the result leaked, and a failed BEGIN or DECLARE surfaced only indirectly as
+// a FETCH returning 0 rows -- reporting "FETCH 3 returns 3 rows" as the failure
+// while hiding the real cause. `expected` is PGRES_COMMAND_OK for statements
+// that return no tuples and PGRES_TUPLES_OK for FETCH.
+static bool exec_expect(PGconn* c, const char* sql, ExecStatusType expected) {
+    PGresult* r = PQexec(c, sql);
+    const ExecStatusType st = PQresultStatus(r);
+    const bool good = (st == expected);
+    if (!good) {
+        diag("%s failed: %s (%s)", sql, PQresStatus(st), PQerrorMessage(c));
+    }
+    PQclear(r);
+    return good;
+}
+
 static PGConnPtr backend_conn() {
     std::stringstream ss;
     ss << "host=" << cl.pgsql_host << " port=" << cl.pgsql_port
@@ -66,18 +83,32 @@ int main(int argc, char** argv) {
     ok(c && PQstatus(c.get()) == CONNECTION_OK, "connected for cursor test");
 
     // DECLARE / FETCH / MOVE / CLOSE inside a transaction (cursors require a txn).
-    PQexec(c.get(), "BEGIN");
-    PQexec(c.get(), "DECLARE cur CURSOR FOR SELECT g FROM generate_series(1,10) g");
+    // BEGIN and DECLARE are preconditions for both FETCH assertions below: without
+    // them the FETCHes cannot mean anything, so a failure aborts rather than
+    // producing two misleading row-count failures.
+    if (!exec_expect(c.get(), "BEGIN", PGRES_COMMAND_OK))
+        BAIL_OUT("could not open transaction for cursor test");
+    if (!exec_expect(c.get(), "DECLARE cur CURSOR FOR SELECT g FROM generate_series(1,10) g",
+                     PGRES_COMMAND_OK))
+        BAIL_OUT("could not declare cursor");
+
     PGresult* r = PQexec(c.get(), "FETCH 3 cur");
-    ok(PQntuples(r) == 3, "FETCH 3 returns 3 rows");
+    ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 3,
+       "FETCH 3 returns 3 rows (status=%s, rows=%d)",
+       PQresStatus(PQresultStatus(r)), PQntuples(r));
     PQclear(r);
-    r = PQexec(c.get(), "MOVE 2 cur");           // skip 2
-    PQclear(r);
+
+    if (!exec_expect(c.get(), "MOVE 2 cur", PGRES_COMMAND_OK))   // skip 2
+        diag("MOVE 2 failed; the following FETCH row count will not be meaningful");
+
     r = PQexec(c.get(), "FETCH 10 cur");         // remaining 5
-    ok(PQntuples(r) == 5, "MOVE 2 then FETCH returns remaining 5 rows");
+    ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 5,
+       "MOVE 2 then FETCH returns remaining 5 rows (status=%s, rows=%d)",
+       PQresStatus(PQresultStatus(r)), PQntuples(r));
     PQclear(r);
-    PQexec(c.get(), "CLOSE cur");
-    PQexec(c.get(), "COMMIT");
+
+    exec_expect(c.get(), "CLOSE cur", PGRES_COMMAND_OK);
+    exec_expect(c.get(), "COMMIT", PGRES_COMMAND_OK);
 
     // KNOWN GAP (tracked): ProxySQL's PG extended-protocol Execute handler ignores
     // the requested row limit (max_rows parsed but never consumed) and never emits
