@@ -375,6 +375,17 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 	query=(char *)l_alloc(query_length);
 	memcpy(query,(char *)pkt->ptr+sizeof(mysql_hdr)+1,query_length-1);
 	query[query_length-1]=0;
+	constexpr size_t k_select_version_len = sizeof("SELECT @@version") - 1;
+	constexpr size_t k_select_version_fn_len = sizeof("SELECT version()") - 1;
+	constexpr size_t k_select_dollar_len = sizeof("SELECT $$") - 1;
+	constexpr size_t k_show_tables_len = sizeof("SHOW TABLES") - 1;
+	constexpr size_t k_show_tables_from_len = sizeof("SHOW TABLES FROM ") - 1;
+	constexpr size_t k_show_tables_like_len = sizeof("SHOW TABLES LIKE ") - 1;
+	constexpr size_t k_show_databases_len = sizeof("SHOW DATABASES") - 1;
+	constexpr size_t k_show_schemas_len = sizeof("SHOW SCHEMAS") - 1;
+	[[maybe_unused]] constexpr size_t k_select_read_only_len = sizeof("SELECT @@global.read_only read_only ") - 1;
+	[[maybe_unused]] constexpr size_t k_select_slave_status_len = sizeof("SELECT SLAVE STATUS ") - 1;
+	[[maybe_unused]] constexpr size_t k_select_replica_status_len = sizeof("SELECT REPLICA STATUS ") - 1;
 
 #if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP) || defined(TEST_READONLY) || defined(TEST_REPLICATIONLAG) || defined(TEST_RDS_BGD)
 	if (sess->client_myds->proxy_addr.addr == NULL) {
@@ -607,7 +618,7 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 		}
 	}
 
-	if (!strncasecmp("SELECT @@version", query_no_space, strlen("SELECT @@version"))) {
+	if (!strncasecmp("SELECT @@version", query_no_space, k_select_version_len)) {
 		l_free(query_length,query);
 		char *q=(char *)"SELECT '%s' AS '@@version'";
 		query_length=strlen(q)+strlen(PROXYSQL_VERSION)+20;
@@ -616,7 +627,7 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 		goto __run_query;
 	}
 
-	if (!strncasecmp("SELECT version()", query_no_space, strlen("SELECT version()"))) {
+	if (!strncasecmp("SELECT version()", query_no_space, k_select_version_fn_len)) {
 		l_free(query_length,query);
 		char *q=(char *)"SELECT '%s' AS 'version()'";
 		query_length=strlen(q)+strlen(PROXYSQL_VERSION)+20;
@@ -626,7 +637,7 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 	}
 
 	// MySQL client check command for dollars quote support, starting at version '8.1.0'. See #4300.
-	if (!strncasecmp("SELECT $$", query_no_space, strlen("SELECT $$"))) {
+	if (!strncasecmp("SELECT $$", query_no_space, k_select_dollar_len)) {
 		pair<int,const char*> err_info { get_dollar_quote_error(mysql_thread___server_version) };
 		GloSQLite3Server->send_MySQL_ERR(&sess->client_myds->myprot, const_cast<char*>(err_info.second));
 		run_query=false;
@@ -637,15 +648,15 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 		goto __end_show_commands; // in the next block there are only SHOW commands
 	}
 
-	if (query_no_space_length==strlen("SHOW TABLES") && !strncasecmp("SHOW TABLES",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==k_show_tables_len && !strncasecmp("SHOW TABLES",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
 		query=l_strdup("SELECT name AS tables FROM sqlite_master WHERE type='table' AND name NOT IN ('sqlite_sequence') ORDER BY name");
 		query_length=strlen(query)+1;
 		goto __run_query;
 	}
 
-	if ((query_no_space_length>17) && (!strncasecmp("SHOW TABLES FROM ", query_no_space, 17))) {
-		strA=query_no_space+17;
+	if ((query_no_space_length > k_show_tables_from_len) && (!strncasecmp("SHOW TABLES FROM ", query_no_space, k_show_tables_from_len))) {
+		strA=query_no_space+k_show_tables_from_len;
 		strAl=strlen(strA);
 		strB=(char *)"SELECT name AS tables FROM %s.sqlite_master WHERE type='table' AND name NOT IN ('sqlite_sequence') ORDER BY name";
 		strBl=strlen(strB);
@@ -659,8 +670,8 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 		goto __run_query;
 	}
 
-	if ((query_no_space_length>17) && (!strncasecmp("SHOW TABLES LIKE ", query_no_space, 17))) {
-		strA=query_no_space+17;
+	if ((query_no_space_length > k_show_tables_like_len) && (!strncasecmp("SHOW TABLES LIKE ", query_no_space, k_show_tables_like_len))) {
+		strA=query_no_space+k_show_tables_like_len;
 		strAl=strlen(strA);
 		strB=(char *)"SELECT name AS tables FROM sqlite_master WHERE type='table' AND name LIKE '%s'";
 		strBl=strlen(strB);
@@ -687,9 +698,9 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 	}
 
 	strA=(char *)"SHOW CREATE TABLE ";
+	strAl = sizeof("SHOW CREATE TABLE ") - 1;
 	strB=(char *)"SELECT name AS 'table' , REPLACE(REPLACE(sql,' , ', X'2C0A20202020'),'CREATE TABLE %s (','CREATE TABLE %s ('||X'0A20202020') AS 'Create Table' FROM %s.sqlite_master WHERE type='table' AND name='%s'";
-	strAl=strlen(strA);
-  if (strncasecmp("SHOW CREATE TABLE ", query_no_space, strAl)==0) {
+	if (strncasecmp("SHOW CREATE TABLE ", query_no_space, strAl)==0) {
 		strBl=strlen(strB);
 		char *dbh=NULL;
 		char *tbh=NULL;
@@ -722,9 +733,9 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 	}
 
 	if (
-		(query_no_space_length==strlen("SHOW DATABASES") && !strncasecmp("SHOW DATABASES",query_no_space, query_no_space_length))
+		(query_no_space_length==k_show_databases_len && !strncasecmp("SHOW DATABASES",query_no_space, query_no_space_length))
 		||
-		(query_no_space_length==strlen("SHOW SCHEMAS") && !strncasecmp("SHOW SCHEMAS",query_no_space, query_no_space_length))
+		(query_no_space_length==k_show_schemas_len && !strncasecmp("SHOW SCHEMAS",query_no_space, query_no_space_length))
 	) {
 		l_free(query_length,query);
 		query=l_strdup("PRAGMA DATABASE_LIST");
@@ -953,37 +964,37 @@ __run_query:
 			}
 #endif // TEST_GROUPREP
 #if defined(TEST_READONLY) || defined(TEST_RDS_BGD)
-			if (strncasecmp("SELECT @@global.read_only read_only ",query_no_space, strlen("SELECT @@global.read_only read_only "))==0) {
-				if (strlen(query_no_space) > strlen("SELECT @@global.read_only read_only ")+5) {
-					pthread_mutex_lock(&GloSQLite3Server->test_readonly_mutex);
-					// the current test doesn't try to simulate failures, therefore it will return immediately
-					if (GloSQLite3Server->readonly_map_size() == 0) {
-						// probably never initialized
-						GloSQLite3Server->load_readonly_table(sess);
+				if (strncasecmp("SELECT @@global.read_only read_only ",query_no_space, k_select_read_only_len)==0) {
+					if (strlen(query_no_space) > k_select_read_only_len+5) {
+						pthread_mutex_lock(&GloSQLite3Server->test_readonly_mutex);
+						// the current test doesn't try to simulate failures, therefore it will return immediately
+						if (GloSQLite3Server->readonly_map_size() == 0) {
+							// probably never initialized
+							GloSQLite3Server->load_readonly_table(sess);
+						}
+						int rc = GloSQLite3Server->readonly_test_value(query_no_space+k_select_read_only_len);
+						free(query);
+						char *a = (char *)"SELECT %d as read_only";
+						query = (char *)malloc(strlen(a)+2);
+						sprintf(query,a,rc);
+						pthread_mutex_unlock(&GloSQLite3Server->test_readonly_mutex);
 					}
-					int rc = GloSQLite3Server->readonly_test_value(query_no_space+strlen("SELECT @@global.read_only read_only "));
-					free(query);
-					char *a = (char *)"SELECT %d as read_only";
-					query = (char *)malloc(strlen(a)+2);
-					sprintf(query,a,rc);
-					pthread_mutex_unlock(&GloSQLite3Server->test_readonly_mutex);
 				}
-			}
 #endif // TEST_READONLY || TEST_RDS_BGD
 #ifdef TEST_REPLICATIONLAG
-			if (
-				strncasecmp("SELECT SLAVE STATUS ", query_no_space, strlen("SELECT SLAVE STATUS ")) == 0
-				|| strncasecmp("SELECT REPLICA STATUS ", query_no_space, strlen("SELECT REPLICA STATUS ")) == 0
-			) {
-				uint64_t addr_offset {
-					strstr(query_no_space, "REPLICA") ?  strlen("SELECT REPLICA STATUS ") : strlen("SELECT SLAVE STATUS ")
-				};
-				if (strlen(query_no_space) > strlen("SELECT SLAVE STATUS ") + 5) {
-					pthread_mutex_lock(&GloSQLite3Server->test_replicationlag_mutex);
-					// the current test doesn't try to simulate failures, therefore it will return immediately
-					if (GloSQLite3Server->replicationlag_map_size() == 0) {
-						// probably never initialized
-						GloSQLite3Server->load_replicationlag_table(sess);
+				if (
+					strncasecmp("SELECT SLAVE STATUS ", query_no_space, k_select_slave_status_len) == 0
+					|| strncasecmp("SELECT REPLICA STATUS ", query_no_space, k_select_replica_status_len) == 0
+				) {
+					uint64_t addr_offset {
+						strstr(query_no_space, "REPLICA") ?  k_select_replica_status_len : k_select_slave_status_len
+					};
+					if (strlen(query_no_space) > k_select_slave_status_len + 5) {
+						pthread_mutex_lock(&GloSQLite3Server->test_replicationlag_mutex);
+						// the current test doesn't try to simulate failures, therefore it will return immediately
+						if (GloSQLite3Server->replicationlag_map_size() == 0) {
+							// probably never initialized
+							GloSQLite3Server->load_replicationlag_table(sess);
 					}
 					const int* rc = GloSQLite3Server->replicationlag_test_value(query_no_space + addr_offset);
 					free(query);
