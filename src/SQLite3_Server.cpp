@@ -841,10 +841,11 @@ __run_query:
 						}
 						delete control_result;
 
-						if (run_query && rds_bgd_table_check) {
-							l_free(query_length,query);
-							query=l_strdup(topology_present ? "SELECT 1" : "SELECT 1 WHERE 0");
-							query_length=strlen(query)+1;
+							if (run_query && rds_bgd_table_check) {
+								const char* topology_sql = topology_present ? "SELECT 1" : "SELECT 1 WHERE 0";
+								l_free(query_length,query);
+								query=l_strdup(topology_sql);
+								query_length=strlen(topology_sql)+1;
 						} else if (run_query && (configured_error != 0 || !topology_present)) {
 							const uint16_t error_code = configured_error
 								? static_cast<uint16_t>(configured_error) : 1146;
@@ -854,16 +855,16 @@ __run_query:
 							GloSQLite3Server->send_MySQL_ERR(
 								&sess->client_myds->myprot, error_code, error_msg);
 							run_query=false;
-						} else if (run_query) {
+							} else if (run_query) {
 							const std::string topology_query {
 								"SELECT id,endpoint,topology_port AS port,role,status "
 								"FROM RDS_BGD_TOPOLOGY WHERE " + predicate +
 								" ORDER BY row_order"
-							};
-							l_free(query_length,query);
-							query=l_strdup(topology_query.c_str());
-							query_length=strlen(query)+1;
-						}
+								};
+								l_free(query_length,query);
+								query=l_strdup(topology_query.c_str());
+								query_length=topology_query.length()+1;
+							}
 					}
 				}
 			}
