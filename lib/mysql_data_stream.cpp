@@ -398,13 +398,14 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 		com_field_wild=NULL;
 	}
 
-	if (passthrough_cleartext) {
-		// Best-effort scrub before free; the cleartext password should
-		// not linger in freed heap memory.
-		memset(passthrough_cleartext, 0, strlen(passthrough_cleartext));
-		free(passthrough_cleartext);
-		passthrough_cleartext = NULL;
-	}
+		if (passthrough_cleartext) {
+			// Best-effort scrub before free; the cleartext password should
+			// not linger in freed heap memory.
+			const size_t cleartext_len = strlen(passthrough_cleartext);
+			memset(passthrough_cleartext, 0, cleartext_len);
+			free(passthrough_cleartext);
+			passthrough_cleartext = NULL;
+		}
 
 	proxy_debug(PROXY_DEBUG_NET,1, "Shutdown Data Stream. Session=%p, DataStream=%p\n" , sess, this);
 	PtrSize_t pkt;
