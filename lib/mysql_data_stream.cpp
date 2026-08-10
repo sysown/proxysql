@@ -1333,7 +1333,7 @@ int MySQL_Data_Stream::buffer2array() {
 							PROXY_info = new ProxyProtocolInfo(ppi);
 							// we take a copy of old address/port
 							if (addr.addr) {
-								strncpy(PROXY_info->proxy_address, addr.addr, INET6_ADDRSTRLEN);
+								snprintf(PROXY_info->proxy_address, sizeof(PROXY_info->proxy_address), "%s", addr.addr);
 								free(addr.addr);
 							}
 							PROXY_info->proxy_port = addr.port;
@@ -1354,7 +1354,7 @@ int MySQL_Data_Stream::buffer2array() {
 							// upstream LB consistently across all branches.
 							PROXY_info = new ProxyProtocolInfo(ppi);
 							if (addr.addr) {
-								strncpy(PROXY_info->proxy_address, addr.addr, INET6_ADDRSTRLEN);
+								snprintf(PROXY_info->proxy_address, sizeof(PROXY_info->proxy_address), "%s", addr.addr);
 							}
 							PROXY_info->proxy_port = addr.port;
 							if (addr.addr) {
