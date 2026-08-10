@@ -104,7 +104,7 @@ int listen_on_unix(char *path, int backlog) {
 
 	memset(&serveraddr, 0, sizeof(serveraddr));
 	serveraddr.sun_family = AF_UNIX;
-	strncpy(serveraddr.sun_path, path, sizeof(serveraddr.sun_path) - 1);
+	snprintf(serveraddr.sun_path, sizeof(serveraddr.sun_path), "%s", path);
 
 	// call bind() to bind the socket on the specified file
 	if ( bind(sd, (struct sockaddr *)&serveraddr, sizeof(struct sockaddr_un)) != 0 ) {
