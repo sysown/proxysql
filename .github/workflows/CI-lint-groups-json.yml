@@ -8,8 +8,9 @@ on:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Fetch GH-Actions branch
         # The reusable half of every workflow pair lives on GH-Actions, so the
         # coverage lint needs that ref to tell an unwired group from one wired

@@ -15,6 +15,7 @@ concurrency:
 jobs:
   init_release:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     # No concurrency group: GitHub's "1 running + 1 pending" rule causes
     # mass cancellations when many workflows share a group. Instead we
     # run all init jobs in parallel and converge via a race-tolerant
@@ -25,7 +26,7 @@ jobs:
       release_name: ${{ steps.release.outputs.release_name }}
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         repository: ${{ github.repository }}
         ref: ${{ github.sha }}
@@ -78,6 +79,7 @@ jobs:
   build:
     needs: init_release
     runs-on: ubuntu-24.04
+    timeout-minutes: 120
     env:
       ARCH: amd64
       DIST: opensuse16
@@ -87,7 +89,7 @@ jobs:
       RELEASE_ID: ${{ needs.init_release.outputs.release_id }}
 
     steps:
-    - uses: LouisBrunner/checks-action@v2.0.0
+    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
       id: checks
       if: always()
       with:
@@ -99,7 +101,7 @@ jobs:
         details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
 
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         repository: ${{ github.repository }}
         ref: ${{ github.sha }}
@@ -138,7 +140,7 @@ jobs:
         fi
         echo "Uploaded $uploaded asset(s) to release id=${RELEASE_ID}"
 
-    - uses: LouisBrunner/checks-action@v2.0.0
+    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
       if: always()
       with:
         token: ${{ secrets.GITHUB_TOKEN }}

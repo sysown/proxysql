@@ -585,8 +585,9 @@ std::shared_ptr<QC_entry_t> Query_Cache<QC_DERIVED>::get(uint64_t user_hash, con
 		uint64_t t = curtime_ms;
 		if (entry_shared->expire_ms > t && entry_shared->create_ms + cache_ttl > t) {
 			if (
-				GET_THREAD_VARIABLE(query_cache_soft_ttl_pct) && !entry_shared->refreshing &&
-				entry_shared->create_ms + cache_ttl * GET_THREAD_VARIABLE(query_cache_soft_ttl_pct) / 100 <= t
+				GET_THREAD_VARIABLE(query_cache_soft_ttl_pct) &&
+				entry_shared->create_ms + cache_ttl * GET_THREAD_VARIABLE(query_cache_soft_ttl_pct) / 100 <= t &&
+				__sync_bool_compare_and_swap(&entry_shared->refreshing, false, true)
 			) {
 				// If the Query Cache entry reach the soft_ttl but do not reach
 				// the cache_ttl, the next query hit the backend and refresh
@@ -594,7 +595,6 @@ std::shared_ptr<QC_entry_t> Query_Cache<QC_DERIVED>::get(uint64_t user_hash, con
 				// refreshing is in process, other queries keep using the "old"
 				// Query Cache entry.
 				// soft_ttl_pct with value 0 and 100 disables the functionality.
-				entry_shared->refreshing = true;
 			} else {
 				THR_UPDATE_CNT(__thr_cntGetOK,Glo_cntGetOK,1,1);
 				THR_UPDATE_CNT(__thr_dataOUT,Glo_dataOUT, entry_shared->length,1);
