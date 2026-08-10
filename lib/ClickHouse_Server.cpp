@@ -516,6 +516,11 @@ class sqlite3server_main_loop_listeners {
 		~tokenizer_owner() {
 			free_tokenizer(&value);
 		}
+
+		tokenizer_owner(const tokenizer_owner&) = delete;
+		tokenizer_owner& operator=(const tokenizer_owner&) = delete;
+		tokenizer_owner(tokenizer_owner&&) = delete;
+		tokenizer_owner& operator=(tokenizer_owner&&) = delete;
 	};
 
 	struct interface_array_owner {
@@ -526,11 +531,16 @@ class sqlite3server_main_loop_listeners {
 		~interface_array_owner() {
 			if (value) {
 				for (int i = 0; i < MAX_IFACES; ++i) {
-					free(value[i]);
+					l_free(0, value[i]);
 				}
-				free(value);
+				l_free(0, value);
 			}
 		}
+
+		interface_array_owner(const interface_array_owner&) = delete;
+		interface_array_owner& operator=(const interface_array_owner&) = delete;
+		interface_array_owner(interface_array_owner&&) = delete;
+		interface_array_owner& operator=(interface_array_owner&&) = delete;
 
 		char **release() {
 			char **released = value;
@@ -600,7 +610,11 @@ class sqlite3server_main_loop_listeners {
 	bool update_ifaces(char *list, char ***_ifaces) {
 		wrlock();
 		char **old_ifaces = *_ifaces;
-		interface_array_owner replacement((char **)calloc(MAX_IFACES, sizeof(char *)));
+		char **new_ifaces = (char **)l_alloc(MAX_IFACES * sizeof(char *));
+		if (new_ifaces != nullptr) {
+			memset(new_ifaces, 0, MAX_IFACES * sizeof(char *));
+		}
+		interface_array_owner replacement(new_ifaces);
 		if (replacement.value == nullptr) {
 			wrunlock();
 			return false;

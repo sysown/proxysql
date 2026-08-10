@@ -235,7 +235,10 @@ class sqlite3server_main_loop_listeners {
 		wrlock();
 		int i = 0;
 		char **old_ifaces = *_ifaces;
-		char **new_ifaces = (char **)calloc(MAX_IFACES, sizeof(char *));
+		char **new_ifaces = (char **)l_alloc(MAX_IFACES * sizeof(char *));
+		if (new_ifaces != NULL) {
+			memset(new_ifaces, 0, MAX_IFACES * sizeof(char *));
+		}
 		tokenizer_t tok;
 		tokenizer( &tok, list, ";", TOKENIZER_NO_EMPTIES );
 		const char* token;
@@ -248,9 +251,9 @@ class sqlite3server_main_loop_listeners {
 		char *token_copy = strdup(token);
 		if (token_copy == NULL) {
 			for (int j = 0; j < i; ++j) {
-				free(new_ifaces[j]);
+				l_free(0, new_ifaces[j]);
 			}
-			free(new_ifaces);
+			l_free(0, new_ifaces);
 			free_tokenizer( &tok );
 			wrunlock();
 			return false;
@@ -260,9 +263,9 @@ class sqlite3server_main_loop_listeners {
 	}
 		if (old_ifaces != NULL) {
 			for (int j = 0; j < MAX_IFACES; ++j) {
-				free(old_ifaces[j]);
+				l_free(0, old_ifaces[j]);
 			}
-			free(old_ifaces);
+			l_free(0, old_ifaces);
 		}
 		*_ifaces = new_ifaces;
 		free_tokenizer( &tok );
@@ -612,18 +615,18 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 		if (!strncasecmp(SELECT_VERSION_COMMENT, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
 #if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP) || defined(TEST_READONLY) || defined(TEST_REPLICATIONLAG) || defined(TEST_RDS_BGD)
-			const char* a = "SELECT '(ProxySQL Automated Test Server) - %s'";
 			const char* proxy_addr = sess->client_myds->proxy_addr.addr;
-			const size_t a_len = strlen(a);
-			const size_t proxy_addr_len = proxy_addr ? strlen(proxy_addr) : 0;
-			const size_t query_len = a_len + proxy_addr_len + 1;
-			query = (char *)malloc(query_len);
+			const std::string formatted_query = cstr_format(
+				"SELECT '(ProxySQL Automated Test Server) - %s'",
+				proxy_addr ? proxy_addr : ""
+			).str;
+			query = l_strdup(formatted_query.c_str());
 			if (query == NULL) {
 				GloSQLite3Server->send_MySQL_ERR(&sess->client_myds->myprot, 1105, "Out of memory");
 				run_query = false;
 				goto __run_query;
 			}
-			snprintf(query, query_len, a, proxy_addr ? proxy_addr : "");
+			query_length = formatted_query.size() + 1;
 #else
 			query=l_strdup("SELECT '(ProxySQL SQLite3 Server)'");
 #endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP || TEST_READONLY || TEST_REPLICATIONLAG || TEST_RDS_BGD
@@ -636,25 +639,18 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 		if (!strncasecmp(SELECT_DB_USER, query_no_space, query_no_space_length)) {
 				l_free(query_length,query);
 				query = NULL;
-				char *query1=(char *)"SELECT \"admin\" AS 'DATABASE()', \"%s\" AS 'USER()'";
 				const char* username = sess->client_myds->myconn->userinfo->username;
-				size_t query2_length = strlen(query1) + (username ? strlen(username) : 0) + 1;
-				char *query2=(char *)malloc(query2_length);
-				if (query2 == NULL) {
-					GloSQLite3Server->send_MySQL_ERR(&sess->client_myds->myprot, 1105, "Out of memory");
-					run_query = false;
-					goto __run_query;
-				}
-				snprintf(query2, query2_length, query1, username ? username : "");
-				query=l_strdup(query2);
+				const std::string formatted_query = cstr_format(
+					"SELECT \"admin\" AS 'DATABASE()', \"%s\" AS 'USER()'",
+					username ? username : ""
+				).str;
+				query = l_strdup(formatted_query.c_str());
 				if (query == NULL) {
-					free(query2);
 					GloSQLite3Server->send_MySQL_ERR(&sess->client_myds->myprot, 1105, "Out of memory");
 					run_query = false;
 					goto __run_query;
 				}
-				query_length=strlen(query)+1;
-				free(query2);
+				query_length = formatted_query.size() + 1;
 				goto __run_query;
 			}
 		}
@@ -757,15 +753,15 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 		char *tbh=NULL;
 		c_split_2(query_no_space+strAl,".",&dbh,&tbh);
 
-		if (strlen(tbh)==0) {
+		if (std::string_view(tbh).empty()) {
 			free(tbh);
 			tbh=dbh;
 			dbh=strdup("main");
 		}
-			size_t tbh_len = strlen(tbh);
+			size_t tbh_len = std::string_view(tbh).size();
 			if (tbh_len>=3 && tbh[0]=='`' && tbh[tbh_len-1]=='`') { // tablename is quoted
 				const size_t quoted_len = tbh_len - 2;
-				char *tbh_tmp=(char *)malloc(quoted_len + 1);
+				char *tbh_tmp=(char *)l_alloc(quoted_len + 1);
 				memcpy(tbh_tmp, tbh + 1, quoted_len);
 				tbh_tmp[quoted_len] = 0;
 			free(tbh);
@@ -1023,8 +1019,8 @@ __run_query:
 			}
 #endif // TEST_GROUPREP
 #if defined(TEST_READONLY) || defined(TEST_RDS_BGD)
-				if (strncasecmp("SELECT @@global.read_only read_only ",query_no_space, k_select_read_only_len)==0) {
-					if (strlen(query_no_space) > k_select_read_only_len+5) {
+				if (strncasecmp("SELECT @@global.read_only read_only ",query_no_space, k_select_read_only_len)==0
+					&& query_no_space_length > k_select_read_only_len+5) {
 						pthread_mutex_lock(&GloSQLite3Server->test_readonly_mutex);
 							// the current test doesn't try to simulate failures, therefore it will return immediately
 							if (GloSQLite3Server->readonly_map_size() == 0) {
@@ -1032,24 +1028,22 @@ __run_query:
 								GloSQLite3Server->load_readonly_table(sess);
 							}
 							int rc = GloSQLite3Server->readonly_test_value(query_no_space+k_select_read_only_len);
-							free(query);
-							char *a = (char *)"SELECT %d as read_only";
-							query = (char *)malloc(strlen(a)+2);
-							snprintf(query, strlen(a)+2, a, rc);
+							l_free(query_length, query);
+							const std::string formatted_query = cstr_format("SELECT %d as read_only", rc).str;
+							query = l_strdup(formatted_query.c_str());
+							query_length = formatted_query.size() + 1;
 							pthread_mutex_unlock(&GloSQLite3Server->test_readonly_mutex);
 						}
 					}
 #endif // TEST_READONLY || TEST_RDS_BGD
 #ifdef TEST_REPLICATIONLAG
 				const bool replica_status = strncasecmp("SELECT REPLICA STATUS ", query_no_space, k_select_replica_status_len) == 0;
-				if (
-					strncasecmp("SELECT SLAVE STATUS ", query_no_space, k_select_slave_status_len) == 0
-					|| replica_status
-				) {
+				if ((strncasecmp("SELECT SLAVE STATUS ", query_no_space, k_select_slave_status_len) == 0
+					|| replica_status)
+					&& query_no_space_length > k_select_slave_status_len + 5) {
 					uint64_t addr_offset {
 						replica_status ? k_select_replica_status_len : k_select_slave_status_len
 					};
-					if (strlen(query_no_space) > k_select_slave_status_len + 5) {
 						pthread_mutex_lock(&GloSQLite3Server->test_replicationlag_mutex);
 						// the current test doesn't try to simulate failures, therefore it will return immediately
 						if (GloSQLite3Server->replicationlag_map_size() == 0) {
@@ -1057,23 +1051,25 @@ __run_query:
 							GloSQLite3Server->load_replicationlag_table(sess);
 					}
 					const int* rc = GloSQLite3Server->replicationlag_test_value(query_no_space + addr_offset);
-					free(query);
+					l_free(query_length, query);
 
 						string SELECT { "SELECT " + (rc ? std::to_string(*rc) : string { "null" }) + " AS " };
 						SELECT += replica_status ? "Seconds_Behind_Source" : "Seconds_Behind_Master";
 
-						query = static_cast<char*>(malloc(SELECT.size() + 1));
-						snprintf(query, SELECT.size() + 1, "%s", SELECT.c_str());
+						query = l_strdup(SELECT.c_str());
+						query_length = SELECT.size() + 1;
 
 					pthread_mutex_unlock(&GloSQLite3Server->test_replicationlag_mutex);
 				}
 			}
 #endif // TEST_REPLICATIONLAG
 				if (strstr(query_no_space,(char *)"Seconds_Behind_Master")) {
-					free(query);
-					char *a = (char *)"SELECT %d as Seconds_Behind_Master";
-					query = (char *)malloc(strlen(a)+4);
-					snprintf(query, strlen(a)+4, a, random_replication_lag_seconds());
+					l_free(query_length, query);
+					const std::string formatted_query = cstr_format(
+						"SELECT %d as Seconds_Behind_Master", random_replication_lag_seconds()
+					).str;
+					query = l_strdup(formatted_query.c_str());
+					query_length = formatted_query.size() + 1;
 				}
 			}
 #endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP || TEST_READONLY || TEST_REPLICATIONLAG || TEST_RDS_BGD

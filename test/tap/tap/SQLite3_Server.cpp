@@ -196,7 +196,10 @@ class sqlite3server_main_loop_listeners {
 		wrlock();
 		int i = 0;
 		char **old_ifaces = *_ifaces;
-		char **new_ifaces = (char **)calloc(MAX_IFACES, sizeof(char *));
+		char **new_ifaces = (char **)l_alloc(MAX_IFACES * sizeof(char *));
+		if (new_ifaces != NULL) {
+			memset(new_ifaces, 0, MAX_IFACES * sizeof(char *));
+		}
 		tokenizer_t tok;
 		tokenizer( &tok, list, ";", TOKENIZER_NO_EMPTIES );
 		const char* token;
@@ -209,9 +212,9 @@ class sqlite3server_main_loop_listeners {
 			new_ifaces[i] = strdup(token);
 			if (new_ifaces[i] == NULL) {
 				for (int j = 0; j < i; ++j) {
-					free(new_ifaces[j]);
+					l_free(0, new_ifaces[j]);
 				}
-				free(new_ifaces);
+				l_free(0, new_ifaces);
 				free_tokenizer( &tok );
 				wrunlock();
 				return false;
@@ -220,9 +223,9 @@ class sqlite3server_main_loop_listeners {
 		}
 		if (old_ifaces != NULL) {
 			for (int j = 0; j < MAX_IFACES; ++j) {
-				free(old_ifaces[j]);
+				l_free(0, old_ifaces[j]);
 			}
-			free(old_ifaces);
+			l_free(0, old_ifaces);
 		}
 		*_ifaces = new_ifaces;
 		free_tokenizer( &tok );
