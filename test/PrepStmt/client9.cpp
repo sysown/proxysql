@@ -64,7 +64,7 @@ void run(MYSQL *mysql) {
 	uint32_t r=(uint32_t)mt_rand();
 	r=r%3000;
 	char *query=(char *)malloc(strlen(QUERY1)+16);
-	sprintf(query,QUERY1,r);
+	snprintf(query,strlen(QUERY1)+16,QUERY1,r);
 	if (DBG) {
 		fprintf(stdout,"%s\n",query);
 	}
