@@ -430,8 +430,9 @@ git log --oneline origin/v3.0..HEAD
 git status --short --branch
 ```
 
-Expected: two focused commits (design, implementation), clean working tree,
-and no whitespace errors.
+Expected: focused task commits and, only when synchronizing with the target base
+requires it, a documented base-integration commit; clean working tree and no
+whitespace errors.
 
 - [ ] **Step 4: Push the dedicated branch**
 

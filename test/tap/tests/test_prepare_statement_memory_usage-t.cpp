@@ -204,14 +204,20 @@ int read_memory_usage(MYSQL* admin, MemoryUsage& memory, std::string& error) {
 	return EXIT_SUCCESS;
 }
 
+std::string describe_statement_changes(const StatementSnapshot& before, const StatementSnapshot& after);
+
 int read_stable_sample(MYSQL* admin, StableSample& sample, std::string& error, uint64_t deadline) {
 	StatementSnapshot before;
 	StatementSnapshot after;
+	std::string last_difference;
 	while (monotonic_time() < deadline) {
 		if (read_statement_snapshot(admin, before, error) != EXIT_SUCCESS ||
 			read_memory_usage(admin, sample.memory, error) != EXIT_SUCCESS ||
 			read_statement_snapshot(admin, after, error) != EXIT_SUCCESS) {
 			return EXIT_FAILURE;
+		}
+		if (before != after) {
+			last_difference = describe_statement_changes(before, after);
 		}
 		if (monotonic_time() >= deadline) {
 			break;
@@ -224,6 +230,9 @@ int read_stable_sample(MYSQL* admin, StableSample& sample, std::string& error, u
 	}
 
 	error = "stable prepared-statement sample could not be obtained before the deadline";
+	if (!last_difference.empty()) {
+		error += "; last statement changes: " + last_difference;
+	}
 	return EXIT_FAILURE;
 }
 
@@ -242,6 +251,10 @@ std::string describe_unrelated_statement_changes(
 ) {
 	const StatementSnapshot before_unrelated {without_target_query(before, target_query)};
 	const StatementSnapshot after_unrelated {without_target_query(after, target_query)};
+	return describe_statement_changes(before_unrelated, after_unrelated);
+}
+
+std::string describe_statement_changes(const StatementSnapshot& before, const StatementSnapshot& after) {
 	std::ostringstream diagnostic;
 	bool first {true};
 	const auto append_change {[&](const std::string& description) {
@@ -252,16 +265,16 @@ std::string describe_unrelated_statement_changes(
 		first = false;
 	}};
 
-	for (const auto& [global_stmt_id, info] : after_unrelated) {
-		const auto before_it {before_unrelated.find(global_stmt_id)};
-		if (before_it == before_unrelated.end()) {
+	for (const auto& [global_stmt_id, info] : after) {
+		const auto before_it {before.find(global_stmt_id)};
+		if (before_it == before.end()) {
 			append_change("added global_stmt_id " + std::to_string(global_stmt_id));
 		} else if (!(before_it->second == info)) {
 			append_change("changed global_stmt_id " + std::to_string(global_stmt_id));
 		}
 	}
-	for (const auto& [global_stmt_id, info] : before_unrelated) {
-		if (after_unrelated.find(global_stmt_id) == after_unrelated.end()) {
+	for (const auto& [global_stmt_id, info] : before) {
+		if (after.find(global_stmt_id) == after.end()) {
 			append_change("removed global_stmt_id " + std::to_string(global_stmt_id));
 		}
 	}
@@ -336,7 +349,8 @@ MeasurementResult measure_once(MYSQL* admin, MYSQL* frontend, const std::string&
 		return result;
 	}
 	if (mysql_stmt_prepare(stmt, query.c_str(), query.size()) != 0) {
-		result.error = "mysql_stmt_prepare failed: " + std::string(mysql_error(frontend));
+		const std::string prepare_error {mysql_stmt_error(stmt)};
+		result.error = "mysql_stmt_prepare failed: " + prepare_error;
 		mysql_stmt_close(stmt);
 		return result;
 	}
@@ -374,7 +388,6 @@ MeasurementResult measure_once(MYSQL* admin, MYSQL* frontend, const std::string&
 	if (!uncontaminated) {
 		result.status = MeasurementStatus::kContaminated;
 		result.error = "unrelated prepared-statement rows changed: " + contamination;
-		diag("Contaminated prepared-statement measurement for %s: %s", query.c_str(), result.error.c_str());
 		return result;
 	}
 
@@ -437,6 +450,9 @@ MeasurementResult failed_frontend_settlement(const MeasurementResult& previous_m
 void report_measurement(const MeasurementResult& result, bool expect_backend_equal) {
 	const bool accepted {result.status == MeasurementStatus::kAccepted};
 	const char* backend_expectation {expect_backend_equal ? "unchanged" : "did not decrease"};
+	if (!accepted && !result.error.empty()) {
+		diag("Prepared-statement measurement failed for %s: %s", result.query.c_str(), result.error.c_str());
+	}
 	ok(accepted, "Prepare succeeded with an uncontaminated sample: %s", result.query.c_str());
 	ok(accepted && result.after.metadata > result.before.metadata,
 		"Prepared-statement metadata memory increased: %lu -> %lu",
