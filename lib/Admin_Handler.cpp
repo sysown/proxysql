@@ -1292,24 +1292,29 @@ static bool is_sensitive_set_variable_name(const char* var_name) {
 
 // Returns true if the given name is either a known mysql or admin global variable.
 bool is_valid_global_variable(const char *var_name) {
-	if (strlen(var_name) > 6 && !strncmp(var_name, "mysql-", 6) && GloMTH->has_variable(var_name + 6)) {
+	if (var_name == NULL) {
+		return false;
+	}
+	const std::string_view name = var_name;
+
+	if (name.size() > 6 && name.compare(0, 6, "mysql-") == 0 && GloMTH->has_variable(var_name + 6)) {
 		return true;
-	} else if (strlen(var_name) > 6 && !strncmp(var_name, "pgsql-", 6) && GloPTH->has_variable(var_name + 6)) {
+	} else if (name.size() > 6 && name.compare(0, 6, "pgsql-") == 0 && GloPTH->has_variable(var_name + 6)) {
 		return true;
-	} else if (strlen(var_name) > 6 && !strncmp(var_name, "admin-", 6) && SPA->has_variable(var_name + 6)) {
+	} else if (name.size() > 6 && name.compare(0, 6, "admin-") == 0 && SPA->has_variable(var_name + 6)) {
 		return true;
-#ifdef PROXYSQLTSDB
-	} else if (strlen(var_name) > 5 && !strncmp(var_name, "tsdb-", 5) && GloProxyStats && GloProxyStats->has_variable(var_name + 5)) {
+	#ifdef PROXYSQLTSDB
+	} else if (name.size() > 5 && name.compare(0, 5, "tsdb-") == 0 && GloProxyStats && GloProxyStats->has_variable(var_name + 5)) {
 		return true;
-#endif
-	} else if (strlen(var_name) > 5 && !strncmp(var_name, "ldap-", 5) && GloMyLdapAuth && GloMyLdapAuth->has_variable(var_name + 5)) {
+	#endif
+	} else if (name.size() > 5 && name.compare(0, 5, "ldap-") == 0 && GloMyLdapAuth && GloMyLdapAuth->has_variable(var_name + 5)) {
 		return true;
-	} else if (strlen(var_name) > 13 && !strncmp(var_name, "sqliteserver-", 13) && GloSQLite3Server && GloSQLite3Server->has_variable(var_name + 13)) {
+	} else if (name.size() > 13 && name.compare(0, 13, "sqliteserver-") == 0 && GloSQLite3Server && GloSQLite3Server->has_variable(var_name + 13)) {
 		return true;
-#ifdef PROXYSQLCLICKHOUSE
-	} else if (strlen(var_name) > 11 && !strncmp(var_name, "clickhouse-", 11) && GloClickHouseServer && GloClickHouseServer->has_variable(var_name + 11)) {
+	#ifdef PROXYSQLCLICKHOUSE
+	} else if (name.size() > 11 && name.compare(0, 11, "clickhouse-") == 0 && GloClickHouseServer && GloClickHouseServer->has_variable(var_name + 11)) {
 		return true;
-#endif /* PROXYSQLCLICKHOUSE */
+	#endif /* PROXYSQLCLICKHOUSE */
 	// `mcp-*` and `genai-*` variables live in the genai plugin
 	// (carve-out Steps 4.C and 5).  Core no longer holds an
 	// authoritative list, so we accept any `mcp-<name>` /
@@ -1325,9 +1330,9 @@ bool is_valid_global_variable(const char *var_name) {
 	// Step 7 removed the surrounding `#ifdef PROXYSQLGENAI` — these
 	// loose prefix checks are unconditional now: SET only succeeds
 	// at write-into-runtime time when the genai plugin is loaded.
-	} else if (strlen(var_name) > 4 && !strncmp(var_name, "mcp-", 4)) {
+	} else if (name.size() > 4 && name.compare(0, 4, "mcp-") == 0) {
 		return true;
-	} else if (strlen(var_name) > 6 && !strncmp(var_name, "genai-", 6)) {
+	} else if (name.size() > 6 && name.compare(0, 6, "genai-") == 0) {
 		return true;
 	} else {
 		return false;
