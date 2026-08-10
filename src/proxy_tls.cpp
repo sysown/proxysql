@@ -233,24 +233,45 @@ int ssl_mkit(X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days, boo
 
 	// check if files exists
 	if (bootstrap == true) {
-		ssl_key_fp = (char *)malloc(strlen(GloVars.datadir)+strlen(ssl_key_rp)+8);
-		snprintf(ssl_key_fp, strlen(GloVars.datadir)+strlen(ssl_key_rp)+2, "%s/%s",GloVars.datadir,ssl_key_rp);
+		const size_t key_path_len = strlen(GloVars.datadir) + strlen(ssl_key_rp) + 2;
+		ssl_key_fp = (char *)malloc(key_path_len);
+		if (ssl_key_fp == NULL) {
+			msg = "Unable to allocate memory for the TLS key path";
+			return 1;
+		}
+		snprintf(ssl_key_fp, key_path_len, "%s/%s",GloVars.datadir,ssl_key_rp);
 	}
 	if (access(ssl_key_fp, R_OK)) {
 		ssl_key_exists = false;
 	}
 
 	if (bootstrap == true) {
-		ssl_cert_fp = (char *)malloc(strlen(GloVars.datadir)+strlen(ssl_cert_rp)+8);
-		snprintf(ssl_cert_fp, strlen(GloVars.datadir)+strlen(ssl_cert_rp)+2, "%s/%s",GloVars.datadir,ssl_cert_rp);
+		const size_t cert_path_len = strlen(GloVars.datadir) + strlen(ssl_cert_rp) + 2;
+		ssl_cert_fp = (char *)malloc(cert_path_len);
+		if (ssl_cert_fp == NULL) {
+			free(ssl_key_fp);
+			ssl_key_fp = NULL;
+			msg = "Unable to allocate memory for the TLS certificate path";
+			return 1;
+		}
+		snprintf(ssl_cert_fp, cert_path_len, "%s/%s",GloVars.datadir,ssl_cert_rp);
 	}
 	if (access(ssl_cert_fp, R_OK)) {
 		ssl_cert_exists = false;
 	}
 
 	if (bootstrap == true) {
-		ssl_ca_fp = (char *)malloc(strlen(GloVars.datadir)+strlen(ssl_ca_rp)+8);
-		snprintf(ssl_ca_fp, strlen(GloVars.datadir)+strlen(ssl_ca_rp)+2, "%s/%s",GloVars.datadir,ssl_ca_rp);
+		const size_t ca_path_len = strlen(GloVars.datadir) + strlen(ssl_ca_rp) + 2;
+		ssl_ca_fp = (char *)malloc(ca_path_len);
+		if (ssl_ca_fp == NULL) {
+			free(ssl_key_fp);
+			free(ssl_cert_fp);
+			ssl_key_fp = NULL;
+			ssl_cert_fp = NULL;
+			msg = "Unable to allocate memory for the TLS CA path";
+			return 1;
+		}
+		snprintf(ssl_ca_fp, ca_path_len, "%s/%s",GloVars.datadir,ssl_ca_rp);
 	}
 	if (access(ssl_ca_fp, R_OK)) {
 		ssl_ca_exists = false;
