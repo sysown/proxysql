@@ -346,6 +346,48 @@ const column_type_t columns_type[] = {
     DATE
 };
 
+bool encodeBinaryField(uint8_t* row, int& offset, column_type_t type, const std::string& data) {
+    switch (type) {
+        case INT: {
+            write_int32(row + offset, sizeof(int32_t));
+            offset += sizeof(int32_t);
+            const int32_t value = atoi(data.c_str());
+            memcpy(row + offset, &value, sizeof(value));
+            offset += sizeof(value);
+            return true;
+        }
+        case DATE: {
+            write_int32(row + offset, sizeof(int32_t));
+            offset += sizeof(int32_t);
+            const uint32_t date = encodeDateBinary(data.c_str());
+            memcpy(row + offset, &date, sizeof(date));
+            offset += sizeof(date);
+            return true;
+        }
+        case TEXT:
+        case BOOLEAN:
+            write_int32(row + offset, data.size());
+            offset += sizeof(int32_t);
+            memcpy(row + offset, data.c_str(), data.size());
+            offset += data.size();
+            return true;
+        case NUMERIC: {
+            uint8_t* length_pos = row + offset;
+            offset += sizeof(int32_t);
+            const int digit_count = encodeNumericBinary(row + offset, data.c_str());
+            if (digit_count < 0) {
+                fprintf(stderr, "Numeric value is too long for the binary COPY test buffer: %s\n", data.c_str());
+                return false;
+            }
+            const int32_t payload_length = digit_count > 0 ? 12 : 8;
+            write_int32(length_pos, payload_length);
+            offset += payload_length;
+            return true;
+        }
+    }
+    return false;
+}
+
 /**
  * @brief Tests the COPY IN functionality using STDIN in TEXT format.
  *
@@ -445,48 +487,10 @@ void testSTDIN_TEXT_BINARY(PGconn* admin_conn, PGconn* conn, std::fstream& f_pro
         offset += sizeof(num_fields);
 
         for (unsigned int j = 0; j < row_data.size(); j++) {
-            const std::string& data = row_data[j];
-            if (columns_type[j] == INT) {
-                write_int32(row + offset, sizeof(int32_t));
-                offset += sizeof(int32_t);
-
-                int32_t value = atoi(data.c_str());
-                // write actual data
-                memcpy(row + offset, &value, sizeof(value));
-                offset += sizeof(value);
-            } else if (columns_type[j] == DATE) {
-                write_int32(row + offset, sizeof(int32_t));
-                offset += sizeof(int32_t);
-
-                uint32_t date = encodeDateBinary(data.c_str());
-                // write actual data
-                memcpy(row + offset, &date, sizeof(date));
-                offset += sizeof(date);
-            } else if (columns_type[j] == TEXT || columns_type[j] == BOOLEAN) {
-                // write field length
-                write_int32(row + offset, data.size());
-                offset += sizeof(int32_t);
-
-                // write actual data
-                memcpy(row + offset, data.c_str(), data.size());
-                offset += data.size();
-            } else if (columns_type[j] == NUMERIC) {
-                uint8_t* prev_pos = (row + offset);
-                offset += sizeof(int32_t);
-                int digit_count = encodeNumericBinary(row + offset, data.c_str());
-                if (digit_count < 0) {
-                    fprintf(stderr, "Numeric value is too long for the binary COPY test buffer: %s\n", data.c_str());
-                    success = false;
-                    break;
-                }
-                if (digit_count > 0) {
-                    write_int32(prev_pos, 12);
-                    offset += 12;
-                } else {
-                    write_int32(prev_pos, 8);
-                    offset += 8;
-                }
-            }
+			if (!encodeBinaryField(row, offset, columns_type[j], row_data[j])) {
+				success = false;
+				break;
+			}
         }
 		if (!success) {
 			break;
