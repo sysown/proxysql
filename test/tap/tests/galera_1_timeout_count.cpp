@@ -84,7 +84,7 @@ void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 	cluster_id--;
 	int hg_id = 2270+(cluster_id*10)+1;
 	char buf[1024];
-	sprintf(buf, (char *)"SELECT * FROM HOST_STATUS_GALERA WHERE hostgroup_id = %d LIMIT 1", hg_id);
+	snprintf(buf, sizeof(buf), "SELECT * FROM HOST_STATUS_GALERA WHERE hostgroup_id = %d LIMIT 1", hg_id);
 	sessdb->execute_statement(buf, &error , &cols , &affected_rows , &resultset);
 	if (resultset->rows_count==0) {
 		//sessdb->execute("DELETE FROM HOST_STATUS_GALERA");
@@ -197,7 +197,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 				free(query);
 				char *a = (char *)"SELECT %d as Seconds_Behind_Master";
 				query = (char *)malloc(strlen(a)+4);
-				sprintf(query,a,rand()%30+10);
+				snprintf(query, strlen(a)+4, a, rand()%30+10);
 			}
 		}
 		SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
