@@ -130,7 +130,7 @@ int main(int argc, char **argv) { // NOSONAR: benchmark tool, cognitive complexi
 
     for (int t = 0; t < threads; t++) {
         args[t].thread_id = t;
-        strncpy(args[t].conninfo, conninfo, sizeof(args[t].conninfo) - 1);
+        snprintf(args[t].conninfo, sizeof(args[t].conninfo), "%s", conninfo);
         args[t].iterations = iterations;
         args[t].warmup = warmup;
         pthread_create(&tids[t], NULL, thread_worker, &args[t]);
