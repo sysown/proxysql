@@ -75,6 +75,10 @@ using json = nlohmann::json;
 #define SHOW_STATUS_LIKE_SSL_VERSION "SHOW STATUS LIKE 'Ssl_version"
 #define SHOW_STATUS_LIKE_SSL_VERSION_LEN 29
 
+static constexpr size_t SHOW_WARNINGS_LEN = sizeof("SHOW WARNINGS") - 1;
+static constexpr size_t SQL_MODE_LEN = sizeof("@@sql_mode") - 1;
+static constexpr size_t SET_NAMES_LEN = sizeof("SET NAMES") - 1;
+
 #define EXPMARIA
 
 using std::function;
@@ -1438,7 +1442,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 	}
 	// if query digest is disabled, warnings in ProxySQL are also deactivated,
 	// resulting in an empty response being sent to the client.
-	if ((pkt->size == 18) && (strncasecmp((char*)"SHOW WARNINGS", (char*)pkt->ptr + 5, 13) == 0) &&
+	if ((pkt->size == 18) && (strncasecmp((char*)"SHOW WARNINGS", (char*)pkt->ptr + 5, SHOW_WARNINGS_LEN) == 0) &&
 		CurrentQuery.QueryParserArgs.digest_text == nullptr) {
 		SQLite3_result* resultset = new SQLite3_result(3);
 		resultset->add_column_definition(SQLITE_TEXT, "Level");
@@ -6579,6 +6583,16 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		}
 	}
 
+	const size_t monitor_username_len = (mysql_thread___monitor_username ? strlen(mysql_thread___monitor_username) : 0);
+	const bool is_monitor_username =
+		(monitor_username_len > 0 &&
+			strncmp(
+				client_myds->myconn->userinfo->username,
+				mysql_thread___monitor_username,
+				monitor_username_len
+			 ) == 0
+		);
+
 	if (
 		//(client_myds->myprot.process_pkt_handshake_response((unsigned char *)pkt->ptr,pkt->size)==true)
 		(handshake_response_return == true)
@@ -6596,14 +6610,13 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			(default_hostgroup>=0 && ( session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE ) )
 			||
 			(
-				client_myds->encrypted==false
-				&&
-				strncmp(client_myds->myconn->userinfo->username,mysql_thread___monitor_username,strlen(mysql_thread___monitor_username))==0
-			)
-		) // Do not delete this line. See bug #492
-	)	{
-		if (session_type == PROXYSQL_SESSION_ADMIN) {
-			if ( (default_hostgroup<0) || (strncmp(client_myds->myconn->userinfo->username,mysql_thread___monitor_username,strlen(mysql_thread___monitor_username))==0) ) {
+					client_myds->encrypted==false
+					&& is_monitor_username
+				)
+			) // Do not delete this line. See bug #492
+		)	{
+			if (session_type == PROXYSQL_SESSION_ADMIN) {
+				if ((default_hostgroup < 0) || is_monitor_username ) {
 				if (default_hostgroup==STATS_HOSTGROUP) {
 					session_type = PROXYSQL_SESSION_STATS;
 				}
@@ -7257,7 +7270,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					match_regexes && (match_regexes[1]->match(dig))
 				)
 				||
-				( strncasecmp(dig,(char *)"SET NAMES", strlen((char *)"SET NAMES")) == 0)
+				( strncasecmp(dig,(char *)"SET NAMES", SET_NAMES_LEN) == 0)
 				||
 				( strcasestr(dig,(char *)"autocommit"))
 			) {
@@ -7342,7 +7355,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							while (v1 && (v2 = strstr(v1,(const char *)"@"))) {
 								// we found a @ . Maybe we need to lock hostgroup
 								proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Found @ in SQL_MODE . v2 = %s\n", v2);
-								if (strncasecmp(v2,(const char *)"@@sql_mode",strlen((const char *)"@@sql_mode"))) {
+								if (strncasecmp(v2,(const char *)"@@sql_mode",SQL_MODE_LEN)) {
 									unable_to_parse_set_statement(lock_hostgroup);
 									free(v1);
 									return false;
@@ -7822,7 +7835,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								char *v2 = NULL;
 								while (v1 && (v2 = strstr(v1,(const char *)"@"))) {
 									// we found a @ . Maybe we need to lock hostgroup
-									if (strncasecmp(v2,(const char *)"@@sql_mode",strlen((const char *)"@@sql_mode"))) {
+									if (strncasecmp(v2,(const char *)"@@sql_mode",SQL_MODE_LEN)) {
 #ifdef DEBUG
 										string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
 										proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", nqn.c_str());
