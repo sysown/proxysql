@@ -97,7 +97,8 @@ int listen_on_unix(char *path, int backlog) {
 	const size_t path_len = strnlen(path, sizeof(serveraddr.sun_path));
 	if (path_len >= sizeof(serveraddr.sun_path)) {
 		errno = ENAMETOOLONG;
-		proxy_error("Unix Socket path is too long: %s\n", path);
+		proxy_error("Unix Socket path is too long: %.*s\n",
+			static_cast<int>(path_len), path);
 		return -1;
 	}
 
