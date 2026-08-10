@@ -3987,7 +3987,14 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			query_length = strlen(query)+1;
 			goto __run_query;
 		}
-		if (!strncmp("SELECT COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.\"number-of-buckets-specified\"') FROM information_schema.COLUMN_STATISTICS", query_no_space, strlen("SELECT COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.\"number-of-buckets-specified\"') FROM information_schema.COLUMN_STATISTICS"))) {
+			constexpr size_t select_column_statistics_len =
+				sizeof("SELECT COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.\"number-of-buckets-specified\"') FROM information_schema.COLUMN_STATISTICS") - 1;
+			if (
+				!strncmp(
+					"SELECT COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.\"number-of-buckets-specified\"') FROM information_schema.COLUMN_STATISTICS",
+					query_no_space,
+					select_column_statistics_len)
+			) {
 			l_free(query_length, query);
 			query = l_strdup("SELECT variable_name AS COLUMN_NAME, Variable_value AS 'JSON_EXTRACT(HISTOGRAM, ''$.\"number-of-buckets-specified\"'')' FROM global_variables WHERE 1=0");
 			query_length = strlen(query)+1;
