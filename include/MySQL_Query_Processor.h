@@ -81,7 +81,7 @@ private:
 				size_t l = strlen(value);
 				if (_is_valid_gtid((char*)value, l)) {
 					char* buf = (char*)malloc(l + 1);
-					strncpy(buf, value, l);
+					memcpy(buf, value, l);
 					buf[l] = '\0';
 
 					if (qpo->min_gtid) {
