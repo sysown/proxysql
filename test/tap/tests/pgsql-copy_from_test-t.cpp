@@ -352,7 +352,7 @@ bool encodeBinaryField(uint8_t* row, int& offset, column_type_t type, const std:
             write_int32(row + offset, sizeof(int32_t));
             offset += sizeof(int32_t);
             const int32_t value = atoi(data.c_str());
-            memcpy(row + offset, &value, sizeof(value));
+            write_int32(row + offset, value);
             offset += sizeof(value);
             return true;
         }
@@ -365,12 +365,26 @@ bool encodeBinaryField(uint8_t* row, int& offset, column_type_t type, const std:
             return true;
         }
         case TEXT:
-        case BOOLEAN:
             write_int32(row + offset, data.size());
             offset += sizeof(int32_t);
             memcpy(row + offset, data.c_str(), data.size());
             offset += data.size();
             return true;
+        case BOOLEAN: {
+            bool value;
+            if (data == "true" || data == "t") {
+                value = true;
+            } else if (data == "false" || data == "f") {
+                value = false;
+            } else {
+                fprintf(stderr, "Invalid boolean value for binary COPY: %s\n", data.c_str());
+                return false;
+            }
+            write_int32(row + offset, 1);
+            offset += sizeof(int32_t);
+            row[offset++] = value ? 1 : 0;
+            return true;
+        }
         case NUMERIC: {
             uint8_t* length_pos = row + offset;
             offset += sizeof(int32_t);
