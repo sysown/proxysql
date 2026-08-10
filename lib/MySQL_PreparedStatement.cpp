@@ -34,34 +34,58 @@ static uint64_t stmt_compute_hash(char *user,
 	l += delimiter1_len;
 	l += delimiter2_len;
 	l += query_length;
-	char *buf = (char *)malloc(l);
-	l = 0;
+	size_t hash_input_length = l;
+	char *buf = (char *)malloc(hash_input_length);
+	if (!buf) {
+		return 0;
+	}
+	size_t copied = 0;
 
 	// write user
 	if (user_len) {
-		memcpy(buf + l, user, user_len);
-		l += user_len;
+		if (copied + user_len > hash_input_length) {
+			free(buf);
+			return 0;
+		}
+		memcpy(buf + copied, user, user_len);
+		copied += user_len;
 	}
 
 	// write delimiter1
-	memcpy(buf + l, _COMPUTE_HASH_DEL1_, delimiter1_len);
-	l += delimiter1_len;
+	if (copied + delimiter1_len > hash_input_length) {
+		free(buf);
+		return 0;
+	}
+	memcpy(buf + copied, _COMPUTE_HASH_DEL1_, delimiter1_len);
+	copied += delimiter1_len;
 
 	// write schema
 	if (schema_len) {
-		memcpy(buf + l, schema, schema_len);
-		l += schema_len;
+		if (copied + schema_len > hash_input_length) {
+			free(buf);
+			return 0;
+		}
+		memcpy(buf + copied, schema, schema_len);
+		copied += schema_len;
 	}
 
 	// write delimiter2
-	memcpy(buf + l, _COMPUTE_HASH_DEL2_, delimiter2_len);
-	l += delimiter2_len;
+	if (copied + delimiter2_len > hash_input_length) {
+		free(buf);
+		return 0;
+	}
+	memcpy(buf + copied, _COMPUTE_HASH_DEL2_, delimiter2_len);
+	copied += delimiter2_len;
 
 	// write query
-	memcpy(buf + l, query, query_length);
-	l += query_length;
+	if (copied + query_length > hash_input_length) {
+		free(buf);
+		return 0;
+	}
+	memcpy(buf + copied, query, query_length);
+	copied += query_length;
 
-	uint64_t hash = SpookyHash::Hash64(buf, l, 0);
+	uint64_t hash = SpookyHash::Hash64(buf, copied, 0);
 	free(buf);
 	return hash;
 }
