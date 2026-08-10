@@ -603,17 +603,19 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 	}
 
 	if (query_no_space_length==SELECT_DB_USER_LEN) {
-		if (!strncasecmp(SELECT_DB_USER, query_no_space, query_no_space_length)) {
-			l_free(query_length,query);
-			char *query1=(char *)"SELECT \"admin\" AS 'DATABASE()', \"%s\" AS 'USER()'";
-			char *query2=(char *)malloc(strlen(query1)+strlen(sess->client_myds->myconn->userinfo->username)+10);
-			sprintf(query2,query1,sess->client_myds->myconn->userinfo->username);
-			query=l_strdup(query2);
-			query_length=strlen(query2)+1;
-			free(query2);
-			goto __run_query;
+			if (!strncasecmp(SELECT_DB_USER, query_no_space, query_no_space_length)) {
+				l_free(query_length,query);
+				char *query1=(char *)"SELECT \"admin\" AS 'DATABASE()', \"%s\" AS 'USER()'";
+				const char* username = sess->client_myds->myconn->userinfo->username;
+				size_t query2_length = strlen(query1) + (username ? strlen(username) : 0) + 1;
+				char *query2=(char *)malloc(query2_length);
+				snprintf(query2, query2_length, query1, username ? username : "");
+				query=l_strdup(query2);
+				query_length=strlen(query2)+1;
+				free(query2);
+				goto __run_query;
+			}
 		}
-	}
 
 	if (query_no_space_length==SELECT_CHARSET_VARIOUS_LEN) {
 		if (!strncasecmp(SELECT_CHARSET_VARIOUS, query_no_space, query_no_space_length)) {
@@ -625,23 +627,23 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 		}
 	}
 
-	if (!strncasecmp("SELECT @@version", query_no_space, k_select_version_len)) {
-		l_free(query_length,query);
-		char *q=(char *)"SELECT '%s' AS '@@version'";
-		query_length=strlen(q)+strlen(PROXYSQL_VERSION)+20;
-		query=(char *)l_alloc(query_length);
-		sprintf(query,q,PROXYSQL_VERSION);
-		goto __run_query;
-	}
+		if (!strncasecmp("SELECT @@version", query_no_space, k_select_version_len)) {
+			l_free(query_length,query);
+			char *q=(char *)"SELECT '%s' AS '@@version'";
+			query_length=strlen(q)+strlen(PROXYSQL_VERSION)+20;
+			query=(char *)l_alloc(query_length);
+			snprintf(query, query_length, q, PROXYSQL_VERSION);
+			goto __run_query;
+		}
 
-	if (!strncasecmp("SELECT version()", query_no_space, k_select_version_fn_len)) {
-		l_free(query_length,query);
-		char *q=(char *)"SELECT '%s' AS 'version()'";
-		query_length=strlen(q)+strlen(PROXYSQL_VERSION)+20;
-		query=(char *)l_alloc(query_length);
-		sprintf(query,q,PROXYSQL_VERSION);
-		goto __run_query;
-	}
+		if (!strncasecmp("SELECT version()", query_no_space, k_select_version_fn_len)) {
+			l_free(query_length,query);
+			char *q=(char *)"SELECT '%s' AS 'version()'";
+			query_length=strlen(q)+strlen(PROXYSQL_VERSION)+20;
+			query=(char *)l_alloc(query_length);
+			snprintf(query, query_length, q, PROXYSQL_VERSION);
+			goto __run_query;
+		}
 
 	// MySQL client check command for dollars quote support, starting at version '8.1.0'. See #4300.
 	if (!strncasecmp("SELECT $$", query_no_space, k_select_dollar_len)) {
@@ -982,19 +984,19 @@ __run_query:
 				if (strncasecmp("SELECT @@global.read_only read_only ",query_no_space, k_select_read_only_len)==0) {
 					if (strlen(query_no_space) > k_select_read_only_len+5) {
 						pthread_mutex_lock(&GloSQLite3Server->test_readonly_mutex);
-						// the current test doesn't try to simulate failures, therefore it will return immediately
-						if (GloSQLite3Server->readonly_map_size() == 0) {
-							// probably never initialized
-							GloSQLite3Server->load_readonly_table(sess);
+							// the current test doesn't try to simulate failures, therefore it will return immediately
+							if (GloSQLite3Server->readonly_map_size() == 0) {
+								// probably never initialized
+								GloSQLite3Server->load_readonly_table(sess);
+							}
+							int rc = GloSQLite3Server->readonly_test_value(query_no_space+k_select_read_only_len);
+							free(query);
+							char *a = (char *)"SELECT %d as read_only";
+							query = (char *)malloc(strlen(a)+2);
+							snprintf(query, strlen(a)+2, a, rc);
+							pthread_mutex_unlock(&GloSQLite3Server->test_readonly_mutex);
 						}
-						int rc = GloSQLite3Server->readonly_test_value(query_no_space+k_select_read_only_len);
-						free(query);
-						char *a = (char *)"SELECT %d as read_only";
-						query = (char *)malloc(strlen(a)+2);
-						sprintf(query,a,rc);
-						pthread_mutex_unlock(&GloSQLite3Server->test_readonly_mutex);
 					}
-				}
 #endif // TEST_READONLY || TEST_RDS_BGD
 #ifdef TEST_REPLICATIONLAG
 				if (
@@ -1014,23 +1016,23 @@ __run_query:
 					const int* rc = GloSQLite3Server->replicationlag_test_value(query_no_space + addr_offset);
 					free(query);
 
-					string SELECT { "SELECT " + (rc ? std::to_string(*rc) : string { "null" }) + " AS " };
-					SELECT += strstr(query_no_space, "REPLICA") ? "Seconds_Behind_Source" : "Seconds_Behind_Master";
+						string SELECT { "SELECT " + (rc ? std::to_string(*rc) : string { "null" }) + " AS " };
+						SELECT += strstr(query_no_space, "REPLICA") ? "Seconds_Behind_Source" : "Seconds_Behind_Master";
 
-					query = static_cast<char*>(malloc(SELECT.size() + 1));
-					sprintf(query, SELECT.c_str());
+						query = static_cast<char*>(malloc(SELECT.size() + 1));
+						snprintf(query, SELECT.size() + 1, "%s", SELECT.c_str());
 
 					pthread_mutex_unlock(&GloSQLite3Server->test_replicationlag_mutex);
 				}
 			}
 #endif // TEST_REPLICATIONLAG
-			if (strstr(query_no_space,(char *)"Seconds_Behind_Master")) {
-				free(query);
-				char *a = (char *)"SELECT %d as Seconds_Behind_Master";
-				query = (char *)malloc(strlen(a)+4);
-				sprintf(query,a,rand()%30+10);
+				if (strstr(query_no_space,(char *)"Seconds_Behind_Master")) {
+					free(query);
+					char *a = (char *)"SELECT %d as Seconds_Behind_Master";
+					query = (char *)malloc(strlen(a)+4);
+					snprintf(query, strlen(a)+4, a, rand()%30+10);
+				}
 			}
-		}
 #endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP || TEST_READONLY || TEST_REPLICATIONLAG || TEST_RDS_BGD
 		if (!run_query) {
 			l_free(pkt->size-sizeof(mysql_hdr),query_no_space);
@@ -1567,7 +1569,7 @@ void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 	cluster_id--;
 	int hg_id = 2270+(cluster_id*10)+1;
 	char buf[1024];
-	sprintf(buf, (char *)"SELECT * FROM HOST_STATUS_GALERA WHERE hostgroup_id = %d LIMIT 1", hg_id);
+	snprintf(buf, sizeof(buf), "SELECT * FROM HOST_STATUS_GALERA WHERE hostgroup_id = %d LIMIT 1", hg_id);
 	sessdb->execute_statement(buf, &error , &cols , &affected_rows , &resultset);
 		if (resultset->rows_count==0) {
 			//sessdb->execute("DELETE FROM HOST_STATUS_GALERA");
