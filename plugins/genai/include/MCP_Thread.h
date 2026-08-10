@@ -271,7 +271,8 @@ public:
 	 * @param name The name of the variable (without 'mcp-' prefix)
 	 * @param val Output buffer to store the value
 	 * @param val_size Size of the output buffer in bytes
-	 * @return 0 on success, -1 if variable not found
+	 * @return 0 on success, -1 if the variable is unknown, the arguments are
+	 *   null/invalid, or the value does not fit in `val_size` bytes
 	 *
 	 * @deprecated The unbounded sprintf into `val` is a stack-buffer
 	 *   overflow risk for variables that hold arbitrary-length values
