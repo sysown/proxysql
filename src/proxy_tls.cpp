@@ -234,7 +234,7 @@ int ssl_mkit(X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days, boo
 	// check if files exists
 	if (bootstrap == true) {
 		ssl_key_fp = (char *)malloc(strlen(GloVars.datadir)+strlen(ssl_key_rp)+8);
-		sprintf(ssl_key_fp,"%s/%s",GloVars.datadir,ssl_key_rp);
+		snprintf(ssl_key_fp, strlen(GloVars.datadir)+strlen(ssl_key_rp)+2, "%s/%s",GloVars.datadir,ssl_key_rp);
 	}
 	if (access(ssl_key_fp, R_OK)) {
 		ssl_key_exists = false;
@@ -242,7 +242,7 @@ int ssl_mkit(X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days, boo
 
 	if (bootstrap == true) {
 		ssl_cert_fp = (char *)malloc(strlen(GloVars.datadir)+strlen(ssl_cert_rp)+8);
-		sprintf(ssl_cert_fp,"%s/%s",GloVars.datadir,ssl_cert_rp);
+		snprintf(ssl_cert_fp, strlen(GloVars.datadir)+strlen(ssl_cert_rp)+2, "%s/%s",GloVars.datadir,ssl_cert_rp);
 	}
 	if (access(ssl_cert_fp, R_OK)) {
 		ssl_cert_exists = false;
@@ -250,7 +250,7 @@ int ssl_mkit(X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days, boo
 
 	if (bootstrap == true) {
 		ssl_ca_fp = (char *)malloc(strlen(GloVars.datadir)+strlen(ssl_ca_rp)+8);
-		sprintf(ssl_ca_fp,"%s/%s",GloVars.datadir,ssl_ca_rp);
+		snprintf(ssl_ca_fp, strlen(GloVars.datadir)+strlen(ssl_ca_rp)+2, "%s/%s",GloVars.datadir,ssl_ca_rp);
 	}
 	if (access(ssl_ca_fp, R_OK)) {
 		ssl_ca_exists = false;
