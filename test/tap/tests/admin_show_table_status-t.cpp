@@ -74,9 +74,10 @@ int main() {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 			return -1;
 		}
-		char *query = (char *) malloc(strlen(queries[0]) + it->length() + 8);
+		const size_t query_len = strlen(queries[0]) + it->size() + 1;
+		char *query = (char *) malloc(query_len);
 		for (std::vector<const char *>::iterator it2 = queries.begin(); it2 != queries.end(); it2++) {
-			sprintf(query,*it2, it->c_str());
+			snprintf(query, query_len, *it2, it->c_str());
 			diag("Running query: %s", query);
 			MYSQL_QUERY(proxysql_admin, query);
 			MYSQL_RES* proxy_res = mysql_store_result(proxysql_admin);
