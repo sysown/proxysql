@@ -3058,15 +3058,17 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	// add global mutex, see bug #1188
 	pthread_mutex_lock(&pa->sql_query_global_mutex);
 
-	if (strcasestr(query_no_space, "INFORMATION_SCHEMA.TABLES") != nullptr) {
-		const char* info_table_name = "SELECT table_name FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = DATABASE() AND table_name = '";
-		const char* info_engine_table_type = "SELECT engine, table_type FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = DATABASE() AND table_name = '";
+		if (strcasestr(query_no_space, "INFORMATION_SCHEMA.TABLES") != nullptr) {
+			const char* info_table_name = "SELECT table_name FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = DATABASE() AND table_name = '";
+			const size_t info_table_name_len = sizeof("SELECT table_name FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = DATABASE() AND table_name = '") - 1;
+			const char* info_engine_table_type = "SELECT engine, table_type FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = DATABASE() AND table_name = '";
+			const size_t info_engine_table_type_len = sizeof("SELECT engine, table_type FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = DATABASE() AND table_name = '") - 1;
 
-		if (query_no_space_length > strlen(info_table_name) &&
-			strncasecmp(query_no_space, info_table_name, strlen(info_table_name)) == 0) {
-			std::string query_str(query_no_space, query_no_space_length);
+			if (query_no_space_length > static_cast<int>(info_table_name_len) &&
+				strncasecmp(query_no_space, info_table_name, info_table_name_len) == 0) {
+				std::string query_str(query_no_space, query_no_space_length);
 
-			size_t start_pos = strlen(info_table_name);
+				size_t start_pos = info_table_name_len;
 			size_t end_pos = query_str.find('\'', start_pos);
 
 			if (end_pos != std::string::npos) {
@@ -3084,11 +3086,11 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			}
 		}
 
-		if (query_no_space_length > strlen(info_engine_table_type) &&
-			strncasecmp(query_no_space, info_engine_table_type, strlen(info_engine_table_type)) == 0) {
-			std::string query_str(query_no_space, query_no_space_length);
+			if (query_no_space_length > static_cast<int>(info_engine_table_type_len) &&
+				strncasecmp(query_no_space, info_engine_table_type, info_engine_table_type_len) == 0) {
+				std::string query_str(query_no_space, query_no_space_length);
 
-			size_t start_pos = strlen(info_engine_table_type);
+				size_t start_pos = info_engine_table_type_len;
 			size_t end_pos = query_str.find('\'', start_pos);
 
 			if (end_pos != std::string::npos) {
@@ -3108,13 +3110,14 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	}
 
 	if (strcasestr(query_no_space, "INFORMATION_SCHEMA.COLUMNS") != nullptr) {
-		const char* info_column_data_type = "SELECT column_name, extra, generation_expression, data_type FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema=database() AND table_name='";
+			const char* info_column_data_type = "SELECT column_name, extra, generation_expression, data_type FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema=database() AND table_name='";
+			const size_t info_column_data_type_len = sizeof("SELECT column_name, extra, generation_expression, data_type FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema=database() AND table_name='") - 1;
 
-		if (query_no_space_length > strlen(info_column_data_type) &&
-			strncasecmp(query_no_space, info_column_data_type, strlen(info_column_data_type)) == 0) {
-			std::string query_str(query_no_space, query_no_space_length);
+			if (query_no_space_length > static_cast<int>(info_column_data_type_len) &&
+				strncasecmp(query_no_space, info_column_data_type, info_column_data_type_len) == 0) {
+				std::string query_str(query_no_space, query_no_space_length);
 
-			size_t start_pos = strlen(info_column_data_type);
+				size_t start_pos = info_column_data_type_len;
 			size_t end_pos = query_str.find('\'', start_pos);
 
 			if (end_pos != std::string::npos) {
