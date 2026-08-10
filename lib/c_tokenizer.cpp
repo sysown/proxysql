@@ -26,17 +26,16 @@ void tokenizer(tokenizer_t *result, const char* s, const char* delimiters, int e
 
 	//tokenizer_t result;
 
-	result->s_length = ( (s && delimiters) ? tokenizer_strlen(s) : 0 );
-	result->s = NULL;
-	if (result->s_length) {
-	if (result->s_length > (PROXYSQL_TOKENIZER_BUFFSIZE-1)) {
-		result->s = strdup(s);
-	} else {
-		memcpy(result->buffer, s, result->s_length);
-		result->buffer[result->s_length] = '\0';
-		result->s = result->buffer;
-	}
-	}
+		result->s_length = ( (s && delimiters) ? tokenizer_strlen(s) : 0 );
+		result->s = NULL;
+		if (result->s_length) {
+		if (result->s_length > (PROXYSQL_TOKENIZER_BUFFSIZE-1)) {
+			result->s = strdup(s);
+		} else {
+			snprintf(result->buffer, sizeof(result->buffer), "%.*s", (int)result->s_length, s);
+			result->s = result->buffer;
+		}
+		}
 	result->delimiters				= delimiters;
 	result->current					 = NULL;
 	result->next							= result->s;
