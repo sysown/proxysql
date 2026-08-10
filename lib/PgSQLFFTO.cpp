@@ -15,6 +15,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <string_view>
 
 extern class PgSQL_Query_Processor* GloPgQPro;
 extern PgSQL_HostGroups_Manager* PgHGM;
@@ -303,17 +304,17 @@ void PgSQLFFTO::report_query_stats(const std::string& query, unsigned long long 
         char* ca = (char*)"";
         if (pgsql_thread___query_digests_track_hostname && m_session->client_myds->addr.addr) ca = m_session->client_myds->addr.addr;
         uint64_t hash2; SpookyHash myhash; myhash.Init(19, 3);
-        const char* username = ui->username ? ui->username : "";
-        const size_t username_len = strlen(username);
-        myhash.Update(username, username_len);
+        const std::string_view username_view = ui->username ? std::string_view{ui->username} : std::string_view{};
+        const size_t username_len = username_view.size();
+        myhash.Update(username_view.data(), username_len);
         myhash.Update(&qp.digest, sizeof(qp.digest));
-        const char* safe_schemaname = schemaname ? schemaname : "";
-        const size_t schemaname_len = strlen(safe_schemaname);
-        myhash.Update(safe_schemaname, schemaname_len);
+        const std::string_view schemaname_view = schemaname ? std::string_view{schemaname} : std::string_view{};
+        const size_t schemaname_len = schemaname_view.size();
+        myhash.Update(schemaname_view.data(), schemaname_len);
         myhash.Update(&m_session->current_hostgroup, sizeof(m_session->current_hostgroup));
-        const char* safe_ca = ca ? ca : "";
-        const size_t ca_len = strlen(safe_ca);
-        myhash.Update(safe_ca, ca_len);
+        const std::string_view ca_view = ca ? std::string_view{ca} : std::string_view{};
+        const size_t ca_len = ca_view.size();
+        myhash.Update(ca_view.data(), ca_len);
         myhash.Final(&qp.digest_total, &hash2);
         GloPgQPro->update_query_digest(qp.digest_total, qp.digest, qp.digest_text, m_session->current_hostgroup, ui, duration_us, m_session->thread->curtime, ca, affected_rows, rows_sent);
         if (digest_text != qp.buf) free(digest_text);
