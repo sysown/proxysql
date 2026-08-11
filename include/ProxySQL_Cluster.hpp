@@ -428,6 +428,7 @@ class ProxySQL_Cluster_Nodes {
 	SQLite3_result * dump_table_proxysql_servers();
 	SQLite3_result * stats_proxysql_servers_checksums();
 	SQLite3_result * stats_proxysql_servers_metrics();
+	SQLite3_result * stats_proxysql_servers_status(const std::string& leader_uuid, unsigned long long alive_timeout_us);
 	void get_peer_to_sync_mysql_query_rules(char **host, uint16_t *port, char** ip_address);
 	void get_peer_to_sync_runtime_mysql_servers(char **host, uint16_t *port, char **peer_checksum, char** ip_address);
 	void get_peer_to_sync_mysql_servers_v2(char** host, uint16_t* port, char** peer_mysql_servers_v2_checksum, 
@@ -700,6 +701,7 @@ public:
 	SQLite3_result* get_stats_proxysql_servers_metrics() {
 		return nodes.stats_proxysql_servers_metrics();
 	}
+	SQLite3_result* get_stats_proxysql_servers_status();
 	void Update_Node_UUID(char* h, uint16_t p, const char* u) {
 		nodes.Update_Node_UUID(h, p, u);
 	}

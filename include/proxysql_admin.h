@@ -827,6 +827,7 @@ class ProxySQL_Admin {
 
 	void stats___proxysql_servers_checksums();
 	void stats___proxysql_servers_metrics();
+	void stats___proxysql_servers_status();
 	void stats___proxysql_message_metrics(bool reset);
 	void stats___mysql_prepared_statements_info();
 	void stats___mysql_gtid_executed();

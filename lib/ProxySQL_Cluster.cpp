@@ -4688,6 +4688,73 @@ SQLite3_result * ProxySQL_Cluster_Nodes::stats_proxysql_servers_metrics() {
 	return result;
 }
 
+SQLite3_result * ProxySQL_Cluster_Nodes::stats_proxysql_servers_status(const std::string& leader_uuid, unsigned long long alive_timeout_us) {
+	const int colnum=10;
+	SQLite3_result *result=new SQLite3_result(colnum);
+	result->add_column_definition(SQLITE_TEXT,"hostname");
+	result->add_column_definition(SQLITE_TEXT,"port");
+	result->add_column_definition(SQLITE_TEXT,"weight");
+	result->add_column_definition(SQLITE_TEXT,"master");
+	result->add_column_definition(SQLITE_TEXT,"global_version");
+	result->add_column_definition(SQLITE_TEXT,"check_age_us");
+	result->add_column_definition(SQLITE_TEXT,"ping_time_us");
+	result->add_column_definition(SQLITE_TEXT,"checks_OK");
+	result->add_column_definition(SQLITE_TEXT,"checks_ERR");
+	result->add_column_definition(SQLITE_TEXT,"uuid");
+	(void)alive_timeout_us; // liveness is derivable from check_age_us; kept for future use
+
+	char buf[64];
+	int k;
+	pthread_mutex_lock(&mutex);
+	unsigned long long now = monotonic_time();
+	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
+		ProxySQL_Node_Entry * node = it->second;
+		char **pta=(char **)malloc(sizeof(char *)*colnum);
+		pta[0]=strdup(node->get_hostname());
+		sprintf(buf,"%d", node->get_port());
+		pta[1]=strdup(buf);
+		sprintf(buf,"%lu", node->get_weight());
+		pta[2]=strdup(buf);
+		const char *nuuid = node->get_uuid();
+		bool is_master = (nuuid != NULL && leader_uuid.empty() == false && leader_uuid == nuuid);
+		pta[3]=strdup(is_master ? "YES" : "NO");
+		sprintf(buf,"%lu", (unsigned long)node->get_global_version());
+		pta[4]=strdup(buf);
+		unsigned long long last = node->get_last_success_at_us();
+		if (last == 0) {
+			pta[5]=strdup("-1");
+		} else {
+			sprintf(buf,"%llu", now - last);
+			pta[5]=strdup(buf);
+		}
+		ProxySQL_Node_Metrics *curr = node->get_metrics_curr();
+		sprintf(buf,"%llu", curr->response_time_us);
+		pta[6]=strdup(buf);
+		sprintf(buf,"%lu", (unsigned long)node->get_checks_ok());
+		pta[7]=strdup(buf);
+		sprintf(buf,"%lu", (unsigned long)node->get_checks_err());
+		pta[8]=strdup(buf);
+		pta[9]=strdup(nuuid ? nuuid : "");
+
+		result->add_row(pta);
+		for (k=0; k<colnum; k++) {
+			if (pta[k])
+				free(pta[k]);
+		}
+		free(pta);
+		it++;
+	}
+	pthread_mutex_unlock(&mutex);
+	return result;
+}
+
+SQLite3_result * ProxySQL_Cluster::get_stats_proxysql_servers_status() {
+	std::string l_host; int l_port = 0; std::string l_uuid;
+	get_leader_info(l_host, l_port, l_uuid);
+	unsigned long long timeout_us = (unsigned long long)__sync_fetch_and_add(&cluster_leader_node_timeout_ms, 0) * 1000ULL;
+	return nodes.stats_proxysql_servers_status(l_uuid, timeout_us);
+}
+
 std::vector<Cluster_Leader_Candidate> ProxySQL_Cluster_Nodes::get_leader_candidates(unsigned long long alive_timeout_us) {
 	std::vector<Cluster_Leader_Candidate> candidates;
 	unsigned long long now = monotonic_time();

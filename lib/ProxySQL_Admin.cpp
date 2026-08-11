@@ -1347,7 +1347,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_proxysql_message_metrics = false;
 	bool stats_proxysql_message_metrics_reset = false;
 
-	//bool stats_proxysql_servers_status = false; // temporary disabled because not implemented
+	bool stats_proxysql_servers_status = false;
 
 	if (strcasestr(query_no_space, "pgsql processlist") ||
 		strcasestr(query_no_space, "pgsql activity") ||
@@ -1494,11 +1494,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	if (strstr(query_no_space,"stats_proxysql_message_metrics_reset"))
 		{ stats_proxysql_message_metrics_reset=true; refresh=true; }
 
-	// temporary disabled because not implemented
-/*
 	if (strstr(query_no_space,"stats_proxysql_servers_status"))
 		{ stats_proxysql_servers_status = true; refresh = true; }
-*/
 	if (strstr(query_no_space,"stats_mysql_prepared_statements_info")) {
 		stats_mysql_prepared_statements_info=true; refresh=true;
 	}
@@ -1726,10 +1723,9 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			}
 		}
 
-		// temporary disabled because not implemented
-//		if (stats_proxysql_servers_status) {
-//			stats___proxysql_servers_status();
-//		}
+		if (stats_proxysql_servers_status) {
+			stats___proxysql_servers_status();
+		}
 		if (stats_mysql_prepared_statements_info) {
 			stats___mysql_prepared_statements_info();
 		}

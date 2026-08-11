@@ -1562,6 +1562,44 @@ void ProxySQL_Admin::stats___proxysql_servers_checksums() {
 	delete resultset;
 }
 
+void ProxySQL_Admin::stats___proxysql_servers_status() {
+	// Same deadlock avoidance as stats___proxysql_servers_checksums:
+	// release sql_query_global_mutex while calling into the cluster nodes mutex.
+	pthread_mutex_unlock(&this->sql_query_global_mutex);
+	SQLite3_result* resultset = GloProxyCluster->get_stats_proxysql_servers_status();
+	pthread_mutex_lock(&this->sql_query_global_mutex);
+	statsdb->execute("BEGIN");
+	statsdb->execute("DELETE FROM stats_proxysql_servers_status");
+	if (resultset) {
+		int rc;
+		sqlite3_stmt *statement1=NULL;
+		char *query1=NULL;
+		query1=(char *)"INSERT INTO stats_proxysql_servers_status VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
+		auto [rc1, statement1_unique] = statsdb->prepare_v2(query1);
+		rc = rc1;
+		statement1 = statement1_unique.get();
+		ASSERT_SQLITE_OK(rc, statsdb);
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r1=*it;
+			rc=(*proxy_sqlite3_bind_text)(statement1, 1, r1->fields[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 2, atoi(r1->fields[1])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_text)(statement1, 4, r1->fields[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 5, atoi(r1->fields[4])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 6, atoll(r1->fields[5])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 7, atoll(r1->fields[6])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 8, atoi(r1->fields[7])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 9, atoi(r1->fields[8])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_text)(statement1, 10, r1->fields[9], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			SAFE_SQLITE3_STEP2(statement1);
+			rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, statsdb);
+		}
+	}
+	statsdb->execute("COMMIT");
+	delete resultset;
+}
+
 void ProxySQL_Admin::stats___proxysql_servers_metrics() {
 	//SQLite3_result * resultset=GloProxyCluster->get_stats_proxysql_servers_metrics();
 	//if (resultset==NULL) return;
