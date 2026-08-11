@@ -72,7 +72,8 @@ uint64_t PgSQL_Connection_userinfo::compute_hash() {
 		hash_input.append(dbname, dbname_len);
 	}
 	hash_input.append(delimiter2);
-	return SpookyHash::Hash64(hash_input.data(), hash_input.size(), 0);
+	hash = SpookyHash::Hash64(hash_input.data(), hash_input.size(), 0);
+	return hash;
 }
 
 void PgSQL_Connection_userinfo::set(char *user, char *pass, char *db, char *sh1) {
