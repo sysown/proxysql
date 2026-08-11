@@ -1418,6 +1418,40 @@ template <typename S>
 bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query_no_space_length, S* sess, ProxySQL_Admin *pa, char **q, unsigned int *ql) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 5, "Received command %s\n", query_no_space);
 
+	{
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		if (SPA->effective_read_only()) {
+			bool is_load = (!strncasecmp("LOAD ", query_no_space, 5));
+			bool is_save = (!strncasecmp("SAVE ", query_no_space, 5));
+			bool refuse = false;
+			if (query_no_space_length > 11 && !strncasecmp(" TO RUNTIME", query_no_space+query_no_space_length-11, 11)) {
+				refuse = true; // LOAD ... TO RUNTIME
+			}
+			if (query_no_space_length > 8 && is_save && !strncasecmp(" TO DISK", query_no_space+query_no_space_length-8, 8)) {
+				refuse = true; // SAVE ... TO DISK
+			}
+			if (query_no_space_length > 12 && (is_load || is_save) && !strncasecmp(" FROM MEMORY", query_no_space+query_no_space_length-12, 12)) {
+				refuse = true; // aliases: LOAD x FROM MEMORY == LOAD x TO RUNTIME ; SAVE x FROM MEMORY == SAVE x TO DISK
+			}
+			if (refuse) {
+				std::string l_host; int l_port = 0; std::string l_uuid;
+				GloProxyCluster->get_leader_info(l_host, l_port, l_uuid);
+				char msg[512];
+				if (l_host.length()) {
+					snprintf(msg, sizeof(msg),
+						"Admin is in read-only mode (cluster follower). Current leader is %s:%d (%s). Use PROXYSQL READWRITE to override.",
+						l_host.c_str(), l_port, l_uuid.c_str());
+				} else {
+					snprintf(msg, sizeof(msg),
+						"Admin is in read-only mode. Use PROXYSQL READWRITE to override.");
+				}
+				proxy_warning("Refused '%s' : %s\n", query_no_space, msg);
+				SPA->send_error_msg_to_client(sess, msg);
+				return false;
+			}
+		}
+	}
+
 #ifdef DEBUG
 	if ((query_no_space_length>11) && ( (!strncasecmp("SAVE DEBUG ", query_no_space, 11)) || (!strncasecmp("LOAD DEBUG ", query_no_space, 11))) ) {
 		if (
