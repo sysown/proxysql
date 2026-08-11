@@ -47,6 +47,14 @@ static int random_replication_lag_seconds() {
 }
 #endif
 
+#ifdef TEST_REPLICATIONLAG
+static void ensure_replicationlag_table_loaded(SQLite3_Server* server, MySQL_Session* sess) {
+	if (server->replicationlag_map_size() == 0) {
+		server->load_replicationlag_table(sess);
+	}
+}
+#endif
+
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
 #define SELECT_VERSION_COMMENT_LEN 32
 #define SELECT_DB_USER "select DATABASE(), USER() limit 1"
@@ -1051,10 +1059,7 @@ __run_query:
 					&& query_no_space_length > addr_offset + 5) {
 						pthread_mutex_lock(&GloSQLite3Server->test_replicationlag_mutex);
 						// the current test doesn't try to simulate failures, therefore it will return immediately
-						if (GloSQLite3Server->replicationlag_map_size() == 0) {
-							// probably never initialized
-							GloSQLite3Server->load_replicationlag_table(sess);
-					}
+						ensure_replicationlag_table_loaded(GloSQLite3Server, sess);
 					const int* rc = GloSQLite3Server->replicationlag_test_value(query_no_space + addr_offset);
 					l_free(query_length, query);
 
