@@ -2631,7 +2631,7 @@ char** client_host_cache_entry_row(
 	row[0] = strdup(address.c_str());
 	snprintf(buff, sizeof(buff), "%u", entry.error_count);
 	row[1] = strdup(buff);
-	snprintf(buff, sizeof(buff), "%lu", last_updated);
+	snprintf(buff, sizeof(buff), "%lld", static_cast<long long>(last_updated));
 	row[2] = strdup(buff);
 
 	return row;
@@ -5158,7 +5158,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist(processlist_config_t arg
 			if (sess->client_myds) {
 				char buf[1024];
 				char** pta = (char**)malloc(sizeof(char*) * colnum);
-				snprintf(buf, sizeof(buf), "%d", i);
+				snprintf(buf, sizeof(buf), "%u", i);
 				pta[0] = strdup(buf);
 				snprintf(buf, sizeof(buf), "%u", sess->thread_session_id);
 				pta[1] = strdup(buf);
@@ -5240,8 +5240,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist(processlist_config_t arg
 						pta[8] = NULL;
 					}
 
-					snprintf(buf, sizeof(buf), "%s", mc->parent->address);
-					pta[9] = strdup(buf);
+					pta[9] = strdup(mc->parent->address);
 					snprintf(buf, sizeof(buf), "%d", mc->parent->port);
 					pta[10] = strdup(buf);
 					pta[15] = sess->get_current_query(args.max_query_length);
