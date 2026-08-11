@@ -8400,11 +8400,14 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			} else {
 				client_addr = strdup((char *)"");
 			}
-			char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100+strlen(client_addr));
-			sprintf(_s,"ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
+			std::string access_denied_message =
+				"ProxySQL Error: Access denied for user '" +
+				std::string(client_myds->myconn->userinfo->username) + "'@'" + client_addr +
+				"' (using password: " +
+				(client_myds->myconn->userinfo->password ? "YES" : "NO") + ")";
 			proxy_error("ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)\n", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
-			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"28000", _s, true);
-			free(_s);
+			char access_denied_sqlstate[] = "28000";
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1045,access_denied_sqlstate, access_denied_message.data(), true);
 			if (client_addr) { free(client_addr); }
 			__sync_fetch_and_add(&MyHGM->status.access_denied_wrong_password, 1);
 		}

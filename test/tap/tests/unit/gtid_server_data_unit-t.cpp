@@ -28,9 +28,11 @@
 extern struct ev_io * new_connect_watcher(char *address, uint16_t gtid_port, uint16_t mysql_port);
 
 static const char *UUID_A = "aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa";
-static const char *UUID_A_STRIPPED = "aaaaaaaa000011112222aaaaaaaaaaaa";
+static char UUID_A_STRIPPED[] = "aaaaaaaa000011112222aaaaaaaaaaaa";
 static const char *UUID_B = "bbbbbbbb-3333-4444-5555-bbbbbbbbbbbb";
-static const char *UUID_B_STRIPPED = "bbbbbbbb333344445555bbbbbbbbbbbb";
+static char UUID_B_STRIPPED[] = "bbbbbbbb333344445555bbbbbbbbbbbb";
+static char LOOPBACK_ADDRESS[] = "127.0.0.1";
+static char EMPTY_COMMENT[] = "";
 
 /**
  * @brief Helper: stuff a message string into sd's buffer and reset pos.
@@ -346,14 +348,14 @@ static void test_incomplete_message() {
 }
 
 static void test_ok_gtid_survives_inactive_reader() {
-	GTID_Server_Data sd(nullptr, (char *)"127.0.0.1", 0, 3306);
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
 	sd.active = false;
 
 	ok(sd.add_gtid_from_ok("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:42"),
 		"OK GTID: first observation updates the set");
-	ok(sd.gtid_exists((char *)UUID_A_STRIPPED, 42),
+	ok(sd.gtid_exists(UUID_A_STRIPPED, 42),
 		"OK GTID: direct evidence is valid while reader is inactive");
-	ok(!sd.gtid_exists((char *)UUID_A_STRIPPED, 43),
+	ok(!sd.gtid_exists(UUID_A_STRIPPED, 43),
 		"OK GTID: an unobserved transaction remains absent");
 	ok(sd.gtid_executed_to_string().find(":42") != std::string::npos,
 		"OK GTID: union is visible in stats rendering");
@@ -364,20 +366,20 @@ static void test_ok_gtid_survives_inactive_reader() {
 }
 
 static void test_known_gtid_survives_inactive_reader() {
-	GTID_Server_Data sd(nullptr, (char *)"127.0.0.1", 0, 3306);
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
 	std::string msg = std::string("I1=") + UUID_A_STRIPPED + ":55\n";
 	stuff_buffer(sd, msg);
 
 	ok(sd.read_next_gtid(), "known GTID: binlog message is parsed");
-	ok(sd.gtid_exists((char *)UUID_A_STRIPPED, 55),
+	ok(sd.gtid_exists(UUID_A_STRIPPED, 55),
 		"known GTID: active endpoint record contains the transaction");
 	sd.active = false;
-	ok(sd.gtid_exists((char *)UUID_A_STRIPPED, 55),
+	ok(sd.gtid_exists(UUID_A_STRIPPED, 55),
 		"known GTID: inactive reader does not hide endpoint state");
 }
 
 static void test_ok_gtid_validation() {
-	GTID_Server_Data sd(nullptr, (char *)"127.0.0.1", 0, 3306);
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
 
 	ok(!sd.add_gtid_from_ok(nullptr), "OK GTID: null is rejected");
 	ok(!sd.add_gtid_from_ok("missing-separator"), "OK GTID: missing separator is rejected");
@@ -392,33 +394,33 @@ static void test_ok_gtid_validation() {
 }
 
 static void test_ok_and_binlog_merge() {
-	GTID_Server_Data sd(nullptr, (char *)"127.0.0.1", 0, 3306);
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
 	std::string msg = std::string("I1=") + UUID_A_STRIPPED + ":60\n";
 	stuff_buffer(sd, msg);
 	sd.read_next_gtid();
 
 	ok(sd.add_gtid_from_ok("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:61"),
 		"mixed observations: direct GTID is added");
-	ok(sd.gtid_exists((char *)UUID_A_STRIPPED, 60),
+	ok(sd.gtid_exists(UUID_A_STRIPPED, 60),
 		"mixed observations: binlog GTID is eligible");
 	sd.active = false;
-	ok(sd.gtid_exists((char *)UUID_A_STRIPPED, 60),
+	ok(sd.gtid_exists(UUID_A_STRIPPED, 60),
 		"mixed observations: known binlog GTID remains eligible when inactive");
-	ok(sd.gtid_exists((char *)UUID_A_STRIPPED, 61),
+	ok(sd.gtid_exists(UUID_A_STRIPPED, 61),
 		"mixed observations: known OK GTID remains eligible when inactive");
 }
 
 static void test_manager_gtid_lookup_survives_inactive_reader() {
 	MySQL_HostGroups_Manager manager;
-	GTID_Server_Data sd(nullptr, (char *)"127.0.0.1", 0, 3306);
-	MySrvC server((char *)"127.0.0.1", 3306, 0, 1, MYSQL_SERVER_STATUS_ONLINE,
-		0, 100, 0, 0, 0, (char *)"");
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+	MySrvC server(LOOPBACK_ADDRESS, 3306, 0, 1, MYSQL_SERVER_STATUS_ONLINE,
+		0, 100, 0, 0, 0, EMPTY_COMMENT);
 
 	sd.add_gtid_from_ok("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:70");
 	manager.gtid_map.emplace("127.0.0.1:3306", &sd);
 	sd.active = false;
 
-	ok(manager.gtid_exists(&server, (char *)UUID_A_STRIPPED, 70),
+	ok(manager.gtid_exists(&server, UUID_A_STRIPPED, 70),
 		"manager GTID lookup: known endpoint state remains eligible when inactive");
 }
 
@@ -486,7 +488,7 @@ static unsigned long long snapshot_last_trxid(const std::string& gtid_executed) 
  * or with an unlocked events_read access, can expose different generations.
  */
 static void test_gtid_snapshot_is_coherent_during_binlog_updates() {
-	GTID_Server_Data sd(nullptr, (char *)"127.0.0.1", 0, 3306);
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
 	constexpr unsigned long long event_count = 4000;
 	std::string messages;
 	messages.reserve(event_count * 16);

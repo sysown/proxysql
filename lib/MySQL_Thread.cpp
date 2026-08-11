@@ -513,7 +513,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"passthrough_auth_failure_map_cap",
 	(char *)"kill_backend_connection_when_disconnect",
 	(char *)"client_session_track_gtid",
-	(char *)"update_gtid_from_ok",
+	(char *)"update_gtid_from_ok", // NOSONAR: matches legacy char* array API
 	(char *)"sessions_sort",
 #ifdef IDLE_THREADS
 	(char *)"session_idle_show_processlist",

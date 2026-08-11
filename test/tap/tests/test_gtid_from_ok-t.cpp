@@ -4,6 +4,7 @@
  *        hostgroup copies of an endpoint, including an inactive GTID reader.
  */
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -177,8 +178,24 @@ static bool poll_endpoint_gtid(
 	return false;
 }
 
-static MYSQL* connect_mysql(char* host, int port, char* username, char* password) {
-	return init_mysql_conn(host, port, username, password);
+static std::vector<char> mutable_c_string(const std::string& value) {
+	std::vector<char> buffer(value.begin(), value.end());
+	buffer.push_back('\0');
+	return buffer;
+}
+
+static MYSQL* connect_mysql(
+	const std::string& host,
+	int port,
+	const std::string& username,
+	const std::string& password
+) {
+	std::vector<char> host_buffer = mutable_c_string(host);
+	std::vector<char> username_buffer = mutable_c_string(username);
+	std::vector<char> password_buffer = mutable_c_string(password);
+	return init_mysql_conn(
+		host_buffer.data(), port, username_buffer.data(), password_buffer.data()
+	);
 }
 
 static bool select_single_string(MYSQL* mysql, const std::string& query, std::string& value) {
@@ -210,7 +227,8 @@ struct TestConnections {
 	MYSQL* tracked = nullptr;
 
 	void close_all() {
-		for (MYSQL** connection : { &direct, &first, &untracked, &tracked }) {
+		const std::array<MYSQL**, 4> connection_ptrs { &direct, &first, &untracked, &tracked };
+		for (MYSQL** connection : connection_ptrs) {
 			if (*connection != nullptr) {
 				mysql_close(*connection);
 				*connection = nullptr;
@@ -224,6 +242,8 @@ public:
 	CleanupGuard(MYSQL* admin, const CommandLine& cl, TestConnections& connections)
 		: admin_(admin), mysql_username_(cl.mysql_username), mysql_password_(cl.mysql_password),
 		  connections_(connections) {}
+	CleanupGuard(const CleanupGuard&) = delete;
+	CleanupGuard& operator=(const CleanupGuard&) = delete;
 
 	~CleanupGuard() {
 		if (!cleaned_up_) {
@@ -277,8 +297,7 @@ public:
 			}
 
 			MYSQL* direct = connect_mysql(
-				const_cast<char*>(address_.c_str()), port_,
-				const_cast<char*>(mysql_username_.c_str()), const_cast<char*>(mysql_password_.c_str())
+				address_.c_str(), port_, mysql_username_.c_str(), mysql_password_.c_str()
 			);
 			if (direct == nullptr) {
 				diag("Cleanup could not connect to %s:%d for backend cleanup",
@@ -460,7 +479,7 @@ static int run_test(
 	}
 
 	connections.direct = connect_mysql(
-		const_cast<char*>(address.c_str()), mysql_port, cl.mysql_username, cl.mysql_password
+		address.c_str(), mysql_port, cl.mysql_username, cl.mysql_password
 	);
 	std::string backend_session_track_gtids;
 	const bool backend_tracking_ready = connections.direct != nullptr &&
