@@ -5,8 +5,10 @@
  *   auth_ed25519 server plugin, creates ed25519 backend users, and exercises:
  *     1. cleartext-stored user: frontend ed25519 auth AND backend ed25519 auth
  *        (query reaches the backend);
- *     2. $ED$-stored user: frontend auth succeeds, backend query fails
- *        (public key cannot drive backend auth -- documented limitation);
+ *     2. $ED$-stored user: frontend auth succeeds, backend query fails with the
+ *        backend's own 1045 "Access denied" (public key cannot drive backend auth --
+ *        documented limitation; asserted on the specific errno/message, not just
+ *        "the query failed", so a Galera blip or backend outage cannot pass this check);
  *     3. wrong password -> 1045;
  *     4. COM_CHANGE_USER into an ed25519 user via Auth Switch;
  *     5. additional-password (attributes JSON) retry.
@@ -23,6 +25,13 @@
 
 const char* ED_PASS = "ed25519_pass_1";
 const char* ED_PUBKEY = "5TBW79xTAMbhi8QKQtLLVS0V0b2w9mlKnRG6c+2NxTQ";
+// Confirmed empirically against the mariadb10-galera infra (see task-5-report.md):
+// when ProxySQL retries the backend connection for a $ED$ (public-key-only) user, the
+// backend itself rejects the retry with its native 1045 access-denied error, and
+// ProxySQL propagates that same errno/message straight through to the client -- this
+// is not a ProxySQL-specific connect-timeout code, it is the backend's own "Access
+// denied for user ..." response, forwarded verbatim.
+#define ED25519_PK_BACKEND_ERRNO 1045
 
 int main(int argc, char** argv) {
 	CommandLine cl;
@@ -126,7 +135,18 @@ int main(int argc, char** argv) {
 		if (conn_ok) {
 			int rc = mysql_query(c, "SELECT 1");
 			if (rc == 0) { mysql_free_result(mysql_store_result(c)); }
-			ok(rc != 0, "backend query fails for public-key-only credential (documented limitation)");
+			unsigned int eno = mysql_errno(c);
+			const char* emsg = mysql_error(c);
+			diag("$ED$ backend query result: rc=%d errno=%u error='%s'", rc, eno, emsg ? emsg : "");
+			// Distinguish the intended "backend rejects the public key" failure from generic
+			// connectivity loss (Galera blip, backend outage, unrelated regression): both the
+			// specific errno AND a stable substring of the backend's own access-denied text
+			// must match, not just "some error occurred".
+			bool is_access_denied = emsg && strstr(emsg, "Access denied") != NULL;
+			ok(rc != 0 && eno == ED25519_PK_BACKEND_ERRNO && is_access_denied,
+				"backend query fails for public-key-only credential with errno %d and 'Access denied' "
+				"(documented limitation; got errno %u, error '%s')",
+				ED25519_PK_BACKEND_ERRNO, eno, emsg ? emsg : "");
 		} else {
 			ok(false, "backend check skipped: connection failed");
 		}
