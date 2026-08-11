@@ -4814,14 +4814,19 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		return false;
 	}
 	if (!strcasecmp(name,"read_only")) {
+		bool old_admin_read_only = variables.admin_read_only;
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.admin_read_only=true;
-			set_ro_mode(variables.admin_read_only ? ADMIN_RO_MODE_FORCED_RO : ADMIN_RO_MODE_AUTO);
+			if (old_admin_read_only != variables.admin_read_only) {
+				set_ro_mode(variables.admin_read_only ? ADMIN_RO_MODE_FORCED_RO : ADMIN_RO_MODE_AUTO);
+			}
 			return true;
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.admin_read_only=false;
-			set_ro_mode(variables.admin_read_only ? ADMIN_RO_MODE_FORCED_RO : ADMIN_RO_MODE_AUTO);
+			if (old_admin_read_only != variables.admin_read_only) {
+				set_ro_mode(variables.admin_read_only ? ADMIN_RO_MODE_FORCED_RO : ADMIN_RO_MODE_AUTO);
+			}
 			return true;
 		}
 		return false;
