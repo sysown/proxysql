@@ -9,6 +9,7 @@ using json = nlohmann::json;
 #include <algorithm>
 #include <cerrno>
 #include <cctype>
+#include <cinttypes>
 #include <vector>
 
 #include "proxysql_utils.h"
@@ -2074,7 +2075,7 @@ char * MySQL_Threads_Handler::get_variable(const char *name) {	// this is the pu
 
 	if (!strcasecmp(name,"server_capabilities")) {
 		// FIXME : make it human readable
-		snprintf(intbuf, sizeof(intbuf), "%d",variables.server_capabilities);
+		snprintf(intbuf, sizeof(intbuf), "%" PRIu32, variables.server_capabilities);
 		return strdup(intbuf);
 	}
 	// SSL variables
