@@ -46,7 +46,7 @@ const char* ED_PUBKEY = "5TBW79xTAMbhi8QKQtLLVS0V0b2w9mlKnRG6c+2NxTQ";
 // ProxySQL propagates that same errno/message straight through to the client -- this
 // is not a ProxySQL-specific connect-timeout code, it is the backend's own "Access
 // denied for user ..." response, forwarded verbatim.
-#define ED25519_PK_BACKEND_ERRNO 1045
+constexpr unsigned int ED25519_PK_BACKEND_ERRNO = 1045;
 
 int main(int argc, char** argv) {
 	CommandLine cl;
@@ -87,11 +87,16 @@ int main(int argc, char** argv) {
 	// every connection/change_user call in this test passes a NULL db -- this still exercises
 	// the full frontend+backend authentication path (the thing under test) without requiring
 	// object-level privileges that the fixture-creating account does not have.
+	// drop-and-recreate: a previous run (or an unrelated test) may have left
+	// these accounts behind with a different authentication string, which
+	// would make the ED_PASS assertions fail for the wrong reason
+	MYSQL_QUERY(wr, "DROP USER IF EXISTS 'ed_user'@'%'");
 	std::string create_user =
-		std::string("CREATE USER IF NOT EXISTS 'ed_user'@'%' IDENTIFIED VIA ed25519 USING '") + ED_PUBKEY + "'";
+		std::string("CREATE USER 'ed_user'@'%' IDENTIFIED VIA ed25519 USING '") + ED_PUBKEY + "'";
 	MYSQL_QUERY(wr, create_user.c_str());
+	MYSQL_QUERY(wr, "DROP USER IF EXISTS 'ed_user_pk'@'%'");
 	std::string create_user_pk =
-		std::string("CREATE USER IF NOT EXISTS 'ed_user_pk'@'%' IDENTIFIED VIA ed25519 USING '") + ED_PUBKEY + "'";
+		std::string("CREATE USER 'ed_user_pk'@'%' IDENTIFIED VIA ed25519 USING '") + ED_PUBKEY + "'";
 	MYSQL_QUERY(wr, create_user_pk.c_str());
 
 	// ---- proxysql users ----
@@ -268,7 +273,7 @@ int main(int argc, char** argv) {
 		// primary password wrong on purpose; additional_password holds the real one
 		char hexpass[64] = { 0 };
 		for (size_t i = 0; i < strlen(ED_PASS); i++) {
-			sprintf(hexpass + 2 * i, "%02x", (unsigned char)ED_PASS[i]);
+			snprintf(hexpass + 2 * i, sizeof(hexpass) - 2 * i, "%02x", (unsigned char)ED_PASS[i]);
 		}
 		std::string q =
 			"UPDATE mysql_users SET password='not_the_real_password',"
