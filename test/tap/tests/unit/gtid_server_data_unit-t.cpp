@@ -14,6 +14,7 @@
 #include "tap.h"
 
 #include "GTID_Server_Data.h"
+#include "MySQL_HostGroups_Manager.h"
 
 #include <cstring>
 #include <string>
@@ -399,8 +400,22 @@ static void test_ok_and_binlog_merge() {
 		"mixed observations: known OK GTID remains eligible when inactive");
 }
 
+static void test_manager_gtid_lookup_survives_inactive_reader() {
+	MySQL_HostGroups_Manager manager;
+	GTID_Server_Data sd(nullptr, (char *)"127.0.0.1", 0, 3306);
+	MySrvC server((char *)"127.0.0.1", 3306, 0, 1, MYSQL_SERVER_STATUS_ONLINE,
+		0, 100, 0, 0, 0, (char *)"");
+
+	sd.add_gtid_from_ok("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:70");
+	manager.gtid_map.emplace("127.0.0.1:3306", &sd);
+	sd.active = false;
+
+	ok(manager.gtid_exists(&server, (char *)UUID_A_STRIPPED, 70),
+		"manager GTID lookup: known endpoint state remains eligible when inactive");
+}
+
 int main() {
-	plan(102);
+	plan(103);
 
 	test_bootstrap_single();            //  6 assertions
 	test_bootstrap_range();             //  8 assertions
@@ -421,6 +436,7 @@ int main() {
 	test_known_gtid_survives_inactive_reader();
 	test_ok_gtid_validation();
 	test_ok_and_binlog_merge();
+	test_manager_gtid_lookup_survives_inactive_reader();
 
 	return exit_status();
 }

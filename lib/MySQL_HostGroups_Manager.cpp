@@ -1678,7 +1678,7 @@ uint64_t MySQL_HostGroups_Manager::get_mysql_servers_checksum(SQLite3_result* ru
  * 1. Acquires a read lock on the GTID read-write lock.
  * 2. Constructs a string representation of the MySQL server address and port.
  * 3. Searches for the GTID information associated with the MySQL server in the GTID map using the constructed string as the key.
- * 4. If the GTID information is found and is active, it checks whether the specified GTID exists.
+ * 4. If the GTID information is found, it checks whether the specified GTID exists.
  * 5. Releases the read lock on the GTID read-write lock.
  *
  * @param mysrvc A pointer to the MySQL server connection.
@@ -1698,9 +1698,7 @@ bool MySQL_HostGroups_Manager::gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uin
 	if (it2!=gtid_map.end()) {
 		gtid_is=it2->second;
 		if (gtid_is) {
-			if (gtid_is->active == true) {
-				ret = gtid_is->gtid_exists(gtid_uuid,gtid_trxid);
-			}
+			ret = gtid_is->gtid_exists(gtid_uuid,gtid_trxid);
 		}
 	}
 	//proxy_info("Checking if server %s has GTID %s:%lu . %s\n", s1.c_str(), gtid_uuid, gtid_trxid, (ret ? "YES" : "NO"));
