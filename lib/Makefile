@@ -140,6 +140,11 @@ ifeq ($(PROXYSQLFFTO),1)
 _OBJ_CXX += MySQLFFTO.oo PgSQLFFTO.oo
 endif
 
+# ed25519 frontend authentication (MariaDB client_ed25519)
+ifeq ($(PROXYSQLED25519),1)
+_OBJ_CXX += MySQL_Ed25519.oo
+endif
+
 OBJ_CXX := $(patsubst %,$(ODIR)/%,$(_OBJ_CXX))
 HEADERS := ../include/*.h ../include/*.hpp
 
