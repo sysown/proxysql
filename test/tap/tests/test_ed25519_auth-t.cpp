@@ -3,15 +3,26 @@
  * @brief End-to-end MariaDB ed25519 authentication (frontend + backend).
  * @details Requires a MariaDB backend (mariadb10-galera infra): installs the
  *   auth_ed25519 server plugin, creates ed25519 backend users, and exercises:
- *     1. cleartext-stored user: frontend ed25519 auth AND backend ed25519 auth
- *        (query reaches the backend);
- *     2. $ED$-stored user: frontend auth succeeds, backend query fails with the
- *        backend's own 1045 "Access denied" (public key cannot drive backend auth --
+ *     1. cleartext-stored user, client-requested switch: the client sets
+ *        MYSQL_DEFAULT_AUTH=client_ed25519, so the server offers ed25519 in
+ *        the greeting, the client requests it, and ProxySQL derives the key
+ *        from the stored cleartext credential to verify the signature (spec
+ *        switch-policy rule 2). Query then reaches the backend over the
+ *        derived-key ed25519 backend connection.
+ *     2. $ED$-stored user: the stored "$ED$<pubkey>" credential forces the
+ *        ed25519 switch unconditionally (independent of client plugin);
+ *        frontend auth succeeds, backend query fails with the backend's own
+ *        1045 "Access denied" (public key cannot drive backend auth --
  *        documented limitation; asserted on the specific errno/message, not just
  *        "the query failed", so a Galera blip or backend outage cannot pass this check);
  *     3. wrong password -> 1045;
- *     4. COM_CHANGE_USER into an ed25519 user via Auth Switch;
- *     5. additional-password (attributes JSON) retry;
+ *     4. COM_CHANGE_USER: (a) into a cleartext-stored ed25519-backed user via
+ *        plain native auth (no client-side ed25519 request, so this exercises
+ *        the ordinary change-user path, not the ed25519 switch -- labeled
+ *        accordingly); (b) into the $ED$-stored user, which forces the
+ *        ed25519 change-user switch regardless of client plugin;
+ *     5. additional-password (attributes JSON) retry, also with a
+ *        client-requested ed25519 switch;
  *     6. malformed "$ED$"-prefixed stored credential ("$ED$short", wrong
  *        length): connecting with the literal stored string as the password
  *        must be denied with 1045, never accepted as a cleartext match
@@ -44,7 +55,7 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	plan(11);
+	plan(13);
 
 	// ---- fixture: backend plugin + users, via ProxySQL default routing ----
 	MYSQL* wr = mysql_init(NULL);
@@ -115,11 +126,18 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(admin, q3.c_str());
 	MYSQL_QUERY(admin, "LOAD MYSQL USERS TO RUNTIME");
 
-	// ---- 1-2: cleartext-stored user, full frontend+backend path ----
+	// ---- 1-2: cleartext-stored user, client-requested switch, full frontend+backend path ----
 	{
 		MYSQL* c = mysql_init(NULL);
+		// Force the client to request client_ed25519 in the handshake response
+		// (the vendored connector otherwise defaults to mysql_native_password
+		// and the greeting's ed25519 offer is never taken up) -- this is what
+		// actually drives the switch-policy "client request + usable cleartext
+		// credential -> derive key" path (spec switch-policy rule 2), rather
+		// than silently falling through to plain native auth.
+		mysql_options(c, MYSQL_DEFAULT_AUTH, "client_ed25519");
 		bool conn_ok = mysql_real_connect(c, cl.host, "ed_user", ED_PASS, NULL, cl.port, NULL, 0) != NULL;
-		ok(conn_ok, "cleartext-stored user connects via ed25519 auth switch (err: %s)", conn_ok ? "-" : mysql_error(c));
+		ok(conn_ok, "connects via ed25519 auth switch (client-requested, key derived from cleartext) (err: %s)", conn_ok ? "-" : mysql_error(c));
 		if (conn_ok) {
 			int rc = mysql_query(c, "SELECT CURRENT_USER()");
 			ok(rc == 0, "query reaches the ed25519 backend user (err: %s)", rc ? mysql_error(c) : "-");
@@ -189,7 +207,13 @@ int main(int argc, char** argv) {
 		mysql_close(c);
 	}
 
-	// ---- 7-8: COM_CHANGE_USER into the ed25519 user ----
+	// ---- 7-8: COM_CHANGE_USER into a cleartext-stored ed25519-backed user, native auth path ----
+	// The connector's COM_CHANGE_USER request here does not carry a client_ed25519
+	// plugin request (no MYSQL_DEFAULT_AUTH set on this connection), and 'ed_user's
+	// stored ProxySQL credential is plain cleartext (not "$ED$"-prefixed), so this
+	// exercises the ordinary native-auth change-user path, not the ed25519 switch --
+	// labeled accordingly. See the block below for change-user via the forced
+	// ed25519 switch.
 	{
 		MYSQL* c = mysql_init(NULL);
 		bool conn_ok = mysql_real_connect(c, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0) != NULL;
@@ -198,15 +222,48 @@ int main(int argc, char** argv) {
 			ok(false, "change_user skipped");
 		} else {
 			int rc = mysql_change_user(c, "ed_user", ED_PASS, NULL);
-			ok(rc == 0, "COM_CHANGE_USER into ed25519 user succeeds (err: %s)", rc ? mysql_error(c) : "-");
+			ok(rc == 0, "COM_CHANGE_USER into ed25519-backed user succeeds (native auth path, cleartext credential) (err: %s)", rc ? mysql_error(c) : "-");
 			rc = mysql_query(c, "SELECT 1");
 			if (rc == 0) { mysql_free_result(mysql_store_result(c)); }
-			ok(rc == 0, "query works after change_user (err: %s)", rc ? mysql_error(c) : "-");
+			ok(rc == 0, "query works after change_user, native auth path (err: %s)", rc ? mysql_error(c) : "-");
 		}
 		mysql_close(c);
 	}
 
-	// ---- 9-10: additional-password retry (attributes JSON, hex-encoded) ----
+	// ---- 8b-8c: COM_CHANGE_USER into the $ED$-stored user forces the ed25519
+	// change-user switch, regardless of client plugin (unlike the block above,
+	// no MYSQL_DEFAULT_AUTH is needed here -- the stored "$ED$" credential alone
+	// makes process_pkt_COM_CHANGE_USER's ed25519_switch_needed gate fire).
+	// The signature-based frontend auth for change_user must succeed; a
+	// following query is expected to fail with the same public-key-only
+	// backend limitation as the initial-connect $ED$ case above.
+	{
+		MYSQL* c = mysql_init(NULL);
+		bool conn_ok = mysql_real_connect(c, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0) != NULL;
+		if (!conn_ok) {
+			ok(false, "base connection for $ED$ change_user failed: %s", mysql_error(c));
+			ok(false, "$ED$ change_user query check skipped");
+		} else {
+			int rc = mysql_change_user(c, "ed_user_pk", ED_PASS, NULL);
+			ok(rc == 0, "COM_CHANGE_USER into $ED$-stored user succeeds (forced ed25519 switch, signature verified) (err: %s)", rc ? mysql_error(c) : "-");
+			if (rc == 0) {
+				int qrc = mysql_query(c, "SELECT 1");
+				if (qrc == 0) { mysql_free_result(mysql_store_result(c)); }
+				unsigned int eno = mysql_errno(c);
+				const char* emsg = mysql_error(c);
+				bool is_access_denied = emsg && strstr(emsg, "Access denied") != NULL;
+				ok(qrc != 0 && eno == ED25519_PK_BACKEND_ERRNO && is_access_denied,
+					"query after $ED$ change_user fails with errno %d and 'Access denied' "
+					"(documented public-key-only backend limitation; got errno %u, error '%s')",
+					ED25519_PK_BACKEND_ERRNO, eno, emsg ? emsg : "");
+			} else {
+				ok(false, "query check skipped: change_user failed");
+			}
+		}
+		mysql_close(c);
+	}
+
+	// ---- 9-10: additional-password retry (attributes JSON, hex-encoded), client-requested switch ----
 	{
 		// primary password wrong on purpose; additional_password holds the real one
 		char hexpass[64] = { 0 };
@@ -221,8 +278,13 @@ int main(int argc, char** argv) {
 		MYSQL_QUERY(admin, "LOAD MYSQL USERS TO RUNTIME");
 
 		MYSQL* c = mysql_init(NULL);
+		// Same client-requested-switch rationale as the block 1-2 connection:
+		// without this, the vendored connector never offers client_ed25519 and
+		// the additional-password retry would silently run over plain native
+		// auth instead of the ed25519 signature-verification path.
+		mysql_options(c, MYSQL_DEFAULT_AUTH, "client_ed25519");
 		bool conn_ok = mysql_real_connect(c, cl.host, "ed_user", ED_PASS, NULL, cl.port, NULL, 0) != NULL;
-		ok(conn_ok, "additional-password retry verifies ed25519 signature (err: %s)", conn_ok ? "-" : mysql_error(c));
+		ok(conn_ok, "additional-password retry verifies ed25519 signature (client-requested switch) (err: %s)", conn_ok ? "-" : mysql_error(c));
 		if (conn_ok) {
 			int rc = mysql_query(c, "SELECT 1");
 			if (rc == 0) { mysql_free_result(mysql_store_result(c)); }
