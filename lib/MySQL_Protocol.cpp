@@ -1572,7 +1572,9 @@ bool MySQL_Protocol::verify_user_pass(
 		//auth_plugin_id = 2; // FIXME: this is temporary, because yet not supported
 		auth_plugin_id = AUTH_MYSQL_CACHING_SHA2_PASSWORD; // FIXME: this is temporary, because yet not supported . It must become 3
 #ifdef PROXYSQLED25519
-	} else if (strncmp(auth_plugin,plugins[AUTH_MYSQL_ED25519],ED25519_PLUGIN_NAME_LEN)==0) {
+	} else if (strcmp(auth_plugin,plugins[AUTH_MYSQL_ED25519])==0) {
+		// exact match (the parser guarantees NUL termination): a non-standard
+		// name like "client_ed25519_x" must not be negotiated as ed25519
 		auth_plugin_id = AUTH_MYSQL_ED25519;
 #endif
 	}
@@ -2500,7 +2502,10 @@ void MySQL_Protocol::PPHR_3(MyProt_tmp_auth_vars& vars1) { // detect plugin id
 			}
 		}
 #ifdef PROXYSQLED25519
-		else if (strncmp((char *)vars1.auth_plugin,plugins[AUTH_MYSQL_ED25519],ED25519_PLUGIN_NAME_LEN)==0) {
+		// exact match (PPHR_2 rejects unterminated plugin names): a
+		// non-standard name like "client_ed25519_x" must not be negotiated
+		// as ed25519
+		else if (strcmp((char *)vars1.auth_plugin,plugins[AUTH_MYSQL_ED25519])==0) {
 			// client explicitly requested client_ed25519; the Auth Switch with a
 			// 32-byte nonce is driven later by PPHR_verify_password at stage 0
 			auth_plugin_id = AUTH_MYSQL_ED25519;

@@ -1,8 +1,19 @@
 # Ed25519 Authentication for MySQL Client Connections — Design
 
 **Date:** 2026-08-11
-**Status:** Approved
+**Status:** Approved (historical design artifact — see note)
 **Tier:** v3.1+ (`PROXYSQL31`)
+
+> **Post-implementation note.** This document reflects the approved design at
+> planning time; review-driven fixes changed some internals afterwards, and
+> the shipped code is authoritative. Known deviations: the 32-byte challenge
+> lives in a dedicated `MySQL_Connection::ed25519_nonce` buffer, NOT on the
+> data stream nor in `scramble_buff` (the native scramble must survive for
+> later COM_CHANGE_USER/caching_sha2 verification); any `$ED$`-prefixed
+> password is fail-closed rather than falling back to cleartext (human
+> ruling), with the ed25519 exchange offered on MySQL client sessions only;
+> and the test suites grew beyond the counts listed in §7. See
+> `doc/ed25519_authentication.md` for the user-facing contract.
 
 ## Goal
 

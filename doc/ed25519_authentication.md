@@ -61,16 +61,20 @@ reaches the ed25519 verification code at all.
 
 The `$ED$` prefix becomes reserved as of this feature: any stored
 `mysql_users.password` value that literally begins with `$ED$` is now
-parsed as an ed25519 credential, never compared as cleartext. If an
+parsed as an ed25519 credential, never compared as cleartext. The
+reservation is **case-insensitive** — `$ed$`, `$Ed$` and `$eD$` count too
+(matching how ProxySQL already detects the `$A$0` caching_sha2 format
+case-insensitively). If an
 existing 3.0 deployment happens to have a cleartext password that starts
-with the literal four characters `$ED$` (coincidental, but possible),
-that account stops authenticating after the upgrade — this is fail-closed
-by design (human-approved: silently falling back to cleartext comparison
-for an unparseable "$ED$..." value was judged more dangerous than a hard
-failure). ProxySQL logs a warning for the affected account on each
-connection attempt. Fix by renaming the credential to not start with
-`$ED$`, or by re-issuing it as a proper `$ED$<public-key>` ed25519
-credential if that was the intent.
+with those four characters in any case combination (coincidental, but
+possible), that account stops authenticating after the upgrade — this is
+fail-closed by design (human-approved: silently falling back to cleartext
+comparison for an unparseable "$ED$..." value was judged more dangerous
+than a hard failure). ProxySQL warns once at `LOAD MYSQL USERS TO
+RUNTIME` time for a malformed `$ED$` value, and once per user when a
+backend connection is attempted with a `$ED$` credential. Fix by renaming
+the credential to not start with `$ED$`, or by re-issuing it as a proper
+`$ED$<public-key>` ed25519 credential if that was the intent.
 
 ## Limitations
 

@@ -67,7 +67,7 @@ ifeq ($(PROXYSQL40),1)
     PROXYSQL31 := 1
 endif
 
-# If PROXYSQL31 is enabled, it automatically enables FFTO and TSDB
+# If PROXYSQL31 is enabled, it automatically enables FFTO, TSDB and ED25519
 ifeq ($(PROXYSQL31),1)
     PROXYSQLFFTO := 1
     PROXYSQLTSDB := 1
