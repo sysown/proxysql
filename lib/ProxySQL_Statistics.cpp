@@ -1819,8 +1819,11 @@ SQLite3_result* ProxySQL_Statistics::query_tsdb_metrics(
             "WHERE metric_name='" + escape_sql_string_literal(metric_name) + "' "
             "AND bucket BETWEEN " + std::to_string(from) + " AND " + std::to_string(to);
     } else if (node.length() > 0) {
+        // Include node as a 5th column: self-describing whether the query is
+        // node=* (multiple nodes -> otherwise unattributable rows) or a specific
+        // node (harmless, still correct).
         query =
-            "SELECT timestamp AS ts, metric_name, labels, value "
+            "SELECT timestamp AS ts, metric_name, labels, value, node "
             "FROM tsdb_metrics_cluster "
             "WHERE metric_name='" + escape_sql_string_literal(metric_name) + "' "
             "AND timestamp BETWEEN " + std::to_string(from) + " AND " + std::to_string(to);
@@ -2198,10 +2201,27 @@ SQLite3_result * ProxySQL_Statistics::get_tsdb_cluster_nodes() {
 void ProxySQL_Statistics::tsdb_cluster_replicate_self(const std::string& node, long watermark, int limit) {
 	char buf[512];
 	std::string esc_node = escape_sql_string_literal(node);
+	// >= (not >): the sampler stamps every series in a tick with the same time_t,
+	// so rows arrive in same-timestamp groups. The watermark for the next cycle is
+	// re-derived as MAX(timestamp) already replicated (tsdb_cluster_node_max_ts), so
+	// re-fetching the boundary group is required whenever a previous cycle's LIMIT
+	// cut in the middle of it — otherwise the unreplicated remainder of that group
+	// is skipped forever. INSERT OR IGNORE + the (node, timestamp, metric_name,
+	// labels) PK make re-fetching the boundary group idempotent.
+	//
+	// No separate no-progress guard here (unlike tsdb_cluster_replicate_peer):
+	// this is a single INSERT..SELECT, and cheaply detecting "the whole LIMIT was
+	// consumed by one timestamp group" would require an extra read-only query to
+	// learn the max timestamp actually selected, which would complicate the
+	// single-statement path for a self-replication stall that shares the exact
+	// same root cause and the exact same operational remedy (raise
+	// tsdb-cluster_batch_rows) as the peer path. In any multi-node cluster the
+	// peer path's identical per-tick fan-out already surfaces the warning; a
+	// single-node cluster stalling here is a known limitation of this path.
 	snprintf(buf, sizeof(buf),
 		"INSERT OR IGNORE INTO tsdb_metrics_cluster (node, timestamp, metric_name, labels, value) "
 		"SELECT '%s', timestamp, metric_name, labels, value FROM tsdb_metrics "
-		"WHERE timestamp > %ld ORDER BY timestamp LIMIT %d",
+		"WHERE timestamp >= %ld ORDER BY timestamp LIMIT %d",
 		esc_node.c_str(), watermark, limit);
 	// Even a single statement must take the write lock: on the shared statsdb_disk
 	// connection, an unlocked write here could execute inside another thread's
@@ -2253,11 +2273,18 @@ bool ProxySQL_Statistics::tsdb_cluster_replicate_peer(const std::string& host, i
 	}
 
 	char q[512];
+	// >= (not >): see the comment in tsdb_cluster_replicate_self() — the sampler
+	// stamps every series in a tick with the same time_t, so a LIMIT can cut inside
+	// a same-timestamp group. The watermark is re-derived from MAX(timestamp)
+	// already replicated, so the boundary group must be re-fetched or its
+	// unreplicated remainder is skipped forever. INSERT OR IGNORE below makes
+	// re-fetching it idempotent.
 	snprintf(q, sizeof(q),
 		"SELECT timestamp, metric_name, labels, value FROM stats_history.tsdb_metrics "
-		"WHERE timestamp > %ld ORDER BY timestamp LIMIT %d",
+		"WHERE timestamp >= %ld ORDER BY timestamp LIMIT %d",
 		watermark, limit);
 	bool cap_hit = false;
+	bool no_progress = false;
 	if (mysql_query(conn, q) == 0) {
 		MYSQL_RES *res = mysql_store_result(conn);
 		if (res) {
@@ -2302,6 +2329,11 @@ bool ProxySQL_Statistics::tsdb_cluster_replicate_peer(const std::string& host, i
 			cap_hit = (fr.caught_up == false);
 			// fr.new_watermark is informational here: the watermark is re-derived
 			// from MAX(timestamp) in the table each cycle (restart-safe by design).
+			// No-progress: an entire full-limit fetch landed inside the single
+			// timestamp group at `watermark` (last_row_ts never moved past it).
+			// The watermark can never advance past this point until the batch
+			// size is raised — the next cycle will re-issue the identical query.
+			no_progress = (rows == limit && last_row_ts == watermark);
 			mysql_free_result(res);
 		}
 	} else {
@@ -2318,6 +2350,19 @@ bool ProxySQL_Statistics::tsdb_cluster_replicate_peer(const std::string& host, i
 		}
 	} else {
 		tsdb_agg_peer_cap_hit_count[node] = 0;
+	}
+
+	// Stuck visibility: a full-limit fetch that never moved past the timestamp
+	// group it started from means the watermark cannot advance at all — raising
+	// tsdb-cluster_batch_rows is the only way forward. Same episode-tracking
+	// style as the cap-hit warning above (log once per episode, at hits==3).
+	if (no_progress) {
+		int hits = ++tsdb_agg_peer_progress_stall_count[node];
+		if (hits == 3) {
+			proxy_warning("TSDB cluster aggregation: tsdb-cluster_batch_rows smaller than per-timestamp series count for node %s; aggregation cannot progress - raise tsdb-cluster_batch_rows\n", node.c_str());
+		}
+	} else {
+		tsdb_agg_peer_progress_stall_count[node] = 0;
 	}
 
 	return cap_hit;

@@ -192,6 +192,27 @@ static long long wait_stable_count(MYSQL* conn, const string& node, const string
 	return prev;
 }
 
+// Total replicated row count for a node across ALL metrics (not just the
+// one-time synthetic backfill): node3 keeps producing genuine per-second
+// samples of its own internal metrics for as long as it is alive, so this
+// total keeps growing while a live leader is actively pulling from it.
+static long long node_total_count(MYSQL* conn, const string& node) {
+	return single_ll(conn, "SELECT COUNT(*) FROM stats_history.tsdb_metrics_cluster WHERE node='" + node + "'", -1);
+}
+
+// Polls node_total_count() until it strictly exceeds `floor` or times out.
+// Used to confirm the leader's aggregator is actually running and pulling
+// fresh data, as opposed to sitting on an unchanged, pre-restart count.
+static long long wait_count_above(MYSQL* conn, const string& node, long long floor, int timeout_s) {
+	long long c = floor;
+	for (int i = 0; i < timeout_s; i++) {
+		c = node_total_count(conn, node);
+		if (c > floor) { return c; }
+		sleep(1);
+	}
+	return c;
+}
+
 int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environmental variables."); return -1; }
@@ -249,7 +270,14 @@ int main(int argc, char** argv) {
 				query_ok(a[i], "SET tsdb-cluster_interval='5'") &&
 				query_ok(a[i], "SET tsdb-cluster_batch_rows='1000'") &&
 				query_ok(a[i], ("SET tsdb-cluster_backfill_hours='" + std::to_string(BACKFILL_HOURS) + "'").c_str()) &&
-				query_ok(a[i], "LOAD TSDB VARIABLES TO RUNTIME");
+				query_ok(a[i], "LOAD TSDB VARIABLES TO RUNTIME") &&
+				// Persist to disk: node1 is later SIGKILLed and restarted
+				// *without* --initial, so it reloads config from its on-disk
+				// sqlite config db, not from node.cnf. Without this, it would
+				// come back with tsdb-enabled=0 (default), its aggregator
+				// would never restart, and the resume assertion below would
+				// pass trivially on an unchanged count.
+				query_ok(a[i], "SAVE TSDB VARIABLES TO DISK");
 			ok(vars_ok, "node%d: tsdb variables configured: %s", i + 1, mysql_error(a[i]));
 		}
 		for (int i = 0; i < 3; i++) {
@@ -279,11 +307,26 @@ int main(int argc, char** argv) {
 		ok(c1 > 0 && c2 > c1, "replication progresses incrementally across cycles (%lld -> %lld)", c1, c2);
 
 		// --- Exactness within the horizon --- (3)
-		// Horizon = 2h at 5s grid = 1440 synthetic rows/metric/node. The leader's
-		// first cycle ran within ~60s of seed_now; allow generous slack.
+		// EXACT computation, not a fudge-factor range: a batch-boundary gap (the
+		// class of bug this fix addresses) leaves specific timestamps within the
+		// replicated range missing while their neighbors are present, which a
+		// generous ~1440 range check can't detect. Instead, once the count is
+		// stable, compute the number of 5s-grid points the replicated range
+		// [MIN(replicated ts), source's own true MAX(ts)] must contain and require
+		// an EXACT match. The upper bound is read from the node's own
+		// stats_history.tsdb_metrics (never from what was replicated), so a
+		// dropped trailing group can't silently shrink `expected` along with `c`.
+		// Any gap anywhere in the range makes count < expected.
 		for (int i = 0; i < 3; i++) {
 			long long c = wait_stable_count(a[0], node_id(i), "synthetic_metric_1", 90);
-			ok(c >= 1380 && c <= 1470, "node%d synthetic rows within horizon replicated exactly (got %lld, expect ~1440)", i + 1, c);
+			long long min_ts = single_ll(a[0],
+				"SELECT MIN(timestamp) FROM stats_history.tsdb_metrics_cluster WHERE node='" + node_id(i)
+				+ "' AND metric_name='synthetic_metric_1'", -1);
+			long long src_max_ts = single_ll(a[i],
+				"SELECT MAX(timestamp) FROM stats_history.tsdb_metrics WHERE metric_name='synthetic_metric_1'", -1);
+			long long expected = (min_ts >= 0 && src_max_ts >= 0) ? ((src_max_ts - min_ts) / SEED_STEP_S + 1) : -1;
+			ok(c == expected, "node%d synthetic rows within horizon replicated exactly (got %lld, expected %lld from range [%lld, %lld])",
+				i + 1, c, expected, min_ts, src_max_ts);
 		}
 
 		// --- Horizon trim: nothing older than ~2h replicated --- (1)
@@ -325,7 +368,11 @@ int main(int argc, char** argv) {
 		}
 
 		// --- Failover: node2 takes over and backfills history it never observed --- (3)
-		long long node3_hist_before = cluster_count(a[0], node_id(2), "synthetic_metric_1");
+		// Total count (not just synthetic_metric_1): the synthetic backfill is a
+		// one-time seed that stops growing once fully replicated, so it can't be
+		// used to prove the *resumed* leader is actually pulling fresh data below.
+		// node3's own live, ever-growing per-second metrics can.
+		long long node3_hist_before = node_total_count(a[0], node_id(2));
 		{
 			pid_t p1 = nodes_def[0].pid.load();
 			if (p1 > 0) { kill(p1, SIGKILL); }
@@ -353,8 +400,13 @@ int main(int argc, char** argv) {
 			usleep(500 * 1000);
 		}
 		ok(retake_ok, "rejoined node1 retakes leadership (highest weight)");
-		long long c_resume = wait_stable_count(a[0], node_id(2), "synthetic_metric_1", 90);
-		ok(a[0] != NULL && c_resume >= node3_hist_before, "node1 resumed aggregation from its surviving watermarks (%lld >= %lld)", c_resume, node3_hist_before);
+		// Strict increase, not >=: node1 must actually re-elect, restart its
+		// aggregator (requires tsdb-enabled to have survived the restart via the
+		// SAVE...TO DISK above), and pull node3's post-kill live samples. A node1
+		// that came back with tsdb-enabled=0 would leave its on-disk cluster table
+		// exactly where it was pre-kill, making a >= check pass trivially.
+		long long c_resume = wait_count_above(a[0], node_id(2), node3_hist_before, 90);
+		ok(a[0] != NULL && c_resume > node3_hist_before, "node1 resumed aggregation from its surviving watermarks (%lld > %lld)", c_resume, node3_hist_before);
 	}
 
 	// Teardown

@@ -152,6 +152,7 @@ class ProxySQL_Statistics {
 	std::map<std::string, int> tsdb_agg_peer_stall_count;    // consecutive unchanged cycles per peer
 	std::map<std::string, bool> tsdb_agg_peer_stall_logged;  // once-flag: already logged the stall
 	std::map<std::string, int> tsdb_agg_peer_cap_hit_count;  // consecutive cap-hit cycles per peer
+	std::map<std::string, int> tsdb_agg_peer_progress_stall_count; // consecutive no-progress-within-batch cycles per peer
 	void tsdb_cluster_aggregation_cycle();
 	long tsdb_cluster_node_max_ts(const std::string& node);
 	void tsdb_cluster_replicate_self(const std::string& node, long watermark, int limit);

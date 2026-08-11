@@ -431,6 +431,11 @@ public:
                         row["labels"] = res->rows[i]->fields[2];
                     }
                     row["value"] = atof(res->rows[i]->fields[3]);
+                    if (res->columns >= 5) {
+                        // Cluster-scoped query: node column identifies which
+                        // node each row came from (relevant for node=*).
+                        row["node"] = res->rows[i]->fields[4];
+                    }
                     j_resp.push_back(row);
                 }
                 delete res;
