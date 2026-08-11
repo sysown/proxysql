@@ -1788,14 +1788,19 @@ SQLite3_result* ProxySQL_Statistics::query_tsdb_metrics(
         const std::map<std::string, std::string>& label_filters,
         time_t from,
         time_t to,
-        const std::string& aggregation) {
+        const std::string& aggregation,
+        const std::string& node) {
 
     if (!statsdb_disk) return NULL;
     if (to < from) {
         std::swap(from, to);
     }
 
-    const bool use_hourly = (to - from > 86400);
+    bool use_hourly = (to - from > 86400);
+    if (node.length() > 0) {
+        // Cluster-scoped queries are always served from the raw cluster table.
+        use_hourly = false;
+    }
     const std::string agg = aggregation.empty() ? "raw" : aggregation;
     std::string query;
 
@@ -1813,6 +1818,15 @@ SQLite3_result* ProxySQL_Statistics::query_tsdb_metrics(
             "FROM tsdb_metrics_hour "
             "WHERE metric_name='" + escape_sql_string_literal(metric_name) + "' "
             "AND bucket BETWEEN " + std::to_string(from) + " AND " + std::to_string(to);
+    } else if (node.length() > 0) {
+        query =
+            "SELECT timestamp AS ts, metric_name, labels, value "
+            "FROM tsdb_metrics_cluster "
+            "WHERE metric_name='" + escape_sql_string_literal(metric_name) + "' "
+            "AND timestamp BETWEEN " + std::to_string(from) + " AND " + std::to_string(to);
+        if (node != "*") {
+            query += " AND node='" + escape_sql_string_literal(node) + "'";
+        }
     } else {
         query =
             "SELECT timestamp AS ts, metric_name, labels, value "
@@ -2166,6 +2180,19 @@ long ProxySQL_Statistics::tsdb_cluster_node_max_ts(const std::string& node) {
 	if (error) free(error);
 	if (res) delete res;
 	return max_ts;
+}
+
+SQLite3_result * ProxySQL_Statistics::get_tsdb_cluster_nodes() {
+	char *error = NULL; int cols = 0; int affected_rows = 0;
+	SQLite3_result *res = NULL;
+	statsdb_disk->execute_statement(
+		"SELECT node, MAX(timestamp) AS last_timestamp, COUNT(*) AS datapoints FROM tsdb_metrics_cluster GROUP BY node ORDER BY node",
+		&error, &cols, &affected_rows, &res);
+	if (error) {
+		proxy_error("get_tsdb_cluster_nodes: %s\n", error);
+		free(error);
+	}
+	return res; // may be NULL on error; callers must handle
 }
 
 void ProxySQL_Statistics::tsdb_cluster_replicate_self(const std::string& node, long watermark, int limit) {

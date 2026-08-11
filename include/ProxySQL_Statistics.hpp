@@ -264,7 +264,8 @@ class ProxySQL_Statistics {
 		const std::map<std::string, std::string>& label_filters,
 		time_t from,
 		time_t to,
-		const std::string& aggregation = "");
+		const std::string& aggregation = "",
+		const std::string& node = "");
 	// Backend health queries
 	SQLite3_result* get_backend_health_metrics(time_t from, time_t to, int hostgroup = -1);
 	// Status

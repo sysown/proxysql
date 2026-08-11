@@ -407,16 +407,17 @@ public:
             string s_to = req.get_arg("to");
             if (!s_to.empty()) to = atol(s_to.c_str());
             string agg = req.get_arg("agg");
+            string node = req.get_arg("node");
 
             std::map<string, string> labels;
             auto all_args = req.get_args();
             for (auto const& [key, val] : all_args) {
-                if (key != "metric" && key != "from" && key != "to" && key != "agg") {
+                if (key != "metric" && key != "from" && key != "to" && key != "agg" && key != "node") {
                     labels[key] = val;
                 }
             }
 
-		SQLite3_result *res = GloProxyStats->query_tsdb_metrics(metric, labels, from, to, agg);
+		SQLite3_result *res = GloProxyStats->query_tsdb_metrics(metric, labels, from, to, agg, node);
             if (!res) {
                 j_resp = json::array();
             } else {
@@ -447,6 +448,34 @@ public:
 		j_resp["disk_size_bytes"] = status.disk_size_bytes;
 		j_resp["oldest_datapoint"] = status.oldest_datapoint;
 		j_resp["newest_datapoint"] = status.newest_datapoint;
+		j_resp["cluster_aggregation_active"] = GloProxyStats->tsdb_agg_active.load();
+		j_resp["cluster_rows_replicated"] = GloProxyStats->tsdb_agg_rows_total.load();
+		j_resp["cluster_last_cycle"] = GloProxyStats->tsdb_agg_last_cycle_ts.load();
+		j_resp["cluster_cap_hit_last_cycle"] = GloProxyStats->tsdb_agg_cap_hit_last_cycle.load();
+	} else if (req_path == "/api/tsdb/nodes") {
+		if (!GloProxyStats || !GloProxyStats->statsdb_disk) {
+			j_resp = json {{"error", "TSDB not initialized"}};
+			auto response = std::shared_ptr<http_response>(new string_response(j_resp.dump(), http::http_utils::http_internal_server_error));
+			add_headers(response);
+			return response;
+		}
+		json nodes_arr = json::array();
+		SQLite3_result *res = GloProxyStats->get_tsdb_cluster_nodes();
+		time_t now = time(NULL);
+		if (res) {
+			for (std::vector<SQLite3_row *>::iterator it = res->rows.begin(); it != res->rows.end(); ++it) {
+				SQLite3_row *r = *it;
+				json jn;
+				jn["node"] = r->fields[0];
+				long last_ts = atol(r->fields[1]);
+				jn["last_timestamp"] = last_ts;
+				jn["watermark_age_s"] = (long)now - last_ts;
+				jn["datapoints"] = atoll(r->fields[2]);
+				nodes_arr.push_back(jn);
+			}
+			delete res;
+		}
+		j_resp = nodes_arr;
         } else {
             return std::shared_ptr<http_response>(new string_response("Not Found", http::http_utils::http_not_found));
         }
@@ -539,6 +568,7 @@ ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
 	ws->register_resource("/api/tsdb/metrics", tsdb_endpoint.get(), true);
 	ws->register_resource("/api/tsdb/query", tsdb_endpoint.get(), true);
 	ws->register_resource("/api/tsdb/status", tsdb_endpoint.get(), true);
+	ws->register_resource("/api/tsdb/nodes", tsdb_endpoint.get(), true);
 
 	/* Serve the dashboard HTML and its Chart.bundle.js asset on the
 	 * same port as the API, so the dashboard's relative fetch() calls
