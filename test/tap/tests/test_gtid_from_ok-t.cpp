@@ -226,22 +226,37 @@ public:
 		  connections_(connections) {}
 
 	~CleanupGuard() {
+		if (!cleaned_up_) {
+			cleanup();
+		}
+	}
+
+	bool cleanup() {
+		if (cleaned_up_) {
+			return cleanup_ok_;
+		}
+		cleaned_up_ = true;
+
+		auto record_result = [this](bool result) {
+			cleanup_ok_ = result && cleanup_ok_;
+		};
+
 		connections_.close_all();
 
 		if (rules_installed_) {
 			const std::string query =
 				"DELETE FROM mysql_query_rules WHERE rule_id BETWEEN " + std::to_string(RULE_FIRST) +
 				" AND " + std::to_string(RULE_LAST) + " AND comment=" + sql_quote(admin_, TEST_COMMENT);
-			exec_query(admin_, query, "remove dedicated query rules");
-			exec_query(admin_, "LOAD MYSQL QUERY RULES TO RUNTIME", "load query-rule cleanup");
+			record_result(exec_query(admin_, query, "remove dedicated query rules"));
+			record_result(exec_query(admin_, "LOAD MYSQL QUERY RULES TO RUNTIME", "load query-rule cleanup"));
 		}
 
 		if (servers_installed_) {
 			const std::string query =
 				"DELETE FROM mysql_servers WHERE hostgroup_id IN (" + std::to_string(RW_HG) + "," +
 				std::to_string(RO_HG) + ") AND comment=" + sql_quote(admin_, TEST_COMMENT);
-			exec_query(admin_, query, "remove dedicated servers");
-			exec_query(admin_, "LOAD MYSQL SERVERS TO RUNTIME", "load server cleanup");
+			record_result(exec_query(admin_, query, "remove dedicated servers"));
+			record_result(exec_query(admin_, "LOAD MYSQL SERVERS TO RUNTIME", "load server cleanup"));
 		}
 
 		if (!saved_variables_.empty()) {
@@ -249,12 +264,18 @@ public:
 				const std::string query =
 					"UPDATE global_variables SET variable_value=" + sql_quote(admin_, variable.second) +
 					" WHERE variable_name=" + sql_quote(admin_, variable.first);
-				exec_query(admin_, query, ("restore " + variable.first).c_str());
+				record_result(exec_query(admin_, query, ("restore " + variable.first).c_str()));
 			}
-			exec_query(admin_, "LOAD MYSQL VARIABLES TO RUNTIME", "load variable cleanup");
+			record_result(exec_query(admin_, "LOAD MYSQL VARIABLES TO RUNTIME", "load variable cleanup"));
 		}
 
-		if ((table_created_ || !backend_session_track_gtids_.empty()) && !address_.empty()) {
+		if (table_created_ || !backend_session_track_gtids_.empty()) {
+			if (address_.empty()) {
+				diag("Cleanup has no backend endpoint for required backend cleanup");
+				cleanup_ok_ = false;
+				return cleanup_ok_;
+			}
+
 			MYSQL* direct = connect_mysql(
 				const_cast<char*>(address_.c_str()), port_,
 				const_cast<char*>(mysql_username_.c_str()), const_cast<char*>(mysql_password_.c_str())
@@ -262,19 +283,22 @@ public:
 			if (direct == nullptr) {
 				diag("Cleanup could not connect to %s:%d for backend cleanup",
 					address_.c_str(), port_);
+				cleanup_ok_ = false;
 			} else {
 				if (table_created_) {
-					exec_query(direct, "DROP TABLE IF EXISTS test.gtid_from_ok", "drop test table");
+					record_result(exec_query(direct, "DROP TABLE IF EXISTS test.gtid_from_ok", "drop test table"));
 				}
 				if (!backend_session_track_gtids_.empty()) {
-					exec_query(direct,
+					record_result(exec_query(direct,
 						"SET GLOBAL session_track_gtids=" +
 							sql_quote(direct, backend_session_track_gtids_),
-						"restore backend session_track_gtids");
+						"restore backend session_track_gtids"));
 				}
 				mysql_close(direct);
 			}
 		}
+
+		return cleanup_ok_;
 	}
 
 	void set_endpoint(const std::string& address, int port) {
@@ -305,6 +329,8 @@ private:
 	bool servers_installed_ = false;
 	bool rules_installed_ = false;
 	bool table_created_ = false;
+	bool cleaned_up_ = false;
+	bool cleanup_ok_ = true;
 };
 
 static int run_test(
@@ -624,11 +650,14 @@ int main(int, char**) {
 
 	TestConnections connections;
 	int run_rc = EXIT_FAILURE;
+	bool cleanup_ok = false;
 	{
 		CleanupGuard cleanup(admin, cl, connections);
 		run_rc = run_test(cl, admin, connections, cleanup);
+		cleanup_ok = cleanup.cleanup();
 	}
 
 	mysql_close(admin);
-	return run_rc == EXIT_SUCCESS ? exit_status() : EXIT_FAILURE;
+	const int tap_rc = exit_status();
+	return run_rc == EXIT_SUCCESS && cleanup_ok && tap_rc == EXIT_SUCCESS ? EXIT_SUCCESS : EXIT_FAILURE;
 }

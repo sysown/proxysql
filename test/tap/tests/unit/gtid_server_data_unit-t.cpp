@@ -16,8 +16,14 @@
 #include "GTID_Server_Data.h"
 #include "MySQL_HostGroups_Manager.h"
 
+#include <dirent.h>
+#include <unistd.h>
+
+#include <cstdlib>
 #include <cstring>
 #include <string>
+
+extern struct ev_io * new_connect_watcher(char *address, uint16_t gtid_port, uint16_t mysql_port);
 
 static const char *UUID_A = "aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa";
 static const char *UUID_A_STRIPPED = "aaaaaaaa000011112222aaaaaaaaaaaa";
@@ -414,8 +420,45 @@ static void test_manager_gtid_lookup_survives_inactive_reader() {
 		"manager GTID lookup: known endpoint state remains eligible when inactive");
 }
 
+static int count_open_file_descriptors() {
+	DIR* directory = opendir("/proc/self/fd");
+	if (directory == nullptr) {
+		return -1;
+	}
+
+	int count = 0;
+	while (dirent* entry = readdir(directory)) {
+		if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
+			++count;
+		}
+	}
+	closedir(directory);
+	return count;
+}
+
+static void test_connect_watcher_closes_socket_on_resolution_failure() {
+	const int before = count_open_file_descriptors();
+	bool all_failed = true;
+	char invalid_address[] = "invalid host name";
+
+	for (int i = 0; i < 32; ++i) {
+		ev_io* watcher = new_connect_watcher(invalid_address, 3307, 3306);
+		if (watcher != nullptr) {
+			all_failed = false;
+			close(watcher->fd);
+			free(watcher);
+		}
+	}
+
+	const int after = count_open_file_descriptors();
+	ok(before >= 0, "connect watcher: open descriptors can be counted");
+	ok(all_failed, "connect watcher: invalid address fails every connection attempt");
+	ok(after == before,
+		"connect watcher: resolution failures do not leak sockets (%d before, %d after)", before, after);
+}
+
 int main() {
-	plan(103);
+	plan(106);
 
 	test_bootstrap_single();            //  6 assertions
 	test_bootstrap_range();             //  8 assertions
@@ -437,6 +480,7 @@ int main() {
 	test_ok_gtid_validation();
 	test_ok_and_binlog_merge();
 	test_manager_gtid_lookup_survives_inactive_reader();
+	test_connect_watcher_closes_socket_on_resolution_failure();
 
 	return exit_status();
 }

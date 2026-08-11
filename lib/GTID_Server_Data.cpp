@@ -161,7 +161,6 @@ struct ev_io * new_connect_watcher(char *address, uint16_t gtid_port, uint16_t m
 
 	if ((s = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
 		perror("socket");
-		close(s);
 		return NULL;
 	}
 
@@ -178,8 +177,11 @@ struct ev_io * new_connect_watcher(char *address, uint16_t gtid_port, uint16_t m
 	sprintf(str_port,"%d", gtid_port);
 
 	int gai_rc = getaddrinfo(address, str_port, &hints, &res);
-	if (gai_rc) {
-		freeaddrinfo(res);
+	if (gai_rc || res == NULL) {
+		if (res != NULL) {
+			freeaddrinfo(res);
+		}
+		close(s);
 		//exit here
 		return NULL;
 	}
@@ -197,6 +199,7 @@ struct ev_io * new_connect_watcher(char *address, uint16_t gtid_port, uint16_t m
 		}
 		/* else error */
 	}
+	close(s);
 	return NULL;
 }
 
