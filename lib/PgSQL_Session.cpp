@@ -673,11 +673,11 @@ bool PgSQL_Session::handler_CommitRollback(PtrSize_t* pkt) {
 
 void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 	char buff[32];
-	sprintf(buff, "%p", this);
+	snprintf(buff, sizeof(buff), "%p", this);
 	j["address"] = buff;
 	j["version"] = PROXYSQL_VERSION;
 	if (thread) {
-		sprintf(buff, "%p", thread);
+		snprintf(buff, sizeof(buff), "%p", thread);
 		j["thread"] = buff;
 	}
 	const uint64_t age_ms = (thread->curtime - start_time) / 1000;
@@ -765,7 +765,7 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 		j["backends"][i]["hostgroup_id"] = _mybe->hostgroup_id;
 		if (_mybe->server_myds) {
 			PgSQL_Data_Stream* _myds = _mybe->server_myds;
-			sprintf(buff, "%p", _myds);
+			snprintf(buff, sizeof(buff), "%p", _myds);
 			j["backends"][i]["stream"]["address"] = buff;
 			j["backends"][i]["stream"]["questions"] = _myds->statuses.questions;
 			j["backends"][i]["stream"]["pgconnpoll_get"] = _myds->statuses.pgconnpoll_get;
@@ -785,7 +785,7 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 				for (std::vector<uint32_t>::const_iterator it_c = _myconn->dynamic_variables_idx.begin(); it_c != _myconn->dynamic_variables_idx.end(); it_c++) {
 					_myconn->variables[*it_c].fill_server_internal_session(j["backends"], i, *it_c);
 				}
-				sprintf(buff, "%p", _myconn);
+				snprintf(buff, sizeof(buff), "%p", _myconn);
 				j["backends"][i]["conn"]["address"] = buff;
 				j["backends"][i]["conn"]["auto_increment_delay_token"] = _myconn->auto_increment_delay_token;
 				j["backends"][i]["conn"]["bytes_recv"] = _myconn->bytes_info.bytes_recv;
@@ -826,7 +826,7 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 
 				j["backends"][i]["conn"]["ps"]["global_stmt_to_backend_ids"] = _myconn->local_stmts->global_stmt_to_backend_ids;
 				if (_myconn->is_connected()) {
-					sprintf(buff, "%p", _myconn->get_pg_connection());
+					snprintf(buff, sizeof(buff), "%p", _myconn->get_pg_connection());
 					j["backends"][i]["conn"]["pgsql"]["address"] = buff;
 					j["backends"][i]["conn"]["pgsql"]["host"] = _myconn->get_pg_host();
 					j["backends"][i]["conn"]["pgsql"]["host_addr"] = _myconn->get_pg_hostaddr();
@@ -1398,7 +1398,7 @@ bool PgSQL_Session::handler_again___status_SETTING_INIT_CONNECT(int* _rc) {
 				st = previous_status.top();
 				previous_status.pop();
 				char sqlstate[10];
-				sprintf(sqlstate, "%s", ""/* TODO: fix this mysql_sqlstate(myconn->pgsql)*/);
+				snprintf(sqlstate, sizeof(sqlstate), "%s", ""/* TODO: fix this mysql_sqlstate(myconn->pgsql)*/);
 				client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 9999 /* TODO: fix this mysql_errno(myconn->pgsql)*/, sqlstate, "" /* TODO: fix this mysql_error(myconn->pgsql)*/);
 				myds->destroy_MySQL_Connection_From_Pool(true);
 				myds->fd = 0;
@@ -1453,8 +1453,9 @@ bool PgSQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int* _rc, co
 			// the calling function is already passing "SESSION TRANSACTION"
 			q = (char*)"SET %s %s";
 		}
-		query = (char*)malloc(strlen(q) + strlen(var_name) + strlen(var_value));
-		sprintf(query, q, var_name, var_value);
+		size_t query_size = strlen(q) + strlen(var_name) + strlen(var_value);
+		query = (char*)malloc(query_size);
+		snprintf(query, query_size, q, var_name, var_value);
 		query_length = strlen(query);
 	}
 	int rc = myconn->async_send_simple_command(myds->revents, query, query_length);
@@ -1731,7 +1732,7 @@ __exit_handler_again___status_CONNECTING_SERVER_with_err:
 						myconn->error_info.code, false, true);
 				} else {
 					char buf[256];
-					sprintf(buf, "Max connect failure while reaching hostgroup %d", current_hostgroup);
+					snprintf(buf, sizeof(buf), "Max connect failure while reaching hostgroup %d", current_hostgroup);
 					client_myds->myprot.generate_error_packet(true, true, buf, PGSQL_ERROR_CODES::ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION,
 						false, true); 
 					if (thread) {
@@ -2042,7 +2043,7 @@ void PgSQL_Session::handler___status_NONE_or_default(PtrSize_t& pkt) {
 		break;
 	}
 	default:
-		sprintf(buf, "localhost");
+		snprintf(buf, sizeof(buf), "localhost");
 		break;
 	}
 
@@ -2086,7 +2087,7 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___default() {
 			break;
 		}
 		default:
-			sprintf(buf, "localhost");
+		snprintf(buf, sizeof(buf), "localhost");
 			break;
 		}
 		// PMC-10001: A unexpected packet has been received from client. This error has two potential causes:
@@ -2503,8 +2504,9 @@ __implicit_sync:
 											}
 											string nqn = string((char*)CurrentQuery.QueryPointer, l);
 											const char* err_msg = "Session trying to reach HG %d while locked on HG %d . Rejecting query: %s%s";
-											char* buf = (char*)malloc(strlen(err_msg) + strlen(nqn.c_str()) + strlen(end) + 64);
-											sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
+											size_t buf_size = strlen(err_msg) + strlen(nqn.c_str()) + strlen(end) + 64;
+											char* buf = (char*)malloc(buf_size);
+											snprintf(buf, buf_size, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
 											client_myds->myprot.generate_error_packet(true, true, buf, PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION,
 												false, true);
 											thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
@@ -4004,8 +4006,9 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				__sync_fetch_and_add(&PgHGM->status.access_denied_max_user_connections, 1);
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , DS=%p . User '%s' has exceeded the 'max_user_connections' resource (current value: %d)\n", this, client_myds, client_myds->myconn->userinfo->username, used_users);
 				char* a = (char*)"User '%s' has exceeded the 'max_user_connections' resource (current value: %d)";
-				char* b = (char*)malloc(strlen(a) + strlen(client_myds->myconn->userinfo->username) + 16);
-				sprintf(b, a, client_myds->myconn->userinfo->username, used_users);
+				size_t b_size = strlen(a) + strlen(client_myds->myconn->userinfo->username) + 16;
+				char* b = (char*)malloc(b_size);
+				snprintf(b, b_size, a, client_myds->myconn->userinfo->username, used_users);
 				GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_ERR, this, NULL, b);
 				client_myds->myprot.generate_error_packet(true, false, b, PGSQL_ERROR_CODES::ERRCODE_TOO_MANY_CONNECTIONS,
 					true, true);
@@ -4075,8 +4078,9 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				}
 				else {
 					char* a = (char*)"User '%s' can only connect locally";
-					char* b = (char*)malloc(strlen(a) + strlen(client_myds->myconn->userinfo->username));
-					sprintf(b, a, client_myds->myconn->userinfo->username);
+					size_t b_size = strlen(a) + strlen(client_myds->myconn->userinfo->username);
+					char* b = (char*)malloc(b_size);
+					snprintf(b, b_size, a, client_myds->myconn->userinfo->username);
 					GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_ERR, this, NULL, b);
 					client_myds->myprot.generate_error_packet(true, false, b, PGSQL_ERROR_CODES::ERRCODE_SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
 						true, true);
@@ -4090,8 +4094,9 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_ERR, this, NULL);
 
 					char* _a = (char*)"ProxySQL Error: Access denied for user '%s' (using password: %s). SSL is required";
-					char* _s = (char*)malloc(strlen(_a) + strlen(client_myds->myconn->userinfo->username) + 32);
-					sprintf(_s, _a, client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
+					size_t _s_size = strlen(_a) + strlen(client_myds->myconn->userinfo->username) + 32;
+					char* _s = (char*)malloc(_s_size);
+					snprintf(_s, _s_size, _a, client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 					client_myds->myprot.generate_error_packet(true, false, _s, PGSQL_ERROR_CODES::ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION,
 							true, true);
 					proxy_error("ProxySQL Error: Access denied for user '%s' (using password: %s). SSL is required\n", client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
@@ -4148,7 +4153,8 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			client_addr = strdup((char*)"");
 		}
 		if (client_myds->myconn->userinfo->username && client_myds->myconn->userinfo->username[0] != '\0') {
-			char* _s = (char*)malloc(strlen(client_myds->myconn->userinfo->username) + 100 + strlen(client_addr));
+			size_t _s_size = strlen(client_myds->myconn->userinfo->username) + 100 + strlen(client_addr);
+			char* _s = (char*)malloc(_s_size);
 			uint8_t _pid = 2;
 			if (client_myds->switching_auth_stage) _pid += 2;
 			if (is_encrypted) _pid++;
@@ -4166,7 +4172,7 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , DS=%p . Error: Access denied for user '%s'@'%s' . No password. Disconnecting\n", this, client_myds, client_myds->myconn->userinfo->username, client_addr);
 			}
 #endif // DEBUG
-			sprintf(_s, "ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
+			snprintf(_s, _s_size, "ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 			client_myds->myprot.generate_error_packet(true, false, _s, PGSQL_ERROR_CODES::ERRCODE_INVALID_PASSWORD, true, true);
 			proxy_error("%s\n", _s);
 			free(_s);
@@ -4619,8 +4625,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 						char* errmsg = NULL;
 						proxy_error("invalid value for parameter \"%s\": \"%s\"\n", pgsql_tracked_variables[idx].set_variable_name, value1.c_str());
 						m = (char*)"invalid value for parameter \"%s\": \"%s\"";
-						errmsg = (char*)malloc(value1.length() + strlen(pgsql_tracked_variables[idx].set_variable_name) + strlen(m));
-						sprintf(errmsg, m, pgsql_tracked_variables[idx].set_variable_name, value1.c_str());
+						size_t errmsg_size = value1.length() + strlen(pgsql_tracked_variables[idx].set_variable_name) + strlen(m);
+						errmsg = (char*)malloc(errmsg_size);
+						snprintf(errmsg, errmsg_size, m, pgsql_tracked_variables[idx].set_variable_name, value1.c_str());
 
 						client_myds->DSS = STATE_QUERY_SENT_NET;
 
@@ -5236,7 +5243,7 @@ __exit_set_destination_hostgroup:
 		if (current_hostgroup != locked_on_hostgroup) {
 			client_myds->DSS = STATE_QUERY_SENT_NET;
 			char buf[140];
-			sprintf(buf, "ProxySQL Error: connection is locked to hostgroup %d but trying to reach hostgroup %d",
+			snprintf(buf, sizeof(buf), "ProxySQL Error: connection is locked to hostgroup %d but trying to reach hostgroup %d",
 				locked_on_hostgroup, current_hostgroup);
 			client_myds->myprot.generate_error_packet(true, true, buf,
 				PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION, false);
@@ -6126,7 +6133,7 @@ int32_t PgSQL_Session::extract_pid_from_param(const PgSQL_Param_Value& param, ui
 		break;
 	}
 	default:
-		sprintf(buf, "localhost");
+		snprintf(buf, sizeof(buf), "localhost");
 		break;
 	}
 	// Unknown format code
@@ -6535,8 +6542,9 @@ void PgSQL_Session::handle_post_sync_locked_on_hostgroup_error(const char* query
 	}
 	std::string nqn = string(query, l); // truncate string to 253 characters
 	const char* err_msg = "Session trying to reach HG %d while locked on HG %d . Rejecting query: %s%s";
-	char* buf = (char*)malloc(strlen(err_msg) + strlen(nqn.c_str()) + strlen(end) + 64);
-	sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
+	size_t buf_size = strlen(err_msg) + strlen(nqn.c_str()) + strlen(end) + 64;
+	char* buf = (char*)malloc(buf_size);
+	snprintf(buf, buf_size, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
 	client_myds->myprot.generate_error_packet(true, true, buf, PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION,
 		false, true);
 	free(buf);
