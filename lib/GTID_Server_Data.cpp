@@ -304,6 +304,9 @@ bool GTID_Server_Data::add_gtid_from_ok(const char* gtid) {
 		})) {
 		return false;
 	}
+	std::transform(uuid.begin(), uuid.end(), uuid.begin(), [](char c) {
+		return c >= 'A' && c <= 'F' ? static_cast<char>(c + ('a' - 'A')) : c;
+	});
 
 	errno = 0;
 	char* end = nullptr;

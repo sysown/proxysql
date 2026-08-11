@@ -399,8 +399,8 @@ static void test_ok_and_binlog_merge() {
 	stuff_buffer(sd, msg);
 	sd.read_next_gtid();
 
-	ok(sd.add_gtid_from_ok("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:61"),
-		"mixed observations: direct GTID is added");
+	ok(sd.add_gtid_from_ok("AAAAAAAA-0000-1111-2222-AAAAAAAAAAAA:61"),
+		"mixed observations: uppercase direct GTID is added");
 	ok(sd.gtid_exists(UUID_A_STRIPPED, 60),
 		"mixed observations: binlog GTID is eligible");
 	sd.active = false;

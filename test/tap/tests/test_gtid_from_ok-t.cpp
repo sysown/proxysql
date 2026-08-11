@@ -15,6 +15,7 @@
 #include <vector>
 
 #include <netdb.h>
+#include <strings.h>
 #include <sys/socket.h>
 
 #include "mysql.h"
