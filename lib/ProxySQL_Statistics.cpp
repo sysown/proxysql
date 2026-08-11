@@ -1891,6 +1891,11 @@ void ProxySQL_Statistics::tsdb_sampler_loop() {
         update_modules_metrics();
         auto metrics = GloVars.prometheus_registry->Collect();
         time_t now = time(NULL);
+        // Shared statsdb_disk connection: also used by the TSDB cluster-aggregation
+        // worker thread (tsdb_cluster_replicate_self/peer). Take the write lock for
+        // the whole explicit transaction so the two threads' BEGIN..COMMIT blocks
+        // can't interleave on the same sqlite connection.
+        statsdb_disk->wrlock();
         statsdb_disk->execute("BEGIN");
         for (const auto& family : metrics) {
             for (const auto& metric : family.metric) {
@@ -1941,6 +1946,7 @@ void ProxySQL_Statistics::tsdb_sampler_loop() {
             }
         }
         statsdb_disk->execute("COMMIT");
+        statsdb_disk->wrunlock();
     }
 
 }
@@ -2046,6 +2052,10 @@ void ProxySQL_Statistics::tsdb_monitor_loop() {
 		for (size_t j = i; j < batch_end; ++j) {
 			batch_futures.push_back(std::async(std::launch::async, probe_backend, targets[j].hg, targets[j].host, targets[j].port, now));
 		}
+		// Shared statsdb_disk connection: see the comment in tsdb_sampler_loop() /
+		// tsdb_cluster_replicate_peer() — hold the write lock for the whole explicit
+		// transaction so it can't interleave with another thread's BEGIN..COMMIT.
+		statsdb_disk->wrlock();
 		statsdb_disk->execute("BEGIN");
 		for (auto& f : batch_futures) {
 			try {
@@ -2056,6 +2066,7 @@ void ProxySQL_Statistics::tsdb_monitor_loop() {
 			}
 		}
 		statsdb_disk->execute("COMMIT");
+		statsdb_disk->wrunlock();
 	}
 }
 
@@ -2165,7 +2176,13 @@ void ProxySQL_Statistics::tsdb_cluster_replicate_self(const std::string& node, l
 		"SELECT '%s', timestamp, metric_name, labels, value FROM tsdb_metrics "
 		"WHERE timestamp > %ld ORDER BY timestamp LIMIT %d",
 		esc_node.c_str(), watermark, limit);
+	// Even a single statement must take the write lock: on the shared statsdb_disk
+	// connection, an unlocked write here could execute inside another thread's
+	// still-open explicit transaction (tsdb_sampler_loop / tsdb_monitor_loop use
+	// the same connection from the admin thread).
+	statsdb_disk->wrlock();
 	statsdb_disk->execute(buf);
+	statsdb_disk->wrunlock();
 }
 
 bool ProxySQL_Statistics::tsdb_cluster_replicate_peer(const std::string& host, int port, const std::string& node, long watermark, int limit, const std::string& user, const std::string& pass) {
@@ -2179,6 +2196,14 @@ bool ProxySQL_Statistics::tsdb_cluster_replicate_peer(const std::string& host, i
 		mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val);
 		mysql_options(conn, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void *)proxysql_keylog_write_line_callback);
 	}
+	// Unlike the cluster monitor threads (which run detached and can tolerate an
+	// unbounded stall), this worker is synchronously pthread_join()'d by the admin
+	// thread when leadership is lost. Bound read/write I/O so a stalled/unresponsive
+	// peer can't wedge the admin thread (and leader_election_tick with it) for the
+	// OS TCP timeout.
+	unsigned int rw_timeout = 10;
+	mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &rw_timeout);
+	mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &rw_timeout);
 	if (mysql_real_connect(conn, host.c_str(), user.c_str(), pass.c_str(), NULL, port, NULL, 0) == NULL) {
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "TSDB cluster aggregation: cannot connect to %s : %s\n", node.c_str(), mysql_error(conn));
 		mysql_close(conn);
@@ -2223,6 +2248,12 @@ bool ProxySQL_Statistics::tsdb_cluster_replicate_peer(const std::string& host, i
 			}
 			int rows = 0;
 			long last_row_ts = watermark;
+			// Same shared-connection concern as tsdb_cluster_replicate_self(): take the
+			// write lock for the whole explicit transaction so it can't interleave with
+			// tsdb_sampler_loop's / tsdb_monitor_loop's BEGIN..COMMIT on the admin thread.
+			// All rows were already buffered locally by mysql_store_result() above, so no
+			// network I/O happens while the lock is held.
+			statsdb_disk->wrlock();
 			statsdb_disk->execute("BEGIN");
 			MYSQL_ROW row;
 			while ((row = mysql_fetch_row(res))) {
@@ -2238,6 +2269,7 @@ bool ProxySQL_Statistics::tsdb_cluster_replicate_peer(const std::string& host, i
 				rows++;
 			}
 			statsdb_disk->execute("COMMIT");
+			statsdb_disk->wrunlock();
 			tsdb_agg_rows_total.fetch_add(rows);
 			Tsdb_Agg_Fetch_Result fr = tsdb_agg_apply_fetch(watermark, rows, last_row_ts, limit);
 			cap_hit = (fr.caught_up == false);
