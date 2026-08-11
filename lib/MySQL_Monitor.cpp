@@ -1648,8 +1648,9 @@ bool MySQL_Monitor_State_Data::set_wait_timeout() {
 	char *query=NULL;
 	char *qt=(char *)"SET wait_timeout=%d";
 	int wait_timeout=mysql_thread___monitor_ping_interval*10/1000;	// convert to second and multiply by 10
-	query=(char *)malloc(strlen(qt)+32);
-	sprintf(query,qt,wait_timeout);
+	size_t query_size = strlen(qt) + 32;
+	query=(char *)malloc(query_size);
+	snprintf(query, query_size, qt, wait_timeout);
 	t1=monotonic_time();
 	async_exit_status=mysql_query_start(&interr,mysql,query);
 	while (async_exit_status) {
@@ -1760,8 +1761,9 @@ void * monitor_read_only_thread(const std::vector<MySQL_Monitor_State_Data*>& da
 		crc=true;
 		if (rc==false) {
 			unsigned long long now=monotonic_time();
-			char * new_error = (char *)malloc(50+strlen(mmsd->mysql_error_msg));
-			sprintf(new_error,"timeout on creating new connection: %s",mmsd->mysql_error_msg);
+			size_t new_error_size = 50 + strlen(mmsd->mysql_error_msg);
+			char * new_error = (char *)malloc(new_error_size);
+			snprintf(new_error, new_error_size, "timeout on creating new connection: %s",mmsd->mysql_error_msg);
 			free(mmsd->mysql_error_msg);
 			mmsd->mysql_error_msg = new_error;
 			proxy_error("Timeout on read_only check for %s:%d after %lldms. Unable to create a connection. If the server is overload, increase mysql-monitor_connect_timeout. Error: %s.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000, new_error);
@@ -1962,9 +1964,10 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 			char *new_query=NULL;
 			SQLite3DB *mondb=mmsd->mondb;
 			new_query=(char *)"SELECT 1 FROM (SELECT hostname,port,read_only,error FROM mysql_server_read_only_log WHERE hostname='%s' AND port='%d' ORDER BY time_start_us DESC LIMIT %d) a WHERE read_only IS NULL AND SUBSTR(error,1,7) = 'timeout' GROUP BY hostname,port HAVING COUNT(*)=%d";
-			char *buff=(char *)malloc(strlen(new_query)+strlen(mmsd->hostname)+32);
+			size_t buff_size = strlen(new_query) + strlen(mmsd->hostname) + 32;
+			char *buff=(char *)malloc(buff_size);
 			int max_failures=mysql_thread___monitor_read_only_max_timeout_count;
-			sprintf(buff,new_query, mmsd->hostname, mmsd->port, max_failures, max_failures);
+			snprintf(buff, buff_size, new_query, mmsd->hostname, mmsd->port, max_failures, max_failures);
 			mondb->execute_statement(buff, &error , &cols , &affected_rows , &resultset);
 			if (!error) {
 				if (resultset) {
@@ -2175,13 +2178,15 @@ __exit_monitor_group_replication_thread:
 		// TODO : complete this
 		char buf[128];
 		char *s=NULL;
+		size_t s_size = sizeof(buf);
 		int l=strlen(mmsd->hostname);
 		if (l<110) {
 			s=buf;
 		}	else {
-			s=(char *)malloc(l+16);
+			s_size = l + 16;
+			s=(char *)malloc(s_size);
 		}
-		sprintf(s,"%s:%d",mmsd->hostname,mmsd->port);
+		snprintf(s, s_size, "%s:%d",mmsd->hostname,mmsd->port);
 		bool viable_candidate=false;
 		bool read_only=true;
 		int num_timeouts = 0;
@@ -2434,8 +2439,9 @@ void * monitor_galera_thread(const std::vector<MySQL_Monitor_State_Data*>& data)
 		crc=true;
 		if (rc==false) {
 			unsigned long long now=monotonic_time();
-			char * new_error = (char *)malloc(50+strlen(mmsd->mysql_error_msg));
-			sprintf(new_error,"timeout or error in creating new connection: %s",mmsd->mysql_error_msg);
+		size_t new_error_size = 50 + strlen(mmsd->mysql_error_msg);
+		char * new_error = (char *)malloc(new_error_size);
+		snprintf(new_error, new_error_size, "timeout or error in creating new connection: %s",mmsd->mysql_error_msg);
 			free(mmsd->mysql_error_msg);
 			mmsd->mysql_error_msg = new_error;
 			proxy_error("Error on Galera check for %s:%d after %lldms. Unable to create a connection. If the server is overload, increase mysql-monitor_connect_timeout. Error: %s.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000, new_error);
@@ -2454,8 +2460,9 @@ void * monitor_galera_thread(const std::vector<MySQL_Monitor_State_Data*>& data)
 #ifdef TEST_GALERA
 		char *q1 = (char *)"SELECT wsrep_local_state , read_only , wsrep_local_recv_queue , wsrep_desync , wsrep_reject_queries , wsrep_sst_donor_rejects_queries , "
 			" wsrep_cluster_status, pxc_maint_mode FROM HOST_STATUS_GALERA WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
-		char *q2 = (char *)malloc(strlen(q1)+strlen(mmsd->hostname)+32);
-		sprintf(q2,q1, mmsd->writer_hostgroup, mmsd->hostname, mmsd->port);
+		size_t q2_size = strlen(q1) + strlen(mmsd->hostname) + 32;
+		char *q2 = (char *)malloc(q2_size);
+		snprintf(q2, q2_size, q1, mmsd->writer_hostgroup, mmsd->hostname, mmsd->port);
 		mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, q2);
 		free(q2);
 #else
@@ -2565,13 +2572,15 @@ __exit_monitor_galera_thread:
 		// TODO : complete this
 		char buf[128];
 		char *s=NULL;
+		size_t s_size = sizeof(buf);
 		int l=strlen(mmsd->hostname);
 		if (l<110) {
 			s=buf;
 		}	else {
-			s=(char *)malloc(l+16);
+			s_size = l + 16;
+			s=(char *)malloc(s_size);
 		}
-		sprintf(s,"%s:%d",mmsd->hostname,mmsd->port);
+		snprintf(s, s_size, "%s:%d",mmsd->hostname,mmsd->port);
 		bool primary_partition = false;
 		bool read_only=true;
 		bool wsrep_desync = true;
@@ -2731,7 +2740,7 @@ __exit_monitor_galera_thread:
 							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_desync=YES");
 						} else {
 							char msg[80];
-							sprintf(msg,"wsrep_local_state=%d",wsrep_local_state);
+							snprintf(msg, sizeof(msg), "wsrep_local_state=%d",wsrep_local_state);
 							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, msg);
 						}
 					}
@@ -2879,8 +2888,9 @@ void * monitor_replication_lag_thread(const std::vector<MySQL_Monitor_State_Data
 		if (l) {
 			use_percona_heartbeat = true;
 			char *base_query = (char *)"SELECT MAX(ROUND(TIMESTAMPDIFF(MICROSECOND, ts, SYSDATE(6))/1000000)) AS Seconds_Behind_Master FROM %s";
-			char *replication_query = (char *)malloc(strlen(base_query)+l);
-			sprintf(replication_query,base_query,percona_heartbeat_table);
+			size_t replication_query_size = strlen(base_query) + l;
+			char *replication_query = (char *)malloc(replication_query_size);
+			snprintf(replication_query, replication_query_size, base_query, percona_heartbeat_table);
 			query = string(replication_query);
 			free(replication_query);
 		}
@@ -3397,9 +3407,10 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 			char *new_query=NULL;
 			new_query=(char *)"SELECT 1 FROM (SELECT hostname,port,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start_us DESC LIMIT %d) a WHERE ping_error IS NOT NULL AND ping_error NOT LIKE 'Access denied for user%%' AND ping_error NOT LIKE 'ProxySQL Error: Access denied for user%%' AND ping_error NOT LIKE 'Your password has expired.%%' GROUP BY hostname,port HAVING COUNT(*)=%d";
 			for (j=0;j<i;j++) {
-				char *buff=(char *)malloc(strlen(new_query)+strlen(addresses[j])+strlen(ports[j])+16);
+				size_t buff_size = strlen(new_query) + strlen(addresses[j]) + strlen(ports[j]) + 16;
+				char *buff=(char *)malloc(buff_size);
 				int max_failures=mysql_thread___monitor_ping_max_failures;
-				sprintf(buff,new_query,addresses[j],ports[j],max_failures,max_failures);
+				snprintf(buff, buff_size, new_query, addresses[j],ports[j],max_failures,max_failures);
 				monitordb->execute_statement(buff, &error , &cols , &affected_rows , &resultset);
 				if (!error) {
 					if (resultset) {
@@ -3458,8 +3469,9 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 
 			new_query=(char *)"SELECT hostname,port,COALESCE(CAST(AVG(ping_success_time_us) AS INTEGER),10000) FROM (SELECT hostname,port,ping_success_time_us,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start_us DESC LIMIT 3) a WHERE ping_error IS NULL GROUP BY hostname,port";
 			for (j=0;j<i;j++) {
-				char *buff=(char *)malloc(strlen(new_query)+strlen(addresses[j])+strlen(ports[j])+16);
-				sprintf(buff,new_query,addresses[j],ports[j]);
+				size_t buff_size = strlen(new_query) + strlen(addresses[j]) + strlen(ports[j]) + 16;
+				char *buff=(char *)malloc(buff_size);
+				snprintf(buff, buff_size, new_query, addresses[j],ports[j]);
 				monitordb->execute_statement(buff, &error , &cols , &affected_rows , &resultset);
 				if (!error) {
 					if (resultset) {
@@ -3519,9 +3531,10 @@ bool MySQL_Monitor::server_responds_to_ping(char *address, int port) {
 	SQLite3_result *resultset=NULL;
 	char *new_query=NULL;
 	new_query=(char *)"SELECT 1 FROM (SELECT hostname,port,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port=%d ORDER BY time_start_us DESC LIMIT %d) a WHERE ping_error IS NOT NULL AND ping_error NOT LIKE 'Access denied for user%%' GROUP BY hostname,port HAVING COUNT(*)=%d";
-	char *buff=(char *)malloc(strlen(new_query)+strlen(address)+32);
+	size_t buff_size = strlen(new_query) + strlen(address) + 32;
+	char *buff=(char *)malloc(buff_size);
 	int max_failures = mysql_thread___monitor_ping_max_failures;
-	sprintf(buff,new_query,address,port,max_failures,max_failures);
+	snprintf(buff, buff_size, new_query, address,port,max_failures,max_failures);
 VALGRIND_DISABLE_ERROR_REPORTING;
 	monitordb->execute_statement(buff, &error , &cols , &affected_rows , &resultset);
 VALGRIND_ENABLE_ERROR_REPORTING;
@@ -6274,12 +6287,13 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 			crc=true;
 			if (rc==false) {
 				unsigned long long now=monotonic_time();
-				char * new_error = (char *)malloc(50+strlen(mmsd->mysql_error_msg));
+				size_t new_error_size = 50 + strlen(mmsd->mysql_error_msg);
+				char * new_error = (char *)malloc(new_error_size);
 				bool access_denied = false;
 				if (strncmp(mmsd->mysql_error_msg,(char *)"Access denied for user",strlen((char *)"Access denied for user"))==0) {
 					access_denied = true;
 				}
-				sprintf(new_error,"timeout or error in creating new connection: %s",mmsd->mysql_error_msg);
+				snprintf(new_error, new_error_size, "timeout or error in creating new connection: %s",mmsd->mysql_error_msg);
 				free(mmsd->mysql_error_msg);
 				mmsd->mysql_error_msg = new_error;
 				proxy_error("Error on AWS Aurora check for %s:%d after %lldms. Unable to create a connection. %sError: %s.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000, (access_denied ? "" : "If the server is overload, increase mysql-monitor_connect_timeout. " ) , new_error);
@@ -6383,13 +6397,15 @@ __exit_monitor_aws_aurora_HG_thread:
 			// TODO : complete this
 			char buf[128];
 			char *s=NULL;
+			size_t s_size = sizeof(buf);
 			int l=strlen(mmsd->hostname);
 			if (l<110) {
 				s=buf;
 			}	else {
-				s=(char *)malloc(l+16);
+				s_size = l + 16;
+				s=(char *)malloc(s_size);
 			}
-			sprintf(s,"%s:%d",mmsd->hostname,mmsd->port);
+			snprintf(s, s_size, "%s:%d",mmsd->hostname,mmsd->port);
 			unsigned long long time_now=realtime_time();
 			time_now=time_now-(mmsd->t2 - start_time);
 			//AWS_Aurora_status_entry *ase = new AWS_Aurora_status_entry(mmsd->t1, mmsd->t2-mmsd->t1, mmsd->mysql_error_msg);
@@ -8387,8 +8403,9 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 					localtime_r(&__timer, &__tm_info);
 					strftime(lut, 25, "%Y-%m-%d %H:%M:%S", &__tm_info);
 					char *q1 = (char *)"INSERT INTO mysql_server_aws_aurora_failovers VALUES (%d, '%s', '%s')";
-					char *q2 = (char *)malloc(strlen(q1)+strlen(lut)+strlen(hse->server_id));
-					sprintf(q2, q1, wHG, hse->server_id, lut);
+					size_t q2_size = strlen(q1) + strlen(lut) + strlen(hse->server_id) + 16;
+					char *q2 = (char *)malloc(q2_size);
+					snprintf(q2, q2_size, q1, wHG, hse->server_id, lut);
 					monitordb->execute(q2);
 					free(q2);
 				} else {
@@ -9279,9 +9296,10 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 			char* new_query = NULL;
 			SQLite3DB* mondb = mmsd->mondb;
 			new_query = (char*)"SELECT 1 FROM (SELECT hostname,port,read_only,error FROM mysql_server_read_only_log WHERE hostname='%s' AND port='%d' ORDER BY time_start_us DESC LIMIT %d) a WHERE read_only IS NULL AND SUBSTR(error,1,7) = 'timeout' GROUP BY hostname,port HAVING COUNT(*)=%d";
-			char* buff = (char*)malloc(strlen(new_query) + strlen(mmsd->hostname) + 32);
+			size_t buff_size = strlen(new_query) + strlen(mmsd->hostname) + 32;
+			char* buff = (char*)malloc(buff_size);
 			int max_failures = mysql_thread___monitor_read_only_max_timeout_count;
-			sprintf(buff, new_query, mmsd->hostname, mmsd->port, max_failures, max_failures);
+			snprintf(buff, buff_size, new_query, mmsd->hostname, mmsd->port, max_failures, max_failures);
 			mondb->execute_statement(buff, &error, &cols, &affected_rows, &resultset);
 			if (!error) {
 				if (resultset) {
@@ -9431,13 +9449,15 @@ bool MySQL_Monitor::monitor_group_replication_process_ready_tasks(const std::vec
 		// TODO : complete this
 		char buf[128];
 		char* s = NULL;
+		size_t s_size = sizeof(buf);
 		int l = strlen(mmsd->hostname);
 		if (l < 110) {
 			s = buf;
 		} else {
-			s = (char*)malloc(l + 16);
+			s_size = l + 16;
+			s = (char*)malloc(s_size);
 		}
-		sprintf(s, "%s:%d", mmsd->hostname, mmsd->port);
+		snprintf(s, s_size, "%s:%d", mmsd->hostname, mmsd->port);
 		bool viable_candidate = false;
 		bool read_only = true;
 		int num_timeouts = 0;
@@ -9926,13 +9946,15 @@ bool MySQL_Monitor::monitor_galera_process_ready_tasks(const std::vector<MySQL_M
 		// TODO : complete this
 		char buf[128];
 		char* s = NULL;
+		size_t s_size = sizeof(buf);
 		int l = strlen(mmsd->hostname);
 		if (l < 110) {
 			s = buf;
 		} else {
-			s = (char*)malloc(l + 16);
+			s_size = l + 16;
+			s = (char*)malloc(s_size);
 		}
-		sprintf(s, "%s:%d", mmsd->hostname, mmsd->port);
+		snprintf(s, s_size, "%s:%d", mmsd->hostname, mmsd->port);
 		bool primary_partition = false;
 		bool read_only = true;
 		bool wsrep_desync = true;
@@ -10092,7 +10114,7 @@ bool MySQL_Monitor::monitor_galera_process_ready_tasks(const std::vector<MySQL_M
 							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char*)"wsrep_desync=YES");
 						} else {
 							char msg[80];
-							sprintf(msg, "wsrep_local_state=%d", wsrep_local_state);
+							snprintf(msg, sizeof(msg), "wsrep_local_state=%d", wsrep_local_state);
 							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, msg);
 						}
 					}
