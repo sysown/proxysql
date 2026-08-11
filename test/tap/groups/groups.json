@@ -356,6 +356,7 @@
   "test_cluster_sync-t" : [ "legacy-g5","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3","mysql84-g5","mysql90-g5","mysql95-g5" ],
   "test_cluster_sync_mysql_servers-t" : [ "legacy-g5","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3","mysql84-g5","mysql90-g5","mysql95-g5" ],
   "test_cluster_sync_pgsql-t" : [ "legacy-g5","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3" ],
+  "test_cluster_tsdb_aggregation-t" : [ "legacy-g5", "mysql84-g5", "mysql90-g5", "mysql95-g5" ],
   "test_com_binlog_dump_enables_fast_forward-t" : [ "legacy-binlog-g1","mysql84-binlog-g1","mysql90-binlog-g1","mysql95-binlog-g1" ],
   "test_com_register_slave_enables_fast_forward-t" : [ "legacy-binlog-g1","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3","mysql84-binlog-g1","mysql90-binlog-g1","mysql95-binlog-g1" ],
   "test_com_reset_connection_com_change_user-t" : [ "legacy-g3","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3","mysql84-g3","mysql90-g3","mysql95-g3" ],
