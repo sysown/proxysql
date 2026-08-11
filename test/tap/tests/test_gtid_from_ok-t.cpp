@@ -103,9 +103,9 @@ static std::string get_session_gtid(MYSQL* mysql) {
 	return std::string(data, len);
 }
 
-static bool resolve_ipv4(const std::string& hostname, std::string& numeric_address) {
+static bool resolve_numeric_address(const std::string& hostname, std::string& numeric_address) {
 	addrinfo hints {};
-	hints.ai_family = AF_INET;
+	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
 
 	addrinfo* addresses = nullptr;
@@ -363,9 +363,9 @@ static int run_test(
 		writer.size() >= 2;
 	if (writer_resolved) {
 		mysql_port = std::atoi(writer[1].c_str());
-		writer_resolved = mysql_port > 0 && resolve_ipv4(writer[0], address);
+		writer_resolved = mysql_port > 0 && resolve_numeric_address(writer[0], address);
 	}
-	ok(writer_resolved, "resolved configured writer to a numeric IPv4 endpoint");
+	ok(writer_resolved, "resolved configured writer to a numeric IP endpoint");
 	if (!writer_resolved) {
 		return EXIT_FAILURE;
 	}
