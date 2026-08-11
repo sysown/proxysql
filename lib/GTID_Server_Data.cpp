@@ -319,10 +319,14 @@ bool GTID_Server_Data::add_gtid_from_ok(const char* gtid) {
 }
 
 std::string GTID_Server_Data::gtid_executed_to_string() {
+	return get_gtid_executed_snapshot().gtid_executed;
+}
+
+GTID_Executed_Snapshot GTID_Server_Data::get_gtid_executed_snapshot() {
 	pthread_rwlock_rdlock(&executed_rwlock);
-	std::string executed = gtid_executed.to_string();
+	GTID_Executed_Snapshot snapshot { gtid_executed.to_string(), events_read };
 	pthread_rwlock_unlock(&executed_rwlock);
-	return executed;
+	return snapshot;
 }
 
 void GTID_Server_Data::read_all_gtids() {

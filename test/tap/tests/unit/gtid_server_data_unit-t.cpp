@@ -19,9 +19,11 @@
 #include <dirent.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <thread>
 
 extern struct ev_io * new_connect_watcher(char *address, uint16_t gtid_port, uint16_t mysql_port);
 
@@ -457,8 +459,76 @@ static void test_connect_watcher_closes_socket_on_resolution_failure() {
 		"connect watcher: resolution failures do not leak sockets (%d before, %d after)", before, after);
 }
 
+static unsigned long long snapshot_last_trxid(const std::string& gtid_executed) {
+	if (gtid_executed.empty()) {
+		return 0;
+	}
+
+	const std::string::size_type separator = gtid_executed.find_last_of(":-");
+	return separator == std::string::npos
+		? 0
+		: strtoull(gtid_executed.c_str() + separator + 1, nullptr, 10);
+}
+
+/**
+ * @brief Stats snapshots stay coherent while binlog records are applied.
+ *
+ * For this single-UUID sequential stream, the highest GTID must always equal
+ * the number of binlog events. A snapshot assembled across two lock sections,
+ * or with an unlocked events_read access, can expose different generations.
+ */
+static void test_gtid_snapshot_is_coherent_during_binlog_updates() {
+	GTID_Server_Data sd(nullptr, (char *)"127.0.0.1", 0, 3306);
+	constexpr unsigned long long event_count = 4000;
+	std::string messages;
+	messages.reserve(event_count * 16);
+	messages.append("I1=").append(UUID_A_STRIPPED).append(":1\n");
+	for (unsigned long long trxid = 2; trxid <= event_count; ++trxid) {
+		messages.append("I2=").append(std::to_string(trxid)).append("\n");
+	}
+	stuff_buffer(sd, messages);
+
+	std::atomic<bool> start { false };
+	std::atomic<bool> writer_done { false };
+	std::atomic<bool> coherent { true };
+	std::atomic<unsigned long long> snapshots { 0 };
+
+	std::thread writer([&]() {
+		while (!start.load(std::memory_order_acquire)) {
+			std::this_thread::yield();
+		}
+		while (sd.read_next_gtid()) {
+			std::this_thread::yield();
+		}
+		writer_done.store(true, std::memory_order_release);
+	});
+
+	std::thread reader([&]() {
+		start.store(true, std::memory_order_release);
+		do {
+			const GTID_Executed_Snapshot snapshot = sd.get_gtid_executed_snapshot();
+			if (snapshot_last_trxid(snapshot.gtid_executed) != snapshot.events_read) {
+				coherent.store(false, std::memory_order_relaxed);
+			}
+			snapshots.fetch_add(1, std::memory_order_relaxed);
+		} while (!writer_done.load(std::memory_order_acquire));
+	});
+
+	writer.join();
+	reader.join();
+
+	const GTID_Executed_Snapshot final_snapshot = sd.get_gtid_executed_snapshot();
+	ok(snapshots.load(std::memory_order_relaxed) > 1,
+		"GTID snapshot: reader sampled while binlog updates were running");
+	ok(coherent.load(std::memory_order_relaxed),
+		"GTID snapshot: text and binlog event count always describe one generation");
+	ok(final_snapshot.events_read == event_count &&
+			snapshot_last_trxid(final_snapshot.gtid_executed) == event_count,
+		"GTID snapshot: final state contains all %llu binlog events", event_count);
+}
+
 int main() {
-	plan(106);
+	plan(109);
 
 	test_bootstrap_single();            //  6 assertions
 	test_bootstrap_range();             //  8 assertions
@@ -481,6 +551,7 @@ int main() {
 	test_ok_and_binlog_merge();
 	test_manager_gtid_lookup_survives_inactive_reader();
 	test_connect_watcher_closes_socket_on_resolution_failure();
+	test_gtid_snapshot_is_coherent_during_binlog_updates();
 
 	return exit_status();
 }

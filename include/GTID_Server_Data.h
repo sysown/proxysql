@@ -5,6 +5,12 @@
 #include <cstdint>
 #include <pthread.h>
 #include <proxysql_gtid.h>
+#include <string>
+
+struct GTID_Executed_Snapshot {
+	std::string gtid_executed;
+	unsigned long long events_read;
+};
 
 class GTID_Server_Data {
 	public:
@@ -35,6 +41,7 @@ class GTID_Server_Data {
 
 	public:
 	bool add_gtid_from_ok(const char* gtid);
+	GTID_Executed_Snapshot get_gtid_executed_snapshot();
 	std::string gtid_executed_to_string();
 };
 

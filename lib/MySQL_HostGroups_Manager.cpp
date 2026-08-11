@@ -5781,8 +5781,9 @@ void MySQL_HostGroups_Manager::p_update_mysql_gtid_executed() {
 			gtid_counter = pc_itr->second;
 		}
 
+		const GTID_Executed_Snapshot snapshot = gtid_sd->get_gtid_executed_snapshot();
 		const auto& cur_executed_gtid = gtid_counter->Value();
-		gtid_counter->Increment(gtid_sd->events_read - cur_executed_gtid);
+		gtid_counter->Increment(snapshot.events_read - cur_executed_gtid);
 
 		it++;
 	}
@@ -5809,9 +5810,9 @@ SQLite3_result * MySQL_HostGroups_Manager::get_stats_mysql_gtid_executed() {
 			sprintf(buf,"%d", (int)gtid_si->mysql_port);
 			pta[1]=strdup(buf);
 			//sprintf(buf,"%d", mysrvc->port);
-			string s1 = gtid_si->gtid_executed_to_string();
-			pta[2]=strdup(s1.c_str());
-			sprintf(buf,"%llu", gtid_si->events_read);
+			const GTID_Executed_Snapshot snapshot = gtid_si->get_gtid_executed_snapshot();
+			pta[2]=strdup(snapshot.gtid_executed.c_str());
+			sprintf(buf,"%llu", snapshot.events_read);
 			pta[3]=strdup(buf);
 		} else {
 			std::string s = it->first;
