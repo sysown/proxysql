@@ -102,11 +102,13 @@ const char * TSDB_Dashboard_html_c = R"HTML(
             try {
                 let url = `/api/tsdb/query?metric=${encodeURIComponent(metric)}&from=${from}&to=${now}`;
                 if (sel.value) {
-                    // Not encodeURIComponent: the REST server's arg parser (libhttpserver's
-                    // MHD_OPTION_UNESCAPE_CALLBACK workaround) does not decode percent-escapes,
-                    // so an encoded ':' in "ip:port" would never match a stored node value.
-                    // Node values come from our own /api/tsdb/nodes response, not free text.
-                    url += `&node=${sel.value}`;
+                    // The REST server's arg parser (libhttpserver's MHD_OPTION_UNESCAPE_CALLBACK
+                    // workaround) never decodes percent-escapes, so ':' must stay literal here or
+                    // it will never match a stored "ip:port" node value. Everything else IS encoded
+                    // (per-character, skipping ':') because proxysql_servers.hostname is an
+                    // unconstrained VARCHAR — a schema-legal hostname containing '&', '=', '#', or a
+                    // space would otherwise corrupt the query string (spurious params, truncation).
+                    url += `&node=${sel.value.replace(/[^:]/g, c => encodeURIComponent(c))}`;
                 }
                 const resp = await fetch(url);
                 if (!resp.ok) throw new Error('Query failed');
