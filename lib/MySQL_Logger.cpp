@@ -587,7 +587,7 @@ void MySQL_Event::write_auth(LogBuffer *f, MySQL_Session *sess) {
 		char buffer2[64];
 		if (localtime_r(&timer, &tm_info)) {
  			strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", &tm_info);
- 			sprintf(buffer2,"%s.%03u", buffer1, (unsigned)(start_time%1000000)/1000);
+		snprintf(buffer2, sizeof(buffer2), "%s.%03u", buffer1, (unsigned)(start_time%1000000)/1000);
  		} else {
  			snprintf(buffer2, sizeof(buffer2), "invalid_date");
  		}
@@ -692,7 +692,7 @@ void MySQL_Event::write_auth(LogBuffer *f, MySQL_Session *sess) {
 				char buffer2[64];
 				if (localtime_r(&timer, &tm_info)) {
  					strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", &tm_info);
- 					sprintf(buffer2,"%s.%03u", buffer1, (unsigned)(orig_time%1000000)/1000);
+					snprintf(buffer2, sizeof(buffer2), "%s.%03u", buffer1, (unsigned)(orig_time%1000000)/1000);
  				} else {
  					snprintf(buffer2, sizeof(buffer2), "invalid_date");
  				}
@@ -701,7 +701,7 @@ void MySQL_Event::write_auth(LogBuffer *f, MySQL_Session *sess) {
 				//life/=1000;
 				float f = timediff;
 				f /= 1000;
-				sprintf(buffer1, "%.3fms", f);
+				snprintf(buffer1, sizeof(buffer1), "%.3fms", f);
 				j["duration"] = buffer1;
 			}
 			break;
@@ -1145,7 +1145,7 @@ uint64_t MySQL_Event::write_query_format_2_json(LogBuffer *f) {
 		char buffer2[64];
 		if (localtime_r(&timer, &tm_info)) {
  			strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", &tm_info);
- 			sprintf(buffer2,"%s.%06u", buffer1, (unsigned)(start_time%1000000));
+		snprintf(buffer2, sizeof(buffer2), "%s.%06u", buffer1, (unsigned)(start_time%1000000));
  		} else {
  			snprintf(buffer2, sizeof(buffer2), "invalid_date");
  		}
@@ -1159,7 +1159,7 @@ uint64_t MySQL_Event::write_query_format_2_json(LogBuffer *f) {
 		char buffer2[64];
 		if (localtime_r(&timer, &tm_info)) {
  			strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", &tm_info);
- 			sprintf(buffer2,"%s.%06u", buffer1, (unsigned)(end_time%1000000));
+		snprintf(buffer2, sizeof(buffer2), "%s.%06u", buffer1, (unsigned)(end_time%1000000));
  		} else {
  			snprintf(buffer2, sizeof(buffer2), "invalid_date");
  		}
@@ -1167,7 +1167,7 @@ uint64_t MySQL_Event::write_query_format_2_json(LogBuffer *f) {
 	}
 	j["duration_us"] = end_time-start_time;
 	char digest_hex[20];
-	sprintf(digest_hex,"0x%016llX", (long long unsigned int)query_digest);
+	snprintf(digest_hex, sizeof(digest_hex), "0x%016llX", (long long unsigned int)query_digest);
 	j["digest"] = digest_hex;
 
 	if (et == PROXYSQL_COM_STMT_PREPARE || et == PROXYSQL_COM_STMT_EXECUTE) {
@@ -1387,11 +1387,13 @@ void MySQL_Logger::events_open_log_unlocked() {
 	}
 	char *filen=NULL;
 	if (events.base_filename[0]=='/') { // absolute path
-		filen=(char *)malloc(strlen(events.base_filename)+11);
-		sprintf(filen,"%s.%08d",events.base_filename,events.log_file_id);
+		size_t filen_size = strlen(events.base_filename) + 11;
+		filen=(char *)malloc(filen_size);
+		snprintf(filen, filen_size, "%s.%08d",events.base_filename,events.log_file_id);
 	} else { // relative path
-		filen=(char *)malloc(strlen(events.datadir)+strlen(events.base_filename)+11);
-		sprintf(filen,"%s/%s.%08d",events.datadir,events.base_filename,events.log_file_id);
+		size_t filen_size = strlen(events.datadir) + strlen(events.base_filename) + 11;
+		filen=(char *)malloc(filen_size);
+		snprintf(filen, filen_size, "%s/%s.%08d",events.datadir,events.base_filename,events.log_file_id);
 	}
 	events.logfile=new std::fstream();
 	events.logfile->exceptions ( std::ofstream::failbit | std::ofstream::badbit );
@@ -1443,11 +1445,13 @@ void MySQL_Logger::audit_open_log_unlocked() {
 	}
 	char *filen=NULL;
 	if (audit.base_filename[0]=='/') { // absolute path
-		filen=(char *)malloc(strlen(audit.base_filename)+11);
-		sprintf(filen,"%s.%08d",audit.base_filename,audit.log_file_id);
+		size_t filen_size = strlen(audit.base_filename) + 11;
+		filen=(char *)malloc(filen_size);
+		snprintf(filen, filen_size, "%s.%08d",audit.base_filename,audit.log_file_id);
 	} else { // relative path
-		filen=(char *)malloc(strlen(audit.datadir)+strlen(audit.base_filename)+11);
-		sprintf(filen,"%s/%s.%08d",audit.datadir,audit.base_filename,audit.log_file_id);
+		size_t filen_size = strlen(audit.datadir) + strlen(audit.base_filename) + 11;
+		filen=(char *)malloc(filen_size);
+		snprintf(filen, filen_size, "%s/%s.%08d",audit.datadir,audit.base_filename,audit.log_file_id);
 	}
 	audit.logfile=new std::fstream();
 	audit.logfile->exceptions ( std::ofstream::failbit | std::ofstream::badbit );
@@ -1555,8 +1559,9 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds, con
 	}
 	cl+=strlen(ca);
 	if (cl && sess->client_myds->addr.port) {
-		ca=(char *)malloc(cl+9);
-		sprintf(ca,"%s:%d",sess->client_myds->addr.addr,sess->client_myds->addr.port);
+		size_t ca_size = cl + 9;
+		ca=(char *)malloc(ca_size);
+		snprintf(ca, ca_size, "%s:%d",sess->client_myds->addr.addr,sess->client_myds->addr.port);
 	}
 	cl=strlen(ca);
 	enum log_event_type let = PROXYSQL_COM_QUERY; // default
@@ -1838,8 +1843,9 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 	}
 	cl+=strlen(ca);
 	if (cl && sess->client_myds->addr.port) {
-		ca=(char *)malloc(cl+9);
-		sprintf(ca,"%s:%d",sess->client_myds->addr.addr,sess->client_myds->addr.port);
+		size_t ca_size = cl + 9;
+		ca=(char *)malloc(ca_size);
+		snprintf(ca, ca_size, "%s:%d",sess->client_myds->addr.addr,sess->client_myds->addr.port);
 	}
 	cl=strlen(ca);
 
@@ -2191,7 +2197,7 @@ void MySQL_Logger::insertMysqlEventsIntoDb(SQLite3DB * db, const std::string& ta
 			rc = (*proxy_sqlite3_bind_text)(statement32, (idx*numcols)+3, event->schemaname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 			rc = (*proxy_sqlite3_bind_int64)(statement32, (idx*numcols)+4, event->start_time); ASSERT_SQLITE_OK(rc, db);
 			rc = (*proxy_sqlite3_bind_int64)(statement32, (idx*numcols)+5, event->end_time); ASSERT_SQLITE_OK(rc, db);
-			sprintf(digest_hex_str, "0x%016llX", (long long unsigned int)event->query_digest);
+			snprintf(digest_hex_str, sizeof(digest_hex_str), "0x%016llX", (long long unsigned int)event->query_digest);
 			rc = (*proxy_sqlite3_bind_text)(statement32, (idx*numcols)+6, digest_hex_str, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 			rc = (*proxy_sqlite3_bind_text)(statement32, (idx*numcols)+7, event->query_ptr, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db); // MySQL_Events from circular-buffer are all null-terminated
 			rc = (*proxy_sqlite3_bind_text)(statement32, (idx*numcols)+8, event->server, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
@@ -2218,7 +2224,7 @@ void MySQL_Logger::insertMysqlEventsIntoDb(SQLite3DB * db, const std::string& ta
 			rc = (*proxy_sqlite3_bind_text)(statement1, 3, event->schemaname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 			rc = (*proxy_sqlite3_bind_int64)(statement1, 4, event->start_time); ASSERT_SQLITE_OK(rc, db);
 			rc = (*proxy_sqlite3_bind_int64)(statement1, 5, event->end_time); ASSERT_SQLITE_OK(rc, db);
-			sprintf(digest_hex_str, "0x%016llX", (long long unsigned int)event->query_digest);
+			snprintf(digest_hex_str, sizeof(digest_hex_str), "0x%016llX", (long long unsigned int)event->query_digest);
 			rc = (*proxy_sqlite3_bind_text)(statement1, 6, digest_hex_str, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 			rc = (*proxy_sqlite3_bind_text)(statement1, 7, event->query_ptr, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db); // MySQL_Events from circular-buffer are all null-terminated
 			rc = (*proxy_sqlite3_bind_text)(statement1, 8, event->server, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);

@@ -170,7 +170,7 @@ struct ev_io * new_connect_watcher(char *address, uint16_t gtid_port, uint16_t m
 	hints.ai_socktype= SOCK_STREAM;
 
 	char str_port[NI_MAXSERV+1];
-	sprintf(str_port,"%d", gtid_port);
+	snprintf(str_port, sizeof(str_port), "%d", gtid_port);
 
 	int gai_rc = getaddrinfo(address, str_port, &hints, &res);
 	if (gai_rc) {

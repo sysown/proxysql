@@ -72,7 +72,7 @@ void proxy_coredump_generate() {
 		coredump_generated < coredump_generation_threshold) {
 		
 		char core_filename[128];
-		sprintf(core_filename, "core.%d.%d", getpid(), coredump_generated);
+		snprintf(core_filename, sizeof(core_filename), "core.%d.%d", getpid(), coredump_generated);
 		proxy_info("Generating coredump file '%s'...\n", core_filename);
 		WriteCompressedCoreDump(core_filename, SIZE_MAX, COREDUMPER_COMPRESSED, NULL);
 		coredump_generated++;

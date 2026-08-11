@@ -548,7 +548,7 @@ int SQLite3DB::check_table_structure(const char *table_name, const char *table_d
 	int l=strlen(q1)+strlen(table_name)+strlen(table_def)+1;
 	sqlite3_stmt *statement;
 	char *buff=(char *)calloc(1,l);
-	sprintf(buff, q1, table_name , table_def);
+	snprintf(buff, l, q1, table_name , table_def);
 	if((*proxy_sqlite3_prepare_v2)(db, buff, -1, &statement, 0) != SQLITE_OK) {
 	  proxy_debug(PROXY_DEBUG_SQLITE, 1, "SQLITE: Error on (*proxy_sqlite3_prepare_v2)() running query \"%s\" : %s\n", buff, (*proxy_sqlite3_errmsg)(db));
 	  (*proxy_sqlite3_finalize)(statement);
@@ -578,7 +578,7 @@ bool SQLite3DB::build_table(const char *table_name, const char *table_def, bool 
 		const char *q2="DROP TABLE IF EXISTS %s";
 		int l=strlen(q2)+strlen(table_name)+1;
 		char *buff=(char *)calloc(1,l);
-		sprintf(buff,q2,table_name);
+		snprintf(buff, l, q2,table_name);
 		proxy_debug(PROXY_DEBUG_SQLITE, 5, "SQLITE: dropping table: %s\n", buff);
 		rc=execute(buff);
 		free(buff);
@@ -684,7 +684,7 @@ char *SQLite3_result::checksum() {
 	memset(buf,'0',128);
 	uint32_t d32[2];
 	memcpy(&d32,&hash1,sizeof(hash1));
-	sprintf(buf,"0x%X%X", d32[0], d32[1]);
+	snprintf(buf, sizeof(buf), "0x%X%X", d32[0], d32[1]);
 	return strdup(buf);
 }
 
@@ -1129,7 +1129,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 					memset(binary_sha1_sqlite3, 0, SHA_DIGEST_LENGTH*2+1);
 					char buf[SHA_DIGEST_LENGTH*2];
 					for (int i=0; i < SHA_DIGEST_LENGTH - 1; i++) {
-						sprintf((char*)&(buf[i*2]), "%02x", temp[i]);
+						snprintf((char*)&(buf[i*2]), sizeof(buf) - i*2, "%02x", temp[i]);
 					}
 					memcpy(binary_sha1_sqlite3, buf, SHA_DIGEST_LENGTH*2);
 					munmap(fb,statbuf.st_size);
@@ -1251,4 +1251,3 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 		}
 	}
 }
-

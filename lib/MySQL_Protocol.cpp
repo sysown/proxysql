@@ -4200,8 +4200,9 @@ bool MySQL_Protocol::generate_COM_QUERY_from_COM_FIELD_LIST(PtrSize_t *pkt) {
 	}
 
 	char *qt = (char *)"SELECT * FROM `%s` WHERE 1=0";
-	q = (char *)malloc(strlen(qt)+strlen(tablename));
-	sprintf(q,qt,tablename);
+	size_t q_size = strlen(qt) + strlen(tablename);
+	q = (char *)malloc(q_size);
+	snprintf(q, q_size, qt,tablename);
 	l_free(pkt->size, pkt->ptr);
 	pkt->size = strlen(q)+5;
 	mysql_hdr Hdr;

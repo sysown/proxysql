@@ -144,7 +144,7 @@ static char *generate_home() {
 		unsigned long long hours = (uptime - days*86400)/3600;
 		unsigned long long mins = (uptime % 3600)/60;
 		unsigned long long secs = uptime % 60;
-		sprintf(buf1,"%llud %02lluh%02llum%02llus", days, hours, mins, secs);
+		snprintf(buf1, sizeof(buf1), "%llud %02lluh%02llum%02llus", days, hours, mins, secs);
 		html.append(buf1);
 	}
 	html.append("<br>\n");
@@ -166,7 +166,7 @@ static char *generate_home() {
 	html.append("<b>Worker threads = </b>");
 	{
 		char buf[16];
-		sprintf(buf,"%u",GloMTH->num_threads);
+		snprintf(buf, sizeof(buf), "%u",GloMTH->num_threads);
 		html.append(buf);
 	}
 	html.append("<br>\n");

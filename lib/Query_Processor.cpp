@@ -727,11 +727,13 @@ int Query_Processor<QP_DERIVED>::search_rules_fast_routing_dest_hg(
 
 	char keybuf[256];
 	char * keybuf_ptr = keybuf;
+	size_t keybuf_size = sizeof(keybuf);
 
 	if (keylen >= sizeof(keybuf)) {
 		keybuf_ptr = (char *)malloc(keylen);
+		keybuf_size = keylen;
 	}
-	sprintf(keybuf_ptr,"%s%s%s---%d", u, rand_del, s, flagIN);
+	snprintf(keybuf_ptr, keybuf_size, "%s%s%s---%d", u, rand_del, s, flagIN);
 
 	if (lock) {
 		rdlock();
@@ -2192,9 +2194,9 @@ __exit_process_mysql_query:
 					if (ret->firewall_whitelist_mode == WUS_DETECTING || ret->firewall_whitelist_mode == WUS_PROTECTING) {
 						char buf[32];
 						if (qp && qp->digest) {
-							sprintf(buf,"0x%016llX", (long long unsigned int)qp->digest);
+							snprintf(buf, sizeof(buf), "0x%016llX", (long long unsigned int)qp->digest);
 						} else {
-							sprintf(buf,"unknown");
+							snprintf(buf, sizeof(buf), "unknown");
 						}
 						char *action = (char *)"blocked";
 						if (ret->firewall_whitelist_mode == WUS_DETECTING) {
@@ -2732,7 +2734,8 @@ fast_routing_hashmap_t Query_Processor<QP_DERIVED>::create_fast_routing_hashmap(
 
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
-			sprintf(ptr,"%s%s%s---%s",r->fields[0],rand_del,r->fields[1],r->fields[2]);
+			size_t key_size = strlen(r->fields[0]) + rand_del_size + strlen(r->fields[1]) + 3 + strlen(r->fields[2]) + 1;
+			snprintf(ptr, key_size, "%s%s%s---%s",r->fields[0],rand_del,r->fields[1],r->fields[2]);
 			int destination_hostgroup = atoi(r->fields[3]);
 			int ret;
 			khiter_t k = kh_put(khStrInt, fast_routing, ptr, &ret); // add the key
@@ -2798,11 +2801,13 @@ int Query_Processor<QP_DERIVED>::testing___find_HG_in_mysql_query_rules_fast_rou
 	if (rules_fast_routing) {
 		char keybuf[256];
 		char * keybuf_ptr = keybuf;
+		size_t keybuf_size = sizeof(keybuf);
 		size_t keylen = strlen(username)+strlen(rand_del)+strlen(schemaname)+30; // 30 is a big number
 		if (keylen > 250) {
 			keybuf_ptr = (char *)malloc(keylen);
+			keybuf_size = keylen;
 		}
-		sprintf(keybuf_ptr,"%s%s%s---%d", username, rand_del, schemaname, flagIN);
+		snprintf(keybuf_ptr, keybuf_size, "%s%s%s---%d", username, rand_del, schemaname, flagIN);
 		khiter_t k = kh_get(khStrInt, rules_fast_routing, keybuf_ptr);
 		if (k == kh_end(rules_fast_routing)) {
 		} else {

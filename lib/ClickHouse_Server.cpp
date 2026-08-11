@@ -694,10 +694,11 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
 		if (!strncasecmp("SHOW ", query_no_space, 5)) {
 			if (
 				!strncasecmp("SHOW COLUMNS FROM ", query_no_space, 18)
-			) {
-				l_free(query_length,query);
-				char *q=(char *)malloc(query_length+256);
-				sprintf(q,"DESC %s",query_no_space+18);
+				) {
+					l_free(query_length,query);
+					size_t q_size = query_length + 256;
+					char *q=(char *)malloc(q_size);
+					snprintf(q, q_size, "DESC %s",query_no_space+18);
 				//fprintf(stderr,"%s\n",q);
 				query=l_strdup(q);
 				query_length=strlen(query)+1;
@@ -727,8 +728,9 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
 					found = true;
 				}
 				l_free(query_length,query);
-				char *q=(char *)malloc(query_length+256);
-				sprintf(q,"SELECT variable_name Variable_name, Variable_value Value FROM global_variables WHERE Variable_name LIKE %s",query_no_space+offset);
+				size_t q_size = query_length + 256;
+				char *q=(char *)malloc(q_size);
+				snprintf(q, q_size, "SELECT variable_name Variable_name, Variable_value Value FROM global_variables WHERE Variable_name LIKE %s",query_no_space+offset);
 				//fprintf(stderr,"%s\n",q);
 				query=l_strdup(q);
 				query_length=strlen(query)+1;
@@ -855,10 +857,11 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
 
 		if (query_no_space_length==strlen((char *)"SELECT CURRENT_USER()")) {
 			if (!strncasecmp((char *)"SELECT CURRENT_USER()", query_no_space, query_no_space_length)) {
-				l_free(query_length,query);
-				char *query1=(char *)"SELECT \"%s\" AS 'CURRENT_USER()'";
-				char *query2=(char *)malloc(strlen(query1)+strlen(sess->client_myds->myconn->userinfo->username)+10);
-				sprintf(query2,query1,sess->client_myds->myconn->userinfo->username);
+			l_free(query_length,query);
+			char *query1=(char *)"SELECT \"%s\" AS 'CURRENT_USER()'";
+			size_t query2_size = strlen(query1) + strlen(sess->client_myds->myconn->userinfo->username) + 10;
+			char *query2=(char *)malloc(query2_size);
+			snprintf(query2, query2_size, query1,sess->client_myds->myconn->userinfo->username);
 				query=l_strdup(query2);
 				query_length=strlen(query2)+1;
 				free(query2);
@@ -868,10 +871,11 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
 		}
 		if (query_no_space_length==strlen((char *)"SELECT USER()")) {
 			if (!strncasecmp((char *)"SELECT USER()", query_no_space, query_no_space_length)) {
-				l_free(query_length,query);
-				char *query1=(char *)"SELECT \"%s\" AS 'USER()'";
-				char *query2=(char *)malloc(strlen(query1)+strlen(sess->client_myds->myconn->userinfo->username)+10);
-				sprintf(query2,query1,sess->client_myds->myconn->userinfo->username);
+			l_free(query_length,query);
+			char *query1=(char *)"SELECT \"%s\" AS 'USER()'";
+			size_t query2_size = strlen(query1) + strlen(sess->client_myds->myconn->userinfo->username) + 10;
+			char *query2=(char *)malloc(query2_size);
+			snprintf(query2, query2_size, query1,sess->client_myds->myconn->userinfo->username);
 				query=l_strdup(query2);
 				query_length=strlen(query2)+1;
 				free(query2);
@@ -935,10 +939,11 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
 
 		if (
 			(pkt->size==(strlen("SELECT version()")+5) && strncasecmp((char *)"SELECT version()",(char *)pkt->ptr+5,pkt->size-5)==0)
-		) {
+	) {
 			l_free(query_length,query);
-			char *q=(char *)malloc(query_length+256);
-			sprintf(q,"SELECT Variable_value 'version' FROM global_variables WHERE Variable_name = 'version'");
+			size_t q_size = query_length + 256;
+			char *q=(char *)malloc(q_size);
+			snprintf(q, q_size, "SELECT Variable_value 'version' FROM global_variables WHERE Variable_name = 'version'");
 			query=l_strdup(q);
 			query_length=strlen(query)+1;
 			free(q);
@@ -947,10 +952,11 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
 		}
 		if (
 			(pkt->size==(strlen("select name, type FROM mysql.proc where db='default'")+5) && strncasecmp((char *)"select name, type FROM mysql.proc where db='default'",(char *)pkt->ptr+5,pkt->size-5)==0)
-		) {
+	) {
 			l_free(query_length,query);
-			char *q=(char *)malloc(query_length+256);
-			sprintf(q,"SELECT * FROM global_variables WHERE 1=0");
+			size_t q_size = query_length + 256;
+			char *q=(char *)malloc(q_size);
+			snprintf(q, q_size, "SELECT * FROM global_variables WHERE 1=0");
 			query=l_strdup(q);
 			query_length=strlen(query)+1;
 			free(q);
@@ -979,9 +985,9 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
 		}
 		if (
 			(pkt->size==(strlen("SELECT CONNECTION_ID()")+5) && strncasecmp((char *)"SELECT CONNECTION_ID()",(char *)pkt->ptr+5,pkt->size-5)==0)
-		) {
+	) {
 			char buf[16];
-			sprintf(buf,"%u",sess->thread_session_id);
+			snprintf(buf, sizeof(buf), "%u",sess->thread_session_id);
 			//unsigned int nTrx=NumActiveTransactions();
 			unsigned int nTrx= 0;
 			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
@@ -1061,8 +1067,9 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
 		if (!strncasecmp(SELECT_DB_USER, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
 			char *query1=(char *)"SELECT 'admin' AS \"DATABASE()\", '%s' AS \"USER()\"";
-			char *query2=(char *)malloc(strlen(query1)+strlen(sess->client_myds->myconn->userinfo->username)+10);
-			sprintf(query2,query1,sess->client_myds->myconn->userinfo->username);
+			size_t query2_size = strlen(query1) + strlen(sess->client_myds->myconn->userinfo->username) + 10;
+			char *query2=(char *)malloc(query2_size);
+			snprintf(query2, query2_size, query1,sess->client_myds->myconn->userinfo->username);
 			query=l_strdup(query2);
 			query_length=strlen(query2)+1;
 			free(query2);
@@ -1290,8 +1297,9 @@ __run_query:
 							if (ds->myconn && ds->myconn->userinfo && ds->myconn->userinfo->schemaname) {
 								char *sn = ds->myconn->userinfo->schemaname;
 								char *use_query = NULL;
-								use_query = (char *)malloc(strlen(sn)+8);
-								sprintf(use_query,"USE %s", sn);
+								size_t use_query_size = strlen(sn) + 8;
+								use_query = (char *)malloc(use_query_size);
+								snprintf(use_query, use_query_size, "USE %s", sn);
 								clickhouse::Query myq(use_query);
 								clickhouse_sess->client->Execute(myq);
 								free(use_query);
@@ -1780,7 +1788,7 @@ char * ClickHouse_Server::get_variable(char *name) {
 	if (!strcasecmp(name,"hostname")) return s_strdup(variables.hostname);
 	if (!strcasecmp(name,"mysql_ifaces")) return s_strdup(variables.mysql_ifaces);
 	if (!strcasecmp(name,"port")) {
-		sprintf(intbuf,"%d",variables.port);
+		snprintf(intbuf, sizeof(intbuf), "%d",variables.port);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"read_only")) {

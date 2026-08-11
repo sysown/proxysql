@@ -153,8 +153,9 @@ int ProxySQL_Config::Read_Global_Variables_from_configfile(const char *prefix) {
 	const Setting& root = GloVars.confFile->cfg.getRoot();
 	const size_t prefix_len = safe_strlen(prefix);
 	const size_t suffix_len = sizeof("_variables") - 1;
-        char *groupname=(char *)l_alloc(prefix_len + suffix_len + 1);
-	sprintf(groupname,"%s%s",prefix,"_variables");
+        const size_t groupname_size = prefix_len + suffix_len + 1;
+        char *groupname=(char *)l_alloc(groupname_size);
+	snprintf(groupname, groupname_size, "%s%s",prefix,"_variables");
 	if (root.exists(groupname)==false) {
 		l_free(0, groupname);
 	return 0;
