@@ -4265,19 +4265,29 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 	}
 #ifdef PROXYSQL31
 	if (!strcasecmp(name,"cluster_leader_election")) {
+		bool old_v = variables.cluster_leader_election;
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.cluster_leader_election=true;
 			__sync_lock_test_and_set(&GloProxyCluster->cluster_leader_election, 1);
 			// Spec: with election enabled a node is effective-RO until the first
 			// election settles. Assume follower immediately; the next tick corrects
 			// it (the elected leader flips back to RW within tick+grace).
-			set_cluster_follower(true);
+			// Only flip on the false->true transition: this variable is
+			// re-applied on every LOAD ADMIN VARIABLES TO RUNTIME (including
+			// cluster syncs), and unconditionally forcing follower(true) here
+			// would kick an already-elected leader back to effective-RO on
+			// every reload.
+			if (old_v == false) {
+				set_cluster_follower(true);
+			}
 			return true;
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.cluster_leader_election=false;
 			__sync_lock_test_and_set(&GloProxyCluster->cluster_leader_election, 0);
-			set_cluster_follower(false); // immediate, don't wait for the next tick
+			if (old_v == true) {
+				set_cluster_follower(false); // immediate, don't wait for the next tick
+			}
 			return true;
 		}
 		return false;

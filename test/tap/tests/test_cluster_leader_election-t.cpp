@@ -194,7 +194,7 @@ int main(int argc, char** argv) {
 		plan(1);
 		ok(1, "admin-cluster_leader_election not present (non-PROXYSQL31 build) - skipping");
 	} else {
-		plan(29);
+		plan(30);
 		string err;
 
 		// --- Convergence: all 3 nodes agree node1 (16062) is leader --- (3)
@@ -207,6 +207,19 @@ int main(int argc, char** argv) {
 		ok(query_ok(a1, Q_LOAD), "leader accepts LOAD TO RUNTIME: %s", mysql_error(a1));
 		ok(query_ok(a1, Q_SAVE), "leader accepts SAVE TO DISK: %s", mysql_error(a1));
 		query_ok(a1, Q_DELETE); query_ok(a1, Q_LOAD); query_ok(a1, Q_SAVE); // cleanup
+
+		// --- Leader survives LOAD ADMIN VARIABLES TO RUNTIME --- (1)
+		// Regression check: flush_GENERIC_variables__process__database_to_runtime
+		// re-applies every admin variable (including cluster_leader_election) on
+		// every admin-vars reload, e.g. on every cluster sync. set_variable()
+		// must only call set_cluster_follower(true) on the false->true
+		// transition, otherwise the current leader gets kicked to
+		// effective-RO on every such reload. No sleep: the check must catch
+		// the state right after the reload, before the next election tick
+		// would self-correct it.
+		query_ok(a1, "LOAD ADMIN VARIABLES TO RUNTIME");
+		ok(query_ok(a1, Q_INSERT) && query_ok(a1, Q_DELETE),
+			"leader stays RW immediately after LOAD ADMIN VARIABLES TO RUNTIME: %s", mysql_error(a1));
 
 		// --- Follower refuses writes --- (3 + 1 + 2)
 		// NOTE: query_refused() mutates 'err', so it must be sequenced before
