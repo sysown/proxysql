@@ -266,6 +266,7 @@ private:
 };
 
 class ProxySQL_Node_Entry {
+	friend class ProxySQL_Cluster_Nodes;
 	private:
 	uint64_t hash;
 	char *hostname;
@@ -273,6 +274,11 @@ class ProxySQL_Node_Entry {
 	uint64_t weight;
 	char *comment;
 	char* ip_addr;
+	char *uuid;                              // learned via SELECT GLOBAL_UUID(); NULL until known
+	unsigned long long last_success_at_us;   // monotonic_time() of last successful GLOBAL_CHECKSUM poll; 0 = never
+	uint64_t global_version;                 // number of observed global checksum changes on this peer
+	uint64_t checks_ok;
+	uint64_t checks_err;
 	uint64_t generate_hash();
 	bool active;
 	int metrics_idx_prev;
@@ -307,6 +313,12 @@ class ProxySQL_Node_Entry {
 	uint16_t get_port() {
 		return port;
 	}
+	const char * get_uuid() { return uuid; }
+	void set_uuid(const char* u);            // strdup, frees previous
+	unsigned long long get_last_success_at_us() { return last_success_at_us; }
+	uint64_t get_global_version() { return global_version; }
+	uint64_t get_checks_ok() { return checks_ok; }
+	uint64_t get_checks_err() { return checks_err; }
 	ProxySQL_Node_Metrics * get_metrics_curr();
 	ProxySQL_Node_Metrics * get_metrics_prev();
 	struct {
@@ -407,6 +419,8 @@ class ProxySQL_Cluster_Nodes {
 	bool Update_Node_Metrics(char * _h, uint16_t _p, MYSQL_RES *_r, unsigned long long _response_time);
 	bool Update_Global_Checksum(char * _h, uint16_t _p, MYSQL_RES *_r);
 	bool Update_Node_Checksums(char * _h, uint16_t _p, MYSQL_RES *_r);
+	void Update_Node_UUID(char * _hostname, uint16_t _port, const char * _uuid);
+	void Update_Node_Failure(char * _hostname, uint16_t _port);
 	void Reset_Global_Checksums(bool lock);
 	void update_prometheus_nodes_metrics();
 	SQLite3_result * dump_table_proxysql_servers();
@@ -669,6 +683,12 @@ public:
 	}
 	SQLite3_result* get_stats_proxysql_servers_metrics() {
 		return nodes.stats_proxysql_servers_metrics();
+	}
+	void Update_Node_UUID(char* h, uint16_t p, const char* u) {
+		nodes.Update_Node_UUID(h, p, u);
+	}
+	void Update_Node_Failure(char* h, uint16_t p) {
+		nodes.Update_Node_Failure(h, p);
 	}
 	void p_update_metrics();
 	void thread_ending(pthread_t);

@@ -3794,6 +3794,31 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			goto __run_query;
 		}
 
+		if ((query_no_space_length == strlen("SELECT GLOBAL_UUID()")) && (!strncasecmp("SELECT GLOBAL_UUID()", query_no_space, strlen("SELECT GLOBAL_UUID()")))) {
+			const char *uuid_val = (GloVars.uuid ? GloVars.uuid : "");
+			uint16_t setStatus = 0;
+			auto *myds=sess->client_myds;
+			auto *myprot=&sess->client_myds->myprot;
+			myds->DSS=STATE_QUERY_SENT_DS;
+			int sid=1;
+			myprot->generate_pkt_column_count(true,NULL,NULL,sid,1); sid++;
+			myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",(char *)"UUID",(char *)"",33,36,MYSQL_TYPE_VAR_STRING,0,0,false,0,NULL); sid++;
+			myds->DSS=STATE_COLUMN_DEFINITION;
+			myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+			char **p=(char **)malloc(sizeof(char*)*1);
+			unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*1);
+			l[0]=strlen(uuid_val);
+			p[0]=(char *)uuid_val;
+			myprot->generate_pkt_row(true,NULL,NULL,sid,1,l,p); sid++;
+			myds->DSS=STATE_ROW;
+			myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+			myds->DSS=STATE_SLEEP;
+			run_query=false;
+			free(l);
+			free(p);
+			goto __run_query;
+		}
+
 
 		if ((query_no_space_length>8) && (!strncasecmp("PROXYSQL ", query_no_space, 8))) {
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received PROXYSQL command\n");

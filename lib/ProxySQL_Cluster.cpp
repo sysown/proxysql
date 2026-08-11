@@ -242,6 +242,17 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 								proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Sending CLUSTER_NODE_UUID %s to peer %s:%d\n", GloVars.uuid, node->hostname, node->port);
 								proxy_info("Cluster: sending CLUSTER_NODE_UUID %s to peer %s:%d\n", GloVars.uuid, node->hostname, node->port);
 								rc_query = mysql_query(conn, q.c_str());
+								rc_query = mysql_query(conn, (char *)"SELECT GLOBAL_UUID()");
+								if (rc_query == 0) {
+									MYSQL_RES *uuid_res = mysql_store_result(conn);
+									if (uuid_res) {
+										MYSQL_ROW urow = mysql_fetch_row(uuid_res);
+										if (urow && urow[0] && strlen(urow[0]) > 0) {
+											GloProxyCluster->Update_Node_UUID(node->hostname, node->port, urow[0]);
+										}
+										mysql_free_result(uuid_res);
+									}
+								}
 							} else {
 								proxy_warning("Cluster: different ProxySQL version with peer %s:%d . Remote: %s . Self: %s\n", node->hostname, node->port, row[0], PROXYSQL_VERSION_);
 							}
@@ -339,6 +350,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 							);
 						}
 						if (++query_error_counter == QUERY_ERROR_RATE) query_error_counter = 0;
+						GloProxyCluster->Update_Node_Failure(node->hostname, node->port);
 					}
 					unsigned long long end_time=monotonic_time();
 					if (rc_query == 0) {
@@ -414,6 +426,11 @@ ProxySQL_Node_Entry::ProxySQL_Node_Entry(char* _hostname, uint16_t _port, uint64
 	global_checksum = 0;
 	ip_addr = NULL;
 	hostname = NULL;
+	uuid = NULL;
+	last_success_at_us = 0;
+	global_version = 0;
+	checks_ok = 0;
+	checks_err = 0;
 	if (_hostname) {
 		hostname = strdup(_hostname);
 	}
@@ -452,6 +469,10 @@ ProxySQL_Node_Entry::~ProxySQL_Node_Entry() {
 	if (ip_addr) {
 		free(ip_addr);
 		ip_addr = NULL;
+	}
+	if (uuid) {
+		free(uuid);
+		uuid = NULL;
 	}
 	for (int i = 0; i < PROXYSQL_NODE_METRICS_LEN ; i++) {
 		delete metrics[i];
@@ -495,6 +516,16 @@ uint64_t ProxySQL_Node_Entry::get_weight() {
 
 void ProxySQL_Node_Entry::set_weight(uint64_t w) {
 	weight = w;
+}
+
+void ProxySQL_Node_Entry::set_uuid(const char* u) {
+	if (uuid) {
+		free(uuid);
+		uuid = NULL;
+	}
+	if (u) {
+		uuid = strdup(u);
+	}
 }
 
 void ProxySQL_Node_Entry::set_comment(char *s) {
@@ -4063,9 +4094,12 @@ bool ProxySQL_Cluster_Nodes::Update_Global_Checksum(char * _h, uint16_t _p, MYSQ
 			} else {
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Global checksum for peer %s:%d is different from fetched one. Local checksum:[0x%lX] Fetched checksum:[0x%llX]\n", node->get_hostname(), node->get_port(), node->global_checksum, v);
 				node->global_checksum = v;
+				node->global_version++;
 			}
 		}
 		//pthread_mutex_unlock(&GloVars.checksum_mutex);
+		node->last_success_at_us = monotonic_time();
+		node->checks_ok++;
 	}
 	pthread_mutex_unlock(&mutex);
 	return ret;
@@ -4149,6 +4183,26 @@ bool ProxySQL_Cluster_Nodes::Update_Node_Metrics(char * _h, uint16_t _p, MYSQL_R
 	}
 	pthread_mutex_unlock(&mutex);
 	return ret;
+}
+
+void ProxySQL_Cluster_Nodes::Update_Node_UUID(char * _hostname, uint16_t _port, const char * _uuid) {
+	uint64_t hash_ = generate_hash(_hostname, _port);
+	pthread_mutex_lock(&mutex);
+	auto ite = umap_proxy_nodes.find(hash_);
+	if (ite != umap_proxy_nodes.end()) {
+		ite->second->set_uuid(_uuid);
+	}
+	pthread_mutex_unlock(&mutex);
+}
+
+void ProxySQL_Cluster_Nodes::Update_Node_Failure(char * _hostname, uint16_t _port) {
+	uint64_t hash_ = generate_hash(_hostname, _port);
+	pthread_mutex_lock(&mutex);
+	auto ite = umap_proxy_nodes.find(hash_);
+	if (ite != umap_proxy_nodes.end()) {
+		ite->second->checks_err++;
+	}
+	pthread_mutex_unlock(&mutex);
 }
 
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_query_rules(char **host, uint16_t *port, char** ip_address) {
