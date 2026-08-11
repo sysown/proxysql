@@ -47,6 +47,16 @@ bool proxysql_ed25519_decode_pubkey(const char* stored, unsigned char* out_pubke
 	in[ED25519_PUBKEY_B64_LEN] = '=';
 	unsigned char out[33];
 	if (EVP_DecodeBlock(out, in, sizeof(in)) != 33) return false;
+	// EVP_DecodeBlock() alone is too lenient: it treats '=' anywhere in the
+	// payload as six zero bits and silently accepts non-canonical trailing
+	// bits in the final symbol, so a corrupted credential could decode to a
+	// DIFFERENT key than the operator intended instead of being rejected.
+	// Round-trip check: re-encode the decoded key (44 chars incl. canonical
+	// padding + NUL) and require the first 43 characters to match the stored
+	// payload exactly.
+	unsigned char reencoded[45];
+	EVP_EncodeBlock(reencoded, out, ED25519_PUBKEY_LEN);
+	if (memcmp(reencoded, in, ED25519_PUBKEY_B64_LEN) != 0) return false;
 	memcpy(out_pubkey, out, ED25519_PUBKEY_LEN);
 	return true;
 }

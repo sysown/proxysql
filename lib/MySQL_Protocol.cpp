@@ -1916,10 +1916,19 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		// fall through to the pre-existing cleartext comparison, which is
 		// the intended conservative behavior for non-MySQL sessions (the
 		// feature simply doesn't apply there).
+		const bool cu_stored_is_ed = proxysql_ed25519_has_prefix(password);
+		// a '*SHA1' or '$A$' hash cannot derive an ed25519 key; refuse the
+		// switch for an explicit client_ed25519 request against such a
+		// credential instead of wasting a round trip on a doomed exchange
+		// (mirrors the cred_usable check in the PPHR_verify_password gate)
+		const bool cu_cred_usable = cu_stored_is_ed ||
+			(password[0] != '*' &&
+			!(strlen(password) == 70 && strncasecmp(password, "$A$0", 4) == 0));
 		const bool ed25519_switch_needed =
 			session_type == PROXYSQL_SESSION_MYSQL &&
-			(proxysql_ed25519_has_prefix(password) ||
-			(client_auth_plugin && strcmp(client_auth_plugin, plugins[AUTH_MYSQL_ED25519]) == 0));
+			(cu_stored_is_ed ||
+			(cu_cred_usable && client_auth_plugin &&
+			strcmp(client_auth_plugin, plugins[AUTH_MYSQL_ED25519]) == 0));
 		if (ed25519_switch_needed) {
 			if (RAND_bytes((*myds)->myconn->ed25519_nonce, ED25519_NONCE_LEN) != 1) {
 				proxy_error("RAND_bytes() failed generating the ed25519 nonce for user '%s'\n", user);
@@ -3675,7 +3684,18 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 			// malformed "$ED$..." stored credential must still be denied via
 			// PPHR_ed25519_verify()'s generic failure, never treated as a
 			// cleartext/native password comparison below.
-			if (auth_plugin_id == AUTH_MYSQL_ED25519 || proxysql_ed25519_has_prefix(vars1.password)) {
+			// Session scope matches the $ED$ reservation rule: MYSQL (the
+			// only session type the ed25519 exchange is offered on) and
+			// SQLITE (shares the USERNAME_FRONTEND credential rows, so the
+			// fail-closed reservation must hold there too). ADMIN/STATS are
+			// deliberately excluded: their credentials flow through this
+			// same function under PROXYSQL31, and routing a $ED$-prefixed
+			// admin password into the 64-byte signature check would be an
+			// unrecoverable admin-port lockout -- they fall through to the
+			// pre-existing cleartext comparison instead.
+			if (((*myds)->sess->session_type == PROXYSQL_SESSION_MYSQL ||
+				(*myds)->sess->session_type == PROXYSQL_SESSION_SQLITE) &&
+				(auth_plugin_id == AUTH_MYSQL_ED25519 || proxysql_ed25519_has_prefix(vars1.password))) {
 				// signature collected by PPHR_1 after the Auth Switch; a stored
 				// "$ED$" key with a non-ed25519 response fails the length check
 				// inside PPHR_ed25519_verify (generic denial)

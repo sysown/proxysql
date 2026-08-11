@@ -55,7 +55,7 @@ int main() {
 		3 /* decode round-trips */ +
 		7 /* is_pubkey_format edge cases */ +
 		5 /* has_prefix edge cases */ +
-		2 /* decode_pubkey malformed */ +
+		5 /* decode_pubkey malformed / non-canonical */ +
 		1 /* signature KAT */ +
 		3 /* tampered signature / nonce / key */
 	);
@@ -107,13 +107,33 @@ int main() {
 		ok(proxysql_ed25519_has_prefix(NULL) == false, "has_prefix: NULL rejected");
 	}
 
-	// 4. decode_pubkey malformed input
+	// 4. decode_pubkey malformed / non-canonical input.
+	// EVP_DecodeBlock() alone treats '=' anywhere as six zero bits and ignores
+	// non-canonical trailing bits, so decode_pubkey adds a re-encode round-trip;
+	// these cases must all be rejected rather than silently decoding to a
+	// different key than the operator stored.
 	{
 		unsigned char pk[ED25519_PUBKEY_LEN];
 		// 43 chars but contains characters outside the base64 alphabet
 		std::string bad = std::string(ED25519_STORED_PREFIX) + "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!";
 		ok(proxysql_ed25519_decode_pubkey(bad.c_str(), pk) == false, "invalid base64 chars rejected");
 		ok(proxysql_ed25519_decode_pubkey("not-ed25519-at-all", pk) == false, "non-$ED$ string rejected");
+
+		std::string valid = std::string(ED25519_STORED_PREFIX) + KATS[1].pubkey_b64;
+		std::string embedded_eq = valid;
+		embedded_eq[ED25519_STORED_PREFIX_LEN + 20] = '=';
+		ok(proxysql_ed25519_decode_pubkey(embedded_eq.c_str(), pk) == false,
+			"embedded '=' in payload rejected (would decode as zero bits)");
+		std::string trailing_eq = valid;
+		trailing_eq[trailing_eq.size() - 1] = '=';
+		ok(proxysql_ed25519_decode_pubkey(trailing_eq.c_str(), pk) == false,
+			"'=' as 43rd payload char rejected");
+		// KATS[1] ends in 'Q' (0b010000, canonical: final 2 slack bits zero);
+		// 'R' (0b010001) decodes to the same 32 bytes but is non-canonical
+		std::string noncanon = valid;
+		noncanon[noncanon.size() - 1] = 'R';
+		ok(proxysql_ed25519_decode_pubkey(noncanon.c_str(), pk) == false,
+			"non-canonical final symbol rejected (trailing bits not zero)");
 	}
 
 	// 5. signature known-answer test
@@ -121,7 +141,7 @@ int main() {
 	unsigned char nonce[ED25519_NONCE_LEN];
 	unsigned char pk[ED25519_PUBKEY_LEN];
 	unhex(SIG_HEX, sig, sizeof(sig));
-	for (int i = 0; i < ED25519_NONCE_LEN; i++) nonce[i] = static_cast<unsigned char>(i);
+	for (size_t i = 0; i < ED25519_NONCE_LEN; i++) nonce[i] = static_cast<unsigned char>(i);
 	proxysql_ed25519_derive_public_key("ed25519_pass_1", strlen("ed25519_pass_1"), pk);
 	ok(proxysql_ed25519_verify_signature(sig, nonce, pk) == true, "known-answer signature verifies");
 

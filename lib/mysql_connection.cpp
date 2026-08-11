@@ -15,6 +15,8 @@ using json = nlohmann::json;
 #include "MySQL_Query_Processor.h"
 #include "MySQL_Variables.h"
 #include <atomic>
+#include <mutex>
+#include <set>
 
 #ifdef PROXYSQLED25519
 #include "MySQL_Ed25519.h"
@@ -1037,10 +1039,25 @@ void MySQL_Connection::connect_start() {
 	// well-formed one -- the "$ED$" marker is reserved and never a real
 	// cleartext password either way.
 	if (userinfo->password && proxysql_ed25519_has_prefix(userinfo->password)) {
-		proxy_warning(
-			"User '%s' has an ed25519 public-key-only ($ED$) credential;"
-			" backend authentication requires the cleartext password and will fail\n",
-			userinfo->username);
+		// connect_start() runs for every backend connect attempt and the pool
+		// retries failed connects, so warn once per user rather than flooding
+		// the error log; MySQL_Authentication::add() already flags the row at
+		// load time. The set is bounded by the number of distinct usernames,
+		// and this branch is only entered for misconfigured $ED$ users.
+		static std::mutex ed25519_warned_mutex;
+		static std::set<std::string> ed25519_warned_users;
+		const std::string ed25519_uname { userinfo->username ? userinfo->username : "" };
+		bool ed25519_first_warning = false;
+		{
+			std::lock_guard<std::mutex> lock(ed25519_warned_mutex);
+			ed25519_first_warning = ed25519_warned_users.insert(ed25519_uname).second;
+		}
+		if (ed25519_first_warning) {
+			proxy_warning(
+				"User '%s' has an ed25519 public-key-only ($ED$) credential;"
+				" backend authentication requires the cleartext password and will fail\n",
+				ed25519_uname.c_str());
+		}
 	}
 #endif
 	if (parent->port) {

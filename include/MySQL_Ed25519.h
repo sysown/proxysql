@@ -21,13 +21,13 @@
  * confused with a cleartext password.
  */
 
-#define ED25519_NONCE_LEN 32
-#define ED25519_SIG_LEN 64
-#define ED25519_PUBKEY_LEN 32
-#define ED25519_PUBKEY_B64_LEN 43
-#define ED25519_STORED_PREFIX "$ED$"
-#define ED25519_STORED_PREFIX_LEN 4
-#define ED25519_STORED_LEN (ED25519_STORED_PREFIX_LEN + ED25519_PUBKEY_B64_LEN)
+inline constexpr size_t ED25519_NONCE_LEN = 32;
+inline constexpr size_t ED25519_SIG_LEN = 64;
+inline constexpr size_t ED25519_PUBKEY_LEN = 32;
+inline constexpr size_t ED25519_PUBKEY_B64_LEN = 43;
+inline constexpr char ED25519_STORED_PREFIX[] = "$ED$";
+inline constexpr size_t ED25519_STORED_PREFIX_LEN = sizeof(ED25519_STORED_PREFIX) - 1;
+inline constexpr size_t ED25519_STORED_LEN = ED25519_STORED_PREFIX_LEN + ED25519_PUBKEY_B64_LEN;
 
 /** @brief Derive the 32-byte public key from a cleartext password (MariaDB variant). */
 void proxysql_ed25519_derive_public_key(const char* password, size_t password_len, unsigned char* out_pubkey);
