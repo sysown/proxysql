@@ -135,15 +135,17 @@ char* psprintf(const char* fmt, ...) {
 }
 
 char* escape_str(MYSQL* mysql, const char* str) {
-    if (!str) return strdup("NULL");
-    const std::string input(str);
-    const size_t input_len = input.size();
-    char* escaped = (char*)malloc(2 * input_len + 1);
-    const unsigned long escaped_len = mysql_real_escape_string(mysql, escaped, input.c_str(), input_len);
-    char* result = (char*)malloc(escaped_len + 3);
-    snprintf(result, escaped_len + 3, "'%s'", escaped);
-    free(escaped);
-    return result;
+	if (!str) return strdup("NULL");
+	const std::string input(str);
+	const size_t input_len = input.size();
+	std::string escaped(2 * input_len + 1, '\0');
+	const unsigned long escaped_len = mysql_real_escape_string(mysql, escaped.data(), input.c_str(), input_len);
+	std::string result;
+	result.reserve(escaped_len + 2);
+	result.push_back('\'');
+	result.append(escaped.data(), escaped_len);
+	result.push_back('\'');
+	return strdup(result.c_str());
 }
 
 // Build INSERT query for a rule
