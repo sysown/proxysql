@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <pthread.h>
 #include <proxysql_gtid.h>
 
 class GTID_Server_Data {
@@ -28,6 +29,13 @@ class GTID_Server_Data {
 	bool gtid_exists(char *gtid_uuid, uint64_t gtid_trxid);
 	void read_all_gtids();
 	void dump();
+
+	private:
+	pthread_rwlock_t executed_rwlock;
+
+	public:
+	bool add_gtid_from_ok(const char* gtid);
+	std::string gtid_executed_to_string();
 };
 
 #endif // CLASS_GTID_Server_Data_H

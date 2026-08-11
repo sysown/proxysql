@@ -5795,7 +5795,7 @@ SQLite3_result * MySQL_HostGroups_Manager::get_stats_mysql_gtid_executed() {
 			sprintf(buf,"%d", (int)gtid_si->mysql_port);
 			pta[1]=strdup(buf);
 			//sprintf(buf,"%d", mysrvc->port);
-			string s1 = gtid_si->gtid_executed.to_string();
+			string s1 = gtid_si->gtid_executed_to_string();
 			pta[2]=strdup(s1.c_str());
 			sprintf(buf,"%llu", gtid_si->events_read);
 			pta[3]=strdup(buf);

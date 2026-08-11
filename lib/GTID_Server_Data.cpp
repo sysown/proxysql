@@ -1,6 +1,11 @@
 #include "GTID_Server_Data.h"
 #include "MySQL_HostGroups_Manager.h"
 
+#include <algorithm>
+#include <cerrno>
+#include <cctype>
+#include <climits>
+#include <cstring>
 #include "ev.h"
 #include <iterator>
 
@@ -207,6 +212,7 @@ GTID_Server_Data::GTID_Server_Data(struct ev_io *_w, char *_address, uint16_t _p
 	port = _port;
 	mysql_port = _mysql_port;
 	events_read = 0;
+	pthread_rwlock_init(&executed_rwlock, nullptr);
 }
 
 void GTID_Server_Data::resize(size_t _s) {
@@ -218,6 +224,7 @@ void GTID_Server_Data::resize(size_t _s) {
 }
 
 GTID_Server_Data::~GTID_Server_Data() {
+	pthread_rwlock_destroy(&executed_rwlock);
 	free(address);
 	free(data);
 }
@@ -270,7 +277,49 @@ bool GTID_Server_Data::readall() {
 
 
 bool GTID_Server_Data::gtid_exists(char *gtid_uuid, uint64_t gtid_trxid) {
-	return gtid_executed.has_gtid((std::string)gtid_uuid, gtid_trxid);
+	pthread_rwlock_rdlock(&executed_rwlock);
+	bool found = gtid_executed.has_gtid((std::string)gtid_uuid, gtid_trxid);
+	pthread_rwlock_unlock(&executed_rwlock);
+	return found;
+}
+
+bool GTID_Server_Data::add_gtid_from_ok(const char* gtid) {
+	if (gtid == nullptr) {
+		return false;
+	}
+
+	const char* sep = strrchr(gtid, ':');
+	if (sep == nullptr || sep == gtid || sep[1] == '\0') {
+		return false;
+	}
+
+	std::string uuid(gtid, static_cast<size_t>(sep - gtid));
+	uuid.erase(std::remove(uuid.begin(), uuid.end(), '-'), uuid.end());
+	if (uuid.size() != 32 || !std::all_of(uuid.begin(), uuid.end(), [](unsigned char c) {
+			return std::isxdigit(c) != 0;
+		})) {
+		return false;
+	}
+
+	errno = 0;
+	char* end = nullptr;
+	unsigned long long parsed = strtoull(sep + 1, &end, 10);
+	if (errno == ERANGE || end == sep + 1 || *end != '\0' || parsed == 0 ||
+			parsed > static_cast<unsigned long long>(LLONG_MAX)) {
+		return false;
+	}
+
+	pthread_rwlock_wrlock(&executed_rwlock);
+	bool updated = gtid_executed.add(uuid, static_cast<trxid_t>(parsed));
+	pthread_rwlock_unlock(&executed_rwlock);
+	return updated;
+}
+
+std::string GTID_Server_Data::gtid_executed_to_string() {
+	pthread_rwlock_rdlock(&executed_rwlock);
+	std::string executed = gtid_executed.to_string();
+	pthread_rwlock_unlock(&executed_rwlock);
+	return executed;
 }
 
 void GTID_Server_Data::read_all_gtids() {
@@ -318,12 +367,15 @@ bool GTID_Server_Data::writeout() {
  * I4=<trxid_start>-<trxid_end>                                : Latest seen trxid range, reusing UUID from previous I1/I3 message.
  */
 bool GTID_Server_Data::read_next_gtid() {
+	pthread_rwlock_wrlock(&executed_rwlock);
 	if (len==0) {
+		pthread_rwlock_unlock(&executed_rwlock);
 		return false;
 	}
 	void *nlp = NULL;
 	nlp = memchr(data+pos,'\n',len-pos);
 	if (nlp == NULL) {
+		pthread_rwlock_unlock(&executed_rwlock);
 		return false;
 	}
 	int l = (char *)nlp - (data+pos);
@@ -384,6 +436,7 @@ bool GTID_Server_Data::read_next_gtid() {
 			proxy_warning("GTID: invalid bootstrap message from binlog reader on port %d for server %s:%d, disconnecting\n",
 				port, address, mysql_port);
 			active = false;
+			pthread_rwlock_unlock(&executed_rwlock);
 			return false;
 		}
 
@@ -453,10 +506,12 @@ bool GTID_Server_Data::read_next_gtid() {
 				proxy_warning("GTID: invalid or unsupported message (%s) from binlog reader on port %d for server %s:%d, disconnecting\n",
 					rec_msg, port, address, mysql_port);
 				active = false;
+				pthread_rwlock_unlock(&executed_rwlock);
 				return false;
 			}
 		}
 	}
+	pthread_rwlock_unlock(&executed_rwlock);
 	return true;
 }
 

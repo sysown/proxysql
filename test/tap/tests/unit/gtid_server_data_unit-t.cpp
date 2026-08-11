@@ -336,8 +336,71 @@ static void test_incomplete_message() {
 	ok(sd.events_read == 0, "incomplete: events_read stays 0");
 }
 
+static void test_ok_gtid_survives_inactive_reader() {
+	GTID_Server_Data sd(nullptr, (char *)"127.0.0.1", 0, 3306);
+	sd.active = false;
+
+	ok(sd.add_gtid_from_ok("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:42"),
+		"OK GTID: first observation updates the set");
+	ok(sd.gtid_exists((char *)UUID_A_STRIPPED, 42),
+		"OK GTID: direct evidence is valid while reader is inactive");
+	ok(!sd.gtid_exists((char *)UUID_A_STRIPPED, 43),
+		"OK GTID: an unobserved transaction remains absent");
+	ok(sd.gtid_executed_to_string().find(":42") != std::string::npos,
+		"OK GTID: union is visible in stats rendering");
+	ok(sd.events_read == 0,
+		"OK GTID: binlog event counter is unchanged");
+	ok(!sd.add_gtid_from_ok("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:42"),
+		"OK GTID: duplicate observation is not counted as an update");
+}
+
+static void test_known_gtid_survives_inactive_reader() {
+	GTID_Server_Data sd(nullptr, (char *)"127.0.0.1", 0, 3306);
+	std::string msg = std::string("I1=") + UUID_A_STRIPPED + ":55\n";
+	stuff_buffer(sd, msg);
+
+	ok(sd.read_next_gtid(), "known GTID: binlog message is parsed");
+	ok(sd.gtid_exists((char *)UUID_A_STRIPPED, 55),
+		"known GTID: active endpoint record contains the transaction");
+	sd.active = false;
+	ok(sd.gtid_exists((char *)UUID_A_STRIPPED, 55),
+		"known GTID: inactive reader does not hide endpoint state");
+}
+
+static void test_ok_gtid_validation() {
+	GTID_Server_Data sd(nullptr, (char *)"127.0.0.1", 0, 3306);
+
+	ok(!sd.add_gtid_from_ok(nullptr), "OK GTID: null is rejected");
+	ok(!sd.add_gtid_from_ok("missing-separator"), "OK GTID: missing separator is rejected");
+	ok(!sd.add_gtid_from_ok("zzzzzzzz-0000-1111-2222-aaaaaaaaaaaa:1"),
+		"OK GTID: nonhexadecimal UUID is rejected");
+	ok(!sd.add_gtid_from_ok("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:not-a-number"),
+		"OK GTID: nonnumeric transaction ID is rejected");
+	ok(!sd.add_gtid_from_ok("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:0"),
+		"OK GTID: transaction zero is rejected");
+	ok(sd.gtid_executed_to_string().empty(),
+		"OK GTID: invalid input does not mutate the endpoint set");
+}
+
+static void test_ok_and_binlog_merge() {
+	GTID_Server_Data sd(nullptr, (char *)"127.0.0.1", 0, 3306);
+	std::string msg = std::string("I1=") + UUID_A_STRIPPED + ":60\n";
+	stuff_buffer(sd, msg);
+	sd.read_next_gtid();
+
+	ok(sd.add_gtid_from_ok("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:61"),
+		"mixed observations: direct GTID is added");
+	ok(sd.gtid_exists((char *)UUID_A_STRIPPED, 60),
+		"mixed observations: binlog GTID is eligible");
+	sd.active = false;
+	ok(sd.gtid_exists((char *)UUID_A_STRIPPED, 60),
+		"mixed observations: known binlog GTID remains eligible when inactive");
+	ok(sd.gtid_exists((char *)UUID_A_STRIPPED, 61),
+		"mixed observations: known OK GTID remains eligible when inactive");
+}
+
 int main() {
-	plan(83);
+	plan(102);
 
 	test_bootstrap_single();            //  6 assertions
 	test_bootstrap_range();             //  8 assertions
@@ -354,6 +417,10 @@ int main() {
 	test_read_all_stops_on_unknown();   //  4 assertions
 	test_empty_buffer();                //  3 assertions
 	test_incomplete_message();          //  3 assertions
+	test_ok_gtid_survives_inactive_reader();
+	test_known_gtid_survives_inactive_reader();
+	test_ok_gtid_validation();
+	test_ok_and_binlog_merge();
 
 	return exit_status();
 }
