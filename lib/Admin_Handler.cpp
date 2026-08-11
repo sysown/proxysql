@@ -5240,6 +5240,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		strBl=strlen(strB);
 		char *dbh=NULL;
 		char *tbh=NULL;
+		bool tbh_uses_l_alloc = false;
 		c_split_2(query_no_space+strAl,".",&dbh,&tbh);
 
 		if (std::string_view(tbh).empty()) {
@@ -5255,12 +5256,17 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		tbh_tmp[quoted_len]=0;
 		free(tbh);
 		tbh=tbh_tmp;
+		tbh_uses_l_alloc = true;
 	}
 		int l=strBl+strlen(tbh)*3+strlen(dbh)-8;
 		char *buff=(char *)l_alloc(l+1);
 		snprintf(buff,l+1,strB,tbh,tbh,dbh,tbh);
 		buff[l]=0;
-		free(tbh);
+		if (tbh_uses_l_alloc) {
+			l_free(tbh_len-1,tbh);
+		} else {
+			free(tbh);
+		}
 		free(dbh);
 		l_free(query_length,query);
 		query=buff;

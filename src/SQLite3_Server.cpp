@@ -1039,17 +1039,16 @@ __run_query:
 							query = l_strdup(formatted_query.c_str());
 							query_length = formatted_query.size() + 1;
 							pthread_mutex_unlock(&GloSQLite3Server->test_readonly_mutex);
-						}
 					}
 #endif // TEST_READONLY || TEST_RDS_BGD
 #ifdef TEST_REPLICATIONLAG
 				const bool replica_status = strncasecmp("SELECT REPLICA STATUS ", query_no_space, k_select_replica_status_len) == 0;
+				const uint64_t addr_offset {
+					replica_status ? k_select_replica_status_len : k_select_slave_status_len
+				};
 				if ((strncasecmp("SELECT SLAVE STATUS ", query_no_space, k_select_slave_status_len) == 0
 					|| replica_status)
-					&& query_no_space_length > k_select_slave_status_len + 5) {
-					uint64_t addr_offset {
-						replica_status ? k_select_replica_status_len : k_select_slave_status_len
-					};
+					&& query_no_space_length > addr_offset + 5) {
 						pthread_mutex_lock(&GloSQLite3Server->test_replicationlag_mutex);
 						// the current test doesn't try to simulate failures, therefore it will return immediately
 						if (GloSQLite3Server->replicationlag_map_size() == 0) {
@@ -1067,7 +1066,6 @@ __run_query:
 
 					pthread_mutex_unlock(&GloSQLite3Server->test_replicationlag_mutex);
 				}
-			}
 #endif // TEST_REPLICATIONLAG
 				if (strstr(query_no_space,(char *)"Seconds_Behind_Master")) {
 					l_free(query_length, query);
