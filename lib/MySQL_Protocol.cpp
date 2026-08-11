@@ -1553,6 +1553,10 @@ bool MySQL_Protocol::verify_user_pass(
 	} else if (strncmp((char *)auth_plugin,plugins[2],strlen(plugins[2]))==0) { // caching_sha2_password
 		//auth_plugin_id = 2; // FIXME: this is temporary, because yet not supported
 		auth_plugin_id = AUTH_MYSQL_CACHING_SHA2_PASSWORD; // FIXME: this is temporary, because yet not supported . It must become 3
+#ifdef PROXYSQLED25519
+	} else if (strncmp((char *)auth_plugin,plugins[AUTH_MYSQL_ED25519],strlen(plugins[AUTH_MYSQL_ED25519]))==0) {
+		auth_plugin_id = AUTH_MYSQL_ED25519;
+#endif
 	}
 
 	if (password[0]!='*') { // clear text password
@@ -1580,6 +1584,14 @@ bool MySQL_Protocol::verify_user_pass(
 			// hash, or if we should prepare the state machine for a 'Auth Switch Request'. Progress for this
 			// is tracked in https://github.com/sysown/proxysql/issues/4618.
 			ret = false;
+#ifdef PROXYSQLED25519
+		} else if (auth_plugin_id == AUTH_MYSQL_ED25519) {
+			// Inline ed25519 auth data in COM_CHANGE_USER is not part of the
+			// MariaDB flow: the client cannot sign before receiving a fresh
+			// nonce. The nonce-based exchange is driven by
+			// process_pkt_COM_CHANGE_USER via Auth Switch; reject inline data.
+			ret = false;
+#endif
 		} else {
 			ret = false;
 		}
@@ -1848,6 +1860,41 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	if (password==NULL) {
 		ret=false;
 	} else {
+#ifdef PROXYSQLED25519
+		// A stored "$ED$" credential (or an explicit client_ed25519 request)
+		// can only be verified through a fresh-nonce Auth Switch: any inline
+		// auth data was computed against the original scramble and is
+		// meaningless for ed25519. Mirrors the native pass_len==0 switch below
+		// (issue #3504); the response re-enters process_pkt_handshake_response
+		// where PPHR_1 picks up switching_auth_type and PPHR_verify_password
+		// verifies the signature (switching_auth_sent guards its stage-0 gate).
+		const bool ed25519_switch_needed =
+			session_type != PROXYSQL_SESSION_CLICKHOUSE &&
+			(proxysql_ed25519_is_pubkey_format(password) ||
+			(client_auth_plugin && strcmp(client_auth_plugin, plugins[AUTH_MYSQL_ED25519]) == 0));
+		if (ed25519_switch_needed) {
+			if (RAND_bytes(reinterpret_cast<unsigned char *>((*myds)->myconn->scramble_buff), ED25519_NONCE_LEN) != 1) {
+				proxy_error("RAND_bytes() failed generating the ed25519 nonce for user '%s'\n", user);
+				ret = false;
+			} else {
+				// The nonce is 32 raw random bytes, not a NUL-terminated string, and
+				// overwrites the terminator that would otherwise sit at index 20 for
+				// the native scramble. scramble_buff[40] is never zero-initialized by
+				// the MySQL_Connection constructor, so without this terminator the
+				// DEBUG-only handshake dump (hex(scramble_buff), which strlen()'s the
+				// buffer via std::string_view) would walk into uninitialized bytes
+				// 32-39 and potentially past the array. Index 32 is safely in bounds
+				// of char[40]; nothing downstream consumes the native scramble after
+				// an ed25519 switch.
+				(*myds)->myconn->scramble_buff[ED25519_NONCE_LEN] = '\0';
+				(*myds)->switching_auth_type = AUTH_MYSQL_ED25519;
+				(*myds)->sess->change_user_auth_switch = true;
+				generate_pkt_auth_switch_request(true, NULL, NULL);
+				(*myds)->myconn->userinfo->set((char *)user, NULL, db, NULL);
+				ret = false;
+			}
+		} else
+#endif
 		if (pass_len==0 && strlen(password)==0) {
 			ret=true;
 		} else {

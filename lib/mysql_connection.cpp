@@ -16,6 +16,10 @@ using json = nlohmann::json;
 #include "MySQL_Variables.h"
 #include <atomic>
 
+#ifdef PROXYSQLED25519
+#include "MySQL_Ed25519.h"
+#endif
+
 // some of the code that follows is from mariadb client library memory allocator
 typedef int     myf;    // Type of MyFlags in my_funcs
 #define MYF(v)      (myf) (v)
@@ -1021,6 +1025,14 @@ void MySQL_Connection::connect_start() {
 			auth_password=userinfo->password;
 		}
 	}
+#ifdef PROXYSQLED25519
+	if (userinfo->password && proxysql_ed25519_is_pubkey_format(userinfo->password)) {
+		proxy_warning(
+			"User '%s' has an ed25519 public-key-only ($ED$) credential;"
+			" backend authentication requires the cleartext password and will fail\n",
+			userinfo->username);
+	}
+#endif
 	if (parent->port) {
 		char* host_ip = connect_start_DNS_lookup();
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, host_ip, userinfo->username, auth_password, userinfo->schemaname, parent->port, NULL, client_flags);
