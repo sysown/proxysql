@@ -105,7 +105,7 @@ int ProxySQL_Test___GenerateRandomQueryInDigestTable(int n) {
 			mysql_thread___query_digests_normalize_digest_text = orig_norm;
 		}
 		for (int j=0; j<10; j++) {
-			sprintf(qp.digest_text,"SELECT ? FROM table%d a JOIN table%d b WHERE a.id > ? AND a.c IN (?,?,?) ORDER BY k,l DESC LIMIT ?",i, j);
+			snprintf(qp.digest_text, 1024, "SELECT ? FROM table%d a JOIN table%d b WHERE a.id > ? AND a.c IN (?,?,?) ORDER BY k,l DESC LIMIT ?", i, j);
 			int digest_text_length = strlen(qp.digest_text);
 			qp.digest=SpookyHash::Hash64(qp.digest_text, digest_text_length, 0);
 			for (int k=0; k<10; k++) {
