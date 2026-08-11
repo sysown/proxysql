@@ -7530,7 +7530,7 @@ char* PgSQL_Session::get_current_query(int max_length) {
 			memcpy(res, query_ptr, query_len - 3);
 			memcpy(res + (query_len - 3), "...", 3);
 		} else {
-			strncpy(res, query_ptr, query_len);
+			memcpy(res, query_ptr, query_len);
 		}
 		res[query_len] = '\0';
 	}

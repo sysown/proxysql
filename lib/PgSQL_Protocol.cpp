@@ -1,6 +1,8 @@
 
 #include <openssl/evp.h>
 #include <openssl/rand.h>
+#include <limits>
+#include <locale>
 #include "proxysql.h"
 #include "cpp.h"
 #include "PgSQL_Authentication.h"
@@ -21,6 +23,31 @@ extern PgSQL_Authentication* GloPgAuth;
 #define INT4OID 23
 #define TEXTOID 25
 #define NUMERICOID 1700
+
+static char *encode_bytea(const uint8_t *data, int length) {
+	if (length < 0 || (data == nullptr && length != 0)) {
+		return nullptr;
+	}
+
+	const size_t byte_len = static_cast<size_t>(length);
+	const size_t max_byte_len = (std::numeric_limits<size_t>::max() - 3) / 2;
+	if (byte_len > max_byte_len) {
+		return nullptr;
+	}
+
+	const size_t required = 2 + byte_len * 2 + 1;
+	char *encoded = (char *)l_alloc(required);
+	if (encoded == nullptr) {
+		return nullptr;
+	}
+	encoded[0] = '\\';
+	encoded[1] = 'x';
+	encoded[2] = '\0';
+	for (size_t i = 0; i < byte_len; ++i) {
+		snprintf(encoded + 2 + i * 2, 3, "%02x", data[i]);
+	}
+	return encoded;
+}
 
 
 void PG_pkt::make_space(unsigned int len) {
@@ -200,20 +227,11 @@ void PG_pkt::write_RowDescription(const char *tupdesc, ...) {
 void SQLite3_to_Postgres(PtrSizeArray *psa, SQLite3_result *result, char *error, int affected_rows, const char *query_type, bool send_ready_for_query,
 	char txn_state) {
 	assert(psa != NULL);
-	const char *fs = strchr(query_type, ' ');
-	int qtlen = strlen(query_type);
-	if (fs != NULL) {
-		qtlen = (fs - query_type) + 1;
-	}
-	char buf[qtlen];
-	memcpy(buf,query_type, qtlen-1);
-	buf[qtlen-1] = 0;
-	{
-		char *s = buf;
-		while (*s) {
-			*s = toupper((unsigned char) *s);
-			s++;
-		}
+	const char *query = query_type ? query_type : "";
+	const size_t command_len = strcspn(query, " \t\r\n");
+	std::string buf(query, command_len);
+	for (char& c : buf) {
+		c = std::toupper(c, std::locale::classic());
 	}
 	if (result) {
 		int ncol = result->columns;
@@ -250,12 +268,11 @@ void SQLite3_to_Postgres(PtrSizeArray *psa, SQLite3_result *result, char *error,
 			pkt.to_PtrSizeArray(psa);
 		}
 
-		if (strcmp(buf,"SELECT") == 0) {
-			char tmpbuf[128];
-			sprintf(tmpbuf,"%s %d", buf, result->rows_count);
-			pkt.write_generic('C', "s", tmpbuf);
+		if (buf == "SELECT") {
+			const std::string completion_tag = buf + " " + std::to_string(result->rows_count);
+			pkt.write_generic('C', "s", completion_tag.c_str());
 		} else {
-			pkt.write_CommandComplete(buf);
+			pkt.write_CommandComplete(buf.c_str());
 		}
 		pkt.to_PtrSizeArray(psa);
 		if (send_ready_for_query) pkt.write_ReadyForQuery(txn_state);
@@ -278,15 +295,14 @@ void SQLite3_to_Postgres(PtrSizeArray *psa, SQLite3_result *result, char *error,
 */
 			// see https://www.postgresql.org/docs/current/protocol-message-formats.html
 		} else {
-			char tmpbuf[128];
-			if (strcmp(buf,"INSERT") == 0) {
-				sprintf(tmpbuf,"%s 0 %d", buf, affected_rows);
-				pkt.write_generic('C', "s", tmpbuf);
-			} else if (strcmp(buf,"UPDATE") == 0 || strcmp(buf,"DELETE") == 0) {
-				sprintf(tmpbuf,"%s %d", buf, affected_rows);
-				pkt.write_generic('C', "s", tmpbuf);
+			if (buf == "INSERT") {
+				const std::string completion_tag = buf + " 0 " + std::to_string(affected_rows);
+				pkt.write_generic('C', "s", completion_tag.c_str());
+			} else if (buf == "UPDATE" || buf == "DELETE") {
+				const std::string completion_tag = buf + " " + std::to_string(affected_rows);
+				pkt.write_generic('C', "s", completion_tag.c_str());
 			} else {
-				pkt.write_CommandComplete(buf);
+				pkt.write_CommandComplete(buf.c_str());
 			}
 		}
 		pkt.to_PtrSizeArray(psa);
@@ -315,20 +331,11 @@ void PG_pkt::write_DataRow(const char *tupdesc, ...) {
 			val = tmp;
 		} else if (tupdesc[i] == 's') {
 			val = va_arg(ap, char *);
-		} else if (tupdesc[i] == 'b') {
-			int blen = va_arg(ap, int);
-			if (blen >= 0) {
-				uint8_t *bval = va_arg(ap, uint8_t *);
-				size_t required = 2 + blen * 2 + 1;
-				tmp2 = (char *)malloc(required);
-				strcpy(tmp2, "\\x");
-				for (int j = 0; j < blen; j++)
-					sprintf(tmp2 + (2 + j * 2), "%02x", bval[j]);
-				val = tmp2;
-			} else {
-				(void) va_arg(ap, uint8_t *);
-				val = NULL;
-			}
+				} else if (tupdesc[i] == 'b') {
+					const int blen = va_arg(ap, int);
+					const uint8_t *bval = va_arg(ap, uint8_t *);
+					tmp2 = encode_bytea(bval, blen);
+					val = tmp2;
 		} else if (tupdesc[i] == 'T') {
 			usec_t time = va_arg(ap, usec_t);
 			val = format_time_s(time, tmp, sizeof(tmp));
@@ -342,7 +349,7 @@ void PG_pkt::write_DataRow(const char *tupdesc, ...) {
 			put_uint32(len);
 			put_bytes(val, len);
 			if (tmp2 != NULL) {
-				free(tmp2);
+				l_free(0, tmp2);
 				tmp2 = NULL;
 			}
 		} else {
@@ -1032,8 +1039,8 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 			}
 
 			PgCredentials stored_user_info{ '\0' };
-			strncpy(stored_user_info.name, user, MAX_USERNAME);
-			strncpy(stored_user_info.passwd, password, MAX_PASSWORD);
+			snprintf(stored_user_info.name, sizeof(stored_user_info.name), "%.*s", (int)(sizeof(stored_user_info.name) - 1), user);
+			snprintf(stored_user_info.passwd, sizeof(stored_user_info.passwd), "%.*s", (int)(sizeof(stored_user_info.passwd) - 1), password);
 
 			if (!(*myds)->scram_state->server_nonce) {
 				/* process as SASLInitialResponse */
@@ -1610,6 +1617,9 @@ char* extract_tag_from_query(const char* query) {
 	constexpr size_t deallocate_prepare_all_len = sizeof("DEALLOCATE PREPARE ALL") - 1;
 	constexpr size_t discard_all_len = sizeof("DISCARD ALL") - 1;
 
+	if (query == nullptr) {
+		return strdup("");
+	}
 	size_t qtlen = strlen(query);
 	if ((qtlen > create_table_len) && strncasecmp(query, "CREATE TABLE AS", create_table_len) == 0) {
 		return strdup("SELECT");
@@ -1620,23 +1630,13 @@ char* extract_tag_from_query(const char* query) {
 	} else if ((qtlen >= discard_all_len) && (strncasecmp(query, "DISCARD ALL", discard_all_len) == 0)) {
 		return strdup("DISCARD ALL");
 	} else {
-		const char* fs = strchr(query, ' ');
-
-		if (fs != NULL) {
-			qtlen = (fs - query) + 1;
-		}
-		char buf[qtlen];
-		memcpy(buf, query, qtlen - 1);
-		buf[qtlen - 1] = 0;
-		{
-			char* s = buf;
-			while (*s) {
-				*s = toupper((unsigned char)*s);
-				s++;
-			}
+		qtlen = strcspn(query, " \t\r\n");
+		std::string buf(query, qtlen);
+		for (char& c : buf) {
+			c = std::toupper(c, std::locale::classic());
 		}
 
-		return strdup(buf);
+		return strdup(buf.c_str());
 	}
 }
 

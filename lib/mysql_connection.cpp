@@ -8,6 +8,7 @@ using json = nlohmann::json;
 //#include "SpookyV2.h"
 #include <fcntl.h>
 #include <sstream>
+#include <openssl/crypto.h>
 
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
@@ -266,9 +267,17 @@ MySQL_Connection_userinfo::MySQL_Connection_userinfo() {
 MySQL_Connection_userinfo::~MySQL_Connection_userinfo() {
 	if (username) free(username);
 	if (fe_username) free(fe_username);
-	if (password) free(password);
+	clear_password();
 	if (sha1_pass) free(sha1_pass);
 	if (schemaname) free(schemaname);
+}
+
+void MySQL_Connection_userinfo::clear_password() {
+	if (password != nullptr) {
+		OPENSSL_cleanse(password, strlen(password));
+		free(password);
+		password = nullptr;
+	}
 }
 
 void MySQL_Connection::compute_unknown_transaction_status() {
@@ -335,6 +344,7 @@ uint64_t MySQL_Connection_userinfo::compute_hash() {
 	strcpy(buf+l,_COMPUTE_HASH_DEL2_);
 	l+=strlen(_COMPUTE_HASH_DEL2_);
 	hash=SpookyHash::Hash64(buf,l,0);
+	OPENSSL_cleanse(buf, l);
 	free(buf);
 	return hash;
 }
@@ -353,7 +363,7 @@ void MySQL_Connection_userinfo::set(char *u, char *p, char *s, char *sh1) {
 	if (p) {
 		if (password) {
 			if (strcmp(p,password)) {
-				free(password);
+				clear_password();
 				password=strdup(p);
 			}
 		} else {

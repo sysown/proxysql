@@ -14,6 +14,7 @@ using json = nlohmann::json;
 #include "MySQL_Data_Stream.h"
 
 #include "openssl/x509v3.h"
+#include <openssl/crypto.h>
 
 #define RESULTSET_BUFLEN_DS_16K 16000
 #define RESULTSET_BUFLEN_DS_1M 1000*1024
@@ -217,38 +218,48 @@ void MySQL_Data_Stream::queue_encrypted_bytes(const char *buf, size_t len)	{
 	//proxy_info("New ssl_write_len size: %u\n", ssl_write_len);
 }
 
+static std::unique_ptr<char[]> extract_first_spiffe_uri(const GENERAL_NAMES* alt_names) {
+	static constexpr char SPIFFE_PREFIX[] = "spiffe";
+	const int alt_name_count = sk_GENERAL_NAME_num(alt_names);
+
+	for (int i = 0; i < alt_name_count; ++i) {
+		const GENERAL_NAME* san = sk_GENERAL_NAME_value(alt_names, i);
+		if (!san || san->type != GEN_URI || !san->d.uniformResourceIdentifier) continue;
+
+		const ASN1_STRING* uri = san->d.uniformResourceIdentifier;
+		const unsigned char* data = ASN1_STRING_get0_data(uri);
+		const int length = ASN1_STRING_length(uri);
+		if (!data || length < static_cast<int>(sizeof(SPIFFE_PREFIX) - 1)) continue;
+		if (memcmp(data, SPIFFE_PREFIX, sizeof(SPIFFE_PREFIX) - 1) != 0) continue;
+		if (memchr(data, '\0', length) != nullptr) continue;
+
+		auto value = std::make_unique<char[]>(static_cast<size_t>(length) + 1);
+		memcpy(value.get(), data, length);
+		value[length] = '\0';
+		return value;
+	}
+
+	return nullptr;
+}
+
 enum sslstatus MySQL_Data_Stream::do_ssl_handshake() {
 	char buf[MY_SSL_BUFFER];
 	enum sslstatus status;
 	int n = SSL_do_handshake(ssl);
 	if (n == 1) {
 		//proxy_info("SSL handshake completed\n");
-		X509 *cert;
-		cert = SSL_get_peer_certificate(ssl);
+		reset_frontend_certificate_evidence();
+		X509 *cert = SSL_get_peer_certificate(ssl);
+#ifdef PROXYSQL31
+		client_cert_present = (cert != nullptr);
+		client_cert_verify_result = cert ? SSL_get_verify_result(ssl) : X509_V_OK;
+#endif
 		if (cert) {
 			GENERAL_NAMES *alt_names = (stack_st_GENERAL_NAME *)X509_get_ext_d2i((X509*)cert, NID_subject_alt_name, 0, 0);
-			int alt_name_count = sk_GENERAL_NAME_num(alt_names);
-
-			// Iterate all the SAN names, looking for SPIFFE identifier
-			for (int i = 0; i < alt_name_count; i++) {
-				GENERAL_NAME *san = sk_GENERAL_NAME_value(alt_names, i);
-
-				// We only care about URI names
-				if (san->type == GEN_URI) {
-					if (san->d.uniformResourceIdentifier->data) {
-						const char* resource_data =
-							reinterpret_cast<const char*>(san->d.uniformResourceIdentifier->data);
-						const char* spiffe_loc = strstr(resource_data, "spiffe");
-
-						// First name starting with 'spiffe' is considered the match.
-						if (spiffe_loc == resource_data) {
-							x509_subject_alt_name = strdup(resource_data);
-						}
-					}
-				}
+			if (alt_names) {
+				x509_subject_alt_name = extract_first_spiffe_uri(alt_names);
+				sk_GENERAL_NAME_pop_free(alt_names, GENERAL_NAME_free);
 			}
-
-			sk_GENERAL_NAME_pop_free(alt_names, GENERAL_NAME_free);
 			X509_free(cert);
 		} else {
 			// we currently disable this annoying error
@@ -258,12 +269,10 @@ enum sslstatus MySQL_Data_Stream::do_ssl_handshake() {
 		}
 		// In case the supplied certificate has a 'SAN'-'URI' identifier
 		// starting with 'spiffe', client certificate verification is performed.
-		if (x509_subject_alt_name != NULL) {
+		if (x509_subject_alt_name && SSL_get_verify_result(ssl) != X509_V_OK) {
 			long rc = SSL_get_verify_result(ssl);
-			if (rc != X509_V_OK) {
-				proxy_error("Disconnecting %s:%d: X509 client SSL certificate verify error: (%ld:%s)\n" , addr.addr, addr.port, rc, X509_verify_cert_error_string(rc));
-				return SSLSTATUS_FAIL;
-			}
+			proxy_error("Disconnecting %s:%d: X509 client SSL certificate verify error: (%ld:%s)\n" , addr.addr, addr.port, rc, X509_verify_cert_error_string(rc));
+			return SSLSTATUS_FAIL;
 		}
 	}
 	status = get_sslstatus(ssl, n);
@@ -346,7 +355,12 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	auth_in_progress = 0;
 	passthrough_cleartext = NULL;
 	tmp_charset = 0;
-	x509_subject_alt_name=NULL;
+	x509_subject_alt_name = nullptr;
+#ifdef PROXYSQL31
+	client_cert_present=false;
+	client_cert_verify_result=X509_V_OK;
+	frontend_authenticated_via_spiffe=false;
+#endif
 	ssl=NULL;
 	rbio_ssl = NULL;
 	wbio_ssl = NULL;
@@ -399,9 +413,9 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 	}
 
 	if (passthrough_cleartext) {
-		// Best-effort scrub before free; the cleartext password should
+		// Scrub before free; the cleartext password should
 		// not linger in freed heap memory.
-		memset(passthrough_cleartext, 0, strlen(passthrough_cleartext));
+		OPENSSL_cleanse(passthrough_cleartext, strlen(passthrough_cleartext));
 		free(passthrough_cleartext);
 		passthrough_cleartext = NULL;
 	}
@@ -489,10 +503,16 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 		CompPktOUT.pkt.ptr=NULL;
 		CompPktOUT.pkt.size=0;
 	}
-	if (x509_subject_alt_name) {
-		free(x509_subject_alt_name);
-		x509_subject_alt_name=NULL;
-	}
+	reset_frontend_certificate_evidence();
+}
+
+void MySQL_Data_Stream::reset_frontend_certificate_evidence() {
+	x509_subject_alt_name.reset();
+#ifdef PROXYSQL31
+	client_cert_present = false;
+	client_cert_verify_result = X509_V_OK;
+	frontend_authenticated_via_spiffe = false;
+#endif
 }
 
 // this function initializes a MySQL_Data_Stream 
@@ -525,6 +545,7 @@ void MySQL_Data_Stream::reinit_queues() {
 // this function initializes a MySQL_Data_Stream with arguments
 void MySQL_Data_Stream::init(enum MySQL_DS_type _type, MySQL_Session *_sess, int _fd) {
 	myds_type=_type;
+	if (_type == MYDS_FRONTEND) reset_frontend_certificate_evidence();
 	sess=_sess;
 	init();
 	fd=_fd;
@@ -1930,7 +1951,7 @@ void MySQL_Data_Stream::get_client_myds_info_json(json& j) {
 			jc1["userinfo"]["username"]   = ( myconn->userinfo->username   ? myconn->userinfo->username   : "" );
 			jc1["userinfo"]["schemaname"] = ( myconn->userinfo->schemaname ? myconn->userinfo->schemaname : "" );
 #ifdef DEBUG
-			jc1["userinfo"]["password"]   = ( myconn->userinfo->password   ? myconn->userinfo->password   : "" );
+			jc1["userinfo"]["password"]   = ( myconn->userinfo->password   ? "(redacted)" : "" );
 #endif
 		}
 		jc2["session_track_gtids"] = ( myconn->options.session_track_gtids ? myconn->options.session_track_gtids : "") ;

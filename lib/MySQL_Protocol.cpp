@@ -14,6 +14,10 @@ using json = nlohmann::json;
 #include "MySQL_Passthrough_Auth_Cache.h"
 #include "MySQL_LDAP_Authentication.hpp"
 #include "MySQL_Variables.h"
+#ifdef PROXYSQL31
+#include "MySQL_Caching_Sha2_RSA.h"
+#include <openssl/crypto.h>
+#endif
 
 #include <sstream>
 #include <zstd.h>
@@ -40,15 +44,47 @@ extern ClickHouse_Authentication *GloClickHouseAuth;
 #include "proxysql_find_charset.h"
 
 mf_unique_ptr<const char> get_masked_pass(const char* pass) {
-	char* tmp_pass = strdup(pass);
-	int lpass = strlen(tmp_pass);
-
-	for (int i=2; i<lpass-1; i++) {
-		tmp_pass[i] = '*';
-	}
-
-	return mf_unique_ptr<const char>(static_cast<const char*>(tmp_pass));
+	return mf_unique_ptr<const char>(
+		static_cast<const char*>(strdup(pass == nullptr ? "(null)" : "(redacted)"))
+	);
 }
+
+namespace {
+
+void cleanse_and_free_password(char*& password) {
+	if (password != nullptr) {
+		OPENSSL_cleanse(password, strlen(password));
+		free(password);
+		password = nullptr;
+	}
+}
+
+void cleanse_and_free_auth_response(unsigned char*& response, size_t response_size) {
+	if (response != nullptr) {
+		OPENSSL_cleanse(response, response_size);
+		char* allocation = reinterpret_cast<char*>(response);
+		response = nullptr;
+		cleanse_and_free_password(allocation);
+	}
+}
+
+class ScopedStringCleanser {
+	std::string& value_;
+
+	public:
+	explicit ScopedStringCleanser(std::string& value) : value_(value) {}
+	~ScopedStringCleanser() {
+		if (!value_.empty()) {
+			OPENSSL_cleanse(value_.data(), value_.size());
+		}
+	}
+	ScopedStringCleanser(const ScopedStringCleanser&) = delete;
+	ScopedStringCleanser& operator=(const ScopedStringCleanser&) = delete;
+	ScopedStringCleanser(ScopedStringCleanser&&) = delete;
+	ScopedStringCleanser& operator=(ScopedStringCleanser&&) = delete;
+};
+
+} // namespace
 
 extern "C" char * sha256_crypt_r (const char *key, const char *salt, char *buffer, int buflen);
 
@@ -57,6 +93,137 @@ static const char *plugins[3] = {
 	"mysql_clear_password",
 	"caching_sha2_password",
 };
+
+#ifdef PROXYSQL31
+enum class frontend_auth_context : uint8_t {
+	INITIAL_HANDSHAKE,
+	COM_CHANGE_USER,
+	PASSTHROUGH
+};
+
+struct frontend_certificate_policy_result {
+	bool allowed { true };
+	bool has_spiffe_id { false };
+};
+
+static bool evaluate_require_x509(
+	MySQL_Data_Stream* myds,
+	const json& attrs,
+	const char* username,
+	frontend_auth_context context,
+	int calling_line,
+	const char* calling_func
+) {
+	const auto require_x509 = attrs.find("require_x509");
+	if (require_x509 == attrs.end()) return true;
+	if (!require_x509->is_boolean()) {
+		proxy_error("%d:%s(): Invalid require_x509 type for user %s\n", calling_line, calling_func, username);
+		return false;
+	}
+	if (!require_x509->get<bool>()) return true;
+
+	const bool allowed = myds
+		&& myds->encrypted
+		&& myds->ssl
+		&& myds->client_cert_present
+		&& myds->client_cert_verify_result == X509_V_OK;
+	if (!allowed) {
+		proxy_error("%d:%s(): Frontend X509 authentication error for user %s: context=%u cert_present=%s verify_result=%ld\n",
+			calling_line, calling_func, username, static_cast<unsigned>(context),
+			(myds && myds->client_cert_present) ? "yes" : "no",
+			myds ? myds->client_cert_verify_result : X509_V_ERR_UNSPECIFIED);
+	}
+	return allowed;
+}
+
+static bool spiffe_identity_matches(MySQL_Data_Stream* myds, const std::string& expected) {
+	if (!myds || !myds->x509_subject_alt_name) return false;
+	if (expected.rfind("!", 0) == 0 && expected.size() > 1) {
+		const string pattern { expected.substr(1) };
+		re2::RE2::Options opts { re2::RE2::Quiet };
+		re2::RE2 subject_alt_regex(pattern, opts);
+		return re2::RE2::FullMatch(myds->x509_subject_alt_name.get(), subject_alt_regex);
+	}
+	return expected.rfind("spiffe://", 0) == 0
+		&& expected == myds->x509_subject_alt_name.get();
+}
+
+static bool evaluate_spiffe_identity(
+	MySQL_Data_Stream* myds,
+	const json::const_iterator& spiffe_id,
+	const char* username,
+	frontend_auth_context context,
+	int calling_line,
+	const char* calling_func
+) {
+	if (context == frontend_auth_context::COM_CHANGE_USER) {
+		proxy_error("%d:%s(): COM_CHANGE_USER target %s has a SPIFFE identity\n",
+			calling_line, calling_func, username);
+		return false;
+	}
+	if (!spiffe_id->is_string()) {
+		proxy_error("%d:%s(): Invalid spiffe_id type for user %s\n", calling_line, calling_func, username);
+		return false;
+	}
+
+	const std::string expected = spiffe_id->get<std::string>();
+	const bool allowed = spiffe_identity_matches(myds, expected);
+	if (!allowed) {
+		proxy_error("%d:%s(): SPIFFE Authentication error for user %s . spiffed_id expected : %s , received: %s\n",
+			calling_line, calling_func, username, expected.c_str(),
+			(myds && myds->x509_subject_alt_name) ? myds->x509_subject_alt_name.get() : "none");
+	}
+	return allowed;
+}
+
+static frontend_certificate_policy_result evaluate_frontend_certificate_policy(
+	MySQL_Data_Stream* myds,
+	const json& attrs,
+	const unsigned char* user,
+	frontend_auth_context context,
+	int calling_line,
+	const char* calling_func
+) {
+	frontend_certificate_policy_result result;
+	const char* username = user ? reinterpret_cast<const char*>(user) : "unknown";
+	if (!attrs.is_object()) {
+		proxy_error("%d:%s(): Invalid user attributes for user %s\n", calling_line, calling_func, username);
+		result.allowed = false;
+		return result;
+	}
+	const auto spiffe_id = attrs.find("spiffe_id");
+	result.has_spiffe_id = spiffe_id != attrs.end();
+	result.allowed = evaluate_require_x509(
+		myds, attrs, username, context, calling_line, calling_func);
+	if (!result.allowed) return result;
+	if (spiffe_id == attrs.end()) return result;
+	result.allowed = evaluate_spiffe_identity(
+		myds, spiffe_id, username, context, calling_line, calling_func);
+	return result;
+}
+
+static frontend_certificate_policy_result evaluate_frontend_certificate_policy(
+	MySQL_Data_Stream* myds,
+	const char* attributes,
+	const unsigned char* user,
+	frontend_auth_context context,
+	int calling_line,
+	const char* calling_func
+) {
+	frontend_certificate_policy_result result;
+	if (!attributes || !*attributes) return result;
+
+	try {
+		const json attrs = json::parse(attributes);
+		return evaluate_frontend_certificate_policy(myds, attrs, user, context, calling_line, calling_func);
+	} catch (const nlohmann::json::exception& e) {
+		proxy_error("%d:%s(): Invalid user attributes for user %s: %s\n", calling_line, calling_func,
+			user ? reinterpret_cast<const char*>(user) : "unknown", e.what());
+		result.allowed = false;
+		return result;
+	}
+}
+#endif
 
 #include "MySQL_encode.h"
 
@@ -70,9 +237,13 @@ char* get_password(account_details_t& ad, PASSWORD_TYPE::E passtype) {
 			}
 		} else if (ad.attributes) {
 			const nlohmann::json attrs = nlohmann::json::parse(ad.attributes, nullptr, false);
-			const string addl_pass { get_nested_elem_val(attrs, { "additional_password" }, string {}) };
-			const string uh_addl_pass { unhex(addl_pass) };
-			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 3, "Password info   length:%ld, val:`%s`, addl_val:`%s`\n", uh_addl_pass.length(), uh_addl_pass.c_str(), addl_pass.c_str());
+			string addl_pass { get_nested_elem_val(attrs, { "additional_password" }, string {}) };
+			ScopedStringCleanser addl_pass_cleanser(addl_pass);
+			string uh_addl_pass { unhex(addl_pass) };
+			ScopedStringCleanser uh_addl_pass_cleanser(uh_addl_pass);
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 3,
+				"Additional password info length:%zu, value:`(redacted)`\n",
+				uh_addl_pass.length());
 			ret = reinterpret_cast<char*>(strdup(uh_addl_pass.c_str()));
 		}
 	} else {
@@ -91,14 +262,8 @@ char* get_password(account_details_t& ad, PASSWORD_TYPE::E passtype) {
 #ifdef DEBUG
 void debug_spiffe_id(const unsigned char *user, const char *attributes, int __line, const char *__func) {
 	if (attributes!=NULL && strlen(attributes)) {
-		json j = nlohmann::json::parse(attributes);
-		auto spiffe_id = j.find("spiffe_id");
-		if (spiffe_id != j.end()) {
-			std::string spiffe_val = j["spiffe_id"].get<std::string>();
-			proxy_info("%d:%s(): Attributes for user %s: %s . Spiffe_id: %s\n" , __line, __func, user, attributes, spiffe_val.c_str());
-		} else {
-			proxy_info("%d:%s(): Attributes for user %s: %s\n" , __line, __func, user, attributes);
-		}
+		proxy_info("%d:%s(): Attributes for user %s are present; values redacted\n",
+			__line, __func, user);
 	}
 }
 #endif
@@ -109,6 +274,10 @@ void MySQL_Protocol::init(MySQL_Data_Stream **__myds, MySQL_Connection_userinfo 
 	userinfo=__userinfo;
 	sess=__sess;
 	current_PreStmt=NULL;
+#ifdef PROXYSQL31
+	caching_sha2_rsa_snapshot_.reset();
+	frontend_auth_error_ = MySQLFrontendAuthError::NONE;
+#endif
 }
 
 static unsigned char protocol_version=10;
@@ -204,7 +373,7 @@ bool MySQL_Protocol::generate_pkt_EOF(bool send, void **ptr, unsigned int *len, 
 	return true;
 }
 
-bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t error_code, char *sql_state, const char *sql_message, bool track) {
+bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t error_code, const char *sql_state, const char *sql_message, bool track) {
 	if ((*myds)->sess->mirror==true) {
 		return true;
 	}
@@ -259,7 +428,10 @@ bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, 
 	return true;
 }
 
-void MySQL_Protocol::generate_one_byte_pkt(unsigned char b) {
+bool MySQL_Protocol::generate_one_byte_pkt(unsigned char b) {
+#ifdef PROXYSQL31
+	return generate_auth_more_data(&b, 1);
+#else
 	assert((*myds) != NULL);
 	uint8_t sequence_id;
 	sequence_id = (*myds)->pkt_sid;
@@ -276,7 +448,43 @@ void MySQL_Protocol::generate_one_byte_pkt(unsigned char b) {
 	_ptr[l]=b;
 	(*myds)->PSarrayOUT->add((void *)_ptr,size);
 	(*myds)->pkt_sid=sequence_id;
+	return true;
+#endif
 }
+
+#ifdef PROXYSQL31
+bool MySQL_Protocol::generate_auth_more_data(const unsigned char *data, size_t data_len) {
+	assert((*myds) != NULL);
+	assert(data != NULL || data_len == 0);
+	assert(data_len <= 0xFFFFFFU - 1);
+
+	uint8_t sequence_id = (*myds)->pkt_sid + 1;
+	mysql_hdr myhdr;
+	myhdr.pkt_id = sequence_id;
+	myhdr.pkt_length = static_cast<uint32_t>(data_len + 1);
+
+	const unsigned int size = myhdr.pkt_length + sizeof(mysql_hdr);
+	unsigned char *_ptr = static_cast<unsigned char *>(l_alloc(size));
+	if (_ptr == nullptr) {
+		return false;
+	}
+	memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
+	_ptr[sizeof(mysql_hdr)] = 0x01;
+	if (data_len != 0) {
+		memcpy(_ptr + sizeof(mysql_hdr) + 1, data, data_len);
+	}
+
+	(*myds)->PSarrayOUT->add(static_cast<void *>(_ptr), size);
+	(*myds)->pkt_sid = sequence_id;
+	return true;
+}
+
+MySQLFrontendAuthError MySQL_Protocol::consume_frontend_auth_error() {
+	const MySQLFrontendAuthError error = frontend_auth_error_;
+	frontend_auth_error_ = MySQLFrontendAuthError::NONE;
+	return error;
+}
+#endif
 
 bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, unsigned int affected_rows, uint64_t last_insert_id, uint16_t status, uint16_t warnings, char *msg, bool eof_identifier) {
 	if ((*myds)->sess->mirror==true) {
@@ -1436,14 +1644,14 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	pass[pass_len]=0;
 	cur+=pass_len;
 	if (pkt + cur >= packet_end) {
-		free(pass);
+		cleanse_and_free_auth_response(pass, pass_len + 1);
 		return false;
 	}
 	const char *db_ptr = reinterpret_cast<const char*>(pkt + cur);
 	const size_t db_remaining = packet_end - (pkt + cur);
 	const size_t db_len = strnlen(db_ptr, db_remaining);
 	if (db_len == db_remaining) {
-		free(pass);
+		cleanse_and_free_auth_response(pass, pass_len + 1);
 		return false;
 	}
 	db=const_cast<char*>(db_ptr);
@@ -1451,7 +1659,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	cur += db_len + 1;
 	// Skip field 'character-set' (size 2)
 	if (static_cast<size_t>(packet_end - (pkt + cur)) < sizeof(uint16_t)) {
-		free(pass);
+		cleanse_and_free_auth_response(pass, pass_len + 1);
 		return false;
 	}
 	cur += 2;
@@ -1462,7 +1670,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		const char *auth_plugin_ptr = reinterpret_cast<const char*>(pkt + cur);
 		const size_t auth_plugin_len = strnlen(auth_plugin_ptr, packet_end - (pkt + cur));
 		if (auth_plugin_len == static_cast<size_t>(packet_end - (pkt + cur))) {
-			free(pass);
+			cleanse_and_free_auth_response(pass, pass_len + 1);
 			return false;
 		}
 		client_auth_plugin = const_cast<char*>(auth_plugin_ptr);
@@ -1476,6 +1684,16 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 			pass_len--; // remove the extra 0 if present
 		}
 	}
+
+#ifdef PROXYSQL31
+	if ((*myds)->frontend_authenticated_via_spiffe) {
+		proxy_error(
+			"Client %s:%d cannot run COM_CHANGE_USER after SPIFFE authentication\n",
+			(*myds)->addr.addr, (*myds)->addr.port);
+		cleanse_and_free_auth_response(pass, pass_len + 1);
+		return false;
+	}
+#endif
 
 	account_details_t account_details {};
 	dup_account_details_t dup_details { false, true, true };
@@ -1550,10 +1768,28 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	 */
 	char* password = get_password(account_details, PASSWORD_TYPE::PRIMARY);
 
+#ifdef PROXYSQL31
+	const auto target_policy = evaluate_frontend_certificate_policy(
+		*myds,
+		account_details.attributes,
+		user,
+		frontend_auth_context::COM_CHANGE_USER,
+		__LINE__, __func__);
+	if (!target_policy.allowed || target_policy.has_spiffe_id) {
+		cleanse_and_free_auth_response(pass, pass_len + 1);
+		cleanse_and_free_password(password);
+		free_account_details(account_details);
+		return false;
+	}
+#endif
+
 	if (mysql_thread___passthrough_auth_enabled
 		&& mysql_thread___passthrough_auth_empty_password
 		&& password != NULL
 		&& password[0] == '\0'
+	#ifdef PROXYSQL31
+		&& !target_policy.has_spiffe_id
+	#endif
 		&& (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE)) {
 		// Rationale for the pre-mutation ordering and the two eligible
 		// cases is documented on the doxygen block above this gate.
@@ -1562,12 +1798,12 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 			"(Phase 1 does not support pass-through via CHANGE_USER, spec §5.4)\n",
 			user ? (const char*)user : "(null)");
 		ret = false;
-		if (pass) { free(pass); pass = NULL; }
+		cleanse_and_free_auth_response(pass, pass_len + 1);
 		if (userinfo->username) free(userinfo->username);
-		if (userinfo->password) free(userinfo->password);
+		userinfo->clear_password();
 		userinfo->username = strdup((const char *)user);
 		userinfo->password = strdup((const char *)"");
-		if (password) { free(password); password = NULL; }
+		cleanse_and_free_password(password);
 		free_account_details(account_details);
 		userinfo->set(NULL, NULL, NULL, NULL);
 		return ret;
@@ -1611,12 +1847,9 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 			}
 		}
 	}
-	if (pass) {
-		free(pass);
-		pass=NULL;
-	}
+	cleanse_and_free_auth_response(pass, pass_len + 1);
 	if (userinfo->username) free(userinfo->username);
-	if (userinfo->password) free(userinfo->password);
+	userinfo->clear_password();
 	if (ret==true) {
 		(*myds)->DSS=STATE_CLIENT_HANDSHAKE;
 
@@ -1628,10 +1861,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		userinfo->username=strdup((const char *)user);
 		userinfo->password=strdup((const char *)"");
 	}
-	if (password) {
-		free(password);
-		password=NULL;
-	}
+	cleanse_and_free_password(password);
 	free_account_details(account_details);
 	userinfo->set(NULL,NULL,NULL,NULL); // just to call compute_hash()
 	if (ret) {
@@ -1669,6 +1899,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		// set the default charset for this session
 		(*myds)->sess->default_charset = charset;
 		if ((*myds)->sess->user_attributes) {
+#ifndef PROXYSQL31
 			if (user_attributes_has_spiffe(__LINE__, __func__, user)) {
 				// if SPIFFE was used, CHANGE_USER is not allowed.
 				// This because when SPIFFE is used, the password it is not relevant,
@@ -1680,6 +1911,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 				ret = false;
 				return ret;
 			}
+#endif
 
 			char* user_attributes = (*myds)->sess->user_attributes;
 			if (strlen(user_attributes)) {
@@ -1711,11 +1943,102 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		mysql_variables.client_set_value(sess, SQL_CHARACTER_SET_CONNECTION, ss.str().c_str());
 		mysql_variables.client_set_value(sess, SQL_COLLATION_CONNECTION, ss.str().c_str());
 	}
+#ifdef PROXYSQL31
+	if (ret) {
+		(*myds)->frontend_authenticated_via_spiffe = false;
+	}
+#endif
 	return ret;
 }
 
+#ifdef PROXYSQL31
+void MySQL_Protocol::capture_caching_sha2_rsa_snapshot() {
+	caching_sha2_rsa_snapshot_.reset();
+	if (!(*myds)->encrypted && GloMTH != nullptr && GloMTH->caching_sha2_rsa() != nullptr) {
+		caching_sha2_rsa_snapshot_ = GloMTH->caching_sha2_rsa()->acquire();
+	}
+}
+
+int MySQL_Protocol::PPHR_decrypt_caching_sha2_rsa_response(
+	unsigned char *pkt,
+	unsigned int len,
+	bool& ret,
+	MyProt_tmp_auth_vars& vars1
+) {
+	(*myds)->auth_in_progress = 0;
+	ret = false;
+	vars1.user = reinterpret_cast<unsigned char *>((*myds)->myconn->userinfo->username);
+	frontend_auth_error_ = MySQLFrontendAuthError::NONE;
+
+	const auto key_snapshot = caching_sha2_rsa_snapshot_;
+	caching_sha2_rsa_snapshot_.reset();
+	const size_t ciphertext_length =
+		len >= sizeof(mysql_hdr) ? len - sizeof(mysql_hdr) : 0;
+	MySQL_Caching_Sha2_RSA* rsa_manager =
+		GloMTH != nullptr ? GloMTH->caching_sha2_rsa() : nullptr;
+	if (key_snapshot == nullptr || rsa_manager == nullptr) {
+		frontend_auth_error_ = MySQLFrontendAuthError::CACHING_SHA2_RSA_UNAVAILABLE;
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
+			"Session=%p , DS=%p , user='%s' . Missing caching_sha2_password RSA key snapshot\n",
+			(*myds)->sess, (*myds), vars1.user);
+		return 1;
+	}
+	if (ciphertext_length != key_snapshot->ciphertext_size()) {
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
+			"Session=%p , DS=%p , user='%s' . Invalid caching_sha2_password RSA response\n",
+			(*myds)->sess, (*myds), vars1.user);
+		return 1;
+	}
+
+	std::string plaintext_password;
+	ScopedStringCleanser plaintext_password_cleanser(plaintext_password);
+	if (!rsa_manager->decrypt_password(
+			key_snapshot,
+			pkt,
+			ciphertext_length,
+			reinterpret_cast<const unsigned char *>((*myds)->myconn->scramble_buff),
+			SCRAMBLE_LENGTH,
+			plaintext_password)) {
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
+			"Session=%p , DS=%p , user='%s' . Invalid caching_sha2_password RSA response\n",
+			(*myds)->sess, (*myds), vars1.user);
+		return 1;
+	}
+
+	const size_t plaintext_password_length = plaintext_password.size();
+	unsigned char* plaintext_password_copy = static_cast<unsigned char *>(
+		malloc(plaintext_password_length + 1)
+	);
+	if (plaintext_password_copy == nullptr) {
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
+			"Session=%p , DS=%p , user='%s' . Cannot allocate caching_sha2_password RSA response\n",
+			(*myds)->sess, (*myds), vars1.user);
+		return 1;
+	}
+	if (plaintext_password_length != 0) {
+		memcpy(plaintext_password_copy, plaintext_password.data(), plaintext_password_length);
+	}
+	plaintext_password_copy[plaintext_password_length] = '\0';
+	vars1.pass_len = plaintext_password_length;
+	vars1.pass = plaintext_password_copy;
+	vars1.pass_is_sensitive = true;
+	vars1.db = (*myds)->myconn->userinfo->schemaname;
+	vars1.charset = (*myds)->tmp_charset;
+	vars1.capabilities = (*myds)->myconn->options.client_flag;
+	auth_plugin_id = (*myds)->switching_auth_type;
+	(*myds)->switching_auth_stage = 5;
+	frontend_auth_error_ = MySQLFrontendAuthError::NONE;
+	return 2;
+}
+#endif
+
 // this function was inline in process_pkt_handshake_response() , split for readibility
 int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1) { // process_pkt_handshake_response inner 1
+#ifdef PROXYSQL31
+	if ((*myds)->switching_auth_stage == 6) {
+		return PPHR_decrypt_caching_sha2_rsa_response(pkt, len, ret, vars1);
+	}
+#endif
 	if ((*myds)->switching_auth_stage == 1) {
 		// this was set in PPHR_4auth0() or PPHR_4auth1()
 		(*myds)->switching_auth_stage=2;
@@ -1728,43 +2051,92 @@ int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyPr
 	if (len==5) {
 		ret = false;
 		vars1.user = (unsigned char *)(*myds)->myconn->userinfo->username;
-		// A 1-byte payload of 0x02 at this stage is not a disconnect: it is the
-		// caching_sha2_password 'request_public_key' packet. ProxySQL has no RSA
-		// key to serve (tracked in #5988), so the exchange cannot continue -- but
-		// reporting it as "client is disconnecting" sent operators looking in
-		// entirely the wrong place. Name the real cause.
-		//
-		// This only fixes the log line. The client still receives the generic
-		// error produced by the normal failure path in
-		// MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE;
-		// giving the client a specific message needs that path to carry one, and
-		// #5988 replaces this branch with a real RSA implementation anyway.
 		if ((*myds)->switching_auth_stage == 5 && *pkt == 2) {
 			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
 				"Session=%p , DS=%p , user='%s' . Client requested the caching_sha2_password RSA public key\n",
 				(*myds)->sess, (*myds), vars1.user);
+#ifdef PROXYSQL31
+			if (caching_sha2_rsa_snapshot_ != nullptr) {
+				const std::string& public_key = caching_sha2_rsa_snapshot_->public_key_pem();
+				if (!generate_auth_more_data(
+						reinterpret_cast<const unsigned char *>(public_key.data()), public_key.size())) {
+					caching_sha2_rsa_snapshot_.reset();
+					frontend_auth_error_ = MySQLFrontendAuthError::NONE;
+					proxy_error(
+						"User '%s'@'%s' requested the caching_sha2_password RSA public key, but ProxySQL could not allocate the response packet.\n",
+						vars1.user, (*myds)->addr.addr
+					);
+					return 1;
+				}
+				(*myds)->switching_auth_stage = 6;
+				(*myds)->auth_in_progress = 1;
+				frontend_auth_error_ = MySQLFrontendAuthError::NONE;
+				return 1;
+			}
+			frontend_auth_error_ = MySQLFrontendAuthError::CACHING_SHA2_RSA_UNAVAILABLE;
+			proxy_error(
+				"User '%s'@'%s' requested the caching_sha2_password RSA public key, but no valid RSA key pair is available.\n",
+				vars1.user, (*myds)->addr.addr
+			);
+#else
 			proxy_error(
 				"User '%s'@'%s' requested the caching_sha2_password RSA public key, which ProxySQL does not"
 				" serve. Connect using TLS instead.\n",
 				vars1.user, (*myds)->addr.addr
 			);
+#endif
 			(*myds)->auth_in_progress = 0;
 			return 1;
 		}
-		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . Client is disconnecting\n", (*myds), (*myds)->sess, vars1.user);
-		proxy_error("User '%s'@'%s' is disconnecting during switch auth\n", vars1.user, (*myds)->addr.addr);
-		(*myds)->auth_in_progress = 0;
-		return 1;
+		const bool tls_caching_sha2_empty_password =
+			(*myds)->switching_auth_stage == 5 &&
+			(*myds)->switching_auth_type == AUTH_MYSQL_CACHING_SHA2_PASSWORD &&
+			(*myds)->encrypted && *pkt == '\0';
+		if (!tls_caching_sha2_empty_password) {
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . Client is disconnecting\n", (*myds), (*myds)->sess, vars1.user);
+			proxy_error("User '%s'@'%s' is disconnecting during switch auth\n", vars1.user, (*myds)->addr.addr);
+			(*myds)->auth_in_progress = 0;
+			return 1;
+		}
 	}
 	auth_plugin_id = (*myds)->switching_auth_type;
+	const size_t payload_length = len >= sizeof(mysql_hdr) ? len - sizeof(mysql_hdr) : 0;
+	if (auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD &&
+		(*myds)->switching_auth_stage == 5 && !(*myds)->encrypted) {
+#ifdef PROXYSQL31
+		return PPHR_decrypt_caching_sha2_rsa_response(pkt, len, ret, vars1);
+#else
+		ret = false;
+		vars1.user = (unsigned char *)(*myds)->myconn->userinfo->username;
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
+			"Session=%p , DS=%p , user='%s' . Rejected cleartext caching_sha2_password response without TLS\n",
+			(*myds)->sess, (*myds), vars1.user);
+		return 1;
+#endif
+	}
 	if (auth_plugin_id == AUTH_MYSQL_NATIVE_PASSWORD) {
-		vars1.pass_len = len - sizeof(mysql_hdr);
+		vars1.pass_len = payload_length;
 	} else {
-		vars1.pass_len=strlen((char *)pkt);
+		const unsigned char* terminator = static_cast<const unsigned char *>(
+			std::memchr(pkt, '\0', payload_length)
+		);
+		if (terminator == nullptr || terminator != pkt + payload_length - 1) {
+			ret = false;
+			vars1.user = (unsigned char *)(*myds)->myconn->userinfo->username;
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
+				"Session=%p , DS=%p , user='%s' . Rejected malformed NUL-terminated authentication response\n",
+				(*myds)->sess, (*myds), vars1.user);
+			return 1;
+		}
+		vars1.pass_len = payload_length - 1;
 	}
 	vars1.pass = (unsigned char *)malloc(vars1.pass_len+1);
 	memcpy(vars1.pass, pkt, vars1.pass_len);
 	vars1.pass[vars1.pass_len] = 0;
+#ifdef PROXYSQL31
+	vars1.pass_is_sensitive = auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD &&
+		(*myds)->switching_auth_stage == 5;
+#endif
 	vars1.user = (unsigned char *)(*myds)->myconn->userinfo->username;
 	vars1.db = (*myds)->myconn->userinfo->schemaname;
 	//(*myds)->switching_auth_stage=2;
@@ -2213,7 +2585,9 @@ void MySQL_Protocol::PPHR_5passwordFalse_0(
 		(*myds)->switching_auth_stage == 0
 	) {
 		const unsigned char fast_auth_success = '\3';
-		generate_one_byte_pkt(fast_auth_success);
+		if (!generate_one_byte_pkt(fast_auth_success)) {
+			ret = false;
+		}
 	}
 }
 
@@ -2225,15 +2599,9 @@ void MySQL_Protocol::PPHR_5passwordFalse_auth2(
 ) {
 	if (GloMyLdapAuth) {
 #ifdef DEBUG
-		{
-			char *tmp_pass=strdup((const char *)vars1.pass);
-			int lpass = strlen(tmp_pass);
-			for (int i=2; i<lpass-1; i++) {
-				tmp_pass[i]='*';
-			}
-			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , password='%s'\n", (*myds), (*myds)->sess, vars1.user, tmp_pass);
-			free(tmp_pass);
-		}
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
+			"Session=%p , DS=%p , username='%s' , password='(redacted)'\n",
+			(*myds), (*myds)->sess, vars1.user);
 #endif // debug
 		char *backend_username = NULL;
 		(*myds)->sess->use_ldap_auth = true;
@@ -2242,13 +2610,9 @@ void MySQL_Protocol::PPHR_5passwordFalse_auth2(
 			&attr1.transaction_persistent, &attr1.fast_forward, &attr1.max_connections, &attr1.sha1_pass, &attr1.attributes, &backend_username);
 		if (vars1.password) {
 #ifdef DEBUG
-			char *tmp_pass=strdup(vars1.password);
-			int lpass = strlen(tmp_pass);
-			for (int i=2; i<lpass-1; i++) {
-				tmp_pass[i]='*';
-			}
-			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , password='%s'\n", (*myds), (*myds)->sess, backend_username, tmp_pass);
-			free(tmp_pass);
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
+				"Session=%p , DS=%p , username='%s' , password='(redacted)'\n",
+				(*myds), (*myds)->sess, backend_username);
 #endif // debug
 			(*myds)->sess->default_hostgroup=attr1.default_hostgroup;
 			(*myds)->sess->default_schema=attr1.default_schema; // just the pointer is passed
@@ -2279,7 +2643,8 @@ void MySQL_Protocol::PPHR_5passwordFalse_auth2(
 						}
 						(*myds)->sess->user_attributes = attr1.attributes; // just the pointer is passed
 #ifdef DEBUG
-						proxy_info("Attributes for user %s: %s\n" , acct.username, attr1.attributes);
+						proxy_info("Attributes for user %s are present; values redacted\n",
+							acct.username);
 #endif
 						(*myds)->sess->schema_locked=attr1.schema_locked;
 						(*myds)->sess->transaction_persistent=attr1.transaction_persistent;
@@ -2516,7 +2881,16 @@ void MySQL_Protocol::PPHR_sha2full(
 ) {
 	if ((*myds)->switching_auth_stage == 0) {
 		const unsigned char perform_full_authentication = '\4';
-		generate_one_byte_pkt(perform_full_authentication);
+#ifdef PROXYSQL31
+		capture_caching_sha2_rsa_snapshot();
+#endif
+		if (!generate_one_byte_pkt(perform_full_authentication)) {
+#ifdef PROXYSQL31
+			caching_sha2_rsa_snapshot_.reset();
+#endif
+			ret = false;
+			return;
+		}
 		(*myds)->pkt_sid++; // increment pkt_sid by one
 		// Required to be set; later used in 'PPHR_1' for setting current 'auth_plugin_id'. E.g:
 		//  - mysql-default_authentication_plugin: 'caching_sha2_password'
@@ -2565,7 +2939,7 @@ void MySQL_Protocol::PPHR_sha2full(
 				// currently proxysql doesn't know the clear text password for that specific user, let's set it!
 				GloMyAuth->set_clear_text_password((char *)vars1.user, USERNAME_FRONTEND, (const char *)vars1.pass, passtype);
 				// Update 'vars1' password with 'clear text' one, so session can be later updated with it
-				if (vars1.password) { free(vars1.password); }
+				cleanse_and_free_password(vars1.password);
 				vars1.password = strdup(reinterpret_cast<const char*>(vars1.pass));
 			}
 		}
@@ -2574,19 +2948,27 @@ void MySQL_Protocol::PPHR_sha2full(
 	}
 }
 
-void MySQL_Protocol::PPHR_passthrough_init(MyProt_tmp_auth_vars& vars1) {
+bool MySQL_Protocol::PPHR_passthrough_init(MyProt_tmp_auth_vars& vars1) {
 	// Stage 0: first call — client just sent the HandshakeResponse with a
 	// scrambled password. Reply with AuthMoreData{0x04} so the client
 	// follows up with its cleartext (under TLS or RSA-encrypted per the
 	// caching_sha2_password protocol).
 	if ((*myds)->switching_auth_stage == 0) {
 		const unsigned char perform_full_authentication = '\4';
-		generate_one_byte_pkt(perform_full_authentication);
+#ifdef PROXYSQL31
+		capture_caching_sha2_rsa_snapshot();
+#endif
+		if (!generate_one_byte_pkt(perform_full_authentication)) {
+#ifdef PROXYSQL31
+			caching_sha2_rsa_snapshot_.reset();
+#endif
+			return false;
+		}
 		(*myds)->pkt_sid++;
 		(*myds)->switching_auth_type = AUTH_MYSQL_CACHING_SHA2_PASSWORD;
 		(*myds)->switching_auth_stage = 4;
 		(*myds)->auth_in_progress = 1;
-		return;
+		return true;
 	}
 
 	// Stage 5: client has replied with the cleartext password (now in
@@ -2613,9 +2995,7 @@ void MySQL_Protocol::PPHR_passthrough_init(MyProt_tmp_auth_vars& vars1) {
 		// userinfo->password at probe-acquire time (after the epilogue has
 		// run), so it becomes the auth password for mysql_real_connect_start.
 		if ((*myds)->passthrough_cleartext) {
-			memset((*myds)->passthrough_cleartext, 0, strlen((*myds)->passthrough_cleartext));
-			free((*myds)->passthrough_cleartext);
-			(*myds)->passthrough_cleartext = NULL;
+			cleanse_and_free_password((*myds)->passthrough_cleartext);
 		}
 		if (vars1.pass && vars1.pass_len > 0) {
 			(*myds)->passthrough_cleartext =
@@ -2627,11 +3007,12 @@ void MySQL_Protocol::PPHR_passthrough_init(MyProt_tmp_auth_vars& vars1) {
 		// authenticate against a real backend account.
 		(*myds)->auth_in_progress = 1;
 		(*myds)->sess->set_status(AUTHENTICATING_BACKEND_FOR_CLIENT);
-		return;
+		return true;
 	}
 
 	// Any other stage is a protocol bug; assert in debug builds.
 	assert(0);
+	return false;
 }
 
 void MySQL_Protocol::PPHR_SetConnAttrs(MyProt_tmp_auth_vars& vars1, account_details_t& attr1) {
@@ -2753,10 +3134,35 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 	// caching_sha2_password full-auth exchange and ultimately schedules a
 	// backend probe via AUTHENTICATING_BACKEND_FOR_CLIENT.
 	{
+	#ifdef PROXYSQL31
+		const bool raw_empty_pw_case =
+			mysql_thread___passthrough_auth_empty_password
+			&& vars1.password != NULL
+			&& vars1.password[0] == '\0';
+
+		frontend_certificate_policy_result row_policy {};
+		if (raw_empty_pw_case) {
+			row_policy = evaluate_frontend_certificate_policy(
+				*myds, account_details.attributes, vars1.user,
+				frontend_auth_context::PASSTHROUGH, __LINE__, __func__);
+		}
+
+		const bool empty_pw_case = raw_empty_pw_case && !row_policy.has_spiffe_id;
+
+		if (mysql_thread___passthrough_auth_enabled
+			&& empty_pw_case
+			&& !row_policy.allowed) {
+			return false;
+		}
+	#else
 		const bool empty_pw_case =
 			mysql_thread___passthrough_auth_empty_password
 			&& vars1.password != NULL
 			&& strlen(vars1.password) == 0;
+	#endif
+		// Unknown-user pass-through has no mysql_users row and therefore no
+		// per-user require_x509 attribute. Its transport gate remains
+		// mysql-passthrough_auth_require_tls.
 		const bool unknown_user_case =
 			mysql_thread___passthrough_auth_unknown_users
 			&& vars1.password == NULL;
@@ -2886,8 +3292,14 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 				if ((*myds) && (*myds)->sess) {
 					(*myds)->sess->passthrough_credential = true;
 				}
-				if (vars1.password) { free(vars1.password); }
+				if (vars1.password) {
+					OPENSSL_cleanse(vars1.password, strlen(vars1.password));
+					free(vars1.password);
+				}
 				vars1.password = strdup(cleartext.c_str());
+				if (!cleartext.empty()) {
+					OPENSSL_cleanse(cleartext.data(), cleartext.size());
+				}
 				/**
 				 * @brief Mirror the synthesized session defaults into
 				 * @c account_details for the unknown-user cache-hit path.
@@ -3022,7 +3434,9 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 				// Cache miss → drive the caching_sha2_password full-auth
 				// exchange so the client emits its cleartext, which we will
 				// then probe against the backend.
-				PPHR_passthrough_init(vars1);
+				if (!PPHR_passthrough_init(vars1)) {
+					return false;
+				}
 				return ret; // not done yet; protocol state machine continues
 			}
 		}
@@ -3107,7 +3521,7 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 						if (ret == true) {
 							if ((*myds)->switching_auth_stage == 0) {
 								const unsigned char fast_auth_success = '\3';
-								generate_one_byte_pkt(fast_auth_success);
+								ret = generate_one_byte_pkt(fast_auth_success);
 							}
 						}
 					}
@@ -3286,12 +3700,12 @@ __do_auth:
 
 		if (addl_pass) {
 			if (strlen(addl_pass) > 0) {
-				if (vars1.password) { free(vars1.password); }
+				cleanse_and_free_password(vars1.password);
 				vars1.password = addl_pass;
 				vars1.passtype = PASSWORD_TYPE::ADDITIONAL;
 				ret = PPHR_verify_password(vars1, account_details);
 			} else {
-				free(addl_pass);
+				cleanse_and_free_password(addl_pass);
 			}
 		}
 	}
@@ -3334,9 +3748,7 @@ __exit_do_auth:
 
 		if (!userinfo->username) // if set already, ignore
 			userinfo->username=strdup((const char *)vars1.user);
-		if (userinfo->password) {
-			free(userinfo->password);
-		}
+		userinfo->clear_password();
 		userinfo->password=strdup((const char *)vars1.password);
 		if (vars1.db) userinfo->set_schemaname(vars1.db,strlen(vars1.db));
 		userinfo->passtype = vars1.passtype;
@@ -3345,7 +3757,7 @@ __exit_do_auth:
 		if (!userinfo->username) // if set already, ignore
 			userinfo->username=strdup((const char *)vars1.user);
 		if (vars1.pass_len) {
-			if (userinfo->password) { free(userinfo->password); }
+			userinfo->clear_password();
 			userinfo->password=strdup((const char *)"");
 		};
 		userinfo->passtype = vars1.passtype;
@@ -3358,19 +3770,20 @@ __exit_process_pkt_handshake_response:
 	{
 		const auto get_debug_pass = [] (const char* pass, size_t len = 0) -> string {
 			if (!pass) { return "(null)"; }
-
-			const string_view pass_view { len > 0 ? string_view { pass, len } : string_view { pass } };
-			const string hex_pass { hex(pass_view) };
-
-			if (GloVars.global.gdbg_lvl[PROXY_DEBUG_MYSQL_PROTOCOL].verbosity >= 5) {
-				return hex_pass;
-			} else {
-				return string { get_masked_pass(hex_pass.c_str()).get() };
-			}
+			(void)len;
+			return "(redacted)";
 		};
 
+#ifdef PROXYSQL31
+		const string tmp_pass = vars1.pass_is_sensitive ?
+			"(redacted RSA plaintext)" : get_debug_pass(vars1.password);
+		const string tmp_cpass = vars1.pass_is_sensitive ?
+			"(redacted RSA plaintext)" :
+			get_debug_pass(reinterpret_cast<const char*>(vars1.pass), vars1.pass_len);
+#else
 		const string tmp_pass { get_debug_pass(vars1.password) };
 		const string tmp_cpass { get_debug_pass(reinterpret_cast<const char*>(vars1.pass), vars1.pass_len) };
+#endif
 
 		proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 1,
 			"Handshake in progress   session_id=%u user=\"%s\" password=\"%s\" client_pass=\"%s\" scramble=\"%s\""
@@ -3383,11 +3796,13 @@ __exit_process_pkt_handshake_response:
 	}
 #endif
 
-	free(vars1.pass);
-	if (vars1.password) {
-		free(vars1.password);
-		vars1.password=NULL;
+#ifdef PROXYSQL31
+	if (vars1.pass_is_sensitive && vars1.pass != nullptr) {
+		OPENSSL_cleanse(vars1.pass, vars1.pass_len + 1);
 	}
+#endif
+	free(vars1.pass);
+	cleanse_and_free_password(vars1.password);
 	if (vars1.db_tmp) {
 		free(vars1.db_tmp);
 		vars1.db_tmp=NULL;
@@ -3400,58 +3815,101 @@ __exit_process_pkt_handshake_response:
 }
 
 bool MySQL_Protocol::verify_user_attributes(int calling_line, const char *calling_func, const unsigned char *user) {
+#ifdef PROXYSQL31
+	const char* attributes = (*myds)->sess->user_attributes;
+	if (!attributes || !*attributes) {
+		const auto policy = evaluate_frontend_certificate_policy(
+			*myds, attributes, user, frontend_auth_context::INITIAL_HANDSHAKE, calling_line, calling_func);
+		if (!policy.allowed) return false;
+		(*myds)->frontend_authenticated_via_spiffe = policy.has_spiffe_id;
+		return true;
+	}
+	try {
+		const json attrs = json::parse(attributes);
+		const auto policy = evaluate_frontend_certificate_policy(
+			*myds, attrs, user, frontend_auth_context::INITIAL_HANDSHAKE, calling_line, calling_func);
+		if (!policy.allowed) return false;
+		(*myds)->frontend_authenticated_via_spiffe = policy.has_spiffe_id;
+		const auto default_transaction_isolation = attrs.find("default-transaction_isolation");
+		if (default_transaction_isolation != attrs.end() && default_transaction_isolation->is_string()) {
+			const std::string value = default_transaction_isolation->get<std::string>();
+			mysql_variables.client_set_value((*myds)->sess, SQL_ISOLATION_LEVEL, value.c_str());
+		}
+	} catch (const nlohmann::json::exception& e) {
+		proxy_error("%d:%s(): Invalid user attributes for user %s: %s\n", calling_line, calling_func,
+			user ? reinterpret_cast<const char*>(user) : "unknown", e.what());
+		return false;
+	}
+	return true;
+#else
 	bool ret = true;
 	if ((*myds)->sess->user_attributes) {
 		char *a = (*myds)->sess->user_attributes; // no copy, just pointer
 		if (strlen(a)) {
-			json j = nlohmann::json::parse(a);
-			auto spiffe_id = j.find("spiffe_id");
-			if (spiffe_id != j.end()) {
-				// at this point, we completely ignore any password specified so far
-				// we assume authentication failure so far
-				ret = false;
-				std::string spiffe_val = j["spiffe_id"].get<std::string>();
-				if ((*myds)->x509_subject_alt_name) {
-					if (spiffe_val.rfind("!", 0) == 0 && spiffe_val.size() > 1) {
-						string str_spiffe_regex { spiffe_val.substr(1) };
-						re2::RE2::Options opts = re2::RE2::Options(RE2::Quiet);
-						re2::RE2 subject_alt_regex(str_spiffe_regex, opts);
+			try {
+				json j = nlohmann::json::parse(a);
+				auto spiffe_id = j.find("spiffe_id");
+				if (spiffe_id != j.end()) {
+					ret = false;
+					if (!spiffe_id->is_string()) {
+						proxy_error("%d:%s(): Invalid spiffe_id type for user %s\n", calling_line, calling_func, user);
+						return false;
+					}
+					std::string spiffe_val = spiffe_id->get<std::string>();
+					if ((*myds)->x509_subject_alt_name) {
+						if (spiffe_val.rfind("!", 0) == 0 && spiffe_val.size() > 1) {
+							string str_spiffe_regex { spiffe_val.substr(1) };
+							re2::RE2::Options opts = re2::RE2::Options(RE2::Quiet);
+							re2::RE2 subject_alt_regex(str_spiffe_regex, opts);
 
-						ret = re2::RE2::FullMatch((*myds)->x509_subject_alt_name, subject_alt_regex);
-					} else if (strncmp(spiffe_val.c_str(), "spiffe://", strlen("spiffe://"))==0) {
-						if (strcmp(spiffe_val.c_str(), (*myds)->x509_subject_alt_name)==0) {
-							ret = true;
+							ret = re2::RE2::FullMatch((*myds)->x509_subject_alt_name.get(), subject_alt_regex);
+						} else if (strncmp(spiffe_val.c_str(), "spiffe://", strlen("spiffe://"))==0) {
+							if (strcmp(spiffe_val.c_str(), (*myds)->x509_subject_alt_name.get())==0) {
+								ret = true;
+							}
 						}
 					}
+					if (ret == false) {
+						proxy_error("%d:%s(): SPIFFE Authentication error for user %s . spiffed_id expected : %s , received: %s\n", calling_line, calling_func, user, spiffe_val.c_str(), ((*myds)->x509_subject_alt_name ? (*myds)->x509_subject_alt_name.get() : "none"));
+					}
 				}
-				if (ret == false) {
-					proxy_error("%d:%s(): SPIFFE Authentication error for user %s . spiffed_id expected : %s , received: %s\n", calling_line, calling_func, user, spiffe_val.c_str(), ((*myds)->x509_subject_alt_name ? (*myds)->x509_subject_alt_name : "none"));
+				auto default_transaction_isolation = j.find("default-transaction_isolation");
+				if (default_transaction_isolation != j.end() && default_transaction_isolation->is_string()) {
+					std::string default_transaction_isolation_value = default_transaction_isolation->get<std::string>();
+					mysql_variables.client_set_value((*myds)->sess, SQL_ISOLATION_LEVEL, default_transaction_isolation_value.c_str());
 				}
-			}
-			auto default_transaction_isolation = j.find("default-transaction_isolation");
-			if (default_transaction_isolation != j.end()) {
-				std::string default_transaction_isolation_value = j["default-transaction_isolation"].get<std::string>();
-				mysql_variables.client_set_value((*myds)->sess, SQL_ISOLATION_LEVEL, default_transaction_isolation_value.c_str());
+			} catch (const nlohmann::json::exception& e) {
+				proxy_error("%d:%s(): Invalid user attributes for user %s: %s\n", calling_line, calling_func, user, e.what());
+				return false;
 			}
 		}
 	}
 	return ret;
+#endif
 }
 
+#ifndef PROXYSQL31
 bool MySQL_Protocol::user_attributes_has_spiffe(int calling_line, const char *calling_func, const unsigned char *user) {
 	bool ret = false;
 	if ((*myds)->sess->user_attributes) {
 		char *a = (*myds)->sess->user_attributes; // no copy, just pointer
 		if (strlen(a)) {
-			json j = nlohmann::json::parse(a);
-			auto spiffe_id = j.find("spiffe_id");
-			if (spiffe_id != j.end()) {
-				ret = true;
+			try {
+				json j = nlohmann::json::parse(a);
+				if (!j.is_object()) return false;
+				auto spiffe_id = j.find("spiffe_id");
+				if (spiffe_id != j.end()) {
+					ret = true;
+				}
+			} catch (const nlohmann::json::exception& e) {
+				proxy_error("%d:%s(): Invalid user attributes for user %s: %s\n", calling_line, calling_func, user, e.what());
+				return false;
 			}
 		}
 	}
 	return ret;
 }
+#endif
 
 void * MySQL_Protocol::Query_String_to_packet(uint8_t sid, std::string *s, unsigned int *l) {
 	mysql_hdr hdr;

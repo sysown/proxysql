@@ -77,6 +77,10 @@ When pass-through completes for a user not in `mysql_users`, no row is inserted.
 
 Because these are re-evaluated each connect, changing `mysql-passthrough_default_hg` immediately affects routing on the next connect from a cached unknown user — no cache flush required.
 
+### 3.6 Frontend certificate policy (v3.1+/v4 only)
+
+A row-backed frontend account can set `attributes.require_x509=true`. On v3.1+ and v4, that requires the configured password/authentication-plugin step and a trusted certificate on the physical frontend TLS connection. A SPIFFE row is excluded from pass-through because `spiffe_id` is an identity policy, not an empty-password pass-through signal. Unknown-user pass-through has no row or attributes object, so its existing `mysql-passthrough_auth_require_tls` transport gate is unchanged; it is not a per-user X.509 rule.
+
 ## 4. Protocol flow
 
 ### 4.1 `caching_sha2_password` (the primary case)
@@ -175,6 +179,8 @@ For Phase 1, `COM_CHANGE_USER` targeting a user that would require pass-through 
 
 Implementation: `process_pkt_COM_CHANGE_USER` in `lib/MySQL_Protocol.cpp` returns early with `ret=false` when the target's stored password is empty and the master gate is on. The check runs BEFORE the function's unconditional session-state mutations (`sess->default_hostgroup`, `transaction_persistent`, `user_attributes`) so a rejected attempt has no observable side effects on the already-authenticated session.
 
+The directions are intentionally asymmetric: a pass-through target is rejected even when the original connection carries a valid certificate, while a pass-through-authenticated source may change to an ordinary password-backed target. The SPIFFE source/target prohibition remains separate: an SPIFFE-authenticated source and every SPIFFE target are rejected. `COM_CHANGE_USER` relies on immutable certificate evidence from the original connection and never renegotiates TLS.
+
 May be revisited in a later phase if there's demand.
 
 ## 6. Probe details
@@ -248,6 +254,22 @@ The §8.4 invalidation eviction (a *later* 1045 during real query traffic agains
 | Stale cached password after backend rotation | TTL + invalidate-on-backend-rejection during real traffic |
 | Unintended exposure of unknown-user code path | `mysql-passthrough_auth_unknown_users` defaults to `false`; `username_pattern` allowlist for further restriction |
 
+For a row-backed authentication attempt, the security ordering is:
+
+```text
+row lookup
+  -> require_x509 / SPIFFE classification
+  -> username allowlist
+  -> cache lookup
+  -> on cache miss, pass-through TLS gate
+  -> cleartext request
+  -> backend probe
+```
+
+Row-backed `require_x509` is evaluated before cache lookup, so the certificate policy applies identically on cold and warm paths. A warm cache hit is verified inline before the miss-only TLS gate. `mysql-passthrough_auth_require_tls` protects acquisition of the cleartext password and backend-probe dispatch on a cache miss; it does not reject an inline warm-cache hit.
+
+Cold-probe completion sends the frontend OK from `MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT()`. Certificate policy must therefore be decided before dispatch, rather than relying only on the normal handshake epilogue. The frontend certificate is not sent to the backend. Unknown-user pass-through has no row attributes and remains subject to the same existing global, miss-only TLS gate rather than a per-user X.509 rule.
+
 ### 7.2 Rate limiting
 
 Maintain two sliding-window counters:
@@ -279,7 +301,14 @@ Entry includes username, source IP, hostgroup probed, outcome. Useful for forens
 
 ### 7.5 RSA public key for non-TLS clients
 
-MySQL's `caching_sha2_password` allows non-TLS clients to encrypt the cleartext password with the server's RSA public key. If we want to support non-TLS pass-through, ProxySQL needs to publish a public key (`caching_sha2_password_public_key_path`) and decrypt with the matching private key. Phase 1 ships without this; clients must use TLS. Phase 2 may add RSA support if there's demand.
+ProxySQL 3.1 adds the frontend RSA public-key exchange for
+`caching_sha2_password`; see
+[`doc/caching_sha2_password_rsa.md`](../caching_sha2_password_rsa.md). This lets
+frontend users complete full authentication without TLS. Pass-through keeps
+its secure default (`mysql-passthrough_auth_require_tls=true`). If an operator
+explicitly disables that gate, the same RSA exchange can supply the cleartext
+credential used by the backend authentication probe; the public-key
+substitution warning in the linked document applies.
 
 ## 8. The cache
 

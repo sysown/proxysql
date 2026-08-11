@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <cerrno>
-#include <cctype>
 #include <climits>
 #include <cstring>
 #include "ev.h"
@@ -299,7 +298,9 @@ bool GTID_Server_Data::add_gtid_from_ok(const char* gtid) {
 	std::string uuid(gtid, static_cast<size_t>(sep - gtid));
 	uuid.erase(std::remove(uuid.begin(), uuid.end(), '-'), uuid.end());
 	if (uuid.size() != 32 || !std::all_of(uuid.begin(), uuid.end(), [](unsigned char c) {
-			return std::isxdigit(c) != 0;
+			return (c >= '0' && c <= '9') ||
+				(c >= 'a' && c <= 'f') ||
+				(c >= 'A' && c <= 'F');
 		})) {
 		return false;
 	}
@@ -414,14 +415,21 @@ bool GTID_Server_Data::read_next_gtid() {
 					}
 				j++;
 				if (j%2 == 1) { // we are reading the uuid
-					char *p = uuid_server;
-					for (unsigned int k=0; k<strlen(subtoken); k++) {
-						if (subtoken[k]!='-') {
-							*p = subtoken[k];
-							p++;
+					size_t uuid_len = 0;
+					for (const char *uuid_char = subtoken; *uuid_char; ++uuid_char) {
+						if (*uuid_char == '-') {
+							continue;
 						}
+						if (uuid_len + 1 >= sizeof(uuid_server)) {
+							invalid_msg = true;
+							break;
+						}
+						uuid_server[uuid_len++] = *uuid_char;
 					}
-					*p = '\0';
+					if (invalid_msg) {
+						break;
+					}
+					uuid_server[uuid_len] = '\0';
 				} else { // we are reading the trxid or trxid range
 					TrxId_Interval iv(trxid_t(0));
 					if (!TrxId_Interval::parse(subtoken, &iv)) {
@@ -451,71 +459,82 @@ bool GTID_Server_Data::read_next_gtid() {
 			events_read++;
 		}
 	} else {
-		strncpy(rec_msg,data+pos,l);
+		if (l >= (int)sizeof(rec_msg)) {
+			pos += l + 1;
+			proxy_warning("GTID: oversized message from binlog reader on port %d for server %s:%d, disconnecting\n",
+				port, address, mysql_port);
+			active = false;
+			pthread_rwlock_unlock(&executed_rwlock);
+			return false;
+		}
+		size_t rec_msg_len = (size_t)l;
+		memcpy(rec_msg, data + pos, rec_msg_len);
 		pos += l+1;
-		rec_msg[l] = 0;
+		rec_msg[rec_msg_len] = 0;
+		if (rec_msg[0] != 'I') {
+			pthread_rwlock_unlock(&executed_rwlock);
+			return true;
+		}
 		bool invalid_msg = false;
-		if (rec_msg[0]=='I') {
-			char *a = NULL;
-			int ul = 0;
-			switch (rec_msg[1]) {
-				case '1': // single trxid with UUID
-					a = strchr(rec_msg+3,':');
-					if (a == NULL) {
-						invalid_msg = true;
-						break;
-					}
-					ul = a-rec_msg-3;
-					strncpy(uuid_server,rec_msg+3,ul);
-					uuid_server[ul] = 0;
-					gtid_executed.add((std::string)uuid_server, (trxid_t)atoll(a+1));
-					events_read++;
-					break;
-				case '2': // single trxid, reuse last UUID
-					gtid_executed.add((std::string)uuid_server, (trxid_t)atoll(rec_msg+3));
-					events_read++;
-					break;
-				case '3': // trxid range with UUID
-					a = strchr(rec_msg+3,':');
-					if (a == NULL) {
-						invalid_msg = true;
-						break;
-					}
-					ul = a-rec_msg-3;
-					strncpy(uuid_server,rec_msg+3,ul);
-					uuid_server[ul] = 0;
-					{
-						TrxId_Interval iv(trxid_t(0));
-						if (!TrxId_Interval::parse(a+1, &iv)) {
-							invalid_msg = true;
-							break;
-						}
-						gtid_executed.add((std::string)uuid_server, iv);
-					}
-					events_read++;
-					break;
-				case '4': // trxid range, reuse last UUID
-					{
-						TrxId_Interval iv(trxid_t(0));
-						if (!TrxId_Interval::parse(rec_msg+3, &iv)) {
-							invalid_msg = true;
-							break;
-						}
-						gtid_executed.add((std::string)uuid_server, iv);
-					}
-					events_read++;
-					break;
-				default:
-					invalid_msg = true;
-			}
-
-			if (invalid_msg) {
-				proxy_warning("GTID: invalid or unsupported message (%s) from binlog reader on port %d for server %s:%d, disconnecting\n",
-					rec_msg, port, address, mysql_port);
-				active = false;
-				pthread_rwlock_unlock(&executed_rwlock);
+		auto copy_uuid = [this, &rec_msg](char *delimiter) {
+			const int uuid_len = delimiter - (rec_msg + 3);
+			if (uuid_len < 0 || (size_t)uuid_len >= sizeof(uuid_server)) {
 				return false;
 			}
+			memcpy(uuid_server, rec_msg + 3, (size_t)uuid_len);
+			uuid_server[uuid_len] = 0;
+			return true;
+		};
+		char *a = NULL;
+		switch (rec_msg[1]) {
+		case '1': // single trxid with UUID
+			a = strchr(rec_msg+3,':');
+			if (a == NULL || !copy_uuid(a)) {
+				invalid_msg = true;
+				break;
+			}
+			gtid_executed.add((std::string)uuid_server, (trxid_t)atoll(a+1));
+			events_read++;
+			break;
+		case '2': // single trxid, reuse last UUID
+			gtid_executed.add((std::string)uuid_server, (trxid_t)atoll(rec_msg+3));
+			events_read++;
+			break;
+		case '3': { // trxid range with UUID
+			a = strchr(rec_msg+3,':');
+			if (a == NULL || !copy_uuid(a)) {
+				invalid_msg = true;
+				break;
+			}
+			TrxId_Interval iv(trxid_t(0));
+			if (!TrxId_Interval::parse(a+1, &iv)) {
+				invalid_msg = true;
+				break;
+			}
+			gtid_executed.add((std::string)uuid_server, iv);
+			events_read++;
+			break;
+		}
+		case '4': { // trxid range, reuse last UUID
+			TrxId_Interval iv(trxid_t(0));
+			if (!TrxId_Interval::parse(rec_msg+3, &iv)) {
+				invalid_msg = true;
+				break;
+			}
+			gtid_executed.add((std::string)uuid_server, iv);
+			events_read++;
+			break;
+		}
+		default:
+			invalid_msg = true;
+		}
+
+		if (invalid_msg) {
+			proxy_warning("GTID: invalid or unsupported message (%s) from binlog reader on port %d for server %s:%d, disconnecting\n",
+				rec_msg, port, address, mysql_port);
+			active = false;
+			pthread_rwlock_unlock(&executed_rwlock);
+			return false;
 		}
 	}
 	pthread_rwlock_unlock(&executed_rwlock);

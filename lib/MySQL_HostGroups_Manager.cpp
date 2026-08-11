@@ -5812,7 +5812,7 @@ SQLite3_result * MySQL_HostGroups_Manager::get_stats_mysql_gtid_executed() {
 			//sprintf(buf,"%d", mysrvc->port);
 			const GTID_Executed_Snapshot snapshot = gtid_si->get_gtid_executed_snapshot();
 			pta[2]=strdup(snapshot.gtid_executed.c_str());
-			sprintf(buf,"%llu", snapshot.events_read);
+			snprintf(buf, sizeof(buf), "%llu", snapshot.events_read);
 			pta[3]=strdup(buf);
 		} else {
 			std::string s = it->first;

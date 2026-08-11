@@ -170,7 +170,7 @@ class MySQL_Event {
 		read_encoded_length((uint64_t *)&rows_sent,f);
 		read_encoded_length((uint64_t *)&query_digest,f);
 		char digest_hex[20];
-		sprintf(digest_hex,"0x%016llX", (long long unsigned int)query_digest);
+		snprintf(digest_hex, sizeof(digest_hex), "0x%016llX", (long long unsigned int)query_digest);
 		read_encoded_length((uint64_t *)&query_len,f);
 		query_ptr=read_string(f,query_len);
 		char buffer[26];
@@ -180,12 +180,12 @@ class MySQL_Event {
 		timer=start_time/1000/1000;
     tm_info = localtime(&timer);
     strftime(buffer, 26, "%Y-%m-%d %H:%M:%S", tm_info);
-		sprintf(buffer2,"%06u", (unsigned)(start_time%1000000));
+		snprintf(buffer2, sizeof(buffer2), "%06u", (unsigned)(start_time%1000000));
 		cout << " starttime=\"" << buffer << "." << buffer2 << "\"";
 		timer=end_time/1000/1000;
     tm_info = localtime(&timer);
     strftime(buffer, 26, "%Y-%m-%d %H:%M:%S", tm_info);
-		sprintf(buffer2,"%06u", (unsigned)(end_time%1000000));
+		snprintf(buffer2, sizeof(buffer2), "%06u", (unsigned)(end_time%1000000));
 		cout << " endtime=\"" << buffer << "." << buffer2 << "\"";
 		cout << " duration=" << (end_time-start_time) << "us";
 		if (et == PROXYSQL_COM_STMT_PREPARE || et == PROXYSQL_COM_STMT_EXECUTE) {

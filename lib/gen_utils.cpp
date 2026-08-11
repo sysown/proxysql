@@ -8,10 +8,19 @@
 using std::vector;
 using std::unique_ptr;
 
+static inline size_t util_strlen(const char* s) {
+	size_t len = 0;
+	if (s == NULL) return 0;
+	while (s[len]) {
+		++len;
+	}
+	return len;
+}
+
 char *escape_string_single_quotes(char *input, bool free_it) {
 	int i,j,l;
 	char *o=NULL;	// output string, if any
-	l=strlen(input);
+	l=util_strlen(input);
 	j=0;
 	for (i=0;i<l;i++) {
 		if (input[i]=='\'') {
@@ -64,7 +73,7 @@ int remove_spaces(const char *s) {
 		}
 	}
 	*outp = '\0';
-	return strlen(s);
+	return outp - s;
 }
 
 // This function returns a pointer to a substring of the original string. It also
@@ -88,7 +97,8 @@ char *trim_spaces_in_place(char *str)
 		return str;
 
 	// Trim trailing space
-	end = str + strlen(str) - 1;
+		const size_t str_len = util_strlen(str);
+		end = str + str_len - 1;
 	while(end > str && isspace(*end)) end--;
 
 	// Write new null terminator
@@ -106,7 +116,8 @@ char *trim_spaces_and_quotes_in_place(char *str) {
 	if(*str == 0)  // All spaces?
 		return str;
 	// Trim trailing space
-	end = str + strlen(str) - 1;
+		const size_t str_len = util_strlen(str);
+		end = str + str_len - 1;
 	while(end > str && (isspace(*end) || *end=='\"' || *end=='\'' || *end==';')) end--;
 	// Write new null terminator
 	*(end+1) = 0;
@@ -412,13 +423,20 @@ time_t realtime_to_monotonic_time(time_t rt) {
  */
 std::string strip_schema_from_query(const char* query, const char* schema,
                                     const std::vector<std::string>& tables, bool ansi_quotes) {
-	if (!query || strlen(query) == 0) {
+	if (!query) {
 		return "";
 	}
 
-	int query_len = strlen(query);
+	const int query_len = static_cast<int>(util_strlen(query));
+	if (query_len == 0) {
+		return "";
+	}
 
-	int schema_len = strlen(schema);
+	if (schema == NULL) {
+		return std::string(query, query_len);
+	}
+
+	int schema_len = static_cast<int>(util_strlen(schema));
 	if (schema_len == 0) {
 		return std::string(query, query_len);
 	}
