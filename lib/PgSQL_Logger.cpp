@@ -1558,6 +1558,13 @@ void PgSQL_Logger::insertPgSQLEventsIntoDb(SQLite3DB* db, const std::string& tab
 	};
 
 	char digest_hex_str[20];
+	// db may be the statsdb_disk connection shared with the TSDB sampler/monitor
+	// and cluster-aggregation worker (see ProxySQL_Statistics.cpp). Those threads
+	// wrlock() around their own explicit transactions on that shared connection;
+	// do the same here so this BEGIN..COMMIT can't interleave with theirs. The
+	// SQLite3DB rwlock is per-instance, so this is a no-op-cost correct guard even
+	// when db is the in-memory statsdb connection instead.
+	db->wrlock();
 	db->execute("BEGIN");
 
 	int row_idx = 0;
@@ -1603,6 +1610,7 @@ void PgSQL_Logger::insertPgSQLEventsIntoDb(SQLite3DB* db, const std::string& tab
 	}
 
 	db->execute("COMMIT");
+	db->wrunlock();
 }
 
 int PgSQL_Logger::processEvents(SQLite3DB* statsdb, SQLite3DB* statsdb_disk) {
