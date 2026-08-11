@@ -1870,7 +1870,7 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 			if (mysql_tracked_variables[i].is_global_variable==false)
 				continue;
 			char buf[128];
-			sprintf(buf, "default_%s", mysql_tracked_variables[i].internal_variable_name);
+			snprintf(buf, sizeof(buf), "default_%s", mysql_tracked_variables[i].internal_variable_name);
 			if (!strcmp(name,buf)) {
 				if (variables.default_variables[i]==NULL) {
 					variables.default_variables[i]=strdup(mysql_tracked_variables[i].default_value);
@@ -1986,7 +1986,7 @@ char * MySQL_Threads_Handler::get_variable(const char *name) {	// this is the pu
 		std::unordered_map<std::string, std::tuple<int *, int, int, bool>>::const_iterator it = VariablesPointers_int.find(nameS);
 		if (it != VariablesPointers_int.end()) {
 			int * v = std::get<0>(it->second);
-			sprintf(intbuf,"%d", *v);
+			snprintf(intbuf, sizeof(intbuf), "%d", *v);
 			return strdup(intbuf);
 		}
 	}
@@ -2074,7 +2074,7 @@ char * MySQL_Threads_Handler::get_variable(const char *name) {	// this is the pu
 
 	if (!strcasecmp(name,"server_capabilities")) {
 		// FIXME : make it human readable
-		sprintf(intbuf,"%d",variables.server_capabilities);
+		snprintf(intbuf, sizeof(intbuf), "%d",variables.server_capabilities);
 		return strdup(intbuf);
 	}
 	// SSL variables
@@ -2136,11 +2136,11 @@ char * MySQL_Threads_Handler::get_variable(const char *name) {	// this is the pu
 		if (!strcasecmp(name,"monitor_replication_lag_use_percona_heartbeat")) return strdup(variables.monitor_replication_lag_use_percona_heartbeat);
 	}
 	if (!strcasecmp(name,"threads")) {
-		sprintf(intbuf,"%d", (num_threads ? num_threads : DEFAULT_NUM_THREADS));
+		snprintf(intbuf, sizeof(intbuf), "%d", (num_threads ? num_threads : DEFAULT_NUM_THREADS));
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"stacksize")) {
-		sprintf(intbuf,"%d", (int)(stacksize ? stacksize : DEFAULT_STACK_SIZE));
+		snprintf(intbuf, sizeof(intbuf), "%d", (int)(stacksize ? stacksize : DEFAULT_STACK_SIZE));
 		return strdup(intbuf);
 	}
 
@@ -2467,7 +2467,7 @@ bool MySQL_Threads_Handler::set_variable(const char *name, const char *value) {	
 			if (mysql_tracked_variables[i].is_global_variable==false)
 				continue;
 			char buf[128];
-			sprintf(buf, "default_%s", mysql_tracked_variables[i].internal_variable_name);
+			snprintf(buf, sizeof(buf), "default_%s", mysql_tracked_variables[i].internal_variable_name);
 			if (!strcmp(name,buf)) {
 				if (variables.default_variables[i]) free(variables.default_variables[i]);
 				variables.default_variables[i] = NULL;
@@ -3285,9 +3285,9 @@ char** client_host_cache_entry_row(
 	time_t last_updated = __now - curtime/1000000 + entry.updated_at/1000000;
 
 	row[0]=strdup(address.c_str());
-	sprintf(buff, "%u", entry.error_count);
+	snprintf(buff, sizeof(buff), "%u", entry.error_count);
 	row[1]=strdup(buff);
-	sprintf(buff, "%lu", last_updated);
+	snprintf(buff, sizeof(buff), "%lu", last_updated);
 	row[2]=strdup(buff);
 
 	return row;
@@ -3463,7 +3463,7 @@ MySQL_Thread::~MySQL_Thread() {
 			MySQL_Session *sess=(MySQL_Session *)mysql_sessions->remove_index_fast(0);
 				if (sess->session_type == PROXYSQL_SESSION_ADMIN || sess->session_type == PROXYSQL_SESSION_STATS) {
 					char _buf[1024];
-					sprintf(_buf,"%s:%d:%s()", __FILE__, __LINE__, __func__);
+					snprintf(_buf, sizeof(_buf), "%s:%d:%s()", __FILE__, __LINE__, __func__);
 					if (GloMyLogger) { GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, _buf); }
 				}
 				delete sess;
@@ -4706,7 +4706,7 @@ void MySQL_Thread::ProcessAllSessions_Healthy0(MySQL_Session *sess, unsigned int
 			}
 		}
 	}
-	sprintf(_buf,"%s:%d:%s()", __FILE__, __LINE__, __func__);
+	snprintf(_buf, sizeof(_buf), "%s:%d:%s()", __FILE__, __LINE__, __func__);
 	GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, _buf);
 	unregister_session(n);
 	n--;
@@ -4821,7 +4821,7 @@ void MySQL_Thread::process_all_sessions() {
 						char _buf[1024];
 						if (sess->client_myds && sess->killed)
 							proxy_warning("Closing killed client connection %s:%d\n",sess->client_myds->addr.addr,sess->client_myds->addr.port);
-						sprintf(_buf,"%s:%d:%s()", __FILE__, __LINE__, __func__);
+						snprintf(_buf, sizeof(_buf), "%s:%d:%s()", __FILE__, __LINE__, __func__);
 						GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, _buf);
 						unregister_session(n);
 						n--;
@@ -4835,7 +4835,7 @@ void MySQL_Thread::process_all_sessions() {
 					char _buf[1024];
 					if (sess->client_myds)
 						proxy_warning("Closing killed client connection %s:%d\n",sess->client_myds->addr.addr,sess->client_myds->addr.port);
-					sprintf(_buf,"%s:%d:%s()", __FILE__, __LINE__, __func__);
+					snprintf(_buf, sizeof(_buf), "%s:%d:%s()", __FILE__, __LINE__, __func__);
 					GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, _buf);
 					unregister_session(n);
 					n--;
@@ -4995,7 +4995,7 @@ void MySQL_Thread::refresh_variables() {
 		}
 		char buf[128];
 		if (mysql_tracked_variables[i].is_global_variable) {
-			sprintf(buf,"default_%s",mysql_tracked_variables[i].internal_variable_name);
+		snprintf(buf, sizeof(buf), "default_%s",mysql_tracked_variables[i].internal_variable_name);
 			mysql_thread___default_variables[i] = GloMTH->get_variable_string(buf);
 		}
 	}
@@ -5337,7 +5337,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}
 	{	// Active Transactions
 		pta[0]=(char *)"Active_Transactions";
-		sprintf(buf,"%u",get_active_transations());
+		snprintf(buf, sizeof(buf), "%u",get_active_transations());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -5408,26 +5408,26 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 #ifdef IDLE_THREADS
 	{	// Connections non idle
 		pta[0]=(char *)"Client_Connections_non_idle";
-		sprintf(buf,"%u",get_non_idle_client_connections());
+		snprintf(buf, sizeof(buf), "%u",get_non_idle_client_connections());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 #endif // IDLE_THREADS
 	{	// MySQL Backend buffers bytes
 		pta[0]=(char *)"mysql_backend_buffers_bytes";
-		sprintf(buf,"%llu",get_mysql_backend_buffers_bytes());
+		snprintf(buf, sizeof(buf), "%llu",get_mysql_backend_buffers_bytes());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{	// MySQL Frontend buffers bytes
 		pta[0]=(char *)"mysql_frontend_buffers_bytes";
-		sprintf(buf,"%llu",get_mysql_frontend_buffers_bytes());
+		snprintf(buf, sizeof(buf), "%llu",get_mysql_frontend_buffers_bytes());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{	// MySQL Frontend buffers bytes
 		pta[0]=(char *)"mysql_session_internal_bytes";
-		sprintf(buf,"%llu",get_mysql_session_internal_bytes());
+		snprintf(buf, sizeof(buf), "%llu",get_mysql_session_internal_bytes());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -5513,7 +5513,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 						MySQL_Thread_status_variables_counter_array[i].m_idx,
 						MySQL_Thread_status_variables_counter_array[i].conv
 					);
-				sprintf(buf,"%llu", stvar);
+				snprintf(buf, sizeof(buf), "%llu", stvar);
 				pta[1] = buf;
 				result->add_row(pta);
 			}
@@ -5530,7 +5530,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 						MySQL_Thread_status_variables_gauge_array[i].m_idx,
 						MySQL_Thread_status_variables_gauge_array[i].conv
 					);
-				sprintf(buf,"%llu", stvar);
+				snprintf(buf, sizeof(buf), "%llu", stvar);
 				pta[1] = buf;
 				result->add_row(pta);
 			}
@@ -5544,7 +5544,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}
 	{	// Mirror queue length
 		pta[0]=(char *)"Mirror_queue_length";
-		sprintf(buf,"%llu",get_total_mirror_queue());
+		snprintf(buf, sizeof(buf), "%llu",get_total_mirror_queue());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -5556,13 +5556,13 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}
 	{	// Servers_table_version
 		pta[0]=(char *)"Servers_table_version";
-		sprintf(buf,"%u",MyHGM->get_servers_table_version());
+		snprintf(buf, sizeof(buf), "%u",MyHGM->get_servers_table_version());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{	// MySQL Threads workers
 		pta[0]=(char *)"MySQL_Thread_Workers";
-		sprintf(buf,"%d",num_threads);
+		snprintf(buf, sizeof(buf), "%d",num_threads);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -5587,67 +5587,67 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	if (GloMyMon) {
 		{	// MySQL Monitor workers
 			pta[0]=(char *)"MySQL_Monitor_Workers";
-			sprintf(buf,"%d",( variables.monitor_enabled ? GloMyMon->num_threads : 0));
+			snprintf(buf, sizeof(buf), "%d",( variables.monitor_enabled ? GloMyMon->num_threads : 0));
 			pta[1]=buf;
 			result->add_row(pta);
 		}
 		{	// MySQL Monitor workers
 			pta[0]=(char *)"MySQL_Monitor_Workers_Aux";
-			sprintf(buf,"%d",( variables.monitor_enabled ? GloMyMon->aux_threads : 0));
+			snprintf(buf, sizeof(buf), "%d",( variables.monitor_enabled ? GloMyMon->aux_threads : 0));
 			pta[1]=buf;
 			result->add_row(pta);
 		}
 		{	// MySQL Monitor workers
 			pta[0]=(char *)"MySQL_Monitor_Workers_Started";
-			sprintf(buf,"%d",( variables.monitor_enabled ? GloMyMon->started_threads : 0));
+			snprintf(buf, sizeof(buf), "%d",( variables.monitor_enabled ? GloMyMon->started_threads : 0));
 			pta[1]=buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0]=(char *)"MySQL_Monitor_connect_check_OK";
-			sprintf(buf,"%llu", GloMyMon->connect_check_OK);
+			snprintf(buf, sizeof(buf), "%llu", GloMyMon->connect_check_OK);
 			pta[1]=buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0]=(char *)"MySQL_Monitor_connect_check_ERR";
-			sprintf(buf,"%llu", GloMyMon->connect_check_ERR);
+			snprintf(buf, sizeof(buf), "%llu", GloMyMon->connect_check_ERR);
 			pta[1]=buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0]=(char *)"MySQL_Monitor_ping_check_OK";
-			sprintf(buf,"%llu", GloMyMon->ping_check_OK);
+			snprintf(buf, sizeof(buf), "%llu", GloMyMon->ping_check_OK);
 			pta[1]=buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0]=(char *)"MySQL_Monitor_ping_check_ERR";
-			sprintf(buf,"%llu", GloMyMon->ping_check_ERR);
+			snprintf(buf, sizeof(buf), "%llu", GloMyMon->ping_check_ERR);
 			pta[1]=buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0]=(char *)"MySQL_Monitor_read_only_check_OK";
-			sprintf(buf,"%llu", GloMyMon->read_only_check_OK);
+			snprintf(buf, sizeof(buf), "%llu", GloMyMon->read_only_check_OK);
 			pta[1]=buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0]=(char *)"MySQL_Monitor_read_only_check_ERR";
-			sprintf(buf,"%llu", GloMyMon->read_only_check_ERR);
+			snprintf(buf, sizeof(buf), "%llu", GloMyMon->read_only_check_ERR);
 			pta[1]=buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0]=(char *)"MySQL_Monitor_replication_lag_check_OK";
-			sprintf(buf,"%llu", GloMyMon->replication_lag_check_OK);
+			snprintf(buf, sizeof(buf), "%llu", GloMyMon->replication_lag_check_OK);
 			pta[1]=buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0]=(char *)"MySQL_Monitor_replication_lag_check_ERR";
-			sprintf(buf,"%llu", GloMyMon->replication_lag_check_ERR);
+			snprintf(buf, sizeof(buf), "%llu", GloMyMon->replication_lag_check_ERR);
 			pta[1]=buf;
 			result->add_row(pta);
 		}
@@ -6034,9 +6034,9 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist(processlist_config_t ar
 			if (sess->client_myds) {
 				char buf[1024];
 				char **pta=(char **)malloc(sizeof(char *)*colnum);
-				sprintf(buf,"%d", i);
+				snprintf(buf, sizeof(buf), "%d", i);
 				pta[0]=strdup(buf);
-				sprintf(buf,"%u", sess->thread_session_id);
+				snprintf(buf, sizeof(buf), "%u", sess->thread_session_id);
 				pta[1]=strdup(buf);
 				MySQL_Connection_userinfo *ui=sess->client_myds->myconn->userinfo;
 				pta[2]=NULL;
@@ -6057,26 +6057,26 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist(processlist_config_t ar
 						case AF_INET:
 							if (sess->client_myds->addr.addr != NULL) {
 								pta[4] = strdup(sess->client_myds->addr.addr);
-								sprintf(port, "%d", sess->client_myds->addr.port);
+								snprintf(port, sizeof(port), "%d", sess->client_myds->addr.port);
 								pta[5] = strdup(port);
 							} else {
 								struct sockaddr_in *ipv4 = (struct sockaddr_in *)sess->client_myds->client_addr;
 								inet_ntop(sess->client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
 								pta[4] = strdup(buf);
-								sprintf(port, "%d", ntohs(ipv4->sin_port));
+								snprintf(port, sizeof(port), "%d", ntohs(ipv4->sin_port));
 								pta[5] = strdup(port);
 							}
 							break;
 						case AF_INET6:
 							if (sess->client_myds->addr.addr != NULL) {
 								pta[4] = strdup(sess->client_myds->addr.addr);
-								sprintf(port, "%d", sess->client_myds->addr.port);
+								snprintf(port, sizeof(port), "%d", sess->client_myds->addr.port);
 								pta[5] = strdup(port);
 							} else {
 								struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)sess->client_myds->client_addr;
 								inet_ntop(sess->client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
 								pta[4] = strdup(buf);
-								sprintf(port, "%d", ntohs(ipv6->sin6_port));
+								snprintf(port, sizeof(port), "%d", ntohs(ipv6->sin6_port));
 								pta[5] = strdup(port);
 							}
 							break;
@@ -6089,7 +6089,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist(processlist_config_t ar
 					pta[4] = strdup("mirror_internal");
 					pta[5] = NULL;
 				}
-				sprintf(buf,"%d", sess->current_hostgroup);
+				snprintf(buf, sizeof(buf), "%d", sess->current_hostgroup);
 				pta[6]=strdup(buf);
 				if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) {
 					MySQL_Connection *mc=sess->mybe->server_myds->myconn;
@@ -6106,7 +6106,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist(processlist_config_t ar
 								struct sockaddr_in *ipv4 = (struct sockaddr_in *)&addr;
 								inet_ntop(addr.sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
 								pta[7] = strdup(buf);
-								sprintf(port, "%d", ntohs(ipv4->sin_port));
+								snprintf(port, sizeof(port), "%d", ntohs(ipv4->sin_port));
 								pta[8] = strdup(port);
 								break;
 								}
@@ -6114,7 +6114,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist(processlist_config_t ar
 								struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)&addr;
 								inet_ntop(addr.sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
 								pta[7] = strdup(buf);
-								sprintf(port, "%d", ntohs(ipv6->sin6_port));
+								snprintf(port, sizeof(port), "%d", ntohs(ipv6->sin6_port));
 								pta[8] = strdup(port);
 								break;
 								}
@@ -6128,12 +6128,12 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist(processlist_config_t ar
 						pta[8]=NULL;
 					}
 
-					sprintf(buf,"%s", mc->parent->address);
+					snprintf(buf, sizeof(buf), "%s", mc->parent->address);
 					pta[9]=strdup(buf);
-					sprintf(buf,"%d", mc->parent->port);
+					snprintf(buf, sizeof(buf), "%d", mc->parent->port);
 					pta[10]=strdup(buf);
 					pta[13] = sess->get_current_query(args.max_query_length);
-					sprintf(buf,"%d", mc->status_flags);
+					snprintf(buf, sizeof(buf), "%d", mc->status_flags);
 					pta[14]=strdup(buf);
 				} else {
 					pta[7]=NULL;
@@ -6209,7 +6209,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist(processlist_config_t ar
 							int idx = sess->changing_variable_idx;
 							if (idx < SQL_NAME_LAST_HIGH_WM) {
 								char buf[128];
-								sprintf(buf, "Setting variable %s", mysql_tracked_variables[idx].set_variable_name);
+								snprintf(buf, sizeof(buf), "Setting variable %s", mysql_tracked_variables[idx].set_variable_name);
 								pta[11]=strdup(buf);
 							} else {
 								pta[11]=strdup("Setting variable");
@@ -6223,7 +6223,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist(processlist_config_t ar
                                                 pta[11]=strdup("None");
                                                 break;
 					default:
-						sprintf(buf,"%d", sess->status);
+						snprintf(buf, sizeof(buf), "%d", sess->status);
 						pta[11]=strdup(buf);
 						break;
 				}
@@ -6235,10 +6235,10 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist(processlist_config_t ar
 					if (last_time>sess->thread->curtime) {
 						last_time=sess->thread->curtime;
 					}
-					sprintf(buf,"%llu", (sess->thread->curtime - last_time)/1000 );
+					snprintf(buf, sizeof(buf), "%llu", (sess->thread->curtime - last_time)/1000 );
 				} else {
 					// for mirror session we only consider the start time
-					sprintf(buf,"%llu", (sess->thread->curtime - sess->start_time)/1000 );
+					snprintf(buf, sizeof(buf), "%llu", (sess->thread->curtime - sess->start_time)/1000 );
 				}
 				pta[12]=strdup(buf);
 
