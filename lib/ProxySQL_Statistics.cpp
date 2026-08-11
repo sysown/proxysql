@@ -150,6 +150,11 @@ ProxySQL_Statistics::ProxySQL_Statistics() {
 	variables.tsdb_retention_days = 7;
 	variables.tsdb_monitor_enabled = 0;
 	variables.tsdb_monitor_interval = 10;
+	variables.tsdb_cluster_aggregation = 1;
+	variables.tsdb_cluster_interval = 10;
+	variables.tsdb_cluster_backfill_hours = 24;
+	variables.tsdb_cluster_retention_days = 3;
+	variables.tsdb_cluster_batch_rows = 10000;
 #endif
 }
 
@@ -164,6 +169,11 @@ static const struct {
     {"retention_days", 1, 3650},
     {"monitor_enabled", 0, 1},
     {"monitor_interval", 1, 3600},
+    {"cluster_aggregation", 0, 1},
+    {"cluster_interval", 5, 300},
+    {"cluster_backfill_hours", 0, 168},
+    {"cluster_retention_days", 1, 30},
+    {"cluster_batch_rows", 1000, 100000},
     {NULL, 0, 0}
 };
 
@@ -182,6 +192,11 @@ bool ProxySQL_Statistics::set_variable(const char *name, const char *value) {
 				else if (i == 2) variables.tsdb_retention_days = (int)intv;
 				else if (i == 3) variables.tsdb_monitor_enabled = (int)intv;
 				else if (i == 4) variables.tsdb_monitor_interval = (int)intv;
+				else if (i == 5) variables.tsdb_cluster_aggregation = (int)intv;
+				else if (i == 6) variables.tsdb_cluster_interval = (int)intv;
+				else if (i == 7) variables.tsdb_cluster_backfill_hours = (int)intv;
+				else if (i == 8) variables.tsdb_cluster_retention_days = (int)intv;
+				else if (i == 9) variables.tsdb_cluster_batch_rows = (int)intv;
 				return true;
 			}
 			return false;
@@ -207,6 +222,21 @@ char *ProxySQL_Statistics::get_variable(const char *name) {
 		return strdup(buf);
 	} else if (!strcasecmp(name, "monitor_interval")) {
 		snprintf(buf, sizeof(buf), "%d", variables.tsdb_monitor_interval);
+		return strdup(buf);
+	} else if (!strcasecmp(name, "cluster_aggregation")) {
+		snprintf(buf, sizeof(buf), "%d", variables.tsdb_cluster_aggregation);
+		return strdup(buf);
+	} else if (!strcasecmp(name, "cluster_interval")) {
+		snprintf(buf, sizeof(buf), "%d", variables.tsdb_cluster_interval);
+		return strdup(buf);
+	} else if (!strcasecmp(name, "cluster_backfill_hours")) {
+		snprintf(buf, sizeof(buf), "%d", variables.tsdb_cluster_backfill_hours);
+		return strdup(buf);
+	} else if (!strcasecmp(name, "cluster_retention_days")) {
+		snprintf(buf, sizeof(buf), "%d", variables.tsdb_cluster_retention_days);
+		return strdup(buf);
+	} else if (!strcasecmp(name, "cluster_batch_rows")) {
+		snprintf(buf, sizeof(buf), "%d", variables.tsdb_cluster_batch_rows);
 		return strdup(buf);
 	}
 	return NULL;
@@ -295,6 +325,7 @@ void ProxySQL_Statistics::init() {
 	insert_into_tables_defs(tables_defs_statsdb_disk,"tsdb_metrics", STATSDB_SQLITE_TABLE_TSDB_METRICS);
 	insert_into_tables_defs(tables_defs_statsdb_disk,"tsdb_metrics_hour", STATSDB_SQLITE_TABLE_TSDB_METRICS_HOUR);
 	insert_into_tables_defs(tables_defs_statsdb_disk,"tsdb_backend_health", STATSDB_SQLITE_TABLE_TSDB_BACKEND_HEALTH);
+	insert_into_tables_defs(tables_defs_statsdb_disk,"tsdb_metrics_cluster", STATSDB_SQLITE_TABLE_TSDB_METRICS_CLUSTER);
 #endif
 
 	disk_upgrade_mysql_connections();
@@ -325,6 +356,7 @@ void ProxySQL_Statistics::init() {
 	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_tsdb_metrics_hour_metric_bucket ON tsdb_metrics_hour(metric_name, bucket)");
 	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_tsdb_backend_health_time ON tsdb_backend_health(timestamp)");
 	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_tsdb_backend_health_host_time ON tsdb_backend_health(hostgroup, hostname, port, timestamp)");
+	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_tsdb_metrics_cluster_node_metric_time ON tsdb_metrics_cluster (node, metric_name, timestamp)");
 #endif
 }
 
@@ -1611,6 +1643,13 @@ void ProxySQL_Statistics::tsdb_retention_cleanup() {
     snprintf(delete_buf, sizeof(delete_buf),
         "DELETE FROM tsdb_backend_health WHERE timestamp < %ld",
         ts - 86400 * retention_days);
+    statsdb_disk->execute(delete_buf);
+
+    // Retention: delete cluster-aggregated data older than configured days
+    const int cluster_retention_days = std::max(1, variables.tsdb_cluster_retention_days);
+    snprintf(delete_buf, sizeof(delete_buf),
+        "DELETE FROM tsdb_metrics_cluster WHERE timestamp < %ld",
+        ts - 86400L * cluster_retention_days);
     statsdb_disk->execute(delete_buf);
 }
 

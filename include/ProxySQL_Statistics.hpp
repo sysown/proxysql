@@ -110,6 +110,10 @@
 // Backend health monitoring table
 #define STATSDB_SQLITE_TABLE_TSDB_BACKEND_HEALTH \
 "CREATE TABLE tsdb_backend_health (timestamp INT NOT NULL, hostgroup INT NOT NULL, hostname TEXT NOT NULL, port INT NOT NULL, probe_up INT NOT NULL, connect_ms INT, PRIMARY KEY (timestamp, hostgroup, hostname, port)) WITHOUT ROWID"
+
+// Cluster-aggregated metrics table (leader-collected, per-node)
+#define STATSDB_SQLITE_TABLE_TSDB_METRICS_CLUSTER \
+"CREATE TABLE tsdb_metrics_cluster (node VARCHAR NOT NULL , timestamp INTEGER NOT NULL , metric_name VARCHAR NOT NULL , labels VARCHAR NOT NULL DEFAULT '{}' , value REAL , PRIMARY KEY (node, timestamp, metric_name, labels)) WITHOUT ROWID"
 #endif
 
 class ProxySQL_Statistics {
@@ -162,6 +166,11 @@ class ProxySQL_Statistics {
 		int tsdb_retention_days;
 		int tsdb_monitor_enabled;
 		int tsdb_monitor_interval;
+		int tsdb_cluster_aggregation;
+		int tsdb_cluster_interval;
+		int tsdb_cluster_backfill_hours;
+		int tsdb_cluster_retention_days;
+		int tsdb_cluster_batch_rows;
 #endif
 	} variables;
 	ProxySQL_Statistics();
