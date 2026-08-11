@@ -229,6 +229,17 @@ class MySQL_Protocol {
 	bool PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_details_t& account_details);
 	bool PPHR_verify_password_2(MyProt_tmp_auth_vars& vars1, account_details_t& account_details);
 
+#ifdef PROXYSQL31
+	private:
+	/** @brief Retain the active RSA key pair for the caching SHA-2 full-auth challenge. */
+	void capture_caching_sha2_rsa_snapshot();
+	/** @brief Decrypt an RSA full-auth response using the retained challenge key pair. */
+	int PPHR_decrypt_caching_sha2_rsa_response(
+		unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1
+	);
+	public:
+#endif
+
 	/** @brief Queue a one-byte auth packet, leaving the queue and sequence unchanged on failure. */
 	bool generate_one_byte_pkt(unsigned char b);
 #ifdef PROXYSQL31
