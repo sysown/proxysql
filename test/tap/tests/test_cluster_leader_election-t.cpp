@@ -194,7 +194,7 @@ int main(int argc, char** argv) {
 		plan(1);
 		ok(1, "admin-cluster_leader_election not present (non-PROXYSQL31 build) - skipping");
 	} else {
-		plan(27);
+		plan(29);
 		string err;
 
 		// --- Convergence: all 3 nodes agree node1 (16062) is leader --- (3)
@@ -208,7 +208,7 @@ int main(int argc, char** argv) {
 		ok(query_ok(a1, Q_SAVE), "leader accepts SAVE TO DISK: %s", mysql_error(a1));
 		query_ok(a1, Q_DELETE); query_ok(a1, Q_LOAD); query_ok(a1, Q_SAVE); // cleanup
 
-		// --- Follower refuses writes --- (3 + 1)
+		// --- Follower refuses writes --- (3 + 1 + 2)
 		// NOTE: query_refused() mutates 'err', so it must be sequenced before
 		// err.c_str() (C++ leaves argument evaluation order unspecified; the
 		// one-liner form read a stale/freed buffer for the diag text).
@@ -219,6 +219,12 @@ int main(int argc, char** argv) {
 		ok(strstr(err.c_str(), "16062") != NULL, "refusal error names the leader: %s", err.c_str());
 		refused = query_refused(a2, Q_SAVE, err);
 		ok(refused, "follower refuses SAVE TO DISK (%s)", err.c_str());
+		// Abbreviated alias spellings must be refused too (Finding 1):
+		// "TO RUN" == "TO RUNTIME" and "FROM MEM" == "FROM MEMORY".
+		refused = query_refused(a2, "LOAD MYSQL SERVERS TO RUN", err);
+		ok(refused, "follower refuses LOAD ... TO RUN (%s)", err.c_str());
+		refused = query_refused(a2, "LOAD MYSQL SERVERS FROM MEM", err);
+		ok(refused, "follower refuses LOAD ... FROM MEM (%s)", err.c_str());
 
 		// --- FORCED_RW override is sticky across election ticks --- (6)
 		ok(query_ok(a2, "PROXYSQL READWRITE"), "PROXYSQL READWRITE accepted on follower");

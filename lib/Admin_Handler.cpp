@@ -1427,11 +1427,17 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			if (query_no_space_length > 11 && !strncasecmp(" TO RUNTIME", query_no_space+query_no_space_length-11, 11)) {
 				refuse = true; // LOAD ... TO RUNTIME
 			}
+			if (query_no_space_length > 7 && !strncasecmp(" TO RUN", query_no_space+query_no_space_length-7, 7)) {
+				refuse = true; // abbreviation: LOAD ... TO RUN == LOAD ... TO RUNTIME
+			}
 			if (query_no_space_length > 8 && is_save && !strncasecmp(" TO DISK", query_no_space+query_no_space_length-8, 8)) {
 				refuse = true; // SAVE ... TO DISK
 			}
 			if (query_no_space_length > 12 && (is_load || is_save) && !strncasecmp(" FROM MEMORY", query_no_space+query_no_space_length-12, 12)) {
 				refuse = true; // aliases: LOAD x FROM MEMORY == LOAD x TO RUNTIME ; SAVE x FROM MEMORY == SAVE x TO DISK
+			}
+			if (query_no_space_length > 9 && (is_load || is_save) && !strncasecmp(" FROM MEM", query_no_space+query_no_space_length-9, 9)) {
+				refuse = true; // abbreviation: LOAD x FROM MEM == LOAD x FROM MEMORY ; SAVE x FROM MEM == SAVE x FROM MEMORY
 			}
 			if (refuse) {
 				std::string l_host; int l_port = 0; std::string l_uuid;
