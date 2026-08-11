@@ -505,6 +505,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"passthrough_auth_failure_map_cap",
 	(char *)"kill_backend_connection_when_disconnect",
 	(char *)"client_session_track_gtid",
+	(char *)"update_gtid_from_ok",
 	(char *)"sessions_sort",
 #ifdef IDLE_THREADS
 	(char *)"session_idle_show_processlist",
@@ -1439,6 +1440,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.query_cache_stores_empty_result=true;
 	variables.kill_backend_connection_when_disconnect=true;
 	variables.client_session_track_gtid=true;
+	variables.update_gtid_from_ok=false;
 	variables.sessions_sort=true;
 #ifdef IDLE_THREADS
 	variables.session_idle_ms=1;
@@ -2645,6 +2647,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["autocommit_false_not_reusable"]   = make_tuple(&variables.autocommit_false_not_reusable,   false);
 		VariablesPointers_bool["automatic_detect_sqli"]           = make_tuple(&variables.automatic_detect_sqli,           false);
 		VariablesPointers_bool["client_session_track_gtid"]       = make_tuple(&variables.client_session_track_gtid,       false);
+		VariablesPointers_bool["update_gtid_from_ok"]             = make_tuple(&variables.update_gtid_from_ok,             false);
 		VariablesPointers_bool["commands_stats"]                  = make_tuple(&variables.commands_stats,                  false);
 		VariablesPointers_bool["connection_warming"]              = make_tuple(&variables.connection_warming,              false);
 		VariablesPointers_bool["default_reconnect"]               = make_tuple(&variables.default_reconnect,               false);
@@ -4930,6 +4933,7 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(hostgroup_manager_verbose);
 	REFRESH_VARIABLE_BOOL(kill_backend_connection_when_disconnect);
 	REFRESH_VARIABLE_BOOL(client_session_track_gtid);
+	REFRESH_VARIABLE_BOOL(update_gtid_from_ok);
 	REFRESH_VARIABLE_BOOL(sessions_sort);
 	REFRESH_VARIABLE_BOOL(servers_stats);
 	REFRESH_VARIABLE_BOOL(default_reconnect);

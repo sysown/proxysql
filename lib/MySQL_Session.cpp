@@ -5775,6 +5775,9 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA() {
  */
 void MySQL_Session::handler_rc0_Process_GTID(MySQL_Connection *myconn) {
 	if (myconn->get_gtid(mybe->gtid_uuid,&mybe->gtid_trxid)) {
+		if (mysql_thread___update_gtid_from_ok) {
+			MyHGM->update_gtid_from_ok(myconn->parent, mybe->gtid_uuid);
+		}
 		if (mysql_thread___client_session_track_gtid) {
 			gtid_hid = current_hostgroup;
 			memcpy(gtid_buf,mybe->gtid_uuid,sizeof(gtid_buf));

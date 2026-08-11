@@ -1706,6 +1706,24 @@ bool MySQL_HostGroups_Manager::gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uin
 	return ret;
 }
 
+bool MySQL_HostGroups_Manager::update_gtid_from_ok(MySrvC* mysrvc, const char* gtid) {
+	if (mysrvc == nullptr || gtid == nullptr) {
+		return false;
+	}
+
+	std::string endpoint(mysrvc->address);
+	endpoint.append(":");
+	endpoint.append(std::to_string(mysrvc->port));
+
+	pthread_rwlock_rdlock(&gtid_rwlock);
+	auto it = gtid_map.find(endpoint);
+	bool updated = it != gtid_map.end() && it->second != nullptr
+		? it->second->add_gtid_from_ok(gtid)
+		: false;
+	pthread_rwlock_unlock(&gtid_rwlock);
+	return updated;
+}
+
 /**
  * @brief Generates and manages GTID connection tables for all MySQL servers
  *
@@ -1759,28 +1777,26 @@ void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
 				it = gtid_map.find(srv);
 				if (it != gtid_map.end()) {
 					gtid_sd = it->second;
-					stale_server.erase(srv);
+				}
+				stale_server.erase(srv);
+
+				if (!gtid_sd) {
+					gtid_sd = new GTID_Server_Data(nullptr, mysrvc->address, mysrvc->gtid_port, mysrvc->port);
+					gtid_sd->active = false;
+					gtid_map.emplace(srv, gtid_sd);
 				}
 
-				if (gtid_sd && gtid_sd->active) {
-					continue;
-				}
-
-				if (mysrvc->get_status() != MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+				if (!gtid_sd->active && mysrvc->get_status() != MYSQL_SERVER_STATUS_OFFLINE_HARD) {
 					// a new server with gtid port
 					// OR an existing server, but we lost connection with binlog_reader
 					struct ev_io *cw = new_connect_watcher(mysrvc->address, mysrvc->gtid_port, mysrvc->port);
 					if (cw) {
-						if (!gtid_sd) {
-							gtid_sd = new GTID_Server_Data(cw, mysrvc->address, mysrvc->gtid_port, mysrvc->port);
-							cw->data = (void *)gtid_sd;
-							gtid_map.emplace(srv, gtid_sd);
-						} else {
-							gtid_sd->w = cw;
-							gtid_sd->active = true;
-							cw->data = (void *)gtid_sd;
-						}
+						gtid_sd->w = cw;
+						gtid_sd->active = true;
+						cw->data = static_cast<void *>(gtid_sd);
 						ev_io_start(MyHGM->gtid_ev_loop, cw);
+					} else {
+						gtid_missing_nodes = true;
 					}
 				}
 			}
