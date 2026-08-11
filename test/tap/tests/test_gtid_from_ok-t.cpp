@@ -4,11 +4,11 @@
  *        hostgroup copies of an endpoint, including an inactive GTID reader.
  */
 
-#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <map>
 #include <string>
 #include <thread>
@@ -226,14 +226,18 @@ struct TestConnections {
 	MYSQL* untracked = nullptr;
 	MYSQL* tracked = nullptr;
 
-	void close_all() {
-		const std::array<MYSQL**, 4> connection_ptrs { &direct, &first, &untracked, &tracked };
-		for (MYSQL** connection : connection_ptrs) {
-			if (*connection != nullptr) {
-				mysql_close(*connection);
-				*connection = nullptr;
-			}
+	static void close_connection(MYSQL*& connection) {
+		if (connection != nullptr) {
+			mysql_close(connection);
+			connection = nullptr;
 		}
+	}
+
+	void close_all() {
+		close_connection(direct);
+		close_connection(first);
+		close_connection(untracked);
+		close_connection(tracked);
 	}
 };
 
@@ -245,9 +249,17 @@ public:
 	CleanupGuard(const CleanupGuard&) = delete;
 	CleanupGuard& operator=(const CleanupGuard&) = delete;
 
-	~CleanupGuard() {
+	~CleanupGuard() noexcept {
 		if (!cleaned_up_) {
-			cleanup();
+			try {
+				cleanup();
+			} catch (const std::exception& error) {
+				diag("Cleanup failed with exception: %s", error.what());
+				cleanup_ok_ = false;
+			} catch (...) {
+				diag("Cleanup failed with an unknown exception");
+				cleanup_ok_ = false;
+			}
 		}
 	}
 
