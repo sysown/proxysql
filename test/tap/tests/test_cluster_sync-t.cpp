@@ -1302,6 +1302,19 @@ int main(int, char**) {
 
 		diag("Launching replica ProxySQL via fork/exec with command: `%s`", proxy_command.c_str());
 
+		// Remove any stale config DB left by a previous aborted run. If 'proxysql.db'
+		// exists, the replica ignores 'test_cluster_sync.cnf' entirely (config DB has
+		// higher precedence), so it starts with whatever 'proxysql_servers' the aborted
+		// run last saved (typically empty) and never joins the cluster: every sync
+		// assertion then times out. Cleanup at the end of this thread only runs on
+		// clean exits, so it cannot be relied upon here.
+		if (remove(proxysql_db.c_str()) == 0) {
+			diag("Removed stale replica config DB from previous aborted run: '%s'", proxysql_db.c_str());
+		}
+		if (remove(stats_db.c_str()) == 0) {
+			diag("Removed stale replica stats DB from previous aborted run: '%s'", stats_db.c_str());
+		}
+
 		pid_t pid = fork();
 		if (pid == 0) {
 			execl("/bin/sh", "sh", "-c", proxy_command.c_str(), nullptr);
