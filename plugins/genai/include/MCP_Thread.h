@@ -270,7 +270,9 @@ public:
 	 *
 	 * @param name The name of the variable (without 'mcp-' prefix)
 	 * @param val Output buffer to store the value
-	 * @return 0 on success, -1 if variable not found
+	 * @param val_size Size of the output buffer in bytes
+	 * @return 0 on success, -1 if the variable is unknown, the arguments are
+	 *   null/invalid, or the value does not fit in `val_size` bytes
 	 *
 	 * @deprecated The unbounded sprintf into `val` is a stack-buffer
 	 *   overflow risk for variables that hold arbitrary-length values
@@ -278,7 +280,7 @@ public:
 	 *   operators).  Prefer `get_variable_string()` below.  Retained
 	 *   for callers that haven't been updated yet.
 	 */
-	int get_variable(const char* name, char* val);
+	int get_variable(const char* name, char* val, size_t val_size);
 
 	/**
 	 * @brief Get the value of a variable as a std::string.

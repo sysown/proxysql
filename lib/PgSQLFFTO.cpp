@@ -15,6 +15,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <string_view>
 
 extern class PgSQL_Query_Processor* GloPgQPro;
 extern PgSQL_HostGroups_Manager* PgHGM;
@@ -64,6 +65,14 @@ static uint64_t extract_pg_rows_affected(const unsigned char* payload, size_t le
         return 0;
     }
     return rows;
+}
+
+static size_t bounded_cstr_len(const char* s, size_t max_len) {
+    if (s == nullptr || max_len == 0) {
+        return 0;
+    }
+    const void* null_pos = memchr(s, '\0', max_len);
+    return null_pos ? static_cast<const char *>(null_pos) - s : max_len;
 }
 
 PgSQLFFTO::PgSQLFFTO(PgSQL_Session* session)
@@ -209,27 +218,27 @@ void PgSQLFFTO::process_client_message(char type, const unsigned char* payload, 
         track_query(std::string(reinterpret_cast<const char*>(payload), query_len), true);
     } else if (type == 'P') {
         const char* p = reinterpret_cast<const char*>(payload);
-        size_t name_len = strnlen(p, len);
+        size_t name_len = bounded_cstr_len(p, len);
         if (name_len >= len) return; // No null terminator
         std::string stmt_name(p, name_len);
         const char* query_ptr = p + name_len + 1;
         size_t rem = len - (name_len + 1);
-        size_t query_text_len = strnlen(query_ptr, rem);
+        size_t query_text_len = bounded_cstr_len(query_ptr, rem);
         if (query_text_len >= rem) return;
         m_statements[stmt_name] = std::string(query_ptr, query_text_len);
     } else if (type == 'B') {
         const char* p = reinterpret_cast<const char*>(payload);
-        size_t portal_len = strnlen(p, len);
+        size_t portal_len = bounded_cstr_len(p, len);
         if (portal_len >= len) return;
         std::string portal_name(p, portal_len);
         const char* stmt_ptr = p + portal_len + 1;
         size_t rem = len - (portal_len + 1);
-        size_t stmt_name_len = strnlen(stmt_ptr, rem);
+        size_t stmt_name_len = bounded_cstr_len(stmt_ptr, rem);
         if (stmt_name_len >= rem) return;
         m_portals[portal_name] = std::string(stmt_ptr, stmt_name_len);
     } else if (type == 'E') {
         const char* p = reinterpret_cast<const char*>(payload);
-        size_t portal_len = strnlen(p, len);
+        size_t portal_len = bounded_cstr_len(p, len);
         if (portal_len >= len) return;
         if (len < portal_len + 1 + 4) return; // portal name + '\0' + max-rows
         std::string portal_name(p, portal_len);
@@ -244,7 +253,7 @@ void PgSQLFFTO::process_client_message(char type, const unsigned char* payload, 
         if (len < 2) return;
         char close_type = static_cast<char>(payload[0]);
         const char* name_ptr = reinterpret_cast<const char*>(payload) + 1;
-        size_t name_len = strnlen(name_ptr, len - 1);
+        size_t name_len = bounded_cstr_len(name_ptr, len - 1);
         if (name_len >= len - 1) return;
         std::string name(name_ptr, name_len);
         if (close_type == 'S') m_statements.erase(name);
@@ -346,16 +355,22 @@ void PgSQLFFTO::report_query_stats(const std::string& query, unsigned long long 
         ((query.length() < QUERY_DIGEST_BUF) ? qp.buf : NULL), &opts);
     if (digest_text) {
         qp.digest_text = digest_text;
-        const int digest_len = strnlen(digest_text, pgsql_thread___query_digests_max_digest_length);
+		const int digest_len = static_cast<int>(strnlen(digest_text, pgsql_thread___query_digests_max_digest_length));
         qp.digest = SpookyHash::Hash64(digest_text, digest_len, 0);
         char* ca = (char*)"";
         if (pgsql_thread___query_digests_track_hostname && m_session->client_myds->addr.addr) ca = m_session->client_myds->addr.addr;
         uint64_t hash2; SpookyHash myhash; myhash.Init(19, 3);
-        myhash.Update(ui->username, strlen(ui->username));
+        const std::string_view username_view = ui->username ? std::string_view{ui->username} : std::string_view{};
+        const size_t username_len = username_view.size();
+        myhash.Update(username_view.data(), username_len);
         myhash.Update(&qp.digest, sizeof(qp.digest));
-        myhash.Update(schemaname, strlen(schemaname));
+        const std::string_view schemaname_view = schemaname ? std::string_view{schemaname} : std::string_view{};
+        const size_t schemaname_len = schemaname_view.size();
+        myhash.Update(schemaname_view.data(), schemaname_len);
         myhash.Update(&m_session->current_hostgroup, sizeof(m_session->current_hostgroup));
-        myhash.Update(ca, strlen(ca));
+        const std::string_view ca_view = ca ? std::string_view{ca} : std::string_view{};
+        const size_t ca_len = ca_view.size();
+        myhash.Update(ca_view.data(), ca_len);
         myhash.Final(&qp.digest_total, &hash2);
         GloPgQPro->update_query_digest(qp.digest_total, qp.digest, qp.digest_text, m_session->current_hostgroup, ui, duration_us, m_session->thread->curtime, ca, affected_rows, rows_sent);
         if (digest_text != qp.buf) free(digest_text);

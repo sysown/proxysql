@@ -7,6 +7,7 @@
 #include <memory>
 #include <vector>       // std::vector
 #include <unordered_set>
+#include <cstring>
 
 #include "MySQL_Query_Processor.h"
 #include "PgSQL_Query_Processor.h"
@@ -330,12 +331,14 @@ unsigned int ProxySQL_Admin::ProxySQL_Test___GenerateRandom_mysql_query_rules_fa
 	char * schemaname_buf = (char *)malloc(256);
 	//ui.username = username_buf;
 	//ui.schemaname = schemaname_buf;
+	static const char user_name_prefix[] = "user_name_";
+	static const char schema_name_prefix[] = "shard_name_";
 	if (empty==false) {
-		strcpy(username_buf,"user_name_");
+		memcpy(username_buf, user_name_prefix, sizeof(user_name_prefix));
 	} else {
-		strcpy(username_buf,"");
+		*username_buf = '\0';
 	}
-	strcpy(schemaname_buf,"shard_name_");
+	memcpy(schemaname_buf, schema_name_prefix, sizeof(schema_name_prefix));
 	int _k;
 	for (unsigned int i=0; i<cnt; i++) {
 		_k = fastrand()%117 + 1;

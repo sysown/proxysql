@@ -129,8 +129,9 @@ PgSQL_Errors_stats::PgSQL_Errors_stats(int _hostgroup, const char* _hostname, in
 		dbname = strdup((char*)"");
 	}
 	if (_sqlstate) {
-		strncpy(sqlstate, _sqlstate, 5);
-		sqlstate[5] = '\0';
+		size_t sqlstate_len = strnlen(_sqlstate, 5);
+		memcpy(sqlstate, _sqlstate, sqlstate_len);
+		sqlstate[sqlstate_len] = '\0';
 	} else {
 		sqlstate[0] = '\0';
 	}
