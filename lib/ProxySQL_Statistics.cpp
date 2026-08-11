@@ -5,6 +5,10 @@
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_HostGroups_Manager.h"
 #include "PgSQL_HostGroups_Manager.h"
+#ifdef PROXYSQLTSDB
+#include "TSDB_Cluster_Aggregator.h"
+#include "ProxySQL_Cluster.hpp"
+#endif
 
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
@@ -264,8 +268,16 @@ bool ProxySQL_Statistics::has_variable(const char *name) {
 
 ProxySQL_Statistics::~ProxySQL_Statistics() {
 #ifdef PROXYSQLTSDB
+	if (tsdb_agg_thread_started) {
+		tsdb_agg_stop.store(true);
+		pthread_join(tsdb_agg_thread, NULL);
+		tsdb_agg_thread_started = false;
+	}
 	if (stmt_insert_tsdb_metric) {
 		(*proxy_sqlite3_finalize)(stmt_insert_tsdb_metric);
+	}
+	if (stmt_insert_tsdb_cluster_metric) {
+		(*proxy_sqlite3_finalize)(stmt_insert_tsdb_cluster_metric);
 	}
 	if (stmt_insert_backend_health) {
 		(*proxy_sqlite3_finalize)(stmt_insert_backend_health);
@@ -2045,6 +2057,211 @@ void ProxySQL_Statistics::tsdb_monitor_loop() {
 		}
 		statsdb_disk->execute("COMMIT");
 	}
+}
+
+// TSDB Cluster Aggregation
+// The leader periodically pulls each cluster peer's own tsdb_metrics (pull +
+// per-node watermark) into the local tsdb_metrics_cluster table, so that the
+// cluster's TSDB dashboard can be served from a single node. See
+// TSDB_Cluster_Aggregator.h for the pure watermark/fetch planning logic.
+
+extern ProxySQL_Cluster* GloProxyCluster;
+
+static void * tsdb_cluster_agg_thread_fn(void *arg) {
+	set_thread_name("TSDBClusterAgg");
+	((ProxySQL_Statistics *)arg)->tsdb_cluster_aggregation_thread_loop();
+	return NULL;
+}
+
+void ProxySQL_Statistics::tsdb_cluster_aggregation_check(unsigned long long curtime) {
+	if (curtime < next_timer_tsdb_cluster_check) return;
+	next_timer_tsdb_cluster_check = curtime + 1000000ULL; // evaluate at most every 1s
+	bool desired = false;
+	if (variables.tsdb_enabled && variables.tsdb_cluster_aggregation) {
+		if (GloProxyCluster && GloProxyCluster->is_leader()) {
+			desired = true;
+		}
+	}
+	if (desired == true && tsdb_agg_thread_started == false) {
+		tsdb_agg_stop.store(false);
+		if (pthread_create(&tsdb_agg_thread, NULL, tsdb_cluster_agg_thread_fn, this) == 0) {
+			tsdb_agg_thread_started = true;
+			tsdb_agg_active.store(true);
+			proxy_info("TSDB cluster aggregation: started (this node is the cluster leader)\n");
+		} else {
+			proxy_error("TSDB cluster aggregation: failed to create worker thread\n");
+		}
+	} else if (desired == false && tsdb_agg_thread_started == true) {
+		tsdb_agg_stop.store(true);
+		pthread_join(tsdb_agg_thread, NULL);
+		tsdb_agg_thread_started = false;
+		tsdb_agg_active.store(false);
+		proxy_info("TSDB cluster aggregation: stopped\n");
+	}
+}
+
+void ProxySQL_Statistics::tsdb_cluster_aggregation_thread_loop() {
+	while (tsdb_agg_stop.load() == false) {
+		tsdb_cluster_aggregation_cycle();
+		tsdb_agg_last_cycle_ts.store((long long)time(NULL));
+		int sleep_s = variables.tsdb_cluster_interval;
+		if (sleep_s < 5) sleep_s = 5;
+		for (int i = 0; i < sleep_s * 10 && tsdb_agg_stop.load() == false; i++) {
+			usleep(100000);
+		}
+	}
+}
+
+void ProxySQL_Statistics::tsdb_cluster_aggregation_cycle() {
+	if (GloProxyCluster == NULL) return;
+	if (GloProxyCluster->is_leader() == false) return; // deposed between checks
+	std::string self_host; int self_port = 0; std::string self_uuid;
+	GloProxyCluster->get_leader_info(self_host, self_port, self_uuid);
+	if (self_host.length() == 0) return;
+	std::string self_node = self_host + ":" + std::to_string(self_port);
+	cluster_creds_t creds = GloProxyCluster->get_credentials();
+	SQLite3_result *servers = GloProxyCluster->dump_table_proxysql_servers();
+	if (servers == NULL) return;
+	long now = (long)time(NULL);
+	int limit = variables.tsdb_cluster_batch_rows;
+	if (limit < 1000) limit = 1000;
+	bool cap_hit = false;
+	for (std::vector<SQLite3_row *>::iterator it = servers->rows.begin(); it != servers->rows.end(); ++it) {
+		if (tsdb_agg_stop.load()) break;
+		SQLite3_row *r = *it;
+		std::string node = std::string(r->fields[0]) + ":" + std::string(r->fields[1]);
+		long wm = tsdb_agg_effective_watermark(tsdb_cluster_node_max_ts(node), now, variables.tsdb_cluster_backfill_hours);
+		if (node == self_node) {
+			tsdb_cluster_replicate_self(node, wm, limit);
+		} else {
+			if (creds.user.length() == 0) continue; // clustering unconfigured
+			bool hit = tsdb_cluster_replicate_peer(r->fields[0], atoi(r->fields[1]), node, wm, limit, creds.user, creds.pass);
+			if (hit) cap_hit = true;
+		}
+	}
+	tsdb_agg_cap_hit_last_cycle.store(cap_hit);
+	delete servers;
+}
+
+long ProxySQL_Statistics::tsdb_cluster_node_max_ts(const std::string& node) {
+	char *error = NULL; int cols = 0; int affected_rows = 0;
+	SQLite3_result *res = NULL;
+	std::string q = "SELECT COALESCE(MAX(timestamp),0) FROM tsdb_metrics_cluster WHERE node='" + escape_sql_string_literal(node) + "'";
+	statsdb_disk->execute_statement(q.c_str(), &error, &cols, &affected_rows, &res);
+	long max_ts = 0;
+	if (error == NULL && res != NULL && res->rows_count > 0) {
+		max_ts = atol(res->rows[0]->fields[0]);
+	}
+	if (error) free(error);
+	if (res) delete res;
+	return max_ts;
+}
+
+void ProxySQL_Statistics::tsdb_cluster_replicate_self(const std::string& node, long watermark, int limit) {
+	char buf[512];
+	std::string esc_node = escape_sql_string_literal(node);
+	snprintf(buf, sizeof(buf),
+		"INSERT OR IGNORE INTO tsdb_metrics_cluster (node, timestamp, metric_name, labels, value) "
+		"SELECT '%s', timestamp, metric_name, labels, value FROM tsdb_metrics "
+		"WHERE timestamp > %ld ORDER BY timestamp LIMIT %d",
+		esc_node.c_str(), watermark, limit);
+	statsdb_disk->execute(buf);
+}
+
+bool ProxySQL_Statistics::tsdb_cluster_replicate_peer(const std::string& host, int port, const std::string& node, long watermark, int limit, const std::string& user, const std::string& pass) {
+	MYSQL *conn = mysql_init(NULL);
+	if (conn == NULL) return false;
+	// Same options as the cluster monitor threads (lib/ProxySQL_Cluster.cpp:207-217)
+	unsigned int timeout = 1;
+	mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
+	{
+		unsigned char val = 1;
+		mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val);
+		mysql_options(conn, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void *)proxysql_keylog_write_line_callback);
+	}
+	if (mysql_real_connect(conn, host.c_str(), user.c_str(), pass.c_str(), NULL, port, NULL, 0) == NULL) {
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "TSDB cluster aggregation: cannot connect to %s : %s\n", node.c_str(), mysql_error(conn));
+		mysql_close(conn);
+		return false;
+	}
+
+	// Peer is reachable: track per-peer watermark progress for stall visibility.
+	// Worker-thread-only maps, no locking needed.
+	std::map<std::string, long>::iterator wm_it = tsdb_agg_peer_last_wm.find(node);
+	if (wm_it != tsdb_agg_peer_last_wm.end() && wm_it->second == watermark) {
+		int stalled = ++tsdb_agg_peer_stall_count[node];
+		if (stalled >= 10 && tsdb_agg_peer_stall_logged[node] == false) {
+			proxy_info("TSDB cluster aggregation: no new samples from %s — peer TSDB likely disabled\n", node.c_str());
+			tsdb_agg_peer_stall_logged[node] = true;
+		}
+	} else {
+		tsdb_agg_peer_last_wm[node] = watermark;
+		tsdb_agg_peer_stall_count[node] = 0;
+		tsdb_agg_peer_stall_logged[node] = false;
+	}
+
+	char q[512];
+	snprintf(q, sizeof(q),
+		"SELECT timestamp, metric_name, labels, value FROM stats_history.tsdb_metrics "
+		"WHERE timestamp > %ld ORDER BY timestamp LIMIT %d",
+		watermark, limit);
+	bool cap_hit = false;
+	if (mysql_query(conn, q) == 0) {
+		MYSQL_RES *res = mysql_store_result(conn);
+		if (res) {
+			int rc = 0;
+			if (stmt_insert_tsdb_cluster_metric == NULL) {
+				sqlite3 *mydb3 = statsdb_disk->get_db();
+				const char *query = "INSERT OR IGNORE INTO tsdb_metrics_cluster (node, timestamp, metric_name, labels, value) VALUES (?1, ?2, ?3, ?4, ?5)";
+				rc = (*proxy_sqlite3_prepare_v2)(mydb3, query, -1, &stmt_insert_tsdb_cluster_metric, 0);
+				if (rc != SQLITE_OK) {
+					proxy_error("Failed to prepare statement: %s\n", (*proxy_sqlite3_errmsg)(mydb3));
+					mysql_free_result(res);
+					mysql_close(conn);
+					return false;
+				}
+			}
+			int rows = 0;
+			long last_row_ts = watermark;
+			statsdb_disk->execute("BEGIN");
+			MYSQL_ROW row;
+			while ((row = mysql_fetch_row(res))) {
+				rc = (*proxy_sqlite3_bind_text)(stmt_insert_tsdb_cluster_metric, 1, node.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb_disk);
+				rc = (*proxy_sqlite3_bind_int64)(stmt_insert_tsdb_cluster_metric, 2, atoll(row[0])); ASSERT_SQLITE_OK(rc, statsdb_disk);
+				rc = (*proxy_sqlite3_bind_text)(stmt_insert_tsdb_cluster_metric, 3, row[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb_disk);
+				rc = (*proxy_sqlite3_bind_text)(stmt_insert_tsdb_cluster_metric, 4, (row[2] ? row[2] : "{}"), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb_disk);
+				rc = (*proxy_sqlite3_bind_double)(stmt_insert_tsdb_cluster_metric, 5, (row[3] ? atof(row[3]) : 0.0)); ASSERT_SQLITE_OK(rc, statsdb_disk);
+				SAFE_SQLITE3_STEP2(stmt_insert_tsdb_cluster_metric);
+				rc = (*proxy_sqlite3_clear_bindings)(stmt_insert_tsdb_cluster_metric); ASSERT_SQLITE_OK(rc, statsdb_disk);
+				rc = (*proxy_sqlite3_reset)(stmt_insert_tsdb_cluster_metric); ASSERT_SQLITE_OK(rc, statsdb_disk);
+				last_row_ts = atol(row[0]);
+				rows++;
+			}
+			statsdb_disk->execute("COMMIT");
+			tsdb_agg_rows_total.fetch_add(rows);
+			Tsdb_Agg_Fetch_Result fr = tsdb_agg_apply_fetch(watermark, rows, last_row_ts, limit);
+			cap_hit = (fr.caught_up == false);
+			// fr.new_watermark is informational here: the watermark is re-derived
+			// from MAX(timestamp) in the table each cycle (restart-safe by design).
+			mysql_free_result(res);
+		}
+	} else {
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "TSDB cluster aggregation: query failed on %s : %s\n", node.c_str(), mysql_error(conn));
+	}
+	mysql_close(conn);
+
+	// Falling-behind visibility: warn once per episode when the peer keeps
+	// hitting the per-cycle row cap for 3+ consecutive cycles.
+	if (cap_hit) {
+		int hits = ++tsdb_agg_peer_cap_hit_count[node];
+		if (hits == 3) {
+			proxy_warning("TSDB cluster aggregation: peer %s is falling behind - hit the per-cycle row cap (%d rows) for %d consecutive cycles\n", node.c_str(), limit, hits);
+		}
+	} else {
+		tsdb_agg_peer_cap_hit_count[node] = 0;
+	}
+
+	return cap_hit;
 }
 
 #endif
