@@ -3264,7 +3264,7 @@ void MySQL_Connection::set_ssl_params(MYSQL *mysql, MySQLServers_SslParams *ssl_
 
 void MySQL_Connection::get_mysql_info_json(json& j) {
 	char buff[32];
-	snprintf(buff, sizeof(buff), "%p",mysql);
+	snprintf(buff, sizeof(buff), "%p", static_cast<void*>(mysql));
 	j["address"] = buff;
 	j["host"] = ( mysql->host ? mysql->host : "" );
 	j["host_info"] = ( mysql->host_info ? mysql->host_info : "" );
@@ -3295,7 +3295,7 @@ void MySQL_Connection::get_backend_conn_info_json(json& j) {
 		variables[*it_c].fill_server_internal_session(j, *it_c);
 	}
 	char buff[32];
-	snprintf(buff, sizeof(buff), "%p", this);
+	snprintf(buff, sizeof(buff), "%p", static_cast<void*>(this));
 	j["address"] = buff;
 	j["auto_increment_delay_token"] = auto_increment_delay_token;
 	j["bytes_recv"] = bytes_info.bytes_recv;
