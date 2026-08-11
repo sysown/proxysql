@@ -85,4 +85,13 @@ credential if that was the intent.
   a stored-`$ED$` user cannot be verified on that connection — the
   MySQL protocol allows a single auth switch. Standard MariaDB clients
   do not hit this.
+- A `$ED$` public key stored as the *additional* password (the
+  `additional_password` attribute) while the primary credential is an
+  ordinary password requires the client to explicitly request
+  `client_ed25519` (e.g. `--default-auth=client_ed25519`). ProxySQL
+  decides the auth switch from the primary credential and the client's
+  requested plugin; it deliberately does not force every client of such
+  an account through ed25519, because that would break clients without
+  the `client_ed25519` plugin whose primary credential is perfectly
+  valid.
 - MariaDB PARSEC (11.6+) is not supported.

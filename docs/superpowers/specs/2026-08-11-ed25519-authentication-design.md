@@ -98,7 +98,7 @@ native, `$A$0…` length 70 → caching_sha2):
   20+1-byte scramble while ed25519 signs a 32-byte challenge. MariaDB itself
   always routes ed25519 through an Auth Switch. Flow:
 
-  ```
+  ```text
   greeting (native|sha2) → HandshakeResponse
     → AuthSwitchRequest "client_ed25519" + 32-byte scramble
     → 64-byte signature → OK / ERR

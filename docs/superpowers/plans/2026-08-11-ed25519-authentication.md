@@ -2,6 +2,12 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Historical artifact.** This plan reflects plan-time expectations; review-driven
+> fix rounds amended the implementation afterwards (e.g. the unit test grew from 19
+> to a larger assertion count, the e2e test from 10, and the nonce moved to a
+> dedicated `ed25519_nonce` member). The shipped code and tests are authoritative;
+> embedded expected outputs here are not updated retroactively.
+
 **Goal:** Support MariaDB's ed25519 authentication (`client_ed25519`) for frontend client connections (v3.1+ tier) and backend connections (all tiers, via the connector), per the approved spec `docs/superpowers/specs/2026-08-11-ed25519-authentication-design.md`.
 
 **Architecture:** The vendored MariaDB Connector/C's `client_ed25519` plugin is flipped from DYNAMIC to STATIC, which (a) gives backend connections ed25519 transparently and (b) puts the ref10 crypto symbols (`crypto_sign_keypair`, `crypto_sign_open`) into `libmariadbclient.a` where a thin new wrapper (`lib/MySQL_Ed25519.cpp`) calls them. Frontend auth always runs through an Auth Switch carrying a fresh 32-byte nonce; the client answers with a 64-byte signature verified against a stored `$ED$<base64>` public key or a key derived from a stored cleartext password.
@@ -494,7 +500,7 @@ example, independently confirming scheme compatibility."
 
 **Flow being implemented** (mirrors how MariaDB itself works — ed25519 is never advertised in the greeting; it always runs through an Auth Switch):
 
-```
+```text
 client HandshakeResponse (any plugin)
   → PPHR_verify_password stage 0: stored "$ED$" OR client asked client_ed25519
   → PPHR_ed25519_switch(): 32-byte RAND_bytes nonce into scramble_buff,
