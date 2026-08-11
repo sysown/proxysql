@@ -256,18 +256,20 @@ static void test_auth_more_data_packet() {
 }
 
 static void test_caching_sha2_stage5_payload_validation() {
-	auto run_stage5 = [](
+	auto run_caching_sha2_response = [](
+		unsigned int switching_auth_stage,
 		bool encrypted,
 		unsigned char *payload,
 		size_t payload_length,
 		std::string* recovered = nullptr,
-		bool* pass_is_sensitive = nullptr
+		bool* pass_is_sensitive = nullptr,
+		MySQLFrontendAuthError* auth_error = nullptr
 	) {
 		MySQL_Data_Stream stream;
 		stream.myds_type = MYDS_FRONTEND;
 		stream.myconn = new MySQL_Connection();
 		stream.myconn->userinfo->username = strdup("rsa-stage5-user");
-		stream.switching_auth_stage = 5;
+		stream.switching_auth_stage = switching_auth_stage;
 		stream.switching_auth_type = AUTH_MYSQL_CACHING_SHA2_PASSWORD;
 		stream.encrypted = encrypted;
 		MySQL_Data_Stream *stream_pointer = &stream;
@@ -285,6 +287,9 @@ static void test_caching_sha2_stage5_payload_validation() {
 		if (pass_is_sensitive != nullptr) {
 			*pass_is_sensitive = vars.pass_is_sensitive;
 		}
+		if (auth_error != nullptr) {
+			*auth_error = protocol.consume_frontend_auth_error();
+		}
 		if (vars.pass != nullptr) {
 			OPENSSL_cleanse(vars.pass, vars.pass_len + 1);
 		}
@@ -293,20 +298,28 @@ static void test_caching_sha2_stage5_payload_validation() {
 	};
 
 	unsigned char raw_cleartext[] = { 's', 'e', 'c', 'r', 'e', 't', '\0' };
-	ok(run_stage5(false, raw_cleartext, sizeof(raw_cleartext)) == 1,
+	ok(run_caching_sha2_response(5, false, raw_cleartext, sizeof(raw_cleartext)) == 1,
 		"non-TLS caching_sha2 stage 5 rejects raw cleartext instead of bypassing RSA");
+
+	MySQLFrontendAuthError missing_stage6_key_error = MySQLFrontendAuthError::NONE;
+	unsigned char stage6_ciphertext[] = { 0x01 };
+	ok(run_caching_sha2_response(
+		6, false, stage6_ciphertext, sizeof(stage6_ciphertext), nullptr, nullptr,
+		&missing_stage6_key_error
+	) == 1 && missing_stage6_key_error == MySQLFrontendAuthError::CACHING_SHA2_RSA_UNAVAILABLE,
+		"caching_sha2 stage 6 reports RSA unavailability when its retained key is missing");
 
 	// A NUL exists just beyond the declared payload. An unbounded strlen()
 	// incorrectly accepts this packet by reading outside its protocol length.
 	unsigned char unterminated_storage[] = { 'n', 'o', '\0' };
-	ok(run_stage5(true, unterminated_storage, 2) == 1,
+	ok(run_caching_sha2_response(5, true, unterminated_storage, 2) == 1,
 		"caching_sha2 stage 5 rejects a payload without an in-bounds trailing NUL");
 
 	unsigned char tls_cleartext[] = { 's', 'e', 'c', 'r', 'e', 't', '\0' };
 	std::string recovered;
 	bool pass_is_sensitive = false;
-	ok(run_stage5(
-		true, tls_cleartext, sizeof(tls_cleartext), &recovered, &pass_is_sensitive
+	ok(run_caching_sha2_response(
+		5, true, tls_cleartext, sizeof(tls_cleartext), &recovered, &pass_is_sensitive
 	) == 2 && recovered == "secret",
 		"TLS caching_sha2 stage 5 accepts exactly one trailing-NUL cleartext payload");
 	ok(pass_is_sensitive,
@@ -512,7 +525,7 @@ static void test_wildcard_matching() {
 
 int main() {
 #ifdef PROXYSQL31
-	plan(55);
+	plan(56);
 #else
 	plan(45);
 #endif
@@ -531,7 +544,7 @@ int main() {
 	test_mysql_hdr();                        // 3 tests
 #ifdef PROXYSQL31
 	test_auth_more_data_packet();            // 5 tests
-	test_caching_sha2_stage5_payload_validation(); // 4 tests
+	test_caching_sha2_stage5_payload_validation(); // 5 tests
 	test_internal_session_redacts_password(); // 1 test
 #endif
 

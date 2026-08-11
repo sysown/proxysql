@@ -266,14 +266,22 @@ void MySQL_Protocol::capture_caching_sha2_rsa_snapshot() {
 }
 ```
 
-After `generate_one_byte_pkt(0x04)` succeeds, call the helper under
-`#ifdef PROXYSQL31` in both `PPHR_sha2full()` and
-`PPHR_passthrough_init()`, before publishing stage 4/auth-in-progress state:
+Call the helper under `#ifdef PROXYSQL31` immediately before
+`generate_one_byte_pkt(0x04)` in both `PPHR_sha2full()` and
+`PPHR_passthrough_init()`. If packet generation fails, reset the retained
+snapshot before returning; only a successfully queued challenge may publish
+stage 4/auth-in-progress state:
 
 ```cpp
 #ifdef PROXYSQL31
 	capture_caching_sha2_rsa_snapshot();
 #endif
+	if (!generate_one_byte_pkt(perform_full_authentication)) {
+#ifdef PROXYSQL31
+		caching_sha2_rsa_snapshot_.reset();
+#endif
+		return;
+	}
 ```
 
 - [ ] **Step 4: Reuse the retained snapshot for the `0x02` request path**

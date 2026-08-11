@@ -60,10 +60,11 @@ one security-sensitive decryption implementation.
 
 ## Protocol design
 
-When ProxySQL successfully generates the `0x04` full-authentication packet for
-a non-TLS `caching_sha2_password` exchange, it acquires and stores the current
-immutable RSA snapshot on `MySQL_Protocol`. Both active challenge producers
-must do this:
+Before ProxySQL queues the `0x04` full-authentication packet for a non-TLS
+`caching_sha2_password` exchange, it acquires and stores the current immutable
+RSA snapshot on `MySQL_Protocol`. If packet generation fails, it discards that
+snapshot without advancing the authentication state. Both active challenge
+producers must follow this ordering:
 
 - `MySQL_Protocol::PPHR_sha2full()` for a configured frontend user; and
 - `MySQL_Protocol::PPHR_passthrough_init()` for pass-through authentication.

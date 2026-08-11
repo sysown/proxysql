@@ -1968,14 +1968,22 @@ int MySQL_Protocol::PPHR_decrypt_caching_sha2_rsa_response(
 	(*myds)->auth_in_progress = 0;
 	ret = false;
 	vars1.user = reinterpret_cast<unsigned char *>((*myds)->myconn->userinfo->username);
+	frontend_auth_error_ = MySQLFrontendAuthError::NONE;
 
 	const auto key_snapshot = caching_sha2_rsa_snapshot_;
 	caching_sha2_rsa_snapshot_.reset();
 	const size_t ciphertext_length =
 		len >= sizeof(mysql_hdr) ? len - sizeof(mysql_hdr) : 0;
-	if (key_snapshot == nullptr ||
-		ciphertext_length != key_snapshot->ciphertext_size() ||
-		GloMTH == nullptr || GloMTH->caching_sha2_rsa() == nullptr) {
+	MySQL_Caching_Sha2_RSA* rsa_manager =
+		GloMTH != nullptr ? GloMTH->caching_sha2_rsa() : nullptr;
+	if (key_snapshot == nullptr || rsa_manager == nullptr) {
+		frontend_auth_error_ = MySQLFrontendAuthError::CACHING_SHA2_RSA_UNAVAILABLE;
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
+			"Session=%p , DS=%p , user='%s' . Missing caching_sha2_password RSA key snapshot\n",
+			(*myds)->sess, (*myds), vars1.user);
+		return 1;
+	}
+	if (ciphertext_length != key_snapshot->ciphertext_size()) {
 		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
 			"Session=%p , DS=%p , user='%s' . Invalid caching_sha2_password RSA response\n",
 			(*myds)->sess, (*myds), vars1.user);
@@ -1984,7 +1992,7 @@ int MySQL_Protocol::PPHR_decrypt_caching_sha2_rsa_response(
 
 	std::string plaintext_password;
 	ScopedStringCleanser plaintext_password_cleanser(plaintext_password);
-	if (!GloMTH->caching_sha2_rsa()->decrypt_password(
+	if (!rsa_manager->decrypt_password(
 			key_snapshot,
 			pkt,
 			ciphertext_length,
@@ -2096,9 +2104,6 @@ int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyPr
 	if (auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD &&
 		(*myds)->switching_auth_stage == 5 && !(*myds)->encrypted) {
 #ifdef PROXYSQL31
-		if (caching_sha2_rsa_snapshot_ == nullptr) {
-			frontend_auth_error_ = MySQLFrontendAuthError::CACHING_SHA2_RSA_UNAVAILABLE;
-		}
 		return PPHR_decrypt_caching_sha2_rsa_response(pkt, len, ret, vars1);
 #else
 		ret = false;
@@ -2876,13 +2881,16 @@ void MySQL_Protocol::PPHR_sha2full(
 ) {
 	if ((*myds)->switching_auth_stage == 0) {
 		const unsigned char perform_full_authentication = '\4';
-		if (!generate_one_byte_pkt(perform_full_authentication)) {
-			ret = false;
-			return;
-		}
 #ifdef PROXYSQL31
 		capture_caching_sha2_rsa_snapshot();
 #endif
+		if (!generate_one_byte_pkt(perform_full_authentication)) {
+#ifdef PROXYSQL31
+			caching_sha2_rsa_snapshot_.reset();
+#endif
+			ret = false;
+			return;
+		}
 		(*myds)->pkt_sid++; // increment pkt_sid by one
 		// Required to be set; later used in 'PPHR_1' for setting current 'auth_plugin_id'. E.g:
 		//  - mysql-default_authentication_plugin: 'caching_sha2_password'
@@ -2947,12 +2955,15 @@ bool MySQL_Protocol::PPHR_passthrough_init(MyProt_tmp_auth_vars& vars1) {
 	// caching_sha2_password protocol).
 	if ((*myds)->switching_auth_stage == 0) {
 		const unsigned char perform_full_authentication = '\4';
-		if (!generate_one_byte_pkt(perform_full_authentication)) {
-			return false;
-		}
 #ifdef PROXYSQL31
 		capture_caching_sha2_rsa_snapshot();
 #endif
+		if (!generate_one_byte_pkt(perform_full_authentication)) {
+#ifdef PROXYSQL31
+			caching_sha2_rsa_snapshot_.reset();
+#endif
+			return false;
+		}
 		(*myds)->pkt_sid++;
 		(*myds)->switching_auth_type = AUTH_MYSQL_CACHING_SHA2_PASSWORD;
 		(*myds)->switching_auth_stage = 4;
