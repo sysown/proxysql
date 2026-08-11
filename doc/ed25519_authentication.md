@@ -47,6 +47,31 @@ the same auth-switch mechanism.
 
 TLS is not required: the exchange never transmits a secret.
 
+**Frontend ed25519 requires `mysql-default_authentication_plugin=mysql_native_password`**
+(this is ProxySQL's built-in default, so no change is needed unless it was
+overridden). If it is set to `caching_sha2_password` instead, ProxySQL
+advertises `caching_sha2_password` in its initial handshake greeting, and an
+ordinary client — one that has not explicitly requested `client_ed25519` —
+switches early to `caching_sha2_password` before ProxySQL has a chance to
+route it into the ed25519 exchange. On that early-switch path, a `$ED$`
+stored user is denied unconditionally (see Limitations below): it never
+reaches the ed25519 verification code at all.
+
+## Upgrading from 3.0
+
+The `$ED$` prefix becomes reserved as of this feature: any stored
+`mysql_users.password` value that literally begins with `$ED$` is now
+parsed as an ed25519 credential, never compared as cleartext. If an
+existing 3.0 deployment happens to have a cleartext password that starts
+with the literal four characters `$ED$` (coincidental, but possible),
+that account stops authenticating after the upgrade — this is fail-closed
+by design (human-approved: silently falling back to cleartext comparison
+for an unparseable "$ED$..." value was judged more dangerous than a hard
+failure). ProxySQL logs a warning for the affected account on each
+connection attempt. Fix by renaming the credential to not start with
+`$ED$`, or by re-issuing it as a proper `$ED$<public-key>` ed25519
+credential if that was the intent.
+
 ## Limitations
 
 - `$ED$` (public-key-only) users cannot open backend connections: the
