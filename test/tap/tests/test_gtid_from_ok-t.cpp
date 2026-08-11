@@ -254,16 +254,24 @@ public:
 			exec_query(admin_, "LOAD MYSQL VARIABLES TO RUNTIME", "load variable cleanup");
 		}
 
-		if (table_created_ && !address_.empty()) {
+		if ((table_created_ || !backend_session_track_gtids_.empty()) && !address_.empty()) {
 			MYSQL* direct = connect_mysql(
 				const_cast<char*>(address_.c_str()), port_,
 				const_cast<char*>(mysql_username_.c_str()), const_cast<char*>(mysql_password_.c_str())
 			);
 			if (direct == nullptr) {
-				diag("Cleanup could not connect to %s:%d to drop test.gtid_from_ok",
+				diag("Cleanup could not connect to %s:%d for backend cleanup",
 					address_.c_str(), port_);
 			} else {
-				exec_query(direct, "DROP TABLE IF EXISTS test.gtid_from_ok", "drop test table");
+				if (table_created_) {
+					exec_query(direct, "DROP TABLE IF EXISTS test.gtid_from_ok", "drop test table");
+				}
+				if (!backend_session_track_gtids_.empty()) {
+					exec_query(direct,
+						"SET GLOBAL session_track_gtids=" +
+							sql_quote(direct, backend_session_track_gtids_),
+						"restore backend session_track_gtids");
+				}
 				mysql_close(direct);
 			}
 		}
@@ -277,6 +285,9 @@ public:
 	void save_variable(const std::string& name, const std::string& value) {
 		saved_variables_[name] = value;
 	}
+	void save_backend_session_track_gtids(const std::string& value) {
+		backend_session_track_gtids_ = value;
+	}
 
 	void mark_servers_installed() { servers_installed_ = true; }
 	void mark_rules_installed() { rules_installed_ = true; }
@@ -288,6 +299,7 @@ private:
 	std::string mysql_password_;
 	TestConnections& connections_;
 	std::map<std::string, std::string> saved_variables_;
+	std::string backend_session_track_gtids_;
 	std::string address_;
 	int port_ = 0;
 	bool servers_installed_ = false;
@@ -424,7 +436,20 @@ static int run_test(
 	connections.direct = connect_mysql(
 		const_cast<char*>(address.c_str()), mysql_port, cl.mysql_username, cl.mysql_password
 	);
-	bool table_ready = connections.direct != nullptr &&
+	std::string backend_session_track_gtids;
+	const bool backend_tracking_ready = connections.direct != nullptr &&
+		select_single_string(connections.direct, "SELECT @@GLOBAL.session_track_gtids",
+			backend_session_track_gtids);
+	if (backend_tracking_ready) {
+		cleanup.save_backend_session_track_gtids(backend_session_track_gtids);
+	}
+	if (!backend_tracking_ready ||
+		!exec_query(connections.direct, "SET GLOBAL session_track_gtids='OFF'",
+			"set backend session_track_gtids default OFF")) {
+		return EXIT_FAILURE;
+	}
+
+	bool table_ready =
 		exec_query(connections.direct, "CREATE DATABASE IF NOT EXISTS test", "create test database") &&
 		exec_query(connections.direct, "DROP TABLE IF EXISTS test.gtid_from_ok", "drop stale test table") &&
 		exec_query(connections.direct, "CREATE TABLE test.gtid_from_ok (id INT PRIMARY KEY)", "create test table");
@@ -478,8 +503,9 @@ static int run_test(
 		}
 		return EXIT_FAILURE;
 	}
-	mysql_close(connections.first);
-	connections.first = nullptr;
+	if (!exec_query(connections.first, "/* hostgroup=15983 */ BEGIN", "pin tracked row 1 backend")) {
+		return EXIT_FAILURE;
+	}
 
 	if (!set_variable(admin, "mysql-update_gtid_from_ok", "true") ||
 		!exec_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME", "enable OK-packet ingestion")) {
@@ -521,6 +547,11 @@ static int run_test(
 	}
 	mysql_close(connections.untracked);
 	connections.untracked = nullptr;
+	if (!exec_query(connections.first, "ROLLBACK", "release tracked row 1 backend")) {
+		return EXIT_FAILURE;
+	}
+	mysql_close(connections.first);
+	connections.first = nullptr;
 
 	connections.tracked = connect_mysql(cl.host, cl.port, cl.username, cl.password);
 	if (connections.tracked == nullptr ||
