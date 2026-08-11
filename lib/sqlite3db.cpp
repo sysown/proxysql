@@ -684,7 +684,7 @@ char *SQLite3_result::checksum() {
 	memset(buf,'0',128);
 	uint32_t d32[2];
 	memcpy(&d32,&hash1,sizeof(hash1));
-	sprintf(buf,"0x%X%X", d32[0], d32[1]);
+	snprintf(buf, sizeof(buf), "0x%X%X", d32[0], d32[1]);
 	return strdup(buf);
 }
 
@@ -1129,7 +1129,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 					memset(binary_sha1_sqlite3, 0, SHA_DIGEST_LENGTH*2+1);
 					char buf[SHA_DIGEST_LENGTH*2];
 					for (int i=0; i < SHA_DIGEST_LENGTH - 1; i++) {
-						sprintf((char*)&(buf[i*2]), "%02x", temp[i]);
+						snprintf((char*)&(buf[i*2]), 3, "%02x", temp[i]);
 					}
 					memcpy(binary_sha1_sqlite3, buf, SHA_DIGEST_LENGTH*2);
 					munmap(fb,statbuf.st_size);
@@ -1251,4 +1251,3 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 		}
 	}
 }
-
