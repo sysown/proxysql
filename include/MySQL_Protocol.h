@@ -37,7 +37,10 @@ enum proxysql_auth_plugins {
 	AUTH_UNKNOWN_PLUGIN = -1,
 	AUTH_MYSQL_NATIVE_PASSWORD = 0,
 	AUTH_MYSQL_CLEAR_PASSWORD,
-	AUTH_MYSQL_CACHING_SHA2_PASSWORD
+	AUTH_MYSQL_CACHING_SHA2_PASSWORD,
+#ifdef PROXYSQLED25519
+	AUTH_MYSQL_ED25519, // MariaDB client_ed25519 (value 3)
+#endif
 };
 
 class MySQL_ResultSet {
@@ -215,6 +218,10 @@ class MySQL_Protocol {
 	void PPHR_6auth2(bool& ret, MyProt_tmp_auth_vars& vars1);
 	bool PPHR_verify_sha2(MyProt_tmp_auth_vars& vars1, enum proxysql_auth_plugins passformat, PASSWORD_TYPE::E passtype);
 	void PPHR_sha2full(bool& ret, MyProt_tmp_auth_vars& vars1, enum proxysql_auth_plugins passformat, PASSWORD_TYPE::E passtype);
+#ifdef PROXYSQLED25519
+	void PPHR_ed25519_switch(bool& ret, MyProt_tmp_auth_vars& vars1);
+	void PPHR_ed25519_verify(bool& ret, MyProt_tmp_auth_vars& vars1);
+#endif
 	/**
 	 * @brief Drive caching_sha2_password full authentication for pass-through users.
 	 * @details At stage 0 this sends AuthMoreData{0x04}; at stage 5 it transfers the

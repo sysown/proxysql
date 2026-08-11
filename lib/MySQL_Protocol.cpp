@@ -18,6 +18,10 @@ using json = nlohmann::json;
 #include "MySQL_Caching_Sha2_RSA.h"
 #include <openssl/crypto.h>
 #endif
+#ifdef PROXYSQLED25519
+#include "MySQL_Ed25519.h"
+#include <openssl/rand.h>
+#endif
 
 #include <sstream>
 #include <zstd.h>
@@ -88,10 +92,13 @@ class ScopedStringCleanser {
 
 extern "C" char * sha256_crypt_r (const char *key, const char *salt, char *buffer, int buflen);
 
-static const char *plugins[3] = {
+static const char *plugins[] = {
 	"mysql_native_password",
 	"mysql_clear_password",
 	"caching_sha2_password",
+#ifdef PROXYSQLED25519
+	"client_ed25519",
+#endif
 };
 
 #ifdef PROXYSQL31
@@ -1163,6 +1170,13 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
 				+ 20 // scramble
 				+ 1; // 00
 			break;
+#ifdef PROXYSQLED25519
+		case AUTH_MYSQL_ED25519:
+			myhdr.pkt_length=1 // fe
+				+ (strlen(plugins[AUTH_MYSQL_ED25519])+1)
+				+ ED25519_NONCE_LEN; // 32-byte nonce; NO trailing 0x00 (client requires exactly 32 bytes of plugin data)
+			break;
+#endif
 		default:
 			// LCOV_EXCL_START
 			assert(0);
@@ -1196,13 +1210,24 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
 			_ptr[l]=0x00; l++;
 			memcpy(_ptr+l, (*myds)->myconn->scramble_buff+0, 20); l+=20;
 			break;
+#ifdef PROXYSQLED25519
+		case AUTH_MYSQL_ED25519:
+			memcpy(_ptr+l,plugins[AUTH_MYSQL_ED25519],strlen(plugins[AUTH_MYSQL_ED25519]));
+			l+=strlen(plugins[AUTH_MYSQL_ED25519]);
+			_ptr[l]=0x00; l++;
+			memcpy(_ptr+l, (*myds)->myconn->scramble_buff, ED25519_NONCE_LEN); l+=ED25519_NONCE_LEN;
+			break;
+#endif
 		default:
 			// LCOV_EXCL_START
 			assert(0);
 			// LCOV_EXCL_STOP
 			break;
 	}
-  _ptr[l]=0x00; //l+=1; //0x00
+#ifdef PROXYSQLED25519
+	if ((*myds)->switching_auth_type != AUTH_MYSQL_ED25519) // ed25519 packet ends exactly after the nonce
+#endif
+	_ptr[l]=0x00; //l+=1; //0x00
 	if (send==true) {
 		(*myds)->PSarrayOUT->add((void *)_ptr,size);
 		(*myds)->DSS=STATE_SERVER_HANDSHAKE;
@@ -2087,7 +2112,11 @@ int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyPr
 			(*myds)->sess, (*myds), vars1.user);
 		return 1;
 	}
-	if (auth_plugin_id == AUTH_MYSQL_NATIVE_PASSWORD) {
+	if (auth_plugin_id == AUTH_MYSQL_NATIVE_PASSWORD
+#ifdef PROXYSQLED25519
+		|| auth_plugin_id == AUTH_MYSQL_ED25519 // raw 64-byte signature, not NUL-terminated
+#endif
+	) {
 		vars1.pass_len = payload_length;
 	} else {
 		const unsigned char* terminator = static_cast<const unsigned char *>(
@@ -2336,6 +2365,13 @@ void MySQL_Protocol::PPHR_3(MyProt_tmp_auth_vars& vars1) { // detect plugin id
 				assert(0);
 			}
 		}
+#ifdef PROXYSQLED25519
+		else if (strncmp((char *)vars1.auth_plugin,plugins[AUTH_MYSQL_ED25519],strlen(plugins[AUTH_MYSQL_ED25519]))==0) {
+			// client explicitly requested client_ed25519; the Auth Switch with a
+			// 32-byte nonce is driven later by PPHR_verify_password at stage 0
+			auth_plugin_id = AUTH_MYSQL_ED25519;
+		}
+#endif
 	}
 	proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' , auth_plugin_id=%d\n", (*myds), (*myds)->sess, vars1.user, auth_plugin_id);
 }
@@ -2976,6 +3012,62 @@ bool MySQL_Protocol::PPHR_passthrough_init(MyProt_tmp_auth_vars& vars1) {
 	return false;
 }
 
+#ifdef PROXYSQLED25519
+/**
+ * @brief Initiate the client_ed25519 Auth Switch (stage 0 -> 1).
+ * @details Generates a fresh 32-byte nonce into 'scramble_buff' (40 bytes, so
+ *   it fits) and sends an AuthSwitchRequest naming client_ed25519. The client
+ *   answers with a 64-byte signature that PPHR_1 collects (stage 1 -> 2) and
+ *   PPHR_ed25519_verify() checks. Mirrors the state handling of PPHR_4auth0.
+ */
+void MySQL_Protocol::PPHR_ed25519_switch(bool& ret, MyProt_tmp_auth_vars& vars1) {
+	ret = false;
+	if (RAND_bytes(reinterpret_cast<unsigned char *>((*myds)->myconn->scramble_buff), ED25519_NONCE_LEN) != 1) {
+		proxy_error("RAND_bytes() failed generating the ed25519 nonce for user '%s'\n", vars1.user);
+		return;
+	}
+	(*myds)->switching_auth_type = AUTH_MYSQL_ED25519;
+	(*myds)->switching_auth_stage = 1;
+	(*myds)->auth_in_progress = 1;
+	generate_pkt_auth_switch_request(true, NULL, NULL);
+	(*myds)->myconn->userinfo->set((char *)vars1.user, NULL, vars1.db, NULL);
+	proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . Sent client_ed25519 Auth Switch\n",
+		(*myds)->sess, (*myds), vars1.user);
+}
+
+/**
+ * @brief Verify the 64-byte client_ed25519 signature over the nonce sent by
+ *   PPHR_ed25519_switch() (or by the COM_CHANGE_USER switch path).
+ * @details The public key comes from a stored "$ED$" credential, or is derived
+ *   from a stored cleartext password (MariaDB variant, ref10). Every failure
+ *   mode -- wrong length, malformed stored key, bad signature -- yields the
+ *   same generic auth failure; nothing distinguishable leaks to the client.
+ */
+void MySQL_Protocol::PPHR_ed25519_verify(bool& ret, MyProt_tmp_auth_vars& vars1) {
+	ret = false;
+	if (vars1.pass_len != ED25519_SIG_LEN) {
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . Malformed ed25519 signature length %u\n",
+			(*myds)->sess, (*myds), vars1.user, vars1.pass_len);
+		return;
+	}
+	unsigned char pubkey[ED25519_PUBKEY_LEN];
+	if (proxysql_ed25519_is_pubkey_format(vars1.password)) {
+		if (proxysql_ed25519_decode_pubkey(vars1.password, pubkey) == false) {
+			proxy_error("mysql_users entry for '%s' has a malformed $ED$ ed25519 credential; denying access\n", vars1.user);
+			return;
+		}
+	} else {
+		proxysql_ed25519_derive_public_key(vars1.password, strlen(vars1.password), pubkey);
+	}
+	if (proxysql_ed25519_verify_signature(vars1.pass, reinterpret_cast<unsigned char *>((*myds)->myconn->scramble_buff), pubkey)) {
+		ret = true;
+	}
+	OPENSSL_cleanse(pubkey, sizeof(pubkey));
+	proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . ed25519 signature verification %s\n",
+		(*myds)->sess, (*myds), vars1.user, ret ? "succeeded" : "failed");
+}
+#endif // PROXYSQLED25519
+
 void MySQL_Protocol::PPHR_SetConnAttrs(MyProt_tmp_auth_vars& vars1, account_details_t& attr1) {
 	MySQL_Connection *myconn = NULL;
 	myconn=sess->client_myds->myconn;
@@ -3426,6 +3518,33 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 		//  - 'ad::default_schema', 'ad::attributes'
 		PPHR_5passwordTrue(ret, vars1, reply, account_details);
 
+#ifdef PROXYSQLED25519
+		// ed25519 gate (stage 0): a client that requested client_ed25519 sends an
+		// empty auth response in the HandshakeResponse -- it cannot sign before
+		// receiving the 32-byte nonce -- so this decision MUST precede the
+		// empty-response checks below. A stored "$ED$" credential forces the
+		// ed25519 exchange regardless of the plugin the client offered.
+		// 'switching_auth_sent' guards re-entry: after the switch, the signature
+		// arrives with stage 0 on the COM_CHANGE_USER path and stage 2 here.
+		if ((*myds)->switching_auth_stage == 0 &&
+			(*myds)->switching_auth_sent != AUTH_MYSQL_ED25519 &&
+			(*myds)->sess->session_type != PROXYSQL_SESSION_CLICKHOUSE) {
+			const bool stored_is_ed = proxysql_ed25519_is_pubkey_format(vars1.password);
+			// a '*SHA1' or '$A$' hash cannot derive an ed25519 key
+			const bool cred_usable = stored_is_ed ||
+				(vars1.password[0] != '*' &&
+				!(strlen(vars1.password) == 70 && strncasecmp(vars1.password,"$A$0",4)==0));
+			if (stored_is_ed || (auth_plugin_id == AUTH_MYSQL_ED25519 && cred_usable)) {
+				PPHR_ed25519_switch(ret, vars1);
+				return ret;
+			}
+			if (auth_plugin_id == AUTH_MYSQL_ED25519) {
+				// client insists on ed25519 but the stored hash cannot derive a key
+				return ret; // ret == false
+			}
+		}
+#endif
+
 		if (vars1.pass_len==0 && strlen(vars1.password)==0) {
 			ret=true;
 			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , password=''\n", (*myds), (*myds)->sess, vars1.user);
@@ -3442,6 +3561,14 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 				(*myds), (*myds)->sess, vars1.user, get_masked_pass(vars1.password).get(), auth_plugin_id
 			);
 #endif // debug
+#ifdef PROXYSQLED25519
+			if (auth_plugin_id == AUTH_MYSQL_ED25519 || proxysql_ed25519_is_pubkey_format(vars1.password)) {
+				// signature collected by PPHR_1 after the Auth Switch; a stored
+				// "$ED$" key with a non-ed25519 response fails the length check
+				// inside PPHR_ed25519_verify (generic denial)
+				PPHR_ed25519_verify(ret, vars1);
+			} else
+#endif
 			if (
 				auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD
 				&&
@@ -3584,6 +3711,12 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 				// if sent_auth_plugin_id == AUTH_MYSQL_NATIVE_PASSWORD
 				assert(0);
 				break;
+#ifdef PROXYSQLED25519
+			case AUTH_MYSQL_ED25519:
+				// nothing to do here; PPHR_verify_password() decides the ed25519
+				// Auth Switch at stage 0 (after the account lookup)
+				break;
+#endif
 			default:
 				assert(0);
 				break;
@@ -3611,6 +3744,12 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 					assert(0);
 				}
 				break;
+#ifdef PROXYSQLED25519
+			case AUTH_MYSQL_ED25519:
+				// nothing to do here; PPHR_verify_password() decides the ed25519
+				// Auth Switch at stage 0 (after the account lookup)
+				break;
+#endif
 			default:
 				break;
 		}
