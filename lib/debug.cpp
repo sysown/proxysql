@@ -253,7 +253,7 @@ extern "C" void proxy_debug_func(
 							realname
 						);
 				}
-				free(realname);
+				free(realname); // NOSONAR: __cxa_demangle returns memory allocated by malloc.
 			}
 			free(strings);
 		}
