@@ -242,15 +242,17 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 								proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Sending CLUSTER_NODE_UUID %s to peer %s:%d\n", GloVars.uuid, node->hostname, node->port);
 								proxy_info("Cluster: sending CLUSTER_NODE_UUID %s to peer %s:%d\n", GloVars.uuid, node->hostname, node->port);
 								rc_query = mysql_query(conn, q.c_str());
-								rc_query = mysql_query(conn, (char *)"SELECT GLOBAL_UUID()");
 								if (rc_query == 0) {
-									MYSQL_RES *uuid_res = mysql_store_result(conn);
-									if (uuid_res) {
-										MYSQL_ROW urow = mysql_fetch_row(uuid_res);
-										if (urow && urow[0] && strlen(urow[0]) > 0) {
-											GloProxyCluster->Update_Node_UUID(node->hostname, node->port, urow[0]);
+									int rc_uuid = mysql_query(conn, (char *)"SELECT GLOBAL_UUID()");
+									if (rc_uuid == 0) {
+										MYSQL_RES *uuid_res = mysql_store_result(conn);
+										if (uuid_res) {
+											MYSQL_ROW urow = mysql_fetch_row(uuid_res);
+											if (urow && urow[0] && strlen(urow[0]) > 0) {
+												GloProxyCluster->Update_Node_UUID(node->hostname, node->port, urow[0]);
+											}
+											mysql_free_result(uuid_res);
 										}
-										mysql_free_result(uuid_res);
 									}
 								}
 							} else {
