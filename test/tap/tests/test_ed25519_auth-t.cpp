@@ -38,7 +38,7 @@
 #include "command_line.h"
 #include "utils.h"
 
-const char* ED_PASS = "ed25519_pass_1";
+constexpr char ED_PASS[] = "ed25519_pass_1";
 const char* ED_PUBKEY = "5TBW79xTAMbhi8QKQtLLVS0V0b2w9mlKnRG6c+2NxTQ";
 // Confirmed empirically against the mariadb10-galera infra (see task-5-report.md):
 // when ProxySQL retries the backend connection for a $ED$ (public-key-only) user, the
@@ -48,7 +48,7 @@ const char* ED_PUBKEY = "5TBW79xTAMbhi8QKQtLLVS0V0b2w9mlKnRG6c+2NxTQ";
 // denied for user ..." response, forwarded verbatim.
 constexpr unsigned int ED25519_PK_BACKEND_ERRNO = 1045;
 
-int main(int argc, char** argv) {
+int main(int argc, char** argv) { // NOSONAR: TAP scenario tests follow the suite convention of linear assertion blocks in main; splitting would obscure the scenario ordering the test depends on
 	CommandLine cl;
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
@@ -272,7 +272,7 @@ int main(int argc, char** argv) {
 	{
 		// primary password wrong on purpose; additional_password holds the real one
 		char hexpass[64] = { 0 };
-		for (size_t i = 0; i < strlen(ED_PASS); i++) {
+		for (size_t i = 0; i + 1 < sizeof(ED_PASS); i++) {
 			snprintf(hexpass + 2 * i, sizeof(hexpass) - 2 * i, "%02x", (unsigned char)ED_PASS[i]);
 		}
 		std::string q =

@@ -63,7 +63,7 @@ int main() {
 	// 1. derivation known-answer tests
 	for (const derivation_kat& kat : KATS) {
 		unsigned char pk[ED25519_PUBKEY_LEN];
-		proxysql_ed25519_derive_public_key(kat.password, strlen(kat.password), pk);
+		proxysql_ed25519_derive_public_key(kat.password, strlen(kat.password), pk); // NOSONAR: KAT table entries are string literals
 		std::string encoded = b64_no_pad(pk, sizeof(pk));
 		ok(encoded == kat.pubkey_b64,
 			"derive_public_key('%s') = '%s' (expected '%s')",
@@ -74,7 +74,7 @@ int main() {
 	for (const derivation_kat& kat : KATS) {
 		unsigned char derived[ED25519_PUBKEY_LEN];
 		unsigned char decoded[ED25519_PUBKEY_LEN];
-		proxysql_ed25519_derive_public_key(kat.password, strlen(kat.password), derived);
+		proxysql_ed25519_derive_public_key(kat.password, strlen(kat.password), derived); // NOSONAR: KAT table entries are string literals
 		std::string stored = std::string(ED25519_STORED_PREFIX) + kat.pubkey_b64;
 		bool rc = proxysql_ed25519_decode_pubkey(stored.c_str(), decoded);
 		ok(rc && memcmp(derived, decoded, ED25519_PUBKEY_LEN) == 0,

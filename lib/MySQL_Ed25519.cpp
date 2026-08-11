@@ -16,7 +16,7 @@ int crypto_sign_open(unsigned char* sm, unsigned long long smlen, const unsigned
 
 void proxysql_ed25519_derive_public_key(const char* password, size_t password_len, unsigned char* out_pubkey) {
 	// ref10 takes a non-const pw but never modifies it
-	crypto_sign_keypair(out_pubkey, reinterpret_cast<unsigned char*>(const_cast<char*>(password)), password_len);
+	crypto_sign_keypair(out_pubkey, reinterpret_cast<unsigned char*>(const_cast<char*>(password)), password_len); // NOSONAR: the vendored ref10 C API declares pw non-const but only reads it; changing the API would fork the upstream sources
 }
 
 bool proxysql_ed25519_verify_signature(const unsigned char* signature, const unsigned char* nonce, const unsigned char* pubkey) {
@@ -35,7 +35,8 @@ bool proxysql_ed25519_has_prefix(const char* password) {
 
 bool proxysql_ed25519_is_pubkey_format(const char* password) {
 	if (proxysql_ed25519_has_prefix(password) == false) return false;
-	return strlen(password) == ED25519_STORED_LEN;
+	// bounded scan: only "exactly ED25519_STORED_LEN chars" matters
+	return strnlen(password, ED25519_STORED_LEN + 1) == ED25519_STORED_LEN;
 }
 
 bool proxysql_ed25519_decode_pubkey(const char* stored, unsigned char* out_pubkey) {
