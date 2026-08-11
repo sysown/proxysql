@@ -506,6 +506,49 @@ class ifaces_desc {
 
 class sqlite3server_main_loop_listeners {
 	private:
+	struct tokenizer_owner {
+		tokenizer_t value;
+
+		explicit tokenizer_owner(char *list) {
+			tokenizer(&value, list, ";", TOKENIZER_NO_EMPTIES);
+		}
+
+		~tokenizer_owner() {
+			free_tokenizer(&value);
+		}
+
+		tokenizer_owner(const tokenizer_owner&) = delete;
+		tokenizer_owner& operator=(const tokenizer_owner&) = delete;
+		tokenizer_owner(tokenizer_owner&&) = delete;
+		tokenizer_owner& operator=(tokenizer_owner&&) = delete;
+	};
+
+	struct interface_array_owner {
+		char **value;
+
+		explicit interface_array_owner(char **value_) : value(value_) {}
+
+		~interface_array_owner() {
+			if (value) {
+				for (int i = 0; i < MAX_IFACES; ++i) {
+					l_free(0, value[i]);
+				}
+				l_free(0, value);
+			}
+		}
+
+		interface_array_owner(const interface_array_owner&) = delete;
+		interface_array_owner& operator=(const interface_array_owner&) = delete;
+		interface_array_owner(interface_array_owner&&) = delete;
+		interface_array_owner& operator=(interface_array_owner&&) = delete;
+
+		char **release() {
+			char **released = value;
+			value = nullptr;
+			return released;
+		}
+	};
+
 	int version;
 	pthread_rwlock_t rwlock;
 
@@ -566,19 +609,32 @@ class sqlite3server_main_loop_listeners {
 
 	bool update_ifaces(char *list, char ***_ifaces) {
 		wrlock();
-		int i;
-		char **ifaces=*_ifaces;
-		tokenizer_t tok;
-		tokenizer( &tok, list, ";", TOKENIZER_NO_EMPTIES );
-		const char* token;
-		ifaces=reset_ifaces(ifaces);
-		i=0;
-		for ( token = tokenize( &tok ) ; token && i < MAX_IFACES ; token = tokenize( &tok ) ) {
-			ifaces[i]=(char *)malloc(strlen(token)+1);
-			strcpy(ifaces[i],token);
+		char **old_ifaces = *_ifaces;
+		char **new_ifaces = (char **)l_alloc(MAX_IFACES * sizeof(char *));
+		if (new_ifaces != nullptr) {
+			memset(new_ifaces, 0, MAX_IFACES * sizeof(char *));
+		}
+		interface_array_owner replacement(new_ifaces);
+		if (replacement.value == nullptr) {
+			wrunlock();
+			return false;
+		}
+
+		tokenizer_owner tokens(list);
+		int i = 0;
+		for (const char *token = tokenize(&tokens.value);
+			token && i < MAX_IFACES;
+			token = tokenize(&tokens.value)) {
+			replacement.value[i] = strdup(token);
+			if (replacement.value[i] == nullptr) {
+				wrunlock();
+				return false;
+			}
 			i++;
 		}
-		free_tokenizer( &tok );
+
+		interface_array_owner previous(old_ifaces);
+		*_ifaces = replacement.release();
 		version++;
 		wrunlock();
 		return true;

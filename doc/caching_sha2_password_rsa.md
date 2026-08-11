@@ -1,9 +1,11 @@
 # RSA key exchange for `caching_sha2_password`
 
-ProxySQL 3.1 can authenticate MySQL clients that use
+ProxySQL 3.1 and 4.0 can authenticate MySQL clients that use
 `caching_sha2_password` over a non-TLS frontend connection. When full
-authentication is required, the client can request ProxySQL's RSA public key,
-encrypt its password, and send the ciphertext back to ProxySQL.
+authentication is required, the client can either request ProxySQL's RSA
+public key or use a trusted copy provisioned locally, encrypt its password, and
+send the ciphertext back to ProxySQL. This feature is not available in
+ProxySQL 3.0.
 
 TLS remains the recommended configuration. Requesting a public key over an
 unauthenticated connection encrypts the password on the wire, but it does not
@@ -13,7 +15,7 @@ integrity are required.
 
 ## Configuration
 
-The following MySQL variables are available in ProxySQL 3.1 and later:
+The following MySQL variables are available in ProxySQL 3.1 and 4.0:
 
 | Variable | Default | Description |
 | --- | --- | --- |
@@ -68,25 +70,71 @@ publication so concurrent ProxySQL processes cannot publish a mixed pair.
 ## Reload and cluster behavior
 
 Each authentication exchange retains the same immutable key snapshot from the
-public-key response through RSA decryption. A concurrent
+full-authentication challenge through RSA decryption. This applies whether the
+client requests the public key or already has a pinned copy. A concurrent
 `LOAD MYSQL VARIABLES TO RUNTIME` can therefore rotate keys without breaking
 an exchange already in progress.
+
+Clients that use a pinned public key must be updated when the ProxySQL key pair
+is rotated. Coordinate publication of the new public key, client configuration
+changes, and the ProxySQL runtime reload: a client using a key that does not
+match the key snapshot selected by ProxySQL cannot authenticate. ProxySQL does
+not provide a grace period in which new connections can use both the old and
+new private keys.
 
 Cluster synchronization transfers the variable values, not private-key
 contents. Every ProxySQL node must be able to read its configured local pair,
 or generate its own pair when automatic generation is enabled. Do not store
 private-key contents in the ProxySQL configuration database.
 
-## Client behavior and failures
+## Client modes
 
-The client must use `caching_sha2_password`, disable TLS only when intended,
-and enable its server-public-key request option. For Oracle's MySQL CLI:
+The client must use `caching_sha2_password` and disable TLS only when intended.
+Oracle's MySQL CLI supports two RSA modes.
+
+### Request ProxySQL's public key
+
+With `--get-server-public-key`, the client asks ProxySQL for its current public
+key during authentication:
 
 ```bash
 mysql --default-auth=caching_sha2_password \
   --ssl-mode=DISABLED --get-server-public-key \
   --host=127.0.0.1 --port=6033 --user=app --password
 ```
+
+After ProxySQL sends the full-authentication challenge (`0x04`), the client
+requests the key (`0x02`). ProxySQL returns the public key and decrypts the
+client's following RSA ciphertext with the same retained key snapshot.
+
+This mode prevents passive observers from learning the password, but it does
+not authenticate ProxySQL. An active attacker can substitute another public
+key. Prefer TLS or the pinned-key mode when server identity matters.
+
+### Use a provisioned public key
+
+With `--server-public-key-path`, the client reads a trusted public key from a
+local file:
+
+```bash
+mysql --default-auth=caching_sha2_password \
+  --ssl-mode=DISABLED \
+  --server-public-key-path=/etc/proxysql/proxysql-caching-sha2-public-key.pem \
+  --host=127.0.0.1 --port=6033 --user=app --password
+```
+
+After the `0x04` challenge, the client encrypts the password immediately and
+sends the RSA ciphertext without first requesting a key with `0x02`. ProxySQL
+decrypts it with the key snapshot retained when it emitted the challenge.
+
+Provision the public-key file through a trusted channel and protect its
+integrity. This mode verifies that the endpoint possesses the corresponding
+private key and avoids unauthenticated in-band key substitution. RSA protects
+only the password exchange; subsequent queries, results, and other session
+traffic remain unencrypted and unauthenticated. Use TLS when the complete
+connection needs confidentiality and integrity.
+
+## Failures
 
 ProxySQL implements the MySQL protocol's RSA OAEP exchange, including the
 protocol-defined SHA-1 OAEP and MGF1 digests and password/scramble XOR step.

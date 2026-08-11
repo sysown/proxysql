@@ -8,6 +8,7 @@
  */
 
 #include <cerrno>
+#include <cstdint>
 #include <cstdlib>
 #include <string>
 #include <unistd.h>
@@ -22,6 +23,12 @@
 
 using std::string;
 using std::vector;
+
+enum class ServerPublicKeyMode : std::uint8_t {
+	NONE,
+	REQUEST,
+	PATH
+};
 
 static bool run_query(MYSQL* connection, const string& query) {
 	if (mysql_query(connection, query.c_str()) == 0) {
@@ -69,7 +76,8 @@ static int run_mysql_cli(
 	const CommandLine& cl,
 	const string& username,
 	const string& password,
-	bool request_server_public_key,
+	ServerPublicKeyMode public_key_mode,
+	const string& public_key_path,
 	const string& query,
 	string& output
 ) {
@@ -78,6 +86,7 @@ static int run_mysql_cli(
 	const string user_arg = "--user=" + username;
 	const string password_arg = "--password=" + password;
 	vector<const char*> args {
+		"--no-defaults",
 		"--protocol=TCP",
 		host_arg.c_str(),
 		port_arg.c_str(),
@@ -89,8 +98,12 @@ static int run_mysql_cli(
 		"--batch",
 		"--skip-column-names"
 	};
-	if (request_server_public_key) {
+	const string server_public_key_path_arg =
+		"--server-public-key-path=" + public_key_path;
+	if (public_key_mode == ServerPublicKeyMode::REQUEST) {
 		args.push_back("--get-server-public-key");
+	} else if (public_key_mode == ServerPublicKeyMode::PATH) {
+		args.push_back(server_public_key_path_arg.c_str());
 	}
 	const string execute_arg = "--execute=" + query;
 	args.push_back(execute_arg.c_str());
@@ -116,20 +129,22 @@ int main() {
 		return EXIT_FAILURE;
 	}
 
-	plan(11);
+	plan(13);
 
 	string mysql_help;
 	const vector<const char*> help_args { "mysql", "--help" };
 	const int help_rc = execvp("mysql", help_args, mysql_help);
 	if (help_rc != 0 ||
 		mysql_help.find("get-server-public-key") == string::npos ||
+		mysql_help.find("server-public-key-path") == string::npos ||
 		mysql_help.find("ssl-mode") == string::npos) {
-		skip(11, "Oracle MySQL CLI with --get-server-public-key and --ssl-mode is unavailable");
+		skip(13,
+			"Oracle MySQL CLI with RSA public-key and --ssl-mode options is unavailable");
 		return exit_status();
 	}
 	const char* infra_datadir = getenv("REGULAR_INFRA_DATADIR");
 	if (infra_datadir == nullptr || *infra_datadir == '\0') {
-		skip(11, "REGULAR_INFRA_DATADIR is required to clean generated RSA key artifacts");
+		skip(13, "REGULAR_INFRA_DATADIR is required to clean generated RSA key artifacts");
 		return exit_status();
 	}
 
@@ -140,7 +155,7 @@ int main() {
 			nullptr, cl.admin_port, nullptr, 0) != nullptr;
 	ok(admin_connected, "Connected to ProxySQL Admin");
 	if (!admin_connected) {
-		skip(10, "Cannot continue without an Admin connection");
+		skip(12, "Cannot continue without an Admin connection");
 		if (admin != nullptr) {
 			mysql_close(admin);
 		}
@@ -149,6 +164,7 @@ int main() {
 
 	const string suffix = std::to_string(static_cast<long>(getpid()));
 	const string username = "tap5988_" + suffix;
+	const string pinned_username = "tap5988_pinned_" + suffix;
 	const string password = "issue5988-secret"; // NOSONAR(cpp:S2068): deterministic process-local E2E test credential.
 	const string wrong_password = "issue5988-wrong"; // NOSONAR(cpp:S2068): deliberate authentication-rejection test credential.
 	const string comment = "reg_test_5988_" + suffix;
@@ -203,30 +219,35 @@ int main() {
 	if (setup_ok) {
 		setup_ok = run_query(
 			admin,
-			"INSERT INTO mysql_users(username,password,active,default_hostgroup) VALUES('" +
-				username + "','" + password_hash + "',1,0)") &&
+			"INSERT INTO mysql_users(username,password,active,default_hostgroup) VALUES"
+				"('" + username + "','" + password_hash + "',1,0),"
+				"('" + pinned_username + "','" + password_hash + "',1,0)") &&
 			run_query(admin, "LOAD MYSQL USERS TO RUNTIME") &&
 			run_query(
 				admin,
 				"INSERT INTO mysql_query_rules(rule_id,active,username,match_pattern,OK_msg,apply,comment) "
 				"VALUES(" + std::to_string(rule_id) + ",1,'" + username +
+					"','^SELECT 5988$','rsa-auth-ok',1,'" + comment + "'),(" +
+					std::to_string(rule_id + 1) + ",1,'" + pinned_username +
 					"','^SELECT 5988$','rsa-auth-ok',1,'" + comment + "')") &&
 			run_query(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 	}
 	ok(setup_ok,
-		"Configured a hashed caching_sha2_password frontend user and local query rule");
+		"Configured hashed caching_sha2_password frontend users and local query rules");
 
 	if (setup_ok) {
 		string output;
 		const int no_key_rc = run_mysql_cli(
-			cl, username, password, false, "SELECT 5988", output
+			cl, username, password, ServerPublicKeyMode::NONE, "", "SELECT 5988", output
 		);
 		ok(no_key_rc != 0,
 			"Non-TLS full authentication is rejected when the client does not request the public key");
 
 		output.clear();
 		const int wrong_password_rc =
-			run_mysql_cli(cl, username, wrong_password, true, "SELECT 5988", output);
+			run_mysql_cli(
+				cl, username, wrong_password, ServerPublicKeyMode::REQUEST, "",
+				"SELECT 5988", output);
 		ok(wrong_password_rc != 0,
 			"RSA full authentication rejects an incorrect password");
 
@@ -239,7 +260,8 @@ int main() {
 			run_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 		output.clear();
 		const int unavailable_rc = disabled_ok ? run_mysql_cli(
-			cl, username, password, true, "SELECT 5988", output
+			cl, username, password, ServerPublicKeyMode::REQUEST, "",
+			"SELECT 5988", output
 		) : 0;
 		ok(disabled_ok && unavailable_rc != 0 &&
 			output.find("RSA key exchange is unavailable") != string::npos,
@@ -306,26 +328,47 @@ int main() {
 			run_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 		output.clear();
 		const int rsa_rc = enabled_ok ? run_mysql_cli(
-			cl, username, password, true, "SELECT 5988", output
+			cl, username, password, ServerPublicKeyMode::REQUEST, "",
+			"SELECT 5988", output
 		) : -1;
 		ok(enabled_ok && rsa_rc == 0,
 			"Non-TLS caching_sha2_password authentication succeeds with --get-server-public-key");
 
+		const string pinned_public_key_path = test_key_directory + test_public_key;
+		output.clear();
+		const int pinned_wrong_password_rc = enabled_ok ? run_mysql_cli(
+			cl, pinned_username, wrong_password, ServerPublicKeyMode::PATH,
+			pinned_public_key_path, "SELECT 5988", output
+		) : 0;
+		ok(enabled_ok && pinned_wrong_password_rc != 0 &&
+			output.find("ERROR 1045") != string::npos,
+			"Pinned RSA full authentication rejects an incorrect password with 1045");
+
+		output.clear();
+		const int pinned_key_rc = enabled_ok ? run_mysql_cli(
+			cl, pinned_username, password, ServerPublicKeyMode::PATH,
+			pinned_public_key_path, "SELECT 5988", output
+		) : -1;
+		ok(enabled_ok && pinned_key_rc == 0,
+			"Non-TLS caching_sha2_password authentication succeeds with --server-public-key-path");
+
 		output.clear();
 		const int internal_session_rc = enabled_ok ? run_mysql_cli(
-			cl, username, password, true, "PROXYSQL INTERNAL SESSION", output
+			cl, username, password, ServerPublicKeyMode::REQUEST, "",
+			"PROXYSQL INTERNAL SESSION", output
 		) : -1;
 		ok(enabled_ok && internal_session_rc == 0 && output.find(password) == string::npos,
 			"RSA-authenticated internal-session output does not expose the recovered password");
 	} else {
-		skip(8, "Cannot run authentication assertions after setup failure");
+		skip(10, "Cannot run authentication assertions after setup failure");
 	}
 
 	bool cleanup_ok = run_query(
 		admin, "DELETE FROM mysql_query_rules WHERE comment='" + comment + "'");
 	cleanup_ok = run_query(admin, "LOAD MYSQL QUERY RULES TO RUNTIME") && cleanup_ok;
 	cleanup_ok = run_query(
-		admin, "DELETE FROM mysql_users WHERE username='" + username + "'") && cleanup_ok;
+		admin, "DELETE FROM mysql_users WHERE username IN ('" + username + "','" +
+			pinned_username + "')") && cleanup_ok;
 	cleanup_ok = run_query(admin, "LOAD MYSQL USERS TO RUNTIME") && cleanup_ok;
 	if (have_original_plugin) {
 		cleanup_ok = set_global_variable(

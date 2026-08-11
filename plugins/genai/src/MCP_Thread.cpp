@@ -168,51 +168,21 @@ void MCP_Threads_Handler::wrunlock() {
 	pthread_rwlock_unlock(&rwlock);
 }
 
-int MCP_Threads_Handler::get_variable(const char* name, char* val) {
-	if (!name || !val)
+int MCP_Threads_Handler::get_variable(const char* name, char* val, size_t val_size) {
+	if (!name || !val || val_size == 0)
 		return -1;
 
-	pthread_rwlock_rdlock(&rwlock);
-
 	std::string out;
-	int rc = 0;
-	if (!strcmp(name, "enabled")) {
-		out = variables.mcp_enabled ? "true" : "false";
-	} else if (!strcmp(name, "port")) {
-		out = std::to_string(variables.mcp_port);
-	} else if (!strcmp(name, "use_ssl")) {
-		out = variables.mcp_use_ssl ? "true" : "false";
-	} else if (!strcmp(name, "config_endpoint_auth")) {
-		out = variables.mcp_config_endpoint_auth ? variables.mcp_config_endpoint_auth : "";
-	} else if (!strcmp(name, "stats_endpoint_auth")) {
-		out = variables.mcp_stats_endpoint_auth ? variables.mcp_stats_endpoint_auth : "";
-	} else if (!strcmp(name, "query_endpoint_auth")) {
-		out = variables.mcp_query_endpoint_auth ? variables.mcp_query_endpoint_auth : "";
-	} else if (!strcmp(name, "admin_endpoint_auth")) {
-		out = variables.mcp_admin_endpoint_auth ? variables.mcp_admin_endpoint_auth : "";
-	} else if (!strcmp(name, "cache_endpoint_auth")) {
-		out = variables.mcp_cache_endpoint_auth ? variables.mcp_cache_endpoint_auth : "";
-	} else if (!strcmp(name, "ai_endpoint_auth")) {
-		out = variables.mcp_ai_endpoint_auth ? variables.mcp_ai_endpoint_auth : "";
-	} else if (!strcmp(name, "rag_endpoint_auth")) {
-		out = variables.mcp_rag_endpoint_auth ? variables.mcp_rag_endpoint_auth : "";
-	} else if (!strcmp(name, "timeout_ms")) {
-		out = std::to_string(variables.mcp_timeout_ms);
-	} else if (!strcmp(name, "stats_show_queries_max_rows")) {
-		out = std::to_string(variables.mcp_stats_show_queries_max_rows);
-	} else if (!strcmp(name, "stats_show_processlist_max_rows")) {
-		out = std::to_string(variables.mcp_stats_show_processlist_max_rows);
-	} else if (!strcmp(name, "stats_enable_debug_tools")) {
-		out = variables.mcp_stats_enable_debug_tools ? "true" : "false";
-	} else {
-		rc = -1;
-	}
-	pthread_rwlock_unlock(&rwlock);
+	if (!get_variable_string(name, out))
+		return -1;
 
-	if (rc == 0) {
-		sprintf(val, "%s", out.c_str());
+	if (out.size() >= val_size) {
+		val[0] = '\0';
+		return -1;
 	}
-	return rc;
+
+	memcpy(val, out.c_str(), out.size() + 1);
+	return 0;
 }
 
 int MCP_Threads_Handler::set_variable(const char* name, const char* value) {

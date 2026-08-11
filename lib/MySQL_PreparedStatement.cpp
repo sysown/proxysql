@@ -1,5 +1,6 @@
 #include "proxysql.h"
 #include "cpp.h"
+#include <string_view>
 
 #ifndef SPOOKYV2
 #include "SpookyV2.h"
@@ -21,41 +22,38 @@ const int PS_GLOBAL_STATUS_FIELD_NUM = 9;
 static uint64_t stmt_compute_hash(char *user,
                                   char *schema, char *query,
                                   unsigned int query_length) {
-	int l = 0;
-	l += strlen(user);
-	l += strlen(schema);
+	size_t user_len = user ? std::string_view(user).size() : 0;
+	size_t schema_len = schema ? std::string_view(schema).size() : 0;
 // two random seperators
 #define _COMPUTE_HASH_DEL1_ "-ujhtgf76y576574fhYTRDFwdt-"
 #define _COMPUTE_HASH_DEL2_ "-8k7jrhtrgJHRgrefgreRFewg6-"
-	l += strlen(_COMPUTE_HASH_DEL1_);
-	l += strlen(_COMPUTE_HASH_DEL2_);
-	l += query_length;
-	char *buf = (char *)malloc(l);
-	l = 0;
+	size_t delimiter1_len = strlen(_COMPUTE_HASH_DEL1_);
+	size_t delimiter2_len = strlen(_COMPUTE_HASH_DEL2_);
+	size_t hash_input_length = user_len + schema_len + delimiter1_len + delimiter2_len + query_length;
+
+	std::string hash_input;
+	hash_input.reserve(hash_input_length);
 
 	// write user
-	strcpy(buf + l, user);
-	l += strlen(user);
+	if (user) {
+		hash_input.append(user, user_len);
+	}
 
 	// write delimiter1
-	strcpy(buf + l, _COMPUTE_HASH_DEL1_);
-	l += strlen(_COMPUTE_HASH_DEL1_);
+	hash_input.append(_COMPUTE_HASH_DEL1_);
 
 	// write schema
-	strcpy(buf + l, schema);
-	l += strlen(schema);
+	if (schema) {
+		hash_input.append(schema, schema_len);
+	}
 
 	// write delimiter2
-	strcpy(buf + l, _COMPUTE_HASH_DEL2_);
-	l += strlen(_COMPUTE_HASH_DEL2_);
+	hash_input.append(_COMPUTE_HASH_DEL2_);
 
 	// write query
-	memcpy(buf + l, query, query_length);
-	l += query_length;
+	hash_input.append(query, query_length);
 
-	uint64_t hash = SpookyHash::Hash64(buf, l, 0);
-	free(buf);
-	return hash;
+	return SpookyHash::Hash64(hash_input.data(), hash_input.size(), 0);
 }
 
 void MySQL_STMT_Global_info::compute_hash() {
