@@ -1556,7 +1556,7 @@ bool MySQL_Protocol::verify_user_pass(
 		//auth_plugin_id = 2; // FIXME: this is temporary, because yet not supported
 		auth_plugin_id = AUTH_MYSQL_CACHING_SHA2_PASSWORD; // FIXME: this is temporary, because yet not supported . It must become 3
 #ifdef PROXYSQLED25519
-	} else if (strncmp((char *)auth_plugin,plugins[AUTH_MYSQL_ED25519],strlen(plugins[AUTH_MYSQL_ED25519]))==0) {
+	} else if (strncmp(auth_plugin,plugins[AUTH_MYSQL_ED25519],strlen(plugins[AUTH_MYSQL_ED25519]))==0) {
 		auth_plugin_id = AUTH_MYSQL_ED25519;
 #endif
 	}
