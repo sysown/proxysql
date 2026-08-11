@@ -501,7 +501,8 @@ FlushVariableStats ProxySQL_Admin::flush_mysql_variables___database_to_runtime(S
 					GloAdmin->variables.mysql_processlist.show_extended = atoi(varvalue);
 #ifdef IDLE_THREADS
 				} else if (varname == "session_idle_show_processlist") {
-					GloAdmin->variables.mysql_processlist.show_idle_session = atoi(varvalue);
+					GloAdmin->variables.mysql_processlist.show_idle_session =
+						strcasecmp(varvalue, "true") == 0 || strcasecmp(varvalue, "1") == 0;
 #endif // IDLE_THREADS
 				} else if (varname == "processlist_max_query_length") {
 					GloAdmin->variables.mysql_processlist.max_query_length = atoi(varvalue);
