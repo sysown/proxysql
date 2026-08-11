@@ -4,7 +4,7 @@
 
 **Goal:** Prevent stale Docker Compose build containers from contaminating persistent self-hosted CI workspaces, while preserving useful and stable failure diagnostics.
 
-**Architecture:** `ci-builds.yml` already maps each Docker build project to its matrix distribution (`ubuntu24`, `ubuntu22`, or `debian12`). Add targeted Compose teardown before the pre-checkout ownership repair and before the final repair. Restrict failure artifacts to logs produced by a failed Build step, rather than the live checkout.
+**Architecture:** `ci-builds.yml` maps Docker build projects to distribution names. Because each self-hosted VM receives the CI-builds matrix legs serially, teardown must cover the explicit project set `debian12`, `ubuntu22`, and `ubuntu24` before ownership repair and again before the final repair. Restrict failure artifacts to logs produced by a failed Build step, rather than the live checkout.
 
 **Tech Stack:** GitHub Actions reusable workflow YAML, Docker Compose, Python 3 YAML parsing, live self-hosted CI verification.
 
@@ -13,7 +13,7 @@
 - Base the branch on `origin/GH-Actions`; do not modify `v3.0` or PR #6038.
 - Touch only `.github/workflows/ci-builds.yml` for the implementation.
 - Do not change workflow permissions or use broad Docker pruning.
-- Target Compose only with `${{ matrix.dist }}`, which matches the Makefile's `IMG_NAME`.
+- Target only the explicit CI-build project set `debian12`, `ubuntu22`, and `ubuntu24`, which matches the Makefile's `IMG_NAME` values.
 - Preserve the existing ownership checks and run the postflight cleanup on every job outcome.
 - Use a descriptive commit message with a substantive body.
 
@@ -27,7 +27,7 @@
 
 **Interfaces:**
 - Consumes: `${{ matrix.dist }}`, `GITHUB_WORKSPACE`, existing `docker-compose.yml`, and the `build` step id.
-- Produces: a workspace with no running Compose project for the active matrix distribution before ownership checks; a failure artifact limited to `ci_build_log` after a failed build.
+- Produces: a workspace with no running CI-build Compose project before ownership checks; a failure artifact limited to `ci_build_log` after a failed build.
 
 - [ ] **Step 1: Establish the configuration-test boundary**
 
@@ -40,7 +40,8 @@ self-hosted pool after the GH-Actions PR is merged.
 
 - [ ] **Step 2: Add the preflight targeted cleanup**
 
-Insert a self-hosted-only step before the current ownership guard. It must:
+Insert a self-hosted-only step before the current ownership guard. It must loop
+over the known CI-build projects, rather than only the active matrix project:
 
 ```yaml
     - name: Stop stale Docker Compose project (self-hosted)
@@ -50,7 +51,9 @@ Insert a self-hosted-only step before the current ownership guard. It must:
         workspace="${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is not set}"
         compose_file="${workspace}/proxysql/docker-compose.yml"
         if [ -f "${compose_file}" ]; then
-          docker-compose -f "${compose_file}" -p "${{ matrix.dist }}" down -v --remove-orphans
+          for compose_project in debian12 ubuntu22 ubuntu24; do
+            docker-compose -f "${compose_file}" -p "${compose_project}" down -v --remove-orphans
+          done
         fi
 ```
 

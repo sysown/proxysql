@@ -152,10 +152,29 @@ jobs:
         path: |
           proxysql/binaries/
 
-    # Self-hosted runners reuse the working directory between jobs. The
-    # dockerized build below bind-mounts the checkout (./:/opt/proxysql) and
-    # writes files as root, so on the next job the actions/checkout pre-clean
-    # trips over them:
+    # Self-hosted runners reuse the working directory between jobs. A cancelled
+    # dockerized build can leave its Compose project running against the
+    # bind-mounted checkout (./:/opt/proxysql), where it continues to create
+    # root-owned files while the next job starts. A VM receives all CI-builds
+    # matrix legs serially, so the stale writer can belong to a different
+    # distribution than the new leg. Stop only the known CI-build projects;
+    # the Makefile maps IMG_NAME directly from these distribution names.
+    - name: Stop stale Docker Compose project (self-hosted)
+      if: ${{ inputs.trusted && runner.environment == 'self-hosted' && steps.cache-check.outputs.cache-hit != 'true' }}
+      run: |
+        set -euo pipefail
+        workspace="${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is not set}"
+        compose_file="${workspace}/proxysql/docker-compose.yml"
+
+        if [ -f "${compose_file}" ]; then
+          for compose_project in debian12 ubuntu22 ubuntu24; do
+            echo ">>> stopping stale Compose project: ${compose_project}"
+            docker-compose -f "${compose_file}" -p "${compose_project}" down -v --remove-orphans
+          done
+        fi
+
+    # The dockerized build writes files as root, so on the next job the
+    # actions/checkout pre-clean can otherwise trip over them:
     #   ##[error]File was unable to be removed Error: EACCES: permission denied,
     #   unlink '.../proxysql/deps/prometheus-cpp/.../.bazelignore'
     # and the job fails before it even builds. Reclaim ownership for the runner
@@ -638,11 +657,27 @@ jobs:
         # cache_bin.tar.zst is produced by the "Pack bin cache" step above.
         path: cache_bin.tar.zst
 
-    # Undo the root ownership the dockerized build left behind, so (a) the next
-    # job on this self-hosted runner can clean/checkout without EACCES and (b)
-    # the failure-path artifact upload below can read the whole tree. Run on
-    # every outcome and fail loudly if cleanup cannot be completed; silently
-    # ignoring this step only defers the failure to the next job's checkout.
+    # Tear down the known CI-build projects before repairing ownership. This
+    # prevents a failed or cancelled build from continuing to write root-owned
+    # files into the bind mount while the runner is being cleaned for its next
+    # job. Run on every outcome and fail loudly if Docker cannot clean the
+    # known CI-build project.
+    - name: Stop Docker Compose project (leave runner clean)
+      if: ${{ inputs.trusted && runner.environment == 'self-hosted' && always() }}
+      run: |
+        set -euo pipefail
+        workspace="${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is not set}"
+        compose_file="${workspace}/proxysql/docker-compose.yml"
+
+        if [ -f "${compose_file}" ]; then
+          for compose_project in debian12 ubuntu22 ubuntu24; do
+            echo ">>> stopping Compose project before workspace cleanup: ${compose_project}"
+            docker-compose -f "${compose_file}" -p "${compose_project}" down -v --remove-orphans
+          done
+        fi
+
+    # Undo the root ownership the dockerized build left behind so the next job
+    # on this self-hosted runner can clean and check out without EACCES.
     - name: Reclaim workspace ownership (leave runner clean)
       if: ${{ inputs.trusted && runner.environment == 'self-hosted' && always() }}
       run: |
@@ -663,12 +698,16 @@ jobs:
         fi
 
     - name: Archive artifacts
-      if: ${{ inputs.trusted && failure() && !cancelled() }}
+      if: ${{ inputs.trusted && steps.build.outcome == 'failure' && !cancelled() }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ci-builds-${{ env.SHA }}-run#${{ github.run_number }}-${{ matrix.dist }}${{ matrix.type }}
-        path: |
-          proxysql/
+        # The checkout is a live bind mount on self-hosted runners. Uploading
+        # it after an unrelated preflight failure can race a stale container
+        # and turn a diagnostic upload into a second failure. Build logs are
+        # the relevant evidence when the Build step itself fails.
+        path: proxysql/ci_build_log/
+        if-no-files-found: warn
 
     - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
       if: ${{ inputs.trusted && always() }}
