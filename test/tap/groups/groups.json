@@ -507,6 +507,7 @@
   "test_warnings-t" : [ "legacy-g9","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g9","mysql90-g4","mysql95-g4" ],
   "test_wexecvp_syscall_failures-t" : [ "legacy-g9","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g9","mysql90-g4","mysql95-g4" ],
   "transaction_state_unit-t" : [ "unit-tests-g1" ],
+  "tsdb_cluster_aggregator_unit-t" : [ "unit-tests-g1" ],
   "unit-strip_schema_from_query-t" : [ "unit-tests-g1" ],
   "vector_db_performance-t" : [ "ai-g1","@proxysql_min_version:4.0" ],
   "vector_features-t" : [ "ai-g1","@proxysql_min_version:4.0" ]
