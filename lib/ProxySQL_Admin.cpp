@@ -410,6 +410,11 @@ static char * admin_variables_names[]= {
 	(char *)"cluster_username",
 	(char *)"cluster_password",
 	(char *)"cluster_check_interval_ms",
+#ifdef PROXYSQL31
+	(char *)"cluster_leader_election",
+#endif /* PROXYSQL31 */
+	(char *)"cluster_leader_node_timeout_ms",
+	(char *)"cluster_leader_grace_ms",
 	(char *)"cluster_check_status_frequency",
 	(char *)"cluster_mysql_query_rules_diffs_before_sync",
 	(char *)"cluster_mysql_servers_diffs_before_sync",
@@ -2635,6 +2640,9 @@ __end_while_pool:
 				GloProxyStats->tsdb_retention_cleanup();
 			}
 #endif
+			if (GloProxyCluster) {
+				GloProxyCluster->leader_election_tick(curtime);
+			}
 		}
 		if (S_amll.get_version()!=version) {
 			S_amll.wrlock();
@@ -2902,6 +2910,9 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.cluster_username=strdup((char *)"");
 	variables.cluster_password=strdup((char *)"");
 	variables.cluster_check_interval_ms=1000;
+	variables.cluster_leader_election=false;
+	variables.cluster_leader_node_timeout_ms=3000;
+	variables.cluster_leader_grace_ms=3000;
 	variables.cluster_check_status_frequency=10;
 	variables.cluster_mysql_query_rules_diffs_before_sync = 3;
 	variables.cluster_mysql_servers_diffs_before_sync = 3;
@@ -3732,6 +3743,19 @@ char * ProxySQL_Admin::get_variable(char *name) {
 		snprintf(intbuf, sizeof(intbuf),"%d",variables.cluster_check_interval_ms);
 		return strdup(intbuf);
 	}
+#ifdef PROXYSQL31
+	if (!strcasecmp(name,"cluster_leader_election")) {
+		return strdup((variables.cluster_leader_election ? "true" : "false"));
+	}
+#endif /* PROXYSQL31 */
+	if (!strcasecmp(name,"cluster_leader_node_timeout_ms")) {
+		snprintf(intbuf, sizeof(intbuf),"%d",variables.cluster_leader_node_timeout_ms);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"cluster_leader_grace_ms")) {
+		snprintf(intbuf, sizeof(intbuf),"%d",variables.cluster_leader_grace_ms);
+		return strdup(intbuf);
+	}
 	if (!strcasecmp(name,"cluster_check_status_frequency")) {
 		snprintf(intbuf, sizeof(intbuf),"%d",variables.cluster_check_status_frequency);
 		return strdup(intbuf);
@@ -4238,6 +4262,46 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (intv >= 10 && intv <= 300000) {
 			variables.cluster_check_interval_ms=intv;
 			__sync_lock_test_and_set(&GloProxyCluster->cluster_check_interval_ms, intv);
+			return true;
+		} else {
+			return false;
+		}
+	}
+#ifdef PROXYSQL31
+	if (!strcasecmp(name,"cluster_leader_election")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.cluster_leader_election=true;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_leader_election, 1);
+			// Spec: with election enabled a node is effective-RO until the first
+			// election settles. Assume follower immediately; the next tick corrects
+			// it (the elected leader flips back to RW within tick+grace).
+			set_cluster_follower(true);
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.cluster_leader_election=false;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_leader_election, 0);
+			set_cluster_follower(false); // immediate, don't wait for the next tick
+			return true;
+		}
+		return false;
+	}
+#endif /* PROXYSQL31 */
+	if (!strcasecmp(name,"cluster_leader_node_timeout_ms")) {
+		int intv=atoi(value);
+		if (intv >= 1000 && intv <= 600000) {
+			variables.cluster_leader_node_timeout_ms=intv;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_leader_node_timeout_ms, intv);
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"cluster_leader_grace_ms")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 600000) {
+			variables.cluster_leader_grace_ms=intv;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_leader_grace_ms, intv);
 			return true;
 		} else {
 			return false;

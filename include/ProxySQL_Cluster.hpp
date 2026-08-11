@@ -10,6 +10,8 @@
 #include "prometheus/counter.h"
 #include "prometheus/gauge.h"
 
+#include "ProxySQL_Cluster_Leader.h"
+
 #define PROXYSQL_NODE_METRICS_LEN	5
 
 /**
@@ -442,6 +444,7 @@ class ProxySQL_Cluster_Nodes {
 	void get_peer_to_sync_pgsql_servers_v2(char** host, uint16_t* port, char** peer_pgsql_servers_v2_checksum,
 		char** peer_runtime_pgsql_servers_checksum, char** ip_address);
 	void get_peer_to_sync_pgsql_users(char **host, uint16_t *port, char** ip_address);
+	std::vector<Cluster_Leader_Candidate> get_leader_candidates(unsigned long long alive_timeout_us);
 };
 
 struct p_cluster_counter {
@@ -518,6 +521,8 @@ struct p_cluster_counter {
 		sync_delayed_pgsql_servers_version_one,
 		sync_delayed_pgsql_users_version_one,
 		sync_delayed_pgsql_variables_version_one,
+
+		cluster_leader_changes,
 
 		SIZE_
 	};
@@ -619,6 +624,17 @@ public:
 
 	char* admin_mysql_ifaces;
 	int cluster_check_interval_ms;
+	int cluster_leader_election;          // 0/1, __sync access
+	int cluster_leader_node_timeout_ms;
+	int cluster_leader_grace_ms;
+	pthread_mutex_t leader_mutex;         // guards leader_state + leader_hostname/leader_port
+	Cluster_Leader_State leader_state;
+	char * leader_hostname;               // NULL = no leader
+	int leader_port;
+	unsigned long long leader_next_check_at; // monotonic us, 0 initially
+	void leader_election_tick(unsigned long long curtime_us);
+	bool is_leader();
+	void get_leader_info(std::string& hostname, int& port, std::string& uuid);
 	int cluster_check_status_frequency;
 	std::atomic<int> cluster_mysql_query_rules_diffs_before_sync;
 	std::atomic<int> cluster_mysql_servers_diffs_before_sync;

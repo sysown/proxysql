@@ -387,6 +387,9 @@ class ProxySQL_Admin {
 		char * cluster_username;
 		char * cluster_password;
 		int cluster_check_interval_ms;
+		bool cluster_leader_election;
+		int cluster_leader_node_timeout_ms;
+		int cluster_leader_grace_ms;
 		int cluster_check_status_frequency;
 		int cluster_mysql_query_rules_diffs_before_sync;
 		int cluster_mysql_servers_diffs_before_sync;

@@ -2606,6 +2606,8 @@ int main(int, char**) {
 			std::make_tuple("admin-cluster_admin_variables_save_to_disk"       , "true"                      ),
 			std::make_tuple("admin-cluster_check_interval_ms"                  , "1001"                      ),
 			std::make_tuple("admin-cluster_check_status_frequency"             , "11"                        ),
+			std::make_tuple("admin-cluster_leader_grace_ms"                    , "3001"                      ),
+			std::make_tuple("admin-cluster_leader_node_timeout_ms"             , "3001"                      ),
 			std::make_tuple("admin-cluster_mysql_query_rules_diffs_before_sync", "4"                         ),
 			std::make_tuple("admin-cluster_mysql_query_rules_save_to_disk"     , "true"                      ),
 			std::make_tuple("admin-cluster_mysql_servers_diffs_before_sync"    , "4"                         ),
