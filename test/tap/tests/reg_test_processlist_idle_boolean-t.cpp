@@ -47,6 +47,24 @@ static bool processlist_count(MYSQL* admin, unsigned long session_id, long* coun
 	return true;
 }
 
+static bool wait_for_processlist_count(MYSQL* admin, unsigned long session_id, long expected_count, long* count) {
+	constexpr int timeout_ms = 5000;
+	constexpr int poll_interval_ms = 10;
+	for (int elapsed_ms = 0; elapsed_ms <= timeout_ms; elapsed_ms += poll_interval_ms) {
+		if (!processlist_count(admin, session_id, count)) {
+			return false;
+		}
+		if (*count == expected_count) {
+			return true;
+		}
+		usleep(poll_interval_ms * 1000);
+	}
+
+	diag("Timed out after %d ms waiting for session %lu to have processlist count %ld; last count: %ld",
+		timeout_ms, session_id, expected_count, *count);
+	return false;
+}
+
 int main(int argc, char** argv) {
 	CommandLine cl;
 	plan(2);
@@ -67,24 +85,25 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	MYSQL* frontend = mysql_init(nullptr);
-	if (!frontend) {
-		diag("mysql_init failed for frontend connection");
-		mysql_close(admin);
-		return EXIT_FAILURE;
-	}
-	if (!mysql_real_connect(frontend, cl.host, cl.username, cl.password, nullptr, cl.port, nullptr, 0)) {
-		diag("Failed to connect to ProxySQL frontend: %s", mysql_error(frontend));
-		mysql_close(frontend);
-		mysql_close(admin);
-		return EXIT_FAILURE;
-	}
-
 	bool configured =
 		run_admin_query(admin, "SET mysql-session_idle_ms=1") &&
 		run_admin_query(admin, "SET mysql-session_idle_show_processlist=false") &&
 		run_admin_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 	if (!configured) {
+		restore_defaults(admin);
+		mysql_close(admin);
+		return EXIT_FAILURE;
+	}
+
+	MYSQL* frontend = mysql_init(nullptr);
+	if (!frontend) {
+		diag("mysql_init failed for frontend connection");
+		restore_defaults(admin);
+		mysql_close(admin);
+		return EXIT_FAILURE;
+	}
+	if (!mysql_real_connect(frontend, cl.host, cl.username, cl.password, nullptr, cl.port, nullptr, 0)) {
+		diag("Failed to connect to ProxySQL frontend: %s", mysql_error(frontend));
 		mysql_close(frontend);
 		restore_defaults(admin);
 		mysql_close(admin);
@@ -92,16 +111,17 @@ int main(int argc, char** argv) {
 	}
 
 	const unsigned long session_id = mysql_thread_id(frontend);
-	sleep(1);
 
 	long count = -1;
-	if (!processlist_count(admin, session_id, &count)) {
+	// With idle sessions hidden, this count becomes zero only after the idle maintenance thread owns the session.
+	const bool idle = wait_for_processlist_count(admin, session_id, 0, &count);
+	ok(idle && count == 0, "Idle session %lu is hidden from processlist when false (count: %ld)", session_id, count);
+	if (!idle) {
 		mysql_close(frontend);
 		restore_defaults(admin);
 		mysql_close(admin);
-		return EXIT_FAILURE;
+		return exit_status();
 	}
-	ok(count == 0, "Idle session %lu is hidden from processlist when false (count: %ld)", session_id, count);
 
 	configured =
 		run_admin_query(admin, "SET mysql-session_idle_show_processlist=true") &&
