@@ -27,6 +27,10 @@ const char * TSDB_Dashboard_html_c = R"HTML(
                 <select id="metric-select"><option>Loading...</option></select>
             </div>
             <div class="control-group">
+                <label for="nodeSel">Node:</label>
+                <select id="nodeSel"><option value="">local</option></select>
+            </div>
+            <div class="control-group">
                 <label for="range-select">Range:</label>
                 <select id="range-select">
                     <option value="3600">Last Hour</option>
@@ -70,14 +74,41 @@ const char * TSDB_Dashboard_html_c = R"HTML(
             }
         }
 
+        async function loadNodes() {
+            try {
+                const resp = await fetch('/api/tsdb/nodes');
+                if (!resp.ok) throw new Error('Failed to fetch nodes');
+                const nodes = await resp.json();
+                if (!nodes || nodes.length === 0) return;
+                const select = document.getElementById('nodeSel');
+                nodes.forEach(n => {
+                    const opt = document.createElement('option');
+                    opt.value = n.node;
+                    opt.text = `${n.node} (${n.watermark_age_s}s behind)`;
+                    select.appendChild(opt);
+                });
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
         async function loadData() {
             const metric = document.getElementById('metric-select').value;
             const range = document.getElementById('range-select').value;
             const now = Math.floor(Date.now() / 1000);
             const from = now - parseInt(range);
+            const sel = document.getElementById('nodeSel');
 
             try {
-                const resp = await fetch(`/api/tsdb/query?metric=${encodeURIComponent(metric)}&from=${from}&to=${now}`);
+                let url = `/api/tsdb/query?metric=${encodeURIComponent(metric)}&from=${from}&to=${now}`;
+                if (sel.value) {
+                    // Not encodeURIComponent: the REST server's arg parser (libhttpserver's
+                    // MHD_OPTION_UNESCAPE_CALLBACK workaround) does not decode percent-escapes,
+                    // so an encoded ':' in "ip:port" would never match a stored node value.
+                    // Node values come from our own /api/tsdb/nodes response, not free text.
+                    url += `&node=${sel.value}`;
+                }
+                const resp = await fetch(url);
                 if (!resp.ok) throw new Error('Query failed');
                 const data = await resp.json();
                 
@@ -154,7 +185,10 @@ const char * TSDB_Dashboard_html_c = R"HTML(
             }
         }
 
-        window.onload = loadMetrics;
+        window.onload = function() {
+            loadMetrics();
+            loadNodes();
+        };
     </script>
 </body>
 </html>
