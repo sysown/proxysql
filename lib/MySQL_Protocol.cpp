@@ -1227,7 +1227,9 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
 #ifdef PROXYSQLED25519
 	if ((*myds)->switching_auth_type != AUTH_MYSQL_ED25519) // ed25519 packet ends exactly after the nonce
 #endif
-	_ptr[l]=0x00; //l+=1; //0x00
+	{
+		_ptr[l]=0x00; //l+=1; //0x00
+	}
 	if (send==true) {
 		(*myds)->PSarrayOUT->add((void *)_ptr,size);
 		(*myds)->DSS=STATE_SERVER_HANDSHAKE;
@@ -1568,7 +1570,12 @@ bool MySQL_Protocol::verify_user_pass(
 		// routes such users through the nonce-based Auth Switch before
 		// reaching this function, but verify_user_pass() fails closed on its
 		// own regardless of caller-side gating.
-		if (proxysql_ed25519_has_prefix(password)) {
+		// Scoped to MYSQL sessions only: admin/stats credentials flow through
+		// this same verify path under PROXYSQL31, and a $ED$-prefixed admin
+		// password must not be denied here -- it falls through to the
+		// pre-existing cleartext comparison below, unchanged from before this
+		// feature (the feature simply doesn't apply to non-MySQL sessions).
+		if (session_type == PROXYSQL_SESSION_MYSQL && proxysql_ed25519_has_prefix(password)) {
 			ret = false;
 		} else
 #endif
@@ -1888,8 +1895,17 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		// it is routed here instead, and the client's inline data (if any)
 		// is discarded in favor of the nonce-based exchange, which denies
 		// it generically via PPHR_ed25519_verify().
+		// Scoped to MYSQL sessions only (not just "not CLICKHOUSE"): under
+		// PROXYSQL31 admin/stats credentials are verified through this same
+		// process_pkt_COM_CHANGE_USER path, and a $ED$-prefixed admin
+		// password must not force an ed25519 Auth Switch that the admin
+		// protocol cannot complete -- that would be an unrecoverable
+		// admin-port lockout. Scoping to MYSQL leaves such a password to
+		// fall through to the pre-existing cleartext comparison, which is
+		// the intended conservative behavior for non-MySQL sessions (the
+		// feature simply doesn't apply there).
 		const bool ed25519_switch_needed =
-			session_type != PROXYSQL_SESSION_CLICKHOUSE &&
+			session_type == PROXYSQL_SESSION_MYSQL &&
 			(proxysql_ed25519_has_prefix(password) ||
 			(client_auth_plugin && strcmp(client_auth_plugin, plugins[AUTH_MYSQL_ED25519]) == 0));
 		if (ed25519_switch_needed) {
@@ -3600,9 +3616,16 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 		// with the generic auth failure.
 		// 'switching_auth_sent' guards re-entry: after the switch, the signature
 		// arrives with stage 0 on the COM_CHANGE_USER path and stage 2 here.
+		// Scoped to MYSQL sessions only: admin/stats credentials are verified
+		// through this same PPHR_verify_password path under PROXYSQL31, and a
+		// $ED$-prefixed admin password must not be routed into the ed25519
+		// switch here -- that would be an unrecoverable admin-port lockout.
+		// With the gate scoped to MYSQL, such a password falls through to the
+		// pre-existing cleartext comparison instead, which is the intended
+		// conservative behavior for non-MySQL sessions.
 		if ((*myds)->switching_auth_stage == 0 &&
 			(*myds)->switching_auth_sent != AUTH_MYSQL_ED25519 &&
-			(*myds)->sess->session_type != PROXYSQL_SESSION_CLICKHOUSE) {
+			(*myds)->sess->session_type == PROXYSQL_SESSION_MYSQL) {
 			const bool stored_is_ed = proxysql_ed25519_has_prefix(vars1.password);
 			// a '*SHA1' or '$A$' hash cannot derive an ed25519 key
 			const bool cred_usable = stored_is_ed ||

@@ -503,6 +503,12 @@ MySQL_Connection::MySQL_Connection() {
 	statuses.myconnpoll_put = 0;
 	memset(gtid_uuid,0,sizeof(gtid_uuid));
 	memset(&connected_host_details, 0, sizeof(connected_host_details));
+#ifdef PROXYSQLED25519
+	// Zero-initialize so an ASAN/MSAN run never reads an uninitialized nonce
+	// on the (unreachable in practice) path where it would be read before
+	// PPHR_ed25519_switch() first populates it via RAND_bytes().
+	memset(ed25519_nonce, 0, sizeof(ed25519_nonce));
+#endif
 };
 
 MySQL_Connection::~MySQL_Connection() {
