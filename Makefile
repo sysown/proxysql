@@ -60,7 +60,7 @@ lint-tests:
 ###      * GenAI plugin (built alongside core)
 ###    - Automatically increments the major version (e.g., 3.0.6 -> 4.0.6).
 ###
-### HIERARCHY: `PROXYSQL40=1` implies `PROXYSQL31=1` implies `PROXYSQLFFTO=1` + `PROXYSQLTSDB=1`.
+### HIERARCHY: `PROXYSQL40=1` implies `PROXYSQL31=1` implies `PROXYSQLFFTO=1` + `PROXYSQLTSDB=1` + `PROXYSQLED25519=1`.
 
 # If PROXYSQL40 is enabled, it automatically enables PROXYSQL31
 ifeq ($(PROXYSQL40),1)
@@ -71,6 +71,7 @@ endif
 ifeq ($(PROXYSQL31),1)
     PROXYSQLFFTO := 1
     PROXYSQLTSDB := 1
+    PROXYSQLED25519 := 1
 endif
 
 # Only increment version at the top-level make to avoid double-incrementing in recursive makes
@@ -106,6 +107,7 @@ export PROXYSQL40
 export PROXYSQL31
 export PROXYSQLFFTO
 export PROXYSQLTSDB
+export PROXYSQLED25519
 
 ### NOTES:
 ### SOURCE_DATE_EPOCH is used for reproducible builds
@@ -413,21 +415,21 @@ build_deps_debug_default:
 
 .PHONY: build_lib_default
 build_lib_default: build_deps_default
-	cd lib && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
+	cd lib && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) PROXYSQLED25519=$(PROXYSQLED25519) CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_debug_default
 build_lib_debug_default: build_deps_debug_default
-	cd lib && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
+	cd lib && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) PROXYSQLED25519=$(PROXYSQLED25519) CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_default
 build_src_default: build_lib_default
-	cd src && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
+	cd src && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) PROXYSQLED25519=$(PROXYSQLED25519) CC=${CC} CXX=${CXX} ${MAKE}
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O2} -ggdb" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/genai && OPTZ="${O2} -ggdb" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] genai plugin (PROXYSQL40 not set)")
 
 .PHONY: build_src_debug_default
 build_src_debug_default: build_lib_debug_default
-	cd src && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
+	cd src && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) PROXYSQLED25519=$(PROXYSQLED25519) CC=${CC} CXX=${CXX} ${MAKE}
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/genai && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] genai plugin (PROXYSQL40 not set)")
 

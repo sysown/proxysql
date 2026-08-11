@@ -73,6 +73,11 @@ ifeq ($(PROXYSQLTSDB),1)
 	PSQLTSDB := -DPROXYSQLTSDB
 endif
 
+PSQLED25519 :=
+ifeq ($(PROXYSQLED25519),1)
+	PSQLED25519 := -DPROXYSQLED25519
+endif
+
 # 'libhttpserver': Add 'ENABLE_EPOLL' by default for all platforms except
 # for 'Darwin'. This is required when compiling 'libhttpserver' for avoiding
 # internal use of 'SELECT' in favor of 'EPOLL'. See #3591.
@@ -83,7 +88,7 @@ endif
 
 
 MYCFLAGS := $(IDIRS) $(OPTZ) $(DEBUG) -Wall -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
-MYCXXFLAGS := $(STDCPP) $(MYCFLAGS) $(PSQLCH) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(ENABLE_EPOLL)
+MYCXXFLAGS := $(STDCPP) $(MYCFLAGS) $(PSQLCH) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLED25519) $(ENABLE_EPOLL)
 
 default: libproxysql.a
 .PHONY: default

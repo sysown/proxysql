@@ -2,6 +2,15 @@ diff --git plugins/auth/CMakeLists.txt plugins/auth/CMakeLists.txt
 index 83e324b9..7c4ed019 100644
 --- plugins/auth/CMakeLists.txt
 +++ plugins/auth/CMakeLists.txt
+@@ -55,7 +55,7 @@
+   REGISTER_PLUGIN(TARGET client_ed25519
+                 TYPE MARIADB_CLIENT_PLUGIN_AUTH
+                 CONFIGURATIONS DYNAMIC STATIC OFF
+-                DEFAULT DYNAMIC
++                DEFAULT STATIC
+                 SOURCES ${CC_SOURCE_DIR}/plugins/auth/ed25519.c 
+                         ${REF10_SOURCES}
+                         ${CRYPT_SOURCE}
 @@ -77,7 +77,7 @@ IF(CRYPTO_PLUGIN)
    REGISTER_PLUGIN(TARGET caching_sha2_password
                  TYPE MARIADB_CLIENT_PLUGIN_AUTH
