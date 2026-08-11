@@ -502,21 +502,34 @@ char *build_client_first_message(ScramState *scram_state)
 		goto failed;
 	scram_state->client_nonce[encoded_len] = '\0';
 
-	len = 8 + strlen(scram_state->client_nonce) + 1;
-	result = malloc(len);
-	if (result == NULL)
-		goto failed;
-	if (scram_state->client_cbind_input != NULL) {
-		/* Channel-bound client: gs2 cbind flag 'p' with tls-server-end-point
-		 * type. The PostgreSQL convention is an empty SCRAM username (the
-		 * real username travels in the StartupMessage), so the header is
-		 * "p=tls-server-end-point,,". */
-		snprintf(result, len, "p=tls-server-end-point,,n=,r=%s", scram_state->client_nonce);
-	} else {
-		snprintf(result, len, "n,,n=,r=%s", scram_state->client_nonce);
-	}
+	/* gs2 header: "n,," for plain SCRAM, "p=tls-server-end-point,," when the
+	 * caller installed a channel-binding input (SCRAM-SHA-256-PLUS). Its length
+	 * drives BOTH the allocation and the offset used to derive
+	 * client_first_message_bare, so the two cannot disagree.
+	 *
+	 * Previously the buffer was sized for the 8-char plain prefix "n,,n=,r=",
+	 * which silently truncated the 29-char channel-bound message, and the bare
+	 * message was taken as "result + 3", which skipped only 3 of the 24 header
+	 * bytes and corrupted the AuthMessage the client proof is computed over.
+	 *
+	 * The PostgreSQL convention is an empty SCRAM username (the real username
+	 * travels in the StartupMessage), hence "n=".
+	 */
+	{
+		const char *gs2 = (scram_state->client_cbind_input != NULL)
+					? "p=tls-server-end-point,," : "n,,";
+		const size_t gs2_len = strlen(gs2);
 
-	scram_state->client_first_message_bare = strdup(result + 3);
+		/* gs2 + "n=,r=" (5) + nonce + NUL. For the plain header this is
+		 * 3 + 5 + nonce + 1, identical to the previous 8 + nonce + 1. */
+		len = gs2_len + 5 + strlen(scram_state->client_nonce) + 1;
+		result = malloc(len);
+		if (result == NULL)
+			goto failed;
+		snprintf(result, len, "%sn=,r=%s", gs2, scram_state->client_nonce);
+
+		scram_state->client_first_message_bare = strdup(result + gs2_len);
+	}
 	if (scram_state->client_first_message_bare == NULL)
 		goto failed;
 

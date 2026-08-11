@@ -76,8 +76,8 @@ int pg_scram_build_cbind_input_tls_server_end_point(
 
 // --- SCRAM-SHA-256 client exchange (thin wrappers over vendored libscram) ---
 //
-// Plain SCRAM-SHA-256 only: gs2 channel-binding flag is 'n' (no channel binding).
-// Channel binding (gs2 flag 'p'/'y') is a separate task. The wrapper owns a libscram
+// SCRAM-SHA-256, and SCRAM-SHA-256-PLUS when a cbind input has been installed via
+// pg_scram_set_cbind() before building client-first. The wrapper owns a libscram
 // ScramState plus a cached PgCredentials; it is defined in lib/PgSQL_Backend_Auth.cpp
 // so this header stays free of scram.h. Usage mirrors a SCRAM client driving the
 // PostgreSQL SASL handshake:
@@ -103,7 +103,10 @@ void pg_scram_free(PgSQL_Scram_State* s);
 // gs2 header is "n,," (no channel binding) and the username field is empty ("n="),
 // matching the PostgreSQL convention where the real username travels in the startup
 // packet. Returns the owned message string, or nullptr on error (see scram_error()).
-// channel_binding=true is not supported by this task and returns nullptr.
+// With channel_binding=true the gs2 header is "p=tls-server-end-point,," and the
+// caller MUST have installed a matching cbind input via pg_scram_set_cbind() first;
+// returns nullptr if it has not, rather than emit a header that contradicts the
+// advertised -PLUS mechanism.
 const char* pg_scram_client_first(PgSQL_Scram_State* s, bool channel_binding);
 
 // Consumes the server-first message (AuthenticationSASLContinue body) and the plaintext

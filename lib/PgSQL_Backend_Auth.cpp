@@ -120,12 +120,17 @@ void pg_scram_free(PgSQL_Scram_State* s) {
 
 const char* pg_scram_client_first(PgSQL_Scram_State* s, bool channel_binding) {
     if (s == nullptr || s->st == nullptr) return nullptr;
-    // Channel binding ('p'/'y' gs2 flag) is a separate task; this wrapper only does
-    // plain SCRAM-SHA-256 with gs2 flag 'n' ("n,," header).
-    if (channel_binding) return nullptr;
+    // channel_binding=true selects SCRAM-SHA-256-PLUS. The gs2 header libscram
+    // writes is driven by the cbind input the caller installed with
+    // pg_scram_set_cbind(), NOT by this flag, so the two must agree: advertising
+    // -PLUS while no cbind input is set would emit a plain "n,," header against a
+    // -PLUS mechanism name and the server would reject the proof. Refuse that
+    // combination rather than produce a mismatched handshake.
+    if (channel_binding && s->st->client_cbind_input == nullptr) return nullptr;
     scram_reset_error();
-    // libscram emits "n,,n=,r=<nonce>" and stashes client_nonce / client_first_message_bare
-    // ("n=,r=<nonce>") into the ScramState for the later proof computation.
+    // libscram emits "n,,n=,r=<nonce>", or "p=tls-server-end-point,,n=,r=<nonce>"
+    // when a cbind input is set, and stashes client_nonce / client_first_message_bare
+    // into the ScramState for the later proof computation.
     char* msg = build_client_first_message(s->st);
     if (msg == nullptr) return nullptr;
     free(s->client_first);
