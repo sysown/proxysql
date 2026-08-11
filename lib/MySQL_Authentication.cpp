@@ -18,6 +18,24 @@
 
 namespace {
 
+#ifdef PROXYSQL31
+void validate_require_x509_attribute(
+	const nlohmann::json& valid,
+	const char* username,
+	enum cred_username_type usertype
+) {
+	if (usertype == USERNAME_FRONTEND && valid.is_object()) {
+		const auto require_x509 = valid.find("require_x509");
+		if (require_x509 != valid.end() && !require_x509->is_boolean()) {
+			proxy_error(
+				"Invalid require_x509 attribute for user %s: expected JSON boolean; "
+				"authentication will be denied until corrected\n",
+				username);
+		}
+	}
+}
+#endif
+
 void cleanse_and_free_password(char*& password) {
 	if (password != nullptr) {
 		OPENSSL_cleanse(password, strlen(password));
@@ -190,6 +208,10 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 				// NOTE: add() is only place where we do input validation
 				try {
 					nlohmann::json valid=nlohmann::json::parse(attributes);
+
+#ifdef PROXYSQL31
+					validate_require_x509_attribute(valid, username, usertype);
+#endif
 					// we do further input validation here, and possibly transforming the JSON itself
 					bool json_rewritten = false;
 					auto default_transaction_isolation = valid.find("default-transaction_isolation");
@@ -248,6 +270,10 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 			// NOTE: add() is only place where we do input validation
 			try {
 				nlohmann::json valid=nlohmann::json::parse(attributes);
+
+#ifdef PROXYSQL31
+				validate_require_x509_attribute(valid, username, usertype);
+#endif
 				ad->attributes=strdup(attributes);
 			}
 			catch(nlohmann::json::exception& e) {
