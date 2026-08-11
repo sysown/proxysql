@@ -1570,12 +1570,24 @@ bool MySQL_Protocol::verify_user_pass(
 		// routes such users through the nonce-based Auth Switch before
 		// reaching this function, but verify_user_pass() fails closed on its
 		// own regardless of caller-side gating.
-		// Scoped to MYSQL sessions only: admin/stats credentials flow through
-		// this same verify path under PROXYSQL31, and a $ED$-prefixed admin
-		// password must not be denied here -- it falls through to the
-		// pre-existing cleartext comparison below, unchanged from before this
-		// feature (the feature simply doesn't apply to non-MySQL sessions).
-		if (session_type == PROXYSQL_SESSION_MYSQL && proxysql_ed25519_has_prefix(password)) {
+		// Scope note -- the fail-closed $ED$ RESERVATION and the ed25519
+		// EXCHANGE are deliberately two different scopes:
+		//   - Reservation (this denial): applies to every session type that
+		//     consumes GloMyAuth's USERNAME_FRONTEND credential scope, i.e.
+		//     PROXYSQL_SESSION_MYSQL *and* PROXYSQL_SESSION_SQLITE -- the
+		//     SQLite3-server frontend (ProxySQL's own admin-clone SQL port)
+		//     reads the same mysql_users rows. Narrowing this to MYSQL-only
+		//     reopened a cleartext fall-through on the SQLite3 port: a stored
+		//     "$ED$short" value would again be compared literally and the
+		//     stored string itself would authenticate there -- exactly what
+		//     this fail-closed fix exists to prevent, regardless of which
+		//     frontend port is asking.
+		//   - Exchange (the stage-0 gate in PPHR_verify_password and
+		//     ed25519_switch_needed in process_pkt_COM_CHANGE_USER): stays
+		//     MYSQL-only. That is a protocol capability -- only a MySQL-wire
+		//     client can complete a MySQL Auth Switch -- not a trust
+		//     decision, so it is scoped independently of this reservation.
+		if ((session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE) && proxysql_ed25519_has_prefix(password)) {
 			ret = false;
 		} else
 #endif
