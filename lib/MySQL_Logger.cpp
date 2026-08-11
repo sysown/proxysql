@@ -2175,12 +2175,10 @@ void MySQL_Logger::insertMysqlEventsIntoDb(SQLite3DB * db, const std::string& ta
 
 	char digest_hex_str[20]; // 2+sizeof(unsigned long long)*2+2
 
-	// db may be the statsdb_disk connection shared with the TSDB sampler/monitor
-	// and cluster-aggregation worker (see ProxySQL_Statistics.cpp). Those threads
-	// wrlock() around their own explicit transactions on that shared connection;
-	// do the same here so this BEGIN..COMMIT can't interleave with theirs. The
-	// SQLite3DB rwlock is per-instance, so this is a no-op-cost correct guard even
-	// when db is the in-memory statsdb connection instead.
+	// Serializes concurrent users of this SQLite3DB instance (e.g., admin main loop's
+	// periodic eventslog flush vs DUMP EVENTSLOG admin command). TSDB writer threads
+	// use a separate SQLite3DB connection to the same file, serialized at the SQLite
+	// file level.
 	db->wrlock();
 	db->execute("BEGIN");
 

@@ -2309,6 +2309,8 @@ bool ProxySQL_Statistics::tsdb_cluster_replicate_peer(const std::string& host, i
 			// network I/O happens while the lock is held.
 			statsdb_disk->wrlock();
 			statsdb_disk->execute("BEGIN");
+			sqlite3 *mydb = statsdb_disk->get_db();
+			long long changes_before = (*proxy_sqlite3_total_changes64)(mydb);
 			MYSQL_ROW row;
 			while ((row = mysql_fetch_row(res))) {
 				rc = (*proxy_sqlite3_bind_text)(stmt_insert_tsdb_cluster_metric, 1, node.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb_disk);
@@ -2324,7 +2326,10 @@ bool ProxySQL_Statistics::tsdb_cluster_replicate_peer(const std::string& host, i
 			}
 			statsdb_disk->execute("COMMIT");
 			statsdb_disk->wrunlock();
-			tsdb_agg_rows_total.fetch_add(rows);
+			// Counter reflects net-new replicated rows; boundary re-fetches are ignored by
+			// the PK and not counted.
+			long long inserted_rows = (*proxy_sqlite3_total_changes64)(mydb) - changes_before;
+			tsdb_agg_rows_total.fetch_add(inserted_rows);
 			Tsdb_Agg_Fetch_Result fr = tsdb_agg_apply_fetch(watermark, rows, last_row_ts, limit);
 			cap_hit = (fr.caught_up == false);
 			// fr.new_watermark is informational here: the watermark is re-derived
