@@ -373,6 +373,7 @@ struct p_cluster_nodes_dyn_gauge {
 		proxysql_servers_metrics_response_time_ms,
 		proxysql_servers_metrics_last_check_ms,
 		proxysql_servers_metrics_client_conns_connected,
+		proxysql_servers_alive,
 		SIZE_
 	};
 };
@@ -413,6 +414,7 @@ class ProxySQL_Cluster_Nodes {
 		std::map<std::string, prometheus::Gauge*> p_proxysql_servers_metrics_response_time_ms {};
 		std::map<std::string, prometheus::Gauge*> p_proxysql_servers_metrics_last_check_ms {};
 		std::map<std::string, prometheus::Gauge*> p_proxysql_servers_metrics_client_conns_connected {};
+		std::map<std::string, prometheus::Gauge*> p_proxysql_servers_alive {};
 	} metrics;
 	public:
 	ProxySQL_Cluster_Nodes();
@@ -531,6 +533,7 @@ struct p_cluster_counter {
 
 struct p_cluster_gauge {
 	enum metric : uint8_t {
+		cluster_leader_status,
 		SIZE_
 	};
 };

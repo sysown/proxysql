@@ -3969,6 +3969,12 @@ cluster_nodes_metrics_map = std::make_tuple(
 			"Number of frontend client connections currently open on the Cluster node.",
 			metric_tags {}
 		),
+		std::make_tuple (
+			p_cluster_nodes_dyn_gauge::proxysql_servers_alive,
+			"proxysql_servers_alive",
+			"1 when the peer answered the cluster liveness poll within admin-cluster_leader_node_timeout_ms, 0 otherwise.",
+			metric_tags {}
+		),
 	}
 );
 
@@ -4830,6 +4836,9 @@ void ProxySQL_Cluster_Nodes::update_prometheus_nodes_metrics() {
 	vector<string> cur_node_metrics {};
 	vector<string> cur_node_checksums {};
 
+	const unsigned long long alive_timeout_us =
+		(unsigned long long)__sync_fetch_and_add(&GloProxyCluster->cluster_leader_node_timeout_ms, 0) * 1000ULL;
+
 	// Update metrics for both 'servers_checksums' and 'servers_metrics'
 	for (const auto& node_entry : umap_proxy_nodes) {
 		const string hostname { node_entry.second->get_hostname() };
@@ -4889,11 +4898,14 @@ void ProxySQL_Cluster_Nodes::update_prometheus_nodes_metrics() {
 		const double last_check_ms = (curtime - read_time_us) / 1000.0;
 		const double response_time_ms = node_metrics->response_time_us / 1000.0;
 		const double conns_connected = node_metrics->Client_Connections_connected;
+		const unsigned long long last_ok = node_entry.second->get_last_success_at_us();
+		const double node_alive = (last_ok != 0 && (curtime - last_ok) < alive_timeout_us) ? 1.0 : 0.0;
 
 		vector<tuple<map<string,prometheus::Gauge*>&, dyn_gauge::metric, double>> metric_gauges {
 			std::make_tuple(std::ref(this->metrics.p_proxysql_servers_metrics_last_check_ms), dyn_gauge::proxysql_servers_metrics_last_check_ms, last_check_ms),
 			std::make_tuple(std::ref(this->metrics.p_proxysql_servers_metrics_response_time_ms), dyn_gauge::proxysql_servers_metrics_response_time_ms, response_time_ms),
 			std::make_tuple(std::ref(this->metrics.p_proxysql_servers_metrics_client_conns_connected), dyn_gauge::proxysql_servers_metrics_client_conns_connected, conns_connected),
+			std::make_tuple(std::ref(this->metrics.p_proxysql_servers_alive), dyn_gauge::proxysql_servers_alive, node_alive),
 		};
 
 		for (const auto& metric_gauge : metric_gauges) {
@@ -4938,6 +4950,7 @@ void ProxySQL_Cluster_Nodes::update_prometheus_nodes_metrics() {
 		{ metrics.p_proxysql_servers_metrics_response_time_ms, dyn_gauge::proxysql_servers_metrics_response_time_ms },
 		{ metrics.p_proxysql_servers_metrics_last_check_ms, dyn_gauge::proxysql_servers_metrics_last_check_ms },
 		{ metrics.p_proxysql_servers_metrics_client_conns_connected, dyn_gauge::proxysql_servers_metrics_client_conns_connected },
+		{ metrics.p_proxysql_servers_alive, dyn_gauge::proxysql_servers_alive },
 
 		{ metrics.p_proxysql_servers_checksums_epoch, dyn_gauge::proxysql_servers_checksums_epoch },
 		{ metrics.p_proxysql_servers_checksums_updated_at, dyn_gauge::proxysql_servers_checksums_updated_at },
@@ -5637,7 +5650,14 @@ cluster_metrics_map = std::make_tuple(
 			metric_tags {}
 		),
 	},
-	cluster_gauge_vector {}
+	cluster_gauge_vector {
+		std::make_tuple (
+			p_cluster_gauge::cluster_leader_status,
+			"proxysql_cluster_leader_status",
+			"1 when this node is the elected cluster leader, 0 otherwise.",
+			metric_tags {}
+		),
+	}
 );
 
 ProxySQL_Cluster::ProxySQL_Cluster() : proxysql_servers_to_monitor(NULL) {
@@ -5702,6 +5722,7 @@ ProxySQL_Cluster::~ProxySQL_Cluster() {
 
 void ProxySQL_Cluster::p_update_metrics() {
 	this->nodes.update_prometheus_nodes_metrics();
+	metrics.p_gauge_array[p_cluster_gauge::cluster_leader_status]->Set(is_leader() ? 1 : 0);
 };
 
 void ProxySQL_Cluster::leader_election_tick(unsigned long long curtime_us) {
