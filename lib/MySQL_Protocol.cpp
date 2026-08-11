@@ -1215,7 +1215,7 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
 			memcpy(_ptr+l,plugins[AUTH_MYSQL_ED25519],strlen(plugins[AUTH_MYSQL_ED25519]));
 			l+=strlen(plugins[AUTH_MYSQL_ED25519]);
 			_ptr[l]=0x00; l++;
-			memcpy(_ptr+l, (*myds)->myconn->scramble_buff, ED25519_NONCE_LEN); l+=ED25519_NONCE_LEN;
+			memcpy(_ptr+l, (*myds)->myconn->ed25519_nonce, ED25519_NONCE_LEN); l+=ED25519_NONCE_LEN;
 			break;
 #endif
 		default:
@@ -1873,20 +1873,10 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 			(proxysql_ed25519_is_pubkey_format(password) ||
 			(client_auth_plugin && strcmp(client_auth_plugin, plugins[AUTH_MYSQL_ED25519]) == 0));
 		if (ed25519_switch_needed) {
-			if (RAND_bytes(reinterpret_cast<unsigned char *>((*myds)->myconn->scramble_buff), ED25519_NONCE_LEN) != 1) {
+			if (RAND_bytes((*myds)->myconn->ed25519_nonce, ED25519_NONCE_LEN) != 1) {
 				proxy_error("RAND_bytes() failed generating the ed25519 nonce for user '%s'\n", user);
 				ret = false;
 			} else {
-				// The nonce is 32 raw random bytes, not a NUL-terminated string, and
-				// overwrites the terminator that would otherwise sit at index 20 for
-				// the native scramble. scramble_buff[40] is never zero-initialized by
-				// the MySQL_Connection constructor, so without this terminator the
-				// DEBUG-only handshake dump (hex(scramble_buff), which strlen()'s the
-				// buffer via std::string_view) would walk into uninitialized bytes
-				// 32-39 and potentially past the array. Index 32 is safely in bounds
-				// of char[40]; nothing downstream consumes the native scramble after
-				// an ed25519 switch.
-				(*myds)->myconn->scramble_buff[ED25519_NONCE_LEN] = '\0';
 				(*myds)->switching_auth_type = AUTH_MYSQL_ED25519;
 				(*myds)->sess->change_user_auth_switch = true;
 				generate_pkt_auth_switch_request(true, NULL, NULL);
@@ -3062,27 +3052,21 @@ bool MySQL_Protocol::PPHR_passthrough_init(MyProt_tmp_auth_vars& vars1) {
 #ifdef PROXYSQLED25519
 /**
  * @brief Initiate the client_ed25519 Auth Switch (stage 0 -> 1).
- * @details Generates a fresh 32-byte nonce into 'scramble_buff' (40 bytes, so
- *   it fits) and sends an AuthSwitchRequest naming client_ed25519. The client
- *   answers with a 64-byte signature that PPHR_1 collects (stage 1 -> 2) and
+ * @details Generates a fresh 32-byte nonce into 'ed25519_nonce' and sends an
+ *   AuthSwitchRequest naming client_ed25519. The client answers with a
+ *   64-byte signature that PPHR_1 collects (stage 1 -> 2) and
  *   PPHR_ed25519_verify() checks. Mirrors the state handling of PPHR_4auth0.
+ *   The nonce is kept in its own field rather than aliasing scramble_buff:
+ *   the native scramble lives for the whole client connection and is read by
+ *   later COM_CHANGE_USER / caching_sha2 verifications, so it must not be
+ *   overwritten by this 32-byte binary (non-NUL-terminated) challenge.
  */
 void MySQL_Protocol::PPHR_ed25519_switch(bool& ret, MyProt_tmp_auth_vars& vars1) {
 	ret = false;
-	if (RAND_bytes(reinterpret_cast<unsigned char *>((*myds)->myconn->scramble_buff), ED25519_NONCE_LEN) != 1) {
+	if (RAND_bytes((*myds)->myconn->ed25519_nonce, ED25519_NONCE_LEN) != 1) {
 		proxy_error("RAND_bytes() failed generating the ed25519 nonce for user '%s'\n", vars1.user);
 		return;
 	}
-	// The nonce is 32 raw random bytes, not a NUL-terminated string, and
-	// overwrites the terminator that proxy_create_random_string() left at
-	// index 20 for the native scramble. scramble_buff[40] is never
-	// zero-initialized by the MySQL_Connection constructor, so without this
-	// terminator the DEBUG-only handshake dump (hex(scramble_buff), which
-	// converts through std::string_view and therefore strlen()'s the
-	// buffer) would walk into uninitialized bytes 32-39 and potentially
-	// past the array. Index 32 is safely in bounds of char[40]; nothing
-	// downstream consumes the native scramble after an ed25519 switch.
-	(*myds)->myconn->scramble_buff[ED25519_NONCE_LEN] = '\0';
 	(*myds)->switching_auth_type = AUTH_MYSQL_ED25519;
 	(*myds)->switching_auth_stage = 1;
 	(*myds)->auth_in_progress = 1;
@@ -3116,7 +3100,7 @@ void MySQL_Protocol::PPHR_ed25519_verify(bool& ret, MyProt_tmp_auth_vars& vars1)
 	} else {
 		proxysql_ed25519_derive_public_key(vars1.password, strlen(vars1.password), pubkey);
 	}
-	if (proxysql_ed25519_verify_signature(vars1.pass, reinterpret_cast<unsigned char *>((*myds)->myconn->scramble_buff), pubkey)) {
+	if (proxysql_ed25519_verify_signature(vars1.pass, (*myds)->myconn->ed25519_nonce, pubkey)) {
 		ret = true;
 	}
 	OPENSSL_cleanse(pubkey, sizeof(pubkey));
