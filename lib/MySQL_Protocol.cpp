@@ -3026,6 +3026,16 @@ void MySQL_Protocol::PPHR_ed25519_switch(bool& ret, MyProt_tmp_auth_vars& vars1)
 		proxy_error("RAND_bytes() failed generating the ed25519 nonce for user '%s'\n", vars1.user);
 		return;
 	}
+	// The nonce is 32 raw random bytes, not a NUL-terminated string, and
+	// overwrites the terminator that proxy_create_random_string() left at
+	// index 20 for the native scramble. scramble_buff[40] is never
+	// zero-initialized by the MySQL_Connection constructor, so without this
+	// terminator the DEBUG-only handshake dump (hex(scramble_buff), which
+	// converts through std::string_view and therefore strlen()'s the
+	// buffer) would walk into uninitialized bytes 32-39 and potentially
+	// past the array. Index 32 is safely in bounds of char[40]; nothing
+	// downstream consumes the native scramble after an ed25519 switch.
+	(*myds)->myconn->scramble_buff[ED25519_NONCE_LEN] = '\0';
 	(*myds)->switching_auth_type = AUTH_MYSQL_ED25519;
 	(*myds)->switching_auth_stage = 1;
 	(*myds)->auth_in_progress = 1;
