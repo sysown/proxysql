@@ -54,6 +54,7 @@ int main() {
 		3 /* derivation KATs */ +
 		3 /* decode round-trips */ +
 		7 /* is_pubkey_format edge cases */ +
+		5 /* has_prefix edge cases */ +
 		2 /* decode_pubkey malformed */ +
 		1 /* signature KAT */ +
 		3 /* tampered signature / nonce / key */
@@ -92,6 +93,18 @@ int main() {
 		ok(proxysql_ed25519_is_pubkey_format(toolong.c_str()) == false, "48-char string rejected");
 		ok(proxysql_ed25519_is_pubkey_format(NULL) == false, "NULL rejected");
 		ok(proxysql_ed25519_is_pubkey_format("*THISLOOKSLIKEASHA1HASHXXXXXXXXXXXXXXXXX") == false, "SHA1-format password rejected");
+	}
+
+	// 3b. has_prefix edge cases -- routes on the marker alone, independent of
+	// validity, per the fail-closed rule: any "$ED$"-prefixed value (valid
+	// or malformed) must be recognized so it is never treated as cleartext.
+	{
+		std::string valid = std::string(ED25519_STORED_PREFIX) + KATS[1].pubkey_b64;
+		ok(proxysql_ed25519_has_prefix(valid.c_str()) == true, "has_prefix: valid 47-char credential accepted");
+		ok(proxysql_ed25519_has_prefix("$ED$short") == true, "has_prefix: malformed wrong-length value still recognized");
+		ok(proxysql_ed25519_has_prefix("$ed$short") == true, "has_prefix: case-insensitive marker match");
+		ok(proxysql_ed25519_has_prefix(KATS[1].pubkey_b64) == false, "has_prefix: bare base64 without marker rejected");
+		ok(proxysql_ed25519_has_prefix(NULL) == false, "has_prefix: NULL rejected");
 	}
 
 	// 4. decode_pubkey malformed input

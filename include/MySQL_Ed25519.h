@@ -38,6 +38,9 @@ bool proxysql_ed25519_verify_signature(const unsigned char* signature, const uns
 /** @brief True when 'password' is a stored ed25519 public key ("$ED$" + 43 base64 chars). NULL-safe. */
 bool proxysql_ed25519_is_pubkey_format(const char* password);
 
+/** @brief True when 'password' begins with the "$ED$" marker (case-insensitive), regardless of validity. Any such value is reserved for ed25519 credentials and never treated as a cleartext password. NULL-safe. */
+bool proxysql_ed25519_has_prefix(const char* password);
+
 /** @brief Decode a "$ED$..." stored credential into a 32-byte public key. False on malformed input. */
 bool proxysql_ed25519_decode_pubkey(const char* stored, unsigned char* out_pubkey);
 

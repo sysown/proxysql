@@ -1026,7 +1026,11 @@ void MySQL_Connection::connect_start() {
 		}
 	}
 #ifdef PROXYSQLED25519
-	if (userinfo->password && proxysql_ed25519_is_pubkey_format(userinfo->password)) {
+	// Prefix match, not full-validity match: a "$ED$"-prefixed value of the
+	// wrong length is just as unusable as cleartext against a backend as a
+	// well-formed one -- the "$ED$" marker is reserved and never a real
+	// cleartext password either way.
+	if (userinfo->password && proxysql_ed25519_has_prefix(userinfo->password)) {
 		proxy_warning(
 			"User '%s' has an ed25519 public-key-only ($ED$) credential;"
 			" backend authentication requires the cleartext password and will fail\n",

@@ -28,9 +28,13 @@ bool proxysql_ed25519_verify_signature(const unsigned char* signature, const uns
 	return crypto_sign_open(sm, sizeof(sm), pubkey) == 0;
 }
 
-bool proxysql_ed25519_is_pubkey_format(const char* password) {
+bool proxysql_ed25519_has_prefix(const char* password) {
 	if (password == NULL) return false;
-	if (strncasecmp(password, ED25519_STORED_PREFIX, ED25519_STORED_PREFIX_LEN) != 0) return false;
+	return strncasecmp(password, ED25519_STORED_PREFIX, ED25519_STORED_PREFIX_LEN) == 0;
+}
+
+bool proxysql_ed25519_is_pubkey_format(const char* password) {
+	if (proxysql_ed25519_has_prefix(password) == false) return false;
 	return strlen(password) == ED25519_STORED_LEN;
 }
 

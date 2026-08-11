@@ -1560,6 +1560,18 @@ bool MySQL_Protocol::verify_user_pass(
 	}
 
 	if (password[0]!='*') { // clear text password
+#ifdef PROXYSQLED25519
+		// Defense in depth: a "$ED$"-prefixed stored password is reserved for
+		// ed25519 credentials and must never be compared as a literal
+		// cleartext/native password, even when malformed (wrong length).
+		// process_pkt_COM_CHANGE_USER's ed25519_switch_needed gate already
+		// routes such users through the nonce-based Auth Switch before
+		// reaching this function, but verify_user_pass() fails closed on its
+		// own regardless of caller-side gating.
+		if (proxysql_ed25519_has_prefix(password)) {
+			ret = false;
+		} else
+#endif
 		if (auth_plugin_id == 0) { // mysql_native_password
 			proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
 			if (auth_response_has(pass_len, SHA_DIGEST_LENGTH) &&
@@ -1861,16 +1873,24 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		ret=false;
 	} else {
 #ifdef PROXYSQLED25519
-		// A stored "$ED$" credential (or an explicit client_ed25519 request)
-		// can only be verified through a fresh-nonce Auth Switch: any inline
-		// auth data was computed against the original scramble and is
-		// meaningless for ed25519. Mirrors the native pass_len==0 switch below
-		// (issue #3504); the response re-enters process_pkt_handshake_response
-		// where PPHR_1 picks up switching_auth_type and PPHR_verify_password
-		// verifies the signature (switching_auth_sent guards its stage-0 gate).
+		// A stored "$ED$"-prefixed credential (or an explicit client_ed25519
+		// request) can only be verified through a fresh-nonce Auth Switch:
+		// any inline auth data was computed against the original scramble
+		// and is meaningless for ed25519. Mirrors the native pass_len==0
+		// switch below (issue #3504); the response re-enters
+		// process_pkt_handshake_response where PPHR_1 picks up
+		// switching_auth_type and PPHR_verify_password verifies the
+		// signature (switching_auth_sent guards its stage-0 gate).
+		// Routing on the prefix alone (not full pubkey validity) is
+		// deliberate and fail-closed: a "$ED$..." value of the wrong length
+		// must never reach verify_user_pass()'s inline-credential branches
+		// below and be compared as a literal cleartext/hashed password --
+		// it is routed here instead, and the client's inline data (if any)
+		// is discarded in favor of the nonce-based exchange, which denies
+		// it generically via PPHR_ed25519_verify().
 		const bool ed25519_switch_needed =
 			session_type != PROXYSQL_SESSION_CLICKHOUSE &&
-			(proxysql_ed25519_is_pubkey_format(password) ||
+			(proxysql_ed25519_has_prefix(password) ||
 			(client_auth_plugin && strcmp(client_auth_plugin, plugins[AUTH_MYSQL_ED25519]) == 0));
 		if (ed25519_switch_needed) {
 			if (RAND_bytes((*myds)->myconn->ed25519_nonce, ED25519_NONCE_LEN) != 1) {
@@ -3092,7 +3112,14 @@ void MySQL_Protocol::PPHR_ed25519_verify(bool& ret, MyProt_tmp_auth_vars& vars1)
 		return;
 	}
 	unsigned char pubkey[ED25519_PUBKEY_LEN];
-	if (proxysql_ed25519_is_pubkey_format(vars1.password)) {
+	// Route on the "$ED$" prefix, not on full validity: any prefixed value is
+	// reserved for ed25519 credentials and must never fall into the
+	// cleartext-derivation branch below, even when malformed (wrong length).
+	// proxysql_ed25519_decode_pubkey() re-checks strict pubkey format
+	// internally and fails closed (generic denial) for a "$ED$"-prefixed but
+	// invalid credential -- it is never treated as a MariaDB-variant
+	// cleartext password.
+	if (proxysql_ed25519_has_prefix(vars1.password)) {
 		if (proxysql_ed25519_decode_pubkey(vars1.password, pubkey) == false) {
 			proxy_error("mysql_users entry for '%s' has a malformed $ED$ ed25519 credential; denying access\n", vars1.user);
 			return;
@@ -3563,14 +3590,20 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 		// ed25519 gate (stage 0): a client that requested client_ed25519 sends an
 		// empty auth response in the HandshakeResponse -- it cannot sign before
 		// receiving the 32-byte nonce -- so this decision MUST precede the
-		// empty-response checks below. A stored "$ED$" credential forces the
-		// ed25519 exchange regardless of the plugin the client offered.
+		// empty-response checks below. A stored "$ED$"-prefixed credential
+		// forces the ed25519 exchange regardless of the plugin the client
+		// offered. Routing on the prefix alone (not full pubkey validity) is
+		// deliberate and fail-closed: a malformed "$ED$..." value (wrong
+		// length) must never fall through to plain cleartext comparison
+		// below -- it is routed into the ed25519 flow, where
+		// PPHR_ed25519_verify()/proxysql_ed25519_decode_pubkey() denies it
+		// with the generic auth failure.
 		// 'switching_auth_sent' guards re-entry: after the switch, the signature
 		// arrives with stage 0 on the COM_CHANGE_USER path and stage 2 here.
 		if ((*myds)->switching_auth_stage == 0 &&
 			(*myds)->switching_auth_sent != AUTH_MYSQL_ED25519 &&
 			(*myds)->sess->session_type != PROXYSQL_SESSION_CLICKHOUSE) {
-			const bool stored_is_ed = proxysql_ed25519_is_pubkey_format(vars1.password);
+			const bool stored_is_ed = proxysql_ed25519_has_prefix(vars1.password);
 			// a '*SHA1' or '$A$' hash cannot derive an ed25519 key
 			const bool cred_usable = stored_is_ed ||
 				(vars1.password[0] != '*' &&
@@ -3603,7 +3636,11 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 			);
 #endif // debug
 #ifdef PROXYSQLED25519
-			if (auth_plugin_id == AUTH_MYSQL_ED25519 || proxysql_ed25519_is_pubkey_format(vars1.password)) {
+			// Route on the "$ED$" prefix, not full pubkey validity: a
+			// malformed "$ED$..." stored credential must still be denied via
+			// PPHR_ed25519_verify()'s generic failure, never treated as a
+			// cleartext/native password comparison below.
+			if (auth_plugin_id == AUTH_MYSQL_ED25519 || proxysql_ed25519_has_prefix(vars1.password)) {
 				// signature collected by PPHR_1 after the Auth Switch; a stored
 				// "$ED$" key with a non-ed25519 response fails the length check
 				// inside PPHR_ed25519_verify (generic denial)

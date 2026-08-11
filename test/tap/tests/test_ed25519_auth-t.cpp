@@ -11,7 +11,11 @@
  *        "the query failed", so a Galera blip or backend outage cannot pass this check);
  *     3. wrong password -> 1045;
  *     4. COM_CHANGE_USER into an ed25519 user via Auth Switch;
- *     5. additional-password (attributes JSON) retry.
+ *     5. additional-password (attributes JSON) retry;
+ *     6. malformed "$ED$"-prefixed stored credential ("$ED$short", wrong
+ *        length): connecting with the literal stored string as the password
+ *        must be denied with 1045, never accepted as a cleartext match
+ *        (regression coverage for the fail-closed prefix-routing fix).
  */
 #include <cstdlib>
 #include <cstring>
@@ -40,7 +44,7 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	plan(10);
+	plan(11);
 
 	// ---- fixture: backend plugin + users, via ProxySQL default routing ----
 	MYSQL* wr = mysql_init(NULL);
@@ -101,6 +105,14 @@ int main(int argc, char** argv) {
 		"INSERT OR REPLACE INTO mysql_users (username,password,active,default_hostgroup) VALUES"
 		" ('ed_user_pk','$ED$" + std::string(ED_PUBKEY) + "',1," + std::to_string(def_hg) + ")";
 	MYSQL_QUERY(admin, q2.c_str());
+	// Malformed "$ED$"-prefixed credential: wrong length, not a valid 47-char
+	// public key. No backend user is needed -- the fail-closed fix denies
+	// this at the frontend, before any backend connection is attempted.
+	const char* ED_BAD_STORED = "$ED$short";
+	std::string q3 =
+		"INSERT OR REPLACE INTO mysql_users (username,password,active,default_hostgroup) VALUES"
+		" ('ed_user_bad','" + std::string(ED_BAD_STORED) + "',1," + std::to_string(def_hg) + ")";
+	MYSQL_QUERY(admin, q3.c_str());
 	MYSQL_QUERY(admin, "LOAD MYSQL USERS TO RUNTIME");
 
 	// ---- 1-2: cleartext-stored user, full frontend+backend path ----
@@ -162,6 +174,21 @@ int main(int argc, char** argv) {
 		mysql_close(c);
 	}
 
+	// ---- 6b: malformed "$ED$"-prefixed stored credential is never treated
+	// as cleartext. Before the fail-closed fix, is_pubkey_format() rejected
+	// "$ED$short" as not-a-valid-key, so it fell through to plain cleartext
+	// comparison and a client sending the literal stored string as its
+	// password would authenticate successfully. It must now be denied with
+	// the standard 1045, exactly like any other credential mismatch.
+	{
+		MYSQL* c = mysql_init(NULL);
+		bool conn_ok = mysql_real_connect(c, cl.host, "ed_user_bad", ED_BAD_STORED, NULL, cl.port, NULL, 0) != NULL;
+		ok(conn_ok == false && mysql_errno(c) == 1045,
+			"malformed $ED$ credential ('%s') denied with 1045, not accepted as cleartext (got errno %u)",
+			ED_BAD_STORED, mysql_errno(c));
+		mysql_close(c);
+	}
+
 	// ---- 7-8: COM_CHANGE_USER into the ed25519 user ----
 	{
 		MYSQL* c = mysql_init(NULL);
@@ -207,7 +234,7 @@ int main(int argc, char** argv) {
 	}
 
 	// ---- cleanup ----
-	MYSQL_QUERY(admin, "DELETE FROM mysql_users WHERE username IN ('ed_user','ed_user_pk')");
+	MYSQL_QUERY(admin, "DELETE FROM mysql_users WHERE username IN ('ed_user','ed_user_pk','ed_user_bad')");
 	MYSQL_QUERY(admin, "LOAD MYSQL USERS TO RUNTIME");
 	mysql_query(wr, "DROP USER IF EXISTS 'ed_user'@'%'");
 	mysql_query(wr, "DROP USER IF EXISTS 'ed_user_pk'@'%'");
