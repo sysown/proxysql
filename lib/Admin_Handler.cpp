@@ -618,7 +618,7 @@ bool admin_handler_command_kill_pgsql_connection(uint32_t session_thd_id, S* ses
 		SPA->send_ok_msg_to_client(sess, NULL, 0, "KILL PGSQL CONNECTION");
 	} else {
 		char buf[1024];
-		sprintf(buf, "Unknown thread id: %u", session_thd_id);
+		snprintf(buf, sizeof(buf), "Unknown thread id: %u", session_thd_id);
 		SPA->send_error_msg_to_client(sess, buf);
 	}
 	return false;
@@ -633,7 +633,7 @@ bool admin_handler_command_kill_mysql_connection(uint32_t session_thd_id, S* ses
 		SPA->send_ok_msg_to_client(sess, NULL, 0, NULL);
 	} else {
 		char buf[1024];
-		sprintf(buf,"Unknown thread id: %u", session_thd_id);
+		snprintf(buf, sizeof(buf), "Unknown thread id: %u", session_thd_id);
 		SPA->send_error_msg_to_client(sess, buf);
 	}
 	return false;
@@ -837,7 +837,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			GloMTH->set_int_variable_and_commit("wait_timeout", "0");
 		GloMTH->signal_all_threads(0);
 		GloMTH->stop_listeners();
-		sprintf(buf, "%d", admin_old_wait_timeout);
+		snprintf(buf, sizeof(buf), "%d", admin_old_wait_timeout);
 		(void)GloMTH->set_int_variable_and_commit("wait_timeout", buf);
 
 		// ----- PgSQL module stop -----
@@ -846,7 +846,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		GloPTH->commit();
 		GloPTH->signal_all_threads(0);
 		GloPTH->stop_listeners();
-		sprintf(buf, "%d", admin_old_wait_timeout);
+		snprintf(buf, sizeof(buf), "%d", admin_old_wait_timeout);
 		GloPTH->set_variable((char*)"wait_timeout", buf);
 		GloPTH->commit();
 
@@ -896,7 +896,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			admin_proxysql_mysql_paused=true;
 			// we now rollback poll_timeout
 			char buf[32];
-			sprintf(buf,"%d",admin_old_wait_timeout);
+			snprintf(buf, sizeof(buf), "%d",admin_old_wait_timeout);
 			(void)GloMTH->set_int_variable_and_commit("poll_timeout", buf);
 		}
 
@@ -911,7 +911,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			admin_proxysql_pgsql_paused = true;
 			// we now rollback poll_timeout
 			char buf[32];
-			sprintf(buf, "%d", admin_old_wait_timeout);
+			snprintf(buf, sizeof(buf), "%d", admin_old_wait_timeout);
 			GloPTH->set_variable((char*)"poll_timeout", buf);
 			GloPTH->commit();
 		}
@@ -952,7 +952,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			admin_proxysql_mysql_paused=false;
 			// we now rollback poll_timeout
 			char buf[32];
-			sprintf(buf,"%d",admin_old_wait_timeout);
+			snprintf(buf, sizeof(buf), "%d",admin_old_wait_timeout);
 			(void)GloMTH->set_int_variable_and_commit("poll_timeout", buf);
 		}
 
@@ -971,7 +971,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			admin_proxysql_pgsql_paused = false;
 			// we now rollback poll_timeout
 			char buf[32];
-			sprintf(buf, "%d", admin_old_wait_timeout);
+			snprintf(buf, sizeof(buf), "%d", admin_old_wait_timeout);
 			GloPTH->set_variable((char*)"poll_timeout", buf);
 			GloPTH->commit();
 		}
@@ -1554,8 +1554,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				} else {
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
 					char *s=(char *)"Unable to open or parse config file %s";
-					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
+					size_t m_size = strlen(s) + strlen(GloVars.config_file) + 1;
+					char *m=(char *)malloc(m_size);
+					snprintf(m, m_size, s, GloVars.config_file);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -1622,8 +1623,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				} else {
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
 					char *s=(char *)"Unable to open or parse config file %s";
-					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
+					size_t m_size = strlen(s) + strlen(GloVars.config_file) + 1;
+					char *m=(char *)malloc(m_size);
+					snprintf(m, m_size, s, GloVars.config_file);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -1694,8 +1696,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				} else {
 					proxy_info("Tried to load invalid user %s\n", name);
 					char *s=(char *)"Invalid name %s";
-					char *m=(char *)malloc(strlen(s)+strlen(name)+1);
-					sprintf(m,s,name);
+					size_t m_size = strlen(s) + strlen(name) + 1;
+					char *m=(char *)malloc(m_size);
+					snprintf(m, m_size, s, name);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -1884,8 +1887,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				} else {
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
 					char *s=(char *)"Unable to open or parse config file %s";
-					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
+					size_t m_size = strlen(s) + strlen(GloVars.config_file) + 1;
+					char *m=(char *)malloc(m_size);
+					snprintf(m, m_size, s, GloVars.config_file);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -2249,8 +2253,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				} else {
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
 					char *s=(char *)"Unable to open or parse config file %s";
-					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
+					size_t m_size = strlen(s) + strlen(GloVars.config_file) + 1;
+					char *m=(char *)malloc(m_size);
+					snprintf(m, m_size, s, GloVars.config_file);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -2390,8 +2395,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				} else {
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
 					char *s=(char *)"Unable to open or parse config file %s";
-					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
+					size_t m_size = strlen(s) + strlen(GloVars.config_file) + 1;
+					char *m=(char *)malloc(m_size);
+					snprintf(m, m_size, s, GloVars.config_file);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -2514,8 +2520,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				} else {
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
 					char *s=(char *)"Unable to open or parse config file %s";
-					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
+					size_t m_size = strlen(s) + strlen(GloVars.config_file) + 1;
+					char *m=(char *)malloc(m_size);
+					snprintf(m, m_size, s, GloVars.config_file);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -2558,8 +2565,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				} else {
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
 					char *s=(char *)"Unable to open or parse config file %s";
-					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
+					size_t m_size = strlen(s) + strlen(GloVars.config_file) + 1;
+					char *m=(char *)malloc(m_size);
+					snprintf(m, m_size, s, GloVars.config_file);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -2663,8 +2671,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				} else {
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
 					char *s=(char *)"Unable to open or parse config file %s";
-					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
+					size_t m_size = strlen(s) + strlen(GloVars.config_file) + 1;
+					char *m=(char *)malloc(m_size);
+					snprintf(m, m_size, s, GloVars.config_file);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -2790,8 +2799,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				} else {
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
 					char *s=(char *)"Unable to open or parse config file %s";
-					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
+					size_t m_size = strlen(s) + strlen(GloVars.config_file) + 1;
+					char *m=(char *)malloc(m_size);
+					snprintf(m, m_size, s, GloVars.config_file);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -3470,7 +3480,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		int cnt = GloMyQPro->get_current_query_rules_fast_routing_count();
 		l_free(query_length,query);
 		char buf[256];
-		sprintf(buf,"SELECT %d AS 'COUNT(*)'", cnt);
+		snprintf(buf, sizeof(buf), "SELECT %d AS 'COUNT(*)'", cnt);
 		query=l_strdup(buf);
 		query_length=strlen(query)+1;
 		goto __run_query;
@@ -3483,7 +3493,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		int cnt = GloPgQPro->get_current_query_rules_fast_routing_count();
 		l_free(query_length, query);
 		char buf[256];
-		sprintf(buf, "SELECT %d AS 'COUNT(*)'", cnt);
+		snprintf(buf, sizeof(buf), "SELECT %d AS 'COUNT(*)'", cnt);
 		query = l_strdup(buf);
 		query_length = strlen(query) + 1;
 		goto __run_query;
@@ -3773,7 +3783,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 					l_free(query_length,query);
 					unsigned int curver = MyHGM->get_servers_table_version();
 					char buf[256];
-					sprintf(buf,"SELECT %u AS 'version'", curver);
+					snprintf(buf, sizeof(buf), "SELECT %u AS 'version'", curver);
 					query=l_strdup(buf);
 					query_length=strlen(query)+1;
 					//SPA->send_ok_msg_to_client(sess,  , NULL);
@@ -3787,7 +3797,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		if ((query_no_space_length == sizeof("SELECT GLOBAL_CHECKSUM()") - 1) && (!strncasecmp("SELECT GLOBAL_CHECKSUM()", query_no_space, sizeof("SELECT GLOBAL_CHECKSUM()") - 1))) {
 			char buf[32];
 			pthread_mutex_lock(&GloVars.checksum_mutex);
-			sprintf(buf,"%lu",GloVars.checksums_values.global_checksum);
+			snprintf(buf, sizeof(buf), "%lu",GloVars.checksums_values.global_checksum);
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
 			uint16_t setStatus = 0;
 			auto *myds=sess->client_myds;
@@ -4194,10 +4204,11 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 
 		// compute the timezone diff
 		std::string timezone_offset_str = timediff_timezone_offset();
-		char *query2=(char *)malloc(strlen(query1) + strlen(timezone_offset_str.c_str()) + 1);
+		size_t query2_size = strlen(query1) + strlen(timezone_offset_str.c_str()) + 1;
+		char *query2=(char *)malloc(query2_size);
 
 		// format the query
-		sprintf(query2, query1, timezone_offset_str.c_str());
+		snprintf(query2, query2_size, query1, timezone_offset_str.c_str());
 
 		// copy the resulting query
 		query=l_strdup(query2);
@@ -4553,15 +4564,16 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		if (error) {
 			proxy_error("Error: %s\n", error);
 			char buf[1024];
-			sprintf(buf,"%s", error);
+			snprintf(buf, sizeof(buf), "%s", error);
 			SPA->send_error_msg_to_client(sess, buf);
 			run_query=false;
 		} else if (resultset) {
 			l_free(query_length,query);
-			char *q=(char *)"SELECT '%s' AS 'table', '%s' AS 'checksum'";
-			char *checksum=(char *)resultset->checksum();
-			query=(char *)malloc(strlen(q)+strlen(tablename)+strlen(checksum)+1);
-			sprintf(query,q,tablename,checksum);
+		char *q=(char *)"SELECT '%s' AS 'table', '%s' AS 'checksum'";
+		char *checksum=(char *)resultset->checksum();
+		size_t query_size = strlen(q) + strlen(tablename) + strlen(checksum) + 1;
+		query=(char *)malloc(query_size);
+		snprintf(query, query_size, q, tablename, checksum);
 			query_length = strlen(query);
 			free(checksum);
 			delete resultset;
@@ -5438,10 +5450,11 @@ __run_query:
 			} else {
 				assert(0);
 			}
-		} else {
-			char *a = (char *)"ProxySQL Admin Error: ";
-			char *new_msg = (char *)malloc(strlen(error)+strlen(a)+1);
-			sprintf(new_msg, "%s%s", a, error);
+	} else {
+		char *a = (char *)"ProxySQL Admin Error: ";
+		size_t new_msg_size = strlen(error) + strlen(a) + 1;
+		char *new_msg = (char *)malloc(new_msg_size);
+		snprintf(new_msg, new_msg_size, "%s%s", a, error);
 
 			if constexpr (std::is_same_v<S, MySQL_Session>) {
 				sess->SQLite3_to_MySQL(resultset, new_msg, affected_rows, &sess->client_myds->myprot);
