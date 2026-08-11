@@ -744,17 +744,25 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	}
 	if (query_no_space_length==strlen("PROXYSQL READONLY") && !strncasecmp("PROXYSQL READONLY",query_no_space, query_no_space_length)) {
 		// this command enables admin_read_only , so the admin module is in read_only mode
-		proxy_info("Received PROXYSQL READONLY command\n");
+		proxy_info("Received PROXYSQL READONLY command: forcing read-only mode (FORCED_RO)\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-		SPA->set_read_only(true);
+		SPA->set_ro_mode(ADMIN_RO_MODE_FORCED_RO);
 		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 		return false;
 	}
 	if (query_no_space_length==strlen("PROXYSQL READWRITE") && !strncasecmp("PROXYSQL READWRITE",query_no_space, query_no_space_length)) {
 		// this command disables admin_read_only , so the admin module won't be in read_only mode
-		proxy_info("Received PROXYSQL WRITE command\n");
+		proxy_info("Received PROXYSQL WRITE command: forcing read-write mode (FORCED_RW)\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-		SPA->set_read_only(false);
+		SPA->set_ro_mode(ADMIN_RO_MODE_FORCED_RW);
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		return false;
+	}
+	if (query_no_space_length==strlen("PROXYSQL READONLY AUTO") && !strncasecmp("PROXYSQL READONLY AUTO",query_no_space, query_no_space_length)) {
+		// returns read-only control to the cluster leader election (AUTO mode)
+		proxy_info("Received PROXYSQL READONLY AUTO command\n");
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		SPA->set_ro_mode(ADMIN_RO_MODE_AUTO);
 		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 		return false;
 	}
@@ -3694,7 +3702,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		query_length=strlen(q)+5;
 		query=(char *)l_alloc(query_length);
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-		bool ro=SPA->get_read_only();
+		bool ro=SPA->effective_read_only();
 		//sprintf(query,q,( ro ? "ON" : "OFF"));
 		PtrSize_t pkt_2;
 		if (ro) {
@@ -3719,7 +3727,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		query_length=strlen(q)+5;
 		query=(char *)l_alloc(query_length);
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-		bool ro=SPA->get_read_only();
+		bool ro=SPA->effective_read_only();
 		//sprintf(query,q,( ro ? "ON" : "OFF"));
 		PtrSize_t pkt_2;
 		if (ro) {
@@ -5391,7 +5399,7 @@ __run_query:
 	if (run_query) {
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
-			if (SPA->get_read_only()) { // disable writes if the admin interface is in read_only mode
+			if (SPA->effective_read_only()) { // disable writes if the admin interface is in read_only mode
 				SPA->admindb->execute("PRAGMA query_only = ON");
 				SPA->admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 				SPA->admindb->execute("PRAGMA query_only = OFF");

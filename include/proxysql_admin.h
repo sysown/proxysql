@@ -12,6 +12,7 @@
 #include <tuple>
 #include <vector>
 #include <array>
+#include <atomic>
 #include <limits>
 
 #include "ProxySQL_RESTAPI_Server.hpp"
@@ -32,6 +33,12 @@ class ProxySQL_Restapi;
 enum SERVER_TYPE {
 	SERVER_TYPE_MYSQL,
 	SERVER_TYPE_PGSQL
+};
+
+enum admin_ro_mode_t {
+	ADMIN_RO_MODE_AUTO = 0,      // read-only iff this node is a cluster follower (leader election)
+	ADMIN_RO_MODE_FORCED_RO = 1, // operator-forced read-only (PROXYSQL READONLY)
+	ADMIN_RO_MODE_FORCED_RW = 2, // operator-forced read-write (PROXYSQL READWRITE)
 };
 
 class Scheduler_Row {
@@ -357,6 +364,9 @@ class ProxySQL_Admin {
 
 	prometheus::SerialExposer serial_exposer;
 
+	std::atomic<int> ro_mode { ADMIN_RO_MODE_AUTO };
+	std::atomic<bool> cluster_follower { false };
+
 	std::mutex proxysql_servers_mutex;
 
 	void wrlock();
@@ -643,8 +653,15 @@ class ProxySQL_Admin {
 	 * @details Modules ready when 'all_modules_started=true'. See 'all_modules_started'.
 	 */
 	void load_restapi_server();
-	bool get_read_only() { return variables.admin_read_only; }
-	bool set_read_only(bool ro) { variables.admin_read_only=ro; return variables.admin_read_only; }
+	bool effective_read_only() {
+		int m = ro_mode.load(std::memory_order_relaxed);
+		if (m == ADMIN_RO_MODE_FORCED_RO) return true;
+		if (m == ADMIN_RO_MODE_FORCED_RW) return false;
+		return cluster_follower.load(std::memory_order_relaxed);
+	}
+	void set_ro_mode(admin_ro_mode_t m) { ro_mode.store((int)m, std::memory_order_relaxed); }
+	admin_ro_mode_t get_ro_mode() { return (admin_ro_mode_t)ro_mode.load(std::memory_order_relaxed); }
+	void set_cluster_follower(bool f) { cluster_follower.store(f, std::memory_order_relaxed); }
 	bool has_variable(const char *name);
 	void init_users(std::unique_ptr<SQLite3_result>&& mysql_users_resultset = nullptr, const std::string& checksum = "", const time_t epoch = 0);
 	void init_mysql_servers();
