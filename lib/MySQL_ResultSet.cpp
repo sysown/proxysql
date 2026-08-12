@@ -447,7 +447,7 @@ void MySQL_ResultSet::add_err(MySQL_Data_Stream *_myds) {
 		MYSQL *_mysql=_myds->myconn->mysql;
 		buffer_to_PSarrayOut();
 		char sqlstate[10];
-		sprintf(sqlstate,"%s",mysql_sqlstate(_mysql));
+		snprintf(sqlstate, sizeof(sqlstate), "%s",mysql_sqlstate(_mysql));
 		if (_myds && _myds->killed_at) { // see case #750
 			if (_myds->kill_type == 0) {
 				myprot->generate_pkt_ERR(false,&pkt.ptr,&pkt.size,sid,1907,sqlstate,(char *)"Query execution was interrupted, query_timeout exceeded");

@@ -94,7 +94,7 @@ MySQL_Rule_Text::MySQL_Rule_Text(const MySQL_Query_Processor_Rule_t* mqr) {
 
 	char buf[20];
 	if (mqr->digest) {
-		sprintf(buf, "0x%016llX", (long long unsigned int)mqr->digest);
+		snprintf(buf, sizeof(buf), "0x%016llX", (long long unsigned int)mqr->digest);
 		pta[8] = strdup(buf);
 	}
 	else {
@@ -831,7 +831,7 @@ MySQL_Query_Processor_Rule_t* MySQL_Query_Processor::new_query_rule(const MySQL_
 
 	char buf[20];
 	if (mqr->digest) { // not 0
-		sprintf(buf, "0x%016llX", (long long unsigned int)mqr->digest);
+		snprintf(buf, sizeof(buf), "0x%016llX", (long long unsigned int)mqr->digest);
 	}
 
 	std::string re_mod;

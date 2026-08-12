@@ -380,17 +380,17 @@ public:
 		char buf[128];
 
 		char** pta = static_cast<char**>(malloc(sizeof(char *)*ProxySQL_MSG_STATS_FIELD_NUM));
-		sprintf(buf,"%d",message_id);
+		snprintf(buf, sizeof(buf), "%d",message_id);
 		pta[0]=strdup(buf);
 		pta[1]=strdup(filename);
-		sprintf(buf,"%d",line);
+		snprintf(buf, sizeof(buf), "%d",line);
 		pta[2]=strdup(buf);
 		pta[3]=strdup(func);
-		sprintf(buf,"%lu",count_star);
+		snprintf(buf, sizeof(buf), "%lu",count_star);
 		pta[4]=strdup(buf);
-		sprintf(buf,"%ld", first_seen);
+		snprintf(buf, sizeof(buf), "%ld", first_seen);
 		pta[5]=strdup(buf);
-		sprintf(buf,"%ld", last_seen);
+		snprintf(buf, sizeof(buf), "%ld", last_seen);
 		pta[6]=strdup(buf);
 
 		return pta;
