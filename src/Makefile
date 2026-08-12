@@ -1,5 +1,6 @@
 #!/bin/make -f
 
+.DEFAULT_GOAL := default
 
 PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd)
 
@@ -233,16 +234,6 @@ $(LIBPROXYSQLAR):
 ### main targets
 
 default: $(EXECUTABLE)
-
-.PHONY: FORCE_AWS_IAM_BUILD_MODE
-FORCE_AWS_IAM_BUILD_MODE:
-
-$(AWS_IAM_MODE_STAMP): FORCE_AWS_IAM_BUILD_MODE
-	@mkdir -p "$(dir $(AWS_IAM_MODE_STAMP))"
-	@if [ ! -f "$@" ] || [ "$$(sed -n '1p' "$@")" != "$(AWS_IAM_BUILD_MODE)" ]; then \
-		printf '%s\n' '$(AWS_IAM_BUILD_MODE)' > "$@.tmp"; \
-		mv -f "$@.tmp" "$@"; \
-	fi
 
 clean:
 	rm -rf *.pid $(ODIR)/*.o $(ODIR)/*.gcno $(ODIR)/*.gcda *~ core perf.data* heaptrack.proxysql.* $(EXECUTABLE) $(EXECUTABLE).sha1 $(ODIR)

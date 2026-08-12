@@ -74,13 +74,30 @@ private:
 	Aws::SDKOptions options_;
 };
 
+class AwsIamSensitiveStringCleanup final {
+public:
+	explicit AwsIamSensitiveStringCleanup(Aws::String& value) : value_(value) {}
+	~AwsIamSensitiveStringCleanup() noexcept {
+		if (!value_.empty()) {
+			OPENSSL_cleanse(&value_[0], value_.size());
+		}
+	}
+
+	AwsIamSensitiveStringCleanup(const AwsIamSensitiveStringCleanup&) = delete;
+	AwsIamSensitiveStringCleanup& operator=(const AwsIamSensitiveStringCleanup&) = delete;
+
+private:
+	Aws::String& value_;
+};
+
 class AwsIamRdsSigner final : public AwsIamTokenSigner {
 public:
 	AwsIamSignResult sign(const AwsIamTokenKey& key) override {
 		Aws::RDS::RDSClient& rds_client = client_for_region(key.region);
-		const auto token = rds_client.GenerateConnectAuthToken(
+		Aws::String token = rds_client.GenerateConnectAuthToken(
 			key.endpoint.c_str(), key.region.c_str(), key.port,
 			key.database_user.c_str());
+		AwsIamSensitiveStringCleanup token_cleanup(token);
 
 		AwsIamSignResult result;
 		if (token.empty()) {

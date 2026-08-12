@@ -8,6 +8,7 @@
 #
 # See: GitHub issue #5473 (Phase 2.1: Test Infrastructure Foundation)
 
+.DEFAULT_GOAL := all
 
 PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd)
 
@@ -529,16 +530,6 @@ endif
 
 .PHONY: all
 all: $(UNIT_TESTS)
-
-.PHONY: FORCE_AWS_IAM_BUILD_MODE
-FORCE_AWS_IAM_BUILD_MODE:
-
-$(AWS_IAM_MODE_STAMP): FORCE_AWS_IAM_BUILD_MODE
-	@mkdir -p "$(dir $(AWS_IAM_MODE_STAMP))"
-	@if [ ! -f "$@" ] || [ "$$(sed -n '1p' "$@")" != "$(AWS_IAM_BUILD_MODE)" ]; then \
-		printf '%s\n' '$(AWS_IAM_BUILD_MODE)' > "$@.tmp"; \
-		mv -f "$@.tmp" "$@"; \
-	fi
 
 # Alias: top-level 'make unit_tests' (via test/tap/Makefile) forwards the goal
 # name here via $(MAKECMDGOALS), so this target must exist even though `all`
