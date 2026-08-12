@@ -5,8 +5,10 @@
 #include "MySQL_Authentication.hpp"
 #include "MySQL_Backend_Auth.h"
 
+#include <cstdio>
 #include <cstring>
 #include <string>
+#include <unistd.h>
 
 extern MySQL_Authentication *GloMyAuth;
 
@@ -16,6 +18,37 @@ static bool add_backend_user(const char *username, const char *password,
 		(char *)username, (char *)password, USERNAME_BACKEND,
 		false, 0, (char *)"", false, false, false, 100,
 		(char *)attributes, (char *)"");
+}
+
+static bool add_backend_user_capturing_stderr(const char *username, const char *password,
+	const char *attributes, std::string& log) {
+	FILE *captured = tmpfile();
+	if (captured == nullptr) {
+		return false;
+	}
+
+	fflush(stderr);
+	const int saved_stderr = dup(STDERR_FILENO);
+	if (saved_stderr < 0 || dup2(fileno(captured), STDERR_FILENO) < 0) {
+		if (saved_stderr >= 0) {
+			close(saved_stderr);
+		}
+		fclose(captured);
+		return false;
+	}
+
+	const bool added = add_backend_user(username, password, attributes);
+	fflush(stderr);
+	dup2(saved_stderr, STDERR_FILENO);
+	close(saved_stderr);
+
+	char buffer[256];
+	rewind(captured);
+	while (fgets(buffer, sizeof(buffer), captured) != nullptr) {
+		log += buffer;
+	}
+	fclose(captured);
+	return added;
 }
 
 static void test_password_defaults() {
@@ -127,8 +160,23 @@ static void test_resolver_rejects_malformed_loaded_backend_attributes() {
 		"resolver fails closed when loaded backend attributes are malformed");
 }
 
+static void test_rejected_backend_policy_does_not_emit_iam_password_warning() {
+	ok(add_backend_user("normalized_backend", "configured-password", ""),
+		"backend user exists before its runtime attributes are updated");
+
+	std::string log;
+	ok(add_backend_user_capturing_stderr("normalized_backend", "configured-password",
+		"{\"backend_auth\":{\"type\":\"aws_iam\"},\"default-transaction_isolation\":1}", log),
+		"backend user reload with invalid default transaction isolation completes");
+	const MySQLBackendAuthPolicy policy = resolve_mysql_backend_auth_policy(*GloMyAuth, "normalized_backend");
+	ok(policy.type == MySQLBackendAuthType::INVALID && policy.failure_code == "attributes_not_object",
+		"post-validation backend policy is invalid");
+	ok(log.find("clear the unused backend password") == std::string::npos,
+		"invalid post-validation backend policy does not emit an IAM password warning");
+}
+
 int main() {
-	plan(27);
+	plan(31);
 	test_init_minimal();
 	test_init_auth();
 
@@ -141,6 +189,7 @@ int main() {
 	test_resolver_uses_backend_account_only();
 	test_resolver_rejects_missing_or_inactive_backend_account();
 	test_resolver_rejects_malformed_loaded_backend_attributes();
+	test_rejected_backend_policy_does_not_emit_iam_password_warning();
 
 	test_cleanup_auth();
 	test_cleanup_minimal();

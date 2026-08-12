@@ -324,22 +324,25 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 		cg.bt_map.insert(std::make_pair(hash1,ad));
 		cg.cred_array->add(ad);
 	}
+	bool warn_for_iam_password = false;
+	if (usertype == USERNAME_BACKEND) {
+		const MySQLBackendAuthPolicy policy = parse_mysql_backend_auth_policy(
+			username,
+			ad->attributes != nullptr ? ad->attributes : "",
+			ad->password != nullptr && ad->password[0] != '\0');
+		warn_for_iam_password =
+			policy.type == MySQLBackendAuthType::AWS_IAM && policy.ignored_password;
+	}
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&cg.lock);
 #else
 	spin_wrunlock(&cg.lock);
 #endif
-	if (usertype == USERNAME_BACKEND) {
-		const MySQLBackendAuthPolicy policy = parse_mysql_backend_auth_policy(
-			username,
-			attributes != nullptr ? attributes : "",
-			password != nullptr && password[0] != '\0');
-		if (policy.type == MySQLBackendAuthType::AWS_IAM && policy.ignored_password) {
-			proxy_warning(
-				"mysql_users backend entry for '%s' uses aws_iam authentication; "
-				"clear the unused backend password\n",
-				username);
-		}
+	if (warn_for_iam_password) {
+		proxy_warning(
+			"mysql_users backend entry for '%s' uses aws_iam authentication; "
+			"clear the unused backend password\n",
+			username);
 	}
 	return true;
 };
