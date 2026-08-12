@@ -149,7 +149,7 @@ int main(int argc, char** argv) {
 	workdir_path = cl.workdir;
 
 	const string base = workdir_path + "test_cluster_leader_election_config";
-	mkdir(base.c_str(), 0755);
+	mkdir(base.c_str(), 0700);
 	// Pass 1: fully populate all 3 node_t entries first. write_node_config()
 	// reads the WHOLE nodes_def[] array (to emit every node as a peer in
 	// each other's proxysql_servers list), so it must not run until every
@@ -164,7 +164,7 @@ int main(int argc, char** argv) {
 	}
 	// Pass 2: now that nodes_def[] is fully populated, write configs and spawn.
 	for (int i = 0; i < 3; i++) {
-		mkdir(nodes_def[i].datadir.c_str(), 0755);
+		mkdir(nodes_def[i].datadir.c_str(), 0700);
 		write_node_config(nodes_def[i]);
 		spawn_node(nodes_def[i], true);
 	}
@@ -194,7 +194,7 @@ int main(int argc, char** argv) {
 		plan(1);
 		ok(1, "admin-cluster_leader_election not present (non-PROXYSQL31 build) - skipping");
 	} else {
-		plan(30);
+		plan(32);
 		string err;
 
 		// --- Convergence: all 3 nodes agree node1 (16062) is leader --- (3)
@@ -221,7 +221,7 @@ int main(int argc, char** argv) {
 		ok(query_ok(a1, Q_INSERT) && query_ok(a1, Q_DELETE),
 			"leader stays RW immediately after LOAD ADMIN VARIABLES TO RUNTIME: %s", mysql_error(a1));
 
-		// --- Follower refuses writes --- (3 + 1 + 2)
+		// --- Follower refuses writes --- (3 + 1 + 2 + 2)
 		// NOTE: query_refused() mutates 'err', so it must be sequenced before
 		// err.c_str() (C++ leaves argument evaluation order unspecified; the
 		// one-liner form read a stale/freed buffer for the diag text).
@@ -238,6 +238,12 @@ int main(int argc, char** argv) {
 		ok(refused, "follower refuses LOAD ... TO RUN (%s)", err.c_str());
 		refused = query_refused(a2, "LOAD MYSQL SERVERS FROM MEM", err);
 		ok(refused, "follower refuses LOAD ... FROM MEM (%s)", err.c_str());
+		// Memory-tier-mutating forms bypass PRAGMA query_only via C++ flush
+		// functions and must be refused explicitly (bot-review finding).
+		refused = query_refused(a2, "LOAD MYSQL SERVERS FROM DISK", err);
+		ok(refused, "follower refuses LOAD ... FROM DISK (%s)", err.c_str());
+		refused = query_refused(a2, "SAVE MYSQL SERVERS FROM RUNTIME", err);
+		ok(refused, "follower refuses SAVE ... FROM RUNTIME (%s)", err.c_str());
 
 		// --- FORCED_RW override is sticky across election ticks --- (6)
 		ok(query_ok(a2, "PROXYSQL READWRITE"), "PROXYSQL READWRITE accepted on follower");

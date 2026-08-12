@@ -1453,6 +1453,28 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			if (query_no_space_length > 9 && (is_load || is_save) && !strncasecmp(" FROM MEM", query_no_space+query_no_space_length-9, 9)) {
 				refuse = true; // abbreviation: LOAD x FROM MEM == LOAD x FROM MEMORY ; SAVE x FROM MEM == SAVE x FROM MEMORY
 			}
+			// Direct SQL writes to the memory tier are blocked by PRAGMA
+			// query_only, but the forms below mutate the memory tier via C++
+			// flush functions that bypass it entirely, so they must be
+			// refused here too.
+			if (query_no_space_length > 10 && is_load && !strncasecmp(" FROM DISK", query_no_space+query_no_space_length-10, 10)) {
+				refuse = true; // LOAD x FROM DISK (disk -> memory)
+			}
+			if (query_no_space_length > 12 && is_load && !strncasecmp(" FROM CONFIG", query_no_space+query_no_space_length-12, 12)) {
+				refuse = true; // LOAD x FROM CONFIG (config file -> memory)
+			}
+			if (query_no_space_length > 10 && (is_load || is_save) && !strncasecmp(" TO MEMORY", query_no_space+query_no_space_length-10, 10)) {
+				refuse = true; // LOAD x TO MEMORY (runtime -> memory) ; SAVE x TO MEMORY (disk -> memory)
+			}
+			if (query_no_space_length > 7 && (is_load || is_save) && !strncasecmp(" TO MEM", query_no_space+query_no_space_length-7, 7)) {
+				refuse = true; // abbreviation: x TO MEM == x TO MEMORY
+			}
+			if (query_no_space_length > 13 && is_save && !strncasecmp(" FROM RUNTIME", query_no_space+query_no_space_length-13, 13)) {
+				refuse = true; // SAVE x FROM RUNTIME (runtime -> memory)
+			}
+			if (query_no_space_length > 9 && is_save && !strncasecmp(" FROM RUN", query_no_space+query_no_space_length-9, 9)) {
+				refuse = true; // abbreviation: SAVE x FROM RUN == SAVE x FROM RUNTIME
+			}
 			if (refuse) {
 				std::string l_host; int l_port = 0; std::string l_uuid;
 				GloProxyCluster->get_leader_info(l_host, l_port, l_uuid);
@@ -3873,7 +3895,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
 			char **p=(char **)malloc(sizeof(char*)*1);
 			unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*1);
-			l[0]=strlen(uuid_val);
+			l[0]=strnlen(uuid_val, 64);
 			p[0]=(char *)uuid_val;
 			myprot->generate_pkt_row(true,NULL,NULL,sid,1,l,p); sid++;
 			myds->DSS=STATE_ROW;

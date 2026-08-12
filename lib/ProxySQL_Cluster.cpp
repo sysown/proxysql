@@ -187,6 +187,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 	int query_error_counter = 0;
 	char *query_error = NULL;
 	int cluster_check_status_frequency_count = 0;
+	bool uuid_known = false; // set once GLOBAL_UUID() is successfully learned; avoids re-querying every poll iteration
 	MYSQL *conn = mysql_init(NULL);
 
 	if (conn==NULL) {
@@ -248,8 +249,9 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 										MYSQL_RES *uuid_res = mysql_store_result(conn);
 										if (uuid_res) {
 											MYSQL_ROW urow = mysql_fetch_row(uuid_res);
-											if (urow && urow[0] && strlen(urow[0]) > 0) {
+											if (urow && urow[0] && strnlen(urow[0], 64) > 0) {
 												GloProxyCluster->Update_Node_UUID(node->hostname, node->port, urow[0]);
+												uuid_known = true;
 											}
 											mysql_free_result(uuid_res);
 										}
@@ -272,6 +274,11 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 						}
 						rc_query = 1;
 					}
+				} else {
+					// connect succeeded but the initial "SELECT @@version" failed:
+					// count it as a check failure for this cycle, same as a
+					// GLOBAL_CHECKSUM() failure further below.
+					GloProxyCluster->Update_Node_Failure(node->hostname, node->port);
 				}
 				while ( glovars.shutdown == 0 && rc_query == 0 && rc_bool == true) {
 					unsigned long long start_time=monotonic_time();
@@ -287,6 +294,25 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 						mysql_free_result(result);
 						// FIXME: update metrics are not updated for now. We only check checksum
 						//rc_bool = GloProxyCluster->Update_Node_Metrics(node->hostname, node->port, result, elapsed_time_us);
+
+						if (!uuid_known) {
+							// The initial UUID fetch (right after the version handshake) can
+							// fail transiently even though clustering is otherwise healthy.
+							// Retry it on every successful poll iteration until it succeeds,
+							// without re-querying once the UUID is known.
+							int rc_uuid = mysql_query(conn, (char *)"SELECT GLOBAL_UUID()");
+							if (rc_uuid == 0) {
+								MYSQL_RES *uuid_res = mysql_store_result(conn);
+								if (uuid_res) {
+									MYSQL_ROW urow = mysql_fetch_row(uuid_res);
+									if (urow && urow[0] && strnlen(urow[0], 64) > 0) {
+										GloProxyCluster->Update_Node_UUID(node->hostname, node->port, urow[0]);
+										uuid_known = true;
+									}
+									mysql_free_result(uuid_res);
+								}
+							}
+						}
 
 						if (update_checksum) {
 							unsigned long long before_query_time=monotonic_time();
@@ -375,6 +401,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 				}
 			} else {
 				proxy_warning("Cluster: unable to connect to peer %s:%d . Error: %s\n", node->hostname, node->port, mysql_error(conn));
+				GloProxyCluster->Update_Node_Failure(node->hostname, node->port);
 				node->resolve_hostname();
 				mysql_close(conn);
 				conn = mysql_init(NULL);
