@@ -8,9 +8,9 @@ jobs:
   trigger:
     runs-on: ubuntu-22.04
     # Must exceed the timeout of the job it watches (ci-builds, 120) -- this
-    # job blocks on `gh run watch` until that build finishes, so an equal
-    # budget lets the watcher expire first and the workflow_run[completed]
-    # fan-out never fires.
+    # job blocks on explicit CI-builds status/conclusion polling until that
+    # build finishes, so an equal budget lets the poller expire first and the
+    # workflow_run[completed] fan-out never fires.
     timeout-minutes: 240
 
     steps:
