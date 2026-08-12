@@ -118,8 +118,17 @@ static void test_resolver_rejects_missing_or_inactive_backend_account() {
 		"resolver rejects an inactive backend account after runtime removal");
 }
 
+static void test_resolver_rejects_malformed_loaded_backend_attributes() {
+	ok(add_backend_user("malformed_backend", "configured-password",
+		"{\"backend_auth\":FAKE_AWS_SECRET,\"token\":\"FAKE_SESSION_TOKEN\"}"),
+		"malformed backend user is loaded into the real authentication store");
+	const MySQLBackendAuthPolicy policy = resolve_mysql_backend_auth_policy(*GloMyAuth, "malformed_backend");
+	ok(policy.type == MySQLBackendAuthType::INVALID && policy.failure_code == "attributes_not_object",
+		"resolver fails closed when loaded backend attributes are malformed");
+}
+
 int main() {
-	plan(25);
+	plan(27);
 	test_init_minimal();
 	test_init_auth();
 
@@ -131,6 +140,7 @@ int main() {
 	test_diagnostics_do_not_leak_attributes();
 	test_resolver_uses_backend_account_only();
 	test_resolver_rejects_missing_or_inactive_backend_account();
+	test_resolver_rejects_malformed_loaded_backend_attributes();
 
 	test_cleanup_auth();
 	test_cleanup_minimal();

@@ -49,6 +49,12 @@ void cleanse_and_free_password(char*& password) {
 	}
 }
 
+const char* invalid_attributes_storage(enum cred_username_type usertype) {
+	// Backend policies must stay invalid after runtime loading so they cannot
+	// silently fall back to password authentication.
+	return usertype == USERNAME_BACKEND ? "null" : "";
+}
+
 } // namespace
 
 void free_account_details(account_details_t& ad) {
@@ -269,8 +275,8 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 					}
 				}
 				catch(nlohmann::json::exception& e) {
-					ad->attributes=strdup("");
-					proxy_error("Invalid attributes for user %s: %s\n", username, attributes);
+					ad->attributes=strdup(invalid_attributes_storage(usertype));
+					proxy_error("Invalid attributes for user %s; ignoring invalid JSON\n", username);
 				}
 			} else {
 				ad->attributes=strdup(attributes); // default, empty string
@@ -293,8 +299,8 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 				ad->attributes=strdup(attributes);
 			}
 			catch(nlohmann::json::exception& e) {
-				ad->attributes=strdup("");
-				proxy_error("Invalid attributes for user %s: %s\n", username, attributes);
+				ad->attributes=strdup(invalid_attributes_storage(usertype));
+				proxy_error("Invalid attributes for user %s; ignoring invalid JSON\n", username);
 			}
 		} else {
 			ad->attributes=strdup(attributes); // default, empty string
