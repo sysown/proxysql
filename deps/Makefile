@@ -277,6 +277,7 @@ endif
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_password.c.patch
 #	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_secure.c < ../ma_secure.c.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../mysql.h.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../tls_server_name.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_priv.h.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_alloc.c.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_charset.c.patch
