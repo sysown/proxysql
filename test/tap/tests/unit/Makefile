@@ -300,6 +300,15 @@ ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -cw 'init_debug_struct'),0
 	PSQLDEBUG := -DDEBUG
 endif
 
+# The unit-test archive freshness rule below rebuilds libproxysql.a in a
+# submake.  Keep that rebuild in the same DEBUG configuration detected above:
+# MySQL_Data_Stream embeds MySQL_Protocol, whose DEBUG-only members affect the
+# public class layout used by both the archive and these test translation units.
+LIB_OPTZ :=
+ifneq ($(PSQLDEBUG),)
+	LIB_OPTZ := -O0 -ggdb -DDEBUG
+endif
+
 # MYSQLX_TEST_BUILD enables the test-only methods (`*_for_test`) on the
 # mysqlx plugin's public classes (e.g. MysqlxSession::inject_identity_for_test).
 # Defined ONLY here, in the unit-test Makefile — never in plugins/mysqlx/Makefile.
@@ -377,7 +386,8 @@ $(LIBPROXYSQLAR): FORCE
 	$(MAKE) -C $(PROXYSQL_PATH)/lib libproxysql.a \
 		PROXYSQLCLICKHOUSE=1 \
 		PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) \
-		PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) CC=$(CC) CXX=$(CXX)
+		PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) \
+		OPTZ="$(LIB_OPTZ)" CC=$(CC) CXX=$(CXX)
 
 
 # ===========================================================================
