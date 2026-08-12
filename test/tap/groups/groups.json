@@ -208,6 +208,7 @@
   "pgsql-tx_poisoned_recovery-t" : [ "legacy-g2" ],
   "pgsql-unix_socket-t" : [ "pgsql-socket-g1" ],
   "pgsql-unsupported_feature_test-t" : [ "legacy-g6","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1" ],
+  "pgsql-user-sync-t" : [ "legacy-g4" ],
   "pgsql-user-sync-unit-t" : [ "no-infra-g1" ],
   "pgsql-watchdog_test-t" : [ "legacy-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4" ],
   "pgsql_command_complete_unit-t" : [ "unit-tests-g1" ],
