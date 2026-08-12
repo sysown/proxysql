@@ -21,42 +21,6 @@
 extern class MySQL_Query_Processor* GloMyQPro;
 extern MySQL_HostGroups_Manager* MyHGM;
 
-/**
- * @brief Helper function to read a length-encoded integer from a MySQL packet buffer.
- *
- * Length-encoded integers are a variable-length data format used in the MySQL protocol
- * to represent integer values efficiently.
- *
- * @param buf Reference to a pointer to the current position in the buffer. Updated on return.
- * @param len Reference to the remaining length of the buffer. Updated on return.
- * @return The decoded 64-bit integer value.
- */
-static uint64_t read_lenenc_int(const unsigned char* &buf, size_t &len) {
-    if (len == 0) return 0;
-    uint8_t first_byte = buf[0];
-    buf++; len--;
-    if (first_byte < 0xFB) return first_byte;
-    if (first_byte == 0xFC) {
-        if (len < 2) return 0;
-        uint64_t value = buf[0] | (static_cast<uint64_t>(buf[1]) << 8);
-        buf += 2; len -= 2; return value;
-    }
-    if (first_byte == 0xFD) {
-        if (len < 3) return 0;
-        uint64_t value = buf[0] | (static_cast<uint64_t>(buf[1]) << 8) | (static_cast<uint64_t>(buf[2]) << 16);
-        buf += 3; len -= 3; return value;
-    }
-    if (first_byte == 0xFE) {
-        if (len < 8) return 0;
-        uint64_t value = buf[0] | (static_cast<uint64_t>(buf[1]) << 8) | (static_cast<uint64_t>(buf[2]) << 16) |
-                         (static_cast<uint64_t>(buf[3]) << 24) | (static_cast<uint64_t>(buf[4]) << 32) |
-                         (static_cast<uint64_t>(buf[5]) << 40) | (static_cast<uint64_t>(buf[6]) << 48) |
-                         (static_cast<uint64_t>(buf[7]) << 56);
-        buf += 8; len -= 8; return value;
-    }
-    return 0;
-}
-
 MySQLFFTO::MySQLFFTO(MySQL_Session* session)
     : m_session(session), m_state(IDLE), m_query_start_time(0), m_affected_rows(0), m_rows_sent(0) {
     m_client_buffer.reserve(1024);
@@ -132,7 +96,7 @@ void MySQLFFTO::on_close() {
 }
 
 bool MySQLFFTO::is_in_flight_query_state() const {
-    return m_state == AWAITING_RESPONSE || m_state == READING_COLUMNS || m_state == READING_ROWS;
+    return m_state == AWAITING_RESPONSE || m_rs.active();
 }
 
 void MySQLFFTO::clear_active_query() {
@@ -140,17 +104,46 @@ void MySQLFFTO::clear_active_query() {
     m_query_start_time = 0;
     m_affected_rows = 0;
     m_rows_sent = 0;
+    m_rs.reset();
+}
+
+bool MySQLFFTO::client_deprecate_eof() const {
+    if (m_session && m_session->client_myds && m_session->client_myds->myconn)
+        return (m_session->client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF);
+    return false;
+}
+
+void MySQLFFTO::finalize_in_flight_best_effort() {
+    if (m_state == AWAITING_RESPONSE && m_query_start_time != 0) {
+        unsigned long long duration = monotonic_time() - m_query_start_time;
+        report_query_stats(m_current_query, duration, m_affected_rows, m_rows_sent);
+    }
+    m_state = IDLE;
+    clear_active_query();
+}
+
+void MySQLFFTO::begin_tracked_query(const std::string& query, bool binary_protocol) {
+    if (m_state == AWAITING_RESPONSE || m_rs.active()) {
+        finalize_in_flight_best_effort();
+    }
+    m_current_query = query;
+    m_query_start_time = monotonic_time();
+    m_affected_rows = 0;
+    m_rows_sent = 0;
+    m_state = AWAITING_RESPONSE;
+    m_rs.begin(binary_protocol, client_deprecate_eof());
 }
 
 void MySQLFFTO::process_client_packet(const unsigned char* data, size_t len) {
     if (len == 0) return;
     uint8_t command = data[0];
     if (command == _MYSQL_COM_QUERY) {
-        m_current_query = std::string(reinterpret_cast<const char*>(data + 1), len - 1);
-        m_query_start_time = monotonic_time();
-        m_state = AWAITING_RESPONSE;
-        m_affected_rows = 0; m_rows_sent = 0;
+        begin_tracked_query(std::string(reinterpret_cast<const char*>(data + 1), len - 1), false);
     } else if (command == _MYSQL_COM_STMT_PREPARE) {
+        if (m_state == AWAITING_RESPONSE || m_rs.active()) {
+            finalize_in_flight_best_effort();
+        }
+        m_rs.reset();
         m_pending_prepare_query = std::string(reinterpret_cast<const char*>(data + 1), len - 1);
         m_state = AWAITING_PREPARE_OK;
     } else if (command == _MYSQL_COM_STMT_EXECUTE) {
@@ -158,10 +151,15 @@ void MySQLFFTO::process_client_packet(const unsigned char* data, size_t len) {
             uint32_t stmt_id; memcpy(&stmt_id, data + 1, 4);
             auto it = m_statements.find(stmt_id);
             if (it != m_statements.end()) {
-                m_current_query = it->second;
-                m_query_start_time = monotonic_time();
-                m_state = AWAITING_RESPONSE;
-                m_affected_rows = 0; m_rows_sent = 0;
+                begin_tracked_query(it->second, true);
+            }
+        }
+    } else if (command == _MYSQL_COM_STMT_FETCH) {
+        if (len >= 5) {
+            uint32_t stmt_id; memcpy(&stmt_id, data + 1, 4);
+            auto it = m_statements.find(stmt_id);
+            if (it != m_statements.end()) {
+                begin_tracked_query(it->second, true);
             }
         }
     } else if (command == _MYSQL_COM_STMT_CLOSE) {
@@ -176,14 +174,9 @@ void MySQLFFTO::process_client_packet(const unsigned char* data, size_t len) {
 
 void MySQLFFTO::process_server_packet(const unsigned char* data, size_t len) {
     if (len == 0 || m_state == IDLE) return;
-    uint8_t first_byte = data[0];
-
-    bool deprecate_eof = false;
-    if (m_session && m_session->client_myds && m_session->client_myds->myconn) {
-        deprecate_eof = (m_session->client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF);
-    }
 
     if (m_state == AWAITING_PREPARE_OK) {
+        uint8_t first_byte = data[0];
         if (first_byte == 0x00 && len >= 9) {
             uint32_t stmt_id; memcpy(&stmt_id, data + 1, 4);
             m_statements[stmt_id] = m_pending_prepare_query;
@@ -194,58 +187,48 @@ void MySQLFFTO::process_server_packet(const unsigned char* data, size_t len) {
             m_state = IDLE;
             m_pending_prepare_query.clear();
         }
-    } else if (m_state == AWAITING_RESPONSE) {
-        if (first_byte == 0x00) { // OK
-            const unsigned char* pos = data + 1; size_t rem = len - 1;
-            m_affected_rows = read_lenenc_int(pos, rem);
+        return;
+    }
+
+    // AWAITING_RESPONSE or framer active
+    if (m_state != AWAITING_RESPONSE && !m_rs.active()) return;
+
+    MySQLRSEvent ev = m_rs.on_payload(data, len);
+
+    switch (ev.kind) {
+    case MySQLRSEventKind::None:
+    case MySQLRSEventKind::Row:
+        // Accumulate only on Complete/OK/Error via rows_sent_total
+        break;
+    case MySQLRSEventKind::OKNoResultset:
+        m_affected_rows += ev.affected_rows;
+        if (!ev.more_results) {
             unsigned long long duration = monotonic_time() - m_query_start_time;
-            report_query_stats(m_current_query, duration, m_affected_rows, 0);
-            m_state = IDLE;
-            clear_active_query();
-        } else if (first_byte == 0xFF) { // ERR
-            unsigned long long duration = monotonic_time() - m_query_start_time;
-            report_query_stats(m_current_query, duration);
-            report_error(data, len);
-            m_state = IDLE;
-            clear_active_query();
-        } else if (first_byte == 0xFE && len < 9) { // EOF
-            m_state = IDLE;
-            clear_active_query();
-        } else { // Result Set started (first_byte is column count)
-            m_state = READING_COLUMNS;
-        }
-    } else if (m_state == READING_COLUMNS) {
-        if (first_byte == 0xFE && len < 9) { // EOF after columns
-            m_state = READING_ROWS;
-        } else if (first_byte == 0xFE && len >= 9 && deprecate_eof) {
-            m_state = READING_ROWS;
-        } else if (first_byte == 0xFF) { // ERR while reading column metadata
-            unsigned long long duration = monotonic_time() - m_query_start_time;
-            report_query_stats(m_current_query, duration);
-            report_error(data, len);
+            report_query_stats(m_current_query, duration, m_affected_rows, m_rows_sent);
             m_state = IDLE;
             clear_active_query();
         }
-    } else if (m_state == READING_ROWS) {
-        if (first_byte == 0xFE && len < 9) { // EOF after rows
+        break;
+    case MySQLRSEventKind::ResultsetComplete:
+        m_rows_sent += ev.rows_sent_total;
+        if (ev.affected_rows) m_affected_rows += ev.affected_rows;
+        if (!ev.more_results) {
             unsigned long long duration = monotonic_time() - m_query_start_time;
-            report_query_stats(m_current_query, duration, 0, m_rows_sent);
+            report_query_stats(m_current_query, duration, m_affected_rows, m_rows_sent);
             m_state = IDLE;
             clear_active_query();
-        } else if (first_byte == 0xFE && len >= 9 && deprecate_eof) {
+        }
+        break;
+    case MySQLRSEventKind::Error:
+        {
             unsigned long long duration = monotonic_time() - m_query_start_time;
-            report_query_stats(m_current_query, duration, 0, m_rows_sent);
-            m_state = IDLE;
-            clear_active_query();
-        } else if (first_byte == 0xFF) { // ERR
-            unsigned long long duration = monotonic_time() - m_query_start_time;
-            report_query_stats(m_current_query, duration, 0, m_rows_sent);
+            m_rows_sent += ev.rows_sent_total;
+            report_query_stats(m_current_query, duration, m_affected_rows, m_rows_sent);
             report_error(data, len);
             m_state = IDLE;
             clear_active_query();
-        } else {
-            m_rows_sent++;
         }
+        break;
     }
 }
 
