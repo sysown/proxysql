@@ -122,6 +122,39 @@ void test_replay_planning() {
 		"one oversized assignment returns no partial replay plan");
 }
 
+void test_replay_completion_decisions() {
+	MySQL_User_Variable_State desired;
+	MySQL_User_Variable_State backend;
+	ok(stage_and_apply(desired, {
+		assignment("alpha", "@alpha", "'one'"),
+		assignment("bravo", "@bravo", "2")
+	}), "desired replay-completion state stages");
+
+	const auto plan = desired.build_replay_plan(MySQL_User_Variable_State {}, std::string("SET @alpha='one'").size());
+	ok(plan.status == MySQL_User_Variable_Replay_Status::OK && plan.batches.size() == 2,
+		"replay-completion fixture has two batches");
+
+	auto completion = mysql_user_variable_replay_complete(backend, plan.batches, 0, true);
+	unsigned int not_matching = 0;
+	ok(completion == MySQL_User_Variable_Replay_Completion::CONTINUE_SETTING_USER_VARIABLES &&
+		backend.count_matches(desired, not_matching) == 1 && not_matching == 1,
+		"acknowledging one batch applies only that batch and continues replay");
+
+	completion = mysql_user_variable_replay_complete(backend, plan.batches, 1, true);
+	not_matching = 0;
+	ok(completion == MySQL_User_Variable_Replay_Completion::RESUME_SAVED_STATUS &&
+		backend.count_matches(desired, not_matching) == 2 && not_matching == 0,
+		"acknowledging the last batch applies it and resumes the saved client-query state");
+
+	MySQL_User_Variable_State failed_backend;
+	completion = mysql_user_variable_replay_complete(failed_backend, plan.batches, 0, false);
+	not_matching = 0;
+	ok(completion == MySQL_User_Variable_Replay_Completion::FAIL_CLIENT_QUERY_AND_RETIRE_BACKEND &&
+		failed_backend.count_matches(desired, not_matching) == 0 && not_matching == 2 &&
+		desired.size() == 2,
+		"replay error applies nothing, retires the backend, and leaves frontend desired state intact");
+}
+
 void test_diagnostic_fingerprint() {
 	MySQL_User_Variable_State state;
 	ok(stage_and_apply(state, { assignment("secret_name", "@secret_target", "'secret_literal'") }),
@@ -257,10 +290,11 @@ void test_connection_state_integration() {
 } // namespace
 
 int main() {
-	plan(56);
+	plan(61);
 	test_staging_and_limits();
 	test_collision_safe_comparison();
 	test_replay_planning();
+	test_replay_completion_decisions();
 	test_diagnostic_fingerprint();
 	test_move_preserves_state_invariants();
 	test_kind_and_empty_replay_edges();

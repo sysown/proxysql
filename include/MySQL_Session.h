@@ -13,6 +13,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include "MySQL_Variables.h"
+#include "MySQL_User_Variables.h"
 #include "Base_Session.h"
 
 #ifndef PROXYJSON
@@ -282,6 +283,9 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	bool handler_again___verify_backend_multi_statement();
 	bool handler_again___verify_backend_user_schema();
 	bool handler_again___verify_multiple_variables(MySQL_Connection *);
+	bool handler_again___verify_backend_user_variables(MySQL_Connection* myconn);
+	void handler_again___fail_user_variable_replay(
+		MySQL_Data_Stream* myds, unsigned int error_code, const char* sqlstate, const char* error_message);
 	bool handler_again___status_SETTING_INIT_CONNECT(int *);
 	bool handler_again___status_SETTING_LDAP_USER_VARIABLE(int *);
 	bool handler_again___status_SETTING_SQL_MODE(int *);
@@ -314,6 +318,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	bool handler_again___status_CHANGING_USER_SERVER(int *);
 	bool handler_again___status_CHANGING_AUTOCOMMIT(int *);
 	bool handler_again___status_SETTING_MULTI_STMT(int *_rc);
+	bool handler_again___status_SETTING_USER_VARIABLES(int* rc);
 	bool handler_again___multiple_statuses(int *rc);
 
 	//void init();
@@ -415,6 +420,8 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	bool handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, const char *var_name, const char *var_value, bool no_quote=false, bool set_transaction=false);
 	bool handler_again___status_SETTING_SQL_LOG_BIN(int *);
 	std::stack<enum session_status> previous_status;
+	std::vector<MySQL_User_Variable_Replay_Batch> user_variable_replay_batches;
+	size_t user_variable_replay_batch_index { 0 };
 
 	Query_Info CurrentQuery;
 	PtrSize_t mirrorPkt;

@@ -73,6 +73,12 @@ struct MySQL_User_Variable_Replay_Plan {
 	std::vector<MySQL_User_Variable_Replay_Batch> batches;
 };
 
+enum class MySQL_User_Variable_Replay_Completion : uint8_t {
+	CONTINUE_SETTING_USER_VARIABLES,
+	RESUME_SAVED_STATUS,
+	FAIL_CLIENT_QUERY_AND_RETIRE_BACKEND
+};
+
 class MySQL_User_Variable_State {
 public:
 	static constexpr size_t kMaxVariables = 128;
@@ -103,6 +109,12 @@ private:
 	std::map<std::string, MySQL_User_Variable_Entry> entries_;
 	size_t stored_bytes_ { 0 };
 };
+
+MySQL_User_Variable_Replay_Completion mysql_user_variable_replay_complete(
+	MySQL_User_Variable_State& backend,
+	const std::vector<MySQL_User_Variable_Replay_Batch>& batches,
+	size_t batch_index,
+	bool batch_succeeded);
 
 UserVariableSetAnalysis parsersql_analyze_user_variable_set_mysql(
 	const char* query, size_t query_length);

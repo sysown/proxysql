@@ -2551,6 +2551,70 @@ bool MySQL_Session::handler_again___verify_multiple_variables(MySQL_Connection* 
 	return false;
 }
 
+bool MySQL_Session::handler_again___verify_backend_user_variables(MySQL_Connection* myconn) {
+	if (mysql_thread___user_variable_tracking != 1) {
+		return false;
+	}
+
+	const MySQL_User_Variable_State& desired = client_myds->myconn->user_variables;
+	unsigned int not_matching = 0;
+	const unsigned int matches = myconn->user_variables.count_matches(desired, not_matching);
+	if (
+		matches == desired.size() && not_matching == 0 &&
+		!myconn->user_variables.has_names_absent_from(desired)
+	) {
+		return false;
+	}
+
+	constexpr size_t query_packet_overhead = sizeof(mysql_hdr) + 1;
+	// Backend connections do not retain this handshake field; use the
+	// frontend-negotiated limit until a backend-specific limit is available.
+	const uint32_t max_allowed_pkt = myconn->options.max_allowed_pkt
+		? myconn->options.max_allowed_pkt
+		: client_myds->myconn->options.max_allowed_pkt;
+	const size_t max_query_bytes = max_allowed_pkt > query_packet_overhead
+		? max_allowed_pkt - query_packet_overhead
+		: 0;
+	const MySQL_User_Variable_Replay_Plan plan = desired.build_replay_plan(
+		myconn->user_variables, max_query_bytes);
+	if (plan.status == MySQL_User_Variable_Replay_Status::ASSIGNMENT_TOO_LARGE) {
+		handler_again___fail_user_variable_replay(
+			mybe->server_myds,
+			ER_NET_PACKET_TOO_LARGE,
+			"08S01",
+			"Got a packet bigger than 'max_allowed_packet' bytes"
+		);
+		return true;
+	}
+	if (plan.batches.empty()) {
+		return false;
+	}
+
+	set_previous_status_mode3();
+	user_variable_replay_batches = plan.batches;
+	user_variable_replay_batch_index = 0;
+	NEXT_IMMEDIATE_NEW(SETTING_USER_VARIABLES);
+}
+
+void MySQL_Session::handler_again___fail_user_variable_replay(
+	MySQL_Data_Stream* myds, unsigned int error_code, const char* sqlstate, const char* error_message) {
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "REPLAY_FAILURE\n");
+	thread->status_variables.stvar[st_var_user_variable_replay_failures]++;
+	client_myds->myprot.generate_pkt_ERR(
+		true, NULL, NULL, client_myds->pkt_sid + 1, error_code, (char*)sqlstate, error_message, true
+	);
+	RequestEnd(myds, error_code, error_message);
+	if (myds->myconn) {
+		myds->destroy_MySQL_Connection_From_Pool(false);
+		myds->fd = 0;
+	}
+	user_variable_replay_batches.clear();
+	user_variable_replay_batch_index = 0;
+	while (!previous_status.empty()) {
+		previous_status.pop();
+	}
+}
+
 
 /**
  * @brief Verifies and sets the ldap_user_variable option for the backend connection.
@@ -6072,6 +6136,10 @@ handler_again:
 									goto handler_again;
 								}
 
+								if (handler_again___verify_backend_user_variables(myconn) == true) {
+									goto handler_again;
+								}
+
 								if (locked_on_hostgroup != -1) {
 									locked_on_hostgroup_and_all_variables_set=true;
 								}
@@ -6420,6 +6488,63 @@ bool MySQL_Session::handler_again___status_SHOW_WARNINGS(MySQL_Data_Stream* myds
  *
  * @return True if the handling was successful and false otherwise.
  */
+bool MySQL_Session::handler_again___status_SETTING_USER_VARIABLES(int* rc) {
+	assert(mybe->server_myds->myconn);
+	MySQL_Data_Stream* myds = mybe->server_myds;
+	MySQL_Connection* myconn = myds->myconn;
+	myds->DSS = STATE_MARIADB_QUERY;
+
+	if (user_variable_replay_batch_index >= user_variable_replay_batches.size()) {
+		handler_again___fail_user_variable_replay(
+			myds, ER_NET_PACKET_TOO_LARGE, "08S01", "Got a packet bigger than 'max_allowed_packet' bytes"
+		);
+		return true;
+	}
+
+	if (myds->mypolls == NULL) {
+		thread->mypolls.add(POLLIN | POLLOUT, myds->fd, myds, thread->curtime);
+	}
+	const MySQL_User_Variable_Replay_Batch& batch =
+		user_variable_replay_batches[user_variable_replay_batch_index];
+	const int command_rc = myconn->async_send_simple_command(
+		myds->revents, const_cast<char*>(batch.sql.c_str()), batch.sql.size()
+	);
+	if (command_rc == 0) {
+		const MySQL_User_Variable_Replay_Completion completion = mysql_user_variable_replay_complete(
+			myconn->user_variables,
+			user_variable_replay_batches,
+			user_variable_replay_batch_index,
+			true
+		);
+		thread->status_variables.stvar[st_var_user_variable_replay_commands]++;
+		++user_variable_replay_batch_index;
+		myds->revents |= POLLOUT;
+
+		if (completion == MySQL_User_Variable_Replay_Completion::CONTINUE_SETTING_USER_VARIABLES) {
+			return true;
+		}
+		if (completion == MySQL_User_Variable_Replay_Completion::RESUME_SAVED_STATUS) {
+			myds->DSS = STATE_MARIADB_GENERIC;
+			const enum session_status saved_status = previous_status.top();
+			previous_status.pop();
+			user_variable_replay_batches.clear();
+			user_variable_replay_batch_index = 0;
+			NEXT_IMMEDIATE_NEW(saved_status);
+		}
+	}
+
+	if (command_rc == 1) {
+		return false;
+	}
+
+	const unsigned int error_code = mysql_errno(myconn->mysql);
+	const char* sqlstate = error_code ? mysql_sqlstate(myconn->mysql) : "HY000";
+	const char* error_message = error_code ? mysql_error(myconn->mysql) : "Lost connection to MySQL server during query";
+	handler_again___fail_user_variable_replay(myds, error_code ? error_code : 2013, sqlstate, error_message);
+	*rc = 0;
+	return true;
+}
+
 bool MySQL_Session::handler_again___multiple_statuses(int *rc) {
 	bool ret = false;
 	switch(status) {
@@ -6452,6 +6577,9 @@ bool MySQL_Session::handler_again___multiple_statuses(int *rc) {
 			break;
 		case SETTING_SET_NAMES:
 			ret = handler_again___status_CHANGING_CHARSET(rc);
+			break;
+		case SETTING_USER_VARIABLES:
+			ret = handler_again___status_SETTING_USER_VARIABLES(rc);
 			break;
 		default:
 			break;

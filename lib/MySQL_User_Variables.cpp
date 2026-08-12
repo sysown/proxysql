@@ -179,6 +179,21 @@ MySQL_User_Variable_Replay_Plan MySQL_User_Variable_State::build_replay_plan(
 	return plan;
 }
 
+MySQL_User_Variable_Replay_Completion mysql_user_variable_replay_complete(
+	MySQL_User_Variable_State& backend,
+	const std::vector<MySQL_User_Variable_Replay_Batch>& batches,
+	size_t batch_index,
+	bool batch_succeeded) {
+	if (!batch_succeeded || batch_index >= batches.size()) {
+		return MySQL_User_Variable_Replay_Completion::FAIL_CLIENT_QUERY_AND_RETIRE_BACKEND;
+	}
+
+	backend.apply(batches[batch_index].assignments);
+	return batch_index + 1 < batches.size()
+		? MySQL_User_Variable_Replay_Completion::CONTINUE_SETTING_USER_VARIABLES
+		: MySQL_User_Variable_Replay_Completion::RESUME_SAVED_STATUS;
+}
+
 std::string MySQL_User_Variable_State::diagnostic_fingerprint() const {
 	Fingerprint_Keys& keys = fingerprint_keys();
 	if (!keys.available) {
