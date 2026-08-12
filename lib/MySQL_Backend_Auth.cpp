@@ -3,6 +3,8 @@
 #include "MySQL_Backend_Auth.h"
 #include "MySQL_Authentication.hpp"
 
+#include <vector>
+
 namespace {
 
 MySQLBackendAuthPolicy invalid_policy(std::string_view database_user, const char* failure_code) {
@@ -10,6 +12,73 @@ MySQLBackendAuthPolicy invalid_policy(std::string_view database_user, const char
 	policy.database_user = database_user;
 	policy.failure_code = failure_code;
 	return policy;
+}
+
+AwsIamConnectionConfigResult invalid_connection_config(
+	AwsIamConnectionConfigStatus status, const char* failure_code) {
+	AwsIamConnectionConfigResult result;
+	result.status = status;
+	result.failure_code = failure_code;
+	return result;
+}
+
+bool is_dns_label(const std::string& label) {
+	if (label.empty() || label.size() > 63 || label.front() == '-' || label.back() == '-') {
+		return false;
+	}
+	for (const unsigned char c : label) {
+		if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == '-')) {
+			return false;
+		}
+	}
+	return true;
+}
+
+bool split_rds_endpoint(const std::string& endpoint, std::string& endpoint_region) {
+	if (endpoint.empty() || endpoint.back() == '.') {
+		return false;
+	}
+
+	std::vector<std::string> labels;
+	size_t begin = 0;
+	while (begin < endpoint.size()) {
+		const size_t end = endpoint.find('.', begin);
+		const std::string label = endpoint.substr(begin, end == std::string::npos ? end : end - begin);
+		if (!is_dns_label(label)) {
+			return false;
+		}
+		labels.push_back(label);
+		if (end == std::string::npos) {
+			break;
+		}
+		begin = end + 1;
+	}
+
+	static const std::vector<std::vector<std::string>> suffixes {
+		{ "rds", "amazonaws", "com" },
+		{ "rds", "amazonaws", "com", "cn" },
+		{ "rds", "c2s", "ic", "gov" },
+		{ "rds", "sc2s", "sgov", "gov" },
+	};
+	for (const auto& suffix : suffixes) {
+		if (labels.size() <= suffix.size() + 1) {
+			continue;
+		}
+		const size_t suffix_start = labels.size() - suffix.size();
+		bool suffix_matches = true;
+		for (size_t i = 0; i < suffix.size(); ++i) {
+			if (labels[suffix_start + i] != suffix[i]) {
+				suffix_matches = false;
+				break;
+			}
+		}
+		if (suffix_matches) {
+			endpoint_region = labels[suffix_start - 1];
+			return true;
+		}
+	}
+	return false;
 }
 
 } // namespace
@@ -93,4 +162,40 @@ MySQLBackendAuthPolicy resolve_mysql_backend_auth_policy(
 		account.password[0] != '\0');
 	free_account_details(account);
 	return policy;
+}
+
+AwsIamConnectionConfigResult validate_mysql_aws_iam_connection(
+	const AwsIamConnectionConfigInput& input)
+{
+	if (!input.support_compiled) {
+		return invalid_connection_config(AwsIamConnectionConfigStatus::SUPPORT_NOT_COMPILED,
+			"support_not_compiled");
+	}
+	if (input.region.empty()) {
+		return invalid_connection_config(AwsIamConnectionConfigStatus::MISSING_REGION, "missing_region");
+	}
+	if (input.port == 0) {
+		return invalid_connection_config(AwsIamConnectionConfigStatus::UNIX_SOCKET_NOT_ALLOWED,
+			"unix_socket_not_allowed");
+	}
+
+	std::string endpoint_region;
+	if (!split_rds_endpoint(input.configured_endpoint, endpoint_region)) {
+		return invalid_connection_config(AwsIamConnectionConfigStatus::INVALID_ENDPOINT, "invalid_endpoint");
+	}
+	if (endpoint_region != input.region) {
+		return invalid_connection_config(AwsIamConnectionConfigStatus::REGION_ENDPOINT_MISMATCH,
+			"region_endpoint_mismatch");
+	}
+	if (!input.use_ssl) {
+		return invalid_connection_config(AwsIamConnectionConfigStatus::TLS_REQUIRED, "tls_required");
+	}
+	if (input.ssl_ca.empty() && input.ssl_capath.empty()) {
+		return invalid_connection_config(AwsIamConnectionConfigStatus::CA_TRUST_REQUIRED, "ca_trust_required");
+	}
+
+	AwsIamConnectionConfigResult result;
+	result.status = AwsIamConnectionConfigStatus::OK;
+	result.key = { input.configured_endpoint, input.port, input.region, input.database_user };
+	return result;
 }

@@ -29,6 +29,7 @@ using json = nlohmann::json;
 #include "ev.h"
 
 #include <functional>
+#include <algorithm>
 #include <mutex>
 #include <type_traits>
 
@@ -6169,6 +6170,8 @@ bool AWS_Aurora_Info::update(int r, int _port, char *_end_addr, int maxl, int al
  */
 void init_myhgc_hostgroup_settings(const char* hostgroup_settings, MyHGC* myhgc) {
 	const uint32_t hid = myhgc->hid;
+	free(myhgc->attributes.aws_iam_region);
+	myhgc->attributes.aws_iam_region = NULL;
 
 	if (hostgroup_settings[0] != '\0') {
 		try {
@@ -6187,6 +6190,25 @@ void init_myhgc_hostgroup_settings(const char* hostgroup_settings, MyHGC* myhgc)
 				{ return (default_query_timeout >= 1000 && default_query_timeout <= 20*24*3600*1000); };
 			const int32_t default_query_timeout = j_get_srv_default_int_val<int32_t>(j, hid, "default_query_timeout", default_query_timeout_check);
 			myhgc->attributes.default_query_timeout = default_query_timeout;
+
+			const auto aws_iam_region = j.find("aws_iam_region");
+			if (aws_iam_region != j.end()) {
+				if (!aws_iam_region->is_string()) {
+					proxy_error("Invalid 'aws_iam_region' value for hostgroup %d. Value rejected.\n", hid);
+				} else {
+					const std::string region = aws_iam_region->get<std::string>();
+					const bool valid_region = !region.empty() && std::all_of(region.begin(), region.end(),
+						[](unsigned char c) {
+							return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+								(c >= '0' && c <= '9') || c == '-';
+						});
+					if (valid_region) {
+						myhgc->attributes.aws_iam_region = strdup(region.c_str());
+					} else {
+						proxy_error("Invalid 'aws_iam_region' value for hostgroup %d. Value rejected.\n", hid);
+					}
+				}
+			}
 		}
 		catch (const json::exception& e) {
 			proxy_error(

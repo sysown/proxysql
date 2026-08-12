@@ -392,7 +392,7 @@ $(LIBPROXYSQLAR): FORCE
 # ===========================================================================
 
 UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
-	protocol_unit-t auth_unit-t aws_iam_policy_unit-t connection_pool_unit-t \
+	protocol_unit-t auth_unit-t aws_iam_policy_unit-t aws_iam_connection_config_unit-t connection_pool_unit-t \
 	rule_matching_unit-t hostgroups_unit-t monitor_health_unit-t \
 	pgsql_command_complete_unit-t \
 	ffto_protocol_unit-t \
