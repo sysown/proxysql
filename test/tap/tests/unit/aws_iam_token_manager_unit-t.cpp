@@ -6,6 +6,8 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <memory>
@@ -168,6 +170,41 @@ private:
 	bool armed_ { true };
 	bool entered_ { false };
 	bool released_ { false };
+};
+
+class FinishPublishPause {
+public:
+	void arm() {
+		std::lock_guard<std::mutex> lock(mu_);
+		armed_ = true;
+	}
+	void hook() {
+		std::unique_lock<std::mutex> lock(mu_);
+		if (!armed_) return;
+		const size_t position = ++arrivals_;
+		arrived_cv_.notify_all();
+		if (position == 1) {
+			arrived_cv_.wait(lock, [&] { return arrivals_ == 2; });
+			return;
+		}
+		release_cv_.wait(lock, [&] { return released_; });
+	}
+	bool wait_for_two(std::chrono::milliseconds timeout = 2s) {
+		std::unique_lock<std::mutex> lock(mu_);
+		return arrived_cv_.wait_for(lock, timeout, [&] { return arrivals_ == 2; });
+	}
+	void release_second() {
+		std::lock_guard<std::mutex> lock(mu_);
+		released_ = true;
+		release_cv_.notify_all();
+	}
+private:
+	std::mutex mu_;
+	std::condition_variable arrived_cv_;
+	std::condition_variable release_cv_;
+	bool armed_ { false };
+	bool released_ { false };
+	size_t arrivals_ { 0 };
 };
 
 AwsIamTokenKey key(std::string endpoint = "db.us-east-1.rds.amazonaws.com",
@@ -517,6 +554,50 @@ void test_cancellation_timeout_late_completion_and_shutdown() {
 	ok(shutdown_a_called && shutdown_a->take().result.status == AwsIamStatus::SHUTDOWN &&
 		!shutdown_b->wait_for(1, 50ms),
 		"shutdown revalidates each handle so callback A can cancel snapshotted callback B");
+
+	FakeClock finish_clock;
+	auto finish_signer = std::make_shared<FakeSigner>();
+	FinishPublishPause finish_pause;
+	auto finish_config = config(finish_clock);
+	finish_config.before_finish_publish = [&] { finish_pause.hook(); };
+	auto finish_manager = std::make_unique<AwsIamTokenManager>(finish_signer, finish_config);
+	const AwsIamTokenKey finish_key_a = key("finish-a.us-east-1.rds.amazonaws.com");
+	const AwsIamTokenKey finish_key_b = key("finish-b.us-east-1.rds.amazonaws.com");
+	blocking(*finish_manager, finish_key_a);
+	blocking(*finish_manager, finish_key_b);
+	finish_pause.arm();
+	auto finish_sink_a = std::make_shared<CollectingSink>();
+	auto finish_sink_b = std::make_shared<CollectingSink>();
+	AwsIamTokenManager* finish_source = finish_manager.get();
+	std::thread finish_request_a([&] { finish_source->request(finish_key_a, 26, finish_sink_a); });
+	std::thread finish_request_b([&] { finish_source->request(finish_key_b, 27, finish_sink_b); });
+	const bool both_finishes_paused = finish_pause.wait_for_two();
+	std::mutex destroyed_mu;
+	std::condition_variable destroyed_cv;
+	bool destroyed = false;
+	std::thread finish_shutdown([&] {
+		finish_manager.reset();
+		{
+			std::lock_guard<std::mutex> lock(destroyed_mu);
+			destroyed = true;
+		}
+		destroyed_cv.notify_all();
+	});
+	bool returned_while_final_finish_paused;
+	{
+		std::unique_lock<std::mutex> lock(destroyed_mu);
+		returned_while_final_finish_paused = destroyed_cv.wait_for(lock, 100ms, [&] { return destroyed; });
+	}
+	ok(both_finishes_paused && !returned_while_final_finish_paused,
+		"shutdown cannot destroy dispatch state before the final callback completes its finish path");
+	if (returned_while_final_finish_paused) {
+		std::fflush(stdout);
+		std::_Exit(1);
+	}
+	finish_pause.release_second();
+	finish_request_a.join();
+	finish_request_b.join();
+	finish_shutdown.join();
 
 	reset_cleanse_observer();
 	auto late_signer = std::make_shared<FakeSigner>();

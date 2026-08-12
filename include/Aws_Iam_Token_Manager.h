@@ -125,6 +125,7 @@ struct AwsIamTokenManagerConfig {
 	Clock clock;
 	Jitter jitter;
 	std::function<void()> before_dispatch;
+	std::function<void()> before_finish_publish;
 };
 
 class AwsIamTokenManager final : public AwsIamTokenSource {

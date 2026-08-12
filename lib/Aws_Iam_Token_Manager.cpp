@@ -498,12 +498,13 @@ public:
 	}
 
 	void finish_delivery(std::shared_ptr<Delivery> delivery) {
+		if (config.before_finish_publish) config.before_finish_publish();
 		{
 			std::lock_guard<std::mutex> lock(mu);
 			if (delivery) delivery->state = DeliveryState::FINISHED;
 			--callbacks_in_progress;
+			cv.notify_all();
 		}
-		cv.notify_all();
 	}
 
 	std::shared_ptr<AwsIamTokenSigner> signer;
