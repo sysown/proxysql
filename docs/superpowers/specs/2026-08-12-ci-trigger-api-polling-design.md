@@ -31,7 +31,8 @@ Replace the table-parsing `gh run list` calls and `gh run watch --exit-status`
 with explicit JSON polling in the existing trigger step.
 
 All GitHub CLI polling calls use one retry helper. Each individual call has a
-30-second command timeout so a hung connection cannot bypass the retry budget.
+30-second command timeout that forcibly terminates the command with the
+non-catchable `SIGKILL`, so a hung connection cannot bypass the retry budget.
 When a call fails, the helper logs a warning containing the attempt and error,
 then retries after 5, 10, 20, and at most 30 seconds between later attempts.
 It tolerates at most five consecutive minutes, measured from the start of the
