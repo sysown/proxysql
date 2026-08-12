@@ -365,12 +365,21 @@ private:
 	bool cleanup_ok_ = true;
 };
 
-static int run_test(
-	CommandLine& cl,
-	MYSQL* admin,
-	TestConnections& connections,
-	CleanupGuard& cleanup
-) {
+struct TestContext {
+	CommandLine& cl;
+	MYSQL* admin;
+	TestConnections& connections;
+	CleanupGuard& cleanup;
+	std::string address;
+	int mysql_port = 0;
+
+	std::string endpoint_filter() const {
+		return " hostname=" + sql_quote(admin, address) +
+			" AND port=" + std::to_string(mysql_port);
+	}
+};
+
+static bool resolve_writer_endpoint(TestContext& context) {
 	std::string writer_query =
 		"SELECT hostname,port FROM runtime_mysql_servers WHERE status='ONLINE'";
 	const char* writer_hg = std::getenv("BINLOG_WHG");
@@ -389,61 +398,69 @@ static int run_test(
 	}
 
 	std::vector<std::string> writer;
-	std::string address;
-	int mysql_port = 0;
-	bool writer_resolved = get_single_row(admin, writer_query, writer, "select configured writer") &&
+	bool writer_resolved = get_single_row(context.admin, writer_query, writer, "select configured writer") &&
 		writer.size() >= 2;
 	if (writer_resolved) {
-		mysql_port = std::atoi(writer[1].c_str());
-		writer_resolved = mysql_port > 0 && resolve_numeric_address(writer[0], address);
+		context.mysql_port = std::atoi(writer[1].c_str());
+		writer_resolved = context.mysql_port > 0 &&
+			resolve_numeric_address(writer[0], context.address);
 	}
 	ok(writer_resolved, "resolved configured writer to a numeric IP endpoint");
 	if (!writer_resolved) {
-		return EXIT_FAILURE;
+		return false;
 	}
-	diag("Dedicated endpoint: configured=%s:%d numeric=%s:%d", writer[0].c_str(), mysql_port,
-		address.c_str(), mysql_port);
-	cleanup.set_endpoint(address, mysql_port);
+	diag("Dedicated endpoint: configured=%s:%d numeric=%s:%d", writer[0].c_str(), context.mysql_port,
+		context.address.c_str(), context.mysql_port);
+	context.cleanup.set_endpoint(context.address, context.mysql_port);
+	return true;
+}
 
+static bool verify_endpoint_absent(TestContext& context) {
 	uint64_t count = 0;
-	const std::string endpoint_filter =
-		" hostname=" + sql_quote(admin, address) + " AND port=" + std::to_string(mysql_port);
-	bool count_ok = get_count(admin, "SELECT COUNT(*) FROM runtime_mysql_servers WHERE" + endpoint_filter, count);
+	bool count_ok = get_count(context.admin,
+		"SELECT COUNT(*) FROM runtime_mysql_servers WHERE" + context.endpoint_filter(), count);
 	ok(count_ok && count == 0, "numeric endpoint is absent from runtime_mysql_servers before setup");
 	if (!count_ok || count != 0) {
-		return EXIT_FAILURE;
+		return false;
 	}
 
-	count_ok = get_count(admin, "SELECT COUNT(*) FROM stats_mysql_gtid_executed WHERE" + endpoint_filter, count);
+	count_ok = get_count(context.admin,
+		"SELECT COUNT(*) FROM stats_mysql_gtid_executed WHERE" + context.endpoint_filter(), count);
 	ok(count_ok && count == 0, "numeric endpoint is absent from stats_mysql_gtid_executed before setup");
 	if (!count_ok || count != 0) {
-		return EXIT_FAILURE;
+		return false;
 	}
+	return true;
+}
 
+static bool install_dedicated_routing(TestContext& context) {
 	const std::string server_insert =
 		"INSERT INTO mysql_servers (hostgroup_id,hostname,port,gtid_port,weight,comment) VALUES (" +
-		std::to_string(RW_HG) + "," + sql_quote(admin, address) + "," + std::to_string(mysql_port) +
-		",0,1," + sql_quote(admin, TEST_COMMENT) + "),(" + std::to_string(RO_HG) + "," +
-		sql_quote(admin, address) + "," + std::to_string(mysql_port) + ",1,1," +
-		sql_quote(admin, TEST_COMMENT) + ")";
-	if (!exec_query(admin, server_insert, "insert dedicated servers")) {
-		return EXIT_FAILURE;
+		std::to_string(RW_HG) + "," + sql_quote(context.admin, context.address) + "," +
+		std::to_string(context.mysql_port) + ",0,1," + sql_quote(context.admin, TEST_COMMENT) + "),(" +
+		std::to_string(RO_HG) + "," + sql_quote(context.admin, context.address) + "," +
+		std::to_string(context.mysql_port) + ",1,1," + sql_quote(context.admin, TEST_COMMENT) + ")";
+	if (!exec_query(context.admin, server_insert, "insert dedicated servers")) {
+		return false;
 	}
-	cleanup.mark_servers_installed();
+	context.cleanup.mark_servers_installed();
 
-	const std::string username = sql_quote(admin, cl.username);
-	const std::string comment = sql_quote(admin, TEST_COMMENT);
+	const std::string username = sql_quote(context.admin, context.cl.username);
+	const std::string comment = sql_quote(context.admin, TEST_COMMENT);
 	const std::string rules_insert =
 		"INSERT INTO mysql_query_rules "
 		"(rule_id,active,username,match_digest,destination_hostgroup,apply,comment) VALUES "
 		"(159830,1," + username + ",'^INSERT INTO test\\.gtid_from_ok',15983,1," + comment + "),"
 		"(159831,1," + username + ",'^SELECT @@session\\.session_track_gtids',15983,1," + comment + "),"
 		"(159832,1," + username + ",'^SELECT id FROM test\\.gtid_from_ok',15984,1," + comment + ")";
-	if (!exec_query(admin, rules_insert, "insert dedicated query rules")) {
-		return EXIT_FAILURE;
+	if (!exec_query(context.admin, rules_insert, "insert dedicated query rules")) {
+		return false;
 	}
-	cleanup.mark_rules_installed();
+	context.cleanup.mark_rules_installed();
+	return true;
+}
 
+static bool configure_gtid_variables(TestContext& context) {
 	const std::vector<std::string> required_variables {
 		"mysql-connect_timeout_server_max",
 		"mysql-client_session_track_gtid",
@@ -452,215 +469,258 @@ static int run_test(
 	};
 	for (const std::string& name : required_variables) {
 		std::string value;
-		if (!get_variable(admin, name, value)) {
+		if (!get_variable(context.admin, name, value)) {
 			diag("Required MySQL variable is unavailable: %s", name.c_str());
-			return EXIT_FAILURE;
+			return false;
 		}
-		cleanup.save_variable(name, value);
+		context.cleanup.save_variable(name, value);
 	}
 
 	std::string update_gtid_saved;
-	if (get_variable(admin, "mysql-update_gtid_from_ok", update_gtid_saved)) {
-		cleanup.save_variable("mysql-update_gtid_from_ok", update_gtid_saved);
+	if (get_variable(context.admin, "mysql-update_gtid_from_ok", update_gtid_saved)) {
+		context.cleanup.save_variable("mysql-update_gtid_from_ok", update_gtid_saved);
 	} else {
 		diag("mysql-update_gtid_from_ok is not present yet; SET below establishes the expected red phase");
 	}
 
 	std::string capabilities;
-	if (!get_variable(admin, "mysql-server_capabilities", capabilities)) {
-		return EXIT_FAILURE;
+	if (!get_variable(context.admin, "mysql-server_capabilities", capabilities)) {
+		return false;
 	}
 	char* end = nullptr;
 	const uint64_t parsed_caps = std::strtoull(capabilities.c_str(), &end, 10);
 	if (end == capabilities.c_str() || *end != '\0') {
 		diag("Invalid mysql-server_capabilities value: %s", capabilities.c_str());
-		return EXIT_FAILURE;
+		return false;
 	}
 	const uint64_t tracking_caps = parsed_caps | CLIENT_SESSION_TRACKING;
 
-	if (!set_variable(admin, "mysql-connect_timeout_server_max", "1000") ||
-		!set_variable(admin, "mysql-client_session_track_gtid", "true") ||
-		!set_variable(admin, "mysql-default_session_track_gtids", "OFF") ||
-		!set_variable(admin, "mysql-server_capabilities", std::to_string(tracking_caps)) ||
-		!set_variable(admin, "mysql-update_gtid_from_ok", "false")) {
-		return EXIT_FAILURE;
+	if (!set_variable(context.admin, "mysql-connect_timeout_server_max", "1000") ||
+		!set_variable(context.admin, "mysql-client_session_track_gtid", "true") ||
+		!set_variable(context.admin, "mysql-default_session_track_gtids", "OFF") ||
+		!set_variable(context.admin, "mysql-server_capabilities", std::to_string(tracking_caps)) ||
+		!set_variable(context.admin, "mysql-update_gtid_from_ok", "false")) {
+		return false;
 	}
-	if (!exec_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME", "load test variables") ||
-		!exec_query(admin, "LOAD MYSQL SERVERS TO RUNTIME", "load dedicated servers") ||
-		!exec_query(admin, "LOAD MYSQL QUERY RULES TO RUNTIME", "load dedicated query rules")) {
-		return EXIT_FAILURE;
+	if (!exec_query(context.admin, "LOAD MYSQL VARIABLES TO RUNTIME", "load test variables") ||
+		!exec_query(context.admin, "LOAD MYSQL SERVERS TO RUNTIME", "load dedicated servers") ||
+		!exec_query(context.admin, "LOAD MYSQL QUERY RULES TO RUNTIME", "load dedicated query rules")) {
+		return false;
 	}
+	return true;
+}
 
-	connections.direct = connect_mysql(
-		address.c_str(), mysql_port, cl.mysql_username, cl.mysql_password
+static bool prepare_backend_and_empty_record(TestContext& context) {
+	context.connections.direct = connect_mysql(
+		context.address.c_str(), context.mysql_port, context.cl.mysql_username, context.cl.mysql_password
 	);
 	std::string backend_session_track_gtids;
-	const bool backend_tracking_ready = connections.direct != nullptr &&
-		select_single_string(connections.direct, "SELECT @@GLOBAL.session_track_gtids",
+	const bool backend_tracking_ready = context.connections.direct != nullptr &&
+		select_single_string(context.connections.direct, "SELECT @@GLOBAL.session_track_gtids",
 			backend_session_track_gtids);
 	if (backend_tracking_ready) {
-		cleanup.save_backend_session_track_gtids(backend_session_track_gtids);
+		context.cleanup.save_backend_session_track_gtids(backend_session_track_gtids);
 	}
 	if (!backend_tracking_ready ||
-		!exec_query(connections.direct, "SET GLOBAL session_track_gtids='OFF'",
+		!exec_query(context.connections.direct, "SET GLOBAL session_track_gtids='OFF'",
 			"set backend session_track_gtids default OFF")) {
-		return EXIT_FAILURE;
+		return false;
 	}
 
 	bool table_ready =
-		exec_query(connections.direct, "CREATE DATABASE IF NOT EXISTS test", "create test database") &&
-		exec_query(connections.direct, "DROP TABLE IF EXISTS test.gtid_from_ok", "drop stale test table") &&
-		exec_query(connections.direct, "CREATE TABLE test.gtid_from_ok (id INT PRIMARY KEY)", "create test table");
+		exec_query(context.connections.direct, "CREATE DATABASE IF NOT EXISTS test", "create test database") &&
+		exec_query(context.connections.direct, "DROP TABLE IF EXISTS test.gtid_from_ok", "drop stale test table") &&
+		exec_query(context.connections.direct, "CREATE TABLE test.gtid_from_ok (id INT PRIMARY KEY)", "create test table");
 	if (table_ready) {
-		cleanup.mark_table_created();
-		mysql_close(connections.direct);
-		connections.direct = nullptr;
+		context.cleanup.mark_table_created();
+		mysql_close(context.connections.direct);
+		context.connections.direct = nullptr;
 	}
 	ok(table_ready, "created test.gtid_from_ok through a direct backend connection");
 	if (!table_ready) {
-		return EXIT_FAILURE;
+		return false;
 	}
 
 	std::string endpoint_gtid;
 	const bool initially_empty = poll_endpoint_gtid(
-		admin, address, mysql_port, [](const std::string& value) { return value.empty(); }, endpoint_gtid
+		context.admin, context.address, context.mysql_port,
+		[](const std::string& value) { return value.empty(); }, endpoint_gtid
 	);
 	ok(initially_empty, "inactive reader exposes an initially empty endpoint GTID record");
 	if (!initially_empty) {
 		diag("Initial endpoint GTID value: %s", endpoint_gtid.c_str());
-		return EXIT_FAILURE;
+		return false;
 	}
+	return true;
+}
 
-	connections.first = connect_mysql(cl.host, cl.port, cl.username, cl.password);
-	if (connections.first == nullptr ||
-		!exec_query(connections.first, "SET SESSION session_track_gtids=OWN_GTID", "enable OWN_GTID for row 1")) {
-		return EXIT_FAILURE;
+static bool verify_disabled_ingestion(TestContext& context) {
+	context.connections.first = connect_mysql(
+		context.cl.host, context.cl.port, context.cl.username, context.cl.password
+	);
+	if (context.connections.first == nullptr ||
+		!exec_query(context.connections.first, "SET SESSION session_track_gtids=OWN_GTID",
+			"enable OWN_GTID for row 1")) {
+		return false;
 	}
-	const int insert1_rc = mysql_query(connections.first, "INSERT INTO test.gtid_from_ok VALUES (1)");
+	const int insert1_rc = mysql_query(context.connections.first, "INSERT INTO test.gtid_from_ok VALUES (1)");
 	if (insert1_rc != 0) {
-		diag("Row 1 insert failed: errno=%u error=%s", mysql_errno(connections.first), mysql_error(connections.first));
+		diag("Row 1 insert failed: errno=%u error=%s", mysql_errno(context.connections.first),
+			mysql_error(context.connections.first));
 	}
-	const std::string gtid1 = insert1_rc == 0 ? get_session_gtid(connections.first) : std::string {};
+	const std::string gtid1 = insert1_rc == 0 ? get_session_gtid(context.connections.first) : std::string {};
 	ok(insert1_rc == 0 && !gtid1.empty(), "row 1 INSERT returned a GTID in its OK packet");
 	if (insert1_rc != 0 || gtid1.empty()) {
-		return EXIT_FAILURE;
+		return false;
 	}
 	diag("Row 1 GTID: %s", gtid1.c_str());
 
 	const std::string disabled_read =
 		"/*+ ;min_gtid=" + gtid1 + " */ SELECT id FROM test.gtid_from_ok WHERE id=1";
-	const int disabled_rc = mysql_query(connections.first, disabled_read.c_str());
-	const unsigned int disabled_errno = mysql_errno(connections.first);
-	const std::string disabled_error = mysql_error(connections.first);
+	const int disabled_rc = mysql_query(context.connections.first, disabled_read.c_str());
+	const unsigned int disabled_errno = mysql_errno(context.connections.first);
+	const std::string disabled_error = mysql_error(context.connections.first);
 	ok(disabled_rc != 0, "disabled OK-packet ingestion rejects min_gtid read (errno=%u, error=%s)",
 		disabled_errno, disabled_error.c_str());
 	if (disabled_rc == 0) {
-		MYSQL_RES* unexpected = mysql_store_result(connections.first);
+		MYSQL_RES* unexpected = mysql_store_result(context.connections.first);
 		if (unexpected != nullptr) {
 			mysql_free_result(unexpected);
 		}
-		return EXIT_FAILURE;
+		return false;
 	}
-	if (!exec_query(connections.first, "/* hostgroup=15983 */ BEGIN", "pin tracked row 1 backend")) {
-		return EXIT_FAILURE;
-	}
-
-	if (!set_variable(admin, "mysql-update_gtid_from_ok", "true") ||
-		!exec_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME", "enable OK-packet ingestion")) {
-		return EXIT_FAILURE;
+	if (!exec_query(context.connections.first, "/* hostgroup=15983 */ BEGIN", "pin tracked row 1 backend")) {
+		return false;
 	}
 
-	connections.untracked = connect_mysql(cl.host, cl.port, cl.username, cl.password);
-	if (connections.untracked == nullptr) {
-		return EXIT_FAILURE;
+	if (!set_variable(context.admin, "mysql-update_gtid_from_ok", "true") ||
+		!exec_query(context.admin, "LOAD MYSQL VARIABLES TO RUNTIME", "enable OK-packet ingestion")) {
+		return false;
+	}
+	return true;
+}
+
+static bool verify_untracked_insert(TestContext& context) {
+	context.connections.untracked = connect_mysql(
+		context.cl.host, context.cl.port, context.cl.username, context.cl.password
+	);
+	if (context.connections.untracked == nullptr) {
+		return false;
 	}
 	std::string tracking_state;
 	const bool tracking_query_ok = select_single_string(
-		connections.untracked, "SELECT @@session.session_track_gtids", tracking_state
+		context.connections.untracked, "SELECT @@session.session_track_gtids", tracking_state
 	);
 	ok(tracking_query_ok && strcasecmp(tracking_state.c_str(), "OFF") == 0,
 		"fresh backend session_track_gtids remains OFF (value=%s)", tracking_state.c_str());
 	if (!tracking_query_ok) {
-		return EXIT_FAILURE;
+		return false;
 	}
 
-	const int insert2_rc = mysql_query(connections.untracked, "INSERT INTO test.gtid_from_ok VALUES (2)");
+	const int insert2_rc = mysql_query(context.connections.untracked, "INSERT INTO test.gtid_from_ok VALUES (2)");
 	if (insert2_rc != 0) {
-		diag("Row 2 insert failed: errno=%u error=%s", mysql_errno(connections.untracked),
-			mysql_error(connections.untracked));
+		diag("Row 2 insert failed: errno=%u error=%s", mysql_errno(context.connections.untracked),
+			mysql_error(context.connections.untracked));
 	}
-	const std::string gtid2 = insert2_rc == 0 ? get_session_gtid(connections.untracked) : std::string {};
+	const std::string gtid2 = insert2_rc == 0 ? get_session_gtid(context.connections.untracked) : std::string {};
 	ok(insert2_rc == 0 && gtid2.empty(), "row 2 INSERT returns no GTID when the client did not request one");
 	if (insert2_rc != 0) {
-		return EXIT_FAILURE;
+		return false;
 	}
 
 	bool found = false;
+	std::string endpoint_gtid;
 	endpoint_gtid.clear();
-	const bool after_row2_ok = get_endpoint_gtid(admin, address, mysql_port, found, endpoint_gtid);
+	const bool after_row2_ok = get_endpoint_gtid(
+		context.admin, context.address, context.mysql_port, found, endpoint_gtid
+	);
 	ok(after_row2_ok && found && endpoint_gtid.empty(),
 		"endpoint GTID set remains empty after untracked row 2 INSERT");
 	if (!after_row2_ok || !found || !endpoint_gtid.empty()) {
-		return EXIT_FAILURE;
+		return false;
 	}
-	mysql_close(connections.untracked);
-	connections.untracked = nullptr;
-	if (!exec_query(connections.first, "ROLLBACK", "release tracked row 1 backend")) {
-		return EXIT_FAILURE;
+	mysql_close(context.connections.untracked);
+	context.connections.untracked = nullptr;
+	if (!exec_query(context.connections.first, "ROLLBACK", "release tracked row 1 backend")) {
+		return false;
 	}
-	mysql_close(connections.first);
-	connections.first = nullptr;
+	mysql_close(context.connections.first);
+	context.connections.first = nullptr;
+	return true;
+}
 
-	connections.tracked = connect_mysql(cl.host, cl.port, cl.username, cl.password);
-	if (connections.tracked == nullptr ||
-		!exec_query(connections.tracked, "SET SESSION session_track_gtids=OWN_GTID", "enable OWN_GTID for row 3")) {
-		return EXIT_FAILURE;
+static bool verify_tracked_causal_read(TestContext& context) {
+	context.connections.tracked = connect_mysql(
+		context.cl.host, context.cl.port, context.cl.username, context.cl.password
+	);
+	if (context.connections.tracked == nullptr ||
+		!exec_query(context.connections.tracked, "SET SESSION session_track_gtids=OWN_GTID",
+			"enable OWN_GTID for row 3")) {
+		return false;
 	}
-	const int insert3_rc = mysql_query(connections.tracked, "INSERT INTO test.gtid_from_ok VALUES (3)");
+	const int insert3_rc = mysql_query(context.connections.tracked, "INSERT INTO test.gtid_from_ok VALUES (3)");
 	if (insert3_rc != 0) {
-		diag("Row 3 insert failed: errno=%u error=%s", mysql_errno(connections.tracked), mysql_error(connections.tracked));
+		diag("Row 3 insert failed: errno=%u error=%s", mysql_errno(context.connections.tracked),
+			mysql_error(context.connections.tracked));
 	}
-	const std::string gtid3 = insert3_rc == 0 ? get_session_gtid(connections.tracked) : std::string {};
+	const std::string gtid3 = insert3_rc == 0 ? get_session_gtid(context.connections.tracked) : std::string {};
 	ok(insert3_rc == 0 && !gtid3.empty(), "row 3 INSERT returned a GTID in its OK packet");
 	if (insert3_rc != 0 || gtid3.empty()) {
-		return EXIT_FAILURE;
+		return false;
 	}
 	diag("Row 3 GTID: %s", gtid3.c_str());
 
+	std::string endpoint_gtid;
 	endpoint_gtid.clear();
 	const bool learned = poll_endpoint_gtid(
-		admin, address, mysql_port,
+		context.admin, context.address, context.mysql_port,
 		[&gtid3](const std::string& value) { return value.find(gtid3) != std::string::npos; },
 		endpoint_gtid
 	);
 	ok(learned, "endpoint GTID stats contains row 3 GTID (stats=%s)", endpoint_gtid.c_str());
 	if (!learned) {
-		return EXIT_FAILURE;
+		return false;
 	}
 
 	uint64_t queries_before = 0;
 	const std::string query_counter =
 		"SELECT COALESCE(SUM(Queries),0) FROM stats_mysql_connection_pool WHERE hostgroup=" +
 		std::to_string(RO_HG);
-	if (!get_count(admin, query_counter, queries_before)) {
-		return EXIT_FAILURE;
+	if (!get_count(context.admin, query_counter, queries_before)) {
+		return false;
 	}
 
 	const std::string causal_read =
 		"/*+ ;min_gtid=" + gtid3 + " */ SELECT id FROM test.gtid_from_ok WHERE id=3";
 	std::string selected_id;
-	const bool read_ok = select_single_string(connections.tracked, causal_read, selected_id);
+	const bool read_ok = select_single_string(context.connections.tracked, causal_read, selected_id);
 	ok(read_ok && selected_id == "3", "causal read through inactive-reader endpoint returns row 3");
 	if (!read_ok || selected_id != "3") {
-		return EXIT_FAILURE;
+		return false;
 	}
 
 	uint64_t queries_after = 0;
-	const bool after_ok = get_count(admin, query_counter, queries_after);
+	const bool after_ok = get_count(context.admin, query_counter, queries_after);
 	ok(after_ok && queries_after > queries_before,
 		"HG %d query counter increments for causal read (%llu -> %llu)", RO_HG,
 		static_cast<unsigned long long>(queries_before), static_cast<unsigned long long>(queries_after));
-	return after_ok && queries_after > queries_before ? EXIT_SUCCESS : EXIT_FAILURE;
+	return after_ok && queries_after > queries_before;
+}
+
+static int run_test(CommandLine& cl, MYSQL* admin,
+	TestConnections& connections, CleanupGuard& cleanup) {
+	TestContext context { cl, admin, connections, cleanup };
+	if (!resolve_writer_endpoint(context) ||
+		!verify_endpoint_absent(context) ||
+		!install_dedicated_routing(context) ||
+		!configure_gtid_variables(context) ||
+		!prepare_backend_and_empty_record(context) ||
+		!verify_disabled_ingestion(context) ||
+		!verify_untracked_insert(context) ||
+		!verify_tracked_causal_read(context)) {
+		return EXIT_FAILURE;
+	}
+	return EXIT_SUCCESS;
 }
 
 } // namespace
