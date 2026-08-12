@@ -1464,7 +1464,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				refuse = true; // LOAD x FROM CONFIG (config file -> memory)
 			}
 			if (query_no_space_length > 10 && (is_load || is_save) && !strncasecmp(" TO MEMORY", query_no_space+query_no_space_length-10, 10)) {
-				refuse = true; // LOAD x TO MEMORY (runtime -> memory) ; SAVE x TO MEMORY (disk -> memory)
+				refuse = true; // LOAD x TO MEMORY (disk -> memory) ; SAVE x TO MEMORY (runtime -> memory)
 			}
 			if (query_no_space_length > 7 && (is_load || is_save) && !strncasecmp(" TO MEM", query_no_space+query_no_space_length-7, 7)) {
 				refuse = true; // abbreviation: x TO MEM == x TO MEMORY
