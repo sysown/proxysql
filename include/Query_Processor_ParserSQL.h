@@ -34,6 +34,19 @@
 #include <string>
 #include <vector>
 
+enum class UserVariableQueryDisposition : uint8_t {
+	LEGACY,
+	SUPPORTED_SET,
+	SAFE,
+	UNSAFE_FALLBACK
+};
+
+struct UserVariableQueryDecision {
+	UserVariableQueryDisposition disposition;
+	bool parsersql_called;
+	bool legacy_udv_status_safe;
+};
+
 /**
  * @brief Computes a query digest using the MySQL-flavour ParserSQL parser.
  *
@@ -122,5 +135,19 @@ std::map<std::string, std::vector<std::string>> parsersql_parse_set_mysql(const 
  *               if the query is not a valid SET statement.
  */
 std::map<std::string, std::vector<std::string>> parsersql_parse_set_pgsql(const std::string& query);
+
+UserVariableQueryDecision mysql_user_variable_query_disposition(
+	const char* query, size_t query_length,
+	bool must_classify_and_sync, bool plain_text_com_query,
+	bool supported_user_variable_set);
+
+bool parsersql_set_changes_user_variable_replay_context_mysql(
+	const char* query, size_t query_length);
+
+bool mysql_user_variable_is_replay_context_name(
+	const char* variable, size_t variable_length);
+
+bool mysql_user_variable_unsafe_query_locks_hostgroup(
+	int query_rule_multiplex, bool already_locked);
 
 #endif

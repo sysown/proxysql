@@ -764,6 +764,106 @@ UserVariableSetAnalysis parsersql_analyze_user_variable_set_mysql(
     return ::UserVariableUsage::UNSAFE_OR_UNKNOWN;
 }
 
+UserVariableQueryDecision mysql_user_variable_query_disposition(
+    const char* query, size_t query_length,
+    bool must_classify_and_sync, bool plain_text_com_query,
+    bool supported_user_variable_set)
+{
+    if (!plain_text_com_query || !must_classify_and_sync) {
+        return {UserVariableQueryDisposition::LEGACY, false, false};
+    }
+    if (supported_user_variable_set) {
+        return {UserVariableQueryDisposition::SUPPORTED_SET, false, true};
+    }
+    if (!query || std::memchr(query, '@', query_length) == nullptr) {
+        return {UserVariableQueryDisposition::SAFE, false, true};
+    }
+
+    const ::UserVariableUsage usage =
+        parsersql_classify_user_variable_usage_mysql(query, query_length);
+    if (usage == ::UserVariableUsage::NO_USER_VARIABLE ||
+        usage == ::UserVariableUsage::READ_ONLY) {
+        return {UserVariableQueryDisposition::SAFE, true, true};
+    }
+    return {UserVariableQueryDisposition::UNSAFE_FALLBACK, true, false};
+}
+
+bool mysql_user_variable_is_replay_context_name(
+    const char* variable, size_t variable_length)
+{
+    if (!variable) return false;
+    const char* names[] = {
+        "sql_mode",
+        "character_set_client",
+        "character_set_connection",
+        "collation_connection"
+    };
+    for (const char* name : names) {
+        const size_t name_length = std::strlen(name);
+        if (name_length == variable_length &&
+            strncasecmp(variable, name, name_length) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool mysql_user_variable_unsafe_query_locks_hostgroup(
+    int query_rule_multiplex, bool already_locked)
+{
+    return query_rule_multiplex == -1 && !already_locked;
+}
+
+static std::string replay_context_target_name(const AstNode* target) {
+    if (!target || target->type != NodeType::NODE_VAR_TARGET) return {};
+
+    const AstNode* name_node = nullptr;
+    for (const AstNode* child = target->first_child; child;
+         child = child->next_sibling) {
+        if (child->type == NodeType::NODE_USER_VARIABLE) return {};
+        if (child->type == NodeType::NODE_IDENTIFIER) name_node = child;
+    }
+    if (!name_node || !name_node->value_ptr || name_node->value_len == 0) return {};
+
+    std::string name(name_node->value_ptr, name_node->value_len);
+    if (!name.empty() && name[0] == '@' &&
+        (name.size() == 1 || name[1] != '@')) {
+        return {};
+    }
+    return normalize_set_var_name(std::move(name));
+}
+
+bool parsersql_set_changes_user_variable_replay_context_mysql(
+    const char* query, size_t query_length)
+{
+    if (!query) return false;
+    auto result = tl_mysql_parser.parse(query, query_length);
+    if (result.status != ParseResult::OK || !result.full_input ||
+        result.stmt_type != StmtType::SET || !result.ast ||
+        result.ast->type != NodeType::NODE_SET_STMT) {
+        tl_mysql_parser.reset();
+        return false;
+    }
+
+    bool changes_context = false;
+    for (const AstNode* child = result.ast->first_child; child;
+         child = child->next_sibling) {
+        if (child->type == NodeType::NODE_SET_NAMES ||
+            child->type == NodeType::NODE_SET_CHARSET) {
+            changes_context = true;
+            break;
+        }
+        if (child->type != NodeType::NODE_VAR_ASSIGNMENT) continue;
+        const std::string name = replay_context_target_name(child->first_child);
+        if (mysql_user_variable_is_replay_context_name(name.data(), name.size())) {
+            changes_context = true;
+            break;
+        }
+    }
+    tl_mysql_parser.reset();
+    return changes_context;
+}
+
 // ---------------------------------------------------------------------------
 // Section 3: SET AST walker
 // ---------------------------------------------------------------------------

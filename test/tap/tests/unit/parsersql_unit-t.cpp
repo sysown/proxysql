@@ -21,6 +21,13 @@ bool mysql_user_variable_commit_post_ok(
 	MySQL_User_Variable_State& frontend,
 	MySQL_User_Variable_State& backend,
 	const std::vector<UserVariableAssignment>& assignments);
+bool mysql_user_variable_accepts_new_assignments_policy(
+	int mode, int set_parser_algorithm, int query_processor_parser,
+	bool plain_text_com_query, bool connection_bound_fallback);
+bool mysql_user_variable_must_classify_and_sync_policy(
+	int mode, int set_parser_algorithm, int query_processor_parser,
+	bool plain_text_com_query, bool connection_bound_fallback,
+	bool tracking_latched);
 
 static inline size_t str_view_len(const char *s) {
 	return s ? std::string_view{s}.size() : 0;
@@ -608,8 +615,128 @@ static void test_user_variable_post_ok_atomic_commit() {
 		"backend post-OK staging failure commits neither map and requests fallback");
 }
 
+static void test_user_variable_query_disposition() {
+	auto decide = [](const char* query, bool active = true, bool plain = true,
+		bool supported_set = false) {
+		return mysql_user_variable_query_disposition(
+			query, str_view_len(query), active, plain, supported_set);
+	};
+	auto d = decide("SELECT 1");
+	ok(d.disposition == UserVariableQueryDisposition::SAFE && !d.parsersql_called &&
+		d.legacy_udv_status_safe,
+		"UDV disposition uses the no-at fast gate without ParserSQL");
+	d = decide("SELECT '@x'");
+	ok(d.disposition == UserVariableQueryDisposition::SAFE && d.parsersql_called &&
+		d.legacy_udv_status_safe,
+		"UDV disposition parses and proves a string-contained at-sign safe");
+	d = decide("SELECT 1 /* @x */");
+	ok(d.disposition == UserVariableQueryDisposition::SAFE && d.parsersql_called &&
+		d.legacy_udv_status_safe,
+		"UDV disposition parses and proves a comment-contained at-sign safe");
+	d = decide("SELECT @x");
+	ok(d.disposition == UserVariableQueryDisposition::SAFE && d.parsersql_called &&
+		d.legacy_udv_status_safe,
+		"UDV disposition keeps a read-only occurrence multiplexable");
+	d = decide("SET @x=1", true, true, true);
+	ok(d.disposition == UserVariableQueryDisposition::SUPPORTED_SET &&
+		!d.parsersql_called && d.legacy_udv_status_safe,
+		"UDV disposition leaves a supported SET to the staging path");
+	d = decide("SELECT @x:=1");
+	ok(d.disposition == UserVariableQueryDisposition::UNSAFE_FALLBACK &&
+		d.parsersql_called && !d.legacy_udv_status_safe,
+		"UDV disposition binds assignment expressions");
+	d = decide("SELECT id INTO @x FROM test.uv_source");
+	ok(d.disposition == UserVariableQueryDisposition::UNSAFE_FALLBACK,
+		"UDV disposition binds SELECT INTO user variables");
+	d = decide("SELECT COALESCE(@x,1)");
+	ok(d.disposition == UserVariableQueryDisposition::UNSAFE_FALLBACK,
+		"UDV disposition binds function AST shapes containing user variables");
+	d = decide("CALL p(@x)");
+	ok(d.disposition == UserVariableQueryDisposition::UNSAFE_FALLBACK,
+		"UDV disposition binds CALL AST shapes containing user variables");
+	d = decide("SELECT @x; SELECT 1");
+	ok(d.disposition == UserVariableQueryDisposition::UNSAFE_FALLBACK,
+		"UDV disposition binds partial or multi-statement input");
+	d = decide("SET @x=1", true, false, false);
+	ok(d.disposition == UserVariableQueryDisposition::LEGACY &&
+		!d.parsersql_called && !d.legacy_udv_status_safe,
+		"UDV disposition keeps prepared SETs on the unsafe legacy path");
+	d = decide("SELECT @x", false);
+	ok(d.disposition == UserVariableQueryDisposition::LEGACY &&
+		!d.parsersql_called && !d.legacy_udv_status_safe,
+		"UDV disposition preserves current behavior before tracking is active");
+}
+
+static void test_user_variable_runtime_drain_policy() {
+	ok(mysql_user_variable_accepts_new_assignments_policy(1, 3, 0, true, false),
+		"runtime UDV policy accepts new assignments while mode and ParserSQL are active");
+	ok(!mysql_user_variable_accepts_new_assignments_policy(0, 3, 0, true, false),
+		"runtime UDV policy stops new assignments when mode is disabled");
+	ok(!mysql_user_variable_accepts_new_assignments_policy(1, 2, 0, true, false),
+		"runtime UDV policy stops new assignments when ParserSQL prerequisite is disabled");
+	ok(!mysql_user_variable_accepts_new_assignments_policy(1, 3, 0, true, true),
+		"runtime UDV policy stops map updates after authoritative-backend binding");
+	ok(mysql_user_variable_must_classify_and_sync_policy(0, 3, 0, true, false, true),
+		"runtime mode disable after first commit preserves classification and synchronization");
+	ok(mysql_user_variable_must_classify_and_sync_policy(1, 2, 0, true, false, true),
+		"runtime ParserSQL prerequisite disable after first commit preserves drain behavior");
+	ok(mysql_user_variable_must_classify_and_sync_policy(1, 3, 0, true, true, true),
+		"tracking latch preserves synchronization after authoritative-backend binding");
+	ok(!mysql_user_variable_must_classify_and_sync_policy(0, 2, 0, true, false, false),
+		"unlatched disabled tracking preserves legacy behavior");
+	ok(mysql_user_variable_unsafe_query_locks_hostgroup(-1, false),
+		"unsafe UDV fallback locks a previously-unbound session without a query-rule override");
+	ok(!mysql_user_variable_unsafe_query_locks_hostgroup(0, false),
+		"unsafe UDV fallback preserves query-rule multiplex=0 semantics");
+	ok(!mysql_user_variable_unsafe_query_locks_hostgroup(1, false),
+		"unsafe UDV fallback preserves query-rule multiplex=1 semantics");
+}
+
+static void test_user_variable_replay_context() {
+	const char* context_queries[] = {
+		"SET sql_mode='NO_BACKSLASH_ESCAPES'",
+		"SET @@SESSION.sql_mode='TRADITIONAL'",
+		"SET character_set_client=utf8mb4",
+		"SET character_set_connection=utf8mb4",
+		"SET collation_connection=utf8mb4_bin",
+		"SET NAMES utf8mb4 COLLATE utf8mb4_bin",
+		"SET CHARACTER SET utf8mb4",
+	};
+	for (const char* query : context_queries) {
+		ok(parsersql_set_changes_user_variable_replay_context_mysql(
+			query, str_view_len(query)),
+			"strict AST detects replay-context SET: %s", query);
+	}
+	const char* non_context_queries[] = {
+		"SET wait_timeout=10",
+		"SET sql_mode='x'; SELECT 1",
+		"SET sql_mode=",
+		"SELECT 'SET NAMES utf8mb4'",
+	};
+	for (const char* query : non_context_queries) {
+		ok(!parsersql_set_changes_user_variable_replay_context_mysql(
+			query, str_view_len(query)),
+			"strict AST rejects non/full-input replay-context lookalike: %s", query);
+	}
+
+	const char* context_names[] = {
+		"sql_mode", "character_set_client", "character_set_connection",
+		"collation_connection"
+	};
+	for (const char* name : context_names) {
+		ok(mysql_user_variable_is_replay_context_name(name, str_view_len(name)),
+			"session tracking recognizes replay-context variable: %s", name);
+	}
+	ok(!mysql_user_variable_is_replay_context_name(
+		"character_set_results", str_view_len("character_set_results")),
+		"session tracking does not bind for unrelated character_set_results");
+	ok(!mysql_user_variable_is_replay_context_name(
+		"user_variable", str_view_len("user_variable")),
+		"session tracking does not infer hidden UDV writes");
+}
+
 int main() {
-	plan(133);
+	plan(173);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -672,6 +799,9 @@ int main() {
 	test_user_variable_staging_preflight();
 	test_user_variable_routing_disposition();
 	test_user_variable_post_ok_atomic_commit();
+	test_user_variable_query_disposition();
+	test_user_variable_runtime_drain_policy();
+	test_user_variable_replay_context();
 
 	test_cleanup_minimal();
 	return exit_status();
