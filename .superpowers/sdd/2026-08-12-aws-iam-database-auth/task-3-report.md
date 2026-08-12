@@ -5,7 +5,7 @@
 - `include/Aws_Iam_Token_Manager.h`: SDK-independent token/source/signer interfaces, move-only `SecureString`, bounded-manager configuration, and stats.
 - `lib/Aws_Iam_Token_Manager.cpp`: secure value ownership and cleansing, two-worker coalescing manager, bounded cache/queue/waiters/backoff, cancellation, timeout, invalidation, recovery, stats, and shutdown.
 - `lib/Makefile`: includes the manager in `libproxysql.a` without AWS SDK dependencies.
-- `test/tap/tests/unit/aws_iam_token_manager_unit-t.cpp`: deterministic fake clock/signer/sinks with 26 behavioral assertions.
+- `test/tap/tests/unit/aws_iam_token_manager_unit-t.cpp`: deterministic fake clock/signer/sinks with 38 behavioral assertions.
 - `test/tap/tests/unit/Makefile`: registers the test and gives it a focused SDK-/process-global-independent build rule.
 
 ## RED / GREEN evidence
@@ -45,3 +45,14 @@
 - The configurable worker-count field was removed; construction always starts exactly two long-lived workers.
 - Verification: default SDK-free library build passed; focused test passed `36/36` repeatedly; TSan passed `36/36` with no race; strict `-Wall -Wextra -Werror` compile passed; earlier IAM policy/config regressions passed `31/31` and `34/34`; `git diff --check` passed.
 - Residual concern remains unchanged: a signer that never returns can delay shutdown because the fixed signer interface has no cancellation/deadline parameter.
+
+## Controller review fix iteration 2
+
+- Code/test commit: `46e86ea87` (`fix(mysql): make IAM delivery claims lock-free`).
+- RED: with the two deterministic regressions added and the old recursive dispatch mutex still in place, assertion 23 (a callback joins another thread canceling a later waiter) failed and the process remained deadlocked until `timeout` returned exit 124. Assertion 25 also failed because shutdown posted B from its stale snapshot after A's callback canceled B.
+- GREEN: focused TAP passes `38/38`; ten consecutive focused runs passed. The two new cases prove that no manager/dispatch mutex is held across a sink callback and that shutdown revalidates each handle after earlier shutdown callbacks have run.
+- Delivery state is explicitly `PENDING -> CLAIMED -> FINISHED`, or `PENDING -> CANCELED`. The transition from `PENDING` to `CLAIMED`, performed under the single manager mutex while retaining a strong sink reference, is the callback-start linearization point. A cancel that wins that mutex suppresses and removes the pending delivery; a cancel that observes no active handle follows an already-started claim and does not wait for arbitrary sink code.
+- Shutdown sets its flag under the same mutex, snapshots only handle IDs, and re-finds/claims each live pending handle immediately before dispatch. Thus reentrant cancellation from shutdown callback A removes B before B can be claimed. A success claimed before shutdown is an already-started callback; shutdown waits for all such claimed callbacks to finish. Once shutdown wins the mutex, no later successful callback can claim or start.
+- Every sink callback runs after releasing the manager mutex, and claimed deliveries retain their sink through callback completion. `callbacks_in_progress` prevents destruction from completing while a previously claimed callback still uses manager-owned dispatch state.
+- Verification after the redesign: default focused TAP passed `38/38`; ten repeated focused runs passed; focused TSan passed `38/38` with no race report; strict `-Wall -Wextra -Werror` compile passed; default `libproxysql.a` rebuilt and the manager object/test have no AWS/Smithy references; earlier IAM policy/config regressions passed `31/31` and `34/34`; `git diff --check` passed.
+- Residual concern is unchanged: the fixed `AwsIamTokenSigner::sign()` interface has no cancellation/deadline hook, so a signer that never returns can still delay worker join during shutdown.
