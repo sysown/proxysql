@@ -176,7 +176,7 @@ jobs:
         for compose_project in ${CI_BUILD_COMPOSE_PROJECTS}; do
           if [ -f "${compose_file}" ]; then
             echo ">>> stopping stale Compose project: ${compose_project}"
-            if ! docker-compose -f "${compose_file}" -p "${compose_project}" down -v --remove-orphans; then
+            if ! docker compose -f "${compose_file}" -p "${compose_project}" down -v --remove-orphans; then
               cleanup_status=1
             fi
           fi
@@ -700,7 +700,7 @@ jobs:
         for compose_project in ${CI_BUILD_COMPOSE_PROJECTS}; do
           if [ -f "${compose_file}" ]; then
             echo ">>> stopping Compose project before workspace cleanup: ${compose_project}"
-            if ! docker-compose -f "${compose_file}" -p "${compose_project}" down -v --remove-orphans; then
+            if ! docker compose -f "${compose_file}" -p "${compose_project}" down -v --remove-orphans; then
               cleanup_status=1
             fi
           fi
