@@ -856,13 +856,16 @@ int main() {
 		? tracked_user_variable_count(reset_session.get()) : std::nullopt;
 	ok(reset_rc == 0 && count_after_reset && *count_after_reset == 0,
 		"mysql_reset_connection clears frontend user-variable diagnostics");
-	const auto reset_id_after = reset_session
-		? query_scalar(reset_session.get(), "/* uv_hg_a */ SELECT CONNECTION_ID()") : std::nullopt;
+	const auto reset_probe = reset_session
+		? query_result(reset_session.get(),
+			"/* uv_hg_a */ SELECT CONNECTION_ID(),@reset_lifecycle IS NULL")
+		: std::nullopt;
 	ok(reset_session && reset_id_before && !reset_id_before->is_null &&
-		reset_id_after && !reset_id_after->is_null &&
-		reset_id_after->bytes == reset_id_before->bytes && scalar_equals(
-			reset_session.get(), "/* uv_hg_a */ SELECT @reset_lifecycle IS NULL", "1"),
-		"mysql_reset_connection clears the value on the exact recorded backend connection");
+		reset_probe && reset_probe->rows.size() == 1 && reset_probe->rows.front().size() == 2 &&
+		!reset_probe->rows.front()[0].is_null &&
+		reset_probe->rows.front()[0].bytes == reset_id_before->bytes &&
+		!reset_probe->rows.front()[1].is_null && reset_probe->rows.front()[1].bytes == "1",
+		"one backend response proves reset cleared the value on the exact recorded connection");
 	reset_session.reset();
 
 	struct FallbackCase {
@@ -1296,15 +1299,19 @@ int main() {
 		? mysql_change_user(change_user_session.get(), cl.username, cl.password, "test") : -1;
 	const auto change_user_count_after = change_user_session
 		? tracked_user_variable_count(change_user_session.get()) : std::nullopt;
-	const auto change_user_id_after = change_user_session
-		? query_scalar(change_user_session.get(), "/* uv_hg_b */ SELECT CONNECTION_ID()")
+	const auto change_user_probe = change_user_session
+		? query_result(change_user_session.get(),
+			"/* uv_hg_b */ SELECT CONNECTION_ID(),@change_user_lifecycle IS NULL")
 		: std::nullopt;
 	ok(change_user_rc == 0 && change_user_count_after && *change_user_count_after == 0 &&
 		change_user_session && change_user_id_before && !change_user_id_before->is_null &&
-		change_user_id_after && !change_user_id_after->is_null &&
-		change_user_id_after->bytes == change_user_id_before->bytes && scalar_equals(
-			change_user_session.get(), "/* uv_hg_b */ SELECT @change_user_lifecycle IS NULL", "1"),
-		"mysql_change_user clears diagnostics and the value on the exact recorded backend connection");
+		change_user_probe && change_user_probe->rows.size() == 1 &&
+		change_user_probe->rows.front().size() == 2 &&
+		!change_user_probe->rows.front()[0].is_null &&
+		change_user_probe->rows.front()[0].bytes == change_user_id_before->bytes &&
+		!change_user_probe->rows.front()[1].is_null &&
+		change_user_probe->rows.front()[1].bytes == "1",
+		"one backend response proves change-user cleared the value on the exact recorded connection");
 	change_user_session.reset();
 
 	MysqlPtr disconnect_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
