@@ -435,8 +435,8 @@ void test_pending_and_waiter_bounds() {
 	ok(per_key_rejected->wait_for(1) && total_rejected->wait_for(1) &&
 		per_key_rejected->take().result.status == AwsIamStatus::WAITER_LIMIT &&
 		total_rejected->take().result.status == AwsIamStatus::WAITER_LIMIT &&
-		waiter_manager.snapshot().waiting_sessions == 3,
-		"per-key and total waiter caps reject without growing the waiter set");
+		waiter_manager.snapshot().waiting_sessions == 0,
+		"manager waiter caps reject without reporting non-session helpers as sessions");
 	waiter_signer->set_blocked(false);
 
 	FakeClock worker_clock;

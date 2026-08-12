@@ -1,4 +1,5 @@
 #include "Aws_Iam_Sdk.h"
+#include "proxysql.h"
 
 #include <atomic>
 #include <chrono>
@@ -29,7 +30,6 @@ public:
 	AwsIamRequestHandle request(const AwsIamTokenKey&, uint64_t opaque_id,
 		std::weak_ptr<AwsIamCompletionSink> sink) override {
 		AwsIamRequestHandle handle { next_handle_.fetch_add(1, std::memory_order_relaxed) };
-		token_requests_.fetch_add(1, std::memory_order_relaxed);
 		if (auto live_sink = sink.lock()) {
 			AwsIamCompletion completion;
 			completion.opaque_id = opaque_id;
@@ -41,7 +41,6 @@ public:
 
 	AwsIamTokenResult request_blocking(const AwsIamTokenKey&,
 		std::chrono::steady_clock::time_point) override {
-		token_requests_.fetch_add(1, std::memory_order_relaxed);
 		AwsIamTokenResult result;
 		result.status = AwsIamStatus::SUPPORT_NOT_COMPILED;
 		return result;
@@ -50,23 +49,13 @@ public:
 	void cancel(AwsIamRequestHandle) override {}
 	void invalidate(const AwsIamTokenKey&, uint64_t) override {}
 
-	void record_backend_connection(bool success) override {
-		(success ? backend_successes_ : backend_failures_).fetch_add(1, std::memory_order_relaxed);
-	}
+	void record_backend_connection(bool) override {}
+	void record_waiting_session(bool) override {}
 
-	AwsIamStatsSnapshot snapshot() const override {
-		AwsIamStatsSnapshot result;
-		result.token_requests = token_requests_.load(std::memory_order_relaxed);
-		result.backend_connection_successes = backend_successes_.load(std::memory_order_relaxed);
-		result.backend_connection_failures = backend_failures_.load(std::memory_order_relaxed);
-		return result;
-	}
+	AwsIamStatsSnapshot snapshot() const override { return {}; }
 
 private:
 	std::atomic<uint64_t> next_handle_ { 1 };
-	std::atomic<uint64_t> token_requests_ { 0 };
-	std::atomic<uint64_t> backend_successes_ { 0 };
-	std::atomic<uint64_t> backend_failures_ { 0 };
 };
 #else
 class AwsIamSdkRuntime final {
@@ -160,6 +149,9 @@ public:
 	void record_backend_connection(bool success) override {
 		manager_->record_backend_connection(success);
 	}
+	void record_waiting_session(bool waiting) override {
+		manager_->record_waiting_session(waiting);
+	}
 	AwsIamStatsSnapshot snapshot() const override { return manager_->snapshot(); }
 
 private:
@@ -202,6 +194,10 @@ AwsIamTokenSourceLease& AwsIamTokenSourceLease::operator=(
 
 void publish_global_aws_iam_token_source(AwsIamTokenSource *source) {
 	std::lock_guard<std::mutex> lock(global_source_mutex);
+	if (source != nullptr && GloVars.prometheus_registry != nullptr) {
+		initialize_aws_iam_prometheus_metrics(*GloVars.prometheus_registry);
+		update_aws_iam_prometheus_metrics(source->snapshot());
+	}
 	leased_global_source = source;
 	global_source_accepting = source != nullptr;
 	GloAwsIamTokenSource = source;

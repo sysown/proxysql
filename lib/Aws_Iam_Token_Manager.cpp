@@ -1,6 +1,13 @@
 #include "Aws_Iam_Token_Manager.h"
 
+#include "prometheus/counter.h"
+#include "prometheus/family.h"
+#include "prometheus/gauge.h"
+#include "prometheus/registry.h"
+
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <condition_variable>
 #include <cstring>
 #include <deque>
@@ -9,6 +16,121 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+namespace {
+
+constexpr std::array<const char *, 8> kAwsIamCounterNames {{
+	"proxysql_mysql_aws_iam_token_requests_total",
+	"proxysql_mysql_aws_iam_token_cache_hits_total",
+	"proxysql_mysql_aws_iam_token_refresh_successes_total",
+	"proxysql_mysql_aws_iam_token_refresh_failures_total",
+	"proxysql_mysql_aws_iam_credential_provider_failures_total",
+	"proxysql_mysql_aws_iam_queue_rejections_total",
+	"proxysql_mysql_aws_iam_backend_connection_successes_total",
+	"proxysql_mysql_aws_iam_backend_connection_failures_total",
+}};
+
+constexpr std::array<const char *, 4> kAwsIamGaugeNames {{
+	"proxysql_mysql_aws_iam_token_cache_entries",
+	"proxysql_mysql_aws_iam_in_flight_generations",
+	"proxysql_mysql_aws_iam_queued_generations",
+	"proxysql_mysql_aws_iam_waiting_sessions",
+}};
+
+struct AwsIamPrometheusState {
+	std::mutex mutex;
+	prometheus::Registry *registry { nullptr };
+	std::array<prometheus::Counter *, 8> counters {};
+	std::array<prometheus::Gauge *, 4> gauges {};
+};
+
+AwsIamPrometheusState& aws_iam_prometheus_state() {
+	static AwsIamPrometheusState state;
+	return state;
+}
+
+std::array<uint64_t, 8> aws_iam_counter_values(const AwsIamStatsSnapshot& stats) {
+	return {{
+		stats.token_requests,
+		stats.token_cache_hits,
+		stats.token_refresh_successes,
+		stats.token_refresh_failures,
+		stats.credential_provider_failures,
+		stats.queue_rejections,
+		stats.backend_connection_successes,
+		stats.backend_connection_failures,
+	}};
+}
+
+std::array<uint64_t, 4> aws_iam_gauge_values(const AwsIamStatsSnapshot& stats) {
+	return {{
+		stats.token_cache_entries,
+		stats.in_flight_generations,
+		stats.queued_generations,
+		stats.waiting_sessions,
+	}};
+}
+
+} // namespace
+
+AwsIamNamedStats aws_iam_stats_mysql_global_rows(const AwsIamStatsSnapshot& stats) {
+	return {{
+		{ "AwsIam_Token_requests", stats.token_requests },
+		{ "AwsIam_Token_cache_hits", stats.token_cache_hits },
+		{ "AwsIam_Token_refresh_successes", stats.token_refresh_successes },
+		{ "AwsIam_Token_refresh_failures", stats.token_refresh_failures },
+		{ "AwsIam_Credential_provider_failures", stats.credential_provider_failures },
+		{ "AwsIam_Queue_rejections", stats.queue_rejections },
+		{ "AwsIam_Backend_connection_successes", stats.backend_connection_successes },
+		{ "AwsIam_Backend_connection_failures", stats.backend_connection_failures },
+		{ "AwsIam_Token_cache_entries", stats.token_cache_entries },
+		{ "AwsIam_In_flight_generations", stats.in_flight_generations },
+		{ "AwsIam_Queued_generations", stats.queued_generations },
+		{ "AwsIam_Waiting_sessions", stats.waiting_sessions },
+	}};
+}
+
+void initialize_aws_iam_prometheus_metrics(prometheus::Registry& registry) {
+	AwsIamPrometheusState& state = aws_iam_prometheus_state();
+	std::lock_guard<std::mutex> lock(state.mutex);
+	if (state.registry == &registry) return;
+	// A ProxySQL process owns one registry for its lifetime. Supporting a new
+	// registry here also keeps isolated tests deterministic after fresh setup.
+	state.registry = &registry;
+	state.counters.fill(nullptr);
+	state.gauges.fill(nullptr);
+	for (size_t i = 0; i < kAwsIamCounterNames.size(); ++i) {
+		auto& family = prometheus::BuildCounter()
+			.Name(kAwsIamCounterNames[i])
+			.Help("ProxySQL AWS IAM backend authentication counter.")
+			.Register(registry);
+		state.counters[i] = std::addressof(family.Add({}));
+	}
+	for (size_t i = 0; i < kAwsIamGaugeNames.size(); ++i) {
+		auto& family = prometheus::BuildGauge()
+			.Name(kAwsIamGaugeNames[i])
+			.Help("ProxySQL AWS IAM backend authentication gauge.")
+			.Register(registry);
+		state.gauges[i] = std::addressof(family.Add({}));
+	}
+}
+
+void update_aws_iam_prometheus_metrics(const AwsIamStatsSnapshot& stats) {
+	AwsIamPrometheusState& state = aws_iam_prometheus_state();
+	std::lock_guard<std::mutex> lock(state.mutex);
+	if (state.registry == nullptr) return;
+	const auto counters = aws_iam_counter_values(stats);
+	const auto gauges = aws_iam_gauge_values(stats);
+	for (size_t i = 0; i < counters.size(); ++i) {
+		const double current = state.counters[i]->Value();
+		if (static_cast<double>(counters[i]) > current) {
+			state.counters[i]->Increment(static_cast<double>(counters[i]) - current);
+		}
+	}
+	for (size_t i = 0; i < gauges.size(); ++i) {
+		state.gauges[i]->Set(static_cast<double>(gauges[i]));
+	}
+}
 
 SecureString::SecureString() = default;
 
@@ -158,6 +280,17 @@ public:
 		std::shared_ptr<Delivery> delivery;
 		AwsIamCompletion completion;
 	};
+	struct AtomicCounters {
+		std::atomic<uint64_t> token_requests { 0 };
+		std::atomic<uint64_t> token_cache_hits { 0 };
+		std::atomic<uint64_t> token_refresh_successes { 0 };
+		std::atomic<uint64_t> token_refresh_failures { 0 };
+		std::atomic<uint64_t> credential_provider_failures { 0 };
+		std::atomic<uint64_t> queue_rejections { 0 };
+		std::atomic<uint64_t> backend_connection_successes { 0 };
+		std::atomic<uint64_t> backend_connection_failures { 0 };
+		std::atomic<uint64_t> waiting_sessions { 0 };
+	};
 	using CompletionPair = std::pair<std::shared_ptr<AwsIamCompletionSink>, AwsIamCompletion>;
 
 	AwsIamRequestHandle request(const AwsIamTokenKey& key, uint64_t opaque_id,
@@ -169,7 +302,7 @@ public:
 		{
 			std::lock_guard<std::mutex> lock(mu);
 			handle.value = next_handle++;
-			++stats.token_requests;
+			stats.token_requests.fetch_add(1, std::memory_order_relaxed);
 			auto make_immediate = [&](AwsIamStatus status, const AwsIamRedactedFailure* failure = nullptr) {
 				if (auto live = sink.lock()) {
 					AwsIamCompletion completion;
@@ -188,7 +321,7 @@ public:
 				const auto now = config.clock();
 				auto cached = cache.find(key);
 				if (cached != cache.end() && cached->second.expires_at - now > config.minimum_remaining_lifetime) {
-					++stats.token_cache_hits;
+					stats.token_cache_hits.fetch_add(1, std::memory_order_relaxed);
 					cached->second.lru = ++lru_clock;
 					if (auto live = sink.lock()) {
 						AwsIamCompletion completion;
@@ -212,7 +345,7 @@ public:
 						if (total_waiters >= config.max_total_waiters || per_key >= config.max_waiters_per_key) {
 							make_immediate(AwsIamStatus::WAITER_LIMIT);
 						} else if (generation == generations.end() && generations.size() >= config.max_pending_keys) {
-							++stats.queue_rejections;
+							stats.queue_rejections.fetch_add(1, std::memory_order_relaxed);
 							make_immediate(AwsIamStatus::QUEUE_FULL);
 						} else {
 							if (generation == generations.end()) {
@@ -267,16 +400,38 @@ public:
 	}
 
 	void record_backend_connection(bool success) {
-		std::lock_guard<std::mutex> lock(mu);
-		if (success) ++stats.backend_connection_successes;
-		else ++stats.backend_connection_failures;
+		if (success) stats.backend_connection_successes.fetch_add(1, std::memory_order_relaxed);
+		else stats.backend_connection_failures.fetch_add(1, std::memory_order_relaxed);
+	}
+
+	void record_waiting_session(bool waiting) {
+		if (waiting) {
+			stats.waiting_sessions.fetch_add(1, std::memory_order_relaxed);
+			return;
+		}
+		uint64_t current = stats.waiting_sessions.load(std::memory_order_relaxed);
+		while (current != 0 && !stats.waiting_sessions.compare_exchange_weak(
+			current, current - 1, std::memory_order_relaxed)) {}
 	}
 
 	AwsIamStatsSnapshot snapshot() const {
 		std::lock_guard<std::mutex> lock(mu);
-		AwsIamStatsSnapshot result = stats;
+		AwsIamStatsSnapshot result;
+		result.token_requests = stats.token_requests.load(std::memory_order_relaxed);
+		result.token_cache_hits = stats.token_cache_hits.load(std::memory_order_relaxed);
+		result.token_refresh_successes =
+			stats.token_refresh_successes.load(std::memory_order_relaxed);
+		result.token_refresh_failures =
+			stats.token_refresh_failures.load(std::memory_order_relaxed);
+		result.credential_provider_failures =
+			stats.credential_provider_failures.load(std::memory_order_relaxed);
+		result.queue_rejections = stats.queue_rejections.load(std::memory_order_relaxed);
+		result.backend_connection_successes =
+			stats.backend_connection_successes.load(std::memory_order_relaxed);
+		result.backend_connection_failures =
+			stats.backend_connection_failures.load(std::memory_order_relaxed);
 		result.token_cache_entries = cache.size();
-		result.waiting_sessions = total_waiters;
+		result.waiting_sessions = stats.waiting_sessions.load(std::memory_order_relaxed);
 		for (const auto& item : generations) {
 			if (item.second.queued) ++result.queued_generations;
 			else ++result.in_flight_generations;
@@ -343,7 +498,7 @@ public:
 					found->second.generation != generation_number) continue;
 				auto& waiters = found->second.waiters;
 				if (signed_result.status == AwsIamStatus::OK) {
-					++stats.token_refresh_successes;
+					stats.token_refresh_successes.fetch_add(1, std::memory_order_relaxed);
 					backoff.erase(key);
 					const auto expires_at = generated_at + config.generated_lifetime;
 					bool has_live_waiter = false;
@@ -369,9 +524,9 @@ public:
 						cache.insert_or_assign(key, std::move(entry));
 					}
 				} else {
-					++stats.token_refresh_failures;
+					stats.token_refresh_failures.fetch_add(1, std::memory_order_relaxed);
 					if (signed_result.status == AwsIamStatus::CREDENTIAL_PROVIDER_ERROR)
-						++stats.credential_provider_failures;
+						stats.credential_provider_failures.fetch_add(1, std::memory_order_relaxed);
 					uint32_t attempts = 1;
 					auto old = backoff.find(key);
 					if (old != backoff.end()) attempts = std::min<uint32_t>(old->second.attempts + 1, 63);
@@ -518,7 +673,7 @@ public:
 	uint64_t lru_clock { 0 };
 	size_t total_waiters { 0 };
 	size_t callbacks_in_progress { 0 };
-	AwsIamStatsSnapshot stats;
+	AtomicCounters stats;
 	std::unordered_map<AwsIamTokenKey, Generation, KeyHash> generations;
 	std::unordered_map<AwsIamTokenKey, CacheEntry, KeyHash> cache;
 	std::unordered_map<AwsIamTokenKey, BackoffEntry, KeyHash> backoff;
@@ -558,5 +713,8 @@ void AwsIamTokenManager::invalidate(const AwsIamTokenKey& key, uint64_t generati
 }
 void AwsIamTokenManager::record_backend_connection(bool success) {
 	impl_->record_backend_connection(success);
+}
+void AwsIamTokenManager::record_waiting_session(bool waiting) {
+	impl_->record_waiting_session(waiting);
 }
 AwsIamStatsSnapshot AwsIamTokenManager::snapshot() const { return impl_->snapshot(); }

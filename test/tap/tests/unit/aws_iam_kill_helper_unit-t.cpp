@@ -96,6 +96,7 @@ public:
 		if (success) ++successes;
 		else ++failures;
 	}
+	void record_waiting_session(bool) override {}
 	AwsIamStatsSnapshot snapshot() const override { return {}; }
 
 	AwsIamStatus status { AwsIamStatus::OK };

@@ -5,6 +5,7 @@
 
 #include <openssl/crypto.h>
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -12,6 +13,8 @@
 #include <memory>
 #include <string>
 #include <string_view>
+
+namespace prometheus { class Registry; }
 
 class SecureString {
 public:
@@ -95,6 +98,17 @@ struct AwsIamStatsSnapshot {
 	uint64_t waiting_sessions { 0 };
 };
 
+struct AwsIamNamedStat {
+	const char *name;
+	uint64_t value;
+};
+
+using AwsIamNamedStats = std::array<AwsIamNamedStat, 12>;
+
+AwsIamNamedStats aws_iam_stats_mysql_global_rows(const AwsIamStatsSnapshot&);
+void initialize_aws_iam_prometheus_metrics(prometheus::Registry&);
+void update_aws_iam_prometheus_metrics(const AwsIamStatsSnapshot&);
+
 class AwsIamTokenSource {
 public:
 	virtual AwsIamRequestHandle request(const AwsIamTokenKey&, uint64_t opaque_id,
@@ -104,6 +118,7 @@ public:
 	virtual void cancel(AwsIamRequestHandle) = 0;
 	virtual void invalidate(const AwsIamTokenKey&, uint64_t generation) = 0;
 	virtual void record_backend_connection(bool success) = 0;
+	virtual void record_waiting_session(bool waiting) = 0;
 	virtual AwsIamStatsSnapshot snapshot() const = 0;
 	virtual ~AwsIamTokenSource() = default;
 };
@@ -141,6 +156,7 @@ public:
 	void cancel(AwsIamRequestHandle) override;
 	void invalidate(const AwsIamTokenKey&, uint64_t generation) override;
 	void record_backend_connection(bool success) override;
+	void record_waiting_session(bool waiting) override;
 	AwsIamStatsSnapshot snapshot() const override;
 
 private:

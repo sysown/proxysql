@@ -100,7 +100,15 @@ public:
 		if (success) ++backend_successes;
 		else ++backend_failures;
 	}
-	AwsIamStatsSnapshot snapshot() const override { return {}; }
+	void record_waiting_session(bool waiting) override {
+		if (waiting) ++waiting_sessions;
+		else if (waiting_sessions != 0) --waiting_sessions;
+	}
+	AwsIamStatsSnapshot snapshot() const override {
+		AwsIamStatsSnapshot result;
+		result.waiting_sessions = waiting_sessions;
+		return result;
+	}
 
 	void post(size_t request_index, AwsIamTokenResult value) {
 		if (auto sink = sinks.at(request_index).lock()) {
@@ -120,6 +128,7 @@ public:
 	std::vector<uint64_t> canceled;
 	unsigned int backend_successes { 0 };
 	unsigned int backend_failures { 0 };
+	uint64_t waiting_sessions { 0 };
 };
 
 bool add_backend_user(const char *username, const char *password, const char *attributes) {
@@ -264,11 +273,15 @@ void test_delayed_completion(MySQL_Thread& worker) {
 	fixture.start();
 	MySQL_Connection *selected = fixture.selected_connection();
 	ok(fixture.run() == 0 &&
-		fixture.session->status == WAITING_AWS_IAM_TOKEN,
+		fixture.session->status == WAITING_AWS_IAM_TOKEN && source.waiting_sessions == 1,
 		"a session remains parked while its delayed token is unfinished");
-	complete_and_drain(worker, source, result(AwsIamStatus::OK, true));
+	source.post(0, result(AwsIamStatus::OK, true));
+	ok(fixture.session->status == WAITING_AWS_IAM_TOKEN && source.waiting_sessions == 1,
+		"a queued completion leaves the live-session gauge set until owner-thread exit");
+	worker.drain_aws_iam_completions();
 	fixture.run();
-	ok(fixture.session->status == CONNECTING_SERVER && fixture.selected_connection() == selected,
+	ok(fixture.session->status == CONNECTING_SERVER && fixture.selected_connection() == selected &&
+		source.waiting_sessions == 0,
 		"a delayed completion resumes the originally selected connection");
 }
 
@@ -511,7 +524,7 @@ int __wrap_mysql_real_connect_start(MYSQL **ret, MYSQL *mysql, const char *host,
 } // extern "C"
 
 int main() {
-	plan(22);
+	plan(23);
 	if (test_init_minimal() != 0 || test_init_auth() != 0 ||
 		test_init_query_processor() != 0 || test_init_hostgroups() != 0) {
 		BAIL_OUT("failed to initialize unit-test globals");

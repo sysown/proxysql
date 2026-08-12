@@ -105,8 +105,16 @@ public:
 			}
 		}
 	}
+	void record_waiting_session(bool waiting) override {
+		if (waiting) ++waiting_sessions;
+		else if (waiting_sessions != 0) --waiting_sessions;
+	}
 
-	AwsIamStatsSnapshot snapshot() const override { return {}; }
+	AwsIamStatsSnapshot snapshot() const override {
+		AwsIamStatsSnapshot result;
+		result.waiting_sessions = waiting_sessions;
+		return result;
+	}
 
 	std::vector<uint64_t> generations { 1, 2 };
 	uint64_t next_handle { 1 };
@@ -117,7 +125,19 @@ public:
 	uint64_t cached_generation { 0 };
 	unsigned int backend_successes { 0 };
 	unsigned int backend_failures { 0 };
+	uint64_t waiting_sessions { 0 };
 	MySQL_Session *corrupt_port_on_failure { nullptr };
+};
+
+class ScopedPublishedTokenSource {
+public:
+	explicit ScopedPublishedTokenSource(AwsIamTokenSource *source) {
+		publish_global_aws_iam_token_source(source);
+	}
+	~ScopedPublishedTokenSource() { publish_global_aws_iam_token_source(nullptr); }
+
+	ScopedPublishedTokenSource(const ScopedPublishedTokenSource&) = delete;
+	ScopedPublishedTokenSource& operator=(const ScopedPublishedTokenSource&) = delete;
 };
 
 bool add_backend_user(const char *username, const char *password,
@@ -253,7 +273,7 @@ std::string process_terminal_connect(SessionFixture& fixture) {
 
 void test_first_1045_retries_once(MySQL_Thread& worker) {
 	FakeTokenSource source;
-	GloAwsIamTokenSource = &source;
+	ScopedPublishedTokenSource published_source(&source);
 	reset_connector({ { ER_ACCESS_DENIED_ERROR, kBackendText, false },
 		{ ER_ACCESS_DENIED_ERROR, kBackendText, false } });
 	SessionFixture fixture(worker, kIamUser);
@@ -316,7 +336,7 @@ void test_first_1045_retries_once(MySQL_Thread& worker) {
 void test_stale_generation_cannot_evict_newer(MySQL_Thread& worker) {
 	FakeTokenSource source;
 	source.generations = { 41, 42 };
-	GloAwsIamTokenSource = &source;
+	ScopedPublishedTokenSource published_source(&source);
 	reset_connector({ { ER_ACCESS_DENIED_ERROR, kBackendText, false } });
 	SessionFixture fixture(worker, kIamUser);
 	fixture.backend()->connect_retries_on_failure = 3;
@@ -331,7 +351,7 @@ void test_stale_generation_cannot_evict_newer(MySQL_Thread& worker) {
 
 void test_transport_failure_does_not_invalidate(MySQL_Thread& worker) {
 	FakeTokenSource source;
-	GloAwsIamTokenSource = &source;
+	ScopedPublishedTokenSource published_source(&source);
 	reset_connector({ { CR_SSL_CONNECTION_ERROR, "TLS transport failed", false } });
 	SessionFixture fixture(worker, kIamUser);
 	fixture.backend()->connect_retries_on_failure = 3;
@@ -344,7 +364,7 @@ void test_transport_failure_does_not_invalidate(MySQL_Thread& worker) {
 
 void test_password_1045_keeps_normal_retry(MySQL_Thread& worker) {
 	FakeTokenSource source;
-	GloAwsIamTokenSource = &source;
+	ScopedPublishedTokenSource published_source(&source);
 	reset_connector({ { ER_ACCESS_DENIED_ERROR, "ordinary password rejected", false },
 		{ 0, "", true } });
 	SessionFixture fixture(worker, kPasswordUser);
@@ -360,7 +380,7 @@ void test_password_1045_keeps_normal_retry(MySQL_Thread& worker) {
 
 void test_fresh_retry_bypasses_local_and_global_idle_iam(MySQL_Thread& worker) {
 	FakeTokenSource source;
-	GloAwsIamTokenSource = &source;
+	ScopedPublishedTokenSource published_source(&source);
 	SessionFixture fixture(worker, kIamUser);
 	MySQL_Connection *local = established_iam_connection(601);
 	MySQL_Connection *global = established_iam_connection(602);
@@ -398,7 +418,7 @@ void test_fresh_retry_bypasses_local_and_global_idle_iam(MySQL_Thread& worker) {
 
 void test_pooled_success_clears_latch_for_later_1045(MySQL_Thread& worker) {
 	FakeTokenSource source;
-	GloAwsIamTokenSource = &source;
+	ScopedPublishedTokenSource published_source(&source);
 	reset_connector({ { ER_ACCESS_DENIED_ERROR, kBackendText, false } });
 	SessionFixture fixture(worker, kIamUser);
 	MySQL_Connection *pooled = established_iam_connection(603);
@@ -427,7 +447,7 @@ void test_pooled_success_clears_latch_for_later_1045(MySQL_Thread& worker) {
 
 void test_missing_port_cannot_retry_or_invalidate(MySQL_Thread& worker) {
 	FakeTokenSource source;
-	GloAwsIamTokenSource = &source;
+	ScopedPublishedTokenSource published_source(&source);
 	reset_connector({ { ER_ACCESS_DENIED_ERROR, kBackendText, false } });
 	SessionFixture fixture(worker, kIamUser);
 	source.corrupt_port_on_failure = fixture.session;

@@ -79,6 +79,11 @@ using json = nlohmann::json;
 #define SHOW_STATUS_LIKE_SSL_VERSION "SHOW STATUS LIKE 'Ssl_version"
 #define SHOW_STATUS_LIKE_SSL_VERSION_LEN 29
 
+static void record_aws_iam_backend_connection(bool success) {
+	AwsIamTokenSourceLease source = acquire_global_aws_iam_token_source();
+	if (source) source->record_backend_connection(success);
+}
+
 #define EXPMARIA
 
 using std::function;
@@ -806,6 +811,10 @@ void MySQL_Session::accept_aws_iam_completion(
 }
 
 void MySQL_Session::cancel_aws_iam_wait() {
+	if (aws_iam_waiting_session_counted && aws_iam_token_source != nullptr) {
+		aws_iam_token_source->record_waiting_session(false);
+	}
+	aws_iam_waiting_session_counted = false;
 	if (aws_iam_waiter_id != 0 && thread != nullptr) {
 		thread->cancel_aws_iam_waiter(aws_iam_waiter_id);
 	}
@@ -936,6 +945,10 @@ int MySQL_Session::handler_again___status_WAITING_AWS_IAM_TOKEN() {
 	aws_iam_connect_token_key = key;
 	aws_iam_connect_token_generation = completion.generation;
 	previous_status.pop();
+	if (aws_iam_waiting_session_counted && aws_iam_token_source != nullptr) {
+		aws_iam_token_source->record_waiting_session(false);
+	}
+	aws_iam_waiting_session_counted = false;
 	aws_iam_token_source = nullptr;
 	aws_iam_request_handle = {};
 	aws_iam_connection = nullptr;
@@ -3786,9 +3799,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 			MySQL_Connection *timed_out_connection = mybe->server_myds->myconn;
 			if (timed_out_connection != nullptr &&
 				timed_out_connection->backend_auth_type() == MySQLBackendAuthType::AWS_IAM) {
-				if (GloAwsIamTokenSource != nullptr) {
-					GloAwsIamTokenSource->record_backend_connection(false);
-				}
+				record_aws_iam_backend_connection(false);
 				const char *database_user = timed_out_connection->userinfo != nullptr &&
 					timed_out_connection->userinfo->username != nullptr
 						? timed_out_connection->userinfo->username : "";
@@ -3923,9 +3934,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 		switch (rc) {
 			case 0:
 				if (myconn->backend_auth_type() == MySQLBackendAuthType::AWS_IAM) {
-					if (GloAwsIamTokenSource != nullptr) {
-						GloAwsIamTokenSource->record_backend_connection(true);
-					}
+					record_aws_iam_backend_connection(true);
 					aws_iam_connect_token_key = AwsIamTokenKey {};
 					aws_iam_connect_token_generation = 0;
 					aws_iam_fresh_token_retry_attempted = false;
@@ -4033,9 +4042,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 				const unsigned int connect_errno = mysql_errno(myconn->mysql);
 				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, connect_errno);
 				if (myconn->backend_auth_type() == MySQLBackendAuthType::AWS_IAM) {
-					if (GloAwsIamTokenSource != nullptr) {
-						GloAwsIamTokenSource->record_backend_connection(false);
-					}
+					record_aws_iam_backend_connection(false);
 					const AwsIamTokenKey failed_key = aws_iam_connect_token_key;
 					const uint64_t failed_generation =
 						aws_iam_connect_token_generation;
@@ -9207,6 +9214,8 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 
 			previous_status.push(CONNECTING_SERVER);
 			set_status(WAITING_AWS_IAM_TOKEN);
+			aws_iam_token_source->record_waiting_session(true);
+			aws_iam_waiting_session_counted = true;
 			unsigned long long wake_deadline = aws_iam_deadline_us;
 			if (mybe->server_myds->max_connect_time != 0 &&
 				mybe->server_myds->max_connect_time < wake_deadline) {

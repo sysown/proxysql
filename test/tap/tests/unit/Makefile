@@ -908,14 +908,21 @@ endif
 aws_iam_token_manager_unit-t: aws_iam_token_manager_unit-t.cpp \
 	$(PROXYSQL_PATH)/lib/Aws_Iam_Token_Manager.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
 	$(CXX) $< $(PROXYSQL_PATH)/lib/Aws_Iam_Token_Manager.cpp \
-		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o $(IDIRS) $(OPT) -lpthread -lcrypto -o $@
+		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o $(IDIRS) $(OPT) \
+		$(PROMETHEUS_LDIR)/libprometheus-cpp-core.a -lpthread -lcrypto -o $@
 
 # The completion inbox is intentionally independent of sessions and the core
 # archive so its producer/lifetime contract can run under TSan in isolation.
 aws_iam_completion_queue_unit-t: aws_iam_completion_queue_unit-t.cpp \
 	$(PROXYSQL_PATH)/lib/Aws_Iam_Token_Manager.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
 	$(CXX) $< $(PROXYSQL_PATH)/lib/Aws_Iam_Token_Manager.cpp \
-		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o $(IDIRS) $(OPT) -lpthread -lcrypto -o $@
+		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o $(IDIRS) $(OPT) \
+		$(PROMETHEUS_LDIR)/libprometheus-cpp-core.a -lpthread -lcrypto -o $@
+
+test_aws_iam_metrics-t: ../test_aws_iam_metrics-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(TEST_HELPERS_OBJ) -I$(TEST_HELPERS_DIR) \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 
 ifeq ($(UNAME_S),Linux)
 aws_iam_session_state_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=mysql_real_connect_start

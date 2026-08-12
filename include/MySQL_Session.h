@@ -619,6 +619,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	uint64_t aws_iam_waiter_id { 0 };
 	unsigned long long aws_iam_deadline_us { 0 };
 	bool aws_iam_completion_ready { false };
+	bool aws_iam_waiting_session_counted { false };
 	// Authentication identity used by the current backend connect attempt.
 	// It outlives handshake-token cleanup so a terminal 1045 can invalidate
 	// only the exact failed cache generation before the connection is freed.
