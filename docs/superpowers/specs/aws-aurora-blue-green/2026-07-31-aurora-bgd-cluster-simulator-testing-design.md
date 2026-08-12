@@ -38,6 +38,12 @@ ProxySQL build, SQLite-server handlers, control tables, and TAP helpers.
 Only one test binary controls a given ProxySQL instance at a time, and every
 binary owns setup and cleanup for its simulator state.
 
+The group runner enforces that ownership by starting one registered binary,
+waiting for it to exit, and only then starting the next binary in sorted order.
+Aurora BGD registration checks must retain that serial execution contract. If a
+future runner executes binaries concurrently, each binary must receive an
+isolated ProxySQL instance and simulator database.
+
 The build contract is:
 
 - `TEST_AURORA` enables ordinary Aurora and Aurora BGD simulation;
@@ -66,14 +72,28 @@ One row controls topology behavior for one backend:
 backend_ip TEXT NOT NULL
 backend_port INTEGER NOT NULL
 topology_present INTEGER NOT NULL DEFAULT 0
+    CHECK (topology_present IN (0, 1))
 error_code INTEGER NOT NULL DEFAULT 0
 error_msg TEXT NOT NULL DEFAULT ''
 PRIMARY KEY (backend_ip, backend_port)
 ```
 
 `topology_present` is restricted to zero or one. A missing control row and a
-row with `topology_present=0` both represent an absent topology table. A
-nonzero `error_code` returns the configured MySQL error.
+row with `topology_present=0` both represent an absent topology table. Query
+precedence is evaluated independently:
+
+| Query | Control state | Result |
+|---|---|---|
+| Table check | No row or `topology_present=0` | Successful empty result; `error_code` is ignored. |
+| Table check | `topology_present=1` | Successful one-row result; `error_code` is ignored. |
+| Metadata | No row | MySQL error 1146. |
+| Metadata | `error_code!=0` | Configured MySQL error, including the defensive `topology_present=0` combination. |
+| Metadata | `error_code=0`, `topology_present=0` | MySQL error 1146. |
+| Metadata | `error_code=0`, `topology_present=1` | Ordered rows, including a successful empty result. |
+
+The helper normally publishes only consistent combinations: error 1146 marks
+the table absent, and other errors retain a present table. The defensive matrix
+keeps direct control-table writes deterministic.
 
 ### 3.2 `AWS_BGD_TOPOLOGY`
 
@@ -106,6 +126,7 @@ backend_ip TEXT NOT NULL
 backend_port INTEGER NOT NULL
 probe_kind TEXT NOT NULL       # table_check or metadata
 encrypted INTEGER NOT NULL
+    CHECK (encrypted IN (0, 1))
 ```
 
 `encrypted` is restricted to zero or one. The monotonic sequence supports
@@ -125,6 +146,7 @@ CPU REAL NOT NULL
 LAST_UPDATE_TIMESTAMP VARCHAR NOT NULL
 REPLICA_LAG_IN_MILLISECONDS REAL NOT NULL
 IS_CURRENT INTEGER NOT NULL DEFAULT 1
+    CHECK (IS_CURRENT IN (0, 1))
 PRIMARY KEY (REPLICA_SET_ID, SERVER_ID)
 ```
 
@@ -154,15 +176,18 @@ backend_ip TEXT NOT NULL
 backend_port INTEGER NOT NULL
 replica_set_id TEXT NOT NULL
 replica_table_present INTEGER NOT NULL DEFAULT 0
+    CHECK (replica_table_present IN (0, 1))
 error_code INTEGER NOT NULL DEFAULT 0
 error_msg TEXT NOT NULL DEFAULT ''
 PRIMARY KEY (backend_ip, backend_port)
 ```
 
-`replica_table_present` is restricted to zero or one. Response behavior is:
+`replica_table_present` is restricted to zero or one. Absence takes precedence
+over a configured error. Response behavior is:
 
-- no control row or `replica_table_present=0`: MySQL error 1146;
-- nonzero `error_code`: the configured MySQL error;
+- no control row or `replica_table_present=0`: MySQL error 1146, regardless of
+  `error_code`;
+- present table and nonzero `error_code`: the configured MySQL error;
 - present table, no error, and matching rows: return that set;
 - present table, no error, and no matching rows: return a successful empty
   result.
@@ -182,6 +207,7 @@ backend_ip TEXT NOT NULL
 backend_port INTEGER NOT NULL
 replica_set_id TEXT NULL
 encrypted INTEGER NOT NULL
+    CHECK (encrypted IN (0, 1))
 ```
 
 The accepted address is logged even when no control mapping exists or the query
@@ -308,6 +334,8 @@ Focused tests cover:
 - atomic membership and mapping replacement;
 - successful complete, writer-only, incomplete, and empty results;
 - missing tables and arbitrary MySQL errors;
+- table-present/error precedence matrices for topology table-check, topology
+  metadata, and replica membership queries;
 - independence of topology and replica errors;
 - TLS state and ordered probe logging;
 - `CLUSTER_SIM_HOST_FILE` parsing and missing-host failures;
@@ -358,7 +386,7 @@ Coverage also includes:
 - rollback from initiated, in-progress, and post-processing states;
 - late entry at initiated, in-progress, post-processing, and completed states;
 - configuration and hostgroup refresh during an active deployment;
-- worker restart or respawn with retained deployment state;
+- in-place worker configuration refresh with retained deployment state;
 - deleting or deactivating an Aurora row during switchover;
 - ONLINE, SHUNNED, OFFLINE_SOFT, and OFFLINE_HARD staging-pool members;
 - TLS selection for topology and replica probes;
@@ -384,6 +412,13 @@ that can be awaited directly. A failed wait reports the latest runtime row,
 relevant server and pool state, and probes observed since the scenario
 checkpoint.
 
+Random probe-selection tests do not assert one exact random order. They assert
+that every observed destination belongs to the scenario's eligible set and
+that fallback reaches another eligible member within a bounded number of
+attempts. Failure diagnostics include the complete probe sequence since the
+scenario checkpoint, so production randomness cannot make the expected result
+order-dependent.
+
 Scenarios use disjoint hostgroups, endpoints, replica-set identifiers, and
 deployment fingerprints, or perform full cleanup before reuse.
 
@@ -399,6 +434,11 @@ Ordinary Aurora and Aurora BGD binaries register in
 `cluster_sim_rds_bgd-g1`. Central simulator CI discovers groups and binaries
 from `groups.json`, so no additional workflow, simulator group family, or CI
 infrastructure is required.
+
+CI must continue to invoke the group through the serial group runner described
+in Section 2. Registration coverage verifies that every Aurora BGD binary is in
+that group and is not scheduled simultaneously against the same ProxySQL
+instance.
 
 ## 10. Non-Goals
 

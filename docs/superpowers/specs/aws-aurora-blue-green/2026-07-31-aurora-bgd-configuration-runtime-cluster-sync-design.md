@@ -102,13 +102,20 @@ in this table, so no `mode` or `auto_generated` column is present.
 
 An active Aurora row behaves as follows:
 
-| Green hostgroup columns | `aws_blue_green_deployment_auto_discovery` | Behavior |
+| Green hostgroup columns | `mysql-aws_blue_green_deployment_auto_discovery` | Behavior |
 |---|---:|---|
 | Both non-NULL | `0` or `1` | BGD discovery is admitted |
 | Both NULL | `1` | BGD discovery is admitted |
 | Both NULL | `0` | Aurora monitoring without BGD discovery |
 | Exactly one NULL | `0` or `1` | Invalid configuration |
 | Any values with `active=0` | `0` or `1` | Neither normal Aurora nor BGD monitoring is active |
+
+Changing `active` from `1` to `0` uses the worker-removal cleanup contract in
+the monitor/FSM specification before the worker exits: remove every applied
+pin, drain and purge affected production-hostname pools, restore safe writer
+placement, release suspended monitoring, clear any terminal latch and retained
+fingerprint, and publish `bgd_status=NONE`. The configuration and
+`mysql_servers` rows remain user-owned and are not deleted by this cleanup.
 
 ### 3.1 Green hostgroups configured
 
@@ -170,11 +177,18 @@ For each `mysql_aws_aurora_hostgroups` row:
    green role in another active Aurora row.
 4. Existing writer-hostgroup primary-key and reader-hostgroup uniqueness rules
    remain in effect.
-5. Invalid rows must be rejected or excluded from runtime loading with a clear
-   admin error identifying the writer hostgroup and conflicting fields.
+5. Invalid rows use per-row isolation: each invalid row is excluded from runtime
+   loading, while the valid rows from the same LOAD remain eligible to publish.
+   The admin error identifies the rejected writer hostgroup, the conflicting
+   fields and values, and the other writer hostgroup involved in a cross-row
+   conflict.
 
-Validation must occur before publishing the new Aurora monitor resultset so a
-bad row cannot partially reconfigure a running monitor worker.
+Validation of the complete candidate result set must finish before publishing
+the filtered valid result set. Valid rows publish together only after that
+validation succeeds and atomically replace the prior runtime configuration. A
+rejected row contributes no new fields; if it previously owned a runtime
+worker, its absence from the replacement triggers the worker-removal cleanup
+contract rather than applying a mixture of old and invalid fields.
 
 ## 5. Runtime Ownership
 
@@ -207,6 +221,13 @@ configured fields plus `bgd_status`. Its runtime dump includes all of those
 fields; paths that write back to configuration explicitly project away
 `bgd_status`.
 
+Configuration materialization and worker status publication use the same
+Hostgroups Manager write-locked update path. Reload merges configured fields
+into an existing writer-hostgroup row without writing its `bgd_status`; the
+worker status API updates only `bgd_status` under that lock. A reload that began
+from an older snapshot therefore cannot overwrite a transition published while
+the reload is being applied.
+
 ## 6. LOAD Behavior
 
 `LOAD MYSQL SERVERS TO RUNTIME` must:
@@ -216,9 +237,10 @@ fields; paths that write back to configuration explicitly project away
    hostgroup `0`.
 3. Validate paired NULL/non-NULL and hostgroup-conflict rules.
 4. Update or create the `AWS_Aurora_Info` entry.
-5. Include both fields in the Aurora monitor resultset checksum.
-6. Restart/refresh only the affected Aurora writer-hostgroup worker when either
-   green hostgroup changes.
+5. Include both fields in the Aurora monitor result set checksum.
+6. Refresh the affected Aurora writer-hostgroup worker in place when either
+   green hostgroup changes. Apply only configuration-derived fields and staging
+   references; do not replace the worker-owned FSM object.
 7. Preserve an active BGD FSM safely across an unrelated configuration refresh.
 8. Initialize `bgd_status` to `NONE` for a newly published runtime row.
 9. Preserve the existing `bgd_status` when merging an existing
@@ -234,7 +256,8 @@ apply the refreshed staging configuration without restarting the BGD operation
 from `NONE`.
 
 `LOAD MYSQL VARIABLES TO RUNTIME` makes a change to
-`aws_blue_green_deployment_auto_discovery` visible to Aurora monitor workers.
+`mysql-aws_blue_green_deployment_auto_discovery` visible to Aurora monitor
+workers.
 The variable controls admission of new BGD operations for rows without green
 hostgroups, as described in Section 3.3.
 
@@ -371,27 +394,37 @@ This configuration design does not:
 2. Both green hostgroups non-NULL load successfully.
 3. Mixed NULL/non-NULL values are rejected.
 4. Duplicate or overlapping blue/green hostgroups are rejected.
-5. Configured green hostgroups admit BGD discovery with global auto-discovery
+5. A LOAD containing valid and invalid rows excludes each invalid row, reports
+   its writer hostgroup and conflicting fields, and atomically publishes the
+   filtered valid result set. A previously active rejected row follows the safe
+   worker-removal cleanup path rather than receiving a partial update.
+6. Configured green hostgroups admit BGD discovery with global auto-discovery
    disabled.
-6. A row without green hostgroups starts BGD discovery only when global
+7. A row without green hostgroups starts BGD discovery only when global
    auto-discovery is enabled.
-7. Disabling auto-discovery does not abort an active switchover.
-8. NULL values survive memory-to-runtime, runtime-to-memory, disk, config-file,
+8. Disabling auto-discovery does not abort an active switchover.
+9. Changing an active row to `active=0` removes pins, restores safe placement,
+   clears the latch and fingerprint, publishes `NONE`, and stops the worker
+   without deleting user configuration.
+10. NULL values survive memory-to-runtime, runtime-to-memory, disk, config-file,
    and cluster synchronization round trips.
-9. Online upgrade preserves existing rows and initializes both new fields to
+11. Online upgrade preserves existing rows and initializes both new fields to
    NULL.
-10. Changing either green hostgroup refreshes only the affected Aurora worker.
-11. Unrelated LOAD operations preserve active BGD pins and terminal-latch state.
-12. New runtime rows initialize `bgd_status` to `NONE`.
-13. Runtime `bgd_status` follows every Aurora FSM transition.
-14. `SWITCHOVER_COMPLETED` remains visible until topology drain and then changes
+12. Changing either green hostgroup refreshes only the affected Aurora worker
+    in place.
+13. Unrelated LOAD operations preserve active BGD pins and terminal-latch state.
+14. A LOAD concurrent with an FSM transition cannot overwrite the newer
+    `bgd_status`.
+15. New runtime rows initialize `bgd_status` to `NONE`.
+16. Runtime `bgd_status` follows every Aurora FSM transition.
+17. `SWITCHOVER_COMPLETED` remains visible until topology drain and then changes
     to `NONE`.
-15. Reloading an existing Aurora row preserves its `bgd_status` and active FSM
+18. Reloading an existing Aurora row preserves its `bgd_status` and active FSM
     state.
-16. `SAVE MYSQL SERVERS FROM RUNTIME`, disk/config export, and ProxySQL Cluster
+19. `SAVE MYSQL SERVERS FROM RUNTIME`, disk/config export, and ProxySQL Cluster
     synchronization exclude `bgd_status`.
-17. ProxySQL Cluster peers retain their own node-local `bgd_status` values.
-18. Existing Multi-AZ BGD configuration and tests remain unchanged.
+20. ProxySQL Cluster peers retain their own node-local `bgd_status` values.
+21. Existing Multi-AZ BGD configuration and tests remain unchanged.
 
 ## 12. Acceptance Criteria
 
@@ -401,7 +434,7 @@ The configuration/runtime integration is complete when:
    columns are either both configured or both NULL.
 2. Configured green hostgroups admit BGD discovery independently of the global
    variable; when both are NULL, the existing
-   `aws_blue_green_deployment_auto_discovery` variable controls admission.
+   `mysql-aws_blue_green_deployment_auto_discovery` variable controls admission.
 3. All load, save, disk, config-file, upgrade, and cluster-sync paths preserve
    the fields and their NULL values.
 4. Exactly one Aurora monitor worker owns normal Aurora and BGD handling for a

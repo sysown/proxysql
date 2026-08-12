@@ -204,10 +204,13 @@ For an eligible row in `NONE`:
    RDS BGD table-check state.
 2. When the table exists, fetch and parse `SELECT * FROM mysql.rds_topology` so
    AWS column-set differences remain tolerated by the shared parser.
-3. Require a structurally valid BGD result with a TARGET row, non-empty TARGET
-   status, endpoint, and port.
-4. Publish the observed TARGET status to `bgd_status`.
-5. Use the TARGET cluster endpoint to bootstrap target membership.
+3. Require a structurally valid BGD result with a TARGET row and non-empty
+   TARGET `id`, status, endpoint, and port. Construct the deployment fingerprint
+   from at least that validated `id`, endpoint, and port.
+4. Map the observed TARGET status to an Aurora FSM state, publish it to
+   `bgd_status`, and leave `NONE` before starting membership discovery.
+5. Use the TARGET cluster endpoint to bootstrap target membership after that
+   state transition.
 6. After target membership is available, rotate topology probes across target
    members.
 
@@ -215,6 +218,23 @@ A membership failure does not undo a valid observed status. It prevents any
 membership-dependent routing action and is retried at the cadence for the
 current phase. Missing, empty, or malformed topology does not create a new
 deployment.
+
+Raw topology statuses map to Aurora runtime states as follows:
+
+| Raw TARGET status | Aurora FSM and `bgd_status` value |
+|---|---|
+| `AVAILABLE` | `AVAILABLE` |
+| `SWITCHOVER_INITIATED` | `SWITCHOVER_INITIATED` |
+| `SWITCHOVER_IN_PROGRESS` | `SWITCHOVER_IN_PROGRESS` |
+| `SWITCHOVER_IN_POST_PROCESSING` | `SWITCHOVER_IN_POST_PROCESSING` |
+| `SWITCHOVER_COMPLETED` in a valid TARGET-only result | `SWITCHOVER_COMPLETED` terminal latch |
+
+`NONE` is an internal baseline and rearm state, not an arbitrary raw status.
+An unsupported or unknown raw status is invalid metadata: a worker already in
+an active or terminal state retains that state, and a worker in `NONE` remains
+there. The value is never copied verbatim into `bgd_status`. Aurora does not use
+the RDS Multi-AZ inferred `READER_SWITCHOVER_IN_PROGRESS` state; TARGET
+completion maps directly to the Aurora terminal latch after cleanup.
 
 If green hostgroups are configured, BGD discovery is admitted for the
 user-created Aurora row. If neither is configured, the existing global
@@ -345,7 +365,30 @@ SWITCHOVER_COMPLETED
 The final state is a terminal rearm latch, not a separate reader-switchover
 phase.
 
-### 8.2 Transition summary
+### 8.2 Topology row-shape predicates
+
+The worker validates the complete topology result before publishing a new
+status or running an FSM action:
+
+- An active deployment result contains exactly one SOURCE row and one TARGET
+  row. Both rows have non-empty `id`, endpoint, role, status, and a valid port;
+  both expose the same supported pre-completion status.
+- A completion result contains exactly one TARGET row, has the validated
+  deployment-fingerprint fields, and reports `SWITCHOVER_COMPLETED`.
+- A successful empty result or confirmed table absence is the explicit
+  cancellation or terminal-drain observation described below.
+- SOURCE-only results, TARGET-only pre-completion results, duplicate SOURCE or
+  TARGET rows, extra or unknown roles, mismatched statuses, missing required
+  fields, and unsupported statuses are invalid or incomplete observations.
+
+Invalid or incomplete observations do not publish a new status, trigger
+cleanup, release pins, or resume suspended monitoring. A worker in `NONE`
+remains there; an active or latched worker retains its existing state and
+retries. This validation is distinct from a successful empty or absent
+topology, which has the explicit state-dependent meaning in the transition
+table.
+
+### 8.3 Transition summary
 
 | Valid observation | Required transition and action |
 |---|---|
@@ -590,6 +633,9 @@ The existing RDS Multi-AZ builder and FSM remain unchanged.
 - A genuine no-reader cluster accepts a writer-only snapshot.
 - Empty, failed, duplicate-writer, ambiguous, unresolved, and incomplete results
   retain the last complete snapshot or defer actions.
+- SOURCE-only, duplicate-role, mismatched-status, unknown-status, and
+  TARGET-only pre-completion topology results fail closed without publishing or
+  transitioning; only TARGET-only completion is accepted.
 
 ### 14.3 FSM and routing
 
@@ -626,7 +672,7 @@ The Aurora monitor/FSM design is satisfied when:
 1. One existing Aurora worker owns the three probes and all state for its
    writer hostgroup.
 2. Every production member is mapped from target `REPLICA_HOST_STATUS` before
-   traffic changes, whether or not green hostgroups are configured.
+   traffic changes, regardless of whether green hostgroups are configured.
 3. Normal Aurora queries stop during the three active switchover phases and
    resume after completion or rollback.
 4. IN_PROGRESS demotes the production writer using the RDS BGD behavior.
