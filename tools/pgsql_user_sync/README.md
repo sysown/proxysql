@@ -49,8 +49,8 @@ The `proxysql_auth_managed` `NOLOGIN` role is the import allow-list.  Grant and
 revoke membership deliberately, for example:
 
 ```sql
-GRANT app_login TO proxysql_auth_managed;
-REVOKE app_login FROM proxysql_auth_managed;
+GRANT proxysql_auth_managed TO app_login;
+REVOKE proxysql_auth_managed FROM app_login;
 ```
 
 The function additionally requires a login-capable role, a non-null verifier,

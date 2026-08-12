@@ -722,6 +722,10 @@ class AssetTests(unittest.TestCase):
         self.assertIn("proxysql_auth_managed", sql)
         self.assertIn("pg_has_role", sql)
         self.assertIn("proxysql_auth_reader", sql)
+        self.assertIn("GRANT proxysql_auth_managed TO app_login;", sql)
+        self.assertIn("REVOKE proxysql_auth_managed FROM app_login;", sql)
+        self.assertNotIn("GRANT app_login TO proxysql_auth_managed;", sql)
+        self.assertNotIn("REVOKE app_login FROM proxysql_auth_managed;", sql)
 
     def test_example_configuration_is_loadable_with_protected_permissions(self):
         source = (ASSET_DIR / "proxysql_pgsql_user_sync.ini.example").read_text()

@@ -52,5 +52,5 @@ GRANT USAGE ON SCHEMA proxysql_auth TO proxysql_auth_reader;
 GRANT EXECUTE ON FUNCTION proxysql_auth.export_login_roles() TO proxysql_auth_reader;
 
 -- Allow-list examples (run separately, one role at a time):
---   GRANT app_login TO proxysql_auth_managed;
---   REVOKE app_login FROM proxysql_auth_managed;
+--   GRANT proxysql_auth_managed TO app_login;
+--   REVOKE proxysql_auth_managed FROM app_login;

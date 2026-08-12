@@ -257,9 +257,6 @@ py-%:
 	cp $(patsubst py-%,%,$@) $(patsubst py-%.py,%,$@)
 	chmod +x $(patsubst py-%.py,%,$@)
 
-.PHONY: pgsql-user-sync-t
-pgsql-user-sync-t: py-pgsql-user-sync-t.py
-
 sh-%:
 	cp $(patsubst sh-%,%,$@) $(patsubst sh-%.sh,%,$@)
 	chmod +x $(patsubst sh-%.sh,%,$@)
