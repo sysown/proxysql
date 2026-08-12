@@ -2,9 +2,9 @@
 
 **Date:** 2026-07-31
 
-**Branch:** `plan/aurora-bgd`
+**Branch:** `spec/aws-aurora-bgd`
 
-**Status:** Design approved; pending written-spec review
+**Status:** Design approved
 
 **Scope:** Aurora MySQL blue/green deployments exposed through
 `mysql.rds_topology` and `INFORMATION_SCHEMA.REPLICA_HOST_STATUS`.

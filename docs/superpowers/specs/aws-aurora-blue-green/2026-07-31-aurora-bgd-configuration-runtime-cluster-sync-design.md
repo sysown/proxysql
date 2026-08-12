@@ -2,9 +2,9 @@
 
 **Date:** 2026-07-31
 
-**Branch:** `plan/aurora-bgd`
+**Branch:** `spec/aws-aurora-bgd`
 
-**Status:** Design draft; configuration decisions locked
+**Status:** Design approved
 
 **Scope:** Configuration and runtime integration of Aurora MySQL blue/green
 deployment handling with the existing `mysql_aws_aurora_hostgroups` subsystem.
@@ -35,10 +35,9 @@ green_writer_hostgroup INT DEFAULT NULL
 green_reader_hostgroup INT DEFAULT NULL
 ```
 
-The columns provide explicit staging hostgroups when configured. When both are
-NULL, the existing global variable
-`mysql-aws_blue_green_deployment_auto_discovery` controls automatic Aurora BGD
-discovery.
+The columns provide staging hostgroups when configured. When both are NULL, the
+existing global variable `mysql-aws_blue_green_deployment_auto_discovery`
+controls whether the worker may start BGD discovery for the row.
 
 No separate Aurora BGD enable column is added.
 
@@ -96,28 +95,24 @@ state is meaningful and must be preserved by every load, save, export, import,
 and cluster-synchronization path.
 
 The runtime table mirrors these configured fields and adds only `bgd_status`.
-This design does not add an `auto_generated` column because the existing Aurora
-row is the owner of both normal Aurora monitoring and BGD monitoring. It also
-does not add a runtime `mode` column; effective mode remains derived from the
-configured green hostgroups and the global auto-discovery variable.
+Every Aurora row is user-created. There is no BGD mode or generated-row concept
+in this table, so no `mode` or `auto_generated` column is present.
 
-## 3. Configuration Modes
+## 3. Green Hostgroup Configuration and BGD Admission
 
-The effective mode for an active Aurora row is determined as follows:
+An active Aurora row behaves as follows:
 
-| Green hostgroup columns | `aws_blue_green_deployment_auto_discovery` | Effective behavior |
+| Green hostgroup columns | `aws_blue_green_deployment_auto_discovery` | Behavior |
 |---|---:|---|
-| Both non-NULL | `0` or `1` | Explicit Aurora BGD monitoring |
-| Both NULL | `1` | Automatic Aurora BGD monitoring |
+| Both non-NULL | `0` or `1` | BGD discovery is admitted |
+| Both NULL | `1` | BGD discovery is admitted |
 | Both NULL | `0` | Aurora monitoring without BGD discovery |
 | Exactly one NULL | `0` or `1` | Invalid configuration |
 | Any values with `active=0` | `0` or `1` | Neither normal Aurora nor BGD monitoring is active |
 
-### 3.1 Explicit mode
+### 3.1 Green hostgroups configured
 
-A row is in explicit mode when both green hostgroups are non-NULL.
-
-In explicit mode:
+When both green hostgroups are non-NULL:
 
 - BGD monitoring is enabled independently of the global auto-discovery value.
 - The target cluster writer is associated with `green_writer_hostgroup`.
@@ -128,12 +123,10 @@ In explicit mode:
 - The green hostgroups provide optional user-visible staging/routing pools in
   addition to the internal BGD member map.
 
-### 3.2 Automatic mode
+### 3.2 Green hostgroups not configured
 
-A row is in automatic mode when both green hostgroups are NULL and
-`mysql-aws_blue_green_deployment_auto_discovery=true` at runtime.
-
-In automatic mode:
+When both green hostgroups are NULL and
+`mysql-aws_blue_green_deployment_auto_discovery=true` at runtime:
 
 - The existing Aurora monitor detects BGD topology for the row.
 - The monitor discovers the target writer and all target readers through
@@ -143,8 +136,8 @@ In automatic mode:
 - Post-processing pinning covers the writer and every reader despite the green
   hostgroup columns being NULL.
 
-Automatic mode therefore does not use the writer-only fallback or reader
-shun/unshun policy from the Multi-AZ instance implementation.
+This path does not use the writer-only fallback or reader shun/unshun policy
+from the Multi-AZ instance implementation.
 
 ### 3.3 BGD disabled for the row
 
@@ -153,11 +146,10 @@ When both green hostgroups are NULL and
 existing Aurora role and lag monitoring but does not start discovery of a new
 BGD deployment.
 
-Disabling global auto-discovery while an automatically discovered switchover is
-already active must not abandon that switchover. The worker completes pin
-cleanup and enters topology-drain wait before disabling discovery for the row.
-The variable gates the start of new automatic BGD state machines, not safe
-completion of one already in progress.
+Disabling global auto-discovery after a switchover has started must not abandon
+that switchover. The worker completes pin cleanup and enters the terminal latch
+before disabling discovery for the row. The variable gates the start of a new
+BGD state machine, not safe completion of one already in progress.
 
 ## 4. Validation Rules
 
@@ -196,7 +188,8 @@ green_reader_hostgroup = -1 when SQL NULL
 
 The existing Aurora monitor worker remains one worker per active writer
 hostgroup. The worker owns the BGD FSM and publishes each transition to the
-runtime row's `bgd_status`. Its effective BGD mode is derived from:
+runtime row's `bgd_status`. BGD admission and configured staging references are
+determined from:
 
 ```text
 AWS_Aurora_Info.active
@@ -237,13 +230,13 @@ fields; paths that write back to configuration explicitly project away
 
 Changing the green hostgroups during an active switchover must not lose cached
 member identities, applied DNS pins, or completion-latch state. The worker must
-apply the refreshed explicit staging configuration without restarting the BGD
-operation from `NONE`.
+apply the refreshed staging configuration without restarting the BGD operation
+from `NONE`.
 
 `LOAD MYSQL VARIABLES TO RUNTIME` makes a change to
 `aws_blue_green_deployment_auto_discovery` visible to Aurora monitor workers.
-The variable controls admission of new automatic BGD operations as described in
-Section 3.3.
+The variable controls admission of new BGD operations for rows without green
+hostgroups, as described in Section 3.3.
 
 ## 7. Runtime Table Behavior
 
@@ -271,11 +264,11 @@ topology result then changes it to `NONE`. Query or connection errors while
 latched do not reset the status or repeat cleanup.
 
 An Aurora row that is not handling a BGD deployment reports `NONE`, including
-ordinary Aurora monitoring when automatic discovery is disabled.
+ordinary Aurora monitoring when BGD discovery is not admitted.
 
 Examples:
 
-Explicit mode:
+Green hostgroups configured:
 
 ```sql
 INSERT INTO mysql_aws_aurora_hostgroups (
@@ -287,7 +280,7 @@ INSERT INTO mysql_aws_aurora_hostgroups (
 ) VALUES (10, 20, 11, 21, '.cluster-example.eu-north-1.rds.amazonaws.com');
 ```
 
-Automatic mode:
+Green hostgroups not configured:
 
 ```sql
 INSERT INTO mysql_aws_aurora_hostgroups (
@@ -302,8 +295,8 @@ SET mysql-aws_blue_green_deployment_auto_discovery = 'true';
 ```
 
 The BGD FSM state is operational monitor state, not user configuration.
-`bgd_status` provides its runtime observability without changing the
-explicit/automatic mode contract defined here.
+`bgd_status` provides its runtime observability without introducing a BGD mode
+into the configuration contract.
 
 ## 8. Persistence and Synchronization
 
@@ -349,7 +342,7 @@ green_reader_hostgroup = NULL
 
 After upgrade, existing active Aurora rows follow the global variable:
 
-- with auto-discovery enabled, they are eligible for automatic BGD discovery;
+- with auto-discovery enabled, they are eligible for BGD discovery;
 - with auto-discovery disabled, they retain existing Aurora monitoring only.
 
 This is backward-compatible at the table-data level because no green
@@ -365,10 +358,10 @@ This configuration design does not:
 
 - add an Aurora-specific configuration table;
 - create Aurora rows in `mysql_aws_rds_bgd_hostgroups`;
-- require explicit green `mysql_servers` rows in automatic mode;
+- require green `mysql_servers` rows when green hostgroups are not configured;
 - add a second per-cluster monitor worker;
 - add a separate `bgd_enabled` column;
-- add a runtime `mode` or `auto_generated` column;
+- add a `mode` or `auto_generated` column;
 - persist transient BGD FSM state to disk;
 - alter the existing RDS Multi-AZ BGD configuration contract.
 
@@ -378,9 +371,11 @@ This configuration design does not:
 2. Both green hostgroups non-NULL load successfully.
 3. Mixed NULL/non-NULL values are rejected.
 4. Duplicate or overlapping blue/green hostgroups are rejected.
-5. Explicit mode operates with global auto-discovery disabled.
-6. Automatic mode starts only when global auto-discovery is enabled.
-7. Disabling auto-discovery does not abort an active automatic switchover.
+5. Configured green hostgroups admit BGD discovery with global auto-discovery
+   disabled.
+6. A row without green hostgroups starts BGD discovery only when global
+   auto-discovery is enabled.
+7. Disabling auto-discovery does not abort an active switchover.
 8. NULL values survive memory-to-runtime, runtime-to-memory, disk, config-file,
    and cluster synchronization round trips.
 9. Online upgrade preserves existing rows and initializes both new fields to
@@ -402,16 +397,15 @@ This configuration design does not:
 
 The configuration/runtime integration is complete when:
 
-1. Aurora BGD explicit mode is configured solely by the two green hostgroup
-   columns on `mysql_aws_aurora_hostgroups`.
-2. Aurora BGD automatic mode is controlled by the existing
-   `aws_blue_green_deployment_auto_discovery` variable when both columns are
-   NULL.
+1. Every Aurora configuration row is user-created, and its two green hostgroup
+   columns are either both configured or both NULL.
+2. Configured green hostgroups admit BGD discovery independently of the global
+   variable; when both are NULL, the existing
+   `aws_blue_green_deployment_auto_discovery` variable controls admission.
 3. All load, save, disk, config-file, upgrade, and cluster-sync paths preserve
    the fields and their NULL values.
 4. Exactly one Aurora monitor worker owns normal Aurora and BGD handling for a
    writer hostgroup.
-5. No Aurora automatic-discovery row is generated in
-   `mysql_aws_rds_bgd_hostgroups`.
+5. No Aurora row is generated in `mysql_aws_rds_bgd_hostgroups`.
 6. `runtime_mysql_aws_aurora_hostgroups.bgd_status` exposes the local Aurora BGD
    FSM state without being saved, exported, or cluster-synchronized.
