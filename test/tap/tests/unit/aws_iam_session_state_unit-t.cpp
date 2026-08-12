@@ -40,6 +40,8 @@ constexpr const char *kEndpointB = "orders-ro.cluster-ro-abcdefghijkl.us-east-1.
 constexpr const char *kRegion = "us-east-1";
 constexpr const char *kIamUser = "iam_backend";
 constexpr const char *kPasswordUser = "password_backend";
+constexpr const char *kUnknownPassthroughUser = "passthrough_unknown_backend";
+constexpr const char *kMalformedPassthroughUser = "passthrough_malformed_backend";
 constexpr const char *kSensitiveToken = "FAKE_AWS_SESSION_TOKEN_MUST_NOT_ESCAPE";
 
 std::atomic<unsigned int> token_cleanse_calls { 0 };
@@ -230,6 +232,14 @@ void complete_and_drain(MySQL_Thread& worker, FakeTokenSource& source,
 	worker.drain_aws_iam_completions();
 }
 
+void make_fast_forward(SessionFixture& fixture) {
+	fixture.session->session_fast_forward = SESSION_FORWARD_TYPE_PERMANENT;
+	while (!fixture.session->previous_status.empty()) {
+		fixture.session->previous_status.pop();
+	}
+	fixture.session->previous_status.push(FAST_FORWARD);
+}
+
 void test_immediate_cache_hit(MySQL_Thread& worker) {
 	FakeTokenSource source(FakeTokenSource::Mode::IMMEDIATE_OK);
 	GloAwsIamTokenSource = &source;
@@ -354,6 +364,50 @@ void test_shutdown_completion(MySQL_Thread& worker) {
 		"token-source shutdown resumes the owner thread only to perform generic cleanup");
 }
 
+void test_fast_forward_provider_failure_is_terminal(MySQL_Thread& worker) {
+	FakeTokenSource source;
+	GloAwsIamTokenSource = &source;
+	SessionFixture fixture(worker);
+	make_fast_forward(fixture);
+	fixture.start();
+	complete_and_drain(worker, source, result(AwsIamStatus::PROVIDER_ERROR));
+	fixture.run();
+	const size_t output_after_failure = client_output(fixture.frontend_stream).size();
+	fixture.run();
+	ok(fixture.session->status == WAITING_CLIENT_DATA &&
+		fixture.selected_connection() == nullptr && worker.aws_iam_waiters.empty() &&
+		client_output(fixture.frontend_stream).size() == output_after_failure,
+		"fast-forward provider failure is terminal and cannot emit a second error");
+}
+
+void test_fast_forward_timeout_is_terminal(MySQL_Thread& worker) {
+	FakeTokenSource source;
+	GloAwsIamTokenSource = &source;
+	SessionFixture fixture(worker);
+	make_fast_forward(fixture);
+	fixture.start();
+	worker.curtime += 5000000;
+	fixture.run();
+	ok(fixture.session->status == WAITING_CLIENT_DATA && source.canceled.size() == 1 &&
+		fixture.selected_connection() == nullptr && worker.aws_iam_waiters.empty(),
+		"fast-forward IAM timeout cancels once and reaches a terminal client state");
+}
+
+void test_fast_forward_config_failure_is_terminal(MySQL_Thread& worker) {
+	FakeTokenSource source;
+	GloAwsIamTokenSource = &source;
+	char *saved_ca = mysql_thread___ssl_p2s_ca;
+	mysql_thread___ssl_p2s_ca = strdup("");
+	SessionFixture fixture(worker);
+	make_fast_forward(fixture);
+	fixture.start();
+	free(mysql_thread___ssl_p2s_ca);
+	mysql_thread___ssl_p2s_ca = saved_ca;
+	ok(fixture.session->status == WAITING_CLIENT_DATA && source.keys.empty() &&
+		fixture.selected_connection() == nullptr && worker.aws_iam_waiters.empty(),
+		"fast-forward IAM configuration failure releases the connection and is terminal");
+}
+
 void test_worker_shutdown_closes_delivery_boundary() {
 	token_cleanse_calls.store(0, std::memory_order_relaxed);
 	FakeTokenSource source;
@@ -405,6 +459,37 @@ void test_password_mode_unchanged(MySQL_Thread& worker) {
 		"ordinary password-mode fresh connection acquisition remains synchronous and unchanged");
 }
 
+void test_unknown_user_passthrough_uses_password(MySQL_Thread& worker) {
+	FakeTokenSource source;
+	GloAwsIamTokenSource = &source;
+	const MySQLBackendAuthPolicy missing_policy =
+		resolve_mysql_backend_auth_policy(*GloMyAuth, kUnknownPassthroughUser);
+	const unsigned int calls_before = connector_calls.load(std::memory_order_relaxed);
+	SessionFixture fixture(worker, kUnknownPassthroughUser);
+	fixture.session->passthrough_credential = true;
+	fixture.start();
+	ok(missing_policy.type == MySQLBackendAuthType::INVALID &&
+		missing_policy.failure_code == "backend_user_not_found" &&
+		source.keys.empty() && fixture.session->status == CONNECTING_SERVER &&
+		fixture.selected_connection() != nullptr &&
+		fixture.selected_connection()->backend_auth_type() == MySQLBackendAuthType::PASSWORD &&
+		connector_calls.load(std::memory_order_relaxed) == calls_before + 1,
+		"authorized unknown-user pass-through keeps password backend semantics without a backend row");
+}
+
+void test_malformed_policy_stays_fail_closed_for_passthrough(MySQL_Thread& worker) {
+	FakeTokenSource source;
+	GloAwsIamTokenSource = &source;
+	const unsigned int calls_before = connector_calls.load(std::memory_order_relaxed);
+	SessionFixture fixture(worker, kMalformedPassthroughUser);
+	fixture.session->passthrough_credential = true;
+	fixture.start();
+	ok(source.keys.empty() && fixture.session->status == WAITING_CLIENT_DATA &&
+		fixture.selected_connection() == nullptr &&
+		connector_calls.load(std::memory_order_relaxed) == calls_before,
+		"pass-through authorization never overrides a malformed backend IAM policy");
+}
+
 } // namespace
 
 extern "C" {
@@ -426,7 +511,7 @@ int __wrap_mysql_real_connect_start(MYSQL **ret, MYSQL *mysql, const char *host,
 } // extern "C"
 
 int main() {
-	plan(17);
+	plan(22);
 	if (test_init_minimal() != 0 || test_init_auth() != 0 ||
 		test_init_query_processor() != 0 || test_init_hostgroups() != 0) {
 		BAIL_OUT("failed to initialize unit-test globals");
@@ -436,6 +521,10 @@ int main() {
 		"IAM backend account fixture is loaded");
 	ok(add_backend_user(kPasswordUser, "ordinary-password", ""),
 		"password backend account fixture is loaded");
+	if (!add_backend_user(kMalformedPassthroughUser, "ordinary-password",
+		"{\"backend_auth\":{\"type\":17}}")) {
+		BAIL_OUT("malformed backend account fixture failed to load");
+	}
 	add_server(kEndpointA);
 	add_server(kEndpointB);
 	MyHGC *hostgroup = MyHGM->MyHGC_find(kHostgroup);
@@ -457,8 +546,13 @@ int main() {
 		test_frontend_disconnect(worker);
 		test_late_completion_is_dropped(worker);
 		test_shutdown_completion(worker);
+		test_fast_forward_provider_failure_is_terminal(worker);
+		test_fast_forward_timeout_is_terminal(worker);
+		test_fast_forward_config_failure_is_terminal(worker);
 		test_selected_server_retention(worker);
 		test_password_mode_unchanged(worker);
+		test_unknown_user_passthrough_uses_password(worker);
+		test_malformed_policy_stays_fail_closed_for_passthrough(worker);
 		GloAwsIamTokenSource = nullptr;
 	}
 	test_worker_shutdown_closes_delivery_boundary();

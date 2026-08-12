@@ -713,6 +713,11 @@ void MySQL_Session::fail_aws_iam_backend(
 		client_myds->pkt_sid++;
 	}
 	RequestEnd(backend, 9002, generic_error);
+	if (backend != nullptr) backend->max_connect_time = 0;
+	// RequestEnd deliberately leaves fast-forward sessions in their current
+	// state. Make every IAM failure terminal explicitly, matching the existing
+	// CONNECTING_SERVER failure disposition and preventing waiter re-entry.
+	set_status(WAITING_CLIENT_DATA);
 }
 
 int MySQL_Session::handler_again___status_WAITING_AWS_IAM_TOKEN() {
@@ -8665,8 +8670,20 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 			client_myds != nullptr && client_myds->myconn != nullptr &&
 			client_myds->myconn->userinfo != nullptr
 				? client_myds->myconn->userinfo->username : nullptr;
-		const MySQLBackendAuthPolicy backend_auth_policy =
+		MySQLBackendAuthPolicy backend_auth_policy =
 			resolve_mysql_backend_auth_policy(*GloMyAuth, backend_username);
+		// A pass-through credential has already been authorized by a successful
+		// backend probe (or its cache). Unknown-user pass-through intentionally
+		// has no USERNAME_BACKEND row, so retain its established password mode.
+		// Every other invalid policy, including malformed IAM attributes, remains
+		// fail-closed and an IAM row can never fall back to password mode.
+		if (backend_auth_policy.type == MySQLBackendAuthType::INVALID &&
+			passthrough_credential && backend_username != nullptr &&
+			backend_username[0] != '\0' &&
+			backend_auth_policy.failure_code == "backend_user_not_found") {
+			backend_auth_policy.type = MySQLBackendAuthType::PASSWORD;
+			backend_auth_policy.failure_code.clear();
+		}
 		if (backend_auth_policy.type == MySQLBackendAuthType::INVALID) {
 			aws_iam_token_key.database_user = backend_auth_policy.database_user;
 			fail_aws_iam_backend(backend_auth_policy.failure_code.c_str());
