@@ -387,7 +387,7 @@ void PgSQL_Event::write_auth(LogBuffer *f, PgSQL_Session *sess) {
 		char buffer2[64];
 		if (localtime_r(&timer, &tm_info)) {
  			strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", &tm_info);
- 			sprintf(buffer2,"%s.%03u", buffer1, (unsigned)(start_time%1000000)/1000);
+			snprintf(buffer2, sizeof(buffer2), "%s.%03u", buffer1, (unsigned)(start_time%1000000)/1000);
  		} else {
  			snprintf(buffer2, sizeof(buffer2), "invalid_date");
  		}
@@ -473,7 +473,7 @@ void PgSQL_Event::write_auth(LogBuffer *f, PgSQL_Session *sess) {
 				char buffer2[64];
 				if (localtime_r(&timer, &tm_info)) {
  					strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", &tm_info);
- 					sprintf(buffer2,"%s.%03u", buffer1, (unsigned)(orig_time%1000000)/1000);
+					snprintf(buffer2, sizeof(buffer2), "%s.%03u", buffer1, (unsigned)(orig_time%1000000)/1000);
  				} else {
  					snprintf(buffer2, sizeof(buffer2), "invalid_date");
  				}
@@ -482,7 +482,7 @@ void PgSQL_Event::write_auth(LogBuffer *f, PgSQL_Session *sess) {
 				//life/=1000;
 				float f = timediff;
 				f /= 1000;
-				sprintf(buffer1, "%.3fms", f);
+				snprintf(buffer1, sizeof(buffer1), "%.3fms", f);
 				j["duration"] = buffer1;
 			}
 			break;
@@ -672,7 +672,7 @@ uint64_t PgSQL_Event::write_query_format_2_json(LogBuffer *f) {
 		char buffer2[64];
 		if (localtime_r(&timer, &tm_info)) {
  			strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", &tm_info);
- 			sprintf(buffer2,"%s.%06u", buffer1, (unsigned)(start_time%1000000));
+			snprintf(buffer2, sizeof(buffer2), "%s.%06u", buffer1, (unsigned)(start_time%1000000));
  		} else {
  			snprintf(buffer2, sizeof(buffer2), "invalid_date");
  		}
@@ -686,7 +686,7 @@ uint64_t PgSQL_Event::write_query_format_2_json(LogBuffer *f) {
 		char buffer2[64];
 		if (localtime_r(&timer, &tm_info)) {
  			strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", &tm_info);
- 			sprintf(buffer2,"%s.%06u", buffer1, (unsigned)(end_time%1000000));
+			snprintf(buffer2, sizeof(buffer2), "%s.%06u", buffer1, (unsigned)(end_time%1000000));
  		} else {
  			snprintf(buffer2, sizeof(buffer2), "invalid_date");
  		}
@@ -694,7 +694,7 @@ uint64_t PgSQL_Event::write_query_format_2_json(LogBuffer *f) {
 	}
 	j["duration_us"] = end_time-start_time;
 	char digest_hex[20];
-	sprintf(digest_hex,"0x%016llX", (long long unsigned int)query_digest);
+	snprintf(digest_hex, sizeof(digest_hex), "0x%016llX", (long long unsigned int)query_digest);
 	j["digest"] = digest_hex;
 
 	if (et == PGSQL_LOG_EVENT_TYPE::STMT_PREPARE || et == PGSQL_LOG_EVENT_TYPE::STMT_EXECUTE || et == PGSQL_LOG_EVENT_TYPE::STMT_DESCRIBE) {
@@ -1578,7 +1578,7 @@ void PgSQL_Logger::insertPgSQLEventsIntoDb(SQLite3DB* db, const std::string& tab
 		bind_text_or_null(stmt, base + 3, event->schemaname);
 		rc = (*proxy_sqlite3_bind_int64)(stmt, base + 4, event->start_time); ASSERT_SQLITE_OK(rc, db);
 		rc = (*proxy_sqlite3_bind_int64)(stmt, base + 5, event->end_time); ASSERT_SQLITE_OK(rc, db);
-		sprintf(digest_hex_str, "0x%016llX", (long long unsigned int)event->query_digest);
+		snprintf(digest_hex_str, sizeof(digest_hex_str), "0x%016llX", (long long unsigned int)event->query_digest);
 		bind_text_or_null(stmt, base + 6, digest_hex_str);
 		bind_text_or_null(stmt, base + 7, event->query_ptr);
 		bind_text_or_null(stmt, base + 8, event->server);

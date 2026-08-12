@@ -8,12 +8,19 @@ using json = nlohmann::json;
 //#include "SpookyV2.h"
 #include <fcntl.h>
 #include <sstream>
+#include <openssl/crypto.h>
 
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
 #include "MySQL_Query_Processor.h"
 #include "MySQL_Variables.h"
 #include <atomic>
+#include <mutex>
+#include <set>
+
+#ifdef PROXYSQLED25519
+#include "MySQL_Ed25519.h"
+#endif
 
 // some of the code that follows is from mariadb client library memory allocator
 typedef int     myf;    // Type of MyFlags in my_funcs
@@ -266,9 +273,17 @@ MySQL_Connection_userinfo::MySQL_Connection_userinfo() {
 MySQL_Connection_userinfo::~MySQL_Connection_userinfo() {
 	if (username) free(username);
 	if (fe_username) free(fe_username);
-	if (password) free(password);
+	clear_password();
 	if (sha1_pass) free(sha1_pass);
 	if (schemaname) free(schemaname);
+}
+
+void MySQL_Connection_userinfo::clear_password() {
+	if (password != nullptr) {
+		OPENSSL_cleanse(password, strlen(password));
+		free(password);
+		password = nullptr;
+	}
 }
 
 void MySQL_Connection::compute_unknown_transaction_status() {
@@ -335,6 +350,7 @@ uint64_t MySQL_Connection_userinfo::compute_hash() {
 	strcpy(buf+l,_COMPUTE_HASH_DEL2_);
 	l+=strlen(_COMPUTE_HASH_DEL2_);
 	hash=SpookyHash::Hash64(buf,l,0);
+	OPENSSL_cleanse(buf, l);
 	free(buf);
 	return hash;
 }
@@ -353,7 +369,7 @@ void MySQL_Connection_userinfo::set(char *u, char *p, char *s, char *sh1) {
 	if (p) {
 		if (password) {
 			if (strcmp(p,password)) {
-				free(password);
+				clear_password();
 				password=strdup(p);
 			}
 		} else {
@@ -489,6 +505,12 @@ MySQL_Connection::MySQL_Connection() {
 	statuses.myconnpoll_put = 0;
 	memset(gtid_uuid,0,sizeof(gtid_uuid));
 	memset(&connected_host_details, 0, sizeof(connected_host_details));
+#ifdef PROXYSQLED25519
+	// Zero-initialize so an ASAN/MSAN run never reads an uninitialized nonce
+	// on the (unreachable in practice) path where it would be read before
+	// PPHR_ed25519_switch() first populates it via RAND_bytes().
+	memset(ed25519_nonce, 0, sizeof(ed25519_nonce));
+#endif
 };
 
 MySQL_Connection::~MySQL_Connection() {
@@ -801,7 +823,7 @@ void MySQL_Connection::connect_start_SetAttributes() {
 		unsigned long long t1=monotonic_time();
 		sprintf(__buffer,"%llu",(t1-GloVars.global.start_time)/1000/1000);
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "proxysql_uptime", __buffer);
-		sprintf(__buffer,"%d", parent->myhgc->hid);
+		snprintf(__buffer, sizeof(__buffer), "%d", parent->myhgc->hid);
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "hostgroup_id", __buffer);
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "compile_time", __TIMESTAMP__);
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "proxysql_version", PROXYSQL_VERSION);
@@ -1011,6 +1033,33 @@ void MySQL_Connection::connect_start() {
 			auth_password=userinfo->password;
 		}
 	}
+#ifdef PROXYSQLED25519
+	// Prefix match, not full-validity match: a "$ED$"-prefixed value of the
+	// wrong length is just as unusable as cleartext against a backend as a
+	// well-formed one -- the "$ED$" marker is reserved and never a real
+	// cleartext password either way.
+	if (userinfo->password && proxysql_ed25519_has_prefix(userinfo->password)) {
+		// connect_start() runs for every backend connect attempt and the pool
+		// retries failed connects, so warn once per user rather than flooding
+		// the error log; MySQL_Authentication::add() already flags the row at
+		// load time. The set is bounded by the number of distinct usernames,
+		// and this branch is only entered for misconfigured $ED$ users.
+		static std::mutex ed25519_warned_mutex;
+		static std::set<std::string> ed25519_warned_users;
+		const std::string ed25519_uname { userinfo->username ? userinfo->username : "" };
+		bool ed25519_first_warning = false;
+		{
+			std::lock_guard<std::mutex> lock(ed25519_warned_mutex);
+			ed25519_first_warning = ed25519_warned_users.insert(ed25519_uname).second;
+		}
+		if (ed25519_first_warning) {
+			proxy_warning(
+				"User '%s' has an ed25519 public-key-only ($ED$) credential;"
+				" backend authentication requires the cleartext password and will fail\n",
+				ed25519_uname.c_str());
+		}
+	}
+#endif
 	if (parent->port) {
 		char* host_ip = connect_start_DNS_lookup();
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, host_ip, userinfo->username, auth_password, userinfo->schemaname, parent->port, NULL, client_flags);
@@ -3254,7 +3303,7 @@ void MySQL_Connection::set_ssl_params(MYSQL *mysql, MySQLServers_SslParams *ssl_
 
 void MySQL_Connection::get_mysql_info_json(json& j) {
 	char buff[32];
-	sprintf(buff,"%p",mysql);
+	snprintf(buff, sizeof(buff), "%p", static_cast<void*>(mysql));
 	j["address"] = buff;
 	j["host"] = ( mysql->host ? mysql->host : "" );
 	j["host_info"] = ( mysql->host_info ? mysql->host_info : "" );
@@ -3285,7 +3334,7 @@ void MySQL_Connection::get_backend_conn_info_json(json& j) {
 		variables[*it_c].fill_server_internal_session(j, *it_c);
 	}
 	char buff[32];
-	sprintf(buff,"%p", this);
+	snprintf(buff, sizeof(buff), "%p", static_cast<void*>(this));
 	j["address"] = buff;
 	j["auto_increment_delay_token"] = auto_increment_delay_token;
 	j["bytes_recv"] = bytes_info.bytes_recv;

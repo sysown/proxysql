@@ -73,6 +73,11 @@ ifeq ($(PROXYSQLTSDB),1)
 	PSQLTSDB := -DPROXYSQLTSDB
 endif
 
+PSQLED25519 :=
+ifeq ($(PROXYSQLED25519),1)
+	PSQLED25519 := -DPROXYSQLED25519
+endif
+
 # 'libhttpserver': Add 'ENABLE_EPOLL' by default for all platforms except
 # for 'Darwin'. This is required when compiling 'libhttpserver' for avoiding
 # internal use of 'SELECT' in favor of 'EPOLL'. See #3591.
@@ -83,7 +88,7 @@ endif
 
 
 MYCFLAGS := $(IDIRS) $(OPTZ) $(DEBUG) -Wall -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
-MYCXXFLAGS := $(STDCPP) $(MYCFLAGS) $(PSQLCH) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(ENABLE_EPOLL)
+MYCXXFLAGS := $(STDCPP) $(MYCFLAGS) $(PSQLCH) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLED25519) $(ENABLE_EPOLL)
 
 default: libproxysql.a
 .PHONY: default
@@ -121,6 +126,10 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	Query_Processor_ParserSQL.oo \
 	proxy_sqlite3_symbols.oo
 
+ifeq ($(PROXYSQL31),1)
+_OBJ_CXX += MySQL_Caching_Sha2_RSA.oo
+endif
+
 # TSDB object files
 ifeq ($(PROXYSQLTSDB),1)
 _OBJ_CXX += TSDB_Dashboard_html.oo
@@ -129,6 +138,11 @@ endif
 # FFTO object files
 ifeq ($(PROXYSQLFFTO),1)
 _OBJ_CXX += MySQLFFTO.oo PgSQLFFTO.oo
+endif
+
+# ed25519 frontend authentication (MariaDB client_ed25519)
+ifeq ($(PROXYSQLED25519),1)
+_OBJ_CXX += MySQL_Ed25519.oo
 endif
 
 OBJ_CXX := $(patsubst %,$(ODIR)/%,$(_OBJ_CXX))

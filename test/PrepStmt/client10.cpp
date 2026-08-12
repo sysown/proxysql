@@ -96,7 +96,7 @@ void * mysql_thread(const std::string& username, int tid) {
 			fprintf(stderr, " mysql_stmt_init(), out of memory\n");
 			return NULL;
 		}
-		sprintf(buff,"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
+		bl = (unsigned int)snprintf(buff,sizeof(buff),"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
 
 		if (mysql_stmt_prepare(stmt, buff, bl)) { // the prepared statement is created
 			fprintf(stderr, " mysql_stmt_prepare(), failed: %s\n" , mysql_stmt_error(stmt));

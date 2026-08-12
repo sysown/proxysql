@@ -16,6 +16,7 @@
 #include <iostream>
 #include <cstring>
 #include <algorithm>
+#include <string_view>
 
 extern class MySQL_Query_Processor* GloMyQPro;
 extern MySQL_HostGroups_Manager* MyHGM;
@@ -271,16 +272,22 @@ void MySQLFFTO::report_query_stats(const std::string& query, unsigned long long 
 		((query.length() < QUERY_DIGEST_BUF) ? qp.buf : NULL), &opts);
 	if (digest_text) {
 		qp.digest_text = digest_text;
-		const int digest_len = strnlen(digest_text, mysql_thread___query_digests_max_digest_length);
+		const int digest_len = static_cast<int>(strnlen(digest_text, mysql_thread___query_digests_max_digest_length));
 		qp.digest = SpookyHash::Hash64(digest_text, digest_len, 0);
-		char* ca = (char*)"";
-		if (mysql_thread___query_digests_track_hostname && m_session->client_myds->addr.addr) ca = m_session->client_myds->addr.addr;
+	    char* ca = (char*)"";
+        if (mysql_thread___query_digests_track_hostname && m_session->client_myds->addr.addr) ca = m_session->client_myds->addr.addr;
         uint64_t hash2; SpookyHash myhash; myhash.Init(19, 3);
-        myhash.Update(ui->username, strlen(ui->username));
+        const std::string_view username_view = ui->username ? std::string_view{ui->username} : std::string_view{};
+        const size_t username_len = username_view.size();
+        myhash.Update(username_view.data(), username_len);
         myhash.Update(&qp.digest, sizeof(qp.digest));
-        myhash.Update(schemaname, strlen(schemaname));
+        const std::string_view schemaname_view = schemaname ? std::string_view{schemaname} : std::string_view{};
+        const size_t schemaname_len = schemaname_view.size();
+        myhash.Update(schemaname_view.data(), schemaname_len);
         myhash.Update(&m_session->current_hostgroup, sizeof(m_session->current_hostgroup));
-        myhash.Update(ca, strlen(ca));
+        const std::string_view ca_view = ca ? std::string_view{ca} : std::string_view{};
+        const size_t ca_len = ca_view.size();
+        myhash.Update(ca_view.data(), ca_len);
         myhash.Final(&qp.digest_total, &hash2);
         GloMyQPro->update_query_digest(qp.digest_total, qp.digest, qp.digest_text, m_session->current_hostgroup, ui, duration_us, m_session->thread->curtime, ca, affected_rows, rows_sent);
         if (digest_text != qp.buf) free(digest_text);
