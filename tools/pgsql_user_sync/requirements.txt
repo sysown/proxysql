@@ -1,0 +1,2 @@
+psycopg[binary]>=3.2.13,<4
+PyMySQL>=1.1.1,<2

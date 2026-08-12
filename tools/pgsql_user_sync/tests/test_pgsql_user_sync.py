@@ -13,6 +13,7 @@ from pathlib import Path
 
 
 SCRIPT = Path(__file__).parents[1] / "proxysql_pgsql_user_sync.py"
+ASSET_DIR = SCRIPT.parent
 
 
 def load_module():
@@ -682,6 +683,66 @@ class OrchestrationTests(unittest.TestCase):
         self.assertGreaterEqual(summary.duration_seconds, 0.0)
         with self.assertRaises(AttributeError):
             summary.outcome = "changed"
+
+
+class AssetTests(unittest.TestCase):
+    """Keep the operator-facing deployment sample complete and safe."""
+
+    def test_source_function_has_security_boundaries(self):
+        sql = (ASSET_DIR / "create_source_function.sql").read_text()
+        for required in (
+            "SECURITY DEFINER",
+            "SET search_path = pg_catalog",
+            "rolcanlogin",
+            "rolvaliduntil",
+            "REVOKE ALL",
+        ):
+            self.assertIn(required, sql)
+        self.assertIn("proxysql_auth_managed", sql)
+        self.assertIn("pg_has_role", sql)
+        self.assertIn("proxysql_auth_reader", sql)
+
+    def test_example_configuration_is_loadable_with_protected_permissions(self):
+        source = (ASSET_DIR / "proxysql_pgsql_user_sync.ini.example").read_text()
+        self.assertIn("[source]", source)
+        self.assertIn("[proxysql]", source)
+        self.assertIn("[sync]", source)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "pgsql-user-sync.ini"
+            path.write_text(
+                source.replace("REPLACE_WITH_SOURCE_PASSWORD", "source-secret")
+                .replace("REPLACE_WITH_PROXYSQL_PASSWORD", "proxysql-secret"),
+                encoding="utf-8",
+            )
+            os.chmod(path, 0o600)
+            module = load_module()
+            config = module.load_config(path, module.CLIOverrides())
+            self.assertEqual("proxysql_auth", config.source.function_schema)
+            self.assertEqual("export_login_roles", config.source.function_name)
+
+    def test_requirements_pin_supported_driver_majors(self):
+        requirements = (ASSET_DIR / "requirements.txt").read_text()
+        self.assertIn("psycopg[binary]>=3.2.13,<4", requirements)
+        self.assertIn("PyMySQL>=1.1.1,<2", requirements)
+
+    def test_readme_documents_scheduler_and_cluster_safety(self):
+        readme = (ASSET_DIR / "README.md").read_text()
+        for required in (
+            "absolute",
+            "LOAD SCHEDULER TO RUNTIME",
+            "SAVE SCHEDULER TO DISK",
+            "disable",
+            "keep",
+            "adopt_existing_users",
+            "dry-run",
+            "non-transactional",
+            "unmanaged",
+            "log",
+            "disk",
+        ):
+            self.assertIn(required, readme)
+        self.assertIn("one authoritative ProxySQL node", readme)
+        self.assertIn("every node", readme)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,27 @@
+# Copy to a root-owned or service-owned file, replace both placeholders, and
+# chmod 0600 before use.  Secrets are intentionally not accepted on the CLI.
+
+[source]
+host = postgresql.example
+port = 5432
+database = postgres
+username = proxysql_auth_reader
+password = REPLACE_WITH_SOURCE_PASSWORD
+connect_timeout = 10
+function = proxysql_auth.export_login_roles
+
+[proxysql]
+host = 127.0.0.1
+port = 6032
+username = admin
+password = REPLACE_WITH_PROXYSQL_PASSWORD
+connect_timeout = 10
+
+[sync]
+profile = primary-cluster
+default_hostgroup = 0
+missing_role_action = disable
+adopt_existing_users = false
+allow_empty_snapshot = false
+save_to_disk = true
+lock_file = /run/lock/proxysql-pgsql-user-sync.lock
