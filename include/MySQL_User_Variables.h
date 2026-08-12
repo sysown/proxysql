@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -39,6 +40,63 @@ struct UserVariableAssignment {
 struct UserVariableSetAnalysis {
 	UserVariableSetStatus status { UserVariableSetStatus::NOT_USER_VARIABLE_SET };
 	std::vector<UserVariableAssignment> assignments;
+};
+
+struct MySQL_User_Variable_Entry {
+	std::string replay_target;
+	std::string raw_literal;
+	UserVariableLiteralKind kind;
+	uint64_t hash;
+
+	size_t stored_bytes() const;
+	bool exactly_equals(const MySQL_User_Variable_Entry& other) const;
+};
+
+enum class MySQL_User_Variable_Apply_Result : uint8_t {
+	OK,
+	VARIABLE_LIMIT,
+	BYTE_LIMIT
+};
+
+struct MySQL_User_Variable_Replay_Batch {
+	std::string sql;
+	std::vector<UserVariableAssignment> assignments;
+};
+
+enum class MySQL_User_Variable_Replay_Status : uint8_t {
+	OK,
+	ASSIGNMENT_TOO_LARGE
+};
+
+struct MySQL_User_Variable_Replay_Plan {
+	MySQL_User_Variable_Replay_Status status { MySQL_User_Variable_Replay_Status::OK };
+	std::vector<MySQL_User_Variable_Replay_Batch> batches;
+};
+
+class MySQL_User_Variable_State {
+public:
+	static constexpr size_t kMaxVariables = 128;
+	static constexpr size_t kMaxStoredBytes = 64 * 1024;
+
+	MySQL_User_Variable_Apply_Result stage(
+		const std::vector<UserVariableAssignment>& assignments,
+		MySQL_User_Variable_State& staged) const;
+	void apply(const std::vector<UserVariableAssignment>& assignments);
+	void clear();
+	size_t size() const;
+	size_t stored_bytes() const;
+	bool has_names_absent_from(const MySQL_User_Variable_State& desired) const;
+	unsigned int count_matches(
+		const MySQL_User_Variable_State& desired,
+		unsigned int& not_matching) const;
+	MySQL_User_Variable_Replay_Plan build_replay_plan(
+		const MySQL_User_Variable_State& actual,
+		size_t max_query_bytes) const;
+	std::string diagnostic_fingerprint() const;
+
+private:
+	std::map<std::string, MySQL_User_Variable_Entry> entries_;
+	size_t stored_bytes_ { 0 };
 };
 
 UserVariableSetAnalysis parsersql_analyze_user_variable_set_mysql(
