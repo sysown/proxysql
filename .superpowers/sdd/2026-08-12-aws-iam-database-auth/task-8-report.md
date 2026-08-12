@@ -5,7 +5,9 @@
 Authentication mode is now part of MySQL backend pool identity. Local and
 global checkout receive the session's resolved backend policy, preserve the
 existing session-variable scoring within the compatible mode, and lazily
-destroy entries left behind by a runtime PASSWORD/AWS_IAM policy change.
+destroy same-username entries left behind by a runtime PASSWORD/AWS_IAM policy
+change. Different backend users in the same server/hostgroup do not cause
+cross-user pool churn when their authentication modes differ.
 
 Established IAM connections remain reusable for the exact same username and
 mode, including beyond the token's 15-minute generation lifetime. An IAM
@@ -13,11 +15,16 @@ connection that would need identity/session reset is destroyed instead. IAM is
 also excluded defensively from `CHANGING_USER_SERVER`,
 `RESETTING_CONNECTION`, the asynchronous reset queue, and detached-session
 reset handling, while the existing password `COM_CHANGE_USER` behavior remains
-unchanged.
+unchanged. A PASSWORD connection whose reloaded backend policy is malformed is
+failed closed before verification, `CHANGING_USER_SERVER`, detached reset, or
+reset-worker processing can send its retained credential.
 
-Implementation commit:
-`cc31f5870ad02526713246af9f052deb685c6c92`
-(`feat(mysql): isolate IAM connections in backend pools`).
+Implementation commits:
+
+- `cc31f5870ad02526713246af9f052deb685c6c92`
+  (`feat(mysql): isolate IAM connections in backend pools`)
+- `be43d385a671a9714d47bcbfb29bec84d091573a`
+  (`fix(mysql): harden IAM pool policy boundaries`)
 
 ## TDD evidence
 
@@ -61,7 +68,7 @@ make -C test/tap/tests/unit -j \
 ./test/tap/tests/unit/connection_pool_unit-t
 ```
 
-- `aws_iam_pool_unit-t`: 15/15
+- `aws_iam_pool_unit-t`: 27/27
 - `connection_pool_unit-t`: 24/24
 - 20 consecutive repetitions of each focused binary also passed
 
@@ -70,6 +77,32 @@ minutes, both runtime policy-change directions, local and global lazy drain,
 the actual reset worker, destroy/reset/change-user state handling, and a
 positive regression proving that ordinary password connections still retain
 their reset queue and quality-1 `COM_CHANGE_USER` reuse behavior.
+
+### Controller review iteration 1
+
+The review regressions were added before the corresponding production fixes.
+The first clean run had 26 assertions and nine intended failures:
+
+- all four global mixed-user/mixed-mode preservation and exact-reuse checks
+- both local mixed-user preservation checks
+- attached PASSWORD reload-to-INVALID failed to terminate
+- direct `CHANGING_USER_SERVER` with INVALID policy called the wrapped
+  `mysql_change_user_start()`
+- `RESETTING_CONNECTION` with INVALID policy called the wrapped reset path
+
+An additional reset-worker INVALID-policy assertion was then added and failed
+alone as assertion 27 before the worker guard was implemented. The final
+focused suite passes 27/27. Its mixed-user cases exercise both directions
+(PASSWORD checkout preserving unrelated IAM, and IAM checkout preserving
+unrelated PASSWORD) in both global and thread-local pools. Its INVALID cases
+exercise an attached processing session, direct change-user state, detached
+reset state, and the actual asynchronous reset consumer.
+
+Two test-harness corrections were required while establishing RED: the minimal
+session fixture needed frontend protocol initialization before the generic
+error packet could be generated, and the wrapped asynchronous change-user call
+needed to return `MYSQL_WAIT_READ` so a forbidden invocation was observed
+without completing and looping. Neither correction changed production code.
 
 ## Sanitizers
 
@@ -88,7 +121,7 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
   ./test/tap/tests/unit/connection_pool_unit-t
 ```
 
-Result: 15/15 and 24/24 with no AddressSanitizer or LeakSanitizer diagnostic.
+Result: 27/27 and 24/24 with no AddressSanitizer or LeakSanitizer diagnostic.
 The normal library and unit binaries were rebuilt afterward; `nm` and `ldd`
 checks found no ASan/TSan symbols or runtime dependencies in the final focused
 artifact.
@@ -106,9 +139,9 @@ were built together with parallel make and passed:
 - `aws_iam_connection_secret_unit-t`: 47/47
 - `mariadb_tls_server_name_unit-t`: 8/8
 - `connection_pool_unit-t`: 24/24
-- `aws_iam_pool_unit-t`: 15/15
+- `aws_iam_pool_unit-t`: 27/27
 
-Total: 239/239 TAP assertions.
+Total: 241/241 TAP assertions.
 
 The existing daemon-backed regressions were rebuilt for the PROXYSQL31 DEBUG
 tier and passed in registered isolated MySQL 8.4 environments:
@@ -124,18 +157,28 @@ libmysql/libmariadb helper binaries; both helpers were built with
 harness prerequisites, not product failures. The isolated containers and
 network were stopped after validation.
 
+During the final review rebuild, one unit link invocation omitted the required
+`PROXYSQLCLICKHOUSE=1` harness flag and therefore mixed ClickHouse-enabled
+library objects with test globals that did not define `GloClickHouse*`. No test
+executed in that invocation. Rebuilding the same targets with the required
+flag linked cleanly and produced the 241/241 result above.
+
 `git diff --check` was clean before the implementation commit.
 
 ## Security checks
 
 - Pool compatibility requires exact username and recorded auth mode.
-- PASSWORD/AWS_IAM mismatches are removed only on checkout; user reload does
+- PASSWORD/AWS_IAM mismatches for the requested backend username are removed
+  only on checkout; unrelated usernames remain pooled, and user reload does
   not synchronously scan all live connections.
 - IAM checkout deletes any candidate that would require `COM_CHANGE_USER`.
 - IAM destruction cannot enqueue reset work, and the reset worker independently
   discards an IAM entry if one is ever queued.
 - Both session change-user/reset states replace or destroy IAM connections
   before `async_change_user()`.
+- INVALID reloaded policy destroys an attached PASSWORD connection and clears
+  pending state before change-user; detached reset and reset-worker paths also
+  discard it without invoking `async_change_user()`.
 - `change_user_start()` asserts that neither IAM mode nor an IAM handshake
   secret can reach the MariaDB change-user call.
 - Existing exact-identity IAM sessions may multiplex on the authenticated
