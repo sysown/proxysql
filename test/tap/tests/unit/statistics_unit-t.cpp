@@ -115,6 +115,18 @@ static unsigned int text_count(const std::string& text, const std::string& needl
 	return count;
 }
 
+static unsigned int prometheus_help_metric_count(
+	const std::string& text, const std::string& metric_name) {
+	return text_count(text, "# HELP " + metric_name + " ");
+}
+
+static void test_user_variable_metric_name_is_exact() {
+	const std::string metric_name = "proxysql_mysql_user_variable_assignments_tracked_total";
+	const std::string fixture = "# HELP " + metric_name + "_v2 unrelated metric\n";
+	ok(prometheus_help_metric_count(fixture, metric_name) == 0,
+		"Prometheus descriptor check rejects a longer prefix-sharing metric name");
+}
+
 static void test_user_variable_tracking_stats_registration() {
 	const std::array<const char*, 5> status_names {
 		"User_variable_assignments_tracked",
@@ -142,7 +154,7 @@ static void test_user_variable_tracking_stats_registration() {
 	prometheus::TextSerializer serializer;
 	const std::string metrics = serializer.Serialize(GloVars.prometheus_registry->Collect());
 	for (const char* name : metric_names) {
-		ok(text_count(metrics, std::string("# HELP ") + name) == 1,
+		ok(prometheus_help_metric_count(metrics, name) == 1,
 			"Prometheus registers %s exactly once", name);
 	}
 }
@@ -808,6 +820,8 @@ int main() {
 	num_tests += 15;
 	// MySQL user-variable tracking stats registration: 10
 	num_tests += 10;
+	// MySQL user-variable tracking exact metric-name matching: 1
+	num_tests += 1;
 
 #ifdef PROXYSQLTSDB
 	// TSDB table init: 3
@@ -852,6 +866,7 @@ int main() {
 	test_pgsql_eventslog_timer_triggers();
 	test_digest_to_disk_timer_disabled();
 	test_digest_to_disk_timer_triggers();
+	test_user_variable_metric_name_is_exact();
 	test_user_variable_tracking_stats_registration();
 
 #ifdef PROXYSQLTSDB
