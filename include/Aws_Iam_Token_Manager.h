@@ -113,7 +113,6 @@ struct AwsIamTokenManagerConfig {
 	using Jitter = std::function<std::chrono::milliseconds(std::chrono::milliseconds)>;
 	explicit AwsIamTokenManagerConfig(size_t mysql_max_connections);
 
-	size_t worker_count { 2 };
 	size_t max_pending_keys { 1024 };
 	size_t max_cache_entries { 1024 };
 	size_t max_total_waiters;
@@ -125,6 +124,7 @@ struct AwsIamTokenManagerConfig {
 	std::chrono::milliseconds maximum_backoff { 5000 };
 	Clock clock;
 	Jitter jitter;
+	std::function<void()> before_dispatch;
 };
 
 class AwsIamTokenManager final : public AwsIamTokenSource {

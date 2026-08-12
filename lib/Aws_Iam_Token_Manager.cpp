@@ -109,24 +109,20 @@ class AwsIamTokenManager::Impl {
 public:
 	Impl(std::shared_ptr<AwsIamTokenSigner> signer_arg, AwsIamTokenManagerConfig config_arg)
 		: signer(std::move(signer_arg)), config(std::move(config_arg)) {
-		config.worker_count = std::max<size_t>(1, config.worker_count);
 		config.max_pending_keys = std::max<size_t>(1, config.max_pending_keys);
 		config.max_total_waiters = std::min(config.max_total_waiters, config.mysql_max_connections);
 		config.max_waiters_per_key = std::min(config.max_waiters_per_key, config.mysql_max_connections);
 		config.max_waiters_per_key = std::min(config.max_waiters_per_key, config.max_total_waiters);
 		config.maximum_backoff = std::min(config.maximum_backoff, std::chrono::milliseconds(5000));
 		config.initial_backoff = std::min(config.initial_backoff, config.maximum_backoff);
-		for (size_t i = 0; i < config.worker_count; ++i) {
+		valid_config = config.generated_lifetime > config.minimum_remaining_lifetime;
+		for (size_t i = 0; i < 2; ++i) {
 			workers.emplace_back([this] { worker_loop(); });
 		}
 	}
 	~Impl() { shutdown(); }
 
 	struct Delivery {
-		std::mutex gate;
-		bool canceled { false };
-		bool posting { false };
-		bool delivered { false };
 		uint64_t opaque_id;
 		std::weak_ptr<AwsIamCompletionSink> sink;
 	};
@@ -182,6 +178,8 @@ public:
 			};
 			if (shutting_down) {
 				make_immediate(AwsIamStatus::SHUTDOWN);
+			} else if (!valid_config) {
+				make_immediate(AwsIamStatus::INVALID_CONFIG);
 			} else {
 				const auto now = config.clock();
 				auto cached = cache.find(key);
@@ -231,38 +229,30 @@ public:
 			}
 		}
 		if (notify) cv.notify_one();
-		if (has_immediate) immediate.first->post(std::move(immediate.second));
+		if (has_immediate) dispatch_immediate(std::move(immediate));
 		return handle;
 	}
 
 	void cancel(AwsIamRequestHandle handle) {
 		if (!handle.value) return;
-		std::shared_ptr<Delivery> delivery;
-		{
-			std::lock_guard<std::mutex> lock(mu);
-			auto active = active_deliveries.find(handle.value);
-			if (active == active_deliveries.end()) return;
-			delivery = active->second;
-			for (auto item = generations.begin(); item != generations.end(); ++item) {
-				auto& waiters = item->second.waiters;
-				auto found = std::find_if(waiters.begin(), waiters.end(),
-					[&](const Waiter& waiter) { return waiter.handle == handle.value; });
-				if (found != waiters.end()) {
-					waiters.erase(found);
-					--total_waiters;
-					if (waiters.empty() && item->second.queued) {
-						jobs.erase(std::remove(jobs.begin(), jobs.end(), item->first), jobs.end());
-						generations.erase(item);
-					}
-					break;
+		std::lock_guard<std::recursive_mutex> dispatch_lock(dispatch_mu);
+		std::lock_guard<std::mutex> lock(mu);
+		auto active = active_deliveries.find(handle.value);
+		if (active == active_deliveries.end()) return;
+		for (auto item = generations.begin(); item != generations.end(); ++item) {
+			auto& waiters = item->second.waiters;
+			auto found = std::find_if(waiters.begin(), waiters.end(),
+				[&](const Waiter& waiter) { return waiter.handle == handle.value; });
+			if (found != waiters.end()) {
+				waiters.erase(found);
+				--total_waiters;
+				if (waiters.empty() && item->second.queued) {
+					jobs.erase(std::remove(jobs.begin(), jobs.end(), item->first), jobs.end());
+					generations.erase(item);
 				}
+				break;
 			}
 		}
-		{
-			std::lock_guard<std::mutex> gate(delivery->gate);
-			if (!delivery->posting) delivery->canceled = true;
-		}
-		std::lock_guard<std::mutex> lock(mu);
 		active_deliveries.erase(handle.value);
 	}
 
@@ -293,33 +283,26 @@ public:
 	void shutdown() {
 		std::vector<std::shared_ptr<Delivery>> deliveries;
 		{
-			std::lock_guard<std::mutex> lock(mu);
-			if (shutting_down) return;
-			shutting_down = true;
-			for (const auto& active : active_deliveries) deliveries.push_back(active.second);
-			generations.clear();
-			jobs.clear();
-			total_waiters = 0;
-			cache.clear();
-			backoff.clear();
-		}
-		cv.notify_all();
-		for (auto& delivery : deliveries) {
+			std::lock_guard<std::recursive_mutex> dispatch_lock(dispatch_mu);
 			{
-				std::lock_guard<std::mutex> gate(delivery->gate);
-				if (delivery->canceled || delivery->posting || delivery->delivered) continue;
-				delivery->posting = true;
+				std::lock_guard<std::mutex> lock(mu);
+				if (shutting_down) return;
+				shutting_down = true;
+				for (const auto& active : active_deliveries) deliveries.push_back(active.second);
+				generations.clear();
+				jobs.clear();
+				total_waiters = 0;
+				cache.clear();
+				backoff.clear();
 			}
-			if (auto sink = delivery->sink.lock()) {
-				AwsIamCompletion completion;
-				completion.opaque_id = delivery->opaque_id;
-				completion.result.status = AwsIamStatus::SHUTDOWN;
-				sink->post(std::move(completion));
-			}
-			{
-				std::lock_guard<std::mutex> gate(delivery->gate);
-				delivery->posting = false;
-				delivery->delivered = true;
+			cv.notify_all();
+			for (auto& delivery : deliveries) {
+				if (auto sink = delivery->sink.lock()) {
+					AwsIamCompletion completion;
+					completion.opaque_id = delivery->opaque_id;
+					completion.result.status = AwsIamStatus::SHUTDOWN;
+					sink->post(std::move(completion));
+				}
 			}
 		}
 		for (auto& worker : workers) if (worker.joinable()) worker.join();
@@ -350,7 +333,7 @@ public:
 			if (signer) signed_result = signer->sign(key);
 			else {
 				signed_result.status = AwsIamStatus::INVALID_CONFIG;
-				 signed_result.failure.category = "missing_signer";
+				signed_result.failure.category = "missing_signer";
 			}
 			const auto generated_at = config.clock();
 			std::vector<PendingCompletion> completions;
@@ -416,47 +399,78 @@ public:
 						}
 					}
 				}
-					total_waiters -= waiters.size();
-					for (const auto& waiter : waiters) {
-						if (std::none_of(completions.begin(), completions.end(),
-							[&](const PendingCompletion& pending) { return pending.handle == waiter.handle; })) {
-							active_deliveries.erase(waiter.handle);
-						}
+				total_waiters -= waiters.size();
+				for (const auto& waiter : waiters) {
+					if (std::none_of(completions.begin(), completions.end(),
+						[&](const PendingCompletion& pending) { return pending.handle == waiter.handle; })) {
+						active_deliveries.erase(waiter.handle);
 					}
-					generations.erase(found);
+				}
+				generations.erase(found);
 			}
-			for (auto& pending : completions) {
-				bool should_post = false;
-				{
-					std::lock_guard<std::mutex> gate(pending.delivery->gate);
-					bool stopped;
-					{
-						std::lock_guard<std::mutex> lock(mu);
-						stopped = shutting_down;
-					}
-					if (!stopped && !pending.delivery->canceled && !pending.delivery->posting &&
-						!pending.delivery->delivered) {
-						pending.delivery->posting = true;
-						should_post = true;
-					}
+			for (auto& pending : completions) dispatch_pending(std::move(pending));
+		}
+	}
+
+	void call_before_dispatch() {
+		if (config.before_dispatch) config.before_dispatch();
+	}
+
+	void dispatch_immediate(CompletionPair&& immediate) {
+		call_before_dispatch();
+		std::lock_guard<std::recursive_mutex> dispatch_lock(dispatch_mu);
+		{
+			std::lock_guard<std::mutex> lock(mu);
+			if (shutting_down) {
+				immediate.second.result.token.clear();
+				immediate.second.result.status = AwsIamStatus::SHUTDOWN;
+			}
+			if (immediate.second.result.status == AwsIamStatus::OK &&
+				immediate.second.result.expires_at - config.clock() <= config.minimum_remaining_lifetime) {
+				auto cached = cache.begin();
+				while (cached != cache.end()) {
+					if (cached->second.generation == immediate.second.result.generation) cached = cache.erase(cached);
+					else ++cached;
 				}
-				if (should_post) {
-					if (auto sink = pending.delivery->sink.lock()) sink->post(std::move(pending.completion));
-					std::lock_guard<std::mutex> gate(pending.delivery->gate);
-					pending.delivery->posting = false;
-					pending.delivery->delivered = true;
-				}
-				std::lock_guard<std::mutex> lock(mu);
-				active_deliveries.erase(pending.handle);
+				immediate.second.result.token.clear();
+				immediate.second.result.status = AwsIamStatus::PROVIDER_ERROR;
+				immediate.second.result.failure.category = "token_not_fresh_at_delivery";
 			}
 		}
+		immediate.first->post(std::move(immediate.second));
+	}
+
+	void dispatch_pending(PendingCompletion&& pending) {
+		call_before_dispatch();
+		std::lock_guard<std::recursive_mutex> dispatch_lock(dispatch_mu);
+		std::shared_ptr<AwsIamCompletionSink> sink;
+		{
+			std::lock_guard<std::mutex> lock(mu);
+			auto active = active_deliveries.find(pending.handle);
+			if (shutting_down || active == active_deliveries.end() || active->second != pending.delivery) return;
+			if (pending.completion.result.status == AwsIamStatus::OK &&
+				pending.completion.result.expires_at - config.clock() <= config.minimum_remaining_lifetime) {
+				for (auto cached = cache.begin(); cached != cache.end();) {
+					if (cached->second.generation == pending.completion.result.generation) cached = cache.erase(cached);
+					else ++cached;
+				}
+				pending.completion.result.token.clear();
+				pending.completion.result.status = AwsIamStatus::PROVIDER_ERROR;
+				pending.completion.result.failure.category = "token_not_fresh_at_delivery";
+			}
+			sink = pending.delivery->sink.lock();
+			active_deliveries.erase(active);
+		}
+		if (sink) sink->post(std::move(pending.completion));
 	}
 
 	std::shared_ptr<AwsIamTokenSigner> signer;
 	AwsIamTokenManagerConfig config;
 	mutable std::mutex mu;
+	std::recursive_mutex dispatch_mu;
 	std::condition_variable cv;
 	bool shutting_down { false };
+	bool valid_config { true };
 	uint64_t next_handle { 1 };
 	uint64_t next_generation { 1 };
 	uint64_t lru_clock { 0 };
@@ -480,11 +494,18 @@ AwsIamRequestHandle AwsIamTokenManager::request(const AwsIamTokenKey& key, uint6
 }
 AwsIamTokenResult AwsIamTokenManager::request_blocking(const AwsIamTokenKey& key,
 	std::chrono::steady_clock::time_point deadline) {
+	if (std::chrono::steady_clock::now() >= deadline) {
+		AwsIamTokenResult result;
+		result.status = AwsIamStatus::TIMEOUT;
+		return result;
+	}
 	auto sink = std::make_shared<BlockingSink>();
 	AwsIamRequestHandle handle = request(key, 0, sink);
 	AwsIamTokenResult result;
-	if (sink->wait_until(deadline, result)) return result;
+	if (std::chrono::steady_clock::now() < deadline && sink->wait_until(deadline, result) &&
+		std::chrono::steady_clock::now() < deadline) return result;
 	cancel(handle);
+	result.token.clear();
 	result.status = AwsIamStatus::TIMEOUT;
 	return result;
 }

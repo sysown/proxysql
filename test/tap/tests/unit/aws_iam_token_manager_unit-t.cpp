@@ -116,6 +116,34 @@ private:
 	std::vector<AwsIamCompletion> completions_;
 };
 
+class DispatchPause {
+public:
+	void hook() {
+		std::unique_lock<std::mutex> lock(mu_);
+		if (!armed_) return;
+		entered_ = true;
+		entered_cv_.notify_all();
+		release_cv_.wait(lock, [&] { return released_; });
+		armed_ = false;
+	}
+	bool wait_until_entered(std::chrono::milliseconds timeout = 2s) {
+		std::unique_lock<std::mutex> lock(mu_);
+		return entered_cv_.wait_for(lock, timeout, [&] { return entered_; });
+	}
+	void release() {
+		std::lock_guard<std::mutex> lock(mu_);
+		released_ = true;
+		release_cv_.notify_all();
+	}
+private:
+	std::mutex mu_;
+	std::condition_variable entered_cv_;
+	std::condition_variable release_cv_;
+	bool armed_ { true };
+	bool entered_ { false };
+	bool released_ { false };
+};
+
 AwsIamTokenKey key(std::string endpoint = "db.us-east-1.rds.amazonaws.com",
 	uint16_t port = 3306, std::string region = "us-east-1", std::string user = "app") {
 	return { std::move(endpoint), port, std::move(region), std::move(user) };
@@ -203,6 +231,28 @@ void test_cache_partition_expiry_and_invalidation() {
 	blocking(manager, base);
 	ok(signer->calls() == 3, "conditional invalidation removes the matching generation");
 
+	FakeClock delivery_clock;
+	auto delivery_signer = std::make_shared<FakeSigner>();
+	DispatchPause delivery_pause;
+	std::atomic<bool> pause_delivery { false };
+	auto delivery_config = config(delivery_clock);
+	delivery_config.before_dispatch = [&] {
+		if (pause_delivery.load()) delivery_pause.hook();
+	};
+	AwsIamTokenManager delivery_manager(delivery_signer, delivery_config);
+	blocking(delivery_manager, key()).token.clear();
+	pause_delivery = true;
+	auto boundary_sink = std::make_shared<CollectingSink>();
+	std::thread boundary_request([&] { delivery_manager.request(key(), 90, boundary_sink); });
+	delivery_pause.wait_until_entered();
+	delivery_clock.advance(13min);
+	delivery_pause.release();
+	boundary_request.join();
+	boundary_sink->wait_for(1);
+	AwsIamTokenResult boundary_result = std::move(boundary_sink->take().result);
+	ok(boundary_result.status != AwsIamStatus::OK && boundary_result.token.empty(),
+		"a cache hit that reaches exactly two minutes remaining before dispatch is not delivered");
+
 	blocking(manager, key("other.us-east-1.rds.amazonaws.com", 3306, "us-east-1", "app"));
 	blocking(manager, key(base.endpoint, 3307, "us-east-1", "app"));
 	blocking(manager, key(base.endpoint, 3306, "us-west-2", "app"));
@@ -249,6 +299,39 @@ void test_coalescing_and_distinct_buffers() {
 	delayed_sink->wait_for(1);
 	ok(delayed_sink->take().result.expires_at == clock.now() + 15min,
 		"queue and signer latency do not consume the generated token lifetime");
+
+	FakeClock freshness_clock;
+	auto invalid_lifetime_signer = std::make_shared<FakeSigner>();
+	auto invalid_lifetime_config = config(freshness_clock);
+	invalid_lifetime_config.generated_lifetime = 2min;
+	AwsIamTokenManager invalid_lifetime_manager(invalid_lifetime_signer, invalid_lifetime_config);
+	AwsIamTokenResult invalid_lifetime = blocking(invalid_lifetime_manager, key());
+	ok(invalid_lifetime.status == AwsIamStatus::INVALID_CONFIG && invalid_lifetime.token.empty() &&
+		invalid_lifetime_signer->calls() == 0,
+		"a generated lifetime at the minimum-remaining boundary is rejected before signing");
+
+	auto stale_signer = std::make_shared<FakeSigner>();
+	stale_signer->set_blocked(true);
+	DispatchPause stale_pause;
+	auto stale_config = config(freshness_clock);
+	stale_config.before_dispatch = [&] { stale_pause.hook(); };
+	AwsIamTokenManager stale_manager(stale_signer, stale_config);
+	auto stale_a = std::make_shared<CollectingSink>();
+	auto stale_b = std::make_shared<CollectingSink>();
+	stale_manager.request(key("stale.us-east-1.rds.amazonaws.com"), 301, stale_a);
+	stale_manager.request(key("stale.us-east-1.rds.amazonaws.com"), 302, stale_b);
+	stale_signer->wait_for_calls(1);
+	stale_signer->set_blocked(false);
+	stale_pause.wait_until_entered();
+	freshness_clock.advance(13min);
+	stale_pause.release();
+	stale_a->wait_for(1);
+	stale_b->wait_for(1);
+	AwsIamCompletion stale_a_result = stale_a->take();
+	AwsIamCompletion stale_b_result = stale_b->take();
+	ok(stale_a_result.result.status != AwsIamStatus::OK && stale_a_result.result.token.empty() &&
+		stale_b_result.result.status != AwsIamStatus::OK && stale_b_result.result.token.empty(),
+		"coalesced results at exactly the minimum-remaining boundary never deliver a token");
 }
 
 void test_pending_and_waiter_bounds() {
@@ -273,7 +356,6 @@ void test_pending_and_waiter_bounds() {
 	auto waiter_signer = std::make_shared<FakeSigner>();
 	waiter_signer->set_blocked(true);
 	auto waiter_cfg = config(waiter_clock, 3);
-	waiter_cfg.worker_count = 1;
 	waiter_cfg.max_waiters_per_key = 2;
 	waiter_cfg.max_total_waiters = 3;
 	AwsIamTokenManager waiter_manager(waiter_signer, waiter_cfg);
@@ -293,18 +375,34 @@ void test_pending_and_waiter_bounds() {
 		waiter_manager.snapshot().waiting_sessions == 3,
 		"per-key and total waiter caps reject without growing the waiter set");
 	waiter_signer->set_blocked(false);
+
+	FakeClock worker_clock;
+	auto worker_signer = std::make_shared<FakeSigner>();
+	worker_signer->set_blocked(true);
+	AwsIamTokenManager worker_manager(worker_signer, config(worker_clock));
+	auto worker_a = std::make_shared<CollectingSink>();
+	auto worker_b = std::make_shared<CollectingSink>();
+	auto worker_c = std::make_shared<CollectingSink>();
+	worker_manager.request(key("worker-a.us-east-1.rds.amazonaws.com"), 10, worker_a);
+	worker_manager.request(key("worker-b.us-east-1.rds.amazonaws.com"), 11, worker_b);
+	worker_manager.request(key("worker-c.us-east-1.rds.amazonaws.com"), 12, worker_c);
+	const bool two_entered = worker_signer->wait_for_calls(2);
+	std::this_thread::sleep_for(20ms);
+	ok(two_entered && worker_signer->calls() == 2 && worker_manager.snapshot().queued_generations == 1,
+		"the manager owns exactly two long-lived signing workers");
+	worker_signer->set_blocked(false);
 }
 
 void test_cancellation_timeout_late_completion_and_shutdown() {
 	FakeClock clock;
 	auto signer = std::make_shared<FakeSigner>();
 	signer->set_blocked(true);
-	auto cfg = config(clock);
-	cfg.worker_count = 1;
-	AwsIamTokenManager manager(signer, cfg);
+	AwsIamTokenManager manager(signer, config(clock));
 	auto active = std::make_shared<CollectingSink>();
 	manager.request(key("active.us-east-1.rds.amazonaws.com"), 1, active);
-	ok(signer->wait_for_calls(1), "the first generation enters the signer");
+	auto second_active = std::make_shared<CollectingSink>();
+	manager.request(key("second-active.us-east-1.rds.amazonaws.com"), 10, second_active);
+	ok(signer->wait_for_calls(2), "both signing workers enter the signer");
 	auto before = std::make_shared<CollectingSink>();
 	AwsIamRequestHandle before_handle = manager.request(key("queued.us-east-1.rds.amazonaws.com"), 2, before);
 	manager.cancel(before_handle);
@@ -317,9 +415,43 @@ void test_cancellation_timeout_late_completion_and_shutdown() {
 	manager.request(key("active.us-east-1.rds.amazonaws.com"), 4, expired);
 	expired.reset();
 	signer->set_blocked(false);
-	ok(active->wait_for(1) && !before->wait_for(1, 50ms) && !during->wait_for(1, 50ms) &&
-		signer->calls() == 1 && manager.snapshot().waiting_sessions == 0,
+	ok(active->wait_for(1) && second_active->wait_for(1) && !before->wait_for(1, 50ms) &&
+		!during->wait_for(1, 50ms) &&
+		signer->calls() == 2 && manager.snapshot().waiting_sessions == 0,
 		"cancel-before-sign, cancel-during-sign, and an expired late sink leave no completion or waiter");
+
+	FakeClock dispatch_clock;
+	auto dispatch_signer = std::make_shared<FakeSigner>();
+	DispatchPause dispatch_pause;
+	auto dispatch_config = config(dispatch_clock);
+	dispatch_config.before_dispatch = [&] { dispatch_pause.hook(); };
+	AwsIamTokenManager dispatch_manager(dispatch_signer, dispatch_config);
+	auto dispatch_sink = std::make_shared<CollectingSink>();
+	AwsIamRequestHandle dispatch_handle = dispatch_manager.request(key(), 20, dispatch_sink);
+	dispatch_pause.wait_until_entered();
+	dispatch_manager.cancel(dispatch_handle);
+	dispatch_pause.release();
+	ok(!dispatch_sink->wait_for(1, 50ms),
+		"cancel at the dispatch boundary returns before and suppresses every later completion");
+
+	auto shutdown_boundary_signer = std::make_shared<FakeSigner>();
+	DispatchPause shutdown_boundary_pause;
+	auto shutdown_boundary_config = config(dispatch_clock);
+	shutdown_boundary_config.before_dispatch = [&] { shutdown_boundary_pause.hook(); };
+	auto shutdown_boundary_manager = std::make_unique<AwsIamTokenManager>(
+		shutdown_boundary_signer, shutdown_boundary_config);
+	auto shutdown_boundary_sink = std::make_shared<CollectingSink>();
+	shutdown_boundary_manager->request(key("shutdown-boundary.us-east-1.rds.amazonaws.com"),
+		21, shutdown_boundary_sink);
+	shutdown_boundary_pause.wait_until_entered();
+	std::thread boundary_shutdown([&] { shutdown_boundary_manager.reset(); });
+	const bool shutdown_won_boundary = shutdown_boundary_sink->wait_for(1);
+	shutdown_boundary_pause.release();
+	boundary_shutdown.join();
+	AwsIamCompletion shutdown_boundary_result = shutdown_boundary_sink->take();
+	ok(shutdown_won_boundary && shutdown_boundary_result.result.status == AwsIamStatus::SHUTDOWN &&
+		shutdown_boundary_sink->size() == 0,
+		"shutdown at the dispatch boundary suppresses the successful completion and posts shutdown once");
 
 	reset_cleanse_observer();
 	auto late_signer = std::make_shared<FakeSigner>();
@@ -346,6 +478,75 @@ void test_cancellation_timeout_late_completion_and_shutdown() {
 	ok(timed_out.status == AwsIamStatus::TIMEOUT && timeout_manager.snapshot().waiting_sessions == 0,
 		"a blocking request cancels its waiter when its deadline expires");
 	timeout_signer->set_blocked(false);
+
+	auto expired_deadline_signer = std::make_shared<FakeSigner>();
+	AwsIamTokenManager expired_deadline_manager(expired_deadline_signer, config(clock));
+	AwsIamTokenResult already_expired = expired_deadline_manager.request_blocking(
+		key(), std::chrono::steady_clock::now());
+	ok(already_expired.status == AwsIamStatus::TIMEOUT && expired_deadline_signer->calls() == 0,
+		"an already-expired blocking deadline takes precedence before a request is started");
+
+	auto immediate_signer = std::make_shared<FakeSigner>();
+	auto immediate_config = config(clock);
+	DispatchPause immediate_pause;
+	std::atomic<bool> pause_immediate { false };
+	immediate_config.before_dispatch = [&] {
+		if (pause_immediate.load()) immediate_pause.hook();
+	};
+	AwsIamTokenManager immediate_timeout_manager(immediate_signer, immediate_config);
+	blocking(immediate_timeout_manager, key()).token.clear();
+	pause_immediate = true;
+	std::thread immediate_release([&] {
+		immediate_pause.wait_until_entered();
+		std::this_thread::sleep_for(30ms);
+		immediate_pause.release();
+	});
+	AwsIamTokenResult immediate_timeout = immediate_timeout_manager.request_blocking(
+		key(), std::chrono::steady_clock::now() + 10ms);
+	immediate_release.join();
+	ok(immediate_timeout.status == AwsIamStatus::TIMEOUT && immediate_timeout.token.empty(),
+		"a blocking deadline crossed while obtaining an immediate cache completion wins over that completion");
+
+	auto completion_signer = std::make_shared<FakeSigner>();
+	DispatchPause completion_pause;
+	auto completion_config = config(clock);
+	completion_config.before_dispatch = [&] { completion_pause.hook(); };
+	AwsIamTokenManager completion_timeout_manager(completion_signer, completion_config);
+	std::thread completion_release([&] {
+		completion_pause.wait_until_entered();
+		std::this_thread::sleep_for(30ms);
+		completion_pause.release();
+	});
+	AwsIamTokenResult completion_timeout = completion_timeout_manager.request_blocking(
+		key(), std::chrono::steady_clock::now() + 10ms);
+	completion_release.join();
+	ok(completion_timeout.status == AwsIamStatus::TIMEOUT && completion_timeout.token.empty(),
+		"a blocking deadline crossed while a generated completion is dispatching wins over that completion");
+
+	auto backoff_signer = std::make_shared<FakeSigner>();
+	ScriptedSign backoff_failure;
+	backoff_failure.status = AwsIamStatus::PROVIDER_ERROR;
+	backoff_failure.token.clear();
+	backoff_signer->push(std::move(backoff_failure));
+	DispatchPause backoff_pause;
+	std::atomic<bool> pause_backoff { false };
+	auto backoff_config = config(clock);
+	backoff_config.before_dispatch = [&] {
+		if (pause_backoff.load()) backoff_pause.hook();
+	};
+	AwsIamTokenManager backoff_timeout_manager(backoff_signer, backoff_config);
+	blocking(backoff_timeout_manager, key());
+	pause_backoff = true;
+	std::thread backoff_release([&] {
+		backoff_pause.wait_until_entered();
+		std::this_thread::sleep_for(30ms);
+		backoff_pause.release();
+	});
+	AwsIamTokenResult backoff_timeout = backoff_timeout_manager.request_blocking(
+		key(), std::chrono::steady_clock::now() + 10ms);
+	backoff_release.join();
+	ok(backoff_timeout.status == AwsIamStatus::TIMEOUT,
+		"a blocking deadline crossed while obtaining an immediate backoff result wins over that result");
 
 	auto shutdown_signer = std::make_shared<FakeSigner>();
 	shutdown_signer->set_blocked(true);
