@@ -27,6 +27,8 @@
 #define STATUS_MYSQL_CONNECTION_HAS_WARNINGS         0x00001000
 
 #include "Servers_SslParams.h"
+#include "Aws_Iam_Token_Manager.h"
+#include "MySQL_Backend_Auth.h"
 
 #ifdef PROXYSQLED25519
 #include "MySQL_Ed25519.h"
@@ -37,6 +39,13 @@ public:
 	char *value = (char*)"";
 	void fill_server_internal_session(nlohmann::json &j, int idx);
 	void fill_client_internal_session(nlohmann::json &j, int idx);
+};
+
+struct MySQLAwsIamIdentity {
+	AwsIamTokenKey key;
+	uint64_t token_generation{0};
+	uint8_t fresh_token_retries{0};
+	SecureString handshake_token;
 };
 
 enum charset_action {
@@ -68,6 +77,10 @@ class MySQL_Connection_userinfo {
 
 class MySQL_Connection {
 	private:
+	MySQLBackendAuthType backend_auth_type_{MySQLBackendAuthType::PASSWORD};
+	std::unique_ptr<MySQLAwsIamIdentity> aws_iam_identity_;
+	bool aws_iam_connector_secret_active_{false};
+	bool aws_iam_async_connect_pending_{false};
 	void update_warning_count_from_connection();
 	void update_warning_count_from_statement();
 	bool is_expired(unsigned long long timeout);
@@ -191,6 +204,11 @@ class MySQL_Connection {
 
 	MySQL_Connection();
 	~MySQL_Connection();
+	void set_backend_auth_type(MySQLBackendAuthType);
+	MySQLBackendAuthType backend_auth_type() const;
+	void attach_aws_iam_token(const AwsIamTokenKey&, AwsIamTokenResult&&);
+	void clear_aws_iam_handshake_secret();
+	bool has_aws_iam_handshake_secret() const;
 	bool set_autocommit(bool);
 	bool set_no_backslash_escapes(bool);
 	unsigned int set_charset(unsigned int, enum charset_action);

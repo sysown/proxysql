@@ -9,6 +9,7 @@ using json = nlohmann::json;
 #include <fcntl.h>
 #include <sstream>
 #include <openssl/crypto.h>
+#include <errmsg.h>
 
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
@@ -515,6 +516,7 @@ MySQL_Connection::MySQL_Connection() {
 
 MySQL_Connection::~MySQL_Connection() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Destroying MySQL_Connection %p\n", this);
+	clear_aws_iam_handshake_secret();
 	if (options.server_version) free(options.server_version);
 	if (options.init_connect) free(options.init_connect);
 	if (options.ldap_user_variable) free(options.ldap_user_variable);
@@ -581,6 +583,61 @@ MySQL_Connection::~MySQL_Connection() {
 		ssl_params = NULL;
 	}
 };
+
+void MySQL_Connection::set_backend_auth_type(MySQLBackendAuthType type) {
+	if (type != MySQLBackendAuthType::AWS_IAM) {
+		clear_aws_iam_handshake_secret();
+		aws_iam_identity_.reset();
+	}
+	backend_auth_type_ = type;
+}
+
+MySQLBackendAuthType MySQL_Connection::backend_auth_type() const {
+	return backend_auth_type_;
+}
+
+void MySQL_Connection::attach_aws_iam_token(
+	const AwsIamTokenKey& key, AwsIamTokenResult&& result)
+{
+	clear_aws_iam_handshake_secret();
+	auto identity = std::make_unique<MySQLAwsIamIdentity>();
+	identity->key = key;
+	identity->token_generation = result.generation;
+	identity->handshake_token = std::move(result.token);
+	aws_iam_identity_ = std::move(identity);
+}
+
+void MySQL_Connection::clear_aws_iam_handshake_secret() {
+	if (mysql != nullptr && mysql->passwd != nullptr &&
+		aws_iam_connector_secret_active_) {
+		OPENSSL_cleanse(mysql->passwd, strlen(mysql->passwd));
+		free(mysql->passwd);
+		mysql->passwd = nullptr;
+	}
+
+	// Connector/C's nonblocking coroutine retains the original passwd pointer
+	// across yields. Destroy the suspended operation before cleansing that
+	// caller-owned buffer so no later mysql_real_connect_cont() can dereference
+	// it. mysql_close_no_command() also destroys the async context without
+	// attempting a blocking COM_QUIT.
+	if (mysql != nullptr && aws_iam_connector_secret_active_ &&
+		aws_iam_async_connect_pending_) {
+		mysql_close_no_command(mysql);
+		mysql = nullptr;
+		ret_mysql = nullptr;
+		fd = -1;
+	}
+
+	if (aws_iam_identity_) {
+		aws_iam_identity_->handshake_token.clear();
+	}
+	aws_iam_connector_secret_active_ = false;
+	aws_iam_async_connect_pending_ = false;
+}
+
+bool MySQL_Connection::has_aws_iam_handshake_secret() const {
+	return aws_iam_identity_ && !aws_iam_identity_->handshake_token.empty();
+}
 
 bool MySQL_Connection::set_autocommit(bool _ac) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Setting autocommit %d\n", _ac);
@@ -1060,6 +1117,32 @@ void MySQL_Connection::connect_start() {
 		}
 	}
 #endif
+	if (backend_auth_type_ == MySQLBackendAuthType::AWS_IAM) {
+		const bool valid_iam_handshake = parent->port != 0 && aws_iam_identity_ &&
+			!aws_iam_identity_->handshake_token.empty();
+		if (!valid_iam_handshake) {
+			mysql->net.last_errno = CR_CONNECTION_ERROR;
+			std::snprintf(mysql->net.last_error, sizeof(mysql->net.last_error),
+				"AWS IAM backend authentication requires a TCP endpoint and handshake token");
+			std::strncpy(mysql->net.sqlstate, "HY000", sizeof(mysql->net.sqlstate));
+			mysql->net.sqlstate[sizeof(mysql->net.sqlstate) - 1] = '\0';
+			ret_mysql = nullptr;
+			async_exit_status = 0;
+			fd = mysql_get_socket(mysql);
+			return;
+		}
+
+		auth_password = const_cast<char *>(aws_iam_identity_->handshake_token.c_str());
+		my_bool enabled = 1;
+		my_bool reconnect = 0;
+		mysql_options(mysql, MYSQL_OPT_SSL_ENFORCE, &enabled);
+		mysql_options(mysql, MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &enabled);
+		mysql_options(mysql, MYSQL_ENABLE_CLEARTEXT_PLUGIN, &enabled);
+		mysql_options(mysql, MYSQL_OPT_RECONNECT, &reconnect);
+		mysql_options(mysql, MARIADB_OPT_TLS_SERVER_NAME,
+			aws_iam_identity_->key.endpoint.c_str());
+		aws_iam_connector_secret_active_ = true;
+	}
 	if (parent->port) {
 		char* host_ip = connect_start_DNS_lookup();
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, host_ip, userinfo->username, auth_password, userinfo->schemaname, parent->port, NULL, client_flags);
@@ -1069,6 +1152,9 @@ void MySQL_Connection::connect_start() {
 			client_flags &= ~(CLIENT_COMPRESS | CLIENT_ZSTD_COMPRESSION_ALGORITHM); // disabling compression for regular connections made via Unix socket
 		}
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, "localhost", userinfo->username, auth_password, userinfo->schemaname, parent->port, parent->address, client_flags);
+	}
+	if (aws_iam_connector_secret_active_) {
+		aws_iam_async_connect_pending_ = async_exit_status != 0;
 	}
 	fd=mysql_get_socket(mysql);
 //	{
@@ -1088,6 +1174,9 @@ void MySQL_Connection::connect_start() {
 void MySQL_Connection::connect_cont(short event) {
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
 	async_exit_status = mysql_real_connect_cont(&ret_mysql, mysql, mysql_status(event, true));
+	if (aws_iam_connector_secret_active_) {
+		aws_iam_async_connect_pending_ = async_exit_status != 0;
+	}
 }
 
 void MySQL_Connection::change_user_start() {
@@ -1308,6 +1397,8 @@ handler_again:
     break;
 			break;
 		case ASYNC_CONNECT_END:
+			aws_iam_async_connect_pending_ = false;
+			clear_aws_iam_handshake_secret();
 			if (myds) {
 				if (myds->sess) {
 					if (myds->sess->thread) {
@@ -1318,7 +1409,11 @@ handler_again:
 			}
 			if (!ret_mysql) {
 				int myerr = mysql_errno(mysql);
-				if (ssl_params != NULL && myerr == 2026) {
+				if (backend_auth_type_ == MySQLBackendAuthType::AWS_IAM) {
+					proxy_error("Failed to connect IAM backend on %u:%s:%d , FD (Conn:%d , MyDS:%d) , %d: authentication details redacted.\n",
+						parent->myhgc->hid, parent->address, parent->port,
+						mysql->net.fd, myds->fd, myerr);
+				} else if (ssl_params != NULL && myerr == 2026) {
 					proxy_error("Failed to mysql_real_connect() on %u:%s:%d , FD (Conn:%d , MyDS:%d) , %d: %s. SSL Params: %s , %s , %s , %s , %s , %s , %s , %s\n",
 						parent->myhgc->hid, parent->address, parent->port, mysql->net.fd , myds->fd, mysql_errno(mysql), mysql_error(mysql),
 						ssl_params->ssl_ca.c_str() , ssl_params->ssl_cert.c_str() , ssl_params->ssl_key.c_str() , ssl_params->ssl_capath.c_str() ,
@@ -1408,10 +1503,14 @@ handler_again:
 			parent->connect_error(mysql_errno(mysql));
 			break;
 		case ASYNC_CONNECT_TIMEOUT:
+			{
+			const int myerr = mysql != nullptr ? mysql_errno(mysql) : CR_CONNECTION_ERROR;
+			clear_aws_iam_handshake_secret();
 			//proxy_error("Connect timeout on %s:%d : %llu - %llu = %llu\n",  parent->address, parent->port, myds->sess->thread->curtime , myds->wait_until, myds->sess->thread->curtime - myds->wait_until);
 			proxy_error("Connect timeout on %s:%d : exceeded by %lluus\n", parent->address, parent->port, myds->sess->thread->curtime - myds->wait_until);
-			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, parent->myhgc->hid, parent->address, parent->port, mysql_errno(mysql));
-			parent->connect_error(mysql_errno(mysql));
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, parent->myhgc->hid, parent->address, parent->port, myerr);
+			parent->connect_error(myerr);
+			}
 			break;
 		case ASYNC_CHANGE_USER_START:
 			change_user_start();
