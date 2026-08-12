@@ -725,6 +725,11 @@ MySQL_Session::MySQL_Session() {
  * @brief Resets the MySQL session to its initial state.
  */
 void MySQL_Session::reset() {
+	pending_user_variable_set.reset();
+	current_query_user_variable_safe = false;
+	user_variable_tracking_latched = false;
+	user_variable_replay_batches.clear();
+	user_variable_replay_batch_index = 0;
 	autocommit=true;
 	autocommit_handled=false;
 	sending_set_autocommit=false;
@@ -3674,6 +3679,8 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 			case -1:
 			case -2:
 			{
+				pending_user_variable_set.reset();
+				current_query_user_variable_safe = false;
 				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, mysql_errno(myconn->mysql));
 				/*
 				 * Pass-through divert (spec §6.4).
@@ -6208,6 +6215,27 @@ handler_again:
 				}
 				gtid_hid = -1;
 				if (rc==0) {
+					if (status == PROCESSING_QUERY && pending_user_variable_set) {
+						const std::vector<UserVariableAssignment>& assignments =
+							pending_user_variable_set->assignments;
+						MySQL_User_Variable_State staged_frontend;
+						MySQL_User_Variable_State staged_backend;
+						const MySQL_User_Variable_Apply_Result frontend_result =
+							client_myds->myconn->user_variables.stage(assignments, staged_frontend);
+						const MySQL_User_Variable_Apply_Result backend_result =
+							myconn->user_variables.stage(assignments, staged_backend);
+						assert(frontend_result == MySQL_User_Variable_Apply_Result::OK);
+						assert(backend_result == MySQL_User_Variable_Apply_Result::OK);
+						if (frontend_result == MySQL_User_Variable_Apply_Result::OK &&
+							backend_result == MySQL_User_Variable_Apply_Result::OK) {
+							client_myds->myconn->user_variables = std::move(staged_frontend);
+							myconn->user_variables = std::move(staged_backend);
+							user_variable_tracking_latched = true;
+							thread->status_variables.stvar[st_var_user_variable_assignments_tracked] +=
+								assignments.size();
+						}
+						pending_user_variable_set.reset();
+					}
 
 					if (active_transactions != 0) {  // run this only if currently we think there is a transaction
 						handler_rc0_RefreshActiveTransactions(myconn);
@@ -6286,6 +6314,8 @@ handler_again:
 					finishQuery(myds,myconn,prepared_stmt_with_no_params);
 				} else {
 					if (rc==-1) {
+						pending_user_variable_set.reset();
+						current_query_user_variable_safe = false;
 						// the query failed
 						int myerr=mysql_errno(myconn->mysql);
 						char *errmsg = NULL;
@@ -7333,6 +7363,49 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	if (CurrentQuery.QueryParserArgs.digest_text) {
 		char *dig=CurrentQuery.QueryParserArgs.digest_text;
 		unsigned int nTrx=NumActiveTransactions();
+		if (strncasecmp(dig,(char *)"SET ",4)==0) {
+			pending_user_variable_set.reset();
+			current_query_user_variable_safe = false;
+
+			const bool plain_text_com_query = command_type == _MYSQL_COM_QUERY &&
+				prepare_stmt_type == ps_type_not_set;
+
+			if (mysql_user_variable_tracking_can_stage(
+				mysql_thread___user_variable_tracking,
+				mysql_thread___set_parser_algorithm,
+				mysql_thread___query_processor_parser,
+				plain_text_com_query,
+				locked_on_hostgroup >= 0)) {
+				UserVariableSetAnalysis analysis = parsersql_analyze_user_variable_set_mysql(
+					(const char *)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
+				switch (analysis.status) {
+					case UserVariableSetStatus::SUPPORTED: {
+						MySQL_User_Variable_State staged;
+						const MySQL_User_Variable_Apply_Result apply_result =
+							client_myds->myconn->user_variables.stage(analysis.assignments, staged);
+						if (apply_result == MySQL_User_Variable_Apply_Result::OK) {
+							pending_user_variable_set = std::move(analysis);
+							current_query_user_variable_safe = true;
+							return false;
+						}
+						thread->status_variables.stvar[st_var_user_variable_fallback_limits]++;
+						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,
+							"User-variable SET tracking fallback reason=RESOURCE_LIMIT\n");
+						unable_to_parse_set_statement(lock_hostgroup);
+						return false;
+					}
+					case UserVariableSetStatus::UNSUPPORTED:
+					case UserVariableSetStatus::PARSE_ERROR:
+						thread->status_variables.stvar[st_var_user_variable_fallback_unsupported]++;
+						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,
+							"User-variable SET tracking fallback reason=UNSUPPORTED_AST\n");
+						unable_to_parse_set_statement(lock_hostgroup);
+						return false;
+					case UserVariableSetStatus::NOT_USER_VARIABLE_SET:
+						break;
+				}
+			}
+		}
 		if ((locked_on_hostgroup == -1) && (strncasecmp(dig,(char *)"SET ",4)==0)) {
 			// this code is executed only if locked_on_hostgroup is not set yet
 			// if locked_on_hostgroup is set, we do not try to parse the SET statement
@@ -7905,6 +7978,12 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				}
 
 				if (failed_to_parse_var) {
+					if (mysql_thread___user_variable_tracking == 1 &&
+						mysql_thread___set_parser_algorithm != 3 &&
+						mysql_thread___query_processor_parser != 1) {
+						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,
+							"User-variable SET tracking fallback reason=PARSER_PREREQUISITE_MISSING\n");
+					}
 					unable_to_parse_set_statement(lock_hostgroup);
 					return false;
 				}
@@ -9046,8 +9125,10 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds,const unsigned int myerrn
 	}
 
 	if (qdt && myds && myds->myconn) {
-		myds->myconn->ProcessQueryAndSetStatusFlags(qdt);
+		myds->myconn->ProcessQueryAndSetStatusFlags(qdt, current_query_user_variable_safe);
 	}
+	current_query_user_variable_safe = false;
+	pending_user_variable_set.reset();
 
 	switch (status) {
 		case PROCESSING_STMT_EXECUTE:

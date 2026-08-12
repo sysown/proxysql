@@ -8,6 +8,7 @@
 #define PROXYSQL_MYSQL_SESSION_H
 
 #include <functional>
+#include <optional>
 #include <vector>
 
 #include "proxysql.h"
@@ -422,6 +423,9 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	std::stack<enum session_status> previous_status;
 	std::vector<MySQL_User_Variable_Replay_Batch> user_variable_replay_batches;
 	size_t user_variable_replay_batch_index { 0 };
+	std::optional<UserVariableSetAnalysis> pending_user_variable_set;
+	bool current_query_user_variable_safe { false };
+	bool user_variable_tracking_latched { false };
 
 	Query_Info CurrentQuery;
 	PtrSize_t mirrorPkt;

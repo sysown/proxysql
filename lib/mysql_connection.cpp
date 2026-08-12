@@ -2959,7 +2959,15 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags_SetBackslashEscapes() {
 	}
 }
 
-void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
+bool mysql_user_variable_tracking_can_stage(
+	int mode, int set_parser_algorithm, int query_processor_parser,
+	bool plain_text_com_query, bool connection_bound_fallback) {
+	return mode == 1 && (set_parser_algorithm == 3 || query_processor_parser == 1) &&
+		plain_text_com_query && !connection_bound_fallback;
+}
+
+void MySQL_Connection::ProcessQueryAndSetStatusFlags(
+	char *query_digest_text, bool user_variable_usage_is_safe) {
 	if (query_digest_text==NULL) return;
 	// unknown what to do with multiplex
 	int mul=-1;
@@ -2980,7 +2988,9 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 
 	ProcessQueryAndSetStatusFlags_Warnings(query_digest_text);
 
-	ProcessQueryAndSetStatusFlags_UserVariables(query_digest_text, mul);
+	if (!user_variable_usage_is_safe) {
+		ProcessQueryAndSetStatusFlags_UserVariables(query_digest_text, mul);
+	}
 
 	if (get_status(STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT)==false) { // we search if prepared was already executed
 		if (!strncasecmp(query_digest_text,"PREPARE ", strlen("PREPARE "))) {

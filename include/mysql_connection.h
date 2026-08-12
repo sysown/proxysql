@@ -64,6 +64,9 @@ class MySQL_Connection_userinfo {
 };
 
 const char* mysql_simple_command_log_text(const char* stmt, bool redact_statement);
+bool mysql_user_variable_tracking_can_stage(
+	int mode, int set_parser_algorithm, int query_processor_parser,
+	bool plain_text_com_query, bool connection_bound_fallback);
 
 class MySQL_Connection {
 	private:
@@ -264,7 +267,7 @@ class MySQL_Connection {
 	bool AutocommitFalse_AndSavepoint();
 	bool MultiplexDisabled(bool check_delay_token = true);
 	bool IsKeepMultiplexEnabledVariables(char *query_digest_text);
-	void ProcessQueryAndSetStatusFlags(char *query_digest_text);
+	void ProcessQueryAndSetStatusFlags(char *query_digest_text, bool user_variable_usage_is_safe);
 	void optimize();
 	void close_mysql();
 

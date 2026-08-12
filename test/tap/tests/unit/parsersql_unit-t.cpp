@@ -11,6 +11,10 @@
 #include <map>
 #include <vector>
 
+bool mysql_user_variable_tracking_can_stage(
+	int mode, int set_parser_algorithm, int query_processor_parser,
+	bool plain_text_com_query, bool connection_bound_fallback);
+
 static inline size_t str_view_len(const char *s) {
 	return s ? std::string_view{s}.size() : 0;
 }
@@ -475,8 +479,59 @@ static void test_user_variable_usage() {
 	}
 }
 
+static void test_user_variable_tracking_policy() {
+	ok(mysql_user_variable_tracking_can_stage(1, 3, 0, true, false),
+		"user-variable tracking policy accepts ParserSQL SET mode");
+	ok(mysql_user_variable_tracking_can_stage(1, 2, 1, true, false),
+		"user-variable tracking policy accepts full-query ParserSQL mode");
+	ok(!mysql_user_variable_tracking_can_stage(0, 3, 0, true, false),
+		"user-variable tracking policy requires mode 1");
+	ok(!mysql_user_variable_tracking_can_stage(2, 3, 0, true, false),
+		"user-variable tracking policy reserves other integer modes");
+	ok(!mysql_user_variable_tracking_can_stage(1, 2, 0, true, false),
+		"user-variable tracking policy requires a ParserSQL prerequisite");
+	ok(!mysql_user_variable_tracking_can_stage(1, 3, 0, false, false),
+		"user-variable tracking policy rejects prepared protocol paths");
+	ok(!mysql_user_variable_tracking_can_stage(1, 3, 0, true, true),
+		"user-variable tracking policy rejects a connection-bound fallback");
+}
+
+static void test_user_variable_staging_preflight() {
+	MySQL_User_Variable_State committed;
+	auto initial = analyze_user_set("SET @kept=1");
+	committed.apply(initial.assignments);
+	const size_t committed_size = committed.size();
+	const size_t committed_bytes = committed.stored_bytes();
+
+	auto update = analyze_user_set("SET @new='value'");
+	MySQL_User_Variable_State staged;
+	auto rc = committed.stage(update.assignments, staged);
+	ok(rc == MySQL_User_Variable_Apply_Result::OK && staged.size() == 2,
+		"user-variable preflight builds the staged post-SET map");
+	ok(committed.size() == committed_size && committed.stored_bytes() == committed_bytes,
+		"user-variable preflight never mutates committed state");
+
+	std::vector<UserVariableAssignment> fill;
+	for (size_t i = 0; i < MySQL_User_Variable_State::kMaxVariables; ++i) {
+		const std::string name = "v" + std::to_string(i);
+		fill.push_back({name, "@" + name, "1", UserVariableLiteralKind::INTEGER, i + 1});
+	}
+	MySQL_User_Variable_State full;
+	full.apply(fill);
+	const size_t full_bytes = full.stored_bytes();
+	MySQL_User_Variable_State rejected;
+	std::vector<UserVariableAssignment> overflow {
+		{"overflow", "@overflow", "2", UserVariableLiteralKind::INTEGER, 999}
+	};
+	rc = full.stage(overflow, rejected);
+	ok(rc == MySQL_User_Variable_Apply_Result::VARIABLE_LIMIT,
+		"user-variable preflight rejects a staged post-SET map over the resource limit");
+	ok(full.size() == MySQL_User_Variable_State::kMaxVariables && full.stored_bytes() == full_bytes,
+		"failed user-variable preflight leaves committed state untouched");
+}
+
 int main() {
-	plan(112);
+	plan(123);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -535,6 +590,8 @@ int main() {
 	test_user_variable_rejections();
 	test_user_variable_hash_contract();
 	test_user_variable_usage();
+	test_user_variable_tracking_policy();
+	test_user_variable_staging_preflight();
 
 	test_cleanup_minimal();
 	return exit_status();
