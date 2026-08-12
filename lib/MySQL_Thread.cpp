@@ -5654,19 +5654,19 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		}
 		{
 			pta[0] = (char*)"MySQL_Monitor_dns_cache_queried";
-			sprintf(buf, "%llu", GloMyMon->dns_cache_queried.load());
+			snprintf(buf, sizeof(buf), "%llu", GloMyMon->dns_cache_queried.load());
 			pta[1] = buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0] = (char*)"MySQL_Monitor_dns_cache_lookup_success";
-			sprintf(buf, "%llu", GloMyMon->dns_cache_lookup_success.load());
+			snprintf(buf, sizeof(buf), "%llu", GloMyMon->dns_cache_lookup_success.load());
 			pta[1] = buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0] = (char*)"MySQL_Monitor_dns_cache_record_updated";
-			sprintf(buf, "%llu", GloMyMon->dns_cache_record_updated.load());
+			snprintf(buf, sizeof(buf), "%llu", GloMyMon->dns_cache_record_updated.load());
 			pta[1] = buf;
 			result->add_row(pta);
 		}
