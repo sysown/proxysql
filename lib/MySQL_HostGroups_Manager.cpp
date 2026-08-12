@@ -1724,6 +1724,41 @@ bool MySQL_HostGroups_Manager::update_gtid_from_ok(MySrvC* mysrvc, const char* g
 	return updated;
 }
 
+GTID_Server_Data* MySQL_HostGroups_Manager::get_or_create_gtid_server_data(
+	MySrvC* server, const std::string& endpoint) {
+	auto existing = gtid_map.find(endpoint);
+	if (existing != gtid_map.end() && existing->second != nullptr) {
+		return existing->second;
+	}
+	if (existing != gtid_map.end()) {
+		gtid_map.erase(existing);
+	}
+
+	auto owned_data = std::make_unique<GTID_Server_Data>(
+		nullptr, server->address, server->gtid_port, server->port);
+	owned_data->active = false;
+	GTID_Server_Data* data = owned_data.get();
+	gtid_map.emplace(endpoint, data);
+	owned_data.release();
+	return data;
+}
+
+void MySQL_HostGroups_Manager::start_gtid_reader_if_needed(
+	MySrvC* server, GTID_Server_Data* data) {
+	if (data->active || server->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+		return;
+	}
+	ev_io* watcher = new_connect_watcher(server->address, server->gtid_port, server->port);
+	if (watcher == nullptr) {
+		gtid_missing_nodes = true;
+		return;
+	}
+	data->w = watcher;
+	data->active = true;
+	watcher->data = static_cast<void*>(data);
+	ev_io_start(MyHGM->gtid_ev_loop, watcher);
+}
+
 /**
  * @brief Generates and manages GTID connection tables for all MySQL servers
  *
@@ -1768,38 +1803,15 @@ void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
 		MySrvC *mysrvc=NULL;
 		for (unsigned int j=0; j<myhgc->mysrvs->servers->len; j++) {
 			mysrvc=myhgc->mysrvs->idx(j);
-			if (mysrvc->gtid_port) {
-				std::string srv = mysrvc->address;
-				srv.append(":");
-				srv.append(std::to_string(mysrvc->port));
-
-				GTID_Server_Data *gtid_sd = nullptr;
-				it = gtid_map.find(srv);
-				if (it != gtid_map.end()) {
-					gtid_sd = it->second;
-				}
-				stale_server.erase(srv);
-
-				if (!gtid_sd) {
-					gtid_sd = new GTID_Server_Data(nullptr, mysrvc->address, mysrvc->gtid_port, mysrvc->port);
-					gtid_sd->active = false;
-					gtid_map.emplace(srv, gtid_sd);
-				}
-
-				if (!gtid_sd->active && mysrvc->get_status() != MYSQL_SERVER_STATUS_OFFLINE_HARD) {
-					// a new server with gtid port
-					// OR an existing server, but we lost connection with binlog_reader
-					struct ev_io *cw = new_connect_watcher(mysrvc->address, mysrvc->gtid_port, mysrvc->port);
-					if (cw) {
-						gtid_sd->w = cw;
-						gtid_sd->active = true;
-						cw->data = static_cast<void *>(gtid_sd);
-						ev_io_start(MyHGM->gtid_ev_loop, cw);
-					} else {
-						gtid_missing_nodes = true;
-					}
-				}
+			if (mysrvc->gtid_port == 0) {
+				continue;
 			}
+			std::string endpoint = mysrvc->address;
+			endpoint.append(":");
+			endpoint.append(std::to_string(mysrvc->port));
+			stale_server.erase(endpoint);
+			GTID_Server_Data* data = get_or_create_gtid_server_data(mysrvc, endpoint);
+			start_gtid_reader_if_needed(mysrvc, data);
 		}
 	}
 
