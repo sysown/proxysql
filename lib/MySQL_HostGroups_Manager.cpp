@@ -6210,11 +6210,8 @@ void init_myhgc_hostgroup_settings(const char* hostgroup_settings, MyHGC* myhgc)
 				}
 			}
 		}
-		catch (const json::exception& e) {
-			proxy_error(
-				"JSON parsing for 'mysql_hostgroup_attributes.hostgroup_settings' for hostgroup %d failed with exception `%s`.\n",
-				hid, e.what()
-			);
+		catch (const json::exception&) {
+			proxy_error("hostgroup_settings_parse_failed for hostgroup %d. Value rejected.\n", hid);
 		}
 	}
 }

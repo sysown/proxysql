@@ -4,7 +4,9 @@
 #include "MySQL_HostGroups_Manager.h"
 
 #include <cstring>
+#include <cstdio>
 #include <string>
+#include <unistd.h>
 
 void init_myhgc_hostgroup_settings(const char* hostgroup_settings, MyHGC* myhgc);
 
@@ -88,6 +90,12 @@ void test_validation_failures() {
 	input = valid_input("database.example.com", "us-east-1");
 	failure_status(input, AwsIamConnectionConfigStatus::INVALID_ENDPOINT, "invalid_endpoint",
 		"custom CNAME endpoint is rejected");
+	const std::string label(63, 'a');
+	const std::string endpoint_over_dns_limit = label + "." + label + "." + label + "." + label +
+		".us-east-1.rds.amazonaws.com";
+	input = valid_input(endpoint_over_dns_limit.c_str(), "us-east-1");
+	failure_status(input, AwsIamConnectionConfigStatus::INVALID_ENDPOINT, "invalid_endpoint",
+		"endpoint exceeding the DNS presentation limit is rejected");
 
 	input = valid_input("instance.abcdef.us-east-1.rds.amazonaws.com", "us-east-1");
 	input.port = 0;
@@ -104,6 +112,43 @@ void test_validation_failures() {
 	input.ssl_capath.clear();
 	failure_status(input, AwsIamConnectionConfigStatus::CA_TRUST_REQUIRED, "ca_trust_required",
 		"IAM connection requires a CA file or CA path");
+}
+
+void test_malformed_hostgroup_settings_diagnostics_are_redacted() {
+	MyHGC hostgroup(43);
+	FILE* captured = tmpfile();
+	if (captured == nullptr) {
+		ok(false, "temporary stderr capture file is available");
+		return;
+	}
+	fflush(stderr);
+	const int saved_stderr = dup(STDERR_FILENO);
+	if (saved_stderr < 0 || dup2(fileno(captured), STDERR_FILENO) < 0) {
+		if (saved_stderr >= 0) {
+			close(saved_stderr);
+		}
+		fclose(captured);
+		ok(false, "stderr is redirected for malformed-settings diagnostics");
+		return;
+	}
+
+	init_myhgc_hostgroup_settings("{\"aws_iam_region\":FAKE_AWS_SECRET}", &hostgroup);
+	fflush(stderr);
+	dup2(saved_stderr, STDERR_FILENO);
+	close(saved_stderr);
+
+	std::string diagnostics;
+	char buffer[256];
+	rewind(captured);
+	while (fgets(buffer, sizeof(buffer), captured) != nullptr) {
+		diagnostics += buffer;
+	}
+	fclose(captured);
+	ok(diagnostics.find("hostgroup_settings_parse_failed") != std::string::npos &&
+		diagnostics.find("FAKE_AWS_SECRET") == std::string::npos,
+		"malformed hostgroup settings diagnostics use a redacted parse failure category without sensitive tokens");
+	ok(diagnostics.find("hostgroup 43") != std::string::npos,
+		"malformed hostgroup settings diagnostics identify the hostgroup without payload details");
 }
 
 void test_hostgroup_region_parser_clears_rejected_values() {
@@ -133,5 +178,6 @@ int main() {
 	test_valid_rds_endpoint_shapes();
 	test_validation_failures();
 	test_hostgroup_region_parser_clears_rejected_values();
+	test_malformed_hostgroup_settings_diagnostics_are_redacted();
 	return exit_status();
 }

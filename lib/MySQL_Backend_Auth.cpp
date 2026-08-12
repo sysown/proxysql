@@ -36,7 +36,7 @@ bool is_dns_label(const std::string& label) {
 }
 
 bool split_rds_endpoint(const std::string& endpoint, std::string& endpoint_region) {
-	if (endpoint.empty() || endpoint.back() == '.') {
+	if (endpoint.empty() || endpoint.size() > 253 || endpoint.back() == '.') {
 		return false;
 	}
 
