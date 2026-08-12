@@ -96,10 +96,26 @@ def verifier(connection, role):
     return value[0]
 
 
-def frontend_login(username, password):
+def frontend_login(username, password, dbname):
     connection = psycopg.connect(
         host=env("TAP_PGSQL_HOST", "127.0.0.1"),
         port=int(env("TAP_PGSQL_PORT", "6133")),
+        dbname=dbname,
+        user=username,
+        password=password,
+        connect_timeout=5,
+    )
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+    finally:
+        connection.close()
+
+
+def backend_login(username, password):
+    connection = psycopg.connect(
+        host=env("TAP_PGSQLSERVER_HOST"),
+        port=int(env("TAP_PGSQLSERVER_PORT", "5432")),
         dbname="postgres",
         user=username,
         password=password,
@@ -165,7 +181,7 @@ def invoke(config_path, extra=()):
     return subprocess.run(command, text=True, capture_output=True)
 
 
-def create_source_objects(connection, names, reader_password, test_password):
+def create_source_objects(connection, names, reader_password, test_password, sentinel_password):
     with connection.cursor() as cursor:
         cursor.execute(sql.SQL("CREATE ROLE {} NOLOGIN").format(sql.Identifier(names["allow"])))
         cursor.execute(
@@ -177,8 +193,17 @@ def create_source_objects(connection, names, reader_password, test_password):
             (test_password,),
         )
         cursor.execute(
+            sql.SQL("CREATE ROLE {} LOGIN PASSWORD %s").format(sql.Identifier(names["sentinel"])),
+            (sentinel_password,),
+        )
+        cursor.execute(
             sql.SQL("GRANT {} TO {}").format(
                 sql.Identifier(names["allow"]), sql.Identifier(names["test"])
+            )
+        )
+        cursor.execute(
+            sql.SQL("GRANT {} TO {}").format(
+                sql.Identifier(names["allow"]), sql.Identifier(names["sentinel"])
             )
         )
         cursor.execute(sql.SQL("CREATE SCHEMA {} AUTHORIZATION CURRENT_USER").format(
@@ -210,7 +235,7 @@ def create_source_objects(connection, names, reader_password, test_password):
 
 def cleanup(connection, names):
     succeeded = True
-    for username in (names["test"], names["control"]):
+    for username in (names["test"], names["sentinel"], names["control"]):
         try:
             admin_execute("DELETE FROM pgsql_users WHERE username=%s", (username,))
         except Exception:
@@ -224,7 +249,7 @@ def cleanup(connection, names):
         try:
             succeeded = all(
                 admin_row(username, runtime=runtime) is None
-                for username in (names["test"], names["control"])
+                for username in (names["test"], names["sentinel"], names["control"])
                 for runtime in (False, True)
             )
         except Exception:
@@ -236,7 +261,7 @@ def cleanup(connection, names):
             cursor.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(
                 sql.Identifier(names["schema"])
             ))
-            for role in (names["test"], names["reader"], names["allow"]):
+            for role in (names["test"], names["sentinel"], names["reader"], names["allow"]):
                 cursor.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(role)))
     except Exception:
         succeeded = False
@@ -249,6 +274,7 @@ def main():
     names = {
         "allow": f"tap_psync_allow_{suffix}",
         "reader": f"tap_psync_reader_{suffix}",
+        "sentinel": f"tap_psync_sentinel_{suffix}",
         "test": f"tap_psync_user_{suffix}",
         "schema": f"tap_psync_schema_{suffix}",
         "control": f"tap_psync_control_{suffix}",
@@ -256,6 +282,7 @@ def main():
     reader_password = secrets.token_urlsafe(24)
     original_password = secrets.token_urlsafe(24)
     rotated_password = secrets.token_urlsafe(24)
+    sentinel_password = secrets.token_urlsafe(24)
     control_password = secrets.token_urlsafe(24)
     source = None
     config_path = None
@@ -263,7 +290,9 @@ def main():
     try:
         source = pg_connection()
         cleanup(source, names)
-        create_source_objects(source, names, reader_password, original_password)
+        create_source_objects(
+            source, names, reader_password, original_password, sentinel_password
+        )
         with tempfile.TemporaryDirectory(prefix="pgsql-user-sync-") as temporary_directory:
             workdir = Path(temporary_directory)
             config_path = workdir / "pgsql-user-sync.ini"
@@ -301,27 +330,46 @@ def main():
                 "sync preserves unmanaged control rows",
             )
 
-            verifier_auth = True
+            frontend_baseline = True
             try:
-                frontend_login(names["test"], original_password)
+                known_username = env("TAP_PGSQL_USERNAME", "testuser")
+                frontend_login(known_username, env("TAP_PGSQL_PASSWORD", "testuser"), known_username)
             except Exception:
-                verifier_auth = False
-                if os.environ.get("TAP_EXPECT_PGSQL_VERIFIER_AUTH") == "1":
-                    tap.check(False, "frontend accepts synchronized verifier")
-                else:
-                    tap.count += 1
-                    print(
-                        f"ok {tap.count} - frontend verifier authentication "
-                        "# SKIP ProxySQL verifier authentication dependency unavailable"
-                    )
+                frontend_baseline = False
+                tap.check(False, "known-good frontend PostgreSQL login succeeds")
             else:
-                tap.check(True, "frontend accepts synchronized verifier")
+                tap.check(True, "known-good frontend PostgreSQL login succeeds")
+            backend_baseline = True
+            try:
+                backend_login(names["test"], original_password)
+            except Exception:
+                backend_baseline = False
+                tap.check(False, "generated role direct backend login succeeds")
+            else:
+                tap.check(True, "generated role direct backend login succeeds")
+
+            verifier_auth = frontend_baseline and backend_baseline
+            if verifier_auth:
                 try:
-                    frontend_login(names["test"], "incorrect-password")
+                    frontend_login(names["test"], original_password, "postgres")
                 except Exception:
-                    tap.check(True, "frontend rejects incorrect password")
+                    verifier_auth = False
+                    if os.environ.get("TAP_EXPECT_PGSQL_VERIFIER_AUTH") == "1":
+                        tap.check(False, "frontend accepts synchronized verifier")
+                    else:
+                        tap.count += 1
+                        print(
+                            f"ok {tap.count} - frontend verifier authentication "
+                            "# SKIP ProxySQL verifier authentication dependency unavailable"
+                        )
                 else:
-                    tap.check(False, "frontend rejects incorrect password")
+                    tap.check(True, "frontend accepts synchronized verifier")
+                    try:
+                        frontend_login(names["test"], "incorrect-password", "postgres")
+                    except Exception:
+                        tap.check(True, "frontend rejects incorrect password")
+                    else:
+                        tap.check(False, "frontend rejects incorrect password")
 
             with source.cursor() as cursor:
                 cursor.execute(sql.SQL("ALTER ROLE {} PASSWORD %s").format(
@@ -337,13 +385,13 @@ def main():
             tap.check(rotated_runtime is not None and rotated_runtime[1] == rotated_verifier, "runtime verifier rotates")
             if verifier_auth:
                 try:
-                    frontend_login(names["test"], rotated_password)
+                    frontend_login(names["test"], rotated_password, "postgres")
                 except Exception:
                     tap.check(False, "frontend accepts rotated verifier")
                 else:
                     tap.check(True, "frontend accepts rotated verifier")
                 try:
-                    frontend_login(names["test"], original_password)
+                    frontend_login(names["test"], original_password, "postgres")
                 except Exception:
                     tap.check(True, "frontend rejects previous password")
                 else:
@@ -374,9 +422,9 @@ def main():
 
             runtime_before_failure = (
                 admin_row(names["test"], runtime=True),
+                admin_row(names["sentinel"], runtime=True),
                 admin_row(names["control"], runtime=True),
             )
-            control_before_failure = admin_row(names["control"])
             with source.cursor() as cursor:
                 cursor.execute(sql.SQL("REVOKE EXECUTE ON FUNCTION {}.export_login_roles() FROM {}").format(
                     sql.Identifier(names["schema"]), sql.Identifier(names["reader"])
@@ -386,15 +434,18 @@ def main():
             tap.check(
                 (
                     admin_row(names["test"], runtime=True),
+                    admin_row(names["sentinel"], runtime=True),
                     admin_row(names["control"], runtime=True),
                 ) == runtime_before_failure,
                 "source-function failure preserves runtime rows",
             )
             tap.check(
-                same_control_row(control_before_failure, admin_row(names["control"])),
-                "source-function failure preserves unmanaged control row",
+                same_control_row(control_before, admin_row(names["control"]))
+                and same_control_row(control_runtime_before, admin_row(names["control"], runtime=True)),
+                "source-function failure preserves original unmanaged control rows",
             )
-    except Exception:
+    except Exception as error:
+        tap.diag(f"lifecycle exception class: {type(error).__name__}")
         tap.check(False, "lifecycle setup and control-plane assertions complete")
     finally:
         tap.check(cleanup(source, names), "cleanup removes test roles and ProxySQL rows")
