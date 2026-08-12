@@ -133,3 +133,75 @@ This task used deterministic unit fixtures and did not make a live AWS/RDS
 connection. Live credential-provider and RDS behavior remains the remit of the
 later integration/system validation tasks; no Task 7 unit or sanitizer
 limitation remains.
+
+## Controller review iteration 1
+
+The review fixes are implemented in commit
+`7fd26aef565bff6a8b573ee15d8d529524a49cf6`
+(`fix(mysql): preserve terminal IAM auth behavior`).
+
+### Findings resolved
+
+- `fail_aws_iam_backend()` now explicitly transitions every IAM failure to
+  `WAITING_CLIENT_DATA` after normal request cleanup, clears the connection
+  deadline, and does not depend on `RequestEnd()` changing fast-forward session
+  state. Existing waiter cancellation, connection destruction, and secure
+  result clearing happen before the transition. Re-dispatch therefore cannot
+  re-enter `WAITING_AWS_IAM_TOKEN` or emit a duplicate client error.
+- An already-authorized pass-through credential retains password backend
+  semantics when the backend username has no `USERNAME_BACKEND` row. The
+  exception is limited to `backend_user_not_found`: malformed policies remain
+  fail-closed and an IAM policy can never fall back to password mode.
+
+### Review TDD evidence
+
+The focused test was extended before the production fix and built/run with:
+
+```bash
+make -C test/tap/tests/unit -j aws_iam_session_state_unit-t
+./test/tap/tests/unit/aws_iam_session_state_unit-t
+```
+
+The genuine RED run failed four new cases:
+
+- fast-forward provider failure retained the IAM wait state and re-entry
+  reached `invalid_wait_state`
+- fast-forward IAM timeout retained the IAM wait state
+- fast-forward IAM configuration failure retained the IAM wait state
+- authorized unknown-user pass-through failed with `backend_user_not_found`
+
+The malformed-policy pass-through control was already green, confirming the
+required fail-closed boundary. After the production fix, the focused session
+suite passed 22/22. The added cases cover provider, timeout, and configuration
+failure in fast-forward mode, duplicate-error prevention, waiter/connection
+cleanup, explicit absence of a backend user row for pass-through, ordinary
+password selection, and malformed-policy rejection.
+
+### Review sanitizer and repetition validation
+
+The final review code passed:
+
+- ASan/LeakSanitizer: completion queue 9/9 and session state 22/22 with
+  `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1`, no diagnostic
+- TSan: completion queue 9/9, including its 100 multi-producer iterations,
+  with `TSAN_OPTIONS=halt_on_error=1`, no diagnostic
+- normal repeated runs: 20/20 queue and 20/20 session runs
+
+All sanitizer builds used the `make -j` commands documented above. The normal
+library and test binaries were rebuilt afterward, and `nm`/`ldd` checks found
+no ASan or TSan runtime reference in the final artifacts.
+
+### Review regression validation
+
+The final normal artifacts passed all seven prior suites:
+
+- `aws_iam_policy_unit-t`: 31/31
+- `aws_iam_connection_config_unit-t`: 34/34
+- `aws_iam_token_manager_unit-t`: 39/39
+- `aws_iam_completion_queue_unit-t`: 9/9
+- `aws_iam_session_state_unit-t`: 22/22
+- `aws_iam_connection_secret_unit-t`: 47/47
+- `connection_pool_unit-t`: 23/23
+
+`git diff --check` was clean. No additional limitation was introduced by this
+review iteration.
