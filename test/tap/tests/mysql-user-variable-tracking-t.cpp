@@ -181,6 +181,38 @@ std::optional<json> internal_session(MYSQL* connection) {
 	}
 }
 
+struct UserVariableAggregate {
+	size_t count { 0 };
+	size_t stored_bytes { 0 };
+	std::string fingerprint;
+};
+
+std::optional<UserVariableAggregate> user_variable_aggregate(MYSQL* connection) {
+	auto session = internal_session(connection);
+	if (!session || !session->contains("conn") ||
+		!(*session)["conn"].contains("user_variables")) {
+		return std::nullopt;
+	}
+	const auto& diagnostics = (*session)["conn"]["user_variables"];
+	if (!diagnostics.contains("count") || !diagnostics["count"].is_number_unsigned() ||
+		!diagnostics.contains("stored_bytes") ||
+		!diagnostics["stored_bytes"].is_number_unsigned() ||
+		!diagnostics.contains("fingerprint") || !diagnostics["fingerprint"].is_string()) {
+		return std::nullopt;
+	}
+	return UserVariableAggregate {
+		diagnostics["count"].get<size_t>(),
+		diagnostics["stored_bytes"].get<size_t>(),
+		diagnostics["fingerprint"].get<std::string>()
+	};
+}
+
+bool aggregates_equal(
+	const UserVariableAggregate& before, const UserVariableAggregate& after) {
+	return before.count == after.count && before.stored_bytes == after.stored_bytes &&
+		before.fingerprint == after.fingerprint;
+}
+
 std::optional<size_t> tracked_user_variable_count(MYSQL* connection) {
 	auto session = internal_session(connection);
 	if (!session || !session->contains("conn") ||
@@ -192,20 +224,6 @@ std::optional<size_t> tracked_user_variable_count(MYSQL* connection) {
 		return std::nullopt;
 	}
 	return diagnostics["count"].get<size_t>();
-}
-
-std::optional<size_t> tracked_user_variable_stored_bytes(MYSQL* connection) {
-	auto session = internal_session(connection);
-	if (!session || !session->contains("conn") ||
-		!(*session)["conn"].contains("user_variables")) {
-		return std::nullopt;
-	}
-	const auto& diagnostics = (*session)["conn"]["user_variables"];
-	if (!diagnostics.contains("stored_bytes") ||
-		!diagnostics["stored_bytes"].is_number_unsigned()) {
-		return std::nullopt;
-	}
-	return diagnostics["stored_bytes"].get<size_t>();
 }
 
 std::optional<int> locked_hostgroup(MYSQL* connection) {
@@ -224,6 +242,15 @@ struct UserVariableCounters {
 	uint64_t fallback_unsupported { 0 };
 	uint64_t fallback_limits { 0 };
 };
+
+bool only_limit_fallback_incremented(
+	const UserVariableCounters& before, const UserVariableCounters& after) {
+	return after.assignments == before.assignments &&
+		after.replay_commands == before.replay_commands &&
+		after.replay_failures == before.replay_failures &&
+		after.fallback_unsupported == before.fallback_unsupported &&
+		after.fallback_limits == before.fallback_limits + 1;
+}
 
 std::optional<UserVariableCounters> user_variable_counters(MYSQL* admin) {
 	auto result = query_result(admin,
@@ -816,19 +843,26 @@ int main() {
 
 	MysqlPtr reset_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
 	const bool reset_staged = reset_session &&
-		execute(reset_session.get(), "SET @reset_lifecycle='reset-value'");
+		execute(reset_session.get(), "/* uv_hg_a */ SET @reset_lifecycle='reset-value'");
+	const auto reset_id_before = reset_session
+		? query_scalar(reset_session.get(), "/* uv_hg_a */ SELECT CONNECTION_ID()") : std::nullopt;
 	const auto count_before_reset = reset_session
 		? tracked_user_variable_count(reset_session.get()) : std::nullopt;
-	ok(reset_staged && count_before_reset && *count_before_reset == 1,
-		"reset lifecycle fixture begins with one committed tracked variable");
+	ok(reset_staged && reset_id_before && !reset_id_before->is_null &&
+		count_before_reset && *count_before_reset == 1,
+		"reset lifecycle fixture begins with one tracked variable on a recorded backend ID");
 	const int reset_rc = reset_session ? mysql_reset_connection(reset_session.get()) : -1;
 	const auto count_after_reset = reset_session
 		? tracked_user_variable_count(reset_session.get()) : std::nullopt;
 	ok(reset_rc == 0 && count_after_reset && *count_after_reset == 0,
 		"mysql_reset_connection clears frontend user-variable diagnostics");
-	ok(reset_session && scalar_equals(
-		reset_session.get(), "SELECT @reset_lifecycle IS NULL", "1"),
-		"mysql_reset_connection clears the backend-visible user-variable value");
+	const auto reset_id_after = reset_session
+		? query_scalar(reset_session.get(), "/* uv_hg_a */ SELECT CONNECTION_ID()") : std::nullopt;
+	ok(reset_session && reset_id_before && !reset_id_before->is_null &&
+		reset_id_after && !reset_id_after->is_null &&
+		reset_id_after->bytes == reset_id_before->bytes && scalar_equals(
+			reset_session.get(), "/* uv_hg_a */ SELECT @reset_lifecycle IS NULL", "1"),
+		"mysql_reset_connection clears the value on the exact recorded backend connection");
 	reset_session.reset();
 
 	struct FallbackCase {
@@ -853,26 +887,37 @@ int main() {
 	bool fallback_cases_bound = true;
 	for (const auto& test_case : fallback_cases) {
 		MysqlPtr session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+		const auto aggregate_before = session
+			? user_variable_aggregate(session.get()) : std::nullopt;
 		const bool query_disposition = session && (test_case.server_accepts
 			? execute(session.get(), test_case.query)
 			: execute_expect_error(session.get(), test_case.query));
+		const auto aggregate_after = session
+			? user_variable_aggregate(session.get()) : std::nullopt;
 		const auto locked = session ? locked_hostgroup(session.get()) : std::nullopt;
-		const bool case_bound = query_disposition && locked && *locked >= 0;
+		const bool case_bound = query_disposition && aggregate_before && aggregate_after &&
+			aggregates_equal(*aggregate_before, *aggregate_after) && locked && *locked >= 0;
 		if (!case_bound) {
-			diag("Fallback case did not bind as required: %s", test_case.label);
+			diag("Fallback case did not preserve aggregate state and bind: %s", test_case.label);
 		}
 		fallback_cases_bound = fallback_cases_bound && case_bound;
 	}
 	ok(fallback_cases_bound,
-		"unsupported, malformed, partial, and assignment queries retain connection-bound fallback");
+		"unsupported, malformed, partial, and assignment queries preserve aggregate state and bind");
 
 	MysqlPtr prepared_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+	const auto prepared_aggregate_before = prepared_session
+		? user_variable_aggregate(prepared_session.get()) : std::nullopt;
 	const bool prepared_set_ok = prepared_session &&
 		execute_prepared(prepared_session.get(), "SET @prepared_fallback=1");
+	const auto prepared_aggregate_after = prepared_session
+		? user_variable_aggregate(prepared_session.get()) : std::nullopt;
 	const auto prepared_lock = prepared_session
 		? locked_hostgroup(prepared_session.get()) : std::nullopt;
-	ok(prepared_set_ok && prepared_lock && *prepared_lock >= 0,
-		"prepared SET retains connection-bound fallback");
+	ok(prepared_set_ok && prepared_aggregate_before && prepared_aggregate_after &&
+		aggregates_equal(*prepared_aggregate_before, *prepared_aggregate_after) &&
+		prepared_lock && *prepared_lock >= 0,
+		"prepared SET preserves aggregate state and retains connection-bound fallback");
 
 	const std::array<FallbackCase, 4> read_only_cases {{
 		{ "plain read", "SELECT @read_only_value", true },
@@ -921,27 +966,26 @@ int main() {
 	}
 	const bool first_128_staged = variable_limit_session &&
 		execute(variable_limit_session.get(), first_128);
-	const auto variable_limit_count_before = variable_limit_session
-		? tracked_user_variable_count(variable_limit_session.get()) : std::nullopt;
+	const auto variable_limit_aggregate_before = variable_limit_session
+		? user_variable_aggregate(variable_limit_session.get()) : std::nullopt;
 	const auto variable_limit_counter_before = user_variable_counters(admin.get());
 	const bool variable_limit_fallback = variable_limit_session &&
 		execute(variable_limit_session.get(), "/* uv_hg_a */ SET @limit_128=129");
-	const auto variable_limit_count_after = variable_limit_session
-		? tracked_user_variable_count(variable_limit_session.get()) : std::nullopt;
+	const auto variable_limit_aggregate_after = variable_limit_session
+		? user_variable_aggregate(variable_limit_session.get()) : std::nullopt;
 	const auto variable_limit_counter_after = user_variable_counters(admin.get());
 	const auto variable_limit_lock = variable_limit_session
 		? locked_hostgroup(variable_limit_session.get()) : std::nullopt;
-	ok(first_128_staged && variable_limit_count_before &&
-		*variable_limit_count_before == 128 && variable_limit_fallback &&
-		variable_limit_count_after && *variable_limit_count_after == 128 &&
-		variable_limit_counter_before && variable_limit_counter_after &&
-		variable_limit_counter_after->assignments == variable_limit_counter_before->assignments &&
-		variable_limit_counter_after->fallback_limits ==
-			variable_limit_counter_before->fallback_limits + 1 &&
+	ok(first_128_staged && variable_limit_aggregate_before &&
+		variable_limit_aggregate_before->count == 128 && variable_limit_fallback &&
+		variable_limit_aggregate_after && aggregates_equal(
+			*variable_limit_aggregate_before, *variable_limit_aggregate_after) &&
+		variable_limit_counter_before && variable_limit_counter_after && only_limit_fallback_incremented(
+			*variable_limit_counter_before, *variable_limit_counter_after) &&
 		variable_limit_lock && *variable_limit_lock >= 0 &&
 		scalar_equals(variable_limit_session.get(), "/* uv_hg_a */ SELECT @limit_0", "0") &&
 		scalar_equals(variable_limit_session.get(), "/* uv_hg_a */ SELECT @limit_128", "129"),
-		"the 129th variable is atomic, increments only limit fallback, and binds the authoritative backend");
+		"the 129th variable preserves its aggregate fingerprint, increments only limit fallback, and binds");
 	variable_limit_session.reset();
 
 	MysqlPtr byte_limit_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
@@ -951,30 +995,26 @@ int main() {
 		"/* uv_hg_b */ SET " + byte_target + "='" + std::string(payload_size, 'x') + "'";
 	const bool byte_limit_staged = byte_limit_session &&
 		execute(byte_limit_session.get(), byte_limit_set);
-	const auto byte_limit_bytes_before = byte_limit_session
-		? tracked_user_variable_stored_bytes(byte_limit_session.get()) : std::nullopt;
-	const auto byte_limit_count_before = byte_limit_session
-		? tracked_user_variable_count(byte_limit_session.get()) : std::nullopt;
+	const auto byte_limit_aggregate_before = byte_limit_session
+		? user_variable_aggregate(byte_limit_session.get()) : std::nullopt;
 	const auto byte_limit_counter_before = user_variable_counters(admin.get());
 	const bool byte_limit_fallback = byte_limit_session &&
 		execute(byte_limit_session.get(), "/* uv_hg_b */ SET @byte_limit_over=1");
-	const auto byte_limit_bytes_after = byte_limit_session
-		? tracked_user_variable_stored_bytes(byte_limit_session.get()) : std::nullopt;
-	const auto byte_limit_count_after = byte_limit_session
-		? tracked_user_variable_count(byte_limit_session.get()) : std::nullopt;
+	const auto byte_limit_aggregate_after = byte_limit_session
+		? user_variable_aggregate(byte_limit_session.get()) : std::nullopt;
 	const auto byte_limit_counter_after = user_variable_counters(admin.get());
 	const auto byte_limit_lock = byte_limit_session
 		? locked_hostgroup(byte_limit_session.get()) : std::nullopt;
-	ok(byte_limit_staged && byte_limit_bytes_before && *byte_limit_bytes_before == 64 * 1024 &&
-		byte_limit_count_before && *byte_limit_count_before == 1 && byte_limit_fallback &&
-		byte_limit_bytes_after && *byte_limit_bytes_after == 64 * 1024 &&
-		byte_limit_count_after && *byte_limit_count_after == 1 &&
-		byte_limit_counter_before && byte_limit_counter_after &&
-		byte_limit_counter_after->assignments == byte_limit_counter_before->assignments &&
-		byte_limit_counter_after->fallback_limits == byte_limit_counter_before->fallback_limits + 1 &&
+	ok(byte_limit_staged && byte_limit_aggregate_before &&
+		byte_limit_aggregate_before->stored_bytes == 64 * 1024 &&
+		byte_limit_aggregate_before->count == 1 && byte_limit_fallback &&
+		byte_limit_aggregate_after && aggregates_equal(
+			*byte_limit_aggregate_before, *byte_limit_aggregate_after) &&
+		byte_limit_counter_before && byte_limit_counter_after && only_limit_fallback_incremented(
+			*byte_limit_counter_before, *byte_limit_counter_after) &&
 		byte_limit_lock && *byte_limit_lock >= 0 &&
 		scalar_equals(byte_limit_session.get(), "/* uv_hg_b */ SELECT @byte_limit_over", "1"),
-		"state over 64 KiB is atomic, increments only limit fallback, and binds the authoritative backend");
+		"state over 64 KiB preserves its aggregate fingerprint, increments only limit fallback, and binds");
 	byte_limit_session.reset();
 
 	owned.context_function = execute(direct.get(),
@@ -1223,26 +1263,18 @@ int main() {
 	MysqlPtr status_fallback_session = connect_mysql(
 		cl.host, cl.port, cl.username, cl.password, "test");
 	const bool status_fallback_query = status_fallback_session &&
-		execute(status_fallback_session.get(), "SELECT @status_fallback:=1");
+		execute(status_fallback_session.get(), "/* uv_hg_a */ SELECT @status_fallback:=1");
 	const auto status_fallback_lock = status_fallback_session
 		? locked_hostgroup(status_fallback_session.get()) : std::nullopt;
 	auto status_fallback_internal = status_fallback_session
 		? internal_session(status_fallback_session.get()) : std::nullopt;
-	bool status_fallback_has_protected_backend = false;
-	if (status_fallback_internal && (*status_fallback_internal).contains("backends")) {
-		for (const auto& backend : (*status_fallback_internal)["backends"]) {
-			if (!backend.contains("conn")) {
-				continue;
-			}
-			const auto& conn = backend["conn"];
-			status_fallback_has_protected_backend = status_fallback_has_protected_backend ||
-				(conn.contains("status") && conn["status"].value("user_variable", false) &&
-				 conn.value("MultiplexDisabled", false));
-		}
-	}
+	const AttachedBackendStatus status_fallback_status = status_fallback_internal
+		? inspect_attached_backend_status(*status_fallback_internal, 18110)
+		: AttachedBackendStatus {};
 	ok(set_lock_disabled && status_fallback_query && status_fallback_lock &&
-		*status_fallback_lock == -1 && status_fallback_has_protected_backend,
-		"set-query-lock=0 uses backend connection status fallback for unsafe user-variable use");
+		*status_fallback_lock == -1 && status_fallback_status.matching_hostgroups == 1 &&
+		status_fallback_status.user_variable && status_fallback_status.multiplex_disabled,
+		"set-query-lock=0 protects the exact routed backend with user-variable status");
 	status_fallback_session.reset();
 	const bool set_lock_restored = set_admin_variable(
 		admin.get(), "mysql-set_query_lock_on_hostgroup", "1") &&
@@ -1251,19 +1283,28 @@ int main() {
 
 	MysqlPtr change_user_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
 	const bool change_user_staged = change_user_session &&
-		execute(change_user_session.get(), "SET @change_user_lifecycle='change-user-value'");
+		execute(change_user_session.get(), "/* uv_hg_b */ SET @change_user_lifecycle='change-user-value'");
+	const auto change_user_id_before = change_user_session
+		? query_scalar(change_user_session.get(), "/* uv_hg_b */ SELECT CONNECTION_ID()")
+		: std::nullopt;
 	const auto change_user_count_before = change_user_session
 		? tracked_user_variable_count(change_user_session.get()) : std::nullopt;
-	ok(change_user_staged && change_user_count_before && *change_user_count_before == 1,
-		"change-user lifecycle fixture begins with one committed tracked variable");
+	ok(change_user_staged && change_user_id_before && !change_user_id_before->is_null &&
+		change_user_count_before && *change_user_count_before == 1,
+		"change-user lifecycle fixture begins with one tracked variable on a recorded backend ID");
 	const int change_user_rc = change_user_session
 		? mysql_change_user(change_user_session.get(), cl.username, cl.password, "test") : -1;
 	const auto change_user_count_after = change_user_session
 		? tracked_user_variable_count(change_user_session.get()) : std::nullopt;
+	const auto change_user_id_after = change_user_session
+		? query_scalar(change_user_session.get(), "/* uv_hg_b */ SELECT CONNECTION_ID()")
+		: std::nullopt;
 	ok(change_user_rc == 0 && change_user_count_after && *change_user_count_after == 0 &&
-		change_user_session && scalar_equals(
-			change_user_session.get(), "SELECT @change_user_lifecycle IS NULL", "1"),
-		"mysql_change_user to the same credentials clears diagnostics and backend-visible value");
+		change_user_session && change_user_id_before && !change_user_id_before->is_null &&
+		change_user_id_after && !change_user_id_after->is_null &&
+		change_user_id_after->bytes == change_user_id_before->bytes && scalar_equals(
+			change_user_session.get(), "/* uv_hg_b */ SELECT @change_user_lifecycle IS NULL", "1"),
+		"mysql_change_user clears diagnostics and the value on the exact recorded backend connection");
 	change_user_session.reset();
 
 	MysqlPtr disconnect_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
