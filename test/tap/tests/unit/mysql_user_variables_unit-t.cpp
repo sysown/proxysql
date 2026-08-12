@@ -149,10 +149,11 @@ void test_replay_completion_decisions() {
 	MySQL_User_Variable_State failed_backend;
 	completion = mysql_user_variable_replay_complete(failed_backend, plan.batches, 0, false);
 	not_matching = 0;
-	ok(completion == MySQL_User_Variable_Replay_Completion::FAIL_CLIENT_QUERY_AND_RETIRE_BACKEND &&
-		failed_backend.count_matches(desired, not_matching) == 0 && not_matching == 2 &&
+	ok(completion == MySQL_User_Variable_Replay_Completion::FAIL_CLIENT_QUERY_AND_RETIRE_BACKEND,
+		"replay failure action fails the pending query and retires the backend");
+	ok(failed_backend.count_matches(desired, not_matching) == 0 && not_matching == 2 &&
 		desired.size() == 2,
-		"replay error applies nothing, retires the backend, and leaves frontend desired state intact");
+		"replay error applies nothing and leaves frontend desired state intact");
 
 	MySQL_User_Variable_State empty_queue_backend;
 	completion = mysql_user_variable_replay_complete(empty_queue_backend, {}, 0, true);
@@ -321,7 +322,7 @@ void test_simple_command_log_redaction() {
 } // namespace
 
 int main() {
-	plan(67);
+	plan(68);
 	test_staging_and_limits();
 	test_collision_safe_comparison();
 	test_replay_planning();

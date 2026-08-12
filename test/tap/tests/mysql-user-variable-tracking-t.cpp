@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -65,6 +66,31 @@ bool execute(MYSQL* connection, const std::string& query) {
 	return result != nullptr || mysql_field_count(connection) == 0;
 }
 
+bool execute_expect_error(MYSQL* connection, const std::string& query) {
+	if (mysql_real_query(connection, query.data(), query.size()) == 0) {
+		MysqlResultPtr result(mysql_store_result(connection), &mysql_free_result);
+		diag("Query unexpectedly succeeded (SQL text redacted)");
+		return false;
+	}
+	return mysql_errno(connection) != 0 && std::strlen(mysql_sqlstate(connection)) == 5;
+}
+
+bool execute_prepared(MYSQL* connection, const std::string& query) {
+	MYSQL_STMT* statement = mysql_stmt_init(connection);
+	if (!statement) {
+		return false;
+	}
+	const bool success =
+		mysql_stmt_prepare(statement, query.data(), query.size()) == 0 &&
+		mysql_stmt_execute(statement) == 0 && mysql_stmt_store_result(statement) == 0;
+	if (!success) {
+		diag("Prepared query failed: errno=%u sqlstate=%s (SQL text redacted)",
+			mysql_stmt_errno(statement), mysql_stmt_sqlstate(statement));
+	}
+	mysql_stmt_close(statement);
+	return success;
+}
+
 std::optional<QueryResult> query_result(MYSQL* connection, const std::string& query) {
 	if (mysql_real_query(connection, query.data(), query.size()) != 0) {
 		diag("Query failed: errno=%u sqlstate=%s (SQL text redacted)",
@@ -118,6 +144,11 @@ bool result_cells_equal(const ResultCell& left, const ResultCell& right) {
 		(left.is_null || left.bytes == right.bytes);
 }
 
+bool scalar_equals(MYSQL* connection, const std::string& query, const char* expected) {
+	auto cell = query_scalar(connection, query);
+	return cell && !cell->is_null && cell->bytes == expected;
+}
+
 bool query_rows_equal(MYSQL* proxy, MYSQL* direct, const std::string& query) {
 	auto proxy_result = query_result(proxy, query);
 	auto direct_result = query_result(direct, query);
@@ -150,12 +181,117 @@ std::optional<json> internal_session(MYSQL* connection) {
 	}
 }
 
+std::optional<size_t> tracked_user_variable_count(MYSQL* connection) {
+	auto session = internal_session(connection);
+	if (!session || !session->contains("conn") ||
+		!(*session)["conn"].contains("user_variables")) {
+		return std::nullopt;
+	}
+	const auto& diagnostics = (*session)["conn"]["user_variables"];
+	if (!diagnostics.contains("count") || !diagnostics["count"].is_number_unsigned()) {
+		return std::nullopt;
+	}
+	return diagnostics["count"].get<size_t>();
+}
+
+std::optional<size_t> tracked_user_variable_stored_bytes(MYSQL* connection) {
+	auto session = internal_session(connection);
+	if (!session || !session->contains("conn") ||
+		!(*session)["conn"].contains("user_variables")) {
+		return std::nullopt;
+	}
+	const auto& diagnostics = (*session)["conn"]["user_variables"];
+	if (!diagnostics.contains("stored_bytes") ||
+		!diagnostics["stored_bytes"].is_number_unsigned()) {
+		return std::nullopt;
+	}
+	return diagnostics["stored_bytes"].get<size_t>();
+}
+
+std::optional<int> locked_hostgroup(MYSQL* connection) {
+	auto session = internal_session(connection);
+	if (!session || !session->contains("locked_on_hostgroup") ||
+		!(*session)["locked_on_hostgroup"].is_number_integer()) {
+		return std::nullopt;
+	}
+	return (*session)["locked_on_hostgroup"].get<int>();
+}
+
+struct UserVariableCounters {
+	uint64_t assignments { 0 };
+	uint64_t replay_commands { 0 };
+	uint64_t replay_failures { 0 };
+	uint64_t fallback_unsupported { 0 };
+	uint64_t fallback_limits { 0 };
+};
+
+std::optional<UserVariableCounters> user_variable_counters(MYSQL* admin) {
+	auto result = query_result(admin,
+		"SELECT Variable_Name,Variable_Value FROM stats_mysql_global WHERE Variable_Name IN ("
+		"'User_variable_assignments_tracked','User_variable_replay_commands',"
+		"'User_variable_replay_failures','User_variable_fallback_unsupported',"
+		"'User_variable_fallback_limits')");
+	if (!result || result->rows.size() != 5) {
+		return std::nullopt;
+	}
+	std::map<std::string, uint64_t> values;
+	for (const auto& row : result->rows) {
+		if (row.size() != 2 || row[0].is_null || row[1].is_null) {
+			return std::nullopt;
+		}
+		values[row[0].bytes] = std::stoull(row[1].bytes);
+	}
+	const std::array<const char*, 5> names {
+		"User_variable_assignments_tracked", "User_variable_replay_commands",
+		"User_variable_replay_failures", "User_variable_fallback_unsupported",
+		"User_variable_fallback_limits"
+	};
+	for (const char* name : names) {
+		if (!values.count(name)) {
+			return std::nullopt;
+		}
+	}
+	return UserVariableCounters {
+		values[names[0]], values[names[1]], values[names[2]], values[names[3]], values[names[4]]
+	};
+}
+
 struct BackendUdvInspection {
 	size_t matching_hostgroups { 0 };
 	size_t statuses_present { 0 };
 	size_t inspected { 0 };
 	bool all_clear { true };
 };
+
+struct AttachedBackendStatus {
+	size_t matching_hostgroups { 0 };
+	bool user_variable { false };
+	bool no_multiplex { false };
+	bool multiplex_disabled { false };
+};
+
+AttachedBackendStatus inspect_attached_backend_status(
+	const json& session, int expected_hostgroup) {
+	AttachedBackendStatus inspection;
+	if (!session.contains("backends") || !session["backends"].is_array()) {
+		return inspection;
+	}
+	for (const auto& backend : session["backends"]) {
+		if (!backend.contains("hostgroup_id") ||
+			backend.value("hostgroup_id", -1) != expected_hostgroup ||
+			!backend.contains("conn")) {
+			continue;
+		}
+		++inspection.matching_hostgroups;
+		const auto& connection = backend["conn"];
+		if (connection.contains("status") && connection["status"].is_object()) {
+			inspection.user_variable = connection["status"].value("user_variable", false);
+			inspection.no_multiplex = connection["status"].value("no_multiplex", false);
+		}
+		inspection.multiplex_disabled = connection.value("MultiplexDisabled", false);
+	}
+	return inspection;
+}
 
 BackendUdvInspection inspect_backend_user_variable_status(
 	const json& session, int expected_hostgroup) {
@@ -216,6 +352,7 @@ struct FixtureOwnership {
 	bool rules { false };
 	bool read_function { false };
 	bool metadata_function { false };
+	bool context_function { false };
 };
 
 std::optional<std::string> admin_variable(MYSQL* admin, const char* name) {
@@ -341,6 +478,9 @@ bool restore_config(
 	}
 	if (owned.metadata_function && direct_backend) {
 		success = execute(direct_backend, "DROP FUNCTION IF EXISTS test.proxysql_uv_metadata") && success;
+	}
+	if (owned.context_function && direct_backend) {
+		success = execute(direct_backend, "DROP FUNCTION IF EXISTS test.proxysql_uv_context_metadata") && success;
 	}
 	if (owned.rules) {
 		success = execute(admin, "DELETE FROM mysql_query_rules WHERE comment=" + sql_quote(admin, tag)) && success;
@@ -673,6 +813,528 @@ int main() {
 	ok(isolated_values_are_null,
 		"the fresh frontend sees NULL through both reused pooled backend connections");
 	isolated.reset();
+
+	MysqlPtr reset_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+	const bool reset_staged = reset_session &&
+		execute(reset_session.get(), "SET @reset_lifecycle='reset-value'");
+	const auto count_before_reset = reset_session
+		? tracked_user_variable_count(reset_session.get()) : std::nullopt;
+	ok(reset_staged && count_before_reset && *count_before_reset == 1,
+		"reset lifecycle fixture begins with one committed tracked variable");
+	const int reset_rc = reset_session ? mysql_reset_connection(reset_session.get()) : -1;
+	const auto count_after_reset = reset_session
+		? tracked_user_variable_count(reset_session.get()) : std::nullopt;
+	ok(reset_rc == 0 && count_after_reset && *count_after_reset == 0,
+		"mysql_reset_connection clears frontend user-variable diagnostics");
+	ok(reset_session && scalar_equals(
+		reset_session.get(), "SELECT @reset_lifecycle IS NULL", "1"),
+		"mysql_reset_connection clears the backend-visible user-variable value");
+	reset_session.reset();
+
+	struct FallbackCase {
+		const char* label;
+		const char* query;
+		bool server_accepts;
+	};
+	const std::array<FallbackCase, 12> fallback_cases {{
+		{ "expression", "SET @fallback_value=1+1", true },
+		{ "mixed system/user SET", "SET @fallback_value=1, sql_mode=''", true },
+		{ "parenthesized value", "SET @fallback_value=(1)", true },
+		{ "cast", "SET @fallback_value=CAST(1 AS SIGNED)", true },
+		{ "character-set introducer", "SET @fallback_value=_utf8mb4'value'", true },
+		{ "collation", "SET @fallback_value=_utf8mb4'value' COLLATE utf8mb4_bin", true },
+		{ "malformed literal", "SET @fallback_value='unterminated", false },
+		{ "partial statement", "SET @fallback_value=1 garbage", false },
+		{ "trailing comma", "SET @fallback_value=1,", false },
+		{ "second statement", "SET @fallback_value=1; SELECT 1", false },
+		{ "SELECT assignment", "SELECT @fallback_value:=1", true },
+		{ "SELECT INTO", "SELECT 1 INTO @fallback_value", true }
+	}};
+	bool fallback_cases_bound = true;
+	for (const auto& test_case : fallback_cases) {
+		MysqlPtr session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+		const bool query_disposition = session && (test_case.server_accepts
+			? execute(session.get(), test_case.query)
+			: execute_expect_error(session.get(), test_case.query));
+		const auto locked = session ? locked_hostgroup(session.get()) : std::nullopt;
+		const bool case_bound = query_disposition && locked && *locked >= 0;
+		if (!case_bound) {
+			diag("Fallback case did not bind as required: %s", test_case.label);
+		}
+		fallback_cases_bound = fallback_cases_bound && case_bound;
+	}
+	ok(fallback_cases_bound,
+		"unsupported, malformed, partial, and assignment queries retain connection-bound fallback");
+
+	MysqlPtr prepared_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+	const bool prepared_set_ok = prepared_session &&
+		execute_prepared(prepared_session.get(), "SET @prepared_fallback=1");
+	const auto prepared_lock = prepared_session
+		? locked_hostgroup(prepared_session.get()) : std::nullopt;
+	ok(prepared_set_ok && prepared_lock && *prepared_lock >= 0,
+		"prepared SET retains connection-bound fallback");
+
+	const std::array<FallbackCase, 4> read_only_cases {{
+		{ "plain read", "SELECT @read_only_value", true },
+		{ "comparison", "SELECT @read_only_value = 1", true },
+		{ "at-sign string", "SELECT '@read_only_value'", true },
+		{ "at-sign comment", "SELECT 1 /* @read_only_value */", true }
+	}};
+	bool read_only_cases_unlocked = true;
+	for (const auto& test_case : read_only_cases) {
+		MysqlPtr session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+		const bool query_ok = session && execute(session.get(), test_case.query);
+		const auto locked = session ? locked_hostgroup(session.get()) : std::nullopt;
+		const bool case_unlocked = query_ok && locked && *locked == -1;
+		if (!case_unlocked) {
+			diag("Read-only case unexpectedly bound: %s", test_case.label);
+		}
+		read_only_cases_unlocked = read_only_cases_unlocked && case_unlocked;
+	}
+	ok(read_only_cases_unlocked,
+		"plain reads, comparisons, strings, and comments containing at-signs remain unlocked");
+
+	MysqlPtr rejected_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+	const auto rejected_counter_before = user_variable_counters(admin.get());
+	const auto rejected_count_before = rejected_session
+		? tracked_user_variable_count(rejected_session.get()) : std::nullopt;
+	const bool rejected_by_backend = rejected_session &&
+		execute_expect_error(rejected_session.get(), "SET @backend_rejected=1e999999999");
+	const auto rejected_count_after = rejected_session
+		? tracked_user_variable_count(rejected_session.get()) : std::nullopt;
+	const auto rejected_counter_after = user_variable_counters(admin.get());
+	ok(rejected_by_backend && rejected_count_before && *rejected_count_before == 0 &&
+		rejected_count_after && *rejected_count_after == 0 && rejected_counter_before &&
+		rejected_counter_after &&
+		rejected_counter_after->assignments == rejected_counter_before->assignments,
+		"backend rejection commits no tracked state and increments no assignment counter");
+	rejected_session.reset();
+
+	MysqlPtr variable_limit_session = connect_mysql(
+		cl.host, cl.port, cl.username, cl.password, "test");
+	std::string first_128 = "/* uv_hg_a */ SET ";
+	for (size_t i = 0; i < 128; ++i) {
+		if (i != 0) {
+			first_128 += ',';
+		}
+		first_128 += "@limit_" + std::to_string(i) + "=" + std::to_string(i);
+	}
+	const bool first_128_staged = variable_limit_session &&
+		execute(variable_limit_session.get(), first_128);
+	const auto variable_limit_count_before = variable_limit_session
+		? tracked_user_variable_count(variable_limit_session.get()) : std::nullopt;
+	const auto variable_limit_counter_before = user_variable_counters(admin.get());
+	const bool variable_limit_fallback = variable_limit_session &&
+		execute(variable_limit_session.get(), "/* uv_hg_a */ SET @limit_128=129");
+	const auto variable_limit_count_after = variable_limit_session
+		? tracked_user_variable_count(variable_limit_session.get()) : std::nullopt;
+	const auto variable_limit_counter_after = user_variable_counters(admin.get());
+	const auto variable_limit_lock = variable_limit_session
+		? locked_hostgroup(variable_limit_session.get()) : std::nullopt;
+	ok(first_128_staged && variable_limit_count_before &&
+		*variable_limit_count_before == 128 && variable_limit_fallback &&
+		variable_limit_count_after && *variable_limit_count_after == 128 &&
+		variable_limit_counter_before && variable_limit_counter_after &&
+		variable_limit_counter_after->assignments == variable_limit_counter_before->assignments &&
+		variable_limit_counter_after->fallback_limits ==
+			variable_limit_counter_before->fallback_limits + 1 &&
+		variable_limit_lock && *variable_limit_lock >= 0 &&
+		scalar_equals(variable_limit_session.get(), "/* uv_hg_a */ SELECT @limit_0", "0") &&
+		scalar_equals(variable_limit_session.get(), "/* uv_hg_a */ SELECT @limit_128", "129"),
+		"the 129th variable is atomic, increments only limit fallback, and binds the authoritative backend");
+	variable_limit_session.reset();
+
+	MysqlPtr byte_limit_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+	const std::string byte_target = "@byte_limit_base";
+	const size_t payload_size = 64 * 1024 - byte_target.size() - 2;
+	const std::string byte_limit_set =
+		"/* uv_hg_b */ SET " + byte_target + "='" + std::string(payload_size, 'x') + "'";
+	const bool byte_limit_staged = byte_limit_session &&
+		execute(byte_limit_session.get(), byte_limit_set);
+	const auto byte_limit_bytes_before = byte_limit_session
+		? tracked_user_variable_stored_bytes(byte_limit_session.get()) : std::nullopt;
+	const auto byte_limit_count_before = byte_limit_session
+		? tracked_user_variable_count(byte_limit_session.get()) : std::nullopt;
+	const auto byte_limit_counter_before = user_variable_counters(admin.get());
+	const bool byte_limit_fallback = byte_limit_session &&
+		execute(byte_limit_session.get(), "/* uv_hg_b */ SET @byte_limit_over=1");
+	const auto byte_limit_bytes_after = byte_limit_session
+		? tracked_user_variable_stored_bytes(byte_limit_session.get()) : std::nullopt;
+	const auto byte_limit_count_after = byte_limit_session
+		? tracked_user_variable_count(byte_limit_session.get()) : std::nullopt;
+	const auto byte_limit_counter_after = user_variable_counters(admin.get());
+	const auto byte_limit_lock = byte_limit_session
+		? locked_hostgroup(byte_limit_session.get()) : std::nullopt;
+	ok(byte_limit_staged && byte_limit_bytes_before && *byte_limit_bytes_before == 64 * 1024 &&
+		byte_limit_count_before && *byte_limit_count_before == 1 && byte_limit_fallback &&
+		byte_limit_bytes_after && *byte_limit_bytes_after == 64 * 1024 &&
+		byte_limit_count_after && *byte_limit_count_after == 1 &&
+		byte_limit_counter_before && byte_limit_counter_after &&
+		byte_limit_counter_after->assignments == byte_limit_counter_before->assignments &&
+		byte_limit_counter_after->fallback_limits == byte_limit_counter_before->fallback_limits + 1 &&
+		byte_limit_lock && *byte_limit_lock >= 0 &&
+		scalar_equals(byte_limit_session.get(), "/* uv_hg_b */ SELECT @byte_limit_over", "1"),
+		"state over 64 KiB is atomic, increments only limit fallback, and binds the authoritative backend");
+	byte_limit_session.reset();
+
+	owned.context_function = execute(direct.get(),
+		"CREATE FUNCTION test.proxysql_uv_context_metadata() RETURNS VARCHAR(256) "
+		"DETERMINISTIC NO SQL RETURN CONCAT_WS('|',HEX(@context_value),"
+		"CHARSET(@context_value),COLLATION(@context_value))");
+	ok(owned.context_function,
+		"the interpretation-context metadata function is created with fixture ownership");
+
+	MysqlPtr sql_mode_proxy = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+	MysqlPtr sql_mode_direct = connect_mysql(
+		endpoint->hostname.c_str(), endpoint->port, cl.mysql_username, cl.mysql_password, "test",
+		endpoint->use_ssl != 0);
+	const bool sql_mode_context_preserved = sql_mode_proxy && sql_mode_direct &&
+		execute(sql_mode_proxy.get(), "/* uv_hg_a */ SET @context_value='A\\n'") &&
+		execute(sql_mode_direct.get(), "SET @context_value='A\\n'") &&
+		execute(sql_mode_proxy.get(), "/* uv_hg_a */ SET sql_mode='NO_BACKSLASH_ESCAPES'") &&
+		execute(sql_mode_direct.get(), "SET sql_mode='NO_BACKSLASH_ESCAPES'") &&
+		query_rows_equal(sql_mode_proxy.get(), sql_mode_direct.get(),
+			"/* uv_hg_a */ SELECT test.proxysql_uv_context_metadata()");
+	const auto sql_mode_lock = sql_mode_proxy
+		? locked_hostgroup(sql_mode_proxy.get()) : std::nullopt;
+	ok(sql_mode_context_preserved && sql_mode_lock && *sql_mode_lock >= 0,
+		"sql_mode changes bind before execution and preserve prior HEX, charset, and collation");
+	sql_mode_proxy.reset();
+	sql_mode_direct.reset();
+
+	MysqlPtr names_proxy = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+	MysqlPtr names_direct = connect_mysql(
+		endpoint->hostname.c_str(), endpoint->port, cl.mysql_username, cl.mysql_password, "test",
+		endpoint->use_ssl != 0);
+	const bool names_context_preserved = names_proxy && names_direct &&
+		execute(names_proxy.get(), "/* uv_hg_b */ SET @context_value='context-value'") &&
+		execute(names_direct.get(), "SET @context_value='context-value'") &&
+		execute(names_proxy.get(), "/* uv_hg_b */ SET NAMES latin1") &&
+		execute(names_direct.get(), "SET NAMES latin1") &&
+		query_rows_equal(names_proxy.get(), names_direct.get(),
+			"/* uv_hg_b */ SELECT test.proxysql_uv_context_metadata()");
+	const auto names_lock = names_proxy ? locked_hostgroup(names_proxy.get()) : std::nullopt;
+	ok(names_context_preserved && names_lock && *names_lock >= 0,
+		"SET NAMES binds before execution and preserves prior HEX, charset, and collation");
+	names_proxy.reset();
+	names_direct.reset();
+
+	std::fstream prerequisite_log;
+	const bool prerequisite_log_ready = infra_datadir &&
+		open_file_and_seek_end(std::string(infra_datadir) + "/proxysql.log", prerequisite_log) == 0;
+	const bool misconfigured_loaded =
+		set_admin_variable(admin.get(), "mysql-user_variable_tracking", "1") &&
+		set_admin_variable(admin.get(), "mysql-set_parser_algorithm", "2") &&
+		set_admin_variable(admin.get(), "mysql-query_processor_parser", "0") &&
+		execute(admin.get(), "LOAD MYSQL VARIABLES TO RUNTIME");
+	MysqlPtr misconfigured_session = connect_mysql(
+		cl.host, cl.port, cl.username, cl.password, "test");
+	const bool inactive_set_forwarded = misconfigured_session &&
+		execute(misconfigured_session.get(), "SET @misconfigured_value='misconfigured-secret'");
+	const auto inactive_count = misconfigured_session
+		? tracked_user_variable_count(misconfigured_session.get()) : std::nullopt;
+	const auto inactive_lock = misconfigured_session
+		? locked_hostgroup(misconfigured_session.get()) : std::nullopt;
+	const auto configured_tracking = admin_variable(admin.get(), "mysql-user_variable_tracking");
+	const auto configured_set_parser = admin_variable(admin.get(), "mysql-set_parser_algorithm");
+	const auto configured_query_parser = admin_variable(admin.get(), "mysql-query_processor_parser");
+	ok(misconfigured_loaded && inactive_set_forwarded && inactive_count && *inactive_count == 0 &&
+		inactive_lock && *inactive_lock >= 0 && configured_tracking && *configured_tracking == "1" &&
+		configured_set_parser && *configured_set_parser == "2" && configured_query_parser &&
+		*configured_query_parser == "0",
+		"mode 1 without ParserSQL prerequisites stays inactive without forcing parser configuration");
+
+	size_t prerequisite_warning_count = 0;
+	bool prerequisite_warning_names_all_config = true;
+	bool prerequisite_warning_redacted = true;
+	if (prerequisite_log_ready) {
+		for (int poll = 0; poll < 20; ++poll) {
+			prerequisite_log.clear();
+			std::string line;
+			while (std::getline(prerequisite_log, line)) {
+				if (line.find("mysql-user_variable_tracking=1 remains inactive") == std::string::npos) {
+					continue;
+				}
+				++prerequisite_warning_count;
+				prerequisite_warning_names_all_config = prerequisite_warning_names_all_config &&
+					line.find("mysql-user_variable_tracking") != std::string::npos &&
+					line.find("mysql-set_parser_algorithm") != std::string::npos &&
+					line.find("mysql-query_processor_parser") != std::string::npos;
+				prerequisite_warning_redacted = prerequisite_warning_redacted &&
+					line.find("misconfigured-secret") == std::string::npos;
+			}
+			usleep(100000);
+		}
+	}
+	ok(prerequisite_log_ready && prerequisite_warning_count == 1 &&
+		prerequisite_warning_names_all_config && prerequisite_warning_redacted,
+		"one prerequisite warning names all configuration inputs without the SET literal");
+	misconfigured_session.reset();
+
+	const bool full_query_parser_loaded =
+		set_admin_variable(admin.get(), "mysql-set_parser_algorithm", "2") &&
+		set_admin_variable(admin.get(), "mysql-query_processor_parser", "1") &&
+		execute(admin.get(), "LOAD MYSQL VARIABLES TO RUNTIME");
+	MysqlPtr full_query_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+	const bool full_query_tracked = full_query_session &&
+		execute(full_query_session.get(), "SET @full_query_parser='alternative'");
+	const auto full_query_count = full_query_session
+		? tracked_user_variable_count(full_query_session.get()) : std::nullopt;
+	const auto full_query_lock = full_query_session
+		? locked_hostgroup(full_query_session.get()) : std::nullopt;
+	ok(full_query_parser_loaded && full_query_tracked && full_query_count &&
+		*full_query_count == 1 && full_query_lock && *full_query_lock == -1,
+		"full-query ParserSQL activates tracking while SET parser algorithm remains 2");
+	full_query_session.reset();
+	const bool primary_parser_restored =
+		set_admin_variable(admin.get(), "mysql-set_parser_algorithm", "3") &&
+		set_admin_variable(admin.get(), "mysql-query_processor_parser", "0") &&
+		execute(admin.get(), "LOAD MYSQL VARIABLES TO RUNTIME");
+	ok(primary_parser_restored,
+		"ParserSQL SET mode is restored before remaining lifecycle phases");
+
+	MysqlPtr mode_drain_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+	const bool mode_drain_staged = mode_drain_session &&
+		execute(mode_drain_session.get(), "SET @mode_drain='drain-value'");
+	const bool mode_disabled = set_admin_variable(
+		admin.get(), "mysql-user_variable_tracking", "0") &&
+		execute(admin.get(), "LOAD MYSQL VARIABLES TO RUNTIME");
+	const bool mode_drain_reads = mode_drain_session &&
+		scalar_equals(mode_drain_session.get(), "/* uv_hg_a */ SELECT @mode_drain", "drain-value") &&
+		scalar_equals(mode_drain_session.get(), "/* uv_hg_b */ SELECT @mode_drain", "drain-value");
+	const auto mode_count_before_fallback = mode_drain_session
+		? tracked_user_variable_count(mode_drain_session.get()) : std::nullopt;
+	const bool mode_new_set_fallback = mode_drain_session &&
+		execute(mode_drain_session.get(), "/* uv_hg_b */ SET @mode_disabled_new='fallback'");
+	const auto mode_count_after_fallback = mode_drain_session
+		? tracked_user_variable_count(mode_drain_session.get()) : std::nullopt;
+	const auto mode_drain_lock = mode_drain_session
+		? locked_hostgroup(mode_drain_session.get()) : std::nullopt;
+	MysqlPtr mode_fresh_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+	const bool mode_fresh_fallback = mode_fresh_session &&
+		execute(mode_fresh_session.get(), "/* uv_hg_a */ SET @mode_fresh='fallback'");
+	const auto mode_fresh_count = mode_fresh_session
+		? tracked_user_variable_count(mode_fresh_session.get()) : std::nullopt;
+	const auto mode_fresh_lock = mode_fresh_session
+		? locked_hostgroup(mode_fresh_session.get()) : std::nullopt;
+	ok(mode_drain_staged && mode_disabled && mode_drain_reads &&
+		mode_count_before_fallback && *mode_count_before_fallback == 1 &&
+		mode_new_set_fallback && mode_count_after_fallback && *mode_count_after_fallback == 1 &&
+		mode_drain_lock && *mode_drain_lock >= 0 && mode_fresh_fallback &&
+		mode_fresh_count && *mode_fresh_count == 0 && mode_fresh_lock && *mode_fresh_lock >= 0,
+		"runtime mode disable drains tracked state across both hostgroups and makes new sessions fall back");
+	mode_drain_session.reset();
+	mode_fresh_session.reset();
+	const bool mode_reenabled = set_admin_variable(
+		admin.get(), "mysql-user_variable_tracking", "1") &&
+		execute(admin.get(), "LOAD MYSQL VARIABLES TO RUNTIME");
+	ok(mode_reenabled, "tracking mode is restored after mode-disable drain coverage");
+
+	MysqlPtr parser_drain_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+	const bool parser_drain_staged = parser_drain_session &&
+		execute(parser_drain_session.get(), "SET @parser_drain='drain-value'");
+	const bool parsers_disabled =
+		set_admin_variable(admin.get(), "mysql-set_parser_algorithm", "2") &&
+		set_admin_variable(admin.get(), "mysql-query_processor_parser", "0") &&
+		execute(admin.get(), "LOAD MYSQL VARIABLES TO RUNTIME");
+	const bool parser_drain_reads = parser_drain_session &&
+		scalar_equals(parser_drain_session.get(), "/* uv_hg_a */ SELECT @parser_drain", "drain-value") &&
+		scalar_equals(parser_drain_session.get(), "/* uv_hg_b */ SELECT @parser_drain", "drain-value");
+	const auto parser_count_before_fallback = parser_drain_session
+		? tracked_user_variable_count(parser_drain_session.get()) : std::nullopt;
+	const bool parser_new_set_fallback = parser_drain_session &&
+		execute(parser_drain_session.get(), "/* uv_hg_b */ SET @parser_disabled_new='fallback'");
+	const auto parser_count_after_fallback = parser_drain_session
+		? tracked_user_variable_count(parser_drain_session.get()) : std::nullopt;
+	const auto parser_drain_lock = parser_drain_session
+		? locked_hostgroup(parser_drain_session.get()) : std::nullopt;
+	ok(parser_drain_staged && parsers_disabled && parser_drain_reads &&
+		parser_count_before_fallback && *parser_count_before_fallback == 1 &&
+		parser_new_set_fallback && parser_count_after_fallback && *parser_count_after_fallback == 1 &&
+		parser_drain_lock && *parser_drain_lock >= 0,
+		"runtime ParserSQL prerequisite disable drains prior state and makes new SET fall back");
+	parser_drain_session.reset();
+	const bool parsers_reenabled = set_admin_variable(
+		admin.get(), "mysql-set_parser_algorithm", "3") &&
+		execute(admin.get(), "LOAD MYSQL VARIABLES TO RUNTIME");
+	ok(parsers_reenabled, "ParserSQL SET mode is restored after prerequisite-drain coverage");
+
+	auto min_rule_id = query_scalar(admin.get(),
+		"SELECT IFNULL(MIN(rule_id),0) FROM mysql_query_rules");
+	const long policy_rule_base = min_rule_id && !min_rule_id->is_null
+		? std::stol(min_rule_id->bytes) - 2 : -181300000L;
+	auto policy_rule_collision = query_result(admin.get(),
+		"SELECT (SELECT COUNT(*) FROM mysql_query_rules WHERE rule_id IN (" +
+		std::to_string(policy_rule_base) + "," + std::to_string(policy_rule_base + 1) + "))," +
+		"(SELECT COUNT(*) FROM runtime_mysql_query_rules WHERE rule_id IN (" +
+		std::to_string(policy_rule_base) + "," + std::to_string(policy_rule_base + 1) + "))");
+	const bool policy_rule_ids_free = policy_rule_collision &&
+		policy_rule_collision->rows.size() == 1 && policy_rule_collision->rows.front().size() == 2 &&
+		!policy_rule_collision->rows.front()[0].is_null &&
+		policy_rule_collision->rows.front()[0].bytes == "0" &&
+		!policy_rule_collision->rows.front()[1].is_null &&
+		policy_rule_collision->rows.front()[1].bytes == "0";
+	const bool policy_rules_loaded = policy_rule_ids_free && execute(admin.get(),
+		"INSERT INTO mysql_query_rules(rule_id,active,username,match_pattern,destination_hostgroup,"
+		"multiplex,apply,comment) VALUES (" + std::to_string(policy_rule_base) + ",1," +
+		sql_quote(admin.get(), cl.username) + "," + sql_quote(admin.get(), "^/\\* uv_mux0 \\*/") +
+		",18110,0,1," + sql_quote(admin.get(), tag) + "),(" +
+		std::to_string(policy_rule_base + 1) + ",1," + sql_quote(admin.get(), cl.username) + "," +
+		sql_quote(admin.get(), "^/\\* uv_mux1 \\*/") + ",18111,1,1," +
+		sql_quote(admin.get(), tag) + ")") &&
+		execute(admin.get(), "LOAD MYSQL QUERY RULES TO RUNTIME");
+	ok(policy_rules_loaded,
+		"collision-free tagged multiplex policy rules are loaded ahead of fixture routes");
+
+	MysqlPtr mux0_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+	const bool mux0_set = mux0_session &&
+		execute(mux0_session.get(), "/* uv_mux0 */ SET @mux0_value='tracked'");
+	const auto mux0_count = mux0_session
+		? tracked_user_variable_count(mux0_session.get()) : std::nullopt;
+	const bool mux0_transaction = mux0_session &&
+		execute(mux0_session.get(), "/* uv_mux0 */ START TRANSACTION") &&
+		scalar_equals(mux0_session.get(), "/* uv_mux0 */ SELECT @mux0_value", "tracked");
+	auto mux0_internal = mux0_session ? internal_session(mux0_session.get()) : std::nullopt;
+	const AttachedBackendStatus mux0_status = mux0_internal
+		? inspect_attached_backend_status(*mux0_internal, 18110) : AttachedBackendStatus {};
+	const bool mux0_rollback = mux0_session && execute(mux0_session.get(), "ROLLBACK");
+	ok(mux0_set && mux0_count && *mux0_count == 1 && mux0_transaction &&
+		mux0_status.matching_hostgroups == 1 && mux0_status.no_multiplex &&
+		mux0_status.multiplex_disabled && mux0_rollback,
+		"multiplex=0 is authoritative while supported SET remains tracked and readable");
+	mux0_session.reset();
+
+	MysqlPtr mux1_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+	const bool mux1_unsafe = mux1_session &&
+		execute(mux1_session.get(), "/* uv_mux1 */ SELECT @mux1_value:=1");
+	const auto mux1_lock = mux1_session ? locked_hostgroup(mux1_session.get()) : std::nullopt;
+	auto mux1_internal = mux1_session ? internal_session(mux1_session.get()) : std::nullopt;
+	const AttachedBackendStatus mux1_status = mux1_internal
+		? inspect_attached_backend_status(*mux1_internal, 18111) : AttachedBackendStatus {};
+	ok(mux1_unsafe && mux1_lock && *mux1_lock == -1 &&
+		mux1_status.matching_hostgroups == 1 && mux1_status.user_variable &&
+		mux1_status.multiplex_disabled,
+		"multiplex=1 unsafe use avoids hostgroup lock but remains protected from pool leakage");
+	mux1_session.reset();
+
+	const bool set_lock_disabled = set_admin_variable(
+		admin.get(), "mysql-set_query_lock_on_hostgroup", "0") &&
+		execute(admin.get(), "LOAD MYSQL VARIABLES TO RUNTIME");
+	MysqlPtr status_fallback_session = connect_mysql(
+		cl.host, cl.port, cl.username, cl.password, "test");
+	const bool status_fallback_query = status_fallback_session &&
+		execute(status_fallback_session.get(), "SELECT @status_fallback:=1");
+	const auto status_fallback_lock = status_fallback_session
+		? locked_hostgroup(status_fallback_session.get()) : std::nullopt;
+	auto status_fallback_internal = status_fallback_session
+		? internal_session(status_fallback_session.get()) : std::nullopt;
+	bool status_fallback_has_protected_backend = false;
+	if (status_fallback_internal && (*status_fallback_internal).contains("backends")) {
+		for (const auto& backend : (*status_fallback_internal)["backends"]) {
+			if (!backend.contains("conn")) {
+				continue;
+			}
+			const auto& conn = backend["conn"];
+			status_fallback_has_protected_backend = status_fallback_has_protected_backend ||
+				(conn.contains("status") && conn["status"].value("user_variable", false) &&
+				 conn.value("MultiplexDisabled", false));
+		}
+	}
+	ok(set_lock_disabled && status_fallback_query && status_fallback_lock &&
+		*status_fallback_lock == -1 && status_fallback_has_protected_backend,
+		"set-query-lock=0 uses backend connection status fallback for unsafe user-variable use");
+	status_fallback_session.reset();
+	const bool set_lock_restored = set_admin_variable(
+		admin.get(), "mysql-set_query_lock_on_hostgroup", "1") &&
+		execute(admin.get(), "LOAD MYSQL VARIABLES TO RUNTIME");
+	ok(set_lock_restored, "default SET lock policy is restored after status-fallback coverage");
+
+	MysqlPtr change_user_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+	const bool change_user_staged = change_user_session &&
+		execute(change_user_session.get(), "SET @change_user_lifecycle='change-user-value'");
+	const auto change_user_count_before = change_user_session
+		? tracked_user_variable_count(change_user_session.get()) : std::nullopt;
+	ok(change_user_staged && change_user_count_before && *change_user_count_before == 1,
+		"change-user lifecycle fixture begins with one committed tracked variable");
+	const int change_user_rc = change_user_session
+		? mysql_change_user(change_user_session.get(), cl.username, cl.password, "test") : -1;
+	const auto change_user_count_after = change_user_session
+		? tracked_user_variable_count(change_user_session.get()) : std::nullopt;
+	ok(change_user_rc == 0 && change_user_count_after && *change_user_count_after == 0 &&
+		change_user_session && scalar_equals(
+			change_user_session.get(), "SELECT @change_user_lifecycle IS NULL", "1"),
+		"mysql_change_user to the same credentials clears diagnostics and backend-visible value");
+	change_user_session.reset();
+
+	MysqlPtr disconnect_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+	const bool disconnect_staged = disconnect_session &&
+		execute(disconnect_session.get(), "/* uv_hg_a */ SET @disconnect_lifecycle='disconnect-value'");
+	const auto disconnect_id = disconnect_session
+		? query_scalar(disconnect_session.get(), "/* uv_hg_a */ SELECT CONNECTION_ID()") : std::nullopt;
+	const bool disconnect_value_present = disconnect_session && scalar_equals(
+		disconnect_session.get(), "/* uv_hg_a */ SELECT @disconnect_lifecycle", "disconnect-value");
+	disconnect_session.reset();
+	MysqlPtr after_disconnect = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+	const auto reused_disconnect_id = after_disconnect
+		? query_scalar(after_disconnect.get(), "/* uv_hg_a */ SELECT CONNECTION_ID()") : std::nullopt;
+	ok(disconnect_staged && disconnect_id && !disconnect_id->is_null &&
+		disconnect_value_present && reused_disconnect_id && !reused_disconnect_id->is_null &&
+		reused_disconnect_id->bytes == disconnect_id->bytes && after_disconnect &&
+		scalar_equals(after_disconnect.get(),
+			"/* uv_hg_a */ SELECT @disconnect_lifecycle IS NULL", "1"),
+		"disconnect clears state before the exact pooled backend is reused by a fresh frontend");
+	after_disconnect.reset();
+
+	const auto counter_baseline = user_variable_counters(admin.get());
+	MysqlPtr counter_replay_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+	const bool counter_assignments_staged = counter_replay_session &&
+		execute(counter_replay_session.get(), "SET @counter_alpha=1,@counter_bravo=2");
+	std::array<std::optional<ResultCell>, 2> counter_route_ids;
+	bool counter_replays_observed = counter_replay_session != nullptr;
+	for (size_t route_index = 0; route_index < route_comments.size(); ++route_index) {
+		const std::string& route = route_comments[route_index];
+		counter_replays_observed = counter_replays_observed &&
+			execute(counter_replay_session.get(), route + "START TRANSACTION");
+		counter_route_ids[route_index] = query_scalar(
+			counter_replay_session.get(), route + "SELECT CONNECTION_ID()");
+		auto values = query_result(
+			counter_replay_session.get(), route + "SELECT @counter_alpha,@counter_bravo");
+		counter_replays_observed = counter_replays_observed && values &&
+			values->rows.size() == 1 && values->rows.front().size() == 2 &&
+			!values->rows.front()[0].is_null && values->rows.front()[0].bytes == "1" &&
+			!values->rows.front()[1].is_null && values->rows.front()[1].bytes == "2" &&
+			execute(counter_replay_session.get(), "ROLLBACK");
+	}
+	counter_replays_observed = counter_replays_observed && counter_route_ids[0] &&
+		counter_route_ids[1] && !counter_route_ids[0]->is_null && !counter_route_ids[1]->is_null &&
+		counter_route_ids[0]->bytes != counter_route_ids[1]->bytes;
+	counter_replay_session.reset();
+
+	MysqlPtr counter_unsupported_session = connect_mysql(
+		cl.host, cl.port, cl.username, cl.password, "test");
+	const bool counter_unsupported = counter_unsupported_session &&
+		execute(counter_unsupported_session.get(), "SET @counter_unsupported=1+1");
+	counter_unsupported_session.reset();
+
+	MysqlPtr counter_limit_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+	const std::string counter_limit_target = "@counter_limit_base";
+	const size_t counter_limit_payload_size = 64 * 1024 - counter_limit_target.size() - 2;
+	const bool counter_limit_base = counter_limit_session && execute(
+		counter_limit_session.get(), "/* uv_hg_a */ SET " + counter_limit_target + "='" +
+			std::string(counter_limit_payload_size, 'y') + "'");
+	const bool counter_limit_overflow = counter_limit_session &&
+		execute(counter_limit_session.get(), "/* uv_hg_a */ SET @counter_limit_over=1");
+	counter_limit_session.reset();
+	const auto counter_final = user_variable_counters(admin.get());
+	ok(counter_baseline && counter_assignments_staged && counter_replays_observed &&
+		counter_unsupported && counter_limit_base && counter_limit_overflow && counter_final &&
+		counter_final->assignments == counter_baseline->assignments + 3 &&
+		counter_final->replay_commands == counter_baseline->replay_commands + 2 &&
+		counter_final->replay_failures == counter_baseline->replay_failures &&
+		counter_final->fallback_unsupported == counter_baseline->fallback_unsupported + 1 &&
+		counter_final->fallback_limits == counter_baseline->fallback_limits + 1,
+		"controlled traffic produces exact deltas for all five user-variable counters");
+
 	ok(cleanup.run(),
 		"temporary functions, rules, hostgroups, and runtime variables are restored");
 	return exit_status();
