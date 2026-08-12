@@ -9,7 +9,7 @@
 ## Implementation
 
 - `cmake/aws-sdk-cpp/CMakeLists.txt` requires AWSSDK 1.9 with only `core;rds`, quotes generated values, writes the make fragment through a temporary file plus atomic rename, uses `AWSSDK_LINK_LIBRARIES` for shared SDKs, and clears/recomputes `AWSSDK_DETERMINE_LIBS_TO_LINK()` scratch state for static SDKs.
-- `common_mk/aws_sdk_cpp_flags.mk` performs discovery only for `PROXYSQLAWSIAM=1`, exports `AWS_SDK_CPP_ROOT` to an authoritative prefix-only CMake search, remakes/includes the generated fragment, emits the exact failure diagnostic, and fingerprints the complete discovered identity so incremental flag changes rebuild and relink affected targets.
+- `common_mk/aws_sdk_cpp_flags.mk` performs discovery only for `PROXYSQLAWSIAM=1`, exports `AWS_SDK_CPP_ROOT` to an authoritative prefix-only AWSSDK search while also passing it as `CMAKE_PREFIX_PATH` for nested package lookups, remakes/includes the generated fragment, emits the exact failure diagnostic, and fingerprints the complete discovered identity so incremental flag changes rebuild and relink affected targets.
 - The SDK-off factory is synchronous, uses no AWS headers, creates no worker thread, and returns `SUPPORT_NOT_COMPILED` for requests.
 - The SDK-on adapter owns exactly one `Aws::SDKOptions`, initializes the SDK before constructing a standard-chain `RDSClient`, creates one client per region lazily under a mutex, and invokes the required `GenerateConnectAuthToken(endpoint, region, port, user)` signature. Empty output maps to `CREDENTIAL_PROVIDER_ERROR`; no credential fields are copied or logged.
 - Member and process teardown order is manager workers, regional clients, then `Aws::ShutdownAPI()`. Startup initializes the source after daemonization/auth initialization and before MySQL workers. Normal and phase-3 failure shutdown paths join MySQL workers before destroying the source.
@@ -74,3 +74,31 @@ AWS SDK for C++ remains an optional external Apache-2.0 dependency discovered by
 ### Iteration commit
 
 - `2c8c94ae9d948a76ec056116603d3c92baefaa81` — `fix(build): stabilize AWS SDK feature identity`
+
+## Controller review fix iteration 2
+
+### RED / GREEN evidence
+
+- RED, nested discovery: the fake AWSSDK package was extended to call `find_package(aws-c-common REQUIRED CONFIG)` and require a marker defined only by the nested package beneath the requested nonstandard prefix. Before the production fix, `PROXYSQLAWSIAM=1 AWS_SDK_CPP_ROOT=<fixture> make -j -s -f <fixture Makefile>` exited 2 because CMake could not find `aws-c-common` and explicitly recommended adding the prefix to `CMAKE_PREFIX_PATH`. GREEN: the same fixture passes after the requested root is also supplied as `CMAKE_PREFIX_PATH`; the outer AWSSDK search remains authoritative through `PATHS <requested-root> NO_DEFAULT_PATH`.
+- RED, concurrent discovery: twelve simultaneous feature-on `make -j` processes alternated between fake SDK roots reporting versions 1.11.101/shared and 1.11.202/static. The former shared configure directory and fixed temporary paths produced one failed process and ten wrong-root results, including concurrent `CMakeFiles` removal/configure failures and temporary-fragment rename failures. GREEN: the same deterministic twelve-process regression passes with every process consuming the expected version.
+- Discovery is now serialized with a process-scoped CMake file lock, uses a configure directory keyed by the requested-root SHA-256, and publishes generated data through random unique temporary paths plus atomic rename. Each Make process includes an immutable fragment keyed by the complete discovered SDK identity, so a later process cannot substitute another root's metadata. The canonical fragment remains available for diagnostics and packaging and retains its timestamp when content is unchanged.
+- The complete identity still includes requested prefix, version, shared/static mode, include/library directories, and resolved link metadata. Consequently an in-place update at the same prefix invalidates dependent targets, while an unchanged second build schedules no compile, archive, or link commands.
+
+### Iteration verification
+
+- Every build in this iteration used `make -j` or `make -C ... -j`. `bash -n`, `shellcheck`, and the full `bash test/infra/control/check-aws-iam-build-gate.bash` passed. The gate covers the exact fake-root diagnostic, feature-off symbol-gate self-test, hostile Make/shell metadata, same-prefix identity changes, no-op rebuilds, nested package lookup, and twelve concurrent feature-on discovery processes across two roots.
+- `make -j clean`, `make -j build_deps`, and `make -j build_src` passed feature-off. A final `make -j build_src` against the implementation commit passed; an immediate repeat scheduled zero compile/archive/link commands and produced `src/proxysql`.
+- Captured `ldd src/proxysql` contained no AWS SDK dependency; captured `nm -C src/proxysql` contained no `Aws::` symbol. The feature-off runtime probe observed no added thread and returned `SUPPORT_NOT_COMPILED`.
+- `make -C test/tap/tests/unit -j aws_iam_connection_config_unit-t aws_iam_token_manager_unit-t` passed, followed by 34/34 and 39/39 test executions.
+- `PROXYSQLAWSIAM=1 make -j build_src` exited 2 with the exact required diagnostic because no prepared real SDK exists on this host. No real feature-on compile/link success is claimed, and no SDK was downloaded or installed.
+- `git diff --check` passed before the implementation commit.
+
+### Dependency, license, lifecycle, and security boundary
+
+- AWS SDK for C++ remains an optional external Apache-2.0 dependency. No AWS source, header, library, binary, or license payload was copied or vendored. Only the `core` and `rds` SDK components are requested; their required CRT/platform dependencies remain external resolved link metadata.
+- All AWS headers remain under `#ifdef PROXYSQLAWSIAM`; exactly one runtime owns `Aws::InitAPI()`/`Aws::ShutdownAPI()`. No credential or token logging was added. The scoped mutable `Aws::String` cleanup, worker/client/runtime shutdown ordering, and phase-3 failure teardown from iteration 1 remain intact.
+- Task 3's signer remains deliberately non-interruptible. A signing call that never returns can still delay worker join and `Aws::ShutdownAPI()`; no unsafe cancellation was introduced.
+
+### Iteration commit
+
+- `535acf25a2909410aff9cd73396dabb22b0976c9` — `fix(build): serialize AWS SDK discovery`
