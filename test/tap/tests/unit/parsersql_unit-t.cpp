@@ -3,6 +3,7 @@
 #include "test_init.h"
 #include "proxysql.h"
 #include "Query_Processor_ParserSQL.h"
+#include "MySQL_User_Variables.h"
 
 #include <cstring>
 #include <string>
@@ -304,8 +305,178 @@ static void test_pgsql_command_type_unknown() {
 		"PgSQL cmd: garbage → UNKNOWN");
 }
 
+static UserVariableSetAnalysis analyze_user_set(const char* query) {
+	return parsersql_analyze_user_variable_set_mysql(query, str_view_len(query));
+}
+
+static void test_user_variable_browser_metadata() {
+	const char* q =
+		"SET @browser_lang = 'en-US', @browser_time = '2026-08-11 18:11:12', "
+		"@browser_timezone = 'GMT+2', @ip_address = '167.235.198.244'";
+	auto r = analyze_user_set(q);
+	bool exact = r.status == UserVariableSetStatus::SUPPORTED && r.assignments.size() == 4;
+	if (exact) {
+		exact = r.assignments[0].canonical_name == "browser_lang" &&
+			r.assignments[0].replay_target == "@browser_lang" &&
+			r.assignments[0].raw_literal == "'en-US'" &&
+			r.assignments[0].kind == UserVariableLiteralKind::STRING &&
+			r.assignments[1].canonical_name == "browser_time" &&
+			r.assignments[1].raw_literal == "'2026-08-11 18:11:12'" &&
+			r.assignments[2].canonical_name == "browser_timezone" &&
+			r.assignments[2].raw_literal == "'GMT+2'" &&
+			r.assignments[3].canonical_name == "ip_address" &&
+			r.assignments[3].raw_literal == "'167.235.198.244'";
+	}
+	ok(exact, "typed user SET: browser metadata is lossless and ordered");
+}
+
+static void test_user_variable_supported_literals() {
+	struct Case { const char* query; const char* raw; UserVariableLiteralKind kind; };
+	const Case cases[] = {
+		{"SET @x='a\\\\b'", "'a\\\\b'", UserVariableLiteralKind::STRING},
+		{"SET @x=42", "42", UserVariableLiteralKind::INTEGER},
+		{"SET @x=-42", "-42", UserVariableLiteralKind::INTEGER},
+		{"SET @x=1.25", "1.25", UserVariableLiteralKind::DECIMAL},
+		{"SET @x=+1.2E-3", "+1.2E-3", UserVariableLiteralKind::DECIMAL},
+		{"SET @x=0xCAFE", "0xCAFE", UserVariableLiteralKind::HEXADECIMAL},
+		{"SET @x=X'CAFE'", "X'CAFE'", UserVariableLiteralKind::HEXADECIMAL},
+		{"SET @x=0b101", "0b101", UserVariableLiteralKind::BIT},
+		{"SET @x=B'101'", "B'101'", UserVariableLiteralKind::BIT},
+		{"SET @x=NULL", "NULL", UserVariableLiteralKind::NULL_VALUE},
+	};
+	for (const auto& c : cases) {
+		auto r = analyze_user_set(c.query);
+		bool exact = r.status == UserVariableSetStatus::SUPPORTED &&
+			r.assignments.size() == 1 && r.assignments[0].raw_literal == c.raw &&
+			r.assignments[0].kind == c.kind && r.assignments[0].hash != 0;
+		ok(exact, "typed user SET supported literal: %s", c.query);
+	}
+}
+
+static void test_user_variable_identity_and_order() {
+	auto r = analyze_user_set("SET @B=1,@a='x',@b=2,@'safe''name'=NULL");
+	bool exact = r.status == UserVariableSetStatus::SUPPORTED && r.assignments.size() == 4;
+	if (exact) {
+		exact = r.assignments[0].canonical_name == "b" &&
+			r.assignments[1].canonical_name == "a" &&
+			r.assignments[2].canonical_name == "b" &&
+			r.assignments[3].canonical_name == "safe'name" &&
+			r.assignments[3].replay_target == "@'safe''name'";
+	}
+	ok(exact, "typed user SET preserves source order, repeats, and canonical identity");
+}
+
+static void test_user_variable_backslashes() {
+	auto target = analyze_user_set("SET @'mode\\\\dependent'=1");
+	ok(target.status == UserVariableSetStatus::UNSUPPORTED && target.assignments.empty(),
+		"typed user SET rejects backslash-containing quoted target atomically");
+	auto rhs = analyze_user_set("SET @safe='mode\\\\independent'");
+	ok(rhs.status == UserVariableSetStatus::SUPPORTED && rhs.assignments.size() == 1 &&
+		rhs.assignments[0].raw_literal == "'mode\\\\independent'",
+		"typed user SET preserves backslashes in raw RHS strings");
+}
+
+static void test_user_variable_non_user_statuses() {
+	auto select = analyze_user_set("SELECT 1");
+	ok(select.status == UserVariableSetStatus::NOT_USER_VARIABLE_SET && select.assignments.empty(),
+		"typed user SET reports non-SET input");
+	auto system = analyze_user_set("SET sql_mode='TRADITIONAL'");
+	ok(system.status == UserVariableSetStatus::NOT_USER_VARIABLE_SET && system.assignments.empty(),
+		"typed user SET reports system-only SET input");
+}
+
+static void test_user_variable_rejections() {
+	struct Case { const char* query; UserVariableSetStatus status; };
+	const Case cases[] = {
+		{"SET @x=1, sql_mode='x'", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @x=1+2", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @x=CAST(1 AS SIGNED)", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @x=(1)", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @x=NOT 1", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @x=(SELECT 1)", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @x=?", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @x=NOW()", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @x=1,@y=NOW()", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @x=_utf8mb4'hello'", UserVariableSetStatus::PARSE_ERROR},
+		{"SET @x='hello' COLLATE utf8mb4_bin", UserVariableSetStatus::PARSE_ERROR},
+		{"SET @x=1,", UserVariableSetStatus::PARSE_ERROR},
+		{"SET @x=1; SELECT 1", UserVariableSetStatus::PARSE_ERROR},
+		{"SET @x='unterminated", UserVariableSetStatus::PARSE_ERROR},
+		{"SET @x=1e+", UserVariableSetStatus::PARSE_ERROR},
+		{"SET @bad-name=1", UserVariableSetStatus::PARSE_ERROR},
+		{"SET @x=(1", UserVariableSetStatus::PARSE_ERROR},
+		{"SET @x=1 /* unterminated", UserVariableSetStatus::PARSE_ERROR},
+	};
+	for (const auto& c : cases) {
+		auto r = analyze_user_set(c.query);
+		ok(r.status == c.status && r.assignments.empty(),
+			"typed user SET rejects atomically: %s", c.query);
+	}
+	std::string long_name = "SET @" + std::string(65, 'a') + "=1";
+	auto r = parsersql_analyze_user_variable_set_mysql(long_name.data(), long_name.size());
+	ok(r.status == UserVariableSetStatus::PARSE_ERROR && r.assignments.empty(),
+		"typed user SET rejects names over 64 bytes atomically");
+}
+
+static void test_user_variable_hash_contract() {
+	auto base = analyze_user_set("SET @x=1");
+	auto same = analyze_user_set("SET @x=1");
+	auto target = analyze_user_set("SET @y=1");
+	auto literal = analyze_user_set("SET @x=2");
+	auto kind = analyze_user_set("SET @x='1'");
+	auto boundary_left = analyze_user_set("SET @a=12");
+	auto boundary_right = analyze_user_set("SET @a1=2");
+	bool supported = base.status == UserVariableSetStatus::SUPPORTED &&
+		same.status == UserVariableSetStatus::SUPPORTED &&
+		target.status == UserVariableSetStatus::SUPPORTED &&
+		literal.status == UserVariableSetStatus::SUPPORTED &&
+		kind.status == UserVariableSetStatus::SUPPORTED &&
+		boundary_left.status == UserVariableSetStatus::SUPPORTED &&
+		boundary_right.status == UserVariableSetStatus::SUPPORTED;
+	ok(supported && base.assignments[0].hash == 5603253534018379060ULL,
+		"typed user SET hash matches the fixed SET @x=1 golden value");
+	ok(supported && base.assignments[0].hash == same.assignments[0].hash,
+		"typed user SET hash is deterministic for an identical tuple");
+	ok(supported && base.assignments[0].hash != target.assignments[0].hash,
+		"typed user SET hash includes the replay target");
+	ok(supported && base.assignments[0].hash != literal.assignments[0].hash,
+		"typed user SET hash includes the raw literal");
+	ok(supported && base.assignments[0].hash != kind.assignments[0].hash,
+		"typed user SET hash distinguishes literal kind");
+	ok(supported && boundary_left.assignments[0].hash != boundary_right.assignments[0].hash,
+		"typed user SET hash length-delimits tuple boundaries");
+}
+
+static void test_user_variable_usage() {
+	struct Case { const char* query; UserVariableUsage usage; };
+	const Case cases[] = {
+		{"SELECT 1", UserVariableUsage::NO_USER_VARIABLE},
+		{"SELECT '@x'", UserVariableUsage::NO_USER_VARIABLE},
+		{"SELECT 1 /* @x */", UserVariableUsage::NO_USER_VARIABLE},
+		{"SELECT @x", UserVariableUsage::READ_ONLY},
+		{"SELECT -@x WHERE @y=1", UserVariableUsage::READ_ONLY},
+		{"SELECT 1--@x", UserVariableUsage::READ_ONLY},
+		{"SET @x=1", UserVariableUsage::UNSAFE_OR_UNKNOWN},
+		{"SELECT @x:=1", UserVariableUsage::UNSAFE_OR_UNKNOWN},
+		{"SELECT id INTO @x FROM test.uv_source", UserVariableUsage::UNSAFE_OR_UNKNOWN},
+		{"SELECT COALESCE(@x,1)", UserVariableUsage::UNSAFE_OR_UNKNOWN},
+		{"CALL p(@x)", UserVariableUsage::UNSAFE_OR_UNKNOWN},
+		{"SELECT ? + @x", UserVariableUsage::UNSAFE_OR_UNKNOWN},
+		{"SELECT @'unterminated", UserVariableUsage::UNSAFE_OR_UNKNOWN},
+		{"/*!40101 SET @x=1 */", UserVariableUsage::UNSAFE_OR_UNKNOWN},
+		{"/*M!100100 SET @x=1 */", UserVariableUsage::UNSAFE_OR_UNKNOWN},
+		{"/*M! SET @x=1 */", UserVariableUsage::UNSAFE_OR_UNKNOWN},
+		{"SELECT @x /* unterminated", UserVariableUsage::UNSAFE_OR_UNKNOWN},
+		{"SET @x=1 /* unterminated", UserVariableUsage::UNSAFE_OR_UNKNOWN},
+	};
+	for (const auto& c : cases) {
+		auto got = parsersql_classify_user_variable_usage_mysql(c.query, str_view_len(c.query));
+		ok(got == c.usage, "typed user usage classification: %s", c.query);
+	}
+}
+
 int main() {
-	plan(53);
+	plan(112);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -355,6 +526,15 @@ int main() {
 	test_pgsql_set_simple();
 	test_pgsql_set_multiple_values();
 	test_pgsql_set_invalid();
+
+	test_user_variable_browser_metadata();
+	test_user_variable_supported_literals();
+	test_user_variable_identity_and_order();
+	test_user_variable_backslashes();
+	test_user_variable_non_user_statuses();
+	test_user_variable_rejections();
+	test_user_variable_hash_contract();
+	test_user_variable_usage();
 
 	test_cleanup_minimal();
 	return exit_status();

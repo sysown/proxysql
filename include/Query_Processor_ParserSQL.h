@@ -28,6 +28,7 @@
 #ifndef PROXYSQL_QUERY_PROCESSOR_PARSERSQL_H
 #define PROXYSQL_QUERY_PROCESSOR_PARSERSQL_H
 
+#include "MySQL_User_Variables.h"
 #include "proxysql_structs.h"
 #include <map>
 #include <string>

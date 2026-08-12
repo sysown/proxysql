@@ -36,9 +36,11 @@
 #include "sql_parser/emitter.h"
 #include "sql_parser/ast.h"
 #include "sql_parser/common.h"
+#include "sql_parser/user_variable.h"
 #include "SpookyV2.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 
 using namespace sql_parser;
@@ -573,6 +575,194 @@ enum PGSQL_QUERY_command parsersql_command_type_pgsql(const char* query, int que
 }
 
 // ---------------------------------------------------------------------------
+// MySQL user-variable tracking contract
+// ---------------------------------------------------------------------------
+
+static std::string copy_ref(StringRef ref) {
+    return ref.ptr ? std::string(ref.ptr, ref.len) : std::string();
+}
+
+static std::string lowercase_ascii(StringRef ref) {
+    std::string value = copy_ref(ref);
+    for (char& c : value) {
+        unsigned char byte = static_cast<unsigned char>(c);
+        if (byte >= 'A' && byte <= 'Z') c = static_cast<char>(byte + ('a' - 'A'));
+    }
+    return value;
+}
+
+static void append_length(std::string& tuple, size_t length) {
+    uint64_t value = static_cast<uint64_t>(length);
+    for (unsigned int shift = 0; shift < 64; shift += 8) {
+        tuple.push_back(static_cast<char>((value >> shift) & 0xff));
+    }
+}
+
+static uint64_t hash_user_variable_assignment(const UserVariableAssignment& assignment) {
+    std::string tuple;
+    tuple.reserve(1 + 16 + assignment.replay_target.size() + assignment.raw_literal.size());
+    tuple.push_back(static_cast<char>(assignment.kind));
+    append_length(tuple, assignment.replay_target.size());
+    tuple.append(assignment.replay_target);
+    append_length(tuple, assignment.raw_literal.size());
+    tuple.append(assignment.raw_literal);
+    return SpookyHash::Hash64(tuple.data(), tuple.size(), 0);
+}
+
+static bool literal_kind(const AstNode* rhs, UserVariableLiteralKind& kind) {
+    switch (rhs->type) {
+        case NodeType::NODE_LITERAL_STRING:
+            kind = UserVariableLiteralKind::STRING;
+            return true;
+        case NodeType::NODE_LITERAL_INT:
+            kind = UserVariableLiteralKind::INTEGER;
+            return true;
+        case NodeType::NODE_LITERAL_FLOAT:
+            kind = UserVariableLiteralKind::DECIMAL;
+            return true;
+        case NodeType::NODE_LITERAL_HEX:
+            kind = UserVariableLiteralKind::HEXADECIMAL;
+            return true;
+        case NodeType::NODE_LITERAL_BIT:
+            kind = UserVariableLiteralKind::BIT;
+            return true;
+        case NodeType::NODE_LITERAL_NULL:
+            kind = UserVariableLiteralKind::NULL_VALUE;
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool supported_user_variable_rhs(
+    const AstNode* rhs, UserVariableLiteralKind& kind)
+{
+    if (!rhs || rhs->next_sibling || !rhs->source_ptr || rhs->source_len == 0) return false;
+    if (literal_kind(rhs, kind)) return true;
+    if (rhs->type != NodeType::NODE_UNARY_OP || !rhs->first_child ||
+        rhs->first_child->next_sibling || rhs->value_len != 1 ||
+        (rhs->value_ptr[0] != '+' && rhs->value_ptr[0] != '-')) {
+        return false;
+    }
+    const AstNode* operand = rhs->first_child;
+    if (operand->type == NodeType::NODE_LITERAL_INT) {
+        kind = UserVariableLiteralKind::INTEGER;
+        return true;
+    }
+    if (operand->type == NodeType::NODE_LITERAL_FLOAT) {
+        kind = UserVariableLiteralKind::DECIMAL;
+        return true;
+    }
+    return false;
+}
+
+static bool assignment_has_user_target(const AstNode* assignment) {
+    if (!assignment || assignment->type != NodeType::NODE_VAR_ASSIGNMENT) return false;
+    const AstNode* target = assignment->first_child;
+    return target && target->type == NodeType::NODE_VAR_TARGET &&
+        target->first_child && target->first_child->type == NodeType::NODE_USER_VARIABLE;
+}
+
+UserVariableSetAnalysis parsersql_analyze_user_variable_set_mysql(
+    const char* query, size_t query_length)
+{
+    UserVariableSetAnalysis analysis;
+    if (!query) {
+        analysis.status = UserVariableSetStatus::PARSE_ERROR;
+        return analysis;
+    }
+
+    auto result = tl_mysql_parser.parse(query, query_length);
+    if (result.status != ParseResult::OK || !result.full_input) {
+        analysis.status = UserVariableSetStatus::PARSE_ERROR;
+        tl_mysql_parser.reset();
+        return analysis;
+    }
+    if (result.stmt_type != StmtType::SET || !result.ast ||
+        result.ast->type != NodeType::NODE_SET_STMT) {
+        tl_mysql_parser.reset();
+        return analysis;
+    }
+
+    bool has_user_target = false;
+    for (const AstNode* child = result.ast->first_child; child; child = child->next_sibling) {
+        if (assignment_has_user_target(child)) has_user_target = true;
+    }
+    if (!has_user_target) {
+        tl_mysql_parser.reset();
+        return analysis;
+    }
+
+    std::vector<UserVariableAssignment> assignments;
+    for (const AstNode* child = result.ast->first_child; child; child = child->next_sibling) {
+        if (!assignment_has_user_target(child)) {
+            analysis.status = UserVariableSetStatus::UNSUPPORTED;
+            tl_mysql_parser.reset();
+            return analysis;
+        }
+
+        const AstNode* target = child->first_child;
+        const AstNode* variable = target->first_child;
+        const AstNode* rhs = target->next_sibling;
+        if (target->next_sibling == nullptr || target->first_child->next_sibling ||
+            variable->value_len == 0 || variable->value_len > 64 ||
+            !variable->source_ptr || variable->source_len < 2) {
+            analysis.status = UserVariableSetStatus::UNSUPPORTED;
+            tl_mysql_parser.reset();
+            return analysis;
+        }
+
+        StringRef target_source = variable->source();
+        char name_start = target_source.ptr[1];
+        bool quoted = name_start == '\'' || name_start == '"' || name_start == '`';
+        if (quoted && std::memchr(target_source.ptr, '\\', target_source.len)) {
+            analysis.status = UserVariableSetStatus::UNSUPPORTED;
+            tl_mysql_parser.reset();
+            return analysis;
+        }
+
+        UserVariableLiteralKind kind;
+        if (!supported_user_variable_rhs(rhs, kind)) {
+            analysis.status = UserVariableSetStatus::UNSUPPORTED;
+            tl_mysql_parser.reset();
+            return analysis;
+        }
+
+        UserVariableAssignment assignment;
+        assignment.canonical_name = lowercase_ascii(variable->value());
+        assignment.replay_target = copy_ref(target_source);
+        assignment.raw_literal = copy_ref(rhs->source());
+        assignment.kind = kind;
+        assignment.hash = hash_user_variable_assignment(assignment);
+        assignments.push_back(std::move(assignment));
+    }
+
+    analysis.status = UserVariableSetStatus::SUPPORTED;
+    analysis.assignments = std::move(assignments);
+    tl_mysql_parser.reset();
+    return analysis;
+}
+
+::UserVariableUsage parsersql_classify_user_variable_usage_mysql(
+    const char* query, size_t query_length)
+{
+    if (!query) return ::UserVariableUsage::UNSAFE_OR_UNKNOWN;
+    auto result = tl_mysql_parser.parse(query, query_length);
+    sql_parser::UserVariableUsage upstream =
+        sql_parser::classify_mysql_user_variable_usage(result);
+    tl_mysql_parser.reset();
+    switch (upstream) {
+        case sql_parser::UserVariableUsage::NO_USER_VARIABLE:
+            return ::UserVariableUsage::NO_USER_VARIABLE;
+        case sql_parser::UserVariableUsage::READ_ONLY:
+            return ::UserVariableUsage::READ_ONLY;
+        case sql_parser::UserVariableUsage::UNSAFE_OR_UNKNOWN:
+            return ::UserVariableUsage::UNSAFE_OR_UNKNOWN;
+    }
+    return ::UserVariableUsage::UNSAFE_OR_UNKNOWN;
+}
+
+// ---------------------------------------------------------------------------
 // Section 3: SET AST walker
 // ---------------------------------------------------------------------------
 // Walks the immediate children of a NODE_SET_STMT, handling three node types:
@@ -683,8 +873,16 @@ static std::map<std::string, std::vector<std::string>> walk_set_stmt(
                 const AstNode* target = child->first_child;
                 if (!target || target->type != NodeType::NODE_VAR_TARGET) break;
 
-                std::string var_name = normalize_set_var_name(
-                    emit_node_text<D>(target, arena));
+                std::string target_text;
+                if constexpr (D == Dialect::MySQL) {
+                    const AstNode* variable = target->first_child;
+                    if (variable && variable->type == NodeType::NODE_USER_VARIABLE) {
+                        target_text.assign("@");
+                        target_text.append(variable->value_ptr, variable->value_len);
+                    }
+                }
+                if (target_text.empty()) target_text = emit_node_text<D>(target, arena);
+                std::string var_name = normalize_set_var_name(target_text);
 
                 // Collect every RHS sibling of the target. For MySQL there is
                 // always exactly one. For PostgreSQL, multi-value lists such
