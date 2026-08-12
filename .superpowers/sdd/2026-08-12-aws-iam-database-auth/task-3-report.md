@@ -28,7 +28,7 @@
 
 ## Commit
 
-Pending at report creation; filled after commit below.
+`00f42147b` (`feat(mysql): add bounded IAM token manager`).
 
 ## Concerns
 
