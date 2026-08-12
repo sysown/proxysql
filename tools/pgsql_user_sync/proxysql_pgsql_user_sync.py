@@ -718,10 +718,10 @@ class ProxySQLAdmin:
             _close_connection(connection)
 
     def fetch_main_users(self) -> list[ProxySQLUser]:
-        return self._fetch_users("mysql_users")
+        return self._fetch_users("pgsql_users")
 
     def fetch_runtime_users(self) -> list[ProxySQLUser]:
-        return self._fetch_users("runtime_mysql_users")
+        return self._fetch_users("runtime_pgsql_users")
 
     def apply_actions(self, actions: Sequence[SyncAction]) -> None:
         connection = self._connection()
@@ -732,18 +732,18 @@ class ProxySQLAdmin:
                 if action.kind is ActionKind.CREATE:
                     placeholders = ",".join(["%s"] * len(_USER_FIELDS))
                     cursor.execute(
-                        f"INSERT INTO mysql_users ({_USER_COLUMNS}) VALUES ({placeholders})",
+                        f"INSERT INTO pgsql_users ({_USER_COLUMNS}) VALUES ({placeholders})",
                         self._user_values(user),
                     )
                 elif action.kind is ActionKind.UPDATE:
                     assignments = ",".join(f"{field}=%s" for field in _USER_FIELDS[1:])
                     cursor.execute(
-                        f"UPDATE mysql_users SET {assignments} WHERE username=%s AND backend=%s",
+                        f"UPDATE pgsql_users SET {assignments} WHERE username=%s AND backend=%s",
                         self._user_values(user)[1:] + (user.username, user.backend),
                     )
                 elif action.kind is ActionKind.DISABLE:
                     cursor.execute(
-                        "UPDATE mysql_users SET active=%s WHERE username=%s AND backend=%s",
+                        "UPDATE pgsql_users SET active=%s WHERE username=%s AND backend=%s",
                         (user.active, user.username, user.backend),
                     )
                 else:
@@ -765,10 +765,10 @@ class ProxySQLAdmin:
             _close_connection(connection)
 
     def load_runtime(self) -> None:
-        self._execute_command("LOAD MYSQL USERS TO RUNTIME", "unable to load ProxySQL users to runtime")
+        self._execute_command("LOAD PGSQL USERS TO RUNTIME", "unable to load ProxySQL users to runtime")
 
     def save_to_disk(self) -> None:
-        self._execute_command("SAVE MYSQL USERS TO DISK", "unable to save ProxySQL users to disk")
+        self._execute_command("SAVE PGSQL USERS TO DISK", "unable to save ProxySQL users to disk")
 
 
 def _sync_failure(message: str) -> SyncError:

@@ -518,8 +518,8 @@ class AdapterTests(unittest.TestCase):
         runtime_sql = self.cursor.executions[-1][0]
         projection = ("username,password,active,use_ssl,default_hostgroup,transaction_persistent,"
                       "fast_forward,backend,frontend,max_connections,attributes,comment")
-        self.assertEqual("SELECT %s FROM mysql_users" % projection, main_sql)
-        self.assertEqual("SELECT %s FROM runtime_mysql_users" % projection, runtime_sql)
+        self.assertEqual("SELECT %s FROM pgsql_users" % projection, main_sql)
+        self.assertEqual("SELECT %s FROM runtime_pgsql_users" % projection, runtime_sql)
         self.assertTrue(self.connect_kwargs["autocommit"])
 
     def test_admin_update_uses_bound_parameters(self):
@@ -541,10 +541,19 @@ class AdapterTests(unittest.TestCase):
         ))
         create_sql, create_params = self.cursor.executions[-2]
         disable_sql, disable_params = self.cursor.executions[-1]
-        self.assertIn("INSERT INTO mysql_users (username,password,active", create_sql)
+        self.assertIn("INSERT INTO pgsql_users (username,password,active", create_sql)
         self.assertEqual("new", create_params[0])
-        self.assertEqual("UPDATE mysql_users SET active=%s WHERE username=%s AND backend=%s", disable_sql)
+        self.assertEqual("UPDATE pgsql_users SET active=%s WHERE username=%s AND backend=%s", disable_sql)
         self.assertEqual((0, "old", 1), disable_params)
+
+    def test_admin_runtime_commands_use_postgresql_users(self):
+        adapter = self.mod.ProxySQLAdmin(self.config, connect=self.fake_connect)
+        adapter.load_runtime()
+        adapter.save_to_disk()
+        self.assertEqual(
+            "LOAD PGSQL USERS TO RUNTIME", self.cursor.executions[-2][0]
+        )
+        self.assertEqual("SAVE PGSQL USERS TO DISK", self.cursor.executions[-1][0])
 
     def test_drivers_are_imported_only_when_default_connectors_are_used(self):
         self.assertNotIn("psycopg", self.mod.__dict__)
@@ -751,6 +760,9 @@ class AssetTests(unittest.TestCase):
             "unmanaged",
             "log",
             "disk",
+            "install -o proxysql -g proxysql -m 0600",
+            "root:proxysql",
+            "0640",
         ):
             self.assertIn(required, readme)
         self.assertIn("one authoritative ProxySQL node", readme)

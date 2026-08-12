@@ -25,13 +25,16 @@ Copy `proxysql_pgsql_user_sync.ini.example` to a regular file, replace both
 obvious password placeholders, and restrict it before entering real secrets:
 
 ```console
-install -o root -g root -m 0600 proxysql_pgsql_user_sync.ini.example /etc/proxysql/pgsql-user-sync.ini
+install -o proxysql -g proxysql -m 0600 proxysql_pgsql_user_sync.ini.example /etc/proxysql/pgsql-user-sync.ini
 ```
 
-The synchronizer rejects group-write/execute and other-user permissions.  A
-root-owned `0640` file with a dedicated service group is also accepted; an
-owner-only `0600` file is the simplest choice.  Database passwords stay in
-this file and never appear in Scheduler arguments or normal logs.
+The synchronizer rejects group-write/execute and other-user permissions.  The
+primary example is service-owned `0600` so the ProxySQL service account can
+read it.  Alternatively, keep the file root-owned and use `chown root:proxysql`
+with mode `0640` (a dedicated `proxysql` group); that is also accepted.  An
+owner-only `0600` file is the simplest choice when the synchronizer runs as its
+owner.  Database passwords stay in this file and never appear in Scheduler
+arguments or normal logs.
 
 ## Create the source function and allow-list
 
