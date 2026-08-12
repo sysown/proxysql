@@ -130,8 +130,7 @@ T j_get_srv_default_int_val(
 }
 
 
-//static void * HGCU_thread_run() {
-static void * HGCU_thread_run() {
+void * HGCU_thread_run() {
 	PtrArray *conn_array=new PtrArray();
 	set_thread_name("MyHGCU", GloVars.set_thread_name);
 	while(1) {
@@ -151,15 +150,25 @@ static void * HGCU_thread_run() {
 			}
 			conn_array->add(myconn);
 		}
+		for (unsigned int i = 0; i < conn_array->len;) {
+			myconn = (MySQL_Connection *)conn_array->index(i);
+			if (myconn->backend_auth_type() == MySQLBackendAuthType::AWS_IAM) {
+				conn_array->remove_index_fast(i);
+				myconn->send_quit = false;
+				MyHGM->destroy_MyConn_from_pool(myconn);
+				continue;
+			}
+			++i;
+		}
 		unsigned int l=conn_array->len;
 		int *errs=(int *)malloc(sizeof(int)*l);
 		int *statuses=(int *)malloc(sizeof(int)*l);
 		my_bool *ret=(my_bool *)malloc(sizeof(my_bool)*l);
 		int i;
 		for (i=0;i<(int)l;i++) {
+			myconn=(MySQL_Connection *)conn_array->index(i);
 			myconn->reset();
 			MyHGM->increase_reset_counter();
-			myconn=(MySQL_Connection *)conn_array->index(i);
 			if (myconn->mysql->net.pvio && myconn->mysql->net.fd && myconn->mysql->net.buff) {
 				MySQL_Connection_userinfo *userinfo = myconn->userinfo;
 				char *auth_password = NULL;
@@ -2508,7 +2517,11 @@ void MySQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address
  * @note This method locks the connection pool to ensure thread safety during access. It releases the lock once
  *       the operation is completed.
  */
-MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
+MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(
+	unsigned int _hid, MySQL_Session *sess, bool ff, char *gtid_uuid,
+	uint64_t gtid_trxid, int max_lag_ms,
+	MySQLBackendAuthType requested_type)
+{
 	MySQL_Connection * conn = nullptr; // Pointer to hold the retrieved MySQL_Connection
 
 	// Acquire a write lock to access the connection pool
@@ -2526,7 +2539,7 @@ MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 	mysrvc = myhgc->get_random_MySrvC(gtid_uuid, gtid_trxid, max_lag_ms, sess);
 	if (mysrvc) { // a MySrvC exists. If not, we return NULL = no targets
 		// Attempt to get a random MySQL_Connection from the server's free connection pool
-		conn=mysrvc->ConnectionsFree->get_random_MyConn(sess, ff);
+		conn=mysrvc->ConnectionsFree->get_random_MyConn(sess, ff, requested_type);
 
 		// If a connection is obtained, mark it as used and update connection pool statistics
 		if (conn) {
@@ -2558,7 +2571,10 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 
 	bool to_del=true; // the default, legacy behavior
 	MySrvC *mysrvc=(MySrvC *)c->parent;
-	if (c->healthy && mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE && c->send_quit && queue.size() < __sync_fetch_and_add(&GloMTH->variables.connpoll_reset_queue_length, 0)) {
+	if (c->backend_auth_type() != MySQLBackendAuthType::AWS_IAM &&
+		c->healthy && mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE &&
+		c->send_quit &&
+		queue.size() < __sync_fetch_and_add(&GloMTH->variables.connpoll_reset_queue_length, 0)) {
 		if (c->async_state_machine==ASYNC_IDLE) {
 			// overall, the backend seems healthy and so it is the connection. Try to reset it
 			int myerr=mysql_errno(c->mysql);

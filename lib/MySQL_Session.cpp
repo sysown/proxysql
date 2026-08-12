@@ -163,6 +163,25 @@ extern MySQL_STMT_Manager_v14 *GloMyStmt;
 
 extern SQLite3_Server *GloSQLite3Server;
 
+static MySQLBackendAuthType resolved_backend_auth_type_for_session(
+	const MySQL_Session *session)
+{
+	const char *backend_username =
+		session != nullptr && session->client_myds != nullptr &&
+		session->client_myds->myconn != nullptr &&
+		session->client_myds->myconn->userinfo != nullptr
+			? session->client_myds->myconn->userinfo->username : nullptr;
+	MySQLBackendAuthPolicy policy =
+		resolve_mysql_backend_auth_policy(*GloMyAuth, backend_username);
+	if (policy.type == MySQLBackendAuthType::INVALID && session != nullptr &&
+		session->passthrough_credential && backend_username != nullptr &&
+		backend_username[0] != '\0' &&
+		policy.failure_code == "backend_user_not_found") {
+		return MySQLBackendAuthType::PASSWORD;
+	}
+	return policy.type;
+}
+
 #ifdef PROXYSQLCLICKHOUSE
 extern ClickHouse_Authentication *GloClickHouseAuth;
 extern ClickHouse_Server *GloClickHouseServer;
@@ -2236,7 +2255,8 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 	// fresh connection has fd == -1, so connect_start runs
 	// mysql_real_connect_start with the borrowed credential below.
 	MySQL_Connection *mc = MyHGM->get_MyConn_from_pool(
-		mybe->hostgroup_id, this, true /*ff*/, NULL, 0, -1);
+		mybe->hostgroup_id, this, true /*ff*/, NULL, 0, -1,
+		MySQLBackendAuthType::PASSWORD);
 	if (mc == NULL) {
 		// Pool throttle fired or no backend. Pass-through does not retry
 		// (a credential verdict requires a reachable backend; retrying just
@@ -2297,6 +2317,14 @@ int MySQL_Session::handler_again___status_RESETTING_CONNECTION() {
 	MySQL_Connection *myconn=myds->myconn;
 	if (myds->mypolls==NULL) {
 		thread->mypolls.add(POLLIN|POLLOUT, myds->fd, myds, thread->curtime);
+	}
+	if (myconn->backend_auth_type() == MySQLBackendAuthType::AWS_IAM) {
+		myds->destroy_MySQL_Connection_From_Pool(false);
+		myds->fd = 0;
+		delete mybe->server_myds;
+		mybe->server_myds = NULL;
+		set_status(session_status___NONE);
+		return -1;
 	}
 	myds->DSS=STATE_MARIADB_QUERY;
 	// we recreate local_stmts : see issue #752
@@ -2841,7 +2869,10 @@ bool MySQL_Session::handler_again___verify_backend_user_schema() {
 		}
 	}
 	// if we reach here, the username is the same
-	if (myds->myconn->requires_CHANGE_USER(client_myds->myconn)) {
+	const MySQLBackendAuthType requested_type =
+		resolved_backend_auth_type_for_session(this);
+	if (myds->myconn->requires_CHANGE_USER(
+		client_myds->myconn, requested_type)) {
 		// if we reach here, even if the username is the same,
 		// the backend connection has some session variable set
 		// that the client never asked for
@@ -3981,6 +4012,15 @@ bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 	enum session_status st=status;
 	if (myds->mypolls==NULL) {
 		thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
+	}
+	const MySQLBackendAuthType requested_type =
+		resolved_backend_auth_type_for_session(this);
+	if (myconn->backend_auth_type() == MySQLBackendAuthType::AWS_IAM ||
+		requested_type == MySQLBackendAuthType::AWS_IAM) {
+		myds->destroy_MySQL_Connection_From_Pool(false);
+		myds->fd = 0;
+		myds->DSS = STATE_NOT_INITIALIZED;
+		NEXT_IMMEDIATE_NEW(CONNECTING_SERVER);
 	}
 	// we recreate local_stmts : see issue #752
 	delete myconn->local_stmts;
@@ -8743,11 +8783,11 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				}
 				uuid[n]='\0';
 #ifndef STRESSTEST_POOL
-				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, uuid, trxid, -1);
+				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, uuid, trxid, -1, backend_auth_policy.type);
 #endif // STRESSTEST_POOL
 			} else {
 #ifndef STRESSTEST_POOL
-				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, NULL, 0, (int)qpo->max_lag_ms);
+				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, NULL, 0, (int)qpo->max_lag_ms, backend_auth_policy.type);
 #endif // STRESSTEST_POOL
 			}
 		}
@@ -8768,9 +8808,9 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 
 		if (mc==NULL) {
 			if (trxid) {
-				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), uuid, trxid, -1);
+				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), uuid, trxid, -1, backend_auth_policy.type);
 			} else {
-				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), NULL, 0, (int)qpo->max_lag_ms);
+				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), NULL, 0, (int)qpo->max_lag_ms, backend_auth_policy.type);
 			}
 			thread->note_pool_attempt(mc == NULL);
 #ifdef STRESSTEST_POOL
@@ -9357,6 +9397,10 @@ void MySQL_Session::Memory_Stats() {
 void MySQL_Session::create_new_session_and_reset_connection(MySQL_Data_Stream *_myds) {
 	MySQL_Data_Stream *new_myds = NULL;
 	MySQL_Connection * mc = _myds->myconn;
+	if (mc->backend_auth_type() == MySQLBackendAuthType::AWS_IAM) {
+		_myds->destroy_MySQL_Connection_From_Pool(false);
+		return;
+	}
 	// we remove the connection from the original data stream
 	_myds->detach_connection();
 	_myds->unplug_backend();

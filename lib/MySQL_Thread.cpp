@@ -6741,7 +6741,11 @@ void MySQL_Thread::Get_Memory_Stats() {
  * @param max_lag_ms The maximum lag time allowed for the connection in milliseconds.
  * @return A pointer to the retrieved MySQL connection if found; otherwise, NULL.
  */
-MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Session *sess, char *gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
+MySQL_Connection * MySQL_Thread::get_MyConn_local(
+	unsigned int _hid, MySQL_Session *sess, char *gtid_uuid,
+	uint64_t gtid_trxid, int max_lag_ms,
+	MySQLBackendAuthType requested_type)
+{
 	// some sanity check
 	if (sess == NULL) return NULL;
 	if (sess->client_myds == NULL) return NULL;
@@ -6757,11 +6761,22 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 		(mysql_thread___session_track_variables == session_track_variables::ENFORCED);
 	std::vector<MySrvC *> parents; // this is a vector of srvers that needs to be excluded in case gtid_uuid is used
 	MySQL_Connection *c=NULL;
-	for (i=0; i<cached_connections->len; i++) {
+	MySQL_Connection *client_conn = sess->client_myds->myconn;
+	for (i=0; i<cached_connections->len;) {
 		c = (MySQL_Connection *) cached_connections->index(i);
+		if (c->parent->myhgc->hid == _hid &&
+			(c->backend_auth_type() != requested_type ||
+			 (requested_type == MySQLBackendAuthType::AWS_IAM &&
+			  c->requires_CHANGE_USER(client_conn, requested_type)))) {
+			cached_connections->remove_index_fast(i);
+			c->send_quit = false;
+			MyHGM->destroy_MyConn_from_pool(c);
+			continue;
+		}
 
 		// Skip unhealthy or non-reusable connections
 		if (!c->healthy || !c->reusable) {
+			++i;
 			continue;
 		}
 
@@ -6772,6 +6787,7 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 		if (check_session_track_backoff) {
 			session_track_backoff_until = c->parent->session_track_backoff_until.load(std::memory_order_relaxed);
 			if (session_track_backoff_until > curtime) {
+				++i;
 				continue;
 			}
 		}
@@ -6781,8 +6797,7 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 				(gtid_uuid == NULL) || // gtid_uuid is not used
 				(gtid_uuid && find(parents.begin(), parents.end(), c->parent) == parents.end()) // the server is currently not excluded
 			) {
-				MySQL_Connection *client_conn = sess->client_myds->myconn;
-				if (c->requires_CHANGE_USER(client_conn)==false) { // CHANGE_USER is not required
+				if (c->requires_CHANGE_USER(client_conn, requested_type)==false) { // CHANGE_USER is not required
 					char *schema = client_conn->userinfo->schemaname;
 					if (strcmp(c->userinfo->schemaname,schema)==0) { // same schema
 						unsigned int not_match = 0; // number of not matching session variables
@@ -6808,6 +6823,7 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 								if (max_lag_ms >= 0) {
 									if ((unsigned int)max_lag_ms < (c->parent->aws_aurora_current_lag_us / 1000)) {
 										status_variables.stvar[st_var_aws_aurora_replicas_skipped_during_query]++;
+										++i;
 										continue;
 									}
 								}
@@ -6820,6 +6836,7 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 				}
 			}
 		}
+		++i;
 	}
 	return NULL;
 }

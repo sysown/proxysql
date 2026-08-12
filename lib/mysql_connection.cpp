@@ -731,11 +731,25 @@ bool MySQL_Connection::get_status_sql_log_bin0() {
 	return status_flags & STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0;
 }
 
-bool MySQL_Connection::requires_CHANGE_USER(const MySQL_Connection *client_conn) {
-	char *username = client_conn->userinfo->username;
-	if (strcmp(userinfo->username,username)) {
+bool MySQL_Connection::backend_auth_compatible(
+	const char *requested_username, MySQLBackendAuthType requested_type) const
+{
+	return requested_username != nullptr && userinfo != nullptr &&
+		userinfo->username != nullptr &&
+		backend_auth_type_ == requested_type &&
+		strcmp(userinfo->username, requested_username) == 0;
+}
+
+bool MySQL_Connection::requires_CHANGE_USER(
+	const MySQL_Connection *client_conn,
+	MySQLBackendAuthType requested_type) const
+{
+	const char *username = client_conn != nullptr && client_conn->userinfo != nullptr
+		? client_conn->userinfo->username : nullptr;
+	if (!backend_auth_compatible(username, requested_type)) {
 		// the two connections use different usernames
-		// The connection need to be reset with CHANGE_USER
+		// or authentication modes. The caller decides whether CHANGE_USER is
+		// permitted for that mode.
 		return true;
 	}
 	for (auto i = 0; i < SQL_NAME_LAST_LOW_WM; i++) {
@@ -1181,6 +1195,11 @@ void MySQL_Connection::connect_cont(short event) {
 
 void MySQL_Connection::change_user_start() {
 	PROXY_TRACE();
+	// IAM credentials exist only for the initial TLS handshake. Reaching this
+	// path with an IAM identity would turn an ephemeral token into a reusable
+	// password; all session/reset callers must replace the connection instead.
+	assert(backend_auth_type_ != MySQLBackendAuthType::AWS_IAM);
+	assert(!has_aws_iam_handshake_secret());
 	//fprintf(stderr,"change_user_start FD %d\n", fd);
 	MySQL_Connection_userinfo *_ui = NULL;
 	if (myds->sess->client_myds == NULL) {

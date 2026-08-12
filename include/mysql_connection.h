@@ -332,7 +332,12 @@ class MySQL_Connection {
 
 	bool match_ff_req_options(const MySQL_Connection *c);
 	bool match_tracked_options(const MySQL_Connection *c);
-	bool requires_CHANGE_USER(const MySQL_Connection *client_conn);
+	bool backend_auth_compatible(
+		const char *requested_username,
+		MySQLBackendAuthType requested_type) const;
+	bool requires_CHANGE_USER(
+		const MySQL_Connection *client_conn,
+		MySQLBackendAuthType requested_type) const;
 	unsigned int number_of_matching_session_variables(const MySQL_Connection *client_conn, unsigned int& not_matching);
 	unsigned long get_mysql_thread_id() { return mysql ? mysql->thread_id : 0; }
 	static void set_ssl_params(MYSQL *mysql, MySQLServers_SslParams *ssl_params);
