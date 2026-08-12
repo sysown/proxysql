@@ -7,7 +7,9 @@
 #ifndef PROXYSQL_MYSQL_SESSION_H
 #define PROXYSQL_MYSQL_SESSION_H
 
+#include <chrono>
 #include <functional>
+#include <string>
 #include <vector>
 
 #include "proxysql.h"
@@ -617,6 +619,12 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	uint64_t aws_iam_waiter_id { 0 };
 	unsigned long long aws_iam_deadline_us { 0 };
 	bool aws_iam_completion_ready { false };
+	// Authentication identity used by the current backend connect attempt.
+	// It outlives handshake-token cleanup so a terminal 1045 can invalidate
+	// only the exact failed cache generation before the connection is freed.
+	AwsIamTokenKey aws_iam_connect_token_key {};
+	uint64_t aws_iam_connect_token_generation { 0 };
+	bool aws_iam_fresh_token_retry_attempted { false };
 	// Fast forward grace close flags: track backend closure during fast forward mode
 	// to allow pending client data to drain before closing the session.
 	bool backend_closed_in_fast_forward;
@@ -731,9 +739,19 @@ public:
 	int kill_type;
 	unsigned int hid;
 	int use_ssl;
+	MySQLBackendAuthType backend_auth_type { MySQLBackendAuthType::PASSWORD };
+	std::string configured_endpoint;
+	std::string region;
+	std::string database_user;
+	std::chrono::steady_clock::time_point token_deadline;
 
 	KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hid, unsigned long i, int kt, int _use_ssl, MySQL_Thread* _mt);
 	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hid, unsigned long i, int kt, int _use_ssl, MySQL_Thread* _mt, char *ip);
+	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hid,
+		unsigned long i, int kt, int _use_ssl, MySQL_Thread* _mt, char *ip,
+		MySQLBackendAuthType auth_type, const char *endpoint,
+		const char *aws_region, const char *db_user,
+		std::chrono::steady_clock::time_point deadline);
 	~KillArgs();
 	const char* get_host_address() const;
 	KillArgs(const KillArgs&) = delete;

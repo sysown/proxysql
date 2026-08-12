@@ -239,9 +239,21 @@ KillArgs::KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hid,
 	}
 }
 
-KillArgs::KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hid, unsigned long i, int kt, int _use_ssl, MySQL_Thread *_mt, char *ip) {
+KillArgs::KillArgs(char* u, char* p, char* h, unsigned int P,
+	unsigned int _hid, unsigned long i, int kt, int _use_ssl,
+	MySQL_Thread *_mt, char *ip) :
+	KillArgs(u, p, h, P, _hid, i, kt, _use_ssl, _mt, ip,
+		MySQLBackendAuthType::PASSWORD, h, "", u,
+		std::chrono::steady_clock::now() + std::chrono::seconds(5)) {}
+
+KillArgs::KillArgs(char* u, char* p, char* h, unsigned int P,
+	unsigned int _hid, unsigned long i, int kt, int _use_ssl,
+	MySQL_Thread *_mt, char *ip, MySQLBackendAuthType auth_type,
+	const char *endpoint, const char *aws_region, const char *db_user,
+	std::chrono::steady_clock::time_point deadline) {
 	username=u ? strdup(u) : nullptr;
-	password=p ? strdup(p) : nullptr;
+	password=auth_type == MySQLBackendAuthType::AWS_IAM
+		? nullptr : (p ? strdup(p) : nullptr);
 	hostname=h ? strdup(h) : nullptr;
 	ip_addr = NULL;
 	if (ip)
@@ -252,6 +264,11 @@ KillArgs::KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hid,
 	kill_type=kt;
 	use_ssl=_use_ssl;
 	mt=_mt;
+	backend_auth_type=auth_type;
+	configured_endpoint=endpoint != nullptr ? endpoint : "";
+	region=aws_region != nullptr ? aws_region : "";
+	database_user=db_user != nullptr ? db_user : "";
+	token_deadline=deadline;
 }
 
 KillArgs::~KillArgs() {
@@ -271,6 +288,13 @@ const char* KillArgs::get_host_address() const {
 	return host_address;
 }
 
+static void cleanse_iam_connector_password(MYSQL *mysql) {
+	if (mysql == nullptr || mysql->passwd == nullptr) return;
+	OPENSSL_cleanse(mysql->passwd, strlen(mysql->passwd));
+	free(mysql->passwd);
+	mysql->passwd = nullptr;
+}
+
 
 /**
  * @brief Thread function to kill a query or connection on a MySQL server.
@@ -283,6 +307,11 @@ const char* KillArgs::get_host_address() const {
  */
 void* kill_query_thread(void *arg) {
 	KillArgs *ka=(KillArgs *)arg;
+	const bool iam_mode =
+		ka->backend_auth_type == MySQLBackendAuthType::AWS_IAM;
+	AwsIamTokenResult iam_result;
+	const char *connect_user = ka->username;
+	const char *connect_password = ka->password;
 	//! It initializes a new MySQL_Thread object to handle MySQL-related operations.
 	std::unique_ptr<MySQL_Thread> mysql_thr(new MySQL_Thread());
 	set_thread_name("KillQuery", GloVars.set_thread_name);
@@ -306,9 +335,70 @@ void* kill_query_thread(void *arg) {
 
 	//! If SSL is enabled and port information is available, it retrieves SSL parameters for the server from MyHGM and configures the MySQL connection accordingly.
 	if (ka->use_ssl && ka->port) {
-		ssl_params = MyHGM->get_Server_SSL_Params(ka->hostname, ka->port, ka->username);
+		const char *ssl_endpoint = iam_mode && !ka->configured_endpoint.empty()
+			? ka->configured_endpoint.c_str() : ka->hostname;
+		const char *ssl_user = iam_mode && !ka->database_user.empty()
+			? ka->database_user.c_str() : ka->username;
+		ssl_params = MyHGM->get_Server_SSL_Params(
+			const_cast<char *>(ssl_endpoint), ka->port,
+			const_cast<char *>(ssl_user));
 		MySQL_Connection::set_ssl_params(mysql,ssl_params);
 		mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
+	}
+
+	if (iam_mode) {
+		AwsIamConnectionConfigInput input;
+		input.database_user = ka->database_user;
+		input.configured_endpoint = ka->configured_endpoint;
+		input.port = ka->port;
+		input.region = ka->region;
+		input.use_ssl = ka->use_ssl != 0;
+		input.ssl_ca = ssl_params != nullptr
+			? ssl_params->ssl_ca
+			: (mysql_thread___ssl_p2s_ca != nullptr ? mysql_thread___ssl_p2s_ca : "");
+		input.ssl_capath = ssl_params != nullptr
+			? ssl_params->ssl_capath
+			: (mysql_thread___ssl_p2s_capath != nullptr ? mysql_thread___ssl_p2s_capath : "");
+		input.support_compiled = GloAwsIamTokenSource != nullptr;
+		const AwsIamConnectionConfigResult config =
+			validate_mysql_aws_iam_connection(input);
+		if (config.status != AwsIamConnectionConfigStatus::OK ||
+			GloAwsIamTokenSource == nullptr) {
+			proxy_error(
+				"AWS IAM kill helper failure user='%s' hostgroup=%u endpoint='%s'"
+				" region='%s' category='%s' code='' request_id=''\n",
+				ka->database_user.c_str(), ka->hid,
+				ka->configured_endpoint.c_str(), ka->region.c_str(),
+				GloAwsIamTokenSource == nullptr
+					? "token_source_unavailable" : config.failure_code.c_str());
+			goto __exit_kill_query_thread;
+		}
+
+		iam_result = GloAwsIamTokenSource->request_blocking(
+			config.key, ka->token_deadline);
+		if (iam_result.status != AwsIamStatus::OK || iam_result.token.empty()) {
+			proxy_error(
+				"AWS IAM kill helper failure user='%s' hostgroup=%u endpoint='%s'"
+				" region='%s' category='%s' code='%s' request_id='%s'\n",
+				ka->database_user.c_str(), ka->hid,
+				ka->configured_endpoint.c_str(), ka->region.c_str(),
+				iam_result.failure.category.empty()
+					? "token_request_failed" : iam_result.failure.category.c_str(),
+				iam_result.failure.aws_error_code.c_str(),
+				iam_result.failure.request_id.c_str());
+			goto __exit_kill_query_thread;
+		}
+
+		my_bool enabled = 1;
+		my_bool reconnect = 0;
+		mysql_options(mysql, MYSQL_OPT_SSL_ENFORCE, &enabled);
+		mysql_options(mysql, MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &enabled);
+		mysql_options(mysql, MYSQL_ENABLE_CLEARTEXT_PLUGIN, &enabled);
+		mysql_options(mysql, MYSQL_OPT_RECONNECT, &reconnect);
+		mysql_options(mysql, MARIADB_OPT_TLS_SERVER_NAME,
+			config.key.endpoint.c_str());
+		connect_user = ka->database_user.c_str();
+		connect_password = iam_result.token.c_str();
 	}
 
 	MYSQL *ret;
@@ -331,7 +421,8 @@ void* kill_query_thread(void *arg) {
 			default:
 				break;
 		}
-		ret=mysql_real_connect(mysql, ka->get_host_address(), ka->username, ka->password, NULL, ka->port, NULL, 0);
+		ret=mysql_real_connect(mysql, ka->get_host_address(), connect_user,
+			connect_password, NULL, ka->port, NULL, 0);
 	} else {
 		switch (ka->kill_type) {
 			case KILL_QUERY:
@@ -343,11 +434,24 @@ void* kill_query_thread(void *arg) {
 			default:
 				break;
 		}
-		ret=mysql_real_connect(mysql,"localhost",ka->username,ka->password,NULL,0,ka->hostname,0);
+		ret=mysql_real_connect(mysql,"localhost",connect_user,connect_password,NULL,0,ka->hostname,0);
+	}
+	if (iam_mode) {
+		cleanse_iam_connector_password(mysql);
+		iam_result.token.clear();
+		if (GloAwsIamTokenSource != nullptr) {
+			GloAwsIamTokenSource->record_backend_connection(ret != nullptr);
+		}
 	}
 	if (!ret) {
 		int myerr = mysql_errno(mysql);
-		if (ssl_params != NULL && myerr == 2026) {
+		if (iam_mode) {
+			proxy_error(
+				"AWS IAM kill helper failure user='%s' hostgroup=%u endpoint='%s'"
+				" region='%s' category='backend_connect' code='' request_id=''\n",
+				ka->database_user.c_str(), ka->hid,
+				ka->configured_endpoint.c_str(), ka->region.c_str());
+		} else if (ssl_params != NULL && myerr == 2026) {
 			proxy_error("Failed to connect to server %s:%d to run KILL %s %lu.  SSL Params: %s , %s , %s , %s , %s , %s , %s , %s\n",
 				ka->hostname, ka->port, ( ka->kill_type==KILL_QUERY ? "QUERY" : "CONNECTION" ) , ka->id,
 				ssl_params->ssl_ca.c_str() , ssl_params->ssl_cert.c_str() , ssl_params->ssl_key.c_str() , ssl_params->ssl_capath.c_str() ,
@@ -379,6 +483,10 @@ void* kill_query_thread(void *arg) {
 	mysql_query(mysql,buf);
 __exit_kill_query_thread:
 	//! clean-up
+	if (iam_mode) {
+		cleanse_iam_connector_password(mysql);
+		iam_result.token.clear();
+	}
 	if (mysql)
 		mysql_close(mysql);
 	delete ka;
@@ -706,6 +814,9 @@ void MySQL_Session::cancel_aws_iam_wait() {
 	aws_iam_waiter_id = 0;
 	aws_iam_deadline_us = 0;
 	aws_iam_completion_ready = false;
+	aws_iam_connect_token_key = AwsIamTokenKey {};
+	aws_iam_connect_token_generation = 0;
+	aws_iam_fresh_token_retry_attempted = false;
 	pause_until = 0;
 }
 
@@ -807,6 +918,8 @@ int MySQL_Session::handler_again___status_WAITING_AWS_IAM_TOKEN() {
 	MySQL_Connection *connection = aws_iam_connection;
 	AwsIamTokenKey key = std::move(aws_iam_token_key);
 	AwsIamTokenResult completion = std::move(aws_iam_completion);
+	aws_iam_connect_token_key = key;
+	aws_iam_connect_token_generation = completion.generation;
 	previous_status.pop();
 	aws_iam_token_source = nullptr;
 	aws_iam_request_handle = {};
@@ -2475,7 +2588,32 @@ void MySQL_Session::handler_again___new_thread_to_kill_connection() {
 				}
 			}
 
-			KillArgs *ka = new KillArgs(ui->username, auth_password, myds->myconn->parent->address, myds->myconn->parent->port, myds->myconn->parent->myhgc->hid, myds->myconn->mysql->thread_id, KILL_QUERY, myds->myconn->parent->use_ssl, thread, myds->myconn->connected_host_details.ip);
+			MySQL_Connection *connection = myds->myconn;
+			KillArgs *ka = nullptr;
+			if (connection->backend_auth_type() == MySQLBackendAuthType::AWS_IAM) {
+				const char *database_user = connection->userinfo != nullptr &&
+					connection->userinfo->username != nullptr
+						? connection->userinfo->username : "";
+				const char *region = connection->parent->myhgc != nullptr &&
+					connection->parent->myhgc->attributes.aws_iam_region != nullptr
+						? connection->parent->myhgc->attributes.aws_iam_region : "";
+				ka = new KillArgs(
+					const_cast<char *>(database_user), nullptr,
+					connection->parent->address, connection->parent->port,
+					connection->parent->myhgc->hid, connection->mysql->thread_id,
+					KILL_QUERY, connection->parent->use_ssl, thread,
+					connection->connected_host_details.ip,
+					MySQLBackendAuthType::AWS_IAM, connection->parent->address,
+					region, database_user,
+					std::chrono::steady_clock::now() + std::chrono::seconds(5));
+			} else {
+				ka = new KillArgs(
+					ui->username, auth_password, connection->parent->address,
+					connection->parent->port, connection->parent->myhgc->hid,
+					connection->mysql->thread_id, KILL_QUERY,
+					connection->parent->use_ssl, thread,
+					connection->connected_host_details.ip);
+			}
 			pthread_attr_t attr;
 			pthread_attr_init(&attr);
 			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
@@ -3655,6 +3793,9 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 				RequestEnd(mybe->server_myds, 9002, generic_error);
 				while (!previous_status.empty()) previous_status.pop();
 				mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
+				aws_iam_connect_token_key = AwsIamTokenKey {};
+				aws_iam_connect_token_generation = 0;
+				aws_iam_fresh_token_retry_attempted = false;
 				mybe->server_myds->max_connect_time = 0;
 				NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
 			}
@@ -3760,9 +3901,13 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 		}
 		switch (rc) {
 			case 0:
-				if (myconn->backend_auth_type() == MySQLBackendAuthType::AWS_IAM &&
-					GloAwsIamTokenSource != nullptr) {
-					GloAwsIamTokenSource->record_backend_connection(true);
+				if (myconn->backend_auth_type() == MySQLBackendAuthType::AWS_IAM) {
+					if (GloAwsIamTokenSource != nullptr) {
+						GloAwsIamTokenSource->record_backend_connection(true);
+					}
+					aws_iam_connect_token_key = AwsIamTokenKey {};
+					aws_iam_connect_token_generation = 0;
+					aws_iam_fresh_token_retry_attempted = false;
 				}
 				myds->myds_type=MYDS_BACKEND;
 				myds->DSS=STATE_MARIADB_GENERIC;
@@ -3864,22 +4009,50 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 			case -1:
 			case -2:
 			{
-				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, mysql_errno(myconn->mysql));
+				const unsigned int connect_errno = mysql_errno(myconn->mysql);
+				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, connect_errno);
 				if (myconn->backend_auth_type() == MySQLBackendAuthType::AWS_IAM) {
 					if (GloAwsIamTokenSource != nullptr) {
 						GloAwsIamTokenSource->record_backend_connection(false);
 					}
-					const char *database_user = myconn->userinfo != nullptr &&
-						myconn->userinfo->username != nullptr
-							? myconn->userinfo->username : "";
-					const char *region = myconn->parent->myhgc != nullptr &&
-						myconn->parent->myhgc->attributes.aws_iam_region != nullptr
-							? myconn->parent->myhgc->attributes.aws_iam_region : "";
-					proxy_error(
-						"AWS IAM backend connection failure user='%s' hostgroup=%u endpoint='%s'"
-						" region='%s' category='backend_connect' code='%u' request_id=''\n",
-						database_user, myconn->parent->myhgc->hid,
-						myconn->parent->address, region, mysql_errno(myconn->mysql));
+					const AwsIamTokenKey failed_key = aws_iam_connect_token_key;
+					const uint64_t failed_generation =
+						aws_iam_connect_token_generation;
+					const unsigned int failed_hostgroup = myconn->parent->myhgc->hid;
+					if (connect_errno == ER_ACCESS_DENIED_ERROR &&
+						!aws_iam_fresh_token_retry_attempted &&
+						GloAwsIamTokenSource != nullptr && failed_generation != 0 &&
+						!failed_key.endpoint.empty() && !failed_key.region.empty() &&
+						!failed_key.database_user.empty()) {
+						proxy_error(
+							"AWS IAM backend connection failure user='%s' hostgroup=%u endpoint='%s'"
+							" region='%s' category='backend_auth_rejected' code='' request_id=''\n",
+							failed_key.database_user.c_str(), failed_hostgroup,
+							failed_key.endpoint.c_str(), failed_key.region.c_str());
+						GloAwsIamTokenSource->invalidate(
+							failed_key, failed_generation);
+						myds->connect_retries_on_failure = 0;
+						myds->destroy_MySQL_Connection_From_Pool(false);
+						aws_iam_connect_token_key = AwsIamTokenKey {};
+						aws_iam_connect_token_generation = 0;
+						aws_iam_fresh_token_retry_attempted = true;
+						NEXT_IMMEDIATE_NEW(CONNECTING_SERVER);
+					}
+					if (connect_errno == ER_ACCESS_DENIED_ERROR &&
+						aws_iam_fresh_token_retry_attempted) {
+						proxy_error(
+							"AWS IAM backend connection failure user='%s' hostgroup=%u endpoint='%s'"
+							" region='%s' category='backend_auth_rejected' code='' request_id=''"
+							" hint='verify_system_clock_for_sigv4_clock_skew'\n",
+							failed_key.database_user.c_str(), failed_hostgroup,
+							failed_key.endpoint.c_str(), failed_key.region.c_str());
+					} else {
+						proxy_error(
+							"AWS IAM backend connection failure user='%s' hostgroup=%u endpoint='%s'"
+							" region='%s' category='backend_connect' code='' request_id=''\n",
+							failed_key.database_user.c_str(), failed_hostgroup,
+							failed_key.endpoint.c_str(), failed_key.region.c_str());
+					}
 					static const char generic_error[] = "Unable to connect to backend";
 					client_myds->setDSS_STATE_QUERY_SENT_NET();
 					client_myds->myprot.generate_pkt_ERR(
@@ -3887,6 +4060,9 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 					RequestEnd(myds, 9002, generic_error);
 					while (!previous_status.empty()) previous_status.pop();
 					myds->destroy_MySQL_Connection_From_Pool(false);
+					aws_iam_connect_token_key = AwsIamTokenKey {};
+					aws_iam_connect_token_generation = 0;
+					aws_iam_fresh_token_retry_attempted = false;
 					myds->max_connect_time = 0;
 					NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
 				}
