@@ -9,15 +9,20 @@ called.
 import argparse
 import base64
 import configparser
+import fcntl
 import json
 import os
 import re
 import stat
+import sys
+import time
 from collections.abc import Iterable, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
+from typing import Callable, Protocol
 
 
 class SyncError(RuntimeError):
@@ -575,6 +580,314 @@ def build_plan(
     )
 
 
+class SourceAdapter(Protocol):
+    def fetch_snapshot(self) -> list[tuple[str, str]]: ...
+
+
+class AdminAdapter(Protocol):
+    def fetch_main_users(self) -> list[ProxySQLUser]: ...
+
+    def fetch_runtime_users(self) -> list[ProxySQLUser]: ...
+
+    def apply_actions(self, actions: Sequence[SyncAction]) -> None: ...
+
+    def load_runtime(self) -> None: ...
+
+    def save_to_disk(self) -> None: ...
+
+
+@dataclass(frozen=True)
+class RunSummary:
+    outcome: str
+    counts: Mapping[str, int]
+    loaded: bool
+    saved: bool
+    duration_seconds: float
+
+
+def _close_connection(connection: object) -> None:
+    try:
+        connection.close()
+    except Exception:
+        pass
+
+
+class PostgreSQLSource:
+    """Fetch the authoritative PostgreSQL role verifier snapshot."""
+
+    def __init__(
+        self,
+        config: AppConfig,
+        *,
+        connect: Callable[..., object] | None = None,
+        sql_module: object | None = None,
+    ) -> None:
+        self.config = config
+        self._connect = connect
+        self._sql_module = sql_module
+
+    def _driver(self) -> tuple[Callable[..., object], object]:
+        if self._connect is not None and self._sql_module is not None:
+            return self._connect, self._sql_module
+        try:
+            import psycopg2
+            from psycopg2 import sql
+        except ImportError:
+            raise _error("PostgreSQL driver is not installed") from None
+        return self._connect or psycopg2.connect, self._sql_module or sql
+
+    def fetch_snapshot(self) -> list[tuple[str, str]]:
+        try:
+            connect, sql = self._driver()
+            source = self.config.source
+            connection = connect(
+                host=source.host,
+                port=source.port,
+                dbname=source.database,
+                user=source.username,
+                password=source.password,
+                connect_timeout=source.connect_timeout,
+            )
+            try:
+                cursor = connection.cursor()
+                query = sql.SQL("SELECT username::text, password FROM {}.{}()").format(
+                    sql.Identifier(source.function_schema), sql.Identifier(source.function_name)
+                )
+                cursor.execute(query)
+                return list(cursor.fetchall())
+            finally:
+                _close_connection(connection)
+        except SyncError:
+            raise
+        except Exception:
+            raise _error("unable to fetch PostgreSQL role snapshot") from None
+
+
+_USER_COLUMNS = (
+    "username,password,active,use_ssl,default_hostgroup,transaction_persistent,"
+    "fast_forward,backend,frontend,max_connections,attributes,comment"
+)
+_USER_FIELDS = (
+    "username", "password", "active", "use_ssl", "default_hostgroup", "transaction_persistent",
+    "fast_forward", "backend", "frontend", "max_connections", "attributes", "comment",
+)
+
+
+class ProxySQLAdmin:
+    """Execute the small, explicit ProxySQL admin command set used by sync."""
+
+    def __init__(self, config: AppConfig, *, connect: Callable[..., object] | None = None) -> None:
+        self.config = config
+        self._connect = connect
+
+    def _connection(self) -> object:
+        connect = self._connect
+        if connect is None:
+            try:
+                import pymysql
+            except ImportError:
+                raise _error("ProxySQL admin driver is not installed") from None
+            connect = pymysql.connect
+        proxy = self.config.proxysql
+        try:
+            return connect(
+                host=proxy.host,
+                port=proxy.port,
+                user=proxy.username,
+                password=proxy.password,
+                database="main",
+                connect_timeout=proxy.connect_timeout,
+                autocommit=True,
+            )
+        except Exception:
+            raise _error("unable to connect to ProxySQL admin interface") from None
+
+    @staticmethod
+    def _user_values(user: ProxySQLUser) -> tuple[object, ...]:
+        return tuple(getattr(user, field) for field in _USER_FIELDS)
+
+    def _fetch_users(self, table: str) -> list[ProxySQLUser]:
+        connection = self._connection()
+        try:
+            cursor = connection.cursor()
+            cursor.execute(f"SELECT {_USER_COLUMNS} FROM {table}")
+            return [ProxySQLUser(*row) for row in cursor.fetchall()]
+        except Exception:
+            raise _error("unable to fetch ProxySQL users") from None
+        finally:
+            _close_connection(connection)
+
+    def fetch_main_users(self) -> list[ProxySQLUser]:
+        return self._fetch_users("mysql_users")
+
+    def fetch_runtime_users(self) -> list[ProxySQLUser]:
+        return self._fetch_users("runtime_mysql_users")
+
+    def apply_actions(self, actions: Sequence[SyncAction]) -> None:
+        connection = self._connection()
+        try:
+            cursor = connection.cursor()
+            for action in actions:
+                user = action.after
+                if action.kind is ActionKind.CREATE:
+                    placeholders = ",".join(["%s"] * len(_USER_FIELDS))
+                    cursor.execute(
+                        f"INSERT INTO mysql_users ({_USER_COLUMNS}) VALUES ({placeholders})",
+                        self._user_values(user),
+                    )
+                elif action.kind is ActionKind.UPDATE:
+                    assignments = ",".join(f"{field}=%s" for field in _USER_FIELDS[1:])
+                    cursor.execute(
+                        f"UPDATE mysql_users SET {assignments} WHERE username=%s AND backend=%s",
+                        self._user_values(user)[1:] + (user.username, user.backend),
+                    )
+                elif action.kind is ActionKind.DISABLE:
+                    cursor.execute(
+                        "UPDATE mysql_users SET active=%s WHERE username=%s AND backend=%s",
+                        (user.active, user.username, user.backend),
+                    )
+                else:
+                    raise _error("sync plan contains an unknown action")
+        except SyncError:
+            raise
+        except Exception:
+            raise _error("unable to apply ProxySQL user changes") from None
+        finally:
+            _close_connection(connection)
+
+    def _execute_command(self, command: str, failure_message: str) -> None:
+        connection = self._connection()
+        try:
+            connection.cursor().execute(command)
+        except Exception:
+            raise _error(failure_message) from None
+        finally:
+            _close_connection(connection)
+
+    def load_runtime(self) -> None:
+        self._execute_command("LOAD MYSQL USERS TO RUNTIME", "unable to load ProxySQL users to runtime")
+
+    def save_to_disk(self) -> None:
+        self._execute_command("SAVE MYSQL USERS TO DISK", "unable to save ProxySQL users to disk")
+
+
+def _sync_failure(message: str) -> SyncError:
+    return _error(message)
+
+
+def run_sync(
+    config: AppConfig,
+    source: SourceAdapter,
+    admin: AdminAdapter,
+    *,
+    dry_run: bool,
+    verbose: bool,
+) -> RunSummary:
+    """Read, plan, and optionally reconcile one complete role snapshot."""
+
+    started = time.monotonic()
+    try:
+        raw_snapshot = source.fetch_snapshot()
+    except Exception:
+        raise _sync_failure("unable to fetch source role snapshot") from None
+    snapshot = validate_snapshot(raw_snapshot, config.sync.allow_empty_snapshot)
+    try:
+        main_users = admin.fetch_main_users()
+        runtime_users = admin.fetch_runtime_users()
+    except Exception:
+        raise _sync_failure("unable to fetch ProxySQL user snapshots") from None
+    plan = build_plan(snapshot, main_users, runtime_users, config.sync)
+    if verbose:
+        for action in plan.actions:
+            print(f"plan: {action.kind.value} username={action.after.username}")
+
+    loaded = False
+    saved = False
+    if not dry_run:
+        if plan.actions:
+            try:
+                admin.apply_actions(plan.actions)
+            except Exception:
+                raise _sync_failure("unable to apply ProxySQL user changes") from None
+        if plan.requires_load:
+            try:
+                admin.load_runtime()
+            except Exception:
+                raise _sync_failure("unable to load ProxySQL users to runtime") from None
+            loaded = True
+            if config.sync.save_to_disk:
+                try:
+                    admin.save_to_disk()
+                except Exception:
+                    raise _sync_failure("unable to save ProxySQL users to disk") from None
+                saved = True
+    return RunSummary(
+        outcome="dry-run" if dry_run else "success",
+        counts=MappingProxyType(dict(plan.counts)),
+        loaded=loaded,
+        saved=saved,
+        duration_seconds=time.monotonic() - started,
+    )
+
+
+@contextmanager
+def exclusive_lock(path: Path):
+    """Yield whether the process acquired the non-blocking synchronizer lock."""
+
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    except OSError:
+        raise _error("unable to open synchronizer lock file") from None
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def _summary_line(summary: RunSummary) -> str:
+    counts = " ".join(f"{name}={value}" for name, value in sorted(summary.counts.items()))
+    return (
+        f"sync {summary.outcome}: {counts} loaded={str(summary.loaded).lower()} "
+        f"saved={str(summary.saved).lower()} duration={summary.duration_seconds:.3f}s"
+    )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run the command-line synchronizer without importing database drivers for --help."""
+
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        config = load_config(args.config, CLIOverrides(
+            default_hostgroup=args.default_hostgroup,
+            missing_role_action=args.missing_role_action,
+            save_to_disk=args.save_to_disk,
+        ))
+        with exclusive_lock(config.sync.lock_file) as acquired:
+            if not acquired:
+                print("sync already running; exiting")
+                return 0
+            summary = run_sync(
+                config,
+                PostgreSQLSource(config),
+                ProxySQLAdmin(config),
+                dry_run=args.dry_run,
+                verbose=args.verbose,
+            )
+        print(_summary_line(summary))
+        return 0
+    except SyncError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
+
 __all__ = [
     "AppConfig",
     "CLIOverrides",
@@ -589,11 +902,23 @@ __all__ = [
     "SyncPlan",
     "SyncSettings",
     "ActionKind",
+    "AdminAdapter",
+    "PostgreSQLSource",
+    "ProxySQLAdmin",
+    "RunSummary",
+    "SourceAdapter",
     "build_plan",
     "decode_ownership",
     "load_config",
     "parse_args",
+    "run_sync",
+    "exclusive_lock",
+    "main",
     "with_ownership",
     "validate_snapshot",
     "validate_verifier",
 ]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
