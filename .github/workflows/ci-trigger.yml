@@ -8,9 +8,9 @@ jobs:
   trigger:
     runs-on: ubuntu-22.04
     # Must exceed the timeout of the job it watches (ci-builds, 120) -- this
-    # job blocks on `gh run watch` until that build finishes, so an equal
-    # budget lets the watcher expire first and the workflow_run[completed]
-    # fan-out never fires.
+    # job blocks on explicit CI-builds status/conclusion polling until that
+    # build finishes, so an equal budget lets the poller expire first and the
+    # workflow_run[completed] fan-out never fires.
     timeout-minutes: 240
 
     steps:
@@ -18,35 +18,126 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        set +e
-        #set -x
+        set -euo pipefail
+
+        readonly API_ERROR_WINDOW_SECONDS="${CI_API_ERROR_WINDOW_SECONDS:-300}"
+        readonly API_CALL_TIMEOUT_SECONDS="${CI_API_CALL_TIMEOUT_SECONDS:-30}"
+        readonly API_RETRY_INITIAL_SECONDS="${CI_API_RETRY_INITIAL_SECONDS:-5}"
+        readonly API_RETRY_MAX_SECONDS="${CI_API_RETRY_MAX_SECONDS:-30}"
+        readonly DISCOVERY_POLL_SECONDS="${CI_DISCOVERY_POLL_SECONDS:-20}"
+        readonly STATUS_POLL_SECONDS="${CI_STATUS_POLL_SECONDS:-30}"
+        readonly INITIAL_DELAY_SECONDS="${CI_INITIAL_DELAY_SECONDS:-5}"
+        readonly GH_BIN="${GH_BIN:-gh}"
+        readonly REPOSITORY="${{ github.repository }}"
 
         RUNNAME1="${{ github.event.after || github.sha }}"
         RUNNAME2="${{ github.event.pull_request.head.sha || github.sha }}"
         RUNNAME3="${{ github.sha }}"
-        echo "Get run id: '${RUNNAME1}|${RUNNAME2}|${RUNNAME3}' ..."
-        sleep 5
-        RUNID=$(gh -R ${{ github.repository }} run list -w CI-builds -s in_progress | grep -P "${RUNNAME1}|${RUNNAME2}|${RUNNAME3}" | grep -Po '(?<=workflow_run)\s+\d+')
-        while [[ -z ${RUNID} ]]; do
-          sleep 20
-          gh -R ${{ github.repository }} run list -w CI-builds -s in_progress | grep -P "${RUNNAME1}|${RUNNAME2}|${RUNNAME3}"
-          RUNID=$(gh -R ${{ github.repository }} run list -w CI-builds -s in_progress | grep -P "${RUNNAME1}|${RUNNAME2}|${RUNNAME3}" | grep -Po '(?<=workflow_run)\s+\d+')
+        GH_RESPONSE=""
+
+        gh_poll() {
+          local operation="$1"
+          shift
+
+          local deadline=$((SECONDS + API_ERROR_WINDOW_SECONDS))
+          local delay="${API_RETRY_INITIAL_SECONDS}"
+          local attempt=1
+          local response=""
+          local status=0
+
+          while true; do
+            local remaining=$((deadline - SECONDS))
+            if ((remaining <= 0)); then
+              echo "::error::GitHub API polling failed for ${API_ERROR_WINDOW_SECONDS} consecutive seconds while ${operation}"
+              return 1
+            fi
+
+            local call_timeout="${API_CALL_TIMEOUT_SECONDS}"
+            if ((call_timeout > remaining)); then
+              call_timeout="${remaining}"
+            fi
+
+            if response=$(timeout --signal=KILL "${call_timeout}s" "${GH_BIN}" "$@" 2>&1); then
+              GH_RESPONSE="${response}"
+              return 0
+            else
+              status=$?
+            fi
+
+            remaining=$((deadline - SECONDS))
+            if ((remaining <= 0)); then
+              echo "::error::GitHub API polling failed for ${API_ERROR_WINDOW_SECONDS} consecutive seconds while ${operation}; last exit ${status}"
+              printf '%s\n' "${response}"
+              return 1
+            fi
+
+            local sleep_for="${delay}"
+            if ((sleep_for > remaining)); then
+              sleep_for="${remaining}"
+            fi
+            echo "::warning::GitHub API call failed while ${operation} (attempt ${attempt}, exit ${status}); retrying in ${sleep_for}s"
+            printf '%s\n' "${response}"
+            sleep "${sleep_for}"
+
+            if ((delay < API_RETRY_MAX_SECONDS)); then
+              delay=$((delay * 2))
+              if ((delay > API_RETRY_MAX_SECONDS)); then
+                delay="${API_RETRY_MAX_SECONDS}"
+              fi
+            fi
+            attempt=$((attempt + 1))
+          done
+        }
+
+        echo "Get CI-builds run id for '${RUNNAME1}|${RUNNAME2}|${RUNNAME3}' ..."
+        sleep "${INITIAL_DELAY_SECONDS}"
+
+        RUNID=""
+        while [[ -z "${RUNID}" ]]; do
+          gh_poll "discovering CI-builds" -R "${REPOSITORY}" run list \
+            --workflow CI-builds --limit 100 \
+            --json databaseId,displayTitle,status
+
+          for expected_sha in "${RUNNAME1}" "${RUNNAME2}" "${RUNNAME3}"; do
+            [[ -n "${expected_sha}" ]] || continue
+            RUNID=$(jq -r --arg sha "${expected_sha}" \
+              'first(.[] | select(.displayTitle | contains($sha)) | .databaseId) // empty' \
+              <<<"${GH_RESPONSE}")
+            [[ -z "${RUNID}" ]] || break
+          done
+
+          if [[ -z "${RUNID}" ]]; then
+            echo "CI-builds run is not visible yet; retrying in ${DISCOVERY_POLL_SECONDS}s"
+            sleep "${DISCOVERY_POLL_SECONDS}"
+          fi
         done
-        echo "Got run id: '${RUNNAME1}|${RUNNAME2}|${RUNNAME3}' : '${RUNID}'"
-        
-        echo "Trigger workflow_run[in_progress]: '${RUNNAME1}|${RUNNAME2}|${RUNNAME3}'"
-        sleep 5
-        # This blocks until the run is finished. Propagate its result: the
-        # downstream workflow_run[completed] jobs intentionally require this
-        # trigger workflow to succeed before consuming CI-builds handoffs.
-        if gh -R ${{ github.repository }} run watch --exit-status -i 30 ${RUNID} >/dev/null; then
-          echo "CI-builds run ${RUNID} completed successfully"
-        else
-          watch_status=$?
-          echo "::error::CI-builds run ${RUNID} did not complete successfully (gh run watch exit ${watch_status})"
-          exit "${watch_status}"
-        fi
-        sleep 5
+
+        echo "Found CI-builds run ${RUNID}; waiting for its confirmed conclusion"
+        while true; do
+          gh_poll "querying CI-builds run ${RUNID}" -R "${REPOSITORY}" run view "${RUNID}" \
+            --json status,conclusion
+
+          run_status=$(jq -r '.status // empty' <<<"${GH_RESPONSE}")
+          run_conclusion=$(jq -r '.conclusion // empty' <<<"${GH_RESPONSE}")
+          if [[ -z "${run_status}" ]]; then
+            echo "::error::GitHub API returned no status for CI-builds run ${RUNID}"
+            exit 1
+          fi
+
+          if [[ "${run_status}" != "completed" ]]; then
+            echo "CI-builds run ${RUNID} is ${run_status}; polling again in ${STATUS_POLL_SECONDS}s"
+            sleep "${STATUS_POLL_SECONDS}"
+            continue
+          fi
+
+          if [[ "${run_conclusion}" == "success" ]]; then
+            echo "CI-builds run ${RUNID} completed successfully"
+            break
+          fi
+
+          echo "::error::CI-builds run ${RUNID} completed with conclusion '${run_conclusion:-unknown}'"
+          exit 1
+        done
 
     - name: Trigger workflow_run[completed]
       env:
