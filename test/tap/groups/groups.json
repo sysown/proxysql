@@ -107,6 +107,7 @@
   "mysql-sql_log_bin-error-t" : [ "legacy-g1","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1","mysql84-g1","mysql90-g1","mysql95-g1" ],
   "mysql-test_malformed_packet-t" : [ "legacy-g1","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1","mysql84-g1","mysql90-g1","mysql95-g1" ],
   "mysql-test_ssl_CA-t" : [ "legacy-g1","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1","mysql84-g1","mysql90-g1","mysql95-g1" ],
+  "mysql-user-variable-tracking-t" : [ "legacy-g4","mariadb10-galera-g4","mysql-multiplexing=false-g4","mysql84-g4","mysql90-g4","mysql95-g4","set_parser_algorithm_3-g1" ],
   "mysql-watchdog_test-t" : [ "legacy-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g4","mysql90-g4","mysql95-g4" ],
   "mysql-zstd_compression_level-t" : [ "legacy-g1","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1","mysql84-g1","mysql90-g1","mysql95-g1" ],
   "mysql-zstd_compression_level_libmysql-t" : [ "mysql84-g1","mysql90-g1","mysql95-g1" ],
