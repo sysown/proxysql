@@ -8,6 +8,7 @@
 #include "proxysql_atomic.h"
 
 #include "MySQL_Authentication.hpp"
+#include "MySQL_Backend_Auth.h"
 
 #include <openssl/crypto.h>
 
@@ -322,6 +323,18 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 #else
 	spin_wrunlock(&cg.lock);
 #endif
+	if (usertype == USERNAME_BACKEND) {
+		const MySQLBackendAuthPolicy policy = parse_mysql_backend_auth_policy(
+			username,
+			attributes != nullptr ? attributes : "",
+			password != nullptr && password[0] != '\0');
+		if (policy.type == MySQLBackendAuthType::AWS_IAM && policy.ignored_password) {
+			proxy_warning(
+				"mysql_users backend entry for '%s' uses aws_iam authentication; "
+				"clear the unused backend password\n",
+				username);
+		}
+	}
 	return true;
 };
 
