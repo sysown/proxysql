@@ -28,9 +28,11 @@ namespace {
 constexpr const char *kUser = "pool_user";
 constexpr const char *kOtherUser = "other_pool_user";
 constexpr const char *kInvalidReloadUser = "invalid_reload_pool_user";
+constexpr const char *kRowlessPassthroughUser = "rowless_passthrough_pool_user";
 constexpr const char *kSchema = "pool_schema";
 
 std::atomic<unsigned int> change_user_calls { 0 };
+std::atomic<bool> change_user_immediate_success { false };
 
 MySrvC *create_server(unsigned int hostgroup_id, const char *address) {
 	srv_info_t info;
@@ -405,6 +407,29 @@ void test_invalid_policy_cannot_enter_reset(MySQL_Thread& worker) {
 		"INVALID backend policy destroys reset work without COM_CHANGE_USER");
 }
 
+void test_authorized_rowless_passthrough_can_enter_detached_reset(
+	MySQL_Thread& worker)
+{
+	MySrvC *server = create_server(817, "reset-rowless-passthrough");
+	SessionFixture fixture(
+		worker, 817, MySQLBackendAuthType::PASSWORD,
+		kRowlessPassthroughUser);
+	MySQL_Connection *password = create_established_connection(
+		server, kRowlessPassthroughUser, MySQLBackendAuthType::PASSWORD);
+	password->set_rowless_passthrough_authorized(true);
+	server->ConnectionsUsed->add(password);
+	fixture.attach_backend(password);
+	fixture.session->set_status(RESETTING_CONNECTION);
+	change_user_calls.store(0, std::memory_order_relaxed);
+	fixture.session->to_process = 1;
+	const int rc = fixture.session->handler();
+	ok(rc == 0 && fixture.session->status == RESETTING_CONNECTION &&
+		fixture.selected() == password &&
+		server->ConnectionsUsed->conns_length() == 1 &&
+		change_user_calls.load(std::memory_order_relaxed) == 1,
+		"authorized rowless pass-through PASSWORD can enter detached reset");
+}
+
 void test_destroy_path_never_queues_iam() {
 	MySrvC *server = create_server(805, "destroy-iam");
 	GloMTH->variables.connpoll_reset_queue_length = 50;
@@ -434,6 +459,7 @@ void test_reset_queue_worker_never_changes_iam() {
 	MySrvC *server = create_server(808, "reset-worker-iam");
 	MySQL_Connection *iam = create_established_connection(
 		server, kUser, MySQLBackendAuthType::AWS_IAM);
+	iam->set_rowless_passthrough_authorized(true);
 	server->ConnectionsUsed->add(iam);
 	MyHGM->queue.add(iam);
 	change_user_calls.store(0, std::memory_order_relaxed);
@@ -457,6 +483,7 @@ void test_reset_queue_worker_never_resets_invalid_policy() {
 	MySrvC *server = create_server(816, "reset-worker-invalid-policy");
 	MySQL_Connection *password = create_established_connection(
 		server, kInvalidReloadUser, MySQLBackendAuthType::PASSWORD);
+	password->set_rowless_passthrough_authorized(true);
 	server->ConnectionsUsed->add(password);
 	MyHGM->queue.add(password);
 	const unsigned long resets_before = MyHGM->status.myconnpoll_reset;
@@ -474,6 +501,66 @@ void test_reset_queue_worker_never_resets_invalid_policy() {
 	ok(removed && MyHGM->status.myconnpoll_reset == resets_before &&
 		change_user_calls.load(std::memory_order_relaxed) == 0,
 		"reset queue worker discards INVALID policy before reset processing");
+}
+
+void test_reset_queue_worker_preserves_authorized_rowless_passthrough() {
+	MySrvC *server = create_server(818, "reset-worker-rowless-passthrough");
+	MySQL_Connection *password = create_established_connection(
+		server, kRowlessPassthroughUser, MySQLBackendAuthType::PASSWORD);
+	password->set_rowless_passthrough_authorized(true);
+	password->mysql->net.pvio =
+		reinterpret_cast<decltype(password->mysql->net.pvio)>(1);
+	password->mysql->net.fd = 123;
+	password->mysql->net.buff =
+		reinterpret_cast<decltype(password->mysql->net.buff)>(1);
+	server->ConnectionsUsed->add(password);
+	MyHGM->queue.add(password);
+	const unsigned long resets_before = MyHGM->status.myconnpoll_reset;
+	change_user_calls.store(0, std::memory_order_relaxed);
+	change_user_immediate_success.store(true, std::memory_order_relaxed);
+	std::thread reset_worker([]() { HGCU_thread_run(); });
+	for (unsigned int attempt = 0;
+		attempt < 1000 && change_user_calls.load(std::memory_order_relaxed) == 0;
+		++attempt) {
+		usleep(1000);
+	}
+	MyHGM->queue.add(nullptr);
+	reset_worker.join();
+	change_user_immediate_success.store(false, std::memory_order_relaxed);
+	const bool returned_to_pool =
+		server->ConnectionsFree->conns_length() == 1 &&
+		server->ConnectionsUsed->conns_length() == 0;
+	ok(MyHGM->status.myconnpoll_reset == resets_before + 1 &&
+		change_user_calls.load(std::memory_order_relaxed) == 1 && returned_to_pool,
+		"reset worker preserves authorized rowless pass-through PASSWORD semantics");
+	if (returned_to_pool) {
+		password->mysql->net.pvio = nullptr;
+		password->mysql->net.fd = 0;
+		password->mysql->net.buff = nullptr;
+	}
+}
+
+void test_reset_queue_worker_discards_unmarked_rowless_password() {
+	MySrvC *server = create_server(819, "reset-worker-unmarked-rowless");
+	MySQL_Connection *password = create_established_connection(
+		server, kRowlessPassthroughUser, MySQLBackendAuthType::PASSWORD);
+	server->ConnectionsUsed->add(password);
+	MyHGM->queue.add(password);
+	const unsigned long resets_before = MyHGM->status.myconnpoll_reset;
+	change_user_calls.store(0, std::memory_order_relaxed);
+	std::thread reset_worker([]() { HGCU_thread_run(); });
+	bool removed = false;
+	for (unsigned int attempt = 0; attempt < 1000 && !removed; ++attempt) {
+		MyHGM->wrlock();
+		removed = server->ConnectionsUsed->conns_length() == 0;
+		MyHGM->wrunlock();
+		if (!removed) usleep(1000);
+	}
+	MyHGM->queue.add(nullptr);
+	reset_worker.join();
+	ok(removed && MyHGM->status.myconnpoll_reset == resets_before &&
+		change_user_calls.load(std::memory_order_relaxed) == 0,
+		"unmarked rowless PASSWORD cannot bypass reset policy validation");
 }
 
 void test_change_user_state_replaces_iam(MySQL_Thread& worker) {
@@ -528,7 +615,8 @@ int __wrap_mysql_change_user_start(
 {
 	change_user_calls.fetch_add(1, std::memory_order_relaxed);
 	*ret = 0;
-	return MYSQL_WAIT_READ;
+	return change_user_immediate_success.load(std::memory_order_relaxed)
+		? 0 : MYSQL_WAIT_READ;
 }
 
 int __wrap_mysql_real_connect_start(MYSQL **ret, MYSQL *, const char *,
@@ -548,7 +636,7 @@ int main() {
 	skip(1, "requires GNU ld --wrap support");
 	return exit_status();
 #else
-	plan(27);
+	plan(30);
 	if (test_init_minimal() != 0 || test_init_auth() != 0 ||
 		test_init_query_processor() != 0 ||
 		test_init_hostgroups() != 0) {
@@ -582,9 +670,12 @@ int main() {
 		test_attached_password_reload_to_invalid_fails_closed(worker); // 1
 		test_invalid_policy_cannot_continue_change_user(worker); // 1
 		test_invalid_policy_cannot_enter_reset(worker); // 1
+		test_authorized_rowless_passthrough_can_enter_detached_reset(worker); // 1
 		test_destroy_path_never_queues_iam();     // 2
 		test_reset_queue_worker_never_changes_iam(); // 1
 		test_reset_queue_worker_never_resets_invalid_policy(); // 1
+		test_reset_queue_worker_preserves_authorized_rowless_passthrough(); // 1
+		test_reset_queue_worker_discards_unmarked_rowless_password(); // 1
 		test_change_user_state_replaces_iam(worker); // 1
 		test_resetting_state_destroys_iam(worker);   // 1
 	}

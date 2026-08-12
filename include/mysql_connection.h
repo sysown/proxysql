@@ -78,6 +78,7 @@ class MySQL_Connection_userinfo {
 class MySQL_Connection {
 	private:
 	MySQLBackendAuthType backend_auth_type_{MySQLBackendAuthType::PASSWORD};
+	bool rowless_passthrough_authorized_{false};
 	std::unique_ptr<MySQLAwsIamIdentity> aws_iam_identity_;
 	bool aws_iam_connector_secret_active_{false};
 	bool aws_iam_async_connect_pending_{false};
@@ -206,6 +207,10 @@ class MySQL_Connection {
 	~MySQL_Connection();
 	void set_backend_auth_type(MySQLBackendAuthType);
 	MySQLBackendAuthType backend_auth_type() const;
+	/** Record that this PASSWORD connection authenticated via rowless pass-through. */
+	void set_rowless_passthrough_authorized(bool);
+	/** Check whether the current resolved policy permits password reset/reuse. */
+	bool can_reset_for_backend_auth_policy(const MySQLBackendAuthPolicy&) const;
 	void attach_aws_iam_token(const AwsIamTokenKey&, AwsIamTokenResult&&);
 	void clear_aws_iam_handshake_secret();
 	bool has_aws_iam_handshake_secret() const;

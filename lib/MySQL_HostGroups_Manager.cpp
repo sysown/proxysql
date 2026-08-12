@@ -159,9 +159,11 @@ void * HGCU_thread_run() {
 			const MySQLBackendAuthPolicy policy = GloMyAuth != nullptr
 				? resolve_mysql_backend_auth_policy(*GloMyAuth, backend_username)
 				: MySQLBackendAuthPolicy {};
-			if (myconn->backend_auth_type() == MySQLBackendAuthType::AWS_IAM ||
-				(GloMyAuth != nullptr &&
-				 policy.type != MySQLBackendAuthType::PASSWORD)) {
+			const bool reset_allowed =
+				myconn->backend_auth_type() == MySQLBackendAuthType::PASSWORD &&
+				(GloMyAuth == nullptr ||
+				 myconn->can_reset_for_backend_auth_policy(policy));
+			if (!reset_allowed) {
 				conn_array->remove_index_fast(i);
 				myconn->send_quit = false;
 				MyHGM->destroy_MyConn_from_pool(myconn);

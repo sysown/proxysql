@@ -163,6 +163,16 @@ extern MySQL_STMT_Manager_v14 *GloMyStmt;
 
 extern SQLite3_Server *GloSQLite3Server;
 
+static bool session_authorizes_rowless_passthrough(
+	const MySQL_Session *session, const char *backend_username,
+	const MySQLBackendAuthPolicy& policy)
+{
+	return policy.type == MySQLBackendAuthType::INVALID && session != nullptr &&
+		session->passthrough_credential && backend_username != nullptr &&
+		backend_username[0] != '\0' &&
+		policy.failure_code == "backend_user_not_found";
+}
+
 static MySQLBackendAuthPolicy resolved_backend_auth_policy_for_session(
 	const MySQL_Session *session)
 {
@@ -173,10 +183,8 @@ static MySQLBackendAuthPolicy resolved_backend_auth_policy_for_session(
 			? session->client_myds->myconn->userinfo->username : nullptr;
 	MySQLBackendAuthPolicy policy =
 		resolve_mysql_backend_auth_policy(*GloMyAuth, backend_username);
-	if (policy.type == MySQLBackendAuthType::INVALID && session != nullptr &&
-		session->passthrough_credential && backend_username != nullptr &&
-		backend_username[0] != '\0' &&
-		policy.failure_code == "backend_user_not_found") {
+	if (session_authorizes_rowless_passthrough(
+			session, backend_username, policy)) {
 		policy.type = MySQLBackendAuthType::PASSWORD;
 		policy.failure_code.clear();
 	}
@@ -2145,11 +2153,18 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 		// the backend conn before returning it, mirroring the client-side guard
 		// above (NULL-safe: len==0 falls back to mysql_thread___default_schema).
 		if (mybe && mybe->server_myds && mybe->server_myds->myconn) {
-			MySQL_Connection_userinfo *bui = mybe->server_myds->myconn->userinfo;
+			MySQL_Connection *backend_conn = mybe->server_myds->myconn;
+			MySQL_Connection_userinfo *bui = backend_conn->userinfo;
 			if (bui && bui->schemaname == NULL) {
 				bui->set_schemaname(
 					default_schema, default_schema ? strlen(default_schema) : 0);
 			}
+			const char *backend_username = bui != nullptr ? bui->username : nullptr;
+			const MySQLBackendAuthPolicy policy =
+				resolve_mysql_backend_auth_policy(*GloMyAuth, backend_username);
+			backend_conn->set_rowless_passthrough_authorized(
+				session_authorizes_rowless_passthrough(
+					this, backend_username, policy));
 			mybe->server_myds->return_MySQL_Connection_To_Pool();
 		}
 
@@ -2349,8 +2364,7 @@ int MySQL_Session::handler_again___status_RESETTING_CONNECTION() {
 		? myconn->userinfo->username : nullptr;
 	const MySQLBackendAuthPolicy policy =
 		resolve_mysql_backend_auth_policy(*GloMyAuth, backend_username);
-	if (myconn->backend_auth_type() == MySQLBackendAuthType::AWS_IAM ||
-		policy.type != MySQLBackendAuthType::PASSWORD) {
+	if (!myconn->can_reset_for_backend_auth_policy(policy)) {
 		myds->destroy_MySQL_Connection_From_Pool(false);
 		myds->fd = 0;
 		delete mybe->server_myds;
@@ -8764,10 +8778,9 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		// has no USERNAME_BACKEND row, so retain its established password mode.
 		// Every other invalid policy, including malformed IAM attributes, remains
 		// fail-closed and an IAM row can never fall back to password mode.
-		if (backend_auth_policy.type == MySQLBackendAuthType::INVALID &&
-			passthrough_credential && backend_username != nullptr &&
-			backend_username[0] != '\0' &&
-			backend_auth_policy.failure_code == "backend_user_not_found") {
+		const bool rowless_passthrough = session_authorizes_rowless_passthrough(
+			this, backend_username, backend_auth_policy);
+		if (rowless_passthrough) {
 			backend_auth_policy.type = MySQLBackendAuthType::PASSWORD;
 			backend_auth_policy.failure_code.clear();
 		}
@@ -8890,6 +8903,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 			mc = nullptr;
 		}
 		if (mc) {
+			mc->set_rowless_passthrough_authorized(rowless_passthrough);
 			mybe->server_myds->attach_connection(mc);
 			thread->status_variables.stvar[st_var_ConnPool_get_conn_success]++;
 		} else {

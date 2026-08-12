@@ -589,11 +589,29 @@ void MySQL_Connection::set_backend_auth_type(MySQLBackendAuthType type) {
 		clear_aws_iam_handshake_secret();
 		aws_iam_identity_.reset();
 	}
+	if (type != MySQLBackendAuthType::PASSWORD) {
+		rowless_passthrough_authorized_ = false;
+	}
 	backend_auth_type_ = type;
 }
 
 MySQLBackendAuthType MySQL_Connection::backend_auth_type() const {
 	return backend_auth_type_;
+}
+
+void MySQL_Connection::set_rowless_passthrough_authorized(bool authorized) {
+	rowless_passthrough_authorized_ =
+		authorized && backend_auth_type_ == MySQLBackendAuthType::PASSWORD;
+}
+
+bool MySQL_Connection::can_reset_for_backend_auth_policy(
+	const MySQLBackendAuthPolicy& policy) const
+{
+	if (backend_auth_type_ != MySQLBackendAuthType::PASSWORD) return false;
+	if (policy.type == MySQLBackendAuthType::PASSWORD) return true;
+	return rowless_passthrough_authorized_ &&
+		policy.type == MySQLBackendAuthType::INVALID &&
+		policy.failure_code == "backend_user_not_found";
 }
 
 void MySQL_Connection::attach_aws_iam_token(
