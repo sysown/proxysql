@@ -6,7 +6,7 @@ import stat
 import sys
 import tempfile
 from dataclasses import replace
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import patch
 from pathlib import Path
@@ -547,12 +547,24 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual((0, "old", 1), disable_params)
 
     def test_drivers_are_imported_only_when_default_connectors_are_used(self):
+        self.assertNotIn("psycopg", self.mod.__dict__)
         self.assertNotIn("psycopg2", self.mod.__dict__)
         self.assertNotIn("pymysql", self.mod.__dict__)
         self.mod.PostgreSQLSource(self.config, connect=self.fake_connect, sql_module=FakeSQL).fetch_snapshot()
         self.mod.ProxySQLAdmin(self.config, connect=self.fake_connect).fetch_main_users()
+        self.assertNotIn("psycopg", self.mod.__dict__)
         self.assertNotIn("psycopg2", self.mod.__dict__)
         self.assertNotIn("pymysql", self.mod.__dict__)
+
+    def test_default_source_connector_uses_psycopg3(self):
+        fake_psycopg = ModuleType("psycopg")
+        fake_psycopg.connect = self.fake_connect
+        fake_psycopg.sql = FakeSQL
+        self.connection.cursor_object.rows = [("alice", self.verifier_a)]
+        with patch.dict(sys.modules, {"psycopg": fake_psycopg}):
+            source = self.mod.PostgreSQLSource(self.config)
+            self.assertEqual([("alice", self.verifier_a)], source.fetch_snapshot())
+        self.assertEqual("source", self.connect_kwargs["host"])
 
 
 class FakeSource:

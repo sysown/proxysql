@@ -630,11 +630,11 @@ class PostgreSQLSource:
         if self._connect is not None and self._sql_module is not None:
             return self._connect, self._sql_module
         try:
-            import psycopg2
-            from psycopg2 import sql
+            import psycopg
+            from psycopg import sql
         except ImportError:
             raise _error("PostgreSQL driver is not installed") from None
-        return self._connect or psycopg2.connect, self._sql_module or sql
+        return self._connect or psycopg.connect, self._sql_module or sql
 
     def fetch_snapshot(self) -> list[tuple[str, str]]:
         try:
