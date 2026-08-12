@@ -153,6 +153,27 @@ void test_replay_completion_decisions() {
 		failed_backend.count_matches(desired, not_matching) == 0 && not_matching == 2 &&
 		desired.size() == 2,
 		"replay error applies nothing, retires the backend, and leaves frontend desired state intact");
+
+	MySQL_User_Variable_State empty_queue_backend;
+	completion = mysql_user_variable_replay_complete(empty_queue_backend, {}, 0, true);
+	ok(completion == MySQL_User_Variable_Replay_Completion::FAIL_CLIENT_QUERY_AND_RETIRE_BACKEND &&
+		empty_queue_backend.size() == 0,
+		"empty replay queue fails without applying state");
+
+	MySQL_User_Variable_State out_of_range_backend;
+	completion = mysql_user_variable_replay_complete(out_of_range_backend, plan.batches, plan.batches.size(), true);
+	ok(completion == MySQL_User_Variable_Replay_Completion::FAIL_CLIENT_QUERY_AND_RETIRE_BACKEND &&
+		out_of_range_backend.size() == 0,
+		"out-of-range replay batch fails without applying state");
+
+	const auto unknown_budget = mysql_user_variable_replay_packet_budget(0, 5);
+	ok(unknown_budget.status == MySQL_User_Variable_Replay_Packet_Budget_Status::FALLBACK_TO_SERVER_MINIMUM &&
+		unknown_budget.max_query_bytes == 1019,
+		"zero backend packet limit uses the documented conservative server floor disposition");
+	const auto bounded_budget = mysql_user_variable_replay_packet_budget(1024, 5);
+	ok(bounded_budget.status == MySQL_User_Variable_Replay_Packet_Budget_Status::OK &&
+		bounded_budget.max_query_bytes == 1019,
+		"packet budget subtracts the four-byte header and COM_QUERY byte");
 }
 
 void test_diagnostic_fingerprint() {
@@ -287,10 +308,20 @@ void test_connection_state_integration() {
 		"backend diagnostics do not expose user-variable names or values");
 }
 
+void test_simple_command_log_redaction() {
+	const char* statement = "SET @sensitive_name='sensitive_literal'";
+	ok(std::string(mysql_simple_command_log_text(statement, false)) == statement,
+		"simple-command logging preserves statements for existing callers");
+	const std::string redacted = mysql_simple_command_log_text(statement, true);
+	ok(redacted == "<redacted>" && redacted.find("sensitive_name") == std::string::npos &&
+		redacted.find("sensitive_literal") == std::string::npos,
+		"simple-command logging redacts tracked-user-variable replay statements");
+}
+
 } // namespace
 
 int main() {
-	plan(61);
+	plan(67);
 	test_staging_and_limits();
 	test_collision_safe_comparison();
 	test_replay_planning();
@@ -299,5 +330,6 @@ int main() {
 	test_move_preserves_state_invariants();
 	test_kind_and_empty_replay_edges();
 	test_connection_state_integration();
+	test_simple_command_log_redaction();
 	return exit_status();
 }

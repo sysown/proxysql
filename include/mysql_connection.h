@@ -63,6 +63,8 @@ class MySQL_Connection_userinfo {
 	bool set_schemaname(char *, int);
 };
 
+const char* mysql_simple_command_log_text(const char* stmt, bool redact_statement);
+
 class MySQL_Connection {
 	private:
 	void update_warning_count_from_connection();
@@ -219,7 +221,7 @@ class MySQL_Connection {
 	int async_select_db(short event);
 	int async_set_autocommit(short event, bool);
 	int async_set_names(short event, unsigned int nr);
-	int async_send_simple_command(short event, char *stmt, unsigned long length); // no result set expected
+	int async_send_simple_command(short event, char *stmt, unsigned long length, bool redact_statement=false); // no result set expected
 	int async_query(short event, char *stmt, unsigned long length, MYSQL_STMT **_stmt=NULL, stmt_execute_metadata_t *_stmt_meta=NULL);
 	int async_ping(short event);
 	int async_set_option(short event, bool mask);

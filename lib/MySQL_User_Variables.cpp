@@ -194,6 +194,25 @@ MySQL_User_Variable_Replay_Completion mysql_user_variable_replay_complete(
 		: MySQL_User_Variable_Replay_Completion::RESUME_SAVED_STATUS;
 }
 
+MySQL_User_Variable_Replay_Packet_Budget mysql_user_variable_replay_packet_budget(
+	uint32_t max_allowed_pkt, size_t framing_bytes) {
+	// MySQL and MariaDB document 1024 bytes as the minimum server
+	// max_allowed_packet value, so an unpopulated backend field can safely use it.
+	const bool use_server_minimum = max_allowed_pkt == 0;
+	const size_t packet_limit = use_server_minimum
+		? kMySQLUserVariableReplayMinimumServerPacketBytes
+		: max_allowed_pkt;
+	if (packet_limit <= framing_bytes) {
+		return { MySQL_User_Variable_Replay_Packet_Budget_Status::PACKET_LIMIT_TOO_SMALL, 0 };
+	}
+	return {
+		use_server_minimum
+			? MySQL_User_Variable_Replay_Packet_Budget_Status::FALLBACK_TO_SERVER_MINIMUM
+			: MySQL_User_Variable_Replay_Packet_Budget_Status::OK,
+		packet_limit - framing_bytes
+	};
+}
+
 std::string MySQL_User_Variable_State::diagnostic_fingerprint() const {
 	Fingerprint_Keys& keys = fingerprint_keys();
 	if (!keys.available) {

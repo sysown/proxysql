@@ -3063,8 +3063,13 @@ void MySQL_Connection::close_mysql() {
 }
 
 
+const char* mysql_simple_command_log_text(const char* stmt, bool redact_statement) {
+	return redact_statement ? "<redacted>" : stmt;
+}
+
 // this function is identical to async_query() , with the only exception that MyRS should never be set
-int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigned long length) {
+int MySQL_Connection::async_send_simple_command(
+	short event, char *stmt, unsigned long length, bool redact_statement) {
 	PROXY_TRACE();
 	assert(mysql);
 	assert(ret_mysql);
@@ -3099,7 +3104,11 @@ int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigne
 		// shouldn't retrieve any resultset.
 		// A common issue for triggering this error is to have configure mysql-init_connect to
 		// run a statement that returns a resultset.
-		proxy_error2(10003, "PMC-10003: Retrieved a resultset while running a simple command. This is an error!! Simple command: %s\n", stmt);
+		proxy_error2(
+			10003,
+			"PMC-10003: Retrieved a resultset while running a simple command. This is an error!! Simple command: %s\n",
+			mysql_simple_command_log_text(stmt, redact_statement)
+		);
 		return -2;
 	}
 	if (async_state_machine==ASYNC_QUERY_END) {

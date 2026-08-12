@@ -2567,16 +2567,20 @@ bool MySQL_Session::handler_again___verify_backend_user_variables(MySQL_Connecti
 	}
 
 	constexpr size_t query_packet_overhead = sizeof(mysql_hdr) + 1;
-	// Backend connections do not retain this handshake field; use the
-	// frontend-negotiated limit until a backend-specific limit is available.
-	const uint32_t max_allowed_pkt = myconn->options.max_allowed_pkt
-		? myconn->options.max_allowed_pkt
-		: client_myds->myconn->options.max_allowed_pkt;
-	const size_t max_query_bytes = max_allowed_pkt > query_packet_overhead
-		? max_allowed_pkt - query_packet_overhead
-		: 0;
+	const MySQL_User_Variable_Replay_Packet_Budget packet_budget =
+		mysql_user_variable_replay_packet_budget(
+			myconn->options.max_allowed_pkt, query_packet_overhead);
+	if (packet_budget.status == MySQL_User_Variable_Replay_Packet_Budget_Status::PACKET_LIMIT_TOO_SMALL) {
+		handler_again___fail_user_variable_replay(
+			mybe->server_myds,
+			ER_NET_PACKET_TOO_LARGE,
+			"08S01",
+			"Backend packet limit is too small to replay tracked user variables"
+		);
+		return true;
+	}
 	const MySQL_User_Variable_Replay_Plan plan = desired.build_replay_plan(
-		myconn->user_variables, max_query_bytes);
+		myconn->user_variables, packet_budget.max_query_bytes);
 	if (plan.status == MySQL_User_Variable_Replay_Status::ASSIGNMENT_TOO_LARGE) {
 		handler_again___fail_user_variable_replay(
 			mybe->server_myds,
@@ -6507,7 +6511,7 @@ bool MySQL_Session::handler_again___status_SETTING_USER_VARIABLES(int* rc) {
 	const MySQL_User_Variable_Replay_Batch& batch =
 		user_variable_replay_batches[user_variable_replay_batch_index];
 	const int command_rc = myconn->async_send_simple_command(
-		myds->revents, const_cast<char*>(batch.sql.c_str()), batch.sql.size()
+		myds->revents, const_cast<char*>(batch.sql.c_str()), batch.sql.size(), true
 	);
 	if (command_rc == 0) {
 		const MySQL_User_Variable_Replay_Completion completion = mysql_user_variable_replay_complete(

@@ -68,6 +68,21 @@ enum class MySQL_User_Variable_Replay_Status : uint8_t {
 	ASSIGNMENT_TOO_LARGE
 };
 
+enum class MySQL_User_Variable_Replay_Packet_Budget_Status : uint8_t {
+	OK,
+	FALLBACK_TO_SERVER_MINIMUM,
+	PACKET_LIMIT_TOO_SMALL
+};
+
+struct MySQL_User_Variable_Replay_Packet_Budget {
+	MySQL_User_Variable_Replay_Packet_Budget_Status status {
+		MySQL_User_Variable_Replay_Packet_Budget_Status::OK
+	};
+	size_t max_query_bytes { 0 };
+};
+
+constexpr uint32_t kMySQLUserVariableReplayMinimumServerPacketBytes = 1024;
+
 struct MySQL_User_Variable_Replay_Plan {
 	MySQL_User_Variable_Replay_Status status { MySQL_User_Variable_Replay_Status::OK };
 	std::vector<MySQL_User_Variable_Replay_Batch> batches;
@@ -115,6 +130,9 @@ MySQL_User_Variable_Replay_Completion mysql_user_variable_replay_complete(
 	const std::vector<MySQL_User_Variable_Replay_Batch>& batches,
 	size_t batch_index,
 	bool batch_succeeded);
+
+MySQL_User_Variable_Replay_Packet_Budget mysql_user_variable_replay_packet_budget(
+	uint32_t max_allowed_pkt, size_t framing_bytes);
 
 UserVariableSetAnalysis parsersql_analyze_user_variable_set_mysql(
 	const char* query, size_t query_length);
