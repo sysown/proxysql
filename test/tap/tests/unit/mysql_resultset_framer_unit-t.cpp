@@ -112,8 +112,53 @@ static void test_err_mid_rows() {
 	ok(!f.active(), "idle after ERR");
 }
 
+static void test_binary_row_all_zeros() {
+	MySQLResultsetFramer f;
+	f.begin(true, true);
+	f.on_first_payload(colcount(1).data(), 1);
+	f.on_payload(dummy_coldef().data(), dummy_coldef().size());
+	// Binary LONGLONG=0: 0x00 + 1-byte null bitmap + 8 zero value bytes.
+	// Parses as OK(affected=0,last_insert=0) with n>min_ok and no session-track bit —
+	// must still be counted as a Row (old heuristic only rejected last_insert!=0).
+	unsigned char brow[10] = {0};
+	auto e = f.on_payload(brow, sizeof(brow));
+	ok(e.kind == MySQLRSEventKind::Row && e.rows_sent_total == 1,
+		"binary: all-zero values is row not OK");
+	e = f.on_payload(ok_term().data(), ok_term().size());
+	ok(e.kind == MySQLRSEventKind::ResultsetComplete && e.rows_sent_total == 1,
+		"binary: OK completes after zero row");
+}
+
+static void test_text_row_empty_first_col() {
+	MySQLResultsetFramer f;
+	f.begin(false, true);
+	f.on_first_payload(colcount(2).data(), 1);
+	f.on_payload(dummy_coldef().data(), dummy_coldef().size());
+	f.on_payload(dummy_coldef().data(), dummy_coldef().size());
+	// Empty first column (0x00) + 4-char second field — OK-parse can succeed on the
+	// leading 0x00; text field consumption must keep it a Row.
+	unsigned char row[] = { 0x00, 0x04, 'a', 'b', 'c', 'd' };
+	auto e = f.on_payload(row, sizeof(row));
+	ok(e.kind == MySQLRSEventKind::Row && e.rows_sent_total == 1,
+		"text: empty first col is row not OK");
+	e = f.on_payload(ok_term().data(), ok_term().size());
+	ok(e.kind == MySQLRSEventKind::ResultsetComplete && e.rows_sent_total == 1,
+		"text: OK after empty-first row");
+}
+
+static void test_zero_row_select_dep_eof() {
+	MySQLResultsetFramer f;
+	f.begin(false, true);
+	f.on_first_payload(colcount(1).data(), 1);
+	f.on_payload(dummy_coldef().data(), dummy_coldef().size());
+	auto e = f.on_payload(ok_term().data(), ok_term().size());
+	ok(e.kind == MySQLRSEventKind::ResultsetComplete && e.rows_sent_total == 0,
+		"0-row SELECT: OK completes with 0 rows");
+	ok(!f.active(), "0-row SELECT: idle");
+}
+
 int main() {
-	plan(18);
+	plan(24);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal");
 	test_text_select_classic_eof();
@@ -122,6 +167,9 @@ int main() {
 	test_multi_result_two_selects_dep_eof();
 	test_binary_row_not_ok();
 	test_err_mid_rows();
+	test_binary_row_all_zeros();
+	test_text_row_empty_first_col();
+	test_zero_row_select_dep_eof();
 	test_cleanup_minimal();
 	return exit_status();
 }

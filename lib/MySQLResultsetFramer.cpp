@@ -3,6 +3,33 @@
 #include <cstring>
 
 static constexpr uint16_t kServerMoreResultsExist = 8;
+static constexpr uint16_t kServerSessionStateChanged = 0x4000;
+
+// True when payload is exactly m_column_count text-protocol fields (length-encoded
+// strings / 0xFB NULL), with nothing left over.
+static bool text_row_consumes_payload(const unsigned char* p, size_t n, uint64_t column_count) {
+	if (!p || column_count == 0) return false;
+	const unsigned char* cur = p;
+	size_t rem = n;
+	for (uint64_t i = 0; i < column_count; i++) {
+		if (rem == 0) return false;
+		if (cur[0] == 0xFB) { // NULL
+			cur++;
+			rem--;
+			continue;
+		}
+		const uint8_t fb = cur[0];
+		if (fb == 0xFF) return false;
+		if (fb == 0xFC && rem < 3) return false;
+		if (fb == 0xFD && rem < 4) return false;
+		if (fb == 0xFE && rem < 9) return false;
+		const uint64_t flen = mysql_read_lenenc_int(cur, rem);
+		if (flen > rem) return false;
+		cur += flen;
+		rem -= flen;
+	}
+	return rem == 0;
+}
 
 void MySQLResultsetFramer::reset() {
 	m_state = State::Idle;
@@ -148,16 +175,36 @@ MySQLRSEvent MySQLResultsetFramer::make_error(uint16_t code) {
 }
 
 bool MySQLResultsetFramer::looks_like_ok_terminator(const unsigned char* p, size_t n) const {
+	if (!p || n < 1 || p[0] != 0x00) return false;
 	MySQLOkFields okf{};
 	if (!mysql_parse_ok_payload(p, n, &okf)) return false;
-	if (!m_binary) return true;
-	// Binary row: 0x00 + null_bitmap[(column_count+9)/8] + values.
-	// A bare SELECT OK terminator has affected_rows=0 and last_insert_id=0.
-	// If last_insert_id is non-zero while affected_rows is 0, the "OK" fields were
-	// almost certainly over-read from binary row value bytes — treat as row.
-	// (Session-track OK packets keep both counters at 0 and remain terminators.)
+
+	if (!m_binary) {
+		// Text row may start with 0x00 (empty first column). If the payload is
+		// exactly column_count length-encoded fields, it is a row, not OK.
+		if (text_row_consumes_payload(p, n, m_column_count)) return false;
+		return true;
+	}
+
+	// Binary: 0x00 + null_bitmap[(cols+9)/8] + typed values. OK also starts 0x00.
 	const size_t nb = (size_t)((m_column_count + 9) / 8);
-	if (n < 1 + nb) return true;
-	if (okf.affected_rows == 0 && okf.last_insert_id != 0) return false;
+	if (m_column_count > 0 && n >= 1 + nb) {
+		// Measure minimal OK size (header + 2 lenenc + status/warnings).
+		const unsigned char* cur = p + 1;
+		size_t rem = n - 1;
+		mysql_read_lenenc_int(cur, rem); // affected_rows
+		mysql_read_lenenc_int(cur, rem); // last_insert_id
+		if (rem < 4) return false;
+		const size_t min_ok = n - rem + 4;
+		if (n == min_ok) {
+			// Exact classic OK. Binary rows of the same size can alias the layout
+			// (e.g. non-zero value bytes misread as last_insert_id) — SELECT end
+			// terminators always carry affected=0 and last_insert_id=0.
+			return okf.affected_rows == 0 && okf.last_insert_id == 0;
+		}
+		// Longer than min OK: session-track OK, or binary row with value bytes.
+		if ((okf.status_flags & kServerSessionStateChanged) != 0) return true;
+		return false;
+	}
 	return true;
 }

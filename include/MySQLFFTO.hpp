@@ -80,6 +80,7 @@ private:
     unsigned long long m_query_start_time; ///< Start timestamp of the current query in microseconds.
     uint64_t m_affected_rows;             ///< Number of rows affected by the current DML query.
     uint64_t m_rows_sent;                 ///< Number of rows returned by the current SELECT query.
+    uint64_t m_framer_rs_rows {0};        ///< In-progress framer row count (partial RS on close).
 
     std::unordered_map<uint32_t, std::string> m_statements; ///< Map of stmt_id to original SQL query for prepared statements.
 

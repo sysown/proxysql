@@ -88,7 +88,7 @@ void MySQLFFTO::on_server_data(const char* buf, std::size_t len) {
 void MySQLFFTO::on_close() {
     if (is_in_flight_query_state() && m_query_start_time != 0) {
         unsigned long long duration = monotonic_time() - m_query_start_time;
-        report_query_stats(m_current_query, duration, m_affected_rows, m_rows_sent);
+        report_query_stats(m_current_query, duration, m_affected_rows, m_rows_sent + m_framer_rs_rows);
     }
     m_state = IDLE;
     clear_active_query();
@@ -104,6 +104,7 @@ void MySQLFFTO::clear_active_query() {
     m_query_start_time = 0;
     m_affected_rows = 0;
     m_rows_sent = 0;
+    m_framer_rs_rows = 0;
     m_rs.reset();
 }
 
@@ -116,7 +117,7 @@ bool MySQLFFTO::client_deprecate_eof() const {
 void MySQLFFTO::finalize_in_flight_best_effort() {
     if (m_state == AWAITING_RESPONSE && m_query_start_time != 0) {
         unsigned long long duration = monotonic_time() - m_query_start_time;
-        report_query_stats(m_current_query, duration, m_affected_rows, m_rows_sent);
+        report_query_stats(m_current_query, duration, m_affected_rows, m_rows_sent + m_framer_rs_rows);
     }
     m_state = IDLE;
     clear_active_query();
@@ -130,6 +131,7 @@ void MySQLFFTO::begin_tracked_query(const std::string& query, bool binary_protoc
     m_query_start_time = monotonic_time();
     m_affected_rows = 0;
     m_rows_sent = 0;
+    m_framer_rs_rows = 0;
     m_state = AWAITING_RESPONSE;
     m_rs.begin(binary_protocol, client_deprecate_eof());
 }
@@ -197,8 +199,15 @@ void MySQLFFTO::process_server_packet(const unsigned char* data, size_t len) {
 
     switch (ev.kind) {
     case MySQLRSEventKind::None:
+        // Framer gave up (e.g. malformed OK on first payload) — avoid stuck state.
+        if (m_state == AWAITING_RESPONSE && !m_rs.active()) {
+            clear_active_query();
+            m_state = IDLE;
+        }
+        break;
     case MySQLRSEventKind::Row:
-        // Accumulate only on Complete/OK/Error via rows_sent_total
+        // Track partial RS rows for close/finalize; Complete still owns final tally.
+        m_framer_rs_rows = ev.rows_sent_total;
         break;
     case MySQLRSEventKind::OKNoResultset:
         m_affected_rows += ev.affected_rows;
@@ -211,6 +220,7 @@ void MySQLFFTO::process_server_packet(const unsigned char* data, size_t len) {
         break;
     case MySQLRSEventKind::ResultsetComplete:
         m_rows_sent += ev.rows_sent_total;
+        m_framer_rs_rows = 0;
         if (ev.affected_rows) m_affected_rows += ev.affected_rows;
         if (!ev.more_results) {
             unsigned long long duration = monotonic_time() - m_query_start_time;
