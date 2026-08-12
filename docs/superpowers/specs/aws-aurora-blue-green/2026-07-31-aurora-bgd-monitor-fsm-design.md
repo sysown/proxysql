@@ -9,9 +9,8 @@
 **Scope:** Aurora MySQL blue/green deployments exposed through
 `mysql.rds_topology` and `INFORMATION_SCHEMA.REPLICA_HOST_STATUS`.
 
-**Evidence basis:** The Aurora switchover observed on 2026-07-30 and recorded in
-`aurora-bgd-switchover-analysis/RESULTS-20260730T073724Z.md`. Section 3 separates
-observed behavior from design policy.
+**Evidence basis:** A timestamped live-Aurora switchover observation captured on
+2026-07-30. Section 3 separates observed behavior from design policy.
 
 **Related designs:**
 
