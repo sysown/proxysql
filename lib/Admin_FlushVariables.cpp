@@ -657,6 +657,13 @@ FlushVariableStats ProxySQL_Admin::flush_mysql_variables___database_to_runtime(S
 			proxy_warning("mysql-use_tcp_keepalive is set to false. This may cause connection drops when ProxySQL is behind a network load balancer. Consider setting this to true.\n");
 		}
 
+		const int user_variable_tracking = GloMTH->get_variable_int((char *)"user_variable_tracking");
+		const int set_parser_algorithm = GloMTH->get_variable_int((char *)"set_parser_algorithm");
+		const int query_processor_parser = GloMTH->get_variable_int((char *)"query_processor_parser");
+		if (user_variable_tracking == 1 && set_parser_algorithm != 3 && query_processor_parser != 1) {
+			proxy_warning("mysql-user_variable_tracking=1 remains inactive because mysql-set_parser_algorithm is not 3 and mysql-query_processor_parser is not 1. Enable both parser prerequisites to activate user-variable tracking.\n");
+		}
+
 		// Cross-variable validation for 'mysql-session_track_variables'.
 		//
 		// Session variable tracking depends on two other MySQL capability toggles and

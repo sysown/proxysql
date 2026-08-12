@@ -625,6 +625,7 @@ class MySQL_Threads_Handler
 		int query_processor_parser;
 		int set_query_lock_on_hostgroup;
 		int set_parser_algorithm;
+		int user_variable_tracking;
 		int reset_connection_algorithm;
 		int auto_increment_delay_multiplex;
 		int auto_increment_delay_multiplex_timeout_ms;
