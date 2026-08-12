@@ -149,7 +149,7 @@ int main(int argc, char** argv) {
 	workdir_path = cl.workdir;
 
 	const string base = workdir_path + "test_cluster_leader_election_config";
-	mkdir(base.c_str(), 0777);
+	mkdir(base.c_str(), 0755);
 	// Pass 1: fully populate all 3 node_t entries first. write_node_config()
 	// reads the WHOLE nodes_def[] array (to emit every node as a peer in
 	// each other's proxysql_servers list), so it must not run until every
@@ -164,7 +164,7 @@ int main(int argc, char** argv) {
 	}
 	// Pass 2: now that nodes_def[] is fully populated, write configs and spawn.
 	for (int i = 0; i < 3; i++) {
-		mkdir(nodes_def[i].datadir.c_str(), 0777);
+		mkdir(nodes_def[i].datadir.c_str(), 0755);
 		write_node_config(nodes_def[i]);
 		spawn_node(nodes_def[i], true);
 	}
