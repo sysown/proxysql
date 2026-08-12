@@ -15,6 +15,7 @@
 
 #include "GTID_Server_Data.h"
 #include "MySQL_HostGroups_Manager.h"
+#include "proxysql_utils.h"
 
 #include <dirent.h>
 #include <unistd.h>
@@ -454,11 +455,10 @@ static void test_connect_watcher_closes_socket_on_resolution_failure() {
 	char invalid_address[] = "invalid host name";
 
 	for (int i = 0; i < 32; ++i) {
-		ev_io* watcher = new_connect_watcher(invalid_address, 3307, 3306);
+		mf_unique_ptr<ev_io> watcher(new_connect_watcher(invalid_address, 3307, 3306));
 		if (watcher != nullptr) {
 			all_failed = false;
 			close(watcher->fd);
-			free(watcher);
 		}
 	}
 
