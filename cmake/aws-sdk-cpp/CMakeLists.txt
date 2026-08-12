@@ -71,8 +71,9 @@ endif()
 string(SHA256 AWS_IAM_DISCOVERY_ID
 	"${PROXYSQL_AWS_REQUESTED_ROOT}\n${AWS_IAM_SDK_VERSION}\n${AWS_IAM_SDK_SHARED}\n${AWSSDK_INCLUDE_DIRS}\n${AWSSDK_LIB_DIR}\n${AWS_IAM_LINK_LIBRARIES}")
 
-set(output_tmp "${CMAKE_BINARY_DIR}/aws-sdk-cpp.mk.tmp")
 set(output_file "${CMAKE_BINARY_DIR}/aws-sdk-cpp.mk")
+string(RANDOM LENGTH 16 ALPHABET 0123456789abcdef output_suffix)
+set(output_tmp "${output_file}.tmp.${output_suffix}")
 file(WRITE "${output_tmp}" "AWS_IAM_CPPFLAGS := ${AWS_IAM_CPPFLAGS}\n")
 file(APPEND "${output_tmp}" "AWS_IAM_LDFLAGS := ${AWS_IAM_LDFLAGS}\n")
 file(APPEND "${output_tmp}" "AWS_IAM_LIBS := ${AWS_IAM_LIBS}\n")

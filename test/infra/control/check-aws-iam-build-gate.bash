@@ -31,7 +31,13 @@ write_fake_sdk_config() {
 	local version=$2
 	local shared=$3
 	local config_dir="$sdk_root/lib/cmake/AWSSDK"
+	local nested_config_dir="$sdk_root/lib/cmake/aws-c-common"
 	mkdir -p "$config_dir"
+	mkdir -p "$nested_config_dir"
+	printf '%s\n' \
+		'set(aws-c-common_FOUND TRUE)' \
+		'set(AWS_C_COMMON_FROM_REQUESTED_PREFIX TRUE)' \
+		>"$nested_config_dir/aws-c-common-config.cmake"
 	# The single-quoted strings below are CMake source, not shell expressions.
 	# shellcheck disable=SC2016
 	printf '%s\n' \
@@ -45,6 +51,11 @@ write_fake_sdk_config() {
 	printf '%s\n' \
 		"set(AWSSDK_VERSION \"$version\")" \
 		"set(PACKAGE_VERSION \"$version\")" \
+		'find_package(aws-c-common REQUIRED CONFIG)' \
+		'if(NOT AWS_C_COMMON_FROM_REQUESTED_PREFIX)' \
+		'  message(FATAL_ERROR "nested AWS CRT package did not come from the requested prefix")' \
+		'endif()' \
+		'execute_process(COMMAND "${CMAKE_COMMAND}" -E sleep 0.05)' \
 		'get_filename_component(_aws_fixture_root "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)' \
 		'set(AWSSDK_INCLUDE_DIRS "${_aws_fixture_root}/include $cash #hash '\''quote")' \
 		'set(AWSSDK_LIB_DIR "${_aws_fixture_root}/lib $cash #hash '\''quote")' \
@@ -85,14 +96,14 @@ if assert_no_aws_symbols "$symbol_fixture/aws-symbol.a"; then
 	exit 1
 fi
 
-make -C lib clean
-make -C lib -j2
-noop_output=$(make -C lib -j2)
+make -C lib -j clean
+make -C lib -j
+noop_output=$(make -C lib -j)
 if contains_build_command <<<"$noop_output" >/dev/null; then
 	echo 'unchanged AWS IAM build mode rebuilt an archive or object' >&2
 	exit 1
 fi
-noop_dry_run=$(make -C lib -n -j2)
+noop_dry_run=$(make -C lib -j -n)
 if contains_build_command <<<"$noop_dry_run" >/dev/null; then
 	echo 'unchanged AWS IAM build mode scheduled a rebuild' >&2
 	exit 1
@@ -101,7 +112,7 @@ assert_no_aws_symbols lib/libproxysql.a
 
 fake_root=$(mktemp -d)
 temporary_directories+=("$fake_root")
-if PROXYSQLAWSIAM=1 AWS_SDK_CPP_ROOT="$fake_root" make -C lib 2>"$fake_root/error"; then
+if PROXYSQLAWSIAM=1 AWS_SDK_CPP_ROOT="$fake_root" make -C lib -j 2>"$fake_root/error"; then
 	exit 1
 fi
 grep -F 'AWS SDK for C++ 1.9 or newer with core and rds is required' "$fake_root/error"
@@ -128,20 +139,22 @@ printf '%s\n' \
 	">@touch \"\$@\"" \
 	'print-flags:' \
 	'>@for value in $(AWS_IAM_CPPFLAGS) $(AWS_IAM_LDFLAGS) $(AWS_IAM_LIBS); do printf '\''<%s>\n'\'' "$$value"; done' \
+	'print-identity:' \
+	'>@printf '\''%s\n'\'' $(AWS_IAM_SDK_VERSION) > "$(result)"' \
 		>"$metadata_makefile"
 
-PROXYSQLAWSIAM=1 AWS_SDK_CPP_ROOT="$hostile_sdk_root" make -s -f "$metadata_makefile"
-PROXYSQLAWSIAM=1 AWS_SDK_CPP_ROOT="$hostile_sdk_root" make -s -f "$metadata_makefile"
+PROXYSQLAWSIAM=1 AWS_SDK_CPP_ROOT="$hostile_sdk_root" make -j -s -f "$metadata_makefile"
+PROXYSQLAWSIAM=1 AWS_SDK_CPP_ROOT="$hostile_sdk_root" make -j -s -f "$metadata_makefile"
 [[ $(wc -l <"$metadata_count") -eq 1 ]]
 
 flag_output=$(PROXYSQLAWSIAM=1 AWS_SDK_CPP_ROOT="$hostile_sdk_root" \
-	make -s -f "$metadata_makefile" print-flags)
+	make -j -s -f "$metadata_makefile" print-flags)
 grep -Fx -- "<-I$hostile_sdk_root/include \$cash #hash 'quote>" <<<"$flag_output"
 grep -Fx -- "<-L$hostile_sdk_root/lib \$cash #hash 'quote>" <<<"$flag_output"
 grep -Fx -- "<$hostile_sdk_root/dependency \$cash #hash 'quote.a>" <<<"$flag_output"
 
 write_fake_sdk_config "$hostile_sdk_root" 1.10.222 OFF
-PROXYSQLAWSIAM=1 AWS_SDK_CPP_ROOT="$hostile_sdk_root" make -s -f "$metadata_makefile"
+PROXYSQLAWSIAM=1 AWS_SDK_CPP_ROOT="$hostile_sdk_root" make -j -s -f "$metadata_makefile"
 [[ $(wc -l <"$metadata_count") -eq 2 ]]
 grep -F "AWS_IAM_SDK_VERSION := \"1.10.222\"" build/aws-sdk-cpp/aws-sdk-cpp.mk
 grep -F 'AWS_IAM_SDK_SHARED := "0"' build/aws-sdk-cpp/aws-sdk-cpp.mk
@@ -150,17 +163,55 @@ grep -F 'pthread' build/aws-sdk-cpp/aws-sdk-cpp.mk
 
 alternate_sdk_root="$metadata_parent/alternate sdk root \$cash #hash 'quote"
 write_fake_sdk_config "$alternate_sdk_root" 1.10.222 OFF
-PROXYSQLAWSIAM=1 AWS_SDK_CPP_ROOT="$alternate_sdk_root" make -s -f "$metadata_makefile"
-PROXYSQLAWSIAM=1 AWS_SDK_CPP_ROOT="$alternate_sdk_root" make -s -f "$metadata_makefile"
+PROXYSQLAWSIAM=1 AWS_SDK_CPP_ROOT="$alternate_sdk_root" make -j -s -f "$metadata_makefile"
+PROXYSQLAWSIAM=1 AWS_SDK_CPP_ROOT="$alternate_sdk_root" make -j -s -f "$metadata_makefile"
 [[ $(wc -l <"$metadata_count") -eq 3 ]]
 
-make -s -f "$metadata_makefile"
-make -s -f "$metadata_makefile"
+make -j -s -f "$metadata_makefile"
+make -j -s -f "$metadata_makefile"
 [[ $(wc -l <"$metadata_count") -eq 4 ]]
 
+concurrent_root_a="$metadata_parent/concurrent-root-a"
+concurrent_root_b="$metadata_parent/concurrent-root-b"
+write_fake_sdk_config "$concurrent_root_a" 1.11.101 ON
+write_fake_sdk_config "$concurrent_root_b" 1.11.202 OFF
+
+concurrent_pids=()
+concurrent_results=()
+for index in $(seq 1 12); do
+	if ((index % 2)); then
+		concurrent_root=$concurrent_root_a
+		concurrent_version=1.11.101
+	else
+		concurrent_root=$concurrent_root_b
+		concurrent_version=1.11.202
+	fi
+	concurrent_result="$metadata_parent/concurrent-$index.result"
+	concurrent_results+=("$concurrent_result:$concurrent_version")
+	(PROXYSQLAWSIAM=1 AWS_SDK_CPP_ROOT="$concurrent_root" \
+		make -j -s -f "$metadata_makefile" result="$concurrent_result" print-identity) &
+	concurrent_pids+=("$!")
+done
+
+concurrent_failed=0
+for pid in "${concurrent_pids[@]}"; do
+	if ! wait "$pid"; then
+		concurrent_failed=1
+	fi
+done
+if ((concurrent_failed)); then
+	echo 'concurrent AWS SDK discovery process failed' >&2
+	exit 1
+fi
+for result_and_version in "${concurrent_results[@]}"; do
+	result=${result_and_version%:*}
+	expected_version=${result_and_version##*:}
+	grep -Fx "$expected_version" "$result"
+done
+
 if [[ -n "$real_sdk_root" ]]; then
-	PROXYSQLAWSIAM=1 AWS_SDK_CPP_ROOT="$real_sdk_root" make -C lib clean
-	PROXYSQLAWSIAM=1 AWS_SDK_CPP_ROOT="$real_sdk_root" make -C lib -j2
+	PROXYSQLAWSIAM=1 AWS_SDK_CPP_ROOT="$real_sdk_root" make -C lib -j clean
+	PROXYSQLAWSIAM=1 AWS_SDK_CPP_ROOT="$real_sdk_root" make -C lib -j
 
 	flags_file=build/aws-sdk-cpp/aws-sdk-cpp.mk
 	grep -F 'aws-cpp-sdk-rds' "$flags_file"
