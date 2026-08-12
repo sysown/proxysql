@@ -1,356 +1,431 @@
-# Aurora BGD Cluster Simulator and Testing Design
+# AWS Aurora Blue/Green Cluster Simulator and Testing Design
 
 **Date:** 2026-07-31
 
-**Branch:** `plan/aurora-bgd`
+**Branch:** `spec/aws-aurora-bgd`
 
-**Status:** Design draft
+**Status:** Design approved
 
 **Related designs:**
 
 - [Aurora BGD Configuration, Runtime Status, and Cluster Sync](2026-07-31-aurora-bgd-configuration-runtime-cluster-sync-design.md)
 - [Aurora BGD Monitor Loop and FSM](2026-07-31-aurora-bgd-monitor-fsm-design.md)
 
-## Spec Boundary
+## 1. Scope
 
-This specification owns the simulator capabilities and executable test coverage
-needed to validate the other two specifications. It does not redefine public
-configuration or FSM behavior. When a test expectation depends on those
-contracts, the corresponding sibling specification is authoritative.
+This specification defines the simulator services, test controllers, endpoint
+model, and executable coverage for AWS Aurora MySQL blue/green deployments.
+The related designs remain authoritative for configuration, runtime status,
+cluster synchronization, monitor scheduling, FSM transitions, and routing
+behavior.
 
-## 1. Purpose
+The test environment drives the complete Aurora BGD lifecycle without live AWS
+infrastructure and retains regression coverage for ordinary Aurora monitoring
+and RDS Multi-AZ BGD.
 
-Provide deterministic coverage for Aurora MySQL blue/green deployments without
-requiring live AWS infrastructure. The test environment must be able to drive
-the complete BGD observation sequence, publish target Aurora membership,
-simulate member renaming, inject failures, observe monitor probes, and verify
-ProxySQL runtime and routing effects.
+## 2. Test Architecture
 
-The design must preserve both existing regression suites:
+The `cluster_sim_aurora` group contains two complementary test styles:
 
-- the ordinary Aurora cluster simulator continues validating Aurora role,
-  membership, lag, failover, and autopurge behavior;
-- the RDS Multi-AZ BGD suite continues validating its existing instance-based
-  mapping and reader-cleanup FSM.
+- `test_cluster_sim_aurora-t` runs JSON-defined ordinary Aurora scenarios
+  through the standalone `cluster_simulator` controller;
+- interactive TAP binaries drive Aurora BGD phases through the
+  `BGD_Simulator` helper.
 
-## 2. Architecture Decision
+RDS Multi-AZ BGD TAP binaries remain in `cluster_sim_rds_bgd`. A simulator
+group is an execution and CI bucket; simulator capabilities come from the
+ProxySQL build, SQLite-server handlers, control tables, and TAP helpers.
+Only one test binary controls a given ProxySQL instance at a time, and every
+binary owns setup and cleanup for its simulator state.
 
-Aurora BGD FSM tests extend the existing interactive RDS BGD simulator used by
-`cluster_sim_rds_bgd-g1`. They do not add BGD sequencing to the legacy JSON
-Aurora simulator.
+The build contract is:
 
-This is the preferred design because the RDS BGD simulator already provides:
+- `TEST_AURORA` enables ordinary Aurora and Aurora BGD simulation;
+- `TEST_RDS_BGD` enables RDS Multi-AZ BGD simulation;
+- AWS BGD topology services are available under either flag;
+- Aurora replica services are available under `TEST_AURORA`;
+- read-only simulation is available to Aurora BGD, RDS BGD, and focused
+  read-only simulator builds;
+- no separate BGD simulator flag is used.
 
-- per-backend `mysql.rds_topology` responses;
-- empty, absent, and error topology modes;
-- read-only controls;
-- ordered probe logging;
-- fixed AWS-style hostname-to-loopback mappings;
-- TAP-driven, phase-by-phase transitions;
-- the build and CI integration required for BGD tests.
+Aurora monitor queries in simulator builds are the same production queries used
+against AWS. The SQLite server identifies the simulated backend from the local
+IP and port on which it accepted the monitor connection, then returns the state
+assigned to that address.
 
-Aurora adds a target-cluster membership service and Aurora-specific TAP helpers
-on top of that base. Shared topology, transaction, endpoint, TLS, read-only,
-probe-wait, and cleanup behavior remains common.
+## 3. AWS BGD Topology Service
 
-### Alternatives not selected
+Aurora BGD and RDS Multi-AZ BGD use the same simulated
+`mysql.rds_topology` service.
 
-1. Extending the JSON Aurora simulator with a long sequence of BGD states would
-   overload a batch-oriented two-state model and make late entry, retry,
-   rollback, and concurrent timing difficult to control.
-2. Creating a third standalone simulator group would duplicate the existing RDS
-   BGD topology service, host maps, helpers, build flavor, and CI wiring.
-3. Using only unit tests would not exercise monitor threads, DNS pins,
-   connection-pool drains, runtime status publication, or config reloads.
+### 3.1 `AWS_BGD_CONTROL`
 
-## 3. Simulator Service Contract
-
-The `TEST_RDS_BGD` SQLite3-server flavor remains the executable backend for the
-interactive suite. It is extended to recognize the Aurora membership query in
-addition to the existing topology and read-only queries.
-
-All simulated responses are keyed by the backend address and port on which the
-SQLite3 server accepted the monitor connection. This preserves isolation when
-multiple deployments or multiple target endpoints are active concurrently.
-
-### 3.1 Existing topology service
-
-The existing service remains authoritative for:
+One row controls topology behavior for one backend:
 
 ```text
-mysql.rds_topology table presence
-SOURCE and TARGET rows
-deployment fingerprint fields
-AWS status strings
-configured topology errors
-ordered table-check and metadata probe logs
+backend_ip TEXT NOT NULL
+backend_port INTEGER NOT NULL
+topology_present INTEGER NOT NULL DEFAULT 0
+error_code INTEGER NOT NULL DEFAULT 0
+error_msg TEXT NOT NULL DEFAULT ''
+PRIMARY KEY (backend_ip, backend_port)
 ```
 
-Aurora TARGET rows contain a cluster endpoint. Multi-AZ TARGET rows continue to
-contain an instance endpoint. The simulator must not infer deployment type from
-test configuration; production detection consumes the endpoint shape and the
-membership-query result.
+`topology_present` is restricted to zero or one. A missing control row and a
+row with `topology_present=0` both represent an absent topology table. A
+nonzero `error_code` returns the configured MySQL error.
 
-### 3.2 Aurora membership service
+### 3.2 `AWS_BGD_TOPOLOGY`
 
-The simulator adds per-backend control and row storage for
-`INFORMATION_SCHEMA.REPLICA_HOST_STATUS`.
-
-Each membership row contains at least:
+Successful topology results are stored as:
 
 ```text
-row_order
-SERVER_ID
-SESSION_ID
-LAST_UPDATE_TIMESTAMP
-IS_CURRENT
-CPU
-REPLICA_LAG_IN_MILLISECONDS
+backend_ip TEXT NOT NULL
+backend_port INTEGER NOT NULL
+row_order INTEGER NOT NULL
+id TEXT NOT NULL
+endpoint TEXT NOT NULL
+topology_port INTEGER NOT NULL
+role TEXT NOT NULL
+status TEXT NOT NULL
+PRIMARY KEY (backend_ip, backend_port, row_order)
 ```
 
-`SESSION_ID='MASTER_SESSION_ID'` identifies the writer. Other current rows are
-readers. `row_order` makes response ordering deterministic while allowing tests
-to prove that ProxySQL does not rely on writer-first or lexical membership
-ordering.
+`row_order` makes the result deterministic. Aurora TARGET rows contain a
+cluster endpoint; RDS Multi-AZ TARGET rows contain an instance endpoint. The
+production monitor identifies the deployment type from the AWS metadata and
+membership result rather than from simulator configuration.
 
-The control state supports:
+### 3.3 `AWS_BGD_PROBE_LOG`
 
-- a successful complete membership result;
-- a successful writer-only result;
-- an intentionally incomplete result;
-- an empty result;
-- table absence/error 1146;
-- an arbitrary MySQL error code and message.
-
-Membership updates are atomic per supplied set of backends. A test must not
-expose a partially rewritten snapshot unless it explicitly selects the
-incomplete-result mode.
-
-### 3.3 Probe log
-
-The existing BGD probe log adds an Aurora-membership probe kind. Every topology
-table check, topology metadata query, and target membership query records:
+Every topology table check and metadata query records:
 
 ```text
-monotonic sequence
-accepted backend IP
-accepted backend port
-probe kind
-TLS state
+sequence_id INTEGER PRIMARY KEY AUTOINCREMENT
+backend_ip TEXT NOT NULL
+backend_port INTEGER NOT NULL
+probe_kind TEXT NOT NULL       # table_check or metadata
+encrypted INTEGER NOT NULL
 ```
 
-Tests use the log to verify probe destination, ordering, cadence class, TLS,
-probe-pin retention, and return to canonical probing. They must not use fixed
-sleeps when an observable probe or runtime state can serve as the wait
-condition.
+`encrypted` is restricted to zero or one. The monotonic sequence supports
+deterministic waits and ordering assertions.
 
-### 3.4 Error isolation
+## 4. AWS Aurora Replica Service
 
-Topology and membership errors are independent. A scenario can publish valid
-topology with failed membership, or valid membership with failed topology.
-Clearing one error source must not silently clear the other.
+### 4.1 Membership sets
 
-Simulator cleanup removes topology, membership, read-only, and probe-log state
-in one operation so each TAP binary begins from a known baseline.
-
-## 4. TAP Helper Model
-
-Aurora-specific helpers extend, rather than fork, the RDS BGD helper model.
-They provide test-facing representations for:
-
-- a blue Aurora cluster and its canonical instance endpoints;
-- a target cluster endpoint;
-- one target writer and zero or more target readers;
-- stable member session identities;
-- pre-rename green `SERVER_ID` values;
-- post-rename canonical `SERVER_ID` values;
-- explicit and automatic Aurora hostgroup configuration;
-- expected runtime `bgd_status` values.
-
-The helper API exposes operations equivalent to:
+`REPLICA_HOST_STATUS` stores each Aurora membership snapshot once:
 
 ```text
-publish topology status
-publish target membership snapshot
-publish renamed membership snapshot
-publish empty/absent topology
-inject topology or membership error
-record and wait for probes
-query Aurora runtime row and bgd_status
-query runtime server placement and status
-query connection-pool state
-open backend traffic and identify accepted simulator IP
-clean up ProxySQL and simulator state
+REPLICA_SET_ID TEXT NOT NULL
+SERVER_ID VARCHAR NOT NULL
+SESSION_ID VARCHAR NOT NULL
+CPU REAL NOT NULL
+LAST_UPDATE_TIMESTAMP VARCHAR NOT NULL
+REPLICA_LAG_IN_MILLISECONDS REAL NOT NULL
+IS_CURRENT INTEGER NOT NULL DEFAULT 1
+PRIMARY KEY (REPLICA_SET_ID, SERVER_ID)
 ```
 
-Helper methods perform control operations only. Individual test scenarios own
-the sequence of AWS observations and all expected ProxySQL outcomes.
+`IS_CURRENT` is restricted to zero or one. It models the AWS column used by the
+Aurora BGD membership query to exclude stale or decommissioned members.
+Ordinary Aurora payloads default it to one.
 
-## 5. Endpoint and DNS Model
+`REPLICA_SET_ID` is simulator-only and is never returned to ProxySQL. It groups
+one membership snapshot independently of `DOMAIN_NAME`. The simulated table
+does not contain `DOMAIN_NAME`; domain configuration remains in
+`mysql_aws_aurora_hostgroups` and in the ordinary Aurora JSON input, where it
+is used to construct member hostnames.
 
-The `cluster_sim_rds_bgd-g1` fixed host map is extended with Aurora cluster
-endpoints and member endpoints. Each hostname maps to a distinct loopback
-address accepted by the same SQLite3 server.
+Blue and green members share the same RDS domain suffix, so a BGD scenario uses
+distinct replica-set identifiers for its blue and green snapshots. Multiple
+backend addresses can map to the same set. A cluster with N members therefore
+stores N membership rows plus lightweight backend mappings, rather than one
+copy of the N rows per backend.
 
-The map includes, per test cluster:
+### 4.2 `AWS_AURORA_REPLICA_CONTROL`
 
-- canonical blue writer and reader instance names;
+One row maps a backend address to its replica set and controls the query
+response:
+
+```text
+backend_ip TEXT NOT NULL
+backend_port INTEGER NOT NULL
+replica_set_id TEXT NOT NULL
+replica_table_present INTEGER NOT NULL DEFAULT 0
+error_code INTEGER NOT NULL DEFAULT 0
+error_msg TEXT NOT NULL DEFAULT ''
+PRIMARY KEY (backend_ip, backend_port)
+```
+
+`replica_table_present` is restricted to zero or one. Response behavior is:
+
+- no control row or `replica_table_present=0`: MySQL error 1146;
+- nonzero `error_code`: the configured MySQL error;
+- present table, no error, and matching rows: return that set;
+- present table, no error, and no matching rows: return a successful empty
+  result.
+
+Writer-only and intentionally incomplete snapshots are represented directly by
+the rows stored for the selected set. No response-mode column is required.
+Topology and replica errors remain independent because their controls are in
+separate tables.
+
+### 4.3 `AWS_AURORA_REPLICA_PROBE_LOG`
+
+Every intercepted production `REPLICA_HOST_STATUS` query records:
+
+```text
+sequence_id INTEGER PRIMARY KEY AUTOINCREMENT
+backend_ip TEXT NOT NULL
+backend_port INTEGER NOT NULL
+replica_set_id TEXT NULL
+encrypted INTEGER NOT NULL
+```
+
+The accepted address is logged even when no control mapping exists or the query
+returns an error. `replica_set_id` is NULL when the backend has no mapping.
+
+### 4.4 Query handling
+
+Ordinary Aurora and Aurora BGD issue their production-shaped
+`REPLICA_HOST_STATUS` queries under `TEST_AURORA`. For a recognized monitor
+query, the SQLite handler:
+
+1. reads the accepted backend IP and port;
+2. records the probe;
+3. reads the matching `AWS_AURORA_REPLICA_CONTROL` row;
+4. returns the configured error or rewrites the query to select the mapped
+   replica set;
+5. preserves the production query's result columns, filtering, and ordering.
+
+The ordinary Aurora query retains its timestamp, lag, and writer filtering.
+The Aurora BGD query retains `IS_CURRENT` and `SERVER_ID` ordering. Other SQL
+against the simulator tables executes normally so controllers can publish
+state.
+
+## 5. State Publication
+
+### 5.1 Ordinary Aurora controller
+
+Ordinary Aurora JSON files retain their current schema. For each Aurora cluster,
+the standalone `cluster_simulator` controller:
+
+1. uses the JSON `DOMAIN_NAME` value as the replica-set identifier;
+2. constructs each member hostname from `SERVER_ID` and `DOMAIN_NAME`;
+3. reads `CLUSTER_SIM_HOST_FILE` to resolve those fixed simulator hostnames to
+   loopback IPs;
+4. writes the membership rows with a current timestamp and `IS_CURRENT=1`;
+5. maps every backend that can serve the cluster membership to the same set in
+   `AWS_AURORA_REPLICA_CONTROL`;
+6. commits the membership replacement and complete backend mapping atomically.
+
+The group environment already supplies `CLUSTER_SIM_HOST_FILE`; test
+infrastructure uses it to populate the ProxySQL container's host map, and the
+controller uses the same file as the authoritative hostname-to-IP mapping. A
+configured or discovered member missing from that map is a test-setup failure.
+
+### 5.2 Aurora BGD controller
+
+Interactive Aurora BGD TAP tests publish state through `BGD_Simulator`. Each
+membership publication supplies:
+
+- one stable replica-set identifier;
+- one membership snapshot;
+- every cluster endpoint or member backend that must return that snapshot.
+
+The helper replaces the set rows and complete backend mapping in one
+transaction. Blue and green use separate identifiers. Tests do not store a
+blue/green flag and do not infer environment identity from hostnames.
+
+The same helper publishes topology rows, topology errors, replica errors,
+read-only state, and probe-log checkpoints. Non-1146 errors change only control
+state, so clearing them exposes the retained data. An absent topology table
+clears topology rows for the addressed backend, matching the topology service's
+backend-scoped storage. An absent replica table preserves its shared membership
+set because other backend mappings may still serve that set.
+
+### 5.3 Helper boundaries
+
+`BGD_Simulator` owns cross-service mechanics: SQL transactions, topology and
+replica controls, read-only controls, probe-log reads and waits, endpoint
+predicates, and cleanup.
+
+Deployment models remain engine-specific. `RDS_BGD_Cluster` and related RDS
+types describe RDS instance topology. Aurora types describe cluster endpoints,
+members, replica sets, rename identity, and expected runtime placement.
+
+### 5.4 Cleanup
+
+Set-scoped operations remove only the supplied replica set and backend
+mappings. Full scenario cleanup clears:
+
+```text
+READONLY_STATUS
+AWS_BGD_CONTROL
+AWS_BGD_TOPOLOGY
+AWS_BGD_PROBE_LOG
+AWS_AURORA_REPLICA_CONTROL
+AWS_AURORA_REPLICA_PROBE_LOG
+REPLICA_HOST_STATUS
+```
+
+Each TAP binary begins and ends with full cleanup. Sequential group execution
+is expected, but correctness does not depend on a later test overwriting stale
+state.
+
+## 6. Endpoint Model
+
+`cluster_sim_aurora/add-hosts` contains fixed aliases for:
+
+- canonical blue cluster members;
 - the green target cluster endpoint returned by `mysql.rds_topology`;
-- green-suffixed target writer and reader instance names;
-- canonical post-rename member names;
-- a second target deployment for repeated-switchover coverage;
-- additional clusters for concurrency coverage.
+- green target writer and reader members;
+- canonical post-switchover member names;
+- repeated deployments and concurrent test clusters.
 
-Green and canonical names used for identity-renaming tests may resolve to the
-same target-member loopback IP where that models AWS's post-processing rename.
-Canonical blue DNS remains static in the container; DNS-cache pin behavior is
-verified through accepted backend addresses and explicit pin removal, not by
-claiming that the simulator reproduces mutable Route 53 propagation.
+Independently controlled backends use distinct loopback IPs. Green and
+canonical aliases may share an IP where the scenario represents AWS resource
+renaming. Response selection always uses the accepted IP and port, not the
+requested hostname.
 
-## 6. Test Layers
+The fixed host map does not model mutable Route 53 propagation. DNS-related
+tests assert cached-IP pins, accepted backend addresses, connection-pool
+behavior, and explicit pin removal.
 
-### 6.1 Schema and unit coverage
+## 7. Test Coverage
 
-Fast tests cover deterministic contracts that do not require monitor threads:
+### 7.1 Simulator contracts
 
-- configuration and runtime table definitions and column order;
+Focused tests cover:
+
+- table schemas, primary keys, defaults, and value constraints;
+- topology and replica routing by accepted backend address;
+- several backend addresses sharing one replica set;
+- independent blue and green sets with overlapping `SERVER_ID` values;
+- production-query result shape, filtering, and ordering;
+- atomic membership and mapping replacement;
+- successful complete, writer-only, incomplete, and empty results;
+- missing tables and arbitrary MySQL errors;
+- independence of topology and replica errors;
+- TLS state and ordered probe logging;
+- `CLUSTER_SIM_HOST_FILE` parsing and missing-host failures;
+- set-scoped deletion and full cleanup.
+
+### 7.2 Configuration, runtime, and cluster synchronization
+
+Tests owned by the configuration design cover:
+
+- configuration and runtime table schemas and column order;
 - paired-NULL and hostgroup-conflict validation;
-- SQL NULL preservation in bind/extract helpers;
-- config-file import and export;
-- disk schema upgrade defaults;
-- runtime `bgd_status` string mapping;
-- configured-column cluster query and checksum projection;
+- config-file, memory, runtime, and disk round trips;
+- runtime-only `bgd_status` initialization and preservation;
 - exclusion of `bgd_status` from SAVE and cluster synchronization;
-- Aurora simulator JSON parsing of the two optional green hostgroups.
+- synchronization of the configured green hostgroups, including NULL;
+- independent node-local runtime status on cluster peers.
 
-### 6.2 Admin and cluster-sync integration coverage
+### 7.3 Interactive Aurora BGD scenarios
 
-Admin/TAP tests cover:
+Interactive TAP tests cover:
 
-- memory-to-runtime and runtime-to-memory round trips;
-- runtime-to-disk and config-file round trips;
-- new runtime rows starting at `NONE`;
-- reload preservation of `bgd_status` and active worker state;
-- removal and deactivation behavior;
-- peer synchronization of both green hostgroups, including NULL;
-- proof that peers retain independent node-local `bgd_status` values;
-- unchanged RDS Multi-AZ BGD cluster synchronization.
+1. `AVAILABLE` discovery of the target writer and all current readers through
+   a complete target membership snapshot.
+2. Green hostgroups configured and green hostgroups not configured, with all
+   Aurora hostgroup rows created by the test.
+3. Independent topology, target-membership, and ordinary Aurora probes with the
+   cadence and on/off behavior defined by the monitor/FSM design, including
+   random blue-member topology probes and random green-member target probes.
+4. `SWITCHOVER_INITIATED`, `SWITCHOVER_IN_PROGRESS`, and
+   `SWITCHOVER_IN_POST_PROCESSING` state retention and retry behavior.
+5. Source-writer read-only observation and the corresponding writer-to-reader
+   placement.
+6. Target member `SERVER_ID` rename with stable reader `SESSION_ID` identity
+   and retained cached IPs.
+7. Idempotent per-member pinning, placement, and pool-drain actions.
+8. The first TARGET-only `SWITCHOVER_COMPLETED`, immediate cleanup, terminal
+   latch, and runtime `bgd_status='SWITCHOVER_COMPLETED'`.
+9. Repeated completion observations, successful topology drain to `NONE`, and
+   rearming for a different deployment fingerprint.
 
-### 6.3 Interactive Aurora BGD coverage
+### 7.4 Resilience and lifecycle scenarios
 
-The interactive suite covers the observable behavior of the monitor/FSM spec:
+Coverage also includes:
 
-1. `AVAILABLE` discovers exactly one writer and every reader, resolves each
-   member, and establishes only the probe state required by the design.
-2. Automatic mode with NULL green hostgroups maps all target members without
-   generating green hostgroups or `mysql_servers` rows.
-3. Explicit mode uses configured green hostgroups as staging pools but still
-   treats `REPLICA_HOST_STATUS` as membership truth.
-4. Initiated and in-progress observations retain the complete snapshot and
-   engage BGD/read-only-monitor protection.
-5. The first post-processing observation pins and drains each writer/reader pair
-   once; repeated observations retry only incomplete member actions.
-6. Member `SERVER_ID` rename preserves reader identity through stable
-   `SESSION_ID` values and does not change cached target IPs.
-7. The first TARGET `SWITCHOVER_COMPLETED` removes all traffic and probe pins,
-   performs cleanup once, and publishes `bgd_status='SWITCHOVER_COMPLETED'`.
-8. Repeated completed rows are no-ops; successful topology drain changes the
-   runtime status to `NONE` and rearms discovery.
-9. A different deployment fingerprint can rearm from the terminal latch without
-   inheriting stale members, pins, probes, or completion flags.
-
-### 6.4 Resilience and edge coverage
-
-Scenarios also cover:
-
-- membership row ordering and zero-reader target clusters;
-- incomplete membership retaining the last complete snapshot;
-- topology and membership query failures in every phase;
-- rollback from initiated, in-progress, and post-processing observations;
+- zero-reader targets and membership row ordering;
+- incomplete snapshots retaining the last complete target set;
+- topology, replica, and read-only query failures in each relevant phase;
+- rollback from initiated, in-progress, and post-processing states;
 - late entry at initiated, in-progress, post-processing, and completed states;
-- config refresh and hostgroup refresh during active phases;
-- worker restart/respawn with preserved fingerprint, members, IPs, pins, and
-  terminal latch;
-- disabling automatic discovery during an active automatic deployment;
-- deleting or deactivating an Aurora row during a switchover;
-- explicit green-pool cleanup with ONLINE, SHUNNED, OFFLINE_SOFT, and
-  OFFLINE_HARD members;
-- TLS selection for topology and membership probes;
-- multiple concurrent Aurora deployments with independent state;
-- simultaneous Aurora BGD and RDS Multi-AZ BGD deployments.
+- configuration and hostgroup refresh during an active deployment;
+- worker restart or respawn with retained deployment state;
+- deleting or deactivating an Aurora row during switchover;
+- ONLINE, SHUNNED, OFFLINE_SOFT, and OFFLINE_HARD staging-pool members;
+- TLS selection for topology and replica probes;
+- repeated and concurrent Aurora deployments with isolated state.
 
-## 7. Regression Coverage
+### 7.5 Regression suites
 
-The existing `test_cluster_sim_aurora-t` JSON payload suite remains responsible
-for ordinary Aurora behavior. Its schema accepts the two new green hostgroup
-fields as optional values but old payloads remain valid and preserve their
-existing results.
+The complete ordinary Aurora JSON suite runs through the production query path
+and retains its role, failover, lag, autodiscovery, and autopurge expectations.
 
-The complete existing `test_rds_bgd_*` suite remains unchanged in semantics.
-Aurora membership support is additive to the shared simulator and must not
-alter instance TARGET handling, reader shun/unshun policy, writer fallback, or
-Multi-AZ completion/drain behavior.
+The RDS Multi-AZ BGD TAP suite retains its instance-target, reader policy,
+writer fallback, completion, and topology-drain expectations while using the
+shared `BGD_Simulator` and `AWS_BGD_*` services.
 
-Regression runs must include:
+## 8. Determinism and Diagnostics
 
-```text
-ordinary Aurora cluster simulator group
-RDS Multi-AZ BGD simulator group
-new Aurora BGD TAP binaries in cluster_sim_rds_bgd-g1
-configuration/unit tests
-ProxySQL Cluster synchronization tests
-```
+Tests synchronize on observable state: probe sequence, runtime `bgd_status`,
+server placement, pool counters, and committed simulator controls. Timeouts are
+derived from configured monitor intervals with bounded slack.
 
-## 8. Determinism and Timing
+Fixed sleeps are permitted only for bounded negative assertions with no event
+that can be awaited directly. A failed wait reports the latest runtime row,
+relevant server and pool state, and probes observed since the scenario
+checkpoint.
 
-Tests synchronize on observable state: runtime `bgd_status`, probe sequence,
-server placement, pool counters, and successful simulator control commits.
-Timeouts are derived from configured monitor intervals with bounded slack.
-
-Fixed sleeps are allowed only for negative assertions where no event can be
-awaited directly, and must be shorter than the overall TAP timeout. Every wait
-failure reports the last runtime row, relevant server/pool state, and probes
-observed since the scenario checkpoint.
-
-Each scenario uses unique hostgroups or performs complete cleanup. Concurrent
-tests use disjoint endpoints and deployment fingerprints.
+Scenarios use disjoint hostgroups, endpoints, replica-set identifiers, and
+deployment fingerprints, or perform full cleanup before reuse.
 
 ## 9. Build and CI Contract
 
-The existing `test_rds_bgd` build remains the focused local build. The combined
-cluster-simulator build continues compiling both `TEST_AURORA` and
-`TEST_RDS_BGD` support.
+`make testaurora` produces the focused Aurora simulator build, including the
+Aurora replica, shared BGD topology, and read-only services. `make test_rds_bgd`
+produces the focused RDS BGD build. The combined `testall` build enables both
+families.
 
-New interactive TAP binaries register in `cluster_sim_rds_bgd-g1`, which keeps
-the existing fixed-host injection, SQLite3-server startup, no-backend-infra
-model, CI matrix discovery, and log collection. No new workflow or simulator
-group is required.
+Ordinary Aurora and Aurora BGD binaries register in
+`cluster_sim_aurora-g1`. RDS Multi-AZ BGD binaries register in
+`cluster_sim_rds_bgd-g1`. Central simulator CI discovers groups and binaries
+from `groups.json`, so no additional workflow, simulator group family, or CI
+infrastructure is required.
 
 ## 10. Non-Goals
 
-The simulator does not claim to validate:
+The simulator does not validate:
 
 - AWS control-plane APIs or real AWS timing;
 - mutable Route 53 propagation;
 - application-level latency or packet loss;
 - cross-process persistence of transient FSM state;
-- behavior of Aurora versions that violate the AWS contract in the monitor/FSM
-  specification.
+- Aurora versions that violate the AWS contracts established by the live-AWS
+  analysis.
 
-Live-AWS evidence remains a separate validation layer for assumptions about
-status ordering, member rename, writability, and DNS completion.
+Live-AWS evidence remains the validation layer for status ordering, member
+rename, writability, and DNS completion.
 
 ## 11. Acceptance Criteria
 
-The simulator/testing design is satisfied when:
+The design is satisfied when:
 
-1. Tests can independently control topology and target membership per backend.
-2. The full Aurora BGD FSM can be driven without live AWS infrastructure.
-3. Runtime status, routing, pool, DNS-pin, probe, reload, and cluster-sync
-   contracts have deterministic assertions.
-4. Automatic and explicit modes both cover writer and all-reader membership.
-5. Rename, rollback, late-entry, error, refresh, repeated, and concurrent paths
-   are covered.
-6. Existing ordinary Aurora and RDS Multi-AZ BGD suites retain their semantics.
-7. The suite runs through existing cluster-simulator build and CI plumbing with
-   no new infrastructure group.
+1. Ordinary Aurora and Aurora BGD use production monitor queries and the same
+   backend-address-to-replica-set service.
+2. Blue and green membership snapshots are stored once and returned from every
+   mapped backend.
+3. The complete Aurora BGD FSM and its failure paths run deterministically
+   without live AWS infrastructure.
+4. Runtime status, routing, pools, cached IPs, probes, refresh, and cluster-sync
+   contracts have observable assertions.
+5. Ordinary Aurora and RDS Multi-AZ BGD regressions retain their semantics.
+6. The suite uses the existing Aurora and RDS simulator CI groups without a
+   separate feature flag or simulator family.
