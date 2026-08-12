@@ -823,7 +823,7 @@ void MySQL_Connection::connect_start_SetAttributes() {
 		unsigned long long t1=monotonic_time();
 		sprintf(__buffer,"%llu",(t1-GloVars.global.start_time)/1000/1000);
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "proxysql_uptime", __buffer);
-		sprintf(__buffer,"%d", parent->myhgc->hid);
+		snprintf(__buffer, sizeof(__buffer), "%d", parent->myhgc->hid);
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "hostgroup_id", __buffer);
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "compile_time", __TIMESTAMP__);
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "proxysql_version", PROXYSQL_VERSION);
@@ -3303,7 +3303,7 @@ void MySQL_Connection::set_ssl_params(MYSQL *mysql, MySQLServers_SslParams *ssl_
 
 void MySQL_Connection::get_mysql_info_json(json& j) {
 	char buff[32];
-	sprintf(buff,"%p",mysql);
+	snprintf(buff, sizeof(buff), "%p", static_cast<void*>(mysql));
 	j["address"] = buff;
 	j["host"] = ( mysql->host ? mysql->host : "" );
 	j["host_info"] = ( mysql->host_info ? mysql->host_info : "" );
@@ -3334,7 +3334,7 @@ void MySQL_Connection::get_backend_conn_info_json(json& j) {
 		variables[*it_c].fill_server_internal_session(j, *it_c);
 	}
 	char buff[32];
-	sprintf(buff,"%p", this);
+	snprintf(buff, sizeof(buff), "%p", static_cast<void*>(this));
 	j["address"] = buff;
 	j["auto_increment_delay_token"] = auto_increment_delay_token;
 	j["bytes_recv"] = bytes_info.bytes_recv;

@@ -655,49 +655,49 @@ SQLite3_result* Query_Cache<QC_DERIVED>::SQL3_getStats() {
 	// NOTE: as there is no string copy, we do NOT free pta[0] and pta[1]
 	{ // Used Memoery
 		pta[0]=(char *)"Query_Cache_Memory_bytes";
-		sprintf(buf,"%lu", get_data_size_total());
+		snprintf(buf, sizeof(buf), "%lu", get_data_size_total());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{ // Glo_cntGet
 		pta[0]=(char *)"Query_Cache_count_GET";
-		sprintf(buf,"%lu", Glo_cntGet);
+		snprintf(buf, sizeof(buf), "%lu", Glo_cntGet);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{ // Glo_cntGetOK
 		pta[0]=(char *)"Query_Cache_count_GET_OK";
-		sprintf(buf,"%lu", Glo_cntGetOK);
+		snprintf(buf, sizeof(buf), "%lu", Glo_cntGetOK);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{ // Glo_cntSet
 		pta[0]=(char *)"Query_Cache_count_SET";
-		sprintf(buf,"%lu", Glo_cntSet);
+		snprintf(buf, sizeof(buf), "%lu", Glo_cntSet);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{ // Glo_dataIN
 		pta[0]=(char *)"Query_Cache_bytes_IN";
-		sprintf(buf,"%lu", Glo_dataIN);
+		snprintf(buf, sizeof(buf), "%lu", Glo_dataIN);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{ // Glo_dataOUT
 		pta[0]=(char *)"Query_Cache_bytes_OUT";
-		sprintf(buf,"%lu", Glo_dataOUT);
+		snprintf(buf, sizeof(buf), "%lu", Glo_dataOUT);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{ // Glo_cntPurge
 		pta[0]=(char *)"Query_Cache_Purged";
-		sprintf(buf,"%lu", Glo_cntPurge);
+		snprintf(buf, sizeof(buf), "%lu", Glo_cntPurge);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{ // Glo_num_entries
 		pta[0]=(char *)"Query_Cache_Entries";
-		sprintf(buf,"%lu", Glo_num_entries);
+		snprintf(buf, sizeof(buf), "%lu", Glo_num_entries);
 		pta[1]=buf;
 		result->add_row(pta);
 	}

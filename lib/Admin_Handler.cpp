@@ -618,7 +618,7 @@ bool admin_handler_command_kill_pgsql_connection(uint32_t session_thd_id, S* ses
 		SPA->send_ok_msg_to_client(sess, NULL, 0, "KILL PGSQL CONNECTION");
 	} else {
 		char buf[1024];
-		sprintf(buf, "Unknown thread id: %u", session_thd_id);
+		snprintf(buf, sizeof(buf), "Unknown thread id: %u", session_thd_id);
 		SPA->send_error_msg_to_client(sess, buf);
 	}
 	return false;
@@ -633,7 +633,7 @@ bool admin_handler_command_kill_mysql_connection(uint32_t session_thd_id, S* ses
 		SPA->send_ok_msg_to_client(sess, NULL, 0, NULL);
 	} else {
 		char buf[1024];
-		sprintf(buf,"Unknown thread id: %u", session_thd_id);
+		snprintf(buf, sizeof(buf), "Unknown thread id: %u", session_thd_id);
 		SPA->send_error_msg_to_client(sess, buf);
 	}
 	return false;
@@ -837,7 +837,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			GloMTH->set_int_variable_and_commit("wait_timeout", "0");
 		GloMTH->signal_all_threads(0);
 		GloMTH->stop_listeners();
-		sprintf(buf, "%d", admin_old_wait_timeout);
+		snprintf(buf, sizeof(buf), "%d", admin_old_wait_timeout);
 		(void)GloMTH->set_int_variable_and_commit("wait_timeout", buf);
 
 		// ----- PgSQL module stop -----
@@ -846,7 +846,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		GloPTH->commit();
 		GloPTH->signal_all_threads(0);
 		GloPTH->stop_listeners();
-		sprintf(buf, "%d", admin_old_wait_timeout);
+		snprintf(buf, sizeof(buf), "%d", admin_old_wait_timeout);
 		GloPTH->set_variable((char*)"wait_timeout", buf);
 		GloPTH->commit();
 
@@ -896,7 +896,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			admin_proxysql_mysql_paused=true;
 			// we now rollback poll_timeout
 			char buf[32];
-			sprintf(buf,"%d",admin_old_wait_timeout);
+			snprintf(buf, sizeof(buf), "%d", admin_old_wait_timeout);
 			(void)GloMTH->set_int_variable_and_commit("poll_timeout", buf);
 		}
 
@@ -911,7 +911,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			admin_proxysql_pgsql_paused = true;
 			// we now rollback poll_timeout
 			char buf[32];
-			sprintf(buf, "%d", admin_old_wait_timeout);
+			snprintf(buf, sizeof(buf), "%d", admin_old_wait_timeout);
 			GloPTH->set_variable((char*)"poll_timeout", buf);
 			GloPTH->commit();
 		}
@@ -952,7 +952,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			admin_proxysql_mysql_paused=false;
 			// we now rollback poll_timeout
 			char buf[32];
-			sprintf(buf,"%d",admin_old_wait_timeout);
+			snprintf(buf, sizeof(buf), "%d", admin_old_wait_timeout);
 			(void)GloMTH->set_int_variable_and_commit("poll_timeout", buf);
 		}
 
@@ -971,7 +971,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			admin_proxysql_pgsql_paused = false;
 			// we now rollback poll_timeout
 			char buf[32];
-			sprintf(buf, "%d", admin_old_wait_timeout);
+			snprintf(buf, sizeof(buf), "%d", admin_old_wait_timeout);
 			GloPTH->set_variable((char*)"poll_timeout", buf);
 			GloPTH->commit();
 		}
@@ -3470,7 +3470,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		int cnt = GloMyQPro->get_current_query_rules_fast_routing_count();
 		l_free(query_length,query);
 		char buf[256];
-		sprintf(buf,"SELECT %d AS 'COUNT(*)'", cnt);
+		snprintf(buf, sizeof(buf), "SELECT %d AS 'COUNT(*)'", cnt);
 		query=l_strdup(buf);
 		query_length=strlen(query)+1;
 		goto __run_query;
@@ -3483,7 +3483,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		int cnt = GloPgQPro->get_current_query_rules_fast_routing_count();
 		l_free(query_length, query);
 		char buf[256];
-		sprintf(buf, "SELECT %d AS 'COUNT(*)'", cnt);
+		snprintf(buf, sizeof(buf), "SELECT %d AS 'COUNT(*)'", cnt);
 		query = l_strdup(buf);
 		query_length = strlen(query) + 1;
 		goto __run_query;
@@ -3773,7 +3773,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 					l_free(query_length,query);
 					unsigned int curver = MyHGM->get_servers_table_version();
 					char buf[256];
-					sprintf(buf,"SELECT %u AS 'version'", curver);
+					snprintf(buf, sizeof(buf), "SELECT %u AS 'version'", curver);
 					query=l_strdup(buf);
 					query_length=strlen(query)+1;
 					//SPA->send_ok_msg_to_client(sess,  , NULL);
@@ -3787,7 +3787,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		if ((query_no_space_length == sizeof("SELECT GLOBAL_CHECKSUM()") - 1) && (!strncasecmp("SELECT GLOBAL_CHECKSUM()", query_no_space, sizeof("SELECT GLOBAL_CHECKSUM()") - 1))) {
 			char buf[32];
 			pthread_mutex_lock(&GloVars.checksum_mutex);
-			sprintf(buf,"%lu",GloVars.checksums_values.global_checksum);
+			snprintf(buf, sizeof(buf), "%llu", static_cast<unsigned long long>(GloVars.checksums_values.global_checksum));
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
 			uint16_t setStatus = 0;
 			auto *myds=sess->client_myds;

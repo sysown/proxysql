@@ -4525,7 +4525,7 @@ SQLite3_result * ProxySQL_Cluster_Nodes::stats_proxysql_servers_checksums() {
 			ProxySQL_Checksum_Value_2 *v = vals[i];
 			char **pta=(char **)malloc(sizeof(char *)*colnum);
 			pta[0]=strdup(node->get_hostname());
-			sprintf(buf,"%d", node->get_port());
+			snprintf(buf, sizeof(buf), "%d", node->get_port());
 			pta[1]=strdup(buf);
 
 			switch (i) {
@@ -4553,16 +4553,16 @@ SQLite3_result * ProxySQL_Cluster_Nodes::stats_proxysql_servers_checksums() {
 				default:
 					break;
 			}
-			sprintf(buf,"%llu", v->version);
+			snprintf(buf, sizeof(buf), "%llu", v->version);
 			pta[3]=strdup(buf);
-			sprintf(buf,"%llu", v->epoch);
+			snprintf(buf, sizeof(buf), "%llu", v->epoch);
 			pta[4]=strdup(buf);
 			pta[5]=strdup(v->checksum);
-			sprintf(buf,"%ld", v->last_changed);
+			snprintf(buf, sizeof(buf), "%ld", v->last_changed);
 			pta[6]=strdup(buf);
-			sprintf(buf,"%ld", v->last_updated);
+			snprintf(buf, sizeof(buf), "%ld", v->last_updated);
 			pta[7]=strdup(buf);
-			sprintf(buf,"%u", v->diff_check);
+			snprintf(buf, sizeof(buf), "%u", v->diff_check);
 			pta[8]=strdup(buf);
 
 
@@ -4601,24 +4601,24 @@ SQLite3_result * ProxySQL_Cluster_Nodes::stats_proxysql_servers_metrics() {
 		ProxySQL_Node_Entry * node = it->second;
 		char **pta=(char **)malloc(sizeof(char *)*colnum);
 		pta[0]=strdup(node->get_hostname());
-		sprintf(buf,"%d", node->get_port());
+		snprintf(buf, sizeof(buf), "%d", node->get_port());
 		pta[1]=strdup(buf);
-		sprintf(buf,"%lu", node->get_weight());
+		snprintf(buf, sizeof(buf), "%lu", node->get_weight());
 		pta[2]=strdup(buf);
 		pta[3]=strdup(node->get_comment());
 		ProxySQL_Node_Metrics *curr = node->get_metrics_curr();
 		// ProxySQL_Node_Metrics *prev = node->get_metrics_prev();
-		sprintf(buf,"%llu", curr->response_time_us/1000);
+		snprintf(buf, sizeof(buf), "%llu", curr->response_time_us/1000);
 		pta[4]=strdup(buf);
-		sprintf(buf,"%llu", curr->ProxySQL_Uptime);
+		snprintf(buf, sizeof(buf), "%llu", curr->ProxySQL_Uptime);
 		pta[5]=strdup(buf);
-		sprintf(buf,"%llu", (curtime - curr->read_time_us)/1000);
+		snprintf(buf, sizeof(buf), "%llu", (curtime - curr->read_time_us)/1000);
 		pta[6]=strdup(buf);
-		sprintf(buf,"%llu", curr->Questions);
+		snprintf(buf, sizeof(buf), "%llu", curr->Questions);
 		pta[7]=strdup(buf);
-		sprintf(buf,"%llu", curr->Client_Connections_connected);
+		snprintf(buf, sizeof(buf), "%llu", curr->Client_Connections_connected);
 		pta[8]=strdup(buf);
-		sprintf(buf,"%llu", curr->Client_Connections_created);
+		snprintf(buf, sizeof(buf), "%llu", curr->Client_Connections_created);
 		pta[9]=strdup(buf);
 
 		result->add_row(pta);
@@ -4647,9 +4647,9 @@ SQLite3_result * ProxySQL_Cluster_Nodes::dump_table_proxysql_servers() {
 		ProxySQL_Node_Entry * node = it->second;
 		char **pta=(char **)malloc(sizeof(char *)*colnum);
 		pta[0]=strdup(node->get_hostname());
-		sprintf(buf,"%d", node->get_port());
+		snprintf(buf, sizeof(buf), "%d", node->get_port());
 		pta[1]=strdup(buf);
-		sprintf(buf,"%lu", node->get_weight());
+		snprintf(buf, sizeof(buf), "%lu", node->get_weight());
 		pta[2]=strdup(buf);
 		pta[3]=strdup(node->get_comment());
 		result->add_row(pta);
