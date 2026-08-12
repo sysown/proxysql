@@ -921,7 +921,8 @@ ifeq ($(UNAME_S),Linux)
 aws_iam_session_state_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=mysql_real_connect_start
 aws_iam_pool_unit-t: ALLOW_MULTI_DEF += \
 	-Wl,--wrap=mysql_change_user_start \
-	-Wl,--wrap=mysql_real_connect_start
+	-Wl,--wrap=mysql_real_connect_start \
+	-Wl,--wrap=pthread_create
 aws_iam_failure_unit-t: ALLOW_MULTI_DEF += \
 	-Wl,--wrap=mysql_real_connect_start \
 	-Wl,--wrap=_ZN14MySQL_Protocol16generate_pkt_ERREbPPvPjhtPKcS4_b

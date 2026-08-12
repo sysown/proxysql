@@ -310,6 +310,7 @@ void* kill_query_thread(void *arg) {
 	const bool iam_mode =
 		ka->backend_auth_type == MySQLBackendAuthType::AWS_IAM;
 	AwsIamTokenResult iam_result;
+	AwsIamTokenSourceLease iam_source;
 	const char *connect_user = ka->username;
 	const char *connect_password = ka->password;
 	//! It initializes a new MySQL_Thread object to handle MySQL-related operations.
@@ -347,6 +348,7 @@ void* kill_query_thread(void *arg) {
 	}
 
 	if (iam_mode) {
+		iam_source = acquire_global_aws_iam_token_source();
 		AwsIamConnectionConfigInput input;
 		input.database_user = ka->database_user;
 		input.configured_endpoint = ka->configured_endpoint;
@@ -359,22 +361,22 @@ void* kill_query_thread(void *arg) {
 		input.ssl_capath = ssl_params != nullptr
 			? ssl_params->ssl_capath
 			: (mysql_thread___ssl_p2s_capath != nullptr ? mysql_thread___ssl_p2s_capath : "");
-		input.support_compiled = GloAwsIamTokenSource != nullptr;
+		input.support_compiled = static_cast<bool>(iam_source);
 		const AwsIamConnectionConfigResult config =
 			validate_mysql_aws_iam_connection(input);
 		if (config.status != AwsIamConnectionConfigStatus::OK ||
-			GloAwsIamTokenSource == nullptr) {
+			!iam_source) {
 			proxy_error(
 				"AWS IAM kill helper failure user='%s' hostgroup=%u endpoint='%s'"
 				" region='%s' category='%s' code='' request_id=''\n",
 				ka->database_user.c_str(), ka->hid,
 				ka->configured_endpoint.c_str(), ka->region.c_str(),
-				GloAwsIamTokenSource == nullptr
+				!iam_source
 					? "token_source_unavailable" : config.failure_code.c_str());
 			goto __exit_kill_query_thread;
 		}
 
-		iam_result = GloAwsIamTokenSource->request_blocking(
+		iam_result = iam_source->request_blocking(
 			config.key, ka->token_deadline);
 		if (iam_result.status != AwsIamStatus::OK || iam_result.token.empty()) {
 			proxy_error(
@@ -388,9 +390,24 @@ void* kill_query_thread(void *arg) {
 				iam_result.failure.request_id.c_str());
 			goto __exit_kill_query_thread;
 		}
+		const auto remaining = ka->token_deadline -
+			std::chrono::steady_clock::now();
+		const auto connect_timeout_seconds =
+			std::chrono::duration_cast<std::chrono::seconds>(remaining).count();
+		if (connect_timeout_seconds <= 0) {
+			proxy_error(
+				"AWS IAM kill helper failure user='%s' hostgroup=%u endpoint='%s'"
+				" region='%s' category='helper_deadline_exceeded' code='' request_id=''\n",
+				ka->database_user.c_str(), ka->hid,
+				ka->configured_endpoint.c_str(), ka->region.c_str());
+			goto __exit_kill_query_thread;
+		}
 
 		my_bool enabled = 1;
 		my_bool reconnect = 0;
+		const unsigned int connect_timeout =
+			static_cast<unsigned int>(connect_timeout_seconds);
+		mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, &connect_timeout);
 		mysql_options(mysql, MYSQL_OPT_SSL_ENFORCE, &enabled);
 		mysql_options(mysql, MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &enabled);
 		mysql_options(mysql, MYSQL_ENABLE_CLEARTEXT_PLUGIN, &enabled);
@@ -439,9 +456,7 @@ void* kill_query_thread(void *arg) {
 	if (iam_mode) {
 		cleanse_iam_connector_password(mysql);
 		iam_result.token.clear();
-		if (GloAwsIamTokenSource != nullptr) {
-			GloAwsIamTokenSource->record_backend_connection(ret != nullptr);
-		}
+		iam_source->record_backend_connection(ret != nullptr);
 	}
 	if (!ret) {
 		int myerr = mysql_errno(mysql);
@@ -3874,6 +3889,12 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 		}
 		enum session_status st=status;
 		if (mybe->server_myds->myconn->async_state_machine==ASYNC_IDLE) {
+			if (mybe->server_myds->myconn->backend_auth_type() ==
+				MySQLBackendAuthType::AWS_IAM) {
+				aws_iam_connect_token_key = AwsIamTokenKey {};
+				aws_iam_connect_token_generation = 0;
+				aws_iam_fresh_token_retry_attempted = false;
+			}
 			if (handle_session_track_capabilities() == false) {
 				pause_until = thread->curtime + mysql_thread___connect_retries_delay*1000;
 				return false;
@@ -4022,7 +4043,8 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 					if (connect_errno == ER_ACCESS_DENIED_ERROR &&
 						!aws_iam_fresh_token_retry_attempted &&
 						GloAwsIamTokenSource != nullptr && failed_generation != 0 &&
-						!failed_key.endpoint.empty() && !failed_key.region.empty() &&
+						!failed_key.endpoint.empty() && failed_key.port != 0 &&
+						!failed_key.region.empty() &&
 						!failed_key.database_user.empty()) {
 						proxy_error(
 							"AWS IAM backend connection failure user='%s' hostgroup=%u endpoint='%s'"
@@ -8949,6 +8971,9 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				? client_myds->myconn->userinfo->username : nullptr;
 		MySQLBackendAuthPolicy backend_auth_policy =
 			resolve_mysql_backend_auth_policy(*GloMyAuth, backend_username);
+		const bool force_fresh_iam_connection =
+			backend_auth_policy.type == MySQLBackendAuthType::AWS_IAM &&
+			aws_iam_fresh_token_retry_attempted;
 		// A pass-through credential has already been authorized by a successful
 		// backend probe (or its cache). Unknown-user pass-through intentionally
 		// has no USERNAME_BACKEND row, so retain its established password mode.
@@ -8984,7 +9009,9 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				}
 			}
 		}
-		if (session_fast_forward == SESSION_FORWARD_TYPE_NONE && qpo->create_new_conn == false) {
+		if (!force_fresh_iam_connection &&
+			session_fast_forward == SESSION_FORWARD_TYPE_NONE &&
+			qpo->create_new_conn == false) {
 			if (qpo->min_gtid) {
 				gtid_uuid = qpo->min_gtid;
 				with_gtid = true;
@@ -9044,9 +9071,13 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 
 		if (mc==NULL) {
 			if (trxid) {
-				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), uuid, trxid, -1, backend_auth_policy.type);
+				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this,
+					(session_fast_forward || qpo->create_new_conn || force_fresh_iam_connection),
+					uuid, trxid, -1, backend_auth_policy.type);
 			} else {
-				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), NULL, 0, (int)qpo->max_lag_ms, backend_auth_policy.type);
+				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this,
+					(session_fast_forward || qpo->create_new_conn || force_fresh_iam_connection),
+					NULL, 0, (int)qpo->max_lag_ms, backend_auth_policy.type);
 			}
 			thread->note_pool_attempt(mc == NULL);
 #ifdef STRESSTEST_POOL

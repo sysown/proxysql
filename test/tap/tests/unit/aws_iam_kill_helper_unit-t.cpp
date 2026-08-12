@@ -16,9 +16,12 @@
 #include <openssl/crypto.h>
 
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 extern MySQL_HostGroups_Manager *MyHGM;
@@ -67,6 +70,13 @@ public:
 		Clock::time_point deadline) override {
 		keys.push_back(key);
 		deadlines.push_back(deadline);
+		if (block_request) {
+			std::unique_lock<std::mutex> lock(block_mutex);
+			request_entered = true;
+			block_cv.notify_all();
+			block_cv.wait(lock, [this] { return request_released; });
+		}
+		if (wait_until_deadline) std::this_thread::sleep_until(deadline);
 		AwsIamTokenResult result;
 		result.status = status;
 		if (status == AwsIamStatus::OK) {
@@ -94,6 +104,12 @@ public:
 	std::vector<Clock::time_point> deadlines;
 	unsigned int successes { 0 };
 	unsigned int failures { 0 };
+	bool wait_until_deadline { false };
+	bool block_request { false };
+	bool request_entered { false };
+	bool request_released { false };
+	std::mutex block_mutex;
+	std::condition_variable block_cv;
 };
 
 struct ConnectorObservation {
@@ -111,6 +127,8 @@ struct ConnectorObservation {
 	bool cleartext { false };
 	bool reconnect_seen { false };
 	bool reconnect { true };
+	bool connect_timeout_seen { false };
+	unsigned int connect_timeout { 0 };
 	std::string tls_server_name;
 	char *connector_password { nullptr };
 	size_t connector_password_size { 0 };
@@ -142,6 +160,7 @@ void test_iam_kill(FakeBlockingTokenSource& source, int kill_type,
 	const char *label) {
 	reset_observations(token);
 	source.status = AwsIamStatus::OK;
+	source.wait_until_deadline = false;
 	source.next_token = token;
 	const Clock::time_point deadline = Clock::now() + std::chrono::seconds(2);
 	KillArgs *args = iam_args(kill_type, id, deadline);
@@ -158,8 +177,10 @@ void test_iam_kill(FakeBlockingTokenSource& source, int kill_type,
 		"%s obtains its own current token with the exact key and helper deadline", label);
 	ok(connector.ssl_enforce && connector.ssl_verify && connector.cleartext &&
 		connector.reconnect_seen && !connector.reconnect &&
-		connector.tls_server_name == kEndpoint,
-		"%s enforces TLS, hostname verification, cleartext auth, and no reconnect", label);
+		connector.tls_server_name == kEndpoint &&
+		connector.connect_timeout_seen && connector.connect_timeout >= 1 &&
+		connector.connect_timeout <= 2,
+		"%s enforces TLS, hostname verification, cleartext auth, no reconnect, and a deadline-bounded connect timeout", label);
 	ok(connector.query_calls == 1 && connector.query == expected_query,
 		"%s connects and issues only the requested KILL command", label);
 	ok(secure_token_cleanse_calls == 1 &&
@@ -182,6 +203,19 @@ void test_helper_deadline(FakeBlockingTokenSource& source) {
 		"an IAM kill helper passes through its deadline and never connects after timeout");
 }
 
+void test_deadline_expiring_during_token_request(FakeBlockingTokenSource& source) {
+	reset_observations(kQueryToken);
+	source.status = AwsIamStatus::OK;
+	source.next_token = kQueryToken;
+	source.wait_until_deadline = true;
+	KillArgs *args = iam_args(
+		KILL_QUERY, 334, Clock::now() + std::chrono::milliseconds(5));
+	kill_query_thread(args);
+	source.wait_until_deadline = false;
+	ok(connector.connect_calls == 0 && connector.query_calls == 0,
+		"an IAM helper does not start TCP connect after its deadline expires during token acquisition");
+}
+
 void test_password_mode_unchanged(FakeBlockingTokenSource& source) {
 	reset_observations(kPassword);
 	const size_t requests_before = source.keys.size();
@@ -195,6 +229,64 @@ void test_password_mode_unchanged(FakeBlockingTokenSource& source) {
 		!connector.cleartext && connector.tls_server_name.empty() &&
 		connector.query == "KILL QUERY 444",
 		"password-mode kill helpers retain their existing password connector behavior");
+}
+
+void test_helper_shutdown_lifetime(FakeBlockingTokenSource& source) {
+	reset_observations(kQueryToken);
+	source.status = AwsIamStatus::OK;
+	source.next_token = kQueryToken;
+	source.block_request = true;
+	source.request_entered = false;
+	source.request_released = false;
+	std::thread helper([&] {
+		kill_query_thread(iam_args(
+			KILL_QUERY, 555, Clock::now() + std::chrono::seconds(2)));
+	});
+	{
+		std::unique_lock<std::mutex> lock(source.block_mutex);
+		if (!source.block_cv.wait_for(lock, std::chrono::seconds(1),
+			[&source] { return source.request_entered; })) {
+			BAIL_OUT("IAM helper did not enter the blocking token source");
+		}
+	}
+	std::atomic<bool> shutdown_started { false };
+	std::atomic<bool> shutdown_returned { false };
+	std::thread shutdown([&] {
+		shutdown_started.store(true, std::memory_order_release);
+		shutdown_global_aws_iam_token_source();
+		shutdown_returned.store(true, std::memory_order_release);
+	});
+	while (!shutdown_started.load(std::memory_order_acquire)) {
+		std::this_thread::yield();
+	}
+	for (;;) {
+		AwsIamTokenSourceLease probe = acquire_global_aws_iam_token_source();
+		if (!probe) break;
+		std::this_thread::yield();
+	}
+	const bool returned_while_helper_active =
+		shutdown_returned.load(std::memory_order_acquire);
+	{
+		std::lock_guard<std::mutex> lock(source.block_mutex);
+		source.request_released = true;
+	}
+	source.block_cv.notify_all();
+	helper.join();
+	shutdown.join();
+	source.block_request = false;
+	ok(!returned_while_helper_active &&
+		shutdown_returned.load(std::memory_order_acquire) &&
+		GloAwsIamTokenSource == nullptr && connector.connect_calls == 1 &&
+		connector.query_calls == 1,
+		"token-source shutdown waits until an already-running detached IAM helper finishes safely");
+
+	const size_t requests_before = source.keys.size();
+	reset_observations(kQueryToken);
+	kill_query_thread(iam_args(
+		KILL_QUERY, 556, Clock::now() + std::chrono::seconds(2)));
+	ok(source.keys.size() == requests_before && connector.connect_calls == 0 &&
+		connector.query_calls == 0,
+		"an IAM helper starting after token-source shutdown is rejected safely");
 }
 
 } // namespace
@@ -227,6 +319,11 @@ int __wrap_mysql_options(MYSQL *mysql, enum mysql_option option, const void *arg
 			connector.reconnect_seen = true;
 			connector.reconnect = arg != nullptr &&
 				*static_cast<const my_bool *>(arg) != 0;
+			break;
+		case MYSQL_OPT_CONNECT_TIMEOUT:
+			connector.connect_timeout_seen = true;
+			connector.connect_timeout = arg != nullptr
+				? *static_cast<const unsigned int *>(arg) : 0;
 			break;
 		default:
 			break;
@@ -276,7 +373,7 @@ void __wrap_mysql_close(MYSQL *mysql) {
 } // extern "C"
 
 int main() {
-	plan(12);
+	plan(15);
 	if (test_init_minimal() != 0 || test_init_query_processor() != 0 ||
 		test_init_hostgroups() != 0) {
 		BAIL_OUT("failed to initialize unit-test globals");
@@ -287,14 +384,15 @@ int main() {
 	}
 
 	FakeBlockingTokenSource source;
-	GloAwsIamTokenSource = &source;
+	publish_global_aws_iam_token_source(&source);
 	test_iam_kill(source, KILL_QUERY, 111, kQueryToken,
 		"KILL QUERY 111", "IAM query kill");
 	test_iam_kill(source, KILL_CONNECTION, 222, kConnectionToken,
 		"KILL CONNECTION 222", "IAM connection kill");
 	test_helper_deadline(source);
+	test_deadline_expiring_during_token_request(source);
 	test_password_mode_unchanged(source);
-	GloAwsIamTokenSource = nullptr;
+	test_helper_shutdown_lifetime(source);
 
 	delete GloMyLogger;
 	GloMyLogger = nullptr;

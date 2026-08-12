@@ -9,12 +9,15 @@
 
 #include "proxysql.h"
 #include "cpp.h"
+#include "Aws_Iam_Sdk.h"
 #include "MySQL_Authentication.hpp"
 #include "MySQL_Data_Stream.h"
 #include "MySQL_Logger.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <cstring>
+#include <string>
 #include <thread>
 
 extern MySQL_HostGroups_Manager *MyHGM;
@@ -33,6 +36,20 @@ constexpr const char *kSchema = "pool_schema";
 
 std::atomic<unsigned int> change_user_calls { 0 };
 std::atomic<bool> change_user_immediate_success { false };
+MySQL_Connection *kill_source_connection = nullptr;
+unsigned int kill_helper_dispatches = 0;
+bool kill_source_token_present_at_dispatch = false;
+bool kill_args_password_absent = false;
+unsigned long kill_args_id = 0;
+int kill_args_type = 0;
+MySQLBackendAuthType kill_args_auth_type = MySQLBackendAuthType::PASSWORD;
+std::string kill_args_endpoint;
+std::string kill_args_region;
+std::string kill_args_database_user;
+std::string kill_args_transport;
+unsigned int kill_args_port = 0;
+int kill_args_use_ssl = 0;
+std::chrono::steady_clock::time_point kill_args_deadline;
 
 MySrvC *create_server(unsigned int hostgroup_id, const char *address) {
 	srv_info_t info;
@@ -455,6 +472,63 @@ void test_destroy_path_never_queues_iam() {
 	}
 }
 
+void test_destroy_path_dispatches_detached_iam_connection_kill() {
+	MySrvC *server = create_server(820, "kill-dispatch-iam");
+	server->use_ssl = 1;
+	free(server->myhgc->attributes.aws_iam_region);
+	server->myhgc->attributes.aws_iam_region = strdup("us-east-1");
+	GloMTH->variables.connpoll_reset_queue_length = 50;
+	mysql_thread___kill_backend_connection_when_disconnect = true;
+
+	MySQL_Connection *iam = create_established_connection(
+		server, kUser, MySQLBackendAuthType::AWS_IAM);
+	AwsIamTokenResult token;
+	token.status = AwsIamStatus::OK;
+	token.generation = 77;
+	token.token = SecureString("ORIGINAL_IAM_HANDSHAKE_TOKEN");
+	iam->attach_aws_iam_token(
+		{ server->address, server->port, "us-east-1", kUser },
+		std::move(token));
+	iam->send_quit = true;
+	iam->async_state_machine = ASYNC_QUERY_CONT;
+	iam->mysql->thread_id = 741;
+	iam->connected_host_details.ip = strdup("198.51.100.28");
+	server->ConnectionsUsed->add(iam);
+
+	kill_source_connection = iam;
+	kill_helper_dispatches = 0;
+	kill_source_token_present_at_dispatch = false;
+	kill_args_password_absent = false;
+	kill_args_id = 0;
+	kill_args_type = 0;
+	kill_args_auth_type = MySQLBackendAuthType::PASSWORD;
+	kill_args_endpoint.clear();
+	kill_args_region.clear();
+	kill_args_database_user.clear();
+	kill_args_transport.clear();
+	kill_args_port = 0;
+	kill_args_use_ssl = 0;
+	kill_args_deadline = {};
+	const auto before = std::chrono::steady_clock::now();
+	MyHGM->destroy_MyConn_from_pool(iam);
+	const auto after = std::chrono::steady_clock::now();
+	kill_source_connection = nullptr;
+	mysql_thread___kill_backend_connection_when_disconnect = false;
+
+	ok(kill_helper_dispatches == 1 && kill_source_token_present_at_dispatch &&
+		kill_args_password_absent && kill_args_id == 741 &&
+		kill_args_type == KILL_CONNECTION &&
+		kill_args_auth_type == MySQLBackendAuthType::AWS_IAM &&
+		kill_args_endpoint == "kill-dispatch-iam" &&
+		kill_args_region == "us-east-1" && kill_args_database_user == kUser &&
+		kill_args_transport == "198.51.100.28" && kill_args_port == 3306 &&
+		kill_args_use_ssl == 1 &&
+		kill_args_deadline > before && kill_args_deadline > after &&
+		MyHGM->queue.size() == 0 &&
+		server->ConnectionsUsed->conns_length() == 0,
+		"production destroy dispatches an IAM KILL_CONNECTION helper without changing the source token or entering reset");
+}
+
 void test_reset_queue_worker_never_changes_iam() {
 	MySrvC *server = create_server(808, "reset-worker-iam");
 	MySQL_Connection *iam = create_established_connection(
@@ -609,6 +683,8 @@ int __real_mysql_change_user_start(
 	my_bool *, MYSQL *, const char *, const char *, const char *);
 int __real_mysql_real_connect_start(MYSQL **, MYSQL *, const char *, const char *,
 	const char *, const char *, unsigned int, const char *, unsigned long);
+int __real_pthread_create(pthread_t *, const pthread_attr_t *,
+	void *(*)(void *), void *);
 
 int __wrap_mysql_change_user_start(
 	my_bool *ret, MYSQL *, const char *, const char *, const char *)
@@ -627,6 +703,32 @@ int __wrap_mysql_real_connect_start(MYSQL **ret, MYSQL *, const char *,
 	return MYSQL_WAIT_READ;
 }
 
+int __wrap_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
+	void *(*start_routine)(void *), void *arg)
+{
+	if (start_routine != &kill_query_thread) {
+		return __real_pthread_create(thread, attr, start_routine, arg);
+	}
+	++kill_helper_dispatches;
+	KillArgs *kill_args = static_cast<KillArgs *>(arg);
+	kill_source_token_present_at_dispatch =
+		kill_source_connection != nullptr &&
+		kill_source_connection->has_aws_iam_handshake_secret();
+	kill_args_password_absent = kill_args->password == nullptr;
+	kill_args_id = kill_args->id;
+	kill_args_type = kill_args->kill_type;
+	kill_args_auth_type = kill_args->backend_auth_type;
+	kill_args_endpoint = kill_args->configured_endpoint;
+	kill_args_region = kill_args->region;
+	kill_args_database_user = kill_args->database_user;
+	kill_args_transport = kill_args->get_host_address();
+	kill_args_port = kill_args->port;
+	kill_args_use_ssl = kill_args->use_ssl;
+	kill_args_deadline = kill_args->token_deadline;
+	delete kill_args;
+	return 0;
+}
+
 } // extern "C"
 #endif
 
@@ -636,7 +738,7 @@ int main() {
 	skip(1, "requires GNU ld --wrap support");
 	return exit_status();
 #else
-	plan(30);
+	plan(31);
 	if (test_init_minimal() != 0 || test_init_auth() != 0 ||
 		test_init_query_processor() != 0 ||
 		test_init_hostgroups() != 0) {
@@ -672,6 +774,7 @@ int main() {
 		test_invalid_policy_cannot_enter_reset(worker); // 1
 		test_authorized_rowless_passthrough_can_enter_detached_reset(worker); // 1
 		test_destroy_path_never_queues_iam();     // 2
+		test_destroy_path_dispatches_detached_iam_connection_kill(); // 1
 		test_reset_queue_worker_never_changes_iam(); // 1
 		test_reset_queue_worker_never_resets_invalid_policy(); // 1
 		test_reset_queue_worker_preserves_authorized_rowless_passthrough(); // 1

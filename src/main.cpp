@@ -1602,7 +1602,7 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 		static_cast<size_t>(GloMTH->variables.max_connections),
 	};
 	GloAwsIamTokenSourceOwner = create_aws_iam_token_source(aws_iam_config);
-	GloAwsIamTokenSource = GloAwsIamTokenSourceOwner.get();
+	publish_global_aws_iam_token_source(GloAwsIamTokenSourceOwner.get());
 
 	if (GloVars.global.nostart) {
 		pthread_mutex_lock(&GloVars.global.start_mutex);
@@ -1816,7 +1816,7 @@ bool ProxySQL_Main_init_phase3___start_all() {
 void ProxySQL_Main_init_phase4___shutdown() {
 	cpu_timer t;
 	ProxySQL_Main_join_all_threads();
-	GloAwsIamTokenSource = NULL;
+	shutdown_global_aws_iam_token_source();
 	GloAwsIamTokenSourceOwner.reset();
 
 	//write(GloAdmin->pipefd[1], &GloAdmin->pipefd[1], 1);	// write a random byte

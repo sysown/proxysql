@@ -2582,20 +2582,21 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 
 	bool to_del=true; // the default, legacy behavior
 	MySrvC *mysrvc=(MySrvC *)c->parent;
-	if (c->backend_auth_type() != MySQLBackendAuthType::AWS_IAM &&
-		c->healthy && mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE &&
+	if (c->healthy && mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE &&
 		c->send_quit &&
 		queue.size() < __sync_fetch_and_add(&GloMTH->variables.connpoll_reset_queue_length, 0)) {
 		if (c->async_state_machine==ASYNC_IDLE) {
-			// overall, the backend seems healthy and so it is the connection. Try to reset it
-			int myerr=mysql_errno(c->mysql);
-			if (myerr >= 2000 && myerr < 3000) {
-				// client library error . We must not try to save the connection
-				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Not trying to reset MySQL_Connection %p, server %s:%d . Error code %d\n", c, mysrvc->address, mysrvc->port, myerr);
-			} else {
-				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Trying to reset MySQL_Connection %p, server %s:%d\n", c, mysrvc->address, mysrvc->port);
-				to_del=false;
-				queue.add(c);
+			if (c->backend_auth_type() != MySQLBackendAuthType::AWS_IAM) {
+				// overall, the backend seems healthy and so it is the connection. Try to reset it
+				int myerr=mysql_errno(c->mysql);
+				if (myerr >= 2000 && myerr < 3000) {
+					// client library error . We must not try to save the connection
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Not trying to reset MySQL_Connection %p, server %s:%d . Error code %d\n", c, mysrvc->address, mysrvc->port, myerr);
+				} else {
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Trying to reset MySQL_Connection %p, server %s:%d\n", c, mysrvc->address, mysrvc->port);
+					to_del=false;
+					queue.add(c);
+				}
 			}
 		} else {
 		// the connection seems health, but we are trying to destroy it
@@ -2609,15 +2610,30 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 					default:
 					if (c->mysql->thread_id) {
 						MySQL_Connection_userinfo *ui=c->userinfo;
-						char *auth_password=NULL;
-						if (ui->password) {
-							if (ui->password[0]=='*') { // we don't have the real password, let's pass sha1
-								auth_password=ui->sha1_pass;
-							} else {
-								auth_password=ui->password;
+						KillArgs *ka = nullptr;
+						if (c->backend_auth_type() == MySQLBackendAuthType::AWS_IAM) {
+							const char *region = mysrvc->myhgc != nullptr &&
+								mysrvc->myhgc->attributes.aws_iam_region != nullptr
+									? mysrvc->myhgc->attributes.aws_iam_region : "";
+							ka = new KillArgs(
+								ui->username, nullptr, mysrvc->address, mysrvc->port,
+								mysrvc->myhgc->hid, c->mysql->thread_id,
+								KILL_CONNECTION, mysrvc->use_ssl, nullptr,
+								c->connected_host_details.ip,
+								MySQLBackendAuthType::AWS_IAM, mysrvc->address,
+								region, ui->username,
+								std::chrono::steady_clock::now() + std::chrono::seconds(5));
+						} else {
+							char *auth_password=NULL;
+							if (ui->password) {
+								if (ui->password[0]=='*') { // we don't have the real password, let's pass sha1
+									auth_password=ui->sha1_pass;
+								} else {
+									auth_password=ui->password;
+								}
 							}
+							ka = new KillArgs(ui->username, auth_password, c->parent->address, c->parent->port, c->parent->myhgc->hid, c->mysql->thread_id, KILL_CONNECTION, c->parent->use_ssl, NULL, c->connected_host_details.ip);
 						}
-						KillArgs *ka = new KillArgs(ui->username, auth_password, c->parent->address, c->parent->port, c->parent->myhgc->hid, c->mysql->thread_id, KILL_CONNECTION, c->parent->use_ssl, NULL, c->connected_host_details.ip);
 						pthread_attr_t attr;
 						pthread_attr_init(&attr);
 						pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);

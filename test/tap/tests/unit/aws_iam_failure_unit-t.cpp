@@ -43,6 +43,7 @@ constexpr const char *kTokenOne = "FAKE_IAM_TOKEN_GENERATION_ONE";
 constexpr const char *kTokenTwo = "FAKE_IAM_TOKEN_GENERATION_TWO";
 constexpr const char *kBackendText =
 	"backend reflected AKIAFAKEACCESSKEY and FAKE_SESSION_TOKEN";
+MySrvC *failure_server = nullptr;
 
 struct ConnectOutcome {
 	unsigned int error;
@@ -97,7 +98,12 @@ public:
 
 	void record_backend_connection(bool success) override {
 		if (success) ++backend_successes;
-		else ++backend_failures;
+		else {
+			++backend_failures;
+			if (corrupt_port_on_failure != nullptr) {
+				corrupt_port_on_failure->aws_iam_connect_token_key.port = 0;
+			}
+		}
 	}
 
 	AwsIamStatsSnapshot snapshot() const override { return {}; }
@@ -111,6 +117,7 @@ public:
 	uint64_t cached_generation { 0 };
 	unsigned int backend_successes { 0 };
 	unsigned int backend_failures { 0 };
+	MySQL_Session *corrupt_port_on_failure { nullptr };
 };
 
 bool add_backend_user(const char *username, const char *password,
@@ -137,6 +144,33 @@ void add_server() {
 	if (rc != 0 || hostgroup == nullptr) BAIL_OUT("failed to create failure fixture");
 	free(hostgroup->attributes.aws_iam_region);
 	hostgroup->attributes.aws_iam_region = strdup(kRegion);
+	failure_server = hostgroup->mysrvs->idx(0);
+}
+
+MySQL_Connection *established_iam_connection(int fd) {
+	MySQL_Connection *connection = new MySQL_Connection();
+	connection->mysql = mysql_init(nullptr);
+	if (connection->mysql == nullptr) BAIL_OUT("mysql_init() failed for retry pool fixture");
+	connection->ret_mysql = connection->mysql;
+	connection->mysql->charset = mariadb_get_charset_by_name("utf8mb4");
+	if (connection->mysql->charset == nullptr) BAIL_OUT("charset fixture failed");
+	connection->parent = failure_server;
+	connection->userinfo->set(
+		const_cast<char *>(kIamUser), const_cast<char *>(""),
+		const_cast<char *>("orders"), nullptr);
+	connection->set_backend_auth_type(MySQLBackendAuthType::AWS_IAM);
+	connection->healthy = true;
+	connection->reusable = true;
+	connection->send_quit = false;
+	connection->fd = fd;
+	connection->async_state_machine = ASYNC_IDLE;
+	return connection;
+}
+
+void destroy_used(MySQL_Connection *connection) {
+	if (connection == nullptr) return;
+	connection->send_quit = false;
+	MyHGM->destroy_MyConn_from_pool(connection);
 }
 
 std::string capture_stderr(const std::function<void()>& action) {
@@ -324,6 +358,85 @@ void test_password_1045_keeps_normal_retry(MySQL_Thread& worker) {
 		"password-mode 1045 retains the existing ordinary connection retry behavior");
 }
 
+void test_fresh_retry_bypasses_local_and_global_idle_iam(MySQL_Thread& worker) {
+	FakeTokenSource source;
+	GloAwsIamTokenSource = &source;
+	SessionFixture fixture(worker, kIamUser);
+	MySQL_Connection *local = established_iam_connection(601);
+	MySQL_Connection *global = established_iam_connection(602);
+	failure_server->ConnectionsUsed->add(local);
+	worker.push_MyConn_local(local);
+	failure_server->ConnectionsFree->add(global);
+	fixture.session->aws_iam_fresh_token_retry_attempted = true;
+	fixture.session->previous_status.pop();
+	fixture.session->previous_status.push(WAITING_CLIENT_DATA);
+
+	fixture.frontend_stream->active = 0;
+	fixture.backend()->active = 0;
+	fixture.run();
+	fixture.frontend_stream->active = 1;
+	fixture.backend()->active = 1;
+	MySQL_Connection *selected = fixture.backend()->myconn;
+	ok(selected != nullptr && selected->fd == -1 &&
+		local->myds == nullptr &&
+		failure_server->ConnectionsFree->conns_length() == 1 &&
+		source.keys.size() == 1 && fixture.session->status == WAITING_AWS_IAM_TOKEN,
+		"an IAM fresh-token retry bypasses compatible local and global idle connections and starts a new handshake");
+
+	if (fixture.backend()->myconn != nullptr) {
+		fixture.backend()->destroy_MySQL_Connection_From_Pool(false);
+	}
+	local = worker.get_MyConn_local(
+		kHostgroup, fixture.session, nullptr, 0, -1,
+		MySQLBackendAuthType::AWS_IAM);
+	destroy_used(local);
+	global = MyHGM->get_MyConn_from_pool(
+		kHostgroup, fixture.session, false, nullptr, 0, -1,
+		MySQLBackendAuthType::AWS_IAM);
+	destroy_used(global);
+}
+
+void test_pooled_success_clears_latch_for_later_1045(MySQL_Thread& worker) {
+	FakeTokenSource source;
+	GloAwsIamTokenSource = &source;
+	reset_connector({ { ER_ACCESS_DENIED_ERROR, kBackendText, false } });
+	SessionFixture fixture(worker, kIamUser);
+	MySQL_Connection *pooled = established_iam_connection(603);
+	failure_server->ConnectionsUsed->add(pooled);
+	fixture.backend()->attach_connection(pooled);
+	fixture.session->aws_iam_fresh_token_retry_attempted = true;
+	fixture.session->previous_status.pop();
+	fixture.session->previous_status.push(WAITING_CLIENT_DATA);
+	fixture.frontend_stream->active = 0;
+	fixture.backend()->active = 0;
+	fixture.run();
+	fixture.frontend_stream->active = 1;
+	fixture.backend()->active = 1;
+	fixture.backend()->destroy_MySQL_Connection_From_Pool(false);
+	fixture.session->previous_status.push(PROCESSING_QUERY);
+	fixture.session->set_status(CONNECTING_SERVER);
+	start_iam_attempt(fixture, worker);
+	process_terminal_connect(fixture);
+
+	ok(source.invalidated_generations.size() == 1 &&
+		source.invalidated_generations[0] == 1 && source.keys.size() == 2 &&
+		fixture.session->aws_iam_fresh_token_retry_attempted &&
+		fixture.session->status == WAITING_AWS_IAM_TOKEN,
+		"a pooled IAM acquisition success clears the retry latch so a later independent 1045 gets one fresh attempt");
+}
+
+void test_missing_port_cannot_retry_or_invalidate(MySQL_Thread& worker) {
+	FakeTokenSource source;
+	GloAwsIamTokenSource = &source;
+	reset_connector({ { ER_ACCESS_DENIED_ERROR, kBackendText, false } });
+	SessionFixture fixture(worker, kIamUser);
+	source.corrupt_port_on_failure = fixture.session;
+	start_iam_attempt(fixture, worker);
+	ok(source.invalidated_generations.empty() && source.keys.size() == 1 &&
+		fixture.session->status == WAITING_CLIENT_DATA,
+		"an IAM 1045 with a missing key port is terminal without invalidation or retry");
+}
+
 } // namespace
 
 extern "C" {
@@ -366,7 +479,7 @@ int __wrap_mysql_real_connect_start(MYSQL **ret, MYSQL *mysql, const char *host,
 } // extern "C"
 
 int main() {
-	plan(10);
+	plan(13);
 	if (test_init_minimal() != 0 || test_init_auth() != 0 ||
 		test_init_query_processor() != 0 || test_init_hostgroups() != 0) {
 		BAIL_OUT("failed to initialize unit-test globals");
@@ -388,6 +501,9 @@ int main() {
 		test_stale_generation_cannot_evict_newer(worker);
 		test_transport_failure_does_not_invalidate(worker);
 		test_password_1045_keeps_normal_retry(worker);
+		test_fresh_retry_bypasses_local_and_global_idle_iam(worker);
+		test_pooled_success_clears_latch_for_later_1045(worker);
+		test_missing_port_cannot_retry_or_invalidate(worker);
 	}
 	GloAwsIamTokenSource = nullptr;
 

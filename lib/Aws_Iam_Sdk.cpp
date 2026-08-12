@@ -2,7 +2,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <utility>
 
 #ifdef PROXYSQLAWSIAM
@@ -10,12 +12,17 @@
 #include <aws/core/client/ClientConfiguration.h>
 #include <aws/rds/RDSClient.h>
 
-#include <mutex>
 #include <string>
 #include <unordered_map>
 #endif
 
 namespace {
+std::mutex global_source_mutex;
+std::condition_variable global_source_cv;
+AwsIamTokenSource *leased_global_source = nullptr;
+size_t global_source_leases = 0;
+bool global_source_accepting = false;
+
 #ifndef PROXYSQLAWSIAM
 class AwsIamNotCompiledTokenSource final : public AwsIamTokenSource {
 public:
@@ -165,6 +172,55 @@ private:
 };
 #endif
 } // namespace
+
+void AwsIamTokenSourceLease::release() {
+	if (source_ == nullptr) return;
+	{
+		std::lock_guard<std::mutex> lock(global_source_mutex);
+		if (global_source_leases != 0) --global_source_leases;
+	}
+	source_ = nullptr;
+	global_source_cv.notify_all();
+}
+
+AwsIamTokenSourceLease::~AwsIamTokenSourceLease() { release(); }
+
+AwsIamTokenSourceLease::AwsIamTokenSourceLease(
+	AwsIamTokenSourceLease&& other) noexcept : source_(other.source_) {
+	other.source_ = nullptr;
+}
+
+AwsIamTokenSourceLease& AwsIamTokenSourceLease::operator=(
+	AwsIamTokenSourceLease&& other) noexcept {
+	if (this != &other) {
+		release();
+		source_ = other.source_;
+		other.source_ = nullptr;
+	}
+	return *this;
+}
+
+void publish_global_aws_iam_token_source(AwsIamTokenSource *source) {
+	std::lock_guard<std::mutex> lock(global_source_mutex);
+	leased_global_source = source;
+	global_source_accepting = source != nullptr;
+	GloAwsIamTokenSource = source;
+}
+
+AwsIamTokenSourceLease acquire_global_aws_iam_token_source() {
+	std::lock_guard<std::mutex> lock(global_source_mutex);
+	if (!global_source_accepting || leased_global_source == nullptr) return {};
+	++global_source_leases;
+	return AwsIamTokenSourceLease(leased_global_source);
+}
+
+void shutdown_global_aws_iam_token_source() {
+	std::unique_lock<std::mutex> lock(global_source_mutex);
+	global_source_accepting = false;
+	GloAwsIamTokenSource = nullptr;
+	global_source_cv.wait(lock, [] { return global_source_leases == 0; });
+	leased_global_source = nullptr;
+}
 
 std::unique_ptr<AwsIamTokenSource> create_aws_iam_token_source(
 	const AwsIamRuntimeConfig& config) {
