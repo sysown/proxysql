@@ -3457,6 +3457,22 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 }
 
 MySQL_Thread::~MySQL_Thread() {
+	// First sever every session-to-request association while the sessions and
+	// token source are still alive. Only then close the independently-held
+	// inbox duplicate so late provider publications are harmless drops.
+	while (!aws_iam_waiters.empty()) {
+		auto waiter = aws_iam_waiters.begin();
+		MySQL_Session *session = waiter->second;
+		if (session != nullptr) {
+			session->cancel_aws_iam_wait();
+		} else {
+			aws_iam_waiters.erase(waiter);
+		}
+	}
+	if (aws_iam_inbox) {
+		aws_iam_inbox->close();
+		aws_iam_inbox.reset();
+	}
 
 	if (mysql_sessions) {
 		while(mysql_sessions->len) {
@@ -3632,10 +3648,11 @@ bool MySQL_Thread::init() {
 	GloMyQPro->init_thread();
 	refresh_variables();
 	i=pipe(pipefd);
+	assert(i==0);
 	ioctl_FIONBIO(pipefd[0],1);
 	ioctl_FIONBIO(pipefd[1],1);
 	mypolls.add(POLLIN, pipefd[0], NULL, 0);
-	assert(i==0);
+	aws_iam_inbox = std::make_shared<AwsIamWorkerInbox>(pipefd[1]);
 
 	thr_SetParser = new MySQL_Set_Stmt_Parser("");
 	match_regexes=(Session_Regex **)malloc(sizeof(Session_Regex *)*4);
@@ -3650,6 +3667,34 @@ bool MySQL_Thread::init() {
 	match_regexes[3]=new Session_Regex((char *)"^(set)(?: +)((charset)|(character +set))(?: )");
 
 	return true;
+}
+
+uint64_t MySQL_Thread::register_aws_iam_waiter(MySQL_Session *session) {
+	if (session == nullptr || !aws_iam_inbox || !aws_iam_inbox->available()) return 0;
+	for (;;) {
+		uint64_t opaque_id = next_aws_iam_waiter_id++;
+		if (opaque_id == 0) continue;
+		if (aws_iam_waiters.emplace(opaque_id, session).second) return opaque_id;
+	}
+}
+
+void MySQL_Thread::cancel_aws_iam_waiter(uint64_t opaque_id) {
+	if (opaque_id != 0) aws_iam_waiters.erase(opaque_id);
+}
+
+void MySQL_Thread::drain_aws_iam_completions() {
+	if (!aws_iam_inbox) return;
+	auto completions = aws_iam_inbox->drain();
+	for (auto& completion : completions) {
+		auto waiter = aws_iam_waiters.find(completion.opaque_id);
+		if (waiter == aws_iam_waiters.end()) continue;
+		MySQL_Session *session = waiter->second;
+		aws_iam_waiters.erase(waiter);
+		if (session != nullptr) {
+			session->accept_aws_iam_completion(
+				completion.opaque_id, std::move(completion.result));
+		}
+	}
 }
 
 struct pollfd * MySQL_Thread::get_pollfd(unsigned int i) {
@@ -4091,6 +4136,9 @@ __run_skip_1:
 		} else {
 #endif // IDLE_THREADS
 			ProcessAllMyDS_AfterPoll<MySQL_Thread>();
+			// IAM providers only enqueue opaque completions. Resolve them to
+			// live sessions here, on the owning worker, before session dispatch.
+			drain_aws_iam_completions();
 			// iterate through all sessions and process the session logic
 			process_all_sessions();
 			return_local_connections();
@@ -6146,6 +6194,9 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist(processlist_config_t ar
 				switch (sess->status) {
 					case CONNECTING_SERVER:
 						pta[11]=strdup("Connect");
+						break;
+					case WAITING_AWS_IAM_TOKEN:
+						pta[11]=strdup("Waiting AWS IAM token");
 						break;
 					case PROCESSING_QUERY:
 						if (sess->pause_until > sess->thread->curtime) {
