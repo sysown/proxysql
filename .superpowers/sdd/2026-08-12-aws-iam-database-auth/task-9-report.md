@@ -210,3 +210,115 @@ None blocking. As expected for the deterministic Task 9 scope, live AWS
 credential-provider and RDS authentication are not exercised here; provider,
 connector, sanitizer, and daemon regression coverage is deterministic and
 complete for the implemented branches.
+
+## Controller review iteration 1
+
+The five controller findings were corrected in implementation commit
+`c2ebe87a3` (`fix(mysql): harden IAM retry and detached helpers`).
+
+### RED evidence
+
+The review regressions were added before their production corrections. The
+focused RED results were:
+
+- `aws_iam_pool_unit-t`: 30/31. The real
+  `destroy_MyConn_from_pool()` call site dispatched no detached IAM
+  connection-kill helper.
+- `aws_iam_failure_unit-t`: the existing 10 assertions passed and all three
+  new assertions failed. A fresh retry could reuse a compatible idle pooled
+  IAM connection, its latch remained set after the idle/pool success path,
+  and a key with port zero still invalidated/retried.
+- `aws_iam_kill_helper_unit-t`: the three new helper-deadline assertions
+  failed because the remaining deadline was not applied to Connector/C's TCP
+  connect timeout. The lifetime regression was first captured as an exact
+  compile/link RED because no safe source lease/publish/shutdown interface
+  existed.
+
+### Corrections and GREEN evidence
+
+- The production pool-destroy path now creates and dispatches a metadata-only
+  IAM `KillArgs` for non-idle connection destruction. IAM remains excluded
+  from reset/change-user. Its call-site test observes the actual detached
+  dispatch and proves the source connection and token remain unchanged.
+- The one permitted fresh-token retry now bypasses both local and global pool
+  checkout, forcing one new token and handshake. Successful acquisition,
+  including the `ASYNC_IDLE`/pooled branch, clears the retry latch so a later
+  independent 1045 can follow the bounded policy.
+- Retry/invalidation now requires a complete key including a nonzero port.
+- Detached helpers hold a move-only token-source lease across token request,
+  connect, statistics, and cleanup. Shutdown rejects new leases and drains
+  active helpers before destroying the source. A deterministic concurrent
+  helper-vs-shutdown test proves the drain and post-shutdown rejection.
+- The remaining helper deadline is translated into
+  `MYSQL_OPT_CONNECT_TIMEOUT` before `mysql_real_connect`; an already-expired
+  post-token deadline skips connect. TLS endpoint identity and transport
+  address remain separately validated.
+
+The updated focused suites passed 59/59 assertions:
+
+- `aws_iam_pool_unit-t`: 31/31
+- `aws_iam_failure_unit-t`: 13/13
+- `aws_iam_kill_helper_unit-t`: 15/15
+
+Each focused suite then passed 20 normal repetitions: 60/60 process runs.
+The three suites passed five ASan/LSan repetitions each (15/15 process runs)
+with no sanitizer diagnostic. The concurrent kill-helper suite also passed
+under TSan (15/15 TAP assertions) with no diagnostic.
+
+All eleven normal suites passed after the corrections:
+
+- `aws_iam_policy_unit-t`: 31/31
+- `aws_iam_connection_config_unit-t`: 34/34
+- `aws_iam_token_manager_unit-t`: 39/39
+- `aws_iam_completion_queue_unit-t`: 9/9
+- `aws_iam_session_state_unit-t`: 22/22
+- `aws_iam_connection_secret_unit-t`: 47/47
+- `mariadb_tls_server_name_unit-t`: 8/8
+- `connection_pool_unit-t`: 24/24
+- `aws_iam_pool_unit-t`: 31/31
+- `aws_iam_failure_unit-t`: 13/13
+- `aws_iam_kill_helper_unit-t`: 15/15
+
+Total: 273/273 TAP assertions. This full matrix was run once during the main
+GREEN verification and again after the exact final daemon build and unit
+archive restoration; both runs passed 273/273.
+
+The daemon-backed regressions passed in a fresh isolated MySQL 8.4.8
+environment:
+
+- `test_passthrough_auth_pool_reuse-t`: 19/19
+- `reg_test_3504-change_user-t`: 96/96
+
+The first pass-through attempt used the DEBUG daemon's default one-second
+backend timeout and hit a timing-only timeout. Raising that isolated daemon's
+backend timeout to ten seconds produced a clean 19/19 rerun; the change-user
+suite then passed 96/96. The isolated daemon, container, network, data, and
+configuration were removed, and no shared environment was modified.
+
+The required final normal root build completed successfully with exactly:
+
+```bash
+PROXYSQL40=1 make -j clean
+PROXYSQL40=1 make -j
+```
+
+As in the original verification, attempting to relink the unit matrix
+directly after the root build encountered the known archive/feature evaluation
+mismatch (`Base_Session<...>::create_backend` was undefined) before any test
+ran. Rebuilding the archive through the unit harness's normal configuration
+resolved that harness-only mismatch, and the fresh 273/273 matrix above then
+passed. The focused binaries and final daemon were checked with `ldd` and had
+no ASan or TSan runtime dependency. `git diff --check` was clean before the
+implementation commit.
+
+All direct normal build commands used only `PROXYSQL40=1`; ClickHouse remained
+enabled through repository defaults. Every make invocation used `-j`, cleanup
+was limited to genuinely required configuration transitions, and `cleanall`
+was never used.
+
+### Review-iteration concerns
+
+None blocking. Live AWS credential-provider and RDS authentication remain
+outside this deterministic test environment; the retry gates, pool bypass,
+production helper dispatch, helper/source shutdown coordination, connect
+deadline, sanitizer coverage, and daemon regressions are covered locally.
