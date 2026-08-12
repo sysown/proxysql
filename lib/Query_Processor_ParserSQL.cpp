@@ -674,7 +674,9 @@ UserVariableSetAnalysis parsersql_analyze_user_variable_set_mysql(
 
     auto result = tl_mysql_parser.parse(query, query_length);
     if (result.status != ParseResult::OK || !result.full_input) {
-        analysis.status = UserVariableSetStatus::PARSE_ERROR;
+        if (result.has_user_variables) {
+            analysis.status = UserVariableSetStatus::PARSE_ERROR;
+        }
         tl_mysql_parser.reset();
         return analysis;
     }

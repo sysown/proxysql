@@ -2966,6 +2966,32 @@ bool mysql_user_variable_tracking_can_stage(
 		plain_text_com_query && !connection_bound_fallback;
 }
 
+bool mysql_user_variable_set_uses_qpo_epilogue(
+	UserVariableSetStatus analysis_status,
+	MySQL_User_Variable_Apply_Result preflight_result) {
+	return analysis_status == UserVariableSetStatus::SUPPORTED &&
+		preflight_result == MySQL_User_Variable_Apply_Result::OK;
+}
+
+bool mysql_user_variable_commit_post_ok(
+	MySQL_User_Variable_State& frontend,
+	MySQL_User_Variable_State& backend,
+	const std::vector<UserVariableAssignment>& assignments) {
+	MySQL_User_Variable_State staged_frontend;
+	MySQL_User_Variable_State staged_backend;
+	const MySQL_User_Variable_Apply_Result frontend_result =
+		frontend.stage(assignments, staged_frontend);
+	const MySQL_User_Variable_Apply_Result backend_result =
+		backend.stage(assignments, staged_backend);
+	if (frontend_result != MySQL_User_Variable_Apply_Result::OK ||
+		backend_result != MySQL_User_Variable_Apply_Result::OK) {
+		return false;
+	}
+	frontend = std::move(staged_frontend);
+	backend = std::move(staged_backend);
+	return true;
+}
+
 void MySQL_Connection::ProcessQueryAndSetStatusFlags(
 	char *query_digest_text, bool user_variable_usage_is_safe) {
 	if (query_digest_text==NULL) return;

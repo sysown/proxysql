@@ -14,6 +14,13 @@
 bool mysql_user_variable_tracking_can_stage(
 	int mode, int set_parser_algorithm, int query_processor_parser,
 	bool plain_text_com_query, bool connection_bound_fallback);
+bool mysql_user_variable_set_uses_qpo_epilogue(
+	UserVariableSetStatus analysis_status,
+	MySQL_User_Variable_Apply_Result preflight_result);
+bool mysql_user_variable_commit_post_ok(
+	MySQL_User_Variable_State& frontend,
+	MySQL_User_Variable_State& backend,
+	const std::vector<UserVariableAssignment>& assignments);
 
 static inline size_t str_view_len(const char *s) {
 	return s ? std::string_view{s}.size() : 0;
@@ -387,6 +394,15 @@ static void test_user_variable_non_user_statuses() {
 	auto system = analyze_user_set("SET sql_mode='TRADITIONAL'");
 	ok(system.status == UserVariableSetStatus::NOT_USER_VARIABLE_SET && system.assignments.empty(),
 		"typed user SET reports system-only SET input");
+	auto mariadb_statement = analyze_user_set(
+		"SET STATEMENT max_statement_time=300 FOR SELECT 1");
+	ok(mariadb_statement.status == UserVariableSetStatus::NOT_USER_VARIABLE_SET &&
+		mariadb_statement.assignments.empty(),
+		"typed user SET leaves unsupported non-UDV MariaDB SET syntax to the legacy parser");
+	auto malformed_user = analyze_user_set("SET @x='unterminated");
+	ok(malformed_user.status == UserVariableSetStatus::PARSE_ERROR &&
+		malformed_user.assignments.empty(),
+		"typed user SET retains parse errors when the tokenizer detected a UDV");
 }
 
 static void test_user_variable_rejections() {
@@ -530,8 +546,70 @@ static void test_user_variable_staging_preflight() {
 		"failed user-variable preflight leaves committed state untouched");
 }
 
+static void test_user_variable_routing_disposition() {
+	ok(mysql_user_variable_set_uses_qpo_epilogue(
+		UserVariableSetStatus::SUPPORTED, MySQL_User_Variable_Apply_Result::OK),
+		"supported preflighted UDV SET forwards through the qpo routing epilogue");
+	ok(!mysql_user_variable_set_uses_qpo_epilogue(
+		UserVariableSetStatus::SUPPORTED, MySQL_User_Variable_Apply_Result::VARIABLE_LIMIT),
+		"variable-limit UDV SET does not take the safe qpo routing disposition");
+	ok(!mysql_user_variable_set_uses_qpo_epilogue(
+		UserVariableSetStatus::SUPPORTED, MySQL_User_Variable_Apply_Result::BYTE_LIMIT),
+		"byte-limit UDV SET does not take the safe qpo routing disposition");
+	ok(!mysql_user_variable_set_uses_qpo_epilogue(
+		UserVariableSetStatus::NOT_USER_VARIABLE_SET, MySQL_User_Variable_Apply_Result::OK),
+		"non-UDV SET continues through the legacy SET walker");
+	ok(!mysql_user_variable_set_uses_qpo_epilogue(
+		UserVariableSetStatus::UNSUPPORTED, MySQL_User_Variable_Apply_Result::OK),
+		"unsupported UDV SET takes connection-bound fallback instead of safe routing");
+}
+
+static void test_user_variable_post_ok_atomic_commit() {
+	auto initial = analyze_user_set("SET @kept=1");
+	auto update = analyze_user_set("SET @new='value'");
+	MySQL_User_Variable_State frontend;
+	MySQL_User_Variable_State backend;
+	frontend.apply(initial.assignments);
+	backend.apply(initial.assignments);
+	const bool committed = mysql_user_variable_commit_post_ok(
+		frontend, backend, update.assignments);
+	unsigned int frontend_not_matching = 0;
+	unsigned int backend_not_matching = 0;
+	ok(committed && frontend.size() == 2 && backend.size() == 2 &&
+		frontend.count_matches(backend, frontend_not_matching) == 2 &&
+		frontend_not_matching == 0 &&
+		backend.count_matches(frontend, backend_not_matching) == 2 &&
+		backend_not_matching == 0,
+		"post-OK helper commits the same supported assignments to both maps");
+
+	std::vector<UserVariableAssignment> fill;
+	for (size_t i = 0; i < MySQL_User_Variable_State::kMaxVariables; ++i) {
+		const std::string name = "v" + std::to_string(i);
+		fill.push_back({name, "@" + name, "1", UserVariableLiteralKind::INTEGER, i + 1});
+	}
+	std::vector<UserVariableAssignment> overflow {
+		{"overflow", "@overflow", "2", UserVariableLiteralKind::INTEGER, 999}
+	};
+
+	MySQL_User_Variable_State full_frontend;
+	MySQL_User_Variable_State empty_backend;
+	full_frontend.apply(fill);
+	ok(!mysql_user_variable_commit_post_ok(full_frontend, empty_backend, overflow) &&
+		full_frontend.size() == MySQL_User_Variable_State::kMaxVariables &&
+		empty_backend.size() == 0,
+		"frontend post-OK staging failure commits neither map and requests fallback");
+
+	MySQL_User_Variable_State empty_frontend;
+	MySQL_User_Variable_State full_backend;
+	full_backend.apply(fill);
+	ok(!mysql_user_variable_commit_post_ok(empty_frontend, full_backend, overflow) &&
+		empty_frontend.size() == 0 &&
+		full_backend.size() == MySQL_User_Variable_State::kMaxVariables,
+		"backend post-OK staging failure commits neither map and requests fallback");
+}
+
 int main() {
-	plan(123);
+	plan(133);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -592,6 +670,8 @@ int main() {
 	test_user_variable_usage();
 	test_user_variable_tracking_policy();
 	test_user_variable_staging_preflight();
+	test_user_variable_routing_disposition();
+	test_user_variable_post_ok_atomic_commit();
 
 	test_cleanup_minimal();
 	return exit_status();

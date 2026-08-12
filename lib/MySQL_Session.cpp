@@ -6218,21 +6218,25 @@ handler_again:
 					if (status == PROCESSING_QUERY && pending_user_variable_set) {
 						const std::vector<UserVariableAssignment>& assignments =
 							pending_user_variable_set->assignments;
-						MySQL_User_Variable_State staged_frontend;
-						MySQL_User_Variable_State staged_backend;
-						const MySQL_User_Variable_Apply_Result frontend_result =
-							client_myds->myconn->user_variables.stage(assignments, staged_frontend);
-						const MySQL_User_Variable_Apply_Result backend_result =
-							myconn->user_variables.stage(assignments, staged_backend);
-						assert(frontend_result == MySQL_User_Variable_Apply_Result::OK);
-						assert(backend_result == MySQL_User_Variable_Apply_Result::OK);
-						if (frontend_result == MySQL_User_Variable_Apply_Result::OK &&
-							backend_result == MySQL_User_Variable_Apply_Result::OK) {
-							client_myds->myconn->user_variables = std::move(staged_frontend);
-							myconn->user_variables = std::move(staged_backend);
+						if (mysql_user_variable_commit_post_ok(
+							client_myds->myconn->user_variables,
+							myconn->user_variables,
+							assignments)) {
 							user_variable_tracking_latched = true;
 							thread->status_variables.stvar[st_var_user_variable_assignments_tracked] +=
 								assignments.size();
+						} else {
+							current_query_user_variable_safe = false;
+							thread->status_variables.stvar[st_var_user_variable_fallback_limits]++;
+							proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,
+								"User-variable SET tracking fallback reason=RESOURCE_LIMIT\n");
+							myconn->set_status(true, STATUS_MYSQL_CONNECTION_USER_VARIABLE);
+							if (mysql_thread___set_query_lock_on_hostgroup == 1 &&
+								locked_on_hostgroup < 0 && current_hostgroup >= 0) {
+								locked_on_hostgroup = current_hostgroup;
+								thread->status_variables.stvar[st_var_hostgroup_locked]++;
+								thread->status_variables.stvar[st_var_hostgroup_locked_set_cmds]++;
+							}
 						}
 						pending_user_variable_set.reset();
 					}
@@ -7369,6 +7373,15 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 			const bool plain_text_com_query = command_type == _MYSQL_COM_QUERY &&
 				prepare_stmt_type == ps_type_not_set;
+			const bool parser_prerequisite_available =
+				mysql_thread___set_parser_algorithm == 3 ||
+				mysql_thread___query_processor_parser == 1;
+			if (mysql_thread___user_variable_tracking == 1 &&
+				plain_text_com_query && locked_on_hostgroup < 0 &&
+				!parser_prerequisite_available) {
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,
+					"User-variable SET tracking unavailable reason=PARSER_PREREQUISITE_MISSING\n");
+			}
 
 			if (mysql_user_variable_tracking_can_stage(
 				mysql_thread___user_variable_tracking,
@@ -7383,10 +7396,11 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						MySQL_User_Variable_State staged;
 						const MySQL_User_Variable_Apply_Result apply_result =
 							client_myds->myconn->user_variables.stage(analysis.assignments, staged);
-						if (apply_result == MySQL_User_Variable_Apply_Result::OK) {
+						if (mysql_user_variable_set_uses_qpo_epilogue(
+							analysis.status, apply_result)) {
 							pending_user_variable_set = std::move(analysis);
 							current_query_user_variable_safe = true;
-							return false;
+							goto __exit_set_destination_hostgroup;
 						}
 						thread->status_variables.stvar[st_var_user_variable_fallback_limits]++;
 						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,
@@ -7978,12 +7992,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				}
 
 				if (failed_to_parse_var) {
-					if (mysql_thread___user_variable_tracking == 1 &&
-						mysql_thread___set_parser_algorithm != 3 &&
-						mysql_thread___query_processor_parser != 1) {
-						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,
-							"User-variable SET tracking fallback reason=PARSER_PREREQUISITE_MISSING\n");
-					}
 					unable_to_parse_set_statement(lock_hostgroup);
 					return false;
 				}

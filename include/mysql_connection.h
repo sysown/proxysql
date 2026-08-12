@@ -67,6 +67,13 @@ const char* mysql_simple_command_log_text(const char* stmt, bool redact_statemen
 bool mysql_user_variable_tracking_can_stage(
 	int mode, int set_parser_algorithm, int query_processor_parser,
 	bool plain_text_com_query, bool connection_bound_fallback);
+bool mysql_user_variable_set_uses_qpo_epilogue(
+	UserVariableSetStatus analysis_status,
+	MySQL_User_Variable_Apply_Result preflight_result);
+bool mysql_user_variable_commit_post_ok(
+	MySQL_User_Variable_State& frontend,
+	MySQL_User_Variable_State& backend,
+	const std::vector<UserVariableAssignment>& assignments);
 
 class MySQL_Connection {
 	private:
