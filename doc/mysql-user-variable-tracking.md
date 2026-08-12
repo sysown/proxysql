@@ -19,9 +19,11 @@ the currently accepted range is `0..1`:
 Values above `1` are rejected; the integer form reserves future modes without
 changing mode `1` semantics. Mode `1` requires either
 `mysql-set_parser_algorithm=3` or `mysql-query_processor_parser=1`. If neither
-is active, ProxySQL leaves mode `1` inactive, emits a configuration warning on
-`LOAD MYSQL VARIABLES TO RUNTIME`, and uses the existing safe fallback. It does
-not change either parser setting for you.
+is active, ProxySQL leaves mode `1` inactive and uses the existing safe
+fallback; loading MySQL variables does not itself emit this warning. When a
+subsequent eligible text `SET` encounters the missing prerequisites, ProxySQL
+emits its fixed aggregate-safe prerequisite warning without the statement's
+literal values. It does not change either parser setting for you.
 
 For example, this enables the feature through the ParserSQL SET parser:
 
