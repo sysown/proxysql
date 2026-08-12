@@ -5,7 +5,7 @@
 - `include/Aws_Iam_Token_Manager.h`: SDK-independent token/source/signer interfaces, move-only `SecureString`, bounded-manager configuration, and stats.
 - `lib/Aws_Iam_Token_Manager.cpp`: secure value ownership and cleansing, two-worker coalescing manager, bounded cache/queue/waiters/backoff, cancellation, timeout, invalidation, recovery, stats, and shutdown.
 - `lib/Makefile`: includes the manager in `libproxysql.a` without AWS SDK dependencies.
-- `test/tap/tests/unit/aws_iam_token_manager_unit-t.cpp`: deterministic fake clock/signer/sinks with 38 behavioral assertions.
+- `test/tap/tests/unit/aws_iam_token_manager_unit-t.cpp`: deterministic fake clock/signer/sinks with 39 behavioral assertions.
 - `test/tap/tests/unit/Makefile`: registers the test and gives it a focused SDK-/process-global-independent build rule.
 
 ## RED / GREEN evidence
@@ -55,4 +55,13 @@
 - Shutdown sets its flag under the same mutex, snapshots only handle IDs, and re-finds/claims each live pending handle immediately before dispatch. Thus reentrant cancellation from shutdown callback A removes B before B can be claimed. A success claimed before shutdown is an already-started callback; shutdown waits for all such claimed callbacks to finish. Once shutdown wins the mutex, no later successful callback can claim or start.
 - Every sink callback runs after releasing the manager mutex, and claimed deliveries retain their sink through callback completion. `callbacks_in_progress` prevents destruction from completing while a previously claimed callback still uses manager-owned dispatch state.
 - Verification after the redesign: default focused TAP passed `38/38`; ten repeated focused runs passed; focused TSan passed `38/38` with no race report; strict `-Wall -Wextra -Werror` compile passed; default `libproxysql.a` rebuilt and the manager object/test have no AWS/Smithy references; earlier IAM policy/config regressions passed `31/31` and `34/34`; `git diff --check` passed.
+- Residual concern is unchanged: the fixed `AwsIamTokenSigner::sign()` interface has no cancellation/deadline hook, so a signer that never returns can still delay worker join during shutdown.
+
+## Controller review fix iteration 3
+
+- Code/test commit: `490971dfe` (`fix(mysql): fence IAM callback finalization`).
+- RED: the new deterministic finalization-boundary test first failed to compile because the `before_finish_publish` test seam did not exist. With that seam placed in the pre-fix gap, focused assertion 26 failed and exited 1: shutdown returned while the final immediate-callback finish path remained paused after publishing `callbacks_in_progress == 0` but before its last `cv` access.
+- GREEN: focused TAP passes `39/39`; ten consecutive focused runs passed. The regression drives two immediate callbacks to the finish boundary so one finisher can wake shutdown while the other remains paused, and proves destruction waits until the final finisher is allowed to publish completion.
+- The finish-boundary hook now runs before publication. `finish_delivery()` then holds the manager mutex while setting `FINISHED`, decrementing `callbacks_in_progress`, and notifying the shutdown condition variable. Once zero is observable to shutdown, that callback performs no further manager-owned state access. Sink callbacks remain outside every manager lock, and the iteration 2 pending/claimed linearization semantics are unchanged.
+- Verification after the lifetime fence: default focused TAP passed `39/39`; ten repeated focused runs passed; focused TSan passed `39/39` with no race report; strict `-Wall -Wextra -Werror` compile passed; default `libproxysql.a` rebuilt and AWS/Smithy symbol checks were empty; earlier IAM policy/config regressions passed `31/31` and `34/34`; `git diff --check` passed.
 - Residual concern is unchanged: the fixed `AwsIamTokenSigner::sign()` interface has no cancellation/deadline hook, so a signer that never returns can still delay worker join during shutdown.
