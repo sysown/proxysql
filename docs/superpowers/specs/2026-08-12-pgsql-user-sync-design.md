@@ -58,9 +58,9 @@ tools/pgsql_user_sync/
     └── test_pgsql_user_sync.py
 ```
 
-The Python implementation uses `psycopg` for PostgreSQL and `PyMySQL` for the
-ProxySQL Admin interface. Database access is isolated behind small adapters so
-the reconciliation logic can be tested without live services.
+The Python implementation uses `psycopg` for PostgreSQL and ProxySQL's
+PostgreSQL Admin interface. Database access is isolated behind small adapters
+so the reconciliation logic can be tested without live services.
 
 ## Source role selection
 
@@ -107,7 +107,7 @@ function = proxysql_auth.export_login_roles
 
 [proxysql]
 host = 127.0.0.1
-port = 6032
+port = 6132
 username = admin
 password = admin-secret
 connect_timeout = 10

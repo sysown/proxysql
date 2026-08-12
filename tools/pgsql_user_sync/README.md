@@ -28,6 +28,9 @@ obvious password placeholders, and restrict it before entering real secrets:
 install -o proxysql -g proxysql -m 0600 proxysql_pgsql_user_sync.ini.example /etc/proxysql/pgsql-user-sync.ini
 ```
 
+Set `[proxysql]` to ProxySQL's PostgreSQL Admin interface (normally port
+`6132`).  The synchronizer uses PostgreSQL's simple-query protocol there.
+
 The synchronizer rejects group-write/execute and other-user permissions.  The
 primary example is service-owned `0600` so the ProxySQL service account can
 read it.  Alternatively, keep the file root-owned and use `chown root:proxysql`

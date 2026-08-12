@@ -682,12 +682,18 @@ class ProxySQLAdmin:
 
     def _connection(self) -> object:
         connect = self._connect
+        connect_options: dict[str, object] = {}
         if connect is None:
             try:
-                import pymysql
+                import psycopg
+                from psycopg import ClientCursor
             except ImportError:
                 raise _error("ProxySQL admin driver is not installed") from None
-            connect = pymysql.connect
+            connect = psycopg.connect
+            # ProxySQL's PostgreSQL Admin interface supports the simple query
+            # protocol. ClientCursor still quotes parameters safely, but does
+            # the interpolation client-side before sending the statement.
+            connect_options["cursor_factory"] = ClientCursor
         proxy = self.config.proxysql
         try:
             return connect(
@@ -695,9 +701,10 @@ class ProxySQLAdmin:
                 port=proxy.port,
                 user=proxy.username,
                 password=proxy.password,
-                database="main",
+                dbname="main",
                 connect_timeout=proxy.connect_timeout,
                 autocommit=True,
+                **connect_options,
             )
         except Exception:
             raise _error("unable to connect to ProxySQL admin interface") from None
@@ -710,7 +717,10 @@ class ProxySQLAdmin:
         connection = self._connection()
         try:
             cursor = connection.cursor()
-            cursor.execute(f"SELECT {_USER_COLUMNS} FROM {table}")
+            # ProxySQL splits a combined backend/frontend user into two rows in
+            # runtime. Reconcile the backend half, which is also the row keyed
+            # by apply_actions(), so one username has one deterministic record.
+            cursor.execute(f"SELECT {_USER_COLUMNS} FROM {table} WHERE backend=1")
             return [ProxySQLUser(*row) for row in cursor.fetchall()]
         except Exception:
             raise _error("unable to fetch ProxySQL users") from None

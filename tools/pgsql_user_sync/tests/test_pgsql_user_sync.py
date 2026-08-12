@@ -518,8 +518,11 @@ class AdapterTests(unittest.TestCase):
         runtime_sql = self.cursor.executions[-1][0]
         projection = ("username,password,active,use_ssl,default_hostgroup,transaction_persistent,"
                       "fast_forward,backend,frontend,max_connections,attributes,comment")
-        self.assertEqual("SELECT %s FROM pgsql_users" % projection, main_sql)
-        self.assertEqual("SELECT %s FROM runtime_pgsql_users" % projection, runtime_sql)
+        self.assertEqual("SELECT %s FROM pgsql_users WHERE backend=1" % projection, main_sql)
+        self.assertEqual(
+            "SELECT %s FROM runtime_pgsql_users WHERE backend=1" % projection,
+            runtime_sql,
+        )
         self.assertTrue(self.connect_kwargs["autocommit"])
 
     def test_admin_update_uses_bound_parameters(self):
@@ -748,7 +751,7 @@ class AssetTests(unittest.TestCase):
     def test_requirements_pin_supported_driver_majors(self):
         requirements = (ASSET_DIR / "requirements.txt").read_text()
         self.assertIn("psycopg[binary]>=3.2.13,<4", requirements)
-        self.assertIn("PyMySQL>=1.1.1,<2", requirements)
+        self.assertNotIn("PyMySQL", requirements)
 
     def test_readme_documents_scheduler_and_cluster_safety(self):
         readme = (ASSET_DIR / "README.md").read_text()

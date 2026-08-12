@@ -12,7 +12,7 @@ function = proxysql_auth.export_login_roles
 
 [proxysql]
 host = 127.0.0.1
-port = 6032
+port = 6132
 username = admin
 password = REPLACE_WITH_PROXYSQL_PASSWORD
 connect_timeout = 10
