@@ -150,8 +150,14 @@ MySQLRSEvent MySQLResultsetFramer::make_error(uint16_t code) {
 bool MySQLResultsetFramer::looks_like_ok_terminator(const unsigned char* p, size_t n) const {
 	MySQLOkFields okf{};
 	if (!mysql_parse_ok_payload(p, n, &okf)) return false;
-	// Text protocol: successful OK parse is sufficient.
-	// Binary row vs OK disambiguation is refined in a later task.
-	(void)okf;
+	if (!m_binary) return true;
+	// Binary row: 0x00 + null_bitmap[(column_count+9)/8] + values.
+	// A bare SELECT OK terminator has affected_rows=0 and last_insert_id=0.
+	// If last_insert_id is non-zero while affected_rows is 0, the "OK" fields were
+	// almost certainly over-read from binary row value bytes — treat as row.
+	// (Session-track OK packets keep both counters at 0 and remain terminators.)
+	const size_t nb = (size_t)((m_column_count + 9) / 8);
+	if (n < 1 + nb) return true;
+	if (okf.affected_rows == 0 && okf.last_insert_id != 0) return false;
 	return true;
 }
