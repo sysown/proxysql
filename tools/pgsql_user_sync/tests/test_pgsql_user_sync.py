@@ -1,9 +1,11 @@
 import base64
 import importlib.util
+import json
 import os
 import stat
 import sys
 import tempfile
+from dataclasses import replace
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -280,6 +282,144 @@ class SnapshotTests(unittest.TestCase):
         for rows in (["not-a-row"], [("alice", "md5" + "a" * 32, "extra")], [(None, "md5" + "a" * 32)], [("a\x00b", "md5" + "a" * 32)], [("é" * 32, "md5" + "a" * 32)]):
             with self.assertRaises(self.mod.SyncError):
                 self.mod.validate_snapshot(rows, True)
+
+
+class PlannerTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = load_module()
+        cls.verifier_a = "md5" + "a" * 32
+        cls.verifier_b = "md5" + "b" * 32
+
+    def settings(self, **kwargs):
+        values = dict(profile="p", default_hostgroup=0, missing_role_action="disable",
+                      adopt_existing_users=False)
+        values.update(kwargs)
+        return self.mod.SyncSettings(**values)
+
+    def role(self, username, password=None):
+        return self.mod.SourceRole(username, password or self.verifier_a)
+
+    def user(self, username, *, password=None, profile=None, active=1, **kwargs):
+        attributes = kwargs.pop("attributes", "")
+        if profile is not None:
+            attributes = json.dumps({"proxysql_pgsql_user_sync": {"profile": profile}},
+                                    separators=(",", ":"))
+        values = dict(username=username, password=password or self.verifier_a, active=active,
+                      use_ssl=0, default_hostgroup=3, transaction_persistent=1,
+                      fast_forward=0, backend=1, frontend=1, max_connections=100,
+                      attributes=attributes, comment="kept")
+        values.update(kwargs)
+        return self.mod.ProxySQLUser(**values)
+
+    def test_create_uses_configured_hostgroup(self):
+        plan = self.mod.build_plan(
+            {"alice": self.role("alice")}, [], [], self.settings(default_hostgroup=17)
+        )
+        action = plan.actions[0]
+        self.assertEqual(self.mod.ActionKind.CREATE, action.kind)
+        self.assertEqual(17, action.after.default_hostgroup)
+        self.assertEqual((1, 1), (action.after.backend, action.after.frontend))
+        self.assertEqual(1, action.after.transaction_persistent)
+        self.assertEqual(10000, action.after.max_connections)
+        self.assertEqual({"proxysql_pgsql_user_sync": {"profile": "p"}},
+                         json.loads(action.after.attributes))
+
+    def test_managed_update_changes_only_password_active_and_ownership(self):
+        main = self.user("alice", profile="p", password=self.verifier_a,
+                         attributes=json.dumps({"other": {"value": 1},
+                                                 "proxysql_pgsql_user_sync": {"profile": "p"}},
+                                                separators=(",", ":")),
+                         active=0, use_ssl=1, default_hostgroup=22,
+                         transaction_persistent=0, fast_forward=1, backend=1,
+                         frontend=1, max_connections=9, comment="operator")
+        plan = self.mod.build_plan({"alice": self.role("alice", self.verifier_b)},
+                                   [main], [main], self.settings())
+        action = plan.actions[0]
+        self.assertEqual(self.mod.ActionKind.UPDATE, action.kind)
+        self.assertEqual(self.verifier_b, action.after.password)
+        self.assertEqual(1, action.after.active)
+        self.assertEqual((1, 22, 0, 1, 1, 9, "operator"),
+                         (action.after.use_ssl, action.after.default_hostgroup,
+                          action.after.transaction_persistent, action.after.fast_forward,
+                          action.after.backend, action.after.max_connections,
+                          action.after.comment))
+        self.assertEqual(json.loads(main.attributes), json.loads(action.after.attributes))
+
+    def test_missing_action_is_configurable(self):
+        owned = self.user("alice", profile="p", active=1)
+        disabled = self.mod.build_plan({}, [owned], [owned], self.settings(profile="p"))
+        kept = self.mod.build_plan({}, [owned], [owned],
+                                   self.settings(profile="p", missing_role_action="keep"))
+        self.assertEqual(self.mod.ActionKind.DISABLE, disabled.actions[0].kind)
+        self.assertEqual(0, disabled.actions[0].after.active)
+        self.assertEqual((), kept.actions)
+
+    def test_aborts_for_unmanaged_main_runtime_drift(self):
+        main = self.user("local", password=self.verifier_b)
+        runtime = replace(main, password=self.verifier_a)
+        with self.assertRaisesRegex(self.mod.SyncError, "unmanaged.*runtime"):
+            self.mod.build_plan({}, [main], [runtime], self.settings())
+
+    def test_unmanaged_conflict_requires_adoption(self):
+        existing = self.user("alice")
+        with self.assertRaisesRegex(self.mod.SyncError, "unmanaged"):
+            self.mod.build_plan({"alice": self.role("alice")}, [existing], [existing],
+                                self.settings())
+        plan = self.mod.build_plan({"alice": self.role("alice", self.verifier_b)},
+                                   [existing], [existing],
+                                   self.settings(adopt_existing_users=True))
+        self.assertEqual(self.mod.ActionKind.UPDATE, plan.actions[0].kind)
+        self.assertEqual(self.verifier_b, plan.actions[0].after.password)
+
+    def test_cross_profile_conflict_aborts(self):
+        existing = self.user("alice", profile="other")
+        with self.assertRaisesRegex(self.mod.SyncError, "another profile"):
+            self.mod.build_plan({"alice": self.role("alice")}, [existing], [existing],
+                                self.settings())
+
+    def test_duplicate_admin_rows_are_rejected(self):
+        first = self.user("alice", profile="p")
+        second = replace(first, backend=0, frontend=1)
+        with self.assertRaisesRegex(self.mod.SyncError, "multiple.*alice"):
+            self.mod.build_plan({"alice": self.role("alice")}, [first, second], [],
+                                self.settings())
+
+    def test_ownership_helpers_validate_and_normalize(self):
+        self.assertIsNone(self.mod.decode_ownership(""))
+        self.assertEqual("p", self.mod.decode_ownership(
+            '{"proxysql_pgsql_user_sync":{"profile":"p"}}'))
+        self.assertEqual('{"a":1,"proxysql_pgsql_user_sync":{"profile":"p"}}',
+                         self.mod.with_ownership('{"a":1}', "p"))
+        for bad in ('[]', '{"proxysql_pgsql_user_sync": []}',
+                    '{"proxysql_pgsql_user_sync": null}',
+                    '{"proxysql_pgsql_user_sync": {"profile": 1}}', '{bad'):
+            with self.assertRaises(self.mod.SyncError):
+                self.mod.decode_ownership(bad)
+        with self.assertRaisesRegex(self.mod.SyncError, "another profile"):
+            self.mod.with_ownership('{"proxysql_pgsql_user_sync":{"profile":"old"}}', "p")
+
+    def test_unchanged_rows_need_no_action_or_load(self):
+        owned = self.user("alice", profile="p")
+        plan = self.mod.build_plan({"alice": self.role("alice")}, [owned], [owned],
+                                   self.settings())
+        self.assertEqual((), plan.actions)
+        self.assertFalse(plan.requires_load)
+        self.assertEqual(1, plan.counts["unchanged"])
+
+    def test_managed_runtime_drift_requires_load(self):
+        main = self.user("alice", profile="p", active=1)
+        runtime = replace(main, active=0)
+        plan = self.mod.build_plan({"alice": self.role("alice")}, [main], [runtime],
+                                   self.settings())
+        self.assertEqual((), plan.actions)
+        self.assertTrue(plan.requires_load)
+
+    def test_inactive_main_row_is_expected_absent_from_runtime(self):
+        main = self.user("alice", profile="p", active=0)
+        plan = self.mod.build_plan({}, [main], [], self.settings())
+        self.assertEqual((), plan.actions)
+        self.assertFalse(plan.requires_load)
 
 
 if __name__ == "__main__":

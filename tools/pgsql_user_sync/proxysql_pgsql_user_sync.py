@@ -9,12 +9,15 @@ called.
 import argparse
 import base64
 import configparser
+import json
 import os
 import re
 import stat
-from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
+from enum import Enum
 from pathlib import Path
+from types import MappingProxyType
 
 
 class SyncError(RuntimeError):
@@ -71,6 +74,42 @@ class AppConfig:
 class SourceRole:
     username: str
     password: str = field(repr=False)
+
+
+@dataclass(frozen=True)
+class ProxySQLUser:
+    username: str
+    password: str | None = field(repr=False)
+    active: int
+    use_ssl: int
+    default_hostgroup: int
+    transaction_persistent: int
+    fast_forward: int
+    backend: int
+    frontend: int
+    max_connections: int
+    attributes: str
+    comment: str
+
+
+class ActionKind(Enum):
+    CREATE = "create"
+    UPDATE = "update"
+    DISABLE = "disable"
+
+
+@dataclass(frozen=True)
+class SyncAction:
+    kind: ActionKind
+    before: ProxySQLUser | None
+    after: ProxySQLUser
+
+
+@dataclass(frozen=True)
+class SyncPlan:
+    actions: tuple[SyncAction, ...]
+    requires_load: bool
+    counts: Mapping[str, int]
 
 
 PROFILE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
@@ -345,18 +384,216 @@ def validate_snapshot(rows: Iterable[Sequence[object]], allow_empty: bool) -> di
     return dict(sorted(result.items()))
 
 
+_OWNERSHIP_KEY = "proxysql_pgsql_user_sync"
+
+
+def _ownership_document(attributes: str) -> dict[str, object]:
+    if not isinstance(attributes, str):
+        raise _error("ProxySQL user attributes must be a JSON object")
+    if attributes == "":
+        return {}
+    try:
+        document = json.loads(attributes)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        raise _error("ProxySQL user attributes must be valid JSON") from None
+    if not isinstance(document, dict):
+        raise _error("ProxySQL user attributes must be a JSON object")
+    return document
+
+
+def decode_ownership(attributes: str) -> str | None:
+    """Return the managed profile in attributes, rejecting malformed markers."""
+
+    document = _ownership_document(attributes)
+    if _OWNERSHIP_KEY not in document:
+        return None
+    marker = document[_OWNERSHIP_KEY]
+    if not isinstance(marker, dict):
+        raise _error("malformed PostgreSQL user ownership marker")
+    profile = marker.get("profile")
+    if not isinstance(profile, str) or PROFILE_RE.fullmatch(profile) is None:
+        raise _error("malformed PostgreSQL user ownership marker")
+    return profile
+
+
+def with_ownership(attributes: str, profile: str) -> str:
+    """Return attributes marked for profile using deterministic JSON."""
+
+    if not isinstance(profile, str) or PROFILE_RE.fullmatch(profile) is None:
+        raise _error("invalid ownership profile")
+    document = _ownership_document(attributes)
+    current = decode_ownership(attributes)
+    if current is not None and current != profile:
+        raise _error("user is owned by another profile")
+    marker = document.get(_OWNERSHIP_KEY)
+    if isinstance(marker, dict) and marker.get("profile") == profile:
+        # Ownership is unchanged; preserve operator formatting and unrelated data.
+        return attributes
+    document[_OWNERSHIP_KEY] = {"profile": profile}
+    return json.dumps(document, sort_keys=True, separators=(",", ":"))
+
+
+def _user_index(rows: Iterable[ProxySQLUser], table: str) -> dict[str, ProxySQLUser]:
+    result: dict[str, ProxySQLUser] = {}
+    try:
+        iterator = iter(rows)
+    except TypeError:
+        raise _error(f"{table} users must be iterable") from None
+    for row in iterator:
+        if not isinstance(row, ProxySQLUser):
+            raise _error(f"{table} users contain an invalid row")
+        # Validate ownership on both snapshots, even when a row is not managed.
+        decode_ownership(row.attributes)
+        if row.username in result:
+            raise _error(f"{table} users contain multiple rows for {row.username!r}")
+        result[row.username] = row
+    return result
+
+
+def _managed(row: ProxySQLUser, settings: SyncSettings) -> bool:
+    return decode_ownership(row.attributes) == settings.profile
+
+
+def _new_user(role: SourceRole, settings: SyncSettings) -> ProxySQLUser:
+    return ProxySQLUser(
+        username=role.username,
+        password=role.password,
+        active=1,
+        use_ssl=0,
+        default_hostgroup=settings.default_hostgroup,
+        transaction_persistent=1,
+        fast_forward=0,
+        backend=1,
+        frontend=1,
+        max_connections=10000,
+        attributes=with_ownership("", settings.profile),
+        comment="",
+    )
+
+
+def build_plan(
+    source: Mapping[str, SourceRole],
+    main: Iterable[ProxySQLUser],
+    runtime: Iterable[ProxySQLUser],
+    settings: SyncSettings,
+) -> SyncPlan:
+    """Build a deterministic, side-effect-free reconciliation plan."""
+
+    if not isinstance(source, Mapping):
+        raise _error("source snapshot must be a username mapping")
+    source_names = set(source)
+    for username, role in source.items():
+        if not isinstance(username, str) or not isinstance(role, SourceRole):
+            raise _error("source snapshot contains an invalid role")
+        if role.username != username:
+            raise _error("source snapshot username does not match role")
+
+    main_by_name = _user_index(main, "main")
+    runtime_by_name = _user_index(runtime, "runtime")
+    managed_active_drift = False
+
+    # LOAD is global. Never overwrite an unrelated user's active runtime state.
+    for username, main_row in main_by_name.items():
+        runtime_row = runtime_by_name.get(username)
+        managed = _managed(main_row, settings)
+        if main_row.active:
+            if runtime_row is None or runtime_row != main_row:
+                if not managed:
+                    raise _error("unmanaged main/runtime drift")
+                managed_active_drift = True
+        elif runtime_row is not None:
+            if not managed:
+                raise _error("unmanaged main/runtime drift")
+            managed_active_drift = True
+    for username, runtime_row in runtime_by_name.items():
+        if username in main_by_name:
+            continue
+        if _managed(runtime_row, settings):
+            managed_active_drift = True
+        elif runtime_row.active:
+            raise _error("unmanaged main/runtime drift")
+
+    actions: list[SyncAction] = []
+    counts = {
+        "discovered": len(source),
+        "created": 0,
+        "updated": 0,
+        "reactivated": 0,
+        "disabled": 0,
+        "unchanged": 0,
+        "conflicted": 0,
+    }
+
+    # Source roles are sorted for stable action order and reproducible output.
+    for username in sorted(source_names):
+        role = source[username]
+        existing = main_by_name.get(username)
+        if existing is None:
+            after = _new_user(role, settings)
+            actions.append(SyncAction(ActionKind.CREATE, None, after))
+            counts["created"] += 1
+            continue
+
+        owner = decode_ownership(existing.attributes)
+        if owner is not None and owner != settings.profile:
+            counts["conflicted"] += 1
+            raise _error("user is owned by another profile")
+        if owner is None and not settings.adopt_existing_users:
+            counts["conflicted"] += 1
+            raise _error("unmanaged user conflicts with source role")
+
+        after = replace(
+            existing,
+            password=role.password,
+            active=1,
+            attributes=with_ownership(existing.attributes, settings.profile),
+        )
+        if after == existing:
+            counts["unchanged"] += 1
+        else:
+            actions.append(SyncAction(ActionKind.UPDATE, existing, after))
+            counts["updated"] += 1
+            if not existing.active:
+                counts["reactivated"] += 1
+
+    if settings.missing_role_action == "disable":
+        for username in sorted(set(main_by_name) - source_names):
+            existing = main_by_name[username]
+            if not _managed(existing, settings) or not existing.active:
+                continue
+            after = replace(existing, active=0)
+            actions.append(SyncAction(ActionKind.DISABLE, existing, after))
+            counts["disabled"] += 1
+    elif settings.missing_role_action != "keep":
+        raise _error("missing_role_action must be disable or keep")
+
+    actions.sort(key=lambda action: action.after.username)
+    return SyncPlan(
+        actions=tuple(actions),
+        requires_load=bool(actions) or managed_active_drift,
+        counts=MappingProxyType(counts),
+    )
+
+
 __all__ = [
     "AppConfig",
     "CLIOverrides",
     "PROFILE_RE",
     "IDENTIFIER_RE",
     "ProxySQLConfig",
+    "ProxySQLUser",
     "SourceConfig",
     "SourceRole",
     "SyncError",
+    "SyncAction",
+    "SyncPlan",
     "SyncSettings",
+    "ActionKind",
+    "build_plan",
+    "decode_ownership",
     "load_config",
     "parse_args",
+    "with_ownership",
     "validate_snapshot",
     "validate_verifier",
 ]
