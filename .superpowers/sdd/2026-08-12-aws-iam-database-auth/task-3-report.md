@@ -33,3 +33,15 @@
 ## Concerns
 
 - `AwsIamTokenSigner::sign()` has no cancellation/deadline parameter. Manager shutdown safely suppresses late signer completions and joins workers, but an implementation that never returns from `sign()` can delay destruction indefinitely. Adding interruptible signer semantics is outside Task 3's fixed interface and should be considered when implementing the SDK signer.
+
+## Controller review fix iteration 1
+
+- Commit: `34138f7c1` (`fix(mysql): harden IAM token delivery boundaries`).
+- RED: the expanded focused test initially failed to compile because deterministic `before_dispatch` control did not exist. The new cases cover cancellation and shutdown while a successful result is paused immediately before dispatch, lifetime/skew rejection, cached and coalesced freshness at the exact two-minute boundary, expired and crossed blocking deadlines across cache/backoff/generated-completion paths, and exactly two workers.
+- GREEN: focused TAP passes `36/36`; five consecutive focused runs passed.
+- Delivery is serialized with cancel/shutdown through a dedicated recursive dispatch mutex. Bookkeeping stays on the original single manager mutex, no sink is called while holding it, self-cancel from a sink is safe, and cancel/shutdown cannot return while a later successful post remains possible.
+- Generated lifetime at or below minimum remaining lifetime returns `INVALID_CONFIG` without signing. Both cache-hit and generated/coalesced completions recheck strict `remaining > minimum_remaining_lifetime` immediately before posting and cleanse stale tokens.
+- `request_blocking` gives `TIMEOUT` precedence before request creation, after synchronous request work, and after condition-variable completion.
+- The configurable worker-count field was removed; construction always starts exactly two long-lived workers.
+- Verification: default SDK-free library build passed; focused test passed `36/36` repeatedly; TSan passed `36/36` with no race; strict `-Wall -Wextra -Werror` compile passed; earlier IAM policy/config regressions passed `31/31` and `34/34`; `git diff --check` passed.
+- Residual concern remains unchanged: a signer that never returns can delay shutdown because the fixed signer interface has no cancellation/deadline parameter.
