@@ -153,9 +153,17 @@ def _validate_file(path: Path) -> Path:
         raise _error("configuration file must be a regular file")
     if not os.access(path, os.R_OK):
         raise _error("configuration file is not readable")
-    # Owner permissions are unrestricted.  Group read is permitted (0640),
-    # while group write/execute and every other-user permission are rejected.
-    if info.st_mode & 0o037:
+    # Group read is a supported deployment mode only for a root-owned file
+    # (typically 0640 with a dedicated service group).  Non-root-owned files
+    # must be owner-only.  Group write/execute and every other-user permission
+    # are rejected in all cases.
+    group_permissions = info.st_mode & 0o070
+    other_permissions = info.st_mode & 0o007
+    if (
+        other_permissions
+        or group_permissions & 0o030
+        or (group_permissions & 0o040 and info.st_uid != 0)
+    ):
         raise _error("configuration file has unsafe permissions")
     return path
 

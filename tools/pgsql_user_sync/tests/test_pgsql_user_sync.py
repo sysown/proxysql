@@ -1,9 +1,12 @@
 import base64
 import importlib.util
 import os
+import stat
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -101,12 +104,28 @@ save_to_disk = true
         with self.assertRaisesRegex(self.mod.SyncError, "permissions"):
             self.mod.load_config(path, self.mod.CLIOverrides())
 
-    def test_accepts_group_read_but_not_group_write(self):
+    def test_group_read_requires_root_owner_and_owner_only_is_allowed(self):
         path = self.write_config(mode=0o640)
-        self.mod.load_config(path, self.mod.CLIOverrides())
-        path = self.write_config(mode=0o660)
-        with self.assertRaisesRegex(self.mod.SyncError, "permissions"):
+        root_metadata = SimpleNamespace(st_mode=stat.S_IFREG | 0o640, st_uid=0)
+        with patch.object(self.mod.Path, "stat", return_value=root_metadata):
             self.mod.load_config(path, self.mod.CLIOverrides())
+
+        non_root_metadata = SimpleNamespace(st_mode=stat.S_IFREG | 0o640, st_uid=1000)
+        with patch.object(self.mod.Path, "stat", return_value=non_root_metadata):
+            with self.assertRaisesRegex(self.mod.SyncError, "permissions"):
+                self.mod.load_config(path, self.mod.CLIOverrides())
+
+        path = self.write_config(mode=0o600)
+        owner_only_metadata = SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=1000)
+        with patch.object(self.mod.Path, "stat", return_value=owner_only_metadata):
+            self.mod.load_config(path, self.mod.CLIOverrides())
+
+    def test_rejects_group_write_even_when_root_owned(self):
+        path = self.write_config(mode=0o660)
+        root_metadata = SimpleNamespace(st_mode=stat.S_IFREG | 0o660, st_uid=0)
+        with patch.object(self.mod.Path, "stat", return_value=root_metadata):
+            with self.assertRaisesRegex(self.mod.SyncError, "permissions"):
+                self.mod.load_config(path, self.mod.CLIOverrides())
 
     def test_rejects_invalid_profile_and_function(self):
         for profile in ("", "-bad", "a" * 65):
