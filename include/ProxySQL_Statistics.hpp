@@ -156,7 +156,7 @@ class ProxySQL_Statistics {
 	void tsdb_cluster_aggregation_cycle();
 	long tsdb_cluster_node_max_ts(const std::string& node);
 	void tsdb_cluster_replicate_self(const std::string& node, long watermark, int limit);
-	bool tsdb_cluster_replicate_peer(const std::string& host, int port, const std::string& node, long watermark, int limit, const std::string& user, const std::string& pass);
+	bool tsdb_cluster_replicate_peer(const std::string& host, int port, const std::string& node, long watermark, int limit, const std::string& user, const std::string& pass, long persisted_max_ts);
 #endif
 	sqlite3_stmt *stmt_insert_backend_health;
 	void MySQL_Threads_Handler_sets_v1(SQLite3_result *);

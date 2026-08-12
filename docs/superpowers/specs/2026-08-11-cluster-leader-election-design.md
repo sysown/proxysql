@@ -62,7 +62,10 @@ safe state (all read-only, operator can override).
 - Membership candidates = rows of `runtime_proxysql_servers` (already a
   cluster-synced module, so the candidate set converges). A node not listed
   there can never become leader.
-- No new network traffic, threads, or protocol messages.
+- No new network traffic, threads, or protocol messages, except for one
+  extra round-trip per connection establishment: after the version/announce
+  handshake, the monitor thread issues `SELECT GLOBAL_UUID()` on the peer to
+  learn its UUID (used as the election tiebreaker).
 
 ### 2. Election
 
@@ -101,7 +104,8 @@ Admin read-only becomes a tri-state `admin_ro_mode`: `AUTO` / `FORCED_RO` /
   - `PROXYSQL READWRITE` → `FORCED_RW` (the recovery escape hatch)
   - `PROXYSQL READONLY`  → `FORCED_RO`
   - `PROXYSQL READONLY AUTO` (new) → `AUTO` (return control to election)
-  - Restart resets to `AUTO`.
+  - Restart resets to `AUTO`, unless `admin-read_only=true` maps the boot to
+    `FORCED_RO` (see below).
 - The existing `admin-read_only` boot variable maps onto the tri-state:
   `true` → boot in `FORCED_RO`, `false` (default) → boot in `AUTO`. Its
   current semantics (boot read-only until an operator lifts it) are
@@ -137,7 +141,8 @@ handler.
   is the election tiebreaker.
 - Prometheus: gauge `proxysql_cluster_leader_status` (1 if this node
   considers itself leader, else 0); per-peer `alive` gauge on the existing
-  dynamic cluster-node families; counter `proxysql_cluster_leader_changes`.
+  dynamic cluster-node families; counter
+  `proxysql_cluster_leader_changes_total`.
 - `proxy_info` on every leadership transition and every state change of
   `admin_ro_mode`; `proxy_warning` on every refused write/LOAD/SAVE in
   effective-RO (rate-limited).
@@ -193,8 +198,9 @@ the master switch).
      `node_timeout + grace`; config writes succeed there.
   4. `PROXYSQL READWRITE` on a follower sticks across ≥ 2 election ticks;
      `PROXYSQL READONLY AUTO` restores follower-RO.
-  5. Restart the old leader; it rejoins as follower (lower rank), no
-     flapping.
+  5. Restart the old leader; since it retains the highest `weight`, it
+     retakes leadership on rejoin (weight-priority retake) — the previous
+     leader's replacement steps back down to follower, no flapping.
   6. Election disabled: all nodes effective-RW (regression guard).
 
 ## Out of scope (each needs its own design round)

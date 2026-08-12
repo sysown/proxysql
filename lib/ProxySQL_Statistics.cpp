@@ -1627,7 +1627,12 @@ void ProxySQL_Statistics::tsdb_downsample_metrics() {
             last_hour > 0 ? last_hour + 3600 : 0,
             current_hour);
 
+        // Runs on the admin main loop and can otherwise execute inside the
+        // aggregation worker's open wrlocked transaction on the same shared
+        // statsdb_disk connection.
+        statsdb_disk->wrlock();
         statsdb_disk->execute(buf);
+        statsdb_disk->wrunlock();
     }
 }
 
@@ -1638,6 +1643,11 @@ void ProxySQL_Statistics::tsdb_retention_cleanup() {
     time_t ts = time(NULL);
     const int retention_days = std::max(1, variables.tsdb_retention_days);
     char delete_buf[256];
+
+    // Runs on the admin main loop and can otherwise execute inside the
+    // aggregation worker's open wrlocked transaction on the same shared
+    // statsdb_disk connection. Single lock span around all four DELETEs.
+    statsdb_disk->wrlock();
 
     // Retention: delete raw data older than configured days
     snprintf(delete_buf, sizeof(delete_buf),
@@ -1663,6 +1673,8 @@ void ProxySQL_Statistics::tsdb_retention_cleanup() {
         "DELETE FROM tsdb_metrics_cluster WHERE timestamp < %ld",
         ts - 86400L * cluster_retention_days);
     statsdb_disk->execute(delete_buf);
+
+    statsdb_disk->wrunlock();
 }
 
 // TSDB Status
@@ -2112,6 +2124,16 @@ void ProxySQL_Statistics::tsdb_cluster_aggregation_check(unsigned long long curt
 	}
 	if (desired == true && tsdb_agg_thread_started == false) {
 		tsdb_agg_stop.store(false);
+		// Clear per-peer episode state before (re)starting the worker: these maps
+		// are worker-thread-only (no locking), so it's only safe to reset them
+		// here, before the new thread is created. Otherwise a restarted
+		// leadership inherits stale stall/cap-hit counters and watermarks from a
+		// previous leadership episode.
+		tsdb_agg_peer_last_wm.clear();
+		tsdb_agg_peer_stall_count.clear();
+		tsdb_agg_peer_stall_logged.clear();
+		tsdb_agg_peer_cap_hit_count.clear();
+		tsdb_agg_peer_progress_stall_count.clear();
 		if (pthread_create(&tsdb_agg_thread, NULL, tsdb_cluster_agg_thread_fn, this) == 0) {
 			tsdb_agg_thread_started = true;
 			tsdb_agg_active.store(true);
@@ -2158,12 +2180,18 @@ void ProxySQL_Statistics::tsdb_cluster_aggregation_cycle() {
 		if (tsdb_agg_stop.load()) break;
 		SQLite3_row *r = *it;
 		std::string node = std::string(r->fields[0]) + ":" + std::string(r->fields[1]);
-		long wm = tsdb_agg_effective_watermark(tsdb_cluster_node_max_ts(node), now, variables.tsdb_cluster_backfill_hours);
+		// Persisted (raw) watermark: MAX(timestamp) actually replicated for this
+		// node so far, stable at 0 for a never-replicated peer. Fetched once here
+		// and reused below for stall detection, instead of letting the effective
+		// (backfill-adjusted) watermark — which moves every cycle for an empty
+		// peer — mask a permanently-stalled/never-replicated peer.
+		long persisted_max_ts = tsdb_cluster_node_max_ts(node);
+		long wm = tsdb_agg_effective_watermark(persisted_max_ts, now, variables.tsdb_cluster_backfill_hours);
 		if (node == self_node) {
 			tsdb_cluster_replicate_self(node, wm, limit);
 		} else {
 			if (creds.user.length() == 0) continue; // clustering unconfigured
-			bool hit = tsdb_cluster_replicate_peer(r->fields[0], atoi(r->fields[1]), node, wm, limit, creds.user, creds.pass);
+			bool hit = tsdb_cluster_replicate_peer(r->fields[0], atoi(r->fields[1]), node, wm, limit, creds.user, creds.pass, persisted_max_ts);
 			if (hit) cap_hit = true;
 		}
 	}
@@ -2232,7 +2260,7 @@ void ProxySQL_Statistics::tsdb_cluster_replicate_self(const std::string& node, l
 	statsdb_disk->wrunlock();
 }
 
-bool ProxySQL_Statistics::tsdb_cluster_replicate_peer(const std::string& host, int port, const std::string& node, long watermark, int limit, const std::string& user, const std::string& pass) {
+bool ProxySQL_Statistics::tsdb_cluster_replicate_peer(const std::string& host, int port, const std::string& node, long watermark, int limit, const std::string& user, const std::string& pass, long persisted_max_ts) {
 	MYSQL *conn = mysql_init(NULL);
 	if (conn == NULL) return false;
 	// Same options as the cluster monitor threads (lib/ProxySQL_Cluster.cpp:207-217)
@@ -2259,15 +2287,20 @@ bool ProxySQL_Statistics::tsdb_cluster_replicate_peer(const std::string& host, i
 
 	// Peer is reachable: track per-peer watermark progress for stall visibility.
 	// Worker-thread-only maps, no locking needed.
+	// Compared against the PERSISTED watermark (MAX(timestamp) actually
+	// replicated), not the effective/backfill-adjusted one: for a
+	// never-replicated (or permanently disabled) peer the persisted value is
+	// stable at 0 across cycles, whereas the effective watermark keeps moving
+	// with `now` every cycle and would mask a permanent stall as "progress".
 	std::map<std::string, long>::iterator wm_it = tsdb_agg_peer_last_wm.find(node);
-	if (wm_it != tsdb_agg_peer_last_wm.end() && wm_it->second == watermark) {
+	if (wm_it != tsdb_agg_peer_last_wm.end() && wm_it->second == persisted_max_ts) {
 		int stalled = ++tsdb_agg_peer_stall_count[node];
 		if (stalled >= 10 && tsdb_agg_peer_stall_logged[node] == false) {
 			proxy_info("TSDB cluster aggregation: no new samples from %s — peer TSDB likely disabled\n", node.c_str());
 			tsdb_agg_peer_stall_logged[node] = true;
 		}
 	} else {
-		tsdb_agg_peer_last_wm[node] = watermark;
+		tsdb_agg_peer_last_wm[node] = persisted_max_ts;
 		tsdb_agg_peer_stall_count[node] = 0;
 		tsdb_agg_peer_stall_logged[node] = false;
 	}
@@ -2325,10 +2358,12 @@ bool ProxySQL_Statistics::tsdb_cluster_replicate_peer(const std::string& host, i
 				rows++;
 			}
 			statsdb_disk->execute("COMMIT");
-			statsdb_disk->wrunlock();
 			// Counter reflects net-new replicated rows; boundary re-fetches are ignored by
-			// the PK and not counted.
+			// the PK and not counted. Read the "after" counter before releasing the write
+			// lock, otherwise an unrelated writer that runs between wrunlock() and this
+			// read can inflate the delta.
 			long long inserted_rows = (*proxy_sqlite3_total_changes64)(mydb) - changes_before;
+			statsdb_disk->wrunlock();
 			tsdb_agg_rows_total.fetch_add(inserted_rows);
 			Tsdb_Agg_Fetch_Result fr = tsdb_agg_apply_fetch(watermark, rows, last_row_ts, limit);
 			cap_hit = (fr.caught_up == false);

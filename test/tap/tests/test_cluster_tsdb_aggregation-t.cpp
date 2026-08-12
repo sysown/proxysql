@@ -225,7 +225,7 @@ int main(int argc, char** argv) {
 	// constraint) and the cluster-table emptiness checks are only valid
 	// against a clean start.
 	{ string rm_cmd = "rm -rf " + base; int rc = system(rm_cmd.c_str()); (void)rc; }
-	mkdir(base.c_str(), 0755);
+	mkdir(base.c_str(), 0700);
 	for (int i = 0; i < 3; i++) {
 		nodes_def[i].idx = i + 1;
 		nodes_def[i].admin_port = 16162 + i * 10;
@@ -235,7 +235,7 @@ int main(int argc, char** argv) {
 		nodes_def[i].cnf_path = nodes_def[i].datadir + "/node.cnf";
 	}
 	for (int i = 0; i < 3; i++) {
-		mkdir(nodes_def[i].datadir.c_str(), 0755);
+		mkdir(nodes_def[i].datadir.c_str(), 0700);
 		write_node_config(nodes_def[i]);
 		spawn_node(nodes_def[i], true);
 	}

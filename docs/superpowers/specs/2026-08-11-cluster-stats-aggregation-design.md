@@ -60,9 +60,13 @@ Per cycle (every `tsdb-cluster_interval` seconds), for each node listed in
 - **Peers**: dedicated MySQL connection per cycle (cluster credentials, same
   SSL-enforce and connect-timeout settings as the cluster monitor threads):
   `SELECT timestamp, metric_name, labels, value FROM
-  stats_history.tsdb_metrics WHERE timestamp > ? ORDER BY timestamp LIMIT
+  stats_history.tsdb_metrics WHERE timestamp >= ? ORDER BY timestamp LIMIT
   <tsdb-cluster_batch_rows>`, looped until caught up or the per-cycle cap is
-  reached (bounds leader load; catch-up resumes next cycle).
+  reached (bounds leader load; catch-up resumes next cycle). `>=` (not `>`):
+  a previous cycle's `LIMIT` can cut in the middle of a same-timestamp
+  group, so the boundary group is re-fetched every cycle until fully
+  replicated; `INSERT OR IGNORE` plus the `(node, timestamp, metric_name,
+  labels)` primary key make the re-fetch idempotent and loss-free.
 - **Self**: no self-connection — a local `INSERT ... SELECT` from the
   leader's own `tsdb_metrics` through the same watermark logic, so the
   leader appears in the cluster view identically to every other node.
