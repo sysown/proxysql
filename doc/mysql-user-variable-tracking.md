@@ -20,10 +20,11 @@ Values above `1` are rejected; the integer form reserves future modes without
 changing mode `1` semantics. Mode `1` requires either
 `mysql-set_parser_algorithm=3` or `mysql-query_processor_parser=1`. If neither
 is active, ProxySQL leaves mode `1` inactive and uses the existing safe
-fallback; loading MySQL variables does not itself emit this warning. When a
-subsequent eligible text `SET` encounters the missing prerequisites, ProxySQL
-emits its fixed aggregate-safe prerequisite warning without the statement's
-literal values. It does not change either parser setting for you.
+fallback. Each `LOAD MYSQL VARIABLES TO RUNTIME` in this state emits one fixed,
+aggregate-safe warning that names both alternative parser settings without any
+statement literal values. Subsequent fallback `SET` statements do not repeat
+the prerequisite warning. ProxySQL does not change either parser setting for
+you.
 
 For example, this enables the feature through the ParserSQL SET parser:
 
@@ -111,11 +112,18 @@ SET @name1=<raw-literal-1>,@name2=<raw-literal-2>
 ```
 
 The replay is batched to the backend packet budget; if all entries do not fit,
-ProxySQL sends deterministic bounded batches. Backend map entries are committed
-only after each replay `SET` succeeds. A replay failure fails the pending client
-query and retires the backend rather than running the query with incorrect
-state. Hashes only accelerate matching: equality also requires the exact
-literal kind, replay target, and raw literal.
+ProxySQL sends deterministic bounded batches. If the backend's
+`max_allowed_pkt` field is zero or not yet known, replay conservatively uses
+MySQL's 1024-byte server minimum. The four-byte packet header and one-byte
+`COM_QUERY` command leave at most 1019 bytes of SQL text for each replay batch
+in that case. An individual assignment that cannot fit that ceiling cannot be
+split: ProxySQL fails the pending client query and retires the backend.
+
+Backend map entries are committed only after each replay `SET` succeeds. Any
+replay failure likewise fails the pending client query and retires the backend
+rather than running the query with incorrect state. Hashes only accelerate
+matching: equality also requires the exact literal kind, replay target, and raw
+literal.
 
 ## Reads, unsafe operations, and context changes
 
