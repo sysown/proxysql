@@ -59,23 +59,59 @@ static inline int ffto_mysql_enable_ff(MYSQL* admin, const char* username) {
 		diag("UPDATE mysql_users SET fast_forward=1 (all) failed: %s", mysql_error(admin));
 		return 1;
 	}
+	/* Keep client password in sync with isolated-infra ROOT_PASSWORD when present.
+	 * After start-proxysql / cluster reconfigure, mysql_users.password can be empty
+	 * while TAP_ROOTPASSWORD is the sha256-derived secret — then client connect fails
+	 * with Access denied even though fast_forward is correct. */
+	{
+		const char* tap_pass = getenv("TAP_ROOTPASSWORD");
+		if (tap_pass && tap_pass[0]) {
+			/* Escape single quotes for SQL string literal (minimal). */
+			char esc[256];
+			size_t j = 0;
+			for (size_t i = 0; tap_pass[i] && j + 2 < sizeof(esc); i++) {
+				if (tap_pass[i] == '\'') {
+					esc[j++] = '\'';
+					esc[j++] = '\'';
+				} else {
+					esc[j++] = tap_pass[i];
+				}
+			}
+			esc[j] = '\0';
+			snprintf(q, sizeof(q),
+				"UPDATE mysql_users SET password='%s' WHERE username='%s'", esc, username);
+			if (mysql_query(admin, q)) {
+				diag("UPDATE mysql_users password failed: %s", mysql_error(admin));
+				return 1;
+			}
+		}
+	}
 	if (mysql_query(admin, "LOAD MYSQL USERS TO RUNTIME")) {
 		diag("LOAD MYSQL USERS TO RUNTIME failed: %s", mysql_error(admin));
 		return 1;
 	}
+	/* Persist so cluster peers / reconfigure dumps keep fast_forward. */
+	(void)mysql_query(admin, "SAVE MYSQL USERS TO DISK");
 
-	/* Hard-require the connecting user's FRONTEND credential has fast_forward=1. */
-	snprintf(q, sizeof(q),
-		"SELECT COUNT(*) FROM runtime_mysql_users "
-		"WHERE username='%s' AND frontend=1 AND fast_forward=1", username);
-	if (mysql_query(admin, q)) {
-		diag("runtime_mysql_users check failed: %s", mysql_error(admin));
-		return 1;
+	/* Hard-require the connecting user's FRONTEND credential has fast_forward=1.
+	 * Retry briefly: cluster sync can lag a tick behind LOAD TO RUNTIME. */
+	int cnt = 0;
+	for (int attempt = 0; attempt < 10; attempt++) {
+		snprintf(q, sizeof(q),
+			"SELECT COUNT(*) FROM runtime_mysql_users "
+			"WHERE username='%s' AND frontend=1 AND fast_forward=1", username);
+		if (mysql_query(admin, q) == 0) {
+			MYSQL_RES* res = mysql_store_result(admin);
+			MYSQL_ROW row = res ? mysql_fetch_row(res) : NULL;
+			cnt = row && row[0] ? atoi(row[0]) : 0;
+			if (res) mysql_free_result(res);
+			if (cnt >= 1) break;
+		}
+		/* Re-assert and reload on retry */
+		(void)mysql_query(admin, "UPDATE mysql_users SET fast_forward=1");
+		(void)mysql_query(admin, "LOAD MYSQL USERS TO RUNTIME");
+		usleep(100000);
 	}
-	MYSQL_RES* res = mysql_store_result(admin);
-	MYSQL_ROW row = res ? mysql_fetch_row(res) : NULL;
-	int cnt = row && row[0] ? atoi(row[0]) : 0;
-	if (res) mysql_free_result(res);
 	if (cnt < 1) {
 		diag("FATAL: runtime frontend user '%s' still has fast_forward=0 after LOAD", username);
 		if (mysql_query(admin,
