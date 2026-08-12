@@ -34,6 +34,7 @@ using json = nlohmann::json;
 #include "PgSQL_Query_Processor.h"
 #include "MySQL_Authentication.hpp"
 #include "MySQL_Passthrough_Auth_Cache.h"
+#include "Aws_Iam_Sdk.h"
 #include "PgSQL_Authentication.h"
 #include "MySQL_LDAP_Authentication.hpp"
 #include "MySQL_Query_Cache.h"
@@ -501,6 +502,8 @@ MySQL_Query_Processor* GloMyQPro;
 PgSQL_Query_Processor* GloPgQPro;
 ProxySQL_Admin *GloAdmin;
 MySQL_Threads_Handler *GloMTH = NULL;
+AwsIamTokenSource* GloAwsIamTokenSource = NULL;
+static std::unique_ptr<AwsIamTokenSource> GloAwsIamTokenSourceOwner;
 PgSQL_Threads_Handler* GloPTH = NULL;
 
 // GloMCPH removed in Step 4.C; GloGATH/GloAI removed in Step 5 — the
@@ -1594,6 +1597,12 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	}
 
 	ProxySQL_Main_init_Auth_module();
+	AwsIamRuntimeConfig aws_iam_config {
+		static_cast<size_t>(GloMTH->variables.max_connections),
+		static_cast<size_t>(GloMTH->variables.max_connections),
+	};
+	GloAwsIamTokenSourceOwner = create_aws_iam_token_source(aws_iam_config);
+	GloAwsIamTokenSource = GloAwsIamTokenSourceOwner.get();
 
 	if (GloVars.global.nostart) {
 		pthread_mutex_lock(&GloVars.global.start_mutex);
@@ -1807,6 +1816,8 @@ bool ProxySQL_Main_init_phase3___start_all() {
 void ProxySQL_Main_init_phase4___shutdown() {
 	cpu_timer t;
 	ProxySQL_Main_join_all_threads();
+	GloAwsIamTokenSource = NULL;
+	GloAwsIamTokenSourceOwner.reset();
 
 	//write(GloAdmin->pipefd[1], &GloAdmin->pipefd[1], 1);	// write a random byte
 	if (GloVars.global.nostart) {
@@ -3219,7 +3230,7 @@ __start_label:
 	{
 		cpu_timer t;
 		if (ProxySQL_Main_init_phase3___start_all() == false) {
-			goto finish;
+			goto __shutdown;
 		}
 #ifdef DEBUG
 		std::cerr << "Main init phase3 completed in ";

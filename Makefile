@@ -108,6 +108,7 @@ export PROXYSQL31
 export PROXYSQLFFTO
 export PROXYSQLTSDB
 export PROXYSQLED25519
+export PROXYSQLAWSIAM
 
 ### NOTES:
 ### SOURCE_DATE_EPOCH is used for reproducible builds

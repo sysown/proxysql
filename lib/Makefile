@@ -78,6 +78,12 @@ ifeq ($(PROXYSQLED25519),1)
 	PSQLED25519 := -DPROXYSQLED25519
 endif
 
+PSQLAWSIAM :=
+ifeq ($(PROXYSQLAWSIAM),1)
+	PSQLAWSIAM := -DPROXYSQLAWSIAM
+	IDIRS += $(AWS_IAM_CPPFLAGS)
+endif
+
 # 'libhttpserver': Add 'ENABLE_EPOLL' by default for all platforms except
 # for 'Darwin'. This is required when compiling 'libhttpserver' for avoiding
 # internal use of 'SELECT' in favor of 'EPOLL'. See #3591.
@@ -88,12 +94,22 @@ endif
 
 
 MYCFLAGS := $(IDIRS) $(OPTZ) $(DEBUG) -Wall -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
-MYCXXFLAGS := $(STDCPP) $(MYCFLAGS) $(PSQLCH) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLED25519) $(ENABLE_EPOLL)
+MYCXXFLAGS := $(STDCPP) $(MYCFLAGS) $(PSQLCH) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLED25519) $(PSQLAWSIAM) $(ENABLE_EPOLL)
 
 default: libproxysql.a
 .PHONY: default
 
-_OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo SpookyV2.oo MySQL_Authentication.oo MySQL_Backend_Auth.oo Aws_Iam_Token_Manager.oo MySQL_Passthrough_Auth_Cache.oo gen_utils.oo sqlite3db.oo mysql_connection.oo MySQL_HostGroups_Manager.oo mysql_data_stream.oo MySQL_Thread.oo MySQL_Session.oo MySQL_Protocol.oo mysql_backend.oo Query_Processor.oo MySQL_Query_Processor.oo PgSQL_Query_Processor.oo  ProxySQL_Admin.oo ProxySQL_Config.oo ProxySQL_Restapi.oo MySQL_Monitor.oo MySQL_Logger.oo log_utils.oo thread.oo MySQL_PreparedStatement.oo ProxySQL_Cluster.oo ClickHouse_Authentication.oo ClickHouse_Server.oo ProxySQL_Statistics.oo Chart_bundle_js.oo ProxySQL_HTTP_Server.oo ProxySQL_RESTAPI_Server.oo font-awesome.min.css.oo main-bundle.min.css.oo MySQL_Variables.oo c_tokenizer.oo proxysql_utils.oo proxysql_coredump.oo proxysql_sslkeylog.oo \
+.PHONY: FORCE_AWS_IAM_BUILD_MODE
+FORCE_AWS_IAM_BUILD_MODE:
+
+$(AWS_IAM_MODE_STAMP): FORCE_AWS_IAM_BUILD_MODE
+	@mkdir -p "$(dir $(AWS_IAM_MODE_STAMP))"
+	@if [ ! -f "$@" ] || [ "$$(sed -n '1p' "$@")" != "$(AWS_IAM_BUILD_MODE)" ]; then \
+		printf '%s\n' '$(AWS_IAM_BUILD_MODE)' > "$@.tmp"; \
+		mv -f "$@.tmp" "$@"; \
+	fi
+
+_OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo SpookyV2.oo MySQL_Authentication.oo MySQL_Backend_Auth.oo Aws_Iam_Token_Manager.oo Aws_Iam_Sdk.oo MySQL_Passthrough_Auth_Cache.oo gen_utils.oo sqlite3db.oo mysql_connection.oo MySQL_HostGroups_Manager.oo mysql_data_stream.oo MySQL_Thread.oo MySQL_Session.oo MySQL_Protocol.oo mysql_backend.oo Query_Processor.oo MySQL_Query_Processor.oo PgSQL_Query_Processor.oo  ProxySQL_Admin.oo ProxySQL_Config.oo ProxySQL_Restapi.oo MySQL_Monitor.oo MySQL_Logger.oo log_utils.oo thread.oo MySQL_PreparedStatement.oo ProxySQL_Cluster.oo ClickHouse_Authentication.oo ClickHouse_Server.oo ProxySQL_Statistics.oo Chart_bundle_js.oo ProxySQL_HTTP_Server.oo ProxySQL_RESTAPI_Server.oo font-awesome.min.css.oo main-bundle.min.css.oo MySQL_Variables.oo c_tokenizer.oo proxysql_utils.oo proxysql_coredump.oo proxysql_sslkeylog.oo \
 	sha256crypt.oo \
 	ProxySQL_PluginManager.oo \
 	BaseSrvList.oo BaseHGC.oo Base_HostGroups_Manager.oo \
@@ -147,6 +163,8 @@ endif
 
 OBJ_CXX := $(patsubst %,$(ODIR)/%,$(_OBJ_CXX))
 HEADERS := ../include/*.h ../include/*.hpp
+
+$(OBJ_CXX): $(AWS_IAM_MODE_STAMP)
 
 %.ko: %.cpp $(HEADERS)
 	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS)

@@ -98,6 +98,12 @@ ifeq ($(PROXYSQLED25519),1)
 	PSQLED25519 := -DPROXYSQLED25519
 endif
 
+PSQLAWSIAM :=
+ifeq ($(PROXYSQLAWSIAM),1)
+	PSQLAWSIAM := -DPROXYSQLAWSIAM
+	IDIRS += $(AWS_IAM_CPPFLAGS)
+endif
+
 
 
 MYCXXFLAGS := $(STDCPP)
@@ -106,7 +112,7 @@ ifneq ($(UNAME_S),Darwin)
 	MYCXXFLAGS += -fuse-ld=lld
 endif
 endif
-MYCXXFLAGS += $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLED25519) -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
+MYCXXFLAGS += $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLED25519) $(PSQLAWSIAM) -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
 
 
 STATICMYLIBS := -Wl,-Bstatic \
@@ -160,6 +166,9 @@ endif
 ifeq ($(CENTOSVER),6)
 	MYLIBS += -lgcrypt
 endif
+ifeq ($(PROXYSQLAWSIAM),1)
+	MYLIBS += $(AWS_IAM_LDFLAGS) $(AWS_IAM_LIBS)
+endif
 
 SQLITE_VEC_OBJ := $(DEPS_PATH)/sqlite3/sqlite3/vec.o
 LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
@@ -195,6 +204,8 @@ EXECUTABLE := proxysql
 _OBJ := main.o proxysql_global.o SQLite3_Server.o proxy_tls.o
 OBJ := $(patsubst %,$(ODIR)/%,$(_OBJ))
 
+$(OBJ): $(AWS_IAM_MODE_STAMP)
+
 $(ODIR)/%.o: %.cpp
 	$(CXX) -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS) -Wall
 
@@ -222,6 +233,16 @@ $(LIBPROXYSQLAR):
 ### main targets
 
 default: $(EXECUTABLE)
+
+.PHONY: FORCE_AWS_IAM_BUILD_MODE
+FORCE_AWS_IAM_BUILD_MODE:
+
+$(AWS_IAM_MODE_STAMP): FORCE_AWS_IAM_BUILD_MODE
+	@mkdir -p "$(dir $(AWS_IAM_MODE_STAMP))"
+	@if [ ! -f "$@" ] || [ "$$(sed -n '1p' "$@")" != "$(AWS_IAM_BUILD_MODE)" ]; then \
+		printf '%s\n' '$(AWS_IAM_BUILD_MODE)' > "$@.tmp"; \
+		mv -f "$@.tmp" "$@"; \
+	fi
 
 clean:
 	rm -rf *.pid $(ODIR)/*.o $(ODIR)/*.gcno $(ODIR)/*.gcda *~ core perf.data* heaptrack.proxysql.* $(EXECUTABLE) $(EXECUTABLE).sha1 $(ODIR)
