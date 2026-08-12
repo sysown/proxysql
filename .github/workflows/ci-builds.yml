@@ -126,6 +126,10 @@ jobs:
     env:
       BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.dist }}${{ matrix.type }}
       MATRIX: '(${{ matrix.dist }},${{ matrix.type }})'
+      # The active CI-builds matrix uses these Makefile IMG_NAME values. Keep
+      # the set in one place because a VM can receive a cancelled leg from a
+      # different distribution immediately before its next matrix entry.
+      CI_BUILD_COMPOSE_PROJECTS: 'debian12 ubuntu22 ubuntu24'
 
     steps:
 
@@ -158,7 +162,9 @@ jobs:
     # root-owned files while the next job starts. A VM receives all CI-builds
     # matrix legs serially, so the stale writer can belong to a different
     # distribution than the new leg. Stop only the known CI-build projects;
-    # the Makefile maps IMG_NAME directly from these distribution names.
+    # the Makefile maps IMG_NAME directly from these distribution names. If a
+    # failed cleanup already removed docker-compose.yml, remove the labelled
+    # containers directly so they cannot keep writing through the bind mount.
     - name: Stop stale Docker Compose project (self-hosted)
       if: ${{ inputs.trusted && runner.environment == 'self-hosted' && steps.cache-check.outputs.cache-hit != 'true' }}
       run: |
@@ -166,12 +172,31 @@ jobs:
         workspace="${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is not set}"
         compose_file="${workspace}/proxysql/docker-compose.yml"
 
-        if [ -f "${compose_file}" ]; then
-          for compose_project in debian12 ubuntu22 ubuntu24; do
+        cleanup_status=0
+        for compose_project in ${CI_BUILD_COMPOSE_PROJECTS}; do
+          if [ -f "${compose_file}" ]; then
             echo ">>> stopping stale Compose project: ${compose_project}"
-            docker-compose -f "${compose_file}" -p "${compose_project}" down -v --remove-orphans
-          done
-        fi
+            if ! docker-compose -f "${compose_file}" -p "${compose_project}" down -v --remove-orphans; then
+              cleanup_status=1
+            fi
+          fi
+
+          stale_containers="$(docker ps -aq --filter "label=com.docker.compose.project=${compose_project}")" || {
+            echo "::error::unable to list containers for Compose project: ${compose_project}"
+            cleanup_status=1
+            stale_containers=""
+          }
+          if [ -n "${stale_containers}" ]; then
+            while IFS= read -r container_id; do
+              [ -n "${container_id}" ] || continue
+              echo ">>> removing stale container: ${container_id} (${compose_project})"
+              if ! docker rm -f "${container_id}"; then
+                cleanup_status=1
+              fi
+            done <<< "${stale_containers}"
+          fi
+        done
+        exit "${cleanup_status}"
 
     # The dockerized build writes files as root, so on the next job the
     # actions/checkout pre-clean can otherwise trip over them:
@@ -469,6 +494,7 @@ jobs:
         fi
 
     - name: Check build
+      id: check_build
       if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
       run: |
         for LOG in proxysql/ci_build_log/build*.log ; do
@@ -661,7 +687,8 @@ jobs:
     # prevents a failed or cancelled build from continuing to write root-owned
     # files into the bind mount while the runner is being cleaned for its next
     # job. Run on every outcome and fail loudly if Docker cannot clean the
-    # known CI-build project.
+    # known CI-build projects. As with preflight, use project labels as a
+    # fallback if a failed job removed docker-compose.yml before this step.
     - name: Stop Docker Compose project (leave runner clean)
       if: ${{ inputs.trusted && runner.environment == 'self-hosted' && always() }}
       run: |
@@ -669,12 +696,31 @@ jobs:
         workspace="${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is not set}"
         compose_file="${workspace}/proxysql/docker-compose.yml"
 
-        if [ -f "${compose_file}" ]; then
-          for compose_project in debian12 ubuntu22 ubuntu24; do
+        cleanup_status=0
+        for compose_project in ${CI_BUILD_COMPOSE_PROJECTS}; do
+          if [ -f "${compose_file}" ]; then
             echo ">>> stopping Compose project before workspace cleanup: ${compose_project}"
-            docker-compose -f "${compose_file}" -p "${compose_project}" down -v --remove-orphans
-          done
-        fi
+            if ! docker-compose -f "${compose_file}" -p "${compose_project}" down -v --remove-orphans; then
+              cleanup_status=1
+            fi
+          fi
+
+          stale_containers="$(docker ps -aq --filter "label=com.docker.compose.project=${compose_project}")" || {
+            echo "::error::unable to list containers for Compose project: ${compose_project}"
+            cleanup_status=1
+            stale_containers=""
+          }
+          if [ -n "${stale_containers}" ]; then
+            while IFS= read -r container_id; do
+              [ -n "${container_id}" ] || continue
+              echo ">>> removing stale container: ${container_id} (${compose_project})"
+              if ! docker rm -f "${container_id}"; then
+                cleanup_status=1
+              fi
+            done <<< "${stale_containers}"
+          fi
+        done
+        exit "${cleanup_status}"
 
     # Undo the root ownership the dockerized build left behind so the next job
     # on this self-hosted runner can clean and check out without EACCES.
@@ -698,14 +744,14 @@ jobs:
         fi
 
     - name: Archive artifacts
-      if: ${{ inputs.trusted && steps.build.outcome == 'failure' && !cancelled() }}
+      if: ${{ inputs.trusted && failure() && !cancelled() && (steps.build.outcome == 'failure' || steps.check_build.outcome == 'failure') }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ci-builds-${{ env.SHA }}-run#${{ github.run_number }}-${{ matrix.dist }}${{ matrix.type }}
         # The checkout is a live bind mount on self-hosted runners. Uploading
         # it after an unrelated preflight failure can race a stale container
         # and turn a diagnostic upload into a second failure. Build logs are
-        # the relevant evidence when the Build step itself fails.
+        # the relevant evidence when Build or its log validation fails.
         path: proxysql/ci_build_log/
         if-no-files-found: warn
 

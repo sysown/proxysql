@@ -4,7 +4,7 @@
 
 **Goal:** Prevent stale Docker Compose build containers from contaminating persistent self-hosted CI workspaces, while preserving useful and stable failure diagnostics.
 
-**Architecture:** `ci-builds.yml` maps Docker build projects to distribution names. Because each self-hosted VM receives the CI-builds matrix legs serially, teardown must cover the explicit project set `debian12`, `ubuntu22`, and `ubuntu24` before ownership repair and again before the final repair. Restrict failure artifacts to logs produced by a failed Build step, rather than the live checkout.
+**Architecture:** `ci-builds.yml` maps Docker build projects to distribution names. Because each self-hosted VM receives the CI-builds matrix legs serially, teardown must cover the explicit project set `debian12`, `ubuntu22`, and `ubuntu24` before ownership repair and again before the final repair. The set is defined once as a job environment value. Each teardown attempts every project, including a label-based container fallback if the Compose file is absent. Restrict failure artifacts to logs produced by a failed Build or Check build step, rather than the live checkout.
 
 **Tech Stack:** GitHub Actions reusable workflow YAML, Docker Compose, Python 3 YAML parsing, live self-hosted CI verification.
 
@@ -26,7 +26,7 @@
 - Test: local YAML parser and a real CI-builds run on the self-hosted pool
 
 **Interfaces:**
-- Consumes: `${{ matrix.dist }}`, `GITHUB_WORKSPACE`, existing `docker-compose.yml`, and the `build` step id.
+- Consumes: `CI_BUILD_COMPOSE_PROJECTS`, `GITHUB_WORKSPACE`, `docker-compose.yml` when present, Compose project labels, and the `build` / `check_build` step ids.
 - Produces: a workspace with no running CI-build Compose project before ownership checks; a failure artifact limited to `ci_build_log` after a failed build.
 
 - [ ] **Step 1: Establish the configuration-test boundary**
@@ -41,7 +41,10 @@ self-hosted pool after the GH-Actions PR is merged.
 - [ ] **Step 2: Add the preflight targeted cleanup**
 
 Insert a self-hosted-only step before the current ownership guard. It must loop
-over the known CI-build projects, rather than only the active matrix project:
+over `CI_BUILD_COMPOSE_PROJECTS`, rather than only the active matrix project,
+and retain a failure status until every project has been attempted. When the
+Compose file is absent, it must force-remove only containers labelled with one
+of those explicit project names:
 
 ```yaml
     - name: Stop stale Docker Compose project (self-hosted)
@@ -50,19 +53,35 @@ over the known CI-build projects, rather than only the active matrix project:
         set -euo pipefail
         workspace="${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is not set}"
         compose_file="${workspace}/proxysql/docker-compose.yml"
-        if [ -f "${compose_file}" ]; then
-          for compose_project in debian12 ubuntu22 ubuntu24; do
-            docker-compose -f "${compose_file}" -p "${compose_project}" down -v --remove-orphans
-          done
-        fi
+        cleanup_status=0
+        for compose_project in ${CI_BUILD_COMPOSE_PROJECTS}; do
+          if [ -f "${compose_file}" ]; then
+            if ! docker-compose -f "${compose_file}" -p "${compose_project}" down -v --remove-orphans; then
+              cleanup_status=1
+            fi
+          fi
+          stale_containers="$(docker ps -aq --filter "label=com.docker.compose.project=${compose_project}")" || {
+            cleanup_status=1
+            stale_containers=""
+          }
+          if [ -n "${stale_containers}" ]; then
+            while IFS= read -r container_id; do
+              [ -n "${container_id}" ] || continue
+              if ! docker rm -f "${container_id}"; then
+                cleanup_status=1
+              fi
+            done <<< "${stale_containers}"
+          fi
+        done
+        exit "${cleanup_status}"
 ```
 
 - [ ] **Step 3: Add postflight cleanup and narrow the failure artifact**
 
-Insert the same targeted cleanup before the existing final ownership repair, with `always()` in its condition. Change the artifact condition and payload to:
+Insert the same targeted cleanup before the existing final ownership repair, with `always()` in its condition. Give Check build the `check_build` id. Change the artifact condition and payload to:
 
 ```yaml
-      if: ${{ inputs.trusted && steps.build.outcome == 'failure' && !cancelled() }}
+      if: ${{ inputs.trusted && failure() && !cancelled() && (steps.build.outcome == 'failure' || steps.check_build.outcome == 'failure') }}
       with:
         path: proxysql/ci_build_log/
         if-no-files-found: warn
