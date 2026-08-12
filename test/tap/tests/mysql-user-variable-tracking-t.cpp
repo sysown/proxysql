@@ -3,12 +3,12 @@
  * @brief End-to-end coverage for literal user-variable tracking across multiplexed backends.
  */
 
+#include <array>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <memory>
 #include <optional>
-#include <set>
 #include <string>
 #include <vector>
 #include <unistd.h>
@@ -47,7 +47,8 @@ MysqlPtr connect_mysql(
 	if (connection && !mysql_real_connect(
 			connection.get(), host, username, password, schema, port, nullptr,
 			use_ssl ? CLIENT_SSL : 0)) {
-		diag("Connection to %s:%d failed: %s", host, port, mysql_error(connection.get()));
+		diag("Connection to %s:%d failed: errno=%u sqlstate=%s", host, port,
+			mysql_errno(connection.get()), mysql_sqlstate(connection.get()));
 		connection.reset();
 	}
 	return connection;
@@ -55,7 +56,8 @@ MysqlPtr connect_mysql(
 
 bool execute(MYSQL* connection, const std::string& query) {
 	if (mysql_real_query(connection, query.data(), query.size()) != 0) {
-		diag("Query failed: %s (SQL text redacted)", mysql_error(connection));
+		diag("Query failed: errno=%u sqlstate=%s (SQL text redacted)",
+			mysql_errno(connection), mysql_sqlstate(connection));
 		return false;
 	}
 
@@ -65,7 +67,8 @@ bool execute(MYSQL* connection, const std::string& query) {
 
 std::optional<QueryResult> query_result(MYSQL* connection, const std::string& query) {
 	if (mysql_real_query(connection, query.data(), query.size()) != 0) {
-		diag("Query failed: %s (SQL text redacted)", mysql_error(connection));
+		diag("Query failed: errno=%u sqlstate=%s (SQL text redacted)",
+			mysql_errno(connection), mysql_sqlstate(connection));
 		return std::nullopt;
 	}
 
@@ -147,17 +150,36 @@ std::optional<json> internal_session(MYSQL* connection) {
 	}
 }
 
-bool backend_user_variable_status_is_clear(const json& session) {
+struct BackendUdvInspection {
+	size_t matching_hostgroups { 0 };
+	size_t statuses_present { 0 };
+	size_t inspected { 0 };
+	bool all_clear { true };
+};
+
+BackendUdvInspection inspect_backend_user_variable_status(
+	const json& session, int expected_hostgroup) {
+	BackendUdvInspection inspection;
 	if (!session.contains("backends") || !session["backends"].is_array()) {
-		return true;
+		return inspection;
 	}
 	for (const auto& backend : session["backends"]) {
-		if (backend.contains("conn") && backend["conn"].contains("status") &&
-			backend["conn"]["status"].value("user_variable", false)) {
-			return false;
+		if (!backend.contains("hostgroup_id") ||
+			backend.value("hostgroup_id", -1) != expected_hostgroup) {
+			continue;
+		}
+		++inspection.matching_hostgroups;
+		if (backend.contains("conn") && backend["conn"].contains("status")) {
+			++inspection.statuses_present;
+			const auto& status = backend["conn"]["status"];
+			if (status.contains("user_variable") && status["user_variable"].is_boolean()) {
+				++inspection.inspected;
+				inspection.all_clear = inspection.all_clear &&
+					!status["user_variable"].get<bool>();
+			}
 		}
 	}
-	return true;
+	return inspection;
 }
 
 std::string sql_quote(MYSQL* connection, const std::string& value) {
@@ -186,6 +208,7 @@ struct BackendEndpoint {
 	int max_replication_lag { 0 };
 	int max_latency_ms { 0 };
 	int use_ssl { 0 };
+	int gtid_port { 0 };
 };
 
 struct FixtureOwnership {
@@ -224,10 +247,10 @@ std::optional<SavedConfig> save_config(MYSQL* admin) {
 
 std::optional<BackendEndpoint> select_backend(MYSQL* admin) {
 	auto result = query_result(admin,
-		"SELECT hostname,port,weight,compression,max_connections,max_replication_lag,max_latency_ms,use_ssl "
+		"SELECT hostname,port,weight,compression,max_connections,max_replication_lag,max_latency_ms,use_ssl,gtid_port "
 		"FROM runtime_mysql_servers "
 		"WHERE status='ONLINE' ORDER BY hostgroup_id,hostname,port LIMIT 1");
-	if (!result || result->rows.size() != 1 || result->rows.front().size() != 8) {
+	if (!result || result->rows.size() != 1 || result->rows.front().size() != 9) {
 		return std::nullopt;
 	}
 	const auto& row = result->rows.front();
@@ -239,16 +262,19 @@ std::optional<BackendEndpoint> select_backend(MYSQL* admin) {
 	return BackendEndpoint {
 		row[0].bytes, std::stoi(row[1].bytes), std::stoi(row[2].bytes), std::stoi(row[3].bytes),
 		std::stoi(row[4].bytes), std::stoi(row[5].bytes), std::stoi(row[6].bytes),
-		std::stoi(row[7].bytes)
+		std::stoi(row[7].bytes), std::stoi(row[8].bytes)
 	};
 }
 
 bool configure_fixture(
 	MYSQL* admin, const CommandLine& cl, const BackendEndpoint& backend,
 	const std::string& tag, FixtureOwnership& owned) {
-	auto occupied = query_scalar(admin,
-		"SELECT COUNT(*) FROM mysql_servers WHERE hostgroup_id IN (18110,18111)");
-	if (!occupied || occupied->is_null || occupied->bytes != "0") {
+	auto occupied = query_result(admin,
+		"SELECT (SELECT COUNT(*) FROM mysql_servers WHERE hostgroup_id IN (18110,18111)),"
+		"(SELECT COUNT(*) FROM runtime_mysql_servers WHERE hostgroup_id IN (18110,18111))");
+	if (!occupied || occupied->rows.size() != 1 || occupied->rows.front().size() != 2 ||
+		occupied->rows.front()[0].is_null || occupied->rows.front()[0].bytes != "0" ||
+		occupied->rows.front()[1].is_null || occupied->rows.front()[1].bytes != "0") {
 		diag("Temporary hostgroups 18110/18111 are already in use");
 		return false;
 	}
@@ -258,25 +284,32 @@ bool configure_fixture(
 		"," + std::to_string(backend.weight) + "," + std::to_string(backend.compression) +
 		"," + std::to_string(backend.max_connections) + "," + std::to_string(backend.max_replication_lag) +
 		"," + std::to_string(backend.max_latency_ms) + "," + std::to_string(backend.use_ssl) +
-		"," + sql_quote(admin, tag) + ")," +
+		"," + std::to_string(backend.gtid_port) + "," + sql_quote(admin, tag) + ")," +
 		"(18111," + sql_quote(admin, backend.hostname) + "," + std::to_string(backend.port) +
 		"," + std::to_string(backend.weight) + "," + std::to_string(backend.compression) +
 		"," + std::to_string(backend.max_connections) + "," + std::to_string(backend.max_replication_lag) +
 		"," + std::to_string(backend.max_latency_ms) + "," + std::to_string(backend.use_ssl) +
-		"," + sql_quote(admin, tag) + ")";
+		"," + std::to_string(backend.gtid_port) + "," + sql_quote(admin, tag) + ")";
 	if (!execute(admin,
 		"INSERT INTO mysql_servers(hostgroup_id,hostname,port,weight,compression,max_connections,"
-		"max_replication_lag,max_latency_ms,use_ssl,comment) VALUES " +
+		"max_replication_lag,max_latency_ms,use_ssl,gtid_port,comment) VALUES " +
 		server_values)) {
 		return false;
 	}
 	owned.hostgroups = true;
 
 	const long rule_base = -181100000L - (static_cast<long>(getpid()) % 100000L) * 2L;
-	auto rule_collision = query_scalar(admin,
-		"SELECT COUNT(*) FROM mysql_query_rules WHERE rule_id IN (" +
-		std::to_string(rule_base) + "," + std::to_string(rule_base + 1) + ")");
-	if (!rule_collision || rule_collision->is_null || rule_collision->bytes != "0") {
+	auto rule_collision = query_result(admin,
+		"SELECT (SELECT COUNT(*) FROM mysql_query_rules WHERE rule_id IN (" +
+		std::to_string(rule_base) + "," + std::to_string(rule_base + 1) + "))," +
+		"(SELECT COUNT(*) FROM runtime_mysql_query_rules WHERE rule_id IN (" +
+		std::to_string(rule_base) + "," + std::to_string(rule_base + 1) + "))");
+	if (!rule_collision || rule_collision->rows.size() != 1 ||
+		rule_collision->rows.front().size() != 2 ||
+		rule_collision->rows.front()[0].is_null ||
+		rule_collision->rows.front()[0].bytes != "0" ||
+		rule_collision->rows.front()[1].is_null ||
+		rule_collision->rows.front()[1].bytes != "0") {
 		diag("Reserved negative query-rule IDs are already in use");
 		return false;
 	}
@@ -426,32 +459,41 @@ int main() {
 		"@uv_bit,@uv_bit_quoted,@uv_null";
 	ok(query_rows_equal(proxy.get(), direct.get(), literal_select),
 		"all supported literals preserve result bytes and MYSQL_FIELD types");
-	const std::vector<std::string> routed_selects {
-		"/* uv_hg_a */ SELECT @browser_lang,@browser_time,@browser_timezone,"
-			"@ip_address,@uv_string,@uv_integer,@uv_positive,@uv_decimal,@uv_exponent,@uv_hex,@uv_hex_quoted,"
-			"@uv_bit,@uv_bit_quoted,@uv_null",
-		"/* uv_hg_b */ SELECT @browser_lang,@browser_time,@browser_timezone,"
-			"@ip_address,@uv_string,@uv_integer,@uv_positive,@uv_decimal,@uv_exponent,@uv_hex,@uv_hex_quoted,"
-			"@uv_bit,@uv_bit_quoted,@uv_null"
+	const std::vector<std::string> tracked_variable_names {
+		"browser_lang", "browser_time", "browser_timezone", "ip_address", "uv_string",
+		"uv_integer", "uv_positive", "uv_decimal", "uv_exponent", "uv_hex",
+		"uv_hex_quoted", "uv_bit", "uv_bit_quoted", "uv_null"
 	};
-	std::set<std::string> backend_connection_ids;
+	const std::array<std::string, 2> route_comments {
+		"/* uv_hg_a */ ", "/* uv_hg_b */ "
+	};
+	const std::string all_variables_select =
+		"SELECT @browser_lang,@browser_time,@browser_timezone,@ip_address,@uv_string,"
+		"@uv_integer,@uv_positive,@uv_decimal,@uv_exponent,@uv_hex,@uv_hex_quoted,@uv_bit,"
+		"@uv_bit_quoted,@uv_null";
+	std::array<std::optional<std::string>, 2> route_connection_ids;
+	std::array<bool, 2> route_ids_stable { true, true };
 	bool switches_preserved_values = true;
 	for (int round = 0; round < 4; ++round) {
-		for (const auto& routed_select : routed_selects) {
+		for (size_t route_index = 0; route_index < route_comments.size(); ++route_index) {
+			const std::string& route = route_comments[route_index];
+			const std::string routed_select = route + all_variables_select;
 			auto routed = query_result(proxy.get(), routed_select);
-			const std::string route = routed_select.find("uv_hg_a") != std::string::npos
-				? "/* uv_hg_a */ " : "/* uv_hg_b */ ";
 			auto connection_id = query_scalar(proxy.get(), route + "SELECT CONNECTION_ID()");
 			if (!routed || routed->rows.size() != 1 || routed->rows.front().size() != 14 ||
 				!connection_id || connection_id->is_null) {
 				switches_preserved_values = false;
+				route_ids_stable[route_index] = false;
 				continue;
 			}
-			backend_connection_ids.insert(connection_id->bytes);
+			if (route_connection_ids[route_index]) {
+				route_ids_stable[route_index] = route_ids_stable[route_index] &&
+					*route_connection_ids[route_index] == connection_id->bytes;
+			} else {
+				route_connection_ids[route_index] = connection_id->bytes;
+			}
 			auto direct_values = query_result(direct.get(),
-				"SELECT @browser_lang,@browser_time,@browser_timezone,@ip_address,@uv_string,"
-				"@uv_integer,@uv_positive,@uv_decimal,@uv_exponent,@uv_hex,@uv_hex_quoted,@uv_bit,"
-				"@uv_bit_quoted,@uv_null");
+				all_variables_select);
 			if (!direct_values || direct_values->rows.size() != 1 ||
 				direct_values->rows.front().size() != 14) {
 				switches_preserved_values = false;
@@ -466,16 +508,28 @@ int main() {
 	}
 	ok(switches_preserved_values,
 		"all tracked values and types survive alternating hostgroup switches");
-	ok(backend_connection_ids.size() == 2,
-		"the two temporary hostgroups use distinct backend connection IDs");
+	ok(route_connection_ids[0] && route_ids_stable[0],
+		"route A repeatedly returns one stable backend connection ID");
+	ok(route_connection_ids[1] && route_ids_stable[1],
+		"route B repeatedly returns one stable backend connection ID");
+	ok(route_connection_ids[0] && route_connection_ids[1] &&
+		*route_connection_ids[0] != *route_connection_ids[1],
+		"routes A and B use distinct backend connection IDs");
 	owned.read_function = execute(direct.get(),
 		"CREATE FUNCTION test.proxysql_uv_read() RETURNS VARCHAR(64) DETERMINISTIC NO SQL "
 		"RETURN @browser_lang");
+	std::string metadata_expression = "CONCAT_WS('|',";
+	for (const auto& name : tracked_variable_names) {
+		metadata_expression +=
+			"CONCAT_WS(':',IFNULL(HEX(@" + name + "),'<NULL>'),"
+			"IFNULL(CHARSET(@" + name + "),'<NULL>'),"
+			"IFNULL(COLLATION(@" + name + "),'<NULL>'),COERCIBILITY(@" + name + ")),";
+	}
+	metadata_expression.pop_back();
+	metadata_expression += ")";
 	owned.metadata_function = execute(direct.get(),
-		"CREATE FUNCTION test.proxysql_uv_metadata() RETURNS TEXT DETERMINISTIC NO SQL "
-		"RETURN CONCAT_WS('|',HEX(@uv_string),CHARSET(@uv_string),COLLATION(@uv_string),"
-		"COERCIBILITY(@uv_string),HEX(@uv_hex),CHARSET(@uv_hex),COLLATION(@uv_hex),"
-		"COERCIBILITY(@uv_hex))");
+		"CREATE FUNCTION test.proxysql_uv_metadata() RETURNS TEXT DETERMINISTIC NO SQL RETURN " +
+		metadata_expression);
 	ok(owned.read_function && owned.metadata_function,
 		"the read-only backend function fixtures are created after routing is proven");
 	auto function_value = query_scalar(proxy.get(),
@@ -483,55 +537,121 @@ int main() {
 	ok(function_value && !function_value->is_null && function_value->bytes == "en-US",
 		"a routed backend-side reader with no at-sign sees synchronized tracked state");
 	bool metadata_preserved = true;
+	bool metadata_routes_match = true;
 	auto direct_metadata = query_scalar(direct.get(), "SELECT test.proxysql_uv_metadata()");
-	for (const char* route : { "/* uv_hg_a */ ", "/* uv_hg_b */ ",
-		"/* uv_hg_a */ ", "/* uv_hg_b */ " }) {
+	for (size_t route_index : { 0U, 1U, 0U, 1U }) {
+		const std::string& route = route_comments[route_index];
+		auto routed_id = query_scalar(proxy.get(), route + "SELECT CONNECTION_ID()");
 		auto routed_metadata = query_scalar(proxy.get(),
-			std::string(route) + "SELECT test.proxysql_uv_metadata()");
+			route + "SELECT test.proxysql_uv_metadata()");
+		metadata_routes_match = metadata_routes_match && routed_id && !routed_id->is_null &&
+			route_connection_ids[route_index] &&
+			routed_id->bytes == *route_connection_ids[route_index];
 		metadata_preserved = metadata_preserved && direct_metadata && routed_metadata &&
 			result_cells_equal(*routed_metadata, *direct_metadata);
 	}
+	ok(metadata_routes_match,
+		"metadata checks genuinely alternate across the proven A and B backend IDs");
 	ok(metadata_preserved,
-		"HEX, charset, collation, and coercibility match direct results after every switch");
+		"all 14 variables preserve HEX, charset, collation, and coercibility after every switch");
 
 	bool warning_disclosed_reported_set = false;
 	if (log_ready) {
-		usleep(250000);
-		proxysql_log.clear();
-		std::string line;
-		while (std::getline(proxysql_log, line)) {
-			if (line.find("Unable to parse unknown SET query") != std::string::npos &&
-				line.find("@browser_lang") != std::string::npos) {
-				warning_disclosed_reported_set = true;
+		// Poll the already-open file for a bounded quiet period. If ProxySQL rotates
+		// this descriptor during the interval, the test deliberately cannot follow
+		// the replacement without a stable log marker from the daemon.
+		for (int poll = 0; poll < 20 && !warning_disclosed_reported_set; ++poll) {
+			proxysql_log.clear();
+			std::string line;
+			while (std::getline(proxysql_log, line)) {
+				if (line.find("Unable to parse unknown SET query") != std::string::npos &&
+					line.find("@browser_lang") != std::string::npos) {
+					warning_disclosed_reported_set = true;
+					break;
+				}
+			}
+			if (!warning_disclosed_reported_set) {
+				usleep(100000);
 			}
 		}
 	}
 	ok(log_ready && !warning_disclosed_reported_set,
 		"the reported supported SET produces no unknown-SET warning or literal disclosure");
 
-	auto session = internal_session(proxy.get());
-	const json diagnostics = session ? (*session)["conn"]["user_variables"] : json {};
-	const std::string serialized_session = session ? session->dump() : std::string {};
+	auto aggregate_session = internal_session(proxy.get());
+	const json diagnostics = aggregate_session
+		? (*aggregate_session)["conn"]["user_variables"] : json {};
+	const std::string serialized_session = aggregate_session
+		? aggregate_session->dump() : std::string {};
 	const bool fingerprint_valid = diagnostics.contains("fingerprint") &&
 		diagnostics["fingerprint"].is_string() &&
 		diagnostics["fingerprint"].get<std::string>().size() == 32;
 	const bool aggregate_keys_only = diagnostics.is_object() && diagnostics.size() == 3 &&
 		diagnostics.contains("count") && diagnostics.contains("stored_bytes") &&
 		diagnostics.contains("fingerprint");
-	ok(session && aggregate_keys_only && diagnostics.value("count", 0) == 14 &&
+	ok(aggregate_session && aggregate_keys_only && diagnostics.value("count", 0) == 14 &&
 		diagnostics.value("stored_bytes", 0) == 283 && fingerprint_valid,
 		"internal session exposes only count 14, stored byte total 283, and an aggregate fingerprint");
-	ok(serialized_session.find("browser_lang") == std::string::npos &&
-		serialized_session.find("uv_string") == std::string::npos &&
-		serialized_session.find("en-US") == std::string::npos &&
-		serialized_session.find("167.235.198.244") == std::string::npos,
-		"internal-session diagnostics contain no tracked names or literal values");
-	ok(session && session->value("locked_on_hostgroup", -2) == -1,
-		"supported SET and read traffic leaves the frontend hostgroup unlocked");
-	ok(session && backend_user_variable_status_is_clear(*session),
-		"supported SET and read traffic does not set backend user-variable status");
+	bool canonical_names_absent = true;
+	for (const auto& name : tracked_variable_names) {
+		canonical_names_absent = canonical_names_absent &&
+			serialized_session.find(name) == std::string::npos;
+	}
+	const std::vector<std::string> distinctive_string_values {
+		"en-US", "2026-08-11 18:11:12", "GMT+2", "167.235.198.244",
+		R"(line\nquote'slash\\)"
+	};
+	bool distinctive_values_absent = true;
+	for (const auto& value : distinctive_string_values) {
+		distinctive_values_absent = distinctive_values_absent &&
+			serialized_session.find(value) == std::string::npos;
+	}
+	ok(canonical_names_absent,
+		"internal-session diagnostics contain none of the 14 canonical variable names");
+	ok(distinctive_values_absent,
+		"internal-session diagnostics contain none of the distinctive string values");
+	bool transaction_status_clear = true;
+	for (size_t route_index = 0; route_index < route_comments.size(); ++route_index) {
+		const std::string& route = route_comments[route_index];
+		const int expected_hostgroup = route_index == 0 ? 18110 : 18111;
+		const bool transaction_started = execute(proxy.get(), route + "START TRANSACTION");
+		auto transaction_id = query_scalar(proxy.get(), route + "SELECT CONNECTION_ID()");
+		auto transaction_value = query_scalar(proxy.get(), route + "SELECT @browser_lang");
+		auto transaction_session = internal_session(proxy.get());
+		const BackendUdvInspection inspection = transaction_session
+			? inspect_backend_user_variable_status(*transaction_session, expected_hostgroup)
+			: BackendUdvInspection {};
+		const bool rolled_back = execute(proxy.get(), "ROLLBACK");
+		transaction_status_clear = transaction_status_clear && transaction_started &&
+			transaction_id && !transaction_id->is_null && route_connection_ids[route_index] &&
+			transaction_id->bytes == *route_connection_ids[route_index] &&
+			transaction_value && !transaction_value->is_null &&
+			transaction_value->bytes == "en-US" && transaction_session &&
+			inspection.matching_hostgroups == 1 && inspection.statuses_present == 1 &&
+			inspection.inspected == 1 && inspection.all_clear && rolled_back;
+	}
+	ok(transaction_status_clear,
+		"each routed transaction exposes its attached hostgroup with user-variable status false");
+	auto unlocked_session = internal_session(proxy.get());
+	ok(unlocked_session && unlocked_session->value("locked_on_hostgroup", -2) == -1,
+		"tracked traffic remains hostgroup-unlocked after both transaction rollbacks");
 
+	proxy.reset();
 	MysqlPtr isolated = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+	std::array<bool, 2> isolated_ids_reused { false, false };
+	if (isolated) {
+		for (size_t route_index = 0; route_index < route_comments.size(); ++route_index) {
+			auto connection_id = query_scalar(isolated.get(),
+				route_comments[route_index] + "SELECT CONNECTION_ID()");
+			isolated_ids_reused[route_index] = connection_id && !connection_id->is_null &&
+				route_connection_ids[route_index] &&
+				connection_id->bytes == *route_connection_ids[route_index];
+		}
+	}
+	ok(isolated_ids_reused[0],
+		"a fresh frontend reuses route A's exact pooled backend connection ID");
+	ok(isolated_ids_reused[1],
+		"a fresh frontend reuses route B's exact pooled backend connection ID");
 	bool isolated_values_are_null = isolated != nullptr;
 	const std::string null_checks =
 		"SELECT @browser_lang IS NULL,@browser_time IS NULL,@browser_timezone IS NULL,"
@@ -551,9 +671,8 @@ int main() {
 		}
 	}
 	ok(isolated_values_are_null,
-		"a second frontend sees NULL through both hostgroups instead of pooled tracked values");
+		"the fresh frontend sees NULL through both reused pooled backend connections");
 	isolated.reset();
-	proxy.reset();
 	ok(cleanup.run(),
 		"temporary functions, rules, hostgroups, and runtime variables are restored");
 	return exit_status();
