@@ -1,6 +1,6 @@
 # AWS IAM Database Authentication for MySQL Backends — Design Spec
 
-**Status:** Draft, pending specification review
+**Status:** Approved
 **Date:** 2026-08-12
 **Target:** ProxySQL `v3.0`
 **Scope:** ProxySQL-to-RDS/Aurora MySQL backend authentication using AWS IAM database authentication. Frontend authentication remains unchanged.
