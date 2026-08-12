@@ -12,60 +12,11 @@
 #include "c_tokenizer.h"
 #include "PgSQLErrorFields.h"
 #include <arpa/inet.h>
-#include <cctype>
-#include <cstdlib>
 #include <cstring>
 #include <string_view>
 
 extern class PgSQL_Query_Processor* GloPgQPro;
 extern PgSQL_HostGroups_Manager* PgHGM;
-
-/**
- * @brief Parses the PostgreSQL CommandComplete ('C') message payload to extract row counts.
- *
- * PostgreSQL encodes row counts into the message tag string (e.g., "INSERT 0 10", "SELECT 50").
- * This function performs lightweight token parsing to extract these values and determine if
- * the message corresponds to a result-generating command (SELECT, FETCH, MOVE) or a DML command.
- *
- * @param payload Pointer to the CommandComplete message payload (the tag string).
- * @param len Length of the payload.
- * @param is_select [OUT] Boolean flag set to true if the command is a result-set operation.
- * @return The number of rows affected or sent.
- */
-static uint64_t extract_pg_rows_affected(const unsigned char* payload, size_t len, bool& is_select) {
-    is_select = false;
-    if (len == 0) return 0;
-
-    size_t begin = 0;
-    while (begin < len && std::isspace(payload[begin])) begin++;
-    while (len > begin && (payload[len - 1] == '\0' || std::isspace(payload[len - 1]))) len--;
-    if (begin >= len) return 0;
-
-    std::string command_tag(reinterpret_cast<const char*>(payload + begin), len - begin);
-
-    size_t first_space = command_tag.find(' ');
-    if (first_space == std::string::npos) return 0;
-
-    std::string command_type = command_tag.substr(0, first_space);
-    if (command_type == "SELECT" || command_type == "FETCH" || command_type == "MOVE") {
-        is_select = true;
-    } else if (command_type != "INSERT" && command_type != "UPDATE" &&
-               command_type != "DELETE" && command_type != "COPY" &&
-               command_type != "MERGE") {
-        return 0;
-    }
-
-    size_t last_space = command_tag.rfind(' ');
-    if (last_space == std::string::npos || last_space + 1 >= command_tag.size()) return 0;
-
-    const char* rows_str = command_tag.c_str() + last_space + 1;
-    char* endptr = nullptr;
-    unsigned long long rows = std::strtoull(rows_str, &endptr, 10);
-    if (endptr == rows_str || *endptr != '\0') {
-        return 0;
-    }
-    return rows;
-}
 
 static size_t bounded_cstr_len(const char* s, size_t max_len) {
     if (s == nullptr || max_len == 0) {
@@ -170,6 +121,7 @@ void PgSQLFFTO::track_query(std::string query, bool finalize_on_sync) {
         m_affected_rows = 0;
         m_rows_sent = 0;
         m_response_seen = false;
+        m_rs.on_query_activated(pending.finalize_on_sync);
         m_state = AWAITING_RESPONSE;
         return;
     }
@@ -184,6 +136,7 @@ void PgSQLFFTO::clear_current_query() {
     m_rows_sent = 0;
     m_current_finalize_on_sync = false;
     m_response_seen = false;
+    m_rs.reset();
 }
 
 void PgSQLFFTO::activate_next_query() {
@@ -201,6 +154,7 @@ void PgSQLFFTO::activate_next_query() {
     m_affected_rows = 0;
     m_rows_sent = 0;
     m_response_seen = false;
+    m_rs.on_query_activated(next_query.finalize_on_sync);
     m_state = AWAITING_RESPONSE;
 }
 
@@ -265,62 +219,37 @@ void PgSQLFFTO::process_client_message(char type, const unsigned char* payload, 
 
 void PgSQLFFTO::process_server_message(char type, const unsigned char* payload, size_t len) {
     if (m_state == IDLE) return;
-    if (type == 'C') {
-        bool is_select = false;
-        uint64_t rows = extract_pg_rows_affected(payload, len, is_select);
-        if (is_select) m_rows_sent += rows;
-        else m_affected_rows += rows;
+    PgSQLRSEvent ev = m_rs.on_message(type, payload, len);
+    switch (ev.kind) {
+    case PgSQLRSEventKind::CommandComplete:
+        if (ev.is_select) m_rows_sent += ev.rows;
+        else m_affected_rows += ev.rows;
         m_response_seen = true;
         if (!m_current_finalize_on_sync) {
             finalize_current_query();
         }
-    } else if (type == 'I' || type == 's') {
-        // EmptyQueryResponse ('I') replaces CommandComplete when the query text
-        // is empty once comments/whitespace are stripped, and PortalSuspended
-        // ('s') replaces it when a row-limited Execute stops early. Both
-        // terminate the current query's response just as CommandComplete does,
-        // with no row counts to add. Without this, an extended Execute answered
-        // by either one would never be finalized -- neither branch below fires
-        // for it -- and the stalled query would block the pending queue and
-        // swallow the NEXT query's CommandComplete.
-        //
-        // ProxySQL does not emit PortalSuspended today (Execute's max-rows
-        // field is parsed but never acted on, issue #5900), so 's' is inert
-        // until that is fixed; handling it now costs two lines and avoids
-        // reintroducing the stall when it is.
+        break;
+    case PgSQLRSEventKind::EmptyQuery:
+    case PgSQLRSEventKind::PortalSuspended:
+        // EmptyQueryResponse ('I') / PortalSuspended ('s') terminate the
+        // current query's response like CommandComplete, with no row counts.
         m_response_seen = true;
         if (!m_current_finalize_on_sync) {
             finalize_current_query();
         }
-    } else if (type == 'Z') {
-        // ReadyForQuery terminates an exchange, and is the finalizer for SIMPLE
-        // queries -- their CommandComplete deliberately does not finalize (see
-        // the m_current_finalize_on_sync check above).
-        //
-        // The qualifying condition is m_response_seen, NOT
-        // m_current_finalize_on_sync. A ReadyForQuery belongs to the exchange
-        // that produced it, but the query that happens to be current when it
-        // arrives may already belong to the NEXT one: a client that pipelines
-        // without reading its replies leaves an earlier exchange's
-        // ReadyForQuery in flight, and an extended CommandComplete can activate
-        // the following queued query before it lands. Finalizing then reports
-        // that query with zeroed counters and pops the queue, so its real
-        // response is attributed to whatever comes after and the last response
-        // in the batch is dropped once the queue drains to IDLE -- silent,
-        // plausible-looking corruption of stats_pgsql_query_digest rather than
-        // an obvious failure.
-        //
-        // Gating on "has this query actually seen its own response terminator"
-        // is correct for every ordering: a simple query that got its
-        // CommandComplete finalizes here as before; an extended Execute has
-        // already finalized itself above and cannot still be current; and a
-        // query still awaiting its first response is left alone for the
-        // CommandComplete that is genuinely its own. An abandoned batch is
-        // still cleared by ErrorResponse ('E' below).
-        if (m_response_seen) {
+        break;
+    case PgSQLRSEventKind::ReadyForQuery:
+        // ReadyForQuery is the finalizer for SIMPLE queries (finalize_on_sync).
+        // Gate on response_seen, not finalize_on_sync: a pipelined RFQ from an
+        // earlier exchange must not finalize a freshly activated query that has
+        // not yet seen its own response terminator (would zero counters / drop
+        // the real response). Extended queries already finalize on C/I/s and
+        // on_query_activated clears response_seen for the next pending query.
+        if (m_rs.response_seen()) {
             finalize_current_query();
         }
-    } else if (type == 'E') {
+        break;
+    case PgSQLRSEventKind::Error:
         if (!m_current_query.empty() && m_query_start_time != 0) {
             unsigned long long duration = monotonic_time() - m_query_start_time;
             report_query_stats(m_current_query, duration, m_affected_rows, m_rows_sent);
@@ -329,6 +258,9 @@ void PgSQLFFTO::process_server_message(char type, const unsigned char* payload, 
         clear_current_query();
         m_pending_queries.clear();
         m_state = IDLE;
+        break;
+    default:
+        break;
     }
 }
 
