@@ -116,6 +116,32 @@ private:
 	std::vector<AwsIamCompletion> completions_;
 };
 
+class CallbackSink final : public AwsIamCompletionSink {
+public:
+	explicit CallbackSink(std::function<void()> callback) : callback_(std::move(callback)) {}
+	void post(AwsIamCompletion&& completion) override {
+		callback_();
+		std::lock_guard<std::mutex> lock(mu_);
+		completions_.push_back(std::move(completion));
+		cv_.notify_all();
+	}
+	bool wait_for(size_t count, std::chrono::milliseconds timeout = 2s) {
+		std::unique_lock<std::mutex> lock(mu_);
+		return cv_.wait_for(lock, timeout, [&] { return completions_.size() >= count; });
+	}
+	AwsIamCompletion take() {
+		std::lock_guard<std::mutex> lock(mu_);
+		AwsIamCompletion result = std::move(completions_.front());
+		completions_.erase(completions_.begin());
+		return result;
+	}
+private:
+	std::function<void()> callback_;
+	std::mutex mu_;
+	std::condition_variable cv_;
+	std::vector<AwsIamCompletion> completions_;
+};
+
 class DispatchPause {
 public:
 	void hook() {
@@ -434,6 +460,24 @@ void test_cancellation_timeout_late_completion_and_shutdown() {
 	ok(!dispatch_sink->wait_for(1, 50ms),
 		"cancel at the dispatch boundary returns before and suppresses every later completion");
 
+	auto cross_thread_signer = std::make_shared<FakeSigner>();
+	cross_thread_signer->set_blocked(true);
+	AwsIamTokenManager cross_thread_manager(cross_thread_signer, config(dispatch_clock));
+	auto cross_thread_b = std::make_shared<CollectingSink>();
+	AwsIamRequestHandle cross_thread_b_handle;
+	auto cross_thread_a = std::make_shared<CallbackSink>([&] {
+		std::thread canceler([&] { cross_thread_manager.cancel(cross_thread_b_handle); });
+		canceler.join();
+	});
+	cross_thread_manager.request(key("cross-thread.us-east-1.rds.amazonaws.com"), 22, cross_thread_a);
+	cross_thread_b_handle = cross_thread_manager.request(
+		key("cross-thread.us-east-1.rds.amazonaws.com"), 23, cross_thread_b);
+	cross_thread_signer->wait_for_calls(1);
+	cross_thread_signer->set_blocked(false);
+	ok(cross_thread_a->wait_for(1) && !cross_thread_b->wait_for(1, 50ms) &&
+		cross_thread_a->take().result.status == AwsIamStatus::OK,
+		"a completion callback can join another thread that cancels a later waiter without deadlock");
+
 	auto shutdown_boundary_signer = std::make_shared<FakeSigner>();
 	DispatchPause shutdown_boundary_pause;
 	auto shutdown_boundary_config = config(dispatch_clock);
@@ -452,6 +496,27 @@ void test_cancellation_timeout_late_completion_and_shutdown() {
 	ok(shutdown_won_boundary && shutdown_boundary_result.result.status == AwsIamStatus::SHUTDOWN &&
 		shutdown_boundary_sink->size() == 0,
 		"shutdown at the dispatch boundary suppresses the successful completion and posts shutdown once");
+
+	auto reentrant_signer = std::make_shared<FakeSigner>();
+	reentrant_signer->set_blocked(true);
+	auto reentrant_manager = std::make_unique<AwsIamTokenManager>(reentrant_signer, config(dispatch_clock));
+	auto shutdown_b = std::make_shared<CollectingSink>();
+	AwsIamRequestHandle shutdown_b_handle;
+	AwsIamTokenManager* reentrant_source = reentrant_manager.get();
+	auto shutdown_a = std::make_shared<CallbackSink>([&] {
+		reentrant_source->cancel(shutdown_b_handle);
+	});
+	reentrant_manager->request(key("reentrant-shutdown.us-east-1.rds.amazonaws.com"), 24, shutdown_a);
+	shutdown_b_handle = reentrant_manager->request(
+		key("reentrant-shutdown.us-east-1.rds.amazonaws.com"), 25, shutdown_b);
+	reentrant_signer->wait_for_calls(1);
+	std::thread reentrant_shutdown([&] { reentrant_manager.reset(); });
+	const bool shutdown_a_called = shutdown_a->wait_for(1);
+	reentrant_signer->set_blocked(false);
+	reentrant_shutdown.join();
+	ok(shutdown_a_called && shutdown_a->take().result.status == AwsIamStatus::SHUTDOWN &&
+		!shutdown_b->wait_for(1, 50ms),
+		"shutdown revalidates each handle so callback A can cancel snapshotted callback B");
 
 	reset_cleanse_observer();
 	auto late_signer = std::make_shared<FakeSigner>();

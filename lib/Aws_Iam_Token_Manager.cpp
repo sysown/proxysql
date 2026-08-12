@@ -122,9 +122,13 @@ public:
 	}
 	~Impl() { shutdown(); }
 
+	enum class DeliveryState : uint8_t { PENDING, CLAIMED, CANCELED, FINISHED };
 	struct Delivery {
 		uint64_t opaque_id;
 		std::weak_ptr<AwsIamCompletionSink> sink;
+		// Guarded by mu. Transitioning PENDING -> CLAIMED is the delivery
+		// linearization point; cancel can suppress only a still-pending delivery.
+		DeliveryState state { DeliveryState::PENDING };
 	};
 	struct Waiter {
 		uint64_t handle;
@@ -235,10 +239,10 @@ public:
 
 	void cancel(AwsIamRequestHandle handle) {
 		if (!handle.value) return;
-		std::lock_guard<std::recursive_mutex> dispatch_lock(dispatch_mu);
 		std::lock_guard<std::mutex> lock(mu);
 		auto active = active_deliveries.find(handle.value);
 		if (active == active_deliveries.end()) return;
+		active->second->state = DeliveryState::CANCELED;
 		for (auto item = generations.begin(); item != generations.end(); ++item) {
 			auto& waiters = item->second.waiters;
 			auto found = std::find_if(waiters.begin(), waiters.end(),
@@ -281,29 +285,24 @@ public:
 	}
 
 	void shutdown() {
-		std::vector<std::shared_ptr<Delivery>> deliveries;
+		std::vector<uint64_t> handles;
 		{
-			std::lock_guard<std::recursive_mutex> dispatch_lock(dispatch_mu);
-			{
-				std::lock_guard<std::mutex> lock(mu);
-				if (shutting_down) return;
-				shutting_down = true;
-				for (const auto& active : active_deliveries) deliveries.push_back(active.second);
-				generations.clear();
-				jobs.clear();
-				total_waiters = 0;
-				cache.clear();
-				backoff.clear();
-			}
-			cv.notify_all();
-			for (auto& delivery : deliveries) {
-				if (auto sink = delivery->sink.lock()) {
-					AwsIamCompletion completion;
-					completion.opaque_id = delivery->opaque_id;
-					completion.result.status = AwsIamStatus::SHUTDOWN;
-					sink->post(std::move(completion));
-				}
-			}
+			std::lock_guard<std::mutex> lock(mu);
+			if (shutting_down) return;
+			shutting_down = true;
+			for (const auto& active : active_deliveries) handles.push_back(active.first);
+			generations.clear();
+			jobs.clear();
+			total_waiters = 0;
+			cache.clear();
+			backoff.clear();
+		}
+		cv.notify_all();
+		std::sort(handles.begin(), handles.end());
+		for (uint64_t handle : handles) dispatch_shutdown(handle);
+		{
+			std::unique_lock<std::mutex> lock(mu);
+			cv.wait(lock, [&] { return callbacks_in_progress == 0; });
 		}
 		for (auto& worker : workers) if (worker.joinable()) worker.join();
 		std::lock_guard<std::mutex> lock(mu);
@@ -403,6 +402,7 @@ public:
 				for (const auto& waiter : waiters) {
 					if (std::none_of(completions.begin(), completions.end(),
 						[&](const PendingCompletion& pending) { return pending.handle == waiter.handle; })) {
+						waiter.delivery->state = DeliveryState::FINISHED;
 						active_deliveries.erase(waiter.handle);
 					}
 				}
@@ -418,7 +418,6 @@ public:
 
 	void dispatch_immediate(CompletionPair&& immediate) {
 		call_before_dispatch();
-		std::lock_guard<std::recursive_mutex> dispatch_lock(dispatch_mu);
 		{
 			std::lock_guard<std::mutex> lock(mu);
 			if (shutting_down) {
@@ -436,18 +435,19 @@ public:
 				immediate.second.result.status = AwsIamStatus::PROVIDER_ERROR;
 				immediate.second.result.failure.category = "token_not_fresh_at_delivery";
 			}
+			++callbacks_in_progress;
 		}
-		immediate.first->post(std::move(immediate.second));
+		post_unlocked(nullptr, std::move(immediate.first), std::move(immediate.second));
 	}
 
 	void dispatch_pending(PendingCompletion&& pending) {
 		call_before_dispatch();
-		std::lock_guard<std::recursive_mutex> dispatch_lock(dispatch_mu);
 		std::shared_ptr<AwsIamCompletionSink> sink;
 		{
 			std::lock_guard<std::mutex> lock(mu);
 			auto active = active_deliveries.find(pending.handle);
-			if (shutting_down || active == active_deliveries.end() || active->second != pending.delivery) return;
+			if (shutting_down || active == active_deliveries.end() || active->second != pending.delivery ||
+				active->second->state != DeliveryState::PENDING) return;
 			if (pending.completion.result.status == AwsIamStatus::OK &&
 				pending.completion.result.expires_at - config.clock() <= config.minimum_remaining_lifetime) {
 				for (auto cached = cache.begin(); cached != cache.end();) {
@@ -459,15 +459,56 @@ public:
 				pending.completion.result.failure.category = "token_not_fresh_at_delivery";
 			}
 			sink = pending.delivery->sink.lock();
+			pending.delivery->state = sink ? DeliveryState::CLAIMED : DeliveryState::FINISHED;
 			active_deliveries.erase(active);
+			if (sink) ++callbacks_in_progress;
 		}
-		if (sink) sink->post(std::move(pending.completion));
+		if (sink) post_unlocked(std::move(pending.delivery), std::move(sink), std::move(pending.completion));
+	}
+
+	void dispatch_shutdown(uint64_t handle) {
+		std::shared_ptr<Delivery> delivery;
+		std::shared_ptr<AwsIamCompletionSink> sink;
+		{
+			std::lock_guard<std::mutex> lock(mu);
+			auto active = active_deliveries.find(handle);
+			if (active == active_deliveries.end() || active->second->state != DeliveryState::PENDING) return;
+			delivery = active->second;
+			sink = delivery->sink.lock();
+			delivery->state = sink ? DeliveryState::CLAIMED : DeliveryState::FINISHED;
+			active_deliveries.erase(active);
+			if (sink) ++callbacks_in_progress;
+		}
+		if (!sink) return;
+		AwsIamCompletion completion;
+		completion.opaque_id = delivery->opaque_id;
+		completion.result.status = AwsIamStatus::SHUTDOWN;
+		post_unlocked(std::move(delivery), std::move(sink), std::move(completion));
+	}
+
+	void post_unlocked(std::shared_ptr<Delivery> delivery,
+		std::shared_ptr<AwsIamCompletionSink> sink, AwsIamCompletion&& completion) {
+		try {
+			sink->post(std::move(completion));
+		} catch (...) {
+			finish_delivery(std::move(delivery));
+			throw;
+		}
+		finish_delivery(std::move(delivery));
+	}
+
+	void finish_delivery(std::shared_ptr<Delivery> delivery) {
+		{
+			std::lock_guard<std::mutex> lock(mu);
+			if (delivery) delivery->state = DeliveryState::FINISHED;
+			--callbacks_in_progress;
+		}
+		cv.notify_all();
 	}
 
 	std::shared_ptr<AwsIamTokenSigner> signer;
 	AwsIamTokenManagerConfig config;
 	mutable std::mutex mu;
-	std::recursive_mutex dispatch_mu;
 	std::condition_variable cv;
 	bool shutting_down { false };
 	bool valid_config { true };
@@ -475,6 +516,7 @@ public:
 	uint64_t next_generation { 1 };
 	uint64_t lru_clock { 0 };
 	size_t total_waiters { 0 };
+	size_t callbacks_in_progress { 0 };
 	AwsIamStatsSnapshot stats;
 	std::unordered_map<AwsIamTokenKey, Generation, KeyHash> generations;
 	std::unordered_map<AwsIamTokenKey, CacheEntry, KeyHash> cache;
@@ -487,7 +529,7 @@ public:
 AwsIamTokenManager::AwsIamTokenManager(std::shared_ptr<AwsIamTokenSigner> signer,
 	AwsIamTokenManagerConfig config)
 	: impl_(new Impl(std::move(signer), std::move(config))) {}
-AwsIamTokenManager::~AwsIamTokenManager() = default;
+AwsIamTokenManager::~AwsIamTokenManager() { impl_->shutdown(); }
 AwsIamRequestHandle AwsIamTokenManager::request(const AwsIamTokenKey& key, uint64_t opaque_id,
 	std::weak_ptr<AwsIamCompletionSink> sink) {
 	return impl_->request(key, opaque_id, std::move(sink));
