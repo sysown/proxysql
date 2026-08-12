@@ -23,13 +23,12 @@ diff --git include/ma_tls.h include/ma_tls.h
 diff --git include/mysql.h include/mysql.h
 --- include/mysql.h
 +++ include/mysql.h
-@@ -260,6 +260,9 @@ extern const char *SQLSTATE_UNKNOWN;
-     MARIADB_OPT_SERVER_PLUGINS
+@@ -260,6 +260,7 @@ extern const char *SQLSTATE_UNKNOWN;
+-    MARIADB_OPT_SERVER_PLUGINS
++    MARIADB_OPT_SERVER_PLUGINS,
++    MARIADB_OPT_TLS_SERVER_NAME = MARIADB_OPT_SERVER_PLUGINS + 2
    };
  
-+/* Keep this distinct from MARIADB_OPT_SSL_KEYLOG_CALLBACK, patched later. */
-+#define MARIADB_OPT_TLS_SERVER_NAME ((enum mysql_option)(MARIADB_OPT_SERVER_PLUGINS + 2))
-+
    enum mariadb_value {
      MARIADB_CHARSET_ID,
      MARIADB_CHARSET_NAME,
