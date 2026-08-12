@@ -3,6 +3,7 @@
 
 #include "proxysql.h"
 #include "cpp.h"
+#include "MySQL_User_Variables.h"
 
 //#include "../deps/json/json.hpp"
 //using json = nlohmann::json;
@@ -104,6 +105,7 @@ class MySQL_Connection {
 
 	Variable variables[SQL_NAME_LAST_HIGH_WM];
 	uint32_t var_hash[SQL_NAME_LAST_HIGH_WM];
+	MySQL_User_Variable_State user_variables;
 	// for now we store possibly missing variables in the lower range
 	// we may need to fix that, but this will cost performance
 	bool var_absent[SQL_NAME_LAST_HIGH_WM] = {false};

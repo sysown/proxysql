@@ -1,6 +1,8 @@
 #include "tap.h"
 
 #include "MySQL_User_Variables.h"
+#include "MySQL_Data_Stream.h"
+#include "mysql_connection.h"
 
 #include <string>
 #include <utility>
@@ -184,15 +186,84 @@ void test_kind_and_empty_replay_edges() {
 		"zero byte limit rejects a nonempty replay without partial batches");
 }
 
+void set_username(MySQL_Connection& connection, const char* username) {
+	connection.userinfo->username = strdup(username);
+}
+
+void test_connection_state_integration() {
+	MySQL_Connection frontend;
+	MySQL_Connection backend;
+	set_username(frontend, "user-variable-unit");
+	set_username(backend, "user-variable-unit");
+	ok(stage_and_apply(backend.user_variables, { assignment("backend_only", "@backend_only", "1") }),
+		"backend-only user variable stages on connection");
+	ok(backend.requires_CHANGE_USER(&frontend),
+		"backend user-variable name absent from frontend requires CHANGE_USER");
+
+	MySQL_Connection desired;
+	MySQL_Connection actual;
+	set_username(desired, "user-variable-unit");
+	set_username(actual, "user-variable-unit");
+	ok(stage_and_apply(desired.user_variables, { assignment("matching", "@matching", "'one'", UserVariableLiteralKind::STRING, 42) }) &&
+		stage_and_apply(actual.user_variables, { assignment("matching", "@matching", "'one'", UserVariableLiteralKind::STRING, 42) }),
+		"equal user variables stage on connection fixtures");
+	unsigned int not_matching = 0;
+	ok(actual.number_of_matching_session_variables(&desired, not_matching) == 1 && not_matching == 0,
+		"exactly equal user variables count as matching session state");
+	ok(stage_and_apply(actual.user_variables, { assignment("matching", "@matching", "'different'", UserVariableLiteralKind::STRING, 42) }),
+		"same-hash different-value backend user variable stages");
+	not_matching = 0;
+	ok(actual.number_of_matching_session_variables(&desired, not_matching) == 0 && not_matching == 1,
+		"same-hash different-value user variable is a mismatch");
+	actual.reset();
+	ok(actual.user_variables.size() == 0 && actual.user_variables.stored_bytes() == 0,
+		"connection reset clears tracked user variables");
+
+	MySQL_Data_Stream stream;
+	stream.myds_type = MYDS_FRONTEND;
+	stream.myconn = new MySQL_Connection();
+	ok(stage_and_apply(stream.myconn->user_variables, {
+		assignment("secret_name", "@secret_target", "'secret_literal'")
+	}), "diagnostic user variable stages");
+	nlohmann::json internal_session;
+	stream.get_client_myds_info_json(internal_session);
+	const nlohmann::json& user_variables = internal_session["conn"]["user_variables"];
+	const std::string client_diagnostic = user_variables.dump();
+	ok(user_variables["count"] == 1 &&
+		user_variables["stored_bytes"] == stream.myconn->user_variables.stored_bytes(),
+		"client diagnostics expose user-variable aggregate count and stored bytes");
+	ok(client_diagnostic.find("secret_name") == std::string::npos &&
+		client_diagnostic.find("secret_target") == std::string::npos &&
+		client_diagnostic.find("secret_literal") == std::string::npos,
+		"client diagnostics do not expose user-variable names, values, or replay syntax");
+	if (user_variables.contains("fingerprint")) {
+		ok(client_diagnostic.find(stream.myconn->user_variables.diagnostic_fingerprint()) != std::string::npos,
+			"client diagnostics fingerprint is aggregate-only");
+	} else {
+		ok(true, "client diagnostics omit fingerprint when keyed initialization is unavailable");
+	}
+
+	nlohmann::json backend_json;
+	backend.get_backend_conn_info_json(backend_json);
+	const nlohmann::json& backend_user_variables = backend_json["user_variables"];
+	const std::string backend_diagnostic = backend_user_variables.dump();
+	ok(backend_user_variables["count"] == 1 &&
+		backend_user_variables["stored_bytes"] == backend.user_variables.stored_bytes(),
+		"backend diagnostics expose user-variable aggregate count and stored bytes");
+	ok(backend_diagnostic.find("backend_only") == std::string::npos,
+		"backend diagnostics do not expose user-variable names or values");
+}
+
 } // namespace
 
 int main() {
-	plan(43);
+	plan(56);
 	test_staging_and_limits();
 	test_collision_safe_comparison();
 	test_replay_planning();
 	test_diagnostic_fingerprint();
 	test_move_preserves_state_invariants();
 	test_kind_and_empty_replay_edges();
+	test_connection_state_integration();
 	return exit_status();
 }

@@ -684,6 +684,11 @@ bool MySQL_Connection::requires_CHANGE_USER(const MySQL_Connection *client_conn)
 		// the server connection has more variables set than the client
 		return true;
 	}
+	if (user_variables.has_names_absent_from(client_conn->user_variables)) {
+		// The backend has a user variable that the frontend does not have.
+		// User variables cannot be unset, so reset the backend with CHANGE_USER.
+		return true;
+	}
 	std::vector<uint32_t>::const_iterator it_c = client_conn->dynamic_variables_idx.begin(); // client connection iterator
 	std::vector<uint32_t>::const_iterator it_s = dynamic_variables_idx.begin();              // server connection iterator
 	for ( ; it_s != dynamic_variables_idx.end() ; it_s++) {
@@ -744,6 +749,9 @@ unsigned int MySQL_Connection::number_of_matching_session_variables(const MySQL_
 			}
 		}
 	}
+	unsigned int user_variables_not_matching = 0;
+	ret += user_variables.count_matches(client_conn->user_variables, user_variables_not_matching);
+	not_matching += user_variables_not_matching;
 	return ret;
 }
 
@@ -3140,6 +3148,7 @@ void MySQL_Connection::reset() {
 		}
 	}
 	dynamic_variables_idx.clear();
+	user_variables.clear();
 
 	if (options.init_connect) {
 		free(options.init_connect);
@@ -3310,6 +3319,13 @@ void MySQL_Connection::get_backend_conn_info_json(json& j) {
 	j["last_set_autocommit"] = options.last_set_autocommit;
 	j["no_backslash_escapes"] = options.no_backslash_escapes;
 	j["warning_count"] = warning_count;
+	json& user_variables_json = j["user_variables"];
+	user_variables_json["count"] = user_variables.size();
+	user_variables_json["stored_bytes"] = user_variables.stored_bytes();
+	const std::string user_variables_fingerprint = user_variables.diagnostic_fingerprint();
+	if (!user_variables_fingerprint.empty()) {
+		user_variables_json["fingerprint"] = user_variables_fingerprint;
+	}
 	json& js = j["status"];
 	js["get_lock"] = get_status(STATUS_MYSQL_CONNECTION_GET_LOCK);
 	js["lock_tables"] = get_status(STATUS_MYSQL_CONNECTION_LOCK_TABLES);
