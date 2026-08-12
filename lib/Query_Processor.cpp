@@ -390,6 +390,8 @@ static void __delete_query_rule(QP_rule_t *qr) {
 		free(qr->OK_msg);
 	if (qr->attributes)
 		free(qr->attributes);
+	if (qr->destination_schema)
+		free(qr->destination_schema);
 	if (qr->comment)
 		free(qr->comment);
 	if (qr->regex_engine1) {
@@ -2068,7 +2070,14 @@ __internal_loop:
 			// Note: negative hostgroup means this rule doesn't change
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set destination hostgroup: %d\n", qr->rule_id, qr->destination_hostgroup);
 			ret->destination_hostgroup=qr->destination_hostgroup;
-		}	
+		}
+		if (qr->destination_schema) {
+			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set destination schema: %s\n", qr->rule_id, qr->destination_schema);
+			if (ret->destination_schema) {
+				free(ret->destination_schema);
+			}
+			ret->destination_schema=strdup(qr->destination_schema);
+		}
 		if constexpr (has_process_query_extended<QP_DERIVED>::value) {
 			(static_cast<QP_DERIVED*>(this))->process_query_extended(static_cast<TypeQPOutput*>(ret), static_cast<TypeQueryRule*>(qr));
 		}
@@ -2940,6 +2949,7 @@ void Query_Processor_Output::get_info_json(json& j) {
 	j["cache_ttl"] = cache_ttl;
 	j["delay"] = delay;
 	j["destination_hostgroup"] = destination_hostgroup;
+	j["destination_schema"] = ( destination_schema ? destination_schema : "" );
 	j["firewall_whitelist_mode"] = firewall_whitelist_mode;
 	j["multiplex"] = multiplex;
 	j["timeout"] = timeout;

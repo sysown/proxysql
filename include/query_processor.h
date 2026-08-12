@@ -132,6 +132,7 @@ typedef struct _Query_Processor_rule_t {
 	int log;
 	bool apply;
 	char* attributes;
+	char *destination_schema; // parsed from attributes JSON key "destination_schema"
 	char *comment; // #643
 	void *regex_engine1;
 	void *regex_engine2;
@@ -175,6 +176,7 @@ class Query_Processor_Output {
 	int log;
 	int firewall_whitelist_mode;
 	char *attributes;
+	char *destination_schema; // when set, session schema is switched before routing
 	char *comment; // #643
 	
 	bool create_new_conn;
@@ -213,6 +215,7 @@ class Query_Processor_Output {
 		error_msg=NULL;
 		OK_msg=NULL;
 		attributes=NULL;
+		destination_schema=NULL;
 		comment=NULL; // #643
 		firewall_whitelist_mode = WUS_NOT_FOUND;
 		create_new_conn=0;
@@ -228,9 +231,15 @@ class Query_Processor_Output {
 		}
 		if (attributes) {
 			free(attributes);
+			attributes=NULL;
+		}
+		if (destination_schema) {
+			free(destination_schema);
+			destination_schema=NULL;
 		}
 		if (comment) { // #643
 			free(comment);
+			comment=NULL;
 		}
 	}
 	void get_info_json(nlohmann::json& j);

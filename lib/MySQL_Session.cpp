@@ -7132,6 +7132,14 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		return true;
 	}
 
+	if (qpo->destination_schema) {
+		// switch the session schema before the query cache lookup and backend
+		// connection selection: the cache key and the connection pool both use
+		// (username, schemaname), and the pool issues COM_INIT_DB on schema
+		// mismatch, so the query (cached or not) lands on this schema
+		client_myds->myconn->userinfo->set_schemaname(qpo->destination_schema, strlen(qpo->destination_schema));
+	}
+
 	if (prepare_stmt_type & ps_type_execute_stmt) {	// for prepared statement execute we exit here
 		reset_warning_hostgroup_flag_and_release_connection();
 		goto __exit_set_destination_hostgroup;
