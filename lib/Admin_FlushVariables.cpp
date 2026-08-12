@@ -661,7 +661,7 @@ FlushVariableStats ProxySQL_Admin::flush_mysql_variables___database_to_runtime(S
 		const int set_parser_algorithm = GloMTH->get_variable_int((char *)"set_parser_algorithm");
 		const int query_processor_parser = GloMTH->get_variable_int((char *)"query_processor_parser");
 		if (user_variable_tracking == 1 && set_parser_algorithm != 3 && query_processor_parser != 1) {
-			proxy_warning("mysql-user_variable_tracking=1 remains inactive because mysql-set_parser_algorithm is not 3 and mysql-query_processor_parser is not 1. Enable both parser prerequisites to activate user-variable tracking.\n");
+			proxy_warning("mysql-user_variable_tracking=1 remains inactive because mysql-set_parser_algorithm is not 3 and mysql-query_processor_parser is not 1. Enable either mysql-set_parser_algorithm=3 or mysql-query_processor_parser=1 to activate user-variable tracking.\n");
 		}
 
 		// Cross-variable validation for 'mysql-session_track_variables'.

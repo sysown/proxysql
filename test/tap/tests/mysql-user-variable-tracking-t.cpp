@@ -360,6 +360,7 @@ struct SavedConfig {
 	std::string set_parser;
 	std::string query_parser;
 	std::string set_lock;
+	std::string multiplexing;
 };
 
 struct BackendEndpoint {
@@ -392,6 +393,19 @@ std::optional<std::string> admin_variable(MYSQL* admin, const char* name) {
 	return cell->bytes;
 }
 
+bool open_proxysql_log(const char* configured_datadir, std::fstream& log) {
+	if (configured_datadir && open_file_and_seek_end(
+			std::string(configured_datadir) + "/proxysql.log", log) == 0) {
+		return true;
+	}
+	// Some registered groups use REGULAR_INFRA_DATADIR for test assets. The
+	// isolated runner always mounts the daemon data directory here.
+	log.close();
+	log.clear();
+	return (!configured_datadir || std::string(configured_datadir) != "/var/lib/proxysql") &&
+		open_file_and_seek_end("/var/lib/proxysql/proxysql.log", log) == 0;
+}
+
 bool set_admin_variable(MYSQL* admin, const char* name, const std::string& value) {
 	return execute(admin,
 		"UPDATE global_variables SET variable_value=" + sql_quote(admin, value) +
@@ -403,10 +417,13 @@ std::optional<SavedConfig> save_config(MYSQL* admin) {
 	auto set_parser = admin_variable(admin, "mysql-set_parser_algorithm");
 	auto query_parser = admin_variable(admin, "mysql-query_processor_parser");
 	auto set_lock = admin_variable(admin, "mysql-set_query_lock_on_hostgroup");
-	if (!tracking || !set_parser || !query_parser || !set_lock) {
+	auto multiplexing = admin_variable(admin, "mysql-multiplexing");
+	if (!tracking || !set_parser || !query_parser || !set_lock || !multiplexing) {
 		return std::nullopt;
 	}
-	return SavedConfig { *tracking, *set_parser, *query_parser, *set_lock };
+	return SavedConfig {
+		*tracking, *set_parser, *query_parser, *set_lock, *multiplexing
+	};
 }
 
 std::optional<BackendEndpoint> select_backend(MYSQL* admin) {
@@ -550,6 +567,8 @@ int main() {
 		ok(false, "user-variable tracking configuration can be saved");
 		return exit_status();
 	}
+	const bool multiplexing_enabled = saved->multiplexing == "true" ||
+		saved->multiplexing == "1";
 	const std::string tag = "mysql-user-variable-tracking-t-" + std::to_string(getpid());
 	auto endpoint = select_backend(admin.get());
 	if (!endpoint) {
@@ -600,8 +619,7 @@ int main() {
 	}
 	std::fstream proxysql_log;
 	const char* infra_datadir = std::getenv("REGULAR_INFRA_DATADIR");
-	const bool log_ready = infra_datadir &&
-		open_file_and_seek_end(std::string(infra_datadir) + "/proxysql.log", proxysql_log) == 0;
+	const bool log_ready = open_proxysql_log(infra_datadir, proxysql_log);
 	ok(log_ready, "ProxySQL log is positioned before the reported SET");
 
 	const std::string reported_set =
@@ -803,43 +821,56 @@ int main() {
 	ok(unlocked_session && unlocked_session->value("locked_on_hostgroup", -2) == -1,
 		"tracked traffic remains hostgroup-unlocked after both transaction rollbacks");
 
-	proxy.reset();
-	MysqlPtr isolated = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
-	std::array<bool, 2> isolated_ids_reused { false, false };
-	if (isolated) {
-		for (size_t route_index = 0; route_index < route_comments.size(); ++route_index) {
-			auto connection_id = query_scalar(isolated.get(),
-				route_comments[route_index] + "SELECT CONNECTION_ID()");
-			isolated_ids_reused[route_index] = connection_id && !connection_id->is_null &&
-				route_connection_ids[route_index] &&
-				connection_id->bytes == *route_connection_ids[route_index];
-		}
+	// With multiplexing enabled, closing the original frontend returns both
+	// connections to their pools and lets us prove exact-ID sanitization. With
+	// multiplexing disabled, keep it open so each fresh frontend must receive a
+	// distinct physical connection. Each route's ID and NULL checks deliberately
+	// come from one result row.
+	if (multiplexing_enabled) {
+		proxy.reset();
 	}
-	ok(isolated_ids_reused[0],
-		"a fresh frontend reuses route A's exact pooled backend connection ID");
-	ok(isolated_ids_reused[1],
-		"a fresh frontend reuses route B's exact pooled backend connection ID");
-	bool isolated_values_are_null = isolated != nullptr;
-	const std::string null_checks =
-		"SELECT @browser_lang IS NULL,@browser_time IS NULL,@browser_timezone IS NULL,"
+	std::array<bool, 2> isolated_id_condition { false, false };
+	std::array<bool, 2> isolated_values_are_null { false, false };
+	const std::string isolation_probe =
+		"SELECT CONNECTION_ID(),@browser_lang IS NULL,@browser_time IS NULL,"
+		"@browser_timezone IS NULL,"
 		"@ip_address IS NULL,@uv_string IS NULL,@uv_integer IS NULL,@uv_positive IS NULL,"
 		"@uv_decimal IS NULL,@uv_exponent IS NULL,@uv_hex IS NULL,@uv_hex_quoted IS NULL,"
 		"@uv_bit IS NULL,@uv_bit_quoted IS NULL,@uv_null IS NULL";
-	if (isolated) {
-		for (const char* route : { "/* uv_hg_a */ ", "/* uv_hg_b */ " }) {
-			auto result = query_result(isolated.get(), std::string(route) + null_checks);
-			if (!result || result->rows.size() != 1 || result->rows.front().size() != 14) {
-				isolated_values_are_null = false;
-				continue;
-			}
-			for (const auto& cell : result->rows.front()) {
-				isolated_values_are_null = isolated_values_are_null && !cell.is_null && cell.bytes == "1";
-			}
+	for (size_t route_index = 0; route_index < route_comments.size(); ++route_index) {
+		MysqlPtr isolated = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
+		auto result = isolated
+			? query_result(isolated.get(), route_comments[route_index] + isolation_probe)
+			: std::nullopt;
+		if (!result || result->rows.size() != 1 || result->rows.front().size() != 15 ||
+			result->rows.front()[0].is_null || !route_connection_ids[route_index]) {
+			continue;
+		}
+		const auto& row = result->rows.front();
+		isolated_id_condition[route_index] = multiplexing_enabled
+			? row[0].bytes == *route_connection_ids[route_index]
+			: row[0].bytes != *route_connection_ids[route_index];
+		isolated_values_are_null[route_index] = true;
+		for (size_t column = 1; column < row.size(); ++column) {
+			isolated_values_are_null[route_index] =
+				isolated_values_are_null[route_index] && !row[column].is_null &&
+				row[column].bytes == "1";
 		}
 	}
-	ok(isolated_values_are_null,
-		"the fresh frontend sees NULL through both reused pooled backend connections");
-	isolated.reset();
+	if (multiplexing_enabled) {
+		ok(isolated_id_condition[0],
+			"a fresh frontend reuses route A's exact pooled backend connection ID");
+		ok(isolated_id_condition[1],
+			"a fresh frontend reuses route B's exact pooled backend connection ID");
+	} else {
+		ok(isolated_id_condition[0],
+			"a fresh frontend receives a distinct route A backend connection ID");
+		ok(isolated_id_condition[1],
+			"a fresh frontend receives a distinct route B backend connection ID");
+	}
+	ok(isolated_values_are_null[0] && isolated_values_are_null[1],
+		"one response per route proves all variables are NULL on each fresh frontend");
+	proxy.reset();
 
 	MysqlPtr reset_session = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
 	const bool reset_staged = reset_session &&
@@ -863,9 +894,12 @@ int main() {
 	ok(reset_session && reset_id_before && !reset_id_before->is_null &&
 		reset_probe && reset_probe->rows.size() == 1 && reset_probe->rows.front().size() == 2 &&
 		!reset_probe->rows.front()[0].is_null &&
-		reset_probe->rows.front()[0].bytes == reset_id_before->bytes &&
+		(!multiplexing_enabled ||
+			reset_probe->rows.front()[0].bytes == reset_id_before->bytes) &&
 		!reset_probe->rows.front()[1].is_null && reset_probe->rows.front()[1].bytes == "1",
-		"one backend response proves reset cleared the value on the exact recorded connection");
+		multiplexing_enabled
+			? "one response proves reset cleared the value on the exact recorded connection"
+			: "one response proves reset cleared the value without assuming backend reuse");
 	reset_session.reset();
 
 	struct FallbackCase {
@@ -1063,17 +1097,63 @@ int main() {
 	names_direct.reset();
 
 	std::fstream prerequisite_log;
-	const bool prerequisite_log_ready = infra_datadir &&
-		open_file_and_seek_end(std::string(infra_datadir) + "/proxysql.log", prerequisite_log) == 0;
+	const bool prerequisite_log_ready = open_proxysql_log(infra_datadir, prerequisite_log);
 	const bool misconfigured_loaded =
 		set_admin_variable(admin.get(), "mysql-user_variable_tracking", "1") &&
 		set_admin_variable(admin.get(), "mysql-set_parser_algorithm", "2") &&
 		set_admin_variable(admin.get(), "mysql-query_processor_parser", "0") &&
 		execute(admin.get(), "LOAD MYSQL VARIABLES TO RUNTIME");
+
+	const std::string prerequisite_warning =
+		"mysql-user_variable_tracking=1 remains inactive because "
+		"mysql-set_parser_algorithm is not 3 and mysql-query_processor_parser is not 1. "
+		"Enable either mysql-set_parser_algorithm=3 or mysql-query_processor_parser=1 "
+		"to activate user-variable tracking.";
+	size_t load_prerequisite_warning_count = 0;
+	bool load_prerequisite_warning_fixed = true;
+	bool load_prerequisite_warning_value_free = true;
+	if (prerequisite_log_ready) {
+		for (int poll = 0; poll < 20; ++poll) {
+			prerequisite_log.clear();
+			std::string line;
+			while (std::getline(prerequisite_log, line)) {
+				if (line.find("mysql-user_variable_tracking=1 remains inactive") ==
+					std::string::npos) {
+					continue;
+				}
+				++load_prerequisite_warning_count;
+				load_prerequisite_warning_fixed = load_prerequisite_warning_fixed &&
+					line.find(prerequisite_warning) != std::string::npos;
+				load_prerequisite_warning_value_free =
+					load_prerequisite_warning_value_free &&
+					line.find("SET @") == std::string::npos;
+			}
+			usleep(100000);
+		}
+	}
+
 	MysqlPtr misconfigured_session = connect_mysql(
 		cl.host, cl.port, cl.username, cl.password, "test");
 	const bool inactive_set_forwarded = misconfigured_session &&
 		execute(misconfigured_session.get(), "SET @misconfigured_value='misconfigured-secret'");
+	size_t post_load_prerequisite_warning_count = 0;
+	bool post_load_prerequisite_warning_value_free = true;
+	if (prerequisite_log_ready) {
+		for (int poll = 0; poll < 20; ++poll) {
+			prerequisite_log.clear();
+			std::string line;
+			while (std::getline(prerequisite_log, line)) {
+				if (line.find("mysql-user_variable_tracking=1 remains inactive") !=
+					std::string::npos) {
+					++post_load_prerequisite_warning_count;
+					post_load_prerequisite_warning_value_free =
+						post_load_prerequisite_warning_value_free &&
+						line.find("misconfigured-secret") == std::string::npos;
+				}
+			}
+			usleep(100000);
+		}
+	}
 	const auto inactive_count = misconfigured_session
 		? tracked_user_variable_count(misconfigured_session.get()) : std::nullopt;
 	const auto inactive_lock = misconfigured_session
@@ -1084,34 +1164,13 @@ int main() {
 	ok(misconfigured_loaded && inactive_set_forwarded && inactive_count && *inactive_count == 0 &&
 		inactive_lock && *inactive_lock >= 0 && configured_tracking && *configured_tracking == "1" &&
 		configured_set_parser && *configured_set_parser == "2" && configured_query_parser &&
-		*configured_query_parser == "0",
-		"mode 1 without ParserSQL prerequisites stays inactive without forcing parser configuration");
-
-	size_t prerequisite_warning_count = 0;
-	bool prerequisite_warning_names_all_config = true;
-	bool prerequisite_warning_redacted = true;
-	if (prerequisite_log_ready) {
-		for (int poll = 0; poll < 20; ++poll) {
-			prerequisite_log.clear();
-			std::string line;
-			while (std::getline(prerequisite_log, line)) {
-				if (line.find("mysql-user_variable_tracking=1 remains inactive") == std::string::npos) {
-					continue;
-				}
-				++prerequisite_warning_count;
-				prerequisite_warning_names_all_config = prerequisite_warning_names_all_config &&
-					line.find("mysql-user_variable_tracking") != std::string::npos &&
-					line.find("mysql-set_parser_algorithm") != std::string::npos &&
-					line.find("mysql-query_processor_parser") != std::string::npos;
-				prerequisite_warning_redacted = prerequisite_warning_redacted &&
-					line.find("misconfigured-secret") == std::string::npos;
-			}
-			usleep(100000);
-		}
-	}
-	ok(prerequisite_log_ready && prerequisite_warning_count == 1 &&
-		prerequisite_warning_names_all_config && prerequisite_warning_redacted,
-		"one prerequisite warning names all configuration inputs without the SET literal");
+		*configured_query_parser == "0" && prerequisite_log_ready &&
+		post_load_prerequisite_warning_count == 0 &&
+		post_load_prerequisite_warning_value_free,
+		"fallback emits no additional or literal-bearing prerequisite warning");
+	ok(prerequisite_log_ready && load_prerequisite_warning_count == 1 &&
+		load_prerequisite_warning_fixed && load_prerequisite_warning_value_free,
+		"LOAD emits exactly one fixed value-free warning naming either parser prerequisite");
 	misconfigured_session.reset();
 
 	const bool full_query_parser_loaded =
@@ -1321,16 +1380,32 @@ int main() {
 		? query_scalar(disconnect_session.get(), "/* uv_hg_a */ SELECT CONNECTION_ID()") : std::nullopt;
 	const bool disconnect_value_present = disconnect_session && scalar_equals(
 		disconnect_session.get(), "/* uv_hg_a */ SELECT @disconnect_lifecycle", "disconnect-value");
-	disconnect_session.reset();
 	MysqlPtr after_disconnect = connect_mysql(cl.host, cl.port, cl.username, cl.password, "test");
-	const auto reused_disconnect_id = after_disconnect
-		? query_scalar(after_disconnect.get(), "/* uv_hg_a */ SELECT CONNECTION_ID()") : std::nullopt;
+	const auto preattached_disconnect_id = !multiplexing_enabled && after_disconnect
+		? query_scalar(after_disconnect.get(), "/* uv_hg_a */ SELECT CONNECTION_ID()")
+		: std::nullopt;
+	disconnect_session.reset();
+	const auto disconnect_probe = after_disconnect
+		? query_result(after_disconnect.get(),
+			"/* uv_hg_a */ SELECT CONNECTION_ID(),@disconnect_lifecycle IS NULL")
+		: std::nullopt;
+	const bool disconnect_probe_valid = disconnect_probe &&
+		disconnect_probe->rows.size() == 1 && disconnect_probe->rows.front().size() == 2 &&
+		!disconnect_probe->rows.front()[0].is_null &&
+		!disconnect_probe->rows.front()[1].is_null &&
+		disconnect_probe->rows.front()[1].bytes == "1";
+	const bool disconnect_id_condition = disconnect_probe_valid && disconnect_id &&
+		!disconnect_id->is_null && (multiplexing_enabled
+			? disconnect_probe->rows.front()[0].bytes == disconnect_id->bytes
+			: preattached_disconnect_id && !preattached_disconnect_id->is_null &&
+				disconnect_probe->rows.front()[0].bytes == preattached_disconnect_id->bytes &&
+				disconnect_probe->rows.front()[0].bytes != disconnect_id->bytes);
 	ok(disconnect_staged && disconnect_id && !disconnect_id->is_null &&
-		disconnect_value_present && reused_disconnect_id && !reused_disconnect_id->is_null &&
-		reused_disconnect_id->bytes == disconnect_id->bytes && after_disconnect &&
-		scalar_equals(after_disconnect.get(),
-			"/* uv_hg_a */ SELECT @disconnect_lifecycle IS NULL", "1"),
-		"disconnect clears state before the exact pooled backend is reused by a fresh frontend");
+		disconnect_value_present && after_disconnect && disconnect_probe_valid &&
+		disconnect_id_condition,
+		multiplexing_enabled
+			? "one response proves disconnect clears state on the exact reused pooled backend"
+			: "one response proves a fresh backend ID and NULL state after disconnect without multiplexing");
 	after_disconnect.reset();
 
 	const auto counter_baseline = user_variable_counters(admin.get());
