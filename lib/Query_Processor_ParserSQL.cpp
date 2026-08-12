@@ -788,6 +788,18 @@ UserVariableQueryDecision mysql_user_variable_query_disposition(
     return {UserVariableQueryDisposition::UNSAFE_FALLBACK, true, false};
 }
 
+UserVariableQueryDecision mysql_user_variable_raw_query_disposition(
+    const char* query, size_t query_length,
+    bool must_classify_and_sync, bool plain_text_com_query,
+    bool supported_user_variable_set, bool digest_available)
+{
+    // Digest availability controls legacy statistics, not raw-query UDV policy.
+    (void)digest_available;
+    return mysql_user_variable_query_disposition(
+        query, query_length, must_classify_and_sync,
+        plain_text_com_query, supported_user_variable_set);
+}
+
 bool mysql_user_variable_is_replay_context_name(
     const char* variable, size_t variable_length)
 {
@@ -814,23 +826,75 @@ bool mysql_user_variable_unsafe_query_locks_hostgroup(
     return query_rule_multiplex == -1 && !already_locked;
 }
 
-static std::string replay_context_target_name(const AstNode* target) {
+bool mysql_user_variable_backend_result_requires_binding(
+    bool backend_success, bool unsafe_fallback,
+    bool replay_context_change, int query_rule_multiplex)
+{
+    // A successful unsafe/context-changing query makes the selected backend
+    // authoritative even when a query rule explicitly controls multiplexing.
+    (void)query_rule_multiplex;
+    return backend_success && (unsafe_fallback || replay_context_change);
+}
+
+bool mysql_user_variable_fallback_uses_qpo_epilogue(
+    bool unsafe_fallback, bool replay_context_change)
+{
+    return unsafe_fallback || replay_context_change;
+}
+
+bool parsersql_is_set_statement_candidate_mysql(
+    const char* query, size_t query_length)
+{
+    if (!query) return false;
+    const auto result = tl_mysql_parser.parse(query, query_length);
+    const bool is_set = result.stmt_type == StmtType::SET;
+    tl_mysql_parser.reset();
+    return is_set;
+}
+
+struct ReplayContextTarget {
+    std::string name;
+    bool affects_session { false };
+};
+
+static bool is_scope(const std::string& value, const char* scope) {
+    const size_t scope_length = std::strlen(scope);
+    return value.size() == scope_length &&
+        strncasecmp(value.data(), scope, scope_length) == 0;
+}
+
+static ReplayContextTarget replay_context_target(const AstNode* target) {
     if (!target || target->type != NodeType::NODE_VAR_TARGET) return {};
 
-    const AstNode* name_node = nullptr;
+    std::vector<std::string> identifiers;
     for (const AstNode* child = target->first_child; child;
          child = child->next_sibling) {
         if (child->type == NodeType::NODE_USER_VARIABLE) return {};
-        if (child->type == NodeType::NODE_IDENTIFIER) name_node = child;
+        if (child->type == NodeType::NODE_IDENTIFIER &&
+            child->value_ptr && child->value_len != 0) {
+            identifiers.emplace_back(child->value_ptr, child->value_len);
+        }
     }
-    if (!name_node || !name_node->value_ptr || name_node->value_len == 0) return {};
+    if (identifiers.empty()) return {};
 
-    std::string name(name_node->value_ptr, name_node->value_len);
+    bool affects_session = true;
+    std::string name = identifiers.back();
+    if (identifiers.size() > 1) {
+        const std::string& scope = identifiers.front();
+        affects_session = is_scope(scope, "SESSION") || is_scope(scope, "LOCAL");
+    } else if (name.size() > 2 && name[0] == '@' && name[1] == '@') {
+        const size_t dot = name.find('.', 2);
+        if (dot != std::string::npos) {
+            const std::string scope = name.substr(2, dot - 2);
+            affects_session = is_scope(scope, "SESSION") || is_scope(scope, "LOCAL");
+        }
+    }
+
     if (!name.empty() && name[0] == '@' &&
         (name.size() == 1 || name[1] != '@')) {
         return {};
     }
-    return normalize_set_var_name(std::move(name));
+    return {normalize_set_var_name(std::move(name)), affects_session};
 }
 
 bool parsersql_set_changes_user_variable_replay_context_mysql(
@@ -854,8 +918,9 @@ bool parsersql_set_changes_user_variable_replay_context_mysql(
             break;
         }
         if (child->type != NodeType::NODE_VAR_ASSIGNMENT) continue;
-        const std::string name = replay_context_target_name(child->first_child);
-        if (mysql_user_variable_is_replay_context_name(name.data(), name.size())) {
+        const ReplayContextTarget target = replay_context_target(child->first_child);
+        if (target.affects_session && mysql_user_variable_is_replay_context_name(
+            target.name.data(), target.name.size())) {
             changes_context = true;
             break;
         }

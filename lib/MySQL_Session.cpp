@@ -727,6 +727,7 @@ MySQL_Session::MySQL_Session() {
 void MySQL_Session::reset() {
 	pending_user_variable_set.reset();
 	current_query_user_variable_safe = false;
+	current_query_user_variable_unsafe_fallback = false;
 	current_query_user_variable_context_change = false;
 	user_variable_tracking_latched = false;
 	user_variable_backend_authoritative = false;
@@ -3718,6 +3719,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 			{
 				pending_user_variable_set.reset();
 				current_query_user_variable_safe = false;
+				current_query_user_variable_unsafe_fallback = false;
 				current_query_user_variable_context_change = false;
 				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, mysql_errno(myconn->mysql));
 				/*
@@ -5899,19 +5901,23 @@ void MySQL_Session::handler_rc0_Process_Variables(MySQL_Connection *myconn) {
 	if(myconn->get_variables(var_map)) {
 		std::string variable;
 		std::string value;
+		if (client_myds && client_myds->myconn &&
+			client_myds->myconn->user_variables.size() != 0) {
+			for (const auto& entry : var_map) {
+				if (mysql_user_variable_is_replay_context_name(
+					entry.first.data(), entry.first.size())) {
+					myconn->set_status(true, STATUS_MYSQL_CONNECTION_USER_VARIABLE);
+					user_variable_backend_authoritative = true;
+					break;
+				}
+			}
+		}
 
 		for (int idx = 0 ; idx < SQL_NAME_LAST_HIGH_WM ; idx++) {
 			variable = mysql_tracked_variables[idx].set_variable_name;
 
 			auto itr = var_map.find(variable);
 			if(itr != var_map.end()) {
-				if (client_myds && client_myds->myconn &&
-					client_myds->myconn->user_variables.size() != 0 &&
-					mysql_user_variable_is_replay_context_name(
-						variable.data(), variable.size())) {
-					myconn->set_status(true, STATUS_MYSQL_CONNECTION_USER_VARIABLE);
-					user_variable_backend_authoritative = true;
-				}
 				value = itr->second;
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p, backend=%p. Notification for session_track_system_variables: variable=%s, value=%s\n", this, this->mybe, variable.c_str(), value.c_str());
 
@@ -6272,6 +6278,7 @@ handler_again:
 								assignments.size();
 						} else {
 							current_query_user_variable_safe = false;
+							user_variable_backend_authoritative = true;
 							thread->status_variables.stvar[st_var_user_variable_fallback_limits]++;
 							proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,
 								"User-variable SET tracking fallback reason=RESOURCE_LIMIT\n");
@@ -6286,7 +6293,11 @@ handler_again:
 						pending_user_variable_set.reset();
 					}
 					if (status == PROCESSING_QUERY &&
-						current_query_user_variable_context_change) {
+						mysql_user_variable_backend_result_requires_binding(
+							true,
+							current_query_user_variable_unsafe_fallback,
+							current_query_user_variable_context_change,
+							qpo ? qpo->multiplex : -1)) {
 						myconn->set_status(true, STATUS_MYSQL_CONNECTION_USER_VARIABLE);
 						user_variable_backend_authoritative = true;
 					}
@@ -6370,6 +6381,7 @@ handler_again:
 					if (rc==-1) {
 						pending_user_variable_set.reset();
 						current_query_user_variable_safe = false;
+						current_query_user_variable_unsafe_fallback = false;
 						current_query_user_variable_context_change = false;
 						// the query failed
 						int myerr=mysql_errno(myconn->mysql);
@@ -7321,6 +7333,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	unsigned char command_type=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
 	pending_user_variable_set.reset();
 	current_query_user_variable_safe = false;
+	current_query_user_variable_unsafe_fallback = false;
 	current_query_user_variable_context_change = false;
 
 	// The "GENAI:" / "LLM:" query-prefix escape hatches were removed in
@@ -7416,6 +7429,106 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	}
 
 	reset_warning_hostgroup_flag_and_release_connection();
+	{
+	const bool plain_text_com_query = command_type == _MYSQL_COM_QUERY &&
+		prepare_stmt_type == ps_type_not_set;
+	const char* raw_query = (const char*)CurrentQuery.QueryPointer;
+	const bool digest_available = CurrentQuery.QueryParserArgs.digest_text != NULL;
+	const bool raw_query_has_at = raw_query &&
+		memchr(raw_query, '@', CurrentQuery.QueryLength) != NULL;
+
+	// User-variable semantics are derived from the raw query and ParserSQL,
+	// independently of whether digest/statistics generation is enabled.
+	const bool accepts_new_udv_assignments = plain_text_com_query &&
+		accepts_new_user_variable_assignments();
+	const bool parsersql_set_candidate =
+		accepts_new_udv_assignments && raw_query_has_at &&
+		parsersql_is_set_statement_candidate_mysql(
+			raw_query, CurrentQuery.QueryLength);
+	if (parsersql_set_candidate) {
+		UserVariableSetAnalysis analysis = parsersql_analyze_user_variable_set_mysql(
+			raw_query, CurrentQuery.QueryLength);
+		switch (analysis.status) {
+			case UserVariableSetStatus::SUPPORTED: {
+				MySQL_User_Variable_State staged;
+				const MySQL_User_Variable_Apply_Result apply_result =
+					client_myds->myconn->user_variables.stage(analysis.assignments, staged);
+				if (mysql_user_variable_set_uses_qpo_epilogue(
+					analysis.status, apply_result)) {
+					pending_user_variable_set = std::move(analysis);
+					current_query_user_variable_safe = true;
+					goto __exit_set_destination_hostgroup;
+				}
+				thread->status_variables.stvar[st_var_user_variable_fallback_limits]++;
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,
+					"User-variable SET tracking fallback reason=RESOURCE_LIMIT\n");
+				current_query_user_variable_unsafe_fallback = true;
+				unable_to_parse_set_statement(lock_hostgroup);
+				if (mysql_user_variable_fallback_uses_qpo_epilogue(true, false)) {
+					goto __exit_set_destination_hostgroup;
+				}
+				return false;
+			}
+			case UserVariableSetStatus::UNSUPPORTED:
+				thread->status_variables.stvar[st_var_user_variable_fallback_unsupported]++;
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,
+					"User-variable SET tracking fallback reason=UNSUPPORTED_AST\n");
+				current_query_user_variable_unsafe_fallback = true;
+				unable_to_parse_set_statement(lock_hostgroup);
+				if (mysql_user_variable_fallback_uses_qpo_epilogue(true, false)) {
+					goto __exit_set_destination_hostgroup;
+				}
+				return false;
+			case UserVariableSetStatus::PARSE_ERROR:
+				thread->status_variables.stvar[st_var_user_variable_fallback_unsupported]++;
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,
+					"User-variable SET tracking fallback reason=UNSUPPORTED_AST\n");
+				current_query_user_variable_unsafe_fallback = true;
+				unable_to_parse_set_statement(lock_hostgroup);
+				if (mysql_user_variable_fallback_uses_qpo_epilogue(true, false)) {
+					goto __exit_set_destination_hostgroup;
+				}
+				return false;
+			case UserVariableSetStatus::NOT_USER_VARIABLE_SET:
+				break;
+		}
+	}
+
+	if (plain_text_com_query && client_myds && client_myds->myconn &&
+		client_myds->myconn->user_variables.size() != 0 &&
+		parsersql_set_changes_user_variable_replay_context_mysql(
+			raw_query, CurrentQuery.QueryLength)) {
+		current_query_user_variable_context_change = true;
+		unable_to_parse_set_statement(lock_hostgroup);
+		if (mysql_user_variable_fallback_uses_qpo_epilogue(false, true)) {
+			goto __exit_set_destination_hostgroup;
+		}
+		return false;
+	}
+
+	const UserVariableQueryDecision user_variable_decision =
+		mysql_user_variable_raw_query_disposition(
+			raw_query, CurrentQuery.QueryLength,
+			must_classify_and_sync_user_variables(),
+			plain_text_com_query,
+			pending_user_variable_set.has_value(),
+			digest_available);
+	if (user_variable_decision.disposition == UserVariableQueryDisposition::SAFE) {
+		current_query_user_variable_safe =
+			user_variable_decision.legacy_udv_status_safe;
+	} else if (user_variable_decision.disposition ==
+		UserVariableQueryDisposition::UNSAFE_FALLBACK) {
+		current_query_user_variable_unsafe_fallback = true;
+		if (mysql_user_variable_unsafe_query_locks_hostgroup(
+			qpo->multiplex, locked_on_hostgroup >= 0)) {
+			*lock_hostgroup = true;
+		}
+		if (mysql_user_variable_fallback_uses_qpo_epilogue(true, false)) {
+			goto __exit_set_destination_hostgroup;
+		}
+		return false;
+	}
+	}
 
 	// handle here #509, #815 and #816
 	if (CurrentQuery.QueryParserArgs.digest_text) {
@@ -7433,73 +7546,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				!parser_prerequisite_available) {
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,
 					"User-variable SET tracking unavailable reason=PARSER_PREREQUISITE_MISSING\n");
-			}
-
-			if (plain_text_com_query && accepts_new_user_variable_assignments()) {
-				UserVariableSetAnalysis analysis = parsersql_analyze_user_variable_set_mysql(
-					(const char *)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
-				switch (analysis.status) {
-					case UserVariableSetStatus::SUPPORTED: {
-						MySQL_User_Variable_State staged;
-						const MySQL_User_Variable_Apply_Result apply_result =
-							client_myds->myconn->user_variables.stage(analysis.assignments, staged);
-						if (mysql_user_variable_set_uses_qpo_epilogue(
-							analysis.status, apply_result)) {
-							pending_user_variable_set = std::move(analysis);
-							current_query_user_variable_safe = true;
-							goto __exit_set_destination_hostgroup;
-						}
-						thread->status_variables.stvar[st_var_user_variable_fallback_limits]++;
-						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,
-							"User-variable SET tracking fallback reason=RESOURCE_LIMIT\n");
-						user_variable_backend_authoritative = true;
-						unable_to_parse_set_statement(lock_hostgroup);
-						return false;
-					}
-					case UserVariableSetStatus::UNSUPPORTED:
-					case UserVariableSetStatus::PARSE_ERROR:
-						thread->status_variables.stvar[st_var_user_variable_fallback_unsupported]++;
-						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,
-							"User-variable SET tracking fallback reason=UNSUPPORTED_AST\n");
-						user_variable_backend_authoritative = true;
-						unable_to_parse_set_statement(lock_hostgroup);
-						return false;
-					case UserVariableSetStatus::NOT_USER_VARIABLE_SET:
-						break;
-				}
-			}
-
-			if (plain_text_com_query && client_myds && client_myds->myconn &&
-				client_myds->myconn->user_variables.size() != 0 &&
-				parsersql_set_changes_user_variable_replay_context_mysql(
-					(const char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength)) {
-				current_query_user_variable_context_change = true;
-				user_variable_backend_authoritative = true;
-				unable_to_parse_set_statement(lock_hostgroup);
-				return false;
-			}
-		}
-
-		const UserVariableQueryDecision user_variable_decision =
-			mysql_user_variable_query_disposition(
-				(const char*)CurrentQuery.QueryPointer,
-				CurrentQuery.QueryLength,
-				must_classify_and_sync_user_variables(),
-				plain_text_com_query,
-				pending_user_variable_set.has_value());
-		if (user_variable_decision.disposition == UserVariableQueryDisposition::SAFE) {
-			current_query_user_variable_safe =
-				user_variable_decision.legacy_udv_status_safe;
-		} else if (user_variable_decision.disposition ==
-			UserVariableQueryDisposition::UNSAFE_FALLBACK) {
-			user_variable_backend_authoritative = true;
-			if (strncasecmp(dig,(char *)"SET ",4)==0) {
-				unable_to_parse_set_statement(lock_hostgroup);
-				return false;
-			}
-			if (mysql_user_variable_unsafe_query_locks_hostgroup(
-				qpo->multiplex, locked_on_hostgroup >= 0)) {
-				*lock_hostgroup = true;
 			}
 		}
 		if ((locked_on_hostgroup == -1) && (strncasecmp(dig,(char *)"SET ",4)==0)) {
@@ -9218,6 +9264,7 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds,const unsigned int myerrn
 		myds->myconn->ProcessQueryAndSetStatusFlags(qdt, current_query_user_variable_safe);
 	}
 	current_query_user_variable_safe = false;
+	current_query_user_variable_unsafe_fallback = false;
 	current_query_user_variable_context_change = false;
 	pending_user_variable_set.reset();
 
@@ -9615,8 +9662,10 @@ bool MySQL_Session::known_query_for_locked_on_hostgroup(uint64_t digest) {
 void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
 	// we couldn't parse the query
 	string query_str = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
-	string digest_str = string(CurrentQuery.get_digest_text());
-	string& nqn = ( mysql_thread___parse_failure_logs_digest == true ? digest_str : query_str );
+	const char* digest_text = CurrentQuery.get_digest_text();
+	string digest_str = digest_text ? string(digest_text) : string();
+	string& nqn = (mysql_thread___parse_failure_logs_digest && digest_text ?
+		digest_str : query_str);
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", query_str.c_str());
 	if (qpo->multiplex == -1) {
 		// we have no rule about this SET statement. We set hostgroup locking

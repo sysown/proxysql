@@ -427,6 +427,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	size_t user_variable_replay_batch_index { 0 };
 	std::optional<UserVariableSetAnalysis> pending_user_variable_set;
 	bool current_query_user_variable_safe { false };
+	bool current_query_user_variable_unsafe_fallback { false };
 	bool current_query_user_variable_context_change { false };
 	bool user_variable_tracking_latched { false };
 	bool user_variable_backend_authoritative { false };

@@ -692,13 +692,66 @@ static void test_user_variable_runtime_drain_policy() {
 		"unsafe UDV fallback preserves query-rule multiplex=1 semantics");
 }
 
+static void test_user_variable_digest_independent_runtime_policy() {
+	auto d = mysql_user_variable_raw_query_disposition(
+		"SELECT @x", str_view_len("SELECT @x"), true, true, false, false);
+	ok(d.disposition == UserVariableQueryDisposition::SAFE && d.parsersql_called,
+		"raw UDV reads are classified when digest text is unavailable");
+	d = mysql_user_variable_raw_query_disposition(
+		"SELECT @x:=1", str_view_len("SELECT @x:=1"), true, true, false, false);
+	ok(d.disposition == UserVariableQueryDisposition::UNSAFE_FALLBACK &&
+		d.parsersql_called,
+		"raw unsafe UDV use falls back when digest text is unavailable");
+	d = mysql_user_variable_raw_query_disposition(
+		"SET @x=1", str_view_len("SET @x=1"), true, true, true, false);
+	ok(d.disposition == UserVariableQueryDisposition::SUPPORTED_SET &&
+		!d.parsersql_called,
+		"raw supported SET retains the Task 8 path without digest text");
+
+	for (int multiplex : {-1, 0, 1}) {
+		ok(mysql_user_variable_backend_result_requires_binding(
+			true, true, false, multiplex),
+			"successful unsafe fallback binds independently of qpo multiplex=%d",
+			multiplex);
+		ok(mysql_user_variable_backend_result_requires_binding(
+			true, false, true, multiplex),
+			"successful replay-context change binds independently of qpo multiplex=%d",
+			multiplex);
+	}
+	ok(!mysql_user_variable_backend_result_requires_binding(
+		true, false, false, -1),
+		"successful query without unsafe/context intent does not bind");
+	ok(!mysql_user_variable_backend_result_requires_binding(
+		false, true, true, 1),
+		"backend error clears unsafe/context intent without binding");
+
+	ok(!parsersql_is_set_statement_candidate_mysql(
+		"SELECT @x; SELECT 1", str_view_len("SELECT @x; SELECT 1")),
+		"partial non-SET UDV input does not enter SET fallback accounting");
+	ok(parsersql_is_set_statement_candidate_mysql(
+		"SET @x=", str_view_len("SET @x=")),
+		"partial SET UDV input retains SET fallback accounting and logging");
+	ok(parsersql_is_set_statement_candidate_mysql(
+		"SET @x=1", str_view_len("SET @x=1")),
+		"full-input SET is a ParserSQL SET candidate");
+	ok(mysql_user_variable_fallback_uses_qpo_epilogue(true, false),
+		"forwarded unsafe fallback uses the normal qpo epilogue");
+	ok(mysql_user_variable_fallback_uses_qpo_epilogue(false, true),
+		"forwarded replay-context change uses the normal qpo epilogue");
+}
+
 static void test_user_variable_replay_context() {
 	const char* context_queries[] = {
 		"SET sql_mode='NO_BACKSLASH_ESCAPES'",
+		"SET `SQL_MODE`='TRADITIONAL'",
+		"SET SESSION sql_mode='TRADITIONAL'",
+		"SET LOCAL character_set_client=utf8mb4",
 		"SET @@SESSION.sql_mode='TRADITIONAL'",
+		"SET @@local.character_set_client=utf8mb4",
+		"SET @@character_set_connection=utf8mb4",
 		"SET character_set_client=utf8mb4",
 		"SET character_set_connection=utf8mb4",
-		"SET collation_connection=utf8mb4_bin",
+		"SET SESSION `collation_connection`=utf8mb4_bin",
 		"SET NAMES utf8mb4 COLLATE utf8mb4_bin",
 		"SET CHARACTER SET utf8mb4",
 	};
@@ -712,6 +765,10 @@ static void test_user_variable_replay_context() {
 		"SET sql_mode='x'; SELECT 1",
 		"SET sql_mode=",
 		"SELECT 'SET NAMES utf8mb4'",
+		"SET GLOBAL sql_mode='TRADITIONAL'",
+		"SET PERSIST character_set_client=utf8mb4",
+		"SET PERSIST_ONLY character_set_connection=utf8mb4",
+		"SET @@GLOBAL.collation_connection=utf8mb4_bin",
 	};
 	for (const char* query : non_context_queries) {
 		ok(!parsersql_set_changes_user_variable_replay_context_mysql(
@@ -733,10 +790,13 @@ static void test_user_variable_replay_context() {
 	ok(!mysql_user_variable_is_replay_context_name(
 		"user_variable", str_view_len("user_variable")),
 		"session tracking does not infer hidden UDV writes");
+	ok(mysql_user_variable_is_replay_context_name(
+		"SQL_MODE", str_view_len("SQL_MODE")),
+		"session tracking matches canonical context keys case-insensitively");
 }
 
 int main() {
-	plan(173);
+	plan(199);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -801,6 +861,7 @@ int main() {
 	test_user_variable_post_ok_atomic_commit();
 	test_user_variable_query_disposition();
 	test_user_variable_runtime_drain_policy();
+	test_user_variable_digest_independent_runtime_policy();
 	test_user_variable_replay_context();
 
 	test_cleanup_minimal();
