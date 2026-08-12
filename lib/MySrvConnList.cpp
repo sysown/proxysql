@@ -121,6 +121,12 @@ void MySrvConnList::get_random_MyConn_inner_search(unsigned int start, unsigned 
 	unsigned int k;
 	for (k = start;  k < end; k++) {
 		conn = (MySQL_Connection *)conns->index(k);
+		// A candidate from another auth mode is not usable, but may belong to
+		// another backend user whose policy did not change. Leave it idle for
+		// that identity instead of turning this checkout into cross-user churn.
+		if (conn->backend_auth_type() != requested_type) continue;
+		if (requested_type == MySQLBackendAuthType::AWS_IAM &&
+			conn->requires_CHANGE_USER(client_conn, requested_type)) continue;
 		if (conn->match_tracked_options(client_conn)) {
 			if (connection_quality_level == 0) {
 				// this is our best candidate so far
@@ -207,10 +213,16 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(
 		for (unsigned int candidate_idx = 0; candidate_idx < l;) {
 			MySQL_Connection *candidate =
 				(MySQL_Connection *)conns->index(candidate_idx);
+			const char *candidate_username =
+				candidate->userinfo != nullptr ? candidate->userinfo->username : nullptr;
+			const char *requested_username = client_conn->userinfo->username;
+			const bool same_username = candidate_username != nullptr &&
+				requested_username != nullptr &&
+				strcmp(candidate_username, requested_username) == 0;
 			const bool wrong_mode =
-				candidate->backend_auth_type() != requested_type;
+				same_username && candidate->backend_auth_type() != requested_type;
 			const bool iam_requires_reset =
-				requested_type == MySQLBackendAuthType::AWS_IAM &&
+				same_username && requested_type == MySQLBackendAuthType::AWS_IAM &&
 				candidate->requires_CHANGE_USER(client_conn, requested_type);
 			if (wrong_mode || iam_requires_reset) {
 				conns->remove_index_fast(candidate_idx);

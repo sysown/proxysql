@@ -35,6 +35,8 @@ using json = nlohmann::json;
 
 using std::function;
 
+extern MySQL_Authentication *GloMyAuth;
+
 
 #define SAFE_SQLITE3_STEP(_stmt) do {\
   do {\
@@ -152,7 +154,14 @@ void * HGCU_thread_run() {
 		}
 		for (unsigned int i = 0; i < conn_array->len;) {
 			myconn = (MySQL_Connection *)conn_array->index(i);
-			if (myconn->backend_auth_type() == MySQLBackendAuthType::AWS_IAM) {
+			const char *backend_username = myconn->userinfo != nullptr
+				? myconn->userinfo->username : nullptr;
+			const MySQLBackendAuthPolicy policy = GloMyAuth != nullptr
+				? resolve_mysql_backend_auth_policy(*GloMyAuth, backend_username)
+				: MySQLBackendAuthPolicy {};
+			if (myconn->backend_auth_type() == MySQLBackendAuthType::AWS_IAM ||
+				(GloMyAuth != nullptr &&
+				 policy.type != MySQLBackendAuthType::PASSWORD)) {
 				conn_array->remove_index_fast(i);
 				myconn->send_quit = false;
 				MyHGM->destroy_MyConn_from_pool(myconn);

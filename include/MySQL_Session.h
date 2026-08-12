@@ -244,6 +244,8 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	int handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT();
 	void fail_aws_iam_backend(const char *failure_code,
 		const AwsIamRedactedFailure *provider_failure = nullptr);
+	void fail_invalid_backend_auth_policy(MySQL_Data_Stream *backend,
+		const char *database_user, const char *failure_code);
 	bool handler_again___status_SHOW_WARNINGS(MySQL_Data_Stream *, bool);
 	void handler_again___new_thread_to_kill_connection();
 	void handler_KillConnectionIfNeeded();

@@ -163,7 +163,7 @@ extern MySQL_STMT_Manager_v14 *GloMyStmt;
 
 extern SQLite3_Server *GloSQLite3Server;
 
-static MySQLBackendAuthType resolved_backend_auth_type_for_session(
+static MySQLBackendAuthPolicy resolved_backend_auth_policy_for_session(
 	const MySQL_Session *session)
 {
 	const char *backend_username =
@@ -177,9 +177,10 @@ static MySQLBackendAuthType resolved_backend_auth_type_for_session(
 		session->passthrough_credential && backend_username != nullptr &&
 		backend_username[0] != '\0' &&
 		policy.failure_code == "backend_user_not_found") {
-		return MySQLBackendAuthType::PASSWORD;
+		policy.type = MySQLBackendAuthType::PASSWORD;
+		policy.failure_code.clear();
 	}
-	return policy.type;
+	return policy;
 }
 
 #ifdef PROXYSQLCLICKHOUSE
@@ -736,6 +737,32 @@ void MySQL_Session::fail_aws_iam_backend(
 	// RequestEnd deliberately leaves fast-forward sessions in their current
 	// state. Make every IAM failure terminal explicitly, matching the existing
 	// CONNECTING_SERVER failure disposition and preventing waiter re-entry.
+	set_status(WAITING_CLIENT_DATA);
+}
+
+void MySQL_Session::fail_invalid_backend_auth_policy(
+	MySQL_Data_Stream *backend, const char *database_user,
+	const char *failure_code)
+{
+	proxy_error(
+		"Invalid backend authentication policy user='%s' hostgroup=%d category='%s'\n",
+		database_user != nullptr ? database_user : "", current_hostgroup,
+		failure_code != nullptr ? failure_code : "invalid_policy");
+
+	static const char generic_error[] = "Unable to connect to backend";
+	if (client_myds != nullptr) {
+		client_myds->setDSS_STATE_QUERY_SENT_NET();
+		client_myds->myprot.generate_pkt_ERR(
+			true, NULL, NULL, client_myds->pkt_sid + 1, 9002,
+			(char *)"HY000", generic_error, true);
+		client_myds->pkt_sid++;
+	}
+	RequestEnd(backend, 9002, generic_error);
+	while (!previous_status.empty()) previous_status.pop();
+	if (backend != nullptr && backend->myconn != nullptr) {
+		backend->destroy_MySQL_Connection_From_Pool(false);
+	}
+	if (backend != nullptr) backend->max_connect_time = 0;
 	set_status(WAITING_CLIENT_DATA);
 }
 
@@ -2318,11 +2345,17 @@ int MySQL_Session::handler_again___status_RESETTING_CONNECTION() {
 	if (myds->mypolls==NULL) {
 		thread->mypolls.add(POLLIN|POLLOUT, myds->fd, myds, thread->curtime);
 	}
-	if (myconn->backend_auth_type() == MySQLBackendAuthType::AWS_IAM) {
+	const char *backend_username = myconn->userinfo != nullptr
+		? myconn->userinfo->username : nullptr;
+	const MySQLBackendAuthPolicy policy =
+		resolve_mysql_backend_auth_policy(*GloMyAuth, backend_username);
+	if (myconn->backend_auth_type() == MySQLBackendAuthType::AWS_IAM ||
+		policy.type != MySQLBackendAuthType::PASSWORD) {
 		myds->destroy_MySQL_Connection_From_Pool(false);
 		myds->fd = 0;
 		delete mybe->server_myds;
 		mybe->server_myds = NULL;
+		while (!previous_status.empty()) previous_status.pop();
 		set_status(session_status___NONE);
 		return -1;
 	}
@@ -2853,6 +2886,14 @@ bool MySQL_Session::handler_again___verify_backend_autocommit() {
 
 bool MySQL_Session::handler_again___verify_backend_user_schema() {
 	MySQL_Data_Stream *myds=mybe->server_myds;
+	const MySQLBackendAuthPolicy requested_policy =
+		resolved_backend_auth_policy_for_session(this);
+	if (requested_policy.type == MySQLBackendAuthType::INVALID) {
+		fail_invalid_backend_auth_policy(
+			myds, requested_policy.database_user.c_str(),
+			requested_policy.failure_code.c_str());
+		return true;
+	}
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->userinfo->username, mybe->server_myds->myconn->userinfo->username);
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->userinfo->schemaname, mybe->server_myds->myconn->userinfo->schemaname);
 	if (client_myds->myconn->userinfo->hash!=mybe->server_myds->myconn->userinfo->hash) {
@@ -2869,8 +2910,7 @@ bool MySQL_Session::handler_again___verify_backend_user_schema() {
 		}
 	}
 	// if we reach here, the username is the same
-	const MySQLBackendAuthType requested_type =
-		resolved_backend_auth_type_for_session(this);
+	const MySQLBackendAuthType requested_type = requested_policy.type;
 	if (myds->myconn->requires_CHANGE_USER(
 		client_myds->myconn, requested_type)) {
 		// if we reach here, even if the username is the same,
@@ -4013,8 +4053,15 @@ bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 	if (myds->mypolls==NULL) {
 		thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
 	}
-	const MySQLBackendAuthType requested_type =
-		resolved_backend_auth_type_for_session(this);
+	const MySQLBackendAuthPolicy requested_policy =
+		resolved_backend_auth_policy_for_session(this);
+	const MySQLBackendAuthType requested_type = requested_policy.type;
+	if (requested_type == MySQLBackendAuthType::INVALID) {
+		fail_invalid_backend_auth_policy(
+			myds, requested_policy.database_user.c_str(),
+			requested_policy.failure_code.c_str());
+		NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
+	}
 	if (myconn->backend_auth_type() == MySQLBackendAuthType::AWS_IAM ||
 		requested_type == MySQLBackendAuthType::AWS_IAM) {
 		myds->destroy_MySQL_Connection_From_Pool(false);

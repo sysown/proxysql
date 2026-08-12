@@ -27,6 +27,7 @@ namespace {
 
 constexpr const char *kUser = "pool_user";
 constexpr const char *kOtherUser = "other_pool_user";
+constexpr const char *kInvalidReloadUser = "invalid_reload_pool_user";
 constexpr const char *kSchema = "pool_schema";
 
 std::atomic<unsigned int> change_user_calls { 0 };
@@ -93,6 +94,7 @@ public:
 		frontend_stream->init(MYDS_FRONTEND, session, -1);
 		frontend = new MySQL_Connection();
 		frontend_stream->attach_connection(frontend);
+		frontend_stream->myprot.init(&frontend_stream, frontend->userinfo, session);
 		session->client_myds = frontend_stream;
 		frontend->userinfo->set(
 			const_cast<char *>(username), const_cast<char *>("password"),
@@ -216,6 +218,193 @@ void test_runtime_mode_change_local(MySQL_Thread& worker) {
 	if (selected != nullptr) destroy_used(selected);
 }
 
+void test_mixed_user_mode_global(MySQL_Thread& worker) {
+	MySrvC *password_server = create_server(809, "mixed-global-password");
+	SessionFixture password_request(
+		worker, 809, MySQLBackendAuthType::PASSWORD, kUser);
+	MySQL_Connection *unrelated_iam = create_established_connection(
+		password_server, kOtherUser, MySQLBackendAuthType::AWS_IAM);
+	unrelated_iam->fd = 201;
+	MySQL_Connection *exact_password = create_established_connection(
+		password_server, kUser, MySQLBackendAuthType::PASSWORD);
+	exact_password->fd = 202;
+	password_server->ConnectionsFree->add(unrelated_iam);
+	password_server->ConnectionsFree->add(exact_password);
+	MySQL_Connection *selected = MyHGM->get_MyConn_from_pool(
+		809, password_request.session, false, nullptr, 0, -1,
+		MySQLBackendAuthType::PASSWORD);
+	ok(selected != nullptr && selected->fd == 202 &&
+		password_server->ConnectionsFree->conns_length() == 1,
+		"PASSWORD checkout preserves another user's idle IAM connection globally");
+	destroy_used(selected);
+
+	SessionFixture iam_request(
+		worker, 809, MySQLBackendAuthType::AWS_IAM, kOtherUser);
+	selected = MyHGM->get_MyConn_from_pool(
+		809, iam_request.session, false, nullptr, 0, -1,
+		MySQLBackendAuthType::AWS_IAM);
+	ok(selected != nullptr && selected->fd == 201,
+		"unrelated global IAM entry remains reusable by its exact identity");
+	destroy_used(selected);
+
+	MySrvC *iam_server = create_server(810, "mixed-global-iam");
+	SessionFixture exact_iam_request(
+		worker, 810, MySQLBackendAuthType::AWS_IAM, kUser);
+	MySQL_Connection *unrelated_password = create_established_connection(
+		iam_server, kOtherUser, MySQLBackendAuthType::PASSWORD);
+	unrelated_password->fd = 211;
+	MySQL_Connection *exact_iam = create_established_connection(
+		iam_server, kUser, MySQLBackendAuthType::AWS_IAM);
+	exact_iam->fd = 212;
+	iam_server->ConnectionsFree->add(unrelated_password);
+	iam_server->ConnectionsFree->add(exact_iam);
+	selected = MyHGM->get_MyConn_from_pool(
+		810, exact_iam_request.session, false, nullptr, 0, -1,
+		MySQLBackendAuthType::AWS_IAM);
+	ok(selected != nullptr && selected->fd == 212 &&
+		iam_server->ConnectionsFree->conns_length() == 1,
+		"IAM checkout preserves another user's idle PASSWORD connection globally");
+	destroy_used(selected);
+
+	SessionFixture unrelated_password_request(
+		worker, 810, MySQLBackendAuthType::PASSWORD, kOtherUser);
+	selected = MyHGM->get_MyConn_from_pool(
+		810, unrelated_password_request.session, false, nullptr, 0, -1,
+		MySQLBackendAuthType::PASSWORD);
+	ok(selected != nullptr && selected->fd == 211,
+		"unrelated global PASSWORD entry remains reusable by its exact identity");
+	destroy_used(selected);
+}
+
+void test_mixed_user_mode_local(MySQL_Thread& worker) {
+	MySrvC *password_server = create_server(811, "mixed-local-password");
+	SessionFixture password_request(
+		worker, 811, MySQLBackendAuthType::PASSWORD, kUser);
+	MySQL_Connection *unrelated_iam = create_established_connection(
+		password_server, kOtherUser, MySQLBackendAuthType::AWS_IAM);
+	unrelated_iam->fd = 301;
+	MySQL_Connection *exact_password = create_established_connection(
+		password_server, kUser, MySQLBackendAuthType::PASSWORD);
+	exact_password->fd = 302;
+	password_server->ConnectionsUsed->add(unrelated_iam);
+	password_server->ConnectionsUsed->add(exact_password);
+	worker.push_MyConn_local(unrelated_iam);
+	worker.push_MyConn_local(exact_password);
+	MySQL_Connection *selected = worker.get_MyConn_local(
+		811, password_request.session, nullptr, 0, -1,
+		MySQLBackendAuthType::PASSWORD);
+	ok(selected != nullptr && selected->fd == 302,
+		"local PASSWORD checkout selects its exact identity in a mixed-mode cache");
+	destroy_used(selected);
+
+	SessionFixture iam_request(
+		worker, 811, MySQLBackendAuthType::AWS_IAM, kOtherUser);
+	selected = worker.get_MyConn_local(
+		811, iam_request.session, nullptr, 0, -1,
+		MySQLBackendAuthType::AWS_IAM);
+	ok(selected != nullptr && selected->fd == 301,
+		"local PASSWORD checkout preserves another user's reusable IAM entry");
+	destroy_used(selected);
+
+	MySrvC *iam_server = create_server(812, "mixed-local-iam");
+	SessionFixture exact_iam_request(
+		worker, 812, MySQLBackendAuthType::AWS_IAM, kUser);
+	MySQL_Connection *unrelated_password = create_established_connection(
+		iam_server, kOtherUser, MySQLBackendAuthType::PASSWORD);
+	unrelated_password->fd = 311;
+	MySQL_Connection *exact_iam = create_established_connection(
+		iam_server, kUser, MySQLBackendAuthType::AWS_IAM);
+	exact_iam->fd = 312;
+	iam_server->ConnectionsUsed->add(unrelated_password);
+	iam_server->ConnectionsUsed->add(exact_iam);
+	worker.push_MyConn_local(unrelated_password);
+	worker.push_MyConn_local(exact_iam);
+	selected = worker.get_MyConn_local(
+		812, exact_iam_request.session, nullptr, 0, -1,
+		MySQLBackendAuthType::AWS_IAM);
+	ok(selected != nullptr && selected->fd == 312,
+		"local IAM checkout selects its exact identity in a mixed-mode cache");
+	destroy_used(selected);
+
+	SessionFixture unrelated_password_request(
+		worker, 812, MySQLBackendAuthType::PASSWORD, kOtherUser);
+	selected = worker.get_MyConn_local(
+		812, unrelated_password_request.session, nullptr, 0, -1,
+		MySQLBackendAuthType::PASSWORD);
+	ok(selected != nullptr && selected->fd == 311,
+		"local IAM checkout preserves another user's reusable PASSWORD entry");
+	destroy_used(selected);
+}
+
+void load_invalid_reload_policy() {
+	if (!GloMyAuth->add(
+		const_cast<char *>(kInvalidReloadUser), const_cast<char *>("password"),
+		USERNAME_BACKEND, false, 0, const_cast<char *>(""), false, false,
+		false, 100, const_cast<char *>("{\"backend_auth\":{\"type\":17}}"),
+		const_cast<char *>(""))) {
+		BAIL_OUT("failed to load malformed backend policy fixture");
+	}
+}
+
+void test_attached_password_reload_to_invalid_fails_closed(MySQL_Thread& worker) {
+	MySrvC *server = create_server(813, "attached-invalid-policy");
+	SessionFixture fixture(
+		worker, 813, MySQLBackendAuthType::PASSWORD, kInvalidReloadUser);
+	MySQL_Connection *password = create_established_connection(
+		server, kInvalidReloadUser, MySQLBackendAuthType::PASSWORD);
+	server->ConnectionsUsed->add(password);
+	fixture.attach_backend(password);
+	fixture.session->set_status(PROCESSING_QUERY);
+	load_invalid_reload_policy();
+	change_user_calls.store(0, std::memory_order_relaxed);
+	fixture.session->to_process = 1;
+	fixture.session->handler();
+	ok(fixture.session->status == WAITING_CLIENT_DATA &&
+		fixture.selected() == nullptr && fixture.session->previous_status.empty() &&
+		server->ConnectionsUsed->conns_length() == 0 &&
+		change_user_calls.load(std::memory_order_relaxed) == 0,
+		"attached PASSWORD connection fails terminally when reload makes policy INVALID");
+}
+
+void test_invalid_policy_cannot_continue_change_user(MySQL_Thread& worker) {
+	MySrvC *server = create_server(814, "changing-user-invalid-policy");
+	SessionFixture fixture(
+		worker, 814, MySQLBackendAuthType::PASSWORD, kInvalidReloadUser);
+	MySQL_Connection *password = create_established_connection(
+		server, kInvalidReloadUser, MySQLBackendAuthType::PASSWORD);
+	server->ConnectionsUsed->add(password);
+	fixture.attach_backend(password);
+	fixture.session->previous_status.push(PROCESSING_QUERY);
+	fixture.session->set_status(CHANGING_USER_SERVER);
+	change_user_calls.store(0, std::memory_order_relaxed);
+	fixture.session->to_process = 1;
+	fixture.session->handler();
+	ok(fixture.session->status == WAITING_CLIENT_DATA &&
+		fixture.selected() == nullptr && fixture.session->previous_status.empty() &&
+		server->ConnectionsUsed->conns_length() == 0 &&
+		change_user_calls.load(std::memory_order_relaxed) == 0,
+		"INVALID policy discovered in CHANGING_USER_SERVER cannot send a password");
+}
+
+void test_invalid_policy_cannot_enter_reset(MySQL_Thread& worker) {
+	MySrvC *server = create_server(815, "reset-invalid-policy");
+	SessionFixture fixture(
+		worker, 815, MySQLBackendAuthType::PASSWORD, kInvalidReloadUser);
+	MySQL_Connection *password = create_established_connection(
+		server, kInvalidReloadUser, MySQLBackendAuthType::PASSWORD);
+	server->ConnectionsUsed->add(password);
+	fixture.attach_backend(password);
+	fixture.session->set_status(RESETTING_CONNECTION);
+	change_user_calls.store(0, std::memory_order_relaxed);
+	fixture.session->to_process = 1;
+	const int rc = fixture.session->handler();
+	ok(rc == -1 && fixture.session->status == session_status___NONE &&
+		fixture.selected() == nullptr &&
+		server->ConnectionsUsed->conns_length() == 0 &&
+		change_user_calls.load(std::memory_order_relaxed) == 0,
+		"INVALID backend policy destroys reset work without COM_CHANGE_USER");
+}
+
 void test_destroy_path_never_queues_iam() {
 	MySrvC *server = create_server(805, "destroy-iam");
 	GloMTH->variables.connpoll_reset_queue_length = 50;
@@ -262,6 +451,29 @@ void test_reset_queue_worker_never_changes_iam() {
 		removed && server->ConnectionsUsed->conns_length() == 0 &&
 		change_user_calls.load(std::memory_order_relaxed) == 0,
 		"reset queue worker destroys IAM without invoking COM_CHANGE_USER");
+}
+
+void test_reset_queue_worker_never_resets_invalid_policy() {
+	MySrvC *server = create_server(816, "reset-worker-invalid-policy");
+	MySQL_Connection *password = create_established_connection(
+		server, kInvalidReloadUser, MySQLBackendAuthType::PASSWORD);
+	server->ConnectionsUsed->add(password);
+	MyHGM->queue.add(password);
+	const unsigned long resets_before = MyHGM->status.myconnpoll_reset;
+	change_user_calls.store(0, std::memory_order_relaxed);
+	std::thread reset_worker([]() { HGCU_thread_run(); });
+	bool removed = false;
+	for (unsigned int attempt = 0; attempt < 1000 && !removed; ++attempt) {
+		MyHGM->wrlock();
+		removed = server->ConnectionsUsed->conns_length() == 0;
+		MyHGM->wrunlock();
+		if (!removed) usleep(1000);
+	}
+	MyHGM->queue.add(nullptr);
+	reset_worker.join();
+	ok(removed && MyHGM->status.myconnpoll_reset == resets_before &&
+		change_user_calls.load(std::memory_order_relaxed) == 0,
+		"reset queue worker discards INVALID policy before reset processing");
 }
 
 void test_change_user_state_replaces_iam(MySQL_Thread& worker) {
@@ -316,7 +528,7 @@ int __wrap_mysql_change_user_start(
 {
 	change_user_calls.fetch_add(1, std::memory_order_relaxed);
 	*ret = 0;
-	return 0;
+	return MYSQL_WAIT_READ;
 }
 
 int __wrap_mysql_real_connect_start(MYSQL **ret, MYSQL *, const char *,
@@ -336,7 +548,7 @@ int main() {
 	skip(1, "requires GNU ld --wrap support");
 	return exit_status();
 #else
-	plan(15);
+	plan(27);
 	if (test_init_minimal() != 0 || test_init_auth() != 0 ||
 		test_init_query_processor() != 0 ||
 		test_init_hostgroups() != 0) {
@@ -350,6 +562,10 @@ int main() {
 		!GloMyAuth->add(
 			const_cast<char *>(kOtherUser), const_cast<char *>("password"), USERNAME_BACKEND,
 			false, 0, const_cast<char *>(""), false, false, false, 100,
+			const_cast<char *>(""), const_cast<char *>("")) ||
+		!GloMyAuth->add(
+			const_cast<char *>(kInvalidReloadUser), const_cast<char *>("password"), USERNAME_BACKEND,
+			false, 0, const_cast<char *>(""), false, false, false, 100,
 			const_cast<char *>(""), const_cast<char *>(""))) {
 		BAIL_OUT("failed to load backend user fixtures");
 	}
@@ -361,8 +577,14 @@ int main() {
 		test_identity_matrix(worker);            // 7
 		test_runtime_mode_changes_global(worker); // 2
 		test_runtime_mode_change_local(worker);   // 1
+		test_mixed_user_mode_global(worker);       // 4
+		test_mixed_user_mode_local(worker);        // 4
+		test_attached_password_reload_to_invalid_fails_closed(worker); // 1
+		test_invalid_policy_cannot_continue_change_user(worker); // 1
+		test_invalid_policy_cannot_enter_reset(worker); // 1
 		test_destroy_path_never_queues_iam();     // 2
 		test_reset_queue_worker_never_changes_iam(); // 1
+		test_reset_queue_worker_never_resets_invalid_policy(); // 1
 		test_change_user_state_replaces_iam(worker); // 1
 		test_resetting_state_destroys_iam(worker);   // 1
 	}

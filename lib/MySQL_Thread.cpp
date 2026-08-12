@@ -6764,13 +6764,26 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(
 	MySQL_Connection *client_conn = sess->client_myds->myconn;
 	for (i=0; i<cached_connections->len;) {
 		c = (MySQL_Connection *) cached_connections->index(i);
+		const char *candidate_username =
+			c->userinfo != nullptr ? c->userinfo->username : nullptr;
+		const char *requested_username = client_conn->userinfo->username;
+		const bool same_username = candidate_username != nullptr &&
+			requested_username != nullptr &&
+			strcmp(candidate_username, requested_username) == 0;
 		if (c->parent->myhgc->hid == _hid &&
+			same_username &&
 			(c->backend_auth_type() != requested_type ||
 			 (requested_type == MySQLBackendAuthType::AWS_IAM &&
 			  c->requires_CHANGE_USER(client_conn, requested_type)))) {
 			cached_connections->remove_index_fast(i);
 			c->send_quit = false;
 			MyHGM->destroy_MyConn_from_pool(c);
+			continue;
+		}
+		if (c->backend_auth_type() != requested_type ||
+			(requested_type == MySQLBackendAuthType::AWS_IAM &&
+			 c->requires_CHANGE_USER(client_conn, requested_type))) {
+			++i;
 			continue;
 		}
 
