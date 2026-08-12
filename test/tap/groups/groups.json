@@ -356,6 +356,7 @@
   "test_cluster_sync-t" : [ "legacy-g5","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3","mysql84-g5","mysql90-g5","mysql95-g5" ],
   "test_cluster_sync_mysql_servers-t" : [ "legacy-g5","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3","mysql84-g5","mysql90-g5","mysql95-g5" ],
   "test_cluster_sync_pgsql-t" : [ "legacy-g5","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3" ],
+  "test_cluster_tsdb_aggregation-t" : [ "legacy-g5", "mysql84-g5", "mysql90-g5", "mysql95-g5" ],
   "test_com_binlog_dump_enables_fast_forward-t" : [ "legacy-binlog-g1","mysql84-binlog-g1","mysql90-binlog-g1","mysql95-binlog-g1" ],
   "test_com_register_slave_enables_fast_forward-t" : [ "legacy-binlog-g1","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3","mysql84-binlog-g1","mysql90-binlog-g1","mysql95-binlog-g1" ],
   "test_com_reset_connection_com_change_user-t" : [ "legacy-g3","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3","mysql84-g3","mysql90-g3","mysql95-g3" ],
@@ -507,6 +508,7 @@
   "test_warnings-t" : [ "legacy-g9","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g9","mysql90-g4","mysql95-g4" ],
   "test_wexecvp_syscall_failures-t" : [ "legacy-g9","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g9","mysql90-g4","mysql95-g4" ],
   "transaction_state_unit-t" : [ "unit-tests-g1" ],
+  "tsdb_cluster_aggregator_unit-t" : [ "unit-tests-g1" ],
   "unit-strip_schema_from_query-t" : [ "unit-tests-g1" ],
   "vector_db_performance-t" : [ "ai-g1","@proxysql_min_version:4.0" ],
   "vector_features-t" : [ "ai-g1","@proxysql_min_version:4.0" ]

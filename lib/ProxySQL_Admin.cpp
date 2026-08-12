@@ -2635,6 +2635,7 @@ __end_while_pool:
 			if (GloProxyStats->tsdb_retention_timetoget(curtime)) {
 				GloProxyStats->tsdb_retention_cleanup();
 			}
+			GloProxyStats->tsdb_cluster_aggregation_check(curtime);
 #endif
 			if (GloProxyCluster) {
 				GloProxyCluster->leader_election_tick(curtime);
