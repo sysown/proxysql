@@ -77,6 +77,11 @@ class MySQL_User_Variable_State {
 public:
 	static constexpr size_t kMaxVariables = 128;
 	static constexpr size_t kMaxStoredBytes = 64 * 1024;
+	MySQL_User_Variable_State() = default;
+	MySQL_User_Variable_State(const MySQL_User_Variable_State&) = default;
+	MySQL_User_Variable_State& operator=(const MySQL_User_Variable_State&) = default;
+	MySQL_User_Variable_State(MySQL_User_Variable_State&& other);
+	MySQL_User_Variable_State& operator=(MySQL_User_Variable_State&& other);
 
 	MySQL_User_Variable_Apply_Result stage(
 		const std::vector<UserVariableAssignment>& assignments,

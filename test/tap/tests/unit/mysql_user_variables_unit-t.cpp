@@ -3,6 +3,7 @@
 #include "MySQL_User_Variables.h"
 
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -134,13 +135,64 @@ void test_diagnostic_fingerprint() {
 		state.diagnostic_fingerprint() != first, "fingerprint changes with state");
 }
 
+void test_move_preserves_state_invariants() {
+	MySQL_User_Variable_State source;
+	const std::string max_literal(MySQL_User_Variable_State::kMaxStoredBytes - 2, 'x');
+	ok(stage_and_apply(source, { assignment("full", "@x", max_literal) }),
+		"full state stages before move");
+	MySQL_User_Variable_State destination(std::move(source));
+	ok(destination.size() == 1 &&
+		destination.stored_bytes() == MySQL_User_Variable_State::kMaxStoredBytes,
+		"move construction preserves destination entries and byte accounting");
+	ok(source.size() == 0 && source.stored_bytes() == 0,
+		"moved-from state is empty with zero stored bytes");
+	ok(stage_and_apply(source, { assignment("new", "@new", "0") }) &&
+		source.size() == 1 && source.stored_bytes() == 5,
+		"moved-from state accepts a valid new assignment");
+	MySQL_User_Variable_State assigned;
+	stage_and_apply(assigned, { assignment("old", "@old", "0") });
+	assigned = std::move(destination);
+	ok(assigned.size() == 1 &&
+		assigned.stored_bytes() == MySQL_User_Variable_State::kMaxStoredBytes &&
+		destination.size() == 0 && destination.stored_bytes() == 0,
+		"move assignment preserves destination accounting and clears its source");
+	ok(stage_and_apply(destination, { assignment("newer", "@newer", "0") }),
+		"move-assigned source accepts a valid new assignment");
+}
+
+void test_kind_and_empty_replay_edges() {
+	MySQL_User_Variable_State desired;
+	MySQL_User_Variable_State actual;
+	ok(stage_and_apply(desired, { assignment("same", "@same", "1", UserVariableLiteralKind::INTEGER, 77) }) &&
+		stage_and_apply(actual, { assignment("same", "@same", "1", UserVariableLiteralKind::DECIMAL, 77) }),
+		"kind-only mismatch states stage");
+	unsigned int not_matching = 0;
+	ok(actual.count_matches(desired, not_matching) == 0 && not_matching == 1,
+		"kind-only difference is an exact mismatch");
+	ok(actual.diagnostic_fingerprint() != desired.diagnostic_fingerprint(),
+		"kind-only difference changes the diagnostic fingerprint");
+
+	MySQL_User_Variable_State empty_desired;
+	MySQL_User_Variable_State nonempty_actual;
+	ok(stage_and_apply(nonempty_actual, { assignment("extra", "@extra", "1") }),
+		"nonempty actual state stages for empty desired replay");
+	const auto empty_diff = empty_desired.build_replay_plan(nonempty_actual, 0);
+	ok(empty_diff.status == MySQL_User_Variable_Replay_Status::OK && empty_diff.batches.empty(),
+		"empty desired replay has no batches even with a zero byte limit");
+	const auto zero_limit = desired.build_replay_plan(MySQL_User_Variable_State {}, 0);
+	ok(zero_limit.status == MySQL_User_Variable_Replay_Status::ASSIGNMENT_TOO_LARGE && zero_limit.batches.empty(),
+		"zero byte limit rejects a nonempty replay without partial batches");
+}
+
 } // namespace
 
 int main() {
-	plan(31);
+	plan(43);
 	test_staging_and_limits();
 	test_collision_safe_comparison();
 	test_replay_planning();
 	test_diagnostic_fingerprint();
+	test_move_preserves_state_invariants();
+	test_kind_and_empty_replay_edges();
 	return exit_status();
 }

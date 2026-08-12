@@ -7,6 +7,7 @@
 #include <iomanip>
 #include <mutex>
 #include <sstream>
+#include <utility>
 
 namespace {
 
@@ -53,6 +54,20 @@ UserVariableAssignment assignment_from(
 }
 
 } // namespace
+
+MySQL_User_Variable_State::MySQL_User_Variable_State(MySQL_User_Variable_State&& other)
+	: entries_(std::move(other.entries_)), stored_bytes_(other.stored_bytes_) {
+	other.clear();
+}
+
+MySQL_User_Variable_State& MySQL_User_Variable_State::operator=(MySQL_User_Variable_State&& other) {
+	if (this != &other) {
+		entries_ = std::move(other.entries_);
+		stored_bytes_ = other.stored_bytes_;
+		other.clear();
+	}
+	return *this;
+}
 
 size_t MySQL_User_Variable_Entry::stored_bytes() const {
 	return replay_target.size() + raw_literal.size();
