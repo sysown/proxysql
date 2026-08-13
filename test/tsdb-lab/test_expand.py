@@ -120,5 +120,85 @@ class TestTableExists(unittest.TestCase):
             conn.close()
 
 
+HOUR_DDL = (
+    "CREATE TABLE tsdb_metrics_hour (bucket INTEGER NOT NULL, metric_name VARCHAR NOT NULL, "
+    "labels VARCHAR NOT NULL DEFAULT '{}', avg_value REAL, max_value REAL, min_value REAL, "
+    "count INTEGER, PRIMARY KEY (bucket, metric_name, labels)) WITHOUT ROWID"
+)
+CLUSTER_DDL = (
+    "CREATE TABLE tsdb_metrics_cluster (node VARCHAR NOT NULL, timestamp INTEGER NOT NULL, "
+    "metric_name VARCHAR NOT NULL, labels VARCHAR NOT NULL DEFAULT '{}', value REAL, "
+    "PRIMARY KEY (node, timestamp, metric_name, labels)) WITHOUT ROWID"
+)
+
+
+class TestExpandHourly(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.conn = sqlite3.connect(os.path.join(self.tmp.name, "stats.db"))
+        self.conn.execute(HOUR_DDL)
+        seed = os.path.join(self.tmp.name, "seed.csv.gz")
+        write_seed(seed)
+        self.rows, self.start, self.end = expand.read_seed(seed)
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_one_row_per_series_per_bucket(self):
+        # 3 whole hours, 2 series -> 6 rows.
+        expand.expand_hourly(self.conn, self.rows, self.start, self.end, 3600 * 100, 3600 * 103)
+        n = self.conn.execute("SELECT COUNT(*) FROM tsdb_metrics_hour").fetchone()[0]
+        self.assertEqual(n, 6)
+
+    def test_buckets_are_hour_aligned(self):
+        expand.expand_hourly(self.conn, self.rows, self.start, self.end, 3600 * 100, 3600 * 103)
+        buckets = [r[0] for r in self.conn.execute("SELECT DISTINCT bucket FROM tsdb_metrics_hour")]
+        self.assertTrue(all(b % 3600 == 0 for b in buckets), buckets)
+
+    def test_aggregates_match_the_block(self):
+        expand.expand_hourly(self.conn, self.rows, self.start, self.end, 3600 * 100, 3600 * 101)
+        row = self.conn.execute(
+            "SELECT avg_value, max_value, min_value, count FROM tsdb_metrics_hour "
+            "WHERE metric_name='metric_a'").fetchone()
+        # metric_a values in the block are 1.0, 2.0, 3.0
+        self.assertAlmostEqual(row[0], 2.0)
+        self.assertAlmostEqual(row[1], 3.0)
+        self.assertAlmostEqual(row[2], 1.0)
+        self.assertEqual(row[3], 3)
+
+    def test_idempotent(self):
+        expand.expand_hourly(self.conn, self.rows, self.start, self.end, 3600 * 100, 3600 * 103)
+        a = self.conn.execute("SELECT COUNT(*) FROM tsdb_metrics_hour").fetchone()[0]
+        expand.expand_hourly(self.conn, self.rows, self.start, self.end, 3600 * 100, 3600 * 103)
+        b = self.conn.execute("SELECT COUNT(*) FROM tsdb_metrics_hour").fetchone()[0]
+        self.assertEqual(a, b)
+
+
+class TestExpandCluster(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.conn = sqlite3.connect(os.path.join(self.tmp.name, "stats.db"))
+        self.conn.execute(CLUSTER_DDL)
+        seed = os.path.join(self.tmp.name, "seed.csv.gz")
+        write_seed(seed)
+        self.rows, self.start, self.end = expand.read_seed(seed)
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def test_rows_scale_with_node_count(self):
+        expand.expand_cluster(self.conn, self.rows, self.start, self.end, 100000, 100060, 3)
+        n = self.conn.execute("SELECT COUNT(*) FROM tsdb_metrics_cluster").fetchone()[0]
+        self.assertEqual(n, 24 * 3)
+
+    def test_distinct_node_identities(self):
+        expand.expand_cluster(self.conn, self.rows, self.start, self.end, 100000, 100060, 3)
+        nodes = sorted(r[0] for r in self.conn.execute(
+            "SELECT DISTINCT node FROM tsdb_metrics_cluster"))
+        self.assertEqual(nodes, ["10.0.0.1:6032", "10.0.0.2:6032", "10.0.0.3:6032"])
+
+
 if __name__ == "__main__":
     unittest.main()

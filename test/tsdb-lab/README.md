@@ -35,10 +35,10 @@ python3 test/tsdb-lab/expand.py \
   --raw-window 24h \
   --span 14d
 
-# Multi-node: same metrics on each node (N copies) — implemented in Task 2
-# python3 test/tsdb-lab/expand.py \
-#   --db /tmp/proxysql_stats.db \
-#   --nodes 5
+# Multi-node: same metrics on each node (N copies)
+python3 test/tsdb-lab/expand.py \
+  --db /tmp/proxysql_stats.db \
+  --nodes 5
 ```
 
 ### 3. Measure and analyze
@@ -90,7 +90,7 @@ systemctl start proxysql
 ## Files
 
 - `expand.py` — Tiling engine, CLI, duration parser, seed reader.
-- `test_expand.py` — 9 tests: duration parsing (2), seed loading (1), raw expansion (5: tiling count, windowing, gap check, idempotence, stride boundaries), table detection (1).
+- `test_expand.py` — 15 tests: duration parsing (2), seed loading (1), raw expansion (5), table detection (1), hourly aggregation (4), cluster expansion (2).
 - `fixtures/seed-10min.csv.gz` — Real captured metrics (5s samples, ~2 series, ~10 minutes).
 - `capture.bash` — Fixture regeneration script (Task 3).
 - `measure.py` — Query harness and analytics (Task 4).
