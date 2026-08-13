@@ -511,6 +511,9 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"passthrough_auth_empty_password",
 	(char *)"passthrough_auth_unknown_users",
 	(char *)"passthrough_auth_require_tls",
+#ifdef PROXYSQL40
+	(char *)"aws_locality_awareness",
+#endif
 	(char *)"passthrough_default_hg",
 	(char *)"passthrough_default_schema",
 	(char *)"passthrough_auth_cache_ttl_s",
@@ -1541,6 +1544,9 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.passthrough_auth_empty_password = true;
 	variables.passthrough_auth_unknown_users = false;
 	variables.passthrough_auth_require_tls = true;
+#ifdef PROXYSQL40
+	variables.aws_locality_awareness = false;
+#endif
 	variables.passthrough_default_hg = 0;
 	variables.passthrough_default_schema = strdup((char *)"");
 	variables.passthrough_auth_cache_ttl_s = 0;
@@ -2892,6 +2898,9 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["passthrough_auth_empty_password"] = make_tuple(&variables.passthrough_auth_empty_password, false);
 		VariablesPointers_bool["passthrough_auth_unknown_users"]  = make_tuple(&variables.passthrough_auth_unknown_users,  false);
 		VariablesPointers_bool["passthrough_auth_require_tls"]    = make_tuple(&variables.passthrough_auth_require_tls,    false);
+#ifdef PROXYSQL40
+		VariablesPointers_bool["aws_locality_awareness"]          = make_tuple(&variables.aws_locality_awareness,          false);
+#endif
 #ifdef PROXYSQL31
 		VariablesPointers_bool["caching_sha2_password_auto_generate_rsa_keys"] =
 			make_tuple(&variables.caching_sha2_password_auto_generate_rsa_keys, false);
@@ -5146,6 +5155,9 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_BOOL(passthrough_auth_empty_password);
 	REFRESH_VARIABLE_BOOL(passthrough_auth_unknown_users);
 	REFRESH_VARIABLE_BOOL(passthrough_auth_require_tls);
+#ifdef PROXYSQL40
+	REFRESH_VARIABLE_BOOL(aws_locality_awareness);
+#endif
 	REFRESH_VARIABLE_INT(passthrough_default_hg);
 	REFRESH_VARIABLE_INT(passthrough_auth_cache_ttl_s);
 	REFRESH_VARIABLE_INT(passthrough_auth_max_inflight_probes);

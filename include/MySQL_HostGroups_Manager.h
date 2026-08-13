@@ -2,6 +2,9 @@
 #define PROXYSQL_MYSQL_HOSTGROUPS_MANAGER_H
 #include "proxysql.h"
 #include "MySQL_Backend_Auth.h"
+#ifdef PROXYSQL40
+#include "Aws_Locality_Manager.h"
+#endif
 #include "cpp.h"
 #include "proxysql_gtid.h"
 
@@ -625,6 +628,9 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 *  present, distinguishing between 'READER' and 'WRITER' hostgroups.
 	 */
 	std::unordered_map<std::string, std::unique_ptr<HostGroup_Server_Mapping>> hostgroup_server_mapping;
+#ifdef PROXYSQL40
+	std::unique_ptr<MySQLAwsLocalityManager> aws_locality_manager_;
+#endif
 	/**
 	 * @brief Holds the previous computed checksum for 'mysql_servers'.
 	 * @details Used to check if the servers checksums has changed during 'commit', if a change is detected,
@@ -885,6 +891,13 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	MySQL_HostGroups_Manager();
 	~MySQL_HostGroups_Manager();
 	void init();
+#ifdef PROXYSQL40
+	void refresh_aws_locality_configuration();
+	void set_aws_locality_awareness_enabled(bool enabled);
+	MySQLAwsLocalityManager* aws_locality_manager() const {
+		return aws_locality_manager_.get();
+	}
+#endif
 #if 0
 	void wrlock();
 	void wrunlock();

@@ -645,6 +645,9 @@ class MySQL_Threads_Handler
 		bool passthrough_auth_empty_password;
 		bool passthrough_auth_unknown_users;
 		bool passthrough_auth_require_tls;
+#ifdef PROXYSQL40
+		bool aws_locality_awareness;
+#endif
 		int passthrough_default_hg;
 		int passthrough_auth_cache_ttl_s;
 		int passthrough_auth_max_inflight_probes;

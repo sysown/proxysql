@@ -690,6 +690,9 @@ hg_metrics_map = std::make_tuple(
 );
 
 MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
+#ifdef PROXYSQL40
+	aws_locality_manager_ = std::make_unique<MySQLAwsLocalityManager>();
+#endif
 	status.client_connections=0;
 	status.client_connections_prim_pass=0;
 	status.client_connections_addl_pass=0;
@@ -802,6 +805,11 @@ void MySQL_HostGroups_Manager::init() {
 }
 
 void MySQL_HostGroups_Manager::shutdown() {
+#ifdef PROXYSQL40
+	if (aws_locality_manager_) {
+		aws_locality_manager_->shutdown();
+	}
+#endif
 	queue.add(NULL);
 	HGCU_thread->join();
 	delete HGCU_thread;
@@ -811,6 +819,11 @@ void MySQL_HostGroups_Manager::shutdown() {
 }
 
 MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
+#ifdef PROXYSQL40
+	if (aws_locality_manager_) {
+		aws_locality_manager_->shutdown();
+	}
+#endif
 	while (MyHostGroups->len) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->remove_index_fast(0);
 		delete myhgc;
@@ -829,6 +842,43 @@ MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
 		free(gtid_ev_timer);
 	pthread_mutex_destroy(&lock);
 }
+
+#ifdef PROXYSQL40
+void MySQL_HostGroups_Manager::refresh_aws_locality_configuration() {
+	std::vector<AwsLocalityHostgroupConfig> hostgroups;
+
+	wrlock();
+	for (unsigned int i = 0; i < MyHostGroups->len; ++i) {
+		MyHGC* hostgroup = static_cast<MyHGC*>(MyHostGroups->index(i));
+		if (!hostgroup->attributes.aws_locality_policy.valid) {
+			continue;
+		}
+
+		AwsLocalityHostgroupConfig config;
+		config.hostgroup_id = hostgroup->hid;
+		config.policy = hostgroup->attributes.aws_locality_policy;
+		config.backends.reserve(hostgroup->mysrvs->servers->len);
+		for (unsigned int j = 0; j < hostgroup->mysrvs->servers->len; ++j) {
+			MySrvC* server = static_cast<MySrvC*>(hostgroup->mysrvs->servers->index(j));
+			config.backends.emplace_back(
+				recognize_rds_endpoint(hostgroup->hid, server->address, server->port),
+				server->weight);
+		}
+		hostgroups.emplace_back(std::move(config));
+	}
+	wrunlock();
+
+	if (aws_locality_manager_) {
+		aws_locality_manager_->configure(std::move(hostgroups));
+	}
+}
+
+void MySQL_HostGroups_Manager::set_aws_locality_awareness_enabled(bool enabled) {
+	if (aws_locality_manager_) {
+		aws_locality_manager_->set_enabled(enabled);
+	}
+}
+#endif
 
 void MySQL_HostGroups_Manager::p_update_mysql_error_counter(p_mysql_error_type err_type, unsigned int hid, char* address, uint16_t port, unsigned int code) {
 	p_hg_dyn_counter::metric metric = p_hg_dyn_counter::mysql_error;
@@ -1641,6 +1691,9 @@ bool MySQL_HostGroups_Manager::commit(
 	update_aws_rds_bgd_hosts_monitor_resultset();
 
 	wrunlock();
+#ifdef PROXYSQL40
+	refresh_aws_locality_configuration();
+#endif
 	unsigned long long curtime2=monotonic_time();
 	curtime1 = curtime1/1000;
 	curtime2 = curtime2/1000;
@@ -6242,10 +6295,34 @@ void init_myhgc_hostgroup_settings(const char* hostgroup_settings, MyHGC* myhgc)
 	const uint32_t hid = myhgc->hid;
 	free(myhgc->attributes.aws_iam_region);
 	myhgc->attributes.aws_iam_region = NULL;
+#ifdef PROXYSQL40
+	myhgc->attributes.aws_locality_policy = {};
+#endif
 
 	if (hostgroup_settings[0] != '\0') {
 		try {
 			nlohmann::json j = nlohmann::json::parse(hostgroup_settings);
+
+#ifdef PROXYSQL40
+			const auto aws = j.find("aws");
+			if (aws != j.end()) {
+				if (!aws->is_object()) {
+					proxy_error("Invalid AWS locality policy field 'aws' for hostgroup %u. Value rejected.\n", hid);
+				} else {
+					const auto locality = aws->find("locality_awareness");
+					if (locality != aws->end()) {
+						AwsLocalityPolicyError error;
+						myhgc->attributes.aws_locality_policy = parse_aws_locality_policy(
+							*locality, hid, error);
+						if (!myhgc->attributes.aws_locality_policy.valid) {
+							proxy_error(
+								"Invalid AWS locality policy field '%s' for hostgroup %u. Value rejected.\n",
+								error.field.c_str(), hid);
+						}
+					}
+				}
+			}
+#endif
 
 			const auto handle_warnings_check = [](int8_t handle_warnings) -> bool { return handle_warnings == 0 || handle_warnings == 1; };
 			const int8_t handle_warnings = j_get_srv_default_int_val<int8_t>(j, hid, "handle_warnings", handle_warnings_check);

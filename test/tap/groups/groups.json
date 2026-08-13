@@ -23,6 +23,7 @@
   "aws_iam_provider_boundary_unit-t" : [ "unit-tests-g1","mysqlx-tsan-g1","@proxysql_min_version:4.0" ],
   "aws_locality_policy_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "aws_locality_manager_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
+  "aws_locality_config_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "backend_sync_unit-t" : [ "unit-tests-g1" ],
   "basic-t" : [ "legacy-g1","mariadb10-galera-g1","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1","mysql84-g1","mysql84-gr-g1","mysql90-g1","mysql90-gr-g1","mysql93-g1","mysql93-gr-g1","mysql95-g1","mysql95-gr-g1" ],
   "c_tokenizer_unit-t" : [ "unit-tests-g1" ],

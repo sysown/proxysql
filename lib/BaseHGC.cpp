@@ -83,6 +83,9 @@ void BaseHGC<HGC>::reset_attributes() {
 	attributes.ignore_session_variables_text = NULL;
 	free(attributes.aws_iam_region);
 	attributes.aws_iam_region = NULL;
+#ifdef PROXYSQL40
+	attributes.aws_locality_policy = {};
+#endif
 	if (attributes.ignore_session_variables_json) {
 		delete attributes.ignore_session_variables_json;
 		attributes.ignore_session_variables_json = NULL;
