@@ -422,6 +422,22 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual((), plan.actions)
         self.assertFalse(plan.requires_load)
 
+    def test_runtime_backend_half_with_frontend_disabled_is_not_drift(self):
+        main = self.user("alice", profile="p")
+        runtime = replace(main, frontend=0)
+        plan = self.mod.build_plan(
+            {"alice": self.role("alice")}, [main], [runtime], self.settings()
+        )
+        self.assertEqual((), plan.actions)
+        self.assertFalse(plan.requires_load)
+
+    def test_unmanaged_runtime_backend_half_with_frontend_disabled_is_not_drift(self):
+        main = self.user("local")
+        runtime = replace(main, frontend=0)
+        plan = self.mod.build_plan({}, [main], [runtime], self.settings())
+        self.assertEqual((), plan.actions)
+        self.assertFalse(plan.requires_load)
+
 
 class FakeCursor:
     def __init__(self, rows=()):
@@ -524,6 +540,22 @@ class AdapterTests(unittest.TestCase):
             runtime_sql,
         )
         self.assertTrue(self.connect_kwargs["autocommit"])
+
+    def test_admin_normalizes_integer_fields_returned_as_postgresql_text(self):
+        self.connection.cursor_object.rows = [
+            ("alice", self.verifier_a, "1", "0", "3", "1", "0", "1", "1", "100", "", "")
+        ]
+        user = self.mod.ProxySQLAdmin(self.config, connect=self.fake_connect).fetch_main_users()[0]
+        self.assertEqual((1, 0, 3, 1, 0, 1, 1, 100), (
+            user.active,
+            user.use_ssl,
+            user.default_hostgroup,
+            user.transaction_persistent,
+            user.fast_forward,
+            user.backend,
+            user.frontend,
+            user.max_connections,
+        ))
 
     def test_admin_update_uses_bound_parameters(self):
         adapter = self.mod.ProxySQLAdmin(self.config, connect=self.fake_connect)
@@ -684,12 +716,24 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(["main", "runtime", "load", "save"], admin.calls)
         self.assertEqual(0, summary.counts["updated"])
 
-    def test_save_failure_follows_successful_load(self):
+    def test_runtime_backend_half_skips_load_on_a_repeated_run(self):
+        main = self.owned_user()
+        runtime = replace(main, frontend=0)
+        admin = FakeAdmin([main], [runtime])
+        summary = self.mod.run_sync(self.config, FakeSource(self.rows), admin,
+                                    dry_run=False, verbose=False)
+        self.assertEqual(["main", "runtime"], admin.calls)
+        self.assertFalse(summary.loaded)
+        self.assertFalse(summary.saved)
+
+    def test_save_failure_reports_partial_after_successful_load(self):
         admin = FakeAdmin(fail_save=True)
-        with self.assertRaises(self.mod.SyncError):
-            self.mod.run_sync(self.config, FakeSource(self.rows), admin,
-                              dry_run=False, verbose=False)
+        summary = self.mod.run_sync(self.config, FakeSource(self.rows), admin,
+                                    dry_run=False, verbose=False)
         self.assertEqual(["main", "runtime", "apply", "load", "save"], admin.calls)
+        self.assertEqual("partial", summary.outcome)
+        self.assertTrue(summary.loaded)
+        self.assertFalse(summary.saved)
 
     def test_exclusive_lock_reports_contention(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -708,6 +752,31 @@ class OrchestrationTests(unittest.TestCase):
         with self.assertRaises(AttributeError):
             summary.outcome = "changed"
 
+    def test_partial_summary_returns_nonzero_after_printing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = replace(
+                self.config,
+                sync=replace(self.config.sync, lock_file=Path(directory) / "sync.lock"),
+            )
+            partial = self.mod.RunSummary(
+                outcome="partial",
+                counts={"created": 1},
+                loaded=True,
+                saved=False,
+                duration_seconds=0.0,
+            )
+            with (
+                patch.object(self.mod, "load_config", return_value=config),
+                patch.object(self.mod, "run_sync", return_value=partial),
+                patch.object(self.mod, "PostgreSQLSource"),
+                patch.object(self.mod, "ProxySQLAdmin"),
+                patch("builtins.print") as report,
+            ):
+                self.assertEqual(1, self.mod.main(["--config", "ignored.ini"]))
+            report.assert_called_once_with(
+                "sync partial: created=1 loaded=true saved=false duration=0.000s"
+            )
+
 
 class AssetTests(unittest.TestCase):
     """Keep the operator-facing deployment sample complete and safe."""
@@ -723,7 +792,9 @@ class AssetTests(unittest.TestCase):
         ):
             self.assertIn(required, sql)
         self.assertIn("proxysql_auth_managed", sql)
-        self.assertIn("pg_has_role", sql)
+        self.assertIn("pg_auth_members", sql)
+        self.assertIn("NOT r.rolsuper", sql)
+        self.assertNotIn("pg_has_role", sql)
         self.assertIn("proxysql_auth_reader", sql)
         self.assertIn("GRANT proxysql_auth_managed TO app_login;", sql)
         self.assertIn("REVOKE proxysql_auth_managed FROM app_login;", sql)

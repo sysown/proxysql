@@ -476,6 +476,16 @@ def _new_user(role: SourceRole, settings: SyncSettings) -> ProxySQLUser:
     )
 
 
+def _runtime_matches(main_row: ProxySQLUser, runtime_row: ProxySQLUser | None) -> bool:
+    """Compare the backend half of main and runtime user rows."""
+
+    if runtime_row is None:
+        return False
+    # ProxySQL materializes a combined main user as separate backend and
+    # frontend runtime rows. The backend half always has frontend=0.
+    return replace(main_row, frontend=0) == replace(runtime_row, frontend=0)
+
+
 def build_plan(
     source: Mapping[str, SourceRole],
     main: Iterable[ProxySQLUser],
@@ -502,7 +512,7 @@ def build_plan(
         runtime_row = runtime_by_name.get(username)
         managed = _managed(main_row, settings)
         if main_row.active:
-            if runtime_row is None or runtime_row != main_row:
+            if not _runtime_matches(main_row, runtime_row):
                 if not managed:
                     raise _error("unmanaged main/runtime drift")
                 managed_active_drift = True
@@ -671,6 +681,7 @@ _USER_FIELDS = (
     "username", "password", "active", "use_ssl", "default_hostgroup", "transaction_persistent",
     "fast_forward", "backend", "frontend", "max_connections", "attributes", "comment",
 )
+_USER_INTEGER_FIELD_INDEXES = (2, 3, 4, 5, 6, 7, 8, 9)
 
 
 class ProxySQLAdmin:
@@ -721,7 +732,16 @@ class ProxySQLAdmin:
             # runtime. Reconcile the backend half, which is also the row keyed
             # by apply_actions(), so one username has one deterministic record.
             cursor.execute(f"SELECT {_USER_COLUMNS} FROM {table} WHERE backend=1")
-            return [ProxySQLUser(*row) for row in cursor.fetchall()]
+            users = []
+            for row in cursor.fetchall():
+                values = list(row)
+                # The PostgreSQL Admin interface sends these SQLite integer
+                # columns as text. Normalizing them prevents false updates on
+                # every scheduler invocation.
+                for index in _USER_INTEGER_FIELD_INDEXES:
+                    values[index] = int(values[index])
+                users.append(ProxySQLUser(*values))
+            return users
         except Exception:
             raise _error("unable to fetch ProxySQL users") from None
         finally:
@@ -813,6 +833,7 @@ def run_sync(
 
     loaded = False
     saved = False
+    partial = False
     if not dry_run:
         if plan.actions:
             try:
@@ -829,10 +850,11 @@ def run_sync(
                 try:
                     admin.save_to_disk()
                 except Exception:
-                    raise _sync_failure("unable to save ProxySQL users to disk") from None
-                saved = True
+                    partial = True
+                else:
+                    saved = True
     return RunSummary(
-        outcome="dry-run" if dry_run else "success",
+        outcome="dry-run" if dry_run else "partial" if partial else "success",
         counts=MappingProxyType(dict(plan.counts)),
         loaded=loaded,
         saved=saved,
@@ -892,7 +914,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 verbose=args.verbose,
             )
         print(_summary_line(summary))
-        return 0
+        return 1 if summary.outcome == "partial" else 0
     except SyncError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

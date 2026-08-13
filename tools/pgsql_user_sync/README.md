@@ -56,10 +56,11 @@ GRANT proxysql_auth_managed TO app_login;
 REVOKE proxysql_auth_managed FROM app_login;
 ```
 
-The function additionally requires a login-capable role, a non-null verifier,
-and no expired `rolvaliduntil`.  Therefore superusers, replication roles, and
-service accounts are not imported unless an operator explicitly places them
-on the allow-list.
+The function uses a direct allow-list membership check and additionally
+requires a login-capable, non-superuser role with a non-null verifier and no
+expired `rolvaliduntil`. Replication roles and service accounts are not
+imported unless an operator explicitly places them on the allow-list;
+superusers are always excluded.
 
 ## Run manually
 

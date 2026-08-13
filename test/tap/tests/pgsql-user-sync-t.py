@@ -73,7 +73,7 @@ def admin_row(username, runtime=False):
         with connection.cursor() as cursor:
             cursor.execute(
                 f"SELECT username,password,active,default_hostgroup,attributes "
-                f"FROM {table} WHERE username=%s",
+                f"FROM {table} WHERE username=%s AND backend=1",
                 (username,),
             )
             return cursor.fetchone()
@@ -206,6 +206,13 @@ def main():
             )
             if result.returncode != 0:
                 print(f"# synchronizer diagnostic: {result.stderr.strip()}")
+            repeated = subprocess.run(
+                [sys.executable, str(SCRIPT), "--config", str(config)],
+                text=True,
+                capture_output=True,
+            )
+            if repeated.returncode != 0:
+                print(f"# repeated synchronizer diagnostic: {repeated.stderr.strip()}")
 
         tap.check(result.returncode == 0, "real synchronizer run succeeds")
         verifier = source_verifier(source, username)
@@ -253,6 +260,16 @@ def main():
             and int(runtime_row[2]) == 1
             and int(runtime_row[3]) == 0,
             "synchronizer loads the user into runtime_pgsql_users",
+        )
+        repeated_is_noop = (
+            repeated.returncode == 0
+            and "loaded=false saved=false" in repeated.stdout
+        )
+        if not repeated_is_noop:
+            print(f"# repeated synchronizer output: {repeated.stdout.strip()}")
+        tap.check(
+            repeated_is_noop,
+            "repeated synchronization detects no backend-runtime drift",
         )
     except Exception as error:
         print(f"# real integration failure class: {type(error).__name__}")

@@ -75,15 +75,19 @@ The example SQL creates:
 The function has a fixed safe `search_path` and returns exactly two columns:
 `username` and `password`. It selects only roles that:
 
-- are members of the allow-list role;
+- are direct members of the allow-list role;
 - have `rolcanlogin = true`;
+- are not superusers;
 - have a non-null `rolpassword`; and
 - have no expiration or a `rolvaliduntil` later than the current time.
 
-This allow-list prevents accidental import of `postgres`, replication users,
-and unrelated service accounts. A role that stops satisfying any selection
-condition is absent from the next snapshot and is processed according to
-`missing_role_action`.
+The function checks direct membership through `pg_auth_members`, rather than
+`pg_has_role`, so implicit superuser membership cannot bypass the allow-list.
+The explicit superuser exclusion prevents accidental import of `postgres`.
+Replication users and unrelated service accounts remain excluded unless an
+operator explicitly grants direct allow-list membership. A role that stops
+satisfying any selection condition is absent from the next snapshot and is
+processed according to `missing_role_action`.
 
 ## Configuration and command line
 
@@ -354,7 +358,7 @@ function, ProxySQL Admin interface, and verifier-capable authentication path:
 
 The integration test is registered only in a PostgreSQL-backed TAP group and
 is gated on verifier-capable ProxySQL behavior. Until the equivalent of PR
-#5865 is present in the target branch, the test must report a clear dependency
+PR #5865 is present in the target branch, the test must report a clear dependency
 skip rather than masking a synchronizer failure.
 
 ## Acceptance criteria

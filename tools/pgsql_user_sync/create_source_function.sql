@@ -37,7 +37,13 @@ AS $function$
     WHERE r.rolcanlogin
       AND r.rolpassword IS NOT NULL
       AND (r.rolvaliduntil IS NULL OR r.rolvaliduntil > pg_catalog.now())
-      AND pg_catalog.pg_has_role(r.oid, 'proxysql_auth_managed', 'member')
+      AND NOT r.rolsuper
+      AND EXISTS (
+          SELECT 1
+          FROM pg_catalog.pg_auth_members AS membership
+          WHERE membership.member = r.oid
+            AND membership.roleid = 'proxysql_auth_managed'::regrole
+      )
     ORDER BY r.rolname;
 $function$;
 
