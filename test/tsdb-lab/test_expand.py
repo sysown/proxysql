@@ -147,9 +147,10 @@ class TestExpandHourly(unittest.TestCase):
 
     def test_one_row_per_series_per_bucket(self):
         # 3 whole hours, 2 series -> 6 rows.
-        expand.expand_hourly(self.conn, self.rows, self.start, self.end, 3600 * 100, 3600 * 103)
+        attempted = expand.expand_hourly(self.conn, self.rows, self.start, self.end, 3600 * 100, 3600 * 103)
         n = self.conn.execute("SELECT COUNT(*) FROM tsdb_metrics_hour").fetchone()[0]
         self.assertEqual(n, 6)
+        self.assertEqual(attempted, 6, "return value (attempted inserts) must equal 3 buckets * 2 series")
 
     def test_buckets_are_hour_aligned(self):
         expand.expand_hourly(self.conn, self.rows, self.start, self.end, 3600 * 100, 3600 * 103)
@@ -189,9 +190,10 @@ class TestExpandCluster(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_rows_scale_with_node_count(self):
-        expand.expand_cluster(self.conn, self.rows, self.start, self.end, 100000, 100060, 3)
+        attempted = expand.expand_cluster(self.conn, self.rows, self.start, self.end, 100000, 100060, 3)
         n = self.conn.execute("SELECT COUNT(*) FROM tsdb_metrics_cluster").fetchone()[0]
         self.assertEqual(n, 24 * 3)
+        self.assertEqual(attempted, 24 * 3, "return value (attempted inserts) must equal len(rows) * tiles * nodes = 6 * 4 * 3")
 
     def test_distinct_node_identities(self):
         expand.expand_cluster(self.conn, self.rows, self.start, self.end, 100000, 100060, 3)
