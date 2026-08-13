@@ -2559,24 +2559,17 @@ bool MySQL_Session::handler_again___verify_multiple_variables(MySQL_Connection* 
 	return false;
 }
 
-bool mysql_user_variable_accepts_new_assignments_policy(
-	int mode, int set_parser_algorithm, int query_processor_parser,
-	bool plain_text_com_query, bool connection_bound_fallback) {
-	return mode == 1 && (set_parser_algorithm == 3 || query_processor_parser == 1) &&
-		plain_text_com_query && !connection_bound_fallback;
-}
-
 bool mysql_user_variable_must_classify_and_sync_policy(
 	int mode, int set_parser_algorithm, int query_processor_parser,
 	bool plain_text_com_query, bool connection_bound_fallback,
 	bool tracking_latched) {
-	return mysql_user_variable_accepts_new_assignments_policy(
+	return mysql_user_variable_tracking_can_stage(
 		mode, set_parser_algorithm, query_processor_parser,
 		plain_text_com_query, connection_bound_fallback) || tracking_latched;
 }
 
 bool MySQL_Session::accepts_new_user_variable_assignments() const {
-	return mysql_user_variable_accepts_new_assignments_policy(
+	return mysql_user_variable_tracking_can_stage(
 		mysql_thread___user_variable_tracking,
 		mysql_thread___set_parser_algorithm,
 		mysql_thread___query_processor_parser,

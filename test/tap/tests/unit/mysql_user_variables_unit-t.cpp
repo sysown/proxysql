@@ -44,31 +44,31 @@ void test_staging_and_limits() {
 
 	MySQL_User_Variable_State names;
 	std::vector<UserVariableAssignment> first_128;
-	for (size_t i = 0; i < MySQL_User_Variable_State::kMaxVariables; ++i) {
+	for (size_t i = 0; i < MySQL_User_Variable_State::MAX_VARIABLES; ++i) {
 		const std::string name = "n" + std::to_string(i);
 		first_128.push_back(assignment(name, "@" + name, "0"));
 	}
-	ok(stage_and_apply(names, first_128) && names.size() == MySQL_User_Variable_State::kMaxVariables,
+	ok(stage_and_apply(names, first_128) && names.size() == MySQL_User_Variable_State::MAX_VARIABLES,
 		"128 distinct names are accepted");
 	MySQL_User_Variable_State unchanged;
 	stage_and_apply(unchanged, { assignment("previous", "@previous", "0") });
 	ok(names.stage({ assignment("n128", "@n128", "0") }, unchanged) ==
 		MySQL_User_Variable_Apply_Result::VARIABLE_LIMIT,
 		"129th distinct name is rejected");
-	ok(unchanged.size() == 1 && names.size() == MySQL_User_Variable_State::kMaxVariables,
+	ok(unchanged.size() == 1 && names.size() == MySQL_User_Variable_State::MAX_VARIABLES,
 		"variable-limit failure leaves input and staged output unchanged");
 
 	MySQL_User_Variable_State bytes;
-	const std::string max_literal(MySQL_User_Variable_State::kMaxStoredBytes - 2, 'x');
+	const std::string max_literal(MySQL_User_Variable_State::MAX_STORED_BYTES - 2, 'x');
 	ok(stage_and_apply(bytes, { assignment("byte", "@x", max_literal) }) &&
-		bytes.stored_bytes() == MySQL_User_Variable_State::kMaxStoredBytes,
+		bytes.stored_bytes() == MySQL_User_Variable_State::MAX_STORED_BYTES,
 		"exactly 64 KiB of target and literal bytes is accepted");
 	MySQL_User_Variable_State byte_unchanged;
 	stage_and_apply(byte_unchanged, { assignment("previous", "@previous", "0") });
 	ok(bytes.stage({ assignment("next", "@y", "0") }, byte_unchanged) ==
 		MySQL_User_Variable_Apply_Result::BYTE_LIMIT,
 		"one byte beyond the stored-byte limit is rejected");
-	ok(byte_unchanged.size() == 1 && bytes.stored_bytes() == MySQL_User_Variable_State::kMaxStoredBytes,
+	ok(byte_unchanged.size() == 1 && bytes.stored_bytes() == MySQL_User_Variable_State::MAX_STORED_BYTES,
 		"byte-limit failure leaves input and staged output unchanged");
 }
 
@@ -194,12 +194,12 @@ void test_diagnostic_fingerprint() {
 
 void test_move_preserves_state_invariants() {
 	MySQL_User_Variable_State source;
-	const std::string max_literal(MySQL_User_Variable_State::kMaxStoredBytes - 2, 'x');
+	const std::string max_literal(MySQL_User_Variable_State::MAX_STORED_BYTES - 2, 'x');
 	ok(stage_and_apply(source, { assignment("full", "@x", max_literal) }),
 		"full state stages before move");
 	MySQL_User_Variable_State destination(std::move(source));
 	ok(destination.size() == 1 &&
-		destination.stored_bytes() == MySQL_User_Variable_State::kMaxStoredBytes,
+		destination.stored_bytes() == MySQL_User_Variable_State::MAX_STORED_BYTES,
 		"move construction preserves destination entries and byte accounting");
 	ok(source.size() == 0 && source.stored_bytes() == 0,
 		"moved-from state is empty with zero stored bytes");
@@ -210,7 +210,7 @@ void test_move_preserves_state_invariants() {
 	stage_and_apply(assigned, { assignment("old", "@old", "0") });
 	assigned = std::move(destination);
 	ok(assigned.size() == 1 &&
-		assigned.stored_bytes() == MySQL_User_Variable_State::kMaxStoredBytes &&
+		assigned.stored_bytes() == MySQL_User_Variable_State::MAX_STORED_BYTES &&
 		destination.size() == 0 && destination.stored_bytes() == 0,
 		"move assignment preserves destination accounting and clears its source");
 	ok(stage_and_apply(destination, { assignment("newer", "@newer", "0") }),
@@ -271,6 +271,14 @@ void test_connection_state_integration() {
 	ok(actual.number_of_matching_session_variables(&desired, not_matching) == 0 && not_matching == 1,
 		"same-hash different-value user variable is a mismatch");
 	actual.reset();
+	not_matching = 0;
+	ok(stage_and_apply(actual.user_variables, {
+		assignment("matching", "@matching", "'one'", UserVariableLiteralKind::STRING, 42),
+		assignment("backend_extra", "@backend_extra", "1")
+	}) && actual.number_of_matching_session_variables(&desired, not_matching) == 1 &&
+		not_matching == 1,
+		"a backend-only user variable is penalized in pool matching");
+	actual.reset();
 	ok(actual.user_variables.size() == 0 && actual.user_variables.stored_bytes() == 0,
 		"connection reset clears tracked user variables");
 
@@ -322,7 +330,7 @@ void test_simple_command_log_redaction() {
 } // namespace
 
 int main() {
-	plan(68);
+	plan(69);
 	test_staging_and_limits();
 	test_collision_safe_comparison();
 	test_replay_planning();

@@ -764,6 +764,9 @@ unsigned int MySQL_Connection::number_of_matching_session_variables(const MySQL_
 	unsigned int user_variables_not_matching = 0;
 	ret += user_variables.count_matches(client_conn->user_variables, user_variables_not_matching);
 	not_matching += user_variables_not_matching;
+	if (user_variables.size() > client_conn->user_variables.size()) {
+		not_matching += user_variables.size() - client_conn->user_variables.size();
+	}
 	return ret;
 }
 

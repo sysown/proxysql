@@ -829,7 +829,7 @@ Expected: policy helpers are missing.
 
 - [ ] **Step 2: Analyze user-variable SETs before the legacy lossy SET map**
 
-At the start of the existing `SET ` branch in `handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo()`:
+At the start of the existing `SET` branch in `handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo()`:
 
 1. clear stale per-query pending/safety state;
 2. when the mode/prerequisite/text-protocol policy is active, call `parsersql_analyze_user_variable_set_mysql()` on `CurrentQuery.QueryPointer` and `QueryLength`;

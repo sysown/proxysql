@@ -21,9 +21,6 @@ bool mysql_user_variable_commit_post_ok(
 	MySQL_User_Variable_State& frontend,
 	MySQL_User_Variable_State& backend,
 	const std::vector<UserVariableAssignment>& assignments);
-bool mysql_user_variable_accepts_new_assignments_policy(
-	int mode, int set_parser_algorithm, int query_processor_parser,
-	bool plain_text_com_query, bool connection_bound_fallback);
 bool mysql_user_variable_must_classify_and_sync_policy(
 	int mode, int set_parser_algorithm, int query_processor_parser,
 	bool plain_text_com_query, bool connection_bound_fallback,
@@ -535,7 +532,7 @@ static void test_user_variable_staging_preflight() {
 		"user-variable preflight never mutates committed state");
 
 	std::vector<UserVariableAssignment> fill;
-	for (size_t i = 0; i < MySQL_User_Variable_State::kMaxVariables; ++i) {
+	for (size_t i = 0; i < MySQL_User_Variable_State::MAX_VARIABLES; ++i) {
 		const std::string name = "v" + std::to_string(i);
 		fill.push_back({name, "@" + name, "1", UserVariableLiteralKind::INTEGER, i + 1});
 	}
@@ -549,7 +546,7 @@ static void test_user_variable_staging_preflight() {
 	rc = full.stage(overflow, rejected);
 	ok(rc == MySQL_User_Variable_Apply_Result::VARIABLE_LIMIT,
 		"user-variable preflight rejects a staged post-SET map over the resource limit");
-	ok(full.size() == MySQL_User_Variable_State::kMaxVariables && full.stored_bytes() == full_bytes,
+	ok(full.size() == MySQL_User_Variable_State::MAX_VARIABLES && full.stored_bytes() == full_bytes,
 		"failed user-variable preflight leaves committed state untouched");
 }
 
@@ -590,7 +587,7 @@ static void test_user_variable_post_ok_atomic_commit() {
 		"post-OK helper commits the same supported assignments to both maps");
 
 	std::vector<UserVariableAssignment> fill;
-	for (size_t i = 0; i < MySQL_User_Variable_State::kMaxVariables; ++i) {
+	for (size_t i = 0; i < MySQL_User_Variable_State::MAX_VARIABLES; ++i) {
 		const std::string name = "v" + std::to_string(i);
 		fill.push_back({name, "@" + name, "1", UserVariableLiteralKind::INTEGER, i + 1});
 	}
@@ -602,7 +599,7 @@ static void test_user_variable_post_ok_atomic_commit() {
 	MySQL_User_Variable_State empty_backend;
 	full_frontend.apply(fill);
 	ok(!mysql_user_variable_commit_post_ok(full_frontend, empty_backend, overflow) &&
-		full_frontend.size() == MySQL_User_Variable_State::kMaxVariables &&
+		full_frontend.size() == MySQL_User_Variable_State::MAX_VARIABLES &&
 		empty_backend.size() == 0,
 		"frontend post-OK staging failure commits neither map and requests fallback");
 
@@ -611,7 +608,7 @@ static void test_user_variable_post_ok_atomic_commit() {
 	full_backend.apply(fill);
 	ok(!mysql_user_variable_commit_post_ok(empty_frontend, full_backend, overflow) &&
 		empty_frontend.size() == 0 &&
-		full_backend.size() == MySQL_User_Variable_State::kMaxVariables,
+		full_backend.size() == MySQL_User_Variable_State::MAX_VARIABLES,
 		"backend post-OK staging failure commits neither map and requests fallback");
 }
 
@@ -668,13 +665,13 @@ static void test_user_variable_query_disposition() {
 }
 
 static void test_user_variable_runtime_drain_policy() {
-	ok(mysql_user_variable_accepts_new_assignments_policy(1, 3, 0, true, false),
+	ok(mysql_user_variable_tracking_can_stage(1, 3, 0, true, false),
 		"runtime UDV policy accepts new assignments while mode and ParserSQL are active");
-	ok(!mysql_user_variable_accepts_new_assignments_policy(0, 3, 0, true, false),
+	ok(!mysql_user_variable_tracking_can_stage(0, 3, 0, true, false),
 		"runtime UDV policy stops new assignments when mode is disabled");
-	ok(!mysql_user_variable_accepts_new_assignments_policy(1, 2, 0, true, false),
+	ok(!mysql_user_variable_tracking_can_stage(1, 2, 0, true, false),
 		"runtime UDV policy stops new assignments when ParserSQL prerequisite is disabled");
-	ok(!mysql_user_variable_accepts_new_assignments_policy(1, 3, 0, true, true),
+	ok(!mysql_user_variable_tracking_can_stage(1, 3, 0, true, true),
 		"runtime UDV policy stops map updates after authoritative-backend binding");
 	ok(mysql_user_variable_must_classify_and_sync_policy(0, 3, 0, true, false, true),
 		"runtime mode disable after first commit preserves classification and synchronization");

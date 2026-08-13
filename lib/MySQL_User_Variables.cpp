@@ -89,10 +89,10 @@ MySQL_User_Variable_Apply_Result MySQL_User_Variable_State::stage(
 		const size_t previous_bytes = existing == candidate.entries_.end() ? 0 : existing->second.stored_bytes();
 		const size_t bytes_after_removal = candidate.stored_bytes_ - previous_bytes;
 
-		if (existing == candidate.entries_.end() && candidate.entries_.size() == kMaxVariables) {
+		if (existing == candidate.entries_.end() && candidate.entries_.size() == MAX_VARIABLES) {
 			return MySQL_User_Variable_Apply_Result::VARIABLE_LIMIT;
 		}
-		if (replacement_bytes > kMaxStoredBytes - bytes_after_removal) {
+		if (replacement_bytes > MAX_STORED_BYTES - bytes_after_removal) {
 			return MySQL_User_Variable_Apply_Result::BYTE_LIMIT;
 		}
 
@@ -200,7 +200,7 @@ MySQL_User_Variable_Replay_Packet_Budget mysql_user_variable_replay_packet_budge
 	// max_allowed_packet value, so an unpopulated backend field can safely use it.
 	const bool use_server_minimum = max_allowed_pkt == 0;
 	const size_t packet_limit = use_server_minimum
-		? kMySQLUserVariableReplayMinimumServerPacketBytes
+		? MYSQL_USER_VARIABLE_REPLAY_MINIMUM_SERVER_PACKET_BYTES
 		: max_allowed_pkt;
 	if (packet_limit <= framing_bytes) {
 		return { MySQL_User_Variable_Replay_Packet_Budget_Status::PACKET_LIMIT_TOO_SMALL, 0 };

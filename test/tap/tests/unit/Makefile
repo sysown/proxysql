@@ -310,9 +310,9 @@ endif
 # submake.  Keep that rebuild in the same DEBUG configuration detected above:
 # MySQL_Data_Stream embeds MySQL_Protocol, whose DEBUG-only members affect the
 # public class layout used by both the archive and these test translation units.
-LIB_OPTZ :=
+LIB_OPTZ_ARG :=
 ifneq ($(PSQLDEBUG),)
-	LIB_OPTZ := -O0 -ggdb -DDEBUG
+	LIB_OPTZ_ARG := OPTZ="-O0 -ggdb -DDEBUG"
 endif
 
 # MYSQLX_TEST_BUILD enables the test-only methods (`*_for_test`) on the
@@ -394,7 +394,7 @@ $(LIBPROXYSQLAR): FORCE
 		PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) \
 		PROXYSQLED25519=$(PROXYSQLED25519) \
 		PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) \
-		OPTZ="$(LIB_OPTZ)" CC=$(CC) CXX=$(CXX)
+		$(LIB_OPTZ_ARG) CC=$(CC) CXX=$(CXX)
 
 
 # ===========================================================================

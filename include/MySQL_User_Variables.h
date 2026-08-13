@@ -1,5 +1,5 @@
-#ifndef PROXYSQL_MYSQL_USER_VARIABLES_H
-#define PROXYSQL_MYSQL_USER_VARIABLES_H
+#ifndef __CLASS_MYSQL_USER_VARIABLES_H
+#define __CLASS_MYSQL_USER_VARIABLES_H
 
 #include <cstddef>
 #include <cstdint>
@@ -81,7 +81,7 @@ struct MySQL_User_Variable_Replay_Packet_Budget {
 	size_t max_query_bytes { 0 };
 };
 
-constexpr uint32_t kMySQLUserVariableReplayMinimumServerPacketBytes = 1024;
+constexpr uint32_t MYSQL_USER_VARIABLE_REPLAY_MINIMUM_SERVER_PACKET_BYTES = 1024;
 
 struct MySQL_User_Variable_Replay_Plan {
 	MySQL_User_Variable_Replay_Status status { MySQL_User_Variable_Replay_Status::OK };
@@ -96,8 +96,8 @@ enum class MySQL_User_Variable_Replay_Completion : uint8_t {
 
 class MySQL_User_Variable_State {
 public:
-	static constexpr size_t kMaxVariables = 128;
-	static constexpr size_t kMaxStoredBytes = 64 * 1024;
+	static constexpr size_t MAX_VARIABLES = 128;
+	static constexpr size_t MAX_STORED_BYTES = 64 * 1024;
 	MySQL_User_Variable_State() = default;
 	MySQL_User_Variable_State(const MySQL_User_Variable_State&) = default;
 	MySQL_User_Variable_State& operator=(const MySQL_User_Variable_State&) = default;
