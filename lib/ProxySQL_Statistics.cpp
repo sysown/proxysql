@@ -2122,13 +2122,38 @@ void ProxySQL_Statistics::tsdb_cluster_aggregation_check(unsigned long long curt
 			desired = true;
 		}
 	}
+
+	// A stop was previously requested and the worker may still be winding
+	// down (it can be blocked in peer I/O for up to ~11s). Never
+	// pthread_join() until the worker itself reports (via
+	// tsdb_agg_thread_done) that it has fully returned -- otherwise this call
+	// (on the admin main loop thread) would block, delaying
+	// leader_election_tick() called right after this check.
+	if (tsdb_agg_thread_started && tsdb_agg_stop.load()) {
+		if (tsdb_agg_thread_done.load() == false) {
+			// Still stopping: do nothing this tick, and in particular do NOT
+			// start a new worker even if leadership (and thus 'desired') was
+			// regained in the meantime -- the old worker must be fully
+			// reaped first.
+			return;
+		}
+		// Worker has returned: this join is effectively instantaneous.
+		pthread_join(tsdb_agg_thread, NULL);
+		tsdb_agg_thread_started = false;
+		tsdb_agg_stop.store(false);
+		tsdb_agg_thread_done.store(false);
+		proxy_info("TSDB cluster aggregation: stopped\n");
+	}
+
 	if (desired == true && tsdb_agg_thread_started == false) {
 		tsdb_agg_stop.store(false);
+		tsdb_agg_thread_done.store(false);
 		// Clear per-peer episode state before (re)starting the worker: these maps
 		// are worker-thread-only (no locking), so it's only safe to reset them
-		// here, before the new thread is created. Otherwise a restarted
-		// leadership inherits stale stall/cap-hit counters and watermarks from a
-		// previous leadership episode.
+		// here, before the new thread is created. The block above guarantees any
+		// previous worker has already been joined, so this is safe. Otherwise a
+		// restarted leadership inherits stale stall/cap-hit counters and
+		// watermarks from a previous leadership episode.
 		tsdb_agg_peer_last_wm.clear();
 		tsdb_agg_peer_stall_count.clear();
 		tsdb_agg_peer_stall_logged.clear();
@@ -2142,11 +2167,14 @@ void ProxySQL_Statistics::tsdb_cluster_aggregation_check(unsigned long long curt
 			proxy_error("TSDB cluster aggregation: failed to create worker thread\n");
 		}
 	} else if (desired == false && tsdb_agg_thread_started == true) {
+		// Request the stop but do NOT join here (see the reap block above --
+		// reaping happens on a later tick once the worker sets
+		// tsdb_agg_thread_done). tsdb_agg_active goes false immediately since
+		// it is REST-visible and should reflect "no longer aggregating" as
+		// soon as the stop is requested, not only once the worker is reaped.
 		tsdb_agg_stop.store(true);
-		pthread_join(tsdb_agg_thread, NULL);
-		tsdb_agg_thread_started = false;
 		tsdb_agg_active.store(false);
-		proxy_info("TSDB cluster aggregation: stopped\n");
+		proxy_info("TSDB cluster aggregation: stop requested (leadership lost)\n");
 	}
 }
 
@@ -2160,6 +2188,10 @@ void ProxySQL_Statistics::tsdb_cluster_aggregation_thread_loop() {
 			usleep(100000);
 		}
 	}
+	// VERY LAST action before this function (and the thread) returns: tells
+	// tsdb_cluster_aggregation_check() it is now safe to pthread_join() this
+	// thread without blocking the admin main loop.
+	tsdb_agg_thread_done.store(true);
 }
 
 void ProxySQL_Statistics::tsdb_cluster_aggregation_cycle() {
@@ -2227,7 +2259,6 @@ SQLite3_result * ProxySQL_Statistics::get_tsdb_cluster_nodes() {
 }
 
 void ProxySQL_Statistics::tsdb_cluster_replicate_self(const std::string& node, long watermark, int limit) {
-	char buf[512];
 	std::string esc_node = escape_sql_string_literal(node);
 	// >= (not >): the sampler stamps every series in a tick with the same time_t,
 	// so rows arrive in same-timestamp groups. The watermark for the next cycle is
@@ -2246,17 +2277,16 @@ void ProxySQL_Statistics::tsdb_cluster_replicate_self(const std::string& node, l
 	// tsdb-cluster_batch_rows) as the peer path. In any multi-node cluster the
 	// peer path's identical per-tick fan-out already surfaces the warning; a
 	// single-node cluster stalling here is a known limitation of this path.
-	snprintf(buf, sizeof(buf),
+	std::string sql =
 		"INSERT OR IGNORE INTO tsdb_metrics_cluster (node, timestamp, metric_name, labels, value) "
-		"SELECT '%s', timestamp, metric_name, labels, value FROM tsdb_metrics "
-		"WHERE timestamp >= %ld ORDER BY timestamp LIMIT %d",
-		esc_node.c_str(), watermark, limit);
+		"SELECT '" + esc_node + "', timestamp, metric_name, labels, value FROM tsdb_metrics "
+		"WHERE timestamp >= " + std::to_string(watermark) + " ORDER BY timestamp LIMIT " + std::to_string(limit);
 	// Even a single statement must take the write lock: on the shared statsdb_disk
 	// connection, an unlocked write here could execute inside another thread's
 	// still-open explicit transaction (tsdb_sampler_loop / tsdb_monitor_loop use
 	// the same connection from the admin thread).
 	statsdb_disk->wrlock();
-	statsdb_disk->execute(buf);
+	statsdb_disk->execute(sql.c_str());
 	statsdb_disk->wrunlock();
 }
 

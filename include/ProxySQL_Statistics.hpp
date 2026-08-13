@@ -146,6 +146,13 @@ class ProxySQL_Statistics {
 	pthread_t tsdb_agg_thread;
 	bool tsdb_agg_thread_started = false;       // only touched by the admin main loop thread
 	std::atomic<bool> tsdb_agg_stop { false };
+	// Set to true by the worker thread as its VERY LAST action before
+	// returning. tsdb_cluster_aggregation_check() must not pthread_join()
+	// the worker until this is observed true -- the worker can be blocked in
+	// peer I/O for up to ~11s (1s connect + 10s read/write timeouts), and a
+	// blocking join on the admin main loop thread would stall
+	// leader_election_tick(), called right after this check.
+	std::atomic<bool> tsdb_agg_thread_done { false };
 	sqlite3_stmt *stmt_insert_tsdb_cluster_metric = NULL;
 	// Worker-thread-only bookkeeping (no locking needed: only the aggregation thread touches these)
 	std::map<std::string, long> tsdb_agg_peer_last_wm;       // last watermark observed per peer
