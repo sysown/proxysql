@@ -322,6 +322,14 @@ test_aws_iam_metrics-t:
 	$(MAKE) -C unit -j PROXYSQL40=$(PROXYSQL40) test_aws_iam_metrics-t
 	ln -fs unit/test_aws_iam_metrics-t $@
 
+# Build the controlled server first, then use the component-test linker so the
+# production MySQL_Connection path can run without a daemon or an AWS SDK.
+.PHONY: test_aws_iam_backend_auth-t
+test_aws_iam_backend_auth-t:
+	$(MAKE) -C $(PROXYSQL_PATH)/test/deps/aws_iam_mysql_server -j PROXYSQL40=$(PROXYSQL40)
+	$(MAKE) -C unit -j PROXYSQL40=$(PROXYSQL40) test_aws_iam_backend_auth-t
+	ln -fs unit/test_aws_iam_backend_auth-t $@
+
 create_connection_annotation: test_connection_annotation-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) -DTEST_AURORA $< $(IDIRS) $(LDIRS) $(OPT) $(OBJ) $(MYLIBS) $(STATIC_LIBS) -o $@
 

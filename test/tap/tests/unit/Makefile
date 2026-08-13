@@ -924,6 +924,12 @@ test_aws_iam_metrics-t: ../test_aws_iam_metrics-t.cpp $(TEST_HELPERS_OBJ) $(LIBP
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 
+test_aws_iam_backend_auth-t: ../test_aws_iam_backend_auth-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) -DAWS_IAM_MYSQL_SERVER_PATH=\"$(PROXYSQL_PATH)/test/deps/aws_iam_mysql_server/aws_iam_mysql_server-t\" \
+		$< $(TEST_HELPERS_OBJ) -I$(TEST_HELPERS_DIR) \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
+
 ifeq ($(UNAME_S),Linux)
 aws_iam_session_state_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=mysql_real_connect_start
 aws_iam_pool_unit-t: ALLOW_MULTI_DEF += \

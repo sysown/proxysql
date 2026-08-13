@@ -111,6 +111,25 @@ const uint32_t R_PORT = 16062;
 // Use 127.0.0.1 to connect to it, not cl.host (which may point to a different container).
 const char* R_HOST = "127.0.0.1";
 
+void restore_task11_mysql_users(MYSQL* admin, int& backup_stage) {
+	if (admin == nullptr || backup_stage == 0) return;
+	const auto best_effort = [admin](const char* query) {
+		if (mysql_query(admin, query) != 0) {
+			diag("Task 11 mysql_users restore query failed: %s", mysql_error(admin));
+		}
+	};
+	best_effort("DELETE FROM mysql_users");
+	best_effort("INSERT INTO mysql_users SELECT * FROM mysql_users_sync_test_task11");
+	if (backup_stage >= 2) {
+		best_effort("DELETE FROM disk.mysql_users");
+		best_effort("INSERT INTO disk.mysql_users SELECT * FROM mysql_users_disk_sync_test_task11");
+	}
+	best_effort("DROP TABLE IF EXISTS mysql_users_sync_test_task11");
+	best_effort("DROP TABLE IF EXISTS mysql_users_disk_sync_test_task11");
+	best_effort("LOAD MYSQL USERS TO RUNTIME");
+	backup_stage = 0;
+}
+
 // Hostname visible to other containers on the Docker network.
 // Used when registering the replica in proxysql_servers on the primary so the
 // primary's cluster monitor can reach the replica.  Falls back to R_HOST when
@@ -1181,6 +1200,7 @@ int main(int, char**) {
 	int res = 0;
 	CommandLine cl;
 	std::atomic<bool> save_proxy_stderr(false);
+	int task11_mysql_users_backup_stage = 0;
 
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
@@ -1213,7 +1233,7 @@ int main(int, char**) {
 
 	plan(
 		// Sync tests by values
-		16 +
+		18 +
 		// Module checkums tests; enabled and disabled checksums
 		check_modules_checksums_sync__tests +
 		(cl.use_noise ? 3 : 0)
@@ -1497,6 +1517,53 @@ int main(int, char**) {
 		std::cout << "REPLICA TABLE AFTER SYNC:" << std::endl;
 		system(print_replica_hostgroup_attributes.c_str());
 		ok(not_synced_query == false, "'mysql_hostgroup_attributes' should be synced.");
+
+		// IAM policy is configuration state. Keep the hostgroup-region row live
+		// while exercising a user save/load and cluster round-trip so the replica
+		// must observe both halves of the effective IAM policy exactly.
+		const char* iam_username = "tap_aws_iam_cluster_sync";
+		const char* iam_attributes = "{\"backend_auth\":{\"type\":\"aws_iam\"}}";
+		MYSQL_QUERY__(proxy_admin, "DROP TABLE IF EXISTS mysql_users_sync_test_task11");
+		MYSQL_QUERY__(proxy_admin, "DROP TABLE IF EXISTS mysql_users_disk_sync_test_task11");
+		MYSQL_QUERY__(proxy_admin, "CREATE TABLE mysql_users_sync_test_task11 AS SELECT * FROM mysql_users");
+		task11_mysql_users_backup_stage = 1;
+		MYSQL_QUERY__(proxy_admin,
+			"CREATE TABLE mysql_users_disk_sync_test_task11 AS SELECT * FROM disk.mysql_users");
+		task11_mysql_users_backup_stage = 2;
+		MYSQL_QUERY__(proxy_admin, "DELETE FROM mysql_users WHERE username='tap_aws_iam_cluster_sync'");
+		MYSQL_QUERY__(proxy_admin,
+			"INSERT INTO mysql_users (username,password,active,default_hostgroup,backend,frontend,attributes) "
+			"VALUES ('tap_aws_iam_cluster_sync','',1,21,1,0,'{\"backend_auth\":{\"type\":\"aws_iam\"}}')");
+		MYSQL_QUERY__(proxy_admin, "SAVE MYSQL USERS TO DISK");
+		MYSQL_QUERY__(proxy_admin, "DELETE FROM mysql_users WHERE username='tap_aws_iam_cluster_sync'");
+		MYSQL_QUERY__(proxy_admin, "LOAD MYSQL USERS FROM DISK");
+
+		const std::string primary_iam_policy_query {
+			"SELECT COUNT(*) FROM mysql_users WHERE username='" + std::string(iam_username) +
+			"' AND password='' AND active=1 AND default_hostgroup=21 AND backend=1 AND frontend=0 "
+			"AND attributes='" + std::string(iam_attributes) + "'"
+		};
+		MYSQL_QUERY__(proxy_admin, primary_iam_policy_query.c_str());
+		MYSQL_RES* primary_iam_res = mysql_store_result(proxy_admin);
+		MYSQL_ROW primary_iam_row = mysql_fetch_row(primary_iam_res);
+		const bool primary_iam_policy_ok = primary_iam_row && primary_iam_row[0] &&
+			std::atoi(primary_iam_row[0]) == 1;
+		mysql_free_result(primary_iam_res);
+		ok(primary_iam_policy_ok, "IAM user policy survives save/load exactly");
+
+		MYSQL_QUERY__(proxy_admin, "LOAD MYSQL USERS TO RUNTIME");
+		const std::string replica_iam_policy_query {
+			"SELECT ((SELECT COUNT(*) FROM mysql_users WHERE username='" + std::string(iam_username) +
+			"' AND password='' AND active=1 AND default_hostgroup=21 AND backend=1 AND frontend=0 "
+			"AND attributes='" + std::string(iam_attributes) + "')=1 "
+			"AND (SELECT COUNT(*) FROM mysql_hostgroup_attributes WHERE hostgroup_id=21 "
+			"AND hostgroup_settings='{\"handle_warnings\":1,\"aws_iam_region\":\"us-east-1\"}')=1)"
+		};
+		const bool iam_cluster_not_synced =
+			wait_for_node_sync(r_proxy_admin, { replica_iam_policy_query }, SYNC_TIMEOUT) != 0;
+		ok(!iam_cluster_not_synced, "cluster sync carries exact IAM user policy and hostgroup region");
+
+		restore_task11_mysql_users(proxy_admin, task11_mysql_users_backup_stage);
 
 		// TEARDOWN CONFIG
 		MYSQL_QUERY__(proxy_admin, "DELETE FROM mysql_hostgroup_attributes");
@@ -2774,6 +2841,7 @@ int main(int, char**) {
 
 cleanup:
 	// Teardown config
+	restore_task11_mysql_users(proxy_admin, task11_mysql_users_backup_stage);
 
 	// In case of test failing, save the stderr output from the spawned proxysql instance
 	if (tests_failed() != 0) {
