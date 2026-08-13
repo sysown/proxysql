@@ -327,6 +327,7 @@ enum session_status {
 	RESYNCHRONIZING_CONNECTION,
 	SETTING_SESSION_TRACK_VARIABLES,
 	SETTING_SESSION_TRACK_STATE,
+	SETTING_USER_VARIABLES,
 	session_status___NONE // special marker
 };
 
@@ -1353,6 +1354,7 @@ __thread int mysql_thread___query_processor_regex;
 __thread int mysql_thread___set_query_lock_on_hostgroup;
 __thread int mysql_thread___set_parser_algorithm;
 __thread int mysql_thread___query_processor_parser;
+__thread int mysql_thread___user_variable_tracking;
 __thread int mysql_thread___reset_connection_algorithm;
 __thread uint32_t mysql_thread___server_capabilities;
 __thread int mysql_thread___auto_increment_delay_multiplex;
@@ -1709,6 +1711,7 @@ extern __thread int mysql_thread___query_processor_regex;
 extern __thread int mysql_thread___set_query_lock_on_hostgroup;
 extern __thread int mysql_thread___set_parser_algorithm;
 extern __thread int mysql_thread___query_processor_parser;
+extern __thread int mysql_thread___user_variable_tracking;
 extern __thread int mysql_thread___reset_connection_algorithm;
 extern __thread uint32_t mysql_thread___server_capabilities;
 extern __thread int mysql_thread___auto_increment_delay_multiplex;
