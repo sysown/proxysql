@@ -1,0 +1,137 @@
+name: CI-tsdb-sizing
+
+# Nightly measurement job for the TSDB sizing lab (test/tsdb-lab/). This is
+# NOT a per-PR gate: it builds ProxySQL, expands the committed real-metric
+# fixture into a realistically sized proxysql_stats.db (24h raw + 14d
+# rollups + a 3-node cluster tier), measures storage/query characteristics
+# with measure.py, and uploads the printed report as a job artifact. The
+# job goes red only when measure.py detects bytes/row drift beyond
+# baseline.json's +/-25% default threshold -- that is the whole point of
+# running it nightly on a schedule instead of on every push.
+#
+# Security note: every 'run:' step below uses only static, repo-controlled
+# values (no untrusted user input is interpolated into a shell command).
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 03:22 UTC daily -- off the top-of-hour to avoid the scheduled-workflow
+    # stampede on GitHub's infrastructure.
+    - cron: '22 3 * * *'
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install build dependencies
+        # Package list per INSTALL.md's "Debian / Ubuntu based" from-source
+        # build section.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            automake bzip2 cmake make g++ gcc git openssl libssl-dev \
+            libgnutls28-dev libmysqlclient-dev libunwind8 libunwind-dev \
+            uuid-dev libncurses-dev libicu-dev libevent-dev libtirpc-dev
+
+      - name: Build ProxySQL (PROXYSQL31)
+        # Release build: the TSDB sizing lab only issues normal admin SQL
+        # (PROXYSQL SHUTDOWN, SET tsdb-*, LOAD TSDB VARIABLES TO RUNTIME),
+        # none of which requires a debug-only admin command.
+        run: PROXYSQL31=1 make -j$(nproc)
+
+      - name: Create TSDB schema (start once, then stop)
+        run: |
+          mkdir -p /tmp/tsdb-lab-ci
+          cat > /tmp/tsdb-lab-ci/n.cnf <<'EOF'
+          datadir="/tmp/tsdb-lab-ci"
+          admin_variables = { admin_credentials="admin:admin"; mysql_ifaces="0.0.0.0:16392" }
+          mysql_variables = { threads=2; interfaces="0.0.0.0:16393" }
+          EOF
+          src/proxysql --initial -f -c /tmp/tsdb-lab-ci/n.cnf -D /tmp/tsdb-lab-ci &
+          echo "started pid $!"
+          for i in $(seq 1 30); do
+            mysql -uadmin -padmin -h127.0.0.1 -P16392 -e "SELECT 1" >/dev/null 2>&1 && break
+            sleep 1
+          done
+          mysql -uadmin -padmin -h127.0.0.1 -P16392 -e "PROXYSQL SHUTDOWN"
+          sleep 2
+          test -f /tmp/tsdb-lab-ci/proxysql_stats.db
+
+      - name: Expand fixture into raw/hourly/cluster tiers
+        # CI profile: bigger than the local smoke profile in README.md --
+        # 24h of raw (5s) metrics, 14d total retention, 3-node cluster tier.
+        run: |
+          python3 test/tsdb-lab/expand.py \
+            --db /tmp/tsdb-lab-ci/proxysql_stats.db \
+            --raw-window 24h --span 14d --nodes 3
+
+      - name: Start ProxySQL and wait for hourly rollup catch-up
+        # tsdb_downsample_metrics() fires once immediately after
+        # tsdb-enabled is switched on (its internal timer starts at 0), then
+        # not again for an hour -- so tsdb_metrics_hour grows exactly once
+        # here as it catches up the raw window we just wrote via expand.py,
+        # then goes flat. Poll stats_history.tsdb_metrics_hour's row count
+        # until it holds steady across 3 consecutive samples, bounded so a
+        # stuck rollup can't hang the job forever.
+        run: |
+          src/proxysql -f -c /tmp/tsdb-lab-ci/n.cnf -D /tmp/tsdb-lab-ci &
+          echo "started pid $!"
+          for i in $(seq 1 30); do
+            mysql -uadmin -padmin -h127.0.0.1 -P16392 -e "SELECT 1" >/dev/null 2>&1 && break
+            sleep 1
+          done
+          mysql -uadmin -padmin -h127.0.0.1 -P16392 -e \
+            "SET tsdb-enabled='1'; LOAD TSDB VARIABLES TO RUNTIME;"
+
+          wait_start=$(date +%s)
+          prev=-1
+          stable=0
+          max_iterations=120   # bounded wait: up to 120 * 5s = 10 minutes
+          iter=0
+          for iter in $(seq 1 "$max_iterations"); do
+            cur=$(mysql -uadmin -padmin -h127.0.0.1 -P16392 -N -B \
+              -e "SELECT COUNT(*) FROM stats_history.tsdb_metrics_hour" 2>/dev/null || echo "")
+            if [ "$cur" = "$prev" ] && [ -n "$cur" ]; then
+              stable=$((stable + 1))
+            else
+              stable=0
+            fi
+            prev="$cur"
+            if [ "$stable" -ge 3 ]; then
+              break
+            fi
+            sleep 5
+          done
+          wait_end=$(date +%s)
+          echo "rollup catch-up: $((wait_end - wait_start))s wall time, " \
+               "tsdb_metrics_hour final row count=${prev} " \
+               "(stable=${stable}/3, iterations=${iter}/${max_iterations})" \
+            | tee /tmp/tsdb-lab-ci/rollup-catchup.log
+
+          mysql -uadmin -padmin -h127.0.0.1 -P16392 -e "PROXYSQL SHUTDOWN"
+          sleep 2
+
+      - name: Measure
+        run: |
+          python3 test/tsdb-lab/measure.py \
+            --db /tmp/tsdb-lab-ci/proxysql_stats.db \
+            --baseline test/tsdb-lab/baseline.json \
+            | tee /tmp/tsdb-lab-ci/report.txt
+
+      - name: Assemble report artifact
+        if: always()
+        run: |
+          mkdir -p /tmp/tsdb-lab-ci/artifact
+          cp /tmp/tsdb-lab-ci/report.txt /tmp/tsdb-lab-ci/artifact/ 2>/dev/null || true
+          cp /tmp/tsdb-lab-ci/rollup-catchup.log /tmp/tsdb-lab-ci/artifact/ 2>/dev/null || true
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tsdb-sizing-report-${{ github.run_id }}
+          path: /tmp/tsdb-lab-ci/artifact/
+          if-no-files-found: warn
