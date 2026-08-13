@@ -79,8 +79,8 @@ When the switch is disabled:
 - selection uses configured weights exactly as it does today;
 - no new locality metadata refreshes are scheduled;
 - in-flight locality requests are cancelled or ignored by generation;
-- cached rows may remain visible in the diagnostic table with status
-  `disabled`, but cannot affect selection.
+- when the AWS plugin is loaded, cached rows remain visible in its diagnostic
+  table with status `disabled`, but cannot affect selection.
 
 ### Per-hostgroup policy
 
@@ -233,7 +233,7 @@ A core `MySQLAwsLocalityManager` owns:
 - last-attempt and last-success times;
 - per-policy fresh/stale/expired evaluation;
 - immutable snapshots used by selection;
-- diagnostic-table rows and redacted failure state.
+- diagnostic snapshot data and redacted failure state.
 
 Core types contain only ProxySQL-owned strings, enums, timestamps, request
 IDs, and result structures. They expose no AWS SDK types.
@@ -262,6 +262,11 @@ It makes no multiplier, eligibility, hostgroup, or traffic decision.
 The plugin extends its advertised capabilities beyond `aws_iam`, for example
 with local-instance metadata and RDS-topology capabilities. The plugin reuses
 the same SDK runtime already used by IAM authentication.
+
+The plugin also registers the `stats_mysql_aws_locality` schema and its
+query-time refresh callback. The MySQL module remains the source of the rows;
+the plugin registration only makes the AWS-specific diagnostic surface exist
+when the AWS capability is actually present.
 
 ### Generic asynchronous provider ABI
 
@@ -479,8 +484,35 @@ IMDS and environment discovery require no AWS API permission.
 
 ## Observability
 
-The MySQL module exposes a read-only `stats_mysql_aws_locality` table with one
-row for each backend in a hostgroup that currently has a valid locality policy:
+The AWS plugin registers `stats_mysql_aws_locality` as a read-only table in the
+stats database. Its existence follows the plugin lifecycle:
+
+- when the AWS plugin loads successfully, its schema-registration phase adds
+  the table before the Admin databases are materialized;
+- when the AWS plugin is not configured or does not load successfully, the
+  table is not created, and querying it returns the normal SQLite
+  `no such table` error;
+- ProxySQL does not currently support hot unloading configured plugins. If hot
+  unload is introduced, the unload contract must unregister and drop this
+  table rather than leave an empty or stale table behind.
+
+The table is a query-time projection of the MySQL locality manager's current
+immutable in-memory snapshot. Before a query that references the table is
+executed, Admin invokes the registered refresh callback. The callback replaces
+the prior SQLite rows in one transaction from one retained manager snapshot,
+so a result never mixes locality generations. This is the same materialized-
+on-query model used by other runtime and stats views; the SQLite rows are not
+the authoritative locality state.
+
+Refreshing the table never performs an IMDS or AWS API request and never waits
+for metadata discovery. Network refresh remains bounded asynchronous plugin
+work; a table query reports the most recently published state, including
+`pending`, `stale`, `expired`, or `error` as applicable.
+
+The projection is non-persistent: it is not saved to disk, loaded to runtime,
+included in ProxySQL Cluster checksums, or accepted as configuration. Writes
+to it are unsupported. Each refresh emits one row for each backend in a
+hostgroup that currently has a valid locality policy:
 
 ```text
 hostgroup_id
@@ -514,9 +546,12 @@ Definitions:
 - timestamps: Unix epoch seconds, or zero if the event has never occurred;
 - `metadata_status`: one of the lifecycle states defined above.
 
-Account IDs are never exposed. When the master switch is disabled, rows may
-retain cached location text for diagnosis, but `active_multiplier` is `1.0`,
-`effective_weight` equals `configured_weight`, and status is `disabled`.
+Account IDs are never exposed. When the AWS plugin is loaded but the master
+switch is disabled, the table remains present and its rows retain cached
+location text for diagnosis. Every row has `active_multiplier` equal to `1.0`,
+`effective_weight` equal to `configured_weight`, and `metadata_status` equal
+to `disabled`. If no hostgroup currently has a valid locality policy, the
+table exists but is empty.
 
 ## Runtime sequence
 
@@ -601,6 +636,11 @@ feature.
 - policy reload affects future selections only;
 - `mysql_servers`, `runtime_mysql_servers`, saved configuration, and cluster
   checksums remain byte-for-byte unchanged by discovered metadata;
+- `stats_mysql_aws_locality` is absent without the AWS plugin and is registered
+  only when that plugin loads successfully;
+- each table query projects one consistent in-memory snapshot without issuing
+  an IMDS or AWS API request, and projected rows are never persisted or
+  clustered;
 - exact `stats_mysql_aws_locality` rows for fresh, stale, expired, error, and
   disabled states;
 - existing IAM database-authentication behavior continues through the shared
@@ -632,7 +672,8 @@ The feature is complete when all of the following are true:
    stale TTL, then returns to configured weighting.
 9. Missing capability, credentials, permissions, or metadata never prevents a
    database connection solely because locality awareness is enabled.
-10. The diagnostic table explains every active or neutral decision without
+10. The plugin-conditional, query-refreshed diagnostic table explains every
+    active or neutral decision without performing network discovery or
     exposing account IDs or sensitive AWS data.
 11. Sanitizer, lifecycle, linkage, existing IAM, and selection regression gates
     pass.
