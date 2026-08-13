@@ -24,4 +24,4 @@ missing_role_action = disable
 adopt_existing_users = false
 allow_empty_snapshot = false
 save_to_disk = true
-lock_file = /run/lock/proxysql-pgsql-user-sync.lock
+lock_file = /var/lib/proxysql/proxysql-pgsql-user-sync.lock

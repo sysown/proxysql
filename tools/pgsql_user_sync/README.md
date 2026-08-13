@@ -76,6 +76,9 @@ Remove `--dry-run` to apply the plan.  Useful non-secret overrides are
 `--save-to-disk`/`--no-save-to-disk`, and `--verbose`.  `--dry-run` fetches and
 validates both snapshots but performs no writes, runtime load, or disk save.
 An exclusive lock makes overlapping scheduler invocations a successful skip.
+The default lock is in ProxySQL's private data directory; if you override it,
+use a service-owned directory. Symlinked configuration and lock files are
+rejected.
 
 ## ProxySQL Scheduler
 

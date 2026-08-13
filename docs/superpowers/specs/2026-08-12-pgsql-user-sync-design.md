@@ -123,7 +123,7 @@ missing_role_action = disable
 adopt_existing_users = false
 allow_empty_snapshot = false
 save_to_disk = true
-lock_file = /run/lock/proxysql-pgsql-user-sync.lock
+lock_file = /var/lib/proxysql/proxysql-pgsql-user-sync.lock
 ```
 
 `profile` is a stable, non-empty identifier used to mark ownership. Profile
@@ -144,10 +144,12 @@ The supported non-secret command-line overrides are:
 
 Database passwords are deliberately config-only. They never appear in the
 scheduler table, process arguments, or normal logs. The configuration must be a
-regular file readable by the executing account. Group write/execute access and
-all access by other users are rejected; `0600` and root-owned `0640` with a
-dedicated ProxySQL group are documented examples. Symlink handling follows the
-normal operating-system file open rules, but the resolved file's metadata is
+regular non-symlink file readable by the executing account. Group write/execute
+access and all access by other users are rejected; `0600` and root-owned `0640`
+with a dedicated ProxySQL group are documented examples. The file is opened and
+validated through one descriptor so the checked object cannot be swapped before
+parsing. The lock file defaults to ProxySQL's private data directory and also
+rejects symlinks. The opened file's metadata is
 validated before credentials are used.
 
 ## Ownership and row policy

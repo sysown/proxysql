@@ -65,7 +65,7 @@ class SyncSettings:
     adopt_existing_users: bool = False
     allow_empty_snapshot: bool = False
     save_to_disk: bool = True
-    lock_file: Path = Path("/run/lock/proxysql-pgsql-user-sync.lock")
+    lock_file: Path = Path("/var/lib/proxysql/proxysql-pgsql-user-sync.lock")
 
 
 @dataclass(frozen=True)
@@ -118,7 +118,7 @@ class SyncPlan:
 
 
 PROFILE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
-IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+IDENTIFIER_RE = re.compile(r"[A-Za-z_]\w*\Z", re.ASCII)
 MD5_RE = re.compile(r"md5[0-9a-f]{32}\Z")
 SCRAM_RE = re.compile(
     r"SCRAM-SHA-256\$(?P<iterations>[0-9]+):(?P<salt>[^$]+)\$"
@@ -188,15 +188,9 @@ def _validate_timeout(section: configparser.SectionProxy, name: str = "connect_t
     return timeout
 
 
-def _validate_file(path: Path) -> Path:
-    try:
-        info = path.stat()
-    except OSError:
-        raise _error("configuration file cannot be read") from None
+def _validate_file(info: os.stat_result) -> None:
     if not stat.S_ISREG(info.st_mode):
         raise _error("configuration file must be a regular file")
-    if not os.access(path, os.R_OK):
-        raise _error("configuration file is not readable")
     # Group read is a supported deployment mode only for a root-owned file
     # (typically 0640 with a dedicated service group).  Non-root-owned files
     # must be owner-only.  Group write/execute and every other-user permission
@@ -209,51 +203,73 @@ def _validate_file(path: Path) -> Path:
         or (group_permissions & 0o040 and info.st_uid != 0)
     ):
         raise _error("configuration file has unsafe permissions")
-    return path
 
 
-def load_config(path: Path, overrides: CLIOverrides) -> AppConfig:
-    """Read and validate a protected INI configuration file."""
+def _open_config_file(path: Path):
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+    fd: int | None = None
+    try:
+        fd = os.open(path, flags)
+        _validate_file(os.fstat(fd))
+        stream = os.fdopen(fd, "r", encoding="utf-8")
+    except SyncError:
+        if fd is not None:
+            os.close(fd)
+        raise
+    except OSError:
+        if fd is not None:
+            os.close(fd)
+        raise _error("configuration file cannot be read") from None
+    return stream
 
-    if not isinstance(path, Path):
-        path = Path(path)
-    path = _validate_file(path)
+
+def _read_config(path: Path) -> configparser.ConfigParser:
     parser = configparser.ConfigParser(interpolation=None)
     try:
-        with path.open("r", encoding="utf-8") as stream:
+        with _open_config_file(path) as stream:
             parser.read_file(stream)
     except (OSError, UnicodeError, configparser.Error):
         raise _error("configuration file cannot be parsed") from None
+    return parser
 
-    source_section = _section(parser, "source")
-    proxy_section = _section(parser, "proxysql")
-    sync_section = _section(parser, "sync")
 
-    source_host, source_port = _validate_endpoint(source_section, "source")
-    proxy_host, proxy_port = _validate_endpoint(proxy_section, "proxysql")
-    source_function = source_section.get("function", "proxysql_auth.export_login_roles").strip()
+def _source_function_parts(section: configparser.SectionProxy) -> tuple[str, str]:
+    source_function = section.get("function", "proxysql_auth.export_login_roles").strip()
     function_parts = source_function.split(".", 1)
     if len(function_parts) != 2 or not all(IDENTIFIER_RE.fullmatch(part) for part in function_parts):
         raise _error("[source].function must be a schema-qualified identifier pair")
+    return function_parts[0], function_parts[1]
 
-    profile = _required(sync_section, "profile")
-    if PROFILE_RE.fullmatch(profile) is None:
-        raise _error("[sync].profile has invalid syntax")
 
-    default_hostgroup = _int_value(sync_section, "default_hostgroup", 0)
-    if default_hostgroup < 0:
-        raise _error("[sync].default_hostgroup must be non-negative")
-    missing_role_action = sync_section.get("missing_role_action", "disable").strip().lower()
-    if missing_role_action not in {"disable", "keep"}:
-        raise _error("[sync].missing_role_action must be disable or keep")
-    adopt_existing_users = _boolean_value(sync_section, "adopt_existing_users", False)
-    allow_empty_snapshot = _boolean_value(sync_section, "allow_empty_snapshot", False)
-    save_to_disk = _boolean_value(sync_section, "save_to_disk", True)
-    lock_file_value = sync_section.get("lock_file", str(SyncSettings.lock_file)).strip()
-    if not lock_file_value:
-        raise _error("[sync].lock_file must not be empty")
-    lock_file = Path(lock_file_value)
+def _source_config(section: configparser.SectionProxy) -> SourceConfig:
+    host, port = _validate_endpoint(section, "source")
+    schema, function = _source_function_parts(section)
+    return SourceConfig(
+        host=host,
+        port=port,
+        database=_required(section, "database"),
+        username=_required(section, "username"),
+        password=_required(section, "password"),
+        connect_timeout=_validate_timeout(section),
+        function_schema=schema,
+        function_name=function,
+    )
 
+
+def _proxysql_config(section: configparser.SectionProxy) -> ProxySQLConfig:
+    host, port = _validate_endpoint(section, "proxysql")
+    return ProxySQLConfig(
+        host=host,
+        port=port,
+        username=_required(section, "username"),
+        password=_required(section, "password"),
+        connect_timeout=_validate_timeout(section),
+    )
+
+
+def _sync_overrides(
+    default_hostgroup: int, missing_role_action: str, save_to_disk: bool, overrides: CLIOverrides
+) -> tuple[int, str, bool]:
     if overrides.default_hostgroup is not None:
         if not isinstance(overrides.default_hostgroup, int) or overrides.default_hostgroup < 0:
             raise _error("default_hostgroup override must be non-negative")
@@ -266,34 +282,53 @@ def load_config(path: Path, overrides: CLIOverrides) -> AppConfig:
         if not isinstance(overrides.save_to_disk, bool):
             raise _error("save_to_disk override must be boolean")
         save_to_disk = overrides.save_to_disk
+    return default_hostgroup, missing_role_action, save_to_disk
 
+
+def _sync_settings(section: configparser.SectionProxy, overrides: CLIOverrides) -> SyncSettings:
+    profile = _required(section, "profile")
+    if PROFILE_RE.fullmatch(profile) is None:
+        raise _error("[sync].profile has invalid syntax")
+    default_hostgroup = _int_value(section, "default_hostgroup", 0)
+    if default_hostgroup < 0:
+        raise _error("[sync].default_hostgroup must be non-negative")
+    missing_role_action = section.get("missing_role_action", "disable").strip().lower()
+    if missing_role_action not in {"disable", "keep"}:
+        raise _error("[sync].missing_role_action must be disable or keep")
+    lock_file_value = section.get("lock_file", str(SyncSettings.lock_file)).strip()
+    if not lock_file_value:
+        raise _error("[sync].lock_file must not be empty")
+    default_hostgroup, missing_role_action, save_to_disk = _sync_overrides(
+        default_hostgroup,
+        missing_role_action,
+        _boolean_value(section, "save_to_disk", True),
+        overrides,
+    )
+    return SyncSettings(
+        profile=profile,
+        default_hostgroup=default_hostgroup,
+        missing_role_action=missing_role_action,
+        adopt_existing_users=_boolean_value(section, "adopt_existing_users", False),
+        allow_empty_snapshot=_boolean_value(section, "allow_empty_snapshot", False),
+        save_to_disk=save_to_disk,
+        lock_file=Path(lock_file_value),
+    )
+
+
+def load_config(path: Path, overrides: CLIOverrides) -> AppConfig:
+    """Read and validate a protected INI configuration file."""
+
+    if not isinstance(path, Path):
+        path = Path(path)
+    parser = _read_config(path)
+
+    source_section = _section(parser, "source")
+    proxy_section = _section(parser, "proxysql")
+    sync_section = _section(parser, "sync")
     return AppConfig(
-        source=SourceConfig(
-            host=source_host,
-            port=source_port,
-            database=_required(source_section, "database"),
-            username=_required(source_section, "username"),
-            password=_required(source_section, "password"),
-            connect_timeout=_validate_timeout(source_section),
-            function_schema=function_parts[0],
-            function_name=function_parts[1],
-        ),
-        proxysql=ProxySQLConfig(
-            host=proxy_host,
-            port=proxy_port,
-            username=_required(proxy_section, "username"),
-            password=_required(proxy_section, "password"),
-            connect_timeout=_validate_timeout(proxy_section),
-        ),
-        sync=SyncSettings(
-            profile=profile,
-            default_hostgroup=default_hostgroup,
-            missing_role_action=missing_role_action,
-            adopt_existing_users=adopt_existing_users,
-            allow_empty_snapshot=allow_empty_snapshot,
-            save_to_disk=save_to_disk,
-            lock_file=lock_file,
-        ),
+        source=_source_config(source_section),
+        proxysql=_proxysql_config(proxy_section),
+        sync=_sync_settings(sync_section, overrides),
     )
 
 
@@ -314,7 +349,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 def _decode_base64(value: str) -> bytes | None:
     try:
         decoded = base64.b64decode(value.encode("ascii"), validate=True)
-    except (UnicodeEncodeError, ValueError):
+    except ValueError:
         return None
     # Reject alternate/non-canonical encodings in addition to non-alphabet
     # characters.  PostgreSQL emits standard padded base64 in SCRAM values.
@@ -352,39 +387,51 @@ def validate_verifier(value: str) -> None:
         raise _error("invalid SCRAM key length")
 
 
+def _snapshot_columns(row: object) -> tuple[str, str]:
+    if isinstance(row, (str, bytes, bytearray)) or not isinstance(row, Sequence):
+        raise _error("snapshot row must contain exactly two columns")
+    if len(row) != 2:
+        raise _error("snapshot row must contain exactly two columns")
+    username, password = row
+    if not isinstance(username, str) or not isinstance(password, str):
+        raise _error("snapshot username and password must be strings")
+    return username, password
+
+
+def _validate_snapshot_username(username: str) -> None:
+    if not username:
+        raise _error("snapshot username must not be empty")
+    if "\x00" in username:
+        raise _error("snapshot username must not contain NUL")
+    try:
+        username_bytes = username.encode("utf-8")
+    except UnicodeEncodeError:
+        raise _error("snapshot username must be valid UTF-8") from None
+    if len(username_bytes) > 63:
+        raise _error("snapshot username exceeds 63 UTF-8 bytes")
+
+
+def _snapshot_role(row: object) -> SourceRole:
+    username, password = _snapshot_columns(row)
+    _validate_snapshot_username(username)
+    validate_verifier(password)
+    return SourceRole(username=username, password=password)
+
+
 def validate_snapshot(rows: Iterable[Sequence[object]], allow_empty: bool) -> dict[str, SourceRole]:
     """Validate a complete two-column role snapshot and return it sorted."""
 
     result: dict[str, SourceRole] = {}
-    count = 0
     try:
         iterator = iter(rows)
     except TypeError:
         raise _error("snapshot must be iterable") from None
     for row in iterator:
-        count += 1
-        if isinstance(row, (str, bytes, bytearray)) or not isinstance(row, Sequence):
-            raise _error("snapshot row must contain exactly two columns")
-        if len(row) != 2:
-            raise _error("snapshot row must contain exactly two columns")
-        username, password = row
-        if not isinstance(username, str) or not isinstance(password, str):
-            raise _error("snapshot username and password must be strings")
-        if not username:
-            raise _error("snapshot username must not be empty")
-        if "\x00" in username:
-            raise _error("snapshot username must not contain NUL")
-        try:
-            username_bytes = username.encode("utf-8")
-        except UnicodeEncodeError:
-            raise _error("snapshot username must be valid UTF-8") from None
-        if len(username_bytes) > 63:
-            raise _error("snapshot username exceeds 63 UTF-8 bytes")
-        if username in result:
+        role = _snapshot_role(row)
+        if role.username in result:
             raise _error("snapshot contains duplicate username")
-        validate_verifier(password)
-        result[username] = SourceRole(username=username, password=password)
-    if count == 0 and not allow_empty:
+        result[role.username] = role
+    if not result and not allow_empty:
         raise _error("snapshot is empty")
     return dict(sorted(result.items()))
 
@@ -399,7 +446,7 @@ def _ownership_document(attributes: str) -> dict[str, object]:
         return {}
     try:
         document = json.loads(attributes)
-    except (TypeError, ValueError, json.JSONDecodeError):
+    except (TypeError, ValueError):
         raise _error("ProxySQL user attributes must be valid JSON") from None
     if not isinstance(document, dict):
         raise _error("ProxySQL user attributes must be a JSON object")
@@ -486,50 +533,49 @@ def _runtime_matches(main_row: ProxySQLUser, runtime_row: ProxySQLUser | None) -
     return replace(main_row, frontend=0) == replace(runtime_row, frontend=0)
 
 
-def build_plan(
-    source: Mapping[str, SourceRole],
-    main: Iterable[ProxySQLUser],
-    runtime: Iterable[ProxySQLUser],
-    settings: SyncSettings,
-) -> SyncPlan:
-    """Build a deterministic, side-effect-free reconciliation plan."""
+_UNMANAGED_RUNTIME_DRIFT = "unmanaged main/runtime drift"
 
+
+def _source_names(source: Mapping[str, SourceRole]) -> set[str]:
     if not isinstance(source, Mapping):
         raise _error("source snapshot must be a username mapping")
-    source_names = set(source)
+    names = set(source)
     for username, role in source.items():
         if not isinstance(username, str) or not isinstance(role, SourceRole):
             raise _error("source snapshot contains an invalid role")
         if role.username != username:
             raise _error("source snapshot username does not match role")
+    return names
 
-    main_by_name = _user_index(main, "main")
-    runtime_by_name = _user_index(runtime, "runtime")
-    managed_active_drift = False
 
-    # LOAD is global. Never overwrite an unrelated user's active runtime state.
+def _main_runtime_drift(main_row: ProxySQLUser, runtime_row: ProxySQLUser | None) -> bool:
+    return not _runtime_matches(main_row, runtime_row) if main_row.active else runtime_row is not None
+
+
+def _managed_runtime_drift(
+    main_by_name: Mapping[str, ProxySQLUser],
+    runtime_by_name: Mapping[str, ProxySQLUser],
+    settings: SyncSettings,
+) -> bool:
+    managed_drift = False
     for username, main_row in main_by_name.items():
-        runtime_row = runtime_by_name.get(username)
-        managed = _managed(main_row, settings)
-        if main_row.active:
-            if not _runtime_matches(main_row, runtime_row):
-                if not managed:
-                    raise _error("unmanaged main/runtime drift")
-                managed_active_drift = True
-        elif runtime_row is not None:
-            if not managed:
-                raise _error("unmanaged main/runtime drift")
-            managed_active_drift = True
+        if not _main_runtime_drift(main_row, runtime_by_name.get(username)):
+            continue
+        if not _managed(main_row, settings):
+            raise _error(_UNMANAGED_RUNTIME_DRIFT)
+        managed_drift = True
     for username, runtime_row in runtime_by_name.items():
         if username in main_by_name:
             continue
         if _managed(runtime_row, settings):
-            managed_active_drift = True
+            managed_drift = True
         elif runtime_row.active:
-            raise _error("unmanaged main/runtime drift")
+            raise _error(_UNMANAGED_RUNTIME_DRIFT)
+    return managed_drift
 
-    actions: list[SyncAction] = []
-    counts = {
+
+def _plan_counts(source: Mapping[str, SourceRole]) -> dict[str, int]:
+    return {
         "discovered": len(source),
         "created": 0,
         "updated": 0,
@@ -539,16 +585,21 @@ def build_plan(
         "conflicted": 0,
     }
 
-    # Source roles are sorted for stable action order and reproducible output.
-    for username in sorted(source_names):
+
+def _source_actions(
+    source: Mapping[str, SourceRole],
+    main_by_name: Mapping[str, ProxySQLUser],
+    settings: SyncSettings,
+    counts: dict[str, int],
+) -> list[SyncAction]:
+    actions: list[SyncAction] = []
+    for username in sorted(source):
         role = source[username]
         existing = main_by_name.get(username)
         if existing is None:
-            after = _new_user(role, settings)
-            actions.append(SyncAction(ActionKind.CREATE, None, after))
+            actions.append(SyncAction(ActionKind.CREATE, None, _new_user(role, settings)))
             counts["created"] += 1
             continue
-
         owner = decode_ownership(existing.attributes)
         if owner is not None and owner != settings.profile:
             counts["conflicted"] += 1
@@ -556,7 +607,6 @@ def build_plan(
         if owner is None and not settings.adopt_existing_users:
             counts["conflicted"] += 1
             raise _error("unmanaged user conflicts with source role")
-
         after = replace(
             existing,
             password=role.password,
@@ -565,27 +615,52 @@ def build_plan(
         )
         if after == existing:
             counts["unchanged"] += 1
-        else:
-            actions.append(SyncAction(ActionKind.UPDATE, existing, after))
-            counts["updated"] += 1
-            if not existing.active:
-                counts["reactivated"] += 1
+            continue
+        actions.append(SyncAction(ActionKind.UPDATE, existing, after))
+        counts["updated"] += 1
+        if not existing.active:
+            counts["reactivated"] += 1
+    return actions
 
-    if settings.missing_role_action == "disable":
-        for username in sorted(set(main_by_name) - source_names):
-            existing = main_by_name[username]
-            if not _managed(existing, settings) or not existing.active:
-                continue
-            after = replace(existing, active=0)
-            actions.append(SyncAction(ActionKind.DISABLE, existing, after))
-            counts["disabled"] += 1
-    elif settings.missing_role_action != "keep":
+
+def _missing_role_actions(
+    source_names: set[str],
+    main_by_name: Mapping[str, ProxySQLUser],
+    settings: SyncSettings,
+    counts: dict[str, int],
+) -> list[SyncAction]:
+    if settings.missing_role_action == "keep":
+        return []
+    if settings.missing_role_action != "disable":
         raise _error("missing_role_action must be disable or keep")
+    actions = []
+    for username in sorted(set(main_by_name) - source_names):
+        existing = main_by_name[username]
+        if _managed(existing, settings) and existing.active:
+            actions.append(SyncAction(ActionKind.DISABLE, existing, replace(existing, active=0)))
+            counts["disabled"] += 1
+    return actions
 
+
+def build_plan(
+    source: Mapping[str, SourceRole],
+    main: Iterable[ProxySQLUser],
+    runtime: Iterable[ProxySQLUser],
+    settings: SyncSettings,
+) -> SyncPlan:
+    """Build a deterministic, side-effect-free reconciliation plan."""
+
+    source_names = _source_names(source)
+    main_by_name = _user_index(main, "main")
+    runtime_by_name = _user_index(runtime, "runtime")
+    managed_runtime_drift = _managed_runtime_drift(main_by_name, runtime_by_name, settings)
+    counts = _plan_counts(source)
+    actions = _source_actions(source, main_by_name, settings, counts)
+    actions.extend(_missing_role_actions(source_names, main_by_name, settings, counts))
     actions.sort(key=lambda action: action.after.username)
     return SyncPlan(
         actions=tuple(actions),
-        requires_load=bool(actions) or managed_active_drift,
+        requires_load=bool(actions) or managed_runtime_drift,
         counts=MappingProxyType(counts),
     )
 
@@ -805,6 +880,50 @@ def _sync_failure(message: str) -> SyncError:
     return _error(message)
 
 
+def _source_snapshot(source: SourceAdapter, allow_empty: bool) -> dict[str, SourceRole]:
+    try:
+        raw_snapshot = source.fetch_snapshot()
+    except Exception:
+        raise _sync_failure("unable to fetch source role snapshot") from None
+    return validate_snapshot(raw_snapshot, allow_empty)
+
+
+def _admin_snapshots(admin: AdminAdapter) -> tuple[list[ProxySQLUser], list[ProxySQLUser]]:
+    try:
+        return admin.fetch_main_users(), admin.fetch_runtime_users()
+    except Exception:
+        raise _sync_failure("unable to fetch ProxySQL user snapshots") from None
+
+
+def _apply_plan(plan: SyncPlan, admin: AdminAdapter, settings: SyncSettings) -> tuple[bool, bool, bool]:
+    if plan.actions:
+        try:
+            admin.apply_actions(plan.actions)
+        except Exception:
+            raise _sync_failure("unable to apply ProxySQL user changes") from None
+    if not plan.requires_load:
+        return False, False, False
+    try:
+        admin.load_runtime()
+    except Exception:
+        raise _sync_failure("unable to load ProxySQL users to runtime") from None
+    if not settings.save_to_disk:
+        return True, False, False
+    try:
+        admin.save_to_disk()
+    except Exception:
+        return True, False, True
+    return True, True, False
+
+
+def _sync_outcome(dry_run: bool, partial: bool) -> str:
+    if dry_run:
+        return "dry-run"
+    if partial:
+        return "partial"
+    return "success"
+
+
 def run_sync(
     config: AppConfig,
     source: SourceAdapter,
@@ -816,16 +935,8 @@ def run_sync(
     """Read, plan, and optionally reconcile one complete role snapshot."""
 
     started = time.monotonic()
-    try:
-        raw_snapshot = source.fetch_snapshot()
-    except Exception:
-        raise _sync_failure("unable to fetch source role snapshot") from None
-    snapshot = validate_snapshot(raw_snapshot, config.sync.allow_empty_snapshot)
-    try:
-        main_users = admin.fetch_main_users()
-        runtime_users = admin.fetch_runtime_users()
-    except Exception:
-        raise _sync_failure("unable to fetch ProxySQL user snapshots") from None
+    snapshot = _source_snapshot(source, config.sync.allow_empty_snapshot)
+    main_users, runtime_users = _admin_snapshots(admin)
     plan = build_plan(snapshot, main_users, runtime_users, config.sync)
     if verbose:
         for action in plan.actions:
@@ -835,26 +946,9 @@ def run_sync(
     saved = False
     partial = False
     if not dry_run:
-        if plan.actions:
-            try:
-                admin.apply_actions(plan.actions)
-            except Exception:
-                raise _sync_failure("unable to apply ProxySQL user changes") from None
-        if plan.requires_load:
-            try:
-                admin.load_runtime()
-            except Exception:
-                raise _sync_failure("unable to load ProxySQL users to runtime") from None
-            loaded = True
-            if config.sync.save_to_disk:
-                try:
-                    admin.save_to_disk()
-                except Exception:
-                    partial = True
-                else:
-                    saved = True
+        loaded, saved, partial = _apply_plan(plan, admin, config.sync)
     return RunSummary(
-        outcome="dry-run" if dry_run else "partial" if partial else "success",
+        outcome=_sync_outcome(dry_run, partial),
         counts=MappingProxyType(dict(plan.counts)),
         loaded=loaded,
         saved=saved,
@@ -867,7 +961,7 @@ def exclusive_lock(path: Path):
     """Yield whether the process acquired the non-blocking synchronizer lock."""
 
     try:
-        fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+        fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
     except OSError:
         raise _error("unable to open synchronizer lock file") from None
     try:

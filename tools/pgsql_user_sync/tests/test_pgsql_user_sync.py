@@ -55,6 +55,9 @@ profile = primary-cluster
         os.chmod(handle.name, mode)
         return Path(handle.name)
 
+    def load_default_config(self, path):
+        return self.mod.load_config(path, self.mod.CLIOverrides())
+
     def test_defaults_and_cli_hostgroup_override(self):
         path = self.write_config()
         cfg = self.mod.load_config(path, self.mod.CLIOverrides(default_hostgroup=12))
@@ -105,30 +108,38 @@ save_to_disk = true
     def test_rejects_world_readable_config(self):
         path = self.write_config(mode=0o604)
         with self.assertRaisesRegex(self.mod.SyncError, "permissions"):
-            self.mod.load_config(path, self.mod.CLIOverrides())
+            self.load_default_config(path)
+
+    def test_rejects_symlinked_config_before_reading_target(self):
+        target = self.write_config()
+        alias = target.with_name(f"{target.name}.link")
+        alias.symlink_to(target)
+        self.addCleanup(alias.unlink)
+        with self.assertRaisesRegex(self.mod.SyncError, "cannot be read"):
+            self.load_default_config(alias)
 
     def test_group_read_requires_root_owner_and_owner_only_is_allowed(self):
         path = self.write_config(mode=0o640)
         root_metadata = SimpleNamespace(st_mode=stat.S_IFREG | 0o640, st_uid=0)
-        with patch.object(self.mod.Path, "stat", return_value=root_metadata):
+        with patch.object(self.mod.os, "fstat", return_value=root_metadata):
             self.mod.load_config(path, self.mod.CLIOverrides())
 
         non_root_metadata = SimpleNamespace(st_mode=stat.S_IFREG | 0o640, st_uid=1000)
-        with patch.object(self.mod.Path, "stat", return_value=non_root_metadata):
+        with patch.object(self.mod.os, "fstat", return_value=non_root_metadata):
             with self.assertRaisesRegex(self.mod.SyncError, "permissions"):
-                self.mod.load_config(path, self.mod.CLIOverrides())
+                self.load_default_config(path)
 
         path = self.write_config(mode=0o600)
         owner_only_metadata = SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=1000)
-        with patch.object(self.mod.Path, "stat", return_value=owner_only_metadata):
+        with patch.object(self.mod.os, "fstat", return_value=owner_only_metadata):
             self.mod.load_config(path, self.mod.CLIOverrides())
 
     def test_rejects_group_write_even_when_root_owned(self):
         path = self.write_config(mode=0o660)
         root_metadata = SimpleNamespace(st_mode=stat.S_IFREG | 0o660, st_uid=0)
-        with patch.object(self.mod.Path, "stat", return_value=root_metadata):
+        with patch.object(self.mod.os, "fstat", return_value=root_metadata):
             with self.assertRaisesRegex(self.mod.SyncError, "permissions"):
-                self.mod.load_config(path, self.mod.CLIOverrides())
+                self.load_default_config(path)
 
     def test_rejects_invalid_profile_and_function(self):
         for profile in ("", "-bad", "a" * 65):
@@ -148,7 +159,7 @@ password = secret
 profile = %s
 """ % profile)
             with self.assertRaisesRegex(self.mod.SyncError, "profile"):
-                self.mod.load_config(path, self.mod.CLIOverrides())
+                self.load_default_config(path)
 
         for function in ("roles", "auth.bad-name", "1auth.roles", "auth.roles.extra"):
             path = self.write_config(text="""\
@@ -168,7 +179,7 @@ password = secret
 profile = p
 """ % function)
             with self.assertRaisesRegex(self.mod.SyncError, "function"):
-                self.mod.load_config(path, self.mod.CLIOverrides())
+                self.load_default_config(path)
 
     def test_rejects_invalid_values_and_missing_fields(self):
         path = self.write_config(text="""\
@@ -193,7 +204,7 @@ allow_empty_snapshot = false
 save_to_disk = true
 """)
         with self.assertRaises(self.mod.SyncError):
-            self.mod.load_config(path, self.mod.CLIOverrides())
+            self.load_default_config(path)
 
         path = self.write_config(text="""\
 [source]
@@ -210,7 +221,7 @@ password = secret
 profile = p
 """)
         with self.assertRaisesRegex(self.mod.SyncError, "password"):
-            self.mod.load_config(path, self.mod.CLIOverrides())
+            self.load_default_config(path)
 
     def test_parse_args_supports_overrides(self):
         args = self.mod.parse_args(
@@ -359,14 +370,16 @@ class PlannerTests(unittest.TestCase):
     def test_aborts_for_unmanaged_main_runtime_drift(self):
         main = self.user("local", password=self.verifier_b)
         runtime = replace(main, password=self.verifier_a)
+        settings = self.settings()
         with self.assertRaisesRegex(self.mod.SyncError, "unmanaged.*runtime"):
-            self.mod.build_plan({}, [main], [runtime], self.settings())
+            self.mod.build_plan({}, [main], [runtime], settings)
 
     def test_unmanaged_conflict_requires_adoption(self):
         existing = self.user("alice")
+        source = {"alice": self.role("alice")}
+        settings = self.settings()
         with self.assertRaisesRegex(self.mod.SyncError, "unmanaged"):
-            self.mod.build_plan({"alice": self.role("alice")}, [existing], [existing],
-                                self.settings())
+            self.mod.build_plan(source, [existing], [existing], settings)
         plan = self.mod.build_plan({"alice": self.role("alice", self.verifier_b)},
                                    [existing], [existing],
                                    self.settings(adopt_existing_users=True))
@@ -375,16 +388,18 @@ class PlannerTests(unittest.TestCase):
 
     def test_cross_profile_conflict_aborts(self):
         existing = self.user("alice", profile="other")
+        source = {"alice": self.role("alice")}
+        settings = self.settings()
         with self.assertRaisesRegex(self.mod.SyncError, "another profile"):
-            self.mod.build_plan({"alice": self.role("alice")}, [existing], [existing],
-                                self.settings())
+            self.mod.build_plan(source, [existing], [existing], settings)
 
     def test_duplicate_admin_rows_are_rejected(self):
         first = self.user("alice", profile="p")
         second = replace(first, backend=0, frontend=1)
+        source = {"alice": self.role("alice")}
+        settings = self.settings()
         with self.assertRaisesRegex(self.mod.SyncError, "multiple.*alice"):
-            self.mod.build_plan({"alice": self.role("alice")}, [first, second], [],
-                                self.settings())
+            self.mod.build_plan(source, [first, second], [], settings)
 
     def test_ownership_helpers_validate_and_normalize(self):
         self.assertIsNone(self.mod.decode_ownership(""))
@@ -676,9 +691,10 @@ class OrchestrationTests(unittest.TestCase):
 
     def test_source_failure_is_secret_safe(self):
         secret = "source-secret"
+        source = FakeSource(error=self.mod.SyncError(secret))
+        admin = FakeAdmin()
         with self.assertRaises(self.mod.SyncError) as ctx:
-            self.mod.run_sync(self.config, FakeSource(error=self.mod.SyncError(secret)), FakeAdmin(),
-                              dry_run=False, verbose=False)
+            self.mod.run_sync(self.config, source, admin, dry_run=False, verbose=False)
         self.assertNotIn(secret, str(ctx.exception))
 
     def test_dry_run_does_not_write_load_or_save(self):
@@ -693,9 +709,9 @@ class OrchestrationTests(unittest.TestCase):
 
     def test_write_failure_never_loads_runtime(self):
         admin = FakeAdmin(fail_apply=True)
+        source = FakeSource(self.rows)
         with self.assertRaises(self.mod.SyncError):
-            self.mod.run_sync(self.config, FakeSource(self.rows), admin,
-                              dry_run=False, verbose=False)
+            self.mod.run_sync(self.config, source, admin, dry_run=False, verbose=False)
         self.assertNotIn("load", admin.calls)
         self.assertNotIn("save", admin.calls)
 
@@ -743,6 +759,16 @@ class OrchestrationTests(unittest.TestCase):
                 with self.mod.exclusive_lock(path) as second:
                     self.assertFalse(second)
             self.assertEqual(0o600, path.stat().st_mode & 0o777)
+
+    def test_exclusive_lock_rejects_symlinked_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "target.lock"
+            target.touch()
+            alias = Path(directory) / "sync.lock"
+            alias.symlink_to(target)
+            with self.assertRaisesRegex(self.mod.SyncError, "unable to open"):
+                with self.mod.exclusive_lock(alias):
+                    pass
 
     def test_summary_has_non_negative_duration(self):
         summary = self.mod.run_sync(self.config, FakeSource(self.rows), FakeAdmin(),
