@@ -1,8 +1,12 @@
 #ifndef AWS_LOCALITY_TYPES_H
 #define AWS_LOCALITY_TYPES_H
 
+#include <chrono>
 #include <cstdint>
+#include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
 enum class AwsEndpointType : uint8_t {
 	unknown,
@@ -61,6 +65,90 @@ struct AwsBackendLocation {
 	std::string region;
 	std::string availability_zone;
 	std::string account_id;
+};
+
+enum class AwsMetadataRequestKind : uint8_t {
+	local_location,
+	rds_region,
+};
+
+enum class AwsMetadataStatus : uint8_t {
+	ok,
+	provider_unavailable,
+	access_denied,
+	throttled,
+	imds_unavailable,
+	timeout,
+	cancelled,
+	invalid_response,
+	shutdown,
+};
+
+struct AwsMetadataRequestHandle {
+	uint64_t value { 0 };
+};
+
+struct AwsMetadataRequest {
+	AwsMetadataRequestKind kind { AwsMetadataRequestKind::local_location };
+	uint64_t opaque_id { 0 };
+	uint64_t generation { 0 };
+	std::string region;
+	std::string partition;
+	std::vector<AwsEndpointCandidate> endpoints;
+	std::chrono::steady_clock::time_point deadline {};
+};
+
+struct AwsMetadataEndpoint {
+	std::string hostname;
+	uint16_t port { 0 };
+	AwsEndpointType endpoint_type { AwsEndpointType::unknown };
+	std::string region;
+	std::string availability_zone;
+	std::string account_id;
+};
+
+struct AwsMetadataResult {
+	AwsMetadataStatus status { AwsMetadataStatus::provider_unavailable };
+	AwsLocalLocation local;
+	std::vector<AwsMetadataEndpoint> endpoints;
+	std::string failure_category;
+};
+
+struct AwsMetadataCompletion {
+	uint64_t opaque_id { 0 };
+	uint64_t generation { 0 };
+	AwsMetadataResult result;
+};
+
+class AwsMetadataCompletionSink {
+public:
+	virtual void post(AwsMetadataCompletion&& completion) = 0;
+	virtual ~AwsMetadataCompletionSink() = default;
+};
+
+class AwsMetadataProvider {
+public:
+	virtual AwsMetadataRequestHandle request(
+		const AwsMetadataRequest& request,
+		std::weak_ptr<AwsMetadataCompletionSink> sink) = 0;
+	virtual void cancel(AwsMetadataRequestHandle handle) = 0;
+	virtual void shutdown() = 0;
+	virtual ~AwsMetadataProvider() = default;
+};
+
+struct AwsLocalityBackendConfig {
+	AwsEndpointCandidate endpoint;
+	int64_t configured_weight { 0 };
+
+	AwsLocalityBackendConfig() = default;
+	AwsLocalityBackendConfig(AwsEndpointCandidate value, int64_t weight = 0)
+		: endpoint(std::move(value)), configured_weight(weight) {}
+};
+
+struct AwsLocalityHostgroupConfig {
+	uint32_t hostgroup_id { 0 };
+	AwsLocalityPolicy policy;
+	std::vector<AwsLocalityBackendConfig> backends;
 };
 
 #endif // AWS_LOCALITY_TYPES_H
