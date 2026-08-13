@@ -1,0 +1,412 @@
+name: CI-legacy-g10
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      trigger:
+        type: string
+
+env:
+  SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Availability-aware dispatch (PROTOTYPE -- CI-legacy-g3 only for now).
+  # `runs-on` locks its pool when the job is created and never falls back, so a
+  # self-hosted-routed job queues behind the 6-VM pool even while GitHub-hosted
+  # capacity sits idle. This leading job decides the pool up front: eligible
+  # actor+workflow AND an idle proxysql-ci VM -> self-hosted; pool saturated ->
+  # SPILL to GitHub-hosted instead of queuing. Listing runners needs repo admin
+  # (GH_TOKEN_SYSOWN); if that is unavailable we fail SAFE to self-hosted so the
+  # existing offload behavior is preserved. It is a heuristic (idle-now != idle-
+  # when-the-job-lands), so it drains the tail to hosted rather than perfectly
+  # packing the VMs.
+  # ---------------------------------------------------------------------------
+  pick-runner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      actions: read          # read in-progress runs/jobs (no repo admin needed)
+    outputs:
+      runson: ${{ steps.pick.outputs.runson }}
+    steps:
+      - name: Pick runner pool
+        id: pick
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          POOL_SIZE: ${{ vars.SELFHOSTED_POOL_SIZE || '6' }}
+          ELIGIBLE: ${{ (github.actor == 'renecannao' || (inputs.trigger && fromJson(inputs.trigger).event.workflow_run.actor.login == 'renecannao')) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) }}
+        run: |
+          set -uo pipefail
+          choice='"ubuntu-22.04"'
+          if [ "${ELIGIBLE:-}" = "true" ]; then
+            POOL="${POOL_SIZE:-6}"
+            # Listing runners needs repo admin, which no available token has, so
+            # infer pool demand from job state the default token CAN read:
+            #   demand = VMs occupied (in-progress jobs whose runner_name starts
+            #            with 'ci-vm') + jobs already queued for the pool
+            #            (status=queued carrying the 'proxysql-ci' label).
+            # Counting the queue too dampens the cycle-start thundering herd: once
+            # earlier deciders have queued self-hosted jobs, later deciders see the
+            # contention and spill. free = POOL - demand; self-hosted iff free>=1.
+            # Early-exit once demand hits POOL. Scan in-progress AND queued runs.
+            demand=0; err=0
+            ids=$( { gh api --paginate "repos/${REPO}/actions/runs?status=in_progress&per_page=100" --jq '.workflow_runs[].id';
+                     gh api --paginate "repos/${REPO}/actions/runs?status=queued&per_page=100" --jq '.workflow_runs[].id'; } 2>e1 ) || err=1
+            if [ "$err" = "0" ]; then
+              for rid in ${ids:-}; do
+                [ "$demand" -ge "$POOL" ] && break
+                n=$(gh api "repos/${REPO}/actions/runs/${rid}/jobs" --jq '[.jobs[]|select((.status=="in_progress" and ((.runner_name//"")|startswith("ci-vm"))) or (.status=="queued" and (([.labels[]]|index("proxysql-ci")) != null)))]|length' 2>/dev/null) || n=0
+                demand=$(( demand + ${n:-0} ))
+              done
+              free=$(( POOL - demand ))
+              echo ">>> self-hosted pool: demand=${demand}/${POOL} free=${free} (occupied+queued)"
+              if [ "${free}" -ge 1 ]; then
+                choice='["self-hosted","proxysql-ci"]'; echo ">>> capacity available -> self-hosted"
+              else
+                choice='"ubuntu-22.04"'; echo ">>> pool at/over capacity -> spill to GitHub-hosted"
+              fi
+            else
+              echo ">>> WARNING: could not read runs:"; sed 's/^/    /' e1
+              choice='["self-hosted","proxysql-ci"]'; echo ">>> failing SAFE to self-hosted (offload unchanged)"
+            fi
+          else
+            echo ">>> not eligible for self-hosted -> GitHub-hosted"
+          fi
+          echo "runson=${choice}" >> "$GITHUB_OUTPUT"
+          echo ">>> decision: runson=${choice}"
+
+  tests:
+    needs: pick-runner
+    runs-on: ${{ fromJson(needs.pick-runner.outputs.runson) }}
+    timeout-minutes: 120
+    # `write-all` grants every default GITHUB_TOKEN scope plus the
+    # id-token:write scope codecov-action@v4 needs to mint a GitHub OIDC
+    # token for `use_oidc: true`. Caller workflow on v3.0 must also
+    # declare write-all for the permissions to propagate through the
+    # reusable call (permissions are intersected caller-callee).
+    permissions: write-all
+    strategy:
+      fail-fast: false
+      matrix:
+        infradb: [ 'mysql57' ]
+    env:
+      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu24-tap-genai-gcov_src
+      MATRIX: '(${{ matrix.infradb }},genai-gcov)'
+
+    steps:
+
+    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
+      id: checks
+      continue-on-error: true
+      if: always()
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        name: '${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}'
+        repo: ${{ github.repository }}
+        sha: ${{ env.SHA }}
+        status: 'in_progress'
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+
+    - name: Checkout repository
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ env.SHA }}
+        path: 'proxysql'
+        # include/lib/src required so Codecov can resolve LCOV SF: paths
+        # (repo-root lib/*.cpp, include/*). Without them sparse checkout
+        # omits daemon sources, codecov-cli drops those SF: entries, and
+        # Codecov shows only test/+src/ -- the regression after #5967.
+        sparse-checkout: |
+          include
+          lib
+          src
+          test/infra
+          test/tap
+          test/scripts
+
+    - name: Download build handoff
+      # Build payload arrives as workflow artifacts, not an Actions cache:
+      # GitHub made cache writes read-only for workflow_run/untrusted triggers
+      # (changelog 2026-06-26). CI-builds uploads per-type artifacts named
+      # ci-builds-handoff-<sha>-<variant>-<type>; download the types this job
+      # used to restore and unpack them into proxysql/. SHA is the real head
+      # SHA (identical to CI-builds' SHA), so the artifact names line up.
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        REPO: ${{ github.repository }}
+        SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+        BUILD_RUN_ID: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.id || '' }}
+        HANDOFF_VARIANT: ubuntu24-tap-genai-gcov
+        HANDOFF_TYPES: src test
+      run: |
+        set -uo pipefail
+        command -v zstd >/dev/null || sudo apt-get install -y zstd
+        # Resolve the build-handoff artifact robustly. Self-hosted runners can
+        # pick up this job within ~1 min of CI-builds finishing -- earlier than
+        # GitHub-hosted runners queue -- which lands inside the window where
+        # GitHub's GLOBAL name-filtered artifact index (artifacts?name=) still
+        # lags behind creation, returning empty for an artifact that already
+        # exists. Prefer resolving via the triggering CI-builds run's OWN
+        # artifact list (run-scoped: populated as soon as the artifact is
+        # attached, not subject to the global-index lag); fall back to the
+        # global name query. Retry on a bounded budget and surface the real gh
+        # error, so a genuine build failure is distinguishable from transient lag.
+        : "${HANDOFF_MAX_ATTEMPTS:=20}"   # bounded: 20 x 15s = up to ~5 min
+        ERRLOG="$(mktemp)"
+        resolve_aid() {
+          local name="$1" out=""
+          if [ -n "${BUILD_RUN_ID:-}" ]; then
+            out=$(gh api "repos/${REPO}/actions/runs/${BUILD_RUN_ID}/artifacts?per_page=100" \
+                    --jq "[.artifacts[]|select(.name==\"${name}\" and .expired==false)]|sort_by(.created_at)|last|.id // empty" 2>>"$ERRLOG") || true
+            [ -n "$out" ] && { printf '%s' "$out"; return 0; }
+          fi
+          out=$(gh api "repos/${REPO}/actions/artifacts?name=${name}&per_page=100" \
+                  --jq '[.artifacts[]|select(.expired==false)]|sort_by(.created_at)|last|.id // empty' 2>>"$ERRLOG") || true
+          [ -n "$out" ] && { printf '%s' "$out"; return 0; }
+          return 1
+        }
+        for t in $HANDOFF_TYPES; do
+          name="ci-builds-handoff-${SHA}-${HANDOFF_VARIANT}-${t}"
+          aid=""
+          for attempt in $(seq 1 "$HANDOFF_MAX_ATTEMPTS"); do
+            aid=$(resolve_aid "$name") && [ -n "$aid" ] && break
+            aid=""
+            echo ">>> ${name} not resolvable yet (${attempt}/${HANDOFF_MAX_ATTEMPTS}); sleeping 15s"; sleep 15
+          done
+          if [ -z "$aid" ]; then
+            echo "ERROR: handoff artifact ${name} not found after ${HANDOFF_MAX_ATTEMPTS} attempts (build_run=${BUILD_RUN_ID:-n/a}) -- did CI-builds succeed for ${SHA}?" >&2
+            echo "--- last gh errors ---" >&2; tail -n 20 "$ERRLOG" >&2
+            exit 1
+          fi
+          echo ">>> downloading ${name} (id=${aid})"
+          gh api "repos/${REPO}/actions/artifacts/${aid}/zip" > "handoff-${t}.zip" || { echo "ERROR: download ${name} failed" >&2; exit 1; }
+          unzip -o "handoff-${t}.zip" || { echo "ERROR: unzip ${name} failed" >&2; exit 1; }
+        done
+        mkdir -p proxysql
+        cd proxysql/
+        for tb in ../cache_*.tar.zst; do
+          [ -e "$tb" ] || continue
+          echo ">>> unpacking $(basename "$tb")"
+          zstd -d < "$tb" | tar -xf - || { echo "ERROR: unpack $tb failed" >&2; exit 1; }
+        done
+        rm -f ../cache_*.tar.zst ../handoff-*.zip
+
+    - name: Verify binary
+      run: |
+        chmod +x proxysql/src/proxysql
+        file proxysql/src/proxysql
+
+    - name: Log in to GHCR and pull CI base image
+      # Both `docker login` and `docker pull` against ghcr.io have been
+      # observed to fail transiently with `net/http: request canceled
+      # (Client.Timeout exceeded while awaiting headers)`. Wrap both in
+      # a short retry loop with linear backoff so a single network blip
+      # does not red the whole TAP group.
+      env:
+        GHCR_USER: ${{ github.actor }}
+        GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set +e
+        attempt=0
+        max_attempts=5
+        while [ $attempt -lt $max_attempts ]; do
+          attempt=$((attempt + 1))
+          echo ">>> GHCR login+pull attempt ${attempt}/${max_attempts}"
+          if echo "$GHCR_TOKEN" | docker login ghcr.io \
+              -u "$GHCR_USER" --password-stdin \
+              && docker pull ghcr.io/sysown/proxysql-ci-base:latest; then
+            echo ">>> GHCR login+pull OK on attempt ${attempt}"
+            docker tag ghcr.io/sysown/proxysql-ci-base:latest \
+                proxysql-ci-base:latest
+            exit 0
+          fi
+          if [ $attempt -lt $max_attempts ]; then
+            sleep_for=$((attempt * 10))
+            echo ">>> attempt ${attempt} failed; sleeping ${sleep_for}s"
+            sleep $sleep_for
+          fi
+        done
+        echo ">>> all ${max_attempts} GHCR attempts failed"
+        exit 1
+
+    - name: Start infrastructure
+      run: |
+        cd proxysql
+        export INFRA_ID="ci-legacy-g10"
+        export TAP_GROUP="legacy-g10"
+        export SKIP_CLUSTER_START=1
+        test/infra/control/ensure-infras.bash
+
+    - name: Run legacy-g10 tests
+      timeout-minutes: 90
+      run: |
+        cd proxysql
+        export INFRA_ID="ci-legacy-g10"
+        export TAP_GROUP="legacy-g10"
+        export SKIP_CLUSTER_START=1
+        export TAP_USE_NOISE=1
+        export COVERAGE=1
+        test/infra/control/run-tests-isolated.bash
+
+    - name: Cleanup
+      if: always()
+      run: |
+        set +e
+        if [ ! -d proxysql ]; then
+          echo "proxysql checkout not present; skipping cleanup."
+          exit 0
+        fi
+        cd proxysql
+        export INFRA_ID="ci-legacy-g10"
+        export TAP_GROUP="legacy-g10"
+        docker logs proxysql.ci-legacy-g10 2>&1 | tail -50 || true
+        test/infra/control/stop-proxysql-isolated.bash || true
+        test/infra/control/destroy-infras.bash || true
+
+    - name: Fix artifact permissions
+      if: ${{ failure() && !cancelled() }}
+      run: |
+        # actions/upload-artifact dies with EACCES when it scandirs into
+        # directories under ci_*_logs/ that were created inside docker
+        # build containers (root-owned). Make everything readable by the
+        # runner user before upload. sudo required because files are
+        # root-owned; 2>/dev/null + || true because the path may not
+        # exist on all failure paths (e.g. a cache-restore failure before
+        # any test even runs).
+        sudo chmod -R a+rX proxysql/ci_*_logs/ 2>/dev/null || true
+
+    - name: Archive artifacts logs
+      if: ${{ failure() && !cancelled() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: ${{ github.workflow }}-${{ env.SHA }}-logs-run#${{ github.run_number }}
+        path: |
+          proxysql/ci_*_logs/
+
+    - name: Archive coverage report
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: ${{ github.workflow }}-${{ env.SHA }}-coverage-run#${{ github.run_number }}
+        path: |
+          proxysql/ci_infra_logs/ci-legacy-g10/coverage-report/
+        if-no-files-found: ignore
+
+    - name: Report missing coverage file
+      if: ${{ !cancelled() && hashFiles('proxysql/ci_infra_logs/**/coverage-report/*.info') == '' }}
+      run: |
+        echo "No coverage report was produced; skipping Codecov upload."
+
+    - name: Upload coverage to Codecov
+      id: codecov_1
+      if: ${{ !cancelled() && hashFiles('proxysql/ci_infra_logs/**/coverage-report/*.info') != '' }}
+      continue-on-error: true
+      # Send the LCOV .info file fastcov produces in run-tests-isolated.bash
+      # (under proxysql/ci_infra_logs/ci-legacy-g10/coverage-report/) to
+      # Codecov. The proxysql binary was built WITHGCOV=1 (-tap-genai-gcov
+      # build cache) and was the live daemon answering the legacy-g10 TAP
+      # suite, so the report reflects production code paths exercised by
+      # integration tests, not just the lib-only unit-test slice.
+      #
+      # integration-tests merges regular-daemon TAP shards for this commit.
+      # The group-specific name remains available for diagnostics.
+      # `use_oidc: true` is mandatory -- the
+      # repo has no CODECOV_TOKEN secret and Codecov rejects tokenless
+      # legacy uploads with "branch is protected" HTTP 400.
+      #
+      # `fail_ci_if_error: true` so a Codecov outage never fails the
+      # whole TAP group; `!cancelled()` so coverage uploads even when
+      # the test step itself reported a failure (partial coverage is
+      # still useful diagnostically).
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
+      with:
+        codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
+        override_commit: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+        files: proxysql/ci_infra_logs/ci-legacy-g10/coverage-report/ci-legacy-g10.info
+        flags: integration-tests
+        name: tap-legacy-g10-coverage
+        use_oidc: true
+        # Upload ONLY the explicit LCOV .info file.
+        # - disable_search + plugins:noop: default plugins include gcov,
+        #   which auto-discovers leftover .gcno from the build handoff
+        #   (lib/obj/*.gcno) and polluted uploads ("Found 33 coverage
+        #   files" instead of 1).
+        # - no network_prefix: TAP LCOV SF: paths are repo-root-relative
+        #   (lib/, src/, test/tap/). network_prefix:proxysql/ created a
+        #   phantom proxysql/ namespace that never merged with unit-tests
+        #   lib/, leaving lib/MySQL_Monitor.cpp at 0% despite real hits.
+        # - root_dir:proxysql: checkout is at path:proxysql; point
+        #   codecov-cli network listing at the git root so lib/X matches.
+        # - disable_file_fixes:true: codecov-cli _get_file_fixes crashes
+        #   FileNotFoundError when sparse checkout lacks sources referenced
+        #   in the report. Aggregate coverage is unaffected.
+        disable_search: true
+        plugins: noop
+        root_dir: proxysql
+        disable_file_fixes: true
+        fail_ci_if_error: true
+        verbose: true
+
+    - name: Wait before Codecov retry 1
+      if: ${{ !cancelled() && steps.codecov_1.outcome == 'failure' }}
+      run: sleep 15
+
+    - name: Upload coverage to Codecov (retry 1)
+      id: codecov_2
+      if: ${{ !cancelled() && steps.codecov_1.outcome == 'failure' }}
+      continue-on-error: true
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
+      with:
+        codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
+        override_commit: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+        files: proxysql/ci_infra_logs/ci-legacy-g10/coverage-report/ci-legacy-g10.info
+        flags: integration-tests
+        name: tap-legacy-g10-coverage
+        use_oidc: true
+        disable_search: true
+        plugins: noop
+        root_dir: proxysql
+        disable_file_fixes: true
+        fail_ci_if_error: true
+        verbose: true
+
+    - name: Wait before Codecov retry 2
+      if: ${{ !cancelled() && steps.codecov_2.outcome == 'failure' }}
+      run: sleep 45
+
+    - name: Upload coverage to Codecov (retry 2)
+      id: codecov_3
+      if: ${{ !cancelled() && steps.codecov_2.outcome == 'failure' }}
+      continue-on-error: true
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
+      with:
+        codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
+        override_commit: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+        files: proxysql/ci_infra_logs/ci-legacy-g10/coverage-report/ci-legacy-g10.info
+        flags: integration-tests
+        name: tap-legacy-g10-coverage
+        use_oidc: true
+        disable_search: true
+        plugins: noop
+        root_dir: proxysql
+        disable_file_fixes: true
+        fail_ci_if_error: true
+        verbose: true
+
+    - name: Report Codecov upload failure
+      if: ${{ !cancelled() && steps.codecov_3.outcome == 'failure' }}
+      run: echo "::warning::Codecov upload failed after 3 attempts; tests were unaffected."
+    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
+      continue-on-error: true
+      if: ${{ always() && steps.checks.outputs.check_id != '' }}
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        check_id: ${{ steps.checks.outputs.check_id }}
+        repo: ${{ github.repository }}
+        sha: ${{ env.SHA }}
+        conclusion: ${{ job.status }}
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
