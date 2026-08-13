@@ -4,6 +4,13 @@ PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; don
 
 include $(PROXYSQL_PATH)/include/makefiles_vars.mk
 
+AWS_SDK_CPP_VERSION := 1.11.869
+AWS_SDK_CPP_DIR := aws-sdk-cpp/aws-sdk-cpp-$(AWS_SDK_CPP_VERSION)
+AWS_SDK_CPP_ARCHIVE := aws-sdk-cpp/aws-sdk-cpp-$(AWS_SDK_CPP_VERSION)-with-crt.tar.xz
+AWS_SDK_CPP_INSTALL_DIR := $(PROXYSQL_PATH)/deps/$(AWS_SDK_CPP_DIR)/install
+AWS_SDK_CPP_CORE_LIB := $(AWS_SDK_CPP_INSTALL_DIR)/lib/libaws-cpp-sdk-core.a
+AWS_SDK_CPP_RDS_LIB := $(AWS_SDK_CPP_INSTALL_DIR)/lib/libaws-cpp-sdk-rds.a
+
 
 # to compile libmariadb_client with support for valgrind enabled, run:
 # export USEVALGRIND=1
@@ -75,7 +82,7 @@ ifeq ($(PROXYSQL40),1)
 endif
 
 ifeq ($(PROXYSQLAWSIAM),1)
-	targets += aws_sdk_cpp
+	targets += $(AWS_SDK_CPP_RDS_LIB)
 endif
 
 default: $(targets)
@@ -219,34 +226,29 @@ $(PROTOBUF_LIB):
 protobuf: $(PROTOBUF_LIB)
 
 
-AWS_SDK_CPP_VERSION := 1.11.869
-AWS_SDK_CPP_DIR := aws-sdk-cpp/aws-sdk-cpp-$(AWS_SDK_CPP_VERSION)
-AWS_SDK_CPP_ARCHIVE := aws-sdk-cpp/aws-sdk-cpp-$(AWS_SDK_CPP_VERSION)-with-crt.tar.xz
-AWS_SDK_CPP_INSTALL_DIR := $(PROXYSQL_PATH)/deps/$(AWS_SDK_CPP_DIR)/install
-AWS_SDK_CPP_CORE_LIB := $(AWS_SDK_CPP_INSTALL_DIR)/lib/libaws-cpp-sdk-core.a
-AWS_SDK_CPP_RDS_LIB := $(AWS_SDK_CPP_INSTALL_DIR)/lib/libaws-cpp-sdk-rds.a
+$(AWS_SDK_CPP_RDS_LIB):
+	rm -rf "$(AWS_SDK_CPP_DIR)"
+	tar -C "$(PROXYSQL_PATH)/deps/aws-sdk-cpp" -Jxf "$(PROXYSQL_PATH)/deps/$(AWS_SDK_CPP_ARCHIVE)"
+	CC=${CC} CXX=${CXX} cmake \
+		-S "$(AWS_SDK_CPP_DIR)" \
+		-B "$(AWS_SDK_CPP_DIR)/build" \
+		-DCMAKE_BUILD_TYPE=RelWithDebInfo \
+		-DCMAKE_INSTALL_PREFIX="$(AWS_SDK_CPP_INSTALL_DIR)" \
+		-DCMAKE_INSTALL_LIBDIR=lib \
+		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+		-DBUILD_ONLY="core;rds" \
+		-DBUILD_SHARED_LIBS=OFF \
+		-DBUILD_DEPS=ON \
+		-DENABLE_TESTING=OFF \
+		-DAUTORUN_UNIT_TESTS=OFF \
+		-DENABLE_UNITY_BUILD=ON
+	CC=${CC} CXX=${CXX} ${MAKE} -C "$(AWS_SDK_CPP_DIR)/build" install
+	test -f "$(AWS_SDK_CPP_CORE_LIB)"
 
-.PHONY: aws_sdk_cpp
-aws_sdk_cpp:
-	@set -e; \
-	if [ ! -f "$(AWS_SDK_CPP_CORE_LIB)" ] || [ ! -f "$(AWS_SDK_CPP_RDS_LIB)" ]; then \
-		rm -rf "$(AWS_SDK_CPP_DIR)"; \
-		tar -C "$(PROXYSQL_PATH)/deps/aws-sdk-cpp" -Jxf "$(PROXYSQL_PATH)/deps/$(AWS_SDK_CPP_ARCHIVE)"; \
-		CC=${CC} CXX=${CXX} cmake \
-			-S "$(AWS_SDK_CPP_DIR)" \
-			-B "$(AWS_SDK_CPP_DIR)/build" \
-			-DCMAKE_BUILD_TYPE=RelWithDebInfo \
-			-DCMAKE_INSTALL_PREFIX="$(AWS_SDK_CPP_INSTALL_DIR)" \
-			-DCMAKE_INSTALL_LIBDIR=lib \
-			-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-			-DBUILD_ONLY="core;rds" \
-			-DBUILD_SHARED_LIBS=OFF \
-			-DBUILD_DEPS=ON \
-			-DENABLE_TESTING=OFF \
-			-DAUTORUN_UNIT_TESTS=OFF \
-			-DENABLE_UNITY_BUILD=ON; \
-		CC=${CC} CXX=${CXX} ${MAKE} -C "$(AWS_SDK_CPP_DIR)/build" install; \
-	fi
+.PHONY: aws_sdk_cpp_clean
+aws_sdk_cpp_clean:
+	rm -rf "$(AWS_SDK_CPP_DIR)"
+	rm -f "$(PROXYSQL_PATH)/deps/aws-sdk-cpp/.proxysql-build-mode"
 
 
 clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:
@@ -484,7 +486,7 @@ cleanpart:
 	cd protobuf && rm -rf protobuf-*/ || true
 .PHONY: cleanpart
 
-cleanall:
+cleanall: aws_sdk_cpp_clean
 	cd libinjection && rm -rf libinjection-*/ || true
 	cd libhttpserver && rm -rf libhttpserver-*/ || true
 	cd libdaemon && rm -rf libdaemon-*/ || true
