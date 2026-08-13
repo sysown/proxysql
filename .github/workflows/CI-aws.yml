@@ -48,6 +48,11 @@ jobs:
           submodules: 'false'
           lfs: true
           fetch-depth: 0
+      - name: Install build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libcurl4-openssl-dev libevent-dev libgnutls28-dev valgrind
       - name: Build v4 daemon and general AWS plugin
         run: PROXYSQL40=1 make -j
       - name: Require an SDK-free daemon
@@ -80,6 +85,11 @@ jobs:
           submodules: 'false'
           lfs: true
           fetch-depth: 0
+      - name: Install build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libcurl4-openssl-dev libevent-dev libgnutls28-dev valgrind
       - name: Verify immutable vendored SDK bundle
         run: bash test/infra/control/check-vendored-aws-sdk-build.bash
       - name: Build static AWS plugin
@@ -125,6 +135,11 @@ jobs:
           submodules: 'false'
           lfs: true
           fetch-depth: 0
+      - name: Install build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libcurl4-openssl-dev libevent-dev libgnutls28-dev valgrind
       - name: Relax ASLR for sanitizers
         run: sudo sysctl -w vm.mmap_rnd_bits=28
       - name: Build ASan fake-provider tests
