@@ -355,8 +355,10 @@ static void test_user_variable_supported_literals() {
 		{"SET @x=+1.2E-3", "+1.2E-3", UserVariableLiteralKind::DECIMAL},
 		{"SET @x=0xCAFE", "0xCAFE", UserVariableLiteralKind::HEXADECIMAL},
 		{"SET @x=X'CAFE'", "X'CAFE'", UserVariableLiteralKind::HEXADECIMAL},
+		{"SET @x=-0xCAFE", "-0xCAFE", UserVariableLiteralKind::HEXADECIMAL},
 		{"SET @x=0b101", "0b101", UserVariableLiteralKind::BIT},
 		{"SET @x=B'101'", "B'101'", UserVariableLiteralKind::BIT},
+		{"SET @x=+B'101'", "+B'101'", UserVariableLiteralKind::BIT},
 		{"SET @x=NULL", "NULL", UserVariableLiteralKind::NULL_VALUE},
 	};
 	for (const auto& c : cases) {
@@ -791,7 +793,7 @@ static void test_user_variable_replay_context() {
 }
 
 int main() {
-	plan(200);
+	plan(202);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 

@@ -56,12 +56,12 @@ right-hand side must be one of these exact forms:
 - unsigned integers, or a direct unary `+` or `-` on an integer;
 - unsigned fixed-point or exponent-form decimals, or a direct unary `+` or
   `-` on one;
-- hexadecimal `0x...` or `X'...'` literals;
-- bit `0b...` or `B'...'` literals;
+- hexadecimal `0x...` or `X'...'` literals, including a direct unary sign;
+- bit `0b...` or `B'...'` literals, including a direct unary sign;
 - `NULL`.
 
-The unary sign exception applies only to integer and decimal literals. It does
-not make signed hexadecimal or bit literals eligible. Parentheses, casts,
+The unary sign exception applies only directly to an integer, decimal,
+hexadecimal, or bit literal. Parentheses, casts,
 introducers, `COLLATE`, identifiers, system- or user-variable references,
 functions, subqueries, operators, parameter markers, prepared statements,
 multi-statements, malformed input, and every other expression form are outside

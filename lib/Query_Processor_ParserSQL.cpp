@@ -660,6 +660,14 @@ static bool supported_user_variable_rhs(
         kind = UserVariableLiteralKind::DECIMAL;
         return true;
     }
+    if (operand->type == NodeType::NODE_LITERAL_HEX) {
+        kind = UserVariableLiteralKind::HEXADECIMAL;
+        return true;
+    }
+    if (operand->type == NodeType::NODE_LITERAL_BIT) {
+        kind = UserVariableLiteralKind::BIT;
+        return true;
+    }
     return false;
 }
 
@@ -741,6 +749,7 @@ UserVariableSetAnalysis parsersql_analyze_user_variable_set_mysql(
         if (!is_ascii(variable->value())) {
             analysis.status = UserVariableSetStatus::UNSUPPORTED;
             analysis.assignments.clear();
+            tl_mysql_parser.reset();
             return analysis;
         }
 
