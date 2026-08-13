@@ -1699,7 +1699,7 @@ uint64_t MySQL_HostGroups_Manager::get_mysql_servers_checksum(SQLite3_result* ru
  * 1. Acquires a read lock on the GTID read-write lock.
  * 2. Constructs a string representation of the MySQL server address and port.
  * 3. Searches for the GTID information associated with the MySQL server in the GTID map using the constructed string as the key.
- * 4. If the GTID information is found and is active, it checks whether the specified GTID exists.
+ * 4. If the GTID information is found, it checks whether the specified GTID exists.
  * 5. Releases the read lock on the GTID read-write lock.
  *
  * @param mysrvc A pointer to the MySQL server connection.
@@ -1719,14 +1719,65 @@ bool MySQL_HostGroups_Manager::gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uin
 	if (it2!=gtid_map.end()) {
 		gtid_is=it2->second;
 		if (gtid_is) {
-			if (gtid_is->active == true) {
-				ret = gtid_is->gtid_exists(gtid_uuid,gtid_trxid);
-			}
+			ret = gtid_is->gtid_exists(gtid_uuid,gtid_trxid);
 		}
 	}
 	//proxy_info("Checking if server %s has GTID %s:%lu . %s\n", s1.c_str(), gtid_uuid, gtid_trxid, (ret ? "YES" : "NO"));
 	pthread_rwlock_unlock(&gtid_rwlock);
 	return ret;
+}
+
+bool MySQL_HostGroups_Manager::update_gtid_from_ok(MySrvC* mysrvc, const char* gtid) {
+	if (mysrvc == nullptr || gtid == nullptr) {
+		return false;
+	}
+
+	std::string endpoint(mysrvc->address);
+	endpoint.append(":");
+	endpoint.append(std::to_string(mysrvc->port));
+
+	pthread_rwlock_rdlock(&gtid_rwlock);
+	auto it = gtid_map.find(endpoint);
+	bool updated = it != gtid_map.end() && it->second != nullptr
+		? it->second->add_gtid_from_ok(gtid)
+		: false;
+	pthread_rwlock_unlock(&gtid_rwlock);
+	return updated;
+}
+
+GTID_Server_Data* MySQL_HostGroups_Manager::get_or_create_gtid_server_data(
+	MySrvC* server, const std::string& endpoint) {
+	auto existing = gtid_map.find(endpoint);
+	if (existing != gtid_map.end() && existing->second != nullptr) {
+		return existing->second;
+	}
+	if (existing != gtid_map.end()) {
+		gtid_map.erase(existing);
+	}
+
+	auto owned_data = std::make_unique<GTID_Server_Data>(
+		nullptr, server->address, server->gtid_port, server->port);
+	owned_data->active = false;
+	GTID_Server_Data* data = owned_data.get();
+	gtid_map.emplace(endpoint, data);
+	owned_data.release();
+	return data;
+}
+
+void MySQL_HostGroups_Manager::start_gtid_reader_if_needed(
+	MySrvC* server, GTID_Server_Data* data) {
+	if (data->active || server->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+		return;
+	}
+	ev_io* watcher = new_connect_watcher(server->address, server->gtid_port, server->port);
+	if (watcher == nullptr) {
+		gtid_missing_nodes = true;
+		return;
+	}
+	data->w = watcher;
+	data->active = true;
+	watcher->data = static_cast<void*>(data);
+	ev_io_start(MyHGM->gtid_ev_loop, watcher);
 }
 
 /**
@@ -1773,40 +1824,15 @@ void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
 		MySrvC *mysrvc=NULL;
 		for (unsigned int j=0; j<myhgc->mysrvs->servers->len; j++) {
 			mysrvc=myhgc->mysrvs->idx(j);
-			if (mysrvc->gtid_port) {
-				std::string srv = mysrvc->address;
-				srv.append(":");
-				srv.append(std::to_string(mysrvc->port));
-
-				GTID_Server_Data *gtid_sd = nullptr;
-				it = gtid_map.find(srv);
-				if (it != gtid_map.end()) {
-					gtid_sd = it->second;
-					stale_server.erase(srv);
-				}
-
-				if (gtid_sd && gtid_sd->active) {
-					continue;
-				}
-
-				if (mysrvc->get_status() != MYSQL_SERVER_STATUS_OFFLINE_HARD) {
-					// a new server with gtid port
-					// OR an existing server, but we lost connection with binlog_reader
-					struct ev_io *cw = new_connect_watcher(mysrvc->address, mysrvc->gtid_port, mysrvc->port);
-					if (cw) {
-						if (!gtid_sd) {
-							gtid_sd = new GTID_Server_Data(cw, mysrvc->address, mysrvc->gtid_port, mysrvc->port);
-							cw->data = (void *)gtid_sd;
-							gtid_map.emplace(srv, gtid_sd);
-						} else {
-							gtid_sd->w = cw;
-							gtid_sd->active = true;
-							cw->data = (void *)gtid_sd;
-						}
-						ev_io_start(MyHGM->gtid_ev_loop, cw);
-					}
-				}
+			if (mysrvc->gtid_port == 0) {
+				continue;
 			}
+			std::string endpoint = mysrvc->address;
+			endpoint.append(":");
+			endpoint.append(std::to_string(mysrvc->port));
+			stale_server.erase(endpoint);
+			GTID_Server_Data* data = get_or_create_gtid_server_data(mysrvc, endpoint);
+			start_gtid_reader_if_needed(mysrvc, data);
 		}
 	}
 
@@ -2460,9 +2486,9 @@ void MySQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address
 	if (GloMTH->variables.hostgroup_manager_verbose >= 3) {
 		char buf[64];
 		if (skip_hid == NULL) {
-			sprintf(buf,"NULL");
+			snprintf(buf, sizeof(buf), "NULL");
 		} else {
-			sprintf(buf,"%u", *skip_hid);
+			snprintf(buf, sizeof(buf), "%u", *skip_hid);
 		}
 		proxy_info("Calling unshun_server_all_hostgroups() for server %s:%d . Arguments: %lu , %d , %s\n" , address, port, t, max_wait_sec, buf);
 	}
@@ -3277,12 +3303,12 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
 			for (l=0; l < (int) mysrvc->ConnectionsFree->conns_length(); l++) {
 				char **pta=(char **)malloc(sizeof(char *)*colnum);
 				MySQL_Connection *conn = mysrvc->ConnectionsFree->index(l);
-				sprintf(buf,"%d", conn->fd);
+				snprintf(buf, sizeof(buf), "%d", conn->fd);
 				pta[0]=strdup(buf);
-				sprintf(buf,"%d", (int)myhgc->hid);
+				snprintf(buf, sizeof(buf), "%d", (int)myhgc->hid);
 				pta[1]=strdup(buf);
 				pta[2]=strdup(mysrvc->address);
-				sprintf(buf,"%d", mysrvc->port);
+				snprintf(buf, sizeof(buf), "%d", mysrvc->port);
 				pta[3]=strdup(buf);
 				pta[4] = strdup(conn->userinfo->username);
 				pta[5] = strdup(conn->userinfo->schemaname);
@@ -3298,14 +3324,14 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
 				if (conn->variables[SQL_SQL_MODE].value) {
 					pta[8] = strdup(conn->variables[SQL_SQL_MODE].value);
 				}
-				sprintf(buf,"%d", conn->options.autocommit);
+				snprintf(buf, sizeof(buf), "%d", conn->options.autocommit);
 				pta[9]=strdup(buf);
-				sprintf(buf,"%llu", (curtime-conn->last_time_used)/1000);
+				snprintf(buf, sizeof(buf), "%llu", (curtime-conn->last_time_used)/1000);
 				pta[10]=strdup(buf);
 				{
 					json j;
 					char buff[32];
-					sprintf(buff,"%p",conn);
+					snprintf(buff, sizeof(buff), "%p", static_cast<void*>(conn));
 					j["address"] = buff;
 					uint64_t age_ms = (curtime - conn->creation_time)/1000;
 					j["age_ms"] = age_ms;
@@ -3321,7 +3347,7 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
 					MYSQL *_my = conn->mysql;
 					json j;
 					char buff[32];
-					sprintf(buff,"%p",_my);
+					snprintf(buff, sizeof(buff), "%p", static_cast<void*>(_my));
 					j["address"] = buff;
 					j["host"] = _my->host;
 					j["host_info"] = _my->host_info;
@@ -3543,10 +3569,10 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int
 			}
 			char buf[1024];
 			char **pta=(char **)malloc(sizeof(char *)*colnum);
-			sprintf(buf,"%d", (int)myhgc->hid);
+			snprintf(buf, sizeof(buf), "%d", (int)myhgc->hid);
 			pta[0]=strdup(buf);
 			pta[1]=strdup(mysrvc->address);
-			sprintf(buf,"%d", mysrvc->port);
+			snprintf(buf, sizeof(buf), "%d", mysrvc->port);
 			pta[2]=strdup(buf);
 			switch ((int)mysrvc->get_status()) {
 				case 0:
@@ -3573,46 +3599,46 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int
 					break;
 					// LCOV_EXCL_STOP
 			}
-			sprintf(buf,"%u", mysrvc->ConnectionsUsed->conns_length());
+			snprintf(buf, sizeof(buf), "%u", mysrvc->ConnectionsUsed->conns_length());
 			pta[4]=strdup(buf);
-			sprintf(buf,"%u", mysrvc->ConnectionsFree->conns_length());
+			snprintf(buf, sizeof(buf), "%u", mysrvc->ConnectionsFree->conns_length());
 			pta[5]=strdup(buf);
-			sprintf(buf,"%u", mysrvc->connect_OK);
+			snprintf(buf, sizeof(buf), "%u", mysrvc->connect_OK);
 			pta[6]=strdup(buf);
 			if (_reset) {
 				mysrvc->connect_OK=0;
 			}
-			sprintf(buf,"%u", mysrvc->connect_ERR);
+			snprintf(buf, sizeof(buf), "%u", mysrvc->connect_ERR);
 			pta[7]=strdup(buf);
 			if (_reset) {
 				mysrvc->connect_ERR=0;
 			}
-			sprintf(buf,"%u", mysrvc->max_connections_used);
+			snprintf(buf, sizeof(buf), "%u", mysrvc->max_connections_used);
 			pta[8]=strdup(buf);
 			if (_reset) {
 				mysrvc->max_connections_used=0;
 			}
-			sprintf(buf,"%llu", mysrvc->queries_sent);
+			snprintf(buf, sizeof(buf), "%llu", mysrvc->queries_sent);
 			pta[9]=strdup(buf);
 			if (_reset) {
 				mysrvc->queries_sent=0;
 			}
-			sprintf(buf,"%llu", mysrvc->queries_gtid_sync);
+			snprintf(buf, sizeof(buf), "%llu", mysrvc->queries_gtid_sync);
 			pta[10]=strdup(buf);
 			if (_reset) {
 				mysrvc->queries_gtid_sync=0;
 			}
-			sprintf(buf,"%llu", mysrvc->bytes_sent);
+			snprintf(buf, sizeof(buf), "%llu", mysrvc->bytes_sent);
 			pta[11]=strdup(buf);
 			if (_reset) {
 				mysrvc->bytes_sent=0;
 			}
-			sprintf(buf,"%llu", mysrvc->bytes_recv);
+			snprintf(buf, sizeof(buf), "%llu", mysrvc->bytes_recv);
 			pta[12]=strdup(buf);
 			if (_reset) {
 				mysrvc->bytes_recv=0;
 			}
-			sprintf(buf,"%u", mysrvc->current_latency_us);
+			snprintf(buf, sizeof(buf), "%u", mysrvc->current_latency_us);
 			pta[13]=strdup(buf);
 			result->add_row(pta);
 			for (k=0; k<colnum; k++) {
@@ -5811,8 +5837,9 @@ void MySQL_HostGroups_Manager::p_update_mysql_gtid_executed() {
 			gtid_counter = pc_itr->second;
 		}
 
+		const GTID_Executed_Snapshot snapshot = gtid_sd->get_gtid_executed_snapshot();
 		const auto& cur_executed_gtid = gtid_counter->Value();
-		gtid_counter->Increment(gtid_sd->events_read - cur_executed_gtid);
+		gtid_counter->Increment(snapshot.events_read - cur_executed_gtid);
 
 		it++;
 	}
@@ -5836,12 +5863,12 @@ SQLite3_result * MySQL_HostGroups_Manager::get_stats_mysql_gtid_executed() {
 		char **pta=(char **)malloc(sizeof(char *)*colnum);
 		if (gtid_si) {
 			pta[0]=strdup(gtid_si->address);
-			sprintf(buf,"%d", (int)gtid_si->mysql_port);
+			snprintf(buf, sizeof(buf), "%d", (int)gtid_si->mysql_port);
 			pta[1]=strdup(buf);
 			//sprintf(buf,"%d", mysrvc->port);
-			string s1 = gtid_si->gtid_executed.to_string();
-			pta[2]=strdup(s1.c_str());
-			sprintf(buf,"%llu", gtid_si->events_read);
+			const GTID_Executed_Snapshot snapshot = gtid_si->get_gtid_executed_snapshot();
+			pta[2]=strdup(snapshot.gtid_executed.c_str());
+			snprintf(buf, sizeof(buf), "%llu", snapshot.events_read);
 			pta[3]=strdup(buf);
 		} else {
 			std::string s = it->first;
@@ -5938,11 +5965,11 @@ class MySQL_Errors_stats {
 	char **get_row() {
 		char buf[128];
 		char **pta=(char **)malloc(sizeof(char *)*MYSQL_ERRORS_STATS_FIELD_NUM);
-		sprintf(buf,"%d",hostgroup);
+		snprintf(buf, sizeof(buf), "%d", hostgroup);
 		pta[0]=strdup(buf);
 		assert(hostname);
 		pta[1]=strdup(hostname);
-		sprintf(buf,"%d",port);
+		snprintf(buf, sizeof(buf), "%d", port);
 		pta[2]=strdup(buf);
 		assert(username);
 		pta[3]=strdup(username);
@@ -5950,16 +5977,16 @@ class MySQL_Errors_stats {
 		pta[4]=strdup(client_address);
 		assert(schemaname);
 		pta[5]=strdup(schemaname);
-		sprintf(buf,"%d",err_no);
+		snprintf(buf, sizeof(buf), "%d", err_no);
 		pta[6]=strdup(buf);
 
-		sprintf(buf,"%llu",count_star);
+		snprintf(buf, sizeof(buf), "%llu", count_star);
 		pta[7]=strdup(buf);
 
-		sprintf(buf,"%ld", first_seen);
+		snprintf(buf, sizeof(buf), "%ld", first_seen);
 		pta[8]=strdup(buf);
 
-		sprintf(buf,"%ld", last_seen);
+		snprintf(buf, sizeof(buf), "%ld", last_seen);
 		pta[9]=strdup(buf);
 
 		assert(last_error);

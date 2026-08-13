@@ -63,19 +63,32 @@ static inline int ffto_mysql_enable_ff(MYSQL* admin, const char* username) {
 		diag("LOAD MYSQL USERS TO RUNTIME failed: %s", mysql_error(admin));
 		return 1;
 	}
+	/* NOTE: credentials (root/testuser passwords) are owned by infra provisioning
+	 * (docker-proxy-post.bash) and must NOT be touched here. Changes are runtime-
+	 * only: no SAVE MYSQL USERS TO DISK, which would persist fast_forward=1 for
+	 * every user; the next test in the group reloads it via 'LOAD MYSQL USERS
+	 * FROM DISK' in reconfigure_proxysql and any non-fast_forward test would then
+	 * run fast-forwarded and break. */
 
-	/* Hard-require the connecting user's FRONTEND credential has fast_forward=1. */
-	snprintf(q, sizeof(q),
-		"SELECT COUNT(*) FROM runtime_mysql_users "
-		"WHERE username='%s' AND frontend=1 AND fast_forward=1", username);
-	if (mysql_query(admin, q)) {
-		diag("runtime_mysql_users check failed: %s", mysql_error(admin));
-		return 1;
+	/* Hard-require the connecting user's FRONTEND credential has fast_forward=1.
+	 * Retry briefly: cluster sync can lag a tick behind LOAD TO RUNTIME. */
+	int cnt = 0;
+	for (int attempt = 0; attempt < 10; attempt++) {
+		snprintf(q, sizeof(q),
+			"SELECT COUNT(*) FROM runtime_mysql_users "
+			"WHERE username='%s' AND frontend=1 AND fast_forward=1", username);
+		if (mysql_query(admin, q) == 0) {
+			MYSQL_RES* res = mysql_store_result(admin);
+			MYSQL_ROW row = res ? mysql_fetch_row(res) : NULL;
+			cnt = row && row[0] ? atoi(row[0]) : 0;
+			if (res) mysql_free_result(res);
+			if (cnt >= 1) break;
+		}
+		/* Re-assert and reload on retry */
+		(void)mysql_query(admin, "UPDATE mysql_users SET fast_forward=1");
+		(void)mysql_query(admin, "LOAD MYSQL USERS TO RUNTIME");
+		usleep(100000);
 	}
-	MYSQL_RES* res = mysql_store_result(admin);
-	MYSQL_ROW row = res ? mysql_fetch_row(res) : NULL;
-	int cnt = row && row[0] ? atoi(row[0]) : 0;
-	if (res) mysql_free_result(res);
 	if (cnt < 1) {
 		diag("FATAL: runtime frontend user '%s' still has fast_forward=0 after LOAD", username);
 		if (mysql_query(admin,

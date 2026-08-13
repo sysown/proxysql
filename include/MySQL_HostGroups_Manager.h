@@ -1239,6 +1239,7 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	SQLite3_result * get_stats_mysql_gtid_executed();
 	void generate_mysql_gtid_executed_tables();
 	bool gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uint64_t gtid_trxid);
+	bool update_gtid_from_ok(MySrvC* mysrvc, const char* gtid);
 
 	SQLite3_result *SQL3_Get_ConnPool_Stats();
 	void increase_reset_counter();
@@ -1253,6 +1254,8 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	MySQLServers_SslParams * get_Server_SSL_Params(char *hostname, int port, char *username);
 
 private:
+	GTID_Server_Data* get_or_create_gtid_server_data(MySrvC* server, const std::string& endpoint);
+	void start_gtid_reader_if_needed(MySrvC* server, GTID_Server_Data* gtid_data);
 	void update_hostgroup_manager_mappings();
 	uint64_t get_mysql_servers_checksum(SQLite3_result* runtime_mysql_servers = nullptr);
 	uint64_t get_mysql_servers_v2_checksum(SQLite3_result* incoming_mysql_servers_v2 = nullptr);

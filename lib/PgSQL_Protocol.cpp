@@ -991,7 +991,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 			unsigned int md5_len = 0;
 			EVP_DigestFinal_ex(md5_context, md5_digest, &md5_len);
 			for (int i = 0; i < MD5_DIGEST_LENGTH; i++) {
-				sprintf(&md5_string[i * 2], "%02x", (unsigned int)md5_digest[i]);
+				snprintf(&md5_string[i * 2], 3, "%02x", (unsigned int)md5_digest[i]);
 			}
 			//
 			memcpy(md5_string+(MD5_DIGEST_LENGTH*2), (*myds)->tmp_login_salt, sizeof((*myds)->tmp_login_salt));
@@ -1001,7 +1001,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 			EVP_MD_CTX_free(md5_context);
 			memcpy(md5_string, "md5", 3);
 			for (int i = 0, j = 3;  i < MD5_DIGEST_LENGTH; i++, j+=2) {
-				sprintf(&md5_string[j], "%02x", (unsigned int)md5_digest[i]);
+				snprintf(&md5_string[j], 3, "%02x", (unsigned int)md5_digest[i]);
 			}
 
 			if (strlen(md5_string) == pass_len && strcmp(md5_string, pass) == 0) {
@@ -1656,7 +1656,7 @@ bool PgSQL_Protocol::generate_ok_packet(bool send, bool ready, const char* msg, 
 		allocated_tag = extract_tag_from_query(query);
 		assert(allocated_tag);
 		if (strcmp(allocated_tag, "INSERT") == 0) {
-			sprintf(tmpbuf, "%s 0 %d", allocated_tag, rows);
+			snprintf(tmpbuf, sizeof(tmpbuf), "%s 0 %d", allocated_tag, rows);
 			tag = tmpbuf;
 		} else if (strcmp(allocated_tag, "UPDATE") == 0 ||
 			strcmp(allocated_tag, "DELETE") == 0 ||
@@ -1665,7 +1665,7 @@ bool PgSQL_Protocol::generate_ok_packet(bool send, bool ready, const char* msg, 
 			strcmp(allocated_tag, "FETCH") == 0 ||
 			strcmp(allocated_tag, "COPY") == 0 ||
 			strcmp(allocated_tag, "SELECT") == 0) {
-			sprintf(tmpbuf, "%s %d", allocated_tag, rows);
+			snprintf(tmpbuf, sizeof(tmpbuf), "%s %d", allocated_tag, rows);
 			tag = tmpbuf;
 		} else {
 			tag = allocated_tag;

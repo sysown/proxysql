@@ -2192,9 +2192,9 @@ __exit_process_mysql_query:
 					if (ret->firewall_whitelist_mode == WUS_DETECTING || ret->firewall_whitelist_mode == WUS_PROTECTING) {
 						char buf[32];
 						if (qp && qp->digest) {
-							sprintf(buf,"0x%016llX", (long long unsigned int)qp->digest);
+							snprintf(buf, sizeof(buf), "0x%016llX", (long long unsigned int)qp->digest);
 						} else {
-							sprintf(buf,"unknown");
+							snprintf(buf, sizeof(buf), "unknown");
 						}
 						char *action = (char *)"blocked";
 						if (ret->firewall_whitelist_mode == WUS_DETECTING) {

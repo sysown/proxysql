@@ -189,7 +189,7 @@ PgSQL_Rule_Text::PgSQL_Rule_Text(const PgSQL_Query_Processor_Rule_t* pqr) {
 
 	char buf[20];
 	if (pqr->digest) {
-		sprintf(buf, "0x%016llX", (long long unsigned int)pqr->digest);
+		snprintf(buf, sizeof(buf), "0x%016llX", (long long unsigned int)pqr->digest);
 		pta[8] = strdup(buf);
 	}
 	else {
@@ -449,7 +449,7 @@ PgSQL_Query_Processor_Rule_t* PgSQL_Query_Processor::new_query_rule(const PgSQL_
 
 	char buf[20];
 	if (pqr->digest) { // not 0
-		sprintf(buf, "0x%016llX", (long long unsigned int)pqr->digest);
+		snprintf(buf, sizeof(buf), "0x%016llX", (long long unsigned int)pqr->digest);
 	}
 
 	std::string re_mod;

@@ -62,6 +62,21 @@ static void test_mysql_integer_variables_are_registered() {
 		"aws_blue_green_deployment_auto_discovery is registered as an integer variable");
 	ok(handler.get_variable_int("session_track_variables") == 0,
 		"session_track_variables is registered as an integer variable");
+	ok(contains_variable(variables, "user_variable_tracking"),
+		"user_variable_tracking is registered as an integer variable");
+	ok(handler.get_variable_int("user_variable_tracking") == 0,
+		"user_variable_tracking has the compiled default of 0");
+
+	char user_variable_tracking_name[] = "user_variable_tracking";
+	ok(handler.set_variable(user_variable_tracking_name, "1") &&
+		handler.get_variable_int(user_variable_tracking_name) == 1,
+		"user_variable_tracking accepts mode 1");
+	ok(!handler.set_variable(user_variable_tracking_name, "-1") &&
+		handler.get_variable_int(user_variable_tracking_name) == 1,
+		"user_variable_tracking rejects values below its supported range");
+	ok(!handler.set_variable(user_variable_tracking_name, "2") &&
+		handler.get_variable_int(user_variable_tracking_name) == 1,
+		"user_variable_tracking rejects values above its supported range");
 
 #ifdef PROXYSQL31
 	ok(contains_variable(variables, "caching_sha2_password_auto_generate_rsa_keys"),
@@ -311,9 +326,9 @@ static void test_caching_sha2_rsa_rejection_restores_database_values(MySQL_Threa
 
 int main() {
 #ifdef PROXYSQL31
-	plan(30);
+	plan(35);
 #else
-	plan(4);
+	plan(9);
 #endif
 	test_mysql_integer_variables_are_registered();
 	test_mysql_integer_boolean_aliases();
