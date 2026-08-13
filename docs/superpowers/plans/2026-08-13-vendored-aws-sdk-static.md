@@ -182,10 +182,15 @@
   ```bash
   bash test/infra/control/check-vendored-aws-sdk-build.bash
   deps/aws-sdk-cpp/verify-bundle.bash deps/aws-sdk-cpp
-  tar -tzf deps/aws-sdk-cpp/aws-sdk-cpp-1.11.869-with-crt.tar.gz | rg '(^|/)(\.git|CMakeCache\.txt|\.a$|\.so$|credential|secret|token)' && exit 1 || true
+  tar -tzf deps/aws-sdk-cpp/aws-sdk-cpp-1.11.869-with-crt.tar.gz | \
+    rg '(^|/)(\.git|CMakeCache\.txt|CMakeFiles/|\.aws/(credentials|config)$|id_rsa$|.*\.pem$|.*\.(a|o|so|dylib)$)' && exit 1 || true
   ```
 
-  Expected: the fixture matrix and real bundle validator pass; the source-only scan prints no prohibited entry.
+  Expected: the fixture matrix and real bundle validator pass; the source-only
+  scan prints no repository metadata, CMake/build output, private-key material,
+  AWS credential/config files, or prebuilt objects/libraries.  It deliberately
+  permits legitimate upstream source names containing ordinary words such as
+  `credential` or `token`.
 
 - [ ] **Step 5: Audit legal material and commit the vendor payload separately**
 
