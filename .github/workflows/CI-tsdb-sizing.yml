@@ -20,8 +20,14 @@ name: CI-tsdb-sizing
 # small-profile baseline.json), so a much smaller profile below gives the
 # same sizing signal -- and still exercises multi-hour rollup catch-up and
 # the 3-node cluster leader cost -- at a projected ~1 GB DB / ~20-30s
-# expand time (measured rate: 7,144,960 raw rows/24h/node, 10,008 hourly
-# rows/day, same rate for the cluster tier per source node).
+# expand time (linearly scaled from the measured 24h/14d/3-node rate:
+# 7,144,960 raw rows/24h/node, 10,008 hourly rows/day, same rate for the
+# cluster tier per source node). IMPORTANT: this 4h/7d/3-node profile has
+# NOT itself been run end-to-end -- only the 24h/14d/3-node profile above
+# was actually executed. The ~1 GB / ~20-30s figures are a projection, not
+# a measurement of this exact profile; the first nightly/dispatched run of
+# this workflow is that validation -- check its printed report against the
+# projection above.
 #
 # Security note: every 'run:' step below uses only static, repo-controlled
 # values (no untrusted user input is interpolated into a shell command).
@@ -36,14 +42,24 @@ on:
 jobs:
   measure:
     runs-on: ubuntu-latest
-    # Derived from measurement, not a blind guess: comparable from-scratch
-    # full builds in this repo (CI-package-*-v31.yml, build+package) budget
-    # 120 minutes; this job only builds (no packaging). The lab steps
-    # themselves are now small and fast (expand ~20-30s projected, rollup
-    # wait bounded at 10 min below, measure <5s) plus checkout/apt/artifact
-    # overhead (~3 min). 120 (build) + 10 (rollup bound) + ~4 (everything
-    # else) = ~134 min; 150 keeps a deliberate margin over that without
-    # the previous unexamined 180-minute guess.
+    # The lab-step terms below are grounded in this session's measurements:
+    # rollup wait is hard-bounded at 10 min in that step's own poll loop,
+    # and expand/measure/checkout/apt/artifact overhead is measured (small
+    # profile) or linearly projected (see the profile-sizing comment above)
+    # at under ~4 min total. The build term (120 min) is NOT a measurement
+    # of this job's build step -- it's taken by analogy from comparable
+    # from-scratch full builds elsewhere in this repo (CI-package-*-v31.yml,
+    # build+package, same order of magnitude of work minus packaging). A
+    # local `PROXYSQL31=1 make clean && make` this session ran in ~55s, but
+    # `make clean` doesn't clean deps/ (only `make cleanall` does) and
+    # deps/ was already built beforehand, so that only timed a lib+src
+    # recompile, not a from-scratch build of the 25+ vendored dependencies
+    # -- the dominant, slow part of a real CI build -- so it isn't usable
+    # as the build-time term. 120 (build, analogy) + 10 (rollup, bounded) +
+    # ~4 (everything else, measured/projected) = ~134 min; 150 keeps a
+    # deliberate margin over that without carrying forward the previous
+    # unexamined 180-minute guess -- but the build term itself should be
+    # replaced with a real measurement after this workflow's first run.
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

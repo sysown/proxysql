@@ -178,7 +178,12 @@ essentially free. Projecting onto real on-disk bytes with the measured
 ≈2.17× payload-to-file-size overhead, a non-leader node's raw+hourly
 footprint is ≈(1245+318)×2.17 ≈ 3.4 GB. That is a real but tractable
 footprint, and a large improvement over the pre-#6034 defaults (7d raw / 3d
-cluster), which this same math scales up ≈3.5× for the raw tier alone.
+cluster), which this same math scales up ≈3.5× for the raw tier alone. (This
+loaded-fixture 622.55 MB/day/node is itself ≈38% above the Motivation
+section's idle-node floor of ≈450 MB/day/node — consistent with the loaded
+fixture's higher series count, 417 vs the idle measurement's 268, which is
+exactly the gap the "refine `tsdb-*` defaults with loaded-node series
+counts" follow-up below anticipates closing further.)
 
 **(b) What does the cluster tier cost the leader per node?** The measured
 3-node cluster tier is 2,133.4 MB payload for one day (the cluster window
@@ -187,11 +192,15 @@ tracked equals the raw window, 24h, which is exactly the default
 node* (2133.4/3), retained on the leader only. That is the dominant single
 cost on a leader: a leader tracking 3 peers carries ≈2.08 GB of cluster
 payload (≈4.5 GB projected on-disk) on top of its own raw+hourly tiers,
-versus a follower's ≈1.53 GB payload (≈3.3 GB projected on-disk). The cost
-scales linearly with cluster size at ≈711 MB/day/node retained — a 10-node
-cluster would put ≈7.1 GB of cluster-tier payload alone on the leader at the
-1-day default, which is worth remembering before growing cluster sizes past
-what's been measured here.
+versus a follower's ≈1.53 GB payload (≈3.3 GB projected on-disk). **The
+leader's combined total — the actual capacity-planning number — is its own
+raw+hourly footprint plus the cluster tier: ≈3.3-3.4 GB + ≈4.5 GB ≈ 7.8 GB,
+roughly 2.3× a follower's footprint**, not the ≈4.5 GB cluster-only figure
+in isolation. The cluster cost scales linearly with cluster size at ≈711
+MB/day/node retained — a 10-node cluster would put ≈7.1 GB of cluster-tier
+payload alone on the leader at the 1-day default (on top of its own ≈3.3-3.4
+GB), which is worth remembering before growing cluster sizes past what's
+been measured here.
 
 **(c) Does the rollup catch-up duration justify chunking (project 3)?** Yes.
 A single, unbounded first-pass downsample — the exact scenario project 3
@@ -215,12 +224,28 @@ disk. `CI-tsdb-sizing.yml` was changed to `--raw-window 4h --span 7d --nodes
 3` instead — since bytes/row is confirmed scale-invariant, this gives the
 same sizing signal (still exercises multi-hour rollup catch-up and the
 3-node cluster leader cost) at a projected ≈1 GB DB and ≈20-30s expand time
-(scaled from the measured rates: 7,144,960 raw rows/24h/node, 10,008 hourly
-rows/day, and the same per-node rate for the cluster tier). `timeout-minutes`
-was set to 150 (down from the previous unexamined 180): comparable
-from-scratch full builds elsewhere in this repo (`CI-package-*-v31.yml`,
-build+package) budget 120 minutes, this job only builds (no packaging), and
-the lab steps themselves are now measured to be small (expand ≈20-30s
-projected, rollup wait already bounded at 10 minutes, measure <5s) plus
-checkout/apt/artifact overhead (≈3 min) — 120 + 10 + ≈4 ≈ 134 min, so 150
-keeps a deliberate margin without carrying forward a blind guess.
+(linearly scaled from the measured 24h/14d/3-node rates: 7,144,960 raw
+rows/24h/node, 10,008 hourly rows/day, and the same per-node rate for the
+cluster tier). **The 4h/7d/3-node profile itself has not been run
+end-to-end** — only the 24h/14d/3-node profile documented in the table
+above was actually executed; the ≈1 GB / ≈20-30s figures are a linear
+projection, justified by the confirmed bytes/row invariance but not
+independently verified at this smaller size. The first nightly (or
+`workflow_dispatch`) run of `CI-tsdb-sizing.yml` is that validation, and its
+printed report should be checked against this projection.
+
+`timeout-minutes` was set to 150 (down from the previous unexamined 180).
+The rollup-wait bound (10 minutes) and the lab steps' own wall-clock
+(expand ≈20-30s projected, measure <5s, checkout/apt/artifact overhead ≈3
+min) are grounded in this session's measurements. The build-time term (120
+minutes) is not: it is taken by analogy from comparable from-scratch full
+builds elsewhere in this repo (`CI-package-*-v31.yml`, build+package, same
+order of magnitude of work minus packaging), not a measurement of this
+job's actual build step. This session did run `PROXYSQL31=1 make clean &&
+PROXYSQL31=1 make -j32` locally (≈55s wall), but `make clean` does not clean
+`deps/` (only `make cleanall` does) — `deps/` was already built from a
+prior session, so that 55s measures only the lib+src recompile, not a
+from-scratch build including the 25+ vendored dependencies, which is the
+dominant, slow part of a real CI build. That number is therefore not usable
+as a build-time measurement here and was not used; 120 minutes remains an
+analogy-derived upper bound, not a measured one, pending a real timed run.
