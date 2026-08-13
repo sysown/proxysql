@@ -100,15 +100,33 @@ gate on every change).
 5. Measure and print a table:
    - bytes per row (per table: `tsdb_metrics`, `tsdb_metrics_hour`,
      `tsdb_metrics_cluster`), computed from row counts and page usage;
+   - the whole-file overhead ratio (page_count*page_size / summed tier
+     payload bytes);
    - total DB size;
    - rollup catch-up duration (time from start until `tsdb_metrics_hour`
      stops growing — i.e. the first downsample pass, which holds `wrlock`);
    - latency of two representative queries: raw last-1h for one metric, and
      hourly 14d for one metric.
-6. **Report always; fail only on a coarse guard** — bytes/row drifting more
-   than 25% from the baseline recorded in
-   `test/tsdb-lab/baseline.json` (committed, updated deliberately). This
-   catches schema/row bloat regressions without becoming a flaky perf gate.
+6. **Report always; fail only on two coarse guards**, each covering a
+   different failure mode, neither covering everything:
+   - **bytes/row** drifting more than 25% from `test/tsdb-lab/baseline.json`
+     (committed, updated deliberately). This is a near-pure function of the
+     committed fixture's text (`LENGTH(metric_name)+LENGTH(labels)+16`,
+     averaged) — it guards fixture/tooling consistency, not the product: a
+     product change that adds or lengthens labels does not move this number
+     until a human re-runs `capture.bash` and commits a refreshed fixture
+     (see `test/tsdb-lab/README.md`'s "Maintenance" section).
+   - **the whole-file overhead ratio** drifting more than 25% from the same
+     baseline file. This IS sensitive to schema/index bloat — a new column
+     or index inflates `page_count` while tier payload stays flat, moving
+     the ratio even though bytes/row does not (verified scale-invariant at
+     2.17 across both the small and full-scale profiles, so a real drift in
+     it is a schema-shape signal, not a scale artifact).
+   - Total DB size and query latency are reported only, never gated (file
+     size is a derived total of the already-gated numbers plus non-tsdb
+     overhead; latency is hardware-dependent, see the non-goals below).
+   - Detecting product-side metric/label growth is **not** automatic under
+     either gate — it requires the maintenance step above.
 
 ### 4. Tests for the tool itself
 
@@ -136,3 +154,116 @@ re-running is a no-op (idempotence).
   the reproduction of the unbounded first pass under `wrlock`.
 - Refining `tsdb-*` defaults with loaded-node series counts rather than the
   idle-node floor.
+
+## Measured results (2026-08-13, ProxySQL 3.1.11-579-geaa0c9b)
+
+First full-scale local run of the CI-sized profile, against a release
+(`PROXYSQL31=1`, no debug flags) build at commit `eaa0c9bdd`. Flow: start
+once (`--initial`) to create the schema, stop, `expand.py --raw-window 24h
+--span 14d --nodes 3` (the profile originally planned for
+`CI-tsdb-sizing.yml`), start again, `measure.py`, then `SET tsdb-enabled='1';
+LOAD TSDB VARIABLES TO RUNTIME` while polling
+`stats_history.tsdb_metrics_hour`'s row count every 1s until 5 consecutive
+reads agreed. Datadir was scratch space under `/data` (341 GB free
+beforehand), ports 16392/16393; the 5.9 GB scratch datadir was removed
+afterward and `df -h /data` confirmed the space was released (345G → 351G
+avail — the extra 6G includes some unrelated background churn on the shared
+host, consistent with the ~5.9 GB DB).
+
+| Metric | Value |
+|---|---|
+| Expansion wall-clock (`expand.py`) | 113.1s (86.82s user + 26.12s sys, 99% CPU) |
+| Raw rows (`tsdb_metrics`) | 7,144,960 over 24h (1 node) |
+| Hourly rows (`tsdb_metrics_hour`) | 130,104 over the 13d preceding the raw window (10,008/day = 24×417 series) |
+| Cluster rows (`tsdb_metrics_cluster`) | 21,434,880 across 3 nodes (7,144,960/node, same 24h window as raw) |
+| Bytes/row — raw / hourly / cluster | 91.36 / 91.38 / 104.36 (0.0% drift vs `baseline.json`, i.e. confirmed scale-invariant between the 1h/1d and 24h/14d profiles) |
+| Tiered payload (raw+hourly+cluster) | 2,767.29 MB |
+| Whole-file DB size | 6,006.27 MB (page_count=1,537,605 × page_size=4096) ≈ 5.87 GB |
+| File-size / tiered-payload overhead ratio | ≈2.17× (indexes + page/journal overhead) |
+| Raw last-1h query | 15.3ms (rows=27,600) — was 13.5ms at the small profile |
+| Hourly full-span query | 5.6ms (rows=12,480) — was 0.4ms at the small profile |
+| Rollup catch-up: `tsdb_metrics_hour` growth | 130,104 → 139,695 rows (+9,591 = 23 complete hourly buckets × 417 series — the entire 24h raw backlog, caught up in one pass) |
+| Rollup catch-up: single blocking pass | ≈38.6s (the poll issued immediately after enabling TSDB blocked for that long before returning, i.e. `wrlock` held that whole time) |
+| Rollup catch-up: poll-detected total | 43.8s (1s poll interval, 5 consecutive stable reads required) |
+
+**(a) Do the new retention defaults (raw 2d local, cluster 1d, hourly 365d —
+`lib/ProxySQL_Statistics.cpp`) hold up against measured per-day cost?** Yes,
+comfortably, for the local (non-cluster) tiers: raw costs 622.55 MB/day/node
+payload, so 2 days retained is ≈1.22 GB/node; hourly costs only ≈0.87
+MB/day (24 buckets/day vs 17,280 raw samples/day — a ~720× row-count
+reduction), so even 365 days retained is ≈318 MB — the long hourly window is
+essentially free. Projecting onto real on-disk bytes with the measured
+≈2.17× payload-to-file-size overhead, a non-leader node's raw+hourly
+footprint is ≈(1245+318)×2.17 ≈ 3.4 GB. That is a real but tractable
+footprint, and a large improvement over the pre-#6034 defaults (7d raw / 3d
+cluster), which this same math scales up ≈3.5× for the raw tier alone. (This
+loaded-fixture 622.55 MB/day/node is itself ≈38% above the Motivation
+section's idle-node floor of ≈450 MB/day/node — consistent with the loaded
+fixture's higher series count, 417 vs the idle measurement's 268, which is
+exactly the gap the "refine `tsdb-*` defaults with loaded-node series
+counts" follow-up below anticipates closing further.)
+
+**(b) What does the cluster tier cost the leader per node?** The measured
+3-node cluster tier is 2,133.4 MB payload for one day (the cluster window
+tracked equals the raw window, 24h, which is exactly the default
+`tsdb-cluster_retention_days=1`), i.e. 711.1 MB/day of payload *per tracked
+node* (2133.4/3), retained on the leader only. That is the dominant single
+cost on a leader: a leader tracking 3 peers carries ≈2.08 GB of cluster
+payload (≈4.5 GB projected on-disk) on top of its own raw+hourly tiers,
+versus a follower's ≈1.53 GB payload (≈3.3 GB projected on-disk). **The
+leader's combined total — the actual capacity-planning number — is its own
+raw+hourly footprint plus the cluster tier: ≈3.3-3.4 GB + ≈4.5 GB ≈ 7.8 GB,
+roughly 2.3× a follower's footprint**, not the ≈4.5 GB cluster-only figure
+in isolation. The cluster cost scales linearly with cluster size at ≈711
+MB/day/node retained — a 10-node cluster would put ≈7.1 GB of cluster-tier
+payload alone on the leader at the 1-day default (on top of its own ≈3.3-3.4
+GB), which is worth remembering before growing cluster sizes past what's
+been measured here.
+
+**(c) Does the rollup catch-up duration justify chunking (project 3)?** Yes.
+A single, unbounded first-pass downsample — the exact scenario project 3
+targets — held `wrlock` for ≈38.6s while aggregating one node's full 24h raw
+backlog (7.14M rows, 417 series, 23 hourly buckets) into 9,591 hourly rows,
+on a 32-core dev machine with no contention. Every other read or write that
+shares `wrlock` blocks for the same interval; in production this pass runs
+after any restart or `tsdb-enabled` toggle that needs to catch up whatever
+raw window has accumulated, and a loaded node has materially more series
+than this fixture's idle-node-derived 417 (see Motivation), so the real
+worst case is plausibly minutes, not tens of seconds. That is a real,
+reproduced availability cost — this measurement is the concrete justification
+for chunking the downsample pass rather than running it as one unbounded
+pass.
+
+**CI workflow adjustment.** The originally planned CI profile
+(`--raw-window 24h --span 14d --nodes 3`, measured above) produces a 6.0 GB
+`proxysql_stats.db`, which combined with the repo's own build artifacts
+(>1.4 GB) leaves too little headroom on a standard GitHub-hosted runner's
+disk. `CI-tsdb-sizing.yml` was changed to `--raw-window 4h --span 7d --nodes
+3` instead — since bytes/row is confirmed scale-invariant, this gives the
+same sizing signal (still exercises multi-hour rollup catch-up and the
+3-node cluster leader cost) at a projected ≈1 GB DB and ≈20-30s expand time
+(linearly scaled from the measured 24h/14d/3-node rates: 7,144,960 raw
+rows/24h/node, 10,008 hourly rows/day, and the same per-node rate for the
+cluster tier). **The 4h/7d/3-node profile itself has not been run
+end-to-end** — only the 24h/14d/3-node profile documented in the table
+above was actually executed; the ≈1 GB / ≈20-30s figures are a linear
+projection, justified by the confirmed bytes/row invariance but not
+independently verified at this smaller size. The first nightly (or
+`workflow_dispatch`) run of `CI-tsdb-sizing.yml` is that validation, and its
+printed report should be checked against this projection.
+
+`timeout-minutes` was set to 150 (down from the previous unexamined 180).
+The rollup-wait bound (10 minutes) and the lab steps' own wall-clock
+(expand ≈20-30s projected, measure <5s, checkout/apt/artifact overhead ≈3
+min) are grounded in this session's measurements. The build-time term (120
+minutes) is not: it is taken by analogy from comparable from-scratch full
+builds elsewhere in this repo (`CI-package-*-v31.yml`, build+package, same
+order of magnitude of work minus packaging), not a measurement of this
+job's actual build step. This session did run `PROXYSQL31=1 make clean &&
+PROXYSQL31=1 make -j32` locally (≈55s wall), but `make clean` does not clean
+`deps/` (only `make cleanall` does) — `deps/` was already built from a
+prior session, so that 55s measures only the lib+src recompile, not a
+from-scratch build including the 25+ vendored dependencies, which is the
+dominant, slow part of a real CI build. That number is therefore not usable
+as a build-time measurement here and was not used; 120 minutes remains an
+analogy-derived upper bound, not a measured one, pending a real timed run.
