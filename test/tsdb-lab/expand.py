@@ -105,6 +105,9 @@ def main(argv=None):
     if raw_window > span:
         sys.exit("--raw-window (%s) cannot exceed --span (%s)" % (args.raw_window, args.span))
 
+    if args.nodes > 0:
+        print("WARNING: --nodes is not implemented yet (Task 2); ignoring")
+
     conn = sqlite3.connect(args.db)
     conn.execute("PRAGMA synchronous=OFF")
     conn.execute("PRAGMA journal_mode=MEMORY")

@@ -74,9 +74,10 @@ class TestExpandRaw(unittest.TestCase):
     def test_tiles_fill_the_window(self):
         # Block spans 1000..1010 -> stride = (1010-1000) + 5 = 15s per tile.
         # Window of 60s therefore holds 4 tiles = 24 rows.
-        expand.expand_raw(self.conn, self.rows, self.start, self.end, 100000, 100060)
+        attempted = expand.expand_raw(self.conn, self.rows, self.start, self.end, 100000, 100060)
         n = self.conn.execute("SELECT COUNT(*) FROM tsdb_metrics").fetchone()[0]
         self.assertEqual(n, 24)
+        self.assertEqual(attempted, 24, "return value (attempted inserts) must equal len(rows) * tiles = 6 * 4")
 
     def test_timestamps_stay_inside_the_window(self):
         expand.expand_raw(self.conn, self.rows, self.start, self.end, 100000, 100060)
@@ -97,6 +98,16 @@ class TestExpandRaw(unittest.TestCase):
         expand.expand_raw(self.conn, self.rows, self.start, self.end, 100000, 100060)
         second = self.conn.execute("SELECT COUNT(*) FROM tsdb_metrics").fetchone()[0]
         self.assertEqual(first, second)
+
+    def test_stride_produces_exact_tile_boundaries(self):
+        # Stride = (1010-1000) + 5 = 15s. Window 100000..100060 has 4 tiles at offsets 0, 15, 30, 45.
+        # Fixture block at [1000,1005,1010]. Offsets produce [100000,100005,100010], [100015,100020,100025], etc.
+        # Expected distinct timestamps within [100000,100060): [100000,100005,100010, 100015,100020,100025, 100030,100035,100040, 100045,100050,100055]
+        expand.expand_raw(self.conn, self.rows, self.start, self.end, 100000, 100060)
+        ts = sorted([r[0] for r in self.conn.execute(
+            "SELECT DISTINCT timestamp FROM tsdb_metrics ORDER BY timestamp")])
+        expected = [100000, 100005, 100010, 100015, 100020, 100025, 100030, 100035, 100040, 100045, 100050, 100055]
+        self.assertEqual(ts, expected, "stride must produce exact tile offsets: got %s" % ts)
 
 
 class TestTableExists(unittest.TestCase):
