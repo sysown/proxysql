@@ -9,8 +9,12 @@
 **Scope:** Aurora MySQL blue/green deployments exposed through
 `mysql.rds_topology` and `INFORMATION_SCHEMA.REPLICA_HOST_STATUS`.
 
-**Evidence basis:** A timestamped live-Aurora switchover observation captured on
-2026-07-30. Section 3 separates observed behavior from design policy.
+**Evidence basis:** The AWS-team-provided *RDS Topology metadata – Overview*
+document defines the routing semantics of the switchover statuses. A
+timestamped live-Aurora switchover observation captured on 2026-07-30
+corroborates those semantics and supplies the observed Aurora-specific details.
+Section 3 separates the supplied status contract, observed behavior, and design
+policy.
 
 **Related designs:**
 
@@ -85,7 +89,24 @@ configured, as defined by the configuration/runtime specification.
 
 ## 3. Evidence and AWS/Aurora Behavioral Contract
 
-### 3.1 Directly observed behavior
+### 3.1 AWS-provided status semantics
+
+The AWS-team-provided *RDS Topology metadata – Overview* document defines these
+traffic-routing semantics for `mysql.rds_topology` during switchover:
+
+| Status | AWS-provided meaning | Write traffic | Read traffic |
+|---|---|---|---|
+| `SWITCHOVER_INITIATED` | Switchover was triggered, but no modifications have occurred and rollback remains possible. | Source | Source |
+| `SWITCHOVER_IN_PROGRESS` | Source writes are disabled while target replication catches up; rollback remains possible. | Nowhere | Source |
+| `SWITCHOVER_IN_POST_PROCESSING` | The target is promoted and can receive writes; rollback is no longer possible. | Target | Target |
+| `SWITCHOVER_COMPLETED` | DNS propagation is complete and the original source endpoint points to the target. | Target | Target |
+
+The implementation treats these meanings as the AWS-supplied behavioral
+contract for routing decisions. In particular, POST_PROCESSING definitively
+means that the promoted target can accept write traffic; target readiness is
+not inferred solely from one observed run.
+
+### 3.2 Directly observed behavior
 
 The 2026-07-30 run observed:
 
@@ -114,14 +135,17 @@ The 2026-07-30 run observed:
 9. TARGET completion was visible at `T+40.655s`; the topology table drained at
    `T+65.730s`.
 
-The implementation treats these observations as the evidence for the design,
-not as a formal AWS compatibility guarantee. Tests must simulate the observed
-changes, and unexpected or ambiguous metadata must fail closed.
+The run corroborates the AWS-provided status semantics. Details learned only
+from the observation, including timings, target-member rename behavior, and
+table-drain timing, are implementation evidence rather than a formal AWS
+compatibility guarantee. Tests must simulate the observed changes, and
+unexpected or ambiguous metadata must fail closed.
 
-### 3.2 Design policy derived from the observation
+### 3.3 Design policy derived from the contract and observation
 
-- POST_PROCESSING is the routing barrier; no additional target-writability
-  query gates traffic pinning.
+- POST_PROCESSING is the routing barrier because the AWS-provided semantics say
+  that the promoted target can receive writes at that status; no additional
+  target-writability query gates traffic pinning.
 - TARGET completion means Aurora writer and reader routing cleanup can occur
   immediately.
 - Table drain is not a reader-availability barrier for Aurora.

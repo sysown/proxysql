@@ -448,11 +448,12 @@ The simulator does not validate:
 - mutable Route 53 propagation;
 - application-level latency or packet loss;
 - cross-process persistence of transient FSM state;
-- Aurora versions that violate the AWS contracts established by the live-AWS
-  analysis.
+- Aurora versions that violate the AWS-provided topology-status contract.
 
-Live-AWS evidence remains the validation layer for status ordering, member
-rename, writability, and DNS completion.
+The AWS-provided topology metadata semantics define the status-to-routing
+contract. Live-AWS evidence remains the validation layer for observed status
+ordering, member rename, DNS completion, and corroboration of the writability
+transition.
 
 ## 11. Acceptance Criteria
 
