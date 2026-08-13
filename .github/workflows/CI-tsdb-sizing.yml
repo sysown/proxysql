@@ -2,12 +2,26 @@ name: CI-tsdb-sizing
 
 # Nightly measurement job for the TSDB sizing lab (test/tsdb-lab/). This is
 # NOT a per-PR gate: it builds ProxySQL, expands the committed real-metric
-# fixture into a realistically sized proxysql_stats.db (24h raw + 14d
-# rollups + a 3-node cluster tier), measures storage/query characteristics
-# with measure.py, and uploads the printed report as a job artifact. The
-# job goes red only when measure.py detects bytes/row drift beyond
+# fixture into a realistically sized proxysql_stats.db (raw + rollups + a
+# 3-node cluster tier), measures storage/query characteristics with
+# measure.py, and uploads the printed report as a job artifact. The job
+# goes red only when measure.py detects bytes/row drift beyond
 # baseline.json's +/-25% default threshold -- that is the whole point of
 # running it nightly on a schedule instead of on every push.
+#
+# Profile sizing (2026-08-13 measurement, see
+# docs/superpowers/specs/2026-08-13-tsdb-sizing-lab-design.md "Measured
+# results"): the originally planned CI profile (--raw-window 24h --span 14d
+# --nodes 3) was actually run once against a local release (PROXYSQL31)
+# build to check disk feasibility. It produced ~28.7M rows and a 6.0 GB
+# proxysql_stats.db in 113s -- on top of the >1.4 GB the repo build itself
+# consumes, that is too tight a margin for a standard GitHub-hosted runner's
+# disk. bytes/row was confirmed scale-invariant (0.0% drift vs the
+# small-profile baseline.json), so a much smaller profile below gives the
+# same sizing signal -- and still exercises multi-hour rollup catch-up and
+# the 3-node cluster leader cost -- at a projected ~1 GB DB / ~20-30s
+# expand time (measured rate: 7,144,960 raw rows/24h/node, 10,008 hourly
+# rows/day, same rate for the cluster tier per source node).
 #
 # Security note: every 'run:' step below uses only static, repo-controlled
 # values (no untrusted user input is interpolated into a shell command).
@@ -22,7 +36,15 @@ on:
 jobs:
   measure:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    # Derived from measurement, not a blind guess: comparable from-scratch
+    # full builds in this repo (CI-package-*-v31.yml, build+package) budget
+    # 120 minutes; this job only builds (no packaging). The lab steps
+    # themselves are now small and fast (expand ~20-30s projected, rollup
+    # wait bounded at 10 min below, measure <5s) plus checkout/apt/artifact
+    # overhead (~3 min). 120 (build) + 10 (rollup bound) + ~4 (everything
+    # else) = ~134 min; 150 keeps a deliberate margin over that without
+    # the previous unexamined 180-minute guess.
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -61,12 +83,16 @@ jobs:
           test -f /tmp/tsdb-lab-ci/proxysql_stats.db
 
       - name: Expand fixture into raw/hourly/cluster tiers
-        # CI profile: bigger than the local smoke profile in README.md --
-        # 24h of raw (5s) metrics, 14d total retention, 3-node cluster tier.
+        # CI profile, sized to fit a standard GitHub-hosted runner's disk
+        # (see the top-of-file comment and the design spec's "Measured
+        # results" section): 4h of raw (5s) metrics, 7d total retention,
+        # 3-node cluster tier. Projected ~1 GB DB / ~20-30s expand time,
+        # scaled from the measured 24h/14d/3-node run (28.7M rows, 6.0 GB,
+        # 113s) using the confirmed-scale-invariant bytes/row.
         run: |
           python3 test/tsdb-lab/expand.py \
             --db /tmp/tsdb-lab-ci/proxysql_stats.db \
-            --raw-window 24h --span 14d --nodes 3
+            --raw-window 4h --span 7d --nodes 3
 
       - name: Start ProxySQL and wait for hourly rollup catch-up
         # tsdb_downsample_metrics() fires once immediately after

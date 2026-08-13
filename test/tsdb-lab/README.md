@@ -97,11 +97,18 @@ schema or fixture legitimately shifts the numbers.
 `.github/workflows/CI-tsdb-sizing.yml` runs this flow on a nightly schedule (and
 `workflow_dispatch`) — **not** on every PR, since it's a measurement job, not a
 gate. It builds ProxySQL (`PROXYSQL31=1`), creates the schema, expands the fixture
-with the bigger CI profile (`--raw-window 24h --span 14d --nodes 3`), starts
+with the CI profile (`--raw-window 4h --span 7d --nodes 3`), starts
 ProxySQL again and waits (bounded, reporting the duration) for
 `tsdb_metrics_hour` to stop growing — i.e. for the hourly rollup to catch up the
 newly-written raw window — then stops it, runs `measure.py --baseline
 test/tsdb-lab/baseline.json`, and uploads the printed report as a job artifact.
+The originally planned `--raw-window 24h --span 14d --nodes 3` profile was
+measured once (2026-08-13, see the design spec's "Measured results" section):
+~28.7M rows, a 6.0 GB `proxysql_stats.db`, 113s to expand. That is too tight a
+disk margin on a standard GitHub-hosted runner on top of the repo build
+(>1.4 GB), so CI uses the smaller profile above instead — bytes/row is
+confirmed scale-invariant, so it gives the same sizing signal at a fraction of
+the disk/time cost.
 The job goes red only when `measure.py` detects drift beyond the threshold.
 
 ## expand.py API
