@@ -6839,6 +6839,18 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(
 	std::vector<MySrvC *> parents; // this is a vector of srvers that needs to be excluded in case gtid_uuid is used
 	MySQL_Connection *c=NULL;
 	MySQL_Connection *client_conn = sess->client_myds->myconn;
+	bool use_aws_locality = false;
+#ifdef PROXYSQL40
+	std::shared_ptr<const AwsLocalitySnapshot> aws_locality_snapshot;
+	if (mysql_thread___aws_locality_awareness && MyHGM != nullptr &&
+		MyHGM->aws_locality_manager() != nullptr) {
+		aws_locality_snapshot = MyHGM->aws_locality_manager()->snapshot();
+		use_aws_locality = aws_locality_snapshot != nullptr &&
+			aws_locality_snapshot->enabled &&
+			aws_locality_snapshot->has_hostgroup(_hid);
+	}
+#endif
+	if (!use_aws_locality) {
 	for (i=0; i<cached_connections->len;) {
 		c = (MySQL_Connection *) cached_connections->index(i);
 		const char *candidate_username =
@@ -6928,6 +6940,147 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(
 		}
 		++i;
 	}
+	return NULL;
+	}
+
+#ifdef PROXYSQL40
+	struct AwsLocalityParentCandidate {
+		MySrvC* parent;
+		MySQL_Connection* connection;
+		uint64_t weight;
+	};
+	AwsLocalityParentCandidate candidates_static[32];
+	AwsLocalityParentCandidate* candidates = candidates_static;
+	const unsigned int candidate_capacity = cached_connections->len;
+	std::vector<AwsLocalityParentCandidate> candidates_dynamic;
+	if (candidate_capacity > 32) {
+		candidates_dynamic.resize(candidate_capacity);
+		candidates = candidates_dynamic.data();
+	}
+	unsigned int num_candidates = 0;
+
+	for (i = 0; i < cached_connections->len;) {
+		c = static_cast<MySQL_Connection*>(cached_connections->index(i));
+		const char* candidate_username =
+			c->userinfo != nullptr ? c->userinfo->username : nullptr;
+		const char* requested_username = client_conn->userinfo->username;
+		const bool same_username = candidate_username != nullptr &&
+			requested_username != nullptr &&
+			strcmp(candidate_username, requested_username) == 0;
+		if (c->parent->myhgc->hid == _hid && same_username &&
+			(c->backend_auth_type() != requested_type ||
+			 (requested_type == MySQLBackendAuthType::AWS_IAM &&
+			  c->requires_CHANGE_USER(client_conn, requested_type)))) {
+			cached_connections->remove_index_fast(i);
+			c->send_quit = false;
+			MyHGM->destroy_MyConn_from_pool(c);
+			continue;
+		}
+		if (c->backend_auth_type() != requested_type ||
+			(requested_type == MySQLBackendAuthType::AWS_IAM &&
+			 c->requires_CHANGE_USER(client_conn, requested_type))) {
+			++i;
+			continue;
+		}
+		if (!c->healthy || !c->reusable) {
+			++i;
+			continue;
+		}
+		if (check_session_track_backoff) {
+			session_track_backoff_until =
+				c->parent->session_track_backoff_until.load(std::memory_order_relaxed);
+			if (session_track_backoff_until > curtime) {
+				++i;
+				continue;
+			}
+		}
+		if (c->parent->myhgc->hid != _hid ||
+			!client_conn->match_tracked_options(c)) {
+			++i;
+			continue;
+		}
+
+		MySrvC* parent = c->parent;
+		if (find(parents.begin(), parents.end(), parent) != parents.end()) {
+			++i;
+			continue;
+		}
+		bool parent_already_selected = false;
+		for (unsigned int candidate = 0; candidate < num_candidates; ++candidate) {
+			if (candidates[candidate].parent == parent) {
+				parent_already_selected = true;
+				break;
+			}
+		}
+		if (parent_already_selected) {
+			++i;
+			continue;
+		}
+		if (gtid_uuid != nullptr &&
+			!MyHGM->gtid_exists(parent, gtid_uuid, gtid_trxid)) {
+			parents.push_back(parent);
+			++i;
+			continue;
+		}
+		if (c->requires_CHANGE_USER(client_conn, requested_type)) {
+			++i;
+			continue;
+		}
+		char* schema = client_conn->userinfo->schemaname;
+		if (strcmp(c->userinfo->schemaname, schema) != 0) {
+			++i;
+			continue;
+		}
+		unsigned int not_match = 0;
+		c->number_of_matching_session_variables(client_conn, not_match);
+		if (not_match != 0) {
+			++i;
+			continue;
+		}
+		if (max_lag_ms >= 0 &&
+			static_cast<unsigned int>(max_lag_ms) <
+				(parent->aws_aurora_current_lag_us / 1000)) {
+			status_variables.stvar[st_var_aws_aurora_replicas_skipped_during_query]++;
+			++i;
+			continue;
+		}
+
+		candidates[num_candidates++] = {
+			parent,
+			c,
+			aws_locality_snapshot->effective_weight(
+				_hid, parent->address, parent->port, parent->weight)
+		};
+		++i;
+	}
+
+	uint64_t locality_weights_static[32];
+	uint64_t* locality_weights = locality_weights_static;
+	std::vector<uint64_t> locality_weights_dynamic;
+	if (num_candidates > 32) {
+		locality_weights_dynamic.resize(num_candidates);
+		locality_weights = locality_weights_dynamic.data();
+	}
+	for (i = 0; i < num_candidates; ++i) {
+		locality_weights[i] = candidates[i].weight;
+	}
+	const uint64_t random_value =
+		(static_cast<uint64_t>(rand_fast()) << 32) |
+		static_cast<uint64_t>(rand_fast());
+	const size_t selected = aws_locality_weighted_index(
+		locality_weights, num_candidates, random_value);
+	MySQL_Connection* selected_connection =
+		selected < num_candidates ? candidates[selected].connection : nullptr;
+	if (selected_connection == nullptr) {
+		return NULL;
+	}
+	for (i = 0; i < cached_connections->len; ++i) {
+		if (cached_connections->index(i) == selected_connection) {
+			return static_cast<MySQL_Connection*>(
+				cached_connections->remove_index_fast(i));
+		}
+	}
+#endif
 	return NULL;
 }
 

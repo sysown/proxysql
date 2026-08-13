@@ -5,12 +5,14 @@
 #include "json_fwd.hpp"
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 AwsLocalityPolicy parse_aws_locality_policy(
@@ -30,6 +32,12 @@ AwsLocalityClass classify_aws_locality(
 uint64_t aws_locality_effective_weight(
 	int64_t configured_weight,
 	double multiplier);
+
+uint64_t aws_locality_saturating_add(uint64_t lhs, uint64_t rhs);
+size_t aws_locality_weighted_index(
+	const uint64_t* weights,
+	size_t count,
+	uint64_t random_value);
 
 using AwsMetadataProviderDestroyFn = void (*)(AwsMetadataProvider*);
 
@@ -83,6 +91,7 @@ struct AwsLocalitySnapshot {
 	uint64_t generation { 0 };
 	bool enabled { false };
 	std::unordered_map<std::string, AwsLocalitySnapshotEntry> entries;
+	std::unordered_set<uint32_t> hostgroups;
 
 	const AwsLocalitySnapshotEntry* find(
 		uint32_t hostgroup_id,
@@ -93,6 +102,9 @@ struct AwsLocalitySnapshot {
 		std::string_view hostname,
 		uint16_t port,
 		int64_t configured_weight) const;
+	bool has_hostgroup(uint32_t hostgroup_id) const {
+		return hostgroups.find(hostgroup_id) != hostgroups.end();
+	}
 };
 
 struct AwsLocalityManagerConfig {

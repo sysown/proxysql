@@ -249,6 +249,38 @@ uint64_t aws_locality_effective_weight(
 	return static_cast<uint64_t>(product);
 }
 
+uint64_t aws_locality_saturating_add(uint64_t lhs, uint64_t rhs) {
+	const uint64_t maximum = std::numeric_limits<uint64_t>::max();
+	return maximum - lhs < rhs ? maximum : lhs + rhs;
+}
+
+size_t aws_locality_weighted_index(
+	const uint64_t* weights,
+	size_t count,
+	uint64_t random_value) {
+	if (weights == nullptr || count == 0) {
+		return count;
+	}
+
+	uint64_t total = 0;
+	for (size_t i = 0; i < count; ++i) {
+		total = aws_locality_saturating_add(total, weights[i]);
+	}
+	if (total == 0) {
+		return count;
+	}
+
+	const uint64_t target = random_value % total;
+	uint64_t cumulative = 0;
+	for (size_t i = 0; i < count; ++i) {
+		cumulative = aws_locality_saturating_add(cumulative, weights[i]);
+		if (target < cumulative) {
+			return i;
+		}
+	}
+	return count;
+}
+
 namespace {
 
 std::mutex metadata_provider_mutex;
@@ -983,6 +1015,7 @@ private:
 		next->enabled = enabled_;
 		const auto now = config_.steady_clock();
 		for (const auto& hostgroup : hostgroups_) {
+			next->hostgroups.insert(hostgroup.hostgroup_id);
 			for (const auto& backend : hostgroup.backends) {
 				auto entry = build_entry_locked(hostgroup, backend, now);
 				next->entries.emplace(snapshot_key(entry.hostgroup_id,
