@@ -59,39 +59,16 @@ static inline int ffto_mysql_enable_ff(MYSQL* admin, const char* username) {
 		diag("UPDATE mysql_users SET fast_forward=1 (all) failed: %s", mysql_error(admin));
 		return 1;
 	}
-	/* Keep client password in sync with isolated-infra ROOT_PASSWORD when present.
-	 * After start-proxysql / cluster reconfigure, mysql_users.password can be empty
-	 * while TAP_ROOTPASSWORD is the sha256-derived secret — then client connect fails
-	 * with Access denied even though fast_forward is correct. */
-	{
-		const char* tap_pass = getenv("TAP_ROOTPASSWORD");
-		if (tap_pass && tap_pass[0]) {
-			/* Escape single quotes for SQL string literal (minimal). */
-			char esc[256];
-			size_t j = 0;
-			for (size_t i = 0; tap_pass[i] && j + 2 < sizeof(esc); i++) {
-				if (tap_pass[i] == '\'') {
-					esc[j++] = '\'';
-					esc[j++] = '\'';
-				} else {
-					esc[j++] = tap_pass[i];
-				}
-			}
-			esc[j] = '\0';
-			snprintf(q, sizeof(q),
-				"UPDATE mysql_users SET password='%s' WHERE username='%s'", esc, username);
-			if (mysql_query(admin, q)) {
-				diag("UPDATE mysql_users password failed: %s", mysql_error(admin));
-				return 1;
-			}
-		}
-	}
 	if (mysql_query(admin, "LOAD MYSQL USERS TO RUNTIME")) {
 		diag("LOAD MYSQL USERS TO RUNTIME failed: %s", mysql_error(admin));
 		return 1;
 	}
-	/* Persist so cluster peers / reconfigure dumps keep fast_forward. */
-	(void)mysql_query(admin, "SAVE MYSQL USERS TO DISK");
+	/* NOTE: credentials (root/testuser passwords) are owned by infra provisioning
+	 * (docker-proxy-post.bash) and must NOT be touched here. Changes are runtime-
+	 * only: no SAVE MYSQL USERS TO DISK, which would persist fast_forward=1 for
+	 * every user; the next test in the group reloads it via 'LOAD MYSQL USERS
+	 * FROM DISK' in reconfigure_proxysql and any non-fast_forward test would then
+	 * run fast-forwarded and break. */
 
 	/* Hard-require the connecting user's FRONTEND credential has fast_forward=1.
 	 * Retry briefly: cluster sync can lag a tick behind LOAD TO RUNTIME. */
