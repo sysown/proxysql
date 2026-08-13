@@ -7,6 +7,8 @@
 #include <atomic>
 #include <thread>
 #include <mutex>
+#include <string>
+#include <vector>
 
 #include "ev.h"
 #include "wqueue.h"
@@ -52,6 +54,8 @@
 #define MYHGM_MYSQL_GALERA_HOSTGROUPS "CREATE TABLE mysql_galera_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , backup_writer_hostgroup INT CHECK (backup_writer_hostgroup>=0 AND backup_writer_hostgroup<>writer_hostgroup) NOT NULL , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND backup_writer_hostgroup<>reader_hostgroup AND reader_hostgroup>0) , offline_hostgroup INT NOT NULL CHECK (offline_hostgroup<>writer_hostgroup AND offline_hostgroup<>reader_hostgroup AND backup_writer_hostgroup<>offline_hostgroup AND offline_hostgroup>=0) , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , max_writers INT NOT NULL CHECK (max_writers >= 0) DEFAULT 1 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1,2)) NOT NULL DEFAULT 0 , max_transactions_behind INT CHECK (max_transactions_behind>=0) NOT NULL DEFAULT 0 , comment VARCHAR , UNIQUE (reader_hostgroup) , UNIQUE (offline_hostgroup) , UNIQUE (backup_writer_hostgroup))"
 
 #define MYHGM_MYSQL_AWS_AURORA_HOSTGROUPS "CREATE TABLE mysql_aws_aurora_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , " \
+										  "green_writer_hostgroup INT DEFAULT NULL CHECK (green_writer_hostgroup IS NULL OR green_writer_hostgroup>=0) , " \
+										  "green_reader_hostgroup INT DEFAULT NULL CHECK (green_reader_hostgroup IS NULL OR green_reader_hostgroup>=0) , " \
 										  "active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , aurora_port INT NOT NUlL DEFAULT 3306 , domain_name VARCHAR NOT NULL DEFAULT '' , " \
 										  "max_lag_ms INT NOT NULL CHECK (max_lag_ms>= 10 AND max_lag_ms <= 600000) DEFAULT 600000 , " \
 										  "check_interval_ms INT NOT NULL CHECK (check_interval_ms >= 100 AND check_interval_ms <= 600000) DEFAULT 1000 , " \
@@ -62,7 +66,7 @@
 										  "min_lag_ms INT NOT NULL CHECK (min_lag_ms >= 0 AND min_lag_ms <= 600000) DEFAULT 30 , " \
 										  "lag_num_checks INT NOT NULL CHECK (lag_num_checks >= 1 AND lag_num_checks <= 16) DEFAULT 1 , " \
 										  "autopurge_missing_checks INT NOT NULL CHECK (autopurge_missing_checks >= 0 AND autopurge_missing_checks <= 100) DEFAULT 0 , " \
-										  "comment VARCHAR , UNIQUE (reader_hostgroup))"
+										  "comment VARCHAR , bgd_status VARCHAR NOT NULL DEFAULT 'NONE' , UNIQUE (reader_hostgroup))"
 
 #define MYHGM_MYSQL_AWS_RDS_BGD_HOSTGROUPS "CREATE TABLE mysql_aws_rds_bgd_hostgroups ("\
 										  "writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , "\
@@ -378,6 +382,18 @@ class AWS_Aurora_Info {
 	AWS_Aurora_Info(const AWS_Aurora_Info&) = delete;
 	AWS_Aurora_Info& operator=(const AWS_Aurora_Info&) = delete;
 };
+
+/**
+ * @brief Validate an Aurora hostgroup candidate and return its canonical configured projection.
+ *
+ * The returned result contains only valid rows, ordered like the Aurora Admin
+ * table. Legacy projections without green hostgroups are normalized with both
+ * green values set to SQL NULL. The caller owns the returned result.
+ */
+SQLite3_result* validate_and_filter_aws_aurora_hostgroups(
+	const SQLite3_result* candidate,
+	std::vector<std::string>& errors
+);
 
 struct p_hg_counter {
 	enum metric {

@@ -8110,27 +8110,11 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	}
 
 	// support for AWS Aurora, table mysql_aws_aurora_hostgroups
-
-	// look for invalid combinations
-	query=(char *)"SELECT a.* FROM mysql_aws_aurora_hostgroups a JOIN mysql_aws_aurora_hostgroups b ON a.writer_hostgroup=b.reader_hostgroup WHERE b.reader_hostgroup";
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	if (error) {
-		proxy_error("Error on %s : %s\n", query, error);
-	} else {
-		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-			SQLite3_row *r=*it;
-			proxy_error("Incompatible entry in mysql_aws_aurora_hostgroups will be ignored : ( %s , %s , %s , %s )\n", r->fields[0], r->fields[1], r->fields[2], r->fields[3]);
-		}
-	}
-	if (resultset) delete resultset;
-	resultset=NULL;
-
-//#ifdef TEST_AURORA // temporary enabled only for testing purpose
-	query=(char *)"SELECT a.* FROM mysql_aws_aurora_hostgroups a LEFT JOIN mysql_aws_aurora_hostgroups b ON (a.writer_hostgroup=b.reader_hostgroup) WHERE b.reader_hostgroup IS NULL ORDER BY writer_hostgroup";
-//#else
-//	query=(char *)"SELECT a.* FROM mysql_aws_aurora_hostgroups a WHERE 1=0";
-//#endif
+	query=(char *)
+		"SELECT writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,"
+		"aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,"
+		"new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,autopurge_missing_checks,comment "
+		"FROM mysql_aws_aurora_hostgroups ORDER BY writer_hostgroup";
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	if (incoming_aurora_hostgroups == nullptr) {
 		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset_aws_aurora);
@@ -8140,8 +8124,17 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
-		// Pass the resultset to MyHGM
-		MyHGM->save_incoming_mysql_table(resultset_aws_aurora,"mysql_aws_aurora_hostgroups");
+		std::vector<std::string> validation_errors;
+		SQLite3_result* filtered_aws_aurora = validate_and_filter_aws_aurora_hostgroups(
+			resultset_aws_aurora,
+			validation_errors
+		);
+		for (const std::string& validation_error : validation_errors) {
+			proxy_error("%s\n", validation_error.c_str());
+		}
+		delete resultset_aws_aurora;
+		resultset_aws_aurora = nullptr;
+		MyHGM->save_incoming_mysql_table(filtered_aws_aurora,"mysql_aws_aurora_hostgroups");
 	}
 
 	// support for AWS RDS, table mysql_aws_rds_bgd_hostgroups

@@ -30,6 +30,7 @@ using json = nlohmann::json;
 
 #include <functional>
 #include <mutex>
+#include <sstream>
 #include <type_traits>
 
 using std::function;
@@ -57,6 +58,198 @@ class MySrvList;
 class MyHGC;
 
 const int MYSQL_ERRORS_STATS_FIELD_NUM = 11;
+
+namespace {
+
+constexpr int AWS_AURORA_CONFIG_COLUMN_COUNT = 17;
+
+const char* const AWS_AURORA_CONFIG_COLUMNS[AWS_AURORA_CONFIG_COLUMN_COUNT] = {
+	"writer_hostgroup",
+	"reader_hostgroup",
+	"green_writer_hostgroup",
+	"green_reader_hostgroup",
+	"active",
+	"aurora_port",
+	"domain_name",
+	"max_lag_ms",
+	"check_interval_ms",
+	"check_timeout_ms",
+	"writer_is_also_reader",
+	"new_reader_weight",
+	"add_lag_ms",
+	"min_lag_ms",
+	"lag_num_checks",
+	"autopurge_missing_checks",
+	"comment"
+};
+
+struct Aurora_Hostgroup_Role {
+	const char* field;
+	int value;
+};
+
+struct Aurora_Config_Row {
+	std::vector<const char*> fields;
+	std::vector<Aurora_Hostgroup_Role> roles;
+	std::vector<std::string> errors;
+	int writer_hostgroup;
+	bool active;
+	bool locally_valid;
+};
+
+int aws_aurora_column_index(const SQLite3_result* candidate, const char* name) {
+	for (size_t i = 0; i < candidate->column_definition.size(); ++i) {
+		if (strcasecmp(candidate->column_definition[i]->name, name) == 0) {
+			return static_cast<int>(i);
+		}
+	}
+	return -1;
+}
+
+std::string aws_aurora_nullable_value(const char* value) {
+	return value ? value : "NULL";
+}
+
+} // namespace
+
+SQLite3_result* validate_and_filter_aws_aurora_hostgroups(
+	const SQLite3_result* candidate,
+	std::vector<std::string>& errors
+) {
+	SQLite3_result* filtered = new SQLite3_result(AWS_AURORA_CONFIG_COLUMN_COUNT);
+	for (const char* column : AWS_AURORA_CONFIG_COLUMNS) {
+		filtered->add_column_definition(SQLITE_TEXT, column);
+	}
+
+	if (candidate == nullptr) {
+		return filtered;
+	}
+
+	std::vector<int> source_indexes(AWS_AURORA_CONFIG_COLUMN_COUNT, -1);
+	for (int i = 0; i < AWS_AURORA_CONFIG_COLUMN_COUNT; ++i) {
+		source_indexes[i] = aws_aurora_column_index(candidate, AWS_AURORA_CONFIG_COLUMNS[i]);
+	}
+
+	// Older peers send the pre-BGD 15-column projection. Treat the two absent
+	// green fields as SQL NULL until cluster synchronization is upgraded.
+	const bool green_writer_absent = source_indexes[2] == -1;
+	const bool green_reader_absent = source_indexes[3] == -1;
+	if (green_writer_absent != green_reader_absent) {
+		errors.emplace_back(
+			"mysql_aws_aurora_hostgroups rejected: candidate projection contains only one green hostgroup column"
+		);
+		return filtered;
+	}
+
+	for (int i = 0; i < AWS_AURORA_CONFIG_COLUMN_COUNT; ++i) {
+		if ((i == 2 || i == 3) && green_writer_absent) {
+			continue;
+		}
+		if (source_indexes[i] == -1) {
+			errors.emplace_back(
+				std::string("mysql_aws_aurora_hostgroups rejected: candidate projection is missing ") +
+				AWS_AURORA_CONFIG_COLUMNS[i]
+			);
+			return filtered;
+		}
+	}
+
+	std::vector<Aurora_Config_Row> rows;
+	rows.reserve(candidate->rows.size());
+
+	for (const SQLite3_row* source_row : candidate->rows) {
+		Aurora_Config_Row row;
+		row.fields.resize(AWS_AURORA_CONFIG_COLUMN_COUNT, nullptr);
+		for (int i = 0; i < AWS_AURORA_CONFIG_COLUMN_COUNT; ++i) {
+			if (source_indexes[i] != -1) {
+				row.fields[i] = source_row->fields[source_indexes[i]];
+			}
+		}
+
+		row.writer_hostgroup = row.fields[0] ? atoi(row.fields[0]) : -1;
+		row.active = row.fields[4] && atoi(row.fields[4]) != 0;
+		row.locally_valid = true;
+
+		const bool has_green_writer = row.fields[2] != nullptr;
+		const bool has_green_reader = row.fields[3] != nullptr;
+		if (has_green_writer != has_green_reader) {
+			std::ostringstream message;
+			message << "green_writer_hostgroup=" << aws_aurora_nullable_value(row.fields[2])
+				<< " and green_reader_hostgroup=" << aws_aurora_nullable_value(row.fields[3])
+				<< " must both be NULL or both be non-NULL";
+			row.errors.emplace_back(message.str());
+			row.locally_valid = false;
+		}
+
+		row.roles.push_back({"writer_hostgroup", row.writer_hostgroup});
+		row.roles.push_back({"reader_hostgroup", row.fields[1] ? atoi(row.fields[1]) : -1});
+		if (has_green_writer && has_green_reader) {
+			row.roles.push_back({"green_writer_hostgroup", atoi(row.fields[2])});
+			row.roles.push_back({"green_reader_hostgroup", atoi(row.fields[3])});
+		}
+
+		if (row.locally_valid) {
+			for (size_t left = 0; left < row.roles.size(); ++left) {
+				for (size_t right = left + 1; right < row.roles.size(); ++right) {
+					if (row.roles[left].value == row.roles[right].value) {
+						std::ostringstream message;
+						message << "conflicting fields " << row.roles[left].field << '=' << row.roles[left].value
+							<< " and " << row.roles[right].field << '=' << row.roles[right].value;
+						row.errors.emplace_back(message.str());
+						row.locally_valid = false;
+					}
+				}
+			}
+		}
+
+		rows.emplace_back(std::move(row));
+	}
+
+	// A locally invalid row is already absent from the replacement and must not
+	// make an otherwise valid row fail. Cross-row conflicts are directional:
+	// every row is checked against the roles owned by every other active row.
+	for (size_t row_index = 0; row_index < rows.size(); ++row_index) {
+		Aurora_Config_Row& row = rows[row_index];
+		if (!row.locally_valid) {
+			continue;
+		}
+
+		for (size_t other_index = 0; other_index < rows.size(); ++other_index) {
+			const Aurora_Config_Row& other = rows[other_index];
+			if (row_index == other_index || !other.locally_valid || !other.active) {
+				continue;
+			}
+
+			for (const Aurora_Hostgroup_Role& role : row.roles) {
+				for (const Aurora_Hostgroup_Role& other_role : other.roles) {
+					if (role.value == other_role.value) {
+						std::ostringstream message;
+						message << "conflicting field " << role.field << '=' << role.value
+							<< " overlaps " << other_role.field << '=' << other_role.value
+							<< " in writer_hostgroup=" << other.writer_hostgroup;
+						row.errors.emplace_back(message.str());
+					}
+				}
+			}
+		}
+	}
+
+	for (Aurora_Config_Row& row : rows) {
+		if (row.errors.empty()) {
+			filtered->add_row(row.fields.data());
+			continue;
+		}
+
+		for (const std::string& reason : row.errors) {
+			std::ostringstream message;
+			message << "mysql_aws_aurora_hostgroups writer_hostgroup=" << row.writer_hostgroup
+				<< " rejected: " << reason;
+			errors.emplace_back(message.str());
+		}
+	}
+
+	return filtered;
+}
 
 struct ev_io * new_connect_watcher(char *address, uint16_t gtid_port, uint16_t mysql_port);
 void * GTID_syncer_run();
@@ -6422,9 +6615,9 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 	}
 	int rc;
 	//sqlite3 *mydb3=mydb->get_db();
-	char *query=(char *)"INSERT INTO mysql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,"
+	char *query=(char *)"INSERT INTO mysql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,"
 					    "check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,autopurge_missing_checks,comment) VALUES "
-					    "(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)";
+					    "(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)";
 	auto [rc1, statement_unique] = mydb->prepare_v2(query);
 	ASSERT_SQLITE_OK(rc1, mydb);
 	sqlite3_stmt *statement = statement_unique.get();
@@ -6439,34 +6632,50 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 		SQLite3_row *r=*it;
 		int writer_hostgroup=atoi(r->fields[0]);
 		int reader_hostgroup=atoi(r->fields[1]);
-		int active=atoi(r->fields[2]);
-		int aurora_port = atoi(r->fields[3]);
-		int max_lag_ms = atoi(r->fields[5]);
-		int check_interval_ms = atoi(r->fields[6]);
-		int check_timeout_ms = atoi(r->fields[7]);
-		int writer_is_also_reader = atoi(r->fields[8]);
-		int new_reader_weight = atoi(r->fields[9]);
-		int add_lag_ms = atoi(r->fields[10]);
-		int min_lag_ms = atoi(r->fields[11]);
-		int lag_num_checks = atoi(r->fields[12]);
-		int autopurge_missing_checks = atoi(r->fields[13]);
-		proxy_info("Loading AWS Aurora info for (%d,%d,%s,%d,\"%s\",%d,%d,%d,%d,%d,%d,%d,\"%s\")\n", writer_hostgroup,reader_hostgroup,(active ? "on" : "off"),aurora_port,
-				   r->fields[4],max_lag_ms,add_lag_ms,min_lag_ms,lag_num_checks,check_interval_ms,check_timeout_ms,autopurge_missing_checks,r->fields[14]);
+		const char* green_writer_hostgroup = r->fields[2];
+		const char* green_reader_hostgroup = r->fields[3];
+		int active=atoi(r->fields[4]);
+		int aurora_port = atoi(r->fields[5]);
+		int max_lag_ms = atoi(r->fields[7]);
+		int check_interval_ms = atoi(r->fields[8]);
+		int check_timeout_ms = atoi(r->fields[9]);
+		int writer_is_also_reader = atoi(r->fields[10]);
+		int new_reader_weight = atoi(r->fields[11]);
+		int add_lag_ms = atoi(r->fields[12]);
+		int min_lag_ms = atoi(r->fields[13]);
+		int lag_num_checks = atoi(r->fields[14]);
+		int autopurge_missing_checks = atoi(r->fields[15]);
+		proxy_info("Loading AWS Aurora info for (%d,%d,%s,%s,%s,%d,\"%s\",%d,%d,%d,%d,%d,%d,%d,\"%s\")\n", writer_hostgroup,reader_hostgroup,
+				   green_writer_hostgroup ? green_writer_hostgroup : "NULL", green_reader_hostgroup ? green_reader_hostgroup : "NULL",
+				   (active ? "on" : "off"),aurora_port,r->fields[6],max_lag_ms,add_lag_ms,min_lag_ms,lag_num_checks,
+				   check_interval_ms,check_timeout_ms,autopurge_missing_checks,r->fields[16]);
 		rc=(*proxy_sqlite3_bind_int64)(statement, 1, writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_bind_int64)(statement, 2, reader_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 3, active); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 4, aurora_port); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_text)(statement, 5, r->fields[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 6, max_lag_ms); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 7, check_interval_ms); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 8, check_timeout_ms); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 9, writer_is_also_reader); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 10, new_reader_weight); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 11, add_lag_ms); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 12, min_lag_ms); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 13, lag_num_checks); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 14, autopurge_missing_checks); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_text)(statement, 15, r->fields[14], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+		if (green_writer_hostgroup) {
+			rc=(*proxy_sqlite3_bind_int64)(statement, 3, atoi(green_writer_hostgroup));
+		} else {
+			rc=(*proxy_sqlite3_bind_null)(statement, 3);
+		}
+		ASSERT_SQLITE_OK(rc, mydb);
+		if (green_reader_hostgroup) {
+			rc=(*proxy_sqlite3_bind_int64)(statement, 4, atoi(green_reader_hostgroup));
+		} else {
+			rc=(*proxy_sqlite3_bind_null)(statement, 4);
+		}
+		ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 5, active); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 6, aurora_port); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_text)(statement, 7, r->fields[6], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 8, max_lag_ms); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 9, check_interval_ms); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 10, check_timeout_ms); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 11, writer_is_also_reader); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 12, new_reader_weight); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 13, add_lag_ms); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 14, min_lag_ms); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 15, lag_num_checks); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 16, autopurge_missing_checks); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_text)(statement, 17, r->fields[16], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
 
 		SAFE_SQLITE3_STEP2(statement);
 		rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mydb);
@@ -6477,12 +6686,12 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 		if (it2!=AWS_Aurora_Info_Map.end()) {
 			info=it2->second;
 			bool changed=false;
-			changed=info->update(reader_hostgroup, aurora_port, r->fields[4], max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks, check_interval_ms, check_timeout_ms,  (bool)active, writer_is_also_reader, new_reader_weight, autopurge_missing_checks, r->fields[14]);
+			changed=info->update(reader_hostgroup, aurora_port, r->fields[6], max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks, check_interval_ms, check_timeout_ms,  (bool)active, writer_is_also_reader, new_reader_weight, autopurge_missing_checks, r->fields[16]);
 			if (changed) {
 				//info->need_converge=true;
 			}
 		} else {
-			info=new AWS_Aurora_Info(writer_hostgroup, reader_hostgroup, aurora_port, r->fields[4], max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks, check_interval_ms, check_timeout_ms,  (bool)active, writer_is_also_reader, new_reader_weight, autopurge_missing_checks, r->fields[14]);
+			info=new AWS_Aurora_Info(writer_hostgroup, reader_hostgroup, aurora_port, r->fields[6], max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks, check_interval_ms, check_timeout_ms,  (bool)active, writer_is_also_reader, new_reader_weight, autopurge_missing_checks, r->fields[16]);
 			//info->need_converge=true;
 			AWS_Aurora_Info_Map.insert(AWS_Aurora_Info_Map.begin(), std::pair<int, AWS_Aurora_Info *>(writer_hostgroup,info));
 		}

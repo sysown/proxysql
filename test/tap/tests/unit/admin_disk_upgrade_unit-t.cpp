@@ -382,6 +382,37 @@ static void test_mysql_servers_no_upgrade_needed() {
 	ok(count == 1, "mysql_servers: data unchanged when no upgrade needed (got %d)", count);
 }
 
+static void test_aurora_hostgroups_upgrade_from_v2_0_10() {
+	TestDiskUpgrade t;
+	SQLite3DB *db = t.db();
+
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS_V2_0_10);
+	db->execute(
+		"INSERT INTO mysql_aws_aurora_hostgroups ("
+			"writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,"
+			"check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,"
+			"add_lag_ms,min_lag_ms,lag_num_checks,autopurge_missing_checks,comment"
+		") VALUES (10,20,1,3307,'.cluster.example',125,1500,900,1,7,40,20,3,9,'existing Aurora row')"
+	);
+
+	t.upgrade_mysql_servers();
+
+	ok(table_matches_current(db, "mysql_aws_aurora_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS),
+		"mysql_aws_aurora_hostgroups: v2.0.10 upgrade produces current schema");
+	ok(query_int(db, "SELECT COUNT(*) FROM mysql_aws_aurora_hostgroups") == 1,
+		"mysql_aws_aurora_hostgroups: v2.0.10 upgrade preserves the row");
+	ok(query_int(db, "SELECT green_writer_hostgroup IS NULL FROM mysql_aws_aurora_hostgroups WHERE writer_hostgroup=10") == 1,
+		"mysql_aws_aurora_hostgroups: migrated green writer is NULL");
+	ok(query_int(db, "SELECT green_reader_hostgroup IS NULL FROM mysql_aws_aurora_hostgroups WHERE writer_hostgroup=10") == 1,
+		"mysql_aws_aurora_hostgroups: migrated green reader is NULL");
+	ok(query_string(db, "SELECT domain_name FROM mysql_aws_aurora_hostgroups WHERE writer_hostgroup=10") == ".cluster.example",
+		"mysql_aws_aurora_hostgroups: migration preserves configured values");
+	ok(query_int(db, "SELECT autopurge_missing_checks FROM mysql_aws_aurora_hostgroups WHERE writer_hostgroup=10") == 9,
+		"mysql_aws_aurora_hostgroups: migration preserves autopurge_missing_checks");
+	ok(query_int(db, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='mysql_aws_aurora_hostgroups_v2010'") == 1,
+		"mysql_aws_aurora_hostgroups: v2.0.10 table is retained as v2010");
+}
+
 // ============================================================================
 // disk_upgrade_pgsql_replication_hostgroups() tests
 // ============================================================================
@@ -549,7 +580,7 @@ static void test_mysql_servers_upgrade_multiple_rows_with_fixes() {
 // ============================================================================
 
 int main() {
-	plan(60);
+	plan(67);
 	test_init_minimal();
 
 	// scheduler tests
@@ -571,6 +602,7 @@ int main() {
 	// mysql_servers tests
 	test_mysql_servers_upgrade_from_v1_1_0();
 	test_mysql_servers_no_upgrade_needed();
+	test_aurora_hostgroups_upgrade_from_v2_0_10();
 
 	// pgsql_replication_hostgroups tests
 	test_pgsql_repl_hg_upgrade_from_v3_0_1();
