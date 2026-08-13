@@ -8,7 +8,8 @@ frontend.
 
 ## Build and package the feature
 
-AWS IAM support is a ProxySQL 4.0 plugin.  The pinned AWS SDK for C++ 1.11.869
+AWS integrations are provided by a ProxySQL 4.0 plugin. IAM database
+authentication is its first capability. The pinned AWS SDK for C++ 1.11.869
 source archive, including its required CRT sources, is stored through Git LFS
 at `deps/aws-sdk-cpp/aws-sdk-cpp-1.11.869-with-crt.tar.xz`.  Fetch LFS objects
 before building; the dependency target unpacks this archive under `deps/` and
@@ -16,20 +17,14 @@ builds only the static SDK libraries required by the plugin.
 
 ```console
 git lfs pull
-PROXYSQL40=1 PROXYSQLAWSIAM=1 make -j
-```
-
-The normal 4.0 build remains SDK-free:
-
-```console
 PROXYSQL40=1 make -j
 ```
 
 The AWS SDK is linked statically into
-`ProxySQL_AwsIam_Plugin.so`, not into `src/proxysql`.  The main daemon contains
+`ProxySQL_Aws_Plugin.so`, not into `src/proxysql`. The main daemon contains
 no AWS C++ SDK symbols or shared-library dependency.  Do not remove or rewrite
 the pinned LFS archive: `deps/Makefile` verifies and unpacks it as a normal
-native dependency.  `PROXYSQL40=1 PROXYSQLAWSIAM=1 make -j -C deps
+native dependency.  `PROXYSQL40=1 make -j -C deps
 aws_sdk_cpp_clean` removes only the unpacked AWS SDK build tree when that is
 genuinely necessary.
 
@@ -39,14 +34,16 @@ location:
 
 ```ini
 plugins = (
-  "/usr/lib/proxysql/ProxySQL_AwsIam_Plugin.so"
+  "/usr/lib/proxysql/ProxySQL_Aws_Plugin.so"
 )
 ```
 
-The plugin is optional even in a feature-enabled build.  If it is not built or
-not configured, attempted IAM backend authentication fails closed.  AWS SDK
+The plugin is always built and packaged for ProxySQL 4.0 but remains optional
+at runtime. If it is not configured, attempted IAM backend authentication
+fails closed without initializing the AWS SDK, resolving credentials, creating
+AWS clients, or starting IAM workers. AWS SDK
 for C++ is Apache-2.0; the exact upstream license and notice are retained in
-the pinned archive and its manifest.  An AWS IAM-enabled DEB/RPM/tarball also
+the pinned archive and its manifest. A ProxySQL 4.0 DEB/RPM/tarball also
 installs `LICENSE`, `NOTICE`, and `THIRD_PARTY_NOTICES.md` under
 `/usr/share/doc/proxysql/aws-sdk-cpp/` (under `share/doc/...` in the tarball).
 

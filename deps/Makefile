@@ -3,13 +3,9 @@
 PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd)
 
 include $(PROXYSQL_PATH)/include/makefiles_vars.mk
-
-AWS_SDK_CPP_VERSION := 1.11.869
-AWS_SDK_CPP_DIR := aws-sdk-cpp/aws-sdk-cpp-$(AWS_SDK_CPP_VERSION)
-AWS_SDK_CPP_ARCHIVE := aws-sdk-cpp/aws-sdk-cpp-$(AWS_SDK_CPP_VERSION)-with-crt.tar.xz
-AWS_SDK_CPP_INSTALL_DIR := $(PROXYSQL_PATH)/deps/$(AWS_SDK_CPP_DIR)/install
-AWS_SDK_CPP_CORE_LIB := $(AWS_SDK_CPP_INSTALL_DIR)/lib/libaws-cpp-sdk-core.a
-AWS_SDK_CPP_RDS_LIB := $(AWS_SDK_CPP_INSTALL_DIR)/lib/libaws-cpp-sdk-rds.a
+include $(PROXYSQL_PATH)/common_mk/openssl_flags.mk
+include $(PROXYSQL_PATH)/common_mk/openssl_version_check.mk
+include $(PROXYSQL_PATH)/common_mk/aws_sdk_cpp_flags.mk
 
 
 # to compile libmariadb_client with support for valgrind enabled, run:
@@ -81,10 +77,7 @@ ifeq ($(PROXYSQL40),1)
 	targets += sqlite-vec
 endif
 
-ifeq ($(PROXYSQLAWSIAM),1)
-ifneq ($(PROXYSQL40),1)
-$(error AWS IAM SDK requires PROXYSQL40=1)
-endif
+ifeq ($(PROXYSQL40),1)
 targets += $(AWS_SDK_CPP_RDS_LIB)
 endif
 
@@ -94,8 +87,7 @@ default: $(targets)
 
 ### deps targets
 
-include $(PROXYSQL_PATH)/common_mk/openssl_flags.mk
-include $(PROXYSQL_PATH)/common_mk/openssl_version_check.mk
+AWS_SDK_CPP_DRY_RUN := $(if $(filter n%,$(MAKEFLAGS)),1,0)
 
 
 libinjection/libinjection/src/libinjection.a:
@@ -229,30 +221,37 @@ $(PROTOBUF_LIB):
 protobuf: $(PROTOBUF_LIB)
 
 
-$(AWS_SDK_CPP_RDS_LIB):
-	bash "$(PROXYSQL_PATH)/deps/aws-sdk-cpp/verify-bundle.bash" "$(PROXYSQL_PATH)/deps/aws-sdk-cpp"
-	rm -rf "$(AWS_SDK_CPP_DIR)"
-	tar -C "$(PROXYSQL_PATH)/deps/aws-sdk-cpp" -Jxf "$(PROXYSQL_PATH)/deps/$(AWS_SDK_CPP_ARCHIVE)"
-	CC=${CC} CXX=${CXX} cmake \
-		-S "$(AWS_SDK_CPP_DIR)" \
-		-B "$(AWS_SDK_CPP_DIR)/build" \
-		-DCMAKE_BUILD_TYPE=RelWithDebInfo \
-		-DCMAKE_INSTALL_PREFIX="$(AWS_SDK_CPP_INSTALL_DIR)" \
-		-DCMAKE_INSTALL_LIBDIR=lib \
-		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-		-DBUILD_ONLY="core;rds" \
-		-DBUILD_SHARED_LIBS=OFF \
-		-DBUILD_DEPS=ON \
-		-DENABLE_TESTING=OFF \
-		-DAUTORUN_UNIT_TESTS=OFF \
-		-DENABLE_UNITY_BUILD=ON
-	CC=${CC} CXX=${CXX} ${MAKE} -C "$(AWS_SDK_CPP_DIR)/build" install
-	test -f "$(AWS_SDK_CPP_CORE_LIB)"
+$(AWS_SDK_CPP_IDENTITY_STAMP):
+	mkdir -p "$(AWS_SDK_CPP_IDENTITY_DIR)"
+	touch "$@"
+
+
+$(AWS_SDK_CPP_RDS_LIB): $(AWS_SDK_CPP_ARCHIVE_PATH) \
+		$(AWS_SDK_CPP_BUNDLE_DIR)/aws-sdk-cpp-$(AWS_SDK_CPP_VERSION)-with-crt.sha256 \
+		$(AWS_SDK_CPP_BUNDLE_DIR)/aws-sdk-cpp-$(AWS_SDK_CPP_VERSION)-sources.json \
+		$(AWS_SDK_CPP_BUNDLE_DIR)/verify-bundle.bash \
+		$(AWS_SDK_CPP_BUNDLE_DIR)/build-sdk.cmake \
+		$(AWS_SDK_CPP_IDENTITY_STAMP)
+	cmake \
+		-DAWS_BUNDLE_DIR="$(AWS_SDK_CPP_BUNDLE_DIR)" \
+		-DAWS_ARCHIVE="$(AWS_SDK_CPP_ARCHIVE_PATH)" \
+		-DAWS_SOURCE_DIR="$(AWS_SDK_CPP_SOURCE_DIR)" \
+		-DAWS_BUILD_DIR="$(AWS_SDK_CPP_BUILD_DIR)" \
+		-DAWS_INSTALL_DIR="$(AWS_SDK_CPP_INSTALL_DIR)" \
+		-DAWS_RDS_LIB="$(AWS_SDK_CPP_RDS_LIB)" \
+		-DAWS_CORE_LIB="$(AWS_SDK_CPP_CORE_LIB)" \
+		-DAWS_IDENTITY="$(AWS_SDK_CPP_INPUT_ID)" \
+		-DAWS_LOCK_FILE="$(AWS_SDK_CPP_BUNDLE_DIR)/.build.lock" \
+		-DAWS_VERIFIER="$(AWS_SDK_CPP_BUNDLE_DIR)/verify-bundle.bash" \
+		-DAWS_DRY_RUN="$(AWS_SDK_CPP_DRY_RUN)" \
+		-DAWS_CC="$(CC)" -DAWS_CXX="$(CXX)" -DAWS_MAKE_COMMAND="$(MAKE)" \
+		-P "$(AWS_SDK_CPP_BUNDLE_DIR)/build-sdk.cmake"
 
 .PHONY: aws_sdk_cpp_clean
 aws_sdk_cpp_clean:
-	rm -rf "$(AWS_SDK_CPP_DIR)"
-	rm -f "$(PROXYSQL_PATH)/deps/aws-sdk-cpp/.proxysql-build-mode"
+	rm -rf "$(AWS_SDK_CPP_SOURCE_DIR)"
+	rm -rf "$(AWS_SDK_CPP_IDENTITY_DIR)"
+	rm -f "$(AWS_SDK_CPP_BUNDLE_DIR)/.build.lock"
 
 
 clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:

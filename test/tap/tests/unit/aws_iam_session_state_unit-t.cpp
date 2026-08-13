@@ -662,7 +662,6 @@ void test_malformed_policy_stays_fail_closed_for_passthrough(MySQL_Thread& worke
 		"pass-through authorization never overrides a malformed backend IAM policy");
 }
 
-#ifndef PROXYSQLAWSIAM
 void test_sdk_off_source_reports_support_not_compiled(MySQL_Thread& worker) {
 	AwsIamRuntimeConfig config;
 	config.max_total_waiters = 128;
@@ -683,7 +682,6 @@ void test_sdk_off_source_reports_support_not_compiled(MySQL_Thread& worker) {
 		log.find("category='support_not_compiled'") != std::string::npos,
 		"the SDK-off source fails closed with the documented support_not_compiled operator reason");
 }
-#endif
 
 } // namespace
 
@@ -706,11 +704,7 @@ int __wrap_mysql_real_connect_start(MYSQL **ret, MYSQL *mysql, const char *host,
 } // extern "C"
 
 int main() {
-#ifdef PROXYSQLAWSIAM
-	plan(26);
-#else
 	plan(27);
-#endif
 	if (test_init_minimal() != 0 || test_init_auth() != 0 ||
 		test_init_query_processor() != 0 || test_init_hostgroups() != 0) {
 		BAIL_OUT("failed to initialize unit-test globals");
@@ -754,9 +748,7 @@ int main() {
 		test_password_mode_unchanged(worker);
 		test_unknown_user_passthrough_uses_password(worker);
 		test_malformed_policy_stays_fail_closed_for_passthrough(worker);
-#ifndef PROXYSQLAWSIAM
 		test_sdk_off_source_reports_support_not_compiled(worker);
-#endif
 		publish_global_aws_iam_token_source(nullptr);
 	}
 	test_worker_shutdown_closes_delivery_boundary();

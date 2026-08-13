@@ -134,7 +134,7 @@ void *retain_own_module() {
 	return dlopen(info.dli_fname, RTLD_NOW | RTLD_LOCAL);
 }
 
-bool aws_iam_plugin_init(ProxySQL_PluginServices *services) {
+bool aws_plugin_init(ProxySQL_PluginServices *services) {
 	if (services == nullptr || services->install_aws_iam_token_source == nullptr ||
 		services->get_aws_iam_limits == nullptr) {
 		return false;
@@ -156,14 +156,15 @@ bool aws_iam_plugin_init(ProxySQL_PluginServices *services) {
 	return true;
 }
 
-bool aws_iam_plugin_start() { return true; }
+bool aws_plugin_start() { return true; }
 
 // Core owns the registered source. It drains and destroys it after MySQL
 // workers have stopped, using the extra dlopen() reference retained above.
-bool aws_iam_plugin_stop() { return true; }
+bool aws_plugin_stop() { return true; }
 
-const char *aws_iam_plugin_status_json() {
-	return "{\"status\":\"ready\",\"provider\":\"aws_iam\"}";
+const char *aws_plugin_status_json() {
+	return "{\"status\":\"ready\",\"provider\":\"aws\","
+		"\"capabilities\":[\"aws_iam\"]}";
 }
 
 } // namespace
@@ -173,12 +174,12 @@ const char *aws_iam_plugin_status_json() {
 extern "C" __attribute__((visibility("default")))
 const ProxySQL_PluginDescriptor *proxysql_plugin_descriptor_v1() {
 	static const ProxySQL_PluginDescriptor descriptor {
-		"aws_iam",
+		"aws",
 		PROXYSQL_PLUGIN_ABI_VERSION,
-		&aws_iam_plugin_init,
-		&aws_iam_plugin_start,
-		&aws_iam_plugin_stop,
-		&aws_iam_plugin_status_json,
+		&aws_plugin_init,
+		&aws_plugin_start,
+		&aws_plugin_stop,
+		&aws_plugin_status_json,
 		nullptr,
 	};
 	return &descriptor;

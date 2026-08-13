@@ -81,8 +81,6 @@ rm -rf %{buildroot}
 %if 0%{?with_plugins}
 %dir /usr/lib/proxysql
 /usr/lib/proxysql/*.so
-%endif
-%if 0%{?with_aws_iam}
 %dir /usr/share/doc/proxysql
 %dir /usr/share/doc/proxysql/aws-sdk-cpp
 /usr/share/doc/proxysql/aws-sdk-cpp/*

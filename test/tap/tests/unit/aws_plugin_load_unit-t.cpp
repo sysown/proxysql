@@ -1,4 +1,4 @@
-// The AWS SDK is intentionally confined to the v4 aws_iam plugin.  Exercise
+// The AWS SDK is intentionally confined to the v4 AWS plugin. Exercise
 // the real loader path and, critically, prove that the provider stays valid
 // after PluginManager releases its own dlopen() handle.  Core must retain the
 // module until its leased provider has been drained during shutdown.
@@ -11,8 +11,8 @@
 #include <string>
 #include <vector>
 
-#ifndef PROXYSQL_AWS_IAM_PLUGIN_PATH
-#error "PROXYSQL_AWS_IAM_PLUGIN_PATH must be defined"
+#ifndef PROXYSQL_AWS_PLUGIN_PATH
+#error "PROXYSQL_AWS_PLUGIN_PATH must be defined"
 #endif
 
 int main() {
@@ -24,12 +24,12 @@ int main() {
 
 	std::unique_ptr<ProxySQL_PluginManager> manager;
 	std::string error;
-	const std::vector<std::string> paths { PROXYSQL_AWS_IAM_PLUGIN_PATH };
+	const std::vector<std::string> paths { PROXYSQL_AWS_PLUGIN_PATH };
 	const bool loaded = proxysql_load_configured_plugins(manager, paths, error);
-	if (!loaded) diag("AWS IAM plugin loader error: %s", error.c_str());
-	ok(loaded, "loads AWS IAM plugin");
-	ok(proxysql_init_configured_plugins(manager.get(), error), "initializes AWS IAM plugin");
-	ok(proxysql_start_configured_plugins(manager.get(), error), "starts AWS IAM plugin");
+	if (!loaded) diag("AWS plugin loader error: %s", error.c_str());
+	ok(loaded, "loads AWS plugin");
+	ok(proxysql_init_configured_plugins(manager.get(), error), "initializes AWS plugin");
+	ok(proxysql_start_configured_plugins(manager.get(), error), "starts AWS plugin");
 
 	{
 		auto lease = acquire_global_aws_iam_token_source();

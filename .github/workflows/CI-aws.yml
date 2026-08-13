@@ -1,9 +1,9 @@
-name: CI-AWS-IAM
+name: CI-AWS
 
 on:
   pull_request:
     paths:
-      - '.github/workflows/CI-aws-iam.yml'
+      - '.github/workflows/CI-aws.yml'
       - 'Makefile'
       - 'deps/aws-sdk-cpp/**'
       - 'deps/Makefile'
@@ -14,13 +14,14 @@ on:
       - 'lib/Aws_Iam_Sdk.cpp'
       - 'lib/Makefile'
       - 'lib/ProxySQL_PluginManager.cpp'
-      - 'plugins/aws_iam/**'
+      - 'plugins/aws/**'
       - 'src/Makefile'
       - 'src/main.cpp'
       - 'etc/proxysql.cnf'
       - 'docker/images/proxysql/**'
       - 'test/infra/control/check-vendored-aws-sdk-build.bash'
       - 'test/tap/tests/**aws_iam**'
+      - 'test/tap/tests/**aws_plugin**'
       - 'test/tap/tests/unit/Makefile'
       - 'README.md'
       - 'doc/aws_iam_database_authentication.md'
@@ -37,33 +38,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  sdk-free-build:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-        with:
-          submodules: 'false'
-      - name: Build without AWS SDK
-        run: PROXYSQL40=1 make -j
-      - name: Require an SDK-free daemon
-        run: |
-          if nm -C src/proxysql | rg -q 'Aws::'; then
-            echo 'SDK-free daemon unexpectedly contains AWS C++ SDK symbols' >&2
-            exit 1
-          fi
-          aws_dso_pattern='aws-cpp-sdk|aws-crt-cpp|aws-c-[[:alnum:]_-]+|aws-checksums|aws-lc|s2n'
-          if ldd src/proxysql | rg -q "$aws_dso_pattern"; then
-            echo 'SDK-free daemon unexpectedly links an AWS SDK or CRT DSO' >&2
-            exit 1
-          fi
-      - name: Build and run controlled TLS/protocol coverage
-        run: |
-          PROXYSQL40=1 make -C test/tap/tests -j test_aws_iam_backend_auth-t
-          timeout 45s test/tap/tests/test_aws_iam_backend_auth-t
-
-  aws-iam-vendored-plugin-build:
+  sdk-free-daemon:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -72,28 +47,65 @@ jobs:
         with:
           submodules: 'false'
           lfs: true
+          fetch-depth: 0
+      - name: Build v4 daemon and general AWS plugin
+        run: PROXYSQL40=1 make -j
+      - name: Require an SDK-free daemon
+        run: |
+          daemon_nm="$RUNNER_TEMP/proxysql.nm"
+          daemon_ldd="$RUNNER_TEMP/proxysql.ldd"
+          nm -C src/proxysql >"$daemon_nm"
+          ldd src/proxysql >"$daemon_ldd"
+          if grep -Fq 'Aws::' "$daemon_nm"; then
+            echo 'SDK-free daemon unexpectedly contains AWS C++ SDK symbols' >&2
+            exit 1
+          fi
+          aws_dso_pattern='aws-cpp-sdk|aws-crt-cpp|aws-c-[[:alnum:]_-]+|aws-checksums|aws-lc|s2n'
+          if grep -Eq "$aws_dso_pattern" "$daemon_ldd"; then
+            echo 'SDK-free daemon unexpectedly links an AWS SDK or CRT DSO' >&2
+            exit 1
+          fi
+      - name: Build and run controlled TLS/protocol coverage
+        run: |
+          PROXYSQL40=1 make -C test/tap/tests -j test_aws_iam_backend_auth-t
+          timeout 45s test/tap/tests/test_aws_iam_backend_auth-t
+
+  aws-vendored-plugin-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          submodules: 'false'
+          lfs: true
+          fetch-depth: 0
       - name: Verify immutable vendored SDK bundle
         run: bash test/infra/control/check-vendored-aws-sdk-build.bash
-      - name: Build static AWS IAM plugin
-        run: |
-          PROXYSQL40=1 PROXYSQLAWSIAM=1 make -j
+      - name: Build static AWS plugin
+        run: PROXYSQL40=1 make -j
       - name: Verify plugin ownership and static linkage
         run: |
           PROXYSQL40=1 make -j -C test/tap/tests/unit \
-            aws_iam_plugin_linkage-t aws_iam_plugin_load_unit-t
-          test/tap/tests/unit/aws_iam_plugin_load_unit-t
-          if nm -C src/proxysql | rg -q 'Aws::'; then
+            aws_plugin_linkage-t aws_plugin_load_unit-t
+          test/tap/tests/unit/aws_plugin_load_unit-t
+          daemon_nm="$RUNNER_TEMP/proxysql.nm"
+          plugin_nm="$RUNNER_TEMP/aws-plugin.nm"
+          nm -C src/proxysql >"$daemon_nm"
+          nm -C plugins/aws/ProxySQL_Aws_Plugin.so >"$plugin_nm"
+          if grep -Fq 'Aws::' "$daemon_nm"; then
             echo 'daemon unexpectedly contains AWS C++ SDK symbols' >&2
             exit 1
           fi
-          if ! nm -C plugins/aws_iam/ProxySQL_AwsIam_Plugin.so | \
-              rg -q 'Aws::RDS::RDSClient::GenerateConnectAuthToken'; then
+          if ! grep -Fq 'Aws::RDS::RDSClient::GenerateConnectAuthToken' "$plugin_nm"; then
             echo 'plugin does not contain the static RDS signer' >&2
             exit 1
           fi
           aws_dso_pattern='aws-cpp-sdk|aws-crt-cpp|aws-c-[[:alnum:]_-]+|aws-checksums|aws-lc|s2n'
-          for artifact in src/proxysql plugins/aws_iam/ProxySQL_AwsIam_Plugin.so; do
-            if ldd "$artifact" | rg -q "$aws_dso_pattern"; then
+          for artifact in src/proxysql plugins/aws/ProxySQL_Aws_Plugin.so; do
+            artifact_ldd="$RUNNER_TEMP/$(basename "$artifact").ldd"
+            ldd "$artifact" >"$artifact_ldd"
+            if grep -Eq "$aws_dso_pattern" "$artifact_ldd"; then
               echo "$artifact unexpectedly dynamically links an AWS SDK or CRT library" >&2
               exit 1
             fi
@@ -111,6 +123,8 @@ jobs:
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           submodules: 'false'
+          lfs: true
+          fetch-depth: 0
       - name: Relax ASLR for sanitizers
         run: sudo sysctl -w vm.mmap_rnd_bits=28
       - name: Build ASan fake-provider tests
@@ -208,6 +222,8 @@ jobs:
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           submodules: 'false'
+          lfs: true
+          fetch-depth: 0
       - name: Require external real-RDS runner
         run: |
           if [[ $AWS_IAM_INTEGRATION_RUNNER != /* || \

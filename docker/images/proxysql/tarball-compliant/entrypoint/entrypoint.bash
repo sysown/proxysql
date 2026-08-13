@@ -27,7 +27,6 @@ export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
 # by the outer make with the same flag, so the artifact name stays in sync.
 EXTRA=""
 [[ "${PROXYSQL40:-}" == "1" ]] && EXTRA="${EXTRA} PROXYSQL40=1"
-[[ "${PROXYSQLAWSIAM:-}" == "1" ]] && EXTRA="${EXTRA} PROXYSQLAWSIAM=1"
 [[ "${PROXYSQL31:-}" == "1" ]] && EXTRA="${EXTRA} PROXYSQL31=1"
 
 deps_target="build_deps_clickhouse"
@@ -55,19 +54,16 @@ cp LICENSE README.md "pkgroot/${DIR_NAME}/"
 # rather than ship an incomplete tarball.
 if [[ "${PROXYSQL40:-}" == "1" ]]; then
     mkdir -p "pkgroot/${DIR_NAME}/lib/proxysql"
-    plugins=(plugins/mysqlx/ProxySQL_MySQLX_Plugin.so plugins/genai/ProxySQL_GenAI_Plugin.so)
-    if [[ "${PROXYSQLAWSIAM:-}" == "1" ]]; then
-        plugins+=(plugins/aws_iam/ProxySQL_AwsIam_Plugin.so)
-        mkdir -p "pkgroot/${DIR_NAME}/share/doc/proxysql/aws-sdk-cpp"
-        for attribution in LICENSE NOTICE THIRD_PARTY_NOTICES.md; do
-            source="deps/aws-sdk-cpp/${attribution}"
-            if [[ ! -s "${source}" ]]; then
-                echo "ERROR: AWS IAM plugin attribution file is missing: ${source}" >&2
-                exit 1
-            fi
-            cp "${source}" "pkgroot/${DIR_NAME}/share/doc/proxysql/aws-sdk-cpp/"
-        done
-    fi
+    plugins=(plugins/mysqlx/ProxySQL_MySQLX_Plugin.so plugins/genai/ProxySQL_GenAI_Plugin.so plugins/aws/ProxySQL_Aws_Plugin.so)
+    mkdir -p "pkgroot/${DIR_NAME}/share/doc/proxysql/aws-sdk-cpp"
+    for attribution in LICENSE NOTICE THIRD_PARTY_NOTICES.md; do
+        source="deps/aws-sdk-cpp/${attribution}"
+        if [[ ! -s "${source}" ]]; then
+            echo "ERROR: AWS plugin attribution file is missing: ${source}" >&2
+            exit 1
+        fi
+        cp "${source}" "pkgroot/${DIR_NAME}/share/doc/proxysql/aws-sdk-cpp/"
+    done
     for plugin in "${plugins[@]}"; do
         if [[ ! -f "${plugin}" ]]; then
             echo "ERROR: PROXYSQL40=1 build but '${plugin}' is missing" >&2

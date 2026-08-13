@@ -43,7 +43,7 @@ errorlog="/var/lib/proxysql/proxysql.log"
 # plugins=(
 # 	"/usr/lib/proxysql/ProxySQL_MySQLX_Plugin.so"
 # 	"/usr/lib/proxysql/ProxySQL_GenAI_Plugin.so"
-# 	"/usr/lib/proxysql/ProxySQL_AwsIam_Plugin.so"
+# 	"/usr/lib/proxysql/ProxySQL_Aws_Plugin.so"
 # )
 
 admin_variables=

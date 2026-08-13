@@ -175,7 +175,8 @@ struct ProxySQL_PluginServices {
 };
 ```
 
-`install_aws_iam_token_source` is reserved for the in-tree AWS IAM plugin.
+`install_aws_iam_token_source` is reserved for the IAM database authentication
+capability of the in-tree AWS plugin.
 The plugin passes a newly allocated provider, a destroy callback, and an extra
 `dlopen()` handle. Core retains that handle until all session leases drain,
 then destroys the provider and closes the module. A plugin must not call this

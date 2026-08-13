@@ -48,7 +48,6 @@ fi
 # PROXYSQLGENAI is no longer a separate flag.
 EXTRA=""
 [[ "${PROXYSQL40:-}" == "1" ]] && EXTRA="$EXTRA PROXYSQL40=1"
-[[ "${PROXYSQLAWSIAM:-}" == "1" ]] && EXTRA="$EXTRA PROXYSQLAWSIAM=1"
 ${MAKE} ${MAKEOPT} ${EXTRA} ${deps_target}
 ${MAKE} ${MAKEOPT} ${EXTRA} ${build_target}
 
@@ -81,22 +80,20 @@ if [[ "${PROXYSQL40:-}" == "1" ]]; then
     if [[ -f plugins/genai/ProxySQL_GenAI_Plugin.so ]]; then
         cp plugins/genai/ProxySQL_GenAI_Plugin.so proxysql/usr/lib/proxysql/
     fi
-    if [[ "${PROXYSQLAWSIAM:-}" == "1" ]]; then
-        if [[ ! -f plugins/aws_iam/ProxySQL_AwsIam_Plugin.so ]]; then
-            echo "ERROR: AWS IAM plugin is missing from feature-enabled build" >&2
+    if [[ ! -f plugins/aws/ProxySQL_Aws_Plugin.so ]]; then
+        echo "ERROR: AWS plugin is missing from the v4 build" >&2
+        exit 1
+    fi
+    cp plugins/aws/ProxySQL_Aws_Plugin.so proxysql/usr/lib/proxysql/
+    mkdir -p proxysql/usr/share/doc/proxysql/aws-sdk-cpp
+    for attribution in LICENSE NOTICE THIRD_PARTY_NOTICES.md; do
+        source="deps/aws-sdk-cpp/${attribution}"
+        if [[ ! -s "${source}" ]]; then
+            echo "ERROR: AWS plugin attribution file is missing: ${source}" >&2
             exit 1
         fi
-        cp plugins/aws_iam/ProxySQL_AwsIam_Plugin.so proxysql/usr/lib/proxysql/
-        mkdir -p proxysql/usr/share/doc/proxysql/aws-sdk-cpp
-        for attribution in LICENSE NOTICE THIRD_PARTY_NOTICES.md; do
-            source="deps/aws-sdk-cpp/${attribution}"
-            if [[ ! -s "${source}" ]]; then
-                echo "ERROR: AWS IAM plugin attribution file is missing: ${source}" >&2
-                exit 1
-            fi
-            cp "${source}" proxysql/usr/share/doc/proxysql/aws-sdk-cpp/
-        done
-    fi
+        cp "${source}" proxysql/usr/share/doc/proxysql/aws-sdk-cpp/
+    done
 fi
 
 # Belt-and-braces: the spec gates `/usr/lib/proxysql/*.so` under
@@ -106,12 +103,8 @@ fi
 # failure that returned 0, etc.).  Only set with_plugins=1 when at
 # least one .so actually made it to the staging directory.
 RPMBUILD_WITH_PLUGINS=0
-RPMBUILD_WITH_AWS_IAM=0
 if compgen -G "proxysql/usr/lib/proxysql/*.so" >/dev/null 2>&1; then
     RPMBUILD_WITH_PLUGINS=1
-fi
-if [[ "${PROXYSQLAWSIAM:-}" == "1" ]]; then
-    RPMBUILD_WITH_AWS_IAM=1
 fi
 mv proxysql "proxysql-${CURVER}"
 tar czvf "proxysql-${CURVER}.tar.gz" proxysql-${CURVER}
@@ -124,9 +117,6 @@ if [[ "${RPMBUILD_WITH_PLUGINS}" == "1" ]]; then
     # gates the %if 0%{?with_plugins} block in proxysql.spec %files —
     # only enabled when at least one .so was actually staged above.
     RPMBUILD_DEFINES+=( --define "with_plugins 1" )
-fi
-if [[ "${RPMBUILD_WITH_AWS_IAM}" == "1" ]]; then
-    RPMBUILD_DEFINES+=( --define "with_aws_iam 1" )
 fi
 cd /root/rpmbuild && rpmbuild -ba SPECS/proxysql.spec "${RPMBUILD_DEFINES[@]}"
 cp "/root/rpmbuild/RPMS/${ARCH}/proxysql-${CURVER}-1.${ARCH}.rpm" "/opt/proxysql/binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.${ARCH}.rpm"
@@ -141,10 +131,7 @@ popd
 if [[ "${PROXYSQL40:-}" == "1" ]]; then
     echo "==> Verifying plugin .so files in package"
     PKG_PATH="/root/rpmbuild/RPMS/${ARCH}/proxysql-${CURVER}-1.${ARCH}.rpm"
-    plugins=(ProxySQL_MySQLX_Plugin.so ProxySQL_GenAI_Plugin.so)
-    if [[ "${PROXYSQLAWSIAM:-}" == "1" ]]; then
-        plugins+=(ProxySQL_AwsIam_Plugin.so)
-    fi
+    plugins=(ProxySQL_MySQLX_Plugin.so ProxySQL_GenAI_Plugin.so ProxySQL_Aws_Plugin.so)
     for plugin in "${plugins[@]}"; do
         if rpm -qpl "${PKG_PATH}" 2>/dev/null | grep -q "/usr/lib/proxysql/${plugin}"; then
             echo "  OK   ${plugin}"
@@ -153,14 +140,12 @@ if [[ "${PROXYSQL40:-}" == "1" ]]; then
             exit 1
         fi
     done
-    if [[ "${PROXYSQLAWSIAM:-}" == "1" ]]; then
-        for attribution in LICENSE NOTICE THIRD_PARTY_NOTICES.md; do
-            if ! rpm -qpl "${PKG_PATH}" 2>/dev/null | grep -q "/usr/share/doc/proxysql/aws-sdk-cpp/${attribution}"; then
-                echo "  FAIL AWS IAM attribution ${attribution} not found in package" >&2
-                exit 1
-            fi
-        done
-    fi
+    for attribution in LICENSE NOTICE THIRD_PARTY_NOTICES.md; do
+        if ! rpm -qpl "${PKG_PATH}" 2>/dev/null | grep -q "/usr/share/doc/proxysql/aws-sdk-cpp/${attribution}"; then
+            echo "  FAIL AWS attribution ${attribution} not found in package" >&2
+            exit 1
+        fi
+    done
     echo "==> Plugin packaging verification PASSED"
 fi
 # Plugin smoke test: verify .so files are valid and export the expected
@@ -171,10 +156,7 @@ if [[ "${PROXYSQL40:-}" == "1" ]]; then
     pushd "${SMOKE_DIR}" >/dev/null
     rpm2cpio /root/rpmbuild/RPMS/${ARCH}/proxysql-${CURVER}-1.${ARCH}.rpm | cpio -idm 2>/dev/null
     ALL_OK=0
-    plugins=(usr/lib/proxysql/ProxySQL_MySQLX_Plugin.so usr/lib/proxysql/ProxySQL_GenAI_Plugin.so)
-    if [[ "${PROXYSQLAWSIAM:-}" == "1" ]]; then
-        plugins+=(usr/lib/proxysql/ProxySQL_AwsIam_Plugin.so)
-    fi
+    plugins=(usr/lib/proxysql/ProxySQL_MySQLX_Plugin.so usr/lib/proxysql/ProxySQL_GenAI_Plugin.so usr/lib/proxysql/ProxySQL_Aws_Plugin.so)
     for plugin in "${plugins[@]}"; do
         if [[ -f "${plugin}" ]]; then
             if file "${plugin}" | grep -q 'ELF 64-bit.*shared object'; then

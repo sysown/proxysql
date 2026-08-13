@@ -13,25 +13,25 @@
 # The AWS SDK must live in the v4-only AWS IAM plugin, never in the core
 # daemon.  Kept as an explicit build-artifact gate because it exercises the
 # actual linker output rather than a source-code convention.
-.PHONY: aws_iam_plugin_linkage-t
-aws_iam_plugin_linkage-t:
+.PHONY: aws_plugin_linkage-t
+aws_plugin_linkage-t:
 	@test -x $(PROXYSQL_PATH)/src/proxysql
 	@if nm -C $(PROXYSQL_PATH)/src/proxysql | grep -q 'Aws::'; then \
 		echo "FAIL: src/proxysql contains AWS C++ SDK symbols" >&2; exit 1; \
 	fi
-	@test -f $(PROXYSQL_PATH)/plugins/aws_iam/ProxySQL_AwsIam_Plugin.so || { \
-		echo "FAIL: AWS IAM plugin is missing" >&2; exit 1; \
+	@test -f $(PROXYSQL_PATH)/plugins/aws/ProxySQL_Aws_Plugin.so || { \
+		echo "FAIL: AWS plugin is missing" >&2; exit 1; \
 	}
 
 # Build the optional, v4-only plugin only for its direct loader test.  Normal
 # SDK-free unit runs never need the vendored AWS SDK or this module.
-.PHONY: aws_iam_plugin_build
-aws_iam_plugin_build:
-	$(MAKE) -C $(PROXYSQL_PATH)/plugins/aws_iam all \
-		PROXYSQL40=1 PROXYSQLAWSIAM=1 CC=$(CC) CXX=$(CXX)
-	@nm -C $(PROXYSQL_PATH)/plugins/aws_iam/ProxySQL_AwsIam_Plugin.so | \
+.PHONY: aws_plugin_build
+aws_plugin_build:
+	$(MAKE) -C $(PROXYSQL_PATH)/plugins/aws all \
+		PROXYSQL40=1 CC=$(CC) CXX=$(CXX)
+	@nm -C $(PROXYSQL_PATH)/plugins/aws/ProxySQL_Aws_Plugin.so | \
 		grep -q 'Aws::RDS::RDSClient::GenerateConnectAuthToken' || { \
-		echo "FAIL: AWS IAM plugin does not contain the RDS signer" >&2; exit 1; \
+		echo "FAIL: AWS plugin does not contain the RDS signer" >&2; exit 1; \
 	}
 
 PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd)
@@ -165,13 +165,6 @@ LZ4_LDIR := $(DEPS_PATH)/lz4/lz4/lib
 
 IDIRS += -I$(CLICKHOUSE_CPP_IDIR)
 
-PSQLAWSIAM :=
-ifeq ($(PROXYSQLAWSIAM),1)
-	PSQLAWSIAM := -DPROXYSQLAWSIAM
-	IDIRS += $(AWS_IAM_CPPFLAGS)
-endif
-
-
 # ===========================================================================
 # libproxysql.a — the core library under test
 # ===========================================================================
@@ -277,11 +270,6 @@ ifeq ($(UNAME_S),Linux)
 endif
 endif
 
-ifeq ($(PROXYSQLAWSIAM),1)
-	MYLIBS += $(AWS_IAM_LDFLAGS) $(AWS_IAM_LIBS)
-endif
-
-
 # ===========================================================================
 # Compiler flags
 # ===========================================================================
@@ -371,8 +359,6 @@ ODIR := obj
 PROXYSQL_TEST_HEADERS := $(wildcard $(PROXYSQL_PATH)/include/*.h) $(wildcard $(PROXYSQL_PATH)/include/*.hpp)
 
 TEST_HELPERS_OBJ := $(ODIR)/test_globals.o $(ODIR)/test_init.o $(ODIR)/tap.o
-
-$(TEST_HELPERS_OBJ): $(AWS_IAM_MODE_STAMP)
 
 $(ODIR):
 	mkdir -p $(ODIR)
@@ -954,8 +940,8 @@ test_aws_iam_backend_auth-t: ../test_aws_iam_backend_auth-t.cpp $(TEST_HELPERS_O
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 
-aws_iam_plugin_load_unit-t: aws_iam_plugin_load_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) aws_iam_plugin_build
-	$(CXX) -DPROXYSQL_AWS_IAM_PLUGIN_PATH=\"$(PROXYSQL_PATH)/plugins/aws_iam/ProxySQL_AwsIam_Plugin.so\" \
+aws_plugin_load_unit-t: aws_plugin_load_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) aws_plugin_build
+	$(CXX) -DPROXYSQL_AWS_PLUGIN_PATH=\"$(PROXYSQL_PATH)/plugins/aws/ProxySQL_Aws_Plugin.so\" \
 		$< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
 		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 

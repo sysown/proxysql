@@ -51,7 +51,6 @@ fi
 # all v4.0 plugins — PROXYSQLGENAI is no longer a separate flag.
 EXTRA=""
 [[ "${PROXYSQL40:-}" == "1" ]] && EXTRA="$EXTRA PROXYSQL40=1"
-[[ "${PROXYSQLAWSIAM:-}" == "1" ]] && EXTRA="$EXTRA PROXYSQLAWSIAM=1"
 # SKIP_GENAI_UNIT_TESTS=1 lets ci-builds.yml's -tap-mysqlx matrix
 # variant skip the ~14 genai_*_unit-t binaries (each links 30+
 # plugins/genai/src/*.cpp at -O0 -ggdb, ~160 MB apiece) so the
@@ -98,13 +97,13 @@ add_plugin_to_pkg() {
     fi
 }
 
-add_aws_iam_attribution_to_pkg() {
+add_aws_attribution_to_pkg() {
     local attribution
     mkdir -p ./aws-sdk-cpp
     for attribution in LICENSE NOTICE THIRD_PARTY_NOTICES.md; do
         local source="../deps/aws-sdk-cpp/${attribution}"
         if [[ ! -s "${source}" ]]; then
-            echo "ERROR: AWS IAM plugin attribution file is missing: ${source}" >&2
+            echo "ERROR: AWS plugin attribution file is missing: ${source}" >&2
             exit 1
         fi
         cp "${source}" "./aws-sdk-cpp/${attribution}"
@@ -115,10 +114,8 @@ add_aws_iam_attribution_to_pkg() {
 if [[ "${PROXYSQL40:-}" == "1" ]]; then
     add_plugin_to_pkg "../plugins/mysqlx/ProxySQL_MySQLX_Plugin.so" "ProxySQL_MySQLX_Plugin.so"
     add_plugin_to_pkg "../plugins/genai/ProxySQL_GenAI_Plugin.so" "ProxySQL_GenAI_Plugin.so"
-    if [[ "${PROXYSQLAWSIAM:-}" == "1" ]]; then
-        add_plugin_to_pkg "../plugins/aws_iam/ProxySQL_AwsIam_Plugin.so" "ProxySQL_AwsIam_Plugin.so"
-        add_aws_iam_attribution_to_pkg
-    fi
+    add_plugin_to_pkg "../plugins/aws/ProxySQL_Aws_Plugin.so" "ProxySQL_Aws_Plugin.so"
+    add_aws_attribution_to_pkg
 fi
 
 # Replace the PKG_PLUGIN_FILES_PLACEHOLDER line with the assembled
@@ -170,10 +167,7 @@ cp tmp/proxysql.sha1 ../binaries/proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.id-ha
 # Verify plugin .so files are present in the package
 if [[ "${PROXYSQL40:-}" == "1" ]]; then
     echo "==> Verifying plugin .so files in package"
-    plugins=(ProxySQL_MySQLX_Plugin.so ProxySQL_GenAI_Plugin.so)
-    if [[ "${PROXYSQLAWSIAM:-}" == "1" ]]; then
-        plugins+=(ProxySQL_AwsIam_Plugin.so)
-    fi
+    plugins=(ProxySQL_MySQLX_Plugin.so ProxySQL_GenAI_Plugin.so ProxySQL_Aws_Plugin.so)
     for plugin in "${plugins[@]}"; do
         if dpkg -c "${PKG}" 2>/dev/null | grep -q "/usr/lib/proxysql/${plugin}"; then
             echo "  OK   ${plugin}"
@@ -182,14 +176,12 @@ if [[ "${PROXYSQL40:-}" == "1" ]]; then
             exit 1
         fi
     done
-    if [[ "${PROXYSQLAWSIAM:-}" == "1" ]]; then
-        for attribution in LICENSE NOTICE THIRD_PARTY_NOTICES.md; do
-            if ! dpkg -c "${PKG}" 2>/dev/null | grep -q "/usr/share/doc/proxysql/aws-sdk-cpp/${attribution}"; then
-                echo "  FAIL AWS IAM attribution ${attribution} not found in package" >&2
-                exit 1
-            fi
-        done
-    fi
+    for attribution in LICENSE NOTICE THIRD_PARTY_NOTICES.md; do
+        if ! dpkg -c "${PKG}" 2>/dev/null | grep -q "/usr/share/doc/proxysql/aws-sdk-cpp/${attribution}"; then
+            echo "  FAIL AWS attribution ${attribution} not found in package" >&2
+            exit 1
+        fi
+    done
     echo "==> Plugin packaging verification PASSED"
 fi
 # Plugin smoke test: verify .so files are valid and export the expected
@@ -199,10 +191,7 @@ if [[ "${PROXYSQL40:-}" == "1" ]]; then
     SMOKE_DIR=$(mktemp -d)
     dpkg-deb -R "${PKG}" "${SMOKE_DIR}"
     ALL_OK=0
-    plugins=(ProxySQL_MySQLX_Plugin.so ProxySQL_GenAI_Plugin.so)
-    if [[ "${PROXYSQLAWSIAM:-}" == "1" ]]; then
-        plugins+=(ProxySQL_AwsIam_Plugin.so)
-    fi
+    plugins=(ProxySQL_MySQLX_Plugin.so ProxySQL_GenAI_Plugin.so ProxySQL_Aws_Plugin.so)
     for plugin in "${plugins[@]}"; do
         plugin_path="${SMOKE_DIR}/usr/lib/proxysql/${plugin}"
         if [[ -f "${plugin_path}" ]]; then

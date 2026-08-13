@@ -6,8 +6,9 @@ export LC_ALL=C
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 validator="$repo_root/deps/aws-sdk-cpp/verify-bundle.bash"
 deps_makefile="$repo_root/deps/Makefile"
-plugin_makefile="$repo_root/plugins/aws_iam/Makefile"
-workflow="$repo_root/.github/workflows/CI-aws-iam.yml"
+plugin_makefile="$repo_root/plugins/aws/Makefile"
+workflow="$repo_root/.github/workflows/CI-aws.yml"
+builder="$repo_root/deps/aws-sdk-cpp/build-sdk.cmake"
 real_bundle="$repo_root/deps/aws-sdk-cpp"
 temporary_root=$(mktemp -d)
 trap 'find "$temporary_root" -depth -delete' EXIT
@@ -95,19 +96,48 @@ new_fixture() {
 
 [[ -x $validator ]] \
 	|| fail "AWS IAM vendor bundle validator is missing or not executable: $validator"
+[[ -f $plugin_makefile ]] || fail 'general AWS plugin Makefile is missing'
+[[ -f $workflow ]] || fail 'general AWS CI workflow is missing'
+[[ -f $builder ]] || fail 'serialized AWS SDK builder is missing'
 
-if ! grep -Fq 'bash "$(PROXYSQL_PATH)/deps/aws-sdk-cpp/verify-bundle.bash"' "$deps_makefile"; then
+if git -C "$repo_root" grep -n -E \
+	'PROXYSQLAWSIAM([[:space:]=]|$)|PROXYSQLAWS([[:space:]=]|$)|ProxySQL_AwsIam_Plugin\.so|plugins/aws_iam' -- \
+	Makefile deps/Makefile common_mk plugins .github docker README.md doc etc \
+	test/tap/tests/unit ':(exclude)test/infra/control/check-vendored-aws-sdk-build.bash'; then
+	fail 'obsolete AWS plugin build flag, artifact, or path remains'
+fi
+
+if ! grep -Fq 'COMMAND bash "${AWS_VERIFIER}" "${AWS_BUNDLE_DIR}"' "$builder"; then
 	fail 'deps AWS SDK build rule does not validate the immutable bundle before extraction'
 fi
-if ! grep -Fq '${MAKE} -C "$(AWS_SDK_CPP_DIR)/build" install' "$deps_makefile"; then
+if ! grep -Fq -- '-DAWS_MAKE_COMMAND="$(MAKE)"' "$deps_makefile"; then
 	fail 'deps AWS SDK build rule does not use make jobserver recursion'
 fi
-darwin_link=$(PROXYSQL40=1 PROXYSQLAWSIAM=1 make -j -n -C "${repo_root}/plugins/aws_iam" UNAME_S=Darwin)
+if [[ $(grep -Fc 'fetch-depth: 0' "$workflow") -ne 4 ]]; then
+	fail 'AWS CI checkouts do not fetch full history and tags'
+fi
+if grep -Eq 'nm .*[|].*(rg|grep)[[:space:]]+-q' "$workflow"; then
+	fail 'AWS CI symbol checks use a pipe that is unsafe under pipefail'
+fi
+grep -Fq '$(AWS_SDK_CPP_IDENTITY_STAMP)' "$deps_makefile" || \
+	fail 'AWS SDK archive target is not invalidated by build identity'
+grep -Fq 'build-sdk.cmake' "$deps_makefile" || \
+	fail 'AWS SDK archive target does not use the serialized builder'
+grep -Fq 'file(LOCK "${AWS_LOCK_FILE}"' "$builder" || \
+	fail 'AWS SDK builder does not serialize the shared build tree'
+grep -Fq 'installed_identity' "$builder" || \
+	fail 'AWS SDK builder does not recheck identity after acquiring the lock'
+verify_line=$(grep -n -m1 'COMMAND bash "${AWS_VERIFIER}"' "$builder" | cut -d: -f1)
+identity_line=$(grep -n -m1 'if(EXISTS "${AWS_RDS_LIB}"' "$builder" | cut -d: -f1)
+if [[ -z $verify_line || -z $identity_line || $verify_line -ge $identity_line ]]; then
+	fail 'AWS SDK builder can accept an installed identity before verifying the bundle'
+fi
+darwin_link=$(PROXYSQL40=1 make -j -n -C "${repo_root}/plugins/aws" UNAME_S=Darwin)
 if grep -Eq -- '(^|[[:space:]])-ldl($|[[:space:]])|(^|[[:space:]])-lrt($|[[:space:]])' <<<"$darwin_link"; then
 	fail 'AWS IAM plugin links Linux-only dl/rt libraries on Darwin'
 fi
 if ! grep -Fq 'aws_dso_pattern=' "$workflow" || \
-	! grep -Fq 'for artifact in src/proxysql plugins/aws_iam/ProxySQL_AwsIam_Plugin.so' "$workflow"; then
+	! grep -Fq 'for artifact in src/proxysql plugins/aws/ProxySQL_Aws_Plugin.so' "$workflow"; then
 	fail 'AWS IAM CI does not reject AWS and CRT DSOs in both artifacts'
 fi
 for workflow_path in \
@@ -130,10 +160,8 @@ for packaging_entrypoint in \
 		fail "AWS IAM package entrypoint omits the vendored attribution list"
 	grep -Fq 'deps/aws-sdk-cpp/${attribution}' "$packaging_entrypoint" || \
 		fail 'AWS IAM package entrypoint does not stage vendored attribution files'
-	if ! grep -Fq 'EXTRA="$EXTRA PROXYSQLAWSIAM=1"' "$packaging_entrypoint" && \
-		! grep -Fq 'EXTRA="${EXTRA} PROXYSQLAWSIAM=1"' "$packaging_entrypoint"; then
-		fail 'AWS IAM package entrypoint does not pass the feature flag into make'
-	fi
+	grep -Fq 'ProxySQL_Aws_Plugin.so' "$packaging_entrypoint" || \
+		fail 'v4 package entrypoint does not stage the general AWS plugin'
 done
 for retired_gate in \
 	"$repo_root/test/infra/control/check-aws-iam-build-gate.bash" \
@@ -141,8 +169,8 @@ for retired_gate in \
 	"$repo_root/test/infra/control/check-aws-iam-linkage-test.bash"; do
 	[[ ! -e $retired_gate ]] || fail "retired system-SDK gate remains: ${retired_gate##*/}"
 done
-if [[ $(grep -Fc 'cd plugins/aws_iam && ${MAKE} clean' "$repo_root/Makefile") -ne 4 ]]; then
-	fail 'AWS IAM plugin clean recursion does not consistently use make jobserver recursion'
+if [[ $(grep -Fc 'cd plugins/aws && ${MAKE} clean' "$repo_root/Makefile") -ne 4 ]]; then
+	fail 'AWS plugin clean recursion does not consistently use make jobserver recursion'
 fi
 
 new_fixture valid
