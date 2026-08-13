@@ -25,11 +25,11 @@
 #define MIN_POLL_LEN 8
 #define MIN_POLL_DELETE_RATIO  8
 #define MY_EPOLL_THREAD_MAXEVENTS 128
+*/
 /// @brief How often wait_for_all_threads_to_exit_run_loop() logs that it is still waiting.
 #ifndef THREADS_EXIT_REPORT_INTERVAL_US
 #define THREADS_EXIT_REPORT_INTERVAL_US (10*1000*1000ULL)
 #endif
-*/
 
 #define ADMIN_HOSTGROUP	(-2)
 #define STATS_HOSTGROUP	(-3)
