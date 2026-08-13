@@ -503,6 +503,29 @@ void test_malformed_policy_stays_fail_closed_for_passthrough(MySQL_Thread& worke
 		"pass-through authorization never overrides a malformed backend IAM policy");
 }
 
+#ifndef PROXYSQLAWSIAM
+void test_sdk_off_source_reports_support_not_compiled(MySQL_Thread& worker) {
+	AwsIamRuntimeConfig config;
+	config.max_total_waiters = 128;
+	config.max_waiters_per_key = 8;
+	std::unique_ptr<AwsIamTokenSource> source = create_aws_iam_token_source(config);
+	GloAwsIamTokenSource = source.get();
+	SessionFixture fixture(worker);
+	const std::string log = capture_stderr([&] {
+		fixture.start();
+		if (fixture.session->status == WAITING_AWS_IAM_TOKEN) {
+			worker.drain_aws_iam_completions();
+			fixture.run();
+		}
+	});
+	GloAwsIamTokenSource = nullptr;
+	ok(fixture.session->status == WAITING_CLIENT_DATA &&
+		fixture.selected_connection() == nullptr &&
+		log.find("category='support_not_compiled'") != std::string::npos,
+		"the SDK-off source fails closed with the documented support_not_compiled operator reason");
+}
+#endif
+
 } // namespace
 
 extern "C" {
@@ -524,7 +547,11 @@ int __wrap_mysql_real_connect_start(MYSQL **ret, MYSQL *mysql, const char *host,
 } // extern "C"
 
 int main() {
+#ifdef PROXYSQLAWSIAM
 	plan(23);
+#else
+	plan(24);
+#endif
 	if (test_init_minimal() != 0 || test_init_auth() != 0 ||
 		test_init_query_processor() != 0 || test_init_hostgroups() != 0) {
 		BAIL_OUT("failed to initialize unit-test globals");
@@ -566,6 +593,9 @@ int main() {
 		test_password_mode_unchanged(worker);
 		test_unknown_user_passthrough_uses_password(worker);
 		test_malformed_policy_stays_fail_closed_for_passthrough(worker);
+#ifndef PROXYSQLAWSIAM
+		test_sdk_off_source_reports_support_not_compiled(worker);
+#endif
 		GloAwsIamTokenSource = nullptr;
 	}
 	test_worker_shutdown_closes_delivery_boundary();

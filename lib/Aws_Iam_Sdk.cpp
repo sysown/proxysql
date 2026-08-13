@@ -27,6 +27,8 @@ bool global_source_accepting = false;
 #ifndef PROXYSQLAWSIAM
 class AwsIamNotCompiledTokenSource final : public AwsIamTokenSource {
 public:
+	bool support_compiled() const override { return false; }
+
 	AwsIamRequestHandle request(const AwsIamTokenKey&, uint64_t opaque_id,
 		std::weak_ptr<AwsIamCompletionSink> sink) override {
 		AwsIamRequestHandle handle { next_handle_.fetch_add(1, std::memory_order_relaxed) };
@@ -34,6 +36,7 @@ public:
 			AwsIamCompletion completion;
 			completion.opaque_id = opaque_id;
 			completion.result.status = AwsIamStatus::SUPPORT_NOT_COMPILED;
+			completion.result.failure.category = "support_not_compiled";
 			live_sink->post(std::move(completion));
 		}
 		return handle;
@@ -43,6 +46,7 @@ public:
 		std::chrono::steady_clock::time_point) override {
 		AwsIamTokenResult result;
 		result.status = AwsIamStatus::SUPPORT_NOT_COMPILED;
+		result.failure.category = "support_not_compiled";
 		return result;
 	}
 

@@ -366,7 +366,7 @@ void* kill_query_thread(void *arg) {
 		input.ssl_capath = ssl_params != nullptr
 			? ssl_params->ssl_capath
 			: (mysql_thread___ssl_p2s_capath != nullptr ? mysql_thread___ssl_p2s_capath : "");
-		input.support_compiled = static_cast<bool>(iam_source);
+		input.support_compiled = iam_source && iam_source->support_compiled();
 		const AwsIamConnectionConfigResult config =
 			validate_mysql_aws_iam_connection(input);
 		if (config.status != AwsIamConnectionConfigStatus::OK ||
@@ -849,7 +849,8 @@ void MySQL_Session::fail_aws_iam_backend(
 	const std::string database_user = aws_iam_token_key.database_user;
 	const std::string endpoint = aws_iam_token_key.endpoint;
 	const std::string region = aws_iam_token_key.region;
-	const char *category = provider_failure != nullptr
+	const char *category = provider_failure != nullptr &&
+		!provider_failure->category.empty()
 		? provider_failure->category.c_str()
 		: (failure_code != nullptr ? failure_code : "unknown");
 	const char *aws_code = provider_failure != nullptr
@@ -9186,7 +9187,8 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 			input.ssl_capath = ssl_params != nullptr
 				? ssl_params->ssl_capath
 				: (mysql_thread___ssl_p2s_capath != nullptr ? mysql_thread___ssl_p2s_capath : "");
-			input.support_compiled = GloAwsIamTokenSource != nullptr;
+			input.support_compiled = GloAwsIamTokenSource != nullptr &&
+				GloAwsIamTokenSource->support_compiled();
 
 			AwsIamConnectionConfigResult config =
 				validate_mysql_aws_iam_connection(input);

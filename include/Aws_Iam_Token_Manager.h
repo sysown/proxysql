@@ -111,6 +111,7 @@ void update_aws_iam_prometheus_metrics(const AwsIamStatsSnapshot&);
 
 class AwsIamTokenSource {
 public:
+	virtual bool support_compiled() const { return true; }
 	virtual AwsIamRequestHandle request(const AwsIamTokenKey&, uint64_t opaque_id,
 		std::weak_ptr<AwsIamCompletionSink>) = 0;
 	virtual AwsIamTokenResult request_blocking(const AwsIamTokenKey&,
