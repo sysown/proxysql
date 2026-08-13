@@ -4,6 +4,7 @@
  */
 
 #include <array>
+#include <charconv>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -243,6 +244,14 @@ struct UserVariableCounters {
 	uint64_t fallback_limits { 0 };
 };
 
+std::optional<uint64_t> parse_uint64(const std::string& text) {
+	uint64_t value { 0 };
+	const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
+	return error == std::errc {} && end == text.data() + text.size()
+		? std::optional<uint64_t> { value }
+		: std::nullopt;
+}
+
 bool only_limit_fallback_incremented(
 	const UserVariableCounters& before, const UserVariableCounters& after) {
 	return after.assignments == before.assignments &&
@@ -266,7 +275,11 @@ std::optional<UserVariableCounters> user_variable_counters(MYSQL* admin) {
 		if (row.size() != 2 || row[0].is_null || row[1].is_null) {
 			return std::nullopt;
 		}
-		values[row[0].bytes] = std::stoull(row[1].bytes);
+		auto value = parse_uint64(row[1].bytes);
+		if (!value) {
+			return std::nullopt;
+		}
+		values[row[0].bytes] = *value;
 	}
 	const std::array<const char*, 5> names {
 		"User_variable_assignments_tracked", "User_variable_replay_commands",
@@ -312,10 +325,17 @@ AttachedBackendStatus inspect_attached_backend_status(
 		++inspection.matching_hostgroups;
 		const auto& connection = backend["conn"];
 		if (connection.contains("status") && connection["status"].is_object()) {
-			inspection.user_variable = connection["status"].value("user_variable", false);
-			inspection.no_multiplex = connection["status"].value("no_multiplex", false);
+			const auto& status = connection["status"];
+			if (status.contains("user_variable") && status["user_variable"].is_boolean()) {
+				inspection.user_variable = status["user_variable"].get<bool>();
+			}
+			if (status.contains("no_multiplex") && status["no_multiplex"].is_boolean()) {
+				inspection.no_multiplex = status["no_multiplex"].get<bool>();
+			}
 		}
-		inspection.multiplex_disabled = connection.value("MultiplexDisabled", false);
+		if (connection.contains("MultiplexDisabled") && connection["MultiplexDisabled"].is_boolean()) {
+			inspection.multiplex_disabled = connection["MultiplexDisabled"].get<bool>();
+		}
 	}
 	return inspection;
 }
@@ -548,6 +568,7 @@ bool restore_config(
 
 int main() {
 	plan(NO_PLAN);
+	try {
 
 	CommandLine cl;
 	if (cl.getEnv()) {
@@ -764,7 +785,9 @@ int main() {
 		"the reported supported SET produces no unknown-SET warning or literal disclosure");
 
 	auto aggregate_session = internal_session(proxy.get());
-	const json diagnostics = aggregate_session
+	const json diagnostics = aggregate_session && aggregate_session->contains("conn") &&
+		(*aggregate_session)["conn"].is_object() &&
+		(*aggregate_session)["conn"].contains("user_variables")
 		? (*aggregate_session)["conn"]["user_variables"] : json {};
 	const std::string serialized_session = aggregate_session
 		? aggregate_session->dump() : std::string {};
@@ -1460,5 +1483,9 @@ int main() {
 
 	ok(cleanup.run(),
 		"temporary functions, rules, hostgroups, and runtime variables are restored");
+	} catch (const std::exception& error) {
+		diag("Unexpected fixture exception: %s", error.what());
+		ok(false, "fixture restores its owned state after an unexpected exception");
+	}
 	return exit_status();
 }
