@@ -100,6 +100,12 @@ new_fixture() {
 [[ -f $workflow ]] || fail 'general AWS CI workflow is missing'
 [[ -f $builder ]] || fail 'serialized AWS SDK builder is missing'
 
+deps_default_goal=$(PROXYSQL40=1 make -C "$repo_root/deps" -pn 2>/dev/null \
+	| sed -n 's/^\.DEFAULT_GOAL := //p' \
+	| head -n 1)
+[[ $deps_default_goal == default ]] ||
+	fail "deps Makefile default goal is '$deps_default_goal', expected 'default'"
+
 if git -C "$repo_root" grep -n -E \
 	'PROXYSQLAWSIAM([[:space:]=]|$)|PROXYSQLAWS([[:space:]=]|$)|ProxySQL_AwsIam_Plugin\.so|plugins/aws_iam' -- \
 	Makefile deps/Makefile common_mk plugins .github docker README.md doc etc \
