@@ -31,22 +31,27 @@ install -o proxysql -g proxysql -m 0600 proxysql_pgsql_user_sync.ini.example /et
 Set `[proxysql]` to ProxySQL's PostgreSQL Admin interface (normally port
 `6132`).  The synchronizer uses PostgreSQL's simple-query protocol there.
 
-The synchronizer rejects group-write/execute and other-user permissions.  The
-primary example is service-owned `0600` so the ProxySQL service account can
-read it.  Alternatively, keep the file root-owned and use `chown root:proxysql`
-with mode `0640` (a dedicated `proxysql` group); that is also accepted.  An
-owner-only `0600` file is the simplest choice when the synchronizer runs as its
-owner.  Database passwords stay in this file and never appear in Scheduler
-arguments or normal logs.
+The synchronizer rejects group-write/execute and other-user permissions, and
+accepts only files owned by root or by the account running it. The primary
+example is service-owned `0600` so the ProxySQL service account can read it.
+Alternatively, keep the file root-owned and use `chown root:proxysql` with mode
+`0640` (a dedicated `proxysql` group); that is also accepted. Database passwords
+stay in this file and never appear in Scheduler arguments or normal logs.
 
 ## Create the source function and allow-list
 
 As a trusted PostgreSQL administrator, connect to the configured database and
-run `create_source_function.sql` after replacing the reader password.  The
-script is rerunnable: guarded role creation, a `SECURITY DEFINER` function
-with `SET search_path = pg_catalog`, and explicit revokes protect the
-credential query.  The reader receives only database `CONNECT`, schema
-`USAGE`, and function `EXECUTE`.
+run `create_source_function.sql` with a runtime-only reader password:
+
+```console
+psql --set=ON_ERROR_STOP=1 --set=proxysql_auth_reader_password='choose-a-secret' \\
+  --file=create_source_function.sql postgres
+```
+
+The script is rerunnable: it reapplies the reader password, creates a
+`SECURITY DEFINER` function with `SET search_path = pg_catalog`, and explicitly
+revokes defaults before granting only database `CONNECT`, schema `USAGE`, and
+function `EXECUTE`.
 
 The `proxysql_auth_managed` `NOLOGIN` role is the import allow-list.  Grant and
 revoke membership deliberately, for example:
@@ -67,7 +72,7 @@ superusers are always excluded.
 Always use absolute paths when invoking the script:
 
 ```console
-/usr/bin/python3 /usr/share/proxysql/tools/pgsql_user_sync/proxysql_pgsql_user_sync.py \
+/opt/proxysql-pgsql-user-sync/bin/python /usr/share/proxysql/tools/pgsql_user_sync/proxysql_pgsql_user_sync.py \
   --config /etc/proxysql/pgsql-user-sync.ini --dry-run --verbose
 ```
 
@@ -92,7 +97,7 @@ INSERT INTO scheduler
     (id, active, interval_ms, filename, arg1, arg2, arg3, comment)
 VALUES
     (9100, 1, 10000,
-     '/usr/bin/python3',
+     '/opt/proxysql-pgsql-user-sync/bin/python',
      '/usr/share/proxysql/tools/pgsql_user_sync/proxysql_pgsql_user_sync.py',
      '--config',
      '/etc/proxysql/pgsql-user-sync.ini',

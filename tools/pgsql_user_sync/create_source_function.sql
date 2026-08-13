@@ -1,7 +1,16 @@
--- Run this file while connected to the database named in the synchronizer
--- configuration (normally "postgres") as a trusted PostgreSQL administrator.
--- Replace the reader password before running it.  This is an operator-managed
--- sample; keep this file out of source control after inserting a real secret.
+-- Run this file with psql while connected to the database named in the
+-- synchronizer configuration (normally "postgres") as a trusted PostgreSQL
+-- administrator. Supply a distinct reader password at runtime, for example:
+--   psql --set=ON_ERROR_STOP=1 --set=proxysql_auth_reader_password='secret' \\
+--     --file=create_source_function.sql postgres
+-- The password variable is required so this sample cannot create a predictable
+-- credential when run unchanged.
+
+\if :{?proxysql_auth_reader_password}
+\else
+\echo 'Set proxysql_auth_reader_password with psql --set before running this script.'
+\quit
+\endif
 
 -- The membership of this NOLOGIN role is the explicit import allow-list.
 DO $role$
@@ -16,12 +25,12 @@ ALTER ROLE proxysql_auth_managed NOLOGIN;
 DO $role$
 BEGIN
     CREATE ROLE proxysql_auth_reader
-        LOGIN
-        PASSWORD 'REPLACE_WITH_SOURCE_PASSWORD';
+        LOGIN;
 EXCEPTION
     WHEN duplicate_object THEN NULL;
 END
 $role$;
+ALTER ROLE proxysql_auth_reader LOGIN PASSWORD :'proxysql_auth_reader_password';
 
 CREATE SCHEMA IF NOT EXISTS proxysql_auth;
 ALTER SCHEMA proxysql_auth OWNER TO CURRENT_USER;
@@ -48,12 +57,17 @@ AS $function$
 $function$;
 
 -- Remove defaults first, then grant only the exact access needed by the
--- synchronizer.  CONNECT is shown for the sample database; change postgres
--- when installing into another database.
+-- synchronizer.  CONNECT is granted on the database where this script runs.
 REVOKE ALL ON SCHEMA proxysql_auth FROM PUBLIC;
 REVOKE ALL ON FUNCTION proxysql_auth.export_login_roles() FROM PUBLIC;
 REVOKE ALL ON FUNCTION proxysql_auth.export_login_roles() FROM proxysql_auth_reader;
-GRANT CONNECT ON DATABASE postgres TO proxysql_auth_reader;
+DO $grant$
+BEGIN
+    EXECUTE format(
+        'GRANT CONNECT ON DATABASE %I TO proxysql_auth_reader', current_database()
+    );
+END
+$grant$;
 GRANT USAGE ON SCHEMA proxysql_auth TO proxysql_auth_reader;
 GRANT EXECUTE ON FUNCTION proxysql_auth.export_login_roles() TO proxysql_auth_reader;
 

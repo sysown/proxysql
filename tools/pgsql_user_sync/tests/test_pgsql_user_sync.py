@@ -125,14 +125,58 @@ save_to_disk = true
             self.mod.load_config(path, self.mod.CLIOverrides())
 
         non_root_metadata = SimpleNamespace(st_mode=stat.S_IFREG | 0o640, st_uid=1000)
-        with patch.object(self.mod.os, "fstat", return_value=non_root_metadata):
+        with (
+            patch.object(self.mod.os, "fstat", return_value=non_root_metadata),
+            patch.object(self.mod.os, "geteuid", return_value=1000),
+        ):
             with self.assertRaisesRegex(self.mod.SyncError, "permissions"):
                 self.load_default_config(path)
 
         path = self.write_config(mode=0o600)
         owner_only_metadata = SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=1000)
-        with patch.object(self.mod.os, "fstat", return_value=owner_only_metadata):
+        with (
+            patch.object(self.mod.os, "fstat", return_value=owner_only_metadata),
+            patch.object(self.mod.os, "geteuid", return_value=1000),
+        ):
             self.mod.load_config(path, self.mod.CLIOverrides())
+
+    def test_config_owner_must_be_root_or_the_service_user(self):
+        path = self.write_config(mode=0o600)
+        service_uid = 1000
+        unrelated_owner = SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=1001)
+        with (
+            patch.object(self.mod.os, "fstat", return_value=unrelated_owner),
+            patch.object(self.mod.os, "geteuid", return_value=service_uid),
+        ):
+            with self.assertRaisesRegex(self.mod.SyncError, "owner"):
+                self.load_default_config(path)
+
+        service_owned = SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=service_uid)
+        with (
+            patch.object(self.mod.os, "fstat", return_value=service_owned),
+            patch.object(self.mod.os, "geteuid", return_value=service_uid),
+        ):
+            self.load_default_config(path)
+
+        root_owned_group_read = SimpleNamespace(st_mode=stat.S_IFREG | 0o640, st_uid=0)
+        with (
+            patch.object(self.mod.os, "fstat", return_value=root_owned_group_read),
+            patch.object(self.mod.os, "geteuid", return_value=service_uid),
+        ):
+            self.load_default_config(path)
+
+    def test_fdopen_failure_does_not_close_a_transferred_descriptor(self):
+        path = self.write_config()
+        file_info = SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=os.geteuid())
+        with (
+            patch.object(self.mod.os, "open", return_value=31),
+            patch.object(self.mod.os, "fstat", return_value=file_info),
+            patch.object(self.mod.os, "fdopen", side_effect=OSError),
+            patch.object(self.mod.os, "close") as close,
+        ):
+            with self.assertRaisesRegex(self.mod.SyncError, "cannot be read"):
+                self.mod._open_config_file(path)
+        close.assert_not_called()
 
     def test_rejects_group_write_even_when_root_owned(self):
         path = self.write_config(mode=0o660)
@@ -181,15 +225,22 @@ profile = p
             with self.assertRaisesRegex(self.mod.SyncError, "function"):
                 self.load_default_config(path)
 
-    def test_rejects_invalid_values_and_missing_fields(self):
-        path = self.write_config(text="""\
+    def test_rejects_each_invalid_configuration_value(self):
+        cases = (
+            ("connect_timeout = -1", "", "connect_timeout"),
+            ("", "default_hostgroup = -1", "default_hostgroup"),
+            ("", "missing_role_action = remove", "missing_role_action"),
+            ("", "adopt_existing_users = maybe", "adopt_existing_users"),
+        )
+        for source_setting, sync_setting, message in cases:
+            path = self.write_config(text="""\
 [source]
 host = source
-port = 0
+port = 5432
 database = db
 username = reader
 password = secret
-connect_timeout = -1
+%s
 [proxysql]
 host = proxy
 port = 6032
@@ -197,14 +248,11 @@ username = admin
 password = secret
 [sync]
 profile = p
-default_hostgroup = -1
-missing_role_action = remove
-adopt_existing_users = maybe
-allow_empty_snapshot = false
-save_to_disk = true
-""")
-        with self.assertRaises(self.mod.SyncError):
-            self.load_default_config(path)
+%s
+""" % (source_setting, sync_setting))
+            with self.subTest(setting=message):
+                with self.assertRaisesRegex(self.mod.SyncError, message):
+                    self.load_default_config(path)
 
         path = self.write_config(text="""\
 [source]
@@ -827,6 +875,14 @@ class AssetTests(unittest.TestCase):
         self.assertNotIn("GRANT app_login TO proxysql_auth_managed;", sql)
         self.assertNotIn("REVOKE app_login FROM proxysql_auth_managed;", sql)
 
+    def test_source_function_requires_runtime_reader_secret_and_current_database(self):
+        sql = (ASSET_DIR / "create_source_function.sql").read_text()
+        self.assertIn("\\if :{?proxysql_auth_reader_password}", sql)
+        self.assertIn("PASSWORD :'proxysql_auth_reader_password'", sql)
+        self.assertNotIn("PASSWORD 'REPLACE_WITH_SOURCE_PASSWORD'", sql)
+        self.assertIn("ALTER ROLE proxysql_auth_reader LOGIN PASSWORD", sql)
+        self.assertIn("current_database()", sql)
+
     def test_example_configuration_is_loadable_with_protected_permissions(self):
         source = (ASSET_DIR / "proxysql_pgsql_user_sync.ini.example").read_text()
         self.assertIn("[source]", source)
@@ -850,6 +906,27 @@ class AssetTests(unittest.TestCase):
         self.assertIn("psycopg[binary]>=3.2.13,<4", requirements)
         self.assertNotIn("PyMySQL", requirements)
 
+    def test_tap_assets_have_a_build_dependency_and_clean_output(self):
+        root = Path(os.environ.get("WORKSPACE", ASSET_DIR.parents[1]))
+        if not (root / "test/tap/Makefile").is_file():
+            root = ASSET_DIR.parents[2]
+        tap_makefile = (root / "test/tap/Makefile").read_text()
+        gitignore = (root / ".gitignore").read_text()
+        self.assertRegex(tap_makefile, r"(?m)^tests:.*\bpgsql_user_sync_assets\b")
+        self.assertIn("test/tap/pgsql_user_sync/", gitignore)
+
+    def test_tap_wrappers_do_not_install_dependencies_or_require_staging_locally(self):
+        root = Path(os.environ.get("WORKSPACE", ASSET_DIR.parents[1]))
+        if not (root / "test/tap/Makefile").is_file():
+            root = ASSET_DIR.parents[2]
+        integration = (root / "test/tap/tests/pgsql-user-sync-t.py").read_text()
+        unit_wrapper = (root / "test/tap/tests/pgsql-user-sync-unit-t.py").read_text()
+        self.assertNotIn('"pip"', integration)
+        self.assertIn("psycopg is required", integration)
+        self.assertIn('json.loads(main_row[4] or "{}")', integration)
+        self.assertIn("if not suite.is_file():", unit_wrapper)
+        self.assertIn("tools/pgsql_user_sync/tests/test_pgsql_user_sync.py", unit_wrapper)
+
     def test_readme_documents_scheduler_and_cluster_safety(self):
         readme = (ASSET_DIR / "README.md").read_text()
         for required in (
@@ -871,6 +948,7 @@ class AssetTests(unittest.TestCase):
             self.assertIn(required, readme)
         self.assertIn("one authoritative ProxySQL node", readme)
         self.assertIn("every node", readme)
+        self.assertIn("/opt/proxysql-pgsql-user-sync/bin/python", readme)
 
 
 if __name__ == "__main__":

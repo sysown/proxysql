@@ -191,6 +191,8 @@ def _validate_timeout(section: configparser.SectionProxy, name: str = "connect_t
 def _validate_file(info: os.stat_result) -> None:
     if not stat.S_ISREG(info.st_mode):
         raise _error("configuration file must be a regular file")
+    if info.st_uid not in (0, os.geteuid()):
+        raise _error("configuration file has an unsafe owner")
     # Group read is a supported deployment mode only for a root-owned file
     # (typically 0640 with a dedicated service group).  Non-root-owned files
     # must be owner-only.  Group write/execute and every other-user permission
@@ -211,7 +213,10 @@ def _open_config_file(path: Path):
     try:
         fd = os.open(path, flags)
         _validate_file(os.fstat(fd))
-        stream = os.fdopen(fd, "r", encoding="utf-8")
+        # os.fdopen() owns its descriptor even when stream construction fails.
+        # Clear fd first so the error path cannot close a reused descriptor.
+        stream_fd, fd = fd, None
+        stream = os.fdopen(stream_fd, "r", encoding="utf-8")
     except SyncError:
         if fd is not None:
             os.close(fd)
@@ -876,15 +881,11 @@ class ProxySQLAdmin:
         self._execute_command("SAVE PGSQL USERS TO DISK", "unable to save ProxySQL users to disk")
 
 
-def _sync_failure(message: str) -> SyncError:
-    return _error(message)
-
-
 def _source_snapshot(source: SourceAdapter, allow_empty: bool) -> dict[str, SourceRole]:
     try:
         raw_snapshot = source.fetch_snapshot()
     except Exception:
-        raise _sync_failure("unable to fetch source role snapshot") from None
+        raise _error("unable to fetch source role snapshot") from None
     return validate_snapshot(raw_snapshot, allow_empty)
 
 
@@ -892,7 +893,7 @@ def _admin_snapshots(admin: AdminAdapter) -> tuple[list[ProxySQLUser], list[Prox
     try:
         return admin.fetch_main_users(), admin.fetch_runtime_users()
     except Exception:
-        raise _sync_failure("unable to fetch ProxySQL user snapshots") from None
+        raise _error("unable to fetch ProxySQL user snapshots") from None
 
 
 def _apply_plan(plan: SyncPlan, admin: AdminAdapter, settings: SyncSettings) -> tuple[bool, bool, bool]:
@@ -900,13 +901,13 @@ def _apply_plan(plan: SyncPlan, admin: AdminAdapter, settings: SyncSettings) -> 
         try:
             admin.apply_actions(plan.actions)
         except Exception:
-            raise _sync_failure("unable to apply ProxySQL user changes") from None
+            raise _error("unable to apply ProxySQL user changes") from None
     if not plan.requires_load:
         return False, False, False
     try:
         admin.load_runtime()
     except Exception:
-        raise _sync_failure("unable to load ProxySQL users to runtime") from None
+        raise _error("unable to load ProxySQL users to runtime") from None
     if not settings.save_to_disk:
         return True, False, False
     try:

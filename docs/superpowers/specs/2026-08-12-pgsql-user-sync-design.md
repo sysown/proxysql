@@ -359,8 +359,8 @@ function, ProxySQL Admin interface, and verifier-capable authentication path:
 8. Make the source lookup fail and verify runtime users remain unchanged.
 
 The integration test is registered only in a PostgreSQL-backed TAP group and
-is gated on verifier-capable ProxySQL behavior. Until the equivalent of PR
-PR #5865 is present in the target branch, the test must report a clear dependency
+is gated on verifier-capable ProxySQL behavior. Until functionality equivalent
+to PR #5865 is present in the target branch, the test must report a clear dependency
 skip rather than masking a synchronizer failure.
 
 ## Acceptance criteria

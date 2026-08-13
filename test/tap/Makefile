@@ -30,7 +30,7 @@ tap: test_deps
 	cd tap && CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: tests
-tests: tap test_deps
+tests: pgsql_user_sync_assets tap test_deps
 	cd tests && CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
 
 .PHONY: tests_no_infra

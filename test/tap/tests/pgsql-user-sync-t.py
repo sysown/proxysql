@@ -19,29 +19,13 @@ SCRIPT = ASSET_DIR / "proxysql_pgsql_user_sync.py"
 PROFILE = "tap-real"
 
 
-def load_psycopg():
-    try:
-        import psycopg
-        from psycopg import sql
-    except ImportError:
-        subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "pip",
-                "install",
-                "--break-system-packages",
-                "-r",
-                str(ASSET_DIR / "requirements.txt"),
-            ],
-            check=True,
-        )
-        import psycopg
-        from psycopg import sql
-    return psycopg, sql
-
-
-psycopg, sql = load_psycopg()
+try:
+    import psycopg
+    from psycopg import sql
+except ImportError:
+    raise SystemExit(
+        "psycopg is required for this test; install the test-image dependencies before running it"
+    ) from None
 
 
 class Tap:
@@ -269,13 +253,20 @@ def main():
                 f"active={runtime_row[2] if runtime_row else None} "
                 f"hostgroup={runtime_row[3] if runtime_row else None}"
             )
+        try:
+            ownership_marker = (
+                json.loads(main_row[4] or "{}").get("proxysql_pgsql_user_sync")
+                if main_row is not None
+                else None
+            )
+        except (TypeError, json.JSONDecodeError):
+            ownership_marker = None
         tap.check(
             main_row is not None
             and main_row[1] == verifier
             and int(main_row[2]) == 1
             and int(main_row[3]) == 0
-            and json.loads(main_row[4]).get("proxysql_pgsql_user_sync")
-            == {"profile": PROFILE},
+            and ownership_marker == {"profile": PROFILE},
             "synchronizer automatically creates the real pgsql_users row",
         )
         tap.check(
