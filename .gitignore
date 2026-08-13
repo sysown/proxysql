@@ -242,3 +242,7 @@ test/scripts/deps/mysqlbinlog
 
 # superpowers scratch (SDD workspaces, review packages)
 .superpowers/
+
+# tsdb-lab capture.bash working dir: per-node datadirs/logs for the 3
+# ephemeral ProxySQL instances it spawns; never the committed fixture.
+test/tsdb-lab/.capture/

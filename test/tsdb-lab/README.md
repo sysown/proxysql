@@ -14,14 +14,27 @@ The lab uses a **real captured metrics fixture** — metric names, label sets, c
 
 ### 1. Regenerate the fixture (optional)
 
-The default fixture is `fixtures/seed-10min.csv.gz` (pre-captured from a live ProxySQL instance). To refresh it:
+The default fixture is `fixtures/seed-10min.csv.gz` (captured from a real 3-node ProxySQL cluster under sysbench load; see `fixtures/seed-10min.README` for provenance). To refresh it:
 
 ```bash
-# Points at a real ProxySQL instance (e.g., staging) and captures 10 minutes of metrics
-bash test/tsdb-lab/capture.bash --host 10.0.0.1 --port 6032 --interval 5s --duration 10m
+# Spins up its own 3-node ProxySQL cluster (leader election) against a
+# harness-managed MySQL backend, drives 10 minutes of variable-rate sysbench
+# load through the leader, and dumps its stats_history.tsdb_metrics window.
+bash test/tsdb-lab/capture.bash
+
+# Quick smoke run with a shorter window:
+DURATION_S=90 bash test/tsdb-lab/capture.bash
 ```
 
-The captured CSV is gzip-compressed and committed to the repo. See `capture.bash` (added in Task 3) for full details.
+`capture.bash` is a human-run script (not CI): it brings up the `legacy-g5`
+backend infra via `test/infra/control/ensure-infras.bash`, spawns 3
+`src/proxysql` instances on 127.0.0.1 admin ports 16362/16372/16382, wires
+them into two hostgroups (writer/reader) against that backend, enables TSDB,
+drives load through the elected leader (falling back to a plain mysql-client
+SELECT/INSERT loop if `sysbench` isn't installed), and writes the gzip-
+compressed CSV plus a provenance `.README` file. It refuses to commit a
+fixture over 2 MB compressed. The backend infra is left running afterward
+(harness-owned); only the 3 capture-only ProxySQL instances are shut down.
 
 ### 2. Expand into a stats database
 
