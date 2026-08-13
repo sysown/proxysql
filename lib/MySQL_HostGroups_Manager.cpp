@@ -1151,7 +1151,16 @@ void MySQL_HostGroups_Manager::CUCFT1(
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
-	string query = "SELECT * FROM " + TableName + " ORDER BY " + ColumnName;
+	string query;
+	if (TableName == "mysql_aws_aurora_hostgroups") {
+		query =
+			"SELECT writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,"
+			"active,aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,"
+			"writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,"
+			"autopurge_missing_checks,comment FROM mysql_aws_aurora_hostgroups ORDER BY " + ColumnName;
+	} else {
+		query = "SELECT * FROM " + TableName + " ORDER BY " + ColumnName;
+	}
 	mydb->execute_statement(query.c_str(), &error , &cols , &affected_rows , &resultset);
 	if (resultset) {
 		if (resultset->rows_count) {

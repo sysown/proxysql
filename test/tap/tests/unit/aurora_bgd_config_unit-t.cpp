@@ -325,6 +325,7 @@ static void test_runtime_ownership_and_status() {
 		"SELECT GROUP_CONCAT(bgd_status, ',') FROM "
 		"(SELECT bgd_status FROM mysql_aws_aurora_hostgroups ORDER BY writer_hostgroup)"
 	) == "NONE,NONE", "new Aurora runtime rows start in NONE");
+	const std::string checksum_before_status = MyHGM->gen_global_mysql_servers_v2_checksum(0);
 
 	SQLite3_result* dump = MyHGM->dump_table_mysql("mysql_aws_aurora_hostgroups");
 	ok(dump && dump->columns == 18, "Aurora runtime dump includes configured fields and bgd_status");
@@ -334,6 +335,8 @@ static void test_runtime_ownership_and_status() {
 	ok(hgm_query_string(
 		"SELECT bgd_status FROM mysql_aws_aurora_hostgroups WHERE writer_hostgroup=300"
 	) == "AVAILABLE", "Aurora BGD status API publishes an accepted state");
+	ok(MyHGM->gen_global_mysql_servers_v2_checksum(0) == checksum_before_status,
+		"node-local Aurora BGD status is excluded from the cluster checksum");
 	const char* accepted_statuses[] = {
 		"NONE",
 		"AVAILABLE",
@@ -413,7 +416,7 @@ static void test_runtime_ownership_and_status() {
 }
 
 int main() {
-	plan(48);
+	plan(49);
 	test_init_minimal();
 
 	test_schema_contract();       // 12
@@ -423,7 +426,7 @@ int main() {
 	test_invalid_replacement_removes_previous_row(); // 3
 
 	ok(test_init_hostgroups() == 0, "test_init_hostgroups() succeeds"); // 1
-	test_runtime_ownership_and_status(); // 17
+	test_runtime_ownership_and_status(); // 18
 	test_cleanup_hostgroups();
 
 	test_cleanup_minimal();
