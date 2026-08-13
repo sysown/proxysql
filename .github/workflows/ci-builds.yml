@@ -203,6 +203,21 @@ jobs:
           exit 1
         fi
 
+    # actions/checkout performs LFS smudging on the runner, before the
+    # Docker build container starts. Keep this guard on the self-hosted pool:
+    # GitHub-hosted images already provide git-lfs, while ci-vm-1 does not.
+    - name: Install Git LFS when absent (self-hosted)
+      if: ${{ inputs.trusted && runner.environment == 'self-hosted' && steps.cache-check.outputs.cache-hit != 'true' }}
+      run: |
+        set -euo pipefail
+        if command -v git-lfs >/dev/null 2>&1; then
+          git-lfs --version
+          exit 0
+        fi
+        sudo -n apt-get update
+        sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install --yes git-lfs
+        git-lfs --version
+
     - name: Checkout repository
       if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
