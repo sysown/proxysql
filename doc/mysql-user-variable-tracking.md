@@ -71,7 +71,8 @@ Analysis is all-or-nothing: one ineligible target or value makes the whole
 `SET` fall back. Mixed system and user-variable assignments are therefore not
 partially tracked. Targets are normalized case-insensitively, preserve a
 ParserSQL-validated replay spelling, and have MySQL's 64-byte decoded-name
-limit; quoted target names containing a backslash are not eligible because
+limit. Tracked names must be ASCII so case-insensitive canonicalization remains
+unambiguous; quoted target names containing a backslash are not eligible because
 their identity depends on SQL mode. Source order is retained, including
 repeated names, and the last successful assignment is the map entry.
 

@@ -1,4 +1,6 @@
 #include "tap.h"
+#include "test_globals.h"
+#include "test_init.h"
 
 #include "MySQL_User_Variables.h"
 #include "MySQL_Data_Stream.h"
@@ -364,7 +366,9 @@ void test_replay_error_code_policy() {
 } // namespace
 
 int main() {
-	plan(73);
+	plan(74);
+	const int init_result = test_init_minimal();
+	ok(init_result == 0, "test_init_minimal() succeeds");
 	test_staging_and_limits();
 	test_collision_safe_comparison();
 	test_replay_planning();
@@ -375,5 +379,6 @@ int main() {
 	test_connection_state_integration();
 	test_simple_command_log_redaction();
 	test_replay_error_code_policy();
+	test_cleanup_minimal();
 	return exit_status();
 }
