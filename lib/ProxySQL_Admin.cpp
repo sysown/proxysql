@@ -9225,7 +9225,7 @@ void ProxySQL_Admin::enable_galera_testing() {
 
 void ProxySQL_Admin::enable_aurora_testing_populate_mysql_servers() {
 	sqlite3_stmt *statement=NULL;
-	unsigned int num_aurora_servers = GloSQLite3Server->num_aurora_servers[0];
+	constexpr unsigned int num_aurora_servers = 4;
 	admindb->execute("DELETE FROM mysql_servers WHERE hostgroup_id BETWEEN 1271 AND 1276");
 	char *query=(char *)"INSERT INTO mysql_servers (hostgroup_id,hostname,use_ssl,comment) VALUES (?1, ?2, ?3, ?4)";
 	auto [rc1, statement_unique] = admindb->prepare_v2(query);

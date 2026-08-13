@@ -47,6 +47,20 @@ static int random_replication_lag_seconds() {
 }
 #endif
 
+#ifdef TEST_AURORA
+static std::string simulator_sql_quote(const std::string& value) {
+	std::string quoted { "'" };
+	for (char c : value) {
+		quoted += c;
+		if (c == '\'') {
+			quoted += '\'';
+		}
+	}
+	quoted += '\'';
+	return quoted;
+}
+#endif
+
 #ifdef TEST_REPLICATIONLAG
 static void ensure_replicationlag_table_loaded(SQLite3_Server* server, MySQL_Session* sess) {
 	if (server->replicationlag_map_size() == 0) {
@@ -917,7 +931,7 @@ __run_query:
 						}
 						delete control_result;
 
-					if (run_query && aws_bgd_table_check) {
+						if (run_query && aws_bgd_table_check) {
 							const char* topology_sql = topology_present ? "SELECT 1" : "SELECT 1 WHERE 0";
 							static constexpr size_t topology_sql_len =
 								sizeof("SELECT 1") - 1;
@@ -952,39 +966,117 @@ __run_query:
 			}
 
 #endif // TEST_AURORA || TEST_RDS_BGD
-				#ifdef TEST_AURORA
-				if (strstr(query_no_space,(char *)"REPLICA_HOST_STATUS")) {
-					pthread_mutex_lock(&GloSQLite3Server->aurora_mutex);
+#ifdef TEST_AURORA
+			const bool aws_aurora_replica_query =
+				strcasecmp(query_no_space, QUERY_AWS_AURORA_REPLICA_HOST_STATUS) == 0;
+			const bool aws_aurora_bgd_replica_query =
+				strcasecmp(query_no_space, QUERY_AWS_AURORA_BGD_REPLICA_HOST_STATUS) == 0;
+			if (aws_aurora_replica_query || aws_aurora_bgd_replica_query) {
+				if (sess->client_myds->proxy_addr.addr == NULL ||
+					sess->client_myds->proxy_addr.port <= 0) {
+					GloSQLite3Server->send_MySQL_ERR(
+						&sess->client_myds->myprot, 1105,
+						"AWS Aurora simulator could not identify the accepted backend address");
+					run_query=false;
+				} else {
+					SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
+					const std::string backend_ip { sess->client_myds->proxy_addr.addr };
+					const int backend_port = sess->client_myds->proxy_addr.port;
+					const std::string predicate {
+						"backend_ip=" + simulator_sql_quote(backend_ip) +
+						" AND backend_port=" + std::to_string(backend_port)
+					};
+					char *control_error=nullptr;
+					int control_cols=0;
+					int control_affected_rows=0;
+					SQLite3_result *control_result=nullptr;
+					const std::string control_query {
+						"SELECT replica_set_id,replica_table_present,error_code,error_msg "
+						"FROM AWS_AURORA_REPLICA_CONTROL WHERE " + predicate
+					};
+					sqlite_sess->sessdb->execute_statement(
+						control_query.c_str(), &control_error, &control_cols,
+						&control_affected_rows, &control_result);
 
-					if (strcasestr(query_no_space, TEST_AURORA_MONITOR_BASE_QUERY)) {
-						string s_whg { query_no_space + (sizeof(TEST_AURORA_MONITOR_BASE_QUERY) - 1) };
-						uint32_t whg = atoi(s_whg.c_str());
+					std::string replica_set_id {};
+					bool replica_table_present=false;
+					unsigned int configured_error=0;
+					std::string configured_error_msg {};
+					if (control_error == nullptr && control_result &&
+						control_result->rows_count == 1) {
+						SQLite3_row *row=control_result->rows.front();
+						replica_set_id=row->fields[0] ? row->fields[0] : "";
+						replica_table_present=atoi(row->fields[1]) != 0;
+						configured_error=static_cast<unsigned int>(atoi(row->fields[2]));
+						configured_error_msg=row->fields[3] ? row->fields[3] : "";
+					}
+					delete control_result;
 
-						GloSQLite3Server->populate_aws_aurora_table(sess, whg);
-						vector<aurora_hg_info_t> hgs_info { get_hgs_info(GloAdmin->admindb) };
+					const std::string log_query {
+						"INSERT INTO AWS_AURORA_REPLICA_PROBE_LOG"
+						"(backend_ip,backend_port,probe_kind,replica_set_id,encrypted) VALUES (" +
+						simulator_sql_quote(backend_ip) + "," +
+						std::to_string(backend_port) + "," +
+						simulator_sql_quote(
+							aws_aurora_replica_query ? "ordinary" : "bgd_membership") + "," +
+						(replica_set_id.empty() ? "NULL" : simulator_sql_quote(replica_set_id)) +
+						"," + (sess->client_myds->encrypted ? "1" : "0") + ")"
+					};
 
-						const auto match_writer = [&whg](const aurora_hg_info_t& hg_info) {
-							return std::get<AURORA_HG_INFO::WRITER_HG>(hg_info) == whg;
-						};
-						const auto hg_info_it = std::find_if(hgs_info.begin(), hgs_info.end(), match_writer);
-						string select_query {
-							"SELECT SERVER_ID,SESSION_ID,LAST_UPDATE_TIMESTAMP,REPLICA_LAG_IN_MILLISECONDS,CPU"
-								" FROM REPLICA_HOST_STATUS "
-						};
-
-						if (hg_info_it == hgs_info.end()) {
-							select_query += " LIMIT 0";
+					if (control_error != nullptr) {
+						GloSQLite3Server->send_MySQL_ERR(
+							&sess->client_myds->myprot, 1105, control_error);
+						free(control_error);
+						run_query=false;
+					} else if (!sqlite_sess->sessdb->execute(log_query.c_str())) {
+						GloSQLite3Server->send_MySQL_ERR(
+							&sess->client_myds->myprot, 1105,
+							"AWS Aurora simulator failed to record the replica probe");
+						run_query=false;
+					} else if (!replica_table_present) {
+						GloSQLite3Server->send_MySQL_ERR(
+							&sess->client_myds->myprot, 1146,
+							"Table 'information_schema.REPLICA_HOST_STATUS' doesn't exist");
+						run_query=false;
+					} else if (configured_error != 0) {
+						GloSQLite3Server->send_MySQL_ERR(
+							&sess->client_myds->myprot,
+							static_cast<uint16_t>(configured_error),
+							configured_error_msg.c_str());
+						run_query=false;
+					} else {
+						const std::string set_literal { simulator_sql_quote(replica_set_id) };
+						std::string select_query {};
+						if (aws_aurora_replica_query) {
+							select_query =
+								"SELECT SERVER_ID,"
+								"CASE WHEN SESSION_ID='MASTER_SESSION_ID' AND SERVER_ID<>("
+									"SELECT SERVER_ID FROM REPLICA_HOST_STATUS WHERE REPLICA_SET_ID=" +
+									set_literal + " AND SESSION_ID='MASTER_SESSION_ID' "
+									"ORDER BY LAST_UPDATE_TIMESTAMP DESC LIMIT 1) "
+								"THEN 'probably_former_MASTER_SESSION_ID' ELSE SESSION_ID END AS SESSION_ID,"
+								"LAST_UPDATE_TIMESTAMP,"
+								"CASE WHEN SESSION_ID='MASTER_SESSION_ID' THEN 0 "
+									"ELSE REPLICA_LAG_IN_MILLISECONDS END AS REPLICA_LAG_IN_MILLISECONDS,"
+								"CPU FROM REPLICA_HOST_STATUS WHERE REPLICA_SET_ID=" + set_literal +
+								" AND ((REPLICA_LAG_IN_MILLISECONDS>=0 AND "
+									"REPLICA_LAG_IN_MILLISECONDS<=600000) OR "
+									"SESSION_ID='MASTER_SESSION_ID')"
+								" AND LAST_UPDATE_TIMESTAMP>datetime('now','-180 seconds')"
+								" ORDER BY SERVER_ID";
 						} else {
-							const string& domain_name { std::get<AURORA_HG_INFO::DOMAIN_NAME>(*hg_info_it) };
-							select_query += " WHERE DOMAIN_NAME='" + domain_name + "' ORDER BY SERVER_ID";
+							select_query =
+								"SELECT SERVER_ID,SESSION_ID,LAST_UPDATE_TIMESTAMP,IS_CURRENT "
+								"FROM REPLICA_HOST_STATUS WHERE REPLICA_SET_ID=" + set_literal +
+								" ORDER BY SERVER_ID";
 						}
 
-						free(query);
-						query = static_cast<char*>(malloc(select_query.length() + 1));
-						memcpy(query, select_query.c_str(), select_query.length());
-						query[select_query.length()] = '\0';
+						l_free(query_length,query);
+						query=l_strdup(select_query.c_str());
+						query_length=select_query.length()+1;
 					}
 				}
+			}
 #endif // TEST_AURORA
 #ifdef TEST_GALERA
 			if (strstr(query_no_space,(char *)"HOST_STATUS_GALERA")) {
@@ -1096,19 +1188,8 @@ __run_query:
 			}
 		}
 		sqlite_sess->sessdb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
+#if defined(TEST_GALERA) || defined(TEST_GROUPREP)
 		if (strncasecmp("SELECT",query_no_space,6)==0) {
-#ifdef TEST_AURORA
-			if (strstr(query_no_space,(char *)"REPLICA_HOST_STATUS")) {
-				pthread_mutex_unlock(&GloSQLite3Server->aurora_mutex);
-#ifdef TEST_AURORA_RANDOM
-				if (rand() % 100 == 0) {
-					// randomly add some latency on 1% of the traffic
-					sleep(2);
-				}
-#endif
-			}
-#endif // TEST_AURORA
 #ifdef TEST_GALERA
 			if (strstr(query_no_space,(char *)"HOST_STATUS_GALERA")) {
 				pthread_mutex_unlock(&GloSQLite3Server->galera_mutex);
@@ -1141,7 +1222,7 @@ __run_query:
 				}
 			}
 		}
-#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP
+#endif // TEST_GALERA || TEST_GROUPREP
 		sqlite3 *db = sqlite_sess->sessdb->get_db();
 		bool in_trans = false;
 		if ((*proxy_sqlite3_get_autocommit)(db)==0) {
@@ -1484,14 +1565,8 @@ SQLite3_Server::~SQLite3_Server() {
 void SQLite3_Server::init_aurora_ifaces_string(std::string& s) {
 	if(!s.empty())
 		s += ";";
-	pthread_mutex_init(&aurora_mutex,NULL);
-	unsigned int nas = time(NULL);
-	nas = nas % 3; // range
-	nas += 4; // min
-	max_num_aurora_servers = 10; // hypothetical maximum number of nodes
+	constexpr unsigned int max_num_aurora_servers = 10;
 	for (unsigned int j=1; j<4; j++) {
-		cur_aurora_writer[j-1] = 0;
-		num_aurora_servers[j-1] = nas;
 		for (unsigned int i=11; i<max_num_aurora_servers+11 ; i++) {
 			s += "127.0." + std::to_string(j) + "." + std::to_string(i) + ":3306";
 			if ( j!=3 || (j==3 && i<max_num_aurora_servers+11-1) ) {
@@ -1512,7 +1587,6 @@ void SQLite3_Server::init_galera_ifaces_string(std::string& s) {
 	ngs += 5; // min
 	max_num_galera_servers = 10; // hypothetical maximum number of nodes
 	for (unsigned int j=1; j<4; j++) {
-		//cur_aurora_writer[j-1] = 0;
 		num_galera_servers[j-1] = ngs;
 		for (unsigned int i=11; i<max_num_galera_servers+11 ; i++) {
 			s += "127.1." + std::to_string(j) + "." + std::to_string(i) + ":3306";
@@ -1656,232 +1730,6 @@ void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 	}
 #endif // TEST_GALERA
 
-#ifdef TEST_AURORA
-
-float get_rand_cpu() {
-	int cpu_i = rand() % 10000;
-	float cpu = static_cast<float>(cpu_i) / 100;
-
-	return cpu;
-}
-
-string get_curtime_str() {
-	time_t __timer;
-	char lut[30];
-	struct tm __tm_info;
-	time(&__timer);
-	localtime_r(&__timer, &__tm_info);
-	strftime(lut, 25, "%Y-%m-%d %H:%M:%S", &__tm_info);
-	string s = string(lut);
-	return s;
-}
-
-void bind_query_params(
-	SQLite3DB* db,
-	sqlite3_stmt* stmt,
-	const string& server_id,
-	const string& domain,
-	const string& session_id,
-	float cpu,
-	const string& lut,
-	int32_t lag_ms
-) {
-	int rc = 0;
-
-	rc=(*proxy_sqlite3_bind_text)(stmt, 1, server_id.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-	rc=(*proxy_sqlite3_bind_text)(stmt, 2, domain.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-	rc=(*proxy_sqlite3_bind_text)(stmt, 3, session_id.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-	rc=(*proxy_sqlite3_bind_double)(stmt, 4, cpu); ASSERT_SQLITE_OK(rc, db);
-	rc=(*proxy_sqlite3_bind_text)(stmt, 5, lut.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-	rc=(*proxy_sqlite3_bind_double)(stmt, 6, lag_ms); ASSERT_SQLITE_OK(rc, db);
-	SAFE_SQLITE3_STEP2(stmt);
-	rc=(*proxy_sqlite3_clear_bindings)(stmt); ASSERT_SQLITE_OK(rc, db);
-	rc=(*proxy_sqlite3_reset)(stmt); ASSERT_SQLITE_OK(rc, db);
-}
-
-/**
- * @brief Extracts SERVER_ID from the supplied hostname using DOMAIN_NAME.
- * @param hostname The server hostname (SERVER_ID + DOMAIN_NAME)).
- * @param domain_name The server DOMAIN_NAME as in 'mysql_aws_aurora_hostgroups'
- * @return Either the SERVER_ID in the supplied hostname or empty if DOMAIN_NAME failed to match.
- */
-string get_server_id(const string& hostname, const string& domain_name) {
-	string::size_type pos = hostname.find(domain_name);
-
-	if (pos == string::npos) {
-		return {};
-	} else {
-		return hostname.substr(0, pos);
-	}
-}
-
-void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess, uint32_t whg) {
-	int rc = 0;
-	sqlite3_stmt* stmt = NULL;
-    const char query[] { "INSERT INTO REPLICA_HOST_STATUS VALUES (?1, ?2, ?3, ?4, ?5, ?6)" };
-
-	auto [stmt_rc, stmt_unique] = sessdb->prepare_v2(query);
-	rc = stmt_rc;
-	stmt = stmt_unique.get();
-	ASSERT_SQLITE_OK(rc, sessdb);
-
-#ifndef TEST_AURORA_RANDOM
-    SQLite3_result* host_status = NULL;
-
-	{
-		char* error = NULL;
-		int cols = 0;
-		int affected_rows = 0;
-
-		string query {
-			"SELECT SERVER_ID,DOMAIN_NAME,SESSION_ID,LAST_UPDATE_TIMESTAMP,REPLICA_LAG_IN_MILLISECONDS"
-				" FROM REPLICA_HOST_STATUS"
-		};
-		sessdb->execute_statement(query.c_str(), &error, &cols, &affected_rows, &host_status);
-	}
-
-	// If empty, we fill the map with sensible defaults for performing manual testing.
-	if (host_status->rows.empty()) {
-		vector<aurora_hg_info_t> hgs_info { get_hgs_info(GloAdmin->admindb) };
-		SQLite3_result* resultset = nullptr;
-
-		{
-			char* error = nullptr;
-			int cols = 0;
-			int affected_rows = 0;
-
-			GloAdmin->admindb->execute_statement(
-				"SELECT hostname, hostgroup_id FROM mysql_servers WHERE hostgroup_id BETWEEN 1270 AND 1300"
-					" GROUP BY HOSTNAME",
-				&error, &cols, &affected_rows, &resultset
-			);
-		}
-
-		sessdb->execute("DELETE FROM REPLICA_HOST_STATUS");
-		vector<string> proc_srvs {};
-
-		for (const aurora_hg_info_t& hg_info : hgs_info) {
-			const auto match_writer = [&hg_info](const SQLite3_row* row) {
-				return atoi(row->fields[1]) == std::get<AURORA_HG_INFO::WRITER_HG>(hg_info);
-			};
-			const auto mysrv_it = std::find_if(resultset->rows.begin(), resultset->rows.end(), match_writer);
-			bool writer_set = false;
-
-			for (const SQLite3_row* r : resultset->rows) {
-				const string srv_hostname { r->fields[0] };
-				const uint32_t srv_hg_id = atoi(r->fields[1]);
-				const string& aurora_domain { std::get<AURORA_HG_INFO::DOMAIN_NAME>(hg_info) };
-
-				if (
-					srv_hostname.find(aurora_domain) == string::npos ||
-					std::find(proc_srvs.begin(), proc_srvs.end(), srv_hostname) != proc_srvs.end()
-				) {
-					continue;
-				}
-
-				const string server_id {
-					get_server_id(srv_hostname, std::get<AURORA_HG_INFO::DOMAIN_NAME>(hg_info))
-				};
-
-				string session_id {};
-
-				if (
-					(mysrv_it == resultset->rows.end() && writer_set == false) ||
-					(srv_hg_id == std::get<AURORA_HG_INFO::WRITER_HG>(hg_info) && writer_set == false)
-				) {
-					session_id = "MASTER_SESSION_ID";
-					writer_set = true;
-				} else {
-					session_id = "TESTID-" + server_id + aurora_domain + "-R";
-				}
-
-				const float cpu = get_rand_cpu();
-				const string lut { get_curtime_str() };
-				const int lag_ms = 0;
-
-				bind_query_params(sessdb, stmt, server_id, aurora_domain, session_id, cpu, lut, lag_ms);
-				proc_srvs.push_back(srv_hostname);
-			}
-		}
-
-			delete resultset;
-		} else {
-		// We just re-generate deterministic 'SESSION_IDS', preserving 'MASTER_SESSION_ID' values:
-		// 'SESSION_IDS' are preserved, 'MASTER_SESSION_ID' or others.
-		for (SQLite3_row* row : host_status->rows) {
-			const char* server_id = row->fields[0];
-			const char* domain_name = row->fields[1];
-
-			const char update_query_t[] {
-				"UPDATE REPLICA_HOST_STATUS SET SESSION_ID='%s',CPU=%f,LAST_UPDATE_TIMESTAMP='%s'"
-				" WHERE SERVER_ID='%s' AND DOMAIN_NAME='%s' AND SESSION_ID!='MASTER_SESSION_ID'"
-			};
-
-			const string session_id { "TESTID-" + string { server_id } + domain_name + "-R" };
-			const float cpu = get_rand_cpu();
-			const string lut { get_curtime_str() };
-
-			const string update_query {
-				cstr_format(update_query_t, session_id.c_str(), cpu, lut.c_str(), server_id, domain_name).str
-			};
-
-			sessdb->execute(update_query.c_str());
-		}
-	}
-
-	delete host_status;
-#else
-	sessdb->execute("DELETE FROM REPLICA_HOST_STATUS");
-
-	string lut { get_curtime_str() };
-	string myip = string(sess->client_myds->proxy_addr.addr);
-	string clu_id_s = myip.substr(6,1);
-	unsigned int cluster_id = atoi(clu_id_s.c_str());
-	cluster_id--;
-
-	if (rand() % 20000 == 0) {
-		// simulate a failover
-		cur_aurora_writer[cluster_id] = rand() % num_aurora_servers[cluster_id];
-		proxy_info("Simulating a failover for AWS Aurora cluster %d , HGs (%d:%d)\n", cluster_id, 1270 + cluster_id*2+1 , 1270 + cluster_id*2+2);
-	}
-	if (rand() % 1000 == 0) {
-		if (num_aurora_servers[cluster_id] < max_num_aurora_servers) {
-			num_aurora_servers[cluster_id]++;
-			proxy_info("Simulating the add of a new server for AWS Aurora Cluster %d , HGs (%d:%d). Now adding server num %d\n", cluster_id, 1270 + cluster_id*2+1 , 1270 + cluster_id*2+2, num_aurora_servers[cluster_id]);
-		}
-	}
-	if (rand() % 1000 == 0) {
-		if (num_aurora_servers[cluster_id] > 1) {
-			if (cur_aurora_writer[cluster_id] != (num_aurora_servers[cluster_id] - 1) ) {
-				num_aurora_servers[cluster_id]--;
-				proxy_info("Simulating the deletion of a server from AWS Aurora Cluster %d , HGs (%d:%d). Removing server num %d\n", cluster_id, 1270 + cluster_id*2+1 , 1270 + cluster_id*2+2, num_aurora_servers[cluster_id]+1);
-			}
-		}
-	}
-	for (unsigned int i=0; i<num_aurora_servers[cluster_id]; i++) {
-		// we simulate that clusters 1 and 3 have the same servers
-		string serverid = "host." + std::to_string( ( cluster_id == 2 ? 0 : cluster_id )  +1) + "." + std::to_string(i+11);
-		string sessionid= "";
-		string aurora_domain {
-			(cluster_id == 0 || cluster_id == 3) ? ".aws-test.com" : ".cluster2.aws.test"
-		};
-		float lag_ms = 0;
-		if (i==cur_aurora_writer[cluster_id]) {
-			sessionid = "MASTER_SESSION_ID";
-		} else {
-			sessionid = "b80ef4b4-" + serverid + "-aa01";
-			int lag_ms_i = rand();
-			lag_ms_i %= 2000;
-			lag_ms = lag_ms_i;
-			lag_ms /= 100;
-			lag_ms += 10;
-		}
-		float cpu = get_rand_cpu();
-		bind_query_params(sessdb, stmt, serverid, aurora_domain, sessionid, cpu, lut, lag_ms);
-	}
-	#endif // TEST_AURORA_RANDOM
-}
-#endif // TEST_AURORA
 
 #ifdef TEST_GROUPREP
 /**
@@ -2013,9 +1861,31 @@ bool SQLite3_Server::init() {
 	insert_into_tables_defs(tables_defs_aurora,
 		(const char *)"REPLICA_HOST_STATUS",
 		"CREATE TABLE REPLICA_HOST_STATUS ("
-			" SERVER_ID VARCHAR NOT NULL , DOMAIN_NAME VARCHAR NOT NULL , SESSION_ID VARCHAR NOT NULL ,"
-			" CPU REAL NOT NULL , LAST_UPDATE_TIMESTAMP VARCHAR NOT NULL , REPLICA_LAG_IN_MILLISECONDS REAL NOT NULL ,"
-			" PRIMARY KEY (SERVER_ID, DOMAIN_NAME)"
+			" REPLICA_SET_ID TEXT NOT NULL, SERVER_ID VARCHAR NOT NULL, SESSION_ID VARCHAR NOT NULL,"
+			" CPU REAL NOT NULL, LAST_UPDATE_TIMESTAMP VARCHAR NOT NULL,"
+			" REPLICA_LAG_IN_MILLISECONDS REAL NOT NULL,"
+			" IS_CURRENT INTEGER NOT NULL DEFAULT 1 CHECK (IS_CURRENT IN (0,1)),"
+			" PRIMARY KEY (REPLICA_SET_ID, SERVER_ID)"
+		")"
+	);
+	insert_into_tables_defs(tables_defs_aurora,
+		(const char *)"AWS_AURORA_REPLICA_CONTROL",
+		"CREATE TABLE AWS_AURORA_REPLICA_CONTROL ("
+			" backend_ip TEXT NOT NULL, backend_port INTEGER NOT NULL, replica_set_id TEXT NOT NULL,"
+			" replica_table_present INTEGER NOT NULL DEFAULT 0"
+				" CHECK (replica_table_present IN (0,1)),"
+			" error_code INTEGER NOT NULL DEFAULT 0, error_msg TEXT NOT NULL DEFAULT '',"
+			" PRIMARY KEY (backend_ip, backend_port)"
+		")"
+	);
+	insert_into_tables_defs(tables_defs_aurora,
+		(const char *)"AWS_AURORA_REPLICA_PROBE_LOG",
+		"CREATE TABLE AWS_AURORA_REPLICA_PROBE_LOG ("
+			" sequence_id INTEGER PRIMARY KEY AUTOINCREMENT, backend_ip TEXT NOT NULL,"
+			" backend_port INTEGER NOT NULL, probe_kind TEXT NOT NULL"
+				" CHECK (probe_kind IN ('ordinary','bgd_membership')),"
+			" replica_set_id TEXT NULL,"
+			" encrypted INTEGER NOT NULL CHECK (encrypted IN (0,1))"
 		")"
 	);
 	check_and_build_standard_tables(sessdb, tables_defs_aurora);
