@@ -14,6 +14,7 @@ using json = nlohmann::json;
 #include "MySQL_Data_Stream.h"
 #include "MySQL_Query_Processor.h"
 #include "MySQL_Variables.h"
+#include "mysqld_error.h"
 #include <atomic>
 #include <mutex>
 #include <set>
@@ -696,6 +697,11 @@ bool MySQL_Connection::requires_CHANGE_USER(const MySQL_Connection *client_conn)
 		// the server connection has more variables set than the client
 		return true;
 	}
+	if (user_variables.has_names_absent_from(client_conn->user_variables)) {
+		// The backend has a user variable that the frontend does not have.
+		// User variables cannot be unset, so reset the backend with CHANGE_USER.
+		return true;
+	}
 	std::vector<uint32_t>::const_iterator it_c = client_conn->dynamic_variables_idx.begin(); // client connection iterator
 	std::vector<uint32_t>::const_iterator it_s = dynamic_variables_idx.begin();              // server connection iterator
 	for ( ; it_s != dynamic_variables_idx.end() ; it_s++) {
@@ -755,6 +761,12 @@ unsigned int MySQL_Connection::number_of_matching_session_variables(const MySQL_
 				}
 			}
 		}
+	}
+	unsigned int user_variables_not_matching = 0;
+	ret += user_variables.count_matches(client_conn->user_variables, user_variables_not_matching);
+	not_matching += user_variables_not_matching;
+	if (user_variables.size() > client_conn->user_variables.size()) {
+		not_matching += user_variables.size() - client_conn->user_variables.size();
 	}
 	return ret;
 }
@@ -2990,7 +3002,45 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags_SetBackslashEscapes() {
 	}
 }
 
-void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
+bool mysql_user_variable_tracking_can_stage(
+	int mode, int set_parser_algorithm, int query_processor_parser,
+	bool plain_text_com_query, bool connection_bound_fallback) {
+	return mode == 1 && (set_parser_algorithm == 3 || query_processor_parser == 1) &&
+		plain_text_com_query && !connection_bound_fallback;
+}
+
+bool mysql_user_variable_set_uses_qpo_epilogue(
+	UserVariableSetStatus analysis_status,
+	MySQL_User_Variable_Apply_Result preflight_result) {
+	return analysis_status == UserVariableSetStatus::SUPPORTED &&
+		preflight_result == MySQL_User_Variable_Apply_Result::OK;
+}
+
+bool mysql_user_variable_commit_post_ok(
+	MySQL_User_Variable_State& frontend,
+	MySQL_User_Variable_State& backend,
+	const std::vector<UserVariableAssignment>& assignments) {
+	MySQL_User_Variable_State staged_frontend;
+	MySQL_User_Variable_State staged_backend;
+	const MySQL_User_Variable_Apply_Result frontend_result =
+		frontend.stage(assignments, staged_frontend);
+	const MySQL_User_Variable_Apply_Result backend_result =
+		backend.stage(assignments, staged_backend);
+	if (frontend_result != MySQL_User_Variable_Apply_Result::OK ||
+		backend_result != MySQL_User_Variable_Apply_Result::OK) {
+		return false;
+	}
+	frontend = std::move(staged_frontend);
+	backend = std::move(staged_backend);
+	return true;
+}
+
+unsigned int mysql_user_variable_replay_error_code(unsigned int backend_error_code) {
+	return backend_error_code == 0 ? ER_UNKNOWN_ERROR : backend_error_code;
+}
+
+void MySQL_Connection::ProcessQueryAndSetStatusFlags(
+	char *query_digest_text, bool user_variable_usage_is_safe) {
 	if (query_digest_text==NULL) return;
 	// unknown what to do with multiplex
 	int mul=-1;
@@ -3011,7 +3061,9 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 
 	ProcessQueryAndSetStatusFlags_Warnings(query_digest_text);
 
-	ProcessQueryAndSetStatusFlags_UserVariables(query_digest_text, mul);
+	if (!user_variable_usage_is_safe) {
+		ProcessQueryAndSetStatusFlags_UserVariables(query_digest_text, mul);
+	}
 
 	if (get_status(STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT)==false) { // we search if prepared was already executed
 		if (!strncasecmp(query_digest_text,"PREPARE ", strlen("PREPARE "))) {
@@ -3094,8 +3146,13 @@ void MySQL_Connection::close_mysql() {
 }
 
 
+const char* mysql_simple_command_log_text(const char* stmt, bool redact_statement) {
+	return redact_statement ? "<redacted>" : stmt;
+}
+
 // this function is identical to async_query() , with the only exception that MyRS should never be set
-int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigned long length) {
+int MySQL_Connection::async_send_simple_command(
+	short event, char *stmt, unsigned long length, bool redact_statement) {
 	PROXY_TRACE();
 	assert(mysql);
 	assert(ret_mysql);
@@ -3130,7 +3187,11 @@ int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigne
 		// shouldn't retrieve any resultset.
 		// A common issue for triggering this error is to have configure mysql-init_connect to
 		// run a statement that returns a resultset.
-		proxy_error2(10003, "PMC-10003: Retrieved a resultset while running a simple command. This is an error!! Simple command: %s\n", stmt);
+		proxy_error2(
+			10003,
+			"PMC-10003: Retrieved a resultset while running a simple command. This is an error!! Simple command: %s\n",
+			mysql_simple_command_log_text(stmt, redact_statement)
+		);
 		return -2;
 	}
 	if (async_state_machine==ASYNC_QUERY_END) {
@@ -3179,6 +3240,7 @@ void MySQL_Connection::reset() {
 		}
 	}
 	dynamic_variables_idx.clear();
+	user_variables.clear();
 
 	if (options.init_connect) {
 		free(options.init_connect);
@@ -3349,6 +3411,13 @@ void MySQL_Connection::get_backend_conn_info_json(json& j) {
 	j["last_set_autocommit"] = options.last_set_autocommit;
 	j["no_backslash_escapes"] = options.no_backslash_escapes;
 	j["warning_count"] = warning_count;
+	json& user_variables_json = j["user_variables"];
+	user_variables_json["count"] = user_variables.size();
+	user_variables_json["stored_bytes"] = user_variables.stored_bytes();
+	const std::string user_variables_fingerprint = user_variables.diagnostic_fingerprint();
+	if (!user_variables_fingerprint.empty()) {
+		user_variables_json["fingerprint"] = user_variables_fingerprint;
+	}
 	json& js = j["status"];
 	js["get_lock"] = get_status(STATUS_MYSQL_CONNECTION_GET_LOCK);
 	js["lock_tables"] = get_status(STATUS_MYSQL_CONNECTION_LOCK_TABLES);
