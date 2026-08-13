@@ -3,10 +3,23 @@
 
 .DEFAULT: all
 .PHONY: all
-all: tests tests_with_deps unit_tests
+all: tests tests_with_deps unit_tests pgsql_user_sync_assets
 
 .PHONY: debug
-debug: tests tests_with_deps unit_tests
+debug: tests tests_with_deps unit_tests pgsql_user_sync_assets
+
+# CI test workflows restore only the build outputs below src/ and test/.
+# Stage the canonical user-sync sample below test/ so its TAP tests exercise
+# the same files that are shipped to operators without duplicating them.
+.PHONY: pgsql_user_sync_assets
+pgsql_user_sync_assets:
+	mkdir -p pgsql_user_sync/tests
+	cp ../../tools/pgsql_user_sync/proxysql_pgsql_user_sync.py pgsql_user_sync/
+	cp ../../tools/pgsql_user_sync/proxysql_pgsql_user_sync.ini.example pgsql_user_sync/
+	cp ../../tools/pgsql_user_sync/create_source_function.sql pgsql_user_sync/
+	cp ../../tools/pgsql_user_sync/requirements.txt pgsql_user_sync/
+	cp ../../tools/pgsql_user_sync/README.md pgsql_user_sync/
+	cp ../../tools/pgsql_user_sync/tests/test_pgsql_user_sync.py pgsql_user_sync/tests/
 
 .PHONY: test_deps
 test_deps:
@@ -17,7 +30,7 @@ tap: test_deps
 	cd tap && CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: tests
-tests: tap test_deps
+tests: pgsql_user_sync_assets tap test_deps
 	cd tests && CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
 
 .PHONY: tests_no_infra
@@ -62,6 +75,7 @@ clean:
 	cd tests && ${MAKE} -s clean
 	cd tests_with_deps && ${MAKE} -s clean
 	cd tests/unit && ${MAKE} -s clean
+	rm -rf pgsql_user_sync
 
 .PHONY: cleanall
 .SILENT: cleanall
