@@ -14,6 +14,8 @@ source archive, including its required CRT sources, is stored through Git LFS
 at `deps/aws-sdk-cpp/aws-sdk-cpp-1.11.869-with-crt.tar.xz`.  Fetch LFS objects
 before building; the dependency target unpacks this archive under `deps/` and
 builds only the static SDK libraries required by the plugin.
+The update and review checklist for this vendored archive is documented in
+`deps/aws-sdk-cpp/README.md`; it is not run on every build.
 
 ```console
 git lfs pull

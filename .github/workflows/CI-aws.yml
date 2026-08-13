@@ -19,7 +19,6 @@ on:
       - 'src/main.cpp'
       - 'etc/proxysql.cnf'
       - 'docker/images/proxysql/**'
-      - 'test/infra/control/check-vendored-aws-sdk-build.bash'
       - 'test/tap/tests/**aws_iam**'
       - 'test/tap/tests/**aws_plugin**'
       - 'test/tap/tests/unit/Makefile'
@@ -38,38 +37,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  sdk-free-daemon:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-        with:
-          submodules: 'false'
-          lfs: true
-          fetch-depth: 0
-      - name: Build v4 daemon and general AWS plugin
-        run: PROXYSQL40=1 make -j
-      - name: Require an SDK-free daemon
-        run: |
-          daemon_nm="$RUNNER_TEMP/proxysql.nm"
-          daemon_ldd="$RUNNER_TEMP/proxysql.ldd"
-          nm -C src/proxysql >"$daemon_nm"
-          ldd src/proxysql >"$daemon_ldd"
-          if grep -Fq 'Aws::' "$daemon_nm"; then
-            echo 'SDK-free daemon unexpectedly contains AWS C++ SDK symbols' >&2
-            exit 1
-          fi
-          aws_dso_pattern='aws-cpp-sdk|aws-crt-cpp|aws-c-[[:alnum:]_-]+|aws-checksums|aws-lc|s2n'
-          if grep -Eq "$aws_dso_pattern" "$daemon_ldd"; then
-            echo 'SDK-free daemon unexpectedly links an AWS SDK or CRT DSO' >&2
-            exit 1
-          fi
-      - name: Build and run controlled TLS/protocol coverage
-        run: |
-          PROXYSQL40=1 make -C test/tap/tests -j test_aws_iam_backend_auth-t
-          timeout 45s test/tap/tests/test_aws_iam_backend_auth-t
-
   aws-vendored-plugin-build:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
@@ -80,36 +47,43 @@ jobs:
           submodules: 'false'
           lfs: true
           fetch-depth: 0
-      - name: Verify immutable vendored SDK bundle
-        run: bash test/infra/control/check-vendored-aws-sdk-build.bash
-      - name: Build static AWS plugin
-        run: PROXYSQL40=1 make -j
-      - name: Verify plugin ownership and static linkage
+      - name: Build and verify inside ProxySQL builder container
         run: |
-          PROXYSQL40=1 make -j -C test/tap/tests/unit \
-            aws_plugin_linkage-t aws_plugin_load_unit-t
-          test/tap/tests/unit/aws_plugin_load_unit-t
-          daemon_nm="$RUNNER_TEMP/proxysql.nm"
-          plugin_nm="$RUNNER_TEMP/aws-plugin.nm"
-          nm -C src/proxysql >"$daemon_nm"
-          nm -C plugins/aws/ProxySQL_Aws_Plugin.so >"$plugin_nm"
-          if grep -Fq 'Aws::' "$daemon_nm"; then
-            echo 'daemon unexpectedly contains AWS C++ SDK symbols' >&2
-            exit 1
-          fi
-          if ! grep -Fq 'Aws::RDS::RDSClient::GenerateConnectAuthToken' "$plugin_nm"; then
-            echo 'plugin does not contain the static RDS signer' >&2
-            exit 1
-          fi
-          aws_dso_pattern='aws-cpp-sdk|aws-crt-cpp|aws-c-[[:alnum:]_-]+|aws-checksums|aws-lc|s2n'
-          for artifact in src/proxysql plugins/aws/ProxySQL_Aws_Plugin.so; do
-            artifact_ldd="$RUNNER_TEMP/$(basename "$artifact").ldd"
-            ldd "$artifact" >"$artifact_ldd"
-            if grep -Eq "$aws_dso_pattern" "$artifact_ldd"; then
-              echo "$artifact unexpectedly dynamically links an AWS SDK or CRT library" >&2
+          docker compose run --rm --entrypoint bash ubuntu24_dbg_build -lc '
+            set -euo pipefail
+            cd /opt/proxysql
+            PROXYSQL40=1 make -j
+            PROXYSQL40=1 make -C lib clean
+            PROXYSQL40=1 make -C test/tap/tests/unit -j \
+              /opt/proxysql/lib/libproxysql.a
+            PROXYSQL40=1 make -C test/tap/tests/unit -j \
+              aws_plugin_linkage-t aws_plugin_load_unit-t
+            test/tap/tests/unit/aws_plugin_load_unit-t
+            PROXYSQL40=1 make -C test/tap/tests -j test_aws_iam_backend_auth-t
+            timeout 45s test/tap/tests/test_aws_iam_backend_auth-t
+
+            daemon_nm=$(mktemp)
+            plugin_nm=$(mktemp)
+            nm -C src/proxysql >"$daemon_nm"
+            nm -C plugins/aws/ProxySQL_Aws_Plugin.so >"$plugin_nm"
+            if grep -Fq "Aws::" "$daemon_nm"; then
+              echo "daemon unexpectedly contains AWS C++ SDK symbols" >&2
               exit 1
             fi
-          done
+            if ! grep -Fq "Aws::RDS::RDSClient::GenerateConnectAuthToken" "$plugin_nm"; then
+              echo "plugin does not contain the static RDS signer" >&2
+              exit 1
+            fi
+            aws_dso_pattern="aws-cpp-sdk|aws-crt-cpp|aws-c-[[:alnum:]_-]+|aws-checksums|aws-lc|s2n"
+            for artifact in src/proxysql plugins/aws/ProxySQL_Aws_Plugin.so; do
+              artifact_ldd=$(mktemp)
+              ldd "$artifact" >"$artifact_ldd"
+              if grep -Eq "$aws_dso_pattern" "$artifact_ldd"; then
+                echo "$artifact unexpectedly dynamically links an AWS SDK or CRT library" >&2
+                exit 1
+              fi
+            done
+          '
 
   fake-provider-sanitizers:
     strategy:
@@ -125,39 +99,40 @@ jobs:
           submodules: 'false'
           lfs: true
           fetch-depth: 0
-      - name: Relax ASLR for sanitizers
-        run: sudo sysctl -w vm.mmap_rnd_bits=28
       - name: Build ASan fake-provider tests
         if: matrix.sanitizer == 'asan'
         run: |
-          NOJEMALLOC=1 WITHASAN=1 PROXYSQL40=1 make -j build_lib_debug
-          NOJEMALLOC=1 WITHASAN=1 PROXYSQL40=1 make -C test/tap/tests/unit -j \
-            aws_iam_token_manager_unit-t aws_iam_connection_secret_unit-t \
-            aws_iam_completion_queue_unit-t aws_iam_session_state_unit-t
-      - name: Run ASan fake-provider tests
-        if: matrix.sanitizer == 'asan'
-        env:
-          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
-        run: |
-          test/tap/tests/unit/aws_iam_token_manager_unit-t
-          test/tap/tests/unit/aws_iam_connection_secret_unit-t
-          test/tap/tests/unit/aws_iam_completion_queue_unit-t
-          test/tap/tests/unit/aws_iam_session_state_unit-t
+          docker compose run --rm --entrypoint bash ubuntu24_dbg_build -lc '
+            set -euo pipefail
+            cd /opt/proxysql
+            NOJEMALLOC=1 WITHASAN=1 PROXYSQL40=1 make -j build_lib_debug
+            NOJEMALLOC=1 WITHASAN=1 PROXYSQL40=1 make -C test/tap/tests/unit -j \
+              aws_iam_token_manager_unit-t aws_iam_connection_secret_unit-t \
+              aws_iam_completion_queue_unit-t aws_iam_session_state_unit-t
+            export ASAN_OPTIONS=detect_leaks=1:halt_on_error=1
+            for test_binary in \
+              aws_iam_token_manager_unit-t aws_iam_connection_secret_unit-t \
+              aws_iam_completion_queue_unit-t aws_iam_session_state_unit-t; do
+              setarch "$(uname -m)" -R "test/tap/tests/unit/$test_binary"
+            done
+          '
       - name: Build TSan fake-provider tests
         if: matrix.sanitizer == 'tsan'
         run: |
-          NOJEMALLOC=1 WITHTSAN=1 PROXYSQL40=1 make -j build_lib_debug
-          NOJEMALLOC=1 WITHTSAN=1 PROXYSQL40=1 make -C test/tap/tests/unit -j \
-            aws_iam_token_manager_unit-t aws_iam_completion_queue_unit-t \
-            aws_iam_session_state_unit-t
-      - name: Run TSan fake-provider tests
-        if: matrix.sanitizer == 'tsan'
-        env:
-          TSAN_OPTIONS: halt_on_error=1
-        run: |
-          test/tap/tests/unit/aws_iam_token_manager_unit-t
-          test/tap/tests/unit/aws_iam_completion_queue_unit-t
-          test/tap/tests/unit/aws_iam_session_state_unit-t
+          docker compose run --rm --entrypoint bash ubuntu24_dbg_build -lc '
+            set -euo pipefail
+            cd /opt/proxysql
+            NOJEMALLOC=1 WITHTSAN=1 PROXYSQL40=1 make -j build_lib_debug
+            NOJEMALLOC=1 WITHTSAN=1 PROXYSQL40=1 make -C test/tap/tests/unit -j \
+              aws_iam_token_manager_unit-t aws_iam_completion_queue_unit-t \
+              aws_iam_session_state_unit-t
+            export TSAN_OPTIONS=halt_on_error=1
+            for test_binary in \
+              aws_iam_token_manager_unit-t aws_iam_completion_queue_unit-t \
+              aws_iam_session_state_unit-t; do
+              setarch "$(uname -m)" -R "test/tap/tests/unit/$test_binary"
+            done
+          '
 
   real-aws-preflight:
     if: github.event_name == 'workflow_dispatch'

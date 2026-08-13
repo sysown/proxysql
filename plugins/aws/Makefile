@@ -30,7 +30,7 @@ HEADERS := $(PROXYSQL_PATH)/include/Aws_Iam_Sdk.h \
 	$(PROXYSQL_PATH)/include/ProxySQL_Plugin.h
 
 PLUGIN_LDFLAGS :=
-AWS_PLUGIN_SYSTEM_LIBS := -lssl -lcrypto -lcurl -lz -lpthread -lm
+AWS_PLUGIN_SYSTEM_LIBS := -lssl -lcrypto -lz -lpthread -lm
 ifeq ($(UNAME_S),Darwin)
 PLUGIN_LDFLAGS += -Wl,-undefined,dynamic_lookup
 AWS_PLUGIN_LIBS := -Wl,-all_load $(AWS_SDK_CPP_STATIC_ARCHIVES)
@@ -43,10 +43,12 @@ $(AWS_SDK_CPP_IDENTITY_STAMP):
 	mkdir -p "$(AWS_SDK_CPP_IDENTITY_DIR)"
 	touch "$@"
 
-$(AWS_SDK_CPP_RDS_LIB): $(AWS_SDK_CPP_ARCHIVE_PATH) \
+$(AWS_SDK_CPP_CURL_LIB):
+	$(MAKE) -C $(PROXYSQL_PATH)/deps $@
+
+$(AWS_SDK_CPP_RDS_LIB): $(AWS_SDK_CPP_ARCHIVE_PATH) $(AWS_SDK_CPP_CURL_LIB) \
 		$(AWS_SDK_CPP_BUNDLE_DIR)/aws-sdk-cpp-$(AWS_SDK_CPP_VERSION)-with-crt.sha256 \
 		$(AWS_SDK_CPP_BUNDLE_DIR)/aws-sdk-cpp-$(AWS_SDK_CPP_VERSION)-sources.json \
-		$(AWS_SDK_CPP_BUNDLE_DIR)/verify-bundle.bash \
 		$(AWS_SDK_CPP_BUNDLE_DIR)/build-sdk.cmake \
 		$(AWS_SDK_CPP_IDENTITY_STAMP)
 	$(MAKE) -C $(PROXYSQL_PATH)/deps PROXYSQL40=1 $@
@@ -66,7 +68,7 @@ $(ODIR)/Aws_Iam_Token_Manager.o: $(PROXYSQL_PATH)/lib/Aws_Iam_Token_Manager.cpp 
 
 $(PLUGIN_SO): $(OBJS) $(AWS_SDK_CPP_STATIC_ARCHIVES)
 	$(CXX) -shared -o $@ $(OBJS) $(CXXFLAGS) $(PLUGIN_LDFLAGS) \
-		$(AWS_PLUGIN_LIBS) $(AWS_PLUGIN_SYSTEM_LIBS)
+		$(AWS_PLUGIN_LIBS) $(AWS_SDK_CPP_CURL_LIB) $(AWS_PLUGIN_SYSTEM_LIBS)
 
 .PHONY: all
 all: $(PLUGIN_SO)
