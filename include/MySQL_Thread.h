@@ -688,6 +688,7 @@ class MySQL_Threads_Handler
 		bool query_cache_stores_empty_result;
 		bool kill_backend_connection_when_disconnect;
 		bool client_session_track_gtid;
+		bool update_gtid_from_ok;
 		bool enable_client_deprecate_eof;
 		bool enable_server_deprecate_eof;
 		bool enable_load_data_local_infile;

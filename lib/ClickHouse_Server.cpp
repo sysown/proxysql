@@ -981,7 +981,7 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
 			(pkt->size==(strlen("SELECT CONNECTION_ID()")+5) && strncasecmp((char *)"SELECT CONNECTION_ID()",(char *)pkt->ptr+5,pkt->size-5)==0)
 		) {
 			char buf[16];
-			sprintf(buf,"%u",sess->thread_session_id);
+			snprintf(buf, sizeof(buf), "%u", sess->thread_session_id);
 			//unsigned int nTrx=NumActiveTransactions();
 			unsigned int nTrx= 0;
 			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
@@ -1780,7 +1780,7 @@ char * ClickHouse_Server::get_variable(char *name) {
 	if (!strcasecmp(name,"hostname")) return s_strdup(variables.hostname);
 	if (!strcasecmp(name,"mysql_ifaces")) return s_strdup(variables.mysql_ifaces);
 	if (!strcasecmp(name,"port")) {
-		sprintf(intbuf,"%d",variables.port);
+		snprintf(intbuf, sizeof(intbuf), "%d", variables.port);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"read_only")) {

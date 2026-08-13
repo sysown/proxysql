@@ -16,6 +16,10 @@
 #define SPOOKYV2
 #endif
 
+#ifdef PROXYSQLED25519
+#include "MySQL_Ed25519.h"
+#endif
+
 namespace {
 
 #ifdef PROXYSQL31
@@ -162,6 +166,17 @@ creds_group_t& MySQL_Authentication::creds_for(enum cred_username_type usertype)
 }
 
 bool MySQL_Authentication::add(char * username, char * password, enum cred_username_type usertype, bool use_ssl, int default_hostgroup, char *default_schema, bool schema_locked, bool transaction_persistent, bool fast_forward, int max_connections, char* attributes, char *comment) {
+#ifdef PROXYSQLED25519
+	if (password && strncasecmp(password, ED25519_STORED_PREFIX, ED25519_STORED_PREFIX_LEN) == 0) {
+		unsigned char tmp_pk[ED25519_PUBKEY_LEN];
+		if (proxysql_ed25519_decode_pubkey(password, tmp_pk) == false) {
+			proxy_warning(
+				"mysql_users entry for '%s' has a malformed $ED$ ed25519 credential"
+				" (expected \"$ED$\" followed by exactly 43 base64 characters);"
+				" every authentication attempt for this user will fail\n", username);
+		}
+	}
+#endif
 	uint64_t hash1, hash2;
 	SpookyHash myhash;
 	myhash.Init(1,2);

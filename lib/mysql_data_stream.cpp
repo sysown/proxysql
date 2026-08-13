@@ -1943,6 +1943,11 @@ void MySQL_Data_Stream::get_client_myds_info_json(json& j) {
 		case AUTH_MYSQL_CACHING_SHA2_PASSWORD:
 			jc1["prot"]["auth_plugin"] = "caching_sha2_password";
 			break;
+#ifdef PROXYSQLED25519
+		case AUTH_MYSQL_ED25519:
+			jc1["prot"]["auth_plugin"] = "client_ed25519";
+			break;
+#endif
 		default:
 			break;
 	}

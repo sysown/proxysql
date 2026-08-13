@@ -1004,25 +1004,25 @@ class PS_global_stats {
 	char **get_row() {
 		char buf[128];
 		char **pta=(char **)malloc(sizeof(char *)*PS_GLOBAL_STATUS_FIELD_NUM);
-		sprintf(buf,"%lu",statement_id);
+		snprintf(buf, sizeof(buf), "%lu",statement_id);
 		pta[0]=strdup(buf);
 		assert(schemaname);
 		pta[1]=strdup(schemaname);
 		assert(username);
 		pta[2]=strdup(username);
 
-		sprintf(buf,"0x%016llX", (long long unsigned int)digest);
+		snprintf(buf, sizeof(buf), "0x%016llX", (long long unsigned int)digest);
 		pta[3]=strdup(buf);
 
 		assert(query);
 		pta[4]=strdup(query);
-		sprintf(buf,"%llu",ref_count_client);
+		snprintf(buf, sizeof(buf), "%llu",ref_count_client);
 		pta[5]=strdup(buf);
-		sprintf(buf,"%llu",ref_count_server);
+		snprintf(buf, sizeof(buf), "%llu",ref_count_server);
 		pta[6]=strdup(buf);
-		sprintf(buf,"%lu",num_columns);
+		snprintf(buf, sizeof(buf), "%lu",num_columns);
 		pta[7]=strdup(buf);
-		sprintf(buf,"%lu",num_params);
+		snprintf(buf, sizeof(buf), "%lu",num_params);
 		pta[8]=strdup(buf);
 
 		return pta;

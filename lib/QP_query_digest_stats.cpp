@@ -161,7 +161,7 @@ char **QP_query_digest_stats::get_row(umap_query_digest_text *digest_text_umap, 
 
 	assert(qdsp != NULL);
 	assert(qdsp->digest);
-	sprintf(qdsp->digest,"0x%016llX", (long long unsigned int)digest);
+	snprintf(qdsp->digest, sizeof(qdsp->digest), "0x%016llX", (long long unsigned int)digest);
 	pta[3]=qdsp->digest;
 
 	pta[4] = get_digest_text(digest_text_umap);
@@ -189,10 +189,9 @@ char **QP_query_digest_stats::get_row(umap_query_digest_text *digest_text_umap, 
 	//sprintf(qdsp->max_time,"%llu",max_time);
 	my_itoa(qdsp->max_time,max_time);
 	pta[10]=qdsp->max_time;
-	// we are reverting this back to the use of sprintf instead of my_itoa
-	// because with my_itoa we are losing the sign
-	// see issue #2285
-	sprintf(qdsp->hid,"%d",hid);
+	// Use formatted conversion instead of my_itoa because my_itoa loses the sign.
+	// See issue #2285.
+	snprintf(qdsp->hid, sizeof(qdsp->hid), "%d",hid);
 	//my_itoa(qdsp->hid,hid);
 	pta[11]=qdsp->hid;
 	//sprintf(qdsp->rows_affected,"%llu",rows_affected);
