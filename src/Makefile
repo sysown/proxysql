@@ -119,6 +119,7 @@ MYCXXFLAGS += $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) $(PSQL40) $(PSQL31) $(PSQLFFTO
 STATICMYLIBS := -Wl,-Bstatic \
 				-lconfig \
 				-lproxysql \
+				$(AWS_IAM_LIBS) \
 				-ldaemon \
 				-lconfig++ \
 				-lre2 \
@@ -167,10 +168,6 @@ endif
 ifeq ($(CENTOSVER),6)
 	MYLIBS += -lgcrypt
 endif
-ifeq ($(PROXYSQLAWSIAM),1)
-	MYLIBS += $(AWS_IAM_LDFLAGS) $(AWS_IAM_LIBS)
-endif
-
 SQLITE_VEC_OBJ := $(DEPS_PATH)/sqlite3/sqlite3/vec.o
 LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
 ifeq ($(UNAME_S),Darwin)
@@ -205,12 +202,12 @@ EXECUTABLE := proxysql
 _OBJ := main.o proxysql_global.o SQLite3_Server.o proxy_tls.o
 OBJ := $(patsubst %,$(ODIR)/%,$(_OBJ))
 
-$(OBJ): $(AWS_IAM_MODE_STAMP)
+$(OBJ): $(AWS_IAM_MODE_STAMP) $(AWS_IAM_STATIC_ARCHIVES)
 
 $(ODIR)/%.o: %.cpp
 	$(CXX) -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS) -Wall
 
-$(EXECUTABLE): $(ODIR) $(OBJ) $(LIBPROXYSQLAR)
+$(EXECUTABLE): $(ODIR) $(OBJ) $(LIBPROXYSQLAR) $(AWS_IAM_STATIC_ARCHIVES)
 ifeq ($(PROXYSQLCLICKHOUSE),1)
 	$(CXX) -o $@ $(OBJ) $(CLANGFIX) -Wl,--whole-archive $(PROXYSQL_LDIR)/libproxysql.a -Wl,--no-whole-archive $(filter-out $(PROXYSQL_LDIR)/libproxysql.a,$(LIBPROXYSQLAR)) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(LZ4_LDIR)/liblz4.a $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
 else ifeq ($(UNAME_S),Darwin)

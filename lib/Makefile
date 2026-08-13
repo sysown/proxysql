@@ -154,7 +154,7 @@ endif
 OBJ_CXX := $(patsubst %,$(ODIR)/%,$(_OBJ_CXX))
 HEADERS := ../include/*.h ../include/*.hpp
 
-$(OBJ_CXX): $(AWS_IAM_MODE_STAMP)
+$(OBJ_CXX): $(AWS_IAM_MODE_STAMP) $(AWS_IAM_STATIC_ARCHIVES)
 
 %.ko: %.cpp $(HEADERS)
 	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS)

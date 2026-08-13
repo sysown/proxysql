@@ -1,31 +1,31 @@
-AWS_IAM_MODE_STAMP := $(PROXYSQL_PATH)/build/aws-sdk-cpp/build-mode
+AWS_IAM_MODE_STAMP := $(PROXYSQL_PATH)/deps/aws-sdk-cpp/.proxysql-build-mode
 AWS_IAM_BUILD_MODE := disabled
 
 ifeq ($(PROXYSQLAWSIAM),1)
-AWS_IAM_BUILD_DIR := $(PROXYSQL_PATH)/build/aws-sdk-cpp
-
-export AWS_SDK_CPP_ROOT
-AWS_IAM_REQUEST_ID := $(shell \
-	printf '%s' "$$AWS_SDK_CPP_ROOT" | \
-	cmake -E sha256sum /dev/stdin | sed 's/[[:space:]].*//')
-AWS_IAM_CONFIGURE_DIR := $(AWS_IAM_BUILD_DIR)/configure-$(AWS_IAM_REQUEST_ID)
-AWS_IAM_DISCOVERY_ID := $(shell \
-	if cmake \
-		-DPROXYSQL_SOURCE_DIR="$(PROXYSQL_PATH)" \
-		-DPROXYSQL_REQUEST_ID="$(AWS_IAM_REQUEST_ID)" \
-		-P "$(PROXYSQL_PATH)/cmake/aws-sdk-cpp/DiscoverAwsSdk.cmake"; then \
-		:; \
-	else \
-		printf '%s' failure; \
-	fi)
-
-ifeq ($(AWS_IAM_DISCOVERY_ID),failure)
-$(error AWS SDK for C++ 1.9 or newer with core and rds is required)
-endif
-
-AWS_IAM_FLAGS_FILE := $(AWS_IAM_BUILD_DIR)/fragments/$(AWS_IAM_DISCOVERY_ID).mk
-include $(AWS_IAM_FLAGS_FILE)
-AWS_IAM_BUILD_MODE := enabled:$(AWS_IAM_DISCOVERY_ID)
+AWS_IAM_SDK_VERSION := 1.11.869
+AWS_IAM_SDK_SHARED := 0
+AWS_IAM_INSTALL_DIR := $(PROXYSQL_PATH)/deps/aws-sdk-cpp/aws-sdk-cpp-$(AWS_IAM_SDK_VERSION)/install
+AWS_IAM_LIB_DIR := $(AWS_IAM_INSTALL_DIR)/lib
+AWS_IAM_CPPFLAGS := -I$(AWS_IAM_INSTALL_DIR)/include
+AWS_IAM_LDFLAGS :=
+AWS_IAM_STATIC_ARCHIVES := \
+	$(AWS_IAM_LIB_DIR)/libaws-cpp-sdk-rds.a \
+	$(AWS_IAM_LIB_DIR)/libaws-cpp-sdk-core.a \
+	$(AWS_IAM_LIB_DIR)/libaws-crt-cpp.a \
+	$(AWS_IAM_LIB_DIR)/libaws-c-s3.a \
+	$(AWS_IAM_LIB_DIR)/libaws-c-auth.a \
+	$(AWS_IAM_LIB_DIR)/libaws-c-mqtt.a \
+	$(AWS_IAM_LIB_DIR)/libaws-c-http.a \
+	$(AWS_IAM_LIB_DIR)/libaws-c-event-stream.a \
+	$(AWS_IAM_LIB_DIR)/libaws-c-compression.a \
+	$(AWS_IAM_LIB_DIR)/libaws-c-io.a \
+	$(AWS_IAM_LIB_DIR)/libaws-c-cal.a \
+	$(AWS_IAM_LIB_DIR)/libaws-c-sdkutils.a \
+	$(AWS_IAM_LIB_DIR)/libaws-checksums.a \
+	$(AWS_IAM_LIB_DIR)/libaws-c-common.a \
+	$(AWS_IAM_LIB_DIR)/libs2n.a
+AWS_IAM_LIBS := -Wl,--start-group $(AWS_IAM_STATIC_ARCHIVES) -Wl,--end-group
+AWS_IAM_BUILD_MODE := enabled:$(AWS_IAM_SDK_VERSION):static
 endif
 
 # Update the mode stamp before make evaluates object freshness. Preserve its
