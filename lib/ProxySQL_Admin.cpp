@@ -143,7 +143,6 @@ static const vector<string> mysql_servers_tablenames = {
 	"mysql_replication_hostgroups",
 	"mysql_group_replication_hostgroups",
 	"mysql_galera_hostgroups",
-	"mysql_aws_aurora_hostgroups",
 	"mysql_aws_rds_bgd_hostgroups",
 	"mysql_hostgroup_attributes",
 	"mysql_servers_ssl_params",
@@ -202,17 +201,31 @@ static void BQE1(SQLite3DB *db, const vector<string>& tbs, const string& p1, con
 			db->execute(query.c_str());
 		}
 		if (p2 != "" && p3 != "") {
-			const size_t wildcard_pos = p3.find('*');
-			if (*it == "mysql_aws_aurora_hostgroups" && wildcard_pos != string::npos) {
-				string projected_select = p3;
-				projected_select.replace(wildcard_pos, 1, mysql_aws_aurora_config_columns);
-				query = p2 + *it + " (" + mysql_aws_aurora_config_columns + ")" + projected_select + *it;
-			} else {
-				query = p2 + *it + p3 + *it;
-			}
+			query = p2 + *it + p3 + *it;
 			db->execute(query.c_str());
 		}
 	}
+}
+
+static bool copy_mysql_aws_aurora_hostgroups(
+	SQLite3DB* db,
+	const string& destination_schema,
+	const string& source_schema
+) {
+	const string table_name = "mysql_aws_aurora_hostgroups";
+	const string query =
+		"INSERT OR REPLACE INTO " + destination_schema + "." + table_name +
+		" (" + mysql_aws_aurora_config_columns + ") SELECT " +
+		mysql_aws_aurora_config_columns + " FROM " + source_schema + "." + table_name;
+	return db->execute(query.c_str());
+}
+
+bool copy_mysql_aws_aurora_hostgroups_from_disk(SQLite3DB* db) {
+	return copy_mysql_aws_aurora_hostgroups(db, "main", "disk");
+}
+
+bool copy_mysql_aws_aurora_hostgroups_to_disk(SQLite3DB* db) {
+	return copy_mysql_aws_aurora_hostgroups(db, "disk", "main");
 }
 
 
@@ -5772,6 +5785,7 @@ int ProxySQL_Admin::flush_debug_levels_database_to_runtime(SQLite3DB *db) {
 void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 	admindb->execute("PRAGMA foreign_keys = OFF");
 	BQE1(admindb, mysql_servers_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
+	copy_mysql_aws_aurora_hostgroups_from_disk(admindb);
 	BQE1(admindb, mysql_query_rules_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_users SELECT * FROM disk.mysql_users");
 	BQE1(admindb, mysql_firewall_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
@@ -5856,6 +5870,7 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 
 void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
 	BQE1(admindb, mysql_servers_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
+	copy_mysql_aws_aurora_hostgroups_to_disk(admindb);
 	BQE1(admindb, mysql_query_rules_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_users SELECT * FROM main.mysql_users");
 	BQE1(admindb, mysql_firewall_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
@@ -5964,8 +5979,16 @@ void ProxySQL_Admin::flush_GENERIC__from_to(const string& name, const string& di
 	assert(it != module_tablenames.end());
 	if (direction == "disk_to_memory") {
 		BQE1(admindb, it->second, "DELETE FROM main.", "INSERT INTO main.", " SELECT * FROM disk.");
+		if (name == "mysql_servers") {
+			admindb->execute("DELETE FROM main.mysql_aws_aurora_hostgroups");
+			copy_mysql_aws_aurora_hostgroups_from_disk(admindb);
+		}
 	} else if (direction == "memory_to_disk") {
 		BQE1(admindb, it->second, "DELETE FROM disk.", "INSERT INTO disk.", " SELECT * FROM main.");
+		if (name == "mysql_servers") {
+			admindb->execute("DELETE FROM disk.mysql_aws_aurora_hostgroups");
+			copy_mysql_aws_aurora_hostgroups_to_disk(admindb);
+		}
 	} else {
 		assert(0);
 	}
@@ -7323,6 +7346,83 @@ void ProxySQL_Admin::save_scheduler_runtime_to_database(bool _runtime) {
 	free(args);
 }
 
+bool materialize_mysql_aws_aurora_hostgroups(
+	SQLite3DB* db,
+	const SQLite3_result* resultset,
+	bool runtime
+) {
+	if (db == nullptr) {
+		return false;
+	}
+
+	const int expected_columns = runtime ? 18 : 17;
+	if (resultset != nullptr && resultset->columns < expected_columns) {
+		proxy_error(
+			"Cannot materialize mysql_aws_aurora_hostgroups: expected at least %d columns, got %d\n",
+			expected_columns,
+			resultset->columns
+		);
+		return false;
+	}
+
+	const char* delete_query = runtime
+		? "DELETE FROM main.runtime_mysql_aws_aurora_hostgroups"
+		: "DELETE FROM main.mysql_aws_aurora_hostgroups";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", delete_query);
+	if (!db->execute(delete_query)) {
+		return false;
+	}
+	if (resultset == nullptr) {
+		return true;
+	}
+
+	const char* insert_query = runtime
+		? "INSERT INTO runtime_mysql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,autopurge_missing_checks,comment,bgd_status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)"
+		: "INSERT INTO mysql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,autopurge_missing_checks,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)";
+	auto [prepare_rc, statement_unique] = db->prepare_v2(insert_query);
+	ASSERT_SQLITE_OK(prepare_rc, db);
+	sqlite3_stmt* statement = statement_unique.get();
+
+	for (const SQLite3_row* row : resultset->rows) {
+		int rc = (*proxy_sqlite3_bind_int64)(statement, 1, atoi(row->fields[0])); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 2, atoi(row->fields[1])); ASSERT_SQLITE_OK(rc, db);
+		if (row->fields[2]) {
+			rc = (*proxy_sqlite3_bind_int64)(statement, 3, atoi(row->fields[2]));
+		} else {
+			rc = (*proxy_sqlite3_bind_null)(statement, 3);
+		}
+		ASSERT_SQLITE_OK(rc, db);
+		if (row->fields[3]) {
+			rc = (*proxy_sqlite3_bind_int64)(statement, 4, atoi(row->fields[3]));
+		} else {
+			rc = (*proxy_sqlite3_bind_null)(statement, 4);
+		}
+		ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 5, atoi(row->fields[4])); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 6, atoi(row->fields[5])); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_text)(statement, 7, row->fields[6], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 8, atoi(row->fields[7])); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 9, atoi(row->fields[8])); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 10, atoi(row->fields[9])); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 11, atoi(row->fields[10])); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 12, atoi(row->fields[11])); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 13, atoi(row->fields[12])); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 14, atoi(row->fields[13])); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 15, atoi(row->fields[14])); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 16, atoi(row->fields[15])); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_bind_text)(statement, 17, row->fields[16], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		if (runtime) {
+			rc = (*proxy_sqlite3_bind_text)(statement, 18, row->fields[17], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+		}
+
+		SAFE_SQLITE3_STEP2(statement);
+		rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, db);
+		rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, db);
+	}
+
+	return true;
+}
+
 void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 	// make sure that the caller has called mysql_servers_wrlock()
 	char *query=NULL;
@@ -7536,69 +7636,10 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 	resultset = NULL;
 
 	// dump mysql_aws_aurora_hostgroups
-
-	if (_runtime) {
-		query=(char *)"DELETE FROM main.runtime_mysql_aws_aurora_hostgroups";
-	} else {
-		query=(char *)"DELETE FROM main.mysql_aws_aurora_hostgroups";
-	}
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-	admindb->execute(query);
-	resultset=MyHGM->dump_table_mysql("mysql_aws_aurora_hostgroups");
-	if (resultset) {
-		int rc;
-		sqlite3_stmt *statement=NULL;
-
-		char *query=NULL;
-		if (_runtime) {
-			query=(char *)"INSERT INTO runtime_mysql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,autopurge_missing_checks,comment,bgd_status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)";
-		} else {
-			query=(char *)"INSERT INTO mysql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,autopurge_missing_checks,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)";
-		}
-
-		auto [rc1, statement_unique] = admindb->prepare_v2(query);
-		rc = rc1;
-		statement = statement_unique.get();
-		ASSERT_SQLITE_OK(rc, admindb);
-
-		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-			SQLite3_row *r=*it;
-			rc=(*proxy_sqlite3_bind_int64)(statement, 1, atoi(r->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
-			rc=(*proxy_sqlite3_bind_int64)(statement, 2, atoi(r->fields[1])); ASSERT_SQLITE_OK(rc, admindb);
-			if (r->fields[2]) {
-				rc=(*proxy_sqlite3_bind_int64)(statement, 3, atoi(r->fields[2]));
-			} else {
-				rc=(*proxy_sqlite3_bind_null)(statement, 3);
-			}
-			ASSERT_SQLITE_OK(rc, admindb);
-			if (r->fields[3]) {
-				rc=(*proxy_sqlite3_bind_int64)(statement, 4, atoi(r->fields[3]));
-			} else {
-				rc=(*proxy_sqlite3_bind_null)(statement, 4);
-			}
-			ASSERT_SQLITE_OK(rc, admindb);
-			rc=(*proxy_sqlite3_bind_int64)(statement, 5, atoi(r->fields[4])); ASSERT_SQLITE_OK(rc, admindb);
-			rc=(*proxy_sqlite3_bind_int64)(statement, 6, atoi(r->fields[5])); ASSERT_SQLITE_OK(rc, admindb);
-			rc=(*proxy_sqlite3_bind_text)(statement, 7, r->fields[6], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-			rc=(*proxy_sqlite3_bind_int64)(statement, 8, atoi(r->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
-			rc=(*proxy_sqlite3_bind_int64)(statement, 9, atoi(r->fields[8])); ASSERT_SQLITE_OK(rc, admindb);
-			rc=(*proxy_sqlite3_bind_int64)(statement, 10, atoi(r->fields[9])); ASSERT_SQLITE_OK(rc, admindb);
-			rc=(*proxy_sqlite3_bind_int64)(statement, 11, atoi(r->fields[10])); ASSERT_SQLITE_OK(rc, admindb);
-			rc=(*proxy_sqlite3_bind_int64)(statement, 12, atoi(r->fields[11])); ASSERT_SQLITE_OK(rc, admindb);
-			rc=(*proxy_sqlite3_bind_int64)(statement, 13, atoi(r->fields[12])); ASSERT_SQLITE_OK(rc, admindb);
-			rc=(*proxy_sqlite3_bind_int64)(statement, 14, atoi(r->fields[13])); ASSERT_SQLITE_OK(rc, admindb);
-			rc=(*proxy_sqlite3_bind_int64)(statement, 15, atoi(r->fields[14])); ASSERT_SQLITE_OK(rc, admindb);
-			rc=(*proxy_sqlite3_bind_int64)(statement, 16, atoi(r->fields[15])); ASSERT_SQLITE_OK(rc, admindb);
-			rc=(*proxy_sqlite3_bind_text)(statement, 17, r->fields[16], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-			if (_runtime) {
-				rc=(*proxy_sqlite3_bind_text)(statement, 18, r->fields[17], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-			}
-
-			SAFE_SQLITE3_STEP2(statement);
-			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);
-			rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, admindb);
-		}
-	}
+	resultset=MyHGM->dump_table_mysql(
+		_runtime ? "runtime_mysql_aws_aurora_hostgroups" : "mysql_aws_aurora_hostgroups"
+	);
+	materialize_mysql_aws_aurora_hostgroups(admindb, resultset, _runtime);
 	if(resultset) delete resultset;
 	resultset=NULL;
 

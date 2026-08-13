@@ -9,7 +9,7 @@ using json = nlohmann::json;
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
 
-#include <array>
+#include <algorithm>
 #include <memory>
 #include <pthread.h>
 #include <string>
@@ -98,15 +98,6 @@ struct Aurora_Config_Row {
 	bool locally_valid;
 };
 
-int aws_aurora_column_index(const SQLite3_result* candidate, const char* name) {
-	for (size_t i = 0; i < candidate->column_definition.size(); ++i) {
-		if (strcasecmp(candidate->column_definition[i]->name, name) == 0) {
-			return static_cast<int>(i);
-		}
-	}
-	return -1;
-}
-
 std::string aws_aurora_nullable_value(const char* value) {
 	return value ? value : "NULL";
 }
@@ -126,33 +117,31 @@ SQLite3_result* validate_and_filter_aws_aurora_hostgroups(
 		return filtered;
 	}
 
-	std::vector<int> source_indexes(AWS_AURORA_CONFIG_COLUMN_COUNT, -1);
-	for (int i = 0; i < AWS_AURORA_CONFIG_COLUMN_COUNT; ++i) {
-		source_indexes[i] = aws_aurora_column_index(candidate, AWS_AURORA_CONFIG_COLUMNS[i]);
-	}
-
-	// Older peers send the pre-BGD 15-column projection. Treat the two absent
-	// green fields as SQL NULL until cluster synchronization is upgraded.
-	const bool green_writer_absent = source_indexes[2] == -1;
-	const bool green_reader_absent = source_indexes[3] == -1;
-	if (green_writer_absent != green_reader_absent) {
+	if (candidate->columns != static_cast<int>(candidate->column_definition.size())) {
 		errors.emplace_back(
-			"mysql_aws_aurora_hostgroups rejected: candidate projection contains only one green hostgroup column"
+			"mysql_aws_aurora_hostgroups rejected: candidate projection metadata is inconsistent"
 		);
 		return filtered;
 	}
 
-	for (int i = 0; i < AWS_AURORA_CONFIG_COLUMN_COUNT; ++i) {
-		if ((i == 2 || i == 3) && green_writer_absent) {
-			continue;
-		}
-		if (source_indexes[i] == -1) {
-			errors.emplace_back(
-				std::string("mysql_aws_aurora_hostgroups rejected: candidate projection is missing ") +
-				AWS_AURORA_CONFIG_COLUMNS[i]
-			);
+	const int comparable_columns = std::min(candidate->columns, AWS_AURORA_CONFIG_COLUMN_COUNT);
+	for (int i = 0; i < comparable_columns; ++i) {
+		const char* actual_name = candidate->column_definition[i]->name;
+		if (strcasecmp(actual_name, AWS_AURORA_CONFIG_COLUMNS[i]) != 0) {
+			std::ostringstream message;
+			message << "mysql_aws_aurora_hostgroups rejected: candidate projection column " << i
+				<< " must be " << AWS_AURORA_CONFIG_COLUMNS[i]
+				<< ", got " << actual_name;
+			errors.emplace_back(message.str());
 			return filtered;
 		}
+	}
+
+	if (candidate->columns != AWS_AURORA_CONFIG_COLUMN_COUNT) {
+		errors.emplace_back(
+			"mysql_aws_aurora_hostgroups rejected: candidate projection must contain exactly 17 columns"
+		);
+		return filtered;
 	}
 
 	std::vector<Aurora_Config_Row> rows;
@@ -162,9 +151,7 @@ SQLite3_result* validate_and_filter_aws_aurora_hostgroups(
 		Aurora_Config_Row row;
 		row.fields.resize(AWS_AURORA_CONFIG_COLUMN_COUNT, nullptr);
 		for (int i = 0; i < AWS_AURORA_CONFIG_COLUMN_COUNT; ++i) {
-			if (source_indexes[i] != -1) {
-				row.fields[i] = source_row->fields[source_indexes[i]];
-			}
+			row.fields[i] = source_row->fields[i];
 		}
 
 		row.writer_hostgroup = row.fields[0] ? atoi(row.fields[0]) : -1;
@@ -2461,6 +2448,9 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) 
 	char * query = (char *)"";
 	if (name == "mysql_aws_aurora_hostgroups") {
 		query=(char *)"SELECT writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,"
+					    "check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,autopurge_missing_checks,comment FROM mysql_aws_aurora_hostgroups";
+	} else if (name == "runtime_mysql_aws_aurora_hostgroups") {
+		query=(char *)"SELECT writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,"
 					    "check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,autopurge_missing_checks,comment,bgd_status FROM mysql_aws_aurora_hostgroups";
 	} else if (name == "mysql_aws_rds_bgd_hostgroups") {
 		query=(char *)"SELECT writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,writer_is_also_reader,"
@@ -4190,24 +4180,6 @@ void MySQL_HostGroups_Manager::aws_rds_bgd_set_runtime_status(unsigned int write
 }
 
 void MySQL_HostGroups_Manager::update_aws_aurora_bgd_status(int writer_hostgroup, const std::string& bgd_status) {
-	static const std::array<const char*, 6> valid_statuses {
-		"NONE",
-		"AVAILABLE",
-		"SWITCHOVER_INITIATED",
-		"SWITCHOVER_IN_PROGRESS",
-		"SWITCHOVER_IN_POST_PROCESSING",
-		"SWITCHOVER_COMPLETED"
-	};
-
-	bool valid = std::any_of(valid_statuses.begin(), valid_statuses.end(), [&bgd_status](const char* status) {
-		return bgd_status == status;
-	});
-	if (!valid) {
-		proxy_error("Invalid AWS Aurora BGD runtime status '%s' for writer hostgroup %d\n",
-			bgd_status.c_str(), writer_hostgroup);
-		return;
-	}
-
 	wrlock();
 	const char* query = "UPDATE mysql_aws_aurora_hostgroups SET bgd_status=?1 WHERE writer_hostgroup=?2";
 	auto [prepare_rc, statement_unique] = mydb->prepare_v2(query);
@@ -6849,11 +6821,9 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 
 
 	// it is now time to build a new structure in Monitor
-	if (GloMyMon) {
-		pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
-		update_aws_aurora_hosts_monitor_resultset(false);
-		pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
-	}
+	pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
+	update_aws_aurora_hosts_monitor_resultset(false);
+	pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
 
 	pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
 }

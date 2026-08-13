@@ -388,9 +388,9 @@ class AWS_Aurora_Info {
 /**
  * @brief Validate an Aurora hostgroup candidate and return its canonical configured projection.
  *
- * The returned result contains only valid rows, ordered like the Aurora Admin
- * table. Legacy projections without green hostgroups are normalized with both
- * green values set to SQL NULL. The caller owns the returned result.
+ * The candidate must exactly match the configured Aurora Admin table projection.
+ * The returned result contains only valid rows in that canonical order. The
+ * caller owns the returned result.
  */
 SQLite3_result* validate_and_filter_aws_aurora_hostgroups(
 	const SQLite3_result* candidate,
@@ -998,6 +998,7 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 * @brief Creates a resultset with the current full content of the target table.
 	 * @param string The target table. Valid values are:
 	 *   - "mysql_aws_aurora_hostgroups"
+	 *   - "runtime_mysql_aws_aurora_hostgroups"
 	 *   - "mysql_galera_hostgroups"
 	 *   - "mysql_group_replication_hostgroups"
 	 *   - "mysql_replication_hostgroups"
