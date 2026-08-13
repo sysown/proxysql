@@ -175,7 +175,7 @@ jobs:
         echo ">>> removing all docker volumes"
         docker volume prune -af
         echo ">>> removing all docker networks"
-        docker network prune -af
+        docker network prune -f
 
     # The dockerized build writes files as root, so on the next job the
     # actions/checkout pre-clean can otherwise trip over them:
@@ -680,7 +680,7 @@ jobs:
         echo ">>> removing all docker volumes"
         docker volume prune -af
         echo ">>> removing all docker networks"
-        docker network prune -af
+        docker network prune -f
 
     # Undo the root ownership the dockerized build left behind so the next job
     # on this self-hosted runner can clean and check out without EACCES.
