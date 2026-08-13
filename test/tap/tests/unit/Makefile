@@ -931,7 +931,7 @@ test_aws_iam_backend_auth-t: ../test_aws_iam_backend_auth-t.cpp $(TEST_HELPERS_O
 		$(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 
 ifeq ($(UNAME_S),Linux)
-aws_iam_session_state_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=mysql_real_connect_start
+aws_iam_session_state_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=mysql_real_connect_start -pthread
 aws_iam_pool_unit-t: ALLOW_MULTI_DEF += \
 	-Wl,--wrap=mysql_change_user_start \
 	-Wl,--wrap=mysql_real_connect_start \

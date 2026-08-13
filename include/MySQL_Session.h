@@ -16,7 +16,7 @@
 #include "cpp.h"
 #include "MySQL_Variables.h"
 #include "Base_Session.h"
-#include "Aws_Iam_Token_Manager.h"
+#include "Aws_Iam_Sdk.h"
 
 #ifndef PROXYJSON
 #define PROXYJSON
@@ -611,7 +611,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 
 	// Owner-thread state for a fresh backend connection parked while an IAM
 	// token is acquired. Provider threads never receive any of these pointers.
-	AwsIamTokenSource *aws_iam_token_source { nullptr };
+	AwsIamTokenSourceLease aws_iam_token_source_lease {};
 	AwsIamRequestHandle aws_iam_request_handle {};
 	AwsIamTokenKey aws_iam_token_key {};
 	AwsIamTokenResult aws_iam_completion {};

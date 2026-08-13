@@ -18,12 +18,17 @@
 #include <openssl/crypto.h>
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <future>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 #include <unistd.h>
@@ -131,6 +136,83 @@ public:
 	uint64_t waiting_sessions { 0 };
 };
 
+class BlockingFakeTokenSource final : public AwsIamTokenSource {
+public:
+	~BlockingFakeTokenSource() override { release_request(); }
+
+	AwsIamRequestHandle request(const AwsIamTokenKey& key, uint64_t opaque_id,
+		std::weak_ptr<AwsIamCompletionSink> sink) override {
+		{
+			std::lock_guard<std::mutex> lock(request_mutex);
+			request_entered = true;
+			requests.push_back(key);
+			opaque_ids.push_back(opaque_id);
+			sinks.push_back(std::move(sink));
+		}
+		request_cv.notify_all();
+		request_worker = std::thread([this] {
+			std::unique_lock<std::mutex> lock(request_mutex);
+			request_cv.wait(lock, [this] { return request_released; });
+		});
+		return AwsIamRequestHandle { next_handle++ };
+	}
+
+	AwsIamTokenResult request_blocking(const AwsIamTokenKey&,
+		std::chrono::steady_clock::time_point) override {
+		return result(AwsIamStatus::PROVIDER_ERROR);
+	}
+
+	void cancel(AwsIamRequestHandle handle) override {
+		if (handle.value != 0) {
+			{
+				std::lock_guard<std::mutex> lock(request_mutex);
+				canceled.push_back(handle.value);
+			}
+			release_request();
+		}
+	}
+	void invalidate(const AwsIamTokenKey&, uint64_t) override {}
+	void record_backend_connection(bool) override {}
+	void record_waiting_session(bool waiting) override {
+		if (waiting) ++waiting_sessions;
+		else if (waiting_sessions != 0) --waiting_sessions;
+	}
+	AwsIamStatsSnapshot snapshot() const override {
+		AwsIamStatsSnapshot result;
+		result.waiting_sessions = waiting_sessions;
+		return result;
+	}
+
+	void wait_for_request() {
+		std::unique_lock<std::mutex> lock(request_mutex);
+		if (!request_cv.wait_for(lock, std::chrono::seconds(1),
+			[this] { return request_entered; })) {
+			BAIL_OUT("session did not enter the blocking IAM token source");
+		}
+	}
+
+	void release_request() {
+		{
+			std::lock_guard<std::mutex> lock(request_mutex);
+			request_released = true;
+		}
+		request_cv.notify_all();
+		if (request_worker.joinable()) request_worker.join();
+	}
+
+	std::mutex request_mutex;
+	std::condition_variable request_cv;
+	bool request_entered { false };
+	bool request_released { false };
+	std::thread request_worker;
+	uint64_t next_handle { 1 };
+	std::vector<AwsIamTokenKey> requests;
+	std::vector<uint64_t> opaque_ids;
+	std::vector<std::weak_ptr<AwsIamCompletionSink>> sinks;
+	std::vector<uint64_t> canceled;
+	uint64_t waiting_sessions { 0 };
+};
+
 bool add_backend_user(const char *username, const char *password, const char *attributes) {
 	return GloMyAuth->add(
 		(char *)username, (char *)password, USERNAME_BACKEND,
@@ -199,7 +281,7 @@ public:
 			const_cast<char *>(username), const_cast<char *>("ordinary-password"),
 			const_cast<char *>("orders"), nullptr);
 
-		session->mybe = session->create_backend(kHostgroup);
+		session->mybe = session->find_or_create_backend(kHostgroup);
 		session->current_hostgroup = kHostgroup;
 		session->default_hostgroup = kHostgroup;
 		session->CurrentQuery.start_time = worker_.curtime;
@@ -251,7 +333,7 @@ void make_fast_forward(SessionFixture& fixture) {
 
 void test_immediate_cache_hit(MySQL_Thread& worker) {
 	FakeTokenSource source(FakeTokenSource::Mode::IMMEDIATE_OK);
-	GloAwsIamTokenSource = &source;
+	publish_global_aws_iam_token_source(&source);
 	SessionFixture fixture(worker);
 	fixture.start();
 	MySQL_Connection *selected = fixture.selected_connection();
@@ -268,7 +350,7 @@ void test_immediate_cache_hit(MySQL_Thread& worker) {
 
 void test_delayed_completion(MySQL_Thread& worker) {
 	FakeTokenSource source;
-	GloAwsIamTokenSource = &source;
+	publish_global_aws_iam_token_source(&source);
 	SessionFixture fixture(worker);
 	fixture.start();
 	MySQL_Connection *selected = fixture.selected_connection();
@@ -287,7 +369,7 @@ void test_delayed_completion(MySQL_Thread& worker) {
 
 void test_provider_error_is_generic(MySQL_Thread& worker) {
 	FakeTokenSource source;
-	GloAwsIamTokenSource = &source;
+	publish_global_aws_iam_token_source(&source);
 	SessionFixture fixture(worker);
 	fixture.start();
 	complete_and_drain(worker, source, result(AwsIamStatus::PROVIDER_ERROR, true));
@@ -305,7 +387,7 @@ void test_provider_error_is_generic(MySQL_Thread& worker) {
 
 void test_queue_rejection(MySQL_Thread& worker) {
 	FakeTokenSource source(FakeTokenSource::Mode::IMMEDIATE_QUEUE_FULL);
-	GloAwsIamTokenSource = &source;
+	publish_global_aws_iam_token_source(&source);
 	SessionFixture fixture(worker);
 	fixture.start();
 	worker.drain_aws_iam_completions();
@@ -316,7 +398,7 @@ void test_queue_rejection(MySQL_Thread& worker) {
 
 void test_five_second_deadline(MySQL_Thread& worker) {
 	FakeTokenSource source;
-	GloAwsIamTokenSource = &source;
+	publish_global_aws_iam_token_source(&source);
 	SessionFixture fixture(worker);
 	fixture.start();
 	worker.curtime += 5000000;
@@ -328,7 +410,7 @@ void test_five_second_deadline(MySQL_Thread& worker) {
 
 void test_existing_backend_deadline_wins(MySQL_Thread& worker) {
 	FakeTokenSource source;
-	GloAwsIamTokenSource = &source;
+	publish_global_aws_iam_token_source(&source);
 	SessionFixture fixture(worker);
 	fixture.session->mybe->server_myds->max_connect_time = worker.curtime + 1000000;
 	fixture.start();
@@ -341,7 +423,7 @@ void test_existing_backend_deadline_wins(MySQL_Thread& worker) {
 
 void test_frontend_disconnect(MySQL_Thread& worker) {
 	FakeTokenSource source;
-	GloAwsIamTokenSource = &source;
+	publish_global_aws_iam_token_source(&source);
 	auto fixture = std::make_unique<SessionFixture>(worker);
 	fixture->start();
 	worker.register_session(&worker, fixture->session, false);
@@ -355,7 +437,7 @@ void test_frontend_disconnect(MySQL_Thread& worker) {
 void test_late_completion_is_dropped(MySQL_Thread& worker) {
 	token_cleanse_calls.store(0, std::memory_order_relaxed);
 	FakeTokenSource source;
-	GloAwsIamTokenSource = &source;
+	publish_global_aws_iam_token_source(&source);
 	SessionFixture fixture(worker);
 	fixture.start();
 	worker.curtime += 5000000;
@@ -368,7 +450,7 @@ void test_late_completion_is_dropped(MySQL_Thread& worker) {
 
 void test_shutdown_completion(MySQL_Thread& worker) {
 	FakeTokenSource source;
-	GloAwsIamTokenSource = &source;
+	publish_global_aws_iam_token_source(&source);
 	SessionFixture fixture(worker);
 	fixture.start();
 	complete_and_drain(worker, source, result(AwsIamStatus::SHUTDOWN));
@@ -377,9 +459,49 @@ void test_shutdown_completion(MySQL_Thread& worker) {
 		"token-source shutdown resumes the owner thread only to perform generic cleanup");
 }
 
+void test_session_wait_keeps_original_source_leased(MySQL_Thread& worker) {
+	BlockingFakeTokenSource original_source;
+	publish_global_aws_iam_token_source(&original_source);
+	SessionFixture fixture(worker);
+	fixture.start();
+	original_source.wait_for_request();
+
+	std::promise<void> shutdown_started;
+	std::future<void> shutdown_started_future = shutdown_started.get_future();
+	auto shutdown = std::async(std::launch::async, [&shutdown_started] {
+		shutdown_started.set_value();
+		shutdown_global_aws_iam_token_source();
+	});
+	shutdown_started_future.wait();
+	const auto shutdown_entry_deadline =
+		std::chrono::steady_clock::now() + std::chrono::seconds(1);
+	for (;;) {
+		AwsIamTokenSourceLease probe = acquire_global_aws_iam_token_source();
+		if (!probe) break;
+		if (std::chrono::steady_clock::now() >= shutdown_entry_deadline) {
+			BAIL_OUT("global IAM shutdown did not disable new leases");
+		}
+		std::this_thread::yield();
+	}
+	const bool shutdown_waits_for_session_lease =
+		shutdown.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout;
+
+	ok(shutdown_waits_for_session_lease,
+		"global shutdown waits for the session-owned IAM lease");
+	fixture.session->cancel_aws_iam_wait();
+	shutdown.get();
+
+	FakeTokenSource republished_source;
+	publish_global_aws_iam_token_source(&republished_source);
+	ok(original_source.requests.size() == 1 && original_source.canceled.size() == 1 &&
+		republished_source.keys.empty() && republished_source.canceled.empty(),
+		"the old IAM wait never requests or cancels a republished token source");
+	publish_global_aws_iam_token_source(nullptr);
+}
+
 void test_fast_forward_provider_failure_is_terminal(MySQL_Thread& worker) {
 	FakeTokenSource source;
-	GloAwsIamTokenSource = &source;
+	publish_global_aws_iam_token_source(&source);
 	SessionFixture fixture(worker);
 	make_fast_forward(fixture);
 	fixture.start();
@@ -395,7 +517,7 @@ void test_fast_forward_provider_failure_is_terminal(MySQL_Thread& worker) {
 
 void test_fast_forward_timeout_is_terminal(MySQL_Thread& worker) {
 	FakeTokenSource source;
-	GloAwsIamTokenSource = &source;
+	publish_global_aws_iam_token_source(&source);
 	SessionFixture fixture(worker);
 	make_fast_forward(fixture);
 	fixture.start();
@@ -408,7 +530,7 @@ void test_fast_forward_timeout_is_terminal(MySQL_Thread& worker) {
 
 void test_fast_forward_config_failure_is_terminal(MySQL_Thread& worker) {
 	FakeTokenSource source;
-	GloAwsIamTokenSource = &source;
+	publish_global_aws_iam_token_source(&source);
 	char *saved_ca = mysql_thread___ssl_p2s_ca;
 	mysql_thread___ssl_p2s_ca = strdup("");
 	SessionFixture fixture(worker);
@@ -424,7 +546,7 @@ void test_fast_forward_config_failure_is_terminal(MySQL_Thread& worker) {
 void test_worker_shutdown_closes_delivery_boundary() {
 	token_cleanse_calls.store(0, std::memory_order_relaxed);
 	FakeTokenSource source;
-	GloAwsIamTokenSource = &source;
+	publish_global_aws_iam_token_source(&source);
 	std::weak_ptr<AwsIamCompletionSink> delivery;
 	{
 		auto worker = std::make_unique<MySQL_Thread>();
@@ -447,7 +569,7 @@ void test_worker_shutdown_closes_delivery_boundary() {
 
 void test_selected_server_retention(MySQL_Thread& worker) {
 	FakeTokenSource source;
-	GloAwsIamTokenSource = &source;
+	publish_global_aws_iam_token_source(&source);
 	SessionFixture fixture(worker);
 	fixture.start();
 	MySQL_Connection *selected = fixture.selected_connection();
@@ -461,7 +583,7 @@ void test_selected_server_retention(MySQL_Thread& worker) {
 
 void test_password_mode_unchanged(MySQL_Thread& worker) {
 	FakeTokenSource source;
-	GloAwsIamTokenSource = &source;
+	publish_global_aws_iam_token_source(&source);
 	const unsigned int calls_before = connector_calls.load(std::memory_order_relaxed);
 	SessionFixture fixture(worker, kPasswordUser);
 	fixture.start();
@@ -474,7 +596,7 @@ void test_password_mode_unchanged(MySQL_Thread& worker) {
 
 void test_unknown_user_passthrough_uses_password(MySQL_Thread& worker) {
 	FakeTokenSource source;
-	GloAwsIamTokenSource = &source;
+	publish_global_aws_iam_token_source(&source);
 	const MySQLBackendAuthPolicy missing_policy =
 		resolve_mysql_backend_auth_policy(*GloMyAuth, kUnknownPassthroughUser);
 	const unsigned int calls_before = connector_calls.load(std::memory_order_relaxed);
@@ -492,7 +614,7 @@ void test_unknown_user_passthrough_uses_password(MySQL_Thread& worker) {
 
 void test_malformed_policy_stays_fail_closed_for_passthrough(MySQL_Thread& worker) {
 	FakeTokenSource source;
-	GloAwsIamTokenSource = &source;
+	publish_global_aws_iam_token_source(&source);
 	const unsigned int calls_before = connector_calls.load(std::memory_order_relaxed);
 	SessionFixture fixture(worker, kMalformedPassthroughUser);
 	fixture.session->passthrough_credential = true;
@@ -509,7 +631,7 @@ void test_sdk_off_source_reports_support_not_compiled(MySQL_Thread& worker) {
 	config.max_total_waiters = 128;
 	config.max_waiters_per_key = 8;
 	std::unique_ptr<AwsIamTokenSource> source = create_aws_iam_token_source(config);
-	GloAwsIamTokenSource = source.get();
+	publish_global_aws_iam_token_source(source.get());
 	SessionFixture fixture(worker);
 	const std::string log = capture_stderr([&] {
 		fixture.start();
@@ -518,7 +640,7 @@ void test_sdk_off_source_reports_support_not_compiled(MySQL_Thread& worker) {
 			fixture.run();
 		}
 	});
-	GloAwsIamTokenSource = nullptr;
+	publish_global_aws_iam_token_source(nullptr);
 	ok(fixture.session->status == WAITING_CLIENT_DATA &&
 		fixture.selected_connection() == nullptr &&
 		log.find("category='support_not_compiled'") != std::string::npos,
@@ -548,9 +670,9 @@ int __wrap_mysql_real_connect_start(MYSQL **ret, MYSQL *mysql, const char *host,
 
 int main() {
 #ifdef PROXYSQLAWSIAM
-	plan(23);
+	plan(25);
 #else
-	plan(24);
+	plan(26);
 #endif
 	if (test_init_minimal() != 0 || test_init_auth() != 0 ||
 		test_init_query_processor() != 0 || test_init_hostgroups() != 0) {
@@ -577,6 +699,7 @@ int main() {
 		free(mysql_thread___ssl_p2s_ca);
 		mysql_thread___ssl_p2s_ca = strdup("/unit/fake-ca.pem");
 		worker.curtime = 10000000;
+		test_session_wait_keeps_original_source_leased(worker);
 		test_immediate_cache_hit(worker);
 		test_delayed_completion(worker);
 		test_provider_error_is_generic(worker);
@@ -596,10 +719,10 @@ int main() {
 #ifndef PROXYSQLAWSIAM
 		test_sdk_off_source_reports_support_not_compiled(worker);
 #endif
-		GloAwsIamTokenSource = nullptr;
+		publish_global_aws_iam_token_source(nullptr);
 	}
 	test_worker_shutdown_closes_delivery_boundary();
-	GloAwsIamTokenSource = nullptr;
+	publish_global_aws_iam_token_source(nullptr);
 
 	delete GloMyLogger;
 	GloMyLogger = nullptr;

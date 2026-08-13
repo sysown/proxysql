@@ -811,16 +811,16 @@ void MySQL_Session::accept_aws_iam_completion(
 }
 
 void MySQL_Session::cancel_aws_iam_wait() {
-	if (aws_iam_waiting_session_counted && aws_iam_token_source != nullptr) {
-		aws_iam_token_source->record_waiting_session(false);
+	if (aws_iam_waiting_session_counted && aws_iam_token_source_lease) {
+		aws_iam_token_source_lease->record_waiting_session(false);
 	}
 	aws_iam_waiting_session_counted = false;
 	if (aws_iam_waiter_id != 0 && thread != nullptr) {
 		thread->cancel_aws_iam_waiter(aws_iam_waiter_id);
 	}
-	if (!aws_iam_completion_ready && aws_iam_token_source != nullptr &&
+	if (!aws_iam_completion_ready && aws_iam_token_source_lease &&
 		aws_iam_request_handle.value != 0) {
-		aws_iam_token_source->cancel(aws_iam_request_handle);
+		aws_iam_token_source_lease->cancel(aws_iam_request_handle);
 	}
 
 	if (aws_iam_connection != nullptr && mybe != nullptr &&
@@ -832,7 +832,7 @@ void MySQL_Session::cancel_aws_iam_wait() {
 	aws_iam_completion.token.clear();
 	aws_iam_completion = AwsIamTokenResult {};
 	aws_iam_token_key = AwsIamTokenKey {};
-	aws_iam_token_source = nullptr;
+	aws_iam_token_source_lease = AwsIamTokenSourceLease {};
 	aws_iam_request_handle = {};
 	aws_iam_connection = nullptr;
 	aws_iam_waiter_id = 0;
@@ -946,11 +946,11 @@ int MySQL_Session::handler_again___status_WAITING_AWS_IAM_TOKEN() {
 	aws_iam_connect_token_key = key;
 	aws_iam_connect_token_generation = completion.generation;
 	previous_status.pop();
-	if (aws_iam_waiting_session_counted && aws_iam_token_source != nullptr) {
-		aws_iam_token_source->record_waiting_session(false);
+	if (aws_iam_waiting_session_counted && aws_iam_token_source_lease) {
+		aws_iam_token_source_lease->record_waiting_session(false);
 	}
 	aws_iam_waiting_session_counted = false;
-	aws_iam_token_source = nullptr;
+	aws_iam_token_source_lease = AwsIamTokenSourceLease {};
 	aws_iam_request_handle = {};
 	aws_iam_connection = nullptr;
 	aws_iam_waiter_id = 0;
@@ -9187,26 +9187,24 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 			input.ssl_capath = ssl_params != nullptr
 				? ssl_params->ssl_capath
 				: (mysql_thread___ssl_p2s_capath != nullptr ? mysql_thread___ssl_p2s_capath : "");
-			input.support_compiled = GloAwsIamTokenSource != nullptr &&
-				GloAwsIamTokenSource->support_compiled();
+			AwsIamTokenSourceLease lease = acquire_global_aws_iam_token_source();
+			input.support_compiled = lease && lease->support_compiled();
 
 			AwsIamConnectionConfigResult config =
 				validate_mysql_aws_iam_connection(input);
 			aws_iam_token_key = config.key;
-			if (config.status != AwsIamConnectionConfigStatus::OK ||
-				GloAwsIamTokenSource == nullptr) {
+			if (config.status != AwsIamConnectionConfigStatus::OK || !lease) {
 				if (aws_iam_token_key.database_user.empty()) {
 					aws_iam_token_key = {
 						input.configured_endpoint, input.port, input.region,
 						input.database_user };
 				}
 				fail_aws_iam_backend(
-					GloAwsIamTokenSource == nullptr
+					!lease
 						? "token_source_unavailable" : config.failure_code.c_str());
 				return;
 			}
 
-			aws_iam_token_source = GloAwsIamTokenSource;
 			aws_iam_deadline_us = thread->curtime + 5000000ULL;
 			aws_iam_waiter_id = thread->register_aws_iam_waiter(this);
 			if (aws_iam_waiter_id == 0) {
@@ -9214,9 +9212,10 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				return;
 			}
 
+			aws_iam_token_source_lease = std::move(lease);
 			previous_status.push(CONNECTING_SERVER);
 			set_status(WAITING_AWS_IAM_TOKEN);
-			aws_iam_token_source->record_waiting_session(true);
+			aws_iam_token_source_lease->record_waiting_session(true);
 			aws_iam_waiting_session_counted = true;
 			unsigned long long wake_deadline = aws_iam_deadline_us;
 			if (mybe->server_myds->max_connect_time != 0 &&
@@ -9224,7 +9223,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				wake_deadline = mybe->server_myds->max_connect_time;
 			}
 			pause_until = wake_deadline;
-			aws_iam_request_handle = aws_iam_token_source->request(
+			aws_iam_request_handle = aws_iam_token_source_lease->request(
 				aws_iam_token_key, aws_iam_waiter_id,
 				thread->aws_iam_completion_sink());
 			return;
