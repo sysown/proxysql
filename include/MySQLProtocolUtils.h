@@ -65,4 +65,16 @@ bool mysql_parse_err_packet(
     uint16_t* out_errno, const char** out_msg, size_t* out_msg_len
 );
 
+struct MySQLOkFields {
+	uint64_t affected_rows;
+	uint64_t last_insert_id;
+	uint16_t status_flags;
+	uint16_t warnings;
+};
+
+bool mysql_is_eof_payload(const unsigned char* p, size_t n);
+bool mysql_is_ok_header(const unsigned char* p, size_t n);
+bool mysql_parse_ok_payload(const unsigned char* p, size_t n, MySQLOkFields* out);
+bool mysql_parse_eof_payload(const unsigned char* p, size_t n, uint16_t* warnings, uint16_t* status_flags);
+
 #endif // MYSQL_PROTOCOL_UTILS_H

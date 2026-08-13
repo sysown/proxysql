@@ -137,7 +137,7 @@ endif
 
 # FFTO object files
 ifeq ($(PROXYSQLFFTO),1)
-_OBJ_CXX += MySQLFFTO.oo PgSQLFFTO.oo
+_OBJ_CXX += MySQLFFTO.oo PgSQLFFTO.oo MySQLResultsetFramer.oo PgSQLResponseFramer.oo
 endif
 
 # ed25519 frontend authentication (MariaDB client_ed25519)
