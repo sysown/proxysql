@@ -360,6 +360,8 @@ class AWS_Aurora_Info {
 	public:
 	int writer_hostgroup;
 	int reader_hostgroup;
+	int green_writer_hostgroup;
+	int green_reader_hostgroup;
 	int aurora_port;
 	int max_lag_ms;
 	int add_lag_ms;
@@ -376,8 +378,8 @@ class AWS_Aurora_Info {
 	char * comment;
 	bool active;
 	bool active_;
-	AWS_Aurora_Info(int w, int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, int amc, char *c);
-	bool update(int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, int amc, char *c);
+	AWS_Aurora_Info(int w, int r, int gw, int gr, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, int amc, char *c);
+	bool update(int r, int gw, int gr, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, int amc, char *c);
 	~AWS_Aurora_Info();
 	AWS_Aurora_Info(const AWS_Aurora_Info&) = delete;
 	AWS_Aurora_Info& operator=(const AWS_Aurora_Info&) = delete;
@@ -786,6 +788,7 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	public:
 	// Friend declaration for WebUI monitoring metrics collector
 	friend class ProxySQL::Monitoring::MetricsCollector;
+	friend class TestAuroraBGDRuntime;
 
 	std::mutex galera_set_writer_mutex;
 	/**
@@ -1120,6 +1123,13 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 * @param status    AWS_RDS_BGD_Status underlying value.
 	 */
 	void aws_rds_bgd_set_runtime_status(unsigned int writer_hg, int status);
+	/**
+	 * @brief Publish the node-local Aurora BGD state for one runtime row.
+	 *
+	 * Invalid status strings and writer hostgroups not present at runtime are
+	 * ignored. Configuration reloads do not write this column.
+	 */
+	void update_aws_aurora_bgd_status(int writer_hostgroup, const std::string& bgd_status);
 	/**
 	 * @brief Aligns the runtime 'mysql_servers' table + checksums with the server state in MyHGM.
 	 *

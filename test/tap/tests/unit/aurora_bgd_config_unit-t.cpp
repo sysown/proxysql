@@ -13,7 +13,38 @@
 
 #include <cstdlib>
 #include <string>
+#include <thread>
 #include <vector>
+
+extern MySQL_HostGroups_Manager* MyHGM;
+
+class TestAuroraBGDRuntime {
+public:
+	static void reload(MySQL_HostGroups_Manager* hgm, SQLite3_result* candidate) {
+		hgm->wrlock();
+		hgm->save_incoming_mysql_table(candidate, "mysql_aws_aurora_hostgroups");
+		hgm->generate_mysql_aws_aurora_hostgroups_table();
+		hgm->wrunlock();
+	}
+
+	static bool green_hostgroups(
+		MySQL_HostGroups_Manager* hgm,
+		int writer_hostgroup,
+		int& green_writer_hostgroup,
+		int& green_reader_hostgroup
+	) {
+		pthread_mutex_lock(&hgm->AWS_Aurora_Info_mutex);
+		auto info_it = hgm->AWS_Aurora_Info_Map.find(writer_hostgroup);
+		if (info_it == hgm->AWS_Aurora_Info_Map.end()) {
+			pthread_mutex_unlock(&hgm->AWS_Aurora_Info_mutex);
+			return false;
+		}
+		green_writer_hostgroup = info_it->second->green_writer_hostgroup;
+		green_reader_hostgroup = info_it->second->green_reader_hostgroup;
+		pthread_mutex_unlock(&hgm->AWS_Aurora_Info_mutex);
+		return true;
+	}
+};
 
 static std::string query_string(SQLite3DB* db, const char* query) {
 	char* error = nullptr;
@@ -29,6 +60,23 @@ static std::string query_string(SQLite3DB* db, const char* query) {
 
 static int query_int(SQLite3DB* db, const char* query) {
 	return db->return_one_int(query);
+}
+
+static std::string hgm_query_string(const char* query) {
+	char* error = nullptr;
+	SQLite3_result* result = MyHGM->execute_query(const_cast<char*>(query), &error);
+	std::string value;
+	if (!error && result && result->rows_count > 0 && result->rows[0]->fields[0]) {
+		value = result->rows[0]->fields[0];
+	}
+	free(error);
+	delete result;
+	return value;
+}
+
+static int hgm_query_int(const char* query) {
+	const std::string value = hgm_query_string(query);
+	return value.empty() ? 0 : atoi(value.c_str());
 }
 
 static SQLite3DB* make_database() {
@@ -227,8 +275,94 @@ static void test_invalid_replacement_removes_previous_row() {
 	delete initial;
 }
 
+static void test_runtime_ownership_and_status() {
+	SQLite3_result* initial = make_candidate();
+	add_candidate_row(initial, 300, 310, "301", "311", true);
+	add_candidate_row(initial, 320, 330, nullptr, nullptr, true);
+	TestAuroraBGDRuntime::reload(MyHGM, initial);
+
+	int green_writer = 0;
+	int green_reader = 0;
+	ok(TestAuroraBGDRuntime::green_hostgroups(MyHGM, 300, green_writer, green_reader) &&
+		green_writer == 301 && green_reader == 311,
+		"Aurora runtime info owns configured green hostgroups");
+	ok(TestAuroraBGDRuntime::green_hostgroups(MyHGM, 320, green_writer, green_reader) &&
+		green_writer == -1 && green_reader == -1,
+		"SQL NULL green hostgroups use the -1 runtime sentinel");
+	ok(hgm_query_string(
+		"SELECT GROUP_CONCAT(bgd_status, ',') FROM "
+		"(SELECT bgd_status FROM mysql_aws_aurora_hostgroups ORDER BY writer_hostgroup)"
+	) == "NONE,NONE", "new Aurora runtime rows start in NONE");
+
+	SQLite3_result* dump = MyHGM->dump_table_mysql("mysql_aws_aurora_hostgroups");
+	ok(dump && dump->columns == 18, "Aurora runtime dump includes configured fields and bgd_status");
+	delete dump;
+
+	MyHGM->update_aws_aurora_bgd_status(300, "AVAILABLE");
+	ok(hgm_query_string(
+		"SELECT bgd_status FROM mysql_aws_aurora_hostgroups WHERE writer_hostgroup=300"
+	) == "AVAILABLE", "Aurora BGD status API publishes an accepted state");
+	const char* accepted_statuses[] = {
+		"NONE",
+		"AVAILABLE",
+		"SWITCHOVER_INITIATED",
+		"SWITCHOVER_IN_PROGRESS",
+		"SWITCHOVER_IN_POST_PROCESSING",
+		"SWITCHOVER_COMPLETED"
+	};
+	bool accepted_all_statuses = true;
+	for (const char* status : accepted_statuses) {
+		MyHGM->update_aws_aurora_bgd_status(300, status);
+		accepted_all_statuses = accepted_all_statuses && hgm_query_string(
+			"SELECT bgd_status FROM mysql_aws_aurora_hostgroups WHERE writer_hostgroup=300"
+		) == status;
+	}
+	ok(accepted_all_statuses, "Aurora BGD status API accepts the complete state vocabulary");
+	MyHGM->update_aws_aurora_bgd_status(300, "AVAILABLE");
+
+	SQLite3_result* unrelated_reload = make_candidate();
+	add_candidate_row(unrelated_reload, 300, 310, "302", "312", true, "reloaded");
+	TestAuroraBGDRuntime::reload(MyHGM, unrelated_reload);
+	ok(hgm_query_string(
+		"SELECT bgd_status FROM mysql_aws_aurora_hostgroups WHERE writer_hostgroup=300"
+	) == "AVAILABLE", "configuration reload preserves the runtime BGD status");
+	ok(TestAuroraBGDRuntime::green_hostgroups(MyHGM, 300, green_writer, green_reader) &&
+		green_writer == 302 && green_reader == 312,
+		"configuration reload updates runtime green hostgroups");
+
+	MyHGM->update_aws_aurora_bgd_status(300, "NOT_A_BGD_STATUS");
+	ok(hgm_query_string(
+		"SELECT bgd_status FROM mysql_aws_aurora_hostgroups WHERE writer_hostgroup=300"
+	) == "AVAILABLE", "invalid Aurora BGD status leaves runtime state unchanged");
+
+	SQLite3_result* concurrent_reload = make_candidate();
+	add_candidate_row(concurrent_reload, 300, 310, "303", "313", true, "concurrent");
+	std::thread reload_thread([concurrent_reload]() {
+		TestAuroraBGDRuntime::reload(MyHGM, concurrent_reload);
+	});
+	std::thread status_thread([]() {
+		MyHGM->update_aws_aurora_bgd_status(300, "SWITCHOVER_IN_PROGRESS");
+	});
+	reload_thread.join();
+	status_thread.join();
+	ok(hgm_query_string(
+		"SELECT bgd_status FROM mysql_aws_aurora_hostgroups WHERE writer_hostgroup=300"
+	) == "SWITCHOVER_IN_PROGRESS", "reload and status publication serialize without losing state");
+	ok(TestAuroraBGDRuntime::green_hostgroups(MyHGM, 300, green_writer, green_reader) &&
+		green_writer == 303 && green_reader == 313,
+		"serialized reload publishes its configured values");
+
+	SQLite3_result* empty_reload = make_candidate();
+	TestAuroraBGDRuntime::reload(MyHGM, empty_reload);
+	ok(hgm_query_int(
+		"SELECT COUNT(*) FROM mysql_aws_aurora_hostgroups WHERE writer_hostgroup=300"
+	) == 0, "removing an Aurora deployment removes its runtime status row");
+	ok(!TestAuroraBGDRuntime::green_hostgroups(MyHGM, 300, green_writer, green_reader),
+		"removing an Aurora deployment removes its runtime info");
+}
+
 int main() {
-	plan(30);
+	plan(44);
 	test_init_minimal();
 
 	test_schema_contract();       // 12
@@ -236,6 +370,10 @@ int main() {
 	test_inactive_cross_row_validation(); // 4
 	test_legacy_projection_normalization(); // 3
 	test_invalid_replacement_removes_previous_row(); // 3
+
+	ok(test_init_hostgroups() == 0, "test_init_hostgroups() succeeds"); // 1
+	test_runtime_ownership_and_status(); // 13
+	test_cleanup_hostgroups();
 
 	test_cleanup_minimal();
 	return exit_status();

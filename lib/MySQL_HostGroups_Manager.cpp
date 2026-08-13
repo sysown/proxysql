@@ -9,6 +9,7 @@ using json = nlohmann::json;
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
 
+#include <array>
 #include <memory>
 #include <pthread.h>
 #include <string>
@@ -1737,8 +1738,6 @@ bool MySQL_HostGroups_Manager::commit(
 
 		// AWS Aurora
 		if (incoming_aws_aurora_hostgroups) {
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_aws_aurora_hostgroups\n");
-			mydb->execute("DELETE FROM mysql_aws_aurora_hostgroups");
 			generate_mysql_aws_aurora_hostgroups_table();
 		}
 
@@ -2452,8 +2451,8 @@ void MySQL_HostGroups_Manager::update_table_mysql_servers_for_monitor(bool lock)
 SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) {
 	char * query = (char *)"";
 	if (name == "mysql_aws_aurora_hostgroups") {
-		query=(char *)"SELECT writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,"
-					    "check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,autopurge_missing_checks,comment FROM mysql_aws_aurora_hostgroups";
+		query=(char *)"SELECT writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,"
+					    "check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,autopurge_missing_checks,comment,bgd_status FROM mysql_aws_aurora_hostgroups";
 	} else if (name == "mysql_aws_rds_bgd_hostgroups") {
 		query=(char *)"SELECT writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,writer_is_also_reader,"
 					    "check_interval_ms,check_timeout_ms,comment,auto_generated,status FROM mysql_aws_rds_bgd_hostgroups";
@@ -4178,6 +4177,38 @@ void MySQL_HostGroups_Manager::aws_rds_bgd_set_runtime_status(unsigned int write
 		"UPDATE mysql_aws_rds_bgd_hostgroups SET status=%d WHERE writer_hostgroup=%u", status, writer_hg);
 	wrlock();
 	mydb->execute(query);
+	wrunlock();
+}
+
+void MySQL_HostGroups_Manager::update_aws_aurora_bgd_status(int writer_hostgroup, const std::string& bgd_status) {
+	static const std::array<const char*, 6> valid_statuses {
+		"NONE",
+		"AVAILABLE",
+		"SWITCHOVER_INITIATED",
+		"SWITCHOVER_IN_PROGRESS",
+		"SWITCHOVER_IN_POST_PROCESSING",
+		"SWITCHOVER_COMPLETED"
+	};
+
+	bool valid = std::any_of(valid_statuses.begin(), valid_statuses.end(), [&bgd_status](const char* status) {
+		return bgd_status == status;
+	});
+	if (!valid) {
+		proxy_error("Invalid AWS Aurora BGD runtime status '%s' for writer hostgroup %d\n",
+			bgd_status.c_str(), writer_hostgroup);
+		return;
+	}
+
+	wrlock();
+	const char* query = "UPDATE mysql_aws_aurora_hostgroups SET bgd_status=?1 WHERE writer_hostgroup=?2";
+	auto [prepare_rc, statement_unique] = mydb->prepare_v2(query);
+	ASSERT_SQLITE_OK(prepare_rc, mydb);
+	sqlite3_stmt* statement = statement_unique.get();
+	int rc = (*proxy_sqlite3_bind_text)(statement, 1, bgd_status.c_str(), -1, SQLITE_TRANSIENT);
+	ASSERT_SQLITE_OK(rc, mydb);
+	rc = (*proxy_sqlite3_bind_int64)(statement, 2, writer_hostgroup);
+	ASSERT_SQLITE_OK(rc, mydb);
+	SAFE_SQLITE3_STEP2(statement);
 	wrunlock();
 }
 
@@ -6223,13 +6254,15 @@ SQLite3_result * MySQL_HostGroups_Manager::get_mysql_errors(bool reset) {
 	return result;
 }
 
-AWS_Aurora_Info::AWS_Aurora_Info(int w, int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, int amc, char *c) {
+AWS_Aurora_Info::AWS_Aurora_Info(int w, int r, int gw, int gr, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, int amc, char *c) {
 	comment=NULL;
 	if (c) {
 		comment=strdup(c);
 	}
 	writer_hostgroup=w;
 	reader_hostgroup=r;
+	green_writer_hostgroup=gw;
+	green_reader_hostgroup=gr;
 	max_lag_ms=maxl;
 	add_lag_ms=al;
 	min_lag_ms=minl;
@@ -6257,11 +6290,19 @@ AWS_Aurora_Info::~AWS_Aurora_Info() {
 	}
 }
 
-bool AWS_Aurora_Info::update(int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, int amc, char *c) {
+bool AWS_Aurora_Info::update(int r, int gw, int gr, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, int amc, char *c) {
 	bool ret=false;
 	active_=true;
 	if (reader_hostgroup!=r) {
 		reader_hostgroup=r;
+		ret=true;
+	}
+	if (green_writer_hostgroup!=gw) {
+		green_writer_hostgroup=gw;
+		ret=true;
+	}
+	if (green_reader_hostgroup!=gr) {
+		green_reader_hostgroup=gr;
 		ret=true;
 	}
 	if (max_lag_ms!=maxl) {
@@ -6613,14 +6654,81 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 	if (incoming_aws_aurora_hostgroups==NULL) {
 		return;
 	}
+
+	struct RuntimeRow {
+		int reader_hostgroup;
+		std::string bgd_status;
+	};
+
+	std::map<int, RuntimeRow> runtime_rows;
+	std::map<int, int> incoming_reader_hostgroups;
+	for (SQLite3_row* row : incoming_aws_aurora_hostgroups->rows) {
+		incoming_reader_hostgroups.emplace(atoi(row->fields[0]), atoi(row->fields[1]));
+	}
+
+	char* error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* resultset = NULL;
+	const char* select_query =
+		"SELECT writer_hostgroup, reader_hostgroup, bgd_status FROM mysql_aws_aurora_hostgroups";
+	mydb->execute_statement(select_query, &error, &cols, &affected_rows, &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", select_query, error);
+		free(error);
+		assert(0);
+	}
+	if (resultset) {
+		for (SQLite3_row* row : resultset->rows) {
+			runtime_rows.emplace(
+				atoi(row->fields[0]),
+				RuntimeRow {atoi(row->fields[1]), row->fields[2] ? row->fields[2] : "NONE"}
+			);
+		}
+		delete resultset;
+	}
+
 	int rc;
-	//sqlite3 *mydb3=mydb->get_db();
-	char *query=(char *)"INSERT INTO mysql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,"
-					    "check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,autopurge_missing_checks,comment) VALUES "
-					    "(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)";
-	auto [rc1, statement_unique] = mydb->prepare_v2(query);
-	ASSERT_SQLITE_OK(rc1, mydb);
-	sqlite3_stmt *statement = statement_unique.get();
+	const char* delete_query = "DELETE FROM mysql_aws_aurora_hostgroups WHERE writer_hostgroup=?1";
+	auto [delete_rc, delete_statement_unique] = mydb->prepare_v2(delete_query);
+	ASSERT_SQLITE_OK(delete_rc, mydb);
+	sqlite3_stmt* delete_statement = delete_statement_unique.get();
+
+	// Delete missing deployments and release a changed reader hostgroup before inserting its replacement.
+	for (const auto& [writer_hostgroup, runtime_row] : runtime_rows) {
+		auto incoming_it = incoming_reader_hostgroups.find(writer_hostgroup);
+		bool removed = incoming_it == incoming_reader_hostgroups.end();
+		bool reader_changed = !removed && incoming_it->second != runtime_row.reader_hostgroup;
+		if (!removed && !reader_changed) {
+			continue;
+		}
+		rc=(*proxy_sqlite3_bind_int64)(delete_statement, 1, writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+		SAFE_SQLITE3_STEP2(delete_statement);
+		rc=(*proxy_sqlite3_clear_bindings)(delete_statement); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_reset)(delete_statement); ASSERT_SQLITE_OK(rc, mydb);
+	}
+
+	const char* update_query =
+		"UPDATE mysql_aws_aurora_hostgroups SET "
+			"reader_hostgroup=?1, green_writer_hostgroup=?2, green_reader_hostgroup=?3, active=?4, "
+			"aurora_port=?5, domain_name=?6, max_lag_ms=?7, check_interval_ms=?8, check_timeout_ms=?9, "
+			"writer_is_also_reader=?10, new_reader_weight=?11, add_lag_ms=?12, min_lag_ms=?13, "
+			"lag_num_checks=?14, autopurge_missing_checks=?15, comment=?16 "
+		"WHERE writer_hostgroup=?17";
+	auto [update_rc, update_statement_unique] = mydb->prepare_v2(update_query);
+	ASSERT_SQLITE_OK(update_rc, mydb);
+	sqlite3_stmt* update_statement = update_statement_unique.get();
+
+	const char* insert_query =
+		"INSERT INTO mysql_aws_aurora_hostgroups("
+			"writer_hostgroup, reader_hostgroup, green_writer_hostgroup, green_reader_hostgroup, active, "
+			"aurora_port, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, "
+			"new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, autopurge_missing_checks, comment, bgd_status"
+		") VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)";
+	auto [insert_rc, insert_statement_unique] = mydb->prepare_v2(insert_query);
+	ASSERT_SQLITE_OK(insert_rc, mydb);
+	sqlite3_stmt* insert_statement = insert_statement_unique.get();
+
 	proxy_info("New mysql_aws_aurora_hostgroups table\n");
 	pthread_mutex_lock(&AWS_Aurora_Info_mutex);
 	for (std::map<int , AWS_Aurora_Info *>::iterator it1 = AWS_Aurora_Info_Map.begin() ; it1 != AWS_Aurora_Info_Map.end(); ++it1) {
@@ -6632,8 +6740,10 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 		SQLite3_row *r=*it;
 		int writer_hostgroup=atoi(r->fields[0]);
 		int reader_hostgroup=atoi(r->fields[1]);
-		const char* green_writer_hostgroup = r->fields[2];
-		const char* green_reader_hostgroup = r->fields[3];
+		const char* green_writer_value = r->fields[2];
+		const char* green_reader_value = r->fields[3];
+		int green_writer_hostgroup = green_writer_value ? atoi(green_writer_value) : -1;
+		int green_reader_hostgroup = green_reader_value ? atoi(green_reader_value) : -1;
 		int active=atoi(r->fields[4]);
 		int aurora_port = atoi(r->fields[5]);
 		int max_lag_ms = atoi(r->fields[7]);
@@ -6645,37 +6755,54 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 		int min_lag_ms = atoi(r->fields[13]);
 		int lag_num_checks = atoi(r->fields[14]);
 		int autopurge_missing_checks = atoi(r->fields[15]);
-		proxy_info("Loading AWS Aurora info for (%d,%d,%s,%s,%s,%d,\"%s\",%d,%d,%d,%d,%d,%d,%d,\"%s\")\n", writer_hostgroup,reader_hostgroup,
-				   green_writer_hostgroup ? green_writer_hostgroup : "NULL", green_reader_hostgroup ? green_reader_hostgroup : "NULL",
+		proxy_info("Loading AWS Aurora info for (%d,%d,%d,%d,%s,%d,\"%s\",%d,%d,%d,%d,%d,%d,%d,\"%s\")\n", writer_hostgroup,reader_hostgroup,
+				   green_writer_hostgroup, green_reader_hostgroup,
 				   (active ? "on" : "off"),aurora_port,r->fields[6],max_lag_ms,add_lag_ms,min_lag_ms,lag_num_checks,
 				   check_interval_ms,check_timeout_ms,autopurge_missing_checks,r->fields[16]);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 1, writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 2, reader_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
-		if (green_writer_hostgroup) {
-			rc=(*proxy_sqlite3_bind_int64)(statement, 3, atoi(green_writer_hostgroup));
+
+		auto runtime_it = runtime_rows.find(writer_hostgroup);
+		bool update_existing =
+			runtime_it != runtime_rows.end() &&
+			runtime_it->second.reader_hostgroup == reader_hostgroup;
+		sqlite3_stmt* statement = update_existing ? update_statement : insert_statement;
+		int field_offset = update_existing ? 0 : 1;
+		if (!update_existing) {
+			rc=(*proxy_sqlite3_bind_int64)(statement, 1, writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+		}
+		rc=(*proxy_sqlite3_bind_int64)(statement, 1 + field_offset, reader_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+		if (green_writer_hostgroup >= 0) {
+			rc=(*proxy_sqlite3_bind_int64)(statement, 2 + field_offset, green_writer_hostgroup);
 		} else {
-			rc=(*proxy_sqlite3_bind_null)(statement, 3);
+			rc=(*proxy_sqlite3_bind_null)(statement, 2 + field_offset);
 		}
 		ASSERT_SQLITE_OK(rc, mydb);
-		if (green_reader_hostgroup) {
-			rc=(*proxy_sqlite3_bind_int64)(statement, 4, atoi(green_reader_hostgroup));
+		if (green_reader_hostgroup >= 0) {
+			rc=(*proxy_sqlite3_bind_int64)(statement, 3 + field_offset, green_reader_hostgroup);
 		} else {
-			rc=(*proxy_sqlite3_bind_null)(statement, 4);
+			rc=(*proxy_sqlite3_bind_null)(statement, 3 + field_offset);
 		}
 		ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 5, active); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 6, aurora_port); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_text)(statement, 7, r->fields[6], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 8, max_lag_ms); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 9, check_interval_ms); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 10, check_timeout_ms); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 11, writer_is_also_reader); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 12, new_reader_weight); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 13, add_lag_ms); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 14, min_lag_ms); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 15, lag_num_checks); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_int64)(statement, 16, autopurge_missing_checks); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_text)(statement, 17, r->fields[16], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 4 + field_offset, active); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 5 + field_offset, aurora_port); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_text)(statement, 6 + field_offset, r->fields[6], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 7 + field_offset, max_lag_ms); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 8 + field_offset, check_interval_ms); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 9 + field_offset, check_timeout_ms); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 10 + field_offset, writer_is_also_reader); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 11 + field_offset, new_reader_weight); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 12 + field_offset, add_lag_ms); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 13 + field_offset, min_lag_ms); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 14 + field_offset, lag_num_checks); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 15 + field_offset, autopurge_missing_checks); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_text)(statement, 16 + field_offset, r->fields[16], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+		if (update_existing) {
+			rc=(*proxy_sqlite3_bind_int64)(statement, 17, writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
+		} else {
+			const std::string bgd_status = runtime_it == runtime_rows.end()
+				? std::string("NONE")
+				: runtime_it->second.bgd_status;
+			rc=(*proxy_sqlite3_bind_text)(statement, 18, bgd_status.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+		}
 
 		SAFE_SQLITE3_STEP2(statement);
 		rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mydb);
@@ -6686,12 +6813,12 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 		if (it2!=AWS_Aurora_Info_Map.end()) {
 			info=it2->second;
 			bool changed=false;
-			changed=info->update(reader_hostgroup, aurora_port, r->fields[6], max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks, check_interval_ms, check_timeout_ms,  (bool)active, writer_is_also_reader, new_reader_weight, autopurge_missing_checks, r->fields[16]);
+			changed=info->update(reader_hostgroup, green_writer_hostgroup, green_reader_hostgroup, aurora_port, r->fields[6], max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks, check_interval_ms, check_timeout_ms,  (bool)active, writer_is_also_reader, new_reader_weight, autopurge_missing_checks, r->fields[16]);
 			if (changed) {
 				//info->need_converge=true;
 			}
 		} else {
-			info=new AWS_Aurora_Info(writer_hostgroup, reader_hostgroup, aurora_port, r->fields[6], max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks, check_interval_ms, check_timeout_ms,  (bool)active, writer_is_also_reader, new_reader_weight, autopurge_missing_checks, r->fields[16]);
+			info=new AWS_Aurora_Info(writer_hostgroup, reader_hostgroup, green_writer_hostgroup, green_reader_hostgroup, aurora_port, r->fields[6], max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks, check_interval_ms, check_timeout_ms,  (bool)active, writer_is_also_reader, new_reader_weight, autopurge_missing_checks, r->fields[16]);
 			//info->need_converge=true;
 			AWS_Aurora_Info_Map.insert(AWS_Aurora_Info_Map.begin(), std::pair<int, AWS_Aurora_Info *>(writer_hostgroup,info));
 		}
@@ -6713,9 +6840,11 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 
 
 	// it is now time to build a new structure in Monitor
-	pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
-	update_aws_aurora_hosts_monitor_resultset(false);
-	pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
+	if (GloMyMon) {
+		pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
+		update_aws_aurora_hosts_monitor_resultset(false);
+		pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
+	}
 
 	pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
 }
@@ -7414,7 +7543,8 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 
 const char SELECT_AWS_AURORA_SERVERS_FOR_MONITOR[] {
 	"SELECT writer_hostgroup, reader_hostgroup, hostname, port, MAX(use_ssl) use_ssl, max_lag_ms, check_interval_ms,"
-		" check_timeout_ms, add_lag_ms, min_lag_ms, lag_num_checks, autopurge_missing_checks, domain_name FROM mysql_servers"
+		" check_timeout_ms, add_lag_ms, min_lag_ms, lag_num_checks, autopurge_missing_checks, domain_name,"
+		" green_writer_hostgroup, green_reader_hostgroup FROM mysql_servers"
 	" JOIN mysql_aws_aurora_hostgroups ON"
 		" hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE active=1 AND status NOT IN (2,3)"
 	" GROUP BY writer_hostgroup, hostname, port"
