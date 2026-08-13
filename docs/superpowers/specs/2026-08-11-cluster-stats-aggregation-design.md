@@ -104,17 +104,33 @@ impossible (`INSERT OR IGNORE` on ingest — replicated samples are immutable).
 
 | Variable | Default | Range | |
 |---|---|---|---|
+| `tsdb-retention_days` | `2` | 1–3650 | local raw-sample (`tsdb_metrics`) retention |
 | `tsdb-cluster_aggregation` | `true` | bool | master switch (election is the real opt-in) |
 | `tsdb-cluster_interval` | `10` | 5–300 s | pull cadence |
 | `tsdb-cluster_backfill_hours` | `24` | 0–168 | horizon for a fresh watermark |
-| `tsdb-cluster_retention_days` | `3` | 1–30 | cluster-table retention |
+| `tsdb-cluster_retention_days` | `1` | 1–30 | cluster-table retention |
 | `tsdb-cluster_batch_rows` | `10000` | 1000–100000 | per-cycle per-peer cap |
+| `tsdb-hourly_retention_days` | `365` | 1–3650 | `tsdb_metrics_hour` rollup retention |
 
-**All defaults are provisional placeholders.** They cannot be chosen
-meaningfully until real storage sizing is known (rows/day/node × node count
-× metric cardinality). The E2E test emits a storage-size diagnostic
-(`page_count × page_size` of `tsdb_metrics_cluster` after replication) to
-start accumulating that data; revisit the defaults before GA.
+**Defaults are set from a measured floor, not a placeholder.** On an idle
+single node at the default 5s sample interval, the sampler emits 268
+distinct series/tick, i.e. ~4.6M rows/day/node (~450 MB/day/node) into the
+raw `tsdb_metrics` table. At that rate the old defaults implied multi-GB
+embedded stats DBs (7-day raw ≈ 3 GB/node; a 3-node cluster's leader-side
+`tsdb_metrics_cluster` at the old 3-day retention ≈ 4 GB). Since the raw
+tiers dominate storage while carrying the least query value beyond a couple
+of days, they get short retention — local raw down to 2 days, cluster raw
+down to 1 day (the leader already multiplies that cost by N nodes) — and
+long-horizon trending is pushed onto the hourly rollup tier, which is now
+governed by its own variable, `tsdb-hourly_retention_days` (default `365`,
+unchanged from the previous hardcoded 1-year prune).
+
+This figure is a floor, not a ceiling: it was measured on an idle node with
+no backends, hostgroups, or connection pools generating additional
+per-object series, so a loaded production node will emit more series/tick
+and correspondingly more rows/day. The forthcoming duplication-tool lab
+(replaying realistic multi-hostgroup traffic) will refine these defaults
+with loaded-node numbers before GA.
 
 ### 5. Query surface
 

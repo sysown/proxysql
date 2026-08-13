@@ -151,14 +151,15 @@ ProxySQL_Statistics::ProxySQL_Statistics() {
 #ifdef PROXYSQLTSDB
 	variables.tsdb_enabled = 0;
 	variables.tsdb_sample_interval = 5;
-	variables.tsdb_retention_days = 7;
+	variables.tsdb_retention_days = 2;
 	variables.tsdb_monitor_enabled = 0;
 	variables.tsdb_monitor_interval = 10;
 	variables.tsdb_cluster_aggregation = 1;
 	variables.tsdb_cluster_interval = 10;
 	variables.tsdb_cluster_backfill_hours = 24;
-	variables.tsdb_cluster_retention_days = 3;
+	variables.tsdb_cluster_retention_days = 1;
 	variables.tsdb_cluster_batch_rows = 10000;
+	variables.tsdb_hourly_retention_days = 365;
 #endif
 }
 
@@ -178,6 +179,7 @@ static const struct {
     {"cluster_backfill_hours", 0, 168},
     {"cluster_retention_days", 1, 30},
     {"cluster_batch_rows", 1000, 100000},
+    {"hourly_retention_days", 1, 3650},
     {NULL, 0, 0}
 };
 
@@ -201,6 +203,7 @@ bool ProxySQL_Statistics::set_variable(const char *name, const char *value) {
 				else if (i == 7) variables.tsdb_cluster_backfill_hours = (int)intv;
 				else if (i == 8) variables.tsdb_cluster_retention_days = (int)intv;
 				else if (i == 9) variables.tsdb_cluster_batch_rows = (int)intv;
+				else if (i == 10) variables.tsdb_hourly_retention_days = (int)intv;
 				return true;
 			}
 			return false;
@@ -241,6 +244,9 @@ char *ProxySQL_Statistics::get_variable(const char *name) {
 		return strdup(buf);
 	} else if (!strcasecmp(name, "cluster_batch_rows")) {
 		snprintf(buf, sizeof(buf), "%d", variables.tsdb_cluster_batch_rows);
+		return strdup(buf);
+	} else if (!strcasecmp(name, "hourly_retention_days")) {
+		snprintf(buf, sizeof(buf), "%d", variables.tsdb_hourly_retention_days);
 		return strdup(buf);
 	}
 	return NULL;
@@ -1655,10 +1661,11 @@ void ProxySQL_Statistics::tsdb_retention_cleanup() {
         ts - 86400 * retention_days);
     statsdb_disk->execute(delete_buf);
 
-    // Retention: delete hourly data older than 1 year
+    // Retention: delete hourly data older than configured days
+    const int hourly_retention_days = std::max(1, variables.tsdb_hourly_retention_days);
     snprintf(delete_buf, sizeof(delete_buf),
         "DELETE FROM tsdb_metrics_hour WHERE bucket < %ld",
-        ts - 86400 * 365);
+        ts - 86400L * hourly_retention_days);
     statsdb_disk->execute(delete_buf);
 
     // Retention: delete backend probe data older than configured days

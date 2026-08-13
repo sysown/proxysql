@@ -101,7 +101,7 @@ int main() {
 	MYSQL_RES* res = mysql_store_result(admin);
 	if (res) {
 		int rows = mysql_num_rows(res);
-		ok(rows == 10, "SHOW TSDB VARIABLES returns 10 rows (found %d)", rows);
+		ok(rows == 11, "SHOW TSDB VARIABLES returns 11 rows (found %d)", rows);
 		mysql_free_result(res);
 	} else {
 		ok(0, "SHOW TSDB VARIABLES returned no result set");
@@ -116,7 +116,7 @@ int main() {
 		"SELECT COUNT(*) FROM runtime_global_variables WHERE variable_name LIKE 'tsdb-%'",
 		count
 	);
-	ok(count_ok && count == "10", "Ten tsdb-* runtime variables are present (found %s)", count.c_str());
+	ok(count_ok && count == "11", "Eleven tsdb-* runtime variables are present (found %s)", count.c_str());
 
 	// 5. Test SAVE TSDB VARIABLES
 	diag("Running command: SAVE TSDB VARIABLES TO DISK");

@@ -195,6 +195,7 @@ class ProxySQL_Statistics {
 		int tsdb_cluster_backfill_hours;
 		int tsdb_cluster_retention_days;
 		int tsdb_cluster_batch_rows;
+		int tsdb_hourly_retention_days;
 #endif
 	} variables;
 	ProxySQL_Statistics();
