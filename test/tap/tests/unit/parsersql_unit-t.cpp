@@ -722,14 +722,11 @@ static void test_user_variable_digest_independent_runtime_policy() {
 		false, true, true, 1),
 		"backend error clears unsafe/context intent without binding");
 
-	ok(!parsersql_is_set_statement_candidate_mysql(
-		"SELECT @x; SELECT 1", str_view_len("SELECT @x; SELECT 1")),
+	ok(!analyze_user_set("SELECT @x; SELECT 1").is_set_statement,
 		"partial non-SET UDV input does not enter SET fallback accounting");
-	ok(parsersql_is_set_statement_candidate_mysql(
-		"SET @x=", str_view_len("SET @x=")),
+	ok(analyze_user_set("SET @x=").is_set_statement,
 		"partial SET UDV input retains SET fallback accounting and logging");
-	ok(parsersql_is_set_statement_candidate_mysql(
-		"SET @x=1", str_view_len("SET @x=1")),
+	ok(analyze_user_set("SET @x=1").is_set_statement,
 		"full-input SET is a ParserSQL SET candidate");
 	ok(mysql_user_variable_fallback_uses_qpo_epilogue(true, false),
 		"forwarded unsafe fallback uses the normal qpo epilogue");

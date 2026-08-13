@@ -276,7 +276,7 @@ std::optional<UserVariableCounters> user_variable_counters(MYSQL* admin) {
 			return std::nullopt;
 		}
 		auto value = parse_uint64(row[1].bytes);
-		if (!value) {
+		if (!value.has_value()) {
 			return std::nullopt;
 		}
 		values[row[0].bytes] = *value;
@@ -607,6 +607,8 @@ int main() {
 		const std::string& tag;
 		const FixtureOwnership& owned;
 		bool active { true };
+		Cleanup(const Cleanup&) = delete;
+		Cleanup& operator=(const Cleanup&) = delete;
 		bool run() {
 			if (!active) {
 				return true;

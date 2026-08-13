@@ -35,6 +35,7 @@
 #include <array>
 #include <string>
 #include <map>
+#include <memory>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -144,12 +145,11 @@ static void test_user_variable_tracking_stats_registration() {
 	};
 
 	MySQL_Threads_Handler handler;
-	SQLite3_result* status = handler.SQL3_GlobalStatus(false);
+	std::unique_ptr<SQLite3_result> status(handler.SQL3_GlobalStatus(false));
 	for (const char* name : status_names) {
-		ok(global_status_name_count(status, name) == 1,
+		ok(global_status_name_count(status.get(), name) == 1,
 			"global status registers %s exactly once", name);
 	}
-	delete status;
 
 	prometheus::TextSerializer serializer;
 	const std::string metrics = serializer.Serialize(GloVars.prometheus_registry->Collect());

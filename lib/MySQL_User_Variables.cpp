@@ -55,12 +55,12 @@ UserVariableAssignment assignment_from(
 
 } // namespace
 
-MySQL_User_Variable_State::MySQL_User_Variable_State(MySQL_User_Variable_State&& other)
+MySQL_User_Variable_State::MySQL_User_Variable_State(MySQL_User_Variable_State&& other) noexcept
 	: entries_(std::move(other.entries_)), stored_bytes_(other.stored_bytes_) {
 	other.clear();
 }
 
-MySQL_User_Variable_State& MySQL_User_Variable_State::operator=(MySQL_User_Variable_State&& other) {
+MySQL_User_Variable_State& MySQL_User_Variable_State::operator=(MySQL_User_Variable_State&& other) noexcept {
 	if (this != &other) {
 		entries_ = std::move(other.entries_);
 		stored_bytes_ = other.stored_bytes_;

@@ -14,6 +14,7 @@ using json = nlohmann::json;
 #include "MySQL_Data_Stream.h"
 #include "MySQL_Query_Processor.h"
 #include "MySQL_Variables.h"
+#include "mysqld_error.h"
 #include <atomic>
 #include <mutex>
 #include <set>
@@ -3032,6 +3033,10 @@ bool mysql_user_variable_commit_post_ok(
 	frontend = std::move(staged_frontend);
 	backend = std::move(staged_backend);
 	return true;
+}
+
+unsigned int mysql_user_variable_replay_error_code(unsigned int backend_error_code) {
+	return backend_error_code == 0 ? ER_UNKNOWN_ERROR : backend_error_code;
 }
 
 void MySQL_Connection::ProcessQueryAndSetStatusFlags(

@@ -39,6 +39,7 @@ struct UserVariableAssignment {
 
 struct UserVariableSetAnalysis {
 	UserVariableSetStatus status { UserVariableSetStatus::NOT_USER_VARIABLE_SET };
+	bool is_set_statement { false };
 	std::vector<UserVariableAssignment> assignments;
 };
 
@@ -101,8 +102,8 @@ public:
 	MySQL_User_Variable_State() = default;
 	MySQL_User_Variable_State(const MySQL_User_Variable_State&) = default;
 	MySQL_User_Variable_State& operator=(const MySQL_User_Variable_State&) = default;
-	MySQL_User_Variable_State(MySQL_User_Variable_State&& other);
-	MySQL_User_Variable_State& operator=(MySQL_User_Variable_State&& other);
+	MySQL_User_Variable_State(MySQL_User_Variable_State&& other) noexcept;
+	MySQL_User_Variable_State& operator=(MySQL_User_Variable_State&& other) noexcept;
 
 	MySQL_User_Variable_Apply_Result stage(
 		const std::vector<UserVariableAssignment>& assignments,

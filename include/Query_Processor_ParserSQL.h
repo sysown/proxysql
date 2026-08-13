@@ -149,9 +149,6 @@ UserVariableQueryDecision mysql_user_variable_raw_query_disposition(
 bool parsersql_set_changes_user_variable_replay_context_mysql(
 	const char* query, size_t query_length);
 
-bool parsersql_is_set_statement_candidate_mysql(
-	const char* query, size_t query_length);
-
 bool mysql_user_variable_is_replay_context_name(
 	const char* variable, size_t variable_length);
 

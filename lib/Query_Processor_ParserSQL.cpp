@@ -673,6 +673,7 @@ UserVariableSetAnalysis parsersql_analyze_user_variable_set_mysql(
     }
 
     auto result = tl_mysql_parser.parse(query, query_length);
+    analysis.is_set_statement = result.stmt_type == StmtType::SET;
     if (result.status != ParseResult::OK || !result.full_input) {
         if (result.has_user_variables) {
             analysis.status = UserVariableSetStatus::PARSE_ERROR;
@@ -840,16 +841,6 @@ bool mysql_user_variable_fallback_uses_qpo_epilogue(
     bool unsafe_fallback, bool replay_context_change)
 {
     return unsafe_fallback || replay_context_change;
-}
-
-bool parsersql_is_set_statement_candidate_mysql(
-    const char* query, size_t query_length)
-{
-    if (!query) return false;
-    const auto result = tl_mysql_parser.parse(query, query_length);
-    const bool is_set = result.stmt_type == StmtType::SET;
-    tl_mysql_parser.reset();
-    return is_set;
 }
 
 struct ReplayContextTarget {

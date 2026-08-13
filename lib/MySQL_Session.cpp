@@ -6636,8 +6636,9 @@ bool MySQL_Session::handler_again___status_SETTING_USER_VARIABLES(int* rc) {
 
 	const unsigned int error_code = mysql_errno(myconn->mysql);
 	const char* sqlstate = error_code ? mysql_sqlstate(myconn->mysql) : "HY000";
-	const char* error_message = error_code ? mysql_error(myconn->mysql) : "Lost connection to MySQL server during query";
-	handler_again___fail_user_variable_replay(myds, error_code ? error_code : 2013, sqlstate, error_message);
+	const char* error_message = error_code ? mysql_error(myconn->mysql) : "User-variable replay failed";
+	handler_again___fail_user_variable_replay(
+		myds, mysql_user_variable_replay_error_code(error_code), sqlstate, error_message);
 	*rc = 0;
 	return true;
 }
@@ -7437,14 +7438,11 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	// independently of whether digest/statistics generation is enabled.
 	const bool accepts_new_udv_assignments = plain_text_com_query &&
 		accepts_new_user_variable_assignments();
-	const bool parsersql_set_candidate =
-		accepts_new_udv_assignments && raw_query_has_at &&
-		parsersql_is_set_statement_candidate_mysql(
-			raw_query, CurrentQuery.QueryLength);
-	if (parsersql_set_candidate) {
+	if (accepts_new_udv_assignments && raw_query_has_at) {
 		UserVariableSetAnalysis analysis = parsersql_analyze_user_variable_set_mysql(
 			raw_query, CurrentQuery.QueryLength);
-		switch (analysis.status) {
+		if (analysis.is_set_statement) {
+			switch (analysis.status) {
 			case UserVariableSetStatus::SUPPORTED: {
 				MySQL_User_Variable_State staged;
 				const MySQL_User_Variable_Apply_Result apply_result =
@@ -7487,6 +7485,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				return false;
 			case UserVariableSetStatus::NOT_USER_VARIABLE_SET:
 				break;
+			}
 		}
 	}
 

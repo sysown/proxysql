@@ -3,12 +3,18 @@
 #include "MySQL_User_Variables.h"
 #include "MySQL_Data_Stream.h"
 #include "mysql_connection.h"
+#include "mysqld_error.h"
 
 #include <string>
+#include <memory>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace {
+
+static_assert(std::is_nothrow_move_constructible_v<MySQL_User_Variable_State>);
+static_assert(std::is_nothrow_move_assignable_v<MySQL_User_Variable_State>);
 
 UserVariableAssignment assignment(
 	const std::string& name, const std::string& target, const std::string& literal,
@@ -284,7 +290,8 @@ void test_connection_state_integration() {
 
 	MySQL_Data_Stream stream;
 	stream.myds_type = MYDS_FRONTEND;
-	stream.myconn = new MySQL_Connection();
+	auto stream_connection = std::make_unique<MySQL_Connection>();
+	stream.myconn = stream_connection.get();
 	ok(stage_and_apply(stream.myconn->user_variables, {
 		assignment("secret_name", "@secret_target", "'secret_literal'")
 	}), "diagnostic user variable stages");
@@ -315,6 +322,7 @@ void test_connection_state_integration() {
 		"backend diagnostics expose user-variable aggregate count and stored bytes");
 	ok(backend_diagnostic.find("backend_only") == std::string::npos,
 		"backend diagnostics do not expose user-variable names or values");
+	stream.myconn = nullptr;
 }
 
 void test_simple_command_log_redaction() {
@@ -327,10 +335,17 @@ void test_simple_command_log_redaction() {
 		"simple-command logging redacts tracked-user-variable replay statements");
 }
 
+void test_replay_error_code_policy() {
+	ok(mysql_user_variable_replay_error_code(1234) == 1234,
+		"replay preserves a backend-provided error code");
+	ok(mysql_user_variable_replay_error_code(0) == ER_UNKNOWN_ERROR,
+		"replay reports an unknown server error when the client library supplies no error code");
+}
+
 } // namespace
 
 int main() {
-	plan(69);
+	plan(71);
 	test_staging_and_limits();
 	test_collision_safe_comparison();
 	test_replay_planning();
@@ -340,5 +355,6 @@ int main() {
 	test_kind_and_empty_replay_edges();
 	test_connection_state_integration();
 	test_simple_command_log_redaction();
+	test_replay_error_code_policy();
 	return exit_status();
 }
