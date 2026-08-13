@@ -52,14 +52,14 @@ jobs:
           docker compose run --rm --entrypoint bash ubuntu24_dbg_build -lc '
             set -euo pipefail
             cd /opt/proxysql
-            PROXYSQL40=1 make -j
+            PROXYSQL40=1 make -j"$(nproc)"
             PROXYSQL40=1 make -C lib clean
-            PROXYSQL40=1 make -C test/tap/tests/unit -j \
+            PROXYSQL40=1 make -C test/tap/tests/unit -j"$(nproc)" \
               /opt/proxysql/lib/libproxysql.a
-            PROXYSQL40=1 make -C test/tap/tests/unit -j \
+            PROXYSQL40=1 make -C test/tap/tests/unit -j"$(nproc)" \
               aws_plugin_linkage-t aws_plugin_load_unit-t
             test/tap/tests/unit/aws_plugin_load_unit-t
-            PROXYSQL40=1 make -C test/tap/tests -j test_aws_iam_backend_auth-t
+            PROXYSQL40=1 make -C test/tap/tests -j"$(nproc)" test_aws_iam_backend_auth-t
             timeout 45s test/tap/tests/test_aws_iam_backend_auth-t
 
             daemon_nm=$(mktemp)
@@ -105,8 +105,8 @@ jobs:
           docker compose run --rm --entrypoint bash ubuntu24_dbg_build -lc '
             set -euo pipefail
             cd /opt/proxysql
-            NOJEMALLOC=1 WITHASAN=1 PROXYSQL40=1 make -j build_lib_debug
-            NOJEMALLOC=1 WITHASAN=1 PROXYSQL40=1 make -C test/tap/tests/unit -j \
+            NOJEMALLOC=1 WITHASAN=1 PROXYSQL40=1 make -j"$(nproc)" build_lib_debug
+            NOJEMALLOC=1 WITHASAN=1 PROXYSQL40=1 make -C test/tap/tests/unit -j"$(nproc)" \
               aws_iam_token_manager_unit-t aws_iam_connection_secret_unit-t \
               aws_iam_completion_queue_unit-t aws_iam_session_state_unit-t
             export ASAN_OPTIONS=detect_leaks=1:halt_on_error=1
@@ -122,8 +122,8 @@ jobs:
           docker compose run --rm --entrypoint bash ubuntu24_dbg_build -lc '
             set -euo pipefail
             cd /opt/proxysql
-            NOJEMALLOC=1 WITHTSAN=1 PROXYSQL40=1 make -j build_lib_debug
-            NOJEMALLOC=1 WITHTSAN=1 PROXYSQL40=1 make -C test/tap/tests/unit -j \
+            NOJEMALLOC=1 WITHTSAN=1 PROXYSQL40=1 make -j"$(nproc)" build_lib_debug
+            NOJEMALLOC=1 WITHTSAN=1 PROXYSQL40=1 make -C test/tap/tests/unit -j"$(nproc)" \
               aws_iam_token_manager_unit-t aws_iam_completion_queue_unit-t \
               aws_iam_session_state_unit-t
             export TSAN_OPTIONS=halt_on_error=1
