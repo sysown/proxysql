@@ -83,6 +83,9 @@ configured, as defined by the configuration/runtime specification.
 - **Complete target snapshot:** Exactly one current target writer plus a unique
   target counterpart for every current production member, with all target IPs
   resolved.
+- **Effect-driven cleanup:** The idempotent RDS BGD pattern that reconciles
+  placement and removes transient routing state from the worker's existing
+  member map. A member-scoped operation is a no-op when its map input is absent.
 - **Deployment fingerprint:** TARGET topology identity retained after cleanup
   to recognize repeated results. At minimum it contains TARGET `id`, endpoint,
   and port.
@@ -105,6 +108,13 @@ The implementation treats these meanings as the AWS-supplied behavioral
 contract for routing decisions. In particular, POST_PROCESSING definitively
 means that the promoted target can accept write traffic; target readiness is
 not inferred solely from one observed run.
+
+[AWS's Aurora switchover documentation](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/blue-green-deployments-switching.html)
+also states that a DB cluster included in a switchover cannot be modified while
+the switchover is running. The production and target member sets are therefore
+fixed from INITIATED until the first COMPLETED observation. Membership can
+change while the deployment is AVAILABLE, when the normal production probe
+and target-membership probe remain active and refresh their snapshots.
 
 ### 3.2 Directly observed behavior
 
@@ -146,6 +156,9 @@ unexpected or ambiguous metadata must fail closed.
 - POST_PROCESSING is the routing barrier because the AWS-provided semantics say
   that the promoted target can receive writes at that status; no additional
   target-writability query gates traffic pinning.
+- Normal monitoring refreshes membership while the deployment is AVAILABLE.
+  INITIATED freezes the last complete production snapshot for the duration of
+  the switchover, matching AWS's cluster-modification restriction.
 - TARGET completion means Aurora writer and reader routing cleanup can occur
   immediately.
 - Table drain is not a reader-availability barrier for Aurora.
@@ -301,6 +314,13 @@ writers, missing readers, duplicate identities, and unresolved IPs do not
 replace the last complete snapshot. They also must not be reinterpreted as a
 reader-less deployment.
 
+The production snapshot is refreshed by normal Aurora monitoring throughout
+AVAILABLE. When the worker first accepts INITIATED, that last complete snapshot
+becomes the fixed production membership for the switchover. The normal
+production probe remains suspended while AWS prevents changes to either
+included cluster; the frozen snapshot and continuously refreshed target
+snapshot therefore require no separate member-set generation.
+
 POST_PROCESSING actions require a complete snapshot. If none exists, the
 worker holds the current status, performs no partial traffic cutover, and
 retries both active probes.
@@ -362,9 +382,7 @@ last complete target snapshot
 normalized production/target member pairs
 cached target IP per pair
 traffic-pin-applied flag per pair
-writer-demoted flag
 production-probe-suspended flag
-completion-cleanup-applied flag
 configured green hostgroup identifiers, when present
 ```
 
@@ -422,7 +440,7 @@ table.
 | `SWITCHOVER_IN_PROGRESS` | Move the production writer to the reader hostgroup; do not route to target yet. |
 | First `SWITCHOVER_IN_POST_PROCESSING` | With a complete snapshot, pin every production member, drain old connections, and restore the canonical writer to the writer hostgroup. |
 | Repeated POST_PROCESSING | Retry only incomplete idempotent member actions. |
-| First TARGET-only `SWITCHOVER_COMPLETED` | Remove all pins, perform immediate cleanup, resume normal Aurora monitoring, and enter the completed latch. |
+| First TARGET-only `SWITCHOVER_COMPLETED` | Run immediate effect-driven cleanup, resume normal Aurora monitoring, and enter the completed latch. |
 | Repeated same completed TARGET | No-op while latched. |
 | Successful empty/absent topology while latched | Release the fingerprint and return to `NONE`. |
 | Earlier valid status before completion | Run rollback, then enter the earlier state. |
@@ -466,7 +484,8 @@ On the first valid observation:
 2. Retain fast BGD probes and the suspended production probe.
 3. Move the current production writer to the reader hostgroup using the same
    writer-demotion behavior as RDS BGD.
-4. Record that demotion so rollback can restore it.
+4. Retain the member map for writer-placement reconciliation during completion
+   or rollback.
 5. Do not redirect any production hostname to target yet.
 
 The move is idempotent. A repeated observation does not repeat a completed
@@ -497,27 +516,41 @@ Before applying any action, require a complete target snapshot. Then:
 7. Keep canonical readers eligible in the reader hostgroup. Do not shun or
    unshun them.
 
-Every pair records whether pinning and draining completed. Repeated
-POST_PROCESSING results retry only unapplied actions and do not repeatedly drain
-an already transitioned member.
+Every pair records that its pin-and-retirement action was applied after the DNS
+pin, free-connection deletion, used-connection unhealthy/non-reusable marking,
+and monitor-pool purge calls return. This flag does not mean that every used
+connection has physically closed: destruction happens asynchronously when the
+connection is released and is not a completion prerequisite. Repeated
+POST_PROCESSING results retry only unapplied actions and do not reapply
+retirement to an already transitioned member.
 
 ### 9.5 `SWITCHOVER_COMPLETED`
 
-On the first TARGET-only completed result:
+On the first TARGET-only completed result, run effect-driven cleanup
+immediately, before publishing the terminal latch:
 
-1. Remove every production-hostname DNS pin immediately. `dns_cache->remove()`
-   must invalidate the local pinned entry so normal DNS resolution resumes.
-2. Do not wait for topology drain or perform a separate DNS verification.
-3. Preserve current production connections; they already point to promoted
-   members. Drain only obsolete pools belonging to configured green
-   hostgroups, subject to the configured OFFLINE-status preservation policy.
-4. Preserve every user-created configuration and `mysql_servers` row.
-5. Clear the switchover guard and resume normal Aurora monitoring.
-6. Move topology probing back to random reachable canonical production members
+1. If the existing member map contains a writer, reconcile that writer into
+   the writer hostgroup and apply its reader placement according to
+   `writer_is_also_reader`. This restores a writer moved during IN_PROGRESS when
+   POST_PROCESSING was not observed, and is a no-op when the writer is already
+   restored or the map is empty.
+2. For every mapped pair, remove the production-hostname DNS entry and purge
+   the corresponding monitor-pool entries so normal DNS resolution resumes.
+   Removing an absent pin or pool entry is a no-op.
+3. Do not reapply connection retirement, wait for marked connections to close,
+   wait for topology drain, or perform a separate DNS verification.
+4. Drain only obsolete pools belonging to configured green hostgroups, subject
+   to the configured OFFLINE-status preservation policy.
+5. Preserve every user-created configuration and `mysql_servers` row.
+6. Clear any installed switchover guard and resume normal Aurora monitoring.
+7. Move topology probing back to random reachable canonical production members
    and the configured interval.
-7. Release the active member map after retaining the deployment fingerprint and
-   the completion-cleanup flag.
-8. Publish and enter the internal `SWITCHOVER_COMPLETED` latch.
+8. Release the active member map after retaining the deployment fingerprint.
+9. Publish and enter the internal `SWITCHOVER_COMPLETED` latch.
+
+The cleanup path is the same regardless of the prior phase. It acts only on the
+available member map and worker state, so absent inputs naturally produce
+no-ops. Completion never replays a skipped phase or waits for earlier actions.
 
 While latched:
 
@@ -536,12 +569,13 @@ The topology drain is therefore only an FSM rearm signal.
 A successful, structurally valid result for the same deployment with an
 earlier status follows the existing RDS BGD backward-transition behavior. A
 successful empty result or confirmed table absence before completion is treated
-as cancellation. Either condition runs idempotent rollback:
+as cancellation. Either condition runs effect-driven cleanup in rollback mode:
 
 1. Remove every traffic pin that was applied.
 2. Drain/purge affected production-hostname pools so subsequent connections use
    restored canonical DNS.
-3. Restore the production writer to the writer hostgroup when it was demoted.
+3. Reconcile the mapped production writer into the writer hostgroup. This is a
+   no-op if the writer is already there or the map is empty.
 4. Restore its reader placement according to `writer_is_also_reader`.
 5. Resume normal production Aurora monitoring.
 6. Return topology probing to production members and the appropriate cadence.
@@ -569,16 +603,16 @@ A worker that first observes INITIATED, IN_PROGRESS, or POST_PROCESSING rebuilds
 all prerequisites before applying that phase's actions. In particular,
 POST_PROCESSING cannot pin traffic until it has a complete target snapshot.
 
-A worker that first observes TARGET-only completion performs completion cleanup
-once, even when no traffic pins were recorded, retains the fingerprint, and
-enters the terminal latch. It must not manufacture or replay earlier phase
-actions.
+A worker that first observes TARGET-only completion has an empty member map.
+Its member-scoped completion actions are consequently no-ops. The worker
+retains the fingerprint and enters the terminal latch without manufacturing or
+replaying earlier phase actions.
 
 ### 11.2 Configuration and variable refresh
 
 An unrelated `LOAD MYSQL SERVERS TO RUNTIME` or variable refresh must preserve
 the FSM status, deployment fingerprint, complete snapshots, cached IPs, applied
-pin flags, writer-demotion state, probe-suspension state, and terminal latch.
+pin flags, probe-suspension state, and terminal latch.
 
 Changing configured green hostgroups refreshes the staging/pool references but
 does not restart an active deployment from `NONE`. Disabling the global
@@ -671,7 +705,16 @@ The existing RDS Multi-AZ builder and FSM remain unchanged.
 - No target-writability query gates POST_PROCESSING.
 - Readers remain eligible and are never shunned.
 - Repeated POST_PROCESSING retries only unapplied work.
-- First TARGET completion removes all pins and cleans up immediately.
+- The per-pair action flag records application of pinning and retirement
+  marking, not asynchronous physical connection closure.
+- First TARGET completion runs immediate effect-driven cleanup using the
+  existing map and worker state.
+- Direct completion with an empty map performs no production-member routing or
+  retirement action and enters the completed latch.
+- Completion after IN_PROGRESS restores the writer even when POST_PROCESSING
+  was not observed.
+- Completion after POST_PROCESSING removes applied pins without reapplying
+  connection retirement or waiting for marked connections to close.
 - Completion performs no DNS verification and does not wait for table drain.
 - Repeated completion is a no-op while latched.
 - Empty/absent topology releases the latch and returns to `NONE`.

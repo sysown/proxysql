@@ -370,9 +370,11 @@ Interactive TAP tests cover:
    placement.
 6. Target member `SERVER_ID` rename with stable reader `SESSION_ID` identity
    and retained cached IPs.
-7. Idempotent per-member pinning, placement, and pool-drain actions.
-8. The first TARGET-only `SWITCHOVER_COMPLETED`, immediate cleanup, terminal
-   latch, and runtime `bgd_status='SWITCHOVER_COMPLETED'`.
+7. Idempotent per-member pinning, placement, and connection-retirement marking,
+   without treating asynchronous physical closure as an FSM prerequisite.
+8. The first TARGET-only `SWITCHOVER_COMPLETED`, immediate effect-driven
+   cleanup, terminal latch, and runtime
+   `bgd_status='SWITCHOVER_COMPLETED'`.
 9. Repeated completion observations, successful topology drain to `NONE`, and
    rearming for a different deployment fingerprint.
 
@@ -385,6 +387,12 @@ Coverage also includes:
 - topology, replica, and read-only query failures in each relevant phase;
 - rollback from initiated, in-progress, and post-processing states;
 - late entry at initiated, in-progress, post-processing, and completed states;
+- direct completion with an empty member map producing no production-member
+  routing or retirement actions;
+- completion directly after in-progress restoring the writer without replaying
+  post-processing;
+- completion after post-processing removing pins without reapplying connection
+  retirement or waiting for marked connections to close;
 - configuration and hostgroup refresh during an active deployment;
 - in-place worker configuration refresh with retained deployment state;
 - deleting or deactivating an Aurora row during switchover;

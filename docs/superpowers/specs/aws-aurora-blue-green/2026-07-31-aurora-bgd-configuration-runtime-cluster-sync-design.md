@@ -327,7 +327,7 @@ Both green hostgroup columns must be supported by:
 
 - admin-memory table creation;
 - runtime table creation;
-- disk database schema and online upgrade;
+- disk database schema and in-place migration on ProxySQL startup;
 - `LOAD MYSQL SERVERS TO RUNTIME`;
 - `SAVE MYSQL SERVERS FROM RUNTIME`;
 - `SAVE MYSQL SERVERS TO DISK`;
@@ -351,7 +351,7 @@ projection rather than `SELECT *`. In particular:
 BGD's `bgd_status`, transient member map, cached IPs, and pins are node-local
 runtime state and are not cluster-synced as configuration.
 
-## 9. Schema Upgrade
+## 9. Disk Schema Migration
 
 A new Aurora hostgroups schema version must add the two nullable columns while
 preserving every existing row and column value.
@@ -408,8 +408,8 @@ This configuration design does not:
    without deleting user configuration.
 10. NULL values survive memory-to-runtime, runtime-to-memory, disk, config-file,
    and cluster synchronization round trips.
-11. Online upgrade preserves existing rows and initializes both new fields to
-   NULL.
+11. In-place disk schema migration on ProxySQL startup preserves existing rows
+    and initializes both new fields to NULL.
 12. Changing either green hostgroup refreshes only the affected Aurora worker
     in place.
 13. Unrelated LOAD operations preserve active BGD pins and terminal-latch state.
