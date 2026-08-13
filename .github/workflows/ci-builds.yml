@@ -210,6 +210,7 @@ jobs:
         repository: ${{ github.repository }}
         ref: ${{ env.SHA }}
         fetch-depth: 0
+        lfs: true
         path: 'proxysql'
 
 #    - name: Patch TAP-tests
