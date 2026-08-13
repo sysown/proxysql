@@ -811,17 +811,17 @@ void MySQL_Session::accept_aws_iam_completion(
 }
 
 void MySQL_Session::cancel_aws_iam_wait() {
-	if (aws_iam_waiting_session_counted && aws_iam_token_source_lease) {
-		aws_iam_token_source_lease->record_waiting_session(false);
-	}
-	aws_iam_waiting_session_counted = false;
-	if (aws_iam_waiter_id != 0 && thread != nullptr) {
-		thread->cancel_aws_iam_waiter(aws_iam_waiter_id);
-	}
 	if (!aws_iam_completion_ready && aws_iam_token_source_lease &&
 		aws_iam_request_handle.value != 0) {
 		aws_iam_token_source_lease->cancel(aws_iam_request_handle);
 	}
+	if (aws_iam_waiter_id != 0 && thread != nullptr) {
+		thread->cancel_aws_iam_waiter(aws_iam_waiter_id);
+	}
+	if (aws_iam_waiting_session_counted && aws_iam_token_source_lease) {
+		aws_iam_token_source_lease->record_waiting_session(false);
+	}
+	aws_iam_waiting_session_counted = false;
 
 	if (aws_iam_connection != nullptr && mybe != nullptr &&
 		mybe->server_myds != nullptr &&
@@ -832,7 +832,6 @@ void MySQL_Session::cancel_aws_iam_wait() {
 	aws_iam_completion.token.clear();
 	aws_iam_completion = AwsIamTokenResult {};
 	aws_iam_token_key = AwsIamTokenKey {};
-	aws_iam_token_source_lease = AwsIamTokenSourceLease {};
 	aws_iam_request_handle = {};
 	aws_iam_connection = nullptr;
 	aws_iam_waiter_id = 0;
@@ -842,6 +841,7 @@ void MySQL_Session::cancel_aws_iam_wait() {
 	aws_iam_connect_token_generation = 0;
 	aws_iam_fresh_token_retry_attempted = false;
 	pause_until = 0;
+	aws_iam_token_source_lease = AwsIamTokenSourceLease {};
 }
 
 void MySQL_Session::fail_aws_iam_backend(
@@ -950,20 +950,22 @@ int MySQL_Session::handler_again___status_WAITING_AWS_IAM_TOKEN() {
 		aws_iam_token_source_lease->record_waiting_session(false);
 	}
 	aws_iam_waiting_session_counted = false;
-	aws_iam_token_source_lease = AwsIamTokenSourceLease {};
 	aws_iam_request_handle = {};
 	aws_iam_connection = nullptr;
 	aws_iam_waiter_id = 0;
 	aws_iam_deadline_us = 0;
 	aws_iam_completion_ready = false;
+	aws_iam_completion = AwsIamTokenResult {};
+	aws_iam_token_key = AwsIamTokenKey {};
 	pause_until = 0;
+	set_status(CONNECTING_SERVER);
+	aws_iam_token_source_lease = AwsIamTokenSourceLease {};
 
 	connection->attach_aws_iam_token(key, std::move(completion));
 	connection->handler(0);
 	mybe->server_myds->fd = connection->fd;
 	mybe->server_myds->DSS = STATE_MARIADB_CONNECTING;
 	connection->reusable = true;
-	set_status(CONNECTING_SERVER);
 	return 0;
 }
 

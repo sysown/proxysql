@@ -98,7 +98,15 @@ public:
 	}
 
 	void cancel(AwsIamRequestHandle handle) override {
-		if (handle.value != 0) canceled.push_back(handle.value);
+		if (handle.value != 0) {
+			if (cancel_observed_session != nullptr && cancel_observed_worker != nullptr) {
+				const uint64_t waiter_id = cancel_observed_session->aws_iam_waiter_id;
+				cancel_saw_live_waiter = waiter_id != 0 &&
+					cancel_observed_worker->aws_iam_waiters.count(waiter_id) == 1;
+				cancel_saw_waiting_metric = waiting_sessions == 1;
+			}
+			canceled.push_back(handle.value);
+		}
 	}
 	void invalidate(const AwsIamTokenKey&, uint64_t) override {}
 	void record_backend_connection(bool success) override {
@@ -131,6 +139,10 @@ public:
 	std::vector<std::weak_ptr<AwsIamCompletionSink>> sinks;
 	std::vector<AwsIamRequestHandle> handles;
 	std::vector<uint64_t> canceled;
+	MySQL_Session *cancel_observed_session { nullptr };
+	MySQL_Thread *cancel_observed_worker { nullptr };
+	bool cancel_saw_live_waiter { false };
+	bool cancel_saw_waiting_metric { false };
 	unsigned int backend_successes { 0 };
 	unsigned int backend_failures { 0 };
 	uint64_t waiting_sessions { 0 };
@@ -152,6 +164,8 @@ public:
 		request_cv.notify_all();
 		request_worker = std::thread([this] {
 			std::unique_lock<std::mutex> lock(request_mutex);
+			request_worker_blocked = true;
+			request_cv.notify_all();
 			request_cv.wait(lock, [this] { return request_released; });
 		});
 		return AwsIamRequestHandle { next_handle++ };
@@ -191,6 +205,14 @@ public:
 		}
 	}
 
+	void wait_for_request_worker_to_block() {
+		std::unique_lock<std::mutex> lock(request_mutex);
+		if (!request_cv.wait_for(lock, std::chrono::seconds(1),
+			[this] { return request_worker_blocked; })) {
+			BAIL_OUT("IAM request worker did not reach its blocking predicate");
+		}
+	}
+
 	void release_request() {
 		{
 			std::lock_guard<std::mutex> lock(request_mutex);
@@ -203,6 +225,7 @@ public:
 	std::mutex request_mutex;
 	std::condition_variable request_cv;
 	bool request_entered { false };
+	bool request_worker_blocked { false };
 	bool request_released { false };
 	std::thread request_worker;
 	uint64_t next_handle { 1 };
@@ -459,12 +482,26 @@ void test_shutdown_completion(MySQL_Thread& worker) {
 		"token-source shutdown resumes the owner thread only to perform generic cleanup");
 }
 
+void test_cancel_keeps_wait_state_until_provider_cancel(MySQL_Thread& worker) {
+	FakeTokenSource source;
+	publish_global_aws_iam_token_source(&source);
+	SessionFixture fixture(worker);
+	fixture.start();
+	source.cancel_observed_session = fixture.session;
+	source.cancel_observed_worker = &worker;
+	fixture.session->cancel_aws_iam_wait();
+	ok(source.canceled.size() == 1 && source.cancel_saw_live_waiter &&
+		source.cancel_saw_waiting_metric,
+		"provider cancellation observes the live worker waiter and waiting metric");
+}
+
 void test_session_wait_keeps_original_source_leased(MySQL_Thread& worker) {
 	BlockingFakeTokenSource original_source;
 	publish_global_aws_iam_token_source(&original_source);
 	SessionFixture fixture(worker);
 	fixture.start();
 	original_source.wait_for_request();
+	original_source.wait_for_request_worker_to_block();
 
 	std::promise<void> shutdown_started;
 	std::future<void> shutdown_started_future = shutdown_started.get_future();
@@ -670,9 +707,9 @@ int __wrap_mysql_real_connect_start(MYSQL **ret, MYSQL *mysql, const char *host,
 
 int main() {
 #ifdef PROXYSQLAWSIAM
-	plan(25);
-#else
 	plan(26);
+#else
+	plan(27);
 #endif
 	if (test_init_minimal() != 0 || test_init_auth() != 0 ||
 		test_init_query_processor() != 0 || test_init_hostgroups() != 0) {
@@ -700,6 +737,7 @@ int main() {
 		mysql_thread___ssl_p2s_ca = strdup("/unit/fake-ca.pem");
 		worker.curtime = 10000000;
 		test_session_wait_keeps_original_source_leased(worker);
+		test_cancel_keeps_wait_state_until_provider_cancel(worker);
 		test_immediate_cache_hit(worker);
 		test_delayed_completion(worker);
 		test_provider_error_is_generic(worker);
