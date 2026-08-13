@@ -29,3 +29,22 @@ Real metric names, real label sets, real cardinality and volume, sampled at
 the default tsdb-sample_interval (5s) from a live 3-node cluster under
 sysbench oltp_read_write load. See test/tsdb-lab/README.md for how
 expand.py tiles this block forward for storage/replication/query sizing.
+
+## Known deviation from the current capture.bash (fixed, fixture NOT regenerated)
+
+This fixture was captured **before** a fix to `capture.bash`'s hostgroup
+registration. At capture time, hostgroup 1 pointed at `172.26.0.3:3307` —
+the dbdeployer GTID *replica*, a separate mysqld from the writer at
+`172.26.0.3:3306` — rather than at the same backend as hostgroup 0, which is
+what the task brief specifies ("one backend registered in two hostgroups").
+`capture.bash` now registers `${BACKEND_IP}:3306` in both hostgroups.
+
+This fixture was kept as-is rather than re-captured: hostgroup 1 carried no
+sysbench traffic under either topology (sysbench only ever connects through
+hostgroup 0 as `testuser`'s default_hostgroup), so the two topologies
+produce the same connpool series *cardinality* — only the `endpoint` label
+value on the (idle) hostgroup-1 connpool series differs (`...:3307` here vs.
+`...:3306` with the current script). Row shapes, sample interval, and total
+series count are unaffected; this fixture remains valid for sizing
+purposes. A future re-capture with the fixed script will show
+`endpoint=...:3306,hostgroup=1"}` instead of `:3307`.

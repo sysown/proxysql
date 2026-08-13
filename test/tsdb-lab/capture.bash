@@ -135,7 +135,7 @@ if [ -z "${BACKEND_IP}" ]; then
     err "could not resolve IP for backend container ${BACKEND_CONTAINER}"
     exit 1
 fi
-log "Backend container ${BACKEND_CONTAINER} at ${BACKEND_IP} (writer=3306, reader=3307)"
+log "Backend container ${BACKEND_CONTAINER} at ${BACKEND_IP}:3306 (used for both hostgroup 0 and hostgroup 1)"
 
 if ! timeout 5 bash -c "cat < /dev/null > /dev/tcp/${BACKEND_IP}/3306" 2>/dev/null; then
     err "backend ${BACKEND_IP}:3306 not reachable from host"
@@ -233,8 +233,13 @@ log "Configuring hostgroups/users/TSDB on each node (forced READWRITE)..."
 CONFIG_SQL="
 PROXYSQL READWRITE;
 DELETE FROM mysql_servers;
+-- Same backend (host:port) in both hostgroups on purpose: the brief calls
+-- for one backend registered in two hostgroups (label/series diversity
+-- for the TSDB fixture), not an actual writer/replica routing split. Do
+-- not point hostgroup 1 at the dbdeployer :3307 replica -- that's a
+-- separate mysqld and turns this into a two-backend setup instead.
 INSERT INTO mysql_servers (hostgroup_id,hostname,port,comment) VALUES (0,'${BACKEND_IP}',3306,'tsdb-lab-writer');
-INSERT INTO mysql_servers (hostgroup_id,hostname,port,comment) VALUES (1,'${BACKEND_IP}',3307,'tsdb-lab-reader');
+INSERT INTO mysql_servers (hostgroup_id,hostname,port,comment) VALUES (1,'${BACKEND_IP}',3306,'tsdb-lab-reader');
 DELETE FROM mysql_users WHERE username='${BACKEND_USER}';
 INSERT INTO mysql_users (username,password,active,default_hostgroup,comment) VALUES ('${BACKEND_USER}','${BACKEND_PASS}',1,0,'tsdb-lab');
 LOAD MYSQL SERVERS TO RUNTIME;
@@ -470,9 +475,11 @@ Build tier: PROXYSQL31 debug (src/proxysql)
 
 - Nodes: 3 (leader election enabled, weights 300/200/100)
 - Leader during capture: node$((LEADER_IDX + 1)) (admin port ${leader_admin_port})
-- Backend: ${BACKEND_CONTAINER} (dbdeployer MySQL 5.7, GTID replication)
-  - hostgroup 0 (writer): ${BACKEND_IP}:3306
-  - hostgroup 1 (reader): ${BACKEND_IP}:3307
+- Backend: ${BACKEND_CONTAINER} (dbdeployer MySQL 5.7, GTID replication),
+  same host:port registered in both hostgroups (two hostgroups over one
+  backend, not a writer/replica routing split)
+  - hostgroup 0: ${BACKEND_IP}:3306
+  - hostgroup 1: ${BACKEND_IP}:3306
 - Load generator: ${LOAD_GENERATOR}
 - Requested duration: ${DURATION_S}s (rates cycled 20/200/60 events-per-sec every 60s)
 
