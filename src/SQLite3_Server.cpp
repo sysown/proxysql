@@ -11,7 +11,7 @@
 #include "proxysql_utils.h"
 #include "MySQL_Query_Processor.h"
 #include "SQLite3_Server.h"
-#ifdef TEST_RDS_BGD
+#if defined(TEST_AURORA) || defined(TEST_RDS_BGD)
 #include "MySQL_Monitor.hpp"
 #endif
 
@@ -285,7 +285,7 @@ class sqlite3server_main_loop_listeners {
 
 static sqlite3server_main_loop_listeners S_amll;
 
-#if defined(TEST_READONLY) || defined(TEST_RDS_BGD)
+#if defined(TEST_AURORA) || defined(TEST_READONLY) || defined(TEST_RDS_BGD)
 static void ensure_readonly_table(SQLite3_Server *server, MySQL_Session *sess) {
 	if (server->readonly_map_size() == 0) {
 		server->load_readonly_table(sess);
@@ -854,17 +854,17 @@ __run_query:
 	if (run_query) {
 #if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP) || defined(TEST_READONLY) || defined(TEST_REPLICATIONLAG) || defined(TEST_RDS_BGD)
 		if (strncasecmp("SELECT",query_no_space,6)==0) {
-#ifdef TEST_RDS_BGD
-			const bool rds_bgd_table_check =
+#if defined(TEST_AURORA) || defined(TEST_RDS_BGD)
+			const bool aws_bgd_table_check =
 				strcasecmp(query_no_space, QUERY_AWS_RDS_TOPOLOGY_TABLE_CHECK) == 0;
-			const bool rds_bgd_metadata =
+			const bool aws_bgd_metadata =
 				strcasecmp(query_no_space, QUERY_AWS_RDS_TOPOLOGY_DISCOVERY) == 0;
-			if (rds_bgd_table_check || rds_bgd_metadata) {
+			if (aws_bgd_table_check || aws_bgd_metadata) {
 				if (sess->client_myds->proxy_addr.addr == NULL ||
 					sess->client_myds->proxy_addr.port <= 0) {
 					GloSQLite3Server->send_MySQL_ERR(
 						&sess->client_myds->myprot, 1105,
-						"RDS BGD simulator could not identify the accepted backend address");
+						"AWS BGD simulator could not identify the accepted backend address");
 					run_query=false;
 				} else {
 					SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
@@ -875,16 +875,16 @@ __run_query:
 						std::to_string(backend_port)
 					};
 					const std::string log_query {
-						"INSERT INTO RDS_BGD_PROBE_LOG"
+						"INSERT INTO AWS_BGD_PROBE_LOG"
 						"(backend_ip,backend_port,probe_kind,encrypted) VALUES ('" +
 						backend_ip + "'," + std::to_string(backend_port) + ",'" +
-						(rds_bgd_table_check ? "table_check" : "metadata") + "'," +
+						(aws_bgd_table_check ? "table_check" : "metadata") + "'," +
 						(sess->client_myds->encrypted ? "1" : "0") + ")"
 					};
 					if (!sqlite_sess->sessdb->execute(log_query.c_str())) {
 						GloSQLite3Server->send_MySQL_ERR(
 							&sess->client_myds->myprot, 1105,
-							"RDS BGD simulator failed to record the topology probe");
+							"AWS BGD simulator failed to record the topology probe");
 						run_query=false;
 					} else {
 						char *control_error=NULL;
@@ -892,7 +892,7 @@ __run_query:
 						int control_affected_rows=0;
 						SQLite3_result *control_result=NULL;
 						const std::string control_query {
-							"SELECT topology_present,error_code,error_msg FROM RDS_BGD_CONTROL WHERE " +
+							"SELECT topology_present,error_code,error_msg FROM AWS_BGD_CONTROL WHERE " +
 							predicate
 						};
 						sqlite_sess->sessdb->execute_statement(
@@ -917,7 +917,7 @@ __run_query:
 						}
 						delete control_result;
 
-						if (run_query && rds_bgd_table_check) {
+					if (run_query && aws_bgd_table_check) {
 							const char* topology_sql = topology_present ? "SELECT 1" : "SELECT 1 WHERE 0";
 							static constexpr size_t topology_sql_len =
 								sizeof("SELECT 1") - 1;
@@ -940,7 +940,7 @@ __run_query:
 						} else if (run_query) {
 							const std::string topology_query {
 								"SELECT id,endpoint,topology_port AS port,role,status "
-								"FROM RDS_BGD_TOPOLOGY WHERE " + predicate +
+								"FROM AWS_BGD_TOPOLOGY WHERE " + predicate +
 								" ORDER BY row_order"
 							};
 							l_free(query_length,query);
@@ -951,7 +951,7 @@ __run_query:
 				}
 			}
 
-#endif // TEST_RDS_BGD
+#endif // TEST_AURORA || TEST_RDS_BGD
 				#ifdef TEST_AURORA
 				if (strstr(query_no_space,(char *)"REPLICA_HOST_STATUS")) {
 					pthread_mutex_lock(&GloSQLite3Server->aurora_mutex);
@@ -1034,7 +1034,7 @@ __run_query:
 				}
 			}
 #endif // TEST_GROUPREP
-#if defined(TEST_READONLY) || defined(TEST_RDS_BGD)
+#if defined(TEST_AURORA) || defined(TEST_READONLY) || defined(TEST_RDS_BGD)
 				if (strncasecmp("SELECT @@global.read_only read_only ",query_no_space, k_select_read_only_len)==0
 					&& query_no_space_length > k_select_read_only_len+5) {
 						pthread_mutex_lock(&GloSQLite3Server->test_readonly_mutex);
@@ -1048,7 +1048,7 @@ __run_query:
 							query_length = formatted_query.size() + 1;
 							pthread_mutex_unlock(&GloSQLite3Server->test_readonly_mutex);
 					}
-#endif // TEST_READONLY || TEST_RDS_BGD
+#endif // TEST_AURORA || TEST_READONLY || TEST_RDS_BGD
 #ifdef TEST_REPLICATIONLAG
 				const bool replica_status = strncasecmp("SELECT REPLICA STATUS ", query_no_space, k_select_replica_status_len) == 0;
 				const uint64_t addr_offset {
@@ -1150,7 +1150,7 @@ __run_query:
 		bool deprecate_eof = sess->client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
 		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot, in_trans, deprecate_eof);
 		delete resultset;
-#if defined(TEST_READONLY) || defined(TEST_RDS_BGD)
+#if defined(TEST_AURORA) || defined(TEST_READONLY) || defined(TEST_RDS_BGD)
 		if (strncasecmp("SELECT",query_no_space,6)) {
 			if (strstr(query_no_space,(char *)"READONLY_STATUS")) {
 				// the table is writable
@@ -1159,7 +1159,7 @@ __run_query:
 				pthread_mutex_unlock(&GloSQLite3Server->test_readonly_mutex);
 			}
 		}
-#endif // TEST_READONLY || TEST_RDS_BGD
+#endif // TEST_AURORA || TEST_READONLY || TEST_RDS_BGD
 #ifdef TEST_REPLICATIONLAG
 		if (strncasecmp("SELECT", query_no_space, 6)) {
 			if (strstr(query_no_space, (char*)"REPLICATIONLAG_HOST_STATUS")) {
@@ -1469,15 +1469,15 @@ SQLite3_Server::~SQLite3_Server() {
 	delete tables_defs_grouprep;
 #endif // TEST_GROUPREP
 
-#if defined(TEST_READONLY) || defined(TEST_RDS_BGD)
+#if defined(TEST_AURORA) || defined(TEST_READONLY) || defined(TEST_RDS_BGD)
 	drop_tables_defs(tables_defs_readonly);
 	delete tables_defs_readonly;
 #endif
 
-#ifdef TEST_RDS_BGD
-	drop_tables_defs(tables_defs_rds_bgd);
-	delete tables_defs_rds_bgd;
-#endif // TEST_RDS_BGD
+#if defined(TEST_AURORA) || defined(TEST_RDS_BGD)
+	drop_tables_defs(tables_defs_aws_bgd);
+	delete tables_defs_aws_bgd;
+#endif // TEST_AURORA || TEST_RDS_BGD
 };
 
 #ifdef TEST_AURORA
@@ -1579,13 +1579,13 @@ SQLite3_Server::SQLite3_Server() {
 #ifdef TEST_GROUPREP
 	init_grouprep_ifaces_string(s);
 #endif // TEST_GROUPREP
-#if defined(TEST_READONLY) || defined(TEST_RDS_BGD)
+#if defined(TEST_AURORA) || defined(TEST_READONLY) || defined(TEST_RDS_BGD)
 	// Read-only simulation listens on all IPs because it can simulate many clusters.
 	if (!s.empty())
 		s += ";";
 	s += "0.0.0.0:3306";
 	pthread_mutex_init(&test_readonly_mutex, NULL);
-#endif // TEST_READONLY || TEST_RDS_BGD
+#endif // TEST_AURORA || TEST_READONLY || TEST_RDS_BGD
 #ifdef TEST_REPLICATIONLAG
 	// for replication test we listen on all IPs
 	if (!s.empty())
@@ -2041,7 +2041,7 @@ bool SQLite3_Server::init() {
 	check_and_build_standard_tables(sessdb, tables_defs_grouprep);
 	GloAdmin->enable_grouprep_testing();
 #endif // TEST_GALERA
-#if defined(TEST_READONLY) || defined(TEST_RDS_BGD)
+#if defined(TEST_AURORA) || defined(TEST_READONLY) || defined(TEST_RDS_BGD)
 	tables_defs_readonly = new std::vector<table_def_t *>;
 	insert_into_tables_defs(tables_defs_readonly,
 		(const char *)"READONLY_STATUS",
@@ -2050,32 +2050,32 @@ bool SQLite3_Server::init() {
 #ifdef TEST_READONLY
 	GloAdmin->enable_readonly_testing();
 #endif // TEST_READONLY
-#endif // TEST_READONLY || TEST_RDS_BGD
-#ifdef TEST_RDS_BGD
-	tables_defs_rds_bgd = new std::vector<table_def_t *>;
-	insert_into_tables_defs(tables_defs_rds_bgd,
-		(const char *)"RDS_BGD_CONTROL",
-		(const char *)"CREATE TABLE RDS_BGD_CONTROL ("
+#endif // TEST_AURORA || TEST_READONLY || TEST_RDS_BGD
+#if defined(TEST_AURORA) || defined(TEST_RDS_BGD)
+	tables_defs_aws_bgd = new std::vector<table_def_t *>;
+	insert_into_tables_defs(tables_defs_aws_bgd,
+		(const char *)"AWS_BGD_CONTROL",
+		(const char *)"CREATE TABLE AWS_BGD_CONTROL ("
 			"backend_ip TEXT NOT NULL, backend_port INTEGER NOT NULL, "
 			"topology_present INTEGER NOT NULL DEFAULT 0 CHECK (topology_present IN (0,1)), "
 			"error_code INTEGER NOT NULL DEFAULT 0, error_msg TEXT NOT NULL DEFAULT '', "
 			"PRIMARY KEY (backend_ip, backend_port))");
-	insert_into_tables_defs(tables_defs_rds_bgd,
-		(const char *)"RDS_BGD_TOPOLOGY",
-		(const char *)"CREATE TABLE RDS_BGD_TOPOLOGY ("
+	insert_into_tables_defs(tables_defs_aws_bgd,
+		(const char *)"AWS_BGD_TOPOLOGY",
+		(const char *)"CREATE TABLE AWS_BGD_TOPOLOGY ("
 			"backend_ip TEXT NOT NULL, backend_port INTEGER NOT NULL, row_order INTEGER NOT NULL, "
 			"id TEXT NOT NULL, endpoint TEXT NOT NULL, topology_port INTEGER NOT NULL, "
 			"role TEXT NOT NULL, status TEXT NOT NULL, "
 			"PRIMARY KEY (backend_ip, backend_port, row_order))");
-	insert_into_tables_defs(tables_defs_rds_bgd,
-		(const char *)"RDS_BGD_PROBE_LOG",
-		(const char *)"CREATE TABLE RDS_BGD_PROBE_LOG ("
+	insert_into_tables_defs(tables_defs_aws_bgd,
+		(const char *)"AWS_BGD_PROBE_LOG",
+		(const char *)"CREATE TABLE AWS_BGD_PROBE_LOG ("
 			"sequence_id INTEGER PRIMARY KEY AUTOINCREMENT, backend_ip TEXT NOT NULL, "
 			"backend_port INTEGER NOT NULL, probe_kind TEXT NOT NULL "
 			"CHECK (probe_kind IN ('table_check','metadata')), encrypted INTEGER NOT NULL "
 			"CHECK (encrypted IN (0,1)))");
-	check_and_build_standard_tables(sessdb, tables_defs_rds_bgd);
-#endif // TEST_RDS_BGD
+	check_and_build_standard_tables(sessdb, tables_defs_aws_bgd);
+#endif // TEST_AURORA || TEST_RDS_BGD
 #ifdef TEST_REPLICATIONLAG
 	tables_defs_replicationlag = new std::vector<table_def_t*>;
 	insert_into_tables_defs(tables_defs_replicationlag,
@@ -2205,7 +2205,7 @@ void SQLite3_Server::send_MySQL_ERR(MySQL_Protocol *myprot, uint16_t error_code,
 	myds->DSS=STATE_SLEEP;
 }
 
-#if defined(TEST_READONLY) || defined(TEST_RDS_BGD)
+#if defined(TEST_AURORA) || defined(TEST_READONLY) || defined(TEST_RDS_BGD)
 void SQLite3_Server::load_readonly_table(MySQL_Session *sess) {
 	// this function needs to be called with lock on mutex readonly_mutex already acquired
 	GloAdmin->mysql_servers_wrlock();
@@ -2246,7 +2246,7 @@ int SQLite3_Server::readonly_test_value(char *p) {
 	}
 	return rc;
 }
-#endif // TEST_READONLY || TEST_RDS_BGD
+#endif // TEST_AURORA || TEST_READONLY || TEST_RDS_BGD
 
 #ifdef TEST_REPLICATIONLAG
 void SQLite3_Server::load_replicationlag_table(MySQL_Session* sess) {

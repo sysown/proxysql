@@ -83,11 +83,14 @@ mcp_client.o: mcp_client.cpp mcp_client.h libcurl$(SHLIB_EXT)
 cluster_simulator.o: cluster_simulator.cpp cluster_simulator.h
 	$(CXX) -fPIC -c cluster_simulator.cpp $(IDIRS) -I$(MARIADB_IDIR) $(OPT)
 
-rds_bgd_simulator.o: rds_bgd_simulator.cpp rds_bgd_simulator.h cluster_simulator.h utils.h
+bgd_simulator.o: bgd_simulator.cpp bgd_simulator.h cluster_simulator.h utils.h
+	$(CXX) -fPIC -c bgd_simulator.cpp $(IDIRS) -I$(MARIADB_IDIR) $(OPT)
+
+rds_bgd_simulator.o: rds_bgd_simulator.cpp rds_bgd_simulator.h bgd_simulator.h
 	$(CXX) -fPIC -c rds_bgd_simulator.cpp $(IDIRS) -I$(MARIADB_IDIR) $(OPT)
 
-libtap_mariadb.a: tap.o command_line.o utils_mariadb.o noise_utils_mariadb.o mcp_client.o cluster_simulator.o rds_bgd_simulator.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
-	$(AR) rcs libtap_mariadb.a tap.o command_line.o utils_mariadb.o noise_utils_mariadb.o mcp_client.o cluster_simulator.o rds_bgd_simulator.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
+libtap_mariadb.a: tap.o command_line.o utils_mariadb.o noise_utils_mariadb.o mcp_client.o cluster_simulator.o bgd_simulator.o rds_bgd_simulator.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
+	$(AR) rcs libtap_mariadb.a tap.o command_line.o utils_mariadb.o noise_utils_mariadb.o mcp_client.o cluster_simulator.o bgd_simulator.o rds_bgd_simulator.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
 
 libtap_mysql57.a: tap.o command_line.o utils_mysql57.o noise_utils_mysql57.o mcp_client.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
 	$(AR) rcs libtap_mysql57.a tap.o command_line.o utils_mysql57.o noise_utils_mysql57.o mcp_client.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo

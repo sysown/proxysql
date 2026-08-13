@@ -39,7 +39,7 @@ struct TestState {
 	vector<Endpoint> generic_error_endpoints { generic_error.get_endpoints() };
 };
 
-int setup(CommandLine& cl, MYSQL*& admin, RDS_BGD_Simulator& sim) {
+int setup(CommandLine& cl, MYSQL*& admin, BGD_Simulator& sim) {
 	if (cl.getEnv()) {
 		diag("Error: failed to load TAP environment");
 		return EXIT_FAILURE;
@@ -61,7 +61,7 @@ int setup(CommandLine& cl, MYSQL*& admin, RDS_BGD_Simulator& sim) {
 	return EXIT_SUCCESS;
 }
 
-int cleanup(MYSQL* admin, RDS_BGD_Simulator& sim) {
+int cleanup(MYSQL* admin, BGD_Simulator& sim) {
 	int admin_rc = bgd_admin_cleanup(admin);
 	if (admin_rc != EXIT_SUCCESS) {
 		diag("Error: failed to clean ProxySQL BGD test state");
@@ -79,8 +79,8 @@ int cleanup(MYSQL* admin, RDS_BGD_Simulator& sim) {
 	return EXIT_SUCCESS;
 }
 
-vector<RDS_BGD_Topology_Row> topology_with_reader_pair(RDS_BGD_Cluster& cluster, string status) {
-	vector<RDS_BGD_Topology_Row> rows = cluster.get_topology(status);
+vector<BGD_Topology_Row> topology_with_reader_pair(RDS_BGD_Cluster& cluster, string status) {
+	vector<BGD_Topology_Row> rows = cluster.get_topology(status);
 	rows.push_back({
 		cluster.blue_readers[0].hostname,
 		cluster.blue_readers[0].hostname,
@@ -98,8 +98,8 @@ vector<RDS_BGD_Topology_Row> topology_with_reader_pair(RDS_BGD_Cluster& cluster,
 	return rows;
 }
 
-vector<RDS_BGD_Topology_Row> target_only_completed(RDS_BGD_Cluster& cluster) {
-	vector<RDS_BGD_Topology_Row> rows {{
+vector<BGD_Topology_Row> target_only_completed(RDS_BGD_Cluster& cluster) {
+	vector<BGD_Topology_Row> rows {{
 		cluster.green_writer.hostname,
 		cluster.green_writer.hostname,
 		cluster.green_writer.port,
@@ -109,7 +109,7 @@ vector<RDS_BGD_Topology_Row> target_only_completed(RDS_BGD_Cluster& cluster) {
 	return rows;
 }
 
-int configure_read_only_values(RDS_BGD_Simulator& sim, RDS_BGD_Cluster& cluster) {
+int configure_read_only_values(BGD_Simulator& sim, RDS_BGD_Cluster& cluster) {
 	if (bgd_set_host_read_only_0(sim, cluster.blue_writer) != EXIT_SUCCESS) {
 		return EXIT_FAILURE;
 	}
@@ -148,7 +148,7 @@ bool runtime_server_online(MYSQL* admin, int hostgroup, RDS_BGD_Host& host) {
 	return online;
 }
 
-int configure_bgd(MYSQL* admin, RDS_BGD_Simulator& sim, RDS_BGD_Cluster& cluster, BGD_Hostgroups& hg) {
+int configure_bgd(MYSQL* admin, BGD_Simulator& sim, RDS_BGD_Cluster& cluster, BGD_Hostgroups& hg) {
 	int read_only_rc = configure_read_only_values(sim, cluster);
 	if (read_only_rc != EXIT_SUCCESS) {
 		diag("Error: failed to configure simulated read_only values for wHG %d", hg.blue_writer);
@@ -168,14 +168,14 @@ int configure_bgd(MYSQL* admin, RDS_BGD_Simulator& sim, RDS_BGD_Cluster& cluster
 	return EXIT_SUCCESS;
 }
 
-int publish_topology(RDS_BGD_Simulator& sim, vector<Endpoint> endpoints, RDS_BGD_Cluster& cluster, string status) {
-	vector<RDS_BGD_Topology_Row> topology = topology_with_reader_pair(cluster, status);
+int publish_topology(BGD_Simulator& sim, vector<Endpoint> endpoints, RDS_BGD_Cluster& cluster, string status) {
+	vector<BGD_Topology_Row> topology = topology_with_reader_pair(cluster, status);
 
 	int rc = sim.topology_update(endpoints, topology);
 	return rc;
 }
 
-int enter_writer_switchover(MYSQL* admin, RDS_BGD_Simulator& sim, RDS_BGD_Cluster& cluster,
+int enter_writer_switchover(MYSQL* admin, BGD_Simulator& sim, RDS_BGD_Cluster& cluster,
 	BGD_Hostgroups& hg, vector<Endpoint> endpoints)
 {
 	int config_rc = configure_bgd(admin, sim, cluster, hg);
@@ -217,7 +217,7 @@ int enter_writer_switchover(MYSQL* admin, RDS_BGD_Simulator& sim, RDS_BGD_Cluste
 	return EXIT_SUCCESS;
 }
 
-int enter_reader_switchover(MYSQL* admin, RDS_BGD_Simulator& sim, RDS_BGD_Cluster& cluster,
+int enter_reader_switchover(MYSQL* admin, BGD_Simulator& sim, RDS_BGD_Cluster& cluster,
 	BGD_Hostgroups& hg, vector<Endpoint> endpoints)
 {
 	int progress_rc = enter_writer_switchover(admin, sim, cluster, hg, endpoints);
@@ -244,7 +244,7 @@ int enter_reader_switchover(MYSQL* admin, RDS_BGD_Simulator& sim, RDS_BGD_Cluste
 		return EXIT_FAILURE;
 	}
 
-	vector<RDS_BGD_Topology_Row> completed = target_only_completed(cluster);
+	vector<BGD_Topology_Row> completed = target_only_completed(cluster);
 	int completed_rc = sim.topology_update(endpoints, completed);
 	if (completed_rc != EXIT_SUCCESS) {
 		diag("Error: failed to publish target-only SWITCHOVER_COMPLETED topology for wHG %d", hg.blue_writer);
@@ -260,8 +260,8 @@ int enter_reader_switchover(MYSQL* admin, RDS_BGD_Simulator& sim, RDS_BGD_Cluste
 	return EXIT_SUCCESS;
 }
 
-int wait_for_metadata_error(RDS_BGD_Simulator& sim, uint64_t sequence, RDS_BGD_Cluster& cluster,
-	int error_number, string error_message, RDS_BGD_Probe_Log& probe)
+int wait_for_metadata_error(BGD_Simulator& sim, uint64_t sequence, RDS_BGD_Cluster& cluster,
+	int error_number, string error_message, BGD_Probe_Log& probe)
 {
 	vector<Endpoint> green_endpoint { cluster.green_writer.endpoint() };
 	int error_rc = sim.topology_error(green_endpoint, error_number, error_message);
@@ -270,7 +270,7 @@ int wait_for_metadata_error(RDS_BGD_Simulator& sim, uint64_t sequence, RDS_BGD_C
 	}
 
 	auto [probe_rc, metadata_probe] =
-		sim.wait_for_probe_log(sequence, cluster.green_writer.endpoint(), RDS_BGD_Probe_Kind::metadata, kProbeTimeoutMs, 0);
+		sim.wait_for_probe_log(sequence, cluster.green_writer.endpoint(), BGD_Probe_Kind::metadata, kProbeTimeoutMs, 0);
 	if (probe_rc != EXIT_SUCCESS) {
 		return EXIT_FAILURE;
 	}
@@ -279,7 +279,7 @@ int wait_for_metadata_error(RDS_BGD_Simulator& sim, uint64_t sequence, RDS_BGD_C
 	return EXIT_SUCCESS;
 }
 
-int wait_for_blue_table_check(RDS_BGD_Simulator& sim, uint64_t sequence, RDS_BGD_Cluster& cluster) {
+int wait_for_blue_table_check(BGD_Simulator& sim, uint64_t sequence, RDS_BGD_Cluster& cluster) {
 	vector<Endpoint> blue_endpoint { cluster.blue_writer.endpoint() };
 	int drop_rc = sim.topology_drop(blue_endpoint);
 	if (drop_rc != EXIT_SUCCESS) {
@@ -287,7 +287,7 @@ int wait_for_blue_table_check(RDS_BGD_Simulator& sim, uint64_t sequence, RDS_BGD
 	}
 
 	auto [probe_rc, probe] =
-		sim.wait_for_probe_log(sequence, cluster.blue_writer.endpoint(), RDS_BGD_Probe_Kind::table_check, kProbeTimeoutMs, 0);
+		sim.wait_for_probe_log(sequence, cluster.blue_writer.endpoint(), BGD_Probe_Kind::table_check, kProbeTimeoutMs, 0);
 	return probe_rc;
 }
 
@@ -299,7 +299,7 @@ int wait_for_blue_table_check(RDS_BGD_Simulator& sim, uint64_t sequence, RDS_BGD
  * - Verify BGD status NONE, restored blue-writer placement, and a subsequent
  *   blue-writer table check.
  */
-int test_error_1146_before_completion(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_error_1146_before_completion(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	RDS_BGD_Cluster& cluster = state.before_completion;
 	BGD_Hostgroups& hg = state.before_completion_hg;
 
@@ -315,7 +315,7 @@ int test_error_1146_before_completion(MYSQL* admin, RDS_BGD_Simulator& sim, Test
 		return EXIT_FAILURE;
 	}
 
-	RDS_BGD_Probe_Log metadata {};
+	BGD_Probe_Log metadata {};
 	int metadata_rc =
 		wait_for_metadata_error(sim, seq, cluster, 1146, "Table 'mysql.rds_topology' doesn't exist", metadata);
 	if (metadata_rc != EXIT_SUCCESS) {
@@ -356,7 +356,7 @@ int test_error_1146_before_completion(MYSQL* admin, RDS_BGD_Simulator& sim, Test
  * - Verify BGD status NONE, restored blue-reader routing, retained green rows,
  *   and a subsequent blue-writer table check.
  */
-int test_error_1146_during_reader_switchover(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_error_1146_during_reader_switchover(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	RDS_BGD_Cluster& cluster = state.reader_switchover;
 	BGD_Hostgroups& hg = state.reader_switchover_hg;
 
@@ -372,7 +372,7 @@ int test_error_1146_during_reader_switchover(MYSQL* admin, RDS_BGD_Simulator& si
 		return EXIT_FAILURE;
 	}
 
-	RDS_BGD_Probe_Log metadata {};
+	BGD_Probe_Log metadata {};
 	int metadata_rc =
 		wait_for_metadata_error(sim, seq, cluster, 1146, "Table 'mysql.rds_topology' doesn't exist", metadata);
 	if (metadata_rc != EXIT_SUCCESS) {
@@ -410,7 +410,7 @@ int test_error_1146_during_reader_switchover(MYSQL* admin, RDS_BGD_Simulator& si
  * - Verify that table checking does not restart and that the in-progress
  *   status and blue-writer demotion remain unchanged.
  */
-int test_generic_metadata_error(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_generic_metadata_error(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	RDS_BGD_Cluster& cluster = state.generic_error;
 	BGD_Hostgroups& hg = state.generic_error_hg;
 
@@ -426,7 +426,7 @@ int test_generic_metadata_error(MYSQL* admin, RDS_BGD_Simulator& sim, TestState&
 		return EXIT_FAILURE;
 	}
 
-	RDS_BGD_Probe_Log metadata {};
+	BGD_Probe_Log metadata {};
 	int metadata_rc = wait_for_metadata_error(sim, seq, cluster, 1105, "simulated generic metadata failure", metadata);
 	if (metadata_rc != EXIT_SUCCESS) {
 		diag("Error: wHG 1160 did not observe the generic metadata error on the green writer");
@@ -462,7 +462,7 @@ int main() {
 
 	CommandLine cl {};
 	MYSQL* admin = nullptr;
-	RDS_BGD_Simulator sim {};
+	BGD_Simulator sim {};
 
 	if (setup(cl, admin, sim) != EXIT_SUCCESS) {
 		return exit_status();

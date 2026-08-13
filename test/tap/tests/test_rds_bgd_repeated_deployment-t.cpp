@@ -36,7 +36,7 @@ struct TestState {
 	}
 };
 
-int setup(CommandLine& cl, MYSQL*& admin, RDS_BGD_Simulator& sim) {
+int setup(CommandLine& cl, MYSQL*& admin, BGD_Simulator& sim) {
 	if (cl.getEnv()) {
 		diag("Error: failed to load TAP environment");
 		return EXIT_FAILURE;
@@ -58,7 +58,7 @@ int setup(CommandLine& cl, MYSQL*& admin, RDS_BGD_Simulator& sim) {
 	return EXIT_SUCCESS;
 }
 
-int cleanup(MYSQL* admin, RDS_BGD_Simulator& sim) {
+int cleanup(MYSQL* admin, BGD_Simulator& sim) {
 	int admin_rc = bgd_admin_cleanup(admin);
 	if (admin_rc != EXIT_SUCCESS) {
 		diag("Error: failed to clean ProxySQL BGD test state");
@@ -76,8 +76,8 @@ int cleanup(MYSQL* admin, RDS_BGD_Simulator& sim) {
 	return EXIT_SUCCESS;
 }
 
-vector<RDS_BGD_Topology_Row> topology_with_reader_pair(RDS_BGD_Cluster& cluster, string status) {
-	vector<RDS_BGD_Topology_Row> rows = cluster.get_topology(status);
+vector<BGD_Topology_Row> topology_with_reader_pair(RDS_BGD_Cluster& cluster, string status) {
+	vector<BGD_Topology_Row> rows = cluster.get_topology(status);
 	rows.push_back({
 		cluster.blue_readers[0].hostname,
 		cluster.blue_readers[0].hostname,
@@ -95,8 +95,8 @@ vector<RDS_BGD_Topology_Row> topology_with_reader_pair(RDS_BGD_Cluster& cluster,
 	return rows;
 }
 
-vector<RDS_BGD_Topology_Row> target_only_completed(RDS_BGD_Cluster& cluster) {
-	vector<RDS_BGD_Topology_Row> rows {{
+vector<BGD_Topology_Row> target_only_completed(RDS_BGD_Cluster& cluster) {
+	vector<BGD_Topology_Row> rows {{
 		cluster.green_writer.hostname,
 		cluster.green_writer.hostname,
 		cluster.green_writer.port,
@@ -106,7 +106,7 @@ vector<RDS_BGD_Topology_Row> target_only_completed(RDS_BGD_Cluster& cluster) {
 	return rows;
 }
 
-int configure_read_only_values(RDS_BGD_Simulator& sim, RDS_BGD_Cluster& cluster) {
+int configure_read_only_values(BGD_Simulator& sim, RDS_BGD_Cluster& cluster) {
 	if (bgd_set_host_read_only_0(sim, cluster.blue_writer) != EXIT_SUCCESS) {
 		return EXIT_FAILURE;
 	}
@@ -196,9 +196,9 @@ int replace_green_membership(
 }
 
 int publish_writer_lifecycle(
-	MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state, RDS_BGD_Cluster& cluster, string deployment)
+	MYSQL* admin, BGD_Simulator& sim, TestState& state, RDS_BGD_Cluster& cluster, string deployment)
 {
-	vector<RDS_BGD_Topology_Row> initiated = topology_with_reader_pair(cluster, "SWITCHOVER_INITIATED");
+	vector<BGD_Topology_Row> initiated = topology_with_reader_pair(cluster, "SWITCHOVER_INITIATED");
 	if (sim.topology_update(cluster.get_endpoints(), initiated) != EXIT_SUCCESS) {
 		diag("Error: failed to publish SWITCHOVER_INITIATED topology for deployment %s", deployment.c_str());
 		return EXIT_FAILURE;
@@ -209,7 +209,7 @@ int publish_writer_lifecycle(
 		return EXIT_FAILURE;
 	}
 
-	vector<RDS_BGD_Topology_Row> progress = topology_with_reader_pair(cluster, "SWITCHOVER_IN_PROGRESS");
+	vector<BGD_Topology_Row> progress = topology_with_reader_pair(cluster, "SWITCHOVER_IN_PROGRESS");
 	if (sim.topology_update(cluster.get_endpoints(), progress) != EXIT_SUCCESS) {
 		diag("Error: failed to publish SWITCHOVER_IN_PROGRESS topology for deployment %s", deployment.c_str());
 		return EXIT_FAILURE;
@@ -220,7 +220,7 @@ int publish_writer_lifecycle(
 		return EXIT_FAILURE;
 	}
 
-	vector<RDS_BGD_Topology_Row> post = topology_with_reader_pair(cluster, "SWITCHOVER_IN_POST_PROCESSING");
+	vector<BGD_Topology_Row> post = topology_with_reader_pair(cluster, "SWITCHOVER_IN_POST_PROCESSING");
 	if (sim.topology_update(cluster.get_endpoints(), post) != EXIT_SUCCESS) {
 		diag("Error: failed to publish SWITCHOVER_IN_POST_PROCESSING topology for deployment %s", deployment.c_str());
 		return EXIT_FAILURE;
@@ -235,9 +235,9 @@ int publish_writer_lifecycle(
 	return EXIT_SUCCESS;
 }
 
-int publish_reader_cleanup(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state, RDS_BGD_Cluster& cluster,
+int publish_reader_cleanup(MYSQL* admin, BGD_Simulator& sim, TestState& state, RDS_BGD_Cluster& cluster,
 	string deployment) {
-	vector<RDS_BGD_Topology_Row> completed = target_only_completed(cluster);
+	vector<BGD_Topology_Row> completed = target_only_completed(cluster);
 	if (sim.topology_update(cluster.get_endpoints(), completed) != EXIT_SUCCESS) {
 		diag("Error: failed to publish target-only SWITCHOVER_COMPLETED for deployment %s", deployment.c_str());
 		return EXIT_FAILURE;
@@ -275,7 +275,7 @@ int publish_reader_cleanup(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& stat
  * - Complete writer and reader switchover, then publish empty topology.
  * - Verify NONE and baseline blue-writer placement.
  */
-int test_deployment_a(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_deployment_a(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	RDS_BGD_Cluster& deployment = state.deployment_a;
 	BGD_Hostgroups& hg = state.hostgroups;
 
@@ -285,7 +285,7 @@ int test_deployment_a(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
 		return EXIT_FAILURE;
 	}
 
-	vector<RDS_BGD_Topology_Row> available = topology_with_reader_pair(deployment, "AVAILABLE");
+	vector<BGD_Topology_Row> available = topology_with_reader_pair(deployment, "AVAILABLE");
 	int topology_rc = sim.topology_update(deployment.get_endpoints(), available);
 	if (topology_rc != EXIT_SUCCESS) {
 		diag("Error: failed to publish AVAILABLE topology for deployment A");
@@ -332,7 +332,7 @@ int test_deployment_a(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
  * - Complete deployment B and verify that routing uses deployment B without
  *   recreating deployment A rows.
  */
-int test_deployment_b(CommandLine& cl, MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_deployment_b(CommandLine& cl, MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	RDS_BGD_Cluster& deployment_a = state.deployment_a;
 	RDS_BGD_Cluster& deployment_b = state.deployment_b;
 	BGD_Hostgroups& hg = state.hostgroups;
@@ -355,7 +355,7 @@ int test_deployment_b(CommandLine& cl, MYSQL* admin, RDS_BGD_Simulator& sim, Tes
 		return EXIT_FAILURE;
 	}
 
-	vector<RDS_BGD_Topology_Row> available = topology_with_reader_pair(deployment_b, "AVAILABLE");
+	vector<BGD_Topology_Row> available = topology_with_reader_pair(deployment_b, "AVAILABLE");
 	int topology_rc = sim.topology_update(deployment_b.get_endpoints(), available);
 	if (topology_rc != EXIT_SUCCESS) {
 		diag("Error: failed to publish AVAILABLE topology for deployment B");
@@ -372,7 +372,7 @@ int test_deployment_b(CommandLine& cl, MYSQL* admin, RDS_BGD_Simulator& sim, Tes
 	ok(membership_matches, "runtime_mysql_servers contains only TLS-enabled deployment B green rows");
 
 	auto [probe_rc, probe] = sim.wait_for_probe_log(
-		seq, deployment_b.green_writer.endpoint(), RDS_BGD_Probe_Kind::metadata, kProbeTimeoutMs, 1
+		seq, deployment_b.green_writer.endpoint(), BGD_Probe_Kind::metadata, kProbeTimeoutMs, 1
 	);
 	if (probe_rc != EXIT_SUCCESS) {
 		diag("Error: deployment B green writer did not receive a TLS metadata probe");
@@ -416,7 +416,7 @@ int main() {
 
 	CommandLine cl {};
 	MYSQL* admin = nullptr;
-	RDS_BGD_Simulator sim {};
+	BGD_Simulator sim {};
 
 	if (setup(cl, admin, sim) != EXIT_SUCCESS) {
 		return exit_status();
