@@ -100,15 +100,33 @@ gate on every change).
 5. Measure and print a table:
    - bytes per row (per table: `tsdb_metrics`, `tsdb_metrics_hour`,
      `tsdb_metrics_cluster`), computed from row counts and page usage;
+   - the whole-file overhead ratio (page_count*page_size / summed tier
+     payload bytes);
    - total DB size;
    - rollup catch-up duration (time from start until `tsdb_metrics_hour`
      stops growing — i.e. the first downsample pass, which holds `wrlock`);
    - latency of two representative queries: raw last-1h for one metric, and
      hourly 14d for one metric.
-6. **Report always; fail only on a coarse guard** — bytes/row drifting more
-   than 25% from the baseline recorded in
-   `test/tsdb-lab/baseline.json` (committed, updated deliberately). This
-   catches schema/row bloat regressions without becoming a flaky perf gate.
+6. **Report always; fail only on two coarse guards**, each covering a
+   different failure mode, neither covering everything:
+   - **bytes/row** drifting more than 25% from `test/tsdb-lab/baseline.json`
+     (committed, updated deliberately). This is a near-pure function of the
+     committed fixture's text (`LENGTH(metric_name)+LENGTH(labels)+16`,
+     averaged) — it guards fixture/tooling consistency, not the product: a
+     product change that adds or lengthens labels does not move this number
+     until a human re-runs `capture.bash` and commits a refreshed fixture
+     (see `test/tsdb-lab/README.md`'s "Maintenance" section).
+   - **the whole-file overhead ratio** drifting more than 25% from the same
+     baseline file. This IS sensitive to schema/index bloat — a new column
+     or index inflates `page_count` while tier payload stays flat, moving
+     the ratio even though bytes/row does not (verified scale-invariant at
+     2.17 across both the small and full-scale profiles, so a real drift in
+     it is a schema-shape signal, not a scale artifact).
+   - Total DB size and query latency are reported only, never gated (file
+     size is a derived total of the already-gated numbers plus non-tsdb
+     overhead; latency is hardware-dependent, see the non-goals below).
+   - Detecting product-side metric/label growth is **not** automatic under
+     either gate — it requires the maintenance step above.
 
 ### 4. Tests for the tool itself
 

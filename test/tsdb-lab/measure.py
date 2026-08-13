@@ -18,10 +18,18 @@ page_count * page_size (this total includes ALL tables in the database
 plus index and page overhead, not just the three TSDB tables measured
 here).
 
-Exit status: 0 unless a table's bytes/row has drifted more than
---drift-pct from the value recorded for it in --baseline (default
-test/tsdb-lab/baseline.json), in which case it exits 1. A table with no
-entry in the baseline is reported as NEW and never fails the run.
+It also computes the whole-file overhead ratio: (page_count * page_size)
+divided by the summed payload bytes across all measured tiers. Unlike
+bytes/row (a per-table proxy derived from fixture text, see the note in
+compare_to_baseline below), this ratio is sensitive to schema/index bloat
+that inflates page_count without changing payload -- a new column or index
+would move it even though bytes/row stays flat.
+
+Exit status: 0 unless a table's bytes/row, OR the whole-file overhead
+ratio, has drifted more than --drift-pct (in either direction) from the
+value recorded in --baseline (default test/tsdb-lab/baseline.json), in
+which case it exits 1. A table or ratio with no entry in the baseline is
+reported as NEW and never fails the run.
 
 Python standard library only.
 """
@@ -134,17 +142,36 @@ def load_baseline(path):
         return json.load(f)
 
 
+def drift_status(value, base, drift_pct):
+    """Returns (status_str, is_drift_failure) for `value` against a baseline
+    scalar `base`. Shared by the per-table bytes/row gate and the whole-file
+    payload-ratio gate below -- both are "fail outside +/-drift_pct" checks
+    against a single recorded number, just with different sources for
+    `value` and `base`."""
+    if not base:
+        return "NEW", False
+    drift = (value - base) / float(base) * 100.0
+    status = "%+.1f%%" % drift
+    return status, abs(drift) > drift_pct
+
+
 def compare_to_baseline(table, bytes_per_row, baseline, drift_pct):
-    """Returns (status_str, is_drift_failure)."""
+    """Returns (status_str, is_drift_failure).
+
+    NOTE on the rows=0 case: measure_table() reports bytes_per_row=0.0 for
+    an empty-but-present table. Against any non-zero baseline entry that is
+    exactly a -100% drift, which is intentionally treated as a hard FAIL
+    here rather than a soft NEW/skip -- an empty tier with a baseline on
+    file is far more likely to mean a broken expansion (wrong --db, wrong
+    schema, expand.py silently inserting 0 rows) than a legitimate new
+    state, and this coarse guard is supposed to catch exactly that, not stay
+    silent because "0 isn't really a row count". This is deliberate,
+    fail-loud behavior, not a bug.
+    """
     entry = baseline.get(table)
     if entry is None:
         return "NEW", False
-    base = entry.get("bytes_per_row")
-    if not base:
-        return "NEW", False
-    drift = (bytes_per_row - base) / float(base) * 100.0
-    status = "%+.1f%%" % drift
-    return status, abs(drift) > drift_pct
+    return drift_status(bytes_per_row, entry.get("bytes_per_row"), drift_pct)
 
 
 def main(argv=None):
@@ -182,17 +209,31 @@ def main(argv=None):
     print("-" * len(header))
 
     any_drift_failure = False
+    total_payload_bytes = 0
     for table in TABLES:
         m = measurements[table]
         if m is None:
             print("%-24s %12s" % (table, "(absent)"))
             continue
+        total_payload_bytes += m["payload_bytes"]
         payload_mb = m["payload_bytes"] / (1024.0 * 1024.0)
         status, is_failure = compare_to_baseline(table, m["bytes_per_row"], baseline, args.drift_pct)
         if is_failure:
             any_drift_failure = True
         print("%-24s %12d %14.2f %16.3f %14s" % (
             table, m["rows"], m["bytes_per_row"], payload_mb, status))
+
+    print()
+    if total_payload_bytes > 0:
+        file_payload_ratio = total_bytes / float(total_payload_bytes)
+        ratio_status, ratio_failure = drift_status(
+            file_payload_ratio, baseline.get("file_payload_ratio"), args.drift_pct)
+        if ratio_failure:
+            any_drift_failure = True
+        print("File/payload overhead ratio: %.3f  (page_count*page_size / summed tier payload; vs baseline: %s)" % (
+            file_payload_ratio, ratio_status))
+    else:
+        print("File/payload overhead ratio: (no payload measured; all tiers absent/empty)")
 
     print()
     print("Query timings:")
@@ -204,7 +245,7 @@ def main(argv=None):
 
     print()
     if any_drift_failure:
-        print("RESULT: FAIL (bytes/row drift exceeded +/-%.1f%% threshold)" % args.drift_pct)
+        print("RESULT: FAIL (bytes/row or file/payload ratio drift exceeded +/-%.1f%% threshold)" % args.drift_pct)
     else:
         print("RESULT: OK (drift threshold +/-%.1f%%)" % args.drift_pct)
 

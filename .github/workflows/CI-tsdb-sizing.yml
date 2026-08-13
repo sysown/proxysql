@@ -5,9 +5,23 @@ name: CI-tsdb-sizing
 # fixture into a realistically sized proxysql_stats.db (raw + rollups + a
 # 3-node cluster tier), measures storage/query characteristics with
 # measure.py, and uploads the printed report as a job artifact. The job
-# goes red only when measure.py detects bytes/row drift beyond
-# baseline.json's +/-25% default threshold -- that is the whole point of
-# running it nightly on a schedule instead of on every push.
+# goes red only when measure.py detects drift beyond baseline.json's
+# +/-25% default threshold on EITHER of two different-purpose gates:
+# bytes/row (guards fixture/tooling consistency -- it is fixture-text
+# derived and does NOT see product-side label/metric growth until a human
+# re-runs capture.bash and commits a refreshed fixture, see
+# test/tsdb-lab/README.md's "Maintenance" section) and the whole-file
+# overhead ratio (guards schema/index bloat -- sensitive to a new column or
+# index even when payload bytes don't change). Total DB size and query
+# latency are reported only, never gated. That two-gate split is the whole
+# point of running it nightly on a schedule instead of on every push.
+#
+# IMPORTANT: this workflow only starts running once merged to the default
+# branch (schedule/workflow_dispatch don't fire off a branch) -- see
+# test/tsdb-lab/README.md's "After merge: first-run validation checklist"
+# for the owner actions that are still outstanding as of this commit
+# (manual dispatch, confirming the 4h/7d profile, replacing the analogy-
+# derived build-time term below, confirming runner disk headroom).
 #
 # Profile sizing (2026-08-13 measurement, see
 # docs/superpowers/specs/2026-08-13-tsdb-sizing-lab-design.md "Measured
