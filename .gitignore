@@ -239,3 +239,6 @@ deps/protobuf/protobuf-*/
 # symlink at runtime under test-scripts/deps/; never commit this one (it was
 # accidentally committed once with an absolute /home path).
 test/scripts/deps/mysqlbinlog
+
+# superpowers scratch (SDD workspaces, review packages)
+.superpowers/
