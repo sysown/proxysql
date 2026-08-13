@@ -6,6 +6,7 @@
 
 #include "ProxySQL_PluginManager.h"
 #include "Aws_Iam_Provider.h"
+#include "Aws_Locality_Manager.h"
 #include "MySQL_Thread.h"
 
 #include <atomic>
@@ -196,6 +197,17 @@ void get_aws_iam_limits_service(size_t *max_total_waiters, size_t *max_waiters_p
 	if (max_total_waiters != nullptr) *max_total_waiters = maximum;
 	if (max_waiters_per_key != nullptr) *max_waiters_per_key = maximum;
 }
+
+bool install_aws_metadata_provider_service(
+	AwsMetadataProvider *provider,
+	void (*destroy)(AwsMetadataProvider *),
+	void *module_handle) {
+	if (g_registry_target == nullptr) {
+		proxy_warning("AWS metadata provider installation attempted outside plugin init phase\n");
+		return false;
+	}
+	return install_global_aws_metadata_provider(provider, destroy, module_handle);
+}
 #endif /* PROXYSQL40 */
 
 SQLite3DB* get_admindb_service() {
@@ -324,6 +336,7 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_.register_runtime_view = &register_runtime_view_service;
 	services_.install_aws_iam_token_source = &install_aws_iam_token_source_service;
 	services_.get_aws_iam_limits = &get_aws_iam_limits_service;
+	services_.install_aws_metadata_provider = &install_aws_metadata_provider_service;
 
 	// Phase-B (register_schemas) services: same layout as init(), but DB
 	// handle getters and the query-hook registrar are stubbed -- see the

@@ -43,6 +43,7 @@ using json = nlohmann::json;
 #include "Web_Interface.hpp"
 #ifdef PROXYSQL40
 #include "ProxySQL_PluginManager.h"
+#include "Aws_Locality_Manager.h"
 #endif /* PROXYSQL40 */
 #include "proxysql_utils.h"
 #include "PgSQL_Monitor.hpp"
@@ -1808,6 +1809,14 @@ bool ProxySQL_Main_init_phase3___start_all() {
 void ProxySQL_Main_init_phase4___shutdown() {
 	cpu_timer t;
 	ProxySQL_Main_join_all_threads();
+#ifdef PROXYSQL40
+	// The locality manager can retain a provider lease between refreshes.
+	// Drain it before shutting down the plugin-owned provider registry.
+	if (MyHGM != nullptr && MyHGM->aws_locality_manager() != nullptr) {
+		MyHGM->aws_locality_manager()->shutdown();
+	}
+	shutdown_global_aws_metadata_provider();
+#endif
 	shutdown_global_aws_iam_token_source();
 
 	//write(GloAdmin->pipefd[1], &GloAdmin->pipefd[1], 1);	// write a random byte

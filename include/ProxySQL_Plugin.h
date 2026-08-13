@@ -15,6 +15,7 @@
 class SQLite3DB;
 class SQLite3_result;
 class AwsIamTokenSource;
+class AwsMetadataProvider;
 namespace prometheus { class Registry; }
 
 // Descriptor ABI version the plugin was compiled for.  Plugins set
@@ -40,8 +41,10 @@ namespace prometheus { class Registry; }
 //          trailing field — matching the pre-ABI-4 behaviour.
 //   ABI 5: ProxySQL_PluginServices gains AWS IAM provider installation and
 //          sizing callbacks. They are live only during normal plugin init.
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = 5u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = 5u;
+//   ABI 6: ProxySQL_PluginServices gains the general AWS metadata-provider
+//          installation callback used by locality discovery.
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = 6u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = 6u;
 
 enum class ProxySQL_PluginDBKind : uint8_t {
 	admin_db = 0,
@@ -242,6 +245,9 @@ using proxysql_plugin_install_aws_iam_token_source_cb =
 
 using proxysql_plugin_get_aws_iam_limits_cb =
 	void (*)(size_t *max_total_waiters, size_t *max_waiters_per_key);
+
+using proxysql_plugin_install_aws_metadata_provider_cb =
+	bool (*)(AwsMetadataProvider *, void (*)(AwsMetadataProvider *), void *module_handle);
 #endif /* PROXYSQL40 */
 
 // Services provided to plugins across the four-phase lifecycle.
@@ -308,6 +314,8 @@ struct ProxySQL_PluginServices {
 	// ABI-5 extension. Both are null outside plugin init().
 	proxysql_plugin_install_aws_iam_token_source_cb install_aws_iam_token_source;
 	proxysql_plugin_get_aws_iam_limits_cb get_aws_iam_limits;
+	// ABI-6 extension. Null outside normal plugin init().
+	proxysql_plugin_install_aws_metadata_provider_cb install_aws_metadata_provider;
 #endif /* PROXYSQL40 */
 };
 

@@ -947,6 +947,13 @@ aws_locality_manager_unit-t: aws_locality_manager_unit-t.cpp \
 		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
 		$(IDIRS) $(OPT) -lpthread -ldl -o $@
 
+aws_locality_plugin_unit-t: aws_locality_plugin_unit-t.cpp \
+		$(PROXYSQL_PATH)/plugins/aws/src/aws_locality_provider.cpp \
+		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/aws/src/aws_locality_provider.cpp \
+		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		$(IDIRS) -I$(PROXYSQL_PATH)/plugins/aws/src $(OPT) -lpthread -lcrypto -o $@
+
 test_aws_iam_metrics-t: ../test_aws_iam_metrics-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(TEST_HELPERS_OBJ) -I$(TEST_HELPERS_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
