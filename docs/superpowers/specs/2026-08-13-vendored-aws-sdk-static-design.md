@@ -30,7 +30,7 @@ archives, initialize the AWS runtime, or start IAM provider workers.
 
 ```text
 deps/aws-sdk-cpp/
-  aws-sdk-cpp-1.11.869-with-crt.tar.gz
+  aws-sdk-cpp-1.11.869-with-crt.tar.xz
   aws-sdk-cpp-1.11.869-with-crt.sha256
   aws-sdk-cpp-1.11.869-sources.json
   LICENSE
@@ -38,15 +38,24 @@ deps/aws-sdk-cpp/
   THIRD_PARTY_NOTICES.md
 ```
 
+The archive is tracked by Git LFS at that repository path.  A checkout must
+hydrate the LFS object before a feature-on build; the build itself reads and
+extracts the already local archive and never downloads SDK source.
+
 The tarball is created from upstream tag `1.11.869` and has all nested source
 trees expanded at their upstream pinned commits. This includes
 `aws-crt-cpp` and its `aws-c-*`, `aws-checksums`, `aws-lc`, and `s2n` source
-trees required by that revision. It is a source-only bundle: generated CMake
-build output, SDK tests, credentials, and prebuilt archives are excluded.
+trees required by that revision. It is a conventional complete source bundle:
+source tests, feature-probe inputs, examples, documentation, and test fixtures
+remain because upstream CMake can use source-side probes even with tests
+disabled. Only VCS metadata, generated build directories, machine-local AWS
+configuration, and prebuilt object/library files are excluded. CMake disables
+all SDK test/example/tool targets during the ProxySQL build.
 
-`aws-sdk-cpp-1.11.869-sources.json` records each upstream repository URL, tag
-or pinned commit, source archive SHA-256, and extracted tree SHA-256. The
-top-level SHA-256 file covers the committed bundle. The license and notice
+`aws-sdk-cpp-1.11.869-sources.json` records the top-level tag/commit and every
+expanded submodule repository URL and pinned commit. The SHA-256 file covers
+the committed bundle, and the verifier pins that same expected digest in its
+own code so the digest file is not the sole trust input. The license and notice
 files are copied from the pinned source trees and named in
 `THIRD_PARTY_NOTICES.md`; the bundle therefore carries the Apache-2.0
 attribution required for the SDK and the notices required by its vendored

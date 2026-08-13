@@ -10,7 +10,8 @@
 
 ## Global Constraints
 
-- Vendor exactly AWS SDK for C++ `1.11.869` as a committed **source-only** tarball under `deps/aws-sdk-cpp/`; it must include the recursively expanded AWS CRT source tree at the upstream-pinned revisions.
+- Vendor exactly AWS SDK for C++ `1.11.869` as a Git-LFS-tracked source tarball under `deps/aws-sdk-cpp/`; it must include the recursively expanded AWS CRT source tree at the upstream-pinned revisions.
+- `.gitattributes` tracks only `deps/aws-sdk-cpp/aws-sdk-cpp-1.11.869-with-crt.tar.xz` with the Git LFS filter.  CI and release checkouts hydrate it before any feature-on build; ProxySQL make rules only extract the local file.
 - Do not download source, invoke `git`, use CMake FetchContent/ExternalProject, install an AWS SDK package, or discover `AWS_SDK_CPP_ROOT` during any ProxySQL build.
 - `PROXYSQLAWSIAM=1` builds only static AWS SDK `core` and `rds` archives and the static CRT archives they require; no AWS SDK test, example, tool, or unrelated service is built.
 - The feature-on daemon must define `Aws::RDS::RDSClient::GenerateConnectAuthToken` and must not have a dynamic dependency on `aws-cpp-sdk-*`, `aws-c-*`, `aws-crt-cpp`, `s2n`, or AWS-LC.  Dynamic OpenSSL, curl, zlib, and libc remain allowed.
@@ -29,11 +30,12 @@
 | `include/MySQL_Session.h` | Own the `AwsIamTokenSourceLease` that keeps the provider alive during a session token wait. |
 | `lib/MySQL_Session.cpp` | Acquire, use, cancel, clear, and release the session lease in every IAM waiting/terminal path. |
 | `test/tap/tests/unit/aws_iam_session_state_unit-t.cpp` | Deterministic shutdown/re-publish lifetime regression for a waiting session. |
-| `deps/aws-sdk-cpp/aws-sdk-cpp-1.11.869-with-crt.tar.gz` | Immutable recursively expanded SDK/CRT source-only payload. |
+| `deps/aws-sdk-cpp/aws-sdk-cpp-1.11.869-with-crt.tar.xz` | Immutable recursively expanded SDK/CRT source payload, unpacked only below `build/` by Task 3. |
+| `.gitattributes` | Git LFS tracking for the single large vendored source archive. |
 | `deps/aws-sdk-cpp/aws-sdk-cpp-1.11.869-with-crt.sha256` | SHA-256 of the committed source tarball. |
-| `deps/aws-sdk-cpp/aws-sdk-cpp-1.11.869-sources.json` | Repository, revision, upstream archive digest, and extracted-tree digest for every bundled source tree. |
+| `deps/aws-sdk-cpp/aws-sdk-cpp-1.11.869-sources.json` | Top-level revision and every expanded submodule repository/revision. |
 | `deps/aws-sdk-cpp/LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md` | Apache-2.0 and transitive attribution distributed with the source payload. |
-| `deps/aws-sdk-cpp/verify-bundle.bash` | Strict, non-network validator for tarball identity, manifest, digest, attribution, and required nested trees. |
+| `deps/aws-sdk-cpp/verify-bundle.bash` | Strict, non-network checksum/layout/revision/attribution validator for the tarball. |
 | `cmake/aws-sdk-cpp/BuildVendoredAwsSdk.cmake` | Offline extraction, CMake configuration/build, and immutable generated static-link fragment publication. |
 | `common_mk/aws_sdk_cpp_flags.mk` | Feature-mode identity, serialized vendored build invocation, and inclusion of its immutable fragment. |
 | `deps/Makefile`, `lib/Makefile`, `src/Makefile`, `Makefile` | Make dependency ordering so feature-on consumes generated static archives and feature-off remains untouched. |
@@ -47,6 +49,7 @@
 ### Task 1: Fix the reviewed asynchronous session lifetime defect
 
 **Files:**
+- Create: `.gitattributes`
 - Modify: `include/MySQL_Session.h`
 - Modify: `lib/MySQL_Session.cpp`
 - Modify: `test/tap/tests/unit/aws_iam_session_state_unit-t.cpp`
@@ -127,7 +130,7 @@
 ### Task 2: Commit and validate the pinned, expanded AWS SDK source bundle
 
 **Files:**
-- Create: `deps/aws-sdk-cpp/aws-sdk-cpp-1.11.869-with-crt.tar.gz`
+- Create: `deps/aws-sdk-cpp/aws-sdk-cpp-1.11.869-with-crt.tar.xz`
 - Create: `deps/aws-sdk-cpp/aws-sdk-cpp-1.11.869-with-crt.sha256`
 - Create: `deps/aws-sdk-cpp/aws-sdk-cpp-1.11.869-sources.json`
 - Create: `deps/aws-sdk-cpp/LICENSE`
@@ -138,11 +141,11 @@
 
 **Interfaces:**
 - Consumes: pinned AWS SDK C++ tag `1.11.869`, commit `c84017197daa00de9cc05b1166e9106e1079f7f3`, and its recursive gitlink revisions.
-- Produces: a source-only tarball with one top-level `aws-sdk-cpp-1.11.869/` directory, explicit nested `crt/aws-crt-cpp/` sources, a parseable JSON manifest, and `verify-bundle.bash ${BUNDLE_DIR}` returning zero only for an intact bundle.
+- Produces: a conventional complete source tarball with one top-level `aws-sdk-cpp-1.11.869/` directory, explicit nested `crt/aws-crt-cpp/` sources, a parseable JSON revision manifest, and `verify-bundle.bash ${BUNDLE_DIR}` returning zero only for an intact bundle.  It is not unpacked into `deps/`; Task 3 extracts it below `build/` during a feature-on compile.
 
 - [ ] **Step 1: Write black-box bundle-validator fixtures before importing the real archive**
 
-  Add to `check-vendored-aws-sdk-build.bash` a temporary synthetic bundle generator with a valid manifest and required nested paths.  Assert success for the fixture and failure with exact diagnostics for a bad tar SHA-256, absent `crt/aws-crt-cpp`, a manifest entry whose extracted-tree SHA does not match, a missing `LICENSE`/`NOTICE`, and a path containing spaces and literal dollar signs.
+  Add to `check-vendored-aws-sdk-build.bash` a temporary synthetic bundle generator with a valid revision manifest and required nested paths.  Assert success for the fixture and failure with exact diagnostics for a bad tar SHA-256, absent `crt/aws-crt-cpp`, a changed manifest/revision digest, a missing `LICENSE`/`NOTICE`, and a path containing spaces and literal dollar signs.
 
   ```bash
   expect_failure 'AWS IAM vendor bundle checksum mismatch' \
@@ -163,17 +166,31 @@
 
 - [ ] **Step 3: Import the reproducible source-only bundle and validator**
 
-  Create the tarball once from an upstream checkout of tag `1.11.869` with all recursive submodules initialized at their gitlink commits.  Remove `.git` metadata, CMake build output, tests, examples, tools, credentials, and prebuilt libraries before deterministic archive creation.  Preserve every source directory required by `BUILD_DEPS=ON`, including `crt/aws-crt-cpp`, `aws-c-*`, `aws-checksums`, `aws-lc`, and `s2n`.
+  Create the tarball once from an upstream checkout of tag `1.11.869` with all
+  recursive submodules initialized at their gitlink commits.  Keep the complete
+  upstream source trees—including tests and feature-probe input—because CMake
+  configuration can consume them even when test targets are disabled.  Remove
+  only `.git` metadata, generated build directories, machine-local `.aws`
+  configuration, and prebuilt object/library files before deterministic XZ
+  archive creation.  Track the archive through a single `.gitattributes` LFS
+  rule.  Preserve `crt/aws-crt-cpp`, `aws-c-*`,
+  `aws-checksums`, `aws-lc`, and `s2n` intact.
 
-  Make the JSON manifest record five fully populated values for every included
-  upstream source tree: `path`, `repository`, `revision`, `source_sha256`, and
-  `tree_sha256`.  The `crt/aws-crt-cpp` entry uses repository
-  `https://github.com/awslabs/aws-crt-cpp.git` and revision
-  `851d8d003c9d5150edab56807e2393013f3771de`; its two digest values and every
-  other manifest digest are the actual 64-hex results of the documented
-  archive/tree calculation, never prose markers or unchecked values.
+  Make the JSON manifest record the SDK tag/commit plus `path`, `repository`,
+  and `revision` for each expanded source tree.  The `crt/aws-crt-cpp` entry
+  uses repository `https://github.com/awslabs/aws-crt-cpp.git` and revision
+  `851d8d003c9d5150edab56807e2393013f3771de`.  The `.sha256` file and a
+  matching literal expected digest in `verify-bundle.bash` bind the committed
+  archive; updating this pinned release requires deliberately updating both.
 
-  `verify-bundle.bash` must use fixed-key JSON parsing (Python standard library is permitted), `sha256sum`/`shasum -a 256`, `tar -tzf`, and `find` without sourcing, evaluating, or expanding manifest contents.  It must verify the outer digest, a single safe top-level directory, manifest version/revisions/tree hashes, required CRT paths, distinct license/notice files, and source-only contents.  It must never print environment variables, credentials, or token-like values.
+  `verify-bundle.bash` must use fixed-key JSON parsing (Python standard
+  library is permitted), `sha256sum`/`shasum -a 256`, `tar -tJf`, and `find`
+  without sourcing, evaluating, or expanding manifest data.  It verifies the
+  outer digest against both inputs, one safe top-level directory, exact
+  revision map, required CRT paths, distinct license/notice files, and the
+  absence of VCS/build/prebuilt/machine-local credential artifacts.  It never
+  rejects legitimate upstream source/test filenames or prints environment
+  variables, credentials, or token-like values.
 
 - [ ] **Step 4: Run validator and archive-safety gates**
 
@@ -182,15 +199,14 @@
   ```bash
   bash test/infra/control/check-vendored-aws-sdk-build.bash
   deps/aws-sdk-cpp/verify-bundle.bash deps/aws-sdk-cpp
-  tar -tzf deps/aws-sdk-cpp/aws-sdk-cpp-1.11.869-with-crt.tar.gz | \
-    rg '(^|/)(\.git|CMakeCache\.txt|CMakeFiles/|\.aws/(credentials|config)$|id_rsa$|.*\.pem$|.*\.(a|o|so|dylib)$)' && exit 1 || true
+  tar -tJf deps/aws-sdk-cpp/aws-sdk-cpp-1.11.869-with-crt.tar.xz | \
+    rg '(^|/)(\.git|CMakeCache\.txt|CMakeFiles/|\.aws/(credentials|config)$|.*\.(a|o|so|dylib)$)' && exit 1 || true
   ```
 
-  Expected: the fixture matrix and real bundle validator pass; the source-only
-  scan prints no repository metadata, CMake/build output, private-key material,
-  AWS credential/config files, or prebuilt objects/libraries.  It deliberately
-  permits legitimate upstream source names containing ordinary words such as
-  `credential` or `token`.
+  Expected: the fixture matrix and real bundle validator pass; the archive scan
+  prints no repository metadata, CMake/build output, machine-local AWS
+  configuration, or prebuilt objects/libraries.  Complete upstream source,
+  probe, test, fixture, example, and documentation files are intentional.
 
 - [ ] **Step 5: Audit legal material and commit the vendor payload separately**
 
@@ -198,7 +214,7 @@
 
   ```bash
   git diff --check
-  git add deps/aws-sdk-cpp test/infra/control/check-vendored-aws-sdk-build.bash
+  git add .gitattributes deps/aws-sdk-cpp test/infra/control/check-vendored-aws-sdk-build.bash
   git commit -m "deps: vendor AWS SDK C++ 1.11.869 sources"
   ```
 
@@ -218,7 +234,7 @@
 - Delete: `cmake/aws-sdk-cpp/DiscoverAwsSdk.cmake`
 
 **Interfaces:**
-- Consumes: `deps/aws-sdk-cpp/verify-bundle.bash`, the committed `1.11.869` archive/manifest, `PROXYSQLAWSIAM=1`, compiler identity, architecture, CMake version, and existing system OpenSSL/curl/zlib paths.
+- Consumes: `deps/aws-sdk-cpp/verify-bundle.bash`, the committed `1.11.869` archive/revision manifest, `PROXYSQLAWSIAM=1`, compiler identity, architecture, CMake version, and existing system OpenSSL/curl/zlib paths.
 - Produces: `build/aws-sdk-cpp/${AWS_IAM_BUILD_ID}/aws-sdk-cpp.mk` with `AWS_IAM_CPPFLAGS`, `AWS_IAM_STATIC_ARCHIVES`, and `AWS_IAM_SYSTEM_LIBS`; all archive paths are beneath `build/aws-sdk-cpp/${AWS_IAM_BUILD_ID}/install/` and no flag names an external SDK prefix.
 
 - [ ] **Step 1: Extend the build-gate test with an intentionally failing feature-on contract**
@@ -248,7 +264,7 @@
   Remove all `AWS_SDK_CPP_ROOT`, `find_package(AWSSDK ...)` against host prefixes, package discovery, and openSUSE-package assumptions from `common_mk/aws_sdk_cpp_flags.mk` and its CMake helpers.  Calculate the feature-on identity from:
 
   ```text
-  bundle SHA-256 + manifest SHA-256 + CMake option list + C/C++ compiler path/version
+  bundle SHA-256 + revision-manifest SHA-256 + CMake option list + C/C++ compiler path/version
   + target architecture + OpenSSL/curl/zlib include/library paths
   ```
 
@@ -269,7 +285,7 @@
   -DCMAKE_INSTALL_PREFIX=${AWS_IAM_BUILD_ID}/install
   ```
 
-  The `ENFORCE_SUBMODULE_VERSIONS=OFF` exception is allowed only because the validator has already checked the committed recursive source manifest and tree digests; document that connection next to the option.  Build and install only the configured static targets.  Generate a temporary CMake link-probe target linked to `AWS::aws-cpp-sdk-rds`, capture its exact ordered archive and system-library arguments, validate them, and atomically publish a shell-quoted immutable make fragment.  The fragment must list only `core`, `rds`, their required CRT/AWS C archives under the private install tree, and existing system link flags.
+  The `ENFORCE_SUBMODULE_VERSIONS=OFF` exception is allowed only because the validator has already checked the committed archive digest and recursive revision manifest before extraction; document that connection next to the option.  Build and install only the configured static targets.  Generate a temporary CMake link-probe target linked to `AWS::aws-cpp-sdk-rds`, capture its exact ordered archive and system-library arguments, validate them, and atomically publish a shell-quoted immutable make fragment.  The fragment must list only `core`, `rds`, their required CRT/AWS C archives under the private install tree, and existing system link flags.
 
   Feature-off must only update a stable disabled mode stamp; it must not execute the validator, tar, CMake, or SDK compilation.  A changed mode/identity forces the affected ProxySQL objects to rebuild; an unchanged actual or dry-run invocation schedules zero compile/archive/link commands.
 
@@ -369,7 +385,7 @@
 
   In `.github/workflows/CI-aws-iam.yml`:
 
-  - add `fetch-depth: 0` and `fetch-tags: true` to every checkout;
+  - add `fetch-depth: 0`, `fetch-tags: true`, and `lfs: true` to every checkout that builds or audits the vendored SDK;
   - retain an SDK-free job that verifies feature-off linkage rejection with `grep -F`;
   - replace `aws-enabled-system-sdk-build` with an Ubuntu vendored-static job that runs `PROXYSQL40=1 PROXYSQLAWSIAM=1 make -j`, `check-vendored-aws-sdk-build.bash`, the static linkage audit, IAM unit tests, and the controlled TLS/auth-switch target;
   - replace the empty external-prefix test with a missing/modified committed-bundle diagnostic test and an exact expected message;
