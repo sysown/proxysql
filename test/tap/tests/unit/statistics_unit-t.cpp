@@ -450,7 +450,7 @@ static void test_get_variables_list() {
 	if (list) {
 		while (list[count] != nullptr) count++;
 	}
-	ok(count == 5, "get_variables_list: returns 5 variables (got %d)", count);
+	ok(count == 10, "get_variables_list: returns 10 variables (got %d)", count);
 
 	// Free the list
 	if (list) {

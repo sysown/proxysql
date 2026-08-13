@@ -14,6 +14,8 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
+#include <cerrno>
+#include <cstring>
 
 #include <atomic>
 #include <string>
@@ -43,7 +45,13 @@ static string workdir_path;
 
 static void write_node_config(node_t& n) {
 	FILE* f = fopen(n.cnf_path.c_str(), "w");
-	if (f == NULL) { return; }
+	if (f == NULL) {
+		// A config write failure here is unrecoverable pre-plan: fail loudly
+		// and immediately instead of leaving the caller to time out opaquely
+		// ~15s later waiting for a node that never started.
+		fprintf(stderr, "FATAL: cannot write %s: %s\n", n.cnf_path.c_str(), strerror(errno));
+		exit(1);
+	}
 	fprintf(f, "datadir=\"%s\"\n", n.datadir.c_str());
 	fprintf(f, "admin_variables = {\n");
 	fprintf(f, "\tadmin_credentials=\"admin:admin;cluster1:secret1pass\"\n");

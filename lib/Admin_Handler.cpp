@@ -3894,7 +3894,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			myds->DSS=STATE_COLUMN_DEFINITION;
 			myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
 			char **p=(char **)malloc(sizeof(char*)*1);
-			unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*1);
+			unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long)*1);
 			l[0]=strnlen(uuid_val, 64);
 			p[0]=(char *)uuid_val;
 			myprot->generate_pkt_row(true,NULL,NULL,sid,1,l,p); sid++;

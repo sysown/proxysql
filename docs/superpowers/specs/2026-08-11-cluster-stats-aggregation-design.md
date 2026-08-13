@@ -139,9 +139,14 @@ start accumulating that data; revisit the defaults before GA.
   state-change; watermark simply doesn't advance.
 - **Mixed versions**: impossible — the cluster already refuses to exchange
   with a different-version peer, so the remote schema always matches.
-- **Clock skew**: timestamps are peer-local. Per-peer watermarks are immune
-  to skew; cross-node comparison quality depends on NTP — documented, not
-  compensated.
+- **Clock skew**: timestamps are peer-local. In steady state, per-peer
+  watermarks are immune to skew — they're re-derived from `MAX(timestamp)`
+  of already-replicated (peer-stamped) rows, not from the leader's clock.
+  The one exception is cold start: a never-replicated peer's initial horizon
+  is `now - backfill_hours` computed on the *leader's* local clock, so
+  leader-peer clock offset affects only the initial backfill depth for that
+  peer, not steady-state behavior. Cross-node comparison quality still
+  depends on NTP — documented, not compensated.
 - **Volume / overload**: worst case ~N× the leader's own sample write rate.
   Bounded by the batch cap and separate retention. The aggregator logs a
   warning when it cannot keep up (cap hit on consecutive cycles for the

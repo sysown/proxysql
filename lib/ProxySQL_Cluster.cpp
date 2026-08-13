@@ -163,6 +163,28 @@ extern MySQL_Authentication* GloMyAuth;
 extern PgSQL_Authentication *GloPgAuth;
 extern PgSQL_Query_Processor* GloPgQPro;
 
+// Runs "SELECT GLOBAL_UUID()" on an already-connected peer connection and, on
+// success, stores the result via Update_Node_UUID(). Shared by the
+// post-handshake fetch and the per-poll retry (both query the same statement
+// on the same connection and apply the same result validation).
+// Returns true when a UUID was fetched and stored.
+static bool cluster_fetch_peer_uuid(MYSQL *conn, char *hostname, uint16_t port) {
+	bool stored = false;
+	int rc_uuid = mysql_query(conn, (char *)"SELECT GLOBAL_UUID()");
+	if (rc_uuid == 0) {
+		MYSQL_RES *uuid_res = mysql_store_result(conn);
+		if (uuid_res) {
+			MYSQL_ROW urow = mysql_fetch_row(uuid_res);
+			if (urow && urow[0] && strnlen(urow[0], 64) > 0) {
+				GloProxyCluster->Update_Node_UUID(hostname, port, urow[0]);
+				stored = true;
+			}
+			mysql_free_result(uuid_res);
+		}
+	}
+	return stored;
+}
+
 void * ProxySQL_Cluster_Monitor_thread(void *args) {
 	pthread_attr_t thread_attr;
 	size_t tmp_stack_size=0;
@@ -244,17 +266,8 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 								proxy_info("Cluster: sending CLUSTER_NODE_UUID %s to peer %s:%d\n", GloVars.uuid, node->hostname, node->port);
 								rc_query = mysql_query(conn, q.c_str());
 								if (rc_query == 0) {
-									int rc_uuid = mysql_query(conn, (char *)"SELECT GLOBAL_UUID()");
-									if (rc_uuid == 0) {
-										MYSQL_RES *uuid_res = mysql_store_result(conn);
-										if (uuid_res) {
-											MYSQL_ROW urow = mysql_fetch_row(uuid_res);
-											if (urow && urow[0] && strnlen(urow[0], 64) > 0) {
-												GloProxyCluster->Update_Node_UUID(node->hostname, node->port, urow[0]);
-												uuid_known = true;
-											}
-											mysql_free_result(uuid_res);
-										}
+									if (cluster_fetch_peer_uuid(conn, node->hostname, node->port)) {
+										uuid_known = true;
 									}
 								}
 							} else {
@@ -300,17 +313,8 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 							// fail transiently even though clustering is otherwise healthy.
 							// Retry it on every successful poll iteration until it succeeds,
 							// without re-querying once the UUID is known.
-							int rc_uuid = mysql_query(conn, (char *)"SELECT GLOBAL_UUID()");
-							if (rc_uuid == 0) {
-								MYSQL_RES *uuid_res = mysql_store_result(conn);
-								if (uuid_res) {
-									MYSQL_ROW urow = mysql_fetch_row(uuid_res);
-									if (urow && urow[0] && strnlen(urow[0], 64) > 0) {
-										GloProxyCluster->Update_Node_UUID(node->hostname, node->port, urow[0]);
-										uuid_known = true;
-									}
-									mysql_free_result(uuid_res);
-								}
+							if (cluster_fetch_peer_uuid(conn, node->hostname, node->port)) {
+								uuid_known = true;
 							}
 						}
 

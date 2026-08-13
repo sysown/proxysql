@@ -205,10 +205,11 @@ the master switch).
 
 ## Out of scope (each needs its own design round)
 
-1. **Stats aggregation into the leader's TSDB** — next deliverable. The
-   leader scrapes peers' `/metrics` (or `stats_*` tables over the existing
-   admin connections) and ingests into TSDB with a per-node label; the TSDB
-   query API already supports arbitrary label filters.
+1. **Stats aggregation into the leader's TSDB** — implemented and shipped
+   alongside this PR; see
+   `2026-08-11-cluster-stats-aggregation-design.md` for the design (leader
+   pulls peers' `stats_*`/TSDB tables over the existing admin connections
+   and ingests into TSDB with a per-node label).
 2. **Distributed quotas** (cluster-wide `max_connections` split by the
    alive-count) — needs hysteresis/flapping design on the admission path.
 3. **Leader-only backend monitoring** (semantic checks on the leader,
