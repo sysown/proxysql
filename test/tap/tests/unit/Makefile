@@ -892,4 +892,5 @@ endif
 .PHONY: clean
 .SILENT: clean
 clean:
-	rm -rf $(ODIR) $(UNIT_TESTS) $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO)
+	rm -rf $(ODIR)
+	rm -f *-t $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO)
