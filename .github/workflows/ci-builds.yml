@@ -126,10 +126,6 @@ jobs:
     env:
       BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.dist }}${{ matrix.type }}
       MATRIX: '(${{ matrix.dist }},${{ matrix.type }})'
-      # The active CI-builds matrix uses these Makefile IMG_NAME values. Keep
-      # the set in one place because a VM can receive a cancelled leg from a
-      # different distribution immediately before its next matrix entry.
-      CI_BUILD_COMPOSE_PROJECTS: 'debian12 ubuntu22 ubuntu24'
 
     steps:
 
@@ -157,46 +153,29 @@ jobs:
           proxysql/binaries/
 
     # Self-hosted runners reuse the working directory between jobs. A cancelled
-    # dockerized build can leave its Compose project running against the
+    # dockerized build can leave its Compose stack running against the
     # bind-mounted checkout (./:/opt/proxysql), where it continues to create
     # root-owned files while the next job starts. A VM receives all CI-builds
     # matrix legs serially, so the stale writer can belong to a different
-    # distribution than the new leg. Stop only the known CI-build projects;
-    # the Makefile maps IMG_NAME directly from these distribution names. If a
-    # failed cleanup already removed docker-compose.yml, remove the labelled
-    # containers directly so they cannot keep writing through the bind mount.
-    - name: Stop stale Docker Compose project (self-hosted)
+    # distribution than the new leg. The previous project-name-filtered cleanup
+    # never matched, because the Makefile names each project
+    # <BLD_NAME>-<GITVERSION> (e.g. ubuntu22-tap-3.0.11-502-gd8bdd5a), not the
+    # bare distribution name. Nuke ALL docker state on the runner instead: every
+    # container, every volume, every network. Nothing dockerized may survive
+    # into the next job.
+    - name: Nuke all docker state (self-hosted)
       if: ${{ inputs.trusted && runner.environment == 'self-hosted' && steps.cache-check.outputs.cache-hit != 'true' }}
       run: |
         set -euo pipefail
-        workspace="${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is not set}"
-        compose_file="${workspace}/proxysql/docker-compose.yml"
-
-        cleanup_status=0
-        for compose_project in ${CI_BUILD_COMPOSE_PROJECTS}; do
-          if [ -f "${compose_file}" ]; then
-            echo ">>> stopping stale Compose project: ${compose_project}"
-            if ! docker compose -f "${compose_file}" -p "${compose_project}" down -v --remove-orphans; then
-              cleanup_status=1
-            fi
-          fi
-
-          stale_containers="$(docker ps -aq --filter "label=com.docker.compose.project=${compose_project}")" || {
-            echo "::error::unable to list containers for Compose project: ${compose_project}"
-            cleanup_status=1
-            stale_containers=""
-          }
-          if [ -n "${stale_containers}" ]; then
-            while IFS= read -r container_id; do
-              [ -n "${container_id}" ] || continue
-              echo ">>> removing stale container: ${container_id} (${compose_project})"
-              if ! docker rm -f "${container_id}"; then
-                cleanup_status=1
-              fi
-            done <<< "${stale_containers}"
-          fi
-        done
-        exit "${cleanup_status}"
+        echo ">>> removing all docker containers"
+        containers="$(docker ps -aq)"
+        if [ -n "${containers}" ]; then
+          docker rm -f ${containers}
+        fi
+        echo ">>> removing all docker volumes"
+        docker volume prune -af
+        echo ">>> removing all docker networks"
+        docker network prune -af
 
     # The dockerized build writes files as root, so on the next job the
     # actions/checkout pre-clean can otherwise trip over them:
@@ -683,44 +662,25 @@ jobs:
         # cache_bin.tar.zst is produced by the "Pack bin cache" step above.
         path: cache_bin.tar.zst
 
-    # Tear down the known CI-build projects before repairing ownership. This
-    # prevents a failed or cancelled build from continuing to write root-owned
-    # files into the bind mount while the runner is being cleaned for its next
-    # job. Run on every outcome and fail loudly if Docker cannot clean the
-    # known CI-build projects. As with preflight, use project labels as a
-    # fallback if a failed job removed docker-compose.yml before this step.
-    - name: Stop Docker Compose project (leave runner clean)
+    # Nuke ALL docker state before leaving the runner clean for its next job.
+    # This prevents a failed or cancelled build from continuing to write
+    # root-owned files into the bind mount while the runner is being cleaned.
+    # Run on every outcome and fail loudly if Docker cannot be fully cleaned.
+    # As with preflight, this is intentionally an unconditional wipe of every
+    # container, volume and network -- nothing dockerized may survive.
+    - name: Nuke all docker state (leave runner clean)
       if: ${{ inputs.trusted && runner.environment == 'self-hosted' && always() }}
       run: |
         set -euo pipefail
-        workspace="${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is not set}"
-        compose_file="${workspace}/proxysql/docker-compose.yml"
-
-        cleanup_status=0
-        for compose_project in ${CI_BUILD_COMPOSE_PROJECTS}; do
-          if [ -f "${compose_file}" ]; then
-            echo ">>> stopping Compose project before workspace cleanup: ${compose_project}"
-            if ! docker compose -f "${compose_file}" -p "${compose_project}" down -v --remove-orphans; then
-              cleanup_status=1
-            fi
-          fi
-
-          stale_containers="$(docker ps -aq --filter "label=com.docker.compose.project=${compose_project}")" || {
-            echo "::error::unable to list containers for Compose project: ${compose_project}"
-            cleanup_status=1
-            stale_containers=""
-          }
-          if [ -n "${stale_containers}" ]; then
-            while IFS= read -r container_id; do
-              [ -n "${container_id}" ] || continue
-              echo ">>> removing stale container: ${container_id} (${compose_project})"
-              if ! docker rm -f "${container_id}"; then
-                cleanup_status=1
-              fi
-            done <<< "${stale_containers}"
-          fi
-        done
-        exit "${cleanup_status}"
+        echo ">>> removing all docker containers"
+        containers="$(docker ps -aq)"
+        if [ -n "${containers}" ]; then
+          docker rm -f ${containers}
+        fi
+        echo ">>> removing all docker volumes"
+        docker volume prune -af
+        echo ">>> removing all docker networks"
+        docker network prune -af
 
     # Undo the root ownership the dockerized build left behind so the next job
     # on this self-hosted runner can clean and check out without EACCES.
