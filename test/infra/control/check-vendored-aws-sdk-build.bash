@@ -100,9 +100,9 @@ new_fixture() {
 [[ -f $workflow ]] || fail 'general AWS CI workflow is missing'
 [[ -f $builder ]] || fail 'serialized AWS SDK builder is missing'
 
-deps_default_goal=$(PROXYSQL40=1 make -C "$repo_root/deps" -pn \
-	check_openssl_version 2>/dev/null \
-	| sed -n 's/^\.DEFAULT_GOAL := //p')
+deps_default_goal=$(PROXYSQL40=1 make -C "$repo_root/deps" -pn 2>/dev/null \
+	| sed -n 's/^\.DEFAULT_GOAL := //p' \
+	| head -n 1)
 [[ $deps_default_goal == default ]] ||
 	fail "deps Makefile default goal is '$deps_default_goal', expected 'default'"
 
