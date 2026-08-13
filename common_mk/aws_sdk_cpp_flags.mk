@@ -11,6 +11,7 @@ AWS_SDK_CPP_SHARED := 0
 AWS_SDK_CPP_LIB_DIR := $(AWS_SDK_CPP_INSTALL_DIR)/lib
 AWS_SDK_CPP_CPPFLAGS := -I$(AWS_SDK_CPP_INSTALL_DIR)/include
 AWS_SDK_CPP_CURL_INCLUDE_DIR := $(PROXYSQL_PATH)/deps/curl/curl/include
+AWS_SDK_CPP_CURL_TARGET := curl/curl/lib/.libs/libcurl.a
 AWS_SDK_CPP_CURL_LIB := $(PROXYSQL_PATH)/deps/curl/curl/lib/.libs/libcurl.a
 AWS_SDK_CPP_CORE_LIB := $(AWS_SDK_CPP_LIB_DIR)/libaws-cpp-sdk-core.a
 AWS_SDK_CPP_RDS_LIB := $(AWS_SDK_CPP_LIB_DIR)/libaws-cpp-sdk-rds.a
