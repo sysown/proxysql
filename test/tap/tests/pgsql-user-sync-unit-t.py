@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 root = Path(os.environ.get("WORKSPACE", Path(__file__).resolve().parents[3]))
-suite = root / "tools/pgsql_user_sync/tests/test_pgsql_user_sync.py"
+suite = root / "test/tap/pgsql_user_sync/tests/test_pgsql_user_sync.py"
 raise SystemExit(subprocess.call(
-    [sys.executable, "-m", "unittest", "-v", str(suite)], cwd=root
+    [sys.executable, str(suite)], cwd=root
 ))

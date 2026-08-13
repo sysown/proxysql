@@ -10,14 +10,38 @@ import tempfile
 import uuid
 from pathlib import Path
 
-import psycopg
 import pymysql
-from psycopg import sql
 
 
 ROOT = Path(os.environ.get("WORKSPACE", Path(__file__).resolve().parents[3]))
-SCRIPT = ROOT / "tools/pgsql_user_sync/proxysql_pgsql_user_sync.py"
+ASSET_DIR = ROOT / "test/tap/pgsql_user_sync"
+SCRIPT = ASSET_DIR / "proxysql_pgsql_user_sync.py"
 PROFILE = "tap-real"
+
+
+def load_psycopg():
+    try:
+        import psycopg
+        from psycopg import sql
+    except ImportError:
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--break-system-packages",
+                "-r",
+                str(ASSET_DIR / "requirements.txt"),
+            ],
+            check=True,
+        )
+        import psycopg
+        from psycopg import sql
+    return psycopg, sql
+
+
+psycopg, sql = load_psycopg()
 
 
 class Tap:
