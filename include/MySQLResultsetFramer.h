@@ -26,6 +26,7 @@ public:
 	void reset();
 	bool active() const;
 	void begin(bool binary_protocol, bool deprecate_eof);
+	void begin_rows(bool binary_protocol, bool deprecate_eof, uint64_t column_count);
 	MySQLRSEvent on_first_payload(const unsigned char* p, size_t n);
 	MySQLRSEvent on_payload(const unsigned char* p, size_t n);
 
@@ -47,6 +48,9 @@ private:
 
 	MySQLRSEvent make_complete(uint16_t status, uint64_t affected);
 	MySQLRSEvent make_error(uint16_t code);
+	MySQLRSEvent on_column_payload(const unsigned char* p, size_t n);
+	MySQLRSEvent on_row_payload(const unsigned char* p, size_t n);
+	bool cursor_intermediate(uint16_t status) const;
 	bool looks_like_ok_terminator(const unsigned char* p, size_t n) const;
 };
 

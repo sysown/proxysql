@@ -15,7 +15,7 @@
 #include "utils.h"
 #include "ffto_mysql_helpers.h"
 
-static constexpr int kPlannedTests = 5;
+static constexpr int kPlannedTests = 6;
 
 #define FAIL_AND_SKIP_REMAINING(cleanup_label, fmt, ...) \
 	do { \
@@ -44,7 +44,7 @@ static void dump_digests(MYSQL* admin) {
 	if (res) mysql_free_result(res);
 }
 
-static void verify_digest_count(MYSQL* admin, const char* template_text, int expected_count) {
+static void verify_digest_count(MYSQL* admin, const char* template_text, int expected_count, long long expected_rows) {
 	char query[1024];
 	snprintf(query, sizeof(query),
 		"SELECT count_star, sum_rows_sent, digest_text "
@@ -66,8 +66,13 @@ static void verify_digest_count(MYSQL* admin, const char* template_text, int exp
 
 	if (row) {
 		int count = atoi(row[0]);
+		long long rows = atoll(row[1]);
 		ok(count >= expected_count,
 		   "Digest count for '%s': %d (expected >= %d)", row[2], count, expected_count);
+		if (expected_rows > 0) {
+			ok(rows == expected_rows,
+			   "Digest sum_rows_sent for '%s': %lld (expected %lld)", row[2], rows, expected_rows);
+		}
 	} else {
 		ok(0, "Digest NOT found for pattern: %s", template_text);
 		dump_digests(admin);
@@ -202,8 +207,10 @@ int main(int argc, char** argv) {
 	}
 	ok(rows == 3, "Fetched %d rows via cursor (expected 3)", rows);
 
-	/* Digest text is space-normalized (no space after commas). EXECUTE and/or FETCH may each count. */
-	verify_digest_count(admin, "SELECT id,val FROM ffto_stmt_fetch", 1);
+	/* Digest text is space-normalized (no space after commas). The cursor is
+	 * driven by COM_STMT_FETCH batches; the framer accumulates rows across all
+	 * batches and reports exactly the 3 fetched rows on the final terminator. */
+	verify_digest_count(admin, "SELECT id,val FROM ffto_stmt_fetch", 1, 3);
 	ok(1, "COM_STMT_FETCH path completed under FFTO");
 
 cleanup:

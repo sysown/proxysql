@@ -153,7 +153,7 @@ void MySQLFFTO::process_client_packet(const unsigned char* data, size_t len) {
             uint32_t stmt_id; memcpy(&stmt_id, data + 1, 4);
             auto it = m_statements.find(stmt_id);
             if (it != m_statements.end()) {
-                begin_tracked_query(it->second, true);
+                begin_tracked_query(it->second.query, true);
             }
         }
     } else if (command == _MYSQL_COM_STMT_FETCH) {
@@ -161,7 +161,18 @@ void MySQLFFTO::process_client_packet(const unsigned char* data, size_t len) {
             uint32_t stmt_id; memcpy(&stmt_id, data + 1, 4);
             auto it = m_statements.find(stmt_id);
             if (it != m_statements.end()) {
-                begin_tracked_query(it->second, true);
+                if (m_rs.active()) {
+                    // EXECUTE metadata already left the framer in ReadingRows;
+                    // FETCH response rows flow through and accumulate here.
+                    return;
+                }
+                // A FETCH response has no resultset header nor column
+                // definitions — only binary rows + a terminator. Resume the
+                // framer directly in row-reading state so the first row is
+                // not misread as an OK packet, and the terminator completes
+                // the EXECUTE-issued query.
+                begin_tracked_query(it->second.query, true);
+                m_rs.begin_rows(true, client_deprecate_eof(), it->second.column_count);
             }
         }
     } else if (command == _MYSQL_COM_STMT_CLOSE) {
@@ -181,7 +192,9 @@ void MySQLFFTO::process_server_packet(const unsigned char* data, size_t len) {
         uint8_t first_byte = data[0];
         if (first_byte == 0x00 && len >= 9) {
             uint32_t stmt_id; memcpy(&stmt_id, data + 1, 4);
-            m_statements[stmt_id] = m_pending_prepare_query;
+            // COM_STMT_PREPARE_OK: stmt_id(4) num_columns(2) num_params(2) ...
+            uint64_t column_count = (len >= 7) ? (uint64_t)(data[5] | (data[6] << 8)) : 0;
+            m_statements[stmt_id] = { m_pending_prepare_query, column_count };
             m_state = IDLE;
             m_pending_prepare_query.clear();
         } else if (first_byte == 0xFF) {

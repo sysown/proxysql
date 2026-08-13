@@ -82,7 +82,12 @@ private:
     uint64_t m_rows_sent;                 ///< Number of rows returned by the current SELECT query.
     uint64_t m_framer_rs_rows {0};        ///< In-progress framer row count (partial RS on close).
 
-    std::unordered_map<uint32_t, std::string> m_statements; ///< Map of stmt_id to original SQL query for prepared statements.
+    /// Per-statement metadata captured from the COM_STMT_PREPARE_OK response.
+    struct PreparedStatement {
+        std::string query;
+        uint64_t column_count { 0 };
+    };
+    std::unordered_map<uint32_t, PreparedStatement> m_statements;
 
     /**
      * @brief Processes individual MySQL packets from the client.

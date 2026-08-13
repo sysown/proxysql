@@ -4,6 +4,8 @@
 
 static constexpr uint16_t kServerMoreResultsExist = 8;
 static constexpr uint16_t kServerSessionStateChanged = 0x4000;
+static constexpr uint16_t kServerCursorExists = 0x40;
+static constexpr uint16_t kServerLastRowSent = 0x80;
 
 // True when payload is exactly m_column_count text-protocol fields (length-encoded
 // strings / 0xFB NULL), with nothing left over.
@@ -50,6 +52,15 @@ void MySQLResultsetFramer::begin(bool binary_protocol, bool deprecate_eof) {
 	m_binary = binary_protocol;
 	m_deprecate_eof = deprecate_eof;
 	m_state = State::AwaitingFirst;
+}
+
+void MySQLResultsetFramer::begin_rows(bool binary_protocol, bool deprecate_eof, uint64_t column_count) {
+	reset();
+	m_binary = binary_protocol;
+	m_deprecate_eof = deprecate_eof;
+	m_column_count = column_count;
+	m_columns_seen = column_count;
+	m_state = State::ReadingRows;
 }
 
 MySQLRSEvent MySQLResultsetFramer::on_first_payload(const unsigned char* p, size_t n) {
@@ -100,52 +111,62 @@ MySQLRSEvent MySQLResultsetFramer::on_payload(const unsigned char* p, size_t n) 
 	if (m_state == State::AwaitingFirst) return on_first_payload(p, n);
 	if (!p || n == 0) return {};
 
-	if (m_state == State::ReadingColumns) {
-		if (p[0] == 0xFF) {
-			uint16_t code = (n >= 3) ? (uint16_t)(p[1] | (p[2] << 8)) : 0;
-			reset();
-			return make_error(code);
-		}
-		if (!m_deprecate_eof && mysql_is_eof_payload(p, n)) {
-			m_saw_intermediate_eof = true;
-			m_state = State::ReadingRows;
-			return {};
-		}
-		m_columns_seen++;
-		if (m_columns_seen >= m_column_count) {
-			if (m_deprecate_eof) {
-				m_state = State::ReadingRows;
-			}
-		}
+	if (m_state == State::ReadingColumns) return on_column_payload(p, n);
+	if (m_state == State::ReadingRows) return on_row_payload(p, n);
+	return {};
+}
+
+MySQLRSEvent MySQLResultsetFramer::on_column_payload(const unsigned char* p, size_t n) {
+	if (p[0] == 0xFF) {
+		uint16_t code = (n >= 3) ? (uint16_t)(p[1] | (p[2] << 8)) : 0;
+		reset();
+		return make_error(code);
+	}
+	if (!m_deprecate_eof && mysql_is_eof_payload(p, n)) {
+		m_saw_intermediate_eof = true;
+		m_state = State::ReadingRows;
 		return {};
 	}
+	m_columns_seen++;
+	if (m_columns_seen >= m_column_count) {
+		if (m_deprecate_eof) {
+			m_state = State::ReadingRows;
+		}
+	}
+	return {};
+}
 
-	if (m_state == State::ReadingRows) {
-		if (p[0] == 0xFF) {
-			uint16_t code = (n >= 3) ? (uint16_t)(p[1] | (p[2] << 8)) : 0;
-			MySQLRSEvent ev = make_error(code);
-			ev.rows_sent_total = m_rows_sent;
-			reset();
-			return ev;
-		}
-		if (!m_deprecate_eof && mysql_is_eof_payload(p, n)) {
-			uint16_t st = 0, wr = 0;
-			mysql_parse_eof_payload(p, n, &wr, &st);
-			return make_complete(st, 0);
-		}
-		if (m_deprecate_eof && looks_like_ok_terminator(p, n)) {
-			MySQLOkFields okf{};
-			mysql_parse_ok_payload(p, n, &okf);
-			return make_complete(okf.status_flags, okf.affected_rows);
-		}
-		m_rows_sent++;
-		MySQLRSEvent ev;
-		ev.kind = MySQLRSEventKind::Row;
+MySQLRSEvent MySQLResultsetFramer::on_row_payload(const unsigned char* p, size_t n) {
+	if (p[0] == 0xFF) {
+		uint16_t code = (n >= 3) ? (uint16_t)(p[1] | (p[2] << 8)) : 0;
+		MySQLRSEvent ev = make_error(code);
 		ev.rows_sent_total = m_rows_sent;
+		reset();
 		return ev;
 	}
-
-	return {};
+	if (!m_deprecate_eof && mysql_is_eof_payload(p, n)) {
+		uint16_t st = 0, wr = 0;
+		mysql_parse_eof_payload(p, n, &wr, &st);
+		if (cursor_intermediate(st)) {
+			m_saw_intermediate_eof = true;
+			return {};
+		}
+		return make_complete(st, 0);
+	}
+	if (m_deprecate_eof && looks_like_ok_terminator(p, n)) {
+		MySQLOkFields okf{};
+		mysql_parse_ok_payload(p, n, &okf);
+		if (cursor_intermediate(okf.status_flags)) {
+			m_saw_intermediate_eof = true;
+			return {};
+		}
+		return make_complete(okf.status_flags, okf.affected_rows);
+	}
+	m_rows_sent++;
+	MySQLRSEvent ev;
+	ev.kind = MySQLRSEventKind::Row;
+	ev.rows_sent_total = m_rows_sent;
+	return ev;
 }
 
 MySQLRSEvent MySQLResultsetFramer::make_complete(uint16_t status, uint64_t affected) {
@@ -172,6 +193,13 @@ MySQLRSEvent MySQLResultsetFramer::make_error(uint16_t code) {
 	ev.kind = MySQLRSEventKind::Error;
 	ev.error_code = code;
 	return ev;
+}
+
+bool MySQLResultsetFramer::cursor_intermediate(uint16_t status) const {
+	// COM_STMT_FETCH batches: an EOF/OK carrying SERVER_STATUS_CURSOR_EXISTS
+	// without SERVER_STATUS_LAST_ROW_SENT means more rows are still pending via
+	// subsequent FETCH commands. Stay in ReadingRows; do not complete.
+	return (status & kServerCursorExists) != 0 && (status & kServerLastRowSent) == 0;
 }
 
 bool MySQLResultsetFramer::looks_like_ok_terminator(const unsigned char* p, size_t n) const {
