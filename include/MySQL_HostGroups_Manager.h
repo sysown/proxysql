@@ -894,6 +894,10 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 #ifdef PROXYSQL40
 	void refresh_aws_locality_configuration();
 	void set_aws_locality_awareness_enabled(bool enabled);
+	void refresh_aws_locality_stats(SQLite3DB* statsdb) const;
+	static bool project_aws_locality_stats(
+		SQLite3DB* statsdb,
+		const std::vector<AwsLocalitySnapshotEntry>& rows);
 	MySQLAwsLocalityManager* aws_locality_manager() const {
 		return aws_locality_manager_.get();
 	}

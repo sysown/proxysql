@@ -878,6 +878,100 @@ void MySQL_HostGroups_Manager::set_aws_locality_awareness_enabled(bool enabled) 
 		aws_locality_manager_->set_enabled(enabled);
 	}
 }
+
+namespace {
+
+const char* aws_endpoint_type_name(AwsEndpointType type) {
+	switch (type) {
+	case AwsEndpointType::instance: return "instance";
+	case AwsEndpointType::cluster: return "cluster";
+	case AwsEndpointType::reader: return "reader";
+	case AwsEndpointType::custom: return "custom";
+	case AwsEndpointType::unknown: return "unknown";
+	}
+	return "unknown";
+}
+
+const char* aws_locality_name(AwsLocalityClass locality) {
+	switch (locality) {
+	case AwsLocalityClass::remote: return "remote";
+	case AwsLocalityClass::same_region: return "same_region";
+	case AwsLocalityClass::same_az: return "same_az";
+	case AwsLocalityClass::unknown: return "unknown";
+	}
+	return "unknown";
+}
+
+const char* aws_metadata_status_name(AwsLocalityMetadataStatus status) {
+	switch (status) {
+	case AwsLocalityMetadataStatus::disabled: return "disabled";
+	case AwsLocalityMetadataStatus::pending: return "pending";
+	case AwsLocalityMetadataStatus::fresh: return "fresh";
+	case AwsLocalityMetadataStatus::stale: return "stale";
+	case AwsLocalityMetadataStatus::expired: return "expired";
+	case AwsLocalityMetadataStatus::error: return "error";
+	}
+	return "error";
+}
+
+const char* aws_account_match_name(const AwsLocalitySnapshotEntry& row) {
+	if (row.local.account_id.empty() || row.backend.account_id.empty()) {
+		return "unknown";
+	}
+	return row.local.account_id == row.backend.account_id ? "same" : "different";
+}
+
+bool aws_locality_status_is_active(AwsLocalityMetadataStatus status) {
+	return status == AwsLocalityMetadataStatus::fresh ||
+		status == AwsLocalityMetadataStatus::stale;
+}
+
+} // namespace
+
+bool MySQL_HostGroups_Manager::project_aws_locality_stats(
+	SQLite3DB* statsdb,
+	const std::vector<AwsLocalitySnapshotEntry>& rows) {
+	if (statsdb == nullptr || !statsdb->execute("BEGIN")) return false;
+	bool success = statsdb->execute("DELETE FROM stats_mysql_aws_locality");
+	for (const auto& row : rows) {
+		if (!success) break;
+		const double active_multiplier = aws_locality_status_is_active(row.status)
+			? row.multiplier : 1.0;
+		const uint64_t effective_weight = aws_locality_effective_weight(
+			row.configured_weight, active_multiplier);
+		char* query = sqlite3_mprintf(
+			"INSERT INTO stats_mysql_aws_locality ("
+			"hostgroup_id,hostname,port,endpoint_type,configured_weight,"
+			"effective_weight,local_region,local_az,backend_region,backend_az,"
+			"account_match,locality,active_multiplier,metadata_status,"
+			"last_success_timestamp,last_attempt_timestamp,last_error_category) "
+			"VALUES (%u,'%q',%u,'%q',%lld,%llu,'%q','%q','%q','%q','%q','%q',"
+			"%.17g,'%q',%lld,%lld,'%q')",
+			row.hostgroup_id, row.hostname.c_str(), static_cast<unsigned>(row.port),
+			aws_endpoint_type_name(row.endpoint_type),
+			static_cast<long long>(row.configured_weight),
+			static_cast<unsigned long long>(effective_weight),
+			row.local.region.c_str(), row.local.availability_zone.c_str(),
+			row.backend.region.c_str(), row.backend.availability_zone.c_str(),
+			aws_account_match_name(row), aws_locality_name(row.locality),
+			active_multiplier, aws_metadata_status_name(row.status),
+			static_cast<long long>(row.last_success_timestamp),
+			static_cast<long long>(row.last_attempt_timestamp),
+			row.failure_category.c_str());
+		success = query != nullptr && statsdb->execute(query);
+		sqlite3_free(query);
+	}
+	if (success) success = statsdb->execute("COMMIT");
+	if (!success) statsdb->execute("ROLLBACK");
+	return success;
+}
+
+void MySQL_HostGroups_Manager::refresh_aws_locality_stats(SQLite3DB* statsdb) const {
+	const std::vector<AwsLocalitySnapshotEntry> rows = aws_locality_manager_
+		? aws_locality_manager_->diagnostic_rows()
+		: std::vector<AwsLocalitySnapshotEntry>();
+	project_aws_locality_stats(statsdb, rows);
+}
 #endif
 
 void MySQL_HostGroups_Manager::p_update_mysql_error_counter(p_mysql_error_type err_type, unsigned int hid, char* address, uint16_t port, unsigned int code) {

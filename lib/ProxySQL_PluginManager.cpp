@@ -7,6 +7,7 @@
 #include "ProxySQL_PluginManager.h"
 #include "Aws_Iam_Provider.h"
 #include "Aws_Locality_Manager.h"
+#include "MySQL_HostGroups_Manager.h"
 #include "MySQL_Thread.h"
 
 #include <atomic>
@@ -208,6 +209,15 @@ bool install_aws_metadata_provider_service(
 	}
 	return install_global_aws_metadata_provider(provider, destroy, module_handle);
 }
+
+void refresh_mysql_aws_locality_stats_service(SQLite3DB* statsdb) {
+	if (statsdb == nullptr) return;
+	if (MyHGM != nullptr) {
+		MyHGM->refresh_aws_locality_stats(statsdb);
+		return;
+	}
+	MySQL_HostGroups_Manager::project_aws_locality_stats(statsdb, {});
+}
 #endif /* PROXYSQL40 */
 
 SQLite3DB* get_admindb_service() {
@@ -337,6 +347,7 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_.install_aws_iam_token_source = &install_aws_iam_token_source_service;
 	services_.get_aws_iam_limits = &get_aws_iam_limits_service;
 	services_.install_aws_metadata_provider = &install_aws_metadata_provider_service;
+	services_.refresh_mysql_aws_locality_stats = &refresh_mysql_aws_locality_stats_service;
 
 	// Phase-B (register_schemas) services: same layout as init(), but DB
 	// handle getters and the query-hook registrar are stubbed -- see the
@@ -362,6 +373,8 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	// refresh callback won't fire until Admin handles a SELECT, by which
 	// point admin module bootstrap has long since completed.
 	services_phase_b_.register_runtime_view = &register_runtime_view_service;
+	services_phase_b_.refresh_mysql_aws_locality_stats =
+		&refresh_mysql_aws_locality_stats_service;
 #endif /* PROXYSQL40 */
 }
 

@@ -1,0 +1,240 @@
+#include "Aws_Locality_Manager.h"
+#include "MySQL_HostGroups_Manager.h"
+#include "ProxySQL_PluginManager.h"
+#include "sqlite3db.h"
+#include "tap.h"
+#include "test_globals.h"
+
+#include <atomic>
+#include <memory>
+#include <string>
+#include <unistd.h>
+#include <vector>
+
+#ifndef PROXYSQL_AWS_PLUGIN_PATH
+#error "PROXYSQL_AWS_PLUGIN_PATH must be defined"
+#endif
+
+extern MySQL_HostGroups_Manager* MyHGM;
+
+namespace {
+
+class CountingProvider final : public AwsMetadataProvider {
+public:
+	AwsMetadataRequestHandle request(
+		const AwsMetadataRequest&,
+		std::weak_ptr<AwsMetadataCompletionSink>) override {
+		++requests;
+		return {requests.load()};
+	}
+	void cancel(AwsMetadataRequestHandle) override {}
+	void shutdown() override {}
+	std::atomic<uint64_t> requests {0};
+};
+
+CountingProvider* counting_provider = nullptr;
+
+void destroy_counting_provider(AwsMetadataProvider* provider) {
+	delete static_cast<CountingProvider*>(provider);
+	counting_provider = nullptr;
+}
+
+AwsLocalityHostgroupConfig disabled_hostgroup(
+	uint32_t hostgroup_id, const std::string& hostname, int64_t weight) {
+	AwsLocalityHostgroupConfig config;
+	config.hostgroup_id = hostgroup_id;
+	config.policy.valid = true;
+	AwsEndpointCandidate endpoint;
+	endpoint.recognized = true;
+	endpoint.hostgroup_id = hostgroup_id;
+	endpoint.hostname = hostname;
+	endpoint.port = 3306;
+	endpoint.region = "us-east-1";
+	endpoint.partition = "aws";
+	config.backends.emplace_back(std::move(endpoint), weight);
+	return config;
+}
+
+AwsLocalitySnapshotEntry diagnostic_row(
+	uint32_t hostgroup_id,
+	AwsLocalityMetadataStatus status,
+	double multiplier,
+	int64_t weight) {
+	AwsLocalitySnapshotEntry row;
+	row.hostgroup_id = hostgroup_id;
+	row.hostname = hostgroup_id == 6
+		? "db'quoted.abcdefghijkl.us-east-1.rds.amazonaws.com"
+		: "db-" + std::to_string(hostgroup_id) +
+			".abcdefghijkl.us-east-1.rds.amazonaws.com";
+	row.port = 3306;
+	row.endpoint_type = hostgroup_id == 1 ? AwsEndpointType::unknown
+		: hostgroup_id == 2 ? AwsEndpointType::instance
+		: hostgroup_id == 3 ? AwsEndpointType::cluster
+		: hostgroup_id == 4 ? AwsEndpointType::reader
+		: AwsEndpointType::custom;
+	row.configured_weight = weight;
+	row.local = {"us-east-1", "us-east-1a", "111122223333"};
+	row.backend.region = hostgroup_id == 4 ? "eu-west-1" : "us-east-1";
+	row.backend.availability_zone = hostgroup_id == 2 ? "us-east-1a" : "";
+	row.backend.account_id = hostgroup_id == 1 ? ""
+		: hostgroup_id == 3 ? "444455556666" : "111122223333";
+	row.locality = hostgroup_id == 2 ? AwsLocalityClass::same_az
+		: hostgroup_id == 3 ? AwsLocalityClass::same_region
+		: hostgroup_id == 4 ? AwsLocalityClass::remote
+		: AwsLocalityClass::unknown;
+	row.multiplier = multiplier;
+	row.status = status;
+	row.last_success_timestamp = 1700000000 + hostgroup_id;
+	row.last_attempt_timestamp = 1700000100 + hostgroup_id;
+	row.failure_category = status == AwsLocalityMetadataStatus::stale
+		? "throttled" : status == AwsLocalityMetadataStatus::error
+			? "access_denied" : "";
+	return row;
+}
+
+} // namespace
+
+int main() {
+	plan(22);
+
+	SQLite3DB statsdb;
+	statsdb.open((char*)":memory:",
+		SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	ok(statsdb.return_one_int(
+		"SELECT count(*) FROM sqlite_master WHERE name='stats_mysql_aws_locality'") == 0,
+		"AWS locality stats table is absent without the AWS plugin");
+
+	std::unique_ptr<ProxySQL_PluginManager> manager;
+	std::string error;
+	ok(proxysql_load_configured_plugins(manager, {PROXYSQL_AWS_PLUGIN_PATH}, error),
+		"real AWS plugin completes schema-registration phase");
+	if (!error.empty()) diag("plugin error: %s", error.c_str());
+
+	const auto& tables = manager->tables(ProxySQL_PluginDBKind::stats_db);
+	ok(tables.size() == 1 &&
+		std::string(tables[0].table_name) == "stats_mysql_aws_locality",
+		"AWS plugin registers exactly its locality table in stats DB");
+	ok(manager->tables(ProxySQL_PluginDBKind::admin_db).empty() &&
+		manager->tables(ProxySQL_PluginDBKind::config_db).empty(),
+		"locality diagnostics add no admin/config persistence surface");
+
+	if (!tables.empty()) statsdb.execute(tables[0].table_def);
+	ok(statsdb.return_one_int(
+		"SELECT count(*) FROM pragma_table_info('stats_mysql_aws_locality')") == 17,
+		"plugin-owned locality table has the exact 17-column schema");
+	ok(statsdb.return_one_int(
+		"SELECT count(*) FROM pragma_table_info('stats_mysql_aws_locality') "
+		"WHERE name IN ('hostgroup_id','hostname','port','endpoint_type',"
+		"'configured_weight','effective_weight','local_region','local_az',"
+		"'backend_region','backend_az','account_match','locality',"
+		"'active_multiplier','metadata_status','last_success_timestamp',"
+		"'last_attempt_timestamp','last_error_category')") == 17,
+		"locality stats schema exposes the documented column names");
+
+	std::vector<AwsLocalitySnapshotEntry> rows;
+	rows.push_back(diagnostic_row(1, AwsLocalityMetadataStatus::pending, 4.0, 10));
+	rows.push_back(diagnostic_row(2, AwsLocalityMetadataStatus::fresh, 2.5, 11));
+	rows.push_back(diagnostic_row(3, AwsLocalityMetadataStatus::stale, 4.0, 12));
+	rows.push_back(diagnostic_row(4, AwsLocalityMetadataStatus::expired, 5.0, 13));
+	rows.push_back(diagnostic_row(5, AwsLocalityMetadataStatus::error, 6.0, 14));
+	rows.push_back(diagnostic_row(6, AwsLocalityMetadataStatus::disabled, 7.0, 15));
+	ok(MySQL_HostGroups_Manager::project_aws_locality_stats(&statsdb, rows),
+		"one retained diagnostics snapshot projects transactionally");
+	ok(statsdb.return_one_int("SELECT count(*) FROM stats_mysql_aws_locality") == 6,
+		"projection emits one row per configured backend");
+	ok(statsdb.return_one_int(
+		"SELECT count(DISTINCT metadata_status) FROM stats_mysql_aws_locality") == 6,
+		"pending, fresh, stale, expired, error, and disabled are explicit");
+	ok(statsdb.return_one_int(
+		"SELECT count(*) FROM stats_mysql_aws_locality WHERE "
+		"(hostgroup_id=2 AND effective_weight=27 AND active_multiplier=2.5) OR "
+		"(hostgroup_id=3 AND effective_weight=48 AND active_multiplier=4.0)") == 2,
+		"fresh/stale rows expose integer-cast weighted multipliers");
+	ok(statsdb.return_one_int(
+		"SELECT count(*) FROM stats_mysql_aws_locality WHERE hostgroup_id IN (1,4,5,6) "
+		"AND effective_weight=configured_weight AND active_multiplier=1.0") == 4,
+		"pending/expired/error/disabled rows force neutral effective weights");
+	ok(statsdb.return_one_int(
+		"SELECT count(*) FROM stats_mysql_aws_locality WHERE "
+		"(hostgroup_id=2 AND endpoint_type='instance' AND locality='same_az') OR "
+		"(hostgroup_id=3 AND endpoint_type='cluster' AND locality='same_region') OR "
+		"(hostgroup_id=4 AND endpoint_type='reader' AND locality='remote')") == 3,
+		"endpoint and locality classifications use stable strings");
+	ok(statsdb.return_one_int(
+		"SELECT count(*) FROM stats_mysql_aws_locality WHERE "
+		"(hostgroup_id=1 AND account_match='unknown') OR "
+		"(hostgroup_id=2 AND account_match='same') OR "
+		"(hostgroup_id=3 AND account_match='different')") == 3,
+		"account comparison exposes unknown/same/different without identifiers");
+	ok(statsdb.return_one_int(
+		"SELECT count(*) FROM stats_mysql_aws_locality WHERE hostgroup_id=3 "
+		"AND last_success_timestamp=1700000003 AND last_attempt_timestamp=1700000103 "
+		"AND last_error_category='throttled'") == 1,
+		"timestamps and fixed failure category survive projection");
+	ok(statsdb.return_one_int(
+		"SELECT count(*) FROM stats_mysql_aws_locality WHERE hostname="
+		"'db''quoted.abcdefghijkl.us-east-1.rds.amazonaws.com'") == 1,
+		"projection safely quotes endpoint text");
+
+	GloVars.prometheus_registry = std::make_shared<prometheus::Registry>();
+	unlink("file:mem_mydb?mode=memory");
+	{
+		MySQL_HostGroups_Manager hostgroups;
+		MyHGM = &hostgroups;
+		counting_provider = new CountingProvider();
+		ok(install_global_aws_metadata_provider(
+			counting_provider, &destroy_counting_provider, nullptr),
+			"network-request counter installs through the production registry");
+
+		hostgroups.aws_locality_manager()->configure({disabled_hostgroup(
+			101, "first.abcdefghijkl.us-east-1.rds.amazonaws.com", 7)});
+		proxysql_refresh_configured_plugin_runtime_views(
+			"SELECT * FROM stats_mysql_aws_locality", nullptr, nullptr, &statsdb);
+		ok(statsdb.return_one_int(
+			"SELECT count(*) FROM stats_mysql_aws_locality WHERE hostgroup_id=101 "
+			"AND metadata_status='disabled' AND configured_weight=7 "
+			"AND effective_weight=7") == 1,
+			"real plugin callback projects the MySQL manager's current snapshot");
+		ok(counting_provider->requests.load() == 0,
+			"query-time refresh issues no metadata-provider request");
+
+		hostgroups.aws_locality_manager()->configure({disabled_hostgroup(
+			202, "second.abcdefghijkl.us-east-1.rds.amazonaws.com", 9)});
+		proxysql_refresh_configured_plugin_runtime_views(
+			"SELECT * FROM stats_mysql_aws_locality", nullptr, nullptr, &statsdb);
+		ok(statsdb.return_one_int("SELECT count(*) FROM stats_mysql_aws_locality") == 1 &&
+			statsdb.return_one_int(
+				"SELECT count(*) FROM stats_mysql_aws_locality WHERE hostgroup_id=202") == 1,
+			"generation swap replaces the prior projection without mixed rows");
+
+		hostgroups.aws_locality_manager()->configure({});
+		proxysql_refresh_configured_plugin_runtime_views(
+			"SELECT * FROM stats_mysql_aws_locality", nullptr, nullptr, &statsdb);
+		ok(statsdb.return_one_int("SELECT count(*) FROM stats_mysql_aws_locality") == 0,
+			"no valid locality policy produces zero rows");
+		ok(counting_provider->requests.load() == 0,
+			"repeated generation queries remain network-free");
+		MyHGM = nullptr;
+	}
+	unlink("file:mem_mydb?mode=memory");
+	shutdown_global_aws_metadata_provider();
+	GloVars.prometheus_registry.reset();
+
+	statsdb.execute("PRAGMA query_only = ON");
+	char* write_error = nullptr;
+	SQLite3_result* write_result = statsdb.execute_statement(
+		"INSERT INTO stats_mysql_aws_locality "
+		"(hostgroup_id,hostname,port,endpoint_type,configured_weight,effective_weight,"
+		"local_region,local_az,backend_region,backend_az,account_match,locality,"
+		"active_multiplier,metadata_status,last_success_timestamp,last_attempt_timestamp,"
+		"last_error_category) VALUES (1,'x',3306,'unknown',1,1,'','','','',"
+		"'unknown','unknown',1.0,'disabled',0,0,'')", &write_error);
+	ok(write_error != nullptr,
+		"stats listener query-only mode rejects writes to the projection");
+	free(write_error);
+	delete write_result;
+	statsdb.execute("PRAGMA query_only = OFF");
+
+	proxysql_stop_configured_plugins(manager, error);
+	return exit_status();
+}

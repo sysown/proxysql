@@ -1613,10 +1613,11 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	}
 #ifdef PROXYSQL40
 	// Plugin-registered runtime views: if the query references any chassis-
-	// registered runtime view (e.g. runtime_mysqlx_users), refresh it on
-	// the admin path BEFORE the SELECT runs against admindb. We always
-	// invoke the dispatcher when the session is on the admin port; the
-	// chassis itself decides whether to fire any plugin's refresh
+// registered runtime view (e.g. runtime_mysqlx_users or an on-demand stats
+// table), refresh it BEFORE the SELECT runs. Admin sessions can project all
+// three DB kinds; stats sessions receive only the stats handle, so they cannot
+// trigger an admin/config projection. The chassis decides whether to fire any
+// plugin's refresh
 	// callback by per-view substring match against query_no_space, so a
 	// query that touches no registered view is a cheap no-op (one shared
 	// lock + N substring scans, N == registered-view count).
@@ -1628,9 +1629,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	// that touches only a plugin view (e.g. SELECT * FROM runtime_mysqlx_
 	// users with no other runtime_* mention) still gets its projection
 	// fired.
-	if (admin) {
-		proxysql_refresh_configured_plugin_runtime_views(query_no_space, admindb, configdb, statsdb);
-	}
+	proxysql_refresh_configured_plugin_runtime_views(query_no_space,
+		admin ? admindb : nullptr, admin ? configdb : nullptr, statsdb);
 #endif /* PROXYSQL40 */
 //	if (stats_mysql_processlist || stats_mysql_connection_pool || stats_mysql_query_digest || stats_mysql_query_digest_reset) {
 	if (refresh==true) {

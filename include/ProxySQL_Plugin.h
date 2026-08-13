@@ -43,8 +43,10 @@ namespace prometheus { class Registry; }
 //          sizing callbacks. They are live only during normal plugin init.
 //   ABI 6: ProxySQL_PluginServices gains the general AWS metadata-provider
 //          installation callback used by locality discovery.
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = 6u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = 6u;
+//   ABI 7: ProxySQL_PluginServices gains the MySQL-owned AWS-locality stats
+//          projection callback used by the AWS plugin's runtime view.
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = 7u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = 7u;
 
 enum class ProxySQL_PluginDBKind : uint8_t {
 	admin_db = 0,
@@ -248,6 +250,9 @@ using proxysql_plugin_get_aws_iam_limits_cb =
 
 using proxysql_plugin_install_aws_metadata_provider_cb =
 	bool (*)(AwsMetadataProvider *, void (*)(AwsMetadataProvider *), void *module_handle);
+
+using proxysql_plugin_refresh_mysql_aws_locality_stats_cb =
+	void (*)(SQLite3DB *);
 #endif /* PROXYSQL40 */
 
 // Services provided to plugins across the four-phase lifecycle.
@@ -316,6 +321,8 @@ struct ProxySQL_PluginServices {
 	proxysql_plugin_get_aws_iam_limits_cb get_aws_iam_limits;
 	// ABI-6 extension. Null outside normal plugin init().
 	proxysql_plugin_install_aws_metadata_provider_cb install_aws_metadata_provider;
+	// ABI-7 extension. Live in Phase B and normal init; it performs no I/O.
+	proxysql_plugin_refresh_mysql_aws_locality_stats_cb refresh_mysql_aws_locality_stats;
 #endif /* PROXYSQL40 */
 };
 
