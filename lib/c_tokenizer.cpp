@@ -12,21 +12,30 @@ extern __thread int  mysql_thread___query_digests_grouping_limit;
 extern __thread int  mysql_thread___query_digests_groups_grouping_limit;
 extern __thread bool mysql_thread___query_digests_keep_comment;
 
+static inline size_t tokenizer_strlen(const char* s) {
+	size_t len = 0;
+	if (s == NULL) return 0;
+	while (s[len]) {
+		++len;
+	}
+	return len;
+}
+
 void tokenizer(tokenizer_t *result, const char* s, const char* delimiters, int empties )
 {
 
 	//tokenizer_t result;
 
-	result->s_length = ( (s && delimiters) ? strlen(s) : 0 );
-	result->s = NULL;
-	if (result->s_length) {
+		result->s_length = ( (s && delimiters) ? tokenizer_strlen(s) : 0 );
+		result->s = NULL;
+		if (result->s_length) {
 		if (result->s_length > (PROXYSQL_TOKENIZER_BUFFSIZE-1)) {
 			result->s = strdup(s);
 		} else {
-			strcpy(result->buffer,s);
+			snprintf(result->buffer, sizeof(result->buffer), "%.*s", (int)result->s_length, s);
 			result->s = result->buffer;
 		}
-	}
+		}
 	result->delimiters				= delimiters;
 	result->current					 = NULL;
 	result->next							= result->s;
@@ -37,7 +46,7 @@ void tokenizer(tokenizer_t *result, const char* s, const char* delimiters, int e
 
 const char* free_tokenizer( tokenizer_t* tokenizer )
 {
-	if (tokenizer->s_length > (PROXYSQL_TOKENIZER_BUFFSIZE-1)) {
+	if (tokenizer->s && tokenizer->s != tokenizer->buffer) {
 		free(tokenizer->s);
 	}
 	tokenizer->s = NULL;
@@ -2641,4 +2650,3 @@ char* mysql_query_strip_comments(char *s, int _len, bool lowercase) {
 
 	return r;
 }
-

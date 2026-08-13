@@ -1,5 +1,6 @@
 
 #include <fcntl.h>
+#include <string_view>
 #include <sstream>
 #include <atomic>
 #include <memory>
@@ -47,38 +48,31 @@ PgSQL_Connection_userinfo::~PgSQL_Connection_userinfo() {
 }
 
 uint64_t PgSQL_Connection_userinfo::compute_hash() {
-	int l=0;
-	if (username)
-		l+=strlen(username);
-	if (password)
-		l+=strlen(password);
-	if (dbname)
-		l+=strlen(dbname);
+	size_t username_len = username ? std::string_view(username).size() : 0;
+	size_t password_len = password ? std::string_view(password).size() : 0;
+	size_t dbname_len = dbname ? std::string_view(dbname).size() : 0;
+	size_t l = username_len + password_len + dbname_len;
 // two random seperator
-#define _COMPUTE_HASH_DEL1_	"-ujhtgf76y576574fhYTRDF345wdt-"
-#define _COMPUTE_HASH_DEL2_	"-8k7jrhtrgJHRgrefgreyhtRFewg6-"
-	l+=strlen(_COMPUTE_HASH_DEL1_);
-	l+=strlen(_COMPUTE_HASH_DEL2_);
-	char *buf=(char *)malloc(l+1);
-	l=0;
+	constexpr char delimiter1[] = "-ujhtgf76y576574fhYTRDF345wdt-";
+	constexpr char delimiter2[] = "-8k7jrhtrgJHRgrefgreyhtRFewg6-";
+	size_t delimiter1_len = sizeof(delimiter1) - 1;
+	size_t delimiter2_len = sizeof(delimiter2) - 1;
+	l += delimiter1_len + delimiter2_len;
+
+	std::string hash_input;
+	hash_input.reserve(l);
 	if (username) {
-		strcpy(buf+l,username);
-		l+=strlen(username);
+		hash_input.append(username, username_len);
 	}
-	strcpy(buf+l,_COMPUTE_HASH_DEL1_);
-	l+=strlen(_COMPUTE_HASH_DEL1_);
+	hash_input.append(delimiter1);
 	if (password) {
-		strcpy(buf+l,password);
-		l+=strlen(password);
+		hash_input.append(password, password_len);
 	}
 	if (dbname) {
-		strcpy(buf+l, dbname);
-		l+=strlen(dbname);
+		hash_input.append(dbname, dbname_len);
 	}
-	strcpy(buf+l,_COMPUTE_HASH_DEL2_);
-	l+=strlen(_COMPUTE_HASH_DEL2_);
-	hash=SpookyHash::Hash64(buf,l,0);
-	free(buf);
+	hash_input.append(delimiter2);
+	hash = SpookyHash::Hash64(hash_input.data(), hash_input.size(), 0);
 	return hash;
 }
 

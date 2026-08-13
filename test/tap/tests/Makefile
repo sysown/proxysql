@@ -308,6 +308,9 @@ endif
 test_gtid_forwarding-t: test_gtid_forwarding-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
 
+test_gtid_from_ok-t: test_gtid_from_ok-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
+	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
+
 test_ignore_min_gtid-t: test_ignore_min_gtid-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
 
@@ -416,27 +419,25 @@ test_wexecvp_syscall_failures-t: test_wexecvp_syscall_failures-t.cpp $(TAP_LDIR)
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -Wl,--wrap=pipe,--wrap=fcntl,--wrap=read,--wrap=poll $(STATIC_LIBS) -o $@
 endif
 
-pgsql-extended_query_protocol_test-t: pgsql-extended_query_protocol_test-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
-	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
+# Every test that links pg_lite_client.cpp shares one link line. pg_lite_client
+# implements PostgreSQL MD5 and SCRAM-SHA-256 client authentication, so it needs
+# -lscram/-lusual; $(ALLOW_MULTI_DEF) resolves the duplicate symbols between
+# libscram/libusual and the other vendored static libs (test binaries only, and
+# it is empty on Darwin where the linker has no such flag).
+PG_LITE_CLIENT_TESTS := \
+	pgsql-extended_query_protocol_test-t \
+	pgsql-reg_test_5273_bind_parameter_format-t \
+	pgsql-reg_test_5899_bind_zero_param_formats-t \
+	pgsql-reg_test_5300_threshold_resultset_deadlock-t \
+	pgsql-reg_test_5866_result_format-t \
+	pgsql-auth_method_matrix-t \
+	pgsql-datatype_matrix-t \
+	pgsql-server_side_cursors-t \
+	test_ffto_pgsql_pipeline-t \
+	test_ffto_pgsql_stmt_portal-t
 
-pgsql-reg_test_5273_bind_parameter_format-t: pgsql-reg_test_5273_bind_parameter_format-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
-	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
-
-pgsql-reg_test_5899_bind_zero_param_formats-t: pgsql-reg_test_5899_bind_zero_param_formats-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
-	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
-
-pgsql-reg_test_5300_threshold_resultset_deadlock-t: pgsql-reg_test_5300_threshold_resultset_deadlock-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
-	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
-
-pgsql-reg_test_5866_result_format-t: pgsql-reg_test_5866_result_format-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
-	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
-
-test_ffto_pgsql_pipeline-t: test_ffto_pgsql_pipeline-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
-	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
-
-test_ffto_pgsql_stmt_portal-t: test_ffto_pgsql_stmt_portal-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
-	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
-
+$(PG_LITE_CLIENT_TESTS): %: %.cpp pg_lite_client.cpp pg_lite_client.h $(TAP_LDIR)/libtap$(SHLIB_EXT)
+	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual $(ALLOW_MULTI_DEF) -o $@
 
 MYSQLX_PROTO_DIR := $(PROXYSQL_PATH)/plugins/mysqlx/proto
 MYSQLX_PROTO_SRCS := $(wildcard $(MYSQLX_PROTO_DIR)/*.pb.cc)

@@ -20,5 +20,5 @@ pgsql_variables=
 
 sqliteserver_variables=
 {
-    mysql_ifaces="0.0.0.0:6030"
+    mysql_ifaces="0.0.0.0:6030;/tmp/proxysql_sqlite.sock"
 }

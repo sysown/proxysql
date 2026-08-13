@@ -20,6 +20,7 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <locale>
 #include <string>
 #include <sstream>
 #include <chrono>
@@ -64,21 +65,18 @@ PGConnPtr createNewConnection(ConnType conn_type, const std::string& parameters 
     return PGConnPtr(conn, &PQfinish);
 }
 
-bool executeQueries(PGconn* conn, const std::vector<std::string>& queries) {
-    auto fnResultType = [](const char* query) -> int {
-        const char* fs = strchr(query, ' ');
-        size_t qtlen = strlen(query);
-        if (fs != NULL) {
-            qtlen = (fs - query) + 1;
+	bool executeQueries(PGconn* conn, const std::vector<std::string>& queries) {
+	    auto fnResultType = [](const char* query) -> int {
+	        const size_t qtlen = strcspn(query, " \t\r\n");
+	        std::string query_type(query, qtlen);
+        for (char& c : query_type) {
+        c = std::toupper(c, std::locale::classic());
         }
-        char buf[qtlen];
-        memcpy(buf, query, qtlen - 1);
-        buf[qtlen - 1] = 0;
 
-        if (strncasecmp(buf, "SELECT", sizeof("SELECT") - 1) == 0) {
+        if (query_type == "SELECT") {
             return PGRES_TUPLES_OK;
         }
-        if (strncasecmp(buf, "COPY", sizeof("COPY") - 1) == 0) {
+        if (query_type == "COPY") {
             return PGRES_COPY_OUT;
         }
 
@@ -291,13 +289,29 @@ void send_startup_message(int sock, const std::vector<std::pair<std::string, std
     memcpy(msg + offset, &protocol, 4);
     offset += 4;
 
-    for (int i = 0; i < param_count; i++) {
-        strcpy(msg + offset, params[i].first.c_str());
-        offset += params[i].first.size() + 1;
-        strcpy(msg + offset, params[i].second.c_str());
-        offset += params[i].second.size() + 1;
-    }
-    msg[offset++] = '\0';
+	for (int i = 0; i < param_count; i++) {
+	        size_t key_len = params[i].first.size();
+	        size_t val_len = params[i].second.size();
+	        if (offset + key_len + 1 > sizeof(msg)) {
+	            return;
+	        }
+	        memcpy(msg + offset, params[i].first.c_str(), key_len);
+	        offset += key_len;
+	if (offset >= sizeof(msg)) {
+		return;
+	}
+	msg[offset++] = '\0';
+	        if (offset + val_len + 1 > sizeof(msg)) {
+	            return;
+	        }
+	        memcpy(msg + offset, params[i].second.c_str(), val_len);
+	        offset += val_len;
+	        msg[offset++] = '\0';
+	    }
+	    if (offset >= sizeof(msg)) {
+	        return;
+	    }
+	    msg[offset++] = '\0';
 
     send(sock, msg, offset, 0);
 }
@@ -619,8 +633,8 @@ const char* escape_string_backslash_spaces(const char* input) {
 
     for (c = input; *c != '\0'; c++) {
         if ((*c == ' ')) {
-            memcpy(p, "\\\\", 2);
-            p += 2;
+            *p++ = '\\';
+            *p++ = '\\';
         }
         else if (*c == '\\') {
             *(p++) = '\\';

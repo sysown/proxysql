@@ -2731,7 +2731,7 @@ __exit_monitor_galera_thread:
 							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_desync=YES");
 						} else {
 							char msg[80];
-							sprintf(msg,"wsrep_local_state=%d",wsrep_local_state);
+							snprintf(msg, sizeof(msg), "wsrep_local_state=%d", wsrep_local_state);
 							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, msg);
 						}
 					}
@@ -10092,7 +10092,7 @@ bool MySQL_Monitor::monitor_galera_process_ready_tasks(const std::vector<MySQL_M
 							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char*)"wsrep_desync=YES");
 						} else {
 							char msg[80];
-							sprintf(msg, "wsrep_local_state=%d", wsrep_local_state);
+							snprintf(msg, sizeof(msg), "wsrep_local_state=%d", wsrep_local_state);
 							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, msg);
 						}
 					}

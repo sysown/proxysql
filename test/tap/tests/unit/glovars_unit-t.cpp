@@ -162,6 +162,28 @@ static void test_checksum_value_set() {
 	ok(spaces_replaced, "set_checksum(spaces): positions 2-17 all replaced with '0'");
 }
 
+static void test_checksum_value_short_input() {
+	ProxySQL_Checksum_Value cv;
+	struct {
+		char input[5];
+		char guard[15];
+	} source;
+	memcpy(source.input, "0x12", sizeof(source.input));
+	memset(source.guard, 'X', sizeof(source.guard));
+
+	cv.set_checksum(source.input);
+
+	bool zero_padded = true;
+	for (int i = 4; i < 18; i++) {
+		if (cv.checksum[i] != '0') {
+			zero_padded = false;
+			break;
+		}
+	}
+	ok(zero_padded,
+		"set_checksum(short input): zero-pads without reading beyond the source string");
+}
+
 static void test_checksum_value_shutdown_flag() {
 	// Normal destruction (in_shutdown == false): no crash
 	{
@@ -415,7 +437,7 @@ static void test_replace_checksum_zeros() {
 }
 
 int main() {
-	plan(78);
+	plan(79);
 
 	test_init_minimal();
 
@@ -425,6 +447,7 @@ int main() {
 	// Checksum value (16 tests)
 	test_checksum_value_defaults();        // 5
 	test_checksum_value_set();             // 9
+	test_checksum_value_short_input();    // 1
 	test_checksum_value_shutdown_flag();   // 2
 
 	// Checksum value version/epoch (6 tests)

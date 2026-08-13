@@ -873,7 +873,7 @@ std::string mysql_result_to_string(MYSQL_RES* result) {
 
 	std::vector<size_t> widths(num_fields);
 	for (int i = 0; i < num_fields; i++) {
-		widths[i] = strlen(fields[i].name);
+		widths[i] = fields[i].name_length;
 	}
 	for (const auto& r : rows) {
 		for (int i = 0; i < num_fields; i++) {
@@ -897,8 +897,9 @@ std::string mysql_result_to_string(MYSQL_RES* result) {
 	append_border();
 	s = "|";
 	for (int i = 0; i < num_fields; i++) {
-		size_t len = strlen(fields[i].name);
-		s += " "; s += fields[i].name;
+		const char* safe_name = fields[i].name ? fields[i].name : "";
+		const size_t len = fields[i].name_length;
+		s += " "; s += safe_name;
 		for (size_t j = 0; j < widths[i] - len + 1; j++) s += " ";
 		s += "|";
 	}

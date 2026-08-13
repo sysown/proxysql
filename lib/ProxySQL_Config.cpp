@@ -8,8 +8,66 @@
 #include <sstream>
 #include <set>
 #include <tuple>
+#include <string>
 #include <cstring>
 #include <memory>
+
+static inline size_t safe_strlen(const char *s) {
+    if (s == nullptr) {
+        return 0;
+    }
+    size_t len = 0;
+    while (s[len] != '\0') {
+        ++len;
+    }
+    return len;
+}
+
+template <typename... Args>
+static void format_query(char *query, size_t query_len, const char *format, Args... args) {
+	if (query == nullptr || query_len == 0) {
+		return;
+	}
+
+	std::string formatted;
+	if (string_format(format, formatted, args...) < 0) {
+		query[0] = '\0';
+		return;
+	}
+
+	size_t copy_len = formatted.size();
+	if (copy_len >= query_len) {
+		copy_len = query_len - 1;
+	}
+	memcpy(query, formatted.data(), copy_len);
+	query[copy_len] = '\0';
+}
+
+static void append_config_field(std::string& fields, std::string& values,
+		bool& is_first_field, const std::string& field_name,
+		const std::string& field_value, bool is_int) {
+	if (!is_first_field) {
+		fields += ", ";
+		values += ", ";
+	} else {
+		is_first_field = false;
+	}
+	fields += field_name;
+
+	if (is_int) {
+		values += field_value;
+		return;
+	}
+
+	char *cs = strdup(field_value.c_str());
+	char *ecs = escape_string_single_quotes(cs, false);
+	const char* safe_escaped = ecs ? ecs : "";
+	values += std::string("'") + safe_escaped + "'";
+	if (cs != ecs) {
+		l_free(0, cs);
+	}
+	l_free(0, ecs);
+}
 
 const char* config_header = "########################################################################################\n"
 							"# This config file is parsed using libconfig , and its grammar is described in:\n"
@@ -53,7 +111,7 @@ ProxySQL_Config:: ~ProxySQL_Config() {
 
 void ProxySQL_Config::addField(std::string& data, const char* name, const char* value, const char* dq) {
 	std::stringstream ss;
-	if (!value || !strlen(value)) return;
+	if (value == NULL || value[0] == 0) return;
 
 	// Escape the double quotes in all the fields contents
 	std::string esc_value { value };
@@ -91,25 +149,28 @@ void ProxySQL_Config::addField(std::string& data, const char* name, const char* 
  * @see ProxySQL_Config::Write_Global_Variables_to_configfile()
  */
 int ProxySQL_Config::Read_Global_Variables_from_configfile(const char *prefix) {
+	if (prefix == NULL) return 0;
 	const Setting& root = GloVars.confFile->cfg.getRoot();
-	char *groupname=(char *)malloc(strlen(prefix)+strlen((char *)"_variables")+1);
-	sprintf(groupname,"%s%s",prefix,"_variables");
+	const size_t prefix_len = safe_strlen(prefix);
+	const size_t suffix_len = sizeof("_variables") - 1;
+	const size_t groupname_size = prefix_len + suffix_len + 1;
+        char *groupname=(char *)l_alloc(groupname_size);
+	snprintf(groupname, groupname_size, "%s%s", prefix, "_variables");
 	if (root.exists(groupname)==false) {
-		free(groupname);
+		l_free(0, groupname);
 	return 0;
 	}
 	const Setting &group = root[(const char *)groupname];
 	int count = group.getLength();
 	//fprintf(stderr, "Found %d %s_variables\n",count, prefix);
 	int i;
-	size_t prefix_len = strlen(prefix);
 	admindb->execute("PRAGMA foreign_keys = OFF");
 	// Prepare statement once for all inserts
 	auto [rc, stmt] = admindb->prepare_v2("INSERT OR REPLACE INTO global_variables VALUES (?1, ?2)");
 	if (rc != SQLITE_OK) {
 		proxy_error("Failed to prepare statement for global_variables insert: %d\n", rc);
 		admindb->execute("PRAGMA foreign_keys = ON");
-		free(groupname);
+		l_free(0, groupname);
 		return 0;
 	}
 	for (i=0; i< count; i++) {
@@ -146,7 +207,7 @@ int ProxySQL_Config::Read_Global_Variables_from_configfile(const char *prefix) {
 	}
 	// Statement automatically finalized when stmt goes out of scope
 	admindb->execute("PRAGMA foreign_keys = ON");
-	free(groupname);
+	l_free(0, groupname);
 	return i;
 }
 
@@ -240,12 +301,19 @@ int ProxySQL_Config::Read_MySQL_Users_from_configfile(std::string& error) {
 		user.lookupValue("comment", comment);
 		char *o1=strdup(comment.c_str());
 		char *o=escape_string_single_quotes(o1, false);
-		char *query=(char *)malloc(strlen(q)+strlen(username.c_str())+strlen(password.c_str())+strlen(o)+strlen(attributes.c_str())+128);
-		sprintf(query,q, username.c_str(), password.c_str(), active, use_ssl, default_hostgroup, default_schema.c_str(), schema_locked, transaction_persistent, fast_forward, max_connections, attributes.c_str(), o);
+		const char* safe_comment = o ? o : "";
+		const size_t query_base_len = safe_strlen(q);
+		const size_t username_len = username.size();
+		const size_t password_len = password.size();
+		const size_t safe_comment_len = safe_strlen(safe_comment);
+		const size_t attributes_len = attributes.size();
+		const size_t query_len = query_base_len + username_len + password_len + default_schema.size() + safe_comment_len + attributes_len + 128;
+		char *query=(char *)l_alloc(query_len);
+		format_query(query, query_len, q, username.c_str(), password.c_str(), active, use_ssl, default_hostgroup, default_schema.c_str(), schema_locked, transaction_persistent, fast_forward, max_connections, attributes.c_str(), safe_comment);
 		admindb->execute(query);
 		if (o!=o1) free(o);
 		free(o1);
-		free(query);
+		l_free(0, query);
 		rows++;
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
@@ -347,20 +415,21 @@ int ProxySQL_Config::Read_Scheduler_from_configfile() {
 		sched.lookupValue("comment", comment);
 
 
-		int query_len=0;
-		query_len+=strlen(q) +
-			strlen(std::to_string(id).c_str()) +
-			strlen(std::to_string(active).c_str()) +
-			strlen(std::to_string(interval_ms).c_str()) +
-			strlen(filename.c_str()) +
-			( arg1_exists ? strlen(arg1.c_str()) : 0 ) + 4 +
-			( arg2_exists ? strlen(arg2.c_str()) : 0 ) + 4 +
-			( arg3_exists ? strlen(arg3.c_str()) : 0 ) + 4 +
-			( arg4_exists ? strlen(arg4.c_str()) : 0 ) + 4 +
-			( arg5_exists ? strlen(arg5.c_str()) : 0 ) + 4 +
-			strlen(comment.c_str()) +
-			40;
-		char *query=(char *)malloc(query_len);
+		const size_t query_base_len = safe_strlen(q);
+		const string id_str = to_string(id);
+		const string active_str = to_string(active);
+		const string interval_ms_str = to_string(interval_ms);
+		const size_t filename_len = filename.size();
+		const size_t arg1_len = arg1_exists ? arg1.size() : 0;
+		const size_t arg2_len = arg2_exists ? arg2.size() : 0;
+		const size_t arg3_len = arg3_exists ? arg3.size() : 0;
+		const size_t arg4_len = arg4_exists ? arg4.size() : 0;
+		const size_t arg5_len = arg5_exists ? arg5.size() : 0;
+		const size_t comment_len = comment.size();
+		const size_t query_len = query_base_len + id_str.size() + active_str.size() + interval_ms_str.size() +
+			filename_len + (arg1_len + 4) + (arg2_len + 4) + (arg3_len + 4) + (arg4_len + 4) + (arg5_len + 4) +
+			comment_len + 40;
+		char *query=(char *)l_alloc(query_len);
 		if (arg1_exists)
 			arg1="\'" + arg1 + "\'";
 		else
@@ -382,7 +451,7 @@ int ProxySQL_Config::Read_Scheduler_from_configfile() {
 		else
 			arg5 = "NULL";
 
-		sprintf(query, q,
+		format_query(query, query_len, q,
 			id, active,
 			interval_ms,
 			filename.c_str(),
@@ -394,7 +463,7 @@ int ProxySQL_Config::Read_Scheduler_from_configfile() {
 			comment.c_str()
 		);
 		admindb->execute(query);
-		free(query);
+		l_free(0, query);
 		rows++;
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
@@ -518,22 +587,29 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 		char *comment_escaped = escape_string_single_quotes(comment_escaped_raw, false);
 
 		const char *q = id_exists ? q_with_id : q_without_id;
+		const size_t query_base_len = safe_strlen(q);
 		const std::string active_str = std::to_string(active);
 		const std::string timeout_ms_str = std::to_string(timeout_ms);
 		const std::string id_str = id_exists ? std::to_string(id) : std::string();
-		int query_len=0;
-		query_len+=strlen(q) +
-			strlen(active_str.c_str()) +
-			strlen(timeout_ms_str.c_str()) +
-			strlen(method_escaped) +
-			strlen(uri_escaped) +
-			strlen(script_escaped) +
-			strlen(comment_escaped) +
-			40;
-		if (id_exists) {
-			query_len += strlen(id_str.c_str());
-		}
-		char *query=(char *)malloc(query_len);
+		const char* safe_method_escaped = method_escaped ? method_escaped : "";
+		const char* safe_uri_escaped = uri_escaped ? uri_escaped : "";
+		const char* safe_script_escaped = script_escaped ? script_escaped : "";
+		const char* safe_comment_escaped = comment_escaped ? comment_escaped : "";
+		const size_t safe_method_len = safe_strlen(safe_method_escaped);
+		const size_t safe_uri_len = safe_strlen(safe_uri_escaped);
+		const size_t safe_script_len = safe_strlen(safe_script_escaped);
+		const size_t safe_comment_len = safe_strlen(safe_comment_escaped);
+		size_t query_len =
+			query_base_len +
+			active_str.size() +
+			timeout_ms_str.size() +
+			safe_method_len +
+			safe_uri_len +
+			safe_script_len +
+			safe_comment_len +
+			40 +
+			(id_exists ? id_str.size() : 0);
+		char *query=(char *)l_alloc(query_len);
 		if (query == NULL) {
 			proxy_error("Admin: unable to allocate memory while loading restapi routes from config file\n");
 			if (method_escaped != method_escaped_raw) free(method_escaped);
@@ -547,22 +623,22 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 			continue;
 		}
 		if (id_exists) {
-			snprintf(query, query_len, q,
+			format_query(query, query_len, q,
 				id, active,
 				timeout_ms,
-				method_escaped,
-				uri_escaped,
-				script_escaped,
-				comment_escaped
+				safe_method_escaped,
+				safe_uri_escaped,
+				safe_script_escaped,
+				safe_comment_escaped
 			);
 		} else {
-			snprintf(query, query_len, q,
+			format_query(query, query_len, q,
 				active,
 				timeout_ms,
-				method_escaped,
-				uri_escaped,
-				script_escaped,
-				comment_escaped
+				safe_method_escaped,
+				safe_uri_escaped,
+				safe_script_escaped,
+				safe_comment_escaped
 			);
 		}
 		admindb->execute(query);
@@ -574,7 +650,7 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 		free(uri_escaped_raw);
 		free(script_escaped_raw);
 		free(comment_escaped_raw);
-		free(query);
+		l_free(0, query);
 		rows++;
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
@@ -902,47 +978,65 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 		if (rule.lookupValue("attributes", attributes)) attributes_exists=true;
 
 
-		//if (user.lookupValue("default_schema", default_schema)==false) default_schema="";
-		int query_len=0;
-		query_len+=strlen(q) +
-			strlen(std::to_string(rule_id).c_str()) +
-			strlen(std::to_string(active).c_str()) +
-			( username_exists ? strlen(username.c_str()) : 0 ) + 4 +
-			( schemaname_exists ? strlen(schemaname.c_str()) : 0 ) + 4 +
-			strlen(std::to_string(flagIN).c_str()) + 4 +
-
-			( client_addr_exists ? strlen(client_addr.c_str()) : 0 ) + 4 +
-			( proxy_addr_exists ? strlen(proxy_addr.c_str()) : 0 ) + 4 +
-			strlen(std::to_string(proxy_port).c_str()) + 4 +
-
-			( match_digest_exists ? strlen(match_digest.c_str()) : 0 ) + 4 +
-			( match_pattern_exists ? strlen(match_pattern.c_str()) : 0 ) + 4 +
-			strlen(std::to_string(negate_match_pattern).c_str()) + 4 +
-			( re_modifiers_exists ? strlen(re_modifiers.c_str()) : 0 ) + 4 +
-			strlen(std::to_string(flagOUT).c_str()) + 4 +
-			( replace_pattern_exists ? strlen(replace_pattern.c_str()) : 0 ) + 4 +
-			strlen(std::to_string(destination_hostgroup).c_str()) + 4 +
-			strlen(std::to_string(cache_ttl).c_str()) + 4 +
-			strlen(std::to_string(cache_empty_result).c_str()) + 4 +
-			strlen(std::to_string(cache_timeout).c_str()) + 4 +
-			strlen(std::to_string(reconnect).c_str()) + 4 +
-			strlen(std::to_string(timeout).c_str()) + 4 +
-			strlen(std::to_string(next_query_flagIN).c_str()) + 4 +
-			strlen(std::to_string(mirror_flagOUT).c_str()) + 4 +
-			strlen(std::to_string(mirror_hostgroup).c_str()) + 4 +
-			strlen(std::to_string(retries).c_str()) + 4 +
-			strlen(std::to_string(delay).c_str()) + 4 +
-			( error_msg_exists ? strlen(error_msg.c_str()) : 0 ) + 4 +
-			( OK_msg_exists ? strlen(OK_msg.c_str()) : 0 ) + 4 +
-			strlen(std::to_string(sticky_conn).c_str()) + 4 +
-			strlen(std::to_string(multiplex).c_str()) + 4 +
-			strlen(std::to_string(gtid_from_hostgroup).c_str()) + 4 +
-			strlen(std::to_string(log).c_str()) + 4 +
-			strlen(std::to_string(apply).c_str()) + 4 +
-			( attributes_exists ? strlen(attributes.c_str()) : 0 ) + 4 +
-			( comment_exists ? strlen(comment.c_str()) : 0 ) + 4 +
-			64;
-		char *query=(char *)malloc(query_len);
+			//if (user.lookupValue("default_schema", default_schema)==false) default_schema="";
+			const size_t query_base_len = safe_strlen(q);
+			const string rule_id_str = to_string(rule_id);
+			const string active_str = to_string(active);
+			const string flagIN_str = to_string(flagIN);
+			const string proxy_port_str = to_string(proxy_port);
+			const string negate_match_pattern_str = to_string(negate_match_pattern);
+			const string flagOUT_str = to_string(flagOUT);
+			const string destination_hostgroup_str = to_string(destination_hostgroup);
+			const string cache_ttl_str = to_string(cache_ttl);
+			const string cache_empty_result_str = to_string(cache_empty_result);
+			const string cache_timeout_str = to_string(cache_timeout);
+			const string reconnect_str = to_string(reconnect);
+			const string timeout_str = to_string(timeout);
+			const string next_query_flagIN_str = to_string(next_query_flagIN);
+			const string mirror_flagOUT_str = to_string(mirror_flagOUT);
+			const string mirror_hostgroup_str = to_string(mirror_hostgroup);
+			const string retries_str = to_string(retries);
+			const string delay_str = to_string(delay);
+			const string sticky_conn_str = to_string(sticky_conn);
+			const string multiplex_str = to_string(multiplex);
+			const string gtid_from_hostgroup_str = to_string(gtid_from_hostgroup);
+			const string log_str = to_string(log);
+			const string apply_str = to_string(apply);
+			size_t query_len = query_base_len + rule_id_str.size() + active_str.size() + flagIN_str.size() +
+				( username_exists ? username.size() : 0 ) + 4 +
+				( schemaname_exists ? schemaname.size() : 0 ) + 4 +
+				( client_addr_exists ? client_addr.size() : 0 ) + 4 +
+				( proxy_addr_exists ? proxy_addr.size() : 0 ) + 4 +
+				proxy_port_str.size() + 4 +
+				( digest_exists ? digest.size() : 0 ) + 4 +
+				( match_digest_exists ? match_digest.size() : 0 ) + 4 +
+				( match_pattern_exists ? match_pattern.size() : 0 ) + 4 +
+				negate_match_pattern_str.size() + 4 +
+				( re_modifiers_exists ? re_modifiers.size() : 0 ) + 4 +
+				flagOUT_str.size() + 4 +
+				( replace_pattern_exists ? replace_pattern.size() : 0 ) + 4 +
+				destination_hostgroup_str.size() + 4 +
+				cache_ttl_str.size() + 4 +
+				cache_empty_result_str.size() + 4 +
+				cache_timeout_str.size() + 4 +
+				reconnect_str.size() + 4 +
+				timeout_str.size() + 4 +
+				next_query_flagIN_str.size() + 4 +
+				mirror_flagOUT_str.size() + 4 +
+				mirror_hostgroup_str.size() + 4 +
+				retries_str.size() + 4 +
+				delay_str.size() + 4 +
+				( error_msg_exists ? error_msg.size() : 0 ) + 4 +
+				( OK_msg_exists ? OK_msg.size() : 0 ) + 4 +
+				sticky_conn_str.size() + 4 +
+				multiplex_str.size() + 4 +
+				gtid_from_hostgroup_str.size() + 4 +
+				log_str.size() + 4 +
+				apply_str.size() + 4 +
+				( attributes_exists ? attributes.size() : 0 ) + 4 +
+				( comment_exists ? comment.size() : 0 ) + 4 +
+				64;
+		char *query=(char *)l_alloc(query_len);
 		if (username_exists)
 			username="\"" + username + "\"";
 		else
@@ -999,7 +1093,7 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 			comment = "NULL";
 
 
-		sprintf(query, q,
+		format_query(query, query_len, q,
 			rule_id, active,
 			username.c_str(),
 			schemaname.c_str(),
@@ -1037,7 +1131,7 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 		);
 		//fprintf(stderr, "%s\n", query);
 		admindb->execute(query);
-		free(query);
+		l_free(0, query);
 		rows++;
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
@@ -1394,13 +1488,19 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
 			server.lookupValue("comment", comment);
 			char *o1=strdup(comment.c_str());
 			char *o=escape_string_single_quotes(o1, false);
-			char *query=(char *)malloc(strlen(q)+strlen(status.c_str())+strlen(address.c_str())+strlen(o)+128);
-			sprintf(query,q, address.c_str(), port, gtid_port, hostgroup, compression, weight, status.c_str(), max_connections, max_replication_lag, use_ssl, max_latency_ms, o);
+			const char* safe_comment = o ? o : "";
+			const size_t query_base_len = safe_strlen(q);
+			const size_t status_len = status.size();
+			const size_t address_len = address.size();
+			const size_t safe_comment_len = safe_strlen(safe_comment);
+			const size_t query_len = query_base_len + status_len + address_len + safe_comment_len + 128;
+			char *query=(char *)l_alloc(query_len);
+				format_query(query, query_len, q, address.c_str(), port, gtid_port, hostgroup, compression, weight, status.c_str(), max_connections, max_replication_lag, use_ssl, max_latency_ms, safe_comment);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
 			if (o!=o1) free(o);
 			free(o1);
-			free(query);
+			l_free(0, query);
 			rows++;
 		}
 	}
@@ -1437,23 +1537,30 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
 			}
 			char *t1=strdup(check_type.c_str());
 			char *t=escape_string_single_quotes(t1, false);
-			char *query=(char *)malloc(strlen(q)+strlen(o)+strlen(t)+32);
-			sprintf(query,q, writer_hostgroup, reader_hostgroup, o, t);
+			const char* safe_comment = o ? o : "";
+			const char* safe_check_type = t ? t : "";
+			const size_t query_base_len = safe_strlen(q);
+			const size_t safe_comment_len = safe_strlen(safe_comment);
+			const size_t safe_check_type_len = safe_strlen(safe_check_type);
+			const size_t query_len = query_base_len + safe_comment_len + safe_check_type_len + 32;
+			char *query=(char *)l_alloc(query_len);
+				format_query(query, query_len, q, writer_hostgroup, reader_hostgroup, safe_comment, safe_check_type);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
 			if (o!=o1) free(o);
 			free(o1);
 			if (t!=t1) free(t);
 			free(t1);
-			free(query);
+			l_free(0, query);
 			rows++;
 		}
 	}
-	if (root.exists("mysql_servers_ssl_params")==true) { // mysql_servers_ssl_params
-		const Setting &mysql_servers_ssl_params = root["mysql_servers_ssl_params"];
-		int count = mysql_servers_ssl_params.getLength();
-		char *q=(char *)"INSERT OR REPLACE INTO mysql_servers_ssl_params (hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_capath, ssl_crl, ssl_crlpath, ssl_cipher, tls_version, comment) VALUES ('%s', %d, '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')";
-		for (i=0; i< count; i++) {
+		if (root.exists("mysql_servers_ssl_params")==true) { // mysql_servers_ssl_params
+			const Setting &mysql_servers_ssl_params = root["mysql_servers_ssl_params"];
+			int count = mysql_servers_ssl_params.getLength();
+			char *q=(char *)"INSERT OR REPLACE INTO mysql_servers_ssl_params (hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_capath, ssl_crl, ssl_crlpath, ssl_cipher, tls_version, comment) VALUES ('%s', %d, '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')";
+			const size_t q_len = safe_strlen(q);
+			for (i=0; i< count; i++) {
 			const Setting &line = mysql_servers_ssl_params[i];
 			string hostname = "";
 			int port = 3306;
@@ -1484,71 +1591,88 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
 			line.lookupValue("comment", comment);
 			char *o1=strdup(comment.c_str());
 			char *o=escape_string_single_quotes(o1, false);
-			char *query=(char *)malloc(
-				strlen(q)
-				+ hostname.length() + username.length()
-				+ ssl_ca.length() + ssl_cert.length() + ssl_key.length() + ssl_capath.length()
-				+ ssl_crl.length() + ssl_crlpath.length() + ssl_cipher.length() + tls_version.length()
-				+ strlen(o) + 32);
-			sprintf(query, q,
+			const size_t hostname_len = hostname.length();
+			const size_t username_len = username.length();
+			const size_t ssl_ca_len = ssl_ca.length();
+			const size_t ssl_cert_len = ssl_cert.length();
+			const size_t ssl_key_len = ssl_key.length();
+			const size_t ssl_capath_len = ssl_capath.length();
+			const size_t ssl_crl_len = ssl_crl.length();
+			const size_t ssl_crlpath_len = ssl_crlpath.length();
+			const size_t ssl_cipher_len = ssl_cipher.length();
+			const size_t tls_version_len = tls_version.length();
+			const char* safe_comment = o ? o : "";
+			const size_t escaped_comment_len = safe_strlen(safe_comment);
+			const size_t query_len =
+				q_len
+				+ hostname_len + username_len
+				+ ssl_ca_len + ssl_cert_len + ssl_key_len + ssl_capath_len
+				+ ssl_crl_len + ssl_crlpath_len + ssl_cipher_len + tls_version_len
+				+ escaped_comment_len + 32;
+			char *query=(char *)l_alloc(query_len);
+			format_query(query, query_len, q,
 				hostname.c_str() , port , username.c_str() ,
 				ssl_ca.c_str() , ssl_cert.c_str() , ssl_key.c_str() , ssl_capath.c_str() ,
 				ssl_crl.c_str() , ssl_crlpath.c_str() , ssl_cipher.c_str() , tls_version.c_str() ,
-				o);
+							 safe_comment);
 			admindb->execute(query);
 			if (o!=o1) free(o);
 			free(o1);
-			free(query);
+			l_free(0, query);
 			rows++;
 		}
 	}
-        if (root.exists("mysql_group_replication_hostgroups")==true) {
-                const Setting &mysql_group_replication_hostgroups = root["mysql_group_replication_hostgroups"];
-                int count = mysql_group_replication_hostgroups.getLength();
-                char *q=(char *)"INSERT OR REPLACE INTO mysql_group_replication_hostgroups (writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, comment) VALUES (%d, %d, %d, %d, %d, %d, %d, %d, '%s')";
-                for (i=0; i< count; i++) {
-                        const Setting &line = mysql_group_replication_hostgroups[i];
-                        int writer_hostgroup;
-                        int backup_writer_hostgroup;
-                        int reader_hostgroup;
-                        int offline_hostgroup;
-                        int active=1; // default
-                        int max_writers;
-                        int writer_is_also_reader;
-                        int max_transactions_behind;
-                        std::string comment="";
-                        if (line.lookupValue("writer_hostgroup", writer_hostgroup)==false) {
-                            proxy_error("Admin: detected a mysql_group_replication_hostgroups in config file without a mandatory writer_hostgroup\n");
-                            continue;
-                        }
-                        if (line.lookupValue("backup_writer_hostgroup", backup_writer_hostgroup)==false) {
-                            proxy_error("Admin: detected a mysql_group_replication_hostgroups in config file without a mandatory backup_writer_hostgroup\n");
-                            continue;
-                        }
-                        if (line.lookupValue("reader_hostgroup", reader_hostgroup)==false) {
-                            proxy_error("Admin: detected a mysql_group_replication_hostgroups in config file without a mandatory reader_hostgroup\n");
-                            continue;
-                        }
-                        if (line.lookupValue("offline_hostgroup", offline_hostgroup)==false) {
-                            proxy_error("Admin: detected a mysql_group_replication_hostgroups in config file without a mandatory offline_hostgroup\n");
-                            continue;
-                        }
+	if (root.exists("mysql_group_replication_hostgroups")==true) {
+		const Setting &mysql_group_replication_hostgroups = root["mysql_group_replication_hostgroups"];
+		int count = mysql_group_replication_hostgroups.getLength();
+		char *q=(char *)"INSERT OR REPLACE INTO mysql_group_replication_hostgroups (writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, comment) VALUES (%d, %d, %d, %d, %d, %d, %d, %d, '%s')";
+		for (i=0; i< count; i++) {
+			const Setting &line = mysql_group_replication_hostgroups[i];
+			int writer_hostgroup;
+			int backup_writer_hostgroup;
+			int reader_hostgroup;
+			int offline_hostgroup;
+			int active=1; // default
+			int max_writers;
+			int writer_is_also_reader;
+			int max_transactions_behind;
+			std::string comment="";
+			if (line.lookupValue("writer_hostgroup", writer_hostgroup)==false) {
+				proxy_error("Admin: detected a mysql_group_replication_hostgroups in config file without a mandatory writer_hostgroup\n");
+				continue;
+			}
+			if (line.lookupValue("backup_writer_hostgroup", backup_writer_hostgroup)==false) {
+				proxy_error("Admin: detected a mysql_group_replication_hostgroups in config file without a mandatory backup_writer_hostgroup\n");
+				continue;
+			}
+			if (line.lookupValue("reader_hostgroup", reader_hostgroup)==false) {
+				proxy_error("Admin: detected a mysql_group_replication_hostgroups in config file without a mandatory reader_hostgroup\n");
+				continue;
+			}
+			if (line.lookupValue("offline_hostgroup", offline_hostgroup)==false) {
+				proxy_error("Admin: detected a mysql_group_replication_hostgroups in config file without a mandatory offline_hostgroup\n");
+				continue;
+			}
 			if (line.lookupValue("max_writers", max_writers)==false) max_writers=1;
-                        if (line.lookupValue("writer_is_also_reader", writer_is_also_reader)==false) writer_is_also_reader=0;
-		        if (line.lookupValue("max_transactions_behind", max_transactions_behind)==false) max_transactions_behind=0;
-                        line.lookupValue("comment", comment);
-                        char *o1=strdup(comment.c_str());
-                        char *o=escape_string_single_quotes(o1, false);
-                        char *query=(char *)malloc(strlen(q)+strlen(o)+128); // 128 vs sizeof(int)*8
-                        sprintf(query,q, writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, o);
-                        //fprintf(stderr, "%s\n", query);
-                        admindb->execute(query);
-                        if (o!=o1) free(o);
-                        free(o1);
-                        free(query);
-                        rows++;
-                }
-        }
+			if (line.lookupValue("writer_is_also_reader", writer_is_also_reader)==false) writer_is_also_reader=0;
+			if (line.lookupValue("max_transactions_behind", max_transactions_behind)==false) max_transactions_behind=0;
+			line.lookupValue("comment", comment);
+			char *o1=strdup(comment.c_str());
+			char *o=escape_string_single_quotes(o1, false);
+			const char* safe_comment = o ? o : "";
+			const size_t query_base_len = safe_strlen(q);
+			const size_t safe_comment_len = safe_strlen(safe_comment);
+			const size_t query_len = query_base_len + safe_comment_len + 128; // 128 vs sizeof(int)*8
+			char *query=(char *)l_alloc(query_len);
+				format_query(query, query_len, q, writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, safe_comment);
+			//fprintf(stderr, "%s\n", query);
+			admindb->execute(query);
+			if (o!=o1) free(o);
+			free(o1);
+			l_free(0, query);
+			rows++;
+		}
+	}
     if (root.exists("mysql_galera_hostgroups")==true) {
             const Setting &mysql_galera_hostgroups = root["mysql_galera_hostgroups"];
             int count = mysql_galera_hostgroups.getLength();
@@ -1586,13 +1710,17 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
                     line.lookupValue("comment", comment);
                     char *o1=strdup(comment.c_str());
                     char *o=escape_string_single_quotes(o1, false);
-                    char *query=(char *)malloc(strlen(q)+strlen(o)+128); // 128 vs sizeof(int)*8
-                    sprintf(query,q, writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, o);
+                    const char* safe_comment = o ? o : "";
+                    const size_t query_base_len = safe_strlen(q);
+                    const size_t safe_comment_len = safe_strlen(safe_comment);
+                    const size_t query_len = query_base_len + safe_comment_len + 128; // 128 vs sizeof(int)*8
+                    char *query=(char *)l_alloc(query_len);
+					format_query(query, query_len, q, writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, safe_comment);
                     //fprintf(stderr, "%s\n", query);
                     admindb->execute(query);
                     if (o!=o1) free(o);
                     free(o1);
-                    free(query);
+                    l_free(0, query);
                     rows++;
             }
     }
@@ -1641,15 +1769,21 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
                     char *o=escape_string_single_quotes(o1, false);
                     char *p1=strdup(domain_name.c_str());
                     char *p=escape_string_single_quotes(p1, false);
-                    char *query=(char *)malloc(strlen(q)+strlen(o)+strlen(p)+256); // 128 vs sizeof(int)*8
-                    sprintf(query,q, writer_hostgroup, reader_hostgroup, active, aurora_port, p, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, autopurge_missing_checks, o);
+                    const char* safe_comment = o ? o : "";
+                    const char* safe_domain = p ? p : "";
+                    const size_t query_base_len = safe_strlen(q);
+                    const size_t safe_comment_len = safe_strlen(safe_comment);
+                    const size_t safe_domain_len = safe_strlen(safe_domain);
+                    const size_t query_len = query_base_len + safe_comment_len + safe_domain_len + 256; // 128 vs sizeof(int)*8
+                    char *query=(char *)l_alloc(query_len);
+					format_query(query, query_len, q, writer_hostgroup, reader_hostgroup, active, aurora_port, safe_domain, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, autopurge_missing_checks, safe_comment);
                     //fprintf(stderr, "%s\n", query);
                     admindb->execute(query);
                     if (o!=o1) free(o);
                     free(o1);
                     if (p!=p1) free(p);
                     free(p1);
-                    free(query);
+                    l_free(0, query);
                     rows++;
             }
     }
@@ -1678,17 +1812,17 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
                         proxy_error("Admin: detected a mysql_aws_rds_bgd_hostgroups in config file without a mandatory reader_hostgroup\n");
                         continue;
                     }
-                    char green_writer_str[24];
-                    char green_reader_str[24];
+                    std::string green_writer_str;
+                    std::string green_reader_str;
                     if (line.lookupValue("green_writer_hostgroup", green_writer_hostgroup)==false) {
-                        strcpy(green_writer_str, "NULL");
+                        green_writer_str = "NULL";
                     } else {
-                        snprintf(green_writer_str, sizeof(green_writer_str), "%d", green_writer_hostgroup);
+                        green_writer_str = std::to_string(green_writer_hostgroup);
                     }
                     if (line.lookupValue("green_reader_hostgroup", green_reader_hostgroup)==false) {
-                        strcpy(green_reader_str, "NULL");
+                        green_reader_str = "NULL";
                     } else {
-                        snprintf(green_reader_str, sizeof(green_reader_str), "%d", green_reader_hostgroup);
+                        green_reader_str = std::to_string(green_reader_hostgroup);
                     }
                     if (line.lookupValue("active", active)==false) active=1;
                     if (line.lookupValue("writer_is_also_reader", writer_is_also_reader)==false) writer_is_also_reader=0;
@@ -1697,12 +1831,16 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
                     line.lookupValue("comment", comment);
                     char *o1=strdup(comment.c_str());
                     char *o=escape_string_single_quotes(o1, false);
-                    char *query=(char *)malloc(strlen(q)+strlen(o)+256); // 128 vs sizeof(int)*8
-                    sprintf(query,q, writer_hostgroup, reader_hostgroup, green_writer_str, green_reader_str, active, writer_is_also_reader, check_interval_ms, check_timeout_ms, o);
+                    const char* safe_comment = o ? o : "";
+                    const size_t query_base_len = safe_strlen(q);
+                    const size_t safe_comment_len = safe_strlen(safe_comment);
+                    const size_t query_len = query_base_len + safe_comment_len + 256; // 128 vs sizeof(int)*8
+                    char *query=(char *)l_alloc(query_len);
+					format_query(query, query_len, q, writer_hostgroup, reader_hostgroup, green_writer_str.c_str(), green_reader_str.c_str(), active, writer_is_also_reader, check_interval_ms, check_timeout_ms, safe_comment);
                     admindb->execute(query);
                     if (o!=o1) free(o);
                     free(o1);
-                    free(query);
+                    l_free(0, query);
                     rows++;
             }
     }
@@ -1719,72 +1857,50 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
 			std::string fields = "";
 			std::string values = "";
 
-			auto process_field = [&](const std::string &field_name, const std::string &field_value, int is_int) {
-				if (!is_first_field) {
-					fields += ", ";
-					values += ", ";
-				}
-				else {
-					is_first_field = false;
-				}
-				fields += field_name;
-
-				if (is_int) {
-					values += field_value;
-				}
-				else {
-					char *cs = strdup(field_value.c_str());
-					char *ecs = escape_string_single_quotes(cs, false);
-					values +=  std::string("'") + ecs + "'";
-					if (cs != ecs) free(cs);
-					free(ecs);
-				}
-			};
-
 			// Only inserting/updating fields which are in configuration file.
 			// Fields default will be from table schema.
 
 			// Parsing integer field
 			if (hostgroup_attributes.lookupValue("hostgroup_id", integer_val) ) {
-				process_field("hostgroup_id", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "hostgroup_id", to_string(integer_val), true);
 			}
 			else {
 				proxy_error("Admin: detected a mysql_hostgroup_attributes in config file without a mandatory hostgroup_id.\n");
 				continue;
 			}
 			if (hostgroup_attributes.lookupValue("max_num_online_servers", integer_val)) {
-				process_field("max_num_online_servers", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "max_num_online_servers", to_string(integer_val), true);
 			}
 			if (hostgroup_attributes.lookupValue("autocommit", integer_val)) {
-				process_field("autocommit", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "autocommit", to_string(integer_val), true);
 			}
 			if (hostgroup_attributes.lookupValue("free_connections_pct", integer_val)) {
-				process_field("free_connections_pct", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "free_connections_pct", to_string(integer_val), true);
 			}
 			if (hostgroup_attributes.lookupValue("multiplex", integer_val)) {
-				process_field("multiplex", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "multiplex", to_string(integer_val), true);
 			}
 			if (hostgroup_attributes.lookupValue("connection_warming", integer_val)) {
-				process_field("connection_warming", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "connection_warming", to_string(integer_val), true);
 			}
 			if (hostgroup_attributes.lookupValue("throttle_connections_per_sec", integer_val)) {
-				process_field("throttle_connections_per_sec", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "throttle_connections_per_sec", to_string(integer_val), true);
 			}
 			// Parsing string field
 			if (hostgroup_attributes.lookupValue("init_connect", string_val)) {
-				process_field("init_connect", string_val, false);
+				append_config_field(fields, values, is_first_field, "init_connect", string_val, false);
 			}
 			if (hostgroup_attributes.lookupValue("ignore_session_variables", string_val)) {
-				process_field("ignore_session_variables", string_val, false);
+				append_config_field(fields, values, is_first_field, "ignore_session_variables", string_val, false);
 			}
 			if (hostgroup_attributes.lookupValue("hostgroup_settings", string_val)) {
-				process_field("hostgroup_settings", string_val, false);
+				append_config_field(fields, values, is_first_field, "hostgroup_settings", string_val, false);
 			}
 			if (hostgroup_attributes.lookupValue("servers_defaults", string_val)) {
-				process_field("servers_defaults", string_val, false);
+				append_config_field(fields, values, is_first_field, "servers_defaults", string_val, false);
 			}
 			if (hostgroup_attributes.lookupValue("comment", string_val)) {
-				process_field("comment", string_val, false);
+				append_config_field(fields, values, is_first_field, "comment", string_val, false);
 			}
 
 			std::string s_query = "INSERT OR REPLACE INTO mysql_hostgroup_attributes (";
@@ -1869,14 +1985,19 @@ int ProxySQL_Config::Read_ProxySQL_Servers_from_configfile(std::string& error) {
 			server.lookupValue("comment", comment);
 			char *o1=strdup(comment.c_str());
 			char *o=escape_string_single_quotes(o1, false);
-			char *query=(char *)malloc(strlen(q)+strlen(address.c_str())+strlen(o)+128);
-			sprintf(query, q, address.c_str(), port, weight, o);
+			const char* safe_comment = o ? o : "";
+			const size_t query_base_len = safe_strlen(q);
+			const size_t address_len = address.size();
+			const size_t safe_comment_len = safe_strlen(safe_comment);
+			const size_t query_len = query_base_len + address_len + safe_comment_len + 128;
+			char *query=(char *)l_alloc(query_len);
+				format_query(query, query_len, q, address.c_str(), port, weight, safe_comment);
 			proxy_info("Cluster: Adding ProxySQL Servers %s:%d from config file\n", address.c_str(), port);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
 			if (o!=o1) free(o);
 			free(o1);
-			free(query);
+			l_free(0, query);
 			rows++;
 		}
 	}
@@ -1895,33 +2016,30 @@ int ProxySQL_Config::Write_Global_Variables_to_configfile(std::string& data) {
 	if (error) {
 		proxy_error("Error on read from global_variables : %s\n", error);
 		return -1;
-	} else {
-		if (sqlite_resultset) {
-			std::string prefix;
+	}
+	if (sqlite_resultset == nullptr)
+		return 0;
 
-			for (auto r : sqlite_resultset->rows) {
-				std::string input(r->fields[0]);
-				std::string p1 = input.substr(0, input.find("-"));
-				if (prefix.empty()) {
-					prefix = input.substr(0, input.find("-"));
-					data += prefix + "_variables =\n{\n";
-				} else {
-					if (p1.compare(prefix)) {
-						prefix = p1;
-						data += "}\n\n" + prefix + "_variables = \n{\n";
-					}
-				}
-				if (r->fields[1] && strlen(r->fields[1])) {
-					std::stringstream ss;
-					ss << "\t" << r->fields[0] + p1.size() + 1 << "=\"" << r->fields[1] << "\"\n";
-					data += ss.str();
-				}
-			}
-
-			if (!prefix.empty())
-				data += "}\n";
+	std::string prefix;
+	for (auto r : sqlite_resultset->rows) {
+		std::string input(r->fields[0]);
+		std::string p1 = input.substr(0, input.find("-"));
+		if (prefix.empty()) {
+			prefix = p1;
+			data += prefix + "_variables =\n{\n";
+		} else if (p1.compare(prefix)) {
+			prefix = p1;
+			data += "}\n\n" + prefix + "_variables = \n{\n";
+		}
+		if (r->fields[1] && r->fields[1][0] != '\0') {
+			std::stringstream ss;
+			ss << "\t" << r->fields[0] + p1.size() + 1 << "=\"" << r->fields[1] << "\"\n";
+			data += ss.str();
 		}
 	}
+
+	if (!prefix.empty())
+		data += "}\n";
 
 	if (sqlite_resultset)
 		delete sqlite_resultset;
@@ -2135,13 +2253,19 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 			server.lookupValue("comment", comment);
 			char* o1 = strdup(comment.c_str());
 			char* o = escape_string_single_quotes(o1, false);
-			char* query = (char*)malloc(strlen(q) + strlen(status.c_str()) + strlen(address.c_str()) + strlen(o) + 128);
-			sprintf(query, q, address.c_str(), port, hostgroup, compression, weight, status.c_str(), max_connections, max_replication_lag, use_ssl, max_latency_ms, o);
+			const char* safe_comment = o ? o : "";
+			const size_t query_base_len = safe_strlen(q);
+			const size_t status_len = status.size();
+			const size_t address_len = address.size();
+			const size_t safe_comment_len = safe_strlen(safe_comment);
+			const size_t query_len = query_base_len + status_len + address_len + safe_comment_len + 128;
+			char* query = (char*)l_alloc(query_len);
+				format_query(query, query_len, q, address.c_str(), port, hostgroup, compression, weight, status.c_str(), max_connections, max_replication_lag, use_ssl, max_latency_ms, safe_comment);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
 			if (o != o1) free(o);
 			free(o1);
-			free(query);
+			l_free(0, query);
 			rows++;
 		}
 	}
@@ -2178,15 +2302,21 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 			}
 			char* t1 = strdup(check_type.c_str());
 			char* t = escape_string_single_quotes(t1, false);
-			char* query = (char*)malloc(strlen(q) + strlen(o) + strlen(t) + 32);
-			sprintf(query, q, writer_hostgroup, reader_hostgroup, o, t);
+			const char* safe_comment = o ? o : "";
+			const char* safe_check_type = t ? t : "";
+			const size_t query_base_len = safe_strlen(q);
+			const size_t safe_comment_len = safe_strlen(safe_comment);
+			const size_t safe_check_type_len = safe_strlen(safe_check_type);
+			const size_t query_len = query_base_len + safe_comment_len + safe_check_type_len + 32;
+			char* query = (char*)l_alloc(query_len);
+				format_query(query, query_len, q, writer_hostgroup, reader_hostgroup, safe_comment, safe_check_type);
 			//fprintf(stderr, "%s\n", query);
 			admindb->execute(query);
 			if (o != o1) free(o);
 			free(o1);
 			if (t != t1) free(t);
 			free(t1);
-			free(query);
+			l_free(0, query);
 			rows++;
 		}
 	}
@@ -2202,66 +2332,45 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 			std::string fields = "";
 			std::string values = "";
 
-			auto process_field = [&](const std::string &field_name, const std::string &field_value, int is_int) {
-				if (!is_first_field) {
-					fields += ", ";
-					values += ", ";
-				}
-				else {
-					is_first_field = false;
-				}
-				fields += field_name;
-				if (is_int) {
-					values += field_value;
-				}
-				else {
-					char *cs = strdup(field_value.c_str());
-					char *ecs = escape_string_single_quotes(cs, false);
-					values += std::string("'") + ecs + "'";
-					if (cs != ecs) free(cs);
-					free(ecs);
-				}
-			};
-
 			if (hostgroup_attributes.lookupValue("hostgroup_id", integer_val)) {
-				process_field("hostgroup_id", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "hostgroup_id", to_string(integer_val), true);
 			}
 			else {
 				proxy_error("Admin: detected a pgsql_hostgroup_attributes in config file without a mandatory hostgroup_id.\n");
 				continue;
 			}
 			if (hostgroup_attributes.lookupValue("max_num_online_servers", integer_val)) {
-				process_field("max_num_online_servers", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "max_num_online_servers", to_string(integer_val), true);
 			}
 			if (hostgroup_attributes.lookupValue("autocommit", integer_val)) {
-				process_field("autocommit", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "autocommit", to_string(integer_val), true);
 			}
 			if (hostgroup_attributes.lookupValue("free_connections_pct", integer_val)) {
-				process_field("free_connections_pct", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "free_connections_pct", to_string(integer_val), true);
 			}
 			if (hostgroup_attributes.lookupValue("multiplex", integer_val)) {
-				process_field("multiplex", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "multiplex", to_string(integer_val), true);
 			}
 			if (hostgroup_attributes.lookupValue("connection_warming", integer_val)) {
-				process_field("connection_warming", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "connection_warming", to_string(integer_val), true);
 			}
 			if (hostgroup_attributes.lookupValue("throttle_connections_per_sec", integer_val)) {
-				process_field("throttle_connections_per_sec", to_string(integer_val), true);
+				append_config_field(fields, values, is_first_field, "throttle_connections_per_sec", to_string(integer_val), true);
 			}
 			if (hostgroup_attributes.lookupValue("init_connect", string_val)) {
-				process_field("init_connect", string_val, false);
+				append_config_field(fields, values, is_first_field, "init_connect", string_val, false);
 			}
 			if (hostgroup_attributes.lookupValue("ignore_session_variables", string_val)) {
-				process_field("ignore_session_variables", string_val, false);
+				append_config_field(fields, values, is_first_field, "ignore_session_variables", string_val, false);
 			}
 			if (hostgroup_attributes.lookupValue("hostgroup_settings", string_val)) {
-				process_field("hostgroup_settings", string_val, false);
+				append_config_field(fields, values, is_first_field, "hostgroup_settings", string_val, false);
 			}
 			if (hostgroup_attributes.lookupValue("servers_defaults", string_val)) {
-				process_field("servers_defaults", string_val, false);
+				append_config_field(fields, values, is_first_field, "servers_defaults", string_val, false);
 			}
 			if (hostgroup_attributes.lookupValue("comment", string_val)) {
-				process_field("comment", string_val, false);
+				append_config_field(fields, values, is_first_field, "comment", string_val, false);
 			}
 
 			std::string s_query = "INSERT OR REPLACE INTO pgsql_hostgroup_attributes (";
@@ -2278,6 +2387,7 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 		const Setting &pgsql_servers_ssl_params = root["pgsql_servers_ssl_params"];
 		int count = pgsql_servers_ssl_params.getLength();
 		char *q=(char *)"INSERT OR REPLACE INTO pgsql_servers_ssl_params (hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_crl, ssl_crlpath, ssl_protocol_version_range, comment) VALUES ('%s', %d, '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')";
+		const size_t q_len = safe_strlen(q);
 		for (i=0; i< count; i++) {
 			const Setting &line = pgsql_servers_ssl_params[i];
 			string hostname = "";
@@ -2305,18 +2415,28 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 			line.lookupValue("comment", comment);
 			char *o1=strdup(comment.c_str());
 			char *o=escape_string_single_quotes(o1, false);
+			const size_t hostname_len = hostname.length();
+			const size_t username_len = username.length();
+			const size_t ssl_ca_len = ssl_ca.length();
+			const size_t ssl_cert_len = ssl_cert.length();
+			const size_t ssl_key_len = ssl_key.length();
+			const size_t ssl_crl_len = ssl_crl.length();
+			const size_t ssl_crlpath_len = ssl_crlpath.length();
+			const size_t ssl_protocol_version_range_len = ssl_protocol_version_range.length();
+			const char* safe_comment = o ? o : "";
+			const size_t escaped_comment_len = safe_strlen(safe_comment);
 			size_t query_len = (
-				strlen(q)
-				+ hostname.length() + username.length()
-				+ ssl_ca.length() + ssl_cert.length() + ssl_key.length()
-				+ ssl_crl.length() + ssl_crlpath.length() + ssl_protocol_version_range.length() + strlen(o) + 64
+				q_len
+				+ hostname_len + username_len
+				+ ssl_ca_len + ssl_cert_len + ssl_key_len
+				+ ssl_crl_len + ssl_crlpath_len + ssl_protocol_version_range_len + escaped_comment_len + 64
 			);
-			char *query=(char *)malloc(query_len);
-			snprintf(query, query_len, q, hostname.c_str(), port, username.c_str(), ssl_ca.c_str(), ssl_cert.c_str(), ssl_key.c_str(), ssl_crl.c_str(), ssl_crlpath.c_str(), ssl_protocol_version_range.c_str(), o);
+			char *query=(char *)l_alloc(query_len);
+				format_query(query, query_len, q, hostname.c_str(), port, username.c_str(), ssl_ca.c_str(), ssl_cert.c_str(), ssl_key.c_str(), ssl_crl.c_str(), ssl_crlpath.c_str(), ssl_protocol_version_range.c_str(), safe_comment);
 			admindb->execute(query);
 			if (o != o1) free(o);
 			free(o1);
-			free(query);
+			l_free(0, query);
 			rows++;
 		}
 	}
@@ -2409,12 +2529,19 @@ int ProxySQL_Config::Read_PgSQL_Users_from_configfile(std::string& error) {
 		user.lookupValue("comment", comment);
 		char* o1 = strdup(comment.c_str());
 		char* o = escape_string_single_quotes(o1, false);
-		char* query = (char*)malloc(strlen(q) + strlen(username.c_str()) + strlen(password.c_str()) + strlen(o) + strlen(attributes.c_str()) + 128);
-		sprintf(query, q, username.c_str(), password.c_str(), active, use_ssl, default_hostgroup, transaction_persistent, fast_forward, max_connections, attributes.c_str(), o);
+		const char* safe_comment = o ? o : "";
+		const size_t query_base_len = safe_strlen(q);
+		const size_t username_len = username.size();
+		const size_t password_len = password.size();
+		const size_t safe_comment_len = safe_strlen(safe_comment);
+		const size_t attributes_len = attributes.size();
+		const size_t query_len = query_base_len + username_len + password_len + safe_comment_len + attributes_len + 128;
+		char* query = (char*)l_alloc(query_len);
+		format_query(query, query_len, q, username.c_str(), password.c_str(), active, use_ssl, default_hostgroup, transaction_persistent, fast_forward, max_connections, attributes.c_str(), safe_comment);
 		admindb->execute(query);
 		if (o != o1) free(o);
 		free(o1);
-		free(query);
+		l_free(0, query);
 		rows++;
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
@@ -2622,45 +2749,66 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 
 
 		//if (user.lookupValue("default_schema", default_schema)==false) default_schema="";
-		int query_len = 0;
-		query_len += strlen(q) +
-			strlen(std::to_string(rule_id).c_str()) +
-			strlen(std::to_string(active).c_str()) +
-			(username_exists ? strlen(username.c_str()) : 0) + 4 +
-			(database_exists ? strlen(database.c_str()) : 0) + 4 +
-			strlen(std::to_string(flagIN).c_str()) + 4 +
-
-			(client_addr_exists ? strlen(client_addr.c_str()) : 0) + 4 +
-			(proxy_addr_exists ? strlen(proxy_addr.c_str()) : 0) + 4 +
-			strlen(std::to_string(proxy_port).c_str()) + 4 +
-
-			(match_digest_exists ? strlen(match_digest.c_str()) : 0) + 4 +
-			(match_pattern_exists ? strlen(match_pattern.c_str()) : 0) + 4 +
-			strlen(std::to_string(negate_match_pattern).c_str()) + 4 +
-			(re_modifiers_exists ? strlen(re_modifiers.c_str()) : 0) + 4 +
-			strlen(std::to_string(flagOUT).c_str()) + 4 +
-			(replace_pattern_exists ? strlen(replace_pattern.c_str()) : 0) + 4 +
-			strlen(std::to_string(destination_hostgroup).c_str()) + 4 +
-			strlen(std::to_string(cache_ttl).c_str()) + 4 +
-			strlen(std::to_string(cache_empty_result).c_str()) + 4 +
-			strlen(std::to_string(cache_timeout).c_str()) + 4 +
-			strlen(std::to_string(reconnect).c_str()) + 4 +
-			strlen(std::to_string(timeout).c_str()) + 4 +
-			strlen(std::to_string(next_query_flagIN).c_str()) + 4 +
-			strlen(std::to_string(mirror_flagOUT).c_str()) + 4 +
-			strlen(std::to_string(mirror_hostgroup).c_str()) + 4 +
-			strlen(std::to_string(retries).c_str()) + 4 +
-			strlen(std::to_string(delay).c_str()) + 4 +
-			(error_msg_exists ? strlen(error_msg.c_str()) : 0) + 4 +
-			(OK_msg_exists ? strlen(OK_msg.c_str()) : 0) + 4 +
-			strlen(std::to_string(sticky_conn).c_str()) + 4 +
-			strlen(std::to_string(multiplex).c_str()) + 4 +
-			strlen(std::to_string(log).c_str()) + 4 +
-			strlen(std::to_string(apply).c_str()) + 4 +
-			(attributes_exists ? strlen(attributes.c_str()) : 0) + 4 +
-			(comment_exists ? strlen(comment.c_str()) : 0) + 4 +
+		const std::string rule_id_str = std::to_string(rule_id);
+		const std::string active_str = std::to_string(active);
+		const std::string flagIN_str = std::to_string(flagIN);
+		const std::string proxy_port_str = std::to_string(proxy_port);
+		const std::string negate_match_pattern_str = std::to_string(negate_match_pattern);
+		const std::string flagOUT_str = std::to_string(flagOUT);
+		const std::string destination_hostgroup_str = std::to_string(destination_hostgroup);
+		const std::string cache_ttl_str = std::to_string(cache_ttl);
+		const std::string cache_empty_result_str = std::to_string(cache_empty_result);
+		const std::string cache_timeout_str = std::to_string(cache_timeout);
+		const std::string reconnect_str = std::to_string(reconnect);
+		const std::string timeout_str = std::to_string(timeout);
+		const std::string next_query_flagIN_str = std::to_string(next_query_flagIN);
+		const std::string mirror_flagOUT_str = std::to_string(mirror_flagOUT);
+		const std::string mirror_hostgroup_str = std::to_string(mirror_hostgroup);
+		const std::string retries_str = std::to_string(retries);
+		const std::string delay_str = std::to_string(delay);
+		const std::string sticky_conn_str = std::to_string(sticky_conn);
+		const std::string multiplex_str = std::to_string(multiplex);
+		const std::string log_str = std::to_string(log);
+		const std::string apply_str = std::to_string(apply);
+		const size_t q_len = safe_strlen(q);
+		size_t query_len =
+			q_len +
+			rule_id_str.size() +
+			active_str.size() +
+			flagIN_str.size() +
+			(username_exists ? username.size() : 0) + 4 +
+			(database_exists ? database.size() : 0) + 4 +
+			(client_addr_exists ? client_addr.size() : 0) + 4 +
+			(proxy_addr_exists ? proxy_addr.size() : 0) + 4 +
+			proxy_port_str.size() + 4 +
+			(digest_exists ? digest.size() : 0) + 4 +
+			(match_digest_exists ? match_digest.size() : 0) + 4 +
+			(match_pattern_exists ? match_pattern.size() : 0) + 4 +
+			negate_match_pattern_str.size() + 4 +
+			(re_modifiers_exists ? re_modifiers.size() : 0) + 4 +
+			flagOUT_str.size() + 4 +
+			(replace_pattern_exists ? replace_pattern.size() : 0) + 4 +
+			destination_hostgroup_str.size() + 4 +
+			cache_ttl_str.size() + 4 +
+			cache_empty_result_str.size() + 4 +
+			cache_timeout_str.size() + 4 +
+			reconnect_str.size() + 4 +
+			timeout_str.size() + 4 +
+			next_query_flagIN_str.size() + 4 +
+			mirror_flagOUT_str.size() + 4 +
+			mirror_hostgroup_str.size() + 4 +
+			retries_str.size() + 4 +
+			delay_str.size() + 4 +
+			(error_msg_exists ? error_msg.size() : 0) + 4 +
+			(OK_msg_exists ? OK_msg.size() : 0) + 4 +
+			sticky_conn_str.size() + 4 +
+			multiplex_str.size() + 4 +
+			log_str.size() + 4 +
+			apply_str.size() + 4 +
+			(attributes_exists ? attributes.size() : 0) + 4 +
+			(comment_exists ? comment.size() : 0) + 4 +
 			64;
-		char* query = (char*)malloc(query_len);
+		char* query = (char*)l_alloc(query_len);
 		if (username_exists)
 			username = "\"" + username + "\"";
 		else
@@ -2717,7 +2865,7 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 			comment = "NULL";
 
 
-		sprintf(query, q,
+		format_query(query, query_len, q,
 			rule_id, active,
 			username.c_str(),
 			database.c_str(),
@@ -2754,7 +2902,7 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_from_configfile() {
 		);
 		//fprintf(stderr, "%s\n", query);
 		admindb->execute(query);
-		free(query);
+		l_free(0, query);
 		rows++;
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
@@ -2896,13 +3044,18 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_Fast_Routing_from_configfile() {
 		rule.lookupValue("comment", comment);
 		char *o1 = strdup(comment.c_str());
 		char *o = escape_string_single_quotes(o1, false);
-		size_t query_len = strlen(q) + strlen(username.c_str()) + strlen(schemaname.c_str()) + strlen(o) + 64;
-		char *query = (char *)malloc(query_len);
-		snprintf(query, query_len, q, username.c_str(), schemaname.c_str(), flagIN, destination_hostgroup, o);
+		const size_t q_len = safe_strlen(q);
+		const size_t username_len = username.size();
+		const size_t schemaname_len = schemaname.size();
+		const char* safe_comment = o ? o : "";
+		const size_t escaped_comment_len = safe_strlen(safe_comment);
+		size_t query_len = q_len + username_len + schemaname_len + escaped_comment_len + 64;
+		char *query = (char *)l_alloc(query_len);
+			format_query(query, query_len, q, username.c_str(), schemaname.c_str(), flagIN, destination_hostgroup, safe_comment);
 		admindb->execute(query);
 		if (o != o1) free(o);
 		free(o1);
-		free(query);
+		l_free(0, query);
 		rows++;
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
@@ -2932,13 +3085,18 @@ int ProxySQL_Config::Read_PgSQL_Query_Rules_Fast_Routing_from_configfile() {
 		rule.lookupValue("comment", comment);
 		char *o1 = strdup(comment.c_str());
 		char *o = escape_string_single_quotes(o1, false);
-		size_t query_len = strlen(q) + strlen(username.c_str()) + strlen(database.c_str()) + strlen(o) + 64;
-		char *query = (char *)malloc(query_len);
-		snprintf(query, query_len, q, username.c_str(), database.c_str(), flagIN, destination_hostgroup, o);
+		const size_t q_len = safe_strlen(q);
+		const size_t username_len = username.size();
+		const size_t database_len = database.size();
+		const char* safe_comment = o ? o : "";
+		const size_t escaped_comment_len = safe_strlen(safe_comment);
+		size_t query_len = q_len + username_len + database_len + escaped_comment_len + 64;
+		char *query = (char *)l_alloc(query_len);
+			format_query(query, query_len, q, username.c_str(), database.c_str(), flagIN, destination_hostgroup, safe_comment);
 		admindb->execute(query);
 		if (o != o1) free(o);
 		free(o1);
-		free(query);
+		l_free(0, query);
 		rows++;
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
@@ -2968,13 +3126,19 @@ int ProxySQL_Config::Read_MySQL_Firewall_from_configfile() {
 			u.lookupValue("comment", comment);
 			char *o1=strdup(comment.c_str());
 			char *o=escape_string_single_quotes(o1, false);
-			size_t query_len = strlen(q) + strlen(username.c_str()) + strlen(client_address.c_str()) + strlen(mode.c_str()) + strlen(o) + 32;
-			char *query=(char *)malloc(query_len);
-			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), mode.c_str(), o);
+			const size_t q_len = safe_strlen(q);
+			const size_t username_len = username.size();
+			const size_t client_address_len = client_address.size();
+			const size_t mode_len = mode.size();
+			const char* safe_comment = o ? o : "";
+				const size_t escaped_comment_len = safe_strlen(safe_comment);
+			size_t query_len = q_len + username_len + client_address_len + mode_len + escaped_comment_len + 32;
+			char *query=(char *)l_alloc(query_len);
+			format_query(query, query_len, q, active, username.c_str(), client_address.c_str(), mode.c_str(), safe_comment);
 			admindb->execute(query);
 			if (o != o1) free(o);
 			free(o1);
-			free(query);
+			l_free(0, query);
 			rows++;
 		}
 	}
@@ -3001,13 +3165,20 @@ int ProxySQL_Config::Read_MySQL_Firewall_from_configfile() {
 			r.lookupValue("comment", comment);
 			char *o1=strdup(comment.c_str());
 			char *o=escape_string_single_quotes(o1, false);
-			size_t query_len = strlen(q) + strlen(username.c_str()) + strlen(client_address.c_str()) + strlen(schemaname.c_str()) + strlen(digest.c_str()) + strlen(o) + 64;
-			char *query=(char *)malloc(query_len);
-			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), schemaname.c_str(), flagIN, digest.c_str(), o);
+			const size_t q_len = safe_strlen(q);
+			const size_t username_len = username.size();
+			const size_t client_address_len = client_address.size();
+			const size_t schemaname_len = schemaname.size();
+			const size_t digest_len = digest.size();
+			const char* safe_comment = o ? o : "";
+			const size_t escaped_comment_len = safe_strlen(safe_comment);
+			size_t query_len = q_len + username_len + client_address_len + schemaname_len + digest_len + escaped_comment_len + 64;
+			char *query=(char *)l_alloc(query_len);
+			format_query(query, query_len, q, active, username.c_str(), client_address.c_str(), schemaname.c_str(), flagIN, digest.c_str(), safe_comment);
 			admindb->execute(query);
 			if (o != o1) free(o);
 			free(o1);
-			free(query);
+			l_free(0, query);
 			rows++;
 		}
 	}
@@ -3022,11 +3193,13 @@ int ProxySQL_Config::Read_MySQL_Firewall_from_configfile() {
 			std::string fingerprint="";
 			f.lookupValue("active", active);
 			f.lookupValue("fingerprint", fingerprint);
-			size_t query_len = strlen(q) + strlen(fingerprint.c_str()) + 16;
-			char *query=(char *)malloc(query_len);
-			snprintf(query, query_len, q, active, fingerprint.c_str());
+			const size_t q_len = safe_strlen(q);
+			const size_t fingerprint_len = fingerprint.size();
+			size_t query_len = q_len + fingerprint_len + 16;
+			char *query=(char *)l_alloc(query_len);
+			format_query(query, query_len, q, active, fingerprint.c_str());
 			admindb->execute(query);
-			free(query);
+			l_free(0, query);
 			rows++;
 		}
 	}
@@ -3058,13 +3231,19 @@ int ProxySQL_Config::Read_PgSQL_Firewall_from_configfile() {
 			u.lookupValue("comment", comment);
 			char *o1=strdup(comment.c_str());
 			char *o=escape_string_single_quotes(o1, false);
-			size_t query_len = strlen(q) + strlen(username.c_str()) + strlen(client_address.c_str()) + strlen(mode.c_str()) + strlen(o) + 32;
-			char *query=(char *)malloc(query_len);
-			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), mode.c_str(), o);
+			const size_t q_len = safe_strlen(q);
+			const size_t username_len = username.size();
+			const size_t client_address_len = client_address.size();
+			const size_t mode_len = mode.size();
+			const char* safe_comment = o ? o : "";
+			const size_t escaped_comment_len = safe_strlen(safe_comment);
+			size_t query_len = q_len + username_len + client_address_len + mode_len + escaped_comment_len + 32;
+			char *query=(char *)l_alloc(query_len);
+			format_query(query, query_len, q, active, username.c_str(), client_address.c_str(), mode.c_str(), safe_comment);
 			admindb->execute(query);
 			if (o != o1) free(o);
 			free(o1);
-			free(query);
+			l_free(0, query);
 			rows++;
 		}
 	}
@@ -3091,13 +3270,20 @@ int ProxySQL_Config::Read_PgSQL_Firewall_from_configfile() {
 			r.lookupValue("comment", comment);
 			char *o1=strdup(comment.c_str());
 			char *o=escape_string_single_quotes(o1, false);
-			size_t query_len = strlen(q) + strlen(username.c_str()) + strlen(client_address.c_str()) + strlen(database.c_str()) + strlen(digest.c_str()) + strlen(o) + 64;
-			char *query=(char *)malloc(query_len);
-			snprintf(query, query_len, q, active, username.c_str(), client_address.c_str(), database.c_str(), flagIN, digest.c_str(), o);
+			const size_t q_len = safe_strlen(q);
+			const size_t username_len = username.size();
+			const size_t client_address_len = client_address.size();
+			const size_t database_len = database.size();
+			const size_t digest_len = digest.size();
+			const char* safe_comment = o ? o : "";
+			const size_t escaped_comment_len = safe_strlen(safe_comment);
+			size_t query_len = q_len + username_len + client_address_len + database_len + digest_len + escaped_comment_len + 64;
+			char *query=(char *)l_alloc(query_len);
+			format_query(query, query_len, q, active, username.c_str(), client_address.c_str(), database.c_str(), flagIN, digest.c_str(), safe_comment);
 			admindb->execute(query);
 			if (o != o1) free(o);
 			free(o1);
-			free(query);
+			l_free(0, query);
 			rows++;
 		}
 	}
@@ -3112,11 +3298,13 @@ int ProxySQL_Config::Read_PgSQL_Firewall_from_configfile() {
 			std::string fingerprint="";
 			f.lookupValue("active", active);
 			f.lookupValue("fingerprint", fingerprint);
-			size_t query_len = strlen(q) + strlen(fingerprint.c_str()) + 16;
-			char *query=(char *)malloc(query_len);
-			snprintf(query, query_len, q, active, fingerprint.c_str());
+			const size_t q_len = safe_strlen(q);
+			const size_t fingerprint_len = fingerprint.size();
+			size_t query_len = q_len + fingerprint_len + 16;
+			char *query=(char *)l_alloc(query_len);
+			format_query(query, query_len, q, active, fingerprint.c_str());
 			admindb->execute(query);
-			free(query);
+			l_free(0, query);
 			rows++;
 		}
 	}

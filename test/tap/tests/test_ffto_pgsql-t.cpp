@@ -107,28 +107,39 @@ int main(int argc, char** argv) {
     }
 
     // Configure FFTO and Fast Forward for PG
-    MYSQL_QUERY(admin, "UPDATE global_variables SET variable_value='true' WHERE variable_name='pgsql-ffto_enabled'");
-    MYSQL_QUERY(admin, "UPDATE global_variables SET variable_value='1048576' WHERE variable_name='pgsql-ffto_max_buffer_size'");
+    MYSQL_QUERY(admin, "SET pgsql-ffto_enabled='true'");
+    MYSQL_QUERY(admin, "SET pgsql-ffto_max_buffer_size=1048576");
     MYSQL_QUERY(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
 
-    // Ensure root user exists
-    char escaped_user[2 * strlen(cl.pgsql_root_username) + 1];
-    char escaped_pass[2 * strlen(cl.pgsql_root_password) + 1];
-    mysql_real_escape_string(admin, escaped_user, cl.pgsql_root_username, strlen(cl.pgsql_root_username));
-    mysql_real_escape_string(admin, escaped_pass, cl.pgsql_root_password, strlen(cl.pgsql_root_password));
-
-    char user_prov_query[1024];
-    snprintf(user_prov_query, sizeof(user_prov_query), "INSERT OR REPLACE INTO pgsql_users (username, password, fast_forward) VALUES ('%s', '%s', 1)", escaped_user, escaped_pass);
-    MYSQL_QUERY(admin, user_prov_query);
-
+    /* Enable fast_forward on ALL pgsql_users rows (frontend + backend).
+     * Partial INSERT OR REPLACE only touches PK (username, backend) and leaves
+     * the frontend credential row at fast_forward=0. */
+    MYSQL_QUERY(admin, "UPDATE pgsql_users SET fast_forward=1");
     MYSQL_QUERY(admin, "LOAD PGSQL USERS TO RUNTIME");
+    {
+        if (mysql_query(admin, "SELECT COUNT(*) FROM runtime_pgsql_users "
+                               "WHERE frontend=1 AND fast_forward=1") != 0) {
+            diag("FATAL: runtime_pgsql_users check failed: %s", mysql_error(admin));
+            return -1;
+        }
+        MYSQL_RES* r = mysql_store_result(admin);
+        MYSQL_ROW row = r ? mysql_fetch_row(r) : NULL;
+        int cnt = row && row[0] ? atoi(row[0]) : 0;
+        if (r) mysql_free_result(r);
+        if (cnt < 1) {
+            diag("FATAL: no frontend pgsql_users with fast_forward=1 after LOAD");
+            return -1;
+        }
+    }
 
     // Ensure backend server exists
     snprintf(server_query, sizeof(server_query), "INSERT OR REPLACE INTO pgsql_servers (hostgroup_id, hostname, port) VALUES (0, '%s', %d)", cl.pgsql_server_host, cl.pgsql_server_port);
     MYSQL_QUERY(admin, server_query);
     MYSQL_QUERY(admin, "LOAD PGSQL SERVERS TO RUNTIME");
 
-    MYSQL_QUERY(admin, "TRUNCATE TABLE stats_pgsql_query_digest");
+    /* TRUNCATE on the stats mirror does not clear in-memory digests. */
+    MYSQL_QUERY(admin, "SELECT * FROM stats_pgsql_query_digest_reset");
+    { MYSQL_RES* r = mysql_store_result(admin); if (r) mysql_free_result(r); }
 
     // Standard libpq connection using root (postgres)
     snprintf(conninfo, sizeof(conninfo), "host=%s port=%d user=%s password=%s dbname=postgres sslmode=disable",

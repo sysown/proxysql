@@ -208,6 +208,7 @@ handle_internal_build() {
         GIT_VERSION_BASE="${GIT_VERSION_BASE}" testall
     make -j"$(nproc)" WITHGCOV=1 \
         GIT_VERSION_BASE="${GIT_VERSION_BASE}" build_cluster_simulator
+    make -C test/deps/cluster_simulator -j"$(nproc)" check
     make -C test/tap -j"$(nproc)" WITHGCOV=1 \
         GIT_VERSION="${GIT_VERSION_BASE}" tap
     make -C test/tap/tests -j"$(nproc)" WITHGCOV=1 \

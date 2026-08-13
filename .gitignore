@@ -78,6 +78,7 @@ oldcode/tests/connect_speed
 # generated test pems
 test/tap/tests/*.pem
 test/tap/tests/test_cluster_sync_config/proxysql*.pem
+test/tap/pgsql_user_sync/
 
 #binary
 src/proxysql
@@ -230,6 +231,10 @@ test-scripts/deps/
 test/tap/tests/parsersql_digest_test
 test/tap/tests/setparser_parsersql_test
 deps/protobuf/protobuf-*/
+
+# pg-compat report output (run-pg-compat.bash's default host bind-mount
+# target; see test/pg-compat/README.md "Report output")
+/pg-compat-reports/
 
 # Stray build artifact: run-tests-isolated.bash creates the real mysqlbinlog
 # symlink at runtime under test-scripts/deps/; never commit this one (it was

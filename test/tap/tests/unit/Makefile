@@ -280,6 +280,12 @@ ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c init_tsdb_variables),0)
 	PSQLTSDB := -DPROXYSQLTSDB
 endif
 
+PSQLED25519 :=
+ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c proxysql_ed25519_verify_signature),0)
+	PROXYSQLED25519 := 1
+	PSQLED25519 := -DPROXYSQLED25519
+endif
+
 # PROXYSQL31 is the parent tier flag for FFTO + TSDB; the codebase has no
 # #ifdef PROXYSQL31 blocks of its own, so autodetect it as "at least one
 # of FFTO or TSDB is enabled".  This matches the top-level Makefile's
@@ -307,12 +313,12 @@ endif
 # misused (most importantly identity-forgery setters), while tests that include
 # the plugin headers and link against the plugin sources still see the helpers
 # they need.
-OPT := $(STDCPP) -O0 -ggdb $(PSQLCH) $(PSQLGA) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLDEBUG) \
+OPT := $(STDCPP) -O0 -ggdb $(PSQLCH) $(PSQLGA) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLED25519) $(PSQLDEBUG) \
 	   -DGITVERSION=\"$(GIT_VERSION)\" -DMYSQLX_TEST_BUILD $(NOJEM) $(WGCOV) $(WASAN) \
 	   -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR)
 
 ifeq ($(UNAME_S),Darwin)
-	OPT := $(STDCPP) -O0 -ggdb $(PSQLCH) $(PSQLGA) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLDEBUG) \
+	OPT := $(STDCPP) -O0 -ggdb $(PSQLCH) $(PSQLGA) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLED25519) $(PSQLDEBUG) \
 		   -DGITVERSION=\"$(GIT_VERSION)\" -DMYSQLX_TEST_BUILD $(NOJEM) $(WGCOV) $(WASAN)
 endif
 
@@ -377,6 +383,7 @@ $(LIBPROXYSQLAR): FORCE
 	$(MAKE) -C $(PROXYSQL_PATH)/lib libproxysql.a \
 		PROXYSQLCLICKHOUSE=1 \
 		PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) \
+		PROXYSQLED25519=$(PROXYSQLED25519) \
 		PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) CC=$(CC) CXX=$(CXX)
 
 
@@ -424,7 +431,24 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	glovars_unit-t \
 	pgsql_servers_ssl_params_unit-t \
 	connection_unhealthy_unit-t \
-	cluster_sync_unit-t
+	cluster_sync_unit-t \
+	parsersql_unit-t \
+	pgsql_query_processor_unit-t \
+	http_server_unit-t \
+	mysql_resultset_framer_unit-t \
+	mysql_resultset_framer_traffic_unit-t \
+	pgsql_response_framer_unit-t \
+	pgsql_response_framer_traffic_unit-t \
+	ffto_state_machine_unit-t \
+	restapi_server_unit-t
+
+ifeq ($(PROXYSQL31),1)
+UNIT_TESTS += caching_sha2_rsa_unit-t
+endif
+
+ifeq ($(PROXYSQLED25519),1)
+UNIT_TESTS += ed25519_unit-t
+endif
 
 # Plugin-chassis + mysqlx-plugin unit tests — built only when
 # libproxysql.a was compiled with -DPROXYSQL40 (autodetected higher up
@@ -851,6 +875,11 @@ genai_mysql_catalog_unit-t: genai_mysql_catalog_unit-t.cpp $(GENAI_ALL_SRCS) $(T
 		$(GENAI_PLUGIN_DEFINES) $(IDIRS) $(LDIRS) $(OPT) \
 		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
+ifeq ($(UNAME_S),Linux)
+# Let the RSA unit test observe the exact flock attempt without a production hook.
+caching_sha2_rsa_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=flock
+endif
+
 # Pattern rule: all unit tests use the same compile + link flags.
 # Each test binary is built from its .cpp source, linked against
 # the test harness objects and libproxysql.a with all dependencies.
@@ -867,4 +896,5 @@ genai_mysql_catalog_unit-t: genai_mysql_catalog_unit-t.cpp $(GENAI_ALL_SRCS) $(T
 .PHONY: clean
 .SILENT: clean
 clean:
-	rm -rf $(ODIR) $(UNIT_TESTS) $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO)
+	rm -rf $(ODIR)
+	rm -f *-t $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO)

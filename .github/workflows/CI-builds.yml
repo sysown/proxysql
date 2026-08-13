@@ -13,6 +13,7 @@ concurrency:
 
 jobs:
   run:
+    if: ${{ !github.event.workflow_run || github.event.workflow_run.head_repository.full_name == github.repository }}
     # `write-all` is required because reusable-workflow permissions are the
     # intersection of caller + callee. Without it the workflow_run event's
     # GITHUB_TOKEN has no cache-writable scope, so the callee's

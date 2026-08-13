@@ -14,6 +14,8 @@
  * @par Test scenarios
  *  1. 3 different queries pipelined before Sync → 3 separate digests
  *  2. Same prepared statement executed 10 times in pipeline → count_star=10
+ *  3. Extended Execute + Sync + simple Query pipelined together → each digest
+ *     keeps its own row counts across the exchange boundary
  *
  * @pre  ProxySQL running with a PostgreSQL backend.
  *
@@ -38,12 +40,13 @@
  * @brief Total number of planned TAP assertions.
  *
  * Breakdown:
- *  - Setup:                 1 (connect)
+ *  - Setup:                  1 (connect)
  *  - Scenario 1 (3 queries): 3 x 3 = 9 (3 verify_pg_digest calls)
  *  - Scenario 2 (10x exec):  1 x 3 = 3 (1 verify_pg_digest call)
- *  Total = 13
+ *  - Scenario 3 (boundary):  2 x 3 = 6 (2 verify_pg_digest calls)
+ *  Total = 19
  */
-static constexpr int kPlannedTests = 13;
+static constexpr int kPlannedTests = 19;
 
 #define FAIL_AND_SKIP_REMAINING(cleanup_label, fmt, ...) \
     do { \
@@ -124,17 +127,11 @@ int main(int argc, char** argv) {
                        "WHERE variable_name='pgsql-ffto_max_buffer_size'");
     MYSQL_QUERY(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
 
-    {
-        char eu[2 * strlen(cl.pgsql_root_username) + 1]; char ep[2 * strlen(cl.pgsql_root_password) + 1];
-        mysql_real_escape_string(admin, eu, cl.pgsql_root_username, strlen(cl.pgsql_root_username));
-        mysql_real_escape_string(admin, ep, cl.pgsql_root_password, strlen(cl.pgsql_root_password));
-        char uq[1024];
-        snprintf(uq, sizeof(uq),
-            "INSERT OR REPLACE INTO pgsql_users (username, password, fast_forward) "
-            "VALUES ('%s', '%s', 1)", eu, ep);
-        MYSQL_QUERY(admin, uq);
-        MYSQL_QUERY(admin, "LOAD PGSQL USERS TO RUNTIME");
-    }
+    /* Enable fast_forward on ALL pgsql_users rows (frontend + backend).
+     * Partial INSERT OR REPLACE only touches PK (username, backend) and leaves
+     * the frontend credential row at fast_forward=0. */
+    MYSQL_QUERY(admin, "UPDATE pgsql_users SET fast_forward=1");
+    MYSQL_QUERY(admin, "LOAD PGSQL USERS TO RUNTIME");
     {
         char sq[1024];
         snprintf(sq, sizeof(sq),
@@ -155,10 +152,26 @@ int main(int argc, char** argv) {
     }
     ok(pgc != NULL && pgc->isConnected(), "Connected via pg_lite_client");
 
-    /* Create test table via simple query */
+    /* Create test table via simple query.
+     *
+     * Each response MUST be consumed. execute() only writes the Query message;
+     * it does not read the reply, so firing three of them back-to-back leaves
+     * three unread ReadyForQuery messages in the socket. The next
+     * consumeInputUntilReady() -- the one after the Parse batch below -- stops
+     * at the FIRST ReadyForQuery it sees, which would be DROP TABLE's, not the
+     * one it is waiting for. From that point the client is a full exchange
+     * behind the server and keeps pipelining anyway, so an old ReadyForQuery is
+     * still in flight when the Bind/Execute batch starts. Whether that stray
+     * message reaches the proxy before or after the batch's first Execute is
+     * pure timing, which is exactly how this test failed intermittently in CI
+     * (SELECT/INSERT/UPDATE stats each shifted by one position) while passing
+     * locally. */
     pgc->execute("DROP TABLE IF EXISTS ffto_pg_pipe");
+    pgc->consumeInputUntilReady();
     pgc->execute("CREATE TABLE ffto_pg_pipe (id INT PRIMARY KEY, val TEXT)");
+    pgc->consumeInputUntilReady();
     pgc->execute("INSERT INTO ffto_pg_pipe VALUES (1,'a'), (2,'b'), (3,'c')");
+    pgc->consumeInputUntilReady();
 
     /* ================================================================
      * Scenario 1:  3 different queries pipelined before Sync
@@ -230,6 +243,57 @@ int main(int argc, char** argv) {
     }
 
     verify_pg_digest(admin, "SELECT val FROM ffto_pg_pipe WHERE id = $1", 10, 0, 10);
+
+    /* ================================================================
+     * Scenario 3:  extended Execute + Sync + SIMPLE query, pipelined
+     *
+     * Regression guard for stats attribution across an exchange boundary.
+     * The client sends Bind/Execute, Sync, and then a simple Query without
+     * reading anything in between, so two exchanges are in flight at once
+     * and the server answers:
+     *
+     *   CommandComplete(Execute), ReadyForQuery(Sync),
+     *   CommandComplete(Query),   ReadyForQuery(Query)
+     *
+     * The Execute's CommandComplete finalizes the Execute and activates the
+     * simple query, which is queued behind it. The ReadyForQuery that then
+     * arrives belongs to the *Sync*, i.e. to the exchange that just ended --
+     * not to the simple query now sitting in front of it. Finalizing on it
+     * reports the simple query with zero rows and pops the queue, so the
+     * CommandComplete that really is its own is discarded and its digest
+     * silently records rows_sent=0.
+     *
+     * Unlike scenarios 1 and 2 this ordering is deterministic, not a race:
+     * the response sequence above follows purely from what the client sends.
+     * ================================================================ */
+    diag("--- Scenario 3: extended Execute + Sync + simple query ---");
+    clear_pg_stats(admin);
+
+    try {
+        /* Exchange 1: extended Bind/Execute terminated by Sync. */
+        pgc->bindStatement("pipe_sel", "",
+            {{std::string("2"), 0}}, {}, false);
+        pgc->executePortal("", 0, false);
+        pgc->sendSync();
+
+        /* Exchange 2: a simple query, sent WITHOUT reading exchange 1's
+         * replies -- that overlap is the whole point of the scenario. */
+        pgc->execute("SELECT count(*) FROM ffto_pg_pipe");
+
+        /* Now drain both exchanges: one ReadyForQuery each. */
+        pgc->consumeInputUntilReady();
+        pgc->consumeInputUntilReady();
+    } catch (const PgException& e) {
+        diag("Pipeline scenario 3 failed: %s", e.what());
+        FAIL_AND_SKIP_REMAINING(cleanup, "Pipelined exchange-boundary test failed");
+    }
+
+    /* The extended Execute is unaffected -- it is finalized by its own
+     * CommandComplete before the boundary is crossed. */
+    verify_pg_digest(admin, "SELECT val FROM ffto_pg_pipe WHERE id = $1", 1, 0, 1);
+    /* The simple query is the one that gets zeroed when ReadyForQuery is
+     * allowed to finalize a query that has not yet seen its own response. */
+    verify_pg_digest(admin, "SELECT count(*) FROM ffto_pg_pipe", 1, 0, 1);
 
 cleanup:
     if (pgc) { delete pgc; }
