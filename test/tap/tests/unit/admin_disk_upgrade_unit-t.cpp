@@ -80,6 +80,9 @@ public:
 	void upgrade_rest_api_routes() { admin->disk_upgrade_rest_api_routes(); }
 	void upgrade_mysql_query_rules() { admin->disk_upgrade_mysql_query_rules(); }
 	void upgrade_pgsql_replication_hostgroups() { admin->disk_upgrade_pgsql_replication_hostgroups(); }
+	void use_config_db_as_admin_db() { admin->admindb = admin->configdb; }
+	void save_mysql_servers_to_disk() { admin->__insert_or_replace_disktable_select_maintable(); }
+	void load_mysql_servers_from_disk() { admin->__insert_or_replace_maintable_select_disktable(); }
 };
 
 // ---------------------------------------------------------------------------
@@ -575,12 +578,90 @@ static void test_mysql_servers_upgrade_multiple_rows_with_fixes() {
 	ok(w2 == 500, "mysql_servers: normal weight preserved (got %d)", w2);
 }
 
+static void test_aurora_hostgroups_disk_roundtrip_uses_configured_projection() {
+	TestDiskUpgrade t;
+	SQLite3DB *db = t.db();
+	t.use_config_db_as_admin_db();
+
+	struct TableDefinition {
+		const char *name;
+		const char *definition;
+	};
+	const TableDefinition tables[] = {
+		{ "mysql_servers", ADMIN_SQLITE_TABLE_MYSQL_SERVERS },
+		{ "mysql_replication_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS },
+		{ "mysql_group_replication_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_GROUP_REPLICATION_HOSTGROUPS },
+		{ "mysql_galera_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_GALERA_HOSTGROUPS },
+		{ "mysql_aws_aurora_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS },
+		{ "mysql_aws_rds_bgd_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_AWS_RDS_BGD_HOSTGROUPS },
+		{ "mysql_hostgroup_attributes", ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES },
+		{ "mysql_servers_ssl_params", ADMIN_SQLITE_TABLE_MYSQL_SERVERS_SSL_PARAMS },
+		{ "mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES },
+		{ "mysql_query_rules_fast_routing", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_FAST_ROUTING },
+		{ "mysql_users", ADMIN_SQLITE_TABLE_MYSQL_USERS },
+		{ "mysql_firewall_whitelist_users", ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_USERS },
+		{ "mysql_firewall_whitelist_rules", ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_RULES },
+		{ "mysql_firewall_whitelist_sqli_fingerprints", ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_SQLI_FINGERPRINTS },
+		{ "global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES },
+		{ "scheduler", ADMIN_SQLITE_TABLE_SCHEDULER },
+		{ "restapi_routes", ADMIN_SQLITE_TABLE_RESTAPI_ROUTES },
+		{ "proxysql_servers", ADMIN_SQLITE_TABLE_PROXYSQL_SERVERS },
+		{ "pgsql_servers", ADMIN_SQLITE_TABLE_PGSQL_SERVERS },
+		{ "pgsql_replication_hostgroups", ADMIN_SQLITE_TABLE_PGSQL_REPLICATION_HOSTGROUPS },
+		{ "pgsql_hostgroup_attributes", ADMIN_SQLITE_TABLE_PGSQL_HOSTGROUP_ATTRIBUTES },
+		{ "pgsql_servers_ssl_params", ADMIN_SQLITE_TABLE_PGSQL_SERVERS_SSL_PARAMS },
+		{ "pgsql_query_rules", ADMIN_SQLITE_TABLE_PGSQL_QUERY_RULES },
+		{ "pgsql_query_rules_fast_routing", ADMIN_SQLITE_TABLE_PGSQL_QUERY_RULES_FAST_ROUTING },
+		{ "pgsql_users", ADMIN_SQLITE_TABLE_PGSQL_USERS },
+		{ "pgsql_firewall_whitelist_users", ADMIN_SQLITE_TABLE_PGSQL_FIREWALL_WHITELIST_USERS },
+		{ "pgsql_firewall_whitelist_rules", ADMIN_SQLITE_TABLE_PGSQL_FIREWALL_WHITELIST_RULES },
+		{ "pgsql_firewall_whitelist_sqli_fingerprints", ADMIN_SQLITE_TABLE_PGSQL_FIREWALL_WHITELIST_SQLI_FINGERPRINTS }
+	};
+	for (const TableDefinition& table : tables) {
+		db->execute(table.definition);
+	}
+	db->execute("ATTACH DATABASE ':memory:' AS disk");
+	for (const TableDefinition& table : tables) {
+		std::string query = std::string("CREATE TABLE disk.") + table.name +
+			" AS SELECT * FROM main." + table.name + " WHERE 0";
+		db->execute(query.c_str());
+	}
+
+	db->execute(
+		"INSERT INTO mysql_aws_aurora_hostgroups ("
+		"writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,domain_name,comment"
+		") VALUES (600,601,602,603,'.disk.example','disk round trip')"
+	);
+	// Model a node-local runtime field on the source. The disk projection must ignore it.
+	db->execute("ALTER TABLE main.mysql_aws_aurora_hostgroups ADD COLUMN bgd_status VARCHAR NOT NULL DEFAULT 'LOCAL'");
+	db->execute("UPDATE main.mysql_aws_aurora_hostgroups SET bgd_status='SWITCHOVER_IN_PROGRESS'");
+
+	t.save_mysql_servers_to_disk();
+	ok(query_string(db,
+		"SELECT green_writer_hostgroup || ',' || green_reader_hostgroup "
+		"FROM disk.mysql_aws_aurora_hostgroups WHERE writer_hostgroup=600") == "602,603",
+		"Aurora disk SAVE preserves both configured green hostgroups");
+	ok(query_int(db,
+		"SELECT COUNT(*) FROM pragma_table_info('mysql_aws_aurora_hostgroups','disk') WHERE name='bgd_status'") == 0,
+		"Aurora disk SAVE excludes node-local bgd_status");
+
+	db->execute("DELETE FROM main.mysql_aws_aurora_hostgroups");
+	t.load_mysql_servers_from_disk();
+	ok(query_string(db,
+		"SELECT green_writer_hostgroup || ',' || green_reader_hostgroup "
+		"FROM main.mysql_aws_aurora_hostgroups WHERE writer_hostgroup=600") == "602,603",
+		"Aurora disk LOAD restores both configured green hostgroups");
+	ok(query_string(db,
+		"SELECT bgd_status FROM main.mysql_aws_aurora_hostgroups WHERE writer_hostgroup=600") == "LOCAL",
+		"Aurora disk LOAD leaves node-local bgd_status at its local default");
+}
+
 // ============================================================================
 // main
 // ============================================================================
 
 int main() {
-	plan(67);
+	plan(71);
 	test_init_minimal();
 
 	// scheduler tests
@@ -615,6 +696,7 @@ int main() {
 	// Multi-row tests
 	test_scheduler_upgrade_preserves_multiple_rows();
 	test_mysql_servers_upgrade_multiple_rows_with_fixes();
+	test_aurora_hostgroups_disk_roundtrip_uses_configured_projection();
 
 	test_cleanup_minimal();
 	return exit_status();

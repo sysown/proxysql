@@ -470,6 +470,69 @@ static void test_write_mysql_servers_replication_hostgroups() {
 	delete db;
 }
 
+static void test_roundtrip_mysql_aws_aurora_hostgroups() {
+	SQLite3DB* db = create_test_db();
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_SERVERS);
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS);
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_GALERA_HOSTGROUPS);
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS);
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_AWS_RDS_BGD_HOSTGROUPS);
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES);
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_SERVERS_SSL_PARAMS);
+	db->execute(
+		"INSERT INTO mysql_aws_aurora_hostgroups ("
+		"writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,"
+		"aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,"
+		"new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,autopurge_missing_checks,comment"
+		") VALUES (500,501,502,503,0,3307,'.bgd.example',321,1200,900,1,7,40,20,3,9,'aurora bgd')"
+	);
+	db->execute(
+		"INSERT INTO mysql_aws_aurora_hostgroups ("
+		"writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,domain_name,comment"
+		") VALUES (510,511,NULL,NULL,'.legacy.example','ordinary aurora')"
+	);
+
+	ProxySQL_Config cfg(db);
+	std::string data;
+	int write_rc = cfg.Write_MySQL_Servers_to_configfile(data);
+
+	ok(write_rc == 0, "RT Aurora hostgroups: configuration export succeeds");
+	ok(data.find("green_writer_hostgroup=502") != std::string::npos,
+		"RT Aurora hostgroups: green writer is exported");
+	ok(data.find("green_reader_hostgroup=503") != std::string::npos,
+		"RT Aurora hostgroups: green reader is exported");
+	ok(data.find("active=0") != std::string::npos &&
+		data.find("autopurge_missing_checks=9") != std::string::npos,
+		"RT Aurora hostgroups: later configured columns retain their values");
+	ok(data.find("bgd_status") == std::string::npos,
+		"RT Aurora hostgroups: runtime status is absent from configuration export");
+
+	db->execute("DELETE FROM mysql_aws_aurora_hostgroups");
+	ProxySQL_ConfigFile* cf = load_config_from_string(data);
+	ProxySQL_ConfigFile* saved = GloVars.confFile;
+	GloVars.confFile = cf;
+	std::string error;
+	int rows = cfg.Read_MySQL_Servers_from_configfile(error);
+	GloVars.confFile = saved;
+	delete cf;
+
+	ok(rows == 2, "RT Aurora hostgroups: configuration import restores both rows (got %d)", rows);
+	ok(db_select_string(db, "green_writer_hostgroup || ',' || green_reader_hostgroup",
+		"mysql_aws_aurora_hostgroups", "writer_hostgroup=500") == "502,503",
+		"RT Aurora hostgroups: both green hostgroups survive the round trip");
+	ok(db_select_string(db, "green_writer_hostgroup IS NULL AND green_reader_hostgroup IS NULL",
+		"mysql_aws_aurora_hostgroups", "writer_hostgroup=510") == "1",
+		"RT Aurora hostgroups: omitted green hostgroups remain NULL");
+	ok(db_select_string(db, "active", "mysql_aws_aurora_hostgroups", "writer_hostgroup=500") == "0",
+		"RT Aurora hostgroups: inactive configuration survives the round trip");
+	ok(db_select_string(db, "autopurge_missing_checks", "mysql_aws_aurora_hostgroups",
+		"writer_hostgroup=500") == "9",
+		"RT Aurora hostgroups: autopurge configuration survives the round trip");
+
+	delete db;
+}
+
 // ============================================================
 // Write_Global_Variables_to_configfile()
 // ============================================================
@@ -1011,7 +1074,7 @@ static void test_roundtrip_pgsql_firewall() {
 // ============================================================
 
 int main() {
-	plan(161);  // matches exact number of ok() assertions in this file
+	plan(171);  // matches exact number of ok() assertions in this file
 	test_init_minimal();
 
 	// MySQL side - existing + new data-driven tests
@@ -1040,6 +1103,7 @@ int main() {
 	test_write_mysql_servers_empty();
 	test_write_mysql_servers_with_data();
 	test_write_mysql_servers_replication_hostgroups();
+	test_roundtrip_mysql_aws_aurora_hostgroups();
 
 	test_write_global_variables_empty();
 	test_write_global_variables_single_prefix();

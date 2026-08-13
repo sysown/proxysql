@@ -1282,7 +1282,10 @@ int ProxySQL_Config::Write_MySQL_Servers_to_configfile(std::string& data) {
 		sqlite_resultset = NULL;
 	}
 
-	query=(char *)"SELECT * FROM mysql_aws_aurora_hostgroups";
+	query=(char *)"SELECT writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,"
+		"aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,"
+		"new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,autopurge_missing_checks,comment "
+		"FROM mysql_aws_aurora_hostgroups";
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
 	if (error) {
 		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
@@ -1298,18 +1301,21 @@ int ProxySQL_Config::Write_MySQL_Servers_to_configfile(std::string& data) {
 			data += "\t{\n";
 			addField(data, "writer_hostgroup", r->fields[0], "");
 			addField(data, "reader_hostgroup", r->fields[1], "");
-			addField(data, "active", r->fields[2], "");
-			addField(data, "aurora_port", r->fields[3], "");
-			addField(data, "domain_name", r->fields[4]);
-			addField(data, "max_lag_ms", r->fields[5], "");
-			addField(data, "check_interval_ms", r->fields[6], "");
-			addField(data, "check_timeout_ms", r->fields[7], "");
-			addField(data, "writer_is_also_reader", r->fields[8], "");
-			addField(data, "new_reader_weight", r->fields[9], "");
-			addField(data, "add_lag_ms", r->fields[10], "");
-			addField(data, "min_lag_ms", r->fields[11], "");
-			addField(data, "lag_num_checks", r->fields[12], "");
-			addField(data, "comment", r->fields[13]);
+			addField(data, "green_writer_hostgroup", r->fields[2], "");
+			addField(data, "green_reader_hostgroup", r->fields[3], "");
+			addField(data, "active", r->fields[4], "");
+			addField(data, "aurora_port", r->fields[5], "");
+			addField(data, "domain_name", r->fields[6]);
+			addField(data, "max_lag_ms", r->fields[7], "");
+			addField(data, "check_interval_ms", r->fields[8], "");
+			addField(data, "check_timeout_ms", r->fields[9], "");
+			addField(data, "writer_is_also_reader", r->fields[10], "");
+			addField(data, "new_reader_weight", r->fields[11], "");
+			addField(data, "add_lag_ms", r->fields[12], "");
+			addField(data, "min_lag_ms", r->fields[13], "");
+			addField(data, "lag_num_checks", r->fields[14], "");
+			addField(data, "autopurge_missing_checks", r->fields[15], "");
+			addField(data, "comment", r->fields[16]);
 
 			data += "\t}";
 			isNext = true;
@@ -1727,11 +1733,14 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
     if (root.exists("mysql_aws_aurora_hostgroups")==true) {
             const Setting &mysql_aws_aurora_hostgroups = root["mysql_aws_aurora_hostgroups"];
             int count = mysql_aws_aurora_hostgroups.getLength();
-            char *q=(char *)"INSERT OR REPLACE INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, autopurge_missing_checks, comment ) VALUES (%d, %d, %d, %d, '%s', %d, %d, %d, %d, %d, %d, %d, %d, %d, '%s')";
+            // Green hostgroups are nullable -> passed as %s ("NULL" or an integer).
+            char *q=(char *)"INSERT OR REPLACE INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, green_writer_hostgroup, green_reader_hostgroup, active, aurora_port, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, autopurge_missing_checks, comment ) VALUES (%d, %d, %s, %s, %d, %d, '%s', %d, %d, %d, %d, %d, %d, %d, %d, %d, '%s')";
             for (i=0; i< count; i++) {
                     const Setting &line = mysql_aws_aurora_hostgroups[i];
                     int writer_hostgroup;
                     int reader_hostgroup;
+                    int green_writer_hostgroup;
+                    int green_reader_hostgroup;
                     int active=1; // default
 					int aurora_port;
                     int max_lag_ms;
@@ -1753,6 +1762,19 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
                         proxy_error("Admin: detected a mysql_aws_aurora_hostgroups in config file without a mandatory reader_hostgroup\n");
                         continue;
                     }
+                    std::string green_writer_str;
+                    std::string green_reader_str;
+                    if (line.lookupValue("green_writer_hostgroup", green_writer_hostgroup)==false) {
+                        green_writer_str = "NULL";
+                    } else {
+                        green_writer_str = std::to_string(green_writer_hostgroup);
+                    }
+                    if (line.lookupValue("green_reader_hostgroup", green_reader_hostgroup)==false) {
+                        green_reader_str = "NULL";
+                    } else {
+                        green_reader_str = std::to_string(green_reader_hostgroup);
+                    }
+                    if (line.lookupValue("active", active)==false) active=1;
                     if (line.lookupValue("aurora_port", aurora_port)==false) aurora_port=3306;
                     if (line.lookupValue("max_lag_ms", max_lag_ms)==false) max_lag_ms=600000;
                     if (line.lookupValue("check_interval_ms", check_interval_ms)==false) check_interval_ms=1000;
@@ -1776,7 +1798,7 @@ int ProxySQL_Config::Read_MySQL_Servers_from_configfile(std::string& error) {
                     const size_t safe_domain_len = safe_strlen(safe_domain);
                     const size_t query_len = query_base_len + safe_comment_len + safe_domain_len + 256; // 128 vs sizeof(int)*8
                     char *query=(char *)l_alloc(query_len);
-					format_query(query, query_len, q, writer_hostgroup, reader_hostgroup, active, aurora_port, safe_domain, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, autopurge_missing_checks, safe_comment);
+					format_query(query, query_len, q, writer_hostgroup, reader_hostgroup, green_writer_str.c_str(), green_reader_str.c_str(), active, aurora_port, safe_domain, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, autopurge_missing_checks, safe_comment);
                     //fprintf(stderr, "%s\n", query);
                     admindb->execute(query);
                     if (o!=o1) free(o);

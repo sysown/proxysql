@@ -189,6 +189,11 @@ static unordered_map<string, const vector<string>&> module_tablenames = {
 	{ "pgsql_query_rules", pgsql_query_rules_tablenames },
 };
 
+static const string mysql_aws_aurora_config_columns =
+	"writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,"
+	"aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,"
+	"new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,autopurge_missing_checks,comment";
+
 static void BQE1(SQLite3DB *db, const vector<string>& tbs, const string& p1, const string& p2, const string& p3) {
 	string query;
 	for (auto it = tbs.begin(); it != tbs.end(); it++) {
@@ -197,7 +202,14 @@ static void BQE1(SQLite3DB *db, const vector<string>& tbs, const string& p1, con
 			db->execute(query.c_str());
 		}
 		if (p2 != "" && p3 != "") {
-			query = p2 + *it + p3 + *it;
+			const size_t wildcard_pos = p3.find('*');
+			if (*it == "mysql_aws_aurora_hostgroups" && wildcard_pos != string::npos) {
+				string projected_select = p3;
+				projected_select.replace(wildcard_pos, 1, mysql_aws_aurora_config_columns);
+				query = p2 + *it + " (" + mysql_aws_aurora_config_columns + ")" + projected_select + *it;
+			} else {
+				query = p2 + *it + p3 + *it;
+			}
 			db->execute(query.c_str());
 		}
 	}

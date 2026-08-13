@@ -322,6 +322,7 @@ struct FlushVariableStats {
 
 class ProxySQL_Admin {
 	friend class TestDiskUpgrade;
+	friend class TestAuroraBGDRuntime;
 	private:
 	volatile int main_shutdown;
 

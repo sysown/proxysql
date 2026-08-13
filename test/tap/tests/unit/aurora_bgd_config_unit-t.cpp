@@ -44,6 +44,38 @@ public:
 		pthread_mutex_unlock(&hgm->AWS_Aurora_Info_mutex);
 		return true;
 	}
+
+	static SQLite3DB* materialize_aurora_table(bool runtime) {
+		void* memory = calloc(1, sizeof(ProxySQL_Admin));
+		ProxySQL_Admin* admin = reinterpret_cast<ProxySQL_Admin*>(memory);
+		SQLite3DB* db = new SQLite3DB();
+		db->open((char*)":memory:", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+		admin->admindb = db;
+
+		if (runtime) {
+			db->execute(ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS);
+			db->execute(ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_REPLICATION_HOSTGROUPS);
+			db->execute(ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
+			db->execute(ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_GALERA_HOSTGROUPS);
+			db->execute(ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_AWS_AURORA_HOSTGROUPS);
+			db->execute(ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_AWS_RDS_BGD_HOSTGROUPS);
+			db->execute(ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_HOSTGROUP_ATTRIBUTES);
+			db->execute(ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS_SSL_PARAMS);
+		} else {
+			db->execute(ADMIN_SQLITE_TABLE_MYSQL_SERVERS);
+			db->execute(ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS);
+			db->execute(ADMIN_SQLITE_TABLE_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
+			db->execute(ADMIN_SQLITE_TABLE_MYSQL_GALERA_HOSTGROUPS);
+			db->execute(ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS);
+			db->execute(ADMIN_SQLITE_TABLE_MYSQL_AWS_RDS_BGD_HOSTGROUPS);
+			db->execute(ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES);
+			db->execute(ADMIN_SQLITE_TABLE_MYSQL_SERVERS_SSL_PARAMS);
+		}
+
+		admin->save_mysql_servers_runtime_to_database(runtime);
+		free(admin);
+		return db;
+	}
 };
 
 static std::string query_string(SQLite3DB* db, const char* query) {
@@ -319,6 +351,25 @@ static void test_runtime_ownership_and_status() {
 	}
 	ok(accepted_all_statuses, "Aurora BGD status API accepts the complete state vocabulary");
 	MyHGM->update_aws_aurora_bgd_status(300, "AVAILABLE");
+	SQLite3DB* configured_db = TestAuroraBGDRuntime::materialize_aurora_table(false);
+	ok(query_string(configured_db,
+		"SELECT green_writer_hostgroup || ',' || green_reader_hostgroup "
+		"FROM mysql_aws_aurora_hostgroups WHERE writer_hostgroup=300") == "301,311",
+		"SAVE from runtime preserves both configured green hostgroups");
+	ok(query_int(configured_db,
+		"SELECT COUNT(*) FROM pragma_table_info('mysql_aws_aurora_hostgroups') WHERE name='bgd_status'") == 0,
+		"SAVE from runtime excludes bgd_status from configuration");
+	delete configured_db;
+
+	SQLite3DB* runtime_db = TestAuroraBGDRuntime::materialize_aurora_table(true);
+	ok(query_string(runtime_db,
+		"SELECT green_writer_hostgroup || ',' || green_reader_hostgroup "
+		"FROM runtime_mysql_aws_aurora_hostgroups WHERE writer_hostgroup=300") == "301,311",
+		"runtime materialization preserves both configured green hostgroups");
+	ok(query_string(runtime_db,
+		"SELECT bgd_status FROM runtime_mysql_aws_aurora_hostgroups WHERE writer_hostgroup=300") == "AVAILABLE",
+		"runtime materialization includes the node-local bgd_status");
+	delete runtime_db;
 
 	SQLite3_result* unrelated_reload = make_candidate();
 	add_candidate_row(unrelated_reload, 300, 310, "302", "312", true, "reloaded");
@@ -362,7 +413,7 @@ static void test_runtime_ownership_and_status() {
 }
 
 int main() {
-	plan(44);
+	plan(48);
 	test_init_minimal();
 
 	test_schema_contract();       // 12
@@ -372,7 +423,7 @@ int main() {
 	test_invalid_replacement_removes_previous_row(); // 3
 
 	ok(test_init_hostgroups() == 0, "test_init_hostgroups() succeeds"); // 1
-	test_runtime_ownership_and_status(); // 13
+	test_runtime_ownership_and_status(); // 17
 	test_cleanup_hostgroups();
 
 	test_cleanup_minimal();
