@@ -544,6 +544,9 @@ void * mysql_worker_thread_func(void *arg) {
 	proxysql_mysql_thread_t *mysql_thread=(proxysql_mysql_thread_t *)arg;
 	MySQL_Thread *worker = new MySQL_Thread();
 	mysql_thread->worker=worker;
+	// register before releasing the start-up gate below, so the shutdown barrier in
+	// wait_for_all_threads_to_exit_run_loop() has a complete participant count
+	GloMTH->register_thread_before_run_loop();
 	worker->init();
 //	worker->poll_listener_add(listen_fd);
 //	worker->poll_listener_add(socket_fd);
@@ -578,6 +581,9 @@ void * mysql_worker_thread_func_idles(void *arg) {
 	proxysql_mysql_thread_t *mysql_thread=(proxysql_mysql_thread_t *)arg;
 	MySQL_Thread *worker = new MySQL_Thread();
 	mysql_thread->worker=worker;
+	// register before releasing the start-up gate below, so the shutdown barrier in
+	// wait_for_all_threads_to_exit_run_loop() has a complete participant count
+	GloMTH->register_thread_before_run_loop();
 	worker->epoll_thread=true;
 	worker->init();
 //	worker->poll_listener_add(listen_fd);
@@ -615,6 +621,9 @@ void* pgsql_worker_thread_func(void* arg) {
 	proxysql_pgsql_thread_t* pgsql_thread = (proxysql_pgsql_thread_t*)arg;
 	PgSQL_Thread* worker = new PgSQL_Thread();
 	pgsql_thread->worker = worker;
+	// register before releasing the start-up gate below, so the shutdown barrier in
+	// wait_for_all_threads_to_exit_run_loop() has a complete participant count
+	GloPTH->register_thread_before_run_loop();
 	worker->init();
 	//	worker->poll_listener_add(listen_fd);
 	//	worker->poll_listener_add(socket_fd);
@@ -649,6 +658,9 @@ void* pgsql_worker_thread_func_idles(void* arg) {
 	proxysql_pgsql_thread_t* pgsql_thread = (proxysql_pgsql_thread_t*)arg;
 	PgSQL_Thread* worker = new PgSQL_Thread();
 	pgsql_thread->worker = worker;
+	// register before releasing the start-up gate below, so the shutdown barrier in
+	// wait_for_all_threads_to_exit_run_loop() has a complete participant count
+	GloPTH->register_thread_before_run_loop();
 	worker->epoll_thread = true;
 	worker->init();
 	//	worker->poll_listener_add(listen_fd);

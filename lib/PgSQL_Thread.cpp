@@ -1029,6 +1029,7 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 #endif // IDLE_THREADS
 	stacksize = 0;
 	shutdown_ = 0;
+	threads_registered.store(0, std::memory_order_relaxed);
 	threads_exited_run_loop.store(0, std::memory_order_relaxed);
 	bootstrapping_listeners = true;
 	pthread_rwlock_init(&rwlock, NULL);
@@ -2543,16 +2544,30 @@ void PgSQL_Threads_Handler::shutdown_threads() {
 	}
 }
 
+void PgSQL_Threads_Handler::register_thread_before_run_loop() {
+	threads_registered.fetch_add(1, std::memory_order_acq_rel);
+}
+
 void PgSQL_Threads_Handler::wait_for_all_threads_to_exit_run_loop() {
-	unsigned int expected = num_threads;
-#ifdef IDLE_THREADS
-	if (GloVars.global.idle_threads) {
-		expected += num_threads;
-	}
-#endif /* IDLE_THREADS */
+	// Every thread that registers also calls this, and every registration happens
+	// before the caller enters PgSQL_Thread::run(), so this count is final by the
+	// time any thread can reach this point.
+	const unsigned int expected = threads_registered.load(std::memory_order_acquire);
 	threads_exited_run_loop.fetch_add(1, std::memory_order_acq_rel);
-	while (threads_exited_run_loop.load(std::memory_order_acquire) < expected) {
+	const unsigned long long started = monotonic_time();
+	unsigned long long next_report = started + THREADS_EXIT_REPORT_INTERVAL_US;
+	unsigned int exited = threads_exited_run_loop.load(std::memory_order_acquire);
+	while (exited < expected) {
 		usleep(50);
+		const unsigned long long now = monotonic_time();
+		if (now >= next_report) {
+			// Never abort: a shutdown that is merely slow must not become a crash.
+			// Just make the stall visible, and keep waiting.
+			proxy_error("Still waiting for all PgSQL worker/idle threads to leave their run loop: %u of %u exited after %llu seconds. Shutdown is stalled on a thread that has not returned from PgSQL_Thread::run()\n",
+				exited, expected, (now - started) / 1000000);
+			next_report = now + THREADS_EXIT_REPORT_INTERVAL_US;
+		}
+		exited = threads_exited_run_loop.load(std::memory_order_acquire);
 	}
 }
 
