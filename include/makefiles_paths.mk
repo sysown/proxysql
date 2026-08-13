@@ -11,7 +11,6 @@ DEPS_PATH := $(PROXYSQL_PATH)/deps
 
 
 include $(PROXYSQL_PATH)/common_mk/openssl_flags.mk
-include $(PROXYSQL_PATH)/common_mk/aws_sdk_cpp_flags.mk
 
 
 MARIADB_PATH := $(DEPS_PATH)/mariadb-client-library/mariadb_client

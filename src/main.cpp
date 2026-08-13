@@ -503,7 +503,6 @@ PgSQL_Query_Processor* GloPgQPro;
 ProxySQL_Admin *GloAdmin;
 MySQL_Threads_Handler *GloMTH = NULL;
 AwsIamTokenSource* GloAwsIamTokenSource = NULL;
-static std::unique_ptr<AwsIamTokenSource> GloAwsIamTokenSourceOwner;
 PgSQL_Threads_Handler* GloPTH = NULL;
 
 // GloMCPH removed in Step 4.C; GloGATH/GloAI removed in Step 5 — the
@@ -1597,13 +1596,6 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	}
 
 	ProxySQL_Main_init_Auth_module();
-	AwsIamRuntimeConfig aws_iam_config {
-		static_cast<size_t>(GloMTH->variables.max_connections),
-		static_cast<size_t>(GloMTH->variables.max_connections),
-	};
-	GloAwsIamTokenSourceOwner = create_aws_iam_token_source(aws_iam_config);
-	publish_global_aws_iam_token_source(GloAwsIamTokenSourceOwner.get());
-
 	if (GloVars.global.nostart) {
 		pthread_mutex_lock(&GloVars.global.start_mutex);
 	}
@@ -1817,7 +1809,6 @@ void ProxySQL_Main_init_phase4___shutdown() {
 	cpu_timer t;
 	ProxySQL_Main_join_all_threads();
 	shutdown_global_aws_iam_token_source();
-	GloAwsIamTokenSourceOwner.reset();
 
 	//write(GloAdmin->pipefd[1], &GloAdmin->pipefd[1], 1);	// write a random byte
 	if (GloVars.global.nostart) {

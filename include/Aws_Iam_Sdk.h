@@ -11,6 +11,8 @@ struct AwsIamRuntimeConfig {
 	size_t max_waiters_per_key;
 };
 
+using AwsIamTokenSourceDestroyFn = void (*)(AwsIamTokenSource *);
+
 class AwsIamTokenSourceLease {
 public:
 	AwsIamTokenSourceLease() = default;
@@ -39,6 +41,12 @@ std::unique_ptr<AwsIamTokenSource> create_aws_iam_token_source(
 void publish_global_aws_iam_token_source(AwsIamTokenSource *source);
 AwsIamTokenSourceLease acquire_global_aws_iam_token_source();
 void shutdown_global_aws_iam_token_source();
+
+// Transfers ownership of a provider created by a dynamically loaded plugin.
+// `module_handle` is an extra dlopen() reference retained by core until every
+// source lease has drained and `destroy` has run.
+bool install_global_aws_iam_token_source(
+	AwsIamTokenSource *source, AwsIamTokenSourceDestroyFn destroy, void *module_handle);
 
 extern AwsIamTokenSource* GloAwsIamTokenSource;
 

@@ -4,13 +4,27 @@ on:
   pull_request:
     paths:
       - '.github/workflows/CI-aws-iam.yml'
-      - 'cmake/aws-sdk-cpp/**'
+      - 'Makefile'
+      - 'deps/aws-sdk-cpp/**'
+      - 'deps/Makefile'
       - 'common_mk/aws_sdk_cpp_flags.mk'
-      - 'include/Aws_Iam_*'
-      - 'lib/Aws_Iam_*'
-      - 'test/infra/control/check-aws-iam-*'
+      - 'include/Aws_Iam_Sdk.h'
+      - 'include/ProxySQL_Plugin.h'
+      - 'include/makefiles_paths.mk'
+      - 'lib/Aws_Iam_Sdk.cpp'
+      - 'lib/Makefile'
+      - 'lib/ProxySQL_PluginManager.cpp'
+      - 'plugins/aws_iam/**'
+      - 'src/Makefile'
+      - 'src/main.cpp'
+      - 'etc/proxysql.cnf'
+      - 'docker/images/proxysql/**'
+      - 'test/infra/control/check-vendored-aws-sdk-build.bash'
       - 'test/tap/tests/**aws_iam**'
+      - 'test/tap/tests/unit/Makefile'
+      - 'README.md'
       - 'doc/aws_iam_database_authentication.md'
+      - 'doc/PLUGIN_API.md'
   push:
     branches: [v3.0]
   workflow_dispatch:
@@ -33,16 +47,15 @@ jobs:
           submodules: 'false'
       - name: Build without AWS SDK
         run: PROXYSQL40=1 make -j
-      - name: Exercise linkage checker behavior
-        run: bash test/infra/control/check-aws-iam-linkage-test.bash
-      - name: Require SDK-free binary rejection
+      - name: Require an SDK-free daemon
         run: |
-          if test/infra/control/check-aws-iam-linkage.bash src/proxysql; then
-            echo 'SDK-free binary unexpectedly passed the IAM linkage check' >&2
+          if nm -C src/proxysql | rg -q 'Aws::'; then
+            echo 'SDK-free daemon unexpectedly contains AWS C++ SDK symbols' >&2
             exit 1
           fi
-          if ldd src/proxysql | rg 'aws-cpp-sdk'; then
-            echo 'SDK-free binary unexpectedly links an AWS SDK library' >&2
+          aws_dso_pattern='aws-cpp-sdk|aws-crt-cpp|aws-c-[[:alnum:]_-]+|aws-checksums|aws-lc|s2n'
+          if ldd src/proxysql | rg -q "$aws_dso_pattern"; then
+            echo 'SDK-free daemon unexpectedly links an AWS SDK or CRT DSO' >&2
             exit 1
           fi
       - name: Build and run controlled TLS/protocol coverage
@@ -50,7 +63,7 @@ jobs:
           PROXYSQL40=1 make -C test/tap/tests -j test_aws_iam_backend_auth-t
           timeout 45s test/tap/tests/test_aws_iam_backend_auth-t
 
-  aws-enabled-system-sdk-build:
+  aws-iam-vendored-plugin-build:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -58,81 +71,33 @@ jobs:
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           submodules: 'false'
-      - name: Build with openSUSE system AWS SDK and inspect linkage
+          lfs: true
+      - name: Verify immutable vendored SDK bundle
+        run: bash test/infra/control/check-vendored-aws-sdk-build.bash
+      - name: Build static AWS IAM plugin
         run: |
-          docker run --rm \
-            --volume "$PWD:/workspace" \
-            --workdir /workspace \
-            opensuse/tumbleweed@sha256:d122808f25124269755da7ef7bbb6df282d032e2f35c32cc09447e2300f70ea7 \
-            bash -euxo pipefail -c '
-              zypper --non-interactive addrepo --refresh --check \
-                https://download.opensuse.org/repositories/Cloud:/Tools/openSUSE_Tumbleweed/ \
-                cloud-tools
-              zypper --non-interactive --gpg-auto-import-keys refresh
-              zypper --non-interactive install --no-recommends \
-                aws-sdk-cpp-devel automake bash binutils bzip2 cmake file \
-                flex gcc gcc-c++ git gnutls gnutls-devel libevent-devel \
-                libicu-devel libtirpc-devel libunwind libunwind-devel \
-                libuuid-devel make ncurses-devel openssl openssl-devel \
-                patch perl-FindBin perl-IPC-Cmd perl-Time-Piece pkg-config \
-                python3 rpcgen zlib-devel
-              PROXYSQLAWSIAM=1 PROXYSQL40=1 make -j
-              set +e
-              audit_output=$(test/infra/control/check-aws-iam-linkage.bash src/proxysql 2>&1)
-              audit_status=$?
-              set -e
-              printf "%s\n%s\n" "$audit_status" "$audit_output" \
-                >.aws-iam-linkage-audit
-            '
-      - name: Audit release package notices
-        shell: bash
+          PROXYSQL40=1 PROXYSQLAWSIAM=1 make -j
+      - name: Verify plugin ownership and static linkage
         run: |
-          trap 'rm -f -- .aws-iam-linkage-audit' EXIT
-          if [[ ! -f .aws-iam-linkage-audit ]]; then
-            echo 'AWS IAM linkage audit result is unavailable' >&2
+          PROXYSQL40=1 make -j -C test/tap/tests/unit \
+            aws_iam_plugin_linkage-t aws_iam_plugin_load_unit-t
+          test/tap/tests/unit/aws_iam_plugin_load_unit-t
+          if nm -C src/proxysql | rg -q 'Aws::'; then
+            echo 'daemon unexpectedly contains AWS C++ SDK symbols' >&2
             exit 1
           fi
-          audit_status=$(sed -n '1p' .aws-iam-linkage-audit)
-          audit_output=$(sed -n '2,$p' .aws-iam-linkage-audit)
-          expected='AWS IAM linkage check failed: package-owned Apache-2.0 LICENSE and NOTICE material was not found'
-          if [[ $audit_status != 1 || $audit_output != "$expected" ]]; then
-            printf '%s\n' "$audit_output" >&2
-            echo 'openSUSE system-SDK build failed before the known package-notice policy gate' >&2
+          if ! nm -C plugins/aws_iam/ProxySQL_AwsIam_Plugin.so | \
+              rg -q 'Aws::RDS::RDSClient::GenerateConnectAuthToken'; then
+            echo 'plugin does not contain the static RDS signer' >&2
             exit 1
           fi
-          echo '::warning title=AWS IAM release packaging blocked::The openSUSE Cloud:Tools package provides the shared SDK, but owns no upstream LICENSE/NOTICE files.'
-          {
-            echo '### AWS IAM release packaging: blocked'
-            echo
-            echo 'The shared system-SDK build passed version and core/rds-only linkage inspection.'
-            echo 'The openSUSE Cloud:Tools package does not own the required upstream LICENSE/NOTICE material, so this build is not release-qualified.'
-          } >>"$GITHUB_STEP_SUMMARY"
-      - name: Restore checkout ownership
-        if: always()
-        run: sudo chown -R "$(id -u):$(id -g)" "$PWD"
-
-  missing-sdk-diagnostic:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-        with:
-          submodules: 'false'
-      - name: Require exact missing-SDK failure
-        run: |
-          missing_root=$(mktemp -d)
-          trap 'rm -rf -- "$missing_root"' EXIT
-          if AWS_SDK_CPP_ROOT="$missing_root" PROXYSQLAWSIAM=1 PROXYSQL40=1 \
-              make -j build_src >missing-sdk.log 2>&1; then
-            echo 'IAM build unexpectedly accepted an empty SDK prefix' >&2
-            exit 1
-          fi
-          expected='AWS SDK for C++ 1.9 or newer with core and rds is required'
-          if ! rg -F "$expected" missing-sdk.log >/dev/null; then
-            echo 'IAM build did not emit the required missing-SDK diagnostic' >&2
-            exit 1
-          fi
+          aws_dso_pattern='aws-cpp-sdk|aws-crt-cpp|aws-c-[[:alnum:]_-]+|aws-checksums|aws-lc|s2n'
+          for artifact in src/proxysql plugins/aws_iam/ProxySQL_AwsIam_Plugin.so; do
+            if ldd "$artifact" | rg -q "$aws_dso_pattern"; then
+              echo "$artifact unexpectedly dynamically links an AWS SDK or CRT library" >&2
+              exit 1
+            fi
+          done
 
   fake-provider-sanitizers:
     strategy:

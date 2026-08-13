@@ -10,6 +10,30 @@
 
 .DEFAULT_GOAL := all
 
+# The AWS SDK must live in the v4-only AWS IAM plugin, never in the core
+# daemon.  Kept as an explicit build-artifact gate because it exercises the
+# actual linker output rather than a source-code convention.
+.PHONY: aws_iam_plugin_linkage-t
+aws_iam_plugin_linkage-t:
+	@test -x $(PROXYSQL_PATH)/src/proxysql
+	@if nm -C $(PROXYSQL_PATH)/src/proxysql | grep -q 'Aws::'; then \
+		echo "FAIL: src/proxysql contains AWS C++ SDK symbols" >&2; exit 1; \
+	fi
+	@test -f $(PROXYSQL_PATH)/plugins/aws_iam/ProxySQL_AwsIam_Plugin.so || { \
+		echo "FAIL: AWS IAM plugin is missing" >&2; exit 1; \
+	}
+
+# Build the optional, v4-only plugin only for its direct loader test.  Normal
+# SDK-free unit runs never need the vendored AWS SDK or this module.
+.PHONY: aws_iam_plugin_build
+aws_iam_plugin_build:
+	$(MAKE) -C $(PROXYSQL_PATH)/plugins/aws_iam all \
+		PROXYSQL40=1 PROXYSQLAWSIAM=1 CC=$(CC) CXX=$(CXX)
+	@nm -C $(PROXYSQL_PATH)/plugins/aws_iam/ProxySQL_AwsIam_Plugin.so | \
+		grep -q 'Aws::RDS::RDSClient::GenerateConnectAuthToken' || { \
+		echo "FAIL: AWS IAM plugin does not contain the RDS signer" >&2; exit 1; \
+	}
+
 PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd)
 
 include $(PROXYSQL_PATH)/include/makefiles_vars.mk
@@ -929,6 +953,11 @@ test_aws_iam_backend_auth-t: ../test_aws_iam_backend_auth-t.cpp $(TEST_HELPERS_O
 		$< $(TEST_HELPERS_OBJ) -I$(TEST_HELPERS_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
+
+aws_iam_plugin_load_unit-t: aws_iam_plugin_load_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) aws_iam_plugin_build
+	$(CXX) -DPROXYSQL_AWS_IAM_PLUGIN_PATH=\"$(PROXYSQL_PATH)/plugins/aws_iam/ProxySQL_AwsIam_Plugin.so\" \
+		$< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 
 ifeq ($(UNAME_S),Linux)
 aws_iam_session_state_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=mysql_real_connect_start -pthread

@@ -8,53 +8,47 @@ frontend.
 
 ## Build and package the feature
 
-Install AWS SDK for C++ 1.9 or newer from the operating system, including the
-`core` and `rds` development components. Package names differ. The openSUSE
-Cloud:Tools repository provides the RPM-packaged SDK as `aws-sdk-cpp-devel`; a
-Debian-family internal repository may use `libaws-sdk-cpp-dev`. For example,
-on openSUSE Tumbleweed:
+AWS IAM support is a ProxySQL 4.0 plugin.  The pinned AWS SDK for C++ 1.11.869
+source archive, including its required CRT sources, is stored through Git LFS
+at `deps/aws-sdk-cpp/aws-sdk-cpp-1.11.869-with-crt.tar.xz`.  Fetch LFS objects
+before building; the dependency target unpacks this archive under `deps/` and
+builds only the static SDK libraries required by the plugin.
 
 ```console
-sudo zypper addrepo --refresh --check \
-  https://download.opensuse.org/repositories/Cloud:/Tools/openSUSE_Tumbleweed/ \
-  cloud-tools
-sudo zypper --gpg-auto-import-keys refresh
-sudo zypper install aws-sdk-cpp-devel
-PROXYSQLAWSIAM=1 PROXYSQL40=1 make -j
-test/infra/control/check-aws-iam-linkage.bash src/proxysql
+git lfs pull
+PROXYSQL40=1 PROXYSQLAWSIAM=1 make -j
 ```
 
-Leave `AWS_SDK_CPP_ROOT` unset for a normal system installation. Set it only to
-the prefix of a system-managed SDK installed outside the package manager's
-default search path:
+The normal 4.0 build remains SDK-free:
 
 ```console
-AWS_SDK_CPP_ROOT=/opt/system/aws-sdk-cpp \
-  PROXYSQLAWSIAM=1 PROXYSQL40=1 make -j
+PROXYSQL40=1 make -j
 ```
 
-The build deliberately does not download or vendor the SDK. A request for IAM
-support fails at configuration time if compatible `core` and `rds` components
-are absent. A default build has no AWS SDK dependency and an attempted IAM
-backend connection fails closed with the operator reason
-`support_not_compiled`.
+The AWS SDK is linked statically into
+`ProxySQL_AwsIam_Plugin.so`, not into `src/proxysql`.  The main daemon contains
+no AWS C++ SDK symbols or shared-library dependency.  Do not remove or rewrite
+the pinned LFS archive: `deps/Makefile` verifies and unpacks it as a normal
+native dependency.  `PROXYSQL40=1 PROXYSQLAWSIAM=1 make -j -C deps
+aws_sdk_cpp_clean` removes only the unpacked AWS SDK build tree when that is
+genuinely necessary.
 
-AWS SDK for C++ is Apache-2.0; ProxySQL is GPL-3.0-or-later. For every release
-artifact, preserve the exact SDK version, the package-owned SDK `LICENSE` and
-`NOTICE`, and the dependency inventory emitted by the linkage check. Release
-packages must use the check's shared-library branch and must link only the
-`rds` and `core` AWS service libraries. The static branch is accepted only for
-development verification and reports that shared linkage is still required by
-release CI.
+Enable the provider by loading the installed plugin from the `plugins` list in
+the ProxySQL configuration.  The path must match the package installation
+location:
 
-The current openSUSE Cloud:Tools `aws-sdk-cpp` RPM spec declares Apache-2.0 but
-its `libs` and `devel` file manifests do not own the upstream `LICENSE.txt` or
-`NOTICE.txt`. The focused CI workflow therefore uses it to prove the
-feature-on shared build and `core`/`rds`-only linkage, but marks release
-packaging blocked at the strict legal-material gate. The example check is
-expected to reject that package for release. Do not ship the CI artifact. A
-release needs a system SDK package that owns both upstream files; do not copy
-unowned files into the build merely to bypass the check.
+```ini
+plugins = (
+  "/usr/lib/proxysql/ProxySQL_AwsIam_Plugin.so"
+)
+```
+
+The plugin is optional even in a feature-enabled build.  If it is not built or
+not configured, attempted IAM backend authentication fails closed.  AWS SDK
+for C++ is Apache-2.0; the exact upstream license and notice are retained in
+the pinned archive and its manifest.  An AWS IAM-enabled DEB/RPM/tarball also
+installs `LICENSE`, `NOTICE`, and `THIRD_PARTY_NOTICES.md` under
+`/usr/share/doc/proxysql/aws-sdk-cpp/` (under `share/doc/...` in the tarball).
 
 ## Give the ProxySQL workload permission
 

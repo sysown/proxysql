@@ -8,11 +8,13 @@
 // abi_version values it doesn't understand.
 #ifdef PROXYSQL40
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
 class SQLite3DB;
 class SQLite3_result;
+class AwsIamTokenSource;
 namespace prometheus { class Registry; }
 
 // Descriptor ABI version the plugin was compiled for.  Plugins set
@@ -36,8 +38,10 @@ namespace prometheus { class Registry; }
 //          struct with {table_name, refresh, opaque} automatically get
 //          db_kind = admin_db (value 0) via zero-initialization of the
 //          trailing field — matching the pre-ABI-4 behaviour.
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = 4u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = 4u;
+//   ABI 5: ProxySQL_PluginServices gains AWS IAM provider installation and
+//          sizing callbacks. They are live only during normal plugin init.
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = 5u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = 5u;
 
 enum class ProxySQL_PluginDBKind : uint8_t {
 	admin_db = 0,
@@ -229,6 +233,15 @@ struct ProxySQL_PluginRuntimeView {
 
 using proxysql_plugin_register_runtime_view_cb =
 	bool (*)(const ProxySQL_PluginRuntimeView &);
+
+// ABI-5 extension. Only the AWS IAM plugin uses these callbacks. The source
+// is owned by core after successful installation; `module_handle` is a
+// retained dlopen() reference released only after all session leases drain.
+using proxysql_plugin_install_aws_iam_token_source_cb =
+	bool (*)(AwsIamTokenSource *, void (*)(AwsIamTokenSource *), void *module_handle);
+
+using proxysql_plugin_get_aws_iam_limits_cb =
+	void (*)(size_t *max_total_waiters, size_t *max_waiters_per_key);
 #endif /* PROXYSQL40 */
 
 // Services provided to plugins across the four-phase lifecycle.
@@ -292,6 +305,9 @@ struct ProxySQL_PluginServices {
 	// at the same point they register their tables, so the callback
 	// is wired in both phases.
 	proxysql_plugin_register_runtime_view_cb register_runtime_view;
+	// ABI-5 extension. Both are null outside plugin init().
+	proxysql_plugin_install_aws_iam_token_source_cb install_aws_iam_token_source;
+	proxysql_plugin_get_aws_iam_limits_cb get_aws_iam_limits;
 #endif /* PROXYSQL40 */
 };
 

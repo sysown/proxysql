@@ -280,6 +280,7 @@ build_src_legacy: build_lib_legacy
 	cd src && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O2} -ggdb" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/genai && OPTZ="${O2} -ggdb" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] genai plugin (PROXYSQL40 not set)")
+	$(if $(filter 1,$(PROXYSQL40)),$(if $(filter 1,$(PROXYSQLAWSIAM)),cd plugins/aws_iam && OPTZ="${O2} -ggdb" PROXYSQL40=1 PROXYSQLAWSIAM=1 CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] AWS IAM plugin (PROXYSQLAWSIAM not set)"),@echo "[skip] AWS IAM plugin (PROXYSQL40 not set)")
 
 .PHONY: build_deps_debug_legacy
 build_deps_debug_legacy:
@@ -294,6 +295,7 @@ build_src_debug_legacy: build_lib_debug_legacy
 	cd src && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/genai && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] genai plugin (PROXYSQL40 not set)")
+	$(if $(filter 1,$(PROXYSQL40)),$(if $(filter 1,$(PROXYSQLAWSIAM)),cd plugins/aws_iam && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQL40=1 PROXYSQLAWSIAM=1 CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] AWS IAM plugin (PROXYSQLAWSIAM not set)"),@echo "[skip] AWS IAM plugin (PROXYSQL40 not set)")
 #--
 
 .PHONY: build_src_testaurora
@@ -427,12 +429,14 @@ build_src_default: build_lib_default
 	cd src && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) PROXYSQLED25519=$(PROXYSQLED25519) CC=${CC} CXX=${CXX} ${MAKE}
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O2} -ggdb" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/genai && OPTZ="${O2} -ggdb" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] genai plugin (PROXYSQL40 not set)")
+	$(if $(filter 1,$(PROXYSQL40)),$(if $(filter 1,$(PROXYSQLAWSIAM)),cd plugins/aws_iam && OPTZ="${O2} -ggdb" PROXYSQL40=1 PROXYSQLAWSIAM=1 CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] AWS IAM plugin (PROXYSQLAWSIAM not set)"),@echo "[skip] AWS IAM plugin (PROXYSQL40 not set)")
 
 .PHONY: build_src_debug_default
 build_src_debug_default: build_lib_debug_default
 	cd src && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) PROXYSQLED25519=$(PROXYSQLED25519) CC=${CC} CXX=${CXX} ${MAKE}
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/genai && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] genai plugin (PROXYSQL40 not set)")
+	$(if $(filter 1,$(PROXYSQL40)),$(if $(filter 1,$(PROXYSQLAWSIAM)),cd plugins/aws_iam && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQL40=1 PROXYSQLAWSIAM=1 CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] AWS IAM plugin (PROXYSQLAWSIAM not set)"),@echo "[skip] AWS IAM plugin (PROXYSQL40 not set)")
 
 
 ### packaging targets
@@ -538,6 +542,7 @@ clean:
 	cd src && ${MAKE} clean
 	cd plugins/mysqlx && ${MAKE} clean
 	cd plugins/genai && ${MAKE} clean
+	cd plugins/aws_iam && ${MAKE} clean
 	cd test/tap && ${MAKE} clean
 	rm -f pkgroot || true
 
@@ -548,6 +553,7 @@ cleandeps:
 	cd src && ${MAKE} clean
 	cd plugins/mysqlx && ${MAKE} clean
 	cd plugins/genai && ${MAKE} clean
+	cd plugins/aws_iam && ${MAKE} clean
 
 .PHONY: cleandev
 cleandev:
@@ -555,6 +561,7 @@ cleandev:
 	cd src && ${MAKE} clean
 	cd plugins/mysqlx && ${MAKE} clean
 	cd plugins/genai && ${MAKE} clean
+	cd plugins/aws_iam && ${MAKE} clean
 
 .PHONY: cleantest
 cleantest:
@@ -568,6 +575,7 @@ cleanall:
 	cd src && ${MAKE} clean
 	cd plugins/mysqlx && ${MAKE} clean
 	cd plugins/genai && ${MAKE} clean
+	cd plugins/aws_iam && ${MAKE} clean
 	cd test/tap && ${MAKE} clean
 	cd test/deps && ${MAKE} cleanall
 	rm -f binaries/* || true
@@ -597,6 +605,10 @@ install: src/proxysql
 	if [ -f plugins/genai/ProxySQL_GenAI_Plugin.so ]; then \
 		install -d /usr/lib/proxysql/plugins ; \
 		install -m 0755 plugins/genai/ProxySQL_GenAI_Plugin.so /usr/lib/proxysql/plugins/ ; \
+	fi
+	if [ -f plugins/aws_iam/ProxySQL_AwsIam_Plugin.so ]; then \
+		install -d /usr/lib/proxysql ; \
+		install -m 0755 plugins/aws_iam/ProxySQL_AwsIam_Plugin.so /usr/lib/proxysql/ ; \
 	fi
 ifeq ($(findstring proxysql,$(USERCHECK)),)
 	@echo "Creating proxysql user and group"
@@ -638,6 +650,7 @@ uninstall:
 	if [ -f /usr/bin/proxysql ]; then rm /usr/bin/proxysql ; fi
 	if [ -f /usr/lib/proxysql/plugins/ProxySQL_MySQLX_Plugin.so ]; then rm /usr/lib/proxysql/plugins/ProxySQL_MySQLX_Plugin.so ; fi
 	if [ -f /usr/lib/proxysql/plugins/ProxySQL_GenAI_Plugin.so ]; then rm /usr/lib/proxysql/plugins/ProxySQL_GenAI_Plugin.so ; fi
+	if [ -f /usr/lib/proxysql/ProxySQL_AwsIam_Plugin.so ]; then rm /usr/lib/proxysql/ProxySQL_AwsIam_Plugin.so ; fi
 	if [ -d /usr/lib/proxysql/plugins ]; then rmdir /usr/lib/proxysql/plugins 2>/dev/null || true ; fi
 	if [ -d /usr/lib/proxysql ]; then rmdir /usr/lib/proxysql 2>/dev/null || true ; fi
 	if [ -d /var/lib/proxysql ]; then rmdir /var/lib/proxysql 2>/dev/null || true ; fi

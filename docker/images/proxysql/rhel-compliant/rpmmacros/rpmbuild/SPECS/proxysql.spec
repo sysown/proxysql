@@ -86,6 +86,11 @@ rm -rf %{buildroot}
 %dir /usr/lib/proxysql
 /usr/lib/proxysql/*.so
 %endif
+%if 0%{?with_aws_iam}
+%dir /usr/share/doc/proxysql
+%dir /usr/share/doc/proxysql/aws-sdk-cpp
+/usr/share/doc/proxysql/aws-sdk-cpp/*
+%endif
 %config(noreplace) %attr(750,%{name},%{name}) /var/run/%{name}/
 %config(noreplace) %attr(750,%{name},%{name}) /var/lib/%{name}/
 

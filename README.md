@@ -75,7 +75,9 @@ tar xzf proxysql-<version>-linux-amd64.tar.gz
 ```
 The archive contains `bin/proxysql`, a sample `etc/proxysql.cnf`, the `systemd/`
 units, and helper tools. The v4.0 build additionally ships the runtime plugins
-under `lib/proxysql/` (`ProxySQL_MySQLX_Plugin.so`, `ProxySQL_GenAI_Plugin.so`).
+under `lib/proxysql/` (`ProxySQL_MySQLX_Plugin.so`, `ProxySQL_GenAI_Plugin.so`);
+an AWS IAM-enabled v4.0 build also ships the statically linked
+`ProxySQL_AwsIam_Plugin.so`.
 
 Alternatively you can also use the available repositories:
 

@@ -5,6 +5,9 @@ export LC_ALL=C
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 validator="$repo_root/deps/aws-sdk-cpp/verify-bundle.bash"
+deps_makefile="$repo_root/deps/Makefile"
+plugin_makefile="$repo_root/plugins/aws_iam/Makefile"
+workflow="$repo_root/.github/workflows/CI-aws-iam.yml"
 real_bundle="$repo_root/deps/aws-sdk-cpp"
 temporary_root=$(mktemp -d)
 trap 'find "$temporary_root" -depth -delete' EXIT
@@ -92,6 +95,55 @@ new_fixture() {
 
 [[ -x $validator ]] \
 	|| fail "AWS IAM vendor bundle validator is missing or not executable: $validator"
+
+if ! grep -Fq 'bash "$(PROXYSQL_PATH)/deps/aws-sdk-cpp/verify-bundle.bash"' "$deps_makefile"; then
+	fail 'deps AWS SDK build rule does not validate the immutable bundle before extraction'
+fi
+if ! grep -Fq '${MAKE} -C "$(AWS_SDK_CPP_DIR)/build" install' "$deps_makefile"; then
+	fail 'deps AWS SDK build rule does not use make jobserver recursion'
+fi
+darwin_link=$(PROXYSQL40=1 PROXYSQLAWSIAM=1 make -j -n -C "${repo_root}/plugins/aws_iam" UNAME_S=Darwin)
+if grep -Eq -- '(^|[[:space:]])-ldl($|[[:space:]])|(^|[[:space:]])-lrt($|[[:space:]])' <<<"$darwin_link"; then
+	fail 'AWS IAM plugin links Linux-only dl/rt libraries on Darwin'
+fi
+if ! grep -Fq 'aws_dso_pattern=' "$workflow" || \
+	! grep -Fq 'for artifact in src/proxysql plugins/aws_iam/ProxySQL_AwsIam_Plugin.so' "$workflow"; then
+	fail 'AWS IAM CI does not reject AWS and CRT DSOs in both artifacts'
+fi
+for workflow_path in \
+	"'Makefile'" \
+	"'src/Makefile'" \
+	"'lib/Makefile'" \
+	"'src/main.cpp'" \
+	"'lib/ProxySQL_PluginManager.cpp'" \
+	"'include/ProxySQL_Plugin.h'" \
+	"'docker/images/proxysql/**'"; do
+	grep -Fq "$workflow_path" "$workflow" || \
+		fail "AWS IAM CI path filter omits $workflow_path"
+done
+for packaging_entrypoint in \
+	"$repo_root/docker/images/proxysql/deb-compliant/entrypoint/entrypoint.bash" \
+	"$repo_root/docker/images/proxysql/rhel-compliant/entrypoint/entrypoint.bash" \
+	"$repo_root/docker/images/proxysql/suse-compliant/entrypoint/entrypoint.bash" \
+	"$repo_root/docker/images/proxysql/tarball-compliant/entrypoint/entrypoint.bash"; do
+	grep -Fq 'LICENSE NOTICE THIRD_PARTY_NOTICES.md' "$packaging_entrypoint" || \
+		fail "AWS IAM package entrypoint omits the vendored attribution list"
+	grep -Fq 'deps/aws-sdk-cpp/${attribution}' "$packaging_entrypoint" || \
+		fail 'AWS IAM package entrypoint does not stage vendored attribution files'
+	if ! grep -Fq 'EXTRA="$EXTRA PROXYSQLAWSIAM=1"' "$packaging_entrypoint" && \
+		! grep -Fq 'EXTRA="${EXTRA} PROXYSQLAWSIAM=1"' "$packaging_entrypoint"; then
+		fail 'AWS IAM package entrypoint does not pass the feature flag into make'
+	fi
+done
+for retired_gate in \
+	"$repo_root/test/infra/control/check-aws-iam-build-gate.bash" \
+	"$repo_root/test/infra/control/check-aws-iam-linkage.bash" \
+	"$repo_root/test/infra/control/check-aws-iam-linkage-test.bash"; do
+	[[ ! -e $retired_gate ]] || fail "retired system-SDK gate remains: ${retired_gate##*/}"
+done
+if [[ $(grep -Fc 'cd plugins/aws_iam && ${MAKE} clean' "$repo_root/Makefile") -ne 4 ]]; then
+	fail 'AWS IAM plugin clean recursion does not consistently use make jobserver recursion'
+fi
 
 new_fixture valid
 "$fixture_validator" "$fixture_bundle" >/dev/null \

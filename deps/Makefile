@@ -82,7 +82,10 @@ ifeq ($(PROXYSQL40),1)
 endif
 
 ifeq ($(PROXYSQLAWSIAM),1)
-	targets += $(AWS_SDK_CPP_RDS_LIB)
+ifneq ($(PROXYSQL40),1)
+$(error AWS IAM SDK requires PROXYSQL40=1)
+endif
+targets += $(AWS_SDK_CPP_RDS_LIB)
 endif
 
 default: $(targets)
@@ -227,6 +230,7 @@ protobuf: $(PROTOBUF_LIB)
 
 
 $(AWS_SDK_CPP_RDS_LIB):
+	bash "$(PROXYSQL_PATH)/deps/aws-sdk-cpp/verify-bundle.bash" "$(PROXYSQL_PATH)/deps/aws-sdk-cpp"
 	rm -rf "$(AWS_SDK_CPP_DIR)"
 	tar -C "$(PROXYSQL_PATH)/deps/aws-sdk-cpp" -Jxf "$(PROXYSQL_PATH)/deps/$(AWS_SDK_CPP_ARCHIVE)"
 	CC=${CC} CXX=${CXX} cmake \

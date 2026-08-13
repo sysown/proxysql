@@ -4,11 +4,22 @@
 **Status:** Approved for specification review  
 **Extends:** `docs/superpowers/specs/2026-08-12-aws-iam-database-auth-design.md`
 
+## Approved 4.0 plugin amendment
+
+AWS IAM database authentication is delivered as the optional v4.0
+`ProxySQL_AwsIam_Plugin.so`.  The pinned SDK and CRT archives are statically
+linked into that plugin, not `src/proxysql`; the default daemon and a v4.0
+daemon built without `PROXYSQLAWSIAM=1` remain free of AWS SDK code.  This
+amendment supersedes every reference below that says the SDK is linked into
+the core daemon or extracted below `build/`.  The native dependency target
+unpacks the immutable LFS archive under `deps/aws-sdk-cpp/`, alongside the
+repository's other dependency builds.
+
 ## Goal
 
 Replace the optional externally installed AWS SDK for C++ integration with a
 reproducible vendored source bundle and statically link the AWS SDK code used
-by IAM database-token generation into `src/proxysql` when
+by IAM database-token generation into the optional v4.0 AWS IAM plugin when
 `PROXYSQLAWSIAM=1`.
 
 The default build remains SDK-free: it must not compile the bundle, link AWS
@@ -68,7 +79,7 @@ obtain AWS SDK source.
 ## Static Build and Link Architecture
 
 When `PROXYSQLAWSIAM=1`, a dedicated dependency rule verifies the bundle
-checksum, extracts it below `build/aws-sdk-cpp/`, and configures an offline
+checksum, extracts it below `deps/aws-sdk-cpp/`, and configures an offline
 CMake build. CMake is passed the extracted source directory and system paths
 only for ProxySQL's existing OpenSSL, curl, and zlib dependencies. It builds:
 
@@ -83,9 +94,11 @@ AWS source dependency comes from the extracted bundle. Its generated Make
 fragment supplies only the necessary include paths, archive paths, and
 ordered system link flags to ProxySQL.
 
-The final daemon must contain `Aws::RDS::RDSClient::GenerateConnectAuthToken`
-and must have no dynamic `aws-cpp-sdk-*`, `aws-c-*`, `aws-crt-cpp`, `s2n`, or
-AWS-LC dependency. System OpenSSL/curl/zlib dependencies may remain dynamic.
+The final AWS IAM plugin must contain
+`Aws::RDS::RDSClient::GenerateConnectAuthToken`, while `src/proxysql` contains
+no AWS SDK symbol or dynamic `aws-cpp-sdk-*`, `aws-c-*`, `aws-crt-cpp`, `s2n`,
+or AWS-LC dependency. System OpenSSL/curl/zlib dependencies may remain
+dynamic.
 
 Feature-on source and build identity are derived from the committed vendor
 manifest and bundle SHA-256, CMake options, compiler identity, target

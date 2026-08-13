@@ -78,12 +78,6 @@ ifeq ($(PROXYSQLED25519),1)
 	PSQLED25519 := -DPROXYSQLED25519
 endif
 
-PSQLAWSIAM :=
-ifeq ($(PROXYSQLAWSIAM),1)
-	PSQLAWSIAM := -DPROXYSQLAWSIAM
-	IDIRS += $(AWS_IAM_CPPFLAGS)
-endif
-
 # 'libhttpserver': Add 'ENABLE_EPOLL' by default for all platforms except
 # for 'Darwin'. This is required when compiling 'libhttpserver' for avoiding
 # internal use of 'SELECT' in favor of 'EPOLL'. See #3591.
@@ -94,7 +88,7 @@ endif
 
 
 MYCFLAGS := $(IDIRS) $(OPTZ) $(DEBUG) -Wall -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
-MYCXXFLAGS := $(STDCPP) $(MYCFLAGS) $(PSQLCH) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLED25519) $(PSQLAWSIAM) $(ENABLE_EPOLL)
+MYCXXFLAGS := $(STDCPP) $(MYCFLAGS) $(PSQLCH) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLED25519) $(ENABLE_EPOLL)
 
 default: libproxysql.a
 .PHONY: default
@@ -153,8 +147,6 @@ endif
 
 OBJ_CXX := $(patsubst %,$(ODIR)/%,$(_OBJ_CXX))
 HEADERS := ../include/*.h ../include/*.hpp
-
-$(OBJ_CXX): $(AWS_IAM_MODE_STAMP) $(AWS_IAM_STATIC_ARCHIVES)
 
 %.ko: %.cpp $(HEADERS)
 	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS)

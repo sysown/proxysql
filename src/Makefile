@@ -99,12 +99,6 @@ ifeq ($(PROXYSQLED25519),1)
 	PSQLED25519 := -DPROXYSQLED25519
 endif
 
-PSQLAWSIAM :=
-ifeq ($(PROXYSQLAWSIAM),1)
-	PSQLAWSIAM := -DPROXYSQLAWSIAM
-	IDIRS += $(AWS_IAM_CPPFLAGS)
-endif
-
 
 
 MYCXXFLAGS := $(STDCPP)
@@ -113,13 +107,12 @@ ifneq ($(UNAME_S),Darwin)
 	MYCXXFLAGS += -fuse-ld=lld
 endif
 endif
-MYCXXFLAGS += $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLED25519) $(PSQLAWSIAM) -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
+MYCXXFLAGS += $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLED25519) -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
 
 
 STATICMYLIBS := -Wl,-Bstatic \
 				-lconfig \
 				-lproxysql \
-				$(AWS_IAM_LIBS) \
 				-ldaemon \
 				-lconfig++ \
 				-lre2 \
@@ -202,12 +195,10 @@ EXECUTABLE := proxysql
 _OBJ := main.o proxysql_global.o SQLite3_Server.o proxy_tls.o
 OBJ := $(patsubst %,$(ODIR)/%,$(_OBJ))
 
-$(OBJ): $(AWS_IAM_MODE_STAMP) $(AWS_IAM_STATIC_ARCHIVES)
-
 $(ODIR)/%.o: %.cpp
 	$(CXX) -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS) -Wall
 
-$(EXECUTABLE): $(ODIR) $(OBJ) $(LIBPROXYSQLAR) $(AWS_IAM_STATIC_ARCHIVES)
+$(EXECUTABLE): $(ODIR) $(OBJ) $(LIBPROXYSQLAR)
 ifeq ($(PROXYSQLCLICKHOUSE),1)
 	$(CXX) -o $@ $(OBJ) $(CLANGFIX) -Wl,--whole-archive $(PROXYSQL_LDIR)/libproxysql.a -Wl,--no-whole-archive $(filter-out $(PROXYSQL_LDIR)/libproxysql.a,$(LIBPROXYSQLAR)) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(LZ4_LDIR)/liblz4.a $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
 else ifeq ($(UNAME_S),Darwin)
