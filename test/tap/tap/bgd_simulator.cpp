@@ -25,6 +25,20 @@ rc_t<BGD_Probe_Kind> parse_probe_kind(string value) {
 	return { EXIT_FAILURE, BGD_Probe_Kind::table_check };
 }
 
+const char* replica_probe_kind_string(Aurora_Replica_Probe_Kind kind) {
+	return kind == Aurora_Replica_Probe_Kind::ordinary ? "ordinary" : "bgd_membership";
+}
+
+rc_t<Aurora_Replica_Probe_Kind> parse_replica_probe_kind(string value) {
+	if (value == "ordinary") {
+		return { EXIT_SUCCESS, Aurora_Replica_Probe_Kind::ordinary };
+	}
+	if (value == "bgd_membership") {
+		return { EXIT_SUCCESS, Aurora_Replica_Probe_Kind::bgd_membership };
+	}
+	return { EXIT_FAILURE, Aurora_Replica_Probe_Kind::ordinary };
+}
+
 }  // namespace
 
 int BGD_Simulator::topology_update(vector<Endpoint> backends, vector<BGD_Topology_Row> rows) {
@@ -99,6 +113,84 @@ int BGD_Simulator::topology_error(vector<Endpoint> backends, int error_code, str
 	return execute_transaction(statements);
 }
 
+int BGD_Simulator::replica_update(
+	string replica_set_id,
+	vector<Aurora_Replica_Row> rows,
+	vector<Endpoint> backends)
+{
+	if (replica_set_id.empty() || backends.empty()) {
+		return EXIT_FAILURE;
+	}
+
+	vector<string> statements {
+		"DELETE FROM REPLICA_HOST_STATUS WHERE REPLICA_SET_ID=" +
+			sql_quote(replica_set_id),
+		"DELETE FROM AWS_AURORA_REPLICA_CONTROL WHERE replica_set_id=" +
+			sql_quote(replica_set_id),
+	};
+	for (Aurora_Replica_Row& row : rows) {
+		statements.push_back(
+			"INSERT INTO REPLICA_HOST_STATUS"
+			"(REPLICA_SET_ID,SERVER_ID,SESSION_ID,CPU,LAST_UPDATE_TIMESTAMP,"
+				"REPLICA_LAG_IN_MILLISECONDS,IS_CURRENT) VALUES (" +
+			sql_quote(replica_set_id) + "," + sql_quote(row.server_id) + "," +
+			sql_quote(row.session_id) + "," + to_string(row.cpu) + "," +
+			sql_quote(row.last_update_timestamp) + "," +
+			to_string(row.replica_lag_in_milliseconds) + "," +
+			(row.is_current ? "1" : "0") + ")");
+	}
+	for (Endpoint& backend : backends) {
+		statements.push_back(
+			"INSERT OR REPLACE INTO AWS_AURORA_REPLICA_CONTROL"
+			"(backend_ip,backend_port,replica_set_id,replica_table_present,error_code,error_msg) "
+			"VALUES (" + sql_quote(backend.host) + "," + to_string(backend.port) + "," +
+			sql_quote(replica_set_id) + ",1,0,'')");
+	}
+
+	return execute_transaction(statements);
+}
+
+int BGD_Simulator::replica_delete(string replica_set_id) {
+	if (replica_set_id.empty()) {
+		return EXIT_FAILURE;
+	}
+	vector<string> statements {
+		"DELETE FROM AWS_AURORA_REPLICA_CONTROL WHERE replica_set_id=" +
+			sql_quote(replica_set_id),
+		"DELETE FROM REPLICA_HOST_STATUS WHERE REPLICA_SET_ID=" +
+			sql_quote(replica_set_id),
+	};
+	return execute_transaction(statements);
+}
+
+int BGD_Simulator::replica_drop(vector<Endpoint> backends) {
+	return replica_error(
+		backends, 1146,
+		"Table 'information_schema.REPLICA_HOST_STATUS' doesn't exist");
+}
+
+int BGD_Simulator::replica_error(
+	vector<Endpoint> backends, int error_code, string error_msg)
+{
+	if (backends.empty() || error_code == 0) {
+		return EXIT_FAILURE;
+	}
+
+	const bool table_present = error_code != 1146;
+	vector<string> statements {};
+	for (Endpoint& backend : backends) {
+		const string predicate { backend_predicate(backend) };
+		statements.push_back(
+			"INSERT OR REPLACE INTO AWS_AURORA_REPLICA_CONTROL"
+			"(backend_ip,backend_port,replica_set_id,replica_table_present,error_code,error_msg) "
+			"VALUES (" + sql_quote(backend.host) + "," + to_string(backend.port) + "," +
+			"COALESCE((SELECT replica_set_id FROM AWS_AURORA_REPLICA_CONTROL WHERE " +
+			predicate + "),'')," + (table_present ? "1" : "0") + "," +
+			to_string(error_code) + "," + sql_quote(error_msg) + ")");
+	}
+	return execute_transaction(statements);
+}
+
 int BGD_Simulator::cleanup() {
 	vector<string> statements {
 		"DELETE FROM READONLY_STATUS",
@@ -106,6 +198,24 @@ int BGD_Simulator::cleanup() {
 		"DELETE FROM AWS_BGD_CONTROL",
 		"DELETE FROM AWS_BGD_PROBE_LOG",
 	};
+
+	if (connection() == nullptr) {
+		return EXIT_FAILURE;
+	}
+	auto [rc, rows] = mysql_query_ext_rows(
+		connection(),
+		"SELECT name FROM sqlite_master WHERE type='table' AND name IN ("
+			"'AWS_AURORA_REPLICA_CONTROL','AWS_AURORA_REPLICA_PROBE_LOG',"
+			"'REPLICA_HOST_STATUS')");
+	if (rc != EXIT_SUCCESS) {
+		return EXIT_FAILURE;
+	}
+	for (mysql_res_row& row : rows) {
+		if (row.size() != 1) {
+			return EXIT_FAILURE;
+		}
+		statements.push_back("DELETE FROM " + row.front());
+	}
 	return execute_transaction(statements);
 }
 
@@ -197,6 +307,102 @@ rc_t<BGD_Probe_Log> BGD_Simulator::wait_for_probe_log(
 	diag(
 		"Timed out waiting for BGD probe backend=%s:%d kind=%s encrypted=%d",
 		backend.host.c_str(), backend.port, probe_kind_string(probe_kind), encrypted);
+	return { ETIMEDOUT, {} };
+}
+
+rc_t<uint64_t> BGD_Simulator::replica_probe_log_last_sequence() {
+	if (connection() == nullptr) {
+		return { EXIT_FAILURE, 0 };
+	}
+	auto [rc, rows] = mysql_query_ext_rows(
+		connection(),
+		"SELECT COALESCE(MAX(sequence_id),0) FROM AWS_AURORA_REPLICA_PROBE_LOG");
+	if (rc != EXIT_SUCCESS || rows.size() != 1 || rows.front().size() != 1) {
+		return { EXIT_FAILURE, 0 };
+	}
+	return {
+		EXIT_SUCCESS,
+		static_cast<uint64_t>(strtoull(rows.front().front().c_str(), nullptr, 10))
+	};
+}
+
+rc_t<vector<Aurora_Replica_Probe_Log>> BGD_Simulator::replica_probe_log_since(
+	uint64_t sequence_id)
+{
+	if (connection() == nullptr) {
+		return { EXIT_FAILURE, {} };
+	}
+	string query {
+		"SELECT sequence_id,backend_ip,backend_port,probe_kind,"
+			"COALESCE(replica_set_id,''),encrypted "
+		"FROM AWS_AURORA_REPLICA_PROBE_LOG WHERE sequence_id>" +
+		to_string(sequence_id) + " ORDER BY sequence_id"
+	};
+	auto [rc, rows] = mysql_query_ext_rows(connection(), query);
+	if (rc != EXIT_SUCCESS) {
+		return { EXIT_FAILURE, {} };
+	}
+
+	vector<Aurora_Replica_Probe_Log> logs {};
+	for (mysql_res_row& row : rows) {
+		if (row.size() != 6) {
+			return { EXIT_FAILURE, {} };
+		}
+		auto [kind_rc, probe_kind] = parse_replica_probe_kind(row[3]);
+		if (kind_rc != EXIT_SUCCESS) {
+			return { EXIT_FAILURE, {} };
+		}
+		logs.push_back({
+			static_cast<uint64_t>(strtoull(row[0].c_str(), nullptr, 10)),
+			{ row[1], atoi(row[2].c_str()) },
+			probe_kind,
+			row[4],
+			atoi(row[5].c_str()) != 0,
+		});
+	}
+	return { EXIT_SUCCESS, move(logs) };
+}
+
+rc_t<Aurora_Replica_Probe_Log> BGD_Simulator::wait_for_replica_probe_log(
+	uint64_t sequence_id,
+	Endpoint backend,
+	Aurora_Replica_Probe_Kind probe_kind,
+	uint32_t timeout_ms,
+	int encrypted,
+	string replica_set_id)
+{
+	uint64_t deadline = monotonic_time() + static_cast<uint64_t>(timeout_ms) * 1000;
+	do {
+		auto [rc, logs] = replica_probe_log_since(sequence_id);
+		if (rc != EXIT_SUCCESS) {
+			return { EXIT_FAILURE, {} };
+		}
+		for (Aurora_Replica_Probe_Log& log : logs) {
+			if (log.backend.host == backend.host && log.backend.port == backend.port &&
+				log.probe_kind == probe_kind &&
+				(replica_set_id.empty() || log.replica_set_id == replica_set_id) &&
+				(encrypted < 0 || log.encrypted == (encrypted != 0))) {
+				return { EXIT_SUCCESS, log };
+			}
+		}
+		usleep(50000);
+	} while (monotonic_time() < deadline);
+
+	auto [rc, logs] = replica_probe_log_since(sequence_id);
+	if (rc == EXIT_SUCCESS) {
+		for (Aurora_Replica_Probe_Log& log : logs) {
+			diag(
+				"Observed Aurora replica probe sequence=%llu backend=%s:%d kind=%s set=%s encrypted=%d",
+				static_cast<unsigned long long>(log.sequence_id),
+				log.backend.host.c_str(), log.backend.port,
+				replica_probe_kind_string(log.probe_kind),
+				log.replica_set_id.c_str(), log.encrypted ? 1 : 0);
+		}
+	}
+	diag(
+		"Timed out waiting for Aurora replica probe backend=%s:%d kind=%s set=%s encrypted=%d",
+		backend.host.c_str(), backend.port, replica_probe_kind_string(probe_kind),
+		replica_set_id.c_str(), encrypted);
 	return { ETIMEDOUT, {} };
 }
 
