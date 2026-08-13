@@ -552,6 +552,9 @@ void * mysql_worker_thread_func(void *arg) {
 	do { sleep_iter(++iter); } while (load_);
 
 	worker->run();
+	// worker and idle threads reach into each other's MySQL_Thread objects, so no
+	// MySQL_Thread may be destroyed until all of them have left run()
+	GloMTH->wait_for_all_threads_to_exit_run_loop();
 	//delete worker;
 	delete worker;
 	mysql_thread->worker=NULL;
@@ -584,6 +587,9 @@ void * mysql_worker_thread_func_idles(void *arg) {
 	do { sleep_iter(++iter); } while (load_);
 
 	worker->run();
+	// worker and idle threads reach into each other's MySQL_Thread objects, so no
+	// MySQL_Thread may be destroyed until all of them have left run()
+	GloMTH->wait_for_all_threads_to_exit_run_loop();
 	//delete worker;
 	delete worker;
 //	l_mem_destroy(__thr_sfp);
@@ -617,6 +623,9 @@ void* pgsql_worker_thread_func(void* arg) {
 	do { sleep_iter(++iter); } while (load_);
 
 	worker->run();
+	// worker and idle threads reach into each other's PgSQL_Thread objects, so no
+	// PgSQL_Thread may be destroyed until all of them have left run()
+	GloPTH->wait_for_all_threads_to_exit_run_loop();
 	//delete worker;
 	delete worker;
 	pgsql_thread->worker = NULL;
@@ -649,6 +658,9 @@ void* pgsql_worker_thread_func_idles(void* arg) {
 	do { sleep_iter(++iter); } while (load_);
 
 	worker->run();
+	// worker and idle threads reach into each other's PgSQL_Thread objects, so no
+	// PgSQL_Thread may be destroyed until all of them have left run()
+	GloPTH->wait_for_all_threads_to_exit_run_loop();
 	//delete worker;
 	delete worker;
 	//	l_mem_destroy(__thr_sfp);

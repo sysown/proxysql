@@ -1029,6 +1029,7 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 #endif // IDLE_THREADS
 	stacksize = 0;
 	shutdown_ = 0;
+	threads_exited_run_loop.store(0, std::memory_order_relaxed);
 	bootstrapping_listeners = true;
 	pthread_rwlock_init(&rwlock, NULL);
 	pthread_attr_init(&attr);
@@ -2517,9 +2518,13 @@ void PgSQL_Threads_Handler::shutdown_threads() {
 		if (GloVars.global.idle_threads) {
 			for (i = 0; i < num_threads; i++) {
 				if (pgsql_threads_idles[i].worker) {
-					pthread_mutex_lock(&pgsql_threads[i].worker->thread_mutex);
+					// the guard above tests the idle thread, so the lock must be
+					// taken on the idle thread too: pgsql_threads[i].worker can
+					// legitimately be NULL here (see signal_all_threads(), which
+					// explicitly tolerates not-yet-ready worker slots).
+					pthread_mutex_lock(&pgsql_threads_idles[i].worker->thread_mutex);
 					pgsql_threads_idles[i].worker->shutdown = 1;
-					pthread_mutex_unlock(&pgsql_threads[i].worker->thread_mutex);
+					pthread_mutex_unlock(&pgsql_threads_idles[i].worker->thread_mutex);
 				}
 			}
 		}
@@ -2535,6 +2540,19 @@ void PgSQL_Threads_Handler::shutdown_threads() {
 			}
 #endif /* IDLE_THREADS */
 		}
+	}
+}
+
+void PgSQL_Threads_Handler::wait_for_all_threads_to_exit_run_loop() {
+	unsigned int expected = num_threads;
+#ifdef IDLE_THREADS
+	if (GloVars.global.idle_threads) {
+		expected += num_threads;
+	}
+#endif /* IDLE_THREADS */
+	threads_exited_run_loop.fetch_add(1, std::memory_order_acq_rel);
+	while (threads_exited_run_loop.load(std::memory_order_acquire) < expected) {
+		usleep(50);
 	}
 }
 

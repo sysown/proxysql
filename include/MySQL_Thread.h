@@ -421,6 +421,8 @@ class MySQL_Threads_Handler
 {
 	private:
 	int shutdown_;
+	/// @brief Number of worker + idle threads that already left MySQL_Thread::run().
+	std::atomic<unsigned int> threads_exited_run_loop;
 	size_t stacksize;
 	pthread_attr_t attr;
 	pthread_rwlock_t rwlock;
@@ -846,6 +848,33 @@ class MySQL_Threads_Handler
 	void init(unsigned int num=0, size_t stack=0);
 	proxysql_mysql_thread_t *create_thread(unsigned int tn, void *(*start_routine) (void *), bool);
 	void shutdown_threads();
+	/**
+	 * @brief Rendezvous for all worker and idle threads before they self-delete.
+	 *
+	 * Worker and idle threads dereference each other's MySQL_Thread objects:
+	 * MySQL_Thread::run_MoveSessionsBetweenThreads() reads
+	 * mysql_threads_idles[rand()].worker, and the idle branch of
+	 * MySQL_Thread::run() reads mysql_threads[rand()].worker and then locks that
+	 * worker's myexchange mutex unconditionally. Because the peer is picked at
+	 * random and both directions exist, no pthread_join() ordering in
+	 * shutdown_threads() can make self-deletion safe -- each thread destroys its
+	 * own MySQL_Thread from its own thread function, which pthread_join() only
+	 * observes after the fact.
+	 *
+	 * Destruction must nevertheless stay on the owning thread, because
+	 * ~MySQL_Thread() frees __thread variables (mysql_thread___*) and calls
+	 * GloMyQPro->end_thread().
+	 *
+	 * Every worker and idle thread therefore calls this right after
+	 * MySQL_Thread::run() returns and before deleting its own MySQL_Thread. It
+	 * returns only once all of them have left run(), so no MySQL_Thread is ever
+	 * freed while another thread may still reach into it.
+	 *
+	 * @note The wait is unbounded, but adds no new liveness requirement:
+	 *   shutdown_threads() already pthread_join()s every one of these threads,
+	 *   and leaving run() strictly precedes the thread exit that join waits for.
+	 */
+	void wait_for_all_threads_to_exit_run_loop();
 	int listener_add(const char *iface);
 	int listener_add(const char *address, int port);
 	int listener_del(const char *iface);
