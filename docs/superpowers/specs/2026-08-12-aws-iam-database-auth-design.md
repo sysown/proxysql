@@ -397,3 +397,42 @@ Rollout should begin with a dedicated canary user and hostgroup. Password users 
 ## Acceptance criteria
 
 The feature is complete when an IAM-enabled ProxySQL build can use its process AWS identity to open a certificate-verified RDS/Aurora MySQL connection for an opted-in backend user, without storing a database password; ordinary password users and SDK-free builds remain unchanged; MySQL workers do not block on AWS credential work; token material is bounded, ephemeral, redacted, and cleansed; pool/reset/error behavior matches this specification; and the build, unit, protocol, regression, sanitizer, and opt-in AWS integration coverage described above is present.
+
+## Implementation verification
+
+The following evidence maps the acceptance criteria to focused tests, the
+`CI-AWS-IAM` jobs, and the operator guide. The CI workflow uses no AWS
+credentials except in its manually dispatched, protected integration
+environment.
+
+| Acceptance criterion | Focused evidence | CI job | Operator guidance |
+|---|---|---|---|
+| Optional AWS SDK 1.9+ discovery, SDK-free compatibility, exact missing-SDK failure, and `core`/`rds`-only release linkage | `test/infra/control/check-aws-iam-build-gate.bash` and `check-aws-iam-linkage-test.bash` | `sdk-free-build`, `aws-enabled-system-sdk-build`, `missing-sdk-diagnostic`; release packaging remains blocked by the openSUSE notice audit described below | [Build and package the feature](../../../doc/aws_iam_database_authentication.md#build-and-package-the-feature) |
+| Per-backend-user opt-in, split frontend/backend rows, explicit hostgroup region, real endpoint, and fail-closed TLS configuration | `aws_iam_policy_unit-t`, `aws_iam_connection_config_unit-t`, and `test_mysql_hostgroup_attributes-1-t` | focused unit/regression coverage; `sdk-free-build` proves the default build remains independent | [Configure ProxySQL](../../../doc/aws_iam_database_authentication.md#configure-proxysql) |
+| Standard process credential chain and one process AWS identity, with no stored backend password or password fallback | `aws_iam_connection_secret_unit-t` and `aws_iam_failure_unit-t` | `fake-provider-sanitizers`; protected real-AWS runner contract | [Give the ProxySQL workload permission](../../../doc/aws_iam_database_authentication.md#give-the-proxysql-workload-permission) |
+| Worker threads do not block on credential work; token generations are bounded, cached, coalesced, cancelable, and shut down safely | `aws_iam_token_manager_unit-t`, `aws_iam_completion_queue_unit-t`, and `aws_iam_session_state_unit-t` | `fake-provider-sanitizers` under ASan and TSan | [Verify and roll out](../../../doc/aws_iam_database_authentication.md#verify-and-roll-out) |
+| Token transmission occurs only after certificate and hostname verification, uses `mysql_clear_password`, supports large tokens, and cleanses transient owners | `test_aws_iam_backend_auth-t`, `mariadb_tls_server_name_unit-t`, and `aws_iam_connection_secret_unit-t` | controlled TLS/protocol step in `sdk-free-build`, plus `fake-provider-sanitizers` | [Prepare the database and trust store](../../../doc/aws_iam_database_authentication.md#prepare-the-database-and-trust-store) |
+| Pool identity, reset, change-user, runtime policy changes, query-kill/connection-kill, and established-connection reuse obey IAM boundaries | `aws_iam_pool_unit-t`, `connection_pool_unit-t`, and `aws_iam_kill_helper_unit-t` | focused unit/regression matrix in Task 13 | [Roll back](../../../doc/aws_iam_database_authentication.md#roll-back) |
+| One generation-conditional retry after initial IAM `1045`, generic client failures, redacted operator diagnostics, and clock-skew hint | `aws_iam_failure_unit-t` and `aws_iam_kill_helper_unit-t` | focused unit/regression matrix in Task 13 | [Verify and roll out](../../../doc/aws_iam_database_authentication.md#verify-and-roll-out) |
+| Fixed label-free statistics and Prometheus monitoring API, including the SDK-off zero shape | `test_aws_iam_metrics-t`, `test_passthrough_auth_metrics-t`, and `test_prometheus_metrics-t` | focused metrics/regression matrix in Task 13 | [Verify and roll out](../../../doc/aws_iam_database_authentication.md#verify-and-roll-out) |
+| User policy and hostgroup region persist and cluster-sync without token persistence | IAM assertions in `test_cluster_sync-t` and configuration round-trip unit coverage | standard regression infrastructure outside this focused workflow | [Scope and non-goals](../../../doc/aws_iam_database_authentication.md#scope-and-non-goals) |
+| A real IAM-enabled RDS/Aurora MySQL endpoint validates success, denial, nonexistent user, wrong region, credential rotation, refresh, and the Amazon RDS CA | externally provisioned real-AWS integration runner; ordinary controlled tests make no real-AWS claim | manually dispatched `real-aws-preflight` plus labeled self-hosted `real-aws-integration`; absent config skips, partial config fails, and a missing matching runner remains visibly queued by GitHub | [Optional real-AWS CI contract](../../../doc/aws_iam_database_authentication.md#optional-real-aws-ci-contract) |
+
+Implementation reports for Tasks 1–11 record the exact local TAP assertion
+counts, sanitizer runs, controlled TLS transcript checks, daemon monitoring
+checks, and build limitations. This development host has no real AWS SDK,
+credentials, or RDS endpoint, so SDK-on compilation/linkage and real-RDS
+behavior are not claimed as local verification.
+
+The feature-on CI job uses a digest-pinned openSUSE Tumbleweed container and
+installs AWS SDK for C++ from the openSUSE Cloud:Tools repository. The current
+RPM spec builds shared SDK libraries but its `libs` and `devel` file manifests
+own no upstream `LICENSE.txt` or `NOTICE.txt`. The
+`aws-enabled-system-sdk-build` job must reach exactly that strict
+package-notice failure after all version/linkage checks pass, records a
+release-blocking warning in the job summary, and fails hard for any earlier
+linkage, version, or unrelated-service error. Consequently the system-SDK
+build contract is present, while the release-package acceptance criterion
+remains unsatisfied until a system package with owned upstream
+`LICENSE.txt` and `NOTICE.txt` is selected. The checker is not bypassed and
+the openSUSE artifact is not release-qualified.

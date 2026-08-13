@@ -1,0 +1,267 @@
+name: CI-AWS-IAM
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/CI-aws-iam.yml'
+      - 'cmake/aws-sdk-cpp/**'
+      - 'common_mk/aws_sdk_cpp_flags.mk'
+      - 'include/Aws_Iam_*'
+      - 'lib/Aws_Iam_*'
+      - 'test/infra/control/check-aws-iam-*'
+      - 'test/tap/tests/**aws_iam**'
+      - 'doc/aws_iam_database_authentication.md'
+  push:
+    branches: [v3.0]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sdk-free-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          submodules: 'false'
+      - name: Build without AWS SDK
+        run: PROXYSQL40=1 make -j
+      - name: Exercise linkage checker behavior
+        run: bash test/infra/control/check-aws-iam-linkage-test.bash
+      - name: Require SDK-free binary rejection
+        run: |
+          if test/infra/control/check-aws-iam-linkage.bash src/proxysql; then
+            echo 'SDK-free binary unexpectedly passed the IAM linkage check' >&2
+            exit 1
+          fi
+          if ldd src/proxysql | rg 'aws-cpp-sdk'; then
+            echo 'SDK-free binary unexpectedly links an AWS SDK library' >&2
+            exit 1
+          fi
+      - name: Build and run controlled TLS/protocol coverage
+        run: |
+          PROXYSQL40=1 make -C test/tap/tests -j test_aws_iam_backend_auth-t
+          timeout 45s test/tap/tests/test_aws_iam_backend_auth-t
+
+  aws-enabled-system-sdk-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          submodules: 'false'
+      - name: Build with openSUSE system AWS SDK and inspect linkage
+        run: |
+          docker run --rm \
+            --volume "$PWD:/workspace" \
+            --workdir /workspace \
+            opensuse/tumbleweed@sha256:d122808f25124269755da7ef7bbb6df282d032e2f35c32cc09447e2300f70ea7 \
+            bash -euxo pipefail -c '
+              zypper --non-interactive addrepo --refresh --check \
+                https://download.opensuse.org/repositories/Cloud:/Tools/openSUSE_Tumbleweed/ \
+                cloud-tools
+              zypper --non-interactive --gpg-auto-import-keys refresh
+              zypper --non-interactive install --no-recommends \
+                aws-sdk-cpp-devel automake bash binutils bzip2 cmake file \
+                flex gcc gcc-c++ git gnutls gnutls-devel libevent-devel \
+                libicu-devel libtirpc-devel libunwind libunwind-devel \
+                libuuid-devel make ncurses-devel openssl openssl-devel \
+                patch perl-FindBin perl-IPC-Cmd perl-Time-Piece pkg-config \
+                python3 rpcgen zlib-devel
+              PROXYSQLAWSIAM=1 PROXYSQL40=1 make -j
+              set +e
+              audit_output=$(test/infra/control/check-aws-iam-linkage.bash src/proxysql 2>&1)
+              audit_status=$?
+              set -e
+              printf "%s\n%s\n" "$audit_status" "$audit_output" \
+                >.aws-iam-linkage-audit
+            '
+      - name: Audit release package notices
+        shell: bash
+        run: |
+          trap 'rm -f -- .aws-iam-linkage-audit' EXIT
+          if [[ ! -f .aws-iam-linkage-audit ]]; then
+            echo 'AWS IAM linkage audit result is unavailable' >&2
+            exit 1
+          fi
+          audit_status=$(sed -n '1p' .aws-iam-linkage-audit)
+          audit_output=$(sed -n '2,$p' .aws-iam-linkage-audit)
+          expected='AWS IAM linkage check failed: package-owned Apache-2.0 LICENSE and NOTICE material was not found'
+          if [[ $audit_status != 1 || $audit_output != "$expected" ]]; then
+            printf '%s\n' "$audit_output" >&2
+            echo 'openSUSE system-SDK build failed before the known package-notice policy gate' >&2
+            exit 1
+          fi
+          echo '::warning title=AWS IAM release packaging blocked::The openSUSE Cloud:Tools package provides the shared SDK, but owns no upstream LICENSE/NOTICE files.'
+          {
+            echo '### AWS IAM release packaging: blocked'
+            echo
+            echo 'The shared system-SDK build passed version and core/rds-only linkage inspection.'
+            echo 'The openSUSE Cloud:Tools package does not own the required upstream LICENSE/NOTICE material, so this build is not release-qualified.'
+          } >>"$GITHUB_STEP_SUMMARY"
+      - name: Restore checkout ownership
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" "$PWD"
+
+  missing-sdk-diagnostic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          submodules: 'false'
+      - name: Require exact missing-SDK failure
+        run: |
+          missing_root=$(mktemp -d)
+          trap 'rm -rf -- "$missing_root"' EXIT
+          if AWS_SDK_CPP_ROOT="$missing_root" PROXYSQLAWSIAM=1 PROXYSQL40=1 \
+              make -j build_src >missing-sdk.log 2>&1; then
+            echo 'IAM build unexpectedly accepted an empty SDK prefix' >&2
+            exit 1
+          fi
+          expected='AWS SDK for C++ 1.9 or newer with core and rds is required'
+          if ! rg -F "$expected" missing-sdk.log >/dev/null; then
+            echo 'IAM build did not emit the required missing-SDK diagnostic' >&2
+            exit 1
+          fi
+
+  fake-provider-sanitizers:
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [asan, tsan]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          submodules: 'false'
+      - name: Relax ASLR for sanitizers
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+      - name: Build ASan fake-provider tests
+        if: matrix.sanitizer == 'asan'
+        run: |
+          NOJEMALLOC=1 WITHASAN=1 PROXYSQL40=1 make -j build_lib_debug
+          NOJEMALLOC=1 WITHASAN=1 PROXYSQL40=1 make -C test/tap/tests/unit -j \
+            aws_iam_token_manager_unit-t aws_iam_connection_secret_unit-t \
+            aws_iam_completion_queue_unit-t aws_iam_session_state_unit-t
+      - name: Run ASan fake-provider tests
+        if: matrix.sanitizer == 'asan'
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+        run: |
+          test/tap/tests/unit/aws_iam_token_manager_unit-t
+          test/tap/tests/unit/aws_iam_connection_secret_unit-t
+          test/tap/tests/unit/aws_iam_completion_queue_unit-t
+          test/tap/tests/unit/aws_iam_session_state_unit-t
+      - name: Build TSan fake-provider tests
+        if: matrix.sanitizer == 'tsan'
+        run: |
+          NOJEMALLOC=1 WITHTSAN=1 PROXYSQL40=1 make -j build_lib_debug
+          NOJEMALLOC=1 WITHTSAN=1 PROXYSQL40=1 make -C test/tap/tests/unit -j \
+            aws_iam_token_manager_unit-t aws_iam_completion_queue_unit-t \
+            aws_iam_session_state_unit-t
+      - name: Run TSan fake-provider tests
+        if: matrix.sanitizer == 'tsan'
+        env:
+          TSAN_OPTIONS: halt_on_error=1
+        run: |
+          test/tap/tests/unit/aws_iam_token_manager_unit-t
+          test/tap/tests/unit/aws_iam_completion_queue_unit-t
+          test/tap/tests/unit/aws_iam_session_state_unit-t
+
+  real-aws-preflight:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: aws-iam-integration
+    outputs:
+      configured: ${{ steps.integration-config.outputs.configured }}
+    env:
+      AWS_IAM_ROLE_ARN: ${{ secrets.AWS_IAM_ROLE_ARN }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      RDS_ENDPOINT: ${{ secrets.RDS_ENDPOINT }}
+      RDS_PORT: ${{ secrets.RDS_PORT }}
+      RDS_DB_USER: ${{ secrets.RDS_DB_USER }}
+      RDS_CA_FILE: ${{ secrets.RDS_CA_FILE }}
+      AWS_IAM_INTEGRATION_RUNNER: ${{ secrets.AWS_IAM_INTEGRATION_RUNNER }}
+    steps:
+      - name: Check protected integration contract
+        id: integration-config
+        shell: bash
+        run: |
+          integration_present=false
+          integration_missing=false
+          for name in AWS_IAM_ROLE_ARN AWS_REGION RDS_ENDPOINT RDS_PORT \
+              RDS_DB_USER RDS_CA_FILE AWS_IAM_INTEGRATION_RUNNER; do
+            if [[ -n ${!name:-} ]]; then
+              integration_present=true
+            else
+              integration_missing=true
+            fi
+          done
+          if [[ $integration_present == false ]]; then
+            echo 'configured=false' >>"$GITHUB_OUTPUT"
+            echo 'Real AWS IAM integration skipped: protected environment configuration is absent.'
+            exit 0
+          fi
+          if [[ $integration_missing == true ]]; then
+            echo 'Real AWS IAM integration unavailable: protected environment configuration is partial.' >&2
+            exit 1
+          fi
+          echo 'configured=true' >>"$GITHUB_OUTPUT"
+
+  real-aws-integration:
+    needs: real-aws-preflight
+    if: needs.real-aws-preflight.outputs.configured == 'true'
+    runs-on: [self-hosted, linux, x64, aws-iam-integration]
+    timeout-minutes: 90
+    environment: aws-iam-integration
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_IAM_ROLE_ARN: ${{ secrets.AWS_IAM_ROLE_ARN }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      RDS_ENDPOINT: ${{ secrets.RDS_ENDPOINT }}
+      RDS_PORT: ${{ secrets.RDS_PORT }}
+      RDS_DB_USER: ${{ secrets.RDS_DB_USER }}
+      RDS_CA_FILE: ${{ secrets.RDS_CA_FILE }}
+      AWS_IAM_INTEGRATION_RUNNER: ${{ secrets.AWS_IAM_INTEGRATION_RUNNER }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          submodules: 'false'
+      - name: Require external real-RDS runner
+        run: |
+          if [[ $AWS_IAM_INTEGRATION_RUNNER != /* || \
+                ! -x $AWS_IAM_INTEGRATION_RUNNER ]]; then
+            echo 'Real AWS IAM integration unavailable: configured external runner is not an executable absolute path.' >&2
+            exit 1
+          fi
+          if [[ $RDS_CA_FILE != /* || ! -f $RDS_CA_FILE || \
+                ! -r $RDS_CA_FILE ]]; then
+            echo 'Real AWS IAM integration unavailable: configured RDS CA is not a readable absolute file.' >&2
+            exit 1
+          fi
+      - name: Configure temporary AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@acca2b1b2070338fb9fd1ca27ecee81d687e58e5 # v6.1.2
+        with:
+          role-to-assume: ${{ secrets.AWS_IAM_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          mask-aws-account-id: true
+      - name: Run externally provisioned real-RDS suite
+        env:
+          RUN_AWS_IAM_INTEGRATION: '1'
+        run: '"$AWS_IAM_INTEGRATION_RUNNER"'
