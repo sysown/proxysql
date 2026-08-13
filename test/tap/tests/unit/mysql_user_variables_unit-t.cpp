@@ -173,6 +173,25 @@ void test_replay_completion_decisions() {
 		out_of_range_backend.size() == 0,
 		"out-of-range replay batch fails without applying state");
 
+	MySQL_User_Variable_State near_limit_actual;
+	MySQL_User_Variable_State near_limit_desired;
+	const std::string near_limit_literal(
+		MySQL_User_Variable_State::MAX_STORED_BYTES - std::string("@z").size(), 'x');
+	ok(stage_and_apply(near_limit_actual, {
+		assignment("z", "@z", near_limit_literal)
+	}) && stage_and_apply(near_limit_desired, {
+		assignment("a", "@a", "1"), assignment("z", "@z", "0")
+	}), "replay overflow fixture stages final desired and near-limit backend states");
+	const auto transient_overflow_plan = near_limit_desired.build_replay_plan(
+		near_limit_actual, MySQL_User_Variable_State::MAX_STORED_BYTES);
+	const MySQL_User_Variable_State near_limit_before = near_limit_actual;
+	completion = mysql_user_variable_replay_complete(
+		near_limit_actual, transient_overflow_plan.batches, 0, true);
+	not_matching = 0;
+	ok(completion == MySQL_User_Variable_Replay_Completion::FAIL_CLIENT_QUERY_AND_RETIRE_BACKEND &&
+		near_limit_actual.count_matches(near_limit_before, not_matching) == 1 && not_matching == 0,
+		"replay retires a backend when a batch cannot update tracked metadata atomically");
+
 	const auto unknown_budget = mysql_user_variable_replay_packet_budget(0, 5);
 	ok(unknown_budget.status == MySQL_User_Variable_Replay_Packet_Budget_Status::FALLBACK_TO_SERVER_MINIMUM &&
 		unknown_budget.max_query_bytes == 1019,
@@ -345,7 +364,7 @@ void test_replay_error_code_policy() {
 } // namespace
 
 int main() {
-	plan(71);
+	plan(73);
 	test_staging_and_limits();
 	test_collision_safe_comparison();
 	test_replay_planning();

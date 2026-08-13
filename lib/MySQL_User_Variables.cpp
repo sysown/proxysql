@@ -99,7 +99,7 @@ MySQL_User_Variable_Apply_Result MySQL_User_Variable_State::stage(
 		candidate.stored_bytes_ = bytes_after_removal + replacement_bytes;
 		candidate.entries_[assignment.canonical_name] = replacement;
 	}
-	staged = candidate;
+	staged = std::move(candidate);
 	return MySQL_User_Variable_Apply_Result::OK;
 }
 
@@ -188,7 +188,12 @@ MySQL_User_Variable_Replay_Completion mysql_user_variable_replay_complete(
 		return MySQL_User_Variable_Replay_Completion::FAIL_CLIENT_QUERY_AND_RETIRE_BACKEND;
 	}
 
-	backend.apply(batches[batch_index].assignments);
+	MySQL_User_Variable_State staged;
+	if (backend.stage(batches[batch_index].assignments, staged) !=
+		MySQL_User_Variable_Apply_Result::OK) {
+		return MySQL_User_Variable_Replay_Completion::FAIL_CLIENT_QUERY_AND_RETIRE_BACKEND;
+	}
+	backend = std::move(staged);
 	return batch_index + 1 < batches.size()
 		? MySQL_User_Variable_Replay_Completion::CONTINUE_SETTING_USER_VARIABLES
 		: MySQL_User_Variable_Replay_Completion::RESUME_SAVED_STATUS;

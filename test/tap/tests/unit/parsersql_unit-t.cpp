@@ -428,6 +428,7 @@ static void test_user_variable_rejections() {
 		{"SET @x='unterminated", UserVariableSetStatus::PARSE_ERROR},
 		{"SET @x=1e+", UserVariableSetStatus::PARSE_ERROR},
 		{"SET @bad-name=1", UserVariableSetStatus::PARSE_ERROR},
+		{"SET @'\xC3\x84'=1", UserVariableSetStatus::UNSUPPORTED},
 		{"SET @x=(1", UserVariableSetStatus::PARSE_ERROR},
 		{"SET @x=1 /* unterminated", UserVariableSetStatus::PARSE_ERROR},
 	};
@@ -790,7 +791,7 @@ static void test_user_variable_replay_context() {
 }
 
 int main() {
-	plan(199);
+	plan(200);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 

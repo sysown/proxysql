@@ -7464,15 +7464,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				return false;
 			}
 			case UserVariableSetStatus::UNSUPPORTED:
-				thread->status_variables.stvar[st_var_user_variable_fallback_unsupported]++;
-				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,
-					"User-variable SET tracking fallback reason=UNSUPPORTED_AST\n");
-				current_query_user_variable_unsafe_fallback = true;
-				unable_to_parse_set_statement(lock_hostgroup);
-				if (mysql_user_variable_fallback_uses_qpo_epilogue(true, false)) {
-					goto __exit_set_destination_hostgroup;
-				}
-				return false;
 			case UserVariableSetStatus::PARSE_ERROR:
 				thread->status_variables.stvar[st_var_user_variable_fallback_unsupported]++;
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,

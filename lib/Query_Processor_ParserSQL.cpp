@@ -591,6 +591,13 @@ static std::string lowercase_ascii(StringRef ref) {
     return value;
 }
 
+static bool is_ascii(StringRef ref) {
+    for (size_t i = 0; i < ref.len; ++i) {
+        if (static_cast<unsigned char>(ref.ptr[i]) > 0x7f) return false;
+    }
+    return true;
+}
+
 static void append_length(std::string& tuple, size_t length) {
     uint64_t value = static_cast<uint64_t>(length);
     for (unsigned int shift = 0; shift < 64; shift += 8) {
@@ -728,6 +735,12 @@ UserVariableSetAnalysis parsersql_analyze_user_variable_set_mysql(
         if (!supported_user_variable_rhs(rhs, kind)) {
             analysis.status = UserVariableSetStatus::UNSUPPORTED;
             tl_mysql_parser.reset();
+            return analysis;
+        }
+
+        if (!is_ascii(variable->value())) {
+            analysis.status = UserVariableSetStatus::UNSUPPORTED;
+            analysis.assignments.clear();
             return analysis;
         }
 
