@@ -4501,7 +4501,11 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			(query_no_space_length==sizeof("CHECKSUM MEM MYSQL AURORA HOSTGROUPS") - 1 && !strncasecmp("CHECKSUM MEM MYSQL AURORA HOSTGROUPS", query_no_space, query_no_space_length))
 			||
 			(query_no_space_length==sizeof("CHECKSUM MYSQL AURORA HOSTGROUPS") - 1 && !strncasecmp("CHECKSUM MYSQL AURORA HOSTGROUPS", query_no_space, query_no_space_length))){
-			char *q=(char *)"SELECT * FROM mysql_aws_aurora_hostgroups ORDER BY writer_hostgroup";
+			char *q=(char *)
+				"SELECT writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,"
+				"aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,"
+				"new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,autopurge_missing_checks,comment "
+				"FROM mysql_aws_aurora_hostgroups ORDER BY writer_hostgroup";
 			tablename=(char *)"MYSQL AURORA HOSTGROUPS";
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
