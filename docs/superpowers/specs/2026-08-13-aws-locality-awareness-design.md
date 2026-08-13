@@ -537,7 +537,7 @@ last_error_category
 Definitions:
 
 - `endpoint_type`: `instance`, `cluster`, `reader`, `custom`, or `unknown`;
-- `account_match`: `yes`, `no`, `unknown`, or `not_applicable`;
+- `account_match`: `same`, `different`, or `unknown`;
 - `locality`: `same_az`, `same_region`, `remote`, or `unknown`;
 - `active_multiplier`: the multiplier currently affecting selection, otherwise
   `1.0`;
