@@ -896,6 +896,17 @@ public:
 	PgSQL_SrvC *parent;
 	PgSQL_Connection_userinfo* userinfo;
 	PgSQL_Data_Stream* myds;
+
+	// Native backend TLS. Owned by the connection so it shares the lifetime of
+	// `fd`, which the native path also owns; the data stream is per-session and
+	// would take the TLS session with it when the connection is pooled.
+	//
+	// SSL_set_bio() transfers both BIOs to the SSL, so SSL_free() releases all
+	// three -- done only in native_teardown() and ~PgSQL_Connection(), never on a
+	// pool return. myds->ssl stays NULL in native mode.
+	SSL* native_ssl  = nullptr;
+	BIO* native_rbio = nullptr;
+	BIO* native_wbio = nullptr;
 	//unsigned int warning_count;
 	int fd;
 	/**

@@ -257,6 +257,17 @@ PgSQL_Connection::~PgSQL_Connection() {
 			::close(fd);
 			fd = -1;
 		}
+		// The TLS session is owned by this connection (see PgSQL_Connection.h), so it
+		// must be released here as well as in native_teardown(): a pooled connection
+		// evicted by destroy_MyConn_from_pool() is `delete`d WITHOUT going through
+		// teardown, and would otherwise leak the SSL and both its BIOs. SSL_free()
+		// releases the BIOs too (SSL_set_bio transferred them).
+		if (native_ssl) {
+			SSL_free(native_ssl);
+			native_ssl  = nullptr;
+			native_rbio = nullptr;
+			native_wbio = nullptr;
+		}
 		// native_ssl_ctx is normally freed at SSL_new() time (the SSL holds a ref) or
 		// in native_teardown(); free here as a safety net if a connection is destroyed
 		// before either ran. The SSL* itself lives on myds and is freed by ~PgSQL_Data_Stream().
@@ -412,6 +423,26 @@ handler_again:
 			assert(0); // shouldn't ever reach here, we have messed up the state machine
 		
 		if (get_pg_ssl_in_use()) {
+			if (native_mode && myds && myds->sess && myds->sess->session_fast_forward) {
+				// fast_forward relays raw bytes and wants the backend SSL on the data
+				// stream. Handing it ours is not fatal -- detach_connection() nulls
+				// myds->ssl for fast_forward without freeing it (a deliberate
+				// borrowed-pointer design), so there is no double free -- but the
+				// block below calls SSL_set_bio(), which REPLACES and frees the BIOs
+				// this connection still holds pointers to, leaving native_rbio /
+				// native_wbio dangling.
+				//
+				// MEASURED: with this guard disabled, 10 native fast_forward TLS
+				// sessions produced no crash, no assert and no double free; the
+				// queries failed either way. fast_forward + backend TLS is broken for
+				// BOTH the native and libpq paths (verified: libpq fails identically),
+				// so this guard changes no user-visible outcome. It is kept only so
+				// the connection is never left holding freed BIO pointers; the
+				// fallback also routes the session to libpq, which is the path that
+				// owns this combination.
+				native_capability_gap("fast_forward with native TLS");
+				return async_state_machine;
+			}
 			if (myds && myds->sess && myds->sess->session_fast_forward) {
 				assert(myds->ssl == NULL);
 				SSL* ssl_obj = get_pg_ssl_object();
@@ -1415,13 +1446,13 @@ bool PgSQL_Connection::native_ssl_pump_wbio_to_fd(bool& would_block) {
 	// First, pull any freshly produced ciphertext out of wbio into native_ssl_outbuf.
 	char buf[MY_SSL_BUFFER];
 	for (;;) {
-		int n = BIO_read(myds->wbio_ssl, buf, sizeof(buf));
+		int n = BIO_read(native_wbio, buf, sizeof(buf));
 		if (n > 0) {
 			native_ssl_outbuf.append(buf, (size_t)n);
 			continue;
 		}
 		// No more bytes pending; BIO_should_retry distinguishes empty from error.
-		if (!BIO_should_retry(myds->wbio_ssl)) {
+		if (!BIO_should_retry(native_wbio)) {
 			// For a mem BIO an "empty" read also returns !should_retry; that is normal.
 		}
 		break;
@@ -1448,7 +1479,7 @@ bool PgSQL_Connection::native_ssl_pump_wbio_to_fd(bool& would_block) {
 bool PgSQL_Connection::native_flush_outbuf() {
 	// Encrypted path: native_outbuf holds *plaintext* protocol bytes. Feed them to
 	// SSL_write, which produces ciphertext into wbio_ssl, then drain wbio to the fd.
-	if (myds && myds->encrypted && myds->ssl) {
+	if (native_ssl != nullptr) {
 		// If there is leftover ciphertext from a previous partial socket write, flush
 		// it first before producing more (preserves ordering).
 		if (!native_ssl_outbuf.empty()) {
@@ -1458,7 +1489,7 @@ bool PgSQL_Connection::native_flush_outbuf() {
 		}
 		while (!native_outbuf.empty()) {
 			ERR_clear_error();
-			int w = SSL_write(myds->ssl, native_outbuf.data(), (int)native_outbuf.size());
+			int w = SSL_write(native_ssl, native_outbuf.data(), (int)native_outbuf.size());
 			if (w > 0) {
 				native_outbuf.erase(0, (size_t)w);
 				bool wb = false;
@@ -1466,7 +1497,7 @@ bool PgSQL_Connection::native_flush_outbuf() {
 				if (wb) return true; // socket full; remaining plaintext stays buffered
 				continue;
 			}
-			int err = SSL_get_error(myds->ssl, w);
+			int err = SSL_get_error(native_ssl, w);
 			if (err == SSL_ERROR_WANT_WRITE || err == SSL_ERROR_WANT_READ) {
 				// SSL needs to do I/O before it can accept more plaintext. Drain
 				// whatever ciphertext it produced and wait for the socket.
@@ -1515,9 +1546,21 @@ void PgSQL_Connection::native_teardown() {
 	native_framer.reset();
 	native_outbuf.clear();
 	native_ssl_outbuf.clear();
-	// The SSL object (if any) lives on myds and is freed by ~PgSQL_Data_Stream();
-	// it uses mem BIOs so SSL_free()'s shutdown writes harmlessly into a mem buffer
-	// even though the fd is now closed. We only own the per-connection SSL_CTX here.
+	// The TLS session belongs to this connection (see PgSQL_Connection.h), so we
+	// free it here. SSL_set_bio() transferred both BIOs to the SSL, so SSL_free()
+	// releases all three; freeing the BIOs separately would be a double free. It
+	// uses mem BIOs, so SSL_free()'s shutdown writes harmlessly into a mem buffer
+	// even though the fd is already closed.
+	//
+	// This runs only on REAL teardown. A pool return must never reach here -- that
+	// was precisely finding A7, where the TLS context was destroyed while the
+	// socket stayed open and pooled.
+	if (native_ssl) {
+		SSL_free(native_ssl);
+		native_ssl  = nullptr;
+		native_rbio = nullptr;
+		native_wbio = nullptr;
+	}
 	if (native_ssl_ctx) {
 		SSL_CTX_free(native_ssl_ctx);
 		native_ssl_ctx = nullptr;
@@ -1528,12 +1571,12 @@ void PgSQL_Connection::native_teardown() {
 // type at the header's accessor declarations. Native TLS reports SSL-in-use once the
 // handshake handed the SSL* to myds; the libpq path defers to PQsslInUse().
 int PgSQL_Connection::get_pg_ssl_in_use() {
-	if (native_mode) return (myds && myds->encrypted && myds->ssl) ? 1 : 0;
+	if (native_mode) return (native_ssl != nullptr) ? 1 : 0;
 	return PQsslInUse(pgsql_conn);
 }
 
 SSL* PgSQL_Connection::get_pg_ssl_object() {
-	if (native_mode) return (myds && myds->encrypted) ? myds->ssl : nullptr;
+	if (native_mode) return native_ssl;
 	return (SSL*)PQsslStruct(pgsql_conn, "OpenSSL");
 }
 
@@ -1715,8 +1758,8 @@ void PgSQL_Connection::native_connect_cont(short event) {
 				native_teardown();
 				return;
 			}
-			myds->ssl = SSL_new(native_ssl_ctx);
-			if (myds->ssl == nullptr) {
+			native_ssl = SSL_new(native_ssl_ctx);
+			if (native_ssl == nullptr) {
 				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "SSL_new() failed", false);
 				native_teardown();
 				return;
@@ -1726,11 +1769,11 @@ void PgSQL_Connection::native_connect_cont(short event) {
 			SSL_CTX_free(native_ssl_ctx);
 			native_ssl_ctx = nullptr;
 
-			SSL_set_connect_state(myds->ssl); // client role
+			SSL_set_connect_state(native_ssl); // client role
 			// verify-full: enforce hostname verification at the TLS layer.
 			if (native_ssl_mode == PG_Native_SSL_Mode::VERIFY_FULL) {
 				const char* host = (parent->address && parent->address[0]) ? parent->address : native_host.c_str();
-				X509_VERIFY_PARAM* vp = SSL_get0_param(myds->ssl);
+				X509_VERIFY_PARAM* vp = SSL_get0_param(native_ssl);
 				X509_VERIFY_PARAM_set_hostflags(vp, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
 				if (X509_VERIFY_PARAM_set1_host(vp, host, 0) != 1) {
 					set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "failed to set TLS verify host", false);
@@ -1740,17 +1783,23 @@ void PgSQL_Connection::native_connect_cont(short event) {
 			}
 			// SNI: present the backend hostname (best-effort; ignored for IP literals).
 			if (parent->address && parent->address[0]) {
-				SSL_set_tlsext_host_name(myds->ssl, parent->address);
+				SSL_set_tlsext_host_name(native_ssl, parent->address);
 			}
-			myds->encrypted = true;
-			myds->rbio_ssl = BIO_new(BIO_s_mem());
-			myds->wbio_ssl = BIO_new(BIO_s_mem());
-			if (myds->rbio_ssl == nullptr || myds->wbio_ssl == nullptr) {
+			native_rbio = BIO_new(BIO_s_mem());
+			native_wbio = BIO_new(BIO_s_mem());
+			if (native_rbio == nullptr || native_wbio == nullptr) {
 				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_OUT_OF_MEMORY), "BIO_new() failed", false);
+				// Free them HERE, not via native_teardown(). Ownership passes to the
+				// SSL only at SSL_set_bio() below, which has not run yet -- so
+				// teardown's SSL_free(native_ssl) would not release them and the one
+				// that DID allocate would leak. Teardown nulls the pointers, so it
+				// cannot clean up after us either.
+				if (native_rbio) { BIO_free(native_rbio); native_rbio = nullptr; }
+				if (native_wbio) { BIO_free(native_wbio); native_wbio = nullptr; }
 				native_teardown();
 				return;
 			}
-			SSL_set_bio(myds->ssl, myds->rbio_ssl, myds->wbio_ssl);
+			SSL_set_bio(native_ssl, native_rbio, native_wbio);
 			native_st = PG_Native_Conn_St::SSL_HANDSHAKE;
 			// Kick the handshake immediately (it will emit ClientHello into wbio).
 			native_connect_cont(event);
@@ -1997,14 +2046,14 @@ int PgSQL_Connection::native_drive_ssl_handshake() {
 
 	for (;;) {
 		ERR_clear_error();
-		int ret = SSL_do_handshake(myds->ssl);
+		int ret = SSL_do_handshake(native_ssl);
 		if (ret == 1) {
 			// Handshake complete. For VERIFY_CA / VERIFY_FULL, confirm the result.
 			// (For VERIFY_FULL the hostname check is folded into SSL_get_verify_result
 			// because we set the verify host on the SSL object before the handshake.)
 			if (native_ssl_mode == PG_Native_SSL_Mode::VERIFY_CA ||
 			    native_ssl_mode == PG_Native_SSL_Mode::VERIFY_FULL) {
-				X509* peer = SSL_get_peer_certificate(myds->ssl);
+				X509* peer = SSL_get_peer_certificate(native_ssl);
 				if (peer == nullptr) {
 					set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE),
 						"TLS verification required but server presented no certificate", false);
@@ -2012,7 +2061,7 @@ int PgSQL_Connection::native_drive_ssl_handshake() {
 					return -1;
 				}
 				X509_free(peer);
-				long vr = SSL_get_verify_result(myds->ssl);
+				long vr = SSL_get_verify_result(native_ssl);
 				if (vr != X509_V_OK) {
 					char msg[256];
 					snprintf(msg, sizeof(msg), "TLS certificate verification failed: %s",
@@ -2034,7 +2083,7 @@ int PgSQL_Connection::native_drive_ssl_handshake() {
 			return 1;
 		}
 
-		int err = SSL_get_error(myds->ssl, ret);
+		int err = SSL_get_error(native_ssl, ret);
 		if (err == SSL_ERROR_WANT_WRITE) {
 			bool wb = false;
 			if (!native_ssl_pump_wbio_to_fd(wb)) {
@@ -2071,9 +2120,9 @@ int PgSQL_Connection::native_drive_ssl_handshake() {
 			unsigned char* src = cipher;
 			int len = (int)n;
 			while (len > 0) {
-				int w = BIO_write(myds->rbio_ssl, src, len);
+				int w = BIO_write(native_rbio, src, len);
 				if (w <= 0) {
-					if (!BIO_should_retry(myds->rbio_ssl)) {
+					if (!BIO_should_retry(native_rbio)) {
 						set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "BIO_write during TLS handshake failed", false);
 						native_teardown();
 						return -1;
@@ -2126,7 +2175,7 @@ int PgSQL_Connection::native_recv_into_framer() {
 	// Encrypted path: read ciphertext from fd into rbio, then SSL_read plaintext
 	// protocol bytes out and feed them to the framer. Mirrors the BIO-mem decrypt
 	// loop of PgSQL_Data_Stream::read_from_net(), but drives the raw fd directly.
-	if (myds && myds->encrypted && myds->ssl) {
+	if (native_ssl != nullptr) {
 		bool got = false;
 		unsigned char cipher[MY_SSL_BUFFER];
 		// Pull whatever ciphertext is available from the socket into rbio. A single
@@ -2151,9 +2200,9 @@ int PgSQL_Connection::native_recv_into_framer() {
 			unsigned char* src = cipher;
 			int len = (int)n;
 			while (len > 0) {
-				int w = BIO_write(myds->rbio_ssl, src, len);
+				int w = BIO_write(native_rbio, src, len);
 				if (w <= 0) {
-					if (!BIO_should_retry(myds->rbio_ssl)) return -1;
+					if (!BIO_should_retry(native_rbio)) return -1;
 					continue;
 				}
 				src += w;
@@ -2164,13 +2213,13 @@ int PgSQL_Connection::native_recv_into_framer() {
 		for (;;) {
 			unsigned char plain[MY_SSL_BUFFER];
 			ERR_clear_error();
-			int r = SSL_read(myds->ssl, plain, sizeof(plain));
+			int r = SSL_read(native_ssl, plain, sizeof(plain));
 			if (r > 0) {
 				native_framer.feed(plain, (size_t)r);
 				got = true;
 				continue;
 			}
-			int err = SSL_get_error(myds->ssl, r);
+			int err = SSL_get_error(native_ssl, r);
 			if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
 				break; // need more ciphertext from the socket; wait for next event
 			}
@@ -2340,7 +2389,7 @@ void PgSQL_Connection::native_drive_auth(short /*event*/) {
 			//   both,    TLS   -> PLUS  (set cbind below)   <-- the upgrade
 			//   both,    !TLS  -> plain
 			//   neither        -> capability gap
-			const bool tls_in_use = (myds && myds->encrypted && myds->ssl);
+			const bool tls_in_use = (native_ssl != nullptr);
 			bool use_scram_plus = false;
 			if (has_scram_plus && tls_in_use) {
 				use_scram_plus = true;
@@ -2366,7 +2415,7 @@ void PgSQL_Connection::native_drive_auth(short /*event*/) {
 			if (use_scram_plus) {
 				unsigned char digest[EVP_MAX_MD_SIZE];
 				size_t digest_len = 0;
-				if (pg_tls_server_end_point(myds->ssl, digest, &digest_len) < 0) {
+				if (pg_tls_server_end_point(native_ssl, digest, &digest_len) < 0) {
 					// Digest failed: degrade to plain if also offered, else
 					// capability gap. Log once via the capability-gap path.
 					if (has_scram) {
