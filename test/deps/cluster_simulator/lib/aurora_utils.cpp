@@ -1,10 +1,14 @@
 #include "aurora_utils.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <fstream>
 #include <iostream>
+#include <map>
 #include <stdio.h>
 #include <sstream>
 #include <tuple>
+#include <unordered_map>
 
 // NOTE: Only needed during testing
 #include <functional>
@@ -354,88 +358,175 @@ std::pair<int, string> prepare_mysql_aurora_hostgroups(
 	return { EXIT_SUCCESS, "" };
 }
 
-const char t_aurora_server_state_insert[] {
-	"INSERT OR REPLACE INTO REPLICA_HOST_STATUS("
-		" SERVER_ID,"
-		" DOMAIN_NAME,"
-		" SESSION_ID,"
-		" CPU,"
-		" LAST_UPDATE_TIMESTAMP,"
-		" REPLICA_LAG_IN_MILLISECONDS"
-	") VALUES ("
-		"'%s', '%s', '%s', %d, '%s', %d"
-	")"
-};
+namespace {
+
+string aurora_sql_quote(const string& value) {
+	string quoted { "'" };
+	for (char c : value) {
+		quoted += c;
+		if (c == '\'') {
+			quoted += '\'';
+		}
+	}
+	quoted += '\'';
+	return quoted;
+}
+
+std::pair<int, string> load_aurora_backend_addresses(
+	std::unordered_map<string, string>& addresses)
+{
+	const char* host_file_path = getenv("CLUSTER_SIM_HOST_FILE");
+	if (host_file_path == nullptr || *host_file_path == '\0') {
+		return { EXIT_FAILURE, "CLUSTER_SIM_HOST_FILE is not configured" };
+	}
+
+	std::ifstream host_file { host_file_path };
+	if (!host_file.is_open()) {
+		return {
+			EXIT_FAILURE,
+			"Unable to open CLUSTER_SIM_HOST_FILE '" + string { host_file_path } + "'"
+		};
+	}
+
+	string line {};
+	uint64_t line_number = 0;
+	while (std::getline(host_file, line)) {
+		++line_number;
+		std::istringstream fields { line };
+		string hostname {};
+		string ip {};
+		if (!(fields >> hostname) || hostname.front() == '#') {
+			continue;
+		}
+		if (!(fields >> ip)) {
+			return {
+				EXIT_FAILURE,
+				"Missing IP in CLUSTER_SIM_HOST_FILE at line " + std::to_string(line_number)
+			};
+		}
+
+		auto existing = addresses.find(hostname);
+		if (existing != addresses.end() && existing->second != ip) {
+			return {
+				EXIT_FAILURE,
+				"Conflicting CLUSTER_SIM_HOST_FILE mappings for '" + hostname + "'"
+			};
+		}
+		addresses[hostname] = ip;
+	}
+
+	return { EXIT_SUCCESS, "" };
+}
+
+}  // namespace
 
 std::pair<int, string> prepare_aurora_cluster_state(
 	MYSQL* proxysql_sqlite,
 	const vector<aurora_server_state_t>& servers,
 	uint32_t cleanup
 ) {
-	int query_error = 0;
-
-	if (cleanup) {
-		string srv_ids {};
-		string domain_names {};
-
-		for (const auto& server : servers) {
-			srv_ids += "'" + std::get<AURORA_SERVER_STATE::SERVER_ID>(server) + "'";
-			domain_names += "'" + std::get<AURORA_SERVER_STATE::DOMAIN_NAME>(server) + "'";
-
-			if (&server != &servers.back()) {
-				srv_ids += ",";
-				domain_names += ",";
-			}
-		}
-
-		string cleanup_query {};
-
-		if (cleanup == 1) {
-			cleanup_query = "DELETE FROM REPLICA_HOST_STATUS WHERE SERVER_ID NOT IN (" +
-				srv_ids + ") OR DOMAIN_NAME NOT IN (" + domain_names + ")";
-		} else {
-			cleanup_query = "DELETE FROM REPLICA_HOST_STATUS";
-		}
-
-		query_error = mysql_query(proxysql_sqlite, cleanup_query.c_str());
-		if (query_error) {
-			return create_query_error(proxysql_sqlite, cleanup_query, __FILE__, __LINE__);
-		}
+	std::unordered_map<string, string> backend_addresses {};
+	auto [host_file_rc, host_file_error] =
+		load_aurora_backend_addresses(backend_addresses);
+	if (host_file_rc != EXIT_SUCCESS) {
+		return { EXIT_FAILURE, host_file_error };
 	}
 
-	usleep(1000 * 1000);
+	std::map<string, vector<aurora_server_state_t>> replica_sets {};
+	for (const aurora_server_state_t& server : servers) {
+		replica_sets[std::get<AURORA_SERVER_STATE::DOMAIN_NAME>(server)].push_back(server);
+	}
 
-	// NOTE: We adquire a 'write lock' so there are no dirty reads on ProxySQL side
-	// while we write the new values.
-	query_error = mysql_query(proxysql_sqlite, "BEGIN IMMEDIATE");
+	int query_error = mysql_query(proxysql_sqlite, "BEGIN IMMEDIATE");
 	if (query_error) {
 		return create_query_error(proxysql_sqlite, "BEGIN IMMEDIATE", __FILE__, __LINE__);
 	}
 
-	for (const auto& server : servers) {
-		string server_insert_query {};
+	const auto execute_or_rollback = [proxysql_sqlite](const string& query) {
+		if (mysql_query(proxysql_sqlite, query.c_str()) == 0) {
+			return std::pair<int, string> { EXIT_SUCCESS, "" };
+		}
+		auto error = create_query_error(proxysql_sqlite, query, __FILE__, __LINE__);
+		(void)mysql_query(proxysql_sqlite, "ROLLBACK");
+		return error;
+	};
 
-		string_format(
-			t_aurora_server_state_insert,
-			server_insert_query,
-			std::get<AURORA_SERVER_STATE::SERVER_ID>(server).c_str(),
-			std::get<AURORA_SERVER_STATE::DOMAIN_NAME>(server).c_str(),
-			std::get<AURORA_SERVER_STATE::SESSION_ID>(server).c_str(),
-			0,
-			"",
-			std::get<AURORA_SERVER_STATE::REPLICA_LAG_IN_MILLISECONDS>(server)
-		);
+	if (cleanup) {
+		auto [control_rc, control_error] =
+			execute_or_rollback("DELETE FROM AWS_AURORA_REPLICA_CONTROL");
+		if (control_rc != EXIT_SUCCESS) return { control_rc, control_error };
+		auto [rows_rc, rows_error] = execute_or_rollback("DELETE FROM REPLICA_HOST_STATUS");
+		if (rows_rc != EXIT_SUCCESS) return { rows_rc, rows_error };
+	} else {
+		for (const auto& replica_set : replica_sets) {
+			const string set_literal { aurora_sql_quote(replica_set.first) };
+			auto [control_rc, control_error] = execute_or_rollback(
+				"DELETE FROM AWS_AURORA_REPLICA_CONTROL WHERE replica_set_id=" + set_literal);
+			if (control_rc != EXIT_SUCCESS) return { control_rc, control_error };
+			auto [rows_rc, rows_error] = execute_or_rollback(
+				"DELETE FROM REPLICA_HOST_STATUS WHERE REPLICA_SET_ID=" + set_literal);
+			if (rows_rc != EXIT_SUCCESS) return { rows_rc, rows_error };
+		}
+	}
 
-		query_error = mysql_query(proxysql_sqlite, server_insert_query.c_str());
-		if (query_error) {
-			return create_query_error(proxysql_sqlite, server_insert_query, __FILE__, __LINE__);
+	const string timestamp { get_fmt_time() };
+	for (const auto& replica_set : replica_sets) {
+		const string& replica_set_id = replica_set.first;
+		std::map<std::pair<string, int>, bool> mapped_backends {};
+		for (const aurora_server_state_t& server : replica_set.second) {
+			const string& server_id = std::get<AURORA_SERVER_STATE::SERVER_ID>(server);
+			string session_id = std::get<AURORA_SERVER_STATE::SESSION_ID>(server);
+			if (session_id.empty()) {
+				session_id = "TESTID-" + server_id + replica_set_id + "-R";
+			}
+			const string hostname { server_id + replica_set_id };
+			auto address = backend_addresses.find(hostname);
+			if (address == backend_addresses.end()) {
+				(void)mysql_query(proxysql_sqlite, "ROLLBACK");
+				return {
+					EXIT_FAILURE,
+					"Missing CLUSTER_SIM_HOST_FILE mapping for Aurora member '" +
+						hostname + "'"
+				};
+			}
+
+			const string row_query {
+				"INSERT INTO REPLICA_HOST_STATUS"
+				"(REPLICA_SET_ID,SERVER_ID,SESSION_ID,CPU,LAST_UPDATE_TIMESTAMP,"
+					"REPLICA_LAG_IN_MILLISECONDS,IS_CURRENT) VALUES (" +
+				aurora_sql_quote(replica_set_id) + "," + aurora_sql_quote(server_id) +
+				"," + aurora_sql_quote(session_id) + ",0," +
+				aurora_sql_quote(timestamp) + "," +
+				std::to_string(std::get<AURORA_SERVER_STATE::REPLICA_LAG_IN_MILLISECONDS>(server)) +
+				",1)"
+			};
+			auto [row_rc, row_error] = execute_or_rollback(row_query);
+			if (row_rc != EXIT_SUCCESS) return { row_rc, row_error };
+
+			mapped_backends[{ address->second, 3306 }] = true;
+		}
+
+		for (const auto& backend : mapped_backends) {
+			const string control_query {
+				"INSERT OR REPLACE INTO AWS_AURORA_REPLICA_CONTROL"
+				"(backend_ip,backend_port,replica_set_id,replica_table_present,error_code,error_msg) "
+				"VALUES (" + aurora_sql_quote(backend.first.first) + "," +
+				std::to_string(backend.first.second) + "," + aurora_sql_quote(replica_set_id) +
+				",1,0,'')"
+			};
+			auto [control_rc, control_error] = execute_or_rollback(control_query);
+			if (control_rc != EXIT_SUCCESS) return { control_rc, control_error };
 		}
 	}
 
 	query_error = mysql_query(proxysql_sqlite, "COMMIT");
 	if (query_error) {
+		(void)mysql_query(proxysql_sqlite, "ROLLBACK");
 		return create_query_error(proxysql_sqlite, "COMMIT", __FILE__, __LINE__);
 	}
+
+	// Allow an already scheduled monitor probe to observe the committed snapshot.
+	usleep(1000 * 1000);
 
 	return { EXIT_SUCCESS, "" };
 }

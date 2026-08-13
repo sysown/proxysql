@@ -61,6 +61,11 @@ std::pair<int, std::string> prepare_mysql_aurora_hostgroups(
 	const std::vector<aurora_hostgroup_config_t>& hostgroups_configs
 );
 
+/**
+ * Publishes ordinary Aurora JSON state through backend-address replica sets.
+ * DOMAIN_NAME identifies the set, and CLUSTER_SIM_HOST_FILE resolves every
+ * SERVER_ID + DOMAIN_NAME member hostname to its simulated backend address.
+ */
 std::pair<int, std::string> prepare_aurora_cluster_state(
 	MYSQL* proxysql_sqlite,
 	const std::vector<aurora_server_state_t>& servers,
@@ -94,4 +99,3 @@ std::vector<aurora_server_state_t> aurora_update_cluster_state(
 );
 
 #endif
-

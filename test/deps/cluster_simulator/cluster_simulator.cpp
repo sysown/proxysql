@@ -1798,10 +1798,8 @@ std::pair<int, nlohmann::ordered_json> simulate_aws_aurora_cluster_state(
 		const auto& aurora_new_state_to_set {
 			aurora_update_cluster_state(aurora_init_servers_state, aurora_new_servers_state)
 		};
-		// cleanup=1 deletes REPLICA_HOST_STATUS rows whose SERVER_ID is not in the new
-		// state, so payloads can simulate a server being removed from the topology
-		// (e.g. for autopurge_missing_checks coverage). Backwards-compatible: existing
-		// payloads keep the full server list in new_state, so nothing extra is purged.
+		// Replace the published replica sets and their complete backend mappings so
+		// payloads can simulate members being removed (for example, autopurge coverage).
 		prep_aurora_final_state_err =
 			prepare_aurora_cluster_state(proxysql_sqlite, aurora_new_servers_state, 1);
 
