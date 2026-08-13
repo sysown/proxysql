@@ -33,7 +33,7 @@ RUN apt-get update -qq && \
     && pip3 install --break-system-packages fastcov \
         "mysql-connector-python==${MYSQL_CONNECTOR_PYTHON_VERSION}" \
         "mysqlx-connector-python==${MYSQL_CONNECTOR_PYTHON_VERSION}" \
-    && wget https://github.com/openark/orchestrator/releases/download/v3.2.6/orchestrator-client_3.2.6_amd64.deb -O /tmp/orc.deb \
+    && wget https://github.com/proxysql/orchestrator/releases/download/v4.31.1/orchestrator-client_4.31.1_amd64.deb -O /tmp/orc.deb \
     && apt-get install -y /tmp/orc.deb \
     && rm -rf /var/lib/apt/lists/* /tmp/orc.deb
 
