@@ -12,6 +12,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <unordered_set>
@@ -142,6 +143,26 @@ private:
 	std::mutex mu_;
 	std::condition_variable cv_;
 	std::vector<AwsIamCompletion> completions_;
+};
+
+class ThrowingSink final : public AwsIamCompletionSink {
+public:
+	void post(AwsIamCompletion&&) override {
+		{
+			std::lock_guard<std::mutex> lock(mu_);
+			called_ = true;
+		}
+		cv_.notify_all();
+		throw std::runtime_error("intentional completion callback failure");
+	}
+	bool wait_for_call(std::chrono::milliseconds timeout = 2s) {
+		std::unique_lock<std::mutex> lock(mu_);
+		return cv_.wait_for(lock, timeout, [&] { return called_; });
+	}
+private:
+	std::mutex mu_;
+	std::condition_variable cv_;
+	bool called_ { false };
 };
 
 class DispatchPause {
@@ -598,6 +619,19 @@ void test_cancellation_timeout_late_completion_and_shutdown() {
 	finish_request_a.join();
 	finish_request_b.join();
 	finish_shutdown.join();
+
+	auto throwing_signer = std::make_shared<FakeSigner>();
+	throwing_signer->set_blocked(true);
+	auto throwing_manager = std::make_unique<AwsIamTokenManager>(throwing_signer, config(clock));
+	auto throwing_sink = std::make_shared<ThrowingSink>();
+	throwing_manager->request(key("throwing-shutdown.us-east-1.rds.amazonaws.com"), 28, throwing_sink);
+	throwing_signer->wait_for_calls(1);
+	std::thread throwing_shutdown([&] { throwing_manager.reset(); });
+	const bool throwing_callback_called = throwing_sink->wait_for_call();
+	throwing_signer->set_blocked(false);
+	throwing_shutdown.join();
+	ok(throwing_callback_called,
+		"a throwing completion callback cannot escape or terminate token-manager shutdown");
 
 	reset_cleanse_observer();
 	auto late_signer = std::make_shared<FakeSigner>();

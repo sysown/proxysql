@@ -49,6 +49,7 @@ struct Options {
 struct Observation {
 	bool tls { false };
 	bool pre_tls_payload { false };
+	int minimum_tls_version { 0 };
 	std::string username;
 	std::string sni;
 	std::string peer;
@@ -229,10 +230,11 @@ std::string parse_username(const std::vector<unsigned char>& response) {
 
 void report(const Observation& observation) {
 	std::printf(
-		"RESULT tls=%d pre_tls=%d username_hex=%s token_len=%zu token_sha256=%s "
+		"RESULT tls=%d pre_tls=%d min_tls=%d username_hex=%s token_len=%zu token_sha256=%s "
 		"sni_hex=%s peer=%s error=%s\n",
 		observation.tls ? 1 : 0,
 		observation.pre_tls_payload ? 1 : 0,
+		observation.minimum_tls_version,
 		hex(observation.username).c_str(), observation.token_length,
 		observation.token_sha256.empty() ? "-" : observation.token_sha256.c_str(),
 		hex(observation.sni).c_str(),
@@ -301,6 +303,7 @@ int main(int argc, char **argv) {
 
 	SSL_CTX *context = SSL_CTX_new(TLS_server_method());
 	if (context == nullptr ||
+		SSL_CTX_set_min_proto_version(context, TLS1_2_VERSION) != 1 ||
 		SSL_CTX_use_certificate_chain_file(context, options.certificate.c_str()) != 1 ||
 		SSL_CTX_use_PrivateKey_file(context, options.private_key.c_str(), SSL_FILETYPE_PEM) != 1 ||
 		SSL_CTX_check_private_key(context) != 1) {
@@ -319,6 +322,7 @@ int main(int argc, char **argv) {
 	std::fflush(stdout);
 
 	Observation observation;
+	observation.minimum_tls_version = SSL_CTX_get_min_proto_version(context);
 	if (!wait_fd(listener, POLLIN, 10000)) {
 		observation.error = "accept_timeout";
 		report(observation);

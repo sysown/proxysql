@@ -520,7 +520,7 @@ public:
 								[](const auto& left, const auto& right) { return left.second.lru < right.second.lru; });
 							cache.erase(victim);
 						}
-						CacheEntry entry { signed_result.token.clone(), expires_at, generation_number, ++lru_clock };
+						CacheEntry entry { std::move(signed_result.token), expires_at, generation_number, ++lru_clock };
 						cache.insert_or_assign(key, std::move(entry));
 					}
 				} else {
@@ -647,7 +647,7 @@ public:
 			sink->post(std::move(completion));
 		} catch (...) {
 			finish_delivery(std::move(delivery));
-			throw;
+			return;
 		}
 		finish_delivery(std::move(delivery));
 	}

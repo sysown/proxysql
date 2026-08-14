@@ -153,7 +153,7 @@ bool make_leaf(const CertificateFixture& fixture, const std::string& name,
 
 CertificateFixture create_certificates() {
 	CertificateFixture fixture;
-	const std::string path_template = "/tmp/proxysql-aws-iam-protocol-XXXXXX";
+	const std::string path_template = "./proxysql-aws-iam-protocol-XXXXXX";
 	std::vector<char> path(path_template.begin(), path_template.end());
 	path.push_back('\0');
 	char *directory = mkdtemp(path.data());
@@ -476,6 +476,8 @@ void run_success_case(MySQL_Thread& worker, const CertificateFixture& certificat
 		"one fake-source result authenticates through the real Connector/C TLS path");
 	ok(field(server.result, "tls") == "1" && field(server.result, "pre_tls") == "0",
 		"mysql_clear_password payload is requested only after SSL_accept");
+	ok(field(server.result, "min_tls") == std::to_string(TLS1_2_VERSION),
+		"the controlled IAM backend refuses TLS protocol versions older than TLS 1.2");
 	ok(field(server.result, "username_hex") == hex(kUsername) &&
 		field(server.result, "token_len") == std::to_string(token.size()) &&
 		field(server.result, "token_sha256") == sha256(token),
@@ -542,7 +544,7 @@ void run_pre_auth_abort_cases(MySQL_Thread& worker, const CertificateFixture& ce
 } // namespace
 
 int main() {
-	plan(16);
+	plan(17);
 	diag("SDK-independent controlled TLS/protocol coverage; no SDK-on provider/signing verification is claimed");
 	if (test_init_minimal() != 0 || test_init_query_processor() != 0 ||
 		test_init_hostgroups() != 0) BAIL_OUT("failed to initialize component globals");

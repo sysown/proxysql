@@ -329,7 +329,7 @@ void test_iam_to_password_transition(MySQL_Thread& worker, MySrvC *server) {
 void test_unix_socket_rejected(MySQL_Thread& worker, MySrvC *tcp_server) {
 	reset_observations();
 	MySrvC unix_server(
-		const_cast<char *>("/tmp/proxysql-iam-unit.sock"), 0, 0, 1,
+		const_cast<char *>("/var/lib/proxysql/proxysql-iam-unit.sock"), 0, 0, 1,
 		MYSQL_SERVER_STATUS_ONLINE, 0, 100, 0, 0, 0,
 		const_cast<char *>("aws-iam-unix-unit"));
 	unix_server.myhgc = tcp_server->myhgc;
