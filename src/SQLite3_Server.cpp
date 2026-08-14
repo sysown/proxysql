@@ -815,6 +815,16 @@ __end_show_commands:
 		goto __run_query;
 	}
 
+	if (query_no_space_length==strlen("SELECT CONNECTION_ID()") && !strncasecmp("SELECT CONNECTION_ID()",query_no_space, query_no_space_length)) {
+		const std::string connection_id_query {
+			"SELECT " + std::to_string(sess->thread_session_id) + " AS 'CONNECTION_ID()'"
+		};
+		l_free(query_length,query);
+		query=l_strdup(connection_id_query.c_str());
+		query_length=connection_id_query.length()+1;
+		goto __run_query;
+	}
+
 	// see issue #1022
 	if (query_no_space_length==strlen("SELECT DATABASE() AS name") && !strncasecmp("SELECT DATABASE() AS name",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);

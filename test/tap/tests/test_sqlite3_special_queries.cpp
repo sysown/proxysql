@@ -5,6 +5,7 @@
  *   response of the intercepted queries.
  */
 
+#include <cstdlib>
 #include <vector>
 #include <string>
 
@@ -56,6 +57,8 @@ const vector<string> set_queries {
 	"SET wait_timeout=86400"
 };
 
+constexpr int sqlite3_server_port { 6030 };
+
 int main(int argc, char** argv) {
 	CommandLine cl;
 
@@ -65,7 +68,7 @@ int main(int argc, char** argv) {
 	}
 
 	const vector<test_opts_t> tests { gen_tests() };
-	plan(tests.size()*(3 + set_queries.size()));
+	plan(tests.size()*(4 + set_queries.size()));
 
 	for (const test_opts_t& opts : tests) {
 		diag("Executing test   test_opts=%s", to_string(opts).c_str());
@@ -81,7 +84,7 @@ int main(int argc, char** argv) {
 		}
 #endif
 
-		if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, cflags)) {
+		if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, sqlite3_server_port, NULL, cflags)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 			return EXIT_FAILURE;
 		}
@@ -99,6 +102,24 @@ int main(int argc, char** argv) {
 
 		int initdb_rc = mysql_select_db(proxy, "information_schema");
 		ok(initdb_rc == 0, "COM_INIT_DB should succeed   rc=%d", initdb_rc);
+
+		int connection_id_rc = mysql_query(proxy, "SELECT CONNECTION_ID()");
+		MYSQL_RES* connection_id_result = connection_id_rc == 0 ? mysql_store_result(proxy) : nullptr;
+		MYSQL_ROW connection_id_row = connection_id_result ? mysql_fetch_row(connection_id_result) : nullptr;
+		char* parse_end = nullptr;
+		const unsigned long long connection_id = connection_id_row && connection_id_row[0]
+			? std::strtoull(connection_id_row[0], &parse_end, 10)
+			: 0;
+		const bool valid_connection_id = connection_id_row && connection_id_row[0]
+			&& parse_end && *parse_end == '\0' && connection_id > 0;
+		if (connection_id_result) {
+			mysql_free_result(connection_id_result);
+		}
+		ok(
+			connection_id_rc == 0 && valid_connection_id,
+			"SELECT CONNECTION_ID() should return a nonzero session ID   rc=%d",
+			connection_id_rc
+		);
 
 		for (const auto& q : set_queries) {
 			diag("Executing 'special SET' query   q='%s'", q.c_str());
