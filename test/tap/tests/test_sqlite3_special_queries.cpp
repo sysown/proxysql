@@ -57,7 +57,7 @@ const vector<string> set_queries {
 	"SET wait_timeout=86400"
 };
 
-constexpr int sqlite3_server_port { 6030 };
+constexpr int SQLITE3_SERVER_PORT { 6030 };
 
 int main(int argc, char** argv) {
 	CommandLine cl;
@@ -84,7 +84,7 @@ int main(int argc, char** argv) {
 		}
 #endif
 
-		if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, sqlite3_server_port, NULL, cflags)) {
+		if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, SQLITE3_SERVER_PORT, NULL, cflags)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 			return EXIT_FAILURE;
 		}
@@ -112,12 +112,14 @@ int main(int argc, char** argv) {
 			: 0;
 		const bool valid_connection_id = connection_id_row && connection_id_row[0]
 			&& parse_end && *parse_end == '\0' && connection_id > 0;
+		const unsigned long long expected_connection_id =
+			static_cast<unsigned long long>(mysql_thread_id(proxy));
 		if (connection_id_result) {
 			mysql_free_result(connection_id_result);
 		}
 		ok(
-			connection_id_rc == 0 && valid_connection_id,
-			"SELECT CONNECTION_ID() should return a nonzero session ID   rc=%d",
+			connection_id_rc == 0 && valid_connection_id && connection_id == expected_connection_id,
+			"SELECT CONNECTION_ID() should return this session ID   rc=%d",
 			connection_id_rc
 		);
 
