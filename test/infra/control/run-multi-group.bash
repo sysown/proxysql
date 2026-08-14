@@ -368,14 +368,16 @@ if [ "${COVERAGE}" -eq 1 ]; then
                 -e COVERAGE_LOG="${COVERAGE_LOG}" \
                 proxysql-ci-base:latest \
                 bash -c '
-                    if command -v fastcov >/dev/null 2>&1; then
-                        cd "${GCOV_DIR}"
-                        fastcov -b -j4 -l \
-                            -e /usr deps \
-                            -d . -o "${GROUP_INFO}" >> "${COVERAGE_LOG}" 2>&1 || \
-                            echo ">>> WARNING: fastcov failed for ${GCOV_DIR}" >> "${COVERAGE_LOG}"
-                    fi
-                ' || echo ">>> WARNING: Coverage generation failed for ${group}"
+                    set -e
+                    command -v gcov-11 >/dev/null 2>&1 || {
+                        echo ">>> ERROR: gcov-11 is required to decode GCC 11 coverage data" >&2
+                        exit 1
+                    }
+                    cd "${GCOV_DIR}"
+                    fastcov -b -g gcov-11 -j4 -l \
+                        -e /usr deps \
+                        -d . -o "${GROUP_INFO}" >> "${COVERAGE_LOG}" 2>&1
+                '
         else
             echo ">>> No .gcda files found for ${group}, skipping"
         fi

@@ -395,7 +395,11 @@ docker run \
                             local coverage_log=\"\${COVERAGE_REPORT_DIR}/coverage-generation.log\"
                             echo \">>> Running fastcov on /gcov...\"
                             cd /gcov
-                            fastcov -b -j\$(nproc) -l \
+                            if ! command -v gcov-11 >/dev/null 2>&1; then
+                                echo \">>> ERROR: gcov-11 is required to decode GCC 11 coverage data\" >&2
+                                exit 1
+                            fi
+                            fastcov -b -g gcov-11 -j\$(nproc) -l \
                                 -e /usr deps \
                                 -d . -o \"\${coverage_file}\" >> \"\${coverage_log}\" 2>&1 || echo \">>> WARNING: Coverage generation failed (see \${coverage_log})\"
 
