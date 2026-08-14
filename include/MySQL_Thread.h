@@ -205,6 +205,15 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 
 	PtrArray *cached_connections;
 	unsigned int push_local_counter;	// round-robin counter for bounded local caching: cache 1-in-N where N = mysql_threads
+#ifdef PROXYSQL40
+	struct AwsLocalityCachedCandidate {
+		MySrvC* parent;
+		unsigned int cached_index;
+	};
+	// Capacity grows when a connection enters the local cache, never while a
+	// query is choosing a backend from that cache.
+	std::vector<AwsLocalityCachedCandidate> aws_locality_candidates;
+#endif
 
 #ifdef IDLE_THREADS
 	struct epoll_event events[MY_EPOLL_THREAD_MAXEVENTS];

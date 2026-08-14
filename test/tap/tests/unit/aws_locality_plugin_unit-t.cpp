@@ -188,7 +188,7 @@ const AwsMetadataEndpoint* find_endpoint(
 } // namespace
 
 int main() {
-	plan(31);
+	plan(30);
 
 	auto backend = std::make_shared<BlockingBackend>();
 	AwsSdkMetadataProvider provider(backend, AwsMetadataProviderConfig {2, 3});
@@ -210,10 +210,10 @@ int main() {
 	ok(handles[3].value == 0 && sink->wait_for(1),
 		"bounded queue rejects excess work immediately");
 	auto completions = sink->snapshot();
-	ok(completions[0].opaque_id == 4 && completions[0].generation == 17 &&
+	ok(completions.size() >= 1 && completions[0].opaque_id == 4 && completions[0].generation == 17 &&
 		completions[0].result.status == AwsMetadataStatus::throttled,
 		"queue rejection preserves request identity with a fixed category");
-	ok(completions[0].result.failure_category == "throttled" &&
+	ok(completions.size() >= 1 && completions[0].result.failure_category == "throttled" &&
 		completions[0].result.failure_category.find("FAKE_SECRET") == std::string::npos,
 		"provider never forwards a backend's raw failure text");
 	provider.cancel(handles[2]);
@@ -230,8 +230,6 @@ int main() {
 	}
 	ok(saw_one && saw_two && !saw_three,
 		"queued cancellation suppresses its callback without affecting other work");
-	ok(saw_one && saw_two,
-		"successful asynchronous completions preserve opaque ID and generation");
 
 	AwsMetadataRequest expired;
 	expired.opaque_id = 9;
@@ -240,7 +238,7 @@ int main() {
 	ok(provider.request(expired, sink).value == 0 && sink->wait_for(4),
 		"already-expired work is rejected without entering the backend");
 	completions = sink->snapshot();
-	ok(completions.back().opaque_id == 9 &&
+	ok(!completions.empty() && completions.back().opaque_id == 9 &&
 		completions.back().result.status == AwsMetadataStatus::timeout &&
 		completions.back().result.failure_category == "timeout",
 		"deadline rejection is normalized and preserves identity");

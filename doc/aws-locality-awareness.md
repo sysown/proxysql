@@ -66,19 +66,18 @@ required:
 
 ```sql
 INSERT INTO mysql_hostgroup_attributes(hostgroup_id, hostgroup_settings)
-VALUES (
-  10,
-  '{
-    "aws": {
-      "locality_awareness": {
-        "same_region_multiplier": 2.0,
-        "same_az_multiplier": 4.0,
-        "refresh_interval_seconds": 300,
-        "stale_ttl_seconds": 1800
-      }
-    }
-  }'
-);
+VALUES (10, json_object(
+  'aws', json_object(
+    'locality_awareness', json_object(
+      'same_region_multiplier', 2.0,
+      'same_az_multiplier', 4.0,
+      'refresh_interval_seconds', 300,
+      'stale_ttl_seconds', 1800))))
+ON CONFLICT(hostgroup_id) DO UPDATE SET
+  hostgroup_settings = json_set(
+    COALESCE(mysql_hostgroup_attributes.hostgroup_settings, '{}'),
+    '$.aws.locality_awareness',
+    json_extract(excluded.hostgroup_settings, '$.aws.locality_awareness'));
 
 LOAD MYSQL SERVERS TO RUNTIME;
 SAVE MYSQL SERVERS TO DISK;

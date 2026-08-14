@@ -6944,21 +6944,8 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(
 	}
 
 #ifdef PROXYSQL40
-	struct AwsLocalityParentCandidate {
-		MySrvC* parent;
-		MySQL_Connection* connection;
-		uint64_t weight;
-	};
-	AwsLocalityParentCandidate candidates_static[32];
-	AwsLocalityParentCandidate* candidates = candidates_static;
-	const unsigned int candidate_capacity = cached_connections->len;
-	std::vector<AwsLocalityParentCandidate> candidates_dynamic;
-	if (candidate_capacity > 32) {
-		candidates_dynamic.resize(candidate_capacity);
-		candidates = candidates_dynamic.data();
-	}
-	unsigned int num_candidates = 0;
-
+	// Remove mode-incompatible connections before the allocation-free scoring
+	// passes below, so their indices remain stable throughout the lottery.
 	for (i = 0; i < cached_connections->len;) {
 		c = static_cast<MySQL_Connection*>(cached_connections->index(i));
 		const char* candidate_username =
@@ -6976,109 +6963,128 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(
 			MyHGM->destroy_MyConn_from_pool(c);
 			continue;
 		}
-		if (c->backend_auth_type() != requested_type ||
-			(requested_type == MySQLBackendAuthType::AWS_IAM &&
-			 c->requires_CHANGE_USER(client_conn, requested_type))) {
-			++i;
-			continue;
-		}
-		if (!c->healthy || !c->reusable) {
-			++i;
-			continue;
-		}
-		if (check_session_track_backoff) {
-			session_track_backoff_until =
-				c->parent->session_track_backoff_until.load(std::memory_order_relaxed);
-			if (session_track_backoff_until > curtime) {
-				++i;
-				continue;
-			}
-		}
-		if (c->parent->myhgc->hid != _hid ||
-			!client_conn->match_tracked_options(c)) {
-			++i;
-			continue;
-		}
-
-		MySrvC* parent = c->parent;
-		if (find(parents.begin(), parents.end(), parent) != parents.end()) {
-			++i;
-			continue;
-		}
-		bool parent_already_selected = false;
-		for (unsigned int candidate = 0; candidate < num_candidates; ++candidate) {
-			if (candidates[candidate].parent == parent) {
-				parent_already_selected = true;
-				break;
-			}
-		}
-		if (parent_already_selected) {
-			++i;
-			continue;
-		}
-		if (gtid_uuid != nullptr &&
-			!MyHGM->gtid_exists(parent, gtid_uuid, gtid_trxid)) {
-			parents.push_back(parent);
-			++i;
-			continue;
-		}
-		if (c->requires_CHANGE_USER(client_conn, requested_type)) {
-			++i;
-			continue;
-		}
-		char* schema = client_conn->userinfo->schemaname;
-		if (strcmp(c->userinfo->schemaname, schema) != 0) {
-			++i;
-			continue;
-		}
-		unsigned int not_match = 0;
-		c->number_of_matching_session_variables(client_conn, not_match);
-		if (not_match != 0) {
-			++i;
-			continue;
-		}
-		if (max_lag_ms >= 0 &&
-			static_cast<unsigned int>(max_lag_ms) <
-				(parent->aws_aurora_current_lag_us / 1000)) {
-			status_variables.stvar[st_var_aws_aurora_replicas_skipped_during_query]++;
-			++i;
-			continue;
-		}
-
-		candidates[num_candidates++] = {
-			parent,
-			c,
-			aws_locality_snapshot->effective_weight(
-				_hid, parent->address, parent->port, parent->weight)
-		};
 		++i;
 	}
 
-	uint64_t locality_weights_static[32];
-	uint64_t* locality_weights = locality_weights_static;
-	std::vector<uint64_t> locality_weights_dynamic;
-	if (num_candidates > 32) {
-		locality_weights_dynamic.resize(num_candidates);
-		locality_weights = locality_weights_dynamic.data();
+	auto connection_is_eligible = [&](MySQL_Connection* candidate,
+		bool record_lag_skip) -> bool {
+		if (candidate->backend_auth_type() != requested_type ||
+			(requested_type == MySQLBackendAuthType::AWS_IAM &&
+			 candidate->requires_CHANGE_USER(client_conn, requested_type)) ||
+			!candidate->healthy || !candidate->reusable) {
+			return false;
+		}
+		if (check_session_track_backoff &&
+			candidate->parent->session_track_backoff_until.load(
+				std::memory_order_relaxed) > curtime) {
+			return false;
+		}
+		if (candidate->parent->myhgc->hid != _hid ||
+			!client_conn->match_tracked_options(candidate) ||
+			candidate->requires_CHANGE_USER(client_conn, requested_type)) {
+			return false;
+		}
+		char* schema = client_conn->userinfo->schemaname;
+		if (strcmp(candidate->userinfo->schemaname, schema) != 0) {
+			return false;
+		}
+		unsigned int not_match = 0;
+		candidate->number_of_matching_session_variables(client_conn, not_match);
+		if (not_match != 0) {
+			return false;
+		}
+		if (gtid_uuid == nullptr && max_lag_ms >= 0 &&
+			static_cast<unsigned int>(max_lag_ms) <
+				(candidate->parent->aws_aurora_current_lag_us / 1000)) {
+			if (record_lag_skip) {
+				status_variables.stvar[
+					st_var_aws_aurora_replicas_skipped_during_query]++;
+			}
+			return false;
+		}
+		return true;
+	};
+
+	aws_locality_candidates.clear();
+	// push_MyConn_local() grows this reusable storage before inserting into the
+	// cache. A direct cache mutation would violate that invariant; fail neutral
+	// instead of allocating in the selection path.
+	if (aws_locality_candidates.capacity() < cached_connections->len) {
+		return NULL;
 	}
-	for (i = 0; i < num_candidates; ++i) {
-		locality_weights[i] = candidates[i].weight;
+	for (i = 0; i < cached_connections->len; ++i) {
+		auto* candidate = static_cast<MySQL_Connection*>(cached_connections->index(i));
+		if (connection_is_eligible(candidate, true)) {
+			aws_locality_candidates.push_back({candidate->parent, i});
+		}
+	}
+	std::sort(aws_locality_candidates.begin(), aws_locality_candidates.end(),
+		[](const AwsLocalityCachedCandidate& lhs,
+			const AwsLocalityCachedCandidate& rhs) {
+			if (lhs.parent != rhs.parent) {
+				return std::less<MySrvC*>()(lhs.parent, rhs.parent);
+			}
+			return lhs.cached_index < rhs.cached_index;
+		});
+
+	uint64_t total_weight = 0;
+	unsigned int num_candidates = 0;
+	for (i = 0; i < aws_locality_candidates.size();) {
+		MySrvC* parent = aws_locality_candidates[i].parent;
+		unsigned int next = i + 1;
+		while (next < aws_locality_candidates.size() &&
+			aws_locality_candidates[next].parent == parent) {
+			++next;
+		}
+		if (gtid_uuid != nullptr && !MyHGM->gtid_exists(parent, gtid_uuid, gtid_trxid)) {
+			i = next;
+			continue;
+		}
+		total_weight = aws_locality_saturating_add(total_weight,
+			aws_locality_snapshot->effective_weight(
+				_hid, parent->address, parent->port, parent->weight));
+		++num_candidates;
+		i = next;
 	}
 	const uint64_t random_value =
 		(static_cast<uint64_t>(rand_fast()) << 32) |
 		static_cast<uint64_t>(rand_fast());
-	const size_t selected = aws_locality_weighted_index(
-		locality_weights, num_candidates, random_value);
-	MySQL_Connection* selected_connection =
-		selected < num_candidates ? candidates[selected].connection : nullptr;
-	if (selected_connection == nullptr) {
+	if (num_candidates == 0) {
 		return NULL;
 	}
-	for (i = 0; i < cached_connections->len; ++i) {
-		if (cached_connections->index(i) == selected_connection) {
-			return static_cast<MySQL_Connection*>(
-				cached_connections->remove_index_fast(i));
+	const bool uniform_fallback = total_weight == 0;
+	const uint64_t target = uniform_fallback
+		? random_value % num_candidates : random_value % total_weight;
+	uint64_t cumulative = 0;
+	unsigned int ordinal = 0;
+	for (i = 0; i < aws_locality_candidates.size();) {
+		const auto& candidate = aws_locality_candidates[i];
+		MySrvC* parent = candidate.parent;
+		unsigned int next = i + 1;
+		while (next < aws_locality_candidates.size() &&
+			aws_locality_candidates[next].parent == parent) {
+			++next;
 		}
+		if (gtid_uuid != nullptr && !MyHGM->gtid_exists(parent, gtid_uuid, gtid_trxid)) {
+			i = next;
+			continue;
+		}
+		if (uniform_fallback) {
+			if (ordinal++ == target) {
+				return static_cast<MySQL_Connection*>(
+					cached_connections->remove_index_fast(candidate.cached_index));
+			}
+			i = next;
+			continue;
+		}
+		cumulative = aws_locality_saturating_add(cumulative,
+			aws_locality_snapshot->effective_weight(
+				_hid, parent->address, parent->port, parent->weight));
+		if (target < cumulative) {
+			return static_cast<MySQL_Connection*>(
+				cached_connections->remove_index_fast(candidate.cached_index));
+		}
+		i = next;
 	}
 #endif
 	return NULL;
@@ -7116,8 +7122,17 @@ void MySQL_Thread::push_MyConn_local(MySQL_Connection *c) {
 	if (mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE) {
 		if (c->async_state_machine==ASYNC_IDLE) {
 			unsigned int n = (GloMTH && GloMTH->num_threads > 0) ? GloMTH->num_threads : 1;
-			if ((push_local_counter++ % n) == 0) {
-				cached_connections->add(c);
+		if ((push_local_counter++ % n) == 0) {
+#ifdef PROXYSQL40
+			const size_t required_capacity = cached_connections->len + 1;
+			if (aws_locality_candidates.capacity() < required_capacity) {
+				const size_t grown_capacity = std::max<size_t>(
+					32, std::max(required_capacity,
+						aws_locality_candidates.capacity() * 2));
+				aws_locality_candidates.reserve(grown_capacity);
+			}
+#endif
+			cached_connections->add(c);
 				return;
 			}
 		}

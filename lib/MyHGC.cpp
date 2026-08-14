@@ -48,15 +48,11 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 	auto candidate_weight_sum = [&]() -> uint64_t {
 #ifdef PROXYSQL40
 		if (use_aws_locality) {
-			uint64_t effective_sum = 0;
-			for (unsigned int candidate = 0; candidate < num_candidates; ++candidate) {
-				MySrvC* server = mysrvcCandidates[candidate];
-				effective_sum = aws_locality_saturating_add(
-					effective_sum,
-					aws_locality_snapshot->effective_weight(
-						hid, server->address, server->port, server->weight));
-			}
-			return effective_sum;
+			// Locality selection has a uniform fallback for an all-zero
+			// configured-weight set. These availability checks therefore only
+			// need to know whether an eligible candidate exists; defer snapshot
+			// lookups until the actual lottery below.
+			return num_candidates;
 		}
 #endif
 		return sum;
@@ -356,24 +352,32 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 
 #ifdef PROXYSQL40
 		if (use_aws_locality) {
-			uint64_t locality_weights_static[32];
-			uint64_t* locality_weights = locality_weights_static;
-			if (num_candidates > 32) {
-				locality_weights = static_cast<uint64_t*>(
-					malloc(sizeof(uint64_t) * num_candidates));
-			}
+			uint64_t total_weight = 0;
 			for (j = 0; j < num_candidates; ++j) {
 				mysrvc = mysrvcCandidates[j];
-				locality_weights[j] = aws_locality_snapshot->effective_weight(
-					hid, mysrvc->address, mysrvc->port, mysrvc->weight);
+				total_weight = aws_locality_saturating_add(total_weight,
+					aws_locality_snapshot->effective_weight(
+						hid, mysrvc->address, mysrvc->port, mysrvc->weight));
 			}
 			const uint64_t random_value =
 				(static_cast<uint64_t>(rand_fast()) << 32) |
 				static_cast<uint64_t>(rand_fast());
-			const size_t selected = aws_locality_weighted_index(
-				locality_weights, num_candidates, random_value);
-			if (num_candidates > 32) {
-				free(locality_weights);
+			size_t selected = num_candidates;
+			if (total_weight == 0 && num_candidates != 0) {
+				selected = random_value % num_candidates;
+			} else if (total_weight != 0) {
+				const uint64_t target = random_value % total_weight;
+				uint64_t cumulative = 0;
+				for (j = 0; j < num_candidates; ++j) {
+					mysrvc = mysrvcCandidates[j];
+					cumulative = aws_locality_saturating_add(cumulative,
+						aws_locality_snapshot->effective_weight(
+							hid, mysrvc->address, mysrvc->port, mysrvc->weight));
+					if (target < cumulative) {
+						selected = j;
+						break;
+					}
+				}
 			}
 			if (selected < num_candidates) {
 				mysrvc = mysrvcCandidates[selected];
@@ -389,7 +393,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 				return mysrvc;
 			}
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7,
-				"Returning MySrvC NULL because AWS locality weights are zero\n");
+				"Returning MySrvC NULL because no AWS locality candidate is eligible\n");
 			if (l>32) {
 				free(mysrvcCandidates);
 			}

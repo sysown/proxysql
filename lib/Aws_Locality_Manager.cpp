@@ -9,6 +9,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <dlfcn.h>
+#include <exception>
 #include <limits>
 #include <map>
 #include <mutex>
@@ -51,7 +52,7 @@ bool read_seconds(
 	const auto it = object.find(field);
 	if (it == object.end()) {
 		value = default_value;
-		return true;
+		return value >= minimum && value <= maximum;
 	}
 	if (!it->is_number_unsigned() && !it->is_number_integer()) {
 		return false;
@@ -64,29 +65,6 @@ bool read_seconds(
 	}
 	value = static_cast<uint32_t>(parsed);
 	return true;
-}
-
-std::string normalized_hostname(std::string_view input) {
-	if (input.empty()) {
-		return {};
-	}
-
-	std::string hostname(input);
-	if (hostname.back() == '.') {
-		hostname.pop_back();
-	}
-	if (hostname.empty() || hostname.back() == '.') {
-		return {};
-	}
-
-	for (char& character : hostname) {
-		const unsigned char value = static_cast<unsigned char>(character);
-		if (!(std::isalnum(value) || character == '-' || character == '.')) {
-			return {};
-		}
-		character = static_cast<char>(std::tolower(value));
-	}
-	return hostname;
 }
 
 bool ends_with(const std::string& value, const std::string& suffix) {
@@ -112,21 +90,15 @@ bool valid_region(const std::string& region) {
 		std::isdigit(static_cast<unsigned char>(region.back()));
 }
 
-bool contains_proxy_label(const std::string& prefix) {
-	size_t begin = 0;
-	while (begin < prefix.size()) {
-		const size_t end = prefix.find('.', begin);
-		const size_t length = end == std::string::npos
-			? prefix.size() - begin : end - begin;
-		if (length >= 6 && prefix.compare(begin, 6, "proxy-") == 0) {
-			return true;
-		}
-		if (end == std::string::npos) {
-			break;
-		}
-		begin = end + 1;
-	}
-	return false;
+bool is_rds_proxy_endpoint_prefix(const std::string& prefix) {
+	// RDS Proxy endpoints have the canonical shape
+	// <proxy-name>.proxy-<generated-id>.<region>.rds.amazonaws.com.  A normal
+	// DB identifier is allowed to begin with "proxy-", so only the reserved
+	// generated-ID label after a proxy name identifies this endpoint type.
+	const size_t separator = prefix.rfind('.');
+	return separator != std::string::npos && separator != 0 &&
+		prefix.size() - separator - 1 > 6 &&
+		prefix.compare(separator + 1, 6, "proxy-") == 0;
 }
 
 } // namespace
@@ -171,7 +143,7 @@ AwsEndpointCandidate recognize_rds_endpoint(
 	AwsEndpointCandidate result;
 	result.hostgroup_id = hostgroup_id;
 	result.port = port;
-	result.hostname = normalized_hostname(hostname_input);
+	result.hostname = aws_locality_normalized_hostname(hostname_input);
 	if (result.hostname.empty()) {
 		return result;
 	}
@@ -197,7 +169,7 @@ AwsEndpointCandidate recognize_rds_endpoint(
 
 	const std::string endpoint_prefix = before_suffix.substr(0, region_separator);
 	result.region = before_suffix.substr(region_separator + 1);
-	if (contains_proxy_label(endpoint_prefix) || !valid_region(result.region)) {
+	if (is_rds_proxy_endpoint_prefix(endpoint_prefix) || !valid_region(result.region)) {
 		result.region.clear();
 		return result;
 	}
@@ -291,17 +263,66 @@ void* metadata_provider_module = nullptr;
 size_t metadata_provider_leases = 0;
 bool metadata_provider_accepting = false;
 
-std::string snapshot_key(
+bool dns_identity_length(std::string_view input, size_t& length) {
+	if (input.empty()) return false;
+	length = input.size();
+	if (input[length - 1] == '.') --length;
+	if (length == 0 || input[length - 1] == '.') return false;
+	for (size_t index = 0; index < length; ++index) {
+		const unsigned char value = static_cast<unsigned char>(input[index]);
+		if (!(std::isalnum(value) || input[index] == '-' || input[index] == '.')) {
+			return false;
+		}
+	}
+	return true;
+}
+
+uint64_t identity_hash(
 	uint32_t hostgroup_id,
-	std::string_view hostname_input,
+	std::string_view hostname,
 	uint16_t port) {
-	const std::string hostname = normalized_hostname(hostname_input);
-	return std::to_string(hostgroup_id) + "\n" + hostname + "\n" +
-		std::to_string(port);
+	uint64_t hash = 14695981039346656037ULL;
+	auto append = [&](unsigned char value) {
+		hash ^= value;
+		hash *= 1099511628211ULL;
+	};
+	for (unsigned int shift = 0; shift < 32; shift += 8) {
+		append(static_cast<unsigned char>(hostgroup_id >> shift));
+	}
+	append(static_cast<unsigned char>(port));
+	append(static_cast<unsigned char>(port >> 8));
+	size_t length = 0;
+	const bool valid_dns = dns_identity_length(hostname, length);
+	append(valid_dns ? 1 : 0);
+	if (!valid_dns) length = hostname.size();
+	for (size_t index = 0; index < length; ++index) {
+		const unsigned char value = static_cast<unsigned char>(hostname[index]);
+		append(valid_dns ? static_cast<unsigned char>(std::tolower(value)) : value);
+	}
+	return hash;
+}
+
+bool same_hostname_identity(std::string_view lhs, std::string_view rhs) {
+	size_t lhs_length = 0;
+	size_t rhs_length = 0;
+	const bool lhs_dns = dns_identity_length(lhs, lhs_length);
+	const bool rhs_dns = dns_identity_length(rhs, rhs_length);
+	if (lhs_dns != rhs_dns) return false;
+	if (!lhs_dns) return lhs == rhs;
+	if (lhs_length != rhs_length) return false;
+	for (size_t index = 0; index < lhs_length; ++index) {
+		if (std::tolower(static_cast<unsigned char>(lhs[index])) !=
+			std::tolower(static_cast<unsigned char>(rhs[index]))) {
+			return false;
+		}
+	}
+	return true;
 }
 
 std::string endpoint_key(std::string_view hostname_input, uint16_t port) {
-	return normalized_hostname(hostname_input) + "\n" + std::to_string(port);
+	const std::string hostname = aws_locality_normalized_hostname(hostname_input);
+	return (hostname.empty() ? "raw:" + std::string(hostname_input)
+		: "dns:" + hostname) + "\n" + std::to_string(port);
 }
 
 const char* failure_category(AwsMetadataStatus status) {
@@ -420,8 +441,15 @@ const AwsLocalitySnapshotEntry* AwsLocalitySnapshot::find(
 	uint32_t hostgroup_id,
 	std::string_view hostname,
 	uint16_t port) const {
-	const auto it = entries.find(snapshot_key(hostgroup_id, hostname, port));
-	return it == entries.end() ? nullptr : &it->second;
+	const auto range = entries.equal_range(identity_hash(hostgroup_id, hostname, port));
+	for (auto it = range.first; it != range.second; ++it) {
+		const auto& entry = it->second;
+		if (entry.hostgroup_id == hostgroup_id && entry.port == port &&
+			same_hostname_identity(entry.hostname, hostname)) {
+			return &entry;
+		}
+	}
+	return nullptr;
 }
 
 uint64_t AwsLocalitySnapshot::effective_weight(
@@ -448,8 +476,29 @@ public:
 			std::memory_order_release);
 	}
 
-	~Impl() {
-		shutdown();
+	~Impl() noexcept {
+		try {
+			shutdown();
+		} catch (...) {
+			// Destructors must not let allocation/system exceptions from the
+			// final snapshot publication escape. Ensure the scheduler thread
+			// cannot make std::thread's destructor terminate the process.
+			try {
+				std::thread worker;
+				{
+					std::lock_guard<std::mutex> lock(mutex_);
+					stopping_ = true;
+					enabled_ = false;
+					cancel_requested_ = true;
+					cv_.notify_all();
+					worker = std::move(worker_);
+				}
+				if (worker.joinable()) worker.join();
+				sink_->detach();
+			} catch (...) {
+				std::terminate();
+			}
+		}
 	}
 
 	void configure(std::vector<AwsLocalityHostgroupConfig> hostgroups) {
@@ -471,6 +520,9 @@ public:
 		++generation_;
 		cancel_requested_ = true;
 		force_refresh_ = enabled_ && !hostgroups_.empty();
+		if (force_refresh_) {
+			ensure_worker_locked();
+		}
 		publish_locked();
 		cv_.notify_all();
 	}
@@ -491,7 +543,7 @@ public:
 		publish_locked();
 		cv_.notify_all();
 		if (!enabled_ && worker_.joinable()) {
-			cv_.wait(lock, [&] {
+			cv_.wait_for(lock, config_.disable_wait_timeout, [&] {
 				return disable_acknowledged_ || stopping_;
 			});
 		}
@@ -742,7 +794,10 @@ private:
 						break;
 					}
 					if (!enabled_ || hostgroups_.empty()) {
-						cv_.wait(lock);
+						cv_.wait(lock, [&] {
+							return stopping_ || cancel_requested_ || force_refresh_ ||
+								(enabled_ && !hostgroups_.empty());
+						});
 						continue;
 					}
 					const auto now = config_.steady_clock();
@@ -900,11 +955,11 @@ private:
 
 		std::unordered_map<std::string, const AwsMetadataEndpoint*> returned;
 		for (const auto& endpoint : result.endpoints) {
-			const std::string hostname = normalized_hostname(endpoint.hostname);
+			const std::string hostname = aws_locality_normalized_hostname(endpoint.hostname);
 			if (!hostname.empty() && endpoint.region == request.region) {
 				returned[endpoint_key(hostname, endpoint.port)] = &endpoint;
 				if (endpoint.port == 0) {
-					returned[hostname + "\n0"] = &endpoint;
+					returned[endpoint_key(hostname, 0)] = &endpoint;
 				}
 			}
 		}
@@ -913,7 +968,7 @@ private:
 			auto& record = endpoint_cache_[endpoint_key(endpoint.hostname, endpoint.port)];
 			record.attempt_wall = now_wall;
 			const auto exact = returned.find(endpoint_key(endpoint.hostname, endpoint.port));
-			const auto no_port = returned.find(normalized_hostname(endpoint.hostname) + "\n0");
+			const auto no_port = returned.find(endpoint_key(endpoint.hostname, 0));
 			const AwsMetadataEndpoint* match = exact != returned.end()
 				? exact->second : (no_port != returned.end() ? no_port->second : nullptr);
 			if (match == nullptr || match->endpoint_type == AwsEndpointType::unknown) {
@@ -1018,7 +1073,7 @@ private:
 			next->hostgroups.insert(hostgroup.hostgroup_id);
 			for (const auto& backend : hostgroup.backends) {
 				auto entry = build_entry_locked(hostgroup, backend, now);
-				next->entries.emplace(snapshot_key(entry.hostgroup_id,
+				next->entries.emplace(identity_hash(entry.hostgroup_id,
 					entry.hostname, entry.port), std::move(entry));
 			}
 		}

@@ -191,6 +191,14 @@ bool install_aws_iam_token_source_service(
 	return install_global_aws_iam_token_source(source, destroy, module_handle);
 }
 
+bool uninstall_aws_iam_token_source_service(AwsIamTokenSource *expected_source) {
+	if (g_registry_target == nullptr) {
+		proxy_warning("AWS IAM token source removal attempted outside plugin init phase\n");
+		return false;
+	}
+	return uninstall_global_aws_iam_token_source(expected_source);
+}
+
 void get_aws_iam_limits_service(size_t *max_total_waiters, size_t *max_waiters_per_key) {
 	const size_t maximum = GloMTH != nullptr && GloMTH->variables.max_connections > 0
 		? static_cast<size_t>(GloMTH->variables.max_connections)
@@ -348,6 +356,7 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_.get_aws_iam_limits = &get_aws_iam_limits_service;
 	services_.install_aws_metadata_provider = &install_aws_metadata_provider_service;
 	services_.refresh_mysql_aws_locality_stats = &refresh_mysql_aws_locality_stats_service;
+	services_.uninstall_aws_iam_token_source = &uninstall_aws_iam_token_source_service;
 
 	// Phase-B (register_schemas) services: same layout as init(), but DB
 	// handle getters and the query-hook registrar are stubbed -- see the

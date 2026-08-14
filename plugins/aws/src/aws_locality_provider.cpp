@@ -62,19 +62,6 @@ void normalize_failure(AwsMetadataResult& result) {
 	}
 }
 
-std::string normalized_hostname(const std::string& input) {
-	if (input.empty()) return {};
-	std::string hostname = input;
-	if (hostname.back() == '.') hostname.pop_back();
-	if (hostname.empty() || hostname.back() == '.') return {};
-	for (char& character : hostname) {
-		const unsigned char value = static_cast<unsigned char>(character);
-		if (!(std::isalnum(value) || character == '-' || character == '.')) return {};
-		character = static_cast<char>(std::tolower(value));
-	}
-	return hostname;
-}
-
 bool valid_location_value(const std::string& value, size_t maximum) {
 	if (value.empty() || value.size() > maximum) return false;
 	for (const unsigned char character : value) {
@@ -453,7 +440,7 @@ AwsMetadataResult AwsLocalityRdsDiscovery::discover(
 	std::unordered_map<std::string, size_t> endpoint_indices;
 	auto append = [&](const std::string& hostname_input, int port,
 		AwsEndpointType type, const std::string& az, const std::string& account) {
-		const std::string hostname = normalized_hostname(hostname_input);
+		const std::string hostname = aws_locality_normalized_hostname(hostname_input);
 		if (hostname.empty() || type == AwsEndpointType::unknown ||
 			port < 0 || port > 65535) return;
 		AwsMetadataEndpoint endpoint;
@@ -629,7 +616,6 @@ AwsImdsResponse imds_request(
 	curl_easy_setopt(handle, CURLOPT_NOBODY, 0L);
 	curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 0L);
 	curl_easy_setopt(handle, CURLOPT_NOPROXY, "*");
-	curl_easy_setopt(handle, CURLOPT_PROXY, "");
 	curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT_MS, std::min<long>(timeout, 500L));
 	curl_easy_setopt(handle, CURLOPT_TIMEOUT_MS, timeout);
 	curl_easy_setopt(handle, CURLOPT_NOSIGNAL, 1L);

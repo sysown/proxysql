@@ -69,7 +69,7 @@ std::string capture_invalid_policy_log(MyHGC& hostgroup) {
 } // namespace
 
 int main() {
-	plan(21);
+	plan(20);
 
 	MyHGC hostgroup(42);
 	init_myhgc_hostgroup_settings(
@@ -146,10 +146,6 @@ int main() {
 		free_variables(variables);
 	}
 	test_globals_cleanup();
-
-	auto refresh_method = &MySQL_HostGroups_Manager::refresh_aws_locality_configuration;
-	ok(refresh_method != nullptr,
-		"Hostgroup Manager exposes the post-commit locality refresh boundary");
 
 	GloVars.prometheus_registry = std::make_shared<prometheus::Registry>();
 	{

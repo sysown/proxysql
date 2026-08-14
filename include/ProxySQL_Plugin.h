@@ -45,8 +45,10 @@ namespace prometheus { class Registry; }
 //          installation callback used by locality discovery.
 //   ABI 7: ProxySQL_PluginServices gains the MySQL-owned AWS-locality stats
 //          projection callback used by the AWS plugin's runtime view.
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = 7u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = 7u;
+//   ABI 8: ProxySQL_PluginServices gains an IAM-provider uninstall callback
+//          so a plugin can roll back a partially successful init.
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = 8u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = 8u;
 
 enum class ProxySQL_PluginDBKind : uint8_t {
 	admin_db = 0,
@@ -245,6 +247,9 @@ using proxysql_plugin_register_runtime_view_cb =
 using proxysql_plugin_install_aws_iam_token_source_cb =
 	bool (*)(AwsIamTokenSource *, void (*)(AwsIamTokenSource *), void *module_handle);
 
+using proxysql_plugin_uninstall_aws_iam_token_source_cb =
+	bool (*)(AwsIamTokenSource *expected_source);
+
 using proxysql_plugin_get_aws_iam_limits_cb =
 	void (*)(size_t *max_total_waiters, size_t *max_waiters_per_key);
 
@@ -323,6 +328,9 @@ struct ProxySQL_PluginServices {
 	proxysql_plugin_install_aws_metadata_provider_cb install_aws_metadata_provider;
 	// ABI-7 extension. Live in Phase B and normal init; it performs no I/O.
 	proxysql_plugin_refresh_mysql_aws_locality_stats_cb refresh_mysql_aws_locality_stats;
+	// ABI-8 extension. Live only during normal plugin init and intended for
+	// rollback of the same plugin's partially installed IAM provider.
+	proxysql_plugin_uninstall_aws_iam_token_source_cb uninstall_aws_iam_token_source;
 #endif /* PROXYSQL40 */
 };
 

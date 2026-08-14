@@ -74,7 +74,13 @@ void test_policy_validation() {
 	ok(!policy.valid && error.field == "stale_ttl_seconds",
 		"stale TTL shorter than refresh interval is rejected");
 
-	policy = parse_aws_locality_policy(json::array(), 20, error);
+	policy = parse_aws_locality_policy(json::parse(
+		R"({"same_region_multiplier":2.0,"same_az_multiplier":4.0,"refresh_interval_seconds":3600})"),
+		20, error);
+	ok(!policy.valid && error.field == "stale_ttl_seconds",
+		"omitted stale TTL cannot undercut an explicit refresh interval");
+
+	policy = parse_aws_locality_policy(json::array(), 21, error);
 	ok(!policy.valid && error.field == "locality_awareness",
 		"non-object locality policy is rejected");
 }
@@ -107,6 +113,10 @@ void test_endpoint_recognition() {
 
 	ok(!recognize_rds_endpoint(14, "db.proxy-abcdefghijkl.us-east-1.rds.amazonaws.com", 3306).recognized,
 		"RDS Proxy endpoint is excluded from the first version");
+	candidate = recognize_rds_endpoint(
+		14, "proxy-app1.abcdefghijkl.us-east-1.rds.amazonaws.com", 3306);
+	ok(candidate.recognized && candidate.region == "us-east-1",
+		"an ordinary RDS identifier beginning with proxy- is not misclassified as RDS Proxy");
 	ok(!recognize_rds_endpoint(15, "db.internal.example.com", 3306).recognized,
 		"custom CNAME is not inferred as RDS");
 	ok(!recognize_rds_endpoint(16, "db.us-east-1.rds.amazonaws.com.evil.example", 3306).recognized,
@@ -171,7 +181,7 @@ void test_effective_weight() {
 } // namespace
 
 int main() {
-	plan(32);
+	plan(34);
 	test_policy_validation();
 	test_endpoint_recognition();
 	test_classification();

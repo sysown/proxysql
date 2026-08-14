@@ -1,12 +1,27 @@
-#ifndef AWS_LOCALITY_TYPES_H
-#define AWS_LOCALITY_TYPES_H
+#ifndef __CLASS_AWS_LOCALITY_TYPES_H
+#define __CLASS_AWS_LOCALITY_TYPES_H
 
 #include <chrono>
+#include <cctype>
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
+
+inline std::string aws_locality_normalized_hostname(std::string_view input) {
+	if (input.empty()) return {};
+	std::string hostname(input);
+	if (hostname.back() == '.') hostname.pop_back();
+	if (hostname.empty() || hostname.back() == '.') return {};
+	for (char& character : hostname) {
+		const unsigned char value = static_cast<unsigned char>(character);
+		if (!(std::isalnum(value) || character == '-' || character == '.')) return {};
+		character = static_cast<char>(std::tolower(value));
+	}
+	return hostname;
+}
 
 enum class AwsEndpointType : uint8_t {
 	unknown,
@@ -151,4 +166,4 @@ struct AwsLocalityHostgroupConfig {
 	std::vector<AwsLocalityBackendConfig> backends;
 };
 
-#endif // AWS_LOCALITY_TYPES_H
+#endif // __CLASS_AWS_LOCALITY_TYPES_H

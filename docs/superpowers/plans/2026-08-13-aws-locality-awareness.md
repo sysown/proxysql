@@ -326,7 +326,7 @@
 
 - [ ] **Step 3: Extend the ABI and shared SDK lifetime**
 
-  Increment the plugin ABI maximum/current version to 6 and append metadata-provider installation to `ProxySQL_PluginServices`. Wire it only during plugin init. Refactor the plugin so IAM signer/token source and locality provider each retain a `std::shared_ptr<AwsSdkRuntime>`; `Aws::InitAPI` occurs once and `Aws::ShutdownAPI` occurs only after both core-owned capabilities drain.
+  Increment the plugin ABI maximum/current version to 6 for metadata-provider installation, to 7 for the MySQL-owned locality-stats projection callback, and to 8 for partial-init provider rollback; append those services to `ProxySQL_PluginServices`. Wire provider installation and rollback only during plugin init. Refactor the plugin so IAM signer/token source and locality provider each retain a `std::shared_ptr<AwsSdkRuntime>`; `Aws::InitAPI` occurs once and `Aws::ShutdownAPI` occurs only after both core-owned capabilities drain.
 
 - [ ] **Step 4: Implement local discovery**
 

@@ -3,6 +3,7 @@
 #include "test_init.h"
 
 #include "Aws_Locality_Manager.h"
+#include "GTID_Server_Data.h"
 #include "MySQL_Data_Stream.h"
 #include "MySQL_HostGroups_Manager.h"
 #include "MySQL_Logger.hpp"
@@ -10,6 +11,7 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -18,6 +20,26 @@
 #include <vector>
 
 using namespace std::chrono_literals;
+
+namespace {
+thread_local bool track_hot_path_allocations = false;
+thread_local size_t hot_path_allocations = 0;
+}
+
+void* operator new(std::size_t size) {
+	if (track_hot_path_allocations) ++hot_path_allocations;
+	if (void* memory = std::malloc(size)) return memory;
+	throw std::bad_alloc();
+}
+
+void* operator new[](std::size_t size) {
+	return ::operator new(size);
+}
+
+void operator delete(void* memory) noexcept { std::free(memory); }
+void operator delete[](void* memory) noexcept { std::free(memory); }
+void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
+void operator delete[](void* memory, std::size_t) noexcept { std::free(memory); }
 
 extern MySQL_HostGroups_Manager* MyHGM;
 extern MySQL_Threads_Handler* GloMTH;
@@ -192,18 +214,22 @@ MySQL_Connection* make_connection(MySrvC* server, int fd) {
 } // namespace
 
 int main() {
-	plan(20);
+	plan(28);
 	ok(aws_locality_saturating_add(
 		std::numeric_limits<uint64_t>::max() - 2, 5) ==
 		std::numeric_limits<uint64_t>::max(),
 		"locality weight sums saturate instead of overflowing");
 	const uint64_t lottery_weights[] = {40, 40, 30};
-	ok(aws_locality_weighted_index(lottery_weights, 3, 0) == 0 &&
-		aws_locality_weighted_index(lottery_weights, 3, 39) == 0 &&
-		aws_locality_weighted_index(lottery_weights, 3, 40) == 1 &&
-		aws_locality_weighted_index(lottery_weights, 3, 79) == 1 &&
-		aws_locality_weighted_index(lottery_weights, 3, 80) == 2,
-		"shared locality lottery uses exact cumulative weight boundaries");
+	ok(aws_locality_weighted_index(lottery_weights, 3, 0) == 0,
+		"locality lottery selects the first candidate at its lower boundary");
+	ok(aws_locality_weighted_index(lottery_weights, 3, 39) == 0,
+		"locality lottery selects the first candidate at its upper boundary");
+	ok(aws_locality_weighted_index(lottery_weights, 3, 40) == 1,
+		"locality lottery selects the second candidate at its lower boundary");
+	ok(aws_locality_weighted_index(lottery_weights, 3, 79) == 1,
+		"locality lottery selects the second candidate at its upper boundary");
+	ok(aws_locality_weighted_index(lottery_weights, 3, 80) == 2,
+		"locality lottery selects the final candidate at its lower boundary");
 	const uint64_t zero_weights[] = {0, 0};
 	ok(aws_locality_weighted_index(zero_weights, 2, 17) == 2,
 		"shared locality lottery rejects an all-zero candidate set");
@@ -293,14 +319,35 @@ int main() {
 		local_share, regional_share, remote_share);
 	ok(local->weight == 10 && regional->weight == 20 && remote->weight == 30,
 		"global locality selection never mutates configured server weights");
+	local->weight = 0;
+	regional->weight = 0;
+	remote->weight = 0;
+	ok(hostgroup->get_random_MySrvC(nullptr, 0, -1, session.session) != nullptr,
+		"global selection retains an eligible fallback when all configured weights are zero");
+	local->weight = 10;
+	regional->weight = 20;
+	remote->weight = 30;
 
 	MySQL_Connection* local_connection = make_connection(local, 100);
 	std::vector<MySQL_Connection*> remote_connections;
 	for (int i = 0; i < 5; ++i) {
 		remote_connections.push_back(make_connection(remote, 200 + i));
 	}
+	for (int i = 5; i < 33; ++i) {
+		remote_connections.push_back(make_connection(remote, 200 + i));
+	}
 	worker.push_MyConn_local(local_connection);
 	for (auto* connection : remote_connections) worker.push_MyConn_local(connection);
+
+	hot_path_allocations = 0;
+	track_hot_path_allocations = true;
+	MySQL_Connection* allocation_probe = worker.get_MyConn_local(
+		kHostgroup, session.session, nullptr, 0, -1,
+		MySQLBackendAuthType::PASSWORD);
+	track_hot_path_allocations = false;
+	ok(allocation_probe != nullptr && hot_path_allocations == 0,
+		"locality selection performs no heap allocation with more than 32 cached connections");
+	if (allocation_probe != nullptr) worker.push_MyConn_local(allocation_probe);
 
 	int local_parent = 0;
 	int remote_parent = 0;
@@ -318,6 +365,30 @@ int main() {
 		local_parent + remote_parent == 6000,
 		"local cache chooses 40:30 weighted parents, not the 1:5 connection count (%.3f local)",
 		local_parent_share);
+	local->weight = 0;
+	remote->weight = 0;
+	MySQL_Connection* zero_weight_selected = worker.get_MyConn_local(
+		kHostgroup, session.session, nullptr, 0, -1,
+		MySQLBackendAuthType::PASSWORD);
+	ok(zero_weight_selected != nullptr,
+		"local cache reuses an eligible connection when all parent weights are zero");
+	if (zero_weight_selected != nullptr) worker.push_MyConn_local(zero_weight_selected);
+	local->weight = 10;
+	remote->weight = 30;
+
+	GTID_Server_Data local_gtid(nullptr, const_cast<char*>(kLocal), 0, 3306);
+	local_gtid.add_gtid_from_ok("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:42");
+	MyHGM->gtid_map.emplace(std::string(kLocal) + ":3306", &local_gtid);
+	local->aws_aurora_current_lag_us = 5000;
+	char gtid_uuid[] = "aaaaaaaa000011112222aaaaaaaaaaaa";
+	MySQL_Connection* gtid_selected = worker.get_MyConn_local(
+		kHostgroup, session.session, gtid_uuid, 42, 1,
+		MySQLBackendAuthType::PASSWORD);
+	ok(gtid_selected != nullptr && gtid_selected->parent == local,
+		"GTID-qualified local reuse preserves the legacy max-lag exemption");
+	if (gtid_selected != nullptr) worker.push_MyConn_local(gtid_selected);
+	local->aws_aurora_current_lag_us = 0;
+	MyHGM->gtid_map.erase(std::string(kLocal) + ":3306");
 
 	remote->aws_aurora_current_lag_us = 5000;
 	MySQL_Connection* selected = worker.get_MyConn_local(

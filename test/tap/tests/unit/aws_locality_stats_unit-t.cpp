@@ -8,7 +8,7 @@
 #include <atomic>
 #include <memory>
 #include <string>
-#include <unistd.h>
+#include <thread>
 #include <vector>
 
 #ifndef PROXYSQL_AWS_PLUGIN_PATH
@@ -95,7 +95,10 @@ AwsLocalitySnapshotEntry diagnostic_row(
 } // namespace
 
 int main() {
-	plan(22);
+	plan(23);
+	if (test_globals_init() != 0) {
+		BAIL_OUT("test global initialization failed");
+	}
 
 	SQLite3DB statsdb;
 	statsdb.open((char*)":memory:",
@@ -176,8 +179,36 @@ int main() {
 		"'db''quoted.abcdefghijkl.us-east-1.rds.amazonaws.com'") == 1,
 		"projection safely quotes endpoint text");
 
+	std::vector<AwsLocalitySnapshotEntry> concurrent_rows_a;
+	std::vector<AwsLocalitySnapshotEntry> concurrent_rows_b;
+	for (uint32_t index = 0; index < 200; ++index) {
+		concurrent_rows_a.push_back(diagnostic_row(1000 + index,
+			AwsLocalityMetadataStatus::fresh, 2.0, 10));
+		concurrent_rows_b.push_back(diagnostic_row(2000 + index,
+			AwsLocalityMetadataStatus::stale, 3.0, 10));
+	}
+	std::atomic<bool> start_concurrent_projection { false };
+	std::atomic<unsigned int> successful_projections { 0 };
+	auto project_repeatedly = [&](const std::vector<AwsLocalitySnapshotEntry>& projection) {
+		while (!start_concurrent_projection.load(std::memory_order_acquire)) {
+			std::this_thread::yield();
+		}
+		for (unsigned int iteration = 0; iteration < 10; ++iteration) {
+			if (MySQL_HostGroups_Manager::project_aws_locality_stats(&statsdb, projection)) {
+				successful_projections.fetch_add(1, std::memory_order_relaxed);
+			}
+		}
+	};
+	std::thread projection_a(project_repeatedly, std::cref(concurrent_rows_a));
+	std::thread projection_b(project_repeatedly, std::cref(concurrent_rows_b));
+	start_concurrent_projection.store(true, std::memory_order_release);
+	projection_a.join();
+	projection_b.join();
+	ok(successful_projections.load() == 20 &&
+		statsdb.return_one_int("SELECT count(*) FROM stats_mysql_aws_locality") == 200,
+		"concurrent runtime-view refreshes serialize complete replacement transactions");
+
 	GloVars.prometheus_registry = std::make_shared<prometheus::Registry>();
-	unlink("file:mem_mydb?mode=memory");
 	{
 		MySQL_HostGroups_Manager hostgroups;
 		MyHGM = &hostgroups;
@@ -216,7 +247,6 @@ int main() {
 			"repeated generation queries remain network-free");
 		MyHGM = nullptr;
 	}
-	unlink("file:mem_mydb?mode=memory");
 	shutdown_global_aws_metadata_provider();
 	GloVars.prometheus_registry.reset();
 
@@ -236,5 +266,6 @@ int main() {
 	statsdb.execute("PRAGMA query_only = OFF");
 
 	proxysql_stop_configured_plugins(manager, error);
+	test_globals_cleanup();
 	return exit_status();
 }

@@ -1,5 +1,5 @@
-#ifndef AWS_LOCALITY_MANAGER_H
-#define AWS_LOCALITY_MANAGER_H
+#ifndef __CLASS_AWS_LOCALITY_MANAGER_H
+#define __CLASS_AWS_LOCALITY_MANAGER_H
 
 #include "Aws_Locality_Types.h"
 #include "json_fwd.hpp"
@@ -90,7 +90,7 @@ struct AwsLocalitySnapshotEntry {
 struct AwsLocalitySnapshot {
 	uint64_t generation { 0 };
 	bool enabled { false };
-	std::unordered_map<std::string, AwsLocalitySnapshotEntry> entries;
+	std::unordered_multimap<uint64_t, AwsLocalitySnapshotEntry> entries;
 	std::unordered_set<uint32_t> hostgroups;
 
 	const AwsLocalitySnapshotEntry* find(
@@ -115,6 +115,7 @@ struct AwsLocalityManagerConfig {
 	SteadyClock steady_clock;
 	WallClock wall_clock;
 	std::chrono::milliseconds request_timeout { std::chrono::seconds(5) };
+	std::chrono::milliseconds disable_wait_timeout { std::chrono::milliseconds(250) };
 	std::function<void()> before_completion;
 };
 
@@ -137,4 +138,4 @@ private:
 	std::unique_ptr<Impl> impl_;
 };
 
-#endif // AWS_LOCALITY_MANAGER_H
+#endif // __CLASS_AWS_LOCALITY_MANAGER_H

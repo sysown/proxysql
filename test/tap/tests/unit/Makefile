@@ -419,7 +419,7 @@ $(LIBPROXYSQLAR): FORCE
 # ===========================================================================
 
 UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
-	protocol_unit-t auth_unit-t aws_iam_policy_unit-t aws_iam_connection_config_unit-t aws_iam_provider_boundary_unit-t aws_iam_completion_queue_unit-t aws_iam_session_state_unit-t aws_iam_connection_secret_unit-t aws_iam_pool_unit-t aws_iam_failure_unit-t aws_iam_kill_helper_unit-t aws_locality_policy_unit-t aws_locality_manager_unit-t aws_locality_config_unit-t aws_locality_selection_unit-t aws_locality_stats_unit-t connection_pool_unit-t \
+	protocol_unit-t auth_unit-t aws_iam_policy_unit-t aws_iam_connection_config_unit-t aws_iam_provider_boundary_unit-t aws_iam_completion_queue_unit-t aws_iam_session_state_unit-t aws_iam_connection_secret_unit-t aws_iam_pool_unit-t aws_iam_failure_unit-t aws_iam_kill_helper_unit-t aws_locality_policy_unit-t aws_locality_manager_unit-t connection_pool_unit-t \
 	rule_matching_unit-t hostgroups_unit-t monitor_health_unit-t \
 	pgsql_command_complete_unit-t \
 	ffto_protocol_unit-t \
@@ -495,6 +495,9 @@ UNIT_TESTS += \
 	plugin_prometheus_unit-t \
 	plugin_lifecycle_unit-t \
 	plugin_runtime_views_unit-t \
+	aws_locality_config_unit-t \
+	aws_locality_selection_unit-t \
+	aws_locality_stats_unit-t \
 	test_mysqlx_plugin_load-t \
 	test_mysqlx_admin_tables-t \
 	mysqlx_config_store_unit-t \
@@ -939,7 +942,7 @@ aws_locality_policy_unit-t: aws_locality_policy_unit-t.cpp \
 		$(PROXYSQL_PATH)/lib/Aws_Locality_Manager.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
 	$(CXX) $< $(PROXYSQL_PATH)/lib/Aws_Locality_Manager.cpp \
 		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
-		$(IDIRS) $(OPT) -lpthread -o $@
+		$(IDIRS) $(OPT) -lpthread -ldl -o $@
 
 aws_locality_manager_unit-t: aws_locality_manager_unit-t.cpp \
 		$(PROXYSQL_PATH)/lib/Aws_Locality_Manager.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o

@@ -31,6 +31,9 @@ struct FakeProviderState {
 	uint64_t next_handle { 1 };
 	bool shut_down { false };
 	bool destroyed { false };
+	bool block_requests { false };
+	bool request_entered { false };
+	bool release_requests { false };
 };
 
 class FakeProvider final : public AwsMetadataProvider {
@@ -47,10 +50,14 @@ public:
 	AwsMetadataRequestHandle request(
 		const AwsMetadataRequest& request,
 		std::weak_ptr<AwsMetadataCompletionSink> sink) override {
-		std::lock_guard<std::mutex> lock(state_->mutex);
+		std::unique_lock<std::mutex> lock(state_->mutex);
 		const AwsMetadataRequestHandle handle { state_->next_handle++ };
 		state_->requests.push_back({handle, request, std::move(sink)});
+		state_->request_entered = true;
 		state_->cv.notify_all();
+		state_->cv.wait(lock, [&] {
+			return !state_->block_requests || state_->release_requests;
+		});
 		return handle;
 	}
 
@@ -122,6 +129,37 @@ bool complete_request(
 	return false;
 }
 
+bool complete_request_after(
+	const std::shared_ptr<FakeProviderState>& state,
+	AwsMetadataRequestKind kind,
+	const std::string& region,
+	AwsMetadataResult result,
+	size_t first_request) {
+	FakeProviderState::Pending pending;
+	{
+		std::lock_guard<std::mutex> lock(state->mutex);
+		for (size_t index = first_request; index < state->requests.size(); ++index) {
+			const auto& item = state->requests[index];
+			if (item.request.kind == kind && item.request.region == region) {
+				pending = item;
+				break;
+			}
+		}
+	}
+	if (pending.handle.value == 0) {
+		return false;
+	}
+	if (auto sink = pending.sink.lock()) {
+		AwsMetadataCompletion completion;
+		completion.opaque_id = pending.request.opaque_id;
+		completion.generation = pending.request.generation;
+		completion.result = std::move(result);
+		sink->post(std::move(completion));
+		return true;
+	}
+	return false;
+}
+
 template <typename Predicate>
 bool wait_until(Predicate predicate) {
 	const auto deadline = std::chrono::steady_clock::now() + 2s;
@@ -129,7 +167,7 @@ bool wait_until(Predicate predicate) {
 		if (predicate()) {
 			return true;
 		}
-		std::this_thread::yield();
+		std::this_thread::sleep_for(1ms);
 	}
 	return predicate();
 }
@@ -164,7 +202,7 @@ const AwsLocalitySnapshotEntry* lookup(
 } // namespace
 
 int main() {
-	plan(41);
+	plan(44);
 
 	auto provider_state = std::make_shared<FakeProviderState>();
 	ok(install_global_aws_metadata_provider(
@@ -287,8 +325,10 @@ int main() {
 		complete_request(provider_state, AwsMetadataRequestKind::rds_region,
 			"eu-west-1", std::move(refresh_failure), 1);
 	const auto failed_refresh_snapshot = manager.snapshot();
+	const auto* failed_refresh_entry = lookup(failed_refresh_snapshot, 11, east_one);
 	ok(failed_refreshes_delivered &&
-		lookup(failed_refresh_snapshot, 11, east_one)->status == AwsLocalityMetadataStatus::stale,
+		failed_refresh_entry != nullptr &&
+		failed_refresh_entry->status == AwsLocalityMetadataStatus::stale,
 		"failed refresh preserves the last successful value within stale TTL");
 
 	steady_seconds.store(121);
@@ -302,7 +342,11 @@ int main() {
 		hg11_east->multiplier == 1.0,
 		"expired metadata becomes neutral");
 
-	const size_t canceled_before_reload = provider_state->canceled.size();
+	size_t canceled_before_reload = 0;
+	{
+		std::lock_guard<std::mutex> lock(provider_state->mutex);
+		canceled_before_reload = provider_state->canceled.size();
+	}
 	manager.configure({
 		make_hostgroup(12, 2.0, 4.0, 300, 1800,
 			{"db-new.abcdefghijkl.us-east-1.rds.amazonaws.com"}),
@@ -446,6 +490,17 @@ int main() {
 	}), "concurrent completions publish one consistent immutable snapshot");
 	concurrent_manager.shutdown();
 
+	const size_t startup_request_count = requests_copy(replacement_state).size();
+	MySQLAwsLocalityManager startup_manager(manager_config);
+	startup_manager.set_enabled(true);
+	startup_manager.configure({
+		make_hostgroup(250, 2.0, 4.0, 300, 1800,
+			{"db-startup.abcdefghijkl.us-east-2.rds.amazonaws.com"}),
+	});
+	ok(wait_for_request_count(replacement_state, startup_request_count + 2),
+		"configuration starts discovery when the master switch was enabled first");
+	startup_manager.shutdown();
+
 	std::mutex completion_hook_mutex;
 	std::condition_variable completion_hook_cv;
 	bool completion_hook_entered = false;
@@ -455,28 +510,32 @@ int main() {
 		std::unique_lock<std::mutex> lock(completion_hook_mutex);
 		completion_hook_entered = true;
 		completion_hook_cv.notify_all();
-		completion_hook_cv.wait(lock, [&] { return release_completion; });
+		completion_hook_cv.wait_for(lock, 2s, [&] { return release_completion; });
 	};
 	MySQLAwsLocalityManager blocking_manager(blocking_config);
 	const auto blocking_endpoint = "db-block.abcdefghijkl.ap-block-1.rds.amazonaws.com";
+	const size_t blocking_request_count = requests_copy(replacement_state).size();
 	blocking_manager.configure({
 		make_hostgroup(300, 2.0, 4.0, 300, 1800, {blocking_endpoint}),
 	});
 	blocking_manager.set_enabled(true);
-	ok(wait_for_request_count(replacement_state, 105),
+	ok(wait_for_request_count(replacement_state, blocking_request_count + 2),
 		"callback-shutdown fixture dispatches local and regional requests");
 	std::atomic<bool> callback_returned { false };
 	std::thread callback_thread([&] {
 		AwsMetadataResult result;
 		result.status = AwsMetadataStatus::ok;
 		result.local = {"ap-block-1", "ap-block-1a", "111122223333"};
-		complete_request(replacement_state, AwsMetadataRequestKind::local_location,
-			"", std::move(result), 2);
+		complete_request_after(replacement_state,
+			AwsMetadataRequestKind::local_location, "", std::move(result),
+			blocking_request_count);
 		callback_returned.store(true);
 	});
 	{
 		std::unique_lock<std::mutex> lock(completion_hook_mutex);
-		completion_hook_cv.wait(lock, [&] { return completion_hook_entered; });
+		if (!completion_hook_cv.wait_for(lock, 2s, [&] { return completion_hook_entered; })) {
+			BAIL_OUT("completion hook did not enter before shutdown fixture deadline");
+		}
 	}
 	std::mutex shutdown_mutex;
 	std::condition_variable shutdown_cv;
@@ -505,6 +564,75 @@ int main() {
 	blocking_shutdown.join();
 	ok(callback_returned.load() && shutdown_done,
 		"callback and shutdown finish without accessing detached manager state");
+
+	AwsLocalityManagerConfig bounded_disable_config = manager_config;
+	bounded_disable_config.disable_wait_timeout = 50ms;
+	MySQLAwsLocalityManager bounded_disable_manager(bounded_disable_config);
+	{
+		std::lock_guard<std::mutex> lock(replacement_state->mutex);
+		replacement_state->block_requests = true;
+		replacement_state->request_entered = false;
+		replacement_state->release_requests = false;
+	}
+	bounded_disable_manager.configure({
+		make_hostgroup(400, 2.0, 4.0, 300, 1800,
+			{"db-disable.abcdefghijkl.us-east-2.rds.amazonaws.com"}),
+	});
+	bounded_disable_manager.set_enabled(true);
+	{
+		std::unique_lock<std::mutex> lock(replacement_state->mutex);
+		if (!replacement_state->cv.wait_for(lock, 2s, [&] {
+				return replacement_state->request_entered;
+			})) {
+			BAIL_OUT("provider request did not enter bounded-disable fixture");
+		}
+	}
+	std::mutex disable_mutex;
+	std::condition_variable disable_cv;
+	bool disable_returned = false;
+	std::thread disable_thread([&] {
+		bounded_disable_manager.set_enabled(false);
+		std::lock_guard<std::mutex> lock(disable_mutex);
+		disable_returned = true;
+		disable_cv.notify_all();
+	});
+	bool disable_returned_within_bound = false;
+	{
+		std::unique_lock<std::mutex> lock(disable_mutex);
+		disable_returned_within_bound = disable_cv.wait_for(lock, 250ms, [&] {
+			return disable_returned;
+		});
+	}
+	ok(disable_returned_within_bound,
+		"disabling locality does not block admin on a stalled provider call");
+	{
+		std::lock_guard<std::mutex> lock(replacement_state->mutex);
+		replacement_state->release_requests = true;
+		replacement_state->cv.notify_all();
+	}
+	disable_thread.join();
+	bounded_disable_manager.shutdown();
+
+	MySQLAwsLocalityManager invalid_identity_manager(manager_config);
+	AwsLocalityHostgroupConfig invalid_identity_hostgroup;
+	invalid_identity_hostgroup.hostgroup_id = 500;
+	invalid_identity_hostgroup.policy = {true, 2.0, 4.0, 300, 1800};
+	AwsEndpointCandidate ipv6_identity;
+	ipv6_identity.hostgroup_id = 500;
+	ipv6_identity.hostname = "fe80::1";
+	ipv6_identity.port = 3306;
+	AwsEndpointCandidate path_identity = ipv6_identity;
+	path_identity.hostname = "bad/name";
+	invalid_identity_hostgroup.backends.emplace_back(ipv6_identity, 7);
+	invalid_identity_hostgroup.backends.emplace_back(path_identity, 9);
+	invalid_identity_manager.configure({std::move(invalid_identity_hostgroup)});
+	const auto invalid_identity_snapshot = invalid_identity_manager.snapshot();
+	const auto* ipv6_entry = invalid_identity_snapshot->find(500, "fe80::1", 3306);
+	const auto* path_entry = invalid_identity_snapshot->find(500, "bad/name", 3306);
+	ok(invalid_identity_snapshot->entries.size() == 2 && ipv6_entry != nullptr &&
+		path_entry != nullptr && ipv6_entry->configured_weight == 7 &&
+		path_entry->configured_weight == 9,
+		"rejected DNS spellings retain distinct snapshot identities");
 
 	shutdown_global_aws_metadata_provider();
 

@@ -926,11 +926,14 @@ bool aws_locality_status_is_active(AwsLocalityMetadataStatus status) {
 		status == AwsLocalityMetadataStatus::stale;
 }
 
+std::mutex aws_locality_stats_projection_mutex;
+
 } // namespace
 
 bool MySQL_HostGroups_Manager::project_aws_locality_stats(
 	SQLite3DB* statsdb,
 	const std::vector<AwsLocalitySnapshotEntry>& rows) {
+	std::lock_guard<std::mutex> projection_lock(aws_locality_stats_projection_mutex);
 	if (statsdb == nullptr || !statsdb->execute("BEGIN")) return false;
 	bool success = statsdb->execute("DELETE FROM stats_mysql_aws_locality");
 	for (const auto& row : rows) {
