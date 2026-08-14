@@ -112,6 +112,11 @@ enum MySQL_Thread_status_variable {
 	st_var_client_host_error_killed_connections,
 	st_var_set_wait_timeout_commands,
 	st_var_timeout_terminated_connections,
+	st_var_user_variable_assignments_tracked,
+	st_var_user_variable_replay_commands,
+	st_var_user_variable_replay_failures,
+	st_var_user_variable_fallback_unsupported,
+	st_var_user_variable_fallback_limits,
 	MY_st_var_END
 };
 
@@ -317,6 +322,11 @@ struct p_th_counter {
 		mysql_killed_backend_connections,
 		mysql_killed_backend_queries,
 		client_host_error_killed_connections,
+		mysql_user_variable_assignments_tracked,
+		mysql_user_variable_replay_commands,
+		mysql_user_variable_replay_failures,
+		mysql_user_variable_fallback_unsupported,
+		mysql_user_variable_fallback_limits,
 		SIZE_
 	};
 };
@@ -625,6 +635,7 @@ class MySQL_Threads_Handler
 		int query_processor_parser;
 		int set_query_lock_on_hostgroup;
 		int set_parser_algorithm;
+		int user_variable_tracking;
 		int reset_connection_algorithm;
 		int auto_increment_delay_multiplex;
 		int auto_increment_delay_multiplex_timeout_ms;
@@ -677,6 +688,7 @@ class MySQL_Threads_Handler
 		bool query_cache_stores_empty_result;
 		bool kill_backend_connection_when_disconnect;
 		bool client_session_track_gtid;
+		bool update_gtid_from_ok;
 		bool enable_client_deprecate_eof;
 		bool enable_server_deprecate_eof;
 		bool enable_load_data_local_infile;

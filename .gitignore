@@ -78,6 +78,7 @@ oldcode/tests/connect_speed
 # generated test pems
 test/tap/tests/*.pem
 test/tap/tests/test_cluster_sync_config/proxysql*.pem
+test/tap/pgsql_user_sync/
 
 #binary
 src/proxysql

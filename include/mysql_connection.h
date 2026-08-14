@@ -3,6 +3,7 @@
 
 #include "proxysql.h"
 #include "cpp.h"
+#include "MySQL_User_Variables.h"
 
 //#include "../deps/json/json.hpp"
 //using json = nlohmann::json;
@@ -66,6 +67,19 @@ class MySQL_Connection_userinfo {
 	bool set_schemaname(char *, int);
 };
 
+const char* mysql_simple_command_log_text(const char* stmt, bool redact_statement);
+bool mysql_user_variable_tracking_can_stage(
+	int mode, int set_parser_algorithm, int query_processor_parser,
+	bool plain_text_com_query, bool connection_bound_fallback);
+bool mysql_user_variable_set_uses_qpo_epilogue(
+	UserVariableSetStatus analysis_status,
+	MySQL_User_Variable_Apply_Result preflight_result);
+bool mysql_user_variable_commit_post_ok(
+	MySQL_User_Variable_State& frontend,
+	MySQL_User_Variable_State& backend,
+	const std::vector<UserVariableAssignment>& assignments);
+unsigned int mysql_user_variable_replay_error_code(unsigned int backend_error_code);
+
 class MySQL_Connection {
 	private:
 	void update_warning_count_from_connection();
@@ -108,6 +122,7 @@ class MySQL_Connection {
 
 	Variable variables[SQL_NAME_LAST_HIGH_WM];
 	uint32_t var_hash[SQL_NAME_LAST_HIGH_WM];
+	MySQL_User_Variable_State user_variables;
 	// for now we store possibly missing variables in the lower range
 	// we may need to fix that, but this will cost performance
 	bool var_absent[SQL_NAME_LAST_HIGH_WM] = {false};
@@ -228,7 +243,7 @@ class MySQL_Connection {
 	int async_select_db(short event);
 	int async_set_autocommit(short event, bool);
 	int async_set_names(short event, unsigned int nr);
-	int async_send_simple_command(short event, char *stmt, unsigned long length); // no result set expected
+	int async_send_simple_command(short event, char *stmt, unsigned long length, bool redact_statement=false); // no result set expected
 	int async_query(short event, char *stmt, unsigned long length, MYSQL_STMT **_stmt=NULL, stmt_execute_metadata_t *_stmt_meta=NULL);
 	int async_ping(short event);
 	int async_set_option(short event, bool mask);
@@ -271,7 +286,7 @@ class MySQL_Connection {
 	bool AutocommitFalse_AndSavepoint();
 	bool MultiplexDisabled(bool check_delay_token = true);
 	bool IsKeepMultiplexEnabledVariables(char *query_digest_text);
-	void ProcessQueryAndSetStatusFlags(char *query_digest_text);
+	void ProcessQueryAndSetStatusFlags(char *query_digest_text, bool user_variable_usage_is_safe);
 	void optimize();
 	void close_mysql();
 

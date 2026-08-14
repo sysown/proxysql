@@ -178,6 +178,7 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 	}
 #endif
 	uint64_t hash1, hash2;
+	bool effective_use_ssl = use_ssl;
 	SpookyHash myhash;
 	myhash.Init(1,2);
 	myhash.Update(username,strlen(username));
@@ -306,7 +307,19 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 		// FIXME: if the password is a clear text password, automatically generate sha1_pass and clear_text_password
 	}
 
-	ad->use_ssl=use_ssl;
+	if (ad->attributes && strlen(ad->attributes)) {
+		try {
+			nlohmann::json valid=nlohmann::json::parse(ad->attributes);
+			if (valid.find("spiffe_id") != valid.end()) {
+				effective_use_ssl = true;
+			}
+		}
+		catch(nlohmann::json::exception&) {
+			// Invalid attributes do not require TLS.
+		}
+	}
+
+	ad->use_ssl=effective_use_ssl;
 	ad->default_hostgroup=default_hostgroup;
 	ad->schema_locked=schema_locked;
 	ad->transaction_persistent=transaction_persistent;

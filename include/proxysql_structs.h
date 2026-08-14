@@ -327,6 +327,7 @@ enum session_status {
 	RESYNCHRONIZING_CONNECTION,
 	SETTING_SESSION_TRACK_VARIABLES,
 	SETTING_SESSION_TRACK_STATE,
+	SETTING_USER_VARIABLES,
 	session_status___NONE // special marker
 };
 
@@ -1353,6 +1354,7 @@ __thread int mysql_thread___query_processor_regex;
 __thread int mysql_thread___set_query_lock_on_hostgroup;
 __thread int mysql_thread___set_parser_algorithm;
 __thread int mysql_thread___query_processor_parser;
+__thread int mysql_thread___user_variable_tracking;
 __thread int mysql_thread___reset_connection_algorithm;
 __thread uint32_t mysql_thread___server_capabilities;
 __thread int mysql_thread___auto_increment_delay_multiplex;
@@ -1389,6 +1391,7 @@ __thread bool mysql_thread___default_reconnect;
 __thread bool mysql_thread___sessions_sort;
 __thread bool mysql_thread___kill_backend_connection_when_disconnect;
 __thread bool mysql_thread___client_session_track_gtid;
+__thread bool mysql_thread___update_gtid_from_ok;
 __thread char * mysql_thread___default_variables[SQL_NAME_LAST_LOW_WM];
 __thread int mysql_thread___query_digests_grouping_limit;
 __thread int mysql_thread___query_digests_groups_grouping_limit;
@@ -1708,6 +1711,7 @@ extern __thread int mysql_thread___query_processor_regex;
 extern __thread int mysql_thread___set_query_lock_on_hostgroup;
 extern __thread int mysql_thread___set_parser_algorithm;
 extern __thread int mysql_thread___query_processor_parser;
+extern __thread int mysql_thread___user_variable_tracking;
 extern __thread int mysql_thread___reset_connection_algorithm;
 extern __thread uint32_t mysql_thread___server_capabilities;
 extern __thread int mysql_thread___auto_increment_delay_multiplex;
@@ -1744,6 +1748,7 @@ extern __thread bool mysql_thread___default_reconnect;
 extern __thread bool mysql_thread___sessions_sort;
 extern __thread bool mysql_thread___kill_backend_connection_when_disconnect;
 extern __thread bool mysql_thread___client_session_track_gtid;
+extern __thread bool mysql_thread___update_gtid_from_ok;
 extern __thread char * mysql_thread___default_variables[SQL_NAME_LAST_LOW_WM];
 extern __thread int mysql_thread___query_digests_grouping_limit;
 extern __thread int mysql_thread___query_digests_groups_grouping_limit;

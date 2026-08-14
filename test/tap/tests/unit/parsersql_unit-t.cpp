@@ -3,12 +3,28 @@
 #include "test_init.h"
 #include "proxysql.h"
 #include "Query_Processor_ParserSQL.h"
+#include "MySQL_User_Variables.h"
 
 #include <cstring>
 #include <string>
 #include <string_view>
 #include <map>
 #include <vector>
+
+bool mysql_user_variable_tracking_can_stage(
+	int mode, int set_parser_algorithm, int query_processor_parser,
+	bool plain_text_com_query, bool connection_bound_fallback);
+bool mysql_user_variable_set_uses_qpo_epilogue(
+	UserVariableSetStatus analysis_status,
+	MySQL_User_Variable_Apply_Result preflight_result);
+bool mysql_user_variable_commit_post_ok(
+	MySQL_User_Variable_State& frontend,
+	MySQL_User_Variable_State& backend,
+	const std::vector<UserVariableAssignment>& assignments);
+bool mysql_user_variable_must_classify_and_sync_policy(
+	int mode, int set_parser_algorithm, int query_processor_parser,
+	bool plain_text_com_query, bool connection_bound_fallback,
+	bool tracking_latched);
 
 static inline size_t str_view_len(const char *s) {
 	return s ? std::string_view{s}.size() : 0;
@@ -304,8 +320,480 @@ static void test_pgsql_command_type_unknown() {
 		"PgSQL cmd: garbage → UNKNOWN");
 }
 
+static UserVariableSetAnalysis analyze_user_set(const char* query) {
+	return parsersql_analyze_user_variable_set_mysql(query, str_view_len(query));
+}
+
+static void test_user_variable_browser_metadata() {
+	const char* q =
+		"SET @browser_lang = 'en-US', @browser_time = '2026-08-11 18:11:12', "
+		"@browser_timezone = 'GMT+2', @ip_address = '167.235.198.244'";
+	auto r = analyze_user_set(q);
+	bool exact = r.status == UserVariableSetStatus::SUPPORTED && r.assignments.size() == 4;
+	if (exact) {
+		exact = r.assignments[0].canonical_name == "browser_lang" &&
+			r.assignments[0].replay_target == "@browser_lang" &&
+			r.assignments[0].raw_literal == "'en-US'" &&
+			r.assignments[0].kind == UserVariableLiteralKind::STRING &&
+			r.assignments[1].canonical_name == "browser_time" &&
+			r.assignments[1].raw_literal == "'2026-08-11 18:11:12'" &&
+			r.assignments[2].canonical_name == "browser_timezone" &&
+			r.assignments[2].raw_literal == "'GMT+2'" &&
+			r.assignments[3].canonical_name == "ip_address" &&
+			r.assignments[3].raw_literal == "'167.235.198.244'";
+	}
+	ok(exact, "typed user SET: browser metadata is lossless and ordered");
+}
+
+static void test_user_variable_supported_literals() {
+	struct Case { const char* query; const char* raw; UserVariableLiteralKind kind; };
+	const Case cases[] = {
+		{"SET @x='a\\\\b'", "'a\\\\b'", UserVariableLiteralKind::STRING},
+		{"SET @x=42", "42", UserVariableLiteralKind::INTEGER},
+		{"SET @x=-42", "-42", UserVariableLiteralKind::INTEGER},
+		{"SET @x=1.25", "1.25", UserVariableLiteralKind::DECIMAL},
+		{"SET @x=+1.2E-3", "+1.2E-3", UserVariableLiteralKind::DECIMAL},
+		{"SET @x=0xCAFE", "0xCAFE", UserVariableLiteralKind::HEXADECIMAL},
+		{"SET @x=X'CAFE'", "X'CAFE'", UserVariableLiteralKind::HEXADECIMAL},
+		{"SET @x=-0xCAFE", "-0xCAFE", UserVariableLiteralKind::HEXADECIMAL},
+		{"SET @x=0b101", "0b101", UserVariableLiteralKind::BIT},
+		{"SET @x=B'101'", "B'101'", UserVariableLiteralKind::BIT},
+		{"SET @x=+B'101'", "+B'101'", UserVariableLiteralKind::BIT},
+		{"SET @x=NULL", "NULL", UserVariableLiteralKind::NULL_VALUE},
+	};
+	for (const auto& c : cases) {
+		auto r = analyze_user_set(c.query);
+		bool exact = r.status == UserVariableSetStatus::SUPPORTED &&
+			r.assignments.size() == 1 && r.assignments[0].raw_literal == c.raw &&
+			r.assignments[0].kind == c.kind && r.assignments[0].hash != 0;
+		ok(exact, "typed user SET supported literal: %s", c.query);
+	}
+}
+
+static void test_user_variable_identity_and_order() {
+	auto r = analyze_user_set("SET @B=1,@a='x',@b=2,@'safe''name'=NULL");
+	bool exact = r.status == UserVariableSetStatus::SUPPORTED && r.assignments.size() == 4;
+	if (exact) {
+		exact = r.assignments[0].canonical_name == "b" &&
+			r.assignments[1].canonical_name == "a" &&
+			r.assignments[2].canonical_name == "b" &&
+			r.assignments[3].canonical_name == "safe'name" &&
+			r.assignments[3].replay_target == "@'safe''name'";
+	}
+	ok(exact, "typed user SET preserves source order, repeats, and canonical identity");
+}
+
+static void test_user_variable_backslashes() {
+	auto target = analyze_user_set("SET @'mode\\\\dependent'=1");
+	ok(target.status == UserVariableSetStatus::UNSUPPORTED && target.assignments.empty(),
+		"typed user SET rejects backslash-containing quoted target atomically");
+	auto rhs = analyze_user_set("SET @safe='mode\\\\independent'");
+	ok(rhs.status == UserVariableSetStatus::SUPPORTED && rhs.assignments.size() == 1 &&
+		rhs.assignments[0].raw_literal == "'mode\\\\independent'",
+		"typed user SET preserves backslashes in raw RHS strings");
+}
+
+static void test_user_variable_non_user_statuses() {
+	auto select = analyze_user_set("SELECT 1");
+	ok(select.status == UserVariableSetStatus::NOT_USER_VARIABLE_SET && select.assignments.empty(),
+		"typed user SET reports non-SET input");
+	auto system = analyze_user_set("SET sql_mode='TRADITIONAL'");
+	ok(system.status == UserVariableSetStatus::NOT_USER_VARIABLE_SET && system.assignments.empty(),
+		"typed user SET reports system-only SET input");
+	auto mariadb_statement = analyze_user_set(
+		"SET STATEMENT max_statement_time=300 FOR SELECT 1");
+	ok(mariadb_statement.status == UserVariableSetStatus::NOT_USER_VARIABLE_SET &&
+		mariadb_statement.assignments.empty(),
+		"typed user SET leaves unsupported non-UDV MariaDB SET syntax to the legacy parser");
+	auto malformed_user = analyze_user_set("SET @x='unterminated");
+	ok(malformed_user.status == UserVariableSetStatus::PARSE_ERROR &&
+		malformed_user.assignments.empty(),
+		"typed user SET retains parse errors when the tokenizer detected a UDV");
+}
+
+static void test_user_variable_rejections() {
+	struct Case { const char* query; UserVariableSetStatus status; };
+	const Case cases[] = {
+		{"SET @x=1, sql_mode='x'", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @x=1+2", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @x=CAST(1 AS SIGNED)", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @x=(1)", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @x=NOT 1", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @x=(SELECT 1)", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @x=?", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @x=NOW()", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @x=1,@y=NOW()", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @x=_utf8mb4'hello'", UserVariableSetStatus::PARSE_ERROR},
+		{"SET @x='hello' COLLATE utf8mb4_bin", UserVariableSetStatus::PARSE_ERROR},
+		{"SET @x=1,", UserVariableSetStatus::PARSE_ERROR},
+		{"SET @x=1; SELECT 1", UserVariableSetStatus::PARSE_ERROR},
+		{"SET @x='unterminated", UserVariableSetStatus::PARSE_ERROR},
+		{"SET @x=1e+", UserVariableSetStatus::PARSE_ERROR},
+		{"SET @bad-name=1", UserVariableSetStatus::PARSE_ERROR},
+		{"SET @'\xC3\x84'=1", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @x=(1", UserVariableSetStatus::PARSE_ERROR},
+		{"SET @x=1 /* unterminated", UserVariableSetStatus::PARSE_ERROR},
+	};
+	for (const auto& c : cases) {
+		auto r = analyze_user_set(c.query);
+		ok(r.status == c.status && r.assignments.empty(),
+			"typed user SET rejects atomically: %s", c.query);
+	}
+	std::string long_name = "SET @" + std::string(65, 'a') + "=1";
+	auto r = parsersql_analyze_user_variable_set_mysql(long_name.data(), long_name.size());
+	ok(r.status == UserVariableSetStatus::PARSE_ERROR && r.assignments.empty(),
+		"typed user SET rejects names over 64 bytes atomically");
+}
+
+static void test_user_variable_hash_contract() {
+	auto base = analyze_user_set("SET @x=1");
+	auto same = analyze_user_set("SET @x=1");
+	auto target = analyze_user_set("SET @y=1");
+	auto literal = analyze_user_set("SET @x=2");
+	auto kind = analyze_user_set("SET @x='1'");
+	auto boundary_left = analyze_user_set("SET @a=12");
+	auto boundary_right = analyze_user_set("SET @a1=2");
+	bool supported = base.status == UserVariableSetStatus::SUPPORTED &&
+		same.status == UserVariableSetStatus::SUPPORTED &&
+		target.status == UserVariableSetStatus::SUPPORTED &&
+		literal.status == UserVariableSetStatus::SUPPORTED &&
+		kind.status == UserVariableSetStatus::SUPPORTED &&
+		boundary_left.status == UserVariableSetStatus::SUPPORTED &&
+		boundary_right.status == UserVariableSetStatus::SUPPORTED;
+	ok(supported && base.assignments[0].hash == 5603253534018379060ULL,
+		"typed user SET hash matches the fixed SET @x=1 golden value");
+	ok(supported && base.assignments[0].hash == same.assignments[0].hash,
+		"typed user SET hash is deterministic for an identical tuple");
+	ok(supported && base.assignments[0].hash != target.assignments[0].hash,
+		"typed user SET hash includes the replay target");
+	ok(supported && base.assignments[0].hash != literal.assignments[0].hash,
+		"typed user SET hash includes the raw literal");
+	ok(supported && base.assignments[0].hash != kind.assignments[0].hash,
+		"typed user SET hash distinguishes literal kind");
+	ok(supported && boundary_left.assignments[0].hash != boundary_right.assignments[0].hash,
+		"typed user SET hash length-delimits tuple boundaries");
+}
+
+static void test_user_variable_usage() {
+	struct Case { const char* query; UserVariableUsage usage; };
+	const Case cases[] = {
+		{"SELECT 1", UserVariableUsage::NO_USER_VARIABLE},
+		{"SELECT '@x'", UserVariableUsage::NO_USER_VARIABLE},
+		{"SELECT 1 /* @x */", UserVariableUsage::NO_USER_VARIABLE},
+		{"SELECT @x", UserVariableUsage::READ_ONLY},
+		{"SELECT -@x WHERE @y=1", UserVariableUsage::READ_ONLY},
+		{"SELECT 1--@x", UserVariableUsage::READ_ONLY},
+		{"SET @x=1", UserVariableUsage::UNSAFE_OR_UNKNOWN},
+		{"SELECT @x:=1", UserVariableUsage::UNSAFE_OR_UNKNOWN},
+		{"SELECT id INTO @x FROM test.uv_source", UserVariableUsage::UNSAFE_OR_UNKNOWN},
+		{"SELECT COALESCE(@x,1)", UserVariableUsage::UNSAFE_OR_UNKNOWN},
+		{"CALL p(@x)", UserVariableUsage::UNSAFE_OR_UNKNOWN},
+		{"SELECT ? + @x", UserVariableUsage::UNSAFE_OR_UNKNOWN},
+		{"SELECT @'unterminated", UserVariableUsage::UNSAFE_OR_UNKNOWN},
+		{"/*!40101 SET @x=1 */", UserVariableUsage::UNSAFE_OR_UNKNOWN},
+		{"/*M!100100 SET @x=1 */", UserVariableUsage::UNSAFE_OR_UNKNOWN},
+		{"/*M! SET @x=1 */", UserVariableUsage::UNSAFE_OR_UNKNOWN},
+		{"SELECT @x /* unterminated", UserVariableUsage::UNSAFE_OR_UNKNOWN},
+		{"SET @x=1 /* unterminated", UserVariableUsage::UNSAFE_OR_UNKNOWN},
+	};
+	for (const auto& c : cases) {
+		auto got = parsersql_classify_user_variable_usage_mysql(c.query, str_view_len(c.query));
+		ok(got == c.usage, "typed user usage classification: %s", c.query);
+	}
+}
+
+static void test_user_variable_tracking_policy() {
+	ok(mysql_user_variable_tracking_can_stage(1, 3, 0, true, false),
+		"user-variable tracking policy accepts ParserSQL SET mode");
+	ok(mysql_user_variable_tracking_can_stage(1, 2, 1, true, false),
+		"user-variable tracking policy accepts full-query ParserSQL mode");
+	ok(!mysql_user_variable_tracking_can_stage(0, 3, 0, true, false),
+		"user-variable tracking policy requires mode 1");
+	ok(!mysql_user_variable_tracking_can_stage(2, 3, 0, true, false),
+		"user-variable tracking policy reserves other integer modes");
+	ok(!mysql_user_variable_tracking_can_stage(1, 2, 0, true, false),
+		"user-variable tracking policy requires a ParserSQL prerequisite");
+	ok(!mysql_user_variable_tracking_can_stage(1, 3, 0, false, false),
+		"user-variable tracking policy rejects prepared protocol paths");
+	ok(!mysql_user_variable_tracking_can_stage(1, 3, 0, true, true),
+		"user-variable tracking policy rejects a connection-bound fallback");
+}
+
+static void test_user_variable_staging_preflight() {
+	MySQL_User_Variable_State committed;
+	auto initial = analyze_user_set("SET @kept=1");
+	committed.apply(initial.assignments);
+	const size_t committed_size = committed.size();
+	const size_t committed_bytes = committed.stored_bytes();
+
+	auto update = analyze_user_set("SET @new='value'");
+	MySQL_User_Variable_State staged;
+	auto rc = committed.stage(update.assignments, staged);
+	ok(rc == MySQL_User_Variable_Apply_Result::OK && staged.size() == 2,
+		"user-variable preflight builds the staged post-SET map");
+	ok(committed.size() == committed_size && committed.stored_bytes() == committed_bytes,
+		"user-variable preflight never mutates committed state");
+
+	std::vector<UserVariableAssignment> fill;
+	for (size_t i = 0; i < MySQL_User_Variable_State::MAX_VARIABLES; ++i) {
+		const std::string name = "v" + std::to_string(i);
+		fill.push_back({name, "@" + name, "1", UserVariableLiteralKind::INTEGER, i + 1});
+	}
+	MySQL_User_Variable_State full;
+	full.apply(fill);
+	const size_t full_bytes = full.stored_bytes();
+	MySQL_User_Variable_State rejected;
+	std::vector<UserVariableAssignment> overflow {
+		{"overflow", "@overflow", "2", UserVariableLiteralKind::INTEGER, 999}
+	};
+	rc = full.stage(overflow, rejected);
+	ok(rc == MySQL_User_Variable_Apply_Result::VARIABLE_LIMIT,
+		"user-variable preflight rejects a staged post-SET map over the resource limit");
+	ok(full.size() == MySQL_User_Variable_State::MAX_VARIABLES && full.stored_bytes() == full_bytes,
+		"failed user-variable preflight leaves committed state untouched");
+}
+
+static void test_user_variable_routing_disposition() {
+	ok(mysql_user_variable_set_uses_qpo_epilogue(
+		UserVariableSetStatus::SUPPORTED, MySQL_User_Variable_Apply_Result::OK),
+		"supported preflighted UDV SET forwards through the qpo routing epilogue");
+	ok(!mysql_user_variable_set_uses_qpo_epilogue(
+		UserVariableSetStatus::SUPPORTED, MySQL_User_Variable_Apply_Result::VARIABLE_LIMIT),
+		"variable-limit UDV SET does not take the safe qpo routing disposition");
+	ok(!mysql_user_variable_set_uses_qpo_epilogue(
+		UserVariableSetStatus::SUPPORTED, MySQL_User_Variable_Apply_Result::BYTE_LIMIT),
+		"byte-limit UDV SET does not take the safe qpo routing disposition");
+	ok(!mysql_user_variable_set_uses_qpo_epilogue(
+		UserVariableSetStatus::NOT_USER_VARIABLE_SET, MySQL_User_Variable_Apply_Result::OK),
+		"non-UDV SET continues through the legacy SET walker");
+	ok(!mysql_user_variable_set_uses_qpo_epilogue(
+		UserVariableSetStatus::UNSUPPORTED, MySQL_User_Variable_Apply_Result::OK),
+		"unsupported UDV SET takes connection-bound fallback instead of safe routing");
+}
+
+static void test_user_variable_post_ok_atomic_commit() {
+	auto initial = analyze_user_set("SET @kept=1");
+	auto update = analyze_user_set("SET @new='value'");
+	MySQL_User_Variable_State frontend;
+	MySQL_User_Variable_State backend;
+	frontend.apply(initial.assignments);
+	backend.apply(initial.assignments);
+	const bool committed = mysql_user_variable_commit_post_ok(
+		frontend, backend, update.assignments);
+	unsigned int frontend_not_matching = 0;
+	unsigned int backend_not_matching = 0;
+	ok(committed && frontend.size() == 2 && backend.size() == 2 &&
+		frontend.count_matches(backend, frontend_not_matching) == 2 &&
+		frontend_not_matching == 0 &&
+		backend.count_matches(frontend, backend_not_matching) == 2 &&
+		backend_not_matching == 0,
+		"post-OK helper commits the same supported assignments to both maps");
+
+	std::vector<UserVariableAssignment> fill;
+	for (size_t i = 0; i < MySQL_User_Variable_State::MAX_VARIABLES; ++i) {
+		const std::string name = "v" + std::to_string(i);
+		fill.push_back({name, "@" + name, "1", UserVariableLiteralKind::INTEGER, i + 1});
+	}
+	std::vector<UserVariableAssignment> overflow {
+		{"overflow", "@overflow", "2", UserVariableLiteralKind::INTEGER, 999}
+	};
+
+	MySQL_User_Variable_State full_frontend;
+	MySQL_User_Variable_State empty_backend;
+	full_frontend.apply(fill);
+	ok(!mysql_user_variable_commit_post_ok(full_frontend, empty_backend, overflow) &&
+		full_frontend.size() == MySQL_User_Variable_State::MAX_VARIABLES &&
+		empty_backend.size() == 0,
+		"frontend post-OK staging failure commits neither map and requests fallback");
+
+	MySQL_User_Variable_State empty_frontend;
+	MySQL_User_Variable_State full_backend;
+	full_backend.apply(fill);
+	ok(!mysql_user_variable_commit_post_ok(empty_frontend, full_backend, overflow) &&
+		empty_frontend.size() == 0 &&
+		full_backend.size() == MySQL_User_Variable_State::MAX_VARIABLES,
+		"backend post-OK staging failure commits neither map and requests fallback");
+}
+
+static void test_user_variable_query_disposition() {
+	auto decide = [](const char* query, bool active = true, bool plain = true,
+		bool supported_set = false) {
+		return mysql_user_variable_query_disposition(
+			query, str_view_len(query), active, plain, supported_set);
+	};
+	auto d = decide("SELECT 1");
+	ok(d.disposition == UserVariableQueryDisposition::SAFE && !d.parsersql_called &&
+		d.legacy_udv_status_safe,
+		"UDV disposition uses the no-at fast gate without ParserSQL");
+	d = decide("SELECT '@x'");
+	ok(d.disposition == UserVariableQueryDisposition::SAFE && d.parsersql_called &&
+		d.legacy_udv_status_safe,
+		"UDV disposition parses and proves a string-contained at-sign safe");
+	d = decide("SELECT 1 /* @x */");
+	ok(d.disposition == UserVariableQueryDisposition::SAFE && d.parsersql_called &&
+		d.legacy_udv_status_safe,
+		"UDV disposition parses and proves a comment-contained at-sign safe");
+	d = decide("SELECT @x");
+	ok(d.disposition == UserVariableQueryDisposition::SAFE && d.parsersql_called &&
+		d.legacy_udv_status_safe,
+		"UDV disposition keeps a read-only occurrence multiplexable");
+	d = decide("SET @x=1", true, true, true);
+	ok(d.disposition == UserVariableQueryDisposition::SUPPORTED_SET &&
+		!d.parsersql_called && d.legacy_udv_status_safe,
+		"UDV disposition leaves a supported SET to the staging path");
+	d = decide("SELECT @x:=1");
+	ok(d.disposition == UserVariableQueryDisposition::UNSAFE_FALLBACK &&
+		d.parsersql_called && !d.legacy_udv_status_safe,
+		"UDV disposition binds assignment expressions");
+	d = decide("SELECT id INTO @x FROM test.uv_source");
+	ok(d.disposition == UserVariableQueryDisposition::UNSAFE_FALLBACK,
+		"UDV disposition binds SELECT INTO user variables");
+	d = decide("SELECT COALESCE(@x,1)");
+	ok(d.disposition == UserVariableQueryDisposition::UNSAFE_FALLBACK,
+		"UDV disposition binds function AST shapes containing user variables");
+	d = decide("CALL p(@x)");
+	ok(d.disposition == UserVariableQueryDisposition::UNSAFE_FALLBACK,
+		"UDV disposition binds CALL AST shapes containing user variables");
+	d = decide("SELECT @x; SELECT 1");
+	ok(d.disposition == UserVariableQueryDisposition::UNSAFE_FALLBACK,
+		"UDV disposition binds partial or multi-statement input");
+	d = decide("SET @x=1", true, false, false);
+	ok(d.disposition == UserVariableQueryDisposition::LEGACY &&
+		!d.parsersql_called && !d.legacy_udv_status_safe,
+		"UDV disposition keeps prepared SETs on the unsafe legacy path");
+	d = decide("SELECT @x", false);
+	ok(d.disposition == UserVariableQueryDisposition::LEGACY &&
+		!d.parsersql_called && !d.legacy_udv_status_safe,
+		"UDV disposition preserves current behavior before tracking is active");
+}
+
+static void test_user_variable_runtime_drain_policy() {
+	ok(mysql_user_variable_tracking_can_stage(1, 3, 0, true, false),
+		"runtime UDV policy accepts new assignments while mode and ParserSQL are active");
+	ok(!mysql_user_variable_tracking_can_stage(0, 3, 0, true, false),
+		"runtime UDV policy stops new assignments when mode is disabled");
+	ok(!mysql_user_variable_tracking_can_stage(1, 2, 0, true, false),
+		"runtime UDV policy stops new assignments when ParserSQL prerequisite is disabled");
+	ok(!mysql_user_variable_tracking_can_stage(1, 3, 0, true, true),
+		"runtime UDV policy stops map updates after authoritative-backend binding");
+	ok(mysql_user_variable_must_classify_and_sync_policy(0, 3, 0, true, false, true),
+		"runtime mode disable after first commit preserves classification and synchronization");
+	ok(mysql_user_variable_must_classify_and_sync_policy(1, 2, 0, true, false, true),
+		"runtime ParserSQL prerequisite disable after first commit preserves drain behavior");
+	ok(mysql_user_variable_must_classify_and_sync_policy(1, 3, 0, true, true, true),
+		"tracking latch preserves synchronization after authoritative-backend binding");
+	ok(!mysql_user_variable_must_classify_and_sync_policy(0, 2, 0, true, false, false),
+		"unlatched disabled tracking preserves legacy behavior");
+	ok(mysql_user_variable_unsafe_query_locks_hostgroup(-1, false),
+		"unsafe UDV fallback locks a previously-unbound session without a query-rule override");
+	ok(!mysql_user_variable_unsafe_query_locks_hostgroup(0, false),
+		"unsafe UDV fallback preserves query-rule multiplex=0 semantics");
+	ok(!mysql_user_variable_unsafe_query_locks_hostgroup(1, false),
+		"unsafe UDV fallback preserves query-rule multiplex=1 semantics");
+}
+
+static void test_user_variable_digest_independent_runtime_policy() {
+	auto d = mysql_user_variable_raw_query_disposition(
+		"SELECT @x", str_view_len("SELECT @x"), true, true, false, false);
+	ok(d.disposition == UserVariableQueryDisposition::SAFE && d.parsersql_called,
+		"raw UDV reads are classified when digest text is unavailable");
+	d = mysql_user_variable_raw_query_disposition(
+		"SELECT @x:=1", str_view_len("SELECT @x:=1"), true, true, false, false);
+	ok(d.disposition == UserVariableQueryDisposition::UNSAFE_FALLBACK &&
+		d.parsersql_called,
+		"raw unsafe UDV use falls back when digest text is unavailable");
+	d = mysql_user_variable_raw_query_disposition(
+		"SET @x=1", str_view_len("SET @x=1"), true, true, true, false);
+	ok(d.disposition == UserVariableQueryDisposition::SUPPORTED_SET &&
+		!d.parsersql_called,
+		"raw supported SET retains the Task 8 path without digest text");
+
+	for (int multiplex : {-1, 0, 1}) {
+		ok(mysql_user_variable_backend_result_requires_binding(
+			true, true, false, multiplex),
+			"successful unsafe fallback binds independently of qpo multiplex=%d",
+			multiplex);
+		ok(mysql_user_variable_backend_result_requires_binding(
+			true, false, true, multiplex),
+			"successful replay-context change binds independently of qpo multiplex=%d",
+			multiplex);
+	}
+	ok(!mysql_user_variable_backend_result_requires_binding(
+		true, false, false, -1),
+		"successful query without unsafe/context intent does not bind");
+	ok(!mysql_user_variable_backend_result_requires_binding(
+		false, true, true, 1),
+		"backend error clears unsafe/context intent without binding");
+
+	ok(!analyze_user_set("SELECT @x; SELECT 1").is_set_statement,
+		"partial non-SET UDV input does not enter SET fallback accounting");
+	ok(analyze_user_set("SET @x=").is_set_statement,
+		"partial SET UDV input retains SET fallback accounting and logging");
+	ok(analyze_user_set("SET @x=1").is_set_statement,
+		"full-input SET is a ParserSQL SET candidate");
+	ok(mysql_user_variable_fallback_uses_qpo_epilogue(true, false),
+		"forwarded unsafe fallback uses the normal qpo epilogue");
+	ok(mysql_user_variable_fallback_uses_qpo_epilogue(false, true),
+		"forwarded replay-context change uses the normal qpo epilogue");
+}
+
+static void test_user_variable_replay_context() {
+	const char* context_queries[] = {
+		"SET sql_mode='NO_BACKSLASH_ESCAPES'",
+		"SET `SQL_MODE`='TRADITIONAL'",
+		"SET SESSION sql_mode='TRADITIONAL'",
+		"SET LOCAL character_set_client=utf8mb4",
+		"SET @@SESSION.sql_mode='TRADITIONAL'",
+		"SET @@local.character_set_client=utf8mb4",
+		"SET @@character_set_connection=utf8mb4",
+		"SET character_set_client=utf8mb4",
+		"SET character_set_connection=utf8mb4",
+		"SET SESSION `collation_connection`=utf8mb4_bin",
+		"SET NAMES utf8mb4 COLLATE utf8mb4_bin",
+		"SET CHARACTER SET utf8mb4",
+	};
+	for (const char* query : context_queries) {
+		ok(parsersql_set_changes_user_variable_replay_context_mysql(
+			query, str_view_len(query)),
+			"strict AST detects replay-context SET: %s", query);
+	}
+	const char* non_context_queries[] = {
+		"SET wait_timeout=10",
+		"SET sql_mode='x'; SELECT 1",
+		"SET sql_mode=",
+		"SELECT 'SET NAMES utf8mb4'",
+		"SET GLOBAL sql_mode='TRADITIONAL'",
+		"SET PERSIST character_set_client=utf8mb4",
+		"SET PERSIST_ONLY character_set_connection=utf8mb4",
+		"SET @@GLOBAL.collation_connection=utf8mb4_bin",
+	};
+	for (const char* query : non_context_queries) {
+		ok(!parsersql_set_changes_user_variable_replay_context_mysql(
+			query, str_view_len(query)),
+			"strict AST rejects non/full-input replay-context lookalike: %s", query);
+	}
+
+	const char* context_names[] = {
+		"sql_mode", "character_set_client", "character_set_connection",
+		"collation_connection"
+	};
+	for (const char* name : context_names) {
+		ok(mysql_user_variable_is_replay_context_name(name, str_view_len(name)),
+			"session tracking recognizes replay-context variable: %s", name);
+	}
+	ok(!mysql_user_variable_is_replay_context_name(
+		"character_set_results", str_view_len("character_set_results")),
+		"session tracking does not bind for unrelated character_set_results");
+	ok(!mysql_user_variable_is_replay_context_name(
+		"user_variable", str_view_len("user_variable")),
+		"session tracking does not infer hidden UDV writes");
+	ok(mysql_user_variable_is_replay_context_name(
+		"SQL_MODE", str_view_len("SQL_MODE")),
+		"session tracking matches canonical context keys case-insensitively");
+}
+
 int main() {
-	plan(53);
+	plan(202);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -355,6 +843,23 @@ int main() {
 	test_pgsql_set_simple();
 	test_pgsql_set_multiple_values();
 	test_pgsql_set_invalid();
+
+	test_user_variable_browser_metadata();
+	test_user_variable_supported_literals();
+	test_user_variable_identity_and_order();
+	test_user_variable_backslashes();
+	test_user_variable_non_user_statuses();
+	test_user_variable_rejections();
+	test_user_variable_hash_contract();
+	test_user_variable_usage();
+	test_user_variable_tracking_policy();
+	test_user_variable_staging_preflight();
+	test_user_variable_routing_disposition();
+	test_user_variable_post_ok_atomic_commit();
+	test_user_variable_query_disposition();
+	test_user_variable_runtime_drain_policy();
+	test_user_variable_digest_independent_runtime_policy();
+	test_user_variable_replay_context();
 
 	test_cleanup_minimal();
 	return exit_status();

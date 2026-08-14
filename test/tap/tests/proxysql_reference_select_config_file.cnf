@@ -84,6 +84,7 @@ mysql_variables =
 	client_found_rows="mysql"
 	client_multi_statements="mysql"
 	client_session_track_gtid="mysql"
+	update_gtid_from_ok="mysql"
 	commands_stats="mysql"
 	connect_retries_delay="mysql"
 	connect_retries_on_failure="mysql"
