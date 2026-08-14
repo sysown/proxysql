@@ -31,7 +31,6 @@ RUN apt-get update -qq && \
     php-cli \
     php-mysql \
     lcov \
-    gcc-11 \
     && pip3 install --break-system-packages fastcov \
         "psycopg[binary]==${PSYCOPG_VERSION}" \
         "mysql-connector-python==${MYSQL_CONNECTOR_PYTHON_VERSION}" \

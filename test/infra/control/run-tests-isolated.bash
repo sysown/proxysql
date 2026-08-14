@@ -395,13 +395,13 @@ docker run \
                             local coverage_log=\"\${COVERAGE_REPORT_DIR}/coverage-generation.log\"
                             echo \">>> Running fastcov on /gcov...\"
                             cd /gcov
-                            if ! command -v gcov-11 >/dev/null 2>&1; then
-                                echo \">>> ERROR: gcov-11 is required to decode GCC 11 coverage data\" >&2
-                                exit 1
-                            fi
-                            fastcov -b -g gcov-11 -j\$(nproc) -l \
+                            fastcov -b -j\$(nproc) -l \
                                 -e /usr deps \
                                 -d . -o \"\${coverage_file}\" >> \"\${coverage_log}\" 2>&1
+                            if [ ! -s \"\${coverage_file}\" ]; then
+                                echo \">>> ERROR: fastcov produced an empty coverage report (see \${coverage_log})\" >&2
+                                exit 1
+                            fi
 
                             if [ -f \"\${coverage_file}\" ]; then
                                 echo \">>> Coverage report generated: \${coverage_file}\"

@@ -370,14 +370,14 @@ if [ "${COVERAGE}" -eq 1 ]; then
                 proxysql-ci-base:latest \
                 bash -c '
                     set -e
-                    command -v gcov-11 >/dev/null 2>&1 || {
-                        echo ">>> ERROR: gcov-11 is required to decode GCC 11 coverage data" >&2
-                        exit 1
-                    }
                     cd "${GCOV_DIR}"
-                    fastcov -b -g gcov-11 -j4 -l \
+                    fastcov -b -j4 -l \
                         -e /usr deps \
                         -d . -o "${GROUP_INFO}" >> "${COVERAGE_LOG}" 2>&1
+                    if [ ! -s "${GROUP_INFO}" ]; then
+                        echo ">>> ERROR: fastcov produced an empty coverage report for ${GCOV_DIR}" >&2
+                        exit 1
+                    fi
                 '
             then
                 echo ">>> ERROR: Coverage generation failed for ${group} (see ${COVERAGE_LOG})" >&2
