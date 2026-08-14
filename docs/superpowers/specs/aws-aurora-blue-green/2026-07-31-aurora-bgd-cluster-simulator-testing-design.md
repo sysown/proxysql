@@ -205,13 +205,17 @@ Every intercepted production `REPLICA_HOST_STATUS` query records:
 sequence_id INTEGER PRIMARY KEY AUTOINCREMENT
 backend_ip TEXT NOT NULL
 backend_port INTEGER NOT NULL
+probe_kind TEXT NOT NULL
+    CHECK (probe_kind IN ('ordinary', 'bgd_membership'))
 replica_set_id TEXT NULL
 encrypted INTEGER NOT NULL
     CHECK (encrypted IN (0, 1))
 ```
 
 The accepted address is logged even when no control mapping exists or the query
-returns an error. `replica_set_id` is NULL when the backend has no mapping.
+returns an error. `probe_kind` distinguishes the ordinary production probe from
+the Aurora BGD target-membership probe. `replica_set_id` is NULL when the
+backend has no mapping.
 
 ### 4.4 Query handling
 

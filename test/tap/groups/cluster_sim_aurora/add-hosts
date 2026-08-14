@@ -2,7 +2,7 @@
 # Format: "<hostname> <ip>" per line; '#' comments allowed.
 # These are injected into the ProxySQL container's /etc/hosts via Docker
 # --add-host by test/infra/control/start-proxysql-isolated.bash when
-# CLUSTER_SIM_HOST_FILE points at this file (see test/tap/groups/aurora-sim/env.sh).
+# CLUSTER_SIM_HOST_FILE points at this file (see test/tap/groups/cluster_sim_aurora/env.sh).
 
 # Cluster 1
 host.1.11.aws-test.com  127.0.1.11

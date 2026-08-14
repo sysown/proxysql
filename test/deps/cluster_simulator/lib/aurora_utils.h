@@ -50,6 +50,12 @@ enum class aurora_state_id {
 	new_state = 1
 };
 
+enum class aurora_publication_mode {
+	replace_sets,
+	replace_snapshot_retaining_backends,
+	reset_scenario
+};
+
 std::pair<int,std::string> extract_aurora_servers_state(
 	const aurora_state_id& state_id,
 	const json& aurora_test_def,
@@ -69,7 +75,7 @@ std::pair<int, std::string> prepare_mysql_aurora_hostgroups(
 std::pair<int, std::string> prepare_aurora_cluster_state(
 	MYSQL* proxysql_sqlite,
 	const std::vector<aurora_server_state_t>& servers,
-	uint32_t cleanup = 0
+	aurora_publication_mode mode = aurora_publication_mode::replace_sets
 );
 
 /**
@@ -89,11 +95,6 @@ std::pair<int, std::string> get_aurora_monitor_check_times(
 );
 
 cluster_state_changes aurora_servers_state_diff(
-	const std::vector<aurora_server_state_t>& servers_state_p,
-	const std::vector<aurora_server_state_t>& servers_state_n
-);
-
-std::vector<aurora_server_state_t> aurora_update_cluster_state(
 	const std::vector<aurora_server_state_t>& servers_state_p,
 	const std::vector<aurora_server_state_t>& servers_state_n
 );

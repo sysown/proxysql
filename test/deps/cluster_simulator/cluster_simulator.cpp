@@ -1719,7 +1719,9 @@ std::pair<int, nlohmann::ordered_json> simulate_aws_aurora_cluster_state(
 	// change the values for the cluster state as a last step
 	prep_aurora_init_state_err =
 		prepare_aurora_cluster_state(
-			proxysql_sqlite, aurora_init_servers_state, 2
+			proxysql_sqlite,
+			aurora_init_servers_state,
+			aurora_publication_mode::reset_scenario
 		);
 
 	if (prep_aurora_init_state_err.first) {
@@ -1794,14 +1796,13 @@ std::pair<int, nlohmann::ordered_json> simulate_aws_aurora_cluster_state(
 			aurora_servers_state_diff(aurora_init_servers_state, aurora_new_servers_state)
 		};
 
-		// set the new servers state
-		const auto& aurora_new_state_to_set {
-			aurora_update_cluster_state(aurora_init_servers_state, aurora_new_servers_state)
-		};
 		// Replace the published replica sets and their complete backend mappings so
 		// payloads can simulate members being removed (for example, autopurge coverage).
-		prep_aurora_final_state_err =
-			prepare_aurora_cluster_state(proxysql_sqlite, aurora_new_servers_state, 1);
+		prep_aurora_final_state_err = prepare_aurora_cluster_state(
+			proxysql_sqlite,
+			aurora_new_servers_state,
+			aurora_publication_mode::replace_snapshot_retaining_backends
+		);
 
 		if (prep_aurora_final_state_err.first) {
 			result = internal_error(prep_aurora_final_state_err.second, __FILE__, __LINE__);
