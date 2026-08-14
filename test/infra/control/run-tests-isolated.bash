@@ -334,8 +334,25 @@ docker run \
         # when standalone, it runs here.
         collect_coverage() {
             local exit_code=\$?
+            local coverage_exit=0
+            trap - EXIT
+            set +e
             if [ \"\${COVERAGE_MODE}\" = \"1\" ]; then
+                (
+                set -e
+                coverage_failed=0
                 echo \">>> Collecting code coverage data (exit code was: \${exit_code})...\"
+
+                # ProxySQL is a long-running process, so its in-memory counters
+                # are not guaranteed to reach the GCDA files during container
+                # teardown. GCC 13 also ignores a second __gcov_dump call until
+                # __gcov_reset is called. Do not dump inside the TAP loop; dump
+                # once here after the group and before any GCDA decoding starts.
+                echo \">>> Dumping ProxySQL GCOV counters after the test group...\"
+                if ! \"${SCRIPT_DIR}/dump-proxysql-gcov.bash\"; then
+                    echo \">>> ERROR: Failed to dump ProxySQL GCOV counters\" >&2
+                    coverage_failed=1
+                fi
 
                 if [ -d \"/gcov\" ] && [ \"\$(ls -A /gcov 2>/dev/null)\" ]; then
                     # Match .gcno files to .gcda files by basename and copy
@@ -444,8 +461,13 @@ docker run \
                 else
                     echo \">>> WARNING: /gcov directory is empty or missing, skipping coverage\"
                 fi
+                exit \${coverage_failed}
+                )
+                coverage_exit=\$?
             fi
-            exit \${exit_code}
+            source "${SCRIPT_DIR}/coverage-exit-status.bash"
+            coverage_exit_status \"\${exit_code}\" \"\${coverage_exit}\"
+            exit \$?
         }
         trap collect_coverage EXIT
 

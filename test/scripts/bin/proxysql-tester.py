@@ -908,9 +908,6 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
 
                 self.padmin_command(f"LOGENTRY '{TAP} test {fo_num+1}/{len(tap_tests)} \'{os.path.basename(fo_cmd)}\' RC: {fop.returncode}'")
                 self.padmin_command(f"PROXYSQL FLUSH LOGS")
-                # Dump gcov counters for coverage collection
-                if self.coverage:
-                    self.padmin_command("PROXYSQL GCOV DUMP")
                 log.debug(f"{TAP} test {fo_num+1}/{len(tap_tests)} '{os.path.basename(fo_cmd)}' RC: {fop.returncode}")
 
                 # if returncode print extra info
@@ -1920,4 +1917,3 @@ def main(argv):
 
 if __name__ == '__main__':
     main(sys.argv[1:])
-
