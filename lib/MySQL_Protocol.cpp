@@ -2285,7 +2285,7 @@ int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyPr
 }
 
 // this function was inline in process_pkt_handshake_response() , split for readibility
-static bool mysql_decode_length_ll_checked(const unsigned char* ptr, const unsigned char* end, uint64_t* len, int* encoded_len) {
+static bool mysql_decode_length_ll_checked(unsigned char* ptr, const unsigned char* end, uint64_t* len, int* encoded_len) {
 	if (ptr >= end) {
 		return false;
 	}
@@ -2308,11 +2308,25 @@ static bool mysql_decode_length_ll_checked(const unsigned char* ptr, const unsig
 		return false;
 	}
 
-	const int decoded_len = mysql_decode_length_ll(const_cast<unsigned char*>(ptr), len);
+	const int decoded_len = mysql_decode_length_ll(ptr, len);
 	if (decoded_len <= 0) {
 		return false;
 	}
 	*encoded_len = decoded_len;
+	return true;
+}
+
+static bool mysql_decode_length_ll_and_advance(unsigned char** ptr, const unsigned char* end, uint64_t* len) {
+	int encoded_len = 0;
+	if (!mysql_decode_length_ll_checked(*ptr, end, len, &encoded_len)) {
+		return false;
+	}
+
+	*ptr += encoded_len;
+	if (*len > static_cast<uint64_t>(end - *ptr)) {
+		return false;
+	}
+
 	return true;
 }
 
@@ -2461,86 +2475,62 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 		}
 	}
 	unsigned char *extra_pkt = pkt;
-	if (packet_end > extra_pkt) {
-		if (vars1.capabilities & CLIENT_PLUGIN_AUTH) {
-			if (extra_pkt >= packet_end) {
-				ret = false;
-				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . malformed auth plugin offset in handshake response\n", (*myds), (*myds)->sess, vars1.user);
-				return false;
-			}
-			const size_t extra_len = packet_end - extra_pkt;
-			const size_t auth_plugin_len = strnlen(reinterpret_cast<const char*>(extra_pkt), extra_len);
-			if (auth_plugin_len == extra_len) {
-				ret = false;
-				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . malformed auth plugin in handshake response\n", (*myds), (*myds)->sess, vars1.user);
-				return false;
-			}
-			vars1.auth_plugin = extra_pkt;
-			extra_pkt += auth_plugin_len + 1;
+	if ((vars1.capabilities & CLIENT_PLUGIN_AUTH) && packet_end > extra_pkt) {
+		const size_t extra_len = packet_end - extra_pkt;
+		const size_t auth_plugin_len = strnlen(reinterpret_cast<const char*>(extra_pkt), extra_len);
+		if (auth_plugin_len == extra_len) {
+			ret = false;
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . malformed auth plugin in handshake response\n", (*myds), (*myds)->sess, vars1.user);
+			return false;
 		}
-		const unsigned char* packet_end = vars1._ptr + len;
-		const bool has_zstd_level = vars1.capabilities & CLIENT_ZSTD_COMPRESSION_ALGORITHM;
-		const unsigned char* connect_attrs_end = packet_end - (has_zstd_level ? 1 : 0);
-		if (vars1.capabilities & CLIENT_CONNECT_ATTRS) {
-			(*myds)->client_connect_attrs.clear();
+		vars1.auth_plugin = extra_pkt;
+		extra_pkt += auth_plugin_len + 1;
+	}
+	const bool has_zstd_level = vars1.capabilities & CLIENT_ZSTD_COMPRESSION_ALGORITHM;
+	unsigned char* connect_attrs_end = packet_end - (has_zstd_level ? 1 : 0);
+	if (vars1.capabilities & CLIENT_CONNECT_ATTRS) {
+		(*myds)->client_connect_attrs.clear();
+
+		uint64_t attrs_len = 0;
+		unsigned char* attrs_ptr = extra_pkt;
+		if (!mysql_decode_length_ll_and_advance(&attrs_ptr, connect_attrs_end, &attrs_len)) {
+			ret = false;
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . malformed connect attrs in handshake response\n", (*myds), (*myds)->sess, vars1.user);
+			return false;
 		}
-		if ((vars1.capabilities & CLIENT_CONNECT_ATTRS) && extra_pkt < connect_attrs_end) {
-			uint64_t attrs_len = 0;
-			int attrs_len_enc = 0;
-			if (
-				!mysql_decode_length_ll_checked(extra_pkt, connect_attrs_end, &attrs_len, &attrs_len_enc)
-				||
-				static_cast<uint64_t>(connect_attrs_end - extra_pkt) < static_cast<uint64_t>(attrs_len_enc) + attrs_len
-			) {
+
+		unsigned char* attrs_end = attrs_ptr + attrs_len;
+		while (attrs_ptr < attrs_end) {
+			uint64_t key_len = 0;
+			if (!mysql_decode_length_ll_and_advance(&attrs_ptr, attrs_end, &key_len)) {
 				ret = false;
 				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . malformed connect attrs in handshake response\n", (*myds), (*myds)->sess, vars1.user);
 				return false;
 			}
+			std::string key(reinterpret_cast<const char*>(attrs_ptr), static_cast<size_t>(key_len));
+			attrs_ptr += key_len;
 
-			const unsigned char* attrs_ptr = extra_pkt + attrs_len_enc;
-			const unsigned char* attrs_end = attrs_ptr + attrs_len;
-			while (attrs_ptr < attrs_end) {
-				uint64_t key_len = 0;
-				int key_len_enc = 0;
-				if (
-					!mysql_decode_length_ll_checked(attrs_ptr, attrs_end, &key_len, &key_len_enc)
-					|| static_cast<uint64_t>(attrs_end - attrs_ptr) < static_cast<uint64_t>(key_len_enc) + key_len
-				) {
-					ret = false;
-					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . malformed connect attrs in handshake response\n", (*myds), (*myds)->sess, vars1.user);
-					return false;
-				}
-				attrs_ptr += key_len_enc;
-				std::string key(reinterpret_cast<const char*>(attrs_ptr), key_len);
-				attrs_ptr += key_len;
-
-				uint64_t value_len = 0;
-				int value_len_enc = 0;
-				if (
-					!mysql_decode_length_ll_checked(attrs_ptr, attrs_end, &value_len, &value_len_enc)
-					|| static_cast<uint64_t>(attrs_end - attrs_ptr) < static_cast<uint64_t>(value_len_enc) + value_len
-				) {
-					ret = false;
-					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . malformed connect attrs in handshake response\n", (*myds), (*myds)->sess, vars1.user);
-					return false;
-				}
-				attrs_ptr += value_len_enc;
-				(*myds)->client_connect_attrs.emplace_back(
-					std::move(key), std::string(reinterpret_cast<const char*>(attrs_ptr), value_len)
-				);
-				attrs_ptr += value_len;
-			}
-			extra_pkt = const_cast<unsigned char*>(attrs_end);
-		}
-		if (has_zstd_level) {
-			if (packet_end <= extra_pkt) {
+			uint64_t value_len = 0;
+			if (!mysql_decode_length_ll_and_advance(&attrs_ptr, attrs_end, &value_len)) {
 				ret = false;
-				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . missing zstd compression level in handshake response\n", (*myds), (*myds)->sess, vars1.user);
+				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . malformed connect attrs in handshake response\n", (*myds), (*myds)->sess, vars1.user);
 				return false;
 			}
-			vars1.use_zstd_compression = true;
-			vars1.zstd_compression_level = *extra_pkt;
+			(*myds)->client_connect_attrs.emplace_back(
+				std::move(key), std::string(reinterpret_cast<const char*>(attrs_ptr), static_cast<size_t>(value_len))
+			);
+			attrs_ptr += value_len;
 		}
+		extra_pkt = attrs_end;
+	}
+	if (has_zstd_level) {
+		if (packet_end <= extra_pkt) {
+			ret = false;
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . missing zstd compression level in handshake response\n", (*myds), (*myds)->sess, vars1.user);
+			return false;
+		}
+		vars1.use_zstd_compression = true;
+		vars1.zstd_compression_level = *extra_pkt;
 	}
 	return true;
 }

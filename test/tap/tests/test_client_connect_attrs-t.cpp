@@ -25,6 +25,38 @@ static bool run_admin_query(MYSQL* admin, const char* query) {
 	return true;
 }
 
+static bool fetch_processlist_extended_setting(MYSQL* admin, std::string& value) {
+	constexpr const char* query =
+		"SELECT variable_value FROM global_variables "
+		"WHERE variable_name='mysql-show_processlist_extended'";
+	if (mysql_query(admin, query) != 0) {
+		diag("Query failed: %s; error: %s", query, mysql_error(admin));
+		return false;
+	}
+
+	MYSQL_RES* result = mysql_store_result(admin);
+	if (!result) {
+		diag("mysql_store_result failed for query: %s; error: %s", query, mysql_error(admin));
+		return false;
+	}
+
+	MYSQL_ROW row = mysql_fetch_row(result);
+	if (!row || !row[0]) {
+		mysql_free_result(result);
+		diag("No mysql-show_processlist_extended value returned");
+		return false;
+	}
+
+	value = row[0];
+	mysql_free_result(result);
+	return true;
+}
+
+static bool restore_processlist_extended_setting(MYSQL* admin, const std::string& value) {
+	const std::string query = "SET mysql-show_processlist_extended=" + value;
+	return run_admin_query(admin, query.c_str()) && run_admin_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+}
+
 static bool fetch_extended_info(MYSQL* admin, unsigned long session_id, json& extended_info) {
 	const std::string query =
 		"SELECT extended_info FROM stats_mysql_processlist WHERE SessionID=" + std::to_string(session_id);
@@ -60,7 +92,7 @@ static bool fetch_extended_info(MYSQL* admin, unsigned long session_id, json& ex
 
 int main(int argc, char** argv) {
 	CommandLine cl;
-	plan(5);
+	plan(6);
 
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
@@ -78,10 +110,19 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
+	std::string original_processlist_extended;
+	const bool original_setting_read = fetch_processlist_extended_setting(admin, original_processlist_extended);
+	ok(original_setting_read, "Read the original mysql-show_processlist_extended value");
+	if (!original_setting_read) {
+		mysql_close(admin);
+		return exit_status();
+	}
+
 	const bool configured =
 		run_admin_query(admin, "SET mysql-show_processlist_extended=1") &&
 		run_admin_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 	if (!configured) {
+		restore_processlist_extended_setting(admin, original_processlist_extended);
 		mysql_close(admin);
 		return EXIT_FAILURE;
 	}
@@ -89,8 +130,7 @@ int main(int argc, char** argv) {
 	MYSQL* frontend = mysql_init(nullptr);
 	if (!frontend) {
 		diag("mysql_init failed for frontend connection");
-		run_admin_query(admin, "SET mysql-show_processlist_extended=0");
-		run_admin_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+		restore_processlist_extended_setting(admin, original_processlist_extended);
 		mysql_close(admin);
 		return EXIT_FAILURE;
 	}
@@ -106,8 +146,7 @@ int main(int argc, char** argv) {
 	if (!connected) {
 		diag("Failed to connect to ProxySQL frontend: %s", mysql_error(frontend));
 		mysql_close(frontend);
-		run_admin_query(admin, "SET mysql-show_processlist_extended=0");
-		run_admin_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+		restore_processlist_extended_setting(admin, original_processlist_extended);
 		mysql_close(admin);
 		return exit_status();
 	}
@@ -132,10 +171,13 @@ int main(int argc, char** argv) {
 	}
 
 	mysql_close(frontend);
-	const bool restored =
-		run_admin_query(admin, "SET mysql-show_processlist_extended=0") &&
-		run_admin_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
-	ok(restored, "Restored mysql-show_processlist_extended");
+	const bool restored = restore_processlist_extended_setting(admin, original_processlist_extended);
+	std::string restored_processlist_extended;
+	const bool restored_value_read = fetch_processlist_extended_setting(admin, restored_processlist_extended);
+	ok(
+		restored && restored_value_read && restored_processlist_extended == original_processlist_extended,
+		"Restored the original mysql-show_processlist_extended value"
+	);
 	mysql_close(admin);
 
 	return exit_status();
