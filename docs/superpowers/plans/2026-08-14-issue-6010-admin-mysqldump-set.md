@@ -269,4 +269,3 @@ For a needed correction, stage the exact changed files and use this message:
 ```bash
 git commit -m "test: finalize issue 6010 coverage"
 ```
-
