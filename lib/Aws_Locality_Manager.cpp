@@ -906,9 +906,11 @@ private:
 			}
 		} else {
 			auto region = region_in_flight_.find(request.region);
-			if (region != region_in_flight_.end() && region->second != 0 &&
-				--region->second == 0) {
-				region_in_flight_.erase(region);
+			if (region != region_in_flight_.end() && region->second != 0) {
+				--region->second;
+				if (region->second == 0) {
+					region_in_flight_.erase(region);
+				}
 			}
 		}
 		if (completion.generation != request.generation ||

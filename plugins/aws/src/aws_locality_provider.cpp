@@ -603,7 +603,7 @@ AwsImdsResponse imds_request(
 	const AwsLocalityCancelPredicate& cancelled) {
 	AwsImdsResponse response;
 	if (cancelled() || std::chrono::steady_clock::now() >= deadline) return response;
-	CURL* handle = curl_easy_init();
+	CURL* handle = curl_easy_init(); // NOSONAR(cpp:S4423): IMDSv2 is HTTP-only; this handle is restricted to HTTP below.
 	if (handle == nullptr) return response;
 	CurlResponseContext write_context {&response.body, maximum};
 	CurlProgressContext progress_context {deadline, &cancelled};
