@@ -154,6 +154,8 @@ int main() {
 	GloVars.prometheus_registry = std::make_shared<prometheus::Registry>();
 	{
 		MySQL_HostGroups_Manager manager;
+		MySQL_HostGroups_Manager *previous_hgm = MyHGM;
+		MyHGM = &manager;
 		srv_info_t info;
 		info.addr = "db.abcdef.us-east-1.rds.amazonaws.com";
 		info.port = 3306;
@@ -189,6 +191,7 @@ int main() {
 		manager.refresh_aws_locality_configuration();
 		ok(manager.aws_locality_manager()->snapshot()->entries.empty(),
 			"removing the hostgroup policy removes its manager configuration");
+		MyHGM = previous_hgm;
 	}
 	GloVars.prometheus_registry.reset();
 
