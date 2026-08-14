@@ -816,12 +816,45 @@ __end_show_commands:
 	}
 
 	if (query_no_space_length==strlen("SELECT CONNECTION_ID()") && !strncasecmp("SELECT CONNECTION_ID()",query_no_space, query_no_space_length)) {
-		const std::string connection_id_query {
-			"SELECT " + std::to_string(sess->thread_session_id) + " AS 'CONNECTION_ID()'"
-		};
-		l_free(query_length,query);
-		query=l_strdup(connection_id_query.c_str());
-		query_length=connection_id_query.length()+1;
+		char connection_id[32];
+		snprintf(connection_id, sizeof(connection_id), "%u", sess->thread_session_id);
+
+		SQLite3_Session *sqlite_sess = static_cast<SQLite3_Session *>(sess->thread->gen_args);
+		sqlite3 *db = sqlite_sess->sessdb->get_db();
+		uint16_t set_status = 0;
+		if (sess->autocommit) {
+			set_status |= SERVER_STATUS_AUTOCOMMIT;
+		}
+		if ((*proxy_sqlite3_get_autocommit)(db) == 0) {
+			set_status |= SERVER_STATUS_IN_TRANS;
+		}
+
+		MySQL_Data_Stream *myds = sess->client_myds;
+		MySQL_Protocol *myprot = &myds->myprot;
+		myds->DSS = STATE_QUERY_SENT_DS;
+		int sid = 1;
+		myprot->generate_pkt_column_count(true, NULL, NULL, sid, 1); sid++;
+		myprot->generate_pkt_field(true, NULL, NULL, sid, (char*)"", (char*)"", (char*)"", (char*)"CONNECTION_ID()", (char*)"", 63, 31, MYSQL_TYPE_LONGLONG, 161, 0, false, 0, NULL); sid++;
+		myds->DSS = STATE_COLUMN_DEFINITION;
+
+		const bool deprecate_eof_active = myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+		if (!deprecate_eof_active) {
+			myprot->generate_pkt_EOF(true, NULL, NULL, sid, 0, set_status); sid++;
+		}
+
+		char *fields[] = { connection_id };
+		unsigned long lengths[] = { strlen(connection_id) };
+		myprot->generate_pkt_row(true, NULL, NULL, sid, 1, lengths, fields); sid++;
+		myds->DSS = STATE_ROW;
+
+		if (deprecate_eof_active) {
+			myprot->generate_pkt_OK(true, NULL, NULL, sid, 0, 0, set_status, 0, NULL, true); sid++;
+		} else {
+			myprot->generate_pkt_EOF(true, NULL, NULL, sid, 0, set_status); sid++;
+		}
+
+		myds->DSS = STATE_SLEEP;
+		run_query = false;
 		goto __run_query;
 	}
 
