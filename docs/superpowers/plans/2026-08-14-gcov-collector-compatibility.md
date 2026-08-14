@@ -4,7 +4,7 @@
 
 **Goal:** Make TAP coverage conversion use GCOV 11, matching the Ubuntu 22 coverage build, so Codecov receives daemon-side FFTO coverage.
 
-**Architecture:** Keep ProxySQL's GCC 11 coverage build unchanged. The Ubuntu 24 CI-base image gains `gcov-11`; the standalone and multi-group raw-GCOV conversion paths select it explicitly with fastcov's `-g` option and fail instead of silently writing an empty report when it is unavailable.
+**Architecture:** Keep ProxySQL's GCC 11 coverage build unchanged. The Ubuntu 24 CI-base image gains `gcc-11`, which provides `gcov-11`; the standalone and multi-group raw-GCOV conversion paths select that executable explicitly with fastcov's `-g` option and fail instead of silently writing an empty report when it is unavailable.
 
 **Tech Stack:** Docker, Ubuntu APT, Bash, fastcov, GCOV, GitHub Actions test infrastructure.
 
@@ -26,7 +26,7 @@
 
 **Interfaces:**
 - Consumes: `test/infra/docker-base/Dockerfile`, `test/infra/control/run-tests-isolated.bash`, and `test/infra/control/run-multi-group.bash`.
-- Produces: exit status 0 only when the image installs `gcov-11` and both raw-data fastcov call sites specify `-g gcov-11`.
+- Produces: exit status 0 only when the image installs `gcc-11` and both raw-data fastcov call sites specify `-g gcov-11`.
 
 - [ ] **Step 1: Write the failing regression check**
 
@@ -41,9 +41,9 @@ dockerfile="${root}/test/infra/docker-base/Dockerfile"
 runner="${root}/test/infra/control/run-tests-isolated.bash"
 multi="${root}/test/infra/control/run-multi-group.bash"
 
-rg -q '^[[:space:]]*gcov-11[[:space:]\\]*$' "${dockerfile}"
-test "$(rg -c 'fastcov -b .* -g gcov-11' "${runner}")" -eq 1
-test "$(rg -c 'fastcov -b .* -g gcov-11' "${multi}")" -eq 1
+rg -q '^[[:space:]]*gcc-11[[:space:]\\]*$' "${dockerfile}"
+test "$(rg -c 'fastcov -b -g gcov-11' "${runner}")" -eq 1
+test "$(rg -c 'fastcov -b -g gcov-11' "${multi}")" -eq 1
 ```
 
 - [ ] **Step 2: Run the check and verify it fails**
@@ -54,7 +54,7 @@ Run:
 bash test/infra/control/validate-coverage-gcov-toolchain.bash
 ```
 
-Expected: nonzero exit because `gcov-11` is absent and neither conversion command selects it.
+Expected: nonzero exit because `gcc-11` is absent and neither conversion command selects it.
 
 - [ ] **Step 3: Commit the failing-test addition**
 
@@ -72,16 +72,16 @@ git commit -m "test(ci): assert GCOV collector compatibility"
 - Test: `test/infra/control/validate-coverage-gcov-toolchain.bash`
 
 **Interfaces:**
-- Consumes: `gcov-11` supplied by the CI-base Docker image.
+- Consumes: the `gcov-11` executable supplied by `gcc-11` in the CI-base Docker image.
 - Produces: `fastcov` LCOV conversion from GCC 11 `.gcda` data, or an immediate nonzero CI exit with an explicit missing-tool message.
 
 - [ ] **Step 1: Install the matching reader in CI-base**
 
-Add `gcov-11` to the `apt-get install` list in `test/infra/docker-base/Dockerfile`, adjacent to `lcov`:
+Add `gcc-11` to the `apt-get install` list in `test/infra/docker-base/Dockerfile`, adjacent to `lcov`. This package supplies `/usr/bin/gcov-11`:
 
 ```dockerfile
     lcov \\
-    gcov-11 \\
+    gcc-11 \\
     && pip3 install --break-system-packages fastcov \\
 ```
 
