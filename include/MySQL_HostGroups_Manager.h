@@ -1127,8 +1127,9 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	/**
 	 * @brief Publish the node-local Aurora BGD state for one runtime row.
 	 *
-	 * Invalid status strings and writer hostgroups not present at runtime are
-	 * ignored. Configuration reloads do not write this column.
+	 * The caller owns validation of the state vocabulary. Writer hostgroups not
+	 * present at runtime are ignored. Configuration reloads do not write this
+	 * column.
 	 */
 	void update_aws_aurora_bgd_status(int writer_hostgroup, const std::string& bgd_status);
 	/**
