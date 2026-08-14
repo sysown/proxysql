@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <cstring>
 #include <deque>
+#include <exception>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
@@ -242,7 +243,13 @@ public:
 			workers.emplace_back([this] { worker_loop(); });
 		}
 	}
-	~Impl() { shutdown(); }
+	~Impl() noexcept {
+		try {
+			shutdown();
+		} catch (...) {
+			std::terminate();
+		}
+	}
 
 	enum class DeliveryState : uint8_t { PENDING, CLAIMED, CANCELED, FINISHED };
 	struct Delivery {
@@ -685,7 +692,7 @@ public:
 AwsIamTokenManager::AwsIamTokenManager(std::shared_ptr<AwsIamTokenSigner> signer,
 	AwsIamTokenManagerConfig config)
 	: impl_(new Impl(std::move(signer), std::move(config))) {}
-AwsIamTokenManager::~AwsIamTokenManager() { impl_->shutdown(); }
+AwsIamTokenManager::~AwsIamTokenManager() = default;
 AwsIamRequestHandle AwsIamTokenManager::request(const AwsIamTokenKey& key, uint64_t opaque_id,
 	std::weak_ptr<AwsIamCompletionSink> sink) {
 	return impl_->request(key, opaque_id, std::move(sink));
