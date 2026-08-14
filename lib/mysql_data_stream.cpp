@@ -1932,6 +1932,12 @@ void MySQL_Data_Stream::get_client_myds_info_json(json& j) {
 	jc1["switching_auth_type"] = switching_auth_type;
 	jc1["prot"]["sent_auth_plugin_id"] = myprot.sent_auth_plugin_id;
 	jc1["prot"]["auth_plugin_id"] = myprot.auth_plugin_id;
+	if (!client_connect_attrs.empty()) {
+		json& connect_attrs = jc1["connect_attrs"];
+		for (const auto& [key, value] : client_connect_attrs) {
+			connect_attrs[key] = value;
+		}
+	}
 
 	switch (myprot.auth_plugin_id) {
 		case AUTH_MYSQL_NATIVE_PASSWORD:
