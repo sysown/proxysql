@@ -616,6 +616,10 @@ AwsImdsResponse imds_request(
 	curl_easy_setopt(handle, CURLOPT_NOBODY, 0L);
 	curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 0L);
 	curl_easy_setopt(handle, CURLOPT_NOPROXY, "*");
+	// IMDS is an HTTP-only link-local service. Restrict the handle to that
+	// protocol and retain a secure TLS floor if the transport URL ever changes.
+	curl_easy_setopt(handle, CURLOPT_PROTOCOLS_STR, "http");
+	curl_easy_setopt(handle, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_2);
 	curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT_MS, std::min<long>(timeout, 500L));
 	curl_easy_setopt(handle, CURLOPT_TIMEOUT_MS, timeout);
 	curl_easy_setopt(handle, CURLOPT_NOSIGNAL, 1L);
