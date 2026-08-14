@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make TAP coverage conversion use GCOV 11, matching the Ubuntu 22 coverage build, so Codecov receives daemon-side FFTO coverage.
+**Goal:** Make TAP coverage conversion use GCOV 11, matching the Ubuntu 24 `tap-genai-gcov` coverage build, so Codecov receives daemon-side FFTO coverage.
 
 **Architecture:** Keep ProxySQL's GCC 11 coverage build unchanged. The Ubuntu 24 CI-base image gains `gcc-11`, which provides `gcov-11`; the standalone and multi-group raw-GCOV conversion paths select that executable explicitly with fastcov's `-g` option and fail instead of silently writing an empty report when it is unavailable.
 
@@ -169,8 +169,8 @@ docker build -t proxysql-ci-base:latest test/infra/docker-base
 - [ ] **Step 2: Build the existing GCC 11 coverage binary and the one TAP executable**
 
 ```bash
-WITHGCOV=1 PROXYSQL40=1 make ubuntu22-tap-genai-gcov
-docker run --rm -v "$PWD:/opt/proxysql" proxysql/packaging:build-ubuntu22-v4.0.0 \\
+WITHGCOV=1 PROXYSQL40=1 make ubuntu24-tap-genai-gcov
+docker run --rm -v "$PWD:/opt/proxysql" proxysql/packaging:build-ubuntu24 \\
   bash -lc 'cd /opt/proxysql/test/tap/tests && WITHGCOV=1 PROXYSQL40=1 PROXYSQL31=1 PROXYSQLFFTO=1 make test_ffto_mysql-t'
 ```
 
@@ -191,8 +191,18 @@ Expected: `test_ffto_mysql-t` passes, including its fast-forward-session and que
 
 ```bash
 info="ci_infra_logs/${INFRA_ID}/coverage-report/${INFRA_ID}.info"
-awk '/^SF:.*lib\/MySQLFFTO\.cpp$/{seen=1} seen && /^LH:/{print; exit}' "${info}"
 test -s "${info}"
+if ! awk '
+  /^SF:/ { in_target = ($0 == "SF:lib/MySQLFFTO.cpp"); next }
+  in_target && /^LH:/ {
+    found = (substr($0, 4) + 0) > 0
+    exit
+  }
+  END { exit(found ? 0 : 1) }
+' "${info}"; then
+  echo "Expected nonzero LCOV coverage for lib/MySQLFFTO.cpp" >&2
+  exit 1
+fi
 ```
 
 Expected: a nonzero `LH:` value for `lib/MySQLFFTO.cpp`.

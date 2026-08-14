@@ -401,7 +401,7 @@ docker run \
                             fi
                             fastcov -b -g gcov-11 -j\$(nproc) -l \
                                 -e /usr deps \
-                                -d . -o \"\${coverage_file}\" >> \"\${coverage_log}\" 2>&1 || echo \">>> WARNING: Coverage generation failed (see \${coverage_log})\"
+                                -d . -o \"\${coverage_file}\" >> \"\${coverage_log}\" 2>&1
 
                             if [ -f \"\${coverage_file}\" ]; then
                                 echo \">>> Coverage report generated: \${coverage_file}\"
