@@ -31,8 +31,8 @@ Replace the SQLite query rewrite with the corresponding native response in
 3. Emit an intermediate EOF only when `CLIENT_DEPRECATE_EOF` is not active.
 4. Terminate rows with an OK packet when it is active, otherwise an EOF
    packet.
-5. End the request and release the incoming packet just as other
-   SQLite3-server command handlers do.
+5. Set `run_query` to false and return through the existing SQLite3-server
+   handler cleanup path, as its direct OK responses do.
 
 No general resultset code, handshake logic, or connection-ID allocation will
 change.
