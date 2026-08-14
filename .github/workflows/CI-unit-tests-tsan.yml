@@ -87,6 +87,7 @@ jobs:
         repository: ${{ github.repository }}
         ref: ${{ env.SHA }}
         fetch-depth: 0
+        lfs: true
         submodules: 'false'
 
     - name: Relax ASLR for ThreadSanitizer
