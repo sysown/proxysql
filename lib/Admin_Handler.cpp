@@ -1341,8 +1341,12 @@ bool is_valid_global_variable(const char *var_name) {
 
 enum class admin_set_scope { implicit, session, local, global };
 
+static bool is_admin_set_whitespace(char character) {
+	return character == ' ' || (character >= '\t' && character <= '\r');
+}
+
 static admin_set_scope strip_admin_set_scope(char*& variable_name) {
-	while (isspace(*variable_name)) {
+	while (is_admin_set_whitespace(*variable_name)) {
 		++variable_name;
 	}
 
@@ -1358,9 +1362,9 @@ static admin_set_scope strip_admin_set_scope(char*& variable_name) {
 
 	for (const auto& scope_token : scope_tokens) {
 		const size_t token_length = strlen(scope_token.token);
-		if (strncasecmp(variable_name, scope_token.token, token_length) == 0 && isspace(variable_name[token_length])) {
+		if (strncasecmp(variable_name, scope_token.token, token_length) == 0 && is_admin_set_whitespace(variable_name[token_length])) {
 			variable_name += token_length;
-			while (isspace(*variable_name)) {
+			while (is_admin_set_whitespace(*variable_name)) {
 				++variable_name;
 			}
 			return scope_token.scope;
