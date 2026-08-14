@@ -85,22 +85,22 @@ if [ "${zero_timeout_exit}" -ne 64 ]; then
     exit 1
 fi
 
-helper_calls=$(rg -F -c 'dump-proxysql-gcov.bash' "${runner}")
+helper_calls=$(grep -Fc 'dump-proxysql-gcov.bash' "${runner}")
 if [ "${helper_calls}" -ne 1 ]; then
     echo "expected one final dump invocation in isolated runner, got ${helper_calls}" >&2
     exit 1
 fi
-dump_line=$(rg -n -F 'dump-proxysql-gcov.bash' "${runner}" | cut -d: -f1)
-decode_line=$(rg -n -F 'fastcov -b' "${runner}" | head -n1 | cut -d: -f1)
+dump_line=$(grep -nF 'dump-proxysql-gcov.bash' "${runner}" | cut -d: -f1)
+decode_line=$(grep -nF 'fastcov -b' "${runner}" | head -n1 | cut -d: -f1)
 if [ "${dump_line}" -ge "${decode_line}" ]; then
     echo "final daemon dump must run before GCDA decoding" >&2
     exit 1
 fi
-if rg -q -F 'self.padmin_command("PROXYSQL GCOV DUMP")' "${tester}"; then
+if grep -qF 'self.padmin_command("PROXYSQL GCOV DUMP")' "${tester}"; then
     echo "per-test GCOV dumps must remain disabled" >&2
     exit 1
 fi
-status_calls=$(rg -F -c 'coverage_exit_status' "${runner}")
+status_calls=$(grep -Fc 'coverage_exit_status' "${runner}")
 if [ "${status_calls}" -ne 1 ]; then
     echo "coverage trap must resolve the final exit status exactly once" >&2
     exit 1
