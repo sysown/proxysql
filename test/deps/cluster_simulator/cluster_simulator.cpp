@@ -1719,7 +1719,7 @@ std::pair<int, nlohmann::ordered_json> simulate_aws_aurora_cluster_state(
 	// change the values for the cluster state as a last step
 	prep_aurora_init_state_err =
 		prepare_aurora_cluster_state(
-			proxysql_sqlite, aurora_init_servers_state, hostgroup_attributes.empty() ? 1 : 2
+			proxysql_sqlite, aurora_init_servers_state, 2
 		);
 
 	if (prep_aurora_init_state_err.first) {

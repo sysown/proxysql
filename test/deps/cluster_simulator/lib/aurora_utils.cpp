@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <ctime>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -372,6 +373,30 @@ string aurora_sql_quote(const string& value) {
 	return quoted;
 }
 
+string aurora_utc_timestamp() {
+	time_t now = time(nullptr);
+	struct tm utc_time {};
+	gmtime_r(&now, &utc_time);
+	char timestamp[20] {};
+	strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", &utc_time);
+	return timestamp;
+}
+
+std::pair<int, uint64_t> aurora_scalar_uint64(MYSQL* connection, const string& query) {
+	if (mysql_query(connection, query.c_str()) != 0) {
+		return { EXIT_FAILURE, 0 };
+	}
+	MYSQL_RES* result = mysql_store_result(connection);
+	if (result == nullptr) {
+		return { EXIT_FAILURE, 0 };
+	}
+	MYSQL_ROW row = mysql_fetch_row(result);
+	const bool valid = row != nullptr && row[0] != nullptr;
+	const uint64_t value = valid ? strtoull(row[0], nullptr, 10) : 0;
+	mysql_free_result(result);
+	return { valid ? EXIT_SUCCESS : EXIT_FAILURE, value };
+}
+
 std::pair<int, string> load_aurora_backend_addresses(
 	std::unordered_map<string, string>& addresses)
 {
@@ -451,10 +476,42 @@ std::pair<int, string> prepare_aurora_cluster_state(
 		return error;
 	};
 
-	if (cleanup) {
+	string replica_set_list {};
+	for (const auto& replica_set : replica_sets) {
+		if (!replica_set_list.empty()) replica_set_list += ",";
+		replica_set_list += aurora_sql_quote(replica_set.first);
+	}
+
+	auto [checkpoint_rc, probe_checkpoint] = aurora_scalar_uint64(
+		proxysql_sqlite,
+		"SELECT COALESCE(MAX(sequence_id),0) FROM AWS_AURORA_REPLICA_PROBE_LOG");
+	if (checkpoint_rc != EXIT_SUCCESS) {
+		(void)mysql_query(proxysql_sqlite, "ROLLBACK");
+		return { EXIT_FAILURE, "Unable to read the Aurora replica probe checkpoint" };
+	}
+
+	if (cleanup > 1) {
 		auto [control_rc, control_error] =
 			execute_or_rollback("DELETE FROM AWS_AURORA_REPLICA_CONTROL");
 		if (control_rc != EXIT_SUCCESS) return { control_rc, control_error };
+		auto [rows_rc, rows_error] = execute_or_rollback("DELETE FROM REPLICA_HOST_STATUS");
+		if (rows_rc != EXIT_SUCCESS) return { rows_rc, rows_error };
+	} else if (cleanup == 1) {
+		const string delete_controls {
+			replica_set_list.empty()
+				? "DELETE FROM AWS_AURORA_REPLICA_CONTROL"
+				: "DELETE FROM AWS_AURORA_REPLICA_CONTROL WHERE replica_set_id NOT IN (" +
+					replica_set_list + ")"
+		};
+		auto [control_rc, control_error] = execute_or_rollback(delete_controls);
+		if (control_rc != EXIT_SUCCESS) return { control_rc, control_error };
+		if (!replica_set_list.empty()) {
+			auto [reset_rc, reset_error] = execute_or_rollback(
+				"UPDATE AWS_AURORA_REPLICA_CONTROL SET replica_table_present=1,"
+				"error_code=0,error_msg='' WHERE replica_set_id IN (" +
+				replica_set_list + ")");
+			if (reset_rc != EXIT_SUCCESS) return { reset_rc, reset_error };
+		}
 		auto [rows_rc, rows_error] = execute_or_rollback("DELETE FROM REPLICA_HOST_STATUS");
 		if (rows_rc != EXIT_SUCCESS) return { rows_rc, rows_error };
 	} else {
@@ -469,7 +526,7 @@ std::pair<int, string> prepare_aurora_cluster_state(
 		}
 	}
 
-	const string timestamp { get_fmt_time() };
+	const string timestamp { aurora_utc_timestamp() };
 	for (const auto& replica_set : replica_sets) {
 		const string& replica_set_id = replica_set.first;
 		std::map<std::pair<string, int>, bool> mapped_backends {};
@@ -525,8 +582,31 @@ std::pair<int, string> prepare_aurora_cluster_state(
 		return create_query_error(proxysql_sqlite, "COMMIT", __FILE__, __LINE__);
 	}
 
-	// Allow an already scheduled monitor probe to observe the committed snapshot.
-	usleep(1000 * 1000);
+	if (cleanup == 1 && !replica_sets.empty()) {
+		const uint64_t deadline = monotonic_time() + 10000000;
+		const string observed_sets_query {
+			"SELECT COUNT(DISTINCT replica_set_id) FROM AWS_AURORA_REPLICA_PROBE_LOG "
+			"WHERE sequence_id>" + std::to_string(probe_checkpoint) +
+			" AND probe_kind='ordinary' AND replica_set_id IN (" +
+			replica_set_list + ")"
+		};
+		do {
+			auto [observed_rc, observed_sets] =
+				aurora_scalar_uint64(proxysql_sqlite, observed_sets_query);
+			if (observed_rc != EXIT_SUCCESS) {
+				return { EXIT_FAILURE, "Unable to read the Aurora replica probe log" };
+			}
+			if (observed_sets == replica_sets.size()) {
+				return { EXIT_SUCCESS, "" };
+			}
+			usleep(50000);
+		} while (monotonic_time() < deadline);
+
+		return {
+			EXIT_FAILURE,
+			"Timed out waiting for every Aurora replica set to be probed"
+		};
+	}
 
 	return { EXIT_SUCCESS, "" };
 }

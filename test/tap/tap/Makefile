@@ -83,13 +83,13 @@ mcp_client.o: mcp_client.cpp mcp_client.h libcurl$(SHLIB_EXT)
 cluster_simulator.o: cluster_simulator.cpp cluster_simulator.h
 	$(CXX) -fPIC -c cluster_simulator.cpp $(IDIRS) -I$(MARIADB_IDIR) $(OPT)
 
-bgd_simulator.o: bgd_simulator.cpp bgd_simulator.h cluster_simulator.h utils.h
+bgd_simulator.o: bgd_simulator.cpp bgd_simulator.h cluster_simulator.h utils.h tap.h command_line.h
 	$(CXX) -fPIC -c bgd_simulator.cpp $(IDIRS) -I$(MARIADB_IDIR) $(OPT)
 
-aurora_bgd_simulator.o: aurora_bgd_simulator.cpp aurora_bgd_simulator.h bgd_simulator.h
+aurora_bgd_simulator.o: aurora_bgd_simulator.cpp aurora_bgd_simulator.h bgd_simulator.h cluster_simulator.h utils.h command_line.h
 	$(CXX) -fPIC -c aurora_bgd_simulator.cpp $(IDIRS) -I$(MARIADB_IDIR) $(OPT)
 
-rds_bgd_simulator.o: rds_bgd_simulator.cpp rds_bgd_simulator.h bgd_simulator.h
+rds_bgd_simulator.o: rds_bgd_simulator.cpp rds_bgd_simulator.h bgd_simulator.h cluster_simulator.h utils.h command_line.h
 	$(CXX) -fPIC -c rds_bgd_simulator.cpp $(IDIRS) -I$(MARIADB_IDIR) $(OPT)
 
 libtap_mariadb.a: tap.o command_line.o utils_mariadb.o noise_utils_mariadb.o mcp_client.o cluster_simulator.o bgd_simulator.o aurora_bgd_simulator.o rds_bgd_simulator.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a

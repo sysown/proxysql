@@ -427,6 +427,9 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 	int cols;
 	int affected_rows;
 	bool run_query=true;
+#ifdef TEST_AURORA
+	bool aws_aurora_replica_transaction=false;
+#endif
 	SQLite3_result *resultset=NULL;
 	char *strA=NULL;
 	char *strB=NULL;
@@ -980,6 +983,18 @@ __run_query:
 					run_query=false;
 				} else {
 					SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
+					sqlite3 *db = sqlite_sess->sessdb->get_db();
+					if ((*proxy_sqlite3_get_autocommit)(db)==1) {
+						if (!sqlite_sess->sessdb->execute("BEGIN IMMEDIATE")) {
+							GloSQLite3Server->send_MySQL_ERR(
+								&sess->client_myds->myprot, 1105,
+								"AWS Aurora simulator failed to start the replica probe transaction");
+							run_query=false;
+						} else {
+							aws_aurora_replica_transaction=true;
+						}
+					}
+
 					const std::string backend_ip { sess->client_myds->proxy_addr.addr };
 					const int backend_port = sess->client_myds->proxy_addr.port;
 					const std::string predicate {
@@ -994,15 +1009,17 @@ __run_query:
 						"SELECT replica_set_id,replica_table_present,error_code,error_msg "
 						"FROM AWS_AURORA_REPLICA_CONTROL WHERE " + predicate
 					};
-					sqlite_sess->sessdb->execute_statement(
-						control_query.c_str(), &control_error, &control_cols,
-						&control_affected_rows, &control_result);
+					if (run_query) {
+						sqlite_sess->sessdb->execute_statement(
+							control_query.c_str(), &control_error, &control_cols,
+							&control_affected_rows, &control_result);
+					}
 
 					std::string replica_set_id {};
 					bool replica_table_present=false;
 					unsigned int configured_error=0;
 					std::string configured_error_msg {};
-					if (control_error == nullptr && control_result &&
+					if (run_query && control_error == nullptr && control_result &&
 						control_result->rows_count == 1) {
 						SQLite3_row *row=control_result->rows.front();
 						replica_set_id=row->fields[0] ? row->fields[0] : "";
@@ -1023,7 +1040,9 @@ __run_query:
 						"," + (sess->client_myds->encrypted ? "1" : "0") + ")"
 					};
 
-					if (control_error != nullptr) {
+					if (!run_query) {
+						// The transaction-start error was already sent above.
+					} else if (control_error != nullptr) {
 						GloSQLite3Server->send_MySQL_ERR(
 							&sess->client_myds->myprot, 1105, control_error);
 						free(control_error);
@@ -1175,6 +1194,12 @@ __run_query:
 			}
 #endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP || TEST_READONLY || TEST_REPLICATIONLAG || TEST_RDS_BGD
 		if (!run_query) {
+#ifdef TEST_AURORA
+			if (aws_aurora_replica_transaction) {
+				SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
+				sqlite_sess->sessdb->execute("COMMIT");
+			}
+#endif
 			l_free(pkt->size-sizeof(mysql_hdr),query_no_space);
 			l_free(query_length,query);
 			return;
@@ -1188,6 +1213,11 @@ __run_query:
 			}
 		}
 		sqlite_sess->sessdb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+#ifdef TEST_AURORA
+		if (aws_aurora_replica_transaction) {
+			sqlite_sess->sessdb->execute("COMMIT");
+		}
+#endif
 #if defined(TEST_GALERA) || defined(TEST_GROUPREP)
 		if (strncasecmp("SELECT",query_no_space,6)==0) {
 #ifdef TEST_GALERA

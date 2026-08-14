@@ -227,9 +227,6 @@ tests-php: $(patsubst %,php-%,$(wildcard *-t.php))
 tests-py: $(patsubst %,py-%,$(wildcard *-t.py))
 tests-sh: $(patsubst %,sh-%,$(wildcard *-t.sh))
 testgalera: galera_1_timeout_count galera_2_timeout_no_count
-testaurora: aurora
-
-
 ### test deps targets
 
 #build_test_deps: $(TAP_LDIR)/libtap$(SHLIB_EXT) $(TEST_MARIADB_LDIR)/libmariadbclient.a $(TEST_MYSQL_LDIR)/libmysqlclient.a
@@ -274,9 +271,6 @@ galera_2_timeout_no_count: galera_2_timeout_no_count.cpp $(TAP_LDIR)/libtap$(SHL
 
 generate_set_session_csv: generate_set_session_csv.cpp
 	$(CXX) $< $(OPT) -o $@
-
-aurora: aurora.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
-	$(CXX) -DTEST_AURORA $< ../tap/SQLite3_Server.cpp $(IDIRS) $(LDIRS) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) -o $@
 
 test_tokenizer-t: test_tokenizer-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
