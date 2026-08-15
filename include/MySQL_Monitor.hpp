@@ -810,6 +810,15 @@ class MySQL_Monitor {
 	void aws_aurora_bgd_refresh_production_snapshot(
 		AWS_Aurora_BGD_State& st, const AWS_Aurora_status_entry& result);
 	/**
+	 * @brief Apply the routing actions for an accepted active Aurora BGD state.
+	 *
+	 * @details INITIATED only suspends production probing. IN_PROGRESS demotes
+	 *   the snapshotted writer on entry. POST_PROCESSING applies each complete
+	 *   member mapping once and restores canonical writer placement.
+	 */
+	void aws_aurora_bgd_apply_active_actions(
+		AWS_Aurora_BGD_State& st, bool status_changed);
+	/**
 	 * @brief Run the topology and target-membership probes owned by an Aurora worker.
 	 *
 	 * @details Discovery is serialized with the ordinary Aurora probe. This method

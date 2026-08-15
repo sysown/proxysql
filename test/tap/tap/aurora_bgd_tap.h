@@ -141,14 +141,17 @@ inline int aurora_bgd_admin_cleanup(MYSQL* admin) {
 		"LOAD MYSQL VARIABLES TO RUNTIME",
 		"DELETE FROM mysql_aws_aurora_hostgroups",
 		"DELETE FROM mysql_servers",
+		"UPDATE mysql_users SET default_hostgroup=0 WHERE username='testuser'",
 		"LOAD MYSQL SERVERS TO RUNTIME",
+		"LOAD MYSQL USERS TO RUNTIME",
 	});
 }
 
 inline int aurora_bgd_admin_setup(
 	MYSQL* admin, Aurora_BGD_Test_Deployment& deployment,
 	int writer_hg, int reader_hg, int green_writer_hg, int green_reader_hg,
-	bool auto_discovery
+	bool auto_discovery, int check_interval_ms = 100,
+	bool writer_is_also_reader = false
 ) {
 	vector<string> queries {
 		"SET mysql-monitor_username='aurora1'",
@@ -156,6 +159,8 @@ inline int aurora_bgd_admin_setup(
 		"SET mysql-monitor_enabled='true'",
 		"SET mysql-aws_blue_green_deployment_auto_discovery='" +
 			string(auto_discovery ? "true" : "false") + "'",
+		"UPDATE mysql_users SET default_hostgroup=" + to_string(writer_hg) +
+			" WHERE username='testuser'",
 	};
 
 	string green_columns = green_writer_hg >= 0
@@ -169,7 +174,9 @@ inline int aurora_bgd_admin_setup(
 		"autopurge_missing_checks,comment) VALUES (" +
 		to_string(writer_hg) + "," + to_string(reader_hg) + "," + green_columns +
 		",1,3306," + aurora_bgd_sql_quote(deployment.domain_name) +
-		",200,100,800,0,1,30,30,1,0," + aurora_bgd_sql_quote(deployment.name) + ")");
+		",200," + to_string(check_interval_ms) + ",800," +
+		to_string(writer_is_also_reader ? 1 : 0) +
+		",1,30,30,1,0," + aurora_bgd_sql_quote(deployment.name) + ")");
 
 	for (Aurora_BGD_Member& member : deployment.production.members) {
 		const int hostgroup = member.session_id == "MASTER_SESSION_ID" ? writer_hg : reader_hg;
@@ -180,6 +187,7 @@ inline int aurora_bgd_admin_setup(
 	}
 	queries.push_back("LOAD MYSQL VARIABLES TO RUNTIME");
 	queries.push_back("LOAD MYSQL SERVERS TO RUNTIME");
+	queries.push_back("LOAD MYSQL USERS TO RUNTIME");
 	return aurora_bgd_execute_all(admin, queries);
 }
 
@@ -202,6 +210,16 @@ inline vector<BGD_Topology_Row> aurora_bgd_available_topology(
 			"AVAILABLE",
 		},
 	};
+}
+
+inline vector<BGD_Topology_Row> aurora_bgd_topology(
+	Aurora_BGD_Test_Deployment& deployment, const string& status
+) {
+	vector<BGD_Topology_Row> rows = aurora_bgd_available_topology(deployment);
+	for (BGD_Topology_Row& row : rows) {
+		row.status = status;
+	}
+	return rows;
 }
 
 inline vector<Endpoint> aurora_bgd_topology_backends(Aurora_BGD_Test_Deployment& deployment) {
