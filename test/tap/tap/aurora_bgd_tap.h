@@ -222,6 +222,20 @@ inline vector<BGD_Topology_Row> aurora_bgd_topology(
 	return rows;
 }
 
+inline vector<BGD_Topology_Row> aurora_bgd_completed_topology(
+	Aurora_BGD_Test_Deployment& deployment
+) {
+	return {
+		{
+			deployment.target_topology_id,
+			deployment.target_cluster_endpoint.hostname,
+			deployment.target_cluster_endpoint.port,
+			"BLUE_GREEN_DEPLOYMENT_TARGET",
+			"SWITCHOVER_COMPLETED",
+		},
+	};
+}
+
 inline vector<Endpoint> aurora_bgd_topology_backends(Aurora_BGD_Test_Deployment& deployment) {
 	vector<Endpoint> backends = deployment.production.backends();
 	vector<Endpoint> target_backends = deployment.target.backends();

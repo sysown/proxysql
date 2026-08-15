@@ -819,6 +819,20 @@ class MySQL_Monitor {
 	void aws_aurora_bgd_apply_active_actions(
 		AWS_Aurora_BGD_State& st, bool status_changed);
 	/**
+	 * @brief Run immediate effect-driven cleanup for TARGET completion.
+	 *
+	 * @details Reconciles writer placement, removes mapped traffic pins, drains
+	 *   eligible configured green pools, resumes production probing, and enters
+	 *   the completed latch while retaining the deployment fingerprint.
+	 */
+	void aws_aurora_bgd_apply_completion(
+		AWS_Aurora_BGD_State& st,
+		const AWS_Aurora_BGD_Fingerprint& completed_fingerprint);
+	/**
+	 * @brief Release the completed latch after a successful topology drain.
+	 */
+	void aws_aurora_bgd_release_completed_latch(AWS_Aurora_BGD_State& st);
+	/**
 	 * @brief Run the topology and target-membership probes owned by an Aurora worker.
 	 *
 	 * @details Discovery is serialized with the ordinary Aurora probe. This method
