@@ -204,12 +204,20 @@ int main() {
 	shutdown_global_aws_iam_token_source();
 	replacement_destroyed.store(false, std::memory_order_release);
 	void *survivor_handle = dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
-	auto *survivor = new FakeSource();
-	ok(survivor_handle != nullptr && install_global_aws_iam_token_source(
-		survivor, destroy_replacement, survivor_handle),
+	auto survivor = std::make_unique<FakeSource>();
+	FakeSource *survivor_observer = survivor.get();
+	const bool survivor_installed = survivor_handle != nullptr &&
+		install_global_aws_iam_token_source(
+			survivor_observer, destroy_replacement, survivor_handle);
+	if (survivor_installed) {
+		(void)survivor.release();
+	} else if (survivor_handle != nullptr) {
+		dlclose(survivor_handle);
+	}
+	ok(survivor_installed,
 		"replacement publication reopens after every retirement caller finishes");
 	AwsIamTokenSourceLease survivor_lease = acquire_global_aws_iam_token_source();
-	ok(survivor_lease && survivor_lease.get() == survivor &&
+	ok(survivor_lease && survivor_lease.get() == survivor_observer &&
 		!replacement_destroyed.load(std::memory_order_acquire),
 		"the post-retirement replacement remains published and alive");
 	survivor_lease = AwsIamTokenSourceLease {};
