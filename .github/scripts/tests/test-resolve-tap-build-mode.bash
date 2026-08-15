@@ -38,6 +38,8 @@ assert_mode normal env TRUSTED=true TRIGGER_JSON="$non_pr_trigger" \
     GITHUB_REPOSITORY=sysown/proxysql GH_BIN="$stub" "$resolver"
 assert_mode normal env TRUSTED=true TRIGGER_JSON="$pr_trigger" GH_LABELS='bug' \
     GITHUB_REPOSITORY=sysown/proxysql GH_BIN="$stub" "$resolver"
+assert_mode normal env TRUSTED=true TRIGGER_JSON="$pr_trigger" GH_LABELS='ci:asan-extra' \
+    GITHUB_REPOSITORY=sysown/proxysql GH_BIN="$stub" "$resolver"
 assert_mode asan env TRUSTED=true TRIGGER_JSON="$pr_trigger" GH_LABELS='bug ci:asan' \
     GITHUB_REPOSITORY=sysown/proxysql GH_BIN="$stub" "$resolver"
 

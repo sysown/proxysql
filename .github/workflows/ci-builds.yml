@@ -46,6 +46,9 @@ env:
 jobs:
 
   resolve-tap-mode:
+    permissions:
+      contents: read
+      pull-requests: read
     runs-on: ubuntu-24.04
     outputs:
       mode: ${{ steps.resolve.outputs.mode }}
