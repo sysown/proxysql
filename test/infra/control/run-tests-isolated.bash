@@ -345,7 +345,9 @@ docker run \
 
                 # ProxySQL is a long-running process, so its in-memory counters
                 # are not guaranteed to reach the GCDA files during container
-                # teardown. Dump once after the group and before decoding.
+                # teardown. GCC 13 also ignores a second __gcov_dump call until
+                # __gcov_reset is called. Do not dump inside the TAP loop; dump
+                # once here after the group and before any GCDA decoding starts.
                 echo \">>> Dumping ProxySQL GCOV counters after the test group...\"
                 if ! \"${SCRIPT_DIR}/dump-proxysql-gcov.bash\"; then
                     echo \">>> ERROR: Failed to dump ProxySQL GCOV counters\" >&2

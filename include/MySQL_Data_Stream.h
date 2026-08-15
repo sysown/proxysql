@@ -2,6 +2,9 @@
 #define PROXYSQL_MYSQL_DATA_STREAM_H
 
 #include <memory>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "proxysql.h"
 #include "cpp.h"
@@ -132,6 +135,7 @@ class MySQL_Data_Stream
 	MySQL_Connection *myconn;
 	MySQL_Session *sess;  // pointer to the session using this data stream
 	MySQL_Backend *mybe;  // if this is a connection to a mysql server, this points to a backend structure
+	std::vector<std::pair<std::string, std::string>> client_connect_attrs;
 	std::unique_ptr<char[]> x509_subject_alt_name;
 #ifdef PROXYSQL31
 	bool client_cert_present;

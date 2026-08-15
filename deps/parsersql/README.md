@@ -107,6 +107,11 @@ Reasons:
 
 Significant audits / bumps:
 
+- **v1.0.11 (2026-08-12)** — Adds lossless literal and user-variable AST
+  nodes, full-input coverage for MySQL parsing, and user-variable usage
+  classification. ProxySQL's typed SET adapter can therefore preserve exact
+  replay literals while distinguishing safe read-only references from unsafe
+  or unknown use.
 - **v1.0.8 (2026-05-23)** — Tokenizer: unclosed delimited identifier
   (`"name` in PG, `` `name `` in MySQL) now emits `TK_ERROR` instead
   of silently consuming everything to EOF as one giant identifier.

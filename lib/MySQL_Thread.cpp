@@ -185,6 +185,11 @@ mythr_st_vars_t MySQL_Thread_status_variables_counter_array[] {
 	{ st_var_client_host_error_killed_connections, p_th_counter::client_host_error_killed_connections, (char *)"client_host_error_killed_connections" },
 	{ st_var_set_wait_timeout_commands,    p_th_counter::mysql_set_wait_timeout_commands,  (char *)"mysql_set_wait_timeout_commands" },
 	{ st_var_timeout_terminated_connections, p_th_counter::mysql_timeout_terminated_connections, (char *)"mysql_timeout_terminated_connections" },
+	{ st_var_user_variable_assignments_tracked, p_th_counter::mysql_user_variable_assignments_tracked, (char *)"User_variable_assignments_tracked" },
+	{ st_var_user_variable_replay_commands, p_th_counter::mysql_user_variable_replay_commands, (char *)"User_variable_replay_commands" },
+	{ st_var_user_variable_replay_failures, p_th_counter::mysql_user_variable_replay_failures, (char *)"User_variable_replay_failures" },
+	{ st_var_user_variable_fallback_unsupported, p_th_counter::mysql_user_variable_fallback_unsupported, (char *)"User_variable_fallback_unsupported" },
+	{ st_var_user_variable_fallback_limits, p_th_counter::mysql_user_variable_fallback_limits, (char *)"User_variable_fallback_limits" },
 };
 
 mythr_g_st_vars_t MySQL_Thread_status_variables_gauge_array[] {
@@ -479,6 +484,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"query_processor_parser", // NOSONAR: matches array pattern
 	(char *)"set_query_lock_on_hostgroup",
 	(char *)"set_parser_algorithm",
+	(char *)"user_variable_tracking",
 	(char *)"reset_connection_algorithm",
 	(char *)"auto_increment_delay_multiplex",
 	(char *)"auto_increment_delay_multiplex_timeout_ms",
@@ -1025,6 +1031,56 @@ th_metrics_map = std::make_tuple(
 				{ "protocol", "mysql" }
 
 			}
+		),
+		std::make_tuple (
+			p_th_counter::mysql_user_variable_assignments_tracked,
+			"proxysql_mysql_user_variable_assignments_tracked_total",
+			"Number of supported MySQL user-variable assignment targets tracked.",
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
+		),
+		std::make_tuple (
+			p_th_counter::mysql_user_variable_replay_commands,
+			"proxysql_mysql_user_variable_replay_commands_total",
+			"Number of internal MySQL user-variable replay SET batches executed.",
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
+		),
+		std::make_tuple (
+			p_th_counter::mysql_user_variable_replay_failures,
+			"proxysql_mysql_user_variable_replay_failures_total",
+			"Number of failed MySQL user-variable replay SET batches.",
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
+		),
+		std::make_tuple (
+			p_th_counter::mysql_user_variable_fallback_unsupported,
+			"proxysql_mysql_user_variable_fallback_unsupported_total",
+			"Number of MySQL user-variable SET statements falling back because they are unsupported.",
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
+		),
+		std::make_tuple (
+			p_th_counter::mysql_user_variable_fallback_limits,
+			"proxysql_mysql_user_variable_fallback_limits_total",
+			"Number of MySQL user-variable SET statements falling back due to tracking limits.",
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		)
 	},
 	th_gauge_vector {
@@ -1374,6 +1430,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.query_processor_parser=0;
 	variables.set_query_lock_on_hostgroup=1;
 	variables.set_parser_algorithm=2; // before 2.6.0 this was 1
+	variables.user_variable_tracking=0;
 	variables.reset_connection_algorithm=2;
 	variables.auto_increment_delay_multiplex=5;
 	variables.auto_increment_delay_multiplex_timeout_ms=10000;
@@ -2911,6 +2968,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["query_retries_on_failure"]        = make_tuple(&variables.query_retries_on_failure,         0,        1000, false);
 		VariablesPointers_int["set_query_lock_on_hostgroup"]     = make_tuple(&variables.set_query_lock_on_hostgroup,      0,           1, false);
 		VariablesPointers_int["set_parser_algorithm"]            = make_tuple(&variables.set_parser_algorithm,             1,           3, false);
+		VariablesPointers_int["user_variable_tracking"]          = make_tuple(&variables.user_variable_tracking,           0,           1, false);
 
 		// throttle
 		VariablesPointers_int["throttle_connections_per_sec_to_hostgroup"] = make_tuple(&variables.throttle_connections_per_sec_to_hostgroup, 1, 100*1000*1000, false);
@@ -4906,6 +4964,7 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(query_processor_parser);
 	REFRESH_VARIABLE_INT(set_query_lock_on_hostgroup);
 	REFRESH_VARIABLE_INT(set_parser_algorithm);
+	REFRESH_VARIABLE_INT(user_variable_tracking);
 	REFRESH_VARIABLE_INT(reset_connection_algorithm);
 	REFRESH_VARIABLE_INT(auto_increment_delay_multiplex);
 	REFRESH_VARIABLE_INT(auto_increment_delay_multiplex_timeout_ms);

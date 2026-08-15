@@ -1932,6 +1932,12 @@ void MySQL_Data_Stream::get_client_myds_info_json(json& j) {
 	jc1["switching_auth_type"] = switching_auth_type;
 	jc1["prot"]["sent_auth_plugin_id"] = myprot.sent_auth_plugin_id;
 	jc1["prot"]["auth_plugin_id"] = myprot.auth_plugin_id;
+	if (!client_connect_attrs.empty()) {
+		json& connect_attrs = jc1["connect_attrs"];
+		for (const auto& [key, value] : client_connect_attrs) {
+			connect_attrs[key] = value;
+		}
+	}
 
 	switch (myprot.auth_plugin_id) {
 		case AUTH_MYSQL_NATIVE_PASSWORD:
@@ -1960,6 +1966,13 @@ void MySQL_Data_Stream::get_client_myds_info_json(json& j) {
 #endif
 		}
 		jc2["session_track_gtids"] = ( myconn->options.session_track_gtids ? myconn->options.session_track_gtids : "") ;
+		json& user_variables_json = jc2["user_variables"];
+		user_variables_json["count"] = myconn->user_variables.size();
+		user_variables_json["stored_bytes"] = myconn->user_variables.stored_bytes();
+		const std::string user_variables_fingerprint = myconn->user_variables.diagnostic_fingerprint();
+		if (!user_variables_fingerprint.empty()) {
+			user_variables_json["fingerprint"] = user_variables_fingerprint;
+		}
 		for (auto idx = 0; idx < SQL_NAME_LAST_LOW_WM; idx++) {
 			myconn->variables[idx].fill_client_internal_session(jc2, idx);
 		}
