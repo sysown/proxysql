@@ -329,6 +329,21 @@ The build matrix:
 | `debian12, -dbg` | `make debian12-dbg` | debug | 3p integration workflows |
 | `ubuntu24, -tap-genai-gcov` | `make ubuntu24-dbg` | `PROXYSQLGENAI=1` + `WITHGCOV=1` | `CI-legacy-g2-genai` only |
 
+### Opt-in TAP ASAN
+
+- Add the exact `ci:asan` label to an internal PR, then push an empty commit
+  to start a new ASAN standard-TAP integration run.
+- Adding or removing the label alone does not trigger CI.
+- Push builds and manual dispatches without `ci:asan` use the normal build.
+- ASAN replaces the normal `ubuntu24-tap-genai-gcov` handoff for that commit;
+  it does not duplicate the fan-out.
+- Unit ASAN coverage and MySQLX behavior are unchanged.
+
+Live CI validation of the labeled and unlabeled paths remains pending until the
+branch is published; validate the mode, handoff artifact names, representative
+consumer restoration, resolver failure behavior, and unchanged unit-ASAN
+trigger before treating this contract as externally verified.
+
 The flag injection is simple `sed` into `docker-compose.yml` before the
 build runs:
 
