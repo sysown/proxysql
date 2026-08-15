@@ -8,6 +8,18 @@ Architecture: No production code changes. Register the existing GTID TAP in the 
 
 Tech Stack: C++17 TAP/libmysqlclient, ProxySQL admin SQL, existing cluster simulator, groups.json, GCOV/fastcov.
 
+## Execution evidence (2026-08-15)
+
+- The existing GTID TAP passed its focused MySQL 8.4 run (14 assertions) after
+  isolating its high-priority routing rules with a dedicated frontend account.
+  Compiler-matched GCOV recorded the intended GTID branch in `lib/MyHGC.cpp`.
+- The new Aurora TAP passed all 9 assertions using a normal libmysql frontend
+  query. It opened a connection to the eligible nonzero-lag replica only and
+  increased the Aurora skipped-replica counter.
+- The new Admin TAP passed all 23 assertions. Compiler-matched GCOV recorded
+  the intended `PROXYSQLTEST` cases 1/2/3/6/12/13/16 in
+  `lib/ProxySQL_Admin_Tests2.cpp`.
+
 ## Global Constraints
 
 - Use normal libmysql client traffic for every ProxySQL request; no handcrafted client protocol packets.
@@ -33,9 +45,16 @@ Interfaces:
 - [ ] Step 1: Build the unchanged GTID TAP with GCOV
 
 ~~~
-make -j"$(nproc)" WITHGCOV=1 testall
-make -C test/tap -j"$(nproc)" WITHGCOV=1 tap
-make -C test/tap/tests -j"$(nproc)" WITHGCOV=1 test_gtid_from_ok-t
+git_version=$(git describe --long --abbrev=7)
+git_epoch=$(git show -s --format=%ct HEAD)
+docker compose run --rm --no-deps --entrypoint bash \
+  -e GIT_VERSION_BASE="$git_version" -e GIT_VERSION="$git_version" \
+  -e SOURCE_DATE_EPOCH="$git_epoch" -e WITHGCOV=1 \
+  -w /opt/proxysql ubuntu22_dbg_build -lc '
+    make -j8 WITHGCOV=1 GIT_VERSION_BASE="$GIT_VERSION_BASE" GIT_VERSION="$GIT_VERSION" debug
+    make -C test/tap -j8 WITHGCOV=1 GIT_VERSION="$GIT_VERSION" tap
+    make -C test/tap/tests -j8 WITHGCOV=1 GIT_VERSION="$GIT_VERSION" test_gtid_from_ok-t
+  '
 ~~~
 
 Expected: the existing test binary is built with the same objects used by the MySQL 8.4 GCOV workflow.
@@ -64,8 +83,9 @@ Change the entry to:
 - [ ] Step 4: Validate and commit
 
 ~~~
-python3 -m json.tool test/tap/groups/groups.json >/dev/null
-python3 test/infra/control/lint_group_coverage.py test/tap/groups/groups.json .github/workflows
+python3 test/tap/groups/lint_groups_json.py
+python3 test/tap/groups/check_groups.py --source
+python3 test/tap/groups/lint_group_coverage.py test/tap/groups/groups.json
 git add test/tap/groups/groups.json
 git commit -m "test: run GTID causal reads in GCOV suite"
 ~~~
@@ -86,13 +106,18 @@ Interfaces:
 
 - [ ] Step 1: Write the failing fixture and TAP
 
-The fixture creates writer host.1.11 at lag 0, reader host.1.12 at lag 4, reader host.1.13 at lag 50, monitor threshold above 50, and aurora_max_lag_ms_only_read_from_replicas=1. The TAP starts from that fixture, connects as aurora1 to the normal frontend, and issues:
+The fixture creates writer host.1.11 at lag 0, replicas host.1.12 at lag 0,
+host.1.13 at lag 4, and host.1.14 at lag 50; it uses a monitor threshold above
+50 and `aurora_max_lag_ms_only_read_from_replicas=1`. The TAP starts from that
+fixture, connects as aurora1 to the normal frontend, and issues:
 
 ~~~
-/* ;max_lag_ms=10;create_new_connection=1 */ SELECT @@version_comment LIMIT 1
+SELECT @@version_comment LIMIT 1 /* ;max_lag_ms=10;create_new_connection=1 */
 ~~~
 
-It must assert the result identifies 127.0.1.12 and that aws_aurora_replicas_skipped_during_query increased.
+It must assert the eligible host.1.13 connection count increases while the
+zero-lag candidate and writer counts do not, and that
+`aws_aurora_replicas_skipped_during_query` increased.
 
 - [ ] Step 2: Verify red before complete implementation
 
@@ -218,8 +243,9 @@ Interfaces:
 
 ~~~
 git diff origin/v3.0...HEAD --check
-python3 -m json.tool test/tap/groups/groups.json >/dev/null
-python3 test/infra/control/lint_group_coverage.py test/tap/groups/groups.json .github/workflows
+python3 test/tap/groups/lint_groups_json.py
+python3 test/tap/groups/check_groups.py --source
+python3 test/tap/groups/lint_group_coverage.py test/tap/groups/groups.json
 ~~~
 
 Expected: no whitespace errors, valid JSON, and no group-registration failure.
@@ -240,4 +266,3 @@ git diff --check
 ~~~
 
 Expected: only intentional coverage changes and documentation commits are present.
-
