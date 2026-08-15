@@ -565,6 +565,85 @@ struct AWS_RDS_BGD_Probe_Host {
 };
 
 /**
+ * @brief Aurora blue/green deployment phase published by the Aurora worker.
+ */
+enum class AWS_Aurora_BGD_Status {
+	NONE = 0,
+	AVAILABLE,
+	SWITCHOVER_INITIATED,
+	SWITCHOVER_IN_PROGRESS,
+	SWITCHOVER_IN_POST_PROCESSING,
+	SWITCHOVER_COMPLETED,
+};
+
+/**
+ * @brief Stable identity of one Aurora blue/green deployment.
+ */
+struct AWS_Aurora_BGD_Fingerprint {
+	std::string target_id;
+	std::string target_endpoint;
+	int target_port = 0;
+
+	bool empty() const {
+		return target_id.empty() || target_endpoint.empty() || target_port <= 0;
+	}
+
+	bool operator==(const AWS_Aurora_BGD_Fingerprint& rhs) const {
+		return target_id == rhs.target_id
+			&& target_endpoint == rhs.target_endpoint
+			&& target_port == rhs.target_port;
+	}
+};
+
+/**
+ * @brief One production or target Aurora member retained by the BGD worker.
+ */
+struct AWS_Aurora_BGD_Member {
+	std::string server_id;
+	std::string normalized_server_id;
+	std::string session_id;
+	std::string hostname;
+	std::string production_hostname;
+	std::string target_ip;
+	int port = 0;
+	int use_ssl = 0;
+	bool is_writer = false;
+	bool traffic_pin_applied = false;
+};
+
+/**
+ * @brief State carried by one existing per-writer Aurora monitor worker.
+ */
+struct AWS_Aurora_BGD_State {
+	unsigned int writer_hg = 0;
+	unsigned int reader_hg = 0;
+	int green_writer_hg = -1;
+	int green_reader_hg = -1;
+	unsigned int check_interval_ms = 0;
+	unsigned int check_timeout_ms = 0;
+	int target_use_ssl = 0;
+	std::string domain_name;
+
+	AWS_Aurora_BGD_Status status = AWS_Aurora_BGD_Status::NONE;
+	RDS_BGD_Topology_Monitor_State topology_state = TOPOLOGY_TABLE_CHECK;
+	AWS_Aurora_BGD_Fingerprint fingerprint;
+	std::vector<AWS_RDS_BGD_Probe_Host> production_probe_hosts;
+	std::vector<AWS_Aurora_BGD_Member> production_members;
+	std::vector<AWS_Aurora_BGD_Member> target_members;
+
+	bool production_snapshot_frozen = false;
+	bool production_probe_suspended = false;
+	bool target_snapshot_complete = false;
+
+	bool has_complete_target_snapshot() const {
+		return target_snapshot_complete;
+	}
+};
+
+// Maps an Aurora switchover status enum to its runtime string.
+const char* aws_aurora_bgd_status_str(AWS_Aurora_BGD_Status status);
+
+/**
  * @brief Switchover state carried by RDS BGD worker thread.
  *
  * @details One worker (monitor_RDS_BGD_thread_HG) owns one writer hostgroup ==
@@ -723,6 +802,21 @@ class MySQL_Monitor {
 	void * monitor_group_replication_2();
 	void * monitor_galera();
 	void * monitor_aws_aurora();
+	/**
+	 * @brief Refresh the Aurora BGD worker's last complete production snapshot.
+	 *
+	 * @details Invalid or incomplete observations retain the previous snapshot.
+	 */
+	void aws_aurora_bgd_refresh_production_snapshot(
+		AWS_Aurora_BGD_State& st, const AWS_Aurora_status_entry& result);
+	/**
+	 * @brief Run the topology and target-membership probes owned by an Aurora worker.
+	 *
+	 * @details Discovery is serialized with the ordinary Aurora probe. This method
+	 *   validates topology before publishing status and replaces target membership
+	 *   only with a complete, unambiguous, fully resolved snapshot.
+	 */
+	void aws_aurora_bgd_run_discovery_cycle(AWS_Aurora_BGD_State& st);
 	/**
 	* @brief AWS RDS BGD monitor thread entry point.
 	*

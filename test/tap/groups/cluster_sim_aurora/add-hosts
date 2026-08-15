@@ -53,6 +53,9 @@ aurora-a-green.cluster-a1.us-east-1.rds.amazonaws.com  127.0.11.20
 aurora-a-green-writer.a1.us-east-1.rds.amazonaws.com  127.0.11.21
 aurora-a-green-reader-1.a1.us-east-1.rds.amazonaws.com  127.0.11.22
 aurora-a-green-reader-2.a1.us-east-1.rds.amazonaws.com  127.0.11.23
+aurora-a-writer-green-k7m2.a1.us-east-1.rds.amazonaws.com  127.0.11.21
+aurora-a-reader-1-green-p4q8.a1.us-east-1.rds.amazonaws.com  127.0.11.22
+aurora-a-reader-2-green-v9n3.a1.us-east-1.rds.amazonaws.com  127.0.11.23
 
 # Canonical names observed after target-member rename retain target addresses.
 aurora-a-canonical-writer.a1.us-east-1.rds.amazonaws.com  127.0.11.21
@@ -65,5 +68,7 @@ aurora-b-reader-1.b1.us-east-1.rds.amazonaws.com  127.0.12.12
 aurora-b-green.cluster-b1.us-east-1.rds.amazonaws.com  127.0.12.20
 aurora-b-green-writer.b1.us-east-1.rds.amazonaws.com  127.0.12.21
 aurora-b-green-reader-1.b1.us-east-1.rds.amazonaws.com  127.0.12.22
+aurora-b-writer-green-h2s6.b1.us-east-1.rds.amazonaws.com  127.0.12.21
+aurora-b-reader-1-green-r8t4.b1.us-east-1.rds.amazonaws.com  127.0.12.22
 aurora-b-canonical-writer.b1.us-east-1.rds.amazonaws.com  127.0.12.21
 aurora-b-canonical-reader-1.b1.us-east-1.rds.amazonaws.com  127.0.12.22

@@ -6057,6 +6057,504 @@ static void shuffle_hosts(host_def_t *array, size_t n) {
 	}
 }
 
+const char* aws_aurora_bgd_status_str(AWS_Aurora_BGD_Status status) {
+	switch (status) {
+		case AWS_Aurora_BGD_Status::NONE:
+			return "NONE";
+		case AWS_Aurora_BGD_Status::AVAILABLE:
+			return BGD_STATUS_AVAILABLE;
+		case AWS_Aurora_BGD_Status::SWITCHOVER_INITIATED:
+			return BGD_STATUS_INITIATED;
+		case AWS_Aurora_BGD_Status::SWITCHOVER_IN_PROGRESS:
+			return BGD_STATUS_IN_PROGRESS;
+		case AWS_Aurora_BGD_Status::SWITCHOVER_IN_POST_PROCESSING:
+			return BGD_STATUS_POST_PROC;
+		case AWS_Aurora_BGD_Status::SWITCHOVER_COMPLETED:
+			return BGD_STATUS_COMPLETED;
+	}
+	return "NONE";
+}
+
+namespace {
+
+struct AWS_Aurora_BGD_Query_Result {
+	unique_ptr<MySQL_Monitor_State_Data> mmsd;
+	int rc = 1;
+	unsigned int mysql_error = 0;
+};
+
+struct AWS_Aurora_BGD_Topology_Observation {
+	bool valid = false;
+	bool completed = false;
+	AWS_Aurora_BGD_Status status = AWS_Aurora_BGD_Status::NONE;
+	AWS_Aurora_BGD_Fingerprint fingerprint;
+};
+
+static std::string aws_aurora_bgd_normalize_server_id(const std::string& server_id) {
+	const size_t green_pos = server_id.find("-green-");
+	return green_pos == std::string::npos ? server_id : server_id.substr(0, green_pos);
+}
+
+static std::string aws_aurora_bgd_member_hostname(
+	const std::string& server_id, const std::string& domain_name
+) {
+	if (domain_name.empty()) {
+		return server_id;
+	}
+	return domain_name.front() == '.'
+		? server_id + domain_name
+		: server_id + "." + domain_name;
+}
+
+static bool aws_aurora_bgd_status_from_raw(
+	const std::string& raw_status, AWS_Aurora_BGD_Status& status
+) {
+	if (strcasecmp(raw_status.c_str(), BGD_STATUS_AVAILABLE) == 0) {
+		status = AWS_Aurora_BGD_Status::AVAILABLE;
+	} else if (strcasecmp(raw_status.c_str(), BGD_STATUS_INITIATED) == 0) {
+		status = AWS_Aurora_BGD_Status::SWITCHOVER_INITIATED;
+	} else if (strcasecmp(raw_status.c_str(), BGD_STATUS_IN_PROGRESS) == 0) {
+		status = AWS_Aurora_BGD_Status::SWITCHOVER_IN_PROGRESS;
+	} else if (strcasecmp(raw_status.c_str(), BGD_STATUS_POST_PROC) == 0) {
+		status = AWS_Aurora_BGD_Status::SWITCHOVER_IN_POST_PROCESSING;
+	} else if (strcasecmp(raw_status.c_str(), BGD_STATUS_COMPLETED) == 0) {
+		status = AWS_Aurora_BGD_Status::SWITCHOVER_COMPLETED;
+	} else {
+		return false;
+	}
+	return true;
+}
+
+static bool aws_aurora_bgd_required_topology_fields(const AWS_RDS_Topology_Node& node) {
+	return !node.id.empty() && !node.endpoint.empty() && node.port > 0
+		&& !node.role.empty() && !node.status.empty();
+}
+
+static AWS_Aurora_BGD_Topology_Observation aws_aurora_bgd_validate_topology(
+	const AWS_RDS_Topology_Result& topology
+) {
+	AWS_Aurora_BGD_Topology_Observation observation;
+	if (!topology.blue_green || topology.nodes.empty()) {
+		return observation;
+	}
+
+	const AWS_RDS_Topology_Node* source = nullptr;
+	const AWS_RDS_Topology_Node* target = nullptr;
+	for (const AWS_RDS_Topology_Node& node : topology.nodes) {
+		if (!aws_aurora_bgd_required_topology_fields(node)) {
+			return observation;
+		}
+		if (strcasecmp(node.role.c_str(), BGD_ROLE_SOURCE) == 0) {
+			if (source != nullptr) {
+				return observation;
+			}
+			source = &node;
+		} else if (strcasecmp(node.role.c_str(), BGD_ROLE_TARGET) == 0) {
+			if (target != nullptr) {
+				return observation;
+			}
+			target = &node;
+		} else {
+			return observation;
+		}
+	}
+
+	if (target == nullptr || !aws_aurora_bgd_status_from_raw(target->status, observation.status)) {
+		return observation;
+	}
+
+	if (observation.status == AWS_Aurora_BGD_Status::SWITCHOVER_COMPLETED) {
+		if (topology.nodes.size() != 1 || source != nullptr) {
+			return AWS_Aurora_BGD_Topology_Observation {};
+		}
+		observation.completed = true;
+	} else {
+		if (topology.nodes.size() != 2 || source == nullptr
+			|| strcasecmp(source->status.c_str(), target->status.c_str()) != 0) {
+			return AWS_Aurora_BGD_Topology_Observation {};
+		}
+	}
+
+	observation.fingerprint = {
+		target->id,
+		target->endpoint,
+		target->port,
+	};
+	observation.valid = !observation.fingerprint.empty();
+	return observation;
+}
+
+static bool aws_aurora_bgd_select_reachable_host(
+	const std::vector<AWS_RDS_BGD_Probe_Host>& hosts,
+	unsigned int writer_hg,
+	AWS_RDS_BGD_Probe_Host& selected
+) {
+	if (hosts.empty()) {
+		return false;
+	}
+
+	const size_t first = static_cast<size_t>(rand()) % hosts.size();
+	for (size_t offset = 0; offset < hosts.size(); ++offset) {
+		const AWS_RDS_BGD_Probe_Host& host = hosts[(first + offset) % hosts.size()];
+		if (GloMyMon->server_responds_to_ping(
+			const_cast<char*>(host.hostname.c_str()), host.port)) {
+			selected = host;
+			return true;
+		}
+		MyHGM->p_update_mysql_error_counter(
+			p_mysql_error_type::proxysql, writer_hg,
+			const_cast<char*>(host.hostname.c_str()), host.port,
+			ER_PROXYSQL_AWS_NO_PINGABLE_SRV
+		);
+	}
+	return false;
+}
+
+static AWS_Aurora_BGD_Query_Result aws_aurora_bgd_query(
+	const AWS_RDS_BGD_Probe_Host& host,
+	unsigned int writer_hg,
+	unsigned int timeout_ms,
+	MySQL_Monitor_State_Data_Task_Type task_type,
+	const char* query
+) {
+	AWS_Aurora_BGD_Query_Result out;
+	out.mmsd.reset(new MySQL_Monitor_State_Data(
+		task_type, const_cast<char*>(host.hostname.c_str()), host.port, host.use_ssl, writer_hg));
+	MySQL_Monitor_State_Data* mmsd = out.mmsd.get();
+	mmsd->writer_hostgroup = writer_hg;
+	mmsd->aws_aurora_check_timeout_ms = timeout_ms;
+	mmsd->mysql = GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port, mmsd);
+
+	bool new_connection = false;
+	if (mmsd->mysql == nullptr) {
+		new_connection = true;
+		if (!mmsd->create_new_connection()) {
+			out.mysql_error = mmsd->mysql ? mysql_errno(mmsd->mysql) : 0;
+			return out;
+		}
+		GloMyMon->My_Conn_Pool->conn_register(mmsd);
+	}
+
+	std::atomic_bool worker_stop {false};
+	out.rc = GloMyMon->aws_rds_bgd_async_query(mmsd, query, worker_stop);
+	out.mysql_error = mmsd->mysql ? mysql_errno(mmsd->mysql) : 0;
+
+	if (out.rc != 0) {
+		GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
+	} else if (new_connection) {
+		if (mmsd->set_wait_timeout()) {
+			GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
+		} else {
+			GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
+		}
+	} else {
+		GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
+	}
+
+	return out;
+}
+
+static void aws_aurora_bgd_set_status(
+	AWS_Aurora_BGD_State& st, AWS_Aurora_BGD_Status status
+) {
+	if (st.status == status) {
+		return;
+	}
+	proxy_info(
+		"AWS Aurora BGD [wHG=%u rHG=%u]: switchover status '%s' -> '%s'\n",
+		st.writer_hg, st.reader_hg,
+		aws_aurora_bgd_status_str(st.status), aws_aurora_bgd_status_str(status));
+	st.status = status;
+	MyHGM->update_aws_aurora_bgd_status(st.writer_hg, aws_aurora_bgd_status_str(status));
+}
+
+static bool aws_aurora_bgd_same_production_snapshot(
+	const std::vector<AWS_Aurora_BGD_Member>& lhs,
+	const std::vector<AWS_Aurora_BGD_Member>& rhs
+) {
+	if (lhs.size() != rhs.size()) {
+		return false;
+	}
+	for (const AWS_Aurora_BGD_Member& member : lhs) {
+		auto found = std::find_if(rhs.begin(), rhs.end(), [&](const AWS_Aurora_BGD_Member& candidate) {
+			return candidate.normalized_server_id == member.normalized_server_id
+				&& candidate.is_writer == member.is_writer;
+		});
+		if (found == rhs.end()) {
+			return false;
+		}
+	}
+	return true;
+}
+
+static bool aws_aurora_bgd_parse_target_membership(
+	AWS_Aurora_BGD_State& st, MYSQL_RES* result,
+	std::vector<AWS_Aurora_BGD_Member>& snapshot
+) {
+	if (result == nullptr || st.production_members.empty()) {
+		return false;
+	}
+
+	const unsigned int num_fields = mysql_num_fields(result);
+	MYSQL_FIELD* fields = mysql_fetch_fields(result);
+	int server_id_idx = -1;
+	int session_id_idx = -1;
+	int is_current_idx = -1;
+	for (unsigned int i = 0; i < num_fields; ++i) {
+		if (fields[i].name == nullptr) {
+			continue;
+		}
+		if (strcasecmp(fields[i].name, "SERVER_ID") == 0) {
+			server_id_idx = static_cast<int>(i);
+		} else if (strcasecmp(fields[i].name, "SESSION_ID") == 0) {
+			session_id_idx = static_cast<int>(i);
+		} else if (strcasecmp(fields[i].name, "IS_CURRENT") == 0) {
+			is_current_idx = static_cast<int>(i);
+		}
+	}
+	if (server_id_idx < 0 || session_id_idx < 0 || is_current_idx < 0) {
+		return false;
+	}
+
+	std::unordered_map<std::string, const AWS_Aurora_BGD_Member*> production_by_id;
+	for (const AWS_Aurora_BGD_Member& member : st.production_members) {
+		if (!production_by_id.emplace(member.normalized_server_id, &member).second) {
+			return false;
+		}
+	}
+
+	std::unordered_map<std::string, std::string> previous_reader_session_by_id;
+	std::unordered_map<std::string, std::string> previous_reader_id_by_session;
+	std::unordered_map<std::string, std::string> previous_ip_by_id;
+	for (const AWS_Aurora_BGD_Member& member : st.target_members) {
+		previous_ip_by_id[member.normalized_server_id] = member.target_ip;
+		if (!member.is_writer) {
+			previous_reader_session_by_id[member.normalized_server_id] = member.session_id;
+			previous_reader_id_by_session[member.session_id] = member.normalized_server_id;
+		}
+	}
+
+	std::unordered_set<std::string> target_ids;
+	std::unordered_set<std::string> reader_sessions;
+	unsigned int writers = 0;
+	MYSQL_ROW row;
+	while ((row = mysql_fetch_row(result))) {
+		if (row[is_current_idx] == nullptr) {
+			continue;
+		}
+		const bool is_current = atoi(row[is_current_idx]) != 0
+			|| strcasecmp(row[is_current_idx], "true") == 0;
+		if (!is_current) {
+			continue;
+		}
+		if (row[server_id_idx] == nullptr || row[server_id_idx][0] == '\0'
+			|| row[session_id_idx] == nullptr || row[session_id_idx][0] == '\0') {
+			return false;
+		}
+
+		AWS_Aurora_BGD_Member member;
+		member.server_id = row[server_id_idx];
+		member.normalized_server_id = aws_aurora_bgd_normalize_server_id(member.server_id);
+		member.session_id = row[session_id_idx];
+		member.is_writer = strcasecmp(member.session_id.c_str(), "MASTER_SESSION_ID") == 0;
+		if (member.normalized_server_id.empty() || !target_ids.insert(member.normalized_server_id).second) {
+			return false;
+		}
+
+		auto production = production_by_id.find(member.normalized_server_id);
+		if (production == production_by_id.end()
+			|| production->second->is_writer != member.is_writer) {
+			return false;
+		}
+		member.production_hostname = production->second->hostname;
+		member.hostname = aws_aurora_bgd_member_hostname(member.server_id, st.domain_name);
+		member.port = st.fingerprint.target_port;
+		member.use_ssl = st.target_use_ssl;
+
+		if (member.is_writer) {
+			writers++;
+		} else {
+			if (!reader_sessions.insert(member.session_id).second) {
+				return false;
+			}
+			auto old_session = previous_reader_session_by_id.find(member.normalized_server_id);
+			if (old_session != previous_reader_session_by_id.end()
+				&& old_session->second != member.session_id) {
+				return false;
+			}
+			auto old_id = previous_reader_id_by_session.find(member.session_id);
+			if (old_id != previous_reader_id_by_session.end()
+				&& old_id->second != member.normalized_server_id) {
+				return false;
+			}
+		}
+
+		size_t ip_count = 0;
+		std::string resolved_ip = MySQL_Monitor::dns_lookup(member.hostname, false, &ip_count);
+		if (resolved_ip.empty()) {
+			const int ai_family = mysql_resolution_family_to_ai_family(mysql_thread___resolution_family);
+			std::vector<std::string> ips = dns_resolve(member.hostname, ai_family);
+			if (!ips.empty()) {
+				resolved_ip = ips.front();
+			}
+		}
+		if (resolved_ip.empty()) {
+			return false;
+		}
+		auto previous_ip = previous_ip_by_id.find(member.normalized_server_id);
+		member.target_ip = previous_ip != previous_ip_by_id.end() && !previous_ip->second.empty()
+			? previous_ip->second : resolved_ip;
+		snapshot.push_back(std::move(member));
+	}
+
+	return writers == 1 && snapshot.size() == st.production_members.size();
+}
+
+static std::vector<AWS_RDS_BGD_Probe_Host> aws_aurora_bgd_target_probe_hosts(
+	const AWS_Aurora_BGD_State& st
+) {
+	std::vector<AWS_RDS_BGD_Probe_Host> hosts;
+	if (st.has_complete_target_snapshot()) {
+		hosts.reserve(st.target_members.size());
+		for (const AWS_Aurora_BGD_Member& member : st.target_members) {
+			hosts.push_back({member.hostname, member.port, member.use_ssl});
+		}
+	} else if (!st.fingerprint.empty()) {
+		hosts.push_back({
+			st.fingerprint.target_endpoint,
+			st.fingerprint.target_port,
+			st.target_use_ssl,
+		});
+	}
+	return hosts;
+}
+
+} // namespace
+
+void MySQL_Monitor::aws_aurora_bgd_refresh_production_snapshot(
+	AWS_Aurora_BGD_State& st, const AWS_Aurora_status_entry& result
+) {
+	if (st.production_snapshot_frozen || result.error != nullptr
+		|| result.host_statuses == nullptr || result.host_statuses->empty()) {
+		return;
+	}
+
+	std::vector<AWS_Aurora_BGD_Member> snapshot;
+	std::unordered_set<std::string> member_ids;
+	unsigned int writers = 0;
+	for (const AWS_Aurora_replica_host_status_entry* row : *result.host_statuses) {
+		if (row == nullptr || row->server_id == nullptr || row->server_id[0] == '\0'
+			|| row->session_id == nullptr) {
+			return;
+		}
+		AWS_Aurora_BGD_Member member;
+		member.server_id = row->server_id;
+		member.normalized_server_id = aws_aurora_bgd_normalize_server_id(member.server_id);
+		member.session_id = row->session_id;
+		member.hostname = aws_aurora_bgd_member_hostname(member.server_id, st.domain_name);
+		member.production_hostname = member.hostname;
+		member.port = st.production_probe_hosts.empty() ? 0 : st.production_probe_hosts.front().port;
+		member.use_ssl = st.production_probe_hosts.empty() ? 0 : st.production_probe_hosts.front().use_ssl;
+		member.is_writer = strcasecmp(member.session_id.c_str(), "MASTER_SESSION_ID") == 0;
+		if (member.normalized_server_id.empty() || !member_ids.insert(member.normalized_server_id).second) {
+			return;
+		}
+		writers += member.is_writer ? 1 : 0;
+		snapshot.push_back(std::move(member));
+	}
+	if (writers != 1) {
+		return;
+	}
+
+	if (!aws_aurora_bgd_same_production_snapshot(st.production_members, snapshot)) {
+		st.target_snapshot_complete = false;
+	}
+	st.production_members = std::move(snapshot);
+}
+
+void MySQL_Monitor::aws_aurora_bgd_run_discovery_cycle(AWS_Aurora_BGD_State& st) {
+	const bool configured_green_hgs = st.green_writer_hg >= 0 && st.green_reader_hg >= 0;
+	const bool discovery_admitted = configured_green_hgs
+		|| st.status != AWS_Aurora_BGD_Status::NONE
+		|| mysql_thread___aws_blue_green_deployment_auto_discovery != 0;
+	if (!discovery_admitted) {
+		return;
+	}
+
+	std::vector<AWS_RDS_BGD_Probe_Host> topology_hosts = st.has_complete_target_snapshot()
+		? aws_aurora_bgd_target_probe_hosts(st)
+		: st.production_probe_hosts;
+	AWS_RDS_BGD_Probe_Host topology_host;
+	if (!aws_aurora_bgd_select_reachable_host(topology_hosts, st.writer_hg, topology_host)) {
+		proxy_error("No node is pingable for AWS Aurora BGD topology checks with writer HG %u\n", st.writer_hg);
+		return;
+	}
+
+	if (st.topology_state == TOPOLOGY_TABLE_CHECK) {
+		AWS_Aurora_BGD_Query_Result query = aws_aurora_bgd_query(
+			topology_host, st.writer_hg, st.check_timeout_ms,
+			MON_AWS_RDS_BGD, QUERY_AWS_RDS_TOPOLOGY_TABLE_CHECK);
+		if (query.rc == 0 && query.mmsd->result
+			&& mysql_num_rows(query.mmsd->result) > 0) {
+			st.topology_state = TOPOLOGY_METADATA_FETCH;
+		}
+	} else {
+		AWS_Aurora_BGD_Query_Result query = aws_aurora_bgd_query(
+			topology_host, st.writer_hg, st.check_timeout_ms,
+			MON_AWS_RDS_BGD, QUERY_AWS_RDS_TOPOLOGY_DISCOVERY);
+		if (query.rc != 0) {
+			if (query.mysql_error == 1146) {
+				st.topology_state = TOPOLOGY_TABLE_CHECK;
+			}
+		} else if (query.mmsd->result && mysql_num_rows(query.mmsd->result) > 0) {
+			AWS_RDS_Topology_Result topology = parse_aws_rds_topology(query.mmsd->result);
+			AWS_Aurora_BGD_Topology_Observation observation =
+				aws_aurora_bgd_validate_topology(topology);
+			if (observation.valid && !observation.completed) {
+				const bool same_deployment = st.fingerprint.empty()
+					|| st.fingerprint == observation.fingerprint;
+				const bool rollback_transition =
+					static_cast<int>(observation.status) < static_cast<int>(st.status);
+				if (same_deployment && !rollback_transition) {
+					st.fingerprint = observation.fingerprint;
+					st.target_use_ssl = topology_host.use_ssl;
+					if (observation.status >= AWS_Aurora_BGD_Status::SWITCHOVER_INITIATED) {
+						st.production_snapshot_frozen = true;
+					}
+					aws_aurora_bgd_set_status(st, observation.status);
+				}
+			}
+		}
+	}
+
+	if (st.status == AWS_Aurora_BGD_Status::NONE || st.fingerprint.empty()) {
+		return;
+	}
+
+	std::vector<AWS_RDS_BGD_Probe_Host> membership_hosts = aws_aurora_bgd_target_probe_hosts(st);
+	AWS_RDS_BGD_Probe_Host membership_host;
+	if (!aws_aurora_bgd_select_reachable_host(membership_hosts, st.writer_hg, membership_host)) {
+		proxy_error("No node is pingable for AWS Aurora BGD membership checks with writer HG %u\n", st.writer_hg);
+		return;
+	}
+
+	AWS_Aurora_BGD_Query_Result membership = aws_aurora_bgd_query(
+		membership_host, st.writer_hg, st.check_timeout_ms,
+		MON_AWS_AURORA, QUERY_AWS_AURORA_BGD_REPLICA_HOST_STATUS);
+	if (membership.rc != 0) {
+		return;
+	}
+
+	std::vector<AWS_Aurora_BGD_Member> snapshot;
+	if (aws_aurora_bgd_parse_target_membership(st, membership.mmsd->result, snapshot)) {
+		st.target_members = std::move(snapshot);
+		st.target_snapshot_complete = true;
+		proxy_debug(PROXY_DEBUG_MONITOR, 7,
+			"AWS Aurora BGD [wHG=%u rHG=%u]: retained complete target membership with %zu members\n",
+			st.writer_hg, st.reader_hg, st.target_members.size());
+	}
+}
+
 void * monitor_AWS_Aurora_thread_HG(void *arg) {
 	unsigned int wHG = *(unsigned int *)arg;
 	unsigned int rHG = 0;
@@ -6071,6 +6569,8 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 	unsigned int autopurge_missing_checks = 0;
 	std::string domain_name;
 	std::map<std::string, int> autopurge_counter;
+	AWS_Aurora_BGD_State bgd_state;
+	bgd_state.writer_hg = wHG;
 	set_thread_name("MonitorAuroraHG", GloVars.set_thread_name);
 	proxy_info("Started Monitor thread for AWS Aurora writer HG %u\n", wHG);
 
@@ -6118,6 +6618,12 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 			if (domain_name.empty() && r->fields[12]) {
 				domain_name = r->fields[12];
 			}
+			if (r->fields[13] && r->fields[13][0]) {
+				bgd_state.green_writer_hg = atoi(r->fields[13]);
+			}
+			if (r->fields[14] && r->fields[14][0]) {
+				bgd_state.green_reader_hg = atoi(r->fields[14]);
+			}
 		}
 	}
 	host_def_t *hpa = (host_def_t *)malloc(sizeof(host_def_t)*num_hosts);
@@ -6127,8 +6633,20 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 			hpa[cur_host_idx].host = strdup(r->fields[2]);
 			hpa[cur_host_idx].port = atoi(r->fields[3]);
 			hpa[cur_host_idx].use_ssl = atoi(r->fields[4]);
+			bgd_state.production_probe_hosts.push_back({
+				r->fields[2],
+				atoi(r->fields[3]),
+				atoi(r->fields[4]),
+			});
 			cur_host_idx++;
 		}
+	}
+	bgd_state.reader_hg = rHG;
+	bgd_state.check_interval_ms = check_interval_ms;
+	bgd_state.check_timeout_ms = check_timeout_ms;
+	bgd_state.domain_name = domain_name;
+	if (!bgd_state.production_probe_hosts.empty()) {
+		bgd_state.target_use_ssl = bgd_state.production_probe_hosts.front().use_ssl;
 	}
 	// NOTE: 'cur_host_idx' should never be higher than 'num_hosts' otherwise later an invalid memory access
 	// can table place later when accessing 'hpa[cur_host_idx]'.
@@ -6388,6 +6906,7 @@ __exit_monitor_aws_aurora_HG_thread:
 				mysql_free_result(mmsd->result);
 				mmsd->result=NULL;
 			}
+			GloMyMon->aws_aurora_bgd_refresh_production_snapshot(bgd_state, *ase);
 
 			if (lasts_ase[ase_idx]) {
 				AWS_Aurora_status_entry * l_ase = lasts_ase[ase_idx];
@@ -6476,6 +6995,9 @@ __fast_exit_monitor_aws_aurora_HG_thread:
 				GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 			}
 		}
+	}
+	if (GloMyMon->shutdown == false && exit_now == false) {
+		GloMyMon->aws_aurora_bgd_run_discovery_cycle(bgd_state);
 	}
 	}
 __exit_monitor_AWS_Aurora_thread_HG_now:
