@@ -113,6 +113,38 @@ inline Aurora_BGD_Test_Deployment aurora_bgd_deployment_b_writer_only() {
 	return deployment;
 }
 
+inline Aurora_BGD_Test_Deployment aurora_bgd_deployment_c_writer_only() {
+	Aurora_BGD_Test_Deployment deployment;
+	deployment.name = "Aurora BGD deployment C writer-only";
+	deployment.domain_name = ".c1.us-east-1.rds.amazonaws.com";
+	deployment.blue_replica_set = "aurora-bgd-blue-c";
+	deployment.target_replica_set = "aurora-bgd-target-c";
+	deployment.source_topology_id = "aurora-bgd-source-c";
+	deployment.target_topology_id = "aurora-bgd-target-c";
+	deployment.target_cluster_endpoint = {
+		"aurora-c-green.cluster-c1.us-east-1.rds.amazonaws.com", "127.0.13.20", 3306
+	};
+	deployment.production = {
+		deployment.blue_replica_set,
+		{
+			aurora_bgd_member("aurora-c-writer", "MASTER_SESSION_ID",
+				{"aurora-c-writer.c1.us-east-1.rds.amazonaws.com", "127.0.13.11", 3306}),
+		},
+		{}
+	};
+	deployment.production.serving_endpoints.push_back(deployment.production.members.front().endpoint);
+	deployment.target = {
+		deployment.target_replica_set,
+		{
+			aurora_bgd_member("aurora-c-writer-green-m5n9", "MASTER_SESSION_ID",
+				{"aurora-c-writer-green-m5n9.c1.us-east-1.rds.amazonaws.com", "127.0.13.21", 3306}),
+		},
+		{deployment.target_cluster_endpoint}
+	};
+	deployment.target.serving_endpoints.push_back(deployment.target.members.front().endpoint);
+	return deployment;
+}
+
 inline string aurora_bgd_sql_quote(const string& value) {
 	string quoted {"'"};
 	for (char c : value) {

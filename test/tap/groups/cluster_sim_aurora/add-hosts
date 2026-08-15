@@ -72,3 +72,8 @@ aurora-b-writer-green-h2s6.b1.us-east-1.rds.amazonaws.com  127.0.12.21
 aurora-b-reader-1-green-r8t4.b1.us-east-1.rds.amazonaws.com  127.0.12.22
 aurora-b-canonical-writer.b1.us-east-1.rds.amazonaws.com  127.0.12.21
 aurora-b-canonical-reader-1.b1.us-east-1.rds.amazonaws.com  127.0.12.22
+
+# Aurora blue/green deployment C supports three-cluster isolation scenarios.
+aurora-c-writer.c1.us-east-1.rds.amazonaws.com  127.0.13.11
+aurora-c-green.cluster-c1.us-east-1.rds.amazonaws.com  127.0.13.20
+aurora-c-writer-green-m5n9.c1.us-east-1.rds.amazonaws.com  127.0.13.21

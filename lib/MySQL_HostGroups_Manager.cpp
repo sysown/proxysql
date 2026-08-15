@@ -7196,6 +7196,15 @@ int MySQL_HostGroups_Manager::remove_server_in_hg(uint32_t hid, const string& ad
 
 // FIXME: complete this!!
 void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid, char *_server_id, bool verbose) {
+	update_aws_aurora_set_writer(
+		_whid, _rhid, _server_id, verbose, nullptr, -1, -1, -1);
+}
+
+void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(
+	int _whid, int _rhid, char *_server_id, bool verbose,
+	const char *domain_name_override, int aurora_port_override,
+	int writer_is_also_reader_override, int new_reader_weight_override
+) {
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
@@ -7203,7 +7212,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 	char *q=NULL;
 	char *error=NULL;
 	//q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d AND status<>3";
-	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s%s' AND port=%d AND status<>3 AND hostgroup_id IN (%d, %d)";
+	q=(char *)"SELECT hostgroup_id FROM mysql_servers WHERE hostname='%s%s' AND port=%d AND status<>3 AND hostgroup_id IN (%d, %d)";
 
 	int writer_is_also_reader=0;
 	int new_reader_weight = 1;
@@ -7213,7 +7222,14 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 	int aurora_port = 3306;
 	char *domain_name = strdup((char *)"");
 	int read_HG=-1;
-	{
+	if (domain_name_override != nullptr) {
+		free(domain_name);
+		domain_name = strdup(domain_name_override);
+		aurora_port = aurora_port_override;
+		writer_is_also_reader = writer_is_also_reader_override;
+		new_reader_weight = new_reader_weight_override;
+		read_HG = _rhid;
+	} else {
 		pthread_mutex_lock(&AWS_Aurora_Info_mutex);
 		std::map<int , AWS_Aurora_Info *>::iterator it2;
 		it2 = AWS_Aurora_Info_Map.find(_writer_hostgroup);
@@ -7317,10 +7333,10 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 				char *q1 = NULL;
 				char *q2 = NULL;
 				char *error=NULL;
-				q1 = (char *)"SELECT DISTINCT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, mysql_servers.comment FROM mysql_servers JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE writer_hostgroup=%d ORDER BY hostgroup_id, hostname, port";
-				q2 = (char *)"SELECT DISTINCT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, mysql_servers_incoming.comment FROM mysql_servers_incoming JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE writer_hostgroup=%d ORDER BY hostgroup_id, hostname, port";
+				q1 = (char *)"SELECT DISTINCT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostgroup_id IN (%d,%d) ORDER BY hostgroup_id, hostname, port";
+				q2 = (char *)"SELECT DISTINCT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers_incoming WHERE hostgroup_id IN (%d,%d) ORDER BY hostgroup_id, hostname, port";
 				query = (char *)malloc(strlen(q2)+128);
-				sprintf(query,q1,_writer_hostgroup);
+				sprintf(query,q1,_writer_hostgroup,_rhid);
 				mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset_servers);
 				if (error == NULL) {
 					if (resultset_servers) {
@@ -7331,7 +7347,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 					delete resultset_servers;
 					resultset_servers = NULL;
 				}
-				sprintf(query,q2,_writer_hostgroup);
+				sprintf(query,q2,_writer_hostgroup,_rhid);
 				mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset_servers);
 				if (error == NULL) {
 					if (resultset_servers) {
@@ -7550,7 +7566,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 const char SELECT_AWS_AURORA_SERVERS_FOR_MONITOR[] {
 	"SELECT writer_hostgroup, reader_hostgroup, hostname, port, MAX(use_ssl) use_ssl, max_lag_ms, check_interval_ms,"
 		" check_timeout_ms, add_lag_ms, min_lag_ms, lag_num_checks, autopurge_missing_checks, domain_name,"
-		" green_writer_hostgroup, green_reader_hostgroup FROM mysql_servers"
+		" green_writer_hostgroup, green_reader_hostgroup, writer_is_also_reader, new_reader_weight FROM mysql_servers"
 	" JOIN mysql_aws_aurora_hostgroups ON"
 		" hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE active=1 AND status NOT IN (2,3)"
 	" GROUP BY writer_hostgroup, hostname, port"

@@ -577,6 +577,40 @@ enum class AWS_Aurora_BGD_Status {
 };
 
 /**
+ * @brief Column positions in `AWS_Aurora_Hosts_resultset`.
+ */
+enum AWS_Aurora_Hosts_Column {
+	AWS_AURORA_WRITER_HOSTGROUP = 0,
+	AWS_AURORA_READER_HOSTGROUP,
+	AWS_AURORA_HOSTNAME,
+	AWS_AURORA_PORT,
+	AWS_AURORA_USE_SSL,
+	AWS_AURORA_MAX_LAG_MS,
+	AWS_AURORA_CHECK_INTERVAL_MS,
+	AWS_AURORA_CHECK_TIMEOUT_MS,
+	AWS_AURORA_ADD_LAG_MS,
+	AWS_AURORA_MIN_LAG_MS,
+	AWS_AURORA_LAG_NUM_CHECKS,
+	AWS_AURORA_AUTOPURGE_MISSING_CHECKS,
+	AWS_AURORA_DOMAIN_NAME,
+	AWS_AURORA_GREEN_WRITER_HOSTGROUP,
+	AWS_AURORA_GREEN_READER_HOSTGROUP,
+	AWS_AURORA_WRITER_IS_ALSO_READER,
+	AWS_AURORA_NEW_READER_WEIGHT,
+	AWS_AURORA_HOSTS_COLUMNS,
+};
+
+/**
+ * @brief Monitor worker owned by one Aurora writer hostgroup.
+ */
+struct AWS_Aurora_BGD_Worker {
+	int writer_hg = 0;
+	pthread_t thread {};
+	std::atomic_bool worker_stop {false};
+	std::atomic<uint64_t> current_checksum {0};
+};
+
+/**
  * @brief Stable identity of one Aurora blue/green deployment.
  */
 struct AWS_Aurora_BGD_Fingerprint {
@@ -619,8 +653,15 @@ struct AWS_Aurora_BGD_State {
 	unsigned int reader_hg = 0;
 	int green_writer_hg = -1;
 	int green_reader_hg = -1;
+	unsigned int max_lag_ms = 0;
 	unsigned int check_interval_ms = 0;
 	unsigned int check_timeout_ms = 0;
+	unsigned int add_lag_ms = 0;
+	unsigned int min_lag_ms = 0;
+	unsigned int lag_num_checks = 1;
+	unsigned int autopurge_missing_checks = 0;
+	int writer_is_also_reader = 0;
+	int new_reader_weight = 1;
 	int target_use_ssl = 0;
 	std::string domain_name;
 
@@ -803,6 +844,19 @@ class MySQL_Monitor {
 	void * monitor_galera();
 	void * monitor_aws_aurora();
 	/**
+	 * @brief Load the configuration rows for one Aurora worker.
+	 *
+	 * @return true when the rows still match the coordinator-provided checksum.
+	 */
+	bool aws_aurora_bgd_load_worker_config(
+		int writer_hg, uint64_t current_checksum, AWS_Aurora_BGD_State& candidate);
+	/**
+	 * @brief Refresh only configuration-derived fields of a running Aurora worker.
+	 */
+	bool aws_aurora_bgd_refresh_worker_config(
+		AWS_Aurora_BGD_State& st, uint64_t current_checksum,
+		unsigned long long& next_loop_at);
+	/**
 	 * @brief Refresh the Aurora BGD worker's last complete production snapshot.
 	 *
 	 * @details Invalid or incomplete observations retain the previous snapshot.
@@ -829,6 +883,16 @@ class MySQL_Monitor {
 		AWS_Aurora_BGD_State& st,
 		const AWS_Aurora_BGD_Fingerprint& completed_fingerprint);
 	/**
+	 * @brief Reverse applied pre-completion effects and enter a safe earlier state.
+	 *
+	 * @details Removes only applied traffic pins, drains affected production
+	 *   pools, restores canonical writer placement, resumes ordinary probing,
+	 *   and optionally clears the deployment identity.
+	 */
+	void aws_aurora_bgd_apply_rollback(
+		AWS_Aurora_BGD_State& st, AWS_Aurora_BGD_Status next_status,
+		bool clear_deployment);
+	/**
 	 * @brief Release the completed latch after a successful topology drain.
 	 */
 	void aws_aurora_bgd_release_completed_latch(AWS_Aurora_BGD_State& st);
@@ -839,7 +903,8 @@ class MySQL_Monitor {
 	 *   validates topology before publishing status and replaces target membership
 	 *   only with a complete, unambiguous, fully resolved snapshot.
 	 */
-	void aws_aurora_bgd_run_discovery_cycle(AWS_Aurora_BGD_State& st);
+	void aws_aurora_bgd_run_discovery_cycle(
+		AWS_Aurora_BGD_State& st, std::atomic_bool& worker_stop);
 	/**
 	* @brief AWS RDS BGD monitor thread entry point.
 	*

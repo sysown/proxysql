@@ -1227,6 +1227,10 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	//void update_aws_aurora_set_reader(int _whid, int _rhid, char *_hostname, int _port);
 	bool aws_aurora_replication_lag_action(int _whid, int _rhid, char *server_id, float current_replication_lag_ms, bool enable, bool is_writer, bool verbose=true);
 	void update_aws_aurora_set_writer(int _whid, int _rhid, char *server_id, bool verbose=true);
+	void update_aws_aurora_set_writer(
+		int _whid, int _rhid, char *server_id, bool verbose,
+		const char *domain_name, int aurora_port, int writer_is_also_reader,
+		int new_reader_weight);
 	void update_aws_aurora_set_reader(int _whid, int _rhid, char *server_id);
 	/**
 	 * @brief Updates the resultset and corresponding checksum used by Monitor for AWS Aurora.
