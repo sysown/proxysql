@@ -59,6 +59,113 @@ const vector<string> set_queries {
 
 constexpr int SQLITE3_SERVER_PORT { 6030 };
 
+static bool set_client_deprecate_eof(MYSQL* admin, bool enabled) {
+	const string query {
+		"SET mysql-enable_client_deprecate_eof=" + std::to_string(enabled ? 1 : 0)
+	};
+	if (mysql_query(admin, query.c_str()) != 0) {
+		diag("Failed to set mysql-enable_client_deprecate_eof: %s", mysql_error(admin));
+		return false;
+	}
+	if (mysql_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME") != 0) {
+		diag("Failed to load mysql variables to runtime: %s", mysql_error(admin));
+		return false;
+	}
+	return true;
+}
+
+static bool get_client_deprecate_eof(MYSQL* admin, bool& enabled) {
+	const char* query {
+		"SELECT variable_value FROM global_variables "
+		"WHERE variable_name='mysql-enable_client_deprecate_eof'"
+	};
+	if (mysql_query(admin, query) != 0) {
+		diag("Failed to read mysql-enable_client_deprecate_eof: %s", mysql_error(admin));
+		return false;
+	}
+
+	MYSQL_RES* result = mysql_store_result(admin);
+	MYSQL_ROW row = result ? mysql_fetch_row(result) : nullptr;
+	const char* value = row ? row[0] : nullptr;
+	const bool valid_value = value &&
+		(!strcmp(value, "0") || !strcmp(value, "1") ||
+		 !strcmp(value, "false") || !strcmp(value, "true"));
+	if (valid_value) {
+		enabled = !strcmp(value, "1") || !strcmp(value, "true");
+	} else {
+		diag("Unexpected mysql-enable_client_deprecate_eof value: %s", value ? value : "(null)");
+	}
+	if (result) {
+		mysql_free_result(result);
+	}
+	return valid_value;
+}
+
+class restore_client_deprecate_eof {
+	MYSQL* admin;
+	bool enabled;
+
+public:
+	restore_client_deprecate_eof(MYSQL* admin, bool enabled) : admin { admin }, enabled { enabled } {}
+	~restore_client_deprecate_eof() {
+		if (!set_client_deprecate_eof(admin, enabled)) {
+			diag("Failed to restore mysql-enable_client_deprecate_eof");
+		}
+	}
+};
+
+static void test_direct_deprecate_eof_matrix(const CommandLine& cl, MYSQL* admin) {
+	bool original_enabled = false;
+	if (!get_client_deprecate_eof(admin, original_enabled)) {
+		ok(false, "SQLite3 advertised CLIENT_DEPRECATE_EOF as configured");
+		ok(false, "SELECT CONNECTION_ID() parses with the negotiated backend EOF mode");
+		ok(false, "SQLite3 advertised CLIENT_DEPRECATE_EOF as configured");
+		ok(false, "SELECT CONNECTION_ID() parses with the negotiated backend EOF mode");
+		return;
+	}
+	restore_client_deprecate_eof restore { admin, original_enabled };
+
+	for (const bool expected_server_capability : { false, true }) {
+		if (!set_client_deprecate_eof(admin, expected_server_capability)) {
+			ok(false, "SQLite3 advertised CLIENT_DEPRECATE_EOF as configured");
+			ok(false, "SELECT CONNECTION_ID() parses with the negotiated backend EOF mode");
+			continue;
+		}
+
+		MYSQL* proxy = mysql_init(NULL);
+		const bool connected = proxy && mysql_real_connect(
+			proxy, cl.host, cl.username, cl.password, NULL, SQLITE3_SERVER_PORT, NULL,
+			CLIENT_DEPRECATE_EOF
+		);
+		const bool server_supports_deprecate_eof = connected &&
+			(proxy->server_capabilities & CLIENT_DEPRECATE_EOF);
+		ok(server_supports_deprecate_eof == expected_server_capability,
+			"SQLite3 advertised CLIENT_DEPRECATE_EOF as configured");
+
+		int connection_id_rc = connected ? mysql_query(proxy, "SELECT CONNECTION_ID()") : -1;
+		MYSQL_RES* connection_id_result = connection_id_rc == 0 ? mysql_store_result(proxy) : nullptr;
+		MYSQL_ROW connection_id_row = connection_id_result ? mysql_fetch_row(connection_id_result) : nullptr;
+		char* parse_end = nullptr;
+		const unsigned long long connection_id = connection_id_row && connection_id_row[0]
+			? std::strtoull(connection_id_row[0], &parse_end, 10)
+			: 0;
+		const bool valid_connection_id = connection_id_row && connection_id_row[0]
+			&& parse_end && *parse_end == '\0' && connection_id > 0;
+		const unsigned long long expected_connection_id = connected
+			? static_cast<unsigned long long>(mysql_thread_id(proxy))
+			: 0;
+		if (connection_id_result) {
+			mysql_free_result(connection_id_result);
+		}
+		ok(connection_id_rc == 0 && valid_connection_id && connection_id == expected_connection_id,
+			"SELECT CONNECTION_ID() parses with the negotiated backend EOF mode");
+
+		if (proxy) {
+			mysql_close(proxy);
+		}
+	}
+}
+
 int main(int argc, char** argv) {
 	CommandLine cl;
 
@@ -68,7 +175,20 @@ int main(int argc, char** argv) {
 	}
 
 	const vector<test_opts_t> tests { gen_tests() };
-	plan(tests.size()*(4 + set_queries.size()));
+	plan(4 + tests.size()*(4 + set_queries.size()));
+
+	MYSQL* admin = mysql_init(NULL);
+	if (!admin || !mysql_real_connect(
+		admin, cl.admin_host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0
+	)) {
+		diag("Failed to connect to the admin interface: %s", admin ? mysql_error(admin) : "mysql_init failed");
+		if (admin) {
+			mysql_close(admin);
+		}
+		return EXIT_FAILURE;
+	}
+	test_direct_deprecate_eof_matrix(cl, admin);
+	mysql_close(admin);
 
 	for (const test_opts_t& opts : tests) {
 		diag("Executing test   test_opts=%s", to_string(opts).c_str());
