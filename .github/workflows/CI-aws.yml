@@ -8,10 +8,10 @@ on:
       - 'deps/aws-sdk-cpp/**'
       - 'deps/Makefile'
       - 'common_mk/aws_sdk_cpp_flags.mk'
-      - 'include/Aws_Iam_Sdk.h'
+      - 'include/Aws_Iam_Provider.h'
       - 'include/ProxySQL_Plugin.h'
       - 'include/makefiles_paths.mk'
-      - 'lib/Aws_Iam_Sdk.cpp'
+      - 'lib/Aws_Iam_Provider.cpp'
       - 'lib/Makefile'
       - 'lib/ProxySQL_PluginManager.cpp'
       - 'plugins/aws/**'
@@ -108,11 +108,11 @@ jobs:
             cd /opt/proxysql
             NOJEMALLOC=1 WITHASAN=1 PROXYSQL40=1 make -j"$(nproc)" build_lib_debug
             NOJEMALLOC=1 WITHASAN=1 PROXYSQL40=1 make -C test/tap/tests/unit -j"$(nproc)" \
-              aws_iam_token_manager_unit-t aws_iam_connection_secret_unit-t \
+              aws_iam_provider_boundary_unit-t aws_iam_connection_secret_unit-t \
               aws_iam_completion_queue_unit-t aws_iam_session_state_unit-t
             export ASAN_OPTIONS=detect_leaks=1:halt_on_error=1
             for test_binary in \
-              aws_iam_token_manager_unit-t aws_iam_connection_secret_unit-t \
+              aws_iam_provider_boundary_unit-t aws_iam_connection_secret_unit-t \
               aws_iam_completion_queue_unit-t aws_iam_session_state_unit-t; do
               setarch "$(uname -m)" -R "test/tap/tests/unit/$test_binary"
             done
@@ -125,11 +125,11 @@ jobs:
             cd /opt/proxysql
             NOJEMALLOC=1 WITHTSAN=1 PROXYSQL40=1 make -j"$(nproc)" build_lib_debug
             NOJEMALLOC=1 WITHTSAN=1 PROXYSQL40=1 make -C test/tap/tests/unit -j"$(nproc)" \
-              aws_iam_token_manager_unit-t aws_iam_completion_queue_unit-t \
+              aws_iam_provider_boundary_unit-t aws_iam_completion_queue_unit-t \
               aws_iam_session_state_unit-t
             export TSAN_OPTIONS=halt_on_error=1
             for test_binary in \
-              aws_iam_token_manager_unit-t aws_iam_completion_queue_unit-t \
+              aws_iam_provider_boundary_unit-t aws_iam_completion_queue_unit-t \
               aws_iam_session_state_unit-t; do
               setarch "$(uname -m)" -R "test/tap/tests/unit/$test_binary"
             done

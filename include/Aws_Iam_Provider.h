@@ -190,6 +190,10 @@ void shutdown_global_aws_iam_token_source();
 // Transfers ownership of a provider created by a dynamically loaded plugin.
 // `module_handle` is an extra dlopen() reference retained by core until every
 // source lease has drained and `destroy` has run.
+// `destroy` runs while core still owns the retirement claim. It must not call
+// uninstall_global_aws_iam_token_source() or
+// shutdown_global_aws_iam_token_source(), because either call would wait for
+// that same claim and deadlock.
 bool install_global_aws_iam_token_source(
 	AwsIamTokenSource *source, AwsIamTokenSourceDestroyFn destroy, void *module_handle);
 bool uninstall_global_aws_iam_token_source(AwsIamTokenSource *expected_source);
