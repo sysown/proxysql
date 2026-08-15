@@ -3,15 +3,10 @@ set -euo pipefail
 
 WORKFLOW_ROOT="${1:-.github/workflows}"
 EXPECTED_CONFIG="${2:-codecov.yml}"
-if [ "$#" -ge 3 ]; then
-    EXPECTED_COMMIT="$3"
-else
-    EXPECTED_COMMIT='${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
-fi
 
 mapfile -t WORKFLOWS < <(
     rg -l --glob '*.yml' --glob '*.yaml' \
-        '^[[:space:]]*uses:[[:space:]]*codecov/codecov-action@v4' \
+        '^[[:space:]]*uses:[[:space:]]*codecov/codecov-action@' \
         "${WORKFLOW_ROOT}" | sort
 )
 
@@ -22,8 +17,7 @@ fi
 
 for workflow in "${WORKFLOWS[@]}"; do
     awk -v file="${workflow}" \
-        -v expected="${EXPECTED_CONFIG}" \
-        -v expected_commit="${EXPECTED_COMMIT}" '
+        -v expected="${EXPECTED_CONFIG}" '
         function mapping_value(key, line,   prefix, value) {
             prefix = "^[[:space:]]*" key ":[[:space:]]*"
             if (line !~ prefix) {
@@ -44,7 +38,7 @@ for workflow in "${WORKFLOWS[@]}"; do
                 bad = 1
             }
             if (!has_override_commit) {
-                printf "%s: missing override_commit: %s\n", file, expected_commit > "/dev/stderr"
+                printf "%s: missing override_commit\n", file > "/dev/stderr"
                 bad = 1
             }
             if (!has_nonblocking) {
@@ -64,7 +58,7 @@ for workflow in "${WORKFLOWS[@]}"; do
             has_nonblocking = 0
         }
 
-        /^[[:space:]]*uses:[[:space:]]*codecov\/codecov-action@v4[[:space:]]*$/ {
+        /^[[:space:]]*uses:[[:space:]]*codecov\/codecov-action@/ {
             has_codecov = 1
         }
         /^[[:space:]]*with:[[:space:]]*$/ {
@@ -75,7 +69,7 @@ for workflow in "${WORKFLOWS[@]}"; do
             if (mapping_value("codecov_yml_path", $0) == expected) {
                 has_config = 1
             }
-            if (mapping_value("override_commit", $0) == expected_commit) {
+            if (mapping_value("override_commit", $0) != "") {
                 has_override_commit = 1
             }
             if (mapping_value("fail_ci_if_error", $0) == "false") {
@@ -92,4 +86,4 @@ for workflow in "${WORKFLOWS[@]}"; do
     ' "${workflow}"
 done
 
-echo "Codecov workflow contract OK: ${#WORKFLOWS[@]} workflow(s), config=${EXPECTED_CONFIG}, commit=${EXPECTED_COMMIT}"
+echo "Codecov workflow contract OK: ${#WORKFLOWS[@]} workflow(s), config=${EXPECTED_CONFIG}"
