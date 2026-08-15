@@ -6,7 +6,7 @@ EXPECTED_CONFIG="${2:-codecov.yml}"
 
 mapfile -t WORKFLOWS < <(
     rg -l --glob '*.yml' --glob '*.yaml' \
-        '^[[:space:]]*uses:[[:space:]]*codecov/codecov-action@' \
+        '^[[:space:]]*uses:[[:space:]]*codecov/codecov-action@(v4|[[:xdigit:]]{40})[[:space:]]*(#.*v4.*)?$' \
         "${WORKFLOW_ROOT}" | sort
 )
 
@@ -58,7 +58,7 @@ for workflow in "${WORKFLOWS[@]}"; do
             has_nonblocking = 0
         }
 
-        /^[[:space:]]*uses:[[:space:]]*codecov\/codecov-action@/ {
+        /^[[:space:]]*uses:[[:space:]]*codecov\/codecov-action@(v4|[[:xdigit:]]{40})[[:space:]]*(#.*v4.*)?$/ {
             has_codecov = 1
         }
         /^[[:space:]]*with:[[:space:]]*$/ {
