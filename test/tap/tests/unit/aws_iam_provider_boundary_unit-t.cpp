@@ -20,6 +20,9 @@ namespace {
 constexpr std::string_view kToken { "FAKE_PROVIDER_BOUNDARY_TOKEN" };
 std::atomic<unsigned int> cleanse_calls { 0 };
 std::atomic<bool> source_destroyed { false };
+std::atomic<bool> replacement_install_attempted { false };
+std::atomic<bool> replacement_install_succeeded { false };
+std::atomic<bool> replacement_destroyed { false };
 
 void tracked_cleanse(void *memory, size_t size) {
 	if (size == kToken.size() && std::memcmp(memory, kToken.data(), size) == 0) {
@@ -71,6 +74,26 @@ void destroy_source(AwsIamTokenSource *source) {
 	source_destroyed.store(true, std::memory_order_release);
 }
 
+void destroy_replacement(AwsIamTokenSource *source) {
+	delete source;
+	replacement_destroyed.store(true, std::memory_order_release);
+}
+
+void destroy_source_and_attempt_replacement(AwsIamTokenSource *source) {
+	delete source;
+	void *module_handle = dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
+	auto *replacement = new FakeSource();
+	replacement_install_attempted.store(true, std::memory_order_release);
+	const bool installed = module_handle != nullptr &&
+		install_global_aws_iam_token_source(
+			replacement, destroy_replacement, module_handle);
+	replacement_install_succeeded.store(installed, std::memory_order_release);
+	if (!installed) {
+		delete replacement;
+		if (module_handle != nullptr) dlclose(module_handle);
+	}
+}
+
 bool all_stats_zero(const AwsIamStatsSnapshot& snapshot) {
 	const AwsIamNamedStats rows = aws_iam_stats_mysql_global_rows(snapshot);
 	for (const AwsIamNamedStat& row : rows) {
@@ -82,7 +105,7 @@ bool all_stats_zero(const AwsIamStatsSnapshot& snapshot) {
 } // namespace
 
 int main() {
-	plan(10);
+	plan(14);
 	shutdown_global_aws_iam_token_source();
 	ok(!acquire_global_aws_iam_token_source(),
 		"provider registry starts without an installed source");
@@ -142,6 +165,55 @@ int main() {
 	ok(!acquire_global_aws_iam_token_source() &&
 		all_stats_zero(unavailable->snapshot()),
 		"shutdown removes the fallback source and leaves all twelve stats zero");
+
+	replacement_install_attempted.store(false, std::memory_order_release);
+	replacement_install_succeeded.store(false, std::memory_order_release);
+	replacement_destroyed.store(false, std::memory_order_release);
+	void *retiring_handle = dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
+	auto *retiring_source = new FakeSource();
+	if (retiring_handle == nullptr || !install_global_aws_iam_token_source(
+		retiring_source, destroy_source_and_attempt_replacement, retiring_handle)) {
+		BAIL_OUT("failed to install overlapping-retirement source");
+	}
+	AwsIamTokenSourceLease retirement_lease =
+		acquire_global_aws_iam_token_source();
+	auto overlapping_uninstall = std::async(std::launch::async, [retiring_source] {
+		return uninstall_global_aws_iam_token_source(retiring_source);
+	});
+	auto overlapping_shutdown = std::async(std::launch::async, [] {
+		shutdown_global_aws_iam_token_source();
+	});
+	const auto retirement_deadline = std::chrono::steady_clock::now() + 1s;
+	while (acquire_global_aws_iam_token_source() &&
+		std::chrono::steady_clock::now() < retirement_deadline) {
+		std::this_thread::yield();
+	}
+	ok(overlapping_uninstall.wait_for(20ms) == std::future_status::timeout &&
+		overlapping_shutdown.wait_for(20ms) == std::future_status::timeout,
+		"overlapping uninstall and shutdown both wait for the claimed source lease");
+	retirement_lease = AwsIamTokenSourceLease {};
+	overlapping_uninstall.get();
+	overlapping_shutdown.get();
+	ok(replacement_install_attempted.load(std::memory_order_acquire) &&
+		!replacement_install_succeeded.load(std::memory_order_acquire) &&
+		!replacement_destroyed.load(std::memory_order_acquire),
+		"replacement publication is rejected until overlapping retirement finishes");
+
+	// Clean up the replacement that an unfixed registry may have accepted before
+	// checking that publication reopens after both retirement callers return.
+	shutdown_global_aws_iam_token_source();
+	replacement_destroyed.store(false, std::memory_order_release);
+	void *survivor_handle = dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
+	auto *survivor = new FakeSource();
+	ok(survivor_handle != nullptr && install_global_aws_iam_token_source(
+		survivor, destroy_replacement, survivor_handle),
+		"replacement publication reopens after every retirement caller finishes");
+	AwsIamTokenSourceLease survivor_lease = acquire_global_aws_iam_token_source();
+	ok(survivor_lease && survivor_lease.get() == survivor &&
+		!replacement_destroyed.load(std::memory_order_acquire),
+		"the post-retirement replacement remains published and alive");
+	survivor_lease = AwsIamTokenSourceLease {};
+	shutdown_global_aws_iam_token_source();
 
 	return exit_status();
 }

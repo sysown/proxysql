@@ -19,6 +19,9 @@ namespace prometheus { class Registry; }
 
 class SecureString {
 public:
+	// A custom cleanser must remain callable for the SecureString's full
+	// lifetime. Provider DSOs must use the process-lifetime default cleanser
+	// for values that can outlive the provider module.
 	using CleanseFn = void (*)(void*, size_t);
 
 	SecureString() = default;

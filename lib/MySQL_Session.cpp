@@ -4158,18 +4158,22 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 					const uint64_t failed_generation =
 						aws_iam_connect_token_generation;
 					const unsigned int failed_hostgroup = myconn->parent->myhgc->hid;
+					AwsIamTokenSourceLease invalidation_source;
 					if (connect_errno == ER_ACCESS_DENIED_ERROR &&
 						!aws_iam_fresh_token_retry_attempted &&
-						GloAwsIamTokenSource != nullptr && failed_generation != 0 &&
+						failed_generation != 0 &&
 						!failed_key.endpoint.empty() && failed_key.port != 0 &&
 						!failed_key.region.empty() &&
 						!failed_key.database_user.empty()) {
+						invalidation_source = acquire_global_aws_iam_token_source();
+					}
+					if (invalidation_source) {
 						proxy_error(
 							"AWS IAM backend connection failure user='%s' hostgroup=%u endpoint='%s'"
 							" region='%s' category='backend_auth_rejected' code='' request_id=''\n",
 							failed_key.database_user.c_str(), failed_hostgroup,
 							failed_key.endpoint.c_str(), failed_key.region.c_str());
-						GloAwsIamTokenSource->invalidate(
+						invalidation_source->invalidate(
 							failed_key, failed_generation);
 						myds->connect_retries_on_failure = 0;
 						myds->destroy_MySQL_Connection_From_Pool(false);

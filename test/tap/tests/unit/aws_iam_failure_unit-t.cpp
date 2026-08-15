@@ -20,12 +20,20 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <atomic>
+#include <condition_variable>
+#include <dlfcn.h>
+#include <future>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 #include <unistd.h>
+
+using namespace std::chrono_literals;
 
 extern MySQL_Authentication *GloMyAuth;
 extern MySQL_HostGroups_Manager *MyHGM;
@@ -44,6 +52,7 @@ constexpr const char *kTokenTwo = "FAKE_IAM_TOKEN_GENERATION_TWO";
 constexpr const char *kBackendText =
 	"backend reflected AKIAFAKEACCESSKEY and FAKE_SESSION_TOKEN";
 MySrvC *failure_server = nullptr;
+std::atomic<bool> blocking_source_destroyed { false };
 
 struct ConnectOutcome {
 	unsigned int error;
@@ -89,6 +98,16 @@ public:
 	void cancel(AwsIamRequestHandle) override {}
 
 	void invalidate(const AwsIamTokenKey& key, uint64_t generation) override {
+		if (block_invalidation) {
+			std::unique_lock<std::mutex> lock(invalidation_mutex);
+			invalidation_entered = true;
+			invalidation_cv.notify_all();
+			invalidation_cv.wait(lock, [this] { return shutdown_started; });
+			const bool shutdown_returned = invalidation_cv.wait_for(lock, 20ms,
+				[this] { return shutdown_completed; });
+			retirement_waited_for_invalidation = !shutdown_returned &&
+				!blocking_source_destroyed.load(std::memory_order_acquire);
+		}
 		invalidated_keys.push_back(key);
 		invalidated_generations.push_back(generation);
 		if (cached_key == key && cached_generation == generation) {
@@ -116,6 +135,24 @@ public:
 		return result;
 	}
 
+	bool wait_for_invalidation() {
+		std::unique_lock<std::mutex> lock(invalidation_mutex);
+		return invalidation_cv.wait_for(lock, 1s,
+			[this] { return invalidation_entered; });
+	}
+
+	void mark_shutdown_completed() {
+		std::lock_guard<std::mutex> lock(invalidation_mutex);
+		shutdown_completed = true;
+		invalidation_cv.notify_all();
+	}
+
+	void mark_shutdown_started() {
+		std::lock_guard<std::mutex> lock(invalidation_mutex);
+		shutdown_started = true;
+		invalidation_cv.notify_all();
+	}
+
 	std::vector<uint64_t> generations { 1, 2 };
 	uint64_t next_handle { 1 };
 	std::vector<AwsIamTokenKey> keys;
@@ -127,7 +164,18 @@ public:
 	unsigned int backend_failures { 0 };
 	uint64_t waiting_sessions { 0 };
 	MySQL_Session *corrupt_port_on_failure { nullptr };
+	bool block_invalidation { false };
+	std::mutex invalidation_mutex;
+	std::condition_variable invalidation_cv;
+	bool invalidation_entered { false };
+	bool shutdown_started { false };
+	bool shutdown_completed { false };
+	bool retirement_waited_for_invalidation { false };
 };
+
+void mark_blocking_source_destroyed(AwsIamTokenSource *) {
+	blocking_source_destroyed.store(true, std::memory_order_release);
+}
 
 class ScopedPublishedTokenSource {
 public:
@@ -457,6 +505,38 @@ void test_missing_port_cannot_retry_or_invalidate(MySQL_Thread& worker) {
 		"an IAM 1045 with a missing key port is terminal without invalidation or retry");
 }
 
+void test_provider_retirement_waits_for_1045_invalidation(MySQL_Thread& worker) {
+	blocking_source_destroyed.store(false, std::memory_order_release);
+	auto *source = new FakeTokenSource();
+	source->block_invalidation = true;
+	void *module_handle = dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
+	if (module_handle == nullptr || !install_global_aws_iam_token_source(
+		source, mark_blocking_source_destroyed, module_handle)) {
+		BAIL_OUT("failed to install blocking IAM source");
+	}
+
+	reset_connector({ { ER_ACCESS_DENIED_ERROR, kBackendText, false } });
+	SessionFixture fixture(worker, kIamUser);
+	fixture.run();
+	worker.drain_aws_iam_completions();
+	auto shutdown = std::async(std::launch::async, [source] {
+		if (!source->wait_for_invalidation()) return false;
+		source->mark_shutdown_started();
+		shutdown_global_aws_iam_token_source();
+		source->mark_shutdown_completed();
+		return true;
+	});
+	fixture.run();
+	const bool invalidation_triggered_shutdown = shutdown.get();
+	ok(invalidation_triggered_shutdown &&
+		source->retirement_waited_for_invalidation,
+		"provider retirement cannot destroy or unload a source during 1045 invalidation");
+	ok(blocking_source_destroyed.load(std::memory_order_acquire) &&
+		source->invalidated_generations.size() == 1,
+		"provider retirement completes after the retained invalidation lease drains");
+	delete source;
+}
+
 } // namespace
 
 extern "C" {
@@ -499,7 +579,7 @@ int __wrap_mysql_real_connect_start(MYSQL **ret, MYSQL *mysql, const char *host,
 } // extern "C"
 
 int main() {
-	plan(13);
+	plan(15);
 	if (test_init_minimal() != 0 || test_init_auth() != 0 ||
 		test_init_query_processor() != 0 || test_init_hostgroups() != 0) {
 		BAIL_OUT("failed to initialize unit-test globals");
@@ -524,6 +604,7 @@ int main() {
 		test_fresh_retry_bypasses_local_and_global_idle_iam(worker);
 		test_pooled_success_clears_latch_for_later_1045(worker);
 		test_missing_port_cannot_retry_or_invalidate(worker);
+		test_provider_retirement_waits_for_1045_invalidation(worker);
 	}
 	GloAwsIamTokenSource = nullptr;
 
