@@ -1,0 +1,203 @@
+name: CI-mysql84-binlog-g1
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      trigger:
+        type: string
+
+env:
+  SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+
+jobs:
+  tests:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    # Codecov's OIDC token and the checks update both require write permission.
+    # The v3.0 caller grants the same permission because caller and callee
+    # permissions are intersected for reusable workflows.
+    permissions: write-all
+    env:
+      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu24-tap-genai-gcov_src
+      MATRIX: '(mysql84-binlog,genai-gcov)'
+
+    steps:
+    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
+      id: checks
+      continue-on-error: true
+      if: always()
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        name: '${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}'
+        repo: ${{ github.repository }}
+        sha: ${{ env.SHA }}
+        status: 'in_progress'
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+
+    - name: Checkout repository
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ env.SHA }}
+        path: proxysql
+        sparse-checkout: |
+          include
+          lib
+          src
+          test/infra
+          test/tap
+          test/scripts
+
+    - name: Download GCOV build handoff
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        REPO: ${{ github.repository }}
+        SHA: ${{ env.SHA }}
+        BUILD_RUN_ID: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.id || '' }}
+        HANDOFF_VARIANT: ubuntu24-tap-genai-gcov
+        HANDOFF_TYPES: src test
+      run: |
+        set -euo pipefail
+        command -v zstd >/dev/null || sudo apt-get install -y zstd
+        errors="$(mktemp)"
+        resolve_artifact() {
+          local name="$1" artifact_id=""
+          if [ -n "${BUILD_RUN_ID}" ]; then
+            artifact_id=$(gh api "repos/${REPO}/actions/runs/${BUILD_RUN_ID}/artifacts?per_page=100" \
+              --jq "[.artifacts[]|select(.name==\"${name}\" and .expired==false)]|sort_by(.created_at)|last|.id // empty" \
+              2>>"${errors}") || true
+            [ -n "${artifact_id}" ] && { printf '%s' "${artifact_id}"; return 0; }
+          fi
+          artifact_id=$(gh api "repos/${REPO}/actions/artifacts?name=${name}&per_page=100" \
+            --jq '[.artifacts[]|select(.expired==false)]|sort_by(.created_at)|last|.id // empty' \
+            2>>"${errors}") || true
+          [ -n "${artifact_id}" ] && { printf '%s' "${artifact_id}"; return 0; }
+          return 1
+        }
+        for type in ${HANDOFF_TYPES}; do
+          name="ci-builds-handoff-${SHA}-${HANDOFF_VARIANT}-${type}"
+          artifact_id=""
+          for attempt in $(seq 1 20); do
+            artifact_id=$(resolve_artifact "${name}") && [ -n "${artifact_id}" ] && break
+            artifact_id=""
+            echo "${name} not available (${attempt}/20); waiting 15 seconds"
+            sleep 15
+          done
+          if [ -z "${artifact_id}" ]; then
+            echo "ERROR: build handoff ${name} was not found" >&2
+            tail -n 20 "${errors}" >&2 || true
+            exit 1
+          fi
+          gh api "repos/${REPO}/actions/artifacts/${artifact_id}/zip" > "handoff-${type}.zip"
+          unzip -o "handoff-${type}.zip"
+        done
+        mkdir -p proxysql
+        cd proxysql
+        for archive in ../cache_*.tar.zst; do
+          [ -e "${archive}" ] || continue
+          zstd -d < "${archive}" | tar -xf -
+        done
+
+    - name: Verify GCOV daemon binary
+      run: |
+        chmod +x proxysql/src/proxysql
+        file proxysql/src/proxysql
+
+    - name: Log in to GHCR and pull CI base image
+      env:
+        GHCR_USER: ${{ github.actor }}
+        GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set +e
+        for attempt in 1 2 3 4 5; do
+          if echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin \
+            && docker pull ghcr.io/sysown/proxysql-ci-base:latest; then
+            docker tag ghcr.io/sysown/proxysql-ci-base:latest proxysql-ci-base:latest
+            exit 0
+          fi
+          sleep $((attempt * 10))
+        done
+        echo 'ERROR: unable to pull proxysql-ci-base after 5 attempts' >&2
+        exit 1
+
+    - name: Start MySQL 8.4 binlog infrastructure
+      run: |
+        cd proxysql
+        export INFRA_ID=ci-mysql84-binlog-g1
+        export TAP_GROUP=mysql84-binlog-g1
+        test/infra/control/ensure-infras.bash
+
+    - name: Run MySQL 8.4 binlog TAP tests with coverage
+      timeout-minutes: 90
+      run: |
+        cd proxysql
+        export INFRA_ID=ci-mysql84-binlog-g1
+        export TAP_GROUP=mysql84-binlog-g1
+        export COVERAGE=1
+        test/infra/control/run-tests-isolated.bash
+
+    - name: Cleanup
+      if: always()
+      run: |
+        set +e
+        [ -d proxysql ] || exit 0
+        cd proxysql
+        export INFRA_ID=ci-mysql84-binlog-g1
+        export TAP_GROUP=mysql84-binlog-g1
+        docker logs proxysql.ci-mysql84-binlog-g1 2>&1 | tail -50 || true
+        test/infra/control/stop-proxysql-isolated.bash || true
+        test/infra/control/destroy-infras.bash || true
+
+    - name: Fix artifact permissions
+      if: ${{ failure() && !cancelled() }}
+      run: sudo chmod -R a+rX proxysql/ci_*_logs/ 2>/dev/null || true
+
+    - name: Archive failure logs
+      if: ${{ failure() && !cancelled() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: ${{ github.workflow }}-${{ env.SHA }}-logs-run#${{ github.run_number }}
+        path: proxysql/ci_*_logs/
+
+    - name: Archive coverage report
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: ${{ github.workflow }}-${{ env.SHA }}-coverage-run#${{ github.run_number }}
+        path: proxysql/ci_infra_logs/ci-mysql84-binlog-g1/coverage-report/
+        if-no-files-found: ignore
+
+    - name: Require non-empty binlog coverage LCOV
+      id: require_lcov
+      if: always()
+      run: test -s proxysql/ci_infra_logs/ci-mysql84-binlog-g1/coverage-report/ci-mysql84-binlog-g1.info
+
+    - name: Upload coverage to Codecov
+      if: ${{ always() && steps.require_lcov.outcome == 'success' }}
+      continue-on-error: true
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
+      with:
+        codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
+        override_commit: ${{ env.SHA }}
+        files: proxysql/ci_infra_logs/ci-mysql84-binlog-g1/coverage-report/ci-mysql84-binlog-g1.info
+        flags: integration-tests
+        name: tap-mysql84-binlog-g1-coverage
+        use_oidc: true
+        disable_search: true
+        plugins: noop
+        root_dir: proxysql
+        disable_file_fixes: true
+        fail_ci_if_error: false
+        verbose: true
+
+    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
+      continue-on-error: true
+      if: ${{ always() && steps.checks.outputs.check_id != '' }}
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        check_id: ${{ steps.checks.outputs.check_id }}
+        repo: ${{ github.repository }}
+        sha: ${{ env.SHA }}
+        conclusion: ${{ job.status }}
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
