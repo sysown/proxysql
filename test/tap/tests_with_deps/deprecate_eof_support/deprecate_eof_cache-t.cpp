@@ -79,32 +79,44 @@ long long query_cache_counter(MYSQL* proxy_admin, const char* counter_name) {
 	return value;
 }
 
-class QueryRulesRestore {
+class ProxyStateRestore {
 public:
-	explicit QueryRulesRestore(MYSQL* proxy_admin) : proxy_admin_(proxy_admin) {}
-	~QueryRulesRestore() { restore(); }
+	explicit ProxyStateRestore(MYSQL* proxy_admin, bool restore_variables)
+		: proxy_admin_(proxy_admin), restore_variables_(restore_variables) {}
+	~ProxyStateRestore() { restore(); }
 
 	void restore() {
 		if (proxy_admin_) {
 			mysql_query(proxy_admin_, "LOAD MYSQL QUERY RULES FROM DISK");
 			mysql_query(proxy_admin_, "LOAD MYSQL QUERY RULES TO RUNTIME");
+			if (restore_variables_) {
+				mysql_query(proxy_admin_, "LOAD MYSQL VARIABLES FROM DISK");
+				mysql_query(proxy_admin_, "LOAD MYSQL VARIABLES TO RUNTIME");
+			}
 			proxy_admin_ = nullptr;
 		}
 	}
 
 private:
 	MYSQL* proxy_admin_;
+	bool restore_variables_;
 };
 
 int main(int argc, char** argv) {
 	CommandLine cl;
 
-	uint32_t c_operations = 50;
+	const bool mixed_capabilities = argc == 2 && std::string(argv[1]) == "--mixed-capabilities";
+	if (argc != 1 && !mixed_capabilities) {
+		diag("Unsupported argument. Expected --mixed-capabilities.");
+		return -1;
+	}
+
+	uint32_t c_operations = mixed_capabilities ? 2 : 50;
 	to_opts_t opts { 10000*1000, 100*1000, 500*1000, 2000*1000 };
 
 	unsigned int p = 1; // create table
 	p += c_operations; // inserts
-	p += c_operations*22; // 22 tests each time
+	p += c_operations * (mixed_capabilities ? 26 : 22);
 	plan(p);
 
 	if (cl.getEnv()) {
@@ -142,7 +154,19 @@ int main(int argc, char** argv) {
 
 		return exit_status();
 	}
-	QueryRulesRestore query_rules_restore(proxy_admin);
+	ProxyStateRestore proxy_state_restore(proxy_admin, mixed_capabilities);
+	auto set_client_deprecate_eof = [&] (bool enabled) -> bool {
+		const std::string value = std::to_string(enabled ? 1 : 0);
+		if (mysql_query(proxy_admin, ("SET mysql-enable_client_deprecate_eof=" + value).c_str())) {
+			diag("Failed to set mysql-enable_client_deprecate_eof=%s: %s", value.c_str(), mysql_error(proxy_admin));
+			return false;
+		}
+		if (mysql_query(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME")) {
+			diag("Failed to load MySQL variables to runtime: %s", mysql_error(proxy_admin));
+			return false;
+		}
+		return true;
+	};
 
 	vector<pair<string, string>> stored_pairs {};
 
@@ -234,6 +258,7 @@ int main(int argc, char** argv) {
 		const long long eof_to_ok_set_before = query_cache_counter(proxy_admin, "Query_Cache_count_SET");
 
 		// First check that the conversion from EOF to OK packet is working
+		if (mixed_capabilities && !set_client_deprecate_eof(false)) return exit_status();
 		std::string eof_query_res {};
 		std::string eof_query_err {};
 		int exec_res = eof_query(eof_query_res, eof_query_err);
@@ -252,6 +277,7 @@ int main(int argc, char** argv) {
 
 		std::string ok_query_res {};
 		std::string ok_query_err {};
+		if (mixed_capabilities && !set_client_deprecate_eof(true)) return exit_status();
 		exec_res = ok_query(ok_query_res, ok_query_err);
 		ok(exec_res == 0, "'fwd_eof_ok_query' should succeed - ErrCode: '%d', ErrMsg: '%s'", exec_res, ok_query_err.c_str());
 		if (exec_res) {
@@ -268,6 +294,16 @@ int main(int argc, char** argv) {
 
 		nlohmann::json eof_query_res_json = nlohmann::json::parse(eof_query_res);
 		nlohmann::json ok_query_res_json = nlohmann::json::parse(ok_query_res);
+		if (mixed_capabilities) {
+			ok(
+				eof_query_res_json.value("FrontendDeprecateEOF", -1) == 0,
+				"EOF to OK -> first client negotiated EOF packets"
+			);
+			ok(
+				ok_query_res_json.value("FrontendDeprecateEOF", -1) == 1,
+				"EOF to OK -> second client negotiated OK packets"
+			);
+		}
 
 		const std::string ok_res_id = ok_query_res_json["Result"][0]["id"];
 		ok(
@@ -333,6 +369,7 @@ int main(int argc, char** argv) {
 			"OK to EOF -> EOF-deprecation client does not read a cache entry"
 		);
 
+		if (mixed_capabilities && !set_client_deprecate_eof(false)) return exit_status();
 		exec_res = eof_query(eof_query_res, eof_query_err);
 
 		ok(exec_res == 0, "'fwd_eof_query' should succeed - ErrCode: '%d', ErrMsg: '%s'", exec_res, eof_query_err.c_str());
@@ -350,6 +387,16 @@ int main(int argc, char** argv) {
 
 		ok_query_res_json = nlohmann::json::parse(ok_query_res);
 		eof_query_res_json = nlohmann::json::parse(eof_query_res);
+		if (mixed_capabilities) {
+			ok(
+				ok_query_res_json.value("FrontendDeprecateEOF", -1) == 1,
+				"OK to EOF -> first client negotiated OK packets"
+			);
+			ok(
+				eof_query_res_json.value("FrontendDeprecateEOF", -1) == 0,
+				"OK to EOF -> second client negotiated EOF packets"
+			);
+		}
 
 		const std::string eof_res_id = eof_query_res_json["Result"][0]["id"];
 		ok(
@@ -394,7 +441,7 @@ int main(int argc, char** argv) {
 		);
 	}
 
-	query_rules_restore.restore();
+	proxy_state_restore.restore();
 	mysql_close(proxy_admin);
 	mysql_close(proxy_mysql);
 
