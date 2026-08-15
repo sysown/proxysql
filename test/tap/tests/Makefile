@@ -131,7 +131,16 @@ ifneq ($(wildcard $(SQLITE3_LDIR)/vec.o),)
 endif
 endif
 
-OPT := $(STDCPP) -O2 -ggdb $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
+# Keep public class layouts identical to libproxysql.a. In particular,
+# PROXYSQL40 adds members to ProxySQL_GlobalVariables; omitting the define in
+# TAP translation units makes their GloVars allocation smaller than the
+# constructor linked from the archive.
+PSQL40 :=
+ifeq ($(PROXYSQL40),1)
+	PSQL40 := -DPROXYSQL40
+endif
+
+OPT := $(STDCPP) -O2 -ggdb $(PSQL40) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
 ifneq ($(UNAME_S),Darwin)
 OPT += -Wl,--no-as-needed
 endif
@@ -159,7 +168,7 @@ tests_no_infra: admin_set_credentials_logging-t listener_conflicts_validation-t
 	./admin_set_credentials_logging-t
 	./listener_conflicts_validation-t
 
-DEBUG_OPT := $(STDCPP) -O0 -DDEBUG -ggdb $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
+DEBUG_OPT := $(STDCPP) -O0 -DDEBUG -ggdb $(PSQL40) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
 ifneq ($(UNAME_S),Darwin)
 DEBUG_OPT += -Wl,--no-as-needed
 endif
