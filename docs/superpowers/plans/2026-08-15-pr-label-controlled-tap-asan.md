@@ -65,11 +65,13 @@ assert_mode normal env TRUSTED=true TRIGGER_JSON="$non_pr_trigger" \
     GITHUB_REPOSITORY=sysown/proxysql GH_BIN="$stub" "$resolver"
 assert_mode normal env TRUSTED=true TRIGGER_JSON="$pr_trigger" GH_LABELS='bug' \
     GITHUB_REPOSITORY=sysown/proxysql GH_BIN="$stub" "$resolver"
+assert_mode normal env TRUSTED=true TRIGGER_JSON="$pr_trigger" GH_LABELS='ci:asan-extra' \
+    GITHUB_REPOSITORY=sysown/proxysql GH_BIN="$stub" "$resolver"
 assert_mode asan env TRUSTED=true TRIGGER_JSON="$pr_trigger" GH_LABELS='bug ci:asan' \
     GITHUB_REPOSITORY=sysown/proxysql GH_BIN="$stub" "$resolver"
 ```
 
-Make the stub return its `GH_LABELS`, or exit nonzero when `GH_STUB_FAIL=1`. Assert that the failure case exits nonzero; this is the guard against a false-green normal build.
+Make the stub emit each space-separated `GH_LABELS` entry on its own line (for example, `tr ' ' '\n' <<<"${GH_LABELS:-}"`), matching `gh api --jq '.labels[].name'`; it exits nonzero when `GH_STUB_FAIL=1`. Assert that the failure case exits nonzero; this is the guard against a false-green normal build.
 
 - [ ] **Step 2: Run the new test to confirm it fails before the resolver exists**
 
@@ -128,7 +130,7 @@ Run:
 bash .github/scripts/tests/test-resolve-tap-build-mode.bash
 ```
 
-Expected: all six cases pass: untrusted, direct dispatch, non-PR, ordinary PR, labeled PR, and API failure.
+Expected: all seven cases pass: untrusted, direct dispatch, non-PR, ordinary PR, near-matching label, labeled PR, and API failure.
 
 - [ ] **Step 5: Commit the tested resolver**
 
