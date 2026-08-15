@@ -2,6 +2,7 @@
 #define MYSQL_FFTO_HPP
 
 #include "TrafficObserver.hpp"
+#include "MySQLResultsetFramer.h"
 #include <vector>
 #include <string>
 #include <unordered_map>
@@ -63,13 +64,12 @@ private:
     enum State {
         IDLE,                 ///< No query is currently active.
         AWAITING_PREPARE_OK,  ///< A COM_STMT_PREPARE has been sent; waiting for the server's response.
-        AWAITING_RESPONSE,    ///< A query has been sent; waiting for the first server response packet.
-        READING_COLUMNS,      ///< Processing column metadata packets for a result set.
-        READING_ROWS          ///< Processing actual row data packets for a result set.
+        AWAITING_RESPONSE     ///< A query has been sent; framer owns resultset sub-states.
     };
 
     MySQL_Session* m_session; ///< Pointer to the session being observed.
     State m_state;            ///< Current state of the protocol parser.
+    MySQLResultsetFramer m_rs; ///< Resultset framer for COM_QUERY / EXECUTE / FETCH responses.
     std::vector<char> m_client_buffer; ///< Temporary buffer for client-side packet reassembly.
     std::vector<char> m_server_buffer; ///< Temporary buffer for server-side packet reassembly.
     std::size_t m_client_offset {0};   ///< Current read offset in m_client_buffer.
@@ -80,8 +80,14 @@ private:
     unsigned long long m_query_start_time; ///< Start timestamp of the current query in microseconds.
     uint64_t m_affected_rows;             ///< Number of rows affected by the current DML query.
     uint64_t m_rows_sent;                 ///< Number of rows returned by the current SELECT query.
+    uint64_t m_framer_rs_rows {0};        ///< In-progress framer row count (partial RS on close).
 
-    std::unordered_map<uint32_t, std::string> m_statements; ///< Map of stmt_id to original SQL query for prepared statements.
+    /// Per-statement metadata captured from the COM_STMT_PREPARE_OK response.
+    struct PreparedStatement {
+        std::string query;
+        uint64_t column_count { 0 };
+    };
+    std::unordered_map<uint32_t, PreparedStatement> m_statements;
 
     /**
      * @brief Processes individual MySQL packets from the client.
@@ -99,6 +105,9 @@ private:
 
     bool is_in_flight_query_state() const;
     void clear_active_query();
+    bool client_deprecate_eof() const;
+    void finalize_in_flight_best_effort();
+    void begin_tracked_query(const std::string& query, bool binary_protocol);
 
     /**
      * @brief Computes and records query metrics into the ProxySQL query digests.

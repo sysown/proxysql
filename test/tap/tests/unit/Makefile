@@ -435,6 +435,10 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	parsersql_unit-t \
 	pgsql_query_processor_unit-t \
 	http_server_unit-t \
+	mysql_resultset_framer_unit-t \
+	mysql_resultset_framer_traffic_unit-t \
+	pgsql_response_framer_unit-t \
+	pgsql_response_framer_traffic_unit-t \
 	ffto_state_machine_unit-t \
 	restapi_server_unit-t
 
@@ -892,4 +896,5 @@ endif
 .PHONY: clean
 .SILENT: clean
 clean:
-	rm -rf $(ODIR) $(UNIT_TESTS) $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO)
+	rm -rf $(ODIR)
+	rm -f *-t $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO)

@@ -1678,7 +1678,7 @@ uint64_t MySQL_HostGroups_Manager::get_mysql_servers_checksum(SQLite3_result* ru
  * 1. Acquires a read lock on the GTID read-write lock.
  * 2. Constructs a string representation of the MySQL server address and port.
  * 3. Searches for the GTID information associated with the MySQL server in the GTID map using the constructed string as the key.
- * 4. If the GTID information is found and is active, it checks whether the specified GTID exists.
+ * 4. If the GTID information is found, it checks whether the specified GTID exists.
  * 5. Releases the read lock on the GTID read-write lock.
  *
  * @param mysrvc A pointer to the MySQL server connection.
@@ -1698,14 +1698,65 @@ bool MySQL_HostGroups_Manager::gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uin
 	if (it2!=gtid_map.end()) {
 		gtid_is=it2->second;
 		if (gtid_is) {
-			if (gtid_is->active == true) {
-				ret = gtid_is->gtid_exists(gtid_uuid,gtid_trxid);
-			}
+			ret = gtid_is->gtid_exists(gtid_uuid,gtid_trxid);
 		}
 	}
 	//proxy_info("Checking if server %s has GTID %s:%lu . %s\n", s1.c_str(), gtid_uuid, gtid_trxid, (ret ? "YES" : "NO"));
 	pthread_rwlock_unlock(&gtid_rwlock);
 	return ret;
+}
+
+bool MySQL_HostGroups_Manager::update_gtid_from_ok(MySrvC* mysrvc, const char* gtid) {
+	if (mysrvc == nullptr || gtid == nullptr) {
+		return false;
+	}
+
+	std::string endpoint(mysrvc->address);
+	endpoint.append(":");
+	endpoint.append(std::to_string(mysrvc->port));
+
+	pthread_rwlock_rdlock(&gtid_rwlock);
+	auto it = gtid_map.find(endpoint);
+	bool updated = it != gtid_map.end() && it->second != nullptr
+		? it->second->add_gtid_from_ok(gtid)
+		: false;
+	pthread_rwlock_unlock(&gtid_rwlock);
+	return updated;
+}
+
+GTID_Server_Data* MySQL_HostGroups_Manager::get_or_create_gtid_server_data(
+	MySrvC* server, const std::string& endpoint) {
+	auto existing = gtid_map.find(endpoint);
+	if (existing != gtid_map.end() && existing->second != nullptr) {
+		return existing->second;
+	}
+	if (existing != gtid_map.end()) {
+		gtid_map.erase(existing);
+	}
+
+	auto owned_data = std::make_unique<GTID_Server_Data>(
+		nullptr, server->address, server->gtid_port, server->port);
+	owned_data->active = false;
+	GTID_Server_Data* data = owned_data.get();
+	gtid_map.emplace(endpoint, data);
+	owned_data.release();
+	return data;
+}
+
+void MySQL_HostGroups_Manager::start_gtid_reader_if_needed(
+	MySrvC* server, GTID_Server_Data* data) {
+	if (data->active || server->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+		return;
+	}
+	ev_io* watcher = new_connect_watcher(server->address, server->gtid_port, server->port);
+	if (watcher == nullptr) {
+		gtid_missing_nodes = true;
+		return;
+	}
+	data->w = watcher;
+	data->active = true;
+	watcher->data = static_cast<void*>(data);
+	ev_io_start(MyHGM->gtid_ev_loop, watcher);
 }
 
 /**
@@ -1752,40 +1803,15 @@ void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
 		MySrvC *mysrvc=NULL;
 		for (unsigned int j=0; j<myhgc->mysrvs->servers->len; j++) {
 			mysrvc=myhgc->mysrvs->idx(j);
-			if (mysrvc->gtid_port) {
-				std::string srv = mysrvc->address;
-				srv.append(":");
-				srv.append(std::to_string(mysrvc->port));
-
-				GTID_Server_Data *gtid_sd = nullptr;
-				it = gtid_map.find(srv);
-				if (it != gtid_map.end()) {
-					gtid_sd = it->second;
-					stale_server.erase(srv);
-				}
-
-				if (gtid_sd && gtid_sd->active) {
-					continue;
-				}
-
-				if (mysrvc->get_status() != MYSQL_SERVER_STATUS_OFFLINE_HARD) {
-					// a new server with gtid port
-					// OR an existing server, but we lost connection with binlog_reader
-					struct ev_io *cw = new_connect_watcher(mysrvc->address, mysrvc->gtid_port, mysrvc->port);
-					if (cw) {
-						if (!gtid_sd) {
-							gtid_sd = new GTID_Server_Data(cw, mysrvc->address, mysrvc->gtid_port, mysrvc->port);
-							cw->data = (void *)gtid_sd;
-							gtid_map.emplace(srv, gtid_sd);
-						} else {
-							gtid_sd->w = cw;
-							gtid_sd->active = true;
-							cw->data = (void *)gtid_sd;
-						}
-						ev_io_start(MyHGM->gtid_ev_loop, cw);
-					}
-				}
+			if (mysrvc->gtid_port == 0) {
+				continue;
 			}
+			std::string endpoint = mysrvc->address;
+			endpoint.append(":");
+			endpoint.append(std::to_string(mysrvc->port));
+			stale_server.erase(endpoint);
+			GTID_Server_Data* data = get_or_create_gtid_server_data(mysrvc, endpoint);
+			start_gtid_reader_if_needed(mysrvc, data);
 		}
 	}
 
@@ -5767,8 +5793,9 @@ void MySQL_HostGroups_Manager::p_update_mysql_gtid_executed() {
 			gtid_counter = pc_itr->second;
 		}
 
+		const GTID_Executed_Snapshot snapshot = gtid_sd->get_gtid_executed_snapshot();
 		const auto& cur_executed_gtid = gtid_counter->Value();
-		gtid_counter->Increment(gtid_sd->events_read - cur_executed_gtid);
+		gtid_counter->Increment(snapshot.events_read - cur_executed_gtid);
 
 		it++;
 	}
@@ -5795,9 +5822,9 @@ SQLite3_result * MySQL_HostGroups_Manager::get_stats_mysql_gtid_executed() {
 			snprintf(buf, sizeof(buf), "%d", (int)gtid_si->mysql_port);
 			pta[1]=strdup(buf);
 			//sprintf(buf,"%d", mysrvc->port);
-			string s1 = gtid_si->gtid_executed.to_string();
-			pta[2]=strdup(s1.c_str());
-			snprintf(buf, sizeof(buf), "%llu", gtid_si->events_read);
+			const GTID_Executed_Snapshot snapshot = gtid_si->get_gtid_executed_snapshot();
+			pta[2]=strdup(snapshot.gtid_executed.c_str());
+			snprintf(buf, sizeof(buf), "%llu", snapshot.events_read);
 			pta[3]=strdup(buf);
 		} else {
 			std::string s = it->first;

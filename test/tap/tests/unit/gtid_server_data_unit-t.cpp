@@ -14,14 +14,26 @@
 #include "tap.h"
 
 #include "GTID_Server_Data.h"
+#include "MySQL_HostGroups_Manager.h"
+#include "proxysql_utils.h"
 
+#include <dirent.h>
+#include <unistd.h>
+
+#include <atomic>
+#include <cstdlib>
 #include <cstring>
 #include <string>
+#include <thread>
+
+extern struct ev_io * new_connect_watcher(char *address, uint16_t gtid_port, uint16_t mysql_port);
 
 static const char *UUID_A = "aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa";
-static const char *UUID_A_STRIPPED = "aaaaaaaa000011112222aaaaaaaaaaaa";
+static char UUID_A_STRIPPED[] = "aaaaaaaa000011112222aaaaaaaaaaaa";
 static const char *UUID_B = "bbbbbbbb-3333-4444-5555-bbbbbbbbbbbb";
-static const char *UUID_B_STRIPPED = "bbbbbbbb333344445555bbbbbbbbbbbb";
+static char UUID_B_STRIPPED[] = "bbbbbbbb333344445555bbbbbbbbbbbb";
+static char LOOPBACK_ADDRESS[] = "127.0.0.1";
+static char EMPTY_COMMENT[] = "";
 
 /**
  * @brief Helper: stuff a message string into sd's buffer and reset pos.
@@ -336,8 +348,202 @@ static void test_incomplete_message() {
 	ok(sd.events_read == 0, "incomplete: events_read stays 0");
 }
 
+static void test_ok_gtid_survives_inactive_reader() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+	sd.active = false;
+
+	ok(sd.add_gtid_from_ok("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:42"),
+		"OK GTID: first observation updates the set");
+	ok(sd.gtid_exists(UUID_A_STRIPPED, 42),
+		"OK GTID: direct evidence is valid while reader is inactive");
+	ok(!sd.gtid_exists(UUID_A_STRIPPED, 43),
+		"OK GTID: an unobserved transaction remains absent");
+	ok(sd.gtid_executed_to_string().find(":42") != std::string::npos,
+		"OK GTID: union is visible in stats rendering");
+	ok(sd.events_read == 0,
+		"OK GTID: binlog event counter is unchanged");
+	ok(!sd.add_gtid_from_ok("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:42"),
+		"OK GTID: duplicate observation is not counted as an update");
+}
+
+static void test_known_gtid_survives_inactive_reader() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+	std::string msg = std::string("I1=") + UUID_A_STRIPPED + ":55\n";
+	stuff_buffer(sd, msg);
+
+	ok(sd.read_next_gtid(), "known GTID: binlog message is parsed");
+	ok(sd.gtid_exists(UUID_A_STRIPPED, 55),
+		"known GTID: active endpoint record contains the transaction");
+	sd.active = false;
+	ok(sd.gtid_exists(UUID_A_STRIPPED, 55),
+		"known GTID: inactive reader does not hide endpoint state");
+}
+
+static void test_ok_gtid_validation() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+
+	ok(!sd.add_gtid_from_ok(nullptr), "OK GTID: null is rejected");
+	ok(!sd.add_gtid_from_ok("missing-separator"), "OK GTID: missing separator is rejected");
+	ok(!sd.add_gtid_from_ok("zzzzzzzz-0000-1111-2222-aaaaaaaaaaaa:1"),
+		"OK GTID: nonhexadecimal UUID is rejected");
+	ok(!sd.add_gtid_from_ok("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:not-a-number"),
+		"OK GTID: nonnumeric transaction ID is rejected");
+	ok(!sd.add_gtid_from_ok("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:0"),
+		"OK GTID: transaction zero is rejected");
+	ok(sd.gtid_executed_to_string().empty(),
+		"OK GTID: invalid input does not mutate the endpoint set");
+}
+
+static void test_ok_and_binlog_merge() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+	std::string msg = std::string("I1=") + UUID_A_STRIPPED + ":60\n";
+	stuff_buffer(sd, msg);
+	sd.read_next_gtid();
+
+	ok(sd.add_gtid_from_ok("AAAAAAAA-0000-1111-2222-AAAAAAAAAAAA:61"),
+		"mixed observations: uppercase direct GTID is added");
+	ok(sd.gtid_exists(UUID_A_STRIPPED, 60),
+		"mixed observations: binlog GTID is eligible");
+	sd.active = false;
+	ok(sd.gtid_exists(UUID_A_STRIPPED, 60),
+		"mixed observations: known binlog GTID remains eligible when inactive");
+	ok(sd.gtid_exists(UUID_A_STRIPPED, 61),
+		"mixed observations: known OK GTID remains eligible when inactive");
+}
+
+static void test_manager_gtid_lookup_survives_inactive_reader() {
+	MySQL_HostGroups_Manager manager;
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+	MySrvC server(LOOPBACK_ADDRESS, 3306, 0, 1, MYSQL_SERVER_STATUS_ONLINE,
+		0, 100, 0, 0, 0, EMPTY_COMMENT);
+
+	sd.add_gtid_from_ok("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:70");
+	manager.gtid_map.emplace("127.0.0.1:3306", &sd);
+	sd.active = false;
+
+	ok(manager.gtid_exists(&server, UUID_A_STRIPPED, 70),
+		"manager GTID lookup: known endpoint state remains eligible when inactive");
+}
+
+static int count_open_file_descriptors() {
+	DIR* directory = opendir("/proc/self/fd");
+	if (directory == nullptr) {
+		directory = opendir("/dev/fd");
+	}
+	if (directory == nullptr) {
+		return -1;
+	}
+
+	int count = 0;
+	while (dirent* entry = readdir(directory)) {
+		if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
+			++count;
+		}
+	}
+	closedir(directory);
+	return count;
+}
+
+static void test_connect_watcher_closes_socket_on_resolution_failure() {
+	const int before = count_open_file_descriptors();
+	if (before < 0) {
+		skip(3, "open file descriptors cannot be enumerated on this platform");
+		return;
+	}
+
+	bool all_failed = true;
+	char invalid_address[] = "invalid host name";
+
+	for (int i = 0; i < 32; ++i) {
+		mf_unique_ptr<ev_io> watcher(new_connect_watcher(invalid_address, 3307, 3306));
+		if (watcher != nullptr) {
+			all_failed = false;
+			close(watcher->fd);
+		}
+	}
+
+	const int after = count_open_file_descriptors();
+	ok(true, "connect watcher: open descriptors can be counted");
+	ok(all_failed, "connect watcher: invalid address fails every connection attempt");
+	ok(after == before,
+		"connect watcher: resolution failures do not leak sockets (%d before, %d after)", before, after);
+}
+
+static unsigned long long snapshot_last_trxid(const std::string& gtid_executed) {
+	if (gtid_executed.empty()) {
+		return 0;
+	}
+
+	const std::string::size_type separator = gtid_executed.find_last_of(":-");
+	return separator == std::string::npos
+		? 0
+		: strtoull(gtid_executed.c_str() + separator + 1, nullptr, 10);
+}
+
+/**
+ * @brief Stats snapshots stay coherent while binlog records are applied.
+ *
+ * For this single-UUID sequential stream, the highest GTID must always equal
+ * the number of binlog events. A snapshot assembled across two lock sections,
+ * or with an unlocked events_read access, can expose different generations.
+ */
+static void test_gtid_snapshot_is_coherent_during_binlog_updates() {
+	GTID_Server_Data sd(nullptr, LOOPBACK_ADDRESS, 0, 3306);
+	constexpr unsigned long long event_count = 4000;
+	std::string messages;
+	messages.reserve(event_count * 16);
+	messages.append("I1=").append(UUID_A_STRIPPED).append(":1\n");
+	for (unsigned long long trxid = 2; trxid <= event_count; ++trxid) {
+		messages.append("I2=").append(std::to_string(trxid)).append("\n");
+	}
+	stuff_buffer(sd, messages);
+
+	std::atomic<bool> start { false };
+	std::atomic<bool> writer_done { false };
+	std::atomic<bool> coherent { true };
+	std::atomic<unsigned long long> snapshots { 0 };
+
+	std::thread writer([&start, &sd, &writer_done]() {
+		while (!start.load()) {
+			std::this_thread::yield();
+		}
+		while (sd.read_next_gtid()) {
+			std::this_thread::yield();
+		}
+		writer_done.store(true);
+	});
+
+	auto capture_snapshot = [&sd, &coherent, &snapshots]() {
+		const GTID_Executed_Snapshot snapshot = sd.get_gtid_executed_snapshot();
+		if (snapshot_last_trxid(snapshot.gtid_executed) != snapshot.events_read) {
+			coherent.store(false);
+		}
+		snapshots.fetch_add(1);
+	};
+
+	std::thread reader([&start, &writer_done, &capture_snapshot]() {
+		capture_snapshot();
+		start.store(true);
+		do {
+			capture_snapshot();
+		} while (!writer_done.load());
+	});
+
+	writer.join();
+	reader.join();
+
+	const GTID_Executed_Snapshot final_snapshot = sd.get_gtid_executed_snapshot();
+	ok(snapshots.load() > 1,
+		"GTID snapshot: reader sampled while binlog updates were running");
+	ok(coherent.load(),
+		"GTID snapshot: text and binlog event count always describe one generation");
+	ok(final_snapshot.events_read == event_count &&
+			snapshot_last_trxid(final_snapshot.gtid_executed) == event_count,
+		"GTID snapshot: final state contains all %llu binlog events", event_count);
+}
+
 int main() {
-	plan(83);
+	plan(109);
 
 	test_bootstrap_single();            //  6 assertions
 	test_bootstrap_range();             //  8 assertions
@@ -354,6 +560,13 @@ int main() {
 	test_read_all_stops_on_unknown();   //  4 assertions
 	test_empty_buffer();                //  3 assertions
 	test_incomplete_message();          //  3 assertions
+	test_ok_gtid_survives_inactive_reader();
+	test_known_gtid_survives_inactive_reader();
+	test_ok_gtid_validation();
+	test_ok_and_binlog_merge();
+	test_manager_gtid_lookup_survives_inactive_reader();
+	test_connect_watcher_closes_socket_on_resolution_failure();
+	test_gtid_snapshot_is_coherent_during_binlog_updates();
 
 	return exit_status();
 }
