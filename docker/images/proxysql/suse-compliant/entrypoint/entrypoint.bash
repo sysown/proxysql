@@ -81,20 +81,6 @@ if [[ "${PROXYSQL40:-}" == "1" ]]; then
     if [[ -f plugins/genai/ProxySQL_GenAI_Plugin.so ]]; then
         cp plugins/genai/ProxySQL_GenAI_Plugin.so proxysql-${CURVER}/usr/lib/proxysql/
     fi
-    if [[ ! -f plugins/aws/ProxySQL_Aws_Plugin.so ]]; then
-        echo "ERROR: AWS plugin is missing from the v4 build" >&2
-        exit 1
-    fi
-    cp plugins/aws/ProxySQL_Aws_Plugin.so proxysql-${CURVER}/usr/lib/proxysql/
-    mkdir -p proxysql-${CURVER}/usr/share/doc/proxysql/aws-sdk-cpp
-    for attribution in LICENSE NOTICE THIRD_PARTY_NOTICES.md; do
-        source="deps/aws-sdk-cpp/${attribution}"
-        if [[ ! -s "${source}" ]]; then
-            echo "ERROR: AWS plugin attribution file is missing: ${source}" >&2
-            exit 1
-        fi
-        cp "${source}" proxysql-${CURVER}/usr/share/doc/proxysql/aws-sdk-cpp/
-    done
 fi
 
 # Belt-and-braces: only set with_plugins=1 when at least one .so was
@@ -127,18 +113,11 @@ popd
 if [[ "${PROXYSQL40:-}" == "1" ]]; then
     echo "==> Verifying plugin .so files in package"
     PKG_PATH="/root/rpmbuild/RPMS/${ARCH}/proxysql-${CURVER}-1.${ARCH}.rpm"
-    plugins=(ProxySQL_MySQLX_Plugin.so ProxySQL_GenAI_Plugin.so ProxySQL_Aws_Plugin.so)
-    for plugin in "${plugins[@]}"; do
+    for plugin in ProxySQL_MySQLX_Plugin.so ProxySQL_GenAI_Plugin.so; do
         if rpm -qpl "${PKG_PATH}" 2>/dev/null | grep -q "/usr/lib/proxysql/${plugin}"; then
             echo "  OK   ${plugin}"
         else
             echo "  FAIL ${plugin} not found in package" >&2
-            exit 1
-        fi
-    done
-    for attribution in LICENSE NOTICE THIRD_PARTY_NOTICES.md; do
-        if ! rpm -qpl "${PKG_PATH}" 2>/dev/null | grep -q "/usr/share/doc/proxysql/aws-sdk-cpp/${attribution}"; then
-            echo "  FAIL AWS attribution ${attribution} not found in package" >&2
             exit 1
         fi
     done
@@ -152,8 +131,7 @@ if [[ "${PROXYSQL40:-}" == "1" ]]; then
     pushd "${SMOKE_DIR}" >/dev/null
     rpm2cpio /root/rpmbuild/RPMS/${ARCH}/proxysql-${CURVER}-1.${ARCH}.rpm | cpio -idm 2>/dev/null
     ALL_OK=0
-    plugins=(usr/lib/proxysql/ProxySQL_MySQLX_Plugin.so usr/lib/proxysql/ProxySQL_GenAI_Plugin.so usr/lib/proxysql/ProxySQL_Aws_Plugin.so)
-    for plugin in "${plugins[@]}"; do
+    for plugin in usr/lib/proxysql/ProxySQL_MySQLX_Plugin.so usr/lib/proxysql/ProxySQL_GenAI_Plugin.so; do
         if [[ -f "${plugin}" ]]; then
             if file "${plugin}" | grep -q 'ELF 64-bit.*shared object'; then
                 echo "  OK   ${plugin} (valid ELF shared library)"

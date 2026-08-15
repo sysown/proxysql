@@ -96,26 +96,9 @@ add_plugin_to_pkg() {
         PLUGIN_FILES_BLOCK+=$' plugins/'"${basename}"$' /usr/lib/proxysql/\n'
     fi
 }
-
-add_aws_attribution_to_pkg() {
-    local attribution
-    mkdir -p ./aws-sdk-cpp
-    for attribution in LICENSE NOTICE THIRD_PARTY_NOTICES.md; do
-        local source="../deps/aws-sdk-cpp/${attribution}"
-        if [[ ! -s "${source}" ]]; then
-            echo "ERROR: AWS plugin attribution file is missing: ${source}" >&2
-            exit 1
-        fi
-        cp "${source}" "./aws-sdk-cpp/${attribution}"
-        PLUGIN_FILES_BLOCK+=$' aws-sdk-cpp/'"${attribution}"$' /usr/share/doc/proxysql/aws-sdk-cpp/\n'
-    done
-}
-
 if [[ "${PROXYSQL40:-}" == "1" ]]; then
     add_plugin_to_pkg "../plugins/mysqlx/ProxySQL_MySQLX_Plugin.so" "ProxySQL_MySQLX_Plugin.so"
     add_plugin_to_pkg "../plugins/genai/ProxySQL_GenAI_Plugin.so" "ProxySQL_GenAI_Plugin.so"
-    add_plugin_to_pkg "../plugins/aws/ProxySQL_Aws_Plugin.so" "ProxySQL_Aws_Plugin.so"
-    add_aws_attribution_to_pkg
 fi
 
 # Replace the PKG_PLUGIN_FILES_PLACEHOLDER line with the assembled
@@ -167,18 +150,11 @@ cp tmp/proxysql.sha1 ../binaries/proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.id-ha
 # Verify plugin .so files are present in the package
 if [[ "${PROXYSQL40:-}" == "1" ]]; then
     echo "==> Verifying plugin .so files in package"
-    plugins=(ProxySQL_MySQLX_Plugin.so ProxySQL_GenAI_Plugin.so ProxySQL_Aws_Plugin.so)
-    for plugin in "${plugins[@]}"; do
+    for plugin in ProxySQL_MySQLX_Plugin.so ProxySQL_GenAI_Plugin.so; do
         if dpkg -c "${PKG}" 2>/dev/null | grep -q "/usr/lib/proxysql/${plugin}"; then
             echo "  OK   ${plugin}"
         else
             echo "  FAIL ${plugin} not found in package" >&2
-            exit 1
-        fi
-    done
-    for attribution in LICENSE NOTICE THIRD_PARTY_NOTICES.md; do
-        if ! dpkg -c "${PKG}" 2>/dev/null | grep -q "/usr/share/doc/proxysql/aws-sdk-cpp/${attribution}"; then
-            echo "  FAIL AWS attribution ${attribution} not found in package" >&2
             exit 1
         fi
     done
@@ -191,8 +167,7 @@ if [[ "${PROXYSQL40:-}" == "1" ]]; then
     SMOKE_DIR=$(mktemp -d)
     dpkg-deb -R "${PKG}" "${SMOKE_DIR}"
     ALL_OK=0
-    plugins=(ProxySQL_MySQLX_Plugin.so ProxySQL_GenAI_Plugin.so ProxySQL_Aws_Plugin.so)
-    for plugin in "${plugins[@]}"; do
+    for plugin in ProxySQL_MySQLX_Plugin.so ProxySQL_GenAI_Plugin.so; do
         plugin_path="${SMOKE_DIR}/usr/lib/proxysql/${plugin}"
         if [[ -f "${plugin_path}" ]]; then
             if file "${plugin_path}" | grep -q 'ELF 64-bit.*shared object'; then

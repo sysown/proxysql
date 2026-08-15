@@ -81,9 +81,6 @@ rm -rf %{buildroot}
 %if 0%{?with_plugins}
 %dir /usr/lib/proxysql
 /usr/lib/proxysql/*.so
-%dir /usr/share/doc/proxysql
-%dir /usr/share/doc/proxysql/aws-sdk-cpp
-/usr/share/doc/proxysql/aws-sdk-cpp/*
 %endif
 %config(noreplace) %attr(750,%{name},%{name}) /var/run/%{name}/
 %config(noreplace) %attr(750,%{name},%{name}) /var/lib/%{name}/

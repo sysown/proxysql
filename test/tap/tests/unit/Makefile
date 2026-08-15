@@ -10,28 +10,22 @@
 
 .DEFAULT_GOAL := all
 
-# The AWS SDK must live in the v4-only AWS IAM plugin, never in the core
-# daemon.  Kept as an explicit build-artifact gate because it exercises the
-# actual linker output rather than a source-code convention.
-.PHONY: aws_plugin_linkage-t
-aws_plugin_linkage-t:
+# The public build owns only the provider-neutral IAM core.  Keep an explicit
+# artifact gate because it exercises the actual build output rather than a
+# source-code convention.  Capture nm completely before matching so grep
+# cannot terminate the producer early under pipefail.
+.PHONY: aws_public_provider_boundary-t
+aws_public_provider_boundary-t:
 	@test -x $(PROXYSQL_PATH)/src/proxysql
-	@if nm -C $(PROXYSQL_PATH)/src/proxysql | grep -q 'Aws::'; then \
+	@nm -C $(PROXYSQL_PATH)/src/proxysql > /tmp/proxysql-public.nm
+	@if grep -Fq 'Aws::' /tmp/proxysql-public.nm; then \
 		echo "FAIL: src/proxysql contains AWS C++ SDK symbols" >&2; exit 1; \
 	fi
-	@test -f $(PROXYSQL_PATH)/plugins/aws/ProxySQL_Aws_Plugin.so || { \
-		echo "FAIL: AWS plugin is missing" >&2; exit 1; \
+	@test ! -d $(PROXYSQL_PATH)/plugins/aws || { \
+		echo "FAIL: public tree owns the AWS plugin" >&2; exit 1; \
 	}
-
-# Build the optional, v4-only plugin only for its direct loader test.  Normal
-# SDK-free unit runs never need the vendored AWS SDK or this module.
-.PHONY: aws_plugin_build
-aws_plugin_build:
-	$(MAKE) -C $(PROXYSQL_PATH)/plugins/aws all \
-		PROXYSQL40=1 CC=$(CC) CXX=$(CXX)
-	@nm -C $(PROXYSQL_PATH)/plugins/aws/ProxySQL_Aws_Plugin.so | \
-		grep -q 'Aws::RDS::RDSClient::GenerateConnectAuthToken' || { \
-		echo "FAIL: AWS plugin does not contain the RDS signer" >&2; exit 1; \
+	@test ! -e $(PROXYSQL_PATH)/plugins/aws/ProxySQL_Aws_Plugin.so || { \
+		echo "FAIL: public build produced the AWS plugin" >&2; exit 1; \
 	}
 
 PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd)
@@ -951,11 +945,6 @@ test_aws_iam_backend_auth-t: ../test_aws_iam_backend_auth-t.cpp $(TEST_HELPERS_O
 		$< $(TEST_HELPERS_OBJ) -I$(TEST_HELPERS_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
-
-aws_plugin_load_unit-t: aws_plugin_load_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) aws_plugin_build
-	$(CXX) -DPROXYSQL_AWS_PLUGIN_PATH=\"$(PROXYSQL_PATH)/plugins/aws/ProxySQL_Aws_Plugin.so\" \
-		$< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
-		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 
 ifeq ($(UNAME_S),Linux)
 aws_iam_session_state_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=mysql_real_connect_start -pthread

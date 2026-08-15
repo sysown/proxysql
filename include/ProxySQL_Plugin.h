@@ -234,10 +234,9 @@ struct ProxySQL_PluginRuntimeView {
 using proxysql_plugin_register_runtime_view_cb =
 	bool (*)(const ProxySQL_PluginRuntimeView &);
 
-// ABI-5 extension. The AWS plugin uses these callbacks for its IAM database
-// authentication capability. The source
-// is owned by core after successful installation; `module_handle` is a
-// retained dlopen() reference released only after all session leases drain.
+// ABI-5 extension for optional external IAM database-authentication providers.
+// The source is owned by core after successful installation; `module_handle`
+// is a retained dlopen() reference released only after all session leases drain.
 using proxysql_plugin_install_aws_iam_token_source_cb =
 	bool (*)(AwsIamTokenSource *, void (*)(AwsIamTokenSource *), void *module_handle);
 

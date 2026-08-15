@@ -54,17 +54,7 @@ cp LICENSE README.md "pkgroot/${DIR_NAME}/"
 # rather than ship an incomplete tarball.
 if [[ "${PROXYSQL40:-}" == "1" ]]; then
     mkdir -p "pkgroot/${DIR_NAME}/lib/proxysql"
-    plugins=(plugins/mysqlx/ProxySQL_MySQLX_Plugin.so plugins/genai/ProxySQL_GenAI_Plugin.so plugins/aws/ProxySQL_Aws_Plugin.so)
-    mkdir -p "pkgroot/${DIR_NAME}/share/doc/proxysql/aws-sdk-cpp"
-    for attribution in LICENSE NOTICE THIRD_PARTY_NOTICES.md; do
-        source="deps/aws-sdk-cpp/${attribution}"
-        if [[ ! -s "${source}" ]]; then
-            echo "ERROR: AWS plugin attribution file is missing: ${source}" >&2
-            exit 1
-        fi
-        cp "${source}" "pkgroot/${DIR_NAME}/share/doc/proxysql/aws-sdk-cpp/"
-    done
-    for plugin in "${plugins[@]}"; do
+    for plugin in plugins/mysqlx/ProxySQL_MySQLX_Plugin.so plugins/genai/ProxySQL_GenAI_Plugin.so; do
         if [[ ! -f "${plugin}" ]]; then
             echo "ERROR: PROXYSQL40=1 build but '${plugin}' is missing" >&2
             exit 1

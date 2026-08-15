@@ -7,7 +7,6 @@ PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; don
 include $(PROXYSQL_PATH)/include/makefiles_vars.mk
 include $(PROXYSQL_PATH)/common_mk/openssl_flags.mk
 include $(PROXYSQL_PATH)/common_mk/openssl_version_check.mk
-include $(PROXYSQL_PATH)/common_mk/aws_sdk_cpp_flags.mk
 
 
 # to compile libmariadb_client with support for valgrind enabled, run:
@@ -79,18 +78,11 @@ ifeq ($(PROXYSQL40),1)
 	targets += sqlite-vec
 endif
 
-ifeq ($(PROXYSQL40),1)
-targets += $(AWS_SDK_CPP_RDS_LIB)
-endif
-
 default: $(targets)
 .PHONY: default
 
 
 ### deps targets
-
-AWS_SDK_CPP_DRY_RUN := $(if $(filter n%,$(MAKEFLAGS)),1,0)
-
 
 libinjection/libinjection/src/libinjection.a:
 	cd libinjection && rm -rf libinjection-*/ || true
@@ -221,39 +213,6 @@ $(PROTOBUF_LIB):
 	cd protobuf/protobuf-$(PROTOBUF_VERSION) && CC=${CC} CXX=${CXX} ${MAKE} -C build install
 
 protobuf: $(PROTOBUF_LIB)
-
-
-$(AWS_SDK_CPP_IDENTITY_STAMP):
-	mkdir -p "$(AWS_SDK_CPP_IDENTITY_DIR)"
-	touch "$@"
-
-
-$(AWS_SDK_CPP_RDS_LIB): $(AWS_SDK_CPP_ARCHIVE_PATH) $(AWS_SDK_CPP_CURL_TARGET) \
-		$(AWS_SDK_CPP_BUNDLE_DIR)/aws-sdk-cpp-$(AWS_SDK_CPP_VERSION)-with-crt.sha256 \
-		$(AWS_SDK_CPP_BUNDLE_DIR)/aws-sdk-cpp-$(AWS_SDK_CPP_VERSION)-sources.json \
-		$(AWS_SDK_CPP_BUNDLE_DIR)/build-sdk.cmake \
-		$(AWS_SDK_CPP_IDENTITY_STAMP)
-	cmake \
-		-DAWS_BUNDLE_DIR="$(AWS_SDK_CPP_BUNDLE_DIR)" \
-		-DAWS_ARCHIVE="$(AWS_SDK_CPP_ARCHIVE_PATH)" \
-		-DAWS_SOURCE_DIR="$(AWS_SDK_CPP_SOURCE_DIR)" \
-		-DAWS_BUILD_DIR="$(AWS_SDK_CPP_BUILD_DIR)" \
-		-DAWS_INSTALL_DIR="$(AWS_SDK_CPP_INSTALL_DIR)" \
-		-DAWS_RDS_LIB="$(AWS_SDK_CPP_RDS_LIB)" \
-		-DAWS_CORE_LIB="$(AWS_SDK_CPP_CORE_LIB)" \
-		-DAWS_CURL_INCLUDE_DIR="$(AWS_SDK_CPP_CURL_INCLUDE_DIR)" \
-		-DAWS_CURL_LIBRARY="$(AWS_SDK_CPP_CURL_LIB)" \
-		-DAWS_IDENTITY="$(AWS_SDK_CPP_INPUT_ID)" \
-		-DAWS_LOCK_FILE="$(AWS_SDK_CPP_BUNDLE_DIR)/.build.lock" \
-		-DAWS_DRY_RUN="$(AWS_SDK_CPP_DRY_RUN)" \
-		-DAWS_CC="$(CC)" -DAWS_CXX="$(CXX)" -DAWS_MAKE_COMMAND="$(MAKE)" \
-		-P "$(AWS_SDK_CPP_BUNDLE_DIR)/build-sdk.cmake"
-
-.PHONY: aws_sdk_cpp_clean
-aws_sdk_cpp_clean:
-	rm -rf "$(AWS_SDK_CPP_SOURCE_DIR)"
-	rm -rf "$(AWS_SDK_CPP_IDENTITY_DIR)"
-	rm -f "$(AWS_SDK_CPP_BUNDLE_DIR)/.build.lock"
 
 
 clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:
@@ -491,7 +450,7 @@ cleanpart:
 	cd protobuf && rm -rf protobuf-*/ || true
 .PHONY: cleanpart
 
-cleanall: aws_sdk_cpp_clean
+cleanall:
 	cd libinjection && rm -rf libinjection-*/ || true
 	cd libhttpserver && rm -rf libhttpserver-*/ || true
 	cd libdaemon && rm -rf libdaemon-*/ || true
