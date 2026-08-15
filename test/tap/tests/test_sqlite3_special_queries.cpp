@@ -149,7 +149,10 @@ static void test_direct_deprecate_eof_matrix(const CommandLine& cl, MYSQL* admin
 		const unsigned long long connection_id = connection_id_row && connection_id_row[0]
 			? std::strtoull(connection_id_row[0], &parse_end, 10)
 			: 0;
-		const bool valid_connection_id = connection_id_row && connection_id_row[0]
+		const bool valid_connection_id = connection_id_result
+			&& mysql_num_fields(connection_id_result) == 1
+			&& mysql_num_rows(connection_id_result) == 1
+			&& connection_id_row && connection_id_row[0]
 			&& parse_end && *parse_end == '\0' && connection_id > 0;
 		const unsigned long long expected_connection_id = connected
 			? static_cast<unsigned long long>(mysql_thread_id(proxy))
