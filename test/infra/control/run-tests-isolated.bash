@@ -334,8 +334,23 @@ docker run \
         # when standalone, it runs here.
         collect_coverage() {
             local exit_code=\$?
+            local coverage_exit=0
+            trap - EXIT
+            set +e
             if [ \"\${COVERAGE_MODE}\" = \"1\" ]; then
+                (
+                set -e
+                coverage_failed=0
                 echo \">>> Collecting code coverage data (exit code was: \${exit_code})...\"
+
+                # ProxySQL is a long-running process, so its in-memory counters
+                # are not guaranteed to reach the GCDA files during container
+                # teardown. Dump once after the group and before decoding.
+                echo \">>> Dumping ProxySQL GCOV counters after the test group...\"
+                if ! \"${SCRIPT_DIR}/dump-proxysql-gcov.bash\"; then
+                    echo \">>> ERROR: Failed to dump ProxySQL GCOV counters\" >&2
+                    coverage_failed=1
+                fi
 
                 if [ -d \"/gcov\" ] && [ \"\$(ls -A /gcov 2>/dev/null)\" ]; then
                     # Match .gcno files to .gcda files by basename and copy
@@ -397,7 +412,11 @@ docker run \
                             cd /gcov
                             fastcov -b -j\$(nproc) -l \
                                 -e /usr deps \
-                                -d . -o \"\${coverage_file}\" >> \"\${coverage_log}\" 2>&1 || echo \">>> WARNING: Coverage generation failed (see \${coverage_log})\"
+                                -d . -o \"\${coverage_file}\" >> \"\${coverage_log}\" 2>&1
+                            if [ ! -s \"\${coverage_file}\" ]; then
+                                echo \">>> ERROR: fastcov produced an empty coverage report (see \${coverage_log})\" >&2
+                                exit 1
+                            fi
 
                             if [ -f \"\${coverage_file}\" ]; then
                                 echo \">>> Coverage report generated: \${coverage_file}\"
@@ -440,8 +459,13 @@ docker run \
                 else
                     echo \">>> WARNING: /gcov directory is empty or missing, skipping coverage\"
                 fi
+                exit \${coverage_failed}
+                )
+                coverage_exit=\$?
             fi
-            exit \${exit_code}
+            source "${SCRIPT_DIR}/coverage-exit-status.bash"
+            coverage_exit_status \"\${exit_code}\" \"\${coverage_exit}\"
+            exit \$?
         }
         trap collect_coverage EXIT
 

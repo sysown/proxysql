@@ -129,8 +129,16 @@ jobs:
         test/infra/control/stop-proxysql-isolated.bash || true
         test/infra/control/destroy-infras.bash || true
 
+    - name: Require non-empty simulator coverage LCOV
+      # `disable_search` plus a missing explicit report would make Codecov a
+      # silent no-op. Treat coverage-generation regressions as CI failures,
+      # while keeping Codecov SaaS outages non-blocking below.
+      id: require-lcov
+      if: always()
+      run: test -s ci_infra_logs/${{ env.INFRA_ID }}/coverage-report/${{ env.INFRA_ID }}.info
+
     - name: Upload coverage to Codecov
-      if: ${{ !cancelled() && hashFiles('ci_infra_logs/**/coverage-report/*.info') != '' }}
+      if: always() && steps.require-lcov.outcome == 'success'
       uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # Codecov Action v4
       with:
         codecov_yml_path: codecov.yml
