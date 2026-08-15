@@ -54,6 +54,48 @@ std::vector<std::string> queries {
 	"UPDATE test.ok_packet_cache_test SET c='%s', pad='%s' WHERE id=%d"
 };
 
+long long query_cache_counter(MYSQL* proxy_admin, const char* counter_name) {
+	std::string query {
+		"SELECT Variable_Value FROM stats_mysql_global WHERE Variable_Name='" +
+		std::string(counter_name) + "'"
+	};
+	if (mysql_query(proxy_admin, query.c_str())) {
+		diag("Failed to read query-cache counter '%s': %s", counter_name, mysql_error(proxy_admin));
+		return -1;
+	}
+
+	MYSQL_RES* result = mysql_store_result(proxy_admin);
+	if (!result) {
+		diag("No result while reading query-cache counter '%s': %s", counter_name, mysql_error(proxy_admin));
+		return -1;
+	}
+
+	MYSQL_ROW row = mysql_fetch_row(result);
+	long long value = row && row[0] ? strtoll(row[0], nullptr, 10) : -1;
+	if (value < 0) {
+		diag("Query-cache counter '%s' was not available", counter_name);
+	}
+	mysql_free_result(result);
+	return value;
+}
+
+class QueryRulesRestore {
+public:
+	explicit QueryRulesRestore(MYSQL* proxy_admin) : proxy_admin_(proxy_admin) {}
+	~QueryRulesRestore() { restore(); }
+
+	void restore() {
+		if (proxy_admin_) {
+			mysql_query(proxy_admin_, "LOAD MYSQL QUERY RULES FROM DISK");
+			mysql_query(proxy_admin_, "LOAD MYSQL QUERY RULES TO RUNTIME");
+			proxy_admin_ = nullptr;
+		}
+	}
+
+private:
+	MYSQL* proxy_admin_;
+};
+
 int main(int argc, char** argv) {
 	CommandLine cl;
 
@@ -62,7 +104,7 @@ int main(int argc, char** argv) {
 
 	unsigned int p = 1; // create table
 	p += c_operations; // inserts
-	p += c_operations*12; // 12 tests each time
+	p += c_operations*22; // 22 tests each time
 	plan(p);
 
 	if (cl.getEnv()) {
@@ -100,6 +142,7 @@ int main(int argc, char** argv) {
 
 		return exit_status();
 	}
+	QueryRulesRestore query_rules_restore(proxy_admin);
 
 	vector<pair<string, string>> stored_pairs {};
 
@@ -139,15 +182,13 @@ int main(int argc, char** argv) {
 		" VALUES (1,'%s','%s',%d,%d,%d);"
 	};
 	std::string query_rule {};
-	string_format(t_query_rule, query_rule, cl.username, query_digest.c_str(), 0, 1, 100);
+	string_format(t_query_rule, query_rule, cl.username, query_digest.c_str(), 0, 1, 10000);
 	MYSQL_QUERY(proxy_admin, query_rule.c_str());
 
 	// Load query rules to runtime
 	MYSQL_QUERY(proxy_admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
 	for (auto i = 0; i < c_operations; i++) {
-		int rnd_op = rand() % c_operations;
-
 		const auto id = i + 1;
 		const std::string& t_select_query = queries[0];
 		std::string select_query {};
@@ -185,6 +226,13 @@ int main(int argc, char** argv) {
 			return exec_res;
 		};
 
+		// Start each direction from a known empty cache. The first real client fills
+		// the entry and the incompatible real client must read it, exercising the
+		// EOF-to-OK conversion in the query cache.
+		MYSQL_QUERY(proxy_admin, "PROXYSQL FLUSH MYSQL QUERY CACHE");
+		const long long eof_to_ok_get_ok_before = query_cache_counter(proxy_admin, "Query_Cache_count_GET_OK");
+		const long long eof_to_ok_set_before = query_cache_counter(proxy_admin, "Query_Cache_count_SET");
+
 		// First check that the conversion from EOF to OK packet is working
 		std::string eof_query_res {};
 		std::string eof_query_err {};
@@ -193,6 +241,14 @@ int main(int argc, char** argv) {
 		if (exec_res) {
 			return exit_status();
 		}
+		ok(
+			query_cache_counter(proxy_admin, "Query_Cache_count_SET") == eof_to_ok_set_before + 1,
+			"EOF to OK -> EOF client stores exactly one cache entry"
+		);
+		ok(
+			query_cache_counter(proxy_admin, "Query_Cache_count_GET_OK") == eof_to_ok_get_ok_before,
+			"EOF to OK -> EOF client does not read a cache entry"
+		);
 
 		std::string ok_query_res {};
 		std::string ok_query_err {};
@@ -201,6 +257,14 @@ int main(int argc, char** argv) {
 		if (exec_res) {
 			return exit_status();
 		}
+		ok(
+			query_cache_counter(proxy_admin, "Query_Cache_count_SET") == eof_to_ok_set_before + 1,
+			"EOF to OK -> EOF-deprecation client does not store a second cache entry"
+		);
+		ok(
+			query_cache_counter(proxy_admin, "Query_Cache_count_GET_OK") == eof_to_ok_get_ok_before + 1,
+			"EOF to OK -> EOF-deprecation client reads the cached entry"
+		);
 
 		nlohmann::json eof_query_res_json = nlohmann::json::parse(eof_query_res);
 		nlohmann::json ok_query_res_json = nlohmann::json::parse(ok_query_res);
@@ -247,23 +311,42 @@ int main(int argc, char** argv) {
 			ok_res_warnings
 		);
 
-		// Wait for invalidation of query_cache
-		usleep(110*1000);
+		// Expire no entries by time. Flush explicitly so the reverse direction also
+		// has a guaranteed fill followed by a cache hit.
+		MYSQL_QUERY(proxy_admin, "PROXYSQL FLUSH MYSQL QUERY CACHE");
+		const long long ok_to_eof_get_ok_before = query_cache_counter(proxy_admin, "Query_Cache_count_GET_OK");
+		const long long ok_to_eof_set_before = query_cache_counter(proxy_admin, "Query_Cache_count_SET");
 
 		// Now check that the conversion from OK to EOF packet is working
 		exec_res = ok_query(ok_query_res, ok_query_err);
 
+		ok(exec_res == 0, "'fwd_eof_ok_query' should succeed - ErrCode: '%d', ErrMsg: '%s'", exec_res, ok_query_err.c_str());
 		if (exec_res) {
-			ok(false, "Error: fwd_eof_ok_query failed - ErrCode: '%d', ErrMsg: '%s'", exec_res, ok_query_err.c_str());
 			return exit_status();
 		}
+		ok(
+			query_cache_counter(proxy_admin, "Query_Cache_count_SET") == ok_to_eof_set_before + 1,
+			"OK to EOF -> EOF-deprecation client stores exactly one cache entry"
+		);
+		ok(
+			query_cache_counter(proxy_admin, "Query_Cache_count_GET_OK") == ok_to_eof_get_ok_before,
+			"OK to EOF -> EOF-deprecation client does not read a cache entry"
+		);
 
 		exec_res = eof_query(eof_query_res, eof_query_err);
 
+		ok(exec_res == 0, "'fwd_eof_query' should succeed - ErrCode: '%d', ErrMsg: '%s'", exec_res, eof_query_err.c_str());
 		if (exec_res) {
-			ok(false, "Error: fwd_eof_query failed - ErrCode: '%d', ErrMsg: '%s'", exec_res, eof_query_err.c_str());
 			return exit_status();
 		}
+		ok(
+			query_cache_counter(proxy_admin, "Query_Cache_count_SET") == ok_to_eof_set_before + 1,
+			"OK to EOF -> EOF client does not store a second cache entry"
+		);
+		ok(
+			query_cache_counter(proxy_admin, "Query_Cache_count_GET_OK") == ok_to_eof_get_ok_before + 1,
+			"OK to EOF -> EOF client reads the cached entry"
+		);
 
 		ok_query_res_json = nlohmann::json::parse(ok_query_res);
 		eof_query_res_json = nlohmann::json::parse(eof_query_res);
@@ -311,6 +394,7 @@ int main(int argc, char** argv) {
 		);
 	}
 
+	query_rules_restore.restore();
 	mysql_close(proxy_admin);
 	mysql_close(proxy_mysql);
 
