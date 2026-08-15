@@ -15,6 +15,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <string_view>
 
 extern class PgSQL_Query_Processor* GloPgQPro;
 extern PgSQL_HostGroups_Manager* PgHGM;
@@ -64,6 +65,14 @@ static uint64_t extract_pg_rows_affected(const unsigned char* payload, size_t le
         return 0;
     }
     return rows;
+}
+
+static size_t bounded_cstr_len(const char* s, size_t max_len) {
+    if (s == nullptr || max_len == 0) {
+        return 0;
+    }
+    const void* null_pos = memchr(s, '\0', max_len);
+    return null_pos ? static_cast<const char *>(null_pos) - s : max_len;
 }
 
 PgSQLFFTO::PgSQLFFTO(PgSQL_Session* session)
@@ -160,6 +169,7 @@ void PgSQLFFTO::track_query(std::string query, bool finalize_on_sync) {
         m_current_finalize_on_sync = pending.finalize_on_sync;
         m_affected_rows = 0;
         m_rows_sent = 0;
+        m_response_seen = false;
         m_state = AWAITING_RESPONSE;
         return;
     }
@@ -173,6 +183,7 @@ void PgSQLFFTO::clear_current_query() {
     m_affected_rows = 0;
     m_rows_sent = 0;
     m_current_finalize_on_sync = false;
+    m_response_seen = false;
 }
 
 void PgSQLFFTO::activate_next_query() {
@@ -189,6 +200,7 @@ void PgSQLFFTO::activate_next_query() {
     m_current_finalize_on_sync = next_query.finalize_on_sync;
     m_affected_rows = 0;
     m_rows_sent = 0;
+    m_response_seen = false;
     m_state = AWAITING_RESPONSE;
 }
 
@@ -206,27 +218,27 @@ void PgSQLFFTO::process_client_message(char type, const unsigned char* payload, 
         track_query(std::string(reinterpret_cast<const char*>(payload), query_len), true);
     } else if (type == 'P') {
         const char* p = reinterpret_cast<const char*>(payload);
-        size_t name_len = strnlen(p, len);
+        size_t name_len = bounded_cstr_len(p, len);
         if (name_len >= len) return; // No null terminator
         std::string stmt_name(p, name_len);
         const char* query_ptr = p + name_len + 1;
         size_t rem = len - (name_len + 1);
-        size_t query_text_len = strnlen(query_ptr, rem);
+        size_t query_text_len = bounded_cstr_len(query_ptr, rem);
         if (query_text_len >= rem) return;
         m_statements[stmt_name] = std::string(query_ptr, query_text_len);
     } else if (type == 'B') {
         const char* p = reinterpret_cast<const char*>(payload);
-        size_t portal_len = strnlen(p, len);
+        size_t portal_len = bounded_cstr_len(p, len);
         if (portal_len >= len) return;
         std::string portal_name(p, portal_len);
         const char* stmt_ptr = p + portal_len + 1;
         size_t rem = len - (portal_len + 1);
-        size_t stmt_name_len = strnlen(stmt_ptr, rem);
+        size_t stmt_name_len = bounded_cstr_len(stmt_ptr, rem);
         if (stmt_name_len >= rem) return;
         m_portals[portal_name] = std::string(stmt_ptr, stmt_name_len);
     } else if (type == 'E') {
         const char* p = reinterpret_cast<const char*>(payload);
-        size_t portal_len = strnlen(p, len);
+        size_t portal_len = bounded_cstr_len(p, len);
         if (portal_len >= len) return;
         if (len < portal_len + 1 + 4) return; // portal name + '\0' + max-rows
         std::string portal_name(p, portal_len);
@@ -241,7 +253,7 @@ void PgSQLFFTO::process_client_message(char type, const unsigned char* payload, 
         if (len < 2) return;
         char close_type = static_cast<char>(payload[0]);
         const char* name_ptr = reinterpret_cast<const char*>(payload) + 1;
-        size_t name_len = strnlen(name_ptr, len - 1);
+        size_t name_len = bounded_cstr_len(name_ptr, len - 1);
         if (name_len >= len - 1) return;
         std::string name(name_ptr, name_len);
         if (close_type == 'S') m_statements.erase(name);
@@ -258,11 +270,56 @@ void PgSQLFFTO::process_server_message(char type, const unsigned char* payload, 
         uint64_t rows = extract_pg_rows_affected(payload, len, is_select);
         if (is_select) m_rows_sent += rows;
         else m_affected_rows += rows;
+        m_response_seen = true;
+        if (!m_current_finalize_on_sync) {
+            finalize_current_query();
+        }
+    } else if (type == 'I' || type == 's') {
+        // EmptyQueryResponse ('I') replaces CommandComplete when the query text
+        // is empty once comments/whitespace are stripped, and PortalSuspended
+        // ('s') replaces it when a row-limited Execute stops early. Both
+        // terminate the current query's response just as CommandComplete does,
+        // with no row counts to add. Without this, an extended Execute answered
+        // by either one would never be finalized -- neither branch below fires
+        // for it -- and the stalled query would block the pending queue and
+        // swallow the NEXT query's CommandComplete.
+        //
+        // ProxySQL does not emit PortalSuspended today (Execute's max-rows
+        // field is parsed but never acted on, issue #5900), so 's' is inert
+        // until that is fixed; handling it now costs two lines and avoids
+        // reintroducing the stall when it is.
+        m_response_seen = true;
         if (!m_current_finalize_on_sync) {
             finalize_current_query();
         }
     } else if (type == 'Z') {
-        finalize_current_query();
+        // ReadyForQuery terminates an exchange, and is the finalizer for SIMPLE
+        // queries -- their CommandComplete deliberately does not finalize (see
+        // the m_current_finalize_on_sync check above).
+        //
+        // The qualifying condition is m_response_seen, NOT
+        // m_current_finalize_on_sync. A ReadyForQuery belongs to the exchange
+        // that produced it, but the query that happens to be current when it
+        // arrives may already belong to the NEXT one: a client that pipelines
+        // without reading its replies leaves an earlier exchange's
+        // ReadyForQuery in flight, and an extended CommandComplete can activate
+        // the following queued query before it lands. Finalizing then reports
+        // that query with zeroed counters and pops the queue, so its real
+        // response is attributed to whatever comes after and the last response
+        // in the batch is dropped once the queue drains to IDLE -- silent,
+        // plausible-looking corruption of stats_pgsql_query_digest rather than
+        // an obvious failure.
+        //
+        // Gating on "has this query actually seen its own response terminator"
+        // is correct for every ordering: a simple query that got its
+        // CommandComplete finalizes here as before; an extended Execute has
+        // already finalized itself above and cannot still be current; and a
+        // query still awaiting its first response is left alone for the
+        // CommandComplete that is genuinely its own. An abandoned batch is
+        // still cleared by ErrorResponse ('E' below).
+        if (m_response_seen) {
+            finalize_current_query();
+        }
     } else if (type == 'E') {
         if (!m_current_query.empty() && m_query_start_time != 0) {
             unsigned long long duration = monotonic_time() - m_query_start_time;
@@ -279,7 +336,9 @@ void PgSQLFFTO::report_query_stats(const std::string& query, unsigned long long 
     if (query.empty() || !GloPgQPro || !m_session) return;
     if (!m_session->client_myds || !m_session->client_myds->myconn || !m_session->client_myds->myconn->userinfo) return;
     auto* ui = m_session->client_myds->myconn->userinfo;
-    if (!ui->username || !ui->schemaname) return;
+    if (!ui->username) return;
+    char empty_schema[] = "";
+    char* schemaname = ui->schemaname ? ui->schemaname : empty_schema;
 
     options opts;
     opts.lowercase = pgsql_thread___query_digests_lowercase;
@@ -296,16 +355,22 @@ void PgSQLFFTO::report_query_stats(const std::string& query, unsigned long long 
         ((query.length() < QUERY_DIGEST_BUF) ? qp.buf : NULL), &opts);
     if (digest_text) {
         qp.digest_text = digest_text;
-        const int digest_len = strnlen(digest_text, pgsql_thread___query_digests_max_digest_length);
+		const int digest_len = static_cast<int>(strnlen(digest_text, pgsql_thread___query_digests_max_digest_length));
         qp.digest = SpookyHash::Hash64(digest_text, digest_len, 0);
         char* ca = (char*)"";
         if (pgsql_thread___query_digests_track_hostname && m_session->client_myds->addr.addr) ca = m_session->client_myds->addr.addr;
         uint64_t hash2; SpookyHash myhash; myhash.Init(19, 3);
-        myhash.Update(ui->username, strlen(ui->username));
+        const std::string_view username_view = ui->username ? std::string_view{ui->username} : std::string_view{};
+        const size_t username_len = username_view.size();
+        myhash.Update(username_view.data(), username_len);
         myhash.Update(&qp.digest, sizeof(qp.digest));
-        myhash.Update(ui->schemaname, strlen(ui->schemaname));
+        const std::string_view schemaname_view = schemaname ? std::string_view{schemaname} : std::string_view{};
+        const size_t schemaname_len = schemaname_view.size();
+        myhash.Update(schemaname_view.data(), schemaname_len);
         myhash.Update(&m_session->current_hostgroup, sizeof(m_session->current_hostgroup));
-        myhash.Update(ca, strlen(ca));
+        const std::string_view ca_view = ca ? std::string_view{ca} : std::string_view{};
+        const size_t ca_len = ca_view.size();
+        myhash.Update(ca_view.data(), ca_len);
         myhash.Final(&qp.digest_total, &hash2);
         GloPgQPro->update_query_digest(qp.digest_total, qp.digest, qp.digest_text, m_session->current_hostgroup, ui, duration_us, m_session->thread->curtime, ca, affected_rows, rows_sent);
         if (digest_text != qp.buf) free(digest_text);
@@ -322,7 +387,9 @@ void PgSQLFFTO::report_error(const unsigned char* payload, size_t len) {
     if (!err.parsed) return;
 
     auto* ui = m_session->client_myds->myconn->userinfo;
-    if (!ui->username || !ui->schemaname) return;
+    if (!ui->username) return;
+    /* database/schemaname may be unset early in the session; still record */
+    char* schemaname = ui->schemaname ? ui->schemaname : (char*)"";
 
     // Build a null-terminated copy of the error message
     std::string msg(err.message ? err.message : "", err.message_len);
@@ -348,7 +415,7 @@ void PgSQLFFTO::report_error(const unsigned char* payload, size_t len) {
     // ui->schemaname and ui->dbname are the same field (union in PgSQL_Connection_userinfo)
     PgHGM->add_pgsql_errors(
         hostgroup, hostname, port,
-        ui->username, client_addr, ui->schemaname,
+        ui->username, client_addr, schemaname,
         err.sqlstate, msg.c_str()
     );
 }

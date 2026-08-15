@@ -7,6 +7,7 @@
 #include <memory>
 #include <vector>       // std::vector
 #include <unordered_set>
+#include <cstring>
 
 #include "MySQL_Query_Processor.h"
 #include "PgSQL_Query_Processor.h"
@@ -330,12 +331,14 @@ unsigned int ProxySQL_Admin::ProxySQL_Test___GenerateRandom_mysql_query_rules_fa
 	char * schemaname_buf = (char *)malloc(256);
 	//ui.username = username_buf;
 	//ui.schemaname = schemaname_buf;
+	static const char user_name_prefix[] = "user_name_";
+	static const char schema_name_prefix[] = "shard_name_";
 	if (empty==false) {
-		strcpy(username_buf,"user_name_");
+		memcpy(username_buf, user_name_prefix, sizeof(user_name_prefix));
 	} else {
-		strcpy(username_buf,"");
+		*username_buf = '\0';
 	}
-	strcpy(schemaname_buf,"shard_name_");
+	memcpy(schemaname_buf, schema_name_prefix, sizeof(schema_name_prefix));
 	int _k;
 	for (unsigned int i=0; i<cnt; i++) {
 		_k = fastrand()%117 + 1;
@@ -387,9 +390,9 @@ void ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_generate_many_clus
 	char hostnamebuf2[32];
 	char hostnamebuf3[32];
 	for (int i=1000; i<2000; i++) {
-		sprintf(hostnamebuf1,"hostname%d", i*10+1);
-		sprintf(hostnamebuf2,"hostname%d", i*10+2);
-		sprintf(hostnamebuf3,"hostname%d", i*10+3);
+		snprintf(hostnamebuf1, sizeof(hostnamebuf1), "hostname%d", i*10+1);
+		snprintf(hostnamebuf2, sizeof(hostnamebuf2), "hostname%d", i*10+2);
+		snprintf(hostnamebuf3, sizeof(hostnamebuf3), "hostname%d", i*10+3);
 		rc=(*proxy_sqlite3_bind_int64)(statement1, 1, i*10+1); ASSERT_SQLITE_OK(rc, admindb);
 		rc=(*proxy_sqlite3_bind_text)(statement1, 2, hostnamebuf1, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 		rc=(*proxy_sqlite3_bind_int64)(statement1, 3, 3306); ASSERT_SQLITE_OK(rc, admindb);
@@ -422,9 +425,9 @@ unsigned long long ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_read
 	//for (int j=0 ; j<500; j++) {
 	for (int j=0 ; j<1000; j++) {
 		for (int i=1000; i<2000; i++) {
-			sprintf(hostnamebuf1,"hostname%d", i*10+1);
-			sprintf(hostnamebuf2,"hostname%d", i*10+2);
-			sprintf(hostnamebuf3,"hostname%d", i*10+3);
+			snprintf(hostnamebuf1, sizeof(hostnamebuf1), "hostname%d", i*10+1);
+			snprintf(hostnamebuf2, sizeof(hostnamebuf2), "hostname%d", i*10+2);
+			snprintf(hostnamebuf3, sizeof(hostnamebuf3), "hostname%d", i*10+3);
 			MyHGM->read_only_action_v2( std::list<read_only_server_t> {
 										read_only_server_t { std::string(hostnamebuf1), 3306, 0 },
 										read_only_server_t { std::string(hostnamebuf2), 3306, 1 },
@@ -1389,7 +1392,7 @@ void ProxySQL_Admin::ProxySQL_Test_Handler(ProxySQL_Admin *SPA, S* sess, char *q
 				{
 					char msg[256];
 					unsigned long long d = SPA->ProxySQL_Test___MySQL_HostGroups_Manager_read_only_action();
-					sprintf(msg, "Tested in %llums\n", d);
+					snprintf(msg, sizeof(msg), "Tested in %llums\n", d);
 					SPA->send_ok_msg_to_client(sess, msg, 0, query_no_space);
 					run_query=false;
 				}
@@ -1399,7 +1402,7 @@ void ProxySQL_Admin::ProxySQL_Test_Handler(ProxySQL_Admin *SPA, S* sess, char *q
 				{
 					char msg[256];
 					unsigned long long d = SPA->ProxySQL_Test___MySQL_HostGroups_Manager_HG_lookup();
-					sprintf(msg, "Tested in %llums\n", d);
+					snprintf(msg, sizeof(msg), "Tested in %llums\n", d);
 					SPA->send_ok_msg_to_client(sess, msg, 0, query_no_space);
 					run_query=false;
 				}
@@ -1417,7 +1420,7 @@ void ProxySQL_Admin::ProxySQL_Test_Handler(ProxySQL_Admin *SPA, S* sess, char *q
 					SPA->mysql_servers_wrunlock();
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers to RUNTIME\n");
 					unsigned long long d = SPA->ProxySQL_Test___MySQL_HostGroups_Manager_Balancing_HG5211();
-					sprintf(msg, "Tested in %llums\n", d);
+					snprintf(msg, sizeof(msg), "Tested in %llums\n", d);
 					SPA->mysql_servers_wrlock();
 					SPA->admindb->execute("DELETE FROM mysql_servers WHERE hostgroup_id=5211");
 					SPA->load_mysql_servers_to_runtime();
@@ -1432,7 +1435,7 @@ void ProxySQL_Admin::ProxySQL_Test_Handler(ProxySQL_Admin *SPA, S* sess, char *q
 					// test_arg1: 1 = ON, 0 = OFF
 					char msg[256];
 					GloMyMon->proxytest_forced_timeout = (test_arg1) ? true : false;
-					sprintf(msg, "Monitor task timeout flag is:%s\n", GloMyMon->proxytest_forced_timeout ? "ON" : "OFF");
+					snprintf(msg, sizeof(msg), "Monitor task timeout flag is:%s\n", GloMyMon->proxytest_forced_timeout ? "ON" : "OFF");
 					SPA->send_ok_msg_to_client(sess, msg, 0, query_no_space);
 					run_query = false;
 				}
@@ -1452,7 +1455,7 @@ void ProxySQL_Admin::ProxySQL_Test_Handler(ProxySQL_Admin *SPA, S* sess, char *q
 				uint64_t duration = 0ULL;
 				if (SPA->ProxySQL_Test___CA_Certificate_Load_And_Verify(&duration, test_arg1, GloMTH->variables.ssl_p2s_ca,
 					GloMTH->variables.ssl_p2s_capath)) {
-					sprintf(msg, "Took %lums in loading and verifying CA Certificate for %d times\n", duration, test_arg1);
+					snprintf(msg, sizeof(msg), "Took %llums in loading and verifying CA Certificate for %d times\n", static_cast<unsigned long long>(duration), test_arg1);
 					SPA->send_ok_msg_to_client(sess, msg, 0, query_no_space);
 				}
 				else {

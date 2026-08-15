@@ -2,7 +2,7 @@
 #
 # Path contract (both upload pipelines MUST emit the same shape):
 #
-#   TAP integration (flags tap-*)
+#   TAP integration (flag integration-tests)
 #     test/infra/control/run-tests-isolated.bash normalizes every LCOV SF:
 #     path to repo-root-relative form (lib/MySQL_Monitor.cpp, src/main.cpp,
 #     test/tap/..., include/...).
@@ -34,3 +34,16 @@ fixes:
 # coverage. Keep test/tap/** included -- those are first-party TAP sources.
 ignore:
   - "test/deps/**"
+
+# Flags represent test/binary classes, not individual matrix shards. All TAP
+# groups exercise the same regular ProxySQL daemon and therefore merge under
+# integration-tests. The ASAN unit-test and cluster-simulator binaries use
+# different build flags and remain separate. Keep carryforward disabled:
+# manually dispatched single TAP groups must not appear as complete coverage.
+flags:
+  unit-tests:
+    carryforward: false
+  integration-tests:
+    carryforward: false
+  simulation-tests:
+    carryforward: false

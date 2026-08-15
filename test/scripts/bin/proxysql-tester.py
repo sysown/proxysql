@@ -5,6 +5,7 @@ import json
 import os
 import pymysql
 import sys
+import select
 import subprocess
 import random
 import time
@@ -842,19 +843,42 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
                         sys.exit(1)
                     continue
 
-                # Run test with timeout if specified
+                # Run test with timeout if specified.
+                #
+                # The read has to be non-blocking for tap_timeout to mean
+                # anything. readline() blocks until a full line arrives, so on
+                # a test that hangs while producing no output -- precisely the
+                # case this timeout exists to catch -- the deadline check below
+                # it was simply never reached, and the test ran until CI killed
+                # the job. select() bounds the wait so the check always runs,
+                # and reading raw chunks rather than lines means a test that
+                # stops mid-line cannot wedge us either.
                 try:
                     start_time = time.time()
+                    buf = b''
                     while True:
-                        line = fop.stdout.readline()
-                        if not line and fop.poll() is not None:
-                            break
-                        if line:
-                            log.debug(f"msg: {line.decode('utf-8').strip()}")
-                        
                         if tap_timeout > 0 and (time.time() - start_time) > tap_timeout:
                             raise subprocess.TimeoutExpired(fop.args, tap_timeout)
-                    
+
+                        wait = 1.0
+                        if tap_timeout > 0:
+                            wait = max(0.0, min(1.0, tap_timeout - (time.time() - start_time)))
+                        ready, _, _ = select.select([fop.stdout], [], [], wait)
+
+                        if ready:
+                            chunk = os.read(fop.stdout.fileno(), 65536)
+                            if not chunk:
+                                break                     # EOF: test finished
+                            buf += chunk
+                            while b'\n' in buf:
+                                line, buf = buf.split(b'\n', 1)
+                                log.debug(f"msg: {line.decode('utf-8', 'replace').strip()}")
+                        elif fop.poll() is not None:
+                            break
+
+                    if buf:                               # trailing partial line
+                        log.debug(f"msg: {buf.decode('utf-8', 'replace').strip()}")
+
                     fop.wait()
                 except subprocess.TimeoutExpired:
                     fop.kill()
@@ -862,7 +886,15 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
                     self.padmin_command(f"LOGENTRY '{TAP} test {fo_num+1}/{len(tap_tests)} \'{os.path.basename(fo_cmd)}\' timed out after {tap_timeout} seconds'")
                     # Drain any remaining output
                     for line in fop.stdout:
-                        log.debug(f"msg: {line.decode('utf-8').strip()}")
+                        log.debug(f"msg: {line.decode('utf-8', 'replace').strip()}")
+                    # Reap the child. kill() signals but does not wait, so
+                    # returncode stays None until we do -- and the shared exit
+                    # path below evaluates abs(int(fop.returncode)), which
+                    # raises TypeError on None. That path was unreachable while
+                    # the timeout could never fire; now that it can, a timed-out
+                    # test would abort the whole group instead of failing one
+                    # test. wait() yields -SIGKILL, so the test scores non-zero.
+                    fop.wait()
                 except Exception as e:
                     log.critical(f"TAP test {fo_num+1}/{len(tap_tests)} '{os.path.basename(fo_cmd)}' - test threw an exception !!!: {e}")
                     self.padmin_command(f"LOGENTRY '{TAP} test {fo_num+1}/{len(tap_tests)} \'{os.path.basename(fo_cmd)}\' - test threw an exception !!!'")

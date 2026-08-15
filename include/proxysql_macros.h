@@ -4,7 +4,7 @@
 #define char_malloc (char *)malloc
 #define free_null(__c) { if(__c) { free(__c); (__c)=NULL; } }
 
-#define itostr(__s, __i)  { (__s)=char_malloc(32); sprintf(__s, "%lld", (__i)); }
+#define itostr(__s, __i)  { (__s)=char_malloc(32); snprintf((__s), 32, "%lld", (__i)); }
 
 // fast memory copy forward . Use this instead of memcpy for small buffers
 #define MEM_COPY_FWD(dst_p, src_p, bytes)  \

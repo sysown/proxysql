@@ -11,7 +11,7 @@ Ensure you have [Homebrew](https://brew.sh/) installed.
 Run the following command to install the required build tools and libraries:
 
 ```bash
-brew install automake bzip2 cmake make git gpatch gnutls openssl@3 icu4c pkg-config libiconv zlib
+brew install automake bzip2 cmake make git gpatch gnutls openssl@3 icu4c pkg-config libiconv libtool zlib
 ```
 
 ## Compilation Steps

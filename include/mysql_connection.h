@@ -28,6 +28,10 @@
 
 #include "Servers_SslParams.h"
 
+#ifdef PROXYSQLED25519
+#include "MySQL_Ed25519.h"
+#endif
+
 class Variable {
 public:
 	char *value = (char*)"";
@@ -55,6 +59,8 @@ class MySQL_Connection_userinfo {
 	char *fe_username;
 	MySQL_Connection_userinfo();
 	~MySQL_Connection_userinfo();
+	/** @brief Cleanse and release the owned cleartext password, if present. */
+	void clear_password();
 	void set(char *, char *, char *, char *);
 	void set(MySQL_Connection_userinfo *);
 	bool set_schemaname(char *, int);
@@ -117,6 +123,13 @@ class MySQL_Connection {
 		stmt_execute_metadata_t *stmt_meta;
 	} query;
 	char scramble_buff[40];
+#ifdef PROXYSQLED25519
+	// Challenge for the client_ed25519 Auth Switch. Kept separate from
+	// scramble_buff: the native scramble lives for the whole client
+	// connection and is consumed by later COM_CHANGE_USER / caching_sha2
+	// verifications, so the 32-byte binary nonce must not overwrite it.
+	unsigned char ed25519_nonce[ED25519_NONCE_LEN];
+#endif
 	unsigned long long creation_time;
 	unsigned long long last_time_used;
 	unsigned long long timeout;

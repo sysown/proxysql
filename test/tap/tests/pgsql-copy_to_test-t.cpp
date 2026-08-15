@@ -285,12 +285,12 @@ void testLargeDataVolume(PGconn* admin_conn, PGconn* conn) {
         return;
 
     // Insert a large number of rows
-    for (int i = 0; i < 1000; i++) {
-        char query[256];
-        sprintf(query, "INSERT INTO copy_test (name, value, active, created_at) VALUES ('User%d', %d, %s, NOW())",
-            i, i * 10, (i % 2 == 0) ? "TRUE" : "FALSE");
-        if (!executeQueries(conn, {
-            query
+	for (int i = 0; i < 1000; i++) {
+		char query[256];
+		snprintf(query, sizeof(query), "INSERT INTO copy_test (name, value, active, created_at) VALUES ('User%d', %d, %s, NOW())",
+			i, i * 10, (i % 2 == 0) ? "TRUE" : "FALSE");
+		if (!executeQueries(conn, {
+			query
             }))
             return;
     }

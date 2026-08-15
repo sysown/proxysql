@@ -25,6 +25,19 @@ static void my_itoa(char s[], unsigned long long n)
      reverse(s);
 }
 
+static char *store_or_duplicate_query_digest_value(char *fixed_buf, size_t fixed_buf_len, const char *input) {
+    if (input == NULL) {
+        return NULL;
+    }
+    size_t input_len = std::string_view(input).size();
+    if (input_len < fixed_buf_len) {
+        memcpy(fixed_buf, input, input_len);
+        fixed_buf[input_len] = '\0';
+        return fixed_buf;
+    }
+    return strdup(input);
+}
+
 
 QP_query_digest_stats::QP_query_digest_stats(const char* _user, const char* _schema, uint64_t _digest, const char* _digest_text,
 	int _hid, const char* _client_addr, int query_digests_max_digest_length) {
@@ -33,24 +46,9 @@ QP_query_digest_stats::QP_query_digest_stats(const char* _user, const char* _sch
 	if (_digest_text) {
 		digest_text=strndup(_digest_text, query_digests_max_digest_length);
 	}
-	if (strlen(_user) < sizeof(username_buf)) {
-		strcpy(username_buf, _user);
-		username = username_buf;
-	} else {
-		username = strdup(_user);
-	}
-	if (strlen(_schema) < sizeof(schemaname_buf)) {
-		strcpy(schemaname_buf, _schema);
-		schemaname = schemaname_buf;
-	} else {
-		schemaname = strdup(_schema);
-	}
-	if (strlen(_client_addr) < sizeof(client_address_buf)) {
-		strcpy(client_address_buf, _client_addr);
-		client_address = client_address_buf;
-	} else {
-		client_address = strdup(_client_addr);
-	}
+	username = store_or_duplicate_query_digest_value(username_buf, sizeof(username_buf), _user);
+	schemaname = store_or_duplicate_query_digest_value(schemaname_buf, sizeof(schemaname_buf), _schema);
+	client_address = store_or_duplicate_query_digest_value(client_address_buf, sizeof(client_address_buf), _client_addr);
 	count_star = 0;
 	first_seen = 0;
 	last_seen = 0;
@@ -163,7 +161,7 @@ char **QP_query_digest_stats::get_row(umap_query_digest_text *digest_text_umap, 
 
 	assert(qdsp != NULL);
 	assert(qdsp->digest);
-	sprintf(qdsp->digest,"0x%016llX", (long long unsigned int)digest);
+	snprintf(qdsp->digest, sizeof(qdsp->digest), "0x%016llX", (long long unsigned int)digest);
 	pta[3]=qdsp->digest;
 
 	pta[4] = get_digest_text(digest_text_umap);
@@ -191,10 +189,9 @@ char **QP_query_digest_stats::get_row(umap_query_digest_text *digest_text_umap, 
 	//sprintf(qdsp->max_time,"%llu",max_time);
 	my_itoa(qdsp->max_time,max_time);
 	pta[10]=qdsp->max_time;
-	// we are reverting this back to the use of sprintf instead of my_itoa
-	// because with my_itoa we are losing the sign
-	// see issue #2285
-	sprintf(qdsp->hid,"%d",hid);
+	// Use formatted conversion instead of my_itoa because my_itoa loses the sign.
+	// See issue #2285.
+	snprintf(qdsp->hid, sizeof(qdsp->hid), "%d",hid);
 	//my_itoa(qdsp->hid,hid);
 	pta[11]=qdsp->hid;
 	//sprintf(qdsp->rows_affected,"%llu",rows_affected);

@@ -261,10 +261,12 @@ ifeq ($(UNAME_S),Darwin)
 else
 	cd mariadb-client-library/mariadb_client && cmake . -Wno-dev -DCMAKE_BUILD_TYPE=RelWithDebInfo -DOPENSSL_ROOT_DIR=$(SSL_IDIR) -DOPENSSL_LIBRARIES=$(SSL_LDIR) -DCMAKE_POLICY_VERSION_MINIMUM=3.5 .
 endif
+ifneq ($(UNAME_S),Darwin)
 ifeq ($(PROXYDEBUG),1)
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_context.h.patch
 else ifeq ($(USEVALGRIND),1)
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_context.h.patch
+endif
 endif
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_stmt.c.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_lib.c.patch
@@ -420,7 +422,7 @@ endif
 libusual: libusual/libusual/.libs/libusual.a
 
 
-libscram/lib/libscram.a:postgresql/postgresql/src/interfaces/libpq/libpq.a 
+libscram/lib/libscram.a:postgresql/postgresql/src/interfaces/libpq/libpq.a
 	cd libscram && rm -rf lib/* || true
 	cd libscram && CC=${CC} CXX=${CXX} ${MAKE} LIBOPENSSL_DIR="$(SSL_IDIR)" POSTGRESQL_DIR="$(shell pwd)/postgresql/postgresql/"
 

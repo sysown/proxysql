@@ -29,31 +29,6 @@ EXTRA=""
 [[ "${PROXYSQL40:-}" == "1" ]] && EXTRA="${EXTRA} PROXYSQL40=1"
 [[ "${PROXYSQL31:-}" == "1" ]] && EXTRA="${EXTRA} PROXYSQL31=1"
 
-# The v4.0 chassis tier builds plugins/mysqlx/ which dynamically links the
-# system libprotobuf (3.x). Some v4.0.0 packaging images predate the plugin
-# and do not ship protobuf-devel; install it on demand for RHEL-family.
-# protobuf-devel lives in the CRB repo on AlmaLinux/RHEL 9 (PowerTools on
-# EL8), which is disabled by default, so try enabling those before a plain
-# install.
-if [[ "${PROXYSQL40:-}" == "1" ]] && ! pkg-config --exists protobuf 2>/dev/null; then
-    echo "==> Installing protobuf-devel (required for PROXYSQL40=1 mysqlx plugin build)"
-    if command -v dnf >/dev/null 2>&1; then
-        dnf install -y --enablerepo=crb protobuf-devel \
-            || dnf install -y --enablerepo=powertools protobuf-devel \
-            || dnf install -y protobuf-devel
-    elif command -v yum >/dev/null 2>&1; then
-        yum install -y --enablerepo=powertools protobuf-devel \
-            || yum install -y protobuf-devel
-    else
-        echo "ERROR: cannot install protobuf-devel (neither dnf nor yum present)" >&2
-        exit 1
-    fi
-    if ! pkg-config --exists protobuf 2>/dev/null; then
-        echo "ERROR: protobuf-devel install did not provide a usable protobuf pkg-config" >&2
-        exit 1
-    fi
-fi
-
 deps_target="build_deps_clickhouse"
 build_target="clickhouse"
 

@@ -3183,16 +3183,17 @@ void ProxySQL_Admin::flush_tsdb_variables___runtime_to_database(SQLite3DB *db, b
 		// Bind and execute for query_a
 		rc = (*proxy_sqlite3_bind_text)(u_stmt_a.get(), 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 		rc = (*proxy_sqlite3_bind_text)(u_stmt_a.get(), 2, safe_val, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-		rc = (*proxy_sqlite3_step)(u_stmt_a.get());
-		if (rc != SQLITE_DONE) { ASSERT_SQLITE_OK(rc, db); }
+		// A locked database is a runtime condition, not a programming error:
+		// retry it like every other flush does. Stepping raw and passing the
+		// result to ASSERT_SQLITE_OK() aborted the daemon on SQLITE_BUSY.
+		SAFE_SQLITE3_STEP2(u_stmt_a.get());
 		rc = (*proxy_sqlite3_reset)(u_stmt_a.get()); ASSERT_SQLITE_OK(rc, db);
 		rc = (*proxy_sqlite3_clear_bindings)(u_stmt_a.get()); ASSERT_SQLITE_OK(rc, db);
 
 		if (runtime) {
 			rc = (*proxy_sqlite3_bind_text)(u_stmt_b.get(), 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 			rc = (*proxy_sqlite3_bind_text)(u_stmt_b.get(), 2, safe_val, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-			rc = (*proxy_sqlite3_step)(u_stmt_b.get());
-			if (rc != SQLITE_DONE) { ASSERT_SQLITE_OK(rc, db); }
+			SAFE_SQLITE3_STEP2(u_stmt_b.get());
 			rc = (*proxy_sqlite3_reset)(u_stmt_b.get()); ASSERT_SQLITE_OK(rc, db);
 			rc = (*proxy_sqlite3_clear_bindings)(u_stmt_b.get()); ASSERT_SQLITE_OK(rc, db);
 		}
@@ -3934,11 +3935,14 @@ void ProxySQL_Admin::add_credentials(char *credentials, int hostgroup_id) {
 		
 		if constexpr (pt == SERVER_TYPE_MYSQL) { 
 			if (GloMyAuth) { // this check if required if GloMyAuth doesn't exist yet
-				GloMyAuth->add(user, pass, USERNAME_FRONTEND, 0, hostgroup_id, (char*)"main", 0, 0, 0, 1000, (char*)"", (char*)"");
+				// ADMIN_CRED_SCOPE keeps these out of the mysql_users namespace from
+				// the Innovative tier onward; on the stable tier it is
+				// USERNAME_FRONTEND and behaviour is unchanged. See #5987.
+				GloMyAuth->add(user, pass, ADMIN_CRED_SCOPE, 0, hostgroup_id, (char*)"main", 0, 0, 0, 1000, (char*)"", (char*)"");
 			}
 		} else if constexpr (pt == SERVER_TYPE_PGSQL) {
 			if (GloPgAuth) { // this check if required if GloPgAuth doesn't exist yet
-				GloPgAuth->add(user, pass, USERNAME_FRONTEND, 0, hostgroup_id, 0, 0, 1000, (char*)"", (char*)"");
+				GloPgAuth->add(user, pass, ADMIN_CRED_SCOPE, 0, hostgroup_id, 0, 0, 1000, (char*)"", (char*)"");
 			}
 		}
 
@@ -3966,12 +3970,18 @@ void ProxySQL_Admin::delete_credentials(char *credentials) {
 
 		if constexpr (pt == SERVER_TYPE_MYSQL) {
 			if (GloMyAuth) { // this check if required if GloMyAuth doesn't exist yet
-				GloMyAuth->del(user, USERNAME_FRONTEND);
+				// Deleting from ADMIN_CRED_SCOPE. On the stable tier this is
+				// USERNAME_FRONTEND, so changing admin-admin_credentials still
+				// removes a same-named mysql_users row from the runtime auth map
+				// until the next LOAD MYSQL USERS TO RUNTIME -- the documented
+				// "do not reuse the name" rule. From PROXYSQL31 the scopes are
+				// separate and the two cannot touch each other. See #5987.
+				GloMyAuth->del(user, ADMIN_CRED_SCOPE);
 			}
 		}
 		else if constexpr (pt == SERVER_TYPE_PGSQL) {
 			if (GloPgAuth) { // this check if required if GloPgAuth doesn't exist yet
-				GloPgAuth->del(user, USERNAME_FRONTEND);
+				GloPgAuth->del(user, ADMIN_CRED_SCOPE);
 			}
 		}
 		free(user);

@@ -305,6 +305,93 @@ int test_pass_match(MYSQL* admin, const user_def_t& def) {
 	return EXIT_SUCCESS;
 }
 
+/**
+ * @brief Read a global variable's current value into 'out'.
+ * @return true when the variable was read.
+ */
+static bool read_global_var(MYSQL* admin, const char* name, string& out) {
+	const string q {
+		string("SELECT variable_value FROM global_variables WHERE variable_name='") + name + "'"
+	};
+	if (mysql_query(admin, q.c_str())) { return false; }
+	MYSQL_RES* r = mysql_store_result(admin);
+	if (r == NULL) { return false; }
+	MYSQL_ROW row = mysql_fetch_row(r);
+	const bool found = (row != NULL && row[0] != NULL);
+	if (found) { out = row[0]; }
+	mysql_free_result(r);
+	return found;
+}
+
+/**
+ * @brief Store a CACHING_SHA2_PASSWORD() hash in 'admin-admin_credentials' and
+ *   authenticate against the Admin interface with it.
+ * @details This is the round trip the generation-side fix in #5990 exists to
+ *   protect: it is not enough for CACHING_SHA2_PASSWORD() to return a well-formed
+ *   string, the string has to survive being stored as an Admin credential and
+ *   then actually let a client in.
+ *
+ *   The hash is produced and appended entirely inside SQL, so it never passes
+ *   through this process -- a hash carrying a control byte cannot be round-tripped
+ *   through a client-side buffer reliably, and 'SET admin-admin_credentials=...'
+ *   silently ignores such a value, leaving the old one in place.
+ *
+ *   TLS is mandatory. With only a hash stored, caching_sha2_password cannot
+ *   complete by fast auth, so the client must return the cleartext over a secure
+ *   channel; ProxySQL does not serve an RSA public key (#5988).
+ *
+ * @param salt_arg Extra argument list for CACHING_SHA2_PASSWORD(), already
+ *   SQL-quoted and comma-prefixed, or "" for the one-argument form.
+ * @return the connection errno: 0 on success.
+ */
+static unsigned int admin_cred_roundtrip(
+	MYSQL* admin, const CommandLine& cl, const string& user, const string& pass,
+	const string& salt_arg
+) {
+	string orig_creds {};
+	if (!read_global_var(admin, "admin-admin_credentials", orig_creds)) {
+		diag("  could not read admin-admin_credentials");
+		return 0xFFFF;
+	}
+
+	const string add {
+		"UPDATE global_variables SET variable_value = variable_value || ';" + user + ":' || "
+		"CACHING_SHA2_PASSWORD('" + pass + "'" + salt_arg + ") "
+		"WHERE variable_name='admin-admin_credentials'"
+	};
+	if (mysql_query(admin, add.c_str()) || mysql_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME")) {
+		diag("  failed to install the credential: %s", mysql_error(admin));
+		return 0xFFFF;
+	}
+
+	MYSQL* conn = mysql_init(NULL);
+	unsigned int err = 0;
+	if (conn != NULL) {
+		// The TAP suite links MariaDB Connector/C, which has no MYSQL_OPT_SSL_MODE;
+		// mysql_ssl_set + CLIENT_SSL is the idiom used elsewhere in these tests.
+		mysql_ssl_set(conn, NULL, NULL, NULL, NULL, NULL);
+		if (!mysql_real_connect(conn, cl.admin_host, user.c_str(), pass.c_str(), NULL,
+				cl.admin_port, NULL, CLIENT_SSL)) {
+			err = mysql_errno(conn);
+			diag("  admin login user='%s' -> errno=%u '%s'", user.c_str(), err, mysql_error(conn));
+		}
+		mysql_close(conn);
+	} else {
+		err = 0xFFFF;
+	}
+
+	// Put back exactly what was there; this runs against a shared instance.
+	const string restore {
+		"UPDATE global_variables SET variable_value='" + orig_creds +
+		"' WHERE variable_name='admin-admin_credentials'"
+	};
+	if (mysql_query(admin, restore.c_str()) || mysql_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME")) {
+		diag("  WARNING: failed to restore admin-admin_credentials: %s", mysql_error(admin));
+	}
+
+	return err;
+}
+
 int test_pass_gen(MYSQL* admin, const string& auth, const string& pass, const string& salt) {
 	diag("Test Admin pass hash gen    auth:'%s',pass:'%s'", auth.c_str(), pass.c_str());
 
@@ -343,7 +430,11 @@ int test_pass_gen(MYSQL* admin, const string& auth, const string& pass, const st
 		MYSQL_RES* myres = mysql_store_result(admin);
 		MYSQL_ROW myrow = mysql_fetch_row(myres);
 
-		if (pass.size() > 0 && salt.size() > 0 && salt.size() <= 20) {
+		// An explicitly supplied salt must be EXACTLY 20 bytes: the stored
+		// '$A$rrr$' format has no delimiter after the salt, so verification reads
+		// it back positionally with substr(7,20). Any other length is rejected at
+		// generation with "Invalid argument size" (handled by the else branch).
+		if (pass.size() > 0 && salt.size() == 20) {
 			const string admin_hash { myrow[0] };
 			const string hash_start { "$A$005$" + salt };
 
@@ -433,12 +524,37 @@ const vector<inv_input_t> INV_INPUTS {
 	{ "SELECT CACHING_SHA2_PASSWORD(2, '00')", 0, "Invalid argument type" },
 	{ "SELECT CACHING_SHA2_PASSWORD('00', 2)", 0, "Invalid argument type" },
 	{ "SELECT CACHING_SHA2_PASSWORD('00', '00', '00')", 0, "Invalid argument type" },
-	{ "SELECT CACHING_SHA2_PASSWORD('00', '00', 1000)", 0,
+	// NOTE: these three exercise the ROUNDS validation, so the salt must be a
+	// valid 20 bytes -- lengths are checked before rounds, and a short salt would
+	// short-circuit with "Invalid argument size" and stop testing rounds at all.
+	{ "SELECT CACHING_SHA2_PASSWORD('00', '00000000000000000000', 1000)", 0,
 		"Invalid rounds: expected multiple of 1000 in [5000,4095000]" },
-	{ "SELECT CACHING_SHA2_PASSWORD('00', '00', 5500)", 0,
+	{ "SELECT CACHING_SHA2_PASSWORD('00', '00000000000000000000', 5500)", 0,
 		"Invalid rounds: expected multiple of 1000 in [5000,4095000]" },
-	{ "SELECT CACHING_SHA2_PASSWORD('00', '00', 4096000)", 0,
+	{ "SELECT CACHING_SHA2_PASSWORD('00', '00000000000000000000', 4096000)", 0,
 		"Invalid rounds: expected multiple of 1000 in [5000,4095000]" },
+
+	// An explicitly supplied salt must be EXACTLY 20 bytes. Anything shorter used
+	// to be accepted and produced a hash that could never authenticate: the stored
+	// '$A$rrr$' format has no delimiter after the salt, so verification reads it
+	// back positionally with substr(7,20) and picks up digest bytes as salt. The
+	// credential stored without error and every login failed with a generic
+	// 'Access denied'.
+	{ "SELECT CACHING_SHA2_PASSWORD('somepass', '0')", 0, "Invalid argument size" },
+	{ "SELECT CACHING_SHA2_PASSWORD('somepass', '0123456789')", 0, "Invalid argument size" },
+	{ "SELECT CACHING_SHA2_PASSWORD('somepass', '0123456789012345678')", 0, "Invalid argument size" },
+	{ "SELECT CACHING_SHA2_PASSWORD('somepass', '012345678901234567890')", 0, "Invalid argument size" },
+
+	// A 20-byte salt containing an embedded NUL is the right LENGTH but is equally
+	// unusable: the salt is appended with strcat(), which stops at the NUL, while
+	// the digest offset is computed from the declared salt_size. The resulting hash
+	// is malformed and cannot authenticate -- silently, just like a short salt.
+	// X'00...' is a 20-byte BLOB whose first byte is NUL.
+	{ "SELECT CACHING_SHA2_PASSWORD('somepass', X'000102030405060708090A0B0C0D0E0F10111213')", 0,
+		"Invalid salt: must not contain NUL bytes" },
+	// ...and one with the NUL in the middle, so it is not simply an empty-string case.
+	{ "SELECT CACHING_SHA2_PASSWORD('somepass', X'01020304050607080900000C0D0E0F1011121314')", 0,
+		"Invalid salt: must not contain NUL bytes" },
 };
 
 
@@ -503,7 +619,8 @@ int main(int argc, char** argv) {
 	uint32_t actual_test_count =
 		INV_INPUTS.size() +           // Always run
 		PASS_GEN_COUNT * 2 +           // Always run (ProxySQL Admin SQLite3 extensions)
-		2;                             // EXTRA: Two extra correctness tests
+		8;                             // EXTRA: 2 forced-randomness + 2 salt-alphabet (#5989)
+		                               //      + 1 legacy-salt + 3 Admin credential round trips
 
 	if (g_mysql_supports_random_password) {
 		// Phase 2: MySQL/Admin hash compatibility tests (USER_GEN_COUNT total,
@@ -531,6 +648,18 @@ int main(int argc, char** argv) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
 	}
+
+	// Saved here, restored once at 'cleanup:'. This test switches
+	// 'mysql-default_authentication_plugin' in two places -- the Admin credential
+	// round trip below, and the Phase 3 end-to-end loop -- and it runs against a
+	// shared instance, so the value has to be put back on every exit path,
+	// including the 'goto cleanup' ones. Declared before the first goto so the
+	// jumps do not cross its initialisation.
+	string orig_auth_plugin {};
+	const bool have_auth_plugin =
+		read_global_var(admin, "mysql-default_authentication_plugin", orig_auth_plugin);
+	diag("Saved mysql-default_authentication_plugin='%s'%s",
+		orig_auth_plugin.c_str(), have_auth_plugin ? "" : " (UNREADABLE - will not be restored)");
 
 	// Tests functions input verification
 	{
@@ -601,6 +730,149 @@ int main(int argc, char** argv) {
 		test_pass_gen(admin, "mysql_native_password", "randpass0", "");
 		test_pass_gen(admin, "caching_sha2_password", "randpass0", "00000000000000000000");
 
+		// EXTRA: auto-generated salts must stay inside a credential-safe alphabet.
+		//
+		// Issue #5989: the salt used to be RAND_bytes() masked with 0x7f, bumping only
+		// '\0' and '$'. That produced ';' or ':' in ~27% of hashes, and those are the
+		// separators parsed by ProxySQL_Admin::add_credentials(), so such a hash is
+		// silently split into a bogus credential when stored in
+		// admin-admin_credentials / admin-stats_credentials -- the variable still
+		// reports all 70 bytes and nothing errors, but the login fails with a generic
+		// 'Access denied'. It also emitted control bytes, which are unusable in a
+		// config file. Salts are now drawn from a 64-character alphabet.
+		//
+		// Only the 1-argument form is checked: an explicitly supplied salt is passed
+		// through verbatim by design and is the caller's responsibility.
+		{
+			const string SALT_ALPHABET {
+				"./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+			};
+			const size_t SALT_SAMPLES = 500;
+
+			size_t bad_alphabet = 0, bad_shape = 0;
+			string first_bad {};
+
+			for (size_t i = 0; i < SALT_SAMPLES; i++) {
+				MYSQL_QUERY_T(admin, "SELECT CACHING_SHA2_PASSWORD('randpass0')");
+				MYSQL_RES* myres = mysql_store_result(admin);
+				MYSQL_ROW myrow = mysql_fetch_row(myres);
+				const string h { myrow[0] ? myrow[0] : "" };
+				mysql_free_result(myres);
+
+				// '$A$' + 3 rounds digits + '$' + 20 salt + 43 digest
+				if (h.size() != 70 || h.rfind("$A$", 0) != 0) {
+					bad_shape++;
+					if (first_bad.empty()) { first_bad = h; }
+					continue;
+				}
+
+				const string salt { h.substr(7, 20) };
+				if (salt.find_first_not_of(SALT_ALPHABET) != string::npos) {
+					bad_alphabet++;
+					if (first_bad.empty()) { first_bad = h; }
+				}
+			}
+
+			ok(
+				bad_shape == 0,
+				"Generated hashes should be wellformed   samples:'%lu', malformed:'%lu', first:'%s'",
+				SALT_SAMPLES, bad_shape, first_bad.c_str()
+			);
+			ok(
+				bad_alphabet == 0,
+				"Generated salts should use the credential-safe alphabet (issue #5989)   "
+				"samples:'%lu', offending:'%lu', first:'%s'",
+				SALT_SAMPLES, bad_alphabet, first_bad.c_str()
+			);
+		}
+
+		// EXTRA: a hash generated with the pre-#5989 salt style must still verify.
+		// The fix is generation-side only; PPHR_verify_sha2()/PPHR_sha2full() read the
+		// salt back with substr(7,20) and never inspect it, so previously stored hashes
+		// keep working. Passing the salt explicitly reproduces the old output exactly.
+		// NOTE: the literal is split so each \x escape terminates. C++ hex escapes are
+		// greedy, so "\x02defghijklmnop" would parse \x02def as a single escape.
+		// It is exactly 20 bytes, the stored-salt length that substr(7,20) reads back,
+		// so this reproduces a real pre-fix hash rather than a shorter approximation.
+		const string LEGACY_STYLE_SALT { "a;b:c" "\x01" "\x02" "defghijklmnop" };
+		assert(LEGACY_STYLE_SALT.size() == 20);
+		test_pass_gen(admin, "caching_sha2_password", "randpass0", LEGACY_STYLE_SALT);
+
+		// EXTRA: the Admin credential ROUND TRIP -- the property #5990 actually
+		// protects. A well-formed hash is not enough; it has to survive being stored
+		// in 'admin-admin_credentials' and still authenticate a client.
+		{
+			// The default authentication plugin must be caching_sha2_password for the
+			// Admin interface to challenge with it. The original value was saved right
+			// after the Admin connection and is restored once at 'cleanup:'.
+			MYSQL_QUERY_T(admin,
+				"UPDATE global_variables SET variable_value='caching_sha2_password' "
+				"WHERE variable_name='mysql-default_authentication_plugin'");
+			MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+
+			// 1-argument form: the salt is generated, so this is what the #5990 fix
+			// changes. Before the fix a generated salt contained ';' or ':' -- the
+			// separators parsed by ProxySQL_Admin::add_credentials() -- for roughly 27%
+			// of hashes, which silently split the credential and produced a generic
+			// 'Access denied'.
+			//
+			// REPEATED DELIBERATELY. A single round trip would still succeed ~73% of the
+			// time against the unfixed generator, making it useless as a regression
+			// detector. At 25 samples the chance of an unfixed build passing is
+			// 0.73^25, under 0.1%.
+			const size_t ROUNDTRIP_SAMPLES = 25;
+			size_t roundtrip_failures = 0;
+			unsigned int first_err = 0;
+			for (size_t i = 0; i < ROUNDTRIP_SAMPLES; i++) {
+				const unsigned int e =
+					admin_cred_roundtrip(admin, cl, "cs2gen", "roundtrippass", "");
+				if (e != 0) {
+					roundtrip_failures++;
+					if (first_err == 0) { first_err = e; }
+				}
+			}
+			ok(
+				roundtrip_failures == 0,
+				"Generated CACHING_SHA2_PASSWORD() hashes should authenticate as Admin "
+				"credentials (issue #5989/#5990)   samples:'%lu', failures:'%lu', first errno:'%u'",
+				ROUNDTRIP_SAMPLES, roundtrip_failures, first_err
+			);
+
+			// Legacy-style salt: outside the new 64-character alphabet, proving the fix
+			// is generation-side only and previously stored hashes still verify.
+			// It deliberately avoids ';' and ':' -- a salt containing those cannot round
+			// trip through admin-admin_credentials at all, which IS #5989 and is covered
+			// by the alphabet assertions above rather than here.
+			const string LEGACY_SAFE_SALT { "!#%&()*+,-<=>?@[]^_~" };
+			assert(LEGACY_SAFE_SALT.size() == 20);
+			assert(LEGACY_SAFE_SALT.find_first_of(";:") == string::npos);
+			const unsigned int legacy_err = admin_cred_roundtrip(
+				admin, cl, "cs2legacy", "roundtrippass", ",'" + LEGACY_SAFE_SALT + "'"
+			);
+			ok(
+				legacy_err == 0,
+				"A legacy-style (pre-#5990 alphabet) hash should still authenticate as an "
+				"Admin credential   salt:'%s', errno:'%u'",
+				LEGACY_SAFE_SALT.c_str(), legacy_err
+			);
+
+			// NEGATIVE CONTROL. Everything above only proves something if this round
+			// trip can actually detect a corrupted credential. Feed it a salt carrying
+			// the ';' separator -- exactly what the pre-#5990 generator emitted ~27% of
+			// the time -- and the login MUST fail. If this ever starts passing, the two
+			// assertions above have gone vacuous and are no longer testing #5989/#5990.
+			const unsigned int control_err = admin_cred_roundtrip(
+				admin, cl, "cs2ctl", "roundtrippass", ",'abc;def:ghijklmnopq'"
+			);
+			ok(
+				control_err != 0,
+				"CONTROL: a salt containing the ';' credential separator must NOT "
+				"authenticate -- proves the round trip above can detect the #5989 "
+				"corruption   errno:'%u'",
+				control_err
+			);
+		}
+
 		for (size_t i = 0; i < PASS_GEN_COUNT; i++) {
 			const uint32_t pass_len = rand() % 150;
 			const string pass { random_string(pass_len) };
@@ -608,11 +880,31 @@ int main(int argc, char** argv) {
 			test_pass_gen(admin, "mysql_native_password", pass, "");
 		}
 
+		// Salt lengths are now exercised deliberately rather than at random: an
+		// explicit salt must be exactly 20 bytes, so alternate between a valid
+		// 20-byte salt (hash must be wellformed) and a random invalid length (must
+		// be rejected with "Invalid argument size"). Both outcomes are asserted by
+		// test_pass_gen().
+		//
+		// This also replaces a long-standing copy/paste bug: 'salt_len' was computed
+		// as 'rand() % 20' and then never used -- the salt was built with
+		// 'random_string(pass_len)', so it tracked the PASSWORD length (0..149) and
+		// the intended salt-length sweep never happened.
 		for (size_t i = 0; i < PASS_GEN_COUNT; i++) {
 			const uint32_t pass_len = rand() % 150;
-			const uint32_t salt_len = rand() % 20;
 			const string pass { random_string(pass_len) };
-			const string salt { random_string(pass_len) };
+
+			// No PRNG here on purpose. A random length adds nothing -- the property
+			// under test is "exactly 20 is accepted, anything else is rejected" --
+			// and both rand() and <random> trip SonarCloud (cpp:S5020, cpp:S2245).
+			// A fixed sweep is fully deterministic and covers the boundaries
+			// explicitly: 0, 1, 19, 21, 40 and a few in between.
+			static const uint32_t INVALID_SALT_LENS[] = { 0, 1, 2, 19, 21, 22, 40, 64 };
+			uint32_t salt_len = 20;
+			if (i % 2 == 1) {
+				salt_len = INVALID_SALT_LENS[(i / 2) % (sizeof(INVALID_SALT_LENS) / sizeof(INVALID_SALT_LENS[0]))];
+			}
+			const string salt { random_string(salt_len) };
 
 			test_pass_gen(admin, "caching_sha2_password", pass, salt);
 		}
@@ -735,6 +1027,21 @@ int main(int argc, char** argv) {
 	}
 
 cleanup:
+
+	// Put the authentication plugin back. Both the Admin credential round trip and
+	// the Phase 3 end-to-end loop change it; without this the test leaves a shared
+	// instance on whatever it happened to set last.
+	if (have_auth_plugin) {
+		const string restore_plugin {
+			"UPDATE global_variables SET variable_value='" + orig_auth_plugin +
+			"' WHERE variable_name='mysql-default_authentication_plugin'"
+		};
+		if (mysql_query(admin, restore_plugin.c_str()) ||
+			mysql_query(admin, "LOAD MYSQL VARIABLES TO RUNTIME")) {
+			diag("WARNING: failed to restore mysql-default_authentication_plugin: %s",
+				mysql_error(admin));
+		}
+	}
 
 	mysql_close(mysql);
 	mysql_close(admin);

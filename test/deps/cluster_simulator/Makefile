@@ -90,7 +90,7 @@ debug: cluster_simulator
 
 .PHONY: clean
 clean:
-	rm -f cluster_simulator
+	rm -f cluster_simulator common_utils_unit-t
 	rm -rf $(UTILSLDIR)
 
 
@@ -130,3 +130,10 @@ $(TAP_LDIR)/libtap.so:
 
 cluster_simulator: cluster_simulator.cpp $(UTILSLDIR)/cluster_simulator_lib.a $(TAP_LDIR)/libtap.so
 	$(CXX) -o $@ $(OBJ) cluster_simulator.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) $(UTILSLDIR)/cluster_simulator_lib.a
+
+common_utils_unit-t: tests/common_utils_unit-t.cpp $(UTILSLDIR)/common_utils.o $(TAP_LDIR)/libtap.so
+	$(CXX) -o $@ $(OBJ) tests/common_utils_unit-t.cpp $(UTILSLDIR)/common_utils.o $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS)
+
+.PHONY: check
+check: common_utils_unit-t
+	LD_LIBRARY_PATH="$(TAP_LDIR):$${LD_LIBRARY_PATH:-}" ./common_utils_unit-t

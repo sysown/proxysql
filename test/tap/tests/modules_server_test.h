@@ -79,6 +79,13 @@ int extract_module_host_port(MYSQL* proxysql_admin, const std::string varname, s
 		return res;
 	}
 
+	// Module interfaces may contain multiple listeners. Existing tests using
+	// this helper connect to the first TCP listener.
+	const std::string::size_type first_iface_end = module_ifaces.find(";");
+	if (first_iface_end != std::string::npos) {
+		module_ifaces.erase(first_iface_end);
+	}
+
 	// Extract the correct port to connect to MODULE server
 	std::string::size_type colon_pos = module_ifaces.find(":");
 	if (colon_pos == std::string::npos) {
