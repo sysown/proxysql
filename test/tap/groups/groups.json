@@ -300,6 +300,7 @@
   "reg_test_5790-mariadb_collation_255-t" : [ "mariadb10-galera-g1" ],
   "reg_test_5977_fast_forward_unix_socket_compression-t" : [ "legacy-g9" ],
   "reg_test_5988-caching_sha2_rsa-t" : [ "no-infra-g1","@proxysql_min_version:3.1" ],
+  "reg_test_6010_admin_mysqldump_set-t" : [ "mysql84-g1" ],
   "reg_test__ssl_client_busy_wait-t" : [ "legacy-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2","mysql84-g2","mysql90-g2","mysql95-g2" ],
   "reg_test_com_change_user_malformed_packet-t" : [ "mysql84-g6","mysql95-g1" ],
   "reg_test_compression_split_packets-t" : [ "legacy-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2","mysql84-g2","mysql90-g2","mysql95-g2" ],
