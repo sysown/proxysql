@@ -202,7 +202,7 @@ const AwsLocalitySnapshotEntry* lookup(
 } // namespace
 
 int main() {
-	plan(44);
+	plan(49);
 
 	auto provider_state = std::make_shared<FakeProviderState>();
 	ok(install_global_aws_metadata_provider(
@@ -411,9 +411,10 @@ int main() {
 
 	MySQLAwsLocalityManager absent_provider_manager(manager_config);
 	const auto absent_endpoint = "db-absent.abcdefghijkl.us-east-1.rds.amazonaws.com";
-	absent_provider_manager.configure({
-		make_hostgroup(20, 2.0, 4.0, 300, 1800, {absent_endpoint}),
-	});
+	auto absent_hostgroup =
+		make_hostgroup(20, 2.0, 4.0, 300, 1800, {absent_endpoint});
+	absent_hostgroup.backends[0].configured_weight = 37;
+	absent_provider_manager.configure({std::move(absent_hostgroup)});
 	absent_provider_manager.set_enabled(true);
 	ok(wait_until([&] {
 		const auto current = absent_provider_manager.snapshot();
@@ -421,6 +422,12 @@ int main() {
 		return entry && entry->status == AwsLocalityMetadataStatus::error &&
 			entry->failure_category == "provider_unavailable";
 	}), "missing plugin provider is reported with a fixed neutral category");
+	const auto absent_snapshot = absent_provider_manager.snapshot();
+	const auto* absent_entry = lookup(absent_snapshot, 20, absent_endpoint);
+	ok(absent_entry != nullptr && absent_entry->configured_weight == 37 &&
+		absent_entry->multiplier == 1.0 &&
+		absent_snapshot->effective_weight(20, absent_endpoint, 3306, 37) == 37,
+		"missing provider preserves configured and effective neutral weights");
 
 	auto replacement_state = std::make_shared<FakeProviderState>();
 	ok(install_global_aws_metadata_provider(
@@ -633,8 +640,38 @@ int main() {
 		path_entry != nullptr && ipv6_entry->configured_weight == 7 &&
 		path_entry->configured_weight == 9,
 		"rejected DNS spellings retain distinct snapshot identities");
+	invalid_identity_manager.shutdown();
 
-	shutdown_global_aws_metadata_provider();
+	const size_t lease_drain_request_count = requests_copy(replacement_state).size();
+	MySQLAwsLocalityManager lease_drain_manager(manager_config);
+	lease_drain_manager.configure({
+		make_hostgroup(600, 2.0, 4.0, 300, 1800,
+			{"db-drain.abcdefghijkl.us-east-2.rds.amazonaws.com"}),
+	});
+	lease_drain_manager.set_enabled(true);
+	ok(wait_for_request_count(replacement_state, lease_drain_request_count + 2),
+		"enabled manager retains the installed provider during discovery");
+	std::atomic<bool> unload_done { false };
+	std::thread unload_thread([&] {
+		shutdown_global_aws_metadata_provider();
+		unload_done.store(true);
+	});
+	ok(wait_until([&] {
+		return !acquire_global_aws_metadata_provider();
+	}) && !unload_done.load(),
+		"provider unload rejects new leases while the manager lease is active");
+	lease_drain_manager.set_enabled(false);
+	unload_thread.join();
+	ok(unload_done.load() && replacement_state->shut_down &&
+		replacement_state->destroyed,
+		"disabling locality drains the manager lease before provider destruction");
+	const size_t requests_after_unload = requests_copy(replacement_state).size();
+	lease_drain_manager.shutdown();
+	lease_drain_manager.set_enabled(true);
+	lease_drain_manager.request_refresh();
+	std::this_thread::sleep_for(20ms);
+	ok(requests_copy(replacement_state).size() == requests_after_unload,
+		"manager shutdown leaves no locality worker able to restart provider work");
 
 	return exit_status();
 }

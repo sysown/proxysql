@@ -103,7 +103,7 @@ All types are defined in `include/ProxySQL_Plugin.h`:
 ```cpp
 struct ProxySQL_PluginDescriptor {
     const char *name;                         // Human-readable plugin name
-    uint32_t abi_version;                     // PROXYSQL_PLUGIN_ABI_VERSION (1 through 5)
+    uint32_t abi_version;                     // PROXYSQL_PLUGIN_ABI_VERSION (1 through 8)
     proxysql_plugin_init_cb init;             // bool (*)(ProxySQL_PluginServices *)
     proxysql_plugin_start_cb start;           // bool (*)()
     proxysql_plugin_stop_cb stop;             // bool (*)()
@@ -115,7 +115,7 @@ struct ProxySQL_PluginDescriptor {
 | Field              | Type          | Description                                               |
 |--------------------|---------------|-----------------------------------------------------------|
 | `name`             | `const char*` | Plugin identifier, used in logging.                        |
-| `abi_version`      | `uint32_t`    | Set from `PROXYSQL_PLUGIN_ABI_VERSION`.  Value `1` = pre-chassis descriptor (six fields).  Value `2` = adds `register_schemas` (four-phase lifecycle).  Value `3` = `ProxySQL_PluginServices` adds `register_runtime_view`; ABI 4 adds `db_kind` to that view; ABI 5 adds the AWS IAM provider callbacks.  A v3/v3.1 core rejects `abi_version > 1`; the current PROXYSQL40 core accepts `[1, 5]`. |
+| `abi_version`      | `uint32_t`    | Set from `PROXYSQL_PLUGIN_ABI_VERSION`. Value `1` is the pre-chassis six-field descriptor; ABI 2 adds `register_schemas`; ABI 3 adds `register_runtime_view`; ABI 4 adds the view's `db_kind`; ABI 5 adds IAM provider install/limits; ABI 6 adds metadata-provider install; ABI 7 adds the MySQL locality projection callback; ABI 8 adds IAM provider rollback. A v3/v3.1 core rejects `abi_version > 1`; the current PROXYSQL40 core accepts `[1, 8]`. |
 | `init`             | callback      | Phase D — called with live services; register tables and commands here (or finish context setup if `register_schemas` already did it). |
 | `start`            | callback      | Phase E — start threads, open sockets, load config.        |
 | `stop`             | callback      | Called on shutdown.  Pairs with `init`, not `start`: if `init` returned true and `start` later failed, `stop` is still called so the plugin can release resources it allocated in `init`. |
@@ -128,12 +128,12 @@ Return `true` on success, `false` on failure. A `false` return from
 
 #### ABI version
 
-`include/ProxySQL_Plugin.h` exposes `PROXYSQL_PLUGIN_ABI_VERSION` (5 under
+`include/ProxySQL_Plugin.h` exposes `PROXYSQL_PLUGIN_ABI_VERSION` (8 under
 PROXYSQL40, undefined in pre-chassis builds — the descriptor is then a
 legacy six-field struct with `abi_version = 1`).  Plugins MUST assign
 `abi_version` from this macro rather than hard-coding a literal; the
 core's loader uses it to detect layout skew and reject plugins built
-for an unsupported ABI.  ABIs 3 through 5 keep the descriptor layout
+for an unsupported ABI.  ABIs 3 through 8 keep the descriptor layout
 identical to ABI 2; each adds only tail fields to service or view structs.
 Plugins compiled against an older ABI therefore still load on the current
 core, where the trailing fields remain invisible to them.  See
@@ -172,6 +172,12 @@ struct ProxySQL_PluginServices {
     // ABI 5 tail extensions, live only while init() is running:
     proxysql_plugin_install_aws_iam_token_source_cb install_aws_iam_token_source;
     proxysql_plugin_get_aws_iam_limits_cb get_aws_iam_limits;
+    // ABI 6 tail extension, live only while init() is running:
+    proxysql_plugin_install_aws_metadata_provider_cb install_aws_metadata_provider;
+    // ABI 7 tail extension, live during register_schemas() and init():
+    proxysql_plugin_refresh_mysql_aws_locality_stats_cb refresh_mysql_aws_locality_stats;
+    // ABI 8 tail extension, live only while init() is running:
+    proxysql_plugin_uninstall_aws_iam_token_source_cb uninstall_aws_iam_token_source;
 };
 ```
 
@@ -182,6 +188,24 @@ handle until all session leases drain, then destroys the source and closes the
 module. A plugin must not call this callback outside `init()` or retain the
 service pointer after initialization. Without an installed provider, IAM
 authentication remains available as a policy but fails closed.
+
+`install_aws_metadata_provider` installs an optional external asynchronous
+metadata provider for MySQL locality selection. Core owns the retained lease
+registry: new leases are rejected during shutdown, active manager/callback
+leases drain, the provider's `shutdown()` and destroy callback run, and the
+extra module handle closes last. Without an installed provider, locality uses
+configured weights and reports the fixed `provider_unavailable` category.
+
+`refresh_mysql_aws_locality_stats` projects the current MySQL-owned immutable
+locality snapshot into a schema supplied by the calling plugin. It performs no
+provider or network I/O and is live during `register_schemas()` so an external
+provider can register its stats table and runtime-view callback together.
+Public core deliberately registers no locality table on its own.
+
+`uninstall_aws_iam_token_source` lets the same plugin roll back its IAM source
+when a later initialization step fails. It rejects a null or different source,
+stops new leases, drains active leases, destroys the source, and releases the
+retained module handle before returning.
 
 ### Service Callbacks
 
@@ -553,7 +577,7 @@ void register_stats_table(ProxySQL_PluginServices& services,
 - **No dependency resolution**: Plugins are loaded in the order listed in
   `proxysql.cnf`. If one plugin depends on another, the dependency must be
   listed first.
-- **ABI version range**: The current core accepts `abi_version` values in `[1, 5]`. Newly built plugins should set `abi_version = PROXYSQL_PLUGIN_ABI_VERSION`.
+- **ABI version range**: The current core accepts `abi_version` values in `[1, 8]`. Newly built plugins should set `abi_version = PROXYSQL_PLUGIN_ABI_VERSION`.
 - **Compiler coupling**: Plugins must match the ProxySQL core's C++ compiler
   and standard library due to `std::string` in `ProxySQL_PluginCommandResult`.
 

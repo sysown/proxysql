@@ -16,14 +16,17 @@
 # cannot terminate the producer early under pipefail.
 .PHONY: aws_public_provider_boundary-t
 aws_public_provider_boundary-t:
+	@test ! -d $(PROXYSQL_PATH)/plugins/aws || { \
+		echo "FAIL: public tree owns the concrete AWS provider" >&2; exit 1; \
+	}
+	@test ! -e $(PROXYSQL_PATH)/test/tap/tests/unit/aws_locality_plugin_unit-t.cpp || { \
+		echo "FAIL: public tree owns the real AWS locality provider test" >&2; exit 1; \
+	}
 	@test -x $(PROXYSQL_PATH)/src/proxysql
 	@nm -C $(PROXYSQL_PATH)/src/proxysql > /tmp/proxysql-public.nm
 	@if grep -Fq 'Aws::' /tmp/proxysql-public.nm; then \
 		echo "FAIL: src/proxysql contains AWS C++ SDK symbols" >&2; exit 1; \
 	fi
-	@test ! -d $(PROXYSQL_PATH)/plugins/aws || { \
-		echo "FAIL: public tree owns the AWS plugin" >&2; exit 1; \
-	}
 	@test ! -e $(PROXYSQL_PATH)/plugins/aws/ProxySQL_Aws_Plugin.so || { \
 		echo "FAIL: public build produced the AWS plugin" >&2; exit 1; \
 	}
@@ -950,13 +953,6 @@ aws_locality_manager_unit-t: aws_locality_manager_unit-t.cpp \
 		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
 		$(IDIRS) $(OPT) -lpthread -ldl -o $@
 
-aws_locality_plugin_unit-t: aws_locality_plugin_unit-t.cpp \
-		$(PROXYSQL_PATH)/plugins/aws/src/aws_locality_provider.cpp \
-		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
-	$(CXX) $< $(PROXYSQL_PATH)/plugins/aws/src/aws_locality_provider.cpp \
-		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
-		$(IDIRS) -I$(PROXYSQL_PATH)/plugins/aws/src $(OPT) -lpthread -lcrypto -o $@
-
 test_aws_iam_metrics-t: ../test_aws_iam_metrics-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(TEST_HELPERS_OBJ) -I$(TEST_HELPERS_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
@@ -968,9 +964,8 @@ test_aws_iam_backend_auth-t: ../test_aws_iam_backend_auth-t.cpp $(TEST_HELPERS_O
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 
-aws_locality_stats_unit-t: aws_locality_stats_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) aws_plugin_build
-	$(CXX) -DPROXYSQL_AWS_PLUGIN_PATH=\"$(PROXYSQL_PATH)/plugins/aws/ProxySQL_Aws_Plugin.so\" \
-		$< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+aws_locality_stats_unit-t: aws_locality_stats_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
 		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 
 ifeq ($(UNAME_S),Linux)

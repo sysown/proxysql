@@ -214,7 +214,7 @@ MySQL_Connection* make_connection(MySrvC* server, int fd) {
 } // namespace
 
 int main() {
-	plan(28);
+	plan(30);
 	ok(aws_locality_saturating_add(
 		std::numeric_limits<uint64_t>::max() - 2, 5) ==
 		std::numeric_limits<uint64_t>::max(),
@@ -441,8 +441,43 @@ int main() {
 	local_connection->options.client_flag &= ~CLIENT_FOUND_ROWS;
 	}
 	MyHGM->set_aws_locality_awareness_enabled(false);
-	test_cleanup_hostgroups();
 	shutdown_global_aws_metadata_provider();
+	MyHGM->set_aws_locality_awareness_enabled(true);
+	ok(wait_until([&] {
+		const auto unavailable = MyHGM->aws_locality_manager()->snapshot();
+		const auto* entry = unavailable->find(kHostgroup, kLocal, 3306);
+		return entry != nullptr &&
+			entry->status == AwsLocalityMetadataStatus::error &&
+			entry->failure_category == "provider_unavailable" &&
+			unavailable->effective_weight(kHostgroup, kLocal, 3306, 10) == 10;
+	}), "missing provider publishes fixed provider_unavailable with neutral weight");
+	{
+		MySQL_Thread neutral_worker;
+		if (!neutral_worker.init()) BAIL_OUT("neutral worker init failed");
+		SessionFixture neutral_session(neutral_worker);
+		int neutral_counts[3] = {0, 0, 0};
+		for (int i = 0; i < 12000; ++i) {
+			MySrvC* selected = hostgroup->get_random_MySrvC(
+				nullptr, 0, -1, neutral_session.session);
+			if (selected == local) ++neutral_counts[0];
+			else if (selected == regional) ++neutral_counts[1];
+			else if (selected == remote) ++neutral_counts[2];
+		}
+		const double neutral_local_share =
+			static_cast<double>(neutral_counts[0]) / 12000.0;
+		const double neutral_regional_share =
+			static_cast<double>(neutral_counts[1]) / 12000.0;
+		const double neutral_remote_share =
+			static_cast<double>(neutral_counts[2]) / 12000.0;
+		ok(neutral_local_share > 0.13 && neutral_local_share < 0.20 &&
+			neutral_regional_share > 0.29 && neutral_regional_share < 0.38 &&
+			neutral_remote_share > 0.45 && neutral_remote_share < 0.55 &&
+			local->weight == 10 && regional->weight == 20 && remote->weight == 30,
+			"provider absence selects by unchanged configured 10:20:30 weights (%.3f/%.3f/%.3f)",
+			neutral_local_share, neutral_regional_share, neutral_remote_share);
+	}
+	MyHGM->set_aws_locality_awareness_enabled(false);
+	test_cleanup_hostgroups();
 	delete GloMyLogger;
 	GloMyLogger = nullptr;
 	test_cleanup_query_processor();

@@ -1613,11 +1613,11 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	}
 #ifdef PROXYSQL40
 	// Plugin-registered runtime views: if the query references any chassis-
-// registered runtime view (e.g. runtime_mysqlx_users or an on-demand stats
-// table), refresh it BEFORE the SELECT runs. Admin sessions can project all
-// three DB kinds; stats sessions receive only the stats handle, so they cannot
-// trigger an admin/config projection. The chassis decides whether to fire any
-// plugin's refresh
+	// registered runtime view (e.g. runtime_mysqlx_users or an on-demand stats
+	// table), refresh it BEFORE the SELECT runs. Admin sessions can project all
+	// three DB kinds; stats sessions receive only the stats handle, so they cannot
+	// trigger an admin/config projection. The chassis decides whether to fire any
+	// plugin's refresh
 	// callback by per-view substring match against query_no_space, so a
 	// query that touches no registered view is a cheap no-op (one shared
 	// lock + N substring scans, N == registered-view count).

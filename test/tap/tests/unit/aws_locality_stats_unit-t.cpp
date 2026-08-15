@@ -11,13 +11,21 @@
 #include <thread>
 #include <vector>
 
-#ifndef PROXYSQL_AWS_PLUGIN_PATH
-#error "PROXYSQL_AWS_PLUGIN_PATH must be defined"
-#endif
-
 extern MySQL_HostGroups_Manager* MyHGM;
 
 namespace {
+
+constexpr const char* kLocalityStatsProjectionFixture =
+	"CREATE TABLE stats_mysql_aws_locality ("
+	"hostgroup_id INT NOT NULL, hostname VARCHAR NOT NULL, port INT NOT NULL, "
+	"endpoint_type VARCHAR NOT NULL, configured_weight INT NOT NULL, "
+	"effective_weight INT NOT NULL, local_region VARCHAR NOT NULL, "
+	"local_az VARCHAR NOT NULL, backend_region VARCHAR NOT NULL, "
+	"backend_az VARCHAR NOT NULL, account_match VARCHAR NOT NULL, "
+	"locality VARCHAR NOT NULL, active_multiplier REAL NOT NULL, "
+	"metadata_status VARCHAR NOT NULL, last_success_timestamp INT NOT NULL, "
+	"last_attempt_timestamp INT NOT NULL, last_error_category VARCHAR NOT NULL, "
+	"PRIMARY KEY(hostgroup_id, hostname, port))";
 
 class CountingProvider final : public AwsMetadataProvider {
 public:
@@ -95,7 +103,7 @@ AwsLocalitySnapshotEntry diagnostic_row(
 } // namespace
 
 int main() {
-	plan(23);
+	plan(22);
 	if (test_globals_init() != 0) {
 		BAIL_OUT("test global initialization failed");
 	}
@@ -105,26 +113,19 @@ int main() {
 		SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 	ok(statsdb.return_one_int(
 		"SELECT count(*) FROM sqlite_master WHERE name='stats_mysql_aws_locality'") == 0,
-		"AWS locality stats table is absent without the AWS plugin");
+		"public core does not register an AWS locality stats table");
 
 	std::unique_ptr<ProxySQL_PluginManager> manager;
 	std::string error;
-	ok(proxysql_load_configured_plugins(manager, {PROXYSQL_AWS_PLUGIN_PATH}, error),
-		"real AWS plugin completes schema-registration phase");
+	ok(proxysql_load_configured_plugins(manager, {}, error) && manager == nullptr,
+		"provider-neutral plugin services expose no always-present locality schema");
 	if (!error.empty()) diag("plugin error: %s", error.c_str());
 
-	const auto& tables = manager->tables(ProxySQL_PluginDBKind::stats_db);
-	ok(tables.size() == 1 &&
-		std::string(tables[0].table_name) == "stats_mysql_aws_locality",
-		"AWS plugin registers exactly its locality table in stats DB");
-	ok(manager->tables(ProxySQL_PluginDBKind::admin_db).empty() &&
-		manager->tables(ProxySQL_PluginDBKind::config_db).empty(),
-		"locality diagnostics add no admin/config persistence surface");
-
-	if (!tables.empty()) statsdb.execute(tables[0].table_def);
+	ok(statsdb.execute(kLocalityStatsProjectionFixture),
+		"test-owned schema fixture accepts the public projection callback");
 	ok(statsdb.return_one_int(
 		"SELECT count(*) FROM pragma_table_info('stats_mysql_aws_locality')") == 17,
-		"plugin-owned locality table has the exact 17-column schema");
+		"projection fixture has the external-provider contract's 17 columns");
 	ok(statsdb.return_one_int(
 		"SELECT count(*) FROM pragma_table_info('stats_mysql_aws_locality') "
 		"WHERE name IN ('hostgroup_id','hostname','port','endpoint_type',"
@@ -132,7 +133,7 @@ int main() {
 		"'backend_region','backend_az','account_match','locality',"
 		"'active_multiplier','metadata_status','last_success_timestamp',"
 		"'last_attempt_timestamp','last_error_category')") == 17,
-		"locality stats schema exposes the documented column names");
+		"projection callback targets the documented external schema columns");
 
 	std::vector<AwsLocalitySnapshotEntry> rows;
 	rows.push_back(diagnostic_row(1, AwsLocalityMetadataStatus::pending, 4.0, 10));
@@ -219,28 +220,25 @@ int main() {
 
 		hostgroups.aws_locality_manager()->configure({disabled_hostgroup(
 			101, "first.abcdefghijkl.us-east-1.rds.amazonaws.com", 7)});
-		proxysql_refresh_configured_plugin_runtime_views(
-			"SELECT * FROM stats_mysql_aws_locality", nullptr, nullptr, &statsdb);
+		hostgroups.refresh_aws_locality_stats(&statsdb);
 		ok(statsdb.return_one_int(
 			"SELECT count(*) FROM stats_mysql_aws_locality WHERE hostgroup_id=101 "
 			"AND metadata_status='disabled' AND configured_weight=7 "
 			"AND effective_weight=7") == 1,
-			"real plugin callback projects the MySQL manager's current snapshot");
+			"public callback projects the MySQL manager's current snapshot");
 		ok(counting_provider->requests.load() == 0,
 			"query-time refresh issues no metadata-provider request");
 
 		hostgroups.aws_locality_manager()->configure({disabled_hostgroup(
 			202, "second.abcdefghijkl.us-east-1.rds.amazonaws.com", 9)});
-		proxysql_refresh_configured_plugin_runtime_views(
-			"SELECT * FROM stats_mysql_aws_locality", nullptr, nullptr, &statsdb);
+		hostgroups.refresh_aws_locality_stats(&statsdb);
 		ok(statsdb.return_one_int("SELECT count(*) FROM stats_mysql_aws_locality") == 1 &&
 			statsdb.return_one_int(
 				"SELECT count(*) FROM stats_mysql_aws_locality WHERE hostgroup_id=202") == 1,
 			"generation swap replaces the prior projection without mixed rows");
 
 		hostgroups.aws_locality_manager()->configure({});
-		proxysql_refresh_configured_plugin_runtime_views(
-			"SELECT * FROM stats_mysql_aws_locality", nullptr, nullptr, &statsdb);
+		hostgroups.refresh_aws_locality_stats(&statsdb);
 		ok(statsdb.return_one_int("SELECT count(*) FROM stats_mysql_aws_locality") == 0,
 			"no valid locality policy produces zero rows");
 		ok(counting_provider->requests.load() == 0,

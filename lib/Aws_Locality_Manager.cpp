@@ -1022,6 +1022,18 @@ private:
 			return entry;
 		}
 
+		// A missing provider is different from a transient provider error: no
+		// concrete locality authority remains installed.  Do not continue to
+		// apply a multiplier derived from a previous provider's cached result.
+		const bool provider_unavailable = local_.error == "provider_unavailable" ||
+			(endpoint != endpoint_cache_.end() &&
+				endpoint->second.error == "provider_unavailable");
+		if (provider_unavailable) {
+			entry.status = AwsLocalityMetadataStatus::error;
+			entry.failure_category = "provider_unavailable";
+			return entry;
+		}
+
 		const bool endpoint_pending = region_in_flight_.find(
 			backend_config.endpoint.region) != region_in_flight_.end();
 		if (!local_.has_value || endpoint == endpoint_cache_.end() ||
