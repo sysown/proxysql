@@ -45,6 +45,33 @@ env:
 
 jobs:
 
+  resolve-tap-mode:
+    permissions:
+      contents: read
+      pull-requests: read
+    runs-on: ubuntu-24.04
+    outputs:
+      mode: ${{ steps.resolve.outputs.mode }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      with:
+        ref: GH-Actions
+        path: ci-control
+        sparse-checkout: |
+          .github/scripts/resolve-tap-build-mode.bash
+        sparse-checkout-cone-mode: false
+    - name: Resolve TAP build mode from PR label
+      id: resolve
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        TRUSTED: ${{ inputs.trusted }}
+        TRIGGER_JSON: ${{ inputs.trigger }}
+      run: |
+        chmod +x ci-control/.github/scripts/resolve-tap-build-mode.bash
+        mode="$(ci-control/.github/scripts/resolve-tap-build-mode.bash)"
+        echo "Selected TAP build mode: ${mode}"
+        printf 'mode=%s\n' "$mode" >> "$GITHUB_OUTPUT"
+
 #  lock:
 #    runs-on: ubuntu-22.04
 #    env:
@@ -74,6 +101,7 @@ jobs:
 
 
   builds:
+    needs: resolve-tap-mode
     # Route to the self-hosted proxysql-ci pool only when: the actor is renecannao
     # (trusted) AND this workflow is listed in the SELFHOSTED_WORKFLOWS repo variable.
     # Otherwise fall back to GitHub-hosted ubuntu-24.04. Empty/absent variable = no routing.
@@ -124,8 +152,9 @@ jobs:
 #          - dist: 'ubuntu22'
 #            type: '-clang-tap-asan'
     env:
-      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.dist }}${{ matrix.type }}
-      MATRIX: '(${{ matrix.dist }},${{ matrix.type }})'
+      TAP_BUILD_MODE: ${{ needs.resolve-tap-mode.outputs.mode }}
+      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.dist }}${{ matrix.type }}${{ needs.resolve-tap-mode.outputs.mode == 'asan' && '_asan' || '' }}
+      MATRIX: '(${{ matrix.dist }},${{ matrix.type }},${{ needs.resolve-tap-mode.outputs.mode }})'
 
     steps:
 
@@ -247,10 +276,12 @@ jobs:
       if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
       run: |
         cd proxysql/
+        echo "TAP build mode: ${TAP_BUILD_MODE}"
+        echo "Build matrix variant: ${{ matrix.dist }}${{ matrix.type }}"
         #sed -i 's/docker-compose/docker compose/g' Makefile
         git fetch --tags --force
         mkdir ci_build_log
-        if [[ "${{ matrix.type }}" =~ "-asan" ]]; then
+        if [[ "${TAP_BUILD_MODE}" = 'asan' && "${{ matrix.dist }}${{ matrix.type }}" = 'ubuntu24-tap-genai-gcov' ]]; then
           sed -i "/command/i \      - WITHASAN=1" docker-compose.yml
           sed -i "/command/i \      - TEST_WITHASAN=1" docker-compose.yml
         fi
