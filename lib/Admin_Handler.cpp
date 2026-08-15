@@ -83,6 +83,7 @@ using json = nlohmann::json;
 #include <uuid/uuid.h>
 
 #include "PgSQL_Protocol.h"
+#include "MySQL_Protocol.h"
 #include "MySQL_Query_Cache.h"
 #include "PgSQL_Query_Cache.h"
 //#include "usual/time.h"
@@ -1338,6 +1339,103 @@ bool is_valid_global_variable(const char *var_name) {
 	}
 }
 
+enum class admin_set_scope { implicit, session, local, global };
+
+static bool is_admin_set_whitespace(char character) {
+	return character == ' ' || (character >= '\t' && character <= '\r');
+}
+
+static admin_set_scope strip_admin_set_scope(char*& variable_name) {
+	while (is_admin_set_whitespace(*variable_name)) {
+		++variable_name;
+	}
+
+	struct scope_token_t {
+		const char* token;
+		admin_set_scope scope;
+	};
+	const scope_token_t scope_tokens[] = {
+		{"SESSION", admin_set_scope::session},
+		{"LOCAL", admin_set_scope::local},
+		{"GLOBAL", admin_set_scope::global},
+	};
+
+	for (const auto& scope_token : scope_tokens) {
+		const size_t token_length = strlen(scope_token.token);
+		if (strncasecmp(variable_name, scope_token.token, token_length) == 0 && is_admin_set_whitespace(variable_name[token_length])) {
+			variable_name += token_length;
+			while (is_admin_set_whitespace(*variable_name)) {
+				++variable_name;
+			}
+			return scope_token.scope;
+		}
+	}
+
+	return admin_set_scope::implicit;
+}
+
+static bool is_ignored_mysql_variable(const char* variable_name) {
+	return std::any_of(mysql_variables.ignore_vars.cbegin(), mysql_variables.ignore_vars.cend(),
+		[variable_name](const std::string& ignored) {
+			return strcasecmp(ignored.c_str(), variable_name) == 0;
+		});
+}
+
+static bool is_ignored_scoped_set(char* assignments) {
+	std::string mutable_assignments(assignments);
+	char* assignment = mutable_assignments.data();
+	bool has_assignment = false;
+	char quote = '\0';
+	int parenthesis_depth = 0;
+
+	for (char* current = assignment;; ++current) {
+		if (quote != '\0') {
+			if (*current == '\\' && quote != '`' && current[1] != '\0') {
+				++current;
+			} else if (*current == quote) {
+				quote = '\0';
+			}
+		} else if (*current == '\'' || *current == '"' || *current == '`') {
+			quote = *current;
+		} else if (*current == '(') {
+			++parenthesis_depth;
+		} else if (*current == ')') {
+			if (parenthesis_depth == 0) {
+				return false;
+			}
+			--parenthesis_depth;
+		}
+
+		if ((*current != ',' || quote != '\0' || parenthesis_depth != 0) && *current != '\0') {
+			continue;
+		}
+		if (*current == '\0' && (quote != '\0' || parenthesis_depth != 0)) {
+			return false;
+		}
+
+		const bool at_end = *current == '\0';
+		*current = '\0';
+		char* equals = strchr(assignment, '=');
+		if (equals == NULL) {
+			return false;
+		}
+		*equals = '\0';
+		char* variable_name = trim_spaces_in_place(assignment);
+		const admin_set_scope scope = strip_admin_set_scope(variable_name);
+		if ((scope != admin_set_scope::session && scope != admin_set_scope::local) || !is_ignored_mysql_variable(variable_name)) {
+			return false;
+		}
+		has_assignment = true;
+
+		if (at_end) {
+			break;
+		}
+		assignment = current + 1;
+	}
+
+	return has_assignment;
+}
+
 
 // This method translates a 'SET variable=value' command into an equivalent UPDATE. It doesn't yes support setting
 // multiple variables at once.
@@ -1359,6 +1457,11 @@ bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space
 		}
 	}
 
+	if (is_ignored_scoped_set(query_no_space + sizeof("SET ") - 1)) {
+		pa->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		return false;
+	}
+
 	// Get a pointer to the beginning of var=value entry and split to get var name and value
 	char *set_entry = query_no_space + sizeof("SET ") - 1;
 	char *untrimmed_var_name=NULL;
@@ -1367,6 +1470,7 @@ bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space
 
 	// Trim spaces from var name to allow writing like 'var = value'
 	char *var_name = trim_spaces_in_place(untrimmed_var_name);
+	strip_admin_set_scope(var_name);
 
 	if (is_sensitive_set_variable_name(var_name)) {
 		proxy_info("Received SET command for %s\n", var_name);

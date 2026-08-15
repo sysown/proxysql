@@ -2349,6 +2349,7 @@ int main(int, char**) {
 			std::make_tuple("mysql-keep_multiplexing_variables"                            , "tx_isolation,version"       ),
 			std::make_tuple("mysql-kill_backend_connection_when_disconnect"                , "true"                       ),
 			std::make_tuple("mysql-client_session_track_gtid"                              , "true"                       ),
+			std::make_tuple("mysql-update_gtid_from_ok"                                    , "true"                       ),
 			std::make_tuple("mysql-session_idle_show_processlist"                          , "true"                       ),
 			std::make_tuple("mysql-show_processlist_extended"                              , "0"                          ),
 			std::make_tuple("mysql-query_digests"                                          , "true"                       ),

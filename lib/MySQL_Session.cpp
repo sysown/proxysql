@@ -725,6 +725,14 @@ MySQL_Session::MySQL_Session() {
  * @brief Resets the MySQL session to its initial state.
  */
 void MySQL_Session::reset() {
+	pending_user_variable_set.reset();
+	current_query_user_variable_safe = false;
+	current_query_user_variable_unsafe_fallback = false;
+	current_query_user_variable_context_change = false;
+	user_variable_tracking_latched = false;
+	user_variable_backend_authoritative = false;
+	user_variable_replay_batches.clear();
+	user_variable_replay_batch_index = 0;
 	autocommit=true;
 	autocommit_handled=false;
 	sending_set_autocommit=false;
@@ -2551,6 +2559,102 @@ bool MySQL_Session::handler_again___verify_multiple_variables(MySQL_Connection* 
 	return false;
 }
 
+bool mysql_user_variable_must_classify_and_sync_policy(
+	int mode, int set_parser_algorithm, int query_processor_parser,
+	bool plain_text_com_query, bool connection_bound_fallback,
+	bool tracking_latched) {
+	return mysql_user_variable_tracking_can_stage(
+		mode, set_parser_algorithm, query_processor_parser,
+		plain_text_com_query, connection_bound_fallback) || tracking_latched;
+}
+
+bool MySQL_Session::accepts_new_user_variable_assignments() const {
+	return mysql_user_variable_tracking_can_stage(
+		mysql_thread___user_variable_tracking,
+		mysql_thread___set_parser_algorithm,
+		mysql_thread___query_processor_parser,
+		true,
+		locked_on_hostgroup >= 0 || user_variable_backend_authoritative);
+}
+
+bool MySQL_Session::must_classify_and_sync_user_variables() const {
+	return mysql_user_variable_must_classify_and_sync_policy(
+		mysql_thread___user_variable_tracking,
+		mysql_thread___set_parser_algorithm,
+		mysql_thread___query_processor_parser,
+		true,
+		locked_on_hostgroup >= 0 || user_variable_backend_authoritative,
+		user_variable_tracking_latched);
+}
+
+bool MySQL_Session::handler_again___verify_backend_user_variables(MySQL_Connection* myconn) {
+	if (!must_classify_and_sync_user_variables()) {
+		return false;
+	}
+
+	const MySQL_User_Variable_State& desired = client_myds->myconn->user_variables;
+	unsigned int not_matching = 0;
+	const unsigned int matches = myconn->user_variables.count_matches(desired, not_matching);
+	if (
+		matches == desired.size() && not_matching == 0 &&
+		!myconn->user_variables.has_names_absent_from(desired)
+	) {
+		return false;
+	}
+
+	constexpr size_t query_packet_overhead = sizeof(mysql_hdr) + 1;
+	const MySQL_User_Variable_Replay_Packet_Budget packet_budget =
+		mysql_user_variable_replay_packet_budget(
+			myconn->options.max_allowed_pkt, query_packet_overhead);
+	if (packet_budget.status == MySQL_User_Variable_Replay_Packet_Budget_Status::PACKET_LIMIT_TOO_SMALL) {
+		handler_again___fail_user_variable_replay(
+			mybe->server_myds,
+			ER_NET_PACKET_TOO_LARGE,
+			"08S01",
+			"Backend packet limit is too small to replay tracked user variables"
+		);
+		return true;
+	}
+	const MySQL_User_Variable_Replay_Plan plan = desired.build_replay_plan(
+		myconn->user_variables, packet_budget.max_query_bytes);
+	if (plan.status == MySQL_User_Variable_Replay_Status::ASSIGNMENT_TOO_LARGE) {
+		handler_again___fail_user_variable_replay(
+			mybe->server_myds,
+			ER_NET_PACKET_TOO_LARGE,
+			"08S01",
+			"Got a packet bigger than 'max_allowed_packet' bytes"
+		);
+		return true;
+	}
+	if (plan.batches.empty()) {
+		return false;
+	}
+
+	set_previous_status_mode3();
+	user_variable_replay_batches = plan.batches;
+	user_variable_replay_batch_index = 0;
+	NEXT_IMMEDIATE_NEW(SETTING_USER_VARIABLES);
+}
+
+void MySQL_Session::handler_again___fail_user_variable_replay(
+	MySQL_Data_Stream* myds, unsigned int error_code, const char* sqlstate, const char* error_message) {
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "REPLAY_FAILURE\n");
+	thread->status_variables.stvar[st_var_user_variable_replay_failures]++;
+	client_myds->myprot.generate_pkt_ERR(
+		true, NULL, NULL, client_myds->pkt_sid + 1, error_code, (char*)sqlstate, error_message, true
+	);
+	RequestEnd(myds, error_code, error_message);
+	if (myds->myconn) {
+		myds->destroy_MySQL_Connection_From_Pool(false);
+		myds->fd = 0;
+	}
+	user_variable_replay_batches.clear();
+	user_variable_replay_batch_index = 0;
+	while (!previous_status.empty()) {
+		previous_status.pop();
+	}
+}
+
 
 /**
  * @brief Verifies and sets the ldap_user_variable option for the backend connection.
@@ -3606,6 +3710,10 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 			case -1:
 			case -2:
 			{
+				pending_user_variable_set.reset();
+				current_query_user_variable_safe = false;
+				current_query_user_variable_unsafe_fallback = false;
+				current_query_user_variable_context_change = false;
 				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, mysql_errno(myconn->mysql));
 				/*
 				 * Pass-through divert (spec §6.4).
@@ -5773,6 +5881,9 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA() {
  */
 void MySQL_Session::handler_rc0_Process_GTID(MySQL_Connection *myconn) {
 	if (myconn->get_gtid(mybe->gtid_uuid,&mybe->gtid_trxid)) {
+		if (mysql_thread___update_gtid_from_ok) {
+			MyHGM->update_gtid_from_ok(myconn->parent, mybe->gtid_uuid);
+		}
 		if (mysql_thread___client_session_track_gtid) {
 			gtid_hid = current_hostgroup;
 			memcpy(gtid_buf,mybe->gtid_uuid,sizeof(gtid_buf));
@@ -5786,6 +5897,17 @@ void MySQL_Session::handler_rc0_Process_Variables(MySQL_Connection *myconn) {
 	if(myconn->get_variables(var_map)) {
 		std::string variable;
 		std::string value;
+		if (client_myds && client_myds->myconn &&
+			client_myds->myconn->user_variables.size() != 0) {
+			for (const auto& entry : var_map) {
+				if (mysql_user_variable_is_replay_context_name(
+					entry.first.data(), entry.first.size())) {
+					myconn->set_status(true, STATUS_MYSQL_CONNECTION_USER_VARIABLE);
+					user_variable_backend_authoritative = true;
+					break;
+				}
+			}
+		}
 
 		for (int idx = 0 ; idx < SQL_NAME_LAST_HIGH_WM ; idx++) {
 			variable = mysql_tracked_variables[idx].set_variable_name;
@@ -6072,6 +6194,10 @@ handler_again:
 									goto handler_again;
 								}
 
+								if (handler_again___verify_backend_user_variables(myconn) == true) {
+									goto handler_again;
+								}
+
 								if (locked_on_hostgroup != -1) {
 									locked_on_hostgroup_and_all_variables_set=true;
 								}
@@ -6136,6 +6262,41 @@ handler_again:
 				}
 				gtid_hid = -1;
 				if (rc==0) {
+					if (status == PROCESSING_QUERY && pending_user_variable_set) {
+						const std::vector<UserVariableAssignment>& assignments =
+							pending_user_variable_set->assignments;
+						if (mysql_user_variable_commit_post_ok(
+							client_myds->myconn->user_variables,
+							myconn->user_variables,
+							assignments)) {
+							user_variable_tracking_latched = true;
+							thread->status_variables.stvar[st_var_user_variable_assignments_tracked] +=
+								assignments.size();
+						} else {
+							current_query_user_variable_safe = false;
+							user_variable_backend_authoritative = true;
+							thread->status_variables.stvar[st_var_user_variable_fallback_limits]++;
+							proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,
+								"User-variable SET tracking fallback reason=RESOURCE_LIMIT\n");
+							myconn->set_status(true, STATUS_MYSQL_CONNECTION_USER_VARIABLE);
+							if (mysql_thread___set_query_lock_on_hostgroup == 1 &&
+								locked_on_hostgroup < 0 && current_hostgroup >= 0) {
+								locked_on_hostgroup = current_hostgroup;
+								thread->status_variables.stvar[st_var_hostgroup_locked]++;
+								thread->status_variables.stvar[st_var_hostgroup_locked_set_cmds]++;
+							}
+						}
+						pending_user_variable_set.reset();
+					}
+					if (status == PROCESSING_QUERY &&
+						mysql_user_variable_backend_result_requires_binding(
+							true,
+							current_query_user_variable_unsafe_fallback,
+							current_query_user_variable_context_change,
+							qpo ? qpo->multiplex : -1)) {
+						myconn->set_status(true, STATUS_MYSQL_CONNECTION_USER_VARIABLE);
+						user_variable_backend_authoritative = true;
+					}
 
 					if (active_transactions != 0) {  // run this only if currently we think there is a transaction
 						handler_rc0_RefreshActiveTransactions(myconn);
@@ -6214,6 +6375,10 @@ handler_again:
 					finishQuery(myds,myconn,prepared_stmt_with_no_params);
 				} else {
 					if (rc==-1) {
+						pending_user_variable_set.reset();
+						current_query_user_variable_safe = false;
+						current_query_user_variable_unsafe_fallback = false;
+						current_query_user_variable_context_change = false;
 						// the query failed
 						int myerr=mysql_errno(myconn->mysql);
 						char *errmsg = NULL;
@@ -6420,6 +6585,64 @@ bool MySQL_Session::handler_again___status_SHOW_WARNINGS(MySQL_Data_Stream* myds
  *
  * @return True if the handling was successful and false otherwise.
  */
+bool MySQL_Session::handler_again___status_SETTING_USER_VARIABLES(int* rc) {
+	assert(mybe->server_myds->myconn);
+	MySQL_Data_Stream* myds = mybe->server_myds;
+	MySQL_Connection* myconn = myds->myconn;
+	myds->DSS = STATE_MARIADB_QUERY;
+
+	if (user_variable_replay_batch_index >= user_variable_replay_batches.size()) {
+		handler_again___fail_user_variable_replay(
+			myds, ER_NET_PACKET_TOO_LARGE, "08S01", "Got a packet bigger than 'max_allowed_packet' bytes"
+		);
+		return true;
+	}
+
+	if (myds->mypolls == NULL) {
+		thread->mypolls.add(POLLIN | POLLOUT, myds->fd, myds, thread->curtime);
+	}
+	const MySQL_User_Variable_Replay_Batch& batch =
+		user_variable_replay_batches[user_variable_replay_batch_index];
+	const int command_rc = myconn->async_send_simple_command(
+		myds->revents, const_cast<char*>(batch.sql.c_str()), batch.sql.size(), true
+	);
+	if (command_rc == 0) {
+		const MySQL_User_Variable_Replay_Completion completion = mysql_user_variable_replay_complete(
+			myconn->user_variables,
+			user_variable_replay_batches,
+			user_variable_replay_batch_index,
+			true
+		);
+		thread->status_variables.stvar[st_var_user_variable_replay_commands]++;
+		++user_variable_replay_batch_index;
+		myds->revents |= POLLOUT;
+
+		if (completion == MySQL_User_Variable_Replay_Completion::CONTINUE_SETTING_USER_VARIABLES) {
+			return true;
+		}
+		if (completion == MySQL_User_Variable_Replay_Completion::RESUME_SAVED_STATUS) {
+			myds->DSS = STATE_MARIADB_GENERIC;
+			const enum session_status saved_status = previous_status.top();
+			previous_status.pop();
+			user_variable_replay_batches.clear();
+			user_variable_replay_batch_index = 0;
+			NEXT_IMMEDIATE_NEW(saved_status);
+		}
+	}
+
+	if (command_rc == 1) {
+		return false;
+	}
+
+	const unsigned int error_code = mysql_errno(myconn->mysql);
+	const char* sqlstate = error_code ? mysql_sqlstate(myconn->mysql) : "HY000";
+	const char* error_message = error_code ? mysql_error(myconn->mysql) : "User-variable replay failed";
+	handler_again___fail_user_variable_replay(
+		myds, mysql_user_variable_replay_error_code(error_code), sqlstate, error_message);
+	*rc = 0;
+	return true;
+}
+
 bool MySQL_Session::handler_again___multiple_statuses(int *rc) {
 	bool ret = false;
 	switch(status) {
@@ -6452,6 +6675,9 @@ bool MySQL_Session::handler_again___multiple_statuses(int *rc) {
 			break;
 		case SETTING_SET_NAMES:
 			ret = handler_again___status_CHANGING_CHARSET(rc);
+			break;
+		case SETTING_USER_VARIABLES:
+			ret = handler_again___status_SETTING_USER_VARIABLES(rc);
 			break;
 		default:
 			break;
@@ -7102,6 +7328,10 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 */
 	bool exit_after_SetParse = true;
 	unsigned char command_type=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
+	pending_user_variable_set.reset();
+	current_query_user_variable_safe = false;
+	current_query_user_variable_unsafe_fallback = false;
+	current_query_user_variable_context_change = false;
 
 	// The "GENAI:" / "LLM:" query-prefix escape hatches were removed in
 	// Step 4 of the GenAI plugin carve-out (decision Q2 in the design
@@ -7196,11 +7426,114 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	}
 
 	reset_warning_hostgroup_flag_and_release_connection();
+	{
+	const bool plain_text_com_query = command_type == _MYSQL_COM_QUERY &&
+		prepare_stmt_type == ps_type_not_set;
+	const char* raw_query = (const char*)CurrentQuery.QueryPointer;
+	const bool digest_available = CurrentQuery.QueryParserArgs.digest_text != NULL;
+	const bool raw_query_has_at = raw_query &&
+		memchr(raw_query, '@', CurrentQuery.QueryLength) != NULL;
+
+	// User-variable semantics are derived from the raw query and ParserSQL,
+	// independently of whether digest/statistics generation is enabled.
+	const bool accepts_new_udv_assignments = plain_text_com_query &&
+		accepts_new_user_variable_assignments();
+	if (accepts_new_udv_assignments && raw_query_has_at) {
+		UserVariableSetAnalysis analysis = parsersql_analyze_user_variable_set_mysql(
+			raw_query, CurrentQuery.QueryLength);
+		if (analysis.is_set_statement) {
+			switch (analysis.status) {
+			case UserVariableSetStatus::SUPPORTED: {
+				MySQL_User_Variable_State staged;
+				const MySQL_User_Variable_Apply_Result apply_result =
+					client_myds->myconn->user_variables.stage(analysis.assignments, staged);
+				if (mysql_user_variable_set_uses_qpo_epilogue(
+					analysis.status, apply_result)) {
+					pending_user_variable_set = std::move(analysis);
+					current_query_user_variable_safe = true;
+					goto __exit_set_destination_hostgroup;
+				}
+				thread->status_variables.stvar[st_var_user_variable_fallback_limits]++;
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,
+					"User-variable SET tracking fallback reason=RESOURCE_LIMIT\n");
+				current_query_user_variable_unsafe_fallback = true;
+				unable_to_parse_set_statement(lock_hostgroup);
+				if (mysql_user_variable_fallback_uses_qpo_epilogue(true, false)) {
+					goto __exit_set_destination_hostgroup;
+				}
+				return false;
+			}
+			case UserVariableSetStatus::UNSUPPORTED:
+			case UserVariableSetStatus::PARSE_ERROR:
+				thread->status_variables.stvar[st_var_user_variable_fallback_unsupported]++;
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,
+					"User-variable SET tracking fallback reason=UNSUPPORTED_AST\n");
+				current_query_user_variable_unsafe_fallback = true;
+				unable_to_parse_set_statement(lock_hostgroup);
+				if (mysql_user_variable_fallback_uses_qpo_epilogue(true, false)) {
+					goto __exit_set_destination_hostgroup;
+				}
+				return false;
+			case UserVariableSetStatus::NOT_USER_VARIABLE_SET:
+				break;
+			}
+		}
+	}
+
+	if (plain_text_com_query && client_myds && client_myds->myconn &&
+		client_myds->myconn->user_variables.size() != 0 &&
+		parsersql_set_changes_user_variable_replay_context_mysql(
+			raw_query, CurrentQuery.QueryLength)) {
+		current_query_user_variable_context_change = true;
+		unable_to_parse_set_statement(lock_hostgroup);
+		if (mysql_user_variable_fallback_uses_qpo_epilogue(false, true)) {
+			goto __exit_set_destination_hostgroup;
+		}
+		return false;
+	}
+
+	const UserVariableQueryDecision user_variable_decision =
+		mysql_user_variable_raw_query_disposition(
+			raw_query, CurrentQuery.QueryLength,
+			must_classify_and_sync_user_variables(),
+			plain_text_com_query,
+			pending_user_variable_set.has_value(),
+			digest_available);
+	if (user_variable_decision.disposition == UserVariableQueryDisposition::SAFE) {
+		current_query_user_variable_safe =
+			user_variable_decision.legacy_udv_status_safe;
+	} else if (user_variable_decision.disposition ==
+		UserVariableQueryDisposition::UNSAFE_FALLBACK) {
+		current_query_user_variable_unsafe_fallback = true;
+		if (mysql_user_variable_unsafe_query_locks_hostgroup(
+			qpo->multiplex, locked_on_hostgroup >= 0)) {
+			*lock_hostgroup = true;
+		}
+		if (mysql_user_variable_fallback_uses_qpo_epilogue(true, false)) {
+			goto __exit_set_destination_hostgroup;
+		}
+		return false;
+	}
+	}
 
 	// handle here #509, #815 and #816
 	if (CurrentQuery.QueryParserArgs.digest_text) {
 		char *dig=CurrentQuery.QueryParserArgs.digest_text;
 		unsigned int nTrx=NumActiveTransactions();
+		const bool plain_text_com_query = command_type == _MYSQL_COM_QUERY &&
+			prepare_stmt_type == ps_type_not_set;
+		if (strncasecmp(dig,(char *)"SET ",4)==0) {
+			const bool parser_prerequisite_available =
+				mysql_thread___set_parser_algorithm == 3 ||
+				mysql_thread___query_processor_parser == 1;
+			if (mysql_thread___user_variable_tracking == 1 &&
+				plain_text_com_query && locked_on_hostgroup < 0 &&
+				!user_variable_backend_authoritative &&
+				!parser_prerequisite_available) {
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,
+					"User-variable SET tracking unavailable reason=PARSER_PREREQUISITE_MISSING\n");
+			}
+		}
 		if ((locked_on_hostgroup == -1) && (strncasecmp(dig,(char *)"SET ",4)==0)) {
 			// this code is executed only if locked_on_hostgroup is not set yet
 			// if locked_on_hostgroup is set, we do not try to parse the SET statement
@@ -8397,11 +8730,14 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			} else {
 				client_addr = strdup((char *)"");
 			}
-			char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100+strlen(client_addr));
-			sprintf(_s,"ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
+			std::string access_denied_message =
+				"ProxySQL Error: Access denied for user '" +
+				std::string(client_myds->myconn->userinfo->username) + "'@'" + client_addr +
+				"' (using password: " +
+				(client_myds->myconn->userinfo->password ? "YES" : "NO") + ")";
 			proxy_error("ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)\n", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
-			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"28000", _s, true);
-			free(_s);
+			char access_denied_sqlstate[] = "28000";
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1045,access_denied_sqlstate, access_denied_message.data(), true);
 			if (client_addr) { free(client_addr); }
 			__sync_fetch_and_add(&MyHGM->status.access_denied_wrong_password, 1);
 		}
@@ -8914,8 +9250,12 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds,const unsigned int myerrn
 	}
 
 	if (qdt && myds && myds->myconn) {
-		myds->myconn->ProcessQueryAndSetStatusFlags(qdt);
+		myds->myconn->ProcessQueryAndSetStatusFlags(qdt, current_query_user_variable_safe);
 	}
+	current_query_user_variable_safe = false;
+	current_query_user_variable_unsafe_fallback = false;
+	current_query_user_variable_context_change = false;
+	pending_user_variable_set.reset();
 
 	switch (status) {
 		case PROCESSING_STMT_EXECUTE:
@@ -9311,8 +9651,10 @@ bool MySQL_Session::known_query_for_locked_on_hostgroup(uint64_t digest) {
 void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
 	// we couldn't parse the query
 	string query_str = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
-	string digest_str = string(CurrentQuery.get_digest_text());
-	string& nqn = ( mysql_thread___parse_failure_logs_digest == true ? digest_str : query_str );
+	const char* digest_text = CurrentQuery.get_digest_text();
+	string digest_str = digest_text ? string(digest_text) : string();
+	string& nqn = (mysql_thread___parse_failure_logs_digest && digest_text ?
+		digest_str : query_str);
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", query_str.c_str());
 	if (qpo->multiplex == -1) {
 		// we have no rule about this SET statement. We set hostgroup locking

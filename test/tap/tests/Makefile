@@ -302,6 +302,9 @@ endif
 test_gtid_forwarding-t: test_gtid_forwarding-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
 
+test_gtid_from_ok-t: test_gtid_from_ok-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
+	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
+
 test_ignore_min_gtid-t: test_ignore_min_gtid-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
 

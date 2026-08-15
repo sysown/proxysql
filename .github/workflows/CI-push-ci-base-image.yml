@@ -37,7 +37,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/v3.0' }}
+            type=ref,event=branch,prefix=branch-
             type=sha,prefix=
 
       - name: Build and push Docker image
