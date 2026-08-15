@@ -3,7 +3,7 @@
 // after PluginManager releases its own dlopen() handle.  Core must retain the
 // module until its leased provider has been drained during shutdown.
 
-#include "Aws_Iam_Sdk.h"
+#include "Aws_Iam_Provider.h"
 #include "ProxySQL_PluginManager.h"
 #include "tap.h"
 

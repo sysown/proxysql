@@ -1,7 +1,6 @@
 #include "tap.h"
 
-#include "Aws_Iam_Sdk.h"
-#include "Aws_Iam_Token_Manager.h"
+#include "Aws_Iam_Provider.h"
 #include "ProxySQL_Statistics.hpp"
 #include "cpp.h"
 #include "proxysql.h"
@@ -11,105 +10,43 @@
 #include "prometheus/registry.h"
 #include "prometheus/text_serializer.h"
 
-#include <chrono>
-#include <condition_variable>
 #include <cstdlib>
-#include <cstdint>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <string>
-#include <thread>
-#include <utility>
-#include <vector>
-
-using namespace std::chrono_literals;
 
 extern ProxySQL_Admin *GloAdmin;
 extern ProxySQL_Statistics *GloProxyStats;
 
 namespace {
 
-constexpr const char *kEndpoint =
+constexpr const char *kSensitiveEndpoint =
 	"metrics-secret.cluster-abcdefghijkl.us-east-1.rds.amazonaws.com";
-constexpr const char *kRegion = "metrics-secret-region";
-constexpr const char *kUser = "metrics-secret-user";
-constexpr const char *kToken = "FAKE_AWS_SESSION_TOKEN_METRICS";
-constexpr const char *kAccessKey = "AKIAFAKEMETRICSACCESSKEY";
-constexpr const char *kProfile = "fake-sensitive-profile";
+constexpr const char *kSensitiveRegion = "metrics-secret-region";
+constexpr const char *kSensitiveUser = "metrics-secret-user";
+constexpr const char *kSensitiveToken = "FAKE_AWS_SESSION_TOKEN_METRICS";
 
-class ScriptedSigner final : public AwsIamTokenSigner {
+class ScriptedSource final : public AwsIamTokenSource {
 public:
-	AwsIamSignResult sign(const AwsIamTokenKey& key) override {
-		std::unique_lock<std::mutex> lock(mu_);
-		if (key.endpoint == "blocked.example") {
-			blocked_entered_ = true;
-			entered_.notify_all();
-			release_.wait(lock, [&] { return release_blocked_; });
-		}
+	explicit ScriptedSource(AwsIamStatsSnapshot stats) : stats_(stats) {}
 
-		AwsIamSignResult result;
-		if (key.endpoint == "provider-failure.example") {
-			result.status = AwsIamStatus::PROVIDER_ERROR;
-			result.failure = { "provider", kAccessKey, kProfile };
-		} else if (key.endpoint == "credential-failure.example") {
-			result.status = AwsIamStatus::CREDENTIAL_PROVIDER_ERROR;
-			result.failure = { "credential_provider", kAccessKey, kProfile };
-		} else {
-			result.status = AwsIamStatus::OK;
-			result.token = SecureString(kToken);
-		}
-		return result;
+	AwsIamRequestHandle request(const AwsIamTokenKey&, uint64_t,
+		std::weak_ptr<AwsIamCompletionSink>) override {
+		return {};
 	}
-
-	bool wait_until_blocked() {
-		std::unique_lock<std::mutex> lock(mu_);
-		return entered_.wait_for(lock, 2s, [&] { return blocked_entered_; });
+	AwsIamTokenResult request_blocking(const AwsIamTokenKey&,
+		std::chrono::steady_clock::time_point) override {
+		return {};
 	}
-
-	void release_blocked() {
-		std::lock_guard<std::mutex> lock(mu_);
-		release_blocked_ = true;
-		release_.notify_all();
-	}
+	void cancel(AwsIamRequestHandle) override {}
+	void invalidate(const AwsIamTokenKey&, uint64_t) override {}
+	void record_backend_connection(bool) override {}
+	void record_waiting_session(bool) override {}
+	AwsIamStatsSnapshot snapshot() const override { return stats_; }
 
 private:
-	std::mutex mu_;
-	std::condition_variable entered_;
-	std::condition_variable release_;
-	bool blocked_entered_ { false };
-	bool release_blocked_ { false };
+	AwsIamStatsSnapshot stats_;
 };
-
-class Sink final : public AwsIamCompletionSink {
-public:
-	void post(AwsIamCompletion&& completion) override {
-		std::lock_guard<std::mutex> lock(mu_);
-		completions_.push_back(std::move(completion));
-		cv_.notify_all();
-	}
-
-	AwsIamTokenResult take() {
-		std::unique_lock<std::mutex> lock(mu_);
-		if (!cv_.wait_for(lock, 2s, [&] { return !completions_.empty(); })) {
-			AwsIamTokenResult timeout;
-			timeout.status = AwsIamStatus::TIMEOUT;
-			return timeout;
-		}
-		AwsIamTokenResult result = std::move(completions_.front().result);
-		completions_.erase(completions_.begin());
-		return result;
-	}
-
-private:
-	std::mutex mu_;
-	std::condition_variable cv_;
-	std::vector<AwsIamCompletion> completions_;
-};
-
-AwsIamTokenKey key(const char *endpoint) {
-	return { endpoint, 3306, kRegion, kUser };
-}
 
 std::map<std::string, uint64_t> query_aws_iam_stats(SQLite3DB *db) {
 	std::map<std::string, uint64_t> values;
@@ -147,7 +84,7 @@ bool has_unlabelled_sample(const std::string& text, const std::string& name,
 } // namespace
 
 int main() {
-	plan(9);
+	plan(7);
 
 	const bool initialized = test_init_minimal() == 0 &&
 		test_init_query_processor() == 0 && test_init_hostgroups() == 0;
@@ -167,71 +104,44 @@ int main() {
 	ok(initialized && GloAdmin != nullptr && GloAdmin->statsdb != nullptr,
 		"production admin and process-registry fixture initializes");
 
-	auto signer = std::make_shared<ScriptedSigner>();
-	AwsIamTokenManagerConfig config(16);
-	config.max_pending_keys = 1;
-	config.max_cache_entries = 4;
-	AwsIamTokenManager manager(signer, config);
-
-	const AwsIamTokenKey success_key = key(kEndpoint);
-	AwsIamTokenResult miss = manager.request_blocking(
-		success_key, std::chrono::steady_clock::now() + 2s);
-	AwsIamTokenResult hit = manager.request_blocking(
-		success_key, std::chrono::steady_clock::now() + 2s);
-	AwsIamTokenResult provider_failure = manager.request_blocking(
-		key("provider-failure.example"), std::chrono::steady_clock::now() + 2s);
-	AwsIamTokenResult credential_failure = manager.request_blocking(
-		key("credential-failure.example"), std::chrono::steady_clock::now() + 2s);
-
-	auto blocked_sink = std::make_shared<Sink>();
-	manager.request(key("blocked.example"), 100, blocked_sink);
-	const bool blocked = signer->wait_until_blocked();
-	manager.record_waiting_session(true);
-	AwsIamTokenResult helper_result;
-	std::thread blocking_helper([&] {
-		helper_result = manager.request_blocking(
-			key("blocked.example"), std::chrono::steady_clock::now() + 2s);
-	});
-	const auto helper_registration_deadline = std::chrono::steady_clock::now() + 2s;
-	while (manager.snapshot().token_requests < 6 &&
-		std::chrono::steady_clock::now() < helper_registration_deadline) {
-		std::this_thread::yield();
-	}
-	auto rejected_sink = std::make_shared<Sink>();
-	manager.request(key("queue-rejected.example"), 101, rejected_sink);
-	AwsIamTokenResult rejected = rejected_sink->take();
-	manager.record_backend_connection(true);
-	manager.record_backend_connection(false);
-
-	const AwsIamStatsSnapshot active = manager.snapshot();
-	ok(blocked && miss.status == AwsIamStatus::OK && hit.status == AwsIamStatus::OK &&
-		provider_failure.status == AwsIamStatus::PROVIDER_ERROR &&
-		credential_failure.status == AwsIamStatus::CREDENTIAL_PROVIDER_ERROR &&
-		rejected.status == AwsIamStatus::QUEUE_FULL,
-		"real manager drives success, hit, provider failures, and queue rejection");
-	ok(active.token_requests == 7 && active.token_cache_entries == 1 &&
-		active.in_flight_generations == 1 &&
-		active.queued_generations == 0 && active.waiting_sessions == 1,
-		"only the live session is counted while a blocking helper shares its generation");
+	AwsIamStatsSnapshot chosen;
+	chosen.token_requests = 17;
+	chosen.token_cache_hits = 11;
+	chosen.token_refresh_successes = 7;
+	chosen.token_refresh_failures = 5;
+	chosen.credential_provider_failures = 3;
+	chosen.queue_rejections = 2;
+	chosen.backend_connection_successes = 13;
+	chosen.backend_connection_failures = 4;
+	chosen.token_cache_entries = 6;
+	chosen.in_flight_generations = 1;
+	chosen.queued_generations = 8;
+	chosen.waiting_sessions = 9;
+	ScriptedSource source(chosen);
+	publish_global_aws_iam_token_source(&source);
+	auto lease = acquire_global_aws_iam_token_source();
+	ok(lease && lease->snapshot().token_requests == 17 &&
+		lease->snapshot().waiting_sessions == 9,
+		"public stats consumers acquire the scripted provider snapshot");
+	lease = AwsIamTokenSourceLease {};
 
 	const std::map<std::string, uint64_t> expected {
-		{ "AwsIam_Token_requests", 7 },
-		{ "AwsIam_Token_cache_hits", 1 },
-		{ "AwsIam_Token_refresh_successes", 1 },
-		{ "AwsIam_Token_refresh_failures", 2 },
-		{ "AwsIam_Credential_provider_failures", 1 },
-		{ "AwsIam_Queue_rejections", 1 },
-		{ "AwsIam_Backend_connection_successes", 1 },
-		{ "AwsIam_Backend_connection_failures", 1 },
-		{ "AwsIam_Token_cache_entries", 1 },
+		{ "AwsIam_Token_requests", 17 },
+		{ "AwsIam_Token_cache_hits", 11 },
+		{ "AwsIam_Token_refresh_successes", 7 },
+		{ "AwsIam_Token_refresh_failures", 5 },
+		{ "AwsIam_Credential_provider_failures", 3 },
+		{ "AwsIam_Queue_rejections", 2 },
+		{ "AwsIam_Backend_connection_successes", 13 },
+		{ "AwsIam_Backend_connection_failures", 4 },
+		{ "AwsIam_Token_cache_entries", 6 },
 		{ "AwsIam_In_flight_generations", 1 },
-		{ "AwsIam_Queued_generations", 0 },
-		{ "AwsIam_Waiting_sessions", 1 },
+		{ "AwsIam_Queued_generations", 8 },
+		{ "AwsIam_Waiting_sessions", 9 },
 	};
-	publish_global_aws_iam_token_source(&manager);
 	GloAdmin->stats___mysql_global();
 	const std::map<std::string, uint64_t> stats = query_aws_iam_stats(GloAdmin->statsdb);
-	ok(stats == expected, "stats_mysql_global rows have the fixed names and exact values");
+	ok(stats == expected, "stats_mysql_global projects all twelve provider values");
 
 	MySQL_Threads_Handler *saved_threads = GloMTH;
 	GloMTH = nullptr;
@@ -240,78 +150,60 @@ int main() {
 	prometheus::TextSerializer serializer;
 	const std::string metrics = serializer.Serialize(GloVars.prometheus_registry->Collect());
 	const std::map<std::string, uint64_t> prometheus_expected {
-		{ "proxysql_mysql_aws_iam_token_requests_total", 7 },
-		{ "proxysql_mysql_aws_iam_token_cache_hits_total", 1 },
-		{ "proxysql_mysql_aws_iam_token_refresh_successes_total", 1 },
-		{ "proxysql_mysql_aws_iam_token_refresh_failures_total", 2 },
-		{ "proxysql_mysql_aws_iam_credential_provider_failures_total", 1 },
-		{ "proxysql_mysql_aws_iam_queue_rejections_total", 1 },
-		{ "proxysql_mysql_aws_iam_backend_connection_successes_total", 1 },
-		{ "proxysql_mysql_aws_iam_backend_connection_failures_total", 1 },
-		{ "proxysql_mysql_aws_iam_token_cache_entries", 1 },
+		{ "proxysql_mysql_aws_iam_token_requests_total", 17 },
+		{ "proxysql_mysql_aws_iam_token_cache_hits_total", 11 },
+		{ "proxysql_mysql_aws_iam_token_refresh_successes_total", 7 },
+		{ "proxysql_mysql_aws_iam_token_refresh_failures_total", 5 },
+		{ "proxysql_mysql_aws_iam_credential_provider_failures_total", 3 },
+		{ "proxysql_mysql_aws_iam_queue_rejections_total", 2 },
+		{ "proxysql_mysql_aws_iam_backend_connection_successes_total", 13 },
+		{ "proxysql_mysql_aws_iam_backend_connection_failures_total", 4 },
+		{ "proxysql_mysql_aws_iam_token_cache_entries", 6 },
 		{ "proxysql_mysql_aws_iam_in_flight_generations", 1 },
-		{ "proxysql_mysql_aws_iam_queued_generations", 0 },
-		{ "proxysql_mysql_aws_iam_waiting_sessions", 1 },
+		{ "proxysql_mysql_aws_iam_queued_generations", 8 },
+		{ "proxysql_mysql_aws_iam_waiting_sessions", 9 },
 	};
 	bool prometheus_exact = true;
 	for (const auto& metric : prometheus_expected) {
 		prometheus_exact = prometheus_exact &&
 			has_unlabelled_sample(metrics, metric.first, metric.second);
 	}
-	ok(prometheus_exact, "Prometheus exports all twelve exact label-free metric names and values");
-	ok(metrics.find(kEndpoint) == std::string::npos &&
-		metrics.find(kRegion) == std::string::npos && metrics.find(kUser) == std::string::npos &&
-		metrics.find(kToken) == std::string::npos && metrics.find(kAccessKey) == std::string::npos &&
-		metrics.find(kProfile) == std::string::npos,
-		"Prometheus output contains no endpoint, region, user, token, access key, or profile text");
-
-	signer->release_blocked();
-	AwsIamTokenResult blocked_result = blocked_sink->take();
-	blocking_helper.join();
-	const AwsIamStatsSnapshot completed_but_session_waiting = manager.snapshot();
-	ok(blocked_result.status == AwsIamStatus::OK && helper_result.status == AwsIamStatus::OK &&
-		completed_but_session_waiting.in_flight_generations == 0 &&
-		completed_but_session_waiting.waiting_sessions == 1,
-		"a queued completion does not clear the gauge before the session exits its wait state");
-	manager.record_waiting_session(false);
-	manager.invalidate(success_key, miss.generation);
-	manager.invalidate(key("blocked.example"), blocked_result.generation);
-	const AwsIamStatsSnapshot cleaned = manager.snapshot();
-	ok(blocked_result.status == AwsIamStatus::OK && cleaned.token_cache_entries == 0 &&
-		cleaned.in_flight_generations == 0 && cleaned.queued_generations == 0 &&
-		cleaned.waiting_sessions == 0,
-		"all IAM gauges return to zero after completion and cache cleanup");
+	ok(prometheus_exact,
+		"Prometheus projects all twelve exact label-free provider values");
+	ok(metrics.find(kSensitiveEndpoint) == std::string::npos &&
+		metrics.find(kSensitiveRegion) == std::string::npos &&
+		metrics.find(kSensitiveUser) == std::string::npos &&
+		metrics.find(kSensitiveToken) == std::string::npos,
+		"provider metrics contain no endpoint, region, user, or token text");
 
 	publish_global_aws_iam_token_source(nullptr);
-	// ProxySQL_Admin owns metric pointers registered in the original process
-	// registry. Retain it while swapping in a fresh registry for the SDK-off
-	// startup contract, just as each real process retains one registry for life.
 	auto active_registry = GloVars.prometheus_registry;
 	GloVars.prometheus_registry = std::make_shared<prometheus::Registry>();
-	auto sdk_off_source = create_aws_iam_token_source({ 16, 16 });
-	publish_global_aws_iam_token_source(sdk_off_source.get());
+	auto unavailable = create_aws_iam_token_source({ 16, 16 });
+	const AwsIamTokenResult unavailable_result = unavailable->request_blocking(
+		{}, std::chrono::steady_clock::now());
+	ok(!unavailable->support_compiled() &&
+		unavailable_result.status == AwsIamStatus::SUPPORT_NOT_COMPILED &&
+		unavailable_result.failure.category == "support_not_compiled",
+		"the provider-neutral fallback remains fail closed");
+	publish_global_aws_iam_token_source(unavailable.get());
 	GloAdmin->stats___mysql_global();
 	saved_threads = GloMTH;
 	GloMTH = nullptr;
 	GloAdmin->p_update_metrics();
 	GloMTH = saved_threads;
-	const auto sdk_off_rows = query_aws_iam_stats(GloAdmin->statsdb);
-	const std::string sdk_off_metrics =
+	const auto unavailable_rows = query_aws_iam_stats(GloAdmin->statsdb);
+	const std::string unavailable_metrics =
 		serializer.Serialize(GloVars.prometheus_registry->Collect());
-	bool sdk_off_zero = sdk_off_rows.size() == 12;
-	for (const auto& row : sdk_off_rows) {
-		if (row.second != 0) diag("SDK-off row %s=%llu", row.first.c_str(),
-			static_cast<unsigned long long>(row.second));
-		sdk_off_zero = sdk_off_zero && row.second == 0;
-	}
+	bool unavailable_zero = unavailable_rows.size() == 12;
+	for (const auto& row : unavailable_rows) unavailable_zero = unavailable_zero && row.second == 0;
 	for (const auto& metric : prometheus_expected) {
-		const bool zero_sample = has_unlabelled_sample(sdk_off_metrics, metric.first, 0);
-		if (!zero_sample) diag("missing SDK-off zero sample %s", metric.first.c_str());
-		sdk_off_zero = sdk_off_zero && zero_sample;
+		unavailable_zero = unavailable_zero &&
+			has_unlabelled_sample(unavailable_metrics, metric.first, 0);
 	}
-	ok(sdk_off_zero,
-		"SDK-off source keeps the real admin table and process metrics at fixed zero values");
-	publish_global_aws_iam_token_source(nullptr);
+	ok(unavailable_zero,
+		"the unavailable provider projects fixed zero admin and Prometheus values");
+	shutdown_global_aws_iam_token_source();
 
 	return exit_status();
 }

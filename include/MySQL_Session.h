@@ -18,7 +18,7 @@
 #include "MySQL_Variables.h"
 #include "MySQL_User_Variables.h"
 #include "Base_Session.h"
-#include "Aws_Iam_Sdk.h"
+#include "Aws_Iam_Provider.h"
 
 #ifndef PROXYJSON
 #define PROXYJSON

@@ -1,14 +1,72 @@
-#include "Aws_Iam_Sdk.h"
+#include "Aws_Iam_Provider.h"
 #include "proxysql.h"
 
+#include "prometheus/counter.h"
+#include "prometheus/family.h"
+#include "prometheus/gauge.h"
+#include "prometheus/registry.h"
+
+#include <array>
 #include <atomic>
-#include <chrono>
 #include <condition_variable>
 #include <dlfcn.h>
 #include <mutex>
 #include <utility>
 
 namespace {
+
+constexpr std::array<const char *, 8> kAwsIamCounterNames {{
+	"proxysql_mysql_aws_iam_token_requests_total",
+	"proxysql_mysql_aws_iam_token_cache_hits_total",
+	"proxysql_mysql_aws_iam_token_refresh_successes_total",
+	"proxysql_mysql_aws_iam_token_refresh_failures_total",
+	"proxysql_mysql_aws_iam_credential_provider_failures_total",
+	"proxysql_mysql_aws_iam_queue_rejections_total",
+	"proxysql_mysql_aws_iam_backend_connection_successes_total",
+	"proxysql_mysql_aws_iam_backend_connection_failures_total",
+}};
+
+constexpr std::array<const char *, 4> kAwsIamGaugeNames {{
+	"proxysql_mysql_aws_iam_token_cache_entries",
+	"proxysql_mysql_aws_iam_in_flight_generations",
+	"proxysql_mysql_aws_iam_queued_generations",
+	"proxysql_mysql_aws_iam_waiting_sessions",
+}};
+
+struct AwsIamPrometheusState {
+	std::mutex mutex;
+	prometheus::Registry *registry { nullptr };
+	std::array<prometheus::Counter *, 8> counters {};
+	std::array<prometheus::Gauge *, 4> gauges {};
+};
+
+AwsIamPrometheusState& aws_iam_prometheus_state() {
+	static AwsIamPrometheusState state;
+	return state;
+}
+
+std::array<uint64_t, 8> aws_iam_counter_values(const AwsIamStatsSnapshot& stats) {
+	return {{
+		stats.token_requests,
+		stats.token_cache_hits,
+		stats.token_refresh_successes,
+		stats.token_refresh_failures,
+		stats.credential_provider_failures,
+		stats.queue_rejections,
+		stats.backend_connection_successes,
+		stats.backend_connection_failures,
+	}};
+}
+
+std::array<uint64_t, 4> aws_iam_gauge_values(const AwsIamStatsSnapshot& stats) {
+	return {{
+		stats.token_cache_entries,
+		stats.in_flight_generations,
+		stats.queued_generations,
+		stats.waiting_sessions,
+	}};
+}
+
 std::mutex global_source_mutex;
 std::condition_variable global_source_cv;
 AwsIamTokenSource *leased_global_source = nullptr;
@@ -54,9 +112,7 @@ struct AwsIamOwnedSource {
 				delete source;
 			}
 		}
-		if (module_handle != nullptr) {
-			dlclose(module_handle);
-		}
+		if (module_handle != nullptr) dlclose(module_handle);
 		source = nullptr;
 		destroy = nullptr;
 		module_handle = nullptr;
@@ -99,7 +155,67 @@ public:
 private:
 	std::atomic<uint64_t> next_handle_ { 1 };
 };
+
 } // namespace
+
+AwsIamNamedStats aws_iam_stats_mysql_global_rows(const AwsIamStatsSnapshot& stats) {
+	return {{
+		{ "AwsIam_Token_requests", stats.token_requests },
+		{ "AwsIam_Token_cache_hits", stats.token_cache_hits },
+		{ "AwsIam_Token_refresh_successes", stats.token_refresh_successes },
+		{ "AwsIam_Token_refresh_failures", stats.token_refresh_failures },
+		{ "AwsIam_Credential_provider_failures", stats.credential_provider_failures },
+		{ "AwsIam_Queue_rejections", stats.queue_rejections },
+		{ "AwsIam_Backend_connection_successes", stats.backend_connection_successes },
+		{ "AwsIam_Backend_connection_failures", stats.backend_connection_failures },
+		{ "AwsIam_Token_cache_entries", stats.token_cache_entries },
+		{ "AwsIam_In_flight_generations", stats.in_flight_generations },
+		{ "AwsIam_Queued_generations", stats.queued_generations },
+		{ "AwsIam_Waiting_sessions", stats.waiting_sessions },
+	}};
+}
+
+void initialize_aws_iam_prometheus_metrics(prometheus::Registry& registry) {
+	AwsIamPrometheusState& state = aws_iam_prometheus_state();
+	std::lock_guard<std::mutex> lock(state.mutex);
+	if (state.registry == &registry) return;
+	// A ProxySQL process owns one registry for its lifetime. Supporting a new
+	// registry here also keeps isolated tests deterministic after fresh setup.
+	state.registry = &registry;
+	state.counters.fill(nullptr);
+	state.gauges.fill(nullptr);
+	for (size_t i = 0; i < kAwsIamCounterNames.size(); ++i) {
+		auto& family = prometheus::BuildCounter()
+			.Name(kAwsIamCounterNames[i])
+			.Help("ProxySQL AWS IAM backend authentication counter.")
+			.Register(registry);
+		state.counters[i] = std::addressof(family.Add({}));
+	}
+	for (size_t i = 0; i < kAwsIamGaugeNames.size(); ++i) {
+		auto& family = prometheus::BuildGauge()
+			.Name(kAwsIamGaugeNames[i])
+			.Help("ProxySQL AWS IAM backend authentication gauge.")
+			.Register(registry);
+		state.gauges[i] = std::addressof(family.Add({}));
+	}
+}
+
+void update_aws_iam_prometheus_metrics(const AwsIamStatsSnapshot& stats) {
+	AwsIamPrometheusState& state = aws_iam_prometheus_state();
+	std::lock_guard<std::mutex> lock(state.mutex);
+	if (state.registry == nullptr) return;
+	const auto counters = aws_iam_counter_values(stats);
+	const auto gauges = aws_iam_gauge_values(stats);
+	for (size_t i = 0; i < counters.size(); ++i) {
+		const double current = state.counters[i]->Value();
+		if (static_cast<double>(counters[i]) > current) {
+			state.counters[i]->Increment(static_cast<double>(counters[i]) - current);
+		}
+	}
+	for (size_t i = 0; i < gauges.size(); ++i) {
+		state.gauges[i]->Set(static_cast<double>(gauges[i]));
+	}
+}
 
 void AwsIamTokenSourceLease::release() {
 	if (source_ == nullptr) return;
@@ -148,7 +264,8 @@ bool install_global_aws_iam_token_source(
 	if (source == nullptr || destroy == nullptr || module_handle == nullptr) return false;
 
 	std::lock_guard<std::mutex> lock(global_source_mutex);
-	if (global_source_accepting || leased_global_source != nullptr || installed_source.source != nullptr) {
+	if (global_source_accepting || leased_global_source != nullptr ||
+		installed_source.source != nullptr) {
 		return false;
 	}
 	if (GloVars.prometheus_registry != nullptr) {
@@ -161,6 +278,24 @@ bool install_global_aws_iam_token_source(
 	leased_global_source = source;
 	global_source_accepting = true;
 	GloAwsIamTokenSource = source;
+	return true;
+}
+
+bool uninstall_global_aws_iam_token_source(AwsIamTokenSource *expected_source) {
+	AwsIamOwnedSource retired_source;
+	{
+		std::unique_lock<std::mutex> lock(global_source_mutex);
+		if (expected_source == nullptr || installed_source.source != expected_source ||
+			leased_global_source != expected_source) {
+			return false;
+		}
+		global_source_accepting = false;
+		GloAwsIamTokenSource = nullptr;
+		global_source_cv.wait(lock, [] { return global_source_leases == 0; });
+		leased_global_source = nullptr;
+		retired_source = std::move(installed_source);
+	}
+	retired_source.reset();
 	return true;
 }
 

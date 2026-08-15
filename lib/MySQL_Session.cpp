@@ -26,7 +26,7 @@ using json = nlohmann::json;
 #include "StatCounters.h"
 #include "MySQL_Authentication.hpp"
 #include "MySQL_Backend_Auth.h"
-#include "Aws_Iam_Sdk.h"
+#include "Aws_Iam_Provider.h"
 #include "MySQL_Passthrough_Auth_Cache.h"
 #include "MySQL_LDAP_Authentication.hpp"
 #include "MySQL_Protocol.h"

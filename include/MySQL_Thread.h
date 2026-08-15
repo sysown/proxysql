@@ -10,7 +10,7 @@
 #include "proxysql_admin.h"
 
 #include "MySQL_Variables.h"
-#include "Aws_Iam_Token_Manager.h"
+#include "Aws_Iam_Provider.h"
 #ifdef IDLE_THREADS
 #include <sys/epoll.h>
 #endif // IDLE_THREADS

@@ -5,7 +5,7 @@
 #ifdef PROXYSQL40
 
 #include "ProxySQL_PluginManager.h"
-#include "Aws_Iam_Sdk.h"
+#include "Aws_Iam_Provider.h"
 #include "MySQL_Thread.h"
 
 #include <atomic>

@@ -9,7 +9,7 @@
 
 #include "proxysql.h"
 #include "cpp.h"
-#include "Aws_Iam_Sdk.h"
+#include "Aws_Iam_Provider.h"
 #include "MySQL_Authentication.hpp"
 #include "MySQL_Data_Stream.h"
 #include "MySQL_HostGroups_Manager.h"

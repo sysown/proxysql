@@ -62,7 +62,7 @@ using json = nlohmann::json;
 #include "PgSQL_Authentication.h"
 #include "MySQL_LDAP_Authentication.hpp"
 #include "MySQL_Passthrough_Auth_Cache.h"
-#include "Aws_Iam_Sdk.h"
+#include "Aws_Iam_Provider.h"
 #include "MySQL_Query_Cache.h"
 #include "PgSQL_Query_Cache.h"
 #include "proxysql_restapi.h"

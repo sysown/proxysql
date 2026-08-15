@@ -425,7 +425,7 @@ $(LIBPROXYSQLAR): FORCE
 # ===========================================================================
 
 UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
-	protocol_unit-t auth_unit-t aws_iam_policy_unit-t aws_iam_connection_config_unit-t aws_iam_token_manager_unit-t aws_iam_completion_queue_unit-t aws_iam_session_state_unit-t aws_iam_connection_secret_unit-t aws_iam_pool_unit-t aws_iam_failure_unit-t aws_iam_kill_helper_unit-t connection_pool_unit-t \
+	protocol_unit-t auth_unit-t aws_iam_policy_unit-t aws_iam_connection_config_unit-t aws_iam_provider_boundary_unit-t aws_iam_completion_queue_unit-t aws_iam_session_state_unit-t aws_iam_connection_secret_unit-t aws_iam_pool_unit-t aws_iam_failure_unit-t aws_iam_kill_helper_unit-t connection_pool_unit-t \
 	rule_matching_unit-t hostgroups_unit-t monitor_health_unit-t \
 	pgsql_command_complete_unit-t \
 	ffto_protocol_unit-t \
@@ -928,21 +928,18 @@ aws_iam_connection_secret_unit-t: ALLOW_MULTI_DEF += \
 	-Wl,--wrap=OPENSSL_cleanse
 endif
 
-# The token manager is deliberately independent of both the AWS SDK and the
-# ProxySQL process globals.  Keep its focused concurrency test equally narrow.
-aws_iam_token_manager_unit-t: aws_iam_token_manager_unit-t.cpp \
-	$(PROXYSQL_PATH)/lib/Aws_Iam_Token_Manager.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
-	$(CXX) $< $(PROXYSQL_PATH)/lib/Aws_Iam_Token_Manager.cpp \
-		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o $(IDIRS) $(OPT) \
-		$(PROMETHEUS_LDIR)/libprometheus-cpp-core.a -lpthread -lcrypto -o $@
+aws_iam_provider_boundary_unit-t: aws_iam_provider_boundary_unit-t.cpp \
+	$(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -ldl \
+		$(ALLOW_MULTI_DEF) -o $@
 
 # The completion inbox is intentionally independent of sessions and the core
 # archive so its producer/lifetime contract can run under TSan in isolation.
 aws_iam_completion_queue_unit-t: aws_iam_completion_queue_unit-t.cpp \
-	$(PROXYSQL_PATH)/lib/Aws_Iam_Token_Manager.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
-	$(CXX) $< $(PROXYSQL_PATH)/lib/Aws_Iam_Token_Manager.cpp \
-		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o $(IDIRS) $(OPT) \
-		$(PROMETHEUS_LDIR)/libprometheus-cpp-core.a -lpthread -lcrypto -o $@
+	$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o $(IDIRS) $(OPT) \
+		-lpthread -lcrypto -o $@
 
 test_aws_iam_metrics-t: ../test_aws_iam_metrics-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(TEST_HELPERS_OBJ) -I$(TEST_HELPERS_DIR) \

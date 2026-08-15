@@ -28,7 +28,7 @@
 #define STATUS_MYSQL_CONNECTION_HAS_WARNINGS         0x00001000
 
 #include "Servers_SslParams.h"
-#include "Aws_Iam_Token_Manager.h"
+#include "Aws_Iam_Provider.h"
 #include "MySQL_Backend_Auth.h"
 
 #ifdef PROXYSQLED25519
