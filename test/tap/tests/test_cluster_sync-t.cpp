@@ -2797,7 +2797,7 @@ cleanup:
 	{
 		pid_t pid = replica_pid.load();
 		if (pid > 0) {
-			int wait_secs = 5;
+			const int wait_secs = get_env_int("WITHASAN", 0) ? 30 : 5;
 			bool exited = false;
 			for (int i = 0; i < wait_secs; i++) {
 				if (waitpid(pid, nullptr, WNOHANG) != 0) {

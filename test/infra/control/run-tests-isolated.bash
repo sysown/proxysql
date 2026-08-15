@@ -31,6 +31,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 export WORKSPACE="${REPO_ROOT}"
 
+source "${SCRIPT_DIR}/asan-detection.bash"
+
+TEST_SANITIZER_ENV=(-e WITHASAN=0)
+if proxysql_binary_uses_asan "${WORKSPACE}/src/proxysql"; then
+    export WITHASAN=1
+    export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}"
+    TEST_SANITIZER_ENV=(-e WITHASAN=1 -e ASAN_OPTIONS="${ASAN_OPTIONS}")
+    echo ">>> Detected ASAN-instrumented ProxySQL; enabling ASAN-aware TAP behavior"
+else
+    export WITHASAN=0
+fi
+
 # Default INFRA_ID if not provided
 export INFRA_ID="${INFRA_ID:-dev-$USER}"
 export INFRA="${INFRA:-${INFRA_TYPE}}"
@@ -312,6 +324,7 @@ docker run \
     -e MULTI_GROUP="${MULTI_GROUP:-0}" \
     -e GCOV_PREFIX="/gcov/tap" \
     -e GCOV_PREFIX_STRIP="2" \
+    "${TEST_SANITIZER_ENV[@]}" \
     proxysql-ci-base:latest \
     /bin/bash -c "
         set -e
