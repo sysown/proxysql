@@ -929,16 +929,28 @@ void MySQL_Connection::connect_start_SetClientFlag(unsigned long& client_flags) 
 		}
 	}
 
-	// 'CLIENT_DEPRECATE_EOF' capability is disabled by default in mariadb_client.
-	// Based on the value of 'mysql-enable_server_deprecate_eof', enable this
-	// capability in a new connection.
+	/**
+	 * @brief Select the backend CLIENT_DEPRECATE_EOF request for this connect attempt.
+	 * @details The local connect-call flags express a client preference only.  Connector/C
+	 *          records actual support from the backend greeting in server_capabilities;
+	 *          a backend that does not advertise the bit remains a legacy-EOF backend.
+	 *
+	 * @par Normal backend connections
+	 *      Request CLIENT_DEPRECATE_EOF when mysql-enable_server_deprecate_eof is enabled.
+	 * @par Enforced session tracking
+	 *      Request CLIENT_DEPRECATE_EOF regardless of that setting because session tracking
+	 *      requires the deprecate-EOF protocol.
+	 * @par Fast-forward connections
+	 *      Replace the normal preference with the frontend's negotiated state.  Forward the
+	 *      request only when the frontend both requested the capability and saw it advertised.
+	 */
 	if (mysql_thread___enable_server_deprecate_eof) {
-		mysql->options.client_flag |= CLIENT_DEPRECATE_EOF;
+		client_flags |= CLIENT_DEPRECATE_EOF;
 	}
 
 	// override 'mysql-enable_server_deprecate_eof' behavior if 'session_track_variables' is set to 'ENFORCED'
 	if (mysql_thread___session_track_variables == session_track_variables::ENFORCED) {
-		mysql->options.client_flag |= CLIENT_DEPRECATE_EOF;
+		client_flags |= CLIENT_DEPRECATE_EOF;
 	}
 
 	if (myds != NULL) {
@@ -947,11 +959,11 @@ void MySQL_Connection::connect_start_SetClientFlag(unsigned long& client_flags) 
 				assert(myds->sess->client_myds != NULL);
 				MySQL_Connection * c = myds->sess->client_myds->myconn;
 				assert(c != NULL);
-				mysql->options.client_flag &= ~(CLIENT_DEPRECATE_EOF); // we disable it by default
+				client_flags &= ~(CLIENT_DEPRECATE_EOF); // we disable it by default
 				// if both client_flag and server_capabilities (used for client) , set CLIENT_DEPRECATE_EOF
 				if (c->options.client_flag & CLIENT_DEPRECATE_EOF) {
 					if (c->options.server_capabilities & CLIENT_DEPRECATE_EOF) {
-						mysql->options.client_flag |= CLIENT_DEPRECATE_EOF;
+						client_flags |= CLIENT_DEPRECATE_EOF;
 					}
 				}
 				// In case of 'fast_forward', we only enable compression if both, client and backend matches. Otherwise,
