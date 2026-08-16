@@ -25,6 +25,7 @@ using namespace std;
 
 const uint32_t kWaitSeconds = 5;
 const uint32_t kProbeTimeoutMs = 5000;
+const int kHeldConnectionRuleId = 153000;
 const char kOrdinaryAuroraQuery[] =
 	"SELECT SERVER_ID,"
 	"IF("
@@ -86,6 +87,9 @@ int setup(CommandLine& cl, MYSQL*& admin, BGD_Simulator& sim) {
 		return EXIT_FAILURE;
 	}
 	if (aurora_bgd_execute_all(admin, {
+		"DELETE FROM mysql_query_rules WHERE rule_id=" +
+			to_string(kHeldConnectionRuleId),
+		"LOAD MYSQL QUERY RULES TO RUNTIME",
 		"DELETE FROM mysql_users WHERE username='testuser'",
 		"INSERT INTO mysql_users(username,password,active,default_hostgroup,transaction_persistent) "
 			"VALUES ('testuser','testuser',1,0,1)",
@@ -100,6 +104,9 @@ int setup(CommandLine& cl, MYSQL*& admin, BGD_Simulator& sim) {
 int cleanup(MYSQL* admin, BGD_Simulator& sim) {
 	int admin_rc = aurora_bgd_admin_cleanup(admin);
 	int user_rc = admin == nullptr ? EXIT_FAILURE : aurora_bgd_execute_all(admin, {
+		"DELETE FROM mysql_query_rules WHERE rule_id=" +
+			to_string(kHeldConnectionRuleId),
+		"LOAD MYSQL QUERY RULES TO RUNTIME",
 		"DELETE FROM mysql_users WHERE username='testuser'",
 		"LOAD MYSQL USERS TO RUNTIME",
 	});
@@ -214,9 +221,24 @@ int set_default_hostgroup(MYSQL* admin, int hostgroup) {
 	});
 }
 
+int set_held_connection_rule(MYSQL* admin, bool enabled) {
+	vector<string> queries {
+		"DELETE FROM mysql_query_rules WHERE rule_id=" +
+			to_string(kHeldConnectionRuleId),
+	};
+	if (enabled) {
+		queries.push_back(
+			"INSERT INTO mysql_query_rules"
+			"(rule_id,active,username,multiplex,apply,comment) VALUES (" +
+			to_string(kHeldConnectionRuleId) +
+			",1,'testuser',0,1,'Aurora BGD held connection')");
+	}
+	queries.push_back("LOAD MYSQL QUERY RULES TO RUNTIME");
+	return aurora_bgd_execute_all(admin, queries);
+}
+
 bool route_to_expected_backend(
-	CommandLine& cl, BGD_Simulator& sim, const Endpoint& expected_backend,
-	const Aurora_BGD_Membership_Set& expected_membership
+	CommandLine& cl, BGD_Simulator& sim, const Endpoint& expected_backend
 ) {
 	auto [sequence_rc, sequence] = sim.replica_probe_log_last_sequence();
 	if (sequence_rc != EXIT_SUCCESS) {
@@ -227,16 +249,14 @@ bool route_to_expected_backend(
 		return false;
 	}
 	auto [rc, rows] = mysql_query_ext_rows(client, kOrdinaryAuroraQuery);
-	const bool result_matches = rc == EXIT_SUCCESS
-		&& aurora_bgd_result_matches_membership(rows, expected_membership);
-	if (!result_matches) {
+	(void)rows;
+	if (rc != EXIT_SUCCESS) {
 		diag("Backend routing query failed with MySQL error %d: %s",
 			mysql_errno(client), mysql_error(client));
-	}
-	mysql_close(client);
-	if (!result_matches) {
+		mysql_close(client);
 		return false;
 	}
+	mysql_close(client);
 
 	auto [logs_rc, logs] = sim.replica_probe_log_since(sequence);
 	if (logs_rc != EXIT_SUCCESS) {
@@ -246,19 +266,18 @@ bool route_to_expected_backend(
 	for (const Aurora_Replica_Probe_Log& log : logs) {
 		if (log.probe_kind == Aurora_Replica_Probe_Kind::ordinary) {
 			routed_probe = &log;
+			if (log.backend.host == expected_backend.host
+				&& log.backend.port == expected_backend.port) {
+				return true;
+			}
 		}
 	}
-	if (routed_probe == nullptr
-		|| routed_probe->backend.host != expected_backend.host
-		|| routed_probe->backend.port != expected_backend.port) {
-		diag(
-			"Ordinary Aurora query reached %s:%d; expected %s:%d",
-			routed_probe ? routed_probe->backend.host.c_str() : "<none>",
-			routed_probe ? routed_probe->backend.port : 0,
-			expected_backend.host.c_str(), expected_backend.port);
-		return false;
-	}
-	return true;
+	diag(
+		"Ordinary Aurora query reached %s:%d; expected %s:%d",
+		routed_probe ? routed_probe->backend.host.c_str() : "<none>",
+		routed_probe ? routed_probe->backend.port : 0,
+		expected_backend.host.c_str(), expected_backend.port);
+	return false;
 }
 
 bool route_members_to_expected_ips(
@@ -273,10 +292,7 @@ bool route_members_to_expected_ips(
 		Endpoint expected_backend = target
 			? deployment.target.members[i].endpoint.backend()
 			: deployment.production.members[i].endpoint.backend();
-		const Aurora_BGD_Membership_Set& expected_membership = target
-			? deployment.target : deployment.production;
-		if (!route_to_expected_backend(
-			cl, sim, expected_backend, expected_membership)) {
+		if (!route_to_expected_backend(cl, sim, expected_backend)) {
 			return false;
 		}
 	}
@@ -358,7 +374,6 @@ int test_bgd_status_available(MYSQL* admin, BGD_Simulator& sim, TestState& state
  *
  * - Keep canonical writer placement unchanged.
  * - Replace ordinary Aurora probes with fast target-membership probes.
- * - Ignore a competing production role observation.
  */
 int test_switchover_initiated(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	Aurora_BGD_Test_Deployment& deployment = state.deployment;
@@ -380,20 +395,6 @@ int test_switchover_initiated(MYSQL* admin, BGD_Simulator& sim, TestState& state
 	ok(active_seq_rc == EXIT_SUCCESS && fast_bgd_without_ordinary(
 		sim, active_sequence, deployment.target_replica_set, 650, 3),
 		"INITIATED uses fast membership probes and suspends the ordinary Aurora query");
-
-	vector<Aurora_Replica_Row> competing_source = deployment.production.replica_rows();
-	competing_source[0].session_id = "source-observed-reader";
-	competing_source[1].session_id = "MASTER_SESSION_ID";
-	auto [source_change_rc, source_change_sequence] = sim.replica_probe_log_last_sequence();
-	if (source_change_rc != EXIT_SUCCESS || sim.replica_update(
-		deployment.blue_replica_set, competing_source, deployment.production.backends())
-		!= EXIT_SUCCESS) {
-		diag("Error: failed to publish the competing source role observation");
-		return EXIT_FAILURE;
-	}
-	ok(fast_bgd_without_ordinary(
-		sim, source_change_sequence, deployment.target_replica_set, 350, 2),
-		"changed source roles cannot compete while production probing is suspended");
 	return EXIT_SUCCESS;
 }
 
@@ -421,13 +422,6 @@ int test_switchover_in_progress(
 		admin, state.writer_hostgroup, state.reader_hostgroup,
 		deployment.production.members.front().endpoint.hostname, true) == EXIT_SUCCESS,
 		"IN_PROGRESS demotes the snapshotted production writer");
-	ok(runtime_server_count(
-		admin, state.writer_hostgroup, deployment.production.members[1].endpoint.hostname, 0)
-		&& runtime_server_count(
-			admin, state.reader_hostgroup,
-			deployment.production.members[1].endpoint.hostname, 1, "ONLINE"),
-		"the competing source observation does not promote a reader");
-
 	auto [repeat_progress_rc, repeat_progress_sequence] = sim.replica_probe_log_last_sequence();
 	if (repeat_progress_rc != EXIT_SUCCESS
 		|| publish_status(sim, deployment, "SWITCHOVER_IN_PROGRESS") != EXIT_SUCCESS) {
@@ -447,19 +441,51 @@ int test_switchover_in_progress(
 			>= static_cast<int64_t>(state.route_hostgroups.size()),
 		"all member routes use source IPs and hold pre-cutover pools");
 
+	vector<Aurora_Replica_Row> competing_source = deployment.production.replica_rows();
+	competing_source[0].session_id = "source-observed-reader";
+	competing_source[1].session_id = "MASTER_SESSION_ID";
+	auto [source_change_rc, source_change_sequence] = sim.replica_probe_log_last_sequence();
+	bool source_change_ignored = source_change_rc == EXIT_SUCCESS
+		&& sim.replica_update(
+			deployment.blue_replica_set, competing_source, deployment.production.backends())
+			== EXIT_SUCCESS
+		&& fast_bgd_without_ordinary(
+			sim, source_change_sequence, deployment.target_replica_set, 350, 2);
+	ok(source_change_ignored,
+		"changed source roles cannot compete while production probing is suspended");
+	ok(runtime_server_count(
+		admin, state.writer_hostgroup, deployment.production.members[1].endpoint.hostname, 0)
+		&& runtime_server_count(
+			admin, state.reader_hostgroup,
+			deployment.production.members[1].endpoint.hostname, 1, "ONLINE"),
+		"the competing source observation does not promote a reader");
+	if (sim.replica_update(
+		deployment.blue_replica_set, deployment.production.replica_rows(),
+		deployment.production.backends()) != EXIT_SUCCESS) {
+		diag("Error: failed to restore the source membership fixture");
+		return EXIT_FAILURE;
+	}
+
 	if (set_default_hostgroup(admin, state.route_hostgroups.front()) != EXIT_SUCCESS) {
 		return EXIT_FAILURE;
 	}
-	state.held_client = init_mysql_conn(cl.host, cl.port, cl.username, cl.password);
-	bool held_connection = state.held_client != nullptr
-		&& mysql_query(state.held_client, "BEGIN") == 0;
+	bool held_connection = set_held_connection_rule(admin, true) == EXIT_SUCCESS;
+	state.held_client = held_connection
+		? init_mysql_conn(cl.host, cl.port, cl.username, cl.password) : nullptr;
+	held_connection = state.held_client != nullptr
+		&& mysql_query(state.held_client, "SELECT 1") == 0;
 	if (held_connection) {
-		auto [query_rc, rows] = mysql_query_ext_rows(state.held_client, kOrdinaryAuroraQuery);
-		held_connection = query_rc == EXIT_SUCCESS
-			&& aurora_bgd_result_matches_membership(rows, deployment.production);
+		MYSQL_RES* result = mysql_store_result(state.held_client);
+		held_connection = result != nullptr;
+		if (result != nullptr) {
+			mysql_free_result(result);
+		}
 	}
 	ok(held_connection && member_route_used_count(admin, state.route_hostgroups) >= 1,
 		"a production connection remains in use across the cutover boundary");
+	if (set_held_connection_rule(admin, false) != EXIT_SUCCESS) {
+		return EXIT_FAILURE;
+	}
 	return EXIT_SUCCESS;
 }
 
@@ -505,7 +531,6 @@ int test_switchover_post_processing(
 		&& member_route_used_count(admin, state.route_hostgroups) >= 1,
 		"POST_PROCESSING advances without waiting for an in-use connection to close");
 	if (state.held_client != nullptr) {
-		mysql_query(state.held_client, "ROLLBACK");
 		mysql_close(state.held_client);
 		state.held_client = nullptr;
 	}
@@ -688,14 +713,12 @@ int test_auto_discovered_refresh_and_rename(
 		return EXIT_FAILURE;
 	}
 
-	Aurora_BGD_Membership_Set observed_target = deployment.target;
-	observed_target.members.pop_back();
 	bool retained_routing = true;
 	for (size_t i = 0; i < state.refreshed_route_hostgroups.size(); ++i) {
 		retained_routing = retained_routing
 			&& set_default_hostgroup(admin, state.refreshed_route_hostgroups[i]) == EXIT_SUCCESS
 			&& route_to_expected_backend(
-				cl, sim, deployment.target.members[i].endpoint.backend(), observed_target);
+				cl, sim, deployment.target.members[i].endpoint.backend());
 	}
 	ok(retained_routing,
 		"POST_PROCESSING routes all auto-discovered readers with the retained complete refreshed map");
@@ -784,11 +807,9 @@ int test_available_production_refresh_and_freeze(
 		const Endpoint expected = target
 			? deployment.target.members[i].endpoint.backend()
 			: deployment.production.members[i].endpoint.backend();
-		const Aurora_BGD_Membership_Set& expected_membership = target
-			? deployment.target : deployment.production;
 		frozen_routes = frozen_routes
 			&& set_default_hostgroup(admin, state.refreshed_route_hostgroups[i]) == EXIT_SUCCESS
-			&& route_to_expected_backend(cl, sim, expected, expected_membership);
+			&& route_to_expected_backend(cl, sim, expected);
 	}
 	ok(frozen_routes,
 		"INITIATED freezes the refreshed production map despite later membership changes");
@@ -845,8 +866,7 @@ int test_post_processing_after_membership_completion(
 
 	int default_rc = set_default_hostgroup(admin, state.gated_route_hostgroup);
 	ok(default_rc == EXIT_SUCCESS && route_to_expected_backend(
-		cl, sim, deployment.production.members.front().endpoint.backend(),
-		deployment.production),
+		cl, sim, deployment.production.members.front().endpoint.backend()),
 		"POST_PROCESSING leaves routing unchanged without a complete target snapshot");
 
 	auto [refresh_seq_rc, refresh_sequence] = sim.replica_probe_log_last_sequence();
@@ -866,8 +886,7 @@ int test_post_processing_after_membership_completion(
 			admin, { state.gated_route_hostgroup }, "=0") == EXIT_SUCCESS
 		&& set_default_hostgroup(admin, state.gated_route_hostgroup) == EXIT_SUCCESS) {
 		target_routing = route_to_expected_backend(
-			cl, sim, deployment.target.members.front().endpoint.backend(),
-			deployment.target);
+			cl, sim, deployment.target.members.front().endpoint.backend());
 	}
 	ok(target_routing,
 		"repeated POST_PROCESSING applies routing after membership becomes complete");

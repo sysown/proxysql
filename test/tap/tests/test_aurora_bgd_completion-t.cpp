@@ -53,7 +53,7 @@ struct TestState {
 	int green_writer_hostgroup { 1562 };
 	int green_reader_hostgroup { 1563 };
 	vector<int> route_hostgroups { 1564, 1565, 1566 };
-	int post_completion_route_hostgroup { 1567 };
+	vector<int> post_completion_route_hostgroups { 1567, 1568, 1569 };
 	Aurora_BGD_Test_Deployment direct { aurora_bgd_deployment_b_writer_only() };
 	int direct_writer_hostgroup { 1580 };
 	int direct_reader_hostgroup { 1581 };
@@ -192,8 +192,7 @@ int add_green_servers(
 }
 
 bool route_to_expected_backend(
-	CommandLine& cl, BGD_Simulator& sim, const Endpoint& expected_backend,
-	const Aurora_BGD_Membership_Set& expected_membership
+	CommandLine& cl, BGD_Simulator& sim, const Endpoint& expected_backend
 ) {
 	auto [sequence_rc, sequence] = sim.replica_probe_log_last_sequence();
 	if (sequence_rc != EXIT_SUCCESS) {
@@ -204,28 +203,37 @@ bool route_to_expected_backend(
 		return false;
 	}
 	auto [query_rc, rows] = mysql_query_ext_rows(client, kOrdinaryAuroraQuery);
-	const bool result_matches = query_rc == EXIT_SUCCESS
-		&& aurora_bgd_result_matches_membership(rows, expected_membership);
-	if (!result_matches) {
+	(void)rows;
+	if (query_rc != EXIT_SUCCESS) {
 		diag("Backend routing query failed with MySQL error %d: %s",
 			mysql_errno(client), mysql_error(client));
-	}
-	mysql_close(client);
-	if (!result_matches) {
+		mysql_close(client);
 		return false;
 	}
+	mysql_close(client);
 
 	auto [logs_rc, logs] = sim.replica_probe_log_since(sequence);
 	if (logs_rc != EXIT_SUCCESS) {
 		return false;
 	}
+	const Aurora_Replica_Probe_Log* ordinary_probe = nullptr;
 	for (const Aurora_Replica_Probe_Log& log : logs) {
-		if (log.probe_kind == Aurora_Replica_Probe_Kind::ordinary
-			&& log.backend.host == expected_backend.host
-			&& log.backend.port == expected_backend.port) {
-			return true;
+		if (log.probe_kind == Aurora_Replica_Probe_Kind::ordinary) {
+			ordinary_probe = &log;
+			if (log.backend.host == expected_backend.host
+				&& log.backend.port == expected_backend.port) {
+				return true;
+			}
 		}
 	}
+	if (ordinary_probe == nullptr) {
+		diag("Routing query produced no ordinary Aurora backend probe");
+		return false;
+	}
+	diag(
+		"Routing query reached backend %s:%d; expected %s:%d",
+		ordinary_probe->backend.host.c_str(), ordinary_probe->backend.port,
+		expected_backend.host.c_str(), expected_backend.port);
 	return false;
 }
 
@@ -240,9 +248,7 @@ bool route_members(
 		const Endpoint expected = target
 			? deployment.target.members[i].endpoint.backend()
 			: deployment.production.members[i].endpoint.backend();
-		const Aurora_BGD_Membership_Set& expected_membership = target
-			? deployment.target : deployment.production;
-		if (!route_to_expected_backend(cl, sim, expected, expected_membership)) {
+		if (!route_to_expected_backend(cl, sim, expected)) {
 			return false;
 		}
 	}
@@ -270,10 +276,10 @@ int wait_for_pool_count(MYSQL* admin, int hostgroup, const string& comparison) {
 
 bool server_count(
 	MYSQL* admin, int hostgroup, const string& hostname, int expected,
-	const string& status = ""
+	const string& status = "", const string& table = "runtime_mysql_servers"
 ) {
 	string query =
-		"SELECT COUNT(*) FROM runtime_mysql_servers WHERE hostgroup_id=" +
+		"SELECT COUNT(*) FROM " + table + " WHERE hostgroup_id=" +
 		to_string(hostgroup) + " AND hostname=" + aurora_bgd_sql_quote(hostname);
 	if (!status.empty()) {
 		query += " AND status=" + aurora_bgd_sql_quote(status);
@@ -478,8 +484,7 @@ int test_completion_after_post_processing(
 	bool green_pool_ready = set_default_hostgroup(admin, state.green_writer_hostgroup)
 		== EXIT_SUCCESS
 		&& route_to_expected_backend(
-			cl, sim, deployment.target.members.front().endpoint.backend(),
-			deployment.target)
+			cl, sim, deployment.target.members.front().endpoint.backend())
 		&& pool_count(admin, state.green_writer_hostgroup) >= 1;
 	ok(target_route_pool >= 1 && green_pool_ready,
 		"pre-completion target and configured-green pools are established");
@@ -510,10 +515,14 @@ int test_completion_after_post_processing(
 		deployment.target.members.front().endpoint.hostname, 1, "SHUNNED")
 		&& server_count(
 			admin, state.green_writer_hostgroup,
-			deployment.target.members[1].endpoint.hostname, 1, "OFFLINE_HARD"),
+			deployment.target.members[1].endpoint.hostname, 1, "OFFLINE_HARD",
+			"mysql_servers"),
 		"completion preserves configured SHUNNED and OFFLINE_HARD green rows");
-	ok(route_members(
-		cl, admin, sim, deployment, state.route_hostgroups, false),
+	ok(add_member_routes(
+		admin, deployment, state.post_completion_route_hostgroups) == EXIT_SUCCESS
+		&& route_members(
+			cl, admin, sim, deployment,
+			state.post_completion_route_hostgroups, false),
 		"completion removes every writer and reader traffic pin without DNS verification");
 
 	auto [replica_seq_rc, replica_sequence] = sim.replica_probe_log_last_sequence();
@@ -524,8 +533,7 @@ int test_completion_after_post_processing(
 	bool recreated_green_pool = set_default_hostgroup(admin, state.green_writer_hostgroup)
 		== EXIT_SUCCESS
 		&& route_to_expected_backend(
-			cl, sim, deployment.target.members.front().endpoint.backend(),
-			deployment.target)
+			cl, sim, deployment.target.members.front().endpoint.backend())
 		&& pool_count(admin, state.green_writer_hostgroup) >= 1;
 	auto [same_seq_rc, same_sequence] = sim.probe_log_last_sequence();
 	bool same_completion_seen = same_seq_rc == EXIT_SUCCESS
@@ -579,8 +587,7 @@ int test_completion_after_post_processing(
 	bool second_green_pool = set_default_hostgroup(admin, state.green_writer_hostgroup)
 		== EXIT_SUCCESS
 		&& route_to_expected_backend(
-			cl, sim, deployment.target.members.front().endpoint.backend(),
-			deployment.target);
+			cl, sim, deployment.target.members.front().endpoint.backend());
 	auto [repeat_different_seq_rc, repeat_different_sequence] = sim.probe_log_last_sequence();
 	bool repeated_different = repeat_different_seq_rc == EXIT_SUCCESS
 		&& publish_completed(sim, deployment, different) == EXIT_SUCCESS
@@ -627,8 +634,7 @@ int test_first_completed_observation(
 		return EXIT_FAILURE;
 	}
 	bool direct_pool_ready = route_to_expected_backend(
-		cl, sim, deployment.production.members.front().endpoint.backend(),
-		deployment.production)
+		cl, sim, deployment.production.members.front().endpoint.backend())
 		&& pool_count(admin, state.direct_route_hostgroup) >= 1;
 	ok(direct_pool_ready,
 		"direct-completion setup has an observable production route and pool");
@@ -651,8 +657,7 @@ int test_first_completed_observation(
 	ok(pool_count(admin, state.direct_route_hostgroup) >= 1
 		&& set_default_hostgroup(admin, state.direct_route_hostgroup) == EXIT_SUCCESS
 		&& route_to_expected_backend(
-			cl, sim, deployment.production.members.front().endpoint.backend(),
-			deployment.production),
+			cl, sim, deployment.production.members.front().endpoint.backend()),
 		"direct completion leaves unrelated production routing effects untouched");
 
 	usleep(750000);

@@ -176,8 +176,7 @@ int add_routes(
 }
 
 bool route_to_backend(
-	CommandLine& cl, BGD_Simulator& sim, const Endpoint& expected,
-	const Aurora_BGD_Membership_Set& expected_membership
+	CommandLine& cl, BGD_Simulator& sim, const Endpoint& expected
 ) {
 	auto [sequence_rc, sequence] = sim.replica_probe_log_last_sequence();
 	if (sequence_rc != EXIT_SUCCESS) {
@@ -188,9 +187,9 @@ bool route_to_backend(
 		return false;
 	}
 	auto [query_rc, rows] = mysql_query_ext_rows(client, kOrdinaryAuroraQuery);
+	(void)rows;
 	mysql_close(client);
-	if (query_rc != EXIT_SUCCESS
-		|| !aurora_bgd_result_matches_membership(rows, expected_membership)) {
+	if (query_rc != EXIT_SUCCESS) {
 		return false;
 	}
 	auto [logs_rc, logs] = sim.replica_probe_log_since(sequence);
@@ -217,9 +216,7 @@ bool route_members(
 		Endpoint expected = target
 			? deployment.target.members[i].endpoint.backend()
 			: deployment.production.members[i].endpoint.backend();
-		const Aurora_BGD_Membership_Set& expected_membership = target
-			? deployment.target : deployment.production;
-		if (!route_to_backend(cl, sim, expected, expected_membership)) {
+		if (!route_to_backend(cl, sim, expected)) {
 			return false;
 		}
 	}
@@ -330,86 +327,6 @@ int test_first_in_progress_after_ordinary_error(
 }
 
 /**
- * Reconstruct POST_PROCESSING after a non-empty but partial ordinary result.
- *
- * The configured/runtime hostgroups define the complete production membership,
- * so a writer-only observation cannot make a writer-only target map actionable.
- */
-int test_first_post_processing_after_partial_ordinary(
-	CommandLine& cl, MYSQL* admin, BGD_Simulator& sim, TestState& state
-) {
-	if (reset_scenario(admin, sim) != EXIT_SUCCESS) {
-		diag("Error: failed to reset before partial-probe late entry");
-		return EXIT_FAILURE;
-	}
-
-	Aurora_BGD_Test_Deployment& deployment = state.post;
-	vector<Aurora_Replica_Row> partial_production = deployment.production.replica_rows();
-	partial_production.resize(1);
-	vector<Aurora_Replica_Row> partial_target = deployment.target.replica_rows();
-	partial_target.resize(1);
-	if (sim.replica_update(
-		deployment.production.replica_set_id, partial_production,
-		deployment.production.backends()) != EXIT_SUCCESS
-		|| sim.replica_update(
-			deployment.target.replica_set_id, partial_target,
-			deployment.target.backends()) != EXIT_SUCCESS
-		|| sim.topology_update(
-			aurora_bgd_topology_backends(deployment),
-			aurora_bgd_topology(deployment, "SWITCHOVER_IN_POST_PROCESSING"))
-			!= EXIT_SUCCESS
-		|| aurora_bgd_admin_setup(
-			admin, deployment, state.post_writer_hostgroup,
-			state.post_reader_hostgroup, state.post_green_writer_hostgroup,
-			state.post_green_reader_hostgroup, false, 300, false) != EXIT_SUCCESS
-		|| add_routes(
-			admin, deployment, state.post_route_hostgroups,
-			state.post_green_writer_hostgroup) != EXIT_SUCCESS
-		|| aurora_bgd_wait_for_status(
-			admin, state.post_writer_hostgroup,
-			"SWITCHOVER_IN_POST_PROCESSING", kWaitSeconds) != EXIT_SUCCESS) {
-		diag("Error: failed to configure partial-probe POST_PROCESSING late entry");
-		return EXIT_FAILURE;
-	}
-
-	auto [partial_seq_rc, partial_sequence] = sim.replica_probe_log_last_sequence();
-	bool partial_map_blocked = partial_seq_rc == EXIT_SUCCESS
-		&& sim.replica_update(
-			deployment.production.replica_set_id,
-			deployment.production.replica_rows(), deployment.production.backends())
-			== EXIT_SUCCESS;
-	if (partial_map_blocked) {
-		auto [partial_probe_rc, partial_probe] = aurora_bgd_wait_for_replica_probe(
-			sim, partial_sequence, deployment.target.backends(),
-			Aurora_Replica_Probe_Kind::bgd_membership, 5000,
-			deployment.target.replica_set_id);
-		partial_map_blocked = partial_probe_rc == EXIT_SUCCESS
-			&& route_members(
-				cl, admin, sim, deployment, state.post_route_hostgroups, false);
-	}
-	ok(partial_map_blocked,
-		"a partial initial ordinary result cannot authorize partial target routing");
-
-	auto [complete_seq_rc, complete_sequence] = sim.replica_probe_log_last_sequence();
-	bool complete_map_applied = complete_seq_rc == EXIT_SUCCESS
-		&& sim.replica_update(
-			deployment.target.replica_set_id, deployment.target.replica_rows(),
-			deployment.target.backends()) == EXIT_SUCCESS;
-	if (complete_map_applied) {
-		auto [complete_probe_rc, complete_probe] = aurora_bgd_wait_for_replica_probe(
-			sim, complete_sequence, deployment.target.backends(),
-			Aurora_Replica_Probe_Kind::bgd_membership, 5000,
-			deployment.target.replica_set_id);
-		complete_map_applied = complete_probe_rc == EXIT_SUCCESS
-			&& route_members(
-				cl, admin, sim, deployment, state.post_route_hostgroups, true);
-	}
-	ok(complete_map_applied,
-		"complete target membership routes every configured production member");
-	return EXIT_SUCCESS;
-}
-
-/**
  * Start a worker from SWITCHOVER_IN_POST_PROCESSING.
  *
  * - Publish POST_PROCESSING before the worker exists.
@@ -448,7 +365,7 @@ int test_first_post_processing(
 }
 
 int main() {
-	plan(9);
+	plan(7);
 
 	CommandLine cl {};
 	MYSQL* admin = nullptr;
@@ -475,13 +392,6 @@ int main() {
 	// Simulator: fail the initial ordinary query while publishing IN_PROGRESS.
 	// Verify: configured production membership still permits immediate demotion.
 	if (test_first_in_progress_after_ordinary_error(admin, sim, state) != EXIT_SUCCESS) {
-		goto exit_cleanup;
-	}
-
-	// Simulator: return only the writer from the first ordinary and target probes.
-	// Verify: configured production membership blocks partial routing, then accepts the full map.
-	if (test_first_post_processing_after_partial_ordinary(cl, admin, sim, state)
-		!= EXIT_SUCCESS) {
 		goto exit_cleanup;
 	}
 

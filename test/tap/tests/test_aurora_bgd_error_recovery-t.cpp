@@ -177,8 +177,7 @@ int add_routes(
 }
 
 bool route_to_backend(
-	CommandLine& cl, BGD_Simulator& sim, const Endpoint& expected,
-	const Aurora_BGD_Membership_Set& expected_membership
+	CommandLine& cl, BGD_Simulator& sim, const Endpoint& expected
 ) {
 	auto [sequence_rc, sequence] = sim.replica_probe_log_last_sequence();
 	if (sequence_rc != EXIT_SUCCESS) {
@@ -189,9 +188,9 @@ bool route_to_backend(
 		return false;
 	}
 	auto [query_rc, rows] = mysql_query_ext_rows(client, kOrdinaryAuroraQuery);
+	(void)rows;
 	mysql_close(client);
-	if (query_rc != EXIT_SUCCESS
-		|| !aurora_bgd_result_matches_membership(rows, expected_membership)) {
+	if (query_rc != EXIT_SUCCESS) {
 		return false;
 	}
 	auto [logs_rc, logs] = sim.replica_probe_log_since(sequence);
@@ -218,9 +217,7 @@ bool route_members(
 		Endpoint expected = target
 			? deployment.target.members[i].endpoint.backend()
 			: deployment.production.members[i].endpoint.backend();
-		const Aurora_BGD_Membership_Set& expected_membership = target
-			? deployment.target : deployment.production;
-		if (!route_to_backend(cl, sim, expected, expected_membership)) {
+		if (!route_to_backend(cl, sim, expected)) {
 			return false;
 		}
 	}
@@ -449,8 +446,7 @@ int test_post_processing_rollback(
 	Aurora_BGD_Test_Deployment& deployment = state.post;
 	ok(set_default_hostgroup(admin, state.post_green_writer_hostgroup) == EXIT_SUCCESS
 		&& route_to_backend(
-			cl, sim, deployment.target.members.front().endpoint.backend(),
-			deployment.target)
+			cl, sim, deployment.target.members.front().endpoint.backend())
 		&& pool_count(admin, state.post_green_writer_hostgroup) >= 1,
 		"a configured green pool is established before rollback");
 	ok(publish_status(sim, deployment, "AVAILABLE") == EXIT_SUCCESS

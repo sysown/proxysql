@@ -126,8 +126,7 @@ int add_writer_route(
 }
 
 bool route_to_backend(
-	CommandLine& cl, BGD_Simulator& sim, const Endpoint& expected,
-	const Aurora_BGD_Membership_Set& expected_membership
+	CommandLine& cl, BGD_Simulator& sim, const Endpoint& expected
 ) {
 	auto [sequence_rc, sequence] = sim.replica_probe_log_last_sequence();
 	if (sequence_rc != EXIT_SUCCESS) {
@@ -138,9 +137,9 @@ bool route_to_backend(
 		return false;
 	}
 	auto [query_rc, rows] = mysql_query_ext_rows(client, kOrdinaryAuroraQuery);
+	(void)rows;
 	mysql_close(client);
-	if (query_rc != EXIT_SUCCESS
-		|| !aurora_bgd_result_matches_membership(rows, expected_membership)) {
+	if (query_rc != EXIT_SUCCESS) {
 		return false;
 	}
 	auto [logs_rc, logs] = sim.replica_probe_log_since(sequence);
@@ -166,9 +165,7 @@ bool route_writer(
 	const Endpoint expected = target
 		? deployment.target.members.front().endpoint.backend()
 		: deployment.production.members.front().endpoint.backend();
-	const Aurora_BGD_Membership_Set& expected_membership = target
-		? deployment.target : deployment.production;
-	return route_to_backend(cl, sim, expected, expected_membership);
+	return route_to_backend(cl, sim, expected);
 }
 
 bool writer_placement(

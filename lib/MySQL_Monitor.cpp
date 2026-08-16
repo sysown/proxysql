@@ -6861,10 +6861,7 @@ void MySQL_Monitor::aws_aurora_bgd_run_discovery_cycle(
 						aws_aurora_bgd_apply_completion(st, observation.fingerprint);
 					}
 				} else if (observation.valid) {
-					const bool entering_active =
-						observation.status >= AWS_Aurora_BGD_Status::SWITCHOVER_INITIATED
-						&& observation.status <= AWS_Aurora_BGD_Status::SWITCHOVER_IN_POST_PROCESSING;
-					if (entering_active && !st.production_snapshot_frozen
+					if (st.production_members.empty()
 						&& !aws_aurora_bgd_rebuild_production_snapshot(st)) {
 						proxy_error(
 							"AWS Aurora BGD [wHG=%u rHG=%u]: retaining current state until production membership is available\n",
