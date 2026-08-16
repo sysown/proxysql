@@ -1,6 +1,13 @@
 /**
  * @file test_aurora_bgd_completion-t.cpp
  * @brief Aurora BGD completion cleanup and terminal-latch behavior.
+ *
+ * Steps:
+ *
+ * 1. Complete directly from IN_PROGRESS and reconcile only the writer effect.
+ * 2. Complete after POST_PROCESSING and clean pins and eligible pools once.
+ * 3. Rearm completion only for a new fingerprint or confirmed topology drain.
+ * 4. Start directly at completion and verify no earlier phase is replayed.
  */
 
 #include <cstdint>
@@ -33,6 +40,24 @@ const char kOrdinaryAuroraQuery[] =
 	" ) "
 	"AND LAST_UPDATE_TIMESTAMP > NOW() - INTERVAL 180 SECOND"
 	" ORDER BY SERVER_ID";
+
+struct TestState {
+	Aurora_BGD_Test_Deployment progress { aurora_bgd_deployment_b_writer_only() };
+	int progress_writer_hostgroup { 1550 };
+	int progress_reader_hostgroup { 1551 };
+	int progress_green_writer_hostgroup { 1552 };
+	int progress_green_reader_hostgroup { 1553 };
+	Aurora_BGD_Test_Deployment post { aurora_bgd_deployment_a() };
+	int post_writer_hostgroup { 1560 };
+	int post_reader_hostgroup { 1561 };
+	int green_writer_hostgroup { 1562 };
+	int green_reader_hostgroup { 1563 };
+	vector<int> route_hostgroups { 1564, 1565, 1566 };
+	int post_completion_route_hostgroup { 1567 };
+	Aurora_BGD_Test_Deployment direct { aurora_bgd_deployment_b_writer_only() };
+	int direct_writer_hostgroup { 1580 };
+	int direct_reader_hostgroup { 1581 };
+};
 
 int setup(CommandLine& cl, MYSQL*& admin, BGD_Simulator& sim) {
 	if (cl.getEnv()) {
@@ -300,247 +325,312 @@ bool wait_for_topology_observation(
 	return rc == EXIT_SUCCESS;
 }
 
+/**
+ * Complete a deployment directly from IN_PROGRESS.
+ *
+ * - Restore the demoted writer without replaying POST_PROCESSING.
+ * - Resume ordinary production probing while retaining a terminal latch.
+ * - Release the latch only after confirmed topology absence.
+ */
+int test_completion_from_in_progress(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
+	Aurora_BGD_Test_Deployment& deployment = state.progress;
+	if (aurora_bgd_publish(sim, deployment) != EXIT_SUCCESS
+		|| aurora_bgd_admin_setup(
+			admin, deployment, state.progress_writer_hostgroup,
+			state.progress_reader_hostgroup, state.progress_green_writer_hostgroup,
+			state.progress_green_reader_hostgroup, false, 300, false) != EXIT_SUCCESS) {
+		diag("Error: failed to configure completion-from-IN_PROGRESS scenario");
+		return EXIT_FAILURE;
+	}
+
+	ok(aurora_bgd_wait_for_status(
+		admin, state.progress_writer_hostgroup, "AVAILABLE", kWaitSeconds) == EXIT_SUCCESS,
+		"completion-from-IN_PROGRESS scenario reaches AVAILABLE");
+	if (publish_status(sim, deployment, "SWITCHOVER_IN_PROGRESS") != EXIT_SUCCESS
+		|| aurora_bgd_wait_for_status(
+			admin, state.progress_writer_hostgroup,
+			"SWITCHOVER_IN_PROGRESS", kWaitSeconds) != EXIT_SUCCESS) {
+		diag("Error: failed to reach IN_PROGRESS");
+		return EXIT_FAILURE;
+	}
+	ok(wait_for_writer_demotion(
+		admin, state.progress_writer_hostgroup, state.progress_reader_hostgroup,
+		deployment.production.members.front().endpoint.hostname) == EXIT_SUCCESS,
+		"IN_PROGRESS demotes the writer before completion");
+
+	if (publish_completed(sim, deployment, deployment) != EXIT_SUCCESS
+		|| aurora_bgd_wait_for_status(
+			admin, state.progress_writer_hostgroup,
+			"SWITCHOVER_COMPLETED", kWaitSeconds) != EXIT_SUCCESS) {
+		diag("Error: failed to enter the completed latch from IN_PROGRESS");
+		return EXIT_FAILURE;
+	}
+	ok(true, "TARGET-only completion publishes SWITCHOVER_COMPLETED");
+	ok(wait_for_writer_policy(
+		admin, state.progress_writer_hostgroup, state.progress_reader_hostgroup,
+		deployment.production.members.front().endpoint.hostname, false) == EXIT_SUCCESS,
+		"completion restores the demoted writer without replaying POST_PROCESSING");
+
+	auto [replica_seq_rc, replica_sequence] = sim.replica_probe_log_last_sequence();
+	ok(replica_seq_rc == EXIT_SUCCESS && completion_probe_policy(
+		sim, replica_sequence, deployment, 750),
+		"completion resumes ordinary production probing and stops membership probing");
+
+	auto [repeat_seq_rc, repeat_sequence] = sim.probe_log_last_sequence();
+	bool repeated = repeat_seq_rc == EXIT_SUCCESS
+		&& publish_completed(sim, deployment, deployment) == EXIT_SUCCESS
+		&& wait_for_topology_observation(sim, repeat_sequence, deployment);
+	ok(repeated && wait_for_writer_policy(
+		admin, state.progress_writer_hostgroup, state.progress_reader_hostgroup,
+		deployment.production.members.front().endpoint.hostname, false) == EXIT_SUCCESS,
+		"repeated completion is a no-op while latched");
+
+	auto [error_seq_rc, error_sequence] = sim.probe_log_last_sequence();
+	bool error_retained = error_seq_rc == EXIT_SUCCESS
+		&& sim.topology_error(
+			aurora_bgd_topology_backends(deployment), 1205,
+			"simulated completion timeout") == EXIT_SUCCESS
+		&& wait_for_topology_observation(sim, error_sequence, deployment);
+	ok(error_retained && aurora_bgd_wait_for_status(
+		admin, state.progress_writer_hostgroup, "SWITCHOVER_COMPLETED", 1)
+		== EXIT_SUCCESS,
+		"topology query errors retain the completed latch");
+	ok(sim.topology_drop(aurora_bgd_topology_backends(deployment)) == EXIT_SUCCESS
+		&& aurora_bgd_wait_for_status(
+			admin, state.progress_writer_hostgroup, "NONE", kWaitSeconds) == EXIT_SUCCESS,
+		"confirmed topology absence releases the completed latch to NONE");
+	return EXIT_SUCCESS;
+}
+
+/**
+ * Complete a deployment after POST_PROCESSING.
+ *
+ * - Remove production pins and drain eligible configured-green pools once.
+ * - Preserve configured rows, public status, and post-cutover production pools.
+ * - Rearm cleanup only for a different deployment fingerprint or topology drain.
+ */
+int test_completion_after_post_processing(
+	CommandLine& cl, MYSQL* admin, BGD_Simulator& sim, TestState& state)
+{
+	if (reset_scenario(admin, sim) != EXIT_SUCCESS) {
+		diag("Error: failed to reset before POST_PROCESSING completion scenario");
+		return EXIT_FAILURE;
+	}
+
+	Aurora_BGD_Test_Deployment& deployment = state.post;
+	if (aurora_bgd_publish(sim, deployment) != EXIT_SUCCESS
+		|| aurora_bgd_admin_setup(
+			admin, deployment, state.post_writer_hostgroup, state.post_reader_hostgroup,
+			state.green_writer_hostgroup, state.green_reader_hostgroup,
+			false, 300, true) != EXIT_SUCCESS
+		|| add_green_servers(
+			admin, deployment, state.green_writer_hostgroup,
+			state.green_reader_hostgroup) != EXIT_SUCCESS
+		|| add_member_routes(admin, deployment, state.route_hostgroups) != EXIT_SUCCESS) {
+		diag("Error: failed to configure POST_PROCESSING completion scenario");
+		return EXIT_FAILURE;
+	}
+
+	ok(aurora_bgd_wait_for_status(
+		admin, state.post_writer_hostgroup, "AVAILABLE", kWaitSeconds) == EXIT_SUCCESS,
+		"POST_PROCESSING completion scenario reaches AVAILABLE");
+	if (publish_status(sim, deployment, "SWITCHOVER_IN_PROGRESS") != EXIT_SUCCESS
+		|| aurora_bgd_wait_for_status(
+			admin, state.post_writer_hostgroup,
+			"SWITCHOVER_IN_PROGRESS", kWaitSeconds) != EXIT_SUCCESS
+		|| publish_status(sim, deployment, "SWITCHOVER_IN_POST_PROCESSING") != EXIT_SUCCESS
+		|| aurora_bgd_wait_for_status(
+			admin, state.post_writer_hostgroup,
+			"SWITCHOVER_IN_POST_PROCESSING", kWaitSeconds) != EXIT_SUCCESS) {
+		diag("Error: failed to advance through POST_PROCESSING");
+		return EXIT_FAILURE;
+	}
+	ok(true, "active deployment advances through POST_PROCESSING");
+	ok(route_members(cl, admin, sim, deployment, state.route_hostgroups, true),
+		"POST_PROCESSING routes every production member to its target IP");
+
+	const int64_t target_route_pool = pool_count(admin, state.route_hostgroups.front());
+	bool green_pool_ready = set_default_hostgroup(admin, state.green_writer_hostgroup)
+		== EXIT_SUCCESS
+		&& route_to_expected_backend(
+			cl, sim, deployment.target.members.front().endpoint.backend())
+		&& pool_count(admin, state.green_writer_hostgroup) >= 1;
+	ok(target_route_pool >= 1 && green_pool_ready,
+		"pre-completion target and configured-green pools are established");
+
+	if (publish_completed(sim, deployment, deployment) != EXIT_SUCCESS
+		|| aurora_bgd_wait_for_status(
+			admin, state.post_writer_hostgroup,
+			"SWITCHOVER_COMPLETED", kWaitSeconds) != EXIT_SUCCESS) {
+		diag("Error: failed to complete the POST_PROCESSING scenario");
+		return EXIT_FAILURE;
+	}
+	ok(true, "completion after POST_PROCESSING enters the terminal latch");
+	ok(wait_for_writer_policy(
+		admin, state.post_writer_hostgroup, state.post_reader_hostgroup,
+		deployment.production.members.front().endpoint.hostname, true) == EXIT_SUCCESS,
+		"completion preserves canonical writer_is_also_reader placement");
+	ok(pool_count(admin, state.route_hostgroups.front()) >= target_route_pool,
+		"completion does not repeat retirement of post-cutover production pools");
+	ok(wait_for_pool_count(
+		admin, state.green_writer_hostgroup, "=0") == EXIT_SUCCESS,
+		"completion drains eligible configured-green pools immediately");
+	ok(server_count(
+		admin, state.green_reader_hostgroup,
+		deployment.target.members.back().endpoint.hostname, 1, "OFFLINE_SOFT"),
+		"completion preserves configured green rows and OFFLINE status");
+	ok(add_route(
+		admin, state.post_completion_route_hostgroup,
+		deployment.production.members.front().endpoint.hostname) == EXIT_SUCCESS
+		&& set_default_hostgroup(
+			admin, state.post_completion_route_hostgroup) == EXIT_SUCCESS
+		&& route_to_expected_backend(
+			cl, sim, deployment.production.members.front().endpoint.backend()),
+		"completion removes the production traffic pin without DNS verification");
+
+	auto [replica_seq_rc, replica_sequence] = sim.replica_probe_log_last_sequence();
+	ok(replica_seq_rc == EXIT_SUCCESS && completion_probe_policy(
+		sim, replica_sequence, deployment, 750),
+		"the completed latch uses configured cadence and canonical production probes");
+
+	bool recreated_green_pool = set_default_hostgroup(admin, state.green_writer_hostgroup)
+		== EXIT_SUCCESS
+		&& route_to_expected_backend(
+			cl, sim, deployment.target.members.front().endpoint.backend())
+		&& pool_count(admin, state.green_writer_hostgroup) >= 1;
+	auto [same_seq_rc, same_sequence] = sim.probe_log_last_sequence();
+	bool same_completion_seen = same_seq_rc == EXIT_SUCCESS
+		&& publish_completed(sim, deployment, deployment) == EXIT_SUCCESS
+		&& wait_for_topology_observation(sim, same_sequence, deployment);
+	ok(recreated_green_pool && same_completion_seen
+		&& pool_count(admin, state.green_writer_hostgroup) >= 1,
+		"repeated completion does not drain a pool created while latched");
+
+	auto [error_seq_rc, error_sequence] = sim.probe_log_last_sequence();
+	bool error_seen = error_seq_rc == EXIT_SUCCESS
+		&& sim.topology_error(
+			aurora_bgd_topology_backends(deployment), 1205,
+			"simulated latched timeout") == EXIT_SUCCESS
+		&& wait_for_topology_observation(sim, error_sequence, deployment);
+	ok(error_seen && aurora_bgd_wait_for_status(
+		admin, state.post_writer_hostgroup, "SWITCHOVER_COMPLETED", 1)
+		== EXIT_SUCCESS
+		&& pool_count(admin, state.green_writer_hostgroup) >= 1,
+		"query errors neither release the latch nor repeat completion cleanup");
+
+	Aurora_BGD_Test_Deployment different = aurora_bgd_deployment_b_writer_only();
+	auto [different_seq_rc, different_sequence] = sim.probe_log_last_sequence();
+	bool different_seen = different_seq_rc == EXIT_SUCCESS
+		&& publish_completed(sim, deployment, different) == EXIT_SUCCESS
+		&& wait_for_topology_observation(sim, different_sequence, deployment);
+	ok(different_seen && wait_for_pool_count(
+		admin, state.green_writer_hostgroup, "=0") == EXIT_SUCCESS,
+		"a different completed deployment fingerprint rearms and runs its cleanup");
+
+	bool second_green_pool = set_default_hostgroup(admin, state.green_writer_hostgroup)
+		== EXIT_SUCCESS
+		&& route_to_expected_backend(
+			cl, sim, deployment.target.members.front().endpoint.backend());
+	auto [repeat_different_seq_rc, repeat_different_sequence] = sim.probe_log_last_sequence();
+	bool repeated_different = repeat_different_seq_rc == EXIT_SUCCESS
+		&& publish_completed(sim, deployment, different) == EXIT_SUCCESS
+		&& wait_for_topology_observation(sim, repeat_different_sequence, deployment);
+	ok(second_green_pool && repeated_different
+		&& pool_count(admin, state.green_writer_hostgroup) >= 1,
+		"the new fingerprint is retained and its repeated completion is a no-op");
+	ok(sim.topology_delete(aurora_bgd_topology_backends(deployment)) == EXIT_SUCCESS
+		&& aurora_bgd_wait_for_status(
+			admin, state.post_writer_hostgroup, "NONE", kWaitSeconds) == EXIT_SUCCESS,
+		"successful empty topology releases the rearmed completed latch");
+	return EXIT_SUCCESS;
+}
+
+/**
+ * Start a worker from its first SWITCHOVER_COMPLETED observation.
+ *
+ * - Enter the terminal latch without a cached target map.
+ * - Keep canonical writer placement and avoid replaying active phases.
+ * - Rearm only after a successful topology drain.
+ */
+int test_first_completed_observation(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
+	if (reset_scenario(admin, sim) != EXIT_SUCCESS) {
+		diag("Error: failed to reset before direct-completion scenario");
+		return EXIT_FAILURE;
+	}
+
+	Aurora_BGD_Test_Deployment& deployment = state.direct;
+	if (sim.replica_update(
+		deployment.blue_replica_set, deployment.production.replica_rows(),
+		deployment.production.backends()) != EXIT_SUCCESS
+		|| sim.topology_update(
+			aurora_bgd_topology_backends(deployment),
+			aurora_bgd_completed_topology(deployment)) != EXIT_SUCCESS) {
+		diag("Error: failed to publish direct completion inputs");
+		return EXIT_FAILURE;
+	}
+	auto [sequence_rc, sequence] = sim.replica_probe_log_last_sequence();
+	if (aurora_bgd_admin_setup(
+		admin, deployment, state.direct_writer_hostgroup,
+		state.direct_reader_hostgroup, -1, -1, true, 300, false) != EXIT_SUCCESS) {
+		diag("Error: failed to configure direct completion");
+		return EXIT_FAILURE;
+	}
+
+	ok(aurora_bgd_wait_for_status(
+		admin, state.direct_writer_hostgroup,
+		"SWITCHOVER_COMPLETED", kWaitSeconds) == EXIT_SUCCESS,
+		"late entry directly at completion enters the terminal latch");
+	ok(wait_for_writer_policy(
+		admin, state.direct_writer_hostgroup, state.direct_reader_hostgroup,
+		deployment.production.members.front().endpoint.hostname, false) == EXIT_SUCCESS,
+		"direct completion leaves canonical writer placement unchanged");
+
+	auto [logs_rc, logs] = sim.replica_probe_log_since(sequence);
+	bool membership_probe = false;
+	for (const Aurora_Replica_Probe_Log& log : logs) {
+		membership_probe |= log.probe_kind == Aurora_Replica_Probe_Kind::bgd_membership;
+	}
+	ok(sequence_rc == EXIT_SUCCESS && logs_rc == EXIT_SUCCESS && !membership_probe,
+		"direct completion does not manufacture target membership or replay active phases");
+	ok(sim.topology_delete(aurora_bgd_topology_backends(deployment)) == EXIT_SUCCESS
+		&& aurora_bgd_wait_for_status(
+			admin, state.direct_writer_hostgroup, "NONE", kWaitSeconds) == EXIT_SUCCESS,
+		"direct-completion latch rearms only after topology drain");
+	return EXIT_SUCCESS;
+}
+
 int main() {
 	plan(28);
 
 	CommandLine cl {};
 	MYSQL* admin = nullptr;
 	BGD_Simulator sim {};
+
 	if (setup(cl, admin, sim) != EXIT_SUCCESS) {
 		return exit_status();
 	}
 
-	// Completion from IN_PROGRESS reconciles the writer without replaying POST_PROCESSING.
-	Aurora_BGD_Test_Deployment progress = aurora_bgd_deployment_b_writer_only();
-	const int progress_writer_hg = 1550;
-	const int progress_reader_hg = 1551;
-	if (aurora_bgd_publish(sim, progress) != EXIT_SUCCESS
-		|| aurora_bgd_admin_setup(
-			admin, progress, progress_writer_hg, progress_reader_hg,
-			1552, 1553, false, 300, false) != EXIT_SUCCESS) {
-		diag("Error: failed to configure completion-from-IN_PROGRESS scenario");
-		cleanup(admin, sim);
-		return exit_status();
-	}
-	ok(aurora_bgd_wait_for_status(
-		admin, progress_writer_hg, "AVAILABLE", kWaitSeconds) == EXIT_SUCCESS,
-		"completion-from-IN_PROGRESS scenario reaches AVAILABLE");
-	if (publish_status(sim, progress, "SWITCHOVER_IN_PROGRESS") != EXIT_SUCCESS
-		|| aurora_bgd_wait_for_status(
-			admin, progress_writer_hg, "SWITCHOVER_IN_PROGRESS", kWaitSeconds)
-			!= EXIT_SUCCESS) {
-		diag("Error: failed to reach IN_PROGRESS");
-		cleanup(admin, sim);
-		return exit_status();
-	}
-	ok(wait_for_writer_demotion(
-		admin, progress_writer_hg, progress_reader_hg,
-		progress.production.members.front().endpoint.hostname) == EXIT_SUCCESS,
-		"IN_PROGRESS demotes the writer before completion");
-	if (publish_completed(sim, progress, progress) != EXIT_SUCCESS
-		|| aurora_bgd_wait_for_status(
-			admin, progress_writer_hg, "SWITCHOVER_COMPLETED", kWaitSeconds)
-			!= EXIT_SUCCESS) {
-		diag("Error: failed to enter the completed latch from IN_PROGRESS");
-		cleanup(admin, sim);
-		return exit_status();
-	}
-	ok(true, "TARGET-only completion publishes SWITCHOVER_COMPLETED");
-	ok(wait_for_writer_policy(
-		admin, progress_writer_hg, progress_reader_hg,
-		progress.production.members.front().endpoint.hostname, false) == EXIT_SUCCESS,
-		"completion restores the demoted writer without replaying POST_PROCESSING");
-	auto [progress_replica_seq_rc, progress_replica_sequence] =
-		sim.replica_probe_log_last_sequence();
-	ok(progress_replica_seq_rc == EXIT_SUCCESS && completion_probe_policy(
-		sim, progress_replica_sequence, progress, 750),
-		"completion resumes ordinary production probing and stops membership probing");
-	auto [repeat_progress_seq_rc, repeat_progress_sequence] = sim.probe_log_last_sequence();
-	bool repeated_progress = repeat_progress_seq_rc == EXIT_SUCCESS
-		&& publish_completed(sim, progress, progress) == EXIT_SUCCESS
-		&& wait_for_topology_observation(sim, repeat_progress_sequence, progress);
-	ok(repeated_progress && wait_for_writer_policy(
-		admin, progress_writer_hg, progress_reader_hg,
-		progress.production.members.front().endpoint.hostname, false) == EXIT_SUCCESS,
-		"repeated completion is a no-op while latched");
-	auto [error_seq_rc, error_sequence] = sim.probe_log_last_sequence();
-	bool error_retained = error_seq_rc == EXIT_SUCCESS
-		&& sim.topology_error(
-			aurora_bgd_topology_backends(progress), 1205, "simulated completion timeout")
-			== EXIT_SUCCESS
-		&& wait_for_topology_observation(sim, error_sequence, progress);
-	ok(error_retained && aurora_bgd_wait_for_status(
-		admin, progress_writer_hg, "SWITCHOVER_COMPLETED", 1) == EXIT_SUCCESS,
-		"topology query errors retain the completed latch");
-	ok(sim.topology_drop(aurora_bgd_topology_backends(progress)) == EXIT_SUCCESS
-		&& aurora_bgd_wait_for_status(
-			admin, progress_writer_hg, "NONE", kWaitSeconds) == EXIT_SUCCESS,
-		"confirmed topology absence releases the completed latch to NONE");
+	TestState state {};
 
-	if (reset_scenario(admin, sim) != EXIT_SUCCESS) {
-		diag("Error: failed to reset before POST_PROCESSING completion scenario");
-		cleanup(admin, sim);
-		return exit_status();
+	// Simulator: advance a deployment to IN_PROGRESS, then publish completion.
+	// Verify: only the writer effect is reconciled and the completed latch is retained.
+	if (test_completion_from_in_progress(admin, sim, state) != EXIT_SUCCESS) {
+		goto exit_cleanup;
 	}
 
-	// Completion after POST_PROCESSING removes pins and drains configured green pools once.
-	Aurora_BGD_Test_Deployment post = aurora_bgd_deployment_a();
-	const int post_writer_hg = 1560;
-	const int post_reader_hg = 1561;
-	const int green_writer_hg = 1562;
-	const int green_reader_hg = 1563;
-	const vector<int> route_hgs {1564, 1565, 1566};
-	if (aurora_bgd_publish(sim, post) != EXIT_SUCCESS
-		|| aurora_bgd_admin_setup(
-			admin, post, post_writer_hg, post_reader_hg,
-			green_writer_hg, green_reader_hg, false, 300, true) != EXIT_SUCCESS
-		|| add_green_servers(admin, post, green_writer_hg, green_reader_hg) != EXIT_SUCCESS
-		|| add_member_routes(admin, post, route_hgs) != EXIT_SUCCESS) {
-		diag("Error: failed to configure POST_PROCESSING completion scenario");
-		cleanup(admin, sim);
-		return exit_status();
-	}
-	ok(aurora_bgd_wait_for_status(
-		admin, post_writer_hg, "AVAILABLE", kWaitSeconds) == EXIT_SUCCESS,
-		"POST_PROCESSING completion scenario reaches AVAILABLE");
-	if (publish_status(sim, post, "SWITCHOVER_IN_PROGRESS") != EXIT_SUCCESS
-		|| aurora_bgd_wait_for_status(
-			admin, post_writer_hg, "SWITCHOVER_IN_PROGRESS", kWaitSeconds)
-			!= EXIT_SUCCESS
-		|| publish_status(sim, post, "SWITCHOVER_IN_POST_PROCESSING") != EXIT_SUCCESS
-		|| aurora_bgd_wait_for_status(
-			admin, post_writer_hg, "SWITCHOVER_IN_POST_PROCESSING", kWaitSeconds)
-			!= EXIT_SUCCESS) {
-		diag("Error: failed to advance through POST_PROCESSING");
-		cleanup(admin, sim);
-		return exit_status();
-	}
-	ok(true, "active deployment advances through POST_PROCESSING");
-	ok(route_members(cl, admin, sim, post, route_hgs, true),
-		"POST_PROCESSING routes every production member to its target IP");
-	const int64_t target_route_pool = pool_count(admin, route_hgs.front());
-	bool green_pool_ready = set_default_hostgroup(admin, green_writer_hg) == EXIT_SUCCESS
-		&& route_to_expected_backend(cl, sim, post.target.members.front().endpoint.backend())
-		&& pool_count(admin, green_writer_hg) >= 1;
-	ok(target_route_pool >= 1 && green_pool_ready,
-		"pre-completion target and configured-green pools are established");
-	if (publish_completed(sim, post, post) != EXIT_SUCCESS
-		|| aurora_bgd_wait_for_status(
-			admin, post_writer_hg, "SWITCHOVER_COMPLETED", kWaitSeconds)
-			!= EXIT_SUCCESS) {
-		diag("Error: failed to complete the POST_PROCESSING scenario");
-		cleanup(admin, sim);
-		return exit_status();
-	}
-	ok(true, "completion after POST_PROCESSING enters the terminal latch");
-	ok(wait_for_writer_policy(
-		admin, post_writer_hg, post_reader_hg,
-		post.production.members.front().endpoint.hostname, true) == EXIT_SUCCESS,
-		"completion preserves canonical writer_is_also_reader placement");
-	ok(pool_count(admin, route_hgs.front()) >= target_route_pool,
-		"completion does not repeat retirement of post-cutover production pools");
-	ok(wait_for_pool_count(admin, green_writer_hg, "=0") == EXIT_SUCCESS,
-		"completion drains eligible configured-green pools immediately");
-	ok(server_count(
-		admin, green_reader_hg,
-		post.target.members.back().endpoint.hostname, 1, "OFFLINE_SOFT"),
-		"completion preserves configured green rows and OFFLINE status");
-	const int post_completion_route_hg = 1567;
-	ok(add_route(
-		admin, post_completion_route_hg,
-		post.production.members.front().endpoint.hostname) == EXIT_SUCCESS
-		&& set_default_hostgroup(admin, post_completion_route_hg) == EXIT_SUCCESS
-		&& route_to_expected_backend(
-			cl, sim, post.production.members.front().endpoint.backend()),
-		"completion removes the production traffic pin without DNS verification");
-	auto [post_replica_seq_rc, post_replica_sequence] = sim.replica_probe_log_last_sequence();
-	ok(post_replica_seq_rc == EXIT_SUCCESS && completion_probe_policy(
-		sim, post_replica_sequence, post, 750),
-		"the completed latch uses configured cadence and canonical production probes");
-	bool recreated_green_pool = set_default_hostgroup(admin, green_writer_hg) == EXIT_SUCCESS
-		&& route_to_expected_backend(cl, sim, post.target.members.front().endpoint.backend())
-		&& pool_count(admin, green_writer_hg) >= 1;
-	auto [same_completed_seq_rc, same_completed_sequence] = sim.probe_log_last_sequence();
-	bool same_completion_seen = same_completed_seq_rc == EXIT_SUCCESS
-		&& publish_completed(sim, post, post) == EXIT_SUCCESS
-		&& wait_for_topology_observation(sim, same_completed_sequence, post);
-	ok(recreated_green_pool && same_completion_seen && pool_count(admin, green_writer_hg) >= 1,
-		"repeated completion does not drain a pool created while latched");
-	auto [latched_error_seq_rc, latched_error_sequence] = sim.probe_log_last_sequence();
-	bool latched_error_seen = latched_error_seq_rc == EXIT_SUCCESS
-		&& sim.topology_error(
-			aurora_bgd_topology_backends(post), 1205, "simulated latched timeout")
-			== EXIT_SUCCESS
-		&& wait_for_topology_observation(sim, latched_error_sequence, post);
-	ok(latched_error_seen && aurora_bgd_wait_for_status(
-		admin, post_writer_hg, "SWITCHOVER_COMPLETED", 1) == EXIT_SUCCESS
-		&& pool_count(admin, green_writer_hg) >= 1,
-		"query errors neither release the latch nor repeat completion cleanup");
-	Aurora_BGD_Test_Deployment different = aurora_bgd_deployment_b_writer_only();
-	auto [different_seq_rc, different_sequence] = sim.probe_log_last_sequence();
-	bool different_seen = different_seq_rc == EXIT_SUCCESS
-		&& publish_completed(sim, post, different) == EXIT_SUCCESS
-		&& wait_for_topology_observation(sim, different_sequence, post);
-	ok(different_seen && wait_for_pool_count(admin, green_writer_hg, "=0") == EXIT_SUCCESS,
-		"a different completed deployment fingerprint rearms and runs its cleanup");
-	bool second_green_pool = set_default_hostgroup(admin, green_writer_hg) == EXIT_SUCCESS
-		&& route_to_expected_backend(cl, sim, post.target.members.front().endpoint.backend());
-	auto [repeat_different_seq_rc, repeat_different_sequence] = sim.probe_log_last_sequence();
-	bool repeated_different = repeat_different_seq_rc == EXIT_SUCCESS
-		&& publish_completed(sim, post, different) == EXIT_SUCCESS
-		&& wait_for_topology_observation(sim, repeat_different_sequence, post);
-	ok(second_green_pool && repeated_different && pool_count(admin, green_writer_hg) >= 1,
-		"the new fingerprint is retained and its repeated completion is a no-op");
-	ok(sim.topology_delete(aurora_bgd_topology_backends(post)) == EXIT_SUCCESS
-		&& aurora_bgd_wait_for_status(
-			admin, post_writer_hg, "NONE", kWaitSeconds) == EXIT_SUCCESS,
-		"successful empty topology releases the rearmed completed latch");
-
-	if (reset_scenario(admin, sim) != EXIT_SUCCESS) {
-		diag("Error: failed to reset before direct-completion scenario");
-		cleanup(admin, sim);
-		return exit_status();
+	// Simulator: advance through POST_PROCESSING, then publish completion repeatedly.
+	// Verify: pins and eligible pools are cleaned once per deployment fingerprint.
+	if (test_completion_after_post_processing(cl, admin, sim, state) != EXIT_SUCCESS) {
+		goto exit_cleanup;
 	}
 
-	// A first observation at completion has no target map and does not replay prior phases.
-	Aurora_BGD_Test_Deployment direct = aurora_bgd_deployment_b_writer_only();
-	if (sim.replica_update(
-		direct.blue_replica_set, direct.production.replica_rows(),
-		direct.production.backends()) != EXIT_SUCCESS
-		|| sim.topology_update(
-			aurora_bgd_topology_backends(direct),
-			aurora_bgd_completed_topology(direct)) != EXIT_SUCCESS) {
-		diag("Error: failed to publish direct completion inputs");
-		cleanup(admin, sim);
-		return exit_status();
+	// Simulator: make SWITCHOVER_COMPLETED the first observed deployment state.
+	// Verify: prior phase effects are not manufactured or replayed.
+	if (test_first_completed_observation(admin, sim, state) != EXIT_SUCCESS) {
+		goto exit_cleanup;
 	}
-	auto [direct_seq_rc, direct_sequence] = sim.replica_probe_log_last_sequence();
-	if (aurora_bgd_admin_setup(
-		admin, direct, 1580, 1581, -1, -1, true, 300, false) != EXIT_SUCCESS) {
-		diag("Error: failed to configure direct completion");
-		cleanup(admin, sim);
-		return exit_status();
-	}
-	ok(aurora_bgd_wait_for_status(
-		admin, 1580, "SWITCHOVER_COMPLETED", kWaitSeconds) == EXIT_SUCCESS,
-		"late entry directly at completion enters the terminal latch");
-	ok(wait_for_writer_policy(
-		admin, 1580, 1581,
-		direct.production.members.front().endpoint.hostname, false) == EXIT_SUCCESS,
-		"direct completion leaves canonical writer placement unchanged");
-	auto [direct_logs_rc, direct_logs] = sim.replica_probe_log_since(direct_sequence);
-	bool direct_membership_probe = false;
-	for (const Aurora_Replica_Probe_Log& log : direct_logs) {
-		direct_membership_probe |=
-			log.probe_kind == Aurora_Replica_Probe_Kind::bgd_membership;
-	}
-	ok(direct_seq_rc == EXIT_SUCCESS && direct_logs_rc == EXIT_SUCCESS
-		&& !direct_membership_probe,
-		"direct completion does not manufacture target membership or replay active phases");
-	ok(sim.topology_delete(aurora_bgd_topology_backends(direct)) == EXIT_SUCCESS
-		&& aurora_bgd_wait_for_status(admin, 1580, "NONE", kWaitSeconds) == EXIT_SUCCESS,
-		"direct-completion latch rearms only after topology drain");
 
+exit_cleanup:
 	if (cleanup(admin, sim) != EXIT_SUCCESS) {
 		diag("Error: failed to clean Aurora BGD completion test data");
 		return EXIT_FAILURE;

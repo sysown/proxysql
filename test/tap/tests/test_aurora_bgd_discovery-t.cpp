@@ -1,6 +1,14 @@
 /**
  * @file test_aurora_bgd_discovery-t.cpp
  * @brief Aurora BGD AVAILABLE discovery, three probes, and fail-closed mapping.
+ *
+ * Steps:
+ *
+ * 1. Publish a complete SOURCE/TARGET deployment and verify AVAILABLE discovery.
+ * 2. Verify topology and target-membership probes move to the selected target.
+ * 3. Publish incomplete and inconsistent membership and retain the last complete map.
+ * 4. Publish invalid topology rows and retain the last valid runtime state.
+ * 5. Verify automatic discovery accepts a writer-only deployment.
  */
 
 #include <cstdint>
@@ -16,6 +24,17 @@ using namespace std;
 
 const uint32_t kWaitSeconds = 5;
 const uint32_t kProbeTimeoutMs = 5000;
+
+struct TestState {
+	Aurora_BGD_Test_Deployment deployment { aurora_bgd_deployment_a() };
+	int writer_hostgroup { 1510 };
+	int reader_hostgroup { 1511 };
+	int green_writer_hostgroup { 1512 };
+	int green_reader_hostgroup { 1513 };
+	Aurora_BGD_Test_Deployment writer_only { aurora_bgd_deployment_b_writer_only() };
+	int writer_only_writer_hostgroup { 1520 };
+	int writer_only_reader_hostgroup { 1521 };
+};
 
 int setup(CommandLine& cl, MYSQL*& admin, BGD_Simulator& sim) {
 	if (cl.getEnv()) {
@@ -50,6 +69,11 @@ int cleanup(MYSQL* admin, BGD_Simulator& sim) {
 	}
 	return admin_rc == EXIT_SUCCESS && simulator_rc == EXIT_SUCCESS
 		? EXIT_SUCCESS : EXIT_FAILURE;
+}
+
+int reset_scenario(MYSQL* admin, BGD_Simulator& sim) {
+	return aurora_bgd_admin_cleanup(admin) == EXIT_SUCCESS
+		&& sim.cleanup() == EXIT_SUCCESS ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
 bool runtime_status_is(MYSQL* admin, int writer_hg, const string& status) {
@@ -118,75 +142,79 @@ bool invalid_topology_retains_available(
 	return probe_rc == EXIT_SUCCESS && runtime_status_is(admin, writer_hg, "AVAILABLE");
 }
 
-int main() {
-	plan(18);
-
-	CommandLine cl {};
-	MYSQL* admin = nullptr;
-	BGD_Simulator sim {};
-	if (setup(cl, admin, sim) != EXIT_SUCCESS) {
-		return exit_status();
-	}
-
-	const int writer_hg = 1510;
-	const int reader_hg = 1511;
-	Aurora_BGD_Test_Deployment deployment = aurora_bgd_deployment_a();
+/**
+ * Discover a complete Aurora blue/green deployment.
+ *
+ * - Publish complete production and target membership.
+ * - Verify the worker reaches AVAILABLE without interrupting ordinary Aurora probes.
+ * - Verify topology discovery, target bootstrap, and steady probes use the expected endpoints.
+ */
+int test_available_discovery(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
+	Aurora_BGD_Test_Deployment& deployment = state.deployment;
 	if (aurora_bgd_publish(sim, deployment) != EXIT_SUCCESS
-		|| aurora_bgd_admin_setup(admin, deployment, writer_hg, reader_hg, 1512, 1513, false)
-			!= EXIT_SUCCESS) {
+		|| aurora_bgd_admin_setup(
+			admin, deployment, state.writer_hostgroup, state.reader_hostgroup,
+			state.green_writer_hostgroup, state.green_reader_hostgroup, false) != EXIT_SUCCESS) {
 		diag("Error: failed to publish or configure deployment A");
-		cleanup(admin, sim);
-		return exit_status();
+		return EXIT_FAILURE;
 	}
 
-	ok(aurora_bgd_wait_for_status(admin, writer_hg, "AVAILABLE", kWaitSeconds) == EXIT_SUCCESS,
+	ok(aurora_bgd_wait_for_status(
+		admin, state.writer_hostgroup, "AVAILABLE", kWaitSeconds) == EXIT_SUCCESS,
 		"valid SOURCE/TARGET topology publishes AVAILABLE");
 
-	{
-		auto [rc, logs] = sim.replica_probe_log_since(0);
-		bool ordinary_seen = false;
-		for (const Aurora_Replica_Probe_Log& log : logs) {
-			if (log.probe_kind == Aurora_Replica_Probe_Kind::ordinary
-				&& log.replica_set_id == deployment.blue_replica_set) {
-				ordinary_seen = true;
-			}
+	auto [logs_rc, logs] = sim.replica_probe_log_since(0);
+	bool ordinary_seen = false;
+	for (const Aurora_Replica_Probe_Log& log : logs) {
+		if (log.probe_kind == Aurora_Replica_Probe_Kind::ordinary
+			&& log.replica_set_id == deployment.blue_replica_set) {
+			ordinary_seen = true;
 		}
-		ok(rc == EXIT_SUCCESS && ordinary_seen,
-			"the existing worker continues ordinary Aurora probing in AVAILABLE");
 	}
+	ok(logs_rc == EXIT_SUCCESS && ordinary_seen,
+		"the existing worker continues ordinary Aurora probing in AVAILABLE");
 
 	vector<Endpoint> blue_backends = deployment.production.backends();
-	{
-		auto [rc, probe] = aurora_bgd_wait_for_topology_probe(
-			sim, 0, blue_backends, BGD_Probe_Kind::metadata, kProbeTimeoutMs);
-		ok(rc == EXIT_SUCCESS, "topology discovery starts on a reachable production member");
-	}
-	{
-		auto [rc, probe] = sim.wait_for_replica_probe_log(
-			0, deployment.target_cluster_endpoint.backend(),
-			Aurora_Replica_Probe_Kind::bgd_membership, kProbeTimeoutMs,
-			0, deployment.target_replica_set);
-		ok(rc == EXIT_SUCCESS, "TARGET cluster endpoint bootstraps target membership");
-	}
+	auto [topology_rc, topology_probe] = aurora_bgd_wait_for_topology_probe(
+		sim, 0, blue_backends, BGD_Probe_Kind::metadata, kProbeTimeoutMs);
+	ok(topology_rc == EXIT_SUCCESS,
+		"topology discovery starts on a reachable production member");
+
+	auto [bootstrap_rc, bootstrap_probe] = sim.wait_for_replica_probe_log(
+		0, deployment.target_cluster_endpoint.backend(),
+		Aurora_Replica_Probe_Kind::bgd_membership, kProbeTimeoutMs,
+		0, deployment.target_replica_set);
+	ok(bootstrap_rc == EXIT_SUCCESS,
+		"TARGET cluster endpoint bootstraps target membership");
 
 	vector<Endpoint> target_backends;
 	for (Aurora_BGD_Member& member : deployment.target.members) {
 		target_backends.push_back(member.endpoint.backend());
 	}
-	{
-		auto [rc, probe] = aurora_bgd_wait_for_topology_probe(
-			sim, 0, target_backends, BGD_Probe_Kind::metadata, kProbeTimeoutMs);
-		ok(rc == EXIT_SUCCESS, "complete membership moves topology probes to target members");
-	}
-	{
-		auto [rc, probe] = aurora_bgd_wait_for_replica_probe(
-			sim, 0, target_backends, Aurora_Replica_Probe_Kind::bgd_membership,
-			kProbeTimeoutMs, deployment.target_replica_set);
-		ok(rc == EXIT_SUCCESS, "complete membership moves membership probes to target members");
-	}
+	auto [target_topology_rc, target_topology_probe] = aurora_bgd_wait_for_topology_probe(
+		sim, 0, target_backends, BGD_Probe_Kind::metadata, kProbeTimeoutMs);
+	ok(target_topology_rc == EXIT_SUCCESS,
+		"complete membership moves topology probes to target members");
 
+	auto [target_membership_rc, target_membership_probe] = aurora_bgd_wait_for_replica_probe(
+		sim, 0, target_backends, Aurora_Replica_Probe_Kind::bgd_membership,
+		kProbeTimeoutMs, deployment.target_replica_set);
+	ok(target_membership_rc == EXIT_SUCCESS,
+		"complete membership moves membership probes to target members");
+	return EXIT_SUCCESS;
+}
+
+/**
+ * Retain the last complete target membership after unusable observations.
+ *
+ * - Publish incomplete, ambiguous, unresolved, and mismatched target snapshots.
+ * - Ignore stale non-current rows.
+ * - Verify the worker continues probing the last complete target selection.
+ */
+int test_target_membership_validation(BGD_Simulator& sim, TestState& state) {
+	Aurora_BGD_Test_Deployment& deployment = state.deployment;
 	vector<Aurora_Replica_Row> complete_rows = deployment.target.replica_rows();
-	vector<Aurora_Replica_Row> incomplete_rows {complete_rows[0], complete_rows[1]};
+	vector<Aurora_Replica_Row> incomplete_rows { complete_rows[0], complete_rows[1] };
 	ok(retain_complete_target_after_membership(sim, deployment, incomplete_rows),
 		"an incomplete target result retains the previous complete target selection");
 
@@ -213,63 +241,129 @@ int main() {
 	ok(retain_complete_target_after_membership(sim, deployment, stale_extra_rows),
 		"IS_CURRENT=0 rows are excluded from the complete target snapshot");
 
-	if (sim.replica_update(
-		deployment.target_replica_set, complete_rows, deployment.target.backends()) != EXIT_SUCCESS) {
+	int restore_rc = sim.replica_update(
+		deployment.target_replica_set, complete_rows, deployment.target.backends());
+	if (restore_rc != EXIT_SUCCESS) {
 		diag("Error: failed to restore complete target membership");
-		cleanup(admin, sim);
-		return exit_status();
+		return EXIT_FAILURE;
 	}
+	return EXIT_SUCCESS;
+}
 
+/**
+ * Reject incomplete or unsupported topology observations.
+ *
+ * - Publish missing identity, SOURCE-only, mismatched-status, and unknown-status rows.
+ * - Verify the last AVAILABLE state and production routing remain unchanged.
+ */
+int test_topology_validation(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
+	Aurora_BGD_Test_Deployment& deployment = state.deployment;
 	vector<BGD_Topology_Row> valid_topology = aurora_bgd_available_topology(deployment);
+
 	vector<BGD_Topology_Row> missing_identity = valid_topology;
 	missing_identity[1].id.clear();
-	ok(invalid_topology_retains_available(admin, sim, deployment, missing_identity, writer_hg),
+	ok(invalid_topology_retains_available(
+		admin, sim, deployment, missing_identity, state.writer_hostgroup),
 		"missing TARGET identity does not replace AVAILABLE");
 
-	vector<BGD_Topology_Row> source_only {valid_topology.front()};
-	ok(invalid_topology_retains_available(admin, sim, deployment, source_only, writer_hg),
+	vector<BGD_Topology_Row> source_only { valid_topology.front() };
+	ok(invalid_topology_retains_available(
+		admin, sim, deployment, source_only, state.writer_hostgroup),
 		"SOURCE-only topology does not replace AVAILABLE");
 
 	vector<BGD_Topology_Row> mismatched_status = valid_topology;
 	mismatched_status[0].status = "SWITCHOVER_INITIATED";
-	ok(invalid_topology_retains_available(admin, sim, deployment, mismatched_status, writer_hg),
+	ok(invalid_topology_retains_available(
+		admin, sim, deployment, mismatched_status, state.writer_hostgroup),
 		"mismatched SOURCE/TARGET statuses do not replace AVAILABLE");
 
 	vector<BGD_Topology_Row> unknown_status = valid_topology;
 	unknown_status[0].status = "UNSUPPORTED_STATUS";
 	unknown_status[1].status = "UNSUPPORTED_STATUS";
-	ok(invalid_topology_retains_available(admin, sim, deployment, unknown_status, writer_hg),
+	ok(invalid_topology_retains_available(
+		admin, sim, deployment, unknown_status, state.writer_hostgroup),
 		"unsupported topology status is not copied into runtime state");
 
-	ok(runtime_production_unchanged(admin, writer_hg, reader_hg, deployment.production.members.size()),
+	ok(runtime_production_unchanged(
+		admin, state.writer_hostgroup, state.reader_hostgroup,
+		deployment.production.members.size()),
 		"AVAILABLE discovery performs no production routing action");
+	return EXIT_SUCCESS;
+}
 
-	if (aurora_bgd_admin_cleanup(admin) != EXIT_SUCCESS || sim.cleanup() != EXIT_SUCCESS) {
+/**
+ * Discover a writer-only deployment without configured green hostgroups.
+ *
+ * - Reset the complete-cluster scenario.
+ * - Configure automatic discovery with writer-only production and target membership.
+ * - Verify the worker admits AVAILABLE and accepts the target snapshot.
+ */
+int test_writer_only_discovery(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
+	if (reset_scenario(admin, sim) != EXIT_SUCCESS) {
 		diag("Error: failed to reset state before writer-only deployment");
-		cleanup(admin, sim);
-		return exit_status();
+		return EXIT_FAILURE;
 	}
 
-	Aurora_BGD_Test_Deployment writer_only = aurora_bgd_deployment_b_writer_only();
-	if (aurora_bgd_publish(sim, writer_only) != EXIT_SUCCESS
-		|| aurora_bgd_admin_setup(admin, writer_only, 1520, 1521, -1, -1, true)
-			!= EXIT_SUCCESS) {
+	Aurora_BGD_Test_Deployment& deployment = state.writer_only;
+	if (aurora_bgd_publish(sim, deployment) != EXIT_SUCCESS
+		|| aurora_bgd_admin_setup(
+			admin, deployment, state.writer_only_writer_hostgroup,
+			state.writer_only_reader_hostgroup, -1, -1, true) != EXIT_SUCCESS) {
 		diag("Error: failed to publish or configure writer-only deployment");
-		cleanup(admin, sim);
-		return exit_status();
-	}
-	ok(aurora_bgd_wait_for_status(admin, 1520, "AVAILABLE", kWaitSeconds) == EXIT_SUCCESS,
-		"auto-discovery admits a row without configured green hostgroups");
-	{
-		vector<Endpoint> writer_target {
-			writer_only.target.members.front().endpoint.backend()
-		};
-		auto [rc, probe] = aurora_bgd_wait_for_replica_probe(
-			sim, 0, writer_target, Aurora_Replica_Probe_Kind::bgd_membership,
-			kProbeTimeoutMs, writer_only.target_replica_set);
-		ok(rc == EXIT_SUCCESS, "a writer-only production cluster accepts a writer-only target snapshot");
+		return EXIT_FAILURE;
 	}
 
+	ok(aurora_bgd_wait_for_status(
+		admin, state.writer_only_writer_hostgroup, "AVAILABLE", kWaitSeconds) == EXIT_SUCCESS,
+		"auto-discovery admits a row without configured green hostgroups");
+
+	vector<Endpoint> writer_target { deployment.target.members.front().endpoint.backend() };
+	auto [probe_rc, probe] = aurora_bgd_wait_for_replica_probe(
+		sim, 0, writer_target, Aurora_Replica_Probe_Kind::bgd_membership,
+		kProbeTimeoutMs, deployment.target_replica_set);
+	ok(probe_rc == EXIT_SUCCESS,
+		"a writer-only production cluster accepts a writer-only target snapshot");
+	return EXIT_SUCCESS;
+}
+
+int main() {
+	plan(18);
+
+	CommandLine cl {};
+	MYSQL* admin = nullptr;
+	BGD_Simulator sim {};
+	if (setup(cl, admin, sim) != EXIT_SUCCESS) {
+		return exit_status();
+	}
+
+	TestState state {};
+
+	// Simulator: publish complete production and target membership.
+	// ProxySQL: configure explicit Aurora BGD hostgroups 1510-1513.
+	// Verify: discovery reaches AVAILABLE and hands probes to the selected target.
+	if (test_available_discovery(admin, sim, state) != EXIT_SUCCESS) {
+		goto exit_cleanup;
+	}
+
+	// Simulator: replace complete target membership with unusable observations.
+	// Verify: the worker retains its last complete target mapping.
+	if (test_target_membership_validation(sim, state) != EXIT_SUCCESS) {
+		goto exit_cleanup;
+	}
+
+	// Simulator: publish incomplete and unsupported topology rows.
+	// Verify: runtime state and production routing retain the last valid observation.
+	if (test_topology_validation(admin, sim, state) != EXIT_SUCCESS) {
+		goto exit_cleanup;
+	}
+
+	// ProxySQL: configure automatic discovery for a writer-only deployment.
+	// Verify: writer-only source and target snapshots are accepted.
+	if (test_writer_only_discovery(admin, sim, state) != EXIT_SUCCESS) {
+		goto exit_cleanup;
+	}
+
+exit_cleanup:
 	if (cleanup(admin, sim) != EXIT_SUCCESS) {
 		diag("Error: failed to clean Aurora BGD discovery state");
 		return EXIT_FAILURE;

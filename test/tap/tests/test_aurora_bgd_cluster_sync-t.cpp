@@ -1,6 +1,13 @@
 /**
  * @file test_aurora_bgd_cluster_sync-t.cpp
  * @brief Aurora BGD configuration sync preserves worker-owned status per node.
+ *
+ * Steps:
+ *
+ * 1. Start two ProxySQL nodes with independent simulator endpoints.
+ * 2. Publish AVAILABLE on the primary and INITIATED on the replica.
+ * 3. Synchronize the configured Aurora hostgroup row from primary to replica.
+ * 4. Verify configured fields synchronize while runtime status remains node-local.
  */
 
 #include <fcntl.h>
@@ -32,6 +39,20 @@ struct Replica_Process {
 	string directory;
 	string config_path;
 	string stderr_path;
+};
+
+Aurora_BGD_Test_Deployment peer_deployment();
+
+struct TestState {
+	MYSQL* primary_admin { nullptr };
+	MYSQL* replica_admin { nullptr };
+	Replica_Process replica_process {};
+	string primary_sqlite_interfaces;
+	BGD_Simulator primary_simulator {};
+	BGD_Simulator replica_simulator {};
+	Aurora_BGD_Test_Deployment deployment { peer_deployment() };
+	bool primary_simulator_connected { false };
+	bool replica_simulator_connected { false };
 };
 
 string config_quote(const string& value) {
@@ -195,112 +216,145 @@ int configure_peer(
 		? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
-int main() {
-	plan(5);
-	CommandLine cl {};
+int setup(CommandLine& cl, TestState& state) {
 	if (cl.getEnv()) {
 		diag("failed to load TAP environment");
-		return exit_status();
+		return EXIT_FAILURE;
 	}
 
-	MYSQL* primary_admin = init_mysql_conn(
+	state.primary_admin = init_mysql_conn(
 		cl.admin_host, cl.admin_port, cl.admin_username, cl.admin_password);
-	MYSQL* replica_admin = nullptr;
-	Replica_Process replica_process;
-	string primary_sqlite_interfaces;
-	BGD_Simulator primary_simulator;
-	BGD_Simulator replica_simulator;
-	Aurora_BGD_Test_Deployment deployment = peer_deployment();
-	bool primary_simulator_connected = false;
-	bool replica_simulator_connected = false;
-
-	if (primary_admin == nullptr
+	if (state.primary_admin == nullptr
 		|| get_variable_value(
-			primary_admin, "sqliteserver-mysql_ifaces", primary_sqlite_interfaces) != EXIT_SUCCESS
-		|| configure_sqlite_interfaces(primary_admin, kSQLiteInterfaces) != EXIT_SUCCESS
-		|| launch_replica(cl, replica_process) != EXIT_SUCCESS) {
+			state.primary_admin, "sqliteserver-mysql_ifaces",
+			state.primary_sqlite_interfaces) != EXIT_SUCCESS
+		|| configure_sqlite_interfaces(
+			state.primary_admin, kSQLiteInterfaces) != EXIT_SUCCESS
+		|| launch_replica(cl, state.replica_process) != EXIT_SUCCESS) {
 		diag("failed to prepare the two ProxySQL nodes");
-		goto cleanup;
+		return EXIT_FAILURE;
 	}
 
-	replica_admin = wait_for_proxysql(
+	state.replica_admin = wait_for_proxysql(
 		{kReplicaHost, cl.admin_username, cl.admin_password, kReplicaAdminPort},
 		kWaitSeconds);
-	if (replica_admin == nullptr
-		|| configure_sqlite_interfaces(replica_admin, kSQLiteInterfaces) != EXIT_SUCCESS) {
+	if (state.replica_admin == nullptr
+		|| configure_sqlite_interfaces(
+			state.replica_admin, kSQLiteInterfaces) != EXIT_SUCCESS) {
 		diag("failed to start the replica ProxySQL node");
-		goto cleanup;
+		return EXIT_FAILURE;
 	}
 
-	{
-		char username[] = "aurora1";
-		char password[] = "pass1";
-		primary_simulator_connected = primary_simulator.connect(
-			cl.host, 3306, username, password) == EXIT_SUCCESS;
-		replica_simulator_connected = replica_simulator.connect(
-			const_cast<char*>(kReplicaHost), 3306, username, password) == EXIT_SUCCESS;
-	}
-	if (!primary_simulator_connected || !replica_simulator_connected
-		|| configure_peer(primary_admin, primary_simulator, deployment, "AVAILABLE")
-			!= EXIT_SUCCESS
+	char username[] = "aurora1";
+	char password[] = "pass1";
+	state.primary_simulator_connected = state.primary_simulator.connect(
+		cl.host, 3306, username, password) == EXIT_SUCCESS;
+	state.replica_simulator_connected = state.replica_simulator.connect(
+		const_cast<char*>(kReplicaHost), 3306, username, password) == EXIT_SUCCESS;
+	if (!state.primary_simulator_connected || !state.replica_simulator_connected
 		|| configure_peer(
-			replica_admin, replica_simulator, deployment, "SWITCHOVER_INITIATED")
-			!= EXIT_SUCCESS) {
+			state.primary_admin, state.primary_simulator,
+			state.deployment, "AVAILABLE") != EXIT_SUCCESS
+		|| configure_peer(
+			state.replica_admin, state.replica_simulator,
+			state.deployment, "SWITCHOVER_INITIATED") != EXIT_SUCCESS) {
 		diag("failed to publish the two node-local Aurora observations");
-		goto cleanup;
+		return EXIT_FAILURE;
 	}
+	return EXIT_SUCCESS;
+}
 
-	ok(aurora_bgd_wait_for_status(primary_admin, 1800, "AVAILABLE", kWaitSeconds)
-		== EXIT_SUCCESS, "primary worker publishes its local AVAILABLE observation");
+/**
+ * Synchronize configured Aurora fields without synchronizing worker-owned status.
+ *
+ * - Verify each node publishes its local topology observation.
+ * - Synchronize the primary's configured hostgroup comment to the replica.
+ * - Verify AVAILABLE and INITIATED remain local to their respective workers.
+ */
+int test_configuration_sync_preserves_local_status(CommandLine& cl, TestState& state) {
 	ok(aurora_bgd_wait_for_status(
-		replica_admin, 1800, "SWITCHOVER_INITIATED", kWaitSeconds) == EXIT_SUCCESS,
+		state.primary_admin, 1800, "AVAILABLE", kWaitSeconds) == EXIT_SUCCESS,
+		"primary worker publishes its local AVAILABLE observation");
+	ok(aurora_bgd_wait_for_status(
+		state.replica_admin, 1800, "SWITCHOVER_INITIATED", kWaitSeconds) == EXIT_SUCCESS,
 		"replica worker publishes its local SWITCHOVER_INITIATED observation");
 
-	if (aurora_bgd_execute_all(replica_admin, {
+	if (aurora_bgd_execute_all(state.replica_admin, {
 		"DELETE FROM proxysql_servers",
 		"INSERT INTO proxysql_servers(hostname,port,weight,comment) VALUES (" +
 			aurora_bgd_sql_quote(cl.admin_host) + "," + to_string(cl.admin_port) +
 			",0,'Aurora BGD sync primary')",
 		"LOAD PROXYSQL SERVERS TO RUNTIME",
 	}) != EXIT_SUCCESS
-		|| aurora_bgd_execute_all(primary_admin, {
+		|| aurora_bgd_execute_all(state.primary_admin, {
 			"UPDATE mysql_aws_aurora_hostgroups SET comment='peer-config-synced' "
 				"WHERE writer_hostgroup=1800",
 			"LOAD MYSQL SERVERS TO RUNTIME",
 		}) != EXIT_SUCCESS) {
 		diag("failed to initiate Aurora configuration synchronization");
-		goto cleanup;
+		return EXIT_FAILURE;
 	}
 
 	ok(wait_for_cond(
-		replica_admin,
+		state.replica_admin,
 		"SELECT COUNT(*)=1 FROM mysql_aws_aurora_hostgroups "
 		"WHERE writer_hostgroup=1800 AND comment='peer-config-synced'",
 		kWaitSeconds) == EXIT_SUCCESS,
 		"Aurora BGD configured fields synchronize to the peer");
-	ok(aurora_bgd_wait_for_status(primary_admin, 1800, "AVAILABLE", kWaitSeconds)
-		== EXIT_SUCCESS, "configuration sync preserves the primary's local status");
 	ok(aurora_bgd_wait_for_status(
-		replica_admin, 1800, "SWITCHOVER_INITIATED", kWaitSeconds) == EXIT_SUCCESS,
+		state.primary_admin, 1800, "AVAILABLE", kWaitSeconds) == EXIT_SUCCESS,
+		"configuration sync preserves the primary's local status");
+	ok(aurora_bgd_wait_for_status(
+		state.replica_admin, 1800, "SWITCHOVER_INITIATED", kWaitSeconds) == EXIT_SUCCESS,
 		"configuration sync preserves the replica's local status");
+	return EXIT_SUCCESS;
+}
 
-cleanup:
-	if (primary_simulator_connected) {
-		primary_simulator.cleanup();
+int cleanup(TestState& state) {
+	if (state.primary_simulator_connected) {
+		state.primary_simulator.cleanup();
 	}
-	if (replica_simulator_connected) {
-		replica_simulator.cleanup();
+	if (state.replica_simulator_connected) {
+		state.replica_simulator.cleanup();
 	}
-	if (replica_admin != nullptr) {
-		aurora_bgd_admin_cleanup(replica_admin);
+	if (state.replica_admin != nullptr) {
+		aurora_bgd_admin_cleanup(state.replica_admin);
 	}
-	if (primary_admin != nullptr) {
-		aurora_bgd_admin_cleanup(primary_admin);
-		if (!primary_sqlite_interfaces.empty()) {
-			configure_sqlite_interfaces(primary_admin, primary_sqlite_interfaces);
+	if (state.primary_admin != nullptr) {
+		aurora_bgd_admin_cleanup(state.primary_admin);
+		if (!state.primary_sqlite_interfaces.empty()) {
+			configure_sqlite_interfaces(
+				state.primary_admin, state.primary_sqlite_interfaces);
 		}
-		mysql_close(primary_admin);
+		mysql_close(state.primary_admin);
+		state.primary_admin = nullptr;
 	}
-	stop_replica(replica_admin, replica_process, tests_failed() != 0);
+	stop_replica(
+		state.replica_admin, state.replica_process, tests_failed() != 0);
+	return EXIT_SUCCESS;
+}
+
+int main() {
+	plan(5);
+
+	CommandLine cl {};
+	TestState state {};
+
+	if (setup(cl, state) != EXIT_SUCCESS) {
+		goto exit_cleanup;
+	}
+
+	// Simulator: publish different Aurora states to two real ProxySQL nodes.
+	// ProxySQL: synchronize the configured Aurora hostgroup row between them.
+	// Verify: configured fields synchronize while runtime status remains node-local.
+	if (test_configuration_sync_preserves_local_status(cl, state) != EXIT_SUCCESS) {
+		goto exit_cleanup;
+	}
+
+exit_cleanup:
+	if (cleanup(state) != EXIT_SUCCESS) {
+		diag("failed to clean the Aurora BGD cluster-sync state");
+		return EXIT_FAILURE;
+	}
 	return exit_status();
 }
