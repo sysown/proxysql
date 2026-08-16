@@ -62,6 +62,7 @@
  */
 
 #include <unistd.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <sys/wait.h>
 #include <pthread.h>
@@ -1288,31 +1289,53 @@ int main(int, char**) {
 
 	// Launch proxysql with cluster config via fork/exec so we can track the PID
 	std::atomic<pid_t> replica_pid { 0 };
+	std::atomic<bool> replica_exited { false };
 
-	std::thread proxy_replica_th([&save_proxy_stderr, &replica_pid, &cl] () {
+	std::thread proxy_replica_th([&save_proxy_stderr, &replica_pid, &replica_exited, &cl] () {
 		const string replica_stderr { string(cl.workdir) + "test_cluster_sync_config/cluster_sync_node_stderr.txt" };
 		const std::string proxysql_db = std::string(cl.workdir) + "test_cluster_sync_config/proxysql.db";
 		const std::string stats_db = std::string(cl.workdir) + "test_cluster_sync_config/proxysql_stats.db";
 		const std::string fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync.cnf";
 
 		const string proxy_binary_path { string { cl.workdir } + "../../../src/proxysql" };
-		const string proxy_command {
-			proxy_binary_path + " -f -M -c " + fmt_config_file + " > " + replica_stderr + " 2>&1"
-		};
+		diag("Launching replica ProxySQL via fork/exec: `%s -f -M -c %s`", proxy_binary_path.c_str(), fmt_config_file.c_str());
 
-		diag("Launching replica ProxySQL via fork/exec with command: `%s`", proxy_command.c_str());
+		int stderr_fd = open(replica_stderr.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+		if (stderr_fd == -1) {
+			diag("Failed to open replica stderr file '%s': %s", replica_stderr.c_str(), strerror(errno));
+			ok(false, "proxysql cluster node should execute and shutdown nicely. Failed to open stderr file");
+			replica_exited.store(true);
+			return;
+		}
 
 		pid_t pid = fork();
 		if (pid == 0) {
-			execl("/bin/sh", "sh", "-c", proxy_command.c_str(), nullptr);
-			_exit(127);
+			if (dup2(stderr_fd, STDOUT_FILENO) == -1 || dup2(stderr_fd, STDERR_FILENO) == -1) {
+				_exit(errno);
+			}
+			close_all_non_term_fd({});
+			execl(proxy_binary_path.c_str(), proxy_binary_path.c_str(), "-f", "-M", "-c", fmt_config_file.c_str(), nullptr);
+			_exit(errno);
+		}
+
+		close(stderr_fd);
+		if (pid == -1) {
+			diag("Failed to fork replica ProxySQL: %s", strerror(errno));
+			ok(false, "proxysql cluster node should execute and shutdown nicely. Failed to fork");
+			replica_exited.store(true);
+			return;
 		}
 
 		replica_pid.store(pid);
 
 		int status = 0;
-		waitpid(pid, &status, 0);
-		int exec_res = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+		pid_t wait_res = 0;
+		do {
+			wait_res = waitpid(pid, &status, 0);
+		} while (wait_res == -1 && errno == EINTR);
+
+		int exec_res = wait_res == pid && WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+		replica_exited.store(true);
 
 		ok(exec_res == 0, "proxysql cluster node should execute and shutdown nicely. Exit status was: %d", exec_res);
 
@@ -1321,6 +1344,23 @@ int main(int, char**) {
 				diag("LOG: Proxysql cluster node execution failed, logging stderr into 'test_cluster_sync_config/cluster_sync_node_stderr.txt'");
 			} else {
 				diag("LOG: One of the tests failed to pass, logging stderr 'test_cluster_sync_config/cluster_sync_node_stderr.txt'");
+			}
+
+			std::ifstream stderr_stream { replica_stderr };
+			constexpr std::streamoff max_stderr_bytes = 64 * 1024;
+			stderr_stream.seekg(0, std::ios::end);
+			std::streamoff stderr_size = stderr_stream.tellg();
+			if (stderr_size > max_stderr_bytes) {
+				stderr_stream.seekg(stderr_size - max_stderr_bytes);
+				std::string partial_line {};
+				std::getline(stderr_stream, partial_line);
+				diag("REPLICA STDERR: [showing final 64 KiB]");
+			} else {
+				stderr_stream.seekg(0);
+			}
+			std::string stderr_line {};
+			while (std::getline(stderr_stream, stderr_line)) {
+				diag("REPLICA STDERR: %s", stderr_line.c_str());
 			}
 		}
 
@@ -2787,27 +2827,29 @@ cleanup:
 		mysql_options(r_proxy_admin, MYSQL_OPT_CONNECT_TIMEOUT, &mysql_timeout);
 		mysql_options(r_proxy_admin, MYSQL_OPT_READ_TIMEOUT, &mysql_timeout);
 		mysql_options(r_proxy_admin, MYSQL_OPT_WRITE_TIMEOUT, &mysql_timeout);
-		mysql_query(r_proxy_admin, "PROXYSQL SHUTDOWN");
+		int shutdown_rc = mysql_query(r_proxy_admin, "PROXYSQL SHUTDOWN");
+		if (shutdown_rc != 0) {
+			diag("PROXYSQL SHUTDOWN returned %d: %s", shutdown_rc, mysql_error(r_proxy_admin));
+		}
 		mysql_close(r_proxy_admin);
 	}
 
-	// Ensure the replica process is dead before joining the thread.
+	// Ensure the replica process is dead before joining the thread. The worker
+	// is the only thread that reaps it; polling waitpid() here would race with it.
 	// If PROXYSQL SHUTDOWN failed or r_proxy_admin was NULL, the process
 	// launched via fork() would block the thread forever.
 	{
 		pid_t pid = replica_pid.load();
 		if (pid > 0) {
-			const int wait_secs = get_env_int("WITHASAN", 0) ? 30 : 5;
-			bool exited = false;
-			for (int i = 0; i < wait_secs; i++) {
-				if (waitpid(pid, nullptr, WNOHANG) != 0) {
-					exited = true;
-					break;
-				}
-				sleep(1);
+			const int wait_secs = get_env_int("WITHASAN", 0) ? 90 : 5;
+			const uint64_t wait_us = wait_secs * 1000 * 1000ULL;
+			const uint64_t wait_started = get_timestamp_us();
+			while (!replica_exited.load() && get_timestamp_us() - wait_started < wait_us) {
+				usleep(100 * 1000);
 			}
-			if (!exited) {
-				diag("Replica ProxySQL (pid=%d) did not exit after SHUTDOWN, sending SIGKILL", pid);
+			if (!replica_exited.load()) {
+				diag("Replica ProxySQL (pid=%d) did not exit within %d seconds after SHUTDOWN, sending SIGKILL", pid, wait_secs);
+				save_proxy_stderr.store(true);
 				kill(pid, SIGKILL);
 			}
 		}
