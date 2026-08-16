@@ -53,7 +53,6 @@ REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", ".."))
 # this list as workflows are added (e.g. mysql90-gr/mysql93-gr/mysql95-gr
 # were removed from here once their CI-*.yml callers landed).
 ALLOWLIST_NO_WORKFLOW = {
-    "ai",
     "legacy-binlog",
     "mysql84-binlog",
     "mysql90",
