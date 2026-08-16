@@ -317,6 +317,22 @@ test_ignore_min_gtid-t: test_ignore_min_gtid-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT
 test_admin_prometheus_metrics_dump-t: test_admin_prometheus_metrics_dump-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
 
+# Keep the IAM observability contract deterministic and independent of an
+# external provider while exercising the production admin/process-global
+# integrations through the platform-aware unit-test linker configuration.
+.PHONY: test_aws_iam_metrics-t
+test_aws_iam_metrics-t:
+	$(MAKE) -C unit PROXYSQL40=$(PROXYSQL40) test_aws_iam_metrics-t
+	ln -fs unit/test_aws_iam_metrics-t $@
+
+# Build the controlled server first, then use the component-test linker so the
+# production MySQL_Connection path can run without a daemon or external provider.
+.PHONY: test_aws_iam_backend_auth-t
+test_aws_iam_backend_auth-t:
+	$(MAKE) -C $(PROXYSQL_PATH)/test/deps/aws_iam_mysql_server PROXYSQL40=$(PROXYSQL40)
+	$(MAKE) -C unit PROXYSQL40=$(PROXYSQL40) test_aws_iam_backend_auth-t
+	ln -fs unit/test_aws_iam_backend_auth-t $@
+
 create_connection_annotation: test_connection_annotation-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) -DTEST_AURORA $< $(IDIRS) $(LDIRS) $(OPT) $(OBJ) $(MYLIBS) $(STATIC_LIBS) -o $@
 

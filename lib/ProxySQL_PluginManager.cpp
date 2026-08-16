@@ -5,6 +5,10 @@
 #ifdef PROXYSQL40
 
 #include "ProxySQL_PluginManager.h"
+#include "Aws_Iam_Provider.h"
+#include "Aws_Locality_Manager.h"
+#include "MySQL_HostGroups_Manager.h"
+#include "MySQL_Thread.h"
 
 #include <atomic>
 #include <cassert>
@@ -20,6 +24,7 @@
 #include "prometheus/registry.h"
 
 extern ProxySQL_GlobalVariables GloVars;
+extern MySQL_Threads_Handler *GloMTH;
 
 SQLite3DB* proxysql_plugin_get_admindb();
 SQLite3DB* proxysql_plugin_get_configdb();
@@ -176,6 +181,51 @@ bool register_runtime_view_service(const ProxySQL_PluginRuntimeView& view) {
 	}
 	return true;
 }
+
+bool install_aws_iam_token_source_service(
+	AwsIamTokenSource *source, void (*destroy)(AwsIamTokenSource *), void *module_handle) {
+	if (g_registry_target == nullptr) {
+		proxy_warning("AWS IAM token source installation attempted outside plugin init phase\n");
+		return false;
+	}
+	return install_global_aws_iam_token_source(source, destroy, module_handle);
+}
+
+bool uninstall_aws_iam_token_source_service(AwsIamTokenSource *expected_source) {
+	if (g_registry_target == nullptr) {
+		proxy_warning("AWS IAM token source removal attempted outside plugin init phase\n");
+		return false;
+	}
+	return uninstall_global_aws_iam_token_source(expected_source);
+}
+
+void get_aws_iam_limits_service(size_t *max_total_waiters, size_t *max_waiters_per_key) {
+	const size_t maximum = GloMTH != nullptr && GloMTH->variables.max_connections > 0
+		? static_cast<size_t>(GloMTH->variables.max_connections)
+		: 1;
+	if (max_total_waiters != nullptr) *max_total_waiters = maximum;
+	if (max_waiters_per_key != nullptr) *max_waiters_per_key = maximum;
+}
+
+bool install_aws_metadata_provider_service(
+	AwsMetadataProvider *provider,
+	void (*destroy)(AwsMetadataProvider *),
+	void *module_handle) {
+	if (g_registry_target == nullptr) {
+		proxy_warning("AWS metadata provider installation attempted outside plugin init phase\n");
+		return false;
+	}
+	return install_global_aws_metadata_provider(provider, destroy, module_handle);
+}
+
+void refresh_mysql_aws_locality_stats_service(SQLite3DB* statsdb) {
+	if (statsdb == nullptr) return;
+	if (MyHGM != nullptr) {
+		MyHGM->refresh_aws_locality_stats(statsdb);
+		return;
+	}
+	MySQL_HostGroups_Manager::project_aws_locality_stats(statsdb, {});
+}
 #endif /* PROXYSQL40 */
 
 SQLite3DB* get_admindb_service() {
@@ -302,6 +352,11 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_.get_prometheus_registry = &get_prometheus_registry_service;
 	services_.register_command_alias = &register_command_alias_service;
 	services_.register_runtime_view = &register_runtime_view_service;
+	services_.install_aws_iam_token_source = &install_aws_iam_token_source_service;
+	services_.get_aws_iam_limits = &get_aws_iam_limits_service;
+	services_.install_aws_metadata_provider = &install_aws_metadata_provider_service;
+	services_.refresh_mysql_aws_locality_stats = &refresh_mysql_aws_locality_stats_service;
+	services_.uninstall_aws_iam_token_source = &uninstall_aws_iam_token_source_service;
 
 	// Phase-B (register_schemas) services: same layout as init(), but DB
 	// handle getters and the query-hook registrar are stubbed -- see the
@@ -327,6 +382,8 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	// refresh callback won't fire until Admin handles a SELECT, by which
 	// point admin module bootstrap has long since completed.
 	services_phase_b_.register_runtime_view = &register_runtime_view_service;
+	services_phase_b_.refresh_mysql_aws_locality_stats =
+		&refresh_mysql_aws_locality_stats_service;
 #endif /* PROXYSQL40 */
 }
 

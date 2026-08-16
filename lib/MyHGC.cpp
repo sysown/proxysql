@@ -31,9 +31,32 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 	MySrvC **mysrvcCandidates = mysrvcCandidates_static;
 	unsigned int num_candidates = 0;
 	bool max_connections_reached = false;
+	bool use_aws_locality = false;
+#ifdef PROXYSQL40
+	std::shared_ptr<const AwsLocalitySnapshot> aws_locality_snapshot;
+	if (mysql_thread___aws_locality_awareness && MyHGM != nullptr &&
+		MyHGM->aws_locality_manager() != nullptr) {
+		aws_locality_snapshot = MyHGM->aws_locality_manager()->snapshot();
+		use_aws_locality = aws_locality_snapshot != nullptr &&
+			aws_locality_snapshot->enabled &&
+			aws_locality_snapshot->has_hostgroup(hid);
+	}
+#endif
 	if (l>32) {
 		mysrvcCandidates = (MySrvC **)malloc(sizeof(MySrvC *)*l);
 	}
+	auto candidate_weight_sum = [&]() -> uint64_t {
+#ifdef PROXYSQL40
+		if (use_aws_locality) {
+			// Locality selection has a uniform fallback for an all-zero
+			// configured-weight set. These availability checks therefore only
+			// need to know whether an eligible candidate exists; defer snapshot
+			// lookups until the actual lottery below.
+			return num_candidates;
+		}
+#endif
+		return sum;
+	};
 	if (l) {
 		//int j=0;
 		for (j=0; j<l; j++) {
@@ -183,7 +206,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 				}
 			}
 		}
-		if (sum==0) {
+		if (candidate_weight_sum()==0) {
 			// per issue #531 , we try a desperate attempt to bring back online any shunned server
 			// we do this lowering the maximum wait time to 10%
 			// most of the follow code is copied from few lines above
@@ -240,7 +263,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 				}
 			}
 		}
-		if (sum==0) {
+		if (candidate_weight_sum()==0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
 			if (l>32) {
 				free(mysrvcCandidates);
@@ -275,7 +298,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 
 		unsigned int New_sum=sum;
 
-		if (New_sum==0) {
+		if (candidate_weight_sum()==0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
 			if (l>32) {
 				free(mysrvcCandidates);
@@ -327,6 +350,59 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 			}
 		}
 
+#ifdef PROXYSQL40
+		if (use_aws_locality) {
+			uint64_t total_weight = 0;
+			for (j = 0; j < num_candidates; ++j) {
+				mysrvc = mysrvcCandidates[j];
+				total_weight = aws_locality_saturating_add(total_weight,
+					aws_locality_snapshot->effective_weight(
+						hid, mysrvc->address, mysrvc->port, mysrvc->weight));
+			}
+			const uint64_t random_value =
+				(static_cast<uint64_t>(rand_fast()) << 32) |
+				static_cast<uint64_t>(rand_fast());
+			size_t selected = num_candidates;
+			if (total_weight == 0 && num_candidates != 0) {
+				selected = random_value % num_candidates;
+			} else if (total_weight != 0) {
+				const uint64_t target = random_value % total_weight;
+				uint64_t cumulative = 0;
+				for (j = 0; j < num_candidates; ++j) {
+					mysrvc = mysrvcCandidates[j];
+					cumulative = aws_locality_saturating_add(cumulative,
+						aws_locality_snapshot->effective_weight(
+							hid, mysrvc->address, mysrvc->port, mysrvc->weight));
+					if (target < cumulative) {
+						selected = j;
+						break;
+					}
+				}
+			}
+			if (selected < num_candidates) {
+				mysrvc = mysrvcCandidates[selected];
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7,
+					"Returning MySrvC %p, server %s:%d with AWS locality weighting\n",
+					mysrvc, mysrvc->address, mysrvc->port);
+				if (l>32) {
+					free(mysrvcCandidates);
+				}
+#ifdef TEST_AURORA
+				array_mysrvc_cands += num_candidates;
+#endif // TEST_AURORA
+				return mysrvc;
+			}
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7,
+				"Returning MySrvC NULL because no AWS locality candidate is eligible\n");
+			if (l>32) {
+				free(mysrvcCandidates);
+			}
+#ifdef TEST_AURORA
+			array_mysrvc_cands += num_candidates;
+#endif // TEST_AURORA
+			return NULL;
+		}
+#endif
 
 		unsigned int k;
 		k=rand_fast()%New_sum;

@@ -1,5 +1,6 @@
 #!/bin/make -f
 
+.DEFAULT_GOAL := default
 
 PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd)
 
@@ -160,7 +161,6 @@ endif
 ifeq ($(CENTOSVER),6)
 	MYLIBS += -lgcrypt
 endif
-
 SQLITE_VEC_OBJ := $(DEPS_PATH)/sqlite3/sqlite3/vec.o
 LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
 ifeq ($(UNAME_S),Darwin)

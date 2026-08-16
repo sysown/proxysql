@@ -1,8 +1,8 @@
 name: CI-unit-tests-tsan
 run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
 
-# Builds the mysqlx + plugin-chassis unit tests with WITHTSAN=1 and
-# runs them under ThreadSanitizer to catch race conditions. Closes
+# Builds the mysqlx, plugin-chassis, and provider-neutral IAM concurrency tests
+# with WITHTSAN=1 and runs them under ThreadSanitizer to catch race conditions. Closes
 # Phase 2 of issue #5675.
 #
 # Architecture (vs. the earlier closed PR #5720):
@@ -120,7 +120,7 @@ jobs:
       run: |
         make ubuntu24-tap
 
-    - name: Run mysqlx-tsan-g1 TAP group inside Docker
+    - name: Run concurrency TAP group inside Docker
       # Run the TSAN-instrumented unit tests INSIDE the same Docker
       # image used for the build — same source mount at /opt/proxysql,
       # same toolchain, same libstdc++/libgcc that the binaries linked

@@ -28,6 +28,8 @@
 #define STATUS_MYSQL_CONNECTION_HAS_WARNINGS         0x00001000
 
 #include "Servers_SslParams.h"
+#include "Aws_Iam_Provider.h"
+#include "MySQL_Backend_Auth.h"
 
 #ifdef PROXYSQLED25519
 #include "MySQL_Ed25519.h"
@@ -38,6 +40,13 @@ public:
 	char *value = (char*)"";
 	void fill_server_internal_session(nlohmann::json &j, int idx);
 	void fill_client_internal_session(nlohmann::json &j, int idx);
+};
+
+struct MySQLAwsIamIdentity {
+	AwsIamTokenKey key;
+	uint64_t token_generation{0};
+	uint8_t fresh_token_retries{0};
+	SecureString handshake_token;
 };
 
 enum charset_action {
@@ -82,6 +91,11 @@ unsigned int mysql_user_variable_replay_error_code(unsigned int backend_error_co
 
 class MySQL_Connection {
 	private:
+	MySQLBackendAuthType backend_auth_type_{MySQLBackendAuthType::PASSWORD};
+	bool rowless_passthrough_authorized_{false};
+	std::unique_ptr<MySQLAwsIamIdentity> aws_iam_identity_;
+	bool aws_iam_connector_secret_active_{false};
+	bool aws_iam_async_connect_pending_{false};
 	void update_warning_count_from_connection();
 	void update_warning_count_from_statement();
 	bool is_expired(unsigned long long timeout);
@@ -206,6 +220,15 @@ class MySQL_Connection {
 
 	MySQL_Connection();
 	~MySQL_Connection();
+	void set_backend_auth_type(MySQLBackendAuthType);
+	MySQLBackendAuthType backend_auth_type() const;
+	/** Record that this PASSWORD connection authenticated via rowless pass-through. */
+	void set_rowless_passthrough_authorized(bool);
+	/** Check whether the current resolved policy permits password reset/reuse. */
+	bool can_reset_for_backend_auth_policy(const MySQLBackendAuthPolicy&) const;
+	void attach_aws_iam_token(const AwsIamTokenKey&, AwsIamTokenResult&&);
+	void clear_aws_iam_handshake_secret();
+	bool has_aws_iam_handshake_secret() const;
 	bool set_autocommit(bool);
 	bool set_no_backslash_escapes(bool);
 	unsigned int set_charset(unsigned int, enum charset_action);
@@ -329,7 +352,12 @@ class MySQL_Connection {
 
 	bool match_ff_req_options(const MySQL_Connection *c);
 	bool match_tracked_options(const MySQL_Connection *c);
-	bool requires_CHANGE_USER(const MySQL_Connection *client_conn);
+	bool backend_auth_compatible(
+		const char *requested_username,
+		MySQLBackendAuthType requested_type) const;
+	bool requires_CHANGE_USER(
+		const MySQL_Connection *client_conn,
+		MySQLBackendAuthType requested_type = MySQLBackendAuthType::PASSWORD) const;
 	unsigned int number_of_matching_session_variables(const MySQL_Connection *client_conn, unsigned int& not_matching);
 	unsigned long get_mysql_thread_id() { return mysql ? mysql->thread_id : 0; }
 	static void set_ssl_params(MYSQL *mysql, MySQLServers_SslParams *ssl_params);

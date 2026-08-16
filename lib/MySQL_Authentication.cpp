@@ -8,6 +8,7 @@
 #include "proxysql_atomic.h"
 
 #include "MySQL_Authentication.hpp"
+#include "MySQL_Backend_Auth.h"
 
 #include <openssl/crypto.h>
 
@@ -46,6 +47,12 @@ void cleanse_and_free_password(char*& password) {
 		free(password);
 		password = nullptr;
 	}
+}
+
+const char* invalid_attributes_storage(enum cred_username_type usertype) {
+	// Backend policies must stay invalid after runtime loading so they cannot
+	// silently fall back to password authentication.
+	return usertype == USERNAME_BACKEND ? "null" : "";
 }
 
 } // namespace
@@ -269,8 +276,8 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 					}
 				}
 				catch(nlohmann::json::exception& e) {
-					ad->attributes=strdup("");
-					proxy_error("Invalid attributes for user %s: %s\n", username, attributes);
+					ad->attributes=strdup(invalid_attributes_storage(usertype));
+					proxy_error("Invalid attributes for user %s; ignoring invalid JSON\n", username);
 				}
 			} else {
 				ad->attributes=strdup(attributes); // default, empty string
@@ -293,8 +300,8 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 				ad->attributes=strdup(attributes);
 			}
 			catch(nlohmann::json::exception& e) {
-				ad->attributes=strdup("");
-				proxy_error("Invalid attributes for user %s: %s\n", username, attributes);
+				ad->attributes=strdup(invalid_attributes_storage(usertype));
+				proxy_error("Invalid attributes for user %s; ignoring invalid JSON\n", username);
 			}
 		} else {
 			ad->attributes=strdup(attributes); // default, empty string
@@ -330,11 +337,26 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 		cg.bt_map.insert(std::make_pair(hash1,ad));
 		cg.cred_array->add(ad);
 	}
+	bool warn_for_iam_password = false;
+	if (usertype == USERNAME_BACKEND) {
+		const MySQLBackendAuthPolicy policy = parse_mysql_backend_auth_policy(
+			username,
+			ad->attributes != nullptr ? ad->attributes : "",
+			ad->password != nullptr && ad->password[0] != '\0');
+		warn_for_iam_password =
+			policy.type == MySQLBackendAuthType::AWS_IAM && policy.ignored_password;
+	}
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&cg.lock);
 #else
 	spin_wrunlock(&cg.lock);
 #endif
+	if (warn_for_iam_password) {
+		proxy_warning(
+			"mysql_users backend entry for '%s' uses aws_iam authentication; "
+			"clear the unused backend password\n",
+			username);
+	}
 	return true;
 };
 
