@@ -57,6 +57,7 @@ struct TestState {
 	Aurora_BGD_Test_Deployment direct { aurora_bgd_deployment_b_writer_only() };
 	int direct_writer_hostgroup { 1580 };
 	int direct_reader_hostgroup { 1581 };
+	int direct_route_hostgroup { 1582 };
 };
 
 int setup(CommandLine& cl, MYSQL*& admin, BGD_Simulator& sim) {
@@ -70,7 +71,7 @@ int setup(CommandLine& cl, MYSQL*& admin, BGD_Simulator& sim) {
 		return EXIT_FAILURE;
 	}
 	char simulator_username[] = "aurora1";
-	char simulator_password[] = "pass1";
+	char simulator_password[] = "pass1"; // NOSONAR: fixed simulator fixture credential.
 	if (sim.connect(cl.host, 3306, simulator_username, simulator_password) != EXIT_SUCCESS) {
 		diag("Error: failed to connect to the shared AWS simulator");
 		mysql_close(admin);
@@ -144,6 +145,10 @@ int add_route(
 int add_member_routes(
 	MYSQL* admin, Aurora_BGD_Test_Deployment& deployment, const vector<int>& hostgroups
 ) {
+	if (hostgroups.size() != deployment.production.members.size()) {
+		diag("Member-route hostgroup count does not match production membership");
+		return EXIT_FAILURE;
+	}
 	vector<string> queries;
 	for (size_t i = 0; i < hostgroups.size(); ++i) {
 		queries.push_back(
@@ -172,12 +177,23 @@ int add_green_servers(
 			",3306," + aurora_bgd_sql_quote(status) +
 			",'Aurora BGD configured green member')");
 	}
+	queries.push_back(
+		"INSERT INTO mysql_servers(hostgroup_id,hostname,port,status,comment) VALUES (" +
+		to_string(green_reader_hg) + "," +
+		aurora_bgd_sql_quote(deployment.target.members.front().endpoint.hostname) +
+		",3306,'SHUNNED','Aurora BGD configured green status matrix')");
+	queries.push_back(
+		"INSERT INTO mysql_servers(hostgroup_id,hostname,port,status,comment) VALUES (" +
+		to_string(green_writer_hg) + "," +
+		aurora_bgd_sql_quote(deployment.target.members[1].endpoint.hostname) +
+		",3306,'OFFLINE_HARD','Aurora BGD configured green status matrix')");
 	queries.push_back("LOAD MYSQL SERVERS TO RUNTIME");
 	return aurora_bgd_execute_all(admin, queries);
 }
 
 bool route_to_expected_backend(
-	CommandLine& cl, BGD_Simulator& sim, const Endpoint& expected_backend
+	CommandLine& cl, BGD_Simulator& sim, const Endpoint& expected_backend,
+	const Aurora_BGD_Membership_Set& expected_membership
 ) {
 	auto [sequence_rc, sequence] = sim.replica_probe_log_last_sequence();
 	if (sequence_rc != EXIT_SUCCESS) {
@@ -188,13 +204,14 @@ bool route_to_expected_backend(
 		return false;
 	}
 	auto [query_rc, rows] = mysql_query_ext_rows(client, kOrdinaryAuroraQuery);
-	(void)rows;
-	if (query_rc != EXIT_SUCCESS) {
+	const bool result_matches = query_rc == EXIT_SUCCESS
+		&& aurora_bgd_result_matches_membership(rows, expected_membership);
+	if (!result_matches) {
 		diag("Backend routing query failed with MySQL error %d: %s",
 			mysql_errno(client), mysql_error(client));
 	}
 	mysql_close(client);
-	if (query_rc != EXIT_SUCCESS) {
+	if (!result_matches) {
 		return false;
 	}
 
@@ -223,7 +240,9 @@ bool route_members(
 		const Endpoint expected = target
 			? deployment.target.members[i].endpoint.backend()
 			: deployment.production.members[i].endpoint.backend();
-		if (!route_to_expected_backend(cl, sim, expected)) {
+		const Aurora_BGD_Membership_Set& expected_membership = target
+			? deployment.target : deployment.production;
+		if (!route_to_expected_backend(cl, sim, expected, expected_membership)) {
 			return false;
 		}
 	}
@@ -319,10 +338,16 @@ bool completion_probe_policy(
 bool wait_for_topology_observation(
 	BGD_Simulator& sim, uint64_t sequence, Aurora_BGD_Test_Deployment& deployment
 ) {
-	auto [rc, probe] = aurora_bgd_wait_for_topology_probe(
+	auto [first_rc, first_probe] = aurora_bgd_wait_for_topology_probe(
 		sim, sequence, deployment.production.backends(),
 		BGD_Probe_Kind::metadata, kProbeTimeoutMs);
-	return rc == EXIT_SUCCESS;
+	if (first_rc != EXIT_SUCCESS) {
+		return false;
+	}
+	auto [second_rc, second_probe] = aurora_bgd_wait_for_topology_probe(
+		sim, first_probe.sequence_id, deployment.production.backends(),
+		BGD_Probe_Kind::metadata, kProbeTimeoutMs);
+	return second_rc == EXIT_SUCCESS;
 }
 
 /**
@@ -453,7 +478,8 @@ int test_completion_after_post_processing(
 	bool green_pool_ready = set_default_hostgroup(admin, state.green_writer_hostgroup)
 		== EXIT_SUCCESS
 		&& route_to_expected_backend(
-			cl, sim, deployment.target.members.front().endpoint.backend())
+			cl, sim, deployment.target.members.front().endpoint.backend(),
+			deployment.target)
 		&& pool_count(admin, state.green_writer_hostgroup) >= 1;
 	ok(target_route_pool >= 1 && green_pool_ready,
 		"pre-completion target and configured-green pools are established");
@@ -479,14 +505,16 @@ int test_completion_after_post_processing(
 		admin, state.green_reader_hostgroup,
 		deployment.target.members.back().endpoint.hostname, 1, "OFFLINE_SOFT"),
 		"completion preserves configured green rows and OFFLINE status");
-	ok(add_route(
-		admin, state.post_completion_route_hostgroup,
-		deployment.production.members.front().endpoint.hostname) == EXIT_SUCCESS
-		&& set_default_hostgroup(
-			admin, state.post_completion_route_hostgroup) == EXIT_SUCCESS
-		&& route_to_expected_backend(
-			cl, sim, deployment.production.members.front().endpoint.backend()),
-		"completion removes the production traffic pin without DNS verification");
+	ok(server_count(
+		admin, state.green_reader_hostgroup,
+		deployment.target.members.front().endpoint.hostname, 1, "SHUNNED")
+		&& server_count(
+			admin, state.green_writer_hostgroup,
+			deployment.target.members[1].endpoint.hostname, 1, "OFFLINE_HARD"),
+		"completion preserves configured SHUNNED and OFFLINE_HARD green rows");
+	ok(route_members(
+		cl, admin, sim, deployment, state.route_hostgroups, false),
+		"completion removes every writer and reader traffic pin without DNS verification");
 
 	auto [replica_seq_rc, replica_sequence] = sim.replica_probe_log_last_sequence();
 	ok(replica_seq_rc == EXIT_SUCCESS && completion_probe_policy(
@@ -496,7 +524,8 @@ int test_completion_after_post_processing(
 	bool recreated_green_pool = set_default_hostgroup(admin, state.green_writer_hostgroup)
 		== EXIT_SUCCESS
 		&& route_to_expected_backend(
-			cl, sim, deployment.target.members.front().endpoint.backend())
+			cl, sim, deployment.target.members.front().endpoint.backend(),
+			deployment.target)
 		&& pool_count(admin, state.green_writer_hostgroup) >= 1;
 	auto [same_seq_rc, same_sequence] = sim.probe_log_last_sequence();
 	bool same_completion_seen = same_seq_rc == EXIT_SUCCESS
@@ -519,6 +548,26 @@ int test_completion_after_post_processing(
 		"query errors neither release the latch nor repeat completion cleanup");
 
 	Aurora_BGD_Test_Deployment different = aurora_bgd_deployment_b_writer_only();
+	auto [same_active_seq_rc, same_active_sequence] = sim.probe_log_last_sequence();
+	bool same_active_seen = same_active_seq_rc == EXIT_SUCCESS
+		&& publish_status(sim, deployment, "SWITCHOVER_IN_PROGRESS") == EXIT_SUCCESS
+		&& wait_for_topology_observation(sim, same_active_sequence, deployment);
+	ok(same_active_seen && aurora_bgd_wait_for_status(
+		admin, state.post_writer_hostgroup, "SWITCHOVER_COMPLETED", 1)
+		== EXIT_SUCCESS
+		&& pool_count(admin, state.green_writer_hostgroup) >= 1,
+		"a stale active result for the completed fingerprint is ignored while latched");
+
+	if (sim.topology_update(
+		aurora_bgd_topology_backends(deployment),
+		aurora_bgd_topology(different, "SWITCHOVER_INITIATED")) != EXIT_SUCCESS) {
+		return EXIT_FAILURE;
+	}
+	ok(aurora_bgd_wait_for_status(
+		admin, state.post_writer_hostgroup, "SWITCHOVER_INITIATED", kWaitSeconds)
+		== EXIT_SUCCESS,
+		"a different active deployment fingerprint rearms the completed latch");
+
 	auto [different_seq_rc, different_sequence] = sim.probe_log_last_sequence();
 	bool different_seen = different_seq_rc == EXIT_SUCCESS
 		&& publish_completed(sim, deployment, different) == EXIT_SUCCESS
@@ -530,7 +579,8 @@ int test_completion_after_post_processing(
 	bool second_green_pool = set_default_hostgroup(admin, state.green_writer_hostgroup)
 		== EXIT_SUCCESS
 		&& route_to_expected_backend(
-			cl, sim, deployment.target.members.front().endpoint.backend());
+			cl, sim, deployment.target.members.front().endpoint.backend(),
+			deployment.target);
 	auto [repeat_different_seq_rc, repeat_different_sequence] = sim.probe_log_last_sequence();
 	bool repeated_different = repeat_different_seq_rc == EXIT_SUCCESS
 		&& publish_completed(sim, deployment, different) == EXIT_SUCCESS
@@ -552,7 +602,9 @@ int test_completion_after_post_processing(
  * - Keep canonical writer placement and avoid replaying active phases.
  * - Rearm only after a successful topology drain.
  */
-int test_first_completed_observation(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
+int test_first_completed_observation(
+	CommandLine& cl, MYSQL* admin, BGD_Simulator& sim, TestState& state
+) {
 	if (reset_scenario(admin, sim) != EXIT_SUCCESS) {
 		diag("Error: failed to reset before direct-completion scenario");
 		return EXIT_FAILURE;
@@ -568,6 +620,18 @@ int test_first_completed_observation(MYSQL* admin, BGD_Simulator& sim, TestState
 		diag("Error: failed to publish direct completion inputs");
 		return EXIT_FAILURE;
 	}
+	if (add_route(
+		admin, state.direct_route_hostgroup,
+		deployment.production.members.front().endpoint.hostname) != EXIT_SUCCESS
+		|| set_default_hostgroup(admin, state.direct_route_hostgroup) != EXIT_SUCCESS) {
+		return EXIT_FAILURE;
+	}
+	bool direct_pool_ready = route_to_expected_backend(
+		cl, sim, deployment.production.members.front().endpoint.backend(),
+		deployment.production)
+		&& pool_count(admin, state.direct_route_hostgroup) >= 1;
+	ok(direct_pool_ready,
+		"direct-completion setup has an observable production route and pool");
 	auto [sequence_rc, sequence] = sim.replica_probe_log_last_sequence();
 	if (aurora_bgd_admin_setup(
 		admin, deployment, state.direct_writer_hostgroup,
@@ -584,7 +648,14 @@ int test_first_completed_observation(MYSQL* admin, BGD_Simulator& sim, TestState
 		admin, state.direct_writer_hostgroup, state.direct_reader_hostgroup,
 		deployment.production.members.front().endpoint.hostname, false) == EXIT_SUCCESS,
 		"direct completion leaves canonical writer placement unchanged");
+	ok(pool_count(admin, state.direct_route_hostgroup) >= 1
+		&& set_default_hostgroup(admin, state.direct_route_hostgroup) == EXIT_SUCCESS
+		&& route_to_expected_backend(
+			cl, sim, deployment.production.members.front().endpoint.backend(),
+			deployment.production),
+		"direct completion leaves unrelated production routing effects untouched");
 
+	usleep(750000);
 	auto [logs_rc, logs] = sim.replica_probe_log_since(sequence);
 	bool membership_probe = false;
 	for (const Aurora_Replica_Probe_Log& log : logs) {
@@ -600,7 +671,7 @@ int test_first_completed_observation(MYSQL* admin, BGD_Simulator& sim, TestState
 }
 
 int main() {
-	plan(28);
+	plan(33);
 
 	CommandLine cl {};
 	MYSQL* admin = nullptr;
@@ -626,7 +697,7 @@ int main() {
 
 	// Simulator: make SWITCHOVER_COMPLETED the first observed deployment state.
 	// Verify: prior phase effects are not manufactured or replayed.
-	if (test_first_completed_observation(admin, sim, state) != EXIT_SUCCESS) {
+	if (test_first_completed_observation(cl, admin, sim, state) != EXIT_SUCCESS) {
 		goto exit_cleanup;
 	}
 

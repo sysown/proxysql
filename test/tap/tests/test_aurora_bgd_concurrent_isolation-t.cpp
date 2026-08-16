@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <string>
+#include <unistd.h>
 
 #include "aurora_bgd_tap.h"
 #include "command_line.h"
@@ -68,7 +69,7 @@ int setup(CommandLine& cl, MYSQL*& admin, BGD_Simulator& sim) {
 		return EXIT_FAILURE;
 	}
 	char username[] = "aurora1";
-	char password[] = "pass1";
+	char password[] = "pass1"; // NOSONAR: fixed simulator fixture credential.
 	if (sim.connect(cl.host, 3306, username, password) != EXIT_SUCCESS
 		|| aurora_bgd_admin_cleanup(admin) != EXIT_SUCCESS
 		|| sim.cleanup() != EXIT_SUCCESS) {
@@ -123,7 +124,10 @@ int add_writer_route(
 	});
 }
 
-bool route_to_backend(CommandLine& cl, BGD_Simulator& sim, const Endpoint& expected) {
+bool route_to_backend(
+	CommandLine& cl, BGD_Simulator& sim, const Endpoint& expected,
+	const Aurora_BGD_Membership_Set& expected_membership
+) {
 	auto [sequence_rc, sequence] = sim.replica_probe_log_last_sequence();
 	if (sequence_rc != EXIT_SUCCESS) {
 		return false;
@@ -133,9 +137,9 @@ bool route_to_backend(CommandLine& cl, BGD_Simulator& sim, const Endpoint& expec
 		return false;
 	}
 	auto [query_rc, rows] = mysql_query_ext_rows(client, kOrdinaryAuroraQuery);
-	(void)rows;
 	mysql_close(client);
-	if (query_rc != EXIT_SUCCESS) {
+	if (query_rc != EXIT_SUCCESS
+		|| !aurora_bgd_result_matches_membership(rows, expected_membership)) {
 		return false;
 	}
 	auto [logs_rc, logs] = sim.replica_probe_log_since(sequence);
@@ -161,7 +165,9 @@ bool route_writer(
 	const Endpoint expected = target
 		? deployment.target.members.front().endpoint.backend()
 		: deployment.production.members.front().endpoint.backend();
-	return route_to_backend(cl, sim, expected);
+	const Aurora_BGD_Membership_Set& expected_membership = target
+		? deployment.target : deployment.production;
+	return route_to_backend(cl, sim, expected, expected_membership);
 }
 
 bool wait_for_writer_route(
@@ -175,7 +181,9 @@ bool wait_for_writer_route(
 		? deployment.target.members.front().endpoint.backend()
 		: deployment.production.members.front().endpoint.backend();
 	for (uint32_t elapsed_ms = 0; elapsed_ms < kWaitSeconds * 1000; elapsed_ms += 100) {
-		if (route_to_backend(cl, sim, expected)) {
+		const Aurora_BGD_Membership_Set& expected_membership = target
+			? deployment.target : deployment.production;
+		if (route_to_backend(cl, sim, expected, expected_membership)) {
 			return true;
 		}
 		usleep(100000);

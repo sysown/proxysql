@@ -71,7 +71,7 @@ int setup(CommandLine& cl, MYSQL*& admin, BGD_Simulator& sim) {
 		return EXIT_FAILURE;
 	}
 	char username[] = "aurora1";
-	char password[] = "pass1";
+	char password[] = "pass1"; // NOSONAR: fixed simulator fixture credential.
 	if (sim.connect(cl.host, 3306, username, password) != EXIT_SUCCESS
 		|| aurora_bgd_admin_cleanup(admin) != EXIT_SUCCESS
 		|| sim.cleanup() != EXIT_SUCCESS) {
@@ -176,7 +176,10 @@ int add_routes(
 	return aurora_bgd_execute_all(admin, queries);
 }
 
-bool route_to_backend(CommandLine& cl, BGD_Simulator& sim, const Endpoint& expected) {
+bool route_to_backend(
+	CommandLine& cl, BGD_Simulator& sim, const Endpoint& expected,
+	const Aurora_BGD_Membership_Set& expected_membership
+) {
 	auto [sequence_rc, sequence] = sim.replica_probe_log_last_sequence();
 	if (sequence_rc != EXIT_SUCCESS) {
 		return false;
@@ -186,9 +189,9 @@ bool route_to_backend(CommandLine& cl, BGD_Simulator& sim, const Endpoint& expec
 		return false;
 	}
 	auto [query_rc, rows] = mysql_query_ext_rows(client, kOrdinaryAuroraQuery);
-	(void)rows;
 	mysql_close(client);
-	if (query_rc != EXIT_SUCCESS) {
+	if (query_rc != EXIT_SUCCESS
+		|| !aurora_bgd_result_matches_membership(rows, expected_membership)) {
 		return false;
 	}
 	auto [logs_rc, logs] = sim.replica_probe_log_since(sequence);
@@ -215,7 +218,9 @@ bool route_members(
 		Endpoint expected = target
 			? deployment.target.members[i].endpoint.backend()
 			: deployment.production.members[i].endpoint.backend();
-		if (!route_to_backend(cl, sim, expected)) {
+		const Aurora_BGD_Membership_Set& expected_membership = target
+			? deployment.target : deployment.production;
+		if (!route_to_backend(cl, sim, expected, expected_membership)) {
 			return false;
 		}
 	}
@@ -228,6 +233,35 @@ int64_t pool_count(MYSQL* admin, int hostgroup) {
 		"FROM stats_mysql_connection_pool WHERE hostgroup=" + to_string(hostgroup));
 	return rc == EXIT_SUCCESS && rows.size() == 1 && rows.front().size() == 1
 		? strtoll(rows.front().front().c_str(), nullptr, 10) : -1;
+}
+
+bool observe_two_topology_responses(
+	BGD_Simulator& sim, uint64_t sequence, const vector<Endpoint>& backends
+) {
+	auto [first_rc, first] = aurora_bgd_wait_for_topology_probe(
+		sim, sequence, backends, BGD_Probe_Kind::metadata, kProbeTimeoutMs);
+	if (first_rc != EXIT_SUCCESS) {
+		return false;
+	}
+	auto [second_rc, second] = aurora_bgd_wait_for_topology_probe(
+		sim, first.sequence_id, backends, BGD_Probe_Kind::metadata, kProbeTimeoutMs);
+	return second_rc == EXIT_SUCCESS;
+}
+
+bool observe_two_membership_responses(
+	BGD_Simulator& sim, uint64_t sequence,
+	const vector<Endpoint>& backends, const string& replica_set
+) {
+	auto [first_rc, first] = aurora_bgd_wait_for_replica_probe(
+		sim, sequence, backends, Aurora_Replica_Probe_Kind::bgd_membership,
+		kProbeTimeoutMs, replica_set);
+	if (first_rc != EXIT_SUCCESS) {
+		return false;
+	}
+	auto [second_rc, second] = aurora_bgd_wait_for_replica_probe(
+		sim, first.sequence_id, backends, Aurora_Replica_Probe_Kind::bgd_membership,
+		kProbeTimeoutMs, replica_set);
+	return second_rc == EXIT_SUCCESS;
 }
 
 /** Retain INITIATED across topology and membership query errors. */
@@ -250,9 +284,8 @@ int test_initiated_error_retention(MYSQL* admin, BGD_Simulator& sim, TestState& 
 		&& sim.topology_error(
 			aurora_bgd_topology_backends(deployment), 1205,
 			"simulated topology timeout") == EXIT_SUCCESS
-		&& aurora_bgd_wait_for_topology_probe(
-			sim, topology_sequence, deployment.target.backends(),
-			BGD_Probe_Kind::metadata, kProbeTimeoutMs).first == EXIT_SUCCESS;
+		&& observe_two_topology_responses(
+			sim, topology_sequence, deployment.target.backends());
 	ok(topology_error_seen && aurora_bgd_wait_for_status(
 		admin, state.initiated_writer_hostgroup, "SWITCHOVER_INITIATED", 1)
 		== EXIT_SUCCESS,
@@ -267,10 +300,9 @@ int test_initiated_error_retention(MYSQL* admin, BGD_Simulator& sim, TestState& 
 		&& sim.replica_error(
 			deployment.target.backends(), 1205,
 			"simulated membership timeout") == EXIT_SUCCESS
-		&& aurora_bgd_wait_for_replica_probe(
+		&& observe_two_membership_responses(
 			sim, membership_sequence, deployment.target.backends(),
-			Aurora_Replica_Probe_Kind::bgd_membership, kProbeTimeoutMs).first
-			== EXIT_SUCCESS;
+			deployment.target_replica_set);
 	ok(membership_error_seen && aurora_bgd_wait_for_status(
 		admin, state.initiated_writer_hostgroup, "SWITCHOVER_INITIATED", 1)
 		== EXIT_SUCCESS,
@@ -379,9 +411,8 @@ int test_post_processing_error_retention(
 		&& sim.topology_error(
 			aurora_bgd_topology_backends(deployment), 1205,
 			"simulated post timeout") == EXIT_SUCCESS
-		&& aurora_bgd_wait_for_topology_probe(
-			sim, topology_sequence, deployment.target.backends(),
-			BGD_Probe_Kind::metadata, kProbeTimeoutMs).first == EXIT_SUCCESS;
+		&& observe_two_topology_responses(
+			sim, topology_sequence, deployment.target.backends());
 	ok(topology_error_seen && aurora_bgd_wait_for_status(
 		admin, state.post_writer_hostgroup,
 		"SWITCHOVER_IN_POST_PROCESSING", 1) == EXIT_SUCCESS
@@ -398,10 +429,9 @@ int test_post_processing_error_retention(
 		&& sim.replica_error(
 			deployment.target.backends(), 1205,
 			"simulated post membership timeout") == EXIT_SUCCESS
-		&& aurora_bgd_wait_for_replica_probe(
+		&& observe_two_membership_responses(
 			sim, membership_sequence, deployment.target.backends(),
-			Aurora_Replica_Probe_Kind::bgd_membership, kProbeTimeoutMs).first
-			== EXIT_SUCCESS;
+			deployment.target_replica_set);
 	ok(membership_error_seen
 		&& sim.replica_update(
 			deployment.target.replica_set_id, deployment.target.replica_rows(),
@@ -419,7 +449,8 @@ int test_post_processing_rollback(
 	Aurora_BGD_Test_Deployment& deployment = state.post;
 	ok(set_default_hostgroup(admin, state.post_green_writer_hostgroup) == EXIT_SUCCESS
 		&& route_to_backend(
-			cl, sim, deployment.target.members.front().endpoint.backend())
+			cl, sim, deployment.target.members.front().endpoint.backend(),
+			deployment.target)
 		&& pool_count(admin, state.post_green_writer_hostgroup) >= 1,
 		"a configured green pool is established before rollback");
 	ok(publish_status(sim, deployment, "AVAILABLE") == EXIT_SUCCESS

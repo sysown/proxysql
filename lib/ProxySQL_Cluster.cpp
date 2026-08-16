@@ -2228,6 +2228,27 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 					}
 				}
 
+				constexpr unsigned int aws_aurora_cluster_column_count = 17;
+				if (!fetching_error && (results[4] == nullptr
+					|| mysql_num_fields(results[4]) != aws_aurora_cluster_column_count)) {
+					const unsigned int actual_columns = results[4]
+						? mysql_num_fields(results[4]) : 0;
+					proxy_error(
+						"Cluster: Rejecting 'MySQL AWS Aurora Hostgroups' from peer %s:%d: expected %u columns, got %u\n",
+						hostname, port, aws_aurora_cluster_column_count, actual_columns);
+					metrics.p_counter_array[
+						p_cluster_counter::pulled_mysql_servers_aws_aurora_hostgroups_failure
+					]->Increment();
+					fetching_error = true;
+					fetch_failed = true;
+					for (MYSQL_RES*& result : results) {
+						if (result != nullptr) {
+							mysql_free_result(result);
+						}
+						result = nullptr;
+					}
+				}
+
 				if (fetching_error == false) {
 					const uint64_t servers_hash = compute_servers_tables_raw_checksum(results, 8); // ignore runtime_mysql_servers in checksum calculation
 					const string computed_checksum{ get_checksum_from_hash(servers_hash) };

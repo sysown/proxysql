@@ -6067,11 +6067,6 @@ struct AWS_Aurora_BGD_Topology_Observation {
 	AWS_Aurora_BGD_Fingerprint fingerprint;
 };
 
-static std::string aws_aurora_bgd_normalize_server_id(const std::string& server_id) {
-	const size_t green_pos = server_id.find("-green-");
-	return green_pos == std::string::npos ? server_id : server_id.substr(0, green_pos);
-}
-
 static std::string aws_aurora_bgd_member_hostname(
 	const std::string& server_id, const std::string& domain_name
 ) {
@@ -6081,6 +6076,21 @@ static std::string aws_aurora_bgd_member_hostname(
 	return domain_name.front() == '.'
 		? server_id + domain_name
 		: server_id + "." + domain_name;
+}
+
+static std::string aws_aurora_bgd_server_id_from_hostname(
+	const std::string& hostname, const std::string& domain_name
+) {
+	if (domain_name.empty()) {
+		return hostname;
+	}
+	const std::string suffix = domain_name.front() == '.'
+		? domain_name : "." + domain_name;
+	if (hostname.size() <= suffix.size()
+		|| strcasecmp(hostname.c_str() + hostname.size() - suffix.size(), suffix.c_str()) != 0) {
+		return {};
+	}
+	return hostname.substr(0, hostname.size() - suffix.size());
 }
 
 static bool aws_aurora_bgd_status_from_raw(
@@ -6161,32 +6171,6 @@ static AWS_Aurora_BGD_Topology_Observation aws_aurora_bgd_validate_topology(
 	return observation;
 }
 
-static bool aws_aurora_bgd_select_reachable_host(
-	const std::vector<AWS_RDS_BGD_Probe_Host>& hosts,
-	unsigned int writer_hg,
-	AWS_RDS_BGD_Probe_Host& selected
-) {
-	if (hosts.empty()) {
-		return false;
-	}
-
-	const size_t first = static_cast<size_t>(rand()) % hosts.size();
-	for (size_t offset = 0; offset < hosts.size(); ++offset) {
-		const AWS_RDS_BGD_Probe_Host& host = hosts[(first + offset) % hosts.size()];
-		if (GloMyMon->server_responds_to_ping(
-			const_cast<char*>(host.hostname.c_str()), host.port)) {
-			selected = host;
-			return true;
-		}
-		MyHGM->p_update_mysql_error_counter(
-			p_mysql_error_type::proxysql, writer_hg,
-			const_cast<char*>(host.hostname.c_str()), host.port,
-			ER_PROXYSQL_AWS_NO_PINGABLE_SRV
-		);
-	}
-	return false;
-}
-
 static AWS_Aurora_BGD_Query_Result aws_aurora_bgd_query(
 	const AWS_RDS_BGD_Probe_Host& host,
 	unsigned int writer_hg,
@@ -6235,6 +6219,48 @@ static AWS_Aurora_BGD_Query_Result aws_aurora_bgd_query(
 	return out;
 }
 
+static AWS_Aurora_BGD_Query_Result aws_aurora_bgd_query_candidates(
+	const std::vector<AWS_RDS_BGD_Probe_Host>& hosts,
+	unsigned int writer_hg,
+	unsigned int timeout_ms,
+	MySQL_Monitor_State_Data_Task_Type task_type,
+	const char* query,
+	std::atomic_bool& worker_stop,
+	AWS_RDS_BGD_Probe_Host* selected,
+	bool stop_on_missing_table
+) {
+	AWS_Aurora_BGD_Query_Result last_result;
+	if (hosts.empty() || worker_stop.load()) {
+		return last_result;
+	}
+
+	const size_t first = static_cast<size_t>(rand_fast()) % hosts.size();
+	for (size_t offset = 0; offset < hosts.size() && !worker_stop.load(); ++offset) {
+		const AWS_RDS_BGD_Probe_Host& host = hosts[(first + offset) % hosts.size()];
+		if (!GloMyMon->server_responds_to_ping(
+			const_cast<char*>(host.hostname.c_str()), host.port)) {
+			MyHGM->p_update_mysql_error_counter(
+				p_mysql_error_type::proxysql, writer_hg,
+				const_cast<char*>(host.hostname.c_str()), host.port,
+				ER_PROXYSQL_AWS_NO_PINGABLE_SRV
+			);
+			continue;
+		}
+
+		last_result = aws_aurora_bgd_query(
+			host, writer_hg, timeout_ms, task_type, query, worker_stop);
+		if (last_result.rc == 0
+			|| (stop_on_missing_table && last_result.mysql_error == 1146)) {
+			if (selected != nullptr) {
+				*selected = host;
+			}
+			return last_result;
+		}
+	}
+
+	return last_result;
+}
+
 static void aws_aurora_bgd_set_status(
 	AWS_Aurora_BGD_State& st, AWS_Aurora_BGD_Status status
 ) {
@@ -6259,12 +6285,68 @@ static bool aws_aurora_bgd_same_production_snapshot(
 	for (const AWS_Aurora_BGD_Member& member : lhs) {
 		auto found = std::find_if(rhs.begin(), rhs.end(), [&](const AWS_Aurora_BGD_Member& candidate) {
 			return candidate.normalized_server_id == member.normalized_server_id
-				&& candidate.is_writer == member.is_writer;
+				&& candidate.is_writer == member.is_writer
+				&& candidate.hostname == member.hostname
+				&& candidate.port == member.port
+				&& candidate.use_ssl == member.use_ssl;
 		});
 		if (found == rhs.end()) {
 			return false;
 		}
 	}
+	return true;
+}
+
+static bool aws_aurora_bgd_rebuild_production_snapshot(AWS_Aurora_BGD_State& st) {
+	std::unordered_set<std::string> writer_endpoints;
+	MyHGM->wrlock();
+	MyHGC* writer_hgc = MyHGM->MyHGC_find(st.writer_hg);
+	if (writer_hgc != nullptr && writer_hgc->mysrvs != nullptr) {
+		for (unsigned int i = 0; i < writer_hgc->mysrvs->cnt(); ++i) {
+			MySrvC* server = writer_hgc->mysrvs->idx(i);
+			if (server->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD
+				|| server->get_status() == MYSQL_SERVER_STATUS_OFFLINE_SOFT) {
+				continue;
+			}
+			writer_endpoints.insert(
+				std::string(server->address) + "\n" + std::to_string(server->port));
+		}
+	}
+	MyHGM->wrunlock();
+
+	std::vector<AWS_Aurora_BGD_Member> snapshot;
+	std::unordered_set<std::string> member_ids;
+	unsigned int writers = 0;
+	for (const AWS_RDS_BGD_Probe_Host& host : st.production_probe_hosts) {
+		AWS_Aurora_BGD_Member member;
+		member.server_id = aws_aurora_bgd_server_id_from_hostname(
+			host.hostname, st.domain_name);
+		member.normalized_server_id = member.server_id;
+		if (member.server_id.empty()
+			|| !member_ids.insert(member.normalized_server_id).second) {
+			return false;
+		}
+		member.hostname = host.hostname;
+		member.production_hostname = host.hostname;
+		member.port = host.port;
+		member.use_ssl = host.use_ssl;
+		member.is_writer = writer_endpoints.count(
+			host.hostname + "\n" + std::to_string(host.port)) != 0;
+		member.session_id = member.is_writer ? "MASTER_SESSION_ID" : "";
+		writers += member.is_writer ? 1 : 0;
+		snapshot.push_back(std::move(member));
+	}
+	if (writers != 1 || snapshot.empty()) {
+		return false;
+	}
+
+	if (!aws_aurora_bgd_same_production_snapshot(st.production_members, snapshot)) {
+		st.target_snapshot_complete = false;
+	}
+	st.production_members = std::move(snapshot);
+	proxy_info(
+		"AWS Aurora BGD [wHG=%u rHG=%u]: rebuilt production membership with %zu configured members\n",
+		st.writer_hg, st.reader_hg, st.production_members.size());
 	return true;
 }
 
@@ -6337,14 +6419,22 @@ static bool aws_aurora_bgd_parse_target_membership(
 
 		AWS_Aurora_BGD_Member member;
 		member.server_id = row[server_id_idx];
-		member.normalized_server_id = aws_aurora_bgd_normalize_server_id(member.server_id);
+		member.normalized_server_id = member.server_id;
 		member.session_id = row[session_id_idx];
 		member.is_writer = strcasecmp(member.session_id.c_str(), "MASTER_SESSION_ID") == 0;
-		if (member.normalized_server_id.empty() || !target_ids.insert(member.normalized_server_id).second) {
+		auto production = production_by_id.find(member.normalized_server_id);
+		if (production == production_by_id.end()) {
+			const size_t green_pos = member.server_id.rfind("-green-");
+			if (green_pos != std::string::npos
+				&& green_pos + strlen("-green-") < member.server_id.size()) {
+				member.normalized_server_id = member.server_id.substr(0, green_pos);
+				production = production_by_id.find(member.normalized_server_id);
+			}
+		}
+		if (member.normalized_server_id.empty()
+			|| !target_ids.insert(member.normalized_server_id).second) {
 			return false;
 		}
-
-		auto production = production_by_id.find(member.normalized_server_id);
 		if (production == production_by_id.end()
 			|| production->second->is_writer != member.is_writer) {
 			return false;
@@ -6384,12 +6474,15 @@ static bool aws_aurora_bgd_parse_target_membership(
 		if (resolved_ip.empty()) {
 			return false;
 		}
-		auto previous_ip = previous_ip_by_id.find(member.normalized_server_id);
-		member.target_ip = previous_ip != previous_ip_by_id.end() && !previous_ip->second.empty()
-			? previous_ip->second : resolved_ip;
 		auto previous_action = previous_action_by_id.find(member.normalized_server_id);
 		member.traffic_pin_applied = previous_action != previous_action_by_id.end()
 			&& previous_action->second;
+		auto previous_ip = previous_ip_by_id.find(member.normalized_server_id);
+		const bool preserve_pre_rename_ip = member.server_id == production->second->server_id;
+		member.target_ip = previous_ip != previous_ip_by_id.end()
+			&& !previous_ip->second.empty()
+			&& (member.traffic_pin_applied || preserve_pre_rename_ip)
+			? previous_ip->second : resolved_ip;
 		snapshot.push_back(std::move(member));
 	}
 
@@ -6415,6 +6508,26 @@ static std::vector<AWS_RDS_BGD_Probe_Host> aws_aurora_bgd_target_probe_hosts(
 	return hosts;
 }
 
+static std::vector<AWS_RDS_BGD_Probe_Host> aws_aurora_bgd_membership_probe_hosts(
+	const AWS_Aurora_BGD_State& st
+) {
+	std::vector<AWS_RDS_BGD_Probe_Host> hosts = aws_aurora_bgd_target_probe_hosts(st);
+	if (!st.fingerprint.empty()) {
+		auto endpoint = std::find_if(hosts.begin(), hosts.end(), [&](const AWS_RDS_BGD_Probe_Host& host) {
+			return host.hostname == st.fingerprint.target_endpoint
+				&& host.port == st.fingerprint.target_port;
+		});
+		if (endpoint == hosts.end()) {
+			hosts.push_back({
+				st.fingerprint.target_endpoint,
+				st.fingerprint.target_port,
+				st.target_use_ssl,
+			});
+		}
+	}
+	return hosts;
+}
+
 } // namespace
 
 void MySQL_Monitor::aws_aurora_bgd_refresh_production_snapshot(
@@ -6435,7 +6548,7 @@ void MySQL_Monitor::aws_aurora_bgd_refresh_production_snapshot(
 		}
 		AWS_Aurora_BGD_Member member;
 		member.server_id = row->server_id;
-		member.normalized_server_id = aws_aurora_bgd_normalize_server_id(member.server_id);
+		member.normalized_server_id = member.server_id;
 		member.session_id = row->session_id;
 		member.hostname = aws_aurora_bgd_member_hostname(member.server_id, st.domain_name);
 		member.production_hostname = member.hostname;
@@ -6463,6 +6576,12 @@ void MySQL_Monitor::aws_aurora_bgd_apply_active_actions(
 ) {
 	if (st.status < AWS_Aurora_BGD_Status::SWITCHOVER_INITIATED
 		|| st.status > AWS_Aurora_BGD_Status::SWITCHOVER_IN_POST_PROCESSING) {
+		return;
+	}
+	if (st.production_members.empty()) {
+		proxy_error(
+			"AWS Aurora BGD [wHG=%u rHG=%u]: cannot enter active handling without production membership\n",
+			st.writer_hg, st.reader_hg);
 		return;
 	}
 
@@ -6675,15 +6794,12 @@ void MySQL_Monitor::aws_aurora_bgd_run_discovery_cycle(
 		? aws_aurora_bgd_target_probe_hosts(st)
 		: st.production_probe_hosts;
 	AWS_RDS_BGD_Probe_Host topology_host;
-	if (!aws_aurora_bgd_select_reachable_host(topology_hosts, st.writer_hg, topology_host)) {
-		proxy_error("No node is pingable for AWS Aurora BGD topology checks with writer HG %u\n", st.writer_hg);
-		return;
-	}
 
 	if (st.topology_state == TOPOLOGY_TABLE_CHECK) {
-		AWS_Aurora_BGD_Query_Result query = aws_aurora_bgd_query(
-			topology_host, st.writer_hg, st.check_timeout_ms,
-			MON_AWS_RDS_BGD, QUERY_AWS_RDS_TOPOLOGY_TABLE_CHECK, worker_stop);
+		AWS_Aurora_BGD_Query_Result query = aws_aurora_bgd_query_candidates(
+			topology_hosts, st.writer_hg, st.check_timeout_ms,
+			MON_AWS_RDS_BGD, QUERY_AWS_RDS_TOPOLOGY_TABLE_CHECK, worker_stop,
+			&topology_host, false);
 		if (worker_stop.load()) {
 			return;
 		}
@@ -6699,9 +6815,10 @@ void MySQL_Monitor::aws_aurora_bgd_run_discovery_cycle(
 			}
 		}
 	} else {
-		AWS_Aurora_BGD_Query_Result query = aws_aurora_bgd_query(
-			topology_host, st.writer_hg, st.check_timeout_ms,
-			MON_AWS_RDS_BGD, QUERY_AWS_RDS_TOPOLOGY_DISCOVERY, worker_stop);
+		AWS_Aurora_BGD_Query_Result query = aws_aurora_bgd_query_candidates(
+			topology_hosts, st.writer_hg, st.check_timeout_ms,
+			MON_AWS_RDS_BGD, QUERY_AWS_RDS_TOPOLOGY_DISCOVERY, worker_stop,
+			&topology_host, true);
 		if (worker_stop.load()) {
 			return;
 		}
@@ -6722,14 +6839,33 @@ void MySQL_Monitor::aws_aurora_bgd_run_discovery_cycle(
 				AWS_RDS_Topology_Result topology = parse_aws_rds_topology(query.mmsd->result);
 				AWS_Aurora_BGD_Topology_Observation observation =
 					aws_aurora_bgd_validate_topology(topology);
+				if (observation.valid
+					&& st.status == AWS_Aurora_BGD_Status::SWITCHOVER_COMPLETED) {
+					if (st.fingerprint == observation.fingerprint) {
+						return;
+					}
+					st.fingerprint = AWS_Aurora_BGD_Fingerprint {};
+					st.target_members.clear();
+					st.target_snapshot_complete = false;
+					aws_aurora_bgd_set_status(st, AWS_Aurora_BGD_Status::NONE);
+					proxy_info(
+						"AWS Aurora BGD [wHG=%u rHG=%u]: new deployment fingerprint rearmed discovery\n",
+						st.writer_hg, st.reader_hg);
+				}
 				if (observation.valid && observation.completed) {
 					const bool same_active_deployment = st.fingerprint.empty()
-						|| st.fingerprint == observation.fingerprint
-						|| st.status == AWS_Aurora_BGD_Status::SWITCHOVER_COMPLETED;
+						|| st.fingerprint == observation.fingerprint;
 					if (same_active_deployment) {
 						aws_aurora_bgd_apply_completion(st, observation.fingerprint);
 					}
 				} else if (observation.valid) {
+					if (st.production_members.empty()
+						&& !aws_aurora_bgd_rebuild_production_snapshot(st)) {
+						proxy_error(
+							"AWS Aurora BGD [wHG=%u rHG=%u]: retaining current state until production membership is available\n",
+							st.writer_hg, st.reader_hg);
+						return;
+					}
 					const bool same_deployment = st.fingerprint.empty()
 						|| st.fingerprint == observation.fingerprint;
 					const bool rollback_transition =
@@ -6755,16 +6891,12 @@ void MySQL_Monitor::aws_aurora_bgd_run_discovery_cycle(
 		return;
 	}
 
-	std::vector<AWS_RDS_BGD_Probe_Host> membership_hosts = aws_aurora_bgd_target_probe_hosts(st);
-	AWS_RDS_BGD_Probe_Host membership_host;
-	if (!aws_aurora_bgd_select_reachable_host(membership_hosts, st.writer_hg, membership_host)) {
-		proxy_error("No node is pingable for AWS Aurora BGD membership checks with writer HG %u\n", st.writer_hg);
-		return;
-	}
-
-	AWS_Aurora_BGD_Query_Result membership = aws_aurora_bgd_query(
-		membership_host, st.writer_hg, st.check_timeout_ms,
-		MON_AWS_AURORA, QUERY_AWS_AURORA_BGD_REPLICA_HOST_STATUS, worker_stop);
+	std::vector<AWS_RDS_BGD_Probe_Host> membership_hosts =
+		aws_aurora_bgd_membership_probe_hosts(st);
+	AWS_Aurora_BGD_Query_Result membership = aws_aurora_bgd_query_candidates(
+		membership_hosts, st.writer_hg, st.check_timeout_ms,
+		MON_AWS_AURORA, QUERY_AWS_AURORA_BGD_REPLICA_HOST_STATUS, worker_stop,
+		nullptr, false);
 	if (membership.rc != 0) {
 		return;
 	}
@@ -6975,7 +7107,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 
 		const size_t num_hosts = bgd_state.production_probe_hosts.size();
 		if (num_hosts != 0) {
-			rnd = static_cast<size_t>(rand()) % num_hosts;
+			rnd = static_cast<size_t>(rand_fast()) % num_hosts;
 			for (size_t offset = 0; !found_pingable_host && offset < num_hosts; ++offset) {
 				const size_t host_idx = (rnd + offset) % num_hosts;
 				const AWS_RDS_BGD_Probe_Host& host =
@@ -6983,7 +7115,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 				rc_ping = GloMyMon->server_responds_to_ping(
 					const_cast<char*>(host.hostname.c_str()), host.port);
 #ifdef TEST_AURORA_RANDOM
-				if (offset == 0 && rand() % 100 < 30) {
+				if (offset == 0 && rand_fast() % 100 < 30) {
 					rc_ping = false;
 				}
 #endif // TEST_AURORA_RANDOM
@@ -7000,7 +7132,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 		}
 
 #ifdef TEST_AURORA_RANDOM
-		if (rand() % 200 == 0) {
+		if (rand_fast() % 200 == 0) {
 			// we randomly fail 0.5% of the requests
 			found_pingable_host = false;
 		}
@@ -7016,7 +7148,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 			continue;
 		}
 #ifdef TEST_AURORA
-		if (rand() % 1000 == 0) { // suppress 99.9% of the output, too verbose
+		if (rand_fast() % 1000 == 0) { // suppress 99.9% of the output, too verbose
 			const AWS_RDS_BGD_Probe_Host& host = bgd_state.production_probe_hosts[cur_host_idx];
 			proxy_info("Running check for AWS Aurora writer HG %u on %s:%d\n", wHG,
 				host.hostname.c_str(), host.port);
@@ -7277,12 +7409,6 @@ __exit_monitor_AWS_Aurora_thread_HG_now:
 	if (mmsd) {
 		delete (mmsd);
 		mmsd = NULL;
-	for (unsigned int i=0; i<N_L_ASE; i++) {
-		if (lasts_ase[i]) {
-			delete lasts_ase[i];
-			lasts_ase[i] = NULL;
-		}
-	}
 	}
 
 	if (mysql_thr) {
@@ -7293,6 +7419,7 @@ __exit_monitor_AWS_Aurora_thread_HG_now:
 		if (lasts_ase[i]) {
 			AWS_Aurora_status_entry * ase = lasts_ase[i];
 			delete ase;
+			lasts_ase[i] = NULL;
 		}
 	}
 	proxy_info("Stopping Monitor thread for AWS Aurora writer HG %u\n", wHG);

@@ -6,7 +6,8 @@
  *
  * 1. Start a worker from SWITCHOVER_INITIATED and reconstruct active probing.
  * 2. Start a worker from SWITCHOVER_IN_PROGRESS and reconstruct writer demotion.
- * 3. Start a worker from POST_PROCESSING and reconstruct every target pin.
+ * 3. Recover late IN_PROGRESS entry when the first ordinary probe fails.
+ * 4. Start a worker from POST_PROCESSING and reconstruct every target pin.
  */
 
 #include <cstdint>
@@ -67,7 +68,7 @@ int setup(CommandLine& cl, MYSQL*& admin, BGD_Simulator& sim) {
 		return EXIT_FAILURE;
 	}
 	char username[] = "aurora1";
-	char password[] = "pass1";
+	char password[] = "pass1"; // NOSONAR: fixed simulator fixture credential.
 	if (sim.connect(cl.host, 3306, username, password) != EXIT_SUCCESS
 		|| aurora_bgd_admin_cleanup(admin) != EXIT_SUCCESS
 		|| sim.cleanup() != EXIT_SUCCESS) {
@@ -174,7 +175,10 @@ int add_routes(
 	return aurora_bgd_execute_all(admin, queries);
 }
 
-bool route_to_backend(CommandLine& cl, BGD_Simulator& sim, const Endpoint& expected) {
+bool route_to_backend(
+	CommandLine& cl, BGD_Simulator& sim, const Endpoint& expected,
+	const Aurora_BGD_Membership_Set& expected_membership
+) {
 	auto [sequence_rc, sequence] = sim.replica_probe_log_last_sequence();
 	if (sequence_rc != EXIT_SUCCESS) {
 		return false;
@@ -184,9 +188,9 @@ bool route_to_backend(CommandLine& cl, BGD_Simulator& sim, const Endpoint& expec
 		return false;
 	}
 	auto [query_rc, rows] = mysql_query_ext_rows(client, kOrdinaryAuroraQuery);
-	(void)rows;
 	mysql_close(client);
-	if (query_rc != EXIT_SUCCESS) {
+	if (query_rc != EXIT_SUCCESS
+		|| !aurora_bgd_result_matches_membership(rows, expected_membership)) {
 		return false;
 	}
 	auto [logs_rc, logs] = sim.replica_probe_log_since(sequence);
@@ -213,7 +217,9 @@ bool route_members(
 		Endpoint expected = target
 			? deployment.target.members[i].endpoint.backend()
 			: deployment.production.members[i].endpoint.backend();
-		if (!route_to_backend(cl, sim, expected)) {
+		const Aurora_BGD_Membership_Set& expected_membership = target
+			? deployment.target : deployment.production;
+		if (!route_to_backend(cl, sim, expected, expected_membership)) {
 			return false;
 		}
 	}
@@ -287,6 +293,43 @@ int test_first_in_progress(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 }
 
 /**
+ * Reconstruct IN_PROGRESS while the first ordinary Aurora query is failing.
+ *
+ * The fixed production membership comes from the configured/runtime hostgroups,
+ * so entering an active phase never depends on a successful cutover-time query.
+ */
+int test_first_in_progress_after_ordinary_error(
+	MYSQL* admin, BGD_Simulator& sim, TestState& state
+) {
+	if (reset_scenario(admin, sim) != EXIT_SUCCESS) {
+		diag("Error: failed to reset before failed-probe late entry");
+		return EXIT_FAILURE;
+	}
+
+	Aurora_BGD_Test_Deployment& deployment = state.progress;
+	if (publish_initial(sim, deployment, "SWITCHOVER_IN_PROGRESS") != EXIT_SUCCESS
+		|| sim.replica_error(
+			deployment.production.backends(), 1205,
+			"simulated initial ordinary Aurora timeout") != EXIT_SUCCESS
+		|| aurora_bgd_admin_setup(
+			admin, deployment, state.progress_writer_hostgroup,
+			state.progress_reader_hostgroup, state.progress_green_writer_hostgroup,
+			state.progress_green_reader_hostgroup, false, 300, false) != EXIT_SUCCESS) {
+		diag("Error: failed to configure failed-probe IN_PROGRESS late entry");
+		return EXIT_FAILURE;
+	}
+
+	ok(aurora_bgd_wait_for_status(
+		admin, state.progress_writer_hostgroup,
+		"SWITCHOVER_IN_PROGRESS", kWaitSeconds) == EXIT_SUCCESS
+		&& writer_placement(
+			admin, state.progress_writer_hostgroup, state.progress_reader_hostgroup,
+			deployment.production.members.front().endpoint.hostname, true),
+		"late IN_PROGRESS entry reconstructs and demotes after an initial ordinary-query failure");
+	return EXIT_SUCCESS;
+}
+
+/**
  * Start a worker from SWITCHOVER_IN_POST_PROCESSING.
  *
  * - Publish POST_PROCESSING before the worker exists.
@@ -325,7 +368,7 @@ int test_first_post_processing(
 }
 
 int main() {
-	plan(6);
+	plan(7);
 
 	CommandLine cl {};
 	MYSQL* admin = nullptr;
@@ -346,6 +389,12 @@ int main() {
 	// Simulator: make IN_PROGRESS the first observed deployment state.
 	// Verify: the worker reconstructs and demotes the production writer.
 	if (test_first_in_progress(admin, sim, state) != EXIT_SUCCESS) {
+		goto exit_cleanup;
+	}
+
+	// Simulator: fail the initial ordinary query while publishing IN_PROGRESS.
+	// Verify: configured production membership still permits immediate demotion.
+	if (test_first_in_progress_after_ordinary_error(admin, sim, state) != EXIT_SUCCESS) {
 		goto exit_cleanup;
 	}
 

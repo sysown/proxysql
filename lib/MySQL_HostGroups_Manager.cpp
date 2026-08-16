@@ -7335,8 +7335,9 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(
 				char *error=NULL;
 				q1 = (char *)"SELECT DISTINCT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostgroup_id IN (%d,%d) ORDER BY hostgroup_id, hostname, port";
 				q2 = (char *)"SELECT DISTINCT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers_incoming WHERE hostgroup_id IN (%d,%d) ORDER BY hostgroup_id, hostname, port";
-				query = (char *)malloc(strlen(q2)+128);
-				sprintf(query,q1,_writer_hostgroup,_rhid);
+				const size_t query_size = strlen(q2) + 128;
+				query = (char *)malloc(query_size);
+				snprintf(query, query_size, q1, _writer_hostgroup, _rhid);
 				mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset_servers);
 				if (error == NULL) {
 					if (resultset_servers) {
@@ -7347,7 +7348,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(
 					delete resultset_servers;
 					resultset_servers = NULL;
 				}
-				sprintf(query,q2,_writer_hostgroup,_rhid);
+				snprintf(query, query_size, q2, _writer_hostgroup, _rhid);
 				mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset_servers);
 				if (error == NULL) {
 					if (resultset_servers) {

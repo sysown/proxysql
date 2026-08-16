@@ -9,6 +9,7 @@
  * 3. Publish incomplete and inconsistent membership and retain the last complete map.
  * 4. Publish invalid topology rows and retain the last valid runtime state.
  * 5. Verify automatic discovery accepts a writer-only deployment.
+ * 6. Verify topology and membership probes inherit TLS from the Aurora row.
  */
 
 #include <cstdint>
@@ -34,6 +35,10 @@ struct TestState {
 	Aurora_BGD_Test_Deployment writer_only { aurora_bgd_deployment_b_writer_only() };
 	int writer_only_writer_hostgroup { 1520 };
 	int writer_only_reader_hostgroup { 1521 };
+	int tls_writer_hostgroup { 1525 };
+	int tls_reader_hostgroup { 1526 };
+	int tls_green_writer_hostgroup { 1527 };
+	int tls_green_reader_hostgroup { 1528 };
 };
 
 int setup(CommandLine& cl, MYSQL*& admin, BGD_Simulator& sim) {
@@ -47,7 +52,7 @@ int setup(CommandLine& cl, MYSQL*& admin, BGD_Simulator& sim) {
 		return EXIT_FAILURE;
 	}
 	char simulator_username[] = "aurora1";
-	char simulator_password[] = "pass1";
+	char simulator_password[] = "pass1"; // NOSONAR: fixed simulator fixture credential.
 	if (sim.connect(cl.host, 3306, simulator_username, simulator_password) != EXIT_SUCCESS) {
 		diag("Error: failed to connect to the shared AWS simulator");
 		mysql_close(admin);
@@ -218,6 +223,9 @@ int test_target_membership_validation(BGD_Simulator& sim, TestState& state) {
 	ok(retain_complete_target_after_membership(sim, deployment, incomplete_rows),
 		"an incomplete target result retains the previous complete target selection");
 
+	ok(retain_complete_target_after_membership(sim, deployment, {}),
+		"an empty target result retains the previous complete target selection");
+
 	vector<Aurora_Replica_Row> duplicate_writer_rows = complete_rows;
 	duplicate_writer_rows[1].session_id = "MASTER_SESSION_ID";
 	ok(retain_complete_target_after_membership(sim, deployment, duplicate_writer_rows),
@@ -271,6 +279,37 @@ int test_topology_validation(MYSQL* admin, BGD_Simulator& sim, TestState& state)
 		admin, sim, deployment, source_only, state.writer_hostgroup),
 		"SOURCE-only topology does not replace AVAILABLE");
 
+	vector<BGD_Topology_Row> target_only { valid_topology.back() };
+	ok(invalid_topology_retains_available(
+		admin, sim, deployment, target_only, state.writer_hostgroup),
+		"TARGET-only topology is accepted only for SWITCHOVER_COMPLETED");
+
+	vector<BGD_Topology_Row> duplicate_source = valid_topology;
+	duplicate_source.push_back(valid_topology.front());
+	ok(invalid_topology_retains_available(
+		admin, sim, deployment, duplicate_source, state.writer_hostgroup),
+		"duplicate SOURCE rows do not replace AVAILABLE");
+
+	vector<BGD_Topology_Row> extra_role = valid_topology;
+	BGD_Topology_Row observer = valid_topology.front();
+	observer.role = "BLUE_GREEN_DEPLOYMENT_OBSERVER";
+	extra_role.push_back(observer);
+	ok(invalid_topology_retains_available(
+		admin, sim, deployment, extra_role, state.writer_hostgroup),
+		"an extra unsupported role does not replace AVAILABLE");
+
+	vector<BGD_Topology_Row> invalid_port = valid_topology;
+	invalid_port[1].port = 0;
+	ok(invalid_topology_retains_available(
+		admin, sim, deployment, invalid_port, state.writer_hostgroup),
+		"a TARGET row with an invalid port does not replace AVAILABLE");
+
+	vector<BGD_Topology_Row> empty_endpoint = valid_topology;
+	empty_endpoint[1].endpoint.clear();
+	ok(invalid_topology_retains_available(
+		admin, sim, deployment, empty_endpoint, state.writer_hostgroup),
+		"a TARGET row with an empty endpoint does not replace AVAILABLE");
+
 	vector<BGD_Topology_Row> mismatched_status = valid_topology;
 	mismatched_status[0].status = "SWITCHOVER_INITIATED";
 	ok(invalid_topology_retains_available(
@@ -288,6 +327,42 @@ int test_topology_validation(MYSQL* admin, BGD_Simulator& sim, TestState& state)
 		admin, state.writer_hostgroup, state.reader_hostgroup,
 		deployment.production.members.size()),
 		"AVAILABLE discovery performs no production routing action");
+	return EXIT_SUCCESS;
+}
+
+/** Configure SSL-enabled Aurora rows and verify both BGD probe types use TLS. */
+int test_tls_probe_policy(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
+	if (reset_scenario(admin, sim) != EXIT_SUCCESS) {
+		diag("Error: failed to reset before the TLS scenario");
+		return EXIT_FAILURE;
+	}
+
+	Aurora_BGD_Test_Deployment& deployment = state.writer_only;
+	if (aurora_bgd_publish(sim, deployment) != EXIT_SUCCESS
+		|| aurora_bgd_admin_setup(
+			admin, deployment, state.tls_writer_hostgroup, state.tls_reader_hostgroup,
+			state.tls_green_writer_hostgroup, state.tls_green_reader_hostgroup,
+			false, 100, false, true) != EXIT_SUCCESS) {
+		diag("Error: failed to configure the TLS probe scenario");
+		return EXIT_FAILURE;
+	}
+
+	ok(aurora_bgd_wait_for_status(
+		admin, state.tls_writer_hostgroup, "AVAILABLE", kWaitSeconds) == EXIT_SUCCESS,
+		"SSL-enabled Aurora rows reach AVAILABLE");
+
+	auto [topology_rc, topology_probe] = sim.wait_for_probe_log(
+		0, deployment.production.members.front().endpoint.backend(),
+		BGD_Probe_Kind::metadata, kProbeTimeoutMs, 1);
+	ok(topology_rc == EXIT_SUCCESS,
+		"topology discovery uses TLS when the Aurora row enables SSL");
+
+	vector<Endpoint> target_backends = deployment.target.backends();
+	auto [membership_rc, membership_probe] = aurora_bgd_wait_for_replica_probe(
+		sim, 0, target_backends, Aurora_Replica_Probe_Kind::bgd_membership,
+		kProbeTimeoutMs, deployment.target_replica_set);
+	ok(membership_rc == EXIT_SUCCESS && membership_probe.encrypted,
+		"target-membership discovery uses TLS when the Aurora row enables SSL");
 	return EXIT_SUCCESS;
 }
 
@@ -327,7 +402,7 @@ int test_writer_only_discovery(MYSQL* admin, BGD_Simulator& sim, TestState& stat
 }
 
 int main() {
-	plan(18);
+	plan(27);
 
 	CommandLine cl {};
 	MYSQL* admin = nullptr;
@@ -360,6 +435,12 @@ int main() {
 	// ProxySQL: configure automatic discovery for a writer-only deployment.
 	// Verify: writer-only source and target snapshots are accepted.
 	if (test_writer_only_discovery(admin, sim, state) != EXIT_SUCCESS) {
+		goto exit_cleanup;
+	}
+
+	// ProxySQL: configure SSL-enabled Aurora rows.
+	// Verify: topology and target-membership probes both use TLS.
+	if (test_tls_probe_policy(admin, sim, state) != EXIT_SUCCESS) {
 		goto exit_cleanup;
 	}
 

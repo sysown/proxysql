@@ -9,6 +9,7 @@
  * 3. Enter IN_PROGRESS and verify one writer demotion with source routing intact.
  * 4. Enter POST_PROCESSING and verify restoration, pool retirement, and target pins.
  * 5. Complete a previously incomplete target snapshot during POST_PROCESSING.
+ * 6. Verify refreshed/renamed target identity with automatic multi-reader discovery.
  */
 
 #include <cstdint>
@@ -55,6 +56,11 @@ struct TestState {
 	int gated_green_writer_hostgroup { 1542 };
 	int gated_green_reader_hostgroup { 1543 };
 	int gated_route_hostgroup { 1544 };
+	Aurora_BGD_Test_Deployment refreshed { aurora_bgd_deployment_a() };
+	int refreshed_writer_hostgroup { 1545 };
+	int refreshed_reader_hostgroup { 1546 };
+	vector<int> refreshed_route_hostgroups { 1547, 1548, 1549 };
+	MYSQL* held_client { nullptr };
 };
 
 int setup(CommandLine& cl, MYSQL*& admin, BGD_Simulator& sim) {
@@ -68,7 +74,7 @@ int setup(CommandLine& cl, MYSQL*& admin, BGD_Simulator& sim) {
 		return EXIT_FAILURE;
 	}
 	char simulator_username[] = "aurora1";
-	char simulator_password[] = "pass1";
+	char simulator_password[] = "pass1"; // NOSONAR: fixed simulator fixture credential.
 	if (sim.connect(cl.host, 3306, simulator_username, simulator_password) != EXIT_SUCCESS) {
 		diag("Error: failed to connect to the shared AWS simulator");
 		mysql_close(admin);
@@ -148,13 +154,18 @@ int publish_status(
 		aurora_bgd_topology(deployment, status));
 }
 
-bool fast_membership_without_ordinary(
+bool fast_bgd_without_ordinary(
 	BGD_Simulator& sim, uint64_t sequence, const string& target_replica_set,
 	uint32_t observation_ms, uint64_t minimum_membership_probes
 ) {
+	auto [topology_seq_rc, topology_sequence] = sim.probe_log_last_sequence();
+	if (topology_seq_rc != EXIT_SUCCESS) {
+		return false;
+	}
 	usleep(observation_ms * 1000);
 	auto [rc, logs] = sim.replica_probe_log_since(sequence);
-	if (rc != EXIT_SUCCESS) {
+	auto [topology_rc, topology_logs] = sim.probe_log_since(topology_sequence);
+	if (rc != EXIT_SUCCESS || topology_rc != EXIT_SUCCESS) {
 		return false;
 	}
 	uint64_t membership_probes = 0;
@@ -167,13 +178,22 @@ bool fast_membership_without_ordinary(
 			membership_probes++;
 		}
 	}
-	return membership_probes >= minimum_membership_probes;
+	uint64_t topology_probes = 0;
+	for (const BGD_Probe_Log& log : topology_logs) {
+		topology_probes += log.probe_kind == BGD_Probe_Kind::metadata ? 1 : 0;
+	}
+	return membership_probes >= minimum_membership_probes
+		&& topology_probes >= minimum_membership_probes;
 }
 
 int add_member_routes(
 	MYSQL* admin, Aurora_BGD_Test_Deployment& deployment,
 	const vector<int>& route_hgs
 ) {
+	if (route_hgs.size() != deployment.production.members.size()) {
+		diag("Member-route hostgroup count does not match production membership");
+		return EXIT_FAILURE;
+	}
 	vector<string> queries;
 	for (size_t i = 0; i < deployment.production.members.size(); ++i) {
 		queries.push_back(
@@ -195,7 +215,8 @@ int set_default_hostgroup(MYSQL* admin, int hostgroup) {
 }
 
 bool route_to_expected_backend(
-	CommandLine& cl, BGD_Simulator& sim, const Endpoint& expected_backend
+	CommandLine& cl, BGD_Simulator& sim, const Endpoint& expected_backend,
+	const Aurora_BGD_Membership_Set& expected_membership
 ) {
 	auto [sequence_rc, sequence] = sim.replica_probe_log_last_sequence();
 	if (sequence_rc != EXIT_SUCCESS) {
@@ -206,12 +227,14 @@ bool route_to_expected_backend(
 		return false;
 	}
 	auto [rc, rows] = mysql_query_ext_rows(client, kOrdinaryAuroraQuery);
-	(void)rows;
-	if (rc != EXIT_SUCCESS) {
-		diag("Backend routing query failed with MySQL error %d: %s", rc, mysql_error(client));
+	const bool result_matches = rc == EXIT_SUCCESS
+		&& aurora_bgd_result_matches_membership(rows, expected_membership);
+	if (!result_matches) {
+		diag("Backend routing query failed with MySQL error %d: %s",
+			mysql_errno(client), mysql_error(client));
 	}
 	mysql_close(client);
-	if (rc != EXIT_SUCCESS) {
+	if (!result_matches) {
 		return false;
 	}
 
@@ -250,7 +273,10 @@ bool route_members_to_expected_ips(
 		Endpoint expected_backend = target
 			? deployment.target.members[i].endpoint.backend()
 			: deployment.production.members[i].endpoint.backend();
-		if (!route_to_expected_backend(cl, sim, expected_backend)) {
+		const Aurora_BGD_Membership_Set& expected_membership = target
+			? deployment.target : deployment.production;
+		if (!route_to_expected_backend(
+			cl, sim, expected_backend, expected_membership)) {
 			return false;
 		}
 	}
@@ -290,6 +316,22 @@ int wait_for_member_route_pool_count(
 		"SELECT COALESCE(SUM(ConnUsed+ConnFree),0)" + comparison +
 		" FROM stats_mysql_connection_pool WHERE hostgroup IN (" + hostgroups + ")",
 		kWaitSeconds);
+}
+
+int64_t member_route_used_count(MYSQL* admin, const vector<int>& route_hgs) {
+	string hostgroups;
+	for (int hostgroup : route_hgs) {
+		if (!hostgroups.empty()) {
+			hostgroups += ",";
+		}
+		hostgroups += to_string(hostgroup);
+	}
+	auto [rc, rows] = mysql_query_ext_rows(
+		admin,
+		"SELECT COALESCE(SUM(ConnUsed),0) FROM stats_mysql_connection_pool "
+		"WHERE hostgroup IN (" + hostgroups + ")");
+	return rc == EXIT_SUCCESS && rows.size() == 1 && rows.front().size() == 1
+		? strtoll(rows.front().front().c_str(), nullptr, 10) : -1;
 }
 
 /** Configure the active switchover scenario and reach AVAILABLE. */
@@ -335,7 +377,7 @@ int test_switchover_initiated(MYSQL* admin, BGD_Simulator& sim, TestState& state
 		"INITIATED does not change writer placement");
 
 	auto [active_seq_rc, active_sequence] = sim.replica_probe_log_last_sequence();
-	ok(active_seq_rc == EXIT_SUCCESS && fast_membership_without_ordinary(
+	ok(active_seq_rc == EXIT_SUCCESS && fast_bgd_without_ordinary(
 		sim, active_sequence, deployment.target_replica_set, 650, 3),
 		"INITIATED uses fast membership probes and suspends the ordinary Aurora query");
 
@@ -349,7 +391,7 @@ int test_switchover_initiated(MYSQL* admin, BGD_Simulator& sim, TestState& state
 		diag("Error: failed to publish the competing source role observation");
 		return EXIT_FAILURE;
 	}
-	ok(fast_membership_without_ordinary(
+	ok(fast_bgd_without_ordinary(
 		sim, source_change_sequence, deployment.target_replica_set, 350, 2),
 		"changed source roles cannot compete while production probing is suspended");
 	return EXIT_SUCCESS;
@@ -392,7 +434,7 @@ int test_switchover_in_progress(
 		diag("Error: failed to repeat SWITCHOVER_IN_PROGRESS");
 		return EXIT_FAILURE;
 	}
-	ok(fast_membership_without_ordinary(
+	ok(fast_bgd_without_ordinary(
 		sim, repeat_progress_sequence, deployment.target_replica_set, 350, 2)
 		&& wait_for_writer_placement(
 			admin, state.writer_hostgroup, state.reader_hostgroup,
@@ -404,6 +446,20 @@ int test_switchover_in_progress(
 		&& member_route_pool_count(admin, state.route_hostgroups)
 			>= static_cast<int64_t>(state.route_hostgroups.size()),
 		"all member routes use source IPs and hold pre-cutover pools");
+
+	if (set_default_hostgroup(admin, state.route_hostgroups.front()) != EXIT_SUCCESS) {
+		return EXIT_FAILURE;
+	}
+	state.held_client = init_mysql_conn(cl.host, cl.port, cl.username, cl.password);
+	bool held_connection = state.held_client != nullptr
+		&& mysql_query(state.held_client, "BEGIN") == 0;
+	if (held_connection) {
+		auto [query_rc, rows] = mysql_query_ext_rows(state.held_client, kOrdinaryAuroraQuery);
+		held_connection = query_rc == EXIT_SUCCESS
+			&& aurora_bgd_result_matches_membership(rows, deployment.production);
+	}
+	ok(held_connection && member_route_used_count(admin, state.route_hostgroups) >= 1,
+		"a production connection remains in use across the cutover boundary");
 	return EXIT_SUCCESS;
 }
 
@@ -418,7 +474,14 @@ int test_switchover_post_processing(
 	CommandLine& cl, MYSQL* admin, BGD_Simulator& sim, TestState& state)
 {
 	Aurora_BGD_Test_Deployment& deployment = state.deployment;
-	if (publish_status(sim, deployment, "SWITCHOVER_IN_POST_PROCESSING") != EXIT_SUCCESS
+	if (sim.read_only_update(
+		deployment.target.members.front().endpoint.host_endpoint(), true) != EXIT_SUCCESS
+		|| aurora_bgd_execute_all(admin, {
+			"SET mysql-monitor_local_dns_cache_ttl=0",
+			"SET mysql-monitor_local_dns_cache_refresh_interval=0",
+			"LOAD MYSQL VARIABLES TO RUNTIME",
+		}) != EXIT_SUCCESS
+		|| publish_status(sim, deployment, "SWITCHOVER_IN_POST_PROCESSING") != EXIT_SUCCESS
 		|| aurora_bgd_wait_for_status(
 			admin, state.writer_hostgroup, "SWITCHOVER_IN_POST_PROCESSING", kWaitSeconds)
 			!= EXIT_SUCCESS) {
@@ -438,12 +501,34 @@ int test_switchover_post_processing(
 			admin, state.reader_hostgroup,
 			deployment.production.members[2].endpoint.hostname, 1, "ONLINE"),
 		"POST_PROCESSING leaves canonical readers ONLINE and eligible");
+	ok(state.held_client != nullptr
+		&& member_route_used_count(admin, state.route_hostgroups) >= 1,
+		"POST_PROCESSING advances without waiting for an in-use connection to close");
+	if (state.held_client != nullptr) {
+		mysql_query(state.held_client, "ROLLBACK");
+		mysql_close(state.held_client);
+		state.held_client = nullptr;
+	}
 	ok(wait_for_member_route_pool_count(
 		admin, state.route_hostgroups, "=0") == EXIT_SUCCESS,
 		"POST_PROCESSING retires the pre-cutover member pools");
 	ok(route_members_to_expected_ips(
 		cl, admin, sim, deployment, state.route_hostgroups, true),
-		"POST_PROCESSING pins every production hostname to its cached target IP");
+		"POST_PROCESSING pins every production hostname despite disabled DNS caching and target read_only=1");
+	ok(aurora_bgd_execute_all(admin, {
+		"LOAD MYSQL VARIABLES TO RUNTIME",
+	}) == EXIT_SUCCESS
+		&& route_members_to_expected_ips(
+			cl, admin, sim, deployment, state.route_hostgroups, true),
+		"an active variables refresh preserves every explicit traffic pin");
+	if (aurora_bgd_execute_all(admin, {
+		"SET mysql-monitor_local_dns_cache_ttl=300000",
+		"SET mysql-monitor_local_dns_cache_refresh_interval=60000",
+		"LOAD MYSQL VARIABLES TO RUNTIME",
+	}) != EXIT_SUCCESS) {
+		diag("Error: failed to restore DNS-cache variables");
+		return EXIT_FAILURE;
+	}
 
 	const int64_t target_pool_count = member_route_pool_count(admin, state.route_hostgroups);
 	auto [repeat_post_rc, repeat_post_sequence] = sim.probe_log_last_sequence();
@@ -462,9 +547,213 @@ int test_switchover_post_processing(
 		"repeated POST_PROCESSING does not replay completed member retirement");
 
 	auto [post_seq_rc, post_sequence] = sim.replica_probe_log_last_sequence();
-	ok(post_seq_rc == EXIT_SUCCESS && fast_membership_without_ordinary(
+	ok(post_seq_rc == EXIT_SUCCESS && fast_bgd_without_ordinary(
 		sim, post_sequence, deployment.target_replica_set, 350, 2),
 		"POST_PROCESSING keeps fast BGD probes without ordinary Aurora queries");
+	return EXIT_SUCCESS;
+}
+
+/**
+ * Refresh target IPs before rename and retain the last complete multi-reader map.
+ *
+ * Green hostgroups are intentionally NULL: auto-discovery must still pair all
+ * members, accept the canonical rename, and route with the last complete map.
+ */
+int test_auto_discovered_refresh_and_rename(
+	CommandLine& cl, MYSQL* admin, BGD_Simulator& sim, TestState& state
+) {
+	if (reset_scenario(admin, sim) != EXIT_SUCCESS) {
+		diag("Error: failed to reset before refreshed-target scenario");
+		return EXIT_FAILURE;
+	}
+
+	Aurora_BGD_Test_Deployment& deployment = state.refreshed;
+	if (aurora_bgd_publish(sim, deployment) != EXIT_SUCCESS
+		|| aurora_bgd_admin_setup(
+			admin, deployment, state.refreshed_writer_hostgroup,
+			state.refreshed_reader_hostgroup, -1, -1, true, 300, false) != EXIT_SUCCESS
+		|| add_member_routes(
+			admin, deployment, state.refreshed_route_hostgroups) != EXIT_SUCCESS
+		|| aurora_bgd_wait_for_status(
+			admin, state.refreshed_writer_hostgroup, "AVAILABLE", kWaitSeconds)
+			!= EXIT_SUCCESS) {
+		diag("Error: failed to configure auto-discovered multi-reader deployment");
+		return EXIT_FAILURE;
+	}
+
+	const vector<string> refreshed_ids {
+		"aurora-a-writer-green-r2",
+		"aurora-a-reader-1-green-r2",
+		"aurora-a-reader-2-green-r2",
+	};
+	const vector<string> refreshed_ips { "127.0.11.31", "127.0.11.32", "127.0.11.33" };
+	for (size_t i = 0; i < deployment.target.members.size(); ++i) {
+		deployment.target.members[i].server_id = refreshed_ids[i];
+		deployment.target.members[i].endpoint.hostname =
+			refreshed_ids[i] + deployment.domain_name;
+		deployment.target.members[i].endpoint.ip = refreshed_ips[i];
+	}
+	deployment.target.serving_endpoints.clear();
+	deployment.target.serving_endpoints.push_back(deployment.target_cluster_endpoint);
+	for (const Aurora_BGD_Member& member : deployment.target.members) {
+		deployment.target.serving_endpoints.push_back(member.endpoint);
+	}
+
+	auto [refresh_seq_rc, refresh_sequence] = sim.replica_probe_log_last_sequence();
+	if (refresh_seq_rc != EXIT_SUCCESS || sim.replica_update(
+		deployment.target_replica_set, deployment.target.replica_rows(),
+		deployment.target.backends()) != EXIT_SUCCESS) {
+		return EXIT_FAILURE;
+	}
+	vector<Endpoint> refreshed_backends = deployment.target.backends();
+	auto [refresh_probe_rc, refresh_probe] = aurora_bgd_wait_for_replica_probe(
+		sim, refresh_sequence, refreshed_backends,
+		Aurora_Replica_Probe_Kind::bgd_membership, kProbeTimeoutMs,
+		deployment.target_replica_set);
+	ok(refresh_probe_rc == EXIT_SUCCESS,
+		"AVAILABLE refreshes every target IP before the member rename");
+
+	vector<Aurora_Replica_Row> canonical_rows = deployment.target.replica_rows();
+	for (size_t i = 0; i < canonical_rows.size(); ++i) {
+		canonical_rows[i].server_id = deployment.production.members[i].server_id;
+	}
+	auto [rename_seq_rc, rename_sequence] = sim.replica_probe_log_last_sequence();
+	if (rename_seq_rc != EXIT_SUCCESS || sim.replica_update(
+		deployment.target_replica_set, canonical_rows,
+		deployment.target.backends()) != EXIT_SUCCESS) {
+		return EXIT_FAILURE;
+	}
+	auto [rename_probe_rc, rename_probe] = aurora_bgd_wait_for_replica_probe(
+		sim, rename_sequence, refreshed_backends,
+		Aurora_Replica_Probe_Kind::bgd_membership, kProbeTimeoutMs,
+		deployment.target_replica_set);
+	ok(rename_probe_rc == EXIT_SUCCESS,
+		"stable reader sessions preserve identity across the canonical SERVER_ID rename");
+
+	vector<Aurora_Replica_Row> incomplete_rows = canonical_rows;
+	incomplete_rows.pop_back();
+	auto [incomplete_seq_rc, incomplete_sequence] = sim.replica_probe_log_last_sequence();
+	if (incomplete_seq_rc != EXIT_SUCCESS || sim.replica_update(
+		deployment.target_replica_set, incomplete_rows,
+		deployment.target.backends()) != EXIT_SUCCESS) {
+		return EXIT_FAILURE;
+	}
+	auto [incomplete_probe_rc, incomplete_probe] = aurora_bgd_wait_for_replica_probe(
+		sim, incomplete_sequence, refreshed_backends,
+		Aurora_Replica_Probe_Kind::bgd_membership, kProbeTimeoutMs,
+		deployment.target_replica_set);
+	if (incomplete_probe_rc != EXIT_SUCCESS
+		|| publish_status(sim, deployment, "SWITCHOVER_IN_POST_PROCESSING") != EXIT_SUCCESS
+		|| aurora_bgd_wait_for_status(
+			admin, state.refreshed_writer_hostgroup,
+			"SWITCHOVER_IN_POST_PROCESSING", kWaitSeconds) != EXIT_SUCCESS) {
+		return EXIT_FAILURE;
+	}
+
+	Aurora_BGD_Membership_Set observed_target = deployment.target;
+	observed_target.members.pop_back();
+	bool retained_routing = true;
+	for (size_t i = 0; i < state.refreshed_route_hostgroups.size(); ++i) {
+		retained_routing = retained_routing
+			&& set_default_hostgroup(admin, state.refreshed_route_hostgroups[i]) == EXIT_SUCCESS
+			&& route_to_expected_backend(
+				cl, sim, deployment.target.members[i].endpoint.backend(), observed_target);
+	}
+	ok(retained_routing,
+		"POST_PROCESSING routes all auto-discovered readers with the retained complete refreshed map");
+	return EXIT_SUCCESS;
+}
+
+/** Refresh production membership in AVAILABLE and freeze it after INITIATED. */
+int test_available_production_refresh_and_freeze(
+	CommandLine& cl, MYSQL* admin, BGD_Simulator& sim, TestState& state
+) {
+	if (reset_scenario(admin, sim) != EXIT_SUCCESS) {
+		return EXIT_FAILURE;
+	}
+	Aurora_BGD_Test_Deployment deployment = aurora_bgd_deployment_a();
+	if (aurora_bgd_publish(sim, deployment) != EXIT_SUCCESS
+		|| aurora_bgd_admin_setup(
+			admin, deployment, state.refreshed_writer_hostgroup,
+			state.refreshed_reader_hostgroup, -1, -1, true, 300, false) != EXIT_SUCCESS
+		|| add_member_routes(
+			admin, deployment, state.refreshed_route_hostgroups) != EXIT_SUCCESS
+		|| aurora_bgd_wait_for_status(
+			admin, state.refreshed_writer_hostgroup, "AVAILABLE", kWaitSeconds)
+			!= EXIT_SUCCESS) {
+		return EXIT_FAILURE;
+	}
+
+	vector<Aurora_Replica_Row> reduced_production = deployment.production.replica_rows();
+	reduced_production.pop_back();
+	vector<Aurora_Replica_Row> reduced_target = deployment.target.replica_rows();
+	reduced_target.pop_back();
+	auto [ordinary_seq_rc, ordinary_sequence] = sim.replica_probe_log_last_sequence();
+	if (ordinary_seq_rc != EXIT_SUCCESS || sim.replica_update(
+		deployment.blue_replica_set, reduced_production,
+		deployment.production.backends()) != EXIT_SUCCESS) {
+		return EXIT_FAILURE;
+	}
+	auto [ordinary_probe_rc, ordinary_probe] = aurora_bgd_wait_for_replica_probe(
+		sim, ordinary_sequence, deployment.production.backends(),
+		Aurora_Replica_Probe_Kind::ordinary, kProbeTimeoutMs,
+		deployment.blue_replica_set);
+	auto [ordinary_retry_rc, ordinary_retry] = aurora_bgd_wait_for_replica_probe(
+		sim, ordinary_probe.sequence_id, deployment.production.backends(),
+		Aurora_Replica_Probe_Kind::ordinary, kProbeTimeoutMs,
+		deployment.blue_replica_set);
+	auto [target_seq_rc, target_sequence] = sim.replica_probe_log_last_sequence();
+	if (ordinary_probe_rc != EXIT_SUCCESS || ordinary_retry_rc != EXIT_SUCCESS
+		|| target_seq_rc != EXIT_SUCCESS
+		|| sim.replica_update(
+			deployment.target_replica_set, reduced_target,
+			deployment.target.backends()) != EXIT_SUCCESS) {
+		return EXIT_FAILURE;
+	}
+	auto [target_probe_rc, target_probe] = aurora_bgd_wait_for_replica_probe(
+		sim, target_sequence, deployment.target.backends(),
+		Aurora_Replica_Probe_Kind::bgd_membership, kProbeTimeoutMs,
+		deployment.target_replica_set);
+	auto [target_retry_rc, target_retry] = aurora_bgd_wait_for_replica_probe(
+		sim, target_probe.sequence_id, deployment.target.backends(),
+		Aurora_Replica_Probe_Kind::bgd_membership, kProbeTimeoutMs,
+		deployment.target_replica_set);
+	ok(target_probe_rc == EXIT_SUCCESS && target_retry_rc == EXIT_SUCCESS
+		&& aurora_bgd_wait_for_status(
+			admin, state.refreshed_writer_hostgroup, "AVAILABLE", 1) == EXIT_SUCCESS,
+		"AVAILABLE refreshes production and target membership before the switchover");
+
+	if (publish_status(sim, deployment, "SWITCHOVER_INITIATED") != EXIT_SUCCESS
+		|| aurora_bgd_wait_for_status(
+			admin, state.refreshed_writer_hostgroup,
+			"SWITCHOVER_INITIATED", kWaitSeconds) != EXIT_SUCCESS
+		|| sim.replica_update(
+			deployment.blue_replica_set, deployment.production.replica_rows(),
+			deployment.production.backends()) != EXIT_SUCCESS
+		|| sim.replica_update(
+			deployment.target_replica_set, deployment.target.replica_rows(),
+			deployment.target.backends()) != EXIT_SUCCESS
+		|| publish_status(sim, deployment, "SWITCHOVER_IN_POST_PROCESSING") != EXIT_SUCCESS
+		|| aurora_bgd_wait_for_status(
+			admin, state.refreshed_writer_hostgroup,
+			"SWITCHOVER_IN_POST_PROCESSING", kWaitSeconds) != EXIT_SUCCESS) {
+		return EXIT_FAILURE;
+	}
+
+	bool frozen_routes = true;
+	for (size_t i = 0; i < state.refreshed_route_hostgroups.size(); ++i) {
+		const bool target = i < reduced_production.size();
+		const Endpoint expected = target
+			? deployment.target.members[i].endpoint.backend()
+			: deployment.production.members[i].endpoint.backend();
+		const Aurora_BGD_Membership_Set& expected_membership = target
+			? deployment.target : deployment.production;
+		frozen_routes = frozen_routes
+			&& set_default_hostgroup(admin, state.refreshed_route_hostgroups[i]) == EXIT_SUCCESS
+			&& route_to_expected_backend(cl, sim, expected, expected_membership);
+	}
+	ok(frozen_routes,
+		"INITIATED freezes the refreshed production map despite later membership changes");
 	return EXIT_SUCCESS;
 }
 
@@ -518,7 +807,8 @@ int test_post_processing_after_membership_completion(
 
 	int default_rc = set_default_hostgroup(admin, state.gated_route_hostgroup);
 	ok(default_rc == EXIT_SUCCESS && route_to_expected_backend(
-		cl, sim, deployment.production.members.front().endpoint.backend()),
+		cl, sim, deployment.production.members.front().endpoint.backend(),
+		deployment.production),
 		"POST_PROCESSING leaves routing unchanged without a complete target snapshot");
 
 	auto [refresh_seq_rc, refresh_sequence] = sim.replica_probe_log_last_sequence();
@@ -538,7 +828,8 @@ int test_post_processing_after_membership_completion(
 			admin, { state.gated_route_hostgroup }, "=0") == EXIT_SUCCESS
 		&& set_default_hostgroup(admin, state.gated_route_hostgroup) == EXIT_SUCCESS) {
 		target_routing = route_to_expected_backend(
-			cl, sim, deployment.target.members.front().endpoint.backend());
+			cl, sim, deployment.target.members.front().endpoint.backend(),
+			deployment.target);
 	}
 	ok(target_routing,
 		"repeated POST_PROCESSING applies routing after membership becomes complete");
@@ -546,7 +837,7 @@ int test_post_processing_after_membership_completion(
 }
 
 int main() {
-	plan(20);
+	plan(28);
 
 	CommandLine cl {};
 	MYSQL* admin = nullptr;
@@ -590,7 +881,25 @@ int main() {
 		goto exit_cleanup;
 	}
 
+	// Simulator: refresh target IDs/IPs, publish canonical IDs, then an incomplete map.
+	// Verify: auto-discovered multi-reader routing uses the last complete refreshed map.
+	if (test_auto_discovered_refresh_and_rename(cl, admin, sim, state)
+		!= EXIT_SUCCESS) {
+		goto exit_cleanup;
+	}
+
+	// Simulator: change membership in AVAILABLE, then change it again after INITIATED.
+	// Verify: AVAILABLE refreshes the map and INITIATED freezes that exact snapshot.
+	if (test_available_production_refresh_and_freeze(cl, admin, sim, state)
+		!= EXIT_SUCCESS) {
+		goto exit_cleanup;
+	}
+
 exit_cleanup:
+	if (state.held_client != nullptr) {
+		mysql_close(state.held_client);
+		state.held_client = nullptr;
+	}
 	if (cleanup(admin, sim) != EXIT_SUCCESS) {
 		diag("Error: failed to clean Aurora BGD active-state test data");
 		return EXIT_FAILURE;

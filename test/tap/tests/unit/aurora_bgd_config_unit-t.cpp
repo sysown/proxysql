@@ -412,7 +412,7 @@ int main() {
 
 	ok(test_init_hostgroups() == 0, "test_init_hostgroups() succeeds"); // 1
 	ok(test_init_monitor() == 0, "test_init_monitor() succeeds"); // 1
-	test_runtime_ownership(); // 4
+	test_runtime_ownership(); // 5
 	test_status_and_materialization(); // 8
 	test_reload_and_status_ordering(); // 4
 	test_runtime_removal(); // 2

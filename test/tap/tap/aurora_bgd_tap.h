@@ -1,6 +1,7 @@
 #ifndef TAP_TESTS_AURORA_BGD_TAP_H
 #define TAP_TESTS_AURORA_BGD_TAP_H
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
@@ -11,7 +12,10 @@
 #include "aurora_bgd_simulator.h"
 #include "tap.h"
 
-using namespace std;
+using std::move;
+using std::string;
+using std::to_string;
+using std::vector;
 
 struct Aurora_BGD_Test_Deployment {
 	string name;
@@ -127,8 +131,8 @@ inline Aurora_BGD_Test_Deployment aurora_bgd_deployment_c_writer_only() {
 	deployment.production = {
 		deployment.blue_replica_set,
 		{
-			aurora_bgd_member("aurora-c-writer", "MASTER_SESSION_ID",
-				{"aurora-c-writer.c1.us-east-1.rds.amazonaws.com", "127.0.13.11", 3306}),
+			aurora_bgd_member("aurora-c-green-writer", "MASTER_SESSION_ID",
+				{"aurora-c-green-writer.c1.us-east-1.rds.amazonaws.com", "127.0.13.11", 3306}),
 		},
 		{}
 	};
@@ -136,8 +140,8 @@ inline Aurora_BGD_Test_Deployment aurora_bgd_deployment_c_writer_only() {
 	deployment.target = {
 		deployment.target_replica_set,
 		{
-			aurora_bgd_member("aurora-c-writer-green-m5n9", "MASTER_SESSION_ID",
-				{"aurora-c-writer-green-m5n9.c1.us-east-1.rds.amazonaws.com", "127.0.13.21", 3306}),
+			aurora_bgd_member("aurora-c-green-writer-green-m5n9", "MASTER_SESSION_ID",
+				{"aurora-c-green-writer-green-m5n9.c1.us-east-1.rds.amazonaws.com", "127.0.13.21", 3306}),
 		},
 		{deployment.target_cluster_endpoint}
 	};
@@ -183,7 +187,7 @@ inline int aurora_bgd_admin_setup(
 	MYSQL* admin, Aurora_BGD_Test_Deployment& deployment,
 	int writer_hg, int reader_hg, int green_writer_hg, int green_reader_hg,
 	bool auto_discovery, int check_interval_ms = 100,
-	bool writer_is_also_reader = false
+	bool writer_is_also_reader = false, bool use_ssl = false
 ) {
 	vector<string> queries {
 		"SET mysql-monitor_username='aurora1'",
@@ -205,7 +209,8 @@ inline int aurora_bgd_admin_setup(
 		"writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,"
 		"autopurge_missing_checks,comment) VALUES (" +
 		to_string(writer_hg) + "," + to_string(reader_hg) + "," + green_columns +
-		",1,3306," + aurora_bgd_sql_quote(deployment.domain_name) +
+		",1," + to_string(deployment.production.members.front().endpoint.port) + "," +
+		aurora_bgd_sql_quote(deployment.domain_name) +
 		",200," + to_string(check_interval_ms) + ",800," +
 		to_string(writer_is_also_reader ? 1 : 0) +
 		",1,30,30,1,0," + aurora_bgd_sql_quote(deployment.name) + ")");
@@ -215,7 +220,9 @@ inline int aurora_bgd_admin_setup(
 		queries.push_back(
 			"INSERT INTO mysql_servers(hostgroup_id,hostname,port,status,use_ssl,comment) VALUES (" +
 			to_string(hostgroup) + "," + aurora_bgd_sql_quote(member.endpoint.hostname) +
-			",3306,'ONLINE',0,'Aurora BGD production member')");
+			"," + to_string(member.endpoint.port) +
+			",'ONLINE'," + string(use_ssl ? "1" : "0") +
+			",'Aurora BGD production member')");
 	}
 	queries.push_back("LOAD MYSQL VARIABLES TO RUNTIME");
 	queries.push_back("LOAD MYSQL SERVERS TO RUNTIME");
@@ -230,14 +237,14 @@ inline vector<BGD_Topology_Row> aurora_bgd_available_topology(
 		{
 			deployment.source_topology_id,
 			deployment.production.members.front().endpoint.hostname,
-			3306,
+			deployment.production.members.front().endpoint.port,
 			"BLUE_GREEN_DEPLOYMENT_SOURCE",
 			"AVAILABLE",
 		},
 		{
 			deployment.target_topology_id,
 			deployment.target_cluster_endpoint.hostname,
-			3306,
+			deployment.target_cluster_endpoint.port,
 			"BLUE_GREEN_DEPLOYMENT_TARGET",
 			"AVAILABLE",
 		},
@@ -293,6 +300,28 @@ inline int aurora_bgd_publish(
 	return sim.topology_update(
 		aurora_bgd_topology_backends(deployment),
 		aurora_bgd_available_topology(deployment));
+}
+
+inline bool aurora_bgd_result_matches_membership(
+	const vector<vector<string>>& rows, const Aurora_BGD_Membership_Set& membership
+) {
+	vector<string> actual_ids;
+	actual_ids.reserve(rows.size());
+	for (const vector<string>& row : rows) {
+		if (row.empty()) {
+			return false;
+		}
+		actual_ids.push_back(row.front());
+	}
+
+	vector<string> expected_ids;
+	expected_ids.reserve(membership.members.size());
+	for (const Aurora_BGD_Member& member : membership.members) {
+		expected_ids.push_back(member.server_id);
+	}
+	std::sort(actual_ids.begin(), actual_ids.end());
+	std::sort(expected_ids.begin(), expected_ids.end());
+	return actual_ids == expected_ids;
 }
 
 inline int aurora_bgd_wait_for_status(

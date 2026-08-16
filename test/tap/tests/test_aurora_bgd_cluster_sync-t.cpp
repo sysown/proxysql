@@ -31,8 +31,11 @@ namespace fs = std::filesystem;
 const uint32_t kWaitSeconds = 10;
 const int kReplicaAdminPort = 16062;
 const int kReplicaMySQLPort = 16063;
+const int kReplicaSQLiteProductionPort = 16064;
+const int kReplicaSQLiteTargetPort = 16065;
 const char kReplicaHost[] = "127.0.0.1";
-const char kSQLiteInterfaces[] = "0.0.0.0:3306;0.0.0.0:3307";
+const char kPrimarySQLiteInterfaces[] = "0.0.0.0:3306;0.0.0.0:3307";
+const char kReplicaSQLiteInterfaces[] = "0.0.0.0:16064;0.0.0.0:16065";
 
 struct Replica_Process {
 	pid_t pid = -1;
@@ -41,7 +44,8 @@ struct Replica_Process {
 	string stderr_path;
 };
 
-Aurora_BGD_Test_Deployment peer_deployment();
+Aurora_BGD_Test_Deployment peer_deployment(
+	int production_port = 3306, int target_port = 3307);
 
 struct TestState {
 	MYSQL* primary_admin { nullptr };
@@ -51,6 +55,9 @@ struct TestState {
 	BGD_Simulator primary_simulator {};
 	BGD_Simulator replica_simulator {};
 	Aurora_BGD_Test_Deployment deployment { peer_deployment() };
+	Aurora_BGD_Test_Deployment replica_deployment {
+		peer_deployment(kReplicaSQLiteProductionPort, kReplicaSQLiteTargetPort)
+	};
 	bool primary_simulator_connected { false };
 	bool replica_simulator_connected { false };
 };
@@ -67,8 +74,8 @@ string config_quote(const string& value) {
 }
 
 int prepare_replica_config(const CommandLine& cl, Replica_Process& process) {
-	char directory_template[] = "/tmp/proxysql-aurora-bgd-sync-XXXXXX";
-	char* directory = mkdtemp(directory_template); // NOSONAR: mkdtemp creates an owner-only directory.
+	char directory_template[] = "proxysql-aurora-bgd-sync-XXXXXX";
+	char* directory = mkdtemp(directory_template);
 	if (directory == nullptr) {
 		diag("mkdtemp failed: %s", strerror(errno));
 		return EXIT_FAILURE;
@@ -100,7 +107,7 @@ int prepare_replica_config(const CommandLine& cl, Replica_Process& process) {
 		<< "mysql_variables={\n"
 		<< " interfaces=\"0.0.0.0:" << kReplicaMySQLPort << "\"\n"
 		<< " monitor_username=\"aurora1\"\n"
-		<< " monitor_password=\"pass1\"\n"
+		<< " monitor_password=\"pass1\"\n" // NOSONAR: fixed simulator fixture credential.
 		<< " monitor_connect_timeout=500\n"
 		<< " monitor_ping_interval=10000\n"
 		<< "}\n"
@@ -162,7 +169,7 @@ void stop_replica(MYSQL*& admin, Replica_Process& process, bool preserve_log) {
 	}
 }
 
-Aurora_BGD_Test_Deployment peer_deployment() {
+Aurora_BGD_Test_Deployment peer_deployment(int production_port, int target_port) {
 	Aurora_BGD_Test_Deployment deployment;
 	deployment.name = "Aurora BGD peer-local status";
 	deployment.domain_name = ".localhost";
@@ -171,13 +178,13 @@ Aurora_BGD_Test_Deployment peer_deployment() {
 	deployment.source_topology_id = "aurora-bgd-peer-source";
 	deployment.target_topology_id = "aurora-bgd-peer-target";
 	deployment.target_cluster_endpoint = {
-		"aurora-peer-writer-green-sync.localhost", "127.0.0.1", 3307
+		"aurora-peer-writer-green-sync.localhost", "127.0.0.1", target_port
 	};
 	deployment.production = {
 		deployment.blue_replica_set,
 		{aurora_bgd_member(
 			"aurora-peer-writer", "MASTER_SESSION_ID",
-			{"aurora-peer-writer.localhost", "127.0.0.1", 3306})},
+			{"aurora-peer-writer.localhost", "127.0.0.1", production_port})},
 		{}
 	};
 	deployment.production.serving_endpoints.push_back(
@@ -186,7 +193,7 @@ Aurora_BGD_Test_Deployment peer_deployment() {
 		deployment.target_replica_set,
 		{aurora_bgd_member(
 			"aurora-peer-writer-green-sync", "MASTER_SESSION_ID",
-			{"aurora-peer-writer-green-sync.localhost", "127.0.0.1", 3307})},
+			{"aurora-peer-writer-green-sync.localhost", "127.0.0.1", target_port})},
 		{deployment.target_cluster_endpoint}
 	};
 	deployment.target.serving_endpoints.push_back(
@@ -229,7 +236,7 @@ int setup(CommandLine& cl, TestState& state) {
 			state.primary_admin, "sqliteserver-mysql_ifaces",
 			state.primary_sqlite_interfaces) != EXIT_SUCCESS
 		|| configure_sqlite_interfaces(
-			state.primary_admin, kSQLiteInterfaces) != EXIT_SUCCESS
+			state.primary_admin, kPrimarySQLiteInterfaces) != EXIT_SUCCESS
 		|| launch_replica(cl, state.replica_process) != EXIT_SUCCESS) {
 		diag("failed to prepare the two ProxySQL nodes");
 		return EXIT_FAILURE;
@@ -240,24 +247,25 @@ int setup(CommandLine& cl, TestState& state) {
 		kWaitSeconds);
 	if (state.replica_admin == nullptr
 		|| configure_sqlite_interfaces(
-			state.replica_admin, kSQLiteInterfaces) != EXIT_SUCCESS) {
+			state.replica_admin, kReplicaSQLiteInterfaces) != EXIT_SUCCESS) {
 		diag("failed to start the replica ProxySQL node");
 		return EXIT_FAILURE;
 	}
 
 	char username[] = "aurora1";
-	char password[] = "pass1";
+	char password[] = "pass1"; // NOSONAR: fixed simulator fixture credential.
+	char replica_host[] = "127.0.0.1";
 	state.primary_simulator_connected = state.primary_simulator.connect(
 		cl.host, 3306, username, password) == EXIT_SUCCESS;
 	state.replica_simulator_connected = state.replica_simulator.connect(
-		const_cast<char*>(kReplicaHost), 3306, username, password) == EXIT_SUCCESS;
+		replica_host, kReplicaSQLiteProductionPort, username, password) == EXIT_SUCCESS;
 	if (!state.primary_simulator_connected || !state.replica_simulator_connected
 		|| configure_peer(
 			state.primary_admin, state.primary_simulator,
 			state.deployment, "AVAILABLE") != EXIT_SUCCESS
 		|| configure_peer(
 			state.replica_admin, state.replica_simulator,
-			state.deployment, "SWITCHOVER_INITIATED") != EXIT_SUCCESS) {
+			state.replica_deployment, "SWITCHOVER_INITIATED") != EXIT_SUCCESS) {
 		diag("failed to publish the two node-local Aurora observations");
 		return EXIT_FAILURE;
 	}
@@ -311,27 +319,31 @@ int test_configuration_sync_preserves_local_status(CommandLine& cl, TestState& s
 }
 
 int cleanup(TestState& state) {
+	bool cleanup_ok = true;
 	if (state.primary_simulator_connected) {
-		state.primary_simulator.cleanup();
+		cleanup_ok = state.primary_simulator.cleanup() == EXIT_SUCCESS && cleanup_ok;
 	}
 	if (state.replica_simulator_connected) {
-		state.replica_simulator.cleanup();
+		cleanup_ok = state.replica_simulator.cleanup() == EXIT_SUCCESS && cleanup_ok;
 	}
 	if (state.replica_admin != nullptr) {
-		aurora_bgd_admin_cleanup(state.replica_admin);
+		cleanup_ok = aurora_bgd_admin_cleanup(state.replica_admin) == EXIT_SUCCESS
+			&& cleanup_ok;
 	}
 	if (state.primary_admin != nullptr) {
-		aurora_bgd_admin_cleanup(state.primary_admin);
+		cleanup_ok = aurora_bgd_admin_cleanup(state.primary_admin) == EXIT_SUCCESS
+			&& cleanup_ok;
 		if (!state.primary_sqlite_interfaces.empty()) {
-			configure_sqlite_interfaces(
-				state.primary_admin, state.primary_sqlite_interfaces);
+			cleanup_ok = configure_sqlite_interfaces(
+				state.primary_admin, state.primary_sqlite_interfaces) == EXIT_SUCCESS
+				&& cleanup_ok;
 		}
 		mysql_close(state.primary_admin);
 		state.primary_admin = nullptr;
 	}
 	stop_replica(
 		state.replica_admin, state.replica_process, tests_failed() != 0);
-	return EXIT_SUCCESS;
+	return cleanup_ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
 int main() {

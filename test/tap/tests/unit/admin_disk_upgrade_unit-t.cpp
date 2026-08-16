@@ -586,55 +586,59 @@ static void test_mysql_servers_upgrade_multiple_rows_with_fixes() {
 }
 
 static void test_aurora_hostgroups_disk_roundtrip_uses_configured_projection() {
-	SQLite3DB* db = new SQLite3DB();
-	db->open((char*)":memory:", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
-	const bool schema_ready = db->execute(ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS) &&
-		db->execute("ATTACH DATABASE ':memory:' AS disk") &&
-		create_table_in_schema(db, "disk", ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS);
+	SQLite3DB db;
+	char memory_database[] = ":memory:";
+	db.open(memory_database, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	const bool schema_ready = db.execute(ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS) &&
+		db.execute("ATTACH DATABASE ':memory:' AS disk") &&
+		create_table_in_schema(&db, "disk", ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS) &&
+		db.execute(
+			"ALTER TABLE disk.mysql_aws_aurora_hostgroups ADD COLUMN "
+			"bgd_status TEXT NOT NULL DEFAULT 'DISK_LOCAL'");
 	ok(schema_ready, "Aurora disk round trip uses the current schemas in main and disk");
 
-	const bool rows_inserted = db->execute(
+	const bool rows_inserted = db.execute(
 		"INSERT INTO mysql_aws_aurora_hostgroups ("
 		"writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,domain_name,comment"
 		") VALUES "
 		"(600,601,602,603,'.disk.example','disk round trip'),"
 		"(610,611,NULL,NULL,'.disk-null.example',NULL)"
 	);
-	ok(rows_inserted && copy_mysql_aws_aurora_hostgroups_to_disk(db),
+	ok(rows_inserted && copy_mysql_aws_aurora_hostgroups_to_disk(&db),
 		"Aurora disk SAVE copies the configured projection");
-	ok(query_string(db,
+	ok(query_string(&db,
 		"SELECT green_writer_hostgroup || ',' || green_reader_hostgroup "
 		"FROM disk.mysql_aws_aurora_hostgroups WHERE writer_hostgroup=600") == "602,603",
 		"Aurora disk SAVE preserves both configured green hostgroups");
-	ok(query_int(db,
+	ok(query_int(&db,
 		"SELECT COUNT(*) FROM disk.mysql_aws_aurora_hostgroups "
 		"WHERE writer_hostgroup=610 AND green_writer_hostgroup IS NULL AND green_reader_hostgroup IS NULL") == 1,
 		"Aurora disk SAVE preserves paired NULL green hostgroups");
-	ok(query_int(db,
+	ok(query_int(&db,
 		"SELECT COUNT(*) FROM disk.mysql_aws_aurora_hostgroups "
 		"WHERE writer_hostgroup=610 AND comment IS NULL") == 1,
 		"Aurora disk SAVE preserves a NULL comment");
-	ok(query_int(db,
-		"SELECT COUNT(*) FROM pragma_table_info('mysql_aws_aurora_hostgroups','disk') WHERE name='bgd_status'") == 0,
-		"Aurora disk SAVE excludes node-local bgd_status");
+	ok(query_int(&db,
+		"SELECT COUNT(*) FROM disk.mysql_aws_aurora_hostgroups "
+		"WHERE bgd_status='DISK_LOCAL'") == 2,
+		"Aurora disk SAVE leaves node-local bgd_status at its destination default");
 
-	ok(db->execute("DELETE FROM main.mysql_aws_aurora_hostgroups"),
+	ok(db.execute("DELETE FROM main.mysql_aws_aurora_hostgroups"),
 		"Aurora disk LOAD test clears the configured source table");
-	ok(copy_mysql_aws_aurora_hostgroups_from_disk(db),
+	ok(copy_mysql_aws_aurora_hostgroups_from_disk(&db),
 		"Aurora disk LOAD copies the configured projection");
-	ok(query_string(db,
+	ok(query_string(&db,
 		"SELECT green_writer_hostgroup || ',' || green_reader_hostgroup "
 		"FROM main.mysql_aws_aurora_hostgroups WHERE writer_hostgroup=600") == "602,603",
 		"Aurora disk LOAD restores both configured green hostgroups");
-	ok(query_int(db,
+	ok(query_int(&db,
 		"SELECT COUNT(*) FROM main.mysql_aws_aurora_hostgroups "
 		"WHERE writer_hostgroup=610 AND green_writer_hostgroup IS NULL AND green_reader_hostgroup IS NULL") == 1,
 		"Aurora disk LOAD restores paired NULL green hostgroups");
-	ok(query_int(db,
+	ok(query_int(&db,
 		"SELECT COUNT(*) FROM main.mysql_aws_aurora_hostgroups "
 		"WHERE writer_hostgroup=610 AND comment IS NULL") == 1,
 		"Aurora disk LOAD restores a NULL comment");
-	delete db;
 }
 
 // ============================================================================

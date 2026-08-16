@@ -8,7 +8,8 @@
 #include "cluster_simulator.h"
 #include "utils.h"
 
-using namespace std;
+using std::string;
+using std::vector;
 
 /** One row returned by the simulated mysql.rds_topology table. */
 struct BGD_Topology_Row {

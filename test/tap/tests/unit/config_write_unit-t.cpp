@@ -502,7 +502,8 @@ static void test_roundtrip_mysql_aws_aurora_hostgroups() {
 		"RT Aurora hostgroups: green writer is exported");
 	ok(data.find("green_reader_hostgroup=503") != std::string::npos,
 		"RT Aurora hostgroups: green reader is exported");
-	ok(data.find("active=0") != std::string::npos &&
+	ok(data.find("writer_hostgroup=500") != std::string::npos &&
+		data.find("active=0") != std::string::npos &&
 		data.find("autopurge_missing_checks=9") != std::string::npos,
 		"RT Aurora hostgroups: later configured columns retain their values");
 	ok(data.find("bgd_status") == std::string::npos,
