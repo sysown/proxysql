@@ -425,7 +425,7 @@ prepare_statement_err3024_async-t: prepare_statement_err3024-t.cpp $(TAP_LDIR)/l
 
 ifneq ($(UNAME_S),Darwin)
 test_wexecvp_syscall_failures-t: test_wexecvp_syscall_failures-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
-	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -Wl,--wrap=pipe,--wrap=fcntl,--wrap=read,--wrap=poll $(STATIC_LIBS) -o $@
+	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -Wl,--wrap=pipe,--wrap=fcntl,--wrap=read,--wrap=poll,--wrap=fork,--wrap=_Znwm,--wrap=opendir $(STATIC_LIBS) -o $@
 endif
 
 # Every test that links pg_lite_client.cpp shares one link line. pg_lite_client
