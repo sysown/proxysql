@@ -1277,8 +1277,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 #endif // IDLE_THREADS
 	stacksize=0;
 	shutdown_=0;
-	threads_registered.store(0, std::memory_order_relaxed);
-	threads_exited_run_loop.store(0, std::memory_order_relaxed);
+	threads_registered.store(0, std::memory_order_relaxed); // NOSONAR(cpp:S8417): the constructor runs before any worker/idle thread exists; no publication ordering is needed
+	threads_exited_run_loop.store(0, std::memory_order_relaxed); // NOSONAR(cpp:S8417): the constructor runs before any worker/idle thread exists; no publication ordering is needed
 	bootstrapping_listeners = true;
 	pthread_rwlock_init(&rwlock,NULL);
 	pthread_attr_init(&attr);
@@ -3201,18 +3201,18 @@ void MySQL_Threads_Handler::shutdown_threads() {
 }
 
 void MySQL_Threads_Handler::register_thread_before_run_loop() {
-	threads_registered.fetch_add(1, std::memory_order_acq_rel);
+	threads_registered.fetch_add(1, std::memory_order_acq_rel); // NOSONAR(cpp:S8417): deliberate acq_rel -- the start-up gate orders every registration before any run(), and the wait side pairs with acquire
 }
 
 void MySQL_Threads_Handler::wait_for_all_threads_to_exit_run_loop() {
 	// Every thread that registers also calls this, and every registration happens
 	// before the caller enters MySQL_Thread::run(), so this count is final by the
 	// time any thread can reach this point.
-	const unsigned int expected = threads_registered.load(std::memory_order_acquire);
-	threads_exited_run_loop.fetch_add(1, std::memory_order_acq_rel);
+	const unsigned int expected = threads_registered.load(std::memory_order_acquire); // NOSONAR(cpp:S8417): deliberate acquire -- pairs with the acq_rel registrations, which all precede the start-up gate
+	threads_exited_run_loop.fetch_add(1, std::memory_order_acq_rel); // NOSONAR(cpp:S8417): deliberate acq_rel -- the release publishes this thread's run-loop exit, the acquire pairs with the exits of peer threads
 	const unsigned long long started = monotonic_time();
 	unsigned long long next_report = started + THREADS_EXIT_REPORT_INTERVAL_US;
-	unsigned int exited = threads_exited_run_loop.load(std::memory_order_acquire);
+	unsigned int exited = threads_exited_run_loop.load(std::memory_order_acquire); // NOSONAR(cpp:S8417): deliberate acquire -- pairs with the acq_rel exit increments
 	while (exited < expected) {
 		usleep(50);
 		const unsigned long long now = monotonic_time();
@@ -3223,7 +3223,7 @@ void MySQL_Threads_Handler::wait_for_all_threads_to_exit_run_loop() {
 				exited, expected, (now - started) / 1000000);
 			next_report = now + THREADS_EXIT_REPORT_INTERVAL_US;
 		}
-		exited = threads_exited_run_loop.load(std::memory_order_acquire);
+		exited = threads_exited_run_loop.load(std::memory_order_acquire); // NOSONAR(cpp:S8417): deliberate acquire -- pairs with the acq_rel exit increments
 	}
 }
 
