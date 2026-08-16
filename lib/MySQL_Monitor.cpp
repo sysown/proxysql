@@ -6475,14 +6475,16 @@ static bool aws_aurora_bgd_parse_target_membership(
 			return false;
 		}
 		auto previous_action = previous_action_by_id.find(member.normalized_server_id);
-		member.traffic_pin_applied = previous_action != previous_action_by_id.end()
-			&& previous_action->second;
 		auto previous_ip = previous_ip_by_id.find(member.normalized_server_id);
 		const bool preserve_pre_rename_ip = member.server_id == production->second->server_id;
 		member.target_ip = previous_ip != previous_ip_by_id.end()
 			&& !previous_ip->second.empty()
-			&& (member.traffic_pin_applied || preserve_pre_rename_ip)
+			&& preserve_pre_rename_ip
 			? previous_ip->second : resolved_ip;
+		member.traffic_pin_applied = previous_action != previous_action_by_id.end()
+			&& previous_action->second
+			&& previous_ip != previous_ip_by_id.end()
+			&& previous_ip->second == member.target_ip;
 		snapshot.push_back(std::move(member));
 	}
 
@@ -6859,7 +6861,10 @@ void MySQL_Monitor::aws_aurora_bgd_run_discovery_cycle(
 						aws_aurora_bgd_apply_completion(st, observation.fingerprint);
 					}
 				} else if (observation.valid) {
-					if (st.production_members.empty()
+					const bool entering_active =
+						observation.status >= AWS_Aurora_BGD_Status::SWITCHOVER_INITIATED
+						&& observation.status <= AWS_Aurora_BGD_Status::SWITCHOVER_IN_POST_PROCESSING;
+					if (entering_active && !st.production_snapshot_frozen
 						&& !aws_aurora_bgd_rebuild_production_snapshot(st)) {
 						proxy_error(
 							"AWS Aurora BGD [wHG=%u rHG=%u]: retaining current state until production membership is available\n",

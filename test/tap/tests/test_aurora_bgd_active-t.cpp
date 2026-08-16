@@ -521,6 +521,44 @@ int test_switchover_post_processing(
 		&& route_members_to_expected_ips(
 			cl, admin, sim, deployment, state.route_hostgroups, true),
 		"an active variables refresh preserves every explicit traffic pin");
+
+	const vector<string> moved_ids {
+		"aurora-a-writer-green-r2",
+		"aurora-a-reader-1-green-r2",
+		"aurora-a-reader-2-green-r2",
+	};
+	const vector<string> moved_ips { "127.0.11.31", "127.0.11.32", "127.0.11.33" };
+	for (size_t i = 0; i < deployment.target.members.size(); ++i) {
+		deployment.target.members[i].server_id = moved_ids[i];
+		deployment.target.members[i].endpoint.hostname =
+			moved_ids[i] + deployment.domain_name;
+		deployment.target.members[i].endpoint.ip = moved_ips[i];
+	}
+	deployment.target.serving_endpoints.clear();
+	deployment.target.serving_endpoints.push_back(deployment.target_cluster_endpoint);
+	for (const Aurora_BGD_Member& member : deployment.target.members) {
+		deployment.target.serving_endpoints.push_back(member.endpoint);
+	}
+	auto [move_seq_rc, move_sequence] = sim.replica_probe_log_last_sequence();
+	bool moved_routing = move_seq_rc == EXIT_SUCCESS
+		&& sim.replica_update(
+			deployment.target_replica_set, deployment.target.replica_rows(),
+			deployment.target.backends()) == EXIT_SUCCESS
+		&& publish_status(sim, deployment, "SWITCHOVER_IN_POST_PROCESSING") == EXIT_SUCCESS;
+	if (moved_routing) {
+		auto [move_probe_rc, move_probe] = aurora_bgd_wait_for_replica_probe(
+			sim, move_sequence, deployment.target.backends(),
+			Aurora_Replica_Probe_Kind::bgd_membership, kProbeTimeoutMs,
+			deployment.target_replica_set);
+		moved_routing = move_probe_rc == EXIT_SUCCESS
+			&& wait_for_member_route_pool_count(
+				admin, state.route_hostgroups, "=0") == EXIT_SUCCESS
+			&& route_members_to_expected_ips(
+				cl, admin, sim, deployment, state.route_hostgroups, true);
+	}
+	ok(moved_routing,
+		"POST_PROCESSING repins every member when target-shaped endpoints move");
+
 	if (aurora_bgd_execute_all(admin, {
 		"SET mysql-monitor_local_dns_cache_ttl=300000",
 		"SET mysql-monitor_local_dns_cache_refresh_interval=60000",
@@ -837,7 +875,7 @@ int test_post_processing_after_membership_completion(
 }
 
 int main() {
-	plan(28);
+	plan(29);
 
 	CommandLine cl {};
 	MYSQL* admin = nullptr;
