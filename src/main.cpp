@@ -544,6 +544,9 @@ void * mysql_worker_thread_func(void *arg) {
 	proxysql_mysql_thread_t *mysql_thread=(proxysql_mysql_thread_t *)arg;
 	MySQL_Thread *worker = new MySQL_Thread();
 	mysql_thread->worker=worker;
+	// register before releasing the start-up gate below, so the shutdown barrier in
+	// wait_for_all_threads_to_exit_run_loop() has a complete participant count
+	GloMTH->register_thread_before_run_loop();
 	worker->init();
 //	worker->poll_listener_add(listen_fd);
 //	worker->poll_listener_add(socket_fd);
@@ -552,6 +555,9 @@ void * mysql_worker_thread_func(void *arg) {
 	do { sleep_iter(++iter); } while (load_);
 
 	worker->run();
+	// worker and idle threads reach into each other's MySQL_Thread objects, so no
+	// MySQL_Thread may be destroyed until all of them have left run()
+	GloMTH->wait_for_all_threads_to_exit_run_loop();
 	//delete worker;
 	delete worker;
 	mysql_thread->worker=NULL;
@@ -575,6 +581,9 @@ void * mysql_worker_thread_func_idles(void *arg) {
 	proxysql_mysql_thread_t *mysql_thread=(proxysql_mysql_thread_t *)arg;
 	MySQL_Thread *worker = new MySQL_Thread();
 	mysql_thread->worker=worker;
+	// register before releasing the start-up gate below, so the shutdown barrier in
+	// wait_for_all_threads_to_exit_run_loop() has a complete participant count
+	GloMTH->register_thread_before_run_loop();
 	worker->epoll_thread=true;
 	worker->init();
 //	worker->poll_listener_add(listen_fd);
@@ -584,6 +593,9 @@ void * mysql_worker_thread_func_idles(void *arg) {
 	do { sleep_iter(++iter); } while (load_);
 
 	worker->run();
+	// worker and idle threads reach into each other's MySQL_Thread objects, so no
+	// MySQL_Thread may be destroyed until all of them have left run()
+	GloMTH->wait_for_all_threads_to_exit_run_loop();
 	//delete worker;
 	delete worker;
 //	l_mem_destroy(__thr_sfp);
@@ -609,6 +621,9 @@ void* pgsql_worker_thread_func(void* arg) {
 	proxysql_pgsql_thread_t* pgsql_thread = (proxysql_pgsql_thread_t*)arg;
 	PgSQL_Thread* worker = new PgSQL_Thread();
 	pgsql_thread->worker = worker;
+	// register before releasing the start-up gate below, so the shutdown barrier in
+	// wait_for_all_threads_to_exit_run_loop() has a complete participant count
+	GloPTH->register_thread_before_run_loop();
 	worker->init();
 	//	worker->poll_listener_add(listen_fd);
 	//	worker->poll_listener_add(socket_fd);
@@ -617,6 +632,9 @@ void* pgsql_worker_thread_func(void* arg) {
 	do { sleep_iter(++iter); } while (load_);
 
 	worker->run();
+	// worker and idle threads reach into each other's PgSQL_Thread objects, so no
+	// PgSQL_Thread may be destroyed until all of them have left run()
+	GloPTH->wait_for_all_threads_to_exit_run_loop();
 	//delete worker;
 	delete worker;
 	pgsql_thread->worker = NULL;
@@ -640,6 +658,9 @@ void* pgsql_worker_thread_func_idles(void* arg) {
 	proxysql_pgsql_thread_t* pgsql_thread = (proxysql_pgsql_thread_t*)arg;
 	PgSQL_Thread* worker = new PgSQL_Thread();
 	pgsql_thread->worker = worker;
+	// register before releasing the start-up gate below, so the shutdown barrier in
+	// wait_for_all_threads_to_exit_run_loop() has a complete participant count
+	GloPTH->register_thread_before_run_loop();
 	worker->epoll_thread = true;
 	worker->init();
 	//	worker->poll_listener_add(listen_fd);
@@ -649,6 +670,9 @@ void* pgsql_worker_thread_func_idles(void* arg) {
 	do { sleep_iter(++iter); } while (load_);
 
 	worker->run();
+	// worker and idle threads reach into each other's PgSQL_Thread objects, so no
+	// PgSQL_Thread may be destroyed until all of them have left run()
+	GloPTH->wait_for_all_threads_to_exit_run_loop();
 	//delete worker;
 	delete worker;
 	//	l_mem_destroy(__thr_sfp);

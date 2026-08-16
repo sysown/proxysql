@@ -35,9 +35,9 @@ int main(int argc, char** argv) {
 	spawn_internal_noise(cl, internal_noise_pgsql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}});
 
 	if (cl.use_noise) {
-		plan(8 + 4);
+		plan(10 + 4);
 	} else {
-		plan(8);
+		plan(10);
 	}
 
 	MYSQL* mysql = mysql_init(NULL);
@@ -62,7 +62,8 @@ int main(int argc, char** argv) {
 
 
 	MYSQL_RES *res;
-	for (int i=0; i<4; i++) {
+	const int query_count = sizeof(queries) / sizeof(queries[0]);
+	for (int i = 0; i < query_count; i++) {
 		diag("Running query: %s", queries[i].c_str());
 		MYSQL_QUERY(mysql, queries[i].c_str());
 		res = mysql_store_result(mysql);
@@ -95,4 +96,3 @@ int main(int argc, char** argv) {
 
 	return exit_status();
 }
-
