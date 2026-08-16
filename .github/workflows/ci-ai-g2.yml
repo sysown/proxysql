@@ -1,0 +1,22 @@
+name: CI-ai-g2
+
+on:
+  workflow_call:
+    inputs:
+      trigger:
+        type: string
+
+permissions:
+  actions: read
+  checks: write
+  contents: read
+  id-token: write
+  packages: read
+
+jobs:
+  tests:
+    uses: sysown/proxysql/.github/workflows/ci-ai-gcov.yml@GH-Actions
+    with:
+      trigger: ${{ inputs.trigger }}
+      tap_group: ai-g2
+      infra_id: ci-ai-g2
