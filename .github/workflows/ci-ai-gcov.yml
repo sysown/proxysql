@@ -118,10 +118,28 @@ jobs:
         done
         rm -f ../cache_*.tar.zst ../handoff-*.zip
 
-    - name: Verify binary
+    - name: Restore GenAI plugin from build handoff
+      run: |
+        set -euo pipefail
+        cd proxysql/
+        plugin_src="test/tap/tap/_runtime_libs/ProxySQL_GenAI_Plugin.so"
+        plugin_dest="plugins/genai/ProxySQL_GenAI_Plugin.so"
+        if [ ! -s "${plugin_src}" ]; then
+          echo "ERROR: required GenAI plugin missing from build handoff: ${plugin_src}" >&2
+          exit 1
+        fi
+        mkdir -p "$(dirname "${plugin_dest}")"
+        cp "${plugin_src}" "${plugin_dest}"
+        test -s "${plugin_dest}"
+
+    - name: Verify binary and GenAI plugin
       run: |
         chmod +x proxysql/src/proxysql
         file proxysql/src/proxysql
+        test -s proxysql/plugins/genai/ProxySQL_GenAI_Plugin.so || {
+          echo "ERROR: ProxySQL_GenAI_Plugin.so was not restored" >&2
+          exit 1
+        }
 
     - name: Log in to GHCR and pull CI base image
       env:
