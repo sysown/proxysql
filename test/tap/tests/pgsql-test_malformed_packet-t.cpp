@@ -577,7 +577,8 @@ void test_malformed_packet_phase2(const std::string& test_name,
                                    int port,
                                    const std::string& username,
                                    const std::string& password,
-                                   const std::vector<uint8_t>& malformed_data) {
+                                   const std::vector<uint8_t>& malformed_data,
+                                   bool accept_ready_for_query = false) {
 
     // Use libpq to establish authenticated connection, then extract socket
     std::stringstream conninfo;
@@ -618,9 +619,12 @@ void test_malformed_packet_phase2(const std::string& test_name,
         return;
     }
 
-    // Step 7: Wait for response to the malformed packet
-    // Keep reading messages until we get an error response, connection close, or timeout
+    // Step 7: Wait for a response to the packet.
+    // Most cases expect an error response, connection close, or timeout. The
+    // rapid-Sync stress case also accepts ReadyForQuery, which is a normal
+    // response to a complete Sync frame.
     bool got_error_response = false;
+    bool got_ready_for_query = false;
     bool connection_closed = false;
     bool timeout = false;
     char first_byte = 0;
@@ -655,14 +659,18 @@ void test_malformed_packet_phase2(const std::string& test_name,
             got_error_response = true;
             break;
         }
+        if (accept_ready_for_query && msg_type == 'Z') {
+            got_ready_for_query = true;
+            break;
+        }
         // Continue reading if it's other protocol traffic
     }
 
-    bool handled_gracefully = connection_closed || timeout || got_error_response;
+    bool handled_gracefully = connection_closed || timeout || got_error_response || got_ready_for_query;
 
-    ok(handled_gracefully, "%s: Phase 2 malformed packet handled (closed=%d, timeout=%d, error=%d, first=0x%02X)",
+    ok(handled_gracefully, "%s: Phase 2 packet handled (closed=%d, timeout=%d, error=%d, ready=%d, first=0x%02X)",
        test_name.c_str(), (int)connection_closed, (int)timeout, (int)got_error_response,
-       first_byte);
+       (int)got_ready_for_query, first_byte);
 
     // Clean up libpq connection (closes socket internally)
     PQfinish(conn);
@@ -827,13 +835,14 @@ void run_phase2_malformed_packet_tests(const std::string& host, int port,
     test_malformed_packet_phase2("Multiple small queries",
         host, port, username, password, multi_pkt);
 
-    // Test 25: Rapid fire empty packets
+    // Test 25: Rapid-fire complete Sync packets. Sync is not malformed; a
+    // ReadyForQuery response is the expected graceful outcome.
     std::vector<uint8_t> rapid;
     for (int i = 0; i < 100; i++) {
         rapid.insert(rapid.end(), {'S', 0x00, 0x00, 0x00, 0x04});
     }
-    test_malformed_packet_phase2("Rapid fire sync packets",
-        host, port, username, password, rapid);
+    test_malformed_packet_phase2("Rapid fire Sync packets",
+        host, port, username, password, rapid, true);
 
     // ==================== DATA TYPE OVERFLOW TESTS ====================
 

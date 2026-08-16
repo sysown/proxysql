@@ -189,12 +189,12 @@ handle_build() {
             --env "GIT_VERSION_BASE=${git_version}" \
             --entrypoint /opt/proxysql/test/infra/control/cluster-simulator-ci.bash \
             --workdir /opt/proxysql \
-            ubuntu22_build _build
+            ubuntu24_build _build
     )
 }
 
 # _build
-# Purpose: Execute the compiler commands inside the Ubuntu 22 packaging image.
+# Purpose: Execute the compiler commands inside the Ubuntu 24 packaging image.
 # Local use: Internal only; use the public `build` command from the host.
 # GitHub use: Called by `build` as the packaging container entrypoint.
 handle_internal_build() {
@@ -204,11 +204,14 @@ handle_internal_build() {
         die "GIT_VERSION_BASE was not provided by the host build command."
 
     cd "${REPO_ROOT}"
-    make -j"$(nproc)" GIT_VERSION_BASE="${GIT_VERSION_BASE}" testall
-    make -j"$(nproc)" GIT_VERSION_BASE="${GIT_VERSION_BASE}" build_cluster_simulator
-    make -C test/deps/cluster_simulator -j"$(nproc)" check
-    make -C test/tap -j"$(nproc)" GIT_VERSION="${GIT_VERSION_BASE}" tap
-    make -C test/tap/tests -j"$(nproc)" \
+    make -j"$(nproc)" WITHGCOV=1 \
+        GIT_VERSION_BASE="${GIT_VERSION_BASE}" testall
+    make -j"$(nproc)" WITHGCOV=1 \
+        GIT_VERSION_BASE="${GIT_VERSION_BASE}" build_cluster_simulator
+    make -C test/deps/cluster_simulator -j"$(nproc)" WITHGCOV=1 check
+    make -C test/tap -j"$(nproc)" WITHGCOV=1 \
+        GIT_VERSION="${GIT_VERSION_BASE}" tap
+    make -C test/tap/tests -j"$(nproc)" WITHGCOV=1 \
         GIT_VERSION="${GIT_VERSION_BASE}" "${SIMULATOR_BINARIES[@]}"
 }
 
@@ -258,6 +261,13 @@ handle_stage() {
     install -D -m 0755 \
         "${REPO_ROOT}/src/proxysql" \
         "${STAGE_TEMP_DIR}/src/proxysql"
+    install -d \
+        "${STAGE_TEMP_DIR}/lib/obj" \
+        "${STAGE_TEMP_DIR}/src/obj"
+    cp -a "${REPO_ROOT}"/lib/obj/*.gcno \
+        "${STAGE_TEMP_DIR}/lib/obj/"
+    cp -a "${REPO_ROOT}"/src/obj/*.gcno \
+        "${STAGE_TEMP_DIR}/src/obj/"
     install -D -m 0755 \
         "${REPO_ROOT}/test/deps/cluster_simulator/cluster_simulator" \
         "${STAGE_TEMP_DIR}/test/deps/cluster_simulator/cluster_simulator"

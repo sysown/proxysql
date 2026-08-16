@@ -16,6 +16,10 @@
  *       2. Attempts to perform a query, forcing the creation of a backend conn.
  *       3. Performs multiple checks over the query and ProxySQL error log metrics:
  *          - Checks if the query was expected to fail/succeed (conn creation).
+ *          - For the two normal backend-request cases, checks that a one-row result is parsed through the
+ *            SQLite3 self-loop. `mysql-enable_server_deprecate_eof` requests `CLIENT_DEPRECATE_EOF` on the
+ *            outbound connect call, while `mysql-enable_client_deprecate_eof` controls whether the SQLite3
+ *            backend greeting advertises support. Thus both deprecated-EOF and legacy-EOF results are tested.
  *          - Checks error log for conn creation failures (caps mismatch).
  *          - Checks audit log for number of conn received (SQLite3 backend ProxySQL-ProxySQL).
  *          - Checks stats on connection creation to be increased by the expected amount.
@@ -326,6 +330,26 @@ struct test_cnf_t {
 	proxy_cnf_t proxy_conf;
 };
 
+const vector<proxy_cnf_t> backend_result_proxy_cnfs {
+	{ .cli_depr_eof = true,  .srv_depr_eof = true, .force_mismatch = false },
+	{ .cli_depr_eof = false, .srv_depr_eof = true, .force_mismatch = false },
+};
+
+bool should_check_backend_result(const test_cnf_t& test_cnf) {
+	if (test_cnf.pool_status.warmup || test_cnf.conn_conf.fast_forward) {
+		return false;
+	}
+
+	return std::any_of(
+		backend_result_proxy_cnfs.begin(), backend_result_proxy_cnfs.end(),
+		[&test_cnf] (const proxy_cnf_t& cnf) {
+			return cnf.cli_depr_eof == test_cnf.proxy_conf.cli_depr_eof
+				&& cnf.srv_depr_eof == test_cnf.proxy_conf.srv_depr_eof
+				&& cnf.force_mismatch == test_cnf.proxy_conf.force_mismatch;
+		}
+	);
+}
+
 vector<proxy_cnf_t> gen_all_proxy_cnfs() {
 	vector<vector<bool>> all_bin_vec { get_all_bin_vec(4) };
 	std::sort(all_bin_vec.begin(), all_bin_vec.end());
@@ -451,6 +475,35 @@ int test_conn_acquisition(MYSQL* admin, const test_cnf_t& test_conf) {
 	if (rc == 0) {
 		diag("Previous query successful; closing trx is required");
 		mysql_query_t(proxy, "COMMIT");
+	}
+
+	if (rc == 0 && should_check_backend_result(test_conf)) {
+		const string expected_value { "proxysql-backend-deprecate-eof" };
+		const string result_query {
+			"/* hostgroup=" + _TO_S(SQLITE3_HG) + " */ SELECT '" + expected_value + "'"
+		};
+		diag("Issue row-returning query through SQLite3 backend   query=\"%s\"", result_query.c_str());
+
+		const int result_rc { mysql_query_t(proxy, result_query) };
+		MYSQL_RES* result { result_rc == 0 ? mysql_store_result(proxy) : nullptr };
+		MYSQL_ROW row { result ? mysql_fetch_row(result) : nullptr };
+		const bool valid_result {
+			result
+			&& mysql_num_fields(result) == 1
+			&& mysql_num_rows(result) == 1
+			&& row && row[0]
+			&& expected_value == row[0]
+		};
+
+		ok(
+			result_rc == 0 && valid_result,
+			"Backend result should parse with negotiated EOF mode   proxy_conf='%s'",
+			to_string(proxy_cnf).c_str()
+		);
+
+		if (result) {
+			mysql_free_result(result);
+		}
 	}
 
 	// Sanity check; query should **NEVER** fail if mismatch is allowed (no fast-forward).
@@ -939,6 +992,8 @@ int main(int argc, char** argv) {
 #else
 		* 2
 #endif
+		// gen_all_proxy_cnfs() projects a four-bit matrix onto three fields, so each case occurs twice.
+		+ 2 * backend_result_proxy_cnfs.size()
 	);
 
 	MYSQL* admin { create_mysql_conn({ cl.admin_host, cl.admin_username, cl.admin_password, cl.admin_port }) };
