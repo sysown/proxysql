@@ -502,6 +502,43 @@ jobs:
           fi
           echo ">>> test/deps runtime-dependency check passed"
 
+          # Stage mysqlbinlog into the _test cache before the test/deps
+          # deletion below. The mysql-connector-c-8.4.0 build above produces
+          # the mysqlbinlog CLI under
+          # test/deps/mysql-connector-c-8.4.0/<mysql-8.4>/runtime_output_directory/mysqlbinlog
+          # as a side effect of `make` (cmake + the default target list).
+          # test_com_binlog_dump_enables_fast_forward-t shells out to it at
+          # runtime via system(); the test harness looks for it under
+          # ${TEST_DEPS}/mysqlbinlog. Copy the binary into
+          # test/tap/tap/bin/ (inside the _test cache's tar root) so it
+          # survives the test/deps prune below and is available to every
+          # CI-* test workflow that consumes this cache. The runner at
+          # test/infra/control/run-tests-isolated.bash will then `find` it
+          # here and symlink it into TEST_DEPS/mysqlbinlog. ~37 MB extra
+          # in the _test cache -- small compared to the existing ~700 MB
+          # saved by dropping the rest of test/deps.
+          #
+          # The bash glob `mysql-*-8.4*` matches whatever mysql source
+          # dir the upstream cmake + ln created; the build steps above
+          # always name the symlinked source dir `mysql-8.4.*` (today
+          # `mysql-8.4.0`). If multiple versions coexist, the first match
+          # is used -- which is fine because the runner only needs ONE
+          # mysqlbinlog to satisfy ${TEST_DEPS}/mysqlbinlog.
+          stage_mysqlbinlog=0
+          for src in test/deps/mysql-connector-c-8.4.0/mysql-*/runtime_output_directory/mysqlbinlog; do
+            if [ -x "${src}" ]; then
+              mkdir -p test/tap/tap/bin
+              sudo cp -f "${src}" test/tap/tap/bin/mysqlbinlog
+              sudo chmod 0755 test/tap/tap/bin/mysqlbinlog
+              echo ">>> Staged mysqlbinlog from ${src} -> test/tap/tap/bin/mysqlbinlog"
+              stage_mysqlbinlog=1
+              break
+            fi
+          done
+          if [ "${stage_mysqlbinlog}" -eq 0 ]; then
+            echo ">>> WARNING: no mysqlbinlog found under test/deps/mysql-connector-c-8.4.0/ — binlog TAP tests will fail" >&2
+          fi
+
           # sudo required: test/deps contents are owned by root (created
           # inside the docker build container). See comment above on the
           # unit test delete.
