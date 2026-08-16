@@ -32,6 +32,11 @@ constexpr int RO_HG = 15984;
 constexpr int RULE_FIRST = 159830;
 constexpr int RULE_LAST = 159832;
 constexpr const char* TEST_COMMENT = "test_gtid_from_ok-t";
+// This account is intentionally not part of any group baseline.  The test installs
+// high-priority dedicated rules, which would otherwise be pre-empted by generic
+// `testuser` rules in coverage groups.
+constexpr const char* FRONTEND_USERNAME = "gtid_from_ok_tap";
+constexpr const char* FRONTEND_PASSWORD = "gtid_from_ok_tap";
 
 static std::string sql_quote(MYSQL* mysql, const std::string& value) {
 	std::vector<char> escaped(value.size() * 2 + 1);
@@ -284,6 +289,14 @@ public:
 			record_result(exec_query(admin_, "LOAD MYSQL QUERY RULES TO RUNTIME", "load query-rule cleanup"));
 		}
 
+		if (frontend_user_installed_) {
+			const std::string query =
+				"DELETE FROM mysql_users WHERE username=" + sql_quote(admin_, FRONTEND_USERNAME) +
+				" AND comment=" + sql_quote(admin_, TEST_COMMENT);
+			record_result(exec_query(admin_, query, "remove dedicated frontend user"));
+			record_result(exec_query(admin_, "LOAD MYSQL USERS TO RUNTIME", "load frontend-user cleanup"));
+		}
+
 		if (servers_installed_) {
 			const std::string query =
 				"DELETE FROM mysql_servers WHERE hostgroup_id IN (" + std::to_string(RW_HG) + "," +
@@ -302,7 +315,7 @@ public:
 			record_result(exec_query(admin_, "LOAD MYSQL VARIABLES TO RUNTIME", "load variable cleanup"));
 		}
 
-		if (table_created_ || !backend_session_track_gtids_.empty()) {
+		if (table_created_ || backend_user_installed_ || !backend_session_track_gtids_.empty()) {
 			if (address_.empty()) {
 				diag("Cleanup has no backend endpoint for required backend cleanup");
 				cleanup_ok_ = false;
@@ -317,6 +330,11 @@ public:
 					address_.c_str(), port_);
 				cleanup_ok_ = false;
 			} else {
+				if (backend_user_installed_) {
+					record_result(exec_query(direct,
+						"DROP USER IF EXISTS '" + std::string(FRONTEND_USERNAME) + "'@'%'",
+						"drop dedicated backend user"));
+				}
 				if (table_created_) {
 					record_result(exec_query(direct, "DROP TABLE IF EXISTS test.gtid_from_ok", "drop test table"));
 				}
@@ -347,6 +365,8 @@ public:
 
 	void mark_servers_installed() { servers_installed_ = true; }
 	void mark_rules_installed() { rules_installed_ = true; }
+	void mark_frontend_user_installed() { frontend_user_installed_ = true; }
+	void mark_backend_user_installed() { backend_user_installed_ = true; }
 	void mark_table_created() { table_created_ = true; }
 
 private:
@@ -360,6 +380,8 @@ private:
 	int port_ = 0;
 	bool servers_installed_ = false;
 	bool rules_installed_ = false;
+	bool frontend_user_installed_ = false;
+	bool backend_user_installed_ = false;
 	bool table_created_ = false;
 	bool cleaned_up_ = false;
 	bool cleanup_ok_ = true;
@@ -434,6 +456,16 @@ static bool verify_endpoint_absent(TestContext& context) {
 }
 
 static bool install_dedicated_routing(TestContext& context) {
+	const std::string frontend_user_insert =
+		"INSERT INTO mysql_users(username,password,active,default_hostgroup,comment) VALUES (" +
+		sql_quote(context.admin, FRONTEND_USERNAME) + "," +
+		sql_quote(context.admin, FRONTEND_PASSWORD) + ",1," + std::to_string(RW_HG) + "," +
+		sql_quote(context.admin, TEST_COMMENT) + ")";
+	if (!exec_query(context.admin, frontend_user_insert, "insert dedicated frontend user")) {
+		return false;
+	}
+	context.cleanup.mark_frontend_user_installed();
+
 	const std::string server_insert =
 		"INSERT INTO mysql_servers (hostgroup_id,hostname,port,gtid_port,weight,comment) VALUES (" +
 		std::to_string(RW_HG) + "," + sql_quote(context.admin, context.address) + "," +
@@ -445,7 +477,7 @@ static bool install_dedicated_routing(TestContext& context) {
 	}
 	context.cleanup.mark_servers_installed();
 
-	const std::string username = sql_quote(context.admin, context.cl.username);
+	const std::string username = sql_quote(context.admin, FRONTEND_USERNAME);
 	const std::string comment = sql_quote(context.admin, TEST_COMMENT);
 	const std::string rules_insert =
 		"INSERT INTO mysql_query_rules "
@@ -504,7 +536,8 @@ static bool configure_gtid_variables(TestContext& context) {
 	}
 	if (!exec_query(context.admin, "LOAD MYSQL VARIABLES TO RUNTIME", "load test variables") ||
 		!exec_query(context.admin, "LOAD MYSQL SERVERS TO RUNTIME", "load dedicated servers") ||
-		!exec_query(context.admin, "LOAD MYSQL QUERY RULES TO RUNTIME", "load dedicated query rules")) {
+		!exec_query(context.admin, "LOAD MYSQL QUERY RULES TO RUNTIME", "load dedicated query rules") ||
+		!exec_query(context.admin, "LOAD MYSQL USERS TO RUNTIME", "load dedicated frontend user")) {
 		return false;
 	}
 	return true;
@@ -527,8 +560,24 @@ static bool prepare_backend_and_empty_record(TestContext& context) {
 		return false;
 	}
 
-	bool table_ready =
-		exec_query(context.connections.direct, "CREATE DATABASE IF NOT EXISTS test", "create test database") &&
+	const bool database_ready =
+		exec_query(context.connections.direct, "CREATE DATABASE IF NOT EXISTS test", "create test database");
+	const bool backend_user_ready = database_ready &&
+		exec_query(context.connections.direct,
+			"DROP USER IF EXISTS '" + std::string(FRONTEND_USERNAME) + "'@'%'",
+			"remove stale dedicated backend user") &&
+		exec_query(context.connections.direct,
+			"CREATE USER '" + std::string(FRONTEND_USERNAME) + "'@'%' IDENTIFIED BY '" +
+				std::string(FRONTEND_PASSWORD) + "'",
+			"create dedicated backend user") &&
+		exec_query(context.connections.direct,
+			"GRANT ALL PRIVILEGES ON test.* TO '" + std::string(FRONTEND_USERNAME) + "'@'%'",
+			"grant dedicated backend user access");
+	if (backend_user_ready) {
+		context.cleanup.mark_backend_user_installed();
+	}
+
+	bool table_ready = backend_user_ready &&
 		exec_query(context.connections.direct, "DROP TABLE IF EXISTS test.gtid_from_ok", "drop stale test table") &&
 		exec_query(context.connections.direct, "CREATE TABLE test.gtid_from_ok (id INT PRIMARY KEY)", "create test table");
 	if (table_ready) {
@@ -556,7 +605,7 @@ static bool prepare_backend_and_empty_record(TestContext& context) {
 
 static bool verify_disabled_ingestion(TestContext& context) {
 	context.connections.first = connect_mysql(
-		context.cl.host, context.cl.port, context.cl.username, context.cl.password
+		context.cl.host, context.cl.port, FRONTEND_USERNAME, FRONTEND_PASSWORD
 	);
 	if (context.connections.first == nullptr ||
 		!exec_query(context.connections.first, "SET SESSION session_track_gtids=OWN_GTID",
@@ -602,7 +651,7 @@ static bool verify_disabled_ingestion(TestContext& context) {
 
 static bool verify_untracked_insert(TestContext& context) {
 	context.connections.untracked = connect_mysql(
-		context.cl.host, context.cl.port, context.cl.username, context.cl.password
+		context.cl.host, context.cl.port, FRONTEND_USERNAME, FRONTEND_PASSWORD
 	);
 	if (context.connections.untracked == nullptr) {
 		return false;
@@ -651,7 +700,7 @@ static bool verify_untracked_insert(TestContext& context) {
 
 static bool verify_tracked_causal_read(TestContext& context) {
 	context.connections.tracked = connect_mysql(
-		context.cl.host, context.cl.port, context.cl.username, context.cl.password
+		context.cl.host, context.cl.port, FRONTEND_USERNAME, FRONTEND_PASSWORD
 	);
 	if (context.connections.tracked == nullptr ||
 		!exec_query(context.connections.tracked, "SET SESSION session_track_gtids=OWN_GTID",
