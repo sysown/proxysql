@@ -70,4 +70,9 @@
 #ifndef ENABLE_TIMER
 #define ENABLE_TIMER false
 #endif // ENABLE_TIMER
+
+/// @brief How often wait_for_all_threads_to_exit_run_loop() logs that it is still waiting.
+#ifndef THREADS_EXIT_REPORT_INTERVAL_US
+#define THREADS_EXIT_REPORT_INTERVAL_US (10*1000*1000ULL)
+#endif
 #endif // PROXYSQL_MACROS_H
