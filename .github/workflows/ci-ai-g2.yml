@@ -6,7 +6,12 @@ on:
       trigger:
         type: string
 
-permissions: write-all
+permissions:
+  actions: read
+  checks: write
+  contents: read
+  id-token: write
+  packages: read
 
 jobs:
   tests:
@@ -15,4 +20,3 @@ jobs:
       trigger: ${{ inputs.trigger }}
       tap_group: ai-g2
       infra_id: ci-ai-g2
-    secrets: inherit
