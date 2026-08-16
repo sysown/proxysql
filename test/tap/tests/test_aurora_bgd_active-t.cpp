@@ -26,23 +26,6 @@ using namespace std;
 const uint32_t kWaitSeconds = 5;
 const uint32_t kProbeTimeoutMs = 5000;
 const int kHeldConnectionRuleId = 153000;
-const char kOrdinaryAuroraQuery[] =
-	"SELECT SERVER_ID,"
-	"IF("
-		"SESSION_ID = 'MASTER_SESSION_ID' AND "
-		"SERVER_ID <> (SELECT SERVER_ID FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS WHERE SESSION_ID = 'MASTER_SESSION_ID' ORDER BY LAST_UPDATE_TIMESTAMP DESC LIMIT 1), "
-		"'probably_former_MASTER_SESSION_ID', SESSION_ID"
-	") SESSION_ID, "
-	"LAST_UPDATE_TIMESTAMP, "
-	"IF(SESSION_ID = 'MASTER_SESSION_ID', 0, REPLICA_LAG_IN_MILLISECONDS) AS REPLICA_LAG_IN_MILLISECONDS, "
-	"CPU "
-	"FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS WHERE"
-	" ( "
-	"(REPLICA_LAG_IN_MILLISECONDS >= 0 AND REPLICA_LAG_IN_MILLISECONDS <= 600000)"
-	" OR SESSION_ID = 'MASTER_SESSION_ID'"
-	" ) "
-	"AND LAST_UPDATE_TIMESTAMP > NOW() - INTERVAL 180 SECOND"
-	" ORDER BY SERVER_ID";
 
 struct TestState {
 	Aurora_BGD_Test_Deployment deployment { aurora_bgd_deployment_a() };
@@ -204,10 +187,10 @@ int add_member_routes(
 	vector<string> queries;
 	for (size_t i = 0; i < deployment.production.members.size(); ++i) {
 		queries.push_back(
-			"INSERT INTO mysql_servers(hostgroup_id,hostname,port,status,comment) VALUES (" +
+			"INSERT INTO mysql_servers(hostgroup_id,hostname,port,status,use_ssl,comment) VALUES (" +
 			to_string(route_hgs[i]) + "," +
 			aurora_bgd_sql_quote(deployment.production.members[i].endpoint.hostname) +
-			",3306,'ONLINE','Aurora BGD member route')");
+			",3306,'ONLINE',1,'Aurora BGD member route')");
 	}
 	queries.push_back("LOAD MYSQL SERVERS TO RUNTIME");
 	return aurora_bgd_execute_all(admin, queries);
@@ -248,7 +231,7 @@ bool route_to_expected_backend(
 	if (client == nullptr) {
 		return false;
 	}
-	auto [rc, rows] = mysql_query_ext_rows(client, kOrdinaryAuroraQuery);
+	auto [rc, rows] = mysql_query_ext_rows(client, kAuroraBGDRouteProbeQuery);
 	(void)rows;
 	if (rc != EXIT_SUCCESS) {
 		diag("Backend routing query failed with MySQL error %d: %s",
@@ -257,27 +240,7 @@ bool route_to_expected_backend(
 		return false;
 	}
 	mysql_close(client);
-
-	auto [logs_rc, logs] = sim.replica_probe_log_since(sequence);
-	if (logs_rc != EXIT_SUCCESS) {
-		return false;
-	}
-	const Aurora_Replica_Probe_Log* routed_probe = nullptr;
-	for (const Aurora_Replica_Probe_Log& log : logs) {
-		if (log.probe_kind == Aurora_Replica_Probe_Kind::ordinary) {
-			routed_probe = &log;
-			if (log.backend.host == expected_backend.host
-				&& log.backend.port == expected_backend.port) {
-				return true;
-			}
-		}
-	}
-	diag(
-		"Ordinary Aurora query reached %s:%d; expected %s:%d",
-		routed_probe ? routed_probe->backend.host.c_str() : "<none>",
-		routed_probe ? routed_probe->backend.port : 0,
-		expected_backend.host.c_str(), expected_backend.port);
-	return false;
+	return aurora_bgd_routing_probe_reached(sim, sequence, expected_backend);
 }
 
 bool route_members_to_expected_ips(

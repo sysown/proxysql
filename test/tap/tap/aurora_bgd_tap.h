@@ -302,26 +302,33 @@ inline int aurora_bgd_publish(
 		aurora_bgd_available_topology(deployment));
 }
 
-inline bool aurora_bgd_result_matches_membership(
-	const vector<vector<string>>& rows, const Aurora_BGD_Membership_Set& membership
-) {
-	vector<string> actual_ids;
-	actual_ids.reserve(rows.size());
-	for (const vector<string>& row : rows) {
-		if (row.empty()) {
-			return false;
-		}
-		actual_ids.push_back(row.front());
-	}
+static const char kAuroraBGDRouteProbeQuery[] =
+	"SELECT SERVER_ID,"
+	"IF("
+		"SESSION_ID = 'MASTER_SESSION_ID' AND "
+		"SERVER_ID <> (SELECT SERVER_ID FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS WHERE SESSION_ID = 'MASTER_SESSION_ID' ORDER BY LAST_UPDATE_TIMESTAMP DESC LIMIT 1), "
+		"'probably_former_MASTER_SESSION_ID', SESSION_ID"
+	") SESSION_ID, "
+	"LAST_UPDATE_TIMESTAMP, "
+	"IF(SESSION_ID = 'MASTER_SESSION_ID', 0, REPLICA_LAG_IN_MILLISECONDS) AS REPLICA_LAG_IN_MILLISECONDS, "
+	"CPU "
+	"FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS WHERE"
+	" ( "
+	"(REPLICA_LAG_IN_MILLISECONDS >= 0 AND REPLICA_LAG_IN_MILLISECONDS <= 600000)"
+	" OR SESSION_ID = 'MASTER_SESSION_ID'"
+	" ) "
+	"AND LAST_UPDATE_TIMESTAMP > NOW() - INTERVAL 180 SECOND"
+	" ORDER BY SERVER_ID";
 
-	vector<string> expected_ids;
-	expected_ids.reserve(membership.members.size());
-	for (const Aurora_BGD_Member& member : membership.members) {
-		expected_ids.push_back(member.server_id);
-	}
-	std::sort(actual_ids.begin(), actual_ids.end());
-	std::sort(expected_ids.begin(), expected_ids.end());
-	return actual_ids == expected_ids;
+inline bool aurora_bgd_routing_probe_reached(
+	BGD_Simulator& sim, uint64_t sequence, const Endpoint& expected_backend
+) {
+	// Client-route fixtures use TLS while Aurora monitor fixtures use plaintext,
+	// so a background monitor probe cannot satisfy this client-query assertion.
+	auto [rc, log] = sim.wait_for_replica_probe_log(
+		sequence, expected_backend, Aurora_Replica_Probe_Kind::ordinary,
+		1000, 1);
+	return rc == EXIT_SUCCESS;
 }
 
 inline int aurora_bgd_wait_for_status(

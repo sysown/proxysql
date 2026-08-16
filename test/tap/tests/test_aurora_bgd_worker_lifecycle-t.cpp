@@ -21,23 +21,6 @@
 using namespace std;
 
 const uint32_t kWaitSeconds = 5;
-const char kOrdinaryAuroraQuery[] =
-	"SELECT SERVER_ID,"
-	"IF("
-		"SESSION_ID = 'MASTER_SESSION_ID' AND "
-		"SERVER_ID <> (SELECT SERVER_ID FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS WHERE SESSION_ID = 'MASTER_SESSION_ID' ORDER BY LAST_UPDATE_TIMESTAMP DESC LIMIT 1), "
-		"'probably_former_MASTER_SESSION_ID', SESSION_ID"
-	") SESSION_ID, "
-	"LAST_UPDATE_TIMESTAMP, "
-	"IF(SESSION_ID = 'MASTER_SESSION_ID', 0, REPLICA_LAG_IN_MILLISECONDS) AS REPLICA_LAG_IN_MILLISECONDS, "
-	"CPU "
-	"FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS WHERE"
-	" ( "
-	"(REPLICA_LAG_IN_MILLISECONDS >= 0 AND REPLICA_LAG_IN_MILLISECONDS <= 600000)"
-	" OR SESSION_ID = 'MASTER_SESSION_ID'"
-	" ) "
-	"AND LAST_UPDATE_TIMESTAMP > NOW() - INTERVAL 180 SECOND"
-	" ORDER BY SERVER_ID";
 
 struct TestState {
 	Aurora_BGD_Test_Deployment reload { aurora_bgd_deployment_a() };
@@ -117,10 +100,10 @@ int add_writer_route(
 	MYSQL* admin, Aurora_BGD_Test_Deployment& deployment, int hostgroup
 ) {
 	return aurora_bgd_execute_all(admin, {
-		"INSERT INTO mysql_servers(hostgroup_id,hostname,port,status,comment) VALUES (" +
+		"INSERT INTO mysql_servers(hostgroup_id,hostname,port,status,use_ssl,comment) VALUES (" +
 			to_string(hostgroup) + "," +
 			aurora_bgd_sql_quote(deployment.production.members.front().endpoint.hostname) +
-			",3306,'ONLINE','Aurora BGD lifecycle route')",
+			",3306,'ONLINE',1,'Aurora BGD lifecycle route')",
 		"LOAD MYSQL SERVERS TO RUNTIME",
 	});
 }
@@ -136,23 +119,11 @@ bool route_to_backend(
 	if (client == nullptr) {
 		return false;
 	}
-	auto [query_rc, rows] = mysql_query_ext_rows(client, kOrdinaryAuroraQuery);
+	auto [query_rc, rows] = mysql_query_ext_rows(client, kAuroraBGDRouteProbeQuery);
 	(void)rows;
 	mysql_close(client);
-	if (query_rc != EXIT_SUCCESS) {
-		return false;
-	}
-	auto [logs_rc, logs] = sim.replica_probe_log_since(sequence);
-	if (logs_rc != EXIT_SUCCESS) {
-		return false;
-	}
-	for (const Aurora_Replica_Probe_Log& log : logs) {
-		if (log.probe_kind == Aurora_Replica_Probe_Kind::ordinary
-			&& log.backend.host == expected.host && log.backend.port == expected.port) {
-			return true;
-		}
-	}
-	return false;
+	return query_rc == EXIT_SUCCESS
+		&& aurora_bgd_routing_probe_reached(sim, sequence, expected);
 }
 
 bool route_writer(

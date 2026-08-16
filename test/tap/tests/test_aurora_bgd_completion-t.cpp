@@ -23,23 +23,6 @@ using namespace std;
 
 const uint32_t kWaitSeconds = 5;
 const uint32_t kProbeTimeoutMs = 5000;
-const char kOrdinaryAuroraQuery[] =
-	"SELECT SERVER_ID,"
-	"IF("
-		"SESSION_ID = 'MASTER_SESSION_ID' AND "
-		"SERVER_ID <> (SELECT SERVER_ID FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS WHERE SESSION_ID = 'MASTER_SESSION_ID' ORDER BY LAST_UPDATE_TIMESTAMP DESC LIMIT 1), "
-		"'probably_former_MASTER_SESSION_ID', SESSION_ID"
-	") SESSION_ID, "
-	"LAST_UPDATE_TIMESTAMP, "
-	"IF(SESSION_ID = 'MASTER_SESSION_ID', 0, REPLICA_LAG_IN_MILLISECONDS) AS REPLICA_LAG_IN_MILLISECONDS, "
-	"CPU "
-	"FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS WHERE"
-	" ( "
-	"(REPLICA_LAG_IN_MILLISECONDS >= 0 AND REPLICA_LAG_IN_MILLISECONDS <= 600000)"
-	" OR SESSION_ID = 'MASTER_SESSION_ID'"
-	" ) "
-	"AND LAST_UPDATE_TIMESTAMP > NOW() - INTERVAL 180 SECOND"
-	" ORDER BY SERVER_ID";
 
 struct TestState {
 	Aurora_BGD_Test_Deployment progress { aurora_bgd_deployment_b_writer_only() };
@@ -135,9 +118,9 @@ int add_route(
 	MYSQL* admin, int hostgroup, const string& hostname, const string& status = "ONLINE"
 ) {
 	return aurora_bgd_execute_all(admin, {
-		"INSERT INTO mysql_servers(hostgroup_id,hostname,port,status,comment) VALUES (" +
+		"INSERT INTO mysql_servers(hostgroup_id,hostname,port,status,use_ssl,comment) VALUES (" +
 			to_string(hostgroup) + "," + aurora_bgd_sql_quote(hostname) +
-			",3306," + aurora_bgd_sql_quote(status) + ",'Aurora BGD completion route')",
+			",3306," + aurora_bgd_sql_quote(status) + ",1,'Aurora BGD completion route')",
 		"LOAD MYSQL SERVERS TO RUNTIME",
 	});
 }
@@ -152,10 +135,10 @@ int add_member_routes(
 	vector<string> queries;
 	for (size_t i = 0; i < hostgroups.size(); ++i) {
 		queries.push_back(
-			"INSERT INTO mysql_servers(hostgroup_id,hostname,port,status,comment) VALUES (" +
+			"INSERT INTO mysql_servers(hostgroup_id,hostname,port,status,use_ssl,comment) VALUES (" +
 			to_string(hostgroups[i]) + "," +
 			aurora_bgd_sql_quote(deployment.production.members[i].endpoint.hostname) +
-			",3306,'ONLINE','Aurora BGD completion member route')");
+			",3306,'ONLINE',1,'Aurora BGD completion member route')");
 	}
 	queries.push_back("LOAD MYSQL SERVERS TO RUNTIME");
 	return aurora_bgd_execute_all(admin, queries);
@@ -171,22 +154,22 @@ int add_green_servers(
 		const string status = i + 1 == deployment.target.members.size()
 			? "OFFLINE_SOFT" : "ONLINE";
 		queries.push_back(
-			"INSERT INTO mysql_servers(hostgroup_id,hostname,port,status,comment) VALUES (" +
+			"INSERT INTO mysql_servers(hostgroup_id,hostname,port,status,use_ssl,comment) VALUES (" +
 			to_string(hostgroup) + "," +
 			aurora_bgd_sql_quote(deployment.target.members[i].endpoint.hostname) +
-			",3306," + aurora_bgd_sql_quote(status) +
+			",3306," + aurora_bgd_sql_quote(status) + ",1" +
 			",'Aurora BGD configured green member')");
 	}
 	queries.push_back(
-		"INSERT INTO mysql_servers(hostgroup_id,hostname,port,status,comment) VALUES (" +
+		"INSERT INTO mysql_servers(hostgroup_id,hostname,port,status,use_ssl,comment) VALUES (" +
 		to_string(green_reader_hg) + "," +
 		aurora_bgd_sql_quote(deployment.target.members.front().endpoint.hostname) +
-		",3306,'SHUNNED','Aurora BGD configured green status matrix')");
+		",3306,'SHUNNED',1,'Aurora BGD configured green status matrix')");
 	queries.push_back(
-		"INSERT INTO mysql_servers(hostgroup_id,hostname,port,status,comment) VALUES (" +
+		"INSERT INTO mysql_servers(hostgroup_id,hostname,port,status,use_ssl,comment) VALUES (" +
 		to_string(green_writer_hg) + "," +
 		aurora_bgd_sql_quote(deployment.target.members[1].endpoint.hostname) +
-		",3306,'OFFLINE_HARD','Aurora BGD configured green status matrix')");
+		",3306,'OFFLINE_HARD',1,'Aurora BGD configured green status matrix')");
 	queries.push_back("LOAD MYSQL SERVERS TO RUNTIME");
 	return aurora_bgd_execute_all(admin, queries);
 }
@@ -202,7 +185,7 @@ bool route_to_expected_backend(
 	if (client == nullptr) {
 		return false;
 	}
-	auto [query_rc, rows] = mysql_query_ext_rows(client, kOrdinaryAuroraQuery);
+	auto [query_rc, rows] = mysql_query_ext_rows(client, kAuroraBGDRouteProbeQuery);
 	(void)rows;
 	if (query_rc != EXIT_SUCCESS) {
 		diag("Backend routing query failed with MySQL error %d: %s",
@@ -211,30 +194,7 @@ bool route_to_expected_backend(
 		return false;
 	}
 	mysql_close(client);
-
-	auto [logs_rc, logs] = sim.replica_probe_log_since(sequence);
-	if (logs_rc != EXIT_SUCCESS) {
-		return false;
-	}
-	const Aurora_Replica_Probe_Log* ordinary_probe = nullptr;
-	for (const Aurora_Replica_Probe_Log& log : logs) {
-		if (log.probe_kind == Aurora_Replica_Probe_Kind::ordinary) {
-			ordinary_probe = &log;
-			if (log.backend.host == expected_backend.host
-				&& log.backend.port == expected_backend.port) {
-				return true;
-			}
-		}
-	}
-	if (ordinary_probe == nullptr) {
-		diag("Routing query produced no ordinary Aurora backend probe");
-		return false;
-	}
-	diag(
-		"Routing query reached backend %s:%d; expected %s:%d",
-		ordinary_probe->backend.host.c_str(), ordinary_probe->backend.port,
-		expected_backend.host.c_str(), expected_backend.port);
-	return false;
+	return aurora_bgd_routing_probe_reached(sim, sequence, expected_backend);
 }
 
 bool route_members(
