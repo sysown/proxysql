@@ -14,8 +14,12 @@ concurrency:
 jobs:
   run:
     if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
-    permissions: write-all
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+      id-token: write
+      packages: read
     uses: sysown/proxysql/.github/workflows/ci-ai-g2.yml@GH-Actions
-    secrets: inherit
     with:
       trigger: ${{ toJson(github) }}

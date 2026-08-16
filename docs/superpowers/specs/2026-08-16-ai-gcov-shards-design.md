@@ -21,7 +21,7 @@ opposite shards:
 
 `ai-g1` retains these 22 tests:
 
-```
+```text
 ai_llm_retry_scenarios-t
 ai_validation-t
 genai_config_query_unit-t
@@ -74,10 +74,11 @@ Once both callers exist, remove `ai` from
 `ALLOWLIST_NO_WORKFLOW` in `test/tap/groups/lint_group_coverage.py`.
 
 For `PROXYSQLTEST 52`, create a dedicated MySQL TAP instead of adding a bare
-command to `admin_various_commands2-t.cpp`. It records the starting number of
-`mysql_servers` rows for hostgroup 5211, runs `PROXYSQLTEST 52`, requires an OK
-response, and verifies that both the admin table and runtime view return to the
-starting state. Register it in one existing GCOV-enabled MySQL 8.4 group.
+command to `admin_various_commands2-t.cpp`. It requires hostgroup 5211 to be
+absent before the command, runs `PROXYSQLTEST 52`, requires an OK response, and
+verifies that `mysql_servers` is empty afterward while `runtime_mysql_servers`
+contains exactly three `OFFLINE_HARD` rows. Register it in one existing
+GCOV-enabled MySQL 8.4 group.
 
 ## Validation
 
