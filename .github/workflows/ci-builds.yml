@@ -564,6 +564,22 @@ jobs:
           grep 'exited with code 0' ${LOG} || exit 1
         done
 
+    - name: Stage GenAI plugin in test handoff
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-genai') }}
+      run: |
+        set -euo pipefail
+        cd proxysql/
+        plugin_src="plugins/genai/ProxySQL_GenAI_Plugin.so"
+        plugin_dest="test/tap/tap/_runtime_libs/ProxySQL_GenAI_Plugin.so"
+        if [ ! -s "${plugin_src}" ]; then
+          echo "ERROR: required GenAI plugin missing after build: ${plugin_src}" >&2
+          exit 1
+        fi
+        mkdir -p "$(dirname "${plugin_dest}")"
+        cp -L "${plugin_src}" "${plugin_dest}"
+        test -s "${plugin_dest}"
+        ls -la "$(dirname "${plugin_dest}")"
+
     - name: Pack bin cache with zstd-15
       id: cache-pack-bin
       if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' }}
