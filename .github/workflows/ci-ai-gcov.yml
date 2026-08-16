@@ -1,0 +1,268 @@
+name: CI-AI-GCOV
+
+on:
+  workflow_call:
+    inputs:
+      trigger:
+        type: string
+      tap_group:
+        type: string
+        required: true
+      infra_id:
+        type: string
+        required: true
+
+env:
+  SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+
+jobs:
+  tests:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    # OIDC is required for tokenless Codecov uploads.  This matches the
+    # permission model of the existing GCOV TAP reusable workflows.
+    permissions: write-all
+    strategy:
+      fail-fast: false
+      matrix:
+        infradb: [ 'mysql84' ]
+    env:
+      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu24-tap-genai-gcov_src
+      MATRIX: '(${{ matrix.infradb }},genai-gcov)'
+
+    steps:
+    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
+      id: checks
+      continue-on-error: true
+      if: always()
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        name: '${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}'
+        repo: ${{ github.repository }}
+        sha: ${{ env.SHA }}
+        status: 'in_progress'
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+
+    - name: Checkout repository
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ env.SHA }}
+        path: proxysql
+        # Codecov must see every production source path emitted by LCOV.
+        sparse-checkout: |
+          include
+          lib
+          src
+          test/infra
+          test/tap
+          test/scripts
+
+    - name: Download build handoff
+      # CI-builds publishes the src and TAP handoff artifacts under the real
+      # head SHA.  Query the triggering run first because its artifact index
+      # becomes visible before GitHub's global name index on busy runners.
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        REPO: ${{ github.repository }}
+        SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+        BUILD_RUN_ID: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.id || '' }}
+        HANDOFF_VARIANT: ubuntu24-tap-genai-gcov
+        HANDOFF_TYPES: src test
+      run: |
+        set -uo pipefail
+        command -v zstd >/dev/null || sudo apt-get install -y zstd
+        : "${HANDOFF_MAX_ATTEMPTS:=20}"
+        ERRLOG="$(mktemp)"
+        resolve_artifact_id() {
+          local name="$1" artifact_id=""
+          if [ -n "${BUILD_RUN_ID:-}" ]; then
+            artifact_id=$(gh api "repos/${REPO}/actions/runs/${BUILD_RUN_ID}/artifacts?per_page=100" \
+              --jq "[.artifacts[]|select(.name==\"${name}\" and .expired==false)]|sort_by(.created_at)|last|.id // empty" 2>>"$ERRLOG") || true
+            [ -n "$artifact_id" ] && { printf '%s' "$artifact_id"; return 0; }
+          fi
+          artifact_id=$(gh api "repos/${REPO}/actions/artifacts?name=${name}&per_page=100" \
+            --jq '[.artifacts[]|select(.expired==false)]|sort_by(.created_at)|last|.id // empty' 2>>"$ERRLOG") || true
+          [ -n "$artifact_id" ] && { printf '%s' "$artifact_id"; return 0; }
+          return 1
+        }
+        for handoff_type in $HANDOFF_TYPES; do
+          artifact_name="ci-builds-handoff-${SHA}-${HANDOFF_VARIANT}-${handoff_type}"
+          artifact_id=""
+          for attempt in $(seq 1 "$HANDOFF_MAX_ATTEMPTS"); do
+            artifact_id=$(resolve_artifact_id "$artifact_name") && [ -n "$artifact_id" ] && break
+            artifact_id=""
+            echo ">>> ${artifact_name} not available (${attempt}/${HANDOFF_MAX_ATTEMPTS}); retrying in 15s"
+            sleep 15
+          done
+          if [ -z "$artifact_id" ]; then
+            echo "ERROR: build handoff ${artifact_name} was not found" >&2
+            tail -n 20 "$ERRLOG" >&2
+            exit 1
+          fi
+          gh api "repos/${REPO}/actions/artifacts/${artifact_id}/zip" > "handoff-${handoff_type}.zip"
+          unzip -o "handoff-${handoff_type}.zip"
+        done
+        mkdir -p proxysql
+        cd proxysql
+        for archive in ../cache_*.tar.zst; do
+          [ -e "$archive" ] || continue
+          zstd -d < "$archive" | tar -xf -
+        done
+        rm -f ../cache_*.tar.zst ../handoff-*.zip
+
+    - name: Verify binary
+      run: |
+        chmod +x proxysql/src/proxysql
+        file proxysql/src/proxysql
+
+    - name: Log in to GHCR and pull CI base image
+      env:
+        GHCR_USER: ${{ github.actor }}
+        GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set +e
+        for attempt in 1 2 3 4 5; do
+          echo ">>> GHCR login and pull attempt ${attempt}/5"
+          if echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin \
+              && docker pull ghcr.io/sysown/proxysql-ci-base:latest; then
+            docker tag ghcr.io/sysown/proxysql-ci-base:latest proxysql-ci-base:latest
+            exit 0
+          fi
+          [ "$attempt" -eq 5 ] || sleep $((attempt * 10))
+        done
+        exit 1
+
+    - name: Start infrastructure
+      run: |
+        cd proxysql
+        export INFRA_ID="${{ inputs.infra_id }}"
+        export TAP_GROUP="${{ inputs.tap_group }}"
+        export SKIP_CLUSTER_START=1
+        test/infra/control/ensure-infras.bash
+
+    - name: Run AI TAP tests with GCOV
+      timeout-minutes: 90
+      run: |
+        cd proxysql
+        export INFRA_ID="${{ inputs.infra_id }}"
+        export TAP_GROUP="${{ inputs.tap_group }}"
+        export SKIP_CLUSTER_START=1
+        export TAP_USE_NOISE=1
+        export COVERAGE=1
+        test/infra/control/run-tests-isolated.bash
+
+    - name: Cleanup
+      if: always()
+      run: |
+        set +e
+        [ -d proxysql ] || exit 0
+        cd proxysql
+        export INFRA_ID="${{ inputs.infra_id }}"
+        export TAP_GROUP="${{ inputs.tap_group }}"
+        docker logs "proxysql.${INFRA_ID}" 2>&1 | tail -50 || true
+        test/infra/control/stop-proxysql-isolated.bash || true
+        test/infra/control/destroy-infras.bash || true
+
+    - name: Fix artifact permissions
+      if: ${{ failure() && !cancelled() }}
+      run: sudo chmod -R a+rX proxysql/ci_*_logs/ 2>/dev/null || true
+
+    - name: Archive failure logs
+      if: ${{ failure() && !cancelled() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: ${{ github.workflow }}-${{ env.SHA }}-logs-run#${{ github.run_number }}
+        path: proxysql/ci_*_logs/
+
+    - name: Archive coverage report
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: ${{ github.workflow }}-${{ env.SHA }}-coverage-run#${{ github.run_number }}
+        path: proxysql/ci_infra_logs/${{ inputs.infra_id }}/coverage-report/
+        if-no-files-found: ignore
+
+    - name: Report missing coverage file
+      if: ${{ !cancelled() && hashFiles('proxysql/ci_infra_logs/**/coverage-report/*.info') == '' }}
+      run: echo "No coverage report was produced; skipping Codecov upload."
+
+    - name: Upload coverage to Codecov
+      id: codecov_1
+      if: ${{ !cancelled() && hashFiles('proxysql/ci_infra_logs/**/coverage-report/*.info') != '' }}
+      continue-on-error: true
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
+      with:
+        codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
+        override_commit: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+        files: proxysql/ci_infra_logs/${{ inputs.infra_id }}/coverage-report/${{ inputs.infra_id }}.info
+        flags: integration-tests
+        name: tap-${{ inputs.tap_group }}-coverage
+        use_oidc: true
+        disable_search: true
+        plugins: noop
+        root_dir: proxysql
+        disable_file_fixes: true
+        fail_ci_if_error: true
+        verbose: true
+
+    - name: Wait before Codecov retry 1
+      if: ${{ !cancelled() && steps.codecov_1.outcome == 'failure' }}
+      run: sleep 15
+
+    - name: Upload coverage to Codecov (retry 1)
+      id: codecov_2
+      if: ${{ !cancelled() && steps.codecov_1.outcome == 'failure' }}
+      continue-on-error: true
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
+      with:
+        codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
+        override_commit: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+        files: proxysql/ci_infra_logs/${{ inputs.infra_id }}/coverage-report/${{ inputs.infra_id }}.info
+        flags: integration-tests
+        name: tap-${{ inputs.tap_group }}-coverage
+        use_oidc: true
+        disable_search: true
+        plugins: noop
+        root_dir: proxysql
+        disable_file_fixes: true
+        fail_ci_if_error: true
+        verbose: true
+
+    - name: Wait before Codecov retry 2
+      if: ${{ !cancelled() && steps.codecov_2.outcome == 'failure' }}
+      run: sleep 45
+
+    - name: Upload coverage to Codecov (retry 2)
+      id: codecov_3
+      if: ${{ !cancelled() && steps.codecov_2.outcome == 'failure' }}
+      continue-on-error: true
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
+      with:
+        codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
+        override_commit: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+        files: proxysql/ci_infra_logs/${{ inputs.infra_id }}/coverage-report/${{ inputs.infra_id }}.info
+        flags: integration-tests
+        name: tap-${{ inputs.tap_group }}-coverage
+        use_oidc: true
+        disable_search: true
+        plugins: noop
+        root_dir: proxysql
+        disable_file_fixes: true
+        fail_ci_if_error: true
+        verbose: true
+
+    - name: Report Codecov upload failure
+      if: ${{ !cancelled() && steps.codecov_3.outcome == 'failure' }}
+      run: echo "::warning::Codecov upload failed after 3 attempts; tests were unaffected."
+
+    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
+      continue-on-error: true
+      if: ${{ always() && steps.checks.outputs.check_id != '' }}
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        check_id: ${{ steps.checks.outputs.check_id }}
+        repo: ${{ github.repository }}
+        sha: ${{ env.SHA }}
+        conclusion: ${{ job.status }}
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
