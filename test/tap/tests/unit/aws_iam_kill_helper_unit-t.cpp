@@ -31,6 +31,7 @@ extern MySQL_Logger *GloMyLogger;
 namespace {
 
 using Clock = std::chrono::steady_clock;
+using OwnedKillArgs = std::unique_ptr<KillArgs>;
 
 constexpr unsigned int kHostgroup = 919;
 constexpr const char *kEndpoint =
@@ -156,15 +157,15 @@ void reset_observations(const char *expected_password) {
 	secure_token_was_zeroed = false;
 }
 
-KillArgs *iam_args(int kill_type, unsigned long id, Clock::time_point deadline) {
+OwnedKillArgs iam_args(int kill_type, unsigned long id, Clock::time_point deadline) {
 	auto username = make_owned_cstr(kDatabaseUser);
 	auto endpoint = make_owned_cstr(kEndpoint);
 	auto transport = make_owned_cstr(kTransportIp);
-	KillArgs *args = new KillArgs(
+	auto args = OwnedKillArgs(new KillArgs(
 		username.get(), nullptr,
 		endpoint.get(), 3306, kHostgroup, id, kill_type, 1,
 		nullptr, transport.get(), MySQLBackendAuthType::AWS_IAM,
-		kEndpoint, kRegion, kDatabaseUser, deadline);
+		kEndpoint, kRegion, kDatabaseUser, deadline));
 	username.release();
 	endpoint.release();
 	transport.release();
@@ -179,10 +180,10 @@ void test_iam_kill(FakeBlockingTokenSource& source, int kill_type,
 	source.wait_until_deadline = false;
 	source.next_token = token;
 	const Clock::time_point deadline = Clock::now() + std::chrono::seconds(2);
-	KillArgs *args = iam_args(kill_type, id, deadline);
+	auto args = iam_args(kill_type, id, deadline);
 	ok(args->password == nullptr,
 		"%s carries IAM mode metadata without an original password or token", label);
-	kill_query_thread(args);
+	kill_query_thread(args.release());
 
 	const AwsIamTokenKey expected_key { kEndpoint, 3306, kRegion, kDatabaseUser };
 	ok(!source.keys.empty() && source.keys.back() == expected_key &&
@@ -210,9 +211,9 @@ void test_helper_deadline(FakeBlockingTokenSource& source) {
 	reset_observations(kQueryToken);
 	source.status = AwsIamStatus::TIMEOUT;
 	const Clock::time_point deadline = Clock::now() + std::chrono::milliseconds(5);
-	KillArgs *args = iam_args(KILL_QUERY, 333, deadline);
+	auto args = iam_args(KILL_QUERY, 333, deadline);
 	const size_t requests_before = source.keys.size();
-	kill_query_thread(args);
+	kill_query_thread(args.release());
 	ok(source.keys.size() == requests_before + 1 &&
 		source.deadlines.back() == deadline && connector.connect_calls == 0 &&
 		connector.query_calls == 0,
@@ -224,9 +225,9 @@ void test_deadline_expiring_during_token_request(FakeBlockingTokenSource& source
 	source.status = AwsIamStatus::OK;
 	source.next_token = kQueryToken;
 	source.wait_until_deadline = true;
-	KillArgs *args = iam_args(
+	auto args = iam_args(
 		KILL_QUERY, 334, Clock::now() + std::chrono::milliseconds(5));
-	kill_query_thread(args);
+	kill_query_thread(args.release());
 	source.wait_until_deadline = false;
 	ok(connector.connect_calls == 0 && connector.query_calls == 0,
 		"an IAM helper does not start TCP connect after its deadline expires during token acquisition");
@@ -239,15 +240,15 @@ void test_password_mode_unchanged(FakeBlockingTokenSource& source) {
 	auto password = make_owned_cstr(kPassword);
 	auto endpoint = make_owned_cstr(kEndpoint);
 	auto transport = make_owned_cstr(kTransportIp);
-	KillArgs *args = new KillArgs(
+	auto args = OwnedKillArgs(new KillArgs(
 		username.get(), password.get(),
 		endpoint.get(), 3306, kHostgroup, 444, KILL_QUERY, 0,
-		nullptr, transport.get());
+		nullptr, transport.get()));
 	username.release();
 	password.release();
 	endpoint.release();
 	transport.release();
-	kill_query_thread(args);
+	kill_query_thread(args.release());
 	ok(source.keys.size() == requests_before && connector.connect_calls == 1 &&
 		connector.password_matches && !connector.ssl_enforce && !connector.ssl_verify &&
 		!connector.cleartext && connector.tls_server_name.empty() &&
@@ -264,7 +265,7 @@ void test_helper_shutdown_lifetime(FakeBlockingTokenSource& source) {
 	source.request_released = false;
 	std::thread helper([&] {
 		kill_query_thread(iam_args(
-			KILL_QUERY, 555, Clock::now() + std::chrono::seconds(2)));
+			KILL_QUERY, 555, Clock::now() + std::chrono::seconds(2)).release());
 	});
 	{
 		std::unique_lock<std::mutex> lock(source.block_mutex);
@@ -307,7 +308,7 @@ void test_helper_shutdown_lifetime(FakeBlockingTokenSource& source) {
 	const size_t requests_before = source.keys.size();
 	reset_observations(kQueryToken);
 	kill_query_thread(iam_args(
-		KILL_QUERY, 556, Clock::now() + std::chrono::seconds(2)));
+		KILL_QUERY, 556, Clock::now() + std::chrono::seconds(2)).release());
 	ok(source.keys.size() == requests_before && connector.connect_calls == 0 &&
 		connector.query_calls == 0,
 		"an IAM helper starting after token-source shutdown is rejected safely");
@@ -402,7 +403,8 @@ int main() {
 		test_init_hostgroups() != 0) {
 		BAIL_OUT("failed to initialize unit-test globals");
 	}
-	GloMyLogger = new MySQL_Logger();
+	std::unique_ptr<MySQL_Logger> logger { std::make_unique<MySQL_Logger>() };
+	GloMyLogger = logger.get();
 	if (!GloMTH->set_variable("ssl_p2s_ca", "/unit/fake-ca.pem")) {
 		BAIL_OUT("failed to configure helper CA fixture");
 	}
@@ -418,7 +420,7 @@ int main() {
 	test_password_mode_unchanged(source);
 	test_helper_shutdown_lifetime(source);
 
-	delete GloMyLogger;
+	logger.reset();
 	GloMyLogger = nullptr;
 	test_cleanup_hostgroups();
 	test_cleanup_query_processor();
