@@ -74,6 +74,17 @@ class MySQL_Authentication {
 	std::unique_ptr<SQLite3_result> mysql_users_resultset { nullptr };
 	creds_group_t creds_backends;
 	creds_group_t creds_frontends;
+	/**
+	 * @brief Scope holding 'admin-admin_credentials' and 'admin-stats_credentials'.
+	 * @details Separate from 'creds_frontends' so an Admin credential and a
+	 *   'mysql_users' row of the same name cannot overwrite each other. Only
+	 *   populated when PROXYSQL31 is defined (see ADMIN_CRED_SCOPE); on the stable
+	 *   tier it stays empty and admin credentials remain in 'creds_frontends'.
+	 *   Never included in 'dump_all_users()', so 'runtime_mysql_users' and the
+	 *   cluster checksum are unaffected.
+	 */
+	creds_group_t creds_admins;
+	creds_group_t& creds_for(enum cred_username_type usertype);
 	bool _reset(enum cred_username_type usertype);
 	uint64_t _get_runtime_checksum(enum cred_username_type usertype);
 	public:
@@ -90,7 +101,7 @@ class MySQL_Authentication {
 	void decrease_frontend_user_connections(char *username, PASSWORD_TYPE::E passtype);
 	void set_all_inactive(enum cred_username_type usertype);
 	void remove_inactives(enum cred_username_type usertype);
-	bool set_SHA1(char *username, enum cred_username_type usertype, void *sha_pass);
+	bool set_SHA1(const char *username, enum cred_username_type usertype, void *sha_pass);
 	bool set_clear_text_password(char* username, enum cred_username_type usertype, const char* clear_text_password, PASSWORD_TYPE::E passtype);
 	unsigned int memory_usage();
 	uint64_t get_runtime_checksum();

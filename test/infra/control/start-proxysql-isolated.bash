@@ -8,6 +8,17 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 export WORKSPACE="${REPO_ROOT}"
 
 source "${SCRIPT_DIR}/docker-fs-helper.bash"
+source "${SCRIPT_DIR}/asan-detection.bash"
+
+PROXYSQL_SANITIZER_ENV=()
+if proxysql_binary_uses_asan "${WORKSPACE}/src/proxysql"; then
+    export WITHASAN=1
+    export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}"
+    PROXYSQL_SANITIZER_ENV=(-e WITHASAN=1 -e ASAN_OPTIONS="${ASAN_OPTIONS}")
+    echo ">>> Detected ASAN-instrumented ProxySQL; LeakSanitizer disabled for daemon processes"
+else
+    export WITHASAN=0
+fi
 
 if [ -z "${INFRA_ID}" ]; then echo "Error: INFRA_ID is not set."; exit 1; fi
 
@@ -238,6 +249,7 @@ docker run -d \
     ${PGSQL_SOCKET_MOUNT} \
     -e GCOV_PREFIX="/gcov" \
     -e GCOV_PREFIX_STRIP="2" \
+    "${PROXYSQL_SANITIZER_ENV[@]}" \
     proxysql-ci-base:latest \
     /bin/bash -c "${STARTUP_CMD}"
 

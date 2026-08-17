@@ -26,11 +26,16 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include "ProxySQL_Statistics.hpp"
+#include "MySQL_Thread.h"
+
+#include "prometheus/text_serializer.h"
 
 #include <cstring>
 #include <cstdlib>
+#include <array>
 #include <string>
 #include <map>
+#include <memory>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -86,6 +91,71 @@ static void teardown_stats() {
 	if (GloVars.statsdb_disk != nullptr) {
 		free(GloVars.statsdb_disk);
 		GloVars.statsdb_disk = nullptr;
+	}
+}
+
+// ============================================================
+// MySQL user-variable tracking stats registration
+// ============================================================
+
+static unsigned int global_status_name_count(const SQLite3_result* result, const char* name) {
+	unsigned int count = 0;
+	for (unsigned long long i = 0; i < result->rows_count; ++i) {
+		if (strcmp(result->rows[i]->fields[0], name) == 0) {
+			++count;
+		}
+	}
+	return count;
+}
+
+static unsigned int text_count(const std::string& text, const std::string& needle) {
+	unsigned int count = 0;
+	for (size_t pos = text.find(needle); pos != std::string::npos; pos = text.find(needle, pos + needle.size())) {
+		++count;
+	}
+	return count;
+}
+
+static unsigned int prometheus_help_metric_count(
+	const std::string& text, const std::string& metric_name) {
+	return text_count(text, "# HELP " + metric_name + " ");
+}
+
+static void test_user_variable_metric_name_is_exact() {
+	const std::string metric_name = "proxysql_mysql_user_variable_assignments_tracked_total";
+	const std::string fixture = "# HELP " + metric_name + "_v2 unrelated metric\n";
+	ok(prometheus_help_metric_count(fixture, metric_name) == 0,
+		"Prometheus descriptor check rejects a longer prefix-sharing metric name");
+}
+
+static void test_user_variable_tracking_stats_registration() {
+	const std::array<const char*, 5> status_names {
+		"User_variable_assignments_tracked",
+		"User_variable_replay_commands",
+		"User_variable_replay_failures",
+		"User_variable_fallback_unsupported",
+		"User_variable_fallback_limits"
+	};
+	const std::array<const char*, 5> metric_names {
+		"proxysql_mysql_user_variable_assignments_tracked_total",
+		"proxysql_mysql_user_variable_replay_commands_total",
+		"proxysql_mysql_user_variable_replay_failures_total",
+		"proxysql_mysql_user_variable_fallback_unsupported_total",
+		"proxysql_mysql_user_variable_fallback_limits_total"
+	};
+
+	MySQL_Threads_Handler handler;
+	std::unique_ptr<SQLite3_result> status(handler.SQL3_GlobalStatus(false));
+	for (const char* name : status_names) {
+		ok(global_status_name_count(status.get(), name) == 1,
+			"global status registers %s exactly once", name);
+	}
+
+	prometheus::TextSerializer serializer;
+	const std::string metrics = serializer.Serialize(GloVars.prometheus_registry->Collect());
+	for (const char* name : metric_names) {
+		ok(prometheus_help_metric_count(metrics, name) == 1,
+			"Prometheus registers %s exactly once", name);
 	}
 }
 
@@ -748,6 +818,10 @@ int main() {
 	num_tests += 5;
 	// Timer tests: 15
 	num_tests += 15;
+	// MySQL user-variable tracking stats registration: 10
+	num_tests += 10;
+	// MySQL user-variable tracking exact metric-name matching: 1
+	num_tests += 1;
 
 #ifdef PROXYSQLTSDB
 	// TSDB table init: 3
@@ -769,6 +843,7 @@ int main() {
 	plan(num_tests);
 
 	test_init_minimal();
+	test_init_hostgroups();
 	setup_stats();
 
 	// Constructor + init
@@ -791,6 +866,8 @@ int main() {
 	test_pgsql_eventslog_timer_triggers();
 	test_digest_to_disk_timer_disabled();
 	test_digest_to_disk_timer_triggers();
+	test_user_variable_metric_name_is_exact();
+	test_user_variable_tracking_stats_registration();
 
 #ifdef PROXYSQLTSDB
 	// TSDB table init
@@ -841,6 +918,7 @@ int main() {
 #endif
 
 	teardown_stats();
+	test_cleanup_hostgroups();
 	test_cleanup_minimal();
 
 	return exit_status();

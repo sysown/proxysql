@@ -70,6 +70,13 @@ using json = nlohmann::json;
 #include "proxy_protocol_info.h"
 #endif // DEBUG
 
+static char *make_path(const char *directory, const char *filename) {
+	std::string path(directory);
+	path += '/';
+	path += filename;
+	return strdup(path.c_str());
+}
+
 
 /*
 extern "C" MySQL_LDAP_Authentication * create_MySQL_LDAP_Authentication_func() {
@@ -537,6 +544,9 @@ void * mysql_worker_thread_func(void *arg) {
 	proxysql_mysql_thread_t *mysql_thread=(proxysql_mysql_thread_t *)arg;
 	MySQL_Thread *worker = new MySQL_Thread();
 	mysql_thread->worker=worker;
+	// register before releasing the start-up gate below, so the shutdown barrier in
+	// wait_for_all_threads_to_exit_run_loop() has a complete participant count
+	GloMTH->register_thread_before_run_loop();
 	worker->init();
 //	worker->poll_listener_add(listen_fd);
 //	worker->poll_listener_add(socket_fd);
@@ -545,6 +555,9 @@ void * mysql_worker_thread_func(void *arg) {
 	do { sleep_iter(++iter); } while (load_);
 
 	worker->run();
+	// worker and idle threads reach into each other's MySQL_Thread objects, so no
+	// MySQL_Thread may be destroyed until all of them have left run()
+	GloMTH->wait_for_all_threads_to_exit_run_loop();
 	//delete worker;
 	delete worker;
 	mysql_thread->worker=NULL;
@@ -568,6 +581,9 @@ void * mysql_worker_thread_func_idles(void *arg) {
 	proxysql_mysql_thread_t *mysql_thread=(proxysql_mysql_thread_t *)arg;
 	MySQL_Thread *worker = new MySQL_Thread();
 	mysql_thread->worker=worker;
+	// register before releasing the start-up gate below, so the shutdown barrier in
+	// wait_for_all_threads_to_exit_run_loop() has a complete participant count
+	GloMTH->register_thread_before_run_loop();
 	worker->epoll_thread=true;
 	worker->init();
 //	worker->poll_listener_add(listen_fd);
@@ -577,6 +593,9 @@ void * mysql_worker_thread_func_idles(void *arg) {
 	do { sleep_iter(++iter); } while (load_);
 
 	worker->run();
+	// worker and idle threads reach into each other's MySQL_Thread objects, so no
+	// MySQL_Thread may be destroyed until all of them have left run()
+	GloMTH->wait_for_all_threads_to_exit_run_loop();
 	//delete worker;
 	delete worker;
 //	l_mem_destroy(__thr_sfp);
@@ -602,6 +621,9 @@ void* pgsql_worker_thread_func(void* arg) {
 	proxysql_pgsql_thread_t* pgsql_thread = (proxysql_pgsql_thread_t*)arg;
 	PgSQL_Thread* worker = new PgSQL_Thread();
 	pgsql_thread->worker = worker;
+	// register before releasing the start-up gate below, so the shutdown barrier in
+	// wait_for_all_threads_to_exit_run_loop() has a complete participant count
+	GloPTH->register_thread_before_run_loop();
 	worker->init();
 	//	worker->poll_listener_add(listen_fd);
 	//	worker->poll_listener_add(socket_fd);
@@ -610,6 +632,9 @@ void* pgsql_worker_thread_func(void* arg) {
 	do { sleep_iter(++iter); } while (load_);
 
 	worker->run();
+	// worker and idle threads reach into each other's PgSQL_Thread objects, so no
+	// PgSQL_Thread may be destroyed until all of them have left run()
+	GloPTH->wait_for_all_threads_to_exit_run_loop();
 	//delete worker;
 	delete worker;
 	pgsql_thread->worker = NULL;
@@ -633,6 +658,9 @@ void* pgsql_worker_thread_func_idles(void* arg) {
 	proxysql_pgsql_thread_t* pgsql_thread = (proxysql_pgsql_thread_t*)arg;
 	PgSQL_Thread* worker = new PgSQL_Thread();
 	pgsql_thread->worker = worker;
+	// register before releasing the start-up gate below, so the shutdown barrier in
+	// wait_for_all_threads_to_exit_run_loop() has a complete participant count
+	GloPTH->register_thread_before_run_loop();
 	worker->epoll_thread = true;
 	worker->init();
 	//	worker->poll_listener_add(listen_fd);
@@ -642,6 +670,9 @@ void* pgsql_worker_thread_func_idles(void* arg) {
 	do { sleep_iter(++iter); } while (load_);
 
 	worker->run();
+	// worker and idle threads reach into each other's PgSQL_Thread objects, so no
+	// PgSQL_Thread may be destroyed until all of them have left run()
+	GloPTH->wait_for_all_threads_to_exit_run_loop();
 	//delete worker;
 	delete worker;
 	//	l_mem_destroy(__thr_sfp);
@@ -889,30 +920,24 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 	}
 	free(t);
 
-	GloVars.admindb=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"proxysql.db")+2);
-	sprintf(GloVars.admindb,"%s/%s",GloVars.datadir, (char *)"proxysql.db");
+	GloVars.admindb = make_path(GloVars.datadir, "proxysql.db");
 
-	GloVars.sqlite3serverdb=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"sqlite3server.db")+2);
-	sprintf(GloVars.sqlite3serverdb,"%s/%s",GloVars.datadir, (char *)"sqlite3server.db");
+	GloVars.sqlite3serverdb = make_path(GloVars.datadir, "sqlite3server.db");
 
-	GloVars.statsdb_disk=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"proxysql_stats.db")+2);
-	sprintf(GloVars.statsdb_disk,"%s/%s",GloVars.datadir, (char *)"proxysql_stats.db");
+	GloVars.statsdb_disk = make_path(GloVars.datadir, "proxysql_stats.db");
 
 	if (GloVars.errorlog == NULL) {
-		GloVars.errorlog=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"proxysql.log")+2);
-		sprintf(GloVars.errorlog,"%s/%s",GloVars.datadir, (char *)"proxysql.log");
+		GloVars.errorlog = make_path(GloVars.datadir, "proxysql.log");
 	}
 
 	if (GloVars.pid == NULL) {
-		GloVars.pid=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"proxysql.pid")+2);
-		sprintf(GloVars.pid,"%s/%s",GloVars.datadir, (char *)"proxysql.pid");
+		GloVars.pid = make_path(GloVars.datadir, "proxysql.pid");
 	}
 
 	if (GloVars.__cmd_proxysql_initial==true) {
 		std::cerr << "Renaming database file " << GloVars.admindb << endl;
-		char *newpath=(char *)malloc(strlen(GloVars.admindb)+8);
-		sprintf(newpath,"%s.bak",GloVars.admindb);
-		rename(GloVars.admindb,newpath);	// FIXME: should we check return value, or ignore whatever it successed or not?
+		const std::string newpath = std::string(GloVars.admindb) + ".bak";
+		rename(GloVars.admindb, newpath.c_str());	// FIXME: should we check return value, or ignore whatever it successed or not?
 	}
 
 	GloVars.confFile->ReadGlobals();
@@ -1336,9 +1361,6 @@ void ProxySQL_Main_shutdown_all_modules() {
 	}
 
 	{
-#ifdef TEST_WITHASAN
-		pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
-#endif
 		cpu_timer t;
 		delete GloAdmin;
 #ifdef DEBUG
@@ -1805,6 +1827,9 @@ bool ProxySQL_Main_init_phase3___start_all() {
 
 void ProxySQL_Main_init_phase4___shutdown() {
 	cpu_timer t;
+	// Stop accepting admin work and wait for all detached admin clients before
+	// the modules used by admin queries are joined or destroyed.
+	GloAdmin->shutdown_threads();
 	ProxySQL_Main_join_all_threads();
 
 	//write(GloAdmin->pipefd[1], &GloAdmin->pipefd[1], 1);	// write a random byte
@@ -2046,9 +2071,8 @@ bool ProxySQL_daemonize_phase3() {
 		//  Honor --initial after a crash , see #4659
 		if (GloVars.__cmd_proxysql_initial==true) {
 			std::cerr << "Renaming database file " << GloVars.admindb << endl;
-			char *newpath=(char *)malloc(strlen(GloVars.admindb)+8);
-			sprintf(newpath,"%s.bak",GloVars.admindb);
-			rename(GloVars.admindb,newpath);	// FIXME: should we check return value, or ignore whatever it successed or not?
+			const std::string newpath = std::string(GloVars.admindb) + ".bak";
+			rename(GloVars.admindb, newpath.c_str());	// FIXME: should we check return value, or ignore whatever it successed or not?
 		}
 		parent_close_error_log();
 		return false;
@@ -3122,8 +3146,7 @@ int main(int argc, const char * argv[]) {
 			// Resolve symlinks to get the real path
 			char resolved[PATH_MAX];
 			if (realpath(buff, resolved) != NULL) {
-				strncpy(buff, resolved, sizeof(buff) - 1);
-				buff[sizeof(buff) - 1] = '\0';
+				snprintf(buff, sizeof(buff), "%s", resolved);
 			}
 			len = strlen(buff);
 		}
@@ -3147,7 +3170,7 @@ int main(int argc, const char * argv[]) {
 					memset(binary_sha1, 0, SHA_DIGEST_LENGTH*2+1);
 					char buf[SHA_DIGEST_LENGTH*2 + 1];
 					for (int i=0; i < SHA_DIGEST_LENGTH; i++) {
-						sprintf((char*)&(buf[i*2]), "%02x", temp[i]);
+						snprintf((char*)&(buf[i*2]), 3, "%02x", temp[i]);
 					}
 					memcpy(binary_sha1, buf, SHA_DIGEST_LENGTH*2);
 					munmap(fb,statbuf.st_size);

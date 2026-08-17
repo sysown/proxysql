@@ -248,24 +248,24 @@ int insert_and_check(MYSQL_STMT *stmti, MYSQL_STMT *stmts, int id, char *name1, 
 		}
 		char buf1[256], buf2[256];
 		if (ts1) {
-			sprintf(buf1,"%d:%d:%d", ts1->hour, ts1->minute, ts1->second);
+			snprintf(buf1,sizeof(buf1),"%u:%u:%u", ts1->hour, ts1->minute, ts1->second);
 		} else {
-			sprintf(buf1,"NULL");
+			snprintf(buf1,sizeof(buf1),"NULL");
 		}
 		if (is_null[2]) {
-			sprintf(buf2,"NULL");
+			snprintf(buf2,sizeof(buf2),"NULL");
 		} else {
-			sprintf(buf2,"%d:%d:%d", ts_res1.hour, ts_res1.minute, ts_res1.second);
+			snprintf(buf2,sizeof(buf2),"%u:%u:%u", ts_res1.hour, ts_res1.minute, ts_res1.second);
 		}
 		if (strcmp(buf1,buf2)==0)
 			matches++;
 		diag("time1 expected/retrieved: %s , %s", buf1, buf2);
-		sprintf(buf1,"NULL");
-		sprintf(buf2,"NULL");
+		snprintf(buf1,sizeof(buf1),"NULL");
+		snprintf(buf2,sizeof(buf2),"NULL");
 		if (i1)
-			sprintf(buf1, "%d", *i1);
+			snprintf(buf1,sizeof(buf1), "%d", *i1);
 		if (!is_null[3])
-			sprintf(buf2, "%d", i1_res);
+			snprintf(buf2,sizeof(buf2), "%d", i1_res);
 		diag("i1 expected/retrieved: %s , %s", buf1, buf2);
 		if (strcmp(buf1,buf2)==0)
 			matches++;
@@ -277,24 +277,24 @@ int insert_and_check(MYSQL_STMT *stmti, MYSQL_STMT *stmts, int id, char *name1, 
 			matches++;
 		}
 		if (ts2) {
-			sprintf(buf1,"%d:%d:%d", ts2->hour, ts2->minute, ts2->second);
+			snprintf(buf1,sizeof(buf1),"%u:%u:%u", ts2->hour, ts2->minute, ts2->second);
 		} else {
-			sprintf(buf1,"NULL");
+			snprintf(buf1,sizeof(buf1),"NULL");
 		}
 		if (is_null[5]) {
-			sprintf(buf2,"NULL");
+			snprintf(buf2,sizeof(buf2),"NULL");
 		} else {
-			sprintf(buf2,"%d:%d:%d", ts_res2.hour, ts_res2.minute, ts_res2.second);
+			snprintf(buf2,sizeof(buf2),"%u:%u:%u", ts_res2.hour, ts_res2.minute, ts_res2.second);
 		}
 		if (strcmp(buf1,buf2)==0)
 			matches++;
 		diag("time2 expected/retrieved: %s , %s", buf1, buf2);
-		sprintf(buf1,"NULL");
-		sprintf(buf2,"NULL");
+		snprintf(buf1,sizeof(buf1),"NULL");
+		snprintf(buf2,sizeof(buf2),"NULL");
 		if (i2)
-			sprintf(buf1, "%d", *i2);
+			snprintf(buf1,sizeof(buf1), "%d", *i2);
 		if (!is_null[6])
-			sprintf(buf2, "%d", i2_res);
+			snprintf(buf2,sizeof(buf2), "%d", i2_res);
 		diag("i2 expected/retrieved: %s , %s", buf1, buf2);
 		if (strcmp(buf1,buf2)==0)
 			matches++;

@@ -160,22 +160,16 @@ int main(int argc, char** argv) {
     }
 
     /* ── FFTO Configuration ─────────────────────────────────────────── */
-    MYSQL_QUERY(admin, "UPDATE global_variables SET variable_value='true' "
-                       "WHERE variable_name='mysql-ffto_enabled'");
-    MYSQL_QUERY(admin, "UPDATE global_variables SET variable_value='1048576' "
-                       "WHERE variable_name='mysql-ffto_max_buffer_size'");
+    MYSQL_QUERY(admin, "SET mysql-ffto_enabled='true'");
+    MYSQL_QUERY(admin, "SET mysql-ffto_max_buffer_size=1048576");
     MYSQL_QUERY(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
-    {
-        char uq[1024];
-        snprintf(uq, sizeof(uq),
-            "INSERT OR REPLACE INTO mysql_users "
-            "(username, password, default_hostgroup, fast_forward) "
-            "VALUES ('%s', '%s', 0, 1)",
-            cl.root_username, cl.root_password);
-        MYSQL_QUERY(admin, uq);
-        MYSQL_QUERY(admin, "LOAD MYSQL USERS TO RUNTIME");
-    }
+    /* Enable fast_forward on ALL mysql_users rows (frontend + backend).
+     * Partial INSERT OR REPLACE only touches PK (username, backend) and leaves
+     * the frontend credential row at fast_forward=0, so sessions never enter
+     * FAST_FORWARD and MySQLFFTO is never constructed. */
+    MYSQL_QUERY(admin, "UPDATE mysql_users SET fast_forward=1");
+    MYSQL_QUERY(admin, "LOAD MYSQL USERS TO RUNTIME");
     {
         char sq[1024];
         snprintf(sq, sizeof(sq),

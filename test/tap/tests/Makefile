@@ -131,7 +131,16 @@ ifneq ($(wildcard $(SQLITE3_LDIR)/vec.o),)
 endif
 endif
 
-OPT := $(STDCPP) -O2 -ggdb $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
+# Keep public class layouts identical to libproxysql.a. In particular,
+# PROXYSQL40 adds members to ProxySQL_GlobalVariables; omitting the define in
+# TAP translation units makes their GloVars allocation smaller than the
+# constructor linked from the archive.
+PSQL40 :=
+ifeq ($(PROXYSQL40),1)
+	PSQL40 := -DPROXYSQL40
+endif
+
+OPT := $(STDCPP) -O2 -ggdb $(PSQL40) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
 ifneq ($(UNAME_S),Darwin)
 OPT += -Wl,--no-as-needed
 endif
@@ -159,7 +168,7 @@ tests_no_infra: admin_set_credentials_logging-t listener_conflicts_validation-t
 	./admin_set_credentials_logging-t
 	./listener_conflicts_validation-t
 
-DEBUG_OPT := $(STDCPP) -O0 -DDEBUG -ggdb $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
+DEBUG_OPT := $(STDCPP) -O0 -DDEBUG -ggdb $(PSQL40) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
 ifneq ($(UNAME_S),Darwin)
 DEBUG_OPT += -Wl,--no-as-needed
 endif
@@ -308,6 +317,9 @@ endif
 test_gtid_forwarding-t: test_gtid_forwarding-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
 
+test_gtid_from_ok-t: test_gtid_from_ok-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
+	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
+
 test_ignore_min_gtid-t: test_ignore_min_gtid-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
 
@@ -413,41 +425,31 @@ prepare_statement_err3024_async-t: prepare_statement_err3024-t.cpp $(TAP_LDIR)/l
 
 ifneq ($(UNAME_S),Darwin)
 test_wexecvp_syscall_failures-t: test_wexecvp_syscall_failures-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
-	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -Wl,--wrap=pipe,--wrap=fcntl,--wrap=read,--wrap=poll $(STATIC_LIBS) -o $@
+	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -Wl,--wrap=pipe,--wrap=fcntl,--wrap=read,--wrap=poll,--wrap=fork,--wrap=_Znwm,--wrap=opendir $(STATIC_LIBS) -o $@
 endif
 
-pgsql-extended_query_protocol_test-t: pgsql-extended_query_protocol_test-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual -Wl,--allow-multiple-definition -o $@
+# Every test that links pg_lite_client.cpp shares one link line. pg_lite_client
+# implements PostgreSQL MD5 and SCRAM-SHA-256 client authentication (including the
+# stepwise saslBegin/saslFinish pair the mid-handshake reload test drives), so it
+# needs -lscram/-lusual; $(ALLOW_MULTI_DEF) resolves the duplicate symbols between
+# libscram/libusual and the other vendored static libs (test binaries only, and
+# it is empty on Darwin where the linker has no such flag).
+PG_LITE_CLIENT_TESTS := \
+	pgsql-extended_query_protocol_test-t \
+	pgsql-reg_test_5273_bind_parameter_format-t \
+	pgsql-reg_test_5899_bind_zero_param_formats-t \
+	pgsql-reg_test_5300_threshold_resultset_deadlock-t \
+	pgsql-reg_test_5866_result_format-t \
+	pgsql-auth_method_matrix-t \
+	pgsql-datatype_matrix-t \
+	pgsql-server_side_cursors-t \
+	pgsql-scram_reload_midhandshake-t \
+	pgsql-native_portals-t \
+	test_ffto_pgsql_pipeline-t \
+	test_ffto_pgsql_stmt_portal-t
 
-pgsql-reg_test_5273_bind_parameter_format-t: pgsql-reg_test_5273_bind_parameter_format-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual -Wl,--allow-multiple-definition -o $@
-
-pgsql-reg_test_5899_bind_zero_param_formats-t: pgsql-reg_test_5899_bind_zero_param_formats-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual -Wl,--allow-multiple-definition -o $@
-
-pgsql-reg_test_5300_threshold_resultset_deadlock-t: pgsql-reg_test_5300_threshold_resultset_deadlock-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual -Wl,--allow-multiple-definition -o $@
-
-pgsql-reg_test_5866_result_format-t: pgsql-reg_test_5866_result_format-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual -Wl,--allow-multiple-definition -o $@
-
-test_ffto_pgsql_pipeline-t: test_ffto_pgsql_pipeline-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual -Wl,--allow-multiple-definition -o $@
-
-test_ffto_pgsql_stmt_portal-t: test_ffto_pgsql_stmt_portal-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual -Wl,--allow-multiple-definition -o $@
-
-# -lscram/-lusual: pg_lite_client.cpp uses libscram client SCRAM (stepwise saslBegin/saslFinish for the
-# mid-handshake reload test); --allow-multiple-definition resolves duplicate symbols between libscram/libusual
-# and other vendored static libs (test binaries only).
-pgsql-scram_reload_midhandshake-t: pgsql-scram_reload_midhandshake-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual -Wl,--allow-multiple-definition -o $@
-
-# Named-portal raw-wire differential test. The client SCRAM-SHA-256 authenticates directly to the
-# backend (pg_hba scram-sha-256) via pg_lite_client's doSASLAuth(), which uses libscram, hence
-# -lscram -lusual (galera-rule precedent at :204/:207).
-pgsql-native_portals-t: pgsql-native_portals-t.cpp pg_lite_client.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual -Wl,--allow-multiple-definition -o $@
+$(PG_LITE_CLIENT_TESTS): %: %.cpp pg_lite_client.cpp pg_lite_client.h $(TAP_LDIR)/libtap$(SHLIB_EXT)
+	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual $(ALLOW_MULTI_DEF) -o $@
 
 MYSQLX_PROTO_DIR := $(PROXYSQL_PATH)/plugins/mysqlx/proto
 MYSQLX_PROTO_SRCS := $(wildcard $(MYSQLX_PROTO_DIR)/*.pb.cc)

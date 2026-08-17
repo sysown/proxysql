@@ -334,6 +334,7 @@ class ProxySQL_Admin {
 	int main_poll_nfds;
 	struct pollfd *main_poll_fds;
 	int *main_callback_func;
+	bool admin_threads_shutdown;
 
 	bool registered_prometheus_collectable;
 
@@ -523,6 +524,10 @@ class ProxySQL_Admin {
 
 	void flush_GENERIC_variables__checksum__database_to_runtime(const std::string& modname, const std::string& checksum, const time_t epoch);
 	bool flush_GENERIC_variables__retrieve__database_to_runtime(const std::string& modname, char* &error, int& cols, int& affected_rows, SQLite3_result* &resultset);
+	/**
+	 * @brief Apply generic variables from a result set and report per-row statistics.
+	 * @param accepted_variables Optional output containing only names successfully applied by this generic pass.
+	 */
 	FlushVariableStats flush_GENERIC_variables__process__database_to_runtime(
 		const std::string& modname, SQLite3DB *db, SQLite3_result* resultset,
 		const bool& lock, const bool& replace,
@@ -530,7 +535,8 @@ class ProxySQL_Admin {
 		const std::unordered_set<std::string>& variables_to_delete_silently,
 		const std::unordered_set<std::string>& variables_deprecated,
 		const std::unordered_set<std::string>& variables_special_values,
-		std::function<void(const std::string&, const char *, SQLite3DB *)> special_variable_action = nullptr
+		std::function<void(const std::string&, const char *, SQLite3DB *)> special_variable_action = nullptr,
+		std::unordered_set<std::string>* accepted_variables = nullptr
 	);
 
 	char **get_variables_list();
@@ -678,6 +684,7 @@ class ProxySQL_Admin {
 	 */
 	void save_mysql_servers_runtime_to_database(bool _runtime);
 	void admin_shutdown();
+	void shutdown_threads();
 	bool is_command(std::string);
 
 	template <typename S>

@@ -1,0 +1,45 @@
+// Prisma schema for the pg-compat driver-matrix behavior program (SP3-Task 5).
+//
+// No REAL models are needed: every behavior uses Prisma's raw-query escape
+// hatch ($queryRaw / $executeRawUnsafe / $transaction), so the generated
+// client uses none of the model types. However, `prisma generate` (5.22.0)
+// refuses to generate from a schema with zero models ("You don't have any
+// models defined ... so nothing will be generated" -> non-zero exit),
+// verified empirically on the runner toolchain. So we declare ONE dummy
+// model `Unused`, @@map-ed to a table `pgcompat_prisma_unused` that is
+// NEVER created and NEVER queried, purely to satisfy the generator. It has
+// no runtime effect: behaviors.mjs never references `prisma.unused`.
+//
+// The datasource URL comes from PGCOMPAT_PRISMA_URL, which behaviors.mjs
+// constructs at runtime from the PGCOMPAT_PROXY_HOST/PGCOMPAT_PROXY_PORT
+// env contract and injects into process.env BEFORE instantiating
+// PrismaClient (keeps the harness env contract unchanged -- no new required
+// vars). At BUILD time `prisma generate` only needs the variable to exist
+// (it does not connect), so the Dockerfile sets a throwaway value.
+
+datasource db {
+  provider = "postgresql"
+  url      = env("PGCOMPAT_PRISMA_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+  // The runner final image is python:3.11-slim (Debian bookworm, OpenSSL 3),
+  // and the client is generated in node:22-bookworm-slim (also bookworm /
+  // OpenSSL 3). The query-engine binary target for that platform is
+  // debian-openssl-3.0.x. Verified empirically: the engine downloaded at
+  // build time for this target loads and runs under the python:3.11-slim
+  // final stage (see the SP3-Task 5 report). "native" would resolve to the
+  // same file when generating inside bookworm, but pinning the explicit
+  // target makes the build reproducible regardless of the generating host.
+  binaryTargets = ["debian-openssl-3.0.x"]
+}
+
+// Dummy model to satisfy `prisma generate` (see the datasource comment
+// above). Mapped to a table that is never created; behaviors use only raw
+// queries and never touch this model.
+model Unused {
+  id Int @id
+
+  @@map("pgcompat_prisma_unused")
+}

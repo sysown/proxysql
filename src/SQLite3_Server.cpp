@@ -27,6 +27,7 @@
 #include <resolv.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include <random>
 #include <pthread.h>
 #ifndef SPOOKYV2
 #include "SpookyV2.h"
@@ -37,6 +38,22 @@
 #include <sys/utsname.h>
 
 using std::string;
+
+#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP) || defined(TEST_READONLY) || defined(TEST_REPLICATIONLAG) || defined(TEST_RDS_BGD)
+static int random_replication_lag_seconds() {
+	static thread_local std::random_device random_source;
+	static thread_local std::uniform_int_distribution<int> distribution(10, 39);
+	return distribution(random_source);
+}
+#endif
+
+#ifdef TEST_REPLICATIONLAG
+static void ensure_replicationlag_table_loaded(SQLite3_Server* server, MySQL_Session* sess) {
+	if (server->replicationlag_map_size() == 0) {
+		server->load_replicationlag_table(sess);
+	}
+}
+#endif
 
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
 #define SELECT_VERSION_COMMENT_LEN 32
@@ -224,18 +241,41 @@ class sqlite3server_main_loop_listeners {
 
 	bool update_ifaces(char *list, char ***_ifaces) {
 		wrlock();
-		int i;
-		char **ifaces=*_ifaces;
+		int i = 0;
+		char **old_ifaces = *_ifaces;
+		char **new_ifaces = (char **)l_alloc(MAX_IFACES * sizeof(char *));
+		if (new_ifaces != NULL) {
+			memset(new_ifaces, 0, MAX_IFACES * sizeof(char *));
+		}
 		tokenizer_t tok;
 		tokenizer( &tok, list, ";", TOKENIZER_NO_EMPTIES );
 		const char* token;
-		ifaces=reset_ifaces(ifaces);
-		i=0;
-		for ( token = tokenize( &tok ) ; token && i < MAX_IFACES ; token = tokenize( &tok ) ) {
-			ifaces[i]=(char *)malloc(strlen(token)+1);
-			strcpy(ifaces[i],token);
-			i++;
+		if (new_ifaces == NULL) {
+			free_tokenizer( &tok );
+			wrunlock();
+			return false;
 		}
+		for ( token = tokenize( &tok ) ; token && i < MAX_IFACES ; token = tokenize( &tok ) ) {
+		char *token_copy = strdup(token);
+		if (token_copy == NULL) {
+			for (int j = 0; j < i; ++j) {
+				l_free(0, new_ifaces[j]);
+			}
+			l_free(0, new_ifaces);
+			free_tokenizer( &tok );
+			wrunlock();
+			return false;
+		}
+		new_ifaces[i]=token_copy;
+		i++;
+	}
+		if (old_ifaces != NULL) {
+			for (int j = 0; j < MAX_IFACES; ++j) {
+				l_free(0, old_ifaces[j]);
+			}
+			l_free(0, old_ifaces);
+		}
+		*_ifaces = new_ifaces;
 		free_tokenizer( &tok );
 		version++;
 		wrunlock();
@@ -244,6 +284,14 @@ class sqlite3server_main_loop_listeners {
 };
 
 static sqlite3server_main_loop_listeners S_amll;
+
+#if defined(TEST_READONLY) || defined(TEST_RDS_BGD)
+static void ensure_readonly_table(SQLite3_Server *server, MySQL_Session *sess) {
+	if (server->readonly_map_size() == 0) {
+		server->load_readonly_table(sess);
+	}
+}
+#endif
 
 #ifdef TEST_GROUPREP
 /**
@@ -374,6 +422,17 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 	query=(char *)l_alloc(query_length);
 	memcpy(query,(char *)pkt->ptr+sizeof(mysql_hdr)+1,query_length-1);
 	query[query_length-1]=0;
+	constexpr size_t k_select_version_len = sizeof("SELECT @@version") - 1;
+	constexpr size_t k_select_version_fn_len = sizeof("SELECT version()") - 1;
+	constexpr size_t k_select_dollar_len = sizeof("SELECT $$") - 1;
+	constexpr size_t k_show_tables_len = sizeof("SHOW TABLES") - 1;
+	constexpr size_t k_show_tables_from_len = sizeof("SHOW TABLES FROM ") - 1;
+	constexpr size_t k_show_tables_like_len = sizeof("SHOW TABLES LIKE ") - 1;
+	constexpr size_t k_show_databases_len = sizeof("SHOW DATABASES") - 1;
+	constexpr size_t k_show_schemas_len = sizeof("SHOW SCHEMAS") - 1;
+	[[maybe_unused]] constexpr size_t k_select_read_only_len = sizeof("SELECT @@global.read_only read_only ") - 1;
+	[[maybe_unused]] constexpr size_t k_select_slave_status_len = sizeof("SELECT SLAVE STATUS ") - 1;
+	[[maybe_unused]] constexpr size_t k_select_replica_status_len = sizeof("SELECT REPLICA STATUS ") - 1;
 
 #if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP) || defined(TEST_READONLY) || defined(TEST_REPLICATIONLAG) || defined(TEST_RDS_BGD)
 	if (sess->client_myds->proxy_addr.addr == NULL) {
@@ -572,9 +631,18 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 		if (!strncasecmp(SELECT_VERSION_COMMENT, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
 #if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP) || defined(TEST_READONLY) || defined(TEST_REPLICATIONLAG) || defined(TEST_RDS_BGD)
-			char *a = (char *)"SELECT '(ProxySQL Automated Test Server) - %s'";
-			query = (char *)malloc(strlen(a)+strlen(sess->client_myds->proxy_addr.addr));
-			sprintf(query,a,sess->client_myds->proxy_addr.addr);
+			const char* proxy_addr = sess->client_myds->proxy_addr.addr;
+			const std::string formatted_query = cstr_format(
+				"SELECT '(ProxySQL Automated Test Server) - %s'",
+				proxy_addr ? proxy_addr : ""
+			).str;
+			query = l_strdup(formatted_query.c_str());
+			if (query == NULL) {
+				GloSQLite3Server->send_MySQL_ERR(&sess->client_myds->myprot, 1105, "Out of memory");
+				run_query = false;
+				goto __run_query;
+			}
+			query_length = formatted_query.size() + 1;
 #else
 			query=l_strdup("SELECT '(ProxySQL SQLite3 Server)'");
 #endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP || TEST_READONLY || TEST_REPLICATIONLAG || TEST_RDS_BGD
@@ -585,16 +653,23 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 
 	if (query_no_space_length==SELECT_DB_USER_LEN) {
 		if (!strncasecmp(SELECT_DB_USER, query_no_space, query_no_space_length)) {
-			l_free(query_length,query);
-			char *query1=(char *)"SELECT \"admin\" AS 'DATABASE()', \"%s\" AS 'USER()'";
-			char *query2=(char *)malloc(strlen(query1)+strlen(sess->client_myds->myconn->userinfo->username)+10);
-			sprintf(query2,query1,sess->client_myds->myconn->userinfo->username);
-			query=l_strdup(query2);
-			query_length=strlen(query2)+1;
-			free(query2);
-			goto __run_query;
+				l_free(query_length,query);
+				query = NULL;
+				const char* username = sess->client_myds->myconn->userinfo->username;
+				const std::string formatted_query = cstr_format(
+					"SELECT \"admin\" AS 'DATABASE()', \"%s\" AS 'USER()'",
+					username ? username : ""
+				).str;
+				query = l_strdup(formatted_query.c_str());
+				if (query == NULL) {
+					GloSQLite3Server->send_MySQL_ERR(&sess->client_myds->myprot, 1105, "Out of memory");
+					run_query = false;
+					goto __run_query;
+				}
+				query_length = formatted_query.size() + 1;
+				goto __run_query;
+			}
 		}
-	}
 
 	if (query_no_space_length==SELECT_CHARSET_VARIOUS_LEN) {
 		if (!strncasecmp(SELECT_CHARSET_VARIOUS, query_no_space, query_no_space_length)) {
@@ -606,26 +681,26 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 		}
 	}
 
-	if (!strncasecmp("SELECT @@version", query_no_space, strlen("SELECT @@version"))) {
-		l_free(query_length,query);
-		char *q=(char *)"SELECT '%s' AS '@@version'";
-		query_length=strlen(q)+strlen(PROXYSQL_VERSION)+20;
-		query=(char *)l_alloc(query_length);
-		sprintf(query,q,PROXYSQL_VERSION);
-		goto __run_query;
-	}
+		if (!strncasecmp("SELECT @@version", query_no_space, k_select_version_len)) {
+			l_free(query_length,query);
+			char *q=(char *)"SELECT '%s' AS '@@version'";
+			query_length=strlen(q)+strlen(PROXYSQL_VERSION)+20;
+			query=(char *)l_alloc(query_length);
+			snprintf(query, query_length, q, PROXYSQL_VERSION);
+			goto __run_query;
+		}
 
-	if (!strncasecmp("SELECT version()", query_no_space, strlen("SELECT version()"))) {
-		l_free(query_length,query);
-		char *q=(char *)"SELECT '%s' AS 'version()'";
-		query_length=strlen(q)+strlen(PROXYSQL_VERSION)+20;
-		query=(char *)l_alloc(query_length);
-		sprintf(query,q,PROXYSQL_VERSION);
-		goto __run_query;
-	}
+		if (!strncasecmp("SELECT version()", query_no_space, k_select_version_fn_len)) {
+			l_free(query_length,query);
+			char *q=(char *)"SELECT '%s' AS 'version()'";
+			query_length=strlen(q)+strlen(PROXYSQL_VERSION)+20;
+			query=(char *)l_alloc(query_length);
+			snprintf(query, query_length, q, PROXYSQL_VERSION);
+			goto __run_query;
+		}
 
 	// MySQL client check command for dollars quote support, starting at version '8.1.0'. See #4300.
-	if (!strncasecmp("SELECT $$", query_no_space, strlen("SELECT $$"))) {
+	if (!strncasecmp("SELECT $$", query_no_space, k_select_dollar_len)) {
 		pair<int,const char*> err_info { get_dollar_quote_error(mysql_thread___server_version) };
 		GloSQLite3Server->send_MySQL_ERR(&sess->client_myds->myprot, const_cast<char*>(err_info.second));
 		run_query=false;
@@ -636,15 +711,15 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 		goto __end_show_commands; // in the next block there are only SHOW commands
 	}
 
-	if (query_no_space_length==strlen("SHOW TABLES") && !strncasecmp("SHOW TABLES",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==k_show_tables_len && !strncasecmp("SHOW TABLES",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
 		query=l_strdup("SELECT name AS tables FROM sqlite_master WHERE type='table' AND name NOT IN ('sqlite_sequence') ORDER BY name");
 		query_length=strlen(query)+1;
 		goto __run_query;
 	}
 
-	if ((query_no_space_length>17) && (!strncasecmp("SHOW TABLES FROM ", query_no_space, 17))) {
-		strA=query_no_space+17;
+	if ((query_no_space_length > k_show_tables_from_len) && (!strncasecmp("SHOW TABLES FROM ", query_no_space, k_show_tables_from_len))) {
+		strA=query_no_space+k_show_tables_from_len;
 		strAl=strlen(strA);
 		strB=(char *)"SELECT name AS tables FROM %s.sqlite_master WHERE type='table' AND name NOT IN ('sqlite_sequence') ORDER BY name";
 		strBl=strlen(strB);
@@ -658,8 +733,8 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 		goto __run_query;
 	}
 
-	if ((query_no_space_length>17) && (!strncasecmp("SHOW TABLES LIKE ", query_no_space, 17))) {
-		strA=query_no_space+17;
+	if ((query_no_space_length > k_show_tables_like_len) && (!strncasecmp("SHOW TABLES LIKE ", query_no_space, k_show_tables_like_len))) {
+		strA=query_no_space+k_show_tables_like_len;
 		strAl=strlen(strA);
 		strB=(char *)"SELECT name AS tables FROM sqlite_master WHERE type='table' AND name LIKE '%s'";
 		strBl=strlen(strB);
@@ -686,23 +761,25 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 	}
 
 	strA=(char *)"SHOW CREATE TABLE ";
+	strAl = sizeof("SHOW CREATE TABLE ") - 1;
 	strB=(char *)"SELECT name AS 'table' , REPLACE(REPLACE(sql,' , ', X'2C0A20202020'),'CREATE TABLE %s (','CREATE TABLE %s ('||X'0A20202020') AS 'Create Table' FROM %s.sqlite_master WHERE type='table' AND name='%s'";
-	strAl=strlen(strA);
-  if (strncasecmp("SHOW CREATE TABLE ", query_no_space, strAl)==0) {
+	if (strncasecmp("SHOW CREATE TABLE ", query_no_space, strAl)==0) {
 		strBl=strlen(strB);
 		char *dbh=NULL;
 		char *tbh=NULL;
 		c_split_2(query_no_space+strAl,".",&dbh,&tbh);
 
-		if (strlen(tbh)==0) {
+		if (std::string_view(tbh).empty()) {
 			free(tbh);
 			tbh=dbh;
 			dbh=strdup("main");
 		}
-		if (strlen(tbh)>=3 && tbh[0]=='`' && tbh[strlen(tbh)-1]=='`') { // tablename is quoted
-			char *tbh_tmp=(char *)malloc(strlen(tbh)-1);
-			strncpy(tbh_tmp,tbh+1,strlen(tbh)-2);
-			tbh_tmp[strlen(tbh)-2]=0;
+			size_t tbh_len = std::string_view(tbh).size();
+			if (tbh_len>=3 && tbh[0]=='`' && tbh[tbh_len-1]=='`') { // tablename is quoted
+				const size_t quoted_len = tbh_len - 2;
+				char *tbh_tmp=(char *)l_alloc(quoted_len + 1);
+				memcpy(tbh_tmp, tbh + 1, quoted_len);
+				tbh_tmp[quoted_len] = 0;
 			free(tbh);
 			tbh=tbh_tmp;
 		}
@@ -719,9 +796,9 @@ void SQLite3_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *p
 	}
 
 	if (
-		(query_no_space_length==strlen("SHOW DATABASES") && !strncasecmp("SHOW DATABASES",query_no_space, query_no_space_length))
+		(query_no_space_length==k_show_databases_len && !strncasecmp("SHOW DATABASES",query_no_space, query_no_space_length))
 		||
-		(query_no_space_length==strlen("SHOW SCHEMAS") && !strncasecmp("SHOW SCHEMAS",query_no_space, query_no_space_length))
+		(query_no_space_length==k_show_schemas_len && !strncasecmp("SHOW SCHEMAS",query_no_space, query_no_space_length))
 	) {
 		l_free(query_length,query);
 		query=l_strdup("PRAGMA DATABASE_LIST");
@@ -735,6 +812,49 @@ __end_show_commands:
 		l_free(query_length,query);
 		query=l_strdup("SELECT \"main\" AS 'DATABASE()'");
 		query_length=strlen(query)+1;
+		goto __run_query;
+	}
+
+	if (query_no_space_length==strlen("SELECT CONNECTION_ID()") && !strncasecmp("SELECT CONNECTION_ID()",query_no_space, query_no_space_length)) {
+		char connection_id[32];
+		snprintf(connection_id, sizeof(connection_id), "%u", sess->thread_session_id);
+
+		SQLite3_Session *sqlite_sess = static_cast<SQLite3_Session *>(sess->thread->gen_args);
+		sqlite3 *db = sqlite_sess->sessdb->get_db();
+		uint16_t set_status = 0;
+		if (sess->autocommit) {
+			set_status |= SERVER_STATUS_AUTOCOMMIT;
+		}
+		if ((*proxy_sqlite3_get_autocommit)(db) == 0) {
+			set_status |= SERVER_STATUS_IN_TRANS;
+		}
+
+		MySQL_Data_Stream *myds = sess->client_myds;
+		MySQL_Protocol *myprot = &myds->myprot;
+		myds->DSS = STATE_QUERY_SENT_DS;
+		int sid = 1;
+		myprot->generate_pkt_column_count(true, NULL, NULL, sid, 1); sid++;
+		myprot->generate_pkt_field(true, NULL, NULL, sid, (char*)"", (char*)"", (char*)"", (char*)"CONNECTION_ID()", (char*)"", 63, 31, MYSQL_TYPE_LONGLONG, 161, 0, false, 0, NULL); sid++;
+		myds->DSS = STATE_COLUMN_DEFINITION;
+
+		const bool deprecate_eof_active = myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+		if (!deprecate_eof_active) {
+			myprot->generate_pkt_EOF(true, NULL, NULL, sid, 0, set_status); sid++;
+		}
+
+		char *fields[] = { connection_id };
+		unsigned long lengths[] = { strlen(connection_id) };
+		myprot->generate_pkt_row(true, NULL, NULL, sid, 1, lengths, fields); sid++;
+		myds->DSS = STATE_ROW;
+
+		if (deprecate_eof_active) {
+			myprot->generate_pkt_OK(true, NULL, NULL, sid, 0, 0, set_status, 0, NULL, true); sid++;
+		} else {
+			myprot->generate_pkt_EOF(true, NULL, NULL, sid, 0, set_status); sid++;
+		}
+
+		myds->DSS = STATE_SLEEP;
+		run_query = false;
 		goto __run_query;
 	}
 
@@ -841,9 +961,16 @@ __run_query:
 						delete control_result;
 
 						if (run_query && rds_bgd_table_check) {
+							const char* topology_sql = topology_present ? "SELECT 1" : "SELECT 1 WHERE 0";
+							static constexpr size_t topology_sql_len =
+								sizeof("SELECT 1") - 1;
+							const size_t topology_len =
+								topology_present ?
+									topology_sql_len :
+									(sizeof("SELECT 1 WHERE 0") - 1);
 							l_free(query_length,query);
-							query=l_strdup(topology_present ? "SELECT 1" : "SELECT 1 WHERE 0");
-							query_length=strlen(query)+1;
+							query=l_strdup(topology_sql);
+							query_length=topology_len + 1;
 						} else if (run_query && (configured_error != 0 || !topology_present)) {
 							const uint16_t error_code = configured_error
 								? static_cast<uint16_t>(configured_error) : 1146;
@@ -861,45 +988,46 @@ __run_query:
 							};
 							l_free(query_length,query);
 							query=l_strdup(topology_query.c_str());
-							query_length=strlen(query)+1;
+							query_length=topology_query.length()+1;
 						}
 					}
 				}
 			}
 
 #endif // TEST_RDS_BGD
-#ifdef TEST_AURORA
-			if (strstr(query_no_space,(char *)"REPLICA_HOST_STATUS")) {
-				pthread_mutex_lock(&GloSQLite3Server->aurora_mutex);
+				#ifdef TEST_AURORA
+				if (strstr(query_no_space,(char *)"REPLICA_HOST_STATUS")) {
+					pthread_mutex_lock(&GloSQLite3Server->aurora_mutex);
 
-				if (strcasestr(query_no_space, TEST_AURORA_MONITOR_BASE_QUERY)) {
-					string s_whg { query_no_space + strlen(TEST_AURORA_MONITOR_BASE_QUERY) };
-					uint32_t whg = atoi(s_whg.c_str());
+					if (strcasestr(query_no_space, TEST_AURORA_MONITOR_BASE_QUERY)) {
+						string s_whg { query_no_space + (sizeof(TEST_AURORA_MONITOR_BASE_QUERY) - 1) };
+						uint32_t whg = atoi(s_whg.c_str());
 
-					GloSQLite3Server->populate_aws_aurora_table(sess, whg);
-					vector<aurora_hg_info_t> hgs_info { get_hgs_info(GloAdmin->admindb) };
+						GloSQLite3Server->populate_aws_aurora_table(sess, whg);
+						vector<aurora_hg_info_t> hgs_info { get_hgs_info(GloAdmin->admindb) };
 
-					const auto match_writer = [&whg](const aurora_hg_info_t& hg_info) {
-						return std::get<AURORA_HG_INFO::WRITER_HG>(hg_info) == whg;
-					};
-					const auto hg_info_it = std::find_if(hgs_info.begin(), hgs_info.end(), match_writer);
-					string select_query {
-						"SELECT SERVER_ID,SESSION_ID,LAST_UPDATE_TIMESTAMP,REPLICA_LAG_IN_MILLISECONDS,CPU"
-							" FROM REPLICA_HOST_STATUS "
-					};
+						const auto match_writer = [&whg](const aurora_hg_info_t& hg_info) {
+							return std::get<AURORA_HG_INFO::WRITER_HG>(hg_info) == whg;
+						};
+						const auto hg_info_it = std::find_if(hgs_info.begin(), hgs_info.end(), match_writer);
+						string select_query {
+							"SELECT SERVER_ID,SESSION_ID,LAST_UPDATE_TIMESTAMP,REPLICA_LAG_IN_MILLISECONDS,CPU"
+								" FROM REPLICA_HOST_STATUS "
+						};
 
-					if (hg_info_it == hgs_info.end()) {
-						select_query += " LIMIT 0";
-					} else {
-						const string& domain_name { std::get<AURORA_HG_INFO::DOMAIN_NAME>(*hg_info_it) };
-						select_query += " WHERE DOMAIN_NAME='" + domain_name + "' ORDER BY SERVER_ID";
+						if (hg_info_it == hgs_info.end()) {
+							select_query += " LIMIT 0";
+						} else {
+							const string& domain_name { std::get<AURORA_HG_INFO::DOMAIN_NAME>(*hg_info_it) };
+							select_query += " WHERE DOMAIN_NAME='" + domain_name + "' ORDER BY SERVER_ID";
+						}
+
+						free(query);
+						query = static_cast<char*>(malloc(select_query.length() + 1));
+						memcpy(query, select_query.c_str(), select_query.length());
+						query[select_query.length()] = '\0';
 					}
-
-					free(query);
-					query = static_cast<char*>(malloc(select_query.length() + 1));
-					strcpy(query, select_query.c_str());
 				}
-			}
 #endif // TEST_AURORA
 #ifdef TEST_GALERA
 			if (strstr(query_no_space,(char *)"HOST_STATUS_GALERA")) {
@@ -944,63 +1072,58 @@ __run_query:
 					);
 
 					query = static_cast<char*>(malloc(select_as_query.length() + 1));
-					strcpy(query, select_as_query.c_str());
+					memcpy(query, select_as_query.c_str(), select_as_query.length());
+					query[select_as_query.length()] = '\0';
 				}
 			}
 #endif // TEST_GROUPREP
 #if defined(TEST_READONLY) || defined(TEST_RDS_BGD)
-			if (strncasecmp("SELECT @@global.read_only read_only ",query_no_space, strlen("SELECT @@global.read_only read_only "))==0) {
-				if (strlen(query_no_space) > strlen("SELECT @@global.read_only read_only ")+5) {
-					pthread_mutex_lock(&GloSQLite3Server->test_readonly_mutex);
-					// the current test doesn't try to simulate failures, therefore it will return immediately
-					if (GloSQLite3Server->readonly_map_size() == 0) {
-						// probably never initialized
-						GloSQLite3Server->load_readonly_table(sess);
+				if (strncasecmp("SELECT @@global.read_only read_only ",query_no_space, k_select_read_only_len)==0
+					&& query_no_space_length > k_select_read_only_len+5) {
+						pthread_mutex_lock(&GloSQLite3Server->test_readonly_mutex);
+							// the current test doesn't try to simulate failures, therefore it will return immediately
+							// Load the test table lazily on its first use.
+							ensure_readonly_table(GloSQLite3Server, sess);
+							int rc = GloSQLite3Server->readonly_test_value(query_no_space+k_select_read_only_len);
+							l_free(query_length, query);
+							const std::string formatted_query = cstr_format("SELECT %d as read_only", rc).str;
+							query = l_strdup(formatted_query.c_str());
+							query_length = formatted_query.size() + 1;
+							pthread_mutex_unlock(&GloSQLite3Server->test_readonly_mutex);
 					}
-					int rc = GloSQLite3Server->readonly_test_value(query_no_space+strlen("SELECT @@global.read_only read_only "));
-					free(query);
-					char *a = (char *)"SELECT %d as read_only";
-					query = (char *)malloc(strlen(a)+2);
-					sprintf(query,a,rc);
-					pthread_mutex_unlock(&GloSQLite3Server->test_readonly_mutex);
-				}
-			}
 #endif // TEST_READONLY || TEST_RDS_BGD
 #ifdef TEST_REPLICATIONLAG
-			if (
-				strncasecmp("SELECT SLAVE STATUS ", query_no_space, strlen("SELECT SLAVE STATUS ")) == 0
-				|| strncasecmp("SELECT REPLICA STATUS ", query_no_space, strlen("SELECT REPLICA STATUS ")) == 0
-			) {
-				uint64_t addr_offset {
-					strstr(query_no_space, "REPLICA") ?  strlen("SELECT REPLICA STATUS ") : strlen("SELECT SLAVE STATUS ")
+				const bool replica_status = strncasecmp("SELECT REPLICA STATUS ", query_no_space, k_select_replica_status_len) == 0;
+				const uint64_t addr_offset {
+					replica_status ? k_select_replica_status_len : k_select_slave_status_len
 				};
-				if (strlen(query_no_space) > strlen("SELECT SLAVE STATUS ") + 5) {
-					pthread_mutex_lock(&GloSQLite3Server->test_replicationlag_mutex);
-					// the current test doesn't try to simulate failures, therefore it will return immediately
-					if (GloSQLite3Server->replicationlag_map_size() == 0) {
-						// probably never initialized
-						GloSQLite3Server->load_replicationlag_table(sess);
-					}
+				if ((strncasecmp("SELECT SLAVE STATUS ", query_no_space, k_select_slave_status_len) == 0
+					|| replica_status)
+					&& query_no_space_length > addr_offset + 5) {
+						pthread_mutex_lock(&GloSQLite3Server->test_replicationlag_mutex);
+						// the current test doesn't try to simulate failures, therefore it will return immediately
+						ensure_replicationlag_table_loaded(GloSQLite3Server, sess);
 					const int* rc = GloSQLite3Server->replicationlag_test_value(query_no_space + addr_offset);
-					free(query);
+					l_free(query_length, query);
 
-					string SELECT { "SELECT " + (rc ? std::to_string(*rc) : string { "null" }) + " AS " };
-					SELECT += strstr(query_no_space, "REPLICA") ? "Seconds_Behind_Source" : "Seconds_Behind_Master";
+						string SELECT { "SELECT " + (rc ? std::to_string(*rc) : string { "null" }) + " AS " };
+						SELECT += replica_status ? "Seconds_Behind_Source" : "Seconds_Behind_Master";
 
-					query = static_cast<char*>(malloc(SELECT.size() + 1));
-					sprintf(query, SELECT.c_str());
+						query = l_strdup(SELECT.c_str());
+						query_length = SELECT.size() + 1;
 
 					pthread_mutex_unlock(&GloSQLite3Server->test_replicationlag_mutex);
 				}
-			}
 #endif // TEST_REPLICATIONLAG
-			if (strstr(query_no_space,(char *)"Seconds_Behind_Master")) {
-				free(query);
-				char *a = (char *)"SELECT %d as Seconds_Behind_Master";
-				query = (char *)malloc(strlen(a)+4);
-				sprintf(query,a,rand()%30+10);
+				if (strstr(query_no_space,(char *)"Seconds_Behind_Master")) {
+					l_free(query_length, query);
+					const std::string formatted_query = cstr_format(
+						"SELECT %d as Seconds_Behind_Master", random_replication_lag_seconds()
+					).str;
+					query = l_strdup(formatted_query.c_str());
+					query_length = formatted_query.size() + 1;
+				}
 			}
-		}
 #endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP || TEST_READONLY || TEST_REPLICATIONLAG || TEST_RDS_BGD
 		if (!run_query) {
 			l_free(pkt->size-sizeof(mysql_hdr),query_no_space);
@@ -1537,7 +1660,7 @@ void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 	cluster_id--;
 	int hg_id = 2270+(cluster_id*10)+1;
 	char buf[1024];
-	sprintf(buf, (char *)"SELECT * FROM HOST_STATUS_GALERA WHERE hostgroup_id = %d LIMIT 1", hg_id);
+	snprintf(buf, sizeof(buf), "SELECT * FROM HOST_STATUS_GALERA WHERE hostgroup_id = %d LIMIT 1", hg_id);
 	sessdb->execute_statement(buf, &error , &cols , &affected_rows , &resultset);
 		if (resultset->rows_count==0) {
 			//sessdb->execute("DELETE FROM HOST_STATUS_GALERA");

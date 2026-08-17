@@ -157,6 +157,14 @@ static Test parsersql_mysql_filtered_set[] = {
   { "SET max_join_size=18446744073709551615",  { Expected("max_join_size",         {"18446744073709551615"}) } },
 };
 
+// Regression net for AstNode::source(): the legacy lossy SET adapter must keep
+// producing the same maps after literal nodes gain exact source spans.
+static Test parsersql_mysql_source_span_legacy[] = {
+  { "SET sql_mode='A\\\\B'", { Expected("sql_mode", {"A\\\\B"}) } },
+  { "SET wait_timeout=+001", { Expected("wait_timeout", {"+001"}) } },
+  { "SET character_set_results=NULL", { Expected("character_set_results", {"NULL"}) } },
+};
+
 // MySQL multi-variable SET cases sampled from set_testing-240.csv (the fixture
 // driving set_testing-t). Exercises comma-separated multi-variable parsing.
 static Test parsersql_mysql_set_testing[] = {
@@ -774,6 +782,7 @@ int main(int argc, char** argv) {
 	p += arraysize(Set1_v2);
 	p += arraysize(parsersql_syntax_errors);
 	p += arraysize(parsersql_mysql_filtered_set);
+	p += arraysize(parsersql_mysql_source_span_legacy);
 	p += arraysize(parsersql_mysql_set_testing);
 	p += arraysize(parsersql_pr5088_mysql_set_syntax);
 	p += arraysize(parsersql_pr5088_mysql_dataset_syntax);
@@ -800,6 +809,7 @@ int main(int argc, char** argv) {
 	TestParse(Set1_v2, arraysize(Set1_v2), "Set1_v2");
 	TestParse(parsersql_syntax_errors, arraysize(parsersql_syntax_errors), "parsersql_syntax_errors");
 	TestParse(parsersql_mysql_filtered_set, arraysize(parsersql_mysql_filtered_set), "mysql_filtered_set");
+	TestParse(parsersql_mysql_source_span_legacy, arraysize(parsersql_mysql_source_span_legacy), "mysql_source_span_legacy");
 	TestParse(parsersql_mysql_set_testing, arraysize(parsersql_mysql_set_testing), "mysql_set_testing");
 	TestParse(parsersql_pr5088_mysql_set_syntax, arraysize(parsersql_pr5088_mysql_set_syntax), "pr5088_mysql_set_syntax");
 	TestParse(parsersql_pr5088_mysql_dataset_syntax, arraysize(parsersql_pr5088_mysql_dataset_syntax), "pr5088_mysql_dataset_syntax");

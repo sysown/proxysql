@@ -1,0 +1,10 @@
+{
+  "name": "pg-compat-behaviors-node",
+  "private": true,
+  "version": "1.0.0",
+  "description": "node-postgres (pg) behavior CLI for the pg-compat driver matrix harness.",
+  "main": "behaviors.js",
+  "dependencies": {
+    "pg": "8.13.1"
+  }
+}

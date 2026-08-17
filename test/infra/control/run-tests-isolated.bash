@@ -31,6 +31,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 export WORKSPACE="${REPO_ROOT}"
 
+source "${SCRIPT_DIR}/asan-detection.bash"
+
+TEST_SANITIZER_ENV=(-e WITHASAN=0)
+if proxysql_binary_uses_asan "${WORKSPACE}/src/proxysql"; then
+    export WITHASAN=1
+    export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}"
+    TEST_SANITIZER_ENV=(-e WITHASAN=1 -e ASAN_OPTIONS="${ASAN_OPTIONS}")
+    echo ">>> Detected ASAN-instrumented ProxySQL; enabling ASAN-aware TAP behavior"
+else
+    export WITHASAN=0
+fi
+
 # Default INFRA_ID if not provided
 export INFRA_ID="${INFRA_ID:-dev-$USER}"
 export INFRA="${INFRA:-${INFRA_TYPE}}"
@@ -49,6 +61,19 @@ COVERAGE_REPORT_DIR="${WORKSPACE}/ci_infra_logs/${INFRA_ID}/coverage-report"
 if [ "${COVERAGE_MODE}" = "1" ]; then
     echo ">>> Code coverage enabled - reports will be saved to ${COVERAGE_REPORT_DIR}"
     mkdir -p "${COVERAGE_REPORT_DIR}"
+
+    # Coverage workflows use sparse checkout for source trees, so the tracked
+    # root codecov.yml may not be materialized in the worktree even though it
+    # exists at HEAD. codecov-action is explicitly pointed at this path; restore
+    # just that file from the tested commit without broadening sparse checkout.
+    if [ ! -f "${WORKSPACE}/codecov.yml" ]; then
+        if git -C "${WORKSPACE}" cat-file -e HEAD:codecov.yml 2>/dev/null; then
+            git -C "${WORKSPACE}" show HEAD:codecov.yml > "${WORKSPACE}/codecov.yml"
+            echo ">>> Materialized codecov.yml from HEAD for coverage upload"
+        else
+            echo ">>> WARNING: codecov.yml is not tracked at HEAD"
+        fi
+    fi
 fi
 
 # 1. Determine Required Infras
@@ -267,7 +292,23 @@ mkdir -p "${TESTS_LOGS_PATH_HOST}"
 chmod 777 "${TESTS_LOGS_PATH_HOST}"
 
 # Find binaries
+#
+# ci-builds.yml explicitly deletes test/deps/ from the cached workspace after
+# the TAP binaries are built (see "Delete test/deps" block in ci-builds.yml).
+# The libmariadbclient.a / libmysqlclient.a archives are statically linked
+# into the *-t binaries, but the mysqlbinlog *executable* is invoked at
+# runtime by test_com_binlog_dump_enables_fast_forward-t via system() and
+# therefore is NOT carried in the cache. Fall back to whatever the runner
+# container provides on PATH (test/infra/docker-base/Dockerfile installs
+# mysql-client, which depends on mysql-server-core-8.0 and ships
+# /usr/bin/mysqlbinlog) so the symlink at TEST_DEPS/mysqlbinlog resolves
+# even when nothing in the workspace matches.
+#
+# See GH issue #6092 for the full failure trace.
 MYSQL_BINLOG_BIN=$(find "${WORKSPACE}" -path "${WORKSPACE}/ci_infra_logs" -prune -o -path "${WORKSPACE}/.git" -prune -o -name "mysqlbinlog" -type f -executable -print | head -n 1)
+if [ -z "${MYSQL_BINLOG_BIN}" ]; then
+    MYSQL_BINLOG_BIN="$(command -v mysqlbinlog 2>/dev/null || true)"
+fi
 
 # Execution: run the container
 docker run \
@@ -299,6 +340,7 @@ docker run \
     -e MULTI_GROUP="${MULTI_GROUP:-0}" \
     -e GCOV_PREFIX="/gcov/tap" \
     -e GCOV_PREFIX_STRIP="2" \
+    "${TEST_SANITIZER_ENV[@]}" \
     proxysql-ci-base:latest \
     /bin/bash -c "
         set -e
@@ -321,8 +363,25 @@ docker run \
         # when standalone, it runs here.
         collect_coverage() {
             local exit_code=\$?
+            local coverage_exit=0
+            trap - EXIT
+            set +e
             if [ \"\${COVERAGE_MODE}\" = \"1\" ]; then
+                (
+                set -e
+                coverage_failed=0
                 echo \">>> Collecting code coverage data (exit code was: \${exit_code})...\"
+
+                # ProxySQL is a long-running process, so its in-memory counters
+                # are not guaranteed to reach the GCDA files during container
+                # teardown. GCC 13 also ignores a second __gcov_dump call until
+                # __gcov_reset is called. Do not dump inside the TAP loop; dump
+                # once here after the group and before any GCDA decoding starts.
+                echo \">>> Dumping ProxySQL GCOV counters after the test group...\"
+                if ! \"${SCRIPT_DIR}/dump-proxysql-gcov.bash\"; then
+                    echo \">>> ERROR: Failed to dump ProxySQL GCOV counters\" >&2
+                    coverage_failed=1
+                fi
 
                 if [ -d \"/gcov\" ] && [ \"\$(ls -A /gcov 2>/dev/null)\" ]; then
                     # Match .gcno files to .gcda files by basename and copy
@@ -384,7 +443,11 @@ docker run \
                             cd /gcov
                             fastcov -b -j\$(nproc) -l \
                                 -e /usr deps \
-                                -d . -o \"\${coverage_file}\" >> \"\${coverage_log}\" 2>&1 || echo \">>> WARNING: Coverage generation failed (see \${coverage_log})\"
+                                -d . -o \"\${coverage_file}\" >> \"\${coverage_log}\" 2>&1
+                            if [ ! -s \"\${coverage_file}\" ]; then
+                                echo \">>> ERROR: fastcov produced an empty coverage report (see \${coverage_log})\" >&2
+                                exit 1
+                            fi
 
                             if [ -f \"\${coverage_file}\" ]; then
                                 echo \">>> Coverage report generated: \${coverage_file}\"
@@ -427,8 +490,13 @@ docker run \
                 else
                     echo \">>> WARNING: /gcov directory is empty or missing, skipping coverage\"
                 fi
+                exit \${coverage_failed}
+                )
+                coverage_exit=\$?
             fi
-            exit \${exit_code}
+            source "${SCRIPT_DIR}/coverage-exit-status.bash"
+            coverage_exit_status \"\${exit_code}\" \"\${coverage_exit}\"
+            exit \$?
         }
         trap collect_coverage EXIT
 

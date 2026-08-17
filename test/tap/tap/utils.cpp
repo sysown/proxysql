@@ -1650,6 +1650,13 @@ int extract_sqlite3_host_port(MYSQL* admin, std::pair<std::string, int>& host_po
 		return EXIT_FAILURE;
 	}
 
+	// The SQLite3 server may expose multiple listeners. Existing tests using
+	// this helper connect to the first TCP listener.
+	const std::string::size_type first_iface_end = sqlite3_ifaces.find(";");
+	if (first_iface_end != std::string::npos) {
+		sqlite3_ifaces.erase(first_iface_end);
+	}
+
 	// Extract the correct port to connect to SQLite server
 	std::string::size_type colon_pos = sqlite3_ifaces.find(":");
 	if (colon_pos == std::string::npos) {

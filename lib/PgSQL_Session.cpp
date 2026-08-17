@@ -487,8 +487,9 @@ bool PgSQL_Session::handler_poisoned_simple_query(PtrSize_t* pkt) {
 		auto buff = pgpkt.detach();
 		client_myds->PSarrayOUT->add((void*)buff.first, buff.second);
 		client_myds->DSS = STATE_SLEEP;
-		l_free(pkt->size, pkt->ptr);
+		// CurrentQuery borrows pkt->ptr; finish logging/parser cleanup first.
 		if (mirror == false) RequestEnd(NULL, false);
+		l_free(pkt->size, pkt->ptr);
 		return true;
 	}
 
@@ -614,8 +615,9 @@ bool PgSQL_Session::handler_poisoned_simple_query(PtrSize_t* pkt) {
 	auto buff = pgpkt.detach();
 	client_myds->PSarrayOUT->add((void*)buff.first, buff.second);
 	client_myds->DSS = STATE_SLEEP;
-	l_free(pkt->size, pkt->ptr);
+	// CurrentQuery borrows pkt->ptr; finish logging/parser cleanup first.
 	if (mirror == false) RequestEnd(NULL, false);
+	l_free(pkt->size, pkt->ptr);
 	return true;
 }
 
@@ -682,11 +684,11 @@ bool PgSQL_Session::handler_CommitRollback(PtrSize_t* pkt) {
 
 void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 	char buff[32];
-	sprintf(buff, "%p", this);
+	snprintf(buff, sizeof(buff), "%p", static_cast<void*>(this));
 	j["address"] = buff;
 	j["version"] = PROXYSQL_VERSION;
 	if (thread) {
-		sprintf(buff, "%p", thread);
+		snprintf(buff, sizeof(buff), "%p", static_cast<void*>(thread));
 		j["thread"] = buff;
 	}
 	const uint64_t age_ms = (thread->curtime - start_time) / 1000;
@@ -774,7 +776,7 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 		j["backends"][i]["hostgroup_id"] = _mybe->hostgroup_id;
 		if (_mybe->server_myds) {
 			PgSQL_Data_Stream* _myds = _mybe->server_myds;
-			sprintf(buff, "%p", _myds);
+			snprintf(buff, sizeof(buff), "%p", static_cast<void*>(_myds));
 			j["backends"][i]["stream"]["address"] = buff;
 			j["backends"][i]["stream"]["questions"] = _myds->statuses.questions;
 			j["backends"][i]["stream"]["pgconnpoll_get"] = _myds->statuses.pgconnpoll_get;
@@ -794,7 +796,7 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 				for (std::vector<uint32_t>::const_iterator it_c = _myconn->dynamic_variables_idx.begin(); it_c != _myconn->dynamic_variables_idx.end(); it_c++) {
 					_myconn->variables[*it_c].fill_server_internal_session(j["backends"], i, *it_c);
 				}
-				sprintf(buff, "%p", _myconn);
+				snprintf(buff, sizeof(buff), "%p", static_cast<void*>(_myconn));
 				j["backends"][i]["conn"]["address"] = buff;
 				j["backends"][i]["conn"]["auto_increment_delay_token"] = _myconn->auto_increment_delay_token;
 				j["backends"][i]["conn"]["bytes_recv"] = _myconn->bytes_info.bytes_recv;
@@ -835,7 +837,7 @@ void PgSQL_Session::generate_proxysql_internal_session_json(json& j) {
 
 				j["backends"][i]["conn"]["ps"]["global_stmt_to_backend_ids"] = _myconn->local_stmts->global_stmt_to_backend_ids;
 				if (_myconn->is_connected()) {
-					sprintf(buff, "%p", _myconn->get_pg_connection());
+					snprintf(buff, sizeof(buff), "%p", static_cast<const void*>(_myconn->get_pg_connection()));
 					j["backends"][i]["conn"]["pgsql"]["address"] = buff;
 					j["backends"][i]["conn"]["pgsql"]["host"] = _myconn->get_pg_host();
 					j["backends"][i]["conn"]["pgsql"]["host_addr"] = _myconn->get_pg_hostaddr();
@@ -1416,7 +1418,7 @@ bool PgSQL_Session::handler_again___status_SETTING_INIT_CONNECT(int* _rc) {
 				st = previous_status.top();
 				previous_status.pop();
 				char sqlstate[10];
-				sprintf(sqlstate, "%s", ""/* TODO: fix this mysql_sqlstate(myconn->pgsql)*/);
+				snprintf(sqlstate, sizeof(sqlstate), "%s", ""/* TODO: fix this mysql_sqlstate(myconn->pgsql)*/);
 				client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 9999 /* TODO: fix this mysql_errno(myconn->pgsql)*/, sqlstate, "" /* TODO: fix this mysql_error(myconn->pgsql)*/);
 				myds->destroy_MySQL_Connection_From_Pool(true);
 				myds->fd = 0;
@@ -1749,7 +1751,7 @@ __exit_handler_again___status_CONNECTING_SERVER_with_err:
 						myconn->error_info.code, false, true);
 				} else {
 					char buf[256];
-					sprintf(buf, "Max connect failure while reaching hostgroup %d", current_hostgroup);
+					snprintf(buf, sizeof(buf), "Max connect failure while reaching hostgroup %d", current_hostgroup);
 					client_myds->myprot.generate_error_packet(true, true, buf, PGSQL_ERROR_CODES::ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION,
 						false, true); 
 					if (thread) {
@@ -2060,7 +2062,7 @@ void PgSQL_Session::handler___status_NONE_or_default(PtrSize_t& pkt) {
 		break;
 	}
 	default:
-		sprintf(buf, "localhost");
+		snprintf(buf, sizeof(buf), "localhost");
 		break;
 	}
 
@@ -2104,7 +2106,7 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___default() {
 			break;
 		}
 		default:
-			sprintf(buf, "localhost");
+			snprintf(buf, sizeof(buf), "localhost");
 			break;
 		}
 		// PMC-10001: A unexpected packet has been received from client. This error has two potential causes:
@@ -5398,7 +5400,7 @@ __exit_set_destination_hostgroup:
 		if (current_hostgroup != locked_on_hostgroup) {
 			client_myds->DSS = STATE_QUERY_SENT_NET;
 			char buf[140];
-			sprintf(buf, "ProxySQL Error: connection is locked to hostgroup %d but trying to reach hostgroup %d",
+			snprintf(buf, sizeof(buf), "ProxySQL Error: connection is locked to hostgroup %d but trying to reach hostgroup %d",
 				locked_on_hostgroup, current_hostgroup);
 			client_myds->myprot.generate_error_packet(true, true, buf,
 				PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION, false);
@@ -6288,7 +6290,7 @@ int32_t PgSQL_Session::extract_pid_from_param(const PgSQL_Param_Value& param, ui
 		break;
 	}
 	default:
-		sprintf(buf, "localhost");
+		snprintf(buf, sizeof(buf), "localhost");
 		break;
 	}
 	// Unknown format code
@@ -7974,7 +7976,7 @@ char* PgSQL_Session::get_current_query(int max_length) {
 			memcpy(res, query_ptr, query_len - 3);
 			memcpy(res + (query_len - 3), "...", 3);
 		} else {
-			strncpy(res, query_ptr, query_len);
+			memcpy(res, query_ptr, query_len);
 		}
 		res[query_len] = '\0';
 	}

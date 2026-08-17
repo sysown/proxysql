@@ -264,6 +264,14 @@ int wexecvp(
 	if (opts.waitpid_delay_us != 0) to_opts.waitpid_delay_us = opts.waitpid_delay_us;
 	if (opts.sigkill_to_us != 0) to_opts.sigkill_to_us = opts.sigkill_to_us;
 
+	// Prepare argv before fork(). The child may run in a multi-threaded process
+	// where another thread held an allocator lock at the time of fork.
+	std::vector<const char*> child_argv {};
+	child_argv.reserve(argv.size() + 2);
+	child_argv.push_back(file.c_str());
+	child_argv.insert(child_argv.end(), argv.begin(), argv.end());
+	child_argv.push_back(nullptr);
+
 	// Pipes for parent to write and read
 	int read_p_err = pipe(pipes[PARENT_READ_PIPE]);
 	int write_p_err = pipe(pipes[PARENT_WRITE_PIPE]);
@@ -279,44 +287,22 @@ int wexecvp(
 	}
 
 	if(child_pid == 0) {
-		int child_err = 0;
-		std::vector<const char*> _argv = argv;
-
-		// Append null to end of _argv for extra safety
-		_argv.push_back(nullptr);
-		// Duplicate file argument to avoid manual duplication
-		_argv.insert(_argv.begin(), file.c_str());
-
-		// close all files , with the exception of the pipes
-		close_all_non_term_fd({ CHILD_READ_FD, CHILD_WRITE_FD, CHILD_WRITE_ERR, PARENT_READ_FD, PARENT_READ_ERR, PARENT_WRITE_FD});
-
 		// Copy the pipe descriptors
 		int dup_read_err = dup2(CHILD_READ_FD, STDIN_FILENO);
 		int dup_write_err = dup2(CHILD_WRITE_FD, STDOUT_FILENO);
 		int dup_err_err = dup2(CHILD_WRITE_ERR, STDERR_FILENO);
 
 		if (dup_read_err == -1 || dup_write_err == -1 || dup_err_err == -1) {
-			exit(errno);
+			_exit(errno);
 		}
 
-		// Close no longer needed pipes
-		close(CHILD_READ_FD);
-		close(CHILD_WRITE_FD);
-		close(CHILD_WRITE_ERR);
+		// The pipe endpoints now live on stdin/stdout/stderr. With no exclusions,
+		// descriptor cleanup can use close_range() (or its allocation-free fallback).
+		close_all_non_term_fd({});
 
-		close(PARENT_READ_FD);
-		close(PARENT_READ_ERR);
-		close(PARENT_WRITE_FD);
-
-
-		char** args = const_cast<char**>(_argv.data());
-		child_err = execvp(file.c_str(), args);
-
-		if (child_err) {
-			exit(errno);
-		} else {
-			exit(0);
-		}
+		char** args = const_cast<char**>(child_argv.data());
+		execvp(file.c_str(), args);
+		_exit(errno);
 	} else {
 		std::string stdout_ {};
 		std::string stderr_ {};
@@ -531,7 +517,7 @@ std::string get_checksum_from_hash(uint64_t hash) {
  *    - This method is O(1) and the most efficient
  *    - ONLY used when excludeFDs is empty (otherwise would close excluded fds)
  *
- * 2. **Secondary Method:** Iterate through /proc/self/fd
+ * 2. **Secondary Method (non-empty excludeFDs only):** Iterate through /proc/self/fd
  *    - Uses opendir("/proc/self/fd") to get a directory stream of open file descriptors
  *    - Uses dirfd() to get the directory's own fd and skips closing it (prevents self-referential closure bug)
  *    - Reads each entry and uses atoi() to convert to fd (no heap allocation)
@@ -539,8 +525,9 @@ std::string get_checksum_from_hash(uint64_t hash) {
  *    - This method is O(n) where n is the number of open file descriptors
  *
  * 3. **Fallback Method:** Iterate through rlimit
- *    - If /proc/self/fd is not available (e.g., on non-Linux systems or chroot environments),
- *      falls back to getrlimit(RLIMIT_NOFILE)
+ *    - For an empty excludeFDs list, this is used directly when close_range() is unavailable,
+ *      because opendir() may allocate and is unsafe after a multi-threaded fork
+ *    - For a non-empty list, this is used if /proc/self/fd is unavailable
  *    - Iterates from 3 to rlim_cur-1, attempting to close each descriptor
  *    - Ignores EBADF errors for descriptors that aren't actually open
  *    - This method is O(rlim_cur) which can be much slower if rlim_max is large (e.g., 1048576)
@@ -558,10 +545,10 @@ std::string get_checksum_from_hash(uint64_t hash) {
  *    - This prevents undefined behavior from closing the fd while iterating
  *
  * **Thread Safety Considerations:**
- * - This function IS safe to call in the child process between fork() and execve()
- * - By avoiding heap allocations (using atoi() and simple loops), it prevents deadlocks
- *   on malloc locks that may be held by other threads in the parent at fork time
- * - For optimal safety, call with an empty excludeFDs initializer list: close_all_non_term_fd({})
+ * - With an empty excludeFDs list, this function is safe to call in the child process
+ *   between fork() and execve(): both close_range() and the rlimit fallback avoid allocation
+ * - A non-empty excludeFDs list may use opendir() and should not be used after a
+ *   multi-threaded fork
  *
  * **Parameters:**
  * @param excludeFDs A vector of file descriptor numbers to keep open (in addition to 0, 1, 2)
@@ -603,8 +590,13 @@ void close_all_non_term_fd(const std::vector<int>& excludeFDs) {
 		static int close_range_available = -1;  // -1 = unknown, 0 = not available, 1 = available
 		if (close_range_available == 1) {
 			// close_range is available, use it to close all fds >= 3
-			syscall(__NR_close_range, 3, ~0U, 0);
-			return;
+			long ret = syscall(__NR_close_range, 3, ~0U, 0);
+			if (ret == 0) {
+				return;
+			}
+			if (errno == ENOSYS) {
+				close_range_available = 0;
+			}
 		}
 		if (close_range_available == -1) {
 			// First call: check if close_range is available
@@ -621,6 +613,19 @@ void close_all_non_term_fd(const std::vector<int>& excludeFDs) {
 		}
 	}
 #endif
+
+	// For an empty exclusion list, callers can be in the child of a
+	// multi-threaded fork. Avoid opendir(), which may allocate internally.
+	if (excludeFDs.empty()) {
+		struct rlimit nlimit;
+		int rc = getrlimit(RLIMIT_NOFILE, &nlimit);
+		if (rc == 0) {
+			for (rlim_t fd_rlim = 3; fd_rlim < nlimit.rlim_cur && fd_rlim <= INT_MAX; fd_rlim++) {
+				close(static_cast<int>(fd_rlim));
+			}
+		}
+		return;
+	}
 
 	// Fallback: iterate through /proc/self/fd
 	DIR *d;
@@ -873,7 +878,7 @@ std::string mysql_result_to_string(MYSQL_RES* result) {
 
 	std::vector<size_t> widths(num_fields);
 	for (int i = 0; i < num_fields; i++) {
-		widths[i] = strlen(fields[i].name);
+		widths[i] = fields[i].name_length;
 	}
 	for (const auto& r : rows) {
 		for (int i = 0; i < num_fields; i++) {
@@ -897,8 +902,9 @@ std::string mysql_result_to_string(MYSQL_RES* result) {
 	append_border();
 	s = "|";
 	for (int i = 0; i < num_fields; i++) {
-		size_t len = strlen(fields[i].name);
-		s += " "; s += fields[i].name;
+		const char* safe_name = fields[i].name ? fields[i].name : "";
+		const size_t len = fields[i].name_length;
+		s += " "; s += safe_name;
 		for (size_t j = 0; j < widths[i] - len + 1; j++) s += " ";
 		s += "|";
 	}

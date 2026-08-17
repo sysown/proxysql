@@ -41,6 +41,9 @@ static const char* ACCEPT_CASES[] = {
 	"/*svc=dd*/ SET AUTOCOMMIT=1",
 	"/*service='datadog-agent'*/ SET AUTOCOMMIT=1",                  // exact DD Agent payload
 	"/* a *//* b */ SET AUTOCOMMIT=1",                               // stacked comments
+	"SET @@session.autocommit = OFF",                                // Connector/Python pure-Python post-connect setup
+	"SET @@session.autocommit = ON",                                 // same connector setter, opposite state
+	"/*connector-python*/ SET @@session.autocommit = OFF",           // comment-stripping compatibility path
 	"/*svc=dd*/ SET NAMES utf8",
 	"/*svc=dd*/ SET character_set_results=utf8",
 	"/*svc=dd*/ SET SQL_AUTO_IS_NULL=0",

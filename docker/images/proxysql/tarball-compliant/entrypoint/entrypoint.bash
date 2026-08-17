@@ -29,31 +29,6 @@ EXTRA=""
 [[ "${PROXYSQL40:-}" == "1" ]] && EXTRA="${EXTRA} PROXYSQL40=1"
 [[ "${PROXYSQL31:-}" == "1" ]] && EXTRA="${EXTRA} PROXYSQL31=1"
 
-# The v4.0 chassis tier builds plugins/mysqlx/ which dynamically links the
-# system libprotobuf (3.x). Some v4.0.0 packaging images predate the plugin
-# and do not ship protobuf-devel; install it on demand for RHEL-family.
-# protobuf-devel lives in the CRB repo on AlmaLinux/RHEL 9 (PowerTools on
-# EL8), which is disabled by default, so try enabling those before a plain
-# install.
-if [[ "${PROXYSQL40:-}" == "1" ]] && ! pkg-config --exists protobuf 2>/dev/null; then
-    echo "==> Installing protobuf-devel (required for PROXYSQL40=1 mysqlx plugin build)"
-    if command -v dnf >/dev/null 2>&1; then
-        dnf install -y --enablerepo=crb protobuf-devel \
-            || dnf install -y --enablerepo=powertools protobuf-devel \
-            || dnf install -y protobuf-devel
-    elif command -v yum >/dev/null 2>&1; then
-        yum install -y --enablerepo=powertools protobuf-devel \
-            || yum install -y protobuf-devel
-    else
-        echo "ERROR: cannot install protobuf-devel (neither dnf nor yum present)" >&2
-        exit 1
-    fi
-    if ! pkg-config --exists protobuf 2>/dev/null; then
-        echo "ERROR: protobuf-devel install did not provide a usable protobuf pkg-config" >&2
-        exit 1
-    fi
-fi
-
 deps_target="build_deps_clickhouse"
 build_target="clickhouse"
 
@@ -62,11 +37,44 @@ ${MAKE} ${MAKEOPT} ${EXTRA} ${build_target}
 
 echo "==> Staging Tarball Files"
 mkdir -p "pkgroot/${DIR_NAME}/bin"
+mkdir -p "pkgroot/${DIR_NAME}/lib"
 mkdir -p "pkgroot/${DIR_NAME}/etc/logrotate.d"
 mkdir -p "pkgroot/${DIR_NAME}/share/proxysql/tools"
 mkdir -p "pkgroot/${DIR_NAME}/systemd/system"
 
-cp src/proxysql "pkgroot/${DIR_NAME}/bin/"
+cp src/proxysql "pkgroot/${DIR_NAME}/bin/proxysql.bin"
+cat > "pkgroot/${DIR_NAME}/bin/proxysql" <<'EOF'
+#!/bin/sh
+set -eu
+
+BIN_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export LD_LIBRARY_PATH="${BIN_DIR}/../lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+exec "${BIN_DIR}/proxysql.bin" "$@"
+EOF
+chmod 0755 "pkgroot/${DIR_NAME}/bin/proxysql"
+
+bundle_runtime_library() {
+    local soname="$1"
+    local resolved_path
+    local library_name
+
+    resolved_path=$(ldd src/proxysql | awk -v soname="${soname}" '$1 == soname && $2 == "=>" { print $3; exit }')
+    if [[ -z "${resolved_path}" || ! -f "${resolved_path}" ]]; then
+        echo "ERROR: unable to resolve ${soname} for the tarball" >&2
+        exit 1
+    fi
+
+    resolved_path=$(readlink -f "${resolved_path}")
+    library_name=$(basename "${resolved_path}")
+    cp "${resolved_path}" "pkgroot/${DIR_NAME}/lib/${library_name}"
+    if [[ "${library_name}" != "${soname}" ]]; then
+        ln -s "${library_name}" "pkgroot/${DIR_NAME}/lib/${soname}"
+    fi
+}
+
+bundle_runtime_library libssl.so.3
+bundle_runtime_library libcrypto.so.3
+
 cp etc/proxysql.cnf "pkgroot/${DIR_NAME}/etc/"
 cp etc/logrotate.d/proxysql "pkgroot/${DIR_NAME}/etc/logrotate.d/"
 cp tools/proxysql_galera_checker.sh tools/proxysql_galera_writer.pl "pkgroot/${DIR_NAME}/share/proxysql/tools/"

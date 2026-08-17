@@ -41,26 +41,6 @@ else
 	build_target="$PROXYSQL_BUILD_TYPE"
 fi
 
-# The v4.0 chassis tier (PROXYSQL40=1) builds plugins/mysqlx/ which
-# dynamically links against the system libprotobuf (3.x). Some of the
-# v4.0.0 packaging images were built before plugins/mysqlx existed and
-# do not yet ship protobuf-devel. Install it on demand for RHEL-family
-# images.  PROXYSQL40=1 builds and packages all v4.0 plugins — there
-# is no separate PROXYSQLGENAI flag.
-if [[ "${PROXYSQL40:-}" == "1" ]]; then
-    if ! pkg-config --exists protobuf 2>/dev/null; then
-        echo "==> Installing protobuf-devel (required for PROXYSQL40=1 mysqlx plugin build)"
-        if command -v dnf >/dev/null 2>&1; then
-            dnf install -y protobuf-devel
-        elif command -v yum >/dev/null 2>&1; then
-            yum install -y protobuf-devel
-        else
-            echo "ERROR: cannot install protobuf-devel (neither dnf nor yum present)" >&2
-            exit 1
-        fi
-    fi
-fi
-
 # clean is expensive, do it before, outside of container
 #${MAKE} cleanbuild
 # PROXYSQL40=1 enables the plugin chassis tier; all v4.0 plugins

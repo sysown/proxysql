@@ -9,6 +9,7 @@ using json = nlohmann::json;
 #include <algorithm>
 #include <cerrno>
 #include <cctype>
+#include <cinttypes>
 #include <vector>
 
 #include "proxysql_utils.h"
@@ -29,6 +30,9 @@ using json = nlohmann::json;
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Logger.hpp"
 #include "MySQL_Resolution.h"
+#ifdef PROXYSQL31
+#include "MySQL_Caching_Sha2_RSA.h"
+#endif
 
 #include <fcntl.h>
 #include <zstd.h>
@@ -181,6 +185,11 @@ mythr_st_vars_t MySQL_Thread_status_variables_counter_array[] {
 	{ st_var_client_host_error_killed_connections, p_th_counter::client_host_error_killed_connections, (char *)"client_host_error_killed_connections" },
 	{ st_var_set_wait_timeout_commands,    p_th_counter::mysql_set_wait_timeout_commands,  (char *)"mysql_set_wait_timeout_commands" },
 	{ st_var_timeout_terminated_connections, p_th_counter::mysql_timeout_terminated_connections, (char *)"mysql_timeout_terminated_connections" },
+	{ st_var_user_variable_assignments_tracked, p_th_counter::mysql_user_variable_assignments_tracked, (char *)"User_variable_assignments_tracked" },
+	{ st_var_user_variable_replay_commands, p_th_counter::mysql_user_variable_replay_commands, (char *)"User_variable_replay_commands" },
+	{ st_var_user_variable_replay_failures, p_th_counter::mysql_user_variable_replay_failures, (char *)"User_variable_replay_failures" },
+	{ st_var_user_variable_fallback_unsupported, p_th_counter::mysql_user_variable_fallback_unsupported, (char *)"User_variable_fallback_unsupported" },
+	{ st_var_user_variable_fallback_limits, p_th_counter::mysql_user_variable_fallback_limits, (char *)"User_variable_fallback_limits" },
 };
 
 mythr_g_st_vars_t MySQL_Thread_status_variables_gauge_array[] {
@@ -350,6 +359,8 @@ void MySQL_Listeners_Manager::del(unsigned int idx) {
 	delete ifi;
 }
 
+static char mysql_thread_update_gtid_from_ok_name[] = "update_gtid_from_ok";
+
 static char * mysql_thread_variables_names[]= {
 	(char *)"shun_on_failures",
 	(char *)"shun_recovery_time_sec",
@@ -473,6 +484,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"query_processor_parser", // NOSONAR: matches array pattern
 	(char *)"set_query_lock_on_hostgroup",
 	(char *)"set_parser_algorithm",
+	(char *)"user_variable_tracking",
 	(char *)"reset_connection_algorithm",
 	(char *)"auto_increment_delay_multiplex",
 	(char *)"auto_increment_delay_multiplex_timeout_ms",
@@ -490,6 +502,11 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"select_version_forwarding",
 	(char *)"keep_multiplexing_variables",
 	(char *)"default_authentication_plugin",
+#ifdef PROXYSQL31
+	(char *)"caching_sha2_password_auto_generate_rsa_keys",
+	(char *)"caching_sha2_password_private_key_path",
+	(char *)"caching_sha2_password_public_key_path",
+#endif
 	(char *)"passthrough_auth_enabled",
 	(char *)"passthrough_auth_empty_password",
 	(char *)"passthrough_auth_unknown_users",
@@ -505,6 +522,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"passthrough_auth_failure_map_cap",
 	(char *)"kill_backend_connection_when_disconnect",
 	(char *)"client_session_track_gtid",
+	mysql_thread_update_gtid_from_ok_name,
 	(char *)"sessions_sort",
 #ifdef IDLE_THREADS
 	(char *)"session_idle_show_processlist",
@@ -1013,6 +1031,56 @@ th_metrics_map = std::make_tuple(
 				{ "protocol", "mysql" }
 
 			}
+		),
+		std::make_tuple (
+			p_th_counter::mysql_user_variable_assignments_tracked,
+			"proxysql_mysql_user_variable_assignments_tracked_total",
+			"Number of supported MySQL user-variable assignment targets tracked.",
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
+		),
+		std::make_tuple (
+			p_th_counter::mysql_user_variable_replay_commands,
+			"proxysql_mysql_user_variable_replay_commands_total",
+			"Number of internal MySQL user-variable replay SET batches executed.",
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
+		),
+		std::make_tuple (
+			p_th_counter::mysql_user_variable_replay_failures,
+			"proxysql_mysql_user_variable_replay_failures_total",
+			"Number of failed MySQL user-variable replay SET batches.",
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
+		),
+		std::make_tuple (
+			p_th_counter::mysql_user_variable_fallback_unsupported,
+			"proxysql_mysql_user_variable_fallback_unsupported_total",
+			"Number of MySQL user-variable SET statements falling back because they are unsupported.",
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
+		),
+		std::make_tuple (
+			p_th_counter::mysql_user_variable_fallback_limits,
+			"proxysql_mysql_user_variable_fallback_limits_total",
+			"Number of MySQL user-variable SET statements falling back due to tracking limits.",
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
 		)
 	},
 	th_gauge_vector {
@@ -1268,6 +1336,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 #endif // IDLE_THREADS
 	stacksize=0;
 	shutdown_=0;
+	threads_registered.store(0, std::memory_order_relaxed); // NOSONAR(cpp:S8417): the constructor runs before any worker/idle thread exists; no publication ordering is needed
+	threads_exited_run_loop.store(0, std::memory_order_relaxed); // NOSONAR(cpp:S8417): the constructor runs before any worker/idle thread exists; no publication ordering is needed
 	bootstrapping_listeners = true;
 	pthread_rwlock_init(&rwlock,NULL);
 	pthread_attr_init(&attr);
@@ -1362,6 +1432,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.query_processor_parser=0;
 	variables.set_query_lock_on_hostgroup=1;
 	variables.set_parser_algorithm=2; // before 2.6.0 this was 1
+	variables.user_variable_tracking=0;
 	variables.reset_connection_algorithm=2;
 	variables.auto_increment_delay_multiplex=5;
 	variables.auto_increment_delay_multiplex_timeout_ms=10000;
@@ -1439,6 +1510,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.query_cache_stores_empty_result=true;
 	variables.kill_backend_connection_when_disconnect=true;
 	variables.client_session_track_gtid=true;
+	variables.update_gtid_from_ok=false;
 	variables.sessions_sort=true;
 #ifdef IDLE_THREADS
 	variables.session_idle_ms=1;
@@ -1459,6 +1531,14 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.proxy_protocol_networks = strdup((char *)"");
 	variables.default_authentication_plugin=strdup((char *)"mysql_native_password");
 	variables.default_authentication_plugin_int = 0; // mysql_native_password
+#ifdef PROXYSQL31
+	variables.caching_sha2_password_auto_generate_rsa_keys = true;
+	variables.caching_sha2_password_private_key_path = strdup("proxysql-caching-sha2-private-key.pem");
+	variables.caching_sha2_password_public_key_path = strdup("proxysql-caching-sha2-public-key.pem");
+	caching_sha2_rsa_accepted_private_path_ = variables.caching_sha2_password_private_key_path;
+	caching_sha2_rsa_accepted_public_path_ = variables.caching_sha2_password_public_key_path;
+	caching_sha2_rsa_manager_ = std::make_unique<MySQL_Caching_Sha2_RSA>();
+#endif
 	variables.passthrough_auth_enabled = false;
 	variables.passthrough_auth_empty_password = true;
 	variables.passthrough_auth_unknown_users = false;
@@ -1580,7 +1660,103 @@ void MySQL_Threads_Handler::wrunlock() {
 	pthread_rwlock_unlock(&rwlock);
 }
 
-void MySQL_Threads_Handler::commit() {
+int MySQL_Threads_Handler::set_int_variable_and_commit(
+	const char* name, const char* value
+) {
+	wrlock();
+	struct WriteUnlockGuard {
+		MySQL_Threads_Handler& handler;
+		~WriteUnlockGuard() { handler.wrunlock(); }
+	} unlock_guard { *this };
+
+	const int previous_value = get_variable_int(name);
+	const bool variable_set = set_variable(name, value);
+	assert(variable_set);
+	if (variable_set) {
+		(void)commit();
+	}
+	return previous_value;
+}
+
+MySQLThreadsCommitResult MySQL_Threads_Handler::commit() {
+	MySQLThreadsCommitResult commit_result;
+#ifdef PROXYSQL31
+	const char *private_path = variables.caching_sha2_password_private_key_path != nullptr
+		? variables.caching_sha2_password_private_key_path : "";
+	const char *public_path = variables.caching_sha2_password_public_key_path != nullptr
+		? variables.caching_sha2_password_public_key_path : "";
+	MySQL_Caching_Sha2_RSA_Config rsa_config {
+		variables.caching_sha2_password_auto_generate_rsa_keys,
+		private_path,
+		public_path,
+		GloVars.datadir != nullptr ? GloVars.datadir : ""
+	};
+	MySQL_Caching_Sha2_RSA_Reload_Result rsa_reload = caching_sha2_rsa_manager_->reload(rsa_config);
+	if (rsa_reload.accepted) {
+		caching_sha2_rsa_accepted_auto_generate_ = rsa_config.auto_generate;
+		caching_sha2_rsa_accepted_private_path_ = rsa_config.private_key_path;
+		caching_sha2_rsa_accepted_public_path_ = rsa_config.public_key_path;
+		caching_sha2_rsa_config_initialized_ = true;
+	} else {
+		proxy_error("Rejected caching_sha2_password RSA key configuration: %s\n", rsa_reload.error.c_str());
+		commit_result.rejected_variables = {
+			"caching_sha2_password_auto_generate_rsa_keys",
+			"caching_sha2_password_private_key_path",
+			"caching_sha2_password_public_key_path"
+		};
+
+		if (!caching_sha2_rsa_config_initialized_) {
+			const std::string default_private_path = "proxysql-caching-sha2-private-key.pem";
+			const std::string default_public_path = "proxysql-caching-sha2-public-key.pem";
+			const bool candidate_is_default = rsa_config.auto_generate &&
+				rsa_config.private_key_path == default_private_path &&
+				rsa_config.public_key_path == default_public_path;
+			bool default_accepted = false;
+			std::string default_error = rsa_reload.error;
+			if (!candidate_is_default) {
+				MySQL_Caching_Sha2_RSA_Config fallback_config {
+					true,
+					default_private_path,
+					default_public_path,
+					rsa_config.datadir
+				};
+				const MySQL_Caching_Sha2_RSA_Reload_Result fallback = caching_sha2_rsa_manager_->reload(fallback_config);
+				default_accepted = fallback.accepted;
+				default_error = fallback.error;
+			}
+			if (default_accepted) {
+				caching_sha2_rsa_accepted_auto_generate_ = true;
+				caching_sha2_rsa_accepted_private_path_ = default_private_path;
+				caching_sha2_rsa_accepted_public_path_ = default_public_path;
+			} else {
+				MySQL_Caching_Sha2_RSA_Config disabled_config { false, "", "", rsa_config.datadir };
+				const MySQL_Caching_Sha2_RSA_Reload_Result disabled =
+					caching_sha2_rsa_manager_->reload(disabled_config);
+				if (!disabled.accepted) {
+					proxy_error("Failed to disable unavailable caching_sha2_password RSA configuration: %s\n",
+						disabled.error.c_str());
+				}
+				caching_sha2_rsa_accepted_auto_generate_ = false;
+				caching_sha2_rsa_accepted_private_path_.clear();
+				caching_sha2_rsa_accepted_public_path_.clear();
+				proxy_error(
+					"Default caching_sha2_password RSA key configuration is unavailable: %s. "
+					"RSA public-key authentication is disabled; TLS authentication remains available.\n",
+					default_error.c_str());
+			}
+			caching_sha2_rsa_config_initialized_ = true;
+		}
+
+		variables.caching_sha2_password_auto_generate_rsa_keys =
+			caching_sha2_rsa_accepted_auto_generate_;
+		free(variables.caching_sha2_password_private_key_path);
+		free(variables.caching_sha2_password_public_key_path);
+		variables.caching_sha2_password_private_key_path =
+			strdup(caching_sha2_rsa_accepted_private_path_.c_str());
+		variables.caching_sha2_password_public_key_path =
+			strdup(caching_sha2_rsa_accepted_public_path_.c_str());
+	}
+#endif
 	__sync_add_and_fetch(&__global_MySQL_Thread_Variables_version,1);
 	proxy_debug(PROXY_DEBUG_MYSQL_SERVER, 1, "Increasing version number to %d - all threads will notice this and refresh their variables\n", __global_MySQL_Thread_Variables_version);
 
@@ -1652,6 +1828,7 @@ void MySQL_Threads_Handler::commit() {
 			"doc/internal/passthrough_authentication.md §7.1.\n",
 			variables.passthrough_default_hg);
 	}
+	return commit_result;
 }
 
 
@@ -1757,7 +1934,7 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 			if (mysql_tracked_variables[i].is_global_variable==false)
 				continue;
 			char buf[128];
-			sprintf(buf, "default_%s", mysql_tracked_variables[i].internal_variable_name);
+			snprintf(buf, sizeof(buf), "default_%s", mysql_tracked_variables[i].internal_variable_name);
 			if (!strcmp(name,buf)) {
 				if (variables.default_variables[i]==NULL) {
 					variables.default_variables[i]=strdup(mysql_tracked_variables[i].default_value);
@@ -1780,6 +1957,10 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 	if (!strcmp(name,"resolution_family")) return strdup(variables.resolution_family);
 	if (!strcmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
 	if (!strcmp(name,"default_authentication_plugin")) return strdup(variables.default_authentication_plugin);
+#ifdef PROXYSQL31
+	if (!strcmp(name,"caching_sha2_password_private_key_path")) return strdup(variables.caching_sha2_password_private_key_path);
+	if (!strcmp(name,"caching_sha2_password_public_key_path")) return strdup(variables.caching_sha2_password_public_key_path);
+#endif
 	if (!strcmp(name,"passthrough_default_schema")) return strdup(variables.passthrough_default_schema ? variables.passthrough_default_schema : "");
 	if (!strcmp(name,"passthrough_auth_username_pattern")) return strdup(variables.passthrough_auth_username_pattern ? variables.passthrough_auth_username_pattern : "");
 	if (!strcmp(name,"proxy_protocol_networks")) return strdup(variables.proxy_protocol_networks);
@@ -1835,7 +2016,6 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 		}
 	}
 
-
 //VALGRIND_DISABLE_ERROR_REPORTING;
 	if (!strcmp(name,"stacksize")) return ( stacksize ? stacksize : DEFAULT_STACK_SIZE);
 	// LCOV_EXCL_START
@@ -1856,7 +2036,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
  * @param name The name of the variable to retrieve.
  * @return The value of the variable as a char pointer, or NULL if the variable does not exist.
  */
-char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public function, accessible from admin
+char * MySQL_Threads_Handler::get_variable(const char *name) {	// this is the public function, accessible from admin
 //VALGRIND_DISABLE_ERROR_REPORTING;
 #define INTBUFSIZE	4096
 	char intbuf[INTBUFSIZE];
@@ -1870,7 +2050,7 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		std::unordered_map<std::string, std::tuple<int *, int, int, bool>>::const_iterator it = VariablesPointers_int.find(nameS);
 		if (it != VariablesPointers_int.end()) {
 			int * v = std::get<0>(it->second);
-			sprintf(intbuf,"%d", *v);
+			snprintf(intbuf, sizeof(intbuf), "%d", *v);
 			return strdup(intbuf);
 		}
 	}
@@ -1882,6 +2062,15 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 			return strdup((*v ? "true" : "false"));
 		}
 	}
+
+#ifdef PROXYSQL31
+	if (!strcasecmp(name,"caching_sha2_password_private_key_path")) {
+		return strdup(variables.caching_sha2_password_private_key_path);
+	}
+	if (!strcasecmp(name,"caching_sha2_password_public_key_path")) {
+		return strdup(variables.caching_sha2_password_public_key_path);
+	}
+#endif
 
 
 	if (!strcasecmp(name,"firewall_whitelist_errormsg")) {
@@ -1949,7 +2138,7 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 
 	if (!strcasecmp(name,"server_capabilities")) {
 		// FIXME : make it human readable
-		sprintf(intbuf,"%d",variables.server_capabilities);
+		snprintf(intbuf, sizeof(intbuf), "%" PRIu32, variables.server_capabilities);
 		return strdup(intbuf);
 	}
 	// SSL variables
@@ -2011,11 +2200,11 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		if (!strcasecmp(name,"monitor_replication_lag_use_percona_heartbeat")) return strdup(variables.monitor_replication_lag_use_percona_heartbeat);
 	}
 	if (!strcasecmp(name,"threads")) {
-		sprintf(intbuf,"%d", (num_threads ? num_threads : DEFAULT_NUM_THREADS));
+		snprintf(intbuf, sizeof(intbuf), "%d", (num_threads ? num_threads : DEFAULT_NUM_THREADS));
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"stacksize")) {
-		sprintf(intbuf,"%d", (int)(stacksize ? stacksize : DEFAULT_STACK_SIZE));
+		snprintf(intbuf, sizeof(intbuf), "%d", (int)(stacksize ? stacksize : DEFAULT_STACK_SIZE));
 		return strdup(intbuf);
 	}
 
@@ -2037,7 +2226,7 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
  * @param value The new value for the variable, passed as a const char pointer.
  * @return True if the variable was successfully updated, false otherwise.
  */
-bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// this is the public function, accessible from admin
+bool MySQL_Threads_Handler::set_variable(const char *name, const char *value) {	// this is the public function, accessible from admin
 	if (!value) return false;
 	size_t vallen=strlen(value);
 
@@ -2342,7 +2531,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			if (mysql_tracked_variables[i].is_global_variable==false)
 				continue;
 			char buf[128];
-			sprintf(buf, "default_%s", mysql_tracked_variables[i].internal_variable_name);
+			snprintf(buf, sizeof(buf), "default_%s", mysql_tracked_variables[i].internal_variable_name);
 			if (!strcmp(name,buf)) {
 				if (variables.default_variables[i]) free(variables.default_variables[i]);
 				variables.default_variables[i] = NULL;
@@ -2375,6 +2564,19 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			}
 		}
 	}
+
+#ifdef PROXYSQL31
+	if (!strcasecmp(name,"caching_sha2_password_private_key_path")) {
+		free(variables.caching_sha2_password_private_key_path);
+		variables.caching_sha2_password_private_key_path = strdup(value);
+		return true;
+	}
+	if (!strcasecmp(name,"caching_sha2_password_public_key_path")) {
+		free(variables.caching_sha2_password_public_key_path);
+		variables.caching_sha2_password_public_key_path = strdup(value);
+		return true;
+	}
+#endif
 
 
 	if (!strcasecmp(name,"keep_multiplexing_variables")) {
@@ -2645,6 +2847,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["autocommit_false_not_reusable"]   = make_tuple(&variables.autocommit_false_not_reusable,   false);
 		VariablesPointers_bool["automatic_detect_sqli"]           = make_tuple(&variables.automatic_detect_sqli,           false);
 		VariablesPointers_bool["client_session_track_gtid"]       = make_tuple(&variables.client_session_track_gtid,       false);
+		VariablesPointers_bool["update_gtid_from_ok"]             = make_tuple(&variables.update_gtid_from_ok,             false);
 		VariablesPointers_bool["commands_stats"]                  = make_tuple(&variables.commands_stats,                  false);
 		VariablesPointers_bool["connection_warming"]              = make_tuple(&variables.connection_warming,              false);
 		VariablesPointers_bool["default_reconnect"]               = make_tuple(&variables.default_reconnect,               false);
@@ -2691,6 +2894,10 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["passthrough_auth_empty_password"] = make_tuple(&variables.passthrough_auth_empty_password, false);
 		VariablesPointers_bool["passthrough_auth_unknown_users"]  = make_tuple(&variables.passthrough_auth_unknown_users,  false);
 		VariablesPointers_bool["passthrough_auth_require_tls"]    = make_tuple(&variables.passthrough_auth_require_tls,    false);
+#ifdef PROXYSQL31
+		VariablesPointers_bool["caching_sha2_password_auto_generate_rsa_keys"] =
+			make_tuple(&variables.caching_sha2_password_auto_generate_rsa_keys, false);
+#endif
 		// variables with special variable == true
 		// the input validation for these variables MUST be EXPLICIT
 		VariablesPointers_bool["have_compress"]      = make_tuple(&variables.have_compress,      true);
@@ -2763,6 +2970,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["query_retries_on_failure"]        = make_tuple(&variables.query_retries_on_failure,         0,        1000, false);
 		VariablesPointers_int["set_query_lock_on_hostgroup"]     = make_tuple(&variables.set_query_lock_on_hostgroup,      0,           1, false);
 		VariablesPointers_int["set_parser_algorithm"]            = make_tuple(&variables.set_parser_algorithm,             1,           3, false);
+		VariablesPointers_int["user_variable_tracking"]          = make_tuple(&variables.user_variable_tracking,           0,           1, false);
 
 		// throttle
 		VariablesPointers_int["throttle_connections_per_sec_to_hostgroup"] = make_tuple(&variables.throttle_connections_per_sec_to_hostgroup, 1, 100*1000*1000, false);
@@ -3030,9 +3238,13 @@ void MySQL_Threads_Handler::shutdown_threads() {
 		if (GloVars.global.idle_threads) {
 			for (i=0; i<num_threads; i++) {
 				if (mysql_threads_idles[i].worker) {
-					pthread_mutex_lock(&mysql_threads[i].worker->thread_mutex);
+					// the guard above tests the idle thread, so the lock must be
+					// taken on the idle thread too: mysql_threads[i].worker can
+					// legitimately be NULL here (see signal_all_threads(), which
+					// explicitly tolerates not-yet-ready worker slots).
+					pthread_mutex_lock(&mysql_threads_idles[i].worker->thread_mutex);
 					mysql_threads_idles[i].worker->shutdown=1;
-					pthread_mutex_unlock(&mysql_threads[i].worker->thread_mutex);
+					pthread_mutex_unlock(&mysql_threads_idles[i].worker->thread_mutex);
 				}
 			}
 		}
@@ -3048,6 +3260,33 @@ void MySQL_Threads_Handler::shutdown_threads() {
 			}
 #endif /* IDLE_THREADS */
 		}
+	}
+}
+
+void MySQL_Threads_Handler::register_thread_before_run_loop() {
+	threads_registered.fetch_add(1, std::memory_order_acq_rel); // NOSONAR(cpp:S8417): deliberate acq_rel -- the start-up gate orders every registration before any run(), and the wait side pairs with acquire
+}
+
+void MySQL_Threads_Handler::wait_for_all_threads_to_exit_run_loop() {
+	// Every thread that registers also calls this, and every registration happens
+	// before the caller enters MySQL_Thread::run(), so this count is final by the
+	// time any thread can reach this point.
+	const unsigned int expected = threads_registered.load(std::memory_order_acquire); // NOSONAR(cpp:S8417): deliberate acquire -- pairs with the acq_rel registrations, which all precede the start-up gate
+	threads_exited_run_loop.fetch_add(1, std::memory_order_acq_rel); // NOSONAR(cpp:S8417): deliberate acq_rel -- the release publishes this thread's run-loop exit, the acquire pairs with the exits of peer threads
+	const unsigned long long started = monotonic_time();
+	unsigned long long next_report = started + THREADS_EXIT_REPORT_INTERVAL_US;
+	unsigned int exited = threads_exited_run_loop.load(std::memory_order_acquire); // NOSONAR(cpp:S8417): deliberate acquire -- pairs with the acq_rel exit increments
+	while (exited < expected) {
+		usleep(50);
+		const unsigned long long now = monotonic_time();
+		if (now >= next_report) {
+			// Never abort: a shutdown that is merely slow must not become a crash.
+			// Just make the stall visible, and keep waiting.
+			proxy_error("Still waiting for all MySQL worker/idle threads to leave their run loop: %u of %u exited after %llu seconds. Shutdown is stalled on a thread that has not returned from MySQL_Thread::run()\n",
+				exited, expected, (now - started) / 1000000);
+			next_report = now + THREADS_EXIT_REPORT_INTERVAL_US;
+		}
+		exited = threads_exited_run_loop.load(std::memory_order_acquire); // NOSONAR(cpp:S8417): deliberate acquire -- pairs with the acq_rel exit increments
 	}
 }
 
@@ -3143,9 +3382,9 @@ char** client_host_cache_entry_row(
 	time_t last_updated = __now - curtime/1000000 + entry.updated_at/1000000;
 
 	row[0]=strdup(address.c_str());
-	sprintf(buff, "%u", entry.error_count);
+	snprintf(buff, sizeof(buff), "%u", entry.error_count);
 	row[1]=strdup(buff);
-	sprintf(buff, "%lu", last_updated);
+	snprintf(buff, sizeof(buff), "%lld", static_cast<long long>(last_updated));
 	row[2]=strdup(buff);
 
 	return row;
@@ -3274,6 +3513,10 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.server_version) free(variables.server_version);
 	if (variables.keep_multiplexing_variables) free(variables.keep_multiplexing_variables);
 	if (variables.default_authentication_plugin) free(variables.default_authentication_plugin);
+#ifdef PROXYSQL31
+	if (variables.caching_sha2_password_private_key_path) free(variables.caching_sha2_password_private_key_path);
+	if (variables.caching_sha2_password_public_key_path) free(variables.caching_sha2_password_public_key_path);
+#endif
 	if (variables.passthrough_default_schema) free(variables.passthrough_default_schema);
 	if (variables.passthrough_auth_username_pattern) free(variables.passthrough_auth_username_pattern);
 	if (variables.proxy_protocol_networks) free(variables.proxy_protocol_networks);
@@ -3317,7 +3560,7 @@ MySQL_Thread::~MySQL_Thread() {
 			MySQL_Session *sess=(MySQL_Session *)mysql_sessions->remove_index_fast(0);
 				if (sess->session_type == PROXYSQL_SESSION_ADMIN || sess->session_type == PROXYSQL_SESSION_STATS) {
 					char _buf[1024];
-					sprintf(_buf,"%s:%d:%s()", __FILE__, __LINE__, __func__);
+					snprintf(_buf, sizeof(_buf), "%s:%d:%s()", __FILE__, __LINE__, __func__);
 					if (GloMyLogger) { GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, _buf); }
 				}
 				delete sess;
@@ -4560,7 +4803,7 @@ void MySQL_Thread::ProcessAllSessions_Healthy0(MySQL_Session *sess, unsigned int
 			}
 		}
 	}
-	sprintf(_buf,"%s:%d:%s()", __FILE__, __LINE__, __func__);
+	snprintf(_buf, sizeof(_buf), "%s:%d:%s()", __FILE__, __LINE__, __func__);
 	GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, _buf);
 	unregister_session(n);
 	n--;
@@ -4675,7 +4918,7 @@ void MySQL_Thread::process_all_sessions() {
 						char _buf[1024];
 						if (sess->client_myds && sess->killed)
 							proxy_warning("Closing killed client connection %s:%d\n",sess->client_myds->addr.addr,sess->client_myds->addr.port);
-						sprintf(_buf,"%s:%d:%s()", __FILE__, __LINE__, __func__);
+						snprintf(_buf, sizeof(_buf), "%s:%d:%s()", __FILE__, __LINE__, __func__);
 						GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, _buf);
 						unregister_session(n);
 						n--;
@@ -4689,7 +4932,7 @@ void MySQL_Thread::process_all_sessions() {
 					char _buf[1024];
 					if (sess->client_myds)
 						proxy_warning("Closing killed client connection %s:%d\n",sess->client_myds->addr.addr,sess->client_myds->addr.port);
-					sprintf(_buf,"%s:%d:%s()", __FILE__, __LINE__, __func__);
+					snprintf(_buf, sizeof(_buf), "%s:%d:%s()", __FILE__, __LINE__, __func__);
 					GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, _buf);
 					unregister_session(n);
 					n--;
@@ -4754,6 +4997,7 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(query_processor_parser);
 	REFRESH_VARIABLE_INT(set_query_lock_on_hostgroup);
 	REFRESH_VARIABLE_INT(set_parser_algorithm);
+	REFRESH_VARIABLE_INT(user_variable_tracking);
 	REFRESH_VARIABLE_INT(reset_connection_algorithm);
 	REFRESH_VARIABLE_INT(auto_increment_delay_multiplex);
 	REFRESH_VARIABLE_INT(auto_increment_delay_multiplex_timeout_ms);
@@ -4849,7 +5093,7 @@ void MySQL_Thread::refresh_variables() {
 		}
 		char buf[128];
 		if (mysql_tracked_variables[i].is_global_variable) {
-			sprintf(buf,"default_%s",mysql_tracked_variables[i].internal_variable_name);
+		snprintf(buf, sizeof(buf), "default_%s",mysql_tracked_variables[i].internal_variable_name);
 			mysql_thread___default_variables[i] = GloMTH->get_variable_string(buf);
 		}
 	}
@@ -4930,6 +5174,7 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(hostgroup_manager_verbose);
 	REFRESH_VARIABLE_BOOL(kill_backend_connection_when_disconnect);
 	REFRESH_VARIABLE_BOOL(client_session_track_gtid);
+	REFRESH_VARIABLE_BOOL(update_gtid_from_ok);
 	REFRESH_VARIABLE_BOOL(sessions_sort);
 	REFRESH_VARIABLE_BOOL(servers_stats);
 	REFRESH_VARIABLE_BOOL(default_reconnect);
@@ -5191,7 +5436,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}
 	{	// Active Transactions
 		pta[0]=(char *)"Active_Transactions";
-		sprintf(buf,"%u",get_active_transations());
+		snprintf(buf, sizeof(buf), "%u",get_active_transations());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -5262,26 +5507,26 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 #ifdef IDLE_THREADS
 	{	// Connections non idle
 		pta[0]=(char *)"Client_Connections_non_idle";
-		sprintf(buf,"%u",get_non_idle_client_connections());
+		snprintf(buf, sizeof(buf), "%u",get_non_idle_client_connections());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 #endif // IDLE_THREADS
 	{	// MySQL Backend buffers bytes
 		pta[0]=(char *)"mysql_backend_buffers_bytes";
-		sprintf(buf,"%llu",get_mysql_backend_buffers_bytes());
+		snprintf(buf, sizeof(buf), "%llu",get_mysql_backend_buffers_bytes());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{	// MySQL Frontend buffers bytes
 		pta[0]=(char *)"mysql_frontend_buffers_bytes";
-		sprintf(buf,"%llu",get_mysql_frontend_buffers_bytes());
+		snprintf(buf, sizeof(buf), "%llu",get_mysql_frontend_buffers_bytes());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{	// MySQL Frontend buffers bytes
 		pta[0]=(char *)"mysql_session_internal_bytes";
-		sprintf(buf,"%llu",get_mysql_session_internal_bytes());
+		snprintf(buf, sizeof(buf), "%llu",get_mysql_session_internal_bytes());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -5367,7 +5612,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 						MySQL_Thread_status_variables_counter_array[i].m_idx,
 						MySQL_Thread_status_variables_counter_array[i].conv
 					);
-				sprintf(buf,"%llu", stvar);
+				snprintf(buf, sizeof(buf), "%llu", stvar);
 				pta[1] = buf;
 				result->add_row(pta);
 			}
@@ -5384,7 +5629,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 						MySQL_Thread_status_variables_gauge_array[i].m_idx,
 						MySQL_Thread_status_variables_gauge_array[i].conv
 					);
-				sprintf(buf,"%llu", stvar);
+				snprintf(buf, sizeof(buf), "%llu", stvar);
 				pta[1] = buf;
 				result->add_row(pta);
 			}
@@ -5398,7 +5643,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}
 	{	// Mirror queue length
 		pta[0]=(char *)"Mirror_queue_length";
-		sprintf(buf,"%llu",get_total_mirror_queue());
+		snprintf(buf, sizeof(buf), "%llu",get_total_mirror_queue());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -5410,13 +5655,13 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}
 	{	// Servers_table_version
 		pta[0]=(char *)"Servers_table_version";
-		sprintf(buf,"%u",MyHGM->get_servers_table_version());
+		snprintf(buf, sizeof(buf), "%u",MyHGM->get_servers_table_version());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{	// MySQL Threads workers
 		pta[0]=(char *)"MySQL_Thread_Workers";
-		sprintf(buf,"%d",num_threads);
+		snprintf(buf, sizeof(buf), "%d",num_threads);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -5441,85 +5686,85 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	if (GloMyMon) {
 		{	// MySQL Monitor workers
 			pta[0]=(char *)"MySQL_Monitor_Workers";
-			sprintf(buf,"%d",( variables.monitor_enabled ? GloMyMon->num_threads : 0));
+			snprintf(buf, sizeof(buf), "%d",( variables.monitor_enabled ? GloMyMon->num_threads : 0));
 			pta[1]=buf;
 			result->add_row(pta);
 		}
 		{	// MySQL Monitor workers
 			pta[0]=(char *)"MySQL_Monitor_Workers_Aux";
-			sprintf(buf,"%d",( variables.monitor_enabled ? GloMyMon->aux_threads : 0));
+			snprintf(buf, sizeof(buf), "%d",( variables.monitor_enabled ? GloMyMon->aux_threads : 0));
 			pta[1]=buf;
 			result->add_row(pta);
 		}
 		{	// MySQL Monitor workers
 			pta[0]=(char *)"MySQL_Monitor_Workers_Started";
-			sprintf(buf,"%d",( variables.monitor_enabled ? GloMyMon->started_threads : 0));
+			snprintf(buf, sizeof(buf), "%d",( variables.monitor_enabled ? GloMyMon->started_threads : 0));
 			pta[1]=buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0]=(char *)"MySQL_Monitor_connect_check_OK";
-			sprintf(buf,"%llu", GloMyMon->connect_check_OK);
+			snprintf(buf, sizeof(buf), "%llu", GloMyMon->connect_check_OK);
 			pta[1]=buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0]=(char *)"MySQL_Monitor_connect_check_ERR";
-			sprintf(buf,"%llu", GloMyMon->connect_check_ERR);
+			snprintf(buf, sizeof(buf), "%llu", GloMyMon->connect_check_ERR);
 			pta[1]=buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0]=(char *)"MySQL_Monitor_ping_check_OK";
-			sprintf(buf,"%llu", GloMyMon->ping_check_OK);
+			snprintf(buf, sizeof(buf), "%llu", GloMyMon->ping_check_OK);
 			pta[1]=buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0]=(char *)"MySQL_Monitor_ping_check_ERR";
-			sprintf(buf,"%llu", GloMyMon->ping_check_ERR);
+			snprintf(buf, sizeof(buf), "%llu", GloMyMon->ping_check_ERR);
 			pta[1]=buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0]=(char *)"MySQL_Monitor_read_only_check_OK";
-			sprintf(buf,"%llu", GloMyMon->read_only_check_OK);
+			snprintf(buf, sizeof(buf), "%llu", GloMyMon->read_only_check_OK);
 			pta[1]=buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0]=(char *)"MySQL_Monitor_read_only_check_ERR";
-			sprintf(buf,"%llu", GloMyMon->read_only_check_ERR);
+			snprintf(buf, sizeof(buf), "%llu", GloMyMon->read_only_check_ERR);
 			pta[1]=buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0]=(char *)"MySQL_Monitor_replication_lag_check_OK";
-			sprintf(buf,"%llu", GloMyMon->replication_lag_check_OK);
+			snprintf(buf, sizeof(buf), "%llu", GloMyMon->replication_lag_check_OK);
 			pta[1]=buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0]=(char *)"MySQL_Monitor_replication_lag_check_ERR";
-			sprintf(buf,"%llu", GloMyMon->replication_lag_check_ERR);
+			snprintf(buf, sizeof(buf), "%llu", GloMyMon->replication_lag_check_ERR);
 			pta[1]=buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0] = (char*)"MySQL_Monitor_dns_cache_queried";
-			sprintf(buf, "%llu", GloMyMon->dns_cache_queried.load());
+			snprintf(buf, sizeof(buf), "%llu", GloMyMon->dns_cache_queried.load());
 			pta[1] = buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0] = (char*)"MySQL_Monitor_dns_cache_lookup_success";
-			sprintf(buf, "%llu", GloMyMon->dns_cache_lookup_success.load());
+			snprintf(buf, sizeof(buf), "%llu", GloMyMon->dns_cache_lookup_success.load());
 			pta[1] = buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0] = (char*)"MySQL_Monitor_dns_cache_record_updated";
-			sprintf(buf, "%llu", GloMyMon->dns_cache_record_updated.load());
+			snprintf(buf, sizeof(buf), "%llu", GloMyMon->dns_cache_record_updated.load());
 			pta[1] = buf;
 			result->add_row(pta);
 		}
@@ -5888,9 +6133,9 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist(processlist_config_t ar
 			if (sess->client_myds) {
 				char buf[1024];
 				char **pta=(char **)malloc(sizeof(char *)*colnum);
-				sprintf(buf,"%d", i);
+				snprintf(buf, sizeof(buf), "%u", i);
 				pta[0]=strdup(buf);
-				sprintf(buf,"%u", sess->thread_session_id);
+				snprintf(buf, sizeof(buf), "%u", sess->thread_session_id);
 				pta[1]=strdup(buf);
 				MySQL_Connection_userinfo *ui=sess->client_myds->myconn->userinfo;
 				pta[2]=NULL;
@@ -5911,26 +6156,26 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist(processlist_config_t ar
 						case AF_INET:
 							if (sess->client_myds->addr.addr != NULL) {
 								pta[4] = strdup(sess->client_myds->addr.addr);
-								sprintf(port, "%d", sess->client_myds->addr.port);
+								snprintf(port, sizeof(port), "%d", sess->client_myds->addr.port);
 								pta[5] = strdup(port);
 							} else {
 								struct sockaddr_in *ipv4 = (struct sockaddr_in *)sess->client_myds->client_addr;
 								inet_ntop(sess->client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
 								pta[4] = strdup(buf);
-								sprintf(port, "%d", ntohs(ipv4->sin_port));
+								snprintf(port, sizeof(port), "%d", ntohs(ipv4->sin_port));
 								pta[5] = strdup(port);
 							}
 							break;
 						case AF_INET6:
 							if (sess->client_myds->addr.addr != NULL) {
 								pta[4] = strdup(sess->client_myds->addr.addr);
-								sprintf(port, "%d", sess->client_myds->addr.port);
+								snprintf(port, sizeof(port), "%d", sess->client_myds->addr.port);
 								pta[5] = strdup(port);
 							} else {
 								struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)sess->client_myds->client_addr;
 								inet_ntop(sess->client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
 								pta[4] = strdup(buf);
-								sprintf(port, "%d", ntohs(ipv6->sin6_port));
+								snprintf(port, sizeof(port), "%d", ntohs(ipv6->sin6_port));
 								pta[5] = strdup(port);
 							}
 							break;
@@ -5943,7 +6188,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist(processlist_config_t ar
 					pta[4] = strdup("mirror_internal");
 					pta[5] = NULL;
 				}
-				sprintf(buf,"%d", sess->current_hostgroup);
+				snprintf(buf, sizeof(buf), "%d", sess->current_hostgroup);
 				pta[6]=strdup(buf);
 				if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) {
 					MySQL_Connection *mc=sess->mybe->server_myds->myconn;
@@ -5960,7 +6205,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist(processlist_config_t ar
 								struct sockaddr_in *ipv4 = (struct sockaddr_in *)&addr;
 								inet_ntop(addr.sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
 								pta[7] = strdup(buf);
-								sprintf(port, "%d", ntohs(ipv4->sin_port));
+								snprintf(port, sizeof(port), "%d", ntohs(ipv4->sin_port));
 								pta[8] = strdup(port);
 								break;
 								}
@@ -5968,7 +6213,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist(processlist_config_t ar
 								struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)&addr;
 								inet_ntop(addr.sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
 								pta[7] = strdup(buf);
-								sprintf(port, "%d", ntohs(ipv6->sin6_port));
+								snprintf(port, sizeof(port), "%d", ntohs(ipv6->sin6_port));
 								pta[8] = strdup(port);
 								break;
 								}
@@ -5982,12 +6227,11 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist(processlist_config_t ar
 						pta[8]=NULL;
 					}
 
-					sprintf(buf,"%s", mc->parent->address);
-					pta[9]=strdup(buf);
-					sprintf(buf,"%d", mc->parent->port);
+					pta[9]=strdup(mc->parent->address);
+					snprintf(buf, sizeof(buf), "%d", mc->parent->port);
 					pta[10]=strdup(buf);
 					pta[13] = sess->get_current_query(args.max_query_length);
-					sprintf(buf,"%d", mc->status_flags);
+					snprintf(buf, sizeof(buf), "%d", mc->status_flags);
 					pta[14]=strdup(buf);
 				} else {
 					pta[7]=NULL;
@@ -6063,7 +6307,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist(processlist_config_t ar
 							int idx = sess->changing_variable_idx;
 							if (idx < SQL_NAME_LAST_HIGH_WM) {
 								char buf[128];
-								sprintf(buf, "Setting variable %s", mysql_tracked_variables[idx].set_variable_name);
+								snprintf(buf, sizeof(buf), "Setting variable %s", mysql_tracked_variables[idx].set_variable_name);
 								pta[11]=strdup(buf);
 							} else {
 								pta[11]=strdup("Setting variable");
@@ -6077,7 +6321,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist(processlist_config_t ar
                                                 pta[11]=strdup("None");
                                                 break;
 					default:
-						sprintf(buf,"%d", sess->status);
+						snprintf(buf, sizeof(buf), "%d", sess->status);
 						pta[11]=strdup(buf);
 						break;
 				}
@@ -6089,10 +6333,10 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist(processlist_config_t ar
 					if (last_time>sess->thread->curtime) {
 						last_time=sess->thread->curtime;
 					}
-					sprintf(buf,"%llu", (sess->thread->curtime - last_time)/1000 );
+					snprintf(buf, sizeof(buf), "%llu", (sess->thread->curtime - last_time)/1000 );
 				} else {
 					// for mirror session we only consider the start time
-					sprintf(buf,"%llu", (sess->thread->curtime - sess->start_time)/1000 );
+					snprintf(buf, sizeof(buf), "%llu", (sess->thread->curtime - sess->start_time)/1000 );
 				}
 				pta[12]=strdup(buf);
 

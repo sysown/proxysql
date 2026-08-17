@@ -6,6 +6,7 @@
 #include <memory>
 #include <vector>       // std::vector
 #include <unordered_set>
+#include <cstring>
 
 #include "MySQL_Data_Stream.h"
 
@@ -91,8 +92,11 @@ int ProxySQL_Test___GenerateRandomQueryInDigestTable(int n) {
 	char * schemaname_buf = (char *)malloc(64);
 	//ui.username = username_buf;
 	//ui.schemaname = schemaname_buf;
-	strcpy(username_buf,"user_name_");
-	strcpy(schemaname_buf,"shard_name_");
+	static const char user_name_prefix[] = "user_name_";
+	static const char schema_name_prefix[] = "shard_name_";
+	// sizeof() includes terminating NULs, and these buffers are intentionally larger.
+	memcpy(username_buf, user_name_prefix, sizeof(user_name_prefix));
+	memcpy(schemaname_buf, schema_name_prefix, sizeof(schema_name_prefix));
 	bool orig_norm = mysql_thread___query_digests_normalize_digest_text;
 	for (int i=0; i<n; i++) {
 		if (i%10 == 0) {
@@ -101,7 +105,7 @@ int ProxySQL_Test___GenerateRandomQueryInDigestTable(int n) {
 			mysql_thread___query_digests_normalize_digest_text = orig_norm;
 		}
 		for (int j=0; j<10; j++) {
-			sprintf(qp.digest_text,"SELECT ? FROM table%d a JOIN table%d b WHERE a.id > ? AND a.c IN (?,?,?) ORDER BY k,l DESC LIMIT ?",i, j);
+			snprintf(qp.digest_text, 1024, "SELECT ? FROM table%d a JOIN table%d b WHERE a.id > ? AND a.c IN (?,?,?) ORDER BY k,l DESC LIMIT ?", i, j);
 			int digest_text_length = strlen(qp.digest_text);
 			qp.digest=SpookyHash::Hash64(qp.digest_text, digest_text_length, 0);
 			for (int k=0; k<10; k++) {

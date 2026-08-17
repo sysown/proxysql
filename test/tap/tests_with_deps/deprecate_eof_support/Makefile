@@ -105,6 +105,9 @@ fwd_eof_ok_query: fwd_eof_query.cpp
 deprecate_eof_cache-t: deprecate_eof_cache-t.cpp
 	$(CXX) $< -I$(TEST_MARIADB_IDIR) $(IDIRS) -L$(TEST_MARIADB_LDIR) $(LDIRS) $(PROXYSQL_LDIR)/proxysql_utils.cpp -lmariadbclient $(COMMONARGS) -o $@
 
+eof_cache_conversion_workload-t: eof_cache_conversion_workload-t.cpp
+	$(CXX) $< -I$(TEST_MARIADB_IDIR) $(IDIRS) -L$(TEST_MARIADB_LDIR) $(LDIRS) $(COMMONARGS) -lmariadbclient -o $@
+
 eof_cache_mixed_flags-t: eof_cache_mixed_flags-t.cpp
 	$(CXX) $< -I$(TEST_MARIADB_IDIR) $(IDIRS) -L$(TEST_MARIADB_LDIR) $(LDIRS) -lmariadbclient $(COMMONARGS) -o $@
 
