@@ -54,6 +54,9 @@ struct PipePair {
 		if (fds[0] >= 0) close(fds[0]);
 		if (fds[1] >= 0) close(fds[1]);
 	}
+	PipePair(const PipePair&) = delete;
+	PipePair& operator=(const PipePair&) = delete;
+
 	unsigned int wake_count() {
 		const int flags = fcntl(fds[0], F_GETFL, 0);
 		fcntl(fds[0], F_SETFL, flags | O_NONBLOCK);
@@ -112,30 +115,30 @@ void test_fifo_drain() {
 }
 
 void test_bounded_overflow_cleanses() {
-	cleanse_calls.store(0, std::memory_order_relaxed);
+	cleanse_calls.store(0);
 	PipePair pipe_pair;
 	AwsIamWorkerInbox inbox(pipe_pair.fds[1], 2);
 	inbox.post(completion(1, true));
 	inbox.post(completion(2, true));
 	inbox.post(completion(3, true));
-	ok(cleanse_calls.load(std::memory_order_relaxed) == 1,
+	ok(cleanse_calls.load() == 1,
 		"a completion rejected by the queue bound is cleansed immediately");
 	auto values = inbox.drain();
 	ok(values.size() == 2 && values[0].opaque_id == 1 && values[1].opaque_id == 2,
 		"bounded overflow does not displace accepted FIFO completions");
 	values.clear();
-	ok(cleanse_calls.load(std::memory_order_relaxed) == 3,
+	ok(cleanse_calls.load() == 3,
 		"drained completion tokens remain independently owned and are cleansed on release");
 }
 
 void test_close_and_late_post() {
-	cleanse_calls.store(0, std::memory_order_relaxed);
+	cleanse_calls.store(0);
 	PipePair pipe_pair;
 	AwsIamWorkerInbox inbox(pipe_pair.fds[1], 2);
 	inbox.close();
 	inbox.close();
 	inbox.post(completion(9, true));
-	ok(cleanse_calls.load(std::memory_order_relaxed) == 1 && inbox.drain().empty(),
+	ok(cleanse_calls.load() == 1 && inbox.drain().empty(),
 		"close is idempotent and a late post is cleansed instead of retained");
 	ok(pipe_pair.wake_count() == 0,
 		"a post after close never writes to the worker pipe");
@@ -149,12 +152,12 @@ void test_expired_weak_producers() {
 	std::vector<std::thread> producers;
 	for (unsigned int i = 0; i < 16; ++i) {
 		producers.emplace_back([weak, &release, i] {
-			while (!release.load(std::memory_order_acquire)) std::this_thread::yield();
+			while (!release.load()) std::this_thread::yield();
 			if (auto live = weak.lock()) live->post(completion(i + 1));
 		});
 	}
 	inbox.reset();
-	release.store(true, std::memory_order_release);
+	release.store(true);
 	for (auto& producer : producers) producer.join();
 	ok(weak.expired(),
 		"inbox destruction is safe while producer threads hold only expired weak pointers");
