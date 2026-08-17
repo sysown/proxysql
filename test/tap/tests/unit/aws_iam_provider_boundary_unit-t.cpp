@@ -71,26 +71,28 @@ public:
 
 void destroy_source(AwsIamTokenSource *source) {
 	delete source;
-	source_destroyed.store(true, std::memory_order_release);
+	source_destroyed.store(true);
 }
 
 void destroy_replacement(AwsIamTokenSource *source) {
 	delete source;
-	replacement_destroyed.store(true, std::memory_order_release);
+	replacement_destroyed.store(true);
 }
 
 void destroy_source_and_attempt_replacement(AwsIamTokenSource *source) {
 	delete source;
 	void *module_handle = dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
-	auto *replacement = new FakeSource();
-	replacement_install_attempted.store(true, std::memory_order_release);
+	auto replacement = std::make_unique<FakeSource>();
+	replacement_install_attempted.store(true);
 	const bool installed = module_handle != nullptr &&
 		install_global_aws_iam_token_source(
-			replacement, destroy_replacement, module_handle);
-	replacement_install_succeeded.store(installed, std::memory_order_release);
+			replacement.get(), destroy_replacement, module_handle);
+	replacement_install_succeeded.store(installed);
 	if (!installed) {
-		delete replacement;
+		replacement.reset();
 		if (module_handle != nullptr) dlclose(module_handle);
+	} else {
+		replacement.release();
 	}
 }
 
@@ -131,7 +133,7 @@ int main() {
 			sink->value.result.token.size()) == kToken,
 		"a provider token moves through the public completion sink");
 	sink->value.result.token.clear();
-	ok(cleanse_calls.load(std::memory_order_relaxed) == 1,
+	ok(cleanse_calls.load() == 1,
 		"the moved token is cleansed by the public secure-string contract");
 
 	auto uninstall = std::async(std::launch::async, [source] {
@@ -145,10 +147,10 @@ int main() {
 	ok(!acquire_global_aws_iam_token_source(),
 		"uninstall rejects new leases before draining the retained source");
 	ok(uninstall.wait_for(20ms) == std::future_status::timeout &&
-		!source_destroyed.load(std::memory_order_acquire),
+		!source_destroyed.load(),
 		"uninstall waits for the outstanding source lease before destruction");
 	lease = AwsIamTokenSourceLease {};
-	ok(uninstall.get() && source_destroyed.load(std::memory_order_acquire),
+	ok(uninstall.get() && source_destroyed.load(),
 		"uninstall destroys the source only after its final lease drains");
 
 	std::unique_ptr<AwsIamTokenSource> unavailable =
@@ -166,19 +168,21 @@ int main() {
 		all_stats_zero(unavailable->snapshot()),
 		"shutdown removes the fallback source and leaves all twelve stats zero");
 
-	replacement_install_attempted.store(false, std::memory_order_release);
-	replacement_install_succeeded.store(false, std::memory_order_release);
-	replacement_destroyed.store(false, std::memory_order_release);
+	replacement_install_attempted.store(false);
+	replacement_install_succeeded.store(false);
+	replacement_destroyed.store(false);
 	void *retiring_handle = dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
-	auto *retiring_source = new FakeSource();
+	auto retiring_source = std::make_unique<FakeSource>();
+	auto *retiring_source_ptr = retiring_source.get();
 	if (retiring_handle == nullptr || !install_global_aws_iam_token_source(
-		retiring_source, destroy_source_and_attempt_replacement, retiring_handle)) {
+		retiring_source_ptr, destroy_source_and_attempt_replacement, retiring_handle)) {
 		BAIL_OUT("failed to install overlapping-retirement source");
 	}
+	retiring_source.release();
 	AwsIamTokenSourceLease retirement_lease =
 		acquire_global_aws_iam_token_source();
-	auto overlapping_uninstall = std::async(std::launch::async, [retiring_source] {
-		return uninstall_global_aws_iam_token_source(retiring_source);
+	auto overlapping_uninstall = std::async(std::launch::async, [retiring_source_ptr] {
+		return uninstall_global_aws_iam_token_source(retiring_source_ptr);
 	});
 	auto overlapping_shutdown = std::async(std::launch::async, [] {
 		shutdown_global_aws_iam_token_source();
@@ -194,15 +198,15 @@ int main() {
 	retirement_lease = AwsIamTokenSourceLease {};
 	overlapping_uninstall.get();
 	overlapping_shutdown.get();
-	ok(replacement_install_attempted.load(std::memory_order_acquire) &&
-		!replacement_install_succeeded.load(std::memory_order_acquire) &&
-		!replacement_destroyed.load(std::memory_order_acquire),
+	ok(replacement_install_attempted.load() &&
+		!replacement_install_succeeded.load() &&
+		!replacement_destroyed.load(),
 		"replacement publication is rejected until overlapping retirement finishes");
 
 	// Clean up the replacement that an unfixed registry may have accepted before
 	// checking that publication reopens after both retirement callers return.
 	shutdown_global_aws_iam_token_source();
-	replacement_destroyed.store(false, std::memory_order_release);
+	replacement_destroyed.store(false);
 	void *survivor_handle = dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
 	auto survivor = std::make_unique<FakeSource>();
 	FakeSource *survivor_observer = survivor.get();
@@ -218,7 +222,7 @@ int main() {
 		"replacement publication reopens after every retirement caller finishes");
 	AwsIamTokenSourceLease survivor_lease = acquire_global_aws_iam_token_source();
 	ok(survivor_lease && survivor_lease.get() == survivor_observer &&
-		!replacement_destroyed.load(std::memory_order_acquire),
+		!replacement_destroyed.load(),
 		"the post-retirement replacement remains published and alive");
 	survivor_lease = AwsIamTokenSourceLease {};
 	shutdown_global_aws_iam_token_source();
