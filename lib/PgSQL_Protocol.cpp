@@ -410,10 +410,8 @@ bool PgSQL_Protocol::generate_pkt_initial_handshake(bool send, void** _ptr, unsi
 	case AUTHENTICATION_METHOD::MD5_PASSWORD:
 		memset((*myds)->tmp_login_salt, 0, sizeof((*myds)->tmp_login_salt));
 		if (RAND_bytes((*myds)->tmp_login_salt, sizeof((*myds)->tmp_login_salt)) != 1) {
-			// Fallback method: using a basic pseudo-random generator
-			for (size_t i = 0; i < sizeof((*myds)->tmp_login_salt); i++) {
-				(*myds)->tmp_login_salt[i] = rand_fast() % 256;
-			}
+			proxy_error("RAND_bytes() failed generating PostgreSQL login salt\n");
+			return false;
 		}
 		pgpkt.write_generic(type, "ib", PG_PKT_AUTH_MD5, (*myds)->tmp_login_salt, sizeof((*myds)->tmp_login_salt));
 		break;
@@ -1416,8 +1414,8 @@ void PgSQL_Protocol::welcome_client() {
 	uint32_t backend_pid = (*myds)->sess->thread_session_id;
 	uint32_t cancel_key = -1;
 	if (RAND_bytes((unsigned char*)&cancel_key, sizeof(cancel_key)) != 1) {
-		// Fallback: use internal non-cryptographic PRNG.
-		cancel_key = (uint32_t)rand_fast();
+		proxy_error("RAND_bytes() failed generating PostgreSQL cancel key\n");
+		return false;
 	}
 	(*myds)->sess->cancel_secret_key = cancel_key;
 

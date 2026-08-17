@@ -136,7 +136,9 @@ void MySQL_Authentication::remove_inactives(enum cred_username_type usertype) {
 	while (i < cg.cred_array->len) {
 		account_details_t *ado=(account_details_t *)cg.cred_array->index(i);
 		if (ado->active_==false) {
-			del(ado->username,usertype,false);
+			if (del(ado->username,usertype,false)==false) {
+				++i;
+			}
 			continue;
 		}
 		++i;

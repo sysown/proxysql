@@ -1883,7 +1883,20 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess, uint32_t whg
 	unsigned int cluster_id = atoi(clu_id_s.c_str());
 	cluster_id--;
 
-	if (fastrand() % 20000 == 0) {
+	auto random_u30 = []() -> unsigned long long {
+		return (static_cast<unsigned long long>(fastrand()) << 15) | static_cast<unsigned long long>(fastrand());
+	};
+	constexpr unsigned long long failover_range = 1ull << 30;
+	constexpr unsigned long long failover_acceptance = failover_range - (failover_range % 20000);
+	auto random_u30_in_20000 = [&]() -> unsigned int {
+		unsigned long long draw;
+		do {
+			draw = random_u30();
+		} while (draw >= failover_acceptance);
+		return static_cast<unsigned int>(draw % 20000);
+	};
+
+	if (random_u30_in_20000() == 0) {
 		// simulate a failover
 		cur_aurora_writer[cluster_id] = fastrand() % num_aurora_servers[cluster_id];
 		proxy_info("Simulating a failover for AWS Aurora cluster %d , HGs (%d:%d)\n", cluster_id, 1270 + cluster_id*2+1 , 1270 + cluster_id*2+2);
