@@ -1,365 +1,140 @@
 /**
  * @file test_aurora_bgd_concurrent_isolation-t.cpp
- * @brief Isolation across three concurrent Aurora BGD workers.
- *
- * Steps:
- *
- * 1. Configure three deployments with independent workers and route hostgroups.
- * 2. Enter POST_PROCESSING on all workers and verify each owns its target pin.
- * 3. Deactivate one worker without changing the other two.
- * 4. Complete and remove different workers without leaking lifecycle effects.
+ * @brief Independent Aurora BGD state for three writer hostgroups.
  */
 
-#include <cstdint>
 #include <cstdlib>
-#include <string>
-#include <unistd.h>
 
-#include "aurora_bgd_tap.h"
-#include "command_line.h"
-#include "utils.h"
+#include "aurora_bgd_scenario_tap.h"
 
-using namespace std;
+using namespace aurora_bgd_scenario;
 
-const uint32_t kWaitSeconds = 5;
-
-struct TestState {
-	Aurora_BGD_Test_Deployment deployment_a { aurora_bgd_deployment_a() };
-	int writer_hostgroup_a { 1640 };
-	int reader_hostgroup_a { 1641 };
-	int green_writer_hostgroup_a { 1642 };
-	int green_reader_hostgroup_a { 1643 };
-	int route_hostgroup_a { 1644 };
-	int post_completion_route_hostgroup_a { 1645 };
-	Aurora_BGD_Test_Deployment deployment_b { aurora_bgd_deployment_b_writer_only() };
-	int writer_hostgroup_b { 1650 };
-	int reader_hostgroup_b { 1651 };
-	int route_hostgroup_b { 1654 };
-	Aurora_BGD_Test_Deployment deployment_c { aurora_bgd_deployment_c_writer_only() };
-	int writer_hostgroup_c { 1660 };
-	int reader_hostgroup_c { 1661 };
-	int route_hostgroup_c { 1664 };
+struct Worker {
+	Aurora_BGD_Test_Deployment deployment;
+	int writer_hostgroup;
+	int reader_hostgroup;
+	int green_writer_hostgroup;
+	int green_reader_hostgroup;
+	int route_hostgroup;
 };
 
-int setup(CommandLine& cl, MYSQL*& admin, BGD_Simulator& sim) {
-	if (cl.getEnv()) {
-		diag("Error: failed to load TAP environment");
-		return EXIT_FAILURE;
-	}
-	admin = init_mysql_conn(cl.admin_host, cl.admin_port, cl.admin_username, cl.admin_password);
-	if (admin == nullptr) {
-		diag("Error: failed to connect to ProxySQL Admin");
-		return EXIT_FAILURE;
-	}
-	char username[] = "aurora1";
-	char password[] = "pass1"; // NOSONAR: fixed simulator fixture credential.
-	if (sim.connect(cl.host, 3306, username, password) != EXIT_SUCCESS
-		|| aurora_bgd_admin_cleanup(admin) != EXIT_SUCCESS
-		|| sim.cleanup() != EXIT_SUCCESS) {
-		diag("Error: failed to initialize the shared AWS simulator");
-		return EXIT_FAILURE;
-	}
-	return aurora_bgd_execute_all(admin, {
-		"DELETE FROM mysql_users WHERE username='testuser'",
-		"INSERT INTO mysql_users(username,password,active,default_hostgroup,transaction_persistent) "
-			"VALUES ('testuser','testuser',1,0,1)",
-		"LOAD MYSQL USERS TO RUNTIME",
-	});
+struct TestState {
+	Worker first { aurora_bgd_deployment_a(), 2250, 2251, 2252, 2253, 2254 };
+	Worker second { aurora_bgd_deployment_b_writer_only(), 2260, 2261, 2262, 2263, 2264 };
+	Worker third { aurora_bgd_deployment_c_writer_only(), 2270, 2271, 2272, 2273, 2274 };
+};
+
+int configure_available(Context& context, Worker& worker, bool use_ssl) {
+	return publish_available(context, worker.deployment) == EXIT_SUCCESS
+		&& configure(
+			context, worker.deployment, worker.writer_hostgroup,
+			worker.reader_hostgroup, worker.green_writer_hostgroup,
+			worker.green_reader_hostgroup, false, 300, false, use_ssl) == EXIT_SUCCESS
+		&& add_route(
+			context.admin, worker.route_hostgroup,
+			worker.deployment.production.members.front().endpoint.hostname) == EXIT_SUCCESS
+		? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
-int cleanup(MYSQL* admin, BGD_Simulator& sim) {
-	int admin_rc = aurora_bgd_admin_cleanup(admin);
-	int user_rc = aurora_bgd_execute_all(admin, {
-		"DELETE FROM mysql_users WHERE username='testuser'",
-		"LOAD MYSQL USERS TO RUNTIME",
-	});
-	int simulator_rc = sim.cleanup();
-	mysql_close(admin);
-	return admin_rc == EXIT_SUCCESS && user_rc == EXIT_SUCCESS
-		&& simulator_rc == EXIT_SUCCESS ? EXIT_SUCCESS : EXIT_FAILURE;
-}
-
-int publish_status(
-	BGD_Simulator& sim, Aurora_BGD_Test_Deployment& deployment, const string& status
+bool worker_matches(
+	Context& context, Worker& worker, const string& status, bool demoted
 ) {
-	return sim.topology_update(
-		aurora_bgd_topology_backends(deployment),
-		aurora_bgd_topology(deployment, status));
-}
-
-int set_default_hostgroup(MYSQL* admin, int hostgroup) {
-	return aurora_bgd_execute_all(admin, {
-		"UPDATE mysql_users SET default_hostgroup=" + to_string(hostgroup) +
-			" WHERE username='testuser'",
-		"LOAD MYSQL USERS TO RUNTIME",
-	});
-}
-
-int add_writer_route(
-	MYSQL* admin, Aurora_BGD_Test_Deployment& deployment, int hostgroup
-) {
-	return aurora_bgd_execute_all(admin, {
-		"INSERT INTO mysql_servers(hostgroup_id,hostname,port,status,use_ssl,comment) VALUES (" +
-			to_string(hostgroup) + "," +
-			aurora_bgd_sql_quote(deployment.production.members.front().endpoint.hostname) +
-			",3306,'ONLINE',1,'Aurora BGD concurrent route')",
-		"LOAD MYSQL SERVERS TO RUNTIME",
-	});
-}
-
-bool route_to_backend(
-	CommandLine& cl, BGD_Simulator& sim, const Endpoint& expected
-) {
-	auto [sequence_rc, sequence] = sim.replica_probe_log_last_sequence();
-	if (sequence_rc != EXIT_SUCCESS) {
-		return false;
-	}
-	MYSQL* client = init_mysql_conn(cl.host, cl.port, cl.username, cl.password);
-	if (client == nullptr) {
-		return false;
-	}
-	auto [query_rc, rows] = mysql_query_ext_rows(client, kAuroraBGDRouteProbeQuery);
-	(void)rows;
-	mysql_close(client);
-	return query_rc == EXIT_SUCCESS
-		&& aurora_bgd_routing_probe_reached(sim, sequence, expected);
-}
-
-bool route_writer(
-	CommandLine& cl, MYSQL* admin, BGD_Simulator& sim,
-	Aurora_BGD_Test_Deployment& deployment, int route_hg, bool target
-) {
-	if (set_default_hostgroup(admin, route_hg) != EXIT_SUCCESS) {
-		return false;
-	}
-	const Endpoint expected = target
-		? deployment.target.members.front().endpoint.backend()
-		: deployment.production.members.front().endpoint.backend();
-	return route_to_backend(cl, sim, expected);
-}
-
-bool wait_for_writer_route(
-	CommandLine& cl, MYSQL* admin, BGD_Simulator& sim,
-	Aurora_BGD_Test_Deployment& deployment, int route_hg, bool target
-) {
-	if (set_default_hostgroup(admin, route_hg) != EXIT_SUCCESS) {
-		return false;
-	}
-	const Endpoint expected = target
-		? deployment.target.members.front().endpoint.backend()
-		: deployment.production.members.front().endpoint.backend();
-	for (uint32_t elapsed_ms = 0; elapsed_ms < kWaitSeconds * 1000; elapsed_ms += 100) {
-		if (route_to_backend(cl, sim, expected)) {
-			return true;
-		}
-		usleep(100000);
-	}
-	return false;
-}
-
-bool writer_placement(
-	MYSQL* admin, int writer_hg, int reader_hg, const string& hostname, bool demoted
-) {
-	string query =
-		"SELECT ((SELECT COUNT(*) FROM runtime_mysql_servers WHERE hostgroup_id=" +
-		to_string(writer_hg) + " AND hostname=" + aurora_bgd_sql_quote(hostname) +
-		")=" + (demoted ? "0" : "1") + ") AND "
-		"((SELECT COUNT(*) FROM runtime_mysql_servers WHERE hostgroup_id=" +
-		to_string(reader_hg) + " AND hostname=" + aurora_bgd_sql_quote(hostname) +
-		")=" + (demoted ? "1" : "0") + ")";
-	return wait_for_cond(admin, query, kWaitSeconds) == EXIT_SUCCESS;
-}
-
-bool wait_for_inactive_none(MYSQL* admin, int writer_hg) {
-	return wait_for_cond(
-		admin,
-		"SELECT COUNT(*)=1 FROM runtime_mysql_aws_aurora_hostgroups WHERE writer_hostgroup=" +
-			to_string(writer_hg) + " AND active=0 AND bgd_status='NONE'",
-		kWaitSeconds) == EXIT_SUCCESS;
-}
-
-bool wait_for_runtime_row_absent(MYSQL* admin, int writer_hg) {
-	return wait_for_cond(
-		admin,
-		"SELECT COUNT(*)=0 FROM runtime_mysql_aws_aurora_hostgroups WHERE writer_hostgroup=" +
-			to_string(writer_hg),
-		kWaitSeconds) == EXIT_SUCCESS;
-}
-
-/** Configure three workers and move each independently to POST_PROCESSING. */
-int test_three_workers_post_processing(
-	CommandLine& cl, MYSQL* admin, BGD_Simulator& sim, TestState& state)
-{
-	if (aurora_bgd_publish(sim, state.deployment_a) != EXIT_SUCCESS
-		|| aurora_bgd_publish(sim, state.deployment_b) != EXIT_SUCCESS
-		|| aurora_bgd_publish(sim, state.deployment_c) != EXIT_SUCCESS
-		|| aurora_bgd_admin_setup(
-			admin, state.deployment_a, state.writer_hostgroup_a,
-			state.reader_hostgroup_a, state.green_writer_hostgroup_a,
-			state.green_reader_hostgroup_a, false, 300) != EXIT_SUCCESS
-		|| aurora_bgd_admin_setup(
-			admin, state.deployment_b, state.writer_hostgroup_b,
-			state.reader_hostgroup_b, -1, -1, true, 300) != EXIT_SUCCESS
-		|| aurora_bgd_admin_setup(
-			admin, state.deployment_c, state.writer_hostgroup_c,
-			state.reader_hostgroup_c, -1, -1, true, 300) != EXIT_SUCCESS
-		|| add_writer_route(
-			admin, state.deployment_a, state.route_hostgroup_a) != EXIT_SUCCESS
-		|| add_writer_route(
-			admin, state.deployment_b, state.route_hostgroup_b) != EXIT_SUCCESS
-		|| add_writer_route(
-			admin, state.deployment_c, state.route_hostgroup_c) != EXIT_SUCCESS) {
-		diag("Error: failed to configure three concurrent deployments");
-		return EXIT_FAILURE;
-	}
-
-	ok(aurora_bgd_wait_for_status(
-		admin, state.writer_hostgroup_a, "AVAILABLE", kWaitSeconds) == EXIT_SUCCESS
-		&& aurora_bgd_wait_for_status(
-			admin, state.writer_hostgroup_b, "AVAILABLE", kWaitSeconds) == EXIT_SUCCESS
-		&& aurora_bgd_wait_for_status(
-			admin, state.writer_hostgroup_c, "AVAILABLE", kWaitSeconds) == EXIT_SUCCESS,
-		"three writer hostgroups discover deployments independently");
-	ok(publish_status(
-		sim, state.deployment_a, "SWITCHOVER_IN_POST_PROCESSING") == EXIT_SUCCESS
-		&& publish_status(
-			sim, state.deployment_b, "SWITCHOVER_IN_POST_PROCESSING") == EXIT_SUCCESS
-		&& publish_status(
-			sim, state.deployment_c, "SWITCHOVER_IN_POST_PROCESSING") == EXIT_SUCCESS
-		&& aurora_bgd_wait_for_status(
-			admin, state.writer_hostgroup_a,
-			"SWITCHOVER_IN_POST_PROCESSING", kWaitSeconds) == EXIT_SUCCESS
-		&& aurora_bgd_wait_for_status(
-			admin, state.writer_hostgroup_b,
-			"SWITCHOVER_IN_POST_PROCESSING", kWaitSeconds) == EXIT_SUCCESS
-		&& aurora_bgd_wait_for_status(
-			admin, state.writer_hostgroup_c,
-			"SWITCHOVER_IN_POST_PROCESSING", kWaitSeconds) == EXIT_SUCCESS,
-		"three workers enter POST_PROCESSING without sharing FSM state");
-	ok(route_writer(
-		cl, admin, sim, state.deployment_a, state.route_hostgroup_a, true),
-		"deployment A owns its target pin");
-	ok(route_writer(
-		cl, admin, sim, state.deployment_b, state.route_hostgroup_b, true),
-		"deployment B owns its target pin");
-	ok(route_writer(
-		cl, admin, sim, state.deployment_c, state.route_hostgroup_c, true),
-		"deployment C owns its target pin");
-	return EXIT_SUCCESS;
-}
-
-/** Deactivate deployment B without changing deployments A or C. */
-int test_deactivate_one_worker(
-	CommandLine& cl, MYSQL* admin, BGD_Simulator& sim, TestState& state)
-{
-	ok(aurora_bgd_execute_all(admin, {
-		"UPDATE mysql_aws_aurora_hostgroups SET active=0 WHERE writer_hostgroup=" +
-			to_string(state.writer_hostgroup_b),
-		"LOAD MYSQL SERVERS TO RUNTIME",
-	}) == EXIT_SUCCESS
-		&& wait_for_inactive_none(admin, state.writer_hostgroup_b)
-		&& aurora_bgd_wait_for_status(
-			admin, state.writer_hostgroup_a,
-			"SWITCHOVER_IN_POST_PROCESSING", kWaitSeconds) == EXIT_SUCCESS
-		&& aurora_bgd_wait_for_status(
-			admin, state.writer_hostgroup_c,
-			"SWITCHOVER_IN_POST_PROCESSING", kWaitSeconds) == EXIT_SUCCESS,
-		"deactivating deployment B cleans only its worker state");
-	ok(writer_placement(
-		admin, state.writer_hostgroup_b, state.reader_hostgroup_b,
-		state.deployment_b.production.members.front().endpoint.hostname, false)
-		&& route_writer(
-			cl, admin, sim, state.deployment_b, state.route_hostgroup_b, false),
-		"deployment B teardown restores only its production routing");
-	ok(route_writer(
-		cl, admin, sim, state.deployment_a, state.route_hostgroup_a, true)
-		&& route_writer(
-			cl, admin, sim, state.deployment_c, state.route_hostgroup_c, true),
-		"deployment B teardown leaves A and C pins intact");
-	return EXIT_SUCCESS;
-}
-
-/** Complete deployment A and remove deployment C without cross-worker effects. */
-int test_complete_and_remove_independent_workers(
-	CommandLine& cl, MYSQL* admin, BGD_Simulator& sim, TestState& state)
-{
-	ok(sim.topology_update(
-		aurora_bgd_topology_backends(state.deployment_a),
-		aurora_bgd_completed_topology(state.deployment_a)) == EXIT_SUCCESS
-		&& aurora_bgd_wait_for_status(
-			admin, state.writer_hostgroup_a,
-			"SWITCHOVER_COMPLETED", kWaitSeconds) == EXIT_SUCCESS
-		&& aurora_bgd_wait_for_status(
-			admin, state.writer_hostgroup_c,
-			"SWITCHOVER_IN_POST_PROCESSING", kWaitSeconds) == EXIT_SUCCESS,
-		"completing deployment A leaves deployment C active");
-	ok(add_writer_route(
-		admin, state.deployment_a, state.post_completion_route_hostgroup_a)
-		== EXIT_SUCCESS
-		&& route_writer(
-			cl, admin, sim, state.deployment_a,
-			state.post_completion_route_hostgroup_a, false)
-		&& route_writer(
-			cl, admin, sim, state.deployment_c, state.route_hostgroup_c, true),
-		"deployment A cleanup removes only its pin");
-	ok(aurora_bgd_execute_all(admin, {
-		"DELETE FROM mysql_aws_aurora_hostgroups WHERE writer_hostgroup=" +
-			to_string(state.writer_hostgroup_c),
-		"LOAD MYSQL SERVERS TO RUNTIME",
-	}) == EXIT_SUCCESS
-		&& wait_for_runtime_row_absent(admin, state.writer_hostgroup_c)
+	return runtime_status_is(context.admin, worker.writer_hostgroup, status)
 		&& writer_placement(
-			admin, state.writer_hostgroup_c, state.reader_hostgroup_c,
-			state.deployment_c.production.members.front().endpoint.hostname, false)
-		&& wait_for_writer_route(
-			cl, admin, sim, state.deployment_c, state.route_hostgroup_c, false),
-		"removing deployment C safely restores its production routing");
+			context.admin, worker.writer_hostgroup, worker.reader_hostgroup,
+			worker.deployment.production.members.front().endpoint.hostname, demoted);
+}
+
+int test_three_workers_available(Context& context, TestState& state) {
+	if (configure_available(context, state.first, false) != EXIT_SUCCESS
+		|| configure_available(context, state.second, true) != EXIT_SUCCESS
+		|| configure_available(context, state.third, false) != EXIT_SUCCESS) {
+		diag("Error: failed to configure three Aurora BGD workers");
+		return EXIT_FAILURE;
+	}
 	ok(aurora_bgd_wait_for_status(
-		admin, state.writer_hostgroup_a,
-		"SWITCHOVER_COMPLETED", kWaitSeconds) == EXIT_SUCCESS
-		&& route_writer(
-			cl, admin, sim, state.deployment_a,
-			state.post_completion_route_hostgroup_a, false),
-		"deployment C removal leaves deployment A terminal state unchanged");
+		context.admin, state.first.writer_hostgroup, "AVAILABLE", kWaitSeconds)
+		== EXIT_SUCCESS,
+		"BGD wHG 2250 independently reaches AVAILABLE");
+	ok(aurora_bgd_wait_for_status(
+		context.admin, state.second.writer_hostgroup, "AVAILABLE", kWaitSeconds)
+		== EXIT_SUCCESS,
+		"BGD wHG 2260 independently reaches AVAILABLE");
+	ok(aurora_bgd_wait_for_status(
+		context.admin, state.third.writer_hostgroup, "AVAILABLE", kWaitSeconds)
+		== EXIT_SUCCESS,
+		"BGD wHG 2270 independently reaches AVAILABLE");
+	return EXIT_SUCCESS;
+}
+
+int test_independent_phase_changes(
+	CommandLine& cl, Context& context, TestState& state
+) {
+	if (publish_status(
+			context, state.first.deployment, "SWITCHOVER_IN_PROGRESS") != EXIT_SUCCESS
+		|| aurora_bgd_wait_for_status(
+			context.admin, state.first.writer_hostgroup, "SWITCHOVER_IN_PROGRESS",
+			kWaitSeconds) != EXIT_SUCCESS) {
+		return EXIT_FAILURE;
+	}
+	ok(worker_matches(context, state.first, "SWITCHOVER_IN_PROGRESS", true),
+		"advancing wHG 2250 changes only its writer placement and state");
+	ok(worker_matches(context, state.second, "AVAILABLE", false)
+		&& worker_matches(context, state.third, "AVAILABLE", false),
+		"advancing wHG 2250 leaves wHG 2260 and wHG 2270 unchanged");
+
+	if (publish_status(
+			context, state.second.deployment,
+			"SWITCHOVER_IN_POST_PROCESSING") != EXIT_SUCCESS
+		|| aurora_bgd_wait_for_status(
+			context.admin, state.second.writer_hostgroup,
+			"SWITCHOVER_IN_POST_PROCESSING", kWaitSeconds) != EXIT_SUCCESS
+		|| set_default_hostgroup(
+			context.admin, state.second.route_hostgroup) != EXIT_SUCCESS) {
+		return EXIT_FAILURE;
+	}
+	ok(route_to_backend(
+		cl, context,
+		state.second.deployment.target.members.front().endpoint.backend()),
+		"advancing wHG 2260 applies only its own target pin");
+	ok(worker_matches(context, state.first, "SWITCHOVER_IN_PROGRESS", true)
+		&& worker_matches(context, state.third, "AVAILABLE", false),
+		"advancing wHG 2260 preserves wHG 2250 progress and wHG 2270 availability");
+
+	if (publish_status(
+			context, state.third.deployment, "SWITCHOVER_INITIATED") != EXIT_SUCCESS
+		|| aurora_bgd_wait_for_status(
+			context.admin, state.third.writer_hostgroup, "SWITCHOVER_INITIATED",
+			kWaitSeconds) != EXIT_SUCCESS) {
+		return EXIT_FAILURE;
+	}
+	ok(worker_matches(context, state.third, "SWITCHOVER_INITIATED", false),
+		"advancing wHG 2270 records INITIATED without changing writer placement");
+	ok(worker_matches(context, state.first, "SWITCHOVER_IN_PROGRESS", true)
+		&& worker_matches(
+			context, state.second, "SWITCHOVER_IN_POST_PROCESSING", false),
+		"advancing wHG 2270 preserves the independent states of wHG 2250 and wHG 2260");
 	return EXIT_SUCCESS;
 }
 
 int main() {
-	plan(12);
+	plan(9);
 
 	CommandLine cl {};
-	MYSQL* admin = nullptr;
-	BGD_Simulator sim {};
-
-	if (setup(cl, admin, sim) != EXIT_SUCCESS) {
+	Context context {};
+	if (setup(cl, context) != EXIT_SUCCESS) {
 		return exit_status();
 	}
 
 	TestState state {};
-
-	// Simulator: publish three independent deployments and POST_PROCESSING states.
-	// Verify: each worker owns only its target pin and FSM state.
-	if (test_three_workers_post_processing(cl, admin, sim, state) != EXIT_SUCCESS) {
+	if (test_three_workers_available(context, state) != EXIT_SUCCESS) {
 		goto exit_cleanup;
 	}
-
-	// ProxySQL: deactivate deployment B.
-	// Verify: only deployment B returns to production routing.
-	if (test_deactivate_one_worker(cl, admin, sim, state) != EXIT_SUCCESS) {
-		goto exit_cleanup;
-	}
-
-	// Simulator and ProxySQL: complete A and remove C.
-	// Verify: their cleanup effects remain isolated from each other.
-	if (test_complete_and_remove_independent_workers(cl, admin, sim, state)
-		!= EXIT_SUCCESS) {
-		goto exit_cleanup;
-	}
+	test_independent_phase_changes(cl, context, state);
 
 exit_cleanup:
-	if (cleanup(admin, sim) != EXIT_SUCCESS) {
-		diag("Error: failed to clean Aurora BGD concurrent-isolation test data");
-		return EXIT_FAILURE;
+	if (cleanup(context) != EXIT_SUCCESS) {
+		diag("Error: failed to clean the concurrent-isolation fixture");
 	}
 	return exit_status();
 }
