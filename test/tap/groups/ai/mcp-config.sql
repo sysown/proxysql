@@ -16,6 +16,12 @@ SET mcp-enabled='false';
 LOAD MCP VARIABLES TO RUNTIME;
 SAVE MCP VARIABLES TO DISK;
 
+-- Initialize the AI feature manager before the MCP listener constructs the
+-- AI and RAG endpoint handlers.
+SET genai-enabled='true';
+LOAD GENAI VARIABLES TO RUNTIME;
+SAVE GENAI VARIABLES TO DISK;
+
 -- Configure MySQL servers for MCP
 DELETE FROM mysql_servers WHERE hostgroup_id IN (0, ${MCP_MYSQL_HOSTGROUP_ID});
 INSERT INTO mysql_servers (hostgroup_id, hostname, port, status, weight, comment)

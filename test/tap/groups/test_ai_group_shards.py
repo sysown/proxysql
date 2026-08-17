@@ -186,10 +186,14 @@ class AiGroupShardTest(unittest.TestCase):
         self.assertTrue(environment["TAP_MCP_AUTH_TOKEN"])
 
         disabled_at = rendered.index("SET mcp-enabled='false';")
+        genai_enabled_at = rendered.index("SET genai-enabled='true';")
+        genai_loaded_at = rendered.index("LOAD GENAI VARIABLES TO RUNTIME;")
         profiles_at = rendered.index("LOAD MCP PROFILES TO RUNTIME;")
         enabled_at = rendered.rindex("SET mcp-enabled='true';")
         self.assertLess(disabled_at, profiles_at)
         self.assertLess(profiles_at, enabled_at)
+        self.assertLess(genai_enabled_at, genai_loaded_at)
+        self.assertLess(genai_loaded_at, enabled_at)
 
 
 if __name__ == "__main__":

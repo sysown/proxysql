@@ -27,6 +27,7 @@
 #include "AI_Features_Manager.h"
 #include "ProxySQL_Admin_Tables_Definitions.h"
 #include "Query_Tool_Handler.h"
+#include "RAG_Tool_Handler.h"
 #include "Discovery_Schema.h"
 
 #include <cstdio>
@@ -222,56 +223,66 @@ void refresh_stats_mcp_query_rules(SQLite3DB* db, void*) {
 	delete result; result = nullptr;
 }
 
-void refresh_stats_mcp_query_tools_counters(SQLite3DB* db, void*) {
-	if (db == nullptr) return;
-	MCP_Threads_Handler* mcp = genai_context().mcp;
-	if (mcp == nullptr) return;
-	Query_Tool_Handler* qth = mcp->query_tool_handler;
-	if (qth == nullptr) return;
-	SQLite3_result* result = qth->get_tool_usage_stats_resultset(false);
-	if (result == nullptr) return;
-	if (!db->execute("BEGIN")) { delete result; result = nullptr; return; }
-	if (!db->execute("DELETE FROM stats_mcp_query_tools_counters")) { db->execute("ROLLBACK"); delete result; result = nullptr; return; }
+bool insert_tool_counter_rows(
+	SQLite3DB* db,
+	const char* table_name,
+	SQLite3_result* result
+) {
+	if (result == nullptr) return true;
 	for (int i = 0; i < result->rows_count; i++) {
 		char** row = result->rows[i]->fields;
 		char* q = sqlite3_mprintf(
-			"INSERT INTO stats_mcp_query_tools_counters"
+			"INSERT INTO %s"
 			" (endpoint, tool, schema, count, first_seen,"
 			"  last_seen, sum_time, min_time, max_time)"
 			" VALUES('%q','%q','%q','%q','%q','%q','%q','%q','%q')",
+			table_name,
 			row[0], row[1], row[2], row[3], row[4],
 			row[5], row[6], row[7], row[8]);
-		db->execute(q);
+		const bool inserted = db->execute(q);
+		sqlite3_free(q);
+		if (!inserted) return false;
+	}
+	return true;
+}
+
+void refresh_stats_mcp_tool_counters(SQLite3DB* db, bool reset) {
+	if (db == nullptr) return;
+	MCP_Threads_Handler* mcp = genai_context().mcp;
+	if (mcp == nullptr) return;
+
+	SQLite3_result* query_result = mcp->query_tool_handler
+		? mcp->query_tool_handler->get_tool_usage_stats_resultset(reset)
+		: nullptr;
+	SQLite3_result* rag_result = mcp->rag_tool_handler
+		? mcp->rag_tool_handler->get_tool_usage_stats_resultset(reset)
+		: nullptr;
+	const char* table_name = reset
+		? "stats_mcp_query_tools_counters_reset"
+		: "stats_mcp_query_tools_counters";
+
+	const bool transaction_started = db->execute("BEGIN");
+	bool success = transaction_started;
+	if (success) {
+		char* q = sqlite3_mprintf("DELETE FROM %s", table_name);
+		success = db->execute(q);
 		sqlite3_free(q);
 	}
-	if (!db->execute("COMMIT")) { delete result; result = nullptr; return; }
-	delete result; result = nullptr;
+	if (success) success = insert_tool_counter_rows(db, table_name, query_result);
+	if (success) success = insert_tool_counter_rows(db, table_name, rag_result);
+	if (success) success = db->execute("COMMIT");
+	if (!success && transaction_started) db->execute("ROLLBACK");
+
+	delete query_result;
+	delete rag_result;
+}
+
+void refresh_stats_mcp_query_tools_counters(SQLite3DB* db, void*) {
+	refresh_stats_mcp_tool_counters(db, false);
 }
 
 void refresh_stats_mcp_query_tools_counters_reset(SQLite3DB* db, void*) {
-	if (db == nullptr) return;
-	MCP_Threads_Handler* mcp = genai_context().mcp;
-	if (mcp == nullptr) return;
-	Query_Tool_Handler* qth = mcp->query_tool_handler;
-	if (qth == nullptr) return;
-	SQLite3_result* result = qth->get_tool_usage_stats_resultset(true);
-	if (result == nullptr) return;
-	if (!db->execute("BEGIN")) { delete result; result = nullptr; return; }
-	if (!db->execute("DELETE FROM stats_mcp_query_tools_counters_reset")) { db->execute("ROLLBACK"); delete result; result = nullptr; return; }
-	for (int i = 0; i < result->rows_count; i++) {
-		char** row = result->rows[i]->fields;
-		char* q = sqlite3_mprintf(
-			"INSERT INTO stats_mcp_query_tools_counters_reset"
-			" (endpoint, tool, schema, count, first_seen,"
-			"  last_seen, sum_time, min_time, max_time)"
-			" VALUES('%q','%q','%q','%q','%q','%q','%q','%q','%q')",
-			row[0], row[1], row[2], row[3], row[4],
-			row[5], row[6], row[7], row[8]);
-		db->execute(q);
-		sqlite3_free(q);
-	}
-	if (!db->execute("COMMIT")) { delete result; result = nullptr; return; }
-	delete result; result = nullptr;
+	refresh_stats_mcp_tool_counters(db, true);
 }
 
 void refresh_stats_genai_global(SQLite3DB* db, void*) {
