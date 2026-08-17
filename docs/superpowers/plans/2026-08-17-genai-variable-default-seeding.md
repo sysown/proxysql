@@ -25,14 +25,16 @@
 - `plugins/genai/src/plugin_main.cpp`: collect handler defaults, seed both databases transactionally, and call the seeding path before runtime loads.
 - `docs/superpowers/specs/2026-08-17-genai-variable-default-seeding-design.md`: approved design; no further edits expected unless implementation exposes a contradiction.
 
-### Task 1: Add the failing lifecycle regression
+### Task 1: Add the lifecycle regression and persistent startup seeding
 
 **Files:**
 - Modify: `test/tap/tests/unit/genai_plugin_load_unit-t.cpp:20-110`
+- Modify: `plugins/genai/src/plugin_main.cpp:50-100`
+- Modify: `plugins/genai/src/plugin_main.cpp:675-698`
 
 **Interfaces:**
-- Consumes: existing `ProxySQL_PluginManager::init_all()` / `start_all()` lifecycle and `SQLite3DB::return_one_int()`.
-- Produces: a 57-assertion lifecycle test that requires exactly 14 persisted MCP variables and 32 persisted GenAI variables in each database while preserving pre-existing values.
+- Consumes: existing `ProxySQL_PluginManager::init_all()` / `start_all()` lifecycle, `SQLite3DB::return_one_int()`, handler variable enumeration APIs, and plugin-service database getters.
+- Produces: a 57-assertion lifecycle regression plus startup helpers that seed exactly 14 MCP and 32 GenAI variables in each database while preserving pre-existing values.
 
 - [ ] **Step 1: Give configdb the minimal schema used by the seeding contract**
 
@@ -127,7 +129,7 @@ test/tap/tests/unit/genai_plugin_load_unit-t
 
 Expected: the existing 45 lifecycle assertions remain successful; the new row-count and missing-default assertions fail because each database still contains only the two pre-seeded rows. The four preservation assertions pass, proving the failure is specifically missing default seeding.
 
-### Task 2: Seed both variable families transactionally at plugin start
+#### Production implementation after the RED checkpoint
 
 **Files:**
 - Modify: `plugins/genai/src/plugin_main.cpp:50-100`
@@ -266,7 +268,7 @@ git add plugins/genai/src/plugin_main.cpp test/tap/tests/unit/genai_plugin_load_
 git commit -m "fix(genai): persist missing plugin variable defaults"
 ```
 
-### Task 3: Verify #6099 and prepare the branch for review
+### Task 2: Verify #6099 and prepare the branch for review
 
 **Files:**
 - Verify only; no planned source changes.
