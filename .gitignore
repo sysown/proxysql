@@ -240,3 +240,5 @@ deps/protobuf/protobuf-*/
 # symlink at runtime under test-scripts/deps/; never commit this one (it was
 # accidentally committed once with an absolute /home path).
 test/scripts/deps/mysqlbinlog
+
+# Temporary ASAN CI end-to-end validation trigger; this branch will not merge.

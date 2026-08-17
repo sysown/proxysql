@@ -131,7 +131,16 @@ ifneq ($(wildcard $(SQLITE3_LDIR)/vec.o),)
 endif
 endif
 
-OPT := $(STDCPP) -O2 -ggdb $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
+# Keep public class layouts identical to libproxysql.a. In particular,
+# PROXYSQL40 adds members to ProxySQL_GlobalVariables; omitting the define in
+# TAP translation units makes their GloVars allocation smaller than the
+# constructor linked from the archive.
+PSQL40 :=
+ifeq ($(PROXYSQL40),1)
+	PSQL40 := -DPROXYSQL40
+endif
+
+OPT := $(STDCPP) -O2 -ggdb $(PSQL40) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
 ifneq ($(UNAME_S),Darwin)
 OPT += -Wl,--no-as-needed
 endif
@@ -159,7 +168,7 @@ tests_no_infra: admin_set_credentials_logging-t listener_conflicts_validation-t
 	./admin_set_credentials_logging-t
 	./listener_conflicts_validation-t
 
-DEBUG_OPT := $(STDCPP) -O0 -DDEBUG -ggdb $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
+DEBUG_OPT := $(STDCPP) -O0 -DDEBUG -ggdb $(PSQL40) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
 ifneq ($(UNAME_S),Darwin)
 DEBUG_OPT += -Wl,--no-as-needed
 endif
@@ -432,7 +441,7 @@ prepare_statement_err3024_async-t: prepare_statement_err3024-t.cpp $(TAP_LDIR)/l
 
 ifneq ($(UNAME_S),Darwin)
 test_wexecvp_syscall_failures-t: test_wexecvp_syscall_failures-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
-	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -Wl,--wrap=pipe,--wrap=fcntl,--wrap=read,--wrap=poll $(STATIC_LIBS) -o $@
+	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -Wl,--wrap=pipe,--wrap=fcntl,--wrap=read,--wrap=poll,--wrap=fork,--wrap=_Znwm,--wrap=opendir $(STATIC_LIBS) -o $@
 endif
 
 # Every test that links pg_lite_client.cpp shares one link line. pg_lite_client

@@ -327,8 +327,15 @@ unsigned int MySQL_ResultSet::add_row(MYSQL_ROWS *rows) {
 	unsigned long row_length = rows->length;
 	// we call generate_pkt_row3 passing row_length
 	sid=myprot->generate_pkt_row3(this, &pkt_length, sid, 0, NULL, row, row_length);
+	const unsigned long long next_resultset_size = resultset_size + pkt_length;
+	if (
+		resultset_size / 0xFFFFFFF != next_resultset_size / 0xFFFFFFF
+		&& myds && myds->sess && myds->sess->thread
+	) {
+		myds->sess->thread->atomic_curtime = monotonic_time();
+	}
 	sid++;
-	resultset_size+=pkt_length;
+	resultset_size = next_resultset_size;
 	num_rows++;
 	return pkt_length;
 }

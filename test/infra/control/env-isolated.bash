@@ -104,14 +104,16 @@ export TEST_PY_TAP_REPEAT="${TEST_PY_TAP_REPEAT:-1}"
 export TEST_PY_TAP_SHUFFLE_LIMIT="${TEST_PY_TAP_SHUFFLE_LIMIT:-0}"
 export TEST_PY_TAP_DUMP_RUNTIME="${TEST_PY_TAP_DUMP_RUNTIME:-1}"
 export TEST_PY_TAP_DUMP_STATS="${TEST_PY_TAP_DUMP_STATS:-1}"
-# Per-test wall-clock budget, in seconds. 0 disables it entirely, which was
-# the previous default: a hung TAP test then ran until the CI job itself was
-# killed. 1800 is ~2.4x the slowest single test measured across 47 groups
-# (reg_test_3765_ssl_pollout-t, 12.5 min; then test_cluster_sync-t 10.5,
-# set_testing-240-t 7.8, test_auth_methods-t 7.7 -- only 4 tests exceed 5
-# minutes at all), so it cannot fire on a merely slow test while still
-# catching a hang long before the 90-minute step budget.
-export TEST_TAP_TIMEOUT="${TEST_TAP_TIMEOUT:-1800}"
+# Per-test wall-clock budget, in seconds. 0 disables it entirely. Normal TAP
+# runs retain the measured 30-minute ceiling. The exhaustive authentication
+# matrix takes just over 30 minutes with ASAN instrumentation, so ASAN gets a
+# bounded 60-minute ceiling while remaining below the 90-minute job budget.
+DEFAULT_TEST_TAP_TIMEOUT=1800
+if [ "${WITHASAN}" = "1" ]; then
+    DEFAULT_TEST_TAP_TIMEOUT=3600
+fi
+export TEST_TAP_TIMEOUT="${TEST_TAP_TIMEOUT:-${DEFAULT_TEST_TAP_TIMEOUT}}"
+unset DEFAULT_TEST_TAP_TIMEOUT
 
 # Cluster sync test support — expose first cluster node admin port for replica validation
 if [ "${NUM_CLUSTER_NODES}" -gt 0 ]; then

@@ -8,6 +8,14 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update -qq && \
     apt-get install -y -qq --no-install-recommends \
     mysql-client \
+    # mysql-server-core pulls in mysqlbinlog, which test_com_binlog_dump_enables_fast_forward-t
+    # shells out to at runtime. mysql-client does NOT (its core package only ships
+    # mysql / mysqladmin / mysqldump etc., not mysqlbinlog). Without this the binlog
+    # TAP tests fail with sh: 1: .../mysqlbinlog: not found even after the runner
+    # fallback in test/infra/control/run-tests-isolated.bash succeeds at creating the
+    # symlink -- the symlink target just doesn't exist. ~118 MB extra in the base
+    # image; cost is paid once and shared by every consumer. See GH issue #6092.
+    mysql-server-core-8.0 \
     mysql-shell \
     mycli \
     postgresql-client \
