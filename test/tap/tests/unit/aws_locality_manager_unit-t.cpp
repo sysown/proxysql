@@ -209,9 +209,11 @@ int main() {
 	plan(49);
 
 	auto provider_state = std::make_shared<FakeProviderState>();
+	auto provider = std::make_unique<FakeProvider>(provider_state);
 	ok(install_global_aws_metadata_provider(
-		new FakeProvider(provider_state), destroy_fake_provider, nullptr),
+		provider.get(), destroy_fake_provider, nullptr),
 		"metadata provider can be installed without an SDK dependency in core");
+	provider.release();
 	{
 		auto lease = acquire_global_aws_metadata_provider();
 		ok(lease && lease.get() != nullptr,
@@ -434,9 +436,11 @@ int main() {
 		"missing provider preserves configured and effective neutral weights");
 
 	auto replacement_state = std::make_shared<FakeProviderState>();
+	auto replacement = std::make_unique<FakeProvider>(replacement_state);
 	ok(install_global_aws_metadata_provider(
-		new FakeProvider(replacement_state), destroy_fake_provider, nullptr),
+		replacement.get(), destroy_fake_provider, nullptr),
 		"provider registry accepts a replacement after complete shutdown");
+	replacement.release();
 	absent_provider_manager.request_refresh();
 	ok(wait_for_request_count(replacement_state, 2),
 		"manager acquires the replacement provider on its next refresh");

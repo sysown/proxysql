@@ -1124,7 +1124,7 @@ private:
 };
 
 MySQLAwsLocalityManager::MySQLAwsLocalityManager(AwsLocalityManagerConfig config)
-	: impl_(new Impl(std::move(config))) {}
+	: impl_(std::make_unique<Impl>(std::move(config))) {}
 
 MySQLAwsLocalityManager::~MySQLAwsLocalityManager() = default;
 

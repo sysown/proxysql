@@ -113,13 +113,13 @@ int main() {
 		"provider registry starts without an installed source");
 
 	void *module_handle = dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
-	auto *source = new FakeSource();
+	auto source = std::make_unique<FakeSource>();
 	ok(module_handle != nullptr && install_global_aws_iam_token_source(
-		source, destroy_source, module_handle),
+		source.get(), destroy_source, module_handle),
 		"provider registry accepts a source with a retained module handle");
 
 	AwsIamTokenSourceLease lease = acquire_global_aws_iam_token_source();
-	ok(lease && lease.get() == source,
+	ok(lease && lease.get() == source.get(),
 		"acquiring the registry returns a retained source lease");
 
 	auto sink = std::make_shared<CapturingSink>();
@@ -136,7 +136,7 @@ int main() {
 	ok(cleanse_calls.load() == 1,
 		"the moved token is cleansed by the public secure-string contract");
 
-	auto uninstall = std::async(std::launch::async, [source] {
+	auto uninstall = std::async(std::launch::async, [source = source.get()] {
 		return uninstall_global_aws_iam_token_source(source);
 	});
 	const auto stop_deadline = std::chrono::steady_clock::now() + 1s;
@@ -152,6 +152,7 @@ int main() {
 	lease = AwsIamTokenSourceLease {};
 	ok(uninstall.get() && source_destroyed.load(),
 		"uninstall destroys the source only after its final lease drains");
+	source.release();
 
 	std::unique_ptr<AwsIamTokenSource> unavailable =
 		create_aws_iam_token_source({ 16, 8 });

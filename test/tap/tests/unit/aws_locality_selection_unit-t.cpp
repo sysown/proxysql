@@ -269,9 +269,11 @@ int main() {
 	GloMyLogger = new MySQL_Logger();
 
 	auto provider_state = std::make_shared<ProviderState>();
+	auto provider = std::make_unique<FakeProvider>(provider_state);
 	ok(install_global_aws_metadata_provider(
-		new FakeProvider(provider_state), destroy_provider, nullptr),
+		provider.get(), destroy_provider, nullptr),
 		"fake metadata provider installs through the production lease registry");
+	provider.release();
 
 	MySrvC* local = add_server(kLocal, 10);
 	MySrvC* regional = add_server(kRegional, 20);

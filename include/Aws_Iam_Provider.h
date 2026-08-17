@@ -29,14 +29,14 @@ public:
 	using CleanseFn = void (*)(void*, size_t);
 
 	SecureString() = default;
-	explicit SecureString(std::string_view value, CleanseFn cleanse = aws_iam_default_cleanse)
+explicit SecureString(std::string_view value, CleanseFn cleanse = aws_iam_default_cleanse)
 		: size_(value.size()), cleanse_(cleanse ? cleanse : aws_iam_default_cleanse) {
-		if (size_ != 0) {
-			bytes_.reset(new unsigned char[size_ + 1]);
-			std::memcpy(bytes_.get(), value.data(), size_);
-			bytes_[size_] = 0;
-		}
+	if (size_ != 0) {
+		bytes_ = std::make_unique<unsigned char[]>(size_ + 1);
+		std::memcpy(bytes_.get(), value.data(), size_);
+		bytes_[size_] = 0;
 	}
+}
 	SecureString(SecureString&& other) noexcept
 		: bytes_(std::move(other.bytes_)), size_(other.size_), cleanse_(other.cleanse_) {
 		other.size_ = 0;
