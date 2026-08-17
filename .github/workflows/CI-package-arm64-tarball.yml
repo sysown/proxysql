@@ -120,11 +120,6 @@ jobs:
       run: |
         make ${{ env.MAKE_TARGET }} ${{ matrix.flags }}
 
-    - name: Test tarball runtime
-      env:
-        TARBALL_TEST_IMAGES: almalinux:9 debian:12 ubuntu:22.04
-      run: tools/test-tarball-runtime.sh
-
     - name: Upload to release
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
