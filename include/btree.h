@@ -777,12 +777,8 @@ struct btree_iterator {
 
   // Increment/decrement the iterator.
   void increment() {
-    if (node->leaf()) {
-      const int next_position = position + 1;
-      if (next_position < node->count()) {
-        ++position;
-        return;
-      }
+    if (node->leaf() && ++position < node->count()) {
+      return;
     }
     increment_slow();
   }
@@ -790,12 +786,8 @@ struct btree_iterator {
   void increment_slow();
 
   void decrement() {
-    if (node->leaf()) {
-      const int previous_position = position - 1;
-      if (previous_position >= 0) {
-        --position;
-        return;
-      }
+    if (node->leaf() && --position >= 0) {
+      return;
     }
     decrement_slow();
   }

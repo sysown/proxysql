@@ -90,7 +90,7 @@ class btree_container {
   void clear() {
     tree_.clear();
   }
-  void swap(self_type &x) noexcept(noexcept(tree_.swap(x.tree_))) {
+  void swap(self_type &x) {
     tree_.swap(x.tree_);
   }
   void dump(std::ostream &os) const {
