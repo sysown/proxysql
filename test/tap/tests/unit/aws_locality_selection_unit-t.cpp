@@ -69,6 +69,14 @@ struct ProviderState {
 	uint64_t next_handle { 1 };
 };
 
+struct NoDeleteMySQLDataStream {
+	void operator()(MySQL_Data_Stream* value) const noexcept { (void)value; }
+};
+
+struct NoDeleteMySQLConnection {
+	void operator()(MySQL_Connection* value) const noexcept { (void)value; }
+};
+
 class FakeProvider final : public AwsMetadataProvider {
 public:
 	explicit FakeProvider(std::shared_ptr<ProviderState> state)
@@ -84,20 +92,26 @@ public:
 		return handle;
 	}
 
-	void cancel(AwsMetadataRequestHandle) override {}
-	void shutdown() override {}
+	void cancel(AwsMetadataRequestHandle) override {
+		// No cancellation side effects are required for this provider fake.
+	}
+	void shutdown() override {
+		// No shutdown side effects are required for this provider fake.
+	}
 
 private:
 	std::shared_ptr<ProviderState> state_;
 };
 
 void destroy_provider(AwsMetadataProvider* provider) {
-	delete provider;
+	std::unique_ptr<AwsMetadataProvider> owned(provider);
 }
 
 bool wait_for_requests(const std::shared_ptr<ProviderState>& state, size_t count) {
 	std::unique_lock<std::mutex> lock(state->mutex);
-	return state->cv.wait_for(lock, 2s, [&] { return state->pending.size() >= count; });
+	return state->cv.wait_for(lock, 2s, [&state, count] {
+		return state->pending.size() >= count;
+	});
 }
 
 bool complete(
@@ -169,46 +183,62 @@ MySrvC* add_server(const char* hostname, int64_t weight) {
 class SessionFixture {
 public:
 	explicit SessionFixture(MySQL_Thread& worker) {
-		session = new MySQL_Session();
-		session->thread = &worker;
-		session->connections_handler = true;
-		frontend_stream = new MySQL_Data_Stream();
-		frontend_stream->init(MYDS_FRONTEND, session, -1);
-		frontend = new MySQL_Connection();
-		frontend_stream->attach_connection(frontend);
-		frontend_stream->myprot.init(&frontend_stream, frontend->userinfo, session);
-		session->client_myds = frontend_stream;
-		frontend->userinfo->set(
-			const_cast<char*>(kUser), const_cast<char*>("password"),
-			const_cast<char*>(kSchema), nullptr);
-		frontend->set_backend_auth_type(MySQLBackendAuthType::PASSWORD);
+		session_owner = std::make_unique<MySQL_Session>();
+		session_owner->thread = &worker;
+		session_owner->connections_handler = true;
+
+		frontend_stream_owner.reset(new MySQL_Data_Stream());
+		frontend_stream_owner->init(MYDS_FRONTEND, session_owner.get(), -1);
+		frontend_stream = frontend_stream_owner.get();
+
+		frontend_owner.reset(new MySQL_Connection());
+		frontend_stream_owner->attach_connection(frontend_owner.get());
+		frontend_stream_owner->myprot.init(&frontend_stream, frontend_owner->userinfo, session_owner.get());
+		session_owner->client_myds = frontend_stream_owner.get();
+		session = session_owner.get();
+		frontend = frontend_owner.get();
+
+		std::string session_user{kUser};
+		std::string session_password{"password"};
+		std::string session_schema{kSchema};
+		frontend_owner->userinfo->set(
+			session_user.data(), session_password.data(),
+			session_schema.data(), nullptr);
+		frontend_owner->set_backend_auth_type(MySQLBackendAuthType::PASSWORD);
 	}
 
-	~SessionFixture() { delete session; }
+	MySQL_Session* session{nullptr};
+	MySQL_Data_Stream* frontend_stream{nullptr};
+	MySQL_Connection* frontend{nullptr};
 
-	MySQL_Session* session { nullptr };
-	MySQL_Data_Stream* frontend_stream { nullptr };
-	MySQL_Connection* frontend { nullptr };
+private:
+	std::unique_ptr<MySQL_Session> session_owner;
+	std::unique_ptr<MySQL_Data_Stream, NoDeleteMySQLDataStream> frontend_stream_owner;
+	std::unique_ptr<MySQL_Connection, NoDeleteMySQLConnection> frontend_owner;
 };
 
 MySQL_Connection* make_connection(MySrvC* server, int fd) {
-	MySQL_Connection* connection = new MySQL_Connection();
+	auto connection = std::make_unique<MySQL_Connection>();
 	connection->mysql = mysql_init(nullptr);
 	if (connection->mysql == nullptr) BAIL_OUT("mysql_init failed");
 	connection->ret_mysql = connection->mysql;
 	connection->mysql->charset = mariadb_get_charset_by_name("utf8mb4");
 	connection->parent = server;
+
+	std::string connection_user{kUser};
+	std::string connection_password{"password"};
+	std::string connection_schema{kSchema};
 	connection->userinfo->set(
-		const_cast<char*>(kUser), const_cast<char*>("password"),
-		const_cast<char*>(kSchema), nullptr);
+		connection_user.data(), connection_password.data(),
+		connection_schema.data(), nullptr);
 	connection->set_backend_auth_type(MySQLBackendAuthType::PASSWORD);
 	connection->healthy = true;
 	connection->reusable = true;
 	connection->send_quit = false;
 	connection->fd = fd;
 	connection->async_state_machine = ASYNC_IDLE;
-	server->ConnectionsUsed->add(connection);
-	return connection;
+	server->ConnectionsUsed->add(connection.get());
+	return connection.release();
 }
 
 } // namespace
@@ -376,7 +406,8 @@ int main() {
 	local->weight = 10;
 	remote->weight = 30;
 
-	GTID_Server_Data local_gtid(nullptr, const_cast<char*>(kLocal), 0, 3306);
+	std::string local_host{kLocal};
+	GTID_Server_Data local_gtid(nullptr, local_host.data(), 0, 3306);
 	local_gtid.add_gtid_from_ok("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:42");
 	MyHGM->gtid_map.emplace(std::string(kLocal) + ":3306", &local_gtid);
 	local->aws_aurora_current_lag_us = 5000;
@@ -400,9 +431,12 @@ int main() {
 	remote->aws_aurora_current_lag_us = 0;
 
 	MySQL_Connection* incompatible = make_connection(regional, 300);
+	std::string incompatible_user{"other_user"};
+	std::string incompatible_password{"password"};
+	std::string incompatible_schema{kSchema};
 	incompatible->userinfo->set(
-		const_cast<char*>("other_user"), const_cast<char*>("password"),
-		const_cast<char*>(kSchema), nullptr);
+		incompatible_user.data(), incompatible_password.data(),
+		incompatible_schema.data(), nullptr);
 	worker.push_MyConn_local(incompatible);
 	selected = worker.get_MyConn_local(
 		kHostgroup, session.session, nullptr, 0, -1,
@@ -420,7 +454,7 @@ int main() {
 	worker.push_MyConn_local(selected);
 	local_connection->healthy = true;
 
-	local->session_track_backoff_until.store(worker.curtime + 1, std::memory_order_relaxed);
+	local->session_track_backoff_until.store(worker.curtime + 1);
 	mysql_thread___session_track_variables = session_track_variables::ENFORCED;
 	selected = worker.get_MyConn_local(
 		kHostgroup, session.session, nullptr, 0, -1,
@@ -429,7 +463,7 @@ int main() {
 		"session-capability backoff excludes a local parent before locality weighting");
 	worker.push_MyConn_local(selected);
 	mysql_thread___session_track_variables = session_track_variables::DISABLED;
-	local->session_track_backoff_until.store(0, std::memory_order_relaxed);
+	local->session_track_backoff_until.store(0);
 
 	local_connection->options.client_flag |= CLIENT_FOUND_ROWS;
 	selected = worker.get_MyConn_local(
@@ -478,7 +512,7 @@ int main() {
 	}
 	MyHGM->set_aws_locality_awareness_enabled(false);
 	test_cleanup_hostgroups();
-	delete GloMyLogger;
+	std::unique_ptr<MySQL_Logger> logger_guard(GloMyLogger);
 	GloMyLogger = nullptr;
 	test_cleanup_query_processor();
 	test_cleanup_auth();
