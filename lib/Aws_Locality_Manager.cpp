@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -13,6 +12,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <locale>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -77,17 +77,18 @@ bool valid_region(const std::string& region) {
 		return false;
 	}
 
+	const auto& ctype = std::use_facet<std::ctype<char>>(std::locale::classic());
 	unsigned int hyphens = 0;
 	for (const char character : region) {
 		if (character == '-') {
 			++hyphens;
-		} else if (!std::islower(static_cast<unsigned char>(character)) &&
-			!std::isdigit(static_cast<unsigned char>(character))) {
+		} else if (!ctype.is(std::ctype_base::lower, character) &&
+			!ctype.is(std::ctype_base::digit, character)) {
 			return false;
 		}
 	}
 	return hyphens >= 2 &&
-		std::isdigit(static_cast<unsigned char>(region.back()));
+		ctype.is(std::ctype_base::digit, region.back());
 }
 
 bool is_rds_proxy_endpoint_prefix(const std::string& prefix) {
@@ -259,18 +260,20 @@ std::mutex metadata_provider_mutex;
 std::condition_variable metadata_provider_cv;
 AwsMetadataProvider* leased_metadata_provider = nullptr;
 AwsMetadataProviderDestroyFn metadata_provider_destroy = nullptr;
-void* metadata_provider_module = nullptr;
+AwsMetadataModuleHandle metadata_provider_module = nullptr;
 size_t metadata_provider_leases = 0;
 bool metadata_provider_accepting = false;
 
 bool dns_identity_length(std::string_view input, size_t& length) {
+	const auto& ctype = std::use_facet<std::ctype<char>>(std::locale::classic());
 	if (input.empty()) return false;
 	length = input.size();
 	if (input[length - 1] == '.') --length;
 	if (length == 0 || input[length - 1] == '.') return false;
 	for (size_t index = 0; index < length; ++index) {
-		const unsigned char value = static_cast<unsigned char>(input[index]);
-		if (!(std::isalnum(value) || input[index] == '-' || input[index] == '.')) {
+		const char value = static_cast<char>(input[index]);
+		if (!(ctype.is(std::ctype_base::alnum, value) ||
+			value == '-' || value == '.')) {
 			return false;
 		}
 	}
@@ -282,9 +285,9 @@ uint64_t identity_hash(
 	std::string_view hostname,
 	uint16_t port) {
 	uint64_t hash = 14695981039346656037ULL;
-	auto append = [&](unsigned char value) {
-		hash ^= value;
-		hash *= 1099511628211ULL;
+	auto append = [hash_ptr = std::addressof(hash)](unsigned char value) {
+		*hash_ptr ^= value;
+		*hash_ptr *= 1099511628211ULL;
 	};
 	for (unsigned int shift = 0; shift < 32; shift += 8) {
 		append(static_cast<unsigned char>(hostgroup_id >> shift));
@@ -295,9 +298,12 @@ uint64_t identity_hash(
 	const bool valid_dns = dns_identity_length(hostname, length);
 	append(valid_dns ? 1 : 0);
 	if (!valid_dns) length = hostname.size();
+	const auto& ctype = std::use_facet<std::ctype<char>>(std::locale::classic());
 	for (size_t index = 0; index < length; ++index) {
 		const unsigned char value = static_cast<unsigned char>(hostname[index]);
-		append(valid_dns ? static_cast<unsigned char>(std::tolower(value)) : value);
+		append(valid_dns
+			? static_cast<unsigned char>(ctype.tolower(static_cast<char>(value)))
+			: value);
 	}
 	return hash;
 }
@@ -310,9 +316,10 @@ bool same_hostname_identity(std::string_view lhs, std::string_view rhs) {
 	if (lhs_dns != rhs_dns) return false;
 	if (!lhs_dns) return lhs == rhs;
 	if (lhs_length != rhs_length) return false;
+	const auto& ctype = std::use_facet<std::ctype<char>>(std::locale::classic());
 	for (size_t index = 0; index < lhs_length; ++index) {
-		if (std::tolower(static_cast<unsigned char>(lhs[index])) !=
-			std::tolower(static_cast<unsigned char>(rhs[index]))) {
+		if (ctype.tolower(static_cast<char>(lhs[index])) !=
+			ctype.tolower(static_cast<char>(rhs[index]))) {
 			return false;
 		}
 	}
@@ -384,7 +391,7 @@ AwsMetadataProviderLease& AwsMetadataProviderLease::operator=(
 bool install_global_aws_metadata_provider(
 	AwsMetadataProvider* provider,
 	AwsMetadataProviderDestroyFn destroy,
-	void* module_handle) {
+	AwsMetadataModuleHandle module_handle) {
 	if (provider == nullptr || destroy == nullptr) {
 		return false;
 	}
@@ -413,7 +420,7 @@ AwsMetadataProviderLease acquire_global_aws_metadata_provider() {
 void shutdown_global_aws_metadata_provider() {
 	AwsMetadataProvider* provider = nullptr;
 	AwsMetadataProviderDestroyFn destroy = nullptr;
-	void* module_handle = nullptr;
+	AwsMetadataModuleHandle module_handle = nullptr;
 	{
 		std::unique_lock<std::mutex> lock(metadata_provider_mutex);
 		metadata_provider_accepting = false;
@@ -471,9 +478,8 @@ public:
 	explicit Impl(AwsLocalityManagerConfig config)
 		: config_(std::move(config)), sink_(std::make_shared<CompletionSink>(this)) {
 		auto initial = std::make_shared<AwsLocalitySnapshot>();
-		std::atomic_store_explicit(
-			&published_, std::shared_ptr<const AwsLocalitySnapshot>(std::move(initial)),
-			std::memory_order_release);
+		std::atomic_store(
+			&published_, std::shared_ptr<const AwsLocalitySnapshot>(std::move(initial)));
 	}
 
 	~Impl() noexcept {
@@ -543,7 +549,7 @@ public:
 		publish_locked();
 		cv_.notify_all();
 		if (!enabled_ && worker_.joinable()) {
-			cv_.wait_for(lock, config_.disable_wait_timeout, [&] {
+			cv_.wait_for(lock, config_.disable_wait_timeout, [this] {
 				return disable_acknowledged_ || stopping_;
 			});
 		}
@@ -560,7 +566,7 @@ public:
 	}
 
 	std::shared_ptr<const AwsLocalitySnapshot> snapshot() const {
-		return std::atomic_load_explicit(&published_, std::memory_order_acquire);
+		return std::atomic_load(&published_);
 	}
 
 	std::vector<AwsLocalitySnapshotEntry> diagnostic_rows() const {
@@ -656,7 +662,7 @@ private:
 		void detach() {
 			std::unique_lock<std::mutex> lock(mutex_);
 			owner_ = nullptr;
-			cv_.wait(lock, [&] { return active_ == 0; });
+			cv_.wait(lock, [this] { return active_ == 0; });
 		}
 
 	private:
@@ -794,7 +800,7 @@ private:
 						break;
 					}
 					if (!enabled_ || hostgroups_.empty()) {
-						cv_.wait(lock, [&] {
+						cv_.wait(lock, [this] {
 							return stopping_ || cancel_requested_ || force_refresh_ ||
 								(enabled_ && !hostgroups_.empty());
 						});
@@ -1091,9 +1097,8 @@ private:
 					entry.hostname, entry.port), std::move(entry));
 			}
 		}
-		std::atomic_store_explicit(
-			&published_, std::shared_ptr<const AwsLocalitySnapshot>(std::move(next)),
-			std::memory_order_release);
+		std::atomic_store(&published_, std::shared_ptr<const AwsLocalitySnapshot>(
+			std::move(next)));
 	}
 
 	AwsLocalityManagerConfig config_;

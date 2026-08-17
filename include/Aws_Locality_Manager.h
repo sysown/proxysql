@@ -40,6 +40,7 @@ size_t aws_locality_weighted_index(
 	uint64_t random_value);
 
 using AwsMetadataProviderDestroyFn = void (*)(AwsMetadataProvider*);
+using AwsMetadataModuleHandle = void *;
 
 class AwsMetadataProviderLease {
 public:
@@ -67,7 +68,7 @@ private:
 bool install_global_aws_metadata_provider(
 	AwsMetadataProvider* provider,
 	AwsMetadataProviderDestroyFn destroy,
-	void* module_handle);
+	AwsMetadataModuleHandle module_handle);
 AwsMetadataProviderLease acquire_global_aws_metadata_provider();
 void shutdown_global_aws_metadata_provider();
 

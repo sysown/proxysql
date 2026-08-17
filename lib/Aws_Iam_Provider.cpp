@@ -33,6 +33,19 @@ constexpr std::array<const char *, 4> kAwsIamGaugeNames {{
 	"proxysql_mysql_aws_iam_waiting_sessions",
 }};
 
+struct AwsIamTokenSourceDestroyer {
+	void operator()(AwsIamTokenSource* source) const noexcept {
+		if (source == nullptr) return;
+		if (destroy == nullptr) {
+			delete source;
+		} else {
+			destroy(source);
+		}
+	}
+
+	AwsIamTokenSourceDestroyFn destroy { nullptr };
+};
+
 struct AwsIamPrometheusState {
 	std::mutex mutex;
 	prometheus::Registry *registry { nullptr };
@@ -82,43 +95,34 @@ size_t global_source_retirement_requests = 0;
 // plugin's destroy callback before dlclose(). This prevents a source vtable
 // from pointing at an already-unmapped plugin during shutdown.
 struct AwsIamOwnedSource {
-	AwsIamTokenSource *source { nullptr };
-	AwsIamTokenSourceDestroyFn destroy { nullptr };
-	void *module_handle { nullptr };
+	std::unique_ptr<AwsIamTokenSource, AwsIamTokenSourceDestroyer> source {
+		nullptr, AwsIamTokenSourceDestroyer {} };
+	AwsIamModuleHandle module_handle { nullptr };
 
 	AwsIamOwnedSource() = default;
 	AwsIamOwnedSource(const AwsIamOwnedSource&) = delete;
 	AwsIamOwnedSource& operator=(const AwsIamOwnedSource&) = delete;
 	AwsIamOwnedSource(AwsIamOwnedSource&& other) noexcept
-		: source(other.source), destroy(other.destroy), module_handle(other.module_handle) {
-		other.source = nullptr;
-		other.destroy = nullptr;
+		: source(std::move(other.source)), module_handle(other.module_handle) {
 		other.module_handle = nullptr;
 	}
 	AwsIamOwnedSource& operator=(AwsIamOwnedSource&& other) noexcept {
 		if (this != &other) {
 			reset();
-			source = other.source;
-			destroy = other.destroy;
+			source = std::move(other.source);
 			module_handle = other.module_handle;
-			other.source = nullptr;
-			other.destroy = nullptr;
 			other.module_handle = nullptr;
 		}
 		return *this;
 	}
 
+	~AwsIamOwnedSource() noexcept { reset(); }
+
 	void reset() noexcept {
-		if (source != nullptr) {
-			if (destroy != nullptr) {
-				destroy(source);
-			} else {
-				delete source;
-			}
+		source.reset();
+		if (module_handle != nullptr) {
+			dlclose(module_handle);
 		}
-		if (module_handle != nullptr) dlclose(module_handle);
-		source = nullptr;
-		destroy = nullptr;
 		module_handle = nullptr;
 	}
 };
@@ -131,7 +135,7 @@ public:
 
 	AwsIamRequestHandle request(const AwsIamTokenKey&, uint64_t opaque_id,
 		std::weak_ptr<AwsIamCompletionSink> sink) override {
-		AwsIamRequestHandle handle { next_handle_.fetch_add(1, std::memory_order_relaxed) };
+		AwsIamRequestHandle handle { next_handle_.fetch_add(1) };
 		if (auto live_sink = sink.lock()) {
 			AwsIamCompletion completion;
 			completion.opaque_id = opaque_id;
@@ -150,10 +154,22 @@ public:
 		return result;
 	}
 
-	void cancel(AwsIamRequestHandle) override {}
-	void invalidate(const AwsIamTokenKey&, uint64_t) override {}
-	void record_backend_connection(bool) override {}
-	void record_waiting_session(bool) override {}
+	void cancel(AwsIamRequestHandle handle) override {
+		// Token invalidation state is not tracked in the non-SDK fallback.
+		(void)handle;
+	}
+	void invalidate(const AwsIamTokenKey&, uint64_t generation) override {
+		// Fallback path does not cache state between generations.
+		(void)generation;
+	}
+	void record_backend_connection(bool success) override {
+		// No backend connection accounting is available when SDK is disabled.
+		(void)success;
+	}
+	void record_waiting_session(bool waiting) override {
+		// Session-wait metrics are not collected for the non-SDK fallback.
+		(void)waiting;
+	}
 	AwsIamStatsSnapshot snapshot() const override { return {}; }
 
 private:
@@ -256,7 +272,8 @@ void publish_global_aws_iam_token_source(AwsIamTokenSource *source) {
 		}
 		return;
 	}
-	if (installed_source.source != nullptr && source != installed_source.source) {
+	if (installed_source.source != nullptr &&
+		source != installed_source.source.get()) {
 		proxy_warning("Refusing to replace the plugin-owned AWS IAM token source\n");
 		return;
 	}
@@ -270,7 +287,7 @@ void publish_global_aws_iam_token_source(AwsIamTokenSource *source) {
 }
 
 bool install_global_aws_iam_token_source(
-	AwsIamTokenSource *source, AwsIamTokenSourceDestroyFn destroy, void *module_handle) {
+	AwsIamTokenSource *source, AwsIamTokenSourceDestroyFn destroy, AwsIamModuleHandle module_handle) {
 	if (source == nullptr || destroy == nullptr || module_handle == nullptr) return false;
 
 	std::lock_guard<std::mutex> lock(global_source_mutex);
@@ -283,8 +300,8 @@ bool install_global_aws_iam_token_source(
 		initialize_aws_iam_prometheus_metrics(*GloVars.prometheus_registry);
 		update_aws_iam_prometheus_metrics(source->snapshot());
 	}
-	installed_source.source = source;
-	installed_source.destroy = destroy;
+	installed_source.source = std::unique_ptr<AwsIamTokenSource, AwsIamTokenSourceDestroyer>(
+		source, AwsIamTokenSourceDestroyer{destroy});
 	installed_source.module_handle = module_handle;
 	leased_global_source = source;
 	global_source_accepting = true;
@@ -294,25 +311,29 @@ bool install_global_aws_iam_token_source(
 
 bool uninstall_global_aws_iam_token_source(AwsIamTokenSource *expected_source) {
 	AwsIamOwnedSource retired_source;
+	bool matched = false;
 	{
 		std::unique_lock<std::mutex> lock(global_source_mutex);
 		++global_source_retirement_requests;
 		global_source_cv.wait(lock, [] {
 			return !global_source_retirement_active;
 		});
-		if (expected_source == nullptr || installed_source.source != expected_source ||
-			leased_global_source != expected_source) {
+		matched = expected_source != nullptr && installed_source.source.get() == expected_source &&
+			leased_global_source == expected_source;
+		if (matched) {
+			global_source_retirement_active = true;
+			global_source_accepting = false;
+			GloAwsIamTokenSource = nullptr;
+			global_source_cv.wait(lock, [] { return global_source_leases == 0; });
+			leased_global_source = nullptr;
+			retired_source = std::move(installed_source);
+		} else {
 			--global_source_retirement_requests;
-			lock.unlock();
-			global_source_cv.notify_all();
-			return false;
 		}
-		global_source_retirement_active = true;
-		global_source_accepting = false;
-		GloAwsIamTokenSource = nullptr;
-		global_source_cv.wait(lock, [] { return global_source_leases == 0; });
-		leased_global_source = nullptr;
-		retired_source = std::move(installed_source);
+	}
+	if (!matched) {
+		global_source_cv.notify_all();
+		return false;
 	}
 	retired_source.reset();
 	{

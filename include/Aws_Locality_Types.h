@@ -2,7 +2,7 @@
 #define __CLASS_AWS_LOCALITY_TYPES_H
 
 #include <chrono>
-#include <cctype>
+#include <locale>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -15,10 +15,13 @@ inline std::string aws_locality_normalized_hostname(std::string_view input) {
 	std::string hostname(input);
 	if (hostname.back() == '.') hostname.pop_back();
 	if (hostname.empty() || hostname.back() == '.') return {};
+	const auto& ctype = std::use_facet<std::ctype<char>>(std::locale::classic());
 	for (char& character : hostname) {
-		const unsigned char value = static_cast<unsigned char>(character);
-		if (!(std::isalnum(value) || character == '-' || character == '.')) return {};
-		character = static_cast<char>(std::tolower(value));
+		if (!(ctype.is(std::ctype_base::alnum, character) ||
+			character == '-' || character == '.')) {
+			return {};
+		}
+		character = ctype.tolower(character);
 	}
 	return hostname;
 }
@@ -54,7 +57,6 @@ struct AwsLocalityPolicy {
 	uint32_t refresh_interval_seconds { 300 };
 	uint32_t stale_ttl_seconds { 1800 };
 };
-
 struct AwsLocalityPolicyError {
 	uint32_t hostgroup_id { 0 };
 	std::string field;
@@ -156,7 +158,7 @@ struct AwsLocalityBackendConfig {
 	int64_t configured_weight { 0 };
 
 	AwsLocalityBackendConfig() = default;
-	AwsLocalityBackendConfig(AwsEndpointCandidate value, int64_t weight = 0)
+	explicit AwsLocalityBackendConfig(AwsEndpointCandidate value, int64_t weight = 0)
 		: endpoint(std::move(value)), configured_weight(weight) {}
 };
 
@@ -164,6 +166,14 @@ struct AwsLocalityHostgroupConfig {
 	uint32_t hostgroup_id { 0 };
 	AwsLocalityPolicy policy;
 	std::vector<AwsLocalityBackendConfig> backends;
+
+	AwsLocalityHostgroupConfig() = default;
+
+	explicit AwsLocalityHostgroupConfig(uint32_t id,
+		AwsLocalityPolicy value_policy,
+		std::vector<AwsLocalityBackendConfig> value_backends = {})
+		: hostgroup_id(id), policy(std::move(value_policy)),
+			backends(std::move(value_backends)) {}
 };
 
 #endif // __CLASS_AWS_LOCALITY_TYPES_H

@@ -34,6 +34,10 @@ struct FakeProviderState {
 	bool block_requests { false };
 	bool request_entered { false };
 	bool release_requests { false };
+
+	FakeProviderState() = default;
+	FakeProviderState(const FakeProviderState&) = delete;
+	FakeProviderState& operator=(const FakeProviderState&) = delete;
 };
 
 class FakeProvider final : public AwsMetadataProvider {
@@ -55,8 +59,8 @@ public:
 		state_->requests.push_back({handle, request, std::move(sink)});
 		state_->request_entered = true;
 		state_->cv.notify_all();
-		state_->cv.wait(lock, [&] {
-			return !state_->block_requests || state_->release_requests;
+		state_->cv.wait(lock, [state = state_] {
+			return !state->block_requests || state->release_requests;
 		});
 		return handle;
 	}
@@ -85,7 +89,7 @@ bool wait_for_request_count(
 	const std::shared_ptr<FakeProviderState>& state,
 	size_t count) {
 	std::unique_lock<std::mutex> lock(state->mutex);
-	return state->cv.wait_for(lock, 2s, [&] {
+	return state->cv.wait_for(lock, 2s, [state, count] {
 		return state->requests.size() >= count;
 	});
 }
@@ -187,7 +191,7 @@ AwsLocalityHostgroupConfig make_hostgroup(
 	config.policy.refresh_interval_seconds = refresh;
 	config.policy.stale_ttl_seconds = stale;
 	for (const char* endpoint : endpoints) {
-		config.backends.push_back(recognize_rds_endpoint(id, endpoint, 3306));
+		config.backends.emplace_back(recognize_rds_endpoint(id, endpoint, 3306), 0);
 	}
 	return config;
 }
@@ -217,13 +221,13 @@ int main() {
 	std::atomic<int64_t> steady_seconds { 0 };
 	std::atomic<int64_t> wall_seconds { 1700000000 };
 	AwsLocalityManagerConfig manager_config;
-	manager_config.steady_clock = [&] {
+	manager_config.steady_clock = [steady_seconds = std::ref(steady_seconds)] {
 		return std::chrono::steady_clock::time_point(
-			std::chrono::seconds(steady_seconds.load()));
+			std::chrono::seconds(steady_seconds.get().load()));
 	};
-	manager_config.wall_clock = [&] {
+	manager_config.wall_clock = [wall_seconds = std::ref(wall_seconds)] {
 		return std::chrono::system_clock::time_point(
-			std::chrono::seconds(wall_seconds.load()));
+			std::chrono::seconds(wall_seconds.get().load()));
 	};
 	manager_config.request_timeout = 5s;
 
@@ -276,7 +280,7 @@ int main() {
 	ok(complete_request(provider_state, AwsMetadataRequestKind::rds_region,
 		"eu-west-1", std::move(west_result)), "west Region completion is accepted");
 
-	ok(wait_until([&] {
+	ok(wait_until([&manager, &east_one] {
 		auto snapshot = manager.snapshot();
 		const auto* entry = lookup(snapshot, 10, east_one);
 		return entry != nullptr && entry->status == AwsLocalityMetadataStatus::fresh;
@@ -351,7 +355,7 @@ int main() {
 		make_hostgroup(12, 2.0, 4.0, 300, 1800,
 			{"db-new.abcdefghijkl.us-east-1.rds.amazonaws.com"}),
 	});
-	ok(wait_until([&] {
+	ok(wait_until([&provider_state, &canceled_before_reload] {
 		std::lock_guard<std::mutex> lock(provider_state->mutex);
 		return provider_state->canceled.size() > canceled_before_reload;
 	}), "configuration generation change cancels obsolete requests");
@@ -370,7 +374,7 @@ int main() {
 		"completion from an obsolete generation cannot repopulate removed policy state");
 
 	manager.set_enabled(false);
-	ok(wait_until([&] {
+	ok(wait_until([&manager, &east_one] {
 		const auto current = manager.snapshot();
 		const auto* entry = lookup(current, 12,
 			"db-new.abcdefghijkl.us-east-1.rds.amazonaws.com");
@@ -394,11 +398,11 @@ int main() {
 
 	std::atomic<bool> global_shutdown_done { false };
 	auto held_lease = acquire_global_aws_metadata_provider();
-	std::thread shutdown_thread([&] {
+	std::thread shutdown_thread([&global_shutdown_done] {
 		shutdown_global_aws_metadata_provider();
 		global_shutdown_done.store(true);
 	});
-	ok(wait_until([&] {
+	ok(wait_until([&global_shutdown_done] {
 		return !acquire_global_aws_metadata_provider();
 	}) && !global_shutdown_done.load(),
 		"global shutdown rejects new leases while waiting for an active lease");
@@ -416,7 +420,7 @@ int main() {
 	absent_hostgroup.backends[0].configured_weight = 37;
 	absent_provider_manager.configure({std::move(absent_hostgroup)});
 	absent_provider_manager.set_enabled(true);
-	ok(wait_until([&] {
+	ok(wait_until([&absent_provider_manager, &absent_endpoint] {
 		const auto current = absent_provider_manager.snapshot();
 		const auto* entry = lookup(current, 20, absent_endpoint);
 		return entry && entry->status == AwsLocalityMetadataStatus::error &&
@@ -450,8 +454,8 @@ int main() {
 		AwsLocalityHostgroupConfig hostgroup;
 		hostgroup.hostgroup_id = 100 + index;
 		hostgroup.policy = {true, 2.0, 4.0, 300, 1800};
-		hostgroup.backends.push_back(recognize_rds_endpoint(
-			hostgroup.hostgroup_id, endpoint, 3306));
+		hostgroup.backends.emplace_back(
+			recognize_rds_endpoint(hostgroup.hostgroup_id, endpoint, 3306), 0);
 		concurrent_regions.push_back(region);
 		concurrent_endpoints.push_back(endpoint);
 		concurrent_hostgroups.push_back(std::move(hostgroup));
@@ -469,7 +473,8 @@ int main() {
 	std::vector<std::thread> producers;
 	producers.reserve(100);
 	for (size_t index = 0; index < 100; ++index) {
-		producers.emplace_back([&, index] {
+		producers.emplace_back([index, &replacement_state, &posted_completions, &concurrent_regions,
+			&concurrent_endpoints] {
 			AwsMetadataResult result;
 			result.status = AwsMetadataStatus::ok;
 			result.endpoints.push_back({concurrent_endpoints[index], 3306,
@@ -487,7 +492,7 @@ int main() {
 	}
 	ok(posted_completions.load() == 100,
 		"100 concurrent completion producers all reach the shared sink");
-	ok(wait_until([&] {
+	ok(wait_until([&concurrent_manager] {
 		const auto current = concurrent_manager.snapshot();
 		return current->entries.size() == 100 &&
 			std::all_of(current->entries.begin(), current->entries.end(),
@@ -513,11 +518,12 @@ int main() {
 	bool completion_hook_entered = false;
 	bool release_completion = false;
 	AwsLocalityManagerConfig blocking_config = manager_config;
-	blocking_config.before_completion = [&] {
+	blocking_config.before_completion = [&completion_hook_mutex, &completion_hook_cv,
+		&completion_hook_entered, &release_completion] {
 		std::unique_lock<std::mutex> lock(completion_hook_mutex);
 		completion_hook_entered = true;
 		completion_hook_cv.notify_all();
-		completion_hook_cv.wait_for(lock, 2s, [&] { return release_completion; });
+		completion_hook_cv.wait_for(lock, 2s, [&release_completion] { return release_completion; });
 	};
 	MySQLAwsLocalityManager blocking_manager(blocking_config);
 	const auto blocking_endpoint = "db-block.abcdefghijkl.ap-block-1.rds.amazonaws.com";
@@ -529,7 +535,7 @@ int main() {
 	ok(wait_for_request_count(replacement_state, blocking_request_count + 2),
 		"callback-shutdown fixture dispatches local and regional requests");
 	std::atomic<bool> callback_returned { false };
-	std::thread callback_thread([&] {
+	std::thread callback_thread([&replacement_state, &blocking_request_count, &callback_returned] {
 		AwsMetadataResult result;
 		result.status = AwsMetadataStatus::ok;
 		result.local = {"ap-block-1", "ap-block-1a", "111122223333"};
@@ -540,14 +546,17 @@ int main() {
 	});
 	{
 		std::unique_lock<std::mutex> lock(completion_hook_mutex);
-		if (!completion_hook_cv.wait_for(lock, 2s, [&] { return completion_hook_entered; })) {
+		if (!completion_hook_cv.wait_for(lock, 2s, [&completion_hook_entered] {
+				return completion_hook_entered;
+			})) {
 			BAIL_OUT("completion hook did not enter before shutdown fixture deadline");
 		}
 	}
 	std::mutex shutdown_mutex;
 	std::condition_variable shutdown_cv;
 	bool shutdown_done = false;
-	std::thread blocking_shutdown([&] {
+	std::thread blocking_shutdown([&blocking_manager, &shutdown_done,
+		&shutdown_mutex, &shutdown_cv] {
 		blocking_manager.shutdown();
 		std::lock_guard<std::mutex> lock(shutdown_mutex);
 		shutdown_done = true;
@@ -556,7 +565,7 @@ int main() {
 	bool shutdown_finished_early = false;
 	{
 		std::unique_lock<std::mutex> lock(shutdown_mutex);
-		shutdown_finished_early = shutdown_cv.wait_for(lock, 100ms, [&] {
+		shutdown_finished_early = shutdown_cv.wait_for(lock, 100ms, [&shutdown_done] {
 			return shutdown_done;
 		});
 	}
@@ -588,7 +597,7 @@ int main() {
 	bounded_disable_manager.set_enabled(true);
 	{
 		std::unique_lock<std::mutex> lock(replacement_state->mutex);
-		if (!replacement_state->cv.wait_for(lock, 2s, [&] {
+		if (!replacement_state->cv.wait_for(lock, 2s, [&replacement_state] {
 				return replacement_state->request_entered;
 			})) {
 			BAIL_OUT("provider request did not enter bounded-disable fixture");
@@ -597,7 +606,8 @@ int main() {
 	std::mutex disable_mutex;
 	std::condition_variable disable_cv;
 	bool disable_returned = false;
-	std::thread disable_thread([&] {
+	std::thread disable_thread([&bounded_disable_manager, &disable_returned,
+		&disable_mutex, &disable_cv] {
 		bounded_disable_manager.set_enabled(false);
 		std::lock_guard<std::mutex> lock(disable_mutex);
 		disable_returned = true;
@@ -606,7 +616,7 @@ int main() {
 	bool disable_returned_within_bound = false;
 	{
 		std::unique_lock<std::mutex> lock(disable_mutex);
-		disable_returned_within_bound = disable_cv.wait_for(lock, 250ms, [&] {
+		disable_returned_within_bound = disable_cv.wait_for(lock, 250ms, [&disable_returned] {
 			return disable_returned;
 		});
 	}
@@ -652,11 +662,11 @@ int main() {
 	ok(wait_for_request_count(replacement_state, lease_drain_request_count + 2),
 		"enabled manager retains the installed provider during discovery");
 	std::atomic<bool> unload_done { false };
-	std::thread unload_thread([&] {
+	std::thread unload_thread([&unload_done] {
 		shutdown_global_aws_metadata_provider();
 		unload_done.store(true);
 	});
-	ok(wait_until([&] {
+	ok(wait_until([&unload_done] {
 		return !acquire_global_aws_metadata_provider();
 	}) && !unload_done.load(),
 		"provider unload rejects new leases while the manager lease is active");

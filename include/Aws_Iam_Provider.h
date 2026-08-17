@@ -17,6 +17,10 @@
 
 namespace prometheus { class Registry; }
 
+inline void aws_iam_default_cleanse(void* bytes, size_t bytes_size) {
+	OPENSSL_cleanse(bytes, bytes_size);
+}
+
 class SecureString {
 public:
 	// A custom cleanser must remain callable for the SecureString's full
@@ -25,8 +29,8 @@ public:
 	using CleanseFn = void (*)(void*, size_t);
 
 	SecureString() = default;
-	explicit SecureString(std::string_view value, CleanseFn cleanse = OPENSSL_cleanse)
-		: size_(value.size()), cleanse_(cleanse ? cleanse : OPENSSL_cleanse) {
+	explicit SecureString(std::string_view value, CleanseFn cleanse = aws_iam_default_cleanse)
+		: size_(value.size()), cleanse_(cleanse ? cleanse : aws_iam_default_cleanse) {
 		if (size_ != 0) {
 			bytes_.reset(new unsigned char[size_ + 1]);
 			std::memcpy(bytes_.get(), value.data(), size_);
@@ -36,7 +40,7 @@ public:
 	SecureString(SecureString&& other) noexcept
 		: bytes_(std::move(other.bytes_)), size_(other.size_), cleanse_(other.cleanse_) {
 		other.size_ = 0;
-		other.cleanse_ = OPENSSL_cleanse;
+		other.cleanse_ = aws_iam_default_cleanse;
 	}
 	SecureString& operator=(SecureString&& other) noexcept {
 		if (this != &other) {
@@ -45,7 +49,7 @@ public:
 			size_ = other.size_;
 			cleanse_ = other.cleanse_;
 			other.size_ = 0;
-			other.cleanse_ = OPENSSL_cleanse;
+			other.cleanse_ = aws_iam_default_cleanse;
 		}
 		return *this;
 	}
@@ -74,8 +78,10 @@ public:
 private:
 	std::unique_ptr<unsigned char[]> bytes_;
 	size_t size_ { 0 };
-	CleanseFn cleanse_ { OPENSSL_cleanse };
+	CleanseFn cleanse_ { aws_iam_default_cleanse };
 };
+
+using AwsIamModuleHandle = void *;
 
 enum class AwsIamStatus : uint8_t {
 	OK, SUPPORT_NOT_COMPILED, INVALID_CONFIG, PROVIDER_ERROR,
@@ -195,7 +201,7 @@ void shutdown_global_aws_iam_token_source();
 // shutdown_global_aws_iam_token_source(), because either call would wait for
 // that same claim and deadlock.
 bool install_global_aws_iam_token_source(
-	AwsIamTokenSource *source, AwsIamTokenSourceDestroyFn destroy, void *module_handle);
+	AwsIamTokenSource *source, AwsIamTokenSourceDestroyFn destroy, AwsIamModuleHandle module_handle);
 bool uninstall_global_aws_iam_token_source(AwsIamTokenSource *expected_source);
 
 extern AwsIamTokenSource* GloAwsIamTokenSource;
