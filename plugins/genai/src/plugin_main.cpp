@@ -51,6 +51,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <utility>
+#include <vector>
 
 class ProxySQL_Admin;
 extern ProxySQL_Admin* GloAdmin;
@@ -83,6 +85,14 @@ extern std::atomic<genai_anomaly_embed_fn_t> genai_anomaly_embed_fn;
 
 namespace {
 
+using VariableDefaults = std::vector<std::pair<std::string, std::string>>;
+
+void free_variable_names(char** names) {
+	if (names == nullptr) return;
+	for (int i = 0; names[i] != nullptr; ++i) free(names[i]);
+	free(names);
+}
+
 std::vector<float> embed_query_via_glogath(const std::string& query) {
 	if (GloGATH == nullptr) return {};
 	std::vector<std::string> docs { query };
@@ -91,6 +101,123 @@ std::vector<float> embed_query_via_glogath(const std::string& query) {
 		return {};
 	}
 	return std::vector<float>(res.data, res.data + res.embedding_size);
+}
+
+bool collect_variable_defaults(GenAIPluginContext& ctx, VariableDefaults& defaults) {
+	if (ctx.mcp == nullptr || GloGATH == nullptr) return false;
+
+	char** mcp_names = ctx.mcp->get_variables_list();
+	if (mcp_names == nullptr) return false;
+	for (int i = 0; mcp_names[i] != nullptr; ++i) {
+		std::string value;
+		if (!ctx.mcp->get_variable_string(mcp_names[i], value)) {
+			free_variable_names(mcp_names);
+			return false;
+		}
+		defaults.emplace_back(std::string("mcp-") + mcp_names[i], std::move(value));
+	}
+	free_variable_names(mcp_names);
+
+	char** genai_names = GloGATH->get_variables_list();
+	if (genai_names == nullptr) return false;
+	for (int i = 0; genai_names[i] != nullptr; ++i) {
+		char* value = GloGATH->get_variable(genai_names[i]);
+		defaults.emplace_back(
+			std::string("genai-") + genai_names[i], value != nullptr ? value : "");
+		free(value);
+	}
+	free_variable_names(genai_names);
+	return true;
+}
+
+bool seed_variable_defaults(SQLite3DB* db, const VariableDefaults& defaults,
+		const char* database_name) {
+	if (db == nullptr) {
+		genai_log(6, "genai plugin: cannot seed defaults in %s: null database\n", database_name);
+		return false;
+	}
+
+	auto [prep_rc, stmt] = db->prepare_v2(
+		"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)"
+	);
+	if (prep_rc != SQLITE_OK) {
+		genai_log(6, "genai plugin: failed to prepare default seeding for %s (rc=%d)\n",
+		          database_name, prep_rc);
+		return false;
+	}
+	sqlite3_stmt* statement = stmt.get();
+
+	if (!db->execute("BEGIN")) {
+		genai_log(6, "genai plugin: failed to begin default seeding transaction for %s\n",
+		          database_name);
+		return false;
+	}
+
+	for (const auto& item : defaults) {
+		int rc = (*proxy_sqlite3_bind_text)(statement, 1, item.first.c_str(), -1, SQLITE_TRANSIENT);
+		if (rc != SQLITE_OK) {
+			genai_log(6, "genai plugin: failed to bind default %s for %s (rc=%d)\n",
+			          item.first.c_str(), database_name, rc);
+			db->execute("ROLLBACK");
+			return false;
+		}
+
+		rc = (*proxy_sqlite3_bind_text)(statement, 2, item.second.c_str(), -1, SQLITE_TRANSIENT);
+		if (rc != SQLITE_OK) {
+			genai_log(6, "genai plugin: failed to bind default %s for %s (rc=%d)\n",
+			          item.first.c_str(), database_name, rc);
+			db->execute("ROLLBACK");
+			return false;
+		}
+
+		rc = (*proxy_sqlite3_step)(statement);
+		if (rc != SQLITE_DONE) {
+			genai_log(6, "genai plugin: failed to seed default %s for %s (rc=%d)\n",
+			          item.first.c_str(), database_name, rc);
+			db->execute("ROLLBACK");
+			return false;
+		}
+
+		rc = (*proxy_sqlite3_clear_bindings)(statement);
+		if (rc != SQLITE_OK) {
+			genai_log(6, "genai plugin: failed to clear default bindings for %s in %s (rc=%d)\n",
+			          item.first.c_str(), database_name, rc);
+			db->execute("ROLLBACK");
+			return false;
+		}
+
+		rc = (*proxy_sqlite3_reset)(statement);
+		if (rc != SQLITE_OK) {
+			genai_log(6, "genai plugin: failed to reset default statement for %s in %s (rc=%d)\n",
+			          item.first.c_str(), database_name, rc);
+			db->execute("ROLLBACK");
+			return false;
+		}
+	}
+
+	if (!db->execute("COMMIT")) {
+		genai_log(6, "genai plugin: failed to commit default seeding transaction for %s\n",
+		          database_name);
+		db->execute("ROLLBACK");
+		return false;
+	}
+	return true;
+}
+
+bool seed_plugin_variable_defaults(GenAIPluginContext& ctx) {
+	if (ctx.services == nullptr ||
+	    ctx.services->get_configdb == nullptr ||
+	    ctx.services->get_admindb == nullptr) {
+		return false;
+	}
+
+	VariableDefaults defaults;
+	if (!collect_variable_defaults(ctx, defaults)) return false;
+
+	SQLite3DB* configdb = ctx.services->get_configdb();
+	SQLite3DB* admindb = ctx.services->get_admindb();
+	return seed_variable_defaults(configdb, defaults, "configdb") &&
+	       seed_variable_defaults(admindb, defaults, "admindb");
 }
 
 } // namespace
@@ -675,6 +802,12 @@ void mcp_start_listener_if_enabled(GenAIPluginContext& ctx) {
 bool genai_start() {
 	GenAIPluginContext& ctx = genai_context();
 	ctx.started = true;
+
+	if (!seed_plugin_variable_defaults(ctx)) {
+		genai_log(6, "genai plugin: failed to seed MCP/GenAI variable defaults\n");
+		ctx.started = false;
+		return false;
+	}
 
 	if (!mcp_load_variables_from_admindb(ctx)) {
 		genai_log(6, "genai plugin: failed to load MCP variables at startup\n");

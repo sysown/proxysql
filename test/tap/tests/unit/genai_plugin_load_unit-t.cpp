@@ -27,14 +27,18 @@ SQLite3DB* g_admindb  = nullptr;
 SQLite3DB* g_configdb = nullptr;
 SQLite3DB* g_statsdb  = nullptr;
 
+void setup_global_variables_schema(SQLite3DB* db) {
+	db->execute("CREATE TABLE IF NOT EXISTS global_variables ("
+	            " variable_name TEXT PRIMARY KEY, variable_value TEXT)");
+}
+
 void setup_admindb_schema(SQLite3DB* db) {
 	// Minimal schema to satisfy mcp_load_variables_from_admindb /
 	// mcp_load_target_auth_map_from_admindb in the plugin.  Column
 	// shapes mirror the canonical DDLs in
 	// include/ProxySQL_Admin_Tables_Definitions.h so the plugin's
 	// SELECTs (which name every column by name) succeed.
-	db->execute("CREATE TABLE IF NOT EXISTS global_variables ("
-	            " variable_name TEXT PRIMARY KEY, variable_value TEXT)");
+	setup_global_variables_schema(db);
 	db->execute("CREATE TABLE IF NOT EXISTS mcp_auth_profiles ("
 	            " auth_profile_id TEXT PRIMARY KEY, db_username TEXT,"
 	            " db_password TEXT, default_schema TEXT DEFAULT '',"
@@ -69,7 +73,7 @@ SQLite3DB* proxysql_plugin_get_configdb() { return g_configdb; }
 SQLite3DB* proxysql_plugin_get_statsdb()  { return g_statsdb; }
 
 int main() {
-	plan(45);
+	plan(57);
 
 	g_admindb  = new SQLite3DB();
 	g_configdb = new SQLite3DB();
@@ -78,6 +82,15 @@ int main() {
 	g_configdb->open((char*)":memory:", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 	g_statsdb->open((char*)":memory:", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 	setup_admindb_schema(g_admindb);
+	setup_global_variables_schema(g_configdb);
+
+	for (SQLite3DB* db : {g_configdb, g_admindb}) {
+		if (!db->execute(
+			"INSERT INTO global_variables(variable_name, variable_value) VALUES"
+			" ('mcp-port','7123'),('genai-threads','7')")) {
+			BAIL_OUT("failed to seed persisted GenAI plugin variables");
+		}
+	}
 
 	ProxySQL_PluginManager mgr;
 	std::string err {};
@@ -104,6 +117,42 @@ int main() {
 
 	ok(mgr.start_all(err), "start_all succeeds");
 	if (!err.empty()) diag("start error: %s", err.c_str());
+
+	struct VariableDatabase {
+		SQLite3DB* db;
+		const char* name;
+	};
+
+	for (const VariableDatabase& target : {
+		VariableDatabase{g_configdb, "configdb"},
+		VariableDatabase{g_admindb, "admindb"}
+	}) {
+		const int mcp_count = target.db->return_one_int(
+			"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'mcp-%'");
+		const int genai_count = target.db->return_one_int(
+			"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'genai-%'");
+
+		ok(mcp_count == 14, "%s contains all 14 MCP variables (got %d)",
+		   target.name, mcp_count);
+		ok(genai_count == 32, "%s contains all 32 GenAI variables (got %d)",
+		   target.name, genai_count);
+		ok(target.db->return_one_int(
+			"SELECT COUNT(*) FROM global_variables"
+			" WHERE variable_name='mcp-port' AND variable_value='7123'") == 1,
+		   "%s preserves persisted mcp-port", target.name);
+		ok(target.db->return_one_int(
+			"SELECT COUNT(*) FROM global_variables"
+			" WHERE variable_name='genai-threads' AND variable_value='7'") == 1,
+		   "%s preserves persisted genai-threads", target.name);
+		ok(target.db->return_one_int(
+			"SELECT COUNT(*) FROM global_variables"
+			" WHERE variable_name='mcp-timeout_ms' AND variable_value='30000'") == 1,
+		   "%s persists missing mcp-timeout_ms default", target.name);
+		ok(target.db->return_one_int(
+			"SELECT COUNT(*) FROM global_variables"
+			" WHERE variable_name='genai-rag_timeout_ms' AND variable_value='2000'") == 1,
+		   "%s persists missing genai-rag_timeout_ms default", target.name);
+	}
 
 	// Runtime-view dispatch: SELECT against runtime_mcp_<X> should
 	// trigger the chassis dispatcher to invoke the plugin's
