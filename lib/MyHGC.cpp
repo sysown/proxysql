@@ -1,4 +1,6 @@
 #include "../deps/json/json.hpp"
+#include <array>
+#include <vector>
 using json = nlohmann::json;
 #define PROXYJSON
 
@@ -27,8 +29,9 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 		fprintf(stderr, "Total: %llu, Candidates: %llu\n", array_mysrvc_total-l, array_mysrvc_cands);
 	}
 #endif // TEST_AURORA
-	MySrvC *mysrvcCandidates_static[32];
-	MySrvC **mysrvcCandidates = mysrvcCandidates_static;
+	std::array<MySrvC*, 32> mysrvcCandidates_static;
+	std::vector<MySrvC *> mysrvcCandidates_heap;
+	MySrvC **mysrvcCandidates = mysrvcCandidates_static.data();
 	unsigned int num_candidates = 0;
 	bool max_connections_reached = false;
 	bool use_aws_locality = false;
@@ -42,21 +45,10 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 			aws_locality_snapshot->has_hostgroup(hid);
 	}
 #endif
-	if (l>32) {
-		mysrvcCandidates = (MySrvC **)malloc(sizeof(MySrvC *)*l);
+	if (l > mysrvcCandidates_static.size()) {
+		mysrvcCandidates_heap.resize(l);
+		mysrvcCandidates = mysrvcCandidates_heap.data();
 	}
-	auto candidate_weight_sum = [&]() -> uint64_t {
-#ifdef PROXYSQL40
-		if (use_aws_locality) {
-			// Locality selection has a uniform fallback for an all-zero
-			// configured-weight set. These availability checks therefore only
-			// need to know whether an eligible candidate exists; defer snapshot
-			// lookups until the actual lottery below.
-			return num_candidates;
-		}
-#endif
-		return sum;
-	};
 	if (l) {
 		//int j=0;
 		for (j=0; j<l; j++) {
@@ -206,7 +198,13 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 				}
 			}
 		}
-		if (candidate_weight_sum()==0) {
+		const uint64_t candidate_weight_sum =
+#ifdef PROXYSQL40
+			use_aws_locality ? num_candidates : static_cast<uint64_t>(sum);
+#else
+			static_cast<uint64_t>(sum);
+#endif
+		if (candidate_weight_sum == 0) {
 			// per issue #531 , we try a desperate attempt to bring back online any shunned server
 			// we do this lowering the maximum wait time to 10%
 			// most of the follow code is copied from few lines above
@@ -263,11 +261,14 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 				}
 			}
 		}
-		if (candidate_weight_sum()==0) {
+		const uint64_t candidate_weight_sum_after_retry =
+#ifdef PROXYSQL40
+			use_aws_locality ? num_candidates : static_cast<uint64_t>(sum);
+#else
+			static_cast<uint64_t>(sum);
+#endif
+		if (candidate_weight_sum_after_retry == 0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
-			if (l>32) {
-				free(mysrvcCandidates);
-			}
 #ifdef TEST_AURORA
 			array_mysrvc_cands += num_candidates;
 #endif // TEST_AURORA
@@ -298,11 +299,14 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 
 		unsigned int New_sum=sum;
 
-		if (candidate_weight_sum()==0) {
+		const uint64_t candidate_weight_sum_post_recovery =
+#ifdef PROXYSQL40
+			use_aws_locality ? num_candidates : static_cast<uint64_t>(sum);
+#else
+			static_cast<uint64_t>(sum);
+#endif
+		if (candidate_weight_sum_post_recovery == 0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
-			if (l>32) {
-				free(mysrvcCandidates);
-			}
 #ifdef TEST_AURORA
 			array_mysrvc_cands += num_candidates;
 #endif // TEST_AURORA
@@ -384,9 +388,6 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7,
 					"Returning MySrvC %p, server %s:%d with AWS locality weighting\n",
 					mysrvc, mysrvc->address, mysrvc->port);
-				if (l>32) {
-					free(mysrvcCandidates);
-				}
 #ifdef TEST_AURORA
 				array_mysrvc_cands += num_candidates;
 #endif // TEST_AURORA
@@ -394,9 +395,6 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 			}
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7,
 				"Returning MySrvC NULL because no AWS locality candidate is eligible\n");
-			if (l>32) {
-				free(mysrvcCandidates);
-			}
 #ifdef TEST_AURORA
 			array_mysrvc_cands += num_candidates;
 #endif // TEST_AURORA
@@ -414,9 +412,6 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 			New_sum+=mysrvc->weight;
 			if (k<=New_sum) {
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
-				if (l>32) {
-					free(mysrvcCandidates);
-				}
 #ifdef TEST_AURORA
 				array_mysrvc_cands += num_candidates;
 #endif // TEST_AURORA
@@ -432,9 +427,6 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 		}
 	}
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL\n");
-	if (l>32) {
-		free(mysrvcCandidates);
-	}
 #ifdef TEST_AURORA
 	array_mysrvc_cands += num_candidates;
 #endif // TEST_AURORA

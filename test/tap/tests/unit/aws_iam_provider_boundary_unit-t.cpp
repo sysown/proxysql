@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstring>
 #include <dlfcn.h>
 #include <future>
@@ -17,6 +18,8 @@ using namespace std::chrono_literals;
 
 namespace {
 
+using DlModuleHandle = decltype(dlopen(nullptr, RTLD_NOW | RTLD_LOCAL));
+
 constexpr std::string_view kToken { "FAKE_PROVIDER_BOUNDARY_TOKEN" };
 std::atomic<unsigned int> cleanse_calls { 0 };
 std::atomic<bool> source_destroyed { false };
@@ -24,9 +27,9 @@ std::atomic<bool> replacement_install_attempted { false };
 std::atomic<bool> replacement_install_succeeded { false };
 std::atomic<bool> replacement_destroyed { false };
 
-void tracked_cleanse(void *memory, size_t size) {
+void tracked_cleanse(std::byte* memory, size_t size) {
 	if (size == kToken.size() && std::memcmp(memory, kToken.data(), size) == 0) {
-		cleanse_calls.fetch_add(1, std::memory_order_relaxed);
+		cleanse_calls.fetch_add(1);
 	}
 	OPENSSL_cleanse(memory, size);
 }
@@ -49,7 +52,9 @@ public:
 		AwsIamCompletion completion;
 		completion.opaque_id = opaque_id;
 		completion.result.status = AwsIamStatus::OK;
-		completion.result.token = SecureString(kToken, tracked_cleanse);
+		completion.result.token = SecureString(kToken, [](void* memory, size_t bytes_size) {
+			tracked_cleanse(static_cast<std::byte*>(memory), bytes_size);
+		});
 		if (auto live = sink.lock()) live->post(std::move(completion));
 		return { 1 };
 	}
@@ -58,30 +63,40 @@ public:
 		std::chrono::steady_clock::time_point) override {
 		AwsIamTokenResult result;
 		result.status = AwsIamStatus::OK;
-		result.token = SecureString(kToken, tracked_cleanse);
+		result.token = SecureString(kToken, [](void* memory, size_t bytes_size) {
+			tracked_cleanse(static_cast<std::byte*>(memory), bytes_size);
+		});
 		return result;
 	}
 
-	void cancel(AwsIamRequestHandle) override {}
-	void invalidate(const AwsIamTokenKey&, uint64_t) override {}
-	void record_backend_connection(bool) override {}
-	void record_waiting_session(bool) override {}
+	void cancel(AwsIamRequestHandle) override {
+		// Cancellation path is not expected in this fake source.
+	}
+	void invalidate(const AwsIamTokenKey&, uint64_t) override {
+		// Invalidations are not exercised by this fake source.
+	}
+	void record_backend_connection(bool) override {
+		// Backend connection metadata is not exercised by this fake source.
+	}
+	void record_waiting_session(bool) override {
+		// Waiting session metrics are not exercised by this fake source.
+	}
 	AwsIamStatsSnapshot snapshot() const override { return {}; }
 };
 
 void destroy_source(AwsIamTokenSource *source) {
-	delete source;
+	std::unique_ptr<AwsIamTokenSource> owned_source(source);
 	source_destroyed.store(true);
 }
 
 void destroy_replacement(AwsIamTokenSource *source) {
-	delete source;
+	std::unique_ptr<AwsIamTokenSource> owned_source(source);
 	replacement_destroyed.store(true);
 }
 
 void destroy_source_and_attempt_replacement(AwsIamTokenSource *source) {
-	delete source;
-	void *module_handle = dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
+	std::unique_ptr<AwsIamTokenSource> owned_source(source);
+	DlModuleHandle module_handle = dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
 	auto replacement = std::make_unique<FakeSource>();
 	replacement_install_attempted.store(true);
 	const bool installed = module_handle != nullptr &&
@@ -112,7 +127,7 @@ int main() {
 	ok(!acquire_global_aws_iam_token_source(),
 		"provider registry starts without an installed source");
 
-	void *module_handle = dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
+	DlModuleHandle module_handle = dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
 	auto source = std::make_unique<FakeSource>();
 	ok(module_handle != nullptr && install_global_aws_iam_token_source(
 		source.get(), destroy_source, module_handle),
@@ -136,9 +151,10 @@ int main() {
 	ok(cleanse_calls.load() == 1,
 		"the moved token is cleansed by the public secure-string contract");
 
-	auto uninstall = std::async(std::launch::async, [source = source.get()] {
-		return uninstall_global_aws_iam_token_source(source);
-	});
+	std::packaged_task<bool()> uninstall_task(
+		[source = source.get()] { return uninstall_global_aws_iam_token_source(source); });
+	auto uninstall = uninstall_task.get_future();
+	std::thread uninstall_worker(std::move(uninstall_task));
 	const auto stop_deadline = std::chrono::steady_clock::now() + 1s;
 	while (acquire_global_aws_iam_token_source() &&
 		std::chrono::steady_clock::now() < stop_deadline) {
@@ -152,6 +168,7 @@ int main() {
 	lease = AwsIamTokenSourceLease {};
 	ok(uninstall.get() && source_destroyed.load(),
 		"uninstall destroys the source only after its final lease drains");
+	uninstall_worker.join();
 	source.release();
 
 	std::unique_ptr<AwsIamTokenSource> unavailable =
@@ -172,7 +189,7 @@ int main() {
 	replacement_install_attempted.store(false);
 	replacement_install_succeeded.store(false);
 	replacement_destroyed.store(false);
-	void *retiring_handle = dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
+	DlModuleHandle retiring_handle = dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
 	auto retiring_source = std::make_unique<FakeSource>();
 	auto *retiring_source_ptr = retiring_source.get();
 	if (retiring_handle == nullptr || !install_global_aws_iam_token_source(
@@ -182,12 +199,14 @@ int main() {
 	retiring_source.release();
 	AwsIamTokenSourceLease retirement_lease =
 		acquire_global_aws_iam_token_source();
-	auto overlapping_uninstall = std::async(std::launch::async, [retiring_source_ptr] {
-		return uninstall_global_aws_iam_token_source(retiring_source_ptr);
-	});
-	auto overlapping_shutdown = std::async(std::launch::async, [] {
-		shutdown_global_aws_iam_token_source();
-	});
+	std::packaged_task<bool()> overlapping_uninstall_task(
+		[retiring_source_ptr] { return uninstall_global_aws_iam_token_source(retiring_source_ptr); });
+	auto overlapping_uninstall = overlapping_uninstall_task.get_future();
+	std::thread overlapping_uninstall_worker(std::move(overlapping_uninstall_task));
+	std::packaged_task<void()> overlapping_shutdown_task(
+		[] { shutdown_global_aws_iam_token_source(); });
+	auto overlapping_shutdown = overlapping_shutdown_task.get_future();
+	std::thread overlapping_shutdown_worker(std::move(overlapping_shutdown_task));
 	const auto retirement_deadline = std::chrono::steady_clock::now() + 1s;
 	while (acquire_global_aws_iam_token_source() &&
 		std::chrono::steady_clock::now() < retirement_deadline) {
@@ -199,6 +218,8 @@ int main() {
 	retirement_lease = AwsIamTokenSourceLease {};
 	overlapping_uninstall.get();
 	overlapping_shutdown.get();
+	overlapping_uninstall_worker.join();
+	overlapping_shutdown_worker.join();
 	ok(replacement_install_attempted.load() &&
 		!replacement_install_succeeded.load() &&
 		!replacement_destroyed.load(),
@@ -208,7 +229,7 @@ int main() {
 	// checking that publication reopens after both retirement callers return.
 	shutdown_global_aws_iam_token_source();
 	replacement_destroyed.store(false);
-	void *survivor_handle = dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
+	DlModuleHandle survivor_handle = dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
 	auto survivor = std::make_unique<FakeSource>();
 	FakeSource *survivor_observer = survivor.get();
 	const bool survivor_installed = survivor_handle != nullptr &&

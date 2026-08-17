@@ -123,6 +123,8 @@ extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Monitor *GloMyMon;
 extern MySQL_Logger *GloMyLogger;
 
+static char mysql_thread_aws_locality_awareness_variable[] = "aws_locality_awareness";
+
 typedef struct mythr_st_vars {
 	enum MySQL_Thread_status_variable v_idx;
 	p_th_counter::metric m_idx;
@@ -512,7 +514,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"passthrough_auth_unknown_users",
 	(char *)"passthrough_auth_require_tls",
 #ifdef PROXYSQL40
-	(char *)"aws_locality_awareness",
+		mysql_thread_aws_locality_awareness_variable,
 #endif
 	(char *)"passthrough_default_hg",
 	(char *)"passthrough_default_schema",
@@ -2343,8 +2345,8 @@ bool MySQL_Threads_Handler::set_variable(const char *name, const char *value) {	
 				} else {
 					proxy_error("%s is an invalid value for %s, not matching regex \"%s\"\n", value, name, patt);
 				}
+				return false;
 			}
-			return false;
 		}
 	}
 	if (!strcasecmp(name,"binlog_reader_connect_retry_msec")) {
@@ -6920,7 +6922,7 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(
 		// full rationale; reads are relaxed because the deadline is compared against
 		// 'curtime' and small reordering is harmless.
 		if (check_session_track_backoff) {
-			session_track_backoff_until = c->parent->session_track_backoff_until.load(std::memory_order_relaxed);
+			session_track_backoff_until = c->parent->session_track_backoff_until.load();
 			if (session_track_backoff_until > curtime) {
 				++i;
 				continue;
@@ -6999,38 +7001,50 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(
 		++i;
 	}
 
-	auto connection_is_eligible = [&](MySQL_Connection* candidate,
-		bool record_lag_skip) -> bool {
-		if (candidate->backend_auth_type() != requested_type ||
-			(requested_type == MySQLBackendAuthType::AWS_IAM &&
-			 candidate->requires_CHANGE_USER(client_conn, requested_type)) ||
+	const bool is_session_track_backoff_enabled = check_session_track_backoff;
+	const int max_lag_ms_local = max_lag_ms;
+	const char* requested_schema = client_conn->userinfo ? client_conn->userinfo->schemaname : nullptr;
+	MySQL_Connection* requested_connection = client_conn;
+	const MySQLBackendAuthType requested_auth_type = requested_type;
+	const time_t current_time = curtime;
+	auto& thread_status_variables = status_variables;
+
+	auto connection_is_eligible = [requested_connection, requested_auth_type, requested_schema,
+		is_session_track_backoff_enabled, max_lag_ms_local, current_time,
+			&thread_status_variables, gtid_uuid, _hid](
+		MySQL_Connection* candidate, bool record_lag_skip) -> bool {
+		if (candidate->backend_auth_type() != requested_auth_type ||
+			(requested_auth_type == MySQLBackendAuthType::AWS_IAM &&
+			 candidate->requires_CHANGE_USER(requested_connection, requested_auth_type)) ||
 			!candidate->healthy || !candidate->reusable) {
 			return false;
 		}
-		if (check_session_track_backoff &&
-			candidate->parent->session_track_backoff_until.load(
-				std::memory_order_relaxed) > curtime) {
+		if (is_session_track_backoff_enabled &&
+			candidate->parent->session_track_backoff_until.load() > current_time) {
 			return false;
 		}
 		if (candidate->parent->myhgc->hid != _hid ||
-			!client_conn->match_tracked_options(candidate) ||
-			candidate->requires_CHANGE_USER(client_conn, requested_type)) {
+			!requested_connection->match_tracked_options(candidate) ||
+			candidate->requires_CHANGE_USER(requested_connection, requested_auth_type)) {
 			return false;
 		}
-		char* schema = client_conn->userinfo->schemaname;
-		if (strcmp(candidate->userinfo->schemaname, schema) != 0) {
-			return false;
-		}
-		unsigned int not_match = 0;
-		candidate->number_of_matching_session_variables(client_conn, not_match);
+			if (requested_schema != nullptr) {
+				const char* candidate_schema = candidate->userinfo ? candidate->userinfo->schemaname : nullptr;
+				if (candidate_schema == nullptr ||
+					strcmp(candidate_schema, requested_schema) != 0) {
+					return false;
+				}
+			}
+			unsigned int not_match = 0;
+		candidate->number_of_matching_session_variables(requested_connection, not_match);
 		if (not_match != 0) {
 			return false;
 		}
-		if (gtid_uuid == nullptr && max_lag_ms >= 0 &&
-			static_cast<unsigned int>(max_lag_ms) <
+		if (gtid_uuid == nullptr && max_lag_ms_local >= 0 &&
+			static_cast<unsigned int>(max_lag_ms_local) <
 				(candidate->parent->aws_aurora_current_lag_us / 1000)) {
 			if (record_lag_skip) {
-				status_variables.stvar[
+				thread_status_variables.stvar[
 					st_var_aws_aurora_replicas_skipped_during_query]++;
 			}
 			return false;

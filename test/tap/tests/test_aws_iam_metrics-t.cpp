@@ -31,17 +31,25 @@ public:
 	explicit ScriptedSource(AwsIamStatsSnapshot stats) : stats_(stats) {}
 
 	AwsIamRequestHandle request(const AwsIamTokenKey&, uint64_t,
-		std::weak_ptr<AwsIamCompletionSink>) override {
+			std::weak_ptr<AwsIamCompletionSink>) override {
 		return {};
 	}
 	AwsIamTokenResult request_blocking(const AwsIamTokenKey&,
-		std::chrono::steady_clock::time_point) override {
+			std::chrono::steady_clock::time_point) override {
 		return {};
 	}
-	void cancel(AwsIamRequestHandle) override {}
-	void invalidate(const AwsIamTokenKey&, uint64_t) override {}
-	void record_backend_connection(bool) override {}
-	void record_waiting_session(bool) override {}
+	void cancel(AwsIamRequestHandle) override {
+		// ScriptedSource is a static fixture; cancellation is intentionally ignored.
+	}
+	void invalidate(const AwsIamTokenKey&, uint64_t) override {
+		// ScriptedSource owns fixed test data; invalidation is intentionally ignored.
+	}
+	void record_backend_connection(bool) override {
+		// Backend-connection metadata is not modeled for this scripted fixture.
+	}
+	void record_waiting_session(bool) override {
+		// Waiting-session metrics are intentionally not modeled in this scripted fixture.
+	}
 	AwsIamStatsSnapshot snapshot() const override { return stats_; }
 
 private:
@@ -50,27 +58,31 @@ private:
 
 std::map<std::string, uint64_t> query_aws_iam_stats(SQLite3DB *db) {
 	std::map<std::string, uint64_t> values;
-	char *error = nullptr;
+	char* error = nullptr;
 	int columns = 0;
 	int affected_rows = 0;
 	SQLite3_result *result = nullptr;
+
 	db->execute_statement(
 		"SELECT Variable_Name, Variable_Value FROM stats_mysql_global "
 		"WHERE Variable_Name LIKE 'AwsIam_%' ORDER BY Variable_Name",
 		&error, &columns, &affected_rows, &result);
-	if (error != nullptr) {
-		free(error);
-		delete result;
+
+	std::unique_ptr<char, decltype(&std::free)> error_guard(error, std::free);
+	std::unique_ptr<SQLite3_result, void (*)(SQLite3_result*)> result_guard(
+		result, [](SQLite3_result* p) { delete p; });
+
+	if (error_guard) {
 		return values;
 	}
-	if (result != nullptr) {
-		for (SQLite3_row *row : result->rows) {
-			if (row->fields[0] != nullptr && row->fields[1] != nullptr) {
-				values.emplace(row->fields[0], std::stoull(row->fields[1]));
-			}
+	if (result_guard == nullptr) {
+		return values;
+	}
+	for (SQLite3_row *row : result_guard->rows) {
+		if (row->fields[0] != nullptr && row->fields[1] != nullptr) {
+			values.emplace(row->fields[0], std::stoull(row->fields[1]));
 		}
 	}
-	delete result;
 	return values;
 }
 
@@ -86,13 +98,19 @@ bool has_unlabelled_sample(const std::string& text, const std::string& name,
 int main() {
 	plan(7);
 
+	std::unique_ptr<ProxySQL_Statistics> proxy_stats;
+	std::unique_ptr<char, decltype(&std::free)> statsdb_disk(nullptr, std::free);
+
 	const bool initialized = test_init_minimal() == 0 &&
 		test_init_query_processor() == 0 && test_init_hostgroups() == 0;
 	if (initialized) {
-		GloVars.statsdb_disk = strdup(":memory:");
-		GloProxyStats = new ProxySQL_Statistics();
+		statsdb_disk.reset(strdup(":memory:"));
+		GloVars.statsdb_disk = statsdb_disk.get();
+		proxy_stats = std::make_unique<ProxySQL_Statistics>();
+		GloProxyStats = proxy_stats.get();
 		GloProxyStats->init();
-		GloAdmin = new ProxySQL_Admin(); // NOSONAR: process-scoped partial fixture
+		// NOSONAR: process-scoped partial fixture cannot invoke production shutdown destructor.
+		GloAdmin = new ProxySQL_Admin();
 		GloAdmin->statsdb = new SQLite3DB();
 		char memory_db[] = ":memory:";
 		GloAdmin->statsdb->open(
@@ -178,6 +196,7 @@ int main() {
 
 	publish_global_aws_iam_token_source(nullptr);
 	auto active_registry = GloVars.prometheus_registry;
+	(void)active_registry;
 	GloVars.prometheus_registry = std::make_shared<prometheus::Registry>();
 	auto unavailable = create_aws_iam_token_source({ 16, 16 });
 	const AwsIamTokenResult unavailable_result = unavailable->request_blocking(
@@ -204,6 +223,10 @@ int main() {
 	ok(unavailable_zero,
 		"the unavailable provider projects fixed zero admin and Prometheus values");
 	shutdown_global_aws_iam_token_source();
+
+	GloAdmin = nullptr;
+	GloProxyStats = nullptr;
+	GloVars.statsdb_disk = nullptr;
 
 	return exit_status();
 }
