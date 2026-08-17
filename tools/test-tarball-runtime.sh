@@ -40,7 +40,7 @@ for image in "${images[@]}"; do
                 resolved_path=
                 while IFS= read -r dependency; do
                     case "${dependency}" in
-                        "${library} => "*)
+                        *"${library} => "*)
                             resolved_path=${dependency#*=> }
                             resolved_path=${resolved_path%% *}
                             break
