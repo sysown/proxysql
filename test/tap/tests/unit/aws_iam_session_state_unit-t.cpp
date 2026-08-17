@@ -300,9 +300,11 @@ public:
 		frontend_stream->attach_connection(frontend);
 		frontend_stream->myprot.init(&frontend_stream, frontend->userinfo, session);
 		session->client_myds = frontend_stream;
+		std::string frontend_user = username;
+		std::string frontend_password = "ordinary-password";
+		std::string frontend_schema = "orders";
 		frontend->userinfo->set(
-			const_cast<char *>(username), const_cast<char *>("ordinary-password"),
-			const_cast<char *>("orders"), nullptr);
+			&frontend_user[0], &frontend_password[0], &frontend_schema[0], nullptr);
 
 		session->mybe = session->find_or_create_backend(kHostgroup);
 		session->current_hostgroup = kHostgroup;

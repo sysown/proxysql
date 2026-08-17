@@ -327,7 +327,7 @@ void finish_server(ChildServer& child) {
 MySrvC *create_server(unsigned int hostgroup, const char *endpoint, unsigned int port,
 	bool use_ssl) {
 	srv_info_t info;
-	info.addr = const_cast<char *>(endpoint);
+	info.addr = endpoint;
 	info.port = port;
 	info.kind = "aws-iam-protocol-test";
 	srv_opts_t opts;
@@ -364,9 +364,11 @@ public:
 		frontend = new MySQL_Connection();
 		frontend_stream->attach_connection(frontend);
 		session->client_myds = frontend_stream;
-		frontend->userinfo->set(const_cast<char *>("frontend_user"),
-			const_cast<char *>("frontend-password-must-not-change"),
-			const_cast<char *>("frontend_schema"), nullptr);
+		std::string frontend_user = "frontend_user";
+		std::string frontend_password = "frontend-password-must-not-change";
+		std::string frontend_schema = "frontend_schema";
+		frontend->userinfo->set(&frontend_user[0],
+			&frontend_password[0], &frontend_schema[0], nullptr);
 		stream = new MySQL_Data_Stream();
 		stream->init(MYDS_BACKEND_NOT_CONNECTED, session, -1);
 		connection = new MySQL_Connection();
@@ -374,9 +376,11 @@ public:
 		connection->parent = server;
 		stream->attach_connection(connection);
 		session->mybe = session->create_backend(server->myhgc->hid, stream);
-		connection->userinfo->set(const_cast<char *>(kUsername),
-			const_cast<char *>("ordinary-password-must-not-leak"),
-			const_cast<char *>(""), nullptr);
+		std::string backend_user = kUsername;
+		std::string backend_password = "ordinary-password-must-not-leak";
+		char backend_schema[] = "";
+		connection->userinfo->set(&backend_user[0], &backend_password[0],
+			backend_schema, nullptr);
 	}
 	~ConnectionFixture() {
 		if (connection != nullptr) {

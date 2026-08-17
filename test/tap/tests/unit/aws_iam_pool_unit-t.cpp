@@ -20,6 +20,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 extern MySQL_HostGroups_Manager *MyHGM;
 extern MySQL_Threads_Handler *GloMTH;
@@ -88,9 +89,11 @@ MySQL_Connection *create_established_connection(
 		BAIL_OUT("failed to initialize connector charset for pool fixture");
 	}
 	connection->parent = server;
+	std::string conn_username = username;
+	std::string conn_password = "password";
+	std::string schema = kSchema;
 	connection->userinfo->set(
-		const_cast<char *>(username), const_cast<char *>("password"),
-		const_cast<char *>(kSchema), nullptr);
+		&conn_username[0], &conn_password[0], &schema[0], nullptr);
 	connection->set_backend_auth_type(type);
 	connection->healthy = true;
 	connection->reusable = true;
@@ -116,9 +119,11 @@ public:
 		frontend_stream->attach_connection(frontend);
 		frontend_stream->myprot.init(&frontend_stream, frontend->userinfo, session);
 		session->client_myds = frontend_stream;
+		std::string frontend_user = username;
+		std::string frontend_password = "password";
+		std::string frontend_schema = kSchema;
 		frontend->userinfo->set(
-			const_cast<char *>(username), const_cast<char *>("password"),
-			const_cast<char *>(kSchema), nullptr);
+			&frontend_user[0], &frontend_password[0], &frontend_schema[0], nullptr);
 		frontend->set_backend_auth_type(requested_type);
 
 		session->mybe = session->create_backend(hostgroup_id);
@@ -357,11 +362,15 @@ void test_mixed_user_mode_local(MySQL_Thread& worker) {
 }
 
 void load_invalid_reload_policy() {
+	std::vector<char> invalid_user(std::strlen(kInvalidReloadUser) + 1);
+	std::strcpy(invalid_user.data(), kInvalidReloadUser);
+	char password[] = "password";
+	char backend_auth[] = "{\"backend_auth\":{\"type\":17}}";
+	char empty[] = "";
 	if (!GloMyAuth->add(
-		const_cast<char *>(kInvalidReloadUser), const_cast<char *>("password"),
-		USERNAME_BACKEND, false, 0, const_cast<char *>(""), false, false,
-		false, 100, const_cast<char *>("{\"backend_auth\":{\"type\":17}}"),
-		const_cast<char *>(""))) {
+		invalid_user.data(), password,
+		USERNAME_BACKEND, false, 0, empty, false, false,
+		false, 100, backend_auth, empty)) {
 		BAIL_OUT("failed to load malformed backend policy fixture");
 	}
 }
@@ -748,18 +757,21 @@ int main() {
 	std::unique_ptr<MySQL_Logger> owned_logger(std::make_unique<MySQL_Logger>());
 	MySQL_Logger *previous_logger = GloMyLogger;
 	GloMyLogger = owned_logger.get();
-	if (!GloMyAuth->add(
-		const_cast<char *>(kUser), const_cast<char *>("password"), USERNAME_BACKEND,
-		false, 0, const_cast<char *>(""), false, false, false, 100,
-		const_cast<char *>(""), const_cast<char *>("")) ||
-		!GloMyAuth->add(
-			const_cast<char *>(kOtherUser), const_cast<char *>("password"), USERNAME_BACKEND,
-			false, 0, const_cast<char *>(""), false, false, false, 100,
-			const_cast<char *>(""), const_cast<char *>("")) ||
-		!GloMyAuth->add(
-			const_cast<char *>(kInvalidReloadUser), const_cast<char *>("password"), USERNAME_BACKEND,
-			false, 0, const_cast<char *>(""), false, false, false, 100,
-			const_cast<char *>(""), const_cast<char *>(""))) {
+	std::string user = kUser;
+	std::string other_user = kOtherUser;
+	std::string invalid_user = kInvalidReloadUser;
+	std::string password = "password";
+	char empty[] = "";
+	if (!(
+		GloMyAuth->add(&user[0], &password[0], USERNAME_BACKEND,
+			false, 0, empty, false, false,
+			false, 100, empty, empty) &&
+		GloMyAuth->add(&other_user[0], &password[0], USERNAME_BACKEND,
+			false, 0, empty, false, false,
+			false, 100, empty, empty) &&
+		GloMyAuth->add(&invalid_user[0], &password[0], USERNAME_BACKEND,
+			false, 0, empty, false, false,
+			false, 100, empty, empty))) {
 		BAIL_OUT("failed to load backend user fixtures");
 	}
 	GloMTH->num_threads = 1;

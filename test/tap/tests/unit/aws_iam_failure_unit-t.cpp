@@ -223,9 +223,11 @@ MySQL_Connection *established_iam_connection(int fd) {
 	connection->mysql->charset = mariadb_get_charset_by_name("utf8mb4");
 	if (connection->mysql->charset == nullptr) BAIL_OUT("charset fixture failed");
 	connection->parent = failure_server;
+	std::string iam_user = kIamUser;
+	char iam_password[] = "";
+	std::string schema = "orders";
 	connection->userinfo->set(
-		const_cast<char *>(kIamUser), const_cast<char *>(""),
-		const_cast<char *>("orders"), nullptr);
+		&iam_user[0], &iam_password[0], &schema[0], nullptr);
 	connection->set_backend_auth_type(MySQLBackendAuthType::AWS_IAM);
 	connection->healthy = true;
 	connection->reusable = true;
@@ -273,9 +275,11 @@ public:
 		frontend_stream->attach_connection(frontend);
 		frontend_stream->myprot.init(&frontend_stream, frontend->userinfo, session);
 		session->client_myds = frontend_stream;
+		std::string frontend_user = username;
+		std::string frontend_password = "ordinary-password";
+		std::string frontend_schema = "orders";
 		frontend->userinfo->set(
-			const_cast<char *>(username), const_cast<char *>("ordinary-password"),
-			const_cast<char *>("orders"), nullptr);
+			&frontend_user[0], &frontend_password[0], &frontend_schema[0], nullptr);
 
 		session->mybe = session->create_backend(kHostgroup);
 		session->current_hostgroup = kHostgroup;

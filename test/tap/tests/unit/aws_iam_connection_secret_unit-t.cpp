@@ -172,10 +172,13 @@ public:
 		frontend_stream->myconn = frontend;
 		frontend->myds = frontend_stream;
 		session->client_myds = frontend_stream;
+		std::string frontend_user = "frontend_user";
+		std::string frontend_password = "frontend-password-must-not-change";
+		std::string frontend_schema = "frontend_schema";
 		frontend->userinfo->set(
-			const_cast<char *>("frontend_user"),
-			const_cast<char *>("frontend-password-must-not-change"),
-			const_cast<char *>("frontend_schema"), nullptr);
+			&frontend_user[0],
+			&frontend_password[0],
+			&frontend_schema[0], nullptr);
 
 		backend_stream = new MySQL_Data_Stream();
 		backend_stream->init(MYDS_BACKEND_NOT_CONNECTED, session, -1);
@@ -186,10 +189,13 @@ public:
 		backend_stream->myconn = connection;
 		MySQL_Backend *backend = session->create_backend(606, backend_stream);
 		session->mybe = backend;
+		std::string backend_user = "iam_backend";
+		std::string backend_password = "ordinary-backend-password";
+		std::string backend_schema = "orders";
 		connection->userinfo->set(
-			const_cast<char *>("iam_backend"),
-			const_cast<char *>("ordinary-backend-password"),
-			const_cast<char *>("orders"), nullptr);
+			&backend_user[0],
+			&backend_password[0],
+			&backend_schema[0], nullptr);
 	}
 
 	~ConnectionFixture() {
@@ -252,11 +258,15 @@ void test_password_mode(MySQL_Thread& worker, MySrvC *server) {
 void test_sha1_password_mode(MySQL_Thread& worker, MySrvC *server) {
 	reset_observations();
 	ConnectionFixture fixture(worker, server);
+	std::string backend_user = "iam_backend";
+	std::string backend_password = "*0123456789012345678901234567890123456789";
+	std::string backend_schema = "orders";
+	std::string backend_sha1 = "sha1-stage-one-secret";
 	fixture.connection->userinfo->set(
-		const_cast<char *>("iam_backend"),
-		const_cast<char *>("*0123456789012345678901234567890123456789"),
-		const_cast<char *>("orders"),
-		const_cast<char *>("sha1-stage-one-secret"));
+		&backend_user[0],
+		&backend_password[0],
+		&backend_schema[0],
+		&backend_sha1[0]);
 	fixture.connection->connect_start();
 
 	ok(connector.password == "sha1-stage-one-secret",
@@ -329,10 +339,12 @@ void test_iam_to_password_transition(MySQL_Thread& worker, MySrvC *server) {
 
 void test_unix_socket_rejected(MySQL_Thread& worker, MySrvC *tcp_server) {
 	reset_observations();
+	char unix_socket_path[] = "/var/lib/proxysql/proxysql-iam-unit.sock";
+	char unix_socket_comment[] = "aws-iam-unix-unit";
 	MySrvC unix_server(
-		const_cast<char *>("/var/lib/proxysql/proxysql-iam-unit.sock"), 0, 0, 1,
+		unix_socket_path, 0, 0, 1,
 		MYSQL_SERVER_STATUS_ONLINE, 0, 100, 0, 0, 0,
-		const_cast<char *>("aws-iam-unix-unit"));
+		unix_socket_comment);
 	unix_server.myhgc = tcp_server->myhgc;
 	ConnectionFixture fixture(worker, &unix_server);
 	const std::string token = "unix-socket-token";
