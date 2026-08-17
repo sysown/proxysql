@@ -312,6 +312,32 @@ int admin_load_main_=0;
 bool admin_nostart_=false;
 static volatile int admin_client_threads_active = 0;
 
+class Admin_Client_Thread_Guard {
+public:
+	explicit Admin_Client_Thread_Guard(size_t stack_size) : stack_size_(stack_size) {
+		__sync_fetch_and_add(&admin_client_threads_active, 1);
+		__sync_fetch_and_add(&GloVars.statuses.stack_memory_admin_threads, stack_size_);
+	}
+
+	~Admin_Client_Thread_Guard() {
+		__sync_fetch_and_sub(&GloVars.statuses.stack_memory_admin_threads, stack_size_);
+		__sync_fetch_and_sub(&admin_client_threads_active, 1);
+	}
+
+	Admin_Client_Thread_Guard(const Admin_Client_Thread_Guard&) = delete;
+	Admin_Client_Thread_Guard& operator=(const Admin_Client_Thread_Guard&) = delete;
+
+private:
+	size_t stack_size_;
+};
+
+static void close_pending_admin_client(arg_proxysql_adm* client_arg) {
+	::shutdown(client_arg->client_t, SHUT_RDWR);
+	close(client_arg->client_t);
+	free(client_arg->addr);
+	free(client_arg);
+}
+
 int __admin_refresh_interval=0;
 
 bool admin_proxysql_mysql_paused = false;
@@ -2156,22 +2182,31 @@ void ProxySQL_Admin::vacuum_stats(bool is_admin) {
 
 
 void *child_mysql(void *arg) {
-	if (GloMTH == nullptr) { return NULL; }
-
 	pthread_attr_t thread_attr;
 	size_t tmp_stack_size=0;
 	if (!pthread_attr_init(&thread_attr)) {
-		if (!pthread_attr_getstacksize(&thread_attr , &tmp_stack_size )) {
-			__sync_fetch_and_add(&GloVars.statuses.stack_memory_admin_threads,tmp_stack_size);
-		}
+		pthread_attr_getstacksize(&thread_attr, &tmp_stack_size);
+		pthread_attr_destroy(&thread_attr);
 	}
-	__sync_fetch_and_add(&admin_client_threads_active, 1);
+	Admin_Client_Thread_Guard thread_guard(tmp_stack_size);
 
 	arg_proxysql_adm*myarg = (arg_proxysql_adm*)arg;
 	int client = myarg->client_t;
 
 	//struct sockaddr *addr = arg->addr;
 	//socklen_t addr_size;
+
+	struct pollfd fds[1];
+	nfds_t nfds=1;
+	int rc;
+	// The acceptor holds this mutex until the child has taken ownership of
+	// its argument. Every exit below must happen after releasing it.
+	pthread_mutex_unlock(&sock_mutex);
+
+	if (__sync_fetch_and_add(&glovars.shutdown, 0) != 0 || !wait_for_glo_mth() || !GloMTH) {
+		close_pending_admin_client(myarg);
+		return NULL;
+	}
 
 	GloMTH->wrlock();
 	{
@@ -2181,13 +2216,6 @@ void *child_mysql(void *arg) {
 	}
 	GloMTH->wrunlock();
 
-	struct pollfd fds[1];
-	nfds_t nfds=1;
-	int rc;
-	pthread_mutex_unlock(&sock_mutex);
-	// Wait for GloMTH to be initialized
-	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
-	if (!GloMTH) return NULL;
 	MySQL_Thread *mysql_thr=new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
 	GloMyQPro->init_thread();
@@ -2277,23 +2305,17 @@ void *child_mysql(void *arg) {
 __exit_child_mysql:
 	delete mysql_thr;
 
-	__sync_fetch_and_sub(&admin_client_threads_active, 1);
-	__sync_fetch_and_sub(&GloVars.statuses.stack_memory_admin_threads,tmp_stack_size);
-
 	return NULL;
 }
 
 void* child_postgres(void* arg) {
-	if (GloPTH == nullptr) { return NULL; }
-
 	pthread_attr_t thread_attr;
 	size_t tmp_stack_size = 0;
 	if (!pthread_attr_init(&thread_attr)) {
-		if (!pthread_attr_getstacksize(&thread_attr, &tmp_stack_size)) {
-			__sync_fetch_and_add(&GloVars.statuses.stack_memory_admin_threads, tmp_stack_size);
-		}
+		pthread_attr_getstacksize(&thread_attr, &tmp_stack_size);
+		pthread_attr_destroy(&thread_attr);
 	}
-	__sync_fetch_and_add(&admin_client_threads_active, 1);
+	Admin_Client_Thread_Guard thread_guard(tmp_stack_size);
 
 	arg_proxysql_adm* myarg = (arg_proxysql_adm*)arg;
 	int client = myarg->client_t;
@@ -2302,6 +2324,10 @@ void* child_postgres(void* arg) {
 	nfds_t nfds = 1;
 	int rc;
 	pthread_mutex_unlock(&sock_mutex);
+	if (__sync_fetch_and_add(&glovars.shutdown, 0) != 0 || GloPTH == nullptr) {
+		close_pending_admin_client(myarg);
+		return NULL;
+	}
 	PgSQL_Thread* pgsql_thr = new PgSQL_Thread();
 	pgsql_thr->curtime = monotonic_time();
 	GloPgQPro->init_thread();
@@ -2398,9 +2424,6 @@ void* child_postgres(void* arg) {
 	
 __exit_child_postgres:
 	delete pgsql_thr;
-
-	__sync_fetch_and_sub(&admin_client_threads_active, 1);
-	__sync_fetch_and_sub(&GloVars.statuses.stack_memory_admin_threads, tmp_stack_size);
 
 	return NULL;
 }
@@ -2816,6 +2839,7 @@ void update_modules_metrics() {
 ProxySQL_Admin::ProxySQL_Admin() :
 	serial_exposer(std::function<void()> { update_modules_metrics })
 {
+	admin_threads_shutdown = false;
 #ifdef DEBUG
 		debugdb_disk = NULL;
 		if (glovars.has_debug==false) {
@@ -3205,9 +3229,12 @@ void ProxySQL_Admin::flush_tsdb_variables___runtime_to_database(SQLite3DB *db, b
 }
 #endif
 
-void ProxySQL_Admin::admin_shutdown() {
-	int i;
-//	do { usleep(50); } while (main_shutdown==0);
+void ProxySQL_Admin::shutdown_threads() {
+	if (admin_threads_shutdown) {
+		return;
+	}
+	admin_threads_shutdown = true;
+
 	if (Admin_HTTP_Server) {
 		if (variables.web_enabled) {
 			MHD_stop_daemon(Admin_HTTP_Server);
@@ -3224,6 +3251,12 @@ void ProxySQL_Admin::admin_shutdown() {
 	while (__sync_fetch_and_add(&admin_client_threads_active, 0) != 0) {
 		usleep(1000);
 	}
+}
+
+void ProxySQL_Admin::admin_shutdown() {
+	int i;
+//	do { usleep(50); } while (main_shutdown==0);
+	shutdown_threads();
 	delete admindb;
 	delete statsdb;
 	delete configdb;

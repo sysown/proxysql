@@ -1361,9 +1361,6 @@ void ProxySQL_Main_shutdown_all_modules() {
 	}
 
 	{
-#ifdef TEST_WITHASAN
-		pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
-#endif
 		cpu_timer t;
 		delete GloAdmin;
 #ifdef DEBUG
@@ -1830,6 +1827,9 @@ bool ProxySQL_Main_init_phase3___start_all() {
 
 void ProxySQL_Main_init_phase4___shutdown() {
 	cpu_timer t;
+	// Stop accepting admin work and wait for all detached admin clients before
+	// the modules used by admin queries are joined or destroyed.
+	GloAdmin->shutdown_threads();
 	ProxySQL_Main_join_all_threads();
 
 	//write(GloAdmin->pipefd[1], &GloAdmin->pipefd[1], 1);	// write a random byte
