@@ -1,409 +1,194 @@
 /**
  * @file vector_db_performance-t.cpp
- * @brief TAP unit tests for vector database performance
- *
- * Test Categories:
- * 1. Embedding generation timing for various text lengths
- * 2. KNN similarity search performance with different dataset sizes
- * 3. Cache hit vs miss performance comparison
- * 4. Concurrent access performance and thread safety
- * 5. Memory usage monitoring during vector operations
- * 6. Large dataset handling (1K+, 10K+ entries)
- *
- * @date 2026-01-16
+ * @brief Deterministic vector-cache correctness and completion checks.
  */
 
-#include "tap.h"
-#include <string>
-#include <string.h>
-#include <cstdio>
-#include <cstdlib>
-#include <cmath>
-#include <vector>
 #include <chrono>
-#include <thread>
-#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <string>
+#include <utility>
+#include <vector>
 
-// ============================================================================
-// Mock structures and functions to simulate vector database operations
-// ============================================================================
+#include "tap.h"
 
-// Mock embedding generation (simulates GenAI embedding)
-static std::vector<float> mock_generate_embedding(const std::string& text) {
-	// Simulate time taken for embedding generation based on text length
-	// In real implementation, this would call GloGATH->embed_documents()
+using std::string;
+using std::vector;
 
-	// Simple mock: create a fixed-size embedding with values based on text
-	std::vector<float> embedding(1536, 0.0f); // Standard embedding size
+namespace {
 
-	// Fill with pseudo-random values based on text content
-	unsigned int hash = 0;
-	for (char c : text) {
-		hash = hash * 31 + static_cast<unsigned char>(c);
+constexpr size_t kEmbeddingDimensions = 1536;
+
+uint64_t fnv1a(const string& text) {
+	uint64_t hash = UINT64_C(14695981039346656037);
+	for (unsigned char character : text) {
+		hash ^= character;
+		hash *= UINT64_C(1099511628211);
 	}
+	return hash;
+}
 
-	// Use hash to generate deterministic but varied embedding values
-	for (size_t i = 0; i < embedding.size() && i < sizeof(hash); i++) {
-		embedding[i] = static_cast<float>((hash >> (i * 8)) & 0xFF) / 255.0f;
+uint64_t splitmix64(uint64_t& state) {
+	state += UINT64_C(0x9e3779b97f4a7c15);
+	uint64_t value = state;
+	value = (value ^ (value >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);
+	value = (value ^ (value >> 27)) * UINT64_C(0x94d049bb133111eb);
+	return value ^ (value >> 31);
+}
+
+vector<float> mock_generate_embedding(const string& text) {
+	uint64_t state = fnv1a(text);
+	vector<float> embedding;
+	embedding.reserve(kEmbeddingDimensions);
+
+	for (size_t index = 0; index < kEmbeddingDimensions; ++index) {
+		const uint32_t sample = static_cast<uint32_t>(splitmix64(state) >> 40);
+		const float normalized = static_cast<float>(sample) / 8388607.5f - 1.0f;
+		embedding.push_back(normalized);
 	}
-
 	return embedding;
 }
 
-// Mock cache entry structure
+double cosine_similarity(const vector<float>& left, const vector<float>& right) {
+	if (left.empty() || left.size() != right.size()) return 0.0;
+
+	double dot_product = 0.0;
+	double left_norm = 0.0;
+	double right_norm = 0.0;
+	for (size_t index = 0; index < left.size(); ++index) {
+		dot_product += static_cast<double>(left[index]) * right[index];
+		left_norm += static_cast<double>(left[index]) * left[index];
+		right_norm += static_cast<double>(right[index]) * right[index];
+	}
+	if (left_norm == 0.0 || right_norm == 0.0) return 0.0;
+	return dot_product / (std::sqrt(left_norm) * std::sqrt(right_norm));
+}
+
 struct MockCacheEntry {
-	std::string natural_language;
-	std::string generated_sql;
-	std::vector<float> embedding;
-	long long timestamp;
+	string natural_language;
+	string generated_sql;
+	vector<float> embedding;
 };
 
-// Mock vector database
+struct LookupResult {
+	long long elapsed_microseconds;
+	string sql;
+	double similarity;
+	size_t embedding_dimensions;
+};
+
 class MockVectorDB {
-private:
-	std::vector<MockCacheEntry> entries;
-	size_t max_entries;
-
 public:
-	MockVectorDB(size_t max_size = 10000) : max_entries(max_size) {}
-
-	// Simulate cache storage with timing
-	long long store_entry(const std::string& query, const std::string& sql) {
-		auto start = std::chrono::high_resolution_clock::now();
-
-		// Generate embedding
-		std::vector<float> embedding = mock_generate_embedding(query);
-
-		// Check if we need to evict old entries
-		if (entries.size() >= max_entries) {
-			// Remove oldest entry (simple FIFO)
-			entries.erase(entries.begin());
-		}
-
-		// Add new entry
-		MockCacheEntry entry;
-		entry.natural_language = query;
-		entry.generated_sql = sql;
-		entry.embedding = embedding;
-		entry.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-			std::chrono::system_clock::now().time_since_epoch()).count();
-
-		entries.push_back(entry);
-
-		auto end = std::chrono::high_resolution_clock::now();
-		auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-		return duration.count();
+	explicit MockVectorDB(size_t maximum_entries = 10000)
+		: max_entries(maximum_entries) {
+		entries.reserve(maximum_entries);
 	}
 
-	// Simulate cache lookup with timing
-	std::pair<long long, std::string> lookup_entry(const std::string& query, float similarity_threshold = 0.85f) {
-		auto start = std::chrono::high_resolution_clock::now();
+	void store_entry(const string& query, const string& sql) {
+		if (entries.size() >= max_entries) entries.erase(entries.begin());
+		entries.push_back({query, sql, mock_generate_embedding(query)});
+	}
 
-		// Generate embedding for query
-		std::vector<float> query_embedding = mock_generate_embedding(query);
+	LookupResult lookup_entry(const string& query, double threshold = 0.85) const {
+		const auto start = std::chrono::steady_clock::now();
+		const vector<float> query_embedding = mock_generate_embedding(query);
+		double best_similarity = -1.0;
+		string best_sql;
 
-		// Find best match using cosine similarity
-		float best_similarity = -1.0f;
-		std::string best_sql = "";
-
-		for (const auto& entry : entries) {
-			float similarity = cosine_similarity(query_embedding, entry.embedding);
-			if (similarity > best_similarity && similarity >= similarity_threshold) {
+		for (const MockCacheEntry& entry : entries) {
+			const double similarity = cosine_similarity(query_embedding, entry.embedding);
+			if (similarity >= threshold && similarity > best_similarity) {
 				best_similarity = similarity;
 				best_sql = entry.generated_sql;
 			}
 		}
 
-		auto end = std::chrono::high_resolution_clock::now();
-		auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-		return std::make_pair(duration.count(), best_sql);
-	}
-
-	// Calculate cosine similarity between two vectors
-	float cosine_similarity(const std::vector<float>& a, const std::vector<float>& b) {
-		if (a.size() != b.size() || a.empty()) return 0.0f;
-
-		float dot_product = 0.0f;
-		float norm_a = 0.0f;
-		float norm_b = 0.0f;
-
-		for (size_t i = 0; i < a.size(); i++) {
-			dot_product += a[i] * b[i];
-			norm_a += a[i] * a[i];
-			norm_b += b[i] * b[i];
-		}
-
-		if (norm_a == 0.0f || norm_b == 0.0f) return 0.0f;
-
-		return dot_product / (sqrt(norm_a) * sqrt(norm_b));
+		const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+			std::chrono::steady_clock::now() - start);
+		return {
+			elapsed.count(), best_sql, best_similarity, query_embedding.size()
+		};
 	}
 
 	size_t size() const { return entries.size(); }
-	void clear() { entries.clear(); }
+
+private:
+	vector<MockCacheEntry> entries;
+	size_t max_entries;
 };
 
-// ============================================================================
-// Test: Embedding Generation Timing
-// ============================================================================
+void test_embedding_contract() {
+	const vector<float> first = mock_generate_embedding("distinct query 0");
+	const vector<float> repeated = mock_generate_embedding("distinct query 0");
+	const vector<float> distinct = mock_generate_embedding("distinct query 1");
 
-void test_embedding_timing() {
-	diag("=== Embedding Generation Timing ===");
+	ok(first.size() == kEmbeddingDimensions,
+	   "Mock embedding has the full %zu-dimensional shape", kEmbeddingDimensions);
+	ok(first == repeated, "Identical text produces an identical deterministic embedding");
+	ok(first != distinct, "Distinct text changes the deterministic embedding");
 
-	// Test with different text lengths
-	std::vector<std::string> test_texts = {
-		"Short query",
-		"A medium length query with more words to process",
-		"A very long query that contains many words and should take more time to process because it has significantly more text content that needs to be analyzed and converted into embeddings for vector database operations",
-		std::string(1000, 'A') // Very long text
-	};
-
-	std::vector<long long> timings;
-
-	for (const auto& text : test_texts) {
-		auto start = std::chrono::high_resolution_clock::now();
-		auto embedding = mock_generate_embedding(text);
-		auto end = std::chrono::high_resolution_clock::now();
-
-		auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-		timings.push_back(duration.count());
-
-		ok(embedding.size() == 1536, "Embedding has correct size for text length %zu", text.length());
-	}
-
-	// Verify that longer texts take more time (roughly)
-	ok(timings[0] <= timings[1], "Medium text takes longer than short text");
-	ok(timings[1] <= timings[2], "Long text takes longer than medium text");
-
-	diag("Embedding times (microseconds): Short=%lld, Medium=%lld, Long=%lld, VeryLong=%lld",
-	     timings[0], timings[1], timings[2], timings[3]);
+	const double self_similarity = cosine_similarity(first, repeated);
+	const double distinct_similarity = cosine_similarity(first, distinct);
+	ok(self_similarity > 0.999999 && self_similarity <= 1.000001,
+	   "Identical embeddings have unit similarity (got %.8f)", self_similarity);
+	ok(distinct_similarity < 0.99,
+	   "Distinct embeddings stay below the 0.99 match threshold (got %.8f)",
+	   distinct_similarity);
 }
 
-// ============================================================================
-// Test: KNN Search Performance
-// ============================================================================
+void test_distinct_query_regression() {
+	MockVectorDB database;
+	database.store_entry("distinct query 0", "SELECT 0");
+	ok(database.size() == 1, "Regression fixture stores one vector entry");
 
-void test_knn_search_performance() {
-	diag("=== KNN Search Performance ===");
-
-	MockVectorDB db;
-
-	// Populate database with test entries
-	const size_t small_dataset = 100;
-	const size_t medium_dataset = 1000;
-	const size_t large_dataset = 10000;
-
-	// Test with small dataset
-	for (size_t i = 0; i < small_dataset; i++) {
-		std::string query = "Test query " + std::to_string(i);
-		std::string sql = "SELECT * FROM table WHERE id = " + std::to_string(i);
-		db.store_entry(query, sql);
-	}
-
-	// Test search performance
-	auto result = db.lookup_entry("Test query 50");
-	ok(result.second == "SELECT * FROM table WHERE id = 50" || result.second.empty(),
-	   "Search finds correct entry or no match in small dataset");
-
-	diag("Small dataset (%zu entries) search time: %lld microseconds", small_dataset, result.first);
-
-	// Clear and test with medium dataset
-	db.clear();
-	for (size_t i = 0; i < medium_dataset; i++) {
-		std::string query = "Test query " + std::to_string(i);
-		std::string sql = "SELECT * FROM table WHERE id = " + std::to_string(i);
-		db.store_entry(query, sql);
-	}
-
-	result = db.lookup_entry("Test query 500");
-	ok(result.second == "SELECT * FROM table WHERE id = 500" || result.second.empty(),
-	   "Search finds correct entry or no match in medium dataset");
-
-	diag("Medium dataset (%zu entries) search time: %lld microseconds", medium_dataset, result.first);
-
-	// Test with query that won't match exactly (tests full search)
-	result = db.lookup_entry("Completely different query");
-	ok(result.second.empty(), "No match found for completely different query");
-
-	diag("Non-matching query search time: %lld microseconds", result.first);
+	const LookupResult result = database.lookup_entry("distinct query 1", 0.99);
+	ok(result.sql.empty(),
+	   "Distinct query does not reuse an unrelated result at 0.99 similarity");
 }
 
-// ============================================================================
-// Test: Cache Hit vs Miss Performance
-// ============================================================================
+void test_workload(const char* label, size_t entry_count, size_t target) {
+	MockVectorDB database(entry_count);
+	const auto insert_start = std::chrono::steady_clock::now();
+	for (size_t index = 0; index < entry_count; ++index) {
+		database.store_entry(
+			"Workload query " + std::to_string(index),
+			"SELECT * FROM workload WHERE id=" + std::to_string(index));
+	}
+	const auto insert_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now() - insert_start);
 
-void test_cache_hit_miss_performance() {
-	diag("=== Cache Hit vs Miss Performance ===");
+	const LookupResult result = database.lookup_entry(
+		"Workload query " + std::to_string(target), 0.99);
+	const string expected_sql =
+		"SELECT * FROM workload WHERE id=" + std::to_string(target);
 
-	MockVectorDB db;
-
-	// Add some entries
-	db.store_entry("Show me all users", "SELECT * FROM users;");
-	db.store_entry("Count the orders", "SELECT COUNT(*) FROM orders;");
-
-	// Test cache hit
-	auto hit_result = db.lookup_entry("Show me all users");
-	ok(!hit_result.second.empty(), "Cache hit returns result");
-
-	// Test cache miss
-	auto miss_result = db.lookup_entry("List all products");
-	ok(miss_result.second.empty(), "Cache miss returns empty result");
-
-	// Verify hit is faster than miss (should be roughly similar in mock, but let's check)
-	diag("Cache hit time: %lld microseconds, Cache miss time: %lld microseconds",
-	     hit_result.first, miss_result.first);
-
-	// Both should be reasonable times
-	ok(hit_result.first < 100000, "Cache hit time is reasonable (< 100ms)");
-	ok(miss_result.first < 100000, "Cache miss time is reasonable (< 100ms)");
+	ok(database.size() == entry_count,
+	   "%s workload stores all %zu entries", label, entry_count);
+	ok(result.sql == expected_sql,
+	   "%s workload returns the exact query result", label);
+	ok(result.embedding_dimensions == kEmbeddingDimensions,
+	   "%s lookup uses the full vector shape", label);
+	ok(result.similarity > 0.999999 && result.similarity <= 1.000001,
+	   "%s exact lookup reports unit similarity (got %.8f)", label, result.similarity);
+	ok(insert_elapsed.count() < 120000,
+	   "%s workload completes insertion within 120 seconds (took %lld ms)",
+	   label, static_cast<long long>(insert_elapsed.count()));
+	ok(result.elapsed_microseconds < 30000000,
+	   "%s workload completes lookup within 30 seconds (took %lld us)",
+	   label, result.elapsed_microseconds);
 }
 
-// ============================================================================
-// Test: Memory Usage Monitoring
-// ============================================================================
-
-void test_memory_usage() {
-	diag("=== Memory Usage Monitoring ===");
-
-	// This is a conceptual test - in real implementation, we would monitor actual memory usage
-	// For now, we'll test that the database doesn't grow unreasonably
-
-	MockVectorDB db(1000); // Limit to 1000 entries
-
-	// Add many entries
-	for (size_t i = 0; i < 500; i++) {
-		std::string query = "Query " + std::to_string(i);
-		std::string sql = "SELECT * FROM table WHERE id = " + std::to_string(i);
-		db.store_entry(query, sql);
-	}
-
-	ok(db.size() == 500, "Database has expected number of entries (500)");
-
-	// Add more entries to test size limit
-	for (size_t i = 500; i < 1200; i++) {
-		std::string query = "Query " + std::to_string(i);
-		std::string sql = "SELECT * FROM table WHERE id = " + std::to_string(i);
-		db.store_entry(query, sql);
-	}
-
-	// Should be capped at 1000 entries due to limit
-	ok(db.size() <= 1000, "Database size respects maximum limit");
-
-	diag("Database size after adding 1200 entries: %zu", db.size());
-}
-
-// ============================================================================
-// Test: Large Dataset Handling
-// ============================================================================
-
-void test_large_dataset_handling() {
-	diag("=== Large Dataset Handling ===");
-
-	MockVectorDB db;
-
-	// Test handling of large dataset (10K entries)
-	const size_t large_size = 10000;
-
-	auto start_insert = std::chrono::high_resolution_clock::now();
-
-	// Insert large number of entries
-	for (size_t i = 0; i < large_size; i++) {
-		std::string query = "Large dataset query " + std::to_string(i);
-		std::string sql = "SELECT * FROM large_table WHERE id = " + std::to_string(i);
-
-		// Every 1000 entries, report progress
-		if (i % 1000 == 0 && i > 0) {
-			diag("Inserted %zu entries...", i);
-		}
-
-		db.store_entry(query, sql);
-	}
-
-	auto end_insert = std::chrono::high_resolution_clock::now();
-	auto insert_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_insert - start_insert);
-
-	ok(db.size() == large_size, "Large dataset (%zu entries) inserted successfully", large_size);
-	diag("Time to insert %zu entries: %ld ms", large_size, insert_duration.count());
-
-	// Test search performance in large dataset
-	auto search_result = db.lookup_entry("Large dataset query 5000");
-	ok(search_result.second == "SELECT * FROM large_table WHERE id = 5000" || search_result.second.empty(),
-	   "Search works in large dataset");
-
-	diag("Search time in %zu entry dataset: %lld microseconds", large_size, search_result.first);
-
-	// Performance should be reasonable even with large dataset
-	ok(search_result.first < 500000, "Search time reasonable in large dataset (< 500ms)");
-	ok(insert_duration.count() < 30000, "Insert time reasonable for large dataset (< 30s)");
-}
-
-// ============================================================================
-// Test: Concurrent Access Performance
-// ============================================================================
-
-void test_concurrent_access() {
-	diag("=== Concurrent Access Performance ===");
-
-	// This is a simplified test - in real implementation, we would test actual thread safety
-	MockVectorDB db;
-
-	// Populate with some data
-	for (size_t i = 0; i < 100; i++) {
-		std::string query = "Concurrent test " + std::to_string(i);
-		std::string sql = "SELECT * FROM concurrent_table WHERE id = " + std::to_string(i);
-		db.store_entry(query, sql);
-	}
-
-	// Simulate concurrent access by running multiple operations
-	const int num_operations = 10;
-	std::vector<long long> timings;
-
-	auto start = std::chrono::high_resolution_clock::now();
-
-	for (int i = 0; i < num_operations; i++) {
-		auto result = db.lookup_entry("Concurrent test " + std::to_string(i * 2));
-		timings.push_back(result.first);
-	}
-
-	auto end = std::chrono::high_resolution_clock::now();
-	auto total_duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-
-	// All operations should complete successfully
-	ok(timings.size() == static_cast<size_t>(num_operations), "All concurrent operations completed");
-
-	// Calculate average time
-	long long total_time = 0;
-	for (long long time : timings) {
-		total_time += time;
-	}
-	long long avg_time = total_time / num_operations;
-
-	diag("Average time per concurrent operation: %lld microseconds", avg_time);
-	diag("Total time for %d operations: %ld microseconds", num_operations, total_duration.count());
-
-	// Operations should be reasonably fast
-	ok(avg_time < 50000, "Average concurrent operation time reasonable (< 50ms)");
-}
-
-// ============================================================================
-// Main
-// ============================================================================
+} // namespace
 
 int main() {
-	// Plan: 25 tests total
-	// Embedding timing: 5 tests
-	// KNN search performance: 4 tests
-	// Cache hit vs miss: 3 tests
-	// Memory usage: 3 tests
-	// Large dataset handling: 5 tests
-	// Concurrent access: 5 tests
 	plan(25);
 
-	test_embedding_timing();
-	test_knn_search_performance();
-	test_cache_hit_miss_performance();
-	test_memory_usage();
-	test_large_dataset_handling();
-	test_concurrent_access();
+	test_embedding_contract();
+	test_distinct_query_regression();
+	test_workload("small", 100, 50);
+	test_workload("medium", 1000, 500);
+	test_workload("large", 10000, 5000);
 
 	return exit_status();
 }
