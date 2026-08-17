@@ -168,7 +168,7 @@ jobs:
       run: |
         GIT_VERSION=$(gh release --repo ${{ github.repository }} view ${{ env.BRANCH }}-head | tr -d '*' | grep -Po "(?<=Version : ).*")
         [[ ${GIT_VERSION} == ${{ needs.clean.outputs.gitdescribe }} ]] || exit 1
-        gh release upload ${{ env.BRANCH }}-head --repo ${{ github.repository }} --clobber ${{ env.BIN_PKG }}
+        gh release upload ${{ env.BRANCH }}-head --repo ${{ github.repository }} --clobber "$BIN_PKG"
  
     - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
       if: always()
