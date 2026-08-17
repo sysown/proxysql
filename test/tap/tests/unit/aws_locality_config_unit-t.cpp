@@ -7,13 +7,27 @@
 #include "proxysql_utils.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string>
+#include <vector>
 #include <unistd.h>
 
 void init_myhgc_hostgroup_settings(const char* hostgroup_settings, MyHGC* myhgc);
 
 namespace {
+struct CStrPtrDeleter {
+	void operator()(char* value) const noexcept {
+		std::free(value);
+	}
+};
+
+struct CStrArrayDeleter {
+	void operator()(char** value) const noexcept {
+		std::free(value);
+	}
+};
 
 bool contains_variable(char** variables, const char* expected) {
 	for (char** item = variables; item != nullptr && *item != nullptr; ++item) {
@@ -28,10 +42,14 @@ void free_variables(char** variables) {
 	if (variables == nullptr) {
 		return;
 	}
+	using CStrPtr = std::unique_ptr<char, CStrPtrDeleter>;
+	using CStrArray = std::unique_ptr<char*, CStrArrayDeleter>;
+
+	CStrArray array_owner { variables };
+	std::vector<CStrPtr> variable_items;
 	for (char** item = variables; *item != nullptr; ++item) {
-		free(*item);
+		variable_items.emplace_back(*item);
 	}
-	free(variables);
 }
 
 std::string capture_invalid_policy_log(MyHGC& hostgroup) {
