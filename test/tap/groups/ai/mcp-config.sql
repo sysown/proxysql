@@ -3,8 +3,15 @@
 -- Variables are substituted using envsubst before execution
 
 -- Configure MCP variables
-SET mcp-port='${TAP_MCPPORT}';
-SET mcp-use_ssl='true';
+SET mcp-port='${TAP_MCP_PORT}';
+SET mcp-use_ssl='false';
+SET mcp-config_endpoint_auth='${TAP_MCP_AUTH_TOKEN}';
+SET mcp-stats_endpoint_auth='${TAP_MCP_AUTH_TOKEN}';
+SET mcp-query_endpoint_auth='${TAP_MCP_AUTH_TOKEN}';
+SET mcp-admin_endpoint_auth='${TAP_MCP_AUTH_TOKEN}';
+SET mcp-cache_endpoint_auth='${TAP_MCP_AUTH_TOKEN}';
+SET mcp-ai_endpoint_auth='${TAP_MCP_AUTH_TOKEN}';
+SET mcp-rag_endpoint_auth='${TAP_MCP_AUTH_TOKEN}';
 SET mcp-enabled='false';
 LOAD MCP VARIABLES TO RUNTIME;
 SAVE MCP VARIABLES TO DISK;
