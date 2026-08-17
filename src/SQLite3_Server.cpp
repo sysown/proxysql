@@ -11,6 +11,7 @@
 #include "proxysql_utils.h"
 #include "MySQL_Query_Processor.h"
 #include "SQLite3_Server.h"
+#include "gen_utils.h"
 #ifdef TEST_RDS_BGD
 #include "MySQL_Monitor.hpp"
 #endif
@@ -1145,7 +1146,7 @@ __run_query:
 			if (strstr(query_no_space,(char *)"REPLICA_HOST_STATUS")) {
 				pthread_mutex_unlock(&GloSQLite3Server->aurora_mutex);
 #ifdef TEST_AURORA_RANDOM
-				if (rand() % 100 == 0) {
+				if (fastrand() % 100 == 0) {
 					// randomly add some latency on 1% of the traffic
 					sleep(2);
 				}
@@ -1159,7 +1160,7 @@ __run_query:
 					PROXY_TRACE();
 				}
 #ifdef TEST_GALERA_RANDOM
-				if (rand() % 20 == 0) {
+				if (fastrand() % 20 == 0) {
 					// randomly add some latency on 5% of the traffic
 					sleep(2);
 				}
@@ -1178,7 +1179,7 @@ __run_query:
 			}
 #endif // TEST_GROUPREP
 			if (strstr(query_no_space,(char *)"Seconds_Behind_Master")) {
-				if (rand() % 10 == 0) {
+				if (fastrand() % 10 == 0) {
 					// randomly add some latency on 10% of the traffic
 					sleep(2);
 				}
@@ -1702,7 +1703,7 @@ void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 #ifdef TEST_AURORA
 
 float get_rand_cpu() {
-	int cpu_i = rand() % 10000;
+	int cpu_i = fastrand() % 10000;
 	float cpu = static_cast<float>(cpu_i) / 100;
 
 	return cpu;
@@ -1882,18 +1883,18 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess, uint32_t whg
 	unsigned int cluster_id = atoi(clu_id_s.c_str());
 	cluster_id--;
 
-	if (rand() % 20000 == 0) {
+	if (fastrand() % 20000 == 0) {
 		// simulate a failover
-		cur_aurora_writer[cluster_id] = rand() % num_aurora_servers[cluster_id];
+		cur_aurora_writer[cluster_id] = fastrand() % num_aurora_servers[cluster_id];
 		proxy_info("Simulating a failover for AWS Aurora cluster %d , HGs (%d:%d)\n", cluster_id, 1270 + cluster_id*2+1 , 1270 + cluster_id*2+2);
 	}
-	if (rand() % 1000 == 0) {
+	if (fastrand() % 1000 == 0) {
 		if (num_aurora_servers[cluster_id] < max_num_aurora_servers) {
 			num_aurora_servers[cluster_id]++;
 			proxy_info("Simulating the add of a new server for AWS Aurora Cluster %d , HGs (%d:%d). Now adding server num %d\n", cluster_id, 1270 + cluster_id*2+1 , 1270 + cluster_id*2+2, num_aurora_servers[cluster_id]);
 		}
 	}
-	if (rand() % 1000 == 0) {
+	if (fastrand() % 1000 == 0) {
 		if (num_aurora_servers[cluster_id] > 1) {
 			if (cur_aurora_writer[cluster_id] != (num_aurora_servers[cluster_id] - 1) ) {
 				num_aurora_servers[cluster_id]--;
@@ -1913,7 +1914,7 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess, uint32_t whg
 			sessionid = "MASTER_SESSION_ID";
 		} else {
 			sessionid = "b80ef4b4-" + serverid + "-aa01";
-			int lag_ms_i = rand();
+			int lag_ms_i = fastrand();
 			lag_ms_i %= 2000;
 			lag_ms = lag_ms_i;
 			lag_ms /= 100;

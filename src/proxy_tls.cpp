@@ -8,8 +8,14 @@ get_file_size (const char *filename) {
 	fp = fopen (filename, "rb");
 	if (fp) {
 		long size;
-		if ((0 != fseek (fp, 0, SEEK_END)) || (-1 == (size = ftell (fp))))
+		if (fseek (fp, 0, SEEK_END) != 0) {
 			size = 0;
+		} else {
+			size = ftell (fp);
+			if (size == -1) {
+				size = 0;
+			}
+		}
 		fclose (fp);
 		return size;
 	} else

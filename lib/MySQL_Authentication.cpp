@@ -132,14 +132,14 @@ void MySQL_Authentication::remove_inactives(enum cred_username_type usertype) {
 #else
 	spin_wrlock(&cg.lock);
 #endif
-	unsigned int i;
-__loop_remove_inactives:
-	for (i=0; i<cg.cred_array->len; i++) {
+	unsigned int i = 0;
+	while (i < cg.cred_array->len) {
 		account_details_t *ado=(account_details_t *)cg.cred_array->index(i);
 		if (ado->active_==false) {
 			del(ado->username,usertype,false);
-			goto __loop_remove_inactives; // we aren't sure how the underlying structure changes, so we jump back to 0
+			continue;
 		}
+		++i;
 	}
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&cg.lock);

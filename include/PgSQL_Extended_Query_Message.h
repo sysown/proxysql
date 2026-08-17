@@ -125,8 +125,8 @@ public:
 	PgSQL_Field_Reader() = delete;
 	PgSQL_Field_Reader(const PgSQL_Field_Reader&) = default;
 	PgSQL_Field_Reader& operator=(const PgSQL_Field_Reader&) = default;
-	PgSQL_Field_Reader(PgSQL_Field_Reader&&) = default;
-	PgSQL_Field_Reader& operator=(PgSQL_Field_Reader&&) = default;
+	PgSQL_Field_Reader(PgSQL_Field_Reader&&) noexcept = default;
+	PgSQL_Field_Reader& operator=(PgSQL_Field_Reader&&) noexcept = default;
 
 	/**
 	  * @brief Checks if there are more fields to read.

@@ -1302,8 +1302,8 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   //randominit(&rand_st,rand(),rand());
   rand_st.max_value= 0x3FFFFFFFL;
   rand_st.max_value_dbl=0x3FFFFFFFL;
-  rand_st.seed1=rand()%rand_st.max_value;
-  rand_st.seed2=rand()%rand_st.max_value;
+  rand_st.seed1=rand_fast()%rand_st.max_value;
+  rand_st.seed2=rand_fast()%rand_st.max_value;
 
   memcpy(_ptr+l, &protocol_version, sizeof(protocol_version)); l+=sizeof(protocol_version);
   memcpy(_ptr+l, mysql_thread___server_version, strlen(mysql_thread___server_version)); l+=strlen(mysql_thread___server_version)+1;

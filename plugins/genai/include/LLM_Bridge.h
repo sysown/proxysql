@@ -33,6 +33,7 @@
 #define LLM_BRIDGE_VERSION "1.0.0"
 
 #include "proxysql.h"
+#include "gen_utils.h"
 #include <string>
 #include <vector>
 
@@ -97,14 +98,19 @@ struct LLMRequest {
 	int retry_max_backoff_ms;                   ///< Maximum backoff in ms (default: 30000)
 
 	LLMRequest() : max_latency_ms(0), allow_cache(true),
-	              max_retries(3), retry_backoff_ms(1000),
-	              retry_multiplier(2.0), retry_max_backoff_ms(30000) {
+		max_retries(3), retry_backoff_ms(1000),
+		retry_multiplier(2.0), retry_max_backoff_ms(30000) {
 		// Generate UUID-like request ID for correlation
 		char uuid[64];
-		snprintf(uuid, sizeof(uuid), "%08lx-%04x-%04x-%04x-%012lx",
-		         (unsigned long)rand(), (unsigned)rand() & 0xffff,
-		         (unsigned)rand() & 0xffff, (unsigned)rand() & 0xffff,
-		         (unsigned long)rand() & 0xffffffffffff);
+		uint32_t d1 = static_cast<uint32_t>(fastrand());
+		uint16_t d2 = static_cast<uint16_t>(fastrand());
+		uint16_t d3 = static_cast<uint16_t>(fastrand());
+		uint16_t d4 = static_cast<uint16_t>(fastrand());
+		uint64_t d5 = (static_cast<uint64_t>(fastrand()) << 32) | static_cast<uint64_t>(fastrand());
+		snprintf(
+			uuid, sizeof(uuid), "%08x-%04x-%04x-%04x-%012llx",
+			d1, d2, d3, d4, static_cast<unsigned long long>(d5 & 0xFFFFFFFFFFFFULL)
+		);
 		request_id = uuid;
 	}
 };

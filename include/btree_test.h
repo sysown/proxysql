@@ -30,6 +30,7 @@
 #include "gtest/gtest.h"
 #include "gflags/gflags.h"
 #include "btree_container.h"
+#include "gen_utils.h"
 
 DECLARE_int32(test_values);
 DECLARE_int32(benchmark_values);
@@ -553,7 +554,7 @@ const std::vector<int>& GenerateNumbers(int n, int maxval) {
     for (int i = values.size(); i < n; i++) {
       int value;
       do {
-        value = rand() % (maxval + 1);
+        value = rand_fast() % (maxval + 1);
       } while (unique_values.find(value) != unique_values.end());
 
       values.push_back(value);

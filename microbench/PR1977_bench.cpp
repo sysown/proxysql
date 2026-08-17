@@ -33,12 +33,12 @@ int main(int argc, char** argv) {
 	unsigned int sum = 0;
 	unsigned int TotalUsedConn = 0;
 
-	srand(monotonic_time());
+	g_seed = static_cast<unsigned int>(monotonic_time());
 	usedConns = (unsigned int *)malloc(NSRV*sizeof(unsigned int));
 	weights = (unsigned int *)malloc(NSRV*sizeof(unsigned int));
 	for (int i=0 ; i < NSRV ; i++ ) {
-		usedConns[i] = 20+rand()%1000;
-		weights[i] = 20+rand()%10000;
+		usedConns[i] = 20+fastrand()%1000;
+		weights[i] = 20+fastrand()%10000;
 	}
 	for (int N=4; N<=NSRV; N+=4) {
 	std::cerr << "Test with " << N << " servers:" << std::endl;
@@ -63,7 +63,7 @@ int main(int argc, char** argv) {
 			}
 			unsigned int k;
 			if (New_sum > 32768) {
-				k = rand() % New_sum;
+				k = fastrand() % New_sum;
 			} else {
 				k = fastrand() % New_sum;
 			}
