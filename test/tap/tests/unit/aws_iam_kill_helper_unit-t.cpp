@@ -19,6 +19,7 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -45,6 +46,13 @@ constexpr const char *kPassword = "ordinary-password";
 unsigned int secure_token_cleanse_calls = 0;
 size_t secure_token_cleanse_size = 0;
 bool secure_token_was_zeroed = false;
+
+using CStrDeleter = void (*)(void *);
+using OwnedCStr = std::unique_ptr<char, CStrDeleter>;
+
+OwnedCStr make_owned_cstr(const char *str) {
+	return OwnedCStr { str != nullptr ? strdup(str) : nullptr, std::free };
+}
 
 bool all_zero(const void *ptr, size_t size) {
 	const auto *bytes = static_cast<const unsigned char *>(ptr);
@@ -149,11 +157,18 @@ void reset_observations(const char *expected_password) {
 }
 
 KillArgs *iam_args(int kill_type, unsigned long id, Clock::time_point deadline) {
-	return new KillArgs(
-		const_cast<char *>(kDatabaseUser), nullptr,
-		const_cast<char *>(kEndpoint), 3306, kHostgroup, id, kill_type, 1,
-		nullptr, const_cast<char *>(kTransportIp), MySQLBackendAuthType::AWS_IAM,
+	auto username = make_owned_cstr(kDatabaseUser);
+	auto endpoint = make_owned_cstr(kEndpoint);
+	auto transport = make_owned_cstr(kTransportIp);
+	KillArgs *args = new KillArgs(
+		username.get(), nullptr,
+		endpoint.get(), 3306, kHostgroup, id, kill_type, 1,
+		nullptr, transport.get(), MySQLBackendAuthType::AWS_IAM,
 		kEndpoint, kRegion, kDatabaseUser, deadline);
+	username.release();
+	endpoint.release();
+	transport.release();
+	return args;
 }
 
 void test_iam_kill(FakeBlockingTokenSource& source, int kill_type,
@@ -220,10 +235,18 @@ void test_deadline_expiring_during_token_request(FakeBlockingTokenSource& source
 void test_password_mode_unchanged(FakeBlockingTokenSource& source) {
 	reset_observations(kPassword);
 	const size_t requests_before = source.keys.size();
+	auto username = make_owned_cstr("password_backend");
+	auto password = make_owned_cstr(kPassword);
+	auto endpoint = make_owned_cstr(kEndpoint);
+	auto transport = make_owned_cstr(kTransportIp);
 	KillArgs *args = new KillArgs(
-		const_cast<char *>("password_backend"), const_cast<char *>(kPassword),
-		const_cast<char *>(kEndpoint), 3306, kHostgroup, 444, KILL_QUERY, 0,
-		nullptr, const_cast<char *>(kTransportIp));
+		username.get(), password.get(),
+		endpoint.get(), 3306, kHostgroup, 444, KILL_QUERY, 0,
+		nullptr, transport.get());
+	username.release();
+	password.release();
+	endpoint.release();
+	transport.release();
 	kill_query_thread(args);
 	ok(source.keys.size() == requests_before && connector.connect_calls == 1 &&
 		connector.password_matches && !connector.ssl_enforce && !connector.ssl_verify &&
@@ -253,11 +276,11 @@ void test_helper_shutdown_lifetime(FakeBlockingTokenSource& source) {
 	std::atomic<bool> shutdown_started { false };
 	std::atomic<bool> shutdown_returned { false };
 	std::thread shutdown([&] {
-		shutdown_started.store(true, std::memory_order_release);
+		shutdown_started.store(true);
 		shutdown_global_aws_iam_token_source();
-		shutdown_returned.store(true, std::memory_order_release);
+		shutdown_returned.store(true);
 	});
-	while (!shutdown_started.load(std::memory_order_acquire)) {
+	while (!shutdown_started.load()) {
 		std::this_thread::yield();
 	}
 	for (;;) {
@@ -266,7 +289,7 @@ void test_helper_shutdown_lifetime(FakeBlockingTokenSource& source) {
 		std::this_thread::yield();
 	}
 	const bool returned_while_helper_active =
-		shutdown_returned.load(std::memory_order_acquire);
+		shutdown_returned.load();
 	{
 		std::lock_guard<std::mutex> lock(source.block_mutex);
 		source.request_released = true;
@@ -276,7 +299,7 @@ void test_helper_shutdown_lifetime(FakeBlockingTokenSource& source) {
 	shutdown.join();
 	source.block_request = false;
 	ok(!returned_while_helper_active &&
-		shutdown_returned.load(std::memory_order_acquire) &&
+		shutdown_returned.load() &&
 		GloAwsIamTokenSource == nullptr && connector.connect_calls == 1 &&
 		connector.query_calls == 1,
 		"token-source shutdown waits until an already-running detached IAM helper finishes safely");
