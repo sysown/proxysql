@@ -558,9 +558,11 @@ char *build_client_final_message(ScramState *scram_state,
 
 	if (scram_state->client_cbind_input != NULL) {
 		/* Channel-bound client: c=base64(gs2-header || cbind-data).
-		 * 86 bytes buffer = 22 (header) + 64 (max digest we accept) = 86;
-		 * base64-encoded = 116 chars max. The full prefix
-		 * "c=<b64>,r=<server_nonce>" easily fits in 512. */
+		 * The gs2 header "p=tls-server-end-point,," is 24 bytes, so the
+		 * cbind input is at most 24 + 64 (max digest we accept) = 88 bytes;
+		 * base64-encoded = 4*ceil(88/3) = 120 chars, 121 with the NUL that
+		 * is written below -- so b64[128] has 7 bytes of headroom. The full
+		 * prefix "c=<b64>,r=<server_nonce>" easily fits in 512. */
 		char b64[128];
 		int blen = pg_b64_encode(scram_state->client_cbind_input,
 					 scram_state->client_cbind_input_len,
