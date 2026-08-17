@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <memory>
 #include <string>
 #include <unistd.h>
 
@@ -494,7 +495,9 @@ int main() {
 		test_init_hostgroups() != 0) {
 		BAIL_OUT("failed to initialize the unit-test component globals");
 	}
-	GloMyLogger = new MySQL_Logger();
+	std::unique_ptr<MySQL_Logger> owned_logger(std::make_unique<MySQL_Logger>());
+	MySQL_Logger *previous_logger = GloMyLogger;
+	GloMyLogger = owned_logger.get();
 
 	MySrvC *server = create_server();
 	{
@@ -515,8 +518,7 @@ int main() {
 		test_destructor_cleanup(worker, server);
 	}
 
-	delete GloMyLogger;
-	GloMyLogger = nullptr;
+	GloMyLogger = previous_logger;
 	test_cleanup_hostgroups();
 	test_cleanup_query_processor();
 	test_cleanup_minimal();

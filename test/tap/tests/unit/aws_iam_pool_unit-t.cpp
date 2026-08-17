@@ -17,6 +17,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <thread>
 
@@ -744,7 +745,9 @@ int main() {
 		test_init_hostgroups() != 0) {
 		BAIL_OUT("failed to initialize unit-test globals");
 	}
-	GloMyLogger = new MySQL_Logger();
+	std::unique_ptr<MySQL_Logger> owned_logger(std::make_unique<MySQL_Logger>());
+	MySQL_Logger *previous_logger = GloMyLogger;
+	GloMyLogger = owned_logger.get();
 	if (!GloMyAuth->add(
 		const_cast<char *>(kUser), const_cast<char *>("password"), USERNAME_BACKEND,
 		false, 0, const_cast<char *>(""), false, false, false, 100,
@@ -783,8 +786,7 @@ int main() {
 		test_resetting_state_destroys_iam(worker);   // 1
 	}
 
-	delete GloMyLogger;
-	GloMyLogger = nullptr;
+	GloMyLogger = previous_logger;
 	test_cleanup_hostgroups();
 	test_cleanup_query_processor();
 	test_cleanup_auth();

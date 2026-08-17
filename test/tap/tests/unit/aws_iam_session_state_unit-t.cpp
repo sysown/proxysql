@@ -709,7 +709,9 @@ int main() {
 		test_init_query_processor() != 0 || test_init_hostgroups() != 0) {
 		BAIL_OUT("failed to initialize unit-test globals");
 	}
-	GloMyLogger = new MySQL_Logger();
+	std::unique_ptr<MySQL_Logger> owned_logger(std::make_unique<MySQL_Logger>());
+	MySQL_Logger *previous_logger = GloMyLogger;
+	GloMyLogger = owned_logger.get();
 	ok(add_backend_user(kIamUser, "", "{\"backend_auth\":{\"type\":\"aws_iam\"}}"),
 		"IAM backend account fixture is loaded");
 	ok(add_backend_user(kPasswordUser, "ordinary-password", ""),
@@ -754,8 +756,7 @@ int main() {
 	test_worker_shutdown_closes_delivery_boundary();
 	publish_global_aws_iam_token_source(nullptr);
 
-	delete GloMyLogger;
-	GloMyLogger = nullptr;
+	GloMyLogger = previous_logger;
 	test_cleanup_hostgroups();
 	test_cleanup_query_processor();
 	test_cleanup_auth();
