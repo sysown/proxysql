@@ -108,6 +108,11 @@ jobs:
             type: '-clang'
           - arch: 'arm64'
             type: '-dbg'
+#         tarball Compose only provides tarball_build
+          - dist: 'tarball-almalinux9'
+            type: '-clang'
+          - dist: 'tarball-almalinux9'
+            type: '-dbg'
 
     runs-on: ubuntu-24.04${{ matrix.arch == 'arm64' && '-arm' || '' }}
     timeout-minutes: 120
@@ -142,8 +147,20 @@ jobs:
       run: |
         #[[ $(git describe --long --abbrev=7) == ${{ needs.clean.outputs.gitdescribe }} ]] || exit 1
         make ${{ matrix.dist }}${{ matrix.type }}
-        echo "BIN_PKG=$(ls -1 binaries/*[mb])" >> $GITHUB_ENV
-        echo "BIN_HASH=$(ls -1 binaries/*.id-hash)" >> $GITHUB_ENV
+        shopt -s nullglob
+        packages=(binaries/*.deb binaries/*.rpm binaries/*.tar.gz)
+        if [[ ${#packages[@]} -ne 1 ]]; then
+          echo "ERROR: expected exactly one package artifact, found ${#packages[@]}" >&2
+          printf '  %s\n' "${packages[@]:-<none>}" >&2
+          exit 1
+        fi
+        echo "BIN_PKG=${packages[0]}" >> $GITHUB_ENV
+
+    - name: Test tarball runtime
+      if: startsWith(matrix.dist, 'tarball')
+      env:
+        TARBALL_TEST_IMAGES: almalinux:9 debian:12 ubuntu:22.04
+      run: tools/test-tarball-runtime.sh
 
     - name: Push packages
       env:
@@ -151,7 +168,7 @@ jobs:
       run: |
         GIT_VERSION=$(gh release --repo ${{ github.repository }} view ${{ env.BRANCH }}-head | tr -d '*' | grep -Po "(?<=Version : ).*")
         [[ ${GIT_VERSION} == ${{ needs.clean.outputs.gitdescribe }} ]] || exit 1
-        gh release upload ${{ env.BRANCH }}-head --repo ${{ github.repository }} --clobber ${{ env.BIN_PKG }}
+        gh release upload ${{ env.BRANCH }}-head --repo ${{ github.repository }} --clobber "$BIN_PKG"
  
     - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
       if: always()
