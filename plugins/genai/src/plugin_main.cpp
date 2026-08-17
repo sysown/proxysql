@@ -122,8 +122,13 @@ bool collect_variable_defaults(GenAIPluginContext& ctx, VariableDefaults& defaul
 	if (genai_names == nullptr) return false;
 	for (int i = 0; genai_names[i] != nullptr; ++i) {
 		char* value = GloGATH->get_variable(genai_names[i]);
-		defaults.emplace_back(
-			std::string("genai-") + genai_names[i], value != nullptr ? value : "");
+		if (value == nullptr) {
+			genai_log(6, "genai plugin: failed to read default for genai-%s\n",
+			          genai_names[i]);
+			free_variable_names(genai_names);
+			return false;
+		}
+		defaults.emplace_back(std::string("genai-") + genai_names[i], value);
 		free(value);
 	}
 	free_variable_names(genai_names);

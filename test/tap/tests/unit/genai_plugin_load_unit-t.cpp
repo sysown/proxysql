@@ -20,9 +20,9 @@
 namespace {
 
 // Real in-memory SQLite databases.  Pre-populated with the table
-// shapes genai_start() reads.  No data — that's enough to make the
-// plugin's admin-DB queries succeed and return empty result sets,
-// which is the "fresh-install" scenario.
+// shapes genai_start() reads and a partial set of persisted variables,
+// modeling an existing installation that startup must complete without
+// overwriting operator values.
 SQLite3DB* g_admindb  = nullptr;
 SQLite3DB* g_configdb = nullptr;
 SQLite3DB* g_statsdb  = nullptr;
@@ -73,7 +73,7 @@ SQLite3DB* proxysql_plugin_get_configdb() { return g_configdb; }
 SQLite3DB* proxysql_plugin_get_statsdb()  { return g_statsdb; }
 
 int main() {
-	plan(57);
+	plan(60);
 
 	g_admindb  = new SQLite3DB();
 	g_configdb = new SQLite3DB();
@@ -90,6 +90,11 @@ int main() {
 			" ('mcp-port','7123'),('genai-threads','7')")) {
 			BAIL_OUT("failed to seed persisted GenAI plugin variables");
 		}
+	}
+	if (!g_admindb->execute(
+		"INSERT INTO global_variables(variable_name, variable_value)"
+		" VALUES('genai-llm_cache_enabled','false')")) {
+		BAIL_OUT("failed to seed persisted genai-llm_cache_enabled=false");
 	}
 
 	ProxySQL_PluginManager mgr;
@@ -117,6 +122,23 @@ int main() {
 
 	ok(mgr.start_all(err), "start_all succeeds");
 	if (!err.empty()) diag("start error: %s", err.c_str());
+
+	ok(g_configdb->return_one_int(
+		"SELECT COUNT(*) FROM global_variables"
+		" WHERE variable_name='genai-llm_cache_enabled' AND variable_value='true'") == 1,
+	   "configdb seeds compiled genai-llm_cache_enabled=true default");
+
+	ProxySQL_PluginCommandContext variable_cmd_ctx { g_admindb, g_configdb, g_statsdb };
+	ProxySQL_PluginCommandResult variable_save_result;
+	const bool variable_save_dispatched = mgr.dispatch_admin_command(
+		variable_cmd_ctx, "SAVE GENAI VARIABLES TO MEMORY", variable_save_result);
+	ok(variable_save_dispatched && variable_save_result.error_code == 0,
+	   "SAVE GENAI VARIABLES TO MEMORY dispatches via plugin (rc=%d, msg=%s)",
+	   variable_save_result.error_code, variable_save_result.message.c_str());
+	ok(g_admindb->return_one_int(
+		"SELECT COUNT(*) FROM global_variables"
+		" WHERE variable_name='genai-llm_cache_enabled' AND variable_value='false'") == 1,
+	   "admindb preserves loaded genai-llm_cache_enabled=false");
 
 	struct VariableDatabase {
 		SQLite3DB* db;

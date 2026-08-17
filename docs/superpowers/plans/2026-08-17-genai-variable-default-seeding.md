@@ -34,7 +34,7 @@
 
 **Interfaces:**
 - Consumes: existing `ProxySQL_PluginManager::init_all()` / `start_all()` lifecycle, `SQLite3DB::return_one_int()`, handler variable enumeration APIs, and plugin-service database getters.
-- Produces: a 57-assertion lifecycle regression plus startup helpers that seed exactly 14 MCP and 32 GenAI variables in each database while preserving pre-existing values.
+- Produces: a 60-assertion lifecycle regression plus startup helpers that seed exactly 14 MCP and 32 GenAI variables in each database while preserving pre-existing values.
 
 - [ ] **Step 1: Give configdb the minimal schema used by the seeding contract**
 
@@ -76,7 +76,7 @@ for (SQLite3DB* db : {g_configdb, g_admindb}) {
 
 - [ ] **Step 3: Add post-start persistence and preservation assertions**
 
-Change `plan(45)` to `plan(57)`. Immediately after `start_all()` succeeds, run six assertions for each database:
+Change `plan(45)` to `plan(60)`. Immediately after `start_all()` succeeds, run six assertions for each database:
 
 ```cpp
 struct VariableDatabase {
@@ -117,6 +117,8 @@ for (const VariableDatabase& target : {
 ```
 
 The primary key on `variable_name` and exact counts jointly prove that startup creates one row per supported variable without duplicates.
+
+Final review adds three assertions around `genai-llm_cache_enabled`: the config database receives its compiled `true` default, `SAVE GENAI VARIABLES TO MEMORY` succeeds, and an Admin database value persisted as `false` is loaded and preserved by that save.
 
 - [ ] **Step 4: Build and run the test to establish RED**
 
@@ -250,7 +252,7 @@ make -C test/tap/tests/unit genai_plugin_load_unit-t
 test/tap/tests/unit/genai_plugin_load_unit-t
 ```
 
-Expected: `1..57`, all 57 assertions pass, and the process exits 0.
+Expected: `1..60`, all 60 assertions pass, and the process exits 0.
 
 - [ ] **Step 6: Review the diff and commit the behavior with its regression**
 
@@ -287,7 +289,7 @@ make -C test/tap/tests/unit -B genai_plugin_load_unit-t
 test/tap/tests/unit/genai_plugin_load_unit-t
 ```
 
-Expected: clean plugin rebuild succeeds and all 57 assertions pass.
+Expected: clean plugin rebuild succeeds and all 60 assertions pass.
 
 - [ ] **Step 2: Run adjacent GenAI handler unit tests**
 
