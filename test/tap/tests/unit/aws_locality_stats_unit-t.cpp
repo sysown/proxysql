@@ -5,6 +5,7 @@
 #include "tap.h"
 #include "test_globals.h"
 
+#include <cstdlib>
 #include <atomic>
 #include <memory>
 #include <string>
@@ -14,6 +15,9 @@
 extern MySQL_HostGroups_Manager* MyHGM;
 
 namespace {
+
+using SQLite3ResultPtr = std::unique_ptr<SQLite3_result>;
+using WriteErrorPtr = std::unique_ptr<char, decltype(&std::free)>;
 
 constexpr const char* kLocalityStatsProjectionFixture =
 	"CREATE TABLE stats_mysql_aws_locality ("
@@ -35,16 +39,23 @@ public:
 		++requests;
 		return {requests.load()};
 	}
-	void cancel(AwsMetadataRequestHandle) override {}
-	void shutdown() override {}
+	void cancel(AwsMetadataRequestHandle) override {
+		// No cancellation side effects are required for this provider fake.
+	}
+	void shutdown() override {
+		// No shutdown side effects are required for this provider fake.
+	}
 	std::atomic<uint64_t> requests {0};
 };
 
-CountingProvider* counting_provider = nullptr;
+std::unique_ptr<CountingProvider> counting_provider;
+CountingProvider* counting_provider_raw = nullptr;
 
 void destroy_counting_provider(AwsMetadataProvider* provider) {
-	delete static_cast<CountingProvider*>(provider);
-	counting_provider = nullptr;
+	if (provider != nullptr) {
+		counting_provider.reset();
+	}
+	counting_provider_raw = nullptr;
 }
 
 AwsLocalityHostgroupConfig disabled_hostgroup(
@@ -109,7 +120,7 @@ int main() {
 	}
 
 	SQLite3DB statsdb;
-	statsdb.open((char*)":memory:",
+	statsdb.open(const_cast<char*>(":memory:"),
 		SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 	ok(statsdb.return_one_int(
 		"SELECT count(*) FROM sqlite_master WHERE name='stats_mysql_aws_locality'") == 0,
@@ -190,19 +201,20 @@ int main() {
 	}
 	std::atomic<bool> start_concurrent_projection { false };
 	std::atomic<unsigned int> successful_projections { 0 };
-	auto project_repeatedly = [&](const std::vector<AwsLocalitySnapshotEntry>& projection) {
-		while (!start_concurrent_projection.load(std::memory_order_acquire)) {
+	auto project_repeatedly = [&start_concurrent_projection, &successful_projections, &statsdb](
+		const std::vector<AwsLocalitySnapshotEntry>& projection) {
+		while (!start_concurrent_projection.load()) {
 			std::this_thread::yield();
 		}
 		for (unsigned int iteration = 0; iteration < 10; ++iteration) {
 			if (MySQL_HostGroups_Manager::project_aws_locality_stats(&statsdb, projection)) {
-				successful_projections.fetch_add(1, std::memory_order_relaxed);
+				successful_projections.fetch_add(1);
 			}
 		}
 	};
 	std::thread projection_a(project_repeatedly, std::cref(concurrent_rows_a));
 	std::thread projection_b(project_repeatedly, std::cref(concurrent_rows_b));
-	start_concurrent_projection.store(true, std::memory_order_release);
+	start_concurrent_projection.store(true);
 	projection_a.join();
 	projection_b.join();
 	ok(successful_projections.load() == 20 &&
@@ -213,9 +225,10 @@ int main() {
 	{
 		MySQL_HostGroups_Manager hostgroups;
 		MyHGM = &hostgroups;
-		counting_provider = new CountingProvider();
+		counting_provider = std::make_unique<CountingProvider>();
+		counting_provider_raw = counting_provider.get();
 		ok(install_global_aws_metadata_provider(
-			counting_provider, &destroy_counting_provider, nullptr),
+			counting_provider.get(), &destroy_counting_provider, nullptr),
 			"network-request counter installs through the production registry");
 
 		hostgroups.aws_locality_manager()->configure({disabled_hostgroup(
@@ -226,7 +239,7 @@ int main() {
 			"AND metadata_status='disabled' AND configured_weight=7 "
 			"AND effective_weight=7") == 1,
 			"public callback projects the MySQL manager's current snapshot");
-		ok(counting_provider->requests.load() == 0,
+		ok(counting_provider_raw->requests.load() == 0,
 			"query-time refresh issues no metadata-provider request");
 
 		hostgroups.aws_locality_manager()->configure({disabled_hostgroup(
@@ -241,7 +254,7 @@ int main() {
 		hostgroups.refresh_aws_locality_stats(&statsdb);
 		ok(statsdb.return_one_int("SELECT count(*) FROM stats_mysql_aws_locality") == 0,
 			"no valid locality policy produces zero rows");
-		ok(counting_provider->requests.load() == 0,
+		ok(counting_provider_raw->requests.load() == 0,
 			"repeated generation queries remain network-free");
 		MyHGM = nullptr;
 	}
@@ -249,18 +262,19 @@ int main() {
 	GloVars.prometheus_registry.reset();
 
 	statsdb.execute("PRAGMA query_only = ON");
-	char* write_error = nullptr;
+	WriteErrorPtr write_error{nullptr, &std::free};
+	char* write_error_raw = nullptr;
 	SQLite3_result* write_result = statsdb.execute_statement(
 		"INSERT INTO stats_mysql_aws_locality "
 		"(hostgroup_id,hostname,port,endpoint_type,configured_weight,effective_weight,"
 		"local_region,local_az,backend_region,backend_az,account_match,locality,"
 		"active_multiplier,metadata_status,last_success_timestamp,last_attempt_timestamp,"
 		"last_error_category) VALUES (1,'x',3306,'unknown',1,1,'','','','',"
-		"'unknown','unknown',1.0,'disabled',0,0,'')", &write_error);
-	ok(write_error != nullptr,
+		"'unknown','unknown',1.0,'disabled',0,0,'')", &write_error_raw);
+	ok(write_error_raw != nullptr,
 		"stats listener query-only mode rejects writes to the projection");
-	free(write_error);
-	delete write_result;
+	write_error.reset(write_error_raw);
+	SQLite3ResultPtr write_result_ptr{write_result};
 	statsdb.execute("PRAGMA query_only = OFF");
 
 	proxysql_stop_configured_plugins(manager, error);
