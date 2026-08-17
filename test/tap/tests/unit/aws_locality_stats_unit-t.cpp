@@ -120,7 +120,8 @@ int main() {
 	}
 
 	SQLite3DB statsdb;
-	statsdb.open(const_cast<char*>(":memory:"),
+	char in_memory_db_name[] = ":memory:";
+	statsdb.open(in_memory_db_name,
 		SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 	ok(statsdb.return_one_int(
 		"SELECT count(*) FROM sqlite_master WHERE name='stats_mysql_aws_locality'") == 0,
