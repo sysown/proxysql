@@ -478,8 +478,9 @@ bool PgSQL_Session::handler_poisoned_simple_query(PtrSize_t* pkt) {
 		auto buff = pgpkt.detach();
 		client_myds->PSarrayOUT->add((void*)buff.first, buff.second);
 		client_myds->DSS = STATE_SLEEP;
-		l_free(pkt->size, pkt->ptr);
+		// CurrentQuery borrows pkt->ptr; finish logging/parser cleanup first.
 		if (mirror == false) RequestEnd(NULL, false);
+		l_free(pkt->size, pkt->ptr);
 		return true;
 	}
 
@@ -605,8 +606,9 @@ bool PgSQL_Session::handler_poisoned_simple_query(PtrSize_t* pkt) {
 	auto buff = pgpkt.detach();
 	client_myds->PSarrayOUT->add((void*)buff.first, buff.second);
 	client_myds->DSS = STATE_SLEEP;
-	l_free(pkt->size, pkt->ptr);
+	// CurrentQuery borrows pkt->ptr; finish logging/parser cleanup first.
 	if (mirror == false) RequestEnd(NULL, false);
+	l_free(pkt->size, pkt->ptr);
 	return true;
 }
 

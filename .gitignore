@@ -247,3 +247,4 @@ test/scripts/deps/mysqlbinlog
 # tsdb-lab capture.bash working dir: per-node datadirs/logs for the 3
 # ephemeral ProxySQL instances it spawns; never the committed fixture.
 test/tsdb-lab/.capture/
+# Temporary ASAN CI end-to-end validation trigger; this branch will not merge.
