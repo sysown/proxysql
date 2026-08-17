@@ -51,6 +51,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -87,11 +88,16 @@ namespace {
 
 using VariableDefaults = std::vector<std::pair<std::string, std::string>>;
 
-void free_variable_names(char** names) {
-	if (names == nullptr) return;
-	for (int i = 0; names[i] != nullptr; ++i) free(names[i]);
-	free(names);
-}
+struct VariableNamesDeleter {
+	void operator()(char** names) const {
+		if (names == nullptr) return;
+		free_deleter release;
+		for (int i = 0; names[i] != nullptr; ++i) release(names[i]);
+		release(names);
+	}
+};
+
+using VariableNamesOwner = std::unique_ptr<char*, VariableNamesDeleter>;
 
 std::vector<float> embed_query_via_glogath(const std::string& query) {
 	if (GloGATH == nullptr) return {};
@@ -106,32 +112,25 @@ std::vector<float> embed_query_via_glogath(const std::string& query) {
 bool collect_variable_defaults(GenAIPluginContext& ctx, VariableDefaults& defaults) {
 	if (ctx.mcp == nullptr || GloGATH == nullptr) return false;
 
-	char** mcp_names = ctx.mcp->get_variables_list();
-	if (mcp_names == nullptr) return false;
-	for (int i = 0; mcp_names[i] != nullptr; ++i) {
+	VariableNamesOwner mcp_names { ctx.mcp->get_variables_list() };
+	if (!mcp_names) return false;
+	for (int i = 0; mcp_names.get()[i] != nullptr; ++i) {
 		std::string value;
-		if (!ctx.mcp->get_variable_string(mcp_names[i], value)) {
-			free_variable_names(mcp_names);
-			return false;
-		}
-		defaults.emplace_back(std::string("mcp-") + mcp_names[i], std::move(value));
+		if (!ctx.mcp->get_variable_string(mcp_names.get()[i], value)) return false;
+		defaults.emplace_back(std::string("mcp-") + mcp_names.get()[i], std::move(value));
 	}
-	free_variable_names(mcp_names);
 
-	char** genai_names = GloGATH->get_variables_list();
-	if (genai_names == nullptr) return false;
-	for (int i = 0; genai_names[i] != nullptr; ++i) {
-		char* value = GloGATH->get_variable(genai_names[i]);
-		if (value == nullptr) {
+	VariableNamesOwner genai_names { GloGATH->get_variables_list() };
+	if (!genai_names) return false;
+	for (int i = 0; genai_names.get()[i] != nullptr; ++i) {
+		mf_unique_ptr<char> value { GloGATH->get_variable(genai_names.get()[i]) };
+		if (!value) {
 			genai_log(6, "genai plugin: failed to read default for genai-%s\n",
-			          genai_names[i]);
-			free_variable_names(genai_names);
+			          genai_names.get()[i]);
 			return false;
 		}
-		defaults.emplace_back(std::string("genai-") + genai_names[i], value);
-		free(value);
+		defaults.emplace_back(std::string("genai-") + genai_names.get()[i], value.get());
 	}
-	free_variable_names(genai_names);
 	return true;
 }
 
