@@ -14,10 +14,14 @@ extern MySQL_Authentication *GloMyAuth;
 
 static bool add_backend_user(const char *username, const char *password,
 	const char *attributes) {
+	std::string owned_username(username ? username : "");
+	std::string owned_password(password ? password : "");
+	std::string empty_attributes = "";
+	std::string owned_attributes(attributes ? attributes : "");
 	return GloMyAuth->add(
-		(char *)username, (char *)password, USERNAME_BACKEND,
-		false, 0, (char *)"", false, false, false, 100,
-		(char *)attributes, (char *)"");
+		&owned_username[0], &owned_password[0], USERNAME_BACKEND,
+		false, 0, &empty_attributes[0], false, false, false, 100,
+		&owned_attributes[0], &empty_attributes[0]);
 }
 
 static bool add_backend_user_capturing_stderr(const char *username, const char *password,

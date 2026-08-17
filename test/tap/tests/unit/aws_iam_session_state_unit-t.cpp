@@ -237,10 +237,15 @@ public:
 };
 
 bool add_backend_user(const char *username, const char *password, const char *attributes) {
+	std::string username_mut(username);
+	std::string password_mut(password);
+	std::string region_mut("");
+	std::string attributes_mut(attributes);
+	std::string extra_attrs_mut("");
 	return GloMyAuth->add(
-		(char *)username, (char *)password, USERNAME_BACKEND,
-		false, 0, (char *)"", false, false, false, 100,
-		(char *)attributes, (char *)"");
+		&username_mut[0], &password_mut[0], USERNAME_BACKEND,
+		false, 0, &region_mut[0], false, false, false, 100,
+		&attributes_mut[0], &extra_attrs_mut[0]);
 }
 
 MySrvC *add_server(const char *endpoint) {
