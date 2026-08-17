@@ -1415,7 +1415,7 @@ void PgSQL_Protocol::welcome_client() {
 	uint32_t cancel_key = -1;
 	if (RAND_bytes((unsigned char*)&cancel_key, sizeof(cancel_key)) != 1) {
 		proxy_error("RAND_bytes() failed generating PostgreSQL cancel key\n");
-		return false;
+		return;
 	}
 	(*myds)->sess->cancel_secret_key = cancel_key;
 
