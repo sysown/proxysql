@@ -10,18 +10,42 @@
 #include <utility>
 #include <vector>
 
+namespace {
+
+inline bool aws_locality_is_alnum_dash_or_dot(unsigned char value) {
+	return (value >= '0' && value <= '9') ||
+		(value >= 'A' && value <= 'Z') ||
+		(value >= 'a' && value <= 'z') ||
+		value == '-' || value == '.';
+}
+
+inline char aws_locality_to_lower(unsigned char value) {
+	return static_cast<char>((value >= 'A' && value <= 'Z') ? (value - ('A' - 'a')) : value);
+}
+
+inline bool aws_locality_is_alnum_dash_or_dot(const std::locale& loc, char value) {
+	(void)loc;
+	return aws_locality_is_alnum_dash_or_dot(static_cast<unsigned char>(value));
+}
+
+inline char aws_locality_to_lower(const std::locale& loc, char value) {
+	(void)loc;
+	return aws_locality_to_lower(static_cast<unsigned char>(value));
+}
+
+} // namespace
+
 inline std::string aws_locality_normalized_hostname(std::string_view input) {
 	if (input.empty()) return {};
 	std::string hostname(input);
 	if (hostname.back() == '.') hostname.pop_back();
 	if (hostname.empty() || hostname.back() == '.') return {};
-	const auto& ctype = std::use_facet<std::ctype<char>>(std::locale::classic());
+	const auto& loc = std::locale::classic();
 	for (char& character : hostname) {
-		if (!(ctype.is(std::ctype_base::alnum, character) ||
-			character == '-' || character == '.')) {
+		if (!aws_locality_is_alnum_dash_or_dot(loc, character)) {
 			return {};
 		}
-		character = ctype.tolower(character);
+		character = aws_locality_to_lower(loc, character);
 	}
 	return hostname;
 }

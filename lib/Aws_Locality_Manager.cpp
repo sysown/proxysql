@@ -77,18 +77,19 @@ bool valid_region(const std::string& region) {
 		return false;
 	}
 
-	const auto& ctype = std::use_facet<std::ctype<char>>(std::locale::classic());
 	unsigned int hyphens = 0;
 	for (const char character : region) {
 		if (character == '-') {
 			++hyphens;
-		} else if (!ctype.is(std::ctype_base::lower, character) &&
-			!ctype.is(std::ctype_base::digit, character)) {
+		} else if (!aws_locality_is_alnum_dash_or_dot(std::locale::classic(),
+			character) ||
+			character == '.') {
 			return false;
 		}
 	}
 	return hyphens >= 2 &&
-		ctype.is(std::ctype_base::digit, region.back());
+		region.back() >= '0' &&
+		region.back() <= '9';
 }
 
 bool is_rds_proxy_endpoint_prefix(const std::string& prefix) {
@@ -265,15 +266,13 @@ size_t metadata_provider_leases = 0;
 bool metadata_provider_accepting = false;
 
 bool dns_identity_length(std::string_view input, size_t& length) {
-	const auto& ctype = std::use_facet<std::ctype<char>>(std::locale::classic());
+	const auto& loc = std::locale::classic();
 	if (input.empty()) return false;
 	length = input.size();
 	if (input[length - 1] == '.') --length;
 	if (length == 0 || input[length - 1] == '.') return false;
 	for (size_t index = 0; index < length; ++index) {
-		const char value = static_cast<char>(input[index]);
-		if (!(ctype.is(std::ctype_base::alnum, value) ||
-			value == '-' || value == '.')) {
+		if (!aws_locality_is_alnum_dash_or_dot(loc, input[index])) {
 			return false;
 		}
 	}
@@ -285,9 +284,9 @@ uint64_t identity_hash(
 	std::string_view hostname,
 	uint16_t port) {
 	uint64_t hash = 14695981039346656037ULL;
-	auto append = [hash_ptr = std::addressof(hash)](unsigned char value) {
-		*hash_ptr ^= value;
-		*hash_ptr *= 1099511628211ULL;
+	auto append = [&hash](unsigned char value) {
+		hash ^= value;
+		hash *= 1099511628211ULL;
 	};
 	for (unsigned int shift = 0; shift < 32; shift += 8) {
 		append(static_cast<unsigned char>(hostgroup_id >> shift));
@@ -298,11 +297,12 @@ uint64_t identity_hash(
 	const bool valid_dns = dns_identity_length(hostname, length);
 	append(valid_dns ? 1 : 0);
 	if (!valid_dns) length = hostname.size();
-	const auto& ctype = std::use_facet<std::ctype<char>>(std::locale::classic());
+	const auto& loc = std::locale::classic();
 	for (size_t index = 0; index < length; ++index) {
 		const unsigned char value = static_cast<unsigned char>(hostname[index]);
 		append(valid_dns
-			? static_cast<unsigned char>(ctype.tolower(static_cast<char>(value)))
+			? static_cast<unsigned char>(aws_locality_to_lower(loc,
+				static_cast<char>(value)))
 			: value);
 	}
 	return hash;
@@ -316,10 +316,10 @@ bool same_hostname_identity(std::string_view lhs, std::string_view rhs) {
 	if (lhs_dns != rhs_dns) return false;
 	if (!lhs_dns) return lhs == rhs;
 	if (lhs_length != rhs_length) return false;
-	const auto& ctype = std::use_facet<std::ctype<char>>(std::locale::classic());
+	const auto& loc = std::locale::classic();
 	for (size_t index = 0; index < lhs_length; ++index) {
-		if (ctype.tolower(static_cast<char>(lhs[index])) !=
-			ctype.tolower(static_cast<char>(rhs[index]))) {
+		if (aws_locality_to_lower(loc, lhs[index]) !=
+			aws_locality_to_lower(loc, rhs[index])) {
 			return false;
 		}
 	}
@@ -549,8 +549,10 @@ public:
 		publish_locked();
 		cv_.notify_all();
 		if (!enabled_ && worker_.joinable()) {
-			cv_.wait_for(lock, config_.disable_wait_timeout, [this] {
-				return disable_acknowledged_ || stopping_;
+			const auto disable_acknowledged = std::addressof(disable_acknowledged_);
+			const auto stopping = std::addressof(stopping_);
+			cv_.wait_for(lock, config_.disable_wait_timeout, [disable_acknowledged, stopping] {
+				return *disable_acknowledged || *stopping;
 			});
 		}
 	}
