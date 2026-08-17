@@ -120,16 +120,19 @@ GenAIPluginContext& genai_context();
 void genai_log(int level, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
 
 /**
- * @brief Push admin DB's `mcp-*` global_variables values into the
- *        running MCP_Threads_Handler.
+ * @brief Validate and push the complete admin DB `mcp-*` configuration into
+ *        the running MCP_Threads_Handler, then atomically publish the
+ *        normalized active snapshot to `runtime_global_variables`.
  *
  * Defined in plugin_main.cpp.  Called from `genai_start()` (initial
  * read at plugin start) and from the `LOAD MCP VARIABLES TO RUNTIME`
  * admin command (in plugin_commands.cpp) — both go through this one
  * helper to keep behavior consistent.
  *
- * @return true on success; false if admindb is unavailable or the
- *         lookup query errored out.
+ * @return true on success; false if the configuration is incomplete/invalid,
+ *         admindb access or publication fails, or the previous handler state
+ *         cannot be retained.  A failed load leaves the prior committed
+ *         runtime snapshot visible and restores the prior handler values.
  */
 bool mcp_load_variables_from_admindb(GenAIPluginContext& ctx);
 

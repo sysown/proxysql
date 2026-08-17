@@ -117,7 +117,8 @@ ProxySQL_PluginCommandResult load_mcp_variables_to_runtime(
 	(void)cmd_ctx; (void)sql;
 	GenAIPluginContext& ctx = genai_context();
 	if (!mcp_load_variables_from_admindb(ctx)) {
-		return err_result("LOAD MCP VARIABLES TO RUNTIME: failed reading global_variables");
+		return err_result(
+			"LOAD MCP VARIABLES TO RUNTIME: failed applying or publishing global_variables");
 	}
 	mcp_start_listener_if_enabled(ctx);
 	return ok_result("MCP variables loaded to runtime");

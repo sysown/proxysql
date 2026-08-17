@@ -87,6 +87,7 @@ extern std::atomic<genai_anomaly_embed_fn_t> genai_anomaly_embed_fn;
 namespace {
 
 using VariableDefaults = std::vector<std::pair<std::string, std::string>>;
+using VariableValues = std::vector<std::pair<std::string, std::string>>;
 
 struct VariableNamesDeleter {
 	void operator()(char** names) const {
@@ -372,14 +373,116 @@ bool genai_register_schemas(ProxySQL_PluginServices* services) {
 //               externally visible, declared in genai_plugin.h, and
 //               called from plugin_commands.cpp.)
 
+namespace {
+
+bool collect_mcp_handler_values(MCP_Threads_Handler* handler, VariableValues& values) {
+	values.clear();
+	if (handler == nullptr) return false;
+
+	VariableNamesOwner names { handler->get_variables_list() };
+	if (!names) return false;
+
+	for (int i = 0; names.get()[i] != nullptr; ++i) {
+		std::string value;
+		if (!handler->get_variable_string(names.get()[i], value)) {
+			genai_log(6, "genai plugin: failed to read active mcp-%s\n", names.get()[i]);
+			return false;
+		}
+		values.emplace_back(names.get()[i], std::move(value));
+	}
+	return !values.empty();
+}
+
+bool apply_mcp_handler_values(MCP_Threads_Handler* handler, const VariableValues& values,
+		const char* operation) {
+	for (const auto& item : values) {
+		if (handler->set_variable(item.first.c_str(), item.second.c_str()) != 0) {
+			// Endpoint-auth values are credentials.  Name the rejected setting
+			// without echoing its value into proxysql.log.
+			genai_log(6, "genai plugin: %s rejected mcp-%s\n", operation,
+			          item.first.c_str());
+			return false;
+		}
+	}
+	return true;
+}
+
+bool contains_mcp_variable(const VariableValues& values, const std::string& name) {
+	for (const auto& item : values) {
+		if (item.first == name) return true;
+	}
+	return false;
+}
+
+bool publish_mcp_runtime_values(SQLite3DB* admindb, const VariableValues& values) {
+	auto [prep_rc, stmt] = admindb->prepare_v2(
+		"INSERT INTO main.runtime_global_variables(variable_name, variable_value)"
+		" VALUES(?1, ?2)"
+	);
+	if (prep_rc != SQLITE_OK) {
+		genai_log(6, "genai plugin: failed to prepare MCP runtime publication (rc=%d)\n",
+		          prep_rc);
+		return false;
+	}
+
+	if (!admindb->execute("BEGIN")) {
+		genai_log(6, "genai plugin: failed to begin MCP runtime publication\n");
+		return false;
+	}
+
+	if (!admindb->execute(
+			"DELETE FROM main.runtime_global_variables WHERE variable_name LIKE 'mcp-%'")) {
+		genai_log(6, "genai plugin: failed to clear the prior MCP runtime snapshot\n");
+		admindb->execute("ROLLBACK");
+		return false;
+	}
+
+	sqlite3_stmt* statement = stmt.get();
+	for (const auto& item : values) {
+		const std::string qualified = std::string("mcp-") + item.first;
+		int rc = (*proxy_sqlite3_bind_text)(
+			statement, 1, qualified.c_str(), -1, SQLITE_TRANSIENT);
+		if (rc == SQLITE_OK) {
+			rc = (*proxy_sqlite3_bind_text)(
+				statement, 2, item.second.c_str(), -1, SQLITE_TRANSIENT);
+		}
+		if (rc == SQLITE_OK) rc = (*proxy_sqlite3_step)(statement);
+		if (rc != SQLITE_DONE) {
+			genai_log(6, "genai plugin: failed to publish runtime %s (rc=%d)\n",
+			          qualified.c_str(), rc);
+			admindb->execute("ROLLBACK");
+			return false;
+		}
+
+		rc = (*proxy_sqlite3_clear_bindings)(statement);
+		if (rc == SQLITE_OK) rc = (*proxy_sqlite3_reset)(statement);
+		if (rc != SQLITE_OK) {
+			genai_log(6, "genai plugin: failed to reset MCP runtime publication"
+			          " for %s (rc=%d)\n", qualified.c_str(), rc);
+			admindb->execute("ROLLBACK");
+			return false;
+		}
+	}
+
+	if (!admindb->execute("COMMIT")) {
+		genai_log(6, "genai plugin: failed to commit MCP runtime publication\n");
+		admindb->execute("ROLLBACK");
+		return false;
+	}
+	return true;
+}
+
+} // namespace
+
 /**
- * @brief Push admin DB's mcp-* variables into the running
- *        MCP_Threads_Handler.  Mirrors the pre-4.C
- *        flush_mcp_variables___database_to_runtime in core.
+ * @brief Validate and push admin DB's complete mcp-* configuration into the
+ *        running handler, then atomically publish the normalized active values
+ *        to runtime_global_variables.
  *
  * @param ctx  Plugin context (provides services + ctx.mcp).
- * @return true on success; false on SQL error (logged and propagated
- *         to caller).
+ * @return true on success; false on an incomplete/invalid configuration or a
+ *         SQL error.  Failures restore the previous handler values and leave
+ *         the previously committed runtime table snapshot visible.
  */
 bool mcp_load_variables_from_admindb(GenAIPluginContext& ctx) {
 	if (ctx.services == nullptr || ctx.services->get_admindb == nullptr || ctx.mcp == nullptr) {
@@ -401,15 +504,55 @@ bool mcp_load_variables_from_admindb(GenAIPluginContext& ctx) {
 		if (rs != nullptr) delete rs;
 		return false;
 	}
+
+	VariableValues previous;
+	if (!collect_mcp_handler_values(ctx.mcp, previous)) {
+		if (rs != nullptr) delete rs;
+		return false;
+	}
+
+	VariableValues desired;
 	if (rs != nullptr) {
 		for (auto* row : rs->rows) {
 			const char* qualified = row->fields[0];
 			const char* value = row->fields[1];
-			if (qualified != nullptr && std::strncmp(qualified, "mcp-", 4) == 0) {
-				ctx.mcp->set_variable(qualified + 4, value ? value : "");
+			if (qualified == nullptr || std::strncmp(qualified, "mcp-", 4) != 0 ||
+				!ctx.mcp->has_variable(qualified + 4)) {
+				genai_log(6, "genai plugin: unknown MCP variable %s\n",
+				          qualified ? qualified : "(null)");
+				delete rs;
+				return false;
 			}
+			desired.emplace_back(qualified + 4, value ? value : "");
 		}
 		delete rs;
+	}
+
+	if (desired.size() != previous.size()) {
+		genai_log(6, "genai plugin: incomplete MCP variable set: expected %zu, got %zu\n",
+		          previous.size(), desired.size());
+		return false;
+	}
+	for (const auto& item : previous) {
+		if (!contains_mcp_variable(desired, item.first)) {
+			genai_log(6, "genai plugin: missing mcp-%s from global_variables\n",
+			          item.first.c_str());
+			return false;
+		}
+	}
+
+	if (!apply_mcp_handler_values(ctx.mcp, desired, "LOAD")) {
+		apply_mcp_handler_values(ctx.mcp, previous, "rollback");
+		return false;
+	}
+
+	VariableValues active;
+	if (!collect_mcp_handler_values(ctx.mcp, active) ||
+		!publish_mcp_runtime_values(admindb, active)) {
+		if (!apply_mcp_handler_values(ctx.mcp, previous, "rollback")) {
+			genai_log(3, "genai plugin: failed to restore MCP handler after LOAD failure\n");
+		}
+		return false;
 	}
 	return true;
 }
