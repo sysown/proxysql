@@ -1787,7 +1787,9 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		if (admin) {
 			if (dump_global_variables) {
 				pthread_mutex_lock(&GloVars.checksum_mutex);
-				admindb->execute("DELETE FROM runtime_global_variables");	// extra
+				// Each core variable flusher below replaces its own namespace.
+				// Preserve rows published by plugins under namespaces core does
+				// not own (for example mcp-*).
 				flush_admin_variables___runtime_to_database(admindb, false, false, false, true);
 				flush_mysql_variables___runtime_to_database(admindb, false, false, false, true);
 #ifdef PROXYSQLTSDB
