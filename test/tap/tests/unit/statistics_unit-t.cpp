@@ -33,9 +33,11 @@
 #include <cstring>
 #include <cstdlib>
 #include <array>
+#include <chrono>
 #include <string>
 #include <map>
 #include <memory>
+#include <thread>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -718,6 +720,47 @@ static void test_insert_and_query_backend_health() {
 	}
 }
 
+static void test_tsdb_query_does_not_wait_for_backend_probe() {
+	// TEST-NET-1 is deliberately non-routable on the public Internet. The
+	// monitor's nonblocking connect therefore remains in poll() until its
+	// one-second timeout, giving us a deterministic in-flight probe window.
+	srv_info_t info;
+	info.addr = "192.0.2.1";
+	info.port = 65000;
+	info.kind = "tsdb-unit-test";
+	srv_opts_t opts;
+	opts.weigth = 1;
+	opts.max_conns = 1;
+	opts.use_ssl = 0;
+
+	MyHGM->wrlock();
+	const int add_rc = MyHGM->create_new_server_in_hg(65000, info, opts);
+	MyHGM->wrunlock();
+	if (add_rc != 0) {
+		ok(false, "TSDB monitor probe fixture is created");
+		return;
+	}
+
+	stats->set_variable("enabled", "1");
+	stats->set_variable("monitor_enabled", "1");
+	std::thread monitor([]() { stats->tsdb_monitor_loop(); });
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+	const auto started = std::chrono::steady_clock::now();
+	(void)stats->get_tsdb_status();
+	const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now() - started).count();
+
+	monitor.join();
+	MyHGM->wrlock();
+	MyHGM->remove_server_in_hg(65000, info.addr, info.port);
+	MyHGM->wrunlock();
+
+	ok(elapsed < 500,
+	   "TSDB status query does not wait for backend probe completion (elapsed=%lldms)",
+	   static_cast<long long>(elapsed));
+}
+
 // ============================================================
 // TSDB status
 // ============================================================
@@ -834,6 +877,8 @@ int main() {
 	num_tests += 9;
 	// TSDB backend health: 4
 	num_tests += 4;
+	// TSDB monitor concurrency: 1
+	num_tests += 1;
 	// TSDB status: 3
 	num_tests += 3;
 	// TSDB downsampling/retention: 5
@@ -906,6 +951,7 @@ int main() {
 
 	// TSDB backend health
 	test_insert_and_query_backend_health();
+	test_tsdb_query_does_not_wait_for_backend_probe();
 
 	// TSDB status
 	test_get_tsdb_status();

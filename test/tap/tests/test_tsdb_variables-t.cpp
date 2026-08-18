@@ -195,35 +195,36 @@ int main() {
 
 	// 12. Test Downsampling command
 	// NOTE: Downsampling only processes COMPLETED hours (data with timestamps before current_hour).
-	// Since we only have a few seconds of data, we need to insert test data with timestamps
-	// from at least 1 hour ago for the downsample to produce results.
+	// Since we only have a few seconds of data, insert test data in the most recently
+	// completed hour. Downsampling deliberately refreshes this boundary bucket so
+	// metrics committed just after an earlier pass are not lost.
 	diag("Testing TSDB downsampling via command...");
 
-	// Get current timestamp and calculate timestamp from 2 hours ago
+	// Get current timestamp and calculate the start of the previous hour.
 	time_t now = time(NULL);
-	time_t two_hours_ago = ((now - 7200) / 3600) * 3600; // Start of the hour, 2 hours ago
-	diag("Current time: %ld, Two hours ago (hour boundary): %ld", now, two_hours_ago);
+	time_t completed_hour = ((now - 3600) / 3600) * 3600;
+	diag("Current time: %ld, Previous hour boundary: %ld", now, completed_hour);
 
-	// Insert test data with timestamps from 2 hours ago (completed hour)
+	// Insert test data with timestamps from the completed hour.
 	diag("Inserting test metrics data with timestamps from completed hour...");
 	char insert_query[512];
 	snprintf(insert_query, sizeof(insert_query),
 		"INSERT OR REPLACE INTO stats_history.tsdb_metrics (timestamp, metric_name, labels, value) "
 		"VALUES (%ld, 'test_downsample_metric', '{\"test\":\"true\"}', 42.0)",
-		two_hours_ago);
+		completed_hour);
 	rc = mysql_query(admin, insert_query);
 	if (rc != 0) {
 		diag("Failed to insert test data: %s", mysql_error(admin));
 	}
 	drain_results(admin);
-	diag("Inserted test metric at timestamp %ld", two_hours_ago);
+	diag("Inserted test metric at timestamp %ld", completed_hour);
 
 	// Also insert a few more data points in the same hour for realistic test
 	for (int i = 1; i <= 3; i++) {
 		snprintf(insert_query, sizeof(insert_query),
 			"INSERT OR REPLACE INTO stats_history.tsdb_metrics (timestamp, metric_name, labels, value) "
 			"VALUES (%ld, 'test_downsample_metric', '{\"test\":\"true\"}', %f)",
-			two_hours_ago + i * 60, 42.0 + i); // Add data points every minute
+			completed_hour + i * 60, 42.0 + i); // Add data points every minute
 		mysql_query(admin, insert_query);
 		drain_results(admin);
 	}

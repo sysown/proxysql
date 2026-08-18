@@ -1471,6 +1471,14 @@ void ProxySQL_Statistics::insert_tsdb_metric(const std::string& metric_name,
                                              const std::map<std::string, std::string>& labels,
                                              double value,
                                              time_t timestamp) {
+    std::lock_guard<std::mutex> lock(tsdb_mutex);
+    insert_tsdb_metric_unlocked(metric_name, labels, value, timestamp);
+}
+
+void ProxySQL_Statistics::insert_tsdb_metric_unlocked(const std::string& metric_name,
+                                                      const std::map<std::string, std::string>& labels,
+                                                      double value,
+                                                      time_t timestamp) {
     if (!statsdb_disk) return;
     sqlite3 *mydb3 = statsdb_disk->get_db();
     int rc;
@@ -1510,6 +1518,16 @@ void ProxySQL_Statistics::insert_backend_health(int hostgroup,
                                                 bool probe_up,
                                                 int connect_ms,
                                                 time_t timestamp) {
+    std::lock_guard<std::mutex> lock(tsdb_mutex);
+    insert_backend_health_unlocked(hostgroup, hostname, port, probe_up, connect_ms, timestamp);
+}
+
+void ProxySQL_Statistics::insert_backend_health_unlocked(int hostgroup,
+                                                         const std::string& hostname,
+                                                         int port,
+                                                         bool probe_up,
+                                                         int connect_ms,
+                                                         time_t timestamp) {
     if (!statsdb_disk) return;
     sqlite3 *mydb3 = statsdb_disk->get_db();
     int rc;
@@ -1542,6 +1560,8 @@ void ProxySQL_Statistics::tsdb_downsample_metrics() {
     if (!variables.tsdb_enabled) return;
     if (!statsdb_disk) return;
 
+    std::lock_guard<std::mutex> lock(tsdb_mutex);
+
     time_t ts = time(NULL);
     time_t current_hour = (ts / 3600) * 3600;
 
@@ -1564,8 +1584,10 @@ void ProxySQL_Statistics::tsdb_downsample_metrics() {
     }
     if (resultset) delete resultset;
 
-    // Process new hours
-    if (last_hour < current_hour - 3600) {
+    // Reprocess the latest completed bucket as well as new buckets. Metrics can
+    // arrive just after an hourly pass has committed, and INSERT OR REPLACE
+    // makes refreshing that boundary bucket idempotent.
+    if (last_hour <= current_hour - 3600) {
         char buf[2048];
         snprintf(buf, sizeof(buf),
             "INSERT OR REPLACE INTO tsdb_metrics_hour "
@@ -1580,7 +1602,7 @@ void ProxySQL_Statistics::tsdb_downsample_metrics() {
             "FROM tsdb_metrics "
             "WHERE timestamp >= %ld AND timestamp < %ld "
             "GROUP BY bucket, metric_name, labels",
-            last_hour > 0 ? last_hour + 3600 : 0,
+            last_hour > 0 ? last_hour : 0,
             current_hour);
 
         statsdb_disk->execute(buf);
@@ -1590,6 +1612,8 @@ void ProxySQL_Statistics::tsdb_downsample_metrics() {
 void ProxySQL_Statistics::tsdb_retention_cleanup() {
     if (!variables.tsdb_enabled) return;
     if (!statsdb_disk) return;
+
+    std::lock_guard<std::mutex> lock(tsdb_mutex);
 
     time_t ts = time(NULL);
     const int retention_days = std::max(1, variables.tsdb_retention_days);
@@ -1619,6 +1643,8 @@ ProxySQL_Statistics::tsdb_status_t ProxySQL_Statistics::get_tsdb_status() {
     tsdb_status_t status = {0, 0, 0, 0, 0};
 
     if (!statsdb_disk) return status;
+
+    std::lock_guard<std::mutex> lock(tsdb_mutex);
 
     char *error = NULL;
     int cols = 0;
@@ -1740,6 +1766,9 @@ SQLite3_result* ProxySQL_Statistics::query_tsdb_metrics(
         const std::string& aggregation) {
 
     if (!statsdb_disk) return NULL;
+
+    std::lock_guard<std::mutex> lock(tsdb_mutex);
+
     if (to < from) {
         std::swap(from, to);
     }
@@ -1799,6 +1828,9 @@ SQLite3_result* ProxySQL_Statistics::query_tsdb_metrics(
 // TSDB Backend Health Query
 SQLite3_result* ProxySQL_Statistics::get_backend_health_metrics(time_t from, time_t to, int hostgroup) {
     if (!statsdb_disk) return NULL;
+
+    std::lock_guard<std::mutex> lock(tsdb_mutex);
+
     if (to < from) {
         std::swap(from, to);
     }
@@ -1840,6 +1872,7 @@ void ProxySQL_Statistics::tsdb_sampler_loop() {
         update_modules_metrics();
         auto metrics = GloVars.prometheus_registry->Collect();
         time_t now = time(NULL);
+        std::lock_guard<std::mutex> lock(tsdb_mutex);
         statsdb_disk->execute("BEGIN");
         for (const auto& family : metrics) {
             for (const auto& metric : family.metric) {
@@ -1849,28 +1882,28 @@ void ProxySQL_Statistics::tsdb_sampler_loop() {
                 }
                 switch (family.type) {
                     case prometheus::MetricType::Counter:
-                        insert_tsdb_metric(family.name, labels, metric.counter.value, now);
+                        insert_tsdb_metric_unlocked(family.name, labels, metric.counter.value, now);
                         break;
                     case prometheus::MetricType::Gauge:
-                        insert_tsdb_metric(family.name, labels, metric.gauge.value, now);
+                        insert_tsdb_metric_unlocked(family.name, labels, metric.gauge.value, now);
                         break;
                     case prometheus::MetricType::Summary: {
-                        insert_tsdb_metric(family.name + "_count", labels, static_cast<double>(metric.summary.sample_count), now);
-                        insert_tsdb_metric(family.name + "_sum", labels, metric.summary.sample_sum, now);
+                        insert_tsdb_metric_unlocked(family.name + "_count", labels, static_cast<double>(metric.summary.sample_count), now);
+                        insert_tsdb_metric_unlocked(family.name + "_sum", labels, metric.summary.sample_sum, now);
                         for (const auto& q : metric.summary.quantile) {
                             std::map<std::string, std::string> q_labels(labels);
                             q_labels["quantile"] = format_prometheus_label_double(q.quantile);
-                            insert_tsdb_metric(family.name, q_labels, q.value, now);
+                            insert_tsdb_metric_unlocked(family.name, q_labels, q.value, now);
                         }
                         break;
                     }
                     case prometheus::MetricType::Histogram: {
-                        insert_tsdb_metric(family.name + "_count", labels, static_cast<double>(metric.histogram.sample_count), now);
-                        insert_tsdb_metric(family.name + "_sum", labels, metric.histogram.sample_sum, now);
+                        insert_tsdb_metric_unlocked(family.name + "_count", labels, static_cast<double>(metric.histogram.sample_count), now);
+                        insert_tsdb_metric_unlocked(family.name + "_sum", labels, metric.histogram.sample_sum, now);
                         for (const auto& b : metric.histogram.bucket) {
                             std::map<std::string, std::string> b_labels(labels);
                             b_labels["le"] = format_prometheus_label_double(b.upper_bound);
-                            insert_tsdb_metric(
+                            insert_tsdb_metric_unlocked(
                                 family.name + "_bucket",
                                 b_labels,
                                 static_cast<double>(b.cumulative_count),
@@ -1880,11 +1913,11 @@ void ProxySQL_Statistics::tsdb_sampler_loop() {
                         break;
                     }
                     case prometheus::MetricType::Info:
-                        insert_tsdb_metric(family.name, labels, metric.info.value, now);
+                        insert_tsdb_metric_unlocked(family.name, labels, metric.info.value, now);
                         break;
                     case prometheus::MetricType::Untyped:
                     default:
-                        insert_tsdb_metric(family.name, labels, metric.untyped.value, now);
+                        insert_tsdb_metric_unlocked(family.name, labels, metric.untyped.value, now);
                         break;
                 }
             }
@@ -1995,14 +2028,26 @@ void ProxySQL_Statistics::tsdb_monitor_loop() {
 		for (size_t j = i; j < batch_end; ++j) {
 			batch_futures.push_back(std::async(std::launch::async, probe_backend, targets[j].hg, targets[j].host, targets[j].port, now));
 		}
-		statsdb_disk->execute("BEGIN");
+
+		// Network completion is independent of SQLite. Collect every result
+		// before taking the TSDB mutex so an unreachable backend cannot block
+		// samplers, status queries, downsampling, or retention for the probe
+		// timeout.
+		std::vector<probe_result_t> batch_results;
+		batch_results.reserve(batch_futures.size());
 		for (auto& f : batch_futures) {
 			try {
-				probe_result_t res = f.get();
-				insert_backend_health(res.hg, res.host, res.port, res.probe_up, res.connect_ms, res.timestamp);
+				batch_results.push_back(f.get());
 			} catch (const std::exception& e) {
 				proxy_error("TSDB monitor probe failed: %s\n", e.what());
 			}
+		}
+
+		std::lock_guard<std::mutex> lock(tsdb_mutex);
+		statsdb_disk->execute("BEGIN");
+		for (const probe_result_t& res : batch_results) {
+			insert_backend_health_unlocked(
+				res.hg, res.host, res.port, res.probe_up, res.connect_ms, res.timestamp);
 		}
 		statsdb_disk->execute("COMMIT");
 	}
