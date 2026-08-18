@@ -9,6 +9,7 @@
 #include "tap.h"
 
 #include <string>
+#include <utility>
 #include <vector>
 
 #ifndef PROXYSQL_GENAI_PLUGIN_PATH
@@ -91,7 +92,7 @@ SQLite3DB* proxysql_plugin_get_configdb() { return g_configdb; }
 SQLite3DB* proxysql_plugin_get_statsdb()  { return g_statsdb; }
 
 int main() {
-	plan(86);
+	plan(95);
 
 	g_admindb  = new SQLite3DB();
 	g_configdb = new SQLite3DB();
@@ -101,6 +102,60 @@ int main() {
 	g_statsdb->open((char*)":memory:", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 	setup_admindb_schema(g_admindb);
 	setup_global_variables_schema(g_configdb);
+
+	// Exercise a genuinely fresh installation before setting up the partial
+	// installation used by the rest of this regression. Both stores begin with
+	// empty global_variables tables and must receive the complete default set.
+	{
+		ProxySQL_PluginManager fresh_mgr;
+		std::string fresh_err {};
+		const bool fresh_loaded = fresh_mgr.load(PROXYSQL_GENAI_PLUGIN_PATH, fresh_err);
+		ok(fresh_loaded, "fresh-install plugin load succeeds");
+		if (!fresh_loaded) {
+			diag("fresh-install load error: %s", fresh_err.c_str());
+			BAIL_OUT("fresh-install plugin must load before lifecycle assertions");
+		}
+
+		const bool fresh_schemas = fresh_mgr.invoke_register_schemas_phase(fresh_err);
+		ok(fresh_schemas, "fresh-install register_schemas succeeds");
+		if (!fresh_schemas) {
+			BAIL_OUT("fresh-install schema registration must succeed");
+		}
+
+		const bool fresh_initialized = fresh_mgr.init_all(fresh_err);
+		ok(fresh_initialized, "fresh-install init_all succeeds");
+		if (!fresh_initialized) {
+			BAIL_OUT("fresh-install initialization must succeed");
+		}
+
+		const bool fresh_started = fresh_mgr.start_all(fresh_err);
+		ok(fresh_started, "fresh-install start_all succeeds");
+		if (!fresh_started) {
+			BAIL_OUT("fresh-install startup must succeed");
+		}
+
+		for (const auto& target : {
+			std::pair<SQLite3DB*, const char*>{g_configdb, "configdb"},
+			std::pair<SQLite3DB*, const char*>{g_admindb, "admindb"}
+		}) {
+			ok(target.first->return_one_int(
+				"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'mcp-%'") == 14,
+			   "fresh %s contains all 14 MCP defaults", target.second);
+			ok(target.first->return_one_int(
+				"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'genai-%'") == 32,
+			   "fresh %s contains all 32 GenAI defaults", target.second);
+		}
+
+		ok(fresh_mgr.stop_all(), "fresh-install stop_all succeeds");
+	}
+
+	// Reset only the variable stores; the existing schemas are reused for the
+	// partial-install preservation and command-dispatch checks below.
+	for (SQLite3DB* db : {g_configdb, g_admindb}) {
+		if (!db->execute("DELETE FROM global_variables")) {
+			BAIL_OUT("failed to reset fresh-install variable fixture");
+		}
+	}
 	if (!g_admindb->execute(
 		"INSERT INTO runtime_global_variables(variable_name, variable_value)"
 		" VALUES('mysql-threads','4')")) {
@@ -131,11 +186,8 @@ int main() {
 	}
 	ok(mgr.size() == 1, "exactly one plugin handle after load");
 
-	// Phase B (chassis): every plugin's register_schemas callback runs
-	// here, BEFORE init_all.  As of Step 4.G the genai plugin uses this
-	// callback to publish its admin/config/stats table set, so it MUST
-	// fire before the size assertions below or we'll see 0 tables in
-	// every kind.
+	// Phase B (chassis): every plugin's register_schemas callback runs here,
+	// before init_all, to publish its admin/config/stats table set.
 	ok(mgr.invoke_register_schemas_phase(err),
 	   "invoke_register_schemas_phase succeeds");
 	if (!err.empty()) diag("register_schemas error: %s", err.c_str());
@@ -408,7 +460,7 @@ int main() {
 	// Verify the plugin handles are still live (pre-destructor).
 	ok(mgr.size() == 1, "plugin handle still present after stop_all");
 
-	// Step 4.G: the plugin now owns the MCP admin / config table set.
+	// The plugin owns the MCP admin / config table set.
 	// Counts match plugins/genai/src/plugin_tables.cpp.
 	//   admin:  6 (mcp_query_rules, mcp_auth_profiles, mcp_target_profiles
 	//              + their runtime_* siblings)
@@ -420,7 +472,7 @@ int main() {
 	   "genai plugin registers 3 config-db tables (got %zu)",
 	   mgr.tables(ProxySQL_PluginDBKind::config_db).size());
 
-	// Step 4.F: the plugin registers MCP admin SQL verbs.  Verify
+	// The plugin registers MCP admin SQL verbs. Verify
 	// each registered alias resolves back to the canonical command
 	// via the plugin manager's alias resolver (which is the same
 	// path admin SQL dispatch uses).
