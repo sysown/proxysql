@@ -130,7 +130,7 @@ void * mysql_thread(int tid) {
 		}
 		for (i=0; i<16; i++) {
 			MySQL_Session *sess=SESS[i];
-			sprintf(buff+5,"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
+			snprintf(buff+5,sizeof(buff)-5,"SELECT %u + ?",(uint32_t)mt_rand()%NUMPRO);
 			bl=strlen(buff+5);
 			mysql_hdr hdr;
 			hdr.pkt_id=0;

@@ -6,6 +6,18 @@
 #include "MySQL_Variables.h"
 #include "MySQL_Prepared_Stmt_info.h"
 
+#ifdef PROXYSQL31
+#include <memory>
+
+class MySQL_Caching_Sha2_RSA_Key_Snapshot;
+
+/** @brief Frontend authentication failures that require a specific client-facing diagnostic. */
+enum class MySQLFrontendAuthError : uint8_t {
+	NONE = 0,
+	CACHING_SHA2_RSA_UNAVAILABLE
+};
+#endif
+
 #define RESULTSET_BUFLEN 16300
 
 extern MySQL_Variables mysql_variables;
@@ -25,7 +37,10 @@ enum proxysql_auth_plugins {
 	AUTH_UNKNOWN_PLUGIN = -1,
 	AUTH_MYSQL_NATIVE_PASSWORD = 0,
 	AUTH_MYSQL_CLEAR_PASSWORD,
-	AUTH_MYSQL_CACHING_SHA2_PASSWORD
+	AUTH_MYSQL_CACHING_SHA2_PASSWORD,
+#ifdef PROXYSQLED25519
+	AUTH_MYSQL_ED25519, // MariaDB client_ed25519 (value 3)
+#endif
 };
 
 class MySQL_ResultSet {
@@ -105,13 +120,16 @@ class MyProt_tmp_auth_vars {
 	unsigned char *auth_plugin = NULL;
 	void *sha1_pass=NULL;
 	unsigned char *_ptr = NULL;;
-	unsigned int charset;
+	unsigned int charset = 0;
 	uint32_t  capabilities = 0;
 	uint32_t  max_pkt;
-	uint32_t  pass_len;
+	uint32_t  pass_len = 0;
 	uint8_t zstd_compression_level = 0;
 	bool use_ssl = false;
 	bool use_zstd_compression = false;
+#ifdef PROXYSQL31
+	bool pass_is_sensitive = false;
+#endif
 	enum proxysql_session_type session_type;
 };
 
@@ -141,6 +159,10 @@ class MySQL_Protocol {
 	enum proxysql_auth_plugins auth_plugin_id;
 	uint16_t prot_status;
 	bool more_data_needed;
+#ifdef PROXYSQL31
+	std::shared_ptr<const MySQL_Caching_Sha2_RSA_Key_Snapshot> caching_sha2_rsa_snapshot_;
+	MySQLFrontendAuthError frontend_auth_error_ { MySQLFrontendAuthError::NONE };
+#endif
 	MySQL_Data_Stream *get_myds() { return *myds; }
 	MySQL_Protocol()
 	  : userinfo(nullptr), sess(nullptr), myds(nullptr), current_PreStmt(nullptr)
@@ -159,7 +181,7 @@ class MySQL_Protocol {
 	// - a pointer to unsigned int, used to return the size of the packet if not NULL 
 	// for now,  they all return true
 	bool generate_pkt_OK(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, unsigned int affected_rows, uint64_t last_insert_id, uint16_t status, uint16_t warnings, char *msg, bool eof_identifier=false);
-	bool generate_pkt_ERR(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t error_code, char *sql_state, const char *sql_message, bool track=false);
+	bool generate_pkt_ERR(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t error_code, const char *sql_state, const char *sql_message, bool track=false);
 	bool generate_pkt_EOF(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t warnings, uint16_t status, MySQL_ResultSet *myrs=NULL);
 //	bool generate_COM_INIT_DB(bool send, void **ptr, unsigned int *len, char *schema);
 	//bool generate_COM_PING(bool send, void **ptr, unsigned int *len);
@@ -196,6 +218,17 @@ class MySQL_Protocol {
 	void PPHR_6auth2(bool& ret, MyProt_tmp_auth_vars& vars1);
 	bool PPHR_verify_sha2(MyProt_tmp_auth_vars& vars1, enum proxysql_auth_plugins passformat, PASSWORD_TYPE::E passtype);
 	void PPHR_sha2full(bool& ret, MyProt_tmp_auth_vars& vars1, enum proxysql_auth_plugins passformat, PASSWORD_TYPE::E passtype);
+#ifdef PROXYSQLED25519
+	void PPHR_ed25519_switch(bool& ret, MyProt_tmp_auth_vars& vars1);
+	void PPHR_ed25519_verify(bool& ret, MyProt_tmp_auth_vars& vars1);
+#endif
+	/**
+	 * @brief Drive caching_sha2_password full authentication for pass-through users.
+	 * @details At stage 0 this sends AuthMoreData{0x04}; at stage 5 it transfers the
+	 * cleartext to the data stream and schedules the backend credential probe.
+	 * @return False when the request packet could not be allocated; no auth state is advanced.
+	 */
+	bool PPHR_passthrough_init(MyProt_tmp_auth_vars& vars1);
 	void PPHR_7auth1(bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, account_details_t& attr1);
 	void PPHR_7auth2(bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, account_details_t& attr1);
 	void PPHR_next_auth_stage(MyProt_tmp_auth_vars& vars1, PASSWORD_TYPE::E passtype);
@@ -203,7 +236,25 @@ class MySQL_Protocol {
 	bool PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_details_t& account_details);
 	bool PPHR_verify_password_2(MyProt_tmp_auth_vars& vars1, account_details_t& account_details);
 
-	void generate_one_byte_pkt(unsigned char b);
+#ifdef PROXYSQL31
+	private:
+	/** @brief Retain the active RSA key pair for the caching SHA-2 full-auth challenge. */
+	void capture_caching_sha2_rsa_snapshot();
+	/** @brief Decrypt an RSA full-auth response using the retained challenge key pair. */
+	int PPHR_decrypt_caching_sha2_rsa_response(
+		unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1
+	);
+	public:
+#endif
+
+	/** @brief Queue a one-byte auth packet, leaving the queue and sequence unchanged on failure. */
+	bool generate_one_byte_pkt(unsigned char b);
+#ifdef PROXYSQL31
+	/** @brief Queue AuthMoreData atomically; false means no packet or sequence update occurred. */
+	bool generate_auth_more_data(const unsigned char *data, size_t data_len);
+	/** @brief Return and clear the pending frontend authentication diagnostic. */
+	MySQLFrontendAuthError consume_frontend_auth_error();
+#endif
 
 	bool process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned int len);
 	void * Query_String_to_packet(uint8_t sid, std::string *s, unsigned int *l);
@@ -244,6 +295,8 @@ class MySQL_Protocol {
 	bool generate_COM_QUERY_from_COM_FIELD_LIST(PtrSize_t *pkt);
 
 	bool verify_user_attributes(int calling_line, const char *calling_func, const unsigned char *user);
+#ifndef PROXYSQL31
 	bool user_attributes_has_spiffe(int calling_line, const char *calling_func, const unsigned char *user);
+#endif
 };
 #endif /* PROXYSQL_MYSQL_PROTOCOL_H */

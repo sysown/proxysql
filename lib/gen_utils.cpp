@@ -1,5 +1,6 @@
 #include <vector>
 #include <memory>
+#include <limits>
 #include <sstream>
 #include "gen_utils.h"
 
@@ -7,10 +8,19 @@
 using std::vector;
 using std::unique_ptr;
 
+static inline size_t util_strlen(const char* s) {
+	size_t len = 0;
+	if (s == NULL) return 0;
+	while (s[len]) {
+		++len;
+	}
+	return len;
+}
+
 char *escape_string_single_quotes(char *input, bool free_it) {
 	int i,j,l;
 	char *o=NULL;	// output string, if any
-	l=strlen(input);
+	l=util_strlen(input);
 	j=0;
 	for (i=0;i<l;i++) {
 		if (input[i]=='\'') {
@@ -63,7 +73,7 @@ int remove_spaces(const char *s) {
 		}
 	}
 	*outp = '\0';
-	return strlen(s);
+	return outp - s;
 }
 
 // This function returns a pointer to a substring of the original string. It also
@@ -87,7 +97,8 @@ char *trim_spaces_in_place(char *str)
 		return str;
 
 	// Trim trailing space
-	end = str + strlen(str) - 1;
+		const size_t str_len = util_strlen(str);
+		end = str + str_len - 1;
 	while(end > str && isspace(*end)) end--;
 
 	// Write new null terminator
@@ -105,7 +116,8 @@ char *trim_spaces_and_quotes_in_place(char *str) {
 	if(*str == 0)  // All spaces?
 		return str;
 	// Trim trailing space
-	end = str + strlen(str) - 1;
+		const size_t str_len = util_strlen(str);
+		end = str + str_len - 1;
 	while(end > str && (isspace(*end) || *end=='\"' || *end=='\'' || *end==';')) end--;
 	// Write new null terminator
 	*(end+1) = 0;
@@ -352,6 +364,54 @@ const char* escape_string_backslash_spaces(const char* input) {
 }
 
 /**
+ * Converts monotonic clock time (in μs) to realtime clock time (in sec).
+ * This function assumes that during bootup initial value for the monotonic
+ * clock in the operation system will be set based on realtime clock value.
+ * This function should only be used in non-critical business logic, such as
+ * input and output conversion.
+ *
+ * @param mt monotonic clock value in microseconds.
+ * @return realtime clock time in seconds.
+ */
+time_t monotonic_time_to_realtime(time_t mt) {
+	time_t mt_now = monotonic_time() / 1000000;
+	mt = mt / 1000000;
+
+	time_t rt_now;
+	time(&rt_now);
+
+	return (rt_now - mt_now + mt);
+}
+
+/**
+ * Converts realtime clock time (in sec) to monotonic clock time (in μs).
+ * This function assumes that during bootup initial value for the monotonic
+ * clock in the operation system will be set based on realtime clock value.
+ * This function should only be used in non-critical business logic, such as
+ * input and output conversion.
+ *
+ * @param rt realtime clock time in seconds.
+ * @return monotonic clock value in microseconds.
+ */
+time_t realtime_to_monotonic_time(time_t rt) {
+	time_t mt_now = monotonic_time() / 1000000;
+
+	time_t rt_now;
+	time(&rt_now);
+
+	time_t mt = mt_now - rt_now + rt;
+	// a realtime value earlier than the monotonic clock epoch (i.e. system boot)
+	// has no monotonic representation: any monotonic timestamp is more recent
+	if (mt < 0) {
+		return 0;
+	}
+	if (mt > std::numeric_limits<time_t>::max() / 1000000) {
+		return std::numeric_limits<time_t>::max();
+	}
+	return (mt * 1000000);
+}
+
+/**
  * Strip schema prefix from the query
  *
  * @param query The input query
@@ -363,13 +423,20 @@ const char* escape_string_backslash_spaces(const char* input) {
  */
 std::string strip_schema_from_query(const char* query, const char* schema,
                                     const std::vector<std::string>& tables, bool ansi_quotes) {
-	if (!query || strlen(query) == 0) {
+	if (!query) {
 		return "";
 	}
 
-	int query_len = strlen(query);
+	const int query_len = static_cast<int>(util_strlen(query));
+	if (query_len == 0) {
+		return "";
+	}
 
-	int schema_len = strlen(schema);
+	if (schema == NULL) {
+		return std::string(query, query_len);
+	}
+
+	int schema_len = static_cast<int>(util_strlen(schema));
 	if (schema_len == 0) {
 		return std::string(query, query_len);
 	}

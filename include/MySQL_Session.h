@@ -8,11 +8,13 @@
 #define PROXYSQL_MYSQL_SESSION_H
 
 #include <functional>
+#include <optional>
 #include <vector>
 
 #include "proxysql.h"
 #include "cpp.h"
 #include "MySQL_Variables.h"
+#include "MySQL_User_Variables.h"
 #include "Base_Session.h"
 
 #ifndef PROXYJSON
@@ -235,6 +237,12 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___create_mirror_session();
 	int handler_again___status_PINGING_SERVER();
 	int handler_again___status_RESETTING_CONNECTION();
+	// Pass-through authentication backend probe. Borrows the cleartext
+	// password captured by PPHR_passthrough_init from client_myds and
+	// validates it against a backend in the target hostgroup; on success
+	// caches the credential and completes the client handshake, on
+	// failure sends a generic ERR and tears down the session.
+	int handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT();
 	bool handler_again___status_SHOW_WARNINGS(MySQL_Data_Stream *, bool);
 	void handler_again___new_thread_to_kill_connection();
 	void handler_KillConnectionIfNeeded();
@@ -276,6 +284,11 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	bool handler_again___verify_backend_multi_statement();
 	bool handler_again___verify_backend_user_schema();
 	bool handler_again___verify_multiple_variables(MySQL_Connection *);
+	bool handler_again___verify_backend_user_variables(MySQL_Connection* myconn);
+	bool accepts_new_user_variable_assignments() const;
+	bool must_classify_and_sync_user_variables() const;
+	void handler_again___fail_user_variable_replay(
+		MySQL_Data_Stream* myds, unsigned int error_code, const char* sqlstate, const char* error_message);
 	bool handler_again___status_SETTING_INIT_CONNECT(int *);
 	bool handler_again___status_SETTING_LDAP_USER_VARIABLE(int *);
 	bool handler_again___status_SETTING_SQL_MODE(int *);
@@ -308,6 +321,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	bool handler_again___status_CHANGING_USER_SERVER(int *);
 	bool handler_again___status_CHANGING_AUTOCOMMIT(int *);
 	bool handler_again___status_SETTING_MULTI_STMT(int *_rc);
+	bool handler_again___status_SETTING_USER_VARIABLES(int* rc);
 	bool handler_again___multiple_statuses(int *rc);
 
 	//void init();
@@ -409,6 +423,14 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	bool handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, const char *var_name, const char *var_value, bool no_quote=false, bool set_transaction=false);
 	bool handler_again___status_SETTING_SQL_LOG_BIN(int *);
 	std::stack<enum session_status> previous_status;
+	std::vector<MySQL_User_Variable_Replay_Batch> user_variable_replay_batches;
+	size_t user_variable_replay_batch_index { 0 };
+	std::optional<UserVariableSetAnalysis> pending_user_variable_set;
+	bool current_query_user_variable_safe { false };
+	bool current_query_user_variable_unsafe_fallback { false };
+	bool current_query_user_variable_context_change { false };
+	bool user_variable_tracking_latched { false };
+	bool user_variable_backend_authoritative { false };
 
 	Query_Info CurrentQuery;
 	PtrSize_t mirrorPkt;
@@ -520,6 +542,81 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 
 	 // this is used ONLY for Admin, and only if the other party is another proxysql instance part of a cluster
 	bool use_ldap_auth;
+
+	/**
+	 * @brief Set to @c true when this session's credential came from the
+	 * pass-through cache or a fresh pass-through probe (spec §8.4).
+	 *
+	 * Read by the @c ER_ACCESS_DENIED_ERROR eviction hook in
+	 * @c handler_again___status_CONNECTING_SERVER: only sessions whose
+	 * credential was supplied by the pass-through machinery are allowed
+	 * to invalidate the cache entry on a backend 1045. Without this
+	 * flag, a regular @c mysql_users user with the same name but a
+	 * stale stored hash would evict an unrelated pass-through cache
+	 * entry -- needless churn for users who aren't even using
+	 * pass-through.
+	 *
+	 * Set in two places:
+	 *   - @c PPHR_verify_password on a cache hit
+	 *     (the cached cleartext IS what we're authenticating with).
+	 *   - @c handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT
+	 *     on probe success (we just inserted the cleartext into the
+	 *     cache and immediately put it on the session's userinfo).
+	 *
+	 * Cleared on session reset / re-init alongside the other auth
+	 * state. Stays @c false for regular @c mysql_users authentications.
+	 */
+	bool passthrough_credential;
+	/**
+	 * @brief Phase marker / divert signal for non-blocking pass-through auth.
+	 *
+	 * Pass-through delegates the backend connect to the existing
+	 * non-blocking @c CONNECTING_SERVER path (spec §6.3). This bool serves
+	 * two roles while a pass-through auth is in flight:
+	 *
+	 *   1. Phase tracking inside
+	 *      @c handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT:
+	 *      @c false on the first entry means "launch the backend connect"
+	 *      (Phase A); the handler then sets it @c true, pushes itself onto
+	 *      @c previous_status, and transitions to @c CONNECTING_SERVER.
+	 *      When @c CONNECTING_SERVER succeeds it pops back to
+	 *      @c AUTHENTICATING_BACKEND_FOR_CLIENT; the now-@c true value means
+	 *      "complete the client handshake" (Phase B).
+	 *
+	 *   2. Divert signal inside @c handler_again___status_CONNECTING_SERVER:
+	 *      when the backend connect fails while this is @c true, the failure
+	 *      is a pass-through credential verdict (not a normal query-time
+	 *      connect failure). The 1045/transport-failure path must NOT use
+	 *      CONNECTING_SERVER's default ERR (which forwards the backend's
+	 *      message and keeps the session alive); it must divert to the
+	 *      pass-through generic-ERR + teardown instead.
+	 *
+	 * Set in Phase A; cleared on every Phase B exit (success and
+	 * @c fail_session). Stays @c false for all non-pass-through sessions,
+	 * so the divert is inert on the normal query path.
+	 */
+	bool passthrough_connect_in_flight;
+	/**
+	 * @brief Failure channel from CONNECTING_SERVER back to the pass-through
+	 * Phase B handler.
+	 *
+	 * CONNECTING_SERVER cannot itself produce the pass-through generic-ERR +
+	 * teardown (its failure path forwards the backend's message and transitions
+	 * to WAITING_CLIENT_DATA without tearing down). So when a backend connect
+	 * fails while @c passthrough_connect_in_flight is true, CONNECTING_SERVER
+	 * sets this flag (with @c passthrough_connect_fail_reason carrying the
+	 * internal classification) and resumes the pass-through handler instead of
+	 * taking its own ERR path. The pass-through Phase B handler checks this
+	 * flag first: if set, it drives @c fail_session (generic "Access denied"
+	 * ERR + audit + return -1 teardown), reusing the single source of truth
+	 * for the client-facing failure disposition.
+	 *
+	 * Valid only while @c passthrough_connect_in_flight is true. Set in
+	 * exactly one place (the CONNECTING_SERVER divert); consumed and cleared
+	 * in the pass-through Phase B entry.
+	 */
+	bool passthrough_connect_failed;
+	const char *passthrough_connect_fail_reason;
 	// Fast forward grace close flags: track backend closure during fast forward mode
 	// to allow pending client data to drain before closing the session.
 	bool backend_closed_in_fast_forward;

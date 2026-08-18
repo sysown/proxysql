@@ -1,6 +1,11 @@
 #ifndef PROXYSQL_MYSQL_DATA_STREAM_H
 #define PROXYSQL_MYSQL_DATA_STREAM_H
 
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -130,7 +135,13 @@ class MySQL_Data_Stream
 	MySQL_Connection *myconn;
 	MySQL_Session *sess;  // pointer to the session using this data stream
 	MySQL_Backend *mybe;  // if this is a connection to a mysql server, this points to a backend structure
-	char *x509_subject_alt_name;
+	std::vector<std::pair<std::string, std::string>> client_connect_attrs;
+	std::unique_ptr<char[]> x509_subject_alt_name;
+#ifdef PROXYSQL31
+	bool client_cert_present;
+	long client_cert_verify_result;
+	bool frontend_authenticated_via_spiffe;
+#endif
 	SSL *ssl;
 	BIO *rbio_ssl;
 	BIO *wbio_ssl;
@@ -170,6 +181,16 @@ class MySQL_Data_Stream
 	// Updated **only** when an 'auth_switch' has been sent to client
 	enum proxysql_auth_plugins switching_auth_sent;
 	int auth_in_progress; // if 0 , no authentication is in progress. Any value greater than 0 depends from the implementation
+	// Pass-through authentication: cleartext password received from the
+	// client during the caching_sha2_password full-auth exchange (spec
+	// §4.1). Captured by PPHR_passthrough_init at stage 5 and consumed by
+	// handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT when it
+	// drives the non-blocking backend connect. Lives on a dedicated field
+	// (NOT userinfo->password) because process_pkt_handshake_response's
+	// epilogue overwrites userinfo->password with "" when auth is still in
+	// progress -- which would clobber the borrowed cleartext before the
+	// session handler runs. NULL when no pass-through probe is in flight.
+	char *passthrough_cleartext;
 	unsigned int tmp_charset;
 
 	short revents;
@@ -190,6 +211,7 @@ class MySQL_Data_Stream
 	MySQL_Data_Stream();
 	virtual ~MySQL_Data_Stream();
 	int array2buffer_full();
+	void reset_frontend_certificate_evidence();
 	void init();	// initialize the data stream
 	void init(enum MySQL_DS_type, MySQL_Session *, int); // initialize with arguments
 	void shut_soft();
@@ -287,4 +309,16 @@ class MySQL_Data_Stream
 
 	void get_client_myds_info_json(nlohmann::json&);
 };
+
+// Decompress a MySQL compressed-protocol payload into `dest` (capacity
+// `destLen` == the claimed pre-compression length from the wire header).
+// Returns true only when the payload decompresses successfully AND the
+// actual decompressed size matches the claimed `destLen`. Exposed (rather
+// than file-static) so it can be exercised directly by the unit test for
+// GHSA-fvch-fpgq-pwfx; see lib/mysql_data_stream.cpp for details.
+bool decompress_mysql_payload(
+	const MySQL_Connection* myconn, unsigned char* dest, unsigned long destLen,
+	const unsigned char* source, size_t sourceLen
+);
+
 #endif /* PROXYSQL_MYSQL_DATA_STREAM_H */

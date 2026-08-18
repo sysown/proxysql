@@ -847,6 +847,10 @@ class PgSQL_Threads_Handler
 {
 private:
 	int shutdown_;
+	/// @brief Number of worker + idle threads that registered before entering PgSQL_Thread::run().
+	std::atomic<unsigned int> threads_registered;
+	/// @brief Number of worker + idle threads that already left PgSQL_Thread::run().
+	std::atomic<unsigned int> threads_exited_run_loop;
 	size_t stacksize;
 	pthread_attr_t attr;
 	pthread_rwlock_t rwlock;
@@ -1435,6 +1439,57 @@ public:
 	 *
 	 */
 	void shutdown_threads();
+
+	/**
+	 * @brief Rendezvous for all worker and idle threads before they self-delete.
+	 *
+	 * Worker and idle threads dereference each other's PgSQL_Thread objects:
+	 * PgSQL_Thread::run_MoveSessionsBetweenThreads() reads
+	 * pgsql_threads_idles[rand()].worker, and the idle branch of
+	 * PgSQL_Thread::run() reads pgsql_threads[rand()].worker and then locks that
+	 * worker's myexchange mutex unconditionally. Because the peer is picked at
+	 * random and both directions exist, no pthread_join() ordering in
+	 * shutdown_threads() can make self-deletion safe -- each thread destroys its
+	 * own PgSQL_Thread from its own thread function, which pthread_join() only
+	 * observes after the fact.
+	 *
+	 * Destruction must nevertheless stay on the owning thread, because
+	 * ~PgSQL_Thread() frees __thread variables (pgsql_thread___*) and calls
+	 * GloPgQPro->end_thread().
+	 *
+	 * Every worker and idle thread therefore calls this right after
+	 * PgSQL_Thread::run() returns and before deleting its own PgSQL_Thread (and
+	 * before clearing its slot in pgsql_threads[], which another thread may still
+	 * be about to load). It returns only once all of them have left run(), so no
+	 * PgSQL_Thread is ever freed while another thread may still reach into it.
+	 *
+	 * The participant count comes from register_thread_before_run_loop(), not from
+	 * num_threads: every thread that registers is exactly a thread that will call
+	 * this, so the barrier is self-consistent and does not depend on every slot of
+	 * pgsql_threads[]/pgsql_threads_idles[] being populated. That matters because
+	 * the rest of this class deliberately tolerates a NULL worker slot (see
+	 * signal_all_threads() and the guards in shutdown_threads()).
+	 *
+	 * @note The wait is unbounded, but adds no new liveness requirement. A thread
+	 *   that never leaves run() still holds a non-NULL slot -- it registers right
+	 *   after storing that pointer -- so shutdown_threads() would block forever in
+	 *   the pthread_join() it performs under exactly that non-NULL guard. Leaving
+	 *   run() strictly precedes the thread exit that join waits for, so any hang
+	 *   this barrier can produce is a hang the pre-existing join already produced.
+	 *   The wait logs via proxy_error() every THREADS_EXIT_REPORT_INTERVAL_US so a
+	 *   stalled shutdown is diagnosable instead of silent; it never aborts.
+	 */
+	void wait_for_all_threads_to_exit_run_loop();
+
+	/**
+	 * @brief Register the calling thread as a participant of the shutdown barrier.
+	 *
+	 * Must be called by each worker/idle thread function before it releases the
+	 * start-up gate (`load_`), so that the count is complete before any thread can
+	 * enter PgSQL_Thread::run() and therefore before any thread can reach
+	 * wait_for_all_threads_to_exit_run_loop().
+	 */
+	void register_thread_before_run_loop();
 
 	/**
 	 * @brief Adds a new listener to the thread pool, based on an interface string.

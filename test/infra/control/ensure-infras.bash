@@ -6,6 +6,7 @@ set -o pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 export WORKSPACE="${REPO_ROOT}"
+source "${SCRIPT_DIR}/readiness.bash"
 
 # Default INFRA_ID if not provided
 export INFRA_ID="${INFRA_ID:-dev-$USER}"
@@ -100,6 +101,13 @@ for EXT in bash sql; do
             mysql -uadmin -padmin -h127.0.0.1 -P6032 < "${HOOK}"
     fi
 done
+
+PROXYSQL_READY_PORTS=(6032 6033 6132 6133)
+if [ -n "${PROXYSQL_READY_PORTS_EXTRA:-}" ]; then
+    read -r -a EXTRA_READY_PORTS <<< "${PROXYSQL_READY_PORTS_EXTRA}"
+    PROXYSQL_READY_PORTS+=("${EXTRA_READY_PORTS[@]}")
+fi
+wait_for_proxysql_ports "${PROXY_CONTAINER}" 30 "${PROXYSQL_READY_PORTS[@]}"
 
 # 4. Ensure Docker Compose helper is available
 COMPOSE_CMD="docker compose"

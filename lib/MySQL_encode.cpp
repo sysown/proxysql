@@ -39,7 +39,7 @@ char *sha1_pass_hex(char *sha1_pass) {
 	uint8_t a = 0;
 	for (i=0;i<SHA_DIGEST_LENGTH;i++) {
 		memcpy(&a,sha1_pass+i,1);
-		sprintf(buff+1+2*i, "%02x", a);
+		snprintf(buff + 1 + 2 * i, 3, "%02x", a);
 	}
 	return buff;
 }
@@ -244,4 +244,3 @@ uint8_t mysql_encode_length(uint64_t len, char *hd) {
 	if (hd) { *hd=0xfe; }
 	return 9;	
 }
-

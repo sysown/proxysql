@@ -86,7 +86,7 @@ class MetricsCollector;
 										  "autopurge_missing_checks INT NOT NULL CHECK (autopurge_missing_checks >= 0 AND autopurge_missing_checks <= 100) DEFAULT 0 , " \
 										  "comment VARCHAR , UNIQUE (reader_hostgroup))"
 
-#define MYHGM_GEN_ADMIN_RUNTIME_SERVERS "SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers ORDER BY hostgroup_id, hostname, port"
+#define MYHGM_GEN_ADMIN_RUNTIME_SERVERS "SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" WHEN 5 THEN \"SHUNNED_AWS_BGD\" END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers ORDER BY hostgroup_id, hostname, port"
 
 #define MYHGM_MYSQL_HOSTGROUP_ATTRIBUTES "CREATE TABLE mysql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers <= 1000000) NOT NULL DEFAULT 1000000 , autocommit INT CHECK (autocommit IN (-1, 0, 1)) NOT NULL DEFAULT -1 , free_connections_pct INT CHECK (free_connections_pct >= 0 AND free_connections_pct <= 100) NOT NULL DEFAULT 10 , init_connect VARCHAR NOT NULL DEFAULT '' , multiplex INT CHECK (multiplex IN (0, 1)) NOT NULL DEFAULT 1 , connection_warming INT CHECK (connection_warming IN (0, 1)) NOT NULL DEFAULT 0 , throttle_connections_per_sec INT CHECK (throttle_connections_per_sec >= 1 AND throttle_connections_per_sec <= 1000000) NOT NULL DEFAULT 1000000 , ignore_session_variables VARCHAR CHECK (JSON_VALID(ignore_session_variables) OR ignore_session_variables = '') NOT NULL DEFAULT '' , hostgroup_settings VARCHAR CHECK (JSON_VALID(hostgroup_settings) OR hostgroup_settings = '') NOT NULL DEFAULT '' , servers_defaults VARCHAR CHECK (JSON_VALID(servers_defaults) OR servers_defaults = '') NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '')"
 
@@ -95,7 +95,7 @@ class MetricsCollector;
 
 /*
  * @brief Generates the 'runtime_mysql_servers' resultset exposed to other ProxySQL cluster members.
- * @details Makes 'SHUNNED' and 'SHUNNED_REPLICATION_LAG' statuses equivalent to 'ONLINE'. 'SHUNNED' states
+ * @details Makes 'SHUNNED', 'SHUNNED_REPLICATION_LAG' and 'SHUNNED_AWS_BGD' statuses equivalent to 'ONLINE'. 'SHUNNED' states
  *  are by definition local transitory states, this is why a 'mysql_servers' table reconfiguration isn't
  *  normally performed when servers are internally imposed with these statuses. This means, that propagating
  *  this state to other cluster members is undesired behavior, and so it's generating a different checksum,
@@ -117,6 +117,7 @@ class MetricsCollector;
 		" WHEN 2 THEN \"OFFLINE_SOFT\"" \
 		" WHEN 3 THEN \"OFFLINE_HARD\"" \
 		" WHEN 4 THEN \"ONLINE\" " \
+		" WHEN 5 THEN \"ONLINE\" " \
 		"END status," \
 		"weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment " \
 	"FROM mysql_servers " \
@@ -127,7 +128,7 @@ class MetricsCollector;
  * @brief Generates the 'mysql_servers_v2' resultset exposed to other ProxySQL cluster members.
  * @details The generated resultset is used for the checksum computation of the runtime ProxySQL config
  *  ('mysql_servers_v2' checksum), and it's also forwarded to other cluster members when querying the Admin
- *  interface with 'CLUSTER_QUERY_MYSQL_SERVERS_V2'. It makes 'SHUNNED' state equivalent to 'ONLINE', and also
+ *  interface with 'CLUSTER_QUERY_MYSQL_SERVERS_V2'. It makes 'SHUNNED' and 'SHUNNED_AWS_BGD' states equivalent to 'ONLINE', and also
  *  filters out any 'OFFLINE_HARD' entries. This is done because none of the statuses are valid configuration
  *  statuses, they are local, transient status that ProxySQL uses during operation.
  */
@@ -136,6 +137,7 @@ class MetricsCollector;
 		"hostgroup_id, hostname, port, gtid_port, " \
 		"CASE" \
 		" WHEN status=\"SHUNNED\" THEN \"ONLINE\"" \
+		" WHEN status=\"SHUNNED_AWS_BGD\" THEN \"ONLINE\"" \
 		" ELSE status " \
 		"END AS status, " \
 		"weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment " \
@@ -311,6 +313,7 @@ class BaseHGC {	// MySQL Host Group Container
 		uint32_t max_num_online_servers;
 		uint32_t throttle_connections_per_sec;
 		int32_t monitor_slave_lag_when_null;
+		int32_t default_query_timeout;
 		int8_t autocommit;
 		int8_t free_connections_pct;
 		int8_t handle_warnings;
@@ -569,11 +572,11 @@ class Base_HostGroups_Manager {
 	PtrArray *MyHostGroups;
 	std::unordered_map<unsigned int, HGC *>MyHostGroups_map;
 
-	HGC * MyHGC_find(unsigned int);
 	HGC * MyHGC_create(unsigned int);
 
 	public:
 	Base_HostGroups_Manager();
+	HGC * MyHGC_find(unsigned int);
 	HGC * MyHGC_lookup(unsigned int);
 	SQLite3_result * execute_query(char *query, char **error);
 
@@ -607,6 +610,7 @@ class MySQL_HostGroups_Manager {
 		MYSQL_AWS_AURORA_HOSTGROUPS,
 		MYSQL_HOSTGROUP_ATTRIBUTES,
 		MYSQL_SERVERS_SSL_PARAMS,
+		MYSQL_AWS_RDS_BGD_HOSTGROUPS,
 		MYSQL_SERVERS,
 
 		HGM_TABLES_SIZE_

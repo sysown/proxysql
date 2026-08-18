@@ -21,6 +21,7 @@
 #include <string>
 #include <tuple>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "thread.h"
@@ -82,11 +83,44 @@ public:
 	void remove(const std::string& hostname);
 	void clear();
 	bool empty() const;
-	std::string lookup(const std::string& hostname, size_t* ip_count) const;
+	bool is_ip_valid(const std::string& hostname, const std::string& ip) const;
+	std::string lookup(const std::string& hostname, size_t* ip_count);
+
+	/**
+	* @brief Pin a hostname to a fixed IP until it is explicitly unpinned.
+	*
+	* @param hostname Hostname whose cached resolution is overridden.
+	* @param ip       IP address to serve for 'hostname' while pinned.
+	*/
+	void pin(const std::string& hostname, const std::string& ip);
+
+	/**
+	* @brief Pin a hostname to a fixed IP for a bounded time.
+	*
+	* @details While the pin is active, lookup() serves 'ip' instead of the resolved
+	*   address set. Once ttl_ms expires, lookup() serves the resolved address and
+	*   clears the expired pin before returning.
+	*
+	* @param hostname Hostname whose cached resolution is overridden.
+	* @param ip       IP address to serve for 'hostname' while pinned.
+	* @param ttl_ms   Pin lifetime in milliseconds; 0 means no expiry.
+	*/
+	void pin(const std::string& hostname, const std::string& ip, unsigned long long ttl_ms);
+
+	/**
+	* @brief Remove a pin set by pin(), restoring normal resolution (no-op if not pinned).
+	*
+	* @param hostname Hostname to unpin.
+	*/
+	void unpin(const std::string& hostname);
 
 private:
 	struct IP_ADDR {
 		std::vector<std::string> ips;
+		// Pinned override: when non-empty, lookup() serves it instead of 'ips'
+		// while pinned_until is not expired.
+		std::string pinned_ip;
+		unsigned long long pinned_until = 0;
 		// 'counter' is bumped by get_next_ip() (a const method) for
 		// round-robin selection; the logical state of the cache record is
 		// unchanged, so mutable is the right tool here and lets us drop a
@@ -94,8 +128,23 @@ private:
 		mutable unsigned long counter = 0;
 	};
 
-	std::string get_next_ip(const IP_ADDR& ip_addr) const;
-	std::unordered_map<std::string, IP_ADDR> records;
+	struct lookup_result_t {
+		std::string resolved_ip;
+		size_t ip_count = 0;
+		std::string pinned_ip;
+		unsigned long long pinned_until = 0;
+	};
+
+	/**
+	* @brief Next round-robin IP for 'ip_addr' and the size of the served set.
+	*
+	* @param ip_addr Cache record to select from.
+	*
+	* @return Selected resolved IP details plus current pin metadata.
+	*/
+	lookup_result_t get_next_ip(const IP_ADDR& ip_addr) const;
+
+	mutable std::unordered_map<std::string, IP_ADDR> records;
 	std::atomic_bool enabled;
 	mutable pthread_rwlock_t rwlock_;
 
@@ -153,6 +202,16 @@ bool validate_ip(const std::string& ip);
 // Return the IP address of the peer connected to 'socket_fd', or "" on
 // failure / non-IP families.
 std::string get_connected_peer_ip_from_socket(int socket_fd);
+
+/**
+* @brief Resolve a hostname to its IP(s) via getaddrinfo.
+*
+* @param hostname  Hostname to resolve.
+* @param ai_family Address family for getaddrinfo (an AF_* value; AF_UNSPEC for OS default).
+*
+* @return The resolved IPs, or an empty vector on failure.
+*/
+std::vector<std::string> dns_resolve(const std::string& hostname, int ai_family);
 
 // Helper: stringify a list of IPs for debug logging.  Defined inline because
 // it's templated over the iterable type used by the various call sites.

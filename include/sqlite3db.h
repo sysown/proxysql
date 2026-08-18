@@ -11,12 +11,19 @@
 #include <utility>
 #define PROXYSQL_SQLITE3DB_PTHREAD_MUTEX
 
+// Retries a step while the database is locked, backing off exponentially from
+// 100us to a 10ms cap. The previous fixed 100us sleep meant a lock held for any
+// noticeable time was waited out at ~10k wakeups/sec; the cap keeps a long wait
+// from burning a core while staying responsive when contention is brief.
 #ifndef SAFE_SQLITE3_STEP2
 #define SAFE_SQLITE3_STEP2(_stmt) do {\
+  unsigned int _backoff_us = 100;\
   do {\
     rc=(*proxy_sqlite3_step)(_stmt);\
     if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) {\
-      usleep(100);\
+      usleep(_backoff_us);\
+      _backoff_us *= 2;\
+      if (_backoff_us > 10000) { _backoff_us = 10000; }\
     }\
   } while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);\
 } while (0)

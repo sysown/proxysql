@@ -1,0 +1,36 @@
+# AWS RDS BGD simulator endpoint aliases.
+# Format: "<hostname> <ip>" per line; '#' comments allowed.
+# These are injected into the ProxySQL container's /etc/hosts via Docker
+# --add-host by test/infra/control/start-proxysql-isolated.bash when
+# CLUSTER_SIM_HOST_FILE points at this file (see this group's env.sh).
+
+# Cluster 1: blue endpoints
+db-1.c1yqcg0ie39o.eu-north-1.rds.amazonaws.com 127.10.0.11
+db-1-reader-1.c1yqcg0ie39o.eu-north-1.rds.amazonaws.com 127.10.0.12
+db-1-reader-2.c1yqcg0ie39o.eu-north-1.rds.amazonaws.com 127.10.0.13
+
+# Cluster 1: green deployment A
+db-1-green-iqu47r.c1yqcg0ie39o.eu-north-1.rds.amazonaws.com 127.10.0.14
+db-1-reader-1-green-dlzky7.c1yqcg0ie39o.eu-north-1.rds.amazonaws.com 127.10.0.15
+db-1-reader-2-green-3fpjuu.c1yqcg0ie39o.eu-north-1.rds.amazonaws.com 127.10.0.16
+
+# Cluster 1: green deployment B
+db-1-green-s7m2kx.c1yqcg0ie39o.eu-north-1.rds.amazonaws.com 127.10.0.17
+db-1-reader-1-green-v4n8qp.c1yqcg0ie39o.eu-north-1.rds.amazonaws.com 127.10.0.18
+db-1-reader-2-green-w6h3rz.c1yqcg0ie39o.eu-north-1.rds.amazonaws.com 127.10.0.19
+
+# Cluster 2
+db-2.c1yqcg0ie39o.eu-north-1.rds.amazonaws.com 127.10.0.20
+db-2-reader-1.c1yqcg0ie39o.eu-north-1.rds.amazonaws.com 127.10.0.21
+db-2-reader-2.c1yqcg0ie39o.eu-north-1.rds.amazonaws.com 127.10.0.22
+db-2-green-iqu47r.c1yqcg0ie39o.eu-north-1.rds.amazonaws.com 127.10.0.23
+db-2-reader-1-green-dlzky7.c1yqcg0ie39o.eu-north-1.rds.amazonaws.com 127.10.0.24
+db-2-reader-2-green-3fpjuu.c1yqcg0ie39o.eu-north-1.rds.amazonaws.com 127.10.0.25
+
+# Cluster 3
+db-3.c1yqcg0ie39o.eu-north-1.rds.amazonaws.com 127.10.0.26
+db-3-reader-1.c1yqcg0ie39o.eu-north-1.rds.amazonaws.com 127.10.0.27
+db-3-reader-2.c1yqcg0ie39o.eu-north-1.rds.amazonaws.com 127.10.0.28
+db-3-green-iqu47r.c1yqcg0ie39o.eu-north-1.rds.amazonaws.com 127.10.0.29
+db-3-reader-1-green-dlzky7.c1yqcg0ie39o.eu-north-1.rds.amazonaws.com 127.10.0.30
+db-3-reader-2-green-3fpjuu.c1yqcg0ie39o.eu-north-1.rds.amazonaws.com 127.10.0.31

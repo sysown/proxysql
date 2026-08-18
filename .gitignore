@@ -78,6 +78,7 @@ oldcode/tests/connect_speed
 # generated test pems
 test/tap/tests/*.pem
 test/tap/tests/test_cluster_sync_config/proxysql*.pem
+test/tap/pgsql_user_sync/
 
 #binary
 src/proxysql
@@ -198,6 +199,8 @@ pkgroot/
 
 #files generated during CI run
 proxysql-save.cfg
+.cluster-simulator-binaries
+.cluster-simulator-runtime/
 test/tap/tests/test_cluster_sync_config/cluster_sync_node_stderr.txt
 test/tap/tests/test_cluster_sync_config/proxysql*.pem
 test/tap/tests/test_cluster_sync_config/test_cluster_sync.cnf
@@ -229,7 +232,13 @@ test/tap/tests/parsersql_digest_test
 test/tap/tests/setparser_parsersql_test
 deps/protobuf/protobuf-*/
 
+# pg-compat report output (run-pg-compat.bash's default host bind-mount
+# target; see test/pg-compat/README.md "Report output")
+/pg-compat-reports/
+
 # Stray build artifact: run-tests-isolated.bash creates the real mysqlbinlog
 # symlink at runtime under test-scripts/deps/; never commit this one (it was
 # accidentally committed once with an absolute /home path).
 test/scripts/deps/mysqlbinlog
+
+# Temporary ASAN CI end-to-end validation trigger; this branch will not merge.

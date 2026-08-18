@@ -1778,6 +1778,9 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 					case 4:
 						st=(char *)"SHUNNED";
 						break;
+					case 5:
+						st=(char *)"SHUNNED_AWS_BGD";
+						break;
 				}
 				fprintf(stderr,"HID: %d , address: %s , port: %d , gtid_port: %d , weight: %ld , status: %s , max_connections: %ld , max_replication_lag: %u , use_ssl: %u , max_latency_ms: %u , comment: %s\n", mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->gtid_port, mysrvc->weight, st, mysrvc->max_connections, mysrvc->max_replication_lag, mysrvc->use_ssl, mysrvc->max_latency_us*1000, mysrvc->comment);
 			}
@@ -3140,6 +3143,9 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int
 				case 4:
 					pta[3]=strdup("SHUNNED_REPLICATION_LAG");
 					break;
+				case 5:
+					pta[3]=strdup("SHUNNED_AWS_BGD");
+					break;
 				default:
 					// LCOV_EXCL_START
 					assert(0);
@@ -4216,6 +4222,9 @@ SQLite3_result * MySQL_HostGroups_Manager::get_mysql_errors(bool reset) {
  * @details Input verification is performed in the supplied 'hostgroup_settings'. It's expected to be a valid
  *  JSON that may contain the following fields:
  *   - handle_warnings: Value must be >= 0.
+ *   - default_query_timeout: Value must be in [1000, 20*24*3600*1000]; takes precedence over
+ *     'mysql-default_query_timeout' for queries that resolve to this hostgroup. Range mirrors
+ *     the global 'mysql-default_query_timeout' bounds.
  *
  *  In case input verification fails for a field, supplied 'MyHGC' is NOT updated for that field. An error
  *  message is logged specifying the source of the error.
@@ -4238,6 +4247,11 @@ void init_myhgc_hostgroup_settings(const char* hostgroup_settings, MyHGC* myhgc)
 				{ return (monitor_slave_lag_when_null >= 0 && monitor_slave_lag_when_null <= 604800); };
 			const int32_t monitor_slave_lag_when_null = j_get_srv_default_int_val<int32_t>(j, hid, "monitor_slave_lag_when_null", monitor_slave_lag_when_null_check);
 			myhgc->attributes.monitor_slave_lag_when_null = monitor_slave_lag_when_null;
+
+			const auto default_query_timeout_check = [](int32_t default_query_timeout) -> bool
+				{ return (default_query_timeout >= 1000 && default_query_timeout <= 20*24*3600*1000); };
+			const int32_t default_query_timeout = j_get_srv_default_int_val<int32_t>(j, hid, "default_query_timeout", default_query_timeout_check);
+			myhgc->attributes.default_query_timeout = default_query_timeout;
 		}
 		catch (const json::exception& e) {
 			proxy_error(

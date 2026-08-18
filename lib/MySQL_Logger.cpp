@@ -553,6 +553,8 @@ uint64_t MySQL_Event::write(LogBuffer *f, MySQL_Session *sess) {
 		case PROXYSQL_MYSQL_AUTH_ERR:
 		case PROXYSQL_MYSQL_AUTH_CLOSE:
 		case PROXYSQL_MYSQL_AUTH_QUIT:
+		case PROXYSQL_MYSQL_AUTH_PASSTHROUGH_OK:
+		case PROXYSQL_MYSQL_AUTH_PASSTHROUGH_FAIL:
 		case PROXYSQL_MYSQL_INITDB:
 		case PROXYSQL_ADMIN_AUTH_OK:
 		case PROXYSQL_ADMIN_AUTH_ERR:
@@ -585,7 +587,7 @@ void MySQL_Event::write_auth(LogBuffer *f, MySQL_Session *sess) {
 		char buffer2[64];
 		if (localtime_r(&timer, &tm_info)) {
  			strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", &tm_info);
- 			sprintf(buffer2,"%s.%03u", buffer1, (unsigned)(start_time%1000000)/1000);
+			snprintf(buffer2, sizeof(buffer2), "%s.%03u", buffer1, (unsigned)(start_time%1000000)/1000);
  		} else {
  			snprintf(buffer2, sizeof(buffer2), "invalid_date");
  		}
@@ -610,6 +612,19 @@ void MySQL_Event::write_auth(LogBuffer *f, MySQL_Session *sess) {
 	if (server) {
 		j["server_addr"] = server;
 	}
+	/**
+	 * @brief Emit hostgroup id when set.
+	 *
+	 * Default value of @c hid is @c UINT64_MAX (see MySQL_Event ctor).
+	 * Pass-through audit entries override it via @c set_server so the
+	 * @c hostgroup JSON field is present per spec §7.4. Non-passthrough
+	 * audit events leave @c hid at its sentinel and the field is
+	 * omitted -- preserving the existing on-wire schema for those
+	 * consumers.
+	 */
+	if (hid != UINT64_MAX) {
+		j["hostgroup"] = static_cast<int64_t>(hid);
+	}
 	if (extra_info) {
 		j["extra_info"] = extra_info;
 	}
@@ -625,6 +640,12 @@ void MySQL_Event::write_auth(LogBuffer *f, MySQL_Session *sess) {
 			break;
 		case PROXYSQL_MYSQL_AUTH_QUIT:
 			j["event"]="MySQL_Client_Quit";
+			break;
+		case PROXYSQL_MYSQL_AUTH_PASSTHROUGH_OK:
+			j["event"]="MySQL_Client_Connect_Passthrough_OK";
+			break;
+		case PROXYSQL_MYSQL_AUTH_PASSTHROUGH_FAIL:
+			j["event"]="MySQL_Client_Connect_Passthrough_FAIL";
 			break;
 		case PROXYSQL_MYSQL_INITDB:
 			j["event"]="MySQL_Client_Init_DB";
@@ -671,7 +692,7 @@ void MySQL_Event::write_auth(LogBuffer *f, MySQL_Session *sess) {
 				char buffer2[64];
 				if (localtime_r(&timer, &tm_info)) {
  					strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", &tm_info);
- 					sprintf(buffer2,"%s.%03u", buffer1, (unsigned)(orig_time%1000000)/1000);
+					snprintf(buffer2, sizeof(buffer2), "%s.%03u", buffer1, (unsigned)(orig_time%1000000)/1000);
  				} else {
  					snprintf(buffer2, sizeof(buffer2), "invalid_date");
  				}
@@ -680,7 +701,7 @@ void MySQL_Event::write_auth(LogBuffer *f, MySQL_Session *sess) {
 				//life/=1000;
 				float f = timediff;
 				f /= 1000;
-				sprintf(buffer1, "%.3fms", f);
+				snprintf(buffer1, sizeof(buffer1), "%.3fms", f);
 				j["duration"] = buffer1;
 			}
 			break;
@@ -1124,7 +1145,7 @@ uint64_t MySQL_Event::write_query_format_2_json(LogBuffer *f) {
 		char buffer2[64];
 		if (localtime_r(&timer, &tm_info)) {
  			strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", &tm_info);
- 			sprintf(buffer2,"%s.%06u", buffer1, (unsigned)(start_time%1000000));
+			snprintf(buffer2, sizeof(buffer2), "%s.%06u", buffer1, (unsigned)(start_time%1000000));
  		} else {
  			snprintf(buffer2, sizeof(buffer2), "invalid_date");
  		}
@@ -1138,7 +1159,7 @@ uint64_t MySQL_Event::write_query_format_2_json(LogBuffer *f) {
 		char buffer2[64];
 		if (localtime_r(&timer, &tm_info)) {
  			strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", &tm_info);
- 			sprintf(buffer2,"%s.%06u", buffer1, (unsigned)(end_time%1000000));
+			snprintf(buffer2, sizeof(buffer2), "%s.%06u", buffer1, (unsigned)(end_time%1000000));
  		} else {
  			snprintf(buffer2, sizeof(buffer2), "invalid_date");
  		}
@@ -1146,7 +1167,7 @@ uint64_t MySQL_Event::write_query_format_2_json(LogBuffer *f) {
 	}
 	j["duration_us"] = end_time-start_time;
 	char digest_hex[20];
-	sprintf(digest_hex,"0x%016llX", (long long unsigned int)query_digest);
+	snprintf(digest_hex, sizeof(digest_hex), "0x%016llX", (long long unsigned int)query_digest);
 	j["digest"] = digest_hex;
 
 	if (et == PROXYSQL_COM_STMT_PREPARE || et == PROXYSQL_COM_STMT_EXECUTE) {
@@ -1676,6 +1697,66 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds, con
 	}
 }
 
+/**
+ * @brief Hostgroup-aware overload of @c log_audit_entry (spec §7.4).
+ *
+ * Used by the pass-through auth path to attach the probed hostgroup id
+ * to the audit entry. Implemented by forwarding to the single-pass-through
+ * site that knows how to mutate the local @c MySQL_Event before
+ * writing -- duplicating the entire 100-line audit-entry helper would
+ * be brittle. We use a thread-local "extra hostgroup" channel: the
+ * main implementation reads it, applies it onto the event, and clears
+ * it. This keeps the diff localized and avoids changing the ABI of
+ * the standard overload.
+ *
+ * The channel is in thread-local storage so concurrent sessions on
+ * different worker threads can't race; the same thread cannot reenter
+ * log_audit_entry while one call is in progress (audit logging is
+ * single-shot from each call site).
+ */
+namespace {
+__thread int passthrough_audit_hostgroup_override = -1;
+
+/**
+ * @brief RAII scope guard for the thread-local hostgroup override channel.
+ *
+ * Sets @c passthrough_audit_hostgroup_override on construction and
+ * restores it (to -1) on destruction, even when the protected call
+ * unwinds via an exception. The previous implementation cleared the
+ * TLS value only on the normal return path; a throwing
+ * @c nlohmann::json operation inside @c MySQL_Event::write or a
+ * @c flush_and_rotate failure would leave the TLS set, and the NEXT
+ * unrelated audit event on the same worker thread would silently
+ * inherit the stale hostgroup -- mis-tagging e.g. a
+ * @c PROXYSQL_MYSQL_AUTH_QUIT with the previous probe's HG.
+ *
+ * Saving the prior value (instead of unconditionally clearing) also
+ * handles the (currently unused) re-entrant case: if a future hook
+ * recursively triggers a hostgroup-tagged audit emission, the inner
+ * call's override is undone on inner-scope exit and the outer call
+ * sees its own value intact.
+ */
+struct PassthroughAuditHostgroupScope {
+	int saved;
+	explicit PassthroughAuditHostgroupScope(int hg) : saved(passthrough_audit_hostgroup_override) {
+		passthrough_audit_hostgroup_override = hg;
+	}
+	~PassthroughAuditHostgroupScope() {
+		passthrough_audit_hostgroup_override = saved;
+	}
+	PassthroughAuditHostgroupScope(const PassthroughAuditHostgroupScope&) = delete;
+	PassthroughAuditHostgroupScope& operator=(const PassthroughAuditHostgroupScope&) = delete;
+};
+} // anonymous namespace
+
+void MySQL_Logger::log_audit_entry(
+	log_event_type _et, MySQL_Session *sess, MySQL_Data_Stream *myds,
+	char *xi, int hostgroup
+) {
+	PassthroughAuditHostgroupScope guard { hostgroup };
+	log_audit_entry(_et, sess, myds, xi);
+}
+
 void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQL_Data_Stream *myds, char *xi) {
 	if (audit.enabled==false) return;
 
@@ -1799,6 +1880,27 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 
 	if (xi) {
 		me.set_extra_info(xi);
+	}
+
+	/**
+	 * @brief Apply hostgroup override from the thread-local channel.
+	 *
+	 * The hostgroup-aware overload of @c log_audit_entry sets a TLS
+	 * value before calling us; pick it up here so the audit JSON
+	 * carries the probed hostgroup id (spec §7.4). For all non-
+	 * pass-through callers the override is -1, leaving @c hid at its
+	 * default UINT64_MAX (which write_auth omits from the JSON).
+	 *
+	 * Pass NULL/0 for the server-address arguments so @c write_auth's
+	 *   if (server) j["server_addr"] = server;
+	 * branch (lib/MySQL_Logger.cpp:610-612) does NOT emit an empty
+	 * @c server_addr field for pass-through audit entries -- the
+	 * probe connection is one-shot and has no meaningful server
+	 * address to record (and emitting an empty string would pollute
+	 * the on-wire JSON schema).
+	 */
+	if (passthrough_audit_hostgroup_override >= 0) {
+		me.set_server(passthrough_audit_hostgroup_override, NULL, 0);
 	}
 
 	// for performance reason, we are moving the write lock
@@ -2089,7 +2191,7 @@ void MySQL_Logger::insertMysqlEventsIntoDb(SQLite3DB * db, const std::string& ta
 			rc = (*proxy_sqlite3_bind_text)(statement32, (idx*numcols)+3, event->schemaname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 			rc = (*proxy_sqlite3_bind_int64)(statement32, (idx*numcols)+4, event->start_time); ASSERT_SQLITE_OK(rc, db);
 			rc = (*proxy_sqlite3_bind_int64)(statement32, (idx*numcols)+5, event->end_time); ASSERT_SQLITE_OK(rc, db);
-			sprintf(digest_hex_str, "0x%016llX", (long long unsigned int)event->query_digest);
+			snprintf(digest_hex_str, sizeof(digest_hex_str), "0x%016llX", (long long unsigned int)event->query_digest);
 			rc = (*proxy_sqlite3_bind_text)(statement32, (idx*numcols)+6, digest_hex_str, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 			rc = (*proxy_sqlite3_bind_text)(statement32, (idx*numcols)+7, event->query_ptr, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db); // MySQL_Events from circular-buffer are all null-terminated
 			rc = (*proxy_sqlite3_bind_text)(statement32, (idx*numcols)+8, event->server, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
@@ -2116,7 +2218,7 @@ void MySQL_Logger::insertMysqlEventsIntoDb(SQLite3DB * db, const std::string& ta
 			rc = (*proxy_sqlite3_bind_text)(statement1, 3, event->schemaname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 			rc = (*proxy_sqlite3_bind_int64)(statement1, 4, event->start_time); ASSERT_SQLITE_OK(rc, db);
 			rc = (*proxy_sqlite3_bind_int64)(statement1, 5, event->end_time); ASSERT_SQLITE_OK(rc, db);
-			sprintf(digest_hex_str, "0x%016llX", (long long unsigned int)event->query_digest);
+			snprintf(digest_hex_str, sizeof(digest_hex_str), "0x%016llX", (long long unsigned int)event->query_digest);
 			rc = (*proxy_sqlite3_bind_text)(statement1, 6, digest_hex_str, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 			rc = (*proxy_sqlite3_bind_text)(statement1, 7, event->query_ptr, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db); // MySQL_Events from circular-buffer are all null-terminated
 			rc = (*proxy_sqlite3_bind_text)(statement1, 8, event->server, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);

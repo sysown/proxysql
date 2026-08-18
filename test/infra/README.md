@@ -39,7 +39,11 @@ This will:
 
 ## 0.2. Simulator-backed TAP groups
 
-Groups whose name starts with `cluster_sim_` (e.g. `cluster_sim_aurora-g1`, `cluster_sim_galera-g1`) drive ProxySQL via the in-repo `cluster_simulator` under `test/deps/cluster_simulator/`. The simulator mutates ProxySQL's internal cluster state through code paths gated by compile-time `#ifdef` flags, so the ProxySQL binary **must** be built with the matching flag or state mutations become no-ops and tests fail silently.
+Groups whose name starts with `cluster_sim_` exercise simulator-specific
+ProxySQL paths gated by compile-time `#ifdef` flags. State is driven either by
+the in-repo `test/deps/cluster_simulator` process or directly by TAP helpers
+through SQLite3-server, as in RDS BGD. The ProxySQL binary **must** be built with
+the matching flag or state mutations become no-ops and tests fail silently.
 
 | Simulator group             | Required build target     |
 |-----------------------------|---------------------------|
@@ -48,8 +52,12 @@ Groups whose name starts with `cluster_sim_` (e.g. `cluster_sim_aurora-g1`, `clu
 | `cluster_sim_group_repl-g<N>` | `make testgrouprep`       |
 | `cluster_sim_read_only-g<N>` | `make testreadonly`       |
 | `cluster_sim_repl_lag-g<N>` | `make testreplicationlag` |
+| `cluster_sim_rds_bgd-g<N>` | `make test_rds_bgd`        |
 
-Each target sets the corresponding `-DTEST_<FAMILY>` flag on the ProxySQL src and lib build and triggers the simulator binary build. A plain `make` is **not sufficient** for these groups.
+Each target sets the corresponding `-DTEST_<FAMILY>` flag on the ProxySQL src
+and lib builds and builds the TAP artifacts. Targets backed by
+`test/deps/cluster_simulator` build that process as well. A plain `make` is
+**not sufficient** for these groups.
 
 ---
 ## 1. Core Concepts

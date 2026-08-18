@@ -92,11 +92,12 @@ jobs:
     steps:
 
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         repository: ${{ github.repository }}
         ref: ${{ env.SHA }}
         fetch-depth: 0
+        lfs: true
         submodules: 'false'
 
     - name: Relax ASLR for AddressSanitizer
@@ -162,11 +163,20 @@ jobs:
 
     - name: Upload coverage LCOV file
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: unit-tests-coverage-lcov-${{ env.SHA }}
         path: coverage/lcov.info
         if-no-files-found: warn
+
+    - name: Require non-empty coverage/lcov.info
+      # With disable_search + plugins:noop, a missing/empty LCOV would
+      # make the Codecov step a silent no-op while fail_ci_if_error:false
+      # keeps the job green. Fail here so coverage-generation regressions
+      # are visible; Codecov SaaS outages remain non-blocking below.
+      id: require-lcov
+      if: always()
+      run: test -s coverage/lcov.info
 
     - name: Upload coverage to Codecov
       # Send the same lcov.info we already archive as a workflow artifact
@@ -174,14 +184,14 @@ jobs:
       # files from N% to M%" comment and main accumulates a historical
       # graph at https://app.codecov.io/gh/sysown/proxysql.
       #
-      # `if: always()` so coverage uploads regardless of whether the unit
-      # tests themselves passed; partial coverage is still useful for
-      # diagnosing why a PR went red. `fail_ci_if_error: false` so a
-      # transient Codecov outage never gates a green CI run on a
-      # third-party SaaS.
-      if: always()
-      uses: codecov/codecov-action@v4
+      # Upload when LCOV exists even if unit tests failed (partial coverage
+      # is still useful). Skip only when require-lcov failed. Codecov SaaS
+      # outages stay non-blocking via fail_ci_if_error: false.
+      if: always() && steps.require-lcov.outcome == 'success'
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4
       with:
+        codecov_yml_path: codecov.yml
+        override_commit: ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
         files: coverage/lcov.info
         flags: unit-tests
         name: unit-tests-asan-coverage
@@ -196,12 +206,16 @@ jobs:
         # action silently falls back to legacy tokenless mode and the
         # upload fails.
         use_oidc: true
+        # Only the explicit LCOV file. Default plugins include gcov which
+        # auto-discovers leftover .gcno and pollutes the upload.
+        disable_search: true
+        plugins: noop
         fail_ci_if_error: false
         verbose: true
 
     - name: Upload coverage HTML report
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: unit-tests-coverage-html-${{ env.SHA }}
         path: coverage/html/
@@ -209,13 +223,13 @@ jobs:
 
     - name: Upload unit-test logs
       if: ${{ failure() && !cancelled() }}
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: unit-tests-logs-${{ env.SHA }}
         path: unit-test-logs/
         if-no-files-found: warn
 
-    - uses: LouisBrunner/checks-action@v2.0.0
+    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
       if: always()
       with:
         token: ${{ secrets.GITHUB_TOKEN }}

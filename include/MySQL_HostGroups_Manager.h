@@ -39,8 +39,8 @@
 
 // we have 2 versions of the same tables: with (debug) and without (no debug) checks
 #ifdef DEBUG
-#define MYHGM_MYSQL_SERVERS "CREATE TABLE mysql_servers ( hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , gtid_port INT NOT NULL DEFAULT 0 , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , status INT CHECK (status IN (0, 1, 2, 3, 4)) NOT NULL DEFAULT 0 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , mem_pointer INT NOT NULL DEFAULT 0 , PRIMARY KEY (hostgroup_id, hostname, port) )"
-#define MYHGM_MYSQL_SERVERS_INCOMING "CREATE TABLE mysql_servers_incoming ( hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , gtid_port INT NOT NULL DEFAULT 0 , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , status INT CHECK (status IN (0, 1, 2, 3, 4)) NOT NULL DEFAULT 0 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup_id, hostname, port))"
+#define MYHGM_MYSQL_SERVERS "CREATE TABLE mysql_servers ( hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , gtid_port INT NOT NULL DEFAULT 0 , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , status INT CHECK (status IN (0, 1, 2, 3, 4, 5)) NOT NULL DEFAULT 0 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , mem_pointer INT NOT NULL DEFAULT 0 , PRIMARY KEY (hostgroup_id, hostname, port) )"
+#define MYHGM_MYSQL_SERVERS_INCOMING "CREATE TABLE mysql_servers_incoming ( hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , gtid_port INT NOT NULL DEFAULT 0 , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , status INT CHECK (status IN (0, 1, 2, 3, 4, 5)) NOT NULL DEFAULT 0 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup_id, hostname, port))"
 #else
 #define MYHGM_MYSQL_SERVERS "CREATE TABLE mysql_servers ( hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , gtid_port INT NOT NULL DEFAULT 0 , weight INT NOT NULL DEFAULT 1 , status INT NOT NULL DEFAULT 0 , compression INT NOT NULL DEFAULT 0 , max_connections INT NOT NULL DEFAULT 1000 , max_replication_lag INT NOT NULL DEFAULT 0 , use_ssl INT NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , mem_pointer INT NOT NULL DEFAULT 0 , PRIMARY KEY (hostgroup_id, hostname, port) )"
 #define MYHGM_MYSQL_SERVERS_INCOMING "CREATE TABLE mysql_servers_incoming ( hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , gtid_port INT NOT NULL DEFAULT 0 , weight INT NOT NULL DEFAULT 1 , status INT NOT NULL DEFAULT 0 , compression INT NOT NULL DEFAULT 0 , max_connections INT NOT NULL DEFAULT 1000 , max_replication_lag INT NOT NULL DEFAULT 0 , use_ssl INT NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup_id, hostname, port))"
@@ -64,7 +64,21 @@
 										  "autopurge_missing_checks INT NOT NULL CHECK (autopurge_missing_checks >= 0 AND autopurge_missing_checks <= 100) DEFAULT 0 , " \
 										  "comment VARCHAR , UNIQUE (reader_hostgroup))"
 
-#define MYHGM_GEN_ADMIN_RUNTIME_SERVERS "SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers ORDER BY hostgroup_id, hostname, port"
+#define MYHGM_MYSQL_AWS_RDS_BGD_HOSTGROUPS "CREATE TABLE mysql_aws_rds_bgd_hostgroups ("\
+										  "writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , "\
+										  "reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0), " \
+										  "green_writer_hostgroup INT DEFAULT NULL CHECK (green_writer_hostgroup IS NULL OR green_writer_hostgroup>=0), " \
+										  "green_reader_hostgroup INT DEFAULT NULL CHECK (green_reader_hostgroup IS NULL OR green_reader_hostgroup>=0), " \
+										  "active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , " \
+										  "writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , " \
+										  "check_interval_ms INT NOT NULL CHECK (check_interval_ms >= 100 AND check_interval_ms <= 600000) DEFAULT 1000, " \
+										  "check_timeout_ms INT NOT NULL CHECK (check_timeout_ms >= 80 AND check_timeout_ms <= 3000) DEFAULT 800, " \
+										  "comment VARCHAR NOT NULL DEFAULT '', " \
+										  "auto_generated INT CHECK (auto_generated IN (0,1)) NOT NULL DEFAULT 0, " \
+										  "status INT NOT NULL DEFAULT 0, " \
+										  "UNIQUE (reader_hostgroup))"
+
+#define MYHGM_GEN_ADMIN_RUNTIME_SERVERS "SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" WHEN 5 THEN \"SHUNNED_AWS_BGD\" END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers ORDER BY hostgroup_id, hostname, port"
 
 #define MYHGM_MYSQL_HOSTGROUP_ATTRIBUTES "CREATE TABLE mysql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers <= 1000000) NOT NULL DEFAULT 1000000 , autocommit INT CHECK (autocommit IN (-1, 0, 1)) NOT NULL DEFAULT -1 , free_connections_pct INT CHECK (free_connections_pct >= 0 AND free_connections_pct <= 100) NOT NULL DEFAULT 10 , init_connect VARCHAR NOT NULL DEFAULT '' , multiplex INT CHECK (multiplex IN (0, 1)) NOT NULL DEFAULT 1 , connection_warming INT CHECK (connection_warming IN (0, 1)) NOT NULL DEFAULT 0 , throttle_connections_per_sec INT CHECK (throttle_connections_per_sec >= 1 AND throttle_connections_per_sec <= 1000000) NOT NULL DEFAULT 1000000 , ignore_session_variables VARCHAR CHECK (JSON_VALID(ignore_session_variables) OR ignore_session_variables = '') NOT NULL DEFAULT '' , hostgroup_settings VARCHAR CHECK (JSON_VALID(hostgroup_settings) OR hostgroup_settings = '') NOT NULL DEFAULT '' , servers_defaults VARCHAR CHECK (JSON_VALID(servers_defaults) OR servers_defaults = '') NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '')"
 
@@ -73,7 +87,7 @@
 
 /*
  * @brief Generates the 'runtime_mysql_servers' resultset exposed to other ProxySQL cluster members.
- * @details Makes 'SHUNNED' and 'SHUNNED_REPLICATION_LAG' statuses equivalent to 'ONLINE'. 'SHUNNED' states
+ * @details Makes 'SHUNNED', 'SHUNNED_REPLICATION_LAG' and 'SHUNNED_AWS_BGD' statuses equivalent to 'ONLINE'. 'SHUNNED' states
  *  are by definition local transitory states, this is why a 'mysql_servers' table reconfiguration isn't
  *  normally performed when servers are internally imposed with these statuses. This means, that propagating
  *  this state to other cluster members is undesired behavior, and so it's generating a different checksum,
@@ -95,6 +109,7 @@
 		" WHEN 2 THEN \"OFFLINE_SOFT\"" \
 		" WHEN 3 THEN \"OFFLINE_HARD\"" \
 		" WHEN 4 THEN \"ONLINE\" " \
+		" WHEN 5 THEN \"ONLINE\" " \
 		"END status," \
 		"weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment " \
 	"FROM mysql_servers " \
@@ -105,7 +120,7 @@
  * @brief Generates the 'mysql_servers_v2' resultset exposed to other ProxySQL cluster members.
  * @details The generated resultset is used for the checksum computation of the runtime ProxySQL config
  *  ('mysql_servers_v2' checksum), and it's also forwarded to other cluster members when querying the Admin
- *  interface with 'CLUSTER_QUERY_MYSQL_SERVERS_V2'. It makes 'SHUNNED' state equivalent to 'ONLINE', and also
+ *  interface with 'CLUSTER_QUERY_MYSQL_SERVERS_V2'. It makes 'SHUNNED' and 'SHUNNED_AWS_BGD' states equivalent to 'ONLINE', and also
  *  filters out any 'OFFLINE_HARD' entries. This is done because none of the statuses are valid configuration
  *  statuses, they are local, transient status that ProxySQL uses during operation.
  */
@@ -114,6 +129,7 @@
 		"hostgroup_id, hostname, port, gtid_port, " \
 		"CASE" \
 		" WHEN status=\"SHUNNED\" THEN \"ONLINE\"" \
+		" WHEN status=\"SHUNNED_AWS_BGD\" THEN \"ONLINE\"" \
 		" ELSE status " \
 		"END AS status, " \
 		"weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment " \
@@ -173,6 +189,7 @@ class MySrvConnList {
 	void get_random_MyConn_inner_search(unsigned int start, unsigned int end, unsigned int& conn_found_idx, unsigned int& connection_quality_level, unsigned int& number_of_matching_session_variables, const MySQL_Connection * client_conn);
 	unsigned int conns_length() { return conns->len; }
 	void drop_all_connections();
+	void mark_connections_unhealthy();
 	MySQL_Connection *index(unsigned int);
 };
 
@@ -202,6 +219,9 @@ class MySrvC {	// MySQL Server Container
 	unsigned long long queries_gtid_sync;
 	unsigned long long bytes_sent;
 	unsigned long long bytes_recv;
+	// shunned_automatic acts as a guard for server auto-recovery. When true, the shun recovery path
+	// (MyHGC::get_random_MySrvC) brings the server back online after shun_recovery_time; when false,
+	// the shun is held until an explicit unshun.
 	bool shunned_automatic;
 	bool shunned_and_kill_all_connections; // if a serious failure is detected, this will cause all connections to die even if the server is just shunned
 	int32_t use_ssl;
@@ -513,6 +533,7 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 		MYSQL_AWS_AURORA_HOSTGROUPS,
 		MYSQL_HOSTGROUP_ATTRIBUTES,
 		MYSQL_SERVERS_SSL_PARAMS,
+		MYSQL_AWS_RDS_BGD_HOSTGROUPS,
 		MYSQL_SERVERS,
 
 		HGM_TABLES_SIZE_
@@ -696,6 +717,17 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 
 	pthread_mutex_t AWS_Aurora_Info_mutex;
 	std::map<int , AWS_Aurora_Info *> AWS_Aurora_Info_Map;
+
+	/**
+	 * @brief Materializes the runtime `mysql_aws_rds_bgd_hostgroups` table from the staged
+	 *   `incoming_aws_rds_bgd_hostgroups` resultset.
+	 *
+	 * @details Inserts each staged row with `auto_generated=0` (config-loaded entries are
+	 *   user-defined) and NULL green hostgroups preserved, then clears the staging resultset.
+	 *   No-op when nothing is staged.
+	 */
+	void generate_mysql_aws_rds_bgd_hostgroups_table();
+	SQLite3_result *incoming_aws_rds_bgd_hostgroups;
 
 	void generate_mysql_hostgroup_attributes_table();
 	SQLite3_result *incoming_hostgroup_attributes;
@@ -1015,13 +1047,87 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 
 	void replication_lag_action_inner(MyHGC *, const char*, unsigned int, int, bool);
 	void replication_lag_action(const std::list<replication_lag_server_t>& mysql_servers);
-//	void read_only_action(char *hostname, int port, int read_only);
-	void read_only_action_v2(const std::list<read_only_server_t>& mysql_servers);
+	/**
+	 * @brief Reconcile writer/reader hostgroup placement from read_only monitor results.
+	 *
+	 * @details New implementation of the read_only_action that does not depend on the admin table.
+	 *   Checks each server in the provided list and adjusts writer/reader hostgroup placement
+	 *   according to the corresponding read_only value. If any change occurs, the runtime
+	 *   mysql_servers table and checksum are regenerated.
+	 *
+	 * @param mysql_servers Servers and their observed/read-only state.
+	 * @param ignore_aws_bgd True to apply the result while BGD switchover is in progress.
+	 */
+	void read_only_action_v2(const std::list<read_only_server_t>& mysql_servers, bool ignore_aws_bgd = false);
 	unsigned int get_servers_table_version();
 	void wait_servers_table_version(unsigned, unsigned);
 	bool shun_and_killall(char *hostname, int port);
 	void set_server_current_latency_us(char *hostname, int port, unsigned int _current_latency_us);
 	void set_Readyset_status(char *hostname, int port, enum MySerStatus status);
+	/**
+	* @brief Set or clear AWS RDS BGD shun state for a matching server.
+	*
+	* @details When shunning, transitions an ONLINE server to SHUNNED_AWS_BGD,
+	*   enables shun metadata, and drops free connections. When unshunning,
+	*   transitions only SHUNNED_AWS_BGD back to ONLINE and clears shun metadata.
+	*   Servers in other statuses are left unchanged.
+	*
+	* @param hostgroup_id Hostgroup to search.
+	* @param hostname     Address of the server to match.
+	* @param port         Port of the server to match.
+	* @param shun         true to shun the server, false to unshun it.
+	*
+	* @return true if this call changed a server's status.
+	*
+	* @note Caller must hold wrlock().
+	*/
+	bool aws_rds_bgd_set_shun_server(unsigned int hostgroup_id, const char *hostname, int port, bool shun);
+	/**
+	 * @brief Configure the AWS RDS BGD writer's writer/reader hostgroup membership.
+	 *
+	 * @details Ensures the writer is present in its writer hostgroup, with optional reader
+	 *   hostgroup membership controlled by writer_is_also_reader.
+	 *
+	 * @param hostname Server hostname to configure.
+	 * @param port Server port to configure.
+	 * @param writer_is_also_reader Whether the writer should also be present in reader hostgroup.
+	 *
+	 * @return true if hostgroup membership changed.
+	 *
+	 * @note Caller must hold wrlock().
+	 */
+	bool aws_rds_bgd_configure_writer(const char *hostname, int port, bool writer_is_also_reader);
+	/**
+	 * @brief Set AWS RDS BGD switchover status in runtime mysql_aws_rds_bgd_hostgroups table
+	 *
+	 * @param writer_hg Writer hostgroup identifying the deployment.
+	 * @param status    AWS_RDS_BGD_Status underlying value.
+	 */
+	void aws_rds_bgd_set_runtime_status(unsigned int writer_hg, int status);
+	/**
+	 * @brief Aligns the runtime 'mysql_servers' table + checksums with the server state in MyHGM.
+	 *
+	 * @details One-way alignment (in-memory -> runtime): regenerates the runtime 'mysql_servers' table
+	 *   from the current in-memory MyHGM state, recomputes/republishes the global checksum, and refreshes
+	 *   'mysql_servers_to_monitor' for the regular monitor threads.
+	 *
+	 * @note Caller must hold wrlock().
+	 */
+	void publish_mysql_servers_to_runtime();
+	/**
+	 * @brief Drain existing backend connections for a server in all hostgroups.
+	 *
+	 * @details Drops free connections immediately and marks used connections as unhealthy and non-reusable,
+	 *   so in-flight operations fail on their next backend step and the connection is never pooled again.
+	 *
+	 * @param hostname     Address of the server to match.
+	 * @param port         Port of the server to match.
+	 * @return true if a matching server was found.
+	 *
+	 * @note Caller must hold wrlock().
+	 */
+	bool drain_server_connections(const char *hostname, int port);
+
 	unsigned long long Get_Memory_Stats();
 
 	void add_discovered_servers_to_mysql_servers_and_replication_hostgroups(const vector<tuple<string, int, int>>& new_servers);
@@ -1107,10 +1213,31 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 *   be taken or not.
 	 */
 	void update_aws_aurora_hosts_monitor_resultset(bool lock=false);
+	/**
+	 * @brief Rebuilds the AWS RDS BGD monitor's host resultset.
+	 *
+	 * @details Rebuilds `GloMyMon->AWS_RDS_BGD_Hosts_resultset` and publishes both the full BGD hosts
+	 *   checksum and one checksum per writer hostgroup.
+	 */
+	void update_aws_rds_bgd_hosts_monitor_resultset();
+	/**
+	 * @brief Auto-generate a runtime `mysql_aws_rds_bgd_hostgroups` entry for a server's writer hostgroup.
+	 *
+	 * @details Called when the read_only monitor detects a blue/green deployment. The writer/reader
+	 *   hostgroups are derived from the server's `hostgroup_server_mapping`. Green hostgroups are
+	 *   stored NULL with `auto_generated=1`. Idempotent.
+	 *
+	 * @param hostname    Hostname of the server that exposed the blue/green topology.
+	 * @param port        Port of the server.
+	 *
+	 * @return true if a new entry was added; false otherwise.
+	 */
+	bool add_aws_rds_bgd_hostgroup_entry(const std::string& hostname, int port);
 
 	SQLite3_result * get_stats_mysql_gtid_executed();
 	void generate_mysql_gtid_executed_tables();
 	bool gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uint64_t gtid_trxid);
+	bool update_gtid_from_ok(MySrvC* mysrvc, const char* gtid);
 
 	SQLite3_result *SQL3_Get_ConnPool_Stats();
 	void increase_reset_counter();
@@ -1125,6 +1252,8 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	MySQLServers_SslParams * get_Server_SSL_Params(char *hostname, int port, char *username);
 
 private:
+	GTID_Server_Data* get_or_create_gtid_server_data(MySrvC* server, const std::string& endpoint);
+	void start_gtid_reader_if_needed(MySrvC* server, GTID_Server_Data* gtid_data);
 	void update_hostgroup_manager_mappings();
 	uint64_t get_mysql_servers_checksum(SQLite3_result* runtime_mysql_servers = nullptr);
 	uint64_t get_mysql_servers_v2_checksum(SQLite3_result* incoming_mysql_servers_v2 = nullptr);

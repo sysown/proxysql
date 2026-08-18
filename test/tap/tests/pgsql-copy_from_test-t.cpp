@@ -6,6 +6,8 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <string>
+#include <string_view>
+#include <algorithm>
 #include <sstream>
 #include <chrono>
 #include <thread>
@@ -134,7 +136,7 @@ void write_int16(uint8_t* dest, int16_t value) {
     dest[1] = value & 0xFF;
 }
 
-bool encodeNumericBinary(uint8_t* out, const char* numStr) {
+int encodeNumericBinary(uint8_t* out, const char* numStr) {
     int16_t numDigits = 0, weight = 0, sign = 0x0000, scale = 0;
     int16_t digits[64] = { 0 }; // Temporary storage for up to 64 4-digit groups
     size_t digitCount = 0;
@@ -153,9 +155,17 @@ bool encodeNumericBinary(uint8_t* out, const char* numStr) {
 
     // Combine integer and fractional parts into a single string of digits
     char combined[128] = { 0 };
-    strncpy(combined, numericPart, intPartLen);
+    if (intPartLen >= sizeof(combined) || fracPartLen > sizeof(combined) - 1 - intPartLen) {
+        return -1;
+    }
+    size_t copy_len = intPartLen;
+    memcpy(combined, numericPart, copy_len);
+    combined[copy_len] = 0;
     if (fracPartLen > 0) {
-        strncat(combined, dotPos + 1, fracPartLen);
+		size_t combined_len = copy_len;
+        size_t copy_len_frac = fracPartLen;
+        memcpy(combined + combined_len, dotPos + 1, copy_len_frac);
+        combined[combined_len + copy_len_frac] = 0;
     }
 
     // Remove leading zeros
@@ -173,7 +183,8 @@ bool encodeNumericBinary(uint8_t* out, const char* numStr) {
     // Parse the padded string into 4-digit groups
     for (size_t i = 0; i < paddedLen; i += 4) {
         char group[5] = { 0 }; // Temporary buffer for a group of up to 4 digits
-        strncpy(group, combined + i, 4);
+        memcpy(group, combined + i, 4);
+        group[4] = 0;
         digits[digitCount++] = static_cast<int16_t>(htons(static_cast<uint16_t>(atoi(group)))); // Convert group to 16-bit integer
     }
 
@@ -268,14 +279,23 @@ int is_string_in_result(PGresult* result, const char* target_str) {
         char full_row_str[1024] = { 0 }; // Buffer to reconstruct full row string
 
         // Reconstruct the row string (with tab and newline separators)
-        for (int j = 0; j < cols; j++) {
-            char* val = PQgetvalue(result, i, j);
-            strcat(full_row_str, val);
-            if (j < cols - 1) {
-                strcat(full_row_str, "\t");
+		size_t current_len = 0;
+		for (int j = 0; j < cols; j++) {
+			char* val = PQgetvalue(result, i, j);
+			size_t space_left = sizeof(full_row_str) - current_len;
+            if (space_left == 0) {
+                break;
             }
+            int nwritten = snprintf(full_row_str + current_len, space_left, "%s%s", val, (j < cols - 1) ? "\t" : "");
+			if (nwritten < 0 || (size_t)nwritten >= space_left) {
+				break;
+			}
+			current_len += nwritten;
+		}
+		size_t space_left = sizeof(full_row_str) - current_len;
+        if (space_left > 1) {
+            snprintf(full_row_str + current_len, space_left, "\n");
         }
-        strcat(full_row_str, "\n");
 
         // Compare reconstructed row string with target
         if (strcmp(full_row_str, target_str) == 0) {
@@ -326,6 +346,62 @@ const column_type_t columns_type[] = {
     BOOLEAN,
     DATE
 };
+
+bool encodeBinaryField(uint8_t* row, int& offset, column_type_t type, const std::string& data) {
+    switch (type) {
+        case INT: {
+            write_int32(row + offset, sizeof(int32_t));
+            offset += sizeof(int32_t);
+            const int32_t value = atoi(data.c_str());
+            write_int32(row + offset, value);
+            offset += sizeof(value);
+            return true;
+        }
+        case DATE: {
+            write_int32(row + offset, sizeof(int32_t));
+            offset += sizeof(int32_t);
+            const uint32_t date = encodeDateBinary(data.c_str());
+            memcpy(row + offset, &date, sizeof(date));
+            offset += sizeof(date);
+            return true;
+        }
+        case TEXT:
+            write_int32(row + offset, data.size());
+            offset += sizeof(int32_t);
+            memcpy(row + offset, data.c_str(), data.size());
+            offset += data.size();
+            return true;
+        case BOOLEAN: {
+            bool value;
+            if (data == "true" || data == "t") {
+                value = true;
+            } else if (data == "false" || data == "f") {
+                value = false;
+            } else {
+                fprintf(stderr, "Invalid boolean value for binary COPY: %s\n", data.c_str());
+                return false;
+            }
+            write_int32(row + offset, 1);
+            offset += sizeof(int32_t);
+            row[offset++] = value ? 1 : 0;
+            return true;
+        }
+        case NUMERIC: {
+            uint8_t* length_pos = row + offset;
+            offset += sizeof(int32_t);
+            const int digit_count = encodeNumericBinary(row + offset, data.c_str());
+            if (digit_count < 0) {
+                fprintf(stderr, "Numeric value is too long for the binary COPY test buffer: %s\n", data.c_str());
+                return false;
+            }
+            const int32_t payload_length = digit_count > 0 ? 12 : 8;
+            write_int32(length_pos, payload_length);
+            offset += payload_length;
+            return true;
+        }
+    }
+    return false;
+}
 
 /**
  * @brief Tests the COPY IN functionality using STDIN in TEXT format.
@@ -426,44 +502,14 @@ void testSTDIN_TEXT_BINARY(PGconn* admin_conn, PGconn* conn, std::fstream& f_pro
         offset += sizeof(num_fields);
 
         for (unsigned int j = 0; j < row_data.size(); j++) {
-            const std::string& data = row_data[j];
-            if (columns_type[j] == INT) {
-                write_int32(row + offset, sizeof(int32_t));
-                offset += sizeof(int32_t);
-
-                int32_t value = atoi(data.c_str());
-                // write actual data
-                memcpy(row + offset, &value, sizeof(value));
-                offset += sizeof(value);
-            } else if (columns_type[j] == DATE) {
-                write_int32(row + offset, sizeof(int32_t));
-                offset += sizeof(int32_t);
-
-                uint32_t date = encodeDateBinary(data.c_str());
-                // write actual data
-                memcpy(row + offset, &date, sizeof(date));
-                offset += sizeof(date);
-            } else if (columns_type[j] == TEXT || columns_type[j] == BOOLEAN) {
-                // write field length
-                write_int32(row + offset, data.size());
-                offset += sizeof(int32_t);
-
-                // write actual data
-                memcpy(row + offset, data.c_str(), data.size());
-                offset += data.size();
-            } else if (columns_type[j] == NUMERIC) {
-                uint8_t* prev_pos = (row + offset);
-                offset += sizeof(int32_t);
-                bool has_digits = encodeNumericBinary(row + offset, data.c_str());
-                if (has_digits) {
-                    write_int32(prev_pos, 12);
-                    offset += 12;
-                } else {
-                    write_int32(prev_pos, 8);
-                    offset += 8;
-                }
-            }
+			if (!encodeBinaryField(row, offset, columns_type[j], row_data[j])) {
+				success = false;
+				break;
+			}
         }
+		if (!success) {
+			break;
+		}
 
         bool last = (i == (test_data.size() - 1));
 
@@ -478,6 +524,9 @@ void testSTDIN_TEXT_BINARY(PGconn* admin_conn, PGconn* conn, std::fstream& f_pro
     }
 
     ok(success, "Copy data transmission should be successful");
+    if (!success) {
+        return;
+    }
 
     PGresult* res = PQgetResult(conn);
 

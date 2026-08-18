@@ -9,6 +9,16 @@ endif
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
 
+ifeq ($(UNAME_S),Darwin)
+SHLIB_EXT  := .dylib
+SHARED_FLAGS := -dynamiclib
+FORCE_LOAD := -force_load
+else
+SHLIB_EXT  := .so
+SHARED_FLAGS := -shared
+FORCE_LOAD := -Wl,--whole-archive
+endif
+
 DISTRO := $(shell if [ -f /etc/os-release ]; then grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"'; else echo "unknown"; fi)
 
 CENTOSVER := Unknown

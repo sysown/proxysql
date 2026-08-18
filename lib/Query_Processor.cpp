@@ -6,6 +6,7 @@ using json = nlohmann::json;
 #include <algorithm>    // std::sort
 #include <vector>       // std::vector
 #include <queue>
+#include <unordered_set>
 #include <cstring>
 #include <cctype>
 #include <functional>
@@ -858,123 +859,285 @@ void * get_query_digests_parallel(void *_arg) {
 	return NULL;
 }
 
-void * purge_query_digests_parallel(void *_arg) {
-	get_query_digests_parallel_args *arg = (get_query_digests_parallel_args *)_arg;
-	unsigned long long i = 0;
-	unsigned long long r = 0;
-	unsigned long long m = arg->m;
-	set_thread_name("PurgeQueryDgest", GloVars.set_thread_name);
-	for (std::unordered_map<uint64_t, void *>::iterator it=arg->gu->begin(); it!=arg->gu->end(); ++it) {
-		if ((i%DIGEST_STATS_FAST_THREADS)==m) {
-			QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
+struct purge_query_digests_args {
+	umap_query_digest *digest_umap = nullptr;
+	umap_query_digest_text *digest_text_umap = nullptr;
+	std::function<bool(std::unordered_map<uint64_t, void *>::iterator it)> match_delete_entry = nullptr;
+	bool erase_umap = true;
+
+	// only used for synchronous multi-threaded purge operation
+	int scan_idx = -1;
+	int thread_idx = -1;
+	unsigned long long digest_deleted = 0;
+};
+
+// NOTE: digest_umap is keyed by 'digest_total' (hash of user+schema+digest+hostgroup+client),
+// while digest_text_umap is keyed by the plain 'digest'; multiple digest_umap entries can
+// share a single digest_text_umap entry. This function only releases digest_umap entries;
+// digest_text_umap entries must be released by the caller (see purge_expired_digest_texts()).
+unsigned long long purge_query_digest_entry(purge_query_digests_args* args) {
+	unsigned long long digest_deleted = 0;
+
+	umap_query_digest *digest_umap = args->digest_umap;
+
+	for (auto it = digest_umap->begin(); it != digest_umap->end();) {
+		// by default, delete all entries
+		bool delete_entry = true;
+
+		if (args->match_delete_entry) {
+			delete_entry = args->match_delete_entry(it);
+		}
+
+		if (delete_entry) {
+			QP_query_digest_stats *qds = (QP_query_digest_stats *)it->second;
 			delete qds;
-			r++;
+
+			digest_deleted++;
 		}
-		i++;
+
+		if (delete_entry && args->erase_umap) {
+			it = digest_umap->erase(it);
+		} else {
+			it++;
+		}
 	}
-	arg->ret = r;
-	i = 0;
-	for (std::unordered_map<uint64_t, char *>::iterator it=arg->gtu->begin(); it!=arg->gtu->end(); ++it) {
-		if ((i%DIGEST_STATS_FAST_THREADS)==m) {
+
+	return digest_deleted;
+}
+
+// Removes (and frees) every digest_text_umap entry whose digest is no longer referenced by
+// any entry in digest_umap. Both maps must be stable for the duration of the call.
+static void purge_expired_digest_texts(umap_query_digest *digest_umap, umap_query_digest_text *digest_text_umap) {
+	if (digest_text_umap->empty()) {
+		return;
+	}
+
+	std::unordered_set<uint64_t> referenced_digests;
+	referenced_digests.reserve(digest_umap->size());
+	for (const auto& entry : *digest_umap) {
+		referenced_digests.insert(((QP_query_digest_stats *)entry.second)->digest);
+	}
+
+	for (auto it = digest_text_umap->begin(); it != digest_text_umap->end();) {
+		if (referenced_digests.find(it->first) == referenced_digests.end()) {
 			free(it->second);
+			it = digest_text_umap->erase(it);
+		} else {
+			++it;
 		}
 	}
-	return NULL;
+}
+
+void * purge_query_digests_parallel(void *_args) {
+	set_thread_name("PurgeQueryDgest", GloVars.set_thread_name);
+
+	auto args = (purge_query_digests_args *)_args;
+	args->digest_deleted = purge_query_digest_entry(args);
+
+	// full parallel purge: free this thread's share of the digest texts
+	if (args->digest_text_umap != nullptr && args->thread_idx >= 0) {
+		unsigned long long i = 0;
+		for (auto it = args->digest_text_umap->begin(); it != args->digest_text_umap->end(); ++it) {
+			if ((i % DIGEST_STATS_FAST_THREADS) == (unsigned long long)args->thread_idx) {
+				free(it->second);
+			}
+			i++;
+		}
+	}
+
+	return nullptr;
 }
 
 template <typename QP_DERIVED>
-unsigned long long Query_Processor<QP_DERIVED>::purge_query_digests(bool async_purge, bool parallel, char **msg) {
+unsigned long long Query_Processor<QP_DERIVED>::purge_query_digests(bool async_purge, bool parallel, time_t last_seen) {
 	unsigned long long ret = 0;
 	if (async_purge) {
-		ret = purge_query_digests_async(msg);
+		ret = purge_query_digests_async(last_seen);
 	} else {
-		ret = purge_query_digests_sync(parallel);
+		ret = purge_query_digests_sync(parallel, last_seen);
 	}
 	return ret;
 }
 
 template <typename QP_DERIVED>
-unsigned long long Query_Processor<QP_DERIVED>::purge_query_digests_async(char **msg) {
-	unsigned long long ret = 0;
+unsigned long long Query_Processor<QP_DERIVED>::purge_query_digests_async(time_t last_seen) {
 	umap_query_digest digest_umap_aux;
 	umap_query_digest_text digest_text_umap_aux;
+
 	pthread_rwlock_wrlock(&digest_rwlock);
 	digest_umap.swap(digest_umap_aux);
 	digest_text_umap.swap(digest_text_umap_aux);
 	pthread_rwlock_unlock(&digest_rwlock);
-	unsigned long long curtime1=monotonic_time();
-	size_t map1_size = digest_umap_aux.size();
-	size_t map2_size = digest_text_umap_aux.size();
-	ret = map1_size + map2_size;
 
+	unsigned long long digest_deleted = 0;
+	unsigned long long curtime1 = monotonic_time();
+	bool selective_purge = (last_seen > 0);
+	size_t purged_map_size = digest_umap_aux.size();
 
-	for (
-		std::unordered_map<uint64_t, void *>::iterator it = digest_umap_aux.begin();
-		it != digest_umap_aux.end();
-		++it
-	) {
-		QP_query_digest_stats *qds = (QP_query_digest_stats *)it->second;
-		delete qds;
+	purge_query_digests_args args;
+	args.digest_umap = &digest_umap_aux;
+	// full purge: no need to erase entries one by one, the aux map is discarded
+	args.erase_umap = selective_purge;
+
+	if (selective_purge) {
+		args.match_delete_entry = [&](std::unordered_map<uint64_t, void *>::iterator it) {
+			QP_query_digest_stats *qds = (QP_query_digest_stats *)it->second;
+			return (last_seen >= qds->last_seen);
+		};
 	}
-	digest_umap_aux.clear();
-	for (std::unordered_map<uint64_t, char *>::iterator it=digest_text_umap_aux.begin(); it!=digest_text_umap_aux.end(); ++it) {
-		free(it->second);
+
+	digest_deleted = purge_query_digest_entry(&args);
+
+	if (selective_purge == false) {
+		// full purge: release every digest text
+		for (auto& text_entry : digest_text_umap_aux) {
+			free(text_entry.second);
+		}
+		digest_text_umap_aux.clear();
 	}
-	digest_text_umap_aux.clear();
 
+	if (purged_map_size >= DIGEST_STATS_FAST_MINSIZE) {
+		const char *cmd = (selective_purge) ? "PURGE" : "TRUNCATE";
 
-	if (map1_size >= DIGEST_STATS_FAST_MINSIZE) {
-		unsigned long long curtime2=monotonic_time();
-		curtime1 = curtime1/1000;
-		curtime2 = curtime2/1000;
+		unsigned long long curtime2 = monotonic_time();
+		curtime1 = curtime1 / 1000;
+		curtime2 = curtime2 / 1000;
+
 		if constexpr (std::is_same_v<QP_DERIVED, MySQL_Query_Processor>) {
-			proxy_info("TRUNCATE stats_mysql_query_digest: (not locked) %llums to remove %lu entries\n", curtime2 - curtime1, map1_size);
+			proxy_info("%s stats_mysql_query_digest: (not locked) %llums to remove %llu of %lu entries\n", cmd, curtime2 - curtime1, digest_deleted, purged_map_size);
 		} else if constexpr (std::is_same_v<QP_DERIVED, PgSQL_Query_Processor>) {
-			proxy_info("TRUNCATE stats_pgsql_query_digest: (not locked) %llums to remove %lu entries\n", curtime2 - curtime1, map1_size);
+			proxy_info("%s stats_pgsql_query_digest: (not locked) %llums to remove %llu of %lu entries\n", cmd, curtime2 - curtime1, digest_deleted, purged_map_size);
 		}
 	}
-	return ret;
+
+	if (selective_purge) {
+		std::vector<char *> texts_to_free;
+
+		// digests referenced by the surviving entries; built before taking the
+		// lock so the work under the lock stays proportional to the purge window
+		std::unordered_set<uint64_t> referenced_digests;
+		referenced_digests.reserve(digest_umap_aux.size());
+		for (const auto& entry : digest_umap_aux) {
+			referenced_digests.insert(((QP_query_digest_stats *)entry.second)->digest);
+		}
+
+		pthread_rwlock_wrlock(&digest_rwlock);
+		digest_umap_aux.swap(digest_umap);
+		// digest_umap now holds the surviving entries, digest_umap_aux the
+		// entries created while the purge was running (purge window)
+
+		// merge stats entries created during the purge window into digest_umap
+		for (const auto& aux_entry : digest_umap_aux) {
+			uint64_t aux_key = aux_entry.first;
+			QP_query_digest_stats *aux_qds = (QP_query_digest_stats *)aux_entry.second;
+
+			referenced_digests.insert(aux_qds->digest);
+
+			auto it = digest_umap.find(aux_key);
+			if (it != digest_umap.end()) {
+				QP_query_digest_stats *digest_qds = (QP_query_digest_stats *)it->second;
+
+				digest_qds->merge(aux_qds);
+				delete aux_qds;
+			} else {
+				digest_umap.insert(aux_entry);
+			}
+		}
+
+		// digest texts: keep one entry per digest still referenced by digest_umap,
+		// preferring the copy created during the purge window (already in digest_text_umap);
+		// release the rest
+		for (const auto& text_entry : digest_text_umap_aux) {
+			if (referenced_digests.find(text_entry.first) != referenced_digests.end()
+				&& digest_text_umap.find(text_entry.first) == digest_text_umap.end()
+			) {
+				digest_text_umap.insert(text_entry);
+			} else {
+				texts_to_free.push_back(text_entry.second);
+			}
+		}
+		digest_text_umap_aux.clear();
+
+		pthread_rwlock_unlock(&digest_rwlock);
+		digest_umap_aux.clear();
+
+		for (char *text : texts_to_free) {
+			free(text);
+		}
+	}
+
+	return digest_deleted;
 }
 
 template <typename QP_DERIVED>
-unsigned long long Query_Processor<QP_DERIVED>::purge_query_digests_sync(bool parallel) {
-	unsigned long long ret = 0;
+unsigned long long Query_Processor<QP_DERIVED>::purge_query_digests_sync(bool parallel, time_t last_seen) {
+	unsigned long long digest_deleted = 0;
+
 	pthread_rwlock_wrlock(&digest_rwlock);
+
 	size_t map_size = digest_umap.size();
-	if (parallel && map_size >= DIGEST_STATS_FAST_MINSIZE) { // parallel purge
-		int n=DIGEST_STATS_FAST_THREADS;
-		get_query_digests_parallel_args args[n];
-		for (int i=0; i<n; i++) {
-			args[i].m=i;
-			args[i].ret=0;
-			args[i].gu = &digest_umap;
-			args[i].gtu = &digest_text_umap;
+
+	// multi-threaded purge
+	if (parallel
+		&& (last_seen == 0)
+		&& (map_size >= DIGEST_STATS_FAST_MINSIZE)
+	) {
+		pthread_t tid[DIGEST_STATS_FAST_THREADS];
+		purge_query_digests_args args[DIGEST_STATS_FAST_THREADS];
+
+		for (int i = 0; i < DIGEST_STATS_FAST_THREADS; i++) {
+			args[i].digest_umap = &digest_umap;
+			args[i].digest_text_umap = &digest_text_umap;
+			args[i].erase_umap = false;
+			args[i].scan_idx = -1;
+			args[i].thread_idx = i;
+
+			args[i].match_delete_entry = [&, i](std::unordered_map<uint64_t, void *>::iterator it) {
+				args[i].scan_idx++;
+				return (args[i].scan_idx % DIGEST_STATS_FAST_THREADS == i);
+			};
 		}
-		for (int i=0; i<n; i++) {
-			if ( pthread_create(&args[i].thr, NULL, &purge_query_digests_parallel, &args[i]) != 0 ) {
+
+		for (int i = 0; i < DIGEST_STATS_FAST_THREADS; i++) {
+			if (pthread_create(&tid[i], NULL, &purge_query_digests_parallel, &args[i]) != 0 ) {
 				// LCOV_EXCL_START
 				assert(0);
 				// LCOV_EXCL_STOP
 			}
 		}
-		for (int i=0; i<n; i++) {
-			pthread_join(args[i].thr, NULL);
-			ret += args[i].ret;
+
+		for (int i = 0; i < DIGEST_STATS_FAST_THREADS; i++) {
+			pthread_join(tid[i], NULL);
+			digest_deleted += args[i].digest_deleted;
 		}
+
+		digest_umap.clear();
+		digest_text_umap.clear();
 	} else {
-		for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
-			QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
-			delete qds;
-			ret++;
-		}
-		for (std::unordered_map<uint64_t, char *>::iterator it=digest_text_umap.begin(); it!=digest_text_umap.end(); ++it) {
-			free(it->second);
+		purge_query_digests_args args;
+		args.digest_umap = &digest_umap;
+
+		if (last_seen > 0) {
+			args.match_delete_entry = [&](std::unordered_map<uint64_t, void *>::iterator it) {
+				QP_query_digest_stats *qds = (QP_query_digest_stats *)it->second;
+				return (last_seen >= qds->last_seen);
+			};
+
+			digest_deleted = purge_query_digest_entry(&args);
+			purge_expired_digest_texts(&digest_umap, &digest_text_umap);
+		} else {
+			digest_deleted = purge_query_digest_entry(&args);
+
+			for (auto& text_entry : digest_text_umap) {
+				free(text_entry.second);
+			}
+			digest_text_umap.clear();
 		}
 	}
-	digest_umap.erase(digest_umap.begin(),digest_umap.end());
-	digest_text_umap.erase(digest_text_umap.begin(),digest_text_umap.end());
+
 	pthread_rwlock_unlock(&digest_rwlock);
-	return ret;
+
+	return digest_deleted;
 }
 
 template <typename QP_DERIVED>
@@ -2029,9 +2192,9 @@ __exit_process_mysql_query:
 					if (ret->firewall_whitelist_mode == WUS_DETECTING || ret->firewall_whitelist_mode == WUS_PROTECTING) {
 						char buf[32];
 						if (qp && qp->digest) {
-							sprintf(buf,"0x%016llX", (long long unsigned int)qp->digest);
+							snprintf(buf, sizeof(buf), "0x%016llX", (long long unsigned int)qp->digest);
 						} else {
-							sprintf(buf,"unknown");
+							snprintf(buf, sizeof(buf), "unknown");
 						}
 						char *action = (char *)"blocked";
 						if (ret->firewall_whitelist_mode == WUS_DETECTING) {

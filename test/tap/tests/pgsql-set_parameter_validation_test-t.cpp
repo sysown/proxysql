@@ -19,15 +19,19 @@ using PGConnPtr = std::unique_ptr<PGconn, decltype(&PQfinish)>;
 
 enum ConnType {
     ADMIN,
-    BACKEND
+    BACKEND,
+    CLIENT
 };
 
 PGConnPtr createNewConnection(ConnType conn_type, const std::string& options = "", bool with_ssl = false) {
-    
-    const char* host = (conn_type == BACKEND) ? cl.pgsql_host : cl.pgsql_admin_host;
-    int port = (conn_type == BACKEND) ? cl.pgsql_port : cl.pgsql_admin_port;
-    const char* username = (conn_type == BACKEND) ? cl.pgsql_root_username : cl.admin_username;
-    const char* password = (conn_type == BACKEND) ? cl.pgsql_root_password : cl.admin_password;
+    const char* host = (conn_type == ADMIN) ? cl.pgsql_admin_host : cl.pgsql_host;
+    int port = (conn_type == ADMIN) ? cl.pgsql_admin_port : cl.pgsql_port;
+    const char* username = (conn_type == ADMIN) ? cl.admin_username :
+        (conn_type == BACKEND ? cl.pgsql_root_username : cl.pgsql_username);
+    const char* password = (conn_type == ADMIN) ? cl.admin_password :
+        (conn_type == BACKEND ? cl.pgsql_root_password : cl.pgsql_password);
+    const char* connection_name = (conn_type == ADMIN) ? "Admin" :
+        (conn_type == BACKEND ? "Backend" : "Client");
 
     std::stringstream ss;
 
@@ -41,11 +45,21 @@ PGConnPtr createNewConnection(ConnType conn_type, const std::string& options = "
 
     PGconn* conn = PQconnectdb(ss.str().c_str());
     if (PQstatus(conn) != CONNECTION_OK) {
-        fprintf(stderr, "Connection failed to '%s': %s", (conn_type == BACKEND ? "Backend" : "Admin"), PQerrorMessage(conn));
+        fprintf(stderr, "Connection failed to '%s': %s", connection_name, PQerrorMessage(conn));
         PQfinish(conn);
         return PGConnPtr(nullptr, &PQfinish);
     }
     return PGConnPtr(conn, &PQfinish);
+}
+
+std::string queryCurrentUser(PGconn* conn) {
+    PGresult* res = PQexec(conn, "SELECT current_user");
+    std::string username;
+    if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) == 1) {
+        username = PQgetvalue(res, 0, 0);
+    }
+    PQclear(res);
+    return username;
 }
 
 struct SetCommandTest {
@@ -382,7 +396,7 @@ static int query_pgsql_set_parser_algorithm() {
 }
 
 int main(int argc, char** argv) {
-    int total_tests = 0;
+    int total_tests = 2;
 
 	for (const auto& test_case : test_cases) {
 		total_tests += test_case.commands.size();
@@ -397,11 +411,26 @@ int main(int argc, char** argv) {
     diag("pgsql-set_parser_algorithm = %d (per-case algo3 override %s)",
          parser_algorithm, parser_algorithm == 3 ? "ACTIVE" : "ignored");
 
+    PGConnPtr client_conn = createNewConnection(ConnType::CLIENT, "", false);
+    if (!client_conn || PQstatus(client_conn.get()) != CONNECTION_OK) {
+        BAIL_OUT("Error: failed to create an unprivileged PostgreSQL connection");
+        return exit_status();
+    }
+    const std::string client_user = queryCurrentUser(client_conn.get());
+    ok(client_user == cl.pgsql_username,
+        "unprivileged frontend retains its backend identity (expected '%s', got '%s')",
+        cl.pgsql_username, client_user.c_str());
+    client_conn.reset();
+
     PGConnPtr conn = createNewConnection(ConnType::BACKEND, "", false);
     if (!conn || PQstatus(conn.get()) != CONNECTION_OK) {
         BAIL_OUT("Error: failed to connect to the database in file %s, line %d", __FILE__, __LINE__);
         return exit_status();
     }
+    const std::string backend_user = queryCurrentUser(conn.get());
+    ok(backend_user == cl.pgsql_root_username,
+        "privileged frontend does not reuse the unprivileged backend identity (expected '%s', got '%s')",
+        cl.pgsql_root_username, backend_user.c_str());
 
     for (const auto& test_case : test_cases) {
         for (const auto& cmd_test : test_case.commands) {
