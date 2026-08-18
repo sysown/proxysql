@@ -1928,10 +1928,6 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 		if (sess->mirror_flagOUT != -1) {
 			// the original session has set a mirror flagOUT
 			flagIN=sess->mirror_flagOUT;
-		} else {
-			// the original session did NOT set any mirror flagOUT
-			// so we exit rule evaluation here
-			// the only thing set so far is destination_hostgroup
 		}
 	}
 	bool iterate_rules = !((sess->mirror == true) && (sess->mirror_flagOUT == -1));
@@ -2090,7 +2086,7 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 							re2p->re1->Replace(qr->replace_pattern,ret->new_query);
 						}
 					}
-				}	
+				}
 			}
 
 			if (qr->apply==true) {

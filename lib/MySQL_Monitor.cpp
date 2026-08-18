@@ -5009,7 +5009,7 @@ void* MySQL_Monitor::monitor_dns_cache() {
 				if (delay_us > 1000000 || delay_us <= 0) {
 					delay_us = 10000;
 				}
-			delay_us = delay_us + rand_fast() % delay_us;
+				delay_us = delay_us + rand_fast() % delay_us;
 			}
 
 			if (dns_records_bookkeeping.empty() == false) {

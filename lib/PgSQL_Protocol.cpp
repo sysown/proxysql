@@ -1363,7 +1363,7 @@ __exit_process_pkt_handshake_response:
 	return ret;
 }
 
-void PgSQL_Protocol::welcome_client() {
+bool PgSQL_Protocol::welcome_client() {
 	PG_pkt pgpkt(128);
 
 	pgpkt.set_multi_pkt_mode(true);
@@ -1415,7 +1415,7 @@ void PgSQL_Protocol::welcome_client() {
 	uint32_t cancel_key = -1;
 	if (RAND_bytes((unsigned char*)&cancel_key, sizeof(cancel_key)) != 1) {
 		proxy_error("RAND_bytes() failed generating PostgreSQL cancel key\n");
-		return;
+		return false;
 	}
 	(*myds)->sess->cancel_secret_key = cancel_key;
 
@@ -1434,6 +1434,7 @@ void PgSQL_Protocol::welcome_client() {
 	(*myds)->PSarrayOUT->add((void*)buff.first, buff.second);
 	//(*myds)->DSS = STATE_CLIENT_AUTH_OK;
 	//(*myds)->sess->status = WAITING_CLIENT_DATA;
+	return true;
 }
 
 void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* msg, PGSQL_ERROR_CODES code, bool fatal, bool track, PtrSize_t* _ptr) {

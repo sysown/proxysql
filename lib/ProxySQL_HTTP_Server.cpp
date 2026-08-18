@@ -909,12 +909,12 @@ string ProxySQL_HTTP_Server::generate_chart(char *chart_name, char *ts, int nset
 	ret.append("    datasets: [ \n");
 	for (i=0;i<nsets;i++) {
 		ret.append("      {\n");
-			ret.append("        data: "); ret.append(dname[i]); ret.append(",\n");
-			ret.append("        label: \""); ret.append(llabel[i]); ret.append("\",\n");
-			int j;
-			char pal[7];
-			for (j=0; j<6; j++) { pal[j]=random_hex_char(); }
-			pal[6]='\0';
+		ret.append("        data: "); ret.append(dname[i]); ret.append(",\n");
+		ret.append("        label: \""); ret.append(llabel[i]); ret.append("\",\n");
+		int j;
+		char pal[7];
+		for (j=0; j<6; j++) { pal[j]=random_hex_char(); }
+		pal[6]='\0';
 		ret.append("        borderColor: \"#"); ret.append(pal); ret.append("\",\n");
 		ret.append("        fill: false\n");
 		ret.append("      }");

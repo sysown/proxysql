@@ -102,11 +102,11 @@ struct LLMRequest {
 		retry_multiplier(2.0), retry_max_backoff_ms(30000) {
 		// Generate UUID-like request ID for correlation
 		char uuid[64];
-		uint32_t d1 = static_cast<uint32_t>(fastrand());
-		uint16_t d2 = static_cast<uint16_t>(fastrand());
-		uint16_t d3 = static_cast<uint16_t>(fastrand());
-		uint16_t d4 = static_cast<uint16_t>(fastrand());
-		uint64_t d5 = (static_cast<uint64_t>(fastrand()) << 32) | static_cast<uint64_t>(fastrand());
+		uint32_t d1 = rand_fast();
+		uint16_t d2 = static_cast<uint16_t>(rand_fast());
+		uint16_t d3 = static_cast<uint16_t>(rand_fast());
+		uint16_t d4 = static_cast<uint16_t>(rand_fast());
+		uint64_t d5 = (static_cast<uint64_t>(rand_fast()) << 32) | rand_fast();
 		snprintf(
 			uuid, sizeof(uuid), "%08x-%04x-%04x-%04x-%012llx",
 			d1, d2, d3, d4, static_cast<unsigned long long>(d5 & 0xFFFFFFFFFFFFULL)

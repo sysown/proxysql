@@ -1314,6 +1314,7 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 		}
 		(*myds)->myconn->scramble_buff[i] = c;
 	}
+	(*myds)->myconn->scramble_buff[sizeof(scramble)] = '\0';
 
   memcpy(_ptr+l, &protocol_version, sizeof(protocol_version)); l+=sizeof(protocol_version);
   memcpy(_ptr+l, mysql_thread___server_version, strlen(mysql_thread___server_version)); l+=strlen(mysql_thread___server_version)+1;
