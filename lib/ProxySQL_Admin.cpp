@@ -6346,7 +6346,20 @@ void ProxySQL_Admin::send_error_msg_to_client(S* sess, const char *msg, uint16_t
 #ifdef PROXYSQL40
 template <typename S>
 bool ProxySQL_Admin::dispatch_plugin_admin_command(S* sess, const char* sql) {
-	ProxySQL_PluginCommandContext ctx { admindb, configdb, statsdb };
+	ProxySQL_PluginCommandContext ctx {
+		admindb,
+		configdb,
+		statsdb,
+		this,
+		[](void* opaque) {
+			auto* admin = static_cast<ProxySQL_Admin*>(opaque);
+			pthread_mutex_unlock(&admin->sql_query_global_mutex);
+		},
+		[](void* opaque) {
+			auto* admin = static_cast<ProxySQL_Admin*>(opaque);
+			pthread_mutex_lock(&admin->sql_query_global_mutex);
+		}
+	};
 	ProxySQL_PluginCommandResult result { 0, 0, "" };
 	if (!proxysql_dispatch_configured_plugin_admin_command(ctx, sql, result)) {
 		return false;

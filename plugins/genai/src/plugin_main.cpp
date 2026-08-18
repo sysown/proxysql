@@ -39,6 +39,8 @@
 #include "Discovery_Schema.h"     // load_mcp_query_rules / get_mcp_query_rules
 #include "GenAI_Thread.h"
 #include "AI_Features_Manager.h"
+#include "AI_Tool_Handler.h"
+#include "RAG_Tool_Handler.h"
 #include "sqlite3db.h"
 #include "proxysql_utils.h"
 #include "proxysql.h"
@@ -52,6 +54,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -687,7 +690,14 @@ bool genai_load_variables_from_admindb(GenAIPluginContext& ctx) {
  * bridge from the refreshed GenAI configuration.
  */
 bool genai_refresh_runtime_components(GenAIPluginContext& ctx) {
-	(void)ctx;
+	// AI/RAG endpoint resources persist across a GenAI reload, but their tool
+	// handlers borrow objects owned by GloGATH/GloAI.  Wait for current AI/RAG
+	// calls, rebuild the owners, and rebind those borrowed pointers before the
+	// next endpoint call can enter.  Command callbacks release the Admin mutex
+	// before reaching this lock, so a request already waiting for Admin cannot
+	// form Admin -> reload -> request -> Admin lock inversion.
+	std::unique_lock<std::shared_mutex> runtime_guard(ctx.runtime_dependencies_mutex);
+
 	if (GloGATH != nullptr) {
 		GloGATH->shutdown();
 		GloGATH->init();
@@ -695,9 +705,23 @@ bool genai_refresh_runtime_components(GenAIPluginContext& ctx) {
 	if (GloAI != nullptr) {
 		GloAI->shutdown();
 		if (GloAI->init() != 0) {
+			if (ctx.mcp != nullptr && ctx.mcp->ai_tool_handler != nullptr) {
+				ctx.mcp->ai_tool_handler->set_llm_bridge(nullptr);
+			}
+			if (ctx.mcp != nullptr && ctx.mcp->rag_tool_handler != nullptr) {
+				ctx.mcp->rag_tool_handler->refresh_runtime_dependencies(GloAI);
+			}
 			genai_log(6, "genai plugin: AI_Features_Manager::init() failed during reload\n");
 			return false;
 		}
+	}
+
+	if (ctx.mcp != nullptr && ctx.mcp->ai_tool_handler != nullptr) {
+		ctx.mcp->ai_tool_handler->set_llm_bridge(
+			GloAI != nullptr ? GloAI->get_llm_bridge() : nullptr);
+	}
+	if (ctx.mcp != nullptr && ctx.mcp->rag_tool_handler != nullptr) {
+		ctx.mcp->rag_tool_handler->refresh_runtime_dependencies(GloAI);
 	}
 	return true;
 }
@@ -877,6 +901,10 @@ bool mcp_save_target_auth_map_to_admindb(GenAIPluginContext& ctx) {
  */
 void mcp_start_listener_if_enabled(GenAIPluginContext& ctx) {
 	if (ctx.mcp == nullptr) return;
+	// Serialize listener construction/destruction with GenAI reloads.  The
+	// server constructor snapshots GloAI/GloGATH dependencies for its AI/RAG
+	// handlers, and its destructor drains those handlers before freeing them.
+	std::unique_lock<std::shared_mutex> runtime_guard(ctx.runtime_dependencies_mutex);
 	if (!ctx.mcp->variables.mcp_enabled) {
 		if (ctx.mcp->mcp_server != nullptr) {
 			delete ctx.mcp->mcp_server;

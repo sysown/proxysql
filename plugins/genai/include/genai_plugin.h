@@ -21,6 +21,8 @@
 #include "ProxySQL_Plugin.h"
 
 #include <atomic>
+#include <mutex>
+#include <shared_mutex>
 
 namespace prometheus { class Counter; }
 class Anomaly_Detector;
@@ -63,6 +65,20 @@ struct GenAIPluginContext {
 	/// See plugins/genai/src/MCP_Thread.cpp for the listener
 	/// implementation.
 	MCP_Threads_Handler* mcp { nullptr };
+
+	/// Serializes every GenAI plugin Admin command. Commands normally enter
+	/// with Admin's global query mutex held, but runtime reloads must yield that
+	/// mutex while draining MCP work. A second plugin command releases Admin
+	/// before waiting here, so it cannot mutate plugin runtime state during the
+	/// yielded interval and cannot form a command-mutex/Admin lock inversion.
+	std::mutex admin_command_mutex;
+
+	/// Protects MCP AI/RAG calls while their borrowed GloGATH/GloAI
+	/// dependencies are replaced.  Runtime reloads and MCP listener
+	/// construction take the exclusive side; endpoint calls take the shared
+	/// side.  Admin command callbacks release the Admin global mutex before
+	/// waiting for this lock, preventing an Admin/MCP lock inversion.
+	std::shared_mutex runtime_dependencies_mutex;
 };
 
 /**
@@ -75,25 +91,24 @@ struct GenAIPluginContext {
  * provider configuration.
  *
  * @par Concurrency contract
- * Caller MUST guarantee no other thread is dereferencing `GloGATH` or
- * `GloAI` while this runs.  The teardown calls `delete`-equivalent
- * `shutdown()` methods on both globals; concurrent reads from MCP
- * listener threads, tool-handler workers, or the anomaly-detector hot
- * path would observe a half-destroyed handler.  Today the function is
- * called from:
+ * MCP AI/RAG calls share `runtime_dependencies_mutex`; this function takes
+ * its exclusive side while replacing runtime resources, then rebinds the
+ * persistent endpoint handlers before allowing another call through.  The
+ * listener remains alive, so an in-flight Config/Stats handler waiting for
+ * the Admin mutex cannot be trapped behind a synchronous listener join.
+ * Other callers of `GloGATH` / `GloAI` (notably the anomaly-detector query
+ * hook) are not quiesced here; callers must still account for that wider
+ * concurrency contract.  Today the function is called from:
  *
  *   1. `genai_start()` — single-threaded plugin lifecycle, no traffic
  *      yet, always safe.
  *   2. `LOAD GENAI VARIABLES TO RUNTIME` admin command — runs on the
- *      admin SQL thread while MCP listener / tool handlers may be
- *      actively serving requests.  Currently this is racy; the
- *      practical mitigation is operator-side: quiesce traffic before
- *      issuing the LOAD command, or accept the brief reload window.
+ *      admin SQL thread.  The callback releases the Admin mutex before
+ *      entering this function so an active MCP request can finish first.
  *   3. `LOAD GENAI VARIABLES FROM CONFIG` — same constraint as (2).
  *
- * Adding a proper rwlock-around-GloGATH/GloAI is a follow-up tracked
- * separately; it touches every consumer of those globals (not just
- * the reload path) and is too large for this carve-out PR.
+ * Extending this lifecycle lock to the remaining GloGATH/GloAI consumers is
+ * tracked separately; it touches more than the MCP reload path covered here.
  */
 bool genai_refresh_runtime_components(GenAIPluginContext& ctx);
 

@@ -1,17 +1,15 @@
-// Step 1 acceptance test for the genai plugin scaffold.
+// Lifecycle and persisted-variable regression coverage for the GenAI plugin.
 //
 // Drives the actual genai .so through load → init → start → stop → unload,
-// the same way proxysql will at startup.  Step 4.F extended the plugin
-// to actually read mcp-* admin variables and the mcp_auth/target profile
-// tables during start(), so this test now spins up real in-memory
-// SQLite3DBs (instead of the previous fake `char*` stubs) and creates
-// the tables genai_start expects.
+// the same way proxysql will at startup. The fixture uses real in-memory
+// SQLite3DBs and creates the tables genai_start expects.
 
 #include "ProxySQL_PluginManager.h"
 #include "sqlite3db.h"
 #include "tap.h"
 
 #include <string>
+#include <vector>
 
 #ifndef PROXYSQL_GENAI_PLUGIN_PATH
 #error "PROXYSQL_GENAI_PLUGIN_PATH must be defined"
@@ -26,6 +24,24 @@ namespace {
 SQLite3DB* g_admindb  = nullptr;
 SQLite3DB* g_configdb = nullptr;
 SQLite3DB* g_statsdb  = nullptr;
+
+struct AdminMutexHandoffProbe {
+	int release_count { 0 };
+	int acquire_count { 0 };
+	std::vector<char> events;
+};
+
+void record_admin_mutex_release(void* opaque) {
+	auto* probe = static_cast<AdminMutexHandoffProbe*>(opaque);
+	probe->events.push_back('R');
+	++probe->release_count;
+}
+
+void record_admin_mutex_acquire(void* opaque) {
+	auto* probe = static_cast<AdminMutexHandoffProbe*>(opaque);
+	probe->events.push_back('A');
+	++probe->acquire_count;
+}
 
 void setup_global_variables_schema(SQLite3DB* db) {
 	db->execute("CREATE TABLE IF NOT EXISTS global_variables ("
@@ -75,7 +91,7 @@ SQLite3DB* proxysql_plugin_get_configdb() { return g_configdb; }
 SQLite3DB* proxysql_plugin_get_statsdb()  { return g_statsdb; }
 
 int main() {
-	plan(83);
+	plan(86);
 
 	g_admindb  = new SQLite3DB();
 	g_configdb = new SQLite3DB();
@@ -146,6 +162,28 @@ int main() {
 		"SELECT COUNT(*) FROM global_variables"
 		" WHERE variable_name='genai-llm_cache_enabled' AND variable_value='false'") == 1,
 	   "admindb preserves loaded genai-llm_cache_enabled=false");
+
+	// A runtime reload can wait for active MCP work, including a request that
+	// is itself waiting for Admin. Verify the command yields the production
+	// Admin mutex around that blocking phase and reacquires it before return.
+	AdminMutexHandoffProbe handoff_probe;
+	ProxySQL_PluginCommandContext handoff_cmd_ctx {
+		g_admindb,
+		g_configdb,
+		g_statsdb,
+		&handoff_probe,
+		&record_admin_mutex_release,
+		&record_admin_mutex_acquire
+	};
+	ProxySQL_PluginCommandResult handoff_result;
+	const bool handoff_dispatched = mgr.dispatch_admin_command(
+		handoff_cmd_ctx, "LOAD GENAI VARIABLES TO RUNTIME", handoff_result);
+	ok(handoff_dispatched && handoff_result.error_code == 0,
+	   "LOAD GENAI VARIABLES TO RUNTIME succeeds with Admin mutex handoff");
+	ok(handoff_probe.release_count == 2 && handoff_probe.acquire_count == 2,
+	   "GenAI reload performs serialized-entry and runtime Admin handoffs");
+	ok(handoff_probe.events == std::vector<char>({'R', 'A', 'R', 'A'}),
+	   "GenAI reload preserves release/acquire ordering across both handoffs");
 
 	// LOAD MCP VARIABLES must publish one coherent snapshot to both the
 	// handler and runtime_global_variables.  A second load replaces the

@@ -6,6 +6,7 @@
 #include "proxysql.h"
 #include <string>
 #include <memory>
+#include <shared_mutex>
 
 // Forward declarations
 class MCP_Threads_Handler;
@@ -36,6 +37,7 @@ private:
 	MCP_Threads_Handler* handler;       ///< Pointer to MCP handler for variable access
 	MCP_Tool_Handler* tool_handler;     ///< Pointer to endpoint's dedicated tool handler
 	std::string endpoint_name;           ///< Endpoint name (config, query, admin, etc.)
+	std::shared_mutex* runtime_dependencies_mutex; ///< Optional guard for borrowed GenAI runtime state
 
 	/**
 	 * @brief Authenticate the incoming request
@@ -153,8 +155,15 @@ public:
 	 * @param h Pointer to the MCP_Threads_Handler instance
 	 * @param th Pointer to the endpoint's dedicated tool handler
 	 * @param name The name of this endpoint (e.g., "config", "query")
+	 * @param dependencies_mutex Optional lifecycle guard for handlers that
+	 *        borrow replaceable GenAI runtime resources
 	 */
-	MCP_JSONRPC_Resource(MCP_Threads_Handler* h, MCP_Tool_Handler* th, const std::string& name);
+	MCP_JSONRPC_Resource(
+		MCP_Threads_Handler* h,
+		MCP_Tool_Handler* th,
+		const std::string& name,
+		std::shared_mutex* dependencies_mutex = nullptr
+	);
 
 	/**
 	 * @brief Destructor
