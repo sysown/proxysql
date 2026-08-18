@@ -58,7 +58,26 @@ private:
 /** SharedMutex wrapper backed by the project's pthread rwlock primitive. */
 class GenAIRWLock {
 public:
-	GenAIRWLock() = default;
+	GenAIRWLock() noexcept {
+		pthread_rwlockattr_t attr;
+		int rc = pthread_rwlockattr_init(&attr);
+		assert(rc == 0);
+		(void)rc;
+#if defined(__GLIBC__)
+		// The query hook is a continuous stream of readers. Prefer a queued
+		// writer so reload and shutdown cannot starve behind that hot path.
+		rc = pthread_rwlockattr_setkind_np(
+			&attr, PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP);
+		assert(rc == 0);
+		(void)rc;
+#endif
+		rc = pthread_rwlock_init(&rwlock_, &attr);
+		assert(rc == 0);
+		(void)rc;
+		rc = pthread_rwlockattr_destroy(&attr);
+		assert(rc == 0);
+		(void)rc;
+	}
 	~GenAIRWLock() { pthread_rwlock_destroy(&rwlock_); }
 
 	void lock() noexcept {
@@ -82,7 +101,7 @@ public:
 	GenAIRWLock& operator=(const GenAIRWLock&) = delete;
 
 private:
-	pthread_rwlock_t rwlock_ = PTHREAD_RWLOCK_INITIALIZER;
+	pthread_rwlock_t rwlock_;
 };
 
 /**
