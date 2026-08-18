@@ -1443,8 +1443,7 @@ static void test_pgsql_query_digests() {
 		"PgSQL QP: digest total size is 0 on empty state");
 
 	// Test purge on empty state
-	char *msg = nullptr;
-	unsigned long long purged = GloPgQPro->purge_query_digests(false, false, &msg);
+	unsigned long long purged = GloPgQPro->purge_query_digests(false, false);
 	ok(purged == 0, "PgSQL QP: purge_query_digests returns 0 on empty state");
 }
 

@@ -329,6 +329,21 @@ The build matrix:
 | `debian12, -dbg` | `make debian12-dbg` | debug | 3p integration workflows |
 | `ubuntu24, -tap-genai-gcov` | `make ubuntu24-dbg` | `PROXYSQLGENAI=1` + `WITHGCOV=1` | `CI-legacy-g2-genai` only |
 
+### Opt-in TAP ASAN
+
+- Add the exact `ci:asan` label to an internal PR, then push an empty commit
+  to start a new ASAN standard-TAP integration run.
+- Adding or removing the label alone does not trigger CI.
+- Push builds and manual dispatches without `ci:asan` use the normal build.
+- ASAN replaces the normal `ubuntu24-tap-genai-gcov` handoff for that commit;
+  it does not duplicate the fan-out.
+- Unit ASAN coverage and MySQLX behavior are unchanged.
+
+Live CI validation of the labeled and unlabeled paths remains pending until the
+branch is published; validate the mode, handoff artifact names, representative
+consumer restoration, resolver failure behavior, and unchanged unit-ASAN
+trigger before treating this contract as externally verified.
+
 The flag injection is simple `sed` into `docker-compose.yml` before the
 build runs:
 
@@ -731,6 +746,8 @@ All chain off `workflow_run[completed]` on `CI-trigger`.
 |---|---|---|---|---|
 | `CI-codeql.yml` | `ci-codeql.yml` | `workflow_run[completed]` on `CI-trigger` | Security analysis | ✅ |
 | `CI-package-build.yml` | `ci-package-build.yml` | `push` | Build `.deb` / `.rpm` / ARM64 packages | ✅ |
+| `CI-package-amd64-tarball.yml` | *(self-contained)* | `workflow_dispatch` | Build generic Linux `.tar.gz` (amd64, all tiers) | ✅ |
+| `CI-package-arm64-tarball.yml` | *(self-contained)* | `workflow_dispatch` | Build generic Linux `.tar.gz` (arm64, all tiers) | ✅ |
 
 ### Third-party integration (`CI-3p-*`)
 
@@ -752,6 +769,55 @@ from GitHub repository variables like
 | `CI-3p-php-pdo-pgsql.yml` | PHP PDO PostgreSQL | PostgreSQL |
 | `CI-3p-postgresql.yml` | libpq (native) | PostgreSQL |
 | `CI-3p-sqlalchemy.yml` | SQLAlchemy ORM | MySQL, PostgreSQL |
+
+### Release tarballs (generic Linux binaries)
+
+`CI-package-amd64-tarball.yml` and `CI-package-arm64-tarball.yml` build
+distribution-agnostic `.tar.gz` bundles — a portable alternative to the
+`.deb`/`.rpm` packages — and attach them to the rolling `<ref>-head` draft
+pre-release. Unlike most CI, these are **`workflow_dispatch`-only** (manual)
+and **self-contained** (no `@GH-Actions` reusable). Trigger them from the
+Actions UI (*Run workflow*) or the CLI, against any ref:
+
+```bash
+gh workflow run CI-package-amd64-tarball.yml --repo sysown/proxysql --ref v3.0
+gh workflow run CI-package-arm64-tarball.yml --repo sysown/proxysql --ref v3.0
+```
+
+> Note: `workflow_dispatch` workflows are only dispatchable once the file
+> exists on the repo's **default branch** (`v3.0`).
+
+Each run's `build` job is a **matrix over the three feature tiers**, so one
+dispatch produces three tarballs per architecture (`CURVER` is bumped per
+tier, so the names never collide):
+
+| Matrix leg | Flag passed to `make` | Artifact |
+|---|---|---|
+| `v3.0` | *(none)* | `proxysql-3.0.x-linux-<arch>.tar.gz` |
+| `v3.1` | `PROXYSQL31=1` | `proxysql-3.1.x-linux-<arch>.tar.gz` |
+| `v4.0` | `PROXYSQL40=1` | `proxysql-4.0.x-linux-<arch>.tar.gz` (bundles the `mysqlx` + `genai` plugin `.so`s under `lib/proxysql/`) |
+
+Mechanics worth knowing:
+
+* A preceding **`init_release`** job finds-or-creates the draft release tagged
+  `<ref>-head` **by tag name** and reuses it, so the tarballs land on the same
+  rolling draft as the `.deb`/`.rpm` packages (on `v3.0` that is `v3.0-head`).
+* The build runs in the `tarball_build` docker-compose service on an
+  **AlmaLinux 9** image (glibc 2.34 / OpenSSL 3), staged and packaged by
+  `docker/images/proxysql/tarball-compliant/entrypoint/entrypoint.bash`.
+* Each `build` leg deletes-then-uploads its own assets by name (`.tar.gz` +
+  `.sha256`), so re-running refreshes them in place.
+
+To build a tarball locally (the exact command the workflow runs — needs Docker
+and access to the AlmaLinux 9 packaging image; arch is taken from `uname -m`):
+
+```bash
+make tarball-almalinux9                 # Stable (v3.0.x)
+make tarball-almalinux9 PROXYSQL31=1    # v3.1.x (FFTO + TSDB)
+make tarball-almalinux9 PROXYSQL40=1    # v4.0.x (+ mysqlx/genai plugins)
+```
+
+The resulting `.tar.gz` and its `.sha256` are written to `binaries/`.
 
 ---
 

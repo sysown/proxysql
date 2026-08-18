@@ -1,6 +1,8 @@
 #include "mysqlx_thread.h"
 #include "mysqlx_config_store.h"
 #include "mysqlx_protocol.h"
+#include "proxysql.h"
+#include "proxysql_debug.h"
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -8,6 +10,7 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <cstdio>
 #include <cstring>
 #include <cerrno>
 #include <ctime>
@@ -25,6 +28,10 @@ uint64_t monotonic_time_ms() {
 
 constexpr uint64_t HANDSHAKE_TIMEOUT_MS = 10000;
 constexpr uint64_t IDLE_TIMEOUT_MS = 28800000;
+
+bool elapsed_exceeds(uint64_t now_ms, uint64_t then_ms, uint64_t limit_ms) {
+	return now_ms > then_ms && (now_ms - then_ms) > limit_ms;
+}
 
 }
 
@@ -304,9 +311,9 @@ void Mysqlx_Thread::process_all_sessions() {
 		bool timeout = false;
 		MysqlxSession::Status st = sess->get_status();
 		if (st < MysqlxSession::WAITING_CLIENT_XMSG) {
-			timeout = (now - sess->get_start_time()) > HANDSHAKE_TIMEOUT_MS;
+			timeout = elapsed_exceeds(now, sess->get_start_time(), HANDSHAKE_TIMEOUT_MS);
 		} else {
-			timeout = (now - sess->get_last_active_time()) > IDLE_TIMEOUT_MS;
+			timeout = elapsed_exceeds(now, sess->get_last_active_time(), IDLE_TIMEOUT_MS);
 		}
 
 		if (!sess->is_healthy() || rc < 0 || timeout) {
@@ -318,9 +325,23 @@ void Mysqlx_Thread::process_all_sessions() {
 	}
 }
 
+#ifdef MYSQLX_TEST_BUILD
+bool Mysqlx_Thread::elapsed_exceeds_for_test(uint64_t now_ms, uint64_t then_ms, uint64_t limit_ms) {
+	return elapsed_exceeds(now_ms, then_ms, limit_ms);
+}
+#endif
+
 int Mysqlx_Thread::add_listener(const char* bind_addr, int port, const char* route_name) {
+	proxy_info("mysqlx: add_listener entered: bind=%s port=%d route=%s\n",
+	           bind_addr ? bind_addr : "(null)", port,
+	           route_name ? route_name : "(null)");
 	int fd = socket(AF_INET, SOCK_STREAM, 0);
-	if (fd < 0) return -1;
+	if (fd < 0) {
+		proxy_error("mysqlx: add_listener(%s:%d, route=%s): socket() failed: %s\n",
+		            bind_addr ? bind_addr : "(null)", port,
+		            route_name ? route_name : "(null)", strerror(errno));
+		return -1;
+	}
 
 	int opt = 1;
 	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -336,10 +357,16 @@ int Mysqlx_Thread::add_listener(const char* bind_addr, int port, const char* rou
 	}
 
 	if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+		proxy_error("mysqlx: add_listener(%s:%d, route=%s): bind() failed: %s\n",
+		            bind_addr ? bind_addr : "(null)", port,
+		            route_name ? route_name : "(null)", strerror(errno));
 		close(fd);
 		return -1;
 	}
 	if (listen(fd, 128) < 0) {
+		proxy_error("mysqlx: add_listener(%s:%d, route=%s): listen() failed: %s\n",
+		            bind_addr ? bind_addr : "(null)", port,
+		            route_name ? route_name : "(null)", strerror(errno));
 		close(fd);
 		return -1;
 	}
@@ -357,6 +384,9 @@ int Mysqlx_Thread::add_listener(const char* bind_addr, int port, const char* rou
 		listener_ports_.push_back(port);
 		listener_route_names_.push_back(route_name != nullptr ? route_name : "");
 	}
+	proxy_info("mysqlx: add_listener(%s:%d, route=%s): bind+listen OK, fd=%d\n",
+	           bind_addr ? bind_addr : "(null)", port,
+	           route_name ? route_name : "(null)", fd);
 	return 0;
 }
 

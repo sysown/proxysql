@@ -305,20 +305,22 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 				case clickhouse::Type::Code::Date:
 					{
 						std::time_t t=block[i]->As<ColumnDate>()->At(r);
-						struct tm *tm = localtime(&t);
+						struct tm tm;
 						char date[20];
 						memset(date,0,sizeof(date));
-						strftime(date, sizeof(date), "%Y-%m-%d", tm);
+						localtime_r(&t, &tm);
+						strftime(date, sizeof(date), "%Y-%m-%d", &tm);
 						s=date;
 					}
 					break;
 				case clickhouse::Type::Code::DateTime:
 					{
 						std::time_t t=block[i]->As<ColumnDateTime>()->At(r);
-						struct tm *tm = localtime(&t);
+						struct tm tm;
 						char date[20];
 						memset(date,0,sizeof(date));
-						strftime(date, sizeof(date), "%Y-%m-%d %H:%M:%S", tm);
+						localtime_r(&t, &tm);
+						strftime(date, sizeof(date), "%Y-%m-%d %H:%M:%S", &tm);
 						s=date;
 					}
 					break;
@@ -369,20 +371,22 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 								case clickhouse::Type::Code::Date:
 									{
 										std::time_t t=block[i]->As<ColumnDate>()->At(r);
-										struct tm *tm = localtime(&t);
+										struct tm tm;
 										char date[20];
 										memset(date,0,sizeof(date));
-										strftime(date, sizeof(date), "%Y-%m-%d", tm);
+										localtime_r(&t, &tm);
+										strftime(date, sizeof(date), "%Y-%m-%d", &tm);
 										s=date;
 									}
 									break;
 								case clickhouse::Type::Code::DateTime:
 									{
 										std::time_t t=block[i]->As<ColumnDateTime>()->At(r);
-										struct tm *tm = localtime(&t);
+										struct tm tm;
 										char date[20];
 										memset(date,0,sizeof(date));
-										strftime(date, sizeof(date), "%Y-%m-%d %H:%M:%S", tm);
+										localtime_r(&t, &tm);
+										strftime(date, sizeof(date), "%Y-%m-%d %H:%M:%S", &tm);
 										s=date;
 									}
 									break;
@@ -506,6 +510,49 @@ class ifaces_desc {
 
 class sqlite3server_main_loop_listeners {
 	private:
+	struct tokenizer_owner {
+		tokenizer_t value;
+
+		explicit tokenizer_owner(char *list) {
+			tokenizer(&value, list, ";", TOKENIZER_NO_EMPTIES);
+		}
+
+		~tokenizer_owner() {
+			free_tokenizer(&value);
+		}
+
+		tokenizer_owner(const tokenizer_owner&) = delete;
+		tokenizer_owner& operator=(const tokenizer_owner&) = delete;
+		tokenizer_owner(tokenizer_owner&&) = delete;
+		tokenizer_owner& operator=(tokenizer_owner&&) = delete;
+	};
+
+	struct interface_array_owner {
+		char **value;
+
+		explicit interface_array_owner(char **value_) : value(value_) {}
+
+		~interface_array_owner() {
+			if (value) {
+				for (int i = 0; i < MAX_IFACES; ++i) {
+					l_free(0, value[i]);
+				}
+				l_free(0, value);
+			}
+		}
+
+		interface_array_owner(const interface_array_owner&) = delete;
+		interface_array_owner& operator=(const interface_array_owner&) = delete;
+		interface_array_owner(interface_array_owner&&) = delete;
+		interface_array_owner& operator=(interface_array_owner&&) = delete;
+
+		char **release() {
+			char **released = value;
+			value = nullptr;
+			return released;
+		}
+	};
+
 	int version;
 	pthread_rwlock_t rwlock;
 
@@ -566,19 +613,32 @@ class sqlite3server_main_loop_listeners {
 
 	bool update_ifaces(char *list, char ***_ifaces) {
 		wrlock();
-		int i;
-		char **ifaces=*_ifaces;
-		tokenizer_t tok;
-		tokenizer( &tok, list, ";", TOKENIZER_NO_EMPTIES );
-		const char* token;
-		ifaces=reset_ifaces(ifaces);
-		i=0;
-		for ( token = tokenize( &tok ) ; token && i < MAX_IFACES ; token = tokenize( &tok ) ) {
-			ifaces[i]=(char *)malloc(strlen(token)+1);
-			strcpy(ifaces[i],token);
+		char **old_ifaces = *_ifaces;
+		char **new_ifaces = (char **)l_alloc(MAX_IFACES * sizeof(char *));
+		if (new_ifaces != nullptr) {
+			memset(new_ifaces, 0, MAX_IFACES * sizeof(char *));
+		}
+		interface_array_owner replacement(new_ifaces);
+		if (replacement.value == nullptr) {
+			wrunlock();
+			return false;
+		}
+
+		tokenizer_owner tokens(list);
+		int i = 0;
+		for (const char *token = tokenize(&tokens.value);
+			token && i < MAX_IFACES;
+			token = tokenize(&tokens.value)) {
+			replacement.value[i] = strdup(token);
+			if (replacement.value[i] == nullptr) {
+				wrunlock();
+				return false;
+			}
 			i++;
 		}
-		free_tokenizer( &tok );
+
+		interface_array_owner previous(old_ifaces);
+		*_ifaces = replacement.release();
 		version++;
 		wrunlock();
 		return true;
@@ -925,7 +985,7 @@ void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t
 			(pkt->size==(strlen("SELECT CONNECTION_ID()")+5) && strncasecmp((char *)"SELECT CONNECTION_ID()",(char *)pkt->ptr+5,pkt->size-5)==0)
 		) {
 			char buf[16];
-			sprintf(buf,"%u",sess->thread_session_id);
+			snprintf(buf, sizeof(buf), "%u", sess->thread_session_id);
 			//unsigned int nTrx=NumActiveTransactions();
 			unsigned int nTrx= 0;
 			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
@@ -1412,7 +1472,9 @@ static void *child_mysql(void *arg) {
 	fds[0].revents=0;
 	fds[0].events=POLLIN|POLLOUT;
 	free(arg);
-	sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, true);
+	if (sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, true) == false) {
+		goto __exit_child_mysql;
+	}
 
 	while (__sync_fetch_and_add(&glovars.shutdown,0)==0) {
 		if (myds->available_data_out()) {
@@ -1724,7 +1786,7 @@ char * ClickHouse_Server::get_variable(char *name) {
 	if (!strcasecmp(name,"hostname")) return s_strdup(variables.hostname);
 	if (!strcasecmp(name,"mysql_ifaces")) return s_strdup(variables.mysql_ifaces);
 	if (!strcasecmp(name,"port")) {
-		sprintf(intbuf,"%d",variables.port);
+		snprintf(intbuf, sizeof(intbuf), "%d", variables.port);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"read_only")) {

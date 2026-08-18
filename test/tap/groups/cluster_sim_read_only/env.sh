@@ -8,6 +8,7 @@ export CLUSTER_SIM_TESTS_ROOT="${WORKSPACE}/test/deps/cluster_simulator/tests"
 # defaults for username/password are 'root/root' (provisioned by pre-proxysql.sql).
 export READONLY_HOSTNAME=proxysql
 export READONLY_PORT=3306
+export PROXYSQL_READY_PORTS_EXTRA="3306"
 
 # Skip the background cluster nodes so their empty mysql_users do not sync
 # back to the primary and wipe the root user we inject.

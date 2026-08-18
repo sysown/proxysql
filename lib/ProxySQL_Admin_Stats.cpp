@@ -8,6 +8,7 @@
 #include "cpp.h"
 
 #include "MySQL_Authentication.hpp"
+#include "MySQL_Passthrough_Auth_Cache.h"
 #include "PgSQL_Authentication.h"
 #include "MySQL_LDAP_Authentication.hpp"
 #include "MySQL_PreparedStatement.h"
@@ -26,6 +27,11 @@
 // for reference) so no header from those moved sets is needed.
 #include <openssl/x509v3.h>
 
+#if defined(__FreeBSD__)
+#include <sys/types.h>
+#include <sys/sysctl.h>
+#endif
+
 #define SAFE_SQLITE3_STEP(_stmt) do {\
   do {\
     rc=(*proxy_sqlite3_step)(_stmt);\
@@ -39,6 +45,7 @@
 extern bool admin_proxysql_mysql_paused;
 extern bool admin_proxysql_pgsql_paused;
 extern MySQL_Authentication *GloMyAuth;
+extern MySQL_Passthrough_Auth_Cache *GloMyPTAuthCache;
 extern PgSQL_Authentication* GloPgAuth;
 extern MySQL_LDAP_Authentication *GloMyLdapAuth;
 extern MySQL_Query_Cache *GloMyQC;
@@ -84,6 +91,19 @@ void ProxySQL_Admin::p_update_metrics() {
  * @return On success, the number of currently opened file descriptors, '-1' otherwise.
  */
 int32_t get_open_fds() {
+#if defined(__FreeBSD__)
+	// FreeBSD's procfs implementation does not provide /proc/self/fd
+	int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_NFDS, 0 };
+	int nfds = 0;
+	size_t len = sizeof(nfds);
+
+	if (sysctl(mib, 4, &nfds, &len, NULL, 0) == -1) {
+		proxy_error("'sysctl(KERN_PROC_NFDS)' failed with error: '%d'\n", errno);
+		return -1;
+	}
+
+	return static_cast<int32_t>(nfds);
+#else
 	DIR* dir = opendir("/proc/self/fd");
 	if (dir == NULL) {
 		proxy_error("'opendir()' failed with error: '%d'\n", errno);
@@ -91,6 +111,8 @@ int32_t get_open_fds() {
 	}
 
 	struct dirent* dp = nullptr;
+	// Start at '-3' to discount the '.' and '..' entries, plus the fd
+	// opened by 'opendir()' itself.
 	int32_t count = -3;
 
 	while ((dp = readdir(dir)) != NULL) {
@@ -100,6 +122,7 @@ int32_t get_open_fds() {
 	closedir(dir);
 
 	return count;
+#endif
 }
 
 
@@ -1986,6 +2009,73 @@ void ProxySQL_Admin::stats___mysql_client_host_cache(bool reset) {
 
 	statsdb->execute("COMMIT");
 	delete resultset;
+}
+
+void ProxySQL_Admin::stats___mysql_passthrough_auth_cache() {
+	if (!GloMyPTAuthCache) return;
+
+	std::vector<passthrough_entry_view> snap = GloMyPTAuthCache->snapshot();
+
+	statsdb->execute("BEGIN");
+	statsdb->execute("DELETE FROM stats_mysql_passthrough_auth_cache");
+
+	const char *query = (char*)"INSERT INTO stats_mysql_passthrough_auth_cache VALUES (?1, ?2, ?3, ?4)";
+	auto [rc1, statement_unique] = statsdb->prepare_v2(query);
+	int rc = rc1;
+	sqlite3_stmt *statement = statement_unique.get();
+	ASSERT_SQLITE_OK(rc, statsdb);
+
+	const uint64_t now_us = monotonic_time();
+	for (const auto &e : snap) {
+		const uint64_t age_us = (now_us > e.learned_at_us) ? (now_us - e.learned_at_us) : 0;
+		const int64_t age_s = static_cast<int64_t>(age_us / 1000000ULL);
+
+		rc=(*proxy_sqlite3_bind_text)(statement, 1, e.username.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 2, static_cast<int64_t>(e.learned_at_us)); ASSERT_SQLITE_OK(rc, statsdb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 3, age_s); ASSERT_SQLITE_OK(rc, statsdb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 4, e.hostgroup_probed); ASSERT_SQLITE_OK(rc, statsdb);
+
+		SAFE_SQLITE3_STEP2(statement);
+		rc=(*proxy_sqlite3_clear_bindings)(statement);
+		rc=(*proxy_sqlite3_reset)(statement);
+	}
+
+	statsdb->execute("COMMIT");
+}
+
+/**
+ * @brief Populate stats_mysql_passthrough_auth_metrics from
+ *        @c GloMyPTAuthCache->metrics_snapshot().
+ *
+ * The snapshot returns a vector of (name, value) pairs in stable order
+ * (counters first, gauges last). Each pair becomes one row. The
+ * counters are monotonic-since-startup; gauges (inflight_probes,
+ * cache_entries) reflect the current state at query time.
+ */
+void ProxySQL_Admin::stats___mysql_passthrough_auth_metrics() {
+	if (!GloMyPTAuthCache) return;
+
+	const auto snap = GloMyPTAuthCache->metrics_snapshot();
+
+	statsdb->execute("BEGIN");
+	statsdb->execute("DELETE FROM stats_mysql_passthrough_auth_metrics");
+
+	const char *query = (char*)"INSERT INTO stats_mysql_passthrough_auth_metrics VALUES (?1, ?2)";
+	auto [rc1, statement_unique] = statsdb->prepare_v2(query);
+	int rc = rc1;
+	sqlite3_stmt *statement = statement_unique.get();
+	ASSERT_SQLITE_OK(rc, statsdb);
+
+	for (const auto &m : snap) {
+		rc=(*proxy_sqlite3_bind_text)(statement, 1, m.name.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 2, static_cast<int64_t>(m.value)); ASSERT_SQLITE_OK(rc, statsdb);
+
+		SAFE_SQLITE3_STEP2(statement);
+		rc=(*proxy_sqlite3_clear_bindings)(statement);
+		rc=(*proxy_sqlite3_reset)(statement);
+	}
+
+	statsdb->execute("COMMIT");
 }
 
 void ProxySQL_Admin::stats___pgsql_client_host_cache(bool reset) {

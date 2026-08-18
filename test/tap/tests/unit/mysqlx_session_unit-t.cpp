@@ -232,6 +232,10 @@ static void test_con_close_during_connecting() {
 	sess.handler();
 
 	ok(!sess.is_healthy(), "unhealthy after CON_CLOSE during CONNECTING_CLIENT");
+	uint8_t buf[64];
+	ssize_t r = read_x_frame(fds[1], buf, sizeof(buf));
+	ok(r > 0 && buf[4] == Mysqlx::ServerMessages_Type_OK,
+	   "CON_CLOSE during CONNECTING_CLIENT receives OK before close");
 
 	close(fds[0]);
 	close(fds[1]);
@@ -710,6 +714,10 @@ static void test_sess_close_in_main_loop() {
 
 	ok(sess.get_status() == MysqlxSession::X_SESSION_CLOSED, "session closed after SESS_CLOSE");
 	ok(!sess.is_healthy(), "unhealthy after session close");
+	uint8_t buf[64];
+	ssize_t r = read_x_frame(fds[1], buf, sizeof(buf));
+	ok(r > 0 && buf[4] == Mysqlx::ServerMessages_Type_OK,
+	   "SESS_CLOSE receives OK before close");
 
 	close(fds[0]);
 	close(fds[1]);
@@ -731,6 +739,10 @@ static void test_con_close_in_main_loop() {
 
 	ok(sess.get_status() == MysqlxSession::X_SESSION_CLOSED, "session closed after CON_CLOSE in main loop");
 	ok(!sess.is_healthy(), "unhealthy after con close");
+	uint8_t buf[64];
+	ssize_t r = read_x_frame(fds[1], buf, sizeof(buf));
+	ok(r > 0 && buf[4] == Mysqlx::ServerMessages_Type_OK,
+	   "CON_CLOSE receives OK before close");
 
 	close(fds[0]);
 	close(fds[1]);
@@ -1536,7 +1548,7 @@ int main() {
 	// contributes 6 ok()s) + 11 (Fix C per-route tls_mode tests:
 	// disabled_advertise=2; tls_refused_on_disabled=2;
 	// passthrough_full_entry_path=7)
-	plan(109);
+	plan(112);
 	diag("=== mysqlx_session_unit-t starting ===");
 
 	test_session_init();

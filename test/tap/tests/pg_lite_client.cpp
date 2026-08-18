@@ -301,6 +301,17 @@ void PgConnection::sendStartupPacket() {
     writeBytes(fullPacket.data(), fullPacket.size());
 }
 
+// Reads the 4-byte authentication sub-type from an 'R' message payload.
+// Every read of this field must go through here: readMessage() refills the
+// buffer on each call, so the length has to be re-validated every time, and
+// memcpy avoids the unaligned/strict-aliasing read that a cast would do.
+static int32_t readAuthType(const std::vector<uint8_t>& buffer) {
+    if (buffer.size() < 4) throw PgException("Invalid authentication message");
+    int32_t netAuthType;
+    memcpy(&netAuthType, buffer.data(), 4);
+    return ntohl(netAuthType);
+}
+
 void PgConnection::handleAuthentication(const std::string& password) {
     char type;
     std::vector<uint8_t> buffer;
@@ -309,8 +320,7 @@ void PgConnection::handleAuthentication(const std::string& password) {
         readMessage(type, buffer);
 
         if (type == AUTH_TYPE) {
-            if (buffer.size() < 4) throw PgException("Invalid authentication message");
-            int32_t authType = ntohl(*reinterpret_cast<int32_t*>(buffer.data()));
+            int32_t authType = readAuthType(buffer);
             if (last_auth_type_ == 0 && authType != 0) last_auth_type_ = authType;
             if (authType == 0) {  // AuthenticationOK
                 return;
@@ -322,7 +332,7 @@ void PgConnection::handleAuthentication(const std::string& password) {
                 if (type == ERROR_RESPONSE)
                     throw PgException("Authentication error: " + extractErrorMessage(buffer));
                 if (type == AUTH_TYPE) {
-                    authType = ntohl(*reinterpret_cast<int32_t*>(buffer.data()));
+                    authType = readAuthType(buffer);
                     if (authType == 0) return;
                 }
             }
@@ -335,7 +345,7 @@ void PgConnection::handleAuthentication(const std::string& password) {
                 if (type == ERROR_RESPONSE)
                     throw PgException("Authentication error: " + extractErrorMessage(buffer));
                 if (type == AUTH_TYPE) {
-                    authType = ntohl(*reinterpret_cast<int32_t*>(buffer.data()));
+                    authType = readAuthType(buffer);
                     if (authType == 0) return;
                 }
             }
@@ -348,17 +358,14 @@ void PgConnection::handleAuthentication(const std::string& password) {
             }
         }
         else if (type == ERROR_RESPONSE) {
-            // Extract error message (field type 'M' is the message)
-            const char* ptr = reinterpret_cast<const char*>(buffer.data());
-            while (*ptr) ptr++;  // Skip severity
-            ptr++;
-            if (*ptr) {
-                std::string errorMsg(ptr);
+            // extractErrorMessage() walks the field list within the buffer bounds;
+            // the previous hand-rolled scan here ran off the end of a truncated or
+            // unterminated ErrorResponse.
+            const std::string errorMsg = extractErrorMessage(buffer);
+            if (!errorMsg.empty()) {
                 throw PgException("Authentication error: " + errorMsg);
             }
-            else {
-                throw PgException("Authentication error");
-            }
+            throw PgException("Authentication error");
         }
     }
 }
@@ -370,9 +377,14 @@ void PgConnection::sendPassword(const std::string& password) {
     sendMessage('p', packet);
 }
 
+// MD5 is not a security choice here: PostgreSQL's AuthenticationMD5Password
+// (authType 5) defines the response as an MD5 construction on the wire, so a
+// client that must exercise that auth path has to compute exactly this digest
+// and nothing else. Test-only client code; ProxySQL's own MD5 auth support is
+// what pgsql-auth_method_matrix-t exists to verify.
 static std::string md5_hex(const std::string& in) {
     unsigned char digest[MD5_DIGEST_LENGTH];
-    MD5(reinterpret_cast<const unsigned char*>(in.data()), in.size(), digest);
+    MD5(reinterpret_cast<const unsigned char*>(in.data()), in.size(), digest); // NOSONAR cpp:S4790 — PG MD5 auth is defined in terms of MD5
     static const char* hx = "0123456789abcdef";
     std::string out;
     out.reserve(MD5_DIGEST_LENGTH * 2);
@@ -451,8 +463,7 @@ void PgConnection::doSASLAuth(const std::string& password,
         free(client_first); free_scram_state(st);
         throw PgException("scram: " + extractErrorMessage(buffer));
     }
-    if (type != AUTH_TYPE || buffer.size() < 4 ||
-        ntohl(*reinterpret_cast<int32_t*>(buffer.data())) != 11) {
+    if (type != AUTH_TYPE || buffer.size() < 4 || readAuthType(buffer) != 11) {
         free(client_first); free_scram_state(st);
         throw PgException("expected AuthenticationSASLContinue(11)");
     }
@@ -481,8 +492,7 @@ void PgConnection::doSASLAuth(const std::string& password,
         free(client_first); free(client_final); free_scram_state(st);
         throw PgException("scram: " + extractErrorMessage(buffer));
     }
-    if (type != AUTH_TYPE || buffer.size() < 4 ||
-        ntohl(*reinterpret_cast<int32_t*>(buffer.data())) != 12) {
+    if (type != AUTH_TYPE || buffer.size() < 4 || readAuthType(buffer) != 12) {
         free(client_first); free(client_final); free_scram_state(st);
         throw PgException("expected AuthenticationSASLFinal(12)");
     }
@@ -500,8 +510,7 @@ void PgConnection::doSASLAuth(const std::string& password,
     // 5) Expect AuthenticationOk (0).
     readMessage(type, buffer);
     if (type == ERROR_RESPONSE) throw PgException("scram: " + extractErrorMessage(buffer));
-    if (type == AUTH_TYPE && buffer.size() >= 4 &&
-        ntohl(*reinterpret_cast<int32_t*>(buffer.data())) == 0) return;
+    if (type == AUTH_TYPE && buffer.size() >= 4 && readAuthType(buffer) == 0) return;
     throw PgException("scram: no AuthenticationOk after SASLFinal");
 }
 
@@ -564,7 +573,7 @@ std::string PgConnection::saslBegin(const std::string& user, const std::string& 
         throw PgException("saslBegin: " + extractErrorMessage(buffer));
     if (type != AUTH_TYPE || buffer.size() < 4)
         throw PgException("saslBegin: expected AuthenticationSASL, got message type '" + std::string(1, type) + "'");
-    int32_t authType = ntohl(*reinterpret_cast<int32_t*>(buffer.data()));
+    int32_t authType = readAuthType(buffer);
     if (authType != 10)
         throw PgException("saslBegin: expected AuthenticationSASL(10), got authType " + std::to_string(authType));
     last_auth_type_ = 10;
@@ -595,8 +604,7 @@ std::string PgConnection::saslBegin(const std::string& user, const std::string& 
         std::string e = extractErrorMessage(buffer); freeSaslState();
         throw PgException("scram: " + e);
     }
-    if (type != AUTH_TYPE || buffer.size() < 4 ||
-        ntohl(*reinterpret_cast<int32_t*>(buffer.data())) != 11) {
+    if (type != AUTH_TYPE || buffer.size() < 4 || readAuthType(buffer) != 11) {
         freeSaslState();
         throw PgException("expected AuthenticationSASLContinue(11)");
     }
@@ -644,8 +652,7 @@ int PgConnection::saslFinish() {
         free(client_final); freeSaslState();
         return SASL_FINISH_REJECTED;
     }
-    if (type != AUTH_TYPE || buffer.size() < 4 ||
-        ntohl(*reinterpret_cast<int32_t*>(buffer.data())) != 12) {
+    if (type != AUTH_TYPE || buffer.size() < 4 || readAuthType(buffer) != 12) {
         free(client_final); freeSaslState();
         throw PgException("expected AuthenticationSASLFinal(12)");
     }
@@ -668,8 +675,7 @@ int PgConnection::saslFinish() {
         freeSaslState();
         return SASL_FINISH_REJECTED;
     }
-    if (type == AUTH_TYPE && buffer.size() >= 4 &&
-        ntohl(*reinterpret_cast<int32_t*>(buffer.data())) == 0) {
+    if (type == AUTH_TYPE && buffer.size() >= 4 && readAuthType(buffer) == 0) {
         last_auth_type_ = 0;
         freeSaslState();
         return 0;

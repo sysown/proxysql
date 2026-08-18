@@ -129,8 +129,9 @@ PgSQL_Errors_stats::PgSQL_Errors_stats(int _hostgroup, const char* _hostname, in
 		dbname = strdup((char*)"");
 	}
 	if (_sqlstate) {
-		strncpy(sqlstate, _sqlstate, 5);
-		sqlstate[5] = '\0';
+		size_t sqlstate_len = strnlen(_sqlstate, 5);
+		memcpy(sqlstate, _sqlstate, sqlstate_len);
+		sqlstate[sqlstate_len] = '\0';
 	} else {
 		sqlstate[0] = '\0';
 	}
@@ -170,11 +171,11 @@ PgSQL_Errors_stats::~PgSQL_Errors_stats() {
 char** PgSQL_Errors_stats::get_row() {
 	char buf[128];
 	char** pta = (char**)malloc(sizeof(char*) * PgSQL_ERRORS_STATS_FIELD_NUM);
-	sprintf(buf, "%d", hostgroup);
+	snprintf(buf, sizeof(buf), "%d", hostgroup);
 	pta[0] = strdup(buf);
 	assert(hostname);
 	pta[1] = strdup(hostname);
-	sprintf(buf, "%d", port);
+	snprintf(buf, sizeof(buf), "%d", port);
 	pta[2] = strdup(buf);
 	assert(username);
 	pta[3] = strdup(username);
@@ -183,11 +184,11 @@ char** PgSQL_Errors_stats::get_row() {
 	assert(dbname);
 	pta[5] = strdup(dbname);
 	pta[6] = strdup(sqlstate);
-	sprintf(buf, "%llu", count_star);
+	snprintf(buf, sizeof(buf), "%llu", count_star);
 	pta[7] = strdup(buf);
-	sprintf(buf, "%ld", first_seen);
+	snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(first_seen));
 	pta[8] = strdup(buf);
-	sprintf(buf, "%ld", last_seen);
+	snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(last_seen));
 	pta[9] = strdup(buf);
 	assert(errmsg);
 	pta[10] = strdup(errmsg);
@@ -2480,11 +2481,11 @@ void PgSQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address
 	if (GloPTH->variables.hostgroup_manager_verbose >= 3) {
 		char buf[64];
 		if (skip_hid == NULL) {
-			sprintf(buf,"NULL");
+			snprintf(buf, sizeof(buf), "NULL");
 		} else {
-			sprintf(buf,"%u", *skip_hid);
+			snprintf(buf, sizeof(buf), "%u", *skip_hid);
 		}
-		proxy_info("Calling unshun_server_all_hostgroups() for server %s:%d . Arguments: %lu , %d , %s\n" , address, port, t, max_wait_sec, buf);
+		proxy_info("Calling unshun_server_all_hostgroups() for server %s:%d . Arguments: %lld , %d , %s\n" , address, port, static_cast<long long>(t), max_wait_sec, buf);
 	}
 	int i, j;
 	for (i=0; i<(int)MyHostGroups->len; i++) {
@@ -3016,12 +3017,12 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Free_Connections() {
 			for (l=0; l < (int) mysrvc->ConnectionsFree->conns_length(); l++) {
 				char **pta=(char **)malloc(sizeof(char *)*colnum);
 				PgSQL_Connection *conn = mysrvc->ConnectionsFree->index(l);
-				sprintf(buf,"%d", conn->fd);
+				snprintf(buf, sizeof(buf), "%d", conn->fd);
 				pta[0]=strdup(buf);
-				sprintf(buf,"%d", (int)myhgc->hid);
+				snprintf(buf, sizeof(buf), "%d", (int)myhgc->hid);
 				pta[1]=strdup(buf);
 				pta[2]=strdup(mysrvc->address);
-				sprintf(buf,"%d", mysrvc->port);
+				snprintf(buf, sizeof(buf), "%d", mysrvc->port);
 				pta[3]=strdup(buf);
 				pta[4] = strdup(conn->userinfo->username);
 				pta[5] = strdup(conn->userinfo->dbname);
@@ -3039,12 +3040,12 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Free_Connections() {
 				}*/
 				//sprintf(buf,"%d", conn->options.autocommit);
 				//pta[9]=strdup(buf);
-				sprintf(buf,"%llu", (curtime-conn->last_time_used)/1000);
+				snprintf(buf, sizeof(buf), "%llu", (curtime-conn->last_time_used)/1000);
 				pta[9]=strdup(buf);
 				{
 					json j;
 					char buff[32];
-					sprintf(buff,"%p",conn);
+					snprintf(buff, sizeof(buff), "%p", static_cast<void*>(conn));
 					j["address"] = buff;
 					uint64_t age_ms = (curtime - conn->creation_time)/1000;
 					j["age_ms"] = age_ms;
@@ -3059,7 +3060,7 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Free_Connections() {
 				{
 					json j;
 					char buff[32];
-					sprintf(buff, "%p", conn->get_pg_connection());
+					snprintf(buff, sizeof(buff), "%p", static_cast<const void*>(conn->get_pg_connection()));
 					j["address"] = buff;
 					j["host"] = conn->get_pg_host();
 					j["host_addr"] = conn->get_pg_hostaddr();
@@ -3271,10 +3272,10 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int
 			}
 			char buf[1024];
 			char **pta=(char **)malloc(sizeof(char *)*colnum);
-			sprintf(buf,"%d", (int)myhgc->hid);
+			snprintf(buf, sizeof(buf), "%d", (int)myhgc->hid);
 			pta[0]=strdup(buf);
 			pta[1]=strdup(mysrvc->address);
-			sprintf(buf,"%d", mysrvc->port);
+			snprintf(buf, sizeof(buf), "%d", mysrvc->port);
 			pta[2]=strdup(buf);
 			switch (mysrvc->status) {
 				case 0:
@@ -3298,41 +3299,41 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int
 					break;
 					// LCOV_EXCL_STOP
 			}
-			sprintf(buf,"%u", mysrvc->ConnectionsUsed->conns_length());
+			snprintf(buf, sizeof(buf), "%u", mysrvc->ConnectionsUsed->conns_length());
 			pta[4]=strdup(buf);
-			sprintf(buf,"%u", mysrvc->ConnectionsFree->conns_length());
+			snprintf(buf, sizeof(buf), "%u", mysrvc->ConnectionsFree->conns_length());
 			pta[5]=strdup(buf);
-			sprintf(buf,"%u", mysrvc->connect_OK);
+			snprintf(buf, sizeof(buf), "%u", mysrvc->connect_OK);
 			pta[6]=strdup(buf);
 			if (_reset) {
 				mysrvc->connect_OK=0;
 			}
-			sprintf(buf,"%u", mysrvc->connect_ERR);
+			snprintf(buf, sizeof(buf), "%u", mysrvc->connect_ERR);
 			pta[7]=strdup(buf);
 			if (_reset) {
 				mysrvc->connect_ERR=0;
 			}
-			sprintf(buf,"%u", mysrvc->max_connections_used);
+			snprintf(buf, sizeof(buf), "%u", mysrvc->max_connections_used);
 			pta[8]=strdup(buf);
 			if (_reset) {
 				mysrvc->max_connections_used=0;
 			}
-			sprintf(buf,"%llu", mysrvc->queries_sent);
+			snprintf(buf, sizeof(buf), "%llu", mysrvc->queries_sent);
 			pta[9]=strdup(buf);
 			if (_reset) {
 				mysrvc->queries_sent=0;
 			}
-			sprintf(buf,"%llu", mysrvc->bytes_sent);
+			snprintf(buf, sizeof(buf), "%llu", mysrvc->bytes_sent);
 			pta[10]=strdup(buf);
 			if (_reset) {
 				mysrvc->bytes_sent=0;
 			}
-			sprintf(buf,"%llu", mysrvc->bytes_recv);
+			snprintf(buf, sizeof(buf), "%llu", mysrvc->bytes_recv);
 			pta[11]=strdup(buf);
 			if (_reset) {
 				mysrvc->bytes_recv=0;
 			}
-			sprintf(buf,"%u", mysrvc->current_latency_us);
+			snprintf(buf, sizeof(buf), "%u", mysrvc->current_latency_us);
 			pta[12]=strdup(buf);
 			result->add_row(pta);
 			for (k=0; k<colnum; k++) {
@@ -3785,6 +3786,9 @@ std::unique_ptr<SQLite3_result> PgSQL_HostGroups_Manager::get_pgsql_errors(bool 
  * @details Input verification is performed in the supplied 'hostgroup_settings'. It's expected to be a valid
  *  JSON that may contain the following fields:
  *   - handle_warnings: Value must be >= 0.
+ *   - default_query_timeout: Value must be in [1000, 20*24*3600*1000]; takes precedence over
+ *     'pgsql-default_query_timeout' for queries that resolve to this hostgroup. Range mirrors
+ *     the global 'pgsql-default_query_timeout' bounds.
  *
  *  In case input verification fails for a field, supplied 'PgSQL_HGC' is NOT updated for that field. An error
  *  message is logged specifying the source of the error.
@@ -3802,6 +3806,11 @@ void init_myhgc_hostgroup_settings(const char* hostgroup_settings, PgSQL_HGC* my
 			const auto handle_warnings_check = [](int8_t handle_warnings) -> bool { return handle_warnings == 0 || handle_warnings == 1; };
 			int8_t handle_warnings = PgSQL_j_get_srv_default_int_val<int8_t>(j, hid, "handle_warnings", handle_warnings_check);
 			myhgc->attributes.handle_warnings = handle_warnings;
+
+			const auto default_query_timeout_check = [](int32_t default_query_timeout) -> bool
+				{ return (default_query_timeout >= 1000 && default_query_timeout <= 20*24*3600*1000); };
+			const int32_t default_query_timeout = PgSQL_j_get_srv_default_int_val<int32_t>(j, hid, "default_query_timeout", default_query_timeout_check);
+			myhgc->attributes.default_query_timeout = default_query_timeout;
 		}
 		catch (const json::exception& e) {
 			proxy_error(

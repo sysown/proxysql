@@ -61,6 +61,7 @@ using json = nlohmann::json;
 #include "MySQL_Authentication.hpp"
 #include "PgSQL_Authentication.h"
 #include "MySQL_LDAP_Authentication.hpp"
+#include "MySQL_Passthrough_Auth_Cache.h"
 #include "MySQL_Query_Cache.h"
 #include "PgSQL_Query_Cache.h"
 #include "proxysql_restapi.h"
@@ -82,6 +83,7 @@ PgSQL_Query_Cache *GloPgQC = nullptr;
 MySQL_Authentication *GloMyAuth = nullptr;
 PgSQL_Authentication *GloPgAuth = nullptr;
 MySQL_LDAP_Authentication *GloMyLdapAuth = nullptr;
+MySQL_Passthrough_Auth_Cache *GloMyPTAuthCache = nullptr;
 
 #ifdef PROXYSQLCLICKHOUSE
 ClickHouse_Authentication *GloClickHouseAuth = nullptr;

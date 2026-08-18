@@ -516,6 +516,9 @@ bool mywildcmp(const char *p, const char *str);
 std::string trim(const std::string& s);
 char* escape_string_single_quotes_and_backslashes(char* input, bool free_it);
 const char* escape_string_backslash_spaces(const char* input);
+time_t monotonic_time_to_realtime(time_t mt);
+time_t realtime_to_monotonic_time(time_t rt);
+
 std::string strip_schema_from_query(const char* query, const char* schema,
                                     const std::vector<std::string>& tables = {}, bool ansi_quotes = false);
 /**

@@ -8,8 +8,14 @@ get_file_size (const char *filename) {
 	fp = fopen (filename, "rb");
 	if (fp) {
 		long size;
-		if ((0 != fseek (fp, 0, SEEK_END)) || (-1 == (size = ftell (fp))))
+		if (fseek (fp, 0, SEEK_END) != 0) {
 			size = 0;
+		} else {
+			size = ftell (fp);
+			if (size == -1) {
+				size = 0;
+			}
+		}
 		fclose (fp);
 		return size;
 	} else
@@ -38,6 +44,11 @@ static char * load_file (const char *filename) {
 	}
 	fclose (fp);
 	return buffer;
+}
+
+static char *make_ssl_path(const char *datadir, const char *filename) {
+	const std::string path = std::string(datadir) + "/" + filename;
+	return l_strdup(path.c_str());
 }
 
 // absolute path of ssl files
@@ -233,24 +244,39 @@ int ssl_mkit(X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days, boo
 
 	// check if files exists
 	if (bootstrap == true) {
-		ssl_key_fp = (char *)malloc(strlen(GloVars.datadir)+strlen(ssl_key_rp)+8);
-		sprintf(ssl_key_fp,"%s/%s",GloVars.datadir,ssl_key_rp);
+		ssl_key_fp = make_ssl_path(GloVars.datadir, ssl_key_rp);
+		if (ssl_key_fp == NULL) {
+			msg = "Unable to allocate memory for the TLS key path";
+			return 1;
+		}
 	}
 	if (access(ssl_key_fp, R_OK)) {
 		ssl_key_exists = false;
 	}
 
 	if (bootstrap == true) {
-		ssl_cert_fp = (char *)malloc(strlen(GloVars.datadir)+strlen(ssl_cert_rp)+8);
-		sprintf(ssl_cert_fp,"%s/%s",GloVars.datadir,ssl_cert_rp);
+		ssl_cert_fp = make_ssl_path(GloVars.datadir, ssl_cert_rp);
+		if (ssl_cert_fp == NULL) {
+			l_free(0, ssl_key_fp);
+			ssl_key_fp = NULL;
+			msg = "Unable to allocate memory for the TLS certificate path";
+			return 1;
+		}
 	}
 	if (access(ssl_cert_fp, R_OK)) {
 		ssl_cert_exists = false;
 	}
 
 	if (bootstrap == true) {
-		ssl_ca_fp = (char *)malloc(strlen(GloVars.datadir)+strlen(ssl_ca_rp)+8);
-		sprintf(ssl_ca_fp,"%s/%s",GloVars.datadir,ssl_ca_rp);
+		ssl_ca_fp = make_ssl_path(GloVars.datadir, ssl_ca_rp);
+		if (ssl_ca_fp == NULL) {
+			l_free(0, ssl_key_fp);
+			l_free(0, ssl_cert_fp);
+			ssl_key_fp = NULL;
+			ssl_cert_fp = NULL;
+			msg = "Unable to allocate memory for the TLS CA path";
+			return 1;
+		}
 	}
 	if (access(ssl_ca_fp, R_OK)) {
 		ssl_ca_exists = false;

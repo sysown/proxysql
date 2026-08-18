@@ -123,9 +123,6 @@ struct MHD_Daemon *Admin_HTTP_Server;
 
 extern ProxySQL_Statistics *GloProxyStats;
 
-template<enum SERVER_TYPE>
-int ProxySQL_Test___PurgeDigestTable(bool async_purge, bool parallel, char **msg);
-
 extern char *ssl_key_fp;
 extern char *ssl_cert_fp;
 extern char *ssl_ca_fp;
@@ -147,6 +144,7 @@ static const vector<string> mysql_servers_tablenames = {
 	"mysql_group_replication_hostgroups",
 	"mysql_galera_hostgroups",
 	"mysql_aws_aurora_hostgroups",
+	"mysql_aws_rds_bgd_hostgroups",
 	"mysql_hostgroup_attributes",
 	"mysql_servers_ssl_params",
 };
@@ -313,6 +311,32 @@ char *s_strdup(char *s) {
 int admin_load_main_=0;
 bool admin_nostart_=false;
 static volatile int admin_client_threads_active = 0;
+
+class Admin_Client_Thread_Guard {
+public:
+	explicit Admin_Client_Thread_Guard(size_t stack_size) : stack_size_(stack_size) {
+		__sync_fetch_and_add(&admin_client_threads_active, 1);
+		__sync_fetch_and_add(&GloVars.statuses.stack_memory_admin_threads, stack_size_);
+	}
+
+	~Admin_Client_Thread_Guard() {
+		__sync_fetch_and_sub(&GloVars.statuses.stack_memory_admin_threads, stack_size_);
+		__sync_fetch_and_sub(&admin_client_threads_active, 1);
+	}
+
+	Admin_Client_Thread_Guard(const Admin_Client_Thread_Guard&) = delete;
+	Admin_Client_Thread_Guard& operator=(const Admin_Client_Thread_Guard&) = delete;
+
+private:
+	size_t stack_size_;
+};
+
+static void close_pending_admin_client(arg_proxysql_adm* client_arg) {
+	::shutdown(client_arg->client_t, SHUT_RDWR);
+	close(client_arg->client_t);
+	free(client_arg->addr);
+	free(client_arg);
+}
 
 int __admin_refresh_interval=0;
 
@@ -878,6 +902,7 @@ incoming_servers_t::incoming_servers_t(
 	SQLite3_result* incoming_aurora_hostgroups,
 	SQLite3_result* incoming_hostgroup_attributes,
 	SQLite3_result* incoming_mysql_servers_ssl_params,
+	SQLite3_result* incoming_aws_rds_bgd_hostgroups,
 	SQLite3_result* runtime_mysql_servers
 ) :
 	incoming_mysql_servers_v2(incoming_mysql_servers_v2),
@@ -887,6 +912,7 @@ incoming_servers_t::incoming_servers_t(
 	incoming_aurora_hostgroups(incoming_aurora_hostgroups),
 	incoming_hostgroup_attributes(incoming_hostgroup_attributes),
 	incoming_mysql_servers_ssl_params(incoming_mysql_servers_ssl_params),
+	incoming_aws_rds_bgd_hostgroups(incoming_aws_rds_bgd_hostgroups),
 	runtime_mysql_servers(runtime_mysql_servers)
 {}
 
@@ -1286,6 +1312,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_mysql_gtid_executed=false;
 	bool stats_mysql_client_host_cache=false;
 	bool stats_mysql_client_host_cache_reset=false;
+	bool stats_mysql_passthrough_auth_cache=false;
+	bool stats_mysql_passthrough_auth_metrics=false;
 	bool stats_pgsql_client_host_cache = false;
 	bool stats_pgsql_client_host_cache_reset = false;
 	bool stats_tls_certificates=false;
@@ -1466,6 +1494,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_mysql_client_host_cache=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_client_host_cache_reset"))
 		{ stats_mysql_client_host_cache_reset=true; refresh=true; }
+	if (strstr(query_no_space,"stats_mysql_passthrough_auth_cache"))
+		{ stats_mysql_passthrough_auth_cache=true; refresh=true; }
+	if (strstr(query_no_space,"stats_mysql_passthrough_auth_metrics"))
+		{ stats_mysql_passthrough_auth_metrics=true; refresh=true; }
 	if (strstr(query_no_space, "stats_pgsql_client_host_cache"))
 		{ stats_pgsql_client_host_cache = true; refresh = true; }
 	if (strstr(query_no_space, "stats_pgsql_client_host_cache_reset"))
@@ -1508,6 +1540,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				strstr(query_no_space,"runtime_mysql_galera_hostgroups")
 				||
 				strstr(query_no_space,"runtime_mysql_aws_aurora_hostgroups")
+				||
+				strstr(query_no_space,"runtime_mysql_aws_rds_bgd_hostgroups")
 				||
 				strstr(query_no_space,"runtime_mysql_hostgroup_attributes")
 				||
@@ -1730,6 +1764,12 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		}
 		if (stats_mysql_client_host_cache_reset) {
 			stats___mysql_client_host_cache(true);
+		}
+		if (stats_mysql_passthrough_auth_cache) {
+			stats___mysql_passthrough_auth_cache();
+		}
+		if (stats_mysql_passthrough_auth_metrics) {
+			stats___mysql_passthrough_auth_metrics();
 		}
 		if (stats_pgsql_client_host_cache) {
 			stats___pgsql_client_host_cache(false);
@@ -2142,22 +2182,31 @@ void ProxySQL_Admin::vacuum_stats(bool is_admin) {
 
 
 void *child_mysql(void *arg) {
-	if (GloMTH == nullptr) { return NULL; }
-
 	pthread_attr_t thread_attr;
 	size_t tmp_stack_size=0;
 	if (!pthread_attr_init(&thread_attr)) {
-		if (!pthread_attr_getstacksize(&thread_attr , &tmp_stack_size )) {
-			__sync_fetch_and_add(&GloVars.statuses.stack_memory_admin_threads,tmp_stack_size);
-		}
+		pthread_attr_getstacksize(&thread_attr, &tmp_stack_size);
+		pthread_attr_destroy(&thread_attr);
 	}
-	__sync_fetch_and_add(&admin_client_threads_active, 1);
+	Admin_Client_Thread_Guard thread_guard(tmp_stack_size);
 
 	arg_proxysql_adm*myarg = (arg_proxysql_adm*)arg;
 	int client = myarg->client_t;
 
 	//struct sockaddr *addr = arg->addr;
 	//socklen_t addr_size;
+
+	struct pollfd fds[1];
+	nfds_t nfds=1;
+	int rc;
+	// The acceptor holds this mutex until the child has taken ownership of
+	// its argument. Every exit below must happen after releasing it.
+	pthread_mutex_unlock(&sock_mutex);
+
+	if (__sync_fetch_and_add(&glovars.shutdown, 0) != 0 || !wait_for_glo_mth() || !GloMTH) {
+		close_pending_admin_client(myarg);
+		return NULL;
+	}
 
 	GloMTH->wrlock();
 	{
@@ -2167,13 +2216,6 @@ void *child_mysql(void *arg) {
 	}
 	GloMTH->wrunlock();
 
-	struct pollfd fds[1];
-	nfds_t nfds=1;
-	int rc;
-	pthread_mutex_unlock(&sock_mutex);
-	// Wait for GloMTH to be initialized
-	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
-	if (!GloMTH) return NULL;
 	MySQL_Thread *mysql_thr=new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
 	GloMyQPro->init_thread();
@@ -2218,7 +2260,9 @@ void *child_mysql(void *arg) {
 	if (__sync_fetch_and_add(&glovars.shutdown,0) != 0) {
 		goto __exit_child_mysql;
 	}
-	sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, false);
+	if (sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, false) == false) {
+		goto __exit_child_mysql;
+	}
 
 	while (__sync_fetch_and_add(&glovars.shutdown,0)==0) {
 		if (myds->available_data_out()) {
@@ -2263,23 +2307,17 @@ void *child_mysql(void *arg) {
 __exit_child_mysql:
 	delete mysql_thr;
 
-	__sync_fetch_and_sub(&admin_client_threads_active, 1);
-	__sync_fetch_and_sub(&GloVars.statuses.stack_memory_admin_threads,tmp_stack_size);
-
 	return NULL;
 }
 
 void* child_postgres(void* arg) {
-	if (GloPTH == nullptr) { return NULL; }
-
 	pthread_attr_t thread_attr;
 	size_t tmp_stack_size = 0;
 	if (!pthread_attr_init(&thread_attr)) {
-		if (!pthread_attr_getstacksize(&thread_attr, &tmp_stack_size)) {
-			__sync_fetch_and_add(&GloVars.statuses.stack_memory_admin_threads, tmp_stack_size);
-		}
+		pthread_attr_getstacksize(&thread_attr, &tmp_stack_size);
+		pthread_attr_destroy(&thread_attr);
 	}
-	__sync_fetch_and_add(&admin_client_threads_active, 1);
+	Admin_Client_Thread_Guard thread_guard(tmp_stack_size);
 
 	arg_proxysql_adm* myarg = (arg_proxysql_adm*)arg;
 	int client = myarg->client_t;
@@ -2288,6 +2326,10 @@ void* child_postgres(void* arg) {
 	nfds_t nfds = 1;
 	int rc;
 	pthread_mutex_unlock(&sock_mutex);
+	if (__sync_fetch_and_add(&glovars.shutdown, 0) != 0 || GloPTH == nullptr) {
+		close_pending_admin_client(myarg);
+		return NULL;
+	}
 	PgSQL_Thread* pgsql_thr = new PgSQL_Thread();
 	pgsql_thr->curtime = monotonic_time();
 	GloPgQPro->init_thread();
@@ -2384,9 +2426,6 @@ void* child_postgres(void* arg) {
 	
 __exit_child_postgres:
 	delete pgsql_thr;
-
-	__sync_fetch_and_sub(&admin_client_threads_active, 1);
-	__sync_fetch_and_sub(&GloVars.statuses.stack_memory_admin_threads, tmp_stack_size);
 
 	return NULL;
 }
@@ -2802,6 +2841,7 @@ void update_modules_metrics() {
 ProxySQL_Admin::ProxySQL_Admin() :
 	serial_exposer(std::function<void()> { update_modules_metrics })
 {
+	admin_threads_shutdown = false;
 #ifdef DEBUG
 		debugdb_disk = NULL;
 		if (glovars.has_debug==false) {
@@ -3169,16 +3209,17 @@ void ProxySQL_Admin::flush_tsdb_variables___runtime_to_database(SQLite3DB *db, b
 		// Bind and execute for query_a
 		rc = (*proxy_sqlite3_bind_text)(u_stmt_a.get(), 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 		rc = (*proxy_sqlite3_bind_text)(u_stmt_a.get(), 2, safe_val, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-		rc = (*proxy_sqlite3_step)(u_stmt_a.get());
-		if (rc != SQLITE_DONE) { ASSERT_SQLITE_OK(rc, db); }
+		// A locked database is a runtime condition, not a programming error:
+		// retry it like every other flush does. Stepping raw and passing the
+		// result to ASSERT_SQLITE_OK() aborted the daemon on SQLITE_BUSY.
+		SAFE_SQLITE3_STEP2(u_stmt_a.get());
 		rc = (*proxy_sqlite3_reset)(u_stmt_a.get()); ASSERT_SQLITE_OK(rc, db);
 		rc = (*proxy_sqlite3_clear_bindings)(u_stmt_a.get()); ASSERT_SQLITE_OK(rc, db);
 
 		if (runtime) {
 			rc = (*proxy_sqlite3_bind_text)(u_stmt_b.get(), 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 			rc = (*proxy_sqlite3_bind_text)(u_stmt_b.get(), 2, safe_val, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
-			rc = (*proxy_sqlite3_step)(u_stmt_b.get());
-			if (rc != SQLITE_DONE) { ASSERT_SQLITE_OK(rc, db); }
+			SAFE_SQLITE3_STEP2(u_stmt_b.get());
 			rc = (*proxy_sqlite3_reset)(u_stmt_b.get()); ASSERT_SQLITE_OK(rc, db);
 			rc = (*proxy_sqlite3_clear_bindings)(u_stmt_b.get()); ASSERT_SQLITE_OK(rc, db);
 		}
@@ -3190,9 +3231,12 @@ void ProxySQL_Admin::flush_tsdb_variables___runtime_to_database(SQLite3DB *db, b
 }
 #endif
 
-void ProxySQL_Admin::admin_shutdown() {
-	int i;
-//	do { usleep(50); } while (main_shutdown==0);
+void ProxySQL_Admin::shutdown_threads() {
+	if (admin_threads_shutdown) {
+		return;
+	}
+	admin_threads_shutdown = true;
+
 	if (Admin_HTTP_Server) {
 		if (variables.web_enabled) {
 			MHD_stop_daemon(Admin_HTTP_Server);
@@ -3209,6 +3253,12 @@ void ProxySQL_Admin::admin_shutdown() {
 	while (__sync_fetch_and_add(&admin_client_threads_active, 0) != 0) {
 		usleep(1000);
 	}
+}
+
+void ProxySQL_Admin::admin_shutdown() {
+	int i;
+//	do { usleep(50); } while (main_shutdown==0);
+	shutdown_threads();
 	delete admindb;
 	delete statsdb;
 	delete configdb;
@@ -3920,11 +3970,14 @@ void ProxySQL_Admin::add_credentials(char *credentials, int hostgroup_id) {
 		
 		if constexpr (pt == SERVER_TYPE_MYSQL) { 
 			if (GloMyAuth) { // this check if required if GloMyAuth doesn't exist yet
-				GloMyAuth->add(user, pass, USERNAME_FRONTEND, 0, hostgroup_id, (char*)"main", 0, 0, 0, 1000, (char*)"", (char*)"");
+				// ADMIN_CRED_SCOPE keeps these out of the mysql_users namespace from
+				// the Innovative tier onward; on the stable tier it is
+				// USERNAME_FRONTEND and behaviour is unchanged. See #5987.
+				GloMyAuth->add(user, pass, ADMIN_CRED_SCOPE, 0, hostgroup_id, (char*)"main", 0, 0, 0, 1000, (char*)"", (char*)"");
 			}
 		} else if constexpr (pt == SERVER_TYPE_PGSQL) {
 			if (GloPgAuth) { // this check if required if GloPgAuth doesn't exist yet
-				GloPgAuth->add(user, pass, USERNAME_FRONTEND, 0, hostgroup_id, 0, 0, 1000, (char*)"", (char*)"");
+				GloPgAuth->add(user, pass, ADMIN_CRED_SCOPE, 0, hostgroup_id, 0, 0, 1000, (char*)"", (char*)"");
 			}
 		}
 
@@ -3952,12 +4005,18 @@ void ProxySQL_Admin::delete_credentials(char *credentials) {
 
 		if constexpr (pt == SERVER_TYPE_MYSQL) {
 			if (GloMyAuth) { // this check if required if GloMyAuth doesn't exist yet
-				GloMyAuth->del(user, USERNAME_FRONTEND);
+				// Deleting from ADMIN_CRED_SCOPE. On the stable tier this is
+				// USERNAME_FRONTEND, so changing admin-admin_credentials still
+				// removes a same-named mysql_users row from the runtime auth map
+				// until the next LOAD MYSQL USERS TO RUNTIME -- the documented
+				// "do not reuse the name" rule. From PROXYSQL31 the scopes are
+				// separate and the two cannot touch each other. See #5987.
+				GloMyAuth->del(user, ADMIN_CRED_SCOPE);
 			}
 		}
 		else if constexpr (pt == SERVER_TYPE_PGSQL) {
 			if (GloPgAuth) { // this check if required if GloPgAuth doesn't exist yet
-				GloPgAuth->del(user, USERNAME_FRONTEND);
+				GloPgAuth->del(user, ADMIN_CRED_SCOPE);
 			}
 		}
 		free(user);
@@ -7327,13 +7386,17 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 		max_bulk_row_idx=max_bulk_row_idx*32;
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r1=*it;
+			const char *status = r1->fields[4];
+			if (_runtime == false && (strcmp(status,"SHUNNED") == 0 || strcmp(status,"SHUNNED_AWS_BGD") == 0)) {
+				status = "ONLINE";
+			}
 			int idx=row_idx%32;
 			if (row_idx<max_bulk_row_idx) { // bulk
 				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+1, atoi(r1->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_bind_text)(statement32, (idx*12)+2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+4, atoi(r1->fields[3])); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_text)(statement32, (idx*12)+5, ( _runtime ? r1->fields[4] : ( strcmp(r1->fields[4],"SHUNNED")==0 ? "ONLINE" : r1->fields[4] ) ), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=(*proxy_sqlite3_bind_text)(statement32, (idx*12)+5, status, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+6, atoi(r1->fields[5])); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+7, atoi(r1->fields[6])); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+8, atoi(r1->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
@@ -7351,7 +7414,7 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 				rc=(*proxy_sqlite3_bind_text)(statement1, 2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_bind_int64)(statement1, 3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_bind_int64)(statement1, 4, atoi(r1->fields[3])); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_text)(statement1, 5, ( _runtime ? r1->fields[4] : ( strcmp(r1->fields[4],"SHUNNED")==0 ? "ONLINE" : r1->fields[4] ) ), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=(*proxy_sqlite3_bind_text)(statement1, 5, status, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_bind_int64)(statement1, 6, atoi(r1->fields[5])); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_bind_int64)(statement1, 7, atoi(r1->fields[6])); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_bind_int64)(statement1, 8, atoi(r1->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
@@ -7538,6 +7601,79 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 			rc=(*proxy_sqlite3_bind_int64)(statement, 13, atoi(r->fields[12])); ASSERT_SQLITE_OK(rc, admindb);
 			rc=(*proxy_sqlite3_bind_int64)(statement, 14, atoi(r->fields[13])); ASSERT_SQLITE_OK(rc, admindb);
 			rc=(*proxy_sqlite3_bind_text)(statement, 15, r->fields[14], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+
+			SAFE_SQLITE3_STEP2(statement);
+			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, admindb);
+		}
+	}
+	if(resultset) delete resultset;
+	resultset=NULL;
+
+	// dump mysql_aws_rds_bgd_hostgroups
+	// The runtime table carries the extra runtime-only 'auto_generated' column; the config table
+	// does not. 'dump_table_mysql' always returns 10 columns (last is 'auto_generated'); we bind
+	// 10 for the runtime table and only the first 9 for the config table. 'green_writer_hostgroup'
+	// and 'green_reader_hostgroup' (fields 2,3) are nullable and bound as NULL when absent.
+
+	if (_runtime) {
+		query=(char *)"DELETE FROM main.runtime_mysql_aws_rds_bgd_hostgroups";
+	} else {
+		query=(char *)"DELETE FROM main.mysql_aws_rds_bgd_hostgroups";
+	}
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute(query);
+	resultset=MyHGM->dump_table_mysql("mysql_aws_rds_bgd_hostgroups");
+	if (resultset) {
+		int rc;
+		sqlite3_stmt *statement=NULL;
+
+		char *query=NULL;
+		if (_runtime) {
+			query=(char *)"INSERT INTO runtime_mysql_aws_rds_bgd_hostgroups(writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,writer_is_also_reader,check_interval_ms,check_timeout_ms,comment,auto_generated,status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+		} else {
+			query=(char *)"INSERT INTO mysql_aws_rds_bgd_hostgroups(writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,active,writer_is_also_reader,check_interval_ms,check_timeout_ms,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
+		}
+
+		auto [rc1, statement_unique] = admindb->prepare_v2(query);
+		rc = rc1;
+		statement = statement_unique.get();
+		ASSERT_SQLITE_OK(rc, admindb);
+
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			// auto_generated (field 9) entries are created at runtime by the monitor; they are NOT
+			// user configuration, so they must not be persisted to the memory config table. They are
+			// still written to the runtime table.
+			if (!_runtime && r->fields[9] && atoi(r->fields[9]) != 0) {
+				continue;
+			}
+			rc=(*proxy_sqlite3_bind_int64)(statement, 1, atoi(r->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_bind_int64)(statement, 2, atoi(r->fields[1])); ASSERT_SQLITE_OK(rc, admindb);
+			if (r->fields[2] && r->fields[2][0]) {
+				rc=(*proxy_sqlite3_bind_int64)(statement, 3, atoi(r->fields[2]));
+			} else {
+				rc=(*proxy_sqlite3_bind_null)(statement, 3);
+			}
+			ASSERT_SQLITE_OK(rc, admindb);
+			if (r->fields[3] && r->fields[3][0]) {
+				rc=(*proxy_sqlite3_bind_int64)(statement, 4, atoi(r->fields[3]));
+			} else {
+				rc=(*proxy_sqlite3_bind_null)(statement, 4);
+			}
+			ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_bind_int64)(statement, 5, atoi(r->fields[4])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_bind_int64)(statement, 6, atoi(r->fields[5])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_bind_int64)(statement, 7, atoi(r->fields[6])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_bind_int64)(statement, 8, atoi(r->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_bind_text)(statement, 9, r->fields[8], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+			if (_runtime) {
+				rc=(*proxy_sqlite3_bind_int64)(statement, 10, atoi(r->fields[9])); ASSERT_SQLITE_OK(rc, admindb);
+				// 'status' (field 10) is the AWS_RDS_BGD_Status underlying int; we store it as text in the runtime table.
+				const char *bgd_status_str =
+					aws_rds_bgd_status_str(static_cast<AWS_RDS_BGD_Status>(r->fields[10] ? atoi(r->fields[10]) : 0));
+				rc=(*proxy_sqlite3_bind_text)(statement, 11, bgd_status_str, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+			}
 
 			SAFE_SQLITE3_STEP2(statement);
 			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);
@@ -7878,6 +8014,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	SQLite3_result *resultset_group_replication=NULL;
 	SQLite3_result *resultset_galera=NULL;
 	SQLite3_result *resultset_aws_aurora=NULL;
+	SQLite3_result *resultset_aws_rds_bgd=NULL;
 	SQLite3_result *resultset_hostgroup_attributes=NULL;
 	SQLite3_result *resultset_mysql_servers_ssl_params=NULL;
 
@@ -7888,6 +8025,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	SQLite3_result* incoming_aurora_hostgroups = incoming_servers.incoming_aurora_hostgroups;
 	SQLite3_result* incoming_hostgroup_attributes = incoming_servers.incoming_hostgroup_attributes;
 	SQLite3_result* incoming_mysql_servers_ssl_params = incoming_servers.incoming_mysql_servers_ssl_params;
+	SQLite3_result* incoming_aws_rds_bgd_hostgroups = incoming_servers.incoming_aws_rds_bgd_hostgroups;
 	SQLite3_result* incoming_mysql_servers_v2 = incoming_servers.incoming_mysql_servers_v2;
 
 	const char *query=(char *)"SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM main.mysql_servers ORDER BY hostgroup_id, hostname, port";
@@ -8041,6 +8179,21 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 		MyHGM->save_incoming_mysql_table(resultset_aws_aurora,"mysql_aws_aurora_hostgroups");
 	}
 
+	// support for AWS RDS, table mysql_aws_rds_bgd_hostgroups
+	query=(char *)"SELECT a.* FROM mysql_aws_rds_bgd_hostgroups a LEFT JOIN mysql_aws_rds_bgd_hostgroups b ON (a.writer_hostgroup=b.reader_hostgroup) WHERE b.reader_hostgroup IS NULL ORDER BY writer_hostgroup";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	if (incoming_aws_rds_bgd_hostgroups == nullptr) {
+		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset_aws_rds_bgd);
+	} else {
+		resultset_aws_rds_bgd = incoming_aws_rds_bgd_hostgroups;
+	}
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+	} else {
+		// Pass the resultset to MyHGM
+		MyHGM->save_incoming_mysql_table(resultset_aws_rds_bgd,"mysql_aws_rds_bgd_hostgroups");
+	}
+
 	// support for hostgroup attributes, table mysql_hostgroup_attributes
 	query = (char *)"SELECT * FROM mysql_hostgroup_attributes ORDER BY hostgroup_id";
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
@@ -8099,6 +8252,10 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	if (resultset_aws_aurora) {
 		//delete resultset_aws_aurora; // do not delete, resultset is stored in MyHGM
 		resultset_aws_aurora=NULL;
+	}
+	if (resultset_aws_rds_bgd) {
+		//delete resultset_aws_rds_bgd; // do not delete, resultset is stored in MyHGM
+		resultset_aws_rds_bgd=NULL;
 	}
 	if (resultset_hostgroup_attributes) {
 		resultset_hostgroup_attributes = NULL;

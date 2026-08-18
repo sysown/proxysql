@@ -355,11 +355,53 @@ static void test_pgsql_error_fields_zero_length() {
 }
 
 // ============================================================================
+// 8. MySQL: OK/EOF payload helpers
+// ============================================================================
+
+#ifndef SERVER_MORE_RESULTS_EXIST
+#define SERVER_MORE_RESULTS_EXIST 8
+#endif
+
+static void test_mysql_is_eof_payload() {
+	unsigned char eof5[] = {0xFE, 0x00, 0x00, 0x02, 0x00}; // warnings=0, status=AUTOCOMMIT
+	ok(mysql_is_eof_payload(eof5, sizeof(eof5)) == true, "EOF: 5-byte classic EOF");
+	unsigned char not_eof[] = {0xFE, 0x01, 0, 0, 0, 0, 0, 0, 0}; // lenenc 8-byte style length
+	ok(mysql_is_eof_payload(not_eof, sizeof(not_eof)) == false, "EOF: 0xFE with len>=9 is not EOF");
+	unsigned char okpkt[] = {0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00};
+	ok(mysql_is_eof_payload(okpkt, sizeof(okpkt)) == false, "EOF: OK is not EOF");
+}
+
+static void test_mysql_parse_ok_payload() {
+	// OK: header 0x00, affected=1, last_insert=0, status=0x0002, warnings=0
+	unsigned char okp[] = {0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00};
+	MySQLOkFields f{};
+	ok(mysql_parse_ok_payload(okp, sizeof(okp), &f) == true, "OK parse: success");
+	ok(f.affected_rows == 1, "OK parse: affected_rows=1");
+	ok(f.status_flags == 0x0002, "OK parse: status AUTOCOMMIT");
+	ok((f.status_flags & SERVER_MORE_RESULTS_EXIST) == 0, "OK parse: no MORE_RESULTS");
+}
+
+static void test_mysql_parse_ok_more_results() {
+	// status = SERVER_MORE_RESULTS_EXIST (8) | AUTOCOMMIT (2) = 10
+	unsigned char okp[] = {0x00, 0x00, 0x00, 0x0A, 0x00, 0x00, 0x00};
+	MySQLOkFields f{};
+	ok(mysql_parse_ok_payload(okp, sizeof(okp), &f) == true, "OK more: parse ok");
+	ok((f.status_flags & SERVER_MORE_RESULTS_EXIST) != 0, "OK more: MORE_RESULTS set");
+}
+
+static void test_mysql_eof_status_flags() {
+	unsigned char eof5[] = {0xFE, 0x00, 0x00, 0x0A, 0x00}; // warnings=0, status=0x000A
+	uint16_t st = 0, wr = 0;
+	ok(mysql_parse_eof_payload(eof5, sizeof(eof5), &wr, &st) == true, "EOF parse: ok");
+	ok(st == 0x000A, "EOF parse: status has MORE_RESULTS|AUTOCOMMIT");
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
 int main() {
-	plan(56);
+	plan(67);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -405,6 +447,12 @@ int main() {
 	test_pgsql_error_fields_missing_code(); // 3
 	test_pgsql_error_fields_empty();        // 3
 	test_pgsql_error_fields_zero_length();  // 1
+
+	// MySQL OK/EOF payload helpers
+	test_mysql_is_eof_payload();            // 3
+	test_mysql_parse_ok_payload();          // 4
+	test_mysql_parse_ok_more_results();     // 2
+	test_mysql_eof_status_flags();          // 2
 
 	test_cleanup_minimal();
 	return exit_status();

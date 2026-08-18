@@ -85,6 +85,7 @@ class ClientWorker(threading.Thread):
                     "user": self.args.user,
                     "password": self.args.password,
                     "ssl-mode": "DISABLED",
+                    "compression": "disabled",
                 })
                 while not self.stop_event.is_set():
                     sess.sql("SELECT 1").execute().fetch_all()
@@ -208,8 +209,13 @@ def main():
 
     print("Stopping workers...")
     stop.set()
+    shutdown_deadline = time.time() + 5
     for w in workers:
-        w.join(timeout=5)
+        remaining = max(0.0, shutdown_deadline - time.time())
+        w.join(timeout=remaining)
+    alive = sum(1 for w in workers if w.is_alive())
+    if alive:
+        print(f"WARNING: {alive} worker(s) did not stop within 5s")
 
     metrics_fh.close()
     total_q = sum(w.queries for w in workers)
@@ -217,6 +223,17 @@ def main():
     error_rate = total_e / max(1, total_q)
     print(f"\nFinal: total_queries={total_q} total_errors={total_e} "
           f"error_rate={error_rate:.4%}")
+
+    error_samples = []
+    for w in workers:
+        if w.last_error and w.last_error not in error_samples:
+            error_samples.append(w.last_error)
+        if len(error_samples) >= 5:
+            break
+    if error_samples:
+        print("\nWorker error samples:")
+        for err in error_samples:
+            print(f"  {err}")
 
     print("\nFinal stats_mysqlx_routes:")
     for row in fetch_route_stats(args):

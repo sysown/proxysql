@@ -175,19 +175,12 @@ int main(int argc, char** argv) {
                        "WHERE variable_name='pgsql-ffto_max_buffer_size'");
     MYSQL_QUERY(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
 
-    {
-        char escaped_user[2 * strlen(cl.pgsql_root_username) + 1]; char escaped_pass[2 * strlen(cl.pgsql_root_password) + 1];
-        mysql_real_escape_string(admin, escaped_user, cl.pgsql_root_username,
-                                strlen(cl.pgsql_root_username));
-        mysql_real_escape_string(admin, escaped_pass, cl.pgsql_root_password,
-                                strlen(cl.pgsql_root_password));
-        char uq[1024];
-        snprintf(uq, sizeof(uq),
-            "INSERT OR REPLACE INTO pgsql_users (username, password, fast_forward) "
-            "VALUES ('%s', '%s', 1)", escaped_user, escaped_pass);
-        MYSQL_QUERY(admin, uq);
-        MYSQL_QUERY(admin, "LOAD PGSQL USERS TO RUNTIME");
-    }
+    /* Enable fast_forward on ALL pgsql_users rows (frontend + backend).
+     * Partial INSERT OR REPLACE only touches PK (username, backend) and leaves
+     * the frontend credential row at fast_forward=0. */
+    MYSQL_QUERY(admin, "UPDATE pgsql_users SET fast_forward=1");
+    MYSQL_QUERY(admin, "LOAD PGSQL USERS TO RUNTIME");
+
     {
         char sq[1024];
         snprintf(sq, sizeof(sq),

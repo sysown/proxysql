@@ -1,6 +1,7 @@
 #include "openssl/rand.h"
 #include "proxysql.h"
 #include "cpp.h"
+#include "gen_utils.h"
 
 #ifdef DEBUG
 void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) {
@@ -39,7 +40,7 @@ char *sha1_pass_hex(char *sha1_pass) {
 	uint8_t a = 0;
 	for (i=0;i<SHA_DIGEST_LENGTH;i++) {
 		memcpy(&a,sha1_pass+i,1);
-		sprintf(buff+1+2*i, "%02x", a);
+		snprintf(buff + 1 + 2 * i, 3, "%02x", a);
 	}
 	return buff;
 }
@@ -60,7 +61,7 @@ void proxy_create_random_string(char *_to, uint length, struct rand_struct *rand
 	if (rc==1) {
 		// For code coverage (to test the following code and other function)
 		// in DEBUG mode we pretend that RAND_bytes() fails 1% of the time
-		if(rand()%100==0) {
+		if(fastrand()%100==0) {
 			rc=0;
 		}
 	}
@@ -244,4 +245,3 @@ uint8_t mysql_encode_length(uint64_t len, char *hd) {
 	if (hd) { *hd=0xfe; }
 	return 9;	
 }
-

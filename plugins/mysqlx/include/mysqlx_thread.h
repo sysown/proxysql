@@ -122,6 +122,10 @@ public:
 
 	SSL_CTX* get_ssl_ctx() const;
 
+#ifdef MYSQLX_TEST_BUILD
+	static bool elapsed_exceeds_for_test(uint64_t now_ms, uint64_t then_ms, uint64_t limit_ms);
+#endif
+
 private:
 	void accept_new_connection(int listener_fd);
 	void rebuild_poll_set();

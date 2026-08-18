@@ -1029,6 +1029,8 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 #endif // IDLE_THREADS
 	stacksize = 0;
 	shutdown_ = 0;
+	threads_registered.store(0, std::memory_order_relaxed); // NOSONAR(cpp:S8417): the constructor runs before any worker/idle thread exists; no publication ordering is needed
+	threads_exited_run_loop.store(0, std::memory_order_relaxed); // NOSONAR(cpp:S8417): the constructor runs before any worker/idle thread exists; no publication ordering is needed
 	bootstrapping_listeners = true;
 	pthread_rwlock_init(&rwlock, NULL);
 	pthread_attr_init(&attr);
@@ -1418,7 +1420,7 @@ char* PgSQL_Threads_Handler::get_variable_string(char* name) {
 	if (!strncmp(name, "default_", 8)) {
 		for (int i = 0; i < PGSQL_NAME_LAST_LOW_WM; i++) {
 			char buf[128];
-			sprintf(buf, "default_%s", pgsql_tracked_variables[i].internal_variable_name);
+			snprintf(buf, sizeof(buf), "default_%s", pgsql_tracked_variables[i].internal_variable_name);
 			if (!strcmp(name, buf)) {
 				if (variables.default_variables[i] == NULL) {
 					variables.default_variables[i] = strdup(pgsql_tracked_variables[i].default_value);
@@ -1485,7 +1487,7 @@ char* PgSQL_Threads_Handler::get_variable(char* name) {	// this is the public fu
 		std::unordered_map<std::string, std::tuple<int*, int, int, bool>>::const_iterator it = VariablesPointers_int.find(nameS);
 		if (it != VariablesPointers_int.end()) {
 			int* v = std::get<0>(it->second);
-			sprintf(intbuf, "%d", *v);
+			snprintf(intbuf, sizeof(intbuf), "%d", *v);
 			return strdup(intbuf);
 		}
 	}
@@ -1621,11 +1623,11 @@ char* PgSQL_Threads_Handler::get_variable(char* name) {	// this is the public fu
 		// if (!strcasecmp(name, "monitor_replication_lag_use_percona_heartbeat")) return strdup(variables.monitor_replication_lag_use_percona_heartbeat);
 	}
 	if (!strcasecmp(name, "threads")) {
-		sprintf(intbuf, "%d", (num_threads ? num_threads : DEFAULT_NUM_THREADS));
+		snprintf(intbuf, sizeof(intbuf), "%d", (num_threads ? num_threads : DEFAULT_NUM_THREADS));
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name, "stacksize")) {
-		sprintf(intbuf, "%d", (int)(stacksize ? stacksize : DEFAULT_STACK_SIZE));
+		snprintf(intbuf, sizeof(intbuf), "%d", (int)(stacksize ? stacksize : DEFAULT_STACK_SIZE));
 		return strdup(intbuf);
 	}
 
@@ -1947,7 +1949,7 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 	if (!strncmp(name, "default_", 8)) {
 		for (int i = 0; i < PGSQL_NAME_LAST_LOW_WM; i++) {
 			char buf[128];
-			sprintf(buf, "default_%s", pgsql_tracked_variables[i].internal_variable_name);
+			snprintf(buf, sizeof(buf), "default_%s", pgsql_tracked_variables[i].internal_variable_name);
 			if (!strcmp(name, buf)) {
 				char* transformed_value = nullptr;
 				if (pgsql_tracked_variables[i].validator && pgsql_tracked_variables[i].validator->validate && 
@@ -2517,9 +2519,13 @@ void PgSQL_Threads_Handler::shutdown_threads() {
 		if (GloVars.global.idle_threads) {
 			for (i = 0; i < num_threads; i++) {
 				if (pgsql_threads_idles[i].worker) {
-					pthread_mutex_lock(&pgsql_threads[i].worker->thread_mutex);
+					// the guard above tests the idle thread, so the lock must be
+					// taken on the idle thread too: pgsql_threads[i].worker can
+					// legitimately be NULL here (see signal_all_threads(), which
+					// explicitly tolerates not-yet-ready worker slots).
+					pthread_mutex_lock(&pgsql_threads_idles[i].worker->thread_mutex);
 					pgsql_threads_idles[i].worker->shutdown = 1;
-					pthread_mutex_unlock(&pgsql_threads[i].worker->thread_mutex);
+					pthread_mutex_unlock(&pgsql_threads_idles[i].worker->thread_mutex);
 				}
 			}
 		}
@@ -2535,6 +2541,33 @@ void PgSQL_Threads_Handler::shutdown_threads() {
 			}
 #endif /* IDLE_THREADS */
 		}
+	}
+}
+
+void PgSQL_Threads_Handler::register_thread_before_run_loop() {
+	threads_registered.fetch_add(1, std::memory_order_acq_rel); // NOSONAR(cpp:S8417): deliberate acq_rel -- the start-up gate orders every registration before any run(), and the wait side pairs with acquire
+}
+
+void PgSQL_Threads_Handler::wait_for_all_threads_to_exit_run_loop() {
+	// Every thread that registers also calls this, and every registration happens
+	// before the caller enters PgSQL_Thread::run(), so this count is final by the
+	// time any thread can reach this point.
+	const unsigned int expected = threads_registered.load(std::memory_order_acquire); // NOSONAR(cpp:S8417): deliberate acquire -- pairs with the acq_rel registrations, which all precede the start-up gate
+	threads_exited_run_loop.fetch_add(1, std::memory_order_acq_rel); // NOSONAR(cpp:S8417): deliberate acq_rel -- the release publishes this thread's run-loop exit, the acquire pairs with the exits of peer threads
+	const unsigned long long started = monotonic_time();
+	unsigned long long next_report = started + THREADS_EXIT_REPORT_INTERVAL_US;
+	unsigned int exited = threads_exited_run_loop.load(std::memory_order_acquire); // NOSONAR(cpp:S8417): deliberate acquire -- pairs with the acq_rel exit increments
+	while (exited < expected) {
+		usleep(50);
+		const unsigned long long now = monotonic_time();
+		if (now >= next_report) {
+			// Never abort: a shutdown that is merely slow must not become a crash.
+			// Just make the stall visible, and keep waiting.
+			proxy_error("Still waiting for all PgSQL worker/idle threads to leave their run loop: %u of %u exited after %llu seconds. Shutdown is stalled on a thread that has not returned from PgSQL_Thread::run()\n",
+				exited, expected, (now - started) / 1000000);
+			next_report = now + THREADS_EXIT_REPORT_INTERVAL_US;
+		}
+		exited = threads_exited_run_loop.load(std::memory_order_acquire); // NOSONAR(cpp:S8417): deliberate acquire -- pairs with the acq_rel exit increments
 	}
 }
 
@@ -2629,9 +2662,9 @@ char** client_host_cache_entry_row(
 	time_t last_updated = __now - curtime / 1000000 + entry.updated_at / 1000000;
 
 	row[0] = strdup(address.c_str());
-	sprintf(buff, "%u", entry.error_count);
+	snprintf(buff, sizeof(buff), "%u", entry.error_count);
 	row[1] = strdup(buff);
-	sprintf(buff, "%lu", last_updated);
+	snprintf(buff, sizeof(buff), "%lld", static_cast<long long>(last_updated));
 	row[2] = strdup(buff);
 
 	return row;
@@ -2792,7 +2825,7 @@ PgSQL_Thread::~PgSQL_Thread() {
 			PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->remove_index_fast(0);
 			if (sess->session_type == PROXYSQL_SESSION_ADMIN || sess->session_type == PROXYSQL_SESSION_STATS) {
 				char _buf[1024];
-				sprintf(_buf, "%s:%d:%s()", __FILE__, __LINE__, __func__);
+				snprintf(_buf, sizeof(_buf), "%s:%d:%s()", __FILE__, __LINE__, __func__);
 				if (GloPgSQL_Logger) { GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_CLOSE, sess, NULL, _buf); }
 			}
 			delete sess;
@@ -3901,7 +3934,7 @@ void PgSQL_Thread::process_all_sessions() {
 					}
 				}
 			}
-			sprintf(_buf, "%s:%d:%s()", __FILE__, __LINE__, __func__);
+			snprintf(_buf, sizeof(_buf), "%s:%d:%s()", __FILE__, __LINE__, __func__);
 			GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_CLOSE, sess, NULL, _buf);
 			unregister_session(n);
 			n--;
@@ -3916,7 +3949,7 @@ void PgSQL_Thread::process_all_sessions() {
 						char _buf[1024];
 						if (sess->client_myds && sess->killed)
 							proxy_warning("Closing killed client connection %s:%d\n", sess->client_myds->addr.addr, sess->client_myds->addr.port);
-						sprintf(_buf, "%s:%d:%s()", __FILE__, __LINE__, __func__);
+						snprintf(_buf, sizeof(_buf), "%s:%d:%s()", __FILE__, __LINE__, __func__);
 						GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_CLOSE, sess, NULL, _buf);
 						unregister_session(n);
 						n--;
@@ -3931,7 +3964,7 @@ void PgSQL_Thread::process_all_sessions() {
 					char _buf[1024];
 					if (sess->client_myds)
 						proxy_warning("Closing killed client connection %s:%d\n", sess->client_myds->addr.addr, sess->client_myds->addr.port);
-					sprintf(_buf, "%s:%d:%s()", __FILE__, __LINE__, __func__);
+					snprintf(_buf, sizeof(_buf), "%s:%d:%s()", __FILE__, __LINE__, __func__);
 					GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_CLOSE, sess, NULL, _buf);
 					unregister_session(n);
 					n--;
@@ -4109,7 +4142,7 @@ void PgSQL_Thread::refresh_variables() {
 			pgsql_thread___default_variables[i] = NULL;
 		}
 		char buf[128];
-		sprintf(buf, "default_%s", pgsql_tracked_variables[i].internal_variable_name);
+		snprintf(buf, sizeof(buf), "default_%s", pgsql_tracked_variables[i].internal_variable_name);
 		pgsql_thread___default_variables[i] = GloPTH->get_variable_string(buf);
 	}
 
@@ -4428,7 +4461,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}
 	{	// Active Transactions
 		pta[0] = (char*)"Active_Transactions";
-		sprintf(buf, "%u", get_active_transations());
+		snprintf(buf, sizeof(buf), "%u", get_active_transations());
 		pta[1] = buf;
 		result->add_row(pta);
 	}
@@ -4502,26 +4535,26 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 #ifdef IDLE_THREADS
 	{	// Connections non idle
 		pta[0] = (char*)"Client_Connections_non_idle";
-		sprintf(buf, "%u", get_non_idle_client_connections());
+		snprintf(buf, sizeof(buf), "%u", get_non_idle_client_connections());
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 #endif // IDLE_THREADS
 	{	// PgSQL Backend buffers bytes
 		pta[0] = (char*)"pgsql_backend_buffers_bytes";
-		sprintf(buf, "%llu", get_pgsql_backend_buffers_bytes());
+		snprintf(buf, sizeof(buf), "%llu", get_pgsql_backend_buffers_bytes());
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// PgSQL Frontend buffers bytes
 		pta[0] = (char*)"pgsql_frontend_buffers_bytes";
-		sprintf(buf, "%llu", get_pgsql_frontend_buffers_bytes());
+		snprintf(buf, sizeof(buf), "%llu", get_pgsql_frontend_buffers_bytes());
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// PgSQL Frontend buffers bytes
 		pta[0] = (char*)"pgsql_session_internal_bytes";
-		sprintf(buf, "%llu", get_pgsql_session_internal_bytes());
+		snprintf(buf, sizeof(buf), "%llu", get_pgsql_session_internal_bytes());
 		pta[1] = buf;
 		result->add_row(pta);
 	}
@@ -4634,13 +4667,13 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 */
 	{	// Mirror current concurrency
 		pta[0] = (char*)"Mirror_concurrency";
-		sprintf(buf, "%u", status_variables.mirror_sessions_current);
+		snprintf(buf, sizeof(buf), "%u", status_variables.mirror_sessions_current);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Mirror queue length
 		pta[0] = (char*)"Mirror_queue_length";
-		sprintf(buf, "%llu", get_total_mirror_queue());
+		snprintf(buf, sizeof(buf), "%llu", get_total_mirror_queue());
 		pta[1] = buf;
 		result->add_row(pta);
 	}
@@ -4652,13 +4685,13 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}
 	{	// Servers_table_version
 		pta[0] = (char*)"Servers_table_version";
-		sprintf(buf, "%u", PgHGM->get_servers_table_version());
+		snprintf(buf, sizeof(buf), "%u", PgHGM->get_servers_table_version());
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// MySQL Threads workers
 		pta[0] = (char*)"PgSQL_Thread_Workers";
-		sprintf(buf, "%d", num_threads);
+		snprintf(buf, sizeof(buf), "%d", num_threads);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
@@ -4702,61 +4735,61 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	*/
 		{
 			pta[0] = (char*)"PgSQL_Monitor_connect_check_OK";
-			sprintf(buf, "%lu", GloPgMon->connect_check_OK);
+			snprintf(buf, sizeof(buf), "%lu", GloPgMon->connect_check_OK);
 			pta[1] = buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0] = (char*)"PgSQL_Monitor_connect_check_ERR";
-			sprintf(buf, "%lu", GloPgMon->connect_check_ERR);
+			snprintf(buf, sizeof(buf), "%lu", GloPgMon->connect_check_ERR);
 			pta[1] = buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0] = (char*)"PgSQL_Monitor_ping_check_OK";
-			sprintf(buf, "%lu", GloPgMon->ping_check_OK);
+			snprintf(buf, sizeof(buf), "%lu", GloPgMon->ping_check_OK);
 			pta[1] = buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0] = (char*)"PgSQL_Monitor_ping_check_ERR";
-			sprintf(buf, "%lu", GloPgMon->ping_check_ERR);
+			snprintf(buf, sizeof(buf), "%lu", GloPgMon->ping_check_ERR);
 			pta[1] = buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0] = (char*)"PgSQL_Monitor_read_only_check_OK";
-			sprintf(buf, "%lu", GloPgMon->readonly_check_OK);
+			snprintf(buf, sizeof(buf), "%lu", GloPgMon->readonly_check_OK);
 			pta[1] = buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0] = (char*)"PgSQL_Monitor_read_only_check_ERR";
-			sprintf(buf, "%lu", GloPgMon->readonly_check_ERR);
+			snprintf(buf, sizeof(buf), "%lu", GloPgMon->readonly_check_ERR);
 			pta[1] = buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0] = (char*)"PgSQL_Monitor_replication_lag_check_OK";
-			sprintf(buf, "%lu", GloPgMon->repl_lag_check_OK);
+			snprintf(buf, sizeof(buf), "%lu", GloPgMon->repl_lag_check_OK);
 			pta[1] = buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0] = (char*)"PgSQL_Monitor_replication_lag_check_ERR";
-			sprintf(buf, "%lu", GloPgMon->repl_lag_check_ERR);
+			snprintf(buf, sizeof(buf), "%lu", GloPgMon->repl_lag_check_ERR);
 			pta[1] = buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0] = (char*)"PgSQL_Monitor_ssl_connections_OK";
-			sprintf(buf, "%lu", GloPgMon->ssl_connections_OK);
+			snprintf(buf, sizeof(buf), "%lu", GloPgMon->ssl_connections_OK);
 			pta[1] = buf;
 			result->add_row(pta);
 		}
 		{
 			pta[0] = (char*)"PgSQL_Monitor_non_ssl_connections_OK";
-			sprintf(buf, "%lu", GloPgMon->non_ssl_connections_OK);
+			snprintf(buf, sizeof(buf), "%lu", GloPgMon->non_ssl_connections_OK);
 			pta[1] = buf;
 			result->add_row(pta);
 		}
@@ -5158,9 +5191,9 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist(processlist_config_t arg
 			if (sess->client_myds) {
 				char buf[1024];
 				char** pta = (char**)malloc(sizeof(char*) * colnum);
-				sprintf(buf, "%d", i);
+				snprintf(buf, sizeof(buf), "%u", i);
 				pta[0] = strdup(buf);
-				sprintf(buf, "%u", sess->thread_session_id);
+				snprintf(buf, sizeof(buf), "%u", sess->thread_session_id);
 				pta[1] = strdup(buf);
 				PgSQL_Connection_userinfo* ui = sess->client_myds->myconn->userinfo;
 				pta[2] = NULL;
@@ -5182,7 +5215,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist(processlist_config_t arg
 						struct sockaddr_in* ipv4 = (struct sockaddr_in*)sess->client_myds->client_addr;
 						inet_ntop(sess->client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
 						pta[4] = strdup(buf);
-						sprintf(port, "%d", ntohs(ipv4->sin_port));
+						snprintf(port, sizeof(port), "%d", ntohs(ipv4->sin_port));
 						pta[5] = strdup(port);
 						break;
 					}
@@ -5190,7 +5223,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist(processlist_config_t arg
 						struct sockaddr_in6* ipv6 = (struct sockaddr_in6*)sess->client_myds->client_addr;
 						inet_ntop(sess->client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
 						pta[4] = strdup(buf);
-						sprintf(port, "%d", ntohs(ipv6->sin6_port));
+						snprintf(port, sizeof(port), "%d", ntohs(ipv6->sin6_port));
 						pta[5] = strdup(port);
 						break;
 					}
@@ -5203,7 +5236,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist(processlist_config_t arg
 					pta[4] = strdup("mirror_internal");
 					pta[5] = NULL;
 				}
-				sprintf(buf, "%d", sess->current_hostgroup);
+				snprintf(buf, sizeof(buf), "%d", sess->current_hostgroup);
 				pta[6] = strdup(buf);
 				if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) {
 					PgSQL_Connection* mc = sess->mybe->server_myds->myconn;
@@ -5218,7 +5251,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist(processlist_config_t arg
 							struct sockaddr_in* ipv4 = (struct sockaddr_in*)&addr;
 							inet_ntop(addr.sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
 							pta[7] = strdup(buf);
-							sprintf(port, "%d", ntohs(ipv4->sin_port));
+							snprintf(port, sizeof(port), "%d", ntohs(ipv4->sin_port));
 							pta[8] = strdup(port);
 							break;
 						}
@@ -5226,7 +5259,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist(processlist_config_t arg
 							struct sockaddr_in6* ipv6 = (struct sockaddr_in6*)&addr;
 							inet_ntop(addr.sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
 							pta[7] = strdup(buf);
-							sprintf(port, "%d", ntohs(ipv6->sin6_port));
+							snprintf(port, sizeof(port), "%d", ntohs(ipv6->sin6_port));
 							pta[8] = strdup(port);
 							break;
 						}
@@ -5240,16 +5273,15 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist(processlist_config_t arg
 						pta[8] = NULL;
 					}
 
-					sprintf(buf, "%s", mc->parent->address);
-					pta[9] = strdup(buf);
-					sprintf(buf, "%d", mc->parent->port);
+					pta[9] = strdup(mc->parent->address);
+					snprintf(buf, sizeof(buf), "%d", mc->parent->port);
 					pta[10] = strdup(buf);
 					pta[15] = sess->get_current_query(args.max_query_length);
-					sprintf(buf, "%d", mc->status_flags);
+					snprintf(buf, sizeof(buf), "%d", mc->status_flags);
 					pta[16] = strdup(buf);
-					sprintf(buf, "%u", mc->get_pg_backend_pid());
+					snprintf(buf, sizeof(buf), "%u", mc->get_pg_backend_pid());
 					pta[11] = strdup(buf);
-					sprintf(buf, "%s", mc->get_pg_backend_state());
+					snprintf(buf, sizeof(buf), "%s", mc->get_pg_backend_state());
 					pta[12] = strdup(buf);
 				}
 				else {
@@ -5314,7 +5346,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist(processlist_config_t arg
 					int idx = sess->changing_variable_idx;
 					if (idx < PGSQL_NAME_LAST_HIGH_WM) {
 						char buf[128];
-						sprintf(buf, "Setting variable %s", pgsql_tracked_variables[idx].set_variable_name);
+						snprintf(buf, sizeof(buf), "Setting variable %s", pgsql_tracked_variables[idx].set_variable_name);
 						pta[13] = strdup(buf);
 					} else {
 						pta[13] = strdup("Setting variable");
@@ -5328,7 +5360,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist(processlist_config_t arg
 					pta[13] = strdup("None");
 					break;
 				default:
-					sprintf(buf, "%d", sess->status);
+					snprintf(buf, sizeof(buf), "%d", sess->status);
 					pta[13] = strdup(buf);
 					break;
 				}
@@ -5340,10 +5372,10 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist(processlist_config_t arg
 					if (last_time > sess->thread->curtime) {
 						last_time = sess->thread->curtime;
 					}
-					sprintf(buf, "%llu", (sess->thread->curtime - last_time) / 1000);
+					snprintf(buf, sizeof(buf), "%llu", (sess->thread->curtime - last_time) / 1000);
 				} else {
 					// for mirror session we only consider the start time
-					sprintf(buf, "%llu", (sess->thread->curtime - sess->start_time) / 1000);
+					snprintf(buf, sizeof(buf), "%llu", (sess->thread->curtime - sess->start_time) / 1000);
 				}
 				pta[14] = strdup(buf);
 

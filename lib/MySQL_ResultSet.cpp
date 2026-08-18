@@ -327,8 +327,15 @@ unsigned int MySQL_ResultSet::add_row(MYSQL_ROWS *rows) {
 	unsigned long row_length = rows->length;
 	// we call generate_pkt_row3 passing row_length
 	sid=myprot->generate_pkt_row3(this, &pkt_length, sid, 0, NULL, row, row_length);
+	const unsigned long long next_resultset_size = resultset_size + pkt_length;
+	if (
+		resultset_size / 0xFFFFFFF != next_resultset_size / 0xFFFFFFF
+		&& myds && myds->sess && myds->sess->thread
+	) {
+		myds->sess->thread->atomic_curtime = monotonic_time();
+	}
 	sid++;
-	resultset_size+=pkt_length;
+	resultset_size = next_resultset_size;
 	num_rows++;
 	return pkt_length;
 }
@@ -447,7 +454,7 @@ void MySQL_ResultSet::add_err(MySQL_Data_Stream *_myds) {
 		MYSQL *_mysql=_myds->myconn->mysql;
 		buffer_to_PSarrayOut();
 		char sqlstate[10];
-		sprintf(sqlstate,"%s",mysql_sqlstate(_mysql));
+		snprintf(sqlstate, sizeof(sqlstate), "%s",mysql_sqlstate(_mysql));
 		if (_myds && _myds->killed_at) { // see case #750
 			if (_myds->kill_type == 0) {
 				myprot->generate_pkt_ERR(false,&pkt.ptr,&pkt.size,sid,1907,sqlstate,(char *)"Query execution was interrupted, query_timeout exceeded");

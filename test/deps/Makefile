@@ -36,8 +36,21 @@ endif
 
 mariadb_client: mariadb-connector-c/mariadb-connector-c/libmariadb/libmariadbclient.a
 
+# Robust tarball fetch: retry a clean download up to 5x (portable -- no curl
+# --retry-all-errors, which needs curl >= 7.71 and breaks on e.g. EL8), abort a
+# stalled transfer (--speed-limit/--speed-time), verify gzip integrity, and only
+# then atomically rename into place so a partial never satisfies the target.
+# $(1)=dir  $(2)=tarball  $(3)=url
+define fetch_tarball
+	cd $(1) && ( for i in 1 2 3 4 5; do \
+		rm -f $(2).part; \
+		curl -fL --connect-timeout 30 --speed-limit 1024 --speed-time 30 -o $(2).part $(3) && gzip -t $(2).part && mv $(2).part $(2) && exit 0; \
+		echo "download of $(2) failed (attempt $$i/5), retrying in 5s..." >&2; sleep 5; \
+	done; echo "ERROR: could not download $(2) after 5 attempts" >&2; exit 1 )
+endef
+
 mysql-connector-c/mysql-boost-5.7.44.tar.gz:
-	cd mysql-connector-c && curl -C - -O -s https://cdn.mysql.com//Downloads/MySQL-5.7/mysql-boost-5.7.44.tar.gz || wget -nc -q https://cdn.mysql.com//Downloads/MySQL-5.7/mysql-boost-5.7.44.tar.gz
+	$(call fetch_tarball,mysql-connector-c,mysql-boost-5.7.44.tar.gz,https://cdn.mysql.com//Downloads/MySQL-5.7/mysql-boost-5.7.44.tar.gz)
 
 mysql-connector-c/mysql-connector-c/libmysql/libmysqlclient.a: mysql-connector-c/mysql-boost-5.7.44.tar.gz
 	cd mysql-connector-c && rm -rf mysql-*/ || true
@@ -72,7 +85,7 @@ endif
 mysql_client: mysql-connector-c/mysql-connector-c/libmysql/libmysqlclient.a
 
 mysql-connector-c-8.4.0/mysql-8.4.0.tar.gz:
-	cd mysql-connector-c-8.4.0 && curl -C - -O -s https://cdn.mysql.com//Downloads/MySQL-8.4/mysql-8.4.0.tar.gz || wget -nc -q https://cdn.mysql.com//Downloads/MySQL-8.4/mysql-8.4.0.tar.gz
+	$(call fetch_tarball,mysql-connector-c-8.4.0,mysql-8.4.0.tar.gz,https://cdn.mysql.com//Downloads/MySQL-8.4/mysql-8.4.0.tar.gz)
 
 mysql-connector-c-8.4.0/mysql-connector-c/libmysql/libmysqlclient.a: mysql-connector-c-8.4.0/mysql-8.4.0.tar.gz
 	cd mysql-connector-c-8.4.0 && rm -rf mysql-*/ || true

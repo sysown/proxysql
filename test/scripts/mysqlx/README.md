@@ -23,12 +23,13 @@ pip install mysql-connector-python
 
 Validates two operationally-important behaviours:
 
-1. **SIGTERM mid-traffic**: opens N concurrent X-Protocol clients
-   running steady queries; sends SIGTERM to ProxySQL; verifies each
+1. **PROXYSQL SHUTDOWN SLOW mid-traffic**: opens N concurrent
+   X-Protocol clients running steady queries; issues
+   `PROXYSQL SHUTDOWN SLOW` through the admin port; verifies each
    client receives a clean `Mysqlx::Error` frame with code 1053
    ("Server is shutting down") instead of an unannounced TCP RST.
-   Exercises `MysqlxSession::shutdown_notify_client()` (commit
-   `55e90d1a7`).
+   Exercises
+   `MysqlxSession::shutdown_notify_client()` (commit `55e90d1a7`).
 
 2. **`LOAD MYSQLX ROUTES TO RUNTIME` mid-traffic**: opens N clients on
    route `r1`, then via the admin port deletes `r1` from

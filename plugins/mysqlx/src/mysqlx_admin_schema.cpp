@@ -3,11 +3,11 @@
 #include "mysqlx_plugin.h"
 #include "mysqlx_stats.h"
 #include "sqlite3db.h"
+#include "proxysql.h"
+#include "proxysql_debug.h"
 
 #include <initializer_list>
 #include <string>
-
-#include <cstdio>
 
 namespace {
 
@@ -151,6 +151,9 @@ ProxySQL_PluginCommandResult load_routes_to_runtime(const ProxySQL_PluginCommand
 	// routes, close listeners for removed or deactivated routes. The symbol
 	// is weak so unit tests that don't link plugin.cpp can resolve cleanly;
 	// in that case it's nullptr and reconciliation is skipped.
+	proxy_info("mysqlx: load_routes_to_runtime: mysqlx_routes active row_count=%lu, reconcile_listeners=%s\n",
+	           (unsigned long)row_count,
+	           mysqlx_reconcile_listeners ? "resolved" : "NULL (weak symbol unresolved)");
 	if (mysqlx_reconcile_listeners) {
 		mysqlx_reconcile_listeners(*ctx.admindb);
 	}
@@ -462,7 +465,7 @@ const char kStatsMysqlxProcesslistTableDef[] =
 
 bool mysqlx_register_admin_schema(ProxySQL_PluginServices& services) {
 	if (services.register_table == nullptr || services.register_command == nullptr) {
-		fprintf(stderr, "mysqlx: cannot register admin schema, services not available\n");
+		proxy_error("mysqlx: cannot register admin schema, services not available\n");
 		return false;
 	}
 

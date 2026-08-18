@@ -82,6 +82,35 @@ mysql_variables=
 	commands_stats=true
 	sessions_sort=true
 	connect_retries_on_failure=10
+
+#####################################################################
+# Pass-through authentication (opt-in, off by default).
+#
+# When enabled, ProxySQL can authenticate a client to the backend
+# without a pre-provisioned password in mysql_users: it intercepts
+# the cleartext password sent during the caching_sha2_password
+# full-auth exchange, probes a backend with it, and on success
+# caches the credential in memory for the next connect. See
+# doc/internal/passthrough_authentication.md for the design.
+#
+# IMPORTANT: enabling passthrough_auth_unknown_users WITHOUT setting
+# passthrough_auth_username_pattern lets ANY username be probed
+# against the backend. ProxySQL emits a startup warning when that
+# combination is published; treat the warning seriously.
+#####################################################################
+#	passthrough_auth_enabled=false                  # master gate; nothing below applies until true
+#	passthrough_auth_empty_password=true            # honor mysql_users rows with password='' as pass-through opt-in
+#	passthrough_auth_unknown_users=false            # also allow usernames NOT in mysql_users (gated by passthrough_default_hg)
+#	passthrough_auth_require_tls=true               # refuse to send AuthMoreData{0x04} over non-TLS client connections
+#	passthrough_default_hg=0                        # hostgroup used for unknown-user probes
+#	passthrough_default_schema=""                   # default schema for unknown-user sessions (falls back to default_schema if empty)
+#	passthrough_auth_cache_ttl_s=0                  # 0 = entries never expire; nonzero = lazy eviction window in seconds
+#	passthrough_auth_max_inflight_probes=100        # concurrent probes cap (DoS / thundering-herd protection)
+#	passthrough_auth_username_pattern=""            # re2 regex; empty = allow all (HIGHLY recommended to set when unknown_users=true)
+#	passthrough_auth_max_failures_per_user=3        # per-user sliding-window threshold
+#	passthrough_auth_max_failures_per_ip=10         # per-source-IP sliding-window threshold
+#	passthrough_auth_failure_window_s=60            # sliding-window size for both counters
+#	passthrough_auth_failure_map_cap=100000         # max distinct keys retained in failure deques (defense-in-depth)
 }
 
 
@@ -192,9 +221,161 @@ mysql_replication_hostgroups=
 
 
 
+#############################################################################
+# The sections below also round-trip through the configuration file, i.e.
+# they are emitted by SAVE CONFIG TO FILE / SELECT CONFIG INTO OUTFILE and
+# consumed by LOAD MYSQL|PGSQL QUERY RULES FROM CONFIG, LOAD MYSQL|PGSQL
+# FIREWALL FROM CONFIG, and LOAD MYSQL|PGSQL SERVERS FROM CONFIG (issue #3468).
+# They are shown here commented out; in normal operation they are managed via
+# the admin interface and persisted with SAVE ... TO DISK. Each pgsql_* variant
+# mirrors its mysql_* sibling (a PostgreSQL section keys on `database` where the
+# MySQL one keys on `schemaname`).
+#############################################################################
+
+# Fast-routing query rules: constant-time (username, schema) -> hostgroup routing.
+mysql_query_rules_fast_routing:
+(
+#	{
+#		username="app1"
+#		schemaname="shard1"
+#		flagIN=0
+#		destination_hostgroup=10
+#		comment=""
+#	}
+)
+
+pgsql_query_rules_fast_routing:
+(
+#	{
+#		username="app1"
+#		database="shard1"
+#		flagIN=0
+#		destination_hostgroup=10
+#		comment=""
+#	}
+)
+
+# SQL firewall whitelist. mode is one of: OFF | DETECTING | PROTECTING.
+mysql_firewall_whitelist_users:
+(
+#	{
+#		active=1
+#		username="app1"
+#		client_address=""
+#		mode="DETECTING"
+#		comment=""
+#	}
+)
+
+mysql_firewall_whitelist_rules:
+(
+#	{
+#		active=1
+#		username="app1"
+#		client_address=""
+#		schemaname="shard1"
+#		flagIN=0
+#		digest="0xE8CF0E5469C2D74C"
+#		comment=""
+#	}
+)
+
+mysql_firewall_whitelist_sqli_fingerprints:
+(
+#	{
+#		active=1
+#		fingerprint="EnkfB"
+#	}
+)
+
+pgsql_firewall_whitelist_users:
+(
+#	{
+#		active=1
+#		username="app1"
+#		client_address=""
+#		mode="DETECTING"
+#		comment=""
+#	}
+)
+
+pgsql_firewall_whitelist_rules:
+(
+#	{
+#		active=1
+#		username="app1"
+#		client_address=""
+#		database="shard1"
+#		flagIN=0
+#		digest="0xE8CF0E5469C2D74C"
+#		comment=""
+#	}
+)
+
+pgsql_firewall_whitelist_sqli_fingerprints:
+(
+#	{
+#		active=1
+#		fingerprint="EnkfB"
+#	}
+)
+
+# Per-server backend SSL parameters. NOTE: the MySQL and PostgreSQL tables have
+# different columns -- the MySQL section carries ssl_capath / ssl_cipher /
+# tls_version, while the PostgreSQL section carries ssl_protocol_version_range.
+mysql_servers_ssl_params:
+(
+#	{
+#		hostname="127.0.0.1"
+#		port=3306
+#		username=""
+#		ssl_ca=""
+#		ssl_cert=""
+#		ssl_key=""
+#		ssl_capath=""
+#		ssl_crl=""
+#		ssl_crlpath=""
+#		ssl_cipher=""
+#		tls_version=""
+#		comment=""
+#	}
+)
+
+pgsql_servers_ssl_params:
+(
+#	{
+#		hostname="127.0.0.1"
+#		port=5432
+#		username=""
+#		ssl_ca=""
+#		ssl_cert=""
+#		ssl_key=""
+#		ssl_crl=""
+#		ssl_crlpath=""
+#		ssl_protocol_version_range=""
+#		comment=""
+#	}
+)
+
+# Per-hostgroup attributes for PostgreSQL (mirrors mysql_hostgroup_attributes).
+pgsql_hostgroup_attributes:
+(
+#	{
+#		hostgroup_id=10
+#		max_num_online_servers=1000000
+#		autocommit=-1
+#		free_connections_pct=10
+#		multiplex=1
+#		hostgroup_settings=""
+#		servers_defaults=""
+#		comment=""
+#	}
+)
+
+
 # http://www.hyperrealm.com/libconfig/libconfig_manual.html#Configuration-File-Grammar
 #
-# Below is the BNF grammar for configuration files. Comments and include directives are not part of the grammar, so they are not included here. 
+# Below is the BNF grammar for configuration files. Comments and include directives are not part of the grammar, so they are not included here.
 #
 # configuration = setting-list | empty
 #

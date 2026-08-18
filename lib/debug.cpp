@@ -37,7 +37,7 @@ struct DebugLogEntry {
 	std::string file;
 	int line = 0;
 	std::string funct;
-	int module = 0;
+	enum debug_module module = PROXY_DEBUG_UNKNOWN;
 	std::string modname;
 	int verbosity = 0;
 	std::string message;
@@ -242,14 +242,21 @@ extern "C" void proxy_debug_func(
 			sscanf(strings[i], "%*[^(](%100[^+]", debugbuff);
 			int status;
 			char *realname=NULL;
-			realname=abi::__cxa_demangle(debugbuff, 0, 0, &status);
-			if (realname) {
-				sprintf(debugbuff," ---- %s : %s\n", strings[i], realname);
-				strcat(longdebugbuff2,debugbuff);
+				realname=abi::__cxa_demangle(debugbuff, 0, 0, &status);
+				if (realname && strnlen(longdebugbuff2, sizeof(longdebugbuff2)) < sizeof(longdebugbuff2) - 1) {
+					size_t longdebugbuff2_len = strnlen(longdebugbuff2, sizeof(longdebugbuff2));
+						snprintf(
+							longdebugbuff2 + longdebugbuff2_len,
+							sizeof(longdebugbuff2) - longdebugbuff2_len,
+							" ---- %s : %s\n",
+							strings[i],
+							realname
+						);
+				}
+				free(realname); // NOSONAR: __cxa_demangle returns memory allocated by malloc.
 			}
+			free(strings);
 		}
-		free(strings);
-	}
 #endif
 	pthread_mutex_lock(&debug_mutex);
 	if (debugdb_disk == NULL) {
@@ -373,17 +380,17 @@ public:
 		char buf[128];
 
 		char** pta = static_cast<char**>(malloc(sizeof(char *)*ProxySQL_MSG_STATS_FIELD_NUM));
-		sprintf(buf,"%d",message_id);
+		snprintf(buf, sizeof(buf), "%d",message_id);
 		pta[0]=strdup(buf);
 		pta[1]=strdup(filename);
-		sprintf(buf,"%d",line);
+		snprintf(buf, sizeof(buf), "%d",line);
 		pta[2]=strdup(buf);
 		pta[3]=strdup(func);
-		sprintf(buf,"%lu",count_star);
+		snprintf(buf, sizeof(buf), "%lu",count_star);
 		pta[4]=strdup(buf);
-		sprintf(buf,"%ld", first_seen);
+		snprintf(buf, sizeof(buf), "%ld", first_seen);
 		pta[5]=strdup(buf);
-		sprintf(buf,"%ld", last_seen);
+		snprintf(buf, sizeof(buf), "%ld", last_seen);
 		pta[6]=strdup(buf);
 
 		return pta;

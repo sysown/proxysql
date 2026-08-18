@@ -27,18 +27,22 @@ PgSQL_Authentication::PgSQL_Authentication() {
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_init(&creds_backends.lock, NULL);
 	pthread_rwlock_init(&creds_frontends.lock, NULL);
+	pthread_rwlock_init(&creds_admins.lock, NULL);
 #else
 	spinlock_rwlock_init(&creds_backends.lock);
 	spinlock_rwlock_init(&creds_frontends.lock);
+	spinlock_rwlock_init(&creds_admins.lock);
 #endif
 	creds_backends.cred_array = new PtrArray();
 	creds_frontends.cred_array = new PtrArray();
+	creds_admins.cred_array = new PtrArray();
 };
 
 PgSQL_Authentication::~PgSQL_Authentication() {
 	reset();
 	delete creds_backends.cred_array;
 	delete creds_frontends.cred_array;
+	delete creds_admins.cred_array;
 };
 
 void PgSQL_Authentication::print_version() {
@@ -46,7 +50,7 @@ void PgSQL_Authentication::print_version() {
 	};
 
 void PgSQL_Authentication::set_all_inactive(enum cred_username_type usertype) {
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	creds_group_t &cg = creds_for(usertype);
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&cg.lock);
 #else
@@ -65,26 +69,45 @@ void PgSQL_Authentication::set_all_inactive(enum cred_username_type usertype) {
 }
 
 void PgSQL_Authentication::remove_inactives(enum cred_username_type usertype) {
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	creds_group_t &cg = creds_for(usertype);
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&cg.lock);
 #else
 	spin_wrlock(&cg.lock);
 #endif
-	unsigned int i;
-__loop_remove_inactives:
-	for (i=0; i<cg.cred_array->len; i++) {
+	unsigned int i = 0;
+	while (i < cg.cred_array->len) {
 		pgsql_account_details_t *ado=(pgsql_account_details_t *)cg.cred_array->index(i);
 		if (ado->active_==false) {
-			del(ado->username,usertype,false);
-			goto __loop_remove_inactives; // we aren't sure how the underlying structure changes, so we jump back to 0
+			if (del(ado->username,usertype,false)==false) {
+				++i;
+			}
+			continue;
 		}
+		++i;
 	}
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&cg.lock);
 #else
 	spin_wrunlock(&cg.lock);
 #endif
+}
+
+/**
+ * @brief Select the credential scope for a username type.
+ * @details Mirrors MySQL_Authentication::creds_for(). USERNAME_ADMIN is only
+ *   passed when PROXYSQL31 is defined; otherwise ADMIN_CRED_SCOPE is
+ *   USERNAME_FRONTEND and 'creds_admins' is never reached.
+ */
+creds_group_t& PgSQL_Authentication::creds_for(enum cred_username_type usertype) {
+	switch (usertype) {
+		case USERNAME_BACKEND:
+			return creds_backends;
+		case USERNAME_ADMIN:
+			return creds_admins;
+		default:
+			return creds_frontends;
+	}
 }
 
 bool PgSQL_Authentication::add(char * username, char * password, enum cred_username_type usertype, bool use_ssl, int default_hostgroup, bool transaction_persistent, bool fast_forward, int max_connections, char* attributes, char *comment) {
@@ -102,7 +125,7 @@ bool PgSQL_Authentication::add(char * username, char * password, enum cred_usern
 	myhash.Update(username,strlen(username));
 	myhash.Final(&hash1,&hash2);
 
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	creds_group_t &cg = creds_for(usertype);
 	
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&cg.lock);
@@ -417,7 +440,7 @@ bool PgSQL_Authentication::del(char * username, enum cred_username_type usertype
 	myhash->Final(&hash1,&hash2);
 	delete myhash;
 
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	creds_group_t &cg = creds_for(usertype);
 
 	if (set_lock)
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
@@ -457,7 +480,7 @@ bool PgSQL_Authentication::set_SHA1(char * username, enum cred_username_type use
 	myhash->Final(&hash1,&hash2);
 	delete myhash;
 
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	creds_group_t &cg = creds_for(usertype);
 
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&cg.lock);
@@ -510,7 +533,7 @@ char * PgSQL_Authentication::lookup(char * username, enum cred_username_type use
 	myhash.Update(username,strlen(username));
 	myhash.Final(&hash1,&hash2);
 
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	creds_group_t &cg = creds_for(usertype);
 
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_rdlock(&cg.lock);
@@ -545,7 +568,7 @@ char * PgSQL_Authentication::lookup(char * username, enum cred_username_type use
 }
 
 bool PgSQL_Authentication::_reset(enum cred_username_type usertype) {
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	creds_group_t &cg = creds_for(usertype);
 
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&cg.lock);
@@ -626,7 +649,7 @@ static uint64_t compute_accounts_hash(const umap_pgauth& accs_map) {
 }
 
 uint64_t PgSQL_Authentication::_get_runtime_checksum(enum cred_username_type usertype) {
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	creds_group_t &cg = creds_for(usertype);
 	uint64_t accs_hash = compute_accounts_hash(cg.bt_map);
 
 	return accs_hash;

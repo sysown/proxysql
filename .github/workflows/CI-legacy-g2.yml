@@ -14,6 +14,14 @@ concurrency:
 jobs:
   run:
     if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
+    # `write-all` is required because reusable-workflow permissions are the
+    # intersection of caller + callee. Without it the workflow_run event's
+    # GITHUB_TOKEN has no cache-writable scope, so the callee's
+    # actions/cache/save@v4 fails with 'cache write denied: token has no
+    # writable scopes' (GitHub started enforcing this for workflow_run in
+    # early July 2026 alongside the Node.js 20 -> 24 actions deprecation).
+    # The callee at ci-<group>.yml@GH-Actions also declares write-all.
+    permissions: write-all
     uses: sysown/proxysql/.github/workflows/ci-legacy-g2.yml@GH-Actions
     secrets: inherit
     with:

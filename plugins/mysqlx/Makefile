@@ -92,6 +92,17 @@ CXXFLAGS += -fstack-protector-strong
 
 .DEFAULT_GOAL := all
 
+# Serialize this plugin's build. The vendored protobuf target (deps/Makefile)
+# is a recursive sub-make whose recipe first `rm -rf`s deps/protobuf and then
+# runs a slow cmake build+install. The plugin's .o, .pb.o and the final .so
+# all list $(PROTOBUF_LIB) as a prereq, but under the parent build's -j that
+# destructive rebuild has been observed to race the link -- the .so link
+# fires while protobuf is only partway rebuilt and libprotobuf.a is absent:
+#   /usr/bin/ld: cannot find .../protobuf-3.21.12/install/lib/libprotobuf.a
+# .NOTPARALLEL forces protobuf to finish before any plugin object or link.
+# The plugin build is small, so the lost parallelism is negligible.
+.NOTPARALLEL:
+
 SRCS := $(PLUGIN_DIR)/src/mysqlx_plugin.cpp \
 	$(PLUGIN_DIR)/src/mysqlx_admin_schema.cpp \
 	$(PLUGIN_DIR)/src/mysqlx_config_store.cpp \
@@ -111,6 +122,7 @@ $(ODIR):
 
 $(PROTOBUF_LIB):
 	$(MAKE) -C $(PROXYSQL_PATH)/deps PROXYSQL40=1 protobuf
+	@test -f $@ || { echo "ERROR: deps protobuf build did not produce $@" >&2; exit 1; }
 
 # Several plugin sources transitively include <google/protobuf/...> via
 # the .pb.h files under plugins/mysqlx/proto/ (e.g. mysqlx_protocol.cpp,

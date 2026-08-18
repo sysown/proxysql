@@ -60,17 +60,18 @@ lint-tests:
 ###      * GenAI plugin (built alongside core)
 ###    - Automatically increments the major version (e.g., 3.0.6 -> 4.0.6).
 ###
-### HIERARCHY: `PROXYSQL40=1` implies `PROXYSQL31=1` implies `PROXYSQLFFTO=1` + `PROXYSQLTSDB=1`.
+### HIERARCHY: `PROXYSQL40=1` implies `PROXYSQL31=1` implies `PROXYSQLFFTO=1` + `PROXYSQLTSDB=1` + `PROXYSQLED25519=1`.
 
 # If PROXYSQL40 is enabled, it automatically enables PROXYSQL31
 ifeq ($(PROXYSQL40),1)
     PROXYSQL31 := 1
 endif
 
-# If PROXYSQL31 is enabled, it automatically enables FFTO and TSDB
+# If PROXYSQL31 is enabled, it automatically enables FFTO, TSDB and ED25519
 ifeq ($(PROXYSQL31),1)
     PROXYSQLFFTO := 1
     PROXYSQLTSDB := 1
+    PROXYSQLED25519 := 1
 endif
 
 # Only increment version at the top-level make to avoid double-incrementing in recursive makes
@@ -106,6 +107,7 @@ export PROXYSQL40
 export PROXYSQL31
 export PROXYSQLFFTO
 export PROXYSQLTSDB
+export PROXYSQLED25519
 
 ### NOTES:
 ### SOURCE_DATE_EPOCH is used for reproducible builds
@@ -219,6 +221,10 @@ testreadonly: build_src_testreadonly build_cluster_simulator
 
 .PHONY: testreplicationlag
 testreplicationlag: build_src_testreplicationlag build_cluster_simulator
+
+.PHONY: test_rds_bgd
+test_rds_bgd: build_src_test_rds_bgd
+	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE} debug
 
 .PHONY: testall
 testall: build_src_testall
@@ -337,13 +343,21 @@ build_src_testreplicationlag: build_lib_testreplicationlag
 build_lib_testreplicationlag: build_deps_debug
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_REPLICATIONLAG" CC=${CC} CXX=${CXX} ${MAKE}
 
+.PHONY: build_src_test_rds_bgd
+build_src_test_rds_bgd: build_lib_test_rds_bgd
+	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_RDS_BGD" CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_lib_test_rds_bgd
+build_lib_test_rds_bgd: build_deps_debug
+	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_RDS_BGD" CC=${CC} CXX=${CXX} ${MAKE}
+
 .PHONY: build_src_testall
 build_src_testall: build_lib_testall
-	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA -DTEST_GALERA -DTEST_GROUPREP -DTEST_READONLY -DTEST_REPLICATIONLAG" CC=${CC} CXX=${CXX} ${MAKE}
+	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA -DTEST_GALERA -DTEST_GROUPREP -DTEST_READONLY -DTEST_REPLICATIONLAG -DTEST_RDS_BGD" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_testall
 build_lib_testall: build_deps_debug
-	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA -DTEST_GALERA -DTEST_GROUPREP -DTEST_READONLY -DTEST_REPLICATIONLAG" CC=${CC} CXX=${CXX} ${MAKE}
+	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA -DTEST_GALERA -DTEST_GROUPREP -DTEST_READONLY -DTEST_REPLICATIONLAG -DTEST_RDS_BGD" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_tap_test
 build_tap_test: build_tap_tests
@@ -401,21 +415,21 @@ build_deps_debug_default:
 
 .PHONY: build_lib_default
 build_lib_default: build_deps_default
-	cd lib && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
+	cd lib && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) PROXYSQLED25519=$(PROXYSQLED25519) CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_debug_default
 build_lib_debug_default: build_deps_debug_default
-	cd lib && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
+	cd lib && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) PROXYSQLED25519=$(PROXYSQLED25519) CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_default
 build_src_default: build_lib_default
-	cd src && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
+	cd src && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) PROXYSQLED25519=$(PROXYSQLED25519) CC=${CC} CXX=${CXX} ${MAKE}
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O2} -ggdb" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/genai && OPTZ="${O2} -ggdb" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] genai plugin (PROXYSQL40 not set)")
 
 .PHONY: build_src_debug_default
 build_src_debug_default: build_lib_debug_default
-	cd src && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
+	cd src && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) PROXYSQLED25519=$(PROXYSQLED25519) CC=${CC} CXX=${CXX} ${MAKE}
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/genai && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] genai plugin (PROXYSQL40 not set)")
 
@@ -439,27 +453,30 @@ debian: $(REL_ARCH)-debian ;
 fedora: $(REL_ARCH)-fedora ;
 opensuse: $(REL_ARCH)-opensuse ;
 ubuntu: $(REL_ARCH)-ubuntu ;
+tarball: $(REL_ARCH)-tarball ;
 pkglist: $(REL_ARCH)-pkglist
 
 amd64-%: SYS_ARCH := x86_64
-amd64-packages: amd64-centos amd64-ubuntu amd64-debian amd64-fedora amd64-opensuse amd64-almalinux
+amd64-packages: amd64-centos amd64-ubuntu amd64-debian amd64-fedora amd64-opensuse amd64-almalinux amd64-tarball
 amd64-almalinux: almalinux8 almalinux8-clang almalinux8-dbg almalinux9 almalinux9-clang almalinux9-dbg almalinux10 almalinux10-clang almalinux10-dbg
 amd64-centos: centos9 centos9-clang centos9-dbg centos10 centos10-clang centos10-dbg
 amd64-debian: debian12 debian12-clang debian12-dbg debian13 debian13-clang debian13-dbg
 amd64-fedora: fedora42 fedora42-clang fedora42-dbg fedora43 fedora43-clang fedora43-dbg fedora44 fedora44-clang fedora44-dbg
 amd64-opensuse: opensuse15 opensuse15-clang opensuse15-dbg opensuse16 opensuse16-clang opensuse16-dbg
 amd64-ubuntu: ubuntu22 ubuntu22-clang ubuntu22-dbg ubuntu24 ubuntu24-clang ubuntu24-dbg
+amd64-tarball: tarball-almalinux9
 amd64-pkglist:
 	@${MAKE} -nk amd64-packages 2>/dev/null | grep -Eo 'binaries/proxysql[^ ]*' | sed 's,^binaries/,,'
 
 arm64-%: SYS_ARCH := aarch64
-arm64-packages: arm64-centos arm64-debian arm64-ubuntu arm64-fedora arm64-opensuse arm64-almalinux
+arm64-packages: arm64-centos arm64-debian arm64-ubuntu arm64-fedora arm64-opensuse arm64-almalinux arm64-tarball
 arm64-almalinux: almalinux8 almalinux9 almalinux10
 arm64-centos: centos9 centos10
 arm64-debian: debian12 debian13
 arm64-fedora: fedora42 fedora43 fedora44
 arm64-opensuse: opensuse15 opensuse16
 arm64-ubuntu: ubuntu22 ubuntu24
+arm64-tarball: tarball-almalinux9
 arm64-pkglist:
 	@${MAKE} -nk arm64-packages 2>/dev/null | grep -Eo 'binaries/proxysql[^ ]*' | sed 's,^binaries/,,'
 
@@ -469,6 +486,7 @@ debian%: build-debian% ;
 fedora%: build-fedora% ;
 opensuse%: build-opensuse% ;
 ubuntu%: build-ubuntu% ;
+tarball%: build-tarball% ;
 
 
 .PHONY: build-%
@@ -478,21 +496,37 @@ build-%: PKG_VERS=$(if $(filter $(shell echo ${BLD_NAME} | grep -Eo '[a-z]+'),de
 build-%: PKG_TYPE=$(if $(filter $(shell echo $(BLD_NAME) | grep -Eo '\-de?bu?g|\-test|\-tap'),-dbg -debug -test -tap),-dbg,)
 build-%: PKG_NAME=$(firstword $(subst -, ,$(BLD_NAME)))
 build-%: PKG_COMP=$(if $(filter $(shell echo $(BLD_NAME) | grep -Eo '\-clang'),-clang),-clang,)
-build-%: PKG_ARCH=$(if $(filter $(shell echo ${BLD_NAME} | grep -Eo '[a-z]+'),debian ubuntu),$(DEB_ARCH),$(RPM_ARCH))
-build-%: PKG_KIND=$(if $(filter $(shell echo ${BLD_NAME} | grep -Eo '[a-z]+'),debian ubuntu),deb,rpm)
-build-%: PKG_FILE=binaries/proxysql$(PKG_VERS)$(PKG_TYPE)-$(PKG_NAME)$(PKG_COMP)$(PKG_ARCH).$(PKG_KIND)
+build-%: PKG_ARCH=$(if $(filter $(shell echo ${BLD_NAME} | grep -Eo '[a-z]+'),debian ubuntu),$(DEB_ARCH),$(if $(filter tarball,$(shell echo ${BLD_NAME} | grep -o 'tarball')),-$(REL_ARCH),$(RPM_ARCH)))
+build-%: PKG_KIND=$(if $(filter $(shell echo ${BLD_NAME} | grep -Eo '[a-z]+'),debian ubuntu),deb,$(if $(filter tarball,$(shell echo ${BLD_NAME} | grep -o 'tarball')),tar.gz,rpm))
+build-%: PKG_FILE=$(if $(filter tarball,$(shell echo ${BLD_NAME} | grep -o 'tarball')),binaries/proxysql-$(CURVER)$(PKG_TYPE)-linux$(PKG_ARCH).$(PKG_KIND),binaries/proxysql$(PKG_VERS)$(PKG_TYPE)-$(PKG_NAME)$(PKG_COMP)$(PKG_ARCH).$(PKG_KIND))
 build-%:
 	@echo 'building $@'
 	@IMG_NAME=$(PKG_NAME) IMG_TYPE=$(subst -,_,$(PKG_TYPE)) IMG_COMP=$(subst -,_,$(PKG_COMP)) BLD_NAME=$(BLD_NAME) $(MAKE) $(PKG_FILE)
 
+# Scope the compose project per build variant, not just per commit. On shared
+# self-hosted CI runners several matrix variants of the same commit build
+# concurrently. The old name `"${GIT_VERSION/./}"` was make (not shell) syntax --
+# make expands `${GIT_VERSION/./}` as an undefined variable to the empty string,
+# so every build ran under compose's default project (the checkout dir basename,
+# "proxysql"). They therefore shared one project, and one variant's
+# `down -v --remove-orphans` tore down another still-building container (SIGKILL /
+# exit 137); same-dist variants (e.g. ubuntu22-tap vs ubuntu22-tap-mysqlx) also
+# collided on an identical container name. Key the project on BLD_NAME (always
+# leads with a letter -> valid project name; falls back to "proxysql" for direct
+# invocations that don't go through build-%) plus the dot-stripped version, so
+# each variant's up/down is isolated.
 .NOTPARALLEL: binaries/proxysql%
+binaries/proxysql%: COMPOSE_PROJECT = $(or $(strip $(BLD_NAME)),proxysql)-$(subst .,,$(GIT_VERSION))
 binaries/proxysql%:
 	${MAKE} cleanbuild
 	${MAKE} cleantest
 	find . -not -path "./binaries/*" -not -path "./.git/*" | xargs touch -h --date=@${SOURCE_DATE_EPOCH}
-	@docker compose -p "${GIT_VERSION/./}" down -v --remove-orphans
-	@docker compose -p "${GIT_VERSION/./}" up $(IMG_NAME)$(IMG_TYPE)$(IMG_COMP)_build
-	@docker compose -p "${GIT_VERSION/./}" down -v --remove-orphans
+	@set -e; \
+		docker compose -p "$(COMPOSE_PROJECT)" down -v --remove-orphans; \
+		trap 'docker compose -p "$(COMPOSE_PROJECT)" down -v --remove-orphans' EXIT; \
+		docker compose -p "$(COMPOSE_PROJECT)" up --abort-on-container-exit \
+			--exit-code-from "$(IMG_NAME)$(IMG_TYPE)$(IMG_COMP)_build" \
+			"$(IMG_NAME)$(IMG_TYPE)$(IMG_COMP)_build"
 
 
 ### clean targets

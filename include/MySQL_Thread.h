@@ -13,6 +13,9 @@
 #include <sys/epoll.h>
 #endif // IDLE_THREADS
 #include <atomic>
+#include <memory>
+#include <string>
+#include <vector>
 
 #include "prometheus_helpers.h"
 
@@ -38,6 +41,16 @@
 
 extern class MySQL_Variables mysql_variables;
 
+#ifdef PROXYSQL31
+class MySQL_Caching_Sha2_RSA;
+#endif
+
+/** @brief Outcome details for a staged MySQL-variable commit. */
+struct MySQLThreadsCommitResult {
+	/** @brief Exact variable names rejected as members of an invalid grouped configuration. */
+	std::vector<std::string> rejected_variables;
+};
+
 #ifdef IDLE_THREADS
 typedef struct __attribute__((aligned(64))) _conn_exchange_t {
 	pthread_mutex_t mutex_idles;
@@ -54,6 +67,7 @@ enum MySQL_Thread_status_variable {
 	st_var_frontend_stmt_prepare,
 	st_var_frontend_stmt_execute,
 	st_var_frontend_stmt_close,
+	st_var_frontend_ping,
 	st_var_queries,
 	st_var_queries_slow,
 	st_var_queries_gtid,
@@ -98,6 +112,11 @@ enum MySQL_Thread_status_variable {
 	st_var_client_host_error_killed_connections,
 	st_var_set_wait_timeout_commands,
 	st_var_timeout_terminated_connections,
+	st_var_user_variable_assignments_tracked,
+	st_var_user_variable_replay_commands,
+	st_var_user_variable_replay_failures,
+	st_var_user_variable_fallback_unsupported,
+	st_var_user_variable_fallback_limits,
 	MY_st_var_END
 };
 
@@ -271,6 +290,7 @@ struct p_th_counter {
 		com_frontend_stmt_prepare,
 		com_frontend_stmt_execute,
 		com_frontend_stmt_close,
+		com_frontend_ping,
 		questions,
 		slow_queries,
 		gtid_consistent_queries,
@@ -302,6 +322,11 @@ struct p_th_counter {
 		mysql_killed_backend_connections,
 		mysql_killed_backend_queries,
 		client_host_error_killed_connections,
+		mysql_user_variable_assignments_tracked,
+		mysql_user_variable_replay_commands,
+		mysql_user_variable_replay_failures,
+		mysql_user_variable_fallback_unsupported,
+		mysql_user_variable_fallback_limits,
 		SIZE_
 	};
 };
@@ -406,6 +431,10 @@ class MySQL_Threads_Handler
 {
 	private:
 	int shutdown_;
+	/// @brief Number of worker + idle threads that registered before entering MySQL_Thread::run().
+	std::atomic<unsigned int> threads_registered;
+	/// @brief Number of worker + idle threads that already left MySQL_Thread::run().
+	std::atomic<unsigned int> threads_exited_run_loop;
 	size_t stacksize;
 	pthread_attr_t attr;
 	pthread_rwlock_t rwlock;
@@ -425,6 +454,13 @@ class MySQL_Threads_Handler
 	//   variable address
 	//   special variable : if true, further input validation is required
 	std::unordered_map<std::string, std::tuple<bool *, bool>> VariablesPointers_bool;
+#ifdef PROXYSQL31
+	std::unique_ptr<MySQL_Caching_Sha2_RSA> caching_sha2_rsa_manager_;
+	bool caching_sha2_rsa_config_initialized_ { false };
+	bool caching_sha2_rsa_accepted_auto_generate_ { true };
+	std::string caching_sha2_rsa_accepted_private_path_;
+	std::string caching_sha2_rsa_accepted_public_path_;
+#endif
 	/**
 	 * @brief Holds the clients host cache. It keeps track of the number of
 	 *   errors associated to a specific client:
@@ -453,6 +489,8 @@ class MySQL_Threads_Handler
 		int monitor_ping_timeout;
 		//! Monitor aws rds topology discovery interval. Unit: 'one discovery check per X monitor_read_only checks'.
 		int monitor_aws_rds_topology_discovery_interval;
+		//! Auto-generate runtime aws_rds_bgd_hostgroups entries when the read_only monitor detects a blue/green deployment.
+		int aws_blue_green_deployment_auto_discovery;
 		//! Monitor read only timeout. Unit: 'ms'.
 		int monitor_read_only_interval;
 		//! Monitor read only timeout. Unit: 'ms'.
@@ -517,10 +555,29 @@ class MySQL_Threads_Handler
 		int select_version_forwarding;
 		char *keep_multiplexing_variables;
 		char *default_authentication_plugin;
+#ifdef PROXYSQL31
+		bool caching_sha2_password_auto_generate_rsa_keys;
+		char *caching_sha2_password_private_key_path;
+		char *caching_sha2_password_public_key_path;
+#endif
 		char *proxy_protocol_networks;
 		//unsigned int default_charset; // removed in 2.0.13 . Obsoleted previously using MySQL_Variables instead
 		int handle_unknown_charset;
 		int default_authentication_plugin_int;
+		// pass-through authentication (see doc/internal/passthrough_authentication.md)
+		bool passthrough_auth_enabled;
+		bool passthrough_auth_empty_password;
+		bool passthrough_auth_unknown_users;
+		bool passthrough_auth_require_tls;
+		int passthrough_default_hg;
+		int passthrough_auth_cache_ttl_s;
+		int passthrough_auth_max_inflight_probes;
+		int passthrough_auth_max_failures_per_user;
+		int passthrough_auth_max_failures_per_ip;
+		int passthrough_auth_failure_window_s;
+		int passthrough_auth_failure_map_cap;
+		char *passthrough_default_schema;
+		char *passthrough_auth_username_pattern;
 		bool servers_stats;
 		bool commands_stats;
 		bool query_digests;
@@ -582,6 +639,7 @@ class MySQL_Threads_Handler
 		int query_processor_parser;
 		int set_query_lock_on_hostgroup;
 		int set_parser_algorithm;
+		int user_variable_tracking;
 		int reset_connection_algorithm;
 		int auto_increment_delay_multiplex;
 		int auto_increment_delay_multiplex_timeout_ms;
@@ -634,6 +692,7 @@ class MySQL_Threads_Handler
 		bool query_cache_stores_empty_result;
 		bool kill_backend_connection_when_disconnect;
 		bool client_session_track_gtid;
+		bool update_gtid_from_ok;
 		bool enable_client_deprecate_eof;
 		bool enable_server_deprecate_eof;
 		bool enable_load_data_local_infile;
@@ -772,11 +831,26 @@ class MySQL_Threads_Handler
 	unsigned int get_global_version();
 	void wrlock();
  	void wrunlock();
-	void commit();
-	char *get_variable(char *name);
-	bool set_variable(char *name, const char *value);
+	/** @brief Commit staged variables and report grouped variables that retained prior values. */
+	MySQLThreadsCommitResult commit();
+	/**
+	 * @brief Atomically replace and commit a registered integer variable.
+	 *
+	 * The previous value is read and the replacement is staged and committed while
+	 * holding the handler write lock. The caller must supply a valid value for a
+	 * registered integer variable.
+	 *
+	 * @return The variable value observed before the replacement.
+	 */
+	int set_int_variable_and_commit(const char* name, const char* value);
+	char *get_variable(const char *name);
+	bool set_variable(const char *name, const char *value);
 	char **get_variables_list();
 	bool has_variable(const char * name);
+#ifdef PROXYSQL31
+	/** @brief Return the handler-owned RSA snapshot manager; ownership is not transferred. */
+	MySQL_Caching_Sha2_RSA* caching_sha2_rsa() const { return caching_sha2_rsa_manager_.get(); }
+#endif
 
 	MySQL_Threads_Handler();
 	~MySQL_Threads_Handler();
@@ -788,6 +862,55 @@ class MySQL_Threads_Handler
 	void init(unsigned int num=0, size_t stack=0);
 	proxysql_mysql_thread_t *create_thread(unsigned int tn, void *(*start_routine) (void *), bool);
 	void shutdown_threads();
+	/**
+	 * @brief Rendezvous for all worker and idle threads before they self-delete.
+	 *
+	 * Worker and idle threads dereference each other's MySQL_Thread objects:
+	 * MySQL_Thread::run_MoveSessionsBetweenThreads() reads
+	 * mysql_threads_idles[rand()].worker, and the idle branch of
+	 * MySQL_Thread::run() reads mysql_threads[rand()].worker and then locks that
+	 * worker's myexchange mutex unconditionally. Because the peer is picked at
+	 * random and both directions exist, no pthread_join() ordering in
+	 * shutdown_threads() can make self-deletion safe -- each thread destroys its
+	 * own MySQL_Thread from its own thread function, which pthread_join() only
+	 * observes after the fact.
+	 *
+	 * Destruction must nevertheless stay on the owning thread, because
+	 * ~MySQL_Thread() frees __thread variables (mysql_thread___*) and calls
+	 * GloMyQPro->end_thread().
+	 *
+	 * Every worker and idle thread therefore calls this right after
+	 * MySQL_Thread::run() returns and before deleting its own MySQL_Thread (and
+	 * before clearing its slot in mysql_threads[], which another thread may still
+	 * be about to load). It returns only once all of them have left run(), so no
+	 * MySQL_Thread is ever freed while another thread may still reach into it.
+	 *
+	 * The participant count comes from register_thread_before_run_loop(), not from
+	 * num_threads: every thread that registers is exactly a thread that will call
+	 * this, so the barrier is self-consistent and does not depend on every slot of
+	 * mysql_threads[]/mysql_threads_idles[] being populated. That matters because
+	 * the rest of this class deliberately tolerates a NULL worker slot (see
+	 * signal_all_threads() and the guards in shutdown_threads()).
+	 *
+	 * @note The wait is unbounded, but adds no new liveness requirement. A thread
+	 *   that never leaves run() still holds a non-NULL slot -- it registers right
+	 *   after storing that pointer -- so shutdown_threads() would block forever in
+	 *   the pthread_join() it performs under exactly that non-NULL guard. Leaving
+	 *   run() strictly precedes the thread exit that join waits for, so any hang
+	 *   this barrier can produce is a hang the pre-existing join already produced.
+	 *   The wait logs via proxy_error() every THREADS_EXIT_REPORT_INTERVAL_US so a
+	 *   stalled shutdown is diagnosable instead of silent; it never aborts.
+	 */
+	void wait_for_all_threads_to_exit_run_loop();
+	/**
+	 * @brief Register the calling thread as a participant of the shutdown barrier.
+	 *
+	 * Must be called by each worker/idle thread function before it releases the
+	 * start-up gate (`load_`), so that the count is complete before any thread can
+	 * enter MySQL_Thread::run() and therefore before any thread can reach
+	 * wait_for_all_threads_to_exit_run_loop().
+	 */
+	void register_thread_before_run_loop();
 	int listener_add(const char *iface);
 	int listener_add(const char *address, int port);
 	int listener_del(const char *iface);

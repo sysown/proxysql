@@ -511,7 +511,7 @@ void Base_Session<S,DS,B,T>::housekeeping_before_pkts() {
 				DS * myds = mybe->server_myds;
 				if constexpr (std::is_same_v<S, MySQL_Session>) {
 					if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit() == false) {
-						if (mysql_thread___reset_connection_algorithm == 2) {
+						if (mysql_thread___reset_connection_algorithm == 2 && myds->myconn->healthy) {
 							create_new_session_and_reset_connection(myds);
 						} else {
 							myds->destroy_MySQL_Connection_From_Pool(true);

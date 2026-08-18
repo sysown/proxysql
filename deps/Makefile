@@ -174,7 +174,7 @@ cityhash: cityhash/cityhash/src/.libs/libcityhash.a
 lz4/lz4/lib/liblz4.a:
 	cd lz4 && rm -rf lz4-*/ || true
 	cd lz4 && tar -zxf lz4-*.tar.gz
-	cd lz4/lz4 && CC=${CC} CXX=${CXX} ${MAKE}
+	cd lz4/lz4 && CC=${CC} CXX=${CXX} ${MAKE} MOREFLAGS=-fPIC
 
 lz4: lz4/lz4/lib/liblz4.a
 
@@ -185,7 +185,7 @@ lz4: lz4/lz4/lib/liblz4.a
 zstd/zstd/lib/libzstd.a:
 	cd zstd && rm -rf zstd-*/ || true
 	cd zstd && tar -zxf zstd-*.tar.gz
-	cd zstd/zstd/lib && CC=${CC} CXX=${CXX} ${MAKE} libzstd.a
+	cd zstd/zstd/lib && CC=${CC} CXX=${CXX} ${MAKE} MOREFLAGS=-fPIC libzstd.a
 
 zstd: zstd/zstd/lib/libzstd.a
 
@@ -201,6 +201,7 @@ $(PROTOBUF_LIB):
 	cd protobuf/protobuf-$(PROTOBUF_VERSION) && CC=${CC} CXX=${CXX} cmake -S . -B build \
 		-DCMAKE_BUILD_TYPE=RelWithDebInfo \
 		-DCMAKE_INSTALL_PREFIX=$(PROTOBUF_INSTALL_DIR) \
+		-DCMAKE_INSTALL_LIBDIR=lib \
 		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
 		-Dprotobuf_BUILD_TESTS=OFF \
 		-Dprotobuf_BUILD_CONFORMANCE=OFF \
@@ -260,10 +261,12 @@ ifeq ($(UNAME_S),Darwin)
 else
 	cd mariadb-client-library/mariadb_client && cmake . -Wno-dev -DCMAKE_BUILD_TYPE=RelWithDebInfo -DOPENSSL_ROOT_DIR=$(SSL_IDIR) -DOPENSSL_LIBRARIES=$(SSL_LDIR) -DCMAKE_POLICY_VERSION_MINIMUM=3.5 .
 endif
+ifneq ($(UNAME_S),Darwin)
 ifeq ($(PROXYDEBUG),1)
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_context.h.patch
 else ifeq ($(USEVALGRIND),1)
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_context.h.patch
+endif
 endif
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_stmt.c.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_lib.c.patch
@@ -420,7 +423,7 @@ endif
 libusual: libusual/libusual/.libs/libusual.a
 
 
-libscram/lib/libscram.a:postgresql/postgresql/src/interfaces/libpq/libpq.a 
+libscram/lib/libscram.a:postgresql/postgresql/src/interfaces/libpq/libpq.a
 	cd libscram && rm -rf lib/* || true
 	cd libscram && CC=${CC} CXX=${CXX} ${MAKE} LIBOPENSSL_DIR="$(SSL_IDIR)" POSTGRESQL_DIR="$(shell pwd)/postgresql/postgresql/"
 

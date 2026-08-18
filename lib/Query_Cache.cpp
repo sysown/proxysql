@@ -585,8 +585,9 @@ std::shared_ptr<QC_entry_t> Query_Cache<QC_DERIVED>::get(uint64_t user_hash, con
 		uint64_t t = curtime_ms;
 		if (entry_shared->expire_ms > t && entry_shared->create_ms + cache_ttl > t) {
 			if (
-				GET_THREAD_VARIABLE(query_cache_soft_ttl_pct) && !entry_shared->refreshing &&
-				entry_shared->create_ms + cache_ttl * GET_THREAD_VARIABLE(query_cache_soft_ttl_pct) / 100 <= t
+				GET_THREAD_VARIABLE(query_cache_soft_ttl_pct) &&
+				entry_shared->create_ms + cache_ttl * GET_THREAD_VARIABLE(query_cache_soft_ttl_pct) / 100 <= t &&
+				__sync_bool_compare_and_swap(&entry_shared->refreshing, false, true)
 			) {
 				// If the Query Cache entry reach the soft_ttl but do not reach
 				// the cache_ttl, the next query hit the backend and refresh
@@ -594,7 +595,6 @@ std::shared_ptr<QC_entry_t> Query_Cache<QC_DERIVED>::get(uint64_t user_hash, con
 				// refreshing is in process, other queries keep using the "old"
 				// Query Cache entry.
 				// soft_ttl_pct with value 0 and 100 disables the functionality.
-				entry_shared->refreshing = true;
 			} else {
 				THR_UPDATE_CNT(__thr_cntGetOK,Glo_cntGetOK,1,1);
 				THR_UPDATE_CNT(__thr_dataOUT,Glo_dataOUT, entry_shared->length,1);
@@ -655,49 +655,49 @@ SQLite3_result* Query_Cache<QC_DERIVED>::SQL3_getStats() {
 	// NOTE: as there is no string copy, we do NOT free pta[0] and pta[1]
 	{ // Used Memoery
 		pta[0]=(char *)"Query_Cache_Memory_bytes";
-		sprintf(buf,"%lu", get_data_size_total());
+		snprintf(buf, sizeof(buf), "%lu", get_data_size_total());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{ // Glo_cntGet
 		pta[0]=(char *)"Query_Cache_count_GET";
-		sprintf(buf,"%lu", Glo_cntGet);
+		snprintf(buf, sizeof(buf), "%lu", Glo_cntGet);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{ // Glo_cntGetOK
 		pta[0]=(char *)"Query_Cache_count_GET_OK";
-		sprintf(buf,"%lu", Glo_cntGetOK);
+		snprintf(buf, sizeof(buf), "%lu", Glo_cntGetOK);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{ // Glo_cntSet
 		pta[0]=(char *)"Query_Cache_count_SET";
-		sprintf(buf,"%lu", Glo_cntSet);
+		snprintf(buf, sizeof(buf), "%lu", Glo_cntSet);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{ // Glo_dataIN
 		pta[0]=(char *)"Query_Cache_bytes_IN";
-		sprintf(buf,"%lu", Glo_dataIN);
+		snprintf(buf, sizeof(buf), "%lu", Glo_dataIN);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{ // Glo_dataOUT
 		pta[0]=(char *)"Query_Cache_bytes_OUT";
-		sprintf(buf,"%lu", Glo_dataOUT);
+		snprintf(buf, sizeof(buf), "%lu", Glo_dataOUT);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{ // Glo_cntPurge
 		pta[0]=(char *)"Query_Cache_Purged";
-		sprintf(buf,"%lu", Glo_cntPurge);
+		snprintf(buf, sizeof(buf), "%lu", Glo_cntPurge);
 		pta[1]=buf;
 		result->add_row(pta);
 	}
 	{ // Glo_num_entries
 		pta[0]=(char *)"Query_Cache_Entries";
-		sprintf(buf,"%lu", Glo_num_entries);
+		snprintf(buf, sizeof(buf), "%lu", Glo_num_entries);
 		pta[1]=buf;
 		result->add_row(pta);
 	}

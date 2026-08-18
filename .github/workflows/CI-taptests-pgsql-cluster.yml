@@ -11,83 +11,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }}
   cancel-in-progress: true
 
-env:
-  SHA: ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
-
 jobs:
-  tests:
-    runs-on: ubuntu-22.04
+  run:
     if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
-    strategy:
-      fail-fast: false
-      matrix:
-        testdist: [ 'ubuntu22-tap' ]
-    env:
-      TESTDIST: ${{ matrix.testdist }}
-      BLDCACHE: ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}_${{ matrix.testdist }}
-
-    steps:
-
-    - name: Checkout
-      uses: actions/checkout@v4
-
-    - name: Cache restore src
-      id: cache-src
-      uses: actions/cache/restore@v4
-      with:
-        key: ${{ env.BLDCACHE }}_src
-        fail-on-cache-miss: true
-        path: |
-          src/
-
-    - name: Cache restore test
-      id: cache-test
-      uses: actions/cache/restore@v4
-      with:
-        key: ${{ env.BLDCACHE }}_test
-        fail-on-cache-miss: true
-        path: |
-          test/
-
-    - name: Build CI base image
-      run: |
-        cd test/infra/docker-base
-        docker build --network host -t proxysql-ci-base:latest .
-
-    - name: Start infrastructure
-      run: |
-        export WORKSPACE="${GITHUB_WORKSPACE}"
-        export INFRA_ID="pgsql-cluster-${GITHUB_RUN_ID}"
-        export TAP_GROUP="legacy-g3"
-        export TEST_PY_TAP_INCL="test_cluster_sync_pgsql-t"
-        export PROXYSQL_CLUSTER_NODES=2
-        source test/infra/common/env.sh
-        ./test/infra/control/ensure-infras.bash
-
-    - name: Run test_cluster_sync_pgsql-t
-      run: |
-        export WORKSPACE="${GITHUB_WORKSPACE}"
-        export INFRA_ID="pgsql-cluster-${GITHUB_RUN_ID}"
-        export TAP_GROUP="legacy-g3"
-        export TEST_PY_TAP_INCL="test_cluster_sync_pgsql-t"
-        export PROXYSQL_CLUSTER_NODES=2
-        source test/infra/common/env.sh
-        ./test/infra/control/run-tests-isolated.bash
-
-    - name: Cleanup
-      if: always()
-      run: |
-        export WORKSPACE="${GITHUB_WORKSPACE}"
-        export INFRA_ID="pgsql-cluster-${GITHUB_RUN_ID}"
-        export TAP_GROUP="legacy-g3"
-        source test/infra/common/env.sh
-        ./test/infra/control/stop-proxysql-isolated.bash || true
-        ./test/infra/control/destroy-infras.bash || true
-
-    - name: Archive logs
-      if: ${{ failure() && !cancelled() }}
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ github.workflow }}-${{ env.SHA }}-logs-run${{ github.run_number }}
-        path: |
-          ci_infra_logs/
+    permissions: write-all
+    uses: sysown/proxysql/.github/workflows/ci-taptests-pgsql-cluster.yml@GH-Actions
+    secrets: inherit
+    with:
+      trigger: ${{ toJson(github) }}

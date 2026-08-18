@@ -62,6 +62,21 @@ wget https://github.com/sysown/proxysql/releases/download/v3.0.4/proxysql_3.0.4-
 dpkg -i proxysql_3.0.4-ubuntu24_amd64.deb
 ```
 
+#### Generic Linux binaries (tarball)
+
+Distribution-agnostic `.tar.gz` builds are also published on the
+[releases page](https://github.com/sysown/proxysql/releases) — handy for hosts
+where a `.deb`/`.rpm` is inconvenient (any glibc 2.34+ / OpenSSL 3 Linux,
+`amd64` or `arm64`). Grab the `proxysql-<version>-linux-<arch>.tar.gz` asset,
+verify its checksum, and extract:
+```bash
+sha256sum -c proxysql-<version>-linux-amd64.tar.gz.sha256
+tar xzf proxysql-<version>-linux-amd64.tar.gz
+```
+The archive contains `bin/proxysql`, a sample `etc/proxysql.cnf`, the `systemd/`
+units, and helper tools. The v4.0 build additionally ships the runtime plugins
+under `lib/proxysql/` (`ProxySQL_MySQLX_Plugin.so`, `ProxySQL_GenAI_Plugin.so`).
+
 Alternatively you can also use the available repositories:
 
 #### Ubuntu / Debian:
