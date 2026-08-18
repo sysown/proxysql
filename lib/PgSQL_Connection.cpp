@@ -444,6 +444,23 @@ handler_again:
 			break;
 		}
 
+		// Issue #6109: the backend's transport is gone (libpq sets CONNECTION_BAD only on
+		// connection loss). fetch_result_cont() returns from its PQconsumeInput()
+		// failure without assigning result_type, so the dispatch below would act on
+		// the previous iteration's value. End the cycle instead: error_info is
+		// already set, so async_query() returns -1 and the session destroys the
+		// connection and unplugs the dead fd.
+		//
+		// Not is_error_present(): that is also true for an ordinary backend ERROR,
+		// which must keep flowing through the PGRES_FATAL_ERROR arm below.
+		// Guarded on pgsql_result == NULL so a pending multi-statement result is
+		// dispatched first. is_copy_out is cleared because a backend dying mid-COPY
+		// would otherwise reach the end state with it still set.
+		if (pgsql_result == NULL && PQstatus(pgsql_conn) == CONNECTION_BAD) {
+			is_copy_out = false;
+			NEXT_IMMEDIATE(fetch_result_end_st);
+		}
+
 		if (result_type == 1) {
 			std::unique_ptr<PGresult, decltype(&PQclear)> result(get_result(), PQclear);
 
@@ -1195,17 +1212,28 @@ void PgSQL_Connection::fetch_result_start() {
 	PROXY_TRACE();
 	reset_error();
 	async_exit_status = PG_EVENT_NONE;
+	// result_type and ps_result are per-fetch outputs but have connection lifetime.
+	// Left over from a previous fetch they are indistinguishable from a value this
+	// one produced, so reset them where the cycle starts.
+	result_type = 0;
+	ps_result.id = 0;
+	ps_result.len = 0;
+	ps_result.data = NULL;
 }
 
 void PgSQL_Connection::fetch_result_cont(short event) {
 	PROXY_TRACE();
 	async_exit_status = PG_EVENT_NONE;
 
-	// Avoid fetching a new result if one is already available. 
+	// Avoid fetching a new result if one is already available.
 	// This situation can happen when a multi-statement query has been executed.
-	if (pgsql_result)
+	// result_type must be set: fetch_result_start() zeroed it for this cycle, so
+	// without this the caller would dispatch on 0 instead of the pending result.
+	if (pgsql_result) {
+		result_type = 1;
 		return;
-	
+	}
+
 	if (is_copy_out == false) {
 		switch (PShandleRowData(pgsql_conn, new_result, &ps_result)) {
 		case 0:
