@@ -164,14 +164,14 @@ void load_endpoint_overrides(
 			continue;
 		}
 
-		MysqlxBackendEndpointOverride override {};
-		override.hostname = nullable_string(row->fields[0]);
-		override.mysql_port = nullable_int(row->fields[1]);
-		override.mysqlx_port = nullable_int(row->fields[2], 33060);
-		override.use_ssl = nullable_bool(row->fields[3]);
-		override.attributes = nullable_string(row->fields[4]);
-		override.comment = nullable_string(row->fields[5]);
-		overrides[endpoint_key(override.hostname, override.mysql_port)] = std::move(override);
+		MysqlxBackendEndpointOverride endpoint_override {};
+		endpoint_override.hostname = nullable_string(row->fields[0]);
+		endpoint_override.mysql_port = nullable_int(row->fields[1]);
+		endpoint_override.mysqlx_port = nullable_int(row->fields[2], 33060);
+		endpoint_override.use_ssl = nullable_bool(row->fields[3]);
+		endpoint_override.attributes = nullable_string(row->fields[4]);
+		endpoint_override.comment = nullable_string(row->fields[5]);
+		overrides[endpoint_key(endpoint_override.hostname, endpoint_override.mysql_port)] = std::move(endpoint_override);
 	}
 }
 

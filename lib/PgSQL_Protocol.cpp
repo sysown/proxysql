@@ -5,6 +5,7 @@
 #include <locale>
 #include "proxysql.h"
 #include "cpp.h"
+#include "gen_utils.h"
 #include "PgSQL_Authentication.h"
 #include "PgSQL_Data_Stream.h"
 #include "PgSQL_Protocol.h"
@@ -431,7 +432,11 @@ bool PgSQL_Protocol::generate_pkt_initial_handshake(bool send, void** _ptr, unsi
 		const char* user = (const char*)(*myds)->myconn->conn_params.get_value(PG_USER);
 		if (user && *user) {
 			bool _ssl = false, _tp = true, _ff = false; int _hg = -1, _mc = 0; void* _sha = NULL; char* _attr = NULL;
-			char* stored = GloPgAuth->lookup((char*)user, USERNAME_FRONTEND,
+			// Same credential scope as the response-time lookup in process_handshake_response()
+			// (#5987): ADMIN/STATS resolve against the Admin scope, everything else against
+			// USERNAME_FRONTEND. The two lookups must agree or the challenge method and the
+			// verification would be chosen from different credentials.
+			char* stored = GloPgAuth->lookup((char*)user, cred_scope_for_session((*myds)->sess->session_type),
 							&_ssl, &_hg, &_tp, &_ff, &_mc, &_sha, &_attr);
 			if (stored) {
 				bool reject = false; // on reject we still challenge with the floor method; the response handler mocks
@@ -456,11 +461,8 @@ bool PgSQL_Protocol::generate_pkt_initial_handshake(bool send, void** _ptr, unsi
 	case AUTHENTICATION_METHOD::MD5_PASSWORD:
 		memset((*myds)->tmp_login_salt, 0, sizeof((*myds)->tmp_login_salt));
 		if (RAND_bytes((*myds)->tmp_login_salt, sizeof((*myds)->tmp_login_salt)) != 1) {
-			// Fallback method: using a basic pseudo-random generator
-			srand((unsigned int)time(NULL));  
-			for (size_t i = 0; i < sizeof((*myds)->tmp_login_salt); i++) {
-				(*myds)->tmp_login_salt[i] = rand_fast() % 256;
-			}
+			proxy_error("RAND_bytes() failed generating PostgreSQL login salt\n");
+			return false;
 		}
 		pgpkt.write_generic(type, "ib", PG_PKT_AUTH_MD5, (*myds)->tmp_login_salt, sizeof((*myds)->tmp_login_salt));
 		break;
@@ -1448,7 +1450,7 @@ __exit_process_pkt_handshake_response:
 	return ret;
 }
 
-void PgSQL_Protocol::welcome_client() {
+bool PgSQL_Protocol::welcome_client() {
 	PG_pkt pgpkt(128);
 
 	pgpkt.set_multi_pkt_mode(true);
@@ -1499,8 +1501,8 @@ void PgSQL_Protocol::welcome_client() {
 	uint32_t backend_pid = (*myds)->sess->thread_session_id;
 	uint32_t cancel_key = -1;
 	if (RAND_bytes((unsigned char*)&cancel_key, sizeof(cancel_key)) != 1) {
-		// Fallback: use libc PRNG
-		cancel_key = (uint32_t)random();
+		proxy_error("RAND_bytes() failed generating PostgreSQL cancel key\n");
+		return false;
 	}
 	(*myds)->sess->cancel_secret_key = cancel_key;
 
@@ -1519,6 +1521,7 @@ void PgSQL_Protocol::welcome_client() {
 	(*myds)->PSarrayOUT->add((void*)buff.first, buff.second);
 	//(*myds)->DSS = STATE_CLIENT_AUTH_OK;
 	//(*myds)->sess->status = WAITING_CLIENT_DATA;
+	return true;
 }
 
 void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* msg, PGSQL_ERROR_CODES code, bool fatal, bool track, PtrSize_t* _ptr) {

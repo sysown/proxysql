@@ -4024,7 +4024,10 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				l_free(pkt->size, pkt->ptr);
 				return;
 			} else {
-				assert(0); // this should never happen
+				*wrong_pass = true;
+				client_myds->setDSS_STATE_QUERY_SENT_NET();
+				l_free(pkt->size, pkt->ptr);
+				return;
 			}
 		} else {
 			*wrong_pass = true; //to forcefully close the connection. Is there a better way to do it?
@@ -4231,11 +4234,15 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					(strcmp(client_addr, (char*)"::1") == 0)
 					) {
 					// we are good!
-					client_myds->myprot.welcome_client();
-					handshake_err = false;
-					GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_OK, this, NULL);
-					status = WAITING_CLIENT_DATA;
-					client_myds->DSS = STATE_CLIENT_AUTH_OK;
+					if (client_myds->myprot.welcome_client()) {
+						handshake_err = false;
+						GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_OK, this, NULL);
+						status = WAITING_CLIENT_DATA;
+						client_myds->DSS = STATE_CLIENT_AUTH_OK;
+					} else {
+						*wrong_pass = true;
+						client_myds->setDSS_STATE_QUERY_SENT_NET();
+					}
 				}
 				else {
 					char* a = (char*)"User '%s' can only connect locally";
@@ -4268,10 +4275,14 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					//client_myds->myprot.generate_pkt_OK(true,NULL,NULL, (is_encrypted ? 3 : 2), 0,0,0,0,NULL,false);
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8, "Session=%p , DS=%p . STATE_CLIENT_AUTH_OK\n", this, client_myds);
 					GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_OK, this, NULL);
-					client_myds->myprot.welcome_client();
-					handshake_err = false;
-					status = WAITING_CLIENT_DATA;
-					client_myds->DSS = STATE_CLIENT_AUTH_OK;
+					if (client_myds->myprot.welcome_client()) {
+						handshake_err = false;
+						status = WAITING_CLIENT_DATA;
+						client_myds->DSS = STATE_CLIENT_AUTH_OK;
+					} else {
+						*wrong_pass = true;
+						client_myds->setDSS_STATE_QUERY_SENT_NET();
+					}
 				}
 			}
 		}
