@@ -674,9 +674,25 @@ handler_again:
 		// it indicates a non-error scenario and we skip this check.
 		if (exit_pipeline_mode == false &&
 			(query_result->get_result_packet_type() & (PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_EMPTY | PGSQL_QUERY_RESULT_ERROR)) == 0) {
-			// if we reach here we assume that error_info is already set in previous call
-			if (!is_error_present())
-				assert(0); // we might have missed setting error_info in previous call
+			// Issue #6110: normally error_info was set on a previous call. It is not always: a
+			// backend can answer a query with NO command outcome at all - a bare
+			// ReadyForQuery, without CommandComplete, EmptyQueryResponse or
+			// ErrorResponse. That is the backend violating the protocol, not an
+			// invariant of ours, so report it to the client rather than aborting the
+			// process. Setting error_info here also feeds add_error(NULL) below, which
+			// otherwise asserts for the same reason.
+			//
+			// The connection is also marked not reusable. A backend that answers a
+			// query incorrectly has not behaved to protocol, and handing that
+			// connection to another client risks giving them the same invalid reply,
+			// so it must not go back into the shared pool.
+			if (!is_error_present()) {
+				proxy_error("Backend %s:%d answered a query with no command outcome (bare ReadyForQuery)\n",
+					parent ? parent->address : "?", parent ? parent->port : 0);
+				set_error(PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION,
+					"backend answered the query with no command outcome", false);
+				reusable = false;
+			}
 
 			query_result->add_error(NULL);
 		}
