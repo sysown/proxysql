@@ -22,9 +22,30 @@ using json = nlohmann::json;
 #include <sstream>
 #include <netdb.h>
 #include <future>
+#include <cassert>
 
 #ifdef PROXYSQLTSDB
 namespace {
+class PthreadMutexGuard {
+public:
+	explicit PthreadMutexGuard(pthread_mutex_t& mutex) : mutex_(mutex) {
+		const int rc = pthread_mutex_lock(&mutex_);
+		assert(rc == 0);
+		(void)rc;
+	}
+	~PthreadMutexGuard() {
+		const int rc = pthread_mutex_unlock(&mutex_);
+		assert(rc == 0);
+		(void)rc;
+	}
+
+	PthreadMutexGuard(const PthreadMutexGuard&) = delete;
+	PthreadMutexGuard& operator=(const PthreadMutexGuard&) = delete;
+
+private:
+	pthread_mutex_t& mutex_;
+};
+
 std::string escape_sql_string_literal(const std::string& value) {
 	std::string escaped;
 	escaped.reserve(value.size() + 8);
@@ -240,6 +261,7 @@ ProxySQL_Statistics::~ProxySQL_Statistics() {
 	if (stmt_insert_backend_health) {
 		(*proxy_sqlite3_finalize)(stmt_insert_backend_health);
 	}
+	pthread_mutex_destroy(&tsdb_mutex);
 #endif
 	drop_tables_defs(tables_defs_statsdb_mem);
 	delete tables_defs_statsdb_mem;
@@ -1471,7 +1493,7 @@ void ProxySQL_Statistics::insert_tsdb_metric(const std::string& metric_name,
                                              const std::map<std::string, std::string>& labels,
                                              double value,
                                              time_t timestamp) {
-    std::lock_guard<std::mutex> lock(tsdb_mutex);
+    PthreadMutexGuard lock(tsdb_mutex);
     insert_tsdb_metric_unlocked(metric_name, labels, value, timestamp);
 }
 
@@ -1518,7 +1540,7 @@ void ProxySQL_Statistics::insert_backend_health(int hostgroup,
                                                 bool probe_up,
                                                 int connect_ms,
                                                 time_t timestamp) {
-    std::lock_guard<std::mutex> lock(tsdb_mutex);
+    PthreadMutexGuard lock(tsdb_mutex);
     insert_backend_health_unlocked(hostgroup, hostname, port, probe_up, connect_ms, timestamp);
 }
 
@@ -1560,7 +1582,7 @@ void ProxySQL_Statistics::tsdb_downsample_metrics() {
     if (!variables.tsdb_enabled) return;
     if (!statsdb_disk) return;
 
-    std::lock_guard<std::mutex> lock(tsdb_mutex);
+    PthreadMutexGuard lock(tsdb_mutex);
 
     time_t ts = time(NULL);
     time_t current_hour = (ts / 3600) * 3600;
@@ -1613,7 +1635,7 @@ void ProxySQL_Statistics::tsdb_retention_cleanup() {
     if (!variables.tsdb_enabled) return;
     if (!statsdb_disk) return;
 
-    std::lock_guard<std::mutex> lock(tsdb_mutex);
+    PthreadMutexGuard lock(tsdb_mutex);
 
     time_t ts = time(NULL);
     const int retention_days = std::max(1, variables.tsdb_retention_days);
@@ -1644,7 +1666,7 @@ ProxySQL_Statistics::tsdb_status_t ProxySQL_Statistics::get_tsdb_status() {
 
     if (!statsdb_disk) return status;
 
-    std::lock_guard<std::mutex> lock(tsdb_mutex);
+    PthreadMutexGuard lock(tsdb_mutex);
 
     char *error = NULL;
     int cols = 0;
@@ -1757,6 +1779,26 @@ bool ProxySQL_Statistics::tsdb_retention_timetoget(unsigned long long curtime) {
     return false;
 }
 
+SQLite3_result* ProxySQL_Statistics::list_tsdb_metric_names() {
+    if (!statsdb_disk) return NULL;
+    PthreadMutexGuard lock(tsdb_mutex);
+
+    char* error = NULL;
+    int cols = 0;
+    int affected_rows = 0;
+    SQLite3_result* resultset = NULL;
+    statsdb_disk->execute_statement(
+        "SELECT DISTINCT metric_name FROM tsdb_metrics ORDER BY metric_name",
+        &error, &cols, &affected_rows, &resultset);
+    if (error) {
+        proxy_error("list_tsdb_metric_names failed: %s\n", error);
+        free(error);
+        if (resultset) delete resultset;
+        return NULL;
+    }
+    return resultset;
+}
+
 // TSDB Query with Label Filtering
 SQLite3_result* ProxySQL_Statistics::query_tsdb_metrics(
         const std::string& metric_name,
@@ -1767,7 +1809,7 @@ SQLite3_result* ProxySQL_Statistics::query_tsdb_metrics(
 
     if (!statsdb_disk) return NULL;
 
-    std::lock_guard<std::mutex> lock(tsdb_mutex);
+    PthreadMutexGuard lock(tsdb_mutex);
 
     if (to < from) {
         std::swap(from, to);
@@ -1829,7 +1871,7 @@ SQLite3_result* ProxySQL_Statistics::query_tsdb_metrics(
 SQLite3_result* ProxySQL_Statistics::get_backend_health_metrics(time_t from, time_t to, int hostgroup) {
     if (!statsdb_disk) return NULL;
 
-    std::lock_guard<std::mutex> lock(tsdb_mutex);
+    PthreadMutexGuard lock(tsdb_mutex);
 
     if (to < from) {
         std::swap(from, to);
@@ -1872,7 +1914,7 @@ void ProxySQL_Statistics::tsdb_sampler_loop() {
         update_modules_metrics();
         auto metrics = GloVars.prometheus_registry->Collect();
         time_t now = time(NULL);
-        std::lock_guard<std::mutex> lock(tsdb_mutex);
+        PthreadMutexGuard lock(tsdb_mutex);
         statsdb_disk->execute("BEGIN");
         for (const auto& family : metrics) {
             for (const auto& metric : family.metric) {
@@ -2043,7 +2085,7 @@ void ProxySQL_Statistics::tsdb_monitor_loop() {
 			}
 		}
 
-		std::lock_guard<std::mutex> lock(tsdb_mutex);
+		PthreadMutexGuard lock(tsdb_mutex);
 		statsdb_disk->execute("BEGIN");
 		for (const probe_result_t& res : batch_results) {
 			insert_backend_health_unlocked(

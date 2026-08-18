@@ -235,6 +235,29 @@ int main() {
 	fetch_single_string(admin, "SELECT COUNT(*) FROM stats_history.tsdb_metrics WHERE metric_name='test_downsample_metric'", before_count);
 	diag("Test metrics in tsdb_metrics before downsample: %s", before_count.c_str());
 
+	// Re-evaluate the boundary immediately before the command. A test that
+	// starts in the final milliseconds of an hour must not leave its fixture in
+	// what has just become the second-most-recent completed bucket.
+	const time_t command_now = time(NULL);
+	const time_t command_completed_hour = ((command_now - 3600) / 3600) * 3600;
+	if (command_completed_hour != completed_hour) {
+		diag("Hour rolled over during fixture setup; moving data from %ld to %ld",
+			completed_hour, command_completed_hour);
+		mysql_query(admin,
+			"DELETE FROM stats_history.tsdb_metrics WHERE metric_name='test_downsample_metric'");
+		drain_results(admin);
+		completed_hour = command_completed_hour;
+		for (int i = 0; i <= 3; ++i) {
+			snprintf(insert_query, sizeof(insert_query),
+				"INSERT OR REPLACE INTO stats_history.tsdb_metrics "
+				"(timestamp, metric_name, labels, value) "
+				"VALUES (%ld, 'test_downsample_metric', '{\"test\":\"true\"}', %f)",
+				completed_hour + i * 60, 42.0 + i);
+			mysql_query(admin, insert_query);
+			drain_results(admin);
+		}
+	}
+
 	// Run the downsample command
 	rc = mysql_query(admin, "PROXYSQL TSDB DOWNSAMPLE");
 	ok(rc == 0, "PROXYSQL TSDB DOWNSAMPLE command is supported");

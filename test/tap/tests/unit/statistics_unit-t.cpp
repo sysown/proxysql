@@ -616,6 +616,31 @@ static void test_insert_and_query_tsdb_metric() {
 	}
 }
 
+static void test_list_tsdb_metric_names() {
+	std::map<std::string, std::string> labels;
+	const time_t now = time(nullptr) + 50;
+	stats->insert_tsdb_metric("listed_metric_b", labels, 1.0, now);
+	stats->insert_tsdb_metric("listed_metric_a", labels, 2.0, now);
+	stats->insert_tsdb_metric("listed_metric_b", labels, 3.0, now + 1);
+
+	SQLite3_result* result = stats->list_tsdb_metric_names();
+	ok(result != nullptr, "list_tsdb_metric_names: returns a result");
+	if (result) {
+		bool found_a = false;
+		bool found_b = false;
+		for (int index = 0; index < result->rows_count; ++index) {
+			const char* name = result->rows[index]->fields[0];
+			found_a = found_a || (name != nullptr && strcmp(name, "listed_metric_a") == 0);
+			found_b = found_b || (name != nullptr && strcmp(name, "listed_metric_b") == 0);
+		}
+		ok(found_a && found_b,
+		   "list_tsdb_metric_names: returns both distinct inserted names");
+		delete result;
+	} else {
+		ok(false, "list_tsdb_metric_names: returns both distinct inserted names");
+	}
+}
+
 static void test_query_tsdb_metric_with_label_filter() {
 	time_t now = time(nullptr) + 100;  // offset to not collide with previous test
 
@@ -873,8 +898,8 @@ int main() {
 	num_tests += 42;
 	// TSDB timers: 9
 	num_tests += 9;
-	// TSDB metric insert/query: 9
-	num_tests += 9;
+	// TSDB metric insert/query: 11
+	num_tests += 11;
 	// TSDB backend health: 4
 	num_tests += 4;
 	// TSDB monitor concurrency: 1
@@ -944,6 +969,7 @@ int main() {
 
 	// TSDB metric insert/query
 	test_insert_and_query_tsdb_metric();
+	test_list_tsdb_metric_names();
 	test_query_tsdb_metric_with_label_filter();
 	test_query_tsdb_metric_with_single_quote_in_name();
 	test_query_tsdb_metric_swapped_time_range();

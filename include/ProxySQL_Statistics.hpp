@@ -240,6 +240,7 @@ class ProxySQL_Statistics {
 		time_t from,
 		time_t to,
 		const std::string& aggregation = "");
+	SQLite3_result* list_tsdb_metric_names();
 	// Backend health queries
 	SQLite3_result* get_backend_health_metrics(time_t from, time_t to, int hostgroup = -1);
 	// Status
@@ -281,7 +282,7 @@ class ProxySQL_Statistics {
 	private:
 #ifdef PROXYSQLTSDB
 	/** Serialize compound operations performed through the shared TSDB SQLite connection. */
-	std::mutex tsdb_mutex;
+	pthread_mutex_t tsdb_mutex = PTHREAD_MUTEX_INITIALIZER;
 	void insert_tsdb_metric_unlocked(const std::string& metric_name,
 		const std::map<std::string, std::string>& labels,
 		double value,
