@@ -7,6 +7,7 @@ using json = nlohmann::json;
 #define PROXYJSON
 
 #include "MCP_Endpoint.h"
+#include "genai_plugin.h"
 #include "MCP_Thread.h"
 #include "MySQL_Tool_Handler.h"
 #include "MCP_Tool_Handler.h"
@@ -19,7 +20,7 @@ MCP_JSONRPC_Resource::MCP_JSONRPC_Resource(
 	MCP_Threads_Handler* h,
 	MCP_Tool_Handler* th,
 	const std::string& name,
-	std::shared_mutex* dependencies_mutex
+	GenAIRWLock* dependencies_mutex
 )
 	: handler(h),
 	  tool_handler(th),
@@ -519,9 +520,9 @@ json MCP_JSONRPC_Resource::handle_tools_call(const json& req_json) {
 	// the shared side only across the handler call so the reload can wait for
 	// current users and rebind the persistent handler before admitting the
 	// next request.
-	std::shared_lock<std::shared_mutex> runtime_guard;
+	std::shared_lock<GenAIRWLock> runtime_guard;
 	if (runtime_dependencies_mutex != nullptr) {
-		runtime_guard = std::shared_lock<std::shared_mutex>(*runtime_dependencies_mutex);
+		runtime_guard = std::shared_lock<GenAIRWLock>(*runtime_dependencies_mutex);
 	}
 	json response = tool_handler->execute_tool(tool_name, arguments);
 

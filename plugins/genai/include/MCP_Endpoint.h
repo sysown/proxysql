@@ -6,11 +6,11 @@
 #include "proxysql.h"
 #include <string>
 #include <memory>
-#include <shared_mutex>
 
 // Forward declarations
 class MCP_Threads_Handler;
 class MCP_Tool_Handler;
+class GenAIRWLock;
 
 // Include httpserver after proxysql.h
 #include "httpserver.hpp"
@@ -37,7 +37,7 @@ private:
 	MCP_Threads_Handler* handler;       ///< Pointer to MCP handler for variable access
 	MCP_Tool_Handler* tool_handler;     ///< Pointer to endpoint's dedicated tool handler
 	std::string endpoint_name;           ///< Endpoint name (config, query, admin, etc.)
-	std::shared_mutex* runtime_dependencies_mutex; ///< Optional guard for borrowed GenAI runtime state
+	GenAIRWLock* runtime_dependencies_mutex; ///< Optional guard for borrowed GenAI runtime state
 
 	/**
 	 * @brief Authenticate the incoming request
@@ -162,7 +162,7 @@ public:
 		MCP_Threads_Handler* h,
 		MCP_Tool_Handler* th,
 		const std::string& name,
-		std::shared_mutex* dependencies_mutex = nullptr
+		GenAIRWLock* dependencies_mutex = nullptr
 	);
 
 	/**

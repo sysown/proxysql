@@ -287,6 +287,8 @@ void refresh_stats_mcp_query_tools_counters_reset(SQLite3DB* db, void*) {
 
 void refresh_stats_genai_global(SQLite3DB* db, void*) {
 	if (db == nullptr) return;
+	GenAIPluginContext& ctx = genai_context();
+	std::shared_lock<GenAIRWLock> runtime_guard(ctx.runtime_dependencies_mutex);
 
 	std::vector<std::pair<std::string, std::string>> all_vars;
 
@@ -294,8 +296,8 @@ void refresh_stats_genai_global(SQLite3DB* db, void*) {
 		auto vars = GloGATH->collect_status_variables();
 		all_vars.insert(all_vars.end(), vars.begin(), vars.end());
 	}
-	if (genai_context().mcp) {
-		auto vars = genai_context().mcp->collect_status_variables();
+	if (ctx.mcp) {
+		auto vars = ctx.mcp->collect_status_variables();
 		all_vars.insert(all_vars.end(), vars.begin(), vars.end());
 	}
 	if (GloAI) {

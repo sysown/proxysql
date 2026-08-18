@@ -21,13 +21,69 @@
 #include "ProxySQL_Plugin.h"
 
 #include <atomic>
+#include <cassert>
 #include <mutex>
 #include <shared_mutex>
+#include <pthread.h>
 
 namespace prometheus { class Counter; }
 class Anomaly_Detector;
 class MCP_Threads_Handler;
 class GenAI_Threads_Handler;
+
+/** BasicLockable wrapper backed by the project's pthread mutex primitive. */
+class GenAIMutex {
+public:
+	GenAIMutex() = default;
+	~GenAIMutex() { pthread_mutex_destroy(&mutex_); }
+
+	void lock() noexcept {
+		const int rc = pthread_mutex_lock(&mutex_);
+		assert(rc == 0);
+		(void)rc;
+	}
+	void unlock() noexcept {
+		const int rc = pthread_mutex_unlock(&mutex_);
+		assert(rc == 0);
+		(void)rc;
+	}
+
+	GenAIMutex(const GenAIMutex&) = delete;
+	GenAIMutex& operator=(const GenAIMutex&) = delete;
+
+private:
+	pthread_mutex_t mutex_ = PTHREAD_MUTEX_INITIALIZER;
+};
+
+/** SharedMutex wrapper backed by the project's pthread rwlock primitive. */
+class GenAIRWLock {
+public:
+	GenAIRWLock() = default;
+	~GenAIRWLock() { pthread_rwlock_destroy(&rwlock_); }
+
+	void lock() noexcept {
+		const int rc = pthread_rwlock_wrlock(&rwlock_);
+		assert(rc == 0);
+		(void)rc;
+	}
+	void unlock() noexcept {
+		const int rc = pthread_rwlock_unlock(&rwlock_);
+		assert(rc == 0);
+		(void)rc;
+	}
+	void lock_shared() noexcept {
+		const int rc = pthread_rwlock_rdlock(&rwlock_);
+		assert(rc == 0);
+		(void)rc;
+	}
+	void unlock_shared() noexcept { unlock(); }
+
+	GenAIRWLock(const GenAIRWLock&) = delete;
+	GenAIRWLock& operator=(const GenAIRWLock&) = delete;
+
+private:
+	pthread_rwlock_t rwlock_ = PTHREAD_RWLOCK_INITIALIZER;
+};
 
 /**
  * @brief Process-wide state shared across the plugin's translation units.
@@ -71,14 +127,14 @@ struct GenAIPluginContext {
 	/// mutex while draining MCP work. A second plugin command releases Admin
 	/// before waiting here, so it cannot mutate plugin runtime state during the
 	/// yielded interval and cannot form a command-mutex/Admin lock inversion.
-	std::mutex admin_command_mutex;
+	GenAIMutex admin_command_mutex;
 
 	/// Protects MCP AI/RAG calls while their borrowed GloGATH/GloAI
 	/// dependencies are replaced.  Runtime reloads and MCP listener
 	/// construction take the exclusive side; endpoint calls take the shared
 	/// side.  Admin command callbacks release the Admin global mutex before
 	/// waiting for this lock, preventing an Admin/MCP lock inversion.
-	std::shared_mutex runtime_dependencies_mutex;
+	GenAIRWLock runtime_dependencies_mutex;
 };
 
 /**
@@ -96,9 +152,9 @@ struct GenAIPluginContext {
  * persistent endpoint handlers before allowing another call through.  The
  * listener remains alive, so an in-flight Config/Stats handler waiting for
  * the Admin mutex cannot be trapped behind a synchronous listener join.
- * Other callers of `GloGATH` / `GloAI` (notably the anomaly-detector query
- * hook) are not quiesced here; callers must still account for that wider
- * concurrency contract.  Today the function is called from:
+ * The anomaly-detector query hook, stats runtime view, and MCP AI/RAG calls
+ * all hold the shared side while using replaceable runtime objects. Today the
+ * function is called from:
  *
  *   1. `genai_start()` — single-threaded plugin lifecycle, no traffic
  *      yet, always safe.
@@ -107,8 +163,6 @@ struct GenAIPluginContext {
  *      entering this function so an active MCP request can finish first.
  *   3. `LOAD GENAI VARIABLES FROM CONFIG` — same constraint as (2).
  *
- * Extending this lifecycle lock to the remaining GloGATH/GloAI consumers is
- * tracked separately; it touches more than the MCP reload path covered here.
  */
 bool genai_refresh_runtime_components(GenAIPluginContext& ctx);
 

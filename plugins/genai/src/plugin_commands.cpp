@@ -84,7 +84,7 @@ class SerializedAdminCommand {
 public:
 	SerializedAdminCommand(
 		const ProxySQL_PluginCommandContext& command_context,
-		std::mutex& command_mutex
+		GenAIMutex& command_mutex
 	) : command_context_(command_context), command_mutex_(command_mutex), handed_off_(false) {
 		if (command_context_.admin_mutex_context != nullptr &&
 		    command_context_.release_admin_mutex != nullptr &&
@@ -109,7 +109,7 @@ public:
 
 private:
 	const ProxySQL_PluginCommandContext& command_context_;
-	std::mutex& command_mutex_;
+	GenAIMutex& command_mutex_;
 	bool handed_off_;
 };
 

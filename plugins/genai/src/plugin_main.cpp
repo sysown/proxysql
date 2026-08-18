@@ -696,7 +696,7 @@ bool genai_refresh_runtime_components(GenAIPluginContext& ctx) {
 	// next endpoint call can enter.  Command callbacks release the Admin mutex
 	// before reaching this lock, so a request already waiting for Admin cannot
 	// form Admin -> reload -> request -> Admin lock inversion.
-	std::unique_lock<std::shared_mutex> runtime_guard(ctx.runtime_dependencies_mutex);
+	std::unique_lock<GenAIRWLock> runtime_guard(ctx.runtime_dependencies_mutex);
 
 	if (GloGATH != nullptr) {
 		GloGATH->shutdown();
@@ -904,7 +904,7 @@ void mcp_start_listener_if_enabled(GenAIPluginContext& ctx) {
 	// Serialize listener construction/destruction with GenAI reloads.  The
 	// server constructor snapshots GloAI/GloGATH dependencies for its AI/RAG
 	// handlers, and its destructor drains those handlers before freeing them.
-	std::unique_lock<std::shared_mutex> runtime_guard(ctx.runtime_dependencies_mutex);
+	std::unique_lock<GenAIRWLock> runtime_guard(ctx.runtime_dependencies_mutex);
 	if (!ctx.mcp->variables.mcp_enabled) {
 		if (ctx.mcp->mcp_server != nullptr) {
 			delete ctx.mcp->mcp_server;
@@ -1011,21 +1011,16 @@ bool genai_start() {
  *
  * Tear-down order is the reverse of construction in genai_init() so
  * that consumers go away before producers:
- *   1. flip `started` to false — the query-hook adapter switches to
- *      ALLOW-everything once this flips, draining in-flight readers
- *      that observed `started == true` before the flip.
- *   2. delete MCP_Threads_Handler — its destructor stops the
- *      ProxySQL_MCP_Server (joining accept + worker threads), so by
- *      the time we move on no listener thread is still alive that
- *      could touch GloGATH/GloAI.
- *   3. delete AI_Features_Manager and GenAI_Threads_Handler — safe
- *      now because the listener / tool handlers (their only callers)
- *      are gone.
- *   4. clear the embedding hook ATOMICALLY before deleting the
- *      anomaly detector, so any straggling hot-path reader (the
- *      query hook ran concurrently with step 1) sees a null pointer
- *      and short-circuits, not a dangling GenAI handler.
- *   5. delete the anomaly detector itself.
+ *   1. flip `started` to false — new query-hook calls become no-ops.
+ *   2. stop the MCP server without holding runtime_dependencies_mutex.
+ *      Its destructor joins accept + worker threads, including workers
+ *      that may already hold the shared side of that mutex. Taking the
+ *      writer first would deadlock while waiting for those workers.
+ *   3. take the exclusive runtime lock. This drains any query-hook or
+ *      stats-view reader that entered before step 1 and prevents another
+ *      runtime consumer from observing teardown in progress.
+ *   4. clear the embedding callback, then destroy the MCP handler,
+ *      AI/GenAI runtime objects, and anomaly detector in reverse order.
  *
  * Prometheus counters stay registered: prometheus-cpp has no
  * Unregister API and re-registering them on a future load+start of
@@ -1037,14 +1032,24 @@ bool genai_start() {
 bool genai_stop() {
 	GenAIPluginContext& ctx = genai_context();
 	ctx.started = false;
+
+	// The server owns threads whose AI/RAG calls take the shared runtime lock.
+	// Drain them before requesting the exclusive side below.
 	if (ctx.mcp != nullptr) {
-		// MCP listener teardown.  ~MCP_Threads_Handler stops the
-		// embedded ProxySQL_MCP_Server (if running) and joins worker
-		// threads.  Mirrors the pre-4.C `delete GloMCPH` in main.cpp.
+		ctx.mcp->shutdown();
+	}
+
+	std::unique_lock<GenAIRWLock> runtime_guard(ctx.runtime_dependencies_mutex);
+	if (ctx.mcp != nullptr) {
 		delete ctx.mcp;
 		ctx.mcp = nullptr;
 		GloMCPH = nullptr;
 	}
+
+	// No shared runtime consumer can retain the embedding callback after the
+	// exclusive lock was acquired, so clear it before deleting GloGATH.
+	genai_anomaly_embed_fn.store(nullptr, std::memory_order_release);
+
 	// Step 5: tear down AI_Features_Manager and GenAI_Threads_Handler
 	// in reverse construction order.  Mirrors the pre-Step-5 shutdown
 	// in src/main.cpp.
@@ -1057,16 +1062,6 @@ bool genai_stop() {
 		GloGATH = nullptr;
 	}
 	if (ctx.anomaly_detector != nullptr) {
-		// Clear the embedding hook before deleting the detector so
-		// any in-flight hot-path call sees a null pointer rather
-		// than a dangling GenAI_Threads_Handler reference.  Release
-		// ordering pairs with the acquire load in
-		// Anomaly_Detector::get_query_embedding so subsequent
-		// readers either observe the null (and short-circuit)
-		// before the GloGATH delete becomes visible, or observe
-		// the prior non-null pointer paired with the
-		// still-live GloGATH from genai_init.
-		genai_anomaly_embed_fn.store(nullptr, std::memory_order_release);
 		ctx.anomaly_detector->close();
 		delete ctx.anomaly_detector;
 		ctx.anomaly_detector = nullptr;
