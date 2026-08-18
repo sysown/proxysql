@@ -124,6 +124,10 @@ int main() {
 	create_test_data(mysql);
 
 	ok(configure_mcp(admin, cl), "MCP configured for stats test");
+	if (count_rows(admin, "stats_mcp_query_digest_reset") < 0 ||
+	    count_rows(admin, "stats_mcp_query_tools_counters_reset") < 0) {
+		BAIL_OUT("Failed to reset MCP statistics before generating test traffic");
+	}
 
 	MCPClient mcp(cl.admin_host, cl.mcp_port);
 	if (strlen(cl.mcp_auth_token) > 0) {
