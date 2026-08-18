@@ -443,4 +443,3 @@ and the repository's Docker-isolated TAP runner.
 - [ ] Inspect all required PR checks and logs. Do not describe a failure as
   pre-existing; either fix an in-scope AI failure or document a concrete,
   evidence-backed out-of-scope cause.
-
