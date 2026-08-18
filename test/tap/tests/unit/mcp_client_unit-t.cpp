@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -16,8 +17,9 @@ namespace {
 
 class OneShotHttpServer {
 public:
-	OneShotHttpServer(int status, std::string body)
-		: listen_fd_(socket(AF_INET, SOCK_STREAM, 0)), status_(status), body_(std::move(body)) {
+	OneShotHttpServer(int status, std::string body, int timeout_ms = 2000)
+		: listen_fd_(socket(AF_INET, SOCK_STREAM, 0)), status_(status),
+		  body_(std::move(body)), timeout_ms_(timeout_ms) {
 		if (listen_fd_ < 0) throw std::runtime_error(std::strerror(errno));
 
 		int reuse = 1;
@@ -28,6 +30,15 @@ public:
 		address.sin_port = 0;
 		if (bind(listen_fd_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0 ||
 			listen(listen_fd_, 1) != 0) {
+			const std::string error = std::strerror(errno);
+			close(listen_fd_);
+			throw std::runtime_error(error);
+		}
+		const timeval timeout {
+			timeout_ms_ / 1000,
+			(timeout_ms_ % 1000) * 1000
+		};
+		if (setsockopt(listen_fd_, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) != 0) {
 			const std::string error = std::strerror(errno);
 			close(listen_fd_);
 			throw std::runtime_error(error);
@@ -59,6 +70,14 @@ private:
 	void serve() {
 		const int client = accept(listen_fd_, nullptr, nullptr);
 		if (client < 0) return;
+		const timeval timeout {
+			timeout_ms_ / 1000,
+			(timeout_ms_ % 1000) * 1000
+		};
+		if (setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) != 0) {
+			close(client);
+			return;
+		}
 
 		char buffer[2048];
 		while (request_.find("\r\n\r\n") == std::string::npos) {
@@ -89,12 +108,23 @@ private:
 	std::string body_;
 	std::string request_;
 	std::thread worker_;
+	int timeout_ms_;
 };
 
 } // namespace
 
 int main() {
-	plan(9);
+	plan(10);
+
+	const auto idle_server_started = std::chrono::steady_clock::now();
+	{
+		OneShotHttpServer idle_server(200, R"({})", 100);
+	}
+	const auto idle_server_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now() - idle_server_started);
+	ok(idle_server_elapsed.count() < 1000,
+	   "idle one-shot server teardown is bounded (took %lld ms)",
+	   static_cast<long long>(idle_server_elapsed.count()));
 
 	OneShotHttpServer authenticated_server(
 		200, R"({"jsonrpc":"2.0","result":{},"id":1})");

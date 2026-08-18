@@ -1100,8 +1100,16 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
         tap_group = os.environ.get('TAP_GROUP', '')
         if tap_group:
             groups_json_path = f"{WORKSPACE}/test/tap/groups/groups.json"
-            with open(groups_json_path) as groups_file:
-                groups = json.load(groups_file)
+            try:
+                with open(groups_json_path) as groups_file:
+                    groups = json.load(groups_file)
+            except (OSError, ValueError) as error:
+                log.critical(
+                    f"TAP_GROUP '{tap_group}' reconciliation cannot read "
+                    f"'{groups_json_path}': {error}"
+                )
+                groups = {}
+                ret_rc = max(ret_rc, 1)
 
             declared_tests = {
                 test_name

@@ -95,7 +95,7 @@ int count_rows(MYSQL* admin, const char* table) {
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(11);
+	plan(12);
 
 	CommandLine cl;
 	if (cl.getEnv()) {
@@ -182,12 +182,20 @@ int main() {
 	int counters_after_reset = count_rows(admin, "stats_mcp_query_tools_counters");
 	ok(counters_after_reset == 0, "stats_mcp_query_tools_counters is empty after _reset (got %d)", counters_after_reset);
 
-	run_q(admin, "LOAD MCP VARIABLES FROM DISK");
-	run_q(admin, ("DELETE FROM mcp_target_profiles WHERE target_id='" + std::string(k_target_id) + "'").c_str());
-	run_q(admin, ("DELETE FROM mcp_auth_profiles WHERE auth_profile_id='" + std::string(k_auth_profile_id) + "'").c_str());
-	run_q(admin, ("DELETE FROM mysql_servers WHERE hostgroup_id=" + std::to_string(k_hostgroup_id)).c_str());
-	run_q(admin, "LOAD MCP PROFILES TO RUNTIME");
-	run_q(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+	bool cleanup_ok = true;
+	cleanup_ok = (run_q(admin, "LOAD MCP VARIABLES FROM DISK") == 0) && cleanup_ok;
+	cleanup_ok = (run_q(admin,
+		("DELETE FROM mcp_target_profiles WHERE target_id='" + std::string(k_target_id) + "'").c_str()) == 0)
+		&& cleanup_ok;
+	cleanup_ok = (run_q(admin,
+		("DELETE FROM mcp_auth_profiles WHERE auth_profile_id='" + std::string(k_auth_profile_id) + "'").c_str()) == 0)
+		&& cleanup_ok;
+	cleanup_ok = (run_q(admin,
+		("DELETE FROM mysql_servers WHERE hostgroup_id=" + std::to_string(k_hostgroup_id)).c_str()) == 0)
+		&& cleanup_ok;
+	cleanup_ok = (run_q(admin, "LOAD MCP PROFILES TO RUNTIME") == 0) && cleanup_ok;
+	cleanup_ok = (run_q(admin, "LOAD MYSQL SERVERS TO RUNTIME") == 0) && cleanup_ok;
+	ok(cleanup_ok, "MCP stats fixture cleanup and runtime restoration succeed");
 	mysql_close(mysql);
 	mysql_close(admin);
 	return exit_status();

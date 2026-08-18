@@ -18,7 +18,7 @@ using std::vector;
 
 namespace {
 
-constexpr size_t kEmbeddingDimensions = 1536;
+constexpr size_t EMBEDDING_DIMENSIONS = 1536;
 
 uint64_t fnv1a(const string& text) {
 	uint64_t hash = UINT64_C(14695981039346656037);
@@ -40,9 +40,9 @@ uint64_t splitmix64(uint64_t& state) {
 vector<float> mock_generate_embedding(const string& text) {
 	uint64_t state = fnv1a(text);
 	vector<float> embedding;
-	embedding.reserve(kEmbeddingDimensions);
+	embedding.reserve(EMBEDDING_DIMENSIONS);
 
-	for (size_t index = 0; index < kEmbeddingDimensions; ++index) {
+	for (size_t index = 0; index < EMBEDDING_DIMENSIONS; ++index) {
 		const uint32_t sample = static_cast<uint32_t>(splitmix64(state) >> 40);
 		const float normalized = static_cast<float>(sample) / 8388607.5f - 1.0f;
 		embedding.push_back(normalized);
@@ -123,8 +123,8 @@ void test_embedding_contract() {
 	const vector<float> repeated = mock_generate_embedding("distinct query 0");
 	const vector<float> distinct = mock_generate_embedding("distinct query 1");
 
-	ok(first.size() == kEmbeddingDimensions,
-	   "Mock embedding has the full %zu-dimensional shape", kEmbeddingDimensions);
+	ok(first.size() == EMBEDDING_DIMENSIONS,
+	   "Mock embedding has the full %zu-dimensional shape", EMBEDDING_DIMENSIONS);
 	ok(first == repeated, "Identical text produces an identical deterministic embedding");
 	ok(first != distinct, "Distinct text changes the deterministic embedding");
 
@@ -167,7 +167,7 @@ void test_workload(const char* label, size_t entry_count, size_t target) {
 	   "%s workload stores all %zu entries", label, entry_count);
 	ok(result.sql == expected_sql,
 	   "%s workload returns the exact query result", label);
-	ok(result.embedding_dimensions == kEmbeddingDimensions,
+	ok(result.embedding_dimensions == EMBEDDING_DIMENSIONS,
 	   "%s lookup uses the full vector shape", label);
 	ok(result.similarity > 0.999999 && result.similarity <= 1.000001,
 	   "%s exact lookup reports unit similarity (got %.8f)", label, result.similarity);

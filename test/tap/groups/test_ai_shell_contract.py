@@ -103,6 +103,44 @@ class AiShellContractTest(unittest.TestCase):
             arguments = capture.read_text(encoding="utf-8").splitlines()
             self.assertIn("http://mcp.example:16071/mcp/config", arguments)
             self.assertIn("Authorization: Bearer contract-token", arguments)
+            self.assertIn("--connect-timeout", arguments)
+            self.assertIn("--max-time", arguments)
+
+    def test_helper_https_uses_configured_ca_by_default(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary_path = Path(temporary)
+            capture = temporary_path / "curl.args"
+            fake_curl = temporary_path / "curl"
+            fake_curl.write_text(
+                "#!/bin/bash\nprintf '%s\\n' \"$@\" > \"$CURL_CAPTURE\"\nprintf '%s\\n' '{}'\n",
+                encoding="utf-8",
+            )
+            fake_curl.chmod(0o755)
+            ca_file = temporary_path / "test-ca.pem"
+            ca_file.write_text("test CA", encoding="utf-8")
+            env = {
+                "PATH": f"{temporary}:{os.environ['PATH']}",
+                "CURL_CAPTURE": str(capture),
+                "TAP_MCP_SCHEME": "https",
+                "TAP_MCP_CA_CERT": str(ca_file),
+                "TAP_MCP_AUTH_TOKEN": "contract-token",
+            }
+            subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    'source "$1"; mcp_request config \'{}\' >/dev/null',
+                    "bash",
+                    str(HELPER),
+                ],
+                cwd=ROOT,
+                env=env,
+                check=True,
+            )
+            arguments = capture.read_text(encoding="utf-8").splitlines()
+            self.assertIn("--cacert", arguments)
+            self.assertIn(str(ca_file), arguments)
+            self.assertNotIn("--insecure", arguments)
 
     def test_helper_admin_sql_targets_configured_host(self):
         with tempfile.TemporaryDirectory() as temporary:

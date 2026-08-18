@@ -24,6 +24,10 @@ MCP_PORT="${TAP_MCP_PORT:-${TAP_MCPPORT:-${MCP_PORT:-6071}}}"
 MCP_SCHEME="${TAP_MCP_SCHEME:-${MCP_SCHEME:-http}}"
 MCP_AUTH_TOKEN="${TAP_MCP_AUTH_TOKEN:-${PROXYSQL_MCP_TOKEN:-}}"
 MCP_TARGET_ID="${MCP_TARGET_ID:-tap_mysql_default}"
+MCP_CONNECT_TIMEOUT="${TAP_MCP_CONNECT_TIMEOUT:-5}"
+MCP_REQUEST_TIMEOUT="${TAP_MCP_REQUEST_TIMEOUT:-30}"
+MCP_CA_CERT="${TAP_MCP_CA_CERT:-}"
+MCP_TLS_INSECURE="${TAP_MCP_TLS_INSECURE:-0}"
 
 PLAN="${PLAN:-0}"
 DONE="${DONE:-0}"
@@ -101,6 +105,12 @@ require_mcp_prerequisites() {
             failed=1
             ;;
     esac
+    if [[ "${MCP_SCHEME}" == "https" && "${MCP_TLS_INSECURE}" != "1" ]]; then
+        if [[ -z "${MCP_CA_CERT}" || ! -f "${MCP_CA_CERT}" ]]; then
+            log_error "TAP_MCP_CA_CERT must name a readable test CA for HTTPS (or set TAP_MCP_TLS_INSECURE=1 explicitly)"
+            failed=1
+        fi
+    fi
     return "${failed}"
 }
 
@@ -181,13 +191,22 @@ mcp_request_url() {
     local payload="$2"
     local -a curl_arguments=(
         --silent --show-error --fail-with-body
+        --connect-timeout "${MCP_CONNECT_TIMEOUT}"
+        --max-time "${MCP_REQUEST_TIMEOUT}"
         --request POST "${url}"
         --header "Content-Type: application/json"
         --header "Authorization: Bearer ${MCP_AUTH_TOKEN}"
         --data "${payload}"
     )
     if [[ "${url}" == https://* ]]; then
-        curl_arguments=(--insecure "${curl_arguments[@]}")
+        if [[ "${MCP_TLS_INSECURE}" == "1" ]]; then
+            curl_arguments=(--insecure "${curl_arguments[@]}")
+        elif [[ -n "${MCP_CA_CERT}" && -f "${MCP_CA_CERT}" ]]; then
+            curl_arguments=(--cacert "${MCP_CA_CERT}" "${curl_arguments[@]}")
+        else
+            log_error "HTTPS MCP request requires TAP_MCP_CA_CERT or explicit TAP_MCP_TLS_INSECURE=1"
+            return 2
+        fi
     fi
     curl "${curl_arguments[@]}"
 }
@@ -225,6 +244,7 @@ restore_mcp_group_baseline() {
 export PROXYSQL_ADMIN_HOST PROXYSQL_ADMIN_PORT PROXYSQL_ADMIN_USER PROXYSQL_ADMIN_PASSWORD
 export MYSQL_HOST MYSQL_PORT MYSQL_USER MYSQL_PASSWORD MYSQL_DATABASE
 export MCP_HOST MCP_PORT MCP_SCHEME MCP_AUTH_TOKEN MCP_TARGET_ID
+export MCP_CONNECT_TIMEOUT MCP_REQUEST_TIMEOUT MCP_CA_CERT MCP_TLS_INSECURE
 export -f log_info log_error log_test log_verbose
 export -f tap_plan tap_ok tap_not_ok tap_skip tap_finish
 export -f require_command require_mcp_prerequisites

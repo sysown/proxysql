@@ -163,6 +163,7 @@ class AiGroupShardTest(unittest.TestCase):
                 "TAP_PGSQLSERVER_PASSWORD": "postgres",
             }
         )
+        environment["TAP_MCP_AUTH_TOKEN_SQL"] = environment["TAP_MCP_AUTH_TOKEN"]
         rendered = subprocess.run(
             ["envsubst"],
             input=(AI_GROUP_DIR / "mcp-config.sql").read_text(encoding="utf-8"),
@@ -194,6 +195,28 @@ class AiGroupShardTest(unittest.TestCase):
         self.assertLess(profiles_at, enabled_at)
         self.assertLess(genai_enabled_at, genai_loaded_at)
         self.assertLess(genai_loaded_at, enabled_at)
+
+    def test_rendered_ai_mcp_config_uses_sql_escaped_auth_token(self):
+        environment = self.source_group_environment(AI_GROUP_DIR / "env.sh")
+        environment.update(
+            {
+                "TAP_MCP_AUTH_TOKEN": "quote'and\\backslash",
+                "TAP_MCP_AUTH_TOKEN_SQL": "quote''and\\\\backslash",
+            }
+        )
+        rendered = subprocess.run(
+            ["envsubst"],
+            input=(AI_GROUP_DIR / "mcp-config.sql").read_text(encoding="utf-8"),
+            text=True,
+            check=True,
+            capture_output=True,
+            env=environment,
+        ).stdout
+        self.assertIn(
+            "SET mcp-config_endpoint_auth='quote''and\\\\backslash';",
+            rendered,
+        )
+        self.assertNotIn("${TAP_MCP_AUTH_TOKEN_SQL}", rendered)
 
 
 if __name__ == "__main__":
