@@ -75,11 +75,12 @@ void fake_log_event(const char *event) {
 void fake_server_module_installed(void *, ProxySQL_ServerRuntimeSnapshot) {}
 bool fake_server_module_prepare(void *, const ProxySQL_ServerModuleSnapshot&,
 	std::vector<ProxySQL_ServerHostgroupClaim>& claims, std::string&) {
+	fake_log_event("server_module_prepare");
 	if (env("SERVER_MODULE_CONFLICT_CLAIM") != nullptr)
 		claims.push_back({17, 18});
 	return true;
 }
-void fake_server_module_commit(void *, uint64_t) {}
+void fake_server_module_commit(void *, uint64_t) { fake_log_event("server_module_commit"); }
 SQLite3_result* fake_server_module_table_snapshot(void *, const char *) { return nullptr; }
 void fake_server_module_shutdown(void *) {}
 void fake_destroy_server_module(ProxySQL_ServerModuleHooks *) {
