@@ -12,6 +12,8 @@ OPENSSL_CMAKE_FLAGS := -DOPENSSL_ROOT_DIR=$(SSL_PATH) \
 	-DOPENSSL_INCLUDE_DIR=$(SSL_IDIR) \
 	-DOPENSSL_SSL_LIBRARY=$(LIB_SSL_PATH) \
 	-DOPENSSL_CRYPTO_LIBRARY=$(LIB_CRYPTO_PATH)
+MYSQL57_OPENSSL_CMAKE_FLAGS := $(OPENSSL_CMAKE_FLAGS) \
+	-DCMAKE_LIBRARY_PATH=$(SSL_PATH)
 
 .DEFAULT: default
 .PHONY: default
@@ -75,13 +77,13 @@ ifeq ($(UNAME_S),Darwin)
 	cd mysql-connector-c/mysql-connector-c && cmake . -DWITH_BOOST=./boost -DCMAKE_BUILD_TYPE=RelWithDebInfo \
 		-DCMAKE_C_FLAGS="-Wno-incompatible-pointer-types" \
 		-DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O0 -ggdb -DNDEBUG -fPIC" \
-		-DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DWITH_SSL=$(SSL_PATH) $(OPENSSL_CMAKE_FLAGS)
+		-DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DWITH_SSL=$(SSL_PATH) $(MYSQL57_OPENSSL_CMAKE_FLAGS)
 else
 	cd mysql-connector-c && ln -fsT $$(ls -1d mysql-5.7.*/) mysql-connector-c
 	cd mysql-connector-c/mysql-connector-c && $(CMAKE3) . -DWITH_BOOST=./boost \
 		-DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_FLAGS="-Wno-incompatible-pointer-types" \
 		-DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O0 -ggdb -DNDEBUG -fPIC" \
-		-DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DWITH_SSL=$(SSL_PATH) $(OPENSSL_CMAKE_FLAGS)
+		-DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DWITH_SSL=$(SSL_PATH) $(MYSQL57_OPENSSL_CMAKE_FLAGS)
 endif
 ifeq ($(UNAME_S),Darwin)
 	cd mysql-connector-c/mysql-connector-c && CC=${CC} CXX=${CXX} ${MAKE} -j1 mysqlclient mysql

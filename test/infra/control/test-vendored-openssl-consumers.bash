@@ -148,6 +148,11 @@ for platform in Linux Darwin; do
 		assert_contains "${test_mysql_output}" "-DOPENSSL_ROOT_DIR=${openssl_root}" "test ${target}/${platform}"
 		assert_contains "${test_mysql_output}" "-DOPENSSL_SSL_LIBRARY=${ssl_archive}" "test ${target}/${platform}"
 		assert_contains "${test_mysql_output}" "-DOPENSSL_CRYPTO_LIBRARY=${crypto_archive}" "test ${target}/${platform}"
+		if [[ "${target}" == mysql_client ]]; then
+			# MySQL 5.7's ssl.cmake ignores the modern OPENSSL_*_LIBRARY
+			# variables and searches CMAKE_LIBRARY_PATH directly.
+			assert_contains "${test_mysql_output}" "-DCMAKE_LIBRARY_PATH=${openssl_root}" "test ${target}/${platform}"
+		fi
 		assert_no_system_openssl "${test_mysql_output}" "test ${target}/${platform}"
 	done
 done
