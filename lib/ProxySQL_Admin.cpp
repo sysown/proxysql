@@ -6854,6 +6854,7 @@ void ProxySQL_Admin::dump_checksums_values_table() {
 	int rc;
 	std::vector<std::pair<std::string, std::string>> server_module_checksums;
 #ifdef PROXYSQL40
+	std::vector<std::pair<std::string, std::string>> computed_server_module_checksums;
 	for (const auto protocol : {ProxySQL_ServerProtocol::mysql, ProxySQL_ServerProtocol::pgsql}) {
 		for (const auto version : {ProxySQL_ServerModuleClusterVersion::runtime_v1,
 			ProxySQL_ServerModuleClusterVersion::memory_v2}) {
@@ -6861,10 +6862,17 @@ void ProxySQL_Admin::dump_checksums_values_table() {
 			std::string error;
 			if (proxysql_server_module_cluster_poll_checksum(
 				protocol, version, *admindb, checksum, error)) {
-				server_module_checksums.emplace_back(
+				computed_server_module_checksums.emplace_back(
 					proxysql_server_module_cluster_poll_name(protocol, version), checksum);
+			} else {
+				proxy_error("Cluster: withholding server-module checksum snapshot: %s\n",
+					error.empty() ? "local checksum generation failed" : error.c_str());
 			}
 		}
+	}
+	if (!proxysql_server_module_cluster_poll_snapshot_complete(
+		computed_server_module_checksums, server_module_checksums)) {
+		return;
 	}
 #endif
 	pthread_mutex_lock(&GloVars.checksum_mutex);

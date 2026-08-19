@@ -1,4 +1,5 @@
 #include "tap.h"
+#include "ProxySQL_Cluster.hpp"
 #include "ProxySQL_ServerModuleCluster.h"
 #include "sqlite3db.h"
 
@@ -26,7 +27,7 @@ ProxySQL_ServerModuleClusterTable table(const char* name, const char* runtime,
 } // namespace
 
 int main() {
-	plan(39);
+	plan(42);
 	SQLite3DB source;
 	SQLite3DB destination;
 	source.open((char*)"file:module-cluster-source?mode=memory&cache=private", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI);
@@ -176,11 +177,28 @@ int main() {
 	for (const auto protocol : {ProxySQL_ServerProtocol::mysql, ProxySQL_ServerProtocol::pgsql}) {
 		for (const auto version : {ProxySQL_ServerModuleClusterVersion::runtime_v1,
 			ProxySQL_ServerModuleClusterVersion::memory_v2}) {
-			ok(proxysql_server_module_cluster_poll_should_schedule(protocol, version, true,
-				"peer-module", true, "local-module", 2, 2),
-				"module-only change schedules the protocol/version pull");
+			const uint64_t legacy_global_checksum = 42;
+			const std::string legacy_server_checksum = "legacy-unchanged";
+			ok(proxysql_cluster_monitor_should_query_checksums(false) &&
+				proxysql_server_module_cluster_poll_should_schedule(protocol, version, true,
+					"peer-module", true, "local-module", 2, 2) &&
+				legacy_global_checksum == 42 && legacy_server_checksum == "legacy-unchanged",
+				"actual light-check gate schedules a module-only protocol/version pull without legacy mutation");
 		}
 	}
+	ok(proxysql_server_module_cluster_poll_next_diff(true, "peer-module", true,
+		"local-module", false, 1) == 2,
+		"null-result cycles advance a supported module mismatch to its threshold");
+	ok(proxysql_server_module_cluster_poll_next_diff(true, "empty", true,
+		"empty", false, 7) == 0,
+		"unchanged supported-empty cycles reset the module diff counter");
+	std::vector<std::pair<std::string, std::string>> partial_poll_snapshot {
+		{"mysql-v1", "one"}, {"mysql-v2", "two"}, {"pgsql-v1", "three"}};
+	std::vector<std::pair<std::string, std::string>> published_poll_snapshot {
+		{"stale", "must-clear"}};
+	ok(!proxysql_server_module_cluster_poll_snapshot_complete(
+		partial_poll_snapshot, published_poll_snapshot) && published_poll_snapshot.empty(),
+		"a failed local checksum atomically withholds the entire module side-channel snapshot");
 	ok(!proxysql_server_module_cluster_poll_should_schedule(ProxySQL_ServerProtocol::mysql,
 		ProxySQL_ServerModuleClusterVersion::runtime_v1, true, "empty", true, "empty", 0, 2),
 		"supported-empty no-change does not schedule a pull");

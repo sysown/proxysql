@@ -142,6 +142,35 @@ bool proxysql_server_module_cluster_poll_should_schedule(
 		diff_check >= diffs_before_sync;
 }
 
+unsigned int proxysql_server_module_cluster_poll_next_diff(
+	bool peer_supported, const std::string& peer_checksum,
+	bool local_supported, const std::string& local_checksum,
+	bool peer_checksum_changed, unsigned int current_diff) {
+	if (!peer_supported || (local_supported && peer_checksum == local_checksum)) return 0;
+	if (peer_checksum_changed || current_diff == 0) return 1;
+	return current_diff + 1;
+}
+
+bool proxysql_server_module_cluster_poll_snapshot_complete(
+	const std::vector<std::pair<std::string, std::string>>& computed,
+	std::vector<std::pair<std::string, std::string>>& publishable) {
+	publishable.clear();
+	if (computed.size() != 4) return false;
+	std::set<std::string> expected;
+	for (const auto protocol : {ProxySQL_ServerProtocol::mysql, ProxySQL_ServerProtocol::pgsql}) {
+		for (const auto version : {ProxySQL_ServerModuleClusterVersion::runtime_v1,
+			ProxySQL_ServerModuleClusterVersion::memory_v2}) {
+			expected.insert(proxysql_server_module_cluster_poll_name(protocol, version));
+		}
+	}
+	for (const auto& entry : computed) {
+		if (entry.second.empty() || expected.erase(entry.first) != 1) return false;
+	}
+	if (!expected.empty()) return false;
+	publishable = computed;
+	return true;
+}
+
 ProxySQL_ServerModuleClusterEndpointResult proxysql_server_module_cluster_endpoint(
 	const std::string& query, SQLite3DB& db, std::unique_ptr<SQLite3_result>& result,
 	std::string& error) {

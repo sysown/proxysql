@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 class SQLite3DB;
@@ -43,6 +44,13 @@ bool proxysql_server_module_cluster_poll_should_schedule(
 	bool peer_supported, const std::string& peer_checksum,
 	bool local_supported, const std::string& local_checksum,
 	unsigned int diff_check, unsigned int diffs_before_sync);
+unsigned int proxysql_server_module_cluster_poll_next_diff(
+	bool peer_supported, const std::string& peer_checksum,
+	bool local_supported, const std::string& local_checksum,
+	bool peer_checksum_changed, unsigned int current_diff);
+bool proxysql_server_module_cluster_poll_snapshot_complete(
+	const std::vector<std::pair<std::string, std::string>>& computed,
+	std::vector<std::pair<std::string, std::string>>& publishable);
 ProxySQL_ServerModuleClusterEndpointResult proxysql_server_module_cluster_endpoint(
 	const std::string& query, SQLite3DB& db, std::unique_ptr<SQLite3_result>& result,
 	std::string& error);

@@ -165,6 +165,14 @@ extern MySQL_Authentication* GloMyAuth;
 extern PgSQL_Authentication *GloPgAuth;
 extern PgSQL_Query_Processor* GloPgQPro;
 
+bool proxysql_cluster_monitor_should_query_checksums(bool global_checksum_changed) {
+#ifdef PROXYSQL40
+	return true;
+#else
+	return global_checksum_changed;
+#endif
+}
+
 void * ProxySQL_Cluster_Monitor_thread(void *args) {
 	pthread_attr_t thread_attr;
 	size_t tmp_stack_size=0;
@@ -277,7 +285,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 						// FIXME: update metrics are not updated for now. We only check checksum
 						//rc_bool = GloProxyCluster->Update_Node_Metrics(node->hostname, node->port, result, elapsed_time_us);
 
-						if (update_checksum) {
+						if (proxysql_cluster_monitor_should_query_checksums(update_checksum)) {
 							unsigned long long before_query_time=monotonic_time();
 							rc_query = mysql_query(conn,query3);
 							if ( rc_query == 0 ) {
@@ -654,12 +662,29 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 		{ProxySQL_ServerProtocol::pgsql, ProxySQL_ServerModuleClusterVersion::memory_v2,
 			&checksums_values.server_module_pgsql_v2},
 	};
+	auto expose_module_diff_to_pull_selector = [&](const ServerModulePollInfo& poll) {
+		if (poll.peer->diff_check == 0) return;
+		ProxySQL_Checksum_Value_2* pull_selector = nullptr;
+		if (poll.protocol == ProxySQL_ServerProtocol::mysql)
+			pull_selector = poll.version == ProxySQL_ServerModuleClusterVersion::runtime_v1
+				? &checksums_values.mysql_servers : &checksums_values.mysql_servers_v2;
+		else
+			pull_selector = poll.version == ProxySQL_ServerModuleClusterVersion::runtime_v1
+				? &checksums_values.pgsql_servers : &checksums_values.pgsql_servers_v2;
+		pull_selector->diff_check = std::max(
+			pull_selector->diff_check, poll.peer->diff_check);
+	};
 	if (GloAdmin && GloAdmin->admindb) {
 		pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
 		for (auto& poll : server_module_polls) {
 			std::string error;
 			poll.local_supported = proxysql_server_module_cluster_poll_checksum(
 				poll.protocol, poll.version, *GloAdmin->admindb, poll.local_checksum, error);
+			if (!poll.local_supported) {
+				proxy_error("Cluster: local server-module checksum unavailable for %s: %s\n",
+					proxysql_server_module_cluster_poll_name(poll.protocol, poll.version).c_str(),
+					error.empty() ? "checksum generation failed" : error.c_str());
+			}
 		}
 		pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
 	}
@@ -743,26 +768,15 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 				poll.peer->diff_check = 0;
 				break;
 			}
-			if (strcmp(poll.peer->checksum, row[3]) != 0) {
+			const bool checksum_changed = strcmp(poll.peer->checksum, row[3]) != 0;
+			if (checksum_changed) {
 				poll.peer->set_checksum(row[3]);
 				poll.peer->last_changed = now;
-				poll.peer->diff_check = 1;
-			} else {
-				poll.peer->diff_check++;
 			}
-			if (poll.local_supported && poll.local_checksum == poll.peer->checksum)
-				poll.peer->diff_check = 0;
-			if (poll.peer->diff_check != 0) {
-				ProxySQL_Checksum_Value_2* pull_selector = nullptr;
-				if (poll.protocol == ProxySQL_ServerProtocol::mysql)
-					pull_selector = poll.version == ProxySQL_ServerModuleClusterVersion::runtime_v1
-						? &checksums_values.mysql_servers : &checksums_values.mysql_servers_v2;
-				else
-					pull_selector = poll.version == ProxySQL_ServerModuleClusterVersion::runtime_v1
-						? &checksums_values.pgsql_servers : &checksums_values.pgsql_servers_v2;
-				pull_selector->diff_check = std::max(
-					pull_selector->diff_check, poll.peer->diff_check);
-			}
+			poll.peer->diff_check = proxysql_server_module_cluster_poll_next_diff(
+				true, poll.peer->checksum, poll.local_supported, poll.local_checksum,
+				checksum_changed, poll.peer->diff_check);
+			expose_module_diff_to_pull_selector(poll);
 			break;
 		}
 		if (server_module_row) continue;
@@ -822,6 +836,15 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 				}
 			}
 		}
+#ifdef PROXYSQL40
+		for (auto& poll : server_module_polls) {
+			poll.peer->last_updated = now;
+			poll.peer->diff_check = proxysql_server_module_cluster_poll_next_diff(
+				poll.peer->version == 1, poll.peer->checksum,
+				poll.local_supported, poll.local_checksum, false, poll.peer->diff_check);
+			expose_module_diff_to_pull_selector(poll);
+		}
+#endif
 	}
 	pthread_mutex_unlock(&GloVars.checksum_mutex);
 	// we now do a series of checks, and we take action
