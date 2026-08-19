@@ -43,7 +43,7 @@ targets :=	check_openssl_version \
 			mariadb_client \
 			re2 \
 			sqlite3 \
-			pcre \
+			pcre2 \
 			lz4 \
 			zstd \
 			cityhash \
@@ -381,14 +381,16 @@ endif
 re2: re2/re2/obj/libre2.a
 
 
-pcre/pcre/.libs/libpcre.a:
-	cd pcre && rm -rf pcre-*/ || true
-	cd pcre && tar -zxf pcre-*.tar.gz
-	cd pcre/pcre && patch pcretest.c < ../pcretest.c-multiplication-overflow.patch
-	cd pcre/pcre && ./configure
-	cd pcre/pcre && CC=${CC} CXX=${CXX} ${MAKE}
+pcre2/pcre2/.libs/libpcre2-8.a:
+	cd pcre2 && rm -rf pcre2-*/ || true
+	cd pcre2 && tar -zxf pcre2-10.47.tar.gz
+	cd pcre2 && mv pcre2-10.47 pcre2
+	cd pcre2/pcre2 && ./configure --disable-shared --enable-static \
+		--enable-pcre2-8 --disable-pcre2-16 --disable-pcre2-32 \
+		--disable-jit --disable-pcre2test-libreadline
+	cd pcre2/pcre2 && CC=${CC} CXX=${CXX} ${MAKE}
 
-pcre: pcre/pcre/.libs/libpcre.a
+pcre2: pcre2/pcre2/.libs/libpcre2-8.a
 postgresql/postgresql/src/interfaces/libpq/libpq.a:
 	cd postgresql && rm -rf postgresql-*/ || true
 	cd postgresql && tar -zxf postgresql-*.tar.gz
@@ -457,7 +459,7 @@ cleanall:
 	cd mariadb-client-library && rm -rf mariadb-connector-c-*/ || true
 	cd libconfig && rm -rf libconfig-*/ || true
 	cd re2 && rm -rf re2-*/ || true
-	cd pcre && rm -rf pcre-*/ || true
+	cd pcre2 && rm -rf pcre2-*/ || true
 	cd sqlite3 && rm -rf sqlite-amalgamation-*/ || true
 	cd clickhouse-cpp/ && rm -rf clickhouse-cpp-*/ || true
 	cd lz4 && rm -rf lz4-*/ || true

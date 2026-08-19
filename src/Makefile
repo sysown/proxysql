@@ -13,7 +13,7 @@ IDIRS :=	-I$(PROXYSQL_IDIR) \
 			-I$(LIBCONFIG_IDIR) \
 			-I$(LIBDAEMON_IDIR) \
 			-I$(RE2_IDIR) \
-			-I$(PCRE_IDIR) \
+			-I$(PCRE2_IDIR) \
 			-I$(CLICKHOUSE_CPP_IDIR) \
 			-I$(MICROHTTPD_IDIR) \
 			-I$(LIBHTTPSERVER_IDIR) \
@@ -36,7 +36,7 @@ LDIRS :=	-L$(PROXYSQL_LDIR) \
 			-L$(LIBCONFIG_LDIR) \
 			-L$(LIBDAEMON_LDIR) \
 			-L$(RE2_LDIR) \
-			-L$(PCRE_LDIR) \
+			-L$(PCRE2_LDIR) \
 			-L$(MICROHTTPD_LDIR) \
 			-L$(LIBHTTPSERVER_LDIR) \
 			-L$(LIBINJECTION_LDIR) \
@@ -115,8 +115,7 @@ STATICMYLIBS := -Wl,-Bstatic \
 				-ldaemon \
 				-lconfig++ \
 				-lre2 \
-				-lpcrecpp \
-				-lpcre \
+				$(PCRE2_LIBS) \
 				-lmariadbclient \
 				-lhttpserver \
 				-lmicrohttpd \
@@ -167,8 +166,7 @@ ifeq ($(UNAME_S),Darwin)
 	LIBPROXYSQLAR += $(JEMALLOC_LDIR)/libjemalloc.a
 	LIBPROXYSQLAR += $(MICROHTTPD_LDIR)/libmicrohttpd.a
 	LIBPROXYSQLAR += $(LIBHTTPSERVER_LDIR)/libhttpserver.a
-	LIBPROXYSQLAR += $(PCRE_LDIR)/libpcre.a
-	LIBPROXYSQLAR += $(PCRE_LDIR)/libpcrecpp.a
+	LIBPROXYSQLAR += $(PCRE2_LDIR)/libpcre2-8.a
 	LIBPROXYSQLAR += $(LIBDAEMON_LDIR)/libdaemon.a
 	LIBPROXYSQLAR += $(LIBCONFIG_LDIR)/libconfig++.a
 	LIBPROXYSQLAR += $(LIBCONFIG_LDIR)/libconfig.a

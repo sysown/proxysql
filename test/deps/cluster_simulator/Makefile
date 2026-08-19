@@ -43,7 +43,7 @@ LDIRS := -L$(TAP_LDIR) \
          -L$(CURL_LDIR) -L$(EV_LDIR) \
          -L$(PROMETHEUS_LDIR) \
          -L$(DOTENV_DYN_LDIR) \
-         -L$(PCRE_LDIR) \
+         -L$(PCRE2_LDIR) \
          -L$(LIBINJECTION_LDIR) \
          -L$(POSTGRESQL_LDIR) \
          -L$(LIBSCRAM_LDIR) \
@@ -56,7 +56,7 @@ endif
 
 
 MYLIBS_DYNAMIC_PART := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -lcpp_dotenv -lcurl -lssl -lcrypto -luuid
-MYLIBS_STATIC_PART := -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core
+MYLIBS_STATIC_PART := -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 $(PCRE2_LIBS) -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core
 MYLIBS_PG_PART := -Wl,-Bstatic -lpq -lpgcommon -lpgport
 MYLIBS_LAST_PART := -Wl,-Bdynamic -lpthread -lm -lz -lzstd -lrt -ldl $(EXTRALINK)
 MYLIBS := -Wl,-Bdynamic -ltap $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) $(MYLIBS_PG_PART) $(MYLIBS_LAST_PART)

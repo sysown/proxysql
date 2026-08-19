@@ -40,9 +40,10 @@ RE2_PATH := $(DEPS_PATH)/re2/re2
 RE2_IDIR := $(RE2_PATH)
 RE2_LDIR := $(RE2_PATH)/obj
 
-PCRE_PATH := $(DEPS_PATH)/pcre/pcre
-PCRE_IDIR := $(PCRE_PATH)
-PCRE_LDIR := $(PCRE_PATH)/.libs
+PCRE2_PATH := $(DEPS_PATH)/pcre2/pcre2
+PCRE2_IDIR := $(PCRE2_PATH)/src
+PCRE2_LDIR := $(PCRE2_PATH)/.libs
+PCRE2_LIBS := -lpcre2-8
 
 SQLITE3_PATH := $(DEPS_PATH)/sqlite3/sqlite3
 SQLITE3_IDIR := $(SQLITE3_PATH)
