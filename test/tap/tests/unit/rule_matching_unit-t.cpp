@@ -135,6 +135,14 @@ static void test_match_digest_pcre() {
 		"match_digest regex matches with PCRE");
 }
 
+static void test_match_digest_pcre2() {
+	QP_rule_t r = make_rule();
+	r.match_digest = const_cast<char *>("(?<=A{1,2})B");
+	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+		"127.0.0.1", 6033, 0, "AAB", "SELECT 1", nullptr, 1),
+		"PCRE-compatible mode accepts PCRE2 variable-length lookbehind");
+}
+
 static void test_match_pattern() {
 	QP_rule_t r = make_rule();
 	r.match_pattern = const_cast<char *>("SELECT .* FROM orders");
@@ -207,7 +215,7 @@ static void test_null_rule() {
 // ============================================================================
 
 int main() {
-	plan(23);
+	plan(24);
 
 	test_init_minimal();
 
@@ -220,6 +228,7 @@ int main() {
 	test_digest();                  // 2
 	test_match_digest_re2();        // 1
 	test_match_digest_pcre();       // 1
+	test_match_digest_pcre2();      // 1
 	test_match_pattern();           // 1
 	test_negate_match_pattern();    // 1
 	test_caseless_modifier();       // 1
