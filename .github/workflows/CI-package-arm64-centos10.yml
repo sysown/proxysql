@@ -106,6 +106,7 @@ jobs:
         repository: ${{ github.repository }}
         ref: ${{ github.sha }}
         fetch-depth: 0
+        lfs: true
 
     - name: Build package
       run: |
