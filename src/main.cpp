@@ -90,7 +90,6 @@ using std::map;
 using std::string;
 using std::vector;
 
-
 void sleep_iter(unsigned int iter) {
 	static thread_local std::mt19937 jitter_rng(std::random_device{}());
 	static thread_local std::uniform_int_distribution<int> jitter_dist(0, 999);
@@ -855,6 +854,7 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 #ifdef PROXYSQL40
 		proxysql_load_plugin_modules_from_config(root, GloVars.plugin_modules);
 #endif /* PROXYSQL40 */
+	#ifndef PROXYSQL40
 		const map<string, char**> varnames_globals_map {
 			{ "mysql-ssl_p2s_ca", &GloVars.global.gr_bootstrap_ssl_ca },
 			{ "mysql-ssl_p2s_capath", &GloVars.global.gr_bootstrap_ssl_capath },
@@ -879,6 +879,7 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 				}
 			}
 		}
+	#endif /* !PROXYSQL40 */
 	} else {
 		proxy_warning("Unable to open config file %s\n", GloVars.config_file); // issue #705
 		if (GloVars.__cmd_proxysql_config_file) {
@@ -998,7 +999,11 @@ void ProxySQL_Main_init_main_modules() {
 	GloPTH = _tmp_GloPTH;
 }
 
-void ProxySQL_Main_init_Admin_module(const bootstrap_info_t& bootstrap_info) {
+void ProxySQL_Main_init_Admin_module(
+#ifndef PROXYSQL40
+	const bootstrap_info_t& bootstrap_info
+#endif /* !PROXYSQL40 */
+) {
 	// cluster module needs to be initialized before
 	GloProxyCluster = new ProxySQL_Cluster();
 	GloProxyCluster->init();
@@ -1007,7 +1012,11 @@ void ProxySQL_Main_init_Admin_module(const bootstrap_info_t& bootstrap_info) {
 	//GloProxyStats->init();
 	GloProxyStats->print_version();
 	GloAdmin = new ProxySQL_Admin();
-	if (!GloAdmin->init(bootstrap_info)) {
+	if (!GloAdmin->init(
+#ifndef PROXYSQL40
+		bootstrap_info
+#endif /* !PROXYSQL40 */
+	)) {
 		proxy_error("Admin module initialization failed\n");
 		exit(EXIT_FAILURE);
 	}
@@ -1566,7 +1575,11 @@ void UnloadPlugins() {
 	}
 }
 
-void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_info) {
+void ProxySQL_Main_init_phase2___not_started(
+#ifndef PROXYSQL40
+	const bootstrap_info_t& boostrap_info
+#endif /* !PROXYSQL40 */
+) {
 	std::string msg;
 	ProxySQL_create_or_load_TLS(false, msg);
 
@@ -1590,7 +1603,7 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	//              a schema that already contains the plugin's own tables).
 	//   Phase E:   start() launches the plugin's threads / accept loops.
 	LoadConfiguredPlugins();
-	ProxySQL_Main_init_Admin_module(boostrap_info);
+	ProxySQL_Main_init_Admin_module();
 	InitConfiguredPlugins();
 	StartConfiguredPlugins();
 #else  /* !PROXYSQL40 */
@@ -2112,6 +2125,7 @@ namespace {
  *  + Optionally match a supplied (/).
  *  + Ensure match termination in HierPart group, forcing conditional subgroups matching.
  */
+#ifndef PROXYSQL40
 const char CONN_URI_REGEX[] {
 	"^(:?(?P<Scheme>[a-z][a-z0-9\\+\\-\\.]*):\\/\\/)?"
 	"(?P<HierPart>"
@@ -2442,6 +2456,7 @@ pair<int32_t,acct_creds_t> create_bootstrap_account(MYSQL* mysql, const string& 
 
 	return { myerr, { user, pass } };
 }
+#endif /* !PROXYSQL40 */
 
 
 /**
@@ -2854,6 +2869,7 @@ int main(int argc, const char * argv[]) {
 		}
 	}
 
+#ifndef PROXYSQL40
 	bootstrap_info_t bootstrap_info {};
 	// Try to connect to MySQL for performing the bootstrapping process:
 	//   - If data isn't found we perform the bootstrap process.
@@ -3134,6 +3150,7 @@ int main(int argc, const char * argv[]) {
 
 		mysql_close(mysql);
 	}
+#endif /* !PROXYSQL40 */
 
 	{
 		cpu_timer t;
@@ -3239,7 +3256,11 @@ int main(int argc, const char * argv[]) {
 __start_label:
 	{
 		cpu_timer t;
-		ProxySQL_Main_init_phase2___not_started(bootstrap_info);
+		ProxySQL_Main_init_phase2___not_started(
+#ifndef PROXYSQL40
+			bootstrap_info
+#endif /* !PROXYSQL40 */
+		);
 #ifdef DEBUG
 		std::cerr << "Main init phase2 completed in ";
 #endif

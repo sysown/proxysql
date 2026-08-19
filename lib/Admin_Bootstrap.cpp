@@ -214,6 +214,7 @@ extern int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg);
 
 extern void * (*child_func[3]) (void *arg);
 
+#ifndef PROXYSQL40
 bootstrap_info_t::~bootstrap_info_t() {
 	if (servers != nullptr) {
 		mysql_free_result(servers);
@@ -222,6 +223,7 @@ bootstrap_info_t::~bootstrap_info_t() {
 		mysql_free_result(users);
 	}
 }
+#endif /* !PROXYSQL40 */
 
 #include "Admin_ifaces.h"
 extern admin_main_loop_listeners S_amll;
@@ -232,6 +234,7 @@ static void flush_logs_handler() {
 
 extern void * admin_main_loop(void *arg);
 
+#ifndef PROXYSQL40
 struct boot_srv_info_t {
 	string member_id;
 	string member_host;
@@ -493,6 +496,7 @@ int check_if_user_config(SQLite3DB* admindb, const char* query) {
  *   executions.
  */
 #define ADMIN_SQLITE_TABLE_BOOTSTRAP_VARIABLES "CREATE TABLE IF NOT EXISTS bootstrap_variables (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
+#endif /* !PROXYSQL40 */
 
 
 extern void *child_mysql(void *arg);
@@ -500,7 +504,11 @@ extern void *child_telnet(void *arg);
 extern void *child_postgres(void *arg);
 
 
+#ifdef PROXYSQL40
+bool ProxySQL_Admin::init() {
+#else
 bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
+#endif /* PROXYSQL40 */
 	cpu_timer cpt;
 
 	if (flush_logs_function == NULL) {
@@ -1080,6 +1088,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 		proxy_info("NOTE: Changes to %s will be ignored while the config DB exists. For more information, refer: https://proxysql.com/documentation/configuring-proxysql\n", GloVars.config_file);
 	}
 
+	#ifndef PROXYSQL40
 	/**
 	 * @brief Inserts a default 'mysql_group_replication_hostgroup'.
 	 * @details Uses the following defaults:
@@ -1175,8 +1184,10 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 		// TODO-NOTE: This MUST go away; 'admin-hash_passwords' will be deprecated
 		admindb->execute("UPDATE global_variables SET variable_value='false' WHERE variable_name='admin-hash_passwords'");
 	}
+	#endif /* !PROXYSQL40 */
 	flush_admin_variables___database_to_runtime(admindb,true);
 
+	#ifndef PROXYSQL40
 	if (GloVars.global.gr_bootstrap_mode) {
 		flush_admin_variables___runtime_to_database(configdb, false, true, false);
 	}
@@ -1270,10 +1281,13 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 			configdb->execute(insert_bootstrap_pass.c_str());
 		}
 	}
+	#endif /* !PROXYSQL40 */
 	flush_mysql_variables___database_to_runtime(admindb,true);
+	#ifndef PROXYSQL40
 	if (GloVars.global.gr_bootstrap_mode) {
 		flush_mysql_variables___runtime_to_database(configdb, false, true, false);
 	}
+	#endif /* !PROXYSQL40 */
 	flush_pgsql_variables___database_to_runtime(admindb, true);
 #ifdef PROXYSQLCLICKHOUSE
 	flush_clickhouse_variables___database_to_runtime(admindb,true);

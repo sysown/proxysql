@@ -142,6 +142,7 @@ ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 	checksums_values.pgsql_servers.in_shutdown = true;
 	checksums_values.pgsql_users.in_shutdown = true;
 	checksums_values.pgsql_variables.in_shutdown = true;
+	#ifndef PROXYSQL40
 	if (global.gr_bootstrap_uri) {
 		free(global.gr_bootstrap_uri);
 		global.gr_bootstrap_uri = nullptr;
@@ -194,6 +195,7 @@ ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 		free(global.gr_bootstrap_ssl_mode);
 		global.gr_bootstrap_ssl_mode = nullptr;
 	}
+	#endif /* !PROXYSQL40 */
 	if (global.tls_cert_file) {
 		free(global.tls_cert_file);
 		global.tls_cert_file = nullptr;
@@ -267,6 +269,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 #ifdef PROXYSQLCLICKHOUSE
 	global.clickhouse_server=false;
 #endif /* PROXYSQLCLICKHOUSE */
+	#ifndef PROXYSQL40
 	global.gr_bootstrap_mode = 0;
 	global.gr_bootstrap_uri = nullptr;
 	global.gr_bootstrap_account = nullptr;
@@ -285,6 +288,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	global.gr_bootstrap_ssl_crlpath = nullptr;
 	global.gr_bootstrap_ssl_key = nullptr;
 	global.gr_bootstrap_ssl_mode = nullptr;
+	#endif /* !PROXYSQL40 */
 	global.ssl_keylog_enabled = false;
 	global.tls_load_count = 0;
 	global.tls_last_load_timestamp = 0;
@@ -330,6 +334,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	opt->add((const char *)"",0,1,0,(const char *)"Administration Unix Socket",(const char *)"-S",(const char *)"--admin-socket");
 
 	opt->add((const char *)"",0,0,0,(const char *)"Enable SQLite3 Server",(const char *)"--sqlite3-server");
+	#ifndef PROXYSQL40
 	// Bootstrap General options
 	opt->add((const char *)"",0,1,0,(const char *)"Start ProxySQL in Group Replication bootstrap mode."
 		" An URI needs to be specified for creating a connection to the bootstrap server, if no URI is provided,"
@@ -358,6 +363,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	// TODO: Complete information about this mode and it's relation with 'ssl-ca'. E.g: For 'VERIFY_CA' mode,
 	// MariaDB connector related options. Not direct option 'MYSQL_OPT_SSL_MODE'.
 	opt->add((const char *)"",0,1,0,(const char *)"SSL connection mode for using during bootstrap during normal operation with the backend servers. Only PREFERRED, and DISABLED are supported.",(const char *)"--ssl-mode");
+	#endif /* !PROXYSQL40 */
 #ifdef PROXYSQLCLICKHOUSE
 	opt->add((const char *)"",0,0,0,(const char *)"Enable ClickHouse Server",(const char *)"--clickhouse-server");
 #endif /* PROXYSQLCLICKHOUSE */
@@ -490,6 +496,7 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 	}
 #endif /* PROXYSQLCLICKHOUSE */
 
+	#ifndef PROXYSQL40
 	update_string_var_if_set(&global.gr_bootstrap_uri, opt, "--bootstrap");
 	global.gr_bootstrap_mode = opt->isSet("--bootstrap");
 	update_ulong_var_if_set(global.gr_bootstrap_conf_base_port, opt, "--conf-base-port");
@@ -508,6 +515,7 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 	update_string_var_if_set(&global.gr_bootstrap_ssl_crlpath, opt, "--ssl-crlpath");
 	update_string_var_if_set(&global.gr_bootstrap_ssl_key, opt, "--ssl-key");
 	update_string_var_if_set(&global.gr_bootstrap_ssl_mode, opt, "--ssl-mode");
+	#endif /* !PROXYSQL40 */
 
 	config_file = GloVars.__cmd_proxysql_config_file;
 	if (!config_file) {
