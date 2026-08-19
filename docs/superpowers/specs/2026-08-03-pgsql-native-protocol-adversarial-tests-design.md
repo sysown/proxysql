@@ -2,6 +2,10 @@
 
 **Date:** 2026-08-03
 **Status:** Approved design, pending implementation plan
+**Update (2026-08-19):** D3 was subsequently fixed in this same PR (#6112) and
+`pgsql-native_framer_retention-t` now passes; the statements below that D3 is
+unfixed and out of scope (§4.1, §5, §6) record the original design intent. The
+separate recv+feed read-loop accumulation is unrelated to D3 and remains open.
 **Scope:** Close the test gaps in the native PostgreSQL backend protocol
 (`feature/pgsql-native-backend-protocol`) and prove three defects found by code
 audit and direct measurement.
