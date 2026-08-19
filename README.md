@@ -81,6 +81,19 @@ The archive contains `bin/proxysql`, a sample `etc/proxysql.cnf`, the `systemd/`
 units, and helper tools. The v4.0 build additionally ships the runtime plugins
 under `lib/proxysql/` (`ProxySQL_MySQLX_Plugin.so`, `ProxySQL_GenAI_Plugin.so`).
 
+Building ProxySQL from source requires Git LFS so the pinned OpenSSL source is
+hydrated before dependency builds start:
+
+```bash
+git lfs install
+git lfs pull --include=deps/libssl/openssl-3.5.7.tar.gz
+deps/libssl/verify-source.bash
+```
+
+See the [vendored OpenSSL maintenance guide](doc/vendored_openssl.md) for source
+verification, recovery, and the supported patch-update procedure from
+[issue #6115](https://github.com/sysown/proxysql/issues/6115).
+
 Alternatively you can also use the available repositories:
 
 #### Ubuntu / Debian:

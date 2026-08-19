@@ -23,10 +23,12 @@ The verifier rejects missing files, unhydrated LFS pointers, checksum
 mismatches, invalid gzip data, unsafe archive paths, and unexpected archive
 layouts before extraction.
 
-OpenSSL updates stay on the 3.5 LTS series until a separately reviewed design
-selects a successor. An update must replace the LFS object, digest, versioned
-symlink, and build pin together, then run the upstream OpenSSL tests and the
-complete ProxySQL TLS and platform matrix.
+OpenSSL updates stay on the 3.5 LTS series through 8 April 2030. Selecting a
+successor requires a separately reviewed design. Follow the authoritative
+[vendored OpenSSL maintenance guide](../../doc/vendored_openssl.md) to verify
+official signatures and digests, update every version-coupled file atomically,
+and run the upstream and ProxySQL acceptance matrices for issue #6115.
 
-Static vendoring is not a FIPS claim. Building and operating a matching FIPS
-provider is separate future work tracked by GitHub issue #6116.
+Static vendoring is not a FIPS claim. Building and operating an exactly
+qualified FIPS provider/core combination is separate future work tracked by
+[GitHub issue #6116](https://github.com/sysown/proxysql/issues/6116).
