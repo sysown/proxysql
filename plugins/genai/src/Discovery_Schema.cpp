@@ -1312,6 +1312,8 @@ int Discovery_Schema::rebuild_fts_index(int run_id) {
 				} catch (...) {
 					// Ignore parse errors
 				}
+			}
+			if (prof_result) {
 				delete prof_result;
 			}
 

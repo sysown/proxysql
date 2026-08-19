@@ -23,6 +23,13 @@ if [[ ! -f "${HELPERS}" ]]; then
 fi
 source "${HELPERS}"
 
+if ! require_mcp_prerequisites; then
+    tap_plan 1
+    tap_not_ok "MCP shell prerequisites are available"
+    tap_finish
+    exit $?
+fi
+
 MCP_MYSQL_TARGET_ID="${MCP_TARGET_ID:-tap_mysql_default}"
 MCP_PGSQL_TARGET_ID="${MCP_PGSQL_TARGET_ID:-tap_pgsql_default}"
 
@@ -133,8 +140,4 @@ else
     tap_not_ok "catalog run_id cannot be resolved across target_id boundaries" "${cross_target_resp}"
 fi
 
-if [[ "${FAIL}" -ne 0 ]]; then
-    echo "msg: # FAILURES=${FAIL}/${PLAN}"
-    exit 1
-fi
-exit 0
+tap_finish

@@ -153,6 +153,7 @@ bool configure_mcp_for_test(MYSQL* admin, const CommandLine& cl, const std::stri
 		"SET mcp-port=" + std::to_string(cl.mcp_port),
 		"SET mcp-use_ssl=false",
 		"SET mcp-enabled=true",
+		"SET mcp-config_endpoint_auth='" + escape_sql_literal(query_token) + "'",
 		"SET mcp-query_endpoint_auth='" + escape_sql_literal(query_token) + "'",
 		"DELETE FROM mcp_target_profiles WHERE target_id='" + std::string(k_target_id) + "'",
 		"DELETE FROM mcp_auth_profiles WHERE auth_profile_id='" + std::string(k_auth_profile_id) + "'",
@@ -320,8 +321,7 @@ cleanup:
 		run_q(admin, ("DELETE FROM mcp_target_profiles WHERE target_id='" + std::string(k_target_id) + "'").c_str());
 		run_q(admin, ("DELETE FROM mcp_auth_profiles WHERE auth_profile_id='" + std::string(k_auth_profile_id) + "'").c_str());
 		run_q(admin, ("DELETE FROM mysql_servers WHERE hostgroup_id=" + std::to_string(k_hostgroup_id)).c_str());
-		run_q(admin, "SET mcp-query_endpoint_auth=''");
-		run_q(admin, "LOAD MCP VARIABLES TO RUNTIME");
+		run_q(admin, "LOAD MCP VARIABLES FROM DISK");
 		run_q(admin, "LOAD MCP PROFILES TO RUNTIME");
 		run_q(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 		mysql_close(admin);

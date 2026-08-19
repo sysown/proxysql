@@ -103,7 +103,7 @@ All types are defined in `include/ProxySQL_Plugin.h`:
 ```cpp
 struct ProxySQL_PluginDescriptor {
     const char *name;                         // Human-readable plugin name
-    uint32_t abi_version;                     // PROXYSQL_PLUGIN_ABI_VERSION (1, 2, or 3)
+    uint32_t abi_version;                     // PROXYSQL_PLUGIN_ABI_VERSION (currently 5)
     proxysql_plugin_init_cb init;             // bool (*)(ProxySQL_PluginServices *)
     proxysql_plugin_start_cb start;           // bool (*)()
     proxysql_plugin_stop_cb stop;             // bool (*)()
@@ -115,7 +115,7 @@ struct ProxySQL_PluginDescriptor {
 | Field              | Type          | Description                                               |
 |--------------------|---------------|-----------------------------------------------------------|
 | `name`             | `const char*` | Plugin identifier, used in logging.                        |
-| `abi_version`      | `uint32_t`    | Set from `PROXYSQL_PLUGIN_ABI_VERSION`.  Value `1` = pre-chassis descriptor (six fields).  Value `2` = adds `register_schemas` (four-phase lifecycle).  Value `3` = same descriptor layout as `2`; `ProxySQL_PluginServices` adds a tail-appended `register_runtime_view`.  A v3/v3.1 ProxySQL core rejects `abi_version > 1`; the current PROXYSQL40 core accepts `[1, 3]`. |
+| `abi_version`      | `uint32_t`    | Set from `PROXYSQL_PLUGIN_ABI_VERSION`. Value `1` is the pre-chassis descriptor; `2` adds `register_schemas`; `3` adds `register_runtime_view`; `4` appends `db_kind` to runtime views; `5` appends optional Admin-mutex handoff callbacks to `ProxySQL_PluginCommandContext`. The current PROXYSQL40 core accepts `[1, 5]`. |
 | `init`             | callback      | Phase D — called with live services; register tables and commands here (or finish context setup if `register_schemas` already did it). |
 | `start`            | callback      | Phase E — start threads, open sockets, load config.        |
 | `stop`             | callback      | Called on shutdown.  Pairs with `init`, not `start`: if `init` returned true and `start` later failed, `stop` is still called so the plugin can release resources it allocated in `init`. |
@@ -128,16 +128,15 @@ Return `true` on success, `false` on failure. A `false` return from
 
 #### ABI version
 
-`include/ProxySQL_Plugin.h` exposes `PROXYSQL_PLUGIN_ABI_VERSION` (3 under
-PROXYSQL40, undefined in pre-chassis builds — the descriptor is then a
-legacy six-field struct with `abi_version = 1`).  Plugins MUST assign
+`include/ProxySQL_Plugin.h` exposes `PROXYSQL_PLUGIN_ABI_VERSION` (currently 5
+under PROXYSQL40, undefined in pre-chassis builds — the descriptor is then a
+legacy six-field struct with `abi_version = 1`). Plugins MUST assign
 `abi_version` from this macro rather than hard-coding a literal; the
 core's loader uses it to detect layout skew and reject plugins built
-for an unsupported ABI.  ABI 3 keeps the descriptor layout identical to
-ABI 2 — the only addition is a tail-appended `register_runtime_view`
-field on `ProxySQL_PluginServices` — so plugins that compile against
-ABI 2 still load on the current core; the trailing services field is
-simply invisible to them.  See `ProxySQL_Plugin.h` for the exact rules.
+for an unsupported ABI. All changes since ABI 2 have been tail additions or
+changes to tail-extensible callback payloads, so older plugins retain the
+prefix they were compiled against. See `ProxySQL_Plugin.h` for the exact
+rules.
 
 ### The Entry Point
 
@@ -322,10 +321,18 @@ struct ProxySQL_PluginCommandContext {
     SQLite3DB *admindb;
     SQLite3DB *configdb;
     SQLite3DB *statsdb;
+    void *admin_mutex_context;                 // ABI 5, optional
+    void (*release_admin_mutex)(void *);       // ABI 5, optional
+    void (*acquire_admin_mutex)(void *);       // ABI 5, optional
 };
 ```
 
 Passed to every command callback. Provides direct access to the three databases.
+Commands that can wait for another Admin-interface consumer may use the three
+ABI-5 fields to release the Admin global mutex for the blocking interval. Such
+commands must call `acquire_admin_mutex(admin_mutex_context)` before returning.
+The callbacks are null outside production Admin dispatch and must be checked as
+a complete triplet. Ordinary commands should leave them unused.
 
 ### Result
 
@@ -542,7 +549,7 @@ void register_stats_table(ProxySQL_PluginServices& services,
 - **No dependency resolution**: Plugins are loaded in the order listed in
   `proxysql.cnf`. If one plugin depends on another, the dependency must be
   listed first.
-- **ABI version range**: The current core accepts `abi_version` values in `[1, 3]`. Newly built plugins should set `abi_version = PROXYSQL_PLUGIN_ABI_VERSION`.
+- **ABI version range**: The current core accepts `abi_version` values in `[1, 5]`. Newly built plugins should set `abi_version = PROXYSQL_PLUGIN_ABI_VERSION`.
 - **Compiler coupling**: Plugins must match the ProxySQL core's C++ compiler
   and standard library due to `std::string` in `ProxySQL_PluginCommandResult`.
 
