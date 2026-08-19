@@ -85,21 +85,26 @@ OBJ := $(PROXYSQL_PATH)/src/obj/proxysql_global.o $(PROXYSQL_PATH)/src/obj/main.
 
 #SOURCES := ../tap/utils.cpp
 
+CURL_STATIC_LIB := $(CURL_LDIR)/libcurl.a
+POSTGRESQL_STATIC_LIBS := $(POSTGRESQL_PATH)/interfaces/libpq/libpq.a \
+	$(POSTGRESQL_PATH)/common/libpgcommon.a \
+	$(POSTGRESQL_PATH)/port/libpgport.a
+
 ifeq ($(UNAME_S),Darwin)
-MYLIBS_DYNAMIC_PART := -lgnutls -lcpp_dotenv -lcurl -lssl -lcrypto -luuid
+MYLIBS_DYNAMIC_PART := -lgnutls -lcpp_dotenv -luuid
 MYLIBS_STATIC_PART := -lconfig -lproxysql -lsqlparser -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core
-MYLIBS_PG_PART := -lpq -lpgcommon -lpgport
 MYLIBS_LAST_PART := -lpthread -lm -lz -lzstd -liconv -ldl $(EXTRALINK)
-MYLIBS := -ltap $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) $(MYLIBS_PG_PART) $(MYLIBS_LAST_PART)
+MYLIBS := -ltap $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) \
+	$(POSTGRESQL_STATIC_LIBS) $(CURL_STATIC_LIB) $(OPENSSL_STATIC_LIBS) \
+	$(MYLIBS_LAST_PART)
 else
-MYLIBS_DYNAMIC_PART := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -lcpp_dotenv -lcurl -lssl -lcrypto -luuid
+MYLIBS_DYNAMIC_PART := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -lcpp_dotenv -luuid
 MYLIBS_STATIC_PART := -Wl,-Bstatic -lconfig -lproxysql -lsqlparser -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core
-MYLIBS_PG_PART := -Wl,-Bstatic -lpq -lpgcommon -lpgport
 MYLIBS_LAST_PART := -Wl,-Bdynamic -lpthread -lm -lz -lzstd -lrt -ldl $(EXTRALINK)
-MYLIBS := -Wl,-Bdynamic -ltap $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) $(MYLIBS_PG_PART) $(MYLIBS_LAST_PART)
+MYLIBS := -Wl,-Bdynamic -ltap $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) \
+	$(POSTGRESQL_STATIC_LIBS) $(CURL_STATIC_LIB) $(OPENSSL_STATIC_LIBS) \
+	$(MYLIBS_LAST_PART)
 endif
-#MYLIBS_PG := $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) $(MYLIBS_PG_PART) $(MYLIBS_LAST_PART)
-#MYLIBS := -Wl,--export-dynamic -Wl,-Bdynamic -lssl -lcrypto -lgnutls -ltap -lcpp_dotenv -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core -luuid -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl $(EXTRALINK)
 
 MYLIBSJEMALLOC :=
 ifneq ($(NOJEMALLOC),1)
@@ -155,9 +160,12 @@ default: all
 CUSTOMARGS := -I$(TAP_IDIR) -I$(CURL_IDIR) -I$(SQLITE3_IDIR) -I$(PROXYSQL_IDIR) -I$(JSON_IDIR) -I$(RE2_IDIR) -I$(SSL_IDIR)
 CUSTOMARGS += -L$(TAP_LDIR) -L$(CURL_LDIR) -L$(RE2_LDIR) -L$(SSL_LDIR) -L$(POSTGRESQL_LDIR)
 ifeq ($(UNAME_S),Darwin)
-CUSTOMARGS += -ltap -lcpp_dotenv -lcurl -lssl -lcrypto -lre2 -lpthread -lz -lzstd -ldl -lpq $(LWGCOV)
+CUSTOMARGS += -ltap -lcpp_dotenv -lre2 $(POSTGRESQL_STATIC_LIBS) \
+	$(CURL_STATIC_LIB) $(OPENSSL_STATIC_LIBS) -lpthread -lz -lzstd -ldl $(LWGCOV)
 else
-CUSTOMARGS += -Wl,-Bdynamic -ltap -lcpp_dotenv -lcurl -lssl -lcrypto -lre2 -lpthread -lz -lzstd -ldl -lpq $(LWGCOV)
+CUSTOMARGS += -Wl,--export-dynamic -Wl,-Bdynamic -ltap -lcpp_dotenv -lre2 \
+	$(POSTGRESQL_STATIC_LIBS) $(CURL_STATIC_LIB) $(OPENSSL_STATIC_LIBS) \
+	-lpthread -lz -lzstd -ldl $(LWGCOV)
 endif
 
 .PHONY: all
@@ -465,12 +473,16 @@ $(ODIR)/mysqlx_proto_%.pb.o: $(MYSQLX_PROTO_DIR)/%.pb.cc $(PROTOBUF_LIB) | $(ODI
 test_mysqlx_e2e_handshake-t: test_mysqlx_e2e_handshake-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
-		$(IDIRS) $(LDIRS) $(OPT) $(PROTOBUF_LIB) -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
+		$(IDIRS) $(LDIRS) $(OPT) $(PROTOBUF_LIB) -ltap -lcpp_dotenv -lmariadbclient \
+		$(POSTGRESQL_STATIC_LIBS) $(CURL_STATIC_LIB) $(OPENSSL_STATIC_LIBS) \
+		-lpthread -lz -ldl -o $@
 
 test_mysqlx_e2e_routing-t: test_mysqlx_e2e_routing-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
-		$(IDIRS) $(LDIRS) $(OPT) $(PROTOBUF_LIB) -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
+		$(IDIRS) $(LDIRS) $(OPT) $(PROTOBUF_LIB) -ltap -lcpp_dotenv -lmariadbclient \
+		$(POSTGRESQL_STATIC_LIBS) $(CURL_STATIC_LIB) $(OPENSSL_STATIC_LIBS) \
+		-lpthread -lz -ldl -o $@
 
 # Behavioural validation TAP test for issue #5678 part (b): the X-Protocol
 # clients are driven directly via the protocol helpers (same set used by
@@ -480,7 +492,9 @@ test_mysqlx_e2e_routing-t: test_mysqlx_e2e_routing-t.cpp $(PROXYSQL_PATH)/plugin
 test_mysqlx_route_drop_inflight-t: test_mysqlx_route_drop_inflight-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
-		$(IDIRS) $(LDIRS) $(OPT) $(PROTOBUF_LIB) -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
+		$(IDIRS) $(LDIRS) $(OPT) $(PROTOBUF_LIB) -ltap -lcpp_dotenv -lmariadbclient \
+		$(POSTGRESQL_STATIC_LIBS) $(CURL_STATIC_LIB) $(OPENSSL_STATIC_LIBS) \
+		-lpthread -lz -ldl -o $@
 
 # The historical inflight stub binary was deleted in the same PR that
 # removed skip_all() from the framework. The stub had never been more

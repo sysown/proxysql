@@ -178,6 +178,11 @@ endif
 # Linker flags — platform-specific
 # ===========================================================================
 
+CURL_STATIC_LIB := $(CURL_LDIR)/libcurl.a
+POSTGRESQL_STATIC_LIBS := $(POSTGRESQL_PATH)/interfaces/libpq/libpq.a \
+	$(POSTGRESQL_PATH)/common/libpgcommon.a \
+	$(POSTGRESQL_PATH)/port/libpgport.a
+
 ifeq ($(UNAME_S),Darwin)
 # macOS: No -Bstatic/-Bdynamic; use explicit .a paths for static linking.
 # libproxysql.a already bundles most deps on Darwin (see src/Makefile).
@@ -202,7 +207,7 @@ LIBPROXYSQLAR_FULL := $(LIBPROXYSQLAR) \
 	$(POSTGRESQL_PATH)/common/libpgcommon.a \
 	$(POSTGRESQL_PATH)/port/libpgport.a
 
-MYLIBS := -lssl -lcrypto -lpthread -lm -lz \
+MYLIBS := $(OPENSSL_EXPORT_LIBS) -lpthread -lm -lz \
 		  -liconv -lgnutls -lprometheus-cpp-pull -lprometheus-cpp-core -luuid \
 		  -lzstd $(LWGCOV)
 else
@@ -215,13 +220,14 @@ LIBPROXYSQLAR_FULL := $(LIBPROXYSQLAR)
 # pull every .oo in twice, producing ODR violations under ASAN
 # (`detect_odr_violation=1` aborts at startup; ld is silenced by
 # `--allow-multiple-definition`).
-MYLIBS := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -lcurl -lssl -lcrypto -luuid \
+MYLIBS := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -luuid \
 		  -Wl,-Bstatic -lconfig -lsqlparser -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre \
 		  -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev \
 		  -lprometheus-cpp-pull -lprometheus-cpp-core \
-		  -Wl,-Bstatic -lpq -lpgcommon -lpgport \
+		  $(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a \
+		  $(LIBUSUAL_LDIR)/libusual.a $(CURL_STATIC_LIB) $(OPENSSL_EXPORT_LIBS) \
 		  -Wl,-Bdynamic -lpthread -lm -lz -lzstd -lrt -ldl \
-		  -lscram -lusual -Wl,--allow-multiple-definition \
+		  -Wl,--allow-multiple-definition \
 		  $(LWGCOV)
 endif
 
@@ -657,13 +663,13 @@ mysqlx_protocol_unit-t: mysqlx_protocol_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysq
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
-		$(MYLIBS) $(PROTOBUF_LIB) -lssl -lcrypto $(ALLOW_MULTI_DEF) -o $@
+		$(MYLIBS) $(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -o $@
 
 mysqlx_protocol_socket_unit-t: mysqlx_protocol_socket_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
-		$(MYLIBS) $(PROTOBUF_LIB) -lssl -lcrypto $(ALLOW_MULTI_DEF) -o $@
+		$(MYLIBS) $(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -o $@
 
 test_mysqlx_admin_tables-t: ../test_mysqlx_admin_tables-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) mysqlx_plugin_build
 	$(CXX) ../test_mysqlx_admin_tables-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
@@ -683,55 +689,55 @@ mysqlx_connection_unit-t: mysqlx_connection_unit-t.cpp $(PROXYSQL_PATH)/plugins/
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) \
 		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) \
-		$(PROTOBUF_LIB) -lssl -lcrypto $(ALLOW_MULTI_DEF) -o $@
+		$(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -o $@
 
 mysqlx_session_unit-t: mysqlx_session_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_session.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_thread.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_session.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_thread.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
-		$(MYLIBS) $(PROTOBUF_LIB) -lssl -lcrypto $(ALLOW_MULTI_DEF) -lpthread -o $@
+		$(MYLIBS) $(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -lpthread -o $@
 
 mysqlx_thread_unit-t: mysqlx_thread_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_thread.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_session.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_thread.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_session.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
-		$(MYLIBS) $(PROTOBUF_LIB) -lssl -lcrypto $(ALLOW_MULTI_DEF) -lpthread -o $@
+		$(MYLIBS) $(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -lpthread -o $@
 
 mysqlx_message_dispatch_unit-t: mysqlx_message_dispatch_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_thread.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_session.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_thread.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_session.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
-		$(MYLIBS) $(PROTOBUF_LIB) -lssl -lcrypto $(ALLOW_MULTI_DEF) -lpthread -o $@
+		$(MYLIBS) $(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -lpthread -o $@
 
 mysqlx_concurrent_unit-t: mysqlx_concurrent_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_thread.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_session.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_thread.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_session.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
-		$(MYLIBS) $(PROTOBUF_LIB) -lssl -lcrypto $(ALLOW_MULTI_DEF) -lpthread -o $@
+		$(MYLIBS) $(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -lpthread -o $@
 
 mysqlx_backend_auth_unit-t: mysqlx_backend_auth_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
-		$(MYLIBS) $(PROTOBUF_LIB) -lssl -lcrypto $(ALLOW_MULTI_DEF) -lpthread -o $@
+		$(MYLIBS) $(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -lpthread -o $@
 
 mysqlx_credential_verify_unit-t: mysqlx_credential_verify_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
-		$(MYLIBS) $(PROTOBUF_LIB) -lssl -lcrypto $(ALLOW_MULTI_DEF) -o $@
+		$(MYLIBS) $(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -o $@
 
 mysqlx_robustness_unit-t: mysqlx_robustness_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_session.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_thread.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_listener_reconcile.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_session.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_thread.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_listener_reconcile.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
-		$(MYLIBS) $(PROTOBUF_LIB) -lssl -lcrypto $(ALLOW_MULTI_DEF) -lpthread -o $@
+		$(MYLIBS) $(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -lpthread -o $@
 
 mysqlx_tls_unit-t: mysqlx_tls_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
-		$(MYLIBS) $(PROTOBUF_LIB) -lssl -lcrypto $(ALLOW_MULTI_DEF) -lpthread -o $@
+		$(MYLIBS) $(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -lpthread -o $@
 
 # X Protocol compression negotiation + decompression / compression wire-up.
 # Same source-set as mysqlx_session_unit-t since it drives MysqlxSession via
@@ -744,7 +750,7 @@ mysqlx_compression_unit-t: mysqlx_compression_unit-t.cpp $(PROXYSQL_PATH)/plugin
 		-I$(ZSTD_IDIR) -I$(PROXYSQL_PATH)/deps/lz4/lz4/lib \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(LZ4_LDIR)/liblz4.a \
-		$(MYLIBS) $(PROTOBUF_LIB) -lssl -lcrypto $(ALLOW_MULTI_DEF) -lpthread -o $@
+		$(MYLIBS) $(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -lpthread -o $@
 mysql_resolution_unit-t: mysql_resolution_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
 		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include \
