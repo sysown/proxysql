@@ -38,6 +38,7 @@ std::string read_log() {
 void create_server_load_schema(SQLite3DB& db) {
 	db.execute("CREATE TABLE mysql_servers (hostgroup_id INTEGER, hostname TEXT, port INTEGER, gtid_port INTEGER, status TEXT, weight INTEGER, compression INTEGER, max_connections INTEGER, max_replication_lag INTEGER, use_ssl INTEGER, max_latency_ms INTEGER, comment TEXT)");
 	db.execute("CREATE TABLE mysql_fake_server_module_claims (writer INTEGER)");
+	db.execute("CREATE TABLE pgsql_fake_server_module_claims (writer INTEGER)");
 	db.execute("CREATE TABLE pgsql_servers (hostgroup_id INTEGER, hostname TEXT, port INTEGER, status TEXT, weight INTEGER, compression INTEGER, max_connections INTEGER, max_replication_lag INTEGER, use_ssl INTEGER, max_latency_ms INTEGER, comment TEXT)");
 	db.execute("CREATE TABLE mysql_replication_hostgroups (writer_hostgroup INTEGER, reader_hostgroup INTEGER, check_type TEXT, comment TEXT)");
 	db.execute("CREATE TABLE pgsql_replication_hostgroups (writer_hostgroup INTEGER, reader_hostgroup INTEGER)");
@@ -70,6 +71,7 @@ int main() {
 	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B", "1", 1);
 	setenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_SERVER_DISCOVERY", "1", 1);
 	setenv("PROXYSQL_FAKE_PLUGIN_AFFILIATED", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_BOTH_PROTOCOLS", "1", 1);
 	setenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER", "1", 1);
 
 	std::unique_ptr<ProxySQL_PluginManager> manager;
@@ -190,10 +192,17 @@ int main() {
 		"public MySQL Admin LOAD prepares before HGM staging and commits before controller restart");
 	admin->pgsql_servers_wrlock();
 	const uint64_t pgsql_before_admin_load = proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::pgsql);
+	const size_t before_pgsql_prepare = occurrences(read_log(), "server_module_prepare");
+	const size_t before_pgsql_commit = occurrences(read_log(), "server_module_commit");
+	const size_t before_pgsql_controller = occurrences(read_log(), "server_controller_runtime");
 	admin->load_pgsql_servers_to_runtime();
 	admin->pgsql_servers_wrunlock();
-	ok(proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::pgsql) == pgsql_before_admin_load + 1,
-		"public PostgreSQL Admin LOAD reaches the same post-HGM installation path");
+	const std::string after_admin_pgsql_load = read_log();
+	ok(proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::pgsql) == pgsql_before_admin_load + 1 &&
+		occurrences(after_admin_pgsql_load, "server_module_prepare") == before_pgsql_prepare + 1 &&
+		occurrences(after_admin_pgsql_load, "server_module_commit") == before_pgsql_commit + 1 &&
+		occurrences(after_admin_pgsql_load, "server_controller_runtime") == before_pgsql_controller + 1,
+		"public PostgreSQL Admin LOAD reaches the same post-HGM module installation path");
 
 	const size_t before_monitor_reload = occurrences(read_log(), "server_controller_runtime");
 	const size_t before_monitor_prepare = occurrences(read_log(), "server_module_prepare");
@@ -213,6 +222,7 @@ int main() {
 	unsetenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_SERVER_DISCOVERY");
 	unsetenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER");
 	unsetenv("PROXYSQL_FAKE_PLUGIN_AFFILIATED");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_BOTH_PROTOCOLS");
 	unsetenv("PROXYSQL_FAKE_PLUGIN_LOG");
 	unlink(g_log_path.c_str());
 	return exit_status();

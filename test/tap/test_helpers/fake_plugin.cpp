@@ -94,6 +94,13 @@ ProxySQL_ServerModuleHooks fake_affiliated_server_module_hooks {
 	ProxySQL_ServerProtocol::mysql,
 	{{ProxySQL_ServerProtocol::mysql, "mysql_fake_server_module_claims", "runtime_mysql_fake_server_module_claims", "writer"}}
 };
+ProxySQL_ServerModuleHooks fake_server_module_hooks_pgsql {
+	ProxySQL_ServerProtocol::pgsql, &fake_server_module_installed, nullptr
+};
+ProxySQL_ServerModuleHooks fake_affiliated_server_module_hooks_pgsql {
+	ProxySQL_ServerProtocol::pgsql,
+	{{ProxySQL_ServerProtocol::pgsql, "pgsql_fake_server_module_claims", "runtime_pgsql_fake_server_module_claims", "writer"}}
+};
 
 void *retain_fake_module() {
 	Dl_info info {};
@@ -104,17 +111,21 @@ void *retain_fake_module() {
 	return dlopen(info.dli_fname, RTLD_NOW | RTLD_LOCAL);
 }
 
-bool fake_register_server_module(ProxySQL_PluginServices *services) {
+bool fake_register_server_module(ProxySQL_PluginServices *services,
+	ProxySQL_ServerProtocol protocol = ProxySQL_ServerProtocol::mysql) {
 	if (services == nullptr || services->register_server_module == nullptr) return false;
 	void *module = retain_fake_module();
 	if (module == nullptr) return false;
-	ProxySQL_ServerModuleHooks *hooks = &fake_server_module_hooks;
+	ProxySQL_ServerModuleHooks *hooks = protocol == ProxySQL_ServerProtocol::mysql
+		? &fake_server_module_hooks : &fake_server_module_hooks_pgsql;
 	if (env("AFFILIATED") != nullptr) {
-		fake_affiliated_server_module_hooks.prepare_runtime = &fake_server_module_prepare;
-		fake_affiliated_server_module_hooks.commit_runtime = &fake_server_module_commit;
-		fake_affiliated_server_module_hooks.runtime_table_snapshot = &fake_server_module_table_snapshot;
-		fake_affiliated_server_module_hooks.shutdown = &fake_server_module_shutdown;
-		hooks = &fake_affiliated_server_module_hooks;
+		ProxySQL_ServerModuleHooks *affiliated = protocol == ProxySQL_ServerProtocol::mysql
+			? &fake_affiliated_server_module_hooks : &fake_affiliated_server_module_hooks_pgsql;
+		affiliated->prepare_runtime = &fake_server_module_prepare;
+		affiliated->commit_runtime = &fake_server_module_commit;
+		affiliated->runtime_table_snapshot = &fake_server_module_table_snapshot;
+		affiliated->shutdown = &fake_server_module_shutdown;
+		hooks = affiliated;
 	}
 	if (!services->register_server_module(hooks,
 		&fake_destroy_server_module, module)) {
@@ -165,12 +176,13 @@ void fake_destroy_server_discovery_controller(ProxySQL_ServerDiscoveryController
 	delete controller;
 }
 
-bool fake_install_server_discovery_controller(ProxySQL_PluginServices *services) {
+bool fake_install_server_discovery_controller(ProxySQL_PluginServices *services,
+	ProxySQL_ServerProtocol protocol = ProxySQL_ServerProtocol::mysql) {
 	if (services == nullptr || services->install_server_discovery_controller == nullptr) return false;
 	void *module = retain_fake_module();
 	if (module == nullptr) return false;
 	auto *controller = new FakeServerDiscoveryController();
-	if (!services->install_server_discovery_controller(ProxySQL_ServerProtocol::mysql,
+	if (!services->install_server_discovery_controller(protocol,
 		controller, &fake_destroy_server_discovery_controller, module)) {
 		delete controller;
 		dlclose(module);
@@ -251,7 +263,10 @@ bool fake_register_schemas(ProxySQL_PluginServices *services) {
 			services->post_server_desired_set == nullptr) {
 			fake_log_event("phase_b_server_discovery_availability");
 		}
-		if (fake_register_server_module(services)) {
+		const bool registered = fake_register_server_module(services) &&
+			(env("SERVER_MODULE_BOTH_PROTOCOLS") == nullptr ||
+			 fake_register_server_module(services, ProxySQL_ServerProtocol::pgsql));
+		if (registered) {
 			fake_log_event("phase_b_server_module_registered");
 		} else {
 			fake_log_event("phase_b_server_module_rejected");
@@ -299,7 +314,10 @@ bool fake_init(ProxySQL_PluginServices *services) {
 		fake_post_server_desired_set = services->post_server_desired_set;
 	}
 	if (env("INSTALL_SERVER_DISCOVERY_CONTROLLER") != nullptr) {
-		if (fake_install_server_discovery_controller(services)) {
+		const bool installed = fake_install_server_discovery_controller(services) &&
+			(env("SERVER_MODULE_BOTH_PROTOCOLS") == nullptr ||
+			 fake_install_server_discovery_controller(services, ProxySQL_ServerProtocol::pgsql));
+		if (installed) {
 			fake_log_event("init_server_controller_installed");
 		} else {
 			fake_log_event("init_server_controller_rejected");
