@@ -232,8 +232,8 @@ jobs:
           exit 1
         fi
 
-    # actions/checkout performs LFS smudging on the runner, before the
-    # Docker build container starts. Keep this guard on the self-hosted pool:
+    # Vendored dependencies are hydrated after checkout, before the Docker
+    # build container starts. Keep this guard on the self-hosted pool:
     # GitHub-hosted images already provide git-lfs, while ci-vm-1 does not.
     - name: Install Git LFS when absent (self-hosted)
       if: ${{ inputs.trusted && runner.environment == 'self-hosted' && steps.cache-check.outputs.cache-hit != 'true' }}
@@ -249,13 +249,28 @@ jobs:
 
     - name: Checkout repository
       if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
+      env:
+        # The self-hosted workspaces are persistent. Hydrating after the
+        # target commit is checked out avoids git-lfs scanning the previous
+        # checkout while actions/checkout is still changing refs.
+        GIT_LFS_SKIP_SMUDGE: "1"
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         repository: ${{ github.repository }}
         ref: ${{ env.SHA }}
         fetch-depth: 0
-        lfs: true
         path: 'proxysql'
+
+    - name: Hydrate vendored OpenSSL source
+      if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
+      working-directory: proxysql
+      run: |
+        set -euo pipefail
+        archive="deps/libssl/openssl-3.5.7.tar.gz"
+        if [[ -f "${archive}" ]]; then
+          git lfs pull --include="${archive}" --exclude=""
+          deps/libssl/verify-source.bash
+        fi
 
 #    - name: Patch TAP-tests
 #      if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
