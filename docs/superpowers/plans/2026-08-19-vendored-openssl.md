@@ -43,7 +43,7 @@
 - With no arguments, the verifier checks the production archive and digest.
 - The exact LFS rule is `deps/libssl/openssl-3.5.7.tar.gz filter=lfs diff=lfs merge=lfs -text`.
 
-- [ ] **Step 1: Write the source-verifier regression tests first.**
+- [x] **Step 1: Write the source-verifier regression tests first.**
 
   Make the test script create temporary archives and checksum files and cover:
 
@@ -56,7 +56,7 @@
   7. a valid fixture archive;
   8. the real checked-in OpenSSL archive.
 
-- [ ] **Step 2: Run the test and prove RED.**
+- [x] **Step 2: Run the test and prove RED.**
 
   Run:
 
@@ -66,7 +66,7 @@
 
   Expected: FAIL because `deps/libssl/verify-source.bash` and the production archive do not exist yet.
 
-- [ ] **Step 3: Implement the portable verifier.**
+- [x] **Step 3: Implement the portable verifier.**
 
   Select SHA-256 tooling in this order so the same script works on all supported builders:
 
@@ -86,7 +86,7 @@
   git lfs pull --include=deps/libssl/openssl-3.5.7.tar.gz
   ```
 
-- [ ] **Step 4: Add and hydrate the official release asset through Git LFS.**
+- [x] **Step 4: Add and hydrate the official release asset through Git LFS.**
 
   Run:
 
@@ -106,7 +106,7 @@
 
   Confirm that `.gitattributes` contains only the exact-path OpenSSL rule unless another independent LFS rule already exists.
 
-- [ ] **Step 5: Verify the production object and LFS index.**
+- [x] **Step 5: Verify the production object and LFS index.**
 
   Run:
 
@@ -119,11 +119,11 @@
 
   Expected: all fixture cases pass, the production digest matches, the LFS file is listed, and attributes report `filter=lfs`, `diff=lfs`, `merge=lfs`, `text=unset`.
 
-- [ ] **Step 6: Document source ownership and recovery.**
+- [x] **Step 6: Document source ownership and recovery.**
 
   Replace the obsolete BIO warning in `deps/libssl/README.md` with the pin, official URL, checksum, LFS hydration command, verifier command, update policy, and an explicit statement that vendoring is not a FIPS claim.
 
-- [ ] **Step 7: Commit the source contract.**
+- [x] **Step 7: Commit the source contract.**
 
   ```bash
   git commit -m "deps: vendor OpenSSL 3.5.7 source via LFS"
@@ -158,7 +158,7 @@
 - `make -C deps libssl` verifies, extracts, configures, and builds the two archives.
 - `libssl/openssl/.proxysql-build-complete` is the single build stamp; both archives depend on it, preventing duplicate recipes under parallel Make.
 
-- [ ] **Step 1: Write the Make-contract test first.**
+- [x] **Step 1: Write the Make-contract test first.**
 
   Assert that a dry run:
 
@@ -168,7 +168,7 @@
   - never invokes `pkg-config`, `CUSTOM_OPENSSL_PATH`, `OPENSSL_ROOT_DIR`, `no-module`, or `no-dso`;
   - tests both `libssl.a` and `libcrypto.a` before touching the completion stamp.
 
-- [ ] **Step 2: Run the contract test and prove RED.**
+- [x] **Step 2: Run the contract test and prove RED.**
 
   ```bash
   test/infra/control/test-vendored-openssl-build-contract.bash
@@ -176,11 +176,11 @@
 
   Expected: FAIL because the current Makefiles discover and version-check system OpenSSL.
 
-- [ ] **Step 3: Replace discovery with canonical vendored paths.**
+- [x] **Step 3: Replace discovery with canonical vendored paths.**
 
   Reduce `common_mk/openssl_flags.mk` to the assignments above. Delete `common_mk/openssl_version_check.mk` and remove its include and `check_openssl_version` target from `deps/Makefile`.
 
-- [ ] **Step 4: Add the verified OpenSSL build rule before every consumer.**
+- [x] **Step 4: Add the verified OpenSSL build rule before every consumer.**
 
   Use a stamp recipe with this ordering:
 
@@ -208,7 +208,7 @@
 
   Put `libssl` first in `targets` so a normal dependency build establishes the canonical core before consumers start.
 
-- [ ] **Step 5: Run the contract and build OpenSSL.**
+- [x] **Step 5: Run the contract and build OpenSSL.**
 
   ```bash
   test/infra/control/test-vendored-openssl-build-contract.bash
@@ -218,7 +218,7 @@
 
   Expected: PASS; the CLI reports `OpenSSL 3.5.7`, both `.a` files exist, and the reported source/build directory is the vendored tree.
 
-- [ ] **Step 6: Prove provider/DSO capability was retained.**
+- [x] **Step 6: Prove provider/DSO capability was retained.**
 
   Run:
 
@@ -231,7 +231,7 @@
 
   Expected: neither `OPENSSL_NO_MODULE` nor `OPENSSL_NO_DSO` is defined and provider build metadata is present. The normal `no-shared` build is allowed to compile the default/base providers into `libcrypto`; #6116 will build the validated FIPS module separately.
 
-- [ ] **Step 7: Commit the canonical build.**
+- [x] **Step 7: Commit the canonical build.**
 
   ```bash
   git commit -am "build: compile mandatory vendored OpenSSL"
@@ -253,7 +253,7 @@
 - CMake consumers receive `OPENSSL_ROOT_DIR=$(SSL_PATH)`, `OPENSSL_INCLUDE_DIR=$(SSL_IDIR)`, and exact archive filenames.
 - Autoconf consumers receive only `$(SSL_IDIR)`, `$(SSL_LDIR)`, and exact archive paths; host `pkg-config` output is excluded.
 
-- [ ] **Step 1: Write a source-level consumer audit and prove RED.**
+- [x] **Step 1: Write a source-level consumer audit and prove RED.**
 
   The audit must reject system discovery and bare OpenSSL link flags in active ProxySQL Makefiles:
 
@@ -265,7 +265,7 @@
 
   It must also assert OpenSSL prerequisites on the curl, MariaDB Connector/C, PostgreSQL/libpq, libusual, libscram, and test connector targets.
 
-- [ ] **Step 2: Fix bundled dependency prerequisites and configuration.**
+- [x] **Step 2: Fix bundled dependency prerequisites and configuration.**
 
   Apply these exact contracts:
 
@@ -276,7 +276,7 @@
   - libscram: change `LIBOPENSSL_DIR` from the include directory to `$(SSL_PATH)` and pass the exact archives if its Makefile exposes library variables;
   - `test/deps/Makefile`: add a `vendored_openssl` bridge target and pass the same root/include/archive variables to every MariaDB/MySQL test connector that enables OpenSSL.
 
-- [ ] **Step 3: Run the audit and dependency builds.**
+- [x] **Step 3: Run the audit and dependency builds.**
 
   ```bash
   test/infra/control/test-vendored-openssl-consumers.bash
@@ -286,7 +286,7 @@
 
   Expected: PASS; configuration logs name only `deps/libssl/openssl`, curl produces `libcurl.a` and no `libcurl.so`/`libcurl.dylib`, and all requested archives build.
 
-- [ ] **Step 4: Prove the static consumers did not capture host OpenSSL paths.**
+- [x] **Step 4: Prove the static consumers did not capture host OpenSSL paths.**
 
   ```bash
   rg -n '/usr/(local/)?(include|lib).*(ssl|crypto)|opt/homebrew/opt/openssl' \
@@ -297,7 +297,7 @@
 
   Expected: no match. A plain platform path unrelated to OpenSSL is acceptable; an OpenSSL header or library path outside `deps/libssl/openssl` is not.
 
-- [ ] **Step 5: Commit dependency routing.**
+- [x] **Step 5: Commit dependency routing.**
 
   ```bash
   git commit -am "build: route bundled dependencies to vendored OpenSSL"
@@ -331,7 +331,7 @@
 
 - `check-openssl-linkage.bash EXECUTABLE [PLUGIN ...]` rejects dynamic OpenSSL dependencies everywhere, rejects plugin-defined OpenSSL sentinel symbols, and proves each plugin's undefined OpenSSL symbols are exported by the executable.
 
-- [ ] **Step 1: Test the linkage checker with tiny fixtures and prove RED.**
+- [x] **Step 1: Test the linkage checker with tiny fixtures and prove RED.**
 
   Compile fixtures for these cases:
 
@@ -343,11 +343,11 @@
 
   Use `cc -shared -fPIC` on ELF and `cc -dynamiclib -undefined dynamic_lookup` on macOS.
 
-- [ ] **Step 2: Implement the cross-platform checker.**
+- [x] **Step 2: Implement the cross-platform checker.**
 
   On ELF, inspect `readelf -d`, `nm -D --defined-only`, and `nm -D --undefined-only`. On macOS, inspect `otool -L`, `nm -gU`, and `nm -g`. Treat `libssl.so`, `libcrypto.so`, `libssl.dylib`, and `libcrypto.dylib` as forbidden. Use `OpenSSL_version`, `SSL_CTX_new`, `EVP_MD_fetch`, and `OSSL_PROVIDER_load` as embedded-core sentinels.
 
-- [ ] **Step 3: Link ProxySQL with the force-loaded core.**
+- [x] **Step 3: Link ProxySQL with the force-loaded core.**
 
   In `src/Makefile`:
 
@@ -357,11 +357,11 @@
   - retain the macOS `-force_load` behavior for `libproxysql.a` and add the OpenSSL force-load flags;
   - add `$(LIB_SSL_PATH) $(LIB_CRYPTO_PATH)` as explicit prerequisites of `src/proxysql`.
 
-- [ ] **Step 4: Stop MySQLX from owning OpenSSL.**
+- [x] **Step 4: Stop MySQLX from owning OpenSSL.**
 
   Keep `-I$(SSL_IDIR)` in `plugins/mysqlx/Makefile`, but remove `-L$(SSL_LDIR) -lssl -lcrypto` and do not add `$(OPENSSL_STATIC_LIBS)`. ELF leaves the plugin's OpenSSL API references undefined for the loader; macOS continues to use `-undefined dynamic_lookup`.
 
-- [ ] **Step 5: Build Chassis and prove the process boundary.**
+- [x] **Step 5: Build Chassis and prove the process boundary.**
 
   ```bash
   make clean
@@ -375,7 +375,7 @@
 
   Expected: PASS; ProxySQL and plugins have no dynamic OpenSSL dependency, plugins define none of the sentinels, and all plugin OpenSSL imports are present in the executable's export table.
 
-- [ ] **Step 6: Run the real plugin load and TLS unit tests.**
+- [x] **Step 6: Run the real plugin load and TLS unit tests.**
 
   ```bash
   PROXYSQL40=1 make -C test/tap/tests/unit -j4 \
@@ -387,7 +387,7 @@
 
   Expected: all TAP assertions pass and the real MySQLX plugin is loaded by a host that owns the only OpenSSL core.
 
-- [ ] **Step 7: Commit the single-runtime link.**
+- [x] **Step 7: Commit the single-runtime link.**
 
   ```bash
   git commit -am "build: make proxysql own the OpenSSL runtime"
@@ -416,11 +416,11 @@
 - Plugin-loading unit binaries use `$(OPENSSL_EXPORT_LIBS)` so plugin-only APIs remain exported.
 - TAP stops copying or depending on shared libcurl and links `$(CURL_LDIR)/libcurl.a` instead.
 
-- [ ] **Step 1: Add the repository-wide active-link audit and prove RED.**
+- [x] **Step 1: Add the repository-wide active-link audit and prove RED.**
 
   Search Makefiles and shell build scripts while excluding docs, extracted dependency trees, and generated configure files. Fail on bare `-lssl`, bare `-lcrypto`, `brew --prefix openssl`, or a system OpenSSL root. Permit only canonical variables from `common_mk/openssl_flags.mk` and the intentional negative fixtures in `test-openssl-linkage-check.bash`.
 
-- [ ] **Step 2: Convert TAP and unit-test links.**
+- [x] **Step 2: Convert TAP and unit-test links.**
 
   - replace every `-lssl -lcrypto` pair with the exact canonical archives;
   - place those archives after `libcurl.a`, `libpq.a`, and other consumers so static symbol resolution is correct;
@@ -428,11 +428,11 @@
   - remove `libcurl$(SHLIB_EXT)` from `test/tap/tap/Makefile` targets and prerequisites;
   - link or leave unresolved `libpq.a` references without introducing a shared `libpq`-owned OpenSSL core.
 
-- [ ] **Step 3: Convert standalone helpers and simulation builds.**
+- [x] **Step 3: Convert standalone helpers and simulation builds.**
 
   Apply the same exact archive variables to the cluster simulator, PrepStmt, deprecate-EOF test, RAG proof of concept, and RAG test. Add the repository root/path includes where the small Makefiles do not currently include `makefiles_paths.mk`.
 
-- [ ] **Step 4: Run the audit and focused crypto regressions.**
+- [x] **Step 4: Run the audit and focused crypto regressions.**
 
   ```bash
   test/infra/control/test-no-system-openssl-links.bash
@@ -445,7 +445,7 @@
 
   Expected: the audit passes and all focused TAP binaries pass.
 
-- [ ] **Step 5: Build the ordinary TAP and simulator link surfaces.**
+- [x] **Step 5: Build the ordinary TAP and simulator link surfaces.**
 
   ```bash
   make -C test/tap/tap -j4
@@ -455,7 +455,7 @@
 
   Expected: all links succeed without a host OpenSSL development package or shared libcurl from the vendored tree.
 
-- [ ] **Step 6: Commit the test/tool migration.**
+- [x] **Step 6: Commit the test/tool migration.**
 
   ```bash
   git commit -am "test: use the vendored OpenSSL runtime"
@@ -477,11 +477,11 @@
 - `stats.stats_mysql_global` keeps `OpenSSL_Version_Num` and adds `OpenSSL_Version`, populated with `OpenSSL_version(OPENSSL_VERSION)`.
 - The unit-test rule passes `-DPROXYSQL_VENDORED_OPENSSL_VERSION=\"$(OPENSSL_VERSION)\"`; the test compares that build pin with `OPENSSL_VERSION_STR` and `OpenSSL_version(OPENSSL_VERSION)`.
 
-- [ ] **Step 1: Add the failing compile-time/runtime version unit test.**
+- [x] **Step 1: Add the failing compile-time/runtime version unit test.**
 
   The test must assert that the header and runtime strings both begin with `OpenSSL 3.5.7` and that `OpenSSL_version_num()` has major/minor/patch `3/5/7`.
 
-- [ ] **Step 2: Register, build, and run it.**
+- [x] **Step 2: Register, build, and run it.**
 
   ```bash
   make -C test/tap/tests/unit vendored_openssl_version_unit-t
@@ -490,7 +490,7 @@
 
   Expected before the change: FAIL on any host library/version mismatch. Expected after canonical linkage: all assertions pass.
 
-- [ ] **Step 3: Add the human-readable statistics row.**
+- [x] **Step 3: Add the human-readable statistics row.**
 
   Immediately beside `OpenSSL_Version_Num`, add:
 
@@ -501,7 +501,7 @@
 
   Update `test_cacert_load_and_verify_duration-t.cpp` to read both rows and require the string prefix `OpenSSL 3.5.7` before applying its existing numeric performance-regression logic.
 
-- [ ] **Step 4: Run the focused unit and TAP compile.**
+- [x] **Step 4: Run the focused unit and TAP compile.**
 
   ```bash
   make -C test/tap/tests/unit vendored_openssl_version_unit-t
@@ -511,7 +511,7 @@
 
   Expected: unit TAP passes and the integration TAP compiles against the vendored headers and archives.
 
-- [ ] **Step 5: Commit version inventory support.**
+- [x] **Step 5: Commit version inventory support.**
 
   ```bash
   git commit -am "stats: expose embedded OpenSSL version"
@@ -537,7 +537,7 @@
 - The generic Linux tarball contains no copied `libssl.so.3` or `libcrypto.so.3`.
 - The tarball smoke test rejects those dynamic dependencies in the binary and all packaged plugins.
 
-- [ ] **Step 1: Write the package contract test and prove RED.**
+- [x] **Step 1: Write the package contract test and prove RED.**
 
   The test must fail if:
 
@@ -546,11 +546,11 @@
   - the tarball entrypoint calls `bundle_runtime_library` for `libssl` or `libcrypto`;
   - the tarball test expects OpenSSL to resolve from `lib/` rather than forbidding it.
 
-- [ ] **Step 2: Remove obsolete runtime metadata and bundling.**
+- [x] **Step 2: Remove obsolete runtime metadata and bundling.**
 
   Keep GnuTLS requirements intact. Remove only OpenSSL requirements. Remove the bundling function entirely if OpenSSL is its only caller; otherwise remove only its two OpenSSL invocations.
 
-- [ ] **Step 3: Invert the runtime smoke test.**
+- [x] **Step 3: Invert the runtime smoke test.**
 
   For the main binary and every `lib/proxysql/*.so`, collect `ldd` output and fail on:
 
@@ -562,11 +562,11 @@
 
   Preserve `--version` execution in the three clean runtime images.
 
-- [ ] **Step 4: Update user-facing tarball documentation.**
+- [x] **Step 4: Update user-facing tarball documentation.**
 
   Remove the README statement that generic tarballs require host OpenSSL 3. State that ProxySQL embeds pinned OpenSSL 3.5.7, still dynamically requires GnuTLS, and that this is not a FIPS claim.
 
-- [ ] **Step 5: Run package checks.**
+- [x] **Step 5: Run package checks.**
 
   ```bash
   test/infra/control/test-openssl-package-contract.bash
@@ -578,7 +578,7 @@
 
   Expected: PASS with no declared, bundled, or dynamic OpenSSL runtime.
 
-- [ ] **Step 6: Build and test an amd64 tarball.**
+- [x] **Step 6: Build and test an amd64 tarball.**
 
   ```bash
   make clean
@@ -588,7 +588,7 @@
 
   Expected: the tarball works on AlmaLinux 9, Debian 12, and Ubuntu 22.04, and none of those clean images supplies OpenSSL to ProxySQL.
 
-- [ ] **Step 7: Commit packaging changes.**
+- [x] **Step 7: Commit packaging changes.**
 
   ```bash
   git commit -am "packaging: drop shared OpenSSL runtime"
@@ -614,13 +614,13 @@
 - Metadata-only `init_release` and fan-out runtime-test checkouts do not hydrate LFS.
 - The validator maps each checkout step to its YAML job and checks only build jobs, preventing unnecessary LFS bandwidth consumption.
 
-- [ ] **Step 1: Write and run the workflow validator before changing YAML.**
+- [x] **Step 1: Write and run the workflow validator before changing YAML.**
 
   The validator must enumerate direct workflows, identify jobs containing a ProxySQL `make`/build-control invocation, and require `lfs: true` on that job's checkout. It must explicitly check package `build`, macOS `build`, cluster-simulator `build`, unit/sanitizer build jobs, and tarball jobs. It must reject `lfs: true` in package/macOS `init_release` jobs.
 
   Expected: FAIL for the 176 package/macOS build jobs and the cluster simulator; existing ASAN/TSAN hydration remains accepted.
 
-- [ ] **Step 2: Add targeted LFS hydration mechanically.**
+- [x] **Step 2: Add targeted LFS hydration mechanically.**
 
   In each affected build-job checkout, add:
 
@@ -634,11 +634,11 @@
 
   Preserve existing checkout settings and add only `lfs: true` when the other keys already exist.
 
-- [ ] **Step 3: Remove system OpenSSL from macOS build selection.**
+- [x] **Step 3: Remove system OpenSSL from macOS build selection.**
 
   Delete `PKG_CONFIG_PATH` and `OPENSSL_ROOT_DIR` from all six macOS build jobs and remove `openssl@3` from their Homebrew install lists. Leave an OpenSSL CLI package only if a workflow step demonstrably invokes the CLI; it must not expose headers or libraries to Make.
 
-- [ ] **Step 4: Validate the full workflow set and YAML diffs.**
+- [x] **Step 4: Validate the full workflow set and YAML diffs.**
 
   ```bash
   test/infra/control/validate-openssl-lfs-workflows.bash
@@ -648,7 +648,7 @@
 
   Expected: PASS; only build jobs hydrate LFS and all 176 generated package/macOS changes have the same shape.
 
-- [ ] **Step 5: Coordinate the reusable primary build workflow.**
+- [x] **Step 5: Coordinate the reusable primary build workflow.**
 
   `.github/workflows/CI-builds.yml` delegates to `sysown/proxysql/.github/workflows/ci-builds.yml@GH-Actions`; its checkout is not present on `v3.0`. Make the corresponding `lfs: true` change on the `GH-Actions` branch in the same delivery window, then dispatch `CI-builds` against the implementation commit. Record that companion commit in issue #6115. Do not mark #6115 complete while the reusable workflow can still produce an unhydrated checkout.
 
@@ -663,7 +663,7 @@
 
   Expected: the file is a gzip archive, not an LFS pointer, and verification passes. Record this operational evidence in #6115.
 
-- [ ] **Step 7: Commit workflow hydration.**
+- [x] **Step 7: Commit workflow hydration.**
 
   ```bash
   git commit -am "ci: hydrate vendored OpenSSL source in build jobs"
@@ -684,7 +684,7 @@
 - The update guide is the authoritative process for staying on OpenSSL 3.5 LTS through 8 April 2030.
 - The guide distinguishes normal vendoring from the future FIPS project #6116.
 
-- [ ] **Step 1: Document the build and update workflow.**
+- [x] **Step 1: Document the build and update workflow.**
 
   Include exact sections for:
 
@@ -698,11 +698,11 @@
   - why static vendoring alone is not FIPS compliance;
   - why a FIPS provider must match the exact core build and configuration from #6116.
 
-- [ ] **Step 2: Link the guide from README and dependency README.**
+- [x] **Step 2: Link the guide from README and dependency README.**
 
   Add a concise source-build prerequisite to `README.md` and keep detailed recovery/update instructions in `doc/vendored_openssl.md`.
 
-- [ ] **Step 3: Validate commands and links.**
+- [x] **Step 3: Validate commands and links.**
 
   ```bash
   git lfs pull --include=deps/libssl/openssl-3.5.7.tar.gz
@@ -714,7 +714,7 @@
 
   Expected: every documented command succeeds and the project boundary is explicit.
 
-- [ ] **Step 4: Commit documentation.**
+- [x] **Step 4: Commit documentation.**
 
   ```bash
   git commit -am "docs: document vendored OpenSSL maintenance"
@@ -733,7 +733,7 @@
 
 - Produces the evidence required to close #6115; it does not produce FIPS artifacts.
 
-- [ ] **Step 1: Run all static contract checks from a clean worktree.**
+- [x] **Step 1: Run all static contract checks from a clean worktree.**
 
   ```bash
   test/infra/control/test-vendored-openssl-source.bash
@@ -747,7 +747,7 @@
 
   Expected: all checks pass.
 
-- [ ] **Step 2: Build and inspect Stable 3.0.**
+- [x] **Step 2: Build and inspect Stable 3.0.**
 
   ```bash
   make clean
@@ -758,7 +758,7 @@
 
   Expected: a 3.0 DEBUG binary, embedded OpenSSL 3.5.7, and no dynamic OpenSSL dependency.
 
-- [ ] **Step 3: Build and inspect Innovative 3.1.**
+- [x] **Step 3: Build and inspect Innovative 3.1.**
 
   ```bash
   make clean
@@ -769,7 +769,7 @@
 
   Expected: a 3.1 DEBUG binary with the same OpenSSL core and linkage result.
 
-- [ ] **Step 4: Build and inspect Chassis 4.0 plus plugins.**
+- [x] **Step 4: Build and inspect Chassis 4.0 plus plugins.**
 
   ```bash
   make clean
@@ -820,13 +820,25 @@
 
   In each built artifact, run the linkage checker or the platform-equivalent `ldd`/`readelf`/`otool` evidence.
 
-- [ ] **Step 7: Verify the failure modes manually once.**
+- [x] **Step 7: Verify the failure modes manually once.**
 
   In a temporary checkout, replace the archive with an LFS pointer and then with corrupt bytes. Run `make -C deps libssl` for each case.
 
   Expected: both fail before extraction; the pointer case prints the exact `git lfs pull --include=...` recovery command and the corruption case prints expected and actual SHA-256 values.
 
-- [ ] **Step 8: Perform final repository checks.**
+  Local evidence collected on 2026-08-19:
+
+  - the seven clean static contract checks pass, including 13 source-verifier cases and 179 workflow build jobs;
+  - Stable 3.0, Innovative 3.1, and Chassis 4.0 debug builds report embedded OpenSSL 3.5.7 and no dynamic OpenSSL dependency;
+  - the Chassis executable and both shared plugins pass the ownership checker, and both plugins retain unresolved EVP imports for the executable-owned core;
+  - the five focused unit/plugin tests pass (150 assertions total), as do `reg_test_3765_ssl_pollout-t`, `reg_test_4556-ssl_error_queue-t`, and `test_cacert_load_and_verify_duration-t` in an isolated MySQL 8.4 environment;
+  - MySQL 5.7 and 8.4 test-client builds were inspected and corrected so every generated OpenSSL link resolves to the vendored archives;
+  - the amd64 tarball contract passes on AlmaLinux 9, Debian 12, and Ubuntu 22.04, with embedded OpenSSL 3.5.7 and no bundled or dynamic `libssl`/`libcrypto`;
+  - disposable-checkout pointer and checksum-mismatch failures occur before extraction with the required diagnostics.
+
+  The full platform/package CI matrix, the PostgreSQL/SCRAM group sweep, and GitHub-generated source-archive hydration remain publication-time gates below.
+
+- [x] **Step 8: Perform final repository checks.**
 
   ```bash
   git diff --check origin/v3.0...HEAD
@@ -841,7 +853,7 @@
 
   Post the implementation commits/PR, the exact OpenSSL digest, platform/tier results, binary/plugin linkage output, package results, the `GH-Actions` companion commit, and confirmation that GitHub source archives include the LFS object. State explicitly that #6116 remains separate future FIPS work.
 
-- [ ] **Step 10: Commit plan progress if checkbox evidence changed.**
+- [x] **Step 10: Commit plan progress if checkbox evidence changed.**
 
   ```bash
   git add docs/superpowers/plans/2026-08-19-vendored-openssl.md
