@@ -49,6 +49,44 @@ thread_local ProxySQL_PluginManager* g_registry_callback_target = nullptr;
 // per-worker MySQL_Thread / PgSQL_Thread parallelism onto one mutex once a
 // plugin actually wires a hook into the hot path.
 std::shared_mutex g_active_plugin_manager_mutex {};
+std::atomic<size_t> g_active_manager_pin_acquisitions_for_test {0};
+thread_local ProxySQL_PluginManager *g_active_manager_pin = nullptr;
+thread_local size_t g_active_manager_pin_depth = 0;
+
+class ScopedActiveManagerPin {
+public:
+	ScopedActiveManagerPin() {
+		if (g_active_manager_pin_depth != 0) {
+			++g_active_manager_pin_depth;
+			manager_ = g_active_manager_pin;
+			return;
+		}
+		lock_ = std::shared_lock<std::shared_mutex>(g_active_plugin_manager_mutex);
+		g_active_manager_pin_acquisitions_for_test.fetch_add(1, std::memory_order_relaxed);
+		manager_ = g_active_plugin_manager.load(std::memory_order_acquire);
+		g_active_manager_pin = manager_;
+		g_active_manager_pin_depth = 1;
+		outermost_ = true;
+	}
+
+	~ScopedActiveManagerPin() {
+		assert(g_active_manager_pin_depth > 0);
+		--g_active_manager_pin_depth;
+		if (outermost_) {
+			assert(g_active_manager_pin_depth == 0);
+			g_active_manager_pin = nullptr;
+		}
+	}
+
+	ScopedActiveManagerPin(const ScopedActiveManagerPin&) = delete;
+	ScopedActiveManagerPin& operator=(const ScopedActiveManagerPin&) = delete;
+	ProxySQL_PluginManager *manager() const { return manager_; }
+
+private:
+	std::shared_lock<std::shared_mutex> lock_ {};
+	ProxySQL_PluginManager *manager_ {nullptr};
+	bool outermost_ {false};
+};
 // Serializes load/init/stop operations. Held for the duration of a plugin
 // lifecycle transition so two reload paths cannot race on g_registry_target /
 // g_registry_registration_*. Distinct from g_active_plugin_manager_mutex,
@@ -276,8 +314,8 @@ bool post_server_desired_set_service(ProxySQL_ServerDesiredSet desired_set) {
 	if (g_registry_callback_target != nullptr) {
 		return g_registry_callback_target->post_server_desired_set(std::move(desired_set));
 	}
-	std::shared_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
-	ProxySQL_PluginManager* manager = g_active_plugin_manager.load(std::memory_order_acquire);
+	ScopedActiveManagerPin pin;
+	ProxySQL_PluginManager* manager = pin.manager();
 	if (manager == nullptr) {
 		proxy_warning("Server desired-set submission attempted without an active plugin manager\n");
 		return false;
@@ -1011,9 +1049,13 @@ private:
 };
 
 bool is_current_server_controller_callback(ProxySQL_PluginManager *manager, int protocol_index) {
-	return g_server_controller_callback != nullptr &&
-		g_server_controller_callback->manager == manager &&
-		g_server_controller_callback->protocol_index == protocol_index;
+	for (ServerCallbackContext *context = g_server_controller_callback;
+		context != nullptr; context = context->previous) {
+		if (context->manager == manager && context->protocol_index == protocol_index) {
+			return true;
+		}
+	}
+	return false;
 }
 
 void log_server_callback_exception(const char *boundary, const std::exception &e) {
@@ -1046,21 +1088,12 @@ void ProxySQL_PluginManager::finalize_server_controller_retirement(
 }
 
 void ProxySQL_PluginManager::release_server_callback_lease(int index) {
-	registered_server_controller_t deferred_retirement {};
 	{
 		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
 		assert(server_callback_leases_[index] > 0);
 		--server_callback_leases_[index];
-		if (server_callback_leases_[index] == 0 &&
-			retired_server_controllers_[index].controller != nullptr) {
-			deferred_retirement = retired_server_controllers_[index];
-			retired_server_controllers_[index] = {};
-		}
 	}
 	server_discovery_cv_.notify_all();
-	if (deferred_retirement.controller != nullptr) {
-		finalize_server_controller_retirement(deferred_retirement);
-	}
 }
 
 bool ProxySQL_PluginManager::register_server_module(
@@ -1156,22 +1189,28 @@ bool ProxySQL_PluginManager::install_server_discovery_controller(
 bool ProxySQL_PluginManager::uninstall_server_discovery_controller(ProxySQL_ServerProtocol protocol) {
 	const int index = server_protocol_index(protocol);
 	if (index < 0) return false;
+	if (is_current_server_controller_callback(this, index)) return false;
 	registered_server_controller_t retired {};
-	bool defer_retirement = false;
-	{
-		std::unique_lock<std::mutex> lock(server_discovery_mutex_);
-		if (server_controllers_[index].controller == nullptr) return false;
-		retired = server_controllers_[index];
-		server_controllers_[index] = {};
-		defer_retirement = is_current_server_controller_callback(this, index);
-		if (defer_retirement) {
-			assert(retired_server_controllers_[index].controller == nullptr);
-			retired_server_controllers_[index] = retired;
-		} else {
-			server_discovery_cv_.wait(lock, [&] { return server_callback_leases_[index] == 0; });
+	server_retirement_observer_for_test_cb observer = nullptr;
+	void *observer_opaque = nullptr;
+	std::unique_lock<std::mutex> lock(server_discovery_mutex_);
+	if (server_controllers_[index].controller == nullptr) return false;
+	retired = server_controllers_[index];
+	server_controllers_[index] = {};
+	observer = server_retirement_observer_for_test_;
+	observer_opaque = server_retirement_observer_opaque_for_test_;
+	if (observer != nullptr) {
+		lock.unlock();
+		try {
+			observer(protocol, true, observer_opaque);
+		} catch (...) {
+			proxy_warning("Server discovery test retirement observer threw\n");
 		}
+		lock.lock();
 	}
-	if (!defer_retirement) finalize_server_controller_retirement(retired);
+	server_discovery_cv_.wait(lock, [&] { return server_callback_leases_[index] == 0; });
+	lock.unlock();
+	finalize_server_controller_retirement(retired);
 	return true;
 }
 
@@ -1539,6 +1578,14 @@ bool proxysql_stop_configured_plugins(
 		return false;
 	}
 	return true;
+}
+
+void proxysql_reset_active_manager_pin_acquisitions_for_test() {
+	g_active_manager_pin_acquisitions_for_test.store(0, std::memory_order_relaxed);
+}
+
+size_t proxysql_active_manager_pin_acquisitions_for_test() {
+	return g_active_manager_pin_acquisitions_for_test.load(std::memory_order_relaxed);
 }
 
 #endif /* PROXYSQL40 */

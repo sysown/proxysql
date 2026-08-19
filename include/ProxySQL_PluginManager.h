@@ -176,9 +176,6 @@ private:
 	std::condition_variable server_discovery_cv_ {};
 	registered_server_module_t server_modules_[2] {};
 	registered_server_controller_t server_controllers_[2] {};
-	// A controller that asks to uninstall itself from one of its callbacks is
-	// detached immediately, then finalized by the callback lease release path.
-	registered_server_controller_t retired_server_controllers_[2] {};
 	bool server_snapshots_present_[2] { false, false };
 	size_t server_callback_leases_[2] { 0, 0 };
 	ProxySQL_ServerRuntimeSnapshot server_snapshots_[2] {};
@@ -247,6 +244,8 @@ bool proxysql_stop_configured_plugins(
 	std::unique_ptr<ProxySQL_PluginManager>& manager,
 	std::string& err
 );
+void proxysql_reset_active_manager_pin_acquisitions_for_test();
+size_t proxysql_active_manager_pin_acquisitions_for_test();
 
 #endif /* PROXYSQL40 */
 #endif /* PROXYSQL_PLUGIN_MANAGER_H */

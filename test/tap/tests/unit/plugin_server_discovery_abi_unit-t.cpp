@@ -44,16 +44,16 @@ std::atomic<bool> g_throw_module_destroy {false};
 std::atomic<bool> g_throw_controller_destroy {false};
 std::mutex g_lease_mutex;
 std::condition_variable g_lease_cv;
-bool g_callback_entered = false;
-bool g_callback_release = false;
-bool g_uninstall_started = false;
-bool g_destroyed_before_callback_release = false;
+std::atomic<bool> g_callback_entered {false};
+std::atomic<bool> g_callback_release {false};
+std::atomic<bool> g_registry_detached {false};
+std::atomic<bool> g_destroyed_before_callback_release {false};
 std::string g_log_path;
 
 void retirement_observer(ProxySQL_ServerProtocol protocol, bool controller, void *) {
-	if (protocol != ProxySQL_ServerProtocol::pgsql || controller) return;
-	std::lock_guard<std::mutex> lock(g_lease_mutex);
-	g_uninstall_started = true;
+	(void)controller;
+	if (protocol != ProxySQL_ServerProtocol::pgsql) return;
+	g_registry_detached.store(true, std::memory_order_release);
 	g_lease_cv.notify_all();
 }
 
@@ -100,16 +100,20 @@ void module_installed(void *, ProxySQL_ServerRuntimeSnapshot snapshot) {
 	}
 	if (snapshot.protocol == ProxySQL_ServerProtocol::pgsql && snapshot.generation == 8) {
 		std::unique_lock<std::mutex> lock(g_lease_mutex);
-		g_callback_entered = true;
+		g_callback_entered.store(true, std::memory_order_release);
 		g_lease_cv.notify_all();
-		g_lease_cv.wait(lock, [] { return g_callback_release && g_uninstall_started; });
+		g_lease_cv.wait(lock, [] {
+			return g_callback_release.load(std::memory_order_acquire) &&
+				g_registry_detached.load(std::memory_order_acquire);
+		});
 	}
 }
 
 void destroy_module(ProxySQL_ServerModuleHooks *) {
-	std::lock_guard<std::mutex> lock(g_lease_mutex);
-	if (!g_callback_release) g_destroyed_before_callback_release = true;
-	++g_module_destroyed;
+	g_module_destroyed.fetch_add(1, std::memory_order_acq_rel);
+	if (!g_callback_release.load(std::memory_order_acquire)) {
+		g_destroyed_before_callback_release.store(true, std::memory_order_release);
+	}
 	if (g_throw_module_destroy.load()) throw std::runtime_error("module destroy failure");
 }
 
@@ -125,9 +129,12 @@ public:
 		if (snapshot.generation == 7) ++g_controller_calls;
 		if (block_runtime_ && snapshot.generation == 8) {
 			std::unique_lock<std::mutex> lock(g_lease_mutex);
-			g_callback_entered = true;
+			g_callback_entered.store(true, std::memory_order_release);
 			g_lease_cv.notify_all();
-			g_lease_cv.wait(lock, [] { return g_callback_release && g_uninstall_started; });
+			g_lease_cv.wait(lock, [] {
+				return g_callback_release.load(std::memory_order_acquire) &&
+					g_registry_detached.load(std::memory_order_acquire);
+			});
 		}
 	}
 	void desired_set_applied(uint64_t, bool) override {
@@ -154,18 +161,18 @@ struct SelfUninstallState {
 	std::atomic<bool> entered {false};
 	std::atomic<bool> uninstall_returned {false};
 	std::atomic<bool> uninstall_result {false};
+	std::atomic<unsigned int> shutdown {0};
 	std::atomic<unsigned int> destroyed {0};
 };
 
 struct ConcurrentSelfUninstallState {
 	std::mutex mutex;
 	std::condition_variable cv;
-	bool entered {false};
-	bool external_ready {false};
-	bool self_retired {false};
-	bool external_finished {false};
-	bool self_result {false};
-	bool external_result {true};
+	bool self_attempted {false};
+	bool external_started {false};
+	bool self_result {true};
+	bool external_result {false};
+	std::atomic<unsigned int> shutdown {0};
 	std::atomic<unsigned int> destroyed {0};
 };
 
@@ -181,7 +188,7 @@ public:
 	void desired_set_applied(uint64_t, bool) override {
 		if (!from_runtime_) uninstall();
 	}
-	void shutdown() override {}
+	void shutdown() override { state_->shutdown.fetch_add(1); }
 	SelfUninstallState *state() const { return state_; }
 
 private:
@@ -210,22 +217,16 @@ public:
 
 	void runtime_configuration_installed(ProxySQL_ServerRuntimeSnapshot) override {}
 	void desired_set_applied(uint64_t, bool) override {
-		{
-			std::unique_lock<std::mutex> lock(state_->mutex);
-			state_->entered = true;
-			state_->cv.notify_all();
-			state_->cv.wait(lock, [this] { return state_->external_ready; });
-		}
 		const bool result = manager_->uninstall_server_discovery_controller(ProxySQL_ServerProtocol::mysql);
 		{
 			std::unique_lock<std::mutex> lock(state_->mutex);
 			state_->self_result = result;
-			state_->self_retired = true;
+			state_->self_attempted = true;
 			state_->cv.notify_all();
-			state_->cv.wait(lock, [this] { return state_->external_finished; });
+			state_->cv.wait(lock, [this] { return state_->external_started; });
 		}
 	}
-	void shutdown() override {}
+	void shutdown() override { state_->shutdown.fetch_add(1); }
 	ConcurrentSelfUninstallState *state() const { return state_; }
 
 private:
@@ -237,6 +238,49 @@ void destroy_concurrent_self_uninstall_controller(ProxySQL_ServerDiscoveryContro
 	auto *self = static_cast<ConcurrentSelfUninstallController *>(controller);
 	self->state()->destroyed.fetch_add(1);
 	delete self;
+}
+
+struct NestedPostState {
+	proxysql_plugin_post_server_desired_set_cb post {nullptr};
+	std::mutex mutex;
+	std::condition_variable cv;
+	bool outer_entered {false};
+	bool stop_started {false};
+	bool outer_result {false};
+	bool nested_result {false};
+	bool stop_result {false};
+	std::atomic<unsigned int> callbacks {0};
+	std::atomic<unsigned int> shutdown {0};
+	std::atomic<unsigned int> destroyed {0};
+};
+
+class NestedPostController final : public ProxySQL_ServerDiscoveryController {
+public:
+	explicit NestedPostController(NestedPostState *state) : state_(state) {}
+	void runtime_configuration_installed(ProxySQL_ServerRuntimeSnapshot) override {}
+	void desired_set_applied(uint64_t generation, bool) override {
+		state_->callbacks.fetch_add(1);
+		if (generation != 100) return;
+		{
+			std::unique_lock<std::mutex> lock(state_->mutex);
+			state_->outer_entered = true;
+			state_->cv.notify_all();
+			state_->cv.wait(lock, [this] { return state_->stop_started; });
+		}
+		state_->nested_result = state_->post({ProxySQL_ServerProtocol::mysql, 101, {}, {},
+			ProxySQL_ServerPersistence::runtime_only});
+	}
+	void shutdown() override { state_->shutdown.fetch_add(1); }
+	NestedPostState *state() const { return state_; }
+
+private:
+	NestedPostState *state_;
+};
+
+void destroy_nested_post_controller(ProxySQL_ServerDiscoveryController *controller) {
+	auto *nested = static_cast<NestedPostController *>(controller);
+	nested->state()->destroyed.fetch_add(1);
+	delete nested;
 }
 
 void test_abi8_fixture_and_invalid_registration() {
@@ -367,6 +411,56 @@ void test_steady_state_desired_set_service_lifetime() {
 	cleanup_log();
 }
 
+void test_nested_steady_state_post_during_unpublish() {
+	using get_post_cb = proxysql_plugin_post_server_desired_set_cb (*)();
+	void *fixture_handle = open_retained_module(PROXYSQL_FAKE_PLUGIN_PATH);
+	auto get_post = fixture_handle == nullptr ? nullptr : reinterpret_cast<get_post_cb>(dlsym(
+		fixture_handle, "proxysql_fake_post_server_desired_set_callback_for_test"));
+	std::unique_ptr<ProxySQL_PluginManager> manager;
+	std::string err;
+	const std::vector<std::string> plugins {PROXYSQL_FAKE_PLUGIN_PATH};
+	NestedPostState state;
+	void *controller_handle = open_retained_module(PROXYSQL_FAKE_PLUGIN2_PATH);
+	const bool initialized = fixture_handle != nullptr && get_post != nullptr &&
+		proxysql_load_configured_plugins(manager, plugins, err) &&
+		proxysql_init_configured_plugins(manager.get(), err) &&
+		proxysql_start_configured_plugins(manager.get(), err);
+	state.post = initialized ? get_post() : nullptr;
+	ok(initialized && state.post != nullptr && controller_handle != nullptr &&
+		manager->install_server_discovery_controller(ProxySQL_ServerProtocol::mysql,
+			new NestedPostController(&state), &destroy_nested_post_controller, controller_handle),
+		"install a controller that recursively reuses the retained steady-state post service");
+
+	proxysql_reset_active_manager_pin_acquisitions_for_test();
+	std::thread outer([&] {
+		state.outer_result = state.post({ProxySQL_ServerProtocol::mysql, 100, {}, {},
+			ProxySQL_ServerPersistence::runtime_only});
+	});
+	{
+		std::unique_lock<std::mutex> lock(state.mutex);
+		state.cv.wait(lock, [&] { return state.outer_entered; });
+	}
+	std::thread stop([&] {
+		{
+			std::lock_guard<std::mutex> lock(state.mutex);
+			state.stop_started = true;
+		}
+		state.cv.notify_all();
+		state.stop_result = proxysql_stop_configured_plugins(manager, err);
+	});
+	outer.join();
+	stop.join();
+	ok(proxysql_active_manager_pin_acquisitions_for_test() == 1,
+		"a bounded nested post chain acquires one outer active-manager lifetime pin");
+	ok(state.outer_result && state.nested_result && state.stop_result &&
+		state.callbacks == 2 && state.shutdown == 1 && state.destroyed == 1 && !manager,
+		"bounded nested posts finish before concurrent unpublish shuts down and destroys once");
+	ok(!state.post({ProxySQL_ServerProtocol::mysql, 102, {}, {},
+		ProxySQL_ServerPersistence::runtime_only}),
+		"the retained post service fails closed after the nested-post unpublish race");
+	dlclose(fixture_handle);
+}
+
 struct RetainedFixtureSymbols {
 	using create_module_cb = ProxySQL_ServerModuleHooks *(*)(ProxySQL_ServerProtocol);
 	using destroy_module_cb = void (*)(ProxySQL_ServerModuleHooks *);
@@ -459,13 +553,10 @@ void test_lifecycle_delivery_and_retained_handles() {
 }
 
 void test_callback_lease_barrier() {
-	{
-		std::lock_guard<std::mutex> lock(g_lease_mutex);
-		g_callback_entered = false;
-		g_callback_release = false;
-		g_uninstall_started = false;
-		g_destroyed_before_callback_release = false;
-	}
+	g_callback_entered.store(false);
+	g_callback_release.store(false);
+	g_registry_detached.store(false);
+	g_destroyed_before_callback_release.store(false);
 	const unsigned int destroyed_before = g_module_destroyed.load();
 	ProxySQL_PluginManager mgr;
 	ProxySQL_ServerModuleHooks module {
@@ -480,22 +571,22 @@ void test_callback_lease_barrier() {
 	});
 	{
 		std::unique_lock<std::mutex> lock(g_lease_mutex);
-		g_lease_cv.wait(lock, [] { return g_callback_entered; });
+		g_lease_cv.wait(lock, [] { return g_callback_entered.load(std::memory_order_acquire); });
 	}
 	std::thread uninstall([&] {
 		mgr.unregister_server_module(ProxySQL_ServerProtocol::pgsql);
 	});
 	{
 		std::unique_lock<std::mutex> lock(g_lease_mutex);
-		g_lease_cv.wait(lock, [] { return g_uninstall_started; });
-		ok(g_module_destroyed == destroyed_before && !g_destroyed_before_callback_release,
-			"registry retirement is observable before the held callback lease permits destroy");
-		g_callback_release = true;
+		g_lease_cv.wait(lock, [] { return g_registry_detached.load(std::memory_order_acquire); });
 	}
+	ok(g_module_destroyed.load() == destroyed_before && !g_destroyed_before_callback_release.load(),
+		"registry retirement is observable before the held callback lease permits destroy");
+	g_callback_release.store(true, std::memory_order_release);
 	g_lease_cv.notify_all();
 	callback.join();
 	uninstall.join();
-	ok(g_module_destroyed == destroyed_before + 1 && !g_destroyed_before_callback_release &&
+	ok(g_module_destroyed.load() == destroyed_before + 1 && !g_destroyed_before_callback_release.load() &&
 		!is_module_loaded(PROXYSQL_FAKE_PLUGIN_PATH),
 		"lease barrier releases then destroys and unloads deterministically");
 }
@@ -556,12 +647,14 @@ void test_controller_self_uninstall_reentrancy() {
 			ProxySQL_ServerProtocol::mysql, controller, &destroy_self_uninstall_controller, handle),
 			"install controller that self-uninstalls from runtime notification");
 		mgr.install_server_runtime_snapshot({ProxySQL_ServerProtocol::mysql, 12, {}});
-		ok(runtime_state.entered && runtime_state.uninstall_returned && runtime_state.uninstall_result &&
-			runtime_state.destroyed == 1 &&
-			!mgr.uninstall_server_discovery_controller(ProxySQL_ServerProtocol::mysql),
-			"runtime callback self-uninstall returns without waiting on its own lease");
-		ok(!is_module_loaded(PROXYSQL_FAKE_PLUGIN2_PATH),
-			"runtime self-uninstall destroys once and releases its retained handle after return");
+		ok(runtime_state.entered && runtime_state.uninstall_returned && !runtime_state.uninstall_result &&
+			runtime_state.shutdown == 0 && runtime_state.destroyed == 0 &&
+			is_module_loaded(PROXYSQL_FAKE_PLUGIN2_PATH),
+			"runtime callback self-uninstall is rejected without mutating its registration");
+		ok(mgr.uninstall_server_discovery_controller(ProxySQL_ServerProtocol::mysql) &&
+			runtime_state.shutdown == 1 && runtime_state.destroyed == 1 &&
+			!is_module_loaded(PROXYSQL_FAKE_PLUGIN2_PATH),
+			"later external runtime-controller uninstall shuts down, destroys, and unloads exactly once");
 	}
 
 	SelfUninstallState desired_state;
@@ -575,12 +668,13 @@ void test_controller_self_uninstall_reentrancy() {
 			"install controller that self-uninstalls from desired-set acknowledgement");
 		ok(mgr.post_server_desired_set({ProxySQL_ServerProtocol::pgsql, 13, {}, {},
 			ProxySQL_ServerPersistence::runtime_only}) && desired_state.entered &&
-			desired_state.uninstall_returned && desired_state.uninstall_result,
-			"desired-set callback self-uninstall returns without waiting on its own lease");
-		ok(desired_state.destroyed == 1 &&
-			!mgr.uninstall_server_discovery_controller(ProxySQL_ServerProtocol::pgsql) &&
+			desired_state.uninstall_returned && !desired_state.uninstall_result &&
+			desired_state.shutdown == 0 && desired_state.destroyed == 0,
+			"desired-set callback self-uninstall is rejected without mutating its registration");
+		ok(mgr.uninstall_server_discovery_controller(ProxySQL_ServerProtocol::pgsql) &&
+			desired_state.shutdown == 1 && desired_state.destroyed == 1 &&
 			!is_module_loaded(PROXYSQL_FAKE_PLUGIN2_PATH),
-			"self-retired desired-set controller cannot double-destroy or retain the DSO");
+			"later external desired-controller uninstall shuts down, destroys, and unloads exactly once");
 	}
 }
 
@@ -598,75 +692,66 @@ void test_controller_self_uninstall_concurrent_external_retirement() {
 	});
 	std::thread external([&] {
 		std::unique_lock<std::mutex> lock(state.mutex);
-		state.cv.wait(lock, [&] { return state.entered; });
-		state.external_ready = true;
+		state.cv.wait(lock, [&] { return state.self_attempted; });
+		state.external_started = true;
 		state.cv.notify_all();
-		state.cv.wait(lock, [&] { return state.self_retired; });
 		lock.unlock();
 		const bool result = mgr.uninstall_server_discovery_controller(ProxySQL_ServerProtocol::mysql);
 		lock.lock();
 		state.external_result = result;
-		state.external_finished = true;
-		state.cv.notify_all();
 	});
 	callback.join();
 	external.join();
-	ok(state.self_result && !state.external_result && state.destroyed == 1,
-		"self-retirement linearizes against external uninstall without deadlock or double destroy");
+	ok(!state.self_result && state.external_result && state.shutdown == 1 && state.destroyed == 1,
+		"rejected self-uninstall lets external retirement drain and destroy exactly once");
 	ok(!is_module_loaded(PROXYSQL_FAKE_PLUGIN2_PATH),
 		"concurrent retirement releases the controller DSO after the callback returns");
 }
 
 void test_controller_callback_lease_barrier() {
-	{
-		std::lock_guard<std::mutex> lock(g_lease_mutex);
-		g_callback_entered = false;
-		g_callback_release = false;
-		g_uninstall_started = false;
-		g_destroyed_before_callback_release = false;
-	}
+	g_callback_entered.store(false);
+	g_callback_release.store(false);
+	g_registry_detached.store(false);
+	g_destroyed_before_callback_release.store(false);
 	const unsigned int destroyed_before = g_controller_destroyed.load();
 	ProxySQL_PluginManager mgr;
 	void *handle = open_retained_module(PROXYSQL_FAKE_PLUGIN2_PATH);
 	ok(handle != nullptr && mgr.install_server_discovery_controller(
 		ProxySQL_ServerProtocol::pgsql, new Controller(false, false, false, true),
 		&destroy_controller, handle), "register controller with retained DSO for callback-lease test");
+	mgr.set_server_retirement_observer_for_test(&retirement_observer, nullptr);
 	std::thread callback([&] {
 		mgr.install_server_runtime_snapshot({ProxySQL_ServerProtocol::pgsql, 8, {}});
 	});
 	{
 		std::unique_lock<std::mutex> lock(g_lease_mutex);
-		g_lease_cv.wait(lock, [] { return g_callback_entered; });
+		g_lease_cv.wait(lock, [] { return g_callback_entered.load(std::memory_order_acquire); });
 	}
 	std::thread uninstall([&] {
-		{
-			std::lock_guard<std::mutex> lock(g_lease_mutex);
-			g_uninstall_started = true;
-		}
-		g_lease_cv.notify_all();
 		mgr.uninstall_server_discovery_controller(ProxySQL_ServerProtocol::pgsql);
 	});
 	{
 		std::unique_lock<std::mutex> lock(g_lease_mutex);
-		g_lease_cv.wait(lock, [] { return g_uninstall_started; });
-		ok(g_controller_destroyed == destroyed_before,
-			"controller remains retained while its callback lease is held");
-		g_callback_release = true;
+		g_lease_cv.wait(lock, [] { return g_registry_detached.load(std::memory_order_acquire); });
 	}
+	ok(g_controller_destroyed.load() == destroyed_before,
+		"actual controller registry detachment precedes final callback-lease destroy");
+	g_callback_release.store(true, std::memory_order_release);
 	g_lease_cv.notify_all();
 	callback.join();
 	uninstall.join();
-	ok(g_controller_destroyed == destroyed_before + 1 && !is_module_loaded(PROXYSQL_FAKE_PLUGIN2_PATH),
+	ok(g_controller_destroyed.load() == destroyed_before + 1 && !is_module_loaded(PROXYSQL_FAKE_PLUGIN2_PATH),
 		"controller DSO unloads after its final callback lease drains");
 }
 
 } // namespace
 
 int main() {
-	plan(54);
+	plan(58);
 	test_abi8_fixture_and_invalid_registration();
 	test_service_phase_availability();
 	test_steady_state_desired_set_service_lifetime();
+	test_nested_steady_state_post_during_unpublish();
 	test_lifecycle_delivery_and_retained_handles();
 	test_callback_lease_barrier();
 	test_throwing_callbacks_do_not_leak_leases();

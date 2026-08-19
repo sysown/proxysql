@@ -438,6 +438,11 @@ extern "C" bool proxysql_fake_post_server_desired_set_for_test() {
 	return fake_post_server_desired_set(desired);
 }
 
+extern "C" proxysql_plugin_post_server_desired_set_cb
+proxysql_fake_post_server_desired_set_callback_for_test() {
+	return fake_post_server_desired_set;
+}
+
 // These factories, callbacks, and destroy functions are intentionally
 // exported from the fixture DSO.  The lease tests pass their addresses into
 // the manager, so its retained dlopen reference protects code it really

@@ -335,8 +335,11 @@ struct ProxySQL_PluginServices {
 	// ABI-8 extension. Live only during normal plugin init and intended for
 	// rollback of the same plugin's partially installed IAM provider.
 	proxysql_plugin_uninstall_aws_iam_token_source_cb uninstall_aws_iam_token_source;
-	// ABI-9 extension. Server modules can register during Phase B or init;
-	// discovery controllers and desired sets are live during normal init.
+	// ABI-9 extension. Server modules can register during Phase B or normal
+	// init; discovery controllers install/uninstall only during normal init.
+	// A plugin may retain post_server_desired_set and call it from start or
+	// steady-state workers. The callback pins the active manager through the
+	// synchronous acknowledgement and fails closed after manager unpublication.
 	proxysql_plugin_register_server_module_cb register_server_module;
 	proxysql_plugin_install_server_discovery_controller_cb install_server_discovery_controller;
 	proxysql_plugin_uninstall_server_discovery_controller_cb uninstall_server_discovery_controller;
