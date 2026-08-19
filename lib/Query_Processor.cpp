@@ -14,7 +14,8 @@ using json = nlohmann::json;
 #include <future>
 #include "re2/re2.h"
 #include "re2/regexp.h"
-#include "pcrecpp.h"
+#define PCRE2_CODE_UNIT_WIDTH 8
+#include <pcre2.h>
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -41,6 +42,167 @@ extern MySQL_Threads_Handler *GloMTH;
 extern PgSQL_Threads_Handler* GloPTH;
 extern ProxySQL_Admin *GloAdmin;
 
+namespace {
+
+bool translate_pcrecpp_rewrite(const char* legacy_rewrite, std::string* pcre2_rewrite) {
+	if (legacy_rewrite == nullptr || pcre2_rewrite == nullptr) return false;
+
+	pcre2_rewrite->clear();
+	for (const char* cursor = legacy_rewrite; *cursor != '\0'; ++cursor) {
+		if (*cursor != '\\') {
+			pcre2_rewrite->push_back(*cursor);
+			continue;
+		}
+
+		++cursor;
+		if (*cursor >= '0' && *cursor <= '9') {
+			pcre2_rewrite->append("${");
+			pcre2_rewrite->push_back(*cursor);
+			pcre2_rewrite->push_back('}');
+		} else if (*cursor == '\\') {
+			// Without PCRE2_SUBSTITUTE_EXTENDED, backslash is a literal.
+			pcre2_rewrite->push_back('\\');
+		} else {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+class Pcre2Regex {
+public:
+	explicit Pcre2Regex(const char* pattern, uint32_t options);
+	~Pcre2Regex();
+	Pcre2Regex(const Pcre2Regex&) = delete;
+	Pcre2Regex& operator=(const Pcre2Regex&) = delete;
+	bool valid() const;
+	bool partial_match(const char* subject) const;
+	bool replace(std::string* subject, const char* legacy_rewrite, bool global) const;
+
+private:
+	pcre2_code* code_ {nullptr};
+};
+
+Pcre2Regex::Pcre2Regex(const char* pattern, uint32_t options) {
+	if (pattern == nullptr) return;
+
+	int error_code = 0;
+	PCRE2_SIZE error_offset = 0;
+	code_ = pcre2_compile(
+		reinterpret_cast<PCRE2_SPTR>(pattern),
+		PCRE2_ZERO_TERMINATED,
+		options,
+		&error_code,
+		&error_offset,
+		nullptr
+	);
+	if (code_ == nullptr) {
+		PCRE2_UCHAR error_message[256] {};
+		const int message_rc = pcre2_get_error_message(
+			error_code,
+			error_message,
+			sizeof(error_message) / sizeof(error_message[0])
+		);
+		if (message_rc >= 0) {
+			proxy_error(
+				"PCRE2 compilation failed at offset %zu: %s\n",
+				static_cast<size_t>(error_offset),
+				reinterpret_cast<const char*>(error_message)
+			);
+		} else {
+			proxy_error(
+				"PCRE2 compilation failed at offset %zu: error %d (message unavailable: %d)\n",
+				static_cast<size_t>(error_offset),
+				error_code,
+				message_rc
+			);
+		}
+	}
+}
+
+Pcre2Regex::~Pcre2Regex() {
+	if (code_ != nullptr) pcre2_code_free(code_);
+}
+
+bool Pcre2Regex::valid() const {
+	return code_ != nullptr;
+}
+
+bool Pcre2Regex::partial_match(const char* subject) const {
+	if (!valid() || subject == nullptr) return false;
+
+	pcre2_match_data* match_data = pcre2_match_data_create_from_pattern(code_, nullptr);
+	if (match_data == nullptr) return false;
+
+	const int rc = pcre2_match(
+		code_,
+		reinterpret_cast<PCRE2_SPTR>(subject),
+		PCRE2_ZERO_TERMINATED,
+		0,
+		0,
+		match_data,
+		nullptr
+	);
+	pcre2_match_data_free(match_data);
+	return rc >= 0;
+}
+
+bool Pcre2Regex::replace(
+	std::string* subject,
+	const char* legacy_rewrite,
+	bool global
+) const {
+	if (!valid() || subject == nullptr || legacy_rewrite == nullptr) return false;
+
+	std::string pcre2_rewrite;
+	if (!translate_pcrecpp_rewrite(legacy_rewrite, &pcre2_rewrite)) {
+		proxy_error("PCRE2 replacement rejected an unsupported pcrecpp escape\n");
+		return false;
+	}
+
+	const uint32_t substitute_options = global ? PCRE2_SUBSTITUTE_GLOBAL : 0;
+	PCRE2_SIZE required_size = 0;
+	const int size_rc = pcre2_substitute(
+		code_,
+		reinterpret_cast<PCRE2_SPTR>(subject->data()),
+		subject->size(),
+		0,
+		substitute_options | PCRE2_SUBSTITUTE_OVERFLOW_LENGTH,
+		nullptr,
+		nullptr,
+		reinterpret_cast<PCRE2_SPTR>(pcre2_rewrite.data()),
+		pcre2_rewrite.size(),
+		nullptr,
+		&required_size
+	);
+	// With a zero-sized output buffer, OVERFLOW_LENGTH reports the required
+	// size (including the terminator) via PCRE2_ERROR_NOMEMORY.
+	if (size_rc != PCRE2_ERROR_NOMEMORY || required_size == PCRE2_SIZE_MAX) return false;
+
+	std::vector<PCRE2_UCHAR> output(required_size + 1);
+	PCRE2_SIZE output_size = output.size();
+	const int substitute_rc = pcre2_substitute(
+		code_,
+		reinterpret_cast<PCRE2_SPTR>(subject->data()),
+		subject->size(),
+		0,
+		substitute_options,
+		nullptr,
+		nullptr,
+		reinterpret_cast<PCRE2_SPTR>(pcre2_rewrite.data()),
+		pcre2_rewrite.size(),
+		output.data(),
+		&output_size
+	);
+	if (substitute_rc < 0) return false;
+
+	subject->assign(reinterpret_cast<const char*>(output.data()), output_size);
+	return true;
+}
+
+} // namespace
+
 // per thread variables
 __thread unsigned int _thr_SQP_version;
 __thread std::vector<QP_rule_t*>* _thr_SQP_rules;
@@ -48,8 +210,7 @@ __thread khash_t(khStrInt)* _thr_SQP_rules_fast_routing;
 __thread char* _thr___rules_fast_routing___keys_values;
 
 struct __RE2_objects_t {
-	pcrecpp::RE_Options* opt1;
-	pcrecpp::RE* re1;
+	Pcre2Regex* re1;
 	re2::RE2::Options* opt2;
 	RE2* re2;
 };
@@ -92,8 +253,7 @@ static unsigned long long mem_used_rule(QP_rule_t *qr) {
 		s+=strlen(qr->comment);
 	if (qr->match_digest || qr->match_pattern || qr->replace_pattern) {
 		s+= sizeof(__RE2_objects_t *)+sizeof(__RE2_objects_t);
-		s+= sizeof(pcrecpp::RE_Options *) + sizeof(pcrecpp::RE_Options);
-		s+= sizeof(pcrecpp::RE *) + sizeof(pcrecpp::RE);
+		s+= sizeof(Pcre2Regex *) + sizeof(Pcre2Regex);
 		s+= sizeof(re2::RE2::Options *) + sizeof(re2::RE2::Options);
 		s+= sizeof(RE2 *) + sizeof(RE2);
 	}
@@ -225,7 +385,6 @@ static bool query_digest_text_matches(
 
 static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processor_regex) {
 	re2_t *r=(re2_t *)malloc(sizeof(re2_t));
-	r->opt1=NULL;
 	r->re1=NULL;
 	r->opt2=NULL;
 	r->re2=NULL;
@@ -240,14 +399,14 @@ static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processo
 			r->re2=new RE2(qr->match_pattern, *r->opt2);
 		}
 	} else {
-		r->opt1=new pcrecpp::RE_Options();
+		uint32_t options = 0;
 		if ((qr->re_modifiers & QP_RE_MOD_CASELESS) == QP_RE_MOD_CASELESS) {
-			r->opt1->set_caseless(true);
+			options |= PCRE2_CASELESS;
 		}
 		if (i==1) {
-			r->re1=new pcrecpp::RE(qr->match_digest, *r->opt1);
+			r->re1=new Pcre2Regex(qr->match_digest, options);
 		} else if (i==2) {
-			r->re1=new pcrecpp::RE(qr->match_pattern, *r->opt1);
+			r->re1=new Pcre2Regex(qr->match_pattern, options);
 		}
 	}
 	return r;
@@ -255,7 +414,6 @@ static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processo
 
 static void free_compiled_query_rule(re2_t *r) {
 	if (r == NULL) return;
-	if (r->opt1) { delete r->opt1; r->opt1=NULL; }
 	if (r->re1) { delete r->re1; r->re1=NULL; }
 	if (r->opt2) { delete r->opt2; r->opt2=NULL; }
 	if (r->re2) { delete r->re2; r->re2=NULL; }
@@ -284,7 +442,7 @@ static bool rule_matches_regex(
 		if (compiled_regex->re2) {
 			rc = RE2::PartialMatch(subject, *compiled_regex->re2);
 		} else if (compiled_regex->re1) {
-			rc = compiled_regex->re1->PartialMatch(subject);
+			rc = compiled_regex->re1->partial_match(subject);
 		}
 	}
 
@@ -2079,12 +2237,11 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 							re2p->re2->Replace(ret->new_query,qr->match_pattern,qr->replace_pattern);
 						}
 					} else {
-						//re2p->re1->Replace(ret->new_query,qr->replace_pattern);
-						if ((qr->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL) {
-							re2p->re1->GlobalReplace(qr->replace_pattern,ret->new_query);
-						} else {
-							re2p->re1->Replace(qr->replace_pattern,ret->new_query);
-						}
+						re2p->re1->replace(
+							ret->new_query,
+							qr->replace_pattern,
+							(qr->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL
+						);
 					}
 				}
 			}
