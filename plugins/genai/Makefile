@@ -112,6 +112,7 @@ SRCS := $(PLUGIN_DIR)/src/plugin_main.cpp \
 HEADERS := $(wildcard $(PLUGIN_DIR)/include/*.h) \
 	$(PROXYSQL_PATH)/include/ProxySQL_Plugin.h
 OBJS := $(patsubst $(PLUGIN_DIR)/src/%.cpp,$(ODIR)/%.o,$(SRCS))
+CURL_AR := $(CURL_LDIR)/libcurl.a
 
 $(ODIR):
 	mkdir -p $(ODIR)
@@ -121,7 +122,11 @@ $(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) | $(ODIR)
 	@mkdir -p $(dir $@)
 	$(CXX) -c -o $@ $< $(CXXFLAGS) $(IDIRS)
 
-$(PLUGIN_SO): $(OBJS)
+# curl is static-only and the plugin directly calls its API. Embed curl in the
+# plugin so its non-OpenSSL symbols do not depend on what the host executable
+# happened to pull from libcurl.a. OpenSSL itself remains unresolved here and
+# is supplied by the single core exported by the ProxySQL executable.
+$(PLUGIN_SO): $(OBJS) $(CURL_AR)
 	$(CXX) -shared -o $@ $^ $(CXXFLAGS) $(PLUGIN_LDFLAGS)
 
 .PHONY: all
