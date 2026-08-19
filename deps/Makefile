@@ -36,7 +36,7 @@ else
 endif
 
 
-targets :=	check_openssl_version \
+targets :=	libssl \
 			libconfig \
 			libdaemon \
 			jemalloc \
@@ -81,7 +81,27 @@ default: $(targets)
 ### deps targets
 
 include $(PROXYSQL_PATH)/common_mk/openssl_flags.mk
-include $(PROXYSQL_PATH)/common_mk/openssl_version_check.mk
+
+
+OPENSSL_BUILD_STAMP := libssl/openssl/.proxysql-build-complete
+
+$(OPENSSL_BUILD_STAMP): libssl/openssl-$(OPENSSL_VERSION).tar.gz \
+		libssl/openssl-$(OPENSSL_VERSION).tar.gz.sha256 \
+		libssl/verify-source.bash Makefile
+	cd libssl && ./verify-source.bash
+	rm -rf libssl/openssl-$(OPENSSL_VERSION)
+	cd libssl && tar --no-same-owner -zxf openssl-$(OPENSSL_VERSION).tar.gz
+	cd libssl/openssl && CC=$(CC) CXX=$(CXX) ./config no-shared no-tests -fPIC
+	cd libssl/openssl && CC=$(CC) CXX=$(CXX) $(MAKE)
+	test -f $(LIB_SSL_PATH)
+	test -f $(LIB_CRYPTO_PATH)
+	touch $@
+
+$(LIB_SSL_PATH) $(LIB_CRYPTO_PATH): $(OPENSSL_BUILD_STAMP)
+	@test -f $@
+
+.PHONY: libssl
+libssl: $(LIB_SSL_PATH) $(LIB_CRYPTO_PATH)
 
 
 libinjection/libinjection/src/libinjection.a:
@@ -450,6 +470,7 @@ cleanpart:
 .PHONY: cleanpart
 
 cleanall:
+	cd libssl && rm -rf openssl-$(OPENSSL_VERSION) || true
 	cd libinjection && rm -rf libinjection-*/ || true
 	cd libhttpserver && rm -rf libhttpserver-*/ || true
 	cd libdaemon && rm -rf libdaemon-*/ || true
