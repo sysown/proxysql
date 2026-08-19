@@ -968,8 +968,18 @@ static void append_conninfo_param(std::ostringstream& conninfo, const char* key,
 // EVERY backend connection must build its credentials here — the pooled one (connect_start()) and
 // the auxiliary kill/terminate one alike. libpq applies no prefix detection to 'password': handing
 // it a verifier or an md5 hash makes it run SASLprep+PBKDF2 over that literal text, and the backend
-// rejects the login. 'conn_ctx' names the caller for the diagnostic below.
-static void append_conninfo_credentials(std::ostringstream& conninfo, const char* username,
+// rejects the login. 'conn_ctx' names the caller for the diagnostics below.
+//
+// Returns true only when a credential parameter was actually emitted; on false the caller must
+// abandon the connection. A conninfo carrying no credential is not inert — libpq falls back to
+// PGPASSWORD and then ~/.pgpass from the ProxySQL process environment, authenticating the backend
+// as whoever owns the host rather than as the configured user. Refusing to connect prevents that.
+// (password='' is not a fix: libpq still reads ~/.pgpass when the password is empty.)
+//
+// Not static so pgsql_conninfo_credentials_unit-t can pin that postcondition — the failing branches
+// are unreachable end to end, so a unit test is the only way to cover them. Same arrangement as
+// pgsql_reconcile_auth_method() in PgSQL_Protocol.cpp.
+bool pgsql_append_conninfo_credentials(std::ostringstream& conninfo, const char* username,
 	char* password, bool has_scram_keys, const uint8_t* scram_client_key,
 	const uint8_t* scram_server_key, const char* conn_ctx)
 {
@@ -983,27 +993,45 @@ static void append_conninfo_credentials(std::ostringstream& conninfo, const char
 			ck_b64, (int)sizeof(ck_b64) - 1);
 		int n2 = pg_b64_encode((const char*)scram_server_key, PGSQL_SCRAM_KEY_LEN,
 			sk_b64, (int)sizeof(sk_b64) - 1);
-		if (n1 > 0) ck_b64[n1] = '\0';
-		if (n2 > 0) sk_b64[n2] = '\0';
-		append_conninfo_param(conninfo, "scram_client_key", ck_b64);
-		append_conninfo_param(conninfo, "scram_server_key", sk_b64);
+		const bool encoded = (n1 > 0 && n2 > 0);
+		if (encoded) {
+			ck_b64[n1] = '\0';
+			sk_b64[n2] = '\0';
+			append_conninfo_param(conninfo, "scram_client_key", ck_b64);
+			append_conninfo_param(conninfo, "scram_server_key", sk_b64);
+		} else {
+			// Cannot happen at these sizes (32 bytes -> 44 chars into a 63-byte buffer), but
+			// handled so the postcondition holds on every branch: emitting the zero-initialised
+			// buffers would send scram_client_key='', which libpq treats as absent, putting us
+			// back on the fallback above.
+			proxy_error("PgSQL backend %s for user '%s': failed to base64-encode the harvested SCRAM keys (n1=%d, n2=%d); refusing to connect\n",
+				conn_ctx, username ? username : "(null)", n1, n2);
+		}
 		// Scrub the base64 key material from the stack buffers once handed to libpq (non-elidable).
+		// Both paths: the buffers hold password-equivalent material either way.
 		OPENSSL_cleanse(ck_b64, sizeof(ck_b64));
 		OPENSSL_cleanse(sk_b64, sizeof(sk_b64));
+		return encoded;
 	} else if (password && get_password_type(password) == PASSWORD_TYPE_MD5) {
 		// md5-stored user: reuse the stored "md5…" hash directly; no plaintext.
 		append_conninfo_param(conninfo, "md5_secret", password);
+		return true;
 	} else if (password && get_password_type(password) == PASSWORD_TYPE_SCRAM_SHA_256) {
 		// A SCRAM verifier reached a backend connect with no harvested keys (has_scram_keys==false).
 		// Do NOT ship it as a plaintext password — libpq would run PBKDF2 over the verifier text and
 		// fail. Not reachable from a normal frontend SCRAM login (which always harvests the ClientKey);
-		// reaching here means an internal/monitor connection or a logic error. Emit no password so the
-		// backend rejects cleanly, and log it.
+		// reaching here means an internal/monitor connection or a logic error.
 		proxy_error("PgSQL backend %s for user '%s': SCRAM verifier stored but no harvested ClientKey; cannot authenticate to backend without a frontend SCRAM login\n",
 			conn_ctx, username ? username : "(null)");
-	} else {
-		append_conninfo_param(conninfo, "password", password); // password
+		return false;
+	} else if (password) {
+		append_conninfo_param(conninfo, "password", password); // password (may legitimately be "")
+		return true;
 	}
+	// No stored secret at all: omitting the parameter would hand the decision to PGPASSWORD / ~/.pgpass.
+	proxy_error("PgSQL backend %s for user '%s': no stored credential; refusing to connect rather than let libpq fall back to PGPASSWORD or ~/.pgpass\n",
+		conn_ctx, username ? username : "(null)");
+	return false;
 }
 
 std::string PgSQL_Connection::connect_start_DNS_lookup() {
@@ -1024,8 +1052,15 @@ void PgSQL_Connection::connect_start() {
 
 	std::ostringstream conninfo;
 	append_conninfo_param(conninfo, "user", userinfo->username); // username
-	append_conninfo_credentials(conninfo, userinfo->username, userinfo->password,
-		userinfo->has_scram_keys, userinfo->scram_client_key, userinfo->scram_server_key, "connect");
+	if (pgsql_append_conninfo_credentials(conninfo, userinfo->username, userinfo->password,
+		userinfo->has_scram_keys, userinfo->scram_client_key, userinfo->scram_server_key, "connect") == false) {
+		// Fail closed. Leaving pgsql_conn NULL and async_exit_status at PG_EVENT_NONE routes
+		// handler() to ASYNC_CONNECT_END -> ASYNC_CONNECT_FAILED, the same path a PQconnectStart()
+		// failure below already takes, so the client gets a clean error instead of a wrong login.
+		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION),
+			"no usable backend credential for this user", false);
+		return;
+	}
 	append_conninfo_param(conninfo, "dbname", userinfo->dbname); // dbname
 	append_conninfo_param(conninfo, "host", parent->address); // backend address
 	// If the DNS cache has resolved this hostname already, also pass
@@ -3147,9 +3182,13 @@ void* PgSQL_backend_kill_thread(void* arg) {
 
 		std::ostringstream conninfo;
 		append_conninfo_param(conninfo, "user", backend_kill_args->username); // username
-		append_conninfo_credentials(conninfo, backend_kill_args->username, backend_kill_args->password,
+		if (pgsql_append_conninfo_credentials(conninfo, backend_kill_args->username, backend_kill_args->password,
 			backend_kill_args->has_scram_keys, backend_kill_args->scram_client_key,
-			backend_kill_args->scram_server_key, "kill connection");
+			backend_kill_args->scram_server_key, "kill connection") == false) {
+			// Fail closed. The terminate is best-effort, so skipping it is correct; connecting on
+			// an ambient PGPASSWORD / ~/.pgpass credential is not. The helper logged the reason.
+			goto __exit;
+		}
 		append_conninfo_param(conninfo, "dbname", backend_kill_args->dbname); // dbname
 		append_conninfo_param(conninfo, "host", backend_kill_args->hostname); // backend address
 		// port=0 means hostname is a Unix-domain socket path; libpq rejects
