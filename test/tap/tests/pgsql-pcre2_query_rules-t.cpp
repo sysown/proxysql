@@ -77,12 +77,28 @@ static bool run_rewrite_case(PGconn* admin, PGconn* proxy, const char* insert_ru
 	return query_ok && value == expected;
 }
 
+static void run_negated_rewrite_case(PGconn* admin, PGconn* proxy, const char* insert_rule) {
+	std::string value;
+	const bool setup_ok =
+		run_admin_checked(admin, "DELETE FROM pgsql_query_rules WHERE rule_id BETWEEN 61190 AND 61194") &&
+		run_admin_checked(admin, insert_rule) &&
+		run_admin_checked(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
+	const bool excluded_ok = setup_ok && get_single_value(proxy, "SELECT 8", value);
+	ok(excluded_ok && value == "8",
+		"negated pcrecpp rule does not rewrite its matching statement (expected '8', got '%s')",
+		excluded_ok ? value.c_str() : "<query failed>");
+	const bool included_ok = setup_ok && get_single_value(proxy, "SELECT 7", value);
+	ok(included_ok && value == "9",
+		"negated pcrecpp rule rewrites only its non-matching statement (expected '9', got '%s')",
+		included_ok ? value.c_str() : "<query failed>");
+}
+
 int main(int, char**) {
 	if (cl.getEnv()) {
 		return -1;
 	}
 
-	plan(5);
+	plan(8);
 
 	PGConnPtr admin = create_new_connection(ADMIN);
 	PGConnPtr proxy = create_new_connection(BACKEND);
@@ -119,8 +135,15 @@ int main(int, char**) {
 			"INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, replace_pattern, re_modifiers, apply) "
 			"VALUES (61194, 1, '^SELECT 7$', 'SELECT \\\\x', 'CASELESS', 1)",
 			"SELECT 7", "7", "malformed legacy escape leaves the query unchanged");
+		run_rewrite_case(admin.get(), proxy.get(),
+			"INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, replace_pattern, re_modifiers, apply) "
+			"VALUES (61190, 1, '^SELECT ''[A-Z]''$', 'SELECT 9', 'CASELESS', 1)",
+			"SELECT 'a'", "9", "CASELESS pcrecpp replacement matches different-case text");
+		run_negated_rewrite_case(admin.get(), proxy.get(),
+			"INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, negate_match_pattern, replace_pattern, re_modifiers, apply) "
+			"VALUES (61194, 1, '^SELECT 8$', 1, 'SELECT 9', 'CASELESS', 1)");
 	} else {
-		for (int i = 0; i < 5; ++i) {
+		for (int i = 0; i < 8; ++i) {
 			ok(0, "could not configure pgsql-query_processor_regex for PCRE-compatible rewrite test");
 		}
 	}

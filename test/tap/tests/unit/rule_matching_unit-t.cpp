@@ -159,6 +159,9 @@ static void test_negate_match_pattern() {
 	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"negate_match_pattern inverts result");
+	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 1),
+		"PCRE-compatible negate_match_pattern inverts result");
 }
 
 static void test_caseless_modifier() {
@@ -215,7 +218,7 @@ static void test_null_rule() {
 // ============================================================================
 
 int main() {
-	plan(24);
+	plan(25);
 
 	test_init_minimal();
 
@@ -230,12 +233,12 @@ int main() {
 	test_match_digest_pcre();       // 1
 	test_match_digest_pcre2();      // 1
 	test_match_pattern();           // 1
-	test_negate_match_pattern();    // 1
+	test_negate_match_pattern();    // 2
 	test_caseless_modifier();       // 1
 	test_rewritten_query();         // 1
 	test_combined_criteria();       // 2
 	test_null_rule();               // 1
-	// Total: 22
+	// Total: 25
 
 	test_cleanup_minimal();
 	return exit_status();
