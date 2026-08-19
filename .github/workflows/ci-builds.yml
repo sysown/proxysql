@@ -384,31 +384,26 @@ jobs:
           # to fail and the entire TAP pipeline to break.
           # ------------------------------------------------------------
 
-          # Stage runtime .so files needed by the e2e test binaries
+          # Stage the runtime .so needed by the e2e test binaries
           # into a path that's both already part of the _test cache
           # (test/tap/tap/ is in `tar -cf - test/`) AND has its parent
           # git-tracked (so post-checkout `mkdir -p` works on restore
           # at the consumer side). The e2e -t binaries DT_NEEDED
-          # libpq.so.5 + libre2.so.10, and their baked RUNPATH points
-          # at /opt/proxysql/deps/postgresql/.../libpq + /opt/proxysql/
-          # deps/re2/.../obj/so -- but those paths involve symlinks
-          # to tarball-unpacked dirs that don't exist post-checkout,
-          # so caching the deps/ subtree directly doesn't survive
-          # tar restore. CI-mysqlx exports LD_LIBRARY_PATH pointing at
-          # this directory when running the e2e binaries inside the
-          # build image, which overrides RUNPATH lookup.
+          # libre2.so.10, and their baked RUNPATH points at
+          # /opt/proxysql/deps/re2/.../obj/so. That path involves a
+          # symlink to a tarball-unpacked directory that doesn't exist
+          # post-checkout, so caching the deps/ subtree directly doesn't
+          # survive tar restore. CI-mysqlx exports LD_LIBRARY_PATH
+          # pointing at this directory when running the e2e binaries
+          # inside the build image, which overrides RUNPATH lookup.
+          # libpq is deliberately absent: issue #6115 links libpq.a into
+          # every consumer and no longer builds or ships libpq.so.
           if [[ "${{ matrix.type }}" =~ "-mysqlx" ]]; then
             mkdir -p test/tap/tap/_runtime_libs
-            # Stage a versioned runtime .so by its SONAME, tolerating a lost
-            # symlink. libpq.so.5 is a symlink to the real ELF (libpq.so.5.16);
-            # symlinks do not reliably survive the build/cache tar round-trip,
-            # so a bare `cp -L libpq.so.5` intermittently aborts the whole
-            # build with "cannot stat" when only the real file remains. Resolve
-            # the SONAME if present, else fall back to the newest matching real
-            # file, and stage THAT under the SONAME the e2e -t binaries
-            # DT_NEEDED. Only a genuine deps-build break (no file at all) fails
-            # -- loudly, with a directory listing, so it is distinguishable
-            # from the transient symlink-loss flake.
+            # Stage the versioned runtime .so by its SONAME, tolerating a lost
+            # symlink. Resolve the SONAME if present, else fall back to the
+            # newest matching real file. Only a genuine deps-build break (no
+            # file at all) fails loudly, with a directory listing.
             stage_lib() {
               local dir="$1" soname="$2" dest="$3" src=""
               if [ -e "$dir/$soname" ]; then
@@ -424,7 +419,6 @@ jobs:
               cp -L "$src" "$dest/$soname"
               echo "staged $soname <- $(readlink -f "$src")"
             }
-            stage_lib deps/postgresql/postgresql/src/interfaces/libpq libpq.so.5 test/tap/tap/_runtime_libs
             stage_lib deps/re2/re2/obj/so libre2.so.10 test/tap/tap/_runtime_libs
             # Stage the chassis plugin .so files into the same dir for
             # the same reason: the _src cache path list is shared

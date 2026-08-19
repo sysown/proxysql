@@ -129,8 +129,8 @@ jobs:
 
       - name: Restore plugin .so files from _runtime_libs
         # CI-builds stages plugins/mysqlx + plugins/genai .so files
-        # into test/tap/tap/_runtime_libs/ alongside libpq.so.5 +
-        # libre2.so.10. The _src cache path list is shared
+        # into test/tap/tap/_runtime_libs/ alongside libre2.so.10.
+        # The _src cache path list is shared
         # infrastructure that CANNOT be extended without invalidating
         # every other CI workflow's cache restore, so the plugin .so
         # files ride along inside the _test cache instead. Copy them
@@ -325,8 +325,8 @@ jobs:
 
       - name: Restore plugin .so files from _runtime_libs
         # CI-builds stages plugins/mysqlx + plugins/genai .so files
-        # into test/tap/tap/_runtime_libs/ alongside libpq.so.5 +
-        # libre2.so.10. The _src cache path list is shared
+        # into test/tap/tap/_runtime_libs/ alongside libre2.so.10.
+        # The _src cache path list is shared
         # infrastructure that CANNOT be extended without invalidating
         # every other CI workflow's cache restore, so the plugin .so
         # files ride along inside the _test cache instead. Copy them
@@ -610,8 +610,8 @@ jobs:
 
       - name: Restore plugin .so files from _runtime_libs
         # CI-builds stages plugins/mysqlx + plugins/genai .so files
-        # into test/tap/tap/_runtime_libs/ alongside libpq.so.5 +
-        # libre2.so.10. The _src cache path list is shared
+        # into test/tap/tap/_runtime_libs/ alongside libre2.so.10.
+        # The _src cache path list is shared
         # infrastructure that CANNOT be extended without invalidating
         # every other CI workflow's cache restore, so the plugin .so
         # files ride along inside the _test cache instead. Copy them
