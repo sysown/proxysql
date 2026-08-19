@@ -36,8 +36,12 @@ namespace prometheus { class Registry; }
 //          struct with {table_name, refresh, opaque} automatically get
 //          db_kind = admin_db (value 0) via zero-initialization of the
 //          trailing field — matching the pre-ABI-4 behaviour.
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = 4u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = 4u;
+//   ABI 5: ProxySQL_PluginCommandContext appends optional Admin global-mutex
+//          handoff callbacks. Plugins use them only around work that can wait
+//          for another Admin consumer; older plugins continue to use the
+//          unchanged three DB-handle prefix.
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = 5u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = 5u;
 
 enum class ProxySQL_PluginDBKind : uint8_t {
 	admin_db = 0,
@@ -59,6 +63,17 @@ struct ProxySQL_PluginCommandContext {
 	SQLite3DB *admindb;
 	SQLite3DB *configdb;
 	SQLite3DB *statsdb;
+
+	// Optional handoff for commands that must wait for work which can itself
+	// enter the Admin interface.  Admin_Handler holds its global query mutex
+	// while dispatching plugin commands; a callback that drains worker threads
+	// while retaining that mutex can deadlock with a worker already waiting for
+	// Admin.  Such callbacks may release the mutex for the blocking portion and
+	// must reacquire it before returning.  Direct/unit-test dispatchers leave
+	// these null, in which case the callback must not attempt a handoff.
+	void *admin_mutex_context { nullptr };
+	void (*release_admin_mutex)(void *) { nullptr };
+	void (*acquire_admin_mutex)(void *) { nullptr };
 };
 
 // NOTE: ProxySQL_PluginCommandResult contains std::string. Plugins MUST

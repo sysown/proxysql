@@ -664,8 +664,37 @@ static void test_statemgr_abort_as_rollback() {
 	destroy_test_session(sess);
 }
 
+// ============================================================
+// Processlist query truncation
+// ============================================================
+
+static void test_current_query_short_truncation_limits() {
+	PgSQL_Session* sess = create_test_session();
+	std::string query = "SELECT 123456789";
+	sess->CurrentQuery.QueryPointer =
+		reinterpret_cast<unsigned char*>(query.data());
+	sess->CurrentQuery.QueryLength = query.size();
+
+	for (int max_length = 1; max_length <= 4; ++max_length) {
+		char* current_query = sess->get_current_query(max_length);
+		const std::string expected = max_length < 4
+			? query.substr(0, max_length)
+			: "S...";
+		ok(current_query != nullptr && expected == current_query,
+			"current query: max length %d is truncated safely", max_length);
+		free(current_query);
+	}
+
+	char* current_query = sess->get_current_query();
+	ok(current_query != nullptr && query == current_query,
+		"current query: unlimited length preserves the complete query");
+	free(current_query);
+
+	destroy_test_session(sess);
+}
+
 int main() {
-	plan(112);
+	plan(117);
 	test_init_minimal();
 
 	// --- Parser tests (54 tests) ---
@@ -702,7 +731,10 @@ int main() {
 	test_statemgr_end_as_commit();                  // 3
 	test_statemgr_abort_as_rollback();              // 3
 	// State manager subtotal: 58
-	// Grand total: 54 + 58 = 112
+
+	// --- Processlist query truncation (5 tests) ---
+	test_current_query_short_truncation_limits();   // 5
+	// Grand total: 54 + 58 + 5 = 117
 
 	test_cleanup_minimal();
 	return exit_status();

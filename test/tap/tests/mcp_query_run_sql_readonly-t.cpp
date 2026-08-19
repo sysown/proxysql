@@ -70,10 +70,15 @@ bool configure_mcp_for_test(MYSQL* admin, const CommandLine& cl) {
 	const std::string mysql_user = escape_sql_literal(cl.mysql_username);
 	const std::string mysql_password = escape_sql_literal(cl.mysql_password);
 	const std::string default_schema = escape_sql_literal(k_test_schema);
+	const std::string auth_token = escape_sql_literal(cl.mcp_auth_token);
 
 	const std::string q1 = "SET mcp-port=" + std::to_string(cl.mcp_port);
 	const std::string q2 = "SET mcp-use_ssl=false";
 	const std::string q3 = "SET mcp-enabled=true";
+	const std::string q_config_auth =
+		"SET mcp-config_endpoint_auth='" + auth_token + "'";
+	const std::string q_query_auth =
+		"SET mcp-query_endpoint_auth='" + auth_token + "'";
 	const std::string q4 = "DELETE FROM mcp_target_profiles WHERE target_id='" + std::string(k_target_id) + "'";
 	const std::string q5 = "DELETE FROM mcp_auth_profiles WHERE auth_profile_id='" + std::string(k_auth_profile_id) + "'";
 	const std::string q6 =
@@ -93,6 +98,8 @@ bool configure_mcp_for_test(MYSQL* admin, const CommandLine& cl) {
 	return run_q(admin, q1.c_str()) == 0 &&
 	       run_q(admin, q2.c_str()) == 0 &&
 	       run_q(admin, q3.c_str()) == 0 &&
+	       run_q(admin, q_config_auth.c_str()) == 0 &&
+	       run_q(admin, q_query_auth.c_str()) == 0 &&
 	       run_q(admin, q4.c_str()) == 0 &&
 	       run_q(admin, q5.c_str()) == 0 &&
 	       run_q(admin, q6.c_str()) == 0 &&
@@ -216,6 +223,7 @@ cleanup:
 		mysql_close(mysql);
 	}
 	if (admin) {
+		run_q(admin, "LOAD MCP VARIABLES FROM DISK");
 		run_q(admin, ("DELETE FROM mcp_target_profiles WHERE target_id='" + std::string(k_target_id) + "'").c_str());
 		run_q(admin, ("DELETE FROM mcp_auth_profiles WHERE auth_profile_id='" + std::string(k_auth_profile_id) + "'").c_str());
 		run_q(admin, ("DELETE FROM mysql_servers WHERE hostgroup_id=" + std::to_string(k_hostgroup_id)).c_str());

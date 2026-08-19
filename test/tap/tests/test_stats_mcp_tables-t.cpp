@@ -8,6 +8,7 @@
  * Also verifies _reset semantics (selecting _reset clears counters).
  */
 
+#include <cstring>
 #include <string>
 
 #include "mysql.h"
@@ -40,11 +41,14 @@ bool configure_mcp(MYSQL* admin, const CommandLine& cl) {
 	const std::string mysql_user = escape_sql_literal(cl.mysql_username);
 	const std::string mysql_password = escape_sql_literal(cl.mysql_password);
 	const std::string default_schema = escape_sql_literal(k_test_schema);
+	const std::string auth_token = escape_sql_literal(cl.mcp_auth_token);
 
 	const std::string queries[] = {
 		"SET mcp-port=" + std::to_string(cl.mcp_port),
 		"SET mcp-use_ssl=false",
 		"SET mcp-enabled=true",
+		"SET mcp-config_endpoint_auth='" + auth_token + "'",
+		"SET mcp-query_endpoint_auth='" + auth_token + "'",
 		"DELETE FROM mcp_target_profiles WHERE target_id='" + std::string(k_target_id) + "'",
 		"DELETE FROM mcp_auth_profiles WHERE auth_profile_id='" + std::string(k_auth_profile_id) + "'",
 		"INSERT INTO mcp_auth_profiles (auth_profile_id, db_username, db_password, default_schema, use_ssl, ssl_mode, comment) VALUES "
@@ -91,7 +95,7 @@ int count_rows(MYSQL* admin, const char* table) {
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(11);
+	plan(12);
 
 	CommandLine cl;
 	if (cl.getEnv()) {
@@ -120,8 +124,15 @@ int main() {
 	create_test_data(mysql);
 
 	ok(configure_mcp(admin, cl), "MCP configured for stats test");
+	if (count_rows(admin, "stats_mcp_query_digest_reset") < 0 ||
+	    count_rows(admin, "stats_mcp_query_tools_counters_reset") < 0) {
+		BAIL_OUT("Failed to reset MCP statistics before generating test traffic");
+	}
 
-	MCPClient mcp(cl.host, cl.mcp_port);
+	MCPClient mcp(cl.admin_host, cl.mcp_port);
+	if (strlen(cl.mcp_auth_token) > 0) {
+		mcp.set_auth_token(cl.mcp_auth_token);
+	}
 
 	{
 		json args = {
@@ -171,6 +182,20 @@ int main() {
 	int counters_after_reset = count_rows(admin, "stats_mcp_query_tools_counters");
 	ok(counters_after_reset == 0, "stats_mcp_query_tools_counters is empty after _reset (got %d)", counters_after_reset);
 
+	bool cleanup_ok = true;
+	cleanup_ok = (run_q(admin, "LOAD MCP VARIABLES FROM DISK") == 0) && cleanup_ok;
+	cleanup_ok = (run_q(admin,
+		("DELETE FROM mcp_target_profiles WHERE target_id='" + std::string(k_target_id) + "'").c_str()) == 0)
+		&& cleanup_ok;
+	cleanup_ok = (run_q(admin,
+		("DELETE FROM mcp_auth_profiles WHERE auth_profile_id='" + std::string(k_auth_profile_id) + "'").c_str()) == 0)
+		&& cleanup_ok;
+	cleanup_ok = (run_q(admin,
+		("DELETE FROM mysql_servers WHERE hostgroup_id=" + std::to_string(k_hostgroup_id)).c_str()) == 0)
+		&& cleanup_ok;
+	cleanup_ok = (run_q(admin, "LOAD MCP PROFILES TO RUNTIME") == 0) && cleanup_ok;
+	cleanup_ok = (run_q(admin, "LOAD MYSQL SERVERS TO RUNTIME") == 0) && cleanup_ok;
+	ok(cleanup_ok, "MCP stats fixture cleanup and runtime restoration succeed");
 	mysql_close(mysql);
 	mysql_close(admin);
 	return exit_status();
