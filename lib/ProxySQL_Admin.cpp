@@ -254,6 +254,31 @@ static bool prepare_registered_server_module_runtime(SQLite3DB* db,
 	const SQLite3_result* core_rows, ProxySQL_ServerRuntimeSnapshot& installed_snapshot) {
 #ifdef PROXYSQL40
 	ProxySQL_ServerModuleSnapshot snapshot {};
+	std::string error;
+	auto append_topology = [&](const char* query, unsigned int fields, std::string& error) -> bool {
+		char* sqlite_error = nullptr;
+		int columns = 0, affected_rows = 0;
+		SQLite3_result* raw_rows = nullptr;
+		const bool ok = db->execute_statement(query, &sqlite_error, &columns, &affected_rows, &raw_rows);
+		std::unique_ptr<SQLite3_result> rows(raw_rows);
+		if (!ok || sqlite_error != nullptr) {
+			const std::string message = sqlite_error ? sqlite_error : "topology query failed";
+			if (sqlite_error) free(sqlite_error);
+			// Older databases may not yet own an optional topology table.
+			if (message.find("no such table") != std::string::npos) return true;
+			error = message;
+			return false;
+		}
+		for (const auto* row : rows->rows) {
+			if (row == nullptr || row->fields == nullptr) continue;
+			for (unsigned int field = 0; field < fields; ++field) {
+				if (row->fields[field] != nullptr)
+					snapshot.runtime.topology_hostgroups.push_back(
+						static_cast<uint32_t>(strtoul(row->fields[field], nullptr, 10)));
+			}
+		}
+		return true;
+	};
 	snapshot.runtime.protocol = protocol;
 	snapshot.runtime.generation = generation;
 	const int expected_core_columns = protocol == ProxySQL_ServerProtocol::mysql ? 12 : 11;
@@ -262,6 +287,19 @@ static bool prepare_registered_server_module_runtime(SQLite3DB* db,
 		return false;
 	}
 	snapshot.runtime = proxysql_server_runtime_snapshot_from_rows(protocol, generation, *core_rows);
+	if (protocol == ProxySQL_ServerProtocol::mysql) {
+		if (!append_topology("SELECT writer_hostgroup,reader_hostgroup FROM mysql_replication_hostgroups", 2, error) ||
+			!append_topology("SELECT writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup FROM mysql_group_replication_hostgroups", 4, error) ||
+			!append_topology("SELECT writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup FROM mysql_galera_hostgroups", 4, error) ||
+			!append_topology("SELECT writer_hostgroup,reader_hostgroup FROM mysql_aws_aurora_hostgroups", 2, error) ||
+			!append_topology("SELECT writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup FROM mysql_aws_rds_bgd_hostgroups", 4, error)) {
+			proxy_error("Unable to collect MySQL topology claims: %s\n", error.c_str());
+			return false;
+		}
+	} else if (!append_topology("SELECT writer_hostgroup,reader_hostgroup FROM pgsql_replication_hostgroups", 2, error)) {
+		proxy_error("Unable to collect PostgreSQL topology claims: %s\n", error.c_str());
+		return false;
+	}
 	for (const auto& table : proxysql_active_server_module_tables(protocol)) {
 		char* error = nullptr;
 		int columns = 0;
@@ -278,7 +316,6 @@ static bool prepare_registered_server_module_runtime(SQLite3DB* db,
 		snapshot.module_tables.push_back({table.table_name, std::unique_ptr<SQLite3_result>(rows)});
 	}
 	std::vector<ProxySQL_ServerHostgroupClaim> claims;
-	std::string error;
 	if (!proxysql_prepare_server_runtime_install(snapshot, claims, error)) {
 		proxy_error("Plugin server module rejected configuration: %s\n", error.c_str());
 		return false;

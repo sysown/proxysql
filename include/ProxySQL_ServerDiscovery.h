@@ -35,6 +35,9 @@ struct ProxySQL_ServerRuntimeSnapshot {
 	ProxySQL_ServerProtocol protocol;
 	uint64_t generation {0};
 	std::vector<ProxySQL_ServerRow> servers;
+	// Built-in topology owners collected by the Admin load path before any HGM
+	// staging.  These are policy inputs, not an alternate runtime store.
+	std::vector<uint32_t> topology_hostgroups;
 };
 
 struct ProxySQL_ServerDesiredSet {

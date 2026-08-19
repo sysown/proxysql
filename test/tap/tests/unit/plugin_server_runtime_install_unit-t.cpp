@@ -34,7 +34,7 @@ size_t occurrences(const std::string& value, const std::string& needle) {
 } // namespace
 
 int main() {
-	plan(13);
+	plan(14);
 	char path[] = "/tmp/proxysql_server_runtime_install.XXXXXX";
 	const int fd = mkstemp(path);
 	if (fd >= 0) close(fd);
@@ -42,6 +42,7 @@ int main() {
 	setenv("PROXYSQL_FAKE_PLUGIN_LOG", g_log_path.c_str(), 1);
 	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B", "1", 1);
 	setenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_SERVER_DISCOVERY", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_AFFILIATED", "1", 1);
 	setenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER", "1", 1);
 
 	std::unique_ptr<ProxySQL_PluginManager> manager;
@@ -113,10 +114,20 @@ int main() {
 	ok(second_prepared.load(std::memory_order_acquire),
 		"second preparation runs only after the first installation commits");
 
+	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_CLAIM", "1", 1);
+	ProxySQL_ServerRuntimeSnapshot conflicting_claim {};
+	conflicting_claim.protocol = ProxySQL_ServerProtocol::mysql;
+	conflicting_claim.generation = proxysql_pending_server_runtime_generation(conflicting_claim.protocol);
+	conflicting_claim.servers.push_back({17, "topology-owner.example", 3306});
+	ok(!proxysql_prepare_server_runtime_install(conflicting_claim),
+		"a plugin claim overlapping the core topology is rejected before HGM staging");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_CLAIM");
+
 	(void)proxysql_stop_configured_plugins(manager, error);
 	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
 	unsetenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_SERVER_DISCOVERY");
 	unsetenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_AFFILIATED");
 	unsetenv("PROXYSQL_FAKE_PLUGIN_LOG");
 	unlink(g_log_path.c_str());
 	return exit_status();

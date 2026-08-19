@@ -73,12 +73,25 @@ void fake_log_event(const char *event) {
 
 #ifdef PROXYSQL40
 void fake_server_module_installed(void *, ProxySQL_ServerRuntimeSnapshot) {}
+bool fake_server_module_prepare(void *, const ProxySQL_ServerModuleSnapshot&,
+	std::vector<ProxySQL_ServerHostgroupClaim>& claims, std::string&) {
+	if (env("SERVER_MODULE_CONFLICT_CLAIM") != nullptr)
+		claims.push_back({17, 18});
+	return true;
+}
+void fake_server_module_commit(void *, uint64_t) {}
+SQLite3_result* fake_server_module_table_snapshot(void *, const char *) { return nullptr; }
+void fake_server_module_shutdown(void *) {}
 void fake_destroy_server_module(ProxySQL_ServerModuleHooks *) {
 	fake_log_event("server_module_destroyed");
 }
 
 ProxySQL_ServerModuleHooks fake_server_module_hooks {
 	ProxySQL_ServerProtocol::mysql, &fake_server_module_installed, nullptr
+};
+ProxySQL_ServerModuleHooks fake_affiliated_server_module_hooks {
+	ProxySQL_ServerProtocol::mysql,
+	{{ProxySQL_ServerProtocol::mysql, "fake_server_module_claims", "runtime_fake_server_module_claims", "writer"}}
 };
 
 void *retain_fake_module() {
@@ -94,7 +107,15 @@ bool fake_register_server_module(ProxySQL_PluginServices *services) {
 	if (services == nullptr || services->register_server_module == nullptr) return false;
 	void *module = retain_fake_module();
 	if (module == nullptr) return false;
-	if (!services->register_server_module(&fake_server_module_hooks,
+	ProxySQL_ServerModuleHooks *hooks = &fake_server_module_hooks;
+	if (env("AFFILIATED") != nullptr) {
+		fake_affiliated_server_module_hooks.prepare_runtime = &fake_server_module_prepare;
+		fake_affiliated_server_module_hooks.commit_runtime = &fake_server_module_commit;
+		fake_affiliated_server_module_hooks.runtime_table_snapshot = &fake_server_module_table_snapshot;
+		fake_affiliated_server_module_hooks.shutdown = &fake_server_module_shutdown;
+		hooks = &fake_affiliated_server_module_hooks;
+	}
+	if (!services->register_server_module(hooks,
 		&fake_destroy_server_module, module)) {
 		dlclose(module);
 		return false;

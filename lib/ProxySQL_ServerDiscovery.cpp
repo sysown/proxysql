@@ -66,6 +66,9 @@ bool proxysql_prepare_server_runtime_install(const ProxySQL_ServerModuleSnapshot
 	for (const auto& server : snapshot.runtime.servers) {
 		claimed_hostgroups.insert(server.hostgroup_id);
 	}
+	for (uint32_t hostgroup_id : snapshot.runtime.topology_hostgroups) {
+		claimed_hostgroups.insert(hostgroup_id);
+	}
 	if (!proxysql_prepare_active_server_module_runtime(snapshot, claims, error)) {
 		release_install_reservation(snapshot.runtime.protocol);
 		return false;
