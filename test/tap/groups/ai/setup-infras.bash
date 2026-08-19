@@ -72,6 +72,7 @@ echo ">>> AI post-infras hook: Configuring MCP..."
 
 # Set MCP-specific environment variables (with defaults)
 export TAP_MCPPORT="${TAP_MCPPORT:-6071}"
+export TAP_MCP_AUTH_TOKEN="${TAP_MCP_AUTH_TOKEN:-tap-mcp-token}"
 export MCP_TARGET_ID="${MCP_TARGET_ID:-tap_mysql_default}"
 export MCP_AUTH_PROFILE_ID="${MCP_AUTH_PROFILE_ID:-tap_mysql_auth}"
 export MCP_PGSQL_TARGET_ID="${MCP_PGSQL_TARGET_ID:-tap_pgsql_default}"
@@ -90,6 +91,13 @@ export TAP_PGSQLSERVER_HOST="pgsql1.${DEFAULT_PGSQL_INFRA}"
 export TAP_PGSQLSERVER_PORT="5432"
 export TAP_PGSQLSERVER_USERNAME="postgres"
 export TAP_PGSQLSERVER_PASSWORD="${ROOT_PASSWORD}"
+
+# envsubst is a textual renderer, so publish a separate value that is safe
+# inside a single-quoted Admin SQL literal. ProxySQL's Admin parser accepts
+# doubled quotes and backslashes in the same form as the MySQL client API.
+TAP_MCP_AUTH_TOKEN_SQL="${TAP_MCP_AUTH_TOKEN//\\/\\\\}"
+TAP_MCP_AUTH_TOKEN_SQL="${TAP_MCP_AUTH_TOKEN_SQL//\'/\'\'}"
+export TAP_MCP_AUTH_TOKEN_SQL
 
 # Apply MCP configuration
 MCP_CONFIG_SQL="${SCRIPT_DIR}/mcp-config.sql"
