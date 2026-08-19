@@ -91,7 +91,7 @@ ProxySQL_ServerModuleHooks fake_server_module_hooks {
 };
 ProxySQL_ServerModuleHooks fake_affiliated_server_module_hooks {
 	ProxySQL_ServerProtocol::mysql,
-	{{ProxySQL_ServerProtocol::mysql, "fake_server_module_claims", "runtime_fake_server_module_claims", "writer"}}
+	{{ProxySQL_ServerProtocol::mysql, "mysql_fake_server_module_claims", "runtime_mysql_fake_server_module_claims", "writer"}}
 };
 
 void *retain_fake_module() {
