@@ -522,7 +522,7 @@ void PgConnection::freeSaslState() {
     if (sasl_client_first_) { free(sasl_client_first_); sasl_client_first_ = nullptr; }
     if (sasl_salt_)         { free(sasl_salt_);         sasl_salt_ = nullptr; }
     if (sasl_st_)           { free_scram_state(sasl_st_); sasl_st_ = nullptr; }
-    sasl_server_nonce_ = nullptr;  // non-owned (points into sasl_st_)
+    sasl_server_nonce_.clear();
     sasl_saltlen_ = 0;
     sasl_iterations_ = 0;
     sasl_password_.clear();
@@ -609,11 +609,16 @@ std::string PgConnection::saslBegin(const std::string& user, const std::string& 
         throw PgException("expected AuthenticationSASLContinue(11)");
     }
     std::string server_first(reinterpret_cast<const char*>(buffer.data()) + 4, buffer.size() - 4);
+    // server_nonce comes back pointing INTO server_first, which dies when this function returns --
+    // copy it into the member before that happens. salt is malloc'd by read_server_first_message()
+    // and genuinely handed over, so it keeps its raw pointer.
+    char* server_nonce = nullptr;
     if (!read_server_first_message(sasl_st_, const_cast<char*>(server_first.c_str()),
-                                   &sasl_server_nonce_, &sasl_salt_, &sasl_saltlen_, &sasl_iterations_)) {
+                                   &server_nonce, &sasl_salt_, &sasl_saltlen_, &sasl_iterations_)) {
         std::string e = scram_error(); freeSaslState();
         throw PgException(std::string("scram read server-first: ") + e);
     }
+    sasl_server_nonce_ = server_nonce ? server_nonce : "";
     return server_first;
 }
 
@@ -633,7 +638,7 @@ int PgConnection::saslFinish() {
     std::vector<uint8_t> buffer;
 
     // 3) SASLResponse ('p'): client-final-message.
-    char* client_final = build_client_final_message(sasl_st_, &cred, sasl_server_nonce_,
+    char* client_final = build_client_final_message(sasl_st_, &cred, sasl_server_nonce_.c_str(),
                                                      sasl_salt_, sasl_saltlen_, sasl_iterations_);
     if (!client_final) {
         std::string e = scram_error(); freeSaslState();
