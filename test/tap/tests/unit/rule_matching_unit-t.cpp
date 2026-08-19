@@ -155,6 +155,14 @@ static void test_match_digest_pcre2() {
 		"PCRE-compatible mode accepts PCRE2 variable-length lookbehind");
 }
 
+static void test_invalid_pcre2_pattern() {
+	QP_rule_t r = make_rule();
+	r.match_pattern = const_cast<char *>("(");
+	ok(!rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 1),
+		"invalid PCRE2 pattern safely returns no match");
+}
+
 static void test_match_pattern() {
 	QP_rule_t r = make_rule();
 	r.match_pattern = const_cast<char *>("SELECT .* FROM orders");
@@ -229,6 +237,18 @@ static void test_pcre2_rewrites() {
 	);
 	ok(rc && rewritten == "\\ \\",
 		"PCRE global rewrite emits a legacy literal backslash for every match");
+
+	rc = pcre2_query_rule_replace_for_test(
+		"(a)?(b)", "b b", "X\\1Y", false, &rewritten
+	);
+	ok(rc && rewritten == "XY b",
+		"PCRE rewrite expands an unset optional capture as empty once");
+
+	rc = pcre2_query_rule_replace_for_test(
+		"(a)?(b)", "b b", "X\\1Y", true, &rewritten
+	);
+	ok(rc && rewritten == "XY XY",
+		"PCRE global rewrite expands unset optional captures as empty");
 }
 #endif
 
@@ -267,9 +287,9 @@ static void test_null_rule() {
 
 int main() {
 #ifdef DEBUG
-	plan(30);
+	plan(33);
 #else
-	plan(25);
+	plan(26);
 #endif
 
 	test_init_minimal();
@@ -284,19 +304,20 @@ int main() {
 	test_match_digest_re2();        // 1
 	test_match_digest_pcre();       // 1
 	test_match_digest_pcre2();      // 1
+	test_invalid_pcre2_pattern();   // 1
 	test_match_pattern();           // 1
 	test_negate_match_pattern();    // 2
 	test_caseless_modifier();       // 1
 	test_rewritten_query();         // 1
 #ifdef DEBUG
-	test_pcre2_rewrites();          // 5
+	test_pcre2_rewrites();          // 7
 #endif
 	test_combined_criteria();       // 2
 	test_null_rule();               // 1
 #ifdef DEBUG
-	// Total: 30
+	// Total: 33
 #else
-	// Total: 25
+	// Total: 26
 #endif
 
 	test_cleanup_minimal();

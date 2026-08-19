@@ -166,7 +166,8 @@ bool Pcre2Regex::replace(
 		return false;
 	}
 
-	const uint32_t substitute_options = global ? PCRE2_SUBSTITUTE_GLOBAL : 0;
+	const uint32_t substitute_options = PCRE2_SUBSTITUTE_UNSET_EMPTY |
+		(global ? PCRE2_SUBSTITUTE_GLOBAL : 0);
 	PCRE2_SIZE required_size = 0;
 	const int size_rc = pcre2_substitute(
 		code_,
