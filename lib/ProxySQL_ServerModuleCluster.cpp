@@ -146,7 +146,7 @@ unsigned int proxysql_server_module_cluster_poll_next_diff(
 	bool peer_supported, const std::string& peer_checksum,
 	bool local_supported, const std::string& local_checksum,
 	bool peer_checksum_changed, unsigned int current_diff) {
-	if (!peer_supported || (local_supported && peer_checksum == local_checksum)) return 0;
+	if (!peer_supported || !local_supported || peer_checksum == local_checksum) return 0;
 	if (peer_checksum_changed || current_diff == 0) return 1;
 	return current_diff + 1;
 }

@@ -662,18 +662,6 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 		{ProxySQL_ServerProtocol::pgsql, ProxySQL_ServerModuleClusterVersion::memory_v2,
 			&checksums_values.server_module_pgsql_v2},
 	};
-	auto expose_module_diff_to_pull_selector = [&](const ServerModulePollInfo& poll) {
-		if (poll.peer->diff_check == 0) return;
-		ProxySQL_Checksum_Value_2* pull_selector = nullptr;
-		if (poll.protocol == ProxySQL_ServerProtocol::mysql)
-			pull_selector = poll.version == ProxySQL_ServerModuleClusterVersion::runtime_v1
-				? &checksums_values.mysql_servers : &checksums_values.mysql_servers_v2;
-		else
-			pull_selector = poll.version == ProxySQL_ServerModuleClusterVersion::runtime_v1
-				? &checksums_values.pgsql_servers : &checksums_values.pgsql_servers_v2;
-		pull_selector->diff_check = std::max(
-			pull_selector->diff_check, poll.peer->diff_check);
-	};
 	if (GloAdmin && GloAdmin->admindb) {
 		pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
 		for (auto& poll : server_module_polls) {
@@ -776,7 +764,6 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 			poll.peer->diff_check = proxysql_server_module_cluster_poll_next_diff(
 				true, poll.peer->checksum, poll.local_supported, poll.local_checksum,
 				checksum_changed, poll.peer->diff_check);
-			expose_module_diff_to_pull_selector(poll);
 			break;
 		}
 		if (server_module_row) continue;
@@ -842,7 +829,6 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 			poll.peer->diff_check = proxysql_server_module_cluster_poll_next_diff(
 				poll.peer->version == 1, poll.peer->checksum,
 				poll.local_supported, poll.local_checksum, false, poll.peer->diff_check);
-			expose_module_diff_to_pull_selector(poll);
 		}
 #endif
 	}
@@ -1034,7 +1020,8 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 			}
 		}
 
-		if (module_mysql_v1) {
+		if (module_mysql_v1 && mysql_server_sync_algo ==
+			mysql_servers_sync_algorithm::runtime_mysql_servers_and_mysql_servers_v2) {
 			v = &checksums_values.mysql_servers;
 			GloProxyCluster->pull_runtime_mysql_servers_from_peer(
 				{v->checksum, static_cast<time_t>(v->epoch)});
@@ -4638,11 +4625,26 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_variables_module(const char* modul
 		ProxySQL_Node_Entry * node = it->second;
 		// Use function pointer to access the correct checksum field
 		ProxySQL_Checksum_Value_2 * v = config->checksum_getter(node);
+		unsigned int selector_diff = v->diff_check;
+#ifdef PROXYSQL40
+		if (strcmp(module_name, "runtime_mysql_servers") == 0)
+			selector_diff = std::max(selector_diff,
+				node->checksums_values.server_module_mysql_v1.diff_check);
+		else if (strcmp(module_name, "mysql_servers_v2") == 0)
+			selector_diff = std::max(selector_diff,
+				node->checksums_values.server_module_mysql_v2.diff_check);
+		else if (strcmp(module_name, "runtime_pgsql_servers") == 0)
+			selector_diff = std::max(selector_diff,
+				node->checksums_values.server_module_pgsql_v1.diff_check);
+		else if (strcmp(module_name, "pgsql_servers_v2") == 0)
+			selector_diff = std::max(selector_diff,
+				node->checksums_values.server_module_pgsql_v2.diff_check);
+#endif
 
 		if (v->version > 1) {
 			if ( v->epoch > epoch ) {
 				max_epoch = v->epoch;
-				if (v->diff_check >= diff_threshold) {
+				if (selector_diff >= diff_threshold) {
 					epoch = v->epoch;
 					version = v->version;
 
