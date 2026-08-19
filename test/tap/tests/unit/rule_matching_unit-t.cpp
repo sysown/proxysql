@@ -20,6 +20,7 @@
 
 #include <cstring>
 
+#ifdef DEBUG
 // Debug-only seam implemented in Query_Processor.cpp. It keeps the adapter and
 // all PCRE2 types private while exercising the real substitution path.
 extern bool pcre2_query_rule_replace_for_test(
@@ -29,6 +30,7 @@ extern bool pcre2_query_rule_replace_for_test(
 	bool global,
 	std::string* rewritten
 );
+#endif
 
 /**
  * @brief Create a zeroed QP_rule_t with safe defaults.
@@ -194,6 +196,7 @@ static void test_rewritten_query() {
 		"rewritten query used for match_pattern when present");
 }
 
+#ifdef DEBUG
 static void test_pcre2_rewrites() {
 	std::string rewritten;
 
@@ -227,6 +230,7 @@ static void test_pcre2_rewrites() {
 	ok(rc && rewritten == "\\ \\",
 		"PCRE global rewrite emits a legacy literal backslash for every match");
 }
+#endif
 
 // ============================================================================
 // 3. Combined criteria (AND logic)
@@ -262,7 +266,11 @@ static void test_null_rule() {
 // ============================================================================
 
 int main() {
+#ifdef DEBUG
 	plan(30);
+#else
+	plan(25);
+#endif
 
 	test_init_minimal();
 
@@ -280,10 +288,16 @@ int main() {
 	test_negate_match_pattern();    // 2
 	test_caseless_modifier();       // 1
 	test_rewritten_query();         // 1
+#ifdef DEBUG
 	test_pcre2_rewrites();          // 5
+#endif
 	test_combined_criteria();       // 2
 	test_null_rule();               // 1
+#ifdef DEBUG
 	// Total: 30
+#else
+	// Total: 25
+#endif
 
 	test_cleanup_minimal();
 	return exit_status();
