@@ -111,15 +111,15 @@ int main(int, char**) {
 			"SELECT 1 + 2", "18", "PCRE-compatible mode replaces all matches with GLOBAL");
 		run_rewrite_case(admin, proxy,
 			"INSERT INTO mysql_query_rules (rule_id, active, match_pattern, replace_pattern, re_modifiers, apply) "
-			"VALUES (61192, 1, '^SELECT ([0-9]+)$', CONCAT('\\\\0:', '\\\\1'), 'CASELESS', 1)",
+			"VALUES (61192, 1, '^SELECT ([0-9]+)$', CONCAT('\\0:', '\\1'), 'CASELESS', 1)",
 			"SELECT 1", "SELECT 1:1", "PCRE-compatible mode expands legacy whole-match and capture references");
 		run_rewrite_case(admin, proxy,
 			"INSERT INTO mysql_query_rules (rule_id, active, match_pattern, replace_pattern, re_modifiers, apply) "
-			"VALUES (61193, 1, '^SELECT 1$', 'SELECT ''\\\\''', 'CASELESS', 1)",
-			"SELECT 1", "\\", "PCRE-compatible replacement preserves a legacy literal backslash");
+			"VALUES (61193, 1, 'TOKEN', '\\\\*/ + 1 /*', 'CASELESS', 1)",
+			"SELECT 1 /*TOKEN*/", "2", "PCRE-compatible replacement emits a legacy literal backslash");
 		run_rewrite_case(admin, proxy,
 			"INSERT INTO mysql_query_rules (rule_id, active, match_pattern, replace_pattern, re_modifiers, apply) "
-			"VALUES (61194, 1, '^SELECT 7$', 'SELECT \\\\x', 'CASELESS', 1)",
+			"VALUES (61194, 1, '^SELECT 7$', 'SELECT \\x', 'CASELESS', 1)",
 			"SELECT 7", "7", "malformed legacy escape leaves the query unchanged");
 		run_rewrite_case(admin, proxy,
 			"INSERT INTO mysql_query_rules (rule_id, active, match_pattern, replace_pattern, re_modifiers, apply) "
