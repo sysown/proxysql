@@ -330,6 +330,8 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	opt->add((const char *)"",0,0,0,(const char *)"Do not check for the latest version of ProxySQL",(const char *)"--no-version-check");
 #ifdef PROXYSQL40
 	opt->add((const char *)"",0,0,0,(const char *)"Bypass plugin chassis: do not load any plugin .so listed in the config file. Useful as a kill switch when a plugin misbehaves.",(const char *)"--no-plugins");
+	opt->add((const char *)"",0,1,0,(const char *)"Directory containing named ProxySQL plugin modules",(const char *)"--plugin-dir");
+	opt->add((const char *)"",0,1,0,(const char *)"Load a named plugin or an explicit absolute .so path; may be repeated",(const char *)"--load-plugin");
 #endif /* PROXYSQL40 */
 	opt->add((const char *)"",0,1,0,(const char *)"Administration Unix Socket",(const char *)"-S",(const char *)"--admin-socket");
 

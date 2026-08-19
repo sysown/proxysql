@@ -43,6 +43,7 @@ using json = nlohmann::json;
 #include "Web_Interface.hpp"
 #ifdef PROXYSQL40
 #include "ProxySQL_PluginManager.h"
+#include "ProxySQL_PluginCLI.h"
 #endif /* PROXYSQL40 */
 #include "proxysql_utils.h"
 #include "PgSQL_Monitor.hpp"
@@ -745,7 +746,25 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 	GloVars.errorlog = NULL;
 	GloVars.pid = NULL;
 #ifdef PROXYSQL40
-	GloVars.plugin_modules.clear();
+	const ProxySQL_PluginDiscovery found = proxysql_prescan_plugins(
+		argc, argv, GloVars.config_file, PROXYSQL_DEFAULT_PLUGIN_DIR);
+	if (!found.error.empty()) {
+		proxy_error("Plugin pre-scan failed: %s\n", found.error.c_str());
+		exit(EXIT_FAILURE);
+	}
+	GloVars.no_plugins = found.disabled;
+	GloVars.plugin_modules = found.module_paths;
+	if (!found.disabled) {
+		std::string plugin_error {};
+		if (!proxysql_discover_configured_plugins(GloPluginManager, found.module_paths, plugin_error)) {
+			proxy_error("Plugin discovery failed: %s\n", plugin_error.c_str());
+			exit(EXIT_FAILURE);
+		}
+		if (!proxysql_register_configured_plugin_cli(GloPluginManager.get(), *GloVars.opt, plugin_error)) {
+			proxy_error("Plugin CLI option registration failed: %s\n", plugin_error.c_str());
+			exit(EXIT_FAILURE);
+		}
+	}
 #endif /* PROXYSQL40 */
 	GloVars.parse(argc,argv);
 	GloVars.process_opts_pre();
@@ -851,9 +870,6 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 				GloVars.ldap_auth_plugin=strdup(ldap_auth_plugin.c_str());
 			}
 		}
-#ifdef PROXYSQL40
-		proxysql_load_plugin_modules_from_config(root, GloVars.plugin_modules);
-#endif /* PROXYSQL40 */
 	#ifndef PROXYSQL40
 		const map<string, char**> varnames_globals_map {
 			{ "mysql-ssl_p2s_ca", &GloVars.global.gr_bootstrap_ssl_ca },
@@ -1513,16 +1529,16 @@ static void LoadPlugins() {
 // Used to disable a misbehaving plugin without editing the config or
 // rolling back the proxysql package. See doc/plugin-chassis/REVIEW_GUIDE.md
 // for the rationale.
-static void LoadConfiguredPlugins() {
+static void RegisterConfiguredPluginSchemas() {
 	if (GloVars.no_plugins) {
 		proxy_info("Plugin chassis disabled by --no-plugins / PROXYSQL_NO_PLUGINS=1; "
-		           "skipping load of %zu configured plugin(s)\n",
+		           "skipping schema registration for %zu configured plugin(s)\n",
 		           GloVars.plugin_modules.size());
 		return;
 	}
 	std::string plugin_error {};
-	if (!proxysql_load_configured_plugins(GloPluginManager, GloVars.plugin_modules, plugin_error)) {
-		proxy_error("Plugin load/register_schemas failed: %s\n", plugin_error.c_str());
+	if (!proxysql_register_configured_plugin_schemas(GloPluginManager.get(), plugin_error)) {
+		proxy_error("Plugin schema registration failed: %s\n", plugin_error.c_str());
 		exit(EXIT_FAILURE);
 	}
 }
@@ -1590,7 +1606,7 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	//   Phase D:   init() with full services (live DB handles pointing at
 	//              a schema that already contains the plugin's own tables).
 	//   Phase E:   start() launches the plugin's threads / accept loops.
-	LoadConfiguredPlugins();
+	RegisterConfiguredPluginSchemas();
 	ProxySQL_Main_init_Admin_module(boostrap_info);
 	InitConfiguredPlugins();
 	StartConfiguredPlugins();

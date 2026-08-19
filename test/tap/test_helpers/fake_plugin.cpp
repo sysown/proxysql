@@ -41,6 +41,16 @@ ProxySQL_PluginQueryHookResult fake_query_hook(const ProxySQL_PluginQueryHookPay
 	}
 	return {ProxySQL_PluginQueryHookAction::allow, msg};
 }
+
+bool fake_register_cli_options(ProxySQL_PluginCLIRegistry* registry) {
+	if (registry == nullptr || registry->add == nullptr) return false;
+	const ProxySQL_PluginCLIOptionDef option {
+		"", "--fake-plugin-action", 1, false, "Fake plugin early action"
+	};
+	const char* error = nullptr;
+	return registry->add(registry->opaque, option, &error);
+}
+
 #endif /* PROXYSQL40 */
 
 const char* env(const char* suffix) {
@@ -251,6 +261,42 @@ const ProxySQL_PluginDescriptor fake_descriptor_with_phase_b = {
 	&fake_status_json,
 	&fake_register_schemas,
 };
+
+// ABI 6 descriptor used by the CLI registration tests. The callback is a
+// descriptor tail field, so the manager must read it only for ABI >= 6.
+const ProxySQL_PluginDescriptor fake_descriptor_with_cli = {
+	FAKE_PLUGIN_NAME,
+	6,
+	&fake_init,
+	&fake_start,
+	&fake_stop,
+	&fake_status_json,
+	nullptr,
+	&fake_register_cli_options,
+};
+
+// This object intentionally uses the ABI-5 descriptor shape. It has no ABI-6
+// tail field. Returning it through the current descriptor pointer type models
+// a plugin compiled before register_cli_options existed; the manager must not
+// inspect beyond register_schemas when abi_version is 5.
+struct fake_descriptor_v5_layout {
+	const char* name;
+	uint32_t abi_version;
+	proxysql_plugin_init_cb init;
+	proxysql_plugin_start_cb start;
+	proxysql_plugin_stop_cb stop;
+	proxysql_plugin_status_json_cb status_json;
+	proxysql_plugin_register_schemas_cb register_schemas;
+};
+const fake_descriptor_v5_layout fake_descriptor_abi5 = {
+	FAKE_PLUGIN_NAME,
+	5,
+	&fake_init,
+	&fake_start,
+	&fake_stop,
+	&fake_status_json,
+	nullptr,
+};
 #endif /* PROXYSQL40 */
 
 // Descriptor with a bogus ABI version -- used by lifecycle tests to
@@ -272,6 +318,12 @@ extern "C" const ProxySQL_PluginDescriptor *proxysql_plugin_descriptor_v1() {
 		return &fake_descriptor_bogus_abi;
 	}
 #ifdef PROXYSQL40
+	if (env("ENABLE_ABI5_TAIL_GUARD") != nullptr) {
+		return reinterpret_cast<const ProxySQL_PluginDescriptor*>(&fake_descriptor_abi5);
+	}
+	if (env("ENABLE_CLI") != nullptr) {
+		return &fake_descriptor_with_cli;
+	}
 	if (env("ENABLE_PHASE_B") != nullptr) {
 		return &fake_descriptor_with_phase_b;
 	}

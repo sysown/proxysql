@@ -403,6 +403,26 @@ bool ProxySQL_PluginManager::load(const std::string &path, std::string &err) {
 	return true;
 }
 
+bool ProxySQL_PluginManager::register_cli_options(ez::ezOptionParser& parser, std::string& err) {
+	err.clear();
+	ProxySQL_PluginCLIOptionRegistry registry(parser);
+	ProxySQL_PluginCLIRegistry callback_registry = registry.callback_registry();
+	for (const auto& plugin : plugins_) {
+		// ABI 6 appends register_cli_options after register_schemas. Reading
+		// the field from an ABI 1-5 descriptor would cross that plugin's
+		// compiled struct boundary, so the version check is part of the ABI.
+		if (plugin.descriptor == nullptr || plugin.descriptor->abi_version < 6u) continue;
+		const proxysql_plugin_register_cli_options_cb callback =
+			plugin.descriptor->register_cli_options;
+		if (callback == nullptr) continue;
+		if (!callback(&callback_registry)) {
+			err = "plugin CLI option registration failed: " + plugin_name(plugin.descriptor);
+			return false;
+		}
+	}
+	return true;
+}
+
 #ifdef PROXYSQL40
 bool ProxySQL_PluginManager::invoke_register_schemas_phase(std::string &err) {
 	// Phase B of the four-phase lifecycle.  Called after all plugins have
@@ -998,20 +1018,13 @@ void proxysql_refresh_configured_plugin_runtime_views(const std::string& sql,
 }
 #endif /* PROXYSQL40 */
 
-bool proxysql_load_configured_plugins(
+bool proxysql_discover_configured_plugins(
 	std::unique_ptr<ProxySQL_PluginManager>& manager,
 	const std::vector<std::string>& plugin_modules,
 	std::string& err
 ) {
-	// Phase A + Phase B of the four-phase lifecycle. Executed BEFORE
-	// ProxySQL_Main_init_Admin_module so that plugin-declared schemas are
-	// available when Admin::init() merges them into tables_defs_* and
-	// runs the DDL via check_and_build_standard_tables.
-	//
-	// On return, `manager` is populated and installed as the active
-	// manager — Admin::init() reads it via proxysql_get_plugin_manager()
-	// to find the tables to merge. Phase D (init) runs later, via
-	// proxysql_init_configured_plugins, once admin is up.
+	// Phase A only: dlopen and descriptor validation. The manager is not
+	// published until every requested module has loaded successfully.
 	std::lock_guard<std::mutex> lifecycle_lock(g_plugin_lifecycle_mutex);
 	err.clear();
 	{
@@ -1032,22 +1045,8 @@ bool proxysql_load_configured_plugins(
 		}
 	}
 
-	// Phase B: register_schemas runs here. Plugins declare their
-	// admin-schema tables into the manager's pending-tables list.
-	// ProxySQL_Admin::init() (called next, via
-	// ProxySQL_Main_init_Admin_module in src/main.cpp) drains that list
-	// by merging into tables_defs_{admin,config,stats} and then running
-	// the DDL via check_and_build_standard_tables — same code path as
-	// the core tables. Plugins that left register_schemas null are
-	// no-ops here.
-	if (!next_manager->invoke_register_schemas_phase(err)) {
-		return false;
-	}
-
-	// Install as active manager BEFORE admin init, so that
-	// proxysql_get_plugin_manager() — used by ProxySQL_Admin::init() to
-	// merge plugin-declared schemas into tables_defs_* — can find the
-	// registered tables.
+	// Publish only after every module has been validated. The later CLI and
+	// schema phases use this same manager; neither reopens a module.
 	//
 	// INVARIANT (publish-before-Phase-D): after this point Phase D
 	// (init_all via proxysql_init_configured_plugins) WILL still write
@@ -1065,6 +1064,27 @@ bool proxysql_load_configured_plugins(
 		g_active_plugin_manager.store(manager.get(), std::memory_order_release);
 	}
 	return true;
+}
+
+bool proxysql_register_configured_plugin_cli(
+	ProxySQL_PluginManager* manager, ez::ezOptionParser& parser, std::string& err) {
+	err.clear();
+	return manager == nullptr || manager->register_cli_options(parser, err);
+}
+
+bool proxysql_register_configured_plugin_schemas(
+	ProxySQL_PluginManager* manager, std::string& err) {
+	err.clear();
+	return manager == nullptr || manager->invoke_register_schemas_phase(err);
+}
+
+bool proxysql_load_configured_plugins(
+	std::unique_ptr<ProxySQL_PluginManager>& manager,
+	const std::vector<std::string>& plugin_modules,
+	std::string& err
+) {
+	if (!proxysql_discover_configured_plugins(manager, plugin_modules, err)) return false;
+	return proxysql_register_configured_plugin_schemas(manager.get(), err);
 }
 
 #ifdef PROXYSQL40

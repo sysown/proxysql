@@ -8,6 +8,7 @@
 #ifdef PROXYSQL40
 
 #include "ProxySQL_Plugin.h"
+#include "ProxySQL_PluginCLI.h"
 
 #include <cstddef>
 #include <deque>
@@ -24,6 +25,7 @@ public:
 	ProxySQL_PluginManager &operator=(const ProxySQL_PluginManager &) = delete;
 
 	bool load(const std::string &path, std::string &err);
+	bool register_cli_options(ez::ezOptionParser& parser, std::string& err);
 #ifdef PROXYSQL40
 	// Phase B of the four-phase plugin lifecycle: after all plugins have
 	// been dlopen'd but BEFORE admin module bootstrap.  Invokes each
@@ -186,6 +188,20 @@ void proxysql_refresh_configured_plugin_runtime_views(const std::string& sql,
 // check_and_build_standard_tables DDL pass. Phase D (init) must be
 // invoked separately — after admin module bootstrap — via
 // proxysql_init_configured_plugins.
+bool proxysql_discover_configured_plugins(
+	std::unique_ptr<ProxySQL_PluginManager>& manager,
+	const std::vector<std::string>& plugin_modules,
+	std::string& err
+);
+bool proxysql_register_configured_plugin_cli(
+	ProxySQL_PluginManager* manager, ez::ezOptionParser& parser,
+	std::string& err
+);
+bool proxysql_register_configured_plugin_schemas(
+	ProxySQL_PluginManager* manager, std::string& err
+);
+// Compatibility composition for existing callers/tests. New startup uses the
+// explicit discovery, CLI, and schema phases above.
 bool proxysql_load_configured_plugins(
 	std::unique_ptr<ProxySQL_PluginManager>& manager,
 	const std::vector<std::string>& plugin_modules,

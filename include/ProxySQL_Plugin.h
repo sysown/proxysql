@@ -40,8 +40,28 @@ namespace prometheus { class Registry; }
 //          handoff callbacks. Plugins use them only around work that can wait
 //          for another Admin consumer; older plugins continue to use the
 //          unchanged three DB-handle prefix.
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = 5u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = 5u;
+//   ABI 6: appends an early CLI-option registration callback.  The loader
+//          invokes it only after discovery has loaded every requested module
+//          and before the one definitive core command-line parse.
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = 6u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = 6u;
+
+struct ProxySQL_PluginCLIOptionDef {
+	const char* short_name;
+	const char* long_name;
+	uint8_t value_count;
+	bool required;
+	const char* help;
+};
+
+struct ProxySQL_PluginCLIRegistry {
+	void* opaque;
+	bool (*add)(void* opaque, const ProxySQL_PluginCLIOptionDef& option,
+		const char** error);
+};
+
+using proxysql_plugin_register_cli_options_cb =
+	bool (*)(ProxySQL_PluginCLIRegistry*);
 
 enum class ProxySQL_PluginDBKind : uint8_t {
 	admin_db = 0,
@@ -367,6 +387,9 @@ struct ProxySQL_PluginDescriptor {
 	 * init() after admin module bootstrap materializes schema. Plugins that
 	 * leave this field null keep the pre-existing two-phase behavior. */
 	proxysql_plugin_register_schemas_cb register_schemas;
+	// ABI 6: optional early command-line option registration.  The core reads
+	// this tail field only for descriptors whose abi_version is at least 6.
+	proxysql_plugin_register_cli_options_cb register_cli_options;
 #endif /* PROXYSQL40 */
 };
 
