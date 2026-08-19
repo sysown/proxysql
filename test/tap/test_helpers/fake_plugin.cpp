@@ -1,6 +1,7 @@
 #include "ProxySQL_Plugin.h"
 
 #include <cstdio>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
@@ -22,6 +23,11 @@
 namespace {
 
 ProxySQL_PluginServices* fake_services = nullptr;
+#ifdef PROXYSQL40
+proxysql_plugin_post_server_desired_set_cb fake_post_server_desired_set = nullptr;
+std::atomic<unsigned int> retained_fixture_module_calls {0};
+std::atomic<unsigned int> retained_fixture_controller_calls {0};
+#endif
 
 ProxySQL_PluginCommandResult fake_command(const ProxySQL_PluginCommandContext&, const char*) {
 	return {0, 1, "fake command executed"};
@@ -90,6 +96,61 @@ bool fake_register_server_module(ProxySQL_PluginServices *services) {
 	if (module == nullptr) return false;
 	if (!services->register_server_module(&fake_server_module_hooks,
 		&fake_destroy_server_module, module)) {
+		dlclose(module);
+		return false;
+	}
+	return true;
+}
+
+class FakeServerDiscoveryController final : public ProxySQL_ServerDiscoveryController {
+public:
+	void runtime_configuration_installed(ProxySQL_ServerRuntimeSnapshot) override {
+		fake_log_event("server_controller_runtime");
+	}
+	void desired_set_applied(uint64_t, bool) override {
+		fake_log_event("server_controller_desired_set");
+	}
+	void shutdown() override {
+		fake_log_event("server_controller_shutdown");
+	}
+};
+
+void retained_fixture_module_installed(void *, ProxySQL_ServerRuntimeSnapshot) {
+	retained_fixture_module_calls.fetch_add(1);
+}
+
+void retained_fixture_destroy_module(ProxySQL_ServerModuleHooks *module) {
+	fake_log_event("retained_fixture_module_destroyed");
+	delete module;
+}
+
+class RetainedFixtureController final : public ProxySQL_ServerDiscoveryController {
+public:
+	void runtime_configuration_installed(ProxySQL_ServerRuntimeSnapshot) override {
+		retained_fixture_controller_calls.fetch_add(1);
+	}
+	void desired_set_applied(uint64_t, bool) override {}
+	void shutdown() override { fake_log_event("retained_fixture_controller_shutdown"); }
+};
+
+void retained_fixture_destroy_controller(ProxySQL_ServerDiscoveryController *controller) {
+	fake_log_event("retained_fixture_controller_destroyed");
+	delete controller;
+}
+
+void fake_destroy_server_discovery_controller(ProxySQL_ServerDiscoveryController *controller) {
+	fake_log_event("server_controller_destroyed");
+	delete controller;
+}
+
+bool fake_install_server_discovery_controller(ProxySQL_PluginServices *services) {
+	if (services == nullptr || services->install_server_discovery_controller == nullptr) return false;
+	void *module = retain_fake_module();
+	if (module == nullptr) return false;
+	auto *controller = new FakeServerDiscoveryController();
+	if (!services->install_server_discovery_controller(ProxySQL_ServerProtocol::mysql,
+		controller, &fake_destroy_server_discovery_controller, module)) {
+		delete controller;
 		dlclose(module);
 		return false;
 	}
@@ -212,6 +273,16 @@ bool fake_init(ProxySQL_PluginServices *services) {
 			fake_log_event("init_server_discovery_unavailable");
 		}
 	}
+	if (services != nullptr) {
+		fake_post_server_desired_set = services->post_server_desired_set;
+	}
+	if (env("INSTALL_SERVER_DISCOVERY_CONTROLLER") != nullptr) {
+		if (fake_install_server_discovery_controller(services)) {
+			fake_log_event("init_server_controller_installed");
+		} else {
+			fake_log_event("init_server_controller_rejected");
+		}
+	}
 	if (env("REGISTER_COMMAND_ALIAS") != nullptr &&
 	    services != nullptr &&
 	    services->register_command_alias != nullptr) {
@@ -268,6 +339,17 @@ bool fake_start() {
 			fake_log_event("start_server_module_registered");
 		} else {
 			fake_log_event("start_server_module_rejected");
+		}
+	}
+	if (env("START_POST_SERVER_DESIRED_SET") != nullptr) {
+		const ProxySQL_ServerDesiredSet desired {
+			ProxySQL_ServerProtocol::mysql, 42, {}, {}, ProxySQL_ServerPersistence::runtime_only
+		};
+		if (fake_services != nullptr && fake_services->post_server_desired_set != nullptr &&
+			fake_services->post_server_desired_set(desired)) {
+			fake_log_event("start_server_desired_set_posted");
+		} else {
+			fake_log_event("start_server_desired_set_rejected");
 		}
 	}
 #endif /* PROXYSQL40 */
@@ -343,3 +425,51 @@ extern "C" const ProxySQL_PluginDescriptor *proxysql_plugin_descriptor_v1() {
 #endif /* PROXYSQL40 */
 	return &fake_descriptor;
 }
+
+#ifdef PROXYSQL40
+// This intentionally retains only the service function pointer, never the
+// transient services table.  Unit tests keep this DSO separately loaded and
+// invoke it after manager unpublication to prove the callback fails closed.
+extern "C" bool proxysql_fake_post_server_desired_set_for_test() {
+	if (fake_post_server_desired_set == nullptr) return false;
+	const ProxySQL_ServerDesiredSet desired {
+		ProxySQL_ServerProtocol::mysql, 43, {}, {}, ProxySQL_ServerPersistence::runtime_only
+	};
+	return fake_post_server_desired_set(desired);
+}
+
+// These factories, callbacks, and destroy functions are intentionally
+// exported from the fixture DSO.  The lease tests pass their addresses into
+// the manager, so its retained dlopen reference protects code it really
+// invokes (rather than only an unrelated fixture handle).
+extern "C" ProxySQL_ServerModuleHooks *proxysql_fake_retained_module_create(
+	ProxySQL_ServerProtocol protocol) {
+	return new ProxySQL_ServerModuleHooks {protocol, &retained_fixture_module_installed, nullptr};
+}
+
+extern "C" void proxysql_fake_retained_module_destroy(ProxySQL_ServerModuleHooks *module) {
+	retained_fixture_destroy_module(module);
+}
+
+extern "C" ProxySQL_ServerDiscoveryController *proxysql_fake_retained_controller_create() {
+	return new RetainedFixtureController();
+}
+
+extern "C" void proxysql_fake_retained_controller_destroy(
+	ProxySQL_ServerDiscoveryController *controller) {
+	retained_fixture_destroy_controller(controller);
+}
+
+extern "C" void proxysql_fake_retained_fixture_reset() {
+	retained_fixture_module_calls.store(0);
+	retained_fixture_controller_calls.store(0);
+}
+
+extern "C" unsigned int proxysql_fake_retained_fixture_module_calls() {
+	return retained_fixture_module_calls.load();
+}
+
+extern "C" unsigned int proxysql_fake_retained_fixture_controller_calls() {
+	return retained_fixture_controller_calls.load();
+}
+#endif /* PROXYSQL40 */

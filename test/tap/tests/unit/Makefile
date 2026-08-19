@@ -402,7 +402,7 @@ $(FAKE_PLUGIN2_SO): $(TEST_HELPERS_DIR)/fake_plugin.cpp $(PROXYSQL_PATH)/include
 		-DFAKE_PLUGIN_NAME=\"fake_plugin2\" \
 		-DFAKE_PLUGIN_ENV_PREFIX=\"PROXYSQL_FAKE_PLUGIN2_\"
 
-$(FAKE_PLUGIN_ABI8_SO): $(TEST_HELPERS_DIR)/fake_plugin_abi8.cpp $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h | $(TEST_HELPERS_DIR)
+$(FAKE_PLUGIN_ABI8_SO): $(TEST_HELPERS_DIR)/fake_plugin_abi8.cpp | $(TEST_HELPERS_DIR)
 	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(IDIRS) -ldl
 
 # Keep on-demand unit-test library rebuilds aligned with the default top-level

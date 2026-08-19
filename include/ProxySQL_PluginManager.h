@@ -91,6 +91,12 @@ public:
 	bool uninstall_server_discovery_controller(ProxySQL_ServerProtocol protocol);
 	bool post_server_desired_set(ProxySQL_ServerDesiredSet desired_set);
 	void install_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot);
+	// Unit-test-only retirement observation seam.  The callback runs after a
+	// registry entry is detached and with server_discovery_mutex_ unlocked.
+	using server_retirement_observer_for_test_cb =
+		void (*)(ProxySQL_ServerProtocol protocol, bool controller, void *opaque);
+	void set_server_retirement_observer_for_test(server_retirement_observer_for_test_cb observer,
+		void *opaque);
 #endif /* PROXYSQL40 */
 
 	size_t size() const;
@@ -164,13 +170,20 @@ private:
 		void (*destroy)(ProxySQL_ServerDiscoveryController *) { nullptr };
 		void *module_handle { nullptr };
 	};
+	void release_server_callback_lease(int index);
+	void finalize_server_controller_retirement(registered_server_controller_t retired);
 	mutable std::mutex server_discovery_mutex_ {};
 	std::condition_variable server_discovery_cv_ {};
 	registered_server_module_t server_modules_[2] {};
 	registered_server_controller_t server_controllers_[2] {};
+	// A controller that asks to uninstall itself from one of its callbacks is
+	// detached immediately, then finalized by the callback lease release path.
+	registered_server_controller_t retired_server_controllers_[2] {};
 	bool server_snapshots_present_[2] { false, false };
 	size_t server_callback_leases_[2] { 0, 0 };
 	ProxySQL_ServerRuntimeSnapshot server_snapshots_[2] {};
+	server_retirement_observer_for_test_cb server_retirement_observer_for_test_ { nullptr };
+	void *server_retirement_observer_opaque_for_test_ { nullptr };
 #endif /* PROXYSQL40 */
 };
 

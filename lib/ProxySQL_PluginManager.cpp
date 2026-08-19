@@ -16,6 +16,7 @@
 #include <cstring>
 #include <dlfcn.h>
 #include <exception>
+#include <functional>
 #include <mutex>
 #include <shared_mutex>
 #include <strings.h>
@@ -35,6 +36,10 @@ namespace {
 
 std::atomic<ProxySQL_PluginManager*> g_active_plugin_manager { nullptr };
 ProxySQL_PluginManager* g_registry_target = nullptr;
+// Only the lifecycle thread may use the transient registration target.  A
+// server-discovery worker can retain a service callback and post after init,
+// so it must never read this plain lifecycle-only pointer.
+thread_local ProxySQL_PluginManager* g_registry_callback_target = nullptr;
 // Guards swaps of g_active_plugin_manager. Readers (dispatch_admin_command,
 // dispatch_query_hook, resolve_alias_to_canonical) take a shared lock, so
 // many worker threads can be running through plugin callbacks at the same
@@ -61,11 +66,13 @@ std::string g_registry_registration_error {};
 struct ScopedRegistryTarget {
 	explicit ScopedRegistryTarget(ProxySQL_PluginManager* mgr) {
 		g_registry_target = mgr;
+		g_registry_callback_target = mgr;
 		g_registry_registration_failed = false;
 		g_registry_registration_error.clear();
 	}
 	~ScopedRegistryTarget() {
 		g_registry_target = nullptr;
+		g_registry_callback_target = nullptr;
 		g_registry_registration_failed = false;
 		g_registry_registration_error.clear();
 	}
@@ -262,11 +269,20 @@ bool uninstall_server_discovery_controller_service(ProxySQL_ServerProtocol proto
 }
 
 bool post_server_desired_set_service(ProxySQL_ServerDesiredSet desired_set) {
-	if (g_registry_target == nullptr) {
-		proxy_warning("Server desired-set submission attempted outside plugin init phase\n");
+	// Registration remains lifecycle-gated, but discovery providers may retain
+	// this submission callback for their steady-state worker threads.  Init
+	// callbacks use the thread-local registry seam; after publication workers
+	// hold the active-manager shared lifetime lock through the acknowledgement.
+	if (g_registry_callback_target != nullptr) {
+		return g_registry_callback_target->post_server_desired_set(std::move(desired_set));
+	}
+	std::shared_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
+	ProxySQL_PluginManager* manager = g_active_plugin_manager.load(std::memory_order_acquire);
+	if (manager == nullptr) {
+		proxy_warning("Server desired-set submission attempted without an active plugin manager\n");
 		return false;
 	}
-	return g_registry_target->post_server_desired_set(std::move(desired_set));
+	return manager->post_server_desired_set(std::move(desired_set));
 }
 #endif /* PROXYSQL40 */
 
@@ -960,25 +976,45 @@ int server_protocol_index(ProxySQL_ServerProtocol protocol) {
 // exceptions cannot leave retirement blocked on a leaked lease.
 class ScopedServerCallbackLease {
 public:
-	ScopedServerCallbackLease(std::mutex &mutex, std::condition_variable &cv,
-		size_t *leases, int index)
-		: mutex_(mutex), cv_(cv), leases_(leases), index_(index) {}
-	~ScopedServerCallbackLease() {
-		{
-			std::lock_guard<std::mutex> lock(mutex_);
-			--leases_[index_];
-		}
-		cv_.notify_all();
-	}
+	explicit ScopedServerCallbackLease(std::function<void()> release)
+		: release_(std::move(release)) {}
+	~ScopedServerCallbackLease() { release_(); }
 	ScopedServerCallbackLease(const ScopedServerCallbackLease&) = delete;
 	ScopedServerCallbackLease& operator=(const ScopedServerCallbackLease&) = delete;
 
 private:
-	std::mutex &mutex_;
-	std::condition_variable &cv_;
-	size_t *leases_;
-	int index_;
+	std::function<void()> release_;
 };
+
+struct ServerCallbackContext {
+	ProxySQL_PluginManager *manager;
+	int protocol_index;
+	ServerCallbackContext *previous;
+};
+
+thread_local ServerCallbackContext *g_server_controller_callback = nullptr;
+
+class ScopedServerControllerCallbackContext {
+public:
+	ScopedServerControllerCallbackContext(ProxySQL_PluginManager *manager, int protocol_index)
+		: context_ {manager, protocol_index, g_server_controller_callback} {
+		g_server_controller_callback = &context_;
+	}
+	~ScopedServerControllerCallbackContext() {
+		g_server_controller_callback = context_.previous;
+	}
+	ScopedServerControllerCallbackContext(const ScopedServerControllerCallbackContext&) = delete;
+	ScopedServerControllerCallbackContext& operator=(const ScopedServerControllerCallbackContext&) = delete;
+
+private:
+	ServerCallbackContext context_;
+};
+
+bool is_current_server_controller_callback(ProxySQL_PluginManager *manager, int protocol_index) {
+	return g_server_controller_callback != nullptr &&
+		g_server_controller_callback->manager == manager &&
+		g_server_controller_callback->protocol_index == protocol_index;
+}
 
 void log_server_callback_exception(const char *boundary, const std::exception &e) {
 	proxy_warning("Server discovery %s callback threw: %s\n", boundary, e.what());
@@ -989,6 +1025,43 @@ void log_server_callback_unknown_exception(const char *boundary) {
 }
 
 } // namespace
+
+void ProxySQL_PluginManager::finalize_server_controller_retirement(
+	registered_server_controller_t retired) {
+	try {
+		retired.controller->shutdown();
+	} catch (const std::exception &e) {
+		log_server_callback_exception("controller shutdown", e);
+	} catch (...) {
+		log_server_callback_unknown_exception("controller shutdown");
+	}
+	try {
+		retired.destroy(retired.controller);
+	} catch (const std::exception &e) {
+		log_server_callback_exception("controller destroy", e);
+	} catch (...) {
+		log_server_callback_unknown_exception("controller destroy");
+	}
+	if (retired.module_handle != nullptr) dlclose(retired.module_handle);
+}
+
+void ProxySQL_PluginManager::release_server_callback_lease(int index) {
+	registered_server_controller_t deferred_retirement {};
+	{
+		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+		assert(server_callback_leases_[index] > 0);
+		--server_callback_leases_[index];
+		if (server_callback_leases_[index] == 0 &&
+			retired_server_controllers_[index].controller != nullptr) {
+			deferred_retirement = retired_server_controllers_[index];
+			retired_server_controllers_[index] = {};
+		}
+	}
+	server_discovery_cv_.notify_all();
+	if (deferred_retirement.controller != nullptr) {
+		finalize_server_controller_retirement(deferred_retirement);
+	}
+}
 
 bool ProxySQL_PluginManager::register_server_module(
 	ProxySQL_ServerModuleHooks *module,
@@ -1005,17 +1078,38 @@ bool ProxySQL_PluginManager::register_server_module(
 	return true;
 }
 
+void ProxySQL_PluginManager::set_server_retirement_observer_for_test(
+	server_retirement_observer_for_test_cb observer, void *opaque) {
+	std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+	server_retirement_observer_for_test_ = observer;
+	server_retirement_observer_opaque_for_test_ = opaque;
+}
+
 bool ProxySQL_PluginManager::unregister_server_module(ProxySQL_ServerProtocol protocol) {
 	const int index = server_protocol_index(protocol);
 	if (index < 0) return false;
 	registered_server_module_t retired {};
-	{
-		std::unique_lock<std::mutex> lock(server_discovery_mutex_);
-		if (server_modules_[index].module == nullptr) return false;
-		retired = server_modules_[index];
-		server_modules_[index] = {};
-		server_discovery_cv_.wait(lock, [&] { return server_callback_leases_[index] == 0; });
+	server_retirement_observer_for_test_cb observer = nullptr;
+	void *observer_opaque = nullptr;
+	std::unique_lock<std::mutex> lock(server_discovery_mutex_);
+	if (server_modules_[index].module == nullptr) return false;
+	retired = server_modules_[index];
+	server_modules_[index] = {};
+	observer = server_retirement_observer_for_test_;
+	observer_opaque = server_retirement_observer_opaque_for_test_;
+	if (observer != nullptr) {
+		// The test seam intentionally observes retirement only after detaching
+		// the registry entry and never while holding the mutex destroy needs.
+		lock.unlock();
+		try {
+			observer(protocol, false, observer_opaque);
+		} catch (...) {
+			proxy_warning("Server discovery test retirement observer threw\n");
+		}
+		lock.lock();
 	}
+	server_discovery_cv_.wait(lock, [&] { return server_callback_leases_[index] == 0; });
+	lock.unlock();
 	try {
 		retired.destroy(retired.module);
 	} catch (const std::exception &e) {
@@ -1046,8 +1140,8 @@ bool ProxySQL_PluginManager::install_server_discovery_controller(
 		}
 	}
 	if (notify) {
-		ScopedServerCallbackLease lease(server_discovery_mutex_, server_discovery_cv_,
-			server_callback_leases_, index);
+		ScopedServerCallbackLease lease([this, index] { release_server_callback_lease(index); });
+		ScopedServerControllerCallbackContext callback_context(this, index);
 		try {
 			controller->runtime_configuration_installed(std::move(snapshot));
 		} catch (const std::exception &e) {
@@ -1063,28 +1157,21 @@ bool ProxySQL_PluginManager::uninstall_server_discovery_controller(ProxySQL_Serv
 	const int index = server_protocol_index(protocol);
 	if (index < 0) return false;
 	registered_server_controller_t retired {};
+	bool defer_retirement = false;
 	{
 		std::unique_lock<std::mutex> lock(server_discovery_mutex_);
 		if (server_controllers_[index].controller == nullptr) return false;
 		retired = server_controllers_[index];
 		server_controllers_[index] = {};
-		server_discovery_cv_.wait(lock, [&] { return server_callback_leases_[index] == 0; });
+		defer_retirement = is_current_server_controller_callback(this, index);
+		if (defer_retirement) {
+			assert(retired_server_controllers_[index].controller == nullptr);
+			retired_server_controllers_[index] = retired;
+		} else {
+			server_discovery_cv_.wait(lock, [&] { return server_callback_leases_[index] == 0; });
+		}
 	}
-	try {
-		retired.controller->shutdown();
-	} catch (const std::exception &e) {
-		log_server_callback_exception("controller shutdown", e);
-	} catch (...) {
-		log_server_callback_unknown_exception("controller shutdown");
-	}
-	try {
-		retired.destroy(retired.controller);
-	} catch (const std::exception &e) {
-		log_server_callback_exception("controller destroy", e);
-	} catch (...) {
-		log_server_callback_unknown_exception("controller destroy");
-	}
-	if (retired.module_handle != nullptr) dlclose(retired.module_handle);
+	if (!defer_retirement) finalize_server_controller_retirement(retired);
 	return true;
 }
 
@@ -1098,8 +1185,8 @@ bool ProxySQL_PluginManager::post_server_desired_set(ProxySQL_ServerDesiredSet d
 		if (controller != nullptr) ++server_callback_leases_[index];
 	}
 	if (controller != nullptr) {
-		ScopedServerCallbackLease lease(server_discovery_mutex_, server_discovery_cv_,
-			server_callback_leases_, index);
+		ScopedServerCallbackLease lease([this, index] { release_server_callback_lease(index); });
+		ScopedServerControllerCallbackContext callback_context(this, index);
 		try {
 			controller->desired_set_applied(desired_set.generation, false);
 		} catch (const std::exception &e) {
@@ -1125,8 +1212,7 @@ void ProxySQL_PluginManager::install_server_runtime_snapshot(ProxySQL_ServerRunt
 		if (module != nullptr || controller != nullptr) ++server_callback_leases_[index];
 	}
 	if (module != nullptr || controller != nullptr) {
-		ScopedServerCallbackLease lease(server_discovery_mutex_, server_discovery_cv_,
-			server_callback_leases_, index);
+		ScopedServerCallbackLease lease([this, index] { release_server_callback_lease(index); });
 		if (module != nullptr) {
 			try {
 				module->runtime_configuration_installed(module->opaque, snapshot);
@@ -1137,6 +1223,7 @@ void ProxySQL_PluginManager::install_server_runtime_snapshot(ProxySQL_ServerRunt
 			}
 		}
 		if (controller != nullptr) {
+			ScopedServerControllerCallbackContext callback_context(this, index);
 			try {
 				controller->runtime_configuration_installed(std::move(snapshot));
 			} catch (const std::exception &e) {
