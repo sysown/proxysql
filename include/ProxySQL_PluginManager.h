@@ -261,6 +261,7 @@ std::vector<ProxySQL_ServerModuleTable> proxysql_active_server_module_tables(
 bool proxysql_prepare_active_server_module_runtime(const ProxySQL_ServerModuleSnapshot& snapshot,
 	std::vector<ProxySQL_ServerHostgroupClaim>& claims, std::string& error);
 void proxysql_commit_active_server_module_runtime(ProxySQL_ServerProtocol protocol, uint64_t generation);
+void proxysql_install_active_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot);
 SQLite3_result* proxysql_active_server_module_runtime_table_snapshot(
 	ProxySQL_ServerProtocol protocol, const char* table_name);
 

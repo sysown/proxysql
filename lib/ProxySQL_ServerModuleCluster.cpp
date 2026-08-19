@@ -485,7 +485,7 @@ bool proxysql_prepare_server_module_cluster_runtime(
 			std::unique_ptr<SQLite3_result>(new SQLite3_result(table.rows.get()))});
 	}
 	std::vector<ProxySQL_ServerHostgroupClaim> claims;
-	return proxysql_prepare_active_server_module_runtime(snapshot, claims, error);
+	return proxysql_prepare_server_runtime_install(snapshot, claims, error);
 }
 
 #endif /* PROXYSQL40 */

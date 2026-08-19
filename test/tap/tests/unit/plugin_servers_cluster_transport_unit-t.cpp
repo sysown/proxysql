@@ -19,6 +19,13 @@ extern ProxySQL_Admin* GloAdmin;
 extern ProxySQL_Cluster* GloProxyCluster;
 extern ProxySQL_Statistics* GloProxyStats;
 
+// Declared here before the production selector exists so the focused test
+// proves that the new peer-affiliation decision is really added.
+bool proxysql_server_module_peer_is_ready_for_selection(
+	const ProxySQL_Checksum_Value_2& module_state,
+	const ProxySQL_Checksum_Value_2& legacy_server_state,
+	unsigned int threshold);
+
 namespace {
 
 std::unique_ptr<SQLite3_result> query(SQLite3DB& db, const std::string& sql) {
@@ -86,7 +93,7 @@ bool set_checksums_finishes_while_pull_mutex_is_held(ProxySQL_Node_Entry& node,
 } // namespace
 
 int main() {
-	plan(49);
+	plan(55);
 	SQLite3DB source;
 	SQLite3DB destination;
 	source.open((char*)"file:module-cluster-source?mode=memory&cache=private", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI);
@@ -199,6 +206,15 @@ int main() {
 	ok(core && proxysql_prepare_server_module_cluster_runtime(ProxySQL_ServerProtocol::mysql, 7,
 		*core, std::vector<ProxySQL_ServerModuleClusterTable>{}, error),
 		"v1 runtime preparation accepts the transported core snapshot without storing a projection");
+	auto copied_runtime = proxysql_server_runtime_snapshot_from_rows(
+		ProxySQL_ServerProtocol::mysql, 7, *core);
+	ok(copied_runtime.generation == 7 && copied_runtime.servers.size() == 1 &&
+		copied_runtime.servers[0].hostname == "db" && copied_runtime.servers[0].gtid_port == 0 &&
+		copied_runtime.servers[0].comment == "core",
+		"v1 commit snapshot deep-copies the complete transported MySQL core row");
+	auto empty_core = query(source, "SELECT * FROM mysql_plugin_alpha LIMIT 0");
+	ok(proxysql_server_runtime_snapshot_from_rows(ProxySQL_ServerProtocol::pgsql, 8, *empty_core).servers.empty(),
+		"zero-server runtime installation retains an explicit empty snapshot");
 
 	std::vector<ProxySQL_ServerModuleTable> local_registry {
 		{ProxySQL_ServerProtocol::mysql, "mysql_plugin_alpha", "runtime_mysql_plugin_alpha", "writer,reader"},
@@ -368,6 +384,24 @@ int main() {
 	ok(independent_diff.checksums_values.server_module_mysql_v1.diff_check == 0 &&
 		independent_diff.checksums_values.mysql_servers.diff_check == 0,
 		"matching valid module checksum resets only its independent selector counter");
+
+	// A module-ready peer starts at legacy Servers version one while a competing
+	// old peer advertises a newer legacy epoch.  All four dynamic paths must use
+	// the side-channel state as their selector; legacy state only validates the
+	// selected peer's core payload.
+	ProxySQL_Checksum_Value_2 stale_legacy {};
+	stale_legacy.version = 9;
+	stale_legacy.epoch = 900;
+	stale_legacy.diff_check = 99;
+	for (const char* path : {"mysql-v1", "mysql-v2", "pgsql-v1", "pgsql-v2"}) {
+		ProxySQL_Checksum_Value_2 fresh_module {};
+		fresh_module.version = 1;
+		fresh_module.diff_check = 1;
+		const std::string message = std::string(path) +
+			" selects a fresh/version-one module peer despite conflicting legacy epoch";
+		ok(proxysql_server_module_peer_is_ready_for_selection(fresh_module, stale_legacy, 1),
+			"%s", message.c_str());
+	}
 
 	GloAdmin = nullptr;
 	admin->admindb = nullptr;

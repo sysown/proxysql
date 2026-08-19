@@ -45,6 +45,15 @@ struct ProxySQL_ServerDesiredSet {
 	ProxySQL_ServerPersistence persistence { ProxySQL_ServerPersistence::runtime_only };
 };
 
+bool proxysql_prepare_server_runtime_install(const ProxySQL_ServerRuntimeSnapshot& snapshot);
+// Preparation is intentionally side-effect free.  A failed policy must not
+// consume an installed generation, so callers use this candidate only while
+// validating and reserve the generation at the post-HGM commit point.
+uint64_t proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol protocol);
+void proxysql_commit_server_runtime_install(ProxySQL_ServerRuntimeSnapshot snapshot);
+ProxySQL_ServerRuntimeSnapshot proxysql_server_runtime_snapshot_from_rows(
+	ProxySQL_ServerProtocol protocol, uint64_t generation, const SQLite3_result& rows);
+
 // Synchronous callbacks used by core while it commits configuration. The
 // opaque value is plugin-owned and is returned unchanged on every call.
 struct ProxySQL_ServerModuleTable {
@@ -68,6 +77,9 @@ struct ProxySQL_ServerModuleSnapshot {
 	ProxySQL_ServerRuntimeSnapshot runtime;
 	std::vector<ProxySQL_ServerModuleTableSnapshot> module_tables;
 };
+
+bool proxysql_prepare_server_runtime_install(const ProxySQL_ServerModuleSnapshot& snapshot,
+	std::vector<ProxySQL_ServerHostgroupClaim>& claims, std::string& error);
 
 struct ProxySQL_ServerModuleHooks {
 	// Keep this ABI-9 prefix immutable: retained modules compiled against the

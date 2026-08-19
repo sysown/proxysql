@@ -250,45 +250,18 @@ static bool save_registered_server_module_runtime_tables(SQLite3DB* db,
 }
 
 static bool prepare_registered_server_module_runtime(SQLite3DB* db,
-	ProxySQL_ServerProtocol protocol, uint64_t generation) {
+	ProxySQL_ServerProtocol protocol, uint64_t generation,
+	const SQLite3_result* core_rows, ProxySQL_ServerRuntimeSnapshot& installed_snapshot) {
 #ifdef PROXYSQL40
 	ProxySQL_ServerModuleSnapshot snapshot {};
 	snapshot.runtime.protocol = protocol;
 	snapshot.runtime.generation = generation;
-	char* runtime_error = nullptr;
-	int runtime_columns = 0;
-	int runtime_affected_rows = 0;
-	SQLite3_result* runtime_rows = nullptr;
-	const char* runtime_sql = protocol == ProxySQL_ServerProtocol::mysql
-		? "SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM main.mysql_servers ORDER BY hostgroup_id,hostname,port"
-		: "SELECT hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM main.pgsql_servers ORDER BY hostgroup_id,hostname,port";
-	db->execute_statement(runtime_sql, &runtime_error, &runtime_columns, &runtime_affected_rows, &runtime_rows);
-	if (runtime_error != nullptr) {
-		proxy_error("Error preparing core server snapshot: %s\n", runtime_error);
-		free(runtime_error);
-		if (runtime_rows != nullptr) delete runtime_rows;
+	const int expected_core_columns = protocol == ProxySQL_ServerProtocol::mysql ? 12 : 11;
+	if (core_rows == nullptr || core_rows->columns != expected_core_columns) {
+		proxy_error("Malformed core server snapshot while preparing plugin runtime\n");
 		return false;
 	}
-	if (runtime_rows != nullptr) {
-		for (const auto* row : runtime_rows->rows) {
-			ProxySQL_ServerRow server {};
-			server.hostgroup_id = static_cast<uint32_t>(strtoul(row->fields[0], nullptr, 10));
-			server.hostname = row->fields[1] ? row->fields[1] : "";
-			server.port = static_cast<uint16_t>(strtoul(row->fields[2], nullptr, 10));
-			const int offset = protocol == ProxySQL_ServerProtocol::mysql ? 1 : 0;
-			server.gtid_port = offset ? atoi(row->fields[3]) : 0;
-			server.status = row->fields[3 + offset] ? row->fields[3 + offset] : "";
-			server.weight = atoll(row->fields[4 + offset]);
-			server.compression = atoi(row->fields[5 + offset]);
-			server.max_connections = atoll(row->fields[6 + offset]);
-			server.max_replication_lag = atoll(row->fields[7 + offset]);
-			server.use_ssl = atoi(row->fields[8 + offset]);
-			server.max_latency_ms = atoll(row->fields[9 + offset]);
-			server.comment = row->fields[10 + offset] ? row->fields[10 + offset] : "";
-			snapshot.runtime.servers.push_back(std::move(server));
-		}
-		delete runtime_rows;
-	}
+	snapshot.runtime = proxysql_server_runtime_snapshot_from_rows(protocol, generation, *core_rows);
 	for (const auto& table : proxysql_active_server_module_tables(protocol)) {
 		char* error = nullptr;
 		int columns = 0;
@@ -306,10 +279,11 @@ static bool prepare_registered_server_module_runtime(SQLite3DB* db,
 	}
 	std::vector<ProxySQL_ServerHostgroupClaim> claims;
 	std::string error;
-	if (!proxysql_prepare_active_server_module_runtime(snapshot, claims, error)) {
+	if (!proxysql_prepare_server_runtime_install(snapshot, claims, error)) {
 		proxy_error("Plugin server module rejected configuration: %s\n", error.c_str());
 		return false;
 	}
+	installed_snapshot = std::move(snapshot.runtime);
 	return true;
 #else
 	(void)db; (void)protocol; (void)generation;
@@ -317,11 +291,11 @@ static bool prepare_registered_server_module_runtime(SQLite3DB* db,
 #endif
 }
 
-static void commit_registered_server_module_runtime(ProxySQL_ServerProtocol protocol, uint64_t generation) {
+static void commit_registered_server_module_runtime(ProxySQL_ServerRuntimeSnapshot snapshot) {
 #ifdef PROXYSQL40
-	proxysql_commit_active_server_module_runtime(protocol, generation);
+	proxysql_commit_server_runtime_install(std::move(snapshot));
 #else
-	(void)protocol; (void)generation;
+	(void)snapshot;
 #endif
 }
 
@@ -8176,8 +8150,10 @@ void ProxySQL_Admin::load_scheduler_to_runtime() {
 void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers, 
 	const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server, const mysql_servers_v2_checksum_t& peer_mysql_server_v2) {
 	// make sure that the caller has called mysql_servers_wrlock()
-	const uint64_t module_generation = monotonic_time();
-	if (!prepare_registered_server_module_runtime(admindb, ProxySQL_ServerProtocol::mysql, module_generation)) return;
+	ProxySQL_ServerRuntimeSnapshot installed_snapshot {};
+	installed_snapshot.protocol = ProxySQL_ServerProtocol::mysql;
+	installed_snapshot.generation = proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::mysql);
+	bool runtime_install_prepared = false;
 	char *error=NULL;
 	int cols=0;
 	int affected_rows=0;
@@ -8212,6 +8188,9 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
+		if (!prepare_registered_server_module_runtime(admindb, ProxySQL_ServerProtocol::mysql,
+			installed_snapshot.generation, resultset_servers, installed_snapshot)) return;
+		runtime_install_prepared = true;
 		MyHGM->servers_add(resultset_servers);
 	}
 	// memory leak was detected here. The following few lines fix that
@@ -8403,7 +8382,8 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 		{ incoming_mysql_servers_v2, peer_mysql_server_v2 },
 		false, true
 	);
-	commit_registered_server_module_runtime(ProxySQL_ServerProtocol::mysql, module_generation);
+	if (runtime_install_prepared)
+		commit_registered_server_module_runtime(std::move(installed_snapshot));
 	
 	// quering runtime table will update and return latest records, so this is not needed.
 	// GloAdmin->save_mysql_servers_runtime_to_database(true);
@@ -8442,8 +8422,10 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t& incoming_pgsql_servers,
 	const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server, const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2) {
 	// make sure that the caller has called pgsql_servers_wrlock()
-	const uint64_t module_generation = monotonic_time();
-	if (!prepare_registered_server_module_runtime(admindb, ProxySQL_ServerProtocol::pgsql, module_generation)) return;
+	ProxySQL_ServerRuntimeSnapshot installed_snapshot {};
+	installed_snapshot.protocol = ProxySQL_ServerProtocol::pgsql;
+	installed_snapshot.generation = proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::pgsql);
+	bool runtime_install_prepared = false;
 	char* error = NULL;
 	int cols = 0;
 	int affected_rows = 0;
@@ -8470,6 +8452,9 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 		proxy_error("Error on %s : %s\n", query, error);
 	}
 	else {
+		if (!prepare_registered_server_module_runtime(admindb, ProxySQL_ServerProtocol::pgsql,
+			installed_snapshot.generation, resultset_servers, installed_snapshot)) return;
+		runtime_install_prepared = true;
 		PgHGM->servers_add(resultset_servers);
 	}
 	// memory leak was detected here. The following few lines fix that
@@ -8555,7 +8540,8 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 		{ incoming_pgsql_servers_v2, peer_pgsql_server_v2 },
 		false, true
 	);
-	commit_registered_server_module_runtime(ProxySQL_ServerProtocol::pgsql, module_generation);
+	if (runtime_install_prepared)
+		commit_registered_server_module_runtime(std::move(installed_snapshot));
 
 	// quering runtime table will update and return latest records, so this is not needed.
 	// GloAdmin->save_pgsql_servers_runtime_to_database(true);

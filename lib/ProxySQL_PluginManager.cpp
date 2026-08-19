@@ -1702,6 +1702,11 @@ void proxysql_commit_active_server_module_runtime(ProxySQL_ServerProtocol protoc
 	if (pin.manager() != nullptr) pin.manager()->commit_server_module_runtime(protocol, generation);
 }
 
+void proxysql_install_active_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot) {
+	ScopedActiveManagerPin pin;
+	if (pin.manager() != nullptr) pin.manager()->install_server_runtime_snapshot(std::move(snapshot));
+}
+
 SQLite3_result* proxysql_active_server_module_runtime_table_snapshot(
 	ProxySQL_ServerProtocol protocol, const char* table_name) {
 	ScopedActiveManagerPin pin;

@@ -232,6 +232,14 @@ class ProxySQL_Checksum_Value_2: public ProxySQL_Checksum_Value {
 	}
 };
 
+// Dynamic server-module capability is independent from the legacy Servers
+// version/epoch.  The latter validates only the core payload once a peer has
+// been selected through its corresponding module poll.
+bool proxysql_server_module_peer_is_ready_for_selection(
+	const ProxySQL_Checksum_Value_2& module_state,
+	const ProxySQL_Checksum_Value_2& legacy_server_state,
+	unsigned int threshold);
+
 class ProxySQL_Node_Metrics {
 	public:
 	unsigned long long read_time_us;
