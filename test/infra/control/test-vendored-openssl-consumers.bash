@@ -121,6 +121,7 @@ for platform in Linux Darwin; do
 	assert_contains "${postgres_output}" "--with-includes=${openssl_root}/include" "PostgreSQL/${platform}"
 	assert_contains "${postgres_output}" "--with-libraries=${openssl_root}" "PostgreSQL/${platform}"
 	assert_contains "${postgres_output}" "LIBS=${ssl_archive} ${crypto_archive}" "PostgreSQL/${platform}"
+	assert_contains "${postgres_output}" "MAKELEVEL=0 libpq.a" "PostgreSQL/${platform}"
 	assert_no_system_openssl "${postgres_output}" "PostgreSQL/${platform}"
 
 	libusual_output=$(dry_run "${repo_root}/deps" libusual "${platform}")

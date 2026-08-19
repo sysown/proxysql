@@ -423,7 +423,7 @@ ifeq ($(UNAME_S),Darwin)
 else
 	cd postgresql/postgresql && LIBS="$(OPENSSL_STATIC_LIBS)" LDFLAGS="-L$(SSL_LDIR)" ./configure --with-ssl=openssl --with-includes="$(SSL_IDIR)" --with-libraries="$(SSL_LDIR)" --without-readline
 endif
-	cd postgresql/postgresql/src/interfaces/libpq && CC=${CC} CXX=${CXX} ${MAKE} MAKELEVEL=0
+	cd postgresql/postgresql/src/interfaces/libpq && CC=${CC} CXX=${CXX} ${MAKE} MAKELEVEL=0 libpq.a
 
 postgresql: postgresql/postgresql/src/interfaces/libpq/libpq.a
 
