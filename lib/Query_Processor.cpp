@@ -44,14 +44,14 @@ extern ProxySQL_Admin *GloAdmin;
 
 namespace {
 
-bool translate_pcrecpp_rewrite(const char* legacy_rewrite, std::string* pcre2_rewrite) {
+bool translate_legacy_rewrite(const char* legacy_rewrite, std::string* pcre2_rewrite) {
 	if (legacy_rewrite == nullptr || pcre2_rewrite == nullptr) return false;
 
 	pcre2_rewrite->clear();
 	for (const char* cursor = legacy_rewrite; *cursor != '\0'; ++cursor) {
 		if (*cursor != '\\') {
 			if (*cursor == '$') {
-				// Dollar is literal in pcrecpp rewrites and special to PCRE2.
+				// Dollar is literal in legacy rewrites and special to PCRE2.
 				pcre2_rewrite->append("$$");
 			} else {
 				pcre2_rewrite->push_back(*cursor);
@@ -161,8 +161,8 @@ bool Pcre2Regex::replace(
 	if (!valid() || subject == nullptr || legacy_rewrite == nullptr) return false;
 
 	std::string pcre2_rewrite;
-	if (!translate_pcrecpp_rewrite(legacy_rewrite, &pcre2_rewrite)) {
-		proxy_error("PCRE2 replacement rejected an unsupported pcrecpp escape\n");
+	if (!translate_legacy_rewrite(legacy_rewrite, &pcre2_rewrite)) {
+		proxy_error("PCRE2 replacement rejected an unsupported legacy escape\n");
 		return false;
 	}
 
