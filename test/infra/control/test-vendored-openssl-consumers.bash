@@ -6,6 +6,7 @@ repo_root=$(CDPATH='' cd -- "${script_dir}/../../.." && pwd)
 openssl_root="${repo_root}/deps/libssl/openssl"
 ssl_archive="${openssl_root}/libssl.a"
 crypto_archive="${openssl_root}/libcrypto.a"
+test_mariadb_archive="${repo_root}/test/deps/mariadb-connector-c/mariadb-connector-c/libmariadb/libmariadbclient.a"
 created_stubs=()
 
 cleanup() {
@@ -62,6 +63,20 @@ assert_contains() {
 	local context=$3
 	[[ "${output}" == *"${expected}"* ]] || \
 		fail "${context} is missing '${expected}'"
+}
+
+assert_in_order() {
+	local output=$1
+	local context=$2
+	shift 2
+	local expected
+	local remainder=${output}
+
+	for expected in "$@"; do
+		[[ "${remainder}" == *"${expected}"* ]] || \
+			fail "${context} does not contain '${expected}' after the preceding link input"
+		remainder=${remainder#*"${expected}"}
+	done
 }
 
 assert_vendored_first() {
@@ -161,6 +176,13 @@ for platform in Linux Darwin; do
 		fi
 		assert_no_system_openssl "${test_mysql_output}" "test ${target}/${platform}"
 	done
+
+	eof_workload_output=$(dry_run \
+		"${repo_root}/test/tap/tests_with_deps/deprecate_eof_support" \
+		eof_cache_conversion_workload-t "${platform}")
+	assert_in_order "${eof_workload_output}" "EOF conversion workload/${platform}" \
+		'-ltap' "${test_mariadb_archive}" "${ssl_archive}" "${crypto_archive}"
+	assert_no_system_openssl "${eof_workload_output}" "EOF conversion workload/${platform}"
 done
 
 echo "Vendored OpenSSL consumer contract tests passed"
