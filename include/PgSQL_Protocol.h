@@ -784,9 +784,11 @@ public:
 	 * messages and a ready-for-query message.
 	 *
 	 * @note This function updates the output buffer with the welcome message
-	 *       data. It also sets the session state to `STATE_CLIENT_AUTH_OK`.
+	 *       data. The caller updates the session state after a successful return.
+	 * @return true when the complete message was queued, false if generating the
+	 *         cancel key failed.
 	 */
-	void welcome_client();
+	bool welcome_client();
 
 	/**
 	 * @brief Generates an error packet for the PostgreSQL protocol.

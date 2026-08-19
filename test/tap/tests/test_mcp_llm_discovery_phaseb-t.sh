@@ -23,13 +23,13 @@ if [[ ! -f "${HELPERS}" ]]; then
 fi
 source "${HELPERS}"
 
-TARGET_ID="${MCP_TARGET_ID:-mysql-127.0.0.1-13306}"
-MYSQL_SCHEMA="${MYSQL_DATABASE:-ffto_db}"
+TARGET_ID="${MCP_TARGET_ID:-tap_mysql_default}"
+MYSQL_SCHEMA="${MYSQL_DATABASE:-test}"
 
 RUN_ID=""
 AGENT_RUN_ID=""
 OBJECT_ID=""
-UNIQ_KEY="tap_phaseb_$(date +%s)"
+UNIQ_KEY="tap_phaseb_$(date +%s)_$$"
 
 tap_ok() {
     DONE=$((DONE + 1))
@@ -91,16 +91,13 @@ echo "msg: # No external LLM credentials required - CI-safe validation."
 echo "msg: # ========================================================"
 echo "msg: #"
 
-# Enable MCP via Admin
-echo "msg: # Enabling MCP and registering targets via Admin interface..." >&2
-exec_admin_silent "UPDATE global_variables SET variable_value='true' WHERE variable_name='mcp-enabled'; UPDATE global_variables SET variable_value='false' WHERE variable_name='mcp-use_ssl'; INSERT OR REPLACE INTO mcp_auth_profiles (auth_profile_id, db_username, db_password) VALUES ('default_mysql', 'root', 'root'); INSERT OR REPLACE INTO mcp_target_profiles (target_id, protocol, hostgroup_id, auth_profile_id) VALUES ('${TARGET_ID}', 'mysql', 0, 'default_mysql');"
-exec_admin_silent "LOAD MCP VARIABLES TO RUNTIME; LOAD MCP PROFILES TO RUNTIME;"
-
-# Override get_endpoint_url to use http since we disabled SSL
-get_endpoint_url() {
-    local endpoint="$1"
-    echo "http://${MCP_HOST}:${MCP_PORT}/mcp/${endpoint}"
-}
+if ! require_mcp_prerequisites; then
+    for _ in $(seq 1 "${PLAN}"); do
+        tap_not_ok "MCP shell prerequisites are available"
+    done
+    tap_finish
+    exit $?
+fi
 
 if check_proxysql_admin; then
     tap_ok "ProxySQL admin reachable"
@@ -260,13 +257,9 @@ if [[ -n "${RUN_ID}" && -n "${AGENT_RUN_ID}" && -n "${OBJECT_ID}" ]]; then
         tap_not_ok "agent.run_finish succeeds" "${finish_resp}"
     fi
 else
-    for i in {7..12}; do
+    for i in {7..14}; do
         tap_skip "skipping remaining tests" "previous setup failure"
     done
 fi
 
-if [[ "${FAIL}" -ne 0 ]]; then
-    echo "msg: # FAILURES=${FAIL}/${PLAN}"
-    exit 1
-fi
-exit 0
+tap_finish

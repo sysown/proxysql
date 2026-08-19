@@ -1787,7 +1787,9 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		if (admin) {
 			if (dump_global_variables) {
 				pthread_mutex_lock(&GloVars.checksum_mutex);
-				admindb->execute("DELETE FROM runtime_global_variables");	// extra
+				// Each core variable flusher below replaces its own namespace.
+				// Preserve rows published by plugins under namespaces core does
+				// not own (for example mcp-*).
 				flush_admin_variables___runtime_to_database(admindb, false, false, false, true);
 				flush_mysql_variables___runtime_to_database(admindb, false, false, false, true);
 #ifdef PROXYSQLTSDB
@@ -2260,7 +2262,9 @@ void *child_mysql(void *arg) {
 	if (__sync_fetch_and_add(&glovars.shutdown,0) != 0) {
 		goto __exit_child_mysql;
 	}
-	sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, false);
+	if (sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, false) == false) {
+		goto __exit_child_mysql;
+	}
 
 	while (__sync_fetch_and_add(&glovars.shutdown,0)==0) {
 		if (myds->available_data_out()) {
@@ -6344,7 +6348,20 @@ void ProxySQL_Admin::send_error_msg_to_client(S* sess, const char *msg, uint16_t
 #ifdef PROXYSQL40
 template <typename S>
 bool ProxySQL_Admin::dispatch_plugin_admin_command(S* sess, const char* sql) {
-	ProxySQL_PluginCommandContext ctx { admindb, configdb, statsdb };
+	ProxySQL_PluginCommandContext ctx {
+		admindb,
+		configdb,
+		statsdb,
+		this,
+		[](void* opaque) {
+			auto* admin = static_cast<ProxySQL_Admin*>(opaque);
+			pthread_mutex_unlock(&admin->sql_query_global_mutex);
+		},
+		[](void* opaque) {
+			auto* admin = static_cast<ProxySQL_Admin*>(opaque);
+			pthread_mutex_lock(&admin->sql_query_global_mutex);
+		}
+	};
 	ProxySQL_PluginCommandResult result { 0, 0, "" };
 	if (!proxysql_dispatch_configured_plugin_admin_command(ctx, sql, result)) {
 		return false;
