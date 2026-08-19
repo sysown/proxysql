@@ -240,6 +240,7 @@ class ProxySQL_Statistics {
 		time_t from,
 		time_t to,
 		const std::string& aggregation = "");
+	SQLite3_result* list_tsdb_metric_names();
 	// Backend health queries
 	SQLite3_result* get_backend_health_metrics(time_t from, time_t to, int hostgroup = -1);
 	// Status
@@ -279,6 +280,20 @@ class ProxySQL_Statistics {
 	bool knows_variable_name(const std::string & variable_name) const;
 
 	private:
+#ifdef PROXYSQLTSDB
+	/** Serialize compound operations performed through the shared TSDB SQLite connection. */
+	pthread_mutex_t tsdb_mutex = PTHREAD_MUTEX_INITIALIZER;
+	void insert_tsdb_metric_unlocked(const std::string& metric_name,
+		const std::map<std::string, std::string>& labels,
+		double value,
+		time_t timestamp);
+	void insert_backend_health_unlocked(int hostgroup,
+		const std::string& hostname,
+		int port,
+		bool probe_up,
+		int connect_ms,
+		time_t timestamp);
+#endif
 	/** @brief Map with the key being the variable_name and the value being the variable_id, used for history_mysql_variables data. Matches the history_mysql_variables_lookup. */
 	std::map<std::string, int64_t> variable_name_id_map;
 	std::mutex mu;

@@ -71,6 +71,7 @@
   "llm_bridge_accuracy-t" : [ "ai-g1","@proxysql_min_version:4.0" ],
   "log_utils_unit-t" : [ "unit-tests-g1" ],
   "max_connections_ff-t" : [ "legacy-g1","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1","mysql84-g1","mysql90-g1","mysql95-g1" ],
+  "mcp_client_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "mcp_mixed_mysql_pgsql_concurrency_stress-t" : [ "ai-g1","@proxysql_min_version:4.0" ],
   "mcp_mixed_stats_cap_churn-t" : [ "ai-g1","@proxysql_min_version:4.0" ],
   "mcp_mixed_stats_profile_matrix-t" : [ "ai-g1","@proxysql_min_version:4.0" ],
