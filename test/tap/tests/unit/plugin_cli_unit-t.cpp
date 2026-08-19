@@ -6,11 +6,15 @@
 #include <memory>
 #include <string>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
 
 #ifndef PROXYSQL_FAKE_PLUGIN_PATH
 #error "PROXYSQL_FAKE_PLUGIN_PATH must be defined"
+#endif
+#ifndef PROXYSQL_BINARY_PATH
+#error "PROXYSQL_BINARY_PATH must be defined"
 #endif
 
 namespace {
@@ -49,6 +53,39 @@ bool copy_file(const std::string& source, const std::string& destination) {
 	std::ofstream output(destination, std::ios::binary);
 	output << input.rdbuf();
 	return input.good() || input.eof() ? output.good() : false;
+}
+
+struct CommandResult {
+	int status {-1};
+	std::string output;
+};
+
+CommandResult run_executable_help(const std::vector<std::string>& args) {
+	int pipefd[2] {-1, -1};
+	if (pipe(pipefd) != 0) return {};
+	const pid_t child = fork();
+	if (child == 0) {
+		(void)dup2(pipefd[1], STDOUT_FILENO);
+		(void)dup2(pipefd[1], STDERR_FILENO);
+		(void)close(pipefd[0]);
+		(void)close(pipefd[1]);
+		setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_CLI", "1", 1);
+		std::vector<char*> argv;
+		for (const auto& arg : args) argv.push_back(const_cast<char*>(arg.c_str()));
+		argv.push_back(nullptr);
+		execv(argv.front(), argv.data());
+		_exit(127);
+	}
+	(void)close(pipefd[1]);
+	CommandResult result;
+	char buffer[1024];
+	ssize_t bytes = 0;
+	while ((bytes = read(pipefd[0], buffer, sizeof(buffer))) > 0) {
+		result.output.append(buffer, static_cast<size_t>(bytes));
+	}
+	(void)close(pipefd[0]);
+	if (child > 0) (void)waitpid(child, &result.status, 0);
+	return result;
 }
 
 void remove_tree(const std::string& root) {
@@ -174,14 +211,42 @@ void test_manager_registers_abi6_options_without_reading_abi5_tail() {
 	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_ABI5_TAIL_GUARD");
 }
 
+void test_executable_help_registers_plugin_options_unless_killed() {
+	const std::string root = make_temp_dir();
+	const std::string plugins = root + "/plugins";
+	(void)mkdir(plugins.c_str(), 0700);
+	const std::string named = plugins + "/proxysql_fake_plugin.so";
+	(void)copy_file(PROXYSQL_FAKE_PLUGIN_PATH, named);
+
+	const std::vector<std::string> enabled_args {
+		PROXYSQL_BINARY_PATH, "--plugin-dir", plugins, "--load-plugin", "fake_plugin", "--help"
+	};
+	const CommandResult enabled = run_executable_help(enabled_args);
+	ok(WIFEXITED(enabled.status) && WEXITSTATUS(enabled.status) == 0,
+	   "executable help with a discovered ABI 6 plugin exits cleanly");
+	ok(enabled.output.find("--fake-plugin-action") != std::string::npos,
+	   "executable help includes the discovered plugin option");
+
+	const std::vector<std::string> disabled_args {
+		PROXYSQL_BINARY_PATH, "--plugin-dir", plugins, "--load-plugin", "fake_plugin", "--no-plugins", "--help"
+	};
+	const CommandResult disabled = run_executable_help(disabled_args);
+	ok(WIFEXITED(disabled.status) && WEXITSTATUS(disabled.status) == 0,
+	   "executable help with --no-plugins exits cleanly");
+	ok(disabled.output.find("--fake-plugin-action") == std::string::npos,
+	   "--no-plugins suppresses the discovered plugin option from executable help");
+	remove_tree(root);
+}
+
 } // namespace
 
 int main() {
-	plan(30);
+	plan(34);
 	test_resolver_rejects_unsafe_names_and_canonicalizes();
 	test_registry_rejects_duplicate_option_names();
 	test_prescan_honors_cli_config_datadir_plugin_dir_and_deduplicates();
 	test_prescan_supports_compact_config_and_no_plugins_kill_switch();
 	test_manager_registers_abi6_options_without_reading_abi5_tail();
+	test_executable_help_registers_plugin_options_unless_killed();
 	return exit_status();
 }
