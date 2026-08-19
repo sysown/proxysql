@@ -131,8 +131,8 @@ int main(int, char**) {
 			"SELECT 1 + 2", "18", "PCRE-compatible mode replaces all matches with GLOBAL");
 		run_rewrite_case(admin.get(), proxy.get(),
 			"INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, replace_pattern, re_modifiers, apply) "
-			"VALUES (61192, 1, '^SELECT ([0-9]+)$', 'SELECT ''\\0:'' || ''\\1''', 'CASELESS', 1)",
-			"SELECT 1", "SELECT 1:1", "PCRE-compatible mode expands legacy whole-match and capture references");
+			"VALUES (61192, 1, '^SELECT ([0-9]+)$', '\\0 + \\1', 'CASELESS', 1)",
+			"SELECT 1", "2", "PCRE-compatible mode expands legacy whole-match and capture references");
 		run_rewrite_case(admin.get(), proxy.get(),
 			"INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, replace_pattern, re_modifiers, apply) "
 			"VALUES (61193, 1, 'TOKEN', '\\\\*/ + 1 /*', 'CASELESS', 1)",
