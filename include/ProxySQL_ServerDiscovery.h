@@ -2,8 +2,12 @@
 #define PROXYSQL_SERVER_DISCOVERY_H
 
 #include <cstdint>
+#include <memory>
 #include <string>
+#include <utility>
 #include <vector>
+
+class SQLite3_result;
 
 enum class ProxySQL_ServerProtocol : uint8_t { mysql = 0, pgsql = 1 };
 enum class ProxySQL_ServerPersistence : uint8_t {
@@ -50,10 +54,45 @@ struct ProxySQL_ServerModuleTable {
 	std::string order_by;
 };
 
+struct ProxySQL_ServerHostgroupClaim {
+	uint32_t writer_hostgroup {0};
+	uint32_t reader_hostgroup {0};
+};
+
+struct ProxySQL_ServerModuleTableSnapshot {
+	std::string table_name;
+	std::unique_ptr<SQLite3_result> rows;
+};
+
+struct ProxySQL_ServerModuleSnapshot {
+	ProxySQL_ServerRuntimeSnapshot runtime;
+	std::vector<ProxySQL_ServerModuleTableSnapshot> module_tables;
+};
+
 struct ProxySQL_ServerModuleHooks {
+	// Keep this ABI-9 prefix immutable: retained modules compiled against the
+	// original callback protocol own exactly these three fields.
 	ProxySQL_ServerProtocol protocol;
 	void (*runtime_configuration_installed)(void *, ProxySQL_ServerRuntimeSnapshot) { nullptr };
 	void *opaque { nullptr };
+
+	// New affiliated modules leave the legacy callback null and populate this
+	// appended callback protocol.  Core never reads beyond the ABI-9 prefix for
+	// legacy modules, so frozen DSOs remain valid.
+	std::vector<ProxySQL_ServerModuleTable> tables;
+	bool (*prepare_runtime)(void *, const ProxySQL_ServerModuleSnapshot&,
+		std::vector<ProxySQL_ServerHostgroupClaim>&, std::string&) { nullptr };
+	void (*commit_runtime)(void *, uint64_t) { nullptr };
+	SQLite3_result* (*runtime_table_snapshot)(void *, const char*) { nullptr };
+	void (*shutdown)(void *) { nullptr };
+
+	ProxySQL_ServerModuleHooks() = default;
+	ProxySQL_ServerModuleHooks(ProxySQL_ServerProtocol value,
+		void (*callback)(void *, ProxySQL_ServerRuntimeSnapshot), void *value_opaque)
+		: protocol(value), runtime_configuration_installed(callback), opaque(value_opaque) {}
+	ProxySQL_ServerModuleHooks(ProxySQL_ServerProtocol value,
+		std::vector<ProxySQL_ServerModuleTable> value_tables)
+		: protocol(value), tables(std::move(value_tables)) {}
 };
 
 class ProxySQL_ServerDiscoveryController {

@@ -203,6 +203,122 @@ static void BQE1(SQLite3DB *db, const vector<string>& tbs, const string& p1, con
 	}
 }
 
+// Server-module tables are ordinary configuration tables.  The registry is
+// intentionally queried at the operation boundary so an unloaded plugin has
+// no schema affiliation and a MySQL operation cannot see PostgreSQL tables.
+static void copy_registered_server_module_tables(SQLite3DB* db,
+	ProxySQL_ServerProtocol protocol, const char* destination, const char* source) {
+#ifdef PROXYSQL40
+	ProxySQL_PluginManager* manager = proxysql_get_plugin_manager();
+	if (manager == nullptr) return;
+	const auto tables = manager->server_module_tables(protocol);
+	if (tables.empty()) return;
+	db->execute("BEGIN");
+	for (const auto& table : tables) {
+		const std::string delete_sql = std::string("DELETE FROM ") + destination + "." + table.table_name;
+		auto [delete_rc, delete_statement] = db->prepare_v2(delete_sql.c_str());
+		if (delete_rc == SQLITE_OK) (*proxy_sqlite3_step)(delete_statement.get());
+		const std::string insert_sql = std::string("INSERT INTO ") + destination + "." + table.table_name +
+			" SELECT * FROM " + source + "." + table.table_name;
+		auto [insert_rc, insert_statement] = db->prepare_v2(insert_sql.c_str());
+		if (insert_rc == SQLITE_OK) (*proxy_sqlite3_step)(insert_statement.get());
+	}
+	db->execute("COMMIT");
+#else
+	(void)db; (void)protocol; (void)destination; (void)source;
+#endif
+}
+
+// Runtime tables are plugin-owned projections.  SAVE ... FROM RUNTIME asks
+// the module for a snapshot and writes that snapshot to its normal MEMORY
+// configuration table; core never persists a runtime projection directly.
+static void save_registered_server_module_runtime_tables(SQLite3DB* db,
+	ProxySQL_ServerProtocol protocol) {
+#ifdef PROXYSQL40
+	ProxySQL_PluginManager* manager = proxysql_get_plugin_manager();
+	if (manager == nullptr) return;
+	const auto tables = manager->server_module_tables(protocol);
+	if (tables.empty()) return;
+	db->execute("BEGIN");
+	for (const auto& table : tables) {
+		std::unique_ptr<SQLite3_result> rows(
+			manager->server_module_runtime_table_snapshot(protocol, table.runtime_table_name.c_str()));
+		const std::string delete_sql = "DELETE FROM main." + table.table_name;
+		auto [delete_rc, delete_statement] = db->prepare_v2(delete_sql.c_str());
+		if (delete_rc == SQLITE_OK) (*proxy_sqlite3_step)(delete_statement.get());
+		if (!rows || rows->columns == 0) continue;
+		std::string values;
+		for (int column = 0; column < rows->columns; ++column) {
+			if (column) values += ',';
+			values += '?' + std::to_string(column + 1);
+		}
+		const std::string insert_sql = "INSERT INTO main." + table.table_name + " VALUES (" + values + ')';
+		auto [insert_rc, insert_statement] = db->prepare_v2(insert_sql.c_str());
+		if (insert_rc != SQLITE_OK) continue;
+		for (const auto* row : rows->rows) {
+			for (int column = 0; column < rows->columns; ++column) {
+				int rc = row->fields[column]
+					? (*proxy_sqlite3_bind_text)(insert_statement.get(), column + 1, row->fields[column], -1, SQLITE_TRANSIENT)
+					: (*proxy_sqlite3_bind_null)(insert_statement.get(), column + 1);
+				if (rc != SQLITE_OK) break;
+			}
+			(*proxy_sqlite3_step)(insert_statement.get());
+			(*proxy_sqlite3_clear_bindings)(insert_statement.get());
+			(*proxy_sqlite3_reset)(insert_statement.get());
+		}
+	}
+	db->execute("COMMIT");
+#else
+	(void)db; (void)protocol;
+#endif
+}
+
+static bool prepare_registered_server_module_runtime(SQLite3DB* db,
+	ProxySQL_ServerProtocol protocol, uint64_t generation) {
+#ifdef PROXYSQL40
+	ProxySQL_PluginManager* manager = proxysql_get_plugin_manager();
+	if (manager == nullptr) return true;
+	ProxySQL_ServerModuleSnapshot snapshot {};
+	snapshot.runtime.protocol = protocol;
+	snapshot.runtime.generation = generation;
+	for (const auto& table : manager->server_module_tables(protocol)) {
+		char* error = nullptr;
+		int columns = 0;
+		int affected_rows = 0;
+		SQLite3_result* rows = nullptr;
+		const std::string sql = "SELECT * FROM main." + table.table_name + " ORDER BY " + table.order_by;
+		db->execute_statement(sql.c_str(), &error, &columns, &affected_rows, &rows);
+		if (error != nullptr) {
+			proxy_error("Error preparing plugin server table %s: %s\n", table.table_name.c_str(), error);
+			free(error);
+			if (rows != nullptr) delete rows;
+			return false;
+		}
+		snapshot.module_tables.push_back({table.table_name, std::unique_ptr<SQLite3_result>(rows)});
+	}
+	std::vector<ProxySQL_ServerHostgroupClaim> claims;
+	std::string error;
+	if (!manager->prepare_server_module_runtime(snapshot, claims, error)) {
+		proxy_error("Plugin server module rejected configuration: %s\n", error.c_str());
+		return false;
+	}
+	return true;
+#else
+	(void)db; (void)protocol; (void)generation;
+	return true;
+#endif
+}
+
+static void commit_registered_server_module_runtime(ProxySQL_ServerProtocol protocol, uint64_t generation) {
+#ifdef PROXYSQL40
+	if (ProxySQL_PluginManager* manager = proxysql_get_plugin_manager()) {
+		manager->commit_server_module_runtime(protocol, generation);
+	}
+#else
+	(void)protocol; (void)generation;
+#endif
+}
+
 
 static int round_intv_to_time_interval(const char* name, int _intv) {
 	int intv = _intv;
@@ -5793,11 +5909,13 @@ int ProxySQL_Admin::flush_debug_levels_database_to_runtime(SQLite3DB *db) {
 void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 	admindb->execute("PRAGMA foreign_keys = OFF");
 	BQE1(admindb, mysql_servers_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
+	copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::mysql, "main", "disk");
 	BQE1(admindb, mysql_query_rules_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_users SELECT * FROM disk.mysql_users");
 	BQE1(admindb, mysql_firewall_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
 
 	BQE1(admindb, pgsql_servers_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
+	copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::pgsql, "main", "disk");
 	BQE1(admindb, pgsql_query_rules_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
 	admindb->execute("INSERT OR REPLACE INTO main.pgsql_users SELECT * FROM disk.pgsql_users");
 	BQE1(admindb, pgsql_firewall_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
@@ -5877,6 +5995,7 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 
 void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
 	BQE1(admindb, mysql_servers_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
+	copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::mysql, "disk", "main");
 	BQE1(admindb, mysql_query_rules_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_users SELECT * FROM main.mysql_users");
 	BQE1(admindb, mysql_firewall_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
@@ -5886,6 +6005,7 @@ void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
 	BQE1(admindb, proxysql_servers_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
 
 	BQE1(admindb, pgsql_servers_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
+	copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::pgsql, "disk", "main");
 	BQE1(admindb, pgsql_query_rules_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
 	admindb->execute("INSERT OR REPLACE INTO disk.pgsql_users SELECT * FROM main.pgsql_users");
 	BQE1(admindb, pgsql_firewall_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
@@ -5985,8 +6105,12 @@ void ProxySQL_Admin::flush_GENERIC__from_to(const string& name, const string& di
 	assert(it != module_tablenames.end());
 	if (direction == "disk_to_memory") {
 		BQE1(admindb, it->second, "DELETE FROM main.", "INSERT INTO main.", " SELECT * FROM disk.");
+		if (name == "mysql_servers") copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::mysql, "main", "disk");
+		if (name == "pgsql_servers") copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::pgsql, "main", "disk");
 	} else if (direction == "memory_to_disk") {
 		BQE1(admindb, it->second, "DELETE FROM disk.", "INSERT INTO disk.", " SELECT * FROM main.");
+		if (name == "mysql_servers") copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::mysql, "disk", "main");
+		if (name == "pgsql_servers") copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::pgsql, "disk", "main");
 	} else {
 		assert(0);
 	}
@@ -7767,6 +7891,9 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 	}
 	if(resultset) delete resultset;
 	resultset=NULL;
+	if (_runtime == false) {
+		save_registered_server_module_runtime_tables(admindb, ProxySQL_ServerProtocol::mysql);
+	}
 }
 
 void ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
@@ -7981,6 +8108,9 @@ void ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 	}
 	if(resultset) delete resultset;
 	resultset=NULL;
+	if (_runtime == false) {
+		save_registered_server_module_runtime_tables(admindb, ProxySQL_ServerProtocol::pgsql);
+	}
 }
 
 
@@ -8003,6 +8133,8 @@ void ProxySQL_Admin::load_scheduler_to_runtime() {
 void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers, 
 	const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server, const mysql_servers_v2_checksum_t& peer_mysql_server_v2) {
 	// make sure that the caller has called mysql_servers_wrlock()
+	const uint64_t module_generation = monotonic_time();
+	if (!prepare_registered_server_module_runtime(admindb, ProxySQL_ServerProtocol::mysql, module_generation)) return;
 	char *error=NULL;
 	int cols=0;
 	int affected_rows=0;
@@ -8228,6 +8360,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 		{ incoming_mysql_servers_v2, peer_mysql_server_v2 },
 		false, true
 	);
+	commit_registered_server_module_runtime(ProxySQL_ServerProtocol::mysql, module_generation);
 	
 	// quering runtime table will update and return latest records, so this is not needed.
 	// GloAdmin->save_mysql_servers_runtime_to_database(true);
@@ -8266,6 +8399,8 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t& incoming_pgsql_servers,
 	const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server, const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2) {
 	// make sure that the caller has called pgsql_servers_wrlock()
+	const uint64_t module_generation = monotonic_time();
+	if (!prepare_registered_server_module_runtime(admindb, ProxySQL_ServerProtocol::pgsql, module_generation)) return;
 	char* error = NULL;
 	int cols = 0;
 	int affected_rows = 0;
@@ -8377,6 +8512,7 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 		{ incoming_pgsql_servers_v2, peer_pgsql_server_v2 },
 		false, true
 	);
+	commit_registered_server_module_runtime(ProxySQL_ServerProtocol::pgsql, module_generation);
 
 	// quering runtime table will update and return latest records, so this is not needed.
 	// GloAdmin->save_pgsql_servers_runtime_to_database(true);

@@ -11,6 +11,7 @@
 #include "MySQL_Thread.h"
 
 #include <atomic>
+#include <algorithm>
 #include <cassert>
 #include <cctype>
 #include <cstring>
@@ -1099,16 +1100,119 @@ void ProxySQL_PluginManager::release_server_callback_lease(int index) {
 bool ProxySQL_PluginManager::register_server_module(
 	ProxySQL_ServerModuleHooks *module,
 	void (*destroy)(ProxySQL_ServerModuleHooks *), void *module_handle) {
-	if (module == nullptr || destroy == nullptr || module_handle == nullptr ||
-		module->runtime_configuration_installed == nullptr) {
+	if (module == nullptr || destroy == nullptr || module_handle == nullptr) {
 		return false;
 	}
+	// ABI-9 callback-only modules remain supported.  Do not read appended
+	// fields from their frozen allocation.
+	const bool affiliated_module = module->runtime_configuration_installed == nullptr;
+	if (affiliated_module && module->tables.empty() && module->prepare_runtime == nullptr &&
+		module->commit_runtime == nullptr && module->runtime_table_snapshot == nullptr) return false;
 	const int index = server_protocol_index(module->protocol);
 	if (index < 0) return false;
+	std::vector<ProxySQL_ServerModuleTable> tables;
+	auto identifier = [](const std::string& value) {
+		if (value.empty() || !(std::isalpha(static_cast<unsigned char>(value[0])) || value[0] == '_')) return false;
+		return std::all_of(value.begin() + 1, value.end(), [](unsigned char c) { return std::isalnum(c) || c == '_'; });
+	};
+	auto order_by = [](const std::string& value) {
+		return !value.empty() && std::all_of(value.begin(), value.end(), [](unsigned char c) {
+			return std::isalnum(c) || c == '_' || c == ',' || std::isspace(c);
+		});
+	};
+	if (affiliated_module) for (const auto& table : module->tables) {
+		if (table.protocol != module->protocol || table.table_name.empty() ||
+			table.runtime_table_name.empty() || table.order_by.empty() ||
+			!identifier(table.table_name) || !identifier(table.runtime_table_name) || !order_by(table.order_by)) return false;
+		for (const auto& existing : tables) {
+			if (existing.table_name == table.table_name ||
+				existing.runtime_table_name == table.runtime_table_name) return false;
+		}
+		tables.push_back(table);
+	}
+	std::sort(tables.begin(), tables.end(), [](const auto& lhs, const auto& rhs) {
+		return lhs.table_name < rhs.table_name;
+	});
 	std::lock_guard<std::mutex> lock(server_discovery_mutex_);
 	if (server_modules_[index].module != nullptr) return false;
-	server_modules_[index] = {module, destroy, module_handle};
+	server_modules_[index] = {module, destroy, module_handle, std::move(tables)};
 	return true;
+}
+
+std::vector<ProxySQL_ServerModuleTable> ProxySQL_PluginManager::server_module_tables(
+	ProxySQL_ServerProtocol protocol) const {
+	const int index = server_protocol_index(protocol);
+	if (index < 0) return {};
+	std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+	return server_modules_[index].tables;
+}
+
+bool ProxySQL_PluginManager::prepare_server_module_runtime(
+	const ProxySQL_ServerModuleSnapshot& snapshot,
+	std::vector<ProxySQL_ServerHostgroupClaim>& claims, std::string& error) {
+	const int index = server_protocol_index(snapshot.runtime.protocol);
+	if (index < 0) return false;
+	ProxySQL_ServerModuleHooks* module = nullptr;
+	{
+		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+		module = server_modules_[index].module;
+		if (module != nullptr) ++server_callback_leases_[index];
+	}
+	if (module == nullptr) return true;
+	ScopedServerCallbackLease lease([this, index] { release_server_callback_lease(index); });
+	try {
+		return module->prepare_runtime == nullptr || module->prepare_runtime(module->opaque, snapshot, claims, error);
+	} catch (const std::exception& e) {
+		log_server_callback_exception("module prepare-runtime", e);
+		error = e.what();
+	} catch (...) {
+		log_server_callback_unknown_exception("module prepare-runtime");
+		error = "module prepare-runtime callback threw";
+	}
+	return false;
+}
+
+void ProxySQL_PluginManager::commit_server_module_runtime(
+	ProxySQL_ServerProtocol protocol, uint64_t generation) {
+	const int index = server_protocol_index(protocol);
+	if (index < 0) return;
+	ProxySQL_ServerModuleHooks* module = nullptr;
+	{
+		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+		module = server_modules_[index].module;
+		if (module != nullptr) ++server_callback_leases_[index];
+	}
+	if (module == nullptr) return;
+	ScopedServerCallbackLease lease([this, index] { release_server_callback_lease(index); });
+	try {
+		if (module->commit_runtime != nullptr) module->commit_runtime(module->opaque, generation);
+	} catch (const std::exception& e) {
+		log_server_callback_exception("module commit-runtime", e);
+	} catch (...) {
+		log_server_callback_unknown_exception("module commit-runtime");
+	}
+}
+
+SQLite3_result* ProxySQL_PluginManager::server_module_runtime_table_snapshot(
+	ProxySQL_ServerProtocol protocol, const char* table_name) {
+	const int index = server_protocol_index(protocol);
+	if (index < 0 || table_name == nullptr) return nullptr;
+	ProxySQL_ServerModuleHooks* module = nullptr;
+	{
+		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+		module = server_modules_[index].module;
+		if (module != nullptr) ++server_callback_leases_[index];
+	}
+	if (module == nullptr) return nullptr;
+	ScopedServerCallbackLease lease([this, index] { release_server_callback_lease(index); });
+	try {
+		return module->runtime_table_snapshot == nullptr ? nullptr : module->runtime_table_snapshot(module->opaque, table_name);
+	} catch (const std::exception& e) {
+		log_server_callback_exception("module runtime-table", e);
+	} catch (...) {
+		log_server_callback_unknown_exception("module runtime-table");
+	}
+	return nullptr;
 }
 
 void ProxySQL_PluginManager::set_server_retirement_observer_for_test(
@@ -1143,6 +1247,15 @@ bool ProxySQL_PluginManager::unregister_server_module(ProxySQL_ServerProtocol pr
 	}
 	server_discovery_cv_.wait(lock, [&] { return server_callback_leases_[index] == 0; });
 	lock.unlock();
+	try {
+		if (retired.module->runtime_configuration_installed == nullptr && retired.module->shutdown != nullptr) {
+			retired.module->shutdown(retired.module->opaque);
+		}
+	} catch (const std::exception &e) {
+		log_server_callback_exception("module shutdown", e);
+	} catch (...) {
+		log_server_callback_unknown_exception("module shutdown");
+	}
 	try {
 		retired.destroy(retired.module);
 	} catch (const std::exception &e) {
@@ -1252,7 +1365,7 @@ void ProxySQL_PluginManager::install_server_runtime_snapshot(ProxySQL_ServerRunt
 	}
 	if (module != nullptr || controller != nullptr) {
 		ScopedServerCallbackLease lease([this, index] { release_server_callback_lease(index); });
-		if (module != nullptr) {
+		if (module != nullptr && module->runtime_configuration_installed != nullptr) {
 			try {
 				module->runtime_configuration_installed(module->opaque, snapshot);
 			} catch (const std::exception &e) {

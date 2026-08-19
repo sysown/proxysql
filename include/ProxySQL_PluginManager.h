@@ -84,6 +84,15 @@ public:
 		SQLite3DB* admindb, SQLite3DB* configdb, SQLite3DB* statsdb) const;
 	bool register_server_module(ProxySQL_ServerModuleHooks *module,
 		void (*destroy)(ProxySQL_ServerModuleHooks *), void *module_handle);
+	std::vector<ProxySQL_ServerModuleTable> server_module_tables(
+		ProxySQL_ServerProtocol protocol) const;
+	// These calls retain a callback lease for the duration of the invocation.
+	// The caller owns the result returned by server_module_runtime_table_snapshot.
+	bool prepare_server_module_runtime(const ProxySQL_ServerModuleSnapshot& snapshot,
+		std::vector<ProxySQL_ServerHostgroupClaim>& claims, std::string& error);
+	void commit_server_module_runtime(ProxySQL_ServerProtocol protocol, uint64_t generation);
+	SQLite3_result* server_module_runtime_table_snapshot(
+		ProxySQL_ServerProtocol protocol, const char* table_name);
 	bool unregister_server_module(ProxySQL_ServerProtocol protocol);
 	bool install_server_discovery_controller(ProxySQL_ServerProtocol protocol,
 		ProxySQL_ServerDiscoveryController *controller,
@@ -164,6 +173,7 @@ private:
 		ProxySQL_ServerModuleHooks *module { nullptr };
 		void (*destroy)(ProxySQL_ServerModuleHooks *) { nullptr };
 		void *module_handle { nullptr };
+		std::vector<ProxySQL_ServerModuleTable> tables {};
 	};
 	struct registered_server_controller_t {
 		ProxySQL_ServerDiscoveryController *controller { nullptr };
