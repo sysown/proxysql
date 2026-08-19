@@ -70,6 +70,7 @@ CommandResult run_executable_help(const std::vector<std::string>& args) {
 		(void)close(pipefd[0]);
 		(void)close(pipefd[1]);
 		setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_CLI", "1", 1);
+		unsetenv("PROXYSQL_NO_PLUGINS");
 		std::vector<char*> argv;
 		for (const auto& arg : args) argv.push_back(const_cast<char*>(arg.c_str()));
 		argv.push_back(nullptr);
@@ -217,9 +218,16 @@ void test_executable_help_registers_plugin_options_unless_killed() {
 	(void)mkdir(plugins.c_str(), 0700);
 	const std::string named = plugins + "/proxysql_fake_plugin.so";
 	(void)copy_file(PROXYSQL_FAKE_PLUGIN_PATH, named);
+	const std::string config = root + "/config.cnf";
+	(void)write_config(config, "");
+	const char* inherited_no_plugins = getenv("PROXYSQL_NO_PLUGINS");
+	const std::string saved_no_plugins = inherited_no_plugins != nullptr ? inherited_no_plugins : "";
+	const bool had_no_plugins = inherited_no_plugins != nullptr;
+	setenv("PROXYSQL_NO_PLUGINS", "1", 1);
 
 	const std::vector<std::string> enabled_args {
-		PROXYSQL_BINARY_PATH, "--plugin-dir", plugins, "--load-plugin", "fake_plugin", "--help"
+		PROXYSQL_BINARY_PATH, "--config", config, "--plugin-dir", plugins,
+		"--load-plugin", "fake_plugin", "--help"
 	};
 	const CommandResult enabled = run_executable_help(enabled_args);
 	ok(WIFEXITED(enabled.status) && WEXITSTATUS(enabled.status) == 0,
@@ -228,13 +236,16 @@ void test_executable_help_registers_plugin_options_unless_killed() {
 	   "executable help includes the discovered plugin option");
 
 	const std::vector<std::string> disabled_args {
-		PROXYSQL_BINARY_PATH, "--plugin-dir", plugins, "--load-plugin", "fake_plugin", "--no-plugins", "--help"
+		PROXYSQL_BINARY_PATH, "--config", config, "--plugin-dir", plugins,
+		"--load-plugin", "fake_plugin", "--no-plugins", "--help"
 	};
 	const CommandResult disabled = run_executable_help(disabled_args);
 	ok(WIFEXITED(disabled.status) && WEXITSTATUS(disabled.status) == 0,
 	   "executable help with --no-plugins exits cleanly");
 	ok(disabled.output.find("--fake-plugin-action") == std::string::npos,
 	   "--no-plugins suppresses the discovered plugin option from executable help");
+	if (had_no_plugins) setenv("PROXYSQL_NO_PLUGINS", saved_no_plugins.c_str(), 1);
+	else unsetenv("PROXYSQL_NO_PLUGINS");
 	remove_tree(root);
 }
 
