@@ -8,11 +8,22 @@
 
 namespace {
 
+bool module_prepare_runtime(void*, const ProxySQL_ServerModuleSnapshot&,
+	std::vector<ProxySQL_ServerHostgroupClaim>&, std::string&) { return true; }
+void module_commit_runtime(void*, uint64_t) {}
+SQLite3_result* module_runtime_table_snapshot(void*, const char*) { return nullptr; }
+void module_shutdown(void*) {}
+
 class Module final : public ProxySQL_ServerModuleHooks {
 public:
 	Module(ProxySQL_ServerProtocol protocol,
 		std::vector<ProxySQL_ServerModuleTable> tables)
-		: ProxySQL_ServerModuleHooks(protocol, std::move(tables)) {}
+		: ProxySQL_ServerModuleHooks(protocol, std::move(tables)) {
+		prepare_runtime = &module_prepare_runtime;
+		commit_runtime = &module_commit_runtime;
+		runtime_table_snapshot = &module_runtime_table_snapshot;
+		shutdown = &module_shutdown;
+	}
 };
 
 void destroy_module(ProxySQL_ServerModuleHooks* module) { delete module; }
@@ -20,7 +31,7 @@ void destroy_module(ProxySQL_ServerModuleHooks* module) { delete module; }
 } // namespace
 
 int main() {
-	plan(9);
+	plan(10);
 	ProxySQL_PluginManager manager;
 	void* handle = dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
 	ProxySQL_ServerModuleTable mysql_a {
@@ -78,5 +89,12 @@ int main() {
 		"duplicate registration fails schema phase");
 	delete duplicate_module;
 	dlclose(duplicate_handle);
+	ProxySQL_PluginManager incomplete_manager;
+	void* incomplete_handle = dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
+	auto* incomplete_module = new ProxySQL_ServerModuleHooks(ProxySQL_ServerProtocol::mysql, {mysql_a});
+	ok(!incomplete_manager.register_server_module(incomplete_module, destroy_module, incomplete_handle),
+		"affiliated module requires complete runtime callbacks");
+	delete incomplete_module;
+	dlclose(incomplete_handle);
 	return exit_status();
 }

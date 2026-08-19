@@ -256,6 +256,13 @@ bool proxysql_stop_configured_plugins(
 );
 void proxysql_reset_active_manager_pin_acquisitions_for_test();
 size_t proxysql_active_manager_pin_acquisitions_for_test();
+std::vector<ProxySQL_ServerModuleTable> proxysql_active_server_module_tables(
+	ProxySQL_ServerProtocol protocol);
+bool proxysql_prepare_active_server_module_runtime(const ProxySQL_ServerModuleSnapshot& snapshot,
+	std::vector<ProxySQL_ServerHostgroupClaim>& claims, std::string& error);
+void proxysql_commit_active_server_module_runtime(ProxySQL_ServerProtocol protocol, uint64_t generation);
+SQLite3_result* proxysql_active_server_module_runtime_table_snapshot(
+	ProxySQL_ServerProtocol protocol, const char* table_name);
 
 #endif /* PROXYSQL40 */
 #endif /* PROXYSQL_PLUGIN_MANAGER_H */

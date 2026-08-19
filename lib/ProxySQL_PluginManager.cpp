@@ -1106,8 +1106,8 @@ bool ProxySQL_PluginManager::register_server_module(
 	// ABI-9 callback-only modules remain supported.  Do not read appended
 	// fields from their frozen allocation.
 	const bool affiliated_module = module->runtime_configuration_installed == nullptr;
-	if (affiliated_module && module->tables.empty() && module->prepare_runtime == nullptr &&
-		module->commit_runtime == nullptr && module->runtime_table_snapshot == nullptr) return false;
+	if (affiliated_module && (module->tables.empty() || module->prepare_runtime == nullptr ||
+		module->commit_runtime == nullptr || module->runtime_table_snapshot == nullptr || module->shutdown == nullptr)) return false;
 	const int index = server_protocol_index(module->protocol);
 	if (index < 0) return false;
 	std::vector<ProxySQL_ServerModuleTable> tables;
@@ -1699,6 +1699,31 @@ void proxysql_reset_active_manager_pin_acquisitions_for_test() {
 
 size_t proxysql_active_manager_pin_acquisitions_for_test() {
 	return g_active_manager_pin_acquisitions_for_test.load(std::memory_order_relaxed);
+}
+
+std::vector<ProxySQL_ServerModuleTable> proxysql_active_server_module_tables(
+	ProxySQL_ServerProtocol protocol) {
+	ScopedActiveManagerPin pin;
+	return pin.manager() == nullptr ? std::vector<ProxySQL_ServerModuleTable>{} :
+		pin.manager()->server_module_tables(protocol);
+}
+
+bool proxysql_prepare_active_server_module_runtime(const ProxySQL_ServerModuleSnapshot& snapshot,
+	std::vector<ProxySQL_ServerHostgroupClaim>& claims, std::string& error) {
+	ScopedActiveManagerPin pin;
+	return pin.manager() == nullptr || pin.manager()->prepare_server_module_runtime(snapshot, claims, error);
+}
+
+void proxysql_commit_active_server_module_runtime(ProxySQL_ServerProtocol protocol, uint64_t generation) {
+	ScopedActiveManagerPin pin;
+	if (pin.manager() != nullptr) pin.manager()->commit_server_module_runtime(protocol, generation);
+}
+
+SQLite3_result* proxysql_active_server_module_runtime_table_snapshot(
+	ProxySQL_ServerProtocol protocol, const char* table_name) {
+	ScopedActiveManagerPin pin;
+	return pin.manager() == nullptr ? nullptr :
+		pin.manager()->server_module_runtime_table_snapshot(protocol, table_name);
 }
 
 #endif /* PROXYSQL40 */

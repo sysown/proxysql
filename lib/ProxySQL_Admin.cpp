@@ -206,46 +206,49 @@ static void BQE1(SQLite3DB *db, const vector<string>& tbs, const string& p1, con
 // Server-module tables are ordinary configuration tables.  The registry is
 // intentionally queried at the operation boundary so an unloaded plugin has
 // no schema affiliation and a MySQL operation cannot see PostgreSQL tables.
-static void copy_registered_server_module_tables(SQLite3DB* db,
+static bool copy_registered_server_module_tables(SQLite3DB* db,
 	ProxySQL_ServerProtocol protocol, const char* destination, const char* source) {
 #ifdef PROXYSQL40
-	ProxySQL_PluginManager* manager = proxysql_get_plugin_manager();
-	if (manager == nullptr) return;
-	const auto tables = manager->server_module_tables(protocol);
-	if (tables.empty()) return;
-	db->execute("BEGIN");
+	const auto tables = proxysql_active_server_module_tables(protocol);
+	if (tables.empty()) return true;
+	if (!db->execute("BEGIN")) return false;
 	for (const auto& table : tables) {
 		const std::string delete_sql = std::string("DELETE FROM ") + destination + "." + table.table_name;
 		auto [delete_rc, delete_statement] = db->prepare_v2(delete_sql.c_str());
-		if (delete_rc == SQLITE_OK) (*proxy_sqlite3_step)(delete_statement.get());
+		if (delete_rc != SQLITE_OK || (*proxy_sqlite3_step)(delete_statement.get()) != SQLITE_DONE) {
+			db->execute("ROLLBACK"); return false;
+		}
 		const std::string insert_sql = std::string("INSERT INTO ") + destination + "." + table.table_name +
 			" SELECT * FROM " + source + "." + table.table_name;
 		auto [insert_rc, insert_statement] = db->prepare_v2(insert_sql.c_str());
-		if (insert_rc == SQLITE_OK) (*proxy_sqlite3_step)(insert_statement.get());
+		if (insert_rc != SQLITE_OK || (*proxy_sqlite3_step)(insert_statement.get()) != SQLITE_DONE) {
+			db->execute("ROLLBACK"); return false;
+		}
 	}
-	db->execute("COMMIT");
+	if (!db->execute("COMMIT")) { db->execute("ROLLBACK"); return false; }
+	return true;
 #else
-	(void)db; (void)protocol; (void)destination; (void)source;
+	(void)db; (void)protocol; (void)destination; (void)source; return true;
 #endif
 }
 
 // Runtime tables are plugin-owned projections.  SAVE ... FROM RUNTIME asks
 // the module for a snapshot and writes that snapshot to its normal MEMORY
 // configuration table; core never persists a runtime projection directly.
-static void save_registered_server_module_runtime_tables(SQLite3DB* db,
+static bool save_registered_server_module_runtime_tables(SQLite3DB* db,
 	ProxySQL_ServerProtocol protocol) {
 #ifdef PROXYSQL40
-	ProxySQL_PluginManager* manager = proxysql_get_plugin_manager();
-	if (manager == nullptr) return;
-	const auto tables = manager->server_module_tables(protocol);
-	if (tables.empty()) return;
-	db->execute("BEGIN");
+	const auto tables = proxysql_active_server_module_tables(protocol);
+	if (tables.empty()) return true;
+	if (!db->execute("BEGIN")) return false;
 	for (const auto& table : tables) {
 		std::unique_ptr<SQLite3_result> rows(
-			manager->server_module_runtime_table_snapshot(protocol, table.runtime_table_name.c_str()));
+			proxysql_active_server_module_runtime_table_snapshot(protocol, table.runtime_table_name.c_str()));
 		const std::string delete_sql = "DELETE FROM main." + table.table_name;
 		auto [delete_rc, delete_statement] = db->prepare_v2(delete_sql.c_str());
-		if (delete_rc == SQLITE_OK) (*proxy_sqlite3_step)(delete_statement.get());
+		if (delete_rc != SQLITE_OK || (*proxy_sqlite3_step)(delete_statement.get()) != SQLITE_DONE) {
+			db->execute("ROLLBACK"); return false;
+		}
 		if (!rows || rows->columns == 0) continue;
 		std::string values;
 		for (int column = 0; column < rows->columns; ++column) {
@@ -254,34 +257,67 @@ static void save_registered_server_module_runtime_tables(SQLite3DB* db,
 		}
 		const std::string insert_sql = "INSERT INTO main." + table.table_name + " VALUES (" + values + ')';
 		auto [insert_rc, insert_statement] = db->prepare_v2(insert_sql.c_str());
-		if (insert_rc != SQLITE_OK) continue;
+		if (insert_rc != SQLITE_OK) { db->execute("ROLLBACK"); return false; }
 		for (const auto* row : rows->rows) {
 			for (int column = 0; column < rows->columns; ++column) {
 				int rc = row->fields[column]
 					? (*proxy_sqlite3_bind_text)(insert_statement.get(), column + 1, row->fields[column], -1, SQLITE_TRANSIENT)
 					: (*proxy_sqlite3_bind_null)(insert_statement.get(), column + 1);
-				if (rc != SQLITE_OK) break;
+				if (rc != SQLITE_OK) { db->execute("ROLLBACK"); return false; }
 			}
-			(*proxy_sqlite3_step)(insert_statement.get());
-			(*proxy_sqlite3_clear_bindings)(insert_statement.get());
-			(*proxy_sqlite3_reset)(insert_statement.get());
+			if ((*proxy_sqlite3_step)(insert_statement.get()) != SQLITE_DONE ||
+				(*proxy_sqlite3_clear_bindings)(insert_statement.get()) != SQLITE_OK ||
+				(*proxy_sqlite3_reset)(insert_statement.get()) != SQLITE_OK) { db->execute("ROLLBACK"); return false; }
 		}
 	}
-	db->execute("COMMIT");
+	if (!db->execute("COMMIT")) { db->execute("ROLLBACK"); return false; }
+	return true;
 #else
-	(void)db; (void)protocol;
+	(void)db; (void)protocol; return true;
 #endif
 }
 
 static bool prepare_registered_server_module_runtime(SQLite3DB* db,
 	ProxySQL_ServerProtocol protocol, uint64_t generation) {
 #ifdef PROXYSQL40
-	ProxySQL_PluginManager* manager = proxysql_get_plugin_manager();
-	if (manager == nullptr) return true;
 	ProxySQL_ServerModuleSnapshot snapshot {};
 	snapshot.runtime.protocol = protocol;
 	snapshot.runtime.generation = generation;
-	for (const auto& table : manager->server_module_tables(protocol)) {
+	char* runtime_error = nullptr;
+	int runtime_columns = 0;
+	int runtime_affected_rows = 0;
+	SQLite3_result* runtime_rows = nullptr;
+	const char* runtime_sql = protocol == ProxySQL_ServerProtocol::mysql
+		? "SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM main.mysql_servers ORDER BY hostgroup_id,hostname,port"
+		: "SELECT hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM main.pgsql_servers ORDER BY hostgroup_id,hostname,port";
+	db->execute_statement(runtime_sql, &runtime_error, &runtime_columns, &runtime_affected_rows, &runtime_rows);
+	if (runtime_error != nullptr) {
+		proxy_error("Error preparing core server snapshot: %s\n", runtime_error);
+		free(runtime_error);
+		if (runtime_rows != nullptr) delete runtime_rows;
+		return false;
+	}
+	if (runtime_rows != nullptr) {
+		for (const auto* row : runtime_rows->rows) {
+			ProxySQL_ServerRow server {};
+			server.hostgroup_id = static_cast<uint32_t>(strtoul(row->fields[0], nullptr, 10));
+			server.hostname = row->fields[1] ? row->fields[1] : "";
+			server.port = static_cast<uint16_t>(strtoul(row->fields[2], nullptr, 10));
+			const int offset = protocol == ProxySQL_ServerProtocol::mysql ? 1 : 0;
+			server.gtid_port = offset ? atoi(row->fields[3]) : 0;
+			server.status = row->fields[3 + offset] ? row->fields[3 + offset] : "";
+			server.weight = atoll(row->fields[4 + offset]);
+			server.compression = atoi(row->fields[5 + offset]);
+			server.max_connections = atoll(row->fields[6 + offset]);
+			server.max_replication_lag = atoll(row->fields[7 + offset]);
+			server.use_ssl = atoi(row->fields[8 + offset]);
+			server.max_latency_ms = atoll(row->fields[9 + offset]);
+			server.comment = row->fields[10 + offset] ? row->fields[10 + offset] : "";
+			snapshot.runtime.servers.push_back(std::move(server));
+		}
+		delete runtime_rows;
+	}
+	for (const auto& table : proxysql_active_server_module_tables(protocol)) {
 		char* error = nullptr;
 		int columns = 0;
 		int affected_rows = 0;
@@ -298,7 +334,7 @@ static bool prepare_registered_server_module_runtime(SQLite3DB* db,
 	}
 	std::vector<ProxySQL_ServerHostgroupClaim> claims;
 	std::string error;
-	if (!manager->prepare_server_module_runtime(snapshot, claims, error)) {
+	if (!proxysql_prepare_active_server_module_runtime(snapshot, claims, error)) {
 		proxy_error("Plugin server module rejected configuration: %s\n", error.c_str());
 		return false;
 	}
@@ -311,9 +347,7 @@ static bool prepare_registered_server_module_runtime(SQLite3DB* db,
 
 static void commit_registered_server_module_runtime(ProxySQL_ServerProtocol protocol, uint64_t generation) {
 #ifdef PROXYSQL40
-	if (ProxySQL_PluginManager* manager = proxysql_get_plugin_manager()) {
-		manager->commit_server_module_runtime(protocol, generation);
-	}
+	proxysql_commit_active_server_module_runtime(protocol, generation);
 #else
 	(void)protocol; (void)generation;
 #endif
