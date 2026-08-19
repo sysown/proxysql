@@ -539,5 +539,6 @@
   "transaction_state_unit-t" : [ "unit-tests-g1" ],
   "unit-strip_schema_from_query-t" : [ "unit-tests-g1" ],
   "vector_db_performance-t" : [ "ai-g2","@proxysql_min_version:4.0" ],
-  "vector_features-t" : [ "ai-g1","@proxysql_min_version:4.0" ]
+  "vector_features-t" : [ "ai-g1","@proxysql_min_version:4.0" ],
+  "vendored_openssl_version_unit-t" : [ "unit-tests-g1" ]
 }
