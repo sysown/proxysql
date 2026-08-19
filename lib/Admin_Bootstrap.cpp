@@ -40,6 +40,7 @@ using json = nlohmann::json;
 #include "MySQL_PreparedStatement.h"
 #ifdef PROXYSQL40
 #include "ProxySQL_PluginManager.h"
+#include "ProxySQL_PluginSecrets.h"
 #endif /* PROXYSQL40 */
 #include "ProxySQL_Cluster.hpp"
 #include "ProxySQL_Statistics.hpp"
@@ -854,6 +855,13 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_config,"mysql_firewall_whitelist_rules", ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_RULES);
 	insert_into_tables_defs(tables_defs_config,"mysql_firewall_whitelist_sqli_fingerprints", ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_SQLI_FINGERPRINTS);
 	insert_into_tables_defs(tables_defs_config, "restapi_routes", ADMIN_SQLITE_TABLE_RESTAPI_ROUTES);
+#ifdef PROXYSQL40
+	// Core-owned encrypted plugin secrets must exist before Phase D exposes
+	// live secret services.  This uses the same configdb definition path as
+	// every other persistent Admin table, not a plugin-provided schema.
+	insert_into_tables_defs(tables_defs_config, "proxysql_plugin_secrets",
+		proxysql_plugin_secrets_table_definition());
+#endif /* PROXYSQL40 */
 #ifdef DEBUG
 	insert_into_tables_defs(tables_defs_config,"debug_levels", ADMIN_SQLITE_TABLE_DEBUG_LEVELS);
 	insert_into_tables_defs(tables_defs_config,"debug_filters", ADMIN_SQLITE_TABLE_DEBUG_FILTERS);

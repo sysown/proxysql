@@ -5,6 +5,7 @@
 #ifdef PROXYSQL40
 
 #include "ProxySQL_PluginManager.h"
+#include "ProxySQL_PluginSecrets.h"
 
 #include <atomic>
 #include <cassert>
@@ -14,6 +15,8 @@
 #include <mutex>
 #include <shared_mutex>
 #include <strings.h>
+
+#include <openssl/crypto.h>
 
 #include "proxysql.h"
 #include "proxysql_glovars.hpp"
@@ -233,6 +236,44 @@ void log_message_service(int level, const char* message) {
 	}
 }
 
+ProxySQL_PluginSecretResult secret_not_available(const char*, const char*, const uint8_t*, size_t) {
+	return ProxySQL_PluginSecretResult::not_available;
+}
+
+ProxySQL_PluginSecretResult secret_get_not_available(const char*, const char*, std::vector<uint8_t>& plaintext) {
+	if (!plaintext.empty()) {
+		OPENSSL_cleanse(plaintext.data(), plaintext.size());
+		plaintext.clear();
+	}
+	return ProxySQL_PluginSecretResult::not_available;
+}
+
+ProxySQL_PluginSecretResult secret_erase_not_available(const char*, const char*) {
+	return ProxySQL_PluginSecretResult::not_available;
+}
+
+ProxySQL_PluginSecretResult put_secret_service(const char* owner, const char* name,
+	const uint8_t* bytes, size_t length) {
+	SQLite3DB* db = proxysql_plugin_get_configdb();
+	if (db == nullptr || GloVars.datadir == nullptr || GloVars.datadir[0] == '\0') return ProxySQL_PluginSecretResult::not_available;
+	ProxySQL_PluginSecrets store(db, GloVars.datadir);
+	return store.put(owner, name, bytes, length);
+}
+
+ProxySQL_PluginSecretResult get_secret_service(const char* owner, const char* name, std::vector<uint8_t>& plaintext) {
+	SQLite3DB* db = proxysql_plugin_get_configdb();
+	if (db == nullptr || GloVars.datadir == nullptr || GloVars.datadir[0] == '\0') return secret_get_not_available(owner, name, plaintext);
+	ProxySQL_PluginSecrets store(db, GloVars.datadir);
+	return store.get(owner, name, plaintext);
+}
+
+ProxySQL_PluginSecretResult erase_secret_service(const char* owner, const char* name) {
+	SQLite3DB* db = proxysql_plugin_get_configdb();
+	if (db == nullptr || GloVars.datadir == nullptr || GloVars.datadir[0] == '\0') return ProxySQL_PluginSecretResult::not_available;
+	ProxySQL_PluginSecrets store(db, GloVars.datadir);
+	return store.erase(owner, name);
+}
+
 bool sql_equals_ci(const std::string& lhs, const std::string& rhs) {
 	return strcasecmp(lhs.c_str(), rhs.c_str()) == 0;
 }
@@ -302,6 +343,9 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_.get_prometheus_registry = &get_prometheus_registry_service;
 	services_.register_command_alias = &register_command_alias_service;
 	services_.register_runtime_view = &register_runtime_view_service;
+	services_.put_secret = &put_secret_service;
+	services_.get_secret = &get_secret_service;
+	services_.erase_secret = &erase_secret_service;
 
 	// Phase-B (register_schemas) services: same layout as init(), but DB
 	// handle getters and the query-hook registrar are stubbed -- see the
@@ -327,6 +371,9 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	// refresh callback won't fire until Admin handles a SELECT, by which
 	// point admin module bootstrap has long since completed.
 	services_phase_b_.register_runtime_view = &register_runtime_view_service;
+	services_phase_b_.put_secret = &secret_not_available;
+	services_phase_b_.get_secret = &secret_get_not_available;
+	services_phase_b_.erase_secret = &secret_erase_not_available;
 #endif /* PROXYSQL40 */
 }
 

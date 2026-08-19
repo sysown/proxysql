@@ -356,6 +356,27 @@ static void test_phase_b_db_handles_are_null() {
 	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
 }
 
+// ABI-7 secret callbacks are callable in Phase B but must reject the request:
+// configdb and the core-owned secret table do not exist until Admin is live.
+static void test_phase_b_secret_services_are_not_available() {
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_TEST_SECRETS", "1", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
+	std::string err;
+	ok(proxysql_load_configured_plugins(mgr, paths, err),
+	   "Phase-B secret-service probe does not fail schema registration (err='%s')", err.c_str());
+	const std::string log = read_log();
+	ok(log.find("fake_plugin:phase_b_secrets_not_available") != std::string::npos,
+	   "Phase-B secret callbacks report not_available and clear supplied output");
+
+	(void)proxysql_stop_configured_plugins(mgr, err);
+	unsetenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_TEST_SECRETS");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
+}
+
 // Case 4: a failing register_schemas aborts the load and init() is NOT
 // called.  Verifies the loader treats Phase-B failure as a hard error.
 static void test_phase_b_failure_aborts_init() {
@@ -465,7 +486,7 @@ static void test_bogus_abi_version_rejected() {
 }
 
 int main() {
-	plan(46);
+	plan(48);
 
 	make_log_path();
 
@@ -477,6 +498,7 @@ int main() {
 	test_abi5_skips_early_action_tail();
 	test_only_init_skips_phase_b();
 	test_phase_b_db_handles_are_null();
+	test_phase_b_secret_services_are_not_available();
 	test_phase_b_failure_aborts_init();
 	test_phase_b_partial_failure_rolls_back();
 	test_stop_runs_when_start_fails();

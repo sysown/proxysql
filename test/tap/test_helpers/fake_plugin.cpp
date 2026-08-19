@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 // Two builds of this source produce two distinct .so files used together
 // in multi-plugin tests:
@@ -131,6 +132,17 @@ bool fake_register_schemas(ProxySQL_PluginServices *services) {
 				fake_log_event("phase_b_handles_live");
 			}
 		}
+	}
+	if (env("PHASE_B_TEST_SECRETS") != nullptr && services != nullptr) {
+		std::vector<uint8_t> output { 0x7f };
+		const uint8_t byte = 0x42;
+		const bool unavailable = services->put_secret != nullptr &&
+			services->get_secret != nullptr && services->erase_secret != nullptr &&
+			services->put_secret("fake_plugin", "phase_b", &byte, 1) == ProxySQL_PluginSecretResult::not_available &&
+			services->get_secret("fake_plugin", "phase_b", output) == ProxySQL_PluginSecretResult::not_available &&
+			services->erase_secret("fake_plugin", "phase_b") == ProxySQL_PluginSecretResult::not_available &&
+			output.empty();
+		fake_log_event(unavailable ? "phase_b_secrets_not_available" : "phase_b_secrets_available");
 	}
 	if (env("PHASE_B_REGISTER_TABLE") != nullptr &&
 	    services != nullptr &&

@@ -10,6 +10,9 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
+
+#include "ProxySQL_PluginSecrets.h"
 
 class SQLite3DB;
 class SQLite3_result;
@@ -45,8 +48,9 @@ namespace prometheus { class Registry; }
 //          every requested module and before the one definitive core
 //          command-line parse. It invokes early actions after Admin is live
 //          and before plugin init/start.
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = 6u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = 6u;
+//   ABI 7: appends authenticated encrypted secret-store services.
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = 7u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = 7u;
 
 struct ProxySQL_PluginCLIOptionDef {
 	const char* short_name;
@@ -356,6 +360,15 @@ struct ProxySQL_PluginServices {
 	// at the same point they register their tables, so the callback
 	// is wired in both phases.
 	proxysql_plugin_register_runtime_view_cb register_runtime_view;
+
+	// ABI-7 encrypted secret storage.  Phase B exposes rejecting stubs because
+	// configdb does not exist yet; early_action, init, start, and runtime use
+	// the core-owned live configdb store.
+	ProxySQL_PluginSecretResult (*put_secret)(const char* owner, const char* name,
+		const uint8_t* bytes, size_t length);
+	ProxySQL_PluginSecretResult (*get_secret)(const char* owner, const char* name,
+		std::vector<uint8_t>& plaintext);
+	ProxySQL_PluginSecretResult (*erase_secret)(const char* owner, const char* name);
 #endif /* PROXYSQL40 */
 };
 
