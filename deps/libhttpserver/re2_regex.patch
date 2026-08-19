@@ -18,47 +18,24 @@ diff --git a/examples/Makefile.am b/examples/Makefile.am
 index 318a7a8..0da1879 100644
 --- a/examples/Makefile.am
 +++ b/examples/Makefile.am
-@@ -16,8 +16,12 @@
- #     License along with this library; if not, write to the Free Software
- #     Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
- 
--LDADD = $(top_builddir)/src/libhttpserver.la
+@@ -20 +20,5 @@
 -AM_CPPFLAGS = -I$(top_srcdir)/src -I$(top_srcdir)/src/httpserver/
 +DEPS_PATH=$(top_srcdir)/../../
 +RE2_PATH=$(DEPS_PATH)/re2/re2
 +RE2_IDIR=$(RE2_PATH)
 +
-+LDADD = $(top_builddir)/src/libhttpserver.la -L$(RE2_PATH)/obj -lre2
 +AM_CPPFLAGS = -I$(top_srcdir)/src -I$(top_srcdir)/src/httpserver/ -I$(RE2_IDIR)
- METASOURCES = AUTO
- noinst_PROGRAMS = hello_world service minimal_hello_world custom_error allowing_disallowing_methods handlers hello_with_get_arg setting_headers custom_access_log basic_authentication digest_authentication minimal_https minimal_file_response minimal_deferred url_registration minimal_ip_ban benchmark_select benchmark_threads benchmark_nodelay deferred_with_accumulator
- 
 diff --git a/src/Makefile.am b/src/Makefile.am
 index 5e549bb..1fcc59e 100644
 --- a/src/Makefile.am
 +++ b/src/Makefile.am
-@@ -16,7 +16,11 @@
- #     License along with this library; if not, write to the Free Software
- #     Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
- 
+@@ -19 +19,5 @@
 -AM_CPPFLAGS = -I../ -I$(srcdir)/httpserver/
 +DEPS_PATH=$(top_srcdir)/../../
 +RE2_PATH=$(DEPS_PATH)/re2/re2
 +RE2_IDIR=$(RE2_PATH)
 +
 +AM_CPPFLAGS = -I../ -I$(srcdir)/httpserver/ -I$(RE2_IDIR)
- METASOURCES = AUTO
- lib_LTLIBRARIES = libhttpserver.la
- libhttpserver_la_SOURCES = string_utilities.cpp webserver.cpp http_utils.cpp http_request.cpp http_response.cpp string_response.cpp basic_auth_fail_response.cpp digest_auth_fail_response.cpp deferred_response.cpp file_response.cpp http_resource.cpp details/http_endpoint.cpp
-@@ -37,7 +41,7 @@ endif
- 
- libhttpserver_la_CFLAGS = $(AM_CFLAGS)
- libhttpserver_la_CXXFLAGS = $(AM_CXXFLAGS)
--libhttpserver_la_LDFLAGS = $(AM_LDFLAGS) -no-undefined
-+libhttpserver_la_LDFLAGS = $(AM_LDFLAGS) -no-undefined -L$(RE2_PATH)/obj -lre2
- 
- install-data-hook:
- 	(mkdir -p $(DESTDIR)$(includedir) && cd $(DESTDIR)$(includedir) && $(LN_S) -f httpserver.hpp httpserverpp)
 diff --git a/src/details/http_endpoint.cpp b/src/details/http_endpoint.cpp
 index 584fb50..01292d5 100644
 --- a/src/details/http_endpoint.cpp
