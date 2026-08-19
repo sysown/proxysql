@@ -145,17 +145,20 @@ static backend_kind_t detect_backend_via_admin(const CommandLine& cl) {
 // silently ignored). Its equivalent is the SET STATEMENT … FOR … wrapper,
 // which is a valid prepared-statement body and surfaces the timeout via the
 // MariaDB-specific error code 1969. See issue #5783.
+//
+// SUM forces SLEEP to be evaluated while producing the aggregate row, after
+// result metadata is available. The primary-key predicate keeps the workload
+// deterministic while preserving the execute-success/store-result-error path.
 static unsigned int select_timeout_dialect(backend_kind_t kind) {
 	if (kind == backend_kind_t::mariadb) {
 		select_query[0] =
 			"SET STATEMENT max_statement_time=0.01 FOR "
-			"SELECT COUNT(*) FROM test.sbtest1 a JOIN test.sbtest1 b "
-			"WHERE (a.id+b.id)%2";
+			"SELECT SUM(SLEEP(id)) FROM test.sbtest1 WHERE id=1";
 		return 1969; // MariaDB ER_STATEMENT_TIMEOUT
 	}
 	select_query[0] =
-		"SELECT /*+ MAX_EXECUTION_TIME(10) */ COUNT(*) "
-		"FROM test.sbtest1 a JOIN test.sbtest1 b WHERE (a.id+b.id)%2";
+		"SELECT /*+ MAX_EXECUTION_TIME(10) */ SUM(SLEEP(id)) "
+		"FROM test.sbtest1 WHERE id=1";
 	return 3024; // MySQL ER_QUERY_TIMEOUT
 }
 
