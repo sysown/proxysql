@@ -42,6 +42,87 @@ extern ProxySQL_Admin* GloAdmin;
 
 namespace {
 
+/**
+ * Temporarily yield Admin's global query mutex around work that can wait for
+ * MCP callbacks.  Production Admin dispatch supplies the handoff callbacks;
+ * direct unit-test dispatch leaves them null and therefore remains a no-op.
+ */
+class AdminMutexHandoff {
+public:
+	explicit AdminMutexHandoff(const ProxySQL_PluginCommandContext& command_context)
+		: command_context_(command_context), released_(false) {}
+
+	void release() {
+		if (released_ || command_context_.admin_mutex_context == nullptr ||
+		    command_context_.release_admin_mutex == nullptr ||
+		    command_context_.acquire_admin_mutex == nullptr) {
+			return;
+		}
+		command_context_.release_admin_mutex(command_context_.admin_mutex_context);
+		released_ = true;
+	}
+
+	~AdminMutexHandoff() {
+		if (released_) {
+			command_context_.acquire_admin_mutex(command_context_.admin_mutex_context);
+		}
+	}
+
+private:
+	const ProxySQL_PluginCommandContext& command_context_;
+	bool released_;
+};
+
+/**
+ * Serialize the complete GenAI Admin command, including any interval where
+ * the callback yields Admin's global mutex. Waiting for this plugin mutex
+ * while retaining Admin would invert the order used by a reload that is
+ * finishing its yielded work, so production dispatch releases Admin before
+ * lock() and reacquires it immediately after entering the serialized region.
+ */
+class SerializedAdminCommand {
+public:
+	SerializedAdminCommand(
+		const ProxySQL_PluginCommandContext& command_context,
+		GenAIMutex& command_mutex
+	) : command_context_(command_context), command_mutex_(command_mutex), handed_off_(false) {
+		if (command_context_.admin_mutex_context != nullptr &&
+		    command_context_.release_admin_mutex != nullptr &&
+		    command_context_.acquire_admin_mutex != nullptr) {
+			command_context_.release_admin_mutex(command_context_.admin_mutex_context);
+			handed_off_ = true;
+		}
+
+		command_mutex_.lock();
+
+		if (handed_off_) {
+			command_context_.acquire_admin_mutex(command_context_.admin_mutex_context);
+		}
+	}
+
+	~SerializedAdminCommand() {
+		command_mutex_.unlock();
+	}
+
+	SerializedAdminCommand(const SerializedAdminCommand&) = delete;
+	SerializedAdminCommand& operator=(const SerializedAdminCommand&) = delete;
+
+private:
+	const ProxySQL_PluginCommandContext& command_context_;
+	GenAIMutex& command_mutex_;
+	bool handed_off_;
+};
+
+template <proxysql_plugin_admin_command_cb Callback>
+ProxySQL_PluginCommandResult serialized_admin_command(
+	const ProxySQL_PluginCommandContext& cmd_ctx,
+	const char* sql
+) {
+	GenAIPluginContext& ctx = genai_context();
+	SerializedAdminCommand command_guard(cmd_ctx, ctx.admin_command_mutex);
+	return Callback(cmd_ctx, sql);
+}
+
 /// Build a successful PluginCommandResult.  Uniform helper so all
 /// callbacks return the same shape.
 ProxySQL_PluginCommandResult ok_result(const char* msg) {
@@ -78,7 +159,6 @@ ProxySQL_PluginCommandResult load_variables_from_config(
 	const char* ok_msg,
 	const char* err_msg
 ) {
-	(void)cmd_ctx;
 	if (GloAdmin == nullptr || GloVars.configfile_open == false || GloVars.confFile == nullptr) {
 		return err_result("Config file unknown");
 	}
@@ -92,10 +172,14 @@ ProxySQL_PluginCommandResult load_variables_from_config(
 	}
 	GenAIPluginContext& ctx = genai_context();
 	if (std::strcmp(prefix, "genai") == 0) {
+		AdminMutexHandoff handoff(cmd_ctx);
+		handoff.release();
 		if (!genai_refresh_runtime_components(ctx)) {
 			return err_result("LOAD GENAI VARIABLES FROM CONFIG: failed reloading runtime components");
 		}
 	} else if (std::strcmp(prefix, "mcp") == 0) {
+		AdminMutexHandoff handoff(cmd_ctx);
+		handoff.release();
 		mcp_start_listener_if_enabled(ctx);
 	}
 	ProxySQL_PluginCommandResult r = ok_result(ok_msg);
@@ -117,8 +201,11 @@ ProxySQL_PluginCommandResult load_mcp_variables_to_runtime(
 	(void)cmd_ctx; (void)sql;
 	GenAIPluginContext& ctx = genai_context();
 	if (!mcp_load_variables_from_admindb(ctx)) {
-		return err_result("LOAD MCP VARIABLES TO RUNTIME: failed reading global_variables");
+		return err_result(
+			"LOAD MCP VARIABLES TO RUNTIME: failed applying or publishing global_variables");
 	}
+	AdminMutexHandoff handoff(cmd_ctx);
+	handoff.release();
 	mcp_start_listener_if_enabled(ctx);
 	return ok_result("MCP variables loaded to runtime");
 }
@@ -136,7 +223,7 @@ ProxySQL_PluginCommandResult save_mcp_variables_to_memory(
 	const ProxySQL_PluginCommandContext& cmd_ctx,
 	const char* sql
 ) {
-	(void)cmd_ctx; (void)sql;
+	(void)sql;
 	GenAIPluginContext& ctx = genai_context();
 	if (!mcp_save_variables_to_admindb(ctx)) {
 		return err_result("SAVE MCP VARIABLES TO MEMORY: failed writing global_variables");
@@ -168,6 +255,8 @@ ProxySQL_PluginCommandResult load_mcp_variables_from_disk(
 	if (!mcp_load_variables_from_admindb(ctx)) {
 		return err_result("LOAD MCP VARIABLES FROM DISK: failed to refresh runtime");
 	}
+	AdminMutexHandoff handoff(cmd_ctx);
+	handoff.release();
 	mcp_start_listener_if_enabled(ctx);
 	return ok_result("MCP variables loaded from disk");
 }
@@ -203,11 +292,13 @@ ProxySQL_PluginCommandResult load_genai_variables_to_runtime(
 	const ProxySQL_PluginCommandContext& cmd_ctx,
 	const char* sql
 ) {
-	(void)cmd_ctx; (void)sql;
+	(void)sql;
 	GenAIPluginContext& ctx = genai_context();
 	if (!genai_load_variables_from_admindb(ctx)) {
 		return err_result("LOAD GENAI VARIABLES TO RUNTIME: failed reading global_variables");
 	}
+	AdminMutexHandoff handoff(cmd_ctx);
+	handoff.release();
 	if (!genai_refresh_runtime_components(ctx)) {
 		return err_result("LOAD GENAI VARIABLES TO RUNTIME: failed reloading runtime components");
 	}
@@ -224,7 +315,7 @@ ProxySQL_PluginCommandResult save_genai_variables_to_memory(
 	const ProxySQL_PluginCommandContext& cmd_ctx,
 	const char* sql
 ) {
-	(void)cmd_ctx; (void)sql;
+	(void)sql;
 	GenAIPluginContext& ctx = genai_context();
 	if (!genai_save_variables_to_admindb(ctx)) {
 		return err_result("SAVE GENAI VARIABLES TO MEMORY: failed writing global_variables");
@@ -263,7 +354,7 @@ ProxySQL_PluginCommandResult save_mcp_query_rules_to_memory(
 	const ProxySQL_PluginCommandContext& cmd_ctx,
 	const char* sql
 ) {
-	(void)cmd_ctx; (void)sql;
+	(void)sql;
 	GenAIPluginContext& ctx = genai_context();
 	if (!mcp_save_query_rules_from_runtime(ctx, /*runtime=*/false)) {
 		return err_result("SAVE MCP QUERY RULES TO MEMORY: failed (is the MCP listener running?)");
@@ -284,11 +375,13 @@ ProxySQL_PluginCommandResult load_mcp_profiles_to_runtime(
 	const ProxySQL_PluginCommandContext& cmd_ctx,
 	const char* sql
 ) {
-	(void)cmd_ctx; (void)sql;
+	(void)sql;
 	GenAIPluginContext& ctx = genai_context();
 	if (!mcp_load_target_auth_map_from_admindb(ctx)) {
 		return err_result("LOAD MCP PROFILES TO RUNTIME: failed reading mcp_*_profiles");
 	}
+	AdminMutexHandoff handoff(cmd_ctx);
+	handoff.release();
 	mcp_start_listener_if_enabled(ctx);
 	return ok_result("MCP profiles loaded to runtime");
 }
@@ -358,6 +451,8 @@ ProxySQL_PluginCommandResult load_mcp_profiles_from_disk(
 	if (!mcp_load_target_auth_map_from_admindb(ctx)) {
 		return err_result("LOAD MCP PROFILES FROM DISK: failed to refresh runtime");
 	}
+	AdminMutexHandoff handoff(cmd_ctx);
+	handoff.release();
 	mcp_start_listener_if_enabled(ctx);
 	return ok_result("MCP profiles loaded from disk");
 }
@@ -451,76 +546,76 @@ void genai_register_admin_commands(ProxySQL_PluginServices* services) {
 	// "LOAD X TO RUNTIME" is canonical; users can also type
 	// "LOAD X FROM MEMORY" / "LOAD X FROM MEM" / "LOAD X TO RUN".
 	// Alias set mirrors mysqlx's convention.
-	reg("LOAD MCP VARIABLES TO RUNTIME", &load_mcp_variables_to_runtime, {
+	reg("LOAD MCP VARIABLES TO RUNTIME", &serialized_admin_command<load_mcp_variables_to_runtime>, {
 		"LOAD MCP VARIABLES FROM MEMORY",
 		"LOAD MCP VARIABLES FROM MEM",
 		"LOAD MCP VARIABLES TO RUN",
 	});
 
-	reg("LOAD MCP VARIABLES FROM DISK", &load_mcp_variables_from_disk, {
+	reg("LOAD MCP VARIABLES FROM DISK", &serialized_admin_command<load_mcp_variables_from_disk>, {
 		"LOAD MCP VARIABLES TO MEMORY",
 		"LOAD MCP VARIABLES TO MEM",
 	});
 
-	reg("LOAD MCP VARIABLES FROM CONFIG", &load_mcp_variables_from_config, {});
+	reg("LOAD MCP VARIABLES FROM CONFIG", &serialized_admin_command<load_mcp_variables_from_config>, {});
 
-	reg("SAVE MCP VARIABLES TO MEMORY", &save_mcp_variables_to_memory, {
+	reg("SAVE MCP VARIABLES TO MEMORY", &serialized_admin_command<save_mcp_variables_to_memory>, {
 		"SAVE MCP VARIABLES TO MEM",
 		"SAVE MCP VARIABLES FROM RUNTIME",
 		"SAVE MCP VARIABLES FROM RUN",
 	});
 
-	reg("SAVE MCP VARIABLES TO DISK", &save_mcp_variables_to_disk, {
+	reg("SAVE MCP VARIABLES TO DISK", &serialized_admin_command<save_mcp_variables_to_disk>, {
 		"SAVE MCP VARIABLES FROM MEMORY",
 		"SAVE MCP VARIABLES FROM MEM",
 	});
 
-	reg("LOAD MCP PROFILES TO RUNTIME", &load_mcp_profiles_to_runtime, {
+	reg("LOAD MCP PROFILES TO RUNTIME", &serialized_admin_command<load_mcp_profiles_to_runtime>, {
 		"LOAD MCP PROFILES FROM MEMORY",
 		"LOAD MCP PROFILES FROM MEM",
 		"LOAD MCP PROFILES TO RUN",
 	});
 
-	reg("LOAD MCP PROFILES FROM DISK", &load_mcp_profiles_from_disk, {
+	reg("LOAD MCP PROFILES FROM DISK", &serialized_admin_command<load_mcp_profiles_from_disk>, {
 		"LOAD MCP PROFILES TO MEMORY",
 	});
 
-	reg("SAVE MCP PROFILES TO MEMORY", &save_mcp_profiles_from_runtime, {
+	reg("SAVE MCP PROFILES TO MEMORY", &serialized_admin_command<save_mcp_profiles_from_runtime>, {
 		"SAVE MCP PROFILES TO MEM",
 		"SAVE MCP PROFILES FROM RUNTIME",
 		"SAVE MCP PROFILES FROM RUN",
 	});
 
-	reg("SAVE MCP PROFILES TO DISK", &save_mcp_profiles_to_disk, {});
+	reg("SAVE MCP PROFILES TO DISK", &serialized_admin_command<save_mcp_profiles_to_disk>, {});
 
-	reg("LOAD MCP QUERY RULES TO RUNTIME", &load_mcp_query_rules_to_runtime, {
+	reg("LOAD MCP QUERY RULES TO RUNTIME", &serialized_admin_command<load_mcp_query_rules_to_runtime>, {
 		"LOAD MCP QUERY RULES FROM MEMORY",
 		"LOAD MCP QUERY RULES FROM MEM",
 		"LOAD MCP QUERY RULES TO RUN",
 	});
 
-	reg("LOAD MCP QUERY RULES FROM DISK", &load_mcp_query_rules_from_disk, {
+	reg("LOAD MCP QUERY RULES FROM DISK", &serialized_admin_command<load_mcp_query_rules_from_disk>, {
 		"LOAD MCP QUERY RULES TO MEMORY",
 	});
 
-	reg("SAVE MCP QUERY RULES TO MEMORY", &save_mcp_query_rules_to_memory, {
+	reg("SAVE MCP QUERY RULES TO MEMORY", &serialized_admin_command<save_mcp_query_rules_to_memory>, {
 		"SAVE MCP QUERY RULES TO MEM",
 		"SAVE MCP QUERY RULES FROM RUNTIME",
 		"SAVE MCP QUERY RULES FROM RUN",
 	});
 
-	reg("SAVE MCP QUERY RULES TO DISK", &save_mcp_query_rules_to_disk, {});
+	reg("SAVE MCP QUERY RULES TO DISK", &serialized_admin_command<save_mcp_query_rules_to_disk>, {});
 
 	// genai-* variables: same alias scheme as the MCP verbs above.
-	reg("LOAD GENAI VARIABLES TO RUNTIME", &load_genai_variables_to_runtime, {
+	reg("LOAD GENAI VARIABLES TO RUNTIME", &serialized_admin_command<load_genai_variables_to_runtime>, {
 		"LOAD GENAI VARIABLES FROM MEMORY",
 		"LOAD GENAI VARIABLES FROM MEM",
 		"LOAD GENAI VARIABLES TO RUN",
 	});
 
-	reg("LOAD GENAI VARIABLES FROM CONFIG", &load_genai_variables_from_config, {});
+	reg("LOAD GENAI VARIABLES FROM CONFIG", &serialized_admin_command<load_genai_variables_from_config>, {});
 
-	reg("SAVE GENAI VARIABLES TO MEMORY", &save_genai_variables_to_memory, {
+	reg("SAVE GENAI VARIABLES TO MEMORY", &serialized_admin_command<save_genai_variables_to_memory>, {
 		"SAVE GENAI VARIABLES TO MEM",
 		"SAVE GENAI VARIABLES FROM RUNTIME",
 		"SAVE GENAI VARIABLES FROM RUN",

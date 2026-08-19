@@ -19,6 +19,7 @@ using json = nlohmann::json;
 #include "AI_Tool_Handler.h"
 #include "RAG_Tool_Handler.h"
 #include "AI_Features_Manager.h"
+#include "genai_plugin.h"
 #include "proxysql_utils.h"
 
 using namespace httpserver;
@@ -181,7 +182,9 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 	// 6. AI endpoint (for LLM and other AI features).
 	if (handler->ai_tool_handler) {
 		std::unique_ptr<httpserver::http_resource> ai_resource =
-			std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, handler->ai_tool_handler, "ai"));
+			std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(
+				handler, handler->ai_tool_handler, "ai",
+				&genai_context().runtime_dependencies_mutex));
 		ws->register_resource("/mcp/ai", ai_resource.get(), true);
 		_endpoints.push_back({"/mcp/ai", std::move(ai_resource)});
 	}
@@ -194,7 +197,9 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 		handler->rag_tool_handler = new RAG_Tool_Handler(GloAI, catalog_path);
 		if (handler->rag_tool_handler->init() == 0) {
 			std::unique_ptr<httpserver::http_resource> rag_resource =
-				std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, handler->rag_tool_handler, "rag"));
+				std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(
+					handler, handler->rag_tool_handler, "rag",
+					&genai_context().runtime_dependencies_mutex));
 			ws->register_resource("/mcp/rag", rag_resource.get(), true);
 			_endpoints.push_back({"/mcp/rag", std::move(rag_resource)});
 			proxy_info("RAG Tool Handler initialized\n");
