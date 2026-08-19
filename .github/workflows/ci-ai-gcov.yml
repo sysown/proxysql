@@ -60,6 +60,7 @@ jobs:
         sparse-checkout: |
           include
           lib
+          plugins/genai
           src
           test/infra
           test/tap
