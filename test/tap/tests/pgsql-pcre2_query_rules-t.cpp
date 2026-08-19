@@ -77,20 +77,26 @@ static bool run_rewrite_case(PGconn* admin, PGconn* proxy, const char* insert_ru
 	return query_ok && value == expected;
 }
 
-static void run_negated_rewrite_case(PGconn* admin, PGconn* proxy, const char* insert_rule) {
+static void run_negated_error_case(PGconn* admin, PGconn* proxy, const char* insert_rule) {
 	std::string value;
 	const bool setup_ok =
 		run_admin_checked(admin, "DELETE FROM pgsql_query_rules WHERE rule_id BETWEEN 61190 AND 61194") &&
 		run_admin_checked(admin, insert_rule) &&
 		run_admin_checked(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
-	const bool excluded_ok = setup_ok && get_single_value(proxy, "SELECT 8", value);
-	ok(excluded_ok && value == "8",
-		"negated pcrecpp rule does not rewrite its matching statement (expected '8', got '%s')",
-		excluded_ok ? value.c_str() : "<query failed>");
-	const bool included_ok = setup_ok && get_single_value(proxy, "SELECT 7", value);
-	ok(included_ok && value == "9",
-		"negated pcrecpp rule rewrites only its non-matching statement (expected '9', got '%s')",
-		included_ok ? value.c_str() : "<query failed>");
+	const bool matching_ok = setup_ok && get_single_value(proxy, "SELECT 8", value);
+	ok(matching_ok && value == "8",
+		"negated PCRE2 rule permits its matching statement (expected '8', got '%s')",
+		matching_ok ? value.c_str() : "<query failed>");
+
+	PGresult* result = setup_ok ? PQexec(proxy, "SELECT 7") : nullptr;
+	const bool blocked = result != nullptr && PQresultStatus(result) == PGRES_FATAL_ERROR;
+	const std::string error = result != nullptr ? PQresultErrorMessage(result) : "";
+	ok(blocked && error.find("PCRE2 negated rule blocked") != std::string::npos,
+		"negated PCRE2 rule blocks its non-matching statement with the configured error (got '%s')",
+		result != nullptr ? error.c_str() : "<no result>");
+	if (result != nullptr) {
+		PQclear(result);
+	}
 }
 
 int main(int, char**) {
@@ -118,19 +124,19 @@ int main(int, char**) {
 		run_rewrite_case(admin.get(), proxy.get(),
 			"INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, replace_pattern, re_modifiers, apply) "
 			"VALUES (61190, 1, '[0-9]', '9', 'CASELESS', 1)",
-			"SELECT 1 + 2", "11", "pcrecpp replaces one match");
+			"SELECT 1 + 2", "11", "PCRE-compatible mode replaces one match");
 		run_rewrite_case(admin.get(), proxy.get(),
 			"INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, replace_pattern, re_modifiers, apply) "
 			"VALUES (61191, 1, '[0-9]', '9', 'CASELESS,GLOBAL', 1)",
-			"SELECT 1 + 2", "18", "pcrecpp replaces all matches with GLOBAL");
+			"SELECT 1 + 2", "18", "PCRE-compatible mode replaces all matches with GLOBAL");
 		run_rewrite_case(admin.get(), proxy.get(),
 			"INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, replace_pattern, re_modifiers, apply) "
 			"VALUES (61192, 1, '^SELECT ([0-9]+)$', 'SELECT ''\\\\0:'' || ''\\\\1''', 'CASELESS', 1)",
-			"SELECT 1", "SELECT 1:1", "pcrecpp expands whole match and capture references");
+			"SELECT 1", "SELECT 1:1", "PCRE-compatible mode expands legacy whole-match and capture references");
 		run_rewrite_case(admin.get(), proxy.get(),
 			"INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, replace_pattern, re_modifiers, apply) "
 			"VALUES (61193, 1, '^SELECT 1$', 'SELECT ''\\\\''', 'CASELESS', 1)",
-			"SELECT 1", "\\", "pcrecpp replacement preserves a literal backslash");
+			"SELECT 1", "\\", "PCRE-compatible replacement preserves a legacy literal backslash");
 		run_rewrite_case(admin.get(), proxy.get(),
 			"INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, replace_pattern, re_modifiers, apply) "
 			"VALUES (61194, 1, '^SELECT 7$', 'SELECT \\\\x', 'CASELESS', 1)",
@@ -138,10 +144,10 @@ int main(int, char**) {
 		run_rewrite_case(admin.get(), proxy.get(),
 			"INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, replace_pattern, re_modifiers, apply) "
 			"VALUES (61190, 1, '^SELECT ''[A-Z]''$', 'SELECT 9', 'CASELESS', 1)",
-			"SELECT 'a'", "9", "CASELESS pcrecpp replacement matches different-case text");
-		run_negated_rewrite_case(admin.get(), proxy.get(),
-			"INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, negate_match_pattern, replace_pattern, re_modifiers, apply) "
-			"VALUES (61194, 1, '^SELECT 8$', 1, 'SELECT 9', 'CASELESS', 1)");
+			"SELECT 'a'", "9", "CASELESS PCRE-compatible replacement matches different-case text");
+		run_negated_error_case(admin.get(), proxy.get(),
+			"INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, negate_match_pattern, error_msg, re_modifiers, apply) "
+			"VALUES (61194, 1, '^SELECT 8$', 1, 'PCRE2 negated rule blocked', 'CASELESS', 1)");
 	} else {
 		for (int i = 0; i < 8; ++i) {
 			ok(0, "could not configure pgsql-query_processor_regex for PCRE-compatible rewrite test");
