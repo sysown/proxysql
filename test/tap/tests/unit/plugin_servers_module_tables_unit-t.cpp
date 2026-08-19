@@ -3,15 +3,21 @@
 #include "ProxySQL_ServerDiscovery.h"
 
 #include <dlfcn.h>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace {
 
+bool g_throw_snapshot = false;
+
 bool module_prepare_runtime(void*, const ProxySQL_ServerModuleSnapshot&,
 	std::vector<ProxySQL_ServerHostgroupClaim>&, std::string&) { return true; }
 void module_commit_runtime(void*, uint64_t) {}
-SQLite3_result* module_runtime_table_snapshot(void*, const char*) { return nullptr; }
+SQLite3_result* module_runtime_table_snapshot(void*, const char*) {
+	if (g_throw_snapshot) throw std::runtime_error("snapshot failure");
+	return nullptr;
+}
 void module_shutdown(void*) {}
 
 class Module final : public ProxySQL_ServerModuleHooks {
@@ -31,7 +37,7 @@ void destroy_module(ProxySQL_ServerModuleHooks* module) { delete module; }
 } // namespace
 
 int main() {
-	plan(10);
+	plan(12);
 	ProxySQL_PluginManager manager;
 	void* handle = dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
 	ProxySQL_ServerModuleTable mysql_a {
@@ -73,6 +79,11 @@ int main() {
 	mysql_module->tables[0].table_name = "mutated_after_registration";
 	ok(manager.server_module_tables(ProxySQL_ServerProtocol::mysql)[0].table_name == mysql_a.table_name,
 		"registry owns deep table metadata copies");
+	g_throw_snapshot = true;
+	ok(manager.server_module_runtime_table_snapshot(ProxySQL_ServerProtocol::mysql,
+		mysql_a.runtime_table_name.c_str()) == nullptr,
+		"runtime snapshot callback exceptions become checked null failures");
+	g_throw_snapshot = false;
 	ProxySQL_ServerModuleTable malformed = mysql_a;
 	malformed.runtime_table_name.clear();
 	ProxySQL_PluginManager malformed_manager;
@@ -96,5 +107,13 @@ int main() {
 		"affiliated module requires complete runtime callbacks");
 	delete incomplete_module;
 	dlclose(incomplete_handle);
+	ProxySQL_PluginManager unloaded_manager;
+	void* unloaded_handle = dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
+	ok(unloaded_manager.register_server_module(new Module(ProxySQL_ServerProtocol::mysql,
+		{mysql_a}), destroy_module, unloaded_handle) &&
+		unloaded_manager.unregister_server_module(ProxySQL_ServerProtocol::mysql) &&
+		unloaded_manager.server_module_runtime_table_snapshot(ProxySQL_ServerProtocol::mysql,
+			mysql_a.runtime_table_name.c_str()) == nullptr,
+		"unloaded module snapshots fail without invoking retired callbacks");
 	return exit_status();
 }

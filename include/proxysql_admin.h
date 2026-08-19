@@ -545,6 +545,7 @@ class ProxySQL_Admin {
 	void flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void disk_upgrade_mysql_query_rules();
 	void disk_upgrade_mysql_servers();
+	bool verify_registered_server_module_tables_after_upgrade();
 	void disk_upgrade_mysql_users();
 	void disk_upgrade_scheduler();
 	void disk_upgrade_rest_api_routes();
@@ -682,7 +683,7 @@ class ProxySQL_Admin {
 	 *   admindb->execute("ATTACH DATABASE 'file:mem_mydb?mode=memory&cache=shared' AS myhgm");
 	 *   ```
 	 */
-	void save_mysql_servers_runtime_to_database(bool _runtime);
+	bool save_mysql_servers_runtime_to_database(bool _runtime);
 	void admin_shutdown();
 	void shutdown_threads();
 	bool is_command(std::string);
@@ -704,7 +705,7 @@ class ProxySQL_Admin {
 	void save_debug_from_runtime();
 #endif // DEBUG
 
-	void flush_GENERIC__from_to(const std::string&, const std::string&);
+	bool flush_GENERIC__from_to(const std::string&, const std::string&);
 
 	void flush_mysql_users__from_memory_to_disk();
 	void flush_mysql_users__from_disk_to_memory();
@@ -899,7 +900,7 @@ class ProxySQL_Admin {
 	char* load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset = NULL, 
 		SQLite3_result* SQLite3_query_rules_fast_routing_resultset = NULL, const std::string& checksum = "", const time_t epoch = 0);
 
-	void save_pgsql_servers_runtime_to_database(bool _runtime);
+	bool save_pgsql_servers_runtime_to_database(bool _runtime);
 	void save_pgsql_firewall_from_runtime(bool);
 	void save_pgsql_query_rules_from_runtime(bool);
 	void save_pgsql_query_rules_fast_routing_from_runtime(bool);

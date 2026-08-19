@@ -547,7 +547,10 @@ template <typename S>
 bool FlushCommandWrapper(S* sess, const std::vector<std::string>& cmds, char *query_no_space, int query_no_space_length, const string& name, const string& direction) {
 	if ( is_admin_command_or_alias(cmds, query_no_space, query_no_space_length) ) {
 		ProxySQL_Admin *SPA = GloAdmin;
-		SPA->flush_GENERIC__from_to(name, direction);
+		if (!SPA->flush_GENERIC__from_to(name, direction)) {
+			SPA->send_error_msg_to_client(sess, (char*)"Server-module table copy failed");
+			return true;
+		}
 #ifdef DEBUG
 		string msg = "Loaded " + name + " ";
 		if (direction == "memory_to_disk")
@@ -2511,8 +2514,12 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			if (is_admin_command_or_alias(SAVE_PGSQL_SERVERS_TO_MEMORY, query_no_space, query_no_space_length)) {
 				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 				SPA->pgsql_servers_wrlock();
-				SPA->save_pgsql_servers_runtime_to_database(false);
+				const bool saved = SPA->save_pgsql_servers_runtime_to_database(false);
 				SPA->pgsql_servers_wrunlock();
+				if (!saved) {
+					SPA->send_error_msg_to_client(sess, (char*)"Server-module runtime snapshot save failed");
+					return false;
+				}
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved pgsql servers from RUNTIME\n");
 				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 				return false;
@@ -2521,8 +2528,12 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			if (is_admin_command_or_alias(SAVE_MYSQL_SERVERS_TO_MEMORY, query_no_space, query_no_space_length)) {
 				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 				SPA->mysql_servers_wrlock();
-				SPA->save_mysql_servers_runtime_to_database(false);
+				const bool saved = SPA->save_mysql_servers_runtime_to_database(false);
 				SPA->mysql_servers_wrunlock();
+				if (!saved) {
+					SPA->send_error_msg_to_client(sess, (char*)"Server-module runtime snapshot save failed");
+					return false;
+				}
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql servers from RUNTIME\n");
 				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 				return false;

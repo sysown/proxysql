@@ -2,29 +2,22 @@
 #include "ProxySQL_Admin_Tables_Definitions.h"
 #include "ProxySQL_PluginManager.h"
 #include "ProxySQL_ServerDiscovery.h"
+#include "ProxySQL_ServerModuleCluster.h"
 
-// Plugin table definitions are materialized by the normal Admin bootstrap
-// before this legacy upgrade chain runs.  Keep their preservation explicit:
-// probing every affiliated table here makes a failed/missing plugin schema a
-// visible upgrade failure rather than silently losing it during a core-server
-// migration.  No provider table name is known to core.
-static bool verify_registered_server_module_tables(SQLite3DB* db, ProxySQL_ServerProtocol protocol) {
+// Called after the normal Admin bootstrap has materialized generic plugin
+// table definitions.  Probe both server protocols so a missing affiliated
+// schema becomes a startup failure instead of a warning after upgrade.
+bool ProxySQL_Admin::verify_registered_server_module_tables_after_upgrade() {
 #ifdef PROXYSQL40
-	for (const auto& table : proxysql_active_server_module_tables(protocol)) {
-		char* error = nullptr;
-		int columns = 0, affected_rows = 0;
-		SQLite3_result* rows = nullptr;
-		const std::string query = "SELECT * FROM " + table.table_name + " ORDER BY " + table.order_by;
-		const bool ok = db->execute_statement(query.c_str(), &error, &columns, &affected_rows, &rows);
-		if (rows != nullptr) delete rows;
-		if (!ok || error != nullptr) {
-			proxy_error("Plugin server table upgrade preservation failed for %s: %s\n", table.table_name.c_str(), error ? error : "unknown error");
-			if (error != nullptr) free(error);
+	for (const auto protocol : {ProxySQL_ServerProtocol::mysql, ProxySQL_ServerProtocol::pgsql}) {
+		const auto tables = proxysql_active_server_module_tables(protocol);
+		if (tables.empty()) continue;
+		std::string error;
+		if (!proxysql_verify_server_module_tables(*configdb, protocol, tables, error)) {
+			proxy_error("Plugin server table upgrade preservation failed: %s\n", error.c_str());
 			return false;
 		}
 	}
-#else
-	(void)db; (void)protocol;
 #endif
 	return true;
 }
@@ -578,8 +571,6 @@ void ProxySQL_Admin::disk_upgrade_mysql_servers() {
 		);
 	}
 	configdb->execute("PRAGMA foreign_keys = ON");
-	verify_registered_server_module_tables(configdb, ProxySQL_ServerProtocol::mysql);
-
 }
 
 

@@ -5,6 +5,7 @@
 #ifdef PROXYSQL40
 
 #include "ProxySQL_PluginManager.h"
+#include "ProxySQL_ServerModuleCluster.h"
 #include "Aws_Iam_Provider.h"
 #include "Aws_Locality_Manager.h"
 #include "MySQL_HostGroups_Manager.h"
@@ -1110,29 +1111,11 @@ bool ProxySQL_PluginManager::register_server_module(
 		module->commit_runtime == nullptr || module->runtime_table_snapshot == nullptr || module->shutdown == nullptr)) return false;
 	const int index = server_protocol_index(module->protocol);
 	if (index < 0) return false;
-	std::vector<ProxySQL_ServerModuleTable> tables;
-	auto identifier = [](const std::string& value) {
-		if (value.empty() || !(std::isalpha(static_cast<unsigned char>(value[0])) || value[0] == '_')) return false;
-		return std::all_of(value.begin() + 1, value.end(), [](unsigned char c) { return std::isalnum(c) || c == '_'; });
-	};
-	auto order_by = [](const std::string& value) {
-		return !value.empty() && std::all_of(value.begin(), value.end(), [](unsigned char c) {
-			return std::isalnum(c) || c == '_' || c == ',' || std::isspace(c);
-		});
-	};
-	if (affiliated_module) for (const auto& table : module->tables) {
-		if (table.protocol != module->protocol || table.table_name.empty() ||
-			table.runtime_table_name.empty() || table.order_by.empty() ||
-			!identifier(table.table_name) || !identifier(table.runtime_table_name) || !order_by(table.order_by)) return false;
-		for (const auto& existing : tables) {
-			if (existing.table_name == table.table_name ||
-				existing.runtime_table_name == table.runtime_table_name) return false;
-		}
-		tables.push_back(table);
-	}
-	std::sort(tables.begin(), tables.end(), [](const auto& lhs, const auto& rhs) {
-		return lhs.table_name < rhs.table_name;
-	});
+	std::vector<ProxySQL_ServerModuleTable> tables = affiliated_module ? module->tables :
+		std::vector<ProxySQL_ServerModuleTable>{};
+	std::string validation_error;
+	if (affiliated_module && !proxysql_validate_server_module_table_registry(
+		module->protocol, tables, validation_error)) return false;
 	std::lock_guard<std::mutex> lock(server_discovery_mutex_);
 	if (server_modules_[index].module != nullptr) return false;
 	server_modules_[index] = {module, destroy, module_handle, std::move(tables)};

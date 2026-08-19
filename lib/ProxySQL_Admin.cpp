@@ -19,6 +19,7 @@ using json = nlohmann::json;
 #include "MySQL_HostGroups_Manager.h"
 #include "PgSQL_HostGroups_Manager.h"
 #include "ProxySQL_PluginManager.h"
+#include "ProxySQL_ServerModuleCluster.h"
 #include "ProxySQL_ServerDiscovery.h"
 #include "mysql.h"
 #include "proxysql_admin.h"
@@ -239,40 +240,10 @@ static bool copy_registered_server_module_tables(SQLite3DB* db,
 static bool save_registered_server_module_runtime_tables(SQLite3DB* db,
 	ProxySQL_ServerProtocol protocol) {
 #ifdef PROXYSQL40
-	const auto tables = proxysql_active_server_module_tables(protocol);
-	if (tables.empty()) return true;
-	if (!db->execute("BEGIN")) return false;
-	for (const auto& table : tables) {
-		std::unique_ptr<SQLite3_result> rows(
-			proxysql_active_server_module_runtime_table_snapshot(protocol, table.runtime_table_name.c_str()));
-		const std::string delete_sql = "DELETE FROM main." + table.table_name;
-		auto [delete_rc, delete_statement] = db->prepare_v2(delete_sql.c_str());
-		if (delete_rc != SQLITE_OK || (*proxy_sqlite3_step)(delete_statement.get()) != SQLITE_DONE) {
-			db->execute("ROLLBACK"); return false;
-		}
-		if (!rows || rows->columns == 0) continue;
-		std::string values;
-		for (int column = 0; column < rows->columns; ++column) {
-			if (column) values += ',';
-			values += '?' + std::to_string(column + 1);
-		}
-		const std::string insert_sql = "INSERT INTO main." + table.table_name + " VALUES (" + values + ')';
-		auto [insert_rc, insert_statement] = db->prepare_v2(insert_sql.c_str());
-		if (insert_rc != SQLITE_OK) { db->execute("ROLLBACK"); return false; }
-		for (const auto* row : rows->rows) {
-			for (int column = 0; column < rows->columns; ++column) {
-				int rc = row->fields[column]
-					? (*proxy_sqlite3_bind_text)(insert_statement.get(), column + 1, row->fields[column], -1, SQLITE_TRANSIENT)
-					: (*proxy_sqlite3_bind_null)(insert_statement.get(), column + 1);
-				if (rc != SQLITE_OK) { db->execute("ROLLBACK"); return false; }
-			}
-			if ((*proxy_sqlite3_step)(insert_statement.get()) != SQLITE_DONE ||
-				(*proxy_sqlite3_clear_bindings)(insert_statement.get()) != SQLITE_OK ||
-				(*proxy_sqlite3_reset)(insert_statement.get()) != SQLITE_OK) { db->execute("ROLLBACK"); return false; }
-		}
-	}
-	if (!db->execute("COMMIT")) { db->execute("ROLLBACK"); return false; }
-	return true;
+	std::string error;
+	const bool ok = proxysql_save_active_server_module_runtime_tables(*db, protocol, error);
+	if (!ok) proxy_error("Saving server-module runtime tables failed: %s\n", error.c_str());
+	return ok;
 #else
 	(void)db; (void)protocol; return true;
 #endif
@@ -6132,25 +6103,27 @@ void ProxySQL_Admin::flush_clickhouse_users__from_memory_to_disk() {
 }
 #endif /* PROXYSQLCLICKHOUSE */
 
-void ProxySQL_Admin::flush_GENERIC__from_to(const string& name, const string& direction) {
+bool ProxySQL_Admin::flush_GENERIC__from_to(const string& name, const string& direction) {
 	assert(direction == "disk_to_memory" || direction == "memory_to_disk");
 	admindb->wrlock();
 	admindb->execute("PRAGMA foreign_keys = OFF");
 	auto it = module_tablenames.find(name);
 	assert(it != module_tablenames.end());
+	bool module_copy_ok = true;
 	if (direction == "disk_to_memory") {
 		BQE1(admindb, it->second, "DELETE FROM main.", "INSERT INTO main.", " SELECT * FROM disk.");
-		if (name == "mysql_servers") copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::mysql, "main", "disk");
-		if (name == "pgsql_servers") copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::pgsql, "main", "disk");
+		if (name == "mysql_servers") module_copy_ok = copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::mysql, "main", "disk");
+		if (name == "pgsql_servers") module_copy_ok = copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::pgsql, "main", "disk");
 	} else if (direction == "memory_to_disk") {
 		BQE1(admindb, it->second, "DELETE FROM disk.", "INSERT INTO disk.", " SELECT * FROM main.");
-		if (name == "mysql_servers") copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::mysql, "disk", "main");
-		if (name == "pgsql_servers") copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::pgsql, "disk", "main");
+		if (name == "mysql_servers") module_copy_ok = copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::mysql, "disk", "main");
+		if (name == "pgsql_servers") module_copy_ok = copy_registered_server_module_tables(admindb, ProxySQL_ServerProtocol::pgsql, "disk", "main");
 	} else {
 		assert(0);
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
 	admindb->wrunlock();
+	return module_copy_ok;
 }
 
 void ProxySQL_Admin::flush_mysql_variables__from_memory_to_disk() {
@@ -7503,7 +7476,7 @@ void ProxySQL_Admin::save_scheduler_runtime_to_database(bool _runtime) {
 	free(args);
 }
 
-void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
+bool ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 	// make sure that the caller has called mysql_servers_wrlock()
 	char *query=NULL;
 	string StrQuery;
@@ -7927,11 +7900,12 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 	if(resultset) delete resultset;
 	resultset=NULL;
 	if (_runtime == false) {
-		save_registered_server_module_runtime_tables(admindb, ProxySQL_ServerProtocol::mysql);
+		return save_registered_server_module_runtime_tables(admindb, ProxySQL_ServerProtocol::mysql);
 	}
+	return true;
 }
 
-void ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
+bool ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 	// make sure that the caller has called pgsql_servers_wrlock()
 	char* query = NULL;
 	string StrQuery;
@@ -8144,8 +8118,9 @@ void ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 	if(resultset) delete resultset;
 	resultset=NULL;
 	if (_runtime == false) {
-		save_registered_server_module_runtime_tables(admindb, ProxySQL_ServerProtocol::pgsql);
+		return save_registered_server_module_runtime_tables(admindb, ProxySQL_ServerProtocol::pgsql);
 	}
+	return true;
 }
 
 

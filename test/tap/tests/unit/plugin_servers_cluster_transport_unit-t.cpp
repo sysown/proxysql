@@ -26,7 +26,7 @@ ProxySQL_ServerModuleClusterTable table(const char* name, const char* runtime,
 } // namespace
 
 int main() {
-	plan(18);
+	plan(31);
 	SQLite3DB source;
 	SQLite3DB destination;
 	source.open((char*)"file:module-cluster-source?mode=memory&cache=private", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI);
@@ -85,6 +85,14 @@ int main() {
 		"malformed row shape fails the v2 transaction");
 	alpha = query(destination, "SELECT label FROM mysql_plugin_alpha WHERE writer=77");
 	ok(alpha && alpha->rows_count == 1, "failed v2 apply rolls back destination state");
+	std::vector<ProxySQL_ServerModuleClusterTable> null_snapshot;
+	null_snapshot.push_back(table("mysql_plugin_alpha", "runtime_mysql_plugin_alpha",
+		"writer,reader", nullptr));
+	ok(!proxysql_apply_server_module_cluster_memory(destination, null_snapshot, error),
+		"null runtime snapshot is a checked failure");
+	alpha = query(destination, "SELECT label FROM mysql_plugin_alpha WHERE writer=77");
+	ok(alpha && alpha->rows_count == 1,
+		"null runtime snapshot never clears existing configuration");
 
 	const std::string mysql_v1 = proxysql_server_module_cluster_metadata_query(
 		ProxySQL_ServerProtocol::mysql, ProxySQL_ServerModuleClusterVersion::runtime_v1);
@@ -97,8 +105,8 @@ int main() {
 	std::unique_ptr<SQLite3_result> endpoint_rows;
 	error.clear();
 	ok(proxysql_server_module_cluster_endpoint(mysql_v1, source, endpoint_rows, error) ==
-		ProxySQL_ServerModuleClusterEndpointResult::handled && endpoint_rows && endpoint_rows->rows_count == 0,
-		"new endpoint advertises an empty registry distinctly from old-peer absence");
+		ProxySQL_ServerModuleClusterEndpointResult::error && !endpoint_rows,
+		"new endpoint rejects an unavailable local registry instead of advertising successful discard");
 	ok(proxysql_server_module_cluster_endpoint("PROXY_SELECT legacy_only", source, endpoint_rows, error) ==
 		ProxySQL_ServerModuleClusterEndpointResult::unsupported,
 		"unsupported old-peer query remains an explicit legacy fallback");
@@ -120,5 +128,49 @@ int main() {
 	ok(core && proxysql_prepare_server_module_cluster_runtime(ProxySQL_ServerProtocol::mysql, 7,
 		*core, std::vector<ProxySQL_ServerModuleClusterTable>{}, error),
 		"v1 runtime preparation accepts the transported core snapshot without storing a projection");
+
+	std::vector<ProxySQL_ServerModuleTable> local_registry {
+		{ProxySQL_ServerProtocol::mysql, "mysql_plugin_alpha", "runtime_mysql_plugin_alpha", "writer,reader"},
+		{ProxySQL_ServerProtocol::mysql, "mysql_plugin_zeta", "runtime_mysql_plugin_zeta", "writer,reader"},
+	};
+	std::vector<ProxySQL_ServerModuleTable> peer_registry = local_registry;
+	ok(proxysql_server_module_cluster_registry_matches(ProxySQL_ServerProtocol::mysql,
+		local_registry, peer_registry, error), "matching new-peer registries negotiate dynamic sync");
+	peer_registry.pop_back();
+	ok(!proxysql_server_module_cluster_registry_matches(ProxySQL_ServerProtocol::mysql,
+		local_registry, peer_registry, error), "missing peer metadata rejects dynamic sync");
+	peer_registry = local_registry;
+	peer_registry[0].order_by = "reader,writer";
+	ok(!proxysql_server_module_cluster_registry_matches(ProxySQL_ServerProtocol::mysql,
+		local_registry, peer_registry, error), "order metadata mismatch rejects dynamic sync");
+	peer_registry = local_registry;
+	std::swap(peer_registry[0], peer_registry[1]);
+	ok(!proxysql_server_module_cluster_registry_matches(ProxySQL_ServerProtocol::mysql,
+		local_registry, peer_registry, error), "non-lexical peer metadata order rejects dynamic sync");
+	ok(!proxysql_server_module_cluster_registry_matches(ProxySQL_ServerProtocol::mysql,
+		{}, local_registry, error), "missing local registry cannot silently discard peer tables");
+
+	const uint64_t legacy_core_checksum = core->raw_checksum();
+	const uint64_t separate_module_checksum = proxysql_server_module_cluster_checksum(pg_payload);
+	ok(legacy_core_checksum == core->raw_checksum() && separate_module_checksum != legacy_core_checksum,
+		"new sender preserves the legacy field byte-for-byte for an old receiver");
+	ok(!proxysql_server_module_cluster_checksum_matches(pg_payload, "0000000000000000", error),
+		"new receiver rejects a separately negotiated module checksum mismatch");
+	ok(proxysql_server_module_cluster_legacy_fallback_allowed(1045,
+		"ProxySQL Admin Error: near \"PROXY_SELECT\": syntax error") &&
+		!proxysql_server_module_cluster_legacy_fallback_allowed(1045, "Access denied"),
+		"new receiver falls back to legacy core sync only for an old sender's exact endpoint syntax error");
+
+	std::vector<ProxySQL_ServerModuleTable> mysql_disk_registry {local_registry[0]};
+	std::vector<ProxySQL_ServerModuleTable> pgsql_disk_registry {
+		{ProxySQL_ServerProtocol::pgsql, "pgsql_plugin_policy", "runtime_pgsql_plugin_policy", "writer"}
+	};
+	ok(proxysql_verify_server_module_tables(destination, ProxySQL_ServerProtocol::mysql,
+		mysql_disk_registry, error), "post-materialization disk verification preserves MySQL affiliated tables");
+	ok(proxysql_verify_server_module_tables(destination, ProxySQL_ServerProtocol::pgsql,
+		pgsql_disk_registry, error), "post-materialization disk verification preserves PGSQL affiliated tables");
+	mysql_disk_registry[0].table_name = "mysql_plugin_missing";
+	ok(!proxysql_verify_server_module_tables(destination, ProxySQL_ServerProtocol::mysql,
+		mysql_disk_registry, error), "missing affiliated disk schema propagates upgrade failure");
 	return exit_status();
 }
