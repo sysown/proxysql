@@ -451,6 +451,7 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	pgsql_response_framer_unit-t \
 	pgsql_response_framer_traffic_unit-t \
 	ffto_state_machine_unit-t \
+	re2_vendor_unit-t \
 	restapi_server_unit-t \
 	mcp_client_unit-t
 
@@ -570,6 +571,11 @@ ezoption_parser_unit-t: ezoption_parser_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noi
 mcp_client_unit-t: mcp_client_unit-t.cpp $(TAP_PATH)/mcp_client.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
 	$(CXX) $< $(TAP_PATH)/mcp_client.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
 		$(IDIRS) $(LDIRS) $(OPT) -Wl,-Bdynamic -lcurl -lpthread -o $@
+
+re2_vendor_unit-t: re2_vendor_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) -I$(ABSL_IDIR) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) \
+		$(ALLOW_MULTI_DEF) -o $@
 
 plugin_manager_unit-t: plugin_manager_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \

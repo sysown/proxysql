@@ -328,6 +328,7 @@
   "reg_test_stmt_resultset_err_no_rows_php-t" : [ "legacy-g7","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2","mysql84-g7","mysql90-g2","mysql95-g2" ],
   "reg_test_stmt_send_long_data_short_packet-t" : [ "mysql84-g6","mysql95-g1" ],
   "reg_test_unexp_ping_pkt-t" : [ "legacy-g7","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2","mysql84-g7","mysql90-g2","mysql95-g2" ],
+  "re2_vendor_unit-t" : [ "unit-tests-g1" ],
   "restapi_server_unit-t" : [ "unit-tests-g1" ],
   "rule_matching_unit-t" : [ "unit-tests-g1" ],
   "savepoint-3749-t" : [ "legacy-g7","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2","mysql84-g7","mysql90-g2","mysql95-g2" ],
