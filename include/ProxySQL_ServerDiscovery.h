@@ -8,6 +8,7 @@
 #include <vector>
 
 class SQLite3_result;
+class SQLite3DB;
 
 enum class ProxySQL_ServerProtocol : uint8_t { mysql = 0, pgsql = 1 };
 enum class ProxySQL_ServerPersistence : uint8_t {
@@ -48,12 +49,10 @@ struct ProxySQL_ServerDesiredSet {
 	ProxySQL_ServerPersistence persistence { ProxySQL_ServerPersistence::runtime_only };
 };
 
-bool proxysql_prepare_server_runtime_install(const ProxySQL_ServerRuntimeSnapshot& snapshot);
-// Preparation is intentionally side-effect free.  A failed policy must not
-// consume an installed generation, so callers use this candidate only while
-// validating and reserve the generation at the post-HGM commit point.
+// Returns the next generation that a successful transaction would install.
+// This is an observation seam; callers must acquire a transaction rather than
+// using the value to tag a candidate themselves.
 uint64_t proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol protocol);
-void proxysql_commit_server_runtime_install(ProxySQL_ServerRuntimeSnapshot snapshot);
 ProxySQL_ServerRuntimeSnapshot proxysql_server_runtime_snapshot_from_rows(
 	ProxySQL_ServerProtocol protocol, uint64_t generation, const SQLite3_result& rows);
 
@@ -81,8 +80,41 @@ struct ProxySQL_ServerModuleSnapshot {
 	std::vector<ProxySQL_ServerModuleTableSnapshot> module_tables;
 };
 
-bool proxysql_prepare_server_runtime_install(const ProxySQL_ServerModuleSnapshot& snapshot,
-	std::vector<ProxySQL_ServerHostgroupClaim>& claims, std::string& error);
+struct ProxySQL_ServerBuiltinTopologyInputs {
+	const SQLite3_result* mysql_replication {nullptr};
+	const SQLite3_result* mysql_group_replication {nullptr};
+	const SQLite3_result* mysql_galera {nullptr};
+	const SQLite3_result* mysql_aurora {nullptr};
+	const SQLite3_result* mysql_rds_blue_green {nullptr};
+	const SQLite3_result* pgsql_replication {nullptr};
+};
+
+bool proxysql_collect_active_builtin_server_topology(SQLite3DB& db,
+	ProxySQL_ServerProtocol protocol, const ProxySQL_ServerBuiltinTopologyInputs& inputs,
+	std::vector<uint32_t>& hostgroups, std::string& error);
+
+class ProxySQL_ServerRuntimeInstallTransaction {
+public:
+	ProxySQL_ServerRuntimeInstallTransaction() noexcept;
+	ProxySQL_ServerRuntimeInstallTransaction(ProxySQL_ServerProtocol protocol, std::string& error);
+	~ProxySQL_ServerRuntimeInstallTransaction();
+	ProxySQL_ServerRuntimeInstallTransaction(ProxySQL_ServerRuntimeInstallTransaction&&) noexcept;
+	ProxySQL_ServerRuntimeInstallTransaction& operator=(ProxySQL_ServerRuntimeInstallTransaction&&) noexcept;
+	ProxySQL_ServerRuntimeInstallTransaction(const ProxySQL_ServerRuntimeInstallTransaction&) = delete;
+	ProxySQL_ServerRuntimeInstallTransaction& operator=(const ProxySQL_ServerRuntimeInstallTransaction&) = delete;
+
+	explicit operator bool() const noexcept;
+	uint64_t generation() const noexcept;
+	bool prepare(ProxySQL_ServerRuntimeSnapshot& snapshot, std::string& error);
+	bool prepare(ProxySQL_ServerModuleSnapshot& snapshot,
+		std::vector<ProxySQL_ServerHostgroupClaim>& claims, std::string& error);
+	bool commit(ProxySQL_ServerRuntimeSnapshot snapshot, bool commit_affiliated_module = true);
+	void abort() noexcept;
+
+private:
+	struct Impl;
+	std::unique_ptr<Impl> impl_;
+};
 
 struct ProxySQL_ServerModuleHooks {
 	// Keep this ABI-9 prefix immutable: retained modules compiled against the

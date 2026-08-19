@@ -447,35 +447,22 @@ bool proxysql_verify_server_module_tables(SQLite3DB& db, ProxySQL_ServerProtocol
 }
 
 bool proxysql_prepare_server_module_cluster_runtime(
-	ProxySQL_ServerProtocol protocol, uint64_t generation,
+	ProxySQL_ServerProtocol protocol, ProxySQL_ServerRuntimeInstallTransaction& transaction,
 	const SQLite3_result& core_servers,
 	const std::vector<ProxySQL_ServerModuleClusterTable>& tables,
+	SQLite3DB& topology_db,
 	std::string& error) {
 	ProxySQL_ServerModuleSnapshot snapshot;
-	snapshot.runtime.protocol = protocol;
-	snapshot.runtime.generation = generation;
 	const int expected_columns = protocol == ProxySQL_ServerProtocol::mysql ? 12 : 11;
 	if (core_servers.columns != expected_columns) {
 		error = "malformed core servers result for module runtime preparation";
 		return false;
 	}
-	for (const auto* row : core_servers.rows) {
-		const int offset = protocol == ProxySQL_ServerProtocol::mysql ? 1 : 0;
-		ProxySQL_ServerRow server;
-		server.hostgroup_id = static_cast<uint32_t>(strtoul(row->fields[0], nullptr, 10));
-		server.hostname = row->fields[1] ? row->fields[1] : "";
-		server.port = static_cast<uint16_t>(strtoul(row->fields[2], nullptr, 10));
-		server.gtid_port = offset ? atoi(row->fields[3]) : 0;
-		server.status = row->fields[3 + offset] ? row->fields[3 + offset] : "";
-		server.weight = atoll(row->fields[4 + offset]);
-		server.compression = atoi(row->fields[5 + offset]);
-		server.max_connections = atoll(row->fields[6 + offset]);
-		server.max_replication_lag = atoll(row->fields[7 + offset]);
-		server.use_ssl = atoi(row->fields[8 + offset]);
-		server.max_latency_ms = atoll(row->fields[9 + offset]);
-		server.comment = row->fields[10 + offset] ? row->fields[10 + offset] : "";
-		snapshot.runtime.servers.push_back(std::move(server));
-	}
+	snapshot.runtime = proxysql_server_runtime_snapshot_from_rows(
+		protocol, transaction.generation(), core_servers);
+	ProxySQL_ServerBuiltinTopologyInputs topology_inputs {};
+	if (!proxysql_collect_active_builtin_server_topology(topology_db, protocol,
+		topology_inputs, snapshot.runtime.topology_hostgroups, error)) return false;
 	for (const auto& table : tables) {
 		if (!table.rows) {
 			error = "missing runtime server-module table payload";
@@ -485,7 +472,7 @@ bool proxysql_prepare_server_module_cluster_runtime(
 			std::unique_ptr<SQLite3_result>(new SQLite3_result(table.rows.get()))});
 	}
 	std::vector<ProxySQL_ServerHostgroupClaim> claims;
-	return proxysql_prepare_server_runtime_install(snapshot, claims, error);
+	return transaction.prepare(snapshot, claims, error);
 }
 
 #endif /* PROXYSQL40 */

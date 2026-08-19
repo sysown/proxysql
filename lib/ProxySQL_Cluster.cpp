@@ -2101,23 +2101,34 @@ module_fetch_status fetch_server_module_tables(MYSQL* conn, ProxySQL_ServerProto
 
 #ifdef PROXYSQL40
 bool proxysql_cluster_install_v1_runtime_post_fetch(
-	ProxySQL_ServerProtocol protocol, SQLite3_result* core_rows,
-	bool module_runtime_supported, uint64_t module_generation,
-	const std::function<void(SQLite3_result*)>& stage_core_rows,
-	const std::function<bool(SQLite3_result*)>& commit_core_rows) {
+		ProxySQL_ServerProtocol protocol, SQLite3_result* core_rows,
+		bool module_runtime_supported,
+		const std::vector<ProxySQL_ServerModuleClusterTable>& module_tables,
+		SQLite3DB* topology_db,
+		const std::function<void(SQLite3_result*)>& stage_core_rows,
+		const std::function<bool(SQLite3_result*)>& commit_core_rows) {
 	std::unique_ptr<SQLite3_result> rows(core_rows);
 	if (!rows || !stage_core_rows || !commit_core_rows) return false;
-	stage_core_rows(rows.get());
+	std::string error;
+	ProxySQL_ServerRuntimeInstallTransaction transaction(protocol, error);
+	if (!transaction) return false;
+	if (module_runtime_supported && (topology_db == nullptr ||
+		!proxysql_prepare_server_module_cluster_runtime(protocol, transaction,
+			*rows, module_tables, *topology_db, error))) return false;
 	ProxySQL_ServerRuntimeSnapshot installed_snapshot =
-		proxysql_server_runtime_snapshot_from_rows(protocol, module_generation, *rows);
-	// The HGM commit API owns the raw resultset, including its failure paths.
-	if (!commit_core_rows(rows.release())) return false;
-	if (module_runtime_supported) {
-		proxysql_commit_server_runtime_install(std::move(installed_snapshot));
-	} else {
-		proxysql_install_active_server_runtime_snapshot(std::move(installed_snapshot));
+		proxysql_server_runtime_snapshot_from_rows(protocol, transaction.generation(), *rows);
+	try {
+		stage_core_rows(rows.get());
+	} catch (...) {
+		return false;
 	}
-	return true;
+	// The HGM commit API owns the raw resultset, including its failure paths.
+	try {
+		if (!commit_core_rows(rows.release())) return false;
+	} catch (...) {
+		return false;
+	}
+	return transaction.commit(std::move(installed_snapshot), module_runtime_supported);
 }
 #endif
 
@@ -2247,25 +2258,15 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 						std::unique_ptr<SQLite3_result> runtime_mysql_servers_resultset = get_SQLite3_resulset(result);
 #ifdef PROXYSQL40
 						const bool module_runtime_supported = module_status == module_fetch_status::success;
-						const uint64_t module_generation = module_runtime_supported
-							? proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::mysql) : 0;
 						// An old v1 peer has no dynamic-table endpoint.  Install its core
 						// controller snapshot, but retain this node's affiliated policy
 						// rather than preparing/committing it against absent payload.
-						if (module_runtime_supported && !proxysql_prepare_server_module_cluster_runtime(ProxySQL_ServerProtocol::mysql,
-								module_generation, *runtime_mysql_servers_resultset, module_tables_v1, module_error)) {
-							proxy_error("Cluster: preparing MySQL server-module v1 runtime failed: %s\n", module_error.c_str());
-							GloAdmin->mysql_servers_wrunlock();
-							mysql_free_result(result);
-							fetch_failed = true;
-							goto __exit_pull_mysql_servers_from_peer;
-						}
-#endif
+						#endif
 #ifdef PROXYSQL40
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Loading runtime_mysql_servers from peer %s:%d into mysql_servers_incoming", hostname, port);
 						const bool installed = proxysql_cluster_install_v1_runtime_post_fetch(
 							ProxySQL_ServerProtocol::mysql, runtime_mysql_servers_resultset.release(),
-							module_runtime_supported, module_generation,
+							module_runtime_supported, module_tables_v1, GloAdmin->admindb,
 							[](SQLite3_result* rows) { MyHGM->servers_add(rows); },
 							[&](SQLite3_result* rows) {
 								proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Updating runtime_mysql_servers from peer %s:%d", hostname, port);
@@ -3849,22 +3850,12 @@ void ProxySQL_Cluster::pull_runtime_pgsql_servers_from_peer(const runtime_pgsql_
 				std::unique_ptr<SQLite3_result> runtime_pgsql_servers_resultset = get_SQLite3_resulset(result);
 #ifdef PROXYSQL40
 				const bool module_runtime_supported = module_status == module_fetch_status::success;
-				const uint64_t module_generation = module_runtime_supported
-					? proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::pgsql) : 0;
-				if (module_runtime_supported && !proxysql_prepare_server_module_cluster_runtime(ProxySQL_ServerProtocol::pgsql,
-						module_generation, *runtime_pgsql_servers_resultset, module_tables_v1, module_error)) {
-					proxy_error("Cluster: preparing PostgreSQL server-module v1 runtime failed: %s\n", module_error.c_str());
-					GloAdmin->pgsql_servers_wrunlock();
-					mysql_free_result(result);
-					fetch_failed = true;
-					goto __exit_pull_runtime_pgsql_servers_from_peer;
-				}
-#endif
+				#endif
 #ifdef PROXYSQL40
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Loading runtime_pgsql_servers from peer %s:%d into pgsql_servers_incoming\n", hostname, port);
 				const bool installed = proxysql_cluster_install_v1_runtime_post_fetch(
 					ProxySQL_ServerProtocol::pgsql, runtime_pgsql_servers_resultset.release(),
-					module_runtime_supported, module_generation,
+					module_runtime_supported, module_tables_v1, GloAdmin->admindb,
 					[](SQLite3_result* rows) { PgHGM->servers_add(rows); },
 					[&](SQLite3_result* rows) {
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Updating runtime_pgsql_servers from peer %s:%d\n", hostname, port);
@@ -4604,6 +4595,12 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_variables_module(const char* modul
 		std::function<ProxySQL_Checksum_Value_2*(ProxySQL_Node_Entry*)> server_module_checksum_getter;
 	};
 
+	#ifdef PROXYSQL40
+	#define SERVER_MODULE_CHECKSUM_GETTER(field) \
+		[](ProxySQL_Node_Entry* node) { return &node->checksums_values.field; }
+	#else
+	#define SERVER_MODULE_CHECKSUM_GETTER(field) nullptr
+	#endif
 	// Initialize all supported modules with their configuration
 	const ModuleConfig modules[] = {
 		// Basic 3-param modules (no checksum)
@@ -4621,20 +4618,20 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_variables_module(const char* modul
 		// Runtime 4-param modules (with checksum)
 		{"runtime_mysql_servers", &ProxySQL_Cluster::cluster_mysql_servers_diffs_before_sync,
 			[](ProxySQL_Node_Entry* node) { return &node->checksums_values.mysql_servers; }, nullptr, true, false, nullptr,
-			[](ProxySQL_Node_Entry* node) { return &node->checksums_values.server_module_mysql_v1; }},
+			SERVER_MODULE_CHECKSUM_GETTER(server_module_mysql_v1)},
 		{"runtime_pgsql_servers", &ProxySQL_Cluster::cluster_pgsql_servers_diffs_before_sync,
 			[](ProxySQL_Node_Entry* node) { return &node->checksums_values.pgsql_servers; }, nullptr, true, false, nullptr,
-			[](ProxySQL_Node_Entry* node) { return &node->checksums_values.server_module_pgsql_v1; }},
+			SERVER_MODULE_CHECKSUM_GETTER(server_module_pgsql_v1)},
 
 		// V2 5-param modules (with dual checksums)
 		{"mysql_servers_v2", &ProxySQL_Cluster::cluster_mysql_servers_diffs_before_sync,
 			[](ProxySQL_Node_Entry* node) { return &node->checksums_values.mysql_servers_v2; },
 			[](ProxySQL_Node_Entry* node) { return &node->checksums_values.mysql_servers; }, true, true, "runtime_mysql_servers",
-			[](ProxySQL_Node_Entry* node) { return &node->checksums_values.server_module_mysql_v2; }},
+			SERVER_MODULE_CHECKSUM_GETTER(server_module_mysql_v2)},
 		{"pgsql_servers_v2", &ProxySQL_Cluster::cluster_pgsql_servers_diffs_before_sync,
 			[](ProxySQL_Node_Entry* node) { return &node->checksums_values.pgsql_servers_v2; },
 			[](ProxySQL_Node_Entry* node) { return &node->checksums_values.pgsql_servers; }, true, true, "runtime_pgsql_servers",
-			[](ProxySQL_Node_Entry* node) { return &node->checksums_values.server_module_pgsql_v2; }},
+			SERVER_MODULE_CHECKSUM_GETTER(server_module_pgsql_v2)},
 
 		// Variables modules (already unified)
 		{"mysql_variables", &ProxySQL_Cluster::cluster_mysql_variables_diffs_before_sync,
@@ -4646,6 +4643,7 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_variables_module(const char* modul
 		{"pgsql_variables", &ProxySQL_Cluster::cluster_pgsql_variables_diffs_before_sync,
 			[](ProxySQL_Node_Entry* node) { return &node->checksums_values.pgsql_variables; }, nullptr, false, false, nullptr, nullptr}
 	};
+	#undef SERVER_MODULE_CHECKSUM_GETTER
 
 	// Find the matching module configuration
 	const ModuleConfig* config = nullptr;

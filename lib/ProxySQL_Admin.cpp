@@ -250,54 +250,23 @@ static bool save_registered_server_module_runtime_tables(SQLite3DB* db,
 }
 
 static bool prepare_registered_server_module_runtime(SQLite3DB* db,
-	ProxySQL_ServerProtocol protocol, uint64_t generation,
-	const SQLite3_result* core_rows, ProxySQL_ServerRuntimeSnapshot& installed_snapshot) {
+	ProxySQL_ServerProtocol protocol, const SQLite3_result* core_rows,
+	const ProxySQL_ServerBuiltinTopologyInputs& topology_inputs,
+	ProxySQL_ServerRuntimeInstallTransaction& transaction,
+	ProxySQL_ServerRuntimeSnapshot& installed_snapshot) {
 #ifdef PROXYSQL40
 	ProxySQL_ServerModuleSnapshot snapshot {};
 	std::string error;
-	auto append_topology = [&](const char* query, unsigned int fields, std::string& error) -> bool {
-		char* sqlite_error = nullptr;
-		int columns = 0, affected_rows = 0;
-		SQLite3_result* raw_rows = nullptr;
-		const bool ok = db->execute_statement(query, &sqlite_error, &columns, &affected_rows, &raw_rows);
-		std::unique_ptr<SQLite3_result> rows(raw_rows);
-		if (!ok || sqlite_error != nullptr) {
-			const std::string message = sqlite_error ? sqlite_error : "topology query failed";
-			if (sqlite_error) free(sqlite_error);
-			// Older databases may not yet own an optional topology table.
-			if (message.find("no such table") != std::string::npos) return true;
-			error = message;
-			return false;
-		}
-		for (const auto* row : rows->rows) {
-			if (row == nullptr || row->fields == nullptr) continue;
-			for (unsigned int field = 0; field < fields; ++field) {
-				if (row->fields[field] != nullptr)
-					snapshot.runtime.topology_hostgroups.push_back(
-						static_cast<uint32_t>(strtoul(row->fields[field], nullptr, 10)));
-			}
-		}
-		return true;
-	};
 	snapshot.runtime.protocol = protocol;
-	snapshot.runtime.generation = generation;
 	const int expected_core_columns = protocol == ProxySQL_ServerProtocol::mysql ? 12 : 11;
 	if (core_rows == nullptr || core_rows->columns != expected_core_columns) {
 		proxy_error("Malformed core server snapshot while preparing plugin runtime\n");
 		return false;
 	}
-	snapshot.runtime = proxysql_server_runtime_snapshot_from_rows(protocol, generation, *core_rows);
-	if (protocol == ProxySQL_ServerProtocol::mysql) {
-		if (!append_topology("SELECT writer_hostgroup,reader_hostgroup FROM mysql_replication_hostgroups", 2, error) ||
-			!append_topology("SELECT writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup FROM mysql_group_replication_hostgroups", 4, error) ||
-			!append_topology("SELECT writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup FROM mysql_galera_hostgroups", 4, error) ||
-			!append_topology("SELECT writer_hostgroup,reader_hostgroup FROM mysql_aws_aurora_hostgroups", 2, error) ||
-			!append_topology("SELECT writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup FROM mysql_aws_rds_bgd_hostgroups", 4, error)) {
-			proxy_error("Unable to collect MySQL topology claims: %s\n", error.c_str());
-			return false;
-		}
-	} else if (!append_topology("SELECT writer_hostgroup,reader_hostgroup FROM pgsql_replication_hostgroups", 2, error)) {
-		proxy_error("Unable to collect PostgreSQL topology claims: %s\n", error.c_str());
+	snapshot.runtime = proxysql_server_runtime_snapshot_from_rows(protocol, transaction.generation(), *core_rows);
+	if (!proxysql_collect_active_builtin_server_topology(*db, protocol, topology_inputs,
+		snapshot.runtime.topology_hostgroups, error)) {
+		proxy_error("Unable to collect built-in topology claims: %s\n", error.c_str());
 		return false;
 	}
 	for (const auto& table : proxysql_active_server_module_tables(protocol)) {
@@ -316,23 +285,15 @@ static bool prepare_registered_server_module_runtime(SQLite3DB* db,
 		snapshot.module_tables.push_back({table.table_name, std::unique_ptr<SQLite3_result>(rows)});
 	}
 	std::vector<ProxySQL_ServerHostgroupClaim> claims;
-	if (!proxysql_prepare_server_runtime_install(snapshot, claims, error)) {
+	if (!transaction.prepare(snapshot, claims, error)) {
 		proxy_error("Plugin server module rejected configuration: %s\n", error.c_str());
 		return false;
 	}
 	installed_snapshot = std::move(snapshot.runtime);
 	return true;
 #else
-	(void)db; (void)protocol; (void)generation;
+	(void)db; (void)protocol; (void)core_rows; (void)topology_inputs; (void)transaction; (void)installed_snapshot;
 	return true;
-#endif
-}
-
-static void commit_registered_server_module_runtime(ProxySQL_ServerRuntimeSnapshot snapshot) {
-#ifdef PROXYSQL40
-	proxysql_commit_server_runtime_install(std::move(snapshot));
-#else
-	(void)snapshot;
 #endif
 }
 
@@ -8190,7 +8151,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	// make sure that the caller has called mysql_servers_wrlock()
 	ProxySQL_ServerRuntimeSnapshot installed_snapshot {};
 	installed_snapshot.protocol = ProxySQL_ServerProtocol::mysql;
-	installed_snapshot.generation = proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::mysql);
+	ProxySQL_ServerRuntimeInstallTransaction runtime_install;
 	bool runtime_install_prepared = false;
 	char *error=NULL;
 	int cols=0;
@@ -8228,8 +8189,19 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
-		if (emit_runtime_install && !prepare_registered_server_module_runtime(admindb, ProxySQL_ServerProtocol::mysql,
-			installed_snapshot.generation, resultset_servers, installed_snapshot)) return;
+		if (emit_runtime_install) {
+			std::string install_error;
+			runtime_install = ProxySQL_ServerRuntimeInstallTransaction(ProxySQL_ServerProtocol::mysql, install_error);
+			ProxySQL_ServerBuiltinTopologyInputs topology_inputs {};
+			topology_inputs.mysql_replication = incoming_replication_hostgroups;
+			topology_inputs.mysql_group_replication = incoming_group_replication_hostgroups;
+			topology_inputs.mysql_galera = incoming_galera_hostgroups;
+			topology_inputs.mysql_aurora = incoming_aurora_hostgroups;
+			topology_inputs.mysql_rds_blue_green = incoming_aws_rds_bgd_hostgroups;
+			if (!runtime_install || !prepare_registered_server_module_runtime(admindb,
+				ProxySQL_ServerProtocol::mysql, resultset_servers, topology_inputs,
+				runtime_install, installed_snapshot)) return;
+		}
 		runtime_install_prepared = emit_runtime_install;
 		MyHGM->servers_add(resultset_servers);
 	}
@@ -8410,13 +8382,14 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	}
 
 	// commit all the changes
-	MyHGM->commit(
+	const bool runtime_hgm_committed = MyHGM->commit(
 		{ runtime_mysql_servers, peer_runtime_mysql_server },
 		{ incoming_mysql_servers_v2, peer_mysql_server_v2 },
 		false, true
 	);
-	if (runtime_install_prepared)
-		commit_registered_server_module_runtime(std::move(installed_snapshot));
+	if (runtime_install_prepared && runtime_hgm_committed &&
+		!runtime_install.commit(std::move(installed_snapshot)))
+		proxy_error("Unable to commit MySQL server runtime installation transaction\n");
 	
 	// quering runtime table will update and return latest records, so this is not needed.
 	// GloAdmin->save_mysql_servers_runtime_to_database(true);
@@ -8458,7 +8431,7 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	// make sure that the caller has called pgsql_servers_wrlock()
 	ProxySQL_ServerRuntimeSnapshot installed_snapshot {};
 	installed_snapshot.protocol = ProxySQL_ServerProtocol::pgsql;
-	installed_snapshot.generation = proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::pgsql);
+	ProxySQL_ServerRuntimeInstallTransaction runtime_install;
 	bool runtime_install_prepared = false;
 	char* error = NULL;
 	int cols = 0;
@@ -8488,8 +8461,15 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 		proxy_error("Error on %s : %s\n", query, error);
 	}
 	else {
-		if (emit_runtime_install && !prepare_registered_server_module_runtime(admindb, ProxySQL_ServerProtocol::pgsql,
-			installed_snapshot.generation, resultset_servers, installed_snapshot)) return;
+		if (emit_runtime_install) {
+			std::string install_error;
+			runtime_install = ProxySQL_ServerRuntimeInstallTransaction(ProxySQL_ServerProtocol::pgsql, install_error);
+			ProxySQL_ServerBuiltinTopologyInputs topology_inputs {};
+			topology_inputs.pgsql_replication = incoming_replication_hostgroups;
+			if (!runtime_install || !prepare_registered_server_module_runtime(admindb,
+				ProxySQL_ServerProtocol::pgsql, resultset_servers, topology_inputs,
+				runtime_install, installed_snapshot)) return;
+		}
 		runtime_install_prepared = emit_runtime_install;
 		PgHGM->servers_add(resultset_servers);
 	}
@@ -8564,13 +8544,14 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	}
 
 	// commit all the changes
-	PgHGM->commit(
+	const bool runtime_hgm_committed = PgHGM->commit(
 		{ runtime_pgsql_servers, peer_runtime_pgsql_server },
 		{ incoming_pgsql_servers_v2, peer_pgsql_server_v2 },
 		false, true
 	);
-	if (runtime_install_prepared)
-		commit_registered_server_module_runtime(std::move(installed_snapshot));
+	if (runtime_install_prepared && runtime_hgm_committed &&
+		!runtime_install.commit(std::move(installed_snapshot)))
+		proxy_error("Unable to commit PostgreSQL server runtime installation transaction\n");
 
 	// quering runtime table will update and return latest records, so this is not needed.
 	// GloAdmin->save_pgsql_servers_runtime_to_database(true);

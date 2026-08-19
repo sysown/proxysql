@@ -203,9 +203,12 @@ int main() {
 
 	auto core = query(source,
 		"SELECT 1 AS hostgroup_id,'db' AS hostname,3306 AS port,0 AS gtid_port,'ONLINE' AS status,1 AS weight,0 AS compression,100 AS max_connections,0 AS max_replication_lag,1 AS use_ssl,10 AS max_latency_ms,'core' AS comment");
-	ok(core && proxysql_prepare_server_module_cluster_runtime(ProxySQL_ServerProtocol::mysql, 7,
-		*core, std::vector<ProxySQL_ServerModuleClusterTable>{}, error),
+	ProxySQL_ServerRuntimeInstallTransaction cluster_runtime_install(ProxySQL_ServerProtocol::mysql, error);
+	ok(core && cluster_runtime_install && proxysql_prepare_server_module_cluster_runtime(
+		ProxySQL_ServerProtocol::mysql, cluster_runtime_install, *core,
+		std::vector<ProxySQL_ServerModuleClusterTable>{}, source, error),
 		"v1 runtime preparation accepts the transported core snapshot without storing a projection");
+	cluster_runtime_install.abort();
 	auto copied_runtime = proxysql_server_runtime_snapshot_from_rows(
 		ProxySQL_ServerProtocol::mysql, 7, *core);
 	ok(copied_runtime.generation == 7 && copied_runtime.servers.size() == 1 &&

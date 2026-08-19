@@ -5,6 +5,7 @@
 #include "thread.h"
 #include "wqueue.h"
 #include "ProxySQL_ServerDiscovery.h"
+#include "ProxySQL_ServerModuleCluster.h"
 #include <vector>
 #include <atomic>
 #include <functional>
@@ -22,7 +23,9 @@ class SQLite3_result;
 // publish their committed core snapshot to the local controller.
 bool proxysql_cluster_install_v1_runtime_post_fetch(
 	ProxySQL_ServerProtocol protocol, SQLite3_result* core_rows,
-	bool module_runtime_supported, uint64_t module_generation,
+	bool module_runtime_supported,
+	const std::vector<ProxySQL_ServerModuleClusterTable>& module_tables,
+	SQLite3DB* topology_db,
 	const std::function<void(SQLite3_result*)>& stage_core_rows,
 	const std::function<bool(SQLite3_result*)>& commit_core_rows);
 #endif

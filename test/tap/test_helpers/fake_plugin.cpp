@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
+#include <stdexcept>
 #include <string>
 
 // Two builds of this source produce two distinct .so files used together
@@ -73,14 +74,31 @@ void fake_log_event(const char *event) {
 
 #ifdef PROXYSQL40
 void fake_server_module_installed(void *, ProxySQL_ServerRuntimeSnapshot) {}
-bool fake_server_module_prepare(void *, const ProxySQL_ServerModuleSnapshot&,
+void fake_log_generation(const char* event, uint64_t generation) {
+	char value[128];
+	std::snprintf(value, sizeof(value), "%s=%llu", event,
+		static_cast<unsigned long long>(generation));
+	fake_log_event(value);
+}
+
+bool fake_server_module_prepare(void *, const ProxySQL_ServerModuleSnapshot& snapshot,
 	std::vector<ProxySQL_ServerHostgroupClaim>& claims, std::string&) {
 	fake_log_event("server_module_prepare");
+	fake_log_generation("runtime_prepare_generation", snapshot.runtime.generation);
+	if (env("SERVER_MODULE_PREPARE_THROW") != nullptr)
+		throw std::runtime_error("injected server-module prepare failure");
+	if (env("SERVER_MODULE_PREPARE_FAIL") != nullptr)
+		return false;
 	if (env("SERVER_MODULE_CONFLICT_CLAIM") != nullptr)
 		claims.push_back({17, 18});
+	if (env("SERVER_MODULE_CONFLICT_BUILTIN_CLAIM") != nullptr)
+		claims.push_back({31, 32});
 	return true;
 }
-void fake_server_module_commit(void *, uint64_t) { fake_log_event("server_module_commit"); }
+void fake_server_module_commit(void *, uint64_t generation) {
+	fake_log_event("server_module_commit");
+	fake_log_generation("runtime_commit_generation", generation);
+}
 SQLite3_result* fake_server_module_table_snapshot(void *, const char *) { return nullptr; }
 void fake_server_module_shutdown(void *) {}
 void fake_destroy_server_module(ProxySQL_ServerModuleHooks *) {
@@ -137,8 +155,9 @@ bool fake_register_server_module(ProxySQL_PluginServices *services,
 
 class FakeServerDiscoveryController final : public ProxySQL_ServerDiscoveryController {
 public:
-	void runtime_configuration_installed(ProxySQL_ServerRuntimeSnapshot) override {
+	void runtime_configuration_installed(ProxySQL_ServerRuntimeSnapshot snapshot) override {
 		fake_log_event("server_controller_runtime");
+		fake_log_generation("runtime_controller_generation", snapshot.generation);
 	}
 	void desired_set_applied(uint64_t, bool) override {
 		fake_log_event("server_controller_desired_set");
