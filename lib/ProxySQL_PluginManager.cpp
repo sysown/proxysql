@@ -49,7 +49,7 @@ std::string g_registry_registration_error {};
 // RAII guard that sets g_registry_target to `mgr` on construction and
 // clears it on destruction.  Also resets the registration-failure sticky
 // bits. Used to bracket each plugin callback invocation during Phase B
-// (register_schemas) and Phase D (init) so an exception thrown from the
+// (register_schemas) and Phase E (init) so an exception thrown from the
 // plugin can't leave the registry globals dirty and break the next
 // phase's `assert(g_registry_target == nullptr)`.
 struct ScopedRegistryTarget {
@@ -423,9 +423,35 @@ bool ProxySQL_PluginManager::register_cli_options(ez::ezOptionParser& parser, st
 	return true;
 }
 
+ProxySQL_PluginEarlyActionResult ProxySQL_PluginManager::run_early_actions(
+	const ProxySQL_PluginEarlyActionContext& context, std::string& err) {
+	err.clear();
+	for (const auto& plugin : plugins_) {
+		// ABI 6 appends both register_cli_options and early_action. Never read
+		// either field from an ABI 1-5 descriptor.
+		if (plugin.descriptor == nullptr || plugin.descriptor->abi_version < 6u) continue;
+		const proxysql_plugin_early_action_cb callback = plugin.descriptor->early_action;
+		if (callback == nullptr) continue;
+
+		ProxySQL_PluginEarlyActionContext plugin_context = context;
+		plugin_context.services = &services_;
+		try {
+			const auto result = callback(plugin_context);
+			if (result == ProxySQL_PluginEarlyActionResult::exit_success ||
+				result == ProxySQL_PluginEarlyActionResult::exit_failure) {
+				return result;
+			}
+		} catch (...) {
+			err = "plugin early action threw an exception: " + plugin_name(plugin.descriptor);
+			return ProxySQL_PluginEarlyActionResult::exit_failure;
+		}
+	}
+	return ProxySQL_PluginEarlyActionResult::not_requested;
+}
+
 #ifdef PROXYSQL40
 bool ProxySQL_PluginManager::invoke_register_schemas_phase(std::string &err) {
-	// Phase B of the four-phase lifecycle.  Called after all plugins have
+	// Phase B of the six-phase lifecycle.  Called after all plugins have
 	// been dlopen'd but before admin module bootstrap, so plugins can
 	// declare schema for merge_plugin_tables to materialize.
 	//
@@ -1048,10 +1074,10 @@ bool proxysql_discover_configured_plugins(
 	// Publish only after every module has been validated. The later CLI and
 	// schema phases use this same manager; neither reopens a module.
 	//
-	// INVARIANT (publish-before-Phase-D): after this point Phase D
+	// INVARIANT (publish-before-Phase-E): after this point Phase E
 	// (init_all via proxysql_init_configured_plugins) WILL still write
 	// to commands_ / mysql_query_hook_ / pgsql_query_hook_ on the
-	// published manager.  This is only safe because Phase D runs during
+	// published manager.  This is only safe because Phase E runs during
 	// single-threaded startup — before ProxySQL_Main_init_phase3___
 	// start_all spawns the threads that take the lock-free read path
 	// (proxysql_has_configured_plugin_query_hook, Admin_Handler alias
@@ -1078,6 +1104,14 @@ bool proxysql_register_configured_plugin_schemas(
 	return manager == nullptr || manager->invoke_register_schemas_phase(err);
 }
 
+ProxySQL_PluginEarlyActionResult proxysql_run_configured_plugin_early_actions(
+	ProxySQL_PluginManager* manager, const ProxySQL_PluginEarlyActionContext& context,
+	std::string& err) {
+	err.clear();
+	if (manager == nullptr) return ProxySQL_PluginEarlyActionResult::not_requested;
+	return manager->run_early_actions(context, err);
+}
+
 bool proxysql_load_configured_plugins(
 	std::unique_ptr<ProxySQL_PluginManager>& manager,
 	const std::vector<std::string>& plugin_modules,
@@ -1092,7 +1126,7 @@ bool proxysql_init_configured_plugins(
 	ProxySQL_PluginManager* manager,
 	std::string& err
 ) {
-	// Phase D of the four-phase lifecycle. Runs after
+	// Phase E of the six-phase lifecycle. Runs after
 	// ProxySQL_Main_init_Admin_module has materialized plugin-owned
 	// tables, so each plugin's init() sees live DB handles against a
 	// schema that already contains its own tables.
@@ -1101,12 +1135,12 @@ bool proxysql_init_configured_plugins(
 	// that takes the lock-free read path on the manager
 	// (MySQL_Thread / PgSQL_Thread dispatch_query_hook, Admin_Handler
 	// alias resolution) comes up.  See src/main.cpp:
-	//   ProxySQL_Main_init_phase2___not_started  — runs Phase D
+	//   ProxySQL_Main_init_phase2___not_started  — runs Phase E
 	//   ProxySQL_Main_init_phase3___start_all    — spawns workers
 	// Phase 3 must run strictly after Phase 2 returns.
 	//
 	// FAILURE MODE: if this function returns false, the caller in
-	// src/main.cpp calls exit(EXIT_FAILURE) — Phase D failure is a
+	// src/main.cpp calls exit(EXIT_FAILURE) — Phase E failure is a
 	// fatal startup error.  The published manager is left in place;
 	// plugins that succeeded init() will have stop_all() called during
 	// process teardown (see stop_all's "initialized -> stop()"

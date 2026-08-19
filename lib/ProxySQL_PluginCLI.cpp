@@ -245,4 +245,32 @@ ProxySQL_PluginCLIRegistry ProxySQL_PluginCLIOptionRegistry::callback_registry()
 	return {this, &ProxySQL_PluginCLIOptionRegistry::add_callback};
 }
 
+ProxySQL_PluginParsedOptionContext::ProxySQL_PluginParsedOptionContext(
+	ez::ezOptionParser& parser) : parser_(parser) {}
+
+bool ProxySQL_PluginParsedOptionContext::is_set_callback(void* opaque,
+	const char* long_name) {
+	if (opaque == nullptr || long_name == nullptr) return false;
+	auto* context = static_cast<ProxySQL_PluginParsedOptionContext*>(opaque);
+	return context->parser_.isSet(long_name) != 0;
+}
+
+bool ProxySQL_PluginParsedOptionContext::get_string_callback(void* opaque,
+	const char* long_name, std::string& value) {
+	if (opaque == nullptr || long_name == nullptr) return false;
+	auto* context = static_cast<ProxySQL_PluginParsedOptionContext*>(opaque);
+	auto* option = context->parser_.get(long_name);
+	if (option == nullptr || !context->is_set_callback(opaque, long_name)) return false;
+	option->getString(value);
+	return true;
+}
+
+ProxySQL_PluginEarlyActionContext
+ProxySQL_PluginParsedOptionContext::early_action_context(const char* config_file,
+	const char* datadir) {
+	return {this, &ProxySQL_PluginParsedOptionContext::is_set_callback,
+		&ProxySQL_PluginParsedOptionContext::get_string_callback, config_file,
+		datadir, nullptr};
+}
+
 #endif /* PROXYSQL40 */

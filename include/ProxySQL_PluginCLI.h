@@ -46,5 +46,22 @@ private:
 	std::string last_error_;
 };
 
+// Owns the parser-facing side of the parsed option context used by early
+// actions. Plugins receive only callback-based reads through
+// ProxySQL_PluginEarlyActionContext, never an ezOptionParser pointer.
+class ProxySQL_PluginParsedOptionContext {
+public:
+	explicit ProxySQL_PluginParsedOptionContext(ez::ezOptionParser& parser);
+	ProxySQL_PluginEarlyActionContext early_action_context(
+		const char* config_file, const char* datadir);
+
+private:
+	static bool is_set_callback(void* opaque, const char* long_name);
+	static bool get_string_callback(void* opaque, const char* long_name,
+		std::string& value);
+
+	ez::ezOptionParser& parser_;
+};
+
 #endif /* PROXYSQL40 */
 #endif /* PROXYSQL_PLUGIN_CLI_H */

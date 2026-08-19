@@ -29,6 +29,9 @@
 #ifndef PROXYSQL_FAKE_PLUGIN_PATH
 #error "PROXYSQL_FAKE_PLUGIN_PATH must be defined"
 #endif
+#ifndef PROXYSQL_FAKE_PLUGIN2_PATH
+#error "PROXYSQL_FAKE_PLUGIN2_PATH must be defined"
+#endif
 
 namespace {
 
@@ -44,6 +47,7 @@ void make_log_path() {
 	if (fd >= 0) close(fd);
 	g_log_path = tpl;
 	setenv("PROXYSQL_FAKE_PLUGIN_LOG", g_log_path.c_str(), 1);
+	setenv("PROXYSQL_FAKE_PLUGIN2_LOG", g_log_path.c_str(), 1);
 }
 
 void clear_log() {
@@ -51,6 +55,12 @@ void clear_log() {
 	// See plugin_manager_unit-t.cpp for the SonarCloud rationale.
 	std::ofstream truncate_handle(g_log_path, std::ios::trunc);
 	(void)truncate_handle;
+}
+
+void append_log(const char* event) {
+	if (g_log_path.empty()) return;
+	std::ofstream log(g_log_path, std::ios::app);
+	log << event << '\n';
 }
 
 std::string read_log() {
@@ -63,6 +73,7 @@ void cleanup_log() {
 	if (g_log_path.empty()) return;
 	std::remove(g_log_path.c_str());
 	unsetenv("PROXYSQL_FAKE_PLUGIN_LOG");
+	unsetenv("PROXYSQL_FAKE_PLUGIN2_LOG");
 }
 
 bool contains_in_order(const std::string& haystack, const char* first, const char* second) {
@@ -104,6 +115,181 @@ static void test_phase_b_and_init_both_fire() {
 
 	(void)proxysql_stop_configured_plugins(mgr, err);
 	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
+}
+
+// An early-action-capable plugin must run after Admin is live but before its
+// normal init/start lifecycle. The production regression this catches is
+// inserting the action phase before schema/Admin setup or after init/start.
+static void test_early_action_runs_between_admin_and_init() {
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_EARLY_ACTION", "continue", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
+	std::string err;
+	ok(proxysql_discover_configured_plugins(mgr, paths, err),
+	   "plugin discovery succeeds before CLI registration (err='%s')", err.c_str());
+	ez::ezOptionParser parser;
+	ok(proxysql_register_configured_plugin_cli(mgr.get(), parser, err),
+	   "plugin CLI registration succeeds before schema registration (err='%s')", err.c_str());
+	const char* argv[] { "proxysql", "--fake-plugin-action", "continue" };
+	parser.parse(3, argv);
+	ok(proxysql_register_configured_plugin_schemas(mgr.get(), err),
+	   "schema registration succeeds before Admin is live (err='%s')", err.c_str());
+	append_log("core:admin_ready");
+	ProxySQL_PluginParsedOptionContext parsed_options(parser);
+	const auto action = proxysql_run_configured_plugin_early_actions(
+		mgr.get(), parsed_options.early_action_context("test.cnf", "test-datadir"), err);
+	ok(action == ProxySQL_PluginEarlyActionResult::not_requested ||
+	   action == ProxySQL_PluginEarlyActionResult::continue_startup,
+	   "early action permits normal startup (err='%s')", err.c_str());
+	ok(proxysql_init_configured_plugins(mgr.get(), err) &&
+	   proxysql_start_configured_plugins(mgr.get(), err),
+	   "normal init and start succeed after the action phase (err='%s')", err.c_str());
+
+	const std::string log = read_log();
+	ok(log.find("fake_plugin:early_action") != std::string::npos,
+	   "early action callback fired (log='%s')", log.c_str());
+	ok(contains_in_order(log, "fake_plugin:phase_b", "core:admin_ready") &&
+	   contains_in_order(log, "core:admin_ready", "fake_plugin:early_action") &&
+	   contains_in_order(log, "fake_plugin:early_action", "fake_plugin:init") &&
+	   contains_in_order(log, "fake_plugin:init", "fake_plugin:start"),
+	   "CLI registration/schema/Admin/action/init/start lifecycle is ordered (log='%s')", log.c_str());
+
+	(void)proxysql_stop_configured_plugins(mgr, err);
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_EARLY_ACTION");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
+}
+
+static ProxySQL_PluginEarlyActionResult run_fake_early_action(
+	const char* requested_action, std::string& err) {
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
+	if (!proxysql_discover_configured_plugins(mgr, paths, err)) {
+		return ProxySQL_PluginEarlyActionResult::exit_failure;
+	}
+	ez::ezOptionParser parser;
+	if (!proxysql_register_configured_plugin_cli(mgr.get(), parser, err) ||
+		!proxysql_register_configured_plugin_schemas(mgr.get(), err)) {
+		return ProxySQL_PluginEarlyActionResult::exit_failure;
+	}
+	const char* argv[] { "proxysql", "--fake-plugin-action", requested_action };
+	parser.parse(3, argv);
+	ProxySQL_PluginParsedOptionContext parsed_options(parser);
+	const auto result = proxysql_run_configured_plugin_early_actions(
+		mgr.get(), parsed_options.early_action_context("test.cnf", "test-datadir"), err);
+	std::string stop_error;
+	(void)proxysql_stop_configured_plugins(mgr, stop_error);
+	return result;
+}
+
+// The production regressions this catches are translating a requested early
+// exit into normal startup, or invoking init/start after an action requested
+// process termination.
+static void test_early_action_exit_results_skip_normal_lifecycle() {
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_EARLY_ACTION", "1", 1);
+	std::string err;
+
+	clear_log();
+	const auto success = run_fake_early_action("exit_success", err);
+	ok(success == ProxySQL_PluginEarlyActionResult::exit_success,
+	   "exit_success is returned for a successful one-shot action (err='%s')", err.c_str());
+	const std::string success_log = read_log();
+	ok(success_log.find("fake_plugin:early_action") != std::string::npos &&
+	   success_log.find("fake_plugin:init") == std::string::npos &&
+	   success_log.find("fake_plugin:start") == std::string::npos,
+	   "exit_success omits init and start (log='%s')", success_log.c_str());
+
+	clear_log();
+	const auto failure = run_fake_early_action("exit_failure", err);
+	ok(failure == ProxySQL_PluginEarlyActionResult::exit_failure,
+	   "exit_failure is returned for a failed one-shot action (err='%s')", err.c_str());
+	const std::string failure_log = read_log();
+	ok(failure_log.find("fake_plugin:early_action") != std::string::npos &&
+	   failure_log.find("fake_plugin:init") == std::string::npos &&
+	   failure_log.find("fake_plugin:start") == std::string::npos,
+	   "exit_failure omits init and start (log='%s')", failure_log.c_str());
+
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_EARLY_ACTION");
+}
+
+// The production regression this catches is allowing a plugin exception to
+// escape startup, or including parsed option values in the failure message.
+static void test_early_action_exception_is_a_sanitized_failure() {
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_EARLY_ACTION", "1", 1);
+	clear_log();
+	std::string err;
+	const auto result = run_fake_early_action("throw", err);
+	ok(result == ProxySQL_PluginEarlyActionResult::exit_failure,
+	   "an early-action exception becomes exit_failure");
+	ok(err.find("fake_plugin") != std::string::npos && err.find("throw") == std::string::npos,
+	   "exception failure names the plugin but not the option value (err='%s')", err.c_str());
+	ok(read_log().find("fake_plugin:init") == std::string::npos &&
+	   read_log().find("fake_plugin:start") == std::string::npos,
+	   "an exception omits init and start");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_EARLY_ACTION");
+}
+
+bool test_action_is_set(void*, const char*) { return true; }
+
+bool test_action_get_string(void* opaque, const char*, std::string& value) {
+	value = *static_cast<std::string*>(opaque);
+	return true;
+}
+
+// The production regression this catches is continuing through later actions
+// after an earlier configured plugin asked the process to exit.
+static void test_first_early_exit_short_circuits_later_plugins() {
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_EARLY_ACTION", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN2_ENABLE_EARLY_ACTION", "1", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths {
+		PROXYSQL_FAKE_PLUGIN_PATH, PROXYSQL_FAKE_PLUGIN2_PATH
+	};
+	std::string err;
+	ok(proxysql_discover_configured_plugins(mgr, paths, err),
+	   "two early-action plugins load in configured order (err='%s')", err.c_str());
+	std::string requested_action = "exit_success";
+	const ProxySQL_PluginEarlyActionContext context {
+		&requested_action, &test_action_is_set, &test_action_get_string,
+		"test.cnf", "test-datadir", nullptr
+	};
+	const auto result = proxysql_run_configured_plugin_early_actions(mgr.get(), context, err);
+	ok(result == ProxySQL_PluginEarlyActionResult::exit_success,
+	   "the first configured exit result is returned");
+	const std::string log = read_log();
+	ok(log.find("fake_plugin:early_action") != std::string::npos &&
+	   log.find("fake_plugin2:early_action") == std::string::npos,
+	   "the first exit short-circuits the later plugin action (log='%s')", log.c_str());
+
+	(void)proxysql_stop_configured_plugins(mgr, err);
+	unsetenv("PROXYSQL_FAKE_PLUGIN2_ENABLE_EARLY_ACTION");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_EARLY_ACTION");
+}
+
+// ABI 5 descriptors end at register_schemas. The production regression this
+// catches is reading the ABI-6 early_action tail from an older plugin.
+static void test_abi5_skips_early_action_tail() {
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_ABI5_TAIL_GUARD", "1", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr(new ProxySQL_PluginManager());
+	std::string err;
+	ok(mgr->load(PROXYSQL_FAKE_PLUGIN_PATH, err), "ABI 5 fake plugin loads");
+	ez::ezOptionParser parser;
+	ProxySQL_PluginParsedOptionContext parsed_options(parser);
+	const auto result = proxysql_run_configured_plugin_early_actions(
+		mgr.get(), parsed_options.early_action_context("test.cnf", "test-datadir"), err);
+	ok(result == ProxySQL_PluginEarlyActionResult::not_requested,
+	   "ABI 5 descriptor skips the ABI 6 early-action tail (err='%s')", err.c_str());
+	ok(read_log().find("fake_plugin:early_action") == std::string::npos,
+	   "ABI 5 plugin did not run an early action");
+
+	(void)proxysql_stop_configured_plugins(mgr, err);
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_ABI5_TAIL_GUARD");
 }
 
 // Case 2: plugin sets only init (register_schemas field is null).
@@ -279,11 +465,16 @@ static void test_bogus_abi_version_rejected() {
 }
 
 int main() {
-	plan(26);
+	plan(46);
 
 	make_log_path();
 
 	test_phase_b_and_init_both_fire();
+	test_early_action_runs_between_admin_and_init();
+	test_early_action_exit_results_skip_normal_lifecycle();
+	test_early_action_exception_is_a_sanitized_failure();
+	test_first_early_exit_short_circuits_later_plugins();
+	test_abi5_skips_early_action_tail();
 	test_only_init_skips_phase_b();
 	test_phase_b_db_handles_are_null();
 	test_phase_b_failure_aborts_init();

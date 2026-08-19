@@ -40,9 +40,11 @@ namespace prometheus { class Registry; }
 //          handoff callbacks. Plugins use them only around work that can wait
 //          for another Admin consumer; older plugins continue to use the
 //          unchanged three DB-handle prefix.
-//   ABI 6: appends an early CLI-option registration callback.  The loader
-//          invokes it only after discovery has loaded every requested module
-//          and before the one definitive core command-line parse.
+//   ABI 6: appends early CLI-option registration and early-action callbacks.
+//          The loader invokes option registration after discovery has loaded
+//          every requested module and before the one definitive core
+//          command-line parse. It invokes early actions after Admin is live
+//          and before plugin init/start.
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = 6u;
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = 6u;
 
@@ -62,6 +64,31 @@ struct ProxySQL_PluginCLIRegistry {
 
 using proxysql_plugin_register_cli_options_cb =
 	bool (*)(ProxySQL_PluginCLIRegistry*);
+
+struct ProxySQL_PluginServices;
+
+enum class ProxySQL_PluginEarlyActionResult : uint8_t {
+	not_requested = 0,
+	continue_startup = 1,
+	exit_success = 2,
+	exit_failure = 3,
+};
+
+// The core owns option_context and it is valid only for the early_action
+// callback. Plugins may read only the options they registered through these
+// callbacks; they must not retain option_context or any pointer derived from
+// it. The underlying ezOptionParser is intentionally not part of this ABI.
+struct ProxySQL_PluginEarlyActionContext {
+	void* option_context;
+	bool (*is_set)(void*, const char* long_name);
+	bool (*get_string)(void*, const char* long_name, std::string& value);
+	const char* config_file;
+	const char* datadir;
+	ProxySQL_PluginServices* services;
+};
+
+using proxysql_plugin_early_action_cb =
+	ProxySQL_PluginEarlyActionResult (*)(const ProxySQL_PluginEarlyActionContext&);
 
 enum class ProxySQL_PluginDBKind : uint8_t {
 	admin_db = 0,
@@ -266,7 +293,7 @@ using proxysql_plugin_register_runtime_view_cb =
 	bool (*)(const ProxySQL_PluginRuntimeView &);
 #endif /* PROXYSQL40 */
 
-// Services provided to plugins across the four-phase lifecycle.
+// Services provided to plugins across the six-phase lifecycle.
 //
 // Availability by phase:
 //   * register_schemas (Phase B, optional, run between load() and init()):
@@ -279,10 +306,12 @@ using proxysql_plugin_register_runtime_view_cb =
 //         MUST NOT touch DB handles here; save that work for init().
 //       - register_query_hook:       RETURNS false (not yet wired).
 //       - snapshots:                 RETURN nullptr (see below).
-//   * init (Phase D): register_*, log_message, get_*db and
+//   * early_action (Phase D): gets full services through
+//     ProxySQL_PluginEarlyActionContext::services after Admin is live.
+//   * init (Phase E): register_*, log_message, get_*db and
 //     get_prometheus_registry are LIVE.  Snapshot getters remain stubs —
 //     see the note below.
-//   * start (Phase E) and beyond: get_*db, log_message,
+//   * start (Phase F) and beyond: get_*db, log_message,
 //     get_prometheus_registry remain valid; register_* are no-ops (ignored
 //     with a warning — schemas must be declared before start).
 //
@@ -292,7 +321,7 @@ using proxysql_plugin_register_runtime_view_cb =
 // runtime config tables, but the backing plumbing (snapshot acquisition,
 // lifetime, invalidation on reload) isn't implemented yet.  Plugins MUST
 // treat a nullptr return as "snapshot not available"; do not assume
-// non-null just because you're in Phase D.  When the feature lands, only
+// non-null just because you're in Phase E.  When the feature lands, only
 // the nullptr contract will change — the field signatures won't.
 struct ProxySQL_PluginServices {
 	proxysql_plugin_register_table_cb register_table;
@@ -355,14 +384,15 @@ using proxysql_plugin_status_json_cb =
 #ifdef PROXYSQL40
 // Phase B entry point: "declare your schema before admin bootstrap."
 //
-// Four-phase plugin lifecycle:
-//   Phase A: load()             -- dlopen the .so, read the descriptor
-//   Phase B: register_schemas() -- NEW, optional; plugin returns its table defs
+// Six-phase plugin lifecycle:
+//   Phase A: discover/register CLI -- dlopen the .so and register options
+//   Phase B: register_schemas() -- optional; plugin returns its table defs
 //   Phase C: admin module init  -- core materializes SQLite schema from the
 //                                  plugin-registered defs (merge_plugin_tables
 //                                  code path -- first-boot == reload)
-//   Phase D: init()             -- plugin runs startup logic with full services
-//   Phase E: start()            -- plugin launches its threads / accept loops
+//   Phase D: early_action()     -- one-shot action with full services
+//   Phase E: init()             -- plugin runs startup logic with full services
+//   Phase F: start()            -- plugin launches its threads / accept loops
 //
 // This callback is optional (may be nullptr).  Plugins that leave it null
 // keep the pre-existing two-phase behavior: Phase B is skipped and the
@@ -390,6 +420,10 @@ struct ProxySQL_PluginDescriptor {
 	// ABI 6: optional early command-line option registration.  The core reads
 	// this tail field only for descriptors whose abi_version is at least 6.
 	proxysql_plugin_register_cli_options_cb register_cli_options;
+	// ABI 6: optional one-shot action after Admin is live and before init().
+	// The core reads this tail field only for descriptors whose abi_version is
+	// at least 6.
+	proxysql_plugin_early_action_cb early_action;
 #endif /* PROXYSQL40 */
 };
 

@@ -1552,6 +1552,20 @@ static void InitConfiguredPlugins() {
 	}
 }
 
+static void RunConfiguredPluginEarlyActions() {
+	if (GloVars.no_plugins) return;
+	ProxySQL_PluginParsedOptionContext parsed_options(*GloVars.opt);
+	const auto context = parsed_options.early_action_context(GloVars.config_file, GloVars.datadir);
+	std::string plugin_error {};
+	const auto result = proxysql_run_configured_plugin_early_actions(
+		GloPluginManager.get(), context, plugin_error);
+	if (result == ProxySQL_PluginEarlyActionResult::exit_success) exit(EXIT_SUCCESS);
+	if (result == ProxySQL_PluginEarlyActionResult::exit_failure) {
+		proxy_error("Plugin early action failed: %s\n", plugin_error.c_str());
+		exit(EXIT_FAILURE);
+	}
+}
+
 static void StartConfiguredPlugins() {
 	if (GloVars.no_plugins) return;
 	std::string plugin_error {};
@@ -1603,11 +1617,14 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	//              tables_defs_{admin,config,stats} and runs the DDL via
 	//              check_and_build_standard_tables, all on the same
 	//              first-boot/reload code path as the core tables.
-	//   Phase D:   init() with full services (live DB handles pointing at
+	//   Phase D:   early_action() with parsed-option callbacks and full
+	//              services (live DB handles).
+	//   Phase E:   init() with full services (live DB handles pointing at
 	//              a schema that already contains the plugin's own tables).
-	//   Phase E:   start() launches the plugin's threads / accept loops.
+	//   Phase F:   start() launches the plugin's threads / accept loops.
 	RegisterConfiguredPluginSchemas();
 	ProxySQL_Main_init_Admin_module(boostrap_info);
+	RunConfiguredPluginEarlyActions();
 	InitConfiguredPlugins();
 	StartConfiguredPlugins();
 #else  /* !PROXYSQL40 */
