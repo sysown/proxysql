@@ -498,6 +498,7 @@ UNIT_TESTS += \
 	plugin_prometheus_unit-t \
 	plugin_lifecycle_unit-t \
 	plugin_runtime_views_unit-t \
+	plugin_server_discovery_abi_unit-t \
 	aws_locality_config_unit-t \
 	aws_locality_selection_unit-t \
 	aws_locality_stats_unit-t \
@@ -604,6 +605,11 @@ plugin_dispatch_unit-t: plugin_dispatch_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUG
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
 plugin_runtime_views_unit-t: plugin_runtime_views_unit-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+plugin_server_discovery_abi_unit-t: plugin_server_discovery_abi_unit-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@

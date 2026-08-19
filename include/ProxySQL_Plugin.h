@@ -12,6 +12,8 @@
 #include <cstdint>
 #include <string>
 
+#include "ProxySQL_ServerDiscovery.h"
+
 class SQLite3DB;
 class SQLite3_result;
 class AwsIamTokenSource;
@@ -47,8 +49,10 @@ namespace prometheus { class Registry; }
 //          projection callback used by the AWS plugin's runtime view.
 //   ABI 8: ProxySQL_PluginServices gains an IAM-provider uninstall callback
 //          so a plugin can roll back a partially successful init.
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = 8u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = 8u;
+//   ABI 9: ProxySQL_PluginServices gains provider-neutral server discovery
+//          module/controller registration and desired-set submission.
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = 9u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = 9u;
 
 enum class ProxySQL_PluginDBKind : uint8_t {
 	admin_db = 0,
@@ -331,6 +335,12 @@ struct ProxySQL_PluginServices {
 	// ABI-8 extension. Live only during normal plugin init and intended for
 	// rollback of the same plugin's partially installed IAM provider.
 	proxysql_plugin_uninstall_aws_iam_token_source_cb uninstall_aws_iam_token_source;
+	// ABI-9 extension. Server modules can register during Phase B or init;
+	// discovery controllers and desired sets are live during normal init.
+	proxysql_plugin_register_server_module_cb register_server_module;
+	proxysql_plugin_install_server_discovery_controller_cb install_server_discovery_controller;
+	proxysql_plugin_uninstall_server_discovery_controller_cb uninstall_server_discovery_controller;
+	proxysql_plugin_post_server_desired_set_cb post_server_desired_set;
 #endif /* PROXYSQL40 */
 };
 

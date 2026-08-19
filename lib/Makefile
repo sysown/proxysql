@@ -154,6 +154,11 @@ HEADERS := ../include/*.h ../include/*.hpp
 $(ODIR)/proxy_sqlite3_symbols.oo: proxy_sqlite3_symbols.cpp $(HEADERS)
 	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS) -DSQLITE_CORE -DSQLITE_VEC_STATIC
 
+# Keep the ABI-9 server-discovery registry object fresh when its public
+# contract changes; this is intentionally explicit despite $(HEADERS), as
+# external plugin builds consume this header directly.
+$(ODIR)/ProxySQL_PluginManager.oo: ../include/ProxySQL_ServerDiscovery.h
+
 $(ODIR)/%.oo: %.cpp $(HEADERS)
 	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS)
 

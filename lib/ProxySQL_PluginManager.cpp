@@ -226,6 +226,47 @@ void refresh_mysql_aws_locality_stats_service(SQLite3DB* statsdb) {
 	}
 	MySQL_HostGroups_Manager::project_aws_locality_stats(statsdb, {});
 }
+
+bool register_server_module_service(
+	ProxySQL_ServerModuleTable *module,
+	void (*destroy)(ProxySQL_ServerModuleTable *), void *module_handle) {
+	if (g_registry_target == nullptr) {
+		proxy_warning("Server module registration attempted outside plugin init/register_schemas phase\n");
+		return false;
+	}
+	if (!g_registry_target->register_server_module(module, destroy, module_handle)) {
+		note_registration_failure("server module", "server discovery");
+		return false;
+	}
+	return true;
+}
+
+bool install_server_discovery_controller_service(
+	ProxySQL_ServerProtocol protocol, ProxySQL_ServerDiscoveryController *controller,
+	void (*destroy)(ProxySQL_ServerDiscoveryController *), void *module_handle) {
+	if (g_registry_target == nullptr) {
+		proxy_warning("Server discovery controller installation attempted outside plugin init phase\n");
+		return false;
+	}
+	return g_registry_target->install_server_discovery_controller(
+		protocol, controller, destroy, module_handle);
+}
+
+bool uninstall_server_discovery_controller_service(ProxySQL_ServerProtocol protocol) {
+	if (g_registry_target == nullptr) {
+		proxy_warning("Server discovery controller removal attempted outside plugin init phase\n");
+		return false;
+	}
+	return g_registry_target->uninstall_server_discovery_controller(protocol);
+}
+
+bool post_server_desired_set_service(ProxySQL_ServerDesiredSet desired_set) {
+	if (g_registry_target == nullptr) {
+		proxy_warning("Server desired-set submission attempted outside plugin init phase\n");
+		return false;
+	}
+	return g_registry_target->post_server_desired_set(std::move(desired_set));
+}
 #endif /* PROXYSQL40 */
 
 SQLite3DB* get_admindb_service() {
@@ -357,6 +398,10 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_.install_aws_metadata_provider = &install_aws_metadata_provider_service;
 	services_.refresh_mysql_aws_locality_stats = &refresh_mysql_aws_locality_stats_service;
 	services_.uninstall_aws_iam_token_source = &uninstall_aws_iam_token_source_service;
+	services_.register_server_module = &register_server_module_service;
+	services_.install_server_discovery_controller = &install_server_discovery_controller_service;
+	services_.uninstall_server_discovery_controller = &uninstall_server_discovery_controller_service;
+	services_.post_server_desired_set = &post_server_desired_set_service;
 
 	// Phase-B (register_schemas) services: same layout as init(), but DB
 	// handle getters and the query-hook registrar are stubbed -- see the
@@ -384,11 +429,19 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_phase_b_.register_runtime_view = &register_runtime_view_service;
 	services_phase_b_.refresh_mysql_aws_locality_stats =
 		&refresh_mysql_aws_locality_stats_service;
+	services_phase_b_.register_server_module = &register_server_module_service;
 #endif /* PROXYSQL40 */
 }
 
 ProxySQL_PluginManager::~ProxySQL_PluginManager() {
 	stop_all();
+	#ifdef PROXYSQL40
+	for (ProxySQL_ServerProtocol protocol : {ProxySQL_ServerProtocol::mysql,
+	                                         ProxySQL_ServerProtocol::pgsql}) {
+		uninstall_server_discovery_controller(protocol);
+		unregister_server_module(protocol);
+	}
+	#endif /* PROXYSQL40 */
 	// Note: g_active_plugin_manager is cleared by callers under the mutex
 	// before reset() triggers this destructor.  No unsynchronized access here.
 	for (auto it = plugins_.rbegin(); it != plugins_.rend(); ++it) {
@@ -888,6 +941,142 @@ void ProxySQL_PluginManager::refresh_runtime_views_for_query(const std::string& 
 		}
 		if (db == nullptr) continue;
 		view.refresh(db, view.opaque);
+	}
+}
+
+namespace {
+
+int server_protocol_index(ProxySQL_ServerProtocol protocol) {
+	switch (protocol) {
+	case ProxySQL_ServerProtocol::mysql: return 0;
+	case ProxySQL_ServerProtocol::pgsql: return 1;
+	}
+	return -1;
+}
+
+} // namespace
+
+bool ProxySQL_PluginManager::register_server_module(
+	ProxySQL_ServerModuleTable *module,
+	void (*destroy)(ProxySQL_ServerModuleTable *), void *module_handle) {
+	if (module == nullptr || destroy == nullptr || module->hooks.runtime_configuration_installed == nullptr) {
+		return false;
+	}
+	const int index = server_protocol_index(module->protocol);
+	if (index < 0) return false;
+	std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+	if (server_modules_[index].module != nullptr) return false;
+	server_modules_[index] = {module, destroy, module_handle};
+	return true;
+}
+
+bool ProxySQL_PluginManager::unregister_server_module(ProxySQL_ServerProtocol protocol) {
+	const int index = server_protocol_index(protocol);
+	if (index < 0) return false;
+	registered_server_module_t retired {};
+	{
+		std::unique_lock<std::mutex> lock(server_discovery_mutex_);
+		if (server_modules_[index].module == nullptr) return false;
+		retired = server_modules_[index];
+		server_modules_[index] = {};
+		server_discovery_cv_.wait(lock, [&] { return server_callback_leases_[index] == 0; });
+	}
+	retired.destroy(retired.module);
+	if (retired.module_handle != nullptr) dlclose(retired.module_handle);
+	return true;
+}
+
+bool ProxySQL_PluginManager::install_server_discovery_controller(
+	ProxySQL_ServerProtocol protocol, ProxySQL_ServerDiscoveryController *controller,
+	void (*destroy)(ProxySQL_ServerDiscoveryController *), void *module_handle) {
+	if (controller == nullptr || destroy == nullptr) return false;
+	const int index = server_protocol_index(protocol);
+	if (index < 0) return false;
+	ProxySQL_ServerRuntimeSnapshot snapshot {};
+	bool notify = false;
+	{
+		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+		if (server_controllers_[index].controller != nullptr) return false;
+		server_controllers_[index] = {controller, destroy, module_handle};
+		if (server_snapshots_present_[index]) {
+			snapshot = server_snapshots_[index];
+			notify = true;
+			++server_callback_leases_[index];
+		}
+	}
+	if (notify) {
+		controller->runtime_configuration_installed(std::move(snapshot));
+		{
+			std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+			--server_callback_leases_[index];
+		}
+		server_discovery_cv_.notify_all();
+	}
+	return true;
+}
+
+bool ProxySQL_PluginManager::uninstall_server_discovery_controller(ProxySQL_ServerProtocol protocol) {
+	const int index = server_protocol_index(protocol);
+	if (index < 0) return false;
+	registered_server_controller_t retired {};
+	{
+		std::unique_lock<std::mutex> lock(server_discovery_mutex_);
+		if (server_controllers_[index].controller == nullptr) return false;
+		retired = server_controllers_[index];
+		server_controllers_[index] = {};
+		server_discovery_cv_.wait(lock, [&] { return server_callback_leases_[index] == 0; });
+	}
+	retired.controller->shutdown();
+	retired.destroy(retired.controller);
+	if (retired.module_handle != nullptr) dlclose(retired.module_handle);
+	return true;
+}
+
+bool ProxySQL_PluginManager::post_server_desired_set(ProxySQL_ServerDesiredSet desired_set) {
+	const int index = server_protocol_index(desired_set.protocol);
+	if (index < 0) return false;
+	ProxySQL_ServerDiscoveryController *controller = nullptr;
+	{
+		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+		controller = server_controllers_[index].controller;
+		if (controller != nullptr) ++server_callback_leases_[index];
+	}
+	if (controller != nullptr) {
+		controller->desired_set_applied(desired_set.generation, false);
+		{
+			std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+			--server_callback_leases_[index];
+		}
+		server_discovery_cv_.notify_all();
+	}
+	return true;
+}
+
+void ProxySQL_PluginManager::install_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot) {
+	const int index = server_protocol_index(snapshot.protocol);
+	if (index < 0) return;
+	ProxySQL_ServerModuleTable *module = nullptr;
+	ProxySQL_ServerDiscoveryController *controller = nullptr;
+	{
+		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+		server_snapshots_[index] = snapshot;
+		server_snapshots_present_[index] = true;
+		module = server_modules_[index].module;
+		controller = server_controllers_[index].controller;
+		if (module != nullptr || controller != nullptr) ++server_callback_leases_[index];
+	}
+	if (module != nullptr) {
+		module->hooks.runtime_configuration_installed(module->opaque, snapshot);
+	}
+	if (controller != nullptr) {
+		controller->runtime_configuration_installed(std::move(snapshot));
+	}
+	if (module != nullptr || controller != nullptr) {
+		{
+			std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+			--server_callback_leases_[index];
+		}
+		server_discovery_cv_.notify_all();
 	}
 }
 #endif /* PROXYSQL40 */

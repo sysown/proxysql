@@ -10,8 +10,10 @@
 #include "ProxySQL_Plugin.h"
 
 #include <cstddef>
+#include <condition_variable>
 #include <deque>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -80,6 +82,15 @@ public:
 	// does not have to reach into the global admin module.
 	void refresh_runtime_views_for_query(const std::string& sql,
 		SQLite3DB* admindb, SQLite3DB* configdb, SQLite3DB* statsdb) const;
+	bool register_server_module(ProxySQL_ServerModuleTable *module,
+		void (*destroy)(ProxySQL_ServerModuleTable *), void *module_handle);
+	bool unregister_server_module(ProxySQL_ServerProtocol protocol);
+	bool install_server_discovery_controller(ProxySQL_ServerProtocol protocol,
+		ProxySQL_ServerDiscoveryController *controller,
+		void (*destroy)(ProxySQL_ServerDiscoveryController *), void *module_handle);
+	bool uninstall_server_discovery_controller(ProxySQL_ServerProtocol protocol);
+	bool post_server_desired_set(ProxySQL_ServerDesiredSet desired_set);
+	void install_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot);
 #endif /* PROXYSQL40 */
 
 	size_t size() const;
@@ -143,6 +154,23 @@ private:
 		void* opaque { nullptr };
 	};
 	std::vector<registered_runtime_view_t> runtime_views_ {};
+	struct registered_server_module_t {
+		ProxySQL_ServerModuleTable *module { nullptr };
+		void (*destroy)(ProxySQL_ServerModuleTable *) { nullptr };
+		void *module_handle { nullptr };
+	};
+	struct registered_server_controller_t {
+		ProxySQL_ServerDiscoveryController *controller { nullptr };
+		void (*destroy)(ProxySQL_ServerDiscoveryController *) { nullptr };
+		void *module_handle { nullptr };
+	};
+	mutable std::mutex server_discovery_mutex_ {};
+	std::condition_variable server_discovery_cv_ {};
+	registered_server_module_t server_modules_[2] {};
+	registered_server_controller_t server_controllers_[2] {};
+	bool server_snapshots_present_[2] { false, false };
+	size_t server_callback_leases_[2] { 0, 0 };
+	ProxySQL_ServerRuntimeSnapshot server_snapshots_[2] {};
 #endif /* PROXYSQL40 */
 };
 
