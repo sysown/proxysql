@@ -407,7 +407,8 @@ $(LIBPROXYSQLAR): FORCE
 # Unit test targets
 # ===========================================================================
 
-UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
+UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
+	query_cache_unit-t query_processor_unit-t \
 	protocol_unit-t auth_unit-t connection_pool_unit-t \
 	rule_matching_unit-t hostgroups_unit-t monitor_health_unit-t \
 	pgsql_command_complete_unit-t \
@@ -896,6 +897,8 @@ ifeq ($(UNAME_S),Linux)
 # Let the RSA unit test observe the exact flock attempt without a production hook.
 caching_sha2_rsa_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=flock
 endif
+
+vendored_openssl_version_unit-t: OPT += -DPROXYSQL_VENDORED_OPENSSL_VERSION=\"$(OPENSSL_VERSION)\"
 
 # Pattern rule: all unit tests use the same compile + link flags.
 # Each test binary is built from its .cpp source, linked against

@@ -22,6 +22,10 @@
 
 using std::string;
 
+#ifndef PROXYSQL_VENDORED_OPENSSL_VERSION
+#error "PROXYSQL_VENDORED_OPENSSL_VERSION must be supplied by the build"
+#endif
+
 CommandLine cl;
 
 int main() {
@@ -38,7 +42,7 @@ int main() {
 		return exit_status();
 	}
 
-	plan(1);
+	plan(2);
 
 	int32_t WASAN = get_env_int("WITHASAN", 0);
 	MYSQL* proxysql_admin = mysql_init(NULL);
@@ -57,11 +61,41 @@ int main() {
 	const string select_query {
 		"SELECT variable_value FROM stats.stats_mysql_global WHERE variable_name='OpenSSL_Version_Num'"
 	}; ext_val_t<int64_t> ssl_ver_ext { mysql_query_ext_val(proxysql_admin, select_query, int64_t(-1)) };
-    if (ssl_ver_ext.err) {
-        const string err { get_ext_val_err(proxysql_admin, ssl_ver_ext) };
-        diag("Failed query   query:`%s`, err:`%s`", select_query.c_str(), err.c_str());
-        return EXIT_FAILURE;
-    }
+	if (ssl_ver_ext.err) {
+		const string err { get_ext_val_err(proxysql_admin, ssl_ver_ext) };
+		diag("Failed query   query:`%s`, err:`%s`", select_query.c_str(), err.c_str());
+		return EXIT_FAILURE;
+	}
+	const string select_version_query {
+		"SELECT variable_value FROM stats.stats_mysql_global WHERE variable_name='OpenSSL_Version'"
+	};
+	const ext_val_t<string> ssl_version_ext {
+		mysql_query_ext_val(proxysql_admin, select_version_query, string {})
+	};
+	if (ssl_version_ext.err) {
+		const string err { get_ext_val_err(proxysql_admin, ssl_version_ext) };
+		diag(
+			"Failed query   query:`%s`, err:`%s`",
+			select_version_query.c_str(), err.c_str()
+		);
+		return EXIT_FAILURE;
+	}
+
+	const string expected_version_prefix {
+		"OpenSSL " PROXYSQL_VENDORED_OPENSSL_VERSION
+	};
+	const bool version_matches {
+		ssl_version_ext.val.rfind(expected_version_prefix, 0) == 0
+	};
+	ok(
+		version_matches,
+		"stats expose the embedded %s runtime (actual: %s)",
+		expected_version_prefix.c_str(), ssl_version_ext.val.c_str()
+	);
+	if (!version_matches) {
+		mysql_close(proxysql_admin);
+		return exit_status();
+	}
 
 	// OPENSSL_VERSION_NUMBER: 0xMNN00PP0L
 	// https://docs.openssl.org/master/man3/OpenSSL_version/
@@ -70,7 +104,10 @@ int main() {
 	const string patch { std::to_string((ssl_ver_ext.val & 0x00000FF0L) >> 4) };
 	const string version { major + "." + minor + "." + patch };
 
-	diag("Detected env   openssl=\"%s\" openssl_num=%lx ASAN=%d", version.c_str(), ssl_ver_ext.val, WASAN);
+	diag(
+		"Detected env   openssl=\"%s\" runtime=\"%s\" openssl_num=%lx ASAN=%d",
+		version.c_str(), ssl_version_ext.val.c_str(), ssl_ver_ext.val, WASAN
+	);
 
 	// Double the value of previously failed ASAN run, previous known time '89415ms'
 	int32_t EXP_TIME = 0;

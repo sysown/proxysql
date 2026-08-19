@@ -649,6 +649,9 @@ void ProxySQL_Admin::stats___mysql_global() {
 
 	sqlite3_global_stats_row_step(statsdb, row_stmt, "mysql_listener_paused", admin_proxysql_mysql_paused);
 	sqlite3_global_stats_row_step(statsdb, row_stmt, "OpenSSL_Version_Num", OpenSSL_version_num());
+	sqlite3_global_stats_row_step_str(
+		statsdb, row_stmt, "OpenSSL_Version", OpenSSL_version(OPENSSL_VERSION)
+	);
 
 	if (GloMyLogger != nullptr) {
 		const string prefix = "MySQL_Logger_";
