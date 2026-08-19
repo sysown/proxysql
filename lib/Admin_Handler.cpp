@@ -757,17 +757,25 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	}
 	if (query_no_space_length==sizeof("PROXYSQL READONLY") - 1 && !strncasecmp("PROXYSQL READONLY",query_no_space, query_no_space_length)) {
 		// this command enables admin_read_only , so the admin module is in read_only mode
-		proxy_info("Received PROXYSQL READONLY command\n");
+		proxy_info("Received PROXYSQL READONLY command: forcing read-only mode (FORCED_RO)\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-		SPA->set_read_only(true);
+		SPA->set_ro_mode(ADMIN_RO_MODE_FORCED_RO);
 		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 		return false;
 	}
 	if (query_no_space_length==sizeof("PROXYSQL READWRITE") - 1 && !strncasecmp("PROXYSQL READWRITE",query_no_space, query_no_space_length)) {
 		// this command disables admin_read_only , so the admin module won't be in read_only mode
-		proxy_info("Received PROXYSQL WRITE command\n");
+		proxy_info("Received PROXYSQL WRITE command: forcing read-write mode (FORCED_RW)\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-		SPA->set_read_only(false);
+		SPA->set_ro_mode(ADMIN_RO_MODE_FORCED_RW);
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		return false;
+	}
+	if (query_no_space_length==strlen("PROXYSQL READONLY AUTO") && !strncasecmp("PROXYSQL READONLY AUTO",query_no_space, query_no_space_length)) {
+		// returns read-only control to the cluster leader election (AUTO mode)
+		proxy_info("Received PROXYSQL READONLY AUTO command\n");
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		SPA->set_ro_mode(ADMIN_RO_MODE_AUTO);
 		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 		return false;
 	}
@@ -1527,6 +1535,68 @@ bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space
 template <typename S>
 bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query_no_space_length, S* sess, ProxySQL_Admin *pa, char **q, unsigned int *ql) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 5, "Received command %s\n", query_no_space);
+
+	{
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		if (SPA->effective_read_only()) {
+			bool is_load = (!strncasecmp("LOAD ", query_no_space, 5));
+			bool is_save = (!strncasecmp("SAVE ", query_no_space, 5));
+			bool refuse = false;
+			if (query_no_space_length > 11 && !strncasecmp(" TO RUNTIME", query_no_space+query_no_space_length-11, 11)) {
+				refuse = true; // LOAD ... TO RUNTIME
+			}
+			if (query_no_space_length > 7 && !strncasecmp(" TO RUN", query_no_space+query_no_space_length-7, 7)) {
+				refuse = true; // abbreviation: LOAD ... TO RUN == LOAD ... TO RUNTIME
+			}
+			if (query_no_space_length > 8 && is_save && !strncasecmp(" TO DISK", query_no_space+query_no_space_length-8, 8)) {
+				refuse = true; // SAVE ... TO DISK
+			}
+			if (query_no_space_length > 12 && (is_load || is_save) && !strncasecmp(" FROM MEMORY", query_no_space+query_no_space_length-12, 12)) {
+				refuse = true; // aliases: LOAD x FROM MEMORY == LOAD x TO RUNTIME ; SAVE x FROM MEMORY == SAVE x TO DISK
+			}
+			if (query_no_space_length > 9 && (is_load || is_save) && !strncasecmp(" FROM MEM", query_no_space+query_no_space_length-9, 9)) {
+				refuse = true; // abbreviation: LOAD x FROM MEM == LOAD x FROM MEMORY ; SAVE x FROM MEM == SAVE x FROM MEMORY
+			}
+			// Direct SQL writes to the memory tier are blocked by PRAGMA
+			// query_only, but the forms below mutate the memory tier via C++
+			// flush functions that bypass it entirely, so they must be
+			// refused here too.
+			if (query_no_space_length > 10 && is_load && !strncasecmp(" FROM DISK", query_no_space+query_no_space_length-10, 10)) {
+				refuse = true; // LOAD x FROM DISK (disk -> memory)
+			}
+			if (query_no_space_length > 12 && is_load && !strncasecmp(" FROM CONFIG", query_no_space+query_no_space_length-12, 12)) {
+				refuse = true; // LOAD x FROM CONFIG (config file -> memory)
+			}
+			if (query_no_space_length > 10 && (is_load || is_save) && !strncasecmp(" TO MEMORY", query_no_space+query_no_space_length-10, 10)) {
+				refuse = true; // LOAD x TO MEMORY (disk -> memory) ; SAVE x TO MEMORY (runtime -> memory)
+			}
+			if (query_no_space_length > 7 && (is_load || is_save) && !strncasecmp(" TO MEM", query_no_space+query_no_space_length-7, 7)) {
+				refuse = true; // abbreviation: x TO MEM == x TO MEMORY
+			}
+			if (query_no_space_length > 13 && is_save && !strncasecmp(" FROM RUNTIME", query_no_space+query_no_space_length-13, 13)) {
+				refuse = true; // SAVE x FROM RUNTIME (runtime -> memory)
+			}
+			if (query_no_space_length > 9 && is_save && !strncasecmp(" FROM RUN", query_no_space+query_no_space_length-9, 9)) {
+				refuse = true; // abbreviation: SAVE x FROM RUN == SAVE x FROM RUNTIME
+			}
+			if (refuse) {
+				std::string l_host; int l_port = 0; std::string l_uuid;
+				GloProxyCluster->get_leader_info(l_host, l_port, l_uuid);
+				char msg[512];
+				if (l_host.length()) {
+					snprintf(msg, sizeof(msg),
+						"Admin is in read-only mode (cluster follower). Current leader is %s:%d (%s). Use PROXYSQL READWRITE to override.",
+						l_host.c_str(), l_port, l_uuid.c_str());
+				} else {
+					snprintf(msg, sizeof(msg),
+						"Admin is in read-only mode. Use PROXYSQL READWRITE to override.");
+				}
+				proxy_warning("Refused '%s' : %s\n", query_no_space, msg);
+				SPA->send_error_msg_to_client(sess, msg);
+				return false;
+			}
+		}
+	}
 
 #ifdef DEBUG
 	if ((query_no_space_length>11) && ( (!strncasecmp("SAVE DEBUG ", query_no_space, 11)) || (!strncasecmp("LOAD DEBUG ", query_no_space, 11))) ) {
@@ -3816,7 +3886,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		query_length=strlen(q)+5;
 		query=(char *)l_alloc(query_length);
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-		bool ro=SPA->get_read_only();
+		bool ro=SPA->effective_read_only();
 		//sprintf(query,q,( ro ? "ON" : "OFF"));
 		PtrSize_t pkt_2;
 		if (ro) {
@@ -3841,7 +3911,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		query_length=strlen(q)+5;
 		query=(char *)l_alloc(query_length);
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-		bool ro=SPA->get_read_only();
+		bool ro=SPA->effective_read_only();
 		//sprintf(query,q,( ro ? "ON" : "OFF"));
 		PtrSize_t pkt_2;
 		if (ro) {
@@ -3906,6 +3976,31 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*1);
 			l[0]=strlen(buf);;
 			p[0]=buf;
+			myprot->generate_pkt_row(true,NULL,NULL,sid,1,l,p); sid++;
+			myds->DSS=STATE_ROW;
+			myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+			myds->DSS=STATE_SLEEP;
+			run_query=false;
+			free(l);
+			free(p);
+			goto __run_query;
+		}
+
+		if ((query_no_space_length == strlen("SELECT GLOBAL_UUID()")) && (!strncasecmp("SELECT GLOBAL_UUID()", query_no_space, strlen("SELECT GLOBAL_UUID()")))) {
+			const char *uuid_val = (GloVars.uuid ? GloVars.uuid : "");
+			uint16_t setStatus = 0;
+			auto *myds=sess->client_myds;
+			auto *myprot=&sess->client_myds->myprot;
+			myds->DSS=STATE_QUERY_SENT_DS;
+			int sid=1;
+			myprot->generate_pkt_column_count(true,NULL,NULL,sid,1); sid++;
+			myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",(char *)"UUID",(char *)"",33,36,MYSQL_TYPE_VAR_STRING,0,0,false,0,NULL); sid++;
+			myds->DSS=STATE_COLUMN_DEFINITION;
+			myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+			char **p=(char **)malloc(sizeof(char*)*1);
+			unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long)*1);
+			l[0]=strnlen(uuid_val, 64);
+			p[0]=(char *)uuid_val;
 			myprot->generate_pkt_row(true,NULL,NULL,sid,1,l,p); sid++;
 			myds->DSS=STATE_ROW;
 			myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
@@ -5502,7 +5597,7 @@ __run_query:
 	if (run_query) {
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
-			if (SPA->get_read_only()) { // disable writes if the admin interface is in read_only mode
+			if (SPA->effective_read_only()) { // disable writes if the admin interface is in read_only mode
 				SPA->admindb->execute("PRAGMA query_only = ON");
 				SPA->admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 				SPA->admindb->execute("PRAGMA query_only = OFF");

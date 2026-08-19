@@ -409,6 +409,7 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	server_selection_unit-t \
   hostgroup_routing_unit-t \
 	transaction_state_unit-t \
+	tsdb_cluster_aggregator_unit-t \
 	pgsql_error_classifier_unit-t \
 	pgsql_monitor_unit-t \
 	mysql_error_classifier_unit-t \
@@ -442,6 +443,7 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	glovars_unit-t \
 	pgsql_servers_ssl_params_unit-t \
 	connection_unhealthy_unit-t \
+	cluster_leader_election_unit-t \
 	cluster_sync_unit-t \
 	parsersql_unit-t \
 	pgsql_query_processor_unit-t \

@@ -10,6 +10,8 @@
 #include "prometheus/counter.h"
 #include "prometheus/gauge.h"
 
+#include "ProxySQL_Cluster_Leader.h"
+
 #define PROXYSQL_NODE_METRICS_LEN	5
 
 /**
@@ -266,6 +268,7 @@ private:
 };
 
 class ProxySQL_Node_Entry {
+	friend class ProxySQL_Cluster_Nodes;
 	private:
 	uint64_t hash;
 	char *hostname;
@@ -273,6 +276,11 @@ class ProxySQL_Node_Entry {
 	uint64_t weight;
 	char *comment;
 	char* ip_addr;
+	char *uuid;                              // learned via SELECT GLOBAL_UUID(); NULL until known
+	unsigned long long last_success_at_us;   // monotonic_time() of last successful GLOBAL_CHECKSUM poll; 0 = never
+	uint64_t global_version;                 // number of observed global checksum changes on this peer
+	uint64_t checks_ok;
+	uint64_t checks_err;
 	uint64_t generate_hash();
 	bool active;
 	int metrics_idx_prev;
@@ -307,6 +315,12 @@ class ProxySQL_Node_Entry {
 	uint16_t get_port() {
 		return port;
 	}
+	const char * get_uuid() { return uuid; }
+	void set_uuid(const char* u);            // strdup, frees previous
+	unsigned long long get_last_success_at_us() { return last_success_at_us; }
+	uint64_t get_global_version() { return global_version; }
+	uint64_t get_checks_ok() { return checks_ok; }
+	uint64_t get_checks_err() { return checks_err; }
 	ProxySQL_Node_Metrics * get_metrics_curr();
 	ProxySQL_Node_Metrics * get_metrics_prev();
 	struct {
@@ -359,6 +373,7 @@ struct p_cluster_nodes_dyn_gauge {
 		proxysql_servers_metrics_response_time_ms,
 		proxysql_servers_metrics_last_check_ms,
 		proxysql_servers_metrics_client_conns_connected,
+		proxysql_servers_alive,
 		SIZE_
 	};
 };
@@ -399,6 +414,7 @@ class ProxySQL_Cluster_Nodes {
 		std::map<std::string, prometheus::Gauge*> p_proxysql_servers_metrics_response_time_ms {};
 		std::map<std::string, prometheus::Gauge*> p_proxysql_servers_metrics_last_check_ms {};
 		std::map<std::string, prometheus::Gauge*> p_proxysql_servers_metrics_client_conns_connected {};
+		std::map<std::string, prometheus::Gauge*> p_proxysql_servers_alive {};
 	} metrics;
 	public:
 	ProxySQL_Cluster_Nodes();
@@ -407,11 +423,14 @@ class ProxySQL_Cluster_Nodes {
 	bool Update_Node_Metrics(char * _h, uint16_t _p, MYSQL_RES *_r, unsigned long long _response_time);
 	bool Update_Global_Checksum(char * _h, uint16_t _p, MYSQL_RES *_r);
 	bool Update_Node_Checksums(char * _h, uint16_t _p, MYSQL_RES *_r);
+	void Update_Node_UUID(char * _hostname, uint16_t _port, const char * _uuid);
+	void Update_Node_Failure(char * _hostname, uint16_t _port);
 	void Reset_Global_Checksums(bool lock);
 	void update_prometheus_nodes_metrics();
 	SQLite3_result * dump_table_proxysql_servers();
 	SQLite3_result * stats_proxysql_servers_checksums();
 	SQLite3_result * stats_proxysql_servers_metrics();
+	SQLite3_result * stats_proxysql_servers_status(const std::string& leader_uuid, unsigned long long alive_timeout_us);
 	void get_peer_to_sync_mysql_query_rules(char **host, uint16_t *port, char** ip_address);
 	void get_peer_to_sync_runtime_mysql_servers(char **host, uint16_t *port, char **peer_checksum, char** ip_address);
 	void get_peer_to_sync_mysql_servers_v2(char** host, uint16_t* port, char** peer_mysql_servers_v2_checksum, 
@@ -428,6 +447,7 @@ class ProxySQL_Cluster_Nodes {
 	void get_peer_to_sync_pgsql_servers_v2(char** host, uint16_t* port, char** peer_pgsql_servers_v2_checksum,
 		char** peer_runtime_pgsql_servers_checksum, char** ip_address);
 	void get_peer_to_sync_pgsql_users(char **host, uint16_t *port, char** ip_address);
+	std::vector<Cluster_Leader_Candidate> get_leader_candidates(unsigned long long alive_timeout_us);
 };
 
 struct p_cluster_counter {
@@ -505,12 +525,15 @@ struct p_cluster_counter {
 		sync_delayed_pgsql_users_version_one,
 		sync_delayed_pgsql_variables_version_one,
 
+		cluster_leader_changes,
+
 		SIZE_
 	};
 };
 
 struct p_cluster_gauge {
 	enum metric : uint8_t {
+		cluster_leader_status,
 		SIZE_
 	};
 };
@@ -605,6 +628,17 @@ public:
 
 	char* admin_mysql_ifaces;
 	int cluster_check_interval_ms;
+	int cluster_leader_election;          // 0/1, __sync access
+	int cluster_leader_node_timeout_ms;
+	int cluster_leader_grace_ms;
+	pthread_mutex_t leader_mutex;         // guards leader_state + leader_hostname/leader_port
+	Cluster_Leader_State leader_state;
+	char * leader_hostname;               // NULL = no leader
+	int leader_port;
+	unsigned long long leader_next_check_at; // monotonic us, 0 initially
+	void leader_election_tick(unsigned long long curtime_us);
+	bool is_leader();
+	void get_leader_info(std::string& hostname, int& port, std::string& uuid);
 	int cluster_check_status_frequency;
 	std::atomic<int> cluster_mysql_query_rules_diffs_before_sync;
 	std::atomic<int> cluster_mysql_servers_diffs_before_sync;
@@ -669,6 +703,13 @@ public:
 	}
 	SQLite3_result* get_stats_proxysql_servers_metrics() {
 		return nodes.stats_proxysql_servers_metrics();
+	}
+	SQLite3_result* get_stats_proxysql_servers_status();
+	void Update_Node_UUID(char* h, uint16_t p, const char* u) {
+		nodes.Update_Node_UUID(h, p, u);
+	}
+	void Update_Node_Failure(char* h, uint16_t p) {
+		nodes.Update_Node_Failure(h, p);
 	}
 	void p_update_metrics();
 	void thread_ending(pthread_t);

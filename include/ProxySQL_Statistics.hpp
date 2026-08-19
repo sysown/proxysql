@@ -8,6 +8,7 @@
 #include <vector>
 #include <map>
 #include <mutex>
+#include <atomic>
 
 #define STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_V1_4 "CREATE TABLE mysql_connections (timestamp INT NOT NULL, Client_Connections_aborted INT NOT NULL, Client_Connections_connected INT NOT NULL, Client_Connections_created INT NOT NULL, Server_Connections_aborted INT NOT NULL, Server_Connections_connected INT NOT NULL, Server_Connections_created INT NOT NULL, ConnPool_get_conn_failure INT NOT NULL, ConnPool_get_conn_immediate INT NOT NULL, ConnPool_get_conn_success INT NOT NULL, Questions INT NOT NULL, Slow_queries INT NOT NULL, PRIMARY KEY (timestamp))"
 
@@ -110,6 +111,10 @@
 // Backend health monitoring table
 #define STATSDB_SQLITE_TABLE_TSDB_BACKEND_HEALTH \
 "CREATE TABLE tsdb_backend_health (timestamp INT NOT NULL, hostgroup INT NOT NULL, hostname TEXT NOT NULL, port INT NOT NULL, probe_up INT NOT NULL, connect_ms INT, PRIMARY KEY (timestamp, hostgroup, hostname, port)) WITHOUT ROWID"
+
+// Cluster-aggregated metrics table (leader-collected, per-node)
+#define STATSDB_SQLITE_TABLE_TSDB_METRICS_CLUSTER \
+"CREATE TABLE tsdb_metrics_cluster (node VARCHAR NOT NULL , timestamp INTEGER NOT NULL , metric_name VARCHAR NOT NULL , labels VARCHAR NOT NULL DEFAULT '{}' , value REAL , PRIMARY KEY (node, timestamp, metric_name, labels)) WITHOUT ROWID"
 #endif
 
 class ProxySQL_Statistics {
@@ -136,6 +141,29 @@ class ProxySQL_Statistics {
 	unsigned long long next_timer_tsdb_monitor;
 	unsigned long long next_timer_tsdb_retention;
 	sqlite3_stmt *stmt_insert_tsdb_metric;
+	// Cluster aggregation (leader pulls peers' TSDB via pull+watermark)
+	unsigned long long next_timer_tsdb_cluster_check = 0;
+	pthread_t tsdb_agg_thread;
+	bool tsdb_agg_thread_started = false;       // only touched by the admin main loop thread
+	std::atomic<bool> tsdb_agg_stop { false };
+	// Set to true by the worker thread as its VERY LAST action before
+	// returning. tsdb_cluster_aggregation_check() must not pthread_join()
+	// the worker until this is observed true -- the worker can be blocked in
+	// peer I/O for up to ~11s (1s connect + 10s read/write timeouts), and a
+	// blocking join on the admin main loop thread would stall
+	// leader_election_tick(), called right after this check.
+	std::atomic<bool> tsdb_agg_thread_done { false };
+	sqlite3_stmt *stmt_insert_tsdb_cluster_metric = NULL;
+	// Worker-thread-only bookkeeping (no locking needed: only the aggregation thread touches these)
+	std::map<std::string, long> tsdb_agg_peer_last_wm;       // last watermark observed per peer
+	std::map<std::string, int> tsdb_agg_peer_stall_count;    // consecutive unchanged cycles per peer
+	std::map<std::string, bool> tsdb_agg_peer_stall_logged;  // once-flag: already logged the stall
+	std::map<std::string, int> tsdb_agg_peer_cap_hit_count;  // consecutive cap-hit cycles per peer
+	std::map<std::string, int> tsdb_agg_peer_progress_stall_count; // consecutive no-progress-within-batch cycles per peer
+	void tsdb_cluster_aggregation_cycle();
+	long tsdb_cluster_node_max_ts(const std::string& node);
+	void tsdb_cluster_replicate_self(const std::string& node, long watermark, int limit);
+	bool tsdb_cluster_replicate_peer(const std::string& host, int port, const std::string& node, long watermark, int limit, const std::string& user, const std::string& pass, long persisted_max_ts);
 #endif
 	sqlite3_stmt *stmt_insert_backend_health;
 	void MySQL_Threads_Handler_sets_v1(SQLite3_result *);
@@ -162,6 +190,12 @@ class ProxySQL_Statistics {
 		int tsdb_retention_days;
 		int tsdb_monitor_enabled;
 		int tsdb_monitor_interval;
+		int tsdb_cluster_aggregation;
+		int tsdb_cluster_interval;
+		int tsdb_cluster_backfill_hours;
+		int tsdb_cluster_retention_days;
+		int tsdb_cluster_batch_rows;
+		int tsdb_hourly_retention_days;
 #endif
 	} variables;
 	ProxySQL_Statistics();
@@ -239,7 +273,8 @@ class ProxySQL_Statistics {
 		const std::map<std::string, std::string>& label_filters,
 		time_t from,
 		time_t to,
-		const std::string& aggregation = "");
+		const std::string& aggregation = "",
+		const std::string& node = "");
 	// Backend health queries
 	SQLite3_result* get_backend_health_metrics(time_t from, time_t to, int hostgroup = -1);
 	// Status
@@ -259,6 +294,14 @@ class ProxySQL_Statistics {
 	// Main loops
 	void tsdb_sampler_loop();
 	void tsdb_monitor_loop();
+	// Cluster aggregation (leader-only worker thread)
+	std::atomic<bool> tsdb_agg_active { false };            // thread running (read by REST)
+	std::atomic<long long> tsdb_agg_rows_total { 0 };       // rows replicated since start
+	std::atomic<long long> tsdb_agg_last_cycle_ts { 0 };    // unix ts of last completed cycle
+	std::atomic<bool> tsdb_agg_cap_hit_last_cycle { false };
+	void tsdb_cluster_aggregation_check(unsigned long long curtime);
+	void tsdb_cluster_aggregation_thread_loop();            // thread body (public for the C trampoline)
+	SQLite3_result * get_tsdb_cluster_nodes();              // implemented in Task 4
 #endif
 
 	/** 

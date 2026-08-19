@@ -1308,6 +1308,19 @@ int main(int, char**) {
 			return;
 		}
 
+		// Remove any stale config DB left by a previous aborted run. If 'proxysql.db'
+		// exists, the replica ignores 'test_cluster_sync.cnf' entirely (config DB has
+		// higher precedence), so it starts with whatever 'proxysql_servers' the aborted
+		// run last saved (typically empty) and never joins the cluster: every sync
+		// assertion then times out. Cleanup at the end of this thread only runs on
+		// clean exits, so it cannot be relied upon here.
+		if (remove(proxysql_db.c_str()) == 0) {
+			diag("Removed stale replica config DB from previous aborted run: '%s'", proxysql_db.c_str());
+		}
+		if (remove(stats_db.c_str()) == 0) {
+			diag("Removed stale replica stats DB from previous aborted run: '%s'", stats_db.c_str());
+		}
+
 		pid_t pid = fork();
 		if (pid == 0) {
 			if (dup2(stderr_fd, STDOUT_FILENO) == -1 || dup2(stderr_fd, STDERR_FILENO) == -1) {
@@ -2647,6 +2660,8 @@ int main(int, char**) {
 			std::make_tuple("admin-cluster_admin_variables_save_to_disk"       , "true"                      ),
 			std::make_tuple("admin-cluster_check_interval_ms"                  , "1001"                      ),
 			std::make_tuple("admin-cluster_check_status_frequency"             , "11"                        ),
+			std::make_tuple("admin-cluster_leader_grace_ms"                    , "3001"                      ),
+			std::make_tuple("admin-cluster_leader_node_timeout_ms"             , "3001"                      ),
 			std::make_tuple("admin-cluster_mysql_query_rules_diffs_before_sync", "4"                         ),
 			std::make_tuple("admin-cluster_mysql_query_rules_save_to_disk"     , "true"                      ),
 			std::make_tuple("admin-cluster_mysql_servers_diffs_before_sync"    , "4"                         ),

@@ -241,4 +241,10 @@ deps/protobuf/protobuf-*/
 # accidentally committed once with an absolute /home path).
 test/scripts/deps/mysqlbinlog
 
+# superpowers scratch (SDD workspaces, review packages)
+.superpowers/
+
+# tsdb-lab capture.bash working dir: per-node datadirs/logs for the 3
+# ephemeral ProxySQL instances it spawns; never the committed fixture.
+test/tsdb-lab/.capture/
 # Temporary ASAN CI end-to-end validation trigger; this branch will not merge.

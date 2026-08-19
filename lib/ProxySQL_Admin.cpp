@@ -436,6 +436,11 @@ static char * admin_variables_names[]= {
 	(char *)"cluster_username",
 	(char *)"cluster_password",
 	(char *)"cluster_check_interval_ms",
+#ifdef PROXYSQL31
+	(char *)"cluster_leader_election",
+#endif /* PROXYSQL31 */
+	(char *)"cluster_leader_node_timeout_ms",
+	(char *)"cluster_leader_grace_ms",
 	(char *)"cluster_check_status_frequency",
 	(char *)"cluster_mysql_query_rules_diffs_before_sync",
 	(char *)"cluster_mysql_servers_diffs_before_sync",
@@ -1368,7 +1373,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_proxysql_message_metrics = false;
 	bool stats_proxysql_message_metrics_reset = false;
 
-	//bool stats_proxysql_servers_status = false; // temporary disabled because not implemented
+	bool stats_proxysql_servers_status = false;
 
 	if (strcasestr(query_no_space, "pgsql processlist") ||
 		strcasestr(query_no_space, "pgsql activity") ||
@@ -1515,11 +1520,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	if (strstr(query_no_space,"stats_proxysql_message_metrics_reset"))
 		{ stats_proxysql_message_metrics_reset=true; refresh=true; }
 
-	// temporary disabled because not implemented
-/*
 	if (strstr(query_no_space,"stats_proxysql_servers_status"))
 		{ stats_proxysql_servers_status = true; refresh = true; }
-*/
 	if (strstr(query_no_space,"stats_mysql_prepared_statements_info")) {
 		stats_mysql_prepared_statements_info=true; refresh=true;
 	}
@@ -1747,10 +1749,9 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			}
 		}
 
-		// temporary disabled because not implemented
-//		if (stats_proxysql_servers_status) {
-//			stats___proxysql_servers_status();
-//		}
+		if (stats_proxysql_servers_status) {
+			stats___proxysql_servers_status();
+		}
 		if (stats_mysql_prepared_statements_info) {
 			stats___mysql_prepared_statements_info();
 		}
@@ -2659,7 +2660,11 @@ __end_while_pool:
 			if (GloProxyStats->tsdb_retention_timetoget(curtime)) {
 				GloProxyStats->tsdb_retention_cleanup();
 			}
+			GloProxyStats->tsdb_cluster_aggregation_check(curtime);
 #endif
+			if (GloProxyCluster) {
+				GloProxyCluster->leader_election_tick(curtime);
+			}
 		}
 		if (S_amll.get_version()!=version) {
 			S_amll.wrlock();
@@ -2928,6 +2933,9 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.cluster_username=strdup((char *)"");
 	variables.cluster_password=strdup((char *)"");
 	variables.cluster_check_interval_ms=1000;
+	variables.cluster_leader_election=false;
+	variables.cluster_leader_node_timeout_ms=3000;
+	variables.cluster_leader_grace_ms=3000;
 	variables.cluster_check_status_frequency=10;
 	variables.cluster_mysql_query_rules_diffs_before_sync = 3;
 	variables.cluster_mysql_servers_diffs_before_sync = 3;
@@ -3767,6 +3775,19 @@ char * ProxySQL_Admin::get_variable(char *name) {
 		snprintf(intbuf, sizeof(intbuf),"%d",variables.cluster_check_interval_ms);
 		return strdup(intbuf);
 	}
+#ifdef PROXYSQL31
+	if (!strcasecmp(name,"cluster_leader_election")) {
+		return strdup((variables.cluster_leader_election ? "true" : "false"));
+	}
+#endif /* PROXYSQL31 */
+	if (!strcasecmp(name,"cluster_leader_node_timeout_ms")) {
+		snprintf(intbuf, sizeof(intbuf),"%d",variables.cluster_leader_node_timeout_ms);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"cluster_leader_grace_ms")) {
+		snprintf(intbuf, sizeof(intbuf),"%d",variables.cluster_leader_grace_ms);
+		return strdup(intbuf);
+	}
 	if (!strcasecmp(name,"cluster_check_status_frequency")) {
 		snprintf(intbuf, sizeof(intbuf),"%d",variables.cluster_check_status_frequency);
 		return strdup(intbuf);
@@ -4273,6 +4294,56 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (intv >= 10 && intv <= 300000) {
 			variables.cluster_check_interval_ms=intv;
 			__sync_lock_test_and_set(&GloProxyCluster->cluster_check_interval_ms, intv);
+			return true;
+		} else {
+			return false;
+		}
+	}
+#ifdef PROXYSQL31
+	if (!strcasecmp(name,"cluster_leader_election")) {
+		bool old_v = variables.cluster_leader_election;
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.cluster_leader_election=true;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_leader_election, 1);
+			// Spec: with election enabled a node is effective-RO until the first
+			// election settles. Assume follower immediately; the next tick corrects
+			// it (the elected leader flips back to RW within tick+grace).
+			// Only flip on the false->true transition: this variable is
+			// re-applied on every LOAD ADMIN VARIABLES TO RUNTIME (including
+			// cluster syncs), and unconditionally forcing follower(true) here
+			// would kick an already-elected leader back to effective-RO on
+			// every reload.
+			if (old_v == false) {
+				set_cluster_follower(true);
+			}
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.cluster_leader_election=false;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_leader_election, 0);
+			if (old_v == true) {
+				set_cluster_follower(false); // immediate, don't wait for the next tick
+			}
+			return true;
+		}
+		return false;
+	}
+#endif /* PROXYSQL31 */
+	if (!strcasecmp(name,"cluster_leader_node_timeout_ms")) {
+		int intv=atoi(value);
+		if (intv >= 1000 && intv <= 600000) {
+			variables.cluster_leader_node_timeout_ms=intv;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_leader_node_timeout_ms, intv);
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"cluster_leader_grace_ms")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 600000) {
+			variables.cluster_leader_grace_ms=intv;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_leader_grace_ms, intv);
 			return true;
 		} else {
 			return false;
@@ -4849,12 +4920,19 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		return false;
 	}
 	if (!strcasecmp(name,"read_only")) {
+		bool old_admin_read_only = variables.admin_read_only;
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.admin_read_only=true;
+			if (old_admin_read_only != variables.admin_read_only) {
+				set_ro_mode(variables.admin_read_only ? ADMIN_RO_MODE_FORCED_RO : ADMIN_RO_MODE_AUTO);
+			}
 			return true;
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.admin_read_only=false;
+			if (old_admin_read_only != variables.admin_read_only) {
+				set_ro_mode(variables.admin_read_only ? ADMIN_RO_MODE_FORCED_RO : ADMIN_RO_MODE_AUTO);
+			}
 			return true;
 		}
 		return false;
