@@ -27,6 +27,12 @@
  * Both are correct. What would be a FINDING (a real bug) is a THIRD outcome: a hang/timeout, a
  * crash, a protocol desync, or a session left unusable afterwards.
  *
+ * How the three are told apart: pg_lite_client's saslFinish() RETURNS 0 for AuthenticationOk and
+ * SASL_FINISH_REJECTED for a clean ErrorResponse, and reserves exceptions for genuine IO, timeout
+ * and protocol failures (pg_lite_client.h). (A) and (B) are therefore both return values; anything
+ * that THROWS is, by construction, the third outcome -- a hang, a transport close with no
+ * ErrorResponse, a desync, or a session that broke after AuthenticationOk.
+ *
  * This test does NOT decide between (A) and (B); it observes which the code implements today and
  * pins THAT as the regression baseline, reporting it via diag() for the maintainer to bless.
  * OBSERVED ON 2026-07-11 (legacy-g4 / docker-pgsql16-single, PR #5865 head): see the run log /
@@ -88,12 +94,23 @@ int main(int, char**) {
 	// --- Drive a raw SCRAM handshake, pausing between server-first and client-final. ---
 	bool contract_held = false;   // assertion 2: (A) bound+in-sync OR (B) fail-closed; NOT a 3rd outcome
 	std::string observed = "unknown";
+
+	// Assertion 1 is reported AFTER the try so that a throw inside saslBegin() cannot swallow it and
+	// leave plan(3) short; that costs a little diag ordering and buys a plan that always balances.
+	std::string server_first;
+	bool server_first_ok = false;
+
+	// How far the exchange got when an exception unwound, so the catch can attribute it to a stage
+	// instead of lumping every throw together.
+	enum Stage { STAGE_SETUP, STAGE_SERVER_FIRST, STAGE_AUTH_OK };
+	Stage stage = STAGE_SETUP;
+
 	try {
 		PgConnection c(4000);   // 4s read timeout: a hung handshake surfaces as "Read timed out"
 		c.rawConnectStartup(cl.pgsql_host, cl.pgsql_port, USER /*db*/, USER);
-		std::string server_first = c.saslBegin(USER, PA);   // ProxySQL builds this from verifier A
-		ok(!server_first.empty(), "server-first received for verifier A (server-first='%s')",
-		   server_first.c_str());
+		server_first = c.saslBegin(USER, PA);   // ProxySQL builds this from verifier A
+		server_first_ok = !server_first.empty();
+		stage = STAGE_SERVER_FIRST;
 
 		// --- MUTATE runtime creds mid-handshake: rotate the stored verifier A -> B. ---
 		setVerifier(admin.get(), USER, vB);
@@ -107,32 +124,65 @@ int main(int, char**) {
 			// session. We deliberately do NOT run a backend query: reload_user is a frontend-only
 			// user with no backend role, so a query would fail at the BACKEND for reasons unrelated
 			// to the mid-handshake contract. ReadyForQuery from ProxySQL is the correct in-sync proof.
+			stage = STAGE_AUTH_OK;
 			c.waitForReady();
 			contract_held = true;
 			observed = "A: bound-to-original (client-final for A ACCEPTED after reload to B; "
 			           "ReadyForQuery received, session in sync)";
 		} else {
-			// (B) fail-closed: ProxySQL's fresh lookup of verifier B rejected the A-proof cleanly.
+			// (B) fail-closed: ProxySQL's fresh lookup of verifier B rejected the A-proof with a
+			// CLEAN ErrorResponse -- saslFinish() returns SASL_FINISH_REJECTED for that; it does not
+			// throw. A rejection that arrives as a dead socket instead lands in the catch below.
 			contract_held = true;
-			observed = std::string("B: fail-closed (client-final for A REJECTED after reload to B: ")
-			           + c.getLastError() + ")";
+			observed = std::string("B: fail-closed (client-final for A REJECTED after reload to B "
+			                       "with a clean ErrorResponse: ") + c.getLastError() + ")";
 		}
 	} catch (const PgException& e) {
-		std::string what = e.what();
-		if (what.find("timed out") != std::string::npos) {
-			// Hang: the handshake neither completed nor was rejected -> this is the FINDING.
-			contract_held = false;
+		const std::string what = e.what();
+		// EVERY path into this catch is the third outcome. Contract (A) and contract (B) are both
+		// return values from saslFinish(); a clean ErrorResponse never throws (pg_lite_client.h). So
+		// an exception cannot mean "rejected cleanly" -- classifying it as (B), as this block used
+		// to, made a socket close indistinguishable from a well-formed rejection and let a desync
+		// pass assertion 2. The branches below only pick the label; none of them holds the contract.
+		contract_held = false;
+
+		if (stage == STAGE_SETUP) {
+			// Threw before the rotation: the contract was never exercised. Still a failure -- the
+			// handshake could not even reach server-first -- but not a verdict on the reload.
+			observed = std::string("SETUP FAILURE (the exchange never reached the rotation point, so "
+			                       "the mid-handshake contract could not be evaluated): ") + what;
+		} else if (what.find("timed out") != std::string::npos) {
 			observed = std::string("FINDING (hang): the mid-handshake reload left the SASL exchange "
 			                       "stalled -- ") + what;
+		} else if (stage == STAGE_AUTH_OK) {
+			// AuthenticationOk arrived and the session then broke: precisely the "left unusable
+			// afterwards" outcome the header names. Assertion 3 would not catch this -- it only
+			// detects a whole-process crash, not one dead session.
+			observed = std::string("FINDING (unusable after success): AuthenticationOk was received, "
+			                       "then the session broke before ReadyForQuery -- ") + what;
+		} else if (what.find("Connection closed by peer") != std::string::npos ||
+		           what.find("Socket read failed")        != std::string::npos ||
+		           what.find("select() failed")           != std::string::npos) {
+			// pg_lite_client.cpp readBytes(): recv()==0 / recv()<0 / select() error. The client-final
+			// was answered by a dead socket instead of an ErrorResponse -- not a clean rejection.
+			observed = std::string("FINDING (transport close): the client-final was answered by a "
+			                       "socket close rather than an ErrorResponse -- ") + what;
+		} else if (what.find("server signature verification failed") != std::string::npos) {
+			// ProxySQL sent AuthenticationSASLFinal rather than ErrorResponse, so it ACCEPTED the
+			// A-proof, yet signed with key material the client cannot verify against A. That is a
+			// mixed-verifier completion, not a rejection -- the most interesting failure this test
+			// can surface, and the one most easily mistaken for a clean reject.
+			observed = std::string("FINDING (mixed verifier): ProxySQL accepted the A-proof but its "
+			                       "server signature does not verify against verifier A -- ") + what;
 		} else {
-			// A thrown ErrorResponse / peer-close is a clean fail-closed outcome == contract (B).
-			// (A libscram server-signature mismatch would also land here; still a rejection, not a
-			// success -- the session never becomes usable, so it is NOT the "unusable-after-success"
-			// third outcome.)
-			contract_held = true;
-			observed = std::string("B: fail-closed (handshake threw a clean rejection: ") + what + ")";
+			// "expected AuthenticationSASLFinal(12)", "no AuthenticationOk after SASLFinal",
+			// "Invalid message length", ... -- the stream stopped making sense.
+			observed = std::string("FINDING (protocol desync): ") + what;
 		}
 	}
+
+	ok(server_first_ok, "server-first received for verifier A (server-first='%s')",
+	   server_first.c_str());
 	diag("=================================================================================");
 	diag("OBSERVED CONTRACT (pin this / maintainer to bless): %s", observed.c_str());
 	diag("=================================================================================");

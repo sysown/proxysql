@@ -441,6 +441,8 @@ PG_LITE_CLIENT_TESTS := \
 	pgsql-reg_test_5866_result_format-t \
 	pgsql-auth_method_matrix-t \
 	pgsql-scram_reload_midhandshake-t \
+	pgsql-scram_user_removed_midhandshake-t \
+	pgsql-scram_rotate_midhandshake_backend-t \
 	pgsql-datatype_matrix-t \
 	pgsql-server_side_cursors-t \
 	test_ffto_pgsql_pipeline-t \
