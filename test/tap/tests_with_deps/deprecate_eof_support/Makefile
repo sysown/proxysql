@@ -24,6 +24,7 @@ IDIRS :=	-I$(TAP_IDIR) \
 
 LDIRS :=	-L$(TAP_LDIR) \
 			-L$(RE2_LDIR) \
+			-L$(ABSL_LDIR) \
 			-L$(PROXYSQL_LDIR) \
 			-L$(JEMALLOC_LDIR) \
 			-L$(LIBCONFIG_LDIR) \
@@ -78,7 +79,7 @@ tests:
 	@echo "Removing empty .gcno files ..."
 	find -L . -type f -name '*.gcno' -empty -ls -delete
 
-COMMONARGS = $(OPT) -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl,-rpath,$(RE2_LDIR) -Wl,-Bdynamic -ltap -lcpp_dotenv -lcurl -lre2 -lssl -lcrypto -lz -ldl -lpthread -DGITVERSION=\"$(GIT_VERSION)\"
+COMMONARGS = $(OPT) -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl,-rpath,$(RE2_LDIR) -Wl,-Bdynamic -ltap -lcpp_dotenv -lcurl $(RE2_STATIC_LIBS) -lssl -lcrypto -lz -ldl -lpthread -DGITVERSION=\"$(GIT_VERSION)\"
 
 ok_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp
 	$(CXX) $< -I$(MARIADB_IDIR) $(IDIRS) -L$(MARIADB_LDIR) $(LDIRS) -lmariadbclient $(COMMONARGS) -o $@

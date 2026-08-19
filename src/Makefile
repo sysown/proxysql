@@ -36,6 +36,7 @@ LDIRS :=	-L$(PROXYSQL_LDIR) \
 			-L$(LIBCONFIG_LDIR) \
 			-L$(LIBDAEMON_LDIR) \
 			-L$(RE2_LDIR) \
+			-L$(ABSL_LDIR) \
 			-L$(PCRE_LDIR) \
 			-L$(MICROHTTPD_LDIR) \
 			-L$(LIBHTTPSERVER_LDIR) \
@@ -114,7 +115,7 @@ STATICMYLIBS := -Wl,-Bstatic \
 				-lproxysql \
 				-ldaemon \
 				-lconfig++ \
-				-lre2 \
+				$(RE2_STATIC_LIBS) \
 				-lpcrecpp \
 				-lpcre \
 				-lmariadbclient \
@@ -145,7 +146,7 @@ endif
 endif
 
 ifeq ($(UNAME_S),Darwin)
-	MYLIBS :=-lre2 -lmariadbclient -lssl -lcrypto -lpthread -lm -lz -liconv -lgnutls -lprometheus-cpp-pull -lprometheus-cpp-core
+	MYLIBS := $(RE2_STATIC_LIBS) -lmariadbclient -lssl -lcrypto -lpthread -lm -lz -liconv -lgnutls -lprometheus-cpp-pull -lprometheus-cpp-core
 else
 	CURL_DIR := $(DEPS_PATH)/curl/curl
 	IDIRS += -L$(CURL_DIR)/include

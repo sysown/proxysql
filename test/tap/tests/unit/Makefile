@@ -82,6 +82,7 @@ endif
 
 LDIRS :=	-L$(TAP_LDIR) \
 			-L$(RE2_LDIR) \
+			-L$(ABSL_LDIR) \
 			-L$(PROXYSQL_LDIR) \
 			-L$(JEMALLOC_LDIR) \
 			-L$(LIBCONFIG_LDIR) \
@@ -197,7 +198,7 @@ LIBPROXYSQLAR_FULL := $(LIBPROXYSQLAR) \
 	$(LIBSCRAM_LDIR)/libscram.a \
 	$(LIBUSUAL_LDIR)/libusual.a \
 	$(MARIADB_LDIR)/libmariadbclient.a \
-	$(RE2_LDIR)/libre2.a \
+	$(RE2_STATIC_LIB) $(RE2_ABSL_LIBS) \
 	$(POSTGRESQL_PATH)/interfaces/libpq/libpq.a \
 	$(POSTGRESQL_PATH)/common/libpgcommon.a \
 	$(POSTGRESQL_PATH)/port/libpgport.a
@@ -216,7 +217,7 @@ LIBPROXYSQLAR_FULL := $(LIBPROXYSQLAR)
 # (`detect_odr_violation=1` aborts at startup; ld is silenced by
 # `--allow-multiple-definition`).
 MYLIBS := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -lcurl -lssl -lcrypto -luuid \
-		  -Wl,-Bstatic -lconfig -lsqlparser -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre \
+		  -Wl,-Bstatic -lconfig -lsqlparser -ldaemon -lconfig++ $(RE2_STATIC_LIBS) -lpcrecpp -lpcre \
 		  -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev \
 		  -lprometheus-cpp-pull -lprometheus-cpp-core \
 		  -Wl,-Bstatic -lpq -lpgcommon -lpgport \

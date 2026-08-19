@@ -100,9 +100,9 @@ libtap.a: libtap_mariadb.a
 
 libtap$(SHLIB_EXT): libtap_mariadb.a cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv$(SHLIB_EXT) libre2$(SHLIB_EXT)
 ifeq ($(UNAME_S),Darwin)
-	$(CXX) -dynamiclib -o libtap$(SHLIB_EXT) -force_load libtap_mariadb.a -L$(POSTGRESQL_PATH)/interfaces/libpq -lpq -L$(RE2_LDIR)/so -lre2 -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl,-rpath,$(RE2_LDIR)/so $(LWGCOV)
+	$(CXX) -dynamiclib -o libtap$(SHLIB_EXT) -force_load libtap_mariadb.a -L$(POSTGRESQL_PATH)/interfaces/libpq -lpq -L$(RE2_LDIR)/so -L$(ABSL_LDIR) $(RE2_STATIC_LIBS) -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl,-rpath,$(RE2_LDIR)/so $(LWGCOV)
 else
-	$(CXX) -shared -o libtap$(SHLIB_EXT) -Wl,--whole-archive libtap_mariadb.a -Wl,--no-whole-archive -L$(POSTGRESQL_PATH)/interfaces/libpq -lpq -L$(RE2_LDIR)/so -lre2 -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl,-rpath,$(RE2_LDIR)/so $(LWGCOV)
+	$(CXX) -shared -o libtap$(SHLIB_EXT) -Wl,--whole-archive libtap_mariadb.a -Wl,--no-whole-archive -L$(POSTGRESQL_PATH)/interfaces/libpq -lpq -L$(RE2_LDIR)/so -L$(ABSL_LDIR) $(RE2_STATIC_LIBS) -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl,-rpath,$(RE2_LDIR)/so $(LWGCOV)
 endif
 
 

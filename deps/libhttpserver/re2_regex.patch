@@ -4,6 +4,16 @@ Date:   Mon Jan 9 12:05:55 2023 +0000
 
     re2_regex.patch
 
+diff --git a/configure.ac b/configure.ac
+index 71d9721..ab0e055 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -118 +118 @@ if test "x$cond_cross_compile" = "xno"; then
+-    CXXFLAGS="-std=c++11 -DHTTPSERVER_COMPILATION -D_REENTRANT $LIBMICROHTTPD_CFLAGS $CXXFLAGS"
++    CXXFLAGS="-std=c++17 -DHTTPSERVER_COMPILATION -D_REENTRANT $LIBMICROHTTPD_CFLAGS $CXXFLAGS"
+@@ -131 +131 @@ else
+-    CXXFLAGS="-std=c++11 -DHTTPSERVER_COMPILATION -D_REENTRANT $CXXFLAGS"
++    CXXFLAGS="-std=c++17 -DHTTPSERVER_COMPILATION -D_REENTRANT $CXXFLAGS"
 diff --git a/examples/Makefile.am b/examples/Makefile.am
 index 318a7a8..0da1879 100644
 --- a/examples/Makefile.am
