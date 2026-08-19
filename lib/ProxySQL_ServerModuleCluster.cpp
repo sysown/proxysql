@@ -88,10 +88,6 @@ bool proxysql_server_module_cluster_registry_matches(ProxySQL_ServerProtocol pro
 	}
 	auto local = local_input;
 	auto peer = peer_input;
-	if (local.empty()) {
-		error = "local server-module registry unavailable";
-		return false;
-	}
 	if (!proxysql_validate_server_module_table_registry(protocol, local, error) ||
 		!proxysql_validate_server_module_table_registry(protocol, peer, error)) return false;
 	if (local.size() != peer.size()) {
@@ -129,6 +125,23 @@ std::string proxysql_server_module_cluster_table_query(
 		std::to_string(static_cast<unsigned>(version)) + " AND table_name='" + table_name + "'";
 }
 
+std::string proxysql_server_module_cluster_poll_name(
+	ProxySQL_ServerProtocol protocol, ProxySQL_ServerModuleClusterVersion version) {
+	return std::string("proxysql_server_module_") +
+		(protocol == ProxySQL_ServerProtocol::mysql ? "mysql_" : "pgsql_") +
+		(version == ProxySQL_ServerModuleClusterVersion::runtime_v1 ? "v1" : "v2");
+}
+
+bool proxysql_server_module_cluster_poll_should_schedule(
+	ProxySQL_ServerProtocol, ProxySQL_ServerModuleClusterVersion,
+	bool peer_supported, const std::string& peer_checksum,
+	bool local_supported, const std::string& local_checksum,
+	unsigned int diff_check, unsigned int diffs_before_sync) {
+	return peer_supported && local_supported && !peer_checksum.empty() &&
+		peer_checksum != local_checksum && diffs_before_sync != 0 &&
+		diff_check >= diffs_before_sync;
+}
+
 ProxySQL_ServerModuleClusterEndpointResult proxysql_server_module_cluster_endpoint(
 	const std::string& query, SQLite3DB& db, std::unique_ptr<SQLite3_result>& result,
 	std::string& error) {
@@ -138,9 +151,7 @@ ProxySQL_ServerModuleClusterEndpointResult proxysql_server_module_cluster_endpoi
 			ProxySQL_ServerModuleClusterVersion::memory_v2}) {
 			if (query == proxysql_server_module_cluster_metadata_query(protocol, version)) {
 				std::vector<ProxySQL_ServerModuleClusterTable> tables;
-				if (!proxysql_active_server_module_cluster_tables(protocol, version, db, tables, error) ||
-					tables.empty()) {
-					if (error.empty()) error = "server-module registry unavailable";
+				if (!proxysql_active_server_module_cluster_tables(protocol, version, db, tables, error)) {
 					return ProxySQL_ServerModuleClusterEndpointResult::error;
 				}
 				auto metadata = std::make_unique<SQLite3_result>(6);
@@ -154,6 +165,11 @@ ProxySQL_ServerModuleClusterEndpointResult proxysql_server_module_cluster_endpoi
 				const std::string version_text = std::to_string(static_cast<unsigned>(version));
 				const std::string checksum = get_checksum_from_hash(
 					proxysql_server_module_cluster_checksum(tables));
+				if (tables.empty()) {
+					const char* row[] = {protocol_text, version_text.c_str(), checksum.c_str(),
+						nullptr, nullptr, nullptr};
+					metadata->add_row(row);
+				}
 				for (const auto& table : tables) {
 					const char* row[] = {protocol_text, version_text.c_str(), checksum.c_str(), table.table_name.c_str(),
 						table.runtime_table_name.c_str(), table.order_by.c_str()};
@@ -229,6 +245,19 @@ bool proxysql_active_server_module_cluster_tables(
 			metadata.order_by, std::move(rows)});
 	}
 	return proxysql_validate_server_module_cluster_tables(protocol, tables, error);
+}
+
+bool proxysql_server_module_cluster_poll_checksum(
+	ProxySQL_ServerProtocol protocol, ProxySQL_ServerModuleClusterVersion version,
+	SQLite3DB& db, std::string& checksum, std::string& error) {
+	std::vector<ProxySQL_ServerModuleClusterTable> tables;
+	if (!proxysql_active_server_module_cluster_tables(protocol, version, db, tables, error)) {
+		checksum.clear();
+		return false;
+	}
+	checksum = get_checksum_from_hash(proxysql_server_module_cluster_checksum(tables));
+	error.clear();
+	return true;
 }
 
 bool proxysql_validate_server_module_cluster_tables(

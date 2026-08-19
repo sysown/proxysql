@@ -635,6 +635,35 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 	MYSQL_ROW row;
 	time_t now = time(NULL);
 
+#ifdef PROXYSQL40
+	struct ServerModulePollInfo {
+		ProxySQL_ServerProtocol protocol;
+		ProxySQL_ServerModuleClusterVersion version;
+		ProxySQL_Checksum_Value_2* peer;
+		bool local_supported {false};
+		bool peer_seen {false};
+		std::string local_checksum;
+	};
+	ServerModulePollInfo server_module_polls[] = {
+		{ProxySQL_ServerProtocol::mysql, ProxySQL_ServerModuleClusterVersion::runtime_v1,
+			&checksums_values.server_module_mysql_v1},
+		{ProxySQL_ServerProtocol::mysql, ProxySQL_ServerModuleClusterVersion::memory_v2,
+			&checksums_values.server_module_mysql_v2},
+		{ProxySQL_ServerProtocol::pgsql, ProxySQL_ServerModuleClusterVersion::runtime_v1,
+			&checksums_values.server_module_pgsql_v1},
+		{ProxySQL_ServerProtocol::pgsql, ProxySQL_ServerModuleClusterVersion::memory_v2,
+			&checksums_values.server_module_pgsql_v2},
+	};
+	if (GloAdmin && GloAdmin->admindb) {
+		pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
+		for (auto& poll : server_module_polls) {
+			std::string error;
+			poll.local_supported = proxysql_server_module_cluster_poll_checksum(
+				poll.protocol, poll.version, *GloAdmin->admindb, poll.local_checksum, error);
+		}
+		pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
+	}
+#endif
 	
 	pthread_mutex_lock(&GloVars.checksum_mutex);
 
@@ -699,6 +728,45 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 	};
 
 	while ( _r && (row = mysql_fetch_row(_r))) {
+#ifdef PROXYSQL40
+		bool server_module_row = false;
+		for (auto& poll : server_module_polls) {
+			if (strcmp(row[0], proxysql_server_module_cluster_poll_name(
+				poll.protocol, poll.version).c_str()) != 0) continue;
+			server_module_row = true;
+			poll.peer_seen = true;
+			poll.peer->version = row[1] ? atoll(row[1]) : 0;
+			poll.peer->epoch = row[2] ? atoll(row[2]) : 0;
+			poll.peer->last_updated = now;
+			if (poll.peer->version != 1 || !row[3]) {
+				poll.peer->version = 0;
+				poll.peer->diff_check = 0;
+				break;
+			}
+			if (strcmp(poll.peer->checksum, row[3]) != 0) {
+				poll.peer->set_checksum(row[3]);
+				poll.peer->last_changed = now;
+				poll.peer->diff_check = 1;
+			} else {
+				poll.peer->diff_check++;
+			}
+			if (poll.local_supported && poll.local_checksum == poll.peer->checksum)
+				poll.peer->diff_check = 0;
+			if (poll.peer->diff_check != 0) {
+				ProxySQL_Checksum_Value_2* pull_selector = nullptr;
+				if (poll.protocol == ProxySQL_ServerProtocol::mysql)
+					pull_selector = poll.version == ProxySQL_ServerModuleClusterVersion::runtime_v1
+						? &checksums_values.mysql_servers : &checksums_values.mysql_servers_v2;
+				else
+					pull_selector = poll.version == ProxySQL_ServerModuleClusterVersion::runtime_v1
+						? &checksums_values.pgsql_servers : &checksums_values.pgsql_servers_v2;
+				pull_selector->diff_check = std::max(
+					pull_selector->diff_check, poll.peer->diff_check);
+			}
+			break;
+		}
+		if (server_module_row) continue;
+#endif
 		// Data-driven approach: find the matching module and process it
 		for (const auto& module : modules) {
 			if (strcmp(row[0], module.module_name) == 0) {
@@ -727,6 +795,16 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 			}
 		}
 	}
+#ifdef PROXYSQL40
+	if (_r) {
+		for (auto& poll : server_module_polls) {
+			if (!poll.peer_seen) {
+				poll.peer->version = 0;
+				poll.peer->diff_check = 0;
+			}
+		}
+	}
+#endif
 	if (_r == NULL) {
 		// Update diff_check counters for all modules using data-driven approach
 		size_t module_count = sizeof(modules) / sizeof(modules[0]);
@@ -823,6 +901,34 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 	unsigned int diff_mu_pgsql = (unsigned int)GloProxyCluster->cluster_pgsql_users_diffs_before_sync.load();
 	unsigned int diff_ps = (unsigned int)GloProxyCluster->cluster_proxysql_servers_diffs_before_sync.load();
 
+#ifdef PROXYSQL40
+	auto module_poll_schedules = [&](ProxySQL_ServerProtocol protocol,
+		ProxySQL_ServerModuleClusterVersion version, unsigned int threshold) {
+		for (const auto& poll : server_module_polls) {
+			if (poll.protocol == protocol && poll.version == version) {
+				return proxysql_server_module_cluster_poll_should_schedule(
+					protocol, version, poll.peer->version == 1, poll.peer->checksum,
+					poll.local_supported, poll.local_checksum,
+					poll.peer->diff_check, threshold);
+			}
+		}
+		return false;
+	};
+	const bool module_mysql_v1 = module_poll_schedules(ProxySQL_ServerProtocol::mysql,
+		ProxySQL_ServerModuleClusterVersion::runtime_v1, diff_ms);
+	const bool module_mysql_v2 = module_poll_schedules(ProxySQL_ServerProtocol::mysql,
+		ProxySQL_ServerModuleClusterVersion::memory_v2, diff_ms);
+	const bool module_pgsql_v1 = module_poll_schedules(ProxySQL_ServerProtocol::pgsql,
+		ProxySQL_ServerModuleClusterVersion::runtime_v1, diff_ms_pgsql);
+	const bool module_pgsql_v2 = module_poll_schedules(ProxySQL_ServerProtocol::pgsql,
+		ProxySQL_ServerModuleClusterVersion::memory_v2, diff_ms_pgsql);
+#else
+	const bool module_mysql_v1 = false;
+	const bool module_mysql_v2 = false;
+	const bool module_pgsql_v1 = false;
+	const bool module_pgsql_v2 = false;
+#endif
+
 	if (diff_mqr) {
 		unsigned long long own_version = __sync_fetch_and_add(&GloVars.checksums_values.mysql_query_rules.version,0);
 		unsigned long long own_epoch = __sync_fetch_and_add(&GloVars.checksums_values.mysql_query_rules.epoch,0);
@@ -864,8 +970,17 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 		const unsigned long long own_epoch = __sync_fetch_and_add(&GloVars.checksums_values.mysql_servers_v2.epoch, 0);
 		const char* own_checksum = __sync_fetch_and_add(&GloVars.checksums_values.mysql_servers_v2.checksum, 0);
 		bool runtime_mysql_servers_already_loaded = false;
+		if (module_mysql_v2) {
+			ProxySQL_Checksum_Value_2* runtime_mysql_server_checksum = &checksums_values.mysql_servers;
+			const bool fetch_runtime = (mysql_server_sync_algo == mysql_servers_sync_algorithm::runtime_mysql_servers_and_mysql_servers_v2);
+			GloProxyCluster->pull_mysql_servers_v2_from_peer(
+				{v->checksum, static_cast<time_t>(v->epoch)},
+				{runtime_mysql_server_checksum->checksum,
+					static_cast<time_t>(runtime_mysql_server_checksum->epoch)}, fetch_runtime);
+			runtime_mysql_servers_already_loaded = fetch_runtime;
+		}
 
-		if (v->version > 1) {
+		if (!module_mysql_v2 && v->version > 1) {
 			if ((own_version == 1) || (v->epoch > own_epoch)) {
 				if (v->diff_check >= diff_ms) {
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with mysql_servers_v2 version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
@@ -896,7 +1011,12 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 			}
 		}
 
-		if (mysql_server_sync_algo == mysql_servers_sync_algorithm::runtime_mysql_servers_and_mysql_servers_v2 && runtime_mysql_servers_already_loaded == false) {
+		if (module_mysql_v1) {
+			v = &checksums_values.mysql_servers;
+			GloProxyCluster->pull_runtime_mysql_servers_from_peer(
+				{v->checksum, static_cast<time_t>(v->epoch)});
+		}
+		if (!module_mysql_v1 && mysql_server_sync_algo == mysql_servers_sync_algorithm::runtime_mysql_servers_and_mysql_servers_v2 && runtime_mysql_servers_already_loaded == false) {
 			v = &checksums_values.mysql_servers;
 			unsigned long long own_version = __sync_fetch_and_add(&GloVars.checksums_values.mysql_servers.version, 0);
 			unsigned long long own_epoch = __sync_fetch_and_add(&GloVars.checksums_values.mysql_servers.epoch, 0);
@@ -1018,8 +1138,21 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 		unsigned long long own_epoch = __sync_fetch_and_add(&GloVars.checksums_values.pgsql_servers_v2.epoch,0);
 		char* own_checksum = __sync_fetch_and_add(&GloVars.checksums_values.pgsql_servers_v2.checksum,0);
 		const std::string v_exp_checksum { v->checksum };
+		if (module_pgsql_v2) {
+			ProxySQL_Checksum_Value_2* runtime_pgsql_server_checksum = &checksums_values.pgsql_servers;
+			GloProxyCluster->pull_pgsql_servers_v2_from_peer(
+				{v_exp_checksum, static_cast<time_t>(v->epoch)},
+				{runtime_pgsql_server_checksum->checksum,
+					static_cast<time_t>(runtime_pgsql_server_checksum->epoch)}, true);
+		}
+		if (module_pgsql_v1) {
+			ProxySQL_Checksum_Value_2* runtime_pgsql_server_checksum = &checksums_values.pgsql_servers;
+			GloProxyCluster->pull_runtime_pgsql_servers_from_peer(
+				{runtime_pgsql_server_checksum->checksum,
+					static_cast<time_t>(runtime_pgsql_server_checksum->epoch)});
+		}
 
-		if (v->version > 1) {
+		if (!module_pgsql_v2 && v->version > 1) {
 			if ((own_version == 1) || (v->epoch > own_epoch)) {
 				if (v->diff_check >= diff_ms_pgsql) {
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with pgsql_servers_v2 version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
@@ -1887,9 +2020,10 @@ module_fetch_status fetch_server_module_tables(MYSQL* conn, ProxySQL_ServerProto
 	}
 	std::string expected_module_checksum;
 	std::vector<ProxySQL_ServerModuleTable> peer_registry;
+	bool capability_only = false;
 	MYSQL_ROW row;
 	while ((row = mysql_fetch_row(metadata.get())) != nullptr) {
-		if (!row[0] || !row[1] || !row[2] || !row[3] || !row[4] || !row[5]) {
+		if (!row[0] || !row[1] || !row[2]) {
 			error = "null server-module metadata field";
 			return module_fetch_status::error;
 		}
@@ -1901,6 +2035,19 @@ module_fetch_status fetch_server_module_tables(MYSQL* conn, ProxySQL_ServerProto
 		if (expected_module_checksum.empty()) expected_module_checksum = row[2];
 		else if (expected_module_checksum != row[2]) {
 			error = "inconsistent server-module checksum metadata";
+			return module_fetch_status::error;
+		}
+		const bool all_table_fields_null = !row[3] && !row[4] && !row[5];
+		if (all_table_fields_null) {
+			if (capability_only || !peer_registry.empty()) {
+				error = "duplicate server-module empty capability metadata";
+				return module_fetch_status::error;
+			}
+			capability_only = true;
+			continue;
+		}
+		if (capability_only || !row[3] || !row[4] || !row[5]) {
+			error = "null server-module table metadata field";
 			return module_fetch_status::error;
 		}
 		peer_registry.push_back({protocol, row[3], row[4], row[5]});

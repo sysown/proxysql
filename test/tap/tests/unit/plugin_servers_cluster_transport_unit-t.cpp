@@ -26,7 +26,7 @@ ProxySQL_ServerModuleClusterTable table(const char* name, const char* runtime,
 } // namespace
 
 int main() {
-	plan(31);
+	plan(39);
 	SQLite3DB source;
 	SQLite3DB destination;
 	source.open((char*)"file:module-cluster-source?mode=memory&cache=private", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI);
@@ -104,9 +104,20 @@ int main() {
 		"v1/v2 and MySQL/PGSQL endpoint identities are isolated");
 	std::unique_ptr<SQLite3_result> endpoint_rows;
 	error.clear();
-	ok(proxysql_server_module_cluster_endpoint(mysql_v1, source, endpoint_rows, error) ==
-		ProxySQL_ServerModuleClusterEndpointResult::error && !endpoint_rows,
-		"new endpoint rejects an unavailable local registry instead of advertising successful discard");
+	bool all_empty_endpoints_supported = true;
+	for (const auto protocol : {ProxySQL_ServerProtocol::mysql, ProxySQL_ServerProtocol::pgsql}) {
+		for (const auto version : {ProxySQL_ServerModuleClusterVersion::runtime_v1,
+			ProxySQL_ServerModuleClusterVersion::memory_v2}) {
+			all_empty_endpoints_supported = all_empty_endpoints_supported &&
+				proxysql_server_module_cluster_endpoint(
+					proxysql_server_module_cluster_metadata_query(protocol, version), source,
+					endpoint_rows, error) == ProxySQL_ServerModuleClusterEndpointResult::handled &&
+				endpoint_rows && endpoint_rows->columns == 6 && endpoint_rows->rows_count == 1 &&
+				endpoint_rows->rows[0]->fields[3] == nullptr;
+		}
+	}
+	ok(all_empty_endpoints_supported,
+		"new MySQL/PGSQL v1/v2 endpoints advertise supported-empty capability/checksum");
 	ok(proxysql_server_module_cluster_endpoint("PROXY_SELECT legacy_only", source, endpoint_rows, error) ==
 		ProxySQL_ServerModuleClusterEndpointResult::unsupported,
 		"unsupported old-peer query remains an explicit legacy fallback");
@@ -149,6 +160,8 @@ int main() {
 		local_registry, peer_registry, error), "non-lexical peer metadata order rejects dynamic sync");
 	ok(!proxysql_server_module_cluster_registry_matches(ProxySQL_ServerProtocol::mysql,
 		{}, local_registry, error), "missing local registry cannot silently discard peer tables");
+	ok(proxysql_server_module_cluster_registry_matches(ProxySQL_ServerProtocol::mysql,
+		{}, {}, error), "supported-empty peers with empty local registry continue ordinary sync");
 
 	const uint64_t legacy_core_checksum = core->raw_checksum();
 	const uint64_t separate_module_checksum = proxysql_server_module_cluster_checksum(pg_payload);
@@ -160,6 +173,29 @@ int main() {
 		"ProxySQL Admin Error: near \"PROXY_SELECT\": syntax error") &&
 		!proxysql_server_module_cluster_legacy_fallback_allowed(1045, "Access denied"),
 		"new receiver falls back to legacy core sync only for an old sender's exact endpoint syntax error");
+	for (const auto protocol : {ProxySQL_ServerProtocol::mysql, ProxySQL_ServerProtocol::pgsql}) {
+		for (const auto version : {ProxySQL_ServerModuleClusterVersion::runtime_v1,
+			ProxySQL_ServerModuleClusterVersion::memory_v2}) {
+			ok(proxysql_server_module_cluster_poll_should_schedule(protocol, version, true,
+				"peer-module", true, "local-module", 2, 2),
+				"module-only change schedules the protocol/version pull");
+		}
+	}
+	ok(!proxysql_server_module_cluster_poll_should_schedule(ProxySQL_ServerProtocol::mysql,
+		ProxySQL_ServerModuleClusterVersion::runtime_v1, true, "empty", true, "empty", 0, 2),
+		"supported-empty no-change does not schedule a pull");
+	ok(!proxysql_server_module_cluster_poll_should_schedule(ProxySQL_ServerProtocol::pgsql,
+		ProxySQL_ServerModuleClusterVersion::memory_v2, false, "", true, "empty", 99, 2),
+		"unsupported old-peer side channel preserves legacy scheduling");
+	ok(proxysql_server_module_cluster_poll_name(ProxySQL_ServerProtocol::mysql,
+		ProxySQL_ServerModuleClusterVersion::runtime_v1) !=
+		proxysql_server_module_cluster_poll_name(ProxySQL_ServerProtocol::mysql,
+			ProxySQL_ServerModuleClusterVersion::memory_v2) &&
+		proxysql_server_module_cluster_poll_name(ProxySQL_ServerProtocol::mysql,
+			ProxySQL_ServerModuleClusterVersion::memory_v2) !=
+		proxysql_server_module_cluster_poll_name(ProxySQL_ServerProtocol::pgsql,
+			ProxySQL_ServerModuleClusterVersion::memory_v2),
+		"periodic capability identities isolate protocol and transport version");
 
 	std::vector<ProxySQL_ServerModuleTable> mysql_disk_registry {local_registry[0]};
 	std::vector<ProxySQL_ServerModuleTable> pgsql_disk_registry {

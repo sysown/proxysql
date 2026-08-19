@@ -323,6 +323,12 @@ class ProxySQL_Node_Entry {
 		ProxySQL_Checksum_Value_2 pgsql_users;
 		ProxySQL_Checksum_Value_2 pgsql_servers_v2;
 		ProxySQL_Checksum_Value_2 pgsql_variables;
+#ifdef PROXYSQL40
+		ProxySQL_Checksum_Value_2 server_module_mysql_v1;
+		ProxySQL_Checksum_Value_2 server_module_mysql_v2;
+		ProxySQL_Checksum_Value_2 server_module_pgsql_v1;
+		ProxySQL_Checksum_Value_2 server_module_pgsql_v2;
+#endif
 	} checksums_values;
 	uint64_t global_checksum;
 };

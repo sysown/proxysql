@@ -36,6 +36,13 @@ std::string proxysql_server_module_cluster_metadata_query(
 std::string proxysql_server_module_cluster_table_query(
 	ProxySQL_ServerProtocol protocol, ProxySQL_ServerModuleClusterVersion version,
 	const std::string& table_name);
+std::string proxysql_server_module_cluster_poll_name(
+	ProxySQL_ServerProtocol protocol, ProxySQL_ServerModuleClusterVersion version);
+bool proxysql_server_module_cluster_poll_should_schedule(
+	ProxySQL_ServerProtocol protocol, ProxySQL_ServerModuleClusterVersion version,
+	bool peer_supported, const std::string& peer_checksum,
+	bool local_supported, const std::string& local_checksum,
+	unsigned int diff_check, unsigned int diffs_before_sync);
 ProxySQL_ServerModuleClusterEndpointResult proxysql_server_module_cluster_endpoint(
 	const std::string& query, SQLite3DB& db, std::unique_ptr<SQLite3_result>& result,
 	std::string& error);
@@ -43,6 +50,9 @@ bool proxysql_active_server_module_cluster_tables(
 	ProxySQL_ServerProtocol protocol, ProxySQL_ServerModuleClusterVersion version,
 	SQLite3DB& db, std::vector<ProxySQL_ServerModuleClusterTable>& tables,
 	std::string& error);
+bool proxysql_server_module_cluster_poll_checksum(
+	ProxySQL_ServerProtocol protocol, ProxySQL_ServerModuleClusterVersion version,
+	SQLite3DB& db, std::string& checksum, std::string& error);
 
 bool proxysql_validate_server_module_cluster_tables(
 	ProxySQL_ServerProtocol protocol,
