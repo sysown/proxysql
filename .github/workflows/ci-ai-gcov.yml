@@ -209,13 +209,25 @@ jobs:
         path: proxysql/ci_infra_logs/${{ inputs.infra_id }}/coverage-report/
         if-no-files-found: ignore
 
+    - name: Locate coverage report
+      id: coverage
+      if: ${{ !cancelled() }}
+      env:
+        COVERAGE_FILE: proxysql/ci_infra_logs/${{ inputs.infra_id }}/coverage-report/${{ inputs.infra_id }}.info
+      run: |
+        if [ -s "${COVERAGE_FILE}" ]; then
+          echo "available=true" >> "${GITHUB_OUTPUT}"
+        else
+          echo "available=false" >> "${GITHUB_OUTPUT}"
+        fi
+
     - name: Report missing coverage file
-      if: ${{ !cancelled() && hashFiles('proxysql/ci_infra_logs/**/coverage-report/*.info') == '' }}
+      if: ${{ !cancelled() && steps.coverage.outputs.available != 'true' }}
       run: echo "No coverage report was produced; skipping Codecov upload."
 
     - name: Upload coverage to Codecov
       id: codecov_1
-      if: ${{ !cancelled() && hashFiles('proxysql/ci_infra_logs/**/coverage-report/*.info') != '' }}
+      if: ${{ !cancelled() && steps.coverage.outputs.available == 'true' }}
       continue-on-error: true
       uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
       with:
