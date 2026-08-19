@@ -155,12 +155,12 @@
 
   ```make
   PCRE2_PATH := $(DEPS_PATH)/pcre2/pcre2
-  PCRE2_IDIR := $(PCRE2_PATH)
+  PCRE2_IDIR := $(PCRE2_PATH)/src
   PCRE2_LDIR := $(PCRE2_PATH)/.libs
   PCRE2_LIBS := -lpcre2-8
   ```
 
-  Update each Makefile listed above so `-I$(PCRE_IDIR)` and `-L$(PCRE_LDIR)` become their PCRE2 equivalents, `-lpcrecpp -lpcre` becomes `$(PCRE2_LIBS)`, and direct PCRE archive paths become `$(PCRE2_LDIR)/libpcre2-8.a`. Remove the PCRE1 tarball and its obsolete patch only after `rg -n 'pcrecpp|libpcre\.a|PCRE_LDIR|PCRE_IDIR'` returns no production references.
+  Update each Makefile listed above so `-I$(PCRE_IDIR)` and `-L$(PCRE_LDIR)` become their PCRE2 equivalents, `-lpcrecpp -lpcre` becomes `$(PCRE2_LIBS)`, and direct PCRE archive paths become `$(PCRE2_LDIR)/libpcre2-8.a`. After the search below returns no production references, remove the entire obsolete `deps/pcre` directory, including its 8.45 source archive and patch.
 
 - [ ] **Step 3: Build the dependency and verify the intended artifacts**
 
