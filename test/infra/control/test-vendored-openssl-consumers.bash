@@ -144,14 +144,19 @@ for platform in Linux Darwin; do
 	for target in mysql_client mysql8_client; do
 		test_mysql_output=$(dry_run "${repo_root}/test/deps" "${target}" "${platform}")
 		assert_contains "${test_mysql_output}" "-C ${repo_root}/deps libssl" "test ${target}/${platform}"
-		assert_contains "${test_mysql_output}" "-DWITH_SSL=${openssl_root}" "test ${target}/${platform}"
 		assert_contains "${test_mysql_output}" "-DOPENSSL_ROOT_DIR=${openssl_root}" "test ${target}/${platform}"
 		assert_contains "${test_mysql_output}" "-DOPENSSL_SSL_LIBRARY=${ssl_archive}" "test ${target}/${platform}"
 		assert_contains "${test_mysql_output}" "-DOPENSSL_CRYPTO_LIBRARY=${crypto_archive}" "test ${target}/${platform}"
 		if [[ "${target}" == mysql_client ]]; then
+			assert_contains "${test_mysql_output}" "-DWITH_SSL=${openssl_root}" "test ${target}/${platform}"
 			# MySQL 5.7's ssl.cmake ignores the modern OPENSSL_*_LIBRARY
 			# variables and searches CMAKE_LIBRARY_PATH directly.
 			assert_contains "${test_mysql_output}" "-DCMAKE_LIBRARY_PATH=${openssl_root}" "test ${target}/${platform}"
+		else
+			# MySQL 8.4's custom-OpenSSL mode bundles shared libraries. Its
+			# system mode uses FindOpenSSL and accepts exact static archives.
+			assert_contains "${test_mysql_output}" '-DWITH_SSL=system' "test ${target}/${platform}"
+			assert_contains "${test_mysql_output}" '-DOPENSSL_USE_STATIC_LIBS=TRUE' "test ${target}/${platform}"
 		fi
 		assert_no_system_openssl "${test_mysql_output}" "test ${target}/${platform}"
 	done

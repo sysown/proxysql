@@ -14,6 +14,8 @@ OPENSSL_CMAKE_FLAGS := -DOPENSSL_ROOT_DIR=$(SSL_PATH) \
 	-DOPENSSL_CRYPTO_LIBRARY=$(LIB_CRYPTO_PATH)
 MYSQL57_OPENSSL_CMAKE_FLAGS := $(OPENSSL_CMAKE_FLAGS) \
 	-DCMAKE_LIBRARY_PATH=$(SSL_PATH)
+MYSQL84_OPENSSL_CMAKE_FLAGS := $(OPENSSL_CMAKE_FLAGS) \
+	-DOPENSSL_USE_STATIC_LIBS=TRUE
 
 .DEFAULT: default
 .PHONY: default
@@ -107,12 +109,12 @@ ifeq ($(UNAME_S),Darwin)
 	cd mysql-connector-c-8.4.0/mysql-connector-c && patch -p0 --batch < ../../mysql-8.4.0-clang17.patch
 	cd mysql-connector-c-8.4.0/mysql-connector-c && cmake . -DFORCE_INSOURCE_BUILD=1 -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
 		-DWITHOUT_SERVER=ON -DDOWNLOAD_BOOST=1 -DWITH_BOOST=./mysql-server/downloads/ -DWITH_UNIT_TESTS=OFF \
-		-DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O0 -ggdb -DNDEBUG -fPIC" -DWITH_SSL=$(SSL_PATH) $(OPENSSL_CMAKE_FLAGS)
+		-DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O0 -ggdb -DNDEBUG -fPIC" -DWITH_SSL=system $(MYSQL84_OPENSSL_CMAKE_FLAGS)
 else
 	cd mysql-connector-c-8.4.0 && ln -fsT $$(ls -1d mysql-8.4.*/) mysql-connector-c
 	cd mysql-connector-c-8.4.0/mysql-connector-c && cmake . -DFORCE_INSOURCE_BUILD=1 -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
 		-DWITHOUT_SERVER=ON -DDOWNLOAD_BOOST=1 -DWITH_BOOST=./mysql-server/downloads/ -DWITH_UNIT_TESTS=OFF \
-		-DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O0 -ggdb -DNDEBUG -fPIC" -DWITH_SSL=$(SSL_PATH) $(OPENSSL_CMAKE_FLAGS)
+		-DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O0 -ggdb -DNDEBUG -fPIC" -DWITH_SSL=system $(MYSQL84_OPENSSL_CMAKE_FLAGS)
 endif
 ifeq ($(UNAME_S),Darwin)
 	cd mysql-connector-c-8.4.0/mysql-connector-c && CC=${CC} CXX=${CXX} ${MAKE} -j1
