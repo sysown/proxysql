@@ -8197,6 +8197,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
 	SQLite3_result *resultset_servers=NULL;
+	std::unique_ptr<SQLite3_result> local_resultset_servers;
 	SQLite3_result *resultset_replication=NULL;
 	SQLite3_result *resultset_group_replication=NULL;
 	SQLite3_result *resultset_galera=NULL;
@@ -8219,6 +8220,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	if (runtime_mysql_servers == nullptr) {
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 		admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset_servers);
+		local_resultset_servers.reset(resultset_servers);
 	} else {
 		resultset_servers = runtime_mysql_servers;
 	}
@@ -8230,13 +8232,6 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 			installed_snapshot.generation, resultset_servers, installed_snapshot)) return;
 		runtime_install_prepared = emit_runtime_install;
 		MyHGM->servers_add(resultset_servers);
-	}
-	// memory leak was detected here. The following few lines fix that
-	if (runtime_mysql_servers == nullptr) {   
-		if (resultset_servers != nullptr) {
-			delete resultset_servers;
-			resultset_servers = nullptr;
-		}
 	}
 	resultset=NULL;
 
@@ -8470,6 +8465,7 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	int affected_rows = 0;
 	SQLite3_result* resultset = NULL;
 	SQLite3_result* resultset_servers = NULL;
+	std::unique_ptr<SQLite3_result> local_resultset_servers;
 	SQLite3_result* resultset_replication = NULL;
 	SQLite3_result* resultset_hostgroup_attributes = NULL;
 
@@ -8482,6 +8478,7 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	if (runtime_pgsql_servers == nullptr) {
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 		admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset_servers);
+		local_resultset_servers.reset(resultset_servers);
 	}
 	else {
 		resultset_servers = runtime_pgsql_servers;
@@ -8495,13 +8492,6 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 			installed_snapshot.generation, resultset_servers, installed_snapshot)) return;
 		runtime_install_prepared = emit_runtime_install;
 		PgHGM->servers_add(resultset_servers);
-	}
-	// memory leak was detected here. The following few lines fix that
-	if (runtime_pgsql_servers == nullptr) {
-		if (resultset_servers != nullptr) {
-			delete resultset_servers;
-			resultset_servers = nullptr;
-		}
 	}
 	resultset = NULL;
 

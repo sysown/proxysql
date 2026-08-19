@@ -1,5 +1,6 @@
 #include "tap.h"
 #include "ProxySQL_PluginManager.h"
+#include "ProxySQL_Cluster.hpp"
 #include "ProxySQL_ServerDiscovery.h"
 #include "MySQL_Thread.h"
 #include "ProxySQL_Statistics.hpp"
@@ -61,7 +62,7 @@ size_t occurrences(const std::string& value, const std::string& needle) {
 } // namespace
 
 int main() {
-	plan(17);
+	plan(20);
 	test_init_minimal();
 	char path[] = "/tmp/proxysql_server_runtime_install.XXXXXX";
 	const int fd = mkstemp(path);
@@ -215,6 +216,65 @@ int main() {
 		occurrences(after_monitor_reload, "server_module_commit") == before_monitor_commit &&
 		proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::mysql) == mysql_before_monitor_reload,
 		"active HGM monitor reconciliation mutates runtime without preparing, committing, or restarting discovery");
+
+	// The shared post-fetch branch is the exact endpoint used by both v1
+	// Cluster pull functions.  An old peer has no module metadata, so it must
+	// install only its core snapshot and leave local affiliated policy untouched.
+	auto select_rows = [&](const char* query) {
+		char* sqlite_error = nullptr;
+		int columns = 0, affected_rows = 0;
+		SQLite3_result* rows = nullptr;
+		admin_db.execute_statement(query, &sqlite_error, &columns, &affected_rows, &rows);
+		if (sqlite_error != nullptr) {
+			free(sqlite_error);
+			delete rows;
+			return static_cast<SQLite3_result*>(nullptr);
+		}
+		return rows;
+	};
+	const size_t before_mysql_fallback_prepare = occurrences(read_log(), "server_module_prepare");
+	const size_t before_mysql_fallback_commit = occurrences(read_log(), "server_module_commit");
+	const size_t before_mysql_fallback_controller = occurrences(read_log(), "server_controller_runtime");
+	ok(proxysql_cluster_install_v1_runtime_post_fetch(ProxySQL_ServerProtocol::mysql,
+		select_rows("SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers"),
+		false, 0,
+		[](SQLite3_result* rows) { MyHGM->servers_add(rows); },
+		[](SQLite3_result* rows) { return MyHGM->commit({rows, {}}, {nullptr, {}}, true, true); }) &&
+		occurrences(read_log(), "server_module_prepare") == before_mysql_fallback_prepare &&
+		occurrences(read_log(), "server_module_commit") == before_mysql_fallback_commit &&
+		occurrences(read_log(), "server_controller_runtime") == before_mysql_fallback_controller + 1,
+		"real MySQL v1 old-peer fallback installs core runtime without touching affiliated policy");
+	const size_t before_pgsql_fallback_prepare = occurrences(read_log(), "server_module_prepare");
+	const size_t before_pgsql_fallback_commit = occurrences(read_log(), "server_module_commit");
+	const size_t before_pgsql_fallback_controller = occurrences(read_log(), "server_controller_runtime");
+	ok(proxysql_cluster_install_v1_runtime_post_fetch(ProxySQL_ServerProtocol::pgsql,
+		select_rows("SELECT hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM pgsql_servers"),
+		false, 0,
+		[](SQLite3_result* rows) { PgHGM->servers_add(rows); },
+		[](SQLite3_result* rows) { return PgHGM->commit({rows, {}}, {nullptr, {}}, true, true); }) &&
+		occurrences(read_log(), "server_module_prepare") == before_pgsql_fallback_prepare &&
+		occurrences(read_log(), "server_module_commit") == before_pgsql_fallback_commit &&
+		occurrences(read_log(), "server_controller_runtime") == before_pgsql_fallback_controller + 1,
+		"real PostgreSQL v1 old-peer fallback installs core runtime without touching affiliated policy");
+
+	// A rejected operator LOAD must unwind the Admin-selected core resultset
+	// and the install reservation, so the next ordinary LOAD can proceed.
+	admin_db.execute("INSERT INTO mysql_servers VALUES (17,'claim-conflict.example',3306,0,'ONLINE',1,0,100,0,1,0,'claim')");
+	const uint64_t before_rejected_load = proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::mysql);
+	const size_t before_rejected_commit = occurrences(read_log(), "server_module_commit");
+	const size_t before_rejected_controller = occurrences(read_log(), "server_controller_runtime");
+	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_CLAIM", "1", 1);
+	admin->mysql_servers_wrlock();
+	admin->load_mysql_servers_to_runtime();
+	admin->mysql_servers_wrunlock();
+	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_CLAIM");
+	admin->mysql_servers_wrlock();
+	admin->load_mysql_servers_to_runtime();
+	admin->mysql_servers_wrunlock();
+	ok(proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::mysql) == before_rejected_load + 1 &&
+		occurrences(read_log(), "server_module_commit") == before_rejected_commit + 1 &&
+		occurrences(read_log(), "server_controller_runtime") == before_rejected_controller + 1,
+		"prepare-rejected Admin LOAD cleans its selected rows and leaves the next operator LOAD installable");
 	GloAdmin = nullptr;
 
 	(void)proxysql_stop_configured_plugins(manager, error);

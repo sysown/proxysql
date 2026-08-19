@@ -2099,6 +2099,28 @@ module_fetch_status fetch_server_module_tables(MYSQL* conn, ProxySQL_ServerProto
 }
 #endif
 
+#ifdef PROXYSQL40
+bool proxysql_cluster_install_v1_runtime_post_fetch(
+	ProxySQL_ServerProtocol protocol, SQLite3_result* core_rows,
+	bool module_runtime_supported, uint64_t module_generation,
+	const std::function<void(SQLite3_result*)>& stage_core_rows,
+	const std::function<bool(SQLite3_result*)>& commit_core_rows) {
+	std::unique_ptr<SQLite3_result> rows(core_rows);
+	if (!rows || !stage_core_rows || !commit_core_rows) return false;
+	stage_core_rows(rows.get());
+	ProxySQL_ServerRuntimeSnapshot installed_snapshot =
+		proxysql_server_runtime_snapshot_from_rows(protocol, module_generation, *rows);
+	// The HGM commit API owns the raw resultset, including its failure paths.
+	if (!commit_core_rows(rows.release())) return false;
+	if (module_runtime_supported) {
+		proxysql_commit_server_runtime_install(std::move(installed_snapshot));
+	} else {
+		proxysql_install_active_server_runtime_snapshot(std::move(installed_snapshot));
+	}
+	return true;
+}
+#endif
+
 incoming_servers_t convert_mysql_servers_resultsets(const std::vector<MYSQL_RES*>& results) {
 	if (results.size() != sizeof(incoming_servers_t) / sizeof(void*)) {
 		return incoming_servers_t {};
@@ -2239,27 +2261,23 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 							goto __exit_pull_mysql_servers_from_peer;
 						}
 #endif
+#ifdef PROXYSQL40
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Loading runtime_mysql_servers from peer %s:%d into mysql_servers_incoming", hostname, port);
+						const bool installed = proxysql_cluster_install_v1_runtime_post_fetch(
+							ProxySQL_ServerProtocol::mysql, runtime_mysql_servers_resultset.release(),
+							module_runtime_supported, module_generation,
+							[](SQLite3_result* rows) { MyHGM->servers_add(rows); },
+							[&](SQLite3_result* rows) {
+								proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Updating runtime_mysql_servers from peer %s:%d", hostname, port);
+								return MyHGM->commit({ rows, peer_runtime_mysql_server }, { nullptr, {} }, true, true);
+							});
+						if (!installed) fetch_failed = true;
+						#else
 						MyHGM->servers_add(runtime_mysql_servers_resultset.get());
-						ProxySQL_ServerRuntimeSnapshot installed_snapshot {};
-#ifdef PROXYSQL40
-						installed_snapshot = proxysql_server_runtime_snapshot_from_rows(
-							ProxySQL_ServerProtocol::mysql, module_generation, *runtime_mysql_servers_resultset);
-#endif
-						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Updating runtime_mysql_servers from peer %s:%d", hostname, port);
-						MyHGM->commit(
-							{ runtime_mysql_servers_resultset.release(), peer_runtime_mysql_server },
-							{ nullptr, {} }, true, true
-						);
-#ifdef PROXYSQL40
-						if (module_runtime_supported) {
-							proxysql_commit_server_runtime_install(std::move(installed_snapshot));
-						} else {
-							proxysql_install_active_server_runtime_snapshot(std::move(installed_snapshot));
-						}
-#endif
+						MyHGM->commit({ runtime_mysql_servers_resultset.release(), peer_runtime_mysql_server }, { nullptr, {} }, true, true);
+						#endif
 
-						if (GloProxyCluster->cluster_mysql_servers_save_to_disk == true) {
+						if (!fetch_failed && GloProxyCluster->cluster_mysql_servers_save_to_disk == true) {
 							proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving Runtime MySQL Servers to Database\n");
 							const bool saved = GloAdmin->save_mysql_servers_runtime_to_database(false);
 							proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving to disk MySQL Servers v2 from peer %s:%d\n", hostname, port);
@@ -3842,27 +3860,23 @@ void ProxySQL_Cluster::pull_runtime_pgsql_servers_from_peer(const runtime_pgsql_
 					goto __exit_pull_runtime_pgsql_servers_from_peer;
 				}
 #endif
+#ifdef PROXYSQL40
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Loading runtime_pgsql_servers from peer %s:%d into pgsql_servers_incoming\n", hostname, port);
+				const bool installed = proxysql_cluster_install_v1_runtime_post_fetch(
+					ProxySQL_ServerProtocol::pgsql, runtime_pgsql_servers_resultset.release(),
+					module_runtime_supported, module_generation,
+					[](SQLite3_result* rows) { PgHGM->servers_add(rows); },
+					[&](SQLite3_result* rows) {
+						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Updating runtime_pgsql_servers from peer %s:%d\n", hostname, port);
+						return PgHGM->commit({ rows, { expected_runtime_checksum, peer_runtime_pgsql_server.epoch } }, { nullptr, {} }, true, true);
+					});
+				if (!installed) fetch_failed = true;
+				#else
 				PgHGM->servers_add(runtime_pgsql_servers_resultset.get());
-				ProxySQL_ServerRuntimeSnapshot installed_snapshot {};
-#ifdef PROXYSQL40
-				installed_snapshot = proxysql_server_runtime_snapshot_from_rows(
-					ProxySQL_ServerProtocol::pgsql, module_generation, *runtime_pgsql_servers_resultset);
-#endif
-				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Updating runtime_pgsql_servers from peer %s:%d\n", hostname, port);
-				PgHGM->commit(
-					{ runtime_pgsql_servers_resultset.release(), { expected_runtime_checksum, peer_runtime_pgsql_server.epoch } },
-					{ nullptr, {} }, true, true
-				);
-#ifdef PROXYSQL40
-				if (module_runtime_supported) {
-					proxysql_commit_server_runtime_install(std::move(installed_snapshot));
-				} else {
-					proxysql_install_active_server_runtime_snapshot(std::move(installed_snapshot));
-				}
-#endif
+				PgHGM->commit({ runtime_pgsql_servers_resultset.release(), { expected_runtime_checksum, peer_runtime_pgsql_server.epoch } }, { nullptr, {} }, true, true);
+				#endif
 
-				if (GloProxyCluster->cluster_pgsql_servers_save_to_disk == true) {
+				if (!fetch_failed && GloProxyCluster->cluster_pgsql_servers_save_to_disk == true) {
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving Runtime PostgreSQL Servers to Database\n");
 					const bool saved = GloAdmin->save_pgsql_servers_runtime_to_database(false);
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving to disk PostgreSQL Servers from peer %s:%d\n", hostname, port);
