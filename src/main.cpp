@@ -999,11 +999,7 @@ void ProxySQL_Main_init_main_modules() {
 	GloPTH = _tmp_GloPTH;
 }
 
-void ProxySQL_Main_init_Admin_module(
-#ifndef PROXYSQL40
-	const bootstrap_info_t& bootstrap_info
-#endif /* !PROXYSQL40 */
-) {
+void ProxySQL_Main_init_Admin_module(const bootstrap_info_t& bootstrap_info) {
 	// cluster module needs to be initialized before
 	GloProxyCluster = new ProxySQL_Cluster();
 	GloProxyCluster->init();
@@ -1012,11 +1008,7 @@ void ProxySQL_Main_init_Admin_module(
 	//GloProxyStats->init();
 	GloProxyStats->print_version();
 	GloAdmin = new ProxySQL_Admin();
-	if (!GloAdmin->init(
-#ifndef PROXYSQL40
-		bootstrap_info
-#endif /* !PROXYSQL40 */
-	)) {
+	if (!GloAdmin->init(bootstrap_info)) {
 		proxy_error("Admin module initialization failed\n");
 		exit(EXIT_FAILURE);
 	}
@@ -1575,11 +1567,7 @@ void UnloadPlugins() {
 	}
 }
 
-void ProxySQL_Main_init_phase2___not_started(
-#ifndef PROXYSQL40
-	const bootstrap_info_t& boostrap_info
-#endif /* !PROXYSQL40 */
-) {
+void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_info) {
 	std::string msg;
 	ProxySQL_create_or_load_TLS(false, msg);
 
@@ -1603,7 +1591,7 @@ void ProxySQL_Main_init_phase2___not_started(
 	//              a schema that already contains the plugin's own tables).
 	//   Phase E:   start() launches the plugin's threads / accept loops.
 	LoadConfiguredPlugins();
-	ProxySQL_Main_init_Admin_module();
+	ProxySQL_Main_init_Admin_module(boostrap_info);
 	InitConfiguredPlugins();
 	StartConfiguredPlugins();
 #else  /* !PROXYSQL40 */
@@ -2869,8 +2857,8 @@ int main(int argc, const char * argv[]) {
 		}
 	}
 
-#ifndef PROXYSQL40
 	bootstrap_info_t bootstrap_info {};
+#ifndef PROXYSQL40
 	// Try to connect to MySQL for performing the bootstrapping process:
 	//   - If data isn't found we perform the bootstrap process.
 	//   - If non-empty datadir is present, reconfiguration should be performed.
@@ -3256,11 +3244,7 @@ int main(int argc, const char * argv[]) {
 __start_label:
 	{
 		cpu_timer t;
-		ProxySQL_Main_init_phase2___not_started(
-#ifndef PROXYSQL40
-			bootstrap_info
-#endif /* !PROXYSQL40 */
-		);
+		ProxySQL_Main_init_phase2___not_started(bootstrap_info);
 #ifdef DEBUG
 		std::cerr << "Main init phase2 completed in ";
 #endif

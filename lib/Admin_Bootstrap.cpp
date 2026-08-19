@@ -504,11 +504,7 @@ extern void *child_telnet(void *arg);
 extern void *child_postgres(void *arg);
 
 
-#ifdef PROXYSQL40
-bool ProxySQL_Admin::init() {
-#else
 bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
-#endif /* PROXYSQL40 */
 	cpu_timer cpt;
 
 	if (flush_logs_function == NULL) {

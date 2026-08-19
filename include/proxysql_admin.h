@@ -149,7 +149,9 @@ struct bootstrap_info_t {
 
 	~bootstrap_info_t();
 };
-#endif /* !PROXYSQL40 */
+#else
+struct bootstrap_info_t {};
+#endif /* PROXYSQL40 */
 
 // ProxySQL_Admin shared variables
 extern int admin__web_verbosity;
@@ -630,7 +632,6 @@ class ProxySQL_Admin {
 #endif
 	int pipefd[2];
 	void print_version();
-	#ifndef PROXYSQL40
 	/**
 	 * @brief Initializes the module.
 	 * @details Bootstrap info is only used for 'bootstrap mode', i.e. if 'GloVars.global.gr_bootstrap_mode'
@@ -639,9 +640,6 @@ class ProxySQL_Admin {
 	 * @return Always true.
 	 */
 	bool init(const bootstrap_info_t& bootstrap_info);
-	#else
-	bool init();
-	#endif /* !PROXYSQL40 */
 	void init_ldap();
 	/** @brief Initializes the HTTP server. For safety should be called after 'phase3'. */
 	void init_http_server();
