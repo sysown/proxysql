@@ -92,6 +92,11 @@ struct ProxySQL_ServerBuiltinTopologyInputs {
 bool proxysql_collect_active_builtin_server_topology(SQLite3DB& db,
 	ProxySQL_ServerProtocol protocol, const ProxySQL_ServerBuiltinTopologyInputs& inputs,
 	std::vector<uint32_t>& hostgroups, std::string& error);
+// Collects a complete supplied projection without consulting a configuration
+// database. Every built-in table for the selected protocol must be present.
+bool proxysql_collect_active_builtin_server_topology(ProxySQL_ServerProtocol protocol,
+	const ProxySQL_ServerBuiltinTopologyInputs& inputs,
+	std::vector<uint32_t>& hostgroups, std::string& error);
 
 class ProxySQL_ServerRuntimeInstallTransaction {
 public:

@@ -2100,11 +2100,56 @@ module_fetch_status fetch_server_module_tables(MYSQL* conn, ProxySQL_ServerProto
 #endif
 
 #ifdef PROXYSQL40
+bool proxysql_snapshot_installed_builtin_server_topology(
+		ProxySQL_ServerProtocol protocol, std::vector<uint32_t>& hostgroups,
+		std::string& error) {
+	ProxySQL_ServerBuiltinTopologyInputs inputs {};
+	std::unique_ptr<SQLite3_result> replication;
+	std::unique_ptr<SQLite3_result> group_replication;
+	std::unique_ptr<SQLite3_result> galera;
+	std::unique_ptr<SQLite3_result> aurora;
+	std::unique_ptr<SQLite3_result> rds_blue_green;
+	if (protocol == ProxySQL_ServerProtocol::mysql) {
+		if (MyHGM == nullptr) {
+			error = "MySQL runtime topology manager unavailable";
+			return false;
+		}
+		replication.reset(MyHGM->dump_table_mysql("mysql_replication_hostgroups"));
+		group_replication.reset(MyHGM->dump_table_mysql("mysql_group_replication_hostgroups"));
+		galera.reset(MyHGM->dump_table_mysql("mysql_galera_hostgroups"));
+		aurora.reset(MyHGM->dump_table_mysql("mysql_aws_aurora_hostgroups"));
+		rds_blue_green.reset(MyHGM->dump_table_mysql("mysql_aws_rds_bgd_hostgroups"));
+		if (!replication || !group_replication || !galera || !aurora || !rds_blue_green) {
+			error = "failed to snapshot installed MySQL built-in topology";
+			return false;
+		}
+		inputs.mysql_replication = replication.get();
+		inputs.mysql_group_replication = group_replication.get();
+		inputs.mysql_galera = galera.get();
+		inputs.mysql_aurora = aurora.get();
+		inputs.mysql_rds_blue_green = rds_blue_green.get();
+	} else if (protocol == ProxySQL_ServerProtocol::pgsql) {
+		if (PgHGM == nullptr) {
+			error = "PostgreSQL runtime topology manager unavailable";
+			return false;
+		}
+		replication.reset(PgHGM->dump_table_pgsql("pgsql_replication_hostgroups"));
+		if (!replication) {
+			error = "failed to snapshot installed PostgreSQL built-in topology";
+			return false;
+		}
+		inputs.pgsql_replication = replication.get();
+	} else {
+		error = "invalid server runtime protocol";
+		return false;
+	}
+	return proxysql_collect_active_builtin_server_topology(protocol, inputs, hostgroups, error);
+}
+
 bool proxysql_cluster_install_v1_runtime_post_fetch(
 		ProxySQL_ServerProtocol protocol, SQLite3_result* core_rows,
 		bool module_runtime_supported,
 		const std::vector<ProxySQL_ServerModuleClusterTable>& module_tables,
-		SQLite3DB* topology_db,
 		const std::function<void(SQLite3_result*)>& stage_core_rows,
 		const std::function<bool(SQLite3_result*)>& commit_core_rows) {
 	std::unique_ptr<SQLite3_result> rows(core_rows);
@@ -2112,9 +2157,12 @@ bool proxysql_cluster_install_v1_runtime_post_fetch(
 	std::string error;
 	ProxySQL_ServerRuntimeInstallTransaction transaction(protocol, error);
 	if (!transaction) return false;
-	if (module_runtime_supported && (topology_db == nullptr ||
-		!proxysql_prepare_server_module_cluster_runtime(protocol, transaction,
-			*rows, module_tables, *topology_db, error))) return false;
+	std::vector<uint32_t> installed_topology_hostgroups;
+	if (module_runtime_supported &&
+		(!proxysql_snapshot_installed_builtin_server_topology(protocol,
+			installed_topology_hostgroups, error) ||
+		 !proxysql_prepare_server_module_cluster_runtime(protocol, transaction,
+			*rows, module_tables, installed_topology_hostgroups, error))) return false;
 	ProxySQL_ServerRuntimeSnapshot installed_snapshot =
 		proxysql_server_runtime_snapshot_from_rows(protocol, transaction.generation(), *rows);
 	try {
@@ -2266,7 +2314,7 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Loading runtime_mysql_servers from peer %s:%d into mysql_servers_incoming", hostname, port);
 						const bool installed = proxysql_cluster_install_v1_runtime_post_fetch(
 							ProxySQL_ServerProtocol::mysql, runtime_mysql_servers_resultset.release(),
-							module_runtime_supported, module_tables_v1, GloAdmin->admindb,
+							module_runtime_supported, module_tables_v1,
 							[](SQLite3_result* rows) { MyHGM->servers_add(rows); },
 							[&](SQLite3_result* rows) {
 								proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Updating runtime_mysql_servers from peer %s:%d", hostname, port);
@@ -3855,7 +3903,7 @@ void ProxySQL_Cluster::pull_runtime_pgsql_servers_from_peer(const runtime_pgsql_
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Loading runtime_pgsql_servers from peer %s:%d into pgsql_servers_incoming\n", hostname, port);
 				const bool installed = proxysql_cluster_install_v1_runtime_post_fetch(
 					ProxySQL_ServerProtocol::pgsql, runtime_pgsql_servers_resultset.release(),
-					module_runtime_supported, module_tables_v1, GloAdmin->admindb,
+					module_runtime_supported, module_tables_v1,
 					[](SQLite3_result* rows) { PgHGM->servers_add(rows); },
 					[&](SQLite3_result* rows) {
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Updating runtime_pgsql_servers from peer %s:%d\n", hostname, port);

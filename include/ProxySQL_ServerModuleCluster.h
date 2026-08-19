@@ -92,7 +92,7 @@ bool proxysql_prepare_server_module_cluster_runtime(
 	ProxySQL_ServerProtocol protocol, ProxySQL_ServerRuntimeInstallTransaction& transaction,
 	const SQLite3_result& core_servers,
 	const std::vector<ProxySQL_ServerModuleClusterTable>& tables,
-	SQLite3DB& topology_db,
+	const std::vector<uint32_t>& installed_topology_hostgroups,
 	std::string& error);
 
 #endif /* PROXYSQL40 */

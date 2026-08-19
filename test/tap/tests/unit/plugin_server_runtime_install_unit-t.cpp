@@ -37,13 +37,26 @@ std::string read_log() {
 	return std::string((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
 }
 
+std::unique_ptr<SQLite3_result> select_rows(SQLite3DB& db, const char* query) {
+	char* sqlite_error = nullptr;
+	int columns = 0, affected_rows = 0;
+	SQLite3_result* rows = nullptr;
+	db.execute_statement(query, &sqlite_error, &columns, &affected_rows, &rows);
+	if (sqlite_error != nullptr) {
+		free(sqlite_error);
+		delete rows;
+		return nullptr;
+	}
+	return std::unique_ptr<SQLite3_result>(rows);
+}
+
 void create_server_load_schema(SQLite3DB& db) {
 	db.execute("CREATE TABLE mysql_servers (hostgroup_id INTEGER, hostname TEXT, port INTEGER, gtid_port INTEGER, status TEXT, weight INTEGER, compression INTEGER, max_connections INTEGER, max_replication_lag INTEGER, use_ssl INTEGER, max_latency_ms INTEGER, comment TEXT)");
 	db.execute("CREATE TABLE mysql_fake_server_module_claims (writer INTEGER)");
 	db.execute("CREATE TABLE pgsql_fake_server_module_claims (writer INTEGER)");
 	db.execute("CREATE TABLE pgsql_servers (hostgroup_id INTEGER, hostname TEXT, port INTEGER, status TEXT, weight INTEGER, compression INTEGER, max_connections INTEGER, max_replication_lag INTEGER, use_ssl INTEGER, max_latency_ms INTEGER, comment TEXT)");
 	db.execute("CREATE TABLE mysql_replication_hostgroups (writer_hostgroup INTEGER, reader_hostgroup INTEGER, check_type TEXT, comment TEXT)");
-	db.execute("CREATE TABLE pgsql_replication_hostgroups (writer_hostgroup INTEGER, reader_hostgroup INTEGER)");
+	db.execute("CREATE TABLE pgsql_replication_hostgroups (writer_hostgroup INTEGER, reader_hostgroup INTEGER, check_type TEXT, comment TEXT)");
 	db.execute("CREATE TABLE mysql_group_replication_hostgroups (writer_hostgroup INTEGER, backup_writer_hostgroup INTEGER, reader_hostgroup INTEGER, offline_hostgroup INTEGER, active INTEGER, max_writers INTEGER, writer_is_also_reader INTEGER, max_transactions_behind INTEGER, comment TEXT)");
 	db.execute("CREATE TABLE mysql_galera_hostgroups (writer_hostgroup INTEGER, backup_writer_hostgroup INTEGER, reader_hostgroup INTEGER, offline_hostgroup INTEGER, active INTEGER, max_writers INTEGER, writer_is_also_reader INTEGER, max_transactions_behind INTEGER, comment TEXT)");
 	db.execute("CREATE TABLE mysql_aws_aurora_hostgroups (writer_hostgroup INTEGER, reader_hostgroup INTEGER, active INTEGER, aurora_port INTEGER, domain_name TEXT, max_lag_ms INTEGER, check_interval_ms INTEGER, check_timeout_ms INTEGER, writer_is_also_reader INTEGER, new_reader_weight INTEGER, add_lag_ms INTEGER, min_lag_ms INTEGER, lag_num_checks INTEGER, autopurge_missing_checks INTEGER, comment TEXT)");
@@ -63,7 +76,7 @@ size_t occurrences(const std::string& value, const std::string& needle) {
 } // namespace
 
 int main() {
-	plan(29);
+	plan(35);
 	test_init_minimal();
 	char path[] = "/tmp/proxysql_server_runtime_install.XXXXXX";
 	const int fd = mkstemp(path);
@@ -212,28 +225,45 @@ int main() {
 	admin_db.execute("INSERT INTO mysql_servers VALUES (31,'admin-load.example',3306,0,'ONLINE',1,0,100,0,1,0,'admin')");
 	admin_db.execute("INSERT INTO mysql_replication_hostgroups VALUES (31,32,'read_only','monitor fixture')");
 	admin_db.execute("INSERT INTO mysql_group_replication_hostgroups VALUES (51,52,53,54,1,1,0,0,'group replication')");
+	admin_db.execute("INSERT INTO mysql_group_replication_hostgroups VALUES (151,152,153,154,0,1,0,0,'inactive group replication')");
 	admin_db.execute("INSERT INTO mysql_galera_hostgroups VALUES (61,62,63,64,1,1,0,0,'galera')");
+	admin_db.execute("INSERT INTO mysql_galera_hostgroups VALUES (161,162,163,164,0,1,0,0,'inactive galera')");
 	admin_db.execute("INSERT INTO mysql_aws_aurora_hostgroups VALUES (71,72,1,3306,'example',100,1000,100,0,1,0,0,1,1,'aurora')");
-	admin_db.execute("INSERT INTO mysql_aws_rds_bgd_hostgroups VALUES (81,82,83,84,1,0,1000,100,'rds blue green')");
+	admin_db.execute("INSERT INTO mysql_aws_aurora_hostgroups VALUES (171,172,0,3306,'inactive',100,1000,100,0,1,0,0,1,1,'inactive aurora')");
+	admin_db.execute("INSERT INTO mysql_aws_rds_bgd_hostgroups VALUES (81,82,NULL,0,1,0,1000,100,'rds blue green')");
+	admin_db.execute("INSERT INTO mysql_aws_rds_bgd_hostgroups VALUES (181,182,183,184,0,0,1000,100,'inactive rds blue green')");
 	admin_db.execute("INSERT INTO pgsql_servers VALUES (41,'pgsql-load.example',5432,'ONLINE',1,0,100,0,1,0,'admin')");
-	admin_db.execute("INSERT INTO pgsql_replication_hostgroups VALUES (91,92)");
+	admin_db.execute("INSERT INTO pgsql_replication_hostgroups VALUES (31,32,'read_only','runtime fixture')");
 	std::vector<uint32_t> mysql_topology;
 	std::vector<uint32_t> pgsql_topology;
 	ProxySQL_ServerBuiltinTopologyInputs topology_inputs {};
 	ok(proxysql_collect_active_builtin_server_topology(admin_db, ProxySQL_ServerProtocol::mysql,
 		topology_inputs, mysql_topology, error) &&
 		std::set<uint32_t>(mysql_topology.begin(), mysql_topology.end()) ==
-			std::set<uint32_t>({31,32,51,52,53,54,61,62,63,64,71,72,81,82,83,84}),
-		"the common collector includes every active MySQL built-in topology owner");
+			std::set<uint32_t>({0,31,32,51,52,53,54,61,62,63,64,71,72,81,82}),
+		"the common collector ignores inactive mappings, skips nullable optional RDS claims, and accepts schema-valid zero hostgroups");
 	ok(proxysql_collect_active_builtin_server_topology(admin_db, ProxySQL_ServerProtocol::pgsql,
 		topology_inputs, pgsql_topology, error) &&
-		std::set<uint32_t>(pgsql_topology.begin(), pgsql_topology.end()) == std::set<uint32_t>({91,92}),
+		std::set<uint32_t>(pgsql_topology.begin(), pgsql_topology.end()) == std::set<uint32_t>({31,32}),
 		"the common collector includes active PostgreSQL replication topology owners");
+	admin_db.execute("INSERT INTO mysql_replication_hostgroups VALUES (NULL,193,'read_only','malformed required hostgroup')");
+	ok(!proxysql_collect_active_builtin_server_topology(admin_db, ProxySQL_ServerProtocol::mysql,
+		topology_inputs, mysql_topology, error),
+		"the common collector rejects a missing required topology hostgroup");
+	admin_db.execute("DELETE FROM mysql_replication_hostgroups WHERE writer_hostgroup IS NULL");
+	std::unique_ptr<SQLite3_result> supplied_group = select_rows(admin_db,
+		"SELECT * FROM mysql_group_replication_hostgroups ORDER BY writer_hostgroup");
+	ProxySQL_ServerBuiltinTopologyInputs supplied_inputs {};
+	supplied_inputs.mysql_group_replication = supplied_group.get();
 	admin_db.execute("DELETE FROM mysql_group_replication_hostgroups");
+	ok(proxysql_collect_active_builtin_server_topology(admin_db, ProxySQL_ServerProtocol::mysql,
+		supplied_inputs, mysql_topology, error) &&
+		std::set<uint32_t>(mysql_topology.begin(), mysql_topology.end()) ==
+			std::set<uint32_t>({0,31,32,51,52,53,54,61,62,63,64,71,72,81,82}),
+		"supplied Cluster-v2 topology projections apply the same active-row semantics as queried Admin tables");
 	admin_db.execute("DELETE FROM mysql_galera_hostgroups");
 	admin_db.execute("DELETE FROM mysql_aws_aurora_hostgroups");
 	admin_db.execute("DELETE FROM mysql_aws_rds_bgd_hostgroups");
-	admin_db.execute("DELETE FROM pgsql_replication_hostgroups");
 	ProxySQL_Admin* admin = new ProxySQL_Admin(); // process-scoped fixture
 	admin->admindb = &admin_db;
 	GloAdmin = admin;
@@ -291,13 +321,72 @@ int main() {
 		}
 		return rows;
 	};
+	auto module_tables = [&](ProxySQL_ServerProtocol protocol) {
+		std::vector<ProxySQL_ServerModuleClusterTable> tables;
+		const bool mysql = protocol == ProxySQL_ServerProtocol::mysql;
+		tables.push_back({mysql ? "mysql_fake_server_module_claims" : "pgsql_fake_server_module_claims",
+			mysql ? "runtime_mysql_fake_server_module_claims" : "runtime_pgsql_fake_server_module_claims",
+			"writer", std::unique_ptr<SQLite3_result>(select_rows(mysql
+				? "SELECT * FROM mysql_fake_server_module_claims ORDER BY writer"
+				: "SELECT * FROM pgsql_fake_server_module_claims ORDER BY writer"))});
+		return tables;
+	};
+	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_BUILTIN_CLAIM", "1", 1);
+	admin_db.execute("DELETE FROM mysql_replication_hostgroups");
+	auto mysql_missed_conflict_tables = module_tables(ProxySQL_ServerProtocol::mysql);
+	ok(!proxysql_cluster_install_v1_runtime_post_fetch(ProxySQL_ServerProtocol::mysql,
+		select_rows("SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers"),
+		true, mysql_missed_conflict_tables,
+		[](SQLite3_result* rows) { MyHGM->servers_add(rows); },
+		[](SQLite3_result* rows) { return MyHGM->commit({rows, {}}, {nullptr, {}}, true, true); }),
+		"MySQL Cluster v1 rejects a module claim owned by installed runtime topology even when MEMORY has removed it");
+	admin_db.execute("DELETE FROM pgsql_replication_hostgroups");
+	auto pgsql_missed_conflict_tables = module_tables(ProxySQL_ServerProtocol::pgsql);
+	ok(!proxysql_cluster_install_v1_runtime_post_fetch(ProxySQL_ServerProtocol::pgsql,
+		select_rows("SELECT hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM pgsql_servers"),
+		true, pgsql_missed_conflict_tables,
+		[](SQLite3_result* rows) { PgHGM->servers_add(rows); },
+		[](SQLite3_result* rows) { return PgHGM->commit({rows, {}}, {nullptr, {}}, true, true); }),
+		"PostgreSQL Cluster v1 rejects a module claim owned by installed runtime topology even when MEMORY has removed it");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_BUILTIN_CLAIM");
+
+	incoming_servers_t clear_mysql_topology {};
+	clear_mysql_topology.incoming_replication_hostgroups =
+		select_rows("SELECT * FROM mysql_replication_hostgroups WHERE 0");
+	admin->mysql_servers_wrlock();
+	admin->load_mysql_servers_to_runtime(clear_mysql_topology, {}, {}, false);
+	admin->mysql_servers_wrunlock();
+	incoming_pgsql_servers_t clear_pgsql_topology {};
+	clear_pgsql_topology.incoming_replication_hostgroups =
+		select_rows("SELECT * FROM pgsql_replication_hostgroups WHERE 0");
+	admin->pgsql_servers_wrlock();
+	admin->load_pgsql_servers_to_runtime(clear_pgsql_topology, {}, {}, false);
+	admin->pgsql_servers_wrunlock();
+	admin_db.execute("INSERT INTO mysql_replication_hostgroups VALUES (31,32,'read_only','MEMORY only')");
+	admin_db.execute("INSERT INTO pgsql_replication_hostgroups VALUES (31,32,'read_only','MEMORY only')");
+	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_BUILTIN_CLAIM", "1", 1);
+	auto mysql_false_conflict_tables = module_tables(ProxySQL_ServerProtocol::mysql);
+	ok(proxysql_cluster_install_v1_runtime_post_fetch(ProxySQL_ServerProtocol::mysql,
+		select_rows("SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers"),
+		true, mysql_false_conflict_tables,
+		[](SQLite3_result* rows) { MyHGM->servers_add(rows); },
+		[](SQLite3_result* rows) { return MyHGM->commit({rows, {}}, {nullptr, {}}, true, true); }),
+		"MySQL Cluster v1 accepts a module claim absent from installed runtime topology even when stale MEMORY still contains it");
+	auto pgsql_false_conflict_tables = module_tables(ProxySQL_ServerProtocol::pgsql);
+	ok(proxysql_cluster_install_v1_runtime_post_fetch(ProxySQL_ServerProtocol::pgsql,
+		select_rows("SELECT hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM pgsql_servers"),
+		true, pgsql_false_conflict_tables,
+		[](SQLite3_result* rows) { PgHGM->servers_add(rows); },
+		[](SQLite3_result* rows) { return PgHGM->commit({rows, {}}, {nullptr, {}}, true, true); }),
+		"PostgreSQL Cluster v1 accepts a module claim absent from installed runtime topology even when stale MEMORY still contains it");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_BUILTIN_CLAIM");
 	const size_t before_mysql_fallback_prepare = occurrences(read_log(), "server_module_prepare");
 	const size_t before_mysql_fallback_commit = occurrences(read_log(), "server_module_commit");
 	const size_t before_mysql_fallback_controller = occurrences(read_log(), "server_controller_runtime");
 	const uint64_t before_mysql_fallback_generation = proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::mysql);
 	ok(proxysql_cluster_install_v1_runtime_post_fetch(ProxySQL_ServerProtocol::mysql,
 		select_rows("SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers"),
-		false, {}, &admin_db,
+		false, {},
 		[](SQLite3_result* rows) { MyHGM->servers_add(rows); },
 		[](SQLite3_result* rows) { return MyHGM->commit({rows, {}}, {nullptr, {}}, true, true); }) &&
 		occurrences(read_log(), "server_module_prepare") == before_mysql_fallback_prepare &&
@@ -311,7 +400,7 @@ int main() {
 	const uint64_t before_pgsql_fallback_generation = proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::pgsql);
 	ok(proxysql_cluster_install_v1_runtime_post_fetch(ProxySQL_ServerProtocol::pgsql,
 		select_rows("SELECT hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM pgsql_servers"),
-		false, {}, &admin_db,
+		false, {},
 		[](SQLite3_result* rows) { PgHGM->servers_add(rows); },
 		[](SQLite3_result* rows) { return PgHGM->commit({rows, {}}, {nullptr, {}}, true, true); }) &&
 		occurrences(read_log(), "server_module_prepare") == before_pgsql_fallback_prepare &&
@@ -324,7 +413,7 @@ int main() {
 	const size_t before_failed_hgm_controller = occurrences(read_log(), "server_controller_runtime");
 	ok(!proxysql_cluster_install_v1_runtime_post_fetch(ProxySQL_ServerProtocol::mysql,
 		select_rows("SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers"),
-		false, {}, &admin_db,
+		false, {},
 		[](SQLite3_result*) {}, [](SQLite3_result* rows) { delete rows; return false; }) &&
 		proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::mysql) == before_failed_hgm &&
 		occurrences(read_log(), "server_controller_runtime") == before_failed_hgm_controller,

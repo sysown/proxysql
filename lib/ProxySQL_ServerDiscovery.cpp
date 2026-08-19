@@ -2,7 +2,10 @@
 #include "ProxySQL_PluginManager.h"
 #include "sqlite3db.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cerrno>
+#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -28,9 +31,33 @@ std::atomic<uint64_t>& installed_generation(ProxySQL_ServerProtocol protocol) {
 	return protocol == ProxySQL_ServerProtocol::mysql ? mysql_generation : pgsql_generation;
 }
 
-bool append_topology_rows(const SQLite3_result& rows, unsigned int fields,
+struct BuiltinTopologyTable {
+	std::vector<unsigned int> nonnegative_hostgroups;
+	std::vector<unsigned int> positive_hostgroups;
+	std::vector<unsigned int> optional_hostgroups;
+	int active_field {-1};
+};
+
+bool parse_topology_integer(const char* text, uint32_t& value) {
+	if (text == nullptr || text[0] == '\0' || text[0] == '-') return false;
+	errno = 0;
+	char* end = nullptr;
+	const unsigned long parsed = strtoul(text, &end, 10);
+	if (errno != 0 || end == text || *end != '\0' || parsed > std::numeric_limits<uint32_t>::max())
+		return false;
+	value = static_cast<uint32_t>(parsed);
+	return true;
+}
+
+bool append_topology_rows(const SQLite3_result& rows, const BuiltinTopologyTable& table,
 	std::vector<uint32_t>& hostgroups, std::string& error) {
-	if (rows.columns < fields) {
+	unsigned int required_columns = 0;
+	for (unsigned int field : table.nonnegative_hostgroups) required_columns = std::max(required_columns, field + 1);
+	for (unsigned int field : table.positive_hostgroups) required_columns = std::max(required_columns, field + 1);
+	for (unsigned int field : table.optional_hostgroups) required_columns = std::max(required_columns, field + 1);
+	if (table.active_field >= 0) required_columns = std::max(required_columns,
+		static_cast<unsigned int>(table.active_field + 1));
+	if (rows.columns < 0 || static_cast<unsigned int>(rows.columns) < required_columns) {
 		error = "malformed built-in topology snapshot";
 		return false;
 	}
@@ -39,17 +66,38 @@ bool append_topology_rows(const SQLite3_result& rows, unsigned int fields,
 			error = "malformed built-in topology row";
 			return false;
 		}
-		for (unsigned int field = 0; field < fields; ++field) {
-			if (row->fields[field] == nullptr) {
-				error = "null built-in topology hostgroup";
+		if (table.active_field >= 0) {
+			uint32_t active = 0;
+			if (!parse_topology_integer(row->fields[table.active_field], active) || active > 1) {
+				error = "invalid built-in topology active value";
 				return false;
 			}
-			const unsigned long value = strtoul(row->fields[field], nullptr, 10);
-			if (value == 0 || value > std::numeric_limits<uint32_t>::max()) {
+			if (active == 0) continue;
+		}
+		for (unsigned int field : table.nonnegative_hostgroups) {
+			uint32_t value = 0;
+			if (!parse_topology_integer(row->fields[field], value)) {
 				error = "invalid built-in topology hostgroup";
 				return false;
 			}
-			hostgroups.push_back(static_cast<uint32_t>(value));
+			hostgroups.push_back(value);
+		}
+		for (unsigned int field : table.positive_hostgroups) {
+			uint32_t value = 0;
+			if (!parse_topology_integer(row->fields[field], value) || value == 0) {
+				error = "invalid positive built-in topology hostgroup";
+				return false;
+			}
+			hostgroups.push_back(value);
+		}
+		for (unsigned int field : table.optional_hostgroups) {
+			if (row->fields[field] == nullptr) continue;
+			uint32_t value = 0;
+			if (!parse_topology_integer(row->fields[field], value)) {
+				error = "invalid optional built-in topology hostgroup";
+				return false;
+			}
+			hostgroups.push_back(value);
 		}
 	}
 	return true;
@@ -197,18 +245,23 @@ bool ProxySQL_ServerRuntimeInstallTransaction::commit(
 
 void ProxySQL_ServerRuntimeInstallTransaction::abort() noexcept { impl_.reset(); }
 
-bool proxysql_collect_active_builtin_server_topology(SQLite3DB& db,
+static bool collect_active_builtin_server_topology(SQLite3DB* db,
 	ProxySQL_ServerProtocol protocol, const ProxySQL_ServerBuiltinTopologyInputs& inputs,
 	std::vector<uint32_t>& hostgroups, std::string& error) {
 	hostgroups.clear();
 	error.clear();
-	auto append = [&](const SQLite3_result* supplied, const char* query, unsigned int fields) {
+	auto append = [&](const SQLite3_result* supplied, const char* query,
+		const BuiltinTopologyTable& table) {
 		std::unique_ptr<SQLite3_result> owned;
 		if (supplied == nullptr) {
+			if (db == nullptr) {
+				error = "incomplete installed built-in topology projection";
+				return false;
+			}
 			char* sqlite_error = nullptr;
 			int columns = 0, affected_rows = 0;
 			SQLite3_result* raw_rows = nullptr;
-			const bool ok = db.execute_statement(query, &sqlite_error, &columns, &affected_rows, &raw_rows);
+			const bool ok = db->execute_statement(query, &sqlite_error, &columns, &affected_rows, &raw_rows);
 			owned.reset(raw_rows);
 			if (!ok || sqlite_error != nullptr || !owned) {
 				const std::string message = sqlite_error ? sqlite_error : "topology query failed";
@@ -219,25 +272,41 @@ bool proxysql_collect_active_builtin_server_topology(SQLite3DB& db,
 			}
 			supplied = owned.get();
 		}
-		return append_topology_rows(*supplied, fields, hostgroups, error);
+		return append_topology_rows(*supplied, table, hostgroups, error);
 	};
+	const BuiltinTopologyTable replication {{0, 1}, {}, {}, -1};
+	const BuiltinTopologyTable four_way_active {{0, 1, 3}, {2}, {}, 4};
+	const BuiltinTopologyTable two_way_active {{0}, {1}, {}, 2};
+	const BuiltinTopologyTable rds_active {{0}, {1}, {2, 3}, 4};
 	if (protocol == ProxySQL_ServerProtocol::mysql) {
 		return append(inputs.mysql_replication,
-			"SELECT a.writer_hostgroup,a.reader_hostgroup FROM mysql_replication_hostgroups a LEFT JOIN mysql_replication_hostgroups b ON a.writer_hostgroup=b.reader_hostgroup WHERE b.reader_hostgroup IS NULL ORDER BY a.writer_hostgroup", 2) &&
+			"SELECT a.* FROM mysql_replication_hostgroups a LEFT JOIN mysql_replication_hostgroups b ON a.writer_hostgroup=b.reader_hostgroup WHERE b.reader_hostgroup IS NULL ORDER BY a.writer_hostgroup", replication) &&
 			append(inputs.mysql_group_replication,
-			"SELECT a.writer_hostgroup,a.backup_writer_hostgroup,a.reader_hostgroup,a.offline_hostgroup FROM mysql_group_replication_hostgroups a LEFT JOIN mysql_group_replication_hostgroups b ON (a.writer_hostgroup=b.reader_hostgroup OR a.writer_hostgroup=b.backup_writer_hostgroup OR a.writer_hostgroup=b.offline_hostgroup) WHERE b.reader_hostgroup IS NULL AND b.backup_writer_hostgroup IS NULL AND b.offline_hostgroup IS NULL ORDER BY a.writer_hostgroup", 4) &&
+			"SELECT a.* FROM mysql_group_replication_hostgroups a LEFT JOIN mysql_group_replication_hostgroups b ON (a.writer_hostgroup=b.reader_hostgroup OR a.writer_hostgroup=b.backup_writer_hostgroup OR a.writer_hostgroup=b.offline_hostgroup) WHERE b.reader_hostgroup IS NULL AND b.backup_writer_hostgroup IS NULL AND b.offline_hostgroup IS NULL ORDER BY a.writer_hostgroup", four_way_active) &&
 			append(inputs.mysql_galera,
-			"SELECT a.writer_hostgroup,a.backup_writer_hostgroup,a.reader_hostgroup,a.offline_hostgroup FROM mysql_galera_hostgroups a LEFT JOIN mysql_galera_hostgroups b ON (a.writer_hostgroup=b.reader_hostgroup OR a.writer_hostgroup=b.backup_writer_hostgroup OR a.writer_hostgroup=b.offline_hostgroup) WHERE b.reader_hostgroup IS NULL AND b.backup_writer_hostgroup IS NULL AND b.offline_hostgroup IS NULL ORDER BY a.writer_hostgroup", 4) &&
+			"SELECT a.* FROM mysql_galera_hostgroups a LEFT JOIN mysql_galera_hostgroups b ON (a.writer_hostgroup=b.reader_hostgroup OR a.writer_hostgroup=b.backup_writer_hostgroup OR a.writer_hostgroup=b.offline_hostgroup) WHERE b.reader_hostgroup IS NULL AND b.backup_writer_hostgroup IS NULL AND b.offline_hostgroup IS NULL ORDER BY a.writer_hostgroup", four_way_active) &&
 			append(inputs.mysql_aurora,
-			"SELECT a.writer_hostgroup,a.reader_hostgroup FROM mysql_aws_aurora_hostgroups a LEFT JOIN mysql_aws_aurora_hostgroups b ON a.writer_hostgroup=b.reader_hostgroup WHERE b.reader_hostgroup IS NULL ORDER BY a.writer_hostgroup", 2) &&
+			"SELECT a.* FROM mysql_aws_aurora_hostgroups a LEFT JOIN mysql_aws_aurora_hostgroups b ON a.writer_hostgroup=b.reader_hostgroup WHERE b.reader_hostgroup IS NULL ORDER BY a.writer_hostgroup", two_way_active) &&
 			append(inputs.mysql_rds_blue_green,
-			"SELECT a.writer_hostgroup,a.reader_hostgroup,a.green_writer_hostgroup,a.green_reader_hostgroup FROM mysql_aws_rds_bgd_hostgroups a LEFT JOIN mysql_aws_rds_bgd_hostgroups b ON a.writer_hostgroup=b.reader_hostgroup WHERE b.reader_hostgroup IS NULL ORDER BY a.writer_hostgroup", 4);
+			"SELECT a.* FROM mysql_aws_rds_bgd_hostgroups a LEFT JOIN mysql_aws_rds_bgd_hostgroups b ON a.writer_hostgroup=b.reader_hostgroup WHERE b.reader_hostgroup IS NULL ORDER BY a.writer_hostgroup", rds_active);
 	}
 	if (protocol == ProxySQL_ServerProtocol::pgsql)
 		return append(inputs.pgsql_replication,
-			"SELECT a.writer_hostgroup,a.reader_hostgroup FROM pgsql_replication_hostgroups a LEFT JOIN pgsql_replication_hostgroups b ON a.writer_hostgroup=b.reader_hostgroup WHERE b.reader_hostgroup IS NULL ORDER BY a.writer_hostgroup", 2);
+			"SELECT a.* FROM pgsql_replication_hostgroups a LEFT JOIN pgsql_replication_hostgroups b ON a.writer_hostgroup=b.reader_hostgroup WHERE b.reader_hostgroup IS NULL ORDER BY a.writer_hostgroup", replication);
 	error = "invalid server runtime protocol";
 	return false;
+}
+
+bool proxysql_collect_active_builtin_server_topology(SQLite3DB& db,
+	ProxySQL_ServerProtocol protocol, const ProxySQL_ServerBuiltinTopologyInputs& inputs,
+	std::vector<uint32_t>& hostgroups, std::string& error) {
+	return collect_active_builtin_server_topology(&db, protocol, inputs, hostgroups, error);
+}
+
+bool proxysql_collect_active_builtin_server_topology(ProxySQL_ServerProtocol protocol,
+	const ProxySQL_ServerBuiltinTopologyInputs& inputs,
+	std::vector<uint32_t>& hostgroups, std::string& error) {
+	return collect_active_builtin_server_topology(nullptr, protocol, inputs, hostgroups, error);
 }
 
 ProxySQL_ServerRuntimeSnapshot proxysql_server_runtime_snapshot_from_rows(

@@ -450,7 +450,7 @@ bool proxysql_prepare_server_module_cluster_runtime(
 	ProxySQL_ServerProtocol protocol, ProxySQL_ServerRuntimeInstallTransaction& transaction,
 	const SQLite3_result& core_servers,
 	const std::vector<ProxySQL_ServerModuleClusterTable>& tables,
-	SQLite3DB& topology_db,
+	const std::vector<uint32_t>& installed_topology_hostgroups,
 	std::string& error) {
 	ProxySQL_ServerModuleSnapshot snapshot;
 	const int expected_columns = protocol == ProxySQL_ServerProtocol::mysql ? 12 : 11;
@@ -460,9 +460,7 @@ bool proxysql_prepare_server_module_cluster_runtime(
 	}
 	snapshot.runtime = proxysql_server_runtime_snapshot_from_rows(
 		protocol, transaction.generation(), core_servers);
-	ProxySQL_ServerBuiltinTopologyInputs topology_inputs {};
-	if (!proxysql_collect_active_builtin_server_topology(topology_db, protocol,
-		topology_inputs, snapshot.runtime.topology_hostgroups, error)) return false;
+	snapshot.runtime.topology_hostgroups = installed_topology_hostgroups;
 	for (const auto& table : tables) {
 		if (!table.rows) {
 			error = "missing runtime server-module table payload";

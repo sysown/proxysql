@@ -206,7 +206,7 @@ int main() {
 	ProxySQL_ServerRuntimeInstallTransaction cluster_runtime_install(ProxySQL_ServerProtocol::mysql, error);
 	ok(core && cluster_runtime_install && proxysql_prepare_server_module_cluster_runtime(
 		ProxySQL_ServerProtocol::mysql, cluster_runtime_install, *core,
-		std::vector<ProxySQL_ServerModuleClusterTable>{}, source, error),
+		std::vector<ProxySQL_ServerModuleClusterTable>{}, std::vector<uint32_t>{}, error),
 		"v1 runtime preparation accepts the transported core snapshot without storing a projection");
 	cluster_runtime_install.abort();
 	auto copied_runtime = proxysql_server_runtime_snapshot_from_rows(
