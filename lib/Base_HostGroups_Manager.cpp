@@ -4,6 +4,7 @@ using json = nlohmann::json;
 
 #include "MySQL_HostGroups_Manager.h"
 #include "proxysql.h"
+#include "ProxySQL_ServerModuleCluster.h"
 #include "cpp.h"
 
 #include "MySQL_PreparedStatement.h"
@@ -1028,6 +1029,14 @@ void MySQL_HostGroups_Manager::commit_update_checksums_from_tables(SpookyHash& m
 	CUCFT1(myhash,init,"mysql_aws_aurora_hostgroups","writer_hostgroup", table_resultset_checksum[HGM_TABLES::MYSQL_AWS_AURORA_HOSTGROUPS]);
 	CUCFT1(myhash,init,"mysql_hostgroup_attributes","hostgroup_id", table_resultset_checksum[HGM_TABLES::MYSQL_HOSTGROUP_ATTRIBUTES]);
 	CUCFT1(myhash,init,"mysql_servers_ssl_params","hostname,port,username", table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS_SSL_PARAMS]);
+#ifdef PROXYSQL40
+	if (GloAdmin && GloAdmin->admindb) {
+		std::vector<ProxySQL_ServerModuleClusterTable> tables; std::string error;
+		if (proxysql_active_server_module_cluster_tables(ProxySQL_ServerProtocol::mysql,
+			ProxySQL_ServerModuleClusterVersion::memory_v2, *GloAdmin->admindb, tables, error))
+			proxysql_update_server_module_cluster_checksum(myhash, init, tables);
+	}
+#endif
 }
 
 /**
@@ -1254,6 +1263,14 @@ uint64_t MySQL_HostGroups_Manager::commit_update_checksum_from_mysql_servers(SQL
 	}
 
 	uint64_t raw_checksum = this->runtime_mysql_servers ? this->runtime_mysql_servers->raw_checksum() : 0;
+#ifdef PROXYSQL40
+	if (GloAdmin && GloAdmin->admindb) {
+		std::vector<ProxySQL_ServerModuleClusterTable> tables; std::string error;
+		if (proxysql_active_server_module_cluster_tables(ProxySQL_ServerProtocol::mysql,
+			ProxySQL_ServerModuleClusterVersion::runtime_v1, *GloAdmin->admindb, tables, error))
+			raw_checksum = proxysql_runtime_server_module_cluster_checksum(raw_checksum, tables);
+	}
+#endif
 	table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS] = raw_checksum;
 
 	return raw_checksum;
@@ -1686,6 +1703,15 @@ uint64_t MySQL_HostGroups_Manager::get_mysql_servers_checksum(SQLite3_result* ru
 	}
 
 	table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS] = resultset != nullptr ? resultset->raw_checksum() : 0;
+#ifdef PROXYSQL40
+	if (GloAdmin && GloAdmin->admindb) {
+		std::vector<ProxySQL_ServerModuleClusterTable> tables; std::string error;
+		if (proxysql_active_server_module_cluster_tables(ProxySQL_ServerProtocol::mysql,
+			ProxySQL_ServerModuleClusterVersion::runtime_v1, *GloAdmin->admindb, tables, error))
+			table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS] = proxysql_runtime_server_module_cluster_checksum(
+				table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS], tables);
+	}
+#endif
 	proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers", table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS]);
 
 	return table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS];

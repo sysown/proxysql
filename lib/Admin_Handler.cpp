@@ -40,6 +40,7 @@ using json = nlohmann::json;
 #include "MySQL_LDAP_Authentication.hpp"
 #include "MySQL_PreparedStatement.h"
 #include "ProxySQL_Cluster.hpp"
+#include "ProxySQL_ServerModuleCluster.h"
 #include "ProxySQL_Statistics.hpp"
 #ifdef PROXYSQL40
 #include "ProxySQL_PluginManager.h"
@@ -3311,6 +3312,25 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 
 	// handle special queries from Cluster
 	// for bug #1188 , ProxySQL Admin needs to know the exact query
+
+#ifdef PROXYSQL40
+	if (sess->session_type == PROXYSQL_SESSION_ADMIN) {
+		std::unique_ptr<SQLite3_result> module_result;
+		std::string module_error;
+		const auto endpoint = proxysql_server_module_cluster_endpoint(
+			query_no_space, *GloAdmin->admindb, module_result, module_error);
+		if (endpoint == ProxySQL_ServerModuleClusterEndpointResult::handled) {
+			sess->SQLite3_to_MySQL(module_result.get(), nullptr, 0, &sess->client_myds->myprot);
+			run_query = false;
+			goto __run_query;
+		}
+		if (endpoint == ProxySQL_ServerModuleClusterEndpointResult::error) {
+			SPA->send_error_msg_to_client(sess, const_cast<char*>(module_error.c_str()));
+			run_query = false;
+			goto __run_query;
+		}
+	}
+#endif
 
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 			string tn = "";
