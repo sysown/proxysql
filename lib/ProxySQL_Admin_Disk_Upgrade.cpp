@@ -1,6 +1,7 @@
 #include "cpp.h"
 #include "ProxySQL_Admin_Tables_Definitions.h"
 #include "ProxySQL_PluginManager.h"
+#include "ProxySQL_ServerDiscovery.h"
 
 // Plugin table definitions are materialized by the normal Admin bootstrap
 // before this legacy upgrade chain runs.  Keep their preservation explicit:
