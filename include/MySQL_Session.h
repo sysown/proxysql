@@ -7,7 +7,9 @@
 #ifndef PROXYSQL_MYSQL_SESSION_H
 #define PROXYSQL_MYSQL_SESSION_H
 
+#include <chrono>
 #include <functional>
+#include <string>
 #include <optional>
 #include <vector>
 
@@ -16,6 +18,7 @@
 #include "MySQL_Variables.h"
 #include "MySQL_User_Variables.h"
 #include "Base_Session.h"
+#include "Aws_Iam_Provider.h"
 
 #ifndef PROXYJSON
 #define PROXYJSON
@@ -243,6 +246,10 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	// caches the credential and completes the client handshake, on
 	// failure sends a generic ERR and tears down the session.
 	int handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT();
+	void fail_aws_iam_backend(const char *failure_code,
+		const AwsIamRedactedFailure *provider_failure = nullptr);
+	void fail_invalid_backend_auth_policy(MySQL_Data_Stream *backend,
+		const char *database_user, const char *failure_code);
 	bool handler_again___status_SHOW_WARNINGS(MySQL_Data_Stream *, bool);
 	void handler_again___new_thread_to_kill_connection();
 	void handler_KillConnectionIfNeeded();
@@ -617,6 +624,24 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	 */
 	bool passthrough_connect_failed;
 	const char *passthrough_connect_fail_reason;
+
+	// Owner-thread state for a fresh backend connection parked while an IAM
+	// token is acquired. Provider threads never receive any of these pointers.
+	AwsIamTokenSourceLease aws_iam_token_source_lease {};
+	AwsIamRequestHandle aws_iam_request_handle {};
+	AwsIamTokenKey aws_iam_token_key {};
+	AwsIamTokenResult aws_iam_completion {};
+	MySQL_Connection *aws_iam_connection { nullptr };
+	uint64_t aws_iam_waiter_id { 0 };
+	unsigned long long aws_iam_deadline_us { 0 };
+	bool aws_iam_completion_ready { false };
+	bool aws_iam_waiting_session_counted { false };
+	// Authentication identity used by the current backend connect attempt.
+	// It outlives handshake-token cleanup so a terminal 1045 can invalidate
+	// only the exact failed cache generation before the connection is freed.
+	AwsIamTokenKey aws_iam_connect_token_key {};
+	uint64_t aws_iam_connect_token_generation { 0 };
+	bool aws_iam_fresh_token_retry_attempted { false };
 	// Fast forward grace close flags: track backend closure during fast forward mode
 	// to allow pending client data to drain before closing the session.
 	bool backend_closed_in_fast_forward;
@@ -632,6 +657,9 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 
 	void set_status(enum session_status e);
 	int handler();
+	int handler_again___status_WAITING_AWS_IAM_TOKEN();
+	void accept_aws_iam_completion(uint64_t opaque_id, AwsIamTokenResult&& result);
+	void cancel_aws_iam_wait();
 
 	void (*handler_function) (MySQL_Session* sess, void *, PtrSize_t *pkt);
 	//MySQL_Backend * find_backend(int);
@@ -728,9 +756,19 @@ public:
 	int kill_type;
 	unsigned int hid;
 	int use_ssl;
+	MySQLBackendAuthType backend_auth_type { MySQLBackendAuthType::PASSWORD };
+	std::string configured_endpoint;
+	std::string region;
+	std::string database_user;
+	std::chrono::steady_clock::time_point token_deadline;
 
 	KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hid, unsigned long i, int kt, int _use_ssl, MySQL_Thread* _mt);
 	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hid, unsigned long i, int kt, int _use_ssl, MySQL_Thread* _mt, char *ip);
+	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hid,
+		unsigned long i, int kt, int _use_ssl, MySQL_Thread* _mt, char *ip,
+		MySQLBackendAuthType auth_type, const char *endpoint,
+		const char *aws_region, const char *db_user,
+		std::chrono::steady_clock::time_point deadline);
 	~KillArgs();
 	const char* get_host_address() const;
 	KillArgs(const KillArgs&) = delete;

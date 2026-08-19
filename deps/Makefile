@@ -2,7 +2,11 @@
 
 PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd)
 
+.DEFAULT_GOAL := default
+
 include $(PROXYSQL_PATH)/include/makefiles_vars.mk
+include $(PROXYSQL_PATH)/common_mk/openssl_flags.mk
+include $(PROXYSQL_PATH)/common_mk/openssl_version_check.mk
 
 
 # to compile libmariadb_client with support for valgrind enabled, run:
@@ -79,10 +83,6 @@ default: $(targets)
 
 
 ### deps targets
-
-include $(PROXYSQL_PATH)/common_mk/openssl_flags.mk
-include $(PROXYSQL_PATH)/common_mk/openssl_version_check.mk
-
 
 libinjection/libinjection/src/libinjection.a:
 	cd libinjection && rm -rf libinjection-*/ || true
@@ -277,6 +277,7 @@ endif
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_password.c.patch
 #	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_secure.c < ../ma_secure.c.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../mysql.h.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../tls_server_name.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_priv.h.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_alloc.c.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_charset.c.patch

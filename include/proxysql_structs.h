@@ -295,6 +295,7 @@ enum session_status {
 	CONNECTING_SERVER,
 	LDAP_AUTH_CLIENT,
 	AUTHENTICATING_BACKEND_FOR_CLIENT,
+	WAITING_AWS_IAM_TOKEN,
 	PINGING_SERVER,
 	WAITING_CLIENT_DATA,
 	WAITING_SERVER_DATA,
@@ -1298,6 +1299,9 @@ __thread bool mysql_thread___passthrough_auth_enabled;
 __thread bool mysql_thread___passthrough_auth_empty_password;
 __thread bool mysql_thread___passthrough_auth_unknown_users;
 __thread bool mysql_thread___passthrough_auth_require_tls;
+#ifdef PROXYSQL40
+__thread bool mysql_thread___aws_locality_awareness;
+#endif
 __thread int mysql_thread___passthrough_default_hg;
 __thread int mysql_thread___passthrough_auth_cache_ttl_s;
 __thread int mysql_thread___passthrough_auth_max_inflight_probes;
@@ -1655,6 +1659,9 @@ extern __thread bool mysql_thread___passthrough_auth_enabled;
 extern __thread bool mysql_thread___passthrough_auth_empty_password;
 extern __thread bool mysql_thread___passthrough_auth_unknown_users;
 extern __thread bool mysql_thread___passthrough_auth_require_tls;
+#ifdef PROXYSQL40
+extern __thread bool mysql_thread___aws_locality_awareness;
+#endif
 extern __thread int mysql_thread___passthrough_default_hg;
 extern __thread int mysql_thread___passthrough_auth_cache_ttl_s;
 extern __thread int mysql_thread___passthrough_auth_max_inflight_probes;

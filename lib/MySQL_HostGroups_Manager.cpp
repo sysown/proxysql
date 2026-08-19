@@ -30,10 +30,13 @@ using json = nlohmann::json;
 #include "ev.h"
 
 #include <functional>
+#include <algorithm>
 #include <mutex>
 #include <type_traits>
 
 using std::function;
+
+extern MySQL_Authentication *GloMyAuth;
 
 
 #define SAFE_SQLITE3_STEP(_stmt) do {\
@@ -130,8 +133,7 @@ T j_get_srv_default_int_val(
 }
 
 
-//static void * HGCU_thread_run() {
-static void * HGCU_thread_run() {
+void * HGCU_thread_run() {
 	PtrArray *conn_array=new PtrArray();
 	set_thread_name("MyHGCU", GloVars.set_thread_name);
 	while(1) {
@@ -151,15 +153,34 @@ static void * HGCU_thread_run() {
 			}
 			conn_array->add(myconn);
 		}
+		for (unsigned int i = 0; i < conn_array->len;) {
+			myconn = (MySQL_Connection *)conn_array->index(i);
+			const char *backend_username = myconn->userinfo != nullptr
+				? myconn->userinfo->username : nullptr;
+			const MySQLBackendAuthPolicy policy = GloMyAuth != nullptr
+				? resolve_mysql_backend_auth_policy(*GloMyAuth, backend_username)
+				: MySQLBackendAuthPolicy {};
+			const bool reset_allowed =
+				myconn->backend_auth_type() == MySQLBackendAuthType::PASSWORD &&
+				(GloMyAuth == nullptr ||
+				 myconn->can_reset_for_backend_auth_policy(policy));
+			if (!reset_allowed) {
+				conn_array->remove_index_fast(i);
+				myconn->send_quit = false;
+				MyHGM->destroy_MyConn_from_pool(myconn);
+				continue;
+			}
+			++i;
+		}
 		unsigned int l=conn_array->len;
 		int *errs=(int *)malloc(sizeof(int)*l);
 		int *statuses=(int *)malloc(sizeof(int)*l);
 		my_bool *ret=(my_bool *)malloc(sizeof(my_bool)*l);
 		int i;
 		for (i=0;i<(int)l;i++) {
+			myconn=(MySQL_Connection *)conn_array->index(i);
 			myconn->reset();
 			MyHGM->increase_reset_counter();
-			myconn=(MySQL_Connection *)conn_array->index(i);
 			if (myconn->mysql->net.pvio && myconn->mysql->net.fd && myconn->mysql->net.buff) {
 				MySQL_Connection_userinfo *userinfo = myconn->userinfo;
 				char *auth_password = NULL;
@@ -670,6 +691,9 @@ hg_metrics_map = std::make_tuple(
 );
 
 MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
+#ifdef PROXYSQL40
+	aws_locality_manager_ = std::make_unique<MySQLAwsLocalityManager>();
+#endif
 	status.client_connections=0;
 	status.client_connections_prim_pass=0;
 	status.client_connections_addl_pass=0;
@@ -782,6 +806,11 @@ void MySQL_HostGroups_Manager::init() {
 }
 
 void MySQL_HostGroups_Manager::shutdown() {
+#ifdef PROXYSQL40
+	if (aws_locality_manager_) {
+		aws_locality_manager_->shutdown();
+	}
+#endif
 	queue.add(NULL);
 	HGCU_thread->join();
 	delete HGCU_thread;
@@ -791,6 +820,11 @@ void MySQL_HostGroups_Manager::shutdown() {
 }
 
 MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
+#ifdef PROXYSQL40
+	if (aws_locality_manager_) {
+		aws_locality_manager_->shutdown();
+	}
+#endif
 	while (MyHostGroups->len) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->remove_index_fast(0);
 		delete myhgc;
@@ -809,6 +843,140 @@ MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
 		free(gtid_ev_timer);
 	pthread_mutex_destroy(&lock);
 }
+
+#ifdef PROXYSQL40
+void MySQL_HostGroups_Manager::refresh_aws_locality_configuration() {
+	std::vector<AwsLocalityHostgroupConfig> hostgroups;
+
+	wrlock();
+	for (unsigned int i = 0; i < MyHostGroups->len; ++i) {
+		MyHGC* hostgroup = static_cast<MyHGC*>(MyHostGroups->index(i));
+		if (!hostgroup->attributes.aws_locality_policy.valid) {
+			continue;
+		}
+
+		AwsLocalityHostgroupConfig config;
+		config.hostgroup_id = hostgroup->hid;
+		config.policy = hostgroup->attributes.aws_locality_policy;
+		config.backends.reserve(hostgroup->mysrvs->servers->len);
+		for (unsigned int j = 0; j < hostgroup->mysrvs->servers->len; ++j) {
+			MySrvC* server = static_cast<MySrvC*>(hostgroup->mysrvs->servers->index(j));
+			config.backends.emplace_back(
+				recognize_rds_endpoint(hostgroup->hid, server->address, server->port),
+				server->weight);
+		}
+		hostgroups.emplace_back(std::move(config));
+	}
+	wrunlock();
+
+	if (aws_locality_manager_) {
+		aws_locality_manager_->configure(std::move(hostgroups));
+	}
+}
+
+void MySQL_HostGroups_Manager::set_aws_locality_awareness_enabled(bool enabled) {
+	if (aws_locality_manager_) {
+		aws_locality_manager_->set_enabled(enabled);
+	}
+}
+
+namespace {
+
+const char* aws_endpoint_type_name(AwsEndpointType type) {
+	switch (type) {
+	case AwsEndpointType::instance: return "instance";
+	case AwsEndpointType::cluster: return "cluster";
+	case AwsEndpointType::reader: return "reader";
+	case AwsEndpointType::custom: return "custom";
+	case AwsEndpointType::unknown: return "unknown";
+	}
+	return "unknown";
+}
+
+const char* aws_locality_name(AwsLocalityClass locality) {
+	switch (locality) {
+	case AwsLocalityClass::remote: return "remote";
+	case AwsLocalityClass::same_region: return "same_region";
+	case AwsLocalityClass::same_az: return "same_az";
+	case AwsLocalityClass::unknown: return "unknown";
+	}
+	return "unknown";
+}
+
+const char* aws_metadata_status_name(AwsLocalityMetadataStatus status) {
+	switch (status) {
+	case AwsLocalityMetadataStatus::disabled: return "disabled";
+	case AwsLocalityMetadataStatus::pending: return "pending";
+	case AwsLocalityMetadataStatus::fresh: return "fresh";
+	case AwsLocalityMetadataStatus::stale: return "stale";
+	case AwsLocalityMetadataStatus::expired: return "expired";
+	case AwsLocalityMetadataStatus::error: return "error";
+	}
+	return "error";
+}
+
+const char* aws_account_match_name(const AwsLocalitySnapshotEntry& row) {
+	if (row.local.account_id.empty() || row.backend.account_id.empty()) {
+		return "unknown";
+	}
+	return row.local.account_id == row.backend.account_id ? "same" : "different";
+}
+
+bool aws_locality_status_is_active(AwsLocalityMetadataStatus status) {
+	return status == AwsLocalityMetadataStatus::fresh ||
+		status == AwsLocalityMetadataStatus::stale;
+}
+
+std::mutex aws_locality_stats_projection_mutex;
+
+} // namespace
+
+bool MySQL_HostGroups_Manager::project_aws_locality_stats(
+	SQLite3DB* statsdb,
+	const std::vector<AwsLocalitySnapshotEntry>& rows) {
+	std::lock_guard<std::mutex> projection_lock(aws_locality_stats_projection_mutex);
+	if (statsdb == nullptr || !statsdb->execute("BEGIN")) return false;
+	bool success = statsdb->execute("DELETE FROM stats_mysql_aws_locality");
+	for (const auto& row : rows) {
+		if (!success) break;
+		const double active_multiplier = aws_locality_status_is_active(row.status)
+			? row.multiplier : 1.0;
+		const uint64_t effective_weight = aws_locality_effective_weight(
+			row.configured_weight, active_multiplier);
+		char* query = sqlite3_mprintf(
+			"INSERT INTO stats_mysql_aws_locality ("
+			"hostgroup_id,hostname,port,endpoint_type,configured_weight,"
+			"effective_weight,local_region,local_az,backend_region,backend_az,"
+			"account_match,locality,active_multiplier,metadata_status,"
+			"last_success_timestamp,last_attempt_timestamp,last_error_category) "
+			"VALUES (%u,'%q',%u,'%q',%lld,%llu,'%q','%q','%q','%q','%q','%q',"
+			"%.17g,'%q',%lld,%lld,'%q')",
+			row.hostgroup_id, row.hostname.c_str(), static_cast<unsigned>(row.port),
+			aws_endpoint_type_name(row.endpoint_type),
+			static_cast<long long>(row.configured_weight),
+			static_cast<unsigned long long>(effective_weight),
+			row.local.region.c_str(), row.local.availability_zone.c_str(),
+			row.backend.region.c_str(), row.backend.availability_zone.c_str(),
+			aws_account_match_name(row), aws_locality_name(row.locality),
+			active_multiplier, aws_metadata_status_name(row.status),
+			static_cast<long long>(row.last_success_timestamp),
+			static_cast<long long>(row.last_attempt_timestamp),
+			row.failure_category.c_str());
+		success = query != nullptr && statsdb->execute(query);
+		sqlite3_free(query);
+	}
+	if (success) success = statsdb->execute("COMMIT");
+	if (!success) statsdb->execute("ROLLBACK");
+	return success;
+}
+
+void MySQL_HostGroups_Manager::refresh_aws_locality_stats(SQLite3DB* statsdb) const {
+	const std::vector<AwsLocalitySnapshotEntry> rows = aws_locality_manager_
+		? aws_locality_manager_->diagnostic_rows()
+		: std::vector<AwsLocalitySnapshotEntry>();
+	project_aws_locality_stats(statsdb, rows);
+}
+#endif
 
 void MySQL_HostGroups_Manager::p_update_mysql_error_counter(p_mysql_error_type err_type, unsigned int hid, char* address, uint16_t port, unsigned int code) {
 	p_hg_dyn_counter::metric metric = p_hg_dyn_counter::mysql_error;
@@ -1621,6 +1789,9 @@ bool MySQL_HostGroups_Manager::commit(
 	update_aws_rds_bgd_hosts_monitor_resultset();
 
 	wrunlock();
+#ifdef PROXYSQL40
+	refresh_aws_locality_configuration();
+#endif
 	unsigned long long curtime2=monotonic_time();
 	curtime1 = curtime1/1000;
 	curtime2 = curtime2/1000;
@@ -2534,7 +2705,11 @@ void MySQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address
  * @note This method locks the connection pool to ensure thread safety during access. It releases the lock once
  *       the operation is completed.
  */
-MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
+MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(
+	unsigned int _hid, MySQL_Session *sess, bool ff, char *gtid_uuid,
+	uint64_t gtid_trxid, int max_lag_ms,
+	MySQLBackendAuthType requested_type)
+{
 	MySQL_Connection * conn = nullptr; // Pointer to hold the retrieved MySQL_Connection
 
 	// Acquire a write lock to access the connection pool
@@ -2552,7 +2727,7 @@ MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 	mysrvc = myhgc->get_random_MySrvC(gtid_uuid, gtid_trxid, max_lag_ms, sess);
 	if (mysrvc) { // a MySrvC exists. If not, we return NULL = no targets
 		// Attempt to get a random MySQL_Connection from the server's free connection pool
-		conn=mysrvc->ConnectionsFree->get_random_MyConn(sess, ff);
+		conn=mysrvc->ConnectionsFree->get_random_MyConn(sess, ff, requested_type);
 
 		// If a connection is obtained, mark it as used and update connection pool statistics
 		if (conn) {
@@ -2584,17 +2759,21 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 
 	bool to_del=true; // the default, legacy behavior
 	MySrvC *mysrvc=(MySrvC *)c->parent;
-	if (c->healthy && mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE && c->send_quit && queue.size() < __sync_fetch_and_add(&GloMTH->variables.connpoll_reset_queue_length, 0)) {
+	if (c->healthy && mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE &&
+		c->send_quit &&
+		queue.size() < __sync_fetch_and_add(&GloMTH->variables.connpoll_reset_queue_length, 0)) {
 		if (c->async_state_machine==ASYNC_IDLE) {
-			// overall, the backend seems healthy and so it is the connection. Try to reset it
-			int myerr=mysql_errno(c->mysql);
-			if (myerr >= 2000 && myerr < 3000) {
-				// client library error . We must not try to save the connection
-				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Not trying to reset MySQL_Connection %p, server %s:%d . Error code %d\n", c, mysrvc->address, mysrvc->port, myerr);
-			} else {
-				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Trying to reset MySQL_Connection %p, server %s:%d\n", c, mysrvc->address, mysrvc->port);
-				to_del=false;
-				queue.add(c);
+			if (c->backend_auth_type() != MySQLBackendAuthType::AWS_IAM) {
+				// overall, the backend seems healthy and so it is the connection. Try to reset it
+				int myerr=mysql_errno(c->mysql);
+				if (myerr >= 2000 && myerr < 3000) {
+					// client library error . We must not try to save the connection
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Not trying to reset MySQL_Connection %p, server %s:%d . Error code %d\n", c, mysrvc->address, mysrvc->port, myerr);
+				} else {
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Trying to reset MySQL_Connection %p, server %s:%d\n", c, mysrvc->address, mysrvc->port);
+					to_del=false;
+					queue.add(c);
+				}
 			}
 		} else {
 		// the connection seems health, but we are trying to destroy it
@@ -2608,15 +2787,30 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 					default:
 					if (c->mysql->thread_id) {
 						MySQL_Connection_userinfo *ui=c->userinfo;
-						char *auth_password=NULL;
-						if (ui->password) {
-							if (ui->password[0]=='*') { // we don't have the real password, let's pass sha1
-								auth_password=ui->sha1_pass;
-							} else {
-								auth_password=ui->password;
+						KillArgs *ka = nullptr;
+						if (c->backend_auth_type() == MySQLBackendAuthType::AWS_IAM) {
+							const char *region = mysrvc->myhgc != nullptr &&
+								mysrvc->myhgc->attributes.aws_iam_region != nullptr
+									? mysrvc->myhgc->attributes.aws_iam_region : "";
+							ka = new KillArgs(
+								ui->username, nullptr, mysrvc->address, mysrvc->port,
+								mysrvc->myhgc->hid, c->mysql->thread_id,
+								KILL_CONNECTION, mysrvc->use_ssl, nullptr,
+								c->connected_host_details.ip,
+								MySQLBackendAuthType::AWS_IAM, mysrvc->address,
+								region, ui->username,
+								std::chrono::steady_clock::now() + std::chrono::seconds(5));
+						} else {
+							char *auth_password=NULL;
+							if (ui->password) {
+								if (ui->password[0]=='*') { // we don't have the real password, let's pass sha1
+									auth_password=ui->sha1_pass;
+								} else {
+									auth_password=ui->password;
+								}
 							}
+							ka = new KillArgs(ui->username, auth_password, c->parent->address, c->parent->port, c->parent->myhgc->hid, c->mysql->thread_id, KILL_CONNECTION, c->parent->use_ssl, NULL, c->connected_host_details.ip);
 						}
-						KillArgs *ka = new KillArgs(ui->username, auth_password, c->parent->address, c->parent->port, c->parent->myhgc->hid, c->mysql->thread_id, KILL_CONNECTION, c->parent->use_ssl, NULL, c->connected_host_details.ip);
 						pthread_attr_t attr;
 						pthread_attr_init(&attr);
 						pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
@@ -6197,10 +6391,36 @@ bool AWS_Aurora_Info::update(int r, int _port, char *_end_addr, int maxl, int al
  */
 void init_myhgc_hostgroup_settings(const char* hostgroup_settings, MyHGC* myhgc) {
 	const uint32_t hid = myhgc->hid;
+	free(myhgc->attributes.aws_iam_region);
+	myhgc->attributes.aws_iam_region = NULL;
+#ifdef PROXYSQL40
+	myhgc->attributes.aws_locality_policy = {};
+#endif
 
 	if (hostgroup_settings[0] != '\0') {
 		try {
 			nlohmann::json j = nlohmann::json::parse(hostgroup_settings);
+
+#ifdef PROXYSQL40
+			const auto aws = j.find("aws");
+			if (aws != j.end()) {
+				if (!aws->is_object()) {
+					proxy_error("Invalid AWS locality policy field 'aws' for hostgroup %u. Value rejected.\n", hid);
+				} else {
+					const auto locality = aws->find("locality_awareness");
+					if (locality != aws->end()) {
+						AwsLocalityPolicyError error;
+						myhgc->attributes.aws_locality_policy = parse_aws_locality_policy(
+							*locality, hid, error);
+						if (!myhgc->attributes.aws_locality_policy.valid) {
+							proxy_error(
+								"Invalid AWS locality policy field '%s' for hostgroup %u. Value rejected.\n",
+								error.field.c_str(), hid);
+						}
+					}
+				}
+			}
+#endif
 
 			const auto handle_warnings_check = [](int8_t handle_warnings) -> bool { return handle_warnings == 0 || handle_warnings == 1; };
 			const int8_t handle_warnings = j_get_srv_default_int_val<int8_t>(j, hid, "handle_warnings", handle_warnings_check);
@@ -6215,12 +6435,28 @@ void init_myhgc_hostgroup_settings(const char* hostgroup_settings, MyHGC* myhgc)
 				{ return (default_query_timeout >= 1000 && default_query_timeout <= 20*24*3600*1000); };
 			const int32_t default_query_timeout = j_get_srv_default_int_val<int32_t>(j, hid, "default_query_timeout", default_query_timeout_check);
 			myhgc->attributes.default_query_timeout = default_query_timeout;
+
+			const auto aws_iam_region = j.find("aws_iam_region");
+			if (aws_iam_region != j.end()) {
+				if (!aws_iam_region->is_string()) {
+					proxy_error("Invalid 'aws_iam_region' value for hostgroup %d. Value rejected.\n", hid);
+				} else {
+					const std::string region = aws_iam_region->get<std::string>();
+					const bool valid_region = !region.empty() && std::all_of(region.begin(), region.end(),
+						[](unsigned char c) {
+							return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+								(c >= '0' && c <= '9') || c == '-';
+						});
+					if (valid_region) {
+						myhgc->attributes.aws_iam_region = strdup(region.c_str());
+					} else {
+						proxy_error("Invalid 'aws_iam_region' value for hostgroup %d. Value rejected.\n", hid);
+					}
+				}
+			}
 		}
-		catch (const json::exception& e) {
-			proxy_error(
-				"JSON parsing for 'mysql_hostgroup_attributes.hostgroup_settings' for hostgroup %d failed with exception `%s`.\n",
-				hid, e.what()
-			);
+		catch (const json::exception&) {
+			proxy_error("hostgroup_settings_parse_failed for hostgroup %d. Value rejected.\n", hid);
 		}
 	}
 }

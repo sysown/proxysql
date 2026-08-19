@@ -115,19 +115,25 @@ ConnectionPoolDecision evaluate_pool_state(
 	return decision;
 }
 
-void MySrvConnList::get_random_MyConn_inner_search(unsigned int start, unsigned int end, unsigned int& conn_found_idx, unsigned int& connection_quality_level, unsigned int& number_of_matching_session_variables, const MySQL_Connection * client_conn) {
+void MySrvConnList::get_random_MyConn_inner_search(unsigned int start, unsigned int end, unsigned int& conn_found_idx, unsigned int& connection_quality_level, unsigned int& number_of_matching_session_variables, const MySQL_Connection * client_conn, MySQLBackendAuthType requested_type) {
 	char *schema = client_conn->userinfo->schemaname;
 	MySQL_Connection * conn=NULL;
 	unsigned int k;
 	for (k = start;  k < end; k++) {
 		conn = (MySQL_Connection *)conns->index(k);
+		// A candidate from another auth mode is not usable, but may belong to
+		// another backend user whose policy did not change. Leave it idle for
+		// that identity instead of turning this checkout into cross-user churn.
+		if (conn->backend_auth_type() != requested_type) continue;
+		if (requested_type == MySQLBackendAuthType::AWS_IAM &&
+			conn->requires_CHANGE_USER(client_conn, requested_type)) continue;
 		if (conn->match_tracked_options(client_conn)) {
 			if (connection_quality_level == 0) {
 				// this is our best candidate so far
 				connection_quality_level = 1;
 				conn_found_idx = k;
 			}
-			if (conn->requires_CHANGE_USER(client_conn)==false) {
+			if (conn->requires_CHANGE_USER(client_conn, requested_type)==false) {
 				if (connection_quality_level == 1) {
 					// this is our best candidate so far
 					connection_quality_level = 2;
@@ -180,7 +186,9 @@ void MySrvConnList::get_random_MyConn_inner_search(unsigned int start, unsigned 
 
 
 
-MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff) {
+MySQL_Connection * MySrvConnList::get_random_MyConn(
+	MySQL_Session *sess, bool ff, MySQLBackendAuthType requested_type)
+{
 	MySQL_Connection * conn=NULL;
 	unsigned int i;
 	unsigned int conn_found_idx = 0;
@@ -199,6 +207,33 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 		connection_warming = mysrvc->myhgc->attributes.connection_warming;
 		free_connections_pct = mysrvc->myhgc->attributes.free_connections_pct;
 	}
+	if (l && ff == false && sess && sess->client_myds &&
+		sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {
+		const MySQL_Connection *client_conn = sess->client_myds->myconn;
+		for (unsigned int candidate_idx = 0; candidate_idx < l;) {
+			MySQL_Connection *candidate =
+				(MySQL_Connection *)conns->index(candidate_idx);
+			const char *candidate_username =
+				candidate->userinfo != nullptr ? candidate->userinfo->username : nullptr;
+			const char *requested_username = client_conn->userinfo->username;
+			const bool same_username = candidate_username != nullptr &&
+				requested_username != nullptr &&
+				strcmp(candidate_username, requested_username) == 0;
+			const bool wrong_mode =
+				same_username && candidate->backend_auth_type() != requested_type;
+			const bool iam_requires_reset =
+				same_username && requested_type == MySQLBackendAuthType::AWS_IAM &&
+				candidate->requires_CHANGE_USER(client_conn, requested_type);
+			if (wrong_mode || iam_requires_reset) {
+				conns->remove_index_fast(candidate_idx);
+				candidate->send_quit = false;
+				delete candidate;
+				--l;
+				continue;
+			}
+			++candidate_idx;
+		}
+	}
 	unsigned int conns_free = mysrvc->ConnectionsFree->conns_length();
 	unsigned int conns_used = mysrvc->ConnectionsUsed->conns_length();
 	bool needs_warming = false;
@@ -213,9 +248,9 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 		i=rand_fast()%l;
 		if (sess && sess->client_myds && sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {
 			MySQL_Connection * client_conn = sess->client_myds->myconn;
-			get_random_MyConn_inner_search(i, l, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn);
+			get_random_MyConn_inner_search(i, l, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn, requested_type);
 			if (connection_quality_level !=3 ) { // we didn't find the perfect connection
-				get_random_MyConn_inner_search(0, i, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn);
+				get_random_MyConn_inner_search(0, i, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn, requested_type);
 			}
 			// Evaluate pool state to determine create-vs-reuse and eviction (warming already handled above)
 			ConnectionPoolDecision decision = evaluate_pool_state(
