@@ -50,7 +50,12 @@ bool translate_pcrecpp_rewrite(const char* legacy_rewrite, std::string* pcre2_re
 	pcre2_rewrite->clear();
 	for (const char* cursor = legacy_rewrite; *cursor != '\0'; ++cursor) {
 		if (*cursor != '\\') {
-			pcre2_rewrite->push_back(*cursor);
+			if (*cursor == '$') {
+				// Dollar is literal in pcrecpp rewrites and special to PCRE2.
+				pcre2_rewrite->append("$$");
+			} else {
+				pcre2_rewrite->push_back(*cursor);
+			}
 			continue;
 		}
 
@@ -202,6 +207,22 @@ bool Pcre2Regex::replace(
 }
 
 } // namespace
+
+#ifdef DEBUG
+bool pcre2_query_rule_replace_for_test(
+	const char* pattern,
+	const char* subject,
+	const char* legacy_rewrite,
+	bool global,
+	std::string* rewritten
+) {
+	if (subject == nullptr || rewritten == nullptr) return false;
+
+	Pcre2Regex regex(pattern, 0);
+	*rewritten = subject;
+	return regex.replace(rewritten, legacy_rewrite, global);
+}
+#endif
 
 // per thread variables
 __thread unsigned int _thr_SQP_version;

@@ -20,6 +20,16 @@
 
 #include <cstring>
 
+// Debug-only seam implemented in Query_Processor.cpp. It keeps the adapter and
+// all PCRE2 types private while exercising the real substitution path.
+extern bool pcre2_query_rule_replace_for_test(
+	const char* pattern,
+	const char* subject,
+	const char* legacy_rewrite,
+	bool global,
+	std::string* rewritten
+);
+
 /**
  * @brief Create a zeroed QP_rule_t with safe defaults.
  */
@@ -184,6 +194,40 @@ static void test_rewritten_query() {
 		"rewritten query used for match_pattern when present");
 }
 
+static void test_pcre2_rewrites() {
+	std::string rewritten;
+
+	bool rc = pcre2_query_rule_replace_for_test(
+		"(x)", "x x", "$1:${name}:$&", false, &rewritten
+	);
+	ok(rc && rewritten == "$1:${name}:$& x",
+		"PCRE rewrite preserves dollar forms as literal text");
+
+	rc = pcre2_query_rule_replace_for_test(
+		"(ab)", "ab ab", "\\0:\\1", false, &rewritten
+	);
+	ok(rc && rewritten == "ab:ab ab",
+		"PCRE rewrite expands legacy whole-match and capture references once");
+
+	rc = pcre2_query_rule_replace_for_test(
+		"(ab)", "ab ab", "\\0:\\1", true, &rewritten
+	);
+	ok(rc && rewritten == "ab:ab ab:ab",
+		"PCRE global rewrite expands legacy captures for every match");
+
+	rc = pcre2_query_rule_replace_for_test(
+		"x", "x x", "\\\\", false, &rewritten
+	);
+	ok(rc && rewritten == "\\ x",
+		"PCRE rewrite emits one legacy literal backslash once");
+
+	rc = pcre2_query_rule_replace_for_test(
+		"x", "x x", "\\\\", true, &rewritten
+	);
+	ok(rc && rewritten == "\\ \\",
+		"PCRE global rewrite emits a legacy literal backslash for every match");
+}
+
 // ============================================================================
 // 3. Combined criteria (AND logic)
 // ============================================================================
@@ -218,7 +262,7 @@ static void test_null_rule() {
 // ============================================================================
 
 int main() {
-	plan(25);
+	plan(30);
 
 	test_init_minimal();
 
@@ -236,9 +280,10 @@ int main() {
 	test_negate_match_pattern();    // 2
 	test_caseless_modifier();       // 1
 	test_rewritten_query();         // 1
+	test_pcre2_rewrites();          // 5
 	test_combined_criteria();       // 2
 	test_null_rule();               // 1
-	// Total: 25
+	// Total: 30
 
 	test_cleanup_minimal();
 	return exit_status();
