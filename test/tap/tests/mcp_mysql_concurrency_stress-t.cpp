@@ -165,6 +165,16 @@ bool run_admin_stmt(MYSQL* admin, const std::string& query, const char* context)
 	return true;
 }
 
+std::string escape_sql_literal(MYSQL* admin, const char* input) {
+	if (input == nullptr) return {};
+	const size_t input_length = std::strlen(input);
+	std::string escaped(input_length * 2 + 1, '\0');
+	const unsigned long escaped_length = mysql_real_escape_string(
+		admin, escaped.data(), input, static_cast<unsigned long>(input_length));
+	escaped.resize(escaped_length);
+	return escaped;
+}
+
 /**
  * @brief Configure MCP runtime for concurrent stats polling.
  *
@@ -173,11 +183,14 @@ bool run_admin_stmt(MYSQL* admin, const std::string& query, const char* context)
  * @return true if all setup statements succeeded.
  */
 bool configure_mcp_runtime(MYSQL* admin, const CommandLine& cl) {
+	if (admin == nullptr) return false;
+	const std::string auth_token = escape_sql_literal(admin, cl.mcp_auth_token);
 	const std::vector<std::string> statements = {
 		"SET mcp-port=" + std::to_string(cl.mcp_port),
 		"SET mcp-use_ssl=false",
 		"SET mcp-enabled=true",
-		"SET mcp-stats_endpoint_auth=''",
+		"SET mcp-config_endpoint_auth='" + auth_token + "'",
+		"SET mcp-stats_endpoint_auth='" + auth_token + "'",
 		"SET mcp-stats_show_processlist_max_rows=" + std::to_string(k_processlist_cap),
 		"SET mcp-stats_show_queries_max_rows=" + std::to_string(k_show_queries_cap),
 		"LOAD MCP VARIABLES TO RUNTIME"
@@ -200,11 +213,7 @@ void restore_mcp_runtime(MYSQL* admin) {
 	if (!admin) {
 		return;
 	}
-	run_q(admin, "SET mcp-stats_show_processlist_max_rows=200");
-	run_q(admin, "SET mcp-stats_show_queries_max_rows=200");
-	run_q(admin, "SET mcp-stats_endpoint_auth=''");
-	run_q(admin, "SET mcp-enabled=false");
-	run_q(admin, "LOAD MCP VARIABLES TO RUNTIME");
+	run_q(admin, "LOAD MCP VARIABLES FROM DISK");
 }
 
 /**
