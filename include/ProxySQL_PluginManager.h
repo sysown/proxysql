@@ -82,8 +82,8 @@ public:
 	// does not have to reach into the global admin module.
 	void refresh_runtime_views_for_query(const std::string& sql,
 		SQLite3DB* admindb, SQLite3DB* configdb, SQLite3DB* statsdb) const;
-	bool register_server_module(ProxySQL_ServerModuleTable *module,
-		void (*destroy)(ProxySQL_ServerModuleTable *), void *module_handle);
+	bool register_server_module(ProxySQL_ServerModuleHooks *module,
+		void (*destroy)(ProxySQL_ServerModuleHooks *), void *module_handle);
 	bool unregister_server_module(ProxySQL_ServerProtocol protocol);
 	bool install_server_discovery_controller(ProxySQL_ServerProtocol protocol,
 		ProxySQL_ServerDiscoveryController *controller,
@@ -155,8 +155,8 @@ private:
 	};
 	std::vector<registered_runtime_view_t> runtime_views_ {};
 	struct registered_server_module_t {
-		ProxySQL_ServerModuleTable *module { nullptr };
-		void (*destroy)(ProxySQL_ServerModuleTable *) { nullptr };
+		ProxySQL_ServerModuleHooks *module { nullptr };
+		void (*destroy)(ProxySQL_ServerModuleHooks *) { nullptr };
 		void *module_handle { nullptr };
 	};
 	struct registered_server_controller_t {

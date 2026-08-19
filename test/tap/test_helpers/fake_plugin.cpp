@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <dlfcn.h>
 #include <string>
 
 // Two builds of this source produce two distinct .so files used together
@@ -63,6 +64,38 @@ void fake_log_event(const char *event) {
 	std::fprintf(log_file, "%s:%s\n", FAKE_PLUGIN_NAME, event);
 	std::fclose(log_file);
 }
+
+#ifdef PROXYSQL40
+void fake_server_module_installed(void *, ProxySQL_ServerRuntimeSnapshot) {}
+void fake_destroy_server_module(ProxySQL_ServerModuleHooks *) {
+	fake_log_event("server_module_destroyed");
+}
+
+ProxySQL_ServerModuleHooks fake_server_module_hooks {
+	ProxySQL_ServerProtocol::mysql, &fake_server_module_installed, nullptr
+};
+
+void *retain_fake_module() {
+	Dl_info info {};
+	if (dladdr(reinterpret_cast<void *>(&fake_server_module_installed), &info) == 0 ||
+		info.dli_fname == nullptr) {
+		return nullptr;
+	}
+	return dlopen(info.dli_fname, RTLD_NOW | RTLD_LOCAL);
+}
+
+bool fake_register_server_module(ProxySQL_PluginServices *services) {
+	if (services == nullptr || services->register_server_module == nullptr) return false;
+	void *module = retain_fake_module();
+	if (module == nullptr) return false;
+	if (!services->register_server_module(&fake_server_module_hooks,
+		&fake_destroy_server_module, module)) {
+		dlclose(module);
+		return false;
+	}
+	return true;
+}
+#endif /* PROXYSQL40 */
 
 #ifdef PROXYSQL40
 // Phase-B callback (Step 2 chassis ABI extension).  Only wired into the
@@ -128,6 +161,19 @@ bool fake_register_schemas(ProxySQL_PluginServices *services) {
 		};
 		services->register_table(table);
 	}
+	if (env("PHASE_B_SERVER_DISCOVERY") != nullptr && services != nullptr) {
+		if (services->register_server_module != nullptr &&
+			services->install_server_discovery_controller == nullptr &&
+			services->uninstall_server_discovery_controller == nullptr &&
+			services->post_server_desired_set == nullptr) {
+			fake_log_event("phase_b_server_discovery_availability");
+		}
+		if (fake_register_server_module(services)) {
+			fake_log_event("phase_b_server_module_registered");
+		} else {
+			fake_log_event("phase_b_server_module_rejected");
+		}
+	}
 	fake_log_event("phase_b");
 	return true;
 }
@@ -156,6 +202,16 @@ bool fake_init(ProxySQL_PluginServices *services) {
 		services->register_command(sql != nullptr ? sql : "PLUGIN FAKE NOOP", &fake_command);
 	}
 #ifdef PROXYSQL40
+	if (env("CHECK_SERVER_DISCOVERY_INIT") != nullptr && services != nullptr) {
+		if (services->register_server_module != nullptr &&
+			services->install_server_discovery_controller != nullptr &&
+			services->uninstall_server_discovery_controller != nullptr &&
+			services->post_server_desired_set != nullptr) {
+			fake_log_event("init_server_discovery_live");
+		} else {
+			fake_log_event("init_server_discovery_unavailable");
+		}
+	}
 	if (env("REGISTER_COMMAND_ALIAS") != nullptr &&
 	    services != nullptr &&
 	    services->register_command_alias != nullptr) {
@@ -206,6 +262,15 @@ bool fake_start() {
 	    fake_services->get_statsdb() == nullptr) {
 		return false;
 	}
+#ifdef PROXYSQL40
+	if (env("START_REGISTER_SERVER_MODULE") != nullptr) {
+		if (fake_register_server_module(fake_services)) {
+			fake_log_event("start_server_module_registered");
+		} else {
+			fake_log_event("start_server_module_rejected");
+		}
+	}
+#endif /* PROXYSQL40 */
 	fake_log_event("start");
 	return true;
 }

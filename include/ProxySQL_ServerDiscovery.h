@@ -43,13 +43,16 @@ struct ProxySQL_ServerDesiredSet {
 
 // Synchronous callbacks used by core while it commits configuration. The
 // opaque value is plugin-owned and is returned unchanged on every call.
-struct ProxySQL_ServerModuleHooks {
-	void (*runtime_configuration_installed)(void *, ProxySQL_ServerRuntimeSnapshot) { nullptr };
-};
-
 struct ProxySQL_ServerModuleTable {
 	ProxySQL_ServerProtocol protocol;
-	ProxySQL_ServerModuleHooks hooks;
+	std::string table_name;
+	std::string runtime_table_name;
+	std::string order_by;
+};
+
+struct ProxySQL_ServerModuleHooks {
+	ProxySQL_ServerProtocol protocol;
+	void (*runtime_configuration_installed)(void *, ProxySQL_ServerRuntimeSnapshot) { nullptr };
 	void *opaque { nullptr };
 };
 
@@ -63,7 +66,7 @@ public:
 };
 
 using proxysql_plugin_register_server_module_cb = bool (*)(
-	ProxySQL_ServerModuleTable *, void (*)(ProxySQL_ServerModuleTable *), void *module_handle);
+	ProxySQL_ServerModuleHooks *, void (*)(ProxySQL_ServerModuleHooks *), void *module_handle);
 using proxysql_plugin_install_server_discovery_controller_cb = bool (*)(
 	ProxySQL_ServerProtocol, ProxySQL_ServerDiscoveryController *,
 	void (*)(ProxySQL_ServerDiscoveryController *), void *module_handle);

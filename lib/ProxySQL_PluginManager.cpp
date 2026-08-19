@@ -15,6 +15,7 @@
 #include <cctype>
 #include <cstring>
 #include <dlfcn.h>
+#include <exception>
 #include <mutex>
 #include <shared_mutex>
 #include <strings.h>
@@ -228,8 +229,8 @@ void refresh_mysql_aws_locality_stats_service(SQLite3DB* statsdb) {
 }
 
 bool register_server_module_service(
-	ProxySQL_ServerModuleTable *module,
-	void (*destroy)(ProxySQL_ServerModuleTable *), void *module_handle) {
+	ProxySQL_ServerModuleHooks *module,
+	void (*destroy)(ProxySQL_ServerModuleHooks *), void *module_handle) {
 	if (g_registry_target == nullptr) {
 		proxy_warning("Server module registration attempted outside plugin init/register_schemas phase\n");
 		return false;
@@ -954,12 +955,46 @@ int server_protocol_index(ProxySQL_ServerProtocol protocol) {
 	return -1;
 }
 
+// A callback lease pins its module/controller object while its callback runs.
+// This guard is deliberately constructed before crossing any plugin boundary:
+// exceptions cannot leave retirement blocked on a leaked lease.
+class ScopedServerCallbackLease {
+public:
+	ScopedServerCallbackLease(std::mutex &mutex, std::condition_variable &cv,
+		size_t *leases, int index)
+		: mutex_(mutex), cv_(cv), leases_(leases), index_(index) {}
+	~ScopedServerCallbackLease() {
+		{
+			std::lock_guard<std::mutex> lock(mutex_);
+			--leases_[index_];
+		}
+		cv_.notify_all();
+	}
+	ScopedServerCallbackLease(const ScopedServerCallbackLease&) = delete;
+	ScopedServerCallbackLease& operator=(const ScopedServerCallbackLease&) = delete;
+
+private:
+	std::mutex &mutex_;
+	std::condition_variable &cv_;
+	size_t *leases_;
+	int index_;
+};
+
+void log_server_callback_exception(const char *boundary, const std::exception &e) {
+	proxy_warning("Server discovery %s callback threw: %s\n", boundary, e.what());
+}
+
+void log_server_callback_unknown_exception(const char *boundary) {
+	proxy_warning("Server discovery %s callback threw an unknown exception\n", boundary);
+}
+
 } // namespace
 
 bool ProxySQL_PluginManager::register_server_module(
-	ProxySQL_ServerModuleTable *module,
-	void (*destroy)(ProxySQL_ServerModuleTable *), void *module_handle) {
-	if (module == nullptr || destroy == nullptr || module->hooks.runtime_configuration_installed == nullptr) {
+	ProxySQL_ServerModuleHooks *module,
+	void (*destroy)(ProxySQL_ServerModuleHooks *), void *module_handle) {
+	if (module == nullptr || destroy == nullptr || module_handle == nullptr ||
+		module->runtime_configuration_installed == nullptr) {
 		return false;
 	}
 	const int index = server_protocol_index(module->protocol);
@@ -981,7 +1016,13 @@ bool ProxySQL_PluginManager::unregister_server_module(ProxySQL_ServerProtocol pr
 		server_modules_[index] = {};
 		server_discovery_cv_.wait(lock, [&] { return server_callback_leases_[index] == 0; });
 	}
-	retired.destroy(retired.module);
+	try {
+		retired.destroy(retired.module);
+	} catch (const std::exception &e) {
+		log_server_callback_exception("module destroy", e);
+	} catch (...) {
+		log_server_callback_unknown_exception("module destroy");
+	}
 	if (retired.module_handle != nullptr) dlclose(retired.module_handle);
 	return true;
 }
@@ -989,7 +1030,7 @@ bool ProxySQL_PluginManager::unregister_server_module(ProxySQL_ServerProtocol pr
 bool ProxySQL_PluginManager::install_server_discovery_controller(
 	ProxySQL_ServerProtocol protocol, ProxySQL_ServerDiscoveryController *controller,
 	void (*destroy)(ProxySQL_ServerDiscoveryController *), void *module_handle) {
-	if (controller == nullptr || destroy == nullptr) return false;
+	if (controller == nullptr || destroy == nullptr || module_handle == nullptr) return false;
 	const int index = server_protocol_index(protocol);
 	if (index < 0) return false;
 	ProxySQL_ServerRuntimeSnapshot snapshot {};
@@ -1005,12 +1046,15 @@ bool ProxySQL_PluginManager::install_server_discovery_controller(
 		}
 	}
 	if (notify) {
-		controller->runtime_configuration_installed(std::move(snapshot));
-		{
-			std::lock_guard<std::mutex> lock(server_discovery_mutex_);
-			--server_callback_leases_[index];
+		ScopedServerCallbackLease lease(server_discovery_mutex_, server_discovery_cv_,
+			server_callback_leases_, index);
+		try {
+			controller->runtime_configuration_installed(std::move(snapshot));
+		} catch (const std::exception &e) {
+			log_server_callback_exception("late controller runtime", e);
+		} catch (...) {
+			log_server_callback_unknown_exception("late controller runtime");
 		}
-		server_discovery_cv_.notify_all();
 	}
 	return true;
 }
@@ -1026,8 +1070,20 @@ bool ProxySQL_PluginManager::uninstall_server_discovery_controller(ProxySQL_Serv
 		server_controllers_[index] = {};
 		server_discovery_cv_.wait(lock, [&] { return server_callback_leases_[index] == 0; });
 	}
-	retired.controller->shutdown();
-	retired.destroy(retired.controller);
+	try {
+		retired.controller->shutdown();
+	} catch (const std::exception &e) {
+		log_server_callback_exception("controller shutdown", e);
+	} catch (...) {
+		log_server_callback_unknown_exception("controller shutdown");
+	}
+	try {
+		retired.destroy(retired.controller);
+	} catch (const std::exception &e) {
+		log_server_callback_exception("controller destroy", e);
+	} catch (...) {
+		log_server_callback_unknown_exception("controller destroy");
+	}
 	if (retired.module_handle != nullptr) dlclose(retired.module_handle);
 	return true;
 }
@@ -1042,12 +1098,15 @@ bool ProxySQL_PluginManager::post_server_desired_set(ProxySQL_ServerDesiredSet d
 		if (controller != nullptr) ++server_callback_leases_[index];
 	}
 	if (controller != nullptr) {
-		controller->desired_set_applied(desired_set.generation, false);
-		{
-			std::lock_guard<std::mutex> lock(server_discovery_mutex_);
-			--server_callback_leases_[index];
+		ScopedServerCallbackLease lease(server_discovery_mutex_, server_discovery_cv_,
+			server_callback_leases_, index);
+		try {
+			controller->desired_set_applied(desired_set.generation, false);
+		} catch (const std::exception &e) {
+			log_server_callback_exception("controller desired-set", e);
+		} catch (...) {
+			log_server_callback_unknown_exception("controller desired-set");
 		}
-		server_discovery_cv_.notify_all();
 	}
 	return true;
 }
@@ -1055,7 +1114,7 @@ bool ProxySQL_PluginManager::post_server_desired_set(ProxySQL_ServerDesiredSet d
 void ProxySQL_PluginManager::install_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot) {
 	const int index = server_protocol_index(snapshot.protocol);
 	if (index < 0) return;
-	ProxySQL_ServerModuleTable *module = nullptr;
+	ProxySQL_ServerModuleHooks *module = nullptr;
 	ProxySQL_ServerDiscoveryController *controller = nullptr;
 	{
 		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
@@ -1065,18 +1124,27 @@ void ProxySQL_PluginManager::install_server_runtime_snapshot(ProxySQL_ServerRunt
 		controller = server_controllers_[index].controller;
 		if (module != nullptr || controller != nullptr) ++server_callback_leases_[index];
 	}
-	if (module != nullptr) {
-		module->hooks.runtime_configuration_installed(module->opaque, snapshot);
-	}
-	if (controller != nullptr) {
-		controller->runtime_configuration_installed(std::move(snapshot));
-	}
 	if (module != nullptr || controller != nullptr) {
-		{
-			std::lock_guard<std::mutex> lock(server_discovery_mutex_);
-			--server_callback_leases_[index];
+		ScopedServerCallbackLease lease(server_discovery_mutex_, server_discovery_cv_,
+			server_callback_leases_, index);
+		if (module != nullptr) {
+			try {
+				module->runtime_configuration_installed(module->opaque, snapshot);
+			} catch (const std::exception &e) {
+				log_server_callback_exception("module runtime", e);
+			} catch (...) {
+				log_server_callback_unknown_exception("module runtime");
+			}
 		}
-		server_discovery_cv_.notify_all();
+		if (controller != nullptr) {
+			try {
+				controller->runtime_configuration_installed(std::move(snapshot));
+			} catch (const std::exception &e) {
+				log_server_callback_exception("controller runtime", e);
+			} catch (...) {
+				log_server_callback_unknown_exception("controller runtime");
+			}
+		}
 	}
 }
 #endif /* PROXYSQL40 */
