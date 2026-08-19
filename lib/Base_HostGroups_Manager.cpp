@@ -3343,7 +3343,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 					if (resultset2) { delete resultset2; resultset2=NULL; }
 					free(query2);
 				}
-				GloAdmin->load_mysql_servers_to_runtime(); // LOAD MYSQL SERVERS TO RUNTIME
+				GloAdmin->load_mysql_servers_to_runtime({}, {}, {}, false); // monitor-internal reload
 				GloAdmin->mysql_servers_wrunlock();
 			} else {
 				// there is a server in writer hostgroup, let check the status of present and not present hosts
@@ -3454,7 +3454,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 						if (resultset2) { delete resultset2; resultset2=NULL; }
 						free(query2);
 					}
-					GloAdmin->load_mysql_servers_to_runtime(); // LOAD MYSQL SERVERS TO RUNTIME
+					GloAdmin->load_mysql_servers_to_runtime({}, {}, {}, false); // monitor-internal reload
 					GloAdmin->mysql_servers_wrunlock();
 				}
 			}
@@ -3531,7 +3531,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 					if (resultset2) { delete resultset2; resultset2=NULL; }
 					free(query2);
 				}
-				GloAdmin->load_mysql_servers_to_runtime(); // LOAD MYSQL SERVERS TO RUNTIME
+				GloAdmin->load_mysql_servers_to_runtime({}, {}, {}, false); // monitor-internal reload
 				GloAdmin->mysql_servers_wrunlock();
 			}
 			break;

@@ -2224,8 +2224,13 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 						GloAdmin->mysql_servers_wrlock();
 						std::unique_ptr<SQLite3_result> runtime_mysql_servers_resultset = get_SQLite3_resulset(result);
 #ifdef PROXYSQL40
-						const uint64_t module_generation = proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::mysql);
-						if (!proxysql_prepare_server_module_cluster_runtime(ProxySQL_ServerProtocol::mysql,
+						const bool module_runtime_supported = module_status == module_fetch_status::success;
+						const uint64_t module_generation = module_runtime_supported
+							? proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::mysql) : 0;
+						// An old v1 peer has no dynamic-table endpoint.  Install its core
+						// controller snapshot, but retain this node's affiliated policy
+						// rather than preparing/committing it against absent payload.
+						if (module_runtime_supported && !proxysql_prepare_server_module_cluster_runtime(ProxySQL_ServerProtocol::mysql,
 								module_generation, *runtime_mysql_servers_resultset, module_tables_v1, module_error)) {
 							proxy_error("Cluster: preparing MySQL server-module v1 runtime failed: %s\n", module_error.c_str());
 							GloAdmin->mysql_servers_wrunlock();
@@ -2247,7 +2252,11 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 							{ nullptr, {} }, true, true
 						);
 #ifdef PROXYSQL40
-						proxysql_commit_server_runtime_install(std::move(installed_snapshot));
+						if (module_runtime_supported) {
+							proxysql_commit_server_runtime_install(std::move(installed_snapshot));
+						} else {
+							proxysql_install_active_server_runtime_snapshot(std::move(installed_snapshot));
+						}
 #endif
 
 						if (GloProxyCluster->cluster_mysql_servers_save_to_disk == true) {
@@ -3821,8 +3830,10 @@ void ProxySQL_Cluster::pull_runtime_pgsql_servers_from_peer(const runtime_pgsql_
 				GloAdmin->pgsql_servers_wrlock();
 				std::unique_ptr<SQLite3_result> runtime_pgsql_servers_resultset = get_SQLite3_resulset(result);
 #ifdef PROXYSQL40
-				const uint64_t module_generation = proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::pgsql);
-				if (!proxysql_prepare_server_module_cluster_runtime(ProxySQL_ServerProtocol::pgsql,
+				const bool module_runtime_supported = module_status == module_fetch_status::success;
+				const uint64_t module_generation = module_runtime_supported
+					? proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::pgsql) : 0;
+				if (module_runtime_supported && !proxysql_prepare_server_module_cluster_runtime(ProxySQL_ServerProtocol::pgsql,
 						module_generation, *runtime_pgsql_servers_resultset, module_tables_v1, module_error)) {
 					proxy_error("Cluster: preparing PostgreSQL server-module v1 runtime failed: %s\n", module_error.c_str());
 					GloAdmin->pgsql_servers_wrunlock();
@@ -3844,7 +3855,11 @@ void ProxySQL_Cluster::pull_runtime_pgsql_servers_from_peer(const runtime_pgsql_
 					{ nullptr, {} }, true, true
 				);
 #ifdef PROXYSQL40
-				proxysql_commit_server_runtime_install(std::move(installed_snapshot));
+				if (module_runtime_supported) {
+					proxysql_commit_server_runtime_install(std::move(installed_snapshot));
+				} else {
+					proxysql_install_active_server_runtime_snapshot(std::move(installed_snapshot));
+				}
 #endif
 
 				if (GloProxyCluster->cluster_pgsql_servers_save_to_disk == true) {

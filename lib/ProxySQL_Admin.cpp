@@ -8148,7 +8148,8 @@ void ProxySQL_Admin::load_scheduler_to_runtime() {
 }
 
 void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers, 
-	const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server, const mysql_servers_v2_checksum_t& peer_mysql_server_v2) {
+	const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server, const mysql_servers_v2_checksum_t& peer_mysql_server_v2,
+	bool emit_runtime_install) {
 	// make sure that the caller has called mysql_servers_wrlock()
 	ProxySQL_ServerRuntimeSnapshot installed_snapshot {};
 	installed_snapshot.protocol = ProxySQL_ServerProtocol::mysql;
@@ -8188,9 +8189,9 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
-		if (!prepare_registered_server_module_runtime(admindb, ProxySQL_ServerProtocol::mysql,
+		if (emit_runtime_install && !prepare_registered_server_module_runtime(admindb, ProxySQL_ServerProtocol::mysql,
 			installed_snapshot.generation, resultset_servers, installed_snapshot)) return;
-		runtime_install_prepared = true;
+		runtime_install_prepared = emit_runtime_install;
 		MyHGM->servers_add(resultset_servers);
 	}
 	// memory leak was detected here. The following few lines fix that
@@ -8420,7 +8421,8 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 }
 
 void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t& incoming_pgsql_servers,
-	const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server, const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2) {
+	const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server, const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2,
+	bool emit_runtime_install) {
 	// make sure that the caller has called pgsql_servers_wrlock()
 	ProxySQL_ServerRuntimeSnapshot installed_snapshot {};
 	installed_snapshot.protocol = ProxySQL_ServerProtocol::pgsql;
@@ -8452,9 +8454,9 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 		proxy_error("Error on %s : %s\n", query, error);
 	}
 	else {
-		if (!prepare_registered_server_module_runtime(admindb, ProxySQL_ServerProtocol::pgsql,
+		if (emit_runtime_install && !prepare_registered_server_module_runtime(admindb, ProxySQL_ServerProtocol::pgsql,
 			installed_snapshot.generation, resultset_servers, installed_snapshot)) return;
-		runtime_install_prepared = true;
+		runtime_install_prepared = emit_runtime_install;
 		PgHGM->servers_add(resultset_servers);
 	}
 	// memory leak was detected here. The following few lines fix that

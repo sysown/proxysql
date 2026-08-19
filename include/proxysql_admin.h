@@ -717,7 +717,7 @@ class ProxySQL_Admin {
 	void flush_ldap_variables__from_memory_to_disk();
 	void flush_pgsql_variables__from_memory_to_disk();
 	void load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers = {}, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server = {},
-		const mysql_servers_v2_checksum_t& peer_mysql_server_v2 = {});
+		const mysql_servers_v2_checksum_t& peer_mysql_server_v2 = {}, bool emit_runtime_install = true);
 	void save_mysql_servers_from_runtime();
 	/**
 	 * @brief Performs the load to runtime of the current configuration in 'main' for 'mysql_query_rules' and
@@ -895,7 +895,7 @@ class ProxySQL_Admin {
 	void save_pgsql_users_runtime_to_database(bool _runtime);
 
 	void load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t& incoming_pgsql_servers = {}, const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server = {},
-		const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2 = {});
+		const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2 = {}, bool emit_runtime_install = true);
 
 	char* load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset = NULL, 
 		SQLite3_result* SQLite3_query_rules_fast_routing_resultset = NULL, const std::string& checksum = "", const time_t epoch = 0);

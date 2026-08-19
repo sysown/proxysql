@@ -3,9 +3,12 @@
 #include "ProxySQL_ServerDiscovery.h"
 
 #include <cstdlib>
+#include <atomic>
+#include <chrono>
 #include <fstream>
 #include <memory>
 #include <string>
+#include <thread>
 #include <unistd.h>
 #include <vector>
 
@@ -31,7 +34,7 @@ size_t occurrences(const std::string& value, const std::string& needle) {
 } // namespace
 
 int main() {
-	plan(10);
+	plan(13);
 	char path[] = "/tmp/proxysql_server_runtime_install.XXXXXX";
 	const int fd = mkstemp(path);
 	if (fd >= 0) close(fd);
@@ -85,6 +88,30 @@ int main() {
 	ok(proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::pgsql) == pgsql_candidate + 1 &&
 		proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::mysql) == candidate + 2,
 		"MySQL and PostgreSQL installed generations are independent and monotonic");
+
+	// Keep the first preparation open while another MySQL installation arrives.
+	// The second must not run module prepare against the same candidate then be
+	// retagged at commit; the per-protocol reservation serializes the full pair.
+	ProxySQL_ServerRuntimeSnapshot first_concurrent {};
+	first_concurrent.protocol = ProxySQL_ServerProtocol::mysql;
+	ok(proxysql_prepare_server_runtime_install(first_concurrent),
+		"first concurrent preparation reserves the MySQL install generation");
+	std::atomic<bool> second_prepared {false};
+	std::thread second([&] {
+		ProxySQL_ServerRuntimeSnapshot second_concurrent {};
+		second_concurrent.protocol = ProxySQL_ServerProtocol::mysql;
+		if (proxysql_prepare_server_runtime_install(second_concurrent)) {
+			second_prepared.store(true, std::memory_order_release);
+			proxysql_commit_server_runtime_install(std::move(second_concurrent));
+		}
+	});
+	std::this_thread::sleep_for(std::chrono::milliseconds(30));
+	ok(!second_prepared.load(std::memory_order_acquire),
+		"second MySQL preparation cannot pass the prepare-to-commit reservation");
+	proxysql_commit_server_runtime_install(std::move(first_concurrent));
+	second.join();
+	ok(second_prepared.load(std::memory_order_acquire),
+		"second preparation runs only after the first installation commits");
 
 	(void)proxysql_stop_configured_plugins(manager, error);
 	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");

@@ -91,6 +91,10 @@ public:
 	bool prepare_server_module_runtime(const ProxySQL_ServerModuleSnapshot& snapshot,
 		std::vector<ProxySQL_ServerHostgroupClaim>& claims, std::string& error);
 	void commit_server_module_runtime(ProxySQL_ServerProtocol protocol, uint64_t generation);
+	// Runs the module commit and legacy/controller notification under one
+	// callback lease.  Runtime installation uses this instead of two separate
+	// calls so a retired DSO cannot disappear between them.
+	void commit_and_install_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot);
 	SQLite3_result* server_module_runtime_table_snapshot(
 		ProxySQL_ServerProtocol protocol, const char* table_name);
 	bool unregister_server_module(ProxySQL_ServerProtocol protocol);
@@ -173,6 +177,17 @@ private:
 		ProxySQL_ServerModuleHooks *module { nullptr };
 		void (*destroy)(ProxySQL_ServerModuleHooks *) { nullptr };
 		void *module_handle { nullptr };
+		// Frozen ABI-9 callback modules expose only the three-field prefix.
+		// Cache every callable while registration can safely classify that prefix;
+		// steady-state code must never inspect an appended member through module.
+		bool legacy_callback_only { false };
+		void (*legacy_runtime_configuration_installed)(void *, ProxySQL_ServerRuntimeSnapshot) { nullptr };
+		bool (*prepare_runtime)(void *, const ProxySQL_ServerModuleSnapshot&,
+			std::vector<ProxySQL_ServerHostgroupClaim>&, std::string&) { nullptr };
+		void (*commit_runtime)(void *, uint64_t) { nullptr };
+		SQLite3_result* (*runtime_table_snapshot)(void *, const char*) { nullptr };
+		void (*shutdown)(void *) { nullptr };
+		void *opaque { nullptr };
 		std::vector<ProxySQL_ServerModuleTable> tables {};
 	};
 	struct registered_server_controller_t {
@@ -262,6 +277,7 @@ bool proxysql_prepare_active_server_module_runtime(const ProxySQL_ServerModuleSn
 	std::vector<ProxySQL_ServerHostgroupClaim>& claims, std::string& error);
 void proxysql_commit_active_server_module_runtime(ProxySQL_ServerProtocol protocol, uint64_t generation);
 void proxysql_install_active_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot);
+void proxysql_commit_and_install_active_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot);
 SQLite3_result* proxysql_active_server_module_runtime_table_snapshot(
 	ProxySQL_ServerProtocol protocol, const char* table_name);
 

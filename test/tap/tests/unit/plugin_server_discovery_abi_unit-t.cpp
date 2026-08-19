@@ -1,6 +1,7 @@
 #include "ProxySQL_Plugin.h"
 #include "ProxySQL_PluginManager.h"
 #include "ProxySQL_ServerDiscovery.h"
+#include "sqlite3db.h"
 #include "tap.h"
 
 #include <atomic>
@@ -24,6 +25,9 @@
 #endif
 #ifndef PROXYSQL_FAKE_PLUGIN_ABI8_PATH
 #error "PROXYSQL_FAKE_PLUGIN_ABI8_PATH must be defined"
+#endif
+#ifndef PROXYSQL_FAKE_SERVER_MODULE_ABI9_PREFIX_PATH
+#error "PROXYSQL_FAKE_SERVER_MODULE_ABI9_PREFIX_PATH must be defined"
 #endif
 
 char g_fake_admin_db = '\0';
@@ -332,6 +336,30 @@ void test_abi8_fixture_and_invalid_registration() {
 		&destroy_controller, nullptr), "reject null retained controller handle");
 	delete controller;
 	dlclose(controller_handle);
+}
+
+void test_frozen_server_module_abi9_prefix() {
+	ProxySQL_PluginManager mgr;
+	void *handle = open_retained_module(PROXYSQL_FAKE_SERVER_MODULE_ABI9_PREFIX_PATH);
+	using create_cb = ProxySQL_ServerModuleHooks *(*)();
+	using destroy_cb = void (*)(ProxySQL_ServerModuleHooks *);
+	auto create = handle == nullptr ? nullptr : reinterpret_cast<create_cb>(dlsym(handle,
+		"proxysql_fake_server_module_abi9_prefix_create"));
+	auto destroy = handle == nullptr ? nullptr : reinterpret_cast<destroy_cb>(dlsym(handle,
+		"proxysql_fake_server_module_abi9_prefix_destroy"));
+	ProxySQL_ServerModuleHooks *module = create == nullptr ? nullptr : create();
+	ok(module != nullptr && destroy != nullptr && mgr.register_server_module(module, destroy, handle),
+		"register a DSO object allocated as the frozen ABI-9 server-module prefix");
+	std::vector<ProxySQL_ServerHostgroupClaim> claims;
+	std::string error;
+	ProxySQL_ServerModuleSnapshot snapshot {};
+	snapshot.runtime.protocol = ProxySQL_ServerProtocol::mysql;
+	snapshot.runtime.generation = 42;
+	ok(mgr.prepare_server_module_runtime(snapshot, claims, error),
+		"prepare does not dereference appended callbacks of frozen ABI-9 module");
+	mgr.commit_server_module_runtime(ProxySQL_ServerProtocol::mysql, 42);
+	ok(mgr.unregister_server_module(ProxySQL_ServerProtocol::mysql),
+		"commit and retirement complete without touching frozen ABI-9 tail");
 }
 
 void test_service_phase_availability() {
@@ -747,8 +775,9 @@ void test_controller_callback_lease_barrier() {
 } // namespace
 
 int main() {
-	plan(58);
+	plan(61);
 	test_abi8_fixture_and_invalid_registration();
+	test_frozen_server_module_abi9_prefix();
 	test_service_phase_availability();
 	test_steady_state_desired_set_service_lifetime();
 	test_nested_steady_state_post_during_unpublish();

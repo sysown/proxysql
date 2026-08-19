@@ -360,6 +360,7 @@ TEST_HELPERS_DIR := $(PROXYSQL_PATH)/test/tap/test_helpers
 FAKE_PLUGIN_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin.so
 FAKE_PLUGIN2_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin2.so
 FAKE_PLUGIN_ABI8_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin_abi8.so
+FAKE_SERVER_MODULE_ABI9_PREFIX_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_server_module_abi9_prefix.so
 MYSQLX_PLUGIN_SO := $(PROXYSQL_PATH)/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
 MYSQLX_PLUGIN_OPTZ := -O0 -ggdb $(filter -DDEBUG,$(OPT))
 ODIR := obj
@@ -404,6 +405,9 @@ $(FAKE_PLUGIN2_SO): $(TEST_HELPERS_DIR)/fake_plugin.cpp $(PROXYSQL_PATH)/include
 
 $(FAKE_PLUGIN_ABI8_SO): $(TEST_HELPERS_DIR)/fake_plugin_abi8.cpp | $(TEST_HELPERS_DIR)
 	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(IDIRS) -ldl
+
+$(FAKE_SERVER_MODULE_ABI9_PREFIX_SO): $(TEST_HELPERS_DIR)/fake_server_module_abi9_prefix.cpp $(PROXYSQL_PATH)/include/ProxySQL_ServerDiscovery.h | $(TEST_HELPERS_DIR)
+	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(IDIRS)
 
 # Keep on-demand unit-test library rebuilds aligned with the default top-level
 # feature set so incremental rebuilds do not mix incompatible objects.
@@ -616,11 +620,12 @@ plugin_runtime_views_unit-t: plugin_runtime_views_unit-t.cpp $(ODIR)/tap.o $(ODI
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
-plugin_server_discovery_abi_unit-t: plugin_server_discovery_abi_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(FAKE_PLUGIN_ABI8_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+plugin_server_discovery_abi_unit-t: plugin_server_discovery_abi_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(FAKE_PLUGIN_ABI8_SO) $(FAKE_SERVER_MODULE_ABI9_PREFIX_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
 		-DPROXYSQL_FAKE_PLUGIN2_PATH=\"$(FAKE_PLUGIN2_SO)\" \
 		-DPROXYSQL_FAKE_PLUGIN_ABI8_PATH=\"$(FAKE_PLUGIN_ABI8_SO)\" \
+		-DPROXYSQL_FAKE_SERVER_MODULE_ABI9_PREFIX_PATH=\"$(FAKE_SERVER_MODULE_ABI9_PREFIX_SO)\" \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
