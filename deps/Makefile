@@ -388,7 +388,7 @@ pcre2/pcre2/.libs/libpcre2-8.a:
 	cd pcre2/pcre2 && ./configure --disable-shared --enable-static \
 		--enable-pcre2-8 --disable-pcre2-16 --disable-pcre2-32 \
 		--disable-jit --disable-pcre2test-libreadline
-	cd pcre2/pcre2 && CC=${CC} CXX=${CXX} ${MAKE}
+	cd pcre2/pcre2 && CC=${CC} CXX=${CXX} ${MAKE} libpcre2-8.la
 
 pcre2: pcre2/pcre2/.libs/libpcre2-8.a
 postgresql/postgresql/src/interfaces/libpq/libpq.a:
@@ -459,7 +459,7 @@ cleanall:
 	cd mariadb-client-library && rm -rf mariadb-connector-c-*/ || true
 	cd libconfig && rm -rf libconfig-*/ || true
 	cd re2 && rm -rf re2-*/ || true
-	cd pcre2 && rm -rf pcre2-*/ || true
+	cd pcre2 && rm -rf pcre2-*/ pcre2 || true
 	cd sqlite3 && rm -rf sqlite-amalgamation-*/ || true
 	cd clickhouse-cpp/ && rm -rf clickhouse-cpp-*/ || true
 	cd lz4 && rm -rf lz4-*/ || true
