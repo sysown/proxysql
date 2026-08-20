@@ -184,10 +184,9 @@ int main(int, char**) {
 	setFloor(admin.get(), orig_floor.c_str()); // restore original floor
 
 	// (9) Load-time validation: a malformed SCRAM verifier is rejected at LOAD (not silently stored
-	// as plaintext) — so it must NOT appear in the runtime user set.
-	execAdmin(admin.get(), "INSERT INTO pgsql_users (username,password,active,default_hostgroup) "
-	                       "VALUES ('bad_verifier_user','SCRAM-SHA-256$notavalidverifier',1,0)");
-	execAdmin(admin.get(), "LOAD PGSQL USERS TO RUNTIME");
+	// as plaintext) — so it must NOT appear in the runtime user set. addUser() BAIL_OUTs if the admin
+	// INSERT/LOAD themselves fail, so the count-0 assertion below cannot pass vacuously.
+	addUser(admin.get(), "bad_verifier_user", "SCRAM-SHA-256$notavalidverifier");
 	{
 		PGresult* r = PQexec(admin.get(),
 			"SELECT count(*) FROM runtime_pgsql_users WHERE username='bad_verifier_user'");
