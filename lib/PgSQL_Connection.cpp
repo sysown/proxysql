@@ -444,29 +444,25 @@ handler_again:
 			break;
 		}
 
-		if (result_type == 0) {
+		// Issue #6109: the fetch produced nothing to dispatch. fetch_result_cont()
+		// returns from its PQconsumeInput() failure without assigning result_type, so
+		// the dispatch below would act on the previous iteration's value; its other
+		// empty returns set async_exit_status and were handled above. The transport may
+		// also be gone with a result already taken (result_type 1 or 2 and a NULL
+		// pgsql_result), which libpq reports as CONNECTION_BAD.
+		//
+		// End the cycle either way, so async_query() returns -1 and the session
+		// destroys the connection and unplugs the dead fd. Not is_error_present():
+		// that is also true for an ordinary backend ERROR, which must keep flowing
+		// through the PGRES_FATAL_ERROR arm below. pgsql_result == NULL keeps a pending
+		// multi-statement result dispatching first. is_copy_out is cleared because a
+		// backend dying mid-COPY would otherwise reach the end state with it still set.
+		if (result_type == 0 || (pgsql_result == NULL && PQstatus(pgsql_conn) == CONNECTION_BAD)) {
 			is_copy_out = false;
 			if (!is_error_present()) {
 				set_error(PGSQL_ERROR_CODES::ERRCODE_CONNECTION_FAILURE,
-					"failed to read the reply from the backend", false);
+					"backend connection lost mid-result", false);
 			}
-			NEXT_IMMEDIATE(fetch_result_end_st);
-		}
-
-		// Issue #6109: the backend's transport is gone (libpq sets CONNECTION_BAD only on
-		// connection loss). fetch_result_cont() returns from its PQconsumeInput()
-		// failure without assigning result_type, so the dispatch below would act on
-		// the previous iteration's value. End the cycle instead: error_info is
-		// already set, so async_query() returns -1 and the session destroys the
-		// connection and unplugs the dead fd.
-		//
-		// Not is_error_present(): that is also true for an ordinary backend ERROR,
-		// which must keep flowing through the PGRES_FATAL_ERROR arm below.
-		// Guarded on pgsql_result == NULL so a pending multi-statement result is
-		// dispatched first. is_copy_out is cleared because a backend dying mid-COPY
-		// would otherwise reach the end state with it still set.
-		if (pgsql_result == NULL && PQstatus(pgsql_conn) == CONNECTION_BAD) {
-			is_copy_out = false;
 			NEXT_IMMEDIATE(fetch_result_end_st);
 		}
 
