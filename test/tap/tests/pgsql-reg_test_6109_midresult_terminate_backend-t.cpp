@@ -15,6 +15,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <sys/select.h>
 #include <unistd.h>
 #include "libpq-fe.h"
 #include "command_line.h"
@@ -85,11 +86,36 @@ int main(int, char**) {
     // from a missed one is elapsed time: draining the buffer takes milliseconds,
     // while reading all 20M rows one PGresult at a time does not. Unbounded, a missed
     // kill would look like a hung test rather than a failed one.
+    // The wait is asynchronous rather than a bare PQgetResult() loop. PQgetResult()
+    // blocks until a result arrives or the connection ends, and the clock is only
+    // read between calls, so a proxy that stalls without closing would hang here
+    // until the harness timeout instead of reporting drain_bounded_out - which is
+    // precisely the regression this test exists to catch.
     const auto drain_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    const int victim_fd = PQsocket(victim.get());
     std::string err;
     int rows_after_kill = 0;
     bool drain_bounded_out = false;
     for (;;) {
+        while (PQisBusy(victim.get())) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= drain_deadline) { drain_bounded_out = true; break; }
+            int remain = (int)std::chrono::duration_cast<std::chrono::milliseconds>(
+                             drain_deadline - now).count();
+            if (remain > 250) remain = 250;
+            fd_set rf;
+            FD_ZERO(&rf);
+            FD_SET(victim_fd, &rf);
+            struct timeval tv;
+            tv.tv_sec  = remain / 1000;
+            tv.tv_usec = (remain % 1000) * 1000;
+            if (select(victim_fd + 1, &rf, nullptr, nullptr, &tv) <= 0) continue;
+            if (PQconsumeInput(victim.get()) == 0) {
+                if (err.empty()) err = PQerrorMessage(victim.get());
+                break;                       // peer gone: PQgetResult() will not block
+            }
+        }
+        if (drain_bounded_out) break;
         PGresult* r = PQgetResult(victim.get());
         if (!r) break;
         const ExecStatusType st = PQresultStatus(r);

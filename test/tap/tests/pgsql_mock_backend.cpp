@@ -268,8 +268,12 @@ bool PgSQL_Mock_Backend::start() {
 
 void PgSQL_Mock_Backend::stop() {
     if (!running_.exchange(false)) return;
-    if (listen_fd_ >= 0) { ::shutdown(listen_fd_, SHUT_RDWR); ::close(listen_fd_); listen_fd_ = -1; }
+    // shutdown() wakes the acceptor out of accept(); the fd is closed only after that
+    // thread has been joined. Closing first would let the acceptor call accept() on a
+    // descriptor number another thread could already have reused.
+    if (listen_fd_ >= 0) ::shutdown(listen_fd_, SHUT_RDWR);
     if (acceptor_.joinable()) acceptor_.join();
+    if (listen_fd_ >= 0) { ::close(listen_fd_); listen_fd_ = -1; }
     for (auto& t : workers_) if (t.joinable()) t.join();
     workers_.clear();
 }

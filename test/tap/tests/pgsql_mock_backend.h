@@ -25,7 +25,7 @@
  *   mock.set_script({ step_expect_startup(), step_send(handshake),
  *                     step_expect_query(), step_send(partial_result),
  *                     step_close() });
- *   // ... register mock.host() : mock.port() in pgsql_servers, drive traffic ...
+ *   // ... register pgmb_local_ip_towards(...) : mock.port() in pgsql_servers ...
  *   mock.stop();
  *
  * A script is a list of Steps executed in order per accepted connection. The
@@ -134,11 +134,10 @@ public:
     bool start();
     void stop();
 
-    // The address ProxySQL should be pointed at. host() is this container's
-    // routable IP on the shared Docker network, discovered at runtime rather
-    // than via Docker DNS so the test does not depend on how the runner
-    // container's name or hostname is registered.
-    const std::string& host() const { return host_; }
+    // The port ProxySQL should be pointed at. For the address, call
+    // pgmb_local_ip_towards() below: it discovers this container's routable IP at
+    // runtime rather than relying on Docker DNS, so the test does not depend on how
+    // the runner container's name or hostname is registered.
     uint16_t port() const { return port_; }
 
     // Replace the script future connections will run. Connections already in
@@ -165,7 +164,6 @@ private:
 
     int listen_fd_ = -1;
     uint16_t port_ = 0;
-    std::string host_;
     std::thread acceptor_;
     std::vector<std::thread> workers_;
     std::atomic<bool> running_{false};

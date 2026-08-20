@@ -479,13 +479,20 @@ static void runDisconnectScenario(PGconn*& admin, PGConnPtr& adminOwner,
                                   const std::vector<Step>& script,
                                   const char* query = "SELECT 1") {
     if (g_proxy_down) {
-        for (int i = 0; i < 3; i++)
+        for (int i = 0; i < 4; i++)
             ok(false, "%s: not run -- ProxySQL was already down from '%s'",
                label, g_proxy_down_where.c_str());
         return;
     }
 
-    resetMockPool(admin);
+    // A failed pool reset is reported, not ignored: the next scenario would then be
+    // served from a connection left over by the previous one, its script would never
+    // run, and its verdict would describe the previous scenario instead.
+    if (!resetMockPool(admin)) {
+        for (int i = 0; i < 4; i++)
+            ok(false, "%s: not run -- could not reset the mock hostgroup's pool", label);
+        return;
+    }
     mock.set_script(script);
     mock.reset_stats();
 
@@ -506,6 +513,15 @@ static void runDisconnectScenario(PGconn*& admin, PGConnPtr& adminOwner,
        "%s: client got a clean error, not a hang and not a silent truncation "
        "(outcome=%s, client=%s)",
        label, outcomeName(out), oneLine(err).c_str());
+
+    // Proves the scenario actually ran. A query that never reached the mock -- routing
+    // failure, shunned server, a stale pooled connection -- still yields ERRORED and an
+    // empty pool, so without this the other assertions can all pass vacuously.
+    const int observed = mock.queries_observed();
+    ok(observed > 0,
+       "%s: the mock backend received the query and ran the script "
+       "(queries observed=%d, connections accepted=%d)",
+       label, observed, mock.connections_accepted());
 
     // Only meaningful while the proxy is up; a dead proxy reports 0 connections
     // for every hostgroup, which would read as a pass.
@@ -626,7 +642,7 @@ int main(int, char**) {
     // Query-cache corollary:                          2
     // Truncated frame:                                3
     // Final pool cleanliness:                         1
-    plan(27);
+    plan(33);
 
     if (cl.getEnv()) return exit_status();
 
