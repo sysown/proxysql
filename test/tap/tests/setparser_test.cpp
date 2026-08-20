@@ -13,8 +13,8 @@
 
 #include "re2/re2.h"
 #include "re2/regexp.h"
-#include "util/test.h"
 #include "MySQL_Set_Stmt_Parser.h"
+#include <cstdlib>
 #include <string>
 #include <vector>
 #include <map>
@@ -40,6 +40,17 @@
 #include "MySQL_LDAP_Authentication.hpp"
 MySQL_LDAP_Authentication *GloMyLdapAuth = nullptr;
 // ******************************************************************************************
+
+static void check_failed(const char* expression, const char* file, int line) {
+	std::cerr << file << ':' << line << ": check failed: " << expression << std::endl;
+	std::abort();
+}
+
+#define CHECK(expression) \
+	do { if (!(expression)) check_failed(#expression, __FILE__, __LINE__); } while (0)
+#define CHECK_EQ(left, right) CHECK((left) == (right))
+#define TEST(suite, name) static void suite##_##name()
+#define arraysize(array) (sizeof(array) / sizeof((array)[0]))
 
 bool iequals(const std::string& a, const std::string& b)
 {
@@ -275,4 +286,15 @@ static Test multiple[] = {
 
 TEST(TestParse, MULTIPLE) {
   TestParse(multiple, arraysize(multiple), "multiple");
+}
+
+int main() {
+	TestParse_SET_SQL_MODE();
+	TestParse_SET_TIME_ZONE();
+	TestParse_SET_SESSION_TRACK_GTIDS();
+	TestParse_SET_CHARACTER_SET_RESULTS();
+	TestParse_SET_NAMES();
+	TestParse_SET_VARIOUS();
+	TestParse_MULTIPLE();
+	return EXIT_SUCCESS;
 }

@@ -52,7 +52,13 @@ tap: test_deps
 	cd tap && CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: tests
-tests: pgsql_user_sync_assets tap test_deps
+# `tests` contains the test_mysqlx_admin_tables-t bridge, which recursively
+# builds its real binary under tests/unit.  Building that bridge concurrently
+# with unit_tests launches two independent make processes in tests/unit and
+# races on the shared obj/test_*.o helper files.  Finish the canonical unit
+# build first so the bridge only creates its symlink to an already-built
+# binary.
+tests: unit_tests pgsql_user_sync_assets tap test_deps
 	cd tests && CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
 
 .PHONY: tests_no_infra

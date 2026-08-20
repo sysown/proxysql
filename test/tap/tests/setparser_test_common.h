@@ -10,7 +10,6 @@
 
 #include "re2/re2.h"
 #include "re2/regexp.h"
-#include "util/test.h"
 #include "MySQL_Set_Stmt_Parser.h"
 #include <string>
 #include <vector>
@@ -28,6 +27,16 @@ using namespace std;
 
 MySQL_LDAP_Authentication *GloMyLdapAuth = nullptr;
 // ******************************************************************************************
+
+static void check_failed(const char* expression, const char* file, int line) {
+	std::cerr << file << ':' << line << ": check failed: " << expression << std::endl;
+	std::abort();
+}
+
+#define CHECK(expression) \
+	do { if (!(expression)) check_failed(#expression, __FILE__, __LINE__); } while (0)
+#define CHECK_EQ(left, right) CHECK((left) == (right))
+#define arraysize(array) (sizeof(array) / sizeof((array)[0]))
 
 bool iequals(const std::string& a, const std::string& b)
 {
@@ -282,4 +291,3 @@ static Test multiple[] = {
     }
   },
 };
-

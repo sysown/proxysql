@@ -294,14 +294,19 @@ test_tokenizer-t: test_tokenizer-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 test_mysql_query_digests_stages-t: test_mysql_query_digests_stages-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
 
+# Both bridge targets use the shared test/tap/tests/unit object directory.
+# Build them in one recursive make so a parallel parent make never starts two
+# independent writers for obj/test_*.o.
+.PHONY: mysqlx_unit_test_bridges
+mysqlx_unit_test_bridges:
+	$(MAKE) -C unit test_mysqlx_plugin_load-t test_mysqlx_admin_tables-t
+
 .PHONY: test_mysqlx_plugin_load-t
-test_mysqlx_plugin_load-t:
-	$(MAKE) -C unit test_mysqlx_plugin_load-t
+test_mysqlx_plugin_load-t: mysqlx_unit_test_bridges
 	ln -fs unit/test_mysqlx_plugin_load-t $@
 
 .PHONY: test_mysqlx_admin_tables-t
-test_mysqlx_admin_tables-t:
-	$(MAKE) -C unit test_mysqlx_admin_tables-t
+test_mysqlx_admin_tables-t: mysqlx_unit_test_bridges
 	ln -fs unit/test_mysqlx_admin_tables-t $@
 
 # test_mysqlx_listener_smoke-t was retired with the dormant MysqlxWorker
@@ -330,11 +335,11 @@ test_admin_prometheus_metrics_dump-t: test_admin_prometheus_metrics_dump-t.cpp $
 create_connection_annotation: test_connection_annotation-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) -DTEST_AURORA $< $(IDIRS) $(LDIRS) $(OPT) $(OBJ) $(MYLIBS) $(STATIC_LIBS) -o $@
 
-setparser_test: setparser_test.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT) $(RE2_PATH)/util/test.cc $(PROXYSQL_LDIR)/MySQL_Set_Stmt_Parser.cpp $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR)
+setparser_test: setparser_test.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT) $(PROXYSQL_LDIR)/MySQL_Set_Stmt_Parser.cpp $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR)
 ifneq ($(PROXYSQL40),)
-	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(RE2_PATH)/util/test.cc $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(SQLITE3_LDIR)/vec.o -o $@
+	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(SQLITE3_LDIR)/vec.o -o $@
 else
-	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(RE2_PATH)/util/test.cc $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
+	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
 endif
 
 setparser_test2-t: setparser_test2
