@@ -61,9 +61,13 @@ static std::string execScalar(PGconn* c, const std::string& q) {
 	return v;
 }
 static void storeUser(PGconn* a, const char* user, const std::string& secret) {
-	execOk(a, std::string("INSERT INTO pgsql_users (username,password,active,default_hostgroup) VALUES ('")
-	         + user + "','" + secret + "',1,0)");
-	execOk(a, "LOAD PGSQL USERS TO RUNTIME");
+	// BAIL_OUT on setup failure: a stale row from an aborted prior run makes the INSERT fail on the
+	// (username,backend) primary key, and the LOAD would then activate the stale verifier — the kill
+	// scenario would run against the wrong material while still reporting pass.
+	if (!execOk(a, std::string("INSERT INTO pgsql_users (username,password,active,default_hostgroup) VALUES ('")
+	              + user + "','" + secret + "',1,0)") ||
+	    !execOk(a, "LOAD PGSQL USERS TO RUNTIME"))
+		BAIL_OUT("storeUser('%s') failed", user);
 }
 
 // The backend PID running our `SELECT pg_sleep(60)` for `user`, observed from a DIRECT backend
