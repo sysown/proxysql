@@ -50,19 +50,23 @@ struct TestState {
 	vector<int> completion_routes { 2247, 2248, 2249 };
 };
 
-int complete_deployment(Context& context, Aurora_BGD_Test_Deployment& deployment) {
+int complete_deployment(
+	Context& context, Aurora_BGD_Test_Deployment& deployment, int writer_hostgroup
+) {
 	return publish_status(context, deployment, "SWITCHOVER_IN_PROGRESS") == EXIT_SUCCESS
+				&& aurora_bgd_wait_for_status(
+					context.admin, writer_hostgroup, "SWITCHOVER_IN_PROGRESS", kWaitSeconds)
+					== EXIT_SUCCESS
+			&& publish_status(
+				context, deployment, "SWITCHOVER_IN_POST_PROCESSING") == EXIT_SUCCESS
 			&& aurora_bgd_wait_for_status(
-				context.admin, 2240, "SWITCHOVER_IN_PROGRESS", kWaitSeconds) == EXIT_SUCCESS
-		&& publish_status(
-			context, deployment, "SWITCHOVER_IN_POST_PROCESSING") == EXIT_SUCCESS
-		&& aurora_bgd_wait_for_status(
-			context.admin, 2240, "SWITCHOVER_IN_POST_PROCESSING", kWaitSeconds)
-			== EXIT_SUCCESS
-			&& publish_completed(context, deployment, deployment) == EXIT_SUCCESS
-			&& aurora_bgd_wait_for_status(
-				context.admin, 2240, "SWITCHOVER_COMPLETED", kWaitSeconds) == EXIT_SUCCESS
-			? EXIT_SUCCESS : EXIT_FAILURE;
+				context.admin, writer_hostgroup, "SWITCHOVER_IN_POST_PROCESSING", kWaitSeconds)
+				== EXIT_SUCCESS
+				&& publish_completed(context, deployment, deployment) == EXIT_SUCCESS
+				&& aurora_bgd_wait_for_status(
+					context.admin, writer_hostgroup, "SWITCHOVER_COMPLETED", kWaitSeconds)
+					== EXIT_SUCCESS
+				? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
 /** @brief Complete the first deployment and release its completed latch. */
@@ -74,7 +78,8 @@ int test_deployment_a(Context& context, TestState& state) {
 			|| aurora_bgd_wait_for_status(
 				context.admin, state.writer_hostgroup, "AVAILABLE", kWaitSeconds)
 				!= EXIT_SUCCESS
-			|| complete_deployment(context, state.first) != EXIT_SUCCESS) {
+				|| complete_deployment(
+					context, state.first, state.writer_hostgroup) != EXIT_SUCCESS) {
 		diag("Error: failed to complete deployment A");
 		return EXIT_FAILURE;
 	}

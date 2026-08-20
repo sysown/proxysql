@@ -60,16 +60,23 @@ inline int setup(CommandLine& cl, Context& context) {
 		return EXIT_FAILURE;
 	}
 	if (aurora_bgd_admin_cleanup(context.admin) != EXIT_SUCCESS
-		|| context.simulator.cleanup() != EXIT_SUCCESS) {
+			|| context.simulator.cleanup() != EXIT_SUCCESS) {
 		diag("Error: failed to clear prior Aurora BGD state");
+		mysql_close(context.admin);
+		context.admin = nullptr;
 		return EXIT_FAILURE;
 	}
-	return aurora_bgd_execute_all(context.admin, {
+	int user_rc = aurora_bgd_execute_all(context.admin, {
 		"DELETE FROM mysql_users WHERE username='testuser'",
 		"INSERT INTO mysql_users(username,password,active,default_hostgroup,transaction_persistent) "
 			"VALUES ('testuser','testuser',1,0,1)",
 		"LOAD MYSQL USERS TO RUNTIME",
 	});
+	if (user_rc != EXIT_SUCCESS) {
+		mysql_close(context.admin);
+		context.admin = nullptr;
+	}
+	return user_rc;
 }
 
 /**
