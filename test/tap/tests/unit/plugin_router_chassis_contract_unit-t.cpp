@@ -135,10 +135,15 @@ extern "C" bool proxysql_router_contract_secret_round_trip() {
 #include "ProxySQL_PluginManager.h"
 #include "ProxySQL_PluginSecrets.h"
 #include "MySQL_Authentication.hpp"
+#include "MySQL_Data_Stream.h"
 #include "MySQL_HostGroups_Manager.h"
+#include "MySQL_Logger.hpp"
 #include "MySQL_Monitor.hpp"
 #include "MySQL_Query_Processor.h"
+#include "MySQL_Session.h"
 #include "MySQL_Thread.h"
+#include "PgSQL_Thread.h"
+#include "ProxySQL_Cluster.hpp"
 #include "ProxySQL_Statistics.hpp"
 #include "proxysql_admin.h"
 #include "proxysql_glovars.hpp"
@@ -147,10 +152,12 @@ extern "C" bool proxysql_router_contract_secret_round_trip() {
 #include "test_init.h"
 
 #include <arpa/inet.h>
+#include <algorithm>
 #include <dlfcn.h>
 #include <fstream>
 #include <memory>
 #include <netinet/in.h>
+#include <poll.h>
 #include <string>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -162,69 +169,17 @@ extern "C" bool proxysql_router_contract_secret_round_trip() {
 
 extern MySQL_Authentication* GloMyAuth;
 extern MySQL_HostGroups_Manager* MyHGM;
+extern MySQL_Logger* GloMyLogger;
 extern MySQL_Query_Processor* GloMyQPro;
 extern MySQL_Monitor* GloMyMon;
 extern ProxySQL_Statistics* GloProxyStats;
 extern MySQL_Threads_Handler* GloMTH;
 extern ProxySQL_Admin* GloAdmin;
+extern ProxySQL_Cluster* GloProxyCluster;
 extern ProxySQL_GlobalVariables GloVars;
+extern PgSQL_Threads_Handler* GloPTH;
 
 namespace {
-
-constexpr const char* k_ledger =
-	"CREATE TABLE proxysql_plugin_owned_objects (owner TEXT NOT NULL, object_type TEXT NOT NULL, "
-	"object_key TEXT NOT NULL, generation INTEGER NOT NULL, PRIMARY KEY(owner,object_type,object_key))";
-constexpr const char* k_generations =
-	"CREATE TABLE proxysql_plugin_config_generations (owner TEXT PRIMARY KEY, generation INTEGER NOT NULL)";
-constexpr const char* k_servers =
-	"CREATE TABLE mysql_servers (hostgroup_id INT NOT NULL, hostname TEXT NOT NULL, port INT NOT NULL, "
-	"gtid_port INT NOT NULL, status TEXT NOT NULL, weight INT NOT NULL, compression INT NOT NULL, "
-	"max_connections INT NOT NULL, max_replication_lag INT NOT NULL, use_ssl INT NOT NULL, "
-	"max_latency_ms INT NOT NULL, comment TEXT NOT NULL, PRIMARY KEY(hostgroup_id,hostname,port))";
-constexpr const char* k_repl =
-	"CREATE TABLE mysql_replication_hostgroups (writer_hostgroup INT PRIMARY KEY, reader_hostgroup INT UNIQUE, "
-	"check_type TEXT NOT NULL, comment TEXT NOT NULL)";
-constexpr const char* k_gr =
-	"CREATE TABLE mysql_group_replication_hostgroups (writer_hostgroup INT PRIMARY KEY, backup_writer_hostgroup INT UNIQUE, "
-	"reader_hostgroup INT UNIQUE, offline_hostgroup INT UNIQUE, active INT, max_writers INT, writer_is_also_reader INT, "
-	"max_transactions_behind INT, comment TEXT)";
-constexpr const char* k_attrs =
-	"CREATE TABLE mysql_hostgroup_attributes (hostgroup_id INT PRIMARY KEY, max_num_online_servers INT, autocommit INT, "
-	"free_connections_pct INT, init_connect TEXT, multiplex INT, connection_warming INT, throttle_connections_per_sec INT, "
-	"ignore_session_variables TEXT, hostgroup_settings TEXT, servers_defaults TEXT, comment TEXT)";
-constexpr const char* k_users =
-	"CREATE TABLE mysql_users (username TEXT NOT NULL, password TEXT, active INT, use_ssl INT, default_hostgroup INT, "
-	"default_schema TEXT, schema_locked INT, transaction_persistent INT, fast_forward INT, backend INT, frontend INT, "
-	"max_connections INT, attributes TEXT, comment TEXT, PRIMARY KEY(username,backend), UNIQUE(username,frontend))";
-constexpr const char* k_rules =
-	"CREATE TABLE mysql_query_rules (rule_id INTEGER PRIMARY KEY, active INT, username TEXT, schemaname TEXT, flagIN INT, "
-	"client_addr TEXT, proxy_addr TEXT, proxy_port INT, digest TEXT, match_digest TEXT, match_pattern TEXT, "
-	"negate_match_pattern INT, re_modifiers TEXT, flagOUT INT, replace_pattern TEXT, destination_hostgroup INT, "
-	"cache_ttl INT, cache_empty_result INT, cache_timeout INT, reconnect INT, timeout INT, retries INT, delay INT, "
-	"next_query_flagIN INT, mirror_flagOUT INT, mirror_hostgroup INT, error_msg TEXT, OK_msg TEXT, sticky_conn INT, "
-	"multiplex INT, gtid_from_hostgroup INT, log INT, apply INT, attributes TEXT NOT NULL DEFAULT '', comment TEXT)";
-constexpr const char* k_fast_rules =
-	"CREATE TABLE mysql_query_rules_fast_routing (username TEXT, schemaname TEXT, flagIN INT, "
-	"destination_hostgroup INT, comment TEXT, PRIMARY KEY(username,schemaname,flagIN))";
-constexpr const char* k_globals =
-	"CREATE TABLE global_variables (variable_name TEXT PRIMARY KEY, variable_value TEXT NOT NULL)";
-constexpr const char* k_galera =
-	"CREATE TABLE mysql_galera_hostgroups (writer_hostgroup INT, backup_writer_hostgroup INT, "
-	"reader_hostgroup INT, offline_hostgroup INT, active INT, max_writers INT, "
-	"writer_is_also_reader INT, max_transactions_behind INT, comment TEXT)";
-constexpr const char* k_aurora =
-	"CREATE TABLE mysql_aws_aurora_hostgroups (writer_hostgroup INT, reader_hostgroup INT, active INT, "
-	"aurora_port INT, domain_name TEXT, max_lag_ms INT, check_interval_ms INT, check_timeout_ms INT, "
-	"writer_is_also_reader INT, new_reader_weight INT, add_lag_ms INT, min_lag_ms INT, "
-	"lag_num_checks INT, autopurge_missing_checks INT, comment TEXT)";
-constexpr const char* k_rds =
-	"CREATE TABLE mysql_aws_rds_bgd_hostgroups (writer_hostgroup INT, reader_hostgroup INT, "
-	"green_writer_hostgroup INT, green_reader_hostgroup INT, active INT, writer_is_also_reader INT, "
-	"check_interval_ms INT, check_timeout_ms INT, comment TEXT)";
-constexpr const char* k_ssl_params =
-	"CREATE TABLE mysql_servers_ssl_params (hostname TEXT, port INT, username TEXT, ssl_ca TEXT, "
-	"ssl_cert TEXT, ssl_key TEXT, ssl_capath TEXT, ssl_crl TEXT, ssl_crlpath TEXT, ssl_cipher TEXT, "
-	"tls_version TEXT, comment TEXT)";
 
 struct ArgV {
 	std::vector<std::string> values;
@@ -291,20 +246,6 @@ SQLite3_row* result_row(SQLite3_result* result, int column, const std::string& v
 	return nullptr;
 }
 
-bool create_publication_schema(SQLite3DB& db) {
-	for (const char* schema : {"", "disk."}) {
-		for (const char* ddl : {k_ledger, k_generations, k_servers, k_repl, k_gr,
-			k_attrs, k_users, k_rules, k_fast_rules, k_globals}) {
-			std::string sql(ddl);
-			const size_t table = sql.find("TABLE ");
-			sql.insert(table + 6, schema);
-			if (!db.execute(sql.c_str())) return false;
-		}
-	}
-	return db.execute(k_galera) && db.execute(k_aurora) && db.execute(k_rds) &&
-		db.execute(k_ssl_params);
-}
-
 bool seed_unrelated_rows(SQLite3DB& db, const std::string& operator_interface) {
 	for (const char* schema : {"main", "disk"}) {
 		const std::string prefix(schema);
@@ -316,8 +257,8 @@ bool seed_unrelated_rows(SQLite3DB& db, const std::string& operator_interface) {
 			".mysql_query_rules(rule_id,active,flagIN,proxy_port,negate_match_pattern,re_modifiers,"
 			"destination_hostgroup,apply,attributes,comment) VALUES "
 			"(5,1,0,6033,0,'CASELESS',10,1,'','operator')").c_str()) ||
-			!db.execute(("INSERT INTO " + prefix + ".global_variables VALUES "
-			"('mysql-interfaces','" + operator_interface + "')").c_str())) {
+			!db.execute(("INSERT OR REPLACE INTO " + prefix + ".global_variables VALUES "
+				"('mysql-interfaces','" + operator_interface + "')").c_str())) {
 			return false;
 		}
 	}
@@ -340,6 +281,48 @@ int reserve_loopback_port() {
 	const int port = named ? ntohs(address.sin_port) : 0;
 	close(fd);
 	return port;
+}
+
+int connect_loopback(int port) {
+	const int fd = socket(AF_INET, SOCK_STREAM, 0);
+	if (fd < 0) return -1;
+	sockaddr_in address {};
+	address.sin_family = AF_INET;
+	address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	address.sin_port = htons(static_cast<uint16_t>(port));
+	if (connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
+		close(fd);
+		return -1;
+	}
+	return fd;
+}
+
+int find_registered_loopback_listener(int port) {
+	const long open_max = sysconf(_SC_OPEN_MAX);
+	const int limit = static_cast<int>(std::min<long>(open_max > 0 ? open_max : 1024, 65536));
+	for (int fd = 0; fd < limit; ++fd) {
+		sockaddr_in address {};
+		socklen_t size = sizeof(address);
+		if (getsockname(fd, reinterpret_cast<sockaddr*>(&address), &size) != 0 ||
+			address.sin_family != AF_INET || ntohs(address.sin_port) != port) continue;
+		iface_info* iface = GloMTH != nullptr ? GloMTH->MLM_find_iface_from_fd(fd) : nullptr;
+		if (iface != nullptr && std::strcmp(iface->address, "127.0.0.1") == 0) return fd;
+	}
+	return -1;
+}
+
+ssize_t receive_with_timeout(int fd, void* buffer, size_t size) {
+	pollfd socket_poll {fd, POLLIN | POLLHUP, 0};
+	if (poll(&socket_poll, 1, 1000) <= 0) return -1;
+	return recv(fd, buffer, size, 0);
+}
+
+bool drain_listener_add(MySQL_Thread& worker) {
+	const int listener_fd = __sync_add_and_fetch(&worker.mypolls.pending_listener_add, 0);
+	if (listener_fd <= 0) return false;
+	worker.poll_listener_add(listener_fd);
+	return __sync_bool_compare_and_swap(
+		&worker.mypolls.pending_listener_add, listener_fd, 0);
 }
 
 void live_gtid_async_noop(struct ev_loop*, struct ev_async*, int) {}
@@ -416,43 +399,37 @@ int main() {
 	ok(std::string(fake.events()) == "register_cli,register_schemas",
 		"discovery callbacks run in CLI then schema order");
 
-	SQLite3DB admindb;
-	SQLite3DB configdb;
-	SQLite3DB statsdb;
-	admindb.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
-	configdb.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
-	statsdb.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
-	const bool databases_created = admindb.execute("ATTACH DATABASE ':memory:' AS disk") &&
-		create_publication_schema(admindb);
-	bool plugin_schema_created = databases_created;
-	for (const auto& table : manager->tables(ProxySQL_PluginDBKind::config_db)) {
-		plugin_schema_created = plugin_schema_created && configdb.execute(table.table_def);
-	}
-	plugin_schema_created = plugin_schema_created &&
-		configdb.execute(proxysql_plugin_secrets_table_definition());
-	ok(plugin_schema_created && scalar(configdb,
-		"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='router_contract_fake_state'") == 1,
-		"Admin DBs materialize the plugin and built-in secret schemas");
-
-	const int operator_port = reserve_loopback_port();
-	const int fake_port = reserve_loopback_port();
-	const std::string operator_interface = "127.0.0.1:" + std::to_string(operator_port);
-	const std::string fake_interface = "127.0.0.1:" + std::to_string(fake_port);
-	ok(operator_port > 0 && fake_port > 0 && operator_port != fake_port &&
-		seed_unrelated_rows(admindb, operator_interface),
-		"unrelated operator rows and a distinct fake listener port are seeded");
-
-	char statsdb_path[] = ":memory:";
-	GloVars.statsdb_disk = statsdb_path;
+	free(GloVars.datadir);
+	GloVars.datadir = strdup(temp_dir.c_str());
+	const std::string admin_path = temp_dir + "/proxysql.db";
+	const std::string stats_path = temp_dir + "/proxysql_stats.db";
+	GloVars.admindb = strdup(admin_path.c_str());
+	GloVars.statsdb_disk = strdup(stats_path.c_str());
+	const bool main_modules_ready = test_init_hostgroups() == 0;
+	if (GloMTH == nullptr) GloMTH = new MySQL_Threads_Handler();
+	if (GloPTH == nullptr) GloPTH = new PgSQL_Threads_Handler();
+	GloProxyCluster = new ProxySQL_Cluster();
+	GloProxyCluster->init();
 	auto proxy_stats = std::make_unique<ProxySQL_Statistics>();
 	GloProxyStats = proxy_stats.get();
-	GloProxyStats->init();
 	ProxySQL_Admin* admin = new ProxySQL_Admin();
-	admin->admindb = &admindb;
-	admin->configdb = &configdb;
-	admin->statsdb = &statsdb;
 	GloAdmin = admin;
-	GloVars.datadir = const_cast<char*>(temp_dir.c_str());
+	const bool admin_materialized = main_modules_ready && admin->init(bootstrap_info_t {});
+	SQLite3DB& admindb = *admin->admindb;
+	SQLite3DB& configdb = *admin->configdb;
+	ok(admin_materialized &&
+		scalar(configdb,
+			"SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
+			"AND name='router_contract_fake_state'") == 1 &&
+		scalar(admindb,
+			"SELECT COUNT(*) FROM disk.sqlite_master WHERE type='table' "
+			"AND name='router_contract_fake_state'") == 1 &&
+		scalar(configdb,
+			"SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
+			"AND name='proxysql_plugin_secrets'") == 1 &&
+		std::string(fake.events()) == "register_cli,register_schemas",
+		"the production Admin materializer merges the registered schema before the action runs");
+
 	ProxySQL_PluginParsedOptionContext parsed_options(parser);
 	const auto action_result = proxysql_run_configured_plugin_early_actions(
 		manager.get(), parsed_options.early_action_context(config_path.c_str(), temp_dir.c_str()), error);
@@ -462,21 +439,46 @@ int main() {
 	ok(fake.secret_round_trip() && scalar(configdb,
 			"SELECT COUNT(*) FROM proxysql_plugin_secrets WHERE owner='router_contract_fake' "
 			"AND secret_name='metadata_password'") == 1,
-		"the bootstrap action stores and reads its encrypted secret");
+		"the action uses the materialized Admin config DB to store and read its encrypted secret");
 
-	const bool modules_ready = test_init_auth() == 0 && test_init_query_processor() == 0 &&
-		test_init_hostgroups() == 0;
+	const int operator_port = reserve_loopback_port();
+	const int fake_port = reserve_loopback_port();
+	const std::string operator_interface = "127.0.0.1:" + std::to_string(operator_port);
+	const std::string fake_interface = "127.0.0.1:" + std::to_string(fake_port);
+	ok(operator_port > 0 && fake_port > 0 && operator_port != fake_port &&
+		seed_unrelated_rows(admindb, operator_interface),
+		"unrelated operator rows and a distinct fake listener port are seeded");
+
+	const bool modules_ready = test_init_auth() == 0 && test_init_query_processor() == 0;
 	GloMyMon = new MySQL_Monitor();
+	auto mysql_logger = std::make_unique<MySQL_Logger>();
+	GloMyLogger = mysql_logger.get();
+	GloMyLogger->events_set_datadir(GloVars.datadir);
+	GloMyLogger->audit_set_datadir(GloVars.datadir);
 	MyHGM->gtid_ev_loop = ev_loop_new(EVBACKEND_POLL | EVFLAG_NOENV);
 	ev_async_init(MyHGM->gtid_ev_async, live_gtid_async_noop);
 	ev_async_start(MyHGM->gtid_ev_loop, MyHGM->gtid_ev_async);
-	const bool listener_ready = modules_ready &&
+	std::unique_ptr<MySQL_Thread> accept_worker;
+	if (modules_ready) {
+		GloMTH->init(1);
+		accept_worker = std::make_unique<MySQL_Thread>();
+		if (accept_worker->init()) GloMTH->mysql_threads[0].worker = accept_worker.get();
+	}
+	std::string operator_interface_error;
+	GloMTH->wrlock();
+	const bool listener_ready = modules_ready && accept_worker != nullptr &&
 		GloMTH->set_variable("caching_sha2_password_auto_generate_rsa_keys", "false") &&
 		GloMTH->set_variable("caching_sha2_password_private_key_path", "") &&
 		GloMTH->set_variable("caching_sha2_password_public_key_path", "") &&
-		GloMTH->set_variable("interfaces", operator_interface.c_str()) &&
-		GloMTH->listener_add(operator_interface.c_str()) >= 0;
-	ok(listener_ready, "real Auth, HGM, QPro, MTH, monitor, and operator listener initialize");
+		GloMTH->apply_interfaces_under_lock(operator_interface.c_str(), operator_interface_error);
+	GloMTH->wrunlock();
+	GloMTH->bootstrapping_listeners = false;
+	const bool operator_notification_drained = listener_ready && drain_listener_add(*accept_worker);
+	ok(listener_ready && find_registered_loopback_listener(operator_port) >= 0 &&
+		operator_notification_drained &&
+		accept_worker->mypolls.find_index(find_registered_loopback_listener(operator_port)) >= 0,
+		"real Auth, HGM, QPro, initialized MTH worker, monitor, and operator listener initialize "
+		"(err='%s')", operator_interface_error.c_str());
 
 	auto live_users = result_value(admindb,
 		"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,"
@@ -538,9 +540,13 @@ int main() {
 	const auto generation_one = services != nullptr && services->apply_mysql_config != nullptr
 		? services->apply_mysql_config(generation)
 		: ProxySQL_PluginMysqlConfigResult{};
+	const bool fake_notification_drained = generation_one.applied && drain_listener_add(*accept_worker);
 	ok(generation_one.applied && generation_one.generation == 1,
 		"the fake consumes the live service table to publish generation 1 (message='%s')",
 		generation_one.message.c_str());
+	ok(fake_notification_drained && find_registered_loopback_listener(fake_port) >= 0 &&
+		accept_worker->mypolls.find_index(find_registered_loopback_listener(fake_port)) >= 0,
+		"generation 1 reaches the initialized worker's real listener poll set");
 
 	const ProxySQL_PluginListenerGate closed_gate {
 		"router_contract_fake", "127.0.0.1", static_cast<uint16_t>(fake_port),
@@ -554,6 +560,31 @@ int main() {
 		closed_snapshot->state == ProxySQL_PluginListenerState::closed &&
 		closed_snapshot->reason == "waiting for generation 2",
 		"the fake listener is closed while generation 2 is reconciled");
+	const int fake_listener_fd = find_registered_loopback_listener(fake_port);
+	const int fake_listener_index = fake_listener_fd >= 0
+		? accept_worker->mypolls.find_index(fake_listener_fd) : -1;
+	const unsigned int sessions_before_closed_accept = accept_worker->mysql_sessions->len;
+	const unsigned int polls_before_closed_accept = accept_worker->mypolls.len;
+	const int closed_client = connect_loopback(fake_port);
+	if (closed_client >= 0 && fake_listener_index >= 0) {
+		accept_worker->curtime = monotonic_time();
+		accept_worker->listener_handle_new_connection(
+			accept_worker->mypolls.myds[fake_listener_index], fake_listener_index);
+	}
+	unsigned char closed_byte {};
+	const ssize_t closed_receive = closed_client >= 0
+		? receive_with_timeout(closed_client, &closed_byte, sizeof(closed_byte)) : -1;
+	const auto closed_after_accept = proxysql_plugin_listener_gate_lookup(
+		"127.0.0.1", static_cast<uint16_t>(fake_port));
+	ok(fake_listener_fd >= 0 && fake_listener_index >= 0 && closed_client >= 0 &&
+		closed_receive == 0 && closed_after_accept && closed_snapshot &&
+		closed_after_accept->reason == "waiting for generation 2" &&
+		closed_after_accept->rejected_accepts == closed_snapshot->rejected_accepts + 1 &&
+		accept_worker->mysql_sessions->len == sessions_before_closed_accept &&
+		accept_worker->mypolls.len == polls_before_closed_accept,
+		"the production listener accept hook closes a gated client with the fixed reason "
+		"before session handoff");
+	if (closed_client >= 0) close(closed_client);
 
 	ProxySQL_PluginRuntimeContext runtime_context {nullptr, 123456};
 	ok(proxysql_runtime_ready_configured_plugins(manager.get(), runtime_context, error) &&
@@ -580,6 +611,34 @@ int main() {
 	ok(gate_ready && ready_snapshot &&
 		ready_snapshot->state == ProxySQL_PluginListenerState::ready,
 		"the fake listener opens only after generation 2 is live");
+	const unsigned int sessions_before_ready_accept = accept_worker->mysql_sessions->len;
+	const unsigned int polls_before_ready_accept = accept_worker->mypolls.len;
+	const uint64_t rejects_before_ready_accept = ready_snapshot
+		? ready_snapshot->rejected_accepts : 0;
+	const int ready_client = connect_loopback(fake_port);
+	if (ready_client >= 0 && fake_listener_index >= 0) {
+		accept_worker->curtime = monotonic_time();
+		accept_worker->listener_handle_new_connection(
+			accept_worker->mypolls.myds[fake_listener_index], fake_listener_index);
+	}
+	unsigned char handshake[128] {};
+	const ssize_t handshake_size = ready_client >= 0
+		? receive_with_timeout(ready_client, handshake, sizeof(handshake)) : -1;
+	const auto ready_after_accept = proxysql_plugin_listener_gate_lookup(
+		"127.0.0.1", static_cast<uint16_t>(fake_port));
+	MySQL_Session* handed_off_session = accept_worker->mysql_sessions->len > sessions_before_ready_accept
+		? static_cast<MySQL_Session*>(accept_worker->mysql_sessions->index(
+			accept_worker->mysql_sessions->len - 1)) : nullptr;
+	ok(ready_client >= 0 && handshake_size > 4 && handshake[3] == 0 && handshake[4] == 10 &&
+		ready_after_accept && ready_after_accept->rejected_accepts == rejects_before_ready_accept &&
+		accept_worker->mysql_sessions->len == sessions_before_ready_accept + 1 &&
+		accept_worker->mypolls.len == polls_before_ready_accept + 1 &&
+		handed_off_session != nullptr && handed_off_session->client_myds != nullptr &&
+		accept_worker->mypolls.find_index(handed_off_session->client_myds->fd) >= 0 &&
+		handed_off_session->client_myds->proxy_addr.port == fake_port,
+		"a ready client traverses the production accept hook into a live session/poll handoff "
+		"and receives the MySQL handshake");
+	if (ready_client >= 0) close(ready_client);
 
 	auto live_users_snapshot = std::unique_ptr<SQLite3_result>(
 		services->get_mysql_users_snapshot());
@@ -599,18 +658,57 @@ int main() {
 
 	ok(scalar(admindb,
 		"SELECT COUNT(*) FROM main.proxysql_plugin_config_generations "
-		"WHERE owner='router_contract_fake' AND generation=2") == 1 &&
+		"WHERE owner='router_contract_fake'") == 1 &&
+		scalar(admindb,
+		"SELECT MIN(generation) FROM main.proxysql_plugin_config_generations "
+		"WHERE owner='router_contract_fake'") == 2 &&
+		scalar(admindb,
+		"SELECT MAX(generation) FROM main.proxysql_plugin_config_generations "
+		"WHERE owner='router_contract_fake'") == 2 &&
 		scalar(admindb,
 		"SELECT COUNT(*) FROM disk.proxysql_plugin_config_generations "
-		"WHERE owner='router_contract_fake' AND generation=2") == 1 &&
+		"WHERE owner='router_contract_fake'") == 1 &&
+		scalar(admindb,
+		"SELECT MIN(generation) FROM disk.proxysql_plugin_config_generations "
+		"WHERE owner='router_contract_fake'") == 2 &&
+		scalar(admindb,
+		"SELECT MAX(generation) FROM disk.proxysql_plugin_config_generations "
+		"WHERE owner='router_contract_fake'") == 2,
+		"main and disk generation rows contain exactly the one active generation");
+
+	const long long main_owned_count = scalar(admindb,
+		"SELECT COUNT(*) FROM main.proxysql_plugin_owned_objects "
+		"WHERE owner='router_contract_fake'");
+	const long long disk_owned_count = scalar(admindb,
+		"SELECT COUNT(*) FROM disk.proxysql_plugin_owned_objects "
+		"WHERE owner='router_contract_fake'");
+	ok(main_owned_count > 0 && main_owned_count == disk_owned_count &&
 		scalar(admindb,
 		"SELECT COUNT(DISTINCT generation) FROM main.proxysql_plugin_owned_objects "
 		"WHERE owner='router_contract_fake'") == 1 &&
 		scalar(admindb,
 		"SELECT MIN(generation) FROM main.proxysql_plugin_owned_objects "
+		"WHERE owner='router_contract_fake'") == 2 &&
+		scalar(admindb,
+		"SELECT MAX(generation) FROM main.proxysql_plugin_owned_objects "
+		"WHERE owner='router_contract_fake'") == 2 &&
+		scalar(admindb,
+		"SELECT COUNT(DISTINCT generation) FROM disk.proxysql_plugin_owned_objects "
+		"WHERE owner='router_contract_fake'") == 1 &&
+		scalar(admindb,
+		"SELECT MIN(generation) FROM disk.proxysql_plugin_owned_objects "
+		"WHERE owner='router_contract_fake'") == 2 &&
+		scalar(admindb,
+		"SELECT MAX(generation) FROM disk.proxysql_plugin_owned_objects "
 		"WHERE owner='router_contract_fake'") == 2,
-		"main, disk, and the ownership ledger retain one active generation");
+		"main and disk ownership ledgers correspond only to active generation 2");
 
+	const std::string main_operator_interface_sql =
+		"SELECT COUNT(*) FROM main.global_variables WHERE variable_name='mysql-interfaces' "
+		"AND instr(variable_value,'" + operator_interface + "')>0";
+	const std::string disk_operator_interface_sql =
+		"SELECT COUNT(*) FROM disk.global_variables WHERE variable_name='mysql-interfaces' "
+		"AND instr(variable_value,'" + operator_interface + "')>0";
 	ok(scalar(admindb,
 		"SELECT COUNT(*) FROM main.mysql_servers WHERE hostgroup_id=10 AND hostname='operator-server'") == 1 &&
 		scalar(admindb,
@@ -623,9 +721,40 @@ int main() {
 		"SELECT COUNT(*) FROM main.mysql_query_rules WHERE rule_id=5") == 1 &&
 		scalar(admindb,
 		"SELECT COUNT(*) FROM disk.mysql_query_rules WHERE rule_id=5") == 1 &&
+		scalar(admindb, main_operator_interface_sql.c_str()) == 1 &&
+		scalar(admindb, disk_operator_interface_sql.c_str()) == 1,
+		"operator server, user, query rule, and interface survive in both storage tiers");
+
+	SQLite3_result* live_rules = GloMyQPro->get_current_query_rules_inner();
+	char* live_interfaces = GloMTH->get_variable("interfaces");
+	const bool live_operator_adapters =
 		result_row(live_users_snapshot.get(), 0, "operator_user") != nullptr &&
-		result_row(live_servers_snapshot.get(), 1, "operator-server") != nullptr,
-		"unrelated operator rows survive both publications in storage and runtime");
+		result_row(live_servers_snapshot.get(), 1, "operator-server") != nullptr &&
+		result_row(live_rules, 0, "5") != nullptr && live_interfaces != nullptr &&
+		std::string(live_interfaces).find(operator_interface) != std::string::npos;
+	free(live_interfaces);
+	ok(live_operator_adapters,
+		"operator server, user, query rule, and interface survive in HGM, Auth, QPro, and MTH");
+
+	const int operator_listener_fd = find_registered_loopback_listener(operator_port);
+	const int operator_listener_index = operator_listener_fd >= 0
+		? accept_worker->mypolls.find_index(operator_listener_fd) : -1;
+	const unsigned int sessions_before_operator_accept = accept_worker->mysql_sessions->len;
+	const int operator_client = connect_loopback(operator_port);
+	if (operator_client >= 0 && operator_listener_index >= 0) {
+		accept_worker->curtime = monotonic_time();
+		accept_worker->listener_handle_new_connection(
+			accept_worker->mypolls.myds[operator_listener_index], operator_listener_index);
+	}
+	unsigned char operator_handshake[128] {};
+	const ssize_t operator_handshake_size = operator_client >= 0
+		? receive_with_timeout(operator_client, operator_handshake, sizeof(operator_handshake)) : -1;
+	ok(operator_listener_fd >= 0 && operator_listener_index >= 0 && operator_client >= 0 &&
+		operator_handshake_size > 4 && operator_handshake[3] == 0 &&
+		operator_handshake[4] == 10 &&
+		accept_worker->mysql_sessions->len == sessions_before_operator_accept + 1,
+		"the unrelated physical operator listener remains registered and accepts a normal session");
+	if (operator_client >= 0) close(operator_client);
 
 	ok(manager->stop_all(), "the configured fake stops cleanly");
 	ok(std::string(fake.events()) ==
@@ -635,6 +764,10 @@ int main() {
 		"127.0.0.1", static_cast<uint16_t>(fake_port)).has_value(),
 		"stopping the plugin removes its owned listener gate");
 	manager.reset();
+	GloMTH->mysql_threads[0].worker = nullptr;
+	accept_worker.reset();
+	GloMyLogger = nullptr;
+	mysql_logger.reset();
 	ev_async_stop(MyHGM->gtid_ev_loop, MyHGM->gtid_ev_async);
 	ev_loop_destroy(MyHGM->gtid_ev_loop);
 	MyHGM->gtid_ev_loop = nullptr;
