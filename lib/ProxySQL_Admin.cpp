@@ -3147,9 +3147,13 @@ void ProxySQL_Admin::init_ldap_variables() {
 	flush_ldap_variables___runtime_to_database(admindb, false, true, false);
 	flush_ldap_variables___database_to_runtime(admindb,true);
 	admindb->execute((char *)"DETACH DATABASE disk");
-	check_and_build_standard_tables(admindb, tables_defs_admin);
-	check_and_build_standard_tables(configdb, tables_defs_config);
+	const bool schemas_ready = check_and_build_standard_tables(admindb, tables_defs_admin) &&
+		check_and_build_standard_tables(configdb, tables_defs_config);
 	__attach_db(admindb, configdb, (char *)"disk");
+	if (!schemas_ready) {
+		proxy_error("Failed to rematerialize Admin database schemas during LDAP initialization\n");
+		return;
+	}
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_ldap_mapping SELECT * FROM disk.mysql_ldap_mapping");
 }
 
@@ -3373,15 +3377,143 @@ void ProxySQL_Admin::dump_mysql_collations() {
 //	admindb->execute("INSERT INTO disk.mysql_collations SELECT * FROM main.mysql_collations");
 }
 
-void ProxySQL_Admin::check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs) {
+namespace {
+
+#ifdef PROXYSQL40
+bool admin_table_schema_matches(SQLite3DB* db, const char* table_name, const char* ddl,
+	bool& exists, bool& matches) {
+	exists = false;
+	matches = false;
+	sqlite3_stmt* statement = nullptr;
+	const char* sql = "SELECT sql FROM sqlite_master WHERE type='table' AND name=?1";
+	if (sqlite3_prepare_v2(db->get_db(), sql, -1, &statement, nullptr) != SQLITE_OK) {
+		proxy_error("Cannot inspect ownership schema: %s\n", sqlite3_errmsg(db->get_db()));
+		return false;
+	}
+	sqlite3_bind_text(statement, 1, table_name, -1, SQLITE_STATIC);
+	const int rc = sqlite3_step(statement);
+	exists = rc == SQLITE_ROW;
+	if (exists) {
+		std::string canonical_ddl {ddl};
+		const std::string if_not_exists {" IF NOT EXISTS"};
+		const size_t modifier = canonical_ddl.find(if_not_exists);
+		if (modifier != std::string::npos) canonical_ddl.erase(modifier, if_not_exists.size());
+		const unsigned char* stored_ddl = sqlite3_column_text(statement, 0);
+		matches = stored_ddl != nullptr && canonical_ddl == reinterpret_cast<const char*>(stored_ddl);
+	}
+	const bool ok = rc == SQLITE_ROW || rc == SQLITE_DONE;
+	if (!ok) proxy_error("Cannot inspect ownership schema: %s\n", sqlite3_errmsg(db->get_db()));
+	sqlite3_finalize(statement);
+	return ok;
+}
+
+bool admin_owned_objects_count(SQLite3DB* db, long long& count) {
+	count = 0;
+	sqlite3_stmt* statement = nullptr;
+	const char* sql = "SELECT COUNT(*) FROM proxysql_plugin_owned_objects";
+	if (sqlite3_prepare_v2(db->get_db(), sql, -1, &statement, nullptr) != SQLITE_OK) {
+		proxy_error("Cannot count ownership rows: %s\n", sqlite3_errmsg(db->get_db()));
+		return false;
+	}
+	const int rc = sqlite3_step(statement);
+	if (rc == SQLITE_ROW) count = sqlite3_column_int64(statement, 0);
+	else proxy_error("Cannot count ownership rows: %s\n", sqlite3_errmsg(db->get_db()));
+	sqlite3_finalize(statement);
+	return rc == SQLITE_ROW;
+}
+
+bool upgrade_plugin_owned_objects_schema(SQLite3DB* db) {
+	if (db == nullptr || db->get_db() == nullptr) return false;
+	bool exists = false;
+	bool current = false;
+	if (!admin_table_schema_matches(db, "proxysql_plugin_owned_objects",
+		PROXYSQL_PLUGIN_OWNED_OBJECTS_DDL, exists, current)) return false;
+	if (current) return true;
+	if (!exists) {
+		if (!db->build_table("proxysql_plugin_owned_objects",
+			PROXYSQL_PLUGIN_OWNED_OBJECTS_DDL, false)) return false;
+		return admin_table_schema_matches(db, "proxysql_plugin_owned_objects",
+			PROXYSQL_PLUGIN_OWNED_OBJECTS_DDL, exists, current) && exists && current;
+	}
+	bool legacy = false;
+	if (!admin_table_schema_matches(db, "proxysql_plugin_owned_objects",
+		PROXYSQL_PLUGIN_OWNED_OBJECTS_DDL_V1, exists, legacy) || !legacy) {
+		proxy_error("Refusing destructive rebuild of an unknown proxysql_plugin_owned_objects schema\n");
+		return false;
+	}
+
+	bool backup_exists = false;
+	bool backup_schema_ignored = false;
+	if (!admin_table_schema_matches(db, "proxysql_plugin_owned_objects_v1_migrate",
+		PROXYSQL_PLUGIN_OWNED_OBJECTS_DDL_V1, backup_exists, backup_schema_ignored)) return false;
+	if (backup_exists) {
+		proxy_error("Refusing ownership schema migration with a pre-existing migration table\n");
+		return false;
+	}
+	if (sqlite3_get_autocommit(db->get_db()) == 0) {
+		proxy_error("Cannot migrate ownership schema inside an existing transaction\n");
+		return false;
+	}
+
+	long long source_rows = 0;
+	if (!admin_owned_objects_count(db, source_rows) || !db->execute("BEGIN IMMEDIATE")) return false;
+	auto rollback = [&]() {
+		if (sqlite3_get_autocommit(db->get_db()) == 0 && !db->execute("ROLLBACK")) {
+			proxy_error("Failed to roll back ownership schema migration: %s\n", sqlite3_errmsg(db->get_db()));
+		}
+	};
+	if (!db->execute("ALTER TABLE proxysql_plugin_owned_objects "
+		"RENAME TO proxysql_plugin_owned_objects_v1_migrate") ||
+		!db->build_table("proxysql_plugin_owned_objects", PROXYSQL_PLUGIN_OWNED_OBJECTS_DDL, false) ||
+		!db->execute("INSERT INTO proxysql_plugin_owned_objects "
+			"(owner,object_type,object_key,generation) "
+			"SELECT owner,object_type,object_key,generation "
+			"FROM proxysql_plugin_owned_objects_v1_migrate")) {
+		rollback();
+		return false;
+	}
+	long long copied_rows = 0;
+	bool migrated_exists = false;
+	bool migrated_current = false;
+	if (!admin_owned_objects_count(db, copied_rows) || copied_rows != source_rows ||
+		!admin_table_schema_matches(db, "proxysql_plugin_owned_objects",
+			PROXYSQL_PLUGIN_OWNED_OBJECTS_DDL, migrated_exists, migrated_current) ||
+		!migrated_exists || !migrated_current ||
+		!db->execute("DROP TABLE proxysql_plugin_owned_objects_v1_migrate") ||
+		!db->execute("COMMIT")) {
+		rollback();
+		return false;
+	}
+	return true;
+}
+#endif
+
+} // namespace
+
+bool ProxySQL_Admin::check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs) {
 //	int i;
 	table_def_t *td;
+#ifdef PROXYSQL40
+	bool has_plugin_ownership_table = false;
+	for (const table_def_t* definition : *tables_defs) {
+		if (strcmp(definition->table_name, "proxysql_plugin_owned_objects") == 0) {
+			has_plugin_ownership_table = true;
+			break;
+		}
+	}
+	if (has_plugin_ownership_table && !upgrade_plugin_owned_objects_schema(db)) return false;
+#endif
 	db->execute("PRAGMA foreign_keys = OFF");
 	for (std::vector<table_def_t *>::iterator it=tables_defs->begin(); it!=tables_defs->end(); ++it) {
 		td=*it;
+#ifdef PROXYSQL40
+		if (has_plugin_ownership_table &&
+			strcmp(td->table_name, "proxysql_plugin_owned_objects") == 0) continue;
+#endif
 		db->check_and_build_table(td->table_name, td->table_def);
 	}
 	db->execute("PRAGMA foreign_keys = ON");
+	return true;
 };
 
 

@@ -37,11 +37,46 @@ extern MySQL_Monitor* GloMyMon;
 extern ProxySQL_Statistics* GloProxyStats;
 extern MySQL_Threads_Handler* GloMTH;
 
+class TestDiskUpgrade {
+public:
+	static bool materialize_plugin_ownership_schema(SQLite3DB& db) {
+		void* storage = calloc(1, sizeof(ProxySQL_Admin));
+		auto* admin = reinterpret_cast<ProxySQL_Admin*>(storage);
+		std::vector<table_def_t*> definitions;
+		admin->insert_into_tables_defs(&definitions, "proxysql_plugin_owned_objects",
+			PROXYSQL_PLUGIN_OWNED_OBJECTS_DDL);
+		const bool materialized = admin->check_and_build_standard_tables(&db, &definitions);
+		std::string canonical_ddl {PROXYSQL_PLUGIN_OWNED_OBJECTS_DDL};
+		const std::string if_not_exists {" IF NOT EXISTS"};
+		canonical_ddl.erase(canonical_ddl.find(if_not_exists), if_not_exists.size());
+		sqlite3_stmt* statement = nullptr;
+		bool current = false;
+		if (materialized && sqlite3_prepare_v2(db.get_db(),
+			"SELECT sql FROM sqlite_master WHERE type='table' "
+			"AND name='proxysql_plugin_owned_objects'", -1, &statement, nullptr) == SQLITE_OK &&
+			sqlite3_step(statement) == SQLITE_ROW) {
+			const unsigned char* stored_ddl = sqlite3_column_text(statement, 0);
+			current = stored_ddl != nullptr &&
+				canonical_ddl == reinterpret_cast<const char*>(stored_ddl);
+		}
+		if (statement != nullptr) sqlite3_finalize(statement);
+		admin->drop_tables_defs(&definitions);
+		free(storage);
+		return current;
+	}
+};
+
 namespace {
 
 constexpr const char* k_ledger =
 	"CREATE TABLE proxysql_plugin_owned_objects (owner TEXT NOT NULL, object_type TEXT NOT NULL, "
 	"object_key TEXT NOT NULL, generation INTEGER NOT NULL, PRIMARY KEY(owner,object_type,object_key))";
+constexpr const char* k_ledger_pre_round_2 =
+	"CREATE TABLE IF NOT EXISTS proxysql_plugin_owned_objects ("
+	"owner TEXT NOT NULL, object_type TEXT NOT NULL CHECK(object_type IN "
+	"('hostgroup','mysql_user','mysql_query_rule','mysql_interface')), "
+	"object_key TEXT NOT NULL, generation INTEGER NOT NULL, "
+	"PRIMARY KEY(owner, object_type, object_key))";
 constexpr const char* k_generations =
 	"CREATE TABLE proxysql_plugin_config_generations (owner TEXT PRIMARY KEY, generation INTEGER NOT NULL)";
 constexpr const char* k_servers =
@@ -476,6 +511,94 @@ int main() {
 		ownership_schema.execute("INSERT INTO disk.proxysql_plugin_owned_objects VALUES "
 			"('mysql_router','mysql_user_v2','v2:1:0:41',1)"),
 		"the ownership schema accepts discriminated exact user keys in main and disk");
+
+	SQLite3DB upgraded_admin;
+	SQLite3DB upgraded_config;
+	upgraded_admin.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+	char upgrade_config_uri[] = "file:plugin_owned_upgrade?mode=memory&cache=shared";
+	upgraded_config.open(upgrade_config_uri,
+		SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI | SQLITE_OPEN_SHAREDCACHE);
+	create_schema(upgraded_admin, "");
+	create_schema(upgraded_config, "");
+	bool old_schemas_seeded = true;
+	for (SQLite3DB* db : {&upgraded_admin, &upgraded_config}) {
+		old_schemas_seeded = old_schemas_seeded &&
+			db->execute("DROP TABLE proxysql_plugin_owned_objects") &&
+			db->execute(k_ledger_pre_round_2) &&
+			db->execute("INSERT INTO mysql_users VALUES "
+				"('A','operator-a',1,0,10,'',0,1,0,1,0,100,'{}','operator'),"
+				"('legacy_user','legacy',1,0,8100,'',0,1,0,1,1,100,'{}','mysql_router:legacy'),"
+				"('round1','round1',1,0,8100,'',0,1,0,1,1,100,'{}','mysql_router:round1')") &&
+			db->execute("INSERT INTO proxysql_plugin_owned_objects VALUES "
+				"('mysql_router','hostgroup','8100',12),"
+				"('mysql_router','mysql_user','legacy_user',12),"
+				"('mysql_router','mysql_user','v2:1:1:726F756E6431',12),"
+				"('mysql_router','mysql_query_rule','9000',12),"
+				"('mysql_router','mysql_interface','127.0.0.1:6446',12)") &&
+			db->execute("INSERT INTO proxysql_plugin_config_generations VALUES ('mysql_router',12)") &&
+			db->execute("INSERT INTO global_variables VALUES "
+				"('mysql-interfaces','127.0.0.1:6446')");
+	}
+	ok(old_schemas_seeded &&
+		scalar(upgraded_admin, "SELECT COUNT(*) FROM proxysql_plugin_owned_objects") == 5 &&
+		scalar(upgraded_config, "SELECT COUNT(*) FROM proxysql_plugin_owned_objects") == 5,
+		"pre-round-2 Admin and config schemas contain complete representative ownership ledgers");
+	const bool admin_schema_materialized =
+		TestDiskUpgrade::materialize_plugin_ownership_schema(upgraded_admin);
+	const bool config_schema_materialized =
+		TestDiskUpgrade::materialize_plugin_ownership_schema(upgraded_config);
+	const bool admin_schema_materialized_again =
+		TestDiskUpgrade::materialize_plugin_ownership_schema(upgraded_admin);
+	const bool config_schema_materialized_again =
+		TestDiskUpgrade::materialize_plugin_ownership_schema(upgraded_config);
+	const bool admin_exact_type_accepted = upgraded_admin.execute(
+		"INSERT INTO proxysql_plugin_owned_objects VALUES "
+		"('other_plugin','mysql_user_v2','v2:0:1:42',12)");
+	const bool config_exact_type_accepted = upgraded_config.execute(
+		"INSERT INTO proxysql_plugin_owned_objects VALUES "
+		"('other_plugin','mysql_user_v2','v2:0:1:42',12)");
+	ok(admin_schema_materialized && config_schema_materialized &&
+		admin_schema_materialized_again && config_schema_materialized_again &&
+		admin_exact_type_accepted && config_exact_type_accepted &&
+		scalar(upgraded_admin, "SELECT COUNT(*) FROM proxysql_plugin_owned_objects") == 6 &&
+		scalar(upgraded_config, "SELECT COUNT(*) FROM proxysql_plugin_owned_objects") == 6,
+		"production materialization preserves every ledger row and enables exact ownership in both tiers");
+	SQLite3DB unknown_ownership_schema;
+	unknown_ownership_schema.open(
+		const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+	const bool unknown_seeded = unknown_ownership_schema.execute(k_ledger) &&
+		unknown_ownership_schema.execute("INSERT INTO proxysql_plugin_owned_objects VALUES "
+			"('mysql_router','mysql_user','operator_owned',12)");
+	const bool unknown_materialized =
+		TestDiskUpgrade::materialize_plugin_ownership_schema(unknown_ownership_schema);
+	ok(unknown_seeded && !unknown_materialized &&
+		scalar(unknown_ownership_schema, "SELECT COUNT(*) FROM proxysql_plugin_owned_objects") == 1 &&
+		unknown_ownership_schema.check_table_structure(
+			"proxysql_plugin_owned_objects", k_ledger) == 1,
+		"an unknown ownership schema fails closed without destructive generic rebuilding");
+	ok(upgraded_admin.execute((std::string("ATTACH DATABASE '") + upgrade_config_uri + "' AS disk").c_str()),
+		"the upgraded persistent config tier attaches as disk for publication");
+	char upgrade_owner[] = "mysql_router";
+	ProxySQL_PluginMysqlConfigPlan upgrade_plan {};
+	upgrade_plan.owner = upgrade_owner;
+	upgrade_plan.generation = 13;
+	Runtime upgrade_runtime;
+	const auto upgraded_publication = proxysql_apply_plugin_mysql_config(
+		upgraded_admin, upgrade_plan, upgrade_runtime.hooks());
+	ok(upgraded_publication.applied && all_runtime_at(upgrade_runtime, 13) &&
+		text_value(upgraded_admin,
+			"SELECT password FROM main.mysql_users WHERE username='A'") == "operator-a" &&
+		text_value(upgraded_admin,
+			"SELECT password FROM disk.mysql_users WHERE username='A'") == "operator-a" &&
+		scalar(upgraded_admin,
+			"SELECT COUNT(*) FROM main.mysql_users WHERE username IN ('legacy_user','round1')") == 0 &&
+		scalar(upgraded_admin,
+			"SELECT COUNT(*) FROM disk.mysql_users WHERE username IN ('legacy_user','round1')") == 0 &&
+		scalar(upgraded_admin,
+			"SELECT COUNT(*) FROM main.proxysql_plugin_owned_objects WHERE owner='other_plugin'") == 1 &&
+		scalar(upgraded_admin,
+			"SELECT COUNT(*) FROM disk.proxysql_plugin_owned_objects WHERE owner='other_plugin'") == 1,
+		"publication migrates marker-proven ownership and preserves operator rows after schema upgrade");
 
 	Fixture f;
 	f.runtime.mutate_owner = f.owner;
