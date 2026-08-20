@@ -6063,7 +6063,7 @@ void ProxySQL_Admin::init_users(
 	unique_ptr<SQLite3_result>&& mysql_users_resultset, const std::string& checksum, const time_t epoch
 ) {
 	pthread_mutex_lock(&users_mutex);
-	__refresh_users(std::move(mysql_users_resultset), checksum, epoch);
+	(void)__refresh_users(std::move(mysql_users_resultset), checksum, epoch);
 	pthread_mutex_unlock(&users_mutex);
 }
 
@@ -6083,8 +6083,7 @@ bool ProxySQL_Admin::init_users_under_lock(unique_ptr<SQLite3_result>&& mysql_us
 			return false;
 		}
 	}
-	__refresh_users(std::move(mysql_users_resultset));
-	return true;
+	return __refresh_users(std::move(mysql_users_resultset), "", 0, &error);
 }
 
 namespace {
@@ -6303,11 +6302,15 @@ bool plugin_config_checkpoint(void*, ProxySQL_PluginConfigStage, std::string&) {
 
 ProxySQL_PluginMysqlConfigResult ProxySQL_Admin::apply_plugin_mysql_config(
 	const ProxySQL_PluginMysqlConfigPlan& plan) {
-	ProxySQL_PluginConfigRuntimeHooks hooks {
-		this, &plugin_config_lock, &plugin_config_unlock, &plugin_config_capture,
-		&plugin_config_publish, &plugin_config_restore, &plugin_config_checkpoint
-	};
-	return proxysql_apply_plugin_mysql_config(*admindb, plan, hooks);
+	try {
+		ProxySQL_PluginConfigRuntimeHooks hooks {
+			this, &plugin_config_lock, &plugin_config_unlock, &plugin_config_capture,
+			&plugin_config_publish, &plugin_config_restore, &plugin_config_checkpoint
+		};
+		return proxysql_apply_plugin_mysql_config(*admindb, plan, hooks);
+	} catch (...) {
+		return {false, 0, "plugin publication failed at Admin service boundary", {}};
+	}
 }
 
 SQLite3_result* ProxySQL_Admin::get_mysql_users_snapshot() {
@@ -6404,29 +6407,39 @@ void ProxySQL_Admin::add_admin_users() {
 #endif /* DEBUG */
 }
 
-void ProxySQL_Admin::__refresh_users(
-	 unique_ptr<SQLite3_result>&& mysql_users_resultset, const string& checksum, const time_t epoch
+bool ProxySQL_Admin::__refresh_users(
+	unique_ptr<SQLite3_result>&& mysql_users_resultset, const string& checksum, const time_t epoch,
+	std::string* atomic_error
 ) {
 	bool no_resultset_supplied = mysql_users_resultset == nullptr;
 	// Checksums are always generated - 'admin-checksum_*' deprecated
 	pthread_mutex_lock(&GloVars.checksum_mutex);
 
-	__delete_inactive_users<SERVER_TYPE_MYSQL>(USERNAME_BACKEND);
-	__delete_inactive_users<SERVER_TYPE_MYSQL>(USERNAME_FRONTEND);
-	GloMyAuth->set_all_inactive(USERNAME_BACKEND);
-	GloMyAuth->set_all_inactive(USERNAME_FRONTEND);
-	add_admin_users<SERVER_TYPE_MYSQL>();
+	if (atomic_error != nullptr && mysql_users_resultset != nullptr) {
+		if (!GloMyAuth->replace_mysql_users_atomically(*mysql_users_resultset, *atomic_error)) {
+			pthread_mutex_unlock(&GloVars.checksum_mutex);
+			return false;
+		}
+	} else {
+		__delete_inactive_users<SERVER_TYPE_MYSQL>(USERNAME_BACKEND);
+		__delete_inactive_users<SERVER_TYPE_MYSQL>(USERNAME_FRONTEND);
+		GloMyAuth->set_all_inactive(USERNAME_BACKEND);
+		GloMyAuth->set_all_inactive(USERNAME_FRONTEND);
+		add_admin_users<SERVER_TYPE_MYSQL>();
 
-	SQLite3_result* added_users { __add_active_users<SERVER_TYPE_MYSQL>(USERNAME_NONE, NULL, mysql_users_resultset.get()) };
-	if (mysql_users_resultset == nullptr && added_users != nullptr) {
-		mysql_users_resultset.reset(added_users);
+		SQLite3_result* added_users {
+			__add_active_users<SERVER_TYPE_MYSQL>(USERNAME_NONE, NULL, mysql_users_resultset.get())
+		};
+		if (mysql_users_resultset == nullptr && added_users != nullptr) {
+			mysql_users_resultset.reset(added_users);
+		}
+		GloMyAuth->remove_inactives(USERNAME_BACKEND);
+		GloMyAuth->remove_inactives(USERNAME_FRONTEND);
 	}
 
 	if (GloMyLdapAuth) {
 		__add_active_users_ldap();
 	}
-	GloMyAuth->remove_inactives(USERNAME_BACKEND);
-	GloMyAuth->remove_inactives(USERNAME_FRONTEND);
 	set_variable((char *)"admin_credentials",(char *)"");
 
 	// Checksums are always generated - 'admin-checksum_*' deprecated
@@ -6474,6 +6487,7 @@ void ProxySQL_Admin::__refresh_users(
 		"Computed checksum for 'LOAD MYSQL USERS TO RUNTIME' was '%s', with epoch '%llu'\n",
 		GloVars.checksums_values.mysql_users.checksum, GloVars.checksums_values.mysql_users.epoch
 	);
+	return true;
 }
 
 #ifdef PROXYSQLCLICKHOUSE

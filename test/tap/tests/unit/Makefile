@@ -619,7 +619,7 @@ plugin_listener_gate_unit-t: plugin_listener_gate_unit-t.cpp $(PROXYSQL_PATH)/li
 
 plugin_mysql_config_unit-t: plugin_mysql_config_unit-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
-		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(IDIRS) -I$(PROXYSQL_PATH)/lib $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@
 
 test_mysqlx_plugin_load-t: ../test_mysqlx_plugin_load-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) mysqlx_plugin_build

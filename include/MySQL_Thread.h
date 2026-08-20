@@ -275,6 +275,7 @@ class MySQL_Listeners_Manager {
 	int add(const char *iface, unsigned int num_threads, int **perthrsocks);
 	int find_idx(const char *iface);
 	int find_idx(const char *address, int port);
+	std::vector<std::string> registered_interfaces();
 	iface_info * find_iface_from_fd(int fd);
 	int get_fd(unsigned int idx);
 	void del(unsigned int idx);

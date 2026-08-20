@@ -168,6 +168,7 @@ void SQLite3_row::add_fields(char **_fields) {
 SQLite3DB::SQLite3DB() {
 	db=NULL;
 	url=NULL;
+	quarantined=false;
 	assert_on_error=0;
 	pthread_rwlock_init(&rwlock, NULL);
 }
@@ -201,6 +202,7 @@ int SQLite3DB::open(char *__url, int flags) {
 	// we shouldn't call open if url is not NULL
 	assert(url==NULL); // we always assert() here
 	assert(db==NULL);
+	quarantined=false;
 	url=strdup(__url);
 	int rc;
 	rc=(*proxy_sqlite3_open_v2)(url, &db, flags , NULL);
@@ -215,6 +217,16 @@ int SQLite3DB::open(char *__url, int flags) {
 	return 0;
 }
 
+bool SQLite3DB::quarantine() {
+	quarantined = true;
+	if (db == NULL) return true;
+	const int rc = (*proxy_sqlite3_close_v2)(db);
+	if (rc == SQLITE_OK) db = NULL;
+	// Even if SQLite cannot close immediately, the wrapper remains permanently
+	// disabled and get_db() no longer exposes the live transactional handle.
+	return true;
+}
+
 /**
  * @brief Executes a SQL statement.
  * 
@@ -222,8 +234,7 @@ int SQLite3DB::open(char *__url, int flags) {
  * @return True if the execution was successful, false otherwise.
  */
 bool SQLite3DB::execute(const char *str) {
-	assert(url);
-	assert(db);
+	if (url == NULL || db == NULL || quarantined) return false;
 	char *err=NULL;
 	int rc=0;
 	do {
@@ -257,6 +268,8 @@ bool SQLite3DB::execute(const char *str) {
  * @return The status of the preparation operation.
  */
 int SQLite3DB::prepare_v2(const char *str, sqlite3_stmt **statement) {
+	if (statement != NULL) *statement = NULL;
+	if (db == NULL || quarantined) return SQLITE_MISUSE;
 	int rc;
 	do {
 		rc = (*proxy_sqlite3_prepare_v2)(db, str, -1, statement, 0);
@@ -272,6 +285,7 @@ void stmt_deleter_t::operator()(sqlite3_stmt* x) const {
 }
 
 std::pair<int,stmt_unique_ptr> SQLite3DB::prepare_v2(const char* query) {
+	if (db == NULL || quarantined) return {SQLITE_MISUSE, stmt_unique_ptr(nullptr)};
 	int rc { 0 };
 	sqlite3_stmt* stmt { nullptr };
 
@@ -325,9 +339,16 @@ SQLite3_result* SQLite3DB::execute_statement(const char *str, char **_error, int
  * @return True if the execution was successful, false otherwise.
  */
 bool SQLite3DB::execute_statement(const char *str, char **error, int *cols, int *affected_rows, SQLite3_result **resultset) {
+	*error=NULL;
+	*cols=0;
+	*affected_rows=0;
+	*resultset=NULL;
+	if (db == NULL || quarantined) {
+		*error=strdup("SQLite connection is quarantined");
+		return false;
+	}
 	int rc;
 	sqlite3_stmt *statement=NULL;
-	*error=NULL;
 	bool ret=false;
 	VALGRIND_DISABLE_ERROR_REPORTING;
 	do {
@@ -392,9 +413,16 @@ __exit_execute_statement:
  * @return True if the execution was successful, false otherwise.
  */
 bool SQLite3DB::execute_statement_raw(const char *str, char **error, int *cols, int *affected_rows, sqlite3_stmt **statement) {
+	*error=NULL;
+	*cols=0;
+	*affected_rows=0;
+	*statement=NULL;
+	if (db == NULL || quarantined) {
+		*error=strdup("SQLite connection is quarantined");
+		return false;
+	}
 	int rc;
 	//sqlite3_stmt *statement=NULL;
-	*error=NULL;
 	bool ret=false;
 	VALGRIND_DISABLE_ERROR_REPORTING;
 	if((*proxy_sqlite3_prepare_v2)(db, str, -1, statement, 0) != SQLITE_OK) {
@@ -471,8 +499,15 @@ SQLite3_result* SQLite3DB::execute_prepared(sqlite3_stmt* statement, char** erro
  * @return True if the execution was successful, false otherwise.
  */
 bool SQLite3DB::execute_prepared(sqlite3_stmt* statement, char** error, int* cols, int* affected_rows, SQLite3_result** resultset) {
-	int rc;
 	*error = NULL;
+	*cols = 0;
+	*affected_rows = 0;
+	*resultset = NULL;
+	if (db == NULL || quarantined || statement == NULL) {
+		*error = strdup("SQLite connection is quarantined");
+		return false;
+	}
+	int rc;
 	bool ret = false;
 	*cols = (*proxy_sqlite3_column_count)(statement);
 	if (*cols == 0) { // not a SELECT
@@ -543,6 +578,7 @@ int SQLite3DB::return_one_int(const char *str) {
  * @return The number of tables matching the structure.
  */
 int SQLite3DB::check_table_structure(const char *table_name, const char *table_def) {
+	if (db == NULL || quarantined) return 0;
 	const char *q1="SELECT COUNT(*) FROM sqlite_master WHERE type=\"table\" AND name=\"%s\" AND sql=\"%s\"";
 	int count=0;
 	int l=strlen(q1)+strlen(table_name)+strlen(table_def)+1;

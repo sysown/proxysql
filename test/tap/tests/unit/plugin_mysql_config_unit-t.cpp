@@ -1,9 +1,12 @@
 #include "ProxySQL_PluginConfig.h"
 #include "MySQL_Authentication.hpp"
+#include "MySQL_Authentication_test.h"
 #include "MySQL_HostGroups_Manager.h"
 #include "MySQL_Monitor.hpp"
 #include "MySQL_Query_Processor.h"
 #include "MySQL_Thread.h"
+#include "MySQL_Thread_test.h"
+#include "ProxySQL_PluginConfig_test.h"
 #include "ProxySQL_Statistics.hpp"
 #include "proxysql_admin.h"
 #include "sqlite3db.h"
@@ -12,6 +15,7 @@
 
 #include <algorithm>
 #include <arpa/inet.h>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -20,6 +24,8 @@
 #include <stdexcept>
 #include <string>
 #include <sys/socket.h>
+#include <sys/wait.h>
+#include <thread>
 #include <unistd.h>
 #include <vector>
 
@@ -344,6 +350,30 @@ int reject_one_commit(void* opaque) {
 	return 1;
 }
 
+struct LiveTransactionFailure {
+	int commit_attempts {0};
+	int rollback_attempts {0};
+	bool persistent_rollback_failure {false};
+
+	static proxysql_plugin_config_test::sql_action control(void* opaque, const char* sql) {
+		auto* self = static_cast<LiveTransactionFailure*>(opaque);
+		if (strcmp(sql, "COMMIT") == 0 && self->commit_attempts++ == 0) {
+			return proxysql_plugin_config_test::sql_action::fail;
+		}
+		if (strcmp(sql, "ROLLBACK") == 0) {
+			const int attempt = self->rollback_attempts++;
+			if (attempt == 0 || self->persistent_rollback_failure) {
+				return proxysql_plugin_config_test::sql_action::fail;
+			}
+		}
+		return proxysql_plugin_config_test::sql_action::normal;
+	}
+};
+
+void throw_before_plan_copy(void*) {
+	throw std::runtime_error("private allocation detail must not cross the service boundary");
+}
+
 int reserve_loopback_port(int& port) {
 	const int fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (fd < 0) return -1;
@@ -377,6 +407,49 @@ bool can_connect_loopback(int port) {
 }
 
 void live_gtid_async_noop(struct ev_loop*, struct ev_async*, int) {}
+
+struct AuthPublishBarrier {
+	std::atomic<bool> reached {false};
+	std::atomic<bool> frontend_attempting {false};
+	std::atomic<bool> backend_attempting {false};
+};
+
+void auth_publish_barrier(void* opaque) {
+	auto& barrier = *static_cast<AuthPublishBarrier*>(opaque);
+	barrier.reached.store(true, std::memory_order_release);
+	while (!barrier.frontend_attempting.load(std::memory_order_acquire) ||
+		!barrier.backend_attempting.load(std::memory_order_acquire)) {
+		std::this_thread::yield();
+	}
+}
+
+void throw_at_auth_publish_midpoint(void*) {
+	throw std::runtime_error("injected Auth midpoint exception");
+}
+
+struct InterfaceRecoveryFailure {
+	std::string old_interface;
+	int rejected_commits {1};
+	int old_add_failures {1};
+	int old_add_attempts {0};
+
+	static bool fail_add(void* opaque, const char* iface) {
+		auto& self = *static_cast<InterfaceRecoveryFailure*>(opaque);
+		if (self.old_interface != iface) return false;
+		++self.old_add_attempts;
+		if (self.old_add_failures < 0) return true;
+		if (self.old_add_failures == 0) return false;
+		--self.old_add_failures;
+		return true;
+	}
+
+	static bool reject_commit(void* opaque) {
+		auto& self = *static_cast<InterfaceRecoveryFailure*>(opaque);
+		if (self.rejected_commits == 0) return false;
+		--self.rejected_commits;
+		return true;
+	}
+};
 
 } // namespace
 
@@ -542,6 +615,83 @@ int main() {
 		commit_failure.message.find("commit") != std::string::npos &&
 		commit_failure.message.find("rollback") != std::string::npos,
 		"an actual SQLite COMMIT failure rolls back SQL, restores runtime, and reports rollback status");
+
+	Fixture live_transaction_cleanup;
+	LiveTransactionFailure live_transaction_failure;
+	ProxySQL_PluginMysqlConfigResult live_transaction_result;
+	{
+		proxysql_plugin_config_test::scoped_hooks hooks(
+			&LiveTransactionFailure::control, nullptr, &live_transaction_failure);
+		live_transaction_result = proxysql_apply_plugin_mysql_config(
+			live_transaction_cleanup.db, live_transaction_cleanup.plan,
+			live_transaction_cleanup.runtime.hooks());
+	}
+	const bool unrelated_commit = live_transaction_cleanup.db.execute("COMMIT");
+	ok(!live_transaction_result.applied && live_transaction_failure.commit_attempts == 1 &&
+		live_transaction_failure.rollback_attempts >= 2 &&
+		sqlite3_get_autocommit(live_transaction_cleanup.db.get_db()) != 0 && !unrelated_commit &&
+		scalar(live_transaction_cleanup.db,
+			"SELECT generation FROM proxysql_plugin_config_generations WHERE owner='mysql_router'") == 12 &&
+		scalar(live_transaction_cleanup.db,
+			"SELECT generation FROM disk.proxysql_plugin_config_generations WHERE owner='mysql_router'") == 12 &&
+		all_runtime_at(live_transaction_cleanup.runtime, 12) &&
+		live_transaction_result.message.find("rollback failed") != std::string::npos,
+		"a live transaction surviving COMMIT and the first ROLLBACK failure is terminated before locks are released");
+
+	Fixture quarantined_cleanup;
+	LiveTransactionFailure persistent_failure;
+	persistent_failure.persistent_rollback_failure = true;
+	ProxySQL_PluginMysqlConfigResult quarantined_result;
+	{
+		proxysql_plugin_config_test::scoped_hooks hooks(
+			&LiveTransactionFailure::control, nullptr, &persistent_failure);
+		quarantined_result = proxysql_apply_plugin_mysql_config(
+			quarantined_cleanup.db, quarantined_cleanup.plan, quarantined_cleanup.runtime.hooks());
+	}
+	const bool commit_on_quarantined_connection = quarantined_cleanup.db.execute("COMMIT");
+	const pid_t quarantined_query_pid = fork();
+	if (quarantined_query_pid == 0) {
+		char* query_error = nullptr;
+		int query_columns = 0;
+		int query_affected = 0;
+		SQLite3_result* query_result = nullptr;
+		const bool query_ok = quarantined_cleanup.db.execute_statement(
+			"SELECT 1", &query_error, &query_columns, &query_affected, &query_result);
+		free(query_error);
+		delete query_result;
+		const int structure = quarantined_cleanup.db.check_table_structure(
+			"never", "CREATE TABLE never(value INT)");
+		_exit(!query_ok && structure == 0 ? 0 : 1);
+	}
+	int quarantined_query_status = 0;
+	const bool quarantined_query_waited = quarantined_query_pid > 0 &&
+		waitpid(quarantined_query_pid, &quarantined_query_status, 0) == quarantined_query_pid;
+	ok(!quarantined_result.applied && persistent_failure.commit_attempts == 1 &&
+		persistent_failure.rollback_attempts >= 2 &&
+		quarantined_cleanup.db.get_db() == nullptr && !commit_on_quarantined_connection &&
+		quarantined_query_waited && WIFEXITED(quarantined_query_status) &&
+		WEXITSTATUS(quarantined_query_status) == 0 &&
+		all_runtime_at(quarantined_cleanup.runtime, 12) &&
+		quarantined_result.message.find("quarantined") != std::string::npos,
+		"persistent rollback failure quarantines the Admin connection before an unrelated COMMIT can publish staged rows");
+
+	Fixture prelock_exception;
+	prelock_exception.runtime.trace.clear();
+	bool prelock_exception_escaped = false;
+	ProxySQL_PluginMysqlConfigResult prelock_exception_result;
+	{
+		proxysql_plugin_config_test::scoped_hooks hooks(nullptr, &throw_before_plan_copy, nullptr);
+		try {
+			prelock_exception_result = proxysql_apply_plugin_mysql_config(
+				prelock_exception.db, prelock_exception.plan, prelock_exception.runtime.hooks());
+		} catch (...) {
+			prelock_exception_escaped = true;
+		}
+	}
+	ok(!prelock_exception_escaped && !prelock_exception_result.applied &&
+		prelock_exception_result.message == "plugin publication failed before lock acquisition" &&
+		prelock_exception.runtime.trace.empty(),
+		"pre-lock plan-copy exceptions are sanitized and cannot cross the plugin-config service boundary");
 
 	bool escaped = false;
 	ProxySQL_PluginMysqlConfigResult exception_result;
@@ -740,6 +890,20 @@ int main() {
 		"live group-replication snapshots are caller-owned copies under the HGM lock");
 
 	admin->admindb = &v.db;
+	bool admin_boundary_escaped = false;
+	ProxySQL_PluginMysqlConfigResult admin_boundary_result;
+	{
+		proxysql_plugin_config_test::scoped_hooks hooks(nullptr, &throw_before_plan_copy, nullptr);
+		try {
+			admin_boundary_result = admin->apply_plugin_mysql_config(v.plan);
+		} catch (...) {
+			admin_boundary_escaped = true;
+		}
+	}
+	ok(!admin_boundary_escaped && !admin_boundary_result.applied &&
+		admin_boundary_result.message == "plugin publication failed before lock acquisition" &&
+		scalar(v.db, "SELECT generation FROM proxysql_plugin_config_generations WHERE owner='mysql_router'") == 12,
+		"pre-lock exceptions cannot cross the live Admin plugin-config ABI wrapper");
 	MySQL_Monitor* live_monitor = new MySQL_Monitor(); // Process-scoped fixture; HGM retains the global.
 	GloMyMon = live_monitor;
 	MyHGM->gtid_ev_loop = ev_loop_new(EVBACKEND_POLL | EVFLAG_NOENV);
@@ -789,6 +953,48 @@ int main() {
 	ok(initial_hgm_loaded && initial_rules_error == nullptr,
 		"real HGM and query processor are seeded from generation 12");
 	free(initial_rules_error);
+
+	auto atomic_old_users = result_value(v.db,
+		"SELECT 'atomic_front','front-old',0,8100,'db',0,1,0,0,1,100,'{}','old' "
+		"UNION ALL SELECT 'atomic_back','back-old',0,8101,'db',0,1,0,1,0,100,'{}','old'");
+	std::string atomic_old_error;
+	ok(admin->init_users_under_lock(std::move(atomic_old_users), atomic_old_error),
+		"atomic Auth fixture starts with complete old frontend and backend groups");
+	auto atomic_new_users = result_value(v.db,
+		"SELECT 'atomic_front','front-new',1,8200,'newdb',1,0,1,0,1,321,'{\"k\":1}','new' "
+		"UNION ALL SELECT 'atomic_back','back-new',1,8201,'newdb',1,0,1,1,0,654,'{\"k\":2}','new'");
+	AuthPublishBarrier auth_barrier;
+	mysql_authentication_test::scoped_atomic_replace_hook auth_hook(&auth_publish_barrier, &auth_barrier);
+	std::string atomic_publish_error;
+	bool atomic_published = false;
+	account_details_t frontend_seen {};
+	account_details_t backend_seen {};
+	std::thread publisher([&] {
+		atomic_published = admin->init_users_under_lock(std::move(atomic_new_users), atomic_publish_error);
+	});
+	std::thread frontend_reader([&] {
+		while (!auth_barrier.reached.load(std::memory_order_acquire)) std::this_thread::yield();
+		auth_barrier.frontend_attempting.store(true, std::memory_order_release);
+		frontend_seen = GloMyAuth->lookup(const_cast<char*>("atomic_front"), USERNAME_FRONTEND,
+			{true, true, true});
+	});
+	std::thread backend_reader([&] {
+		while (!auth_barrier.reached.load(std::memory_order_acquire)) std::this_thread::yield();
+		auth_barrier.backend_attempting.store(true, std::memory_order_release);
+		backend_seen = GloMyAuth->lookup(const_cast<char*>("atomic_back"), USERNAME_BACKEND,
+			{true, true, true});
+	});
+	publisher.join();
+	frontend_reader.join();
+	backend_reader.join();
+	ok(atomic_published && auth_barrier.reached.load(std::memory_order_acquire) &&
+		frontend_seen.password != nullptr && std::string(frontend_seen.password) == "front-new" &&
+		frontend_seen.default_hostgroup == 8200 && frontend_seen.max_connections == 321 &&
+		backend_seen.password != nullptr && std::string(backend_seen.password) == "back-new" &&
+		backend_seen.default_hostgroup == 8201 && backend_seen.max_connections == 654,
+		"frontend and backend lookups attempted mid-publish observe complete new Auth groups");
+	free_account_details(frontend_seen);
+	free_account_details(backend_seen);
 
 	auto malformed_users = result_value(v.db,
 		"SELECT username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,"
@@ -846,6 +1052,56 @@ int main() {
 	const uint64_t stable_server_checksum = MyHGM->get_current_mysql_table("cluster_mysql_servers")->raw_checksum();
 	const uint64_t stable_rule_checksum = GloMyQPro->get_current_query_rules_inner()->raw_checksum();
 	v.plan.generation = 14;
+	int recovery_port = 0;
+	const int recovery_reservation = reserve_loopback_port(recovery_port);
+	if (recovery_reservation >= 0) close(recovery_reservation);
+	const std::string recovery_interface = "127.0.0.1:" + std::to_string(recovery_port);
+	v.interfaces[0] = recovery_interface.c_str();
+	InterfaceRecoveryFailure transient_readd {new_interface, 1, 1, 0};
+	ProxySQL_PluginMysqlConfigResult transient_recovery;
+	{
+		mysql_thread_test::scoped_interface_hooks hooks(
+			&InterfaceRecoveryFailure::fail_add, &InterfaceRecoveryFailure::reject_commit,
+			&transient_readd);
+		transient_recovery = admin->apply_plugin_mysql_config(v.plan);
+	}
+	char* transient_interfaces = GloMTH->get_variable("interfaces");
+	ok(recovery_port > 0 && !transient_recovery.applied && transient_readd.old_add_attempts >= 2 &&
+		transient_interfaces != nullptr && new_interface == transient_interfaces &&
+		can_connect_loopback(new_port) && !can_connect_loopback(recovery_port) &&
+		transient_recovery.message.find("restore failed") == std::string::npos,
+		"outer interface restore reconciles a listener missed by the rejected publish's first re-add");
+	free(transient_interfaces);
+
+	int persistent_port = 0;
+	const int persistent_reservation = reserve_loopback_port(persistent_port);
+	if (persistent_reservation >= 0) close(persistent_reservation);
+	const std::string persistent_interface = "127.0.0.1:" + std::to_string(persistent_port);
+	v.interfaces[0] = persistent_interface.c_str();
+	InterfaceRecoveryFailure persistent_readd {new_interface, 1, -1, 0};
+	ProxySQL_PluginMysqlConfigResult persistent_recovery;
+	{
+		mysql_thread_test::scoped_interface_hooks hooks(
+			&InterfaceRecoveryFailure::fail_add, &InterfaceRecoveryFailure::reject_commit,
+			&persistent_readd);
+		persistent_recovery = admin->apply_plugin_mysql_config(v.plan);
+	}
+	char* persistent_interfaces = GloMTH->get_variable("interfaces");
+	ok(persistent_port > 0 && !persistent_recovery.applied && persistent_readd.old_add_attempts >= 2 &&
+		persistent_recovery.message.find("restore failed") != std::string::npos &&
+		persistent_interfaces != nullptr && new_interface != persistent_interfaces &&
+		!can_connect_loopback(new_port) && !can_connect_loopback(persistent_port),
+		"persistent listener re-add failure is reported and never claims the old interface string was restored");
+	free(persistent_interfaces);
+	std::string recovery_error;
+	GloMTH->wrlock();
+	const bool recovered_after_injection =
+		GloMTH->apply_interfaces_under_lock(new_interface.c_str(), recovery_error);
+	GloMTH->wrunlock();
+	ok(recovered_after_injection && can_connect_loopback(new_port),
+		"listener state is repaired after persistent recovery-failure coverage");
+	v.interfaces[0] = new_interface.c_str();
+
 	v.users[0].password = "must-rollback";
 	ok(v.db.execute("DROP TABLE main.mysql_query_rules_fast_routing"),
 		"query processor failure is injected through its real Admin input table");
@@ -880,6 +1136,40 @@ int main() {
 	free(after_interface_failure);
 	if (occupied_fd >= 0) close(occupied_fd);
 	v.interfaces[0] = new_interface.c_str();
+
+	auto auth_exception_users = result_value(v.db,
+		"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,"
+		"transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment "
+		"FROM main.mysql_users WHERE active=1 ORDER BY username,backend DESC");
+	const pid_t auth_exception_pid = fork();
+	if (auth_exception_pid == 0) {
+		alarm(3);
+		bool midpoint_exception_seen = false;
+		try {
+			mysql_authentication_test::scoped_atomic_replace_hook hook(
+				&throw_at_auth_publish_midpoint, nullptr);
+			std::string auth_exception_error;
+			(void)admin->init_users_under_lock(std::move(auth_exception_users), auth_exception_error);
+		} catch (...) {
+			midpoint_exception_seen = true;
+		}
+		bool old_state_intact = false;
+		std::thread independent_reader([&] {
+			account_details_t old_user = GloMyAuth->lookup(const_cast<char*>("router_app"),
+				USERNAME_FRONTEND, {true, true, true});
+			old_state_intact = old_user.password != nullptr &&
+				std::string(old_user.password) == "new-secret";
+			free_account_details(old_user);
+		});
+		independent_reader.join();
+		_exit(midpoint_exception_seen && old_state_intact ? 0 : 1);
+	}
+	int auth_exception_status = 0;
+	const bool auth_exception_waited = auth_exception_pid > 0 &&
+		waitpid(auth_exception_pid, &auth_exception_status, 0) == auth_exception_pid;
+	ok(auth_exception_waited && WIFEXITED(auth_exception_status) &&
+		WEXITSTATUS(auth_exception_status) == 0,
+		"an Auth midpoint exception releases both reader locks and preserves the complete old groups");
 	ev_async_stop(MyHGM->gtid_ev_loop, MyHGM->gtid_ev_async);
 	ev_loop_destroy(MyHGM->gtid_ev_loop);
 	MyHGM->gtid_ev_loop = nullptr;

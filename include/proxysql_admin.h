@@ -525,7 +525,9 @@ class ProxySQL_Admin {
 	void __delete_inactive_users(enum cred_username_type usertype);
 	template<enum SERVER_TYPE>
 	void add_admin_users();
-	void __refresh_users(std::unique_ptr<SQLite3_result>&& all_users = nullptr, const std::string& checksum = "", const time_t epoch = 0);
+	bool __refresh_users(std::unique_ptr<SQLite3_result>&& all_users = nullptr,
+		const std::string& checksum = "", const time_t epoch = 0,
+		std::string* atomic_error = nullptr);
 	void __add_active_users_ldap();
 
 	void flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false, bool use_lock=true);

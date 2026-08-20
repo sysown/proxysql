@@ -219,14 +219,19 @@ class SQLite3DB {
 	private:
 	char *url;
 	sqlite3 *db;
+	bool quarantined;
 	pthread_rwlock_t rwlock;
 	public:
 	char *get_url() const { return url; }
-	sqlite3 *get_db() const { return db; }
+	sqlite3 *get_db() const { return quarantined ? nullptr : db; }
 	int assert_on_error;
 	SQLite3DB();
 	~SQLite3DB();
 	int open(char *, int);
+	// Permanently disables a connection whose transactional state cannot be
+	// recovered. sqlite3_close_v2 rolls back the live transaction before the
+	// handle is made unavailable to later Admin operations.
+	bool quarantine();
 
 	void rdlock();
 	void rdunlock();

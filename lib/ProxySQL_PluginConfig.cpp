@@ -1,4 +1,5 @@
 #include "ProxySQL_PluginConfig.h"
+#include "ProxySQL_PluginConfig_test.h"
 
 #ifdef PROXYSQL40
 
@@ -15,6 +16,18 @@
 #include <unordered_set>
 
 namespace {
+
+proxysql_plugin_config_test::sql_hook_t transaction_sql_hook = nullptr;
+proxysql_plugin_config_test::before_copy_hook_t before_copy_hook = nullptr;
+void* test_hook_opaque = nullptr;
+
+bool execute_transaction_sql(SQLite3DB& db, const char* sql) {
+	if (transaction_sql_hook != nullptr &&
+		transaction_sql_hook(test_hook_opaque, sql) == proxysql_plugin_config_test::sql_action::fail) {
+		return false;
+	}
+	return db.execute(sql);
+}
 
 std::string copied(const char* value) {
 	return value == nullptr ? std::string() : std::string(value);
@@ -635,6 +648,22 @@ bool stage_schema(SQLite3DB& db, const std::string& schema, const OwnedPlan& pla
 
 } // namespace
 
+namespace proxysql_plugin_config_test {
+
+scoped_hooks::scoped_hooks(sql_hook_t sql_hook, before_copy_hook_t copy_hook, void* opaque) {
+	test_hook_opaque = opaque;
+	transaction_sql_hook = sql_hook;
+	before_copy_hook = copy_hook;
+}
+
+scoped_hooks::~scoped_hooks() {
+	transaction_sql_hook = nullptr;
+	before_copy_hook = nullptr;
+	test_hook_opaque = nullptr;
+}
+
+} // namespace proxysql_plugin_config_test
+
 ProxySQL_PluginMysqlRuntimeSnapshot::~ProxySQL_PluginMysqlRuntimeSnapshot() {
 	delete servers;
 	delete replication_hostgroups;
@@ -659,7 +688,7 @@ bool proxysql_ensure_plugin_mysql_config_schema(SQLite3DB& db, const char* schem
 		db.execute(qualified(PROXYSQL_PLUGIN_CONFIG_GENERATIONS_DDL, "config_generations").c_str());
 }
 
-ProxySQL_PluginMysqlConfigResult proxysql_apply_plugin_mysql_config(
+static ProxySQL_PluginMysqlConfigResult apply_plugin_mysql_config_impl(
 	SQLite3DB& admindb,
 	const ProxySQL_PluginMysqlConfigPlan& source,
 	const ProxySQL_PluginConfigRuntimeHooks& runtime) {
@@ -708,15 +737,30 @@ ProxySQL_PluginMysqlConfigResult proxysql_apply_plugin_mysql_config(
 			}
 		}
 		published.clear();
-		if (transaction_open) {
-			try {
-				if (!admindb.execute("ROLLBACK")) {
-					append_error(message, std::string("rollback failed: ") + sqlite3_errmsg(admindb.get_db()));
+		if (transaction_open && admindb.get_db() != nullptr) {
+			if (sqlite3_get_autocommit(admindb.get_db()) != 0) {
+				append_error(message, "rollback not required: transaction already closed");
+			} else {
+				for (int attempt = 0; attempt < 3 && admindb.get_db() != nullptr &&
+					sqlite3_get_autocommit(admindb.get_db()) == 0; ++attempt) {
+					try {
+						if (!execute_transaction_sql(admindb, "ROLLBACK")) {
+							append_error(message, std::string("rollback failed: ") +
+								sqlite3_errmsg(admindb.get_db()));
+						}
+					} catch (const std::exception& e) {
+						append_error(message, std::string("rollback failed: ") + e.what());
+					} catch (...) {
+						append_error(message, "rollback failed: unknown exception");
+					}
 				}
-			} catch (const std::exception& e) {
-				append_error(message, std::string("rollback failed: ") + e.what());
-			} catch (...) {
-				append_error(message, "rollback failed: unknown exception");
+				if (admindb.get_db() != nullptr && sqlite3_get_autocommit(admindb.get_db()) == 0) {
+					if (admindb.quarantine()) {
+						append_error(message, "fatal rollback cleanup failure: Admin connection quarantined");
+					} else {
+						append_error(message, "fatal rollback cleanup failure: Admin connection quarantine failed");
+					}
+				}
 			}
 			transaction_open = false;
 		}
@@ -782,7 +826,7 @@ ProxySQL_PluginMysqlConfigResult proxysql_apply_plugin_mysql_config(
 		}
 		if (hybrid) return fail("hostgroup mapping crosses the plugin ownership boundary");
 
-		if (!admindb.execute("BEGIN IMMEDIATE")) {
+		if (!execute_transaction_sql(admindb, "BEGIN IMMEDIATE")) {
 			return fail(std::string("cannot start publication transaction: ") + sqlite3_errmsg(admindb.get_db()));
 		}
 		transaction_open = true;
@@ -803,7 +847,7 @@ ProxySQL_PluginMysqlConfigResult proxysql_apply_plugin_mysql_config(
 		}
 		error.clear();
 		if (!runtime.checkpoint(runtime.opaque, ProxySQL_PluginConfigStage::commit, error)) return fail(error);
-		if (!admindb.execute("COMMIT")) {
+		if (!execute_transaction_sql(admindb, "COMMIT")) {
 			return fail(std::string("cannot commit plugin configuration: ") + sqlite3_errmsg(admindb.get_db()));
 		}
 		transaction_open = false;
@@ -817,6 +861,18 @@ ProxySQL_PluginMysqlConfigResult proxysql_apply_plugin_mysql_config(
 		return fail(std::string("plugin publication exception: ") + e.what());
 	} catch (...) {
 		return fail("plugin publication exception: unknown exception");
+	}
+}
+
+ProxySQL_PluginMysqlConfigResult proxysql_apply_plugin_mysql_config(
+	SQLite3DB& admindb,
+	const ProxySQL_PluginMysqlConfigPlan& source,
+	const ProxySQL_PluginConfigRuntimeHooks& runtime) {
+	try {
+		if (before_copy_hook != nullptr) before_copy_hook(test_hook_opaque);
+		return apply_plugin_mysql_config_impl(admindb, source, runtime);
+	} catch (...) {
+		return {false, 0, "plugin publication failed before lock acquisition", {}};
 	}
 }
 
