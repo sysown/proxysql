@@ -4,6 +4,7 @@
 #include "MySQL_Backend_Auth.h"
 #ifdef PROXYSQL40
 #include "Aws_Locality_Manager.h"
+#include "ProxySQL_Plugin.h"
 #endif
 #include "cpp.h"
 #include "proxysql_gtid.h"
@@ -1008,6 +1009,10 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 * @return The generated resultset.
 	 */
 	SQLite3_result* dump_table_mysql(const string&);
+#ifdef PROXYSQL40
+	bool reconcile_server_desired_set(
+		const ProxySQL_ServerDesiredSet& desired_set, std::string& error);
+#endif
 
 	/**
 	 * @brief Update the public member resulset 'mysql_servers_to_monitor'. This resulset should contain the latest
@@ -1271,6 +1276,12 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	MySQLServers_SslParams * get_Server_SSL_Params(char *hostname, int port, char *username);
 
 private:
+	SQLite3_result* dump_table_mysql_locked(const string&);
+	bool commit_locked(
+		const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers,
+		const peer_mysql_servers_v2_t& peer_mysql_servers_v2,
+		bool only_commit_runtime_mysql_servers, bool update_version);
+	void finish_commit(unsigned long long started_at);
 	GTID_Server_Data* get_or_create_gtid_server_data(MySrvC* server, const std::string& endpoint);
 	void start_gtid_reader_if_needed(MySrvC* server, GTID_Server_Data* gtid_data);
 	void update_hostgroup_manager_mappings();

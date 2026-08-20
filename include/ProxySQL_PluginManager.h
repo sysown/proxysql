@@ -20,6 +20,7 @@
 class ProxySQL_ServerDesiredSetCompletion {
 public:
 	virtual bool revalidate(const ProxySQL_ServerDesiredSet& desired_set) = 0;
+	virtual bool begin_apply(const ProxySQL_ServerDesiredSet& desired_set) = 0;
 	virtual void complete(uint64_t generation, bool applied) = 0;
 	virtual ProxySQL_ServerProtocol protocol() const noexcept = 0;
 	virtual const void* controller_identity() const noexcept = 0;
@@ -28,7 +29,6 @@ public:
 
 enum class ProxySQL_ServerDesiredSetPostResult : uint8_t {
 	accepted,
-	owner_unavailable,
 	rejected
 };
 
@@ -36,6 +36,7 @@ ProxySQL_ServerDesiredSetPostResult proxysql_enqueue_server_desired_set(
 	ProxySQL_ServerDesiredSet desired_set,
 	std::shared_ptr<ProxySQL_ServerDesiredSetCompletion> completion);
 size_t proxysql_drain_server_desired_sets();
+bool proxysql_reopen_server_desired_sets();
 void proxysql_reject_queued_server_desired_sets(
 	ProxySQL_ServerProtocol protocol, const void* controller_identity);
 void proxysql_shutdown_server_desired_sets();
@@ -131,8 +132,12 @@ public:
 	bool revalidate_server_desired_set(ProxySQL_ServerProtocol protocol,
 		const ProxySQL_ServerDiscoveryController* controller,
 		const ProxySQL_ServerDesiredSet& desired_set) const;
+	bool begin_server_desired_set_apply(ProxySQL_ServerProtocol protocol,
+		const ProxySQL_ServerDiscoveryController* controller,
+		const ProxySQL_ServerDesiredSet& desired_set);
 	void complete_server_desired_set(ProxySQL_ServerProtocol protocol,
-		ProxySQL_ServerDiscoveryController* controller, uint64_t generation, bool applied);
+		ProxySQL_ServerDiscoveryController* controller, uint64_t generation, bool applied,
+		bool applying);
 	// Unit-test-only retirement observation seam.  The callback runs after a
 	// registry entry is detached and with server_discovery_mutex_ unlocked.
 	using server_retirement_observer_for_test_cb =
@@ -225,6 +230,7 @@ private:
 		void *module_handle { nullptr };
 	};
 	void release_server_callback_lease(int index);
+	void finish_server_desired_set(int index, bool applying);
 	void finalize_server_controller_retirement(registered_server_controller_t retired);
 	mutable std::mutex server_discovery_mutex_ {};
 	std::condition_variable server_discovery_cv_ {};
@@ -233,6 +239,8 @@ private:
 	bool server_snapshots_present_[2] { false, false };
 	size_t server_callback_leases_[2] { 0, 0 };
 	size_t server_desired_posts_inflight_[2] { 0, 0 };
+	size_t server_desired_applies_inflight_[2] { 0, 0 };
+	bool server_controller_retiring_[2] { false, false };
 	ProxySQL_ServerRuntimeSnapshot server_snapshots_[2] {};
 	std::vector<uint32_t> server_delegated_hostgroups_[2] {};
 	server_retirement_observer_for_test_cb server_retirement_observer_for_test_ { nullptr };

@@ -421,17 +421,15 @@ void test_steady_state_desired_set_service_lifetime() {
 		"a plugin can post desired sets from start after init has returned");
 	const std::string start_log = read_log();
 	ok(start_log.find("init_server_controller_installed") != std::string::npos &&
-		start_log.find("start_server_desired_set_posted") != std::string::npos &&
-		start_log.find("server_controller_desired_set") != std::string::npos,
-		"steady-state desired-set service reaches the installed controller");
+		start_log.find("start_server_desired_set_rejected") != std::string::npos &&
+		start_log.find("server_controller_desired_set") == std::string::npos,
+		"steady-state desired-set service rejects entry without an Admin owner");
 	(void)proxysql_stop_configured_plugins(manager, err);
 	const std::string stopped_log = read_log();
-	const size_t first_ack = stopped_log.find("server_controller_desired_set");
 	ok(!post_after_shutdown() &&
 		stopped_log.find("server_controller_shutdown") != std::string::npos &&
 		stopped_log.find("server_controller_destroyed") != std::string::npos &&
-		first_ack != std::string::npos &&
-		stopped_log.find("server_controller_desired_set", first_ack + 1) == std::string::npos,
+		stopped_log.find("server_controller_desired_set") == std::string::npos,
 		"post service fails closed after shutdown unpublishes its manager");
 	dlclose(fixture_handle);
 	unsetenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER");
@@ -460,29 +458,14 @@ void test_nested_steady_state_post_during_unpublish() {
 		"install a controller that recursively reuses the retained steady-state post service");
 
 	proxysql_reset_active_manager_pin_acquisitions_for_test();
-	std::thread outer([&] {
-		state.outer_result = state.post({ProxySQL_ServerProtocol::mysql, 100, {}, {},
-			ProxySQL_ServerPersistence::runtime_only});
-	});
-	{
-		std::unique_lock<std::mutex> lock(state.mutex);
-		state.cv.wait(lock, [&] { return state.outer_entered; });
-	}
-	std::thread stop([&] {
-		{
-			std::lock_guard<std::mutex> lock(state.mutex);
-			state.stop_started = true;
-		}
-		state.cv.notify_all();
-		state.stop_result = proxysql_stop_configured_plugins(manager, err);
-	});
-	outer.join();
-	stop.join();
+	state.outer_result = state.post({ProxySQL_ServerProtocol::mysql, 100, {}, {},
+		ProxySQL_ServerPersistence::runtime_only});
+	state.stop_result = proxysql_stop_configured_plugins(manager, err);
 	ok(proxysql_active_manager_pin_acquisitions_for_test() == 1,
-		"a bounded nested post chain acquires one outer active-manager lifetime pin");
-	ok(state.outer_result && state.nested_result && state.stop_result &&
-		state.callbacks == 2 && state.shutdown == 1 && state.destroyed == 1 && !manager,
-		"bounded nested posts finish before concurrent unpublish shuts down and destroys once");
+		"an owner-unavailable post acquires one active-manager lifetime pin");
+	ok(!state.outer_result && !state.nested_result && state.stop_result &&
+		state.callbacks == 0 && state.shutdown == 1 && state.destroyed == 1 && !manager,
+		"entry rejection has no callback and later unpublish shuts down and destroys once");
 	ok(!state.post({ProxySQL_ServerProtocol::mysql, 102, {}, {},
 		ProxySQL_ServerPersistence::runtime_only}),
 		"the retained post service fails closed after the nested-post unpublish race");
@@ -652,13 +635,14 @@ void test_throwing_callbacks_do_not_leak_leases() {
 		mgr.install_server_discovery_controller(ProxySQL_ServerProtocol::mysql,
 			new Controller(false, true, true), &destroy_controller, handle);
 		bool threw = false;
-		try { mgr.post_server_desired_set({ProxySQL_ServerProtocol::mysql, 11, {}, {}, ProxySQL_ServerPersistence::runtime_only}); }
+		bool posted = true;
+		try { posted = mgr.post_server_desired_set({ProxySQL_ServerProtocol::mysql, 11, {}, {}, ProxySQL_ServerPersistence::runtime_only}); }
 		catch (...) { threw = true; }
 		g_throw_controller_destroy = true;
 		const bool retired = mgr.uninstall_server_discovery_controller(ProxySQL_ServerProtocol::mysql);
 		g_throw_controller_destroy = false;
-		ok(!threw && retired,
-			"throwing desired acknowledgement, shutdown, and destroy still retire controller");
+		ok(!threw && !posted && retired,
+			"owner-unavailable rejection skips acknowledgement while throwing shutdown/destroy still retire controller");
 	}
 	ok(!is_module_loaded(PROXYSQL_FAKE_PLUGIN2_PATH),
 		"throwing controller paths release their retained DSO handles");
@@ -694,11 +678,11 @@ void test_controller_self_uninstall_reentrancy() {
 		ok(handle != nullptr && mgr.install_server_discovery_controller(
 			ProxySQL_ServerProtocol::pgsql, controller, &destroy_self_uninstall_controller, handle),
 			"install controller that self-uninstalls from desired-set acknowledgement");
-		ok(mgr.post_server_desired_set({ProxySQL_ServerProtocol::pgsql, 13, {}, {},
-			ProxySQL_ServerPersistence::runtime_only}) && desired_state.entered &&
-			desired_state.uninstall_returned && !desired_state.uninstall_result &&
+		ok(!mgr.post_server_desired_set({ProxySQL_ServerProtocol::pgsql, 13, {}, {},
+			ProxySQL_ServerPersistence::runtime_only}) && !desired_state.entered &&
+			!desired_state.uninstall_returned && !desired_state.uninstall_result &&
 			desired_state.shutdown == 0 && desired_state.destroyed == 0,
-			"desired-set callback self-uninstall is rejected without mutating its registration");
+			"owner-unavailable desired-set entry rejection has no callback or registration mutation");
 		ok(mgr.uninstall_server_discovery_controller(ProxySQL_ServerProtocol::pgsql) &&
 			desired_state.shutdown == 1 && desired_state.destroyed == 1 &&
 			!is_module_loaded(PROXYSQL_FAKE_PLUGIN2_PATH),
@@ -714,24 +698,12 @@ void test_controller_self_uninstall_concurrent_external_retirement() {
 		new ConcurrentSelfUninstallController(&mgr, &state),
 		&destroy_concurrent_self_uninstall_controller, handle),
 		"install controller for concurrent external uninstall race");
-	std::thread callback([&] {
-		mgr.post_server_desired_set({ProxySQL_ServerProtocol::mysql, 14, {}, {},
-			ProxySQL_ServerPersistence::runtime_only});
-	});
-	std::thread external([&] {
-		std::unique_lock<std::mutex> lock(state.mutex);
-		state.cv.wait(lock, [&] { return state.self_attempted; });
-		state.external_started = true;
-		state.cv.notify_all();
-		lock.unlock();
-		const bool result = mgr.uninstall_server_discovery_controller(ProxySQL_ServerProtocol::mysql);
-		lock.lock();
-		state.external_result = result;
-	});
-	callback.join();
-	external.join();
-	ok(!state.self_result && state.external_result && state.shutdown == 1 && state.destroyed == 1,
-		"rejected self-uninstall lets external retirement drain and destroy exactly once");
+	const bool posted = mgr.post_server_desired_set({ProxySQL_ServerProtocol::mysql, 14, {}, {},
+		ProxySQL_ServerPersistence::runtime_only});
+	state.external_result = mgr.uninstall_server_discovery_controller(ProxySQL_ServerProtocol::mysql);
+	ok(!posted && !state.self_attempted && state.self_result && state.external_result &&
+		state.shutdown == 1 && state.destroyed == 1,
+		"owner-unavailable rejection lets external retirement destroy exactly once");
 	ok(!is_module_loaded(PROXYSQL_FAKE_PLUGIN2_PATH),
 		"concurrent retirement releases the controller DSO after the callback returns");
 }

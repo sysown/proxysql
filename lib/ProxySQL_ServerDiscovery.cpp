@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <cerrno>
 #include <cstdlib>
 #include <limits>
@@ -19,6 +20,8 @@ bool proxysql_server_discovery_admin_available();
 void proxysql_wake_server_discovery_admin();
 void proxysql_lock_server_discovery_protocol(ProxySQL_ServerProtocol protocol);
 void proxysql_unlock_server_discovery_protocol(ProxySQL_ServerProtocol protocol);
+extern "C" void proxysql_server_discovery_after_final_revalidation_for_test(
+	ProxySQL_ServerProtocol) __attribute__((weak));
 #endif
 
 namespace {
@@ -391,7 +394,8 @@ struct QueuedServerDesiredSet {
 struct ServerDesiredSetInbox {
 	std::mutex mutex;
 	std::deque<QueuedServerDesiredSet> queue;
-	bool shutdown {false};
+	size_t outstanding {0};
+	bool shutdown {true};
 };
 
 class ScopedServerDiscoveryProtocolLock {
@@ -420,6 +424,25 @@ bool same_queue_key(const QueuedServerDesiredSet& queued,
 
 void wake_admin_owner() {
 	proxysql_wake_server_discovery_admin();
+}
+
+void release_accepted_server_desired_set() {
+	ServerDesiredSetInbox& inbox = server_desired_set_inbox();
+	std::lock_guard<std::mutex> lock(inbox.mutex);
+	assert(inbox.outstanding > 0);
+	--inbox.outstanding;
+}
+
+void complete_accepted_server_desired_set(
+	const std::shared_ptr<ProxySQL_ServerDesiredSetCompletion>& completion,
+	uint64_t generation, bool applied) {
+	try {
+		if (completion) completion->complete(generation, applied);
+	} catch (...) {
+		release_accepted_server_desired_set();
+		throw;
+	}
+	release_accepted_server_desired_set();
 }
 
 } // namespace
@@ -506,8 +529,8 @@ bool proxysql_merge_server_desired_set(const ProxySQL_ServerRuntimeSnapshot& cur
 ProxySQL_ServerDesiredSetPostResult proxysql_enqueue_server_desired_set(
 	ProxySQL_ServerDesiredSet desired_set,
 	std::shared_ptr<ProxySQL_ServerDesiredSetCompletion> completion) {
-	if (!proxysql_server_discovery_admin_available())
-		return ProxySQL_ServerDesiredSetPostResult::owner_unavailable;
+	if (!completion || !proxysql_server_discovery_admin_available())
+		return ProxySQL_ServerDesiredSetPostResult::rejected;
 	std::sort(desired_set.delegated_hostgroups.begin(), desired_set.delegated_hostgroups.end());
 	ServerDesiredSetInbox& inbox = server_desired_set_inbox();
 	std::shared_ptr<ProxySQL_ServerDesiredSetCompletion> replaced;
@@ -517,18 +540,20 @@ ProxySQL_ServerDesiredSetPostResult proxysql_enqueue_server_desired_set(
 		std::lock_guard<std::mutex> lock(inbox.mutex);
 		if (inbox.shutdown) return ProxySQL_ServerDesiredSetPostResult::rejected;
 		if (inbox.queue.size() == SERVER_DESIRED_SET_QUEUE_CAPACITY) {
-			auto match = std::find_if(inbox.queue.begin(), inbox.queue.end(),
+			auto match = std::find_if(inbox.queue.rbegin(), inbox.queue.rend(),
 				[&](const QueuedServerDesiredSet& queued) { return same_queue_key(queued, desired_set); });
-			if (match == inbox.queue.end()) return ProxySQL_ServerDesiredSetPostResult::rejected;
+			if (match == inbox.queue.rend()) return ProxySQL_ServerDesiredSetPostResult::rejected;
 			replaced_generation = match->desired_set.generation;
 			replaced = std::move(match->completion);
 			*match = {std::move(desired_set), std::move(completion)};
+			++inbox.outstanding;
 		} else {
 			wake = inbox.queue.empty();
 			inbox.queue.push_back({std::move(desired_set), std::move(completion)});
+			++inbox.outstanding;
 		}
 	}
-	if (replaced) replaced->complete(replaced_generation, false);
+	if (replaced) complete_accepted_server_desired_set(replaced, replaced_generation, false);
 	if (wake) wake_admin_owner();
 	return ProxySQL_ServerDesiredSetPostResult::accepted;
 }
@@ -551,10 +576,16 @@ size_t proxysql_drain_server_desired_sets() {
 				{
 					ScopedServerDiscoveryProtocolLock lock(queued.desired_set.protocol);
 					if (queued.desired_set.protocol == ProxySQL_ServerProtocol::mysql &&
-						queued.completion->revalidate(queued.desired_set)) {
+						queued.completion->begin_apply(queued.desired_set)) {
+						if (proxysql_server_discovery_after_final_revalidation_for_test != nullptr)
+							proxysql_server_discovery_after_final_revalidation_for_test(
+								queued.desired_set.protocol);
 						applied = proxysql_reconcile_mysql_server_desired_set(queued.desired_set, error);
 					} else if (queued.desired_set.protocol == ProxySQL_ServerProtocol::pgsql &&
-						queued.completion->revalidate(queued.desired_set)) {
+						queued.completion->begin_apply(queued.desired_set)) {
+						if (proxysql_server_discovery_after_final_revalidation_for_test != nullptr)
+							proxysql_server_discovery_after_final_revalidation_for_test(
+								queued.desired_set.protocol);
 						applied = proxysql_reconcile_pgsql_server_desired_set(queued.desired_set, error);
 					}
 				}
@@ -564,11 +595,19 @@ size_t proxysql_drain_server_desired_sets() {
 				error = "unknown reconciliation failure";
 			}
 		}
-		if (queued.completion)
-			queued.completion->complete(queued.desired_set.generation, applied);
+		complete_accepted_server_desired_set(
+			queued.completion, queued.desired_set.generation, applied);
 		++drained;
 	}
 	return drained;
+}
+
+bool proxysql_reopen_server_desired_sets() {
+	ServerDesiredSetInbox& inbox = server_desired_set_inbox();
+	std::lock_guard<std::mutex> lock(inbox.mutex);
+	if (!inbox.shutdown || inbox.outstanding != 0 || !inbox.queue.empty()) return false;
+	inbox.shutdown = false;
+	return true;
 }
 
 void proxysql_reject_queued_server_desired_sets(
@@ -588,7 +627,8 @@ void proxysql_reject_queued_server_desired_sets(
 		}
 	}
 	for (auto& queued : rejected)
-		queued.completion->complete(queued.desired_set.generation, false);
+		complete_accepted_server_desired_set(
+			queued.completion, queued.desired_set.generation, false);
 }
 
 void proxysql_shutdown_server_desired_sets() {
@@ -600,8 +640,8 @@ void proxysql_shutdown_server_desired_sets() {
 		rejected.swap(inbox.queue);
 	}
 	for (auto& queued : rejected) {
-		if (queued.completion)
-			queued.completion->complete(queued.desired_set.generation, false);
+		complete_accepted_server_desired_set(
+			queued.completion, queued.desired_set.generation, false);
 	}
 }
 #endif

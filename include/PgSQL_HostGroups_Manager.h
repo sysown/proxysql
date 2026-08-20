@@ -4,6 +4,9 @@
 #include "cpp.h"
 #include "proxysql_gtid.h"
 #include "proxysql_admin.h"
+#ifdef PROXYSQL40
+#include "ProxySQL_Plugin.h"
+#endif
 #include <atomic>
 #include <thread>
 #include <iostream>
@@ -779,6 +782,10 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	 * @return The generated resultset.
 	 */
 	SQLite3_result* dump_table_pgsql(const string&);
+#ifdef PROXYSQL40
+	bool reconcile_server_desired_set(
+		const ProxySQL_ServerDesiredSet& desired_set, std::string& error);
+#endif
 	PgSQLServers_SslParams * get_Server_SSL_Params(char *hostname, int port, char *username);
 
 	/**
@@ -858,6 +865,12 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	PgSQL_SrvC* find_server_in_hg(unsigned int _hid, const std::string& addr, int port);
 
 private:
+	SQLite3_result* dump_table_pgsql_locked(const string&);
+	bool commit_locked(
+		const peer_runtime_pgsql_servers_t& peer_runtime_pgsql_servers,
+		const peer_pgsql_servers_v2_t& peer_pgsql_servers_v2,
+		bool only_commit_runtime_pgsql_servers, bool update_version);
+	void finish_commit(unsigned long long started_at);
 	void update_hostgroup_manager_mappings();
 	uint64_t get_pgsql_servers_checksum(SQLite3_result* runtime_pgsql_servers = nullptr);
 	uint64_t get_pgsql_servers_v2_checksum(SQLite3_result* incoming_pgsql_servers_v2 = nullptr);

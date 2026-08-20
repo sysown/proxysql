@@ -11,6 +11,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <dlfcn.h>
 #include <memory>
@@ -33,9 +35,13 @@ namespace {
 
 struct AckState {
 	std::mutex mutex;
+	std::condition_variable cv;
 	std::vector<std::pair<uint64_t, bool>> values;
 	std::atomic<unsigned int> shutdowns {0};
 	std::atomic<unsigned int> destroyed {0};
+	uint64_t blocked_generation {0};
+	bool callback_entered {false};
+	bool release_callback {false};
 };
 
 class Controller final : public ProxySQL_ServerDiscoveryController {
@@ -43,14 +49,95 @@ public:
 	explicit Controller(AckState* state) : state_(state) {}
 	void runtime_configuration_installed(ProxySQL_ServerRuntimeSnapshot) override {}
 	void desired_set_applied(uint64_t generation, bool applied) override {
-		std::lock_guard<std::mutex> lock(state_->mutex);
+		std::unique_lock<std::mutex> lock(state_->mutex);
 		state_->values.emplace_back(generation, applied);
+		if (generation == state_->blocked_generation) {
+			state_->callback_entered = true;
+			state_->cv.notify_all();
+			state_->cv.wait(lock, [this] { return state_->release_callback; });
+		}
 	}
 	void shutdown() override { state_->shutdowns.fetch_add(1); }
 	AckState* state() const { return state_; }
 private:
 	AckState* state_;
 };
+
+enum class ReconcileHookMode : uint8_t { none, final_apply, hgm_snapshot };
+
+struct ReconcileHookState {
+	std::mutex mutex;
+	std::condition_variable cv;
+	ReconcileHookMode mode {ReconcileHookMode::none};
+	bool reached {false};
+	bool release {false};
+	bool retirement_attempted {false};
+};
+
+ReconcileHookState reconcile_hook;
+
+void wait_at_reconcile_hook(ReconcileHookMode expected) {
+	std::unique_lock<std::mutex> lock(reconcile_hook.mutex);
+	if (reconcile_hook.mode != expected) return;
+	reconcile_hook.reached = true;
+	reconcile_hook.cv.notify_all();
+	reconcile_hook.cv.wait(lock, [] { return reconcile_hook.release; });
+}
+
+extern "C" void proxysql_server_discovery_after_final_revalidation_for_test(
+	ProxySQL_ServerProtocol) {
+	wait_at_reconcile_hook(ReconcileHookMode::final_apply);
+}
+
+extern "C" void proxysql_server_reconcile_after_hgm_snapshot_for_test(
+	ProxySQL_ServerProtocol) {
+	wait_at_reconcile_hook(ReconcileHookMode::hgm_snapshot);
+}
+
+extern "C" void proxysql_server_discovery_retirement_attempt_for_test(
+	ProxySQL_ServerProtocol) {
+	std::lock_guard<std::mutex> lock(reconcile_hook.mutex);
+	reconcile_hook.retirement_attempted = true;
+	reconcile_hook.cv.notify_all();
+}
+
+void arm_reconcile_hook(ReconcileHookMode mode) {
+	std::lock_guard<std::mutex> lock(reconcile_hook.mutex);
+	reconcile_hook.mode = mode;
+	reconcile_hook.reached = false;
+	reconcile_hook.release = false;
+	reconcile_hook.retirement_attempted = false;
+}
+
+bool wait_for_hook(bool retirement_attempt = false) {
+	std::unique_lock<std::mutex> lock(reconcile_hook.mutex);
+	return reconcile_hook.cv.wait_for(lock, std::chrono::seconds(2), [&] {
+		return retirement_attempt ? reconcile_hook.retirement_attempted : reconcile_hook.reached;
+	});
+}
+
+void release_reconcile_hook() {
+	std::lock_guard<std::mutex> lock(reconcile_hook.mutex);
+	reconcile_hook.release = true;
+	reconcile_hook.cv.notify_all();
+}
+
+struct RetirementObservation {
+	AckState* acks {nullptr};
+	uint64_t generation {0};
+	std::atomic<size_t> true_acks_at_detach {0};
+	std::atomic<bool> detached {false};
+};
+
+size_t ack_count(AckState& state, uint64_t generation, bool applied);
+
+void observe_controller_retirement(ProxySQL_ServerProtocol, bool controller, void* opaque) {
+	auto* observation = static_cast<RetirementObservation*>(opaque);
+	if (!controller || observation == nullptr) return;
+	observation->true_acks_at_detach.store(
+		ack_count(*observation->acks, observation->generation, true));
+	observation->detached.store(true);
+}
 
 void destroy_controller(ProxySQL_ServerDiscoveryController* controller) {
 	auto* owned = static_cast<Controller*>(controller);
@@ -149,7 +236,7 @@ ProxySQL_ServerDesiredSet pgsql_desired(uint64_t generation,
 } // namespace
 
 int main() {
-	plan(41);
+	plan(57);
 	test_init_minimal();
 	test_init_query_processor();
 	test_init_hostgroups();
@@ -198,6 +285,12 @@ int main() {
 	const uint64_t pgsql_generation = pgsql_install.generation();
 	ok(pgsql_install.prepare(pgsql_installed, error) && pgsql_install.commit(pgsql_installed),
 		"PostgreSQL runtime generation installs independent delegated claims");
+	GloAdmin = nullptr;
+	const bool unavailable_post = manager->post_server_desired_set(desired(generation, {}));
+	GloAdmin = admin;
+	ok(!unavailable_post && ack_count(acks, generation, false) == 0,
+		"an unavailable Admin owner rejects at entry without an acknowledgement");
+	clear_acks(acks);
 
 	auto initial = mysql_rows({
 		{17, "old.example", 3306, 0, "ONLINE", 10, 0, 100, 0, 1, 0, "old"},
@@ -223,6 +316,43 @@ int main() {
 		"multiple worker threads post without mutating owner-thread runtime state");
 	ok(admin->drain_server_discovery_updates() == 4 && ack_count(acks, generation, false) == 4,
 		"owner thread rejects and acknowledges every accepted concurrent malformed update once");
+	clear_acks(acks);
+
+	ProxySQL_ServerRow atomic_update {17, "old.example", 3306, 0, "ONLINE", 11,
+		0, 100, 0, 1, 0, "atomic"};
+	ok(manager->post_server_desired_set(desired(generation, {atomic_update})),
+		"atomic HGM fixture queues a delegated update");
+	arm_reconcile_hook(ReconcileHookMode::hgm_snapshot);
+	std::thread atomic_drain([&] { admin->drain_server_discovery_updates(); });
+	const bool snapshot_barrier_reached = wait_for_hook();
+	std::atomic<unsigned int> monitor_threads_started {0};
+	std::atomic<unsigned int> monitor_updates {0};
+	std::thread delegated_monitor([&] {
+		monitor_threads_started.fetch_add(1);
+		if (MyHGM->shun_and_killall(const_cast<char*>("old.example"), 3306))
+			monitor_updates.fetch_add(1);
+	});
+	std::thread unrelated_monitor([&] {
+		monitor_threads_started.fetch_add(1);
+		if (MyHGM->shun_and_killall(const_cast<char*>("unrelated.example"), 3306))
+			monitor_updates.fetch_add(1);
+	});
+	while (monitor_threads_started.load() != 2) std::this_thread::yield();
+	release_reconcile_hook();
+	delegated_monitor.join();
+	unrelated_monitor.join();
+	atomic_drain.join();
+	arm_reconcile_hook(ReconcileHookMode::none);
+	ok(snapshot_barrier_reached,
+		"HGM reconciliation exposes the deterministic locked-snapshot interleave barrier");
+	auto atomic_rows = runtime_rows();
+	const SQLite3_row* atomic_delegated = find_row(*atomic_rows, 17, "old.example", 3306);
+	const SQLite3_row* atomic_unrelated = find_row(*atomic_rows, 99, "unrelated.example", 3306);
+	ok(monitor_updates.load() == 2 && atomic_delegated != nullptr && atomic_unrelated != nullptr &&
+		std::string(atomic_delegated->fields[4]) == "SHUNNED" &&
+		std::string(atomic_delegated->fields[5]) == "11" &&
+		std::string(atomic_unrelated->fields[4]) == "SHUNNED",
+		"monitor status and unrelated-row updates after the locked snapshot survive reconcile commit");
 	clear_acks(acks);
 
 	ProxySQL_ServerRow copied {17, "deep-copy.example", 3306, 0, "ONLINE", 31, 0, 101, 0, 1, 0, "copied"};
@@ -368,26 +498,113 @@ int main() {
 		ack_count(pgsql_acks, pgsql_generation, true) == 1,
 		"PostgreSQL replacement preserves unrelated rows and acknowledges exactly once");
 
+	ProxySQL_ServerRow pgsql_retirement = pgsql_new;
+	pgsql_retirement.weight = 72;
+	ok(manager->post_server_desired_set(pgsql_desired(pgsql_generation, {pgsql_retirement})),
+		"retirement race fixture queues a live PostgreSQL update");
+	RetirementObservation retirement {&pgsql_acks, pgsql_generation};
+	manager->set_server_retirement_observer_for_test(&observe_controller_retirement, &retirement);
+	arm_reconcile_hook(ReconcileHookMode::final_apply);
+	std::thread retirement_drain([&] { admin->drain_server_discovery_updates(); });
+	const bool final_apply_barrier_reached = wait_for_hook();
+	bool uninstall_result = false;
+	std::thread retirement_thread([&] {
+		uninstall_result = manager->uninstall_server_discovery_controller(
+			ProxySQL_ServerProtocol::pgsql);
+	});
+	const bool retirement_attempt_reached = wait_for_hook(true);
+	release_reconcile_hook();
+	retirement_drain.join();
+	retirement_thread.join();
+	arm_reconcile_hook(ReconcileHookMode::none);
+	ok(final_apply_barrier_reached && retirement_attempt_reached,
+		"uninstall deterministically attempts detachment inside the final validate/apply window");
+	pgsql_runtime.reset(PgHGM->dump_table_pgsql("pgsql_servers"));
+	const SQLite3_row* retired_apply = find_row(*pgsql_runtime, 18, "pgsql-new.example", 5432);
+	ok(uninstall_result && retirement.detached.load() &&
+		retirement.true_acks_at_detach.load() == 2 && retired_apply != nullptr &&
+		std::string(retired_apply->fields[4]) == "72" &&
+		pgsql_acks.shutdowns.load() == 1 && pgsql_acks.destroyed.load() == 1,
+		"apply and true acknowledgement complete before controller detachment and retirement");
+	manager->set_server_retirement_observer_for_test(nullptr, nullptr);
+
 	size_t accepted = 0;
-	for (uint32_t hg = 1000; hg < 1256; ++hg) {
+	ProxySQL_ServerRow ordered_old = shunned;
+	ordered_old.hostname = "ordering.example";
+	ordered_old.weight = 201;
+	ordered_old.force_topology_role = true;
+	ProxySQL_ServerRow ordered_second = ordered_old;
+	ordered_second.weight = 202;
+	accepted += manager->post_server_desired_set(desired(newer_generation, {ordered_old})) ? 1 : 0;
+	accepted += manager->post_server_desired_set(desired(newer_generation, {ordered_second})) ? 1 : 0;
+	for (uint32_t hg = 1000; hg < 1254; ++hg) {
 		ProxySQL_ServerDesiredSet queued {ProxySQL_ServerProtocol::mysql,
-			hg == 1000 ? generation : newer_generation, {hg}, {},
+			newer_generation, {hg}, {},
 			ProxySQL_ServerPersistence::runtime_only};
 		accepted += manager->post_server_desired_set(std::move(queued)) ? 1 : 0;
 	}
-	const size_t displaced_before = ack_count(acks, generation, false);
-	ok(manager->post_server_desired_set({ProxySQL_ServerProtocol::mysql, newer_generation, {1000}, {},
-		ProxySQL_ServerPersistence::runtime_only}) &&
-		ack_count(acks, generation, false) == displaced_before + 1,
+	const size_t displaced_before = ack_count(acks, newer_generation, false);
+	ProxySQL_ServerRow ordered_newest = ordered_old;
+	ordered_newest.weight = 203;
+	ok(manager->post_server_desired_set(desired(newer_generation, {ordered_newest})) &&
+		ack_count(acks, newer_generation, false) == displaced_before + 1,
 		"full-queue exact-key coalescing false-acknowledges the displaced accepted generation once");
 	ok(accepted == 256 && !manager->post_server_desired_set(
 		{ProxySQL_ServerProtocol::mysql, newer_generation, {2000}, {}, ProxySQL_ServerPersistence::runtime_only}),
 		"shared inbox is bounded at 256 and fails closed for a different delegation set");
-	admin->shutdown_server_discovery_updates();
+	ok(admin->drain_server_discovery_updates() == 256,
+		"owner drains the full mixed-key queue after coalescing");
+	auto ordered_rows = runtime_rows();
+	const SQLite3_row* ordered_row = find_row(*ordered_rows, 17, "ordering.example", 3306);
+	ok(ordered_row != nullptr && std::string(ordered_row->fields[5]) == "203",
+		"newest accepted same-key replacement remains last in FIFO application order");
+
+	const uint64_t blocked_shutdown_generation = newer_generation + 1000;
+	{
+		std::lock_guard<std::mutex> lock(acks.mutex);
+		acks.blocked_generation = blocked_shutdown_generation;
+		acks.callback_entered = false;
+		acks.release_callback = false;
+	}
+	ok(manager->post_server_desired_set({ProxySQL_ServerProtocol::mysql,
+		blocked_shutdown_generation, {17, 18}, {}, ProxySQL_ServerPersistence::runtime_only}),
+		"reload fixture retains one accepted request across inbox shutdown");
+	std::thread closing_inbox([&] { admin->shutdown_server_discovery_updates(); });
+	{
+		std::unique_lock<std::mutex> lock(acks.mutex);
+		acks.cv.wait(lock, [&] { return acks.callback_entered; });
+	}
+	auto* premature_admin = new ProxySQL_Admin();
+	ok(pipe(premature_admin->pipefd) == 0, "concurrent replacement Admin has a wake pipe");
+	GloAdmin = premature_admin;
 	ok(!manager->post_server_desired_set(desired(newer_generation, {shunned})),
-		"queue shutdown rejects new work after freeing/rejecting copied updates");
+		"Admin lifecycle cannot reopen while an old accepted callback lease remains");
+	{
+		std::lock_guard<std::mutex> lock(acks.mutex);
+		acks.release_callback = true;
+		acks.cv.notify_all();
+	}
+	closing_inbox.join();
+	auto* reopened_admin = new ProxySQL_Admin();
+	ok(pipe(reopened_admin->pipefd) == 0, "fresh Admin lifecycle has a wake pipe after shutdown drains");
+	GloAdmin = reopened_admin;
+	ProxySQL_ServerRow reloaded = shunned;
+	reloaded.hostname = "reloaded.example";
+	reloaded.weight = 301;
+	reloaded.force_topology_role = true;
+	const bool reloaded_post = manager->post_server_desired_set(desired(newer_generation, {reloaded}));
+	auto* duplicate_admin = new ProxySQL_Admin();
+	ok(pipe(duplicate_admin->pipefd) == 0, "duplicate in-process Admin lifecycle has a wake pipe");
+	GloAdmin = duplicate_admin;
+	ok(reloaded_post && duplicate_admin->drain_server_discovery_updates() == 1,
+		"completed shutdown reopens the empty inbox once without losing accepted work");
+	auto reloaded_rows = runtime_rows();
+	ok(find_row(*reloaded_rows, 17, "reloaded.example", 3306) != nullptr,
+		"post-shutdown Admin lifecycle applies newly accepted runtime work");
+	duplicate_admin->shutdown_server_discovery_updates();
+	ok(!manager->post_server_desired_set(desired(newer_generation, {shunned})),
+		"reopened queue closes again and rejects new work without acknowledgement");
 	ok(manager->uninstall_server_discovery_controller(ProxySQL_ServerProtocol::mysql) &&
-		manager->uninstall_server_discovery_controller(ProxySQL_ServerProtocol::pgsql) &&
 		acks.shutdowns.load() == 1 && acks.destroyed.load() == 1 &&
 		pgsql_acks.shutdowns.load() == 1 && pgsql_acks.destroyed.load() == 1,
 		"shutdown releases all queued leases before one destroy per protocol controller");
@@ -396,5 +613,11 @@ int main() {
 
 	close(admin->pipefd[0]);
 	close(admin->pipefd[1]);
+	close(premature_admin->pipefd[0]);
+	close(premature_admin->pipefd[1]);
+	close(reopened_admin->pipefd[0]);
+	close(reopened_admin->pipefd[1]);
+	close(duplicate_admin->pipefd[0]);
+	close(duplicate_admin->pipefd[1]);
 	return exit_status();
 }

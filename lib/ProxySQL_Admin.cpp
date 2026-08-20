@@ -2941,6 +2941,9 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	serial_exposer(std::function<void()> { update_modules_metrics })
 {
 	admin_threads_shutdown = false;
+#ifdef PROXYSQL40
+	proxysql_reopen_server_desired_sets();
+#endif
 #ifdef DEBUG
 		debugdb_disk = NULL;
 		if (glovars.has_debug==false) {

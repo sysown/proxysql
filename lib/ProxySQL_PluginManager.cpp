@@ -30,6 +30,12 @@
 extern ProxySQL_GlobalVariables GloVars;
 extern MySQL_Threads_Handler *GloMTH;
 
+void proxysql_lock_server_discovery_protocol(ProxySQL_ServerProtocol protocol);
+void proxysql_unlock_server_discovery_protocol(ProxySQL_ServerProtocol protocol);
+
+extern "C" void proxysql_server_discovery_retirement_attempt_for_test(
+	ProxySQL_ServerProtocol) __attribute__((weak));
+
 SQLite3DB* proxysql_plugin_get_admindb();
 SQLite3DB* proxysql_plugin_get_configdb();
 SQLite3DB* proxysql_plugin_get_statsdb();
@@ -1026,6 +1032,22 @@ private:
 	std::function<void()> release_;
 };
 
+class ScopedServerDiscoveryProtocolLock {
+public:
+	explicit ScopedServerDiscoveryProtocolLock(ProxySQL_ServerProtocol protocol)
+		: protocol_(protocol) {
+		proxysql_lock_server_discovery_protocol(protocol_);
+	}
+	~ScopedServerDiscoveryProtocolLock() {
+		proxysql_unlock_server_discovery_protocol(protocol_);
+	}
+	ScopedServerDiscoveryProtocolLock(const ScopedServerDiscoveryProtocolLock&) = delete;
+	ScopedServerDiscoveryProtocolLock& operator=(const ScopedServerDiscoveryProtocolLock&) = delete;
+
+private:
+	ProxySQL_ServerProtocol protocol_;
+};
+
 struct ServerCallbackContext {
 	ProxySQL_PluginManager *manager;
 	int protocol_index;
@@ -1060,11 +1082,18 @@ public:
 		return !completed_.load(std::memory_order_acquire) &&
 			manager_->revalidate_server_desired_set(protocol_, controller_, desired_set);
 	}
+	bool begin_apply(const ProxySQL_ServerDesiredSet& desired_set) override {
+		if (completed_.load(std::memory_order_acquire)) return false;
+		applying_ = manager_->begin_server_desired_set_apply(
+			protocol_, controller_, desired_set);
+		return applying_;
+	}
 
 	void complete(uint64_t generation, bool applied) override {
 		bool expected = false;
 		if (!completed_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) return;
-		manager_->complete_server_desired_set(protocol_, controller_, generation, applied);
+		manager_->complete_server_desired_set(
+			protocol_, controller_, generation, applied, applying_);
 	}
 
 	ProxySQL_ServerProtocol protocol() const noexcept override { return protocol_; }
@@ -1075,6 +1104,7 @@ private:
 	ProxySQL_ServerProtocol protocol_;
 	ProxySQL_ServerDiscoveryController* controller_;
 	std::atomic<bool> completed_ {false};
+	bool applying_ {false};
 };
 
 bool is_current_server_controller_callback(ProxySQL_PluginManager *manager, int protocol_index) {
@@ -1121,6 +1151,19 @@ void ProxySQL_PluginManager::release_server_callback_lease(int index) {
 		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
 		assert(server_callback_leases_[index] > 0);
 		--server_callback_leases_[index];
+	}
+	server_discovery_cv_.notify_all();
+}
+
+void ProxySQL_PluginManager::finish_server_desired_set(int index, bool applying) {
+	{
+		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+		assert(server_callback_leases_[index] > 0);
+		--server_callback_leases_[index];
+		if (applying) {
+			assert(server_desired_applies_inflight_[index] > 0);
+			--server_desired_applies_inflight_[index];
+		}
 	}
 	server_discovery_cv_.notify_all();
 }
@@ -1364,7 +1407,8 @@ bool ProxySQL_PluginManager::install_server_discovery_controller(
 	bool notify = false;
 	{
 		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
-		if (server_controllers_[index].controller != nullptr) return false;
+		if (server_controllers_[index].controller != nullptr ||
+			server_controller_retiring_[index]) return false;
 		server_controllers_[index] = {controller, destroy, module_handle};
 		if (server_snapshots_present_[index]) {
 			snapshot = server_snapshots_[index];
@@ -1393,28 +1437,43 @@ bool ProxySQL_PluginManager::uninstall_server_discovery_controller(ProxySQL_Serv
 	registered_server_controller_t retired {};
 	server_retirement_observer_for_test_cb observer = nullptr;
 	void *observer_opaque = nullptr;
+	if (proxysql_server_discovery_retirement_attempt_for_test != nullptr) {
+		proxysql_server_discovery_retirement_attempt_for_test(protocol);
+	}
 	std::unique_lock<std::mutex> lock(server_discovery_mutex_);
-	if (server_controllers_[index].controller == nullptr) return false;
-	retired = server_controllers_[index];
-	server_controllers_[index] = {};
-	observer = server_retirement_observer_for_test_;
-	observer_opaque = server_retirement_observer_opaque_for_test_;
-	if (observer != nullptr) {
+	if (server_controllers_[index].controller == nullptr ||
+		server_controller_retiring_[index]) return false;
+	server_controller_retiring_[index] = true;
+	server_discovery_cv_.wait(lock, [&] {
+		return server_desired_posts_inflight_[index] == 0 &&
+			server_desired_applies_inflight_[index] == 0;
+	});
+	lock.unlock();
+	{
+		ScopedServerDiscoveryProtocolLock protocol_lock(protocol);
+		lock.lock();
+		retired = server_controllers_[index];
+		server_controllers_[index] = {};
+		observer = server_retirement_observer_for_test_;
+		observer_opaque = server_retirement_observer_opaque_for_test_;
 		lock.unlock();
+	}
+	if (observer != nullptr) {
 		try {
 			observer(protocol, true, observer_opaque);
 		} catch (...) {
 			proxy_warning("Server discovery test retirement observer threw\n");
 		}
-		lock.lock();
 	}
-	server_discovery_cv_.wait(lock, [&] { return server_desired_posts_inflight_[index] == 0; });
-	lock.unlock();
 	proxysql_reject_queued_server_desired_sets(protocol, retired.controller);
 	lock.lock();
 	server_discovery_cv_.wait(lock, [&] { return server_callback_leases_[index] == 0; });
 	lock.unlock();
 	finalize_server_controller_retirement(retired);
+	lock.lock();
+	server_controller_retiring_[index] = false;
+	lock.unlock();
+	server_discovery_cv_.notify_all();
 	return true;
 }
 
@@ -1424,7 +1483,8 @@ bool ProxySQL_PluginManager::post_server_desired_set(ProxySQL_ServerDesiredSet d
 	ProxySQL_ServerDiscoveryController *controller = nullptr;
 	{
 		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
-		controller = server_controllers_[index].controller;
+		controller = server_controller_retiring_[index] ? nullptr :
+			server_controllers_[index].controller;
 		if (controller != nullptr) {
 			++server_callback_leases_[index];
 			++server_desired_posts_inflight_[index];
@@ -1442,15 +1502,9 @@ bool ProxySQL_PluginManager::post_server_desired_set(ProxySQL_ServerDesiredSet d
 	try {
 		auto completion = std::make_shared<ManagerServerDesiredSetCompletion>(
 			this, desired_set.protocol, controller);
-		const uint64_t generation = desired_set.generation;
 		const ProxySQL_ServerDesiredSetPostResult result = proxysql_enqueue_server_desired_set(
 			std::move(desired_set), completion);
 		if (result == ProxySQL_ServerDesiredSetPostResult::accepted) {
-			finish_post();
-			return true;
-		}
-		if (result == ProxySQL_ServerDesiredSetPostResult::owner_unavailable) {
-			completion->complete(generation, false);
 			finish_post();
 			return true;
 		}
@@ -1473,17 +1527,36 @@ bool ProxySQL_PluginManager::revalidate_server_desired_set(
 	std::sort(delegated.begin(), delegated.end());
 	std::lock_guard<std::mutex> lock(server_discovery_mutex_);
 	return server_controllers_[index].controller == controller &&
+		!server_controller_retiring_[index] &&
 		server_snapshots_present_[index] &&
 		server_snapshots_[index].generation == desired_set.generation &&
 		server_delegated_hostgroups_[index] == delegated;
 }
 
+bool ProxySQL_PluginManager::begin_server_desired_set_apply(
+	ProxySQL_ServerProtocol protocol, const ProxySQL_ServerDiscoveryController* controller,
+	const ProxySQL_ServerDesiredSet& desired_set) {
+	const int index = server_protocol_index(protocol);
+	if (index < 0 || desired_set.protocol != protocol) return false;
+	std::vector<uint32_t> delegated = desired_set.delegated_hostgroups;
+	std::sort(delegated.begin(), delegated.end());
+	std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+	if (server_controllers_[index].controller != controller ||
+		server_controller_retiring_[index] ||
+		!server_snapshots_present_[index] ||
+		server_snapshots_[index].generation != desired_set.generation ||
+		server_delegated_hostgroups_[index] != delegated) return false;
+	++server_desired_applies_inflight_[index];
+	return true;
+}
+
 void ProxySQL_PluginManager::complete_server_desired_set(
 	ProxySQL_ServerProtocol protocol, ProxySQL_ServerDiscoveryController* controller,
-	uint64_t generation, bool applied) {
+	uint64_t generation, bool applied, bool applying) {
 	const int index = server_protocol_index(protocol);
 	if (index < 0 || controller == nullptr) return;
-	ScopedServerCallbackLease lease([this, index] { release_server_callback_lease(index); });
+	ScopedServerCallbackLease lease(
+		[this, index, applying] { finish_server_desired_set(index, applying); });
 	ScopedServerControllerCallbackContext callback_context(this, index);
 	try {
 		controller->desired_set_applied(generation, applied);

@@ -1348,6 +1348,19 @@ bool PgSQL_HostGroups_Manager::commit(
 
 	unsigned long long curtime1=monotonic_time();
 	wrlock();
+	const bool result = commit_locked(peer_runtime_pgsql_servers, peer_pgsql_servers_v2,
+		only_commit_runtime_pgsql_servers, update_version);
+	wrunlock();
+	finish_commit(curtime1);
+	return result;
+}
+
+bool PgSQL_HostGroups_Manager::commit_locked(
+	const peer_runtime_pgsql_servers_t& peer_runtime_pgsql_servers,
+	const peer_pgsql_servers_v2_t& peer_pgsql_servers_v2,
+	bool only_commit_runtime_pgsql_servers,
+	bool update_version
+) {
 	// purge table
 	purge_pgsql_servers_table();
 
@@ -1596,7 +1609,10 @@ bool PgSQL_HostGroups_Manager::commit(
 	// calls to 'generate_pgsql_servers'.
 	update_table_pgsql_servers_for_monitor(false);
 
-	wrunlock();
+	return true;
+}
+
+void PgSQL_HostGroups_Manager::finish_commit(unsigned long long curtime1) {
 	unsigned long long curtime2=monotonic_time();
 	curtime1 = curtime1/1000;
 	curtime2 = curtime2/1000;
@@ -1606,7 +1622,6 @@ bool PgSQL_HostGroups_Manager::commit(
 		GloPTH->signal_all_threads(1);
 	}
 
-	return true;
 }
 
 /** 
@@ -1868,6 +1883,13 @@ void PgSQL_HostGroups_Manager::update_table_pgsql_servers_for_monitor(bool lock)
 }
 
 SQLite3_result * PgSQL_HostGroups_Manager::dump_table_pgsql(const string& name) {
+	wrlock();
+	SQLite3_result *resultset = dump_table_pgsql_locked(name);
+	wrunlock();
+	return resultset;
+}
+
+SQLite3_result * PgSQL_HostGroups_Manager::dump_table_pgsql_locked(const string& name) {
 	char * query = (char *)"";
 	if (name == "pgsql_replication_hostgroups") {
 		query=(char *)"SELECT writer_hostgroup, reader_hostgroup, check_type, comment FROM pgsql_replication_hostgroups";
@@ -1882,7 +1904,6 @@ SQLite3_result * PgSQL_HostGroups_Manager::dump_table_pgsql(const string& name) 
 	} else {
 		assert(0);
 	}
-	wrlock();
 	if (name == "pgsql_servers") {
 		purge_pgsql_servers_table();
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM pgsql_servers\n");
@@ -1895,7 +1916,6 @@ SQLite3_result * PgSQL_HostGroups_Manager::dump_table_pgsql(const string& name) 
 	SQLite3_result *resultset=NULL;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
 	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	wrunlock();
 	return resultset;
 }
 
@@ -4335,27 +4355,51 @@ void PgSQL_HostGroups_Manager::HostGroup_Server_Mapping::remove_HGM(PgSQL_SrvC* 
 }
 
 #ifdef PROXYSQL40
+extern "C" void proxysql_server_reconcile_after_hgm_snapshot_for_test(
+	ProxySQL_ServerProtocol) __attribute__((weak));
+
+bool PgSQL_HostGroups_Manager::reconcile_server_desired_set(
+	const ProxySQL_ServerDesiredSet& desired_set, std::string& error) {
+	if (desired_set.protocol != ProxySQL_ServerProtocol::pgsql) {
+		error = "invalid protocol for PostgreSQL Hostgroup Manager";
+		return false;
+	}
+	const unsigned long long started_at = monotonic_time();
+	proxy_info("Generating runtime pgsql servers records only.\n");
+	wrlock();
+	bool result = false;
+	try {
+		std::unique_ptr<SQLite3_result> current_rows(dump_table_pgsql_locked("pgsql_servers"));
+		if (!current_rows || current_rows->columns != 11) {
+			error = "malformed PostgreSQL runtime server snapshot";
+		} else {
+			if (proxysql_server_reconcile_after_hgm_snapshot_for_test != nullptr)
+				proxysql_server_reconcile_after_hgm_snapshot_for_test(desired_set.protocol);
+			ProxySQL_ServerRuntimeSnapshot current = proxysql_server_runtime_snapshot_from_rows(
+				ProxySQL_ServerProtocol::pgsql, desired_set.generation, *current_rows);
+			std::vector<ProxySQL_ServerRow> merged;
+			if (proxysql_merge_server_desired_set(current, desired_set, merged, error)) {
+				std::unique_ptr<SQLite3_result> incoming = pgsql_desired_rows(merged);
+				servers_add(incoming.get());
+				result = commit_locked({}, {}, true, false);
+				if (!result) error = "PostgreSQL Hostgroup Manager rejected desired servers";
+			}
+		}
+	} catch (...) {
+		wrunlock();
+		throw;
+	}
+	wrunlock();
+	if (result) finish_commit(started_at);
+	return result;
+}
+
 bool proxysql_reconcile_pgsql_server_desired_set(
 	const ProxySQL_ServerDesiredSet& desired_set, std::string& error) {
 	if (PgHGM == nullptr || desired_set.protocol != ProxySQL_ServerProtocol::pgsql) {
 		error = "PostgreSQL Hostgroup Manager is unavailable";
 		return false;
 	}
-	std::unique_ptr<SQLite3_result> current_rows(PgHGM->dump_table_pgsql("pgsql_servers"));
-	if (!current_rows || current_rows->columns != 11) {
-		error = "malformed PostgreSQL runtime server snapshot";
-		return false;
-	}
-	ProxySQL_ServerRuntimeSnapshot current = proxysql_server_runtime_snapshot_from_rows(
-		ProxySQL_ServerProtocol::pgsql, desired_set.generation, *current_rows);
-	std::vector<ProxySQL_ServerRow> merged;
-	if (!proxysql_merge_server_desired_set(current, desired_set, merged, error)) return false;
-	std::unique_ptr<SQLite3_result> incoming = pgsql_desired_rows(merged);
-	PgHGM->servers_add(incoming.get());
-	if (!PgHGM->commit()) {
-		error = "PostgreSQL Hostgroup Manager rejected desired servers";
-		return false;
-	}
-	return true;
+	return PgHGM->reconcile_server_desired_set(desired_set, error);
 }
 #endif

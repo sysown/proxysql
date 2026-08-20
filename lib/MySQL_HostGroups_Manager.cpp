@@ -1494,6 +1494,19 @@ bool MySQL_HostGroups_Manager::commit(
 
 	unsigned long long curtime1=monotonic_time();
 	wrlock();
+	const bool result = commit_locked(peer_runtime_mysql_servers, peer_mysql_servers_v2,
+		only_commit_runtime_mysql_servers, update_version);
+	wrunlock();
+	finish_commit(curtime1);
+	return result;
+}
+
+bool MySQL_HostGroups_Manager::commit_locked(
+	const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers,
+	const peer_mysql_servers_v2_t& peer_mysql_servers_v2,
+	bool only_commit_runtime_mysql_servers,
+	bool update_version
+) {
 	// purge table
 	purge_mysql_servers_table();
 	// if any server has gtid_port enabled, use_gtid is set to true
@@ -1813,7 +1826,10 @@ bool MySQL_HostGroups_Manager::commit(
 	// Refresh BGD monitoring after all runtime server changes are applied.
 	update_aws_rds_bgd_hosts_monitor_resultset();
 
-	wrunlock();
+	return true;
+}
+
+void MySQL_HostGroups_Manager::finish_commit(unsigned long long curtime1) {
 #ifdef PROXYSQL40
 	refresh_aws_locality_configuration();
 #endif
@@ -1826,7 +1842,6 @@ bool MySQL_HostGroups_Manager::commit(
 		GloMTH->signal_all_threads(1);
 	}
 
-	return true;
 }
 
 /** 
@@ -2480,6 +2495,13 @@ void MySQL_HostGroups_Manager::update_table_mysql_servers_for_monitor(bool lock)
  * @note If the provided table name is not recognized, the function assertion fails.
  */
 SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) {
+	wrlock();
+	SQLite3_result *resultset = dump_table_mysql_locked(name);
+	wrunlock();
+	return resultset;
+}
+
+SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_locked(const string& name) {
 	char * query = (char *)"";
 	if (name == "mysql_aws_aurora_hostgroups") {
 		query=(char *)"SELECT writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,"
@@ -2504,7 +2526,6 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) 
 	} else {
 		assert(0);
 	}
-	wrlock();
 	if (name == "mysql_servers") {
 		purge_mysql_servers_table();
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
@@ -2517,7 +2538,6 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) 
 	SQLite3_result *resultset=NULL;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
 	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	wrunlock();
 	return resultset;
 }
 
@@ -3179,28 +3199,52 @@ __exit_replication_lag_action:
 }
 
 #ifdef PROXYSQL40
+extern "C" void proxysql_server_reconcile_after_hgm_snapshot_for_test(
+	ProxySQL_ServerProtocol) __attribute__((weak));
+
+bool MySQL_HostGroups_Manager::reconcile_server_desired_set(
+	const ProxySQL_ServerDesiredSet& desired_set, std::string& error) {
+	if (desired_set.protocol != ProxySQL_ServerProtocol::mysql) {
+		error = "invalid protocol for MySQL Hostgroup Manager";
+		return false;
+	}
+	const unsigned long long started_at = monotonic_time();
+	proxy_info("Generating runtime mysql servers records only.\n");
+	wrlock();
+	bool result = false;
+	try {
+		std::unique_ptr<SQLite3_result> current_rows(dump_table_mysql_locked("mysql_servers"));
+		if (!current_rows || current_rows->columns != 12) {
+			error = "malformed MySQL runtime server snapshot";
+		} else {
+			if (proxysql_server_reconcile_after_hgm_snapshot_for_test != nullptr)
+				proxysql_server_reconcile_after_hgm_snapshot_for_test(desired_set.protocol);
+			ProxySQL_ServerRuntimeSnapshot current = proxysql_server_runtime_snapshot_from_rows(
+				ProxySQL_ServerProtocol::mysql, desired_set.generation, *current_rows);
+			std::vector<ProxySQL_ServerRow> merged;
+			if (proxysql_merge_server_desired_set(current, desired_set, merged, error)) {
+				std::unique_ptr<SQLite3_result> incoming = mysql_desired_rows(merged);
+				servers_add(incoming.get());
+				result = commit_locked({}, {}, true, false);
+				if (!result) error = "MySQL Hostgroup Manager rejected desired servers";
+			}
+		}
+	} catch (...) {
+		wrunlock();
+		throw;
+	}
+	wrunlock();
+	if (result) finish_commit(started_at);
+	return result;
+}
+
 bool proxysql_reconcile_mysql_server_desired_set(
 	const ProxySQL_ServerDesiredSet& desired_set, std::string& error) {
 	if (MyHGM == nullptr || desired_set.protocol != ProxySQL_ServerProtocol::mysql) {
 		error = "MySQL Hostgroup Manager is unavailable";
 		return false;
 	}
-	std::unique_ptr<SQLite3_result> current_rows(MyHGM->dump_table_mysql("mysql_servers"));
-	if (!current_rows || current_rows->columns != 12) {
-		error = "malformed MySQL runtime server snapshot";
-		return false;
-	}
-	ProxySQL_ServerRuntimeSnapshot current = proxysql_server_runtime_snapshot_from_rows(
-		ProxySQL_ServerProtocol::mysql, desired_set.generation, *current_rows);
-	std::vector<ProxySQL_ServerRow> merged;
-	if (!proxysql_merge_server_desired_set(current, desired_set, merged, error)) return false;
-	std::unique_ptr<SQLite3_result> incoming = mysql_desired_rows(merged);
-	MyHGM->servers_add(incoming.get());
-	if (!MyHGM->commit()) {
-		error = "MySQL Hostgroup Manager rejected desired servers";
-		return false;
-	}
-	return true;
+	return MyHGM->reconcile_server_desired_set(desired_set, error);
 }
 #endif
 
