@@ -389,15 +389,15 @@ jobs:
           # (test/tap/tap/ is in `tar -cf - test/`) AND has its parent
           # git-tracked (so post-checkout `mkdir -p` works on restore
           # at the consumer side). The e2e -t binaries DT_NEEDED
-          # libre2.so.10, and their baked RUNPATH points at
-          # /opt/proxysql/deps/re2/.../obj/so. That path involves a
-          # symlink to a tarball-unpacked directory that doesn't exist
-          # post-checkout, so caching the deps/ subtree directly doesn't
-          # survive tar restore. CI-mysqlx exports LD_LIBRARY_PATH
-          # pointing at this directory when running the e2e binaries
-          # inside the build image, which overrides RUNPATH lookup.
-          # libpq is deliberately absent: issue #6115 links libpq.a into
-          # every consumer and no longer builds or ships libpq.so.
+          # libre2.so.10 when built as a shared library; static RE2
+          # builds do not need it. Its baked RUNPATH points at
+          # /opt/proxysql/deps/re2/.../obj/so, a tarball-unpacked path
+          # that does not exist post-checkout. CI-mysqlx exports
+          # LD_LIBRARY_PATH pointing at this directory when running the
+          # e2e binaries inside the build image, which overrides RUNPATH
+          # lookup. libpq is deliberately absent: issue #6115 links
+          # libpq.a into every consumer and no longer builds or ships
+          # libpq.so.
           if [[ "${{ matrix.type }}" =~ "-mysqlx" ]]; then
             mkdir -p test/tap/tap/_runtime_libs
             # Stage the versioned runtime .so by its SONAME, tolerating a lost
@@ -419,7 +419,14 @@ jobs:
               cp -L "$src" "$dest/$soname"
               echo "staged $soname <- $(readlink -f "$src")"
             }
-            stage_lib deps/re2/re2/obj/so libre2.so.10 test/tap/tap/_runtime_libs
+            # Current v3.0 RE2 builds are static-only, so obj/so is not
+            # created. Keep staging for branches that intentionally build
+            # shared RE2, where a missing library remains a real failure.
+            if [ -d deps/re2/re2/obj/so ]; then
+              stage_lib deps/re2/re2/obj/so libre2.so.10 test/tap/tap/_runtime_libs
+            else
+              echo "RE2 is static-only; no libre2 runtime library to stage"
+            fi
             # Stage the chassis plugin .so files into the same dir for
             # the same reason: the _src cache path list is shared
             # infrastructure that we MUST NOT extend (changing it
@@ -435,15 +442,22 @@ jobs:
           fi
           # ------------------------------------------------------------
 
-          # Compile-time safety check: make sure unit tests actually got
-          # built. If they didn't, the build step above silently ignored
-          # a compile error and the delete below would "succeed" on an
-          # empty set. Fail loudly instead.
+          # Compile-time safety checks. A normal TAP build produces the
+          # integration binaries in tests/; it need not build tests/unit.
+          # The -tap-mysqlx cache is the exception: CI-mysqlx runs its
+          # mysqlx_*_unit-t and plugin_*_unit-t binaries directly.
+          # Fail loudly when the expected binaries are absent rather than
+          # letting cache-pruning succeed on an empty set.
+          TAP_COUNT=$(find test/tap/tests test/tap/tests_with_deps -path test/tap/tests/unit -prune -o -type f -name '*-t' -executable -print 2>/dev/null | wc -l)
           UNIT_COUNT=$(find test/tap/tests/unit -type f -name '*-t' -executable 2>/dev/null | wc -l)
-          echo ">>> Compiled ${UNIT_COUNT} unit test binaries"
-          if [ "${UNIT_COUNT}" -lt 1 ]; then
-            echo "ERROR: no unit test binaries found at test/tap/tests/unit/*-t"
-            echo "       This typically means a unit test failed to compile."
+          echo ">>> Compiled ${TAP_COUNT} TAP test binaries, including ${UNIT_COUNT} unit test binaries"
+          if [ "${TAP_COUNT}" -lt 1 ]; then
+            echo "ERROR: no executable TAP test binaries found under test/tap/tests"
+            echo "       This typically means the TAP build did not run or failed."
+            exit 1
+          fi
+          if [[ "${{ matrix.type }}" =~ "-mysqlx" ]] && [ "${UNIT_COUNT}" -lt 1 ]; then
+            echo "ERROR: no unit test binaries found at test/tap/tests/unit/*-t for the mysqlx cache"
             exit 1
           fi
 
