@@ -9,6 +9,7 @@ using json = nlohmann::json;
 #include <thread>
 #include "btree_map.h"
 #include "proxysql.h"
+#include "gen_utils.h"
 
 #include <random>
 #include <unistd.h>
@@ -91,10 +92,18 @@ using std::vector;
 
 
 void sleep_iter(unsigned int iter) {
+	static thread_local std::mt19937 jitter_rng(std::random_device{}());
+	static thread_local std::uniform_int_distribution<int> jitter_dist(0, 999);
 	usleep(50*iter);
 #ifdef RUNNING_ON_VALGRIND
-	usleep((1000+rand()%1000)*iter);
+	usleep((1000 + jitter_dist(jitter_rng)) * iter);
 #endif // RUNNING_ON_VALGRIND
+}
+
+static unsigned int rand_id() {
+	static thread_local std::mt19937 gen(std::random_device{}());
+	static thread_local std::uniform_int_distribution<unsigned int> dist;
+	return dist(gen);
 }
 
 
@@ -544,6 +553,9 @@ void * mysql_worker_thread_func(void *arg) {
 	proxysql_mysql_thread_t *mysql_thread=(proxysql_mysql_thread_t *)arg;
 	MySQL_Thread *worker = new MySQL_Thread();
 	mysql_thread->worker=worker;
+	// register before releasing the start-up gate below, so the shutdown barrier in
+	// wait_for_all_threads_to_exit_run_loop() has a complete participant count
+	GloMTH->register_thread_before_run_loop();
 	worker->init();
 //	worker->poll_listener_add(listen_fd);
 //	worker->poll_listener_add(socket_fd);
@@ -552,6 +564,9 @@ void * mysql_worker_thread_func(void *arg) {
 	do { sleep_iter(++iter); } while (load_);
 
 	worker->run();
+	// worker and idle threads reach into each other's MySQL_Thread objects, so no
+	// MySQL_Thread may be destroyed until all of them have left run()
+	GloMTH->wait_for_all_threads_to_exit_run_loop();
 	//delete worker;
 	delete worker;
 	mysql_thread->worker=NULL;
@@ -575,6 +590,9 @@ void * mysql_worker_thread_func_idles(void *arg) {
 	proxysql_mysql_thread_t *mysql_thread=(proxysql_mysql_thread_t *)arg;
 	MySQL_Thread *worker = new MySQL_Thread();
 	mysql_thread->worker=worker;
+	// register before releasing the start-up gate below, so the shutdown barrier in
+	// wait_for_all_threads_to_exit_run_loop() has a complete participant count
+	GloMTH->register_thread_before_run_loop();
 	worker->epoll_thread=true;
 	worker->init();
 //	worker->poll_listener_add(listen_fd);
@@ -584,6 +602,9 @@ void * mysql_worker_thread_func_idles(void *arg) {
 	do { sleep_iter(++iter); } while (load_);
 
 	worker->run();
+	// worker and idle threads reach into each other's MySQL_Thread objects, so no
+	// MySQL_Thread may be destroyed until all of them have left run()
+	GloMTH->wait_for_all_threads_to_exit_run_loop();
 	//delete worker;
 	delete worker;
 //	l_mem_destroy(__thr_sfp);
@@ -609,6 +630,9 @@ void* pgsql_worker_thread_func(void* arg) {
 	proxysql_pgsql_thread_t* pgsql_thread = (proxysql_pgsql_thread_t*)arg;
 	PgSQL_Thread* worker = new PgSQL_Thread();
 	pgsql_thread->worker = worker;
+	// register before releasing the start-up gate below, so the shutdown barrier in
+	// wait_for_all_threads_to_exit_run_loop() has a complete participant count
+	GloPTH->register_thread_before_run_loop();
 	worker->init();
 	//	worker->poll_listener_add(listen_fd);
 	//	worker->poll_listener_add(socket_fd);
@@ -617,6 +641,9 @@ void* pgsql_worker_thread_func(void* arg) {
 	do { sleep_iter(++iter); } while (load_);
 
 	worker->run();
+	// worker and idle threads reach into each other's PgSQL_Thread objects, so no
+	// PgSQL_Thread may be destroyed until all of them have left run()
+	GloPTH->wait_for_all_threads_to_exit_run_loop();
 	//delete worker;
 	delete worker;
 	pgsql_thread->worker = NULL;
@@ -640,6 +667,9 @@ void* pgsql_worker_thread_func_idles(void* arg) {
 	proxysql_pgsql_thread_t* pgsql_thread = (proxysql_pgsql_thread_t*)arg;
 	PgSQL_Thread* worker = new PgSQL_Thread();
 	pgsql_thread->worker = worker;
+	// register before releasing the start-up gate below, so the shutdown barrier in
+	// wait_for_all_threads_to_exit_run_loop() has a complete participant count
+	GloPTH->register_thread_before_run_loop();
 	worker->epoll_thread = true;
 	worker->init();
 	//	worker->poll_listener_add(listen_fd);
@@ -649,6 +679,9 @@ void* pgsql_worker_thread_func_idles(void* arg) {
 	do { sleep_iter(++iter); } while (load_);
 
 	worker->run();
+	// worker and idle threads reach into each other's PgSQL_Thread objects, so no
+	// PgSQL_Thread may be destroyed until all of them have left run()
+	GloPTH->wait_for_all_threads_to_exit_run_loop();
 	//delete worker;
 	delete worker;
 	//	l_mem_destroy(__thr_sfp);
@@ -1337,9 +1370,6 @@ void ProxySQL_Main_shutdown_all_modules() {
 	}
 
 	{
-#ifdef TEST_WITHASAN
-		pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
-#endif
 		cpu_timer t;
 		delete GloAdmin;
 #ifdef DEBUG
@@ -1613,7 +1643,7 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
  */
 bool ProxySQL_Main_init_phase3___start_all() {
 
-	srandom((unsigned int)(time(NULL) ^ getpid()));
+	g_seed = static_cast<unsigned int>(time(NULL) ^ getpid());
 	{
 		cpu_timer t;
 		GloMyLogger->events_set_datadir(GloVars.datadir);
@@ -1806,6 +1836,9 @@ bool ProxySQL_Main_init_phase3___start_all() {
 
 void ProxySQL_Main_init_phase4___shutdown() {
 	cpu_timer t;
+	// Stop accepting admin work and wait for all detached admin clients before
+	// the modules used by admin queries are joined or destroyed.
+	GloAdmin->shutdown_threads();
 	ProxySQL_Main_join_all_threads();
 
 	//write(GloAdmin->pipefd[1], &GloAdmin->pipefd[1], 1);	// write a random byte
@@ -2782,8 +2815,7 @@ int main(int argc, const char * argv[]) {
 		cpu_timer t;
 		ProxySQL_Main_process_global_variables(argc, argv);
 		GloVars.global.start_time=monotonic_time(); // always initialize it
-		srand(GloVars.global.start_time*thread_id());
-		randID = rand();
+		randID = rand_id();
 #ifdef DEBUG
 		std::cerr << "Main init global variables completed in ";
 #endif

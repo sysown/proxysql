@@ -11,6 +11,7 @@
 #include "proxysql_utils.h"
 #include "MySQL_Query_Processor.h"
 #include "SQLite3_Server.h"
+#include "gen_utils.h"
 #if defined(TEST_AURORA) || defined(TEST_RDS_BGD)
 #include "MySQL_Monitor.hpp"
 #endif
@@ -1270,7 +1271,7 @@ __run_query:
 					PROXY_TRACE();
 				}
 #ifdef TEST_GALERA_RANDOM
-				if (rand() % 20 == 0) {
+				if (fastrand() % 20 == 0) {
 					// randomly add some latency on 5% of the traffic
 					sleep(2);
 				}
@@ -1289,7 +1290,7 @@ __run_query:
 			}
 #endif // TEST_GROUPREP
 			if (strstr(query_no_space,(char *)"Seconds_Behind_Master")) {
-				if (rand() % 10 == 0) {
+				if (fastrand() % 10 == 0) {
 					// randomly add some latency on 10% of the traffic
 					sleep(2);
 				}
@@ -1397,7 +1398,9 @@ static void *child_mysql(void *arg) {
 	fds[0].revents=0;
 	fds[0].events=POLLIN|POLLOUT;
 	free(arg);
-	sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, true);
+	if (sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, true) == false) {
+		goto __exit_child_mysql;
+	}
 
 	while (__sync_fetch_and_add(&glovars.shutdown,0)==0) {
 		if (myds->available_data_out()) {

@@ -176,11 +176,13 @@ the chassis writes to `proxysql.log`.
 - **`MCP_Threads_Handler` variable accessors** (`get_variable`,
   `set_variable`, `has_variable`, `get_variables_list`) all serialize
   on the handler's `pthread_rwlock`.
-- **`genai_refresh_runtime_components`** is currently called from the
-  admin SQL thread without quiescing readers — operators triggering
-  `LOAD GENAI VARIABLES TO RUNTIME` while traffic is hot should expect
-  brief reload-window blips. Tracked as a follow-up — see the
-  detailed contract comment on the declaration in `genai_plugin.h`.
+- **`genai_refresh_runtime_components`** takes an exclusive lifecycle lock
+  while replacing the GenAI resources its AI/RAG handlers borrow, then rebinds
+  the persistent handlers before admitting another request. Admin command
+  callbacks yield the Admin global mutex before waiting for this lock, avoiding
+  a lock inversion with MCP config/stats requests. Other readers, especially
+  the anomaly-detector query hook, are not yet covered by the same lifecycle
+  lock; see the detailed contract comment in `genai_plugin.h`.
 - **Profile triplet**: `install_profiles_from_admin` and
   `save_profiles_to_admin_table` are *atomic across both tables*: one
   wrlock for both swaps + one BEGIN/COMMIT for both writes, FK-aware
@@ -215,8 +217,9 @@ the most worth closing given vector-storage complexity.
 
 ## 10. Known gaps
 
-- **`genai_refresh_runtime_components` race**: see Concurrency notes
-  above; needs a proper rwlock around `GloGATH`/`GloAI` consumers.
+- **Non-MCP `genai_refresh_runtime_components` race**: see Concurrency notes
+  above; needs a proper rwlock around the remaining `GloGATH`/`GloAI`
+  consumers.
 - **Tool-handler unit tests**: see Testing section.
 
 ## 11. History

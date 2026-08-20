@@ -23,6 +23,10 @@ jobs:
             || echo "::warning::could not fetch GH-Actions; the workflow-coverage check will skip"
       - name: Lint groups.json format
         run: python3 test/tap/groups/lint_groups_json.py
+      - name: Check AI TAP shard split
+        run: python3 test/tap/groups/test_ai_group_shards.py
+      - name: Check TAP Makefile dependency graph
+        run: python3 test/tap/groups/test_makefile_dependencies.py
       - name: Check every TAP source is registered in groups.json
         run: python3 test/tap/groups/check_groups.py --source
       - name: Check cluster simulator coverage contract

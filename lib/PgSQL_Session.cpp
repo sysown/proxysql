@@ -478,8 +478,9 @@ bool PgSQL_Session::handler_poisoned_simple_query(PtrSize_t* pkt) {
 		auto buff = pgpkt.detach();
 		client_myds->PSarrayOUT->add((void*)buff.first, buff.second);
 		client_myds->DSS = STATE_SLEEP;
-		l_free(pkt->size, pkt->ptr);
+		// CurrentQuery borrows pkt->ptr; finish logging/parser cleanup first.
 		if (mirror == false) RequestEnd(NULL, false);
+		l_free(pkt->size, pkt->ptr);
 		return true;
 	}
 
@@ -605,8 +606,9 @@ bool PgSQL_Session::handler_poisoned_simple_query(PtrSize_t* pkt) {
 	auto buff = pgpkt.detach();
 	client_myds->PSarrayOUT->add((void*)buff.first, buff.second);
 	client_myds->DSS = STATE_SLEEP;
-	l_free(pkt->size, pkt->ptr);
+	// CurrentQuery borrows pkt->ptr; finish logging/parser cleanup first.
 	if (mirror == false) RequestEnd(NULL, false);
+	l_free(pkt->size, pkt->ptr);
 	return true;
 }
 
@@ -3860,7 +3862,10 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				l_free(pkt->size, pkt->ptr);
 				return;
 			} else {
-				assert(0); // this should never happen
+				*wrong_pass = true;
+				client_myds->setDSS_STATE_QUERY_SENT_NET();
+				l_free(pkt->size, pkt->ptr);
+				return;
 			}
 		} else {
 			*wrong_pass = true; //to forcefully close the connection. Is there a better way to do it?
@@ -4067,11 +4072,15 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					(strcmp(client_addr, (char*)"::1") == 0)
 					) {
 					// we are good!
-					client_myds->myprot.welcome_client();
-					handshake_err = false;
-					GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_OK, this, NULL);
-					status = WAITING_CLIENT_DATA;
-					client_myds->DSS = STATE_CLIENT_AUTH_OK;
+					if (client_myds->myprot.welcome_client()) {
+						handshake_err = false;
+						GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_OK, this, NULL);
+						status = WAITING_CLIENT_DATA;
+						client_myds->DSS = STATE_CLIENT_AUTH_OK;
+					} else {
+						*wrong_pass = true;
+						client_myds->setDSS_STATE_QUERY_SENT_NET();
+					}
 				}
 				else {
 					char* a = (char*)"User '%s' can only connect locally";
@@ -4104,10 +4113,14 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					//client_myds->myprot.generate_pkt_OK(true,NULL,NULL, (is_encrypted ? 3 : 2), 0,0,0,0,NULL,false);
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8, "Session=%p , DS=%p . STATE_CLIENT_AUTH_OK\n", this, client_myds);
 					GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_OK, this, NULL);
-					client_myds->myprot.welcome_client();
-					handshake_err = false;
-					status = WAITING_CLIENT_DATA;
-					client_myds->DSS = STATE_CLIENT_AUTH_OK;
+					if (client_myds->myprot.welcome_client()) {
+						handshake_err = false;
+						status = WAITING_CLIENT_DATA;
+						client_myds->DSS = STATE_CLIENT_AUTH_OK;
+					} else {
+						*wrong_pass = true;
+						client_myds->setDSS_STATE_QUERY_SENT_NET();
+					}
 				}
 			}
 		}
@@ -7525,10 +7538,11 @@ char* PgSQL_Session::get_current_query(int max_length) {
 
 	if (query_len > 0) {
 		res = (char *) malloc(query_len + 1);
-		if (trunc_query) {
-			// for truncated queries, add three dots at the end
-			memcpy(res, query_ptr, query_len - 3);
-			memcpy(res + (query_len - 3), "...", 3);
+		if (trunc_query && query_len >= 4) {
+			// for truncated queries, add three dots at the end when they fit
+			size_t cp_len = static_cast<size_t>(query_len) - 3;
+			memcpy(res, query_ptr, cp_len);
+			memcpy(res + cp_len, "...", 3);
 		} else {
 			memcpy(res, query_ptr, query_len);
 		}

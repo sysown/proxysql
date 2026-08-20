@@ -353,6 +353,7 @@ class ProxySQL_Admin {
 	int main_poll_nfds;
 	struct pollfd *main_poll_fds;
 	int *main_callback_func;
+	bool admin_threads_shutdown;
 
 	bool registered_prometheus_collectable;
 
@@ -702,6 +703,7 @@ class ProxySQL_Admin {
 	 */
 	void save_mysql_servers_runtime_to_database(bool _runtime);
 	void admin_shutdown();
+	void shutdown_threads();
 	bool is_command(std::string);
 
 	template <typename S>
