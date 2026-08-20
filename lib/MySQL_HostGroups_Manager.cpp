@@ -3,6 +3,7 @@ using json = nlohmann::json;
 #define PROXYJSON
 
 #include "MySQL_HostGroups_Manager.h"
+#include "ProxySQL_ServerDiscovery.h"
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -34,6 +35,30 @@ using json = nlohmann::json;
 #include <type_traits>
 
 using std::function;
+
+#ifdef PROXYSQL40
+namespace {
+
+std::unique_ptr<SQLite3_result> mysql_desired_rows(
+	const std::vector<ProxySQL_ServerRow>& rows) {
+	auto result = std::make_unique<SQLite3_result>(12);
+	for (const auto& row : rows) {
+		std::array<std::string, 12> values {{
+			std::to_string(row.hostgroup_id), row.hostname, std::to_string(row.port),
+			std::to_string(row.gtid_port), row.status, std::to_string(row.weight),
+			std::to_string(row.compression), std::to_string(row.max_connections),
+			std::to_string(row.max_replication_lag), std::to_string(row.use_ssl),
+			std::to_string(row.max_latency_ms), row.comment
+		}};
+		char* fields[12];
+		for (size_t index = 0; index < values.size(); ++index) fields[index] = values[index].data();
+		result->add_row(fields);
+	}
+	return result;
+}
+
+} // namespace
+#endif
 
 extern MySQL_Authentication *GloMyAuth;
 
@@ -1778,6 +1803,7 @@ bool MySQL_HostGroups_Manager::commit(
 	read_only_set2.erase(read_only_set2.begin(), read_only_set2.end());
 
 	this->status.p_counter_array[p_hg_counter::servers_table_version]->Increment();
+	pthread_mutex_lock(&status.servers_table_version_lock);
 	pthread_cond_broadcast(&status.servers_table_version_cond);
 	pthread_mutex_unlock(&status.servers_table_version_lock);
 
@@ -3151,6 +3177,32 @@ __exit_replication_lag_action:
 	wrunlock();
 	GloAdmin->mysql_servers_wrunlock();
 }
+
+#ifdef PROXYSQL40
+bool proxysql_reconcile_mysql_server_desired_set(
+	const ProxySQL_ServerDesiredSet& desired_set, std::string& error) {
+	if (MyHGM == nullptr || desired_set.protocol != ProxySQL_ServerProtocol::mysql) {
+		error = "MySQL Hostgroup Manager is unavailable";
+		return false;
+	}
+	std::unique_ptr<SQLite3_result> current_rows(MyHGM->dump_table_mysql("mysql_servers"));
+	if (!current_rows || current_rows->columns != 12) {
+		error = "malformed MySQL runtime server snapshot";
+		return false;
+	}
+	ProxySQL_ServerRuntimeSnapshot current = proxysql_server_runtime_snapshot_from_rows(
+		ProxySQL_ServerProtocol::mysql, desired_set.generation, *current_rows);
+	std::vector<ProxySQL_ServerRow> merged;
+	if (!proxysql_merge_server_desired_set(current, desired_set, merged, error)) return false;
+	std::unique_ptr<SQLite3_result> incoming = mysql_desired_rows(merged);
+	MyHGM->servers_add(incoming.get());
+	if (!MyHGM->commit()) {
+		error = "MySQL Hostgroup Manager rejected desired servers";
+		return false;
+	}
+	return true;
+}
+#endif
 
 void MySQL_HostGroups_Manager::drop_all_idle_connections() {
 	// NOTE: the caller should hold wrlock

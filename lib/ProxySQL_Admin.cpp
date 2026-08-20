@@ -2618,6 +2618,13 @@ void * admin_main_loop(void *arg) {
 		if (__sync_fetch_and_add(&glovars.shutdown,0) != 0 || *shutdown != 0) {
 			break;
 		}
+		if (rc > 0 && (fds[0].revents & POLLIN) != 0) {
+			unsigned char wake = 0;
+			const ssize_t ignored = read(fds[0].fd, &wake, sizeof(wake));
+			(void)ignored;
+			fds[0].revents = 0;
+			GloAdmin->drain_server_discovery_updates();
+		}
 		if ((rc == -1 && errno == EINTR) || rc==0) {
 			// poll() timeout, try again
 			goto __end_while_pool;
@@ -3328,7 +3335,7 @@ void ProxySQL_Admin::shutdown_threads() {
 		return;
 	}
 	admin_threads_shutdown = true;
-
+	shutdown_server_discovery_updates();
 	if (Admin_HTTP_Server) {
 		if (variables.web_enabled) {
 			MHD_stop_daemon(Admin_HTTP_Server);
@@ -3443,6 +3450,54 @@ void ProxySQL_Admin::dump_mysql_collations() {
 //	admindb->execute("DELETE FROM disk.mysql_collations");
 //	admindb->execute("INSERT INTO disk.mysql_collations SELECT * FROM main.mysql_collations");
 }
+
+size_t ProxySQL_Admin::drain_server_discovery_updates() {
+#ifdef PROXYSQL40
+	unsigned char wake = 0;
+	if (pipefd[0] >= 0) {
+		const int flags = fcntl(pipefd[0], F_GETFL, 0);
+		if (flags >= 0) {
+			fcntl(pipefd[0], F_SETFL, flags | O_NONBLOCK);
+			while (read(pipefd[0], &wake, sizeof(wake)) > 0) {}
+			fcntl(pipefd[0], F_SETFL, flags);
+		}
+	}
+	return proxysql_drain_server_desired_sets();
+#else
+	return 0;
+#endif
+}
+
+void ProxySQL_Admin::shutdown_server_discovery_updates() {
+#ifdef PROXYSQL40
+	proxysql_shutdown_server_desired_sets();
+#endif
+}
+
+#ifdef PROXYSQL40
+bool proxysql_server_discovery_admin_available() {
+	return GloAdmin != nullptr;
+}
+
+void proxysql_wake_server_discovery_admin() {
+	if (GloAdmin == nullptr || GloAdmin->pipefd[1] < 0) return;
+	const unsigned char wake = 1;
+	const ssize_t ignored = write(GloAdmin->pipefd[1], &wake, sizeof(wake));
+	(void)ignored;
+}
+
+void proxysql_lock_server_discovery_protocol(ProxySQL_ServerProtocol protocol) {
+	if (GloAdmin == nullptr) return;
+	if (protocol == ProxySQL_ServerProtocol::mysql) GloAdmin->mysql_servers_wrlock();
+	else if (protocol == ProxySQL_ServerProtocol::pgsql) GloAdmin->pgsql_servers_wrlock();
+}
+
+void proxysql_unlock_server_discovery_protocol(ProxySQL_ServerProtocol protocol) {
+	if (GloAdmin == nullptr) return;
+	if (protocol == ProxySQL_ServerProtocol::mysql) GloAdmin->mysql_servers_wrunlock();
+	else if (protocol == ProxySQL_ServerProtocol::pgsql) GloAdmin->pgsql_servers_wrunlock();
+}
+#endif
 
 void ProxySQL_Admin::check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs) {
 //	int i;

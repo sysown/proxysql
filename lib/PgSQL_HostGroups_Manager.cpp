@@ -3,6 +3,7 @@ using json = nlohmann::json;
 #define PROXYJSON
 
 #include "PgSQL_HostGroups_Manager.h"
+#include "ProxySQL_ServerDiscovery.h"
 #include "ConnectionPoolDecision.h"
 #include "proxysql.h"
 #include "cpp.h"
@@ -32,6 +33,29 @@ using json = nlohmann::json;
 #include <functional>
 #include <mutex>
 #include <type_traits>
+
+#ifdef PROXYSQL40
+namespace {
+
+std::unique_ptr<SQLite3_result> pgsql_desired_rows(
+	const std::vector<ProxySQL_ServerRow>& rows) {
+	auto result = std::make_unique<SQLite3_result>(11);
+	for (const auto& row : rows) {
+		std::array<std::string, 11> values {{
+			std::to_string(row.hostgroup_id), row.hostname, std::to_string(row.port),
+			row.status, std::to_string(row.weight), std::to_string(row.compression),
+			std::to_string(row.max_connections), std::to_string(row.max_replication_lag),
+			std::to_string(row.use_ssl), std::to_string(row.max_latency_ms), row.comment
+		}};
+		char* fields[11];
+		for (size_t index = 0; index < values.size(); ++index) fields[index] = values[index].data();
+		result->add_row(fields);
+	}
+	return result;
+}
+
+} // namespace
+#endif
 
 using std::function;
 
@@ -1564,6 +1588,7 @@ bool PgSQL_HostGroups_Manager::commit(
 	read_only_set2.erase(read_only_set2.begin(), read_only_set2.end());
 
 	this->status.p_counter_array[PgSQL_p_hg_counter::servers_table_version]->Increment();
+	pthread_mutex_lock(&status.servers_table_version_lock);
 	pthread_cond_broadcast(&status.servers_table_version_cond);
 	pthread_mutex_unlock(&status.servers_table_version_lock);
 
@@ -4308,3 +4333,29 @@ void PgSQL_HostGroups_Manager::HostGroup_Server_Mapping::remove_HGM(PgSQL_SrvC* 
 	srv->status = MYSQL_SERVER_STATUS_OFFLINE_HARD;
 	srv->ConnectionsFree->drop_all_connections();
 }
+
+#ifdef PROXYSQL40
+bool proxysql_reconcile_pgsql_server_desired_set(
+	const ProxySQL_ServerDesiredSet& desired_set, std::string& error) {
+	if (PgHGM == nullptr || desired_set.protocol != ProxySQL_ServerProtocol::pgsql) {
+		error = "PostgreSQL Hostgroup Manager is unavailable";
+		return false;
+	}
+	std::unique_ptr<SQLite3_result> current_rows(PgHGM->dump_table_pgsql("pgsql_servers"));
+	if (!current_rows || current_rows->columns != 11) {
+		error = "malformed PostgreSQL runtime server snapshot";
+		return false;
+	}
+	ProxySQL_ServerRuntimeSnapshot current = proxysql_server_runtime_snapshot_from_rows(
+		ProxySQL_ServerProtocol::pgsql, desired_set.generation, *current_rows);
+	std::vector<ProxySQL_ServerRow> merged;
+	if (!proxysql_merge_server_desired_set(current, desired_set, merged, error)) return false;
+	std::unique_ptr<SQLite3_result> incoming = pgsql_desired_rows(merged);
+	PgHGM->servers_add(incoming.get());
+	if (!PgHGM->commit()) {
+		error = "PostgreSQL Hostgroup Manager rejected desired servers";
+		return false;
+	}
+	return true;
+}
+#endif

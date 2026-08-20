@@ -17,6 +17,29 @@
 #include <string>
 #include <vector>
 
+class ProxySQL_ServerDesiredSetCompletion {
+public:
+	virtual bool revalidate(const ProxySQL_ServerDesiredSet& desired_set) = 0;
+	virtual void complete(uint64_t generation, bool applied) = 0;
+	virtual ProxySQL_ServerProtocol protocol() const noexcept = 0;
+	virtual const void* controller_identity() const noexcept = 0;
+	virtual ~ProxySQL_ServerDesiredSetCompletion() = default;
+};
+
+enum class ProxySQL_ServerDesiredSetPostResult : uint8_t {
+	accepted,
+	owner_unavailable,
+	rejected
+};
+
+ProxySQL_ServerDesiredSetPostResult proxysql_enqueue_server_desired_set(
+	ProxySQL_ServerDesiredSet desired_set,
+	std::shared_ptr<ProxySQL_ServerDesiredSetCompletion> completion);
+size_t proxysql_drain_server_desired_sets();
+void proxysql_reject_queued_server_desired_sets(
+	ProxySQL_ServerProtocol protocol, const void* controller_identity);
+void proxysql_shutdown_server_desired_sets();
+
 class ProxySQL_PluginManager {
 public:
 	ProxySQL_PluginManager();
@@ -94,7 +117,8 @@ public:
 	// Runs the module commit and legacy/controller notification under one
 	// callback lease.  Runtime installation uses this instead of two separate
 	// calls so a retired DSO cannot disappear between them.
-	void commit_and_install_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot);
+	void commit_and_install_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot,
+		std::vector<uint32_t> delegated_hostgroups);
 	SQLite3_result* server_module_runtime_table_snapshot(
 		ProxySQL_ServerProtocol protocol, const char* table_name);
 	bool unregister_server_module(ProxySQL_ServerProtocol protocol);
@@ -104,6 +128,11 @@ public:
 	bool uninstall_server_discovery_controller(ProxySQL_ServerProtocol protocol);
 	bool post_server_desired_set(ProxySQL_ServerDesiredSet desired_set);
 	void install_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot);
+	bool revalidate_server_desired_set(ProxySQL_ServerProtocol protocol,
+		const ProxySQL_ServerDiscoveryController* controller,
+		const ProxySQL_ServerDesiredSet& desired_set) const;
+	void complete_server_desired_set(ProxySQL_ServerProtocol protocol,
+		ProxySQL_ServerDiscoveryController* controller, uint64_t generation, bool applied);
 	// Unit-test-only retirement observation seam.  The callback runs after a
 	// registry entry is detached and with server_discovery_mutex_ unlocked.
 	using server_retirement_observer_for_test_cb =
@@ -203,7 +232,9 @@ private:
 	registered_server_controller_t server_controllers_[2] {};
 	bool server_snapshots_present_[2] { false, false };
 	size_t server_callback_leases_[2] { 0, 0 };
+	size_t server_desired_posts_inflight_[2] { 0, 0 };
 	ProxySQL_ServerRuntimeSnapshot server_snapshots_[2] {};
+	std::vector<uint32_t> server_delegated_hostgroups_[2] {};
 	server_retirement_observer_for_test_cb server_retirement_observer_for_test_ { nullptr };
 	void *server_retirement_observer_opaque_for_test_ { nullptr };
 #endif /* PROXYSQL40 */
@@ -277,7 +308,8 @@ bool proxysql_prepare_active_server_module_runtime(const ProxySQL_ServerModuleSn
 	std::vector<ProxySQL_ServerHostgroupClaim>& claims, std::string& error);
 void proxysql_commit_active_server_module_runtime(ProxySQL_ServerProtocol protocol, uint64_t generation);
 void proxysql_install_active_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot);
-void proxysql_commit_and_install_active_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot);
+void proxysql_commit_and_install_active_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot,
+	std::vector<uint32_t> delegated_hostgroups);
 SQLite3_result* proxysql_active_server_module_runtime_table_snapshot(
 	ProxySQL_ServerProtocol protocol, const char* table_name);
 

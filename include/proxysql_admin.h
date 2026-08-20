@@ -684,6 +684,8 @@ class ProxySQL_Admin {
 	 *   ```
 	 */
 	bool save_mysql_servers_runtime_to_database(bool _runtime);
+	size_t drain_server_discovery_updates();
+	void shutdown_server_discovery_updates();
 	void admin_shutdown();
 	void shutdown_threads();
 	bool is_command(std::string);

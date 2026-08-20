@@ -30,6 +30,10 @@ struct ProxySQL_ServerRow {
 	int32_t use_ssl {1};
 	int64_t max_latency_ms {0};
 	std::string comment;
+	// Transient reconciliation metadata. These fields are consumed by the
+	// owner-thread adapter and are never projected into a Servers table.
+	uint64_t topology_role_epoch {0};
+	bool force_topology_role {false};
 };
 
 struct ProxySQL_ServerRuntimeSnapshot {
@@ -55,6 +59,16 @@ struct ProxySQL_ServerDesiredSet {
 uint64_t proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol protocol);
 ProxySQL_ServerRuntimeSnapshot proxysql_server_runtime_snapshot_from_rows(
 	ProxySQL_ServerProtocol protocol, uint64_t generation, const SQLite3_result& rows);
+
+#ifdef PROXYSQL40
+bool proxysql_reconcile_mysql_server_desired_set(
+	const ProxySQL_ServerDesiredSet& desired_set, std::string& error);
+bool proxysql_reconcile_pgsql_server_desired_set(
+	const ProxySQL_ServerDesiredSet& desired_set, std::string& error);
+bool proxysql_merge_server_desired_set(const ProxySQL_ServerRuntimeSnapshot& current,
+	const ProxySQL_ServerDesiredSet& desired_set,
+	std::vector<ProxySQL_ServerRow>& merged, std::string& error);
+#endif
 
 // Synchronous callbacks used by core while it commits configuration. The
 // opaque value is plugin-owned and is returned unchanged on every call.

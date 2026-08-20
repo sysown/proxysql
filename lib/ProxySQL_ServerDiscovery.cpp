@@ -10,6 +10,16 @@
 #include <memory>
 #include <mutex>
 #include <set>
+#include <deque>
+#include <map>
+#include <tuple>
+
+#ifdef PROXYSQL40
+bool proxysql_server_discovery_admin_available();
+void proxysql_wake_server_discovery_admin();
+void proxysql_lock_server_discovery_protocol(ProxySQL_ServerProtocol protocol);
+void proxysql_unlock_server_discovery_protocol(ProxySQL_ServerProtocol protocol);
+#endif
 
 namespace {
 std::atomic<uint64_t> mysql_generation {0};
@@ -111,6 +121,7 @@ struct ProxySQL_ServerRuntimeInstallTransaction::Impl {
 	std::unique_lock<std::mutex> lock;
 	bool prepared {false};
 	bool reservation_owned {false};
+	std::vector<uint32_t> delegated_hostgroups;
 
 	Impl(ProxySQL_ServerProtocol value_protocol, uint64_t value_candidate, int value_index,
 		std::unique_lock<std::mutex>&& value_lock)
@@ -201,6 +212,14 @@ bool ProxySQL_ServerRuntimeInstallTransaction::prepare(ProxySQL_ServerModuleSnap
 			return false;
 		}
 	}
+	impl_->delegated_hostgroups.clear();
+	for (const auto& claim : claims) {
+		impl_->delegated_hostgroups.push_back(claim.writer_hostgroup);
+		impl_->delegated_hostgroups.push_back(claim.reader_hostgroup);
+	}
+	std::sort(impl_->delegated_hostgroups.begin(), impl_->delegated_hostgroups.end());
+	impl_->delegated_hostgroups.erase(std::unique(impl_->delegated_hostgroups.begin(),
+		impl_->delegated_hostgroups.end()), impl_->delegated_hostgroups.end());
 	impl_->prepared = true;
 	return true;
 #else
@@ -233,7 +252,8 @@ bool ProxySQL_ServerRuntimeInstallTransaction::commit(
 	std::unique_ptr<Impl> completed = std::move(impl_);
 #ifdef PROXYSQL40
 	if (commit_affiliated_module)
-		proxysql_commit_and_install_active_server_runtime_snapshot(std::move(snapshot));
+		proxysql_commit_and_install_active_server_runtime_snapshot(std::move(snapshot),
+			std::move(completed->delegated_hostgroups));
 	else
 		proxysql_install_active_server_runtime_snapshot(std::move(snapshot));
 #else
@@ -336,3 +356,252 @@ ProxySQL_ServerRuntimeSnapshot proxysql_server_runtime_snapshot_from_rows(
 	}
 	return snapshot;
 }
+
+#ifdef PROXYSQL40
+namespace {
+
+using ServerKey = std::tuple<uint32_t, std::string, uint16_t>;
+using EndpointKey = std::pair<std::string, uint16_t>;
+
+bool valid_desired_server_row(ProxySQL_ServerProtocol protocol,
+	const ProxySQL_ServerRow& row) {
+	if (row.hostname.empty() || row.port == 0 || row.weight < 0 ||
+		row.max_connections < 0 || row.max_replication_lag < 0 ||
+		row.max_latency_ms < 0 || (row.compression != 0 && row.compression != 1) ||
+		(row.use_ssl != 0 && row.use_ssl != 1)) return false;
+	if (protocol == ProxySQL_ServerProtocol::pgsql && row.gtid_port != 0) return false;
+	if (protocol == ProxySQL_ServerProtocol::mysql &&
+		(row.gtid_port < 0 || row.gtid_port > std::numeric_limits<uint16_t>::max())) return false;
+	return row.status == "ONLINE" || row.status == "SHUNNED" ||
+		row.status == "OFFLINE_SOFT" || row.status == "OFFLINE_HARD";
+}
+
+bool server_row_less(const ProxySQL_ServerRow& lhs, const ProxySQL_ServerRow& rhs) {
+	return std::tie(lhs.hostgroup_id, lhs.hostname, lhs.port) <
+		std::tie(rhs.hostgroup_id, rhs.hostname, rhs.port);
+}
+
+constexpr size_t SERVER_DESIRED_SET_QUEUE_CAPACITY = 256;
+
+struct QueuedServerDesiredSet {
+	ProxySQL_ServerDesiredSet desired_set;
+	std::shared_ptr<ProxySQL_ServerDesiredSetCompletion> completion;
+};
+
+struct ServerDesiredSetInbox {
+	std::mutex mutex;
+	std::deque<QueuedServerDesiredSet> queue;
+	bool shutdown {false};
+};
+
+class ScopedServerDiscoveryProtocolLock {
+public:
+	explicit ScopedServerDiscoveryProtocolLock(ProxySQL_ServerProtocol protocol)
+		: protocol_(protocol) { proxysql_lock_server_discovery_protocol(protocol_); }
+	~ScopedServerDiscoveryProtocolLock() {
+		proxysql_unlock_server_discovery_protocol(protocol_);
+	}
+	ScopedServerDiscoveryProtocolLock(const ScopedServerDiscoveryProtocolLock&) = delete;
+	ScopedServerDiscoveryProtocolLock& operator=(const ScopedServerDiscoveryProtocolLock&) = delete;
+private:
+	ProxySQL_ServerProtocol protocol_;
+};
+
+ServerDesiredSetInbox& server_desired_set_inbox() {
+	static ServerDesiredSetInbox inbox;
+	return inbox;
+}
+
+bool same_queue_key(const QueuedServerDesiredSet& queued,
+	const ProxySQL_ServerDesiredSet& desired_set) {
+	return queued.desired_set.protocol == desired_set.protocol &&
+		queued.desired_set.delegated_hostgroups == desired_set.delegated_hostgroups;
+}
+
+void wake_admin_owner() {
+	proxysql_wake_server_discovery_admin();
+}
+
+} // namespace
+
+bool proxysql_merge_server_desired_set(const ProxySQL_ServerRuntimeSnapshot& current,
+	const ProxySQL_ServerDesiredSet& desired_set,
+	std::vector<ProxySQL_ServerRow>& merged, std::string& error) {
+	merged.clear();
+	error.clear();
+	if (current.protocol != desired_set.protocol ||
+		(desired_set.protocol != ProxySQL_ServerProtocol::mysql &&
+		 desired_set.protocol != ProxySQL_ServerProtocol::pgsql)) {
+		error = "protocol mismatch";
+		return false;
+	}
+	if (desired_set.persistence != ProxySQL_ServerPersistence::runtime_only) {
+		error = "unsupported desired-set persistence mode";
+		return false;
+	}
+	if (desired_set.delegated_hostgroups.empty()) {
+		error = "empty delegated hostgroup set";
+		return false;
+	}
+	std::set<uint32_t> delegated;
+	for (uint32_t hostgroup : desired_set.delegated_hostgroups) {
+		if (!delegated.insert(hostgroup).second) {
+			error = "duplicate delegated hostgroup";
+			return false;
+		}
+	}
+	std::set<ServerKey> desired_keys;
+	std::map<EndpointKey, std::vector<ProxySQL_ServerRow>> desired_by_endpoint;
+	for (const auto& row : desired_set.servers) {
+		if (delegated.count(row.hostgroup_id) == 0) {
+			error = "desired row is outside delegated hostgroups";
+			return false;
+		}
+		if (!valid_desired_server_row(desired_set.protocol, row)) {
+			error = "malformed desired server row";
+			return false;
+		}
+		const ServerKey key {row.hostgroup_id, row.hostname, row.port};
+		if (!desired_keys.insert(key).second) {
+			error = "duplicate desired server row";
+			return false;
+		}
+		desired_by_endpoint[{row.hostname, row.port}].push_back(row);
+	}
+
+	std::map<EndpointKey, std::vector<ProxySQL_ServerRow>> current_by_endpoint;
+	for (const auto& row : current.servers) {
+		if (delegated.count(row.hostgroup_id) == 0) merged.push_back(row);
+		else current_by_endpoint[{row.hostname, row.port}].push_back(row);
+	}
+
+	for (const auto& desired_entry : desired_by_endpoint) {
+		const auto current_it = current_by_endpoint.find(desired_entry.first);
+		const bool force_role = std::any_of(desired_entry.second.begin(), desired_entry.second.end(),
+			[](const ProxySQL_ServerRow& row) { return row.force_topology_role; });
+		if (current_it == current_by_endpoint.end() || force_role) {
+			merged.insert(merged.end(), desired_entry.second.begin(), desired_entry.second.end());
+			continue;
+		}
+		for (const auto& current_row : current_it->second) {
+			const auto exact = std::find_if(desired_entry.second.begin(), desired_entry.second.end(),
+				[&](const ProxySQL_ServerRow& row) {
+					return row.hostgroup_id == current_row.hostgroup_id;
+				});
+			ProxySQL_ServerRow row = exact != desired_entry.second.end() ? *exact :
+				desired_entry.second.front();
+			row.hostgroup_id = current_row.hostgroup_id;
+			row.hostname = current_row.hostname;
+			row.port = current_row.port;
+			row.status = current_row.status;
+			row.topology_role_epoch = 0;
+			row.force_topology_role = false;
+			merged.push_back(std::move(row));
+		}
+	}
+	std::sort(merged.begin(), merged.end(), server_row_less);
+	return true;
+}
+
+ProxySQL_ServerDesiredSetPostResult proxysql_enqueue_server_desired_set(
+	ProxySQL_ServerDesiredSet desired_set,
+	std::shared_ptr<ProxySQL_ServerDesiredSetCompletion> completion) {
+	if (!proxysql_server_discovery_admin_available())
+		return ProxySQL_ServerDesiredSetPostResult::owner_unavailable;
+	std::sort(desired_set.delegated_hostgroups.begin(), desired_set.delegated_hostgroups.end());
+	ServerDesiredSetInbox& inbox = server_desired_set_inbox();
+	std::shared_ptr<ProxySQL_ServerDesiredSetCompletion> replaced;
+	uint64_t replaced_generation = 0;
+	bool wake = false;
+	{
+		std::lock_guard<std::mutex> lock(inbox.mutex);
+		if (inbox.shutdown) return ProxySQL_ServerDesiredSetPostResult::rejected;
+		if (inbox.queue.size() == SERVER_DESIRED_SET_QUEUE_CAPACITY) {
+			auto match = std::find_if(inbox.queue.begin(), inbox.queue.end(),
+				[&](const QueuedServerDesiredSet& queued) { return same_queue_key(queued, desired_set); });
+			if (match == inbox.queue.end()) return ProxySQL_ServerDesiredSetPostResult::rejected;
+			replaced_generation = match->desired_set.generation;
+			replaced = std::move(match->completion);
+			*match = {std::move(desired_set), std::move(completion)};
+		} else {
+			wake = inbox.queue.empty();
+			inbox.queue.push_back({std::move(desired_set), std::move(completion)});
+		}
+	}
+	if (replaced) replaced->complete(replaced_generation, false);
+	if (wake) wake_admin_owner();
+	return ProxySQL_ServerDesiredSetPostResult::accepted;
+}
+
+size_t proxysql_drain_server_desired_sets() {
+	ServerDesiredSetInbox& inbox = server_desired_set_inbox();
+	size_t drained = 0;
+	for (;;) {
+		QueuedServerDesiredSet queued;
+		{
+			std::lock_guard<std::mutex> lock(inbox.mutex);
+			if (inbox.queue.empty()) break;
+			queued = std::move(inbox.queue.front());
+			inbox.queue.pop_front();
+		}
+		bool applied = false;
+		if (queued.completion && queued.completion->revalidate(queued.desired_set)) {
+			std::string error;
+			try {
+				{
+					ScopedServerDiscoveryProtocolLock lock(queued.desired_set.protocol);
+					if (queued.desired_set.protocol == ProxySQL_ServerProtocol::mysql &&
+						queued.completion->revalidate(queued.desired_set)) {
+						applied = proxysql_reconcile_mysql_server_desired_set(queued.desired_set, error);
+					} else if (queued.desired_set.protocol == ProxySQL_ServerProtocol::pgsql &&
+						queued.completion->revalidate(queued.desired_set)) {
+						applied = proxysql_reconcile_pgsql_server_desired_set(queued.desired_set, error);
+					}
+				}
+			} catch (const std::exception& exception) {
+				error = exception.what();
+			} catch (...) {
+				error = "unknown reconciliation failure";
+			}
+		}
+		if (queued.completion)
+			queued.completion->complete(queued.desired_set.generation, applied);
+		++drained;
+	}
+	return drained;
+}
+
+void proxysql_reject_queued_server_desired_sets(
+	ProxySQL_ServerProtocol protocol, const void* controller_identity) {
+	ServerDesiredSetInbox& inbox = server_desired_set_inbox();
+	std::vector<QueuedServerDesiredSet> rejected;
+	{
+		std::lock_guard<std::mutex> lock(inbox.mutex);
+		for (auto it = inbox.queue.begin(); it != inbox.queue.end();) {
+			if (it->completion && it->completion->protocol() == protocol &&
+				it->completion->controller_identity() == controller_identity) {
+				rejected.push_back(std::move(*it));
+				it = inbox.queue.erase(it);
+			} else {
+				++it;
+			}
+		}
+	}
+	for (auto& queued : rejected)
+		queued.completion->complete(queued.desired_set.generation, false);
+}
+
+void proxysql_shutdown_server_desired_sets() {
+	ServerDesiredSetInbox& inbox = server_desired_set_inbox();
+	std::deque<QueuedServerDesiredSet> rejected;
+	{
+		std::lock_guard<std::mutex> lock(inbox.mutex);
+		inbox.shutdown = true;
+		rejected.swap(inbox.queue);
+	}
+	for (auto& queued : rejected) {
+		if (queued.completion)
+			queued.completion->complete(queued.desired_set.generation, false);
+	}
+}
+#endif
