@@ -6,9 +6,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <sys/types.h>
 #include <vector>
 
 class SQLite3DB;
+struct sqlite3_stmt;
 
 // Result values intentionally reveal only operation state.  They never carry
 // secret material and are safe to surface in a plugin's own error handling.
@@ -30,6 +32,9 @@ class ProxySQL_PluginSecrets {
 public:
 	using cleanse_observer_t = void (*)(void*, size_t);
 	using key_open_observer_t = void (*)(int flags);
+	using key_io_hook_t = ssize_t (*)(bool is_write, int fd, void* buffer,
+		size_t length, int* error);
+	using sqlite_step_hook_t = int (*)(sqlite3_stmt* stmt);
 
 	ProxySQL_PluginSecrets(SQLite3DB* configdb, std::string datadir);
 
@@ -43,6 +48,8 @@ public:
 	// altering production crypto or filesystem behaviour.
 	static void set_cleanse_observer(cleanse_observer_t observer);
 	static void set_key_open_observer(key_open_observer_t observer);
+	static void set_key_io_hook(key_io_hook_t hook);
+	static void set_sqlite_step_hook(sqlite_step_hook_t hook);
 
 private:
 	bool ensure_schema() const;

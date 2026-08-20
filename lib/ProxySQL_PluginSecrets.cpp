@@ -28,6 +28,8 @@ constexpr const char k_aad_context[] = "proxysql-plugin-secret-v1";
 std::mutex g_observer_mutex;
 ProxySQL_PluginSecrets::cleanse_observer_t g_cleanse_observer = nullptr;
 ProxySQL_PluginSecrets::key_open_observer_t g_key_open_observer = nullptr;
+ProxySQL_PluginSecrets::key_io_hook_t g_key_io_hook = nullptr;
+ProxySQL_PluginSecrets::sqlite_step_hook_t g_sqlite_step_hook = nullptr;
 
 void cleanse(void* ptr, size_t length) {
 	if (ptr == nullptr || length == 0) return;
@@ -91,7 +93,15 @@ bool sqlite_exec(sqlite3* db, const char* sql) {
 
 bool write_all(int fd, const uint8_t* value, size_t length) {
 	while (length != 0) {
-		const ssize_t written = write(fd, value, length);
+		ProxySQL_PluginSecrets::key_io_hook_t hook = nullptr;
+		{
+			std::lock_guard<std::mutex> lock(g_observer_mutex);
+			hook = g_key_io_hook;
+		}
+		int io_error = 0;
+		const ssize_t written = hook != nullptr ?
+			hook(true, fd, const_cast<uint8_t*>(value), length, &io_error) : write(fd, value, length);
+		if (written < 0 && (hook != nullptr ? io_error : errno) == EINTR) continue;
 		if (written <= 0) return false;
 		value += written;
 		length -= static_cast<size_t>(written);
@@ -101,12 +111,28 @@ bool write_all(int fd, const uint8_t* value, size_t length) {
 
 bool read_all(int fd, uint8_t* value, size_t length) {
 	while (length != 0) {
-		const ssize_t read_count = read(fd, value, length);
+		ProxySQL_PluginSecrets::key_io_hook_t hook = nullptr;
+		{
+			std::lock_guard<std::mutex> lock(g_observer_mutex);
+			hook = g_key_io_hook;
+		}
+		int io_error = 0;
+		const ssize_t read_count = hook != nullptr ? hook(false, fd, value, length, &io_error) : read(fd, value, length);
+		if (read_count < 0 && (hook != nullptr ? io_error : errno) == EINTR) continue;
 		if (read_count <= 0) return false;
 		value += read_count;
 		length -= static_cast<size_t>(read_count);
 	}
 	return true;
+}
+
+int sqlite_step(sqlite3_stmt* stmt) {
+	ProxySQL_PluginSecrets::sqlite_step_hook_t hook = nullptr;
+	{
+		std::lock_guard<std::mutex> lock(g_observer_mutex);
+		hook = g_sqlite_step_hook;
+	}
+	return hook != nullptr ? hook(stmt) : (*proxy_sqlite3_step)(stmt);
 }
 
 bool safe_key_stat(const struct stat& st) {
@@ -144,6 +170,16 @@ void ProxySQL_PluginSecrets::set_cleanse_observer(cleanse_observer_t observer) {
 void ProxySQL_PluginSecrets::set_key_open_observer(key_open_observer_t observer) {
 	std::lock_guard<std::mutex> lock(g_observer_mutex);
 	g_key_open_observer = observer;
+}
+
+void ProxySQL_PluginSecrets::set_key_io_hook(key_io_hook_t hook) {
+	std::lock_guard<std::mutex> lock(g_observer_mutex);
+	g_key_io_hook = hook;
+}
+
+void ProxySQL_PluginSecrets::set_sqlite_step_hook(sqlite_step_hook_t hook) {
+	std::lock_guard<std::mutex> lock(g_observer_mutex);
+	g_sqlite_step_hook = hook;
 }
 
 bool ProxySQL_PluginSecrets::ensure_schema() const {
@@ -235,9 +271,11 @@ ProxySQL_PluginSecretResult ProxySQL_PluginSecrets::put(const char* owner, const
 	const bool bound = (*proxy_sqlite3_bind_text)(stmt, 1, owner, -1, SQLITE_TRANSIENT) == SQLITE_OK &&
 		(*proxy_sqlite3_bind_text)(stmt, 2, name, -1, SQLITE_TRANSIENT) == SQLITE_OK &&
 		(*proxy_sqlite3_bind_blob)(stmt, 3, nonce.data(), nonce.size(), SQLITE_TRANSIENT) == SQLITE_OK &&
-		(*proxy_sqlite3_bind_blob)(stmt, 4, ciphertext.data(), ciphertext.size(), SQLITE_TRANSIENT) == SQLITE_OK &&
+		(*proxy_sqlite3_bind_blob)(stmt, 4,
+			ciphertext.empty() ? static_cast<const void*>("\0") : static_cast<const void*>(ciphertext.data()),
+			ciphertext.size(), SQLITE_TRANSIENT) == SQLITE_OK &&
 		(*proxy_sqlite3_bind_blob)(stmt, 5, tag.data(), tag.size(), SQLITE_TRANSIENT) == SQLITE_OK;
-	const bool stepped = bound && (*proxy_sqlite3_step)(stmt) == SQLITE_DONE;
+	const bool stepped = bound && sqlite_step(stmt) == SQLITE_DONE;
 	(*proxy_sqlite3_finalize)(stmt);
 	if (!stepped || !sqlite_exec(db, "COMMIT")) { rollback(); return ProxySQL_PluginSecretResult::storage_error; }
 	committed = true;
@@ -260,23 +298,30 @@ ProxySQL_PluginSecretResult ProxySQL_PluginSecrets::get(const char* owner, const
 	if ((*proxy_sqlite3_prepare_v2)(configdb_->get_db(), sql, -1, &stmt, nullptr) != SQLITE_OK) return ProxySQL_PluginSecretResult::storage_error;
 	const bool bound = (*proxy_sqlite3_bind_text)(stmt, 1, owner, -1, SQLITE_TRANSIENT) == SQLITE_OK &&
 		(*proxy_sqlite3_bind_text)(stmt, 2, name, -1, SQLITE_TRANSIENT) == SQLITE_OK;
-	if (!bound || (*proxy_sqlite3_step)(stmt) != SQLITE_ROW) {
+	if (!bound) {
 		(*proxy_sqlite3_finalize)(stmt);
-		return bound ? ProxySQL_PluginSecretResult::not_found : ProxySQL_PluginSecretResult::storage_error;
+		return ProxySQL_PluginSecretResult::storage_error;
+	}
+	const int step_result = sqlite_step(stmt);
+	if (step_result != SQLITE_ROW) {
+		(*proxy_sqlite3_finalize)(stmt);
+		return step_result == SQLITE_DONE ? ProxySQL_PluginSecretResult::not_found : ProxySQL_PluginSecretResult::storage_error;
 	}
 	const auto* nonce = static_cast<const uint8_t*>(sqlite3_column_blob(stmt, 0));
 	const int nonce_length = sqlite3_column_bytes(stmt, 0);
 	const auto* ciphertext = static_cast<const uint8_t*>(sqlite3_column_blob(stmt, 1));
 	const int ciphertext_length = sqlite3_column_bytes(stmt, 1);
+	const int ciphertext_type = (*proxy_sqlite3_column_type)(stmt, 1);
 	const auto* tag = static_cast<const uint8_t*>(sqlite3_column_blob(stmt, 2));
 	const int tag_length = sqlite3_column_bytes(stmt, 2);
-	if (nonce == nullptr || nonce_length != static_cast<int>(k_nonce_length) || ciphertext == nullptr || ciphertext_length < 0 ||
+	if (nonce == nullptr || nonce_length != static_cast<int>(k_nonce_length) || ciphertext_type != SQLITE_BLOB || ciphertext_length < 0 ||
 		tag == nullptr || tag_length != static_cast<int>(k_tag_length)) {
 		(*proxy_sqlite3_finalize)(stmt);
 		return ProxySQL_PluginSecretResult::authentication_failed;
 	}
 	std::vector<uint8_t> staging(static_cast<size_t>(ciphertext_length) + EVP_CIPHER_block_size(EVP_aes_256_gcm()));
 	vector_guard_t staging_guard { staging };
+	const uint8_t empty_ciphertext = 0;
 	const std::string aad = make_aad(owner, name);
 	evp_ctx_guard_t ctx_guard;
 	int output_length = 0;
@@ -286,7 +331,8 @@ ProxySQL_PluginSecretResult ProxySQL_PluginSecrets::get(const char* owner, const
 		EVP_CIPHER_CTX_ctrl(ctx_guard.ctx, EVP_CTRL_GCM_SET_IVLEN, k_nonce_length, nullptr) == 1 &&
 		EVP_DecryptInit_ex(ctx_guard.ctx, nullptr, nullptr, key.data(), nonce) == 1 &&
 		EVP_DecryptUpdate(ctx_guard.ctx, nullptr, &output_length, reinterpret_cast<const uint8_t*>(aad.data()), aad.size()) == 1 &&
-		EVP_DecryptUpdate(ctx_guard.ctx, staging.data(), &output_length, ciphertext, ciphertext_length) == 1 &&
+		EVP_DecryptUpdate(ctx_guard.ctx, staging.data(), &output_length,
+			ciphertext_length == 0 ? &empty_ciphertext : ciphertext, ciphertext_length) == 1 &&
 		EVP_CIPHER_CTX_ctrl(ctx_guard.ctx, EVP_CTRL_GCM_SET_TAG, k_tag_length, const_cast<uint8_t*>(tag)) == 1 &&
 		EVP_DecryptFinal_ex(ctx_guard.ctx, staging.data() + output_length, &final_length) == 1;
 	(*proxy_sqlite3_finalize)(stmt);
@@ -309,7 +355,7 @@ ProxySQL_PluginSecretResult ProxySQL_PluginSecrets::erase(const char* owner, con
 	}
 	const bool bound = (*proxy_sqlite3_bind_text)(stmt, 1, owner, -1, SQLITE_TRANSIENT) == SQLITE_OK &&
 		(*proxy_sqlite3_bind_text)(stmt, 2, name, -1, SQLITE_TRANSIENT) == SQLITE_OK;
-	const bool stepped = bound && (*proxy_sqlite3_step)(stmt) == SQLITE_DONE;
+	const bool stepped = bound && sqlite_step(stmt) == SQLITE_DONE;
 	const int changed = stepped ? (*proxy_sqlite3_changes)(db) : 0;
 	(*proxy_sqlite3_finalize)(stmt);
 	if (!stepped || !sqlite_exec(db, "COMMIT")) { rollback(); return ProxySQL_PluginSecretResult::storage_error; }

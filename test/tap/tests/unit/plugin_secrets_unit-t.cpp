@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
+#include <openssl/evp.h>
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -47,11 +48,27 @@ bool select_one_blob(sqlite3* db, const char* sql, std::vector<uint8_t>& value) 
 	return rc == SQLITE_ROW;
 }
 
-int g_cleanse_calls = 0;
-size_t g_cleanse_bytes = 0;
-void observe_cleanse(void*, size_t length) {
-	++g_cleanse_calls;
-	g_cleanse_bytes += length;
+struct cleanse_record_t {
+	const void* address;
+	size_t length;
+};
+std::vector<cleanse_record_t> g_cleanse_records;
+void observe_cleanse(void* address, size_t length) {
+	g_cleanse_records.push_back({address, length});
+}
+
+bool saw_cleanse(const void* address, size_t length) {
+	for (const auto& record : g_cleanse_records) {
+		if (record.address == address && record.length == length) return true;
+	}
+	return false;
+}
+
+bool saw_cleanse_length(size_t length) {
+	for (const auto& record : g_cleanse_records) {
+		if (record.length == length) return true;
+	}
+	return false;
 }
 
 int g_open_flags = 0;
@@ -67,11 +84,34 @@ void create_wrong_length_key(const std::string& datadir) {
 	}
 }
 
+int g_write_eintr_count = 0;
+int g_read_eintr_count = 0;
+int g_short_write_count = 0;
+int g_short_read_count = 0;
+ssize_t inject_eintr_and_short_io(bool is_write, int fd, void* buffer, size_t length, int* error) {
+	if (is_write && g_write_eintr_count++ == 0) {
+		*error = EINTR;
+		return -1;
+	}
+	if (!is_write && g_read_eintr_count++ == 0) {
+		*error = EINTR;
+		return -1;
+	}
+	int& short_count = is_write ? g_short_write_count : g_short_read_count;
+	if (short_count++ == 0 && length > 1) {
+		const size_t short_length = length / 2;
+		return is_write ? write(fd, buffer, short_length) : read(fd, buffer, short_length);
+	}
+	return is_write ? write(fd, buffer, length) : read(fd, buffer, length);
+}
+
+int inject_busy_step(sqlite3_stmt*) { return SQLITE_BUSY; }
+
 } // namespace
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(25);
+	plan(40);
 
 	SQLite3DB db;
 	db.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE); // NOSONAR: API requires char*
@@ -92,6 +132,11 @@ int main() {
 	std::vector<uint8_t> out;
 	ok(store.get("mysql_router", "metadata_password", out) == ProxySQL_PluginSecretResult::ok && as_string(out) == "s3cret",
 	   "secret round-trips through AES-GCM");
+	ok(store.put("mysql_router", "empty_secret", nullptr, 0) == ProxySQL_PluginSecretResult::ok,
+	   "empty secret is stored as an authenticated zero-length BLOB");
+	out.assign({0x55});
+	ok(store.get("mysql_router", "empty_secret", out) == ProxySQL_PluginSecretResult::ok && out.empty(),
+	   "empty secret round-trips as an empty plaintext");
 
 	std::vector<uint8_t> ciphertext;
 	ok(select_one_blob(db.get_db(), "SELECT ciphertext FROM proxysql_plugin_secrets", ciphertext) &&
@@ -110,11 +155,27 @@ int main() {
 	ok(store.get("-not-an-owner", "metadata_password", out) == ProxySQL_PluginSecretResult::invalid_argument,
 	   "owner must begin with an ASCII alphanumeric character or underscore");
 
-	ok(db.execute("UPDATE proxysql_plugin_secrets SET ciphertext = X'00'"),
+	ok(db.execute("UPDATE proxysql_plugin_secrets SET ciphertext = X'00' WHERE owner='mysql_router' AND secret_name='metadata_password'"),
 	   "tamper fixture changes ciphertext");
 	out.assign({1, 2, 3});
 	ok(store.get("mysql_router", "metadata_password", out) == ProxySQL_PluginSecretResult::authentication_failed && out.empty(),
 	   "GCM authentication rejects modified ciphertext and clears output");
+
+	const auto atomic_old = bytes("atomic-old");
+	const auto atomic_new = bytes("atomic-new");
+	ok(store.put("mysql_router", "atomic_failure", atomic_old.data(), atomic_old.size()) == ProxySQL_PluginSecretResult::ok,
+	   "atomic-failure fixture stores the previous secret");
+	ok(db.execute("CREATE TRIGGER reject_plugin_secret_update BEFORE UPDATE ON proxysql_plugin_secrets "
+	              "WHEN NEW.owner='mysql_router' AND NEW.secret_name='atomic_failure' "
+	              "BEGIN SELECT RAISE(ABORT, 'injected mutation failure'); END"),
+	   "mutation-failure trigger is installed");
+	ok(store.put("mysql_router", "atomic_failure", atomic_new.data(), atomic_new.size()) == ProxySQL_PluginSecretResult::storage_error,
+	   "failed replacement reports storage error");
+	ok(db.execute("DROP TRIGGER reject_plugin_secret_update"),
+	   "mutation-failure trigger is removed");
+	out.clear();
+	ok(store.get("mysql_router", "atomic_failure", out) == ProxySQL_PluginSecretResult::ok && as_string(out) == "atomic-old",
+	   "failed replacement leaves the prior encrypted value intact");
 
 	const auto before = bytes("before");
 	const auto after = bytes("after");
@@ -131,15 +192,31 @@ int main() {
 	   "erased secret is unavailable and output is empty");
 
 	ProxySQL_PluginSecrets::set_cleanse_observer(&observe_cleanse);
-	g_cleanse_calls = 0;
-	g_cleanse_bytes = 0;
+	g_cleanse_records.clear();
 	ok(store.put("mysql_router", "cleanse_test", secret.data(), secret.size()) == ProxySQL_PluginSecretResult::ok,
 	   "cleanse fixture writes secret");
 	out.clear();
 	ok(store.get("mysql_router", "cleanse_test", out) == ProxySQL_PluginSecretResult::ok,
 	   "cleanse fixture decrypts secret");
-	ok(g_cleanse_calls >= 3 && g_cleanse_bytes >= 32,
-	   "key copies and plaintext staging are cleansed through the observer");
+	ok(saw_cleanse_length(32),
+	   "master-key copy is cleansed through the observer");
+	ProxySQL_PluginSecrets::set_cleanse_observer(nullptr);
+
+	const auto staging_secret = bytes("staging-secret-123");
+	ok(store.put("mysql_router", "cleanse_failure", staging_secret.data(), staging_secret.size()) == ProxySQL_PluginSecretResult::ok,
+	   "failed-decryption cleanse fixture stores a secret");
+	ok(db.execute("UPDATE proxysql_plugin_secrets SET tag=X'00000000000000000000000000000000' "
+	              "WHERE owner='mysql_router' AND secret_name='cleanse_failure'"),
+	   "failed-decryption cleanse fixture tampers with the tag");
+	out.assign({0xa1, 0xa2, 0xa3});
+	const void* replaced_output_address = out.data();
+	ProxySQL_PluginSecrets::set_cleanse_observer(&observe_cleanse);
+	g_cleanse_records.clear();
+	ok(store.get("mysql_router", "cleanse_failure", out) == ProxySQL_PluginSecretResult::authentication_failed && out.empty(),
+	   "failed decryption does not publish plaintext");
+	ok(saw_cleanse(replaced_output_address, 3) &&
+	   saw_cleanse_length(staging_secret.size() + EVP_CIPHER_block_size(EVP_aes_256_gcm())),
+	   "failed get cleanses both replaced output and unpublished plaintext staging");
 	ProxySQL_PluginSecrets::set_cleanse_observer(nullptr);
 
 	const std::string wrong_length_dir = make_temp_dir();
@@ -168,6 +245,31 @@ int main() {
 	   "first key creation uses exclusive no-follow flags");
 	ProxySQL_PluginSecrets::set_key_open_observer(nullptr);
 	remove_temp_dir(flags_dir);
+
+	const std::string io_dir = make_temp_dir();
+	g_write_eintr_count = 0;
+	g_read_eintr_count = 0;
+	g_short_write_count = 0;
+	g_short_read_count = 0;
+	ProxySQL_PluginSecrets::set_key_io_hook(&inject_eintr_and_short_io);
+	ProxySQL_PluginSecrets io_store(&db, io_dir);
+	ok(io_store.put("mysql_router", "io_secret", secret.data(), secret.size()) == ProxySQL_PluginSecretResult::ok,
+	   "exclusive key creation survives injected EINTR and short writes");
+	out.clear();
+	ProxySQL_PluginSecrets io_reader(&db, io_dir);
+	ok(io_reader.get("mysql_router", "io_secret", out) == ProxySQL_PluginSecretResult::ok && as_string(out) == "s3cret",
+	   "existing key read survives injected EINTR and short reads");
+	ok(g_write_eintr_count > 0 && g_read_eintr_count > 0 &&
+	   g_short_write_count > 0 && g_short_read_count > 0,
+	   "I/O hook observed retries after EINTR and partial key transfers");
+	ProxySQL_PluginSecrets::set_key_io_hook(nullptr);
+	remove_temp_dir(io_dir);
+
+	ProxySQL_PluginSecrets::set_sqlite_step_hook(&inject_busy_step);
+	out.assign({0x42});
+	ok(store.get("mysql_router", "cleanse_test", out) == ProxySQL_PluginSecretResult::storage_error && out.empty(),
+	   "SQLite step failure is not misreported as a missing secret");
+	ProxySQL_PluginSecrets::set_sqlite_step_hook(nullptr);
 
 	remove_temp_dir(datadir);
 	return exit_status();
