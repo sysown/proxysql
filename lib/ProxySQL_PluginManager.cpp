@@ -48,6 +48,11 @@ ProxySQL_PluginManager* g_registry_target = nullptr;
 // server-discovery worker can retain a service callback and post after init,
 // so it must never read this plain lifecycle-only pointer.
 thread_local ProxySQL_PluginManager* g_registry_callback_target = nullptr;
+// A plugin may retain the ABI-9 uninstall callback and invoke it from stop().
+// This target is deliberately separate from g_registry_target so stop cannot
+// reopen install/registration services, and separate from the active manager
+// because shutdown unpublishes that manager before invoking plugin callbacks.
+thread_local ProxySQL_PluginManager* g_stop_callback_target = nullptr;
 // Guards swaps of g_active_plugin_manager. Readers (dispatch_admin_command,
 // dispatch_query_hook, resolve_alias_to_canonical) take a shared lock, so
 // many worker threads can be running through plugin callbacks at the same
@@ -124,6 +129,16 @@ struct ScopedRegistryTarget {
 	}
 	ScopedRegistryTarget(const ScopedRegistryTarget&) = delete;
 	ScopedRegistryTarget& operator=(const ScopedRegistryTarget&) = delete;
+};
+
+struct ScopedStopCallbackTarget {
+	explicit ScopedStopCallbackTarget(ProxySQL_PluginManager* mgr) {
+		assert(g_stop_callback_target == nullptr);
+		g_stop_callback_target = mgr;
+	}
+	~ScopedStopCallbackTarget() { g_stop_callback_target = nullptr; }
+	ScopedStopCallbackTarget(const ScopedStopCallbackTarget&) = delete;
+	ScopedStopCallbackTarget& operator=(const ScopedStopCallbackTarget&) = delete;
 };
 
 ProxySQL_PluginCommandResult ignored_test_command(const ProxySQL_PluginCommandContext&, const char*) {
@@ -307,11 +322,13 @@ bool install_server_discovery_controller_service(
 }
 
 bool uninstall_server_discovery_controller_service(ProxySQL_ServerProtocol protocol) {
-	if (g_registry_target == nullptr) {
-		proxy_warning("Server discovery controller removal attempted outside plugin init phase\n");
+	ProxySQL_PluginManager* target = g_registry_target != nullptr
+		? g_registry_target : g_stop_callback_target;
+	if (target == nullptr) {
+		proxy_warning("Server discovery controller removal attempted outside plugin init/stop phase\n");
 		return false;
 	}
-	return g_registry_target->uninstall_server_discovery_controller(protocol);
+	return target->uninstall_server_discovery_controller(protocol);
 }
 
 bool post_server_desired_set_service(ProxySQL_ServerDesiredSet desired_set) {
@@ -756,7 +773,17 @@ bool ProxySQL_PluginManager::stop_all() {
 			continue;
 		}
 		if (it->descriptor != nullptr && it->descriptor->stop != nullptr) {
-			if (!it->descriptor->stop()) {
+			bool stop_ok = false;
+			try {
+				ScopedStopCallbackTarget target_guard(this);
+				stop_ok = it->descriptor->stop();
+			} catch (const std::exception &e) {
+				proxy_warning("Plugin stop threw for %s: %s\n",
+					plugin_name(it->descriptor).c_str(), e.what());
+			} catch (...) {
+				proxy_warning("Plugin stop threw for %s\n", plugin_name(it->descriptor).c_str());
+			}
+			if (!stop_ok) {
 				proxy_warning("Plugin stop failed: %s\n", plugin_name(it->descriptor).c_str());
 				ok = false;
 			}

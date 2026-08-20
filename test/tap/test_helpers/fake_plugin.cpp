@@ -27,6 +27,8 @@ namespace {
 ProxySQL_PluginServices* fake_services = nullptr;
 #ifdef PROXYSQL40
 proxysql_plugin_post_server_desired_set_cb fake_post_server_desired_set = nullptr;
+proxysql_plugin_uninstall_server_discovery_controller_cb
+	fake_uninstall_server_discovery_controller = nullptr;
 std::atomic<unsigned int> retained_fixture_module_calls {0};
 std::atomic<unsigned int> retained_fixture_controller_calls {0};
 #endif
@@ -340,6 +342,8 @@ bool fake_init(ProxySQL_PluginServices *services) {
 	}
 	if (services != nullptr) {
 		fake_post_server_desired_set = services->post_server_desired_set;
+		fake_uninstall_server_discovery_controller =
+			services->uninstall_server_discovery_controller;
 	}
 	if (env("INSTALL_SERVER_DISCOVERY_CONTROLLER") != nullptr) {
 		const bool installed = fake_install_server_discovery_controller(services) &&
@@ -426,6 +430,30 @@ bool fake_start() {
 }
 
 bool fake_stop() {
+#ifdef PROXYSQL40
+	if (env("STOP_UNINSTALL_SERVER_DISCOVERY_CONTROLLER") != nullptr) {
+		const bool uninstalled = fake_uninstall_server_discovery_controller != nullptr &&
+			fake_uninstall_server_discovery_controller(ProxySQL_ServerProtocol::mysql);
+		fake_log_event(uninstalled ? "stop_server_controller_uninstalled" :
+			"stop_server_controller_uninstall_rejected");
+	}
+	if (env("STOP_CHECK_SERVER_DISCOVERY_PHASE") != nullptr) {
+		fake_log_event(fake_install_server_discovery_controller(fake_services)
+			? "stop_server_controller_installed" : "stop_server_controller_install_rejected");
+		fake_log_event(fake_register_server_module(fake_services)
+			? "stop_server_module_registered" : "stop_server_module_register_rejected");
+		const ProxySQL_ServerDesiredSet desired {
+			ProxySQL_ServerProtocol::mysql, 44, {}, {}, ProxySQL_ServerPersistence::runtime_only
+		};
+		fake_log_event(fake_post_server_desired_set != nullptr &&
+			fake_post_server_desired_set(desired)
+			? "stop_server_desired_set_posted" : "stop_server_desired_set_rejected");
+	}
+#endif /* PROXYSQL40 */
+	if (env("STOP_THROW") != nullptr) {
+		fake_log_event("stop_throw");
+		throw std::runtime_error("injected plugin stop failure");
+	}
 	if (env("STOP_FAIL") != nullptr) {
 		fake_log_event("stop_fail");
 		return false;
@@ -509,6 +537,11 @@ extern "C" bool proxysql_fake_post_server_desired_set_for_test() {
 extern "C" proxysql_plugin_post_server_desired_set_cb
 proxysql_fake_post_server_desired_set_callback_for_test() {
 	return fake_post_server_desired_set;
+}
+
+extern "C" bool proxysql_fake_uninstall_server_discovery_controller_for_test() {
+	return fake_uninstall_server_discovery_controller != nullptr &&
+		fake_uninstall_server_discovery_controller(ProxySQL_ServerProtocol::mysql);
 }
 
 // These factories, callbacks, and destroy functions are intentionally

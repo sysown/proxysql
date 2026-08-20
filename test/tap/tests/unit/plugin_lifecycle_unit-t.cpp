@@ -19,6 +19,8 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <dlfcn.h>
 #include <fstream>
 #include <iterator>
 #include <memory>
@@ -70,6 +72,24 @@ bool contains_in_order(const std::string& haystack, const char* first, const cha
 	if (pos_first == std::string::npos) return false;
 	size_t pos_second = haystack.find(second, pos_first + 1);
 	return pos_second != std::string::npos;
+}
+
+size_t count_occurrences(const std::string& haystack, const char* needle) {
+	size_t count = 0;
+	size_t pos = 0;
+	while ((pos = haystack.find(needle, pos)) != std::string::npos) {
+		++count;
+		pos += std::strlen(needle);
+	}
+	return count;
+}
+
+using retained_uninstall_cb = bool (*)();
+
+retained_uninstall_cb retain_uninstall_callback(void*& handle) {
+	handle = dlopen(PROXYSQL_FAKE_PLUGIN_PATH, RTLD_NOW | RTLD_LOCAL);
+	return handle == nullptr ? nullptr : reinterpret_cast<retained_uninstall_cb>(dlsym(
+		handle, "proxysql_fake_uninstall_server_discovery_controller_for_test"));
 }
 
 } // namespace
@@ -232,6 +252,8 @@ static void test_phase_b_partial_failure_rolls_back() {
 // leak.  This is the "init pairs with stop" contract.
 static void test_stop_runs_when_start_fails() {
 	setenv("PROXYSQL_FAKE_PLUGIN_START_FAIL", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_STOP_UNINSTALL_SERVER_DISCOVERY_CONTROLLER", "1", 1);
 	clear_log();
 
 	std::unique_ptr<ProxySQL_PluginManager> mgr;
@@ -251,8 +273,92 @@ static void test_stop_runs_when_start_fails() {
 	   "start_fail marker confirms start() was called and returned false");
 	ok(log.find("fake_plugin:stop") != std::string::npos,
 	   "stop() was called for init-success/start-fail plugin (teardown symmetry)");
+	ok(contains_in_order(log, "fake_plugin:stop_server_controller_uninstalled", "fake_plugin:stop"),
+	   "start-fail teardown retires its init-installed controller before stop returns");
 
 	unsetenv("PROXYSQL_FAKE_PLUGIN_START_FAIL");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_STOP_UNINSTALL_SERVER_DISCOVERY_CONTROLLER");
+}
+
+static void test_stop_uninstalls_controller_through_retained_service() {
+	setenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_STOP_UNINSTALL_SERVER_DISCOVERY_CONTROLLER", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_STOP_CHECK_SERVER_DISCOVERY_PHASE", "1", 1);
+	clear_log();
+
+	void* fixture_handle = nullptr;
+	const retained_uninstall_cb retained_uninstall = retain_uninstall_callback(fixture_handle);
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
+	std::string err;
+	ok(fixture_handle != nullptr && retained_uninstall != nullptr &&
+	   proxysql_load_configured_plugins(mgr, paths, err) &&
+	   proxysql_init_configured_plugins(mgr.get(), err) &&
+	   proxysql_start_configured_plugins(mgr.get(), err),
+	   "real plugin installs a discovery controller during init");
+	ok(proxysql_stop_configured_plugins(mgr, err) && !mgr,
+	   "retained uninstall service succeeds from stop and manager teardown completes");
+
+	const std::string log = read_log();
+	ok(contains_in_order(log, "fake_plugin:server_controller_shutdown",
+	   "fake_plugin:server_controller_destroyed") &&
+	   contains_in_order(log, "fake_plugin:server_controller_destroyed",
+	   "fake_plugin:stop_server_controller_uninstalled") &&
+	   contains_in_order(log, "fake_plugin:stop_server_controller_uninstalled", "fake_plugin:stop"),
+	   "controller drains, shuts down, and is destroyed synchronously before stop returns");
+	ok(log.find("fake_plugin:stop_server_controller_install_rejected") != std::string::npos &&
+	   log.find("fake_plugin:stop_server_module_register_rejected") != std::string::npos &&
+	   log.find("fake_plugin:stop_server_desired_set_rejected") != std::string::npos,
+	   "stop target does not re-enable install, registration, or desired-set posting");
+	ok(count_occurrences(log, "fake_plugin:server_controller_shutdown") == 1 &&
+	   count_occurrences(log, "fake_plugin:server_controller_destroyed") == 1,
+	   "manager destructor does not retire the explicitly uninstalled controller twice");
+	ok(!retained_uninstall(), "retained uninstall service fails closed after stop returns");
+
+	dlclose(fixture_handle);
+	unsetenv("PROXYSQL_FAKE_PLUGIN_STOP_CHECK_SERVER_DISCOVERY_PHASE");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_STOP_UNINSTALL_SERVER_DISCOVERY_CONTROLLER");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER");
+}
+
+static void test_failed_stop_cleanup_is_idempotent(const char* failure_env,
+	const char* failure_marker, const char* description) {
+	setenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_STOP_UNINSTALL_SERVER_DISCOVERY_CONTROLLER", "1", 1);
+	setenv(failure_env, "1", 1);
+	clear_log();
+
+	void* fixture_handle = nullptr;
+	const retained_uninstall_cb retained_uninstall = retain_uninstall_callback(fixture_handle);
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
+	std::string err;
+	const bool started = fixture_handle != nullptr && retained_uninstall != nullptr &&
+		proxysql_load_configured_plugins(mgr, paths, err) &&
+		proxysql_init_configured_plugins(mgr.get(), err) &&
+		proxysql_start_configured_plugins(mgr.get(), err);
+	bool stop_result = true;
+	bool threw = false;
+	try {
+		stop_result = proxysql_stop_configured_plugins(mgr, err);
+	} catch (...) {
+		threw = true;
+	}
+	ok(started && !threw && !stop_result && !mgr && err == "plugin stop failed", "%s", description);
+
+	const std::string log = read_log();
+	ok(contains_in_order(log, "fake_plugin:server_controller_destroyed",
+	   "fake_plugin:stop_server_controller_uninstalled") &&
+	   log.find(failure_marker) != std::string::npos &&
+	   count_occurrences(log, "fake_plugin:server_controller_destroyed") == 1,
+	   "failed stop still destroys its controller exactly once");
+	ok(!retained_uninstall(), "failed stop clears its transient uninstall target");
+
+	dlclose(fixture_handle);
+	unsetenv(failure_env);
+	unsetenv("PROXYSQL_FAKE_PLUGIN_STOP_UNINSTALL_SERVER_DISCOVERY_CONTROLLER");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER");
 }
 
 // Case 6: plugin returns a descriptor with an unknown abi_version.  The
@@ -279,7 +385,7 @@ static void test_bogus_abi_version_rejected() {
 }
 
 int main() {
-	plan(26);
+	plan(39);
 
 	make_log_path();
 
@@ -289,6 +395,11 @@ int main() {
 	test_phase_b_failure_aborts_init();
 	test_phase_b_partial_failure_rolls_back();
 	test_stop_runs_when_start_fails();
+	test_stop_uninstalls_controller_through_retained_service();
+	test_failed_stop_cleanup_is_idempotent("PROXYSQL_FAKE_PLUGIN_STOP_FAIL",
+		"fake_plugin:stop_fail", "false-returning stop still tears down the manager");
+	test_failed_stop_cleanup_is_idempotent("PROXYSQL_FAKE_PLUGIN_STOP_THROW",
+		"fake_plugin:stop_throw", "throwing stop is contained and still tears down the manager");
 	test_bogus_abi_version_rejected();
 
 	cleanup_log();
