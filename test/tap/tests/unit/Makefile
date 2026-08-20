@@ -179,6 +179,9 @@ endif
 # ===========================================================================
 
 CURL_STATIC_LIB := $(CURL_LDIR)/libcurl.a
+# Keep static curl consumers on the vendored archive and follow it with the
+# vendored OpenSSL archives that satisfy curl's TLS symbols.
+CURL_STATIC_DEPS := $(CURL_STATIC_LIB) $(OPENSSL_EXPORT_LIBS)
 POSTGRESQL_STATIC_LIBS := $(POSTGRESQL_PATH)/interfaces/libpq/libpq.a \
 	$(POSTGRESQL_PATH)/common/libpgcommon.a \
 	$(POSTGRESQL_PATH)/port/libpgport.a
@@ -225,7 +228,7 @@ MYLIBS := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -luuid \
 		  -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev \
 		  -lprometheus-cpp-pull -lprometheus-cpp-core \
 		  $(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a \
-		  $(LIBUSUAL_LDIR)/libusual.a $(CURL_STATIC_LIB) $(OPENSSL_EXPORT_LIBS) \
+		  $(LIBUSUAL_LDIR)/libusual.a $(CURL_STATIC_DEPS) \
 		  -Wl,-Bdynamic -lpthread -lm -lz -lzstd -lrt -ldl \
 		  -Wl,--allow-multiple-definition \
 		  $(LWGCOV)
@@ -576,7 +579,7 @@ ezoption_parser_unit-t: ezoption_parser_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noi
 
 mcp_client_unit-t: mcp_client_unit-t.cpp $(TAP_PATH)/mcp_client.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
 	$(CXX) $< $(TAP_PATH)/mcp_client.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
-		$(IDIRS) $(LDIRS) $(OPT) -Wl,-Bdynamic -lcurl -lpthread -o $@
+		$(IDIRS) $(LDIRS) $(OPT) $(CURL_STATIC_DEPS) -lz -lpthread -o $@
 
 plugin_manager_unit-t: plugin_manager_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
