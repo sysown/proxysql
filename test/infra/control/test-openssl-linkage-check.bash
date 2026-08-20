@@ -2,6 +2,7 @@
 set -euo pipefail
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(CDPATH='' cd -- "${script_dir}/../../.." && pwd)
 checker="${script_dir}/check-openssl-linkage.bash"
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "${tmp_dir}"' EXIT
@@ -139,5 +140,17 @@ darwin_export_libs=$(make -s -f "${tmp_dir}/openssl-contract.mk" \
 [[ "${darwin_export_libs}" == \
 	"-Wl,-force_load,${script_dir}/../../../deps/libssl/openssl/libssl.a -Wl,-force_load,${script_dir}/../../../deps/libssl/openssl/libcrypto.a" ]] || \
 	fail "macOS executable ownership flags are incorrect: ${darwin_export_libs}"
+
+linux_mcp_link=$(make -Bn -C "${repo_root}/test/tap/tests/unit" \
+	UNAME_S=Linux mcp_client_unit-t | tr '\n' ' ')
+[[ "${linux_mcp_link}" == *"${repo_root}/deps/curl/curl/lib/.libs/libcurl.a -Wl,--whole-archive ${repo_root}/deps/libssl/openssl/libssl.a ${repo_root}/deps/libssl/openssl/libcrypto.a -Wl,--no-whole-archive -lz -lpthread -ldl -o mcp_client_unit-t"* ]] || \
+	fail "Linux MCP unit link command must use vendored static curl/OpenSSL then zlib, pthread, and libdl: ${linux_mcp_link}"
+
+darwin_mcp_link=$(make -Bn -C "${repo_root}/test/tap/tests/unit" \
+	UNAME_S=Darwin mcp_client_unit-t | tr '\n' ' ')
+[[ "${darwin_mcp_link}" == *"${repo_root}/deps/curl/curl/lib/.libs/libcurl.a -Wl,-force_load,${repo_root}/deps/libssl/openssl/libssl.a -Wl,-force_load,${repo_root}/deps/libssl/openssl/libcrypto.a -lz -lpthread -o mcp_client_unit-t"* ]] || \
+	fail "macOS MCP unit link command must use vendored static curl/OpenSSL: ${darwin_mcp_link}"
+[[ "${darwin_mcp_link}" != *"-ldl"* ]] || \
+	fail "macOS MCP unit link command must not include Linux-only -ldl: ${darwin_mcp_link}"
 
 echo "OpenSSL linkage checker tests passed"
