@@ -1,6 +1,7 @@
 #ifdef PROXYSQL40
 
 #include "ProxySQL_PluginSecrets.h"
+#include "ProxySQL_PluginSecrets_test.h"
 
 #include "sqlite3db.h"
 
@@ -26,10 +27,10 @@ constexpr const char k_key_filename[] = "proxysql-plugin-secrets.key";
 constexpr const char k_aad_context[] = "proxysql-plugin-secret-v1";
 
 std::mutex g_observer_mutex;
-ProxySQL_PluginSecrets::cleanse_observer_t g_cleanse_observer = nullptr;
-ProxySQL_PluginSecrets::key_open_observer_t g_key_open_observer = nullptr;
-ProxySQL_PluginSecrets::key_io_hook_t g_key_io_hook = nullptr;
-ProxySQL_PluginSecrets::sqlite_step_hook_t g_sqlite_step_hook = nullptr;
+proxysql_plugin_secrets_test::cleanse_observer_t g_cleanse_observer = nullptr;
+proxysql_plugin_secrets_test::key_open_observer_t g_key_open_observer = nullptr;
+proxysql_plugin_secrets_test::key_io_hook_t g_key_io_hook = nullptr;
+proxysql_plugin_secrets_test::sqlite_step_hook_t g_sqlite_step_hook = nullptr;
 
 void cleanse(void* ptr, size_t length) {
 	if (ptr == nullptr || length == 0) return;
@@ -93,7 +94,7 @@ bool sqlite_exec(sqlite3* db, const char* sql) {
 
 bool write_all(int fd, const uint8_t* value, size_t length) {
 	while (length != 0) {
-		ProxySQL_PluginSecrets::key_io_hook_t hook = nullptr;
+		proxysql_plugin_secrets_test::key_io_hook_t hook = nullptr;
 		{
 			std::lock_guard<std::mutex> lock(g_observer_mutex);
 			hook = g_key_io_hook;
@@ -111,7 +112,7 @@ bool write_all(int fd, const uint8_t* value, size_t length) {
 
 bool read_all(int fd, uint8_t* value, size_t length) {
 	while (length != 0) {
-		ProxySQL_PluginSecrets::key_io_hook_t hook = nullptr;
+		proxysql_plugin_secrets_test::key_io_hook_t hook = nullptr;
 		{
 			std::lock_guard<std::mutex> lock(g_observer_mutex);
 			hook = g_key_io_hook;
@@ -127,7 +128,7 @@ bool read_all(int fd, uint8_t* value, size_t length) {
 }
 
 int sqlite_step(sqlite3_stmt* stmt) {
-	ProxySQL_PluginSecrets::sqlite_step_hook_t hook = nullptr;
+	proxysql_plugin_secrets_test::sqlite_step_hook_t hook = nullptr;
 	{
 		std::lock_guard<std::mutex> lock(g_observer_mutex);
 		hook = g_sqlite_step_hook;
@@ -147,6 +148,26 @@ void observe_key_open(int flags) {
 
 } // namespace
 
+namespace proxysql_plugin_secrets_test {
+
+scoped_hooks_t::scoped_hooks_t(hooks_t hooks) {
+	std::lock_guard<std::mutex> lock(g_observer_mutex);
+	g_cleanse_observer = hooks.cleanse_observer;
+	g_key_open_observer = hooks.key_open_observer;
+	g_key_io_hook = hooks.key_io_hook;
+	g_sqlite_step_hook = hooks.sqlite_step_hook;
+}
+
+scoped_hooks_t::~scoped_hooks_t() {
+	std::lock_guard<std::mutex> lock(g_observer_mutex);
+	g_cleanse_observer = nullptr;
+	g_key_open_observer = nullptr;
+	g_key_io_hook = nullptr;
+	g_sqlite_step_hook = nullptr;
+}
+
+} // namespace proxysql_plugin_secrets_test
+
 const char* proxysql_plugin_secrets_table_definition() {
 	return "CREATE TABLE IF NOT EXISTS proxysql_plugin_secrets ("
 		"owner TEXT NOT NULL,"
@@ -161,26 +182,6 @@ const char* proxysql_plugin_secrets_table_definition() {
 
 ProxySQL_PluginSecrets::ProxySQL_PluginSecrets(SQLite3DB* configdb, std::string datadir)
 	: configdb_(configdb), datadir_(std::move(datadir)) {}
-
-void ProxySQL_PluginSecrets::set_cleanse_observer(cleanse_observer_t observer) {
-	std::lock_guard<std::mutex> lock(g_observer_mutex);
-	g_cleanse_observer = observer;
-}
-
-void ProxySQL_PluginSecrets::set_key_open_observer(key_open_observer_t observer) {
-	std::lock_guard<std::mutex> lock(g_observer_mutex);
-	g_key_open_observer = observer;
-}
-
-void ProxySQL_PluginSecrets::set_key_io_hook(key_io_hook_t hook) {
-	std::lock_guard<std::mutex> lock(g_observer_mutex);
-	g_key_io_hook = hook;
-}
-
-void ProxySQL_PluginSecrets::set_sqlite_step_hook(sqlite_step_hook_t hook) {
-	std::lock_guard<std::mutex> lock(g_observer_mutex);
-	g_sqlite_step_hook = hook;
-}
 
 bool ProxySQL_PluginSecrets::ensure_schema() const {
 	return configdb_ != nullptr && configdb_->get_db() != nullptr &&

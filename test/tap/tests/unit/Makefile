@@ -588,7 +588,7 @@ plugin_manager_unit-t: plugin_manager_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN
 
 plugin_secrets_unit-t: plugin_secrets_unit-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
-		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(IDIRS) -I$(PROXYSQL_PATH)/lib $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
 plugin_config_unit-t: plugin_config_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
