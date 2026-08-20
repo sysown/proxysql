@@ -46,23 +46,9 @@ public:
 		admin->insert_into_tables_defs(&definitions, "proxysql_plugin_owned_objects",
 			PROXYSQL_PLUGIN_OWNED_OBJECTS_DDL);
 		const bool materialized = admin->check_and_build_standard_tables(&db, &definitions);
-		std::string canonical_ddl {PROXYSQL_PLUGIN_OWNED_OBJECTS_DDL};
-		const std::string if_not_exists {" IF NOT EXISTS"};
-		canonical_ddl.erase(canonical_ddl.find(if_not_exists), if_not_exists.size());
-		sqlite3_stmt* statement = nullptr;
-		bool current = false;
-		if (materialized && sqlite3_prepare_v2(db.get_db(),
-			"SELECT sql FROM sqlite_master WHERE type='table' "
-			"AND name='proxysql_plugin_owned_objects'", -1, &statement, nullptr) == SQLITE_OK &&
-			sqlite3_step(statement) == SQLITE_ROW) {
-			const unsigned char* stored_ddl = sqlite3_column_text(statement, 0);
-			current = stored_ddl != nullptr &&
-				canonical_ddl == reinterpret_cast<const char*>(stored_ddl);
-		}
-		if (statement != nullptr) sqlite3_finalize(statement);
 		admin->drop_tables_defs(&definitions);
 		free(storage);
-		return current;
+		return materialized;
 	}
 };
 
@@ -73,6 +59,18 @@ constexpr const char* k_ledger =
 	"object_key TEXT NOT NULL, generation INTEGER NOT NULL, PRIMARY KEY(owner,object_type,object_key))";
 constexpr const char* k_ledger_pre_round_2 =
 	"CREATE TABLE IF NOT EXISTS proxysql_plugin_owned_objects ("
+	"owner TEXT NOT NULL, object_type TEXT NOT NULL CHECK(object_type IN "
+	"('hostgroup','mysql_user','mysql_query_rule','mysql_interface')), "
+	"object_key TEXT NOT NULL, generation INTEGER NOT NULL, "
+	"PRIMARY KEY(owner, object_type, object_key))";
+constexpr const char* k_ledger_current =
+	"CREATE TABLE IF NOT EXISTS proxysql_plugin_owned_objects ("
+	"owner TEXT NOT NULL, object_type TEXT NOT NULL CHECK(object_type IN "
+	"('hostgroup','mysql_user','mysql_user_v2','mysql_query_rule','mysql_interface')), "
+	"object_key TEXT NOT NULL, generation INTEGER NOT NULL, "
+	"PRIMARY KEY(owner, object_type, object_key))";
+constexpr const char* k_ledger_backup_pre_round_2 =
+	"CREATE TABLE IF NOT EXISTS proxysql_plugin_owned_objects_v1_migrate ("
 	"owner TEXT NOT NULL, object_type TEXT NOT NULL CHECK(object_type IN "
 	"('hostgroup','mysql_user','mysql_query_rule','mysql_interface')), "
 	"object_key TEXT NOT NULL, generation INTEGER NOT NULL, "
@@ -157,6 +155,24 @@ std::string text_value(SQLite3DB& db, const std::string& sql) {
 	free(error);
 	delete result;
 	return value;
+}
+
+bool table_schema_matches(SQLite3DB& db, const char* table_name, const char* ddl) {
+	std::string canonical_ddl {ddl};
+	const std::string if_not_exists {" IF NOT EXISTS"};
+	const size_t modifier = canonical_ddl.find(if_not_exists);
+	if (modifier != std::string::npos) canonical_ddl.erase(modifier, if_not_exists.size());
+	sqlite3_stmt* statement = nullptr;
+	if (sqlite3_prepare_v2(db.get_db(),
+		"SELECT sql FROM sqlite_master WHERE type='table' AND name=?1",
+		-1, &statement, nullptr) != SQLITE_OK) return false;
+	sqlite3_bind_text(statement, 1, table_name, -1, SQLITE_STATIC);
+	const bool found = sqlite3_step(statement) == SQLITE_ROW;
+	const unsigned char* stored_ddl = found ? sqlite3_column_text(statement, 0) : nullptr;
+	const bool matches = stored_ddl != nullptr &&
+		canonical_ddl == reinterpret_cast<const char*>(stored_ddl);
+	sqlite3_finalize(statement);
+	return matches;
 }
 
 std::unique_ptr<SQLite3_result> result_value(SQLite3DB& db, const std::string& sql) {
@@ -560,9 +576,124 @@ int main() {
 	ok(admin_schema_materialized && config_schema_materialized &&
 		admin_schema_materialized_again && config_schema_materialized_again &&
 		admin_exact_type_accepted && config_exact_type_accepted &&
+		table_schema_matches(upgraded_admin,
+			"proxysql_plugin_owned_objects", k_ledger_current) &&
+		table_schema_matches(upgraded_config,
+			"proxysql_plugin_owned_objects", k_ledger_current) &&
 		scalar(upgraded_admin, "SELECT COUNT(*) FROM proxysql_plugin_owned_objects") == 6 &&
 		scalar(upgraded_config, "SELECT COUNT(*) FROM proxysql_plugin_owned_objects") == 6,
 		"production materialization preserves every ledger row and enables exact ownership in both tiers");
+
+	SQLite3DB absent_ownership_schema;
+	absent_ownership_schema.open(
+		const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+	const bool absent_materialized =
+		TestDiskUpgrade::materialize_plugin_ownership_schema(absent_ownership_schema);
+	ok(absent_materialized && table_schema_matches(absent_ownership_schema,
+			"proxysql_plugin_owned_objects", k_ledger_current) &&
+		scalar(absent_ownership_schema,
+			"SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
+			"AND name='proxysql_plugin_owned_objects_v1_migrate'") == 0,
+		"production materialization creates and verifies an absent ownership table");
+
+	SQLite3DB current_with_stale_backup;
+	current_with_stale_backup.open(
+		const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+	const bool current_stale_seeded = current_with_stale_backup.execute(k_ledger_current) &&
+		current_with_stale_backup.execute(k_ledger_backup_pre_round_2) &&
+		current_with_stale_backup.execute("INSERT INTO proxysql_plugin_owned_objects VALUES "
+			"('mysql_router','mysql_user_v2','v2:1:0:63757272656E74',21)") &&
+		current_with_stale_backup.execute("INSERT INTO proxysql_plugin_owned_objects_v1_migrate VALUES "
+			"('mysql_router','mysql_user','stale_backup',20)");
+	const bool current_stale_materialized =
+		TestDiskUpgrade::materialize_plugin_ownership_schema(current_with_stale_backup);
+	ok(current_stale_seeded && !current_stale_materialized &&
+		table_schema_matches(current_with_stale_backup,
+			"proxysql_plugin_owned_objects", k_ledger_current) &&
+		table_schema_matches(current_with_stale_backup,
+			"proxysql_plugin_owned_objects_v1_migrate", k_ledger_backup_pre_round_2) &&
+		text_value(current_with_stale_backup,
+			"SELECT owner||'|'||object_type||'|'||object_key||'|'||generation "
+			"FROM proxysql_plugin_owned_objects") ==
+				"mysql_router|mysql_user_v2|v2:1:0:63757272656E74|21" &&
+		text_value(current_with_stale_backup,
+			"SELECT owner||'|'||object_type||'|'||object_key||'|'||generation "
+			"FROM proxysql_plugin_owned_objects_v1_migrate") ==
+				"mysql_router|mysql_user|stale_backup|20",
+		"a current target with a stale migration table fails unchanged");
+
+	SQLite3DB absent_with_stale_backup;
+	absent_with_stale_backup.open(
+		const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+	const bool absent_stale_seeded = absent_with_stale_backup.execute(k_ledger_backup_pre_round_2) &&
+		absent_with_stale_backup.execute("INSERT INTO proxysql_plugin_owned_objects_v1_migrate VALUES "
+			"('mysql_router','mysql_user','stale_only',22)");
+	const bool absent_stale_materialized =
+		TestDiskUpgrade::materialize_plugin_ownership_schema(absent_with_stale_backup);
+	ok(absent_stale_seeded && !absent_stale_materialized &&
+		scalar(absent_with_stale_backup,
+			"SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
+			"AND name='proxysql_plugin_owned_objects'") == 0 &&
+		table_schema_matches(absent_with_stale_backup,
+			"proxysql_plugin_owned_objects_v1_migrate", k_ledger_backup_pre_round_2) &&
+		text_value(absent_with_stale_backup,
+			"SELECT owner||'|'||object_type||'|'||object_key||'|'||generation "
+			"FROM proxysql_plugin_owned_objects_v1_migrate") ==
+				"mysql_router|mysql_user|stale_only|22",
+		"an absent target with a stale migration table fails without creating the target");
+
+	SQLite3DB legacy_with_stale_backup;
+	legacy_with_stale_backup.open(
+		const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+	const bool legacy_stale_seeded = legacy_with_stale_backup.execute(k_ledger_pre_round_2) &&
+		legacy_with_stale_backup.execute(k_ledger_backup_pre_round_2) &&
+		legacy_with_stale_backup.execute("INSERT INTO proxysql_plugin_owned_objects VALUES "
+			"('mysql_router','mysql_user','legacy_target',23)") &&
+		legacy_with_stale_backup.execute("INSERT INTO proxysql_plugin_owned_objects_v1_migrate VALUES "
+			"('mysql_router','mysql_user','legacy_backup',22)");
+	const bool legacy_stale_materialized =
+		TestDiskUpgrade::materialize_plugin_ownership_schema(legacy_with_stale_backup);
+	ok(legacy_stale_seeded && !legacy_stale_materialized &&
+		table_schema_matches(legacy_with_stale_backup,
+			"proxysql_plugin_owned_objects", k_ledger_pre_round_2) &&
+		table_schema_matches(legacy_with_stale_backup,
+			"proxysql_plugin_owned_objects_v1_migrate", k_ledger_backup_pre_round_2) &&
+		text_value(legacy_with_stale_backup,
+			"SELECT owner||'|'||object_type||'|'||object_key||'|'||generation "
+			"FROM proxysql_plugin_owned_objects") ==
+				"mysql_router|mysql_user|legacy_target|23" &&
+		text_value(legacy_with_stale_backup,
+			"SELECT owner||'|'||object_type||'|'||object_key||'|'||generation "
+			"FROM proxysql_plugin_owned_objects_v1_migrate") ==
+				"mysql_router|mysql_user|legacy_backup|22",
+		"a V1 target with a stale migration table fails unchanged");
+
+	SQLite3DB legacy_in_transaction;
+	legacy_in_transaction.open(
+		const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+	const bool transaction_seeded = legacy_in_transaction.execute(k_ledger_pre_round_2) &&
+		legacy_in_transaction.execute("INSERT INTO proxysql_plugin_owned_objects VALUES "
+			"('mysql_router','mysql_user','transaction_target',24)") &&
+		legacy_in_transaction.execute("BEGIN IMMEDIATE");
+	const bool transaction_materialized =
+		TestDiskUpgrade::materialize_plugin_ownership_schema(legacy_in_transaction);
+	const bool transaction_unchanged = transaction_seeded && !transaction_materialized &&
+		sqlite3_get_autocommit(legacy_in_transaction.get_db()) == 0 &&
+		table_schema_matches(legacy_in_transaction,
+			"proxysql_plugin_owned_objects", k_ledger_pre_round_2) &&
+		text_value(legacy_in_transaction,
+			"SELECT owner||'|'||object_type||'|'||object_key||'|'||generation "
+			"FROM proxysql_plugin_owned_objects") ==
+				"mysql_router|mysql_user|transaction_target|24" &&
+		scalar(legacy_in_transaction,
+			"SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
+			"AND name='proxysql_plugin_owned_objects_v1_migrate'") == 0;
+	ok(transaction_unchanged,
+		"a V1 target inside an existing transaction fails intact without creating a backup");
+	if (sqlite3_get_autocommit(legacy_in_transaction.get_db()) == 0) {
+		legacy_in_transaction.execute("ROLLBACK");
+	}
+
 	SQLite3DB unknown_ownership_schema;
 	unknown_ownership_schema.open(
 		const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);

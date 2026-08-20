@@ -3424,11 +3424,24 @@ bool admin_owned_objects_count(SQLite3DB* db, long long& count) {
 
 bool upgrade_plugin_owned_objects_schema(SQLite3DB* db) {
 	if (db == nullptr || db->get_db() == nullptr) return false;
+	bool backup_exists = false;
+	bool backup_schema_ignored = false;
+	if (!admin_table_schema_matches(db, "proxysql_plugin_owned_objects_v1_migrate",
+		PROXYSQL_PLUGIN_OWNED_OBJECTS_DDL_V1, backup_exists, backup_schema_ignored)) return false;
+	if (backup_exists) {
+		proxy_error("Refusing ownership schema migration with a pre-existing migration table\n");
+		return false;
+	}
+
 	bool exists = false;
 	bool current = false;
 	if (!admin_table_schema_matches(db, "proxysql_plugin_owned_objects",
 		PROXYSQL_PLUGIN_OWNED_OBJECTS_DDL, exists, current)) return false;
 	if (current) return true;
+	if (sqlite3_get_autocommit(db->get_db()) == 0) {
+		proxy_error("Cannot materialize ownership schema inside an existing transaction\n");
+		return false;
+	}
 	if (!exists) {
 		if (!db->build_table("proxysql_plugin_owned_objects",
 			PROXYSQL_PLUGIN_OWNED_OBJECTS_DDL, false)) return false;
@@ -3439,19 +3452,6 @@ bool upgrade_plugin_owned_objects_schema(SQLite3DB* db) {
 	if (!admin_table_schema_matches(db, "proxysql_plugin_owned_objects",
 		PROXYSQL_PLUGIN_OWNED_OBJECTS_DDL_V1, exists, legacy) || !legacy) {
 		proxy_error("Refusing destructive rebuild of an unknown proxysql_plugin_owned_objects schema\n");
-		return false;
-	}
-
-	bool backup_exists = false;
-	bool backup_schema_ignored = false;
-	if (!admin_table_schema_matches(db, "proxysql_plugin_owned_objects_v1_migrate",
-		PROXYSQL_PLUGIN_OWNED_OBJECTS_DDL_V1, backup_exists, backup_schema_ignored)) return false;
-	if (backup_exists) {
-		proxy_error("Refusing ownership schema migration with a pre-existing migration table\n");
-		return false;
-	}
-	if (sqlite3_get_autocommit(db->get_db()) == 0) {
-		proxy_error("Cannot migrate ownership schema inside an existing transaction\n");
 		return false;
 	}
 
