@@ -337,7 +337,10 @@ void PgSQL_Mock_Backend::handle_conn(int fd, std::vector<Step> script) {
                         head.rfind("DISCARD", 0) == 0  || head.rfind("BEGIN", 0) == 0 ||
                         head.rfind("COMMIT", 0) == 0   || head.rfind("ROLLBACK", 0) == 0 ||
                         head.rfind("START TR", 0) == 0;
-                    if (!housekeeping) break;            // the client's query
+                    if (!housekeeping) {                 // the client's query
+                        queries_observed_.fetch_add(1);
+                        break;
+                    }
                     const std::string ack =
                         pgmb_command_complete("SET") + pgmb_ready_for_query('I');
                     if (!write_all(fd, ack.data(), ack.size())) { fail("housekeeping ack failed"); goto done; }
@@ -351,7 +354,12 @@ void PgSQL_Mock_Backend::handle_conn(int fd, std::vector<Step> script) {
         case Step::CLOSE:
             goto done;
         case Step::SLEEP_MS:
-            usleep((useconds_t)s.ms * 1000);
+            // Slept in slices, watching running_, so a script that deliberately holds
+            // a socket open for seconds does not make stop() -- which joins these
+            // threads -- block for the remainder of it.
+            for (int slept = 0; slept < s.ms && running_.load(); slept += 100) {
+                usleep(100000);
+            }
             break;
         }
     }

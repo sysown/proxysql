@@ -147,7 +147,14 @@ public:
 
     // Connections accepted since the last reset_stats().
     int connections_accepted() const { return conns_accepted_.load(); }
-    void reset_stats() { conns_accepted_.store(0); }
+
+    // Client queries an EXPECT_QUERY step actually took delivery of since the last
+    // reset_stats(), excluding the proxy's own housekeeping statements. Separates
+    // "the scripted reply was delivered" from "the fixture never routed anything
+    // here", which otherwise look identical from the client side.
+    int queries_observed() const { return queries_observed_.load(); }
+
+    void reset_stats() { conns_accepted_.store(0); queries_observed_.store(0); }
 
     // Diagnostics from the most recent connection handler, for failure output.
     std::string last_error();
@@ -163,6 +170,7 @@ private:
     std::vector<std::thread> workers_;
     std::atomic<bool> running_{false};
     std::atomic<int> conns_accepted_{0};
+    std::atomic<int> queries_observed_{0};
     std::mutex script_mtx_;
     std::vector<Step> script_;
     std::mutex err_mtx_;
