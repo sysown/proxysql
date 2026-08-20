@@ -20,6 +20,7 @@
 #include <dlfcn.h>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <unistd.h>
@@ -31,11 +32,37 @@ extern ProxySQL_Statistics* GloProxyStats;
 extern MySQL_Monitor* GloMyMon;
 extern ProxySQL_Cluster* GloProxyCluster;
 
+namespace {
+enum class RefreshExceptionStage : int {
+	none = 0,
+	after_hgm_lock = 1,
+	after_checksum_lock = 2
+};
+std::atomic<int> refresh_exception_protocol {-1};
+std::atomic<int> refresh_exception_stage {static_cast<int>(RefreshExceptionStage::none)};
+}
+
+extern "C" void proxysql_servers_v2_refresh_exception_for_test(int protocol, int stage) {
+	if (refresh_exception_protocol.load() == protocol &&
+		refresh_exception_stage.load() == stage)
+		throw std::runtime_error("injected Servers-v2 refresh exception");
+}
+
 #ifndef PROXYSQL_FAKE_PLUGIN_PATH
 #error "PROXYSQL_FAKE_PLUGIN_PATH must be defined"
 #endif
 
 namespace {
+
+void set_refresh_exception(ProxySQL_ServerProtocol protocol, RefreshExceptionStage stage) {
+	refresh_exception_protocol.store(static_cast<int>(protocol));
+	refresh_exception_stage.store(static_cast<int>(stage));
+}
+
+void clear_refresh_exception() {
+	refresh_exception_stage.store(static_cast<int>(RefreshExceptionStage::none));
+	refresh_exception_protocol.store(-1);
+}
 
 std::unique_ptr<SQLite3_result> select_rows(SQLite3DB& db, const std::string& sql) {
 	char* error = nullptr;
@@ -271,7 +298,7 @@ bool post_and_drain(ProxySQL_PluginManager& manager, ProxySQL_Admin& admin,
 } // namespace
 
 int main() {
-	plan(53);
+	plan(59);
 	test_init_minimal();
 	test_init_query_processor();
 	test_init_hostgroups();
@@ -491,6 +518,49 @@ int main() {
 		snapshot(admin_db, "main.mysql_servers WHERE hostgroup_id=99") == mysql_pending_memory &&
 		snapshot(admin_db, "disk.mysql_servers WHERE hostgroup_id=99") == mysql_unrelated_disk,
 		"empty desired servers clear exactly the delegated MySQL scope through MEMORY and DISK");
+	const ChecksumSnapshot mysql_v2_before_exceptions =
+		checksum_snapshot(GloVars.checksums_values.mysql_servers_v2);
+	ProxySQL_ServerRow mysql_exception_hgm {17, "exception-hgm.mysql", 3306, 0,
+		"ONLINE", 81, 0, 151, 0, 1, 0, "exception-hgm"};
+	set_refresh_exception(ProxySQL_ServerProtocol::mysql,
+		RefreshExceptionStage::after_hgm_lock);
+	const bool mysql_hgm_exception_drained = post_and_drain(*manager, *admin,
+		desired(ProxySQL_ServerProtocol::mysql, mysql_generation,
+			ProxySQL_ServerPersistence::memory, mysql_exception_hgm));
+	clear_refresh_exception();
+	ok(mysql_hgm_exception_drained && mysql_acks.observations.size() == 6 &&
+		!mysql_acks.observations.back().applied &&
+		mysql_acks.observations.back().memory.find("exception-hgm.mysql") != std::string::npos &&
+		checksum_snapshot(GloVars.checksums_values.mysql_servers_v2).checksum ==
+			mysql_v2_before_exceptions.checksum &&
+		checksum_snapshot(GloVars.checksums_values.mysql_servers_v2).version ==
+			mysql_v2_before_exceptions.version,
+		"MySQL exception after HGM lock false-acks without publishing v2 state");
+	ProxySQL_ServerRow mysql_exception_checksum {18, "exception-checksum.mysql", 3306, 0,
+		"ONLINE", 82, 0, 152, 0, 1, 0, "exception-checksum"};
+	set_refresh_exception(ProxySQL_ServerProtocol::mysql,
+		RefreshExceptionStage::after_checksum_lock);
+	const bool mysql_checksum_exception_drained = post_and_drain(*manager, *admin,
+		desired(ProxySQL_ServerProtocol::mysql, mysql_generation,
+			ProxySQL_ServerPersistence::memory, mysql_exception_checksum));
+	clear_refresh_exception();
+	ok(mysql_checksum_exception_drained && mysql_acks.observations.size() == 7 &&
+		!mysql_acks.observations.back().applied &&
+		mysql_acks.observations.back().memory.find("exception-checksum.mysql") != std::string::npos &&
+		checksum_snapshot(GloVars.checksums_values.mysql_servers_v2).checksum ==
+			mysql_v2_before_exceptions.checksum &&
+		checksum_snapshot(GloVars.checksums_values.mysql_servers_v2).version ==
+			mysql_v2_before_exceptions.version,
+		"MySQL exception under checksum mutex false-acks without publishing v2 state");
+	ok(post_and_drain(*manager, *admin, desired(ProxySQL_ServerProtocol::mysql,
+		mysql_generation, ProxySQL_ServerPersistence::memory, mysql_exception_checksum)) &&
+		mysql_acks.observations.size() == 8 && mysql_acks.observations.back().applied &&
+		checksum_snapshot(GloVars.checksums_values.mysql_servers_v2).checksum !=
+			mysql_v2_before_exceptions.checksum &&
+		checksum_snapshot(GloVars.checksums_values.mysql_servers_v2).version ==
+			mysql_v2_before_exceptions.version + 1 &&
+		mysql_acks.observations.back().v2.version == mysql_v2_before_exceptions.version + 1,
+		"MySQL refresh locks are released so later materialization succeeds and publishes once");
 
 	const std::string pgsql_checksum_before = GloVars.checksums_values.pgsql_servers.checksum;
 	const ChecksumSnapshot pgsql_v2_before = checksum_snapshot(GloVars.checksums_values.pgsql_servers_v2);
@@ -614,6 +684,49 @@ int main() {
 		pgsql_acks.observations.back().v2.version == pgsql_v2_after_disk_failure.version &&
 		pgsql_acks.observations.back().v2.epoch == pgsql_v2_after_disk_failure.epoch,
 		"PostgreSQL v2 state is published before a later DISK failure is acknowledged false");
+	const ChecksumSnapshot pgsql_v2_before_exceptions =
+		checksum_snapshot(GloVars.checksums_values.pgsql_servers_v2);
+	ProxySQL_ServerRow pgsql_exception_hgm {17, "exception-hgm.pgsql", 5432, 0,
+		"ONLINE", 81, 0, 151, 0, 1, 0, "exception-hgm"};
+	set_refresh_exception(ProxySQL_ServerProtocol::pgsql,
+		RefreshExceptionStage::after_hgm_lock);
+	const bool pgsql_hgm_exception_drained = post_and_drain(*manager, *admin,
+		desired(ProxySQL_ServerProtocol::pgsql, pgsql_generation,
+			ProxySQL_ServerPersistence::memory, pgsql_exception_hgm));
+	clear_refresh_exception();
+	ok(pgsql_hgm_exception_drained && pgsql_acks.observations.size() == 6 &&
+		!pgsql_acks.observations.back().applied &&
+		pgsql_acks.observations.back().memory.find("exception-hgm.pgsql") != std::string::npos &&
+		checksum_snapshot(GloVars.checksums_values.pgsql_servers_v2).checksum ==
+			pgsql_v2_before_exceptions.checksum &&
+		checksum_snapshot(GloVars.checksums_values.pgsql_servers_v2).version ==
+			pgsql_v2_before_exceptions.version,
+		"PostgreSQL exception after HGM lock false-acks without publishing v2 state");
+	ProxySQL_ServerRow pgsql_exception_checksum {18, "exception-checksum.pgsql", 5432, 0,
+		"ONLINE", 82, 0, 152, 0, 1, 0, "exception-checksum"};
+	set_refresh_exception(ProxySQL_ServerProtocol::pgsql,
+		RefreshExceptionStage::after_checksum_lock);
+	const bool pgsql_checksum_exception_drained = post_and_drain(*manager, *admin,
+		desired(ProxySQL_ServerProtocol::pgsql, pgsql_generation,
+			ProxySQL_ServerPersistence::memory, pgsql_exception_checksum));
+	clear_refresh_exception();
+	ok(pgsql_checksum_exception_drained && pgsql_acks.observations.size() == 7 &&
+		!pgsql_acks.observations.back().applied &&
+		pgsql_acks.observations.back().memory.find("exception-checksum.pgsql") != std::string::npos &&
+		checksum_snapshot(GloVars.checksums_values.pgsql_servers_v2).checksum ==
+			pgsql_v2_before_exceptions.checksum &&
+		checksum_snapshot(GloVars.checksums_values.pgsql_servers_v2).version ==
+			pgsql_v2_before_exceptions.version,
+		"PostgreSQL exception under checksum mutex false-acks without publishing v2 state");
+	ok(post_and_drain(*manager, *admin, desired(ProxySQL_ServerProtocol::pgsql,
+		pgsql_generation, ProxySQL_ServerPersistence::memory, pgsql_exception_checksum)) &&
+		pgsql_acks.observations.size() == 8 && pgsql_acks.observations.back().applied &&
+		checksum_snapshot(GloVars.checksums_values.pgsql_servers_v2).checksum !=
+			pgsql_v2_before_exceptions.checksum &&
+		checksum_snapshot(GloVars.checksums_values.pgsql_servers_v2).version ==
+			pgsql_v2_before_exceptions.version + 1 &&
+		pgsql_acks.observations.back().v2.version == pgsql_v2_before_exceptions.version + 1,
+		"PostgreSQL refresh locks are released so later materialization succeeds and publishes once");
 
 	ProxySQL_ServerRow mysql_operator {17, "operator-save.mysql", 3306, 0, "ONLINE", 71, 0, 141, 0, 1, 0, "operator"};
 	ProxySQL_ServerRow pgsql_operator {17, "operator-save.pgsql", 5432, 0, "ONLINE", 71, 0, 141, 0, 1, 0, "operator"};

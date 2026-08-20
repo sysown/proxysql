@@ -595,8 +595,10 @@ size_t proxysql_drain_server_desired_sets() {
 					}
 				}
 			} catch (const std::exception& exception) {
+				applied = false;
 				error = exception.what();
 			} catch (...) {
+				applied = false;
 				error = "unknown reconciliation failure";
 			}
 		}

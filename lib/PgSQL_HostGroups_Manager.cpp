@@ -59,6 +59,9 @@ std::unique_ptr<SQLite3_result> pgsql_desired_rows(
 
 using std::function;
 
+extern "C" void proxysql_servers_v2_refresh_exception_for_test(int, int)
+	__attribute__((weak));
+
 #ifdef TEST_AURORA
 static unsigned long long array_mysrvc_total = 0;
 static unsigned long long array_mysrvc_cands = 0;
@@ -1341,12 +1344,22 @@ std::string PgSQL_HostGroups_Manager::gen_global_pgsql_servers_v2_checksum(uint6
 
 void PgSQL_HostGroups_Manager::refresh_pgsql_servers_v2_checksum() {
 	wrlock();
+	struct WriteUnlockGuard {
+		PgSQL_HostGroups_Manager& manager;
+		~WriteUnlockGuard() { manager.wrunlock(); }
+	} write_unlock_guard {*this};
+	if (proxysql_servers_v2_refresh_exception_for_test != nullptr)
+		proxysql_servers_v2_refresh_exception_for_test(1, 1);
 	const uint64_t new_hash = commit_update_checksum_from_pgsql_servers_v2();
 	const string global_checksum_v2 = gen_global_pgsql_servers_v2_checksum(new_hash);
 	pthread_mutex_lock(&GloVars.checksum_mutex);
+	struct MutexUnlockGuard {
+		pthread_mutex_t& mutex;
+		~MutexUnlockGuard() { pthread_mutex_unlock(&mutex); }
+	} checksum_unlock_guard {GloVars.checksum_mutex};
+	if (proxysql_servers_v2_refresh_exception_for_test != nullptr)
+		proxysql_servers_v2_refresh_exception_for_test(1, 2);
 	update_glovars_pgsql_servers_v2_checksum(global_checksum_v2, {}, true, true);
-	pthread_mutex_unlock(&GloVars.checksum_mutex);
-	wrunlock();
 }
 
 bool PgSQL_HostGroups_Manager::commit(
