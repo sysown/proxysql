@@ -444,6 +444,15 @@ handler_again:
 			break;
 		}
 
+		if (result_type == 0) {
+			is_copy_out = false;
+			if (!is_error_present()) {
+				set_error(PGSQL_ERROR_CODES::ERRCODE_CONNECTION_FAILURE,
+					"failed to read the reply from the backend", false);
+			}
+			NEXT_IMMEDIATE(fetch_result_end_st);
+		}
+
 		// Issue #6109: the backend's transport is gone (libpq sets CONNECTION_BAD only on
 		// connection loss). fetch_result_cont() returns from its PQconsumeInput()
 		// failure without assigning result_type, so the dispatch below would act on
