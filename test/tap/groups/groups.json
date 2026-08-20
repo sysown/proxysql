@@ -226,6 +226,7 @@
   "pgsql-verifier_pool_rotation-t" : [ "legacy-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4" ],
   "pgsql-watchdog_test-t" : [ "legacy-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4" ],
   "pgsql_command_complete_unit-t" : [ "unit-tests-g1" ],
+  "pgsql_conninfo_credentials_unit-t" : [ "unit-tests-g1" ],
   "pgsql_error_classifier_unit-t" : [ "unit-tests-g1" ],
   "pgsql_error_helper_unit-t" : [ "unit-tests-g1" ],
   "pgsql_monitor_unit-t" : [ "unit-tests-g1" ],
