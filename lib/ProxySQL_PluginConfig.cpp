@@ -510,43 +510,55 @@ bool query_user_variants(SQLite3DB& db, const std::string& schema, const std::st
 
 bool load_owned_user_identities(SQLite3DB& db, const std::string& schema,
 	const std::string& owner, std::set<Preflight::UserIdentity>& identities, std::string& error) {
+	std::set<std::string> exact_keys;
+	if (!ledger_keys(db, schema, owner, "mysql_user_v2", exact_keys, error)) return false;
+	for (const std::string& key : exact_keys) {
+		Preflight::UserIdentity identity;
+		if (parse_user_identity_key(key, identity) != UserKeyKind::exact) {
+			error = "invalid mysql_user_v2 ownership key: " + key;
+			return false;
+		}
+		if (!identities.insert(identity).second) {
+			error = "duplicate exact mysql_user ownership identity";
+			return false;
+		}
+	}
+
 	std::set<std::string> keys;
 	if (!ledger_keys(db, schema, owner, "mysql_user", keys, error)) return false;
 	const std::string marker = owner + ":";
 	for (const std::string& key : keys) {
-		Preflight::UserIdentity identity;
-		const UserKeyKind kind = parse_user_identity_key(key, identity);
-		if (kind == UserKeyKind::invalid) {
-			error = "invalid exact mysql_user ownership key: " + key;
+		std::vector<ExistingUserVariant> literal_variants;
+		if (!query_user_variants(db, schema, key, literal_variants, error)) return false;
+		std::vector<Preflight::UserIdentity> candidates;
+		for (const auto& variant : literal_variants) {
+			if (variant.comment.compare(0, marker.size(), marker) == 0) {
+				candidates.push_back(variant.identity);
+			}
+		}
+
+		Preflight::UserIdentity decoded_identity;
+		const UserKeyKind kind = parse_user_identity_key(key, decoded_identity);
+		if (kind == UserKeyKind::exact) {
+			std::vector<ExistingUserVariant> decoded_variants;
+			if (!query_user_variants(db, schema, decoded_identity.username, decoded_variants, error)) return false;
+			for (const auto& variant : decoded_variants) {
+				if (variant.identity.username == decoded_identity.username &&
+					variant.identity.backend == decoded_identity.backend &&
+					variant.identity.frontend == decoded_identity.frontend &&
+					variant.comment.compare(0, marker.size(), marker) == 0) {
+					candidates.push_back(variant.identity);
+				}
+			}
+		} else if (kind == UserKeyKind::legacy && literal_variants.empty()) {
+			continue;
+		}
+
+		if (candidates.size() != 1) {
+			error = "ambiguous legacy mysql_user ownership for key: " + key;
 			return false;
 		}
-		if (kind == UserKeyKind::exact) {
-			std::vector<ExistingUserVariant> literal_username_variants;
-			if (!query_user_variants(db, schema, key, literal_username_variants, error)) return false;
-			if (!literal_username_variants.empty()) {
-				error = "ambiguous exact-key-shaped legacy mysql_user username: " + key;
-				return false;
-			}
-		} else {
-			std::vector<ExistingUserVariant> variants;
-			if (!query_user_variants(db, schema, key, variants, error)) return false;
-			if (variants.empty()) continue;
-			const ExistingUserVariant* marked = nullptr;
-			for (const auto& variant : variants) {
-				if (variant.comment.compare(0, marker.size(), marker) != 0) continue;
-				if (marked != nullptr) {
-					error = "ambiguous legacy mysql_user ownership for username: " + key;
-					return false;
-				}
-				marked = &variant;
-			}
-			if (marked == nullptr) {
-				error = "ambiguous legacy mysql_user ownership for username: " + key;
-				return false;
-			}
-			identity = marked->identity;
-		}
-		if (!identities.insert(identity).second) {
+		if (!identities.insert(candidates.front()).second) {
 			error = "duplicate exact mysql_user ownership identity";
 			return false;
 		}
@@ -772,7 +784,7 @@ bool stage_schema(SQLite3DB& db, const std::string& schema, const OwnedPlan& pla
 	auto add_ledger=[&](const std::string&type,const std::string&key){return run_statement(db,"INSERT INTO "+schema+".proxysql_plugin_owned_objects(owner,object_type,object_key,generation) VALUES (?1,?2,?3,?4)",{plan.owner,type,key},{static_cast<long long>(plan.generation)},error);};
 	for(int id:plan.hostgroups)if(!add_ledger("hostgroup",std::to_string(id)))return false;
 	for(const auto& row:plan.users)if(!preflight.user_collisions.count(row.username)&&
-		!add_ledger("mysql_user",user_identity_key(row)))return false;
+		!add_ledger("mysql_user_v2",user_identity_key(row)))return false;
 	for(const auto& row:plan.rules)if(!preflight.rule_collisions.count(row.rule_id)&&!add_ledger("mysql_query_rule",std::to_string(row.rule_id)))return false;
 	for(const auto& value:plan.interfaces)if(!add_ledger("mysql_interface",value))return false;
 	if(!run_statement(db,"INSERT OR REPLACE INTO "+schema+".proxysql_plugin_config_generations(owner,generation) VALUES (?1,?2)",{plan.owner},{static_cast<long long>(plan.generation)},error))return false;

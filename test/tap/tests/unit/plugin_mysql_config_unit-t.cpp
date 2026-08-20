@@ -465,6 +465,17 @@ int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
 	plan(NO_PLAN);
 	const bool globals_ready = test_init_minimal() == 0;
+	SQLite3DB ownership_schema;
+	ownership_schema.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+	ok(ownership_schema.execute("ATTACH DATABASE ':memory:' AS disk") &&
+		proxysql_ensure_plugin_mysql_config_schema(ownership_schema, "main") &&
+		proxysql_ensure_plugin_mysql_config_schema(ownership_schema, "disk"),
+		"the ownership schema is created in main and disk");
+	ok(ownership_schema.execute("INSERT INTO main.proxysql_plugin_owned_objects VALUES "
+		"('mysql_router','mysql_user_v2','v2:1:0:41',1)") &&
+		ownership_schema.execute("INSERT INTO disk.proxysql_plugin_owned_objects VALUES "
+			"('mysql_router','mysql_user_v2','v2:1:0:41',1)"),
+		"the ownership schema accepts discriminated exact user keys in main and disk");
 
 	Fixture f;
 	f.runtime.mutate_owner = f.owner;
@@ -664,6 +675,37 @@ int main() {
 			"SELECT password FROM disk.mysql_users WHERE username='split_user' AND backend=0 AND frontend=1") ==
 				"operator-frontend",
 		"plugin removal deletes only its exact variant and preserves the operator complement in both tiers");
+
+	Fixture round_one_exact;
+	for (const char* schema : {"main", "disk"}) {
+		const std::string prefix = std::string(schema) + ".";
+		ok(round_one_exact.db.execute(("UPDATE " + prefix +
+			"proxysql_plugin_owned_objects SET object_key='v2:1:1:6F6C645F6F776E6564' "
+			"WHERE owner='mysql_router' AND object_type='mysql_user' AND object_key='old_owned'").c_str()),
+			"a round-1 exact ownership key is seeded in %s", schema);
+	}
+	const auto round_one_migrated = proxysql_apply_plugin_mysql_config(
+		round_one_exact.db, round_one_exact.plan, round_one_exact.runtime.hooks());
+	ok(round_one_migrated.applied &&
+		scalar(round_one_exact.db,
+			"SELECT COUNT(*) FROM main.mysql_users WHERE username='old_owned'") == 0 &&
+		scalar(round_one_exact.db,
+			"SELECT COUNT(*) FROM disk.mysql_users WHERE username='old_owned'") == 0 &&
+		all_runtime_at(round_one_exact.runtime, 13),
+		"a marker-proven round-1 exact key remains compatible during migration");
+	ok(scalar(round_one_exact.db,
+		"SELECT COUNT(*) FROM main.proxysql_plugin_owned_objects "
+		"WHERE owner='mysql_router' AND object_type='mysql_user_v2'") == 1 &&
+		scalar(round_one_exact.db,
+			"SELECT COUNT(*) FROM disk.proxysql_plugin_owned_objects "
+			"WHERE owner='mysql_router' AND object_type='mysql_user_v2'") == 1 &&
+		scalar(round_one_exact.db,
+			"SELECT COUNT(*) FROM main.proxysql_plugin_owned_objects "
+			"WHERE owner='mysql_router' AND object_type='mysql_user'") == 0 &&
+		scalar(round_one_exact.db,
+			"SELECT COUNT(*) FROM disk.proxysql_plugin_owned_objects "
+			"WHERE owner='mysql_router' AND object_type='mysql_user'") == 0,
+		"migration rewrites exact user ownership into the discriminated v2 ledger namespace");
 
 	Fixture ambiguous_legacy;
 	for (const char* schema : {"main", "disk"}) {
@@ -1378,6 +1420,49 @@ int main() {
 		text_value(v.db, "SELECT password FROM disk.mysql_users WHERE username='split_live' AND backend=0") ==
 			"operator-live",
 		"removal deletes only the plugin variant from main, disk, and live Auth");
+
+	bool misleading_legacy_seeded = true;
+	for (const char* schema : {"main", "disk"}) {
+		const std::string prefix = std::string(schema) + ".";
+		misleading_legacy_seeded = misleading_legacy_seeded &&
+			v.db.execute(("INSERT INTO " + prefix + "mysql_users VALUES "
+				"('A','operator-a',1,0,10,'',0,1,0,1,0,100,'{}','operator')").c_str()) &&
+			v.db.execute(("INSERT INTO " + prefix + "proxysql_plugin_owned_objects VALUES "
+				"('mysql_router','mysql_user','v2:1:0:41',16)").c_str());
+	}
+	auto misleading_legacy_users = result_value(v.db,
+		"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,"
+		"transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment "
+		"FROM mysql_users ORDER BY username,backend DESC");
+	admin->init_users(std::move(misleading_legacy_users));
+	account_details_t operator_a_before = GloMyAuth->lookup(
+		const_cast<char*>("A"), USERNAME_BACKEND, {true, true, true});
+	const bool operator_a_live_before = operator_a_before.password != nullptr &&
+		std::string(operator_a_before.password) == "operator-a";
+	free_account_details(operator_a_before);
+	ok(misleading_legacy_seeded && operator_a_live_before &&
+		scalar(v.db, "SELECT COUNT(*) FROM main.mysql_users WHERE username='v2:1:0:41'") == 0 &&
+		scalar(v.db, "SELECT COUNT(*) FROM disk.mysql_users WHERE username='v2:1:0:41'") == 0,
+		"the live fixture seeds an encoded-looking legacy ledger beside unrelated operator user A");
+	v.plan.generation = 17;
+	const auto misleading_legacy_result = admin->apply_plugin_mysql_config(v.plan);
+	account_details_t operator_a_after = GloMyAuth->lookup(
+		const_cast<char*>("A"), USERNAME_BACKEND, {true, true, true});
+	const bool operator_a_live_after = operator_a_after.password != nullptr &&
+		std::string(operator_a_after.password) == "operator-a";
+	free_account_details(operator_a_after);
+	ok(!misleading_legacy_result.applied &&
+		misleading_legacy_result.message.find("ambiguous") != std::string::npos &&
+		scalar(v.db, "SELECT generation FROM main.proxysql_plugin_config_generations "
+			"WHERE owner='mysql_router'") == 16 &&
+		scalar(v.db, "SELECT generation FROM disk.proxysql_plugin_config_generations "
+			"WHERE owner='mysql_router'") == 16 &&
+		text_value(v.db, "SELECT password FROM main.mysql_users WHERE username='A' AND backend=1") ==
+			"operator-a" &&
+		text_value(v.db, "SELECT password FROM disk.mysql_users WHERE username='A' AND backend=1") ==
+			"operator-a" &&
+		operator_a_live_after,
+		"an encoded-looking legacy ledger fails closed and preserves operator A in main, disk, and live Auth");
 	ev_async_stop(MyHGM->gtid_ev_loop, MyHGM->gtid_ev_async);
 	ev_loop_destroy(MyHGM->gtid_ev_loop);
 	MyHGM->gtid_ev_loop = nullptr;

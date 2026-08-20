@@ -182,7 +182,7 @@ struct ProxySQL_PluginConfigRuntimeHooks {
 constexpr const char* PROXYSQL_PLUGIN_OWNED_OBJECTS_DDL =
 	"CREATE TABLE IF NOT EXISTS proxysql_plugin_owned_objects ("
 	"owner TEXT NOT NULL, object_type TEXT NOT NULL CHECK(object_type IN "
-	"('hostgroup','mysql_user','mysql_query_rule','mysql_interface')), "
+	"('hostgroup','mysql_user','mysql_user_v2','mysql_query_rule','mysql_interface')), "
 	"object_key TEXT NOT NULL, generation INTEGER NOT NULL, "
 	"PRIMARY KEY(owner, object_type, object_key))";
 
