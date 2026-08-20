@@ -6,6 +6,7 @@
 
 #include "ProxySQL_PluginManager.h"
 #include "ProxySQL_PluginSecrets.h"
+#include "ProxySQL_PluginListenerGate.h"
 
 #include <atomic>
 #include <cassert>
@@ -274,6 +275,19 @@ ProxySQL_PluginSecretResult erase_secret_service(const char* owner, const char* 
 	return store.erase(owner, name);
 }
 
+bool set_listener_gate_service(const ProxySQL_PluginListenerGate& gate) {
+	return proxysql_plugin_set_listener_gate(gate);
+}
+
+bool set_listener_gate_not_available(const ProxySQL_PluginListenerGate&) {
+	return false;
+}
+
+ProxySQL_PluginMysqlConfigResult apply_mysql_config_not_available(
+	const ProxySQL_PluginMysqlConfigPlan&) {
+	return { false, "MySQL configuration publication is not available" };
+}
+
 bool sql_equals_ci(const std::string& lhs, const std::string& rhs) {
 	return strcasecmp(lhs.c_str(), rhs.c_str()) == 0;
 }
@@ -346,6 +360,8 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_.put_secret = &put_secret_service;
 	services_.get_secret = &get_secret_service;
 	services_.erase_secret = &erase_secret_service;
+	services_.set_listener_gate = &set_listener_gate_service;
+	services_.apply_mysql_config = &apply_mysql_config_not_available;
 
 	// Phase-B (register_schemas) services: same layout as init(), but DB
 	// handle getters and the query-hook registrar are stubbed -- see the
@@ -374,6 +390,8 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_phase_b_.put_secret = &secret_not_available;
 	services_phase_b_.get_secret = &secret_get_not_available;
 	services_phase_b_.erase_secret = &secret_erase_not_available;
+	services_phase_b_.set_listener_gate = &set_listener_gate_not_available;
+	services_phase_b_.apply_mysql_config = &apply_mysql_config_not_available;
 #endif /* PROXYSQL40 */
 }
 
@@ -659,6 +677,37 @@ bool ProxySQL_PluginManager::start_all(std::string &err) {
 	return true;
 }
 
+bool ProxySQL_PluginManager::runtime_ready_all(
+	ProxySQL_PluginRuntimeContext& context, std::string& err) {
+	err.clear();
+	bool all_ready = true;
+	for (auto& plugin : plugins_) {
+		if (!plugin.started || plugin.stopped || plugin.descriptor == nullptr ||
+			plugin.descriptor->abi_version < 8u || plugin.descriptor->runtime_ready == nullptr) {
+			continue;
+		}
+		bool ready = false;
+		try {
+			ProxySQL_PluginRuntimeContext callback_context {
+				&services_, context.startup_monotonic_us
+			};
+			ready = plugin.descriptor->runtime_ready(&callback_context);
+		} catch (...) {
+			ready = false;
+		}
+		if (!ready) {
+			all_ready = false;
+			proxysql_plugin_listener_gate_registry().force_close_owner(
+				plugin.descriptor->name);
+			if (!err.empty()) err += "; ";
+			err += "plugin runtime readiness failed: " + plugin_name(plugin.descriptor);
+			proxy_warning("Plugin runtime readiness degraded: %s\n",
+				plugin_name(plugin.descriptor).c_str());
+		}
+	}
+	return all_ready;
+}
+
 bool ProxySQL_PluginManager::stop_all() {
 	bool ok = true;
 
@@ -680,6 +729,9 @@ bool ProxySQL_PluginManager::stop_all() {
 				proxy_warning("Plugin stop failed: %s\n", plugin_name(it->descriptor).c_str());
 				ok = false;
 			}
+		}
+		if (it->descriptor != nullptr) {
+			proxysql_plugin_listener_gate_registry().remove_owner(it->descriptor->name);
 		}
 		// Mark stopped even on failure — never retry stop() on the same plugin.
 		// The destructor's stop_all() call must be idempotent across failure paths.
@@ -1212,6 +1264,17 @@ bool proxysql_start_configured_plugins(
 	}
 
 	return manager->start_all(err);
+}
+
+bool proxysql_runtime_ready_configured_plugins(
+	ProxySQL_PluginManager* manager,
+	ProxySQL_PluginRuntimeContext& context,
+	std::string& err
+) {
+	std::lock_guard<std::mutex> lifecycle_lock(g_plugin_lifecycle_mutex);
+	err.clear();
+	if (manager == nullptr) return true;
+	return manager->runtime_ready_all(context, err);
 }
 
 bool proxysql_stop_configured_plugins(

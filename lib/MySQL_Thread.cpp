@@ -5321,6 +5321,23 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 	}
 	c=accept(myds->fd, addr, &addrlen);
 	if (c>-1) { // accept() succeeded
+		iface_info *ifi=NULL;
+#ifdef PROXYSQL40
+		ifi=GloMTH->MLM_find_iface_from_fd(myds->fd);
+		if (ifi != nullptr) {
+			const auto gate = proxysql_plugin_listener_gate_close_if_closed(
+				ifi->address, static_cast<uint16_t>(ifi->port), c, monotonic_time());
+			if (gate) {
+				if (gate->should_warn) {
+					proxy_warning("Plugin listener %s:%u is not ready: %s\n",
+						ifi->address, ifi->port, gate->gate.reason.c_str());
+				}
+				mypolls.fds[n].revents=0;
+				free(addr);
+				return;
+			}
+		}
+#endif /* PROXYSQL40 */
 		if (mysql_thread___client_host_cache_size) {
 			MySQL_Client_Host_Cache_Entry client_host_entry =
 				GloMTH->find_client_host_cache(addr);
@@ -5372,7 +5389,6 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 				break;
 		}
 
-		iface_info *ifi=NULL;
 		ifi=GloMTH->MLM_find_iface_from_fd(myds->fd); // here we try to get the info about the proxy bind address
 		if (ifi) {
 			sess->client_myds->proxy_addr.addr=strdup(ifi->address);

@@ -21,6 +21,10 @@
 
 #include "MySQL_Set_Stmt_Parser.h"
 
+#ifdef PROXYSQL40
+#include "ProxySQL_PluginListenerGate.h"
+#endif /* PROXYSQL40 */
+
 /*
 #define MIN_POLL_LEN 8
 #define MIN_POLL_DELETE_RATIO  8

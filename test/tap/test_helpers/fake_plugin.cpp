@@ -260,6 +260,38 @@ bool fake_start() {
 	return true;
 }
 
+#ifdef PROXYSQL40
+bool fake_runtime_ready(ProxySQL_PluginRuntimeContext* context) {
+	if (context == nullptr || context->services == nullptr ||
+		context->services->set_listener_gate == nullptr) {
+		return false;
+	}
+	if (env("RUNTIME_READY_MUTATE_CONTEXT") != nullptr) {
+		context->services = nullptr;
+		context->startup_monotonic_us = 0;
+		fake_log_event("runtime_ready_mutated_context");
+		return true;
+	}
+	const ProxySQL_PluginListenerGate listener_gate {
+		FAKE_PLUGIN_NAME, "127.0.0.1", 6450,
+		env("RUNTIME_READY_INSTALL_READY") != nullptr
+			? ProxySQL_PluginListenerState::ready : ProxySQL_PluginListenerState::closed,
+		"fake plugin has not reconciled"
+	};
+	if (!context->services->set_listener_gate(listener_gate)) return false;
+	if (env("RUNTIME_READY_THROW") != nullptr) {
+		fake_log_event("runtime_ready_throw");
+		throw "fake runtime readiness exception";
+	}
+	if (env("RUNTIME_READY_FAIL") != nullptr) {
+		fake_log_event("runtime_ready_fail");
+		return false;
+	}
+	fake_log_event("runtime_ready");
+	return true;
+}
+#endif /* PROXYSQL40 */
+
 bool fake_stop() {
 	if (env("STOP_FAIL") != nullptr) {
 		fake_log_event("stop_fail");
@@ -328,6 +360,19 @@ const ProxySQL_PluginDescriptor fake_descriptor_with_early_action = {
 	&fake_early_action,
 };
 
+const ProxySQL_PluginDescriptor fake_descriptor_with_runtime_ready = {
+	FAKE_PLUGIN_NAME,
+	8,
+	&fake_init,
+	&fake_start,
+	&fake_stop,
+	&fake_status_json,
+	nullptr,
+	nullptr,
+	nullptr,
+	&fake_runtime_ready,
+};
+
 // This object intentionally uses the ABI-5 descriptor shape. It has no ABI-6
 // tail field. Returning it through the current descriptor pointer type models
 // a plugin compiled before register_cli_options existed; the manager must not
@@ -348,6 +393,32 @@ const fake_descriptor_v5_layout fake_descriptor_abi5 = {
 	&fake_start,
 	&fake_stop,
 	&fake_status_json,
+	nullptr,
+};
+
+// ABI 7 has the complete pre-runtime-ready descriptor prefix but no ABI-8
+// tail. Returning this shorter layout verifies the loader never reads the
+// runtime_ready member for secret-service-era plugins.
+struct fake_descriptor_v7_layout {
+	const char* name;
+	uint32_t abi_version;
+	proxysql_plugin_init_cb init;
+	proxysql_plugin_start_cb start;
+	proxysql_plugin_stop_cb stop;
+	proxysql_plugin_status_json_cb status_json;
+	proxysql_plugin_register_schemas_cb register_schemas;
+	proxysql_plugin_register_cli_options_cb register_cli_options;
+	proxysql_plugin_early_action_cb early_action;
+};
+const fake_descriptor_v7_layout fake_descriptor_abi7 = {
+	FAKE_PLUGIN_NAME,
+	7,
+	&fake_init,
+	&fake_start,
+	&fake_stop,
+	&fake_status_json,
+	nullptr,
+	nullptr,
 	nullptr,
 };
 #endif /* PROXYSQL40 */
@@ -374,11 +445,17 @@ extern "C" const ProxySQL_PluginDescriptor *proxysql_plugin_descriptor_v1() {
 	if (env("ENABLE_ABI5_TAIL_GUARD") != nullptr) {
 		return reinterpret_cast<const ProxySQL_PluginDescriptor*>(&fake_descriptor_abi5);
 	}
+	if (env("ENABLE_ABI7_TAIL_GUARD") != nullptr) {
+		return reinterpret_cast<const ProxySQL_PluginDescriptor*>(&fake_descriptor_abi7);
+	}
 	if (env("ENABLE_CLI") != nullptr) {
 		return &fake_descriptor_with_cli;
 	}
 	if (env("ENABLE_EARLY_ACTION") != nullptr) {
 		return &fake_descriptor_with_early_action;
+	}
+	if (env("ENABLE_RUNTIME_READY") != nullptr) {
+		return &fake_descriptor_with_runtime_ready;
 	}
 	if (env("ENABLE_PHASE_B") != nullptr) {
 		return &fake_descriptor_with_phase_b;

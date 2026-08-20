@@ -15,6 +15,7 @@
 
 #include "ProxySQL_PluginManager.h"
 #include "ProxySQL_Plugin.h"
+#include "ProxySQL_PluginListenerGate.h"
 #include "tap.h"
 
 #include <cstdio>
@@ -292,6 +293,26 @@ static void test_abi5_skips_early_action_tail() {
 	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_ABI5_TAIL_GUARD");
 }
 
+// ABI-7 descriptors include the secret-service era prefix but do not have the
+// ABI-8 runtime_ready field. The production regression is reading that tail
+// unconditionally during phase 3.
+static void test_abi7_skips_runtime_ready_tail() {
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_ABI7_TAIL_GUARD", "1", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr(new ProxySQL_PluginManager());
+	std::string err;
+	ok(mgr->load(PROXYSQL_FAKE_PLUGIN_PATH, err) && mgr->init_all(err) && mgr->start_all(err),
+		"ABI 7 plugin reaches started state without an ABI 8 descriptor tail");
+	ProxySQL_PluginRuntimeContext context { nullptr, 4321 };
+	ok(proxysql_runtime_ready_configured_plugins(mgr.get(), context, err),
+		"ABI 7 plugin is skipped by runtime-ready dispatch (err='%s')", err.c_str());
+	ok(read_log().find("fake_plugin:runtime_ready") == std::string::npos,
+		"ABI 7 plugin did not read or invoke the ABI 8 runtime-ready tail");
+	(void)proxysql_stop_configured_plugins(mgr, err);
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_ABI7_TAIL_GUARD");
+}
+
 // Case 2: plugin sets only init (register_schemas field is null).
 // Phase B is skipped; init still runs.  This is the compat path for
 // plugins built against the pre-2.2 descriptor layout.
@@ -462,6 +483,124 @@ static void test_stop_runs_when_start_fails() {
 	unsetenv("PROXYSQL_FAKE_PLUGIN_START_FAIL");
 }
 
+// Runtime readiness is deliberately separate from start(): its callback must
+// run only after phase 3 has the HGM/Auth/QPro/MTH core dependencies, and a
+// failed first reconciliation must leave the process able to start listeners.
+static void test_runtime_ready_runs_before_listeners_and_teardown_removes_gates() {
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_RUNTIME_READY", "1", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
+	std::string err;
+	ok(proxysql_load_configured_plugins(mgr, paths, err) &&
+		proxysql_init_configured_plugins(mgr.get(), err) &&
+		proxysql_start_configured_plugins(mgr.get(), err),
+		"runtime-ready plugin reaches the started state (err='%s')", err.c_str());
+	append_log("core:hgm_auth_qpro_mth_ready");
+	ProxySQL_PluginRuntimeContext context { nullptr, 1234 };
+	ok(proxysql_runtime_ready_configured_plugins(mgr.get(), context, err),
+		"successful runtime-ready reconciliation does not degrade the plugin (err='%s')", err.c_str());
+	append_log("core:listeners_started");
+	const std::string log = read_log();
+	ok(contains_in_order(log, "core:hgm_auth_qpro_mth_ready", "fake_plugin:runtime_ready") &&
+		contains_in_order(log, "fake_plugin:runtime_ready", "core:listeners_started"),
+		"runtime_ready is ordered after core prerequisites and before listeners (log='%s')", log.c_str());
+	ok(proxysql_plugin_listener_gate_lookup("127.0.0.1", 6450).has_value(),
+		"runtime-ready plugin installs its listener gate through ABI 8 services");
+	(void)proxysql_stop_configured_plugins(mgr, err);
+	ok(!proxysql_plugin_listener_gate_lookup("127.0.0.1", 6450).has_value(),
+		"manager teardown removes gates owned by its plugin");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_RUNTIME_READY");
+}
+
+static void test_runtime_ready_failure_degrades_without_aborting_listener_start() {
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_RUNTIME_READY", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_RUNTIME_READY_INSTALL_READY", "1", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
+	std::string err;
+	ok(proxysql_load_configured_plugins(mgr, paths, err) &&
+		proxysql_init_configured_plugins(mgr.get(), err) &&
+		proxysql_start_configured_plugins(mgr.get(), err),
+		"plugin start succeeds before its runtime-ready reconciliation");
+	ProxySQL_PluginRuntimeContext context { nullptr, 5678 };
+	ok(proxysql_runtime_ready_configured_plugins(mgr.get(), context, err),
+		"runtime readiness can first leave the plugin listener ready (err='%s')", err.c_str());
+	auto listener_gate = proxysql_plugin_listener_gate_lookup("127.0.0.1", 6450);
+	ok(listener_gate && listener_gate->state == ProxySQL_PluginListenerState::ready,
+		"the callback starts its second reconciliation with a ready gate");
+	setenv("PROXYSQL_FAKE_PLUGIN_RUNTIME_READY_FAIL", "1", 1);
+	ok(!proxysql_runtime_ready_configured_plugins(mgr.get(), context, err),
+		"a failed runtime-ready callback reports a degraded plugin");
+	listener_gate = proxysql_plugin_listener_gate_lookup("127.0.0.1", 6450);
+	ok(listener_gate && listener_gate->state == ProxySQL_PluginListenerState::closed &&
+		listener_gate->reason == "runtime readiness degraded",
+		"a false callback closes its previously ready gates with a sanitized reason");
+	append_log("core:listeners_started");
+	const std::string log = read_log();
+	ok(log.find("fake_plugin:runtime_ready_fail") != std::string::npos &&
+		contains_in_order(log, "fake_plugin:runtime_ready_fail", "core:listeners_started"),
+		"runtime-ready failure does not prevent listeners from starting (log='%s')", log.c_str());
+	(void)proxysql_stop_configured_plugins(mgr, err);
+	unsetenv("PROXYSQL_FAKE_PLUGIN_RUNTIME_READY_FAIL");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_RUNTIME_READY_INSTALL_READY");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_RUNTIME_READY");
+}
+
+static void test_runtime_ready_exception_closes_ready_gates() {
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_RUNTIME_READY", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_RUNTIME_READY_INSTALL_READY", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_RUNTIME_READY_THROW", "1", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
+	std::string err;
+	ok(proxysql_load_configured_plugins(mgr, paths, err) &&
+		proxysql_init_configured_plugins(mgr.get(), err) &&
+		proxysql_start_configured_plugins(mgr.get(), err),
+		"plugin start succeeds before its runtime-ready exception");
+	ProxySQL_PluginRuntimeContext context { nullptr, 6789 };
+	ok(!proxysql_runtime_ready_configured_plugins(mgr.get(), context, err),
+		"a throwing runtime-ready callback reports a degraded plugin");
+	const auto listener_gate = proxysql_plugin_listener_gate_lookup("127.0.0.1", 6450);
+	ok(listener_gate && listener_gate->state == ProxySQL_PluginListenerState::closed &&
+		listener_gate->reason == "runtime readiness degraded",
+		"an exception closes its newly ready gate with a sanitized reason");
+	(void)proxysql_stop_configured_plugins(mgr, err);
+	unsetenv("PROXYSQL_FAKE_PLUGIN_RUNTIME_READY_THROW");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_RUNTIME_READY_INSTALL_READY");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_RUNTIME_READY");
+}
+
+static void test_runtime_ready_callbacks_receive_isolated_contexts() {
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_RUNTIME_READY", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_RUNTIME_READY_MUTATE_CONTEXT", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN2_ENABLE_RUNTIME_READY", "1", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH, PROXYSQL_FAKE_PLUGIN2_PATH };
+	std::string err;
+	ok(proxysql_load_configured_plugins(mgr, paths, err) &&
+		proxysql_init_configured_plugins(mgr.get(), err) &&
+		proxysql_start_configured_plugins(mgr.get(), err),
+		"two runtime-ready plugins start before their callbacks run");
+	ProxySQL_PluginRuntimeContext context { nullptr, 7890 };
+	ok(proxysql_runtime_ready_configured_plugins(mgr.get(), context, err),
+		"a callback mutating its context cannot degrade the following plugin (err='%s')", err.c_str());
+	const std::string log = read_log();
+	ok(contains_in_order(log, "fake_plugin:runtime_ready_mutated_context", "fake_plugin2:runtime_ready"),
+		"the second runtime-ready callback received an unpoisoned context (log='%s')", log.c_str());
+	(void)proxysql_stop_configured_plugins(mgr, err);
+	unsetenv("PROXYSQL_FAKE_PLUGIN2_ENABLE_RUNTIME_READY");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_RUNTIME_READY_MUTATE_CONTEXT");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_RUNTIME_READY");
+}
+
 // Case 6: plugin returns a descriptor with an unknown abi_version.  The
 // loader MUST refuse to load such a plugin rather than read past the end
 // of its own (compiled-against) struct definition.  This is the test that
@@ -486,7 +625,7 @@ static void test_bogus_abi_version_rejected() {
 }
 
 int main() {
-	plan(48);
+	plan(68);
 
 	make_log_path();
 
@@ -496,12 +635,17 @@ int main() {
 	test_early_action_exception_is_a_sanitized_failure();
 	test_first_early_exit_short_circuits_later_plugins();
 	test_abi5_skips_early_action_tail();
+	test_abi7_skips_runtime_ready_tail();
 	test_only_init_skips_phase_b();
 	test_phase_b_db_handles_are_null();
 	test_phase_b_secret_services_are_not_available();
 	test_phase_b_failure_aborts_init();
 	test_phase_b_partial_failure_rolls_back();
 	test_stop_runs_when_start_fails();
+	test_runtime_ready_runs_before_listeners_and_teardown_removes_gates();
+	test_runtime_ready_failure_degrades_without_aborting_listener_start();
+	test_runtime_ready_exception_closes_ready_gates();
+	test_runtime_ready_callbacks_receive_isolated_contexts();
 	test_bogus_abi_version_rejected();
 
 	cleanup_log();

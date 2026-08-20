@@ -39,6 +39,7 @@ public:
 #endif /* PROXYSQL40 */
 	bool init_all(std::string &err);
 	bool start_all(std::string &err);
+	bool runtime_ready_all(ProxySQL_PluginRuntimeContext& context, std::string& err);
 	bool stop_all();
 	const std::vector<ProxySQL_PluginTableDef>& tables(ProxySQL_PluginDBKind kind) const;
 	bool dispatch_admin_command(const ProxySQL_PluginCommandContext& ctx, const std::string& sql, ProxySQL_PluginCommandResult& result) const;
@@ -223,6 +224,13 @@ bool proxysql_init_configured_plugins(
 );
 bool proxysql_start_configured_plugins(
 	ProxySQL_PluginManager* manager,
+	std::string& err
+);
+// Runtime readiness failures degrade only their plugin; caller continues to
+// listener startup so Admin and unrelated listeners remain reachable.
+bool proxysql_runtime_ready_configured_plugins(
+	ProxySQL_PluginManager* manager,
+	ProxySQL_PluginRuntimeContext& context,
 	std::string& err
 );
 bool proxysql_stop_configured_plugins(

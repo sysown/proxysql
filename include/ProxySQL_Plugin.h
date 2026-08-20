@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "ProxySQL_PluginSecrets.h"
+#include "ProxySQL_PluginListenerGate.h"
 
 class SQLite3DB;
 class SQLite3_result;
@@ -49,8 +50,10 @@ namespace prometheus { class Registry; }
 //          command-line parse. It invokes early actions after Admin is live
 //          and before plugin init/start.
 //   ABI 7: appends authenticated encrypted secret-store services.
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = 7u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = 7u;
+//   ABI 8: appends runtime readiness and listener-gate services, followed by
+//          the reserved scoped-MySQL-publication service slot.
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = 8u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = 8u;
 
 struct ProxySQL_PluginCLIOptionDef {
 	const char* short_name;
@@ -70,6 +73,22 @@ using proxysql_plugin_register_cli_options_cb =
 	bool (*)(ProxySQL_PluginCLIRegistry*);
 
 struct ProxySQL_PluginServices;
+
+// Task 6 owns the full plan definition. ABI 8 reserves its service slot now
+// so no second ABI bump is necessary when publication becomes live.
+struct ProxySQL_PluginMysqlConfigPlan;
+struct ProxySQL_PluginMysqlConfigResult {
+	bool applied;
+	std::string message;
+};
+
+struct ProxySQL_PluginRuntimeContext {
+	ProxySQL_PluginServices* services;
+	uint64_t startup_monotonic_us;
+};
+
+using proxysql_plugin_runtime_ready_cb =
+	bool (*)(ProxySQL_PluginRuntimeContext*);
 
 enum class ProxySQL_PluginEarlyActionResult : uint8_t {
 	not_requested = 0,
@@ -369,6 +388,16 @@ struct ProxySQL_PluginServices {
 	ProxySQL_PluginSecretResult (*get_secret)(const char* owner, const char* name,
 		std::vector<uint8_t>& plaintext);
 	ProxySQL_PluginSecretResult (*erase_secret)(const char* owner, const char* name);
+
+	// ABI-8 listener readiness. Available after Admin is live; Phase B gets a
+	// rejecting stub. Gates are copied by core and remain in effect until their
+	// owner replaces/removes them or its manager tears down.
+	bool (*set_listener_gate)(const ProxySQL_PluginListenerGate& gate);
+
+	// ABI-8 reserved final tail: Task 6 replaces this rejecting stub with the
+	// generic scoped MySQL configuration publisher without another ABI bump.
+	ProxySQL_PluginMysqlConfigResult (*apply_mysql_config)(
+		const ProxySQL_PluginMysqlConfigPlan& plan);
 #endif /* PROXYSQL40 */
 };
 
@@ -437,6 +466,9 @@ struct ProxySQL_PluginDescriptor {
 	// The core reads this tail field only for descriptors whose abi_version is
 	// at least 6.
 	proxysql_plugin_early_action_cb early_action;
+	// ABI 8: invoked after core runtime dependencies exist and immediately
+	// before listener validation/start. Core reads this tail only for ABI >= 8.
+	proxysql_plugin_runtime_ready_cb runtime_ready;
 #endif /* PROXYSQL40 */
 };
 

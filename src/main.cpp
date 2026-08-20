@@ -1575,6 +1575,17 @@ static void StartConfiguredPlugins() {
 	}
 }
 
+static void RunConfiguredPluginsRuntimeReady() {
+	if (GloVars.no_plugins) return;
+	ProxySQL_PluginRuntimeContext context { nullptr, monotonic_time() };
+	std::string plugin_error {};
+	if (!proxysql_runtime_ready_configured_plugins(
+		GloPluginManager.get(), context, plugin_error)) {
+		proxy_warning("Plugin runtime readiness degraded: %s; continuing listener startup\n",
+			plugin_error.c_str());
+	}
+}
+
 static void StopConfiguredPlugins() {
 	if (GloVars.no_plugins) return;
 	std::string plugin_error {};
@@ -1744,6 +1755,11 @@ bool ProxySQL_Main_init_phase3___start_all() {
 	load_ = 0;
 	__sync_fetch_and_add(&GloMTH->status_variables.threads_initialized, 1);
 	__sync_fetch_and_add(&GloPTH->status_variables.threads_initialized, 1);
+#ifdef PROXYSQL40
+	// Runtime-ready callbacks run only now: HGM, Auth, QPro, and MTH all
+	// exist, but no listener has yet been validated or started.
+	RunConfiguredPluginsRuntimeReady();
+#endif /* PROXYSQL40 */
 	{
 		char* admin_mysql_ifaces = GloAdmin->get_variable((char*)"mysql_ifaces");
 		char* admin_pgsql_ifaces = GloAdmin->get_variable((char*)"pgsql_ifaces");
