@@ -146,19 +146,21 @@ static backend_kind_t detect_backend_via_admin(const CommandLine& cl) {
 // which is a valid prepared-statement body and surfaces the timeout via the
 // MariaDB-specific error code 1969. See issue #5783.
 //
-// SUM forces SLEEP to be evaluated while producing the aggregate row, after
-// result metadata is available. The primary-key predicate keeps the workload
-// deterministic while preserving the execute-success/store-result-error path.
+// Keep SLEEP as the predicate of a table SELECT.  MySQL 5.7 turns an interrupt
+// into a normal value when SLEEP is combined with an equality predicate or
+// consumed by SUM(), so mysql_stmt_store_result() sees success instead of the
+// intended timeout.  COUNT(*) still provides stable result metadata, while
+// the non-empty fixture guarantees that the predicate is evaluated.
 static unsigned int select_timeout_dialect(backend_kind_t kind) {
 	if (kind == backend_kind_t::mariadb) {
 		select_query[0] =
 			"SET STATEMENT max_statement_time=0.01 FOR "
-			"SELECT SUM(SLEEP(id)) FROM test.sbtest1 WHERE id=1";
+			"SELECT COUNT(*) FROM test.sbtest1 WHERE SLEEP(1)";
 		return 1969; // MariaDB ER_STATEMENT_TIMEOUT
 	}
 	select_query[0] =
-		"SELECT /*+ MAX_EXECUTION_TIME(10) */ SUM(SLEEP(id)) "
-		"FROM test.sbtest1 WHERE id=1";
+		"SELECT /*+ MAX_EXECUTION_TIME(10) */ COUNT(*) "
+		"FROM test.sbtest1 WHERE SLEEP(1)";
 	return 3024; // MySQL ER_QUERY_TIMEOUT
 }
 
