@@ -28,6 +28,11 @@ extern ProxySQL_GlobalVariables GloVars;
 SQLite3DB* proxysql_plugin_get_admindb();
 SQLite3DB* proxysql_plugin_get_configdb();
 SQLite3DB* proxysql_plugin_get_statsdb();
+SQLite3_result* proxysql_plugin_get_mysql_users_snapshot();
+SQLite3_result* proxysql_plugin_get_mysql_servers_snapshot();
+SQLite3_result* proxysql_plugin_get_mysql_group_replication_hostgroups_snapshot();
+ProxySQL_PluginMysqlConfigResult proxysql_plugin_apply_mysql_config(
+	const ProxySQL_PluginMysqlConfigPlan&);
 
 namespace {
 
@@ -285,7 +290,7 @@ bool set_listener_gate_not_available(const ProxySQL_PluginListenerGate&) {
 
 ProxySQL_PluginMysqlConfigResult apply_mysql_config_not_available(
 	const ProxySQL_PluginMysqlConfigPlan&) {
-	return { false, "MySQL configuration publication is not available" };
+	return { false, 0, "MySQL configuration publication is not available", {} };
 }
 
 bool sql_equals_ci(const std::string& lhs, const std::string& rhs) {
@@ -345,9 +350,10 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	std::memset(&services_, 0, sizeof(services_));
 	services_.register_table = &register_table_service;
 	services_.register_command = &register_command_service;
-	services_.get_mysql_users_snapshot = &snapshot_stub;
-	services_.get_mysql_servers_snapshot = &snapshot_stub;
-	services_.get_mysql_group_replication_hostgroups_snapshot = &snapshot_stub;
+	services_.get_mysql_users_snapshot = &proxysql_plugin_get_mysql_users_snapshot;
+	services_.get_mysql_servers_snapshot = &proxysql_plugin_get_mysql_servers_snapshot;
+	services_.get_mysql_group_replication_hostgroups_snapshot =
+		&proxysql_plugin_get_mysql_group_replication_hostgroups_snapshot;
 	services_.get_admindb = &get_admindb_service;
 	services_.get_configdb = &get_configdb_service;
 	services_.get_statsdb = &get_statsdb_service;
@@ -361,7 +367,7 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_.get_secret = &get_secret_service;
 	services_.erase_secret = &erase_secret_service;
 	services_.set_listener_gate = &set_listener_gate_service;
-	services_.apply_mysql_config = &apply_mysql_config_not_available;
+	services_.apply_mysql_config = &proxysql_plugin_apply_mysql_config;
 
 	// Phase-B (register_schemas) services: same layout as init(), but DB
 	// handle getters and the query-hook registrar are stubbed -- see the

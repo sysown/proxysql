@@ -19,6 +19,7 @@ using json = nlohmann::json;
 #include "MySQL_HostGroups_Manager.h"
 #include "PgSQL_HostGroups_Manager.h"
 #include "ProxySQL_PluginManager.h"
+#include "ProxySQL_PluginConfig.h"
 #include "mysql.h"
 #include "proxysql_admin.h"
 // Discovery_Schema.h moved to plugins/genai/include/ in Step 6.
@@ -377,6 +378,24 @@ SQLite3DB* proxysql_plugin_get_configdb() {
 
 SQLite3DB* proxysql_plugin_get_statsdb() {
 	return GloAdmin ? GloAdmin->statsdb : nullptr;
+}
+
+SQLite3_result* proxysql_plugin_get_mysql_users_snapshot() {
+	return GloAdmin ? GloAdmin->get_mysql_users_snapshot() : nullptr;
+}
+
+SQLite3_result* proxysql_plugin_get_mysql_servers_snapshot() {
+	return GloAdmin ? GloAdmin->get_mysql_servers_snapshot() : nullptr;
+}
+
+SQLite3_result* proxysql_plugin_get_mysql_group_replication_hostgroups_snapshot() {
+	return GloAdmin ? GloAdmin->get_mysql_group_replication_hostgroups_snapshot() : nullptr;
+}
+
+ProxySQL_PluginMysqlConfigResult proxysql_plugin_apply_mysql_config(
+	const ProxySQL_PluginMysqlConfigPlan& plan) {
+	return GloAdmin ? GloAdmin->apply_plugin_mysql_config(plan) :
+		ProxySQL_PluginMysqlConfigResult{false, 0, "Admin module is not available", {}};
 }
 #endif /* PROXYSQL40 */
 
@@ -6048,6 +6067,271 @@ void ProxySQL_Admin::init_users(
 	pthread_mutex_unlock(&users_mutex);
 }
 
+#ifdef PROXYSQL40
+void ProxySQL_Admin::init_users_under_lock(unique_ptr<SQLite3_result>&& mysql_users_resultset) {
+	__refresh_users(std::move(mysql_users_resultset));
+}
+
+namespace {
+
+SQLite3_result* clone_result(SQLite3_result* source) {
+	return source == nullptr ? nullptr : new SQLite3_result(source);
+}
+
+SQLite3_result* plugin_query(SQLite3DB& db, const char* sql, std::string& error) {
+	char* sqlite_error = nullptr;
+	int columns = 0;
+	int affected_rows = 0;
+	SQLite3_result* result = nullptr;
+	db.execute_statement(sql, &sqlite_error, &columns, &affected_rows, &result);
+	if (sqlite_error != nullptr) {
+		error = sqlite_error;
+		free(sqlite_error);
+		delete result;
+		return nullptr;
+	}
+	return result;
+}
+
+SQLite3_result* hgm_query(const char* sql, std::string& error) {
+	char* sqlite_error = nullptr;
+	SQLite3_result* result = MyHGM->execute_query_under_lock(sql, &sqlite_error);
+	if (sqlite_error != nullptr) {
+		error = sqlite_error;
+		free(sqlite_error);
+		delete result;
+		return nullptr;
+	}
+	return result;
+}
+
+bool plugin_config_lock(void* opaque, ProxySQL_PluginConfigLock which, std::string& error) {
+	auto* admin = static_cast<ProxySQL_Admin*>(opaque);
+	switch (which) {
+		case ProxySQL_PluginConfigLock::admin:
+			admin->mysql_servers_wrlock();
+			return true;
+		case ProxySQL_PluginConfigLock::hostgroups:
+			if (MyHGM == nullptr) { error = "MySQL hostgroup manager is not available"; return false; }
+			MyHGM->wrlock();
+			return true;
+		case ProxySQL_PluginConfigLock::auth:
+			if (GloMyAuth == nullptr) { error = "MySQL authentication is not available"; return false; }
+			pthread_mutex_lock(&users_mutex);
+			return true;
+		case ProxySQL_PluginConfigLock::query_processor:
+			if (GloMyQPro == nullptr) { error = "MySQL query processor is not available"; return false; }
+			GloMyQPro->wrlock();
+			return true;
+		case ProxySQL_PluginConfigLock::mysql_threads:
+			if (GloMTH == nullptr) { error = "MySQL threads handler is not available"; return false; }
+			GloMTH->wrlock();
+			return true;
+	}
+	error = "unknown plugin configuration lock";
+	return false;
+}
+
+void plugin_config_unlock(void* opaque, ProxySQL_PluginConfigLock which) {
+	auto* admin = static_cast<ProxySQL_Admin*>(opaque);
+	switch (which) {
+		case ProxySQL_PluginConfigLock::admin: admin->mysql_servers_wrunlock(); break;
+		case ProxySQL_PluginConfigLock::hostgroups: MyHGM->wrunlock(); break;
+		case ProxySQL_PluginConfigLock::auth: pthread_mutex_unlock(&users_mutex); break;
+		case ProxySQL_PluginConfigLock::query_processor: GloMyQPro->wrunlock(); break;
+		case ProxySQL_PluginConfigLock::mysql_threads: GloMTH->wrunlock(); break;
+	}
+}
+
+bool plugin_config_capture(void*, ProxySQL_PluginMysqlRuntimeSnapshot& snapshot, std::string& error) {
+	snapshot.servers = clone_result(MyHGM->get_current_mysql_table("cluster_mysql_servers"));
+	snapshot.replication_hostgroups = hgm_query(
+		"SELECT writer_hostgroup,reader_hostgroup,check_type,comment "
+		"FROM mysql_replication_hostgroups ORDER BY writer_hostgroup", error);
+	if (!error.empty()) return false;
+	snapshot.group_replication_hostgroups = hgm_query(
+		"SELECT writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,"
+		"active,max_writers,writer_is_also_reader,max_transactions_behind,comment "
+		"FROM mysql_group_replication_hostgroups ORDER BY writer_hostgroup", error);
+	if (!error.empty()) return false;
+	snapshot.hostgroup_attributes = hgm_query(
+		"SELECT hostgroup_id,max_num_online_servers,autocommit,free_connections_pct,init_connect,"
+		"multiplex,connection_warming,throttle_connections_per_sec,ignore_session_variables,"
+		"hostgroup_settings,servers_defaults,comment FROM mysql_hostgroup_attributes ORDER BY hostgroup_id", error);
+	if (!error.empty()) return false;
+	snapshot.users = clone_result(GloMyAuth->get_current_mysql_users());
+	snapshot.rules = clone_result(GloMyQPro->get_current_query_rules_inner());
+	snapshot.fast_routing_rules = clone_result(GloMyQPro->get_current_query_rules_fast_routing_inner());
+	char* interfaces = GloMTH->get_variable("interfaces");
+	if (interfaces == nullptr) { error = "cannot snapshot MySQL interfaces"; return false; }
+	snapshot.interfaces = interfaces;
+	free(interfaces);
+	if (snapshot.servers == nullptr || snapshot.users == nullptr || snapshot.rules == nullptr ||
+		snapshot.fast_routing_rules == nullptr) {
+		error = "a required MySQL runtime snapshot is not available";
+		return false;
+	}
+	return true;
+}
+
+incoming_servers_t plugin_server_state(SQLite3DB& db, std::string& error) {
+	unique_ptr<SQLite3_result> servers(plugin_query(db,
+		"SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,"
+		"max_replication_lag,use_ssl,max_latency_ms,comment FROM main.mysql_servers "
+		"ORDER BY hostgroup_id,hostname,port", error));
+	if (!error.empty()) return {};
+	unique_ptr<SQLite3_result> replication(plugin_query(db,
+		"SELECT writer_hostgroup,reader_hostgroup,check_type,comment "
+		"FROM main.mysql_replication_hostgroups ORDER BY writer_hostgroup", error));
+	if (!error.empty()) return {};
+	unique_ptr<SQLite3_result> group_replication(plugin_query(db,
+		"SELECT writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,"
+		"max_writers,writer_is_also_reader,max_transactions_behind,comment "
+		"FROM main.mysql_group_replication_hostgroups ORDER BY writer_hostgroup", error));
+	if (!error.empty()) return {};
+	unique_ptr<SQLite3_result> attributes(plugin_query(db,
+		"SELECT hostgroup_id,max_num_online_servers,autocommit,free_connections_pct,init_connect,"
+		"multiplex,connection_warming,throttle_connections_per_sec,ignore_session_variables,"
+		"hostgroup_settings,servers_defaults,comment FROM main.mysql_hostgroup_attributes ORDER BY hostgroup_id", error));
+	if (!error.empty()) return {};
+	incoming_servers_t incoming;
+	incoming.runtime_mysql_servers = servers.release();
+	incoming.incoming_replication_hostgroups = replication.release();
+	incoming.incoming_group_replication_hostgroups = group_replication.release();
+	incoming.incoming_hostgroup_attributes = attributes.release();
+	return incoming;
+}
+
+incoming_servers_t snapshot_server_state(const ProxySQL_PluginMysqlRuntimeSnapshot& snapshot) {
+	incoming_servers_t incoming;
+	incoming.runtime_mysql_servers = clone_result(snapshot.servers);
+	incoming.incoming_replication_hostgroups = clone_result(snapshot.replication_hostgroups);
+	incoming.incoming_group_replication_hostgroups = clone_result(snapshot.group_replication_hostgroups);
+	incoming.incoming_hostgroup_attributes = clone_result(snapshot.hostgroup_attributes);
+	return incoming;
+}
+
+std::string query_rules_checksum(SQLite3_result* rules, SQLite3_result* fast_rules) {
+	uint64_t hash = rules->raw_checksum() + fast_rules->raw_checksum();
+	uint32_t halves[2];
+	memcpy(halves, &hash, sizeof(hash));
+	char value[20];
+	snprintf(value, sizeof(value), "0x%0X%0X", halves[0], halves[1]);
+	return value;
+}
+
+bool plugin_config_publish(void* opaque, ProxySQL_PluginConfigStage stage, SQLite3DB& db,
+	uint64_t, std::string& error) {
+	auto* admin = static_cast<ProxySQL_Admin*>(opaque);
+	if (stage == ProxySQL_PluginConfigStage::servers) {
+		incoming_servers_t incoming = plugin_server_state(db, error);
+		if (!error.empty()) return false;
+		admin->load_mysql_servers_to_runtime(incoming, {}, {}, false);
+		return true;
+	}
+	if (stage == ProxySQL_PluginConfigStage::users) {
+		unique_ptr<SQLite3_result> users(plugin_query(db,
+			"SELECT username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,"
+			"transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment "
+			"FROM main.mysql_users WHERE active=1 ORDER BY username,backend DESC", error));
+		if (!users) return false;
+		admin->init_users_under_lock(std::move(users));
+		return true;
+	}
+	if (stage == ProxySQL_PluginConfigStage::rules) {
+		char* module_error = admin->load_mysql_query_rules_to_runtime(nullptr, nullptr, "", 0, false);
+		if (module_error != nullptr) { error = module_error; return false; }
+		return true;
+	}
+	if (stage == ProxySQL_PluginConfigStage::interfaces) {
+		unique_ptr<SQLite3_result> value(plugin_query(db,
+			"SELECT variable_value FROM main.global_variables WHERE variable_name='mysql-interfaces'", error));
+		if (!value || value->rows.empty() || value->rows[0]->fields[0] == nullptr) {
+			if (error.empty()) error = "staged mysql-interfaces is missing";
+			return false;
+		}
+		if (!GloMTH->set_variable("interfaces", value->rows[0]->fields[0])) {
+			error = "MySQL threads rejected staged interfaces";
+			return false;
+		}
+		const auto committed = GloMTH->commit();
+		if (!committed.rejected_variables.empty()) {
+			error = "MySQL threads rejected staged variables";
+			return false;
+		}
+		return true;
+	}
+	error = "unknown plugin publication stage";
+	return false;
+}
+
+void plugin_config_restore(void* opaque, ProxySQL_PluginConfigStage stage,
+	const ProxySQL_PluginMysqlRuntimeSnapshot& snapshot) {
+	auto* admin = static_cast<ProxySQL_Admin*>(opaque);
+	if (stage == ProxySQL_PluginConfigStage::servers) {
+		admin->load_mysql_servers_to_runtime(snapshot_server_state(snapshot), {}, {}, false);
+	} else if (stage == ProxySQL_PluginConfigStage::users) {
+		admin->init_users_under_lock(unique_ptr<SQLite3_result>(clone_result(snapshot.users)));
+	} else if (stage == ProxySQL_PluginConfigStage::rules) {
+		SQLite3_result* rules = clone_result(snapshot.rules);
+		SQLite3_result* fast_rules = clone_result(snapshot.fast_routing_rules);
+		const std::string checksum = query_rules_checksum(rules, fast_rules);
+		admin->load_mysql_query_rules_to_runtime(rules, fast_rules, checksum, 0, false);
+	} else if (stage == ProxySQL_PluginConfigStage::interfaces) {
+		if (GloMTH->set_variable("interfaces", snapshot.interfaces.c_str())) (void)GloMTH->commit();
+	}
+}
+
+bool plugin_config_checkpoint(void*, ProxySQL_PluginConfigStage, std::string&) {
+	return true;
+}
+
+} // namespace
+
+ProxySQL_PluginMysqlConfigResult ProxySQL_Admin::apply_plugin_mysql_config(
+	const ProxySQL_PluginMysqlConfigPlan& plan) {
+	ProxySQL_PluginConfigRuntimeHooks hooks {
+		this, &plugin_config_lock, &plugin_config_unlock, &plugin_config_capture,
+		&plugin_config_publish, &plugin_config_restore, &plugin_config_checkpoint
+	};
+	return proxysql_apply_plugin_mysql_config(*admindb, plan, hooks);
+}
+
+SQLite3_result* ProxySQL_Admin::get_mysql_users_snapshot() {
+	pthread_mutex_lock(&users_mutex);
+	SQLite3_result* result = GloMyAuth == nullptr ? nullptr : clone_result(GloMyAuth->get_current_mysql_users());
+	pthread_mutex_unlock(&users_mutex);
+	return result;
+}
+
+SQLite3_result* ProxySQL_Admin::get_mysql_servers_snapshot() {
+	mysql_servers_wrlock();
+	if (MyHGM != nullptr) MyHGM->wrlock();
+	SQLite3_result* result = MyHGM == nullptr ? nullptr :
+		clone_result(MyHGM->get_current_mysql_table("cluster_mysql_servers"));
+	if (MyHGM != nullptr) MyHGM->wrunlock();
+	mysql_servers_wrunlock();
+	return result;
+}
+
+SQLite3_result* ProxySQL_Admin::get_mysql_group_replication_hostgroups_snapshot() {
+	mysql_servers_wrlock();
+	if (MyHGM == nullptr) {
+		mysql_servers_wrunlock();
+		return nullptr;
+	}
+	MyHGM->wrlock();
+	std::string error;
+	SQLite3_result* result = hgm_query(
+		"SELECT writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,"
+		"max_writers,writer_is_also_reader,max_transactions_behind,comment "
+		"FROM mysql_group_replication_hostgroups ORDER BY writer_hostgroup", error);
+	MyHGM->wrunlock();
+	mysql_servers_wrunlock();
+	return error.empty() ? result : nullptr;
+}
+#endif
+
 void ProxySQL_Admin::init_pgsql_users(
 	unique_ptr<SQLite3_result>&& pgsql_users_resultset, const std::string& checksum, const time_t epoch
 ) {
@@ -8018,7 +8302,8 @@ void ProxySQL_Admin::load_scheduler_to_runtime() {
 }
 
 void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers, 
-	const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server, const mysql_servers_v2_checksum_t& peer_mysql_server_v2) {
+	const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server,
+	const mysql_servers_v2_checksum_t& peer_mysql_server_v2, bool hgm_acquire_lock) {
 	// make sure that the caller has called mysql_servers_wrlock()
 	char *error=NULL;
 	int cols=0;
@@ -8243,7 +8528,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	MyHGM->commit(
 		{ runtime_mysql_servers, peer_runtime_mysql_server },
 		{ incoming_mysql_servers_v2, peer_mysql_server_v2 },
-		false, true
+		false, true, hgm_acquire_lock
 	);
 	
 	// quering runtime table will update and return latest records, so this is not needed.
@@ -8538,7 +8823,7 @@ char* ProxySQL_Admin::load_pgsql_firewall_to_runtime() {
 //   NULL on success, error message string on failure (caller must free)
 //
 
-char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset, SQLite3_result* SQLite3_query_rules_fast_routing_resultset, const std::string& checksum, const time_t epoch) {
+char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset, SQLite3_result* SQLite3_query_rules_fast_routing_resultset, const std::string& checksum, const time_t epoch, bool acquire_lock) {
 	// About the queries used here, see notes about CLUSTER_QUERY_MYSQL_QUERY_RULES and
 	// CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING in ProxySQL_Cluster.hpp
 	char *error=NULL;
@@ -8588,7 +8873,7 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 		}
 
 		unsigned long long curtime1 = monotonic_time();
-		GloMyQPro->wrlock();
+		if (acquire_lock) GloMyQPro->wrlock();
 		// Checksums are always generated - 'admin-checksum_*' deprecated
 		{
 			pthread_mutex_lock(&GloVars.checksum_mutex);
@@ -8712,7 +8997,7 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 #ifdef BENCHMARK_FASTROUTING_LOAD
 		}
 #endif // BENCHMARK_FASTROUTING_LOAD
-		GloMyQPro->wrunlock();
+		if (acquire_lock) GloMyQPro->wrunlock();
 		unsigned long long curtime2 = monotonic_time();
 		unsigned long long elapsed_ms = (curtime2/1000) - (curtime1/1000);
 		if (elapsed_ms > 5) {

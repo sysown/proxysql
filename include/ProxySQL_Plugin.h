@@ -14,6 +14,7 @@
 
 #include "ProxySQL_PluginSecrets.h"
 #include "ProxySQL_PluginListenerGate.h"
+#include "ProxySQL_PluginConfig.h"
 
 class SQLite3DB;
 class SQLite3_result;
@@ -73,14 +74,6 @@ using proxysql_plugin_register_cli_options_cb =
 	bool (*)(ProxySQL_PluginCLIRegistry*);
 
 struct ProxySQL_PluginServices;
-
-// Task 6 owns the full plan definition. ABI 8 reserves its service slot now
-// so no second ABI bump is necessary when publication becomes live.
-struct ProxySQL_PluginMysqlConfigPlan;
-struct ProxySQL_PluginMysqlConfigResult {
-	bool applied;
-	std::string message;
-};
 
 struct ProxySQL_PluginRuntimeContext {
 	ProxySQL_PluginServices* services;
@@ -339,13 +332,9 @@ using proxysql_plugin_register_runtime_view_cb =
 //     with a warning — schemas must be declared before start).
 //
 // NOTE ON SNAPSHOT GETTERS (`get_mysql_users_snapshot`, etc.):
-// These are currently wired to a stub that returns nullptr in every phase.
-// The plan is to surface read-only SQLite3_result snapshots of the core's
-// runtime config tables, but the backing plumbing (snapshot acquisition,
-// lifetime, invalidation on reload) isn't implemented yet.  Plugins MUST
-// treat a nullptr return as "snapshot not available"; do not assume
-// non-null just because you're in Phase E.  When the feature lands, only
-// the nullptr contract will change — the field signatures won't.
+// Phase B returns nullptr because runtime modules do not exist yet. From
+// Phase D onward, each callback returns a caller-owned SQLite3_result copied
+// while the corresponding runtime lock is held. The caller deletes it.
 struct ProxySQL_PluginServices {
 	proxysql_plugin_register_table_cb register_table;
 	proxysql_plugin_register_command_cb register_command;

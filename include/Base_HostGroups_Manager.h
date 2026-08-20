@@ -579,6 +579,7 @@ class Base_HostGroups_Manager {
 	HGC * MyHGC_find(unsigned int);
 	HGC * MyHGC_lookup(unsigned int);
 	SQLite3_result * execute_query(char *query, char **error);
+	SQLite3_result * execute_query_under_lock(const char *query, char **error);
 
 	void wrlock();
 	void wrunlock();

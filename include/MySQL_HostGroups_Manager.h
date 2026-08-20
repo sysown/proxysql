@@ -902,7 +902,8 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 		const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers,
 		const peer_mysql_servers_v2_t& peer_mysql_servers_v2,
 		bool only_commit_runtime_mysql_servers = true,
-		bool update_version = false
+		bool update_version = false,
+		bool acquire_lock = true
 	);
 	/**
 	 * @brief Extracted from 'commit'. Performs the following actions:

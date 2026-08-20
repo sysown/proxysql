@@ -40,6 +40,7 @@ using json = nlohmann::json;
 #include "MySQL_PreparedStatement.h"
 #ifdef PROXYSQL40
 #include "ProxySQL_PluginManager.h"
+#include "ProxySQL_PluginConfig.h"
 #include "ProxySQL_PluginSecrets.h"
 #endif /* PROXYSQL40 */
 #include "ProxySQL_Cluster.hpp"
@@ -766,6 +767,10 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_query_rules", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_query_rules_fast_routing", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QUERY_RULES_FAST_ROUTING);
 	insert_into_tables_defs(tables_defs_admin,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
+	insert_into_tables_defs(tables_defs_admin, "proxysql_plugin_owned_objects",
+		PROXYSQL_PLUGIN_OWNED_OBJECTS_DDL);
+	insert_into_tables_defs(tables_defs_admin, "proxysql_plugin_config_generations",
+		PROXYSQL_PLUGIN_CONFIG_GENERATIONS_DDL);
 	insert_into_tables_defs(tables_defs_admin,"runtime_global_variables", ADMIN_SQLITE_RUNTIME_GLOBAL_VARIABLES);
 	insert_into_tables_defs(tables_defs_admin,"mysql_collations", ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS);
 	insert_into_tables_defs(tables_defs_admin,"scheduler", ADMIN_SQLITE_TABLE_SCHEDULER);
@@ -847,6 +852,10 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_config,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_config,"mysql_query_rules_fast_routing", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_FAST_ROUTING);
 	insert_into_tables_defs(tables_defs_config,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
+	insert_into_tables_defs(tables_defs_config, "proxysql_plugin_owned_objects",
+		PROXYSQL_PLUGIN_OWNED_OBJECTS_DDL);
+	insert_into_tables_defs(tables_defs_config, "proxysql_plugin_config_generations",
+		PROXYSQL_PLUGIN_CONFIG_GENERATIONS_DDL);
 	insert_into_tables_defs(tables_defs_config,"global_settings", ADMIN_SQLITE_TABLE_GLOBAL_SETTINGS);
 	// the table is not required to be present on disk. Removing it due to #1055
 	insert_into_tables_defs(tables_defs_config,"mysql_collations", ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS);

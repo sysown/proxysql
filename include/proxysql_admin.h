@@ -197,6 +197,11 @@ struct peer_runtime_mysql_servers_t {
 	peer_runtime_mysql_servers_t(SQLite3_result*, const runtime_mysql_servers_checksum_t&);
 };
 
+#ifdef PROXYSQL40
+struct ProxySQL_PluginMysqlConfigPlan;
+struct ProxySQL_PluginMysqlConfigResult;
+#endif
+
 struct peer_mysql_servers_v2_t {
 	SQLite3_result* resultset { nullptr };
 	mysql_servers_v2_checksum_t checksum {};
@@ -657,6 +662,13 @@ class ProxySQL_Admin {
 	bool set_read_only(bool ro) { variables.admin_read_only=ro; return variables.admin_read_only; }
 	bool has_variable(const char *name);
 	void init_users(std::unique_ptr<SQLite3_result>&& mysql_users_resultset = nullptr, const std::string& checksum = "", const time_t epoch = 0);
+#ifdef PROXYSQL40
+	void init_users_under_lock(std::unique_ptr<SQLite3_result>&& mysql_users_resultset);
+	ProxySQL_PluginMysqlConfigResult apply_plugin_mysql_config(const ProxySQL_PluginMysqlConfigPlan& plan);
+	SQLite3_result* get_mysql_users_snapshot();
+	SQLite3_result* get_mysql_servers_snapshot();
+	SQLite3_result* get_mysql_group_replication_hostgroups_snapshot();
+#endif
 	void init_mysql_servers();
 	void init_mysql_query_rules();
 	void init_mysql_firewall();
@@ -720,7 +732,7 @@ class ProxySQL_Admin {
 	void flush_ldap_variables__from_memory_to_disk();
 	void flush_pgsql_variables__from_memory_to_disk();
 	void load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers = {}, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server = {},
-		const mysql_servers_v2_checksum_t& peer_mysql_server_v2 = {});
+		const mysql_servers_v2_checksum_t& peer_mysql_server_v2 = {}, bool hgm_acquire_lock = true);
 	void save_mysql_servers_from_runtime();
 	/**
 	 * @brief Performs the load to runtime of the current configuration in 'main' for 'mysql_query_rules' and
@@ -746,7 +758,7 @@ class ProxySQL_Admin {
 	 *
 	 * @return Error message in case of not being able to perform the operation, 'NULL' otherwise.
 	 */
-	char* load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset=NULL, SQLite3_result* SQLite3_query_rules_fast_routing_resultset=NULL, const std::string& checksum = "", const time_t epoch = 0);
+	char* load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset=NULL, SQLite3_result* SQLite3_query_rules_fast_routing_resultset=NULL, const std::string& checksum = "", const time_t epoch = 0, bool acquire_lock = true);
 	void save_mysql_query_rules_from_runtime(bool);
 	void save_mysql_query_rules_fast_routing_from_runtime(bool);
 	char* load_mysql_firewall_to_runtime();
