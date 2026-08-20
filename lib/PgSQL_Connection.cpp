@@ -164,6 +164,7 @@ PgSQL_Connection::PgSQL_Connection(bool is_client_conn) {
 	unknown_transaction_status = false;
 	send_quit = true;
 	reusable = false;
+	healthy = true;
 	multiplex_delayed = false;
 	processing_multi_statement = false;
 	async_state_machine = ASYNC_CONNECT_START;
@@ -687,16 +688,23 @@ handler_again:
 			// process. Setting error_info here also feeds add_error(NULL) below, which
 			// otherwise asserts for the same reason.
 			//
-			// The connection is also marked not reusable. A backend that answers a
-			// query incorrectly has not behaved to protocol, and handing that
-			// connection to another client risks giving them the same invalid reply,
-			// so it must not go back into the shared pool.
+			// Two independent consequences follow, one per object:
+			//   - the CONNECTION is unhealthy and not reusable, so it is destroyed
+			//     rather than pooled or reset. A reset cannot cure a server that
+			//     answers incorrectly, and another client must not inherit it.
+			//   - the SESSION is closed, because a reply we cannot interpret leaves
+			//     us unable to vouch for its protocol state.
+			// They are set separately on purpose: neither implies the other.
 			if (!is_error_present()) {
 				proxy_error("Backend %s:%d answered a query with no command outcome (bare ReadyForQuery)\n",
 					parent ? parent->address : "?", parent ? parent->port : 0);
 				set_error(PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION,
 					"backend answered the query with no command outcome", false);
 				reusable = false;
+				healthy = false;
+				if (myds && myds->sess) {
+					myds->sess->set_unhealthy();
+				}
 			}
 
 			query_result->add_error(NULL);
