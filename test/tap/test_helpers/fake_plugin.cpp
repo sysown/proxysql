@@ -94,6 +94,8 @@ bool fake_server_module_prepare(void *, const ProxySQL_ServerModuleSnapshot& sna
 		return false;
 	if (env("SERVER_MODULE_CONFLICT_CLAIM") != nullptr)
 		claims.push_back({17, 18});
+	if (env("SERVER_MODULE_SECOND_CLAIM") != nullptr)
+		claims.push_back({27, 28});
 	if (env("SERVER_MODULE_CONFLICT_BUILTIN_CLAIM") != nullptr)
 		claims.push_back({31, 32});
 	return true;

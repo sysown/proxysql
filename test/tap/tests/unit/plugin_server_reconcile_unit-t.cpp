@@ -236,7 +236,7 @@ ProxySQL_ServerDesiredSet pgsql_desired(uint64_t generation,
 } // namespace
 
 int main() {
-	plan(57);
+	plan(61);
 	test_init_minimal();
 	test_init_query_processor();
 	test_init_hostgroups();
@@ -256,6 +256,7 @@ int main() {
 	setenv("PROXYSQL_FAKE_PLUGIN_AFFILIATED", "1", 1);
 	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_BOTH_PROTOCOLS", "1", 1);
 	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_CLAIM", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_SECOND_CLAIM", "1", 1);
 	std::unique_ptr<ProxySQL_PluginManager> manager;
 	std::string error;
 	ok(proxysql_load_configured_plugins(manager, {PROXYSQL_FAKE_PLUGIN_PATH}, error) &&
@@ -264,8 +265,9 @@ int main() {
 
 	AckState acks;
 	void* controller_handle = dlopen(PROXYSQL_FAKE_PLUGIN_PATH, RTLD_NOW | RTLD_LOCAL);
+	auto* mysql_controller = new Controller(&acks);
 	ok(controller_handle != nullptr && manager->install_server_discovery_controller(
-		ProxySQL_ServerProtocol::mysql, new Controller(&acks), &destroy_controller, controller_handle),
+		ProxySQL_ServerProtocol::mysql, mysql_controller, &destroy_controller, controller_handle),
 		"controller is registered with a retained DSO boundary");
 	AckState pgsql_acks;
 	void* pgsql_controller_handle = dlopen(PROXYSQL_FAKE_PLUGIN_PATH, RTLD_NOW | RTLD_LOCAL);
@@ -285,11 +287,56 @@ int main() {
 	const uint64_t pgsql_generation = pgsql_install.generation();
 	ok(pgsql_install.prepare(pgsql_installed, error) && pgsql_install.commit(pgsql_installed),
 		"PostgreSQL runtime generation installs independent delegated claims");
+	const ProxySQL_ServerDesiredSet valid_single {ProxySQL_ServerProtocol::mysql, generation,
+		{17}, {}, ProxySQL_ServerPersistence::runtime_only};
+	const ProxySQL_ServerDesiredSet valid_pair {ProxySQL_ServerProtocol::mysql, generation,
+		{17, 18}, {}, ProxySQL_ServerPersistence::runtime_only};
+	ok(manager->revalidate_server_desired_set(ProxySQL_ServerProtocol::mysql,
+		mysql_controller, valid_single) &&
+		manager->revalidate_server_desired_set(ProxySQL_ServerProtocol::mysql,
+			mysql_controller, valid_pair),
+		"nonempty sorted singleton and pair scopes contained in installed claims revalidate");
+	const auto rejected_by_both = [&](ProxySQL_ServerDesiredSet candidate,
+		ProxySQL_ServerProtocol callback_protocol = ProxySQL_ServerProtocol::mysql,
+		const ProxySQL_ServerDiscoveryController* callback_controller = nullptr) {
+		if (callback_controller == nullptr) callback_controller = mysql_controller;
+		return !manager->revalidate_server_desired_set(
+			callback_protocol, callback_controller, candidate) &&
+			!manager->begin_server_desired_set_apply(
+				callback_protocol, callback_controller, candidate);
+	};
+	Controller wrong_controller(&acks);
+	ok(rejected_by_both({ProxySQL_ServerProtocol::mysql, generation, {}, {},
+			ProxySQL_ServerPersistence::runtime_only}) &&
+		rejected_by_both({ProxySQL_ServerProtocol::mysql, generation, {18, 17}, {},
+			ProxySQL_ServerPersistence::runtime_only}) &&
+		rejected_by_both({ProxySQL_ServerProtocol::mysql, generation, {17, 17}, {},
+			ProxySQL_ServerPersistence::runtime_only}) &&
+		rejected_by_both({ProxySQL_ServerProtocol::mysql, generation, {17, 29}, {},
+			ProxySQL_ServerPersistence::runtime_only}) &&
+		rejected_by_both({ProxySQL_ServerProtocol::pgsql, generation, {17}, {},
+			ProxySQL_ServerPersistence::runtime_only}) &&
+		rejected_by_both({ProxySQL_ServerProtocol::mysql, generation + 1, {17}, {},
+			ProxySQL_ServerPersistence::runtime_only}) &&
+		rejected_by_both(valid_single, ProxySQL_ServerProtocol::mysql, &wrong_controller),
+		"empty, unsorted, duplicate, out-of-claim, protocol, generation, and controller mismatches reject");
 	GloAdmin = nullptr;
 	const bool unavailable_post = manager->post_server_desired_set(desired(generation, {}));
 	GloAdmin = admin;
 	ok(!unavailable_post && ack_count(acks, generation, false) == 0,
 		"an unavailable Admin owner rejects at entry without an acknowledgement");
+	clear_acks(acks);
+
+	const auto apply_scope = [&](std::vector<uint32_t> scope) {
+		return manager->post_server_desired_set({ProxySQL_ServerProtocol::mysql, generation,
+			std::move(scope), {}, ProxySQL_ServerPersistence::runtime_only}) &&
+			admin->drain_server_discovery_updates() == 1;
+	};
+	ok(apply_scope({17, 18}) && apply_scope({27, 28}) &&
+		ack_count(acks, generation, true) == 2,
+		"two independent claimed policy pairs under one protocol each apply");
+	ok(apply_scope({17}) && ack_count(acks, generation, true) == 3,
+		"a singleton desired scope contained in the installed claim union applies");
 	clear_acks(acks);
 
 	auto initial = mysql_rows({

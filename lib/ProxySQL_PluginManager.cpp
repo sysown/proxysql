@@ -1053,6 +1053,13 @@ int server_protocol_index(ProxySQL_ServerProtocol protocol) {
 	return -1;
 }
 
+bool is_nonempty_sorted_unique_subset(const std::vector<uint32_t>& installed,
+	const std::vector<uint32_t>& desired) {
+	return !desired.empty() && std::is_sorted(desired.begin(), desired.end()) &&
+		std::adjacent_find(desired.begin(), desired.end()) == desired.end() &&
+		std::includes(installed.begin(), installed.end(), desired.begin(), desired.end());
+}
+
 // A callback lease pins its module/controller object while its callback runs.
 // This guard is deliberately constructed before crossing any plugin boundary:
 // exceptions cannot leave retirement blocked on a leaked lease.
@@ -1562,14 +1569,13 @@ bool ProxySQL_PluginManager::revalidate_server_desired_set(
 	const ProxySQL_ServerDesiredSet& desired_set) const {
 	const int index = server_protocol_index(protocol);
 	if (index < 0 || desired_set.protocol != protocol) return false;
-	std::vector<uint32_t> delegated = desired_set.delegated_hostgroups;
-	std::sort(delegated.begin(), delegated.end());
 	std::lock_guard<std::mutex> lock(server_discovery_mutex_);
 	return server_controllers_[index].controller == controller &&
 		!server_controller_retiring_[index] &&
 		server_snapshots_present_[index] &&
 		server_snapshots_[index].generation == desired_set.generation &&
-		server_delegated_hostgroups_[index] == delegated;
+		is_nonempty_sorted_unique_subset(server_delegated_hostgroups_[index],
+			desired_set.delegated_hostgroups);
 }
 
 bool ProxySQL_PluginManager::begin_server_desired_set_apply(
@@ -1577,14 +1583,13 @@ bool ProxySQL_PluginManager::begin_server_desired_set_apply(
 	const ProxySQL_ServerDesiredSet& desired_set) {
 	const int index = server_protocol_index(protocol);
 	if (index < 0 || desired_set.protocol != protocol) return false;
-	std::vector<uint32_t> delegated = desired_set.delegated_hostgroups;
-	std::sort(delegated.begin(), delegated.end());
 	std::lock_guard<std::mutex> lock(server_discovery_mutex_);
 	if (server_controllers_[index].controller != controller ||
 		server_controller_retiring_[index] ||
 		!server_snapshots_present_[index] ||
 		server_snapshots_[index].generation != desired_set.generation ||
-		server_delegated_hostgroups_[index] != delegated) return false;
+		!is_nonempty_sorted_unique_subset(server_delegated_hostgroups_[index],
+			desired_set.delegated_hostgroups)) return false;
 	++server_desired_applies_inflight_[index];
 	return true;
 }
