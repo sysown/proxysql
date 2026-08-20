@@ -1,4 +1,5 @@
 #include "ProxySQL_Plugin.h"
+#include "sqlite3db.h"
 
 #include <cstdio>
 #include <atomic>
@@ -99,7 +100,15 @@ void fake_server_module_commit(void *, uint64_t generation) {
 	fake_log_event("server_module_commit");
 	fake_log_generation("runtime_commit_generation", generation);
 }
-SQLite3_result* fake_server_module_table_snapshot(void *, const char *) { return nullptr; }
+SQLite3_result* fake_server_module_table_snapshot(void *, const char *) {
+	if (env("SERVER_MODULE_SNAPSHOT") == nullptr) return nullptr;
+	auto* result = new SQLite3_result(2);
+	char writer[] = "17";
+	char label[] = "runtime-policy";
+	char* fields[] = {writer, label};
+	result->add_row(fields);
+	return result;
+}
 void fake_server_module_shutdown(void *) {}
 void fake_destroy_server_module(ProxySQL_ServerModuleHooks *) {
 	fake_log_event("server_module_destroyed");

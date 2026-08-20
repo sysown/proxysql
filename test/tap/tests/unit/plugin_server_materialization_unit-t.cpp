@@ -1,5 +1,6 @@
 #include "tap.h"
 #include "ProxySQL_PluginManager.h"
+#include "ProxySQL_Cluster.hpp"
 #include "ProxySQL_ServerDiscovery.h"
 #include "ProxySQL_ServerModuleCluster.h"
 #include "MySQL_Thread.h"
@@ -13,10 +14,14 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <dlfcn.h>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <unistd.h>
 #include <utility>
 #include <vector>
@@ -24,6 +29,7 @@
 extern ProxySQL_Admin* GloAdmin;
 extern ProxySQL_Statistics* GloProxyStats;
 extern MySQL_Monitor* GloMyMon;
+extern ProxySQL_Cluster* GloProxyCluster;
 
 #ifndef PROXYSQL_FAKE_PLUGIN_PATH
 #error "PROXYSQL_FAKE_PLUGIN_PATH must be defined"
@@ -79,6 +85,79 @@ void create_schema(SQLite3DB& db) {
 	db.execute("CREATE TABLE pgsql_fake_server_module_claims (writer INTEGER, label TEXT)");
 	db.execute("CREATE TABLE disk.mysql_fake_server_module_claims (writer INTEGER, label TEXT)");
 	db.execute("CREATE TABLE disk.pgsql_fake_server_module_claims (writer INTEGER, label TEXT)");
+	db.execute("CREATE TABLE runtime_checksums_values (name VARCHAR NOT NULL, version INT NOT NULL, epoch INT NOT NULL, checksum VARCHAR NOT NULL, PRIMARY KEY(name))");
+}
+
+struct ChecksumSnapshot {
+	uint64_t version {0};
+	uint64_t epoch {0};
+	std::string checksum;
+};
+
+ChecksumSnapshot checksum_snapshot(const ProxySQL_Checksum_Value& value) {
+	return {value.version, value.epoch, value.checksum ? value.checksum : ""};
+}
+
+bool dumped_checksum_matches(SQLite3DB& db, const char* name,
+	const ChecksumSnapshot& expected) {
+	auto rows = select_rows(db, std::string("SELECT version,epoch,checksum FROM runtime_checksums_values WHERE name='") + name + "'");
+	return rows && rows->rows.size() == 1 && rows->rows[0]->fields[0] &&
+		std::stoull(rows->rows[0]->fields[0]) == expected.version &&
+		std::stoull(rows->rows[0]->fields[1]) == expected.epoch &&
+		expected.checksum == rows->rows[0]->fields[2];
+}
+
+class OneRowMysqlResult {
+public:
+	OneRowMysqlResult(const std::string& name, uint64_t version, uint64_t epoch,
+		const std::string& checksum) :
+		values_ {name, std::to_string(version), std::to_string(epoch), checksum} {
+		for (size_t i = 0; i < 4; ++i) fields_[i] = values_[i].data();
+		row_.data = fields_;
+		data_.data = &row_;
+		result_.data = &data_;
+		result_.field_count = 4;
+	}
+
+	MYSQL_RES* reset() {
+		row_.next = nullptr;
+		result_.data_cursor = &row_;
+		return &result_;
+	}
+
+private:
+	std::string values_[4];
+	char* fields_[4] {};
+	MYSQL_ROWS row_ {};
+	MYSQL_DATA data_ {};
+	MYSQL_RES result_ {};
+};
+
+bool set_checksums_schedules_v2(const char* name, const ChecksumSnapshot& peer,
+	pthread_mutex_t& pull_mutex) {
+	char host[] = "127.0.0.1";
+	char comment[] = "materialization";
+	char ip[] = "127.0.0.1";
+	ProxySQL_Node_Entry node(host, 1, 1, comment, ip);
+	OneRowMysqlResult result(name, peer.version, peer.epoch, peer.checksum);
+	std::mutex done_mutex;
+	std::condition_variable done_cv;
+	bool done = false;
+	pthread_mutex_lock(&pull_mutex);
+	std::thread worker([&] {
+		node.set_checksums(result.reset());
+		{
+			std::lock_guard<std::mutex> lock(done_mutex);
+			done = true;
+		}
+		done_cv.notify_one();
+	});
+	std::unique_lock<std::mutex> lock(done_mutex);
+	const bool completed = done_cv.wait_for(lock, std::chrono::milliseconds(200), [&] { return done; });
+	lock.unlock();
+	pthread_mutex_unlock(&pull_mutex);
+	worker.join();
+	return !completed;
 }
 
 std::unique_ptr<SQLite3_result> mysql_rows(std::initializer_list<ProxySQL_ServerRow> rows) {
@@ -140,6 +219,7 @@ struct AckObservation {
 	std::string disk;
 	std::string memory_policy;
 	std::string disk_policy;
+	ChecksumSnapshot v2;
 };
 
 struct AckState {
@@ -158,9 +238,12 @@ public:
 		const std::string core = mysql ? "mysql_servers" : "pgsql_servers";
 		const std::string policy = mysql ? "mysql_fake_server_module_claims" :
 			"pgsql_fake_server_module_claims";
+		const auto& v2 = mysql ? GloVars.checksums_values.mysql_servers_v2 :
+			GloVars.checksums_values.pgsql_servers_v2;
 		state_->observations.push_back({generation, applied,
 			snapshot(*state_->db, "main." + core), snapshot(*state_->db, "disk." + core),
-			snapshot(*state_->db, "main." + policy), snapshot(*state_->db, "disk." + policy)});
+			snapshot(*state_->db, "main." + policy), snapshot(*state_->db, "disk." + policy),
+			checksum_snapshot(v2)});
 	}
 	void shutdown() override {}
 	AckState* state() const { return state_; }
@@ -188,7 +271,7 @@ bool post_and_drain(ProxySQL_PluginManager& manager, ProxySQL_Admin& admin,
 } // namespace
 
 int main() {
-	plan(36);
+	plan(53);
 	test_init_minimal();
 	test_init_query_processor();
 	test_init_hostgroups();
@@ -196,6 +279,12 @@ int main() {
 	GloVars.statsdb_disk = stats_memory_db;
 	GloProxyStats = new ProxySQL_Statistics();
 	GloMyMon = new MySQL_Monitor();
+	auto cluster = std::make_unique<ProxySQL_Cluster>();
+	GloProxyCluster = cluster.get();
+	cluster->cluster_mysql_servers_diffs_before_sync = 1;
+	cluster->cluster_pgsql_servers_diffs_before_sync = 1;
+	cluster->cluster_mysql_servers_sync_algorithm =
+		static_cast<int>(mysql_servers_sync_algorithm::mysql_servers_v2);
 	MyHGM->gtid_ev_loop = ev_loop_new(0);
 	ev_async_init(MyHGM->gtid_ev_async, [](EV_P_ ev_async*, int) {});
 
@@ -264,6 +353,7 @@ int main() {
 	setenv("PROXYSQL_FAKE_PLUGIN_AFFILIATED", "1", 1);
 	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_BOTH_PROTOCOLS", "1", 1);
 	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_CLAIM", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_SNAPSHOT", "1", 1);
 	std::unique_ptr<ProxySQL_PluginManager> manager;
 	std::string error;
 	ok(proxysql_load_configured_plugins(manager, {PROXYSQL_FAKE_PLUGIN_PATH}, error) &&
@@ -302,6 +392,7 @@ int main() {
 		"PostgreSQL runtime generation records the delegated scope");
 
 	const std::string mysql_checksum_before = GloVars.checksums_values.mysql_servers.checksum;
+	const ChecksumSnapshot mysql_v2_before = checksum_snapshot(GloVars.checksums_values.mysql_servers_v2);
 	ProxySQL_ServerRow mysql_runtime {17, "runtime-only.mysql", 3306, 0, "ONLINE", 31, 0, 101, 0, 1, 0, "runtime-only"};
 	ok(post_and_drain(*manager, *admin, desired(ProxySQL_ServerProtocol::mysql,
 		mysql_generation, ProxySQL_ServerPersistence::runtime_only, mysql_runtime)) &&
@@ -316,6 +407,15 @@ int main() {
 		"MySQL runtime-only does not copy affiliated policy tables");
 	ok(mysql_checksum_before != GloVars.checksums_values.mysql_servers.checksum,
 		"MySQL reconciliation recomputes the existing Servers checksum");
+	admin->dump_checksums_values_table();
+	ok(checksum_snapshot(GloVars.checksums_values.mysql_servers_v2).checksum == mysql_v2_before.checksum &&
+		checksum_snapshot(GloVars.checksums_values.mysql_servers_v2).version == mysql_v2_before.version &&
+		checksum_snapshot(GloVars.checksums_values.mysql_servers_v2).epoch == mysql_v2_before.epoch &&
+		dumped_checksum_matches(admin_db, "mysql_servers_v2", mysql_v2_before),
+		"MySQL runtime-only leaves the published and dumped v2 checksum state unchanged");
+	ok(!set_checksums_schedules_v2("mysql_servers_v2", mysql_v2_before,
+		cluster->update_mysql_servers_v2_mutex),
+		"MySQL runtime-only leaves a matching v2 cluster poll unscheduled");
 
 	const std::string mysql_disk_before_memory = snapshot(admin_db, "disk.mysql_servers");
 	ProxySQL_ServerRow mysql_memory {18, "memory.mysql", 3306, 0, "ONLINE", 41, 0, 111, 0, 1, 0, "memory"};
@@ -327,11 +427,37 @@ int main() {
 		snapshot(admin_db, "main.mysql_servers WHERE hostgroup_id=99") == mysql_pending_memory &&
 		mysql_acks.observations.back().disk == mysql_disk_before_memory,
 		"MySQL MEMORY replaces only delegated rows and preserves pending unrelated edits");
+	const ChecksumSnapshot mysql_v2_memory = checksum_snapshot(GloVars.checksums_values.mysql_servers_v2);
+	admin->dump_checksums_values_table();
+	ok(mysql_v2_memory.checksum != mysql_v2_before.checksum &&
+		mysql_v2_memory.version == mysql_v2_before.version + 1 &&
+		mysql_v2_memory.epoch >= mysql_v2_before.epoch &&
+		mysql_acks.observations.back().v2.checksum == mysql_v2_memory.checksum &&
+		mysql_acks.observations.back().v2.version == mysql_v2_memory.version &&
+		mysql_acks.observations.back().v2.epoch == mysql_v2_memory.epoch &&
+		dumped_checksum_matches(admin_db, "mysql_servers_v2", mysql_v2_memory),
+		"MySQL MEMORY publishes exactly one v2 version and its runtime_checksums_values row");
+	ChecksumSnapshot mysql_old_peer {mysql_v2_memory.version + 1, mysql_v2_memory.epoch + 1,
+		mysql_v2_before.checksum};
+	ok(set_checksums_schedules_v2("mysql_servers_v2", mysql_old_peer,
+		cluster->update_mysql_servers_v2_mutex),
+		"MySQL MEMORY publishes a changed v2 checksum consumed by cluster scheduling");
+	ok(post_and_drain(*manager, *admin, desired(ProxySQL_ServerProtocol::mysql,
+		mysql_generation, ProxySQL_ServerPersistence::memory, mysql_memory)) &&
+		mysql_acks.observations.size() == 3 && mysql_acks.observations.back().applied,
+		"repeated MySQL MEMORY materialization is acknowledged through the normal scoped path");
+	const ChecksumSnapshot mysql_v2_memory_repeat = checksum_snapshot(GloVars.checksums_values.mysql_servers_v2);
+	admin->dump_checksums_values_table();
+	ok(mysql_v2_memory_repeat.checksum == mysql_v2_memory.checksum &&
+		mysql_v2_memory_repeat.version == mysql_v2_memory.version + 1 &&
+		mysql_v2_memory_repeat.epoch >= mysql_v2_memory.epoch &&
+		dumped_checksum_matches(admin_db, "mysql_servers_v2", mysql_v2_memory_repeat),
+		"unchanged MySQL MEMORY rows preserve normal v2 checksum/version publication semantics");
 
 	ProxySQL_ServerRow mysql_disk {17, "memory-disk.mysql", 3306, 0, "ONLINE", 51, 0, 121, 0, 1, 0, "memory-disk"};
 	ok(post_and_drain(*manager, *admin, desired(ProxySQL_ServerProtocol::mysql,
 		mysql_generation, ProxySQL_ServerPersistence::memory_and_disk, mysql_disk)) &&
-		mysql_acks.observations.size() == 3 && mysql_acks.observations.back().applied,
+		mysql_acks.observations.size() == 4 && mysql_acks.observations.back().applied,
 		"MySQL MEMORY+DISK request is acknowledged after both scoped saves");
 	ok(mysql_acks.observations.back().memory.find("memory-disk.mysql") != std::string::npos &&
 		mysql_acks.observations.back().disk.find("memory-disk.mysql") != std::string::npos &&
@@ -341,10 +467,25 @@ int main() {
 	ok(mysql_acks.observations.back().memory_policy == mysql_memory_policy &&
 		mysql_acks.observations.back().disk_policy == mysql_disk_policy,
 		"automatic MySQL materialization never copies plugin policy tables");
+	const ChecksumSnapshot mysql_v2_disk = checksum_snapshot(GloVars.checksums_values.mysql_servers_v2);
+	admin->dump_checksums_values_table();
+	ok(mysql_v2_disk.checksum != mysql_v2_memory_repeat.checksum &&
+		mysql_v2_disk.version == mysql_v2_memory_repeat.version + 1 &&
+		mysql_v2_disk.epoch >= mysql_v2_memory_repeat.epoch &&
+		mysql_acks.observations.back().v2.checksum == mysql_v2_disk.checksum &&
+		mysql_acks.observations.back().v2.version == mysql_v2_disk.version &&
+		mysql_acks.observations.back().v2.epoch == mysql_v2_disk.epoch &&
+		dumped_checksum_matches(admin_db, "mysql_servers_v2", mysql_v2_disk),
+		"MySQL MEMORY+DISK publishes exactly one v2 version before acknowledgement");
+	ChecksumSnapshot mysql_memory_peer {mysql_v2_disk.version + 1, mysql_v2_disk.epoch + 1,
+		mysql_v2_memory.checksum};
+	ok(set_checksums_schedules_v2("mysql_servers_v2", mysql_memory_peer,
+		cluster->update_mysql_servers_v2_mutex),
+		"MySQL MEMORY+DISK publishes a changed v2 checksum consumed by cluster scheduling");
 	ProxySQL_ServerDesiredSet mysql_empty {ProxySQL_ServerProtocol::mysql, mysql_generation,
 		{17, 18}, {}, ProxySQL_ServerPersistence::memory_and_disk};
 	ok(post_and_drain(*manager, *admin, std::move(mysql_empty)) &&
-		mysql_acks.observations.size() == 4 && mysql_acks.observations.back().applied &&
+		mysql_acks.observations.size() == 5 && mysql_acks.observations.back().applied &&
 		snapshot(admin_db, "main.mysql_servers WHERE hostgroup_id IN (17,18)").empty() &&
 		snapshot(admin_db, "disk.mysql_servers WHERE hostgroup_id IN (17,18)").empty() &&
 		snapshot(admin_db, "main.mysql_servers WHERE hostgroup_id=99") == mysql_pending_memory &&
@@ -352,6 +493,7 @@ int main() {
 		"empty desired servers clear exactly the delegated MySQL scope through MEMORY and DISK");
 
 	const std::string pgsql_checksum_before = GloVars.checksums_values.pgsql_servers.checksum;
+	const ChecksumSnapshot pgsql_v2_before = checksum_snapshot(GloVars.checksums_values.pgsql_servers_v2);
 	ProxySQL_ServerRow pgsql_runtime {17, "runtime-only.pgsql", 5432, 0, "ONLINE", 31, 0, 101, 0, 1, 0, "runtime-only"};
 	ok(post_and_drain(*manager, *admin, desired(ProxySQL_ServerProtocol::pgsql,
 		pgsql_generation, ProxySQL_ServerPersistence::runtime_only, pgsql_runtime)) &&
@@ -363,6 +505,15 @@ int main() {
 		"PostgreSQL runtime-only changes HGM without materializing MEMORY or DISK");
 	ok(pgsql_checksum_before != GloVars.checksums_values.pgsql_servers.checksum,
 		"PostgreSQL reconciliation recomputes the existing Servers checksum");
+	admin->dump_checksums_values_table();
+	ok(checksum_snapshot(GloVars.checksums_values.pgsql_servers_v2).checksum == pgsql_v2_before.checksum &&
+		checksum_snapshot(GloVars.checksums_values.pgsql_servers_v2).version == pgsql_v2_before.version &&
+		checksum_snapshot(GloVars.checksums_values.pgsql_servers_v2).epoch == pgsql_v2_before.epoch &&
+		dumped_checksum_matches(admin_db, "pgsql_servers_v2", pgsql_v2_before),
+		"PostgreSQL runtime-only leaves the published and dumped v2 checksum state unchanged");
+	ok(!set_checksums_schedules_v2("pgsql_servers_v2", pgsql_v2_before,
+		cluster->update_mysql_servers_v2_mutex),
+		"PostgreSQL runtime-only leaves a matching v2 cluster poll unscheduled");
 
 	const std::string pgsql_disk_before_memory = snapshot(admin_db, "disk.pgsql_servers");
 	ProxySQL_ServerRow pgsql_memory {18, "memory.pgsql", 5432, 0, "ONLINE", 41, 0, 111, 0, 1, 0, "memory"};
@@ -374,11 +525,37 @@ int main() {
 		snapshot(admin_db, "main.pgsql_servers WHERE hostgroup_id=99") == pgsql_pending_memory &&
 		pgsql_acks.observations.back().disk == pgsql_disk_before_memory,
 		"PostgreSQL MEMORY preserves unrelated pending MEMORY and DISK rows");
+	const ChecksumSnapshot pgsql_v2_memory = checksum_snapshot(GloVars.checksums_values.pgsql_servers_v2);
+	admin->dump_checksums_values_table();
+	ok(pgsql_v2_memory.checksum != pgsql_v2_before.checksum &&
+		pgsql_v2_memory.version == pgsql_v2_before.version + 1 &&
+		pgsql_v2_memory.epoch >= pgsql_v2_before.epoch &&
+		pgsql_acks.observations.back().v2.checksum == pgsql_v2_memory.checksum &&
+		pgsql_acks.observations.back().v2.version == pgsql_v2_memory.version &&
+		pgsql_acks.observations.back().v2.epoch == pgsql_v2_memory.epoch &&
+		dumped_checksum_matches(admin_db, "pgsql_servers_v2", pgsql_v2_memory),
+		"PostgreSQL MEMORY publishes exactly one v2 version and its runtime_checksums_values row");
+	ChecksumSnapshot pgsql_old_peer {pgsql_v2_memory.version + 1, pgsql_v2_memory.epoch + 1,
+		pgsql_v2_before.checksum};
+	ok(set_checksums_schedules_v2("pgsql_servers_v2", pgsql_old_peer,
+		cluster->update_mysql_servers_v2_mutex),
+		"PostgreSQL MEMORY publishes a changed v2 checksum consumed by cluster scheduling");
+	ok(post_and_drain(*manager, *admin, desired(ProxySQL_ServerProtocol::pgsql,
+		pgsql_generation, ProxySQL_ServerPersistence::memory, pgsql_memory)) &&
+		pgsql_acks.observations.size() == 3 && pgsql_acks.observations.back().applied,
+		"repeated PostgreSQL MEMORY materialization is acknowledged through the normal scoped path");
+	const ChecksumSnapshot pgsql_v2_memory_repeat = checksum_snapshot(GloVars.checksums_values.pgsql_servers_v2);
+	admin->dump_checksums_values_table();
+	ok(pgsql_v2_memory_repeat.checksum == pgsql_v2_memory.checksum &&
+		pgsql_v2_memory_repeat.version == pgsql_v2_memory.version + 1 &&
+		pgsql_v2_memory_repeat.epoch >= pgsql_v2_memory.epoch &&
+		dumped_checksum_matches(admin_db, "pgsql_servers_v2", pgsql_v2_memory_repeat),
+		"unchanged PostgreSQL MEMORY rows preserve normal v2 checksum/version publication semantics");
 
 	ProxySQL_ServerRow pgsql_disk {17, "memory-disk.pgsql", 5432, 0, "ONLINE", 51, 0, 121, 0, 1, 0, "memory-disk"};
 	ok(post_and_drain(*manager, *admin, desired(ProxySQL_ServerProtocol::pgsql,
 		pgsql_generation, ProxySQL_ServerPersistence::memory_and_disk, pgsql_disk)) &&
-		pgsql_acks.observations.size() == 3 && pgsql_acks.observations.back().applied,
+		pgsql_acks.observations.size() == 4 && pgsql_acks.observations.back().applied,
 		"PostgreSQL MEMORY+DISK request is acknowledged after both scoped saves");
 	ok(pgsql_acks.observations.back().memory.find("memory-disk.pgsql") != std::string::npos &&
 		pgsql_acks.observations.back().disk.find("memory-disk.pgsql") != std::string::npos &&
@@ -388,6 +565,21 @@ int main() {
 	ok(pgsql_acks.observations.back().memory_policy == pgsql_memory_policy &&
 		pgsql_acks.observations.back().disk_policy == pgsql_disk_policy,
 		"automatic PostgreSQL materialization never copies plugin policy tables");
+	const ChecksumSnapshot pgsql_v2_disk = checksum_snapshot(GloVars.checksums_values.pgsql_servers_v2);
+	admin->dump_checksums_values_table();
+	ok(pgsql_v2_disk.checksum != pgsql_v2_memory_repeat.checksum &&
+		pgsql_v2_disk.version == pgsql_v2_memory_repeat.version + 1 &&
+		pgsql_v2_disk.epoch >= pgsql_v2_memory_repeat.epoch &&
+		pgsql_acks.observations.back().v2.checksum == pgsql_v2_disk.checksum &&
+		pgsql_acks.observations.back().v2.version == pgsql_v2_disk.version &&
+		pgsql_acks.observations.back().v2.epoch == pgsql_v2_disk.epoch &&
+		dumped_checksum_matches(admin_db, "pgsql_servers_v2", pgsql_v2_disk),
+		"PostgreSQL MEMORY+DISK publishes exactly one v2 version before acknowledgement");
+	ChecksumSnapshot pgsql_memory_peer {pgsql_v2_disk.version + 1, pgsql_v2_disk.epoch + 1,
+		pgsql_v2_memory.checksum};
+	ok(set_checksums_schedules_v2("pgsql_servers_v2", pgsql_memory_peer,
+		cluster->update_mysql_servers_v2_mutex),
+		"PostgreSQL MEMORY+DISK publishes a changed v2 checksum consumed by cluster scheduling");
 	std::string mysql_module_checksum_after;
 	std::string pgsql_module_checksum_after;
 	ok(initial_module_checksums &&
@@ -403,14 +595,25 @@ int main() {
 		"Task 2 module checksum path recomputes unchanged policy checksums after scoped saves");
 
 	admin_db.execute("DROP TABLE disk.pgsql_servers");
+	const ChecksumSnapshot pgsql_v2_before_disk_failure =
+		checksum_snapshot(GloVars.checksums_values.pgsql_servers_v2);
 	ProxySQL_ServerRow pgsql_failure {18, "disk-failure.pgsql", 5432, 0, "ONLINE", 61, 0, 131, 0, 1, 0, "failure"};
 	ok(post_and_drain(*manager, *admin, desired(ProxySQL_ServerProtocol::pgsql,
 		pgsql_generation, ProxySQL_ServerPersistence::memory_and_disk, pgsql_failure)) &&
-		pgsql_acks.observations.size() == 4 && !pgsql_acks.observations.back().applied,
+		pgsql_acks.observations.size() == 5 && !pgsql_acks.observations.back().applied,
 		"a failed scoped DISK save produces one false acknowledgement");
 	ok(runtime_contains(ProxySQL_ServerProtocol::pgsql, 18, "disk-failure.pgsql") &&
 		pgsql_acks.observations.back().memory.find("disk-failure.pgsql") != std::string::npos,
 		"failure acknowledgement occurs after the configured runtime then MEMORY sequence");
+	const ChecksumSnapshot pgsql_v2_after_disk_failure =
+		checksum_snapshot(GloVars.checksums_values.pgsql_servers_v2);
+	ok(pgsql_v2_after_disk_failure.checksum != pgsql_v2_before_disk_failure.checksum &&
+		pgsql_v2_after_disk_failure.version == pgsql_v2_before_disk_failure.version + 1 &&
+		pgsql_v2_after_disk_failure.epoch >= pgsql_v2_before_disk_failure.epoch &&
+		pgsql_acks.observations.back().v2.checksum == pgsql_v2_after_disk_failure.checksum &&
+		pgsql_acks.observations.back().v2.version == pgsql_v2_after_disk_failure.version &&
+		pgsql_acks.observations.back().v2.epoch == pgsql_v2_after_disk_failure.epoch,
+		"PostgreSQL v2 state is published before a later DISK failure is acknowledged false");
 
 	ProxySQL_ServerRow mysql_operator {17, "operator-save.mysql", 3306, 0, "ONLINE", 71, 0, 141, 0, 1, 0, "operator"};
 	ProxySQL_ServerRow pgsql_operator {17, "operator-save.pgsql", 5432, 0, "ONLINE", 71, 0, 141, 0, 1, 0, "operator"};
@@ -444,5 +647,6 @@ int main() {
 	unsetenv("PROXYSQL_FAKE_PLUGIN_AFFILIATED");
 	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_BOTH_PROTOCOLS");
 	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_CLAIM");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_SNAPSHOT");
 	return exit_status();
 }

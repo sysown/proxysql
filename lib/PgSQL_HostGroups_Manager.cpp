@@ -1264,7 +1264,8 @@ static void update_glovars_pgsql_servers_checksum(
 static void update_glovars_pgsql_servers_v2_checksum(
 	const string& new_checksum,
 	const pgsql_servers_v2_checksum_t& peer_checksum = {},
-	bool update_version = false
+	bool update_version = false,
+	bool publish_global = false
 ) {
 	time_t new_epoch = time(NULL);
 
@@ -1276,6 +1277,11 @@ static void update_glovars_pgsql_servers_v2_checksum(
 		peer_checksum.epoch,
 		update_version
 	);
+	if (publish_global) {
+		GloVars.checksums_values.updates_cnt++;
+		GloVars.generate_global_checksum();
+		GloVars.epoch_version = new_epoch;
+	}
 }
 
 uint64_t PgSQL_HostGroups_Manager::commit_update_checksum_from_pgsql_servers(SQLite3_result* runtime_pgsql_servers) {
@@ -1331,6 +1337,16 @@ std::string PgSQL_HostGroups_Manager::gen_global_pgsql_servers_v2_checksum(uint6
 
 	string mysrvs_checksum { get_checksum_from_hash(hash_1) };
 	return mysrvs_checksum;
+}
+
+void PgSQL_HostGroups_Manager::refresh_pgsql_servers_v2_checksum() {
+	wrlock();
+	const uint64_t new_hash = commit_update_checksum_from_pgsql_servers_v2();
+	const string global_checksum_v2 = gen_global_pgsql_servers_v2_checksum(new_hash);
+	pthread_mutex_lock(&GloVars.checksum_mutex);
+	update_glovars_pgsql_servers_v2_checksum(global_checksum_v2, {}, true, true);
+	pthread_mutex_unlock(&GloVars.checksum_mutex);
+	wrunlock();
 }
 
 bool PgSQL_HostGroups_Manager::commit(

@@ -917,6 +917,7 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 * @return Checksum computed using the provided hash, and 'mysql_servers' config tables hashes.
 	 */
 	std::string gen_global_mysql_servers_v2_checksum(uint64_t servers_v2_hash);
+	void refresh_mysql_servers_v2_checksum();
 	bool commit();
 	bool commit(
 		const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers,

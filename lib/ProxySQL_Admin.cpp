@@ -7667,8 +7667,11 @@ bool ProxySQL_Admin::save_mysql_servers_runtime_to_database_scoped(
 	const std::vector<uint32_t>& hostgroups) {
 	if (hostgroups.empty()) return true;
 	if (admindb == nullptr || MyHGM == nullptr) return false;
-	return save_runtime_server_rows_scoped(admindb, "mysql_servers",
-		std::unique_ptr<SQLite3_result>(MyHGM->dump_table_mysql("mysql_servers")), hostgroups, true);
+	if (!save_runtime_server_rows_scoped(admindb, "mysql_servers",
+		std::unique_ptr<SQLite3_result>(MyHGM->dump_table_mysql("mysql_servers")), hostgroups, true))
+		return false;
+	MyHGM->refresh_mysql_servers_v2_checksum();
+	return true;
 }
 
 bool ProxySQL_Admin::save_mysql_servers_memory_to_disk_scoped(
@@ -7682,8 +7685,11 @@ bool ProxySQL_Admin::save_pgsql_servers_runtime_to_database_scoped(
 	const std::vector<uint32_t>& hostgroups) {
 	if (hostgroups.empty()) return true;
 	if (admindb == nullptr || PgHGM == nullptr) return false;
-	return save_runtime_server_rows_scoped(admindb, "pgsql_servers",
-		std::unique_ptr<SQLite3_result>(PgHGM->dump_table_pgsql("pgsql_servers")), hostgroups, false);
+	if (!save_runtime_server_rows_scoped(admindb, "pgsql_servers",
+		std::unique_ptr<SQLite3_result>(PgHGM->dump_table_pgsql("pgsql_servers")), hostgroups, false))
+		return false;
+	PgHGM->refresh_pgsql_servers_v2_checksum();
+	return true;
 }
 
 bool ProxySQL_Admin::save_pgsql_servers_memory_to_disk_scoped(

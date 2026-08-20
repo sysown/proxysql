@@ -697,6 +697,7 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	 * @return Checksum computed using the provided hash, and 'pgsql_servers' config tables hashes.
 	 */
 	std::string gen_global_pgsql_servers_v2_checksum(uint64_t servers_v2_hash);
+	void refresh_pgsql_servers_v2_checksum();
 	bool commit(
 		const peer_runtime_pgsql_servers_t& peer_runtime_pgsql_servers = {},
 		const peer_pgsql_servers_v2_t& peer_pgsql_servers_v2 = {},
