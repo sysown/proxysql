@@ -6068,8 +6068,23 @@ void ProxySQL_Admin::init_users(
 }
 
 #ifdef PROXYSQL40
-void ProxySQL_Admin::init_users_under_lock(unique_ptr<SQLite3_result>&& mysql_users_resultset) {
+bool ProxySQL_Admin::init_users_under_lock(unique_ptr<SQLite3_result>&& mysql_users_resultset,
+	std::string& error) {
+	if (mysql_users_resultset == nullptr || mysql_users_resultset->columns != 13) {
+		error = "mysql users runtime input must have the canonical 13 columns";
+		return false;
+	}
+	for (SQLite3_row* row : mysql_users_resultset->rows) {
+		if (row == nullptr || row->fields == nullptr || row->fields[0] == nullptr ||
+			row->fields[2] == nullptr || row->fields[3] == nullptr || row->fields[5] == nullptr ||
+			row->fields[6] == nullptr || row->fields[7] == nullptr || row->fields[8] == nullptr ||
+			row->fields[9] == nullptr || row->fields[10] == nullptr) {
+			error = "mysql users runtime input contains an invalid row";
+			return false;
+		}
+	}
 	__refresh_users(std::move(mysql_users_resultset));
+	return true;
 }
 
 namespace {
@@ -6226,21 +6241,23 @@ bool plugin_config_publish(void* opaque, ProxySQL_PluginConfigStage stage, SQLit
 	if (stage == ProxySQL_PluginConfigStage::servers) {
 		incoming_servers_t incoming = plugin_server_state(db, error);
 		if (!error.empty()) return false;
-		admin->load_mysql_servers_to_runtime(incoming, {}, {}, false);
+		if (!admin->load_mysql_servers_to_runtime(incoming, {}, {}, false)) {
+			error = "MySQL hostgroup manager rejected staged servers";
+			return false;
+		}
 		return true;
 	}
 	if (stage == ProxySQL_PluginConfigStage::users) {
 		unique_ptr<SQLite3_result> users(plugin_query(db,
-			"SELECT username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,"
+			"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,"
 			"transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment "
 			"FROM main.mysql_users WHERE active=1 ORDER BY username,backend DESC", error));
 		if (!users) return false;
-		admin->init_users_under_lock(std::move(users));
-		return true;
+		return admin->init_users_under_lock(std::move(users), error);
 	}
 	if (stage == ProxySQL_PluginConfigStage::rules) {
 		char* module_error = admin->load_mysql_query_rules_to_runtime(nullptr, nullptr, "", 0, false);
-		if (module_error != nullptr) { error = module_error; return false; }
+		if (module_error != nullptr) { error = module_error; free(module_error); return false; }
 		return true;
 	}
 	if (stage == ProxySQL_PluginConfigStage::interfaces) {
@@ -6250,36 +6267,32 @@ bool plugin_config_publish(void* opaque, ProxySQL_PluginConfigStage stage, SQLit
 			if (error.empty()) error = "staged mysql-interfaces is missing";
 			return false;
 		}
-		if (!GloMTH->set_variable("interfaces", value->rows[0]->fields[0])) {
-			error = "MySQL threads rejected staged interfaces";
-			return false;
-		}
-		const auto committed = GloMTH->commit();
-		if (!committed.rejected_variables.empty()) {
-			error = "MySQL threads rejected staged variables";
-			return false;
-		}
-		return true;
+		return GloMTH->apply_interfaces_under_lock(value->rows[0]->fields[0], error);
 	}
 	error = "unknown plugin publication stage";
 	return false;
 }
 
-void plugin_config_restore(void* opaque, ProxySQL_PluginConfigStage stage,
-	const ProxySQL_PluginMysqlRuntimeSnapshot& snapshot) {
+bool plugin_config_restore(void* opaque, ProxySQL_PluginConfigStage stage,
+	const ProxySQL_PluginMysqlRuntimeSnapshot& snapshot, std::string& error) {
 	auto* admin = static_cast<ProxySQL_Admin*>(opaque);
 	if (stage == ProxySQL_PluginConfigStage::servers) {
-		admin->load_mysql_servers_to_runtime(snapshot_server_state(snapshot), {}, {}, false);
+		if (!admin->load_mysql_servers_to_runtime(snapshot_server_state(snapshot), {}, {}, false)) {
+			error = "MySQL hostgroup manager rejected the server snapshot";
+			return false;
+		}
 	} else if (stage == ProxySQL_PluginConfigStage::users) {
-		admin->init_users_under_lock(unique_ptr<SQLite3_result>(clone_result(snapshot.users)));
+		if (!admin->init_users_under_lock(unique_ptr<SQLite3_result>(clone_result(snapshot.users)), error)) return false;
 	} else if (stage == ProxySQL_PluginConfigStage::rules) {
 		SQLite3_result* rules = clone_result(snapshot.rules);
 		SQLite3_result* fast_rules = clone_result(snapshot.fast_routing_rules);
 		const std::string checksum = query_rules_checksum(rules, fast_rules);
-		admin->load_mysql_query_rules_to_runtime(rules, fast_rules, checksum, 0, false);
+		char* module_error = admin->load_mysql_query_rules_to_runtime(rules, fast_rules, checksum, 0, false);
+		if (module_error != nullptr) { error = module_error; free(module_error); return false; }
 	} else if (stage == ProxySQL_PluginConfigStage::interfaces) {
-		if (GloMTH->set_variable("interfaces", snapshot.interfaces.c_str())) (void)GloMTH->commit();
+		if (!GloMTH->apply_interfaces_under_lock(snapshot.interfaces.c_str(), error)) return false;
 	}
+	return true;
 }
 
 bool plugin_config_checkpoint(void*, ProxySQL_PluginConfigStage, std::string&) {
@@ -8301,7 +8314,7 @@ void ProxySQL_Admin::load_scheduler_to_runtime() {
 	resultset=NULL;
 }
 
-void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers, 
+bool ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers,
 	const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server,
 	const mysql_servers_v2_checksum_t& peer_mysql_server_v2, bool hgm_acquire_lock) {
 	// make sure that the caller has called mysql_servers_wrlock()
@@ -8317,6 +8330,15 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	SQLite3_result *resultset_aws_rds_bgd=NULL;
 	SQLite3_result *resultset_hostgroup_attributes=NULL;
 	SQLite3_result *resultset_mysql_servers_ssl_params=NULL;
+	std::string first_error;
+	auto consume_error = [&](const char* failed_query) {
+		if (error == nullptr) return false;
+		if (first_error.empty()) first_error = error;
+		proxy_error("Error on %s : %s\n", failed_query, error);
+		free(error);
+		error = nullptr;
+		return true;
+	};
 
 	SQLite3_result* runtime_mysql_servers = incoming_servers.runtime_mysql_servers;
 	SQLite3_result* incoming_replication_hostgroups = incoming_servers.incoming_replication_hostgroups;
@@ -8336,8 +8358,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 		resultset_servers = runtime_mysql_servers;
 	}
 	//MyHGH->wrlock();
-	if (error) {
-		proxy_error("Error on %s : %s\n", query, error);
+	if (consume_error(query)) {
 	} else {
 		MyHGM->servers_add(resultset_servers);
 	}
@@ -8353,8 +8374,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	query=(char *)"SELECT a.* FROM mysql_replication_hostgroups a JOIN mysql_replication_hostgroups b ON a.writer_hostgroup=b.reader_hostgroup WHERE b.reader_hostgroup";
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	if (error) {
-		proxy_error("Error on %s : %s\n", query, error);
+	if (consume_error(query)) {
 	} else {
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
@@ -8372,8 +8392,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 		resultset_replication = incoming_replication_hostgroups;
 	}
 	//MyHGH->wrlock();
-	if (error) {
-		proxy_error("Error on %s : %s\n", query, error);
+	if (consume_error(query)) {
 	} else {
 		// Pass the resultset to MyHGM
 		MyHGM->save_incoming_mysql_table(resultset_replication,"mysql_replication_hostgroups");
@@ -8387,8 +8406,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	query=(char *)"SELECT a.* FROM mysql_group_replication_hostgroups a JOIN mysql_group_replication_hostgroups b ON a.writer_hostgroup=b.reader_hostgroup WHERE b.reader_hostgroup UNION ALL SELECT a.* FROM mysql_group_replication_hostgroups a JOIN mysql_group_replication_hostgroups b ON a.writer_hostgroup=b.backup_writer_hostgroup WHERE b.backup_writer_hostgroup UNION ALL SELECT a.* FROM mysql_group_replication_hostgroups a JOIN mysql_group_replication_hostgroups b ON a.writer_hostgroup=b.offline_hostgroup WHERE b.offline_hostgroup";
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	if (error) {
-		proxy_error("Error on %s : %s\n", query, error);
+	if (consume_error(query)) {
 	} else {
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
@@ -8406,8 +8424,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 		resultset_group_replication = incoming_group_replication_hostgroups;
 	}
 
-	if (error) {
-		proxy_error("Error on %s : %s\n", query, error);
+	if (consume_error(query)) {
 	} else {
 		// Pass the resultset to MyHGM
 		MyHGM->save_incoming_mysql_table(resultset_group_replication,"mysql_group_replication_hostgroups");
@@ -8419,8 +8436,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	query=(char *)"SELECT a.* FROM mysql_galera_hostgroups a JOIN mysql_galera_hostgroups b ON a.writer_hostgroup=b.reader_hostgroup WHERE b.reader_hostgroup UNION ALL SELECT a.* FROM mysql_galera_hostgroups a JOIN mysql_galera_hostgroups b ON a.writer_hostgroup=b.backup_writer_hostgroup WHERE b.backup_writer_hostgroup UNION ALL SELECT a.* FROM mysql_galera_hostgroups a JOIN mysql_galera_hostgroups b ON a.writer_hostgroup=b.offline_hostgroup WHERE b.offline_hostgroup";
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	if (error) {
-		proxy_error("Error on %s : %s\n", query, error);
+	if (consume_error(query)) {
 	} else {
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
@@ -8437,8 +8453,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	} else {
 		resultset_galera = incoming_galera_hostgroups;
 	}
-	if (error) {
-		proxy_error("Error on %s : %s\n", query, error);
+	if (consume_error(query)) {
 	} else {
 		// Pass the resultset to MyHGM
 		MyHGM->save_incoming_mysql_table(resultset_galera, "mysql_galera_hostgroups");
@@ -8450,8 +8465,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	query=(char *)"SELECT a.* FROM mysql_aws_aurora_hostgroups a JOIN mysql_aws_aurora_hostgroups b ON a.writer_hostgroup=b.reader_hostgroup WHERE b.reader_hostgroup";
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	if (error) {
-		proxy_error("Error on %s : %s\n", query, error);
+	if (consume_error(query)) {
 	} else {
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
@@ -8472,8 +8486,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	} else {
 		resultset_aws_aurora = incoming_aurora_hostgroups;
 	}
-	if (error) {
-		proxy_error("Error on %s : %s\n", query, error);
+	if (consume_error(query)) {
 	} else {
 		// Pass the resultset to MyHGM
 		MyHGM->save_incoming_mysql_table(resultset_aws_aurora,"mysql_aws_aurora_hostgroups");
@@ -8487,8 +8500,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	} else {
 		resultset_aws_rds_bgd = incoming_aws_rds_bgd_hostgroups;
 	}
-	if (error) {
-		proxy_error("Error on %s : %s\n", query, error);
+	if (consume_error(query)) {
 	} else {
 		// Pass the resultset to MyHGM
 		MyHGM->save_incoming_mysql_table(resultset_aws_rds_bgd,"mysql_aws_rds_bgd_hostgroups");
@@ -8502,8 +8514,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	} else {
 		resultset_hostgroup_attributes = incoming_hostgroup_attributes;
 	}
-	if (error) {
-		proxy_error("Error on %s : %s\n", query, error);
+	if (consume_error(query)) {
 	} else {
 		// Pass the resultset to MyHGM
 		MyHGM->save_incoming_mysql_table(resultset_hostgroup_attributes, "mysql_hostgroup_attributes");
@@ -8517,15 +8528,14 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	} else {
 		resultset_mysql_servers_ssl_params = incoming_mysql_servers_ssl_params;
 	}
-	if (error) {
-		proxy_error("Error on %s : %s\n", query, error);
+	if (consume_error(query)) {
 	} else {
 		// Pass the resultset to MyHGM
 		MyHGM->save_incoming_mysql_table(resultset_mysql_servers_ssl_params, "mysql_servers_ssl_params");
 	}
 
 	// commit all the changes
-	MyHGM->commit(
+	const bool committed = MyHGM->commit(
 		{ runtime_mysql_servers, peer_runtime_mysql_server },
 		{ incoming_mysql_servers_v2, peer_mysql_server_v2 },
 		false, true, hgm_acquire_lock
@@ -8563,6 +8573,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	if (resultset_mysql_servers_ssl_params) {
 		resultset_mysql_servers_ssl_params = NULL;
 	}
+	return first_error.empty() && committed;
 }
 
 void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t& incoming_pgsql_servers,
@@ -9016,6 +9027,11 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 			__reset_rules(&prev_rules_data.query_rules);
 		}
 	}
+	if (error != nullptr) {
+		if (error2 != nullptr) free(error2);
+		return error;
+	}
+	if (error2 != nullptr) return error2;
 	// if (resultset) delete resultset; // never delete it. GloMyQPro saves it
 	// if (resultset2) delete resultset2; // never delete it. GloMyQPro saves it
 	return NULL;

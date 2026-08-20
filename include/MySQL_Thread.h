@@ -919,6 +919,10 @@ class MySQL_Threads_Handler
 	int listener_add(const char *address, int port);
 	int listener_del(const char *iface);
 	int listener_del(const char *address, int port);
+#ifdef PROXYSQL40
+	/** Replace initialized MySQL interfaces while the caller holds the write lock. */
+	bool apply_interfaces_under_lock(const char* value, std::string& error);
+#endif
 	void start_listeners();
 	void stop_listeners();
 	void signal_all_threads(unsigned char _c=0);

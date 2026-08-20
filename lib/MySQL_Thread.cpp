@@ -1652,6 +1652,68 @@ int MySQL_Threads_Handler::listener_del(const char *iface) {
 	return 0;
 }
 
+#ifdef PROXYSQL40
+bool MySQL_Threads_Handler::apply_interfaces_under_lock(const char* value, std::string& error) {
+	if (value == nullptr) {
+		error = "mysql-interfaces cannot be null";
+		return false;
+	}
+	auto parse = [](const std::string& source) {
+		std::vector<std::string> values;
+		size_t start = 0;
+		while (start <= source.size()) {
+			const size_t end = source.find(';', start);
+			size_t first = start;
+			size_t last = end == std::string::npos ? source.size() : end;
+			while (first < last && std::isspace(static_cast<unsigned char>(source[first]))) ++first;
+			while (last > first && std::isspace(static_cast<unsigned char>(source[last - 1]))) --last;
+			if (last > first) values.emplace_back(source.substr(first, last - first));
+			if (end == std::string::npos) break;
+			start = end + 1;
+		}
+		return values;
+	};
+	const std::string previous = variables.interfaces == nullptr ? "" : variables.interfaces;
+	const std::string replacement(value);
+	if (previous == replacement) return true;
+	const std::vector<std::string> old_values = parse(previous);
+	const std::vector<std::string> new_values = parse(replacement);
+	std::vector<std::string> added;
+	for (const std::string& iface : new_values) {
+		if (std::find(old_values.begin(), old_values.end(), iface) != old_values.end()) continue;
+		if (listener_add(iface.c_str()) < 0) {
+			for (auto it = added.rbegin(); it != added.rend(); ++it) listener_del(it->c_str());
+			error = "cannot add MySQL listener " + iface;
+			return false;
+		}
+		added.push_back(iface);
+	}
+	std::vector<std::string> removed;
+	for (const std::string& iface : old_values) {
+		if (std::find(new_values.begin(), new_values.end(), iface) != new_values.end()) continue;
+		listener_del(iface.c_str());
+		removed.push_back(iface);
+	}
+	free(variables.interfaces);
+	variables.interfaces = strdup(replacement.c_str());
+	const auto committed = commit();
+	if (committed.rejected_variables.empty()) return true;
+
+	for (auto it = added.rbegin(); it != added.rend(); ++it) listener_del(it->c_str());
+	for (const std::string& iface : removed) {
+		if (listener_add(iface.c_str()) < 0) {
+			if (!error.empty()) error += "; ";
+			error += "cannot restore MySQL listener " + iface;
+		}
+	}
+	free(variables.interfaces);
+	variables.interfaces = strdup(previous.c_str());
+	if (!error.empty()) error += "; ";
+	error += "MySQL threads rejected staged interfaces";
+	return false;
+}
+#endif
+
 void MySQL_Threads_Handler::wrlock() {
 	pthread_rwlock_wrlock(&rwlock);
 }

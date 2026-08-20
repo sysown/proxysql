@@ -164,7 +164,8 @@ struct ProxySQL_PluginConfigRuntimeHooks {
 	void (*unlock)(void*, ProxySQL_PluginConfigLock) {nullptr};
 	bool (*capture)(void*, ProxySQL_PluginMysqlRuntimeSnapshot&, std::string&) {nullptr};
 	bool (*publish)(void*, ProxySQL_PluginConfigStage, SQLite3DB&, uint64_t, std::string&) {nullptr};
-	void (*restore)(void*, ProxySQL_PluginConfigStage, const ProxySQL_PluginMysqlRuntimeSnapshot&) {nullptr};
+	bool (*restore)(void*, ProxySQL_PluginConfigStage, const ProxySQL_PluginMysqlRuntimeSnapshot&,
+		std::string&) {nullptr};
 	bool (*checkpoint)(void*, ProxySQL_PluginConfigStage, std::string&) {nullptr};
 };
 

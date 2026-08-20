@@ -3,10 +3,13 @@
 #ifdef PROXYSQL40
 
 #include "sqlite3db.h"
+#include <json.hpp>
 
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <exception>
+#include <limits>
 #include <set>
 #include <tuple>
 #include <unordered_set>
@@ -214,9 +217,31 @@ bool in_owned(const std::unordered_set<int>& owned, int hostgroup) {
 	return owned.find(hostgroup) != owned.end();
 }
 
+bool valid_json_or_empty(const std::string& value) {
+	if (value.empty()) return true;
+	return !nlohmann::json::parse(value, nullptr, false).is_discarded();
+}
+
+bool valid_rule_modifiers(const std::string& value) {
+	if (value.empty()) return true;
+	std::set<std::string> seen;
+	size_t start = 0;
+	while (start <= value.size()) {
+		const size_t end = value.find(',', start);
+		const std::string token = trim(value.substr(start,
+			end == std::string::npos ? std::string::npos : end - start));
+		if ((token != "CASELESS" && token != "GLOBAL") || !seen.insert(token).second) return false;
+		if (end == std::string::npos) break;
+		start = end + 1;
+	}
+	return true;
+}
+
 bool validate(OwnedPlan& plan, std::string& error) {
 	if (!valid_owner(plan.owner)) { error = "owner must match [A-Za-z0-9_]+"; return false; }
-	if (plan.generation == 0) { error = "generation must be greater than zero"; return false; }
+	if (plan.generation == 0 || plan.generation > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+		error = "generation must be within 1..INT64_MAX"; return false;
+	}
 	std::unordered_set<int> owned;
 	for (int hostgroup : plan.hostgroups) {
 		if (hostgroup < 1 || hostgroup > 999999) { error = "owned hostgroup is outside 1..999999"; return false; }
@@ -226,8 +251,9 @@ bool validate(OwnedPlan& plan, std::string& error) {
 	for (const auto& row : plan.servers) {
 		if (!in_owned(owned, row.hostgroup_id)) { error = "server is outside the owned hostgroup set"; return false; }
 		if (row.hostname.empty() || row.port == 0 || (row.gtid_port != 0 && row.gtid_port == row.port) ||
-			row.status < 0 || row.status > 3 || row.weight < 0 || row.compression < 0 || row.compression > 1 ||
-			row.max_connections < 0 || row.max_replication_lag < 0) {
+			row.status < 0 || row.status > 3 || row.weight < 0 || row.weight > 10000000 ||
+			row.compression < 0 || row.compression > 1 || row.max_connections < 0 ||
+			row.max_replication_lag < 0 || row.max_replication_lag > 126144000) {
 			error = "invalid mysql_servers row"; return false;
 		}
 		if (!server_keys.emplace(row.hostgroup_id, row.hostname, row.port).second) {
@@ -235,10 +261,12 @@ bool validate(OwnedPlan& plan, std::string& error) {
 		}
 	}
 	std::set<int> repl_writers, repl_readers;
+	const std::set<std::string> check_types {"read_only", "innodb_read_only", "super_read_only",
+		"read_only|innodb_read_only", "read_only&innodb_read_only"};
 	for (const auto& row : plan.replication) {
 		if (!in_owned(owned, row.writer_hostgroup) || !in_owned(owned, row.reader_hostgroup) ||
 			row.writer_hostgroup == row.reader_hostgroup || !repl_writers.insert(row.writer_hostgroup).second ||
-			!repl_readers.insert(row.reader_hostgroup).second) {
+			!repl_readers.insert(row.reader_hostgroup).second || check_types.count(row.check_type) == 0) {
 			error = "invalid or duplicate replication hostgroup mapping"; return false;
 		}
 	}
@@ -251,21 +279,32 @@ bool validate(OwnedPlan& plan, std::string& error) {
 				error = "group replication mapping escapes or aliases owned hostgroups"; return false;
 			}
 		}
-		if (!gr_all.insert(row.writer_hostgroup).second || row.max_writers < 0 ||
+		for (int id : ids) {
+			if (!gr_all.insert(id).second) {
+				error = "group replication hostgroups must be globally unique across roles"; return false;
+			}
+		}
+		if (row.max_writers < 0 ||
 			row.writer_is_also_reader < 0 || row.writer_is_also_reader > 2 || row.max_transactions_behind < 0) {
 			error = "invalid group replication hostgroup mapping"; return false;
 		}
 	}
 	std::set<int> attribute_keys;
 	for (const auto& row : plan.attributes) {
-		if (!in_owned(owned, row.hostgroup_id) || !attribute_keys.insert(row.hostgroup_id).second) {
+		if (!in_owned(owned, row.hostgroup_id) || !attribute_keys.insert(row.hostgroup_id).second ||
+			row.max_num_online_servers < 0 || row.max_num_online_servers > 1000000 ||
+			row.autocommit < -1 || row.autocommit > 1 || row.free_connections_pct < 0 ||
+			row.free_connections_pct > 100 || row.throttle_connections_per_sec < 1 ||
+			row.throttle_connections_per_sec > 1000000 ||
+			!valid_json_or_empty(row.ignore_session_variables) ||
+			!valid_json_or_empty(row.hostgroup_settings) || !valid_json_or_empty(row.servers_defaults)) {
 			error = "hostgroup attributes escape or duplicate the owned set"; return false;
 		}
 	}
 	std::set<std::string> usernames;
 	for (const auto& row : plan.users) {
 		if (row.username.empty() || !usernames.insert(row.username).second || (!row.frontend && !row.backend) ||
-			row.default_hostgroup < 0 || row.max_connections < 0) {
+			row.default_hostgroup < 0 || row.max_connections < 0 || !valid_json_or_empty(row.attributes)) {
 			error = "invalid or duplicate mysql user"; return false;
 		}
 	}
@@ -273,7 +312,8 @@ bool validate(OwnedPlan& plan, std::string& error) {
 	std::set<int> rule_ids;
 	for (const auto& row : plan.rules) {
 		if (row.rule_id <= 0 || !rule_ids.insert(row.rule_id).second || row.proxy_port < 1 || row.proxy_port > 65535 ||
-			!in_owned(owned, row.destination_hostgroup) || row.comment.compare(0, tag.size(), tag) != 0) {
+			!in_owned(owned, row.destination_hostgroup) || row.comment.compare(0, tag.size(), tag) != 0 ||
+			!valid_rule_modifiers(row.re_modifiers)) {
 			error = "invalid, duplicate, or untagged mysql query rule"; return false;
 		}
 	}
@@ -290,16 +330,21 @@ bool validate(OwnedPlan& plan, std::string& error) {
 	return true;
 }
 
-uint64_t active_generation(SQLite3DB& db, const std::string& owner, bool& ok) {
+uint64_t active_generation(SQLite3DB& db, const std::string& schema,
+	const std::string& owner, bool& ok) {
 	sqlite3_stmt* statement = nullptr;
-	ok = sqlite3_prepare_v2(db.get_db(),
-		"SELECT generation FROM main.proxysql_plugin_config_generations WHERE owner=?1",
-		-1, &statement, nullptr) == SQLITE_OK;
+	const std::string sql = "SELECT generation FROM " + schema +
+		".proxysql_plugin_config_generations WHERE owner=?1";
+	ok = sqlite3_prepare_v2(db.get_db(), sql.c_str(), -1, &statement, nullptr) == SQLITE_OK;
 	if (!ok) return 0;
 	sqlite3_bind_text(statement, 1, owner.c_str(), -1, SQLITE_TRANSIENT);
 	const int rc = sqlite3_step(statement);
 	uint64_t generation = 0;
-	if (rc == SQLITE_ROW) generation = static_cast<uint64_t>(sqlite3_column_int64(statement, 0));
+	if (rc == SQLITE_ROW) {
+		const sqlite3_int64 stored = sqlite3_column_int64(statement, 0);
+		if (stored < 0) ok = false;
+		else generation = static_cast<uint64_t>(stored);
+	}
 	else if (rc != SQLITE_DONE) ok = false;
 	sqlite3_finalize(statement);
 	return generation;
@@ -340,12 +385,12 @@ bool query_exists(SQLite3DB& db, const std::string& sql,
 	return rc == SQLITE_ROW || rc == SQLITE_DONE;
 }
 
-bool ledger_keys(SQLite3DB& db, const std::string& owner, const std::string& type,
+bool ledger_keys(SQLite3DB& db, const std::string& schema, const std::string& owner, const std::string& type,
 	std::set<std::string>& keys, std::string& error) {
 	sqlite3_stmt* statement = nullptr;
-	if (sqlite3_prepare_v2(db.get_db(),
-		"SELECT object_key FROM main.proxysql_plugin_owned_objects WHERE owner=?1 AND object_type=?2 ORDER BY object_key",
-		-1, &statement, nullptr) != SQLITE_OK) {
+	const std::string sql = "SELECT object_key FROM " + schema +
+		".proxysql_plugin_owned_objects WHERE owner=?1 AND object_type=?2 ORDER BY object_key";
+	if (sqlite3_prepare_v2(db.get_db(), sql.c_str(), -1, &statement, nullptr) != SQLITE_OK) {
 		error = sqlite3_errmsg(db.get_db());
 		return false;
 	}
@@ -371,16 +416,17 @@ struct Preflight {
 	std::vector<std::string> collisions;
 };
 
-bool preflight_collisions(SQLite3DB& db, const OwnedPlan& plan, Preflight& state, std::string& error) {
-	if (!ledger_keys(db, plan.owner, "hostgroup", state.old_hostgroups, error) ||
-		!ledger_keys(db, plan.owner, "mysql_user", state.old_users, error) ||
-		!ledger_keys(db, plan.owner, "mysql_query_rule", state.old_rules, error) ||
-		!ledger_keys(db, plan.owner, "mysql_interface", state.old_interfaces, error)) return false;
+bool preflight_collisions(SQLite3DB& db, const std::string& schema,
+	const OwnedPlan& plan, Preflight& state, std::string& error) {
+	if (!ledger_keys(db, schema, plan.owner, "hostgroup", state.old_hostgroups, error) ||
+		!ledger_keys(db, schema, plan.owner, "mysql_user", state.old_users, error) ||
+		!ledger_keys(db, schema, plan.owner, "mysql_query_rule", state.old_rules, error) ||
+		!ledger_keys(db, schema, plan.owner, "mysql_interface", state.old_interfaces, error)) return false;
 	for (const auto& user : plan.users) {
 		if (state.old_users.count(user.username) != 0) continue;
 		bool collision = false;
 		if (!query_exists(db,
-			"SELECT 1 FROM main.mysql_users WHERE username=?1 AND (backend=?2 OR frontend=?3) LIMIT 1",
+			"SELECT 1 FROM " + schema + ".mysql_users WHERE username=?1 AND (backend=?2 OR frontend=?3) LIMIT 1",
 			{user.username}, {user.backend ? 1 : 0, user.frontend ? 1 : 0}, collision, error)) return false;
 		if (collision) {
 			state.user_collisions.insert(user.username);
@@ -392,11 +438,12 @@ bool preflight_collisions(SQLite3DB& db, const OwnedPlan& plan, Preflight& state
 		const std::string key = std::to_string(rule.rule_id);
 		bool collision = false;
 		if (state.old_rules.count(key) == 0) {
-			if (!query_exists(db, "SELECT 1 FROM main.mysql_query_rules WHERE rule_id=?1 LIMIT 1",
+			if (!query_exists(db, "SELECT 1 FROM " + schema + ".mysql_query_rules WHERE rule_id=?1 LIMIT 1",
 				{}, {rule.rule_id}, collision, error)) return false;
 		} else {
 			if (!query_exists(db,
-				"SELECT 1 FROM main.mysql_query_rules WHERE rule_id=?2 AND comment NOT LIKE ?1 LIMIT 1",
+				"SELECT 1 FROM " + schema + ".mysql_query_rules WHERE rule_id=?2 "
+				"AND (comment IS NULL OR comment NOT LIKE ?1) LIMIT 1",
 				{tag + "%"}, {rule.rule_id}, collision, error)) return false;
 		}
 		if (collision) {
@@ -420,6 +467,34 @@ std::string hostgroup_predicate(const std::set<int>& ids, const std::vector<std:
 		predicate += column + " IN (" + values + ")";
 	}
 	return predicate;
+}
+
+bool has_hybrid_mapping(SQLite3DB& db, const std::string& schema,
+	const OwnedPlan& plan, const Preflight& preflight, bool& hybrid, std::string& error) {
+	std::set<int> affected;
+	for (int id : plan.hostgroups) affected.insert(id);
+	for (const std::string& id : preflight.old_hostgroups) affected.insert(std::atoi(id.c_str()));
+	if (affected.empty()) { hybrid = false; return true; }
+	const std::string repl_any = hostgroup_predicate(affected, {"writer_hostgroup", "reader_hostgroup"});
+	std::string ids;
+	for (int id : affected) {
+		if (!ids.empty()) ids += ',';
+		ids += std::to_string(id);
+	}
+	const std::string repl_all = "writer_hostgroup IN (" + ids + ") AND reader_hostgroup IN (" + ids + ")";
+	if (!query_exists(db, "SELECT 1 FROM " + schema + ".mysql_replication_hostgroups WHERE (" +
+		repl_any + ") AND NOT (" + repl_all + ") LIMIT 1", {}, {}, hybrid, error) || hybrid) return !error.size();
+	const std::vector<std::string> gr_columns {"writer_hostgroup", "backup_writer_hostgroup",
+		"reader_hostgroup", "offline_hostgroup"};
+	const std::string gr_any = hostgroup_predicate(affected, gr_columns);
+	std::string gr_all;
+	for (const std::string& column : gr_columns) {
+		if (!gr_all.empty()) gr_all += " AND ";
+		gr_all += column + " IN (" + ids + ")";
+	}
+	return query_exists(db, "SELECT 1 FROM " + schema +
+		".mysql_group_replication_hostgroups WHERE (" + gr_any + ") AND NOT (" + gr_all +
+		") LIMIT 1", {}, {}, hybrid, error);
 }
 
 const char* server_status(int status) {
@@ -540,7 +615,7 @@ bool stage_schema(SQLite3DB& db, const std::string& schema, const OwnedPlan& pla
 	}
 	for(const auto& row:plan.rules){
 		if(preflight.rule_collisions.count(row.rule_id))continue;
-		if(!run_statement(db,"INSERT INTO "+schema+".mysql_query_rules (rule_id,active,proxy_port,match_digest,match_pattern,negate_match_pattern,re_modifiers,destination_hostgroup,apply,attributes,comment) VALUES (?5,?6,?7,NULLIF(?1,''),NULLIF(?2,''),?8,NULLIF(?3,''),?9,?10,'',?4)",
+		if(!run_statement(db,"INSERT INTO "+schema+".mysql_query_rules (rule_id,active,flagIN,proxy_port,match_digest,match_pattern,negate_match_pattern,re_modifiers,destination_hostgroup,apply,attributes,comment) VALUES (?5,?6,0,?7,NULLIF(?1,''),NULLIF(?2,''),?8,NULLIF(?3,''),?9,?10,'',?4)",
 			{row.match_digest,row.match_pattern,row.re_modifiers,row.comment},{row.rule_id,row.active,row.proxy_port,row.negate_match_pattern,row.destination_hostgroup,row.apply},error))return false;
 	}
 	std::vector<std::string> merged;
@@ -591,88 +666,158 @@ ProxySQL_PluginMysqlConfigResult proxysql_apply_plugin_mysql_config(
 	OwnedPlan plan;
 	std::string error;
 	if (!copy_plan(source, plan, error) || !validate(plan, error)) return {false, 0, error, {}};
-	bool generation_ok = false;
-	const uint64_t current = active_generation(admindb, plan.owner, generation_ok);
-	if (!generation_ok) return {false, 0, "cannot read active plugin generation", {}};
-	if (plan.generation <= current) return {false, current, "generation must be strictly newer", {}};
-	Preflight preflight;
-	if (!preflight_collisions(admindb, plan, preflight, error)) {
-		return {false, current, "cannot preflight plugin ownership: " + error, {}};
-	}
 	if (runtime.lock == nullptr || runtime.unlock == nullptr || runtime.capture == nullptr ||
 		runtime.publish == nullptr || runtime.restore == nullptr || runtime.checkpoint == nullptr) {
-		return {false, current, "runtime publication hooks are incomplete", preflight.collisions};
+		return {false, 0, "runtime publication hooks are incomplete", {}};
 	}
 
 	std::vector<ProxySQL_PluginConfigLock> locks;
-	auto unlock_all = [&]() {
-		for (auto it = locks.rbegin(); it != locks.rend(); ++it) runtime.unlock(runtime.opaque, *it);
+	std::vector<ProxySQL_PluginConfigStage> published;
+	ProxySQL_PluginMysqlRuntimeSnapshot snapshot;
+	bool transaction_open = false;
+	uint64_t locked_current = 0;
+	std::vector<std::string> collisions;
+	auto append_error = [](std::string& message, const std::string& extra) {
+		if (extra.empty()) return;
+		if (!message.empty()) message += "; ";
+		message += extra;
+	};
+	auto unlock_all = [&](std::string& cleanup_error) {
+		for (auto it = locks.rbegin(); it != locks.rend(); ++it) {
+			try {
+				runtime.unlock(runtime.opaque, *it);
+			} catch (const std::exception& e) {
+				append_error(cleanup_error, std::string("unlock failed: ") + e.what());
+			} catch (...) {
+				append_error(cleanup_error, "unlock failed: unknown exception");
+			}
+		}
 		locks.clear();
 	};
-	for (ProxySQL_PluginConfigLock lock : {
-		ProxySQL_PluginConfigLock::admin,
-		ProxySQL_PluginConfigLock::hostgroups,
-		ProxySQL_PluginConfigLock::auth,
-		ProxySQL_PluginConfigLock::query_processor,
-		ProxySQL_PluginConfigLock::mysql_threads}) {
-		if (!runtime.lock(runtime.opaque, lock, error)) {
-			unlock_all();
-			return {false, current, "cannot acquire publication locks: " + error, preflight.collisions};
-		}
-		locks.push_back(lock);
-	}
-
-	ProxySQL_PluginMysqlRuntimeSnapshot snapshot;
-	if (!runtime.capture(runtime.opaque, snapshot, error)) {
-		unlock_all();
-		return {false, current, "cannot capture runtime state: " + error, preflight.collisions};
-	}
-	bool current_ok = false;
-	const uint64_t locked_current = active_generation(admindb, plan.owner, current_ok);
-	if (!current_ok || plan.generation <= locked_current) {
-		unlock_all();
-		return {false, current_ok ? locked_current : current,
-			current_ok ? "generation became stale before publication" : "cannot re-read active plugin generation",
-			preflight.collisions};
-	}
-	if (!admindb.execute("BEGIN IMMEDIATE")) {
-		error = sqlite3_errmsg(admindb.get_db());
-		unlock_all();
-		return {false, locked_current, "cannot start publication transaction: " + error, preflight.collisions};
-	}
-
-	std::vector<ProxySQL_PluginConfigStage> published;
-	auto fail = [&](const std::string& message) {
+	auto fail = [&](std::string message) {
 		for (auto it = published.rbegin(); it != published.rend(); ++it) {
-			runtime.restore(runtime.opaque, *it, snapshot);
+			std::string restore_error;
+			try {
+				if (!runtime.restore(runtime.opaque, *it, snapshot, restore_error)) {
+					append_error(message, "restore failed: " + restore_error);
+				}
+			} catch (const std::exception& e) {
+				append_error(message, std::string("restore failed: ") + e.what());
+			} catch (...) {
+				append_error(message, "restore failed: unknown exception");
+			}
 		}
-		admindb.execute("ROLLBACK");
-		unlock_all();
-		return ProxySQL_PluginMysqlConfigResult{false, locked_current, message, preflight.collisions};
+		published.clear();
+		if (transaction_open) {
+			try {
+				if (!admindb.execute("ROLLBACK")) {
+					append_error(message, std::string("rollback failed: ") + sqlite3_errmsg(admindb.get_db()));
+				}
+			} catch (const std::exception& e) {
+				append_error(message, std::string("rollback failed: ") + e.what());
+			} catch (...) {
+				append_error(message, "rollback failed: unknown exception");
+			}
+			transaction_open = false;
+		}
+		unlock_all(message);
+		return ProxySQL_PluginMysqlConfigResult{false, locked_current, std::move(message), collisions};
 	};
 
-	if (!stage_schema(admindb, "main", plan, preflight, error) ||
-		!stage_schema(admindb, "disk", plan, preflight, error)) {
-		return fail("cannot stage plugin configuration: " + error);
+	try {
+		for (ProxySQL_PluginConfigLock lock : {
+			ProxySQL_PluginConfigLock::admin,
+			ProxySQL_PluginConfigLock::hostgroups,
+			ProxySQL_PluginConfigLock::auth,
+			ProxySQL_PluginConfigLock::query_processor,
+			ProxySQL_PluginConfigLock::mysql_threads}) {
+			locks.push_back(lock);
+			error.clear();
+			bool acquired = false;
+			try {
+				acquired = runtime.lock(runtime.opaque, lock, error);
+			} catch (...) {
+				locks.pop_back();
+				throw;
+			}
+			if (!acquired) {
+				locks.pop_back();
+				return fail("cannot acquire publication locks: " + error);
+			}
+		}
+		error.clear();
+		if (!runtime.capture(runtime.opaque, snapshot, error)) {
+			return fail("cannot capture runtime state: " + error);
+		}
+
+		bool main_ok = false;
+		bool disk_ok = false;
+		const uint64_t main_current = active_generation(admindb, "main", plan.owner, main_ok);
+		const uint64_t disk_current = active_generation(admindb, "disk", plan.owner, disk_ok);
+		locked_current = std::max(main_current, disk_current);
+		if (!main_ok || !disk_ok) return fail("cannot read active plugin generations");
+		if (plan.generation <= locked_current) return fail("generation must be strictly newer");
+
+		Preflight main_preflight;
+		Preflight disk_preflight;
+		error.clear();
+		if (!preflight_collisions(admindb, "main", plan, main_preflight, error) ||
+			!preflight_collisions(admindb, "disk", plan, disk_preflight, error)) {
+			return fail("cannot preflight plugin ownership: " + error);
+		}
+		std::set<std::string> user_collisions = main_preflight.user_collisions;
+		user_collisions.insert(disk_preflight.user_collisions.begin(), disk_preflight.user_collisions.end());
+		std::set<int> rule_collisions = main_preflight.rule_collisions;
+		rule_collisions.insert(disk_preflight.rule_collisions.begin(), disk_preflight.rule_collisions.end());
+		main_preflight.user_collisions = disk_preflight.user_collisions = user_collisions;
+		main_preflight.rule_collisions = disk_preflight.rule_collisions = rule_collisions;
+		for (const std::string& username : user_collisions) collisions.push_back("mysql_user:" + username);
+		for (int rule_id : rule_collisions) collisions.push_back("mysql_query_rule:" + std::to_string(rule_id));
+
+		bool hybrid = false;
+		error.clear();
+		if (!has_hybrid_mapping(admindb, "main", plan, main_preflight, hybrid, error) ||
+			(!hybrid && !has_hybrid_mapping(admindb, "disk", plan, disk_preflight, hybrid, error))) {
+			return fail("cannot validate hostgroup ownership boundary: " + error);
+		}
+		if (hybrid) return fail("hostgroup mapping crosses the plugin ownership boundary");
+
+		if (!admindb.execute("BEGIN IMMEDIATE")) {
+			return fail(std::string("cannot start publication transaction: ") + sqlite3_errmsg(admindb.get_db()));
+		}
+		transaction_open = true;
+		error.clear();
+		if (!stage_schema(admindb, "main", plan, main_preflight, error) ||
+			!stage_schema(admindb, "disk", plan, disk_preflight, error)) {
+			return fail("cannot stage plugin configuration: " + error);
+		}
+		if (!runtime.checkpoint(runtime.opaque, ProxySQL_PluginConfigStage::admin_staging, error)) return fail(error);
+		for (ProxySQL_PluginConfigStage stage : {
+			ProxySQL_PluginConfigStage::servers,
+			ProxySQL_PluginConfigStage::users,
+			ProxySQL_PluginConfigStage::rules,
+			ProxySQL_PluginConfigStage::interfaces}) {
+			published.push_back(stage);
+			error.clear();
+			if (!runtime.publish(runtime.opaque, stage, admindb, plan.generation, error)) return fail(error);
+		}
+		error.clear();
+		if (!runtime.checkpoint(runtime.opaque, ProxySQL_PluginConfigStage::commit, error)) return fail(error);
+		if (!admindb.execute("COMMIT")) {
+			return fail(std::string("cannot commit plugin configuration: ") + sqlite3_errmsg(admindb.get_db()));
+		}
+		transaction_open = false;
+		published.clear();
+		std::string unlock_error;
+		unlock_all(unlock_error);
+		std::string message = "plugin configuration published";
+		append_error(message, unlock_error);
+		return {true, plan.generation, std::move(message), collisions};
+	} catch (const std::exception& e) {
+		return fail(std::string("plugin publication exception: ") + e.what());
+	} catch (...) {
+		return fail("plugin publication exception: unknown exception");
 	}
-	if (!runtime.checkpoint(runtime.opaque, ProxySQL_PluginConfigStage::admin_staging, error)) {
-		return fail(error);
-	}
-	for (ProxySQL_PluginConfigStage stage : {
-		ProxySQL_PluginConfigStage::servers,
-		ProxySQL_PluginConfigStage::users,
-		ProxySQL_PluginConfigStage::rules,
-		ProxySQL_PluginConfigStage::interfaces}) {
-		published.push_back(stage);
-		if (!runtime.publish(runtime.opaque, stage, admindb, plan.generation, error)) return fail(error);
-	}
-	if (!runtime.checkpoint(runtime.opaque, ProxySQL_PluginConfigStage::commit, error)) return fail(error);
-	if (!admindb.execute("COMMIT")) {
-		error = sqlite3_errmsg(admindb.get_db());
-		return fail("cannot commit plugin configuration: " + error);
-	}
-	unlock_all();
-	return {true, plan.generation, "plugin configuration published", preflight.collisions};
 }
 
 #endif /* PROXYSQL40 */
