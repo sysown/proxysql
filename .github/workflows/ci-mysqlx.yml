@@ -467,6 +467,12 @@ jobs:
             proxysql/packaging:build-ubuntu22-v4.0.0 \
             bash -c '
               set -e
+              # The TAP binaries link libproxysql, which in turn needs libpq.
+              # The packaging build image deliberately omits this runtime
+              # library, unlike the normal TAP image. Install it before
+              # loading any mysqlx e2e binary.
+              apt-get update -qq
+              DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends libpq5
               DISCOVERED="${MYSQLX_E2E_PORT:?missing}"
               source /opt/proxysql/test/tap/groups/mysqlx-e2e/env.sh
               export MYSQLX_E2E_PORT="$DISCOVERED"
