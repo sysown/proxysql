@@ -20,6 +20,7 @@ bool proxysql_server_discovery_admin_available();
 void proxysql_wake_server_discovery_admin();
 void proxysql_lock_server_discovery_protocol(ProxySQL_ServerProtocol protocol);
 void proxysql_unlock_server_discovery_protocol(ProxySQL_ServerProtocol protocol);
+bool proxysql_materialize_server_desired_set(const ProxySQL_ServerDesiredSet& desired_set);
 extern "C" void proxysql_server_discovery_after_final_revalidation_for_test(
 	ProxySQL_ServerProtocol) __attribute__((weak));
 #endif
@@ -458,8 +459,10 @@ bool proxysql_merge_server_desired_set(const ProxySQL_ServerRuntimeSnapshot& cur
 		error = "protocol mismatch";
 		return false;
 	}
-	if (desired_set.persistence != ProxySQL_ServerPersistence::runtime_only) {
-		error = "unsupported desired-set persistence mode";
+	if (desired_set.persistence != ProxySQL_ServerPersistence::runtime_only &&
+		desired_set.persistence != ProxySQL_ServerPersistence::memory &&
+		desired_set.persistence != ProxySQL_ServerPersistence::memory_and_disk) {
+		error = "invalid desired-set persistence mode";
 		return false;
 	}
 	if (desired_set.delegated_hostgroups.empty()) {
@@ -581,12 +584,14 @@ size_t proxysql_drain_server_desired_sets() {
 							proxysql_server_discovery_after_final_revalidation_for_test(
 								queued.desired_set.protocol);
 						applied = proxysql_reconcile_mysql_server_desired_set(queued.desired_set, error);
+						if (applied) applied = proxysql_materialize_server_desired_set(queued.desired_set);
 					} else if (queued.desired_set.protocol == ProxySQL_ServerProtocol::pgsql &&
 						queued.completion->begin_apply(queued.desired_set)) {
 						if (proxysql_server_discovery_after_final_revalidation_for_test != nullptr)
 							proxysql_server_discovery_after_final_revalidation_for_test(
 								queued.desired_set.protocol);
 						applied = proxysql_reconcile_pgsql_server_desired_set(queued.desired_set, error);
+						if (applied) applied = proxysql_materialize_server_desired_set(queued.desired_set);
 					}
 				}
 			} catch (const std::exception& exception) {

@@ -684,6 +684,10 @@ class ProxySQL_Admin {
 	 *   ```
 	 */
 	bool save_mysql_servers_runtime_to_database(bool _runtime);
+	bool save_mysql_servers_runtime_to_database_scoped(
+		const std::vector<uint32_t>& hostgroups);
+	bool save_mysql_servers_memory_to_disk_scoped(
+		const std::vector<uint32_t>& hostgroups);
 	size_t drain_server_discovery_updates();
 	void shutdown_server_discovery_updates();
 	void admin_shutdown();
@@ -903,6 +907,10 @@ class ProxySQL_Admin {
 		SQLite3_result* SQLite3_query_rules_fast_routing_resultset = NULL, const std::string& checksum = "", const time_t epoch = 0);
 
 	bool save_pgsql_servers_runtime_to_database(bool _runtime);
+	bool save_pgsql_servers_runtime_to_database_scoped(
+		const std::vector<uint32_t>& hostgroups);
+	bool save_pgsql_servers_memory_to_disk_scoped(
+		const std::vector<uint32_t>& hostgroups);
 	void save_pgsql_firewall_from_runtime(bool);
 	void save_pgsql_query_rules_from_runtime(bool);
 	void save_pgsql_query_rules_fast_routing_from_runtime(bool);

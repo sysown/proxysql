@@ -433,6 +433,7 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	plugin_servers_module_tables_unit-t \
 	plugin_server_runtime_install_unit-t \
 	plugin_server_reconcile_unit-t \
+	plugin_server_materialization_unit-t \
 	plugin_servers_cluster_transport_unit-t \
 	protocol_unit-t auth_unit-t aws_iam_policy_unit-t aws_iam_connection_config_unit-t aws_iam_provider_boundary_unit-t aws_iam_completion_queue_unit-t aws_iam_session_state_unit-t aws_iam_connection_secret_unit-t aws_iam_pool_unit-t aws_iam_failure_unit-t aws_iam_kill_helper_unit-t aws_locality_policy_unit-t aws_locality_manager_unit-t connection_pool_unit-t \
 	rule_matching_unit-t hostgroups_unit-t monitor_health_unit-t \
@@ -637,6 +638,12 @@ plugin_server_runtime_install_unit-t: plugin_server_runtime_install_unit-t.cpp $
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
 plugin_server_reconcile_unit-t: plugin_server_reconcile_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+plugin_server_materialization_unit-t: plugin_server_materialization_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
