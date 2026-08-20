@@ -1,6 +1,9 @@
 /**
  * @file test_aurora_bgd_probe_tls-t.cpp
  * @brief Aurora BGD topology and target-membership probe TLS policy.
+ *
+ * @details Configures TLS on the production Aurora row and verifies both
+ *   topology discovery and target-membership discovery inherit that setting.
  */
 
 #include <cstdlib>
@@ -17,6 +20,7 @@ struct TestState {
 	int green_reader_hostgroup { 2033 };
 };
 
+/** @brief Verify topology and membership probes both use the configured TLS policy. */
 int test_tls_probe_policy(Context& context, TestState& state) {
 	if (publish_available(context, state.deployment) != EXIT_SUCCESS
 		|| configure(

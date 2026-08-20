@@ -1,6 +1,10 @@
 /**
  * @file test_aurora_bgd_smoke-t.cpp
  * @brief Basic Aurora BGD AVAILABLE discovery.
+ *
+ * @details Publishes one valid deployment and verifies AVAILABLE state,
+ *   continued ordinary production monitoring, target topology probing, and
+ *   target-membership discovery.
  */
 
 #include <cstdlib>
@@ -17,6 +21,7 @@ struct TestState {
 	int green_reader_hostgroup { 2013 };
 };
 
+/** @brief Verify AVAILABLE discovery and its production/topology probe policy. */
 int test_available_topology(Context& context, TestState& state) {
 	if (publish_available(context, state.deployment) != EXIT_SUCCESS
 		|| configure(
@@ -40,6 +45,7 @@ int test_available_topology(Context& context, TestState& state) {
 	return EXIT_SUCCESS;
 }
 
+/** @brief Verify AVAILABLE discovery probes the target membership set. */
 int test_target_membership(Context& context, TestState& state) {
 	ok(membership_probe_reached(context, 0, state.deployment),
 		"AVAILABLE discovery probes the target replica set");

@@ -1,6 +1,10 @@
 /**
  * @file test_aurora_bgd_repeated_deployment-t.cpp
  * @brief Reuse one Aurora worker for a later deployment fingerprint.
+ *
+ * @details Completes one deployment, drains its topology, then publishes a
+ *   different target fingerprint on the same worker and verifies the new
+ *   deployment can independently reach POST_PROCESSING.
  */
 
 #include <cstdlib>
@@ -61,6 +65,7 @@ int complete_deployment(Context& context, Aurora_BGD_Test_Deployment& deployment
 			? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
+/** @brief Complete the first deployment and release its completed latch. */
 int test_deployment_a(Context& context, TestState& state) {
 	if (publish_available(context, state.first) != EXIT_SUCCESS
 		|| configure(
@@ -80,6 +85,7 @@ int test_deployment_a(Context& context, TestState& state) {
 	return EXIT_SUCCESS;
 }
 
+/** @brief Verify the rearmed worker accepts and redirects the second deployment. */
 int test_deployment_b(
 	CommandLine& cl, Context& context, TestState& state
 ) {

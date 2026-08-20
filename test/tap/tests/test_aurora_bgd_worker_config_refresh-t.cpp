@@ -1,6 +1,10 @@
 /**
  * @file test_aurora_bgd_worker_config_refresh-t.cpp
  * @brief Aurora BGD active-worker refresh without FSM reset.
+ *
+ * @details Enters POST_PROCESSING, changes the explicit green hostgroups, and
+ *   verifies the existing worker retains its deployment phase and traffic pins
+ *   while applying the refreshed configuration in place.
  */
 
 #include <cstdlib>
@@ -20,6 +24,7 @@ struct TestState {
 	int route_hostgroup { 2206 };
 };
 
+/** @brief Verify an active worker refreshes configuration without resetting its FSM. */
 int test_active_worker_refresh(
 	CommandLine& cl, Context& context, TestState& state
 ) {

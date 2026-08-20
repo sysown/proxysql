@@ -85,26 +85,49 @@ const char* const AWS_AURORA_CONFIG_COLUMNS[AWS_AURORA_CONFIG_COLUMN_COUNT] = {
 	"comment"
 };
 
+/**
+ * @brief One hostgroup role extracted from an Aurora configuration row.
+ */
 struct Aurora_Hostgroup_Role {
-	const char* field;
-	int value;
+	const char* field;  ///< Configuration column naming the role.
+	int value;          ///< Hostgroup identifier assigned to the role.
 };
 
+/**
+ * @brief Parsed Aurora row and the validation state of its hostgroup component.
+ */
 struct Aurora_Config_Row {
-	std::vector<const char*> fields;
-	std::vector<Aurora_Hostgroup_Role> roles;
-	std::vector<std::string> errors;
-	int writer_hostgroup;
-	bool active;
-	bool locally_valid;
+	std::vector<const char*> fields;           ///< Canonical table projection.
+	std::vector<Aurora_Hostgroup_Role> roles;  ///< Non-NULL hostgroups and their roles.
+	std::vector<std::string> errors;            ///< Validation failures for this row.
+	int writer_hostgroup;                       ///< Component identity used in diagnostics.
+	bool active;                                ///< Whether the row participates in role conflicts.
+	bool locally_valid;                         ///< Whether row-local validation succeeded.
 };
 
+/**
+ * @brief Convert an optional Aurora field to text for diagnostics.
+ *
+ * @param value Nullable SQLite result field.
+ * @return The field value, or the literal `NULL`.
+ */
 std::string aws_aurora_nullable_value(const char* value) {
 	return value ? value : "NULL";
 }
 
 } // namespace
 
+/**
+ * @brief Validate an Aurora hostgroup candidate and return its canonical configured projection.
+ *
+ * @details The candidate must exactly match the configured Aurora Admin table
+ *   projection. The returned result contains only valid rows in canonical
+ *   order. Rows that conflict by hostgroup role are rejected as one component.
+ *
+ * @param candidate Candidate Aurora configuration rows.
+ * @param errors Receives one message for each rejected projection or component.
+ * @return Heap-allocated canonical result owned by the caller.
+ */
 SQLite3_result* validate_and_filter_aws_aurora_hostgroups(
 	const SQLite3_result* candidate,
 	std::vector<std::string>& errors
@@ -4206,6 +4229,16 @@ void MySQL_HostGroups_Manager::aws_rds_bgd_set_runtime_status(unsigned int write
 	wrunlock();
 }
 
+/**
+ * @brief Publish the node-local Aurora BGD state for one runtime row.
+ *
+ * @details The caller owns validation of the state vocabulary. Writer
+ *   hostgroups not present at runtime are ignored. Configuration reloads do
+ *   not write this column.
+ *
+ * @param writer_hostgroup Writer hostgroup identifying the runtime row.
+ * @param bgd_status Validated Aurora BGD status string to publish.
+ */
 void MySQL_HostGroups_Manager::update_aws_aurora_bgd_status(int writer_hostgroup, const std::string& bgd_status) {
 	wrlock();
 	const char* query = "UPDATE mysql_aws_aurora_hostgroups SET bgd_status=?1 WHERE writer_hostgroup=?2";
@@ -6263,6 +6296,27 @@ SQLite3_result * MySQL_HostGroups_Manager::get_mysql_errors(bool reset) {
 	return result;
 }
 
+/**
+ * @brief Construct the runtime configuration for one Aurora cluster.
+ *
+ * @param w Writer hostgroup.
+ * @param r Reader hostgroup.
+ * @param gw Explicit green writer hostgroup, or -1 for NULL.
+ * @param gr Explicit green reader hostgroup, or -1 for NULL.
+ * @param _port Aurora backend port.
+ * @param _end_addr Aurora domain name.
+ * @param maxl Maximum accepted replica lag in milliseconds.
+ * @param al Lag threshold used when adding a reader.
+ * @param minl Minimum lag value used by Aurora monitoring.
+ * @param lnc Number of lag checks used by Aurora monitoring.
+ * @param ci Monitor check interval in milliseconds.
+ * @param ct Monitor check timeout in milliseconds.
+ * @param _a Whether the cluster is active.
+ * @param wiar Whether the writer also belongs to the reader hostgroup.
+ * @param nrw Weight assigned to newly discovered readers.
+ * @param amc Missing checks required before automatic removal.
+ * @param c Optional configuration comment.
+ */
 AWS_Aurora_Info::AWS_Aurora_Info(int w, int r, int gw, int gr, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, int amc, char *c) {
 	comment=NULL;
 	if (c) {
@@ -6299,6 +6353,27 @@ AWS_Aurora_Info::~AWS_Aurora_Info() {
 	}
 }
 
+/**
+ * @brief Apply a refreshed Aurora configuration to this runtime entry.
+ *
+ * @param r Reader hostgroup.
+ * @param gw Explicit green writer hostgroup, or -1 for NULL.
+ * @param gr Explicit green reader hostgroup, or -1 for NULL.
+ * @param _port Aurora backend port.
+ * @param _end_addr Aurora domain name.
+ * @param maxl Maximum accepted replica lag in milliseconds.
+ * @param al Lag threshold used when adding a reader.
+ * @param minl Minimum lag value used by Aurora monitoring.
+ * @param lnc Number of lag checks used by Aurora monitoring.
+ * @param ci Monitor check interval in milliseconds.
+ * @param ct Monitor check timeout in milliseconds.
+ * @param _a Whether the cluster is active.
+ * @param wiar Whether the writer also belongs to the reader hostgroup.
+ * @param nrw Weight assigned to newly discovered readers.
+ * @param amc Missing checks required before automatic removal.
+ * @param c Optional configuration comment.
+ * @return true when any retained configuration value changed.
+ */
 bool AWS_Aurora_Info::update(int r, int gw, int gr, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, int amc, char *c) {
 	bool ret=false;
 	active_=true;
@@ -7201,6 +7276,23 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 		_whid, _rhid, _server_id, verbose, nullptr, -1, -1, -1);
 }
 
+/**
+ * @brief Place an Aurora member in its canonical writer hostgroup configuration.
+ *
+ * @details The explicit configuration values let BGD cleanup restore writer
+ *   placement without rereading mutable Aurora configuration. The member is
+ *   added to or removed from the reader hostgroup according to
+ *   writer_is_also_reader.
+ *
+ * @param _whid Writer hostgroup.
+ * @param _rhid Reader hostgroup.
+ * @param _server_id Aurora server identifier without the configured domain.
+ * @param verbose Whether to emit routing-change messages.
+ * @param domain_name_override Configured Aurora domain name.
+ * @param aurora_port_override Aurora backend port.
+ * @param writer_is_also_reader_override Whether the writer also belongs to the reader hostgroup.
+ * @param new_reader_weight_override Weight used when reader membership is created.
+ */
 void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(
 	int _whid, int _rhid, char *_server_id, bool verbose,
 	const char *domain_name_override, int aurora_port_override,

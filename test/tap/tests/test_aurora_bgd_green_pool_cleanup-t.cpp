@@ -1,6 +1,10 @@
 /**
  * @file test_aurora_bgd_green_pool_cleanup-t.cpp
  * @brief Aurora BGD rollback and completion behavior for green status pools.
+ *
+ * @details Builds green pools containing ONLINE, SHUNNED, OFFLINE_SOFT, and
+ *   OFFLINE_HARD servers. It verifies rollback preserves the pools, successful
+ *   completion drains eligible pools, and offline pools remain untouched.
  */
 
 #include <cstdlib>
@@ -82,6 +86,7 @@ bool configured_rows_preserved(Context& context, TestState& state) {
 	return true;
 }
 
+/** @brief Verify rollback does not drain configured green connection pools. */
 int test_rollback_preserves_green_pools(
 	CommandLine& cl, Context& context, TestState& state
 ) {
@@ -118,6 +123,7 @@ int test_rollback_preserves_green_pools(
 	return EXIT_SUCCESS;
 }
 
+/** @brief Verify completion drains ONLINE and SHUNNED green connection pools. */
 int test_successful_cleanup_drains_non_offline(
 	Context& context, TestState& state
 ) {
@@ -145,6 +151,7 @@ int test_successful_cleanup_drains_non_offline(
 	return EXIT_SUCCESS;
 }
 
+/** @brief Verify completion leaves OFFLINE_SOFT and OFFLINE_HARD pools unchanged. */
 int test_cleanup_preserves_offline_pools(Context& context, TestState& state) {
 	state.pools_after.clear();
 	for (GreenServer& server : state.servers) {

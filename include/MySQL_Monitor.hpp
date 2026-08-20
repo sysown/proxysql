@@ -566,18 +566,25 @@ struct AWS_RDS_BGD_Probe_Host {
 
 /**
  * @brief Aurora blue/green deployment phase published by the Aurora worker.
+ *
+ * @details Values after NONE mirror the statuses exposed by
+ *   `mysql.rds_topology`. The worker publishes the current value in
+ *   `runtime_mysql_aws_aurora_hostgroups.bgd_status`.
  */
 enum class AWS_Aurora_BGD_Status {
-	NONE = 0,
-	AVAILABLE,
-	SWITCHOVER_INITIATED,
-	SWITCHOVER_IN_PROGRESS,
-	SWITCHOVER_IN_POST_PROCESSING,
-	SWITCHOVER_COMPLETED,
+	NONE = 0,                       ///< No active deployment has been observed.
+	AVAILABLE,                      ///< The deployment is available for switchover.
+	SWITCHOVER_INITIATED,           ///< AWS has accepted the switchover request.
+	SWITCHOVER_IN_PROGRESS,         ///< AWS is switching the writer endpoint.
+	SWITCHOVER_IN_POST_PROCESSING,  ///< AWS is applying the final topology changes.
+	SWITCHOVER_COMPLETED,           ///< Cleanup completed and the deployment is latched.
 };
 
 /**
  * @brief Column positions in `AWS_Aurora_Hosts_resultset`.
+ *
+ * @details The resultset is the immutable configuration snapshot shared by
+ *   the Aurora coordinator and its per-writer-hostgroup workers.
  */
 enum AWS_Aurora_Hosts_Column {
 	AWS_AURORA_WRITER_HOSTGROUP = 0,
@@ -602,26 +609,45 @@ enum AWS_Aurora_Hosts_Column {
 
 /**
  * @brief Monitor worker owned by one Aurora writer hostgroup.
+ *
+ * @details The coordinator owns the object and joins its thread before
+ *   destruction. Mutable control fields are atomic because the coordinator
+ *   updates them while the worker is running.
  */
 struct AWS_Aurora_BGD_Worker {
-	int writer_hg = 0;
-	pthread_t thread {};
-	std::atomic_bool worker_stop {false};
-	std::atomic<uint64_t> current_checksum {0};
+	int writer_hg = 0;                            ///< Writer hostgroup monitored by this worker.
+	pthread_t thread {};                          ///< Worker thread handle owned by the coordinator.
+	std::atomic_bool worker_stop {false};         ///< Per-worker shutdown signal.
+	std::atomic<uint64_t> current_checksum {0};   ///< Latest configuration checksum to apply.
 };
 
 /**
  * @brief Stable identity of one Aurora blue/green deployment.
+ *
+ * @details AWS identifies a deployment through the target topology row. The
+ *   identity remains latched after completion so repeated observations of the
+ *   same completed deployment are idempotent.
  */
 struct AWS_Aurora_BGD_Fingerprint {
-	std::string target_id;
-	std::string target_endpoint;
-	int target_port = 0;
+	std::string target_id;        ///< Target identifier from `mysql.rds_topology`.
+	std::string target_endpoint;  ///< Target cluster endpoint used for topology probes.
+	int target_port = 0;          ///< Target endpoint port; zero means unset.
 
+	/**
+	 * @brief Check whether the deployment identity is incomplete.
+	 *
+	 * @return true when any required target identity field is missing.
+	 */
 	bool empty() const {
 		return target_id.empty() || target_endpoint.empty() || target_port <= 0;
 	}
 
+	/**
+	 * @brief Compare two deployment identities.
+	 *
+	 * @param rhs Deployment identity to compare with this instance.
+	 * @return true when the target identifier, endpoint, and port all match.
+	 */
 	bool operator==(const AWS_Aurora_BGD_Fingerprint& rhs) const {
 		return target_id == rhs.target_id
 			&& target_endpoint == rhs.target_endpoint
@@ -631,57 +657,76 @@ struct AWS_Aurora_BGD_Fingerprint {
 
 /**
  * @brief One production or target Aurora member retained by the BGD worker.
+ *
+ * @details Production snapshots describe the configured cluster before the
+ *   switchover. Target snapshots retain the matching production hostname and
+ *   resolved target address needed to redirect traffic during post-processing.
  */
 struct AWS_Aurora_BGD_Member {
-	std::string server_id;
-	std::string normalized_server_id;
-	std::string session_id;
-	std::string hostname;
-	std::string production_hostname;
-	std::string target_ip;
-	int port = 0;
-	int use_ssl = 0;
-	bool is_writer = false;
-	bool traffic_pin_applied = false;
+	std::string server_id;             ///< Server identifier reported by Aurora.
+	std::string normalized_server_id;  ///< Production identifier used to match a target member.
+	std::string session_id;            ///< Aurora session identifier; MASTER_SESSION_ID marks the writer.
+	std::string hostname;              ///< Hostname used to reach this observed member.
+	std::string production_hostname;   ///< Configured hostname whose traffic is redirected.
+	std::string target_ip;             ///< Resolved target address retained for DNS pinning.
+	int port = 0;                      ///< Backend port for the member.
+	int use_ssl = 0;                   ///< SSL setting inherited by target probes.
+	bool is_writer = false;            ///< True when the member owns MASTER_SESSION_ID.
+	bool traffic_pin_applied = false;  ///< True after production_hostname is pinned to target_ip.
 };
 
 /**
  * @brief State carried by one existing per-writer Aurora monitor worker.
+ *
+ * @details The worker owns this state on its stack and mutates it across poll
+ *   cycles without additional locking. Configuration-derived fields may be
+ *   refreshed in place; deployment identity, membership snapshots, and action
+ *   flags preserve the switchover FSM's progress.
  */
 struct AWS_Aurora_BGD_State {
-	unsigned int writer_hg = 0;
-	unsigned int reader_hg = 0;
-	int green_writer_hg = -1;
-	int green_reader_hg = -1;
-	unsigned int max_lag_ms = 0;
-	unsigned int check_interval_ms = 0;
-	unsigned int check_timeout_ms = 0;
-	unsigned int add_lag_ms = 0;
-	unsigned int min_lag_ms = 0;
-	unsigned int lag_num_checks = 1;
-	unsigned int autopurge_missing_checks = 0;
-	int writer_is_also_reader = 0;
-	int new_reader_weight = 1;
-	int target_use_ssl = 0;
-	std::string domain_name;
+	unsigned int writer_hg = 0;                  ///< Production writer hostgroup.
+	unsigned int reader_hg = 0;                  ///< Production reader hostgroup.
+	int green_writer_hg = -1;                    ///< Configured green writer hostgroup; -1 means NULL.
+	int green_reader_hg = -1;                    ///< Configured green reader hostgroup; -1 means NULL.
+	unsigned int max_lag_ms = 0;                 ///< Maximum accepted Aurora replica lag.
+	unsigned int check_interval_ms = 0;          ///< Baseline Aurora monitoring interval.
+	unsigned int check_timeout_ms = 0;           ///< Timeout for Aurora and topology probes.
+	unsigned int add_lag_ms = 0;                 ///< Lag threshold used when adding a reader.
+	unsigned int min_lag_ms = 0;                 ///< Minimum lag value used by Aurora monitoring.
+	unsigned int lag_num_checks = 1;             ///< Consecutive lag samples used by Aurora monitoring.
+	unsigned int autopurge_missing_checks = 0;   ///< Missing samples required before automatic removal.
+	int writer_is_also_reader = 0;               ///< Whether the writer also belongs to the reader hostgroup.
+	int new_reader_weight = 1;                   ///< Weight assigned to newly discovered readers.
+	int target_use_ssl = 0;                      ///< SSL setting used for target topology and membership probes.
+	std::string domain_name;                     ///< Domain appended to Aurora server identifiers.
 
-	AWS_Aurora_BGD_Status status = AWS_Aurora_BGD_Status::NONE;
-	RDS_BGD_Topology_Monitor_State topology_state = TOPOLOGY_TABLE_CHECK;
-	AWS_Aurora_BGD_Fingerprint fingerprint;
-	std::vector<AWS_RDS_BGD_Probe_Host> production_probe_hosts;
-	std::vector<AWS_Aurora_BGD_Member> production_members;
-	std::vector<AWS_Aurora_BGD_Member> target_members;
+	AWS_Aurora_BGD_Status status = AWS_Aurora_BGD_Status::NONE;  ///< Current FSM phase.
+	RDS_BGD_Topology_Monitor_State topology_state = TOPOLOGY_TABLE_CHECK;  ///< Next topology query form.
+	AWS_Aurora_BGD_Fingerprint fingerprint;                         ///< Active or completed deployment identity.
+	std::vector<AWS_RDS_BGD_Probe_Host> production_probe_hosts;     ///< Configured production probe endpoints.
+	std::vector<AWS_Aurora_BGD_Member> production_members;          ///< Last complete production membership.
+	std::vector<AWS_Aurora_BGD_Member> target_members;              ///< Last complete target membership.
 
-	bool production_snapshot_frozen = false;
-	bool production_probe_suspended = false;
-	bool target_snapshot_complete = false;
+	bool production_snapshot_frozen = false;  ///< Prevents active switchover membership from being replaced.
+	bool production_probe_suspended = false;  ///< Stops ordinary Aurora probes while target traffic is active.
+	bool target_snapshot_complete = false;     ///< True only when every production member has one target match.
 
+	/**
+	 * @brief Check whether target membership is safe to apply.
+	 *
+	 * @return true when the retained target snapshot is complete and unambiguous.
+	 */
 	bool has_complete_target_snapshot() const {
 		return target_snapshot_complete;
 	}
 };
 
-// Maps an Aurora switchover status enum to its runtime string.
+/**
+ * @brief Map an Aurora BGD status to its runtime string.
+ *
+ * @param status Status to convert.
+ * @return Stable status string stored in the runtime Aurora hostgroup table.
+ */
 const char* aws_aurora_bgd_status_str(AWS_Aurora_BGD_Status status);
 
 /**
@@ -842,9 +887,23 @@ class MySQL_Monitor {
 	void * monitor_group_replication();
 	void * monitor_group_replication_2();
 	void * monitor_galera();
+	/**
+	 * @brief Coordinate per-hostgroup Aurora monitor workers.
+	 *
+	 * @details Rebuilds the shared Aurora configuration snapshot when its
+	 *   checksum changes, starts one worker for each configured writer
+	 *   hostgroup, refreshes running workers, and joins workers removed from
+	 *   the active configuration during shutdown or reload.
+	 *
+	 * @return nullptr when monitoring stops.
+	 */
 	void * monitor_aws_aurora();
 	/**
 	 * @brief Load the configuration rows for one Aurora worker.
+	 *
+	 * @param writer_hg Writer hostgroup owned by the worker.
+	 * @param current_checksum Per-hostgroup checksum published by the coordinator.
+	 * @param candidate Receives a complete configuration snapshot on success.
 	 *
 	 * @return true when the rows still match the coordinator-provided checksum.
 	 */
@@ -852,6 +911,16 @@ class MySQL_Monitor {
 		int writer_hg, uint64_t current_checksum, AWS_Aurora_BGD_State& candidate);
 	/**
 	 * @brief Refresh only configuration-derived fields of a running Aurora worker.
+	 *
+	 * @details Preserves deployment identity, membership, and applied-action
+	 *   state while replacing the current configuration and forcing an
+	 *   immediate worker iteration.
+	 *
+	 * @param st Worker-owned Aurora BGD state to refresh.
+	 * @param current_checksum Per-hostgroup checksum published by the coordinator.
+	 * @param next_loop_at Next scheduled worker iteration; reset to zero on success.
+	 *
+	 * @return true when a matching configuration snapshot was applied.
 	 */
 	bool aws_aurora_bgd_refresh_worker_config(
 		AWS_Aurora_BGD_State& st, uint64_t current_checksum,
@@ -860,6 +929,10 @@ class MySQL_Monitor {
 	 * @brief Refresh the Aurora BGD worker's last complete production snapshot.
 	 *
 	 * @details Invalid or incomplete observations retain the previous snapshot.
+	 *   A changed production snapshot invalidates any retained target snapshot.
+	 *
+	 * @param st Worker-owned Aurora BGD state to update.
+	 * @param result Successful ordinary Aurora membership observation.
 	 */
 	void aws_aurora_bgd_refresh_production_snapshot(
 		AWS_Aurora_BGD_State& st, const AWS_Aurora_status_entry& result);
@@ -869,6 +942,9 @@ class MySQL_Monitor {
 	 * @details INITIATED only suspends production probing. IN_PROGRESS demotes
 	 *   the snapshotted writer on entry. POST_PROCESSING applies each complete
 	 *   member mapping once and restores canonical writer placement.
+	 *
+	 * @param st Worker-owned state whose routing effects are applied.
+	 * @param status_changed Whether the current status was entered in this cycle.
 	 */
 	void aws_aurora_bgd_apply_active_actions(
 		AWS_Aurora_BGD_State& st, bool status_changed);
@@ -878,6 +954,9 @@ class MySQL_Monitor {
 	 * @details Reconciles writer placement, removes mapped traffic pins, drains
 	 *   eligible configured green pools, resumes production probing, and enters
 	 *   the completed latch while retaining the deployment fingerprint.
+	 *
+	 * @param st Worker-owned state to clean up and latch.
+	 * @param completed_fingerprint Identity reported by the completed target row.
 	 */
 	void aws_aurora_bgd_apply_completion(
 		AWS_Aurora_BGD_State& st,
@@ -888,12 +967,18 @@ class MySQL_Monitor {
 	 * @details Removes only applied traffic pins, drains affected production
 	 *   pools, restores canonical writer placement, resumes ordinary probing,
 	 *   and optionally clears the deployment identity.
+	 *
+	 * @param st Worker-owned state whose applied effects are reversed.
+	 * @param next_status Validated status to enter after cleanup.
+	 * @param clear_deployment Whether to discard the retained deployment identity.
 	 */
 	void aws_aurora_bgd_apply_rollback(
 		AWS_Aurora_BGD_State& st, AWS_Aurora_BGD_Status next_status,
 		bool clear_deployment);
 	/**
 	 * @brief Release the completed latch after a successful topology drain.
+	 *
+	 * @param st Worker-owned state holding the completed deployment identity.
 	 */
 	void aws_aurora_bgd_release_completed_latch(AWS_Aurora_BGD_State& st);
 	/**
@@ -902,6 +987,9 @@ class MySQL_Monitor {
 	 * @details Discovery is serialized with the ordinary Aurora probe. This method
 	 *   validates topology before publishing status and replaces target membership
 	 *   only with a complete, unambiguous, fully resolved snapshot.
+	 *
+	 * @param st Worker-owned state advanced by the discovery cycle.
+	 * @param worker_stop Per-worker shutdown signal checked around remote work.
 	 */
 	void aws_aurora_bgd_run_discovery_cycle(
 		AWS_Aurora_BGD_State& st, std::atomic_bool& worker_stop);

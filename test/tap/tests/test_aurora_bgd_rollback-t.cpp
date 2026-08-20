@@ -1,6 +1,10 @@
 /**
  * @file test_aurora_bgd_rollback-t.cpp
  * @brief Aurora BGD rollback from each active writer phase.
+ *
+ * @details Runs independent deployments through INITIATED, IN_PROGRESS, and
+ *   POST_PROCESSING before publishing AVAILABLE again. Each case verifies only
+ *   the routing and status effects that its phase must reverse.
  */
 
 #include <cstdlib>
@@ -28,6 +32,7 @@ int prepare_available(
 		? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
+/** @brief Verify INITIATED can return to AVAILABLE without routing changes. */
 int test_initiated_rollback(Context& context, TestState& state) {
 	if (prepare_available(context, state, 2130, 2131) != EXIT_SUCCESS
 		|| publish_status(
@@ -48,6 +53,7 @@ int test_initiated_rollback(Context& context, TestState& state) {
 	return EXIT_SUCCESS;
 }
 
+/** @brief Verify IN_PROGRESS rollback restores canonical writer placement. */
 int test_in_progress_rollback(Context& context, TestState& state) {
 	if (reset(context) != EXIT_SUCCESS
 		|| prepare_available(context, state, 2140, 2141) != EXIT_SUCCESS
@@ -78,6 +84,7 @@ int test_in_progress_rollback(Context& context, TestState& state) {
 	return EXIT_SUCCESS;
 }
 
+/** @brief Verify POST_PROCESSING rollback removes every applied traffic pin. */
 int test_post_processing_rollback(
 	CommandLine& cl, Context& context, TestState& state
 ) {

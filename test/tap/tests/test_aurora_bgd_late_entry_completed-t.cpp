@@ -1,6 +1,10 @@
 /**
  * @file test_aurora_bgd_late_entry_completed-t.cpp
  * @brief First observation of Aurora BGD completion and later rearm.
+ *
+ * @details Starts a worker on a lone completed TARGET row, verifies the
+ *   resulting cleanup is a routing no-op, then drains the topology and checks
+ *   that discovery rearms for a later deployment.
  */
 
 #include <cstdlib>
@@ -16,6 +20,7 @@ struct TestState {
 	int route_hostgroup { 2122 };
 };
 
+/** @brief Verify direct entry at completion preserves source routing and latches identity. */
 int test_first_completed(
 	CommandLine& cl, Context& context, TestState& state
 ) {
@@ -67,6 +72,7 @@ int test_first_completed(
 	return EXIT_SUCCESS;
 }
 
+/** @brief Verify an empty topology releases the completed latch back to NONE. */
 int test_completed_empty_topology(Context& context, TestState& state) {
 	if (context.simulator.topology_delete(
 		aurora_bgd_topology_backends(state.deployment)) != EXIT_SUCCESS) {

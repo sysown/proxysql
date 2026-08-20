@@ -1,6 +1,10 @@
 /**
  * @file test_aurora_bgd_late_entry_writer_phases-t.cpp
  * @brief First observation of each active Aurora BGD writer phase.
+ *
+ * @details Starts independent workers directly in INITIATED, IN_PROGRESS, and
+ *   POST_PROCESSING to verify phase-specific routing actions and the switch
+ *   from ordinary production probes to target-membership probes.
  */
 
 #include <cstdlib>
@@ -37,6 +41,7 @@ bool active_probe_policy(
 	return membership_seen;
 }
 
+/** @brief Verify direct INITIATED entry suspends ordinary production probing. */
 int test_first_initiated(Context& context, TestState& state) {
 	if (publish_initial(
 			context, state.initiated, "SWITCHOVER_INITIATED") != EXIT_SUCCESS
@@ -59,6 +64,7 @@ int test_first_initiated(Context& context, TestState& state) {
 	return EXIT_SUCCESS;
 }
 
+/** @brief Verify direct IN_PROGRESS entry demotes the source writer. */
 int test_first_in_progress(Context& context, TestState& state) {
 	if (reset(context) != EXIT_SUCCESS
 		|| publish_initial(
@@ -78,6 +84,7 @@ int test_first_in_progress(Context& context, TestState& state) {
 	return EXIT_SUCCESS;
 }
 
+/** @brief Verify direct POST_PROCESSING entry redirects every mapped member. */
 int test_first_post_processing(
 	CommandLine& cl, Context& context, TestState& state
 ) {

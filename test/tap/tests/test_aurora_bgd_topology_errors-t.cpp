@@ -1,6 +1,10 @@
 /**
  * @file test_aurora_bgd_topology_errors-t.cpp
  * @brief Aurora BGD state retention across generic metadata errors.
+ *
+ * @details Injects non-table-missing errors into topology and target-membership
+ *   probes. Each case verifies the active phase and its already-applied routing
+ *   effects remain unchanged until a valid observation arrives.
  */
 
 #include <cstdlib>
@@ -15,6 +19,7 @@ struct TestState {
 	vector<int> routes { 2194, 2195, 2196 };
 };
 
+/** @brief Verify a generic topology error retains active state and writer placement. */
 int test_generic_topology_error(Context& context, TestState& state) {
 	if (publish_initial(
 			context, state.deployment, "SWITCHOVER_IN_PROGRESS") != EXIT_SUCCESS
@@ -45,6 +50,7 @@ int test_generic_topology_error(Context& context, TestState& state) {
 	return EXIT_SUCCESS;
 }
 
+/** @brief Verify a generic membership error retains post-processing traffic pins. */
 int test_generic_membership_error(
 	CommandLine& cl, Context& context, TestState& state
 ) {

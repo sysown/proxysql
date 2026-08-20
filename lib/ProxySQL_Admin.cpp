@@ -207,6 +207,17 @@ static void BQE1(SQLite3DB *db, const vector<string>& tbs, const string& p1, con
 	}
 }
 
+/**
+ * @brief Copy configured Aurora hostgroup columns between SQLite schemas.
+ *
+ * @details Runtime-only BGD status is intentionally excluded from the
+ *   persisted projection.
+ *
+ * @param db Admin database containing both schemas.
+ * @param destination_schema Schema receiving the configured rows.
+ * @param source_schema Schema providing the configured rows.
+ * @return true when the copy statement succeeds.
+ */
 static bool copy_mysql_aws_aurora_hostgroups(
 	SQLite3DB* db,
 	const string& destination_schema,
@@ -220,10 +231,22 @@ static bool copy_mysql_aws_aurora_hostgroups(
 	return db->execute(query.c_str());
 }
 
+/**
+ * @brief Load the configured Aurora hostgroup projection from disk into Admin.
+ *
+ * @param db Admin database containing the main and disk schemas.
+ * @return true when the configured rows were copied successfully.
+ */
 bool copy_mysql_aws_aurora_hostgroups_from_disk(SQLite3DB* db) {
 	return copy_mysql_aws_aurora_hostgroups(db, "main", "disk");
 }
 
+/**
+ * @brief Save the configured Aurora hostgroup projection from Admin to disk.
+ *
+ * @param db Admin database containing the main and disk schemas.
+ * @return true when the configured rows were copied successfully.
+ */
 bool copy_mysql_aws_aurora_hostgroups_to_disk(SQLite3DB* db) {
 	return copy_mysql_aws_aurora_hostgroups(db, "disk", "main");
 }
@@ -7396,6 +7419,15 @@ void ProxySQL_Admin::save_scheduler_runtime_to_database(bool _runtime) {
 	free(args);
 }
 
+/**
+ * @brief Replace an Admin Aurora hostgroup table with an HGM runtime snapshot.
+ *
+ * @param db Destination Admin database.
+ * @param resultset Aurora rows returned by MySQL_HostGroups_Manager.
+ * @param runtime Selects runtime_mysql_aws_aurora_hostgroups when true and
+ *        mysql_aws_aurora_hostgroups when false.
+ * @return true when the destination table was replaced.
+ */
 bool materialize_mysql_aws_aurora_hostgroups(
 	SQLite3DB* db,
 	const SQLite3_result* resultset,

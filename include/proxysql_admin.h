@@ -335,8 +335,20 @@ bool materialize_mysql_aws_aurora_hostgroups(
 	bool runtime
 );
 
-/** Copy the configured Aurora hostgroup projection between Admin and disk. */
+/**
+ * @brief Load the configured Aurora hostgroup projection from disk into Admin.
+ *
+ * @param db Admin database containing the main and disk schemas.
+ * @return true when the configured rows were copied successfully.
+ */
 bool copy_mysql_aws_aurora_hostgroups_from_disk(SQLite3DB* db);
+
+/**
+ * @brief Save the configured Aurora hostgroup projection from Admin to disk.
+ *
+ * @param db Admin database containing the main and disk schemas.
+ * @return true when the configured rows were copied successfully.
+ */
 bool copy_mysql_aws_aurora_hostgroups_to_disk(SQLite3DB* db);
 
 class ProxySQL_Admin {

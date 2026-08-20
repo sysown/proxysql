@@ -11,10 +11,20 @@ using namespace std;
 
 namespace {
 
+/**
+ * @brief Convert a topology probe kind to its simulator log value.
+ * @param kind Probe kind to convert.
+ * @return Stable simulator log string.
+ */
 const char* probe_kind_string(BGD_Probe_Kind kind) {
 	return kind == BGD_Probe_Kind::table_check ? "table_check" : "metadata";
 }
 
+/**
+ * @brief Parse a topology probe kind from a simulator log row.
+ * @param value Stored probe kind.
+ * @return Result code and parsed kind.
+ */
 rc_t<BGD_Probe_Kind> parse_probe_kind(string value) {
 	if (value == "table_check") {
 		return { EXIT_SUCCESS, BGD_Probe_Kind::table_check };
@@ -25,10 +35,20 @@ rc_t<BGD_Probe_Kind> parse_probe_kind(string value) {
 	return { EXIT_FAILURE, BGD_Probe_Kind::table_check };
 }
 
+/**
+ * @brief Convert an Aurora probe kind to its simulator log value.
+ * @param kind Probe kind to convert.
+ * @return Stable simulator log string.
+ */
 const char* replica_probe_kind_string(Aurora_Replica_Probe_Kind kind) {
 	return kind == Aurora_Replica_Probe_Kind::ordinary ? "ordinary" : "bgd_membership";
 }
 
+/**
+ * @brief Parse an Aurora probe kind from a simulator log row.
+ * @param value Stored probe kind.
+ * @return Result code and parsed kind.
+ */
 rc_t<Aurora_Replica_Probe_Kind> parse_replica_probe_kind(string value) {
 	if (value == "ordinary") {
 		return { EXIT_SUCCESS, Aurora_Replica_Probe_Kind::ordinary };
@@ -41,6 +61,12 @@ rc_t<Aurora_Replica_Probe_Kind> parse_replica_probe_kind(string value) {
 
 }  // namespace
 
+/**
+ * @brief Replace the topology rows served by a set of backends.
+ * @param backends Backends that should serve the topology.
+ * @param rows Topology rows returned by those backends.
+ * @return EXIT_SUCCESS on success, otherwise EXIT_FAILURE.
+ */
 int BGD_Simulator::topology_update(vector<Endpoint> backends, vector<BGD_Topology_Row> rows) {
 	if (backends.empty()) {
 		return EXIT_FAILURE;
@@ -70,6 +96,11 @@ int BGD_Simulator::topology_update(vector<Endpoint> backends, vector<BGD_Topolog
 	return execute_transaction(statements);
 }
 
+/**
+ * @brief Publish an empty topology table on a set of backends.
+ * @param backends Backends that should return an empty table.
+ * @return EXIT_SUCCESS on success, otherwise EXIT_FAILURE.
+ */
 int BGD_Simulator::topology_delete(vector<Endpoint> backends) {
 	if (backends.empty()) {
 		return EXIT_FAILURE;
@@ -87,10 +118,22 @@ int BGD_Simulator::topology_delete(vector<Endpoint> backends) {
 	return execute_transaction(statements);
 }
 
+/**
+ * @brief Simulate an absent topology table on a set of backends.
+ * @param backends Backends that should report the table as absent.
+ * @return EXIT_SUCCESS on success, otherwise EXIT_FAILURE.
+ */
 int BGD_Simulator::topology_drop(vector<Endpoint> backends) {
 	return topology_error(backends, 1146, "Table 'mysql.rds_topology' doesn't exist");
 }
 
+/**
+ * @brief Make topology probes return a selected MySQL error.
+ * @param backends Backends that should return the error.
+ * @param error_code Nonzero MySQL error code.
+ * @param error_msg MySQL error text.
+ * @return EXIT_SUCCESS on success, otherwise EXIT_FAILURE.
+ */
 int BGD_Simulator::topology_error(vector<Endpoint> backends, int error_code, string error_msg) {
 	if (backends.empty() || error_code == 0) {
 		return EXIT_FAILURE;
@@ -113,6 +156,13 @@ int BGD_Simulator::topology_error(vector<Endpoint> backends, int error_code, str
 	return execute_transaction(statements);
 }
 
+/**
+ * @brief Replace one Aurora membership set and its serving backends.
+ * @param replica_set_id Stable simulator membership identity.
+ * @param rows Replica rows returned for the set.
+ * @param backends Backends that should serve the set.
+ * @return EXIT_SUCCESS on success, otherwise EXIT_FAILURE.
+ */
 int BGD_Simulator::replica_update(
 	string replica_set_id,
 	vector<Aurora_Replica_Row> rows,
@@ -150,6 +200,11 @@ int BGD_Simulator::replica_update(
 	return execute_transaction(statements);
 }
 
+/**
+ * @brief Remove one Aurora membership set and its backend controls.
+ * @param replica_set_id Stable simulator membership identity.
+ * @return EXIT_SUCCESS on success, otherwise EXIT_FAILURE.
+ */
 int BGD_Simulator::replica_delete(string replica_set_id) {
 	if (replica_set_id.empty()) {
 		return EXIT_FAILURE;
@@ -163,12 +218,24 @@ int BGD_Simulator::replica_delete(string replica_set_id) {
 	return execute_transaction(statements);
 }
 
+/**
+ * @brief Simulate an absent REPLICA_HOST_STATUS table on selected backends.
+ * @param backends Backends that should report the table as absent.
+ * @return EXIT_SUCCESS on success, otherwise EXIT_FAILURE.
+ */
 int BGD_Simulator::replica_drop(vector<Endpoint> backends) {
 	return replica_error(
 		backends, 1146,
 		"Table 'information_schema.REPLICA_HOST_STATUS' doesn't exist");
 }
 
+/**
+ * @brief Make Aurora membership probes return a selected MySQL error.
+ * @param backends Backends that should return the error.
+ * @param error_code Nonzero MySQL error code.
+ * @param error_msg MySQL error text.
+ * @return EXIT_SUCCESS on success, otherwise EXIT_FAILURE.
+ */
 int BGD_Simulator::replica_error(
 	vector<Endpoint> backends, int error_code, string error_msg)
 {
@@ -191,6 +258,10 @@ int BGD_Simulator::replica_error(
 	return execute_transaction(statements);
 }
 
+/**
+ * @brief Remove all shared topology, replica, control, and probe-log state.
+ * @return EXIT_SUCCESS on success, otherwise EXIT_FAILURE.
+ */
 int BGD_Simulator::cleanup() {
 	vector<string> statements {
 		"DELETE FROM READONLY_STATUS",
@@ -219,6 +290,10 @@ int BGD_Simulator::cleanup() {
 	return execute_transaction(statements);
 }
 
+/**
+ * @brief Read the last topology-probe sequence.
+ * @return Result code and the current sequence number.
+ */
 rc_t<uint64_t> BGD_Simulator::probe_log_last_sequence() {
 	if (connection() == nullptr) {
 		return { EXIT_FAILURE, 0 };
@@ -236,6 +311,11 @@ rc_t<uint64_t> BGD_Simulator::probe_log_last_sequence() {
 	};
 }
 
+/**
+ * @brief Read topology probes recorded after a sequence.
+ * @param sequence_id Exclusive lower sequence bound.
+ * @return Result code and ordered probe records.
+ */
 rc_t<vector<BGD_Probe_Log>> BGD_Simulator::probe_log_since(uint64_t sequence_id) {
 	if (connection() == nullptr) {
 		return { EXIT_FAILURE, {} };
@@ -271,6 +351,15 @@ rc_t<vector<BGD_Probe_Log>> BGD_Simulator::probe_log_since(uint64_t sequence_id)
 	return { EXIT_SUCCESS, move(logs) };
 }
 
+/**
+ * @brief Wait for a matching topology probe.
+ * @param sequence_id Exclusive lower sequence bound.
+ * @param backend Expected backend.
+ * @param probe_kind Expected topology query form.
+ * @param timeout_ms Maximum wait in milliseconds.
+ * @param encrypted Expected TLS state, or -1 to accept either.
+ * @return Result code and the matching probe record.
+ */
 rc_t<BGD_Probe_Log> BGD_Simulator::wait_for_probe_log(
 	uint64_t sequence_id,
 	Endpoint backend,
@@ -310,6 +399,10 @@ rc_t<BGD_Probe_Log> BGD_Simulator::wait_for_probe_log(
 	return { ETIMEDOUT, {} };
 }
 
+/**
+ * @brief Read the last Aurora replica-probe sequence.
+ * @return Result code and the current sequence number.
+ */
 rc_t<uint64_t> BGD_Simulator::replica_probe_log_last_sequence() {
 	if (connection() == nullptr) {
 		return { EXIT_FAILURE, 0 };
@@ -326,6 +419,11 @@ rc_t<uint64_t> BGD_Simulator::replica_probe_log_last_sequence() {
 	};
 }
 
+/**
+ * @brief Read Aurora replica probes recorded after a sequence.
+ * @param sequence_id Exclusive lower sequence bound.
+ * @return Result code and ordered probe records.
+ */
 rc_t<vector<Aurora_Replica_Probe_Log>> BGD_Simulator::replica_probe_log_since(
 	uint64_t sequence_id)
 {
@@ -363,6 +461,16 @@ rc_t<vector<Aurora_Replica_Probe_Log>> BGD_Simulator::replica_probe_log_since(
 	return { EXIT_SUCCESS, move(logs) };
 }
 
+/**
+ * @brief Wait for a matching Aurora replica probe.
+ * @param sequence_id Exclusive lower sequence bound.
+ * @param backend Expected backend.
+ * @param probe_kind Expected Aurora query path.
+ * @param timeout_ms Maximum wait in milliseconds.
+ * @param encrypted Expected TLS state, or -1 to accept either.
+ * @param replica_set_id Expected set identity, or empty to accept any set.
+ * @return Result code and the matching probe record.
+ */
 rc_t<Aurora_Replica_Probe_Log> BGD_Simulator::wait_for_replica_probe_log(
 	uint64_t sequence_id,
 	Endpoint backend,
@@ -406,6 +514,11 @@ rc_t<Aurora_Replica_Probe_Log> BGD_Simulator::wait_for_replica_probe_log(
 	return { ETIMEDOUT, {} };
 }
 
+/**
+ * @brief Execute simulator state changes as one transaction.
+ * @param statements SQL statements to execute in order.
+ * @return EXIT_SUCCESS after commit, otherwise EXIT_FAILURE after rollback.
+ */
 int BGD_Simulator::execute_transaction(vector<string>& statements) {
 	if (execute("START TRANSACTION") != EXIT_SUCCESS) {
 		return EXIT_FAILURE;
@@ -423,6 +536,11 @@ int BGD_Simulator::execute_transaction(vector<string>& statements) {
 	return EXIT_SUCCESS;
 }
 
+/**
+ * @brief Build a SQL predicate identifying one simulator backend.
+ * @param backend Backend address and port.
+ * @return SQL predicate for simulator control tables.
+ */
 string BGD_Simulator::backend_predicate(Endpoint backend) {
 	return "backend_ip=" + sql_quote(backend.host) +
 		" AND backend_port=" + to_string(backend.port);

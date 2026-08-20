@@ -1,6 +1,11 @@
 /**
  * @file test_aurora_bgd_automatic_discovery-t.cpp
  * @brief Aurora BGD runtime derivation for NULL green hostgroups.
+ *
+ * @details Verifies that automatic discovery:
+ *   1. Preserves NULL green hostgroups in configured and runtime rows.
+ *   2. Moves from absent topology to AVAILABLE without rewriting configuration.
+ *   3. Remains idempotent across repeated AVAILABLE observations.
  */
 
 #include <cstdlib>
@@ -40,6 +45,7 @@ bool persistent_row_stays_null(Context& context, int writer_hostgroup) {
 		"1");
 }
 
+/** @brief Verify discovery preserves NULL green hostgroups in both table projections. */
 int test_null_green_hostgroups(Context& context, TestState& state) {
 	if (publish_available(context, state.first) != EXIT_SUCCESS
 		|| configure(
@@ -61,6 +67,7 @@ int test_null_green_hostgroups(Context& context, TestState& state) {
 	return EXIT_SUCCESS;
 }
 
+/** @brief Verify an absent topology can later be discovered as AVAILABLE. */
 int test_absent_then_available(Context& context, TestState& state) {
 	if (context.simulator.replica_update(
 			state.second.production.replica_set_id,
@@ -98,6 +105,7 @@ int test_absent_then_available(Context& context, TestState& state) {
 	return EXIT_SUCCESS;
 }
 
+/** @brief Verify repeated discovery leaves the runtime and configured rows unchanged. */
 int test_repeated_discovery(Context& context, TestState& state) {
 	usleep(300000);
 	ok(runtime_row_stays_null(context, 2024, 2025, "AVAILABLE")

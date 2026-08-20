@@ -1,6 +1,10 @@
 /**
  * @file test_aurora_bgd_config_refresh_after_completion-t.cpp
  * @brief Aurora BGD configuration refresh while completion is latched.
+ *
+ * @details Completes a deployment from IN_PROGRESS, then changes the worker's
+ *   green hostgroups and confirms the completed fingerprint remains latched
+ *   while the refreshed configuration becomes visible.
  */
 
 #include <cstdlib>
@@ -15,6 +19,7 @@ struct TestState {
 	int reader_hostgroup { 2211 };
 };
 
+/** @brief Enter the completed latch and verify canonical writer placement. */
 int test_completed_latch(Context& context, TestState& state) {
 	if (publish_available(context, state.deployment) != EXIT_SUCCESS
 		|| configure(
@@ -44,6 +49,7 @@ int test_completed_latch(Context& context, TestState& state) {
 	return EXIT_SUCCESS;
 }
 
+/** @brief Verify a completed worker applies refreshed green hostgroups in place. */
 int test_config_refresh_after_completion(Context& context, TestState& state) {
 	if (aurora_bgd_execute_all(context.admin, {
 		"UPDATE mysql_aws_aurora_hostgroups SET check_timeout_ms=950 "

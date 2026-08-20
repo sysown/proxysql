@@ -445,6 +445,20 @@ std::pair<int, string> load_aurora_backend_addresses(
 
 }  // namespace
 
+/**
+ * @brief Publish ordinary Aurora state through backend-address replica sets.
+ *
+ * @details DOMAIN_NAME identifies the set, and CLUSTER_SIM_HOST_FILE resolves
+ *   every SERVER_ID + DOMAIN_NAME member hostname to its simulated backend
+ *   address. Publication is transactional. Snapshot replacement waits until
+ *   every retained set has received an ordinary Aurora probe.
+ *
+ * @param proxysql_sqlite Connection to the simulator SQLite interface.
+ * @param servers Aurora members grouped by DOMAIN_NAME.
+ * @param mode State replacement policy for rows and backend controls.
+ * @return Pair containing EXIT_SUCCESS and an empty message, or EXIT_FAILURE
+ *   and a diagnostic message.
+ */
 std::pair<int, string> prepare_aurora_cluster_state(
 	MYSQL* proxysql_sqlite,
 	const vector<aurora_server_state_t>& servers,

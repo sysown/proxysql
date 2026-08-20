@@ -1,6 +1,10 @@
 /**
  * @file test_aurora_bgd_reader_policy-t.cpp
  * @brief Aurora BGD mapped-reader eligibility and routing.
+ *
+ * @details Publishes a complete target membership, enters POST_PROCESSING,
+ *   and verifies each configured production reader remains eligible while its
+ *   hostname routes to the matched target reader.
  */
 
 #include <cstdlib>
@@ -19,6 +23,7 @@ struct TestState {
 	vector<int> reader_routes { 2054, 2055 };
 };
 
+/** @brief Verify mapped readers stay ONLINE and route to their target counterparts. */
 int test_mapped_readers(CommandLine& cl, Context& context, TestState& state) {
 	if (publish_available(context, state.deployment) != EXIT_SUCCESS
 		|| configure(

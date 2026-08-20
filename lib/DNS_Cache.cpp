@@ -460,6 +460,12 @@ void DNS_Cache::remove(const std::string& hostname) {
 	assert(rc == 0);
 }
 
+/**
+ * @brief Clear ordinary DNS resolutions while retaining explicit pins.
+ *
+ * @details Unpinned records are removed. Pinned records keep their fixed
+ *   address while their ordinary resolution list and rotation counter are reset.
+ */
 void DNS_Cache::clear() {
 	size_t records_removed = 0;
 	int rc = pthread_rwlock_wrlock(&rwlock_);

@@ -6035,6 +6035,12 @@ bool AWS_Aurora_monitor_node::add_entry(AWS_Aurora_status_entry *ase) {
 }
 
 
+/**
+ * @brief Map an Aurora BGD status to its runtime string.
+ *
+ * @param status Status to convert.
+ * @return Stable status string stored in the runtime Aurora hostgroup table.
+ */
 const char* aws_aurora_bgd_status_str(AWS_Aurora_BGD_Status status) {
 	switch (status) {
 		case AWS_Aurora_BGD_Status::NONE:
@@ -6055,19 +6061,32 @@ const char* aws_aurora_bgd_status_str(AWS_Aurora_BGD_Status status) {
 
 namespace {
 
+/**
+ * @brief Result and connection state returned by one Aurora BGD probe.
+ */
 struct AWS_Aurora_BGD_Query_Result {
-	unique_ptr<MySQL_Monitor_State_Data> mmsd;
-	int rc = 1;
-	unsigned int mysql_error = 0;
+	unique_ptr<MySQL_Monitor_State_Data> mmsd;  ///< Probe connection, timing, and result owner.
+	int rc = 1;                                ///< Query status returned by the asynchronous monitor helper.
+	unsigned int mysql_error = 0;              ///< MySQL error captured before the connection is released.
 };
 
+/**
+ * @brief Validated deployment state parsed from `mysql.rds_topology`.
+ */
 struct AWS_Aurora_BGD_Topology_Observation {
-	bool valid = false;
-	bool completed = false;
-	AWS_Aurora_BGD_Status status = AWS_Aurora_BGD_Status::NONE;
-	AWS_Aurora_BGD_Fingerprint fingerprint;
+	bool valid = false;  ///< True when all topology rows form an accepted snapshot.
+	bool completed = false;  ///< True for the lone TARGET row completion shape.
+	AWS_Aurora_BGD_Status status = AWS_Aurora_BGD_Status::NONE;  ///< Validated target status.
+	AWS_Aurora_BGD_Fingerprint fingerprint;  ///< Stable identity of the target row.
 };
 
+/**
+ * @brief Build a member hostname from an Aurora server identifier and domain.
+ *
+ * @param server_id Aurora server identifier.
+ * @param domain_name Configured Aurora domain, with or without a leading dot.
+ * @return Fully qualified member hostname, or server_id when no domain is configured.
+ */
 static std::string aws_aurora_bgd_member_hostname(
 	const std::string& server_id, const std::string& domain_name
 ) {
@@ -6079,6 +6098,13 @@ static std::string aws_aurora_bgd_member_hostname(
 		: server_id + "." + domain_name;
 }
 
+/**
+ * @brief Remove the configured Aurora domain from a member hostname.
+ *
+ * @param hostname Fully qualified configured member hostname.
+ * @param domain_name Configured Aurora domain, with or without a leading dot.
+ * @return Aurora server identifier, or an empty string when the domain does not match.
+ */
 static std::string aws_aurora_bgd_server_id_from_hostname(
 	const std::string& hostname, const std::string& domain_name
 ) {
@@ -6094,6 +6120,13 @@ static std::string aws_aurora_bgd_server_id_from_hostname(
 	return hostname.substr(0, hostname.size() - suffix.size());
 }
 
+/**
+ * @brief Parse one AWS topology status without accepting unknown values.
+ *
+ * @param raw_status Status text returned by `mysql.rds_topology`.
+ * @param status Receives the corresponding Aurora BGD status on success.
+ * @return true when raw_status belongs to the supported AWS vocabulary.
+ */
 static bool aws_aurora_bgd_status_from_raw(
 	const std::string& raw_status, AWS_Aurora_BGD_Status& status
 ) {
@@ -6113,11 +6146,27 @@ static bool aws_aurora_bgd_status_from_raw(
 	return true;
 }
 
+/**
+ * @brief Check that an Aurora topology row contains every identity and state field.
+ *
+ * @param node Parsed topology row to inspect.
+ * @return true when the row has an id, endpoint, port, role, and status.
+ */
 static bool aws_aurora_bgd_required_topology_fields(const AWS_RDS_Topology_Node& node) {
 	return !node.id.empty() && !node.endpoint.empty() && node.port > 0
 		&& !node.role.empty() && !node.status.empty();
 }
 
+/**
+ * @brief Validate an Aurora blue/green topology snapshot.
+ *
+ * @details Active phases require exactly one SOURCE and one TARGET row with
+ *   matching statuses. Completion requires exactly one TARGET row. Any
+ *   duplicate, incomplete, unknown, or inconsistent row rejects the snapshot.
+ *
+ * @param topology Parsed `mysql.rds_topology` result.
+ * @return Validated observation; valid remains false when the snapshot is rejected.
+ */
 static AWS_Aurora_BGD_Topology_Observation aws_aurora_bgd_validate_topology(
 	const AWS_RDS_Topology_Result& topology
 ) {
@@ -6172,6 +6221,21 @@ static AWS_Aurora_BGD_Topology_Observation aws_aurora_bgd_validate_topology(
 	return observation;
 }
 
+/**
+ * @brief Execute one Aurora BGD query against a selected probe host.
+ *
+ * @details Reuses a monitor connection when possible, applies the Aurora
+ *   timeout, and returns or destroys the connection according to the query
+ *   outcome.
+ *
+ * @param host Backend endpoint and SSL setting to use.
+ * @param writer_hg Writer hostgroup used for monitor accounting.
+ * @param timeout_ms Query timeout in milliseconds.
+ * @param task_type Monitor task classification.
+ * @param query SQL text to execute.
+ * @param worker_stop Per-worker shutdown signal.
+ * @return Query result retaining the monitor state and captured MySQL error.
+ */
 static AWS_Aurora_BGD_Query_Result aws_aurora_bgd_query(
 	const AWS_RDS_BGD_Probe_Host& host,
 	unsigned int writer_hg,
@@ -6220,6 +6284,23 @@ static AWS_Aurora_BGD_Query_Result aws_aurora_bgd_query(
 	return out;
 }
 
+/**
+ * @brief Query eligible Aurora endpoints until one produces an accepted result.
+ *
+ * @details Candidate order starts at a random offset. Unpingable endpoints are
+ *   skipped and counted; a missing topology table may be treated as a terminal
+ *   observation when requested by the caller.
+ *
+ * @param hosts Candidate endpoints.
+ * @param writer_hg Writer hostgroup used for monitor accounting.
+ * @param timeout_ms Query timeout in milliseconds.
+ * @param task_type Monitor task classification.
+ * @param query SQL text to execute.
+ * @param worker_stop Per-worker shutdown signal.
+ * @param selected Optional destination for the endpoint that produced the result.
+ * @param stop_on_missing_table Whether MySQL error 1146 stops candidate traversal.
+ * @return Last query result, or the first accepted result.
+ */
 static AWS_Aurora_BGD_Query_Result aws_aurora_bgd_query_candidates(
 	const std::vector<AWS_RDS_BGD_Probe_Host>& hosts,
 	unsigned int writer_hg,
@@ -6262,6 +6343,12 @@ static AWS_Aurora_BGD_Query_Result aws_aurora_bgd_query_candidates(
 	return last_result;
 }
 
+/**
+ * @brief Publish a changed Aurora BGD state to the runtime hostgroup row.
+ *
+ * @param st Worker-owned state whose status is updated.
+ * @param status Validated status to publish.
+ */
 static void aws_aurora_bgd_set_status(
 	AWS_Aurora_BGD_State& st, AWS_Aurora_BGD_Status status
 ) {
@@ -6276,6 +6363,13 @@ static void aws_aurora_bgd_set_status(
 	MyHGM->update_aws_aurora_bgd_status(st.writer_hg, aws_aurora_bgd_status_str(status));
 }
 
+/**
+ * @brief Compare production membership snapshots independent of row order.
+ *
+ * @param lhs First membership snapshot.
+ * @param rhs Second membership snapshot.
+ * @return true when both snapshots contain the same identities, roles, and endpoints.
+ */
 static bool aws_aurora_bgd_same_production_snapshot(
 	const std::vector<AWS_Aurora_BGD_Member>& lhs,
 	const std::vector<AWS_Aurora_BGD_Member>& rhs
@@ -6298,6 +6392,17 @@ static bool aws_aurora_bgd_same_production_snapshot(
 	return true;
 }
 
+/**
+ * @brief Rebuild production membership from configured probe hosts and hostgroups.
+ *
+ * @details Used when discovery starts before an ordinary Aurora observation is
+ *   available. The snapshot is accepted only when every configured member has
+ *   a unique server identifier and exactly one member belongs to the writer
+ *   hostgroup.
+ *
+ * @param st Worker-owned state receiving the rebuilt snapshot.
+ * @return true when a complete production snapshot was built.
+ */
 static bool aws_aurora_bgd_rebuild_production_snapshot(AWS_Aurora_BGD_State& st) {
 	std::unordered_set<std::string> writer_endpoints;
 	MyHGM->wrlock();
@@ -6351,6 +6456,19 @@ static bool aws_aurora_bgd_rebuild_production_snapshot(AWS_Aurora_BGD_State& st)
 	return true;
 }
 
+/**
+ * @brief Build a complete target membership snapshot from REPLICA_HOST_STATUS.
+ *
+ * @details Matches each current target member to one production member,
+ *   validates writer and reader session identities, resolves target addresses,
+ *   and preserves already-applied traffic actions only while their mapping is
+ *   unchanged.
+ *
+ * @param st Worker-owned state containing production membership and deployment identity.
+ * @param result Target REPLICA_HOST_STATUS result.
+ * @param snapshot Receives the complete target snapshot on success.
+ * @return true when every production member has one valid target counterpart.
+ */
 static bool aws_aurora_bgd_parse_target_membership(
 	AWS_Aurora_BGD_State& st, MYSQL_RES* result,
 	std::vector<AWS_Aurora_BGD_Member>& snapshot
@@ -6492,6 +6610,12 @@ static bool aws_aurora_bgd_parse_target_membership(
 	return writers == 1 && snapshot.size() == st.production_members.size();
 }
 
+/**
+ * @brief Select target endpoints eligible for topology probes.
+ *
+ * @param st Worker-owned state containing target membership or deployment identity.
+ * @return Target member endpoints when complete, otherwise the target cluster endpoint.
+ */
 static std::vector<AWS_RDS_BGD_Probe_Host> aws_aurora_bgd_target_probe_hosts(
 	const AWS_Aurora_BGD_State& st
 ) {
@@ -6511,6 +6635,15 @@ static std::vector<AWS_RDS_BGD_Probe_Host> aws_aurora_bgd_target_probe_hosts(
 	return hosts;
 }
 
+/**
+ * @brief Select endpoints eligible for target membership probes.
+ *
+ * @details Includes the target cluster endpoint in addition to retained member
+ *   endpoints so membership discovery remains possible across endpoint changes.
+ *
+ * @param st Worker-owned state containing target membership and deployment identity.
+ * @return Deduplicated candidate endpoints for REPLICA_HOST_STATUS.
+ */
 static std::vector<AWS_RDS_BGD_Probe_Host> aws_aurora_bgd_membership_probe_hosts(
 	const AWS_Aurora_BGD_State& st
 ) {
@@ -6533,6 +6666,15 @@ static std::vector<AWS_RDS_BGD_Probe_Host> aws_aurora_bgd_membership_probe_hosts
 
 } // namespace
 
+/**
+ * @brief Refresh the Aurora BGD worker's last complete production snapshot.
+ *
+ * @details Invalid or incomplete observations retain the previous snapshot.
+ *   A changed production snapshot invalidates any retained target snapshot.
+ *
+ * @param st Worker-owned Aurora BGD state to update.
+ * @param result Successful ordinary Aurora membership observation.
+ */
 void MySQL_Monitor::aws_aurora_bgd_refresh_production_snapshot(
 	AWS_Aurora_BGD_State& st, const AWS_Aurora_status_entry& result
 ) {
@@ -6574,6 +6716,16 @@ void MySQL_Monitor::aws_aurora_bgd_refresh_production_snapshot(
 	st.production_members = std::move(snapshot);
 }
 
+/**
+ * @brief Apply the routing actions for an accepted active Aurora BGD state.
+ *
+ * @details INITIATED only suspends production probing. IN_PROGRESS demotes
+ *   the snapshotted writer on entry. POST_PROCESSING applies each complete
+ *   member mapping once and restores canonical writer placement.
+ *
+ * @param st Worker-owned state whose routing effects are applied.
+ * @param status_changed Whether the current status was entered in this cycle.
+ */
 void MySQL_Monitor::aws_aurora_bgd_apply_active_actions(
 	AWS_Aurora_BGD_State& st, bool status_changed
 ) {
@@ -6647,6 +6799,16 @@ void MySQL_Monitor::aws_aurora_bgd_apply_active_actions(
 	}
 }
 
+/**
+ * @brief Run immediate effect-driven cleanup for TARGET completion.
+ *
+ * @details Reconciles writer placement, removes mapped traffic pins, drains
+ *   eligible configured green pools, resumes production probing, and enters
+ *   the completed latch while retaining the deployment fingerprint.
+ *
+ * @param st Worker-owned state to clean up and latch.
+ * @param completed_fingerprint Identity reported by the completed target row.
+ */
 void MySQL_Monitor::aws_aurora_bgd_apply_completion(
 	AWS_Aurora_BGD_State& st,
 	const AWS_Aurora_BGD_Fingerprint& completed_fingerprint
@@ -6719,6 +6881,17 @@ void MySQL_Monitor::aws_aurora_bgd_apply_completion(
 		st.writer_hg, st.reader_hg);
 }
 
+/**
+ * @brief Reverse applied pre-completion effects and enter a safe earlier state.
+ *
+ * @details Removes only applied traffic pins, drains affected production
+ *   pools, restores canonical writer placement, resumes ordinary probing,
+ *   and optionally clears the deployment identity.
+ *
+ * @param st Worker-owned state whose applied effects are reversed.
+ * @param next_status Validated status to enter after cleanup.
+ * @param clear_deployment Whether to discard the retained deployment identity.
+ */
 void MySQL_Monitor::aws_aurora_bgd_apply_rollback(
 	AWS_Aurora_BGD_State& st, AWS_Aurora_BGD_Status next_status,
 	bool clear_deployment
@@ -6764,6 +6937,11 @@ void MySQL_Monitor::aws_aurora_bgd_apply_rollback(
 		st.writer_hg, st.reader_hg, aws_aurora_bgd_status_str(st.status));
 }
 
+/**
+ * @brief Release the completed latch after a successful topology drain.
+ *
+ * @param st Worker-owned state holding the completed deployment identity.
+ */
 void MySQL_Monitor::aws_aurora_bgd_release_completed_latch(AWS_Aurora_BGD_State& st) {
 	if (st.status != AWS_Aurora_BGD_Status::SWITCHOVER_COMPLETED) {
 		return;
@@ -6779,6 +6957,16 @@ void MySQL_Monitor::aws_aurora_bgd_release_completed_latch(AWS_Aurora_BGD_State&
 		st.writer_hg, st.reader_hg);
 }
 
+/**
+ * @brief Run the topology and target-membership probes owned by an Aurora worker.
+ *
+ * @details Discovery is serialized with the ordinary Aurora probe. This method
+ *   validates topology before publishing status and replaces target membership
+ *   only with a complete, unambiguous, fully resolved snapshot.
+ *
+ * @param st Worker-owned state advanced by the discovery cycle.
+ * @param worker_stop Per-worker shutdown signal checked around remote work.
+ */
 void MySQL_Monitor::aws_aurora_bgd_run_discovery_cycle(
 	AWS_Aurora_BGD_State& st, std::atomic_bool& worker_stop
 ) {
@@ -6915,6 +7103,15 @@ void MySQL_Monitor::aws_aurora_bgd_run_discovery_cycle(
 	}
 }
 
+/**
+ * @brief Load the configuration rows for one Aurora worker.
+ *
+ * @param writer_hg Writer hostgroup owned by the worker.
+ * @param current_checksum Per-hostgroup checksum published by the coordinator.
+ * @param candidate Receives a complete configuration snapshot on success.
+ *
+ * @return true when the rows still match the coordinator-provided checksum.
+ */
 bool MySQL_Monitor::aws_aurora_bgd_load_worker_config(
 	int writer_hg, uint64_t current_checksum, AWS_Aurora_BGD_State& candidate
 ) {
@@ -6972,6 +7169,19 @@ bool MySQL_Monitor::aws_aurora_bgd_load_worker_config(
 	return true;
 }
 
+/**
+ * @brief Refresh only configuration-derived fields of a running Aurora worker.
+ *
+ * @details Preserves deployment identity, membership, and applied-action
+ *   state while replacing the current configuration and forcing an immediate
+ *   worker iteration.
+ *
+ * @param st Worker-owned Aurora BGD state to refresh.
+ * @param current_checksum Per-hostgroup checksum published by the coordinator.
+ * @param next_loop_at Next scheduled worker iteration; reset to zero on success.
+ *
+ * @return true when a matching configuration snapshot was applied.
+ */
 bool MySQL_Monitor::aws_aurora_bgd_refresh_worker_config(
 	AWS_Aurora_BGD_State& st, uint64_t current_checksum,
 	unsigned long long& next_loop_at
@@ -7007,6 +7217,17 @@ bool MySQL_Monitor::aws_aurora_bgd_refresh_worker_config(
 	return true;
 }
 
+/**
+ * @brief Run ordinary Aurora monitoring and BGD discovery for one writer hostgroup.
+ *
+ * @details The worker refreshes configuration in place, retains production
+ *   membership from successful Aurora observations, and serializes BGD probes
+ *   with the ordinary Aurora check loop. Applied BGD effects are rolled back
+ *   before the worker exits.
+ *
+ * @param arg Pointer to the coordinator-owned AWS_Aurora_BGD_Worker.
+ * @return nullptr after shutdown or removal of the worker configuration.
+ */
 void * monitor_AWS_Aurora_thread_HG(void *arg) {
 	AWS_Aurora_BGD_Worker* worker = static_cast<AWS_Aurora_BGD_Worker*>(arg);
 	unsigned int wHG = worker->writer_hg;
@@ -7430,6 +7651,16 @@ __exit_monitor_AWS_Aurora_thread_HG_now:
 }
 
 
+/**
+ * @brief Coordinate per-hostgroup Aurora monitor workers.
+ *
+ * @details Rebuilds the shared Aurora configuration snapshot when its
+ *   checksum changes, starts one worker for each configured writer
+ *   hostgroup, refreshes running workers, and joins workers removed from
+ *   the active configuration during shutdown or reload.
+ *
+ * @return nullptr when monitoring stops.
+ */
 void * MySQL_Monitor::monitor_aws_aurora() {
 	if (!wait_for_glo_mth()) return NULL;
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;

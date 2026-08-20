@@ -17,18 +17,30 @@ using std::string;
 using std::to_string;
 using std::vector;
 
+/**
+ * @brief Complete simulator fixture for one Aurora blue/green deployment.
+ */
 struct Aurora_BGD_Test_Deployment {
-	string name;
-	string domain_name;
-	string blue_replica_set;
-	string target_replica_set;
-	Aurora_BGD_Endpoint target_cluster_endpoint;
-	Aurora_BGD_Membership_Set production;
-	Aurora_BGD_Membership_Set target;
-	string source_topology_id;
-	string target_topology_id;
+	string name;                                      ///< Human-readable fixture name.
+	string domain_name;                               ///< Domain appended to member identifiers.
+	string blue_replica_set;                          ///< Production simulator membership identity.
+	string target_replica_set;                        ///< Target simulator membership identity.
+	Aurora_BGD_Endpoint target_cluster_endpoint;      ///< Target cluster topology endpoint.
+	Aurora_BGD_Membership_Set production;             ///< Production membership and serving backends.
+	Aurora_BGD_Membership_Set target;                 ///< Target membership and serving backends.
+	string source_topology_id;                        ///< SOURCE topology row identifier.
+	string target_topology_id;                        ///< TARGET topology row identifier.
 };
 
+/**
+ * @brief Build one Aurora member fixture with stable default metrics.
+ *
+ * @param server_id Aurora member identifier.
+ * @param session_id Writer or reader session identity.
+ * @param endpoint Hostname and fixed simulator address.
+ * @param current Whether the member belongs to current membership.
+ * @return Initialized member fixture.
+ */
 inline Aurora_BGD_Member aurora_bgd_member(
 	string server_id, string session_id, Aurora_BGD_Endpoint endpoint, bool current = true
 ) {
@@ -41,6 +53,10 @@ inline Aurora_BGD_Member aurora_bgd_member(
 	return member;
 }
 
+/**
+ * @brief Build the primary three-member Aurora BGD fixture.
+ * @return Deployment A with one writer and two readers per environment.
+ */
 inline Aurora_BGD_Test_Deployment aurora_bgd_deployment_a() {
 	Aurora_BGD_Test_Deployment deployment;
 	deployment.name = "Aurora BGD deployment A";
@@ -85,6 +101,10 @@ inline Aurora_BGD_Test_Deployment aurora_bgd_deployment_a() {
 	return deployment;
 }
 
+/**
+ * @brief Build an independent writer-only Aurora BGD fixture.
+ * @return Deployment B with one member per environment.
+ */
 inline Aurora_BGD_Test_Deployment aurora_bgd_deployment_b_writer_only() {
 	Aurora_BGD_Test_Deployment deployment;
 	deployment.name = "Aurora BGD deployment B writer-only";
@@ -117,6 +137,10 @@ inline Aurora_BGD_Test_Deployment aurora_bgd_deployment_b_writer_only() {
 	return deployment;
 }
 
+/**
+ * @brief Build a writer-only fixture whose production identifier contains `green`.
+ * @return Deployment C with one member per environment.
+ */
 inline Aurora_BGD_Test_Deployment aurora_bgd_deployment_c_writer_only() {
 	Aurora_BGD_Test_Deployment deployment;
 	deployment.name = "Aurora BGD deployment C writer-only";
@@ -183,6 +207,24 @@ inline int aurora_bgd_admin_cleanup(MYSQL* admin) {
 	});
 }
 
+/**
+ * @brief Configure ProxySQL for one simulated Aurora deployment.
+ *
+ * @details Installs monitor credentials, the Aurora hostgroup row, production
+ *   servers, and the test user's default route, then loads each module to runtime.
+ *
+ * @param admin ProxySQL Admin connection.
+ * @param deployment Deployment fixture to configure.
+ * @param writer_hg Production writer hostgroup.
+ * @param reader_hg Production reader hostgroup.
+ * @param green_writer_hg Explicit green writer hostgroup, or -1 for NULL.
+ * @param green_reader_hg Explicit green reader hostgroup, or -1 for NULL.
+ * @param auto_discovery Whether Aurora BGD auto-discovery is enabled.
+ * @param check_interval_ms Aurora monitor interval.
+ * @param writer_is_also_reader Whether the writer also belongs to the reader hostgroup.
+ * @param use_ssl Whether configured production members use TLS.
+ * @return EXIT_SUCCESS on success, otherwise EXIT_FAILURE.
+ */
 inline int aurora_bgd_admin_setup(
 	MYSQL* admin, Aurora_BGD_Test_Deployment& deployment,
 	int writer_hg, int reader_hg, int green_writer_hg, int green_reader_hg,
@@ -230,6 +272,11 @@ inline int aurora_bgd_admin_setup(
 	return aurora_bgd_execute_all(admin, queries);
 }
 
+/**
+ * @brief Build the two-row AVAILABLE topology for a deployment.
+ * @param deployment Deployment fixture.
+ * @return SOURCE and TARGET topology rows.
+ */
 inline vector<BGD_Topology_Row> aurora_bgd_available_topology(
 	Aurora_BGD_Test_Deployment& deployment
 ) {
@@ -251,6 +298,12 @@ inline vector<BGD_Topology_Row> aurora_bgd_available_topology(
 	};
 }
 
+/**
+ * @brief Build an active two-row topology with one shared status.
+ * @param deployment Deployment fixture.
+ * @param status AWS switchover status assigned to both rows.
+ * @return SOURCE and TARGET topology rows.
+ */
 inline vector<BGD_Topology_Row> aurora_bgd_topology(
 	Aurora_BGD_Test_Deployment& deployment, const string& status
 ) {
@@ -261,6 +314,11 @@ inline vector<BGD_Topology_Row> aurora_bgd_topology(
 	return rows;
 }
 
+/**
+ * @brief Build the lone TARGET row used for completed Aurora switchovers.
+ * @param deployment Deployment fixture.
+ * @return One SWITCHOVER_COMPLETED target row.
+ */
 inline vector<BGD_Topology_Row> aurora_bgd_completed_topology(
 	Aurora_BGD_Test_Deployment& deployment
 ) {
@@ -275,6 +333,11 @@ inline vector<BGD_Topology_Row> aurora_bgd_completed_topology(
 	};
 }
 
+/**
+ * @brief Collect every production and target backend eligible for topology probes.
+ * @param deployment Deployment fixture.
+ * @return Simulator backend endpoints without altering fixture order.
+ */
 inline vector<Endpoint> aurora_bgd_topology_backends(Aurora_BGD_Test_Deployment& deployment) {
 	vector<Endpoint> backends = deployment.production.backends();
 	vector<Endpoint> target_backends = deployment.target.backends();
@@ -282,6 +345,12 @@ inline vector<Endpoint> aurora_bgd_topology_backends(Aurora_BGD_Test_Deployment&
 	return backends;
 }
 
+/**
+ * @brief Publish both membership sets and the AVAILABLE topology.
+ * @param sim Connected shared AWS simulator.
+ * @param deployment Deployment fixture to publish.
+ * @return EXIT_SUCCESS on success, otherwise EXIT_FAILURE.
+ */
 inline int aurora_bgd_publish(
 	BGD_Simulator& sim, Aurora_BGD_Test_Deployment& deployment
 ) {

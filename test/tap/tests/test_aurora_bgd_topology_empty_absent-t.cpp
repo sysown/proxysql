@@ -1,6 +1,10 @@
 /**
  * @file test_aurora_bgd_topology_empty_absent-t.cpp
  * @brief Aurora BGD cancellation on successful empty or absent topology.
+ *
+ * @details Starts independent deployments in IN_PROGRESS, then verifies both
+ *   a successful empty result and a missing topology table cancel the active
+ *   deployment, restore the writer, and resume ordinary Aurora probing.
  */
 
 #include <cstdlib>
@@ -30,6 +34,7 @@ int prepare_in_progress(
 		? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
+/** @brief Verify an empty topology cancels an active deployment safely. */
 int test_empty_before_completion(Context& context, TestState& state) {
 	if (prepare_in_progress(context, state, 2160, 2161) != EXIT_SUCCESS) {
 		return EXIT_FAILURE;
@@ -51,6 +56,7 @@ int test_empty_before_completion(Context& context, TestState& state) {
 	return EXIT_SUCCESS;
 }
 
+/** @brief Verify a missing topology table cancels an active deployment safely. */
 int test_absent_before_completion(Context& context, TestState& state) {
 	if (reset(context) != EXIT_SUCCESS
 		|| prepare_in_progress(context, state, 2170, 2171) != EXIT_SUCCESS) {

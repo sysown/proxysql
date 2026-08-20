@@ -1,6 +1,10 @@
 /**
  * @file test_aurora_bgd_writer_switchover-t.cpp
  * @brief Aurora BGD writer behavior across the active switchover phases.
+ *
+ * @details Advances one deployment through AVAILABLE, INITIATED, IN_PROGRESS,
+ *   and POST_PROCESSING. Each phase verifies its distinct status, writer
+ *   placement, probe policy, or target-routing effect.
  */
 
 #include <cstdlib>
@@ -19,6 +23,7 @@ struct TestState {
 	vector<int> route_hostgroups { 2044, 2045, 2046 };
 };
 
+/** @brief Verify AVAILABLE preserves canonical source-writer placement. */
 int test_bgd_status_available(Context& context, TestState& state) {
 	if (publish_available(context, state.deployment) != EXIT_SUCCESS
 		|| configure(
@@ -40,6 +45,7 @@ int test_bgd_status_available(Context& context, TestState& state) {
 	return EXIT_SUCCESS;
 }
 
+/** @brief Verify INITIATED publishes status without moving the source writer. */
 int test_switchover_initiated(Context& context, TestState& state) {
 	if (publish_status(context, state.deployment, "SWITCHOVER_INITIATED") != EXIT_SUCCESS) {
 		diag("Error: failed to publish SWITCHOVER_INITIATED");
@@ -56,6 +62,7 @@ int test_switchover_initiated(Context& context, TestState& state) {
 	return EXIT_SUCCESS;
 }
 
+/** @brief Verify IN_PROGRESS demotes the source writer exactly once. */
 int test_switchover_in_progress(Context& context, TestState& state) {
 	if (publish_status(context, state.deployment, "SWITCHOVER_IN_PROGRESS") != EXIT_SUCCESS) {
 		diag("Error: failed to publish SWITCHOVER_IN_PROGRESS");
@@ -79,6 +86,7 @@ int test_switchover_in_progress(Context& context, TestState& state) {
 	return EXIT_SUCCESS;
 }
 
+/** @brief Verify POST_PROCESSING restores writer placement and redirects all members. */
 int test_switchover_post_processing(
 	CommandLine& cl, Context& context, TestState& state
 ) {

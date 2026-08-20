@@ -1,6 +1,10 @@
 /**
  * @file test_aurora_bgd_reader_switchover_cleanup-t.cpp
  * @brief Aurora BGD immediate completion cleanup and topology-drain rearm.
+ *
+ * @details Redirects all mapped members in POST_PROCESSING, publishes the lone
+ *   completed TARGET row, and verifies immediate routing cleanup. A later empty
+ *   topology must release the completed latch.
  */
 
 #include <cstdlib>
@@ -20,6 +24,7 @@ struct TestState {
 	vector<int> source_routes { 2077, 2078, 2079 };
 };
 
+/** @brief Verify completion removes target pins and restores production routing. */
 int test_completion_cleanup(
 	CommandLine& cl, Context& context, TestState& state
 ) {
@@ -82,6 +87,7 @@ int test_completion_cleanup(
 	return EXIT_SUCCESS;
 }
 
+/** @brief Verify an empty topology releases the completed latch to NONE. */
 int test_topology_drain(Context& context, TestState& state) {
 	if (context.simulator.topology_delete(
 		aurora_bgd_topology_backends(state.deployment)) != EXIT_SUCCESS) {

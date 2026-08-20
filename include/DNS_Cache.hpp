@@ -81,7 +81,12 @@ public:
 	bool add(const std::string& hostname, std::vector<std::string>&& ips);
 	bool add_if_not_exist(const std::string& hostname, std::vector<std::string>&& ips);
 	void remove(const std::string& hostname);
-	// Clear ordinary resolved addresses while retaining explicit pins.
+	/**
+	 * @brief Clear ordinary DNS resolutions while retaining explicit pins.
+	 *
+	 * @details Unpinned records are removed. Pinned records keep their fixed
+	 *   address while their ordinary resolution list and rotation counter are reset.
+	 */
 	void clear();
 	bool empty() const;
 	bool is_ip_valid(const std::string& hostname, const std::string& ip) const;

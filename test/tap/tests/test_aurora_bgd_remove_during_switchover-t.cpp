@@ -1,6 +1,10 @@
 /**
  * @file test_aurora_bgd_remove_during_switchover-t.cpp
  * @brief Aurora BGD cleanup when the owning row is deleted.
+ *
+ * @details Moves one deployment from AVAILABLE to IN_PROGRESS, deletes its
+ *   Aurora configuration row, and verifies worker removal restores the source
+ *   writer and removes runtime deployment state.
  */
 
 #include <cstdlib>
@@ -17,6 +21,7 @@ struct TestState {
 	int green_reader_hostgroup { 2233 };
 };
 
+/** @brief Establish the deployment's AVAILABLE baseline. */
 int test_bgd_status_available(Context& context, TestState& state) {
 	if (publish_available(context, state.deployment) != EXIT_SUCCESS
 		|| configure(
@@ -30,6 +35,7 @@ int test_bgd_status_available(Context& context, TestState& state) {
 	return EXIT_SUCCESS;
 }
 
+/** @brief Enter IN_PROGRESS and verify source-writer demotion. */
 int test_writer_switchover_in_progress(Context& context, TestState& state) {
 	if (publish_status(
 			context, state.deployment, "SWITCHOVER_IN_PROGRESS") != EXIT_SUCCESS) {
@@ -46,6 +52,7 @@ int test_writer_switchover_in_progress(Context& context, TestState& state) {
 	return EXIT_SUCCESS;
 }
 
+/** @brief Delete the owning row and verify worker teardown reverses routing effects. */
 int test_remove_during_switchover(Context& context, TestState& state) {
 	if (aurora_bgd_execute_all(context.admin, {
 		"DELETE FROM mysql_aws_aurora_hostgroups WHERE writer_hostgroup=2230",

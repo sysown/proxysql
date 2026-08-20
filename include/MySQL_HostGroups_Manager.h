@@ -356,12 +356,15 @@ class Galera_Info {
 	Galera_Info& operator=(const Galera_Info&) = delete;
 };
 
+/**
+ * @brief Runtime configuration retained for one Aurora writer hostgroup.
+ */
 class AWS_Aurora_Info {
 	public:
-	int writer_hostgroup;
-	int reader_hostgroup;
-	int green_writer_hostgroup;
-	int green_reader_hostgroup;
+	int writer_hostgroup;        ///< Production writer hostgroup.
+	int reader_hostgroup;        ///< Production reader hostgroup.
+	int green_writer_hostgroup;  ///< Explicit green writer hostgroup; -1 means NULL.
+	int green_reader_hostgroup;  ///< Explicit green reader hostgroup; -1 means NULL.
 	int aurora_port;
 	int max_lag_ms;
 	int add_lag_ms;
@@ -378,7 +381,49 @@ class AWS_Aurora_Info {
 	char * comment;
 	bool active;
 	bool active_;
+	/**
+	 * @brief Construct the runtime configuration for one Aurora cluster.
+	 *
+	 * @param w Writer hostgroup.
+	 * @param r Reader hostgroup.
+	 * @param gw Explicit green writer hostgroup, or -1 for NULL.
+	 * @param gr Explicit green reader hostgroup, or -1 for NULL.
+	 * @param _port Aurora backend port.
+	 * @param _end_addr Aurora domain name.
+	 * @param maxl Maximum accepted replica lag in milliseconds.
+	 * @param al Lag threshold used when adding a reader.
+	 * @param minl Minimum lag value used by Aurora monitoring.
+	 * @param lnc Number of lag checks used by Aurora monitoring.
+	 * @param ci Monitor check interval in milliseconds.
+	 * @param ct Monitor check timeout in milliseconds.
+	 * @param _a Whether the cluster is active.
+	 * @param wiar Whether the writer also belongs to the reader hostgroup.
+	 * @param nrw Weight assigned to newly discovered readers.
+	 * @param amc Missing checks required before automatic removal.
+	 * @param c Optional configuration comment.
+	 */
 	AWS_Aurora_Info(int w, int r, int gw, int gr, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, int amc, char *c);
+	/**
+	 * @brief Apply a refreshed Aurora configuration to this runtime entry.
+	 *
+	 * @param r Reader hostgroup.
+	 * @param gw Explicit green writer hostgroup, or -1 for NULL.
+	 * @param gr Explicit green reader hostgroup, or -1 for NULL.
+	 * @param _port Aurora backend port.
+	 * @param _end_addr Aurora domain name.
+	 * @param maxl Maximum accepted replica lag in milliseconds.
+	 * @param al Lag threshold used when adding a reader.
+	 * @param minl Minimum lag value used by Aurora monitoring.
+	 * @param lnc Number of lag checks used by Aurora monitoring.
+	 * @param ci Monitor check interval in milliseconds.
+	 * @param ct Monitor check timeout in milliseconds.
+	 * @param _a Whether the cluster is active.
+	 * @param wiar Whether the writer also belongs to the reader hostgroup.
+	 * @param nrw Weight assigned to newly discovered readers.
+	 * @param amc Missing checks required before automatic removal.
+	 * @param c Optional configuration comment.
+	 * @return true when any retained configuration value changed.
+	 */
 	bool update(int r, int gw, int gr, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, int amc, char *c);
 	~AWS_Aurora_Info();
 	AWS_Aurora_Info(const AWS_Aurora_Info&) = delete;
@@ -388,9 +433,13 @@ class AWS_Aurora_Info {
 /**
  * @brief Validate an Aurora hostgroup candidate and return its canonical configured projection.
  *
- * The candidate must exactly match the configured Aurora Admin table projection.
- * The returned result contains only valid rows in that canonical order. The
- * caller owns the returned result.
+ * @details The candidate must exactly match the configured Aurora Admin table
+ *   projection. The returned result contains only valid rows in canonical
+ *   order. Rows that conflict by hostgroup role are rejected as one component.
+ *
+ * @param candidate Candidate Aurora configuration rows.
+ * @param errors Receives one message for each rejected projection or component.
+ * @return Heap-allocated canonical result owned by the caller.
  */
 SQLite3_result* validate_and_filter_aws_aurora_hostgroups(
 	const SQLite3_result* candidate,
@@ -1127,9 +1176,12 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	/**
 	 * @brief Publish the node-local Aurora BGD state for one runtime row.
 	 *
-	 * The caller owns validation of the state vocabulary. Writer hostgroups not
-	 * present at runtime are ignored. Configuration reloads do not write this
-	 * column.
+	 * @details The caller owns validation of the state vocabulary. Writer
+	 *   hostgroups not present at runtime are ignored. Configuration reloads do
+	 *   not write this column.
+	 *
+	 * @param writer_hostgroup Writer hostgroup identifying the runtime row.
+	 * @param bgd_status Validated Aurora BGD status string to publish.
 	 */
 	void update_aws_aurora_bgd_status(int writer_hostgroup, const std::string& bgd_status);
 	/**
@@ -1227,6 +1279,23 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	//void update_aws_aurora_set_reader(int _whid, int _rhid, char *_hostname, int _port);
 	bool aws_aurora_replication_lag_action(int _whid, int _rhid, char *server_id, float current_replication_lag_ms, bool enable, bool is_writer, bool verbose=true);
 	void update_aws_aurora_set_writer(int _whid, int _rhid, char *server_id, bool verbose=true);
+	/**
+	 * @brief Place an Aurora member in its canonical writer hostgroup configuration.
+	 *
+	 * @details The explicit configuration values let BGD cleanup restore writer
+	 *   placement without rereading mutable Aurora configuration. The member is
+	 *   added to or removed from the reader hostgroup according to
+	 *   writer_is_also_reader.
+	 *
+	 * @param _whid Writer hostgroup.
+	 * @param _rhid Reader hostgroup.
+	 * @param server_id Aurora server identifier without the configured domain.
+	 * @param verbose Whether to emit routing-change messages.
+	 * @param domain_name Configured Aurora domain name.
+	 * @param aurora_port Aurora backend port.
+	 * @param writer_is_also_reader Whether the writer also belongs to the reader hostgroup.
+	 * @param new_reader_weight Weight used when reader membership is created.
+	 */
 	void update_aws_aurora_set_writer(
 		int _whid, int _rhid, char *server_id, bool verbose,
 		const char *domain_name, int aurora_port, int writer_is_also_reader,

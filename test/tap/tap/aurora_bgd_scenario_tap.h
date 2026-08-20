@@ -19,9 +19,12 @@ using std::vector;
 const uint32_t kWaitSeconds = 5;
 const uint32_t kProbeTimeoutMs = 5000;
 
+/**
+ * @brief Connections shared by one focused Aurora BGD TAP scenario.
+ */
 struct Context {
-	MYSQL* admin { nullptr };
-	BGD_Simulator simulator;
+	MYSQL* admin { nullptr };  ///< ProxySQL Admin connection owned by the scenario.
+	BGD_Simulator simulator;   ///< Connected shared AWS simulator controller.
 };
 
 inline bool scalar_is(MYSQL* admin, const string& query, const string& expected) {
@@ -30,6 +33,12 @@ inline bool scalar_is(MYSQL* admin, const string& query, const string& expected)
 		&& rows.front().front() == expected;
 }
 
+/**
+ * @brief Connect a scenario to ProxySQL and reset shared Aurora simulator state.
+ * @param cl TAP environment and connection options.
+ * @param context Receives the Admin and simulator connections.
+ * @return EXIT_SUCCESS when the isolated fixture is ready.
+ */
 inline int setup(CommandLine& cl, Context& context) {
 	if (cl.getEnv()) {
 		diag("Error: failed to load TAP environment");
@@ -63,11 +72,21 @@ inline int setup(CommandLine& cl, Context& context) {
 	});
 }
 
+/**
+ * @brief Remove runtime configuration and simulator state between scenarios.
+ * @param context Active scenario context.
+ * @return EXIT_SUCCESS when both stores were cleared.
+ */
 inline int reset(Context& context) {
 	return aurora_bgd_admin_cleanup(context.admin) == EXIT_SUCCESS
 		&& context.simulator.cleanup() == EXIT_SUCCESS ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
+/**
+ * @brief Reset a scenario, remove its test user, and close the Admin connection.
+ * @param context Active scenario context.
+ * @return EXIT_SUCCESS when every cleanup operation succeeds.
+ */
 inline int cleanup(Context& context) {
 	int reset_rc = reset(context);
 	int user_rc = context.admin == nullptr ? EXIT_FAILURE : aurora_bgd_execute_all(context.admin, {
@@ -82,6 +101,20 @@ inline int cleanup(Context& context) {
 		? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
+/**
+ * @brief Configure one deployment through the common Aurora Admin fixture.
+ * @param context Active scenario context.
+ * @param deployment Deployment fixture to configure.
+ * @param writer_hostgroup Production writer hostgroup.
+ * @param reader_hostgroup Production reader hostgroup.
+ * @param green_writer_hostgroup Explicit green writer hostgroup, or -1 for NULL.
+ * @param green_reader_hostgroup Explicit green reader hostgroup, or -1 for NULL.
+ * @param automatic Whether BGD auto-discovery is enabled.
+ * @param check_interval_ms Aurora monitor interval.
+ * @param writer_is_also_reader Whether the writer also belongs to the reader hostgroup.
+ * @param use_ssl Whether configured production members use TLS.
+ * @return EXIT_SUCCESS on success, otherwise EXIT_FAILURE.
+ */
 inline int configure(
 	Context& context, Aurora_BGD_Test_Deployment& deployment,
 	int writer_hostgroup, int reader_hostgroup,
@@ -95,12 +128,25 @@ inline int configure(
 		check_interval_ms, writer_is_also_reader, use_ssl);
 }
 
+/**
+ * @brief Publish both membership sets and the AVAILABLE topology.
+ * @param context Active scenario context.
+ * @param deployment Deployment fixture to publish.
+ * @return EXIT_SUCCESS on success, otherwise EXIT_FAILURE.
+ */
 inline int publish_available(
 	Context& context, Aurora_BGD_Test_Deployment& deployment
 ) {
 	return aurora_bgd_publish(context.simulator, deployment);
 }
 
+/**
+ * @brief Replace the published topology phase for a deployment.
+ * @param context Active scenario context.
+ * @param deployment Deployment fixture whose backends serve the topology.
+ * @param status AWS topology status assigned to SOURCE and TARGET rows.
+ * @return EXIT_SUCCESS on success, otherwise EXIT_FAILURE.
+ */
 inline int publish_status(
 	Context& context, Aurora_BGD_Test_Deployment& deployment, const string& status
 ) {
@@ -109,6 +155,13 @@ inline int publish_status(
 		aurora_bgd_topology(deployment, status));
 }
 
+/**
+ * @brief Publish production and target membership with an initial topology phase.
+ * @param context Active scenario context.
+ * @param deployment Deployment fixture to publish.
+ * @param status Initial AWS topology status.
+ * @return EXIT_SUCCESS on success, otherwise EXIT_FAILURE.
+ */
 inline int publish_initial(
 	Context& context, Aurora_BGD_Test_Deployment& deployment,
 	const string& status
@@ -125,6 +178,13 @@ inline int publish_initial(
 		? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
+/**
+ * @brief Publish completion while retaining another deployment's serving backends.
+ * @param context Active scenario context.
+ * @param serving_deployment Fixture whose backends receive the topology response.
+ * @param completed_deployment Fixture providing the completed target identity.
+ * @return EXIT_SUCCESS on success, otherwise EXIT_FAILURE.
+ */
 inline int publish_completed(
 	Context& context, Aurora_BGD_Test_Deployment& serving_deployment,
 	Aurora_BGD_Test_Deployment& completed_deployment

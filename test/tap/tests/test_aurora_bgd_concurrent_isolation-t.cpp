@@ -1,6 +1,10 @@
 /**
  * @file test_aurora_bgd_concurrent_isolation-t.cpp
  * @brief Independent Aurora BGD state for three writer hostgroups.
+ *
+ * @details Verifies that three workers can reach AVAILABLE independently and
+ *   that advancing one worker does not change another worker's phase, routing,
+ *   or probe policy.
  */
 
 #include <cstdlib>
@@ -45,6 +49,7 @@ bool worker_matches(
 			worker.deployment.production.members.front().endpoint.hostname, demoted);
 }
 
+/** @brief Verify three configured deployments independently reach AVAILABLE. */
 int test_three_workers_available(Context& context, TestState& state) {
 	if (configure_available(context, state.first, false) != EXIT_SUCCESS
 		|| configure_available(context, state.second, true) != EXIT_SUCCESS
@@ -67,6 +72,7 @@ int test_three_workers_available(Context& context, TestState& state) {
 	return EXIT_SUCCESS;
 }
 
+/** @brief Advance selected workers and verify the remaining worker is unaffected. */
 int test_independent_phase_changes(
 	CommandLine& cl, Context& context, TestState& state
 ) {
