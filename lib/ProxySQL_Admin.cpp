@@ -6413,11 +6413,25 @@ bool ProxySQL_Admin::__refresh_users(
 ) {
 	bool no_resultset_supplied = mysql_users_resultset == nullptr;
 	// Checksums are always generated - 'admin-checksum_*' deprecated
-	pthread_mutex_lock(&GloVars.checksum_mutex);
+	struct ChecksumMutexGuard {
+		pthread_mutex_t* mutex;
+		bool owns_lock {true};
+		explicit ChecksumMutexGuard(pthread_mutex_t* mutex) : mutex(mutex) {
+			pthread_mutex_lock(mutex);
+		}
+		~ChecksumMutexGuard() {
+			if (owns_lock) pthread_mutex_unlock(mutex);
+		}
+		void unlock() {
+			if (owns_lock) {
+				pthread_mutex_unlock(mutex);
+				owns_lock = false;
+			}
+		}
+	} checksum_mutex_guard {&GloVars.checksum_mutex};
 
 	if (atomic_error != nullptr && mysql_users_resultset != nullptr) {
 		if (!GloMyAuth->replace_mysql_users_atomically(*mysql_users_resultset, *atomic_error)) {
-			pthread_mutex_unlock(&GloVars.checksum_mutex);
 			return false;
 		}
 	} else {
@@ -6481,8 +6495,7 @@ bool ProxySQL_Admin::__refresh_users(
 		// store the new 'added_users' resultset after generating the new checksum
 		GloMyAuth->save_mysql_users(std::move(mysql_users_resultset));
 	}
-	pthread_mutex_unlock(&GloVars.checksum_mutex);
-
+	checksum_mutex_guard.unlock();
 	proxy_info(
 		"Computed checksum for 'LOAD MYSQL USERS TO RUNTIME' was '%s', with epoch '%llu'\n",
 		GloVars.checksums_values.mysql_users.checksum, GloVars.checksums_values.mysql_users.epoch

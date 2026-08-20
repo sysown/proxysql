@@ -423,9 +423,16 @@ void auth_publish_barrier(void* opaque) {
 	}
 }
 
-void throw_at_auth_publish_midpoint(void*) {
-	throw std::runtime_error("injected Auth midpoint exception");
-}
+struct AuthMidpointThrowOnce {
+	int calls {0};
+
+	static void hook(void* opaque) {
+		auto& self = *static_cast<AuthMidpointThrowOnce*>(opaque);
+		if (self.calls++ == 0) {
+			throw std::runtime_error("injected Auth midpoint exception");
+		}
+	}
+};
 
 struct InterfaceRecoveryFailure {
 	std::string old_interface;
@@ -1137,39 +1144,58 @@ int main() {
 	if (occupied_fd >= 0) close(occupied_fd);
 	v.interfaces[0] = new_interface.c_str();
 
-	auto auth_exception_users = result_value(v.db,
-		"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,"
-		"transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment "
-		"FROM main.mysql_users WHERE active=1 ORDER BY username,backend DESC");
 	const pid_t auth_exception_pid = fork();
 	if (auth_exception_pid == 0) {
-		alarm(3);
-		bool midpoint_exception_seen = false;
+		alarm(5);
+		const uint64_t checksum_version_before = GloVars.checksums_values.mysql_users.version;
+		AuthMidpointThrowOnce midpoint;
+		bool exception_crossed_admin = false;
+		ProxySQL_PluginMysqlConfigResult failed_publish;
 		try {
 			mysql_authentication_test::scoped_atomic_replace_hook hook(
-				&throw_at_auth_publish_midpoint, nullptr);
-			std::string auth_exception_error;
-			(void)admin->init_users_under_lock(std::move(auth_exception_users), auth_exception_error);
+				&AuthMidpointThrowOnce::hook, &midpoint);
+			failed_publish = admin->apply_plugin_mysql_config(v.plan);
 		} catch (...) {
-			midpoint_exception_seen = true;
+			exception_crossed_admin = true;
 		}
-		bool old_state_intact = false;
-		std::thread independent_reader([&] {
-			account_details_t old_user = GloMyAuth->lookup(const_cast<char*>("router_app"),
-				USERNAME_FRONTEND, {true, true, true});
-			old_state_intact = old_user.password != nullptr &&
-				std::string(old_user.password) == "new-secret";
-			free_account_details(old_user);
-		});
-		independent_reader.join();
-		_exit(midpoint_exception_seen && old_state_intact ? 0 : 1);
+		account_details_t old_user = GloMyAuth->lookup(const_cast<char*>("router_app"),
+			USERNAME_FRONTEND, {true, true, true});
+		const bool old_state_intact = old_user.password != nullptr &&
+			std::string(old_user.password) == "new-secret" && old_user.default_hostgroup == 8100 &&
+			old_user.max_connections == 500 && GloMyAuth->get_current_mysql_users() != nullptr &&
+			GloMyAuth->get_current_mysql_users()->raw_checksum() == stable_auth_checksum;
+		free_account_details(old_user);
+		const uint64_t checksum_version_after_restore = GloVars.checksums_values.mysql_users.version;
+		const bool generations_rolled_back =
+			scalar(v.db, "SELECT generation FROM proxysql_plugin_config_generations "
+				"WHERE owner='mysql_router'") == 13 &&
+			scalar(v.db, "SELECT generation FROM disk.proxysql_plugin_config_generations "
+				"WHERE owner='mysql_router'") == 13;
+		const auto retry_publish = admin->apply_plugin_mysql_config(v.plan);
+		account_details_t new_user = GloMyAuth->lookup(const_cast<char*>("router_app"),
+			USERNAME_FRONTEND, {true, true, true});
+		const bool retry_loaded_users = new_user.password != nullptr &&
+			std::string(new_user.password) == "must-rollback";
+		free_account_details(new_user);
+		const bool generations_published =
+			scalar(v.db, "SELECT generation FROM proxysql_plugin_config_generations "
+				"WHERE owner='mysql_router'") == 14 &&
+			scalar(v.db, "SELECT generation FROM disk.proxysql_plugin_config_generations "
+				"WHERE owner='mysql_router'") == 14;
+		const bool complete = !exception_crossed_admin && !failed_publish.applied &&
+			failed_publish.message.find("exception") != std::string::npos && midpoint.calls >= 2 &&
+			generations_rolled_back && old_state_intact &&
+			checksum_version_after_restore > checksum_version_before && retry_publish.applied &&
+			retry_publish.generation == 14 && generations_published && retry_loaded_users &&
+			GloVars.checksums_values.mysql_users.version > checksum_version_after_restore;
+		_exit(complete ? 0 : 1);
 	}
 	int auth_exception_status = 0;
 	const bool auth_exception_waited = auth_exception_pid > 0 &&
 		waitpid(auth_exception_pid, &auth_exception_status, 0) == auth_exception_pid;
 	ok(auth_exception_waited && WIFEXITED(auth_exception_status) &&
 		WEXITSTATUS(auth_exception_status) == 0,
-		"an Auth midpoint exception releases both reader locks and preserves the complete old groups");
+		"a real Auth midpoint exception completes reverse checksum restore and releases every publication lock");
 	ev_async_stop(MyHGM->gtid_ev_loop, MyHGM->gtid_ev_async);
 	ev_loop_destroy(MyHGM->gtid_ev_loop);
 	MyHGM->gtid_ev_loop = nullptr;
