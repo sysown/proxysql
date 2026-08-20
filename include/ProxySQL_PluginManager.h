@@ -125,8 +125,10 @@ public:
 	bool unregister_server_module(ProxySQL_ServerProtocol protocol);
 	bool install_server_discovery_controller(ProxySQL_ServerProtocol protocol,
 		ProxySQL_ServerDiscoveryController *controller,
-		void (*destroy)(ProxySQL_ServerDiscoveryController *), void *module_handle);
-	bool uninstall_server_discovery_controller(ProxySQL_ServerProtocol protocol);
+		void (*destroy)(ProxySQL_ServerDiscoveryController *), void *module_handle,
+		const ProxySQL_PluginDescriptor *owner = nullptr);
+	bool uninstall_server_discovery_controller(ProxySQL_ServerProtocol protocol,
+		const ProxySQL_PluginDescriptor *owner = nullptr);
 	bool post_server_desired_set(ProxySQL_ServerDesiredSet desired_set);
 	void install_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot);
 	bool revalidate_server_desired_set(ProxySQL_ServerProtocol protocol,
@@ -228,6 +230,7 @@ private:
 		ProxySQL_ServerDiscoveryController *controller { nullptr };
 		void (*destroy)(ProxySQL_ServerDiscoveryController *) { nullptr };
 		void *module_handle { nullptr };
+		const ProxySQL_PluginDescriptor *owner { nullptr };
 	};
 	void release_server_callback_lease(int index);
 	void finish_server_desired_set(int index, bool applying);

@@ -44,15 +44,19 @@ namespace {
 
 std::atomic<ProxySQL_PluginManager*> g_active_plugin_manager { nullptr };
 ProxySQL_PluginManager* g_registry_target = nullptr;
+struct PluginCallbackTarget {
+	ProxySQL_PluginManager *manager { nullptr };
+	const ProxySQL_PluginDescriptor *plugin { nullptr };
+};
 // Only the lifecycle thread may use the transient registration target.  A
 // server-discovery worker can retain a service callback and post after init,
 // so it must never read this plain lifecycle-only pointer.
-thread_local ProxySQL_PluginManager* g_registry_callback_target = nullptr;
+thread_local PluginCallbackTarget g_registry_callback_target {};
 // A plugin may retain the ABI-9 uninstall callback and invoke it from stop().
 // This target is deliberately separate from g_registry_target so stop cannot
 // reopen install/registration services, and separate from the active manager
 // because shutdown unpublishes that manager before invoking plugin callbacks.
-thread_local ProxySQL_PluginManager* g_stop_callback_target = nullptr;
+thread_local PluginCallbackTarget g_stop_callback_target {};
 // Guards swaps of g_active_plugin_manager. Readers (dispatch_admin_command,
 // dispatch_query_hook, resolve_alias_to_canonical) take a shared lock, so
 // many worker threads can be running through plugin callbacks at the same
@@ -115,15 +119,18 @@ std::string g_registry_registration_error {};
 // plugin can't leave the registry globals dirty and break the next
 // phase's `assert(g_registry_target == nullptr)`.
 struct ScopedRegistryTarget {
-	explicit ScopedRegistryTarget(ProxySQL_PluginManager* mgr) {
+	explicit ScopedRegistryTarget(ProxySQL_PluginManager* mgr,
+		const ProxySQL_PluginDescriptor* plugin) {
+		assert(g_registry_callback_target.manager == nullptr);
+		assert(g_registry_callback_target.plugin == nullptr);
 		g_registry_target = mgr;
-		g_registry_callback_target = mgr;
+		g_registry_callback_target = {mgr, plugin};
 		g_registry_registration_failed = false;
 		g_registry_registration_error.clear();
 	}
 	~ScopedRegistryTarget() {
 		g_registry_target = nullptr;
-		g_registry_callback_target = nullptr;
+		g_registry_callback_target = {};
 		g_registry_registration_failed = false;
 		g_registry_registration_error.clear();
 	}
@@ -132,11 +139,13 @@ struct ScopedRegistryTarget {
 };
 
 struct ScopedStopCallbackTarget {
-	explicit ScopedStopCallbackTarget(ProxySQL_PluginManager* mgr) {
-		assert(g_stop_callback_target == nullptr);
-		g_stop_callback_target = mgr;
+	explicit ScopedStopCallbackTarget(ProxySQL_PluginManager* mgr,
+		const ProxySQL_PluginDescriptor* plugin) {
+		assert(g_stop_callback_target.manager == nullptr);
+		assert(g_stop_callback_target.plugin == nullptr);
+		g_stop_callback_target = {mgr, plugin};
 	}
-	~ScopedStopCallbackTarget() { g_stop_callback_target = nullptr; }
+	~ScopedStopCallbackTarget() { g_stop_callback_target = {}; }
 	ScopedStopCallbackTarget(const ScopedStopCallbackTarget&) = delete;
 	ScopedStopCallbackTarget& operator=(const ScopedStopCallbackTarget&) = delete;
 };
@@ -318,17 +327,17 @@ bool install_server_discovery_controller_service(
 		return false;
 	}
 	return g_registry_target->install_server_discovery_controller(
-		protocol, controller, destroy, module_handle);
+		protocol, controller, destroy, module_handle, g_registry_callback_target.plugin);
 }
 
 bool uninstall_server_discovery_controller_service(ProxySQL_ServerProtocol protocol) {
-	ProxySQL_PluginManager* target = g_registry_target != nullptr
-		? g_registry_target : g_stop_callback_target;
-	if (target == nullptr) {
+	const PluginCallbackTarget target = g_registry_target != nullptr
+		? g_registry_callback_target : g_stop_callback_target;
+	if (target.manager == nullptr || target.plugin == nullptr) {
 		proxy_warning("Server discovery controller removal attempted outside plugin init/stop phase\n");
 		return false;
 	}
-	return target->uninstall_server_discovery_controller(protocol);
+	return target.manager->uninstall_server_discovery_controller(protocol, target.plugin);
 }
 
 bool post_server_desired_set_service(ProxySQL_ServerDesiredSet desired_set) {
@@ -336,8 +345,8 @@ bool post_server_desired_set_service(ProxySQL_ServerDesiredSet desired_set) {
 	// this submission callback for their steady-state worker threads.  Init
 	// callbacks use the thread-local registry seam; after publication workers
 	// hold the active-manager shared lifetime lock through the acknowledgement.
-	if (g_registry_callback_target != nullptr) {
-		return g_registry_callback_target->post_server_desired_set(std::move(desired_set));
+	if (g_registry_callback_target.manager != nullptr) {
+		return g_registry_callback_target.manager->post_server_desired_set(std::move(desired_set));
 	}
 	ScopedActiveManagerPin pin;
 	ProxySQL_PluginManager* manager = pin.manager();
@@ -638,7 +647,7 @@ bool ProxySQL_PluginManager::invoke_register_schemas_phase(std::string &err) {
 		bool registration_failed;
 		std::string registration_error;
 		{
-			ScopedRegistryTarget target_guard(this);
+			ScopedRegistryTarget target_guard(this, plugin.descriptor);
 			phase_b_ok = register_schemas_cb(&services_phase_b_);
 			registration_failed = g_registry_registration_failed;
 			registration_error = g_registry_registration_error;
@@ -698,7 +707,7 @@ bool ProxySQL_PluginManager::init_all(std::string &err) {
 		bool registration_failed;
 		std::string registration_error;
 		{
-			ScopedRegistryTarget target_guard(this);
+			ScopedRegistryTarget target_guard(this, plugin.descriptor);
 			init_ok = plugin.descriptor->init(&services_);
 			registration_failed = g_registry_registration_failed;
 			registration_error = g_registry_registration_error;
@@ -775,7 +784,7 @@ bool ProxySQL_PluginManager::stop_all() {
 		if (it->descriptor != nullptr && it->descriptor->stop != nullptr) {
 			bool stop_ok = false;
 			try {
-				ScopedStopCallbackTarget target_guard(this);
+				ScopedStopCallbackTarget target_guard(this, it->descriptor);
 				stop_ok = it->descriptor->stop();
 			} catch (const std::exception &e) {
 				proxy_warning("Plugin stop threw for %s: %s\n",
@@ -1426,7 +1435,8 @@ bool ProxySQL_PluginManager::unregister_server_module(ProxySQL_ServerProtocol pr
 
 bool ProxySQL_PluginManager::install_server_discovery_controller(
 	ProxySQL_ServerProtocol protocol, ProxySQL_ServerDiscoveryController *controller,
-	void (*destroy)(ProxySQL_ServerDiscoveryController *), void *module_handle) {
+	void (*destroy)(ProxySQL_ServerDiscoveryController *), void *module_handle,
+	const ProxySQL_PluginDescriptor *owner) {
 	if (controller == nullptr || destroy == nullptr || module_handle == nullptr) return false;
 	const int index = server_protocol_index(protocol);
 	if (index < 0) return false;
@@ -1436,7 +1446,7 @@ bool ProxySQL_PluginManager::install_server_discovery_controller(
 		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
 		if (server_controllers_[index].controller != nullptr ||
 			server_controller_retiring_[index]) return false;
-		server_controllers_[index] = {controller, destroy, module_handle};
+		server_controllers_[index] = {controller, destroy, module_handle, owner};
 		if (server_snapshots_present_[index]) {
 			snapshot = server_snapshots_[index];
 			notify = true;
@@ -1457,7 +1467,8 @@ bool ProxySQL_PluginManager::install_server_discovery_controller(
 	return true;
 }
 
-bool ProxySQL_PluginManager::uninstall_server_discovery_controller(ProxySQL_ServerProtocol protocol) {
+bool ProxySQL_PluginManager::uninstall_server_discovery_controller(
+	ProxySQL_ServerProtocol protocol, const ProxySQL_PluginDescriptor *owner) {
 	const int index = server_protocol_index(protocol);
 	if (index < 0) return false;
 	if (is_current_server_controller_callback(this, index)) return false;
@@ -1470,6 +1481,7 @@ bool ProxySQL_PluginManager::uninstall_server_discovery_controller(ProxySQL_Serv
 	std::unique_lock<std::mutex> lock(server_discovery_mutex_);
 	if (server_controllers_[index].controller == nullptr ||
 		server_controller_retiring_[index]) return false;
+	if (owner != nullptr && server_controllers_[index].owner != owner) return false;
 	server_controller_retiring_[index] = true;
 	server_discovery_cv_.wait(lock, [&] {
 		return server_desired_posts_inflight_[index] == 0 &&

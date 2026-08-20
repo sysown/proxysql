@@ -31,6 +31,9 @@
 #ifndef PROXYSQL_FAKE_PLUGIN_PATH
 #error "PROXYSQL_FAKE_PLUGIN_PATH must be defined"
 #endif
+#ifndef PROXYSQL_FAKE_PLUGIN2_PATH
+#error "PROXYSQL_FAKE_PLUGIN2_PATH must be defined"
+#endif
 
 namespace {
 
@@ -46,6 +49,7 @@ void make_log_path() {
 	if (fd >= 0) close(fd);
 	g_log_path = tpl;
 	setenv("PROXYSQL_FAKE_PLUGIN_LOG", g_log_path.c_str(), 1);
+	setenv("PROXYSQL_FAKE_PLUGIN2_LOG", g_log_path.c_str(), 1);
 }
 
 void clear_log() {
@@ -65,6 +69,7 @@ void cleanup_log() {
 	if (g_log_path.empty()) return;
 	std::remove(g_log_path.c_str());
 	unsetenv("PROXYSQL_FAKE_PLUGIN_LOG");
+	unsetenv("PROXYSQL_FAKE_PLUGIN2_LOG");
 }
 
 bool contains_in_order(const std::string& haystack, const char* first, const char* second) {
@@ -322,6 +327,43 @@ static void test_stop_uninstalls_controller_through_retained_service() {
 	unsetenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER");
 }
 
+static void test_stop_uninstall_is_scoped_to_controller_owner() {
+	setenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_STOP_UNINSTALL_SERVER_DISCOVERY_CONTROLLER", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN2_STOP_UNINSTALL_SERVER_DISCOVERY_CONTROLLER", "1", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH, PROXYSQL_FAKE_PLUGIN2_PATH };
+	std::string err;
+	ok(proxysql_load_configured_plugins(mgr, paths, err) &&
+	   proxysql_init_configured_plugins(mgr.get(), err) &&
+	   proxysql_start_configured_plugins(mgr.get(), err),
+	   "first of two real plugins installs the discovery controller");
+	ok(proxysql_stop_configured_plugins(mgr, err) && !mgr,
+	   "two-plugin reverse-order stop completes after owner-scoped uninstall attempts");
+
+	const std::string log = read_log();
+	ok(log.find("fake_plugin2:stop_server_controller_uninstall_rejected") != std::string::npos &&
+	   log.find("fake_plugin2:stop_server_controller_uninstalled") == std::string::npos &&
+	   contains_in_order(log, "fake_plugin2:stop_server_controller_uninstall_rejected",
+	   "fake_plugin2:stop") &&
+	   contains_in_order(log, "fake_plugin2:stop", "fake_plugin:server_controller_shutdown"),
+	   "non-owner stop cannot shut down or destroy another plugin's controller");
+	ok(contains_in_order(log, "fake_plugin:server_controller_shutdown",
+	   "fake_plugin:server_controller_destroyed") &&
+	   contains_in_order(log, "fake_plugin:server_controller_destroyed",
+	   "fake_plugin:stop_server_controller_uninstalled") &&
+	   contains_in_order(log, "fake_plugin:stop_server_controller_uninstalled", "fake_plugin:stop") &&
+	   count_occurrences(log, "fake_plugin:server_controller_shutdown") == 1 &&
+	   count_occurrences(log, "fake_plugin:server_controller_destroyed") == 1,
+	   "owner stop later drains and destroys its controller synchronously exactly once");
+
+	unsetenv("PROXYSQL_FAKE_PLUGIN2_STOP_UNINSTALL_SERVER_DISCOVERY_CONTROLLER");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_STOP_UNINSTALL_SERVER_DISCOVERY_CONTROLLER");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER");
+}
+
 static void test_failed_stop_cleanup_is_idempotent(const char* failure_env,
 	const char* failure_marker, const char* description) {
 	setenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER", "1", 1);
@@ -385,7 +427,7 @@ static void test_bogus_abi_version_rejected() {
 }
 
 int main() {
-	plan(39);
+	plan(43);
 
 	make_log_path();
 
@@ -396,6 +438,7 @@ int main() {
 	test_phase_b_partial_failure_rolls_back();
 	test_stop_runs_when_start_fails();
 	test_stop_uninstalls_controller_through_retained_service();
+	test_stop_uninstall_is_scoped_to_controller_owner();
 	test_failed_stop_cleanup_is_idempotent("PROXYSQL_FAKE_PLUGIN_STOP_FAIL",
 		"fake_plugin:stop_fail", "false-returning stop still tears down the manager");
 	test_failed_stop_cleanup_is_idempotent("PROXYSQL_FAKE_PLUGIN_STOP_THROW",
