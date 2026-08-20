@@ -527,7 +527,11 @@ class ProxySQL_Admin {
 	void add_admin_users();
 	bool __refresh_users(std::unique_ptr<SQLite3_result>&& all_users = nullptr,
 		const std::string& checksum = "", const time_t epoch = 0,
-		std::string* atomic_error = nullptr);
+		std::string* atomic_error = nullptr
+#ifdef PROXYSQL40
+		, const ProxySQL_PluginMysqlUsersChecksumSnapshot* exact_checksum = nullptr
+#endif
+	);
 	void __add_active_users_ldap();
 
 	void flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false, bool use_lock=true);
@@ -665,7 +669,8 @@ class ProxySQL_Admin {
 	bool has_variable(const char *name);
 	void init_users(std::unique_ptr<SQLite3_result>&& mysql_users_resultset = nullptr, const std::string& checksum = "", const time_t epoch = 0);
 #ifdef PROXYSQL40
-	bool init_users_under_lock(std::unique_ptr<SQLite3_result>&& mysql_users_resultset, std::string& error);
+	bool init_users_under_lock(std::unique_ptr<SQLite3_result>&& mysql_users_resultset, std::string& error,
+		const ProxySQL_PluginMysqlUsersChecksumSnapshot* exact_checksum = nullptr);
 	ProxySQL_PluginMysqlConfigResult apply_plugin_mysql_config(const ProxySQL_PluginMysqlConfigPlan& plan);
 	SQLite3_result* get_mysql_users_snapshot();
 	SQLite3_result* get_mysql_servers_snapshot();

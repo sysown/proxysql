@@ -6069,7 +6069,7 @@ void ProxySQL_Admin::init_users(
 
 #ifdef PROXYSQL40
 bool ProxySQL_Admin::init_users_under_lock(unique_ptr<SQLite3_result>&& mysql_users_resultset,
-	std::string& error) {
+	std::string& error, const ProxySQL_PluginMysqlUsersChecksumSnapshot* exact_checksum) {
 	if (mysql_users_resultset == nullptr || mysql_users_resultset->columns != 13) {
 		error = "mysql users runtime input must have the canonical 13 columns";
 		return false;
@@ -6083,7 +6083,7 @@ bool ProxySQL_Admin::init_users_under_lock(unique_ptr<SQLite3_result>&& mysql_us
 			return false;
 		}
 	}
-	return __refresh_users(std::move(mysql_users_resultset), "", 0, &error);
+	return __refresh_users(std::move(mysql_users_resultset), "", 0, &error, exact_checksum);
 }
 
 namespace {
@@ -6174,6 +6174,11 @@ bool plugin_config_capture(void*, ProxySQL_PluginMysqlRuntimeSnapshot& snapshot,
 		"hostgroup_settings,servers_defaults,comment FROM mysql_hostgroup_attributes ORDER BY hostgroup_id", error);
 	if (!error.empty()) return false;
 	snapshot.users = clone_result(GloMyAuth->get_current_mysql_users());
+	pthread_mutex_lock(&GloVars.checksum_mutex);
+	snapshot.users_checksum.checksum = GloVars.checksums_values.mysql_users.checksum;
+	snapshot.users_checksum.version = GloVars.checksums_values.mysql_users.version;
+	snapshot.users_checksum.epoch = GloVars.checksums_values.mysql_users.epoch;
+	pthread_mutex_unlock(&GloVars.checksum_mutex);
 	snapshot.rules = clone_result(GloMyQPro->get_current_query_rules_inner());
 	snapshot.fast_routing_rules = clone_result(GloMyQPro->get_current_query_rules_fast_routing_inner());
 	char* interfaces = GloMTH->get_variable("interfaces");
@@ -6281,7 +6286,8 @@ bool plugin_config_restore(void* opaque, ProxySQL_PluginConfigStage stage,
 			return false;
 		}
 	} else if (stage == ProxySQL_PluginConfigStage::users) {
-		if (!admin->init_users_under_lock(unique_ptr<SQLite3_result>(clone_result(snapshot.users)), error)) return false;
+		if (!admin->init_users_under_lock(unique_ptr<SQLite3_result>(clone_result(snapshot.users)), error,
+			&snapshot.users_checksum)) return false;
 	} else if (stage == ProxySQL_PluginConfigStage::rules) {
 		SQLite3_result* rules = clone_result(snapshot.rules);
 		SQLite3_result* fast_rules = clone_result(snapshot.fast_routing_rules);
@@ -6410,6 +6416,9 @@ void ProxySQL_Admin::add_admin_users() {
 bool ProxySQL_Admin::__refresh_users(
 	unique_ptr<SQLite3_result>&& mysql_users_resultset, const string& checksum, const time_t epoch,
 	std::string* atomic_error
+#ifdef PROXYSQL40
+	, const ProxySQL_PluginMysqlUsersChecksumSnapshot* exact_checksum
+#endif
 ) {
 	bool no_resultset_supplied = mysql_users_resultset == nullptr;
 	// Checksums are always generated - 'admin-checksum_*' deprecated
@@ -6458,39 +6467,50 @@ bool ProxySQL_Admin::__refresh_users(
 
 	// Checksums are always generated - 'admin-checksum_*' deprecated
 	{
-		char* buff = nullptr;
-		char buf[20] = { 0 };
+		std::string canonical_checksum;
+		const char* buff = nullptr;
 
-		if (no_resultset_supplied) {
+		if (no_resultset_supplied || atomic_error != nullptr) {
 			uint64_t hash1 = GloMyAuth->get_runtime_checksum();
 			if (GloMyLdapAuth) {
 				hash1 += GloMyLdapAuth->get_ldap_mapping_runtime_checksum();
 			}
-			uint32_t d32[2];
-			memcpy(&d32, &hash1, sizeof(hash1));
-			snprintf(buf, sizeof(buf),"0x%0X%0X", d32[0], d32[1]);
-
-			buff = buf;
+			canonical_checksum = get_checksum_from_hash(hash1);
+			buff = canonical_checksum.c_str();
 		} else {
-			buff = const_cast<char*>(checksum.c_str());
+			buff = checksum.c_str();
 		}
 
-		GloVars.checksums_values.mysql_users.set_checksum(buff);
-		GloVars.checksums_values.mysql_users.version++;
-		time_t t = time(NULL);
-
-		const bool same_checksum = no_resultset_supplied == false;
-		const bool matching_checksums = same_checksum || (GloVars.checksums_values.mysql_users.checksum == checksum);
-
-		if (epoch != 0 && checksum != "" && matching_checksums) {
-			GloVars.checksums_values.mysql_users.epoch = epoch;
+#ifdef PROXYSQL40
+		if (exact_checksum != nullptr) {
+			GloVars.checksums_values.mysql_users.set_checksum(exact_checksum->checksum.c_str());
+			GloVars.checksums_values.mysql_users.version = exact_checksum->version;
+			GloVars.checksums_values.mysql_users.epoch = exact_checksum->epoch;
+			GloVars.epoch_version = time(NULL);
+			GloVars.generate_global_checksum();
+			GloVars.checksums_values.updates_cnt++;
 		} else {
-			GloVars.checksums_values.mysql_users.epoch = t;
-		}
+#endif
+			GloVars.checksums_values.mysql_users.set_checksum(buff);
+			GloVars.checksums_values.mysql_users.version++;
+			time_t t = time(NULL);
 
-		GloVars.epoch_version = t;
-		GloVars.generate_global_checksum();
-		GloVars.checksums_values.updates_cnt++;
+			const bool same_checksum = no_resultset_supplied == false;
+			const bool matching_checksums = same_checksum ||
+				(GloVars.checksums_values.mysql_users.checksum == checksum);
+
+			if (epoch != 0 && checksum != "" && matching_checksums) {
+				GloVars.checksums_values.mysql_users.epoch = epoch;
+			} else {
+				GloVars.checksums_values.mysql_users.epoch = t;
+			}
+
+			GloVars.epoch_version = t;
+			GloVars.generate_global_checksum();
+			GloVars.checksums_values.updates_cnt++;
+#ifdef PROXYSQL40
+		}
+#endif
 
 		// store the new 'added_users' resultset after generating the new checksum
 		GloMyAuth->save_mysql_users(std::move(mysql_users_resultset));

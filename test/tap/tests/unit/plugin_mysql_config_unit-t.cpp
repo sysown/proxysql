@@ -9,6 +9,7 @@
 #include "ProxySQL_PluginConfig_test.h"
 #include "ProxySQL_Statistics.hpp"
 #include "proxysql_admin.h"
+#include "proxysql_utils.h"
 #include "sqlite3db.h"
 #include "tap.h"
 #include "test_init.h"
@@ -609,6 +610,125 @@ int main() {
 		scalar(divergent.db, "SELECT COUNT(*) FROM disk.mysql_query_rules WHERE rule_id=9021 AND comment IS NULL") == 1,
 		"nullable rule comments are non-owned collisions and remain untouched");
 
+	Fixture complementary_variants;
+	ProxySQL_PluginMysqlUserRow backend_only {
+		"split_user", "plugin-backend-v1", true, false, 8100, "appdb", false, true, false,
+		false, true, 100, "{}", "mysql_router:managed"};
+	complementary_variants.plan.users = &backend_only;
+	complementary_variants.plan.user_count = 1;
+	const auto initial_variant = proxysql_apply_plugin_mysql_config(
+		complementary_variants.db, complementary_variants.plan, complementary_variants.runtime.hooks());
+	ok(initial_variant.applied &&
+		scalar(complementary_variants.db,
+			"SELECT COUNT(*) FROM mysql_users WHERE username='split_user' AND backend=1 AND frontend=0") == 1 &&
+		scalar(complementary_variants.db,
+			"SELECT COUNT(*) FROM disk.mysql_users WHERE username='split_user' AND backend=1 AND frontend=0") == 1,
+		"a backend-only plugin user is materialized in both configuration tiers");
+	ok(complementary_variants.db.execute(
+		"INSERT INTO mysql_users VALUES ('split_user','operator-frontend',1,0,10,'',0,1,0,0,1,77,'{}','operator')") &&
+		complementary_variants.db.execute(
+		"INSERT INTO disk.mysql_users VALUES ('split_user','operator-frontend',1,0,10,'',0,1,0,0,1,77,'{}','operator')"),
+		"an operator adds the complementary frontend-only variant in both tiers");
+	backend_only.password = "plugin-backend-v2";
+	complementary_variants.plan.generation = 14;
+	const auto replaced_variant = proxysql_apply_plugin_mysql_config(
+		complementary_variants.db, complementary_variants.plan, complementary_variants.runtime.hooks());
+	ok(replaced_variant.applied &&
+		text_value(complementary_variants.db,
+			"SELECT password FROM mysql_users WHERE username='split_user' AND backend=1 AND frontend=0") ==
+				"plugin-backend-v2" &&
+		text_value(complementary_variants.db,
+			"SELECT password FROM mysql_users WHERE username='split_user' AND backend=0 AND frontend=1") ==
+				"operator-frontend" &&
+		text_value(complementary_variants.db,
+			"SELECT password FROM disk.mysql_users WHERE username='split_user' AND backend=1 AND frontend=0") ==
+				"plugin-backend-v2" &&
+		text_value(complementary_variants.db,
+			"SELECT password FROM disk.mysql_users WHERE username='split_user' AND backend=0 AND frontend=1") ==
+				"operator-frontend",
+		"plugin replacement owns only its exact variant and preserves the operator complement in both tiers");
+	complementary_variants.plan.generation = 15;
+	complementary_variants.plan.users = nullptr;
+	complementary_variants.plan.user_count = 0;
+	const auto removed_variant = proxysql_apply_plugin_mysql_config(
+		complementary_variants.db, complementary_variants.plan, complementary_variants.runtime.hooks());
+	ok(removed_variant.applied &&
+		scalar(complementary_variants.db,
+			"SELECT COUNT(*) FROM mysql_users WHERE username='split_user' AND backend=1 AND frontend=0") == 0 &&
+		text_value(complementary_variants.db,
+			"SELECT password FROM mysql_users WHERE username='split_user' AND backend=0 AND frontend=1") ==
+				"operator-frontend" &&
+		scalar(complementary_variants.db,
+			"SELECT COUNT(*) FROM disk.mysql_users WHERE username='split_user' AND backend=1 AND frontend=0") == 0 &&
+		text_value(complementary_variants.db,
+			"SELECT password FROM disk.mysql_users WHERE username='split_user' AND backend=0 AND frontend=1") ==
+				"operator-frontend",
+		"plugin removal deletes only its exact variant and preserves the operator complement in both tiers");
+
+	Fixture ambiguous_legacy;
+	for (const char* schema : {"main", "disk"}) {
+		const std::string prefix = std::string(schema) + ".";
+		ok(ambiguous_legacy.db.execute(("INSERT INTO " + prefix + "mysql_users VALUES "
+			"('legacy_split','operator-backend',1,0,10,'',0,1,0,1,0,100,'{}','operator'),"
+			"('legacy_split','operator-frontend',1,0,10,'',0,1,0,0,1,100,'{}','operator')").c_str()) &&
+			ambiguous_legacy.db.execute(("INSERT INTO " + prefix +
+				"proxysql_plugin_owned_objects VALUES ('mysql_router','mysql_user','legacy_split',12)").c_str()),
+			"an ambiguous username-only legacy ownership row is seeded in %s", schema);
+	}
+	ambiguous_legacy.plan.users = nullptr;
+	ambiguous_legacy.plan.user_count = 0;
+	const auto ambiguous_result = proxysql_apply_plugin_mysql_config(
+		ambiguous_legacy.db, ambiguous_legacy.plan, ambiguous_legacy.runtime.hooks());
+	ok(!ambiguous_result.applied && ambiguous_result.message.find("ambiguous") != std::string::npos &&
+		scalar(ambiguous_legacy.db, "SELECT COUNT(*) FROM mysql_users WHERE username='legacy_split'") == 2 &&
+		scalar(ambiguous_legacy.db, "SELECT COUNT(*) FROM disk.mysql_users WHERE username='legacy_split'") == 2 &&
+		scalar(ambiguous_legacy.db,
+			"SELECT generation FROM proxysql_plugin_config_generations WHERE owner='mysql_router'") == 12 &&
+		all_runtime_at(ambiguous_legacy.runtime, 12),
+		"ambiguous legacy username ownership fails closed without deleting either variant");
+
+	Fixture unmarked_legacy;
+	for (const char* schema : {"main", "disk"}) {
+		const std::string prefix = std::string(schema) + ".";
+		ok(unmarked_legacy.db.execute(("INSERT INTO " + prefix + "mysql_users VALUES "
+			"('legacy_single','operator-only',1,0,10,'',0,1,0,1,0,100,'{}','operator')").c_str()) &&
+			unmarked_legacy.db.execute(("INSERT INTO " + prefix +
+				"proxysql_plugin_owned_objects VALUES ('mysql_router','mysql_user','legacy_single',12)").c_str()),
+			"a single unmarked legacy username row is seeded in %s", schema);
+	}
+	unmarked_legacy.plan.users = nullptr;
+	unmarked_legacy.plan.user_count = 0;
+	const auto unmarked_result = proxysql_apply_plugin_mysql_config(
+		unmarked_legacy.db, unmarked_legacy.plan, unmarked_legacy.runtime.hooks());
+	ok(!unmarked_result.applied && unmarked_result.message.find("ambiguous") != std::string::npos &&
+		text_value(unmarked_legacy.db,
+			"SELECT password FROM mysql_users WHERE username='legacy_single'") == "operator-only" &&
+		text_value(unmarked_legacy.db,
+			"SELECT password FROM disk.mysql_users WHERE username='legacy_single'") == "operator-only" &&
+		all_runtime_at(unmarked_legacy.runtime, 12),
+		"a username-only legacy ledger cannot claim a single unmarked operator row");
+
+	Fixture encoded_name_legacy;
+	for (const char* schema : {"main", "disk"}) {
+		const std::string prefix = std::string(schema) + ".";
+		ok(encoded_name_legacy.db.execute(("INSERT INTO " + prefix + "mysql_users VALUES "
+			"('v2:1:0:41','operator-encoded-name',1,0,10,'',0,1,0,1,0,100,'{}','operator')").c_str()) &&
+			encoded_name_legacy.db.execute(("INSERT INTO " + prefix +
+				"proxysql_plugin_owned_objects VALUES ('mysql_router','mysql_user','v2:1:0:41',12)").c_str()),
+			"an exact-key-shaped legacy username is seeded in %s", schema);
+	}
+	encoded_name_legacy.plan.users = nullptr;
+	encoded_name_legacy.plan.user_count = 0;
+	const auto encoded_name_result = proxysql_apply_plugin_mysql_config(
+		encoded_name_legacy.db, encoded_name_legacy.plan, encoded_name_legacy.runtime.hooks());
+	ok(!encoded_name_result.applied && encoded_name_result.message.find("ambiguous") != std::string::npos &&
+		text_value(encoded_name_legacy.db,
+			"SELECT password FROM mysql_users WHERE username='v2:1:0:41'") == "operator-encoded-name" &&
+		text_value(encoded_name_legacy.db,
+			"SELECT password FROM disk.mysql_users WHERE username='v2:1:0:41'") == "operator-encoded-name" &&
+		all_runtime_at(encoded_name_legacy.runtime, 12),
+		"an exact-key-shaped legacy username fails closed instead of being misparsed as ownership");
+
 	Fixture cleanup;
 	bool reject_commit = true;
 	sqlite3_commit_hook(cleanup.db.get_db(), &reject_one_commit, &reject_commit);
@@ -1027,6 +1147,7 @@ int main() {
 
 	const auto live_applied = admin->apply_plugin_mysql_config(v.plan);
 	SQLite3_result* applied_users = GloMyAuth->get_current_mysql_users();
+	const std::string applied_users_checksum = get_checksum_from_hash(GloMyAuth->get_runtime_checksum());
 	SQLite3_row* applied_router = result_row(applied_users, 0, "router_app");
 	SQLite3_result* applied_servers = MyHGM->get_current_mysql_table("cluster_mysql_servers");
 	SQLite3_result* applied_rules = GloMyQPro->get_current_query_rules_inner();
@@ -1046,6 +1167,9 @@ int main() {
 		std::string(applied_router->fields[11]) == "{}" &&
 		std::string(applied_router->fields[12]) == "mysql_router:managed",
 		"real Admin publication loads exact canonical Auth field values");
+	ok(!applied_users_checksum.empty() &&
+		applied_users_checksum == GloVars.checksums_values.mysql_users.checksum,
+		"real Admin publication exposes the canonical checksum of the complete live Auth state");
 	ok(applied_servers != nullptr && result_row(applied_servers, 1, "writer-new") != nullptr &&
 		applied_rules != nullptr && applied_rules->rows_count == 3 && applied_router_rule != nullptr &&
 		applied_router_rule->fields[3] != nullptr && std::string(applied_router_rule->fields[3]) == "0" &&
@@ -1058,6 +1182,9 @@ int main() {
 	const uint64_t stable_auth_checksum = GloMyAuth->get_current_mysql_users()->raw_checksum();
 	const uint64_t stable_server_checksum = MyHGM->get_current_mysql_table("cluster_mysql_servers")->raw_checksum();
 	const uint64_t stable_rule_checksum = GloMyQPro->get_current_query_rules_inner()->raw_checksum();
+	const std::string stable_users_module_checksum = GloVars.checksums_values.mysql_users.checksum;
+	const unsigned long long stable_users_checksum_version = GloVars.checksums_values.mysql_users.version;
+	const unsigned long long stable_users_checksum_epoch = GloVars.checksums_values.mysql_users.epoch;
 	v.plan.generation = 14;
 	int recovery_port = 0;
 	const int recovery_reservation = reserve_loopback_port(recovery_port);
@@ -1117,11 +1244,14 @@ int main() {
 	ok(!qpro_failure.applied && qpro_failure.message.find("mysql_query_rules_fast_routing") != std::string::npos &&
 		scalar(v.db, "SELECT generation FROM proxysql_plugin_config_generations WHERE owner='mysql_router'") == 13 &&
 		GloMyAuth->get_current_mysql_users()->raw_checksum() == stable_auth_checksum &&
+		std::string(GloVars.checksums_values.mysql_users.checksum) == stable_users_module_checksum &&
+		GloVars.checksums_values.mysql_users.version == stable_users_checksum_version &&
+		GloVars.checksums_values.mysql_users.epoch == stable_users_checksum_epoch &&
 		MyHGM->get_current_mysql_table("cluster_mysql_servers")->raw_checksum() == stable_server_checksum &&
 		GloMyQPro->get_current_query_rules_inner()->raw_checksum() == stable_rule_checksum &&
 		after_qpro_interfaces != nullptr && new_interface == after_qpro_interfaces &&
 		can_connect_loopback(new_port),
-		"a real QPro adapter failure restores HGM and Auth and leaves listeners at generation 13");
+		"a real QPro adapter failure restores exact Auth checksum state, HGM, and listeners at generation 13");
 	free(after_qpro_interfaces);
 	ok(v.db.execute(k_fast_rules), "query processor failure fixture is repaired");
 
@@ -1185,7 +1315,7 @@ int main() {
 		const bool complete = !exception_crossed_admin && !failed_publish.applied &&
 			failed_publish.message.find("exception") != std::string::npos && midpoint.calls >= 2 &&
 			generations_rolled_back && old_state_intact &&
-			checksum_version_after_restore > checksum_version_before && retry_publish.applied &&
+			checksum_version_after_restore == checksum_version_before && retry_publish.applied &&
 			retry_publish.generation == 14 && generations_published && retry_loaded_users &&
 			GloVars.checksums_values.mysql_users.version > checksum_version_after_restore;
 		_exit(complete ? 0 : 1);
@@ -1196,6 +1326,58 @@ int main() {
 	ok(auth_exception_waited && WIFEXITED(auth_exception_status) &&
 		WEXITSTATUS(auth_exception_status) == 0,
 		"a real Auth midpoint exception completes reverse checksum restore and releases every publication lock");
+
+	ProxySQL_PluginMysqlUserRow live_backend_only {
+		"split_live", "plugin-live-v1", true, false, 8100, "appdb", false, true, false,
+		false, true, 90, "{}", "mysql_router:managed"};
+	v.plan.generation = 14;
+	v.plan.users = &live_backend_only;
+	v.plan.user_count = 1;
+	const auto live_variant_initial = admin->apply_plugin_mysql_config(v.plan);
+	ok(live_variant_initial.applied &&
+		v.db.execute("INSERT INTO main.mysql_users VALUES "
+			"('split_live','operator-live',1,0,10,'',0,1,0,0,1,88,'{}','operator')") &&
+		v.db.execute("INSERT INTO disk.mysql_users VALUES "
+			"('split_live','operator-live',1,0,10,'',0,1,0,0,1,88,'{}','operator')"),
+		"the live fixture adds an operator frontend variant after plugin backend ownership");
+	live_backend_only.password = "plugin-live-v2";
+	v.plan.generation = 15;
+	const auto live_variant_replaced = admin->apply_plugin_mysql_config(v.plan);
+	account_details_t live_backend = GloMyAuth->lookup(
+		const_cast<char*>("split_live"), USERNAME_BACKEND, {true, true, true});
+	account_details_t live_frontend = GloMyAuth->lookup(
+		const_cast<char*>("split_live"), USERNAME_FRONTEND, {true, true, true});
+	const bool live_replacement_exact = live_backend.password != nullptr && live_frontend.password != nullptr &&
+		std::string(live_backend.password) == "plugin-live-v2" &&
+		std::string(live_frontend.password) == "operator-live";
+	free_account_details(live_backend);
+	free_account_details(live_frontend);
+	ok(live_variant_replaced.applied && live_replacement_exact &&
+		text_value(v.db, "SELECT password FROM main.mysql_users WHERE username='split_live' AND backend=0") ==
+			"operator-live" &&
+		text_value(v.db, "SELECT password FROM disk.mysql_users WHERE username='split_live' AND backend=0") ==
+			"operator-live",
+		"replacement preserves the complementary operator variant in main, disk, and live Auth");
+	v.plan.generation = 16;
+	v.plan.users = nullptr;
+	v.plan.user_count = 0;
+	const auto live_variant_removed = admin->apply_plugin_mysql_config(v.plan);
+	account_details_t removed_backend = GloMyAuth->lookup(
+		const_cast<char*>("split_live"), USERNAME_BACKEND, {true, true, true});
+	account_details_t surviving_frontend = GloMyAuth->lookup(
+		const_cast<char*>("split_live"), USERNAME_FRONTEND, {true, true, true});
+	const bool live_removal_exact = removed_backend.password == nullptr && surviving_frontend.password != nullptr &&
+		std::string(surviving_frontend.password) == "operator-live";
+	free_account_details(removed_backend);
+	free_account_details(surviving_frontend);
+	ok(live_variant_removed.applied && live_removal_exact &&
+		scalar(v.db, "SELECT COUNT(*) FROM main.mysql_users WHERE username='split_live' AND backend=1") == 0 &&
+		text_value(v.db, "SELECT password FROM main.mysql_users WHERE username='split_live' AND backend=0") ==
+			"operator-live" &&
+		scalar(v.db, "SELECT COUNT(*) FROM disk.mysql_users WHERE username='split_live' AND backend=1") == 0 &&
+		text_value(v.db, "SELECT password FROM disk.mysql_users WHERE username='split_live' AND backend=0") ==
+			"operator-live",
+		"removal deletes only the plugin variant from main, disk, and live Auth");
 	ev_async_stop(MyHGM->gtid_ev_loop, MyHGM->gtid_ev_async);
 	ev_loop_destroy(MyHGM->gtid_ev_loop);
 	MyHGM->gtid_ev_loop = nullptr;

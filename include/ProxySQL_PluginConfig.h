@@ -136,6 +136,15 @@ enum class ProxySQL_PluginConfigStage : uint8_t {
 	commit = 6,
 };
 
+// Checksum metadata is part of the observable Auth runtime generation. A
+// rejected multi-module publication restores this state exactly together with
+// the credential groups and their canonical result set.
+struct ProxySQL_PluginMysqlUsersChecksumSnapshot {
+	std::string checksum;
+	unsigned long long version {0};
+	unsigned long long epoch {0};
+};
+
 // Runtime snapshots are owned by the caller. Each non-null result is deleted
 // by this object's destructor. The result sets contain complete module state,
 // captured while the corresponding runtime locks are held.
@@ -145,6 +154,7 @@ struct ProxySQL_PluginMysqlRuntimeSnapshot {
 	SQLite3_result* group_replication_hostgroups {nullptr};
 	SQLite3_result* hostgroup_attributes {nullptr};
 	SQLite3_result* users {nullptr};
+	ProxySQL_PluginMysqlUsersChecksumSnapshot users_checksum;
 	SQLite3_result* rules {nullptr};
 	SQLite3_result* fast_routing_rules {nullptr};
 	std::string interfaces;
