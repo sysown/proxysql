@@ -30,9 +30,6 @@
 extern ProxySQL_GlobalVariables GloVars;
 extern MySQL_Threads_Handler *GloMTH;
 
-void proxysql_lock_server_discovery_protocol(ProxySQL_ServerProtocol protocol);
-void proxysql_unlock_server_discovery_protocol(ProxySQL_ServerProtocol protocol);
-
 extern "C" void proxysql_server_discovery_retirement_attempt_for_test(
 	ProxySQL_ServerProtocol) __attribute__((weak));
 
@@ -1075,22 +1072,6 @@ private:
 	std::function<void()> release_;
 };
 
-class ScopedServerDiscoveryProtocolLock {
-public:
-	explicit ScopedServerDiscoveryProtocolLock(ProxySQL_ServerProtocol protocol)
-		: protocol_(protocol) {
-		proxysql_lock_server_discovery_protocol(protocol_);
-	}
-	~ScopedServerDiscoveryProtocolLock() {
-		proxysql_unlock_server_discovery_protocol(protocol_);
-	}
-	ScopedServerDiscoveryProtocolLock(const ScopedServerDiscoveryProtocolLock&) = delete;
-	ScopedServerDiscoveryProtocolLock& operator=(const ScopedServerDiscoveryProtocolLock&) = delete;
-
-private:
-	ProxySQL_ServerProtocol protocol_;
-};
-
 struct ServerCallbackContext {
 	ProxySQL_PluginManager *manager;
 	int protocol_index;
@@ -1414,6 +1395,7 @@ void ProxySQL_PluginManager::set_server_retirement_observer_for_test(
 bool ProxySQL_PluginManager::unregister_server_module(ProxySQL_ServerProtocol protocol) {
 	const int index = server_protocol_index(protocol);
 	if (index < 0) return false;
+	ScopedServerDiscoveryProtocolLock protocol_lock(protocol);
 	registered_server_module_t retired {};
 	server_retirement_observer_for_test_cb observer = nullptr;
 	void *observer_opaque = nullptr;

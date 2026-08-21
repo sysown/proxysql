@@ -18,8 +18,6 @@
 #ifdef PROXYSQL40
 bool proxysql_server_discovery_admin_available();
 void proxysql_wake_server_discovery_admin();
-void proxysql_lock_server_discovery_protocol(ProxySQL_ServerProtocol protocol);
-void proxysql_unlock_server_discovery_protocol(ProxySQL_ServerProtocol protocol);
 bool proxysql_materialize_server_desired_set(const ProxySQL_ServerDesiredSet& desired_set);
 extern "C" void proxysql_server_discovery_after_final_revalidation_for_test(
 	ProxySQL_ServerProtocol) __attribute__((weak));
@@ -405,19 +403,6 @@ struct ServerDesiredSetInbox {
 	std::deque<QueuedServerDesiredSet> queue;
 	size_t outstanding {0};
 	bool shutdown {true};
-};
-
-class ScopedServerDiscoveryProtocolLock {
-public:
-	explicit ScopedServerDiscoveryProtocolLock(ProxySQL_ServerProtocol protocol)
-		: protocol_(protocol) { proxysql_lock_server_discovery_protocol(protocol_); }
-	~ScopedServerDiscoveryProtocolLock() {
-		proxysql_unlock_server_discovery_protocol(protocol_);
-	}
-	ScopedServerDiscoveryProtocolLock(const ScopedServerDiscoveryProtocolLock&) = delete;
-	ScopedServerDiscoveryProtocolLock& operator=(const ScopedServerDiscoveryProtocolLock&) = delete;
-private:
-	ProxySQL_ServerProtocol protocol_;
 };
 
 ServerDesiredSetInbox& server_desired_set_inbox() {

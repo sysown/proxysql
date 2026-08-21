@@ -87,6 +87,23 @@ struct ProxySQL_ServerHostgroupClaim {
 #ifdef PROXYSQL40
 // Internal, lifetime-safe snapshots used by core monitor/HGM consumers. These
 // are not plugin service-table callbacks and do not change ABI-9.
+void proxysql_lock_server_discovery_protocol(ProxySQL_ServerProtocol protocol);
+void proxysql_unlock_server_discovery_protocol(ProxySQL_ServerProtocol protocol);
+
+class ScopedServerDiscoveryProtocolLock {
+public:
+	explicit ScopedServerDiscoveryProtocolLock(ProxySQL_ServerProtocol protocol)
+		: protocol_(protocol) { proxysql_lock_server_discovery_protocol(protocol_); }
+	~ScopedServerDiscoveryProtocolLock() {
+		proxysql_unlock_server_discovery_protocol(protocol_);
+	}
+	ScopedServerDiscoveryProtocolLock(const ScopedServerDiscoveryProtocolLock&) = delete;
+	ScopedServerDiscoveryProtocolLock& operator=(const ScopedServerDiscoveryProtocolLock&) = delete;
+
+private:
+	ProxySQL_ServerProtocol protocol_;
+};
+
 std::vector<ProxySQL_ServerHostgroupClaim> proxysql_active_server_hostgroup_claims(
 	ProxySQL_ServerProtocol protocol);
 uint64_t proxysql_server_read_only_monitor_epoch(ProxySQL_ServerProtocol protocol);
