@@ -4,6 +4,7 @@
  */
 
 #include <algorithm>
+#include <cstring>
 #include <string>
 #include <vector>
 #include <unistd.h>
@@ -23,11 +24,24 @@ static const char* k_auth_profile_id = "tap_mcp_rules_auth";
 // Helper Functions
 // ============================================================================
 
+std::string escape_sql_literal(const char* input) {
+	std::string escaped = input ? input : "";
+	size_t pos = 0;
+	while ((pos = escaped.find('\'', pos)) != std::string::npos) {
+		escaped.insert(pos, 1, '\'');
+		pos += 2;
+	}
+	return escaped;
+}
+
 bool configure_mcp_for_rules_test(MYSQL* admin, const CommandLine& cl) {
 	diag("Configuring MCP for rules test");
+	const std::string auth_token = escape_sql_literal(cl.mcp_auth_token);
 
-	run_q(admin, "SET mcp-port=6071");
+	run_q(admin, ("SET mcp-port=" + std::to_string(cl.mcp_port)).c_str());
 	run_q(admin, "SET mcp-use_ssl=false");
+	run_q(admin, ("SET mcp-config_endpoint_auth='" + auth_token + "'").c_str());
+	run_q(admin, ("SET mcp-query_endpoint_auth='" + auth_token + "'").c_str());
 	run_q(admin, "SET mcp-enabled=true");
 
 	// Clean up existing test data
@@ -200,7 +214,10 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	MCPClient mcp(cl.admin_host, 6071);
+	MCPClient mcp(cl.admin_host, cl.mcp_port);
+	if (strlen(cl.mcp_auth_token) > 0) {
+		mcp.set_auth_token(cl.mcp_auth_token);
+	}
 	if (!mcp.check_server()) {
 		diag("MCP server not accessible");
 		mysql_close(admin);
@@ -213,6 +230,7 @@ int main(int argc, char** argv) {
 	diag("Final cleanup");
 	run_q(admin, "DELETE FROM mcp_query_rules WHERE rule_id >= 1000");
 	run_q(admin, "LOAD MCP QUERY RULES TO RUNTIME");
+	run_q(admin, "LOAD MCP VARIABLES FROM DISK");
 	ok(true, "Cleanup completed");
 
 	mysql_close(admin);

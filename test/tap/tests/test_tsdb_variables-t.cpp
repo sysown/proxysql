@@ -195,35 +195,36 @@ int main() {
 
 	// 12. Test Downsampling command
 	// NOTE: Downsampling only processes COMPLETED hours (data with timestamps before current_hour).
-	// Since we only have a few seconds of data, we need to insert test data with timestamps
-	// from at least 1 hour ago for the downsample to produce results.
+	// Since we only have a few seconds of data, insert test data in the most recently
+	// completed hour. Downsampling deliberately refreshes this boundary bucket so
+	// metrics committed just after an earlier pass are not lost.
 	diag("Testing TSDB downsampling via command...");
 
-	// Get current timestamp and calculate timestamp from 2 hours ago
+	// Get current timestamp and calculate the start of the previous hour.
 	time_t now = time(NULL);
-	time_t two_hours_ago = ((now - 7200) / 3600) * 3600; // Start of the hour, 2 hours ago
-	diag("Current time: %ld, Two hours ago (hour boundary): %ld", now, two_hours_ago);
+	time_t completed_hour = ((now - 3600) / 3600) * 3600;
+	diag("Current time: %ld, Previous hour boundary: %ld", now, completed_hour);
 
-	// Insert test data with timestamps from 2 hours ago (completed hour)
+	// Insert test data with timestamps from the completed hour.
 	diag("Inserting test metrics data with timestamps from completed hour...");
 	char insert_query[512];
 	snprintf(insert_query, sizeof(insert_query),
 		"INSERT OR REPLACE INTO stats_history.tsdb_metrics (timestamp, metric_name, labels, value) "
 		"VALUES (%ld, 'test_downsample_metric', '{\"test\":\"true\"}', 42.0)",
-		two_hours_ago);
+		completed_hour);
 	rc = mysql_query(admin, insert_query);
 	if (rc != 0) {
 		diag("Failed to insert test data: %s", mysql_error(admin));
 	}
 	drain_results(admin);
-	diag("Inserted test metric at timestamp %ld", two_hours_ago);
+	diag("Inserted test metric at timestamp %ld", completed_hour);
 
 	// Also insert a few more data points in the same hour for realistic test
 	for (int i = 1; i <= 3; i++) {
 		snprintf(insert_query, sizeof(insert_query),
 			"INSERT OR REPLACE INTO stats_history.tsdb_metrics (timestamp, metric_name, labels, value) "
 			"VALUES (%ld, 'test_downsample_metric', '{\"test\":\"true\"}', %f)",
-			two_hours_ago + i * 60, 42.0 + i); // Add data points every minute
+			completed_hour + i * 60, 42.0 + i); // Add data points every minute
 		mysql_query(admin, insert_query);
 		drain_results(admin);
 	}
@@ -233,6 +234,29 @@ int main() {
 	string before_count;
 	fetch_single_string(admin, "SELECT COUNT(*) FROM stats_history.tsdb_metrics WHERE metric_name='test_downsample_metric'", before_count);
 	diag("Test metrics in tsdb_metrics before downsample: %s", before_count.c_str());
+
+	// Re-evaluate the boundary immediately before the command. A test that
+	// starts in the final milliseconds of an hour must not leave its fixture in
+	// what has just become the second-most-recent completed bucket.
+	const time_t command_now = time(NULL);
+	const time_t command_completed_hour = ((command_now - 3600) / 3600) * 3600;
+	if (command_completed_hour != completed_hour) {
+		diag("Hour rolled over during fixture setup; moving data from %ld to %ld",
+			completed_hour, command_completed_hour);
+		mysql_query(admin,
+			"DELETE FROM stats_history.tsdb_metrics WHERE metric_name='test_downsample_metric'");
+		drain_results(admin);
+		completed_hour = command_completed_hour;
+		for (int i = 0; i <= 3; ++i) {
+			snprintf(insert_query, sizeof(insert_query),
+				"INSERT OR REPLACE INTO stats_history.tsdb_metrics "
+				"(timestamp, metric_name, labels, value) "
+				"VALUES (%ld, 'test_downsample_metric', '{\"test\":\"true\"}', %f)",
+				completed_hour + i * 60, 42.0 + i);
+			mysql_query(admin, insert_query);
+			drain_results(admin);
+		}
+	}
 
 	// Run the downsample command
 	rc = mysql_query(admin, "PROXYSQL TSDB DOWNSAMPLE");
