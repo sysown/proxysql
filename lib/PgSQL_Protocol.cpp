@@ -1169,7 +1169,8 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 				data = (const unsigned char*)hdr.data.ptr;
 				length = hdr.data.size;
 
-				if (scram_handle_client_final((*myds)->scram_state, &stored_user_info, data, length)) {
+				const bool proof_verified = scram_handle_client_final((*myds)->scram_state, &stored_user_info, data, length);
+				if (proof_verified && password) {
 					/* Persist the harvested ClientKey + the verifier's ServerKey onto the long-lived
 					 * client userinfo so the backend connection can hand them to libpq. Harvest ONLY
 					 * when the stored secret IS a SCRAM verifier: for a plaintext-stored user the SCRAM
@@ -1193,6 +1194,25 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 					//	return false;
 					//welcome_client();
 					ret = EXECUTION_STATE::SUCCESSFUL;
+				}
+				else if (proof_verified) {
+					/* The proof verified but the credential is gone: the user was removed by a LOAD
+					 * PGSQL USERS TO RUNTIME between client-first and client-final. Verification runs
+					 * against scram_state, built from the secret that existed at client-first, so it
+					 * still succeeds -- and without this guard the login counts as SUCCESSFUL and the
+					 * block below strdup()s a NULL password, taking the whole process down.
+					 *
+					 * Keyed on proof_verified, not on !password: an unknown username also reaches
+					 * client-final with password==NULL (that is the anti-enumeration mock exchange),
+					 * but its proof cannot verify against the mock secret, so it belongs on the
+					 * ordinary failure path below and must not log an error on every bad-username
+					 * attempt.
+					 *
+					 * ret stays FAILED, so the session emits the same generic "Access denied" the
+					 * wrong-password path does and a removed user remains indistinguishable from a
+					 * bad password. */
+					proxy_error("Session=%p , DS=%p , user='%s'. Credential removed during the SCRAM exchange; rejecting the login\n",
+						(*myds)->sess, (*myds), user);
 				}
 				else {
 					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. SASL authentication failed.\n", (*myds)->sess, (*myds), user);

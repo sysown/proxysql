@@ -446,6 +446,8 @@ PG_LITE_CLIENT_TESTS := \
 	pgsql-datatype_matrix-t \
 	pgsql-server_side_cursors-t \
 	pgsql-scram_reload_midhandshake-t \
+	pgsql-scram_user_removed_midhandshake-t \
+	pgsql-scram_rotate_midhandshake_backend-t \
 	pgsql-native_portals-t \
 	test_ffto_pgsql_pipeline-t \
 	test_ffto_pgsql_stmt_portal-t

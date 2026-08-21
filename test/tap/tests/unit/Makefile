@@ -453,6 +453,7 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	pgsql_response_framer_traffic_unit-t \
 	pgsql_reconcile_unit-t \
 	ffto_state_machine_unit-t \
+	pgsql_conninfo_credentials_unit-t \
 	restapi_server_unit-t \
 	mcp_client_unit-t
 

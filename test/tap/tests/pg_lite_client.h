@@ -232,9 +232,10 @@ private:
     struct ScramState* sasl_st_ = nullptr;
     std::string sasl_password_;        // to rebuild PgCredentials for the client-final proof
     char* sasl_client_first_ = nullptr; // owned by us; freed in saslFinish()/destructor
-    // Owned COPY of the server nonce. read_server_first_message() hands back a pointer INTO its
-    // input buffer (scram.c: read_attr_value), not into sasl_st_ -- and saslBegin()'s input buffer
-    // dies when it returns, so the pointer must not be stored raw across the saslBegin/saslFinish gap.
+    // OWNED copy of the server nonce. read_server_first_message() returns a pointer INTO the buffer
+    // it was handed (read_attr_value() returns `*input`), not into sasl_st_ -- so the value must be
+    // copied out before saslBegin()'s local server-first string dies, or saslFinish() reads freed
+    // memory when it builds the client-final proof.
     std::string sasl_server_nonce_;
     char* sasl_salt_ = nullptr;         // owned by us (read_server_first_message malloc'd it)
     int sasl_saltlen_ = 0;

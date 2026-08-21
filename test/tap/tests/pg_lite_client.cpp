@@ -627,13 +627,14 @@ std::string PgConnection::saslBegin(const std::string& user, const std::string& 
     // read_server_first_message() mutates its input in place (read_attr_value writes NULs), and
     // hands back server_nonce as a pointer INTO that buffer -- which is this local, about to die.
     // Copy the nonce into the member before returning; sasl_salt_ IS malloc'd and stays owned.
+    // &s[0], not const_cast(c_str()): the callee writes NULs into the buffer it is handed.
     char* server_nonce = nullptr;
     if (!read_server_first_message(sasl_st_, &server_first[0],
                                    &server_nonce, &sasl_salt_, &sasl_saltlen_, &sasl_iterations_)) {
         std::string e = scram_error(); freeSaslState();
         throw PgException(std::string("scram read server-first: ") + e);
     }
-    sasl_server_nonce_ = server_nonce;
+    sasl_server_nonce_ = server_nonce ? server_nonce : "";
     return server_first;
 }
 
