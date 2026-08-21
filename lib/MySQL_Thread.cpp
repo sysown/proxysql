@@ -3903,7 +3903,7 @@ void MySQL_Thread::run___cleanup_mirror_queue() {
  */
 void MySQL_Thread::run_MoveSessionsBetweenThreads() {
 	if (GloVars.global.idle_threads) {
-		int r=rand()%(GloMTH->num_threads);
+		int r=rand_fast()%(GloMTH->num_threads);
 		MySQL_Thread *thr=GloMTH->mysql_threads_idles[r].worker;
 		worker_thread_assigns_sessions_to_idle_thread(thr);
 		worker_thread_gets_sessions_from_idle_thread();
@@ -3954,7 +3954,7 @@ void MySQL_Thread::run_BootstrapListener() {
 		// The delay for the active-wait is a fraction of 'poll_timeout'. Since other
 		// threads may be waiting on poll for further operations, checks are meaningless
 		// until that timeout expires (other workers make progress).
-		usleep(std::min(std::max(mysql_thread___poll_timeout/20, 10000), 40000) + (rand() % 2000));
+		usleep(std::min(std::max(mysql_thread___poll_timeout/20, 10000), 40000) + (rand_fast() % 2000));
 	}
 }
 
@@ -4178,7 +4178,7 @@ __run_skip_1:
 		// here we handle epoll_wait()
 		if (GloVars.global.idle_threads && idle_maintenance_thread) {
 			run_Handle_epoll_wait(rc);
-			unsigned int w=rand()%(GloMTH->num_threads);
+			unsigned int w=rand_fast()%(GloMTH->num_threads);
 			MySQL_Thread *thr=GloMTH->mysql_threads[w].worker;
 			if (resume_mysql_sessions->len) {
 				idle_thread_assigns_sessions_to_worker_thread(thr);
@@ -5378,7 +5378,10 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 			sess->client_myds->proxy_addr.addr=strdup(ifi->address);
 			sess->client_myds->proxy_addr.port=ifi->port;
 		}
-		sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, true);
+		if (sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, true) == false) {
+			delete sess;
+			return;
+		}
 		ioctl_FIONBIO(sess->client_myds->fd, 1);
 
 		/**

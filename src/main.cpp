@@ -9,6 +9,7 @@ using json = nlohmann::json;
 #include <thread>
 #include "btree_map.h"
 #include "proxysql.h"
+#include "gen_utils.h"
 
 #include <random>
 #include <unistd.h>
@@ -91,10 +92,18 @@ using std::vector;
 
 
 void sleep_iter(unsigned int iter) {
+	static thread_local std::mt19937 jitter_rng(std::random_device{}());
+	static thread_local std::uniform_int_distribution<int> jitter_dist(0, 999);
 	usleep(50*iter);
 #ifdef RUNNING_ON_VALGRIND
-	usleep((1000+rand()%1000)*iter);
+	usleep((1000 + jitter_dist(jitter_rng)) * iter);
 #endif // RUNNING_ON_VALGRIND
+}
+
+static unsigned int rand_id() {
+	static thread_local std::mt19937 gen(std::random_device{}());
+	static thread_local std::uniform_int_distribution<unsigned int> dist;
+	return dist(gen);
 }
 
 
@@ -1634,7 +1643,7 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
  */
 bool ProxySQL_Main_init_phase3___start_all() {
 
-	srandom((unsigned int)(time(NULL) ^ getpid()));
+	g_seed = static_cast<unsigned int>(time(NULL) ^ getpid());
 	{
 		cpu_timer t;
 		GloMyLogger->events_set_datadir(GloVars.datadir);
@@ -2806,8 +2815,7 @@ int main(int argc, const char * argv[]) {
 		cpu_timer t;
 		ProxySQL_Main_process_global_variables(argc, argv);
 		GloVars.global.start_time=monotonic_time(); // always initialize it
-		srand(GloVars.global.start_time*thread_id());
-		randID = rand();
+		randID = rand_id();
 #ifdef DEBUG
 		std::cerr << "Main init global variables completed in ";
 #endif
