@@ -222,6 +222,27 @@ static std::string savedVar(PGconn* admin, const char* name) {
         std::string("SELECT variable_value FROM global_variables WHERE variable_name='") + name + "'");
 }
 
+// Wait out one monitor ping interval after disabling the monitor, so an iteration
+// already dispatched has finished before the mock is registered. The monitor's ping
+// is an EMPTY query and this mock answers every query with a canned resultset;
+// PgSQL_Monitor::handle_async_check_cont() has no case for a ping that comes back
+// with rows and asserts (PgSQL_Monitor.cpp:710), taking the whole process down.
+// Disabling the monitor stops new iterations, not one already in flight.
+static void waitMonitorQuiesced(PGconn* admin) {
+    const std::string v = savedVar(admin, "pgsql-monitor_ping_interval");
+    if (v.empty()) {
+        BAIL_OUT("cannot read pgsql-monitor_ping_interval -- without it the settle "
+                 "wait would be a guess, and a guess is not a guarantee");
+    }
+    const long ms = atol(v.c_str());
+    diag("waiting %ld ms (one pgsql-monitor_ping_interval) for any in-flight "
+         "monitor iteration to finish", ms);
+    if (ms > 0) {
+        sleep((unsigned int)(ms / 1000));
+        usleep((useconds_t)(ms % 1000) * 1000);
+    }
+}
+
 // Backend connections currently held for the mock's hostgroup.
 static int mockPoolConnsNow(PGconn* admin) {
     std::stringstream q;
@@ -556,7 +577,11 @@ static void runServedScenario(PGconn*& admin, PGConnPtr& adminOwner,
         return;
     }
 
-    resetMockPool(admin);
+    if (!resetMockPool(admin)) {
+        for (int i = 0; i < 2; i++)
+            ok(false, "%s: not run -- could not reset the mock hostgroup's pool", label);
+        return;
+    }
     mock.set_script(script);
     mock.reset_stats();
 
@@ -600,7 +625,11 @@ static void runCacheScenario(PGconn*& admin, PGConnPtr& adminOwner,
     }
 
     // Attempt 1: the cacheable query dies mid-result.
-    resetMockPool(admin);
+    if (!resetMockPool(admin)) {
+        for (int i = 0; i < 2; i++)
+            ok(false, "%s: not run -- could not reset the mock hostgroup's pool", label);
+        return;
+    }
     mock.set_script(scriptCompleteRowsThenFin(20));
     std::string err;
     driveQuery(err, nullptr, CACHE_PROBE_SQL, QUERY_DEADLINE_MS);
@@ -622,7 +651,14 @@ static void runCacheScenario(PGconn*& admin, PGConnPtr& adminOwner,
     // Attempt 2: the same query against a healthy backend. If the truncated bytes
     // were cached, this is answered from the cache and never reaches the mock, so
     // the complete value cannot come back.
-    resetMockPool(admin);
+    // A stale pooled connection here would answer attempt 2 without reaching the
+    // mock, which is indistinguishable from the cache having served it - exactly the
+    // thing this scenario exists to tell apart.
+    if (!resetMockPool(admin)) {
+        ok(false, "%s: cache content not assertable -- could not reset the mock "
+                  "hostgroup's pool", label);
+        return;
+    }
     mock.set_script(scriptCompleteResult());
     std::vector<std::string> got;
     const Outcome out = driveQuery(err, &got, CACHE_PROBE_SQL, QUERY_DEADLINE_MS);
@@ -638,9 +674,8 @@ static void runCacheScenario(PGconn*& admin, PGConnPtr& adminOwner,
 
 int main(int, char**) {
     // Healthy paths the fix must not have broken:   2 + 2 + 2
-    // Mid-result disconnects, five shapes:            3 + 3 + 3 + 3 + 3
+    // Mid-result disconnects, six shapes:             4 + 4 + 4 + 4 + 4 + 4
     // Query-cache corollary:                          2
-    // Truncated frame:                                3
     // Final pool cleanliness:                         1
     plan(33);
 
@@ -673,22 +708,29 @@ int main(int, char**) {
                 return;
             }
         }
-        if (!saved_monitor.empty()) setVar(admin, "pgsql-monitor_enabled", saved_monitor);
-        if (!saved_shun.empty())    setVar(admin, "pgsql-shun_on_failures", saved_shun);
-        if (!saved_conn_to.empty()) setVar(admin, "pgsql-connect_timeout_server_max", saved_conn_to);
-        if (!saved_thresh.empty())  setVar(admin, "pgsql-threshold_resultset_size", saved_thresh);
+        // The mock is unregistered BEFORE the monitor is re-enabled. The monitor's
+        // ping is an EMPTY query, and this mock answers any query with a canned
+        // resultset; PgSQL_Monitor's handle_async_check_cont() has no case for a ping
+        // that comes back with rows and asserts (PgSQL_Monitor.cpp:710), taking the
+        // process down. Leaving the mock in pgsql_servers while the monitor runs is
+        // therefore never safe, not even for the few statements this used to take.
+        std::stringstream ds;
+        ds << "DELETE FROM pgsql_servers WHERE hostgroup_id=" << MOCK_HG;
+        execAdmin(admin, ds.str());
+        execAdmin(admin, "LOAD PGSQL SERVERS TO RUNTIME");
+
+        execAdmin(admin, std::string("DELETE FROM pgsql_users WHERE username='") + MOCK_USER + "'");
+        execAdmin(admin, "LOAD PGSQL USERS TO RUNTIME");
 
         std::stringstream dr;
         dr << "DELETE FROM pgsql_query_rules WHERE rule_id=" << CACHE_RULE_ID;
         execAdmin(admin, dr.str());
         execAdmin(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
 
-        execAdmin(admin, std::string("DELETE FROM pgsql_users WHERE username='") + MOCK_USER + "'");
-        execAdmin(admin, "LOAD PGSQL USERS TO RUNTIME");
-        std::stringstream ds;
-        ds << "DELETE FROM pgsql_servers WHERE hostgroup_id=" << MOCK_HG;
-        execAdmin(admin, ds.str());
-        execAdmin(admin, "LOAD PGSQL SERVERS TO RUNTIME");
+        if (!saved_monitor.empty()) setVar(admin, "pgsql-monitor_enabled", saved_monitor);
+        if (!saved_shun.empty())    setVar(admin, "pgsql-shun_on_failures", saved_shun);
+        if (!saved_conn_to.empty()) setVar(admin, "pgsql-connect_timeout_server_max", saved_conn_to);
+        if (!saved_thresh.empty())  setVar(admin, "pgsql-threshold_resultset_size", saved_thresh);
     };
 
     // ---- preconditions -----------------------------------------------------
@@ -696,7 +738,9 @@ int main(int, char**) {
         BAIL_OUT("cannot disable the monitor");
     if (!setVar(admin, "pgsql-shun_on_failures", "10000"))
         BAIL_OUT("cannot raise shun_on_failures");
-    setVar(admin, "pgsql-connect_timeout_server_max", "5000");
+    waitMonitorQuiesced(admin);
+    if (!setVar(admin, "pgsql-connect_timeout_server_max", "5000"))
+        BAIL_OUT("cannot set connect_timeout_server_max");
 
     // ---- start the mock and point ProxySQL at it ---------------------------
     // No set_scram_password(): the harness answers the startup packet with a
@@ -759,7 +803,13 @@ int main(int, char**) {
     // Combined with multi-statement that puts a pause between fetch_result_start()
     // zeroing result_type and the point it is re-derived, with a PGresult pending
     // across it -- the sharpest case the reset had to survive.
-    setVar(admin, "pgsql-threshold_resultset_size", "512");
+    if (!setVar(admin, "pgsql-threshold_resultset_size", "512")) {
+        // The mock is registered by now: bailing without restore() would leave its row
+        // in pgsql_servers for the monitor to probe once re-enabled, which is the crash
+        // this file's teardown ordering exists to avoid.
+        mock.stop(); restore();
+        BAIL_OUT("cannot lower threshold_resultset_size");
+    }
 
     runServedScenario(admin, adminOwner, mock,
                       "multi-statement across resultset-threshold pauses",

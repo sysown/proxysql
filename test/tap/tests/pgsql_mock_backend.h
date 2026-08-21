@@ -169,6 +169,11 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<int> conns_accepted_{0};
     std::atomic<int> queries_observed_{0};
+    // Client sockets currently owned by worker threads. stop() shuts these down so a
+    // worker blocked reading from a proxy that connected but never sent a query does
+    // not make the join below hang the whole run.
+    std::mutex conns_mtx_;
+    std::vector<int> client_fds_;
     std::mutex script_mtx_;
     std::vector<Step> script_;
     std::mutex err_mtx_;

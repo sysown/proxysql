@@ -162,6 +162,27 @@ static std::string savedVar(PGconn* admin, const char* name) {
         std::string("SELECT variable_value FROM global_variables WHERE variable_name='") + name + "'");
 }
 
+// Wait out one monitor ping interval after disabling the monitor, so an iteration
+// already dispatched has finished before the mock is registered. The monitor's ping
+// is an EMPTY query and this mock answers every query with a canned resultset;
+// PgSQL_Monitor::handle_async_check_cont() has no case for a ping that comes back
+// with rows and asserts (PgSQL_Monitor.cpp:710), taking the whole process down.
+// Disabling the monitor stops new iterations, not one already in flight.
+static void waitMonitorQuiesced(PGconn* admin) {
+    const std::string v = savedVar(admin, "pgsql-monitor_ping_interval");
+    if (v.empty()) {
+        BAIL_OUT("cannot read pgsql-monitor_ping_interval -- without it the settle "
+                 "wait would be a guess, and a guess is not a guarantee");
+    }
+    const long ms = atol(v.c_str());
+    diag("waiting %ld ms (one pgsql-monitor_ping_interval) for any in-flight "
+         "monitor iteration to finish", ms);
+    if (ms > 0) {
+        sleep((unsigned int)(ms / 1000));
+        usleep((useconds_t)(ms % 1000) * 1000);
+    }
+}
+
 // A counter from stats_pgsql_global. Returns -1 when absent so a renamed metric
 // shows up as a failed assertion rather than a silently-zero comparison.
 static long long globalStat(PGconn* admin, const char* name) {
@@ -184,6 +205,22 @@ static int realPoolConns(PGconn* admin) {
 // expires. Connection teardown is asynchronous, so a fixed sleep is a guess about
 // how fast the machine is; this waits for the event instead and returns the last
 // value seen either way.
+// Wait until a process-wide counter has been still for `quiet_ms`. The counters are
+// global, so a push or reset left in flight by an earlier connection in this test can
+// land inside a later sampling window and satisfy an assertion the connection under
+// test should have had to satisfy itself. Settling first removes that overlap.
+static long long waitStatQuiet(PGconn* admin, const char* name, int quiet_ms, int timeout_ms) {
+    long long v = globalStat(admin, name);
+    int still = 0;
+    for (int waited = 0; waited < timeout_ms && still < quiet_ms; waited += 200) {
+        usleep(200000);
+        const long long now = globalStat(admin, name);
+        still = (now == v) ? still + 200 : 0;
+        v = now;
+    }
+    return v;
+}
+
 static long long waitStatAbove(PGconn* admin, const char* name, long long floor, int timeout_ms) {
     long long v = globalStat(admin, name);
     for (int waited = 0; waited < timeout_ms && v >= 0 && v <= floor; waited += 200) {
@@ -218,9 +255,9 @@ static int mockPoolConnsNow(PGconn* admin) {
 // teardown of the last attempt can still be in flight when the client's error
 // surfaces; sampling immediately reports connections on their way out as leaks.
 // Poll toward zero for a bounded window and report the last value seen.
-static int mockPoolConns(PGconn* admin) {
+static int mockPoolConns(PGconn* admin, int timeout_ms = 10000) {
     int last = mockPoolConnsNow(admin);
-    for (int i = 0; i < 20 && last != 0; i++) {   // up to ~2s
+    for (int waited = 0; waited < timeout_ms && last != 0; waited += 100) {
         usleep(100000);
         last = mockPoolConnsNow(admin);
     }
@@ -418,21 +455,30 @@ int main(int, char**) {
                 return;
             }
         }
-        if (!saved_monitor.empty()) setVar(admin, "pgsql-monitor_enabled", saved_monitor);
-        if (!saved_shun.empty())    setVar(admin, "pgsql-shun_on_failures", saved_shun);
-        if (!saved_conn_to.empty()) setVar(admin, "pgsql-connect_timeout_server_max", saved_conn_to);
-        execAdmin(admin, std::string("DELETE FROM pgsql_users WHERE username='") + MOCK_USER + "'");
-        execAdmin(admin, "LOAD PGSQL USERS TO RUNTIME");
+        // The mock is unregistered BEFORE the monitor is re-enabled. The monitor's
+        // ping is an EMPTY query, and this mock answers any query with a canned
+        // resultset; PgSQL_Monitor's handle_async_check_cont() has no case for a ping
+        // that comes back with rows and asserts (PgSQL_Monitor.cpp:710), taking the
+        // process down. Leaving the mock in pgsql_servers while the monitor runs is
+        // therefore never safe, not even for the few statements this used to take.
         std::stringstream ds;
         ds << "DELETE FROM pgsql_servers WHERE hostgroup_id=" << MOCK_HG;
         execAdmin(admin, ds.str());
         execAdmin(admin, "LOAD PGSQL SERVERS TO RUNTIME");
+
+        execAdmin(admin, std::string("DELETE FROM pgsql_users WHERE username='") + MOCK_USER + "'");
+        execAdmin(admin, "LOAD PGSQL USERS TO RUNTIME");
+
+        if (!saved_monitor.empty()) setVar(admin, "pgsql-monitor_enabled", saved_monitor);
+        if (!saved_shun.empty())    setVar(admin, "pgsql-shun_on_failures", saved_shun);
+        if (!saved_conn_to.empty()) setVar(admin, "pgsql-connect_timeout_server_max", saved_conn_to);
     };
 
     if (!setVar(admin, "pgsql-monitor_enabled", "false"))
         BAIL_OUT("cannot disable the monitor");
     if (!setVar(admin, "pgsql-shun_on_failures", "10000"))
         BAIL_OUT("cannot raise shun_on_failures");
+    waitMonitorQuiesced(admin);
     setVar(admin, "pgsql-connect_timeout_server_max", "5000");
 
     PgSQL_Mock_Backend mock;
@@ -561,7 +607,7 @@ int main(int, char**) {
     // Normal pooling still works: the pool-return arm of reset_connection() now also
     // requires healthy==true, so a healthy connection must still reach the pool.
     {
-        const long long push_before = globalStat(admin, "PgHGM_pgconnpoll_push");
+        const long long push_before = waitStatQuiet(admin, "PgHGM_pgconnpoll_push", 1000, 10000);
         {
             auto rc = createNewConnection(ConnType::BACKEND);
             std::string e; std::vector<std::string> v;
@@ -581,7 +627,7 @@ int main(int, char**) {
     // reset branch -- the other gate that gained the healthy check. It must still
     // reset the connection rather than destroy it.
     {
-        const long long reset_before = globalStat(admin, "PgHGM_pgconnpoll_reset");
+        const long long reset_before = waitStatQuiet(admin, "PgHGM_pgconnpoll_reset", 1000, 10000);
         {
             auto rc = createNewConnection(ConnType::BACKEND);
             std::string e; std::vector<std::string> v;

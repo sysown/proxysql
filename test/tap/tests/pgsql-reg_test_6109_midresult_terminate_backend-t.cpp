@@ -64,6 +64,11 @@ int main(int, char**) {
     // session -- the marker never reached pg_stat_activity, the victim already
     // finished -- then nothing was terminated and the survival check below would
     // pass without having tested anything at all.
+    // Count sessions actually TERMINATED, not rows matched. pg_terminate_backend()
+    // returns one boolean row per matching pid, so a refused or failed termination
+    // still produces a row: counting rows would report a kill that never happened and
+    // let the survival check below be trusted on nothing.
+    int matched = -1;
     int killed = -1;
     {
         auto killer = openConn(cl.pgsql_host, cl.pgsql_port, cl.pgsql_username, cl.pgsql_password, cl.pgsql_username);
@@ -71,11 +76,18 @@ int main(int, char**) {
         std::string k = "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE query LIKE '%" +
                         std::string(MARKER) + "%' AND query NOT LIKE '%pg_stat_activity%'";
         PGresult* r = PQexec(killer.get(), k.c_str());
-        killed = (PQresultStatus(r) == PGRES_TUPLES_OK) ? PQntuples(r) : -1;
+        if (PQresultStatus(r) == PGRES_TUPLES_OK) {
+            matched = PQntuples(r);
+            killed = 0;
+            for (int i = 0; i < matched; i++) {
+                const char* v = PQgetisnull(r, i, 0) ? nullptr : PQgetvalue(r, i, 0);
+                if (v && (*v == 't' || *v == 'T')) killed++;
+            }
+        }
         PQclear(r);
     }
     ok(killed == 1, "the streaming backend session was found and terminated "
-       "(pg_terminate_backend matched %d session(s), expected 1)", killed);
+       "(matched %d session(s), terminated %d, expected 1)", matched, killed);
 
     // Drain the victim: it should end in an error, not a hang.
     //

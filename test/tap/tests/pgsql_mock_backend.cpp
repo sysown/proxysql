@@ -10,6 +10,7 @@
  */
 #include "pgsql_mock_backend.h"
 
+#include <algorithm>
 #include <arpa/inet.h>
 #include <cctype>
 #include <cerrno>
@@ -274,6 +275,14 @@ void PgSQL_Mock_Backend::stop() {
     if (listen_fd_ >= 0) ::shutdown(listen_fd_, SHUT_RDWR);
     if (acceptor_.joinable()) acceptor_.join();
     if (listen_fd_ >= 0) { ::close(listen_fd_); listen_fd_ = -1; }
+    // A worker can be blocked in recv() waiting for a startup packet or a query that
+    // a wedged proxy will never send. Joining it in that state hangs the run instead
+    // of letting the test report a failure, so wake them first. The fd is still open:
+    // handle_conn() removes itself from this list before closing, under the same lock.
+    {
+        std::lock_guard<std::mutex> g(conns_mtx_);
+        for (int cfd : client_fds_) ::shutdown(cfd, SHUT_RDWR);
+    }
     for (auto& t : workers_) if (t.joinable()) t.join();
     workers_.clear();
 }
@@ -288,6 +297,10 @@ void PgSQL_Mock_Backend::accept_loop() {
         int one = 1;
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
         conns_accepted_.fetch_add(1);
+        {
+            std::lock_guard<std::mutex> g(conns_mtx_);
+            client_fds_.push_back(fd);
+        }
         std::vector<Step> script;
         {
             std::lock_guard<std::mutex> g(script_mtx_);
@@ -374,5 +387,10 @@ void PgSQL_Mock_Backend::handle_conn(int fd, std::vector<Step> script) {
     usleep(200000);
 
 done:
+    {
+        std::lock_guard<std::mutex> g(conns_mtx_);
+        auto it = std::find(client_fds_.begin(), client_fds_.end(), fd);
+        if (it != client_fds_.end()) client_fds_.erase(it);
+    }
     ::close(fd);
 }
