@@ -618,7 +618,7 @@ static void runCacheScenario(PGconn*& admin, PGConnPtr& adminOwner,
     const char* label = "truncated result is not stored in the query cache";
 
     if (g_proxy_down) {
-        for (int i = 0; i < 2; i++)
+        for (int i = 0; i < 3; i++)
             ok(false, "%s: not run -- ProxySQL was already down from '%s'",
                label, g_proxy_down_where.c_str());
         return;
@@ -626,13 +626,25 @@ static void runCacheScenario(PGconn*& admin, PGConnPtr& adminOwner,
 
     // Attempt 1: the cacheable query dies mid-result.
     if (!resetMockPool(admin)) {
-        for (int i = 0; i < 2; i++)
+        for (int i = 0; i < 3; i++)
             ok(false, "%s: not run -- could not reset the mock hostgroup's pool", label);
         return;
     }
     mock.set_script(scriptCompleteRowsThenFin(20));
+    mock.reset_stats();
     std::string err;
-    driveQuery(err, nullptr, CACHE_PROBE_SQL, QUERY_DEADLINE_MS);
+    const Outcome first = driveQuery(err, nullptr, CACHE_PROBE_SQL, QUERY_DEADLINE_MS);
+
+    // Anti-vacuous: without this, a routing or connect failure before EXPECT_QUERY
+    // leaves nothing truncated for the cache to store, and attempt 2 below passes
+    // for a reason that has nothing to do with the fix -- a healthy mock simply
+    // answers it. queries_observed() excludes the proxy's own housekeeping
+    // statements, so a non-zero count means the cacheable query itself landed.
+    const int observed = mock.queries_observed();
+    ok(first == Outcome::ERRORED && observed > 0,
+       "%s: the cacheable query reached the mock and died mid-result "
+       "(outcome=%s, queries observed=%d, client=%s)",
+       label, outcomeName(first), observed, oneLine(err).c_str());
 
     const std::string broke = checkInvariants(admin, adminOwner);
     if (!broke.empty()) {
@@ -675,9 +687,9 @@ static void runCacheScenario(PGconn*& admin, PGConnPtr& adminOwner,
 int main(int, char**) {
     // Healthy paths the fix must not have broken:   2 + 2 + 2
     // Mid-result disconnects, six shapes:             4 + 4 + 4 + 4 + 4 + 4
-    // Query-cache corollary:                          2
+    // Query-cache corollary:                          3
     // Final pool cleanliness:                         1
-    plan(33);
+    plan(34);
 
     if (cl.getEnv()) return exit_status();
 
