@@ -303,7 +303,7 @@ ProxySQL_ServerDesiredSet pgsql_desired(uint64_t generation,
 } // namespace
 
 int main() {
-	plan(79);
+	plan(83);
 	test_init_minimal();
 	test_init_query_processor();
 	test_init_hostgroups();
@@ -338,9 +338,41 @@ int main() {
 		"controller is registered with a retained DSO boundary");
 	AckState pgsql_acks;
 	void* pgsql_controller_handle = dlopen(PROXYSQL_FAKE_PLUGIN_PATH, RTLD_NOW | RTLD_LOCAL);
+	auto* pgsql_controller = new Controller(&pgsql_acks);
 	ok(pgsql_controller_handle != nullptr && manager->install_server_discovery_controller(
-		ProxySQL_ServerProtocol::pgsql, new Controller(&pgsql_acks), &destroy_controller,
+		ProxySQL_ServerProtocol::pgsql, pgsql_controller, &destroy_controller,
 		pgsql_controller_handle), "PostgreSQL controller shares the retained queue boundary");
+
+	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_CLAIM");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_SECOND_CLAIM");
+	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_ZERO_CLAIM", "1", 1);
+	ProxySQL_ServerRuntimeSnapshot mysql_zero_prepared {};
+	mysql_zero_prepared.protocol = ProxySQL_ServerProtocol::mysql;
+	ProxySQL_ServerRuntimeInstallTransaction mysql_zero_install(
+		mysql_zero_prepared.protocol, error);
+	const bool mysql_zero_installed = mysql_zero_install.prepare(mysql_zero_prepared, error) &&
+		mysql_zero_install.commit(mysql_zero_prepared);
+	const auto mysql_zero_prepared_claims = proxysql_active_server_hostgroup_claims(
+		ProxySQL_ServerProtocol::mysql);
+	ok(mysql_zero_installed && mysql_zero_prepared_claims.size() == 1 &&
+		mysql_zero_prepared_claims[0].writer_hostgroup == 0 &&
+		mysql_zero_prepared_claims[0].reader_hostgroup == 1,
+		"real MySQL reconciliation prepare installs the active claim pair (0,1)");
+	ProxySQL_ServerRuntimeSnapshot pgsql_zero_prepared {};
+	pgsql_zero_prepared.protocol = ProxySQL_ServerProtocol::pgsql;
+	ProxySQL_ServerRuntimeInstallTransaction pgsql_zero_install(
+		pgsql_zero_prepared.protocol, error);
+	const bool pgsql_zero_installed = pgsql_zero_install.prepare(pgsql_zero_prepared, error) &&
+		pgsql_zero_install.commit(pgsql_zero_prepared);
+	const auto pgsql_zero_prepared_claims = proxysql_active_server_hostgroup_claims(
+		ProxySQL_ServerProtocol::pgsql);
+	ok(pgsql_zero_installed && pgsql_zero_prepared_claims.size() == 1 &&
+		pgsql_zero_prepared_claims[0].writer_hostgroup == 1 &&
+		pgsql_zero_prepared_claims[0].reader_hostgroup == 0,
+		"real PostgreSQL reconciliation prepare installs the active claim pair (1,0)");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_ZERO_CLAIM");
+	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_CLAIM", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_SECOND_CLAIM", "1", 1);
 
 	ProxySQL_ServerRuntimeSnapshot installed {};
 	installed.protocol = ProxySQL_ServerProtocol::mysql;
@@ -421,6 +453,8 @@ int main() {
 		{18, "reader.example", 3306, 0, "ONLINE", 20, 0, 100, 0, 1, 0, "reader"},
 		{27, "second-writer.example", 3306, 0, "ONLINE", 21, 0, 100, 0, 1, 0, "writer"},
 		{28, "second-reader.example", 3306, 0, "ONLINE", 22, 0, 100, 0, 1, 0, "reader"},
+		{0, "zero-writer.example", 3306, 0, "ONLINE", 23, 0, 100, 0, 1, 0, "zero"},
+		{1, "zero-reader.example", 3306, 0, "ONLINE", 24, 0, 100, 0, 1, 0, "zero"},
 		{99, "unrelated.example", 3306, 0, "ONLINE", 90, 0, 100, 0, 1, 0, "keep"}});
 	MyHGM->save_incoming_mysql_table(std::make_unique<SQLite3_result>(4).release(),
 		"mysql_replication_hostgroups");
@@ -464,6 +498,24 @@ int main() {
 		find_row(*runtime_rows(), 28, "second-writer.example", 3306) != nullptr,
 		"MySQL query failures return an empty set, do not act, and preserve retryable mappings");
 	if (mysql_enumeration_error != nullptr) free(mysql_enumeration_error);
+	manager->commit_and_install_server_runtime_snapshot(installed, {{0, 1}});
+	const ProxySQL_ServerDesiredSet mysql_zero_scope {ProxySQL_ServerProtocol::mysql,
+		generation, {0, 1}, {}, ProxySQL_ServerPersistence::runtime_only};
+	const bool mysql_zero_revalidated = manager->revalidate_server_desired_set(
+		ProxySQL_ServerProtocol::mysql, mysql_controller, mysql_zero_scope);
+	mysql_readonly.reset(MyHGM->get_read_only_servers());
+	MyHGM->read_only_action_v2({{"zero-writer.example", 3306, 1}});
+	const bool mysql_zero_mapped =
+		find_row(*runtime_rows(), 1, "zero-writer.example", 3306) != nullptr;
+	const bool mysql_zero_applied = manager->post_server_desired_set(mysql_zero_scope) &&
+		admin->drain_server_discovery_updates() == 1 &&
+		ack_count(acks, generation, true) == 1;
+	ok(mysql_zero_revalidated && mysql_zero_applied && mysql_readonly &&
+		has_readonly_endpoint(*mysql_readonly, 0, "zero-writer.example", 3306) &&
+		has_readonly_endpoint(*mysql_readonly, 0, "zero-reader.example", 3306) &&
+		mysql_zero_mapped,
+		"MySQL desired-set subset and monitor mapping treat hostgroup 0 as an ordinary claim");
+	clear_acks(acks);
 	manager->commit_and_install_server_runtime_snapshot(installed, mysql_claims);
 	std::atomic<unsigned int> concurrent_posts {0};
 	std::vector<std::thread> producers;
@@ -661,6 +713,8 @@ int main() {
 
 	auto pgsql_initial = pgsql_rows({
 		{17, "pgsql-old.example", 5432, 0, "ONLINE", 61, 0, 131, 0, 1, 0, "old"},
+		{1, "pgsql-zero-writer.example", 5432, 0, "ONLINE", 63, 0, 133, 0, 1, 0, "zero"},
+		{0, "pgsql-zero-reader.example", 5432, 0, "ONLINE", 64, 0, 134, 0, 1, 0, "zero"},
 		{99, "pgsql-unrelated.example", 5432, 0, "ONLINE", 62, 0, 132, 0, 1, 0, "keep"}});
 	PgHGM->servers_add(pgsql_initial.get());
 	ok(PgHGM->commit(), "real PostgreSQL HGM fixture starts with unrelated runtime state");
@@ -696,6 +750,25 @@ int main() {
 		find_row(*large_pgsql_runtime, 18, "pgsql-old.example", 5432) != nullptr,
 		"PostgreSQL query failures return an empty set, do not act, and preserve retryable mappings");
 	if (pgsql_enumeration_error != nullptr) free(pgsql_enumeration_error);
+	manager->commit_and_install_server_runtime_snapshot(pgsql_installed, {{1, 0}});
+	const ProxySQL_ServerDesiredSet pgsql_zero_scope {ProxySQL_ServerProtocol::pgsql,
+		pgsql_generation, {0, 1}, {}, ProxySQL_ServerPersistence::runtime_only};
+	const bool pgsql_zero_revalidated = manager->revalidate_server_desired_set(
+		ProxySQL_ServerProtocol::pgsql, pgsql_controller, pgsql_zero_scope);
+	large_pgsql_readonly.reset(PgHGM->get_read_only_servers());
+	PgHGM->read_only_action_v2({{"pgsql-zero-writer.example", 5432, 1}}, false);
+	large_pgsql_runtime.reset(PgHGM->dump_table_pgsql("pgsql_servers"));
+	const bool pgsql_zero_mapped = large_pgsql_runtime &&
+		find_row(*large_pgsql_runtime, 0, "pgsql-zero-writer.example", 5432) != nullptr;
+	const bool pgsql_zero_applied = manager->post_server_desired_set(pgsql_zero_scope) &&
+		admin->drain_server_discovery_updates() == 1 &&
+		ack_count(pgsql_acks, pgsql_generation, true) == 1;
+	ok(pgsql_zero_revalidated && pgsql_zero_applied && large_pgsql_readonly &&
+		has_readonly_endpoint(*large_pgsql_readonly, 1, "pgsql-zero-writer.example", 5432) &&
+		has_readonly_endpoint(*large_pgsql_readonly, 1, "pgsql-zero-reader.example", 5432) &&
+		pgsql_zero_mapped,
+		"PostgreSQL desired-set subset and monitor mapping treat hostgroup 0 as an ordinary claim");
+	clear_acks(pgsql_acks);
 	manager->commit_and_install_server_runtime_snapshot(pgsql_installed, pgsql_claims);
 	ProxySQL_ServerRow pgsql_new {18, "pgsql-new.example", 5432, 0, "ONLINE", 71, 0, 141, 0, 1, 0, "new"};
 	pgsql_new.topology_role_epoch = 3;

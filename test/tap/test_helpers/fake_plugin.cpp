@@ -96,6 +96,12 @@ bool fake_server_module_prepare(void *, const ProxySQL_ServerModuleSnapshot& sna
 		claims.push_back({17, 18});
 	if (env("SERVER_MODULE_SECOND_CLAIM") != nullptr)
 		claims.push_back({27, 28});
+	if (env("SERVER_MODULE_ZERO_CLAIM") != nullptr) {
+		if (snapshot.runtime.protocol == ProxySQL_ServerProtocol::mysql)
+			claims.push_back({0, 1});
+		else if (snapshot.runtime.protocol == ProxySQL_ServerProtocol::pgsql)
+			claims.push_back({1, 0});
+	}
 	if (env("SERVER_MODULE_CONFLICT_BUILTIN_CLAIM") != nullptr)
 		claims.push_back({31, 32});
 	return true;

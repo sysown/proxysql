@@ -204,8 +204,7 @@ bool ProxySQL_ServerRuntimeInstallTransaction::prepare(ProxySQL_ServerModuleSnap
 		return false;
 	}
 	for (const auto& claim : claims) {
-		if (claim.writer_hostgroup == 0 || claim.reader_hostgroup == 0 ||
-			claim.writer_hostgroup == claim.reader_hostgroup) {
+		if (claim.writer_hostgroup == claim.reader_hostgroup) {
 			error = "invalid server-module writer/reader hostgroup claim";
 			abort();
 			return false;

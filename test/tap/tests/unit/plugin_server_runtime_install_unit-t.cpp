@@ -76,7 +76,7 @@ size_t occurrences(const std::string& value, const std::string& needle) {
 } // namespace
 
 int main() {
-	plan(35);
+	plan(37);
 	test_init_minimal();
 	char path[] = "/tmp/proxysql_server_runtime_install.XXXXXX";
 	const int fd = mkstemp(path);
@@ -139,6 +139,35 @@ int main() {
 	ok(proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::pgsql) == pgsql_candidate + 1 &&
 		proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::mysql) == candidate + 2,
 		"MySQL and PostgreSQL installed generations are independent and monotonic");
+
+	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_ZERO_CLAIM", "1", 1);
+	ProxySQL_ServerRuntimeSnapshot mysql_zero_claim_snapshot {};
+	mysql_zero_claim_snapshot.protocol = ProxySQL_ServerProtocol::mysql;
+	ProxySQL_ServerRuntimeInstallTransaction mysql_zero_claim_install(
+		mysql_zero_claim_snapshot.protocol, error);
+	const bool mysql_zero_claim_committed =
+		mysql_zero_claim_install.prepare(mysql_zero_claim_snapshot, error) &&
+		mysql_zero_claim_install.commit(mysql_zero_claim_snapshot);
+	const auto mysql_zero_claims = proxysql_active_server_hostgroup_claims(
+		ProxySQL_ServerProtocol::mysql);
+	ok(mysql_zero_claim_committed && mysql_zero_claims.size() == 1 &&
+		mysql_zero_claims[0].writer_hostgroup == 0 &&
+		mysql_zero_claims[0].reader_hostgroup == 1,
+		"real MySQL module prepare accepts and publishes the active claim pair (0,1)");
+	ProxySQL_ServerRuntimeSnapshot pgsql_zero_claim_snapshot {};
+	pgsql_zero_claim_snapshot.protocol = ProxySQL_ServerProtocol::pgsql;
+	ProxySQL_ServerRuntimeInstallTransaction pgsql_zero_claim_install(
+		pgsql_zero_claim_snapshot.protocol, error);
+	const bool pgsql_zero_claim_committed =
+		pgsql_zero_claim_install.prepare(pgsql_zero_claim_snapshot, error) &&
+		pgsql_zero_claim_install.commit(pgsql_zero_claim_snapshot);
+	const auto pgsql_zero_claims = proxysql_active_server_hostgroup_claims(
+		ProxySQL_ServerProtocol::pgsql);
+	ok(pgsql_zero_claim_committed && pgsql_zero_claims.size() == 1 &&
+		pgsql_zero_claims[0].writer_hostgroup == 1 &&
+		pgsql_zero_claims[0].reader_hostgroup == 0,
+		"real PostgreSQL module prepare accepts and publishes the active claim pair (1,0)");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_ZERO_CLAIM");
 
 	// Keep the first preparation open while another MySQL installation arrives.
 	// The second must not run module prepare against the same candidate then be
@@ -267,6 +296,7 @@ int main() {
 	ProxySQL_Admin* admin = new ProxySQL_Admin(); // process-scoped fixture
 	admin->admindb = &admin_db;
 	GloAdmin = admin;
+	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_ZERO_CLAIM", "1", 1);
 	const size_t before_admin_load = occurrences(read_log(), "server_controller_runtime");
 	const size_t before_admin_prepare = occurrences(read_log(), "server_module_prepare");
 	const size_t before_admin_commit = occurrences(read_log(), "server_module_commit");
@@ -274,9 +304,14 @@ int main() {
 	admin->load_mysql_servers_to_runtime();
 	admin->mysql_servers_wrunlock();
 	const std::string after_admin_mysql_load = read_log();
+	const auto mysql_admin_zero_claims = proxysql_active_server_hostgroup_claims(
+		ProxySQL_ServerProtocol::mysql);
 	ok(occurrences(after_admin_mysql_load, "server_module_prepare") == before_admin_prepare + 1 &&
 		occurrences(after_admin_mysql_load, "server_module_commit") == before_admin_commit + 1 &&
 		occurrences(after_admin_mysql_load, "server_controller_runtime") == before_admin_load + 1 &&
+		mysql_admin_zero_claims.size() == 1 &&
+		mysql_admin_zero_claims[0].writer_hostgroup == 0 &&
+		mysql_admin_zero_claims[0].reader_hostgroup == 1 &&
 		after_admin_mysql_load.rfind("server_module_prepare") < after_admin_mysql_load.rfind("server_module_commit") &&
 		after_admin_mysql_load.rfind("server_module_commit") < after_admin_mysql_load.rfind("server_controller_runtime"),
 		"public MySQL Admin LOAD prepares before HGM staging and commits before controller restart");
@@ -288,11 +323,17 @@ int main() {
 	admin->load_pgsql_servers_to_runtime();
 	admin->pgsql_servers_wrunlock();
 	const std::string after_admin_pgsql_load = read_log();
+	const auto pgsql_admin_zero_claims = proxysql_active_server_hostgroup_claims(
+		ProxySQL_ServerProtocol::pgsql);
 	ok(proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol::pgsql) == pgsql_before_admin_load + 1 &&
 		occurrences(after_admin_pgsql_load, "server_module_prepare") == before_pgsql_prepare + 1 &&
 		occurrences(after_admin_pgsql_load, "server_module_commit") == before_pgsql_commit + 1 &&
-		occurrences(after_admin_pgsql_load, "server_controller_runtime") == before_pgsql_controller + 1,
+		occurrences(after_admin_pgsql_load, "server_controller_runtime") == before_pgsql_controller + 1 &&
+		pgsql_admin_zero_claims.size() == 1 &&
+		pgsql_admin_zero_claims[0].writer_hostgroup == 1 &&
+		pgsql_admin_zero_claims[0].reader_hostgroup == 0,
 		"public PostgreSQL Admin LOAD reaches the same post-HGM module installation path");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_ZERO_CLAIM");
 
 	const size_t before_monitor_reload = occurrences(read_log(), "server_controller_runtime");
 	const size_t before_monitor_prepare = occurrences(read_log(), "server_module_prepare");
