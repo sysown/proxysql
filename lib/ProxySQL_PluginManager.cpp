@@ -1309,7 +1309,8 @@ void ProxySQL_PluginManager::commit_server_module_runtime(
 }
 
 void ProxySQL_PluginManager::commit_and_install_server_runtime_snapshot(
-    ProxySQL_ServerRuntimeSnapshot snapshot, std::vector<uint32_t> delegated_hostgroups) {
+    ProxySQL_ServerRuntimeSnapshot snapshot,
+    std::vector<ProxySQL_ServerHostgroupClaim> hostgroup_claims) {
 	const int index = server_protocol_index(snapshot.protocol);
 	if (index < 0) return;
 	void (*commit_runtime)(void *, uint64_t) = nullptr;
@@ -1321,10 +1322,17 @@ void ProxySQL_PluginManager::commit_and_install_server_runtime_snapshot(
 		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
 		server_snapshots_[index] = snapshot;
 		server_snapshots_present_[index] = true;
+		std::vector<uint32_t> delegated_hostgroups;
+		delegated_hostgroups.reserve(hostgroup_claims.size() * 2);
+		for (const auto& claim : hostgroup_claims) {
+			delegated_hostgroups.push_back(claim.writer_hostgroup);
+			delegated_hostgroups.push_back(claim.reader_hostgroup);
+		}
 		std::sort(delegated_hostgroups.begin(), delegated_hostgroups.end());
 		delegated_hostgroups.erase(std::unique(delegated_hostgroups.begin(),
 			delegated_hostgroups.end()), delegated_hostgroups.end());
 		server_delegated_hostgroups_[index] = std::move(delegated_hostgroups);
+		server_hostgroup_claims_[index] = std::move(hostgroup_claims);
 		commit_runtime = server_modules_[index].commit_runtime;
 		legacy_runtime_configuration_installed = server_modules_[index].legacy_runtime_configuration_installed;
 		module_opaque = server_modules_[index].opaque;
@@ -1362,6 +1370,14 @@ void ProxySQL_PluginManager::commit_and_install_server_runtime_snapshot(
 			log_server_callback_unknown_exception("controller runtime");
 		}
 	}
+}
+
+std::vector<ProxySQL_ServerHostgroupClaim> ProxySQL_PluginManager::server_hostgroup_claims(
+	ProxySQL_ServerProtocol protocol) const {
+	const int index = server_protocol_index(protocol);
+	if (index < 0) return {};
+	std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+	return server_hostgroup_claims_[index];
 }
 
 SQLite3_result* ProxySQL_PluginManager::server_module_runtime_table_snapshot(
@@ -1405,6 +1421,8 @@ bool ProxySQL_PluginManager::unregister_server_module(ProxySQL_ServerProtocol pr
 	if (server_modules_[index].module == nullptr) return false;
 	retired = server_modules_[index];
 	server_modules_[index] = {};
+	server_hostgroup_claims_[index].clear();
+	server_delegated_hostgroups_[index].clear();
 	observer = server_retirement_observer_for_test_;
 	observer_opaque = server_retirement_observer_opaque_for_test_;
 	if (observer != nullptr) {
@@ -1990,14 +2008,21 @@ void proxysql_install_active_server_runtime_snapshot(ProxySQL_ServerRuntimeSnaps
 }
 
 void proxysql_commit_and_install_active_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot,
-	std::vector<uint32_t> delegated_hostgroups) {
+	std::vector<ProxySQL_ServerHostgroupClaim> hostgroup_claims) {
 	// One active-manager pin spans both callbacks: a concurrent plugin-manager
 	// retirement cannot unload either module/controller DSO between commit and
 	// the controller's installation notification.
 	ScopedActiveManagerPin pin;
 	if (pin.manager() == nullptr) return;
 	pin.manager()->commit_and_install_server_runtime_snapshot(std::move(snapshot),
-		std::move(delegated_hostgroups));
+		std::move(hostgroup_claims));
+}
+
+std::vector<ProxySQL_ServerHostgroupClaim> proxysql_active_server_hostgroup_claims(
+	ProxySQL_ServerProtocol protocol) {
+	ScopedActiveManagerPin pin;
+	return pin.manager() == nullptr ? std::vector<ProxySQL_ServerHostgroupClaim>{} :
+		pin.manager()->server_hostgroup_claims(protocol);
 }
 
 SQLite3_result* proxysql_active_server_module_runtime_table_snapshot(

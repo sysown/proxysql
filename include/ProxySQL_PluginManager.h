@@ -119,7 +119,9 @@ public:
 	// callback lease.  Runtime installation uses this instead of two separate
 	// calls so a retired DSO cannot disappear between them.
 	void commit_and_install_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot,
-		std::vector<uint32_t> delegated_hostgroups);
+		std::vector<ProxySQL_ServerHostgroupClaim> hostgroup_claims);
+	std::vector<ProxySQL_ServerHostgroupClaim> server_hostgroup_claims(
+		ProxySQL_ServerProtocol protocol) const;
 	SQLite3_result* server_module_runtime_table_snapshot(
 		ProxySQL_ServerProtocol protocol, const char* table_name);
 	bool unregister_server_module(ProxySQL_ServerProtocol protocol);
@@ -246,6 +248,7 @@ private:
 	bool server_controller_retiring_[2] { false, false };
 	ProxySQL_ServerRuntimeSnapshot server_snapshots_[2] {};
 	std::vector<uint32_t> server_delegated_hostgroups_[2] {};
+	std::vector<ProxySQL_ServerHostgroupClaim> server_hostgroup_claims_[2] {};
 	server_retirement_observer_for_test_cb server_retirement_observer_for_test_ { nullptr };
 	void *server_retirement_observer_opaque_for_test_ { nullptr };
 #endif /* PROXYSQL40 */
@@ -320,7 +323,7 @@ bool proxysql_prepare_active_server_module_runtime(const ProxySQL_ServerModuleSn
 void proxysql_commit_active_server_module_runtime(ProxySQL_ServerProtocol protocol, uint64_t generation);
 void proxysql_install_active_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot);
 void proxysql_commit_and_install_active_server_runtime_snapshot(ProxySQL_ServerRuntimeSnapshot snapshot,
-	std::vector<uint32_t> delegated_hostgroups);
+	std::vector<ProxySQL_ServerHostgroupClaim> hostgroup_claims);
 SQLite3_result* proxysql_active_server_module_runtime_table_snapshot(
 	ProxySQL_ServerProtocol protocol, const char* table_name);
 

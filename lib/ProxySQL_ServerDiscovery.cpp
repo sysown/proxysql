@@ -28,6 +28,9 @@ extern "C" void proxysql_server_discovery_after_final_revalidation_for_test(
 namespace {
 std::atomic<uint64_t> mysql_generation {0};
 std::atomic<uint64_t> pgsql_generation {0};
+#ifdef PROXYSQL40
+std::atomic<uint64_t> read_only_monitor_epochs[2] {{0}, {0}};
+#endif
 std::mutex mysql_install_mutex;
 std::mutex pgsql_install_mutex;
 thread_local bool install_reservation[2] {false, false};
@@ -125,7 +128,7 @@ struct ProxySQL_ServerRuntimeInstallTransaction::Impl {
 	std::unique_lock<std::mutex> lock;
 	bool prepared {false};
 	bool reservation_owned {false};
-	std::vector<uint32_t> delegated_hostgroups;
+	std::vector<ProxySQL_ServerHostgroupClaim> hostgroup_claims;
 
 	Impl(ProxySQL_ServerProtocol value_protocol, uint64_t value_candidate, int value_index,
 		std::unique_lock<std::mutex>&& value_lock)
@@ -216,14 +219,7 @@ bool ProxySQL_ServerRuntimeInstallTransaction::prepare(ProxySQL_ServerModuleSnap
 			return false;
 		}
 	}
-	impl_->delegated_hostgroups.clear();
-	for (const auto& claim : claims) {
-		impl_->delegated_hostgroups.push_back(claim.writer_hostgroup);
-		impl_->delegated_hostgroups.push_back(claim.reader_hostgroup);
-	}
-	std::sort(impl_->delegated_hostgroups.begin(), impl_->delegated_hostgroups.end());
-	impl_->delegated_hostgroups.erase(std::unique(impl_->delegated_hostgroups.begin(),
-		impl_->delegated_hostgroups.end()), impl_->delegated_hostgroups.end());
+	impl_->hostgroup_claims = claims;
 	impl_->prepared = true;
 	return true;
 #else
@@ -242,6 +238,18 @@ uint64_t proxysql_pending_server_runtime_generation(ProxySQL_ServerProtocol prot
 	return generation.load(std::memory_order_relaxed) + 1;
 }
 
+#ifdef PROXYSQL40
+uint64_t proxysql_server_read_only_monitor_epoch(ProxySQL_ServerProtocol protocol) {
+	const int index = protocol_index(protocol);
+	return index < 0 ? 0 : read_only_monitor_epochs[index].load(std::memory_order_acquire);
+}
+
+static void request_server_read_only_monitor(ProxySQL_ServerProtocol protocol) {
+	const int index = protocol_index(protocol);
+	if (index >= 0) read_only_monitor_epochs[index].fetch_add(1, std::memory_order_release);
+}
+#endif
+
 bool ProxySQL_ServerRuntimeInstallTransaction::commit(
 	ProxySQL_ServerRuntimeSnapshot snapshot, bool commit_affiliated_module) {
 	if (impl_ == nullptr || snapshot.protocol != impl_->protocol ||
@@ -257,7 +265,7 @@ bool ProxySQL_ServerRuntimeInstallTransaction::commit(
 #ifdef PROXYSQL40
 	if (commit_affiliated_module)
 		proxysql_commit_and_install_active_server_runtime_snapshot(std::move(snapshot),
-			std::move(completed->delegated_hostgroups));
+			std::move(completed->hostgroup_claims));
 	else
 		proxysql_install_active_server_runtime_snapshot(std::move(snapshot));
 #else
@@ -601,6 +609,11 @@ size_t proxysql_drain_server_desired_sets() {
 				applied = false;
 				error = "unknown reconciliation failure";
 			}
+		}
+		if (applied && std::any_of(queued.desired_set.servers.begin(),
+			queued.desired_set.servers.end(),
+			[](const ProxySQL_ServerRow& row) { return row.force_topology_role; })) {
+			request_server_read_only_monitor(queued.desired_set.protocol);
 		}
 		complete_accepted_server_desired_set(
 			queued.completion, queued.desired_set.generation, applied);

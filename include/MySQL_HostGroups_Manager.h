@@ -647,6 +647,10 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 *   and 'hostgroup_server_mapping' should be rebuild.
 	 */
 	uint64_t hgsm_mysql_replication_hostgroups_checksum = 0;
+#ifdef PROXYSQL40
+	// Exact affiliated-module claims used to invalidate the derived role map.
+	std::vector<ProxySQL_ServerHostgroupClaim> hgsm_server_module_claims_ {};
+#endif
 
 
 #if 0
@@ -1072,6 +1076,7 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 
 	void replication_lag_action_inner(MyHGC *, const char*, unsigned int, int, bool);
 	void replication_lag_action(const std::list<replication_lag_server_t>& mysql_servers);
+	SQLite3_result* get_read_only_servers(char** error = nullptr);
 	/**
 	 * @brief Reconcile writer/reader hostgroup placement from read_only monitor results.
 	 *

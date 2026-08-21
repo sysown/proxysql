@@ -84,6 +84,14 @@ struct ProxySQL_ServerHostgroupClaim {
 	uint32_t reader_hostgroup {0};
 };
 
+#ifdef PROXYSQL40
+// Internal, lifetime-safe snapshots used by core monitor/HGM consumers. These
+// are not plugin service-table callbacks and do not change ABI-9.
+std::vector<ProxySQL_ServerHostgroupClaim> proxysql_active_server_hostgroup_claims(
+	ProxySQL_ServerProtocol protocol);
+uint64_t proxysql_server_read_only_monitor_epoch(ProxySQL_ServerProtocol protocol);
+#endif
+
 struct ProxySQL_ServerModuleTableSnapshot {
 	std::string table_name;
 	std::unique_ptr<SQLite3_result> rows;

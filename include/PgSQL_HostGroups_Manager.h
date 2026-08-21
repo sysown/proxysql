@@ -512,6 +512,10 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	 *   and 'hostgroup_server_mapping' should be rebuild.
 	 */
 	uint64_t hgsm_pgsql_replication_hostgroups_checksum = 0;
+#ifdef PROXYSQL40
+	// Exact affiliated-module claims used to invalidate the derived role map.
+	std::vector<ProxySQL_ServerHostgroupClaim> hgsm_server_module_claims_ {};
+#endif
 
 	std::mutex PgSQL_Servers_SSL_Params_map_mutex;
 	std::unordered_map<std::string, PgSQLServers_SslParams> PgSQL_Servers_SSL_Params_map;
@@ -846,6 +850,7 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 
 	void replication_lag_action_inner(PgSQL_HGC *, const char*, unsigned int, int);
 	void replication_lag_action(const std::list<replication_lag_server_t>& pgsql_servers);
+	SQLite3_result* get_read_only_servers(char** error = nullptr);
 //	void read_only_action(char *hostname, int port, int read_only);
 	void read_only_action_v2(const std::list<read_only_server_t>& pgsql_servers, bool writer_is_also_reader);
 	unsigned int get_servers_table_version();

@@ -31,6 +31,7 @@ using json = nlohmann::json;
 #include "ev.h"
 
 #include <functional>
+#include <algorithm>
 #include <mutex>
 #include <type_traits>
 
@@ -52,6 +53,28 @@ std::unique_ptr<SQLite3_result> pgsql_desired_rows(
 		result->add_row(fields);
 	}
 	return result;
+}
+
+bool same_server_hostgroup_claims(const std::vector<ProxySQL_ServerHostgroupClaim>& left,
+	const std::vector<ProxySQL_ServerHostgroupClaim>& right) {
+	return left.size() == right.size() && std::equal(left.begin(), left.end(), right.begin(),
+		[](const ProxySQL_ServerHostgroupClaim& lhs, const ProxySQL_ServerHostgroupClaim& rhs) {
+			return lhs.writer_hostgroup == rhs.writer_hostgroup &&
+				lhs.reader_hostgroup == rhs.reader_hostgroup;
+		});
+}
+
+std::string pgsql_active_replication_hostgroups_cte(
+	const std::vector<ProxySQL_ServerHostgroupClaim>& claims) {
+	std::string query =
+		"WITH active_replication_hostgroups(writer_hostgroup,reader_hostgroup,check_type) AS ("
+		"SELECT writer_hostgroup,reader_hostgroup,check_type FROM pgsql_replication_hostgroups";
+	for (const auto& claim : claims) {
+		query += " UNION ALL SELECT " + std::to_string(claim.writer_hostgroup) + "," +
+			std::to_string(claim.reader_hostgroup) + ",'read_only'";
+	}
+	query += ") ";
+	return query;
 }
 
 } // namespace
@@ -1090,8 +1113,17 @@ void PgSQL_HostGroups_Manager::commit_update_checksums_from_tables(SpookyHash& m
 */
 void PgSQL_HostGroups_Manager::update_hostgroup_manager_mappings() {
 
+#ifdef PROXYSQL40
+	auto active_claims = proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::pgsql);
+	const bool server_module_claims_changed =
+		!same_server_hostgroup_claims(active_claims, hgsm_server_module_claims_);
+#else
+	const bool server_module_claims_changed = false;
+#endif
+
 	if (hgsm_pgsql_servers_checksum != table_resultset_checksum[HGM_TABLES::PgSQL_SERVERS] ||
-		hgsm_pgsql_replication_hostgroups_checksum != table_resultset_checksum[HGM_TABLES::PgSQL_REPLICATION_HOSTGROUPS])
+		hgsm_pgsql_replication_hostgroups_checksum != table_resultset_checksum[HGM_TABLES::PgSQL_REPLICATION_HOSTGROUPS] ||
+		server_module_claims_changed)
 	{
 		proxy_info("Rebuilding 'Hostgroup_Manager_Mapping' due to checksums change - pgsql_servers { old: 0x%lX, new: 0x%lX }, pgsql_replication_hostgroups { old:0x%lX, new:0x%lX }\n",
 			hgsm_pgsql_servers_checksum, table_resultset_checksum[HGM_TABLES::PgSQL_SERVERS],
@@ -1104,12 +1136,23 @@ void PgSQL_HostGroups_Manager::update_hostgroup_manager_mappings() {
 
 		hostgroup_server_mapping.clear();
 
-		const char* query = "SELECT DISTINCT hostname, port, '1' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer FROM pgsql_replication_hostgroups JOIN pgsql_servers ON hostgroup_id=writer_hostgroup WHERE status<>3 \
-							 UNION \
-							 SELECT DISTINCT hostname, port, '0' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer FROM pgsql_replication_hostgroups JOIN pgsql_servers ON hostgroup_id=reader_hostgroup WHERE status<>3 \
-							 ORDER BY hostname, port";
+		std::string query;
+#ifdef PROXYSQL40
+		query = pgsql_active_replication_hostgroups_cte(active_claims);
+#endif
+		query += "SELECT DISTINCT hostname, port, '1' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer FROM "
+			"active_replication_hostgroups JOIN pgsql_servers ON hostgroup_id=writer_hostgroup WHERE status<>3 "
+			"UNION "
+			"SELECT DISTINCT hostname, port, '0' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer FROM "
+			"active_replication_hostgroups JOIN pgsql_servers ON hostgroup_id=reader_hostgroup WHERE status<>3 "
+			"ORDER BY hostname, port";
+#ifndef PROXYSQL40
+		query.replace(0, 0,
+			"WITH active_replication_hostgroups(writer_hostgroup,reader_hostgroup,check_type) AS ("
+			"SELECT writer_hostgroup,reader_hostgroup,check_type FROM pgsql_replication_hostgroups) ");
+#endif
 
-		mydb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
+		mydb->execute_statement(query.c_str(), &error, &cols, &affected_rows, &resultset);
 
 		if (resultset && resultset->rows_count) {
 			std::string fetched_server_id;
@@ -1151,7 +1194,33 @@ void PgSQL_HostGroups_Manager::update_hostgroup_manager_mappings() {
 
 		hgsm_pgsql_servers_checksum = table_resultset_checksum[HGM_TABLES::PgSQL_SERVERS];
 		hgsm_pgsql_replication_hostgroups_checksum = table_resultset_checksum[HGM_TABLES::PgSQL_REPLICATION_HOSTGROUPS];
+#ifdef PROXYSQL40
+		hgsm_server_module_claims_ = std::move(active_claims);
+#endif
 	}
+}
+
+SQLite3_result* PgSQL_HostGroups_Manager::get_read_only_servers(char** error) {
+	char* local_error = nullptr;
+	char** error_target = error == nullptr ? &local_error : error;
+#ifdef PROXYSQL40
+	std::string query = pgsql_active_replication_hostgroups_cte(
+		proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::pgsql));
+#else
+	std::string query =
+		"WITH active_replication_hostgroups(writer_hostgroup,reader_hostgroup,check_type) AS ("
+		"SELECT writer_hostgroup,reader_hostgroup,check_type FROM pgsql_replication_hostgroups) ";
+#endif
+	query += "SELECT hostgroup_id, hostname, port, MAX(use_ssl) use_ssl, check_type, reader_hostgroup "
+		"FROM pgsql_servers JOIN active_replication_hostgroups "
+		"ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup "
+		"WHERE status NOT IN (2,3) GROUP BY hostname, port ORDER BY RANDOM()";
+	SQLite3_result* result = execute_query(const_cast<char*>(query.c_str()), error_target);
+	if (error == nullptr && local_error != nullptr) {
+		proxy_error("Error enumerating read-only monitor servers: %s\n", local_error);
+		free(local_error);
+	}
+	return result;
 }
 
 /**
@@ -3437,6 +3506,7 @@ void PgSQL_HostGroups_Manager::read_only_action_v2(
 
 	unsigned long long curtime1 = monotonic_time();
 	wrlock();
+	update_hostgroup_manager_mappings();
 	for (const auto& server : pgsql_servers) {
 		bool is_writer = false;
 		const std::string& hostname = std::get<PgSQL_READ_ONLY_SERVER_T::PG_ROS_HOSTNAME>(server);

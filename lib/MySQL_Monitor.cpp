@@ -23,6 +23,7 @@ using json = nlohmann::json;
 #include "MySQL_Protocol.h"
 #include "MySQL_HostGroups_Manager.h"
 #include "MySQL_Monitor.hpp"
+#include "ProxySQL_ServerDiscovery.h"
 #include "ProxySQL_Cluster.hpp"
 #include "proxysql.h"
 #include "cpp.h"
@@ -3708,6 +3709,10 @@ void * MySQL_Monitor::monitor_read_only() {
 	unsigned long long t2;
 	unsigned long long next_loop_at=0;
 	int topology_loop = 0;
+#ifdef PROXYSQL40
+	uint64_t read_only_wake_epoch = proxysql_server_read_only_monitor_epoch(
+		ProxySQL_ServerProtocol::mysql);
+#endif
 
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
 		int topology_loop_max = mysql_thread___monitor_aws_rds_topology_discovery_interval;
@@ -3717,8 +3722,17 @@ void * MySQL_Monitor::monitor_read_only() {
 		char *error=NULL;
 		SQLite3_result *resultset=NULL;
 		// add support for SSL
-		char *query=(char *)SELECT_SERVERS_FOR_READ_ONLY;
+		const char* query = "read-only monitor server enumeration";
 		t1=monotonic_time();
+
+#ifdef PROXYSQL40
+		const uint64_t current_wake_epoch = proxysql_server_read_only_monitor_epoch(
+			ProxySQL_ServerProtocol::mysql);
+		if (current_wake_epoch != read_only_wake_epoch) {
+			read_only_wake_epoch = current_wake_epoch;
+			next_loop_at = 0;
+		}
+#endif
 
 		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 		glover=GloMTH->get_global_version();
@@ -3732,8 +3746,7 @@ void * MySQL_Monitor::monitor_read_only() {
 			goto __sleep_monitor_read_only;
 		}
 		next_loop_at=t1+1000*mysql_thread___monitor_read_only_interval;
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-		resultset = MyHGM->execute_query(query, &error);
+		resultset = MyHGM->get_read_only_servers(&error);
 		assert(resultset);
 		if (error) {
 			proxy_error("Error on %s : %s\n", query, error);
