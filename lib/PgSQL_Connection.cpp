@@ -1609,6 +1609,32 @@ bool PgSQL_Connection::native_flush_outbuf() {
 	return true;
 }
 
+// A fatal error during the RESULT phase kills the CONNECTION, not just the query,
+// so the socket must be torn down and not merely flagged.
+//
+// Two kinds of exit reach here and both are unrecoverable for the connection:
+//   * CONNECTION_FAILURE -- the peer closed, or a send()/recv() failed outright.
+//   * PROTOCOL_VIOLATION -- the byte stream is desynchronised. We no longer know
+//     where the next message begins, so nothing can ever be read from it safely
+//     again, even though the socket is still technically open.
+//
+// Without the teardown the object still looks HEALTHY to
+// is_connection_in_reusable_state(): `fd` is >= 0, and `native_connected` is still
+// true because that flag is only cleared when a NEW connect starts
+// (native_connect_start()) and never on breakage -- it means "completed a
+// handshake once", not "is alive now". Both halves of that gate's
+// `fd == -1 || native_connected == false` test therefore answer "reusable", and
+// destroy_MySQL_Connection_From_Pool() re-pools a connection whose peer is gone or
+// whose stream is out of sync. The next session to draw it inherits the mess.
+//
+// The auth and startup phases already do this -- their "backend closed during
+// auth" / "during startup" exits call native_teardown() -- the result phase simply
+// never did, on any of its exits.
+void PgSQL_Connection::native_result_fatal(const char* code, const char* message) {
+	set_error(code, message, false);
+	native_teardown();
+}
+
 void PgSQL_Connection::native_teardown() {
 	if (native_scram) {
 		pg_scram_free(native_scram);
@@ -2921,7 +2947,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 	// query_result must have been allocated in ASYNC_USE_RESULT_START via
 	// init_query_result(). Guard defensively so we never deref a null result.
 	if (query_result == nullptr) {
-		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_INTERNAL_ERROR), "native result fetch with no query_result", false);
+		native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_INTERNAL_ERROR), "native result fetch with no query_result");
 		return;
 	}
 
@@ -2933,7 +2959,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 	// ReadyForQuery that complete the cycle. Mirrors query_cont()'s native branch.
 	if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {
 		if (!native_flush_outbuf()) {
-			set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send failed during result fetch", false);
+			native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send failed during result fetch");
 			return;
 		}
 		if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {
@@ -2945,7 +2971,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 
 	int r = native_recv_into_framer();
 	if (r < 0) {
-		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "backend closed during result fetch", false);
+		native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "backend closed during result fetch");
 		return;
 	}
 	if (r == 0) {
@@ -2979,7 +3005,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 					// during the connect handshake; it is dead here (post-connect,
 					// mid-fetch) — only the flush result and async_exit_status count.
 					if (!native_send_or_buffer(PG_Native_Conn_St::DONE)) {
-						set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(CopyFail) failed", false);
+						native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(CopyFail) failed");
 						return;
 					}
 					if (async_exit_status == PG_EVENT_WRITE || !native_outbuf.empty() || !native_ssl_outbuf.empty()) {
@@ -3083,7 +3109,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 						}
 						pg_build_sync(native_outbuf);
 						if (!native_send_or_buffer(PG_Native_Conn_St::DONE)) {
-							set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(Sync) failed", false);
+							native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(Sync) failed");
 							return;
 						}
 						if (async_exit_status == PG_EVENT_WRITE || !native_outbuf.empty() || !native_ssl_outbuf.empty()) {
@@ -3187,7 +3213,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 			return;
 		}
 		// FRAME_ERROR: malformed backend message length.
-		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_PROTOCOL_VIOLATION), "malformed backend message during result fetch", false);
+		native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_PROTOCOL_VIOLATION), "malformed backend message during result fetch");
 		return;
 	}
 }
