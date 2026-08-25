@@ -57,8 +57,10 @@
  *     probes with libpq, which every hostile handshake defeats;
  *   - pgsql-shun_on_failures defaults to 5 (PgSQL_Thread.cpp:1042) and this
  *     file contains well over five deliberate failures.
- * Both are adjusted for the duration and restored at the end, in memory only —
- * never SAVE ... TO DISK, per project rule.
+ * Both are adjusted in memory for the duration. They are deliberately NOT
+ * restored: proxysql-tester.py reloads every config table FROM DISK before each
+ * test, so the isolation lives in the harness. Never SAVE ... TO DISK, which is
+ * what would actually defeat it.
  */
 #include <cstdlib>
 #include <memory>
@@ -391,25 +393,6 @@ int main(int, char**) {
         BAIL_OUT("cannot proceed without an admin connection");
     PGconn* admin = adminOwner.get();
 
-    // ---- save runtime state we are about to change -------------------------
-    const std::string saved_monitor  = adminScalar(admin, "SELECT variable_value FROM global_variables WHERE variable_name='pgsql-monitor_enabled'");
-    const std::string saved_shun     = adminScalar(admin, "SELECT variable_value FROM global_variables WHERE variable_name='pgsql-shun_on_failures'");
-    const std::string saved_native   = adminScalar(admin, "SELECT variable_value FROM global_variables WHERE variable_name='pgsql-use_native_backend_protocol'");
-    const std::string saved_conn_to  = adminScalar(admin, "SELECT variable_value FROM global_variables WHERE variable_name='pgsql-connect_timeout_server_max'");
-
-    auto restore = [&]() {
-        if (!saved_monitor.empty()) setVar(admin, "pgsql-monitor_enabled", saved_monitor);
-        if (!saved_shun.empty())    setVar(admin, "pgsql-shun_on_failures", saved_shun);
-        if (!saved_native.empty())  setVar(admin, "pgsql-use_native_backend_protocol", saved_native);
-        if (!saved_conn_to.empty()) setVar(admin, "pgsql-connect_timeout_server_max", saved_conn_to);
-        execAdmin(admin, "DELETE FROM pgsql_users WHERE username='" + std::string(MOCK_USER) + "'");
-        execAdmin(admin, "LOAD PGSQL USERS TO RUNTIME");
-        std::stringstream d;
-        d << "DELETE FROM pgsql_servers WHERE hostgroup_id=" << MOCK_HG;
-        execAdmin(admin, d.str());
-        execAdmin(admin, "LOAD PGSQL SERVERS TO RUNTIME");
-    };
-
     // ---- preconditions -----------------------------------------------------
     // See the file header: without these the mock is shunned part-way through
     // and the remaining cases never reach it.
@@ -436,7 +419,7 @@ int main(int, char**) {
     if (!mock.start()) BAIL_OUT("mock backend failed to listen");
 
     const std::string myip = pgmb_local_ip_towards(cl.pgsql_host, cl.pgsql_port);
-    if (myip.empty()) { restore(); BAIL_OUT("could not discover this container's IP toward ProxySQL"); }
+    if (myip.empty()) { BAIL_OUT("could not discover this container's IP toward ProxySQL"); }
     diag("mock backend listening on %s:%u (hostgroup %d)", myip.c_str(), mock.port(), MOCK_HG);
     g_mock_ip = myip;
     g_mock_port = mock.port();
@@ -449,13 +432,13 @@ int main(int, char**) {
         ins << "INSERT INTO pgsql_servers (hostgroup_id,hostname,port,max_connections,use_ssl,comment) "
             << "VALUES (" << MOCK_HG << ",'" << myip << "'," << mock.port() << ",4,0,'hostile mock backend')";
         if (!execAdmin(admin, ins.str()) || !execAdmin(admin, "LOAD PGSQL SERVERS TO RUNTIME")) {
-            restore(); BAIL_OUT("could not register the mock backend");
+            BAIL_OUT("could not register the mock backend");
         }
         std::stringstream u;
         u << "INSERT OR REPLACE INTO pgsql_users (username,password,active,default_hostgroup) VALUES ('"
           << MOCK_USER << "','" << MOCK_PASS << "',1," << MOCK_HG << ")";
         if (!execAdmin(admin, u.str()) || !execAdmin(admin, "LOAD PGSQL USERS TO RUNTIME")) {
-            restore(); BAIL_OUT("could not register the mock user");
+            BAIL_OUT("could not register the mock user");
         }
     }
     usleep(300000);
@@ -899,6 +882,5 @@ int main(int, char**) {
     }
 
     mock.stop();
-    restore();
     return exit_status();
 }

@@ -96,30 +96,12 @@ static long long connOK(PGconn* a, int hg) {
     return v.empty() ? -1 : atoll(v.c_str());
 }
 
-// Runtime variables this test forces, remembered so they can be put back.
-// Restored in memory only -- never SAVE ... TO DISK.
-struct SavedVar { std::string name, value; };
-static std::vector<SavedVar> g_saved_vars;
-
-static std::string getVar(PGconn* a, const std::string& name) {
-    return adminScalar(a, "SELECT variable_value FROM global_variables "
-                          "WHERE variable_name='" + name + "'");
-}
-// Remembers the current value once, then sets the new one. Caller issues a
-// single LOAD PGSQL VARIABLES TO RUNTIME afterwards.
+// Sets a runtime variable. Deliberately does NOT remember the old value:
+// proxysql-tester.py reloads every config table FROM DISK before each test, so
+// putting variables back is the harness's job, not the test's.
+// Caller issues a single LOAD PGSQL VARIABLES TO RUNTIME afterwards.
 static bool forceVar(PGconn* a, const std::string& name, const std::string& value) {
-    const std::string cur = getVar(a, name);
-    if (!cur.empty()) {
-        bool already = false;
-        for (const auto& s : g_saved_vars) if (s.name == name) already = true;
-        if (!already) g_saved_vars.push_back({name, cur});
-    }
     return execAdmin(a, "SET " + name + "='" + value + "'");
-}
-static void restoreVars(PGconn* a) {
-    for (const auto& s : g_saved_vars)
-        execAdmin(a, "SET " + s.name + "='" + s.value + "'");
-    execAdmin(a, "LOAD PGSQL VARIABLES TO RUNTIME");
 }
 
 // native_mode is latched per backend connection on its first handler() call
@@ -205,8 +187,9 @@ int main(int, char**) {
     const std::vector<ServerRow> saved_servers = readServers(admin, BACKEND_HG);
     if (saved_servers.empty()) BAIL_OUT("no pgsql_servers in hostgroup %d", BACKEND_HG);
 
-    auto restore = [&]() {
-        restoreVars(admin);
+    // NOT a variable restore (the harness handles those). This recycles the
+    // backend POOL, which the harness does not touch.
+    auto recyclePool = [&]() {
         // Not redundant with create_new_connection=1: that hint gets us a native
         // connection, it does not take it away. The connection returns to the
         // pool still latched native, where a later test expecting libpq could be
@@ -226,16 +209,16 @@ int main(int, char**) {
         forceVar(admin, "pgsql-query_digests", "true") &&
         forceVar(admin, "pgsql-query_processor_first_comment_parsing", "3") &&
         execAdmin(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
-    if (!prereq) { restore(); BAIL_OUT("cannot set the native-path preconditions"); }
+    if (!prereq) { recyclePool(); BAIL_OUT("cannot set the native-path preconditions"); }
 
     // No pool recycle here on purpose: create_new_connection=1 on the streaming
     // query already gets a fresh connection, and recycling would add a window
     // where pgsql_servers is empty for this hostgroup -- a crash inside it
-    // strands every later test with no backend. restore() still recycles.
+    // strands every later test with no backend. recyclePool() still recycles.
 
     auto c = createClientConn();
     if (!c || PQstatus(c.get()) != CONNECTION_OK) {
-        restore();
+        recyclePool();
         BAIL_OUT("client connection failed: %s", c ? PQerrorMessage(c.get()) : "null");
     }
 
@@ -289,6 +272,6 @@ int main(int, char**) {
              : "  <-- unreadable because ProxySQL aborted; admin is gone");
 
     c.reset();     // close the client before touching runtime config
-    restore();
+    recyclePool();
     return exit_status();
 }
