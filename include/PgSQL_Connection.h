@@ -498,13 +498,19 @@ public:
 	inline const PGconn* get_pg_connection() const { return pgsql_conn; }
 	inline int get_pg_server_version() {
 		if (native_mode) {
-			// native_params["server_version"] is e.g. "16.2" or "9.6.1"; libpq encodes
-			// PQserverVersion as major*10000 + minor*100 + rev. Parse best-effort.
 			auto it = native_params.find("server_version");
 			if (it == native_params.end()) return 0;
-			int maj = 0, min = 0, rev = 0;
-			sscanf(it->second.c_str(), "%d.%d.%d", &maj, &min, &rev);
-			return maj * 10000 + min * 100 + rev;
+			// PostgreSQL changed the numeric version encoding at 10: major*10000 + minor
+			// from 10 onwards, major*10000 + minor*100 + revision before it.
+			int vmaj = 0, vmin = 0, vrev = 0;
+			const int cnt = sscanf(it->second.c_str(), "%d.%d.%d", &vmaj, &vmin, &vrev);
+			// The backend controls this string; the multiplies below overflow int for
+			// absurd values, so anything implausible is reported as unknown.
+			if (vmaj < 0 || vmaj > 9999 || vmin < 0 || vmin > 9999 || vrev < 0 || vrev > 9999) return 0;
+			if (cnt == 3) return (100 * vmaj + vmin) * 100 + vrev;
+			if (cnt == 2) return (vmaj >= 10) ? (100 * 100 * vmaj + vmin) : ((100 * vmaj + vmin) * 100);
+			if (cnt == 1) return 100 * 100 * vmaj;
+			return 0;
 		}
 		return PQserverVersion(pgsql_conn);
 	}
@@ -524,7 +530,16 @@ public:
 	inline int get_pg_connection_needs_password() { return PQconnectionNeedsPassword(pgsql_conn); }
 	inline int get_pg_connection_used_password() { return PQconnectionUsedPassword(pgsql_conn); }
 	inline int get_pg_connection_used_gssapi() { return PQconnectionUsedGSSAPI(pgsql_conn); }
-	inline int get_pg_client_encoding() { return PQclientEncoding(pgsql_conn); }
+	inline int get_pg_client_encoding() {
+		if (native_mode) {
+			constexpr int SQL_ASCII = 0;   // PG_SQL_ASCII; mb/pg_wchar.h is not included here
+			auto it = native_params.find("client_encoding");
+			if (it == native_params.end()) return SQL_ASCII;
+			const int enc = char_to_encoding(it->second.c_str());
+			return (enc < 0) ? SQL_ASCII : enc;
+		}
+		return PQclientEncoding(pgsql_conn);
+	}
 	// Native TLS (1.6b): SSL is in use once the handshake handed the SSL* to myds.
 	// Out-of-line in PgSQL_Connection.cpp because PgSQL_Data_Stream is incomplete here.
 	int get_pg_ssl_in_use();
