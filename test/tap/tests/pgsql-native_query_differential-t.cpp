@@ -17,6 +17,18 @@
  * Like the auth test, it ALSO asserts the native run actually used the native
  * path (no fallback warning in the proxy log).
  *
+ * PROXYSQL INTERNAL SESSION (the last 9 assertions)
+ * -------------------------------------------------
+ * The corpus above compares RESULTS. The tail of main() applies the same
+ * two-phase method to `PROXYSQL INTERNAL SESSION`, which the corpus cannot
+ * carry: both paths answer it, but with legitimately DIFFERENT documents (they
+ * describe different backend connections), so the assertions are on whether the
+ * command is answered at all and on the SHAPE of the native document -- not on
+ * equality. It is a regression guard for a crash, not a fidelity check: four
+ * get_pg_*() accessors used to call libpq on the NULL PGconn of a native
+ * connection and the resulting NULL, assigned into a nlohmann::json, aborted the
+ * whole proxy process. See the comment block at that section for detail.
+ *
  * INFRA / SCENARIO COVERAGE
  * -------------------------
  * Same legacy-g1 infra as the auth test (docker-pgsql16-single, scram-sha-256
@@ -36,6 +48,9 @@
 #include "command_line.h"
 #include "tap.h"
 #include "utils.h"
+#include "json.hpp"
+
+using nlohmann::json;
 
 CommandLine cl;
 
@@ -228,6 +243,77 @@ static void drainLogToNow() {
     get_matching_lines(f_proxysql_log, "__no_such_marker_line__");
 }
 
+// ------------------------------------------------- internal-session probe
+//
+// `PROXYSQL INTERNAL SESSION` is a ProxySQL command, so it has no direct-
+// PostgreSQL oracle. Its oracle here is the OTHER ProxySQL path: the same
+// command, on the same proxy, with pgsql-use_native_backend_protocol flipped.
+
+struct InternalSession {
+    bool answered = false;
+    json doc;
+};
+
+// Pin a freshly-built backend connection to a client session, then read the
+// session-introspection document back out of it.
+//
+// BEGIN keeps the backend attached for the lifetime of the transaction, and the
+// create_new_connection hint guarantees the attached connection was built under
+// the CURRENT value of pgsql-use_native_backend_protocol rather than reused from
+// the pool. Both matter: with no backend attached, "backends" is empty and not a
+// single get_pg_*() accessor is called, so the probe would pass while testing
+// nothing.
+static InternalSession probe_internal_session() {
+    InternalSession out;
+    auto c = createClientConn();
+    if (!c || PQstatus(c.get()) != CONNECTION_OK) {
+        diag("internal-session probe: client connection failed: %s",
+             c ? PQerrorMessage(c.get()) : "null conn");
+        return out;
+    }
+    PQclear(PQexec(c.get(), "BEGIN"));
+    PQclear(PQexec(c.get(), "/* create_new_connection=1 */ SELECT 42"));
+
+    PGresult* r = PQexec(c.get(), "PROXYSQL INTERNAL SESSION");
+    if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) > 0 && !PQgetisnull(r, 0, 0)) {
+        try {
+            out.doc = json::parse(PQgetvalue(r, 0, 0));
+            out.answered = true;
+        } catch (const std::exception& e) {
+            diag("internal-session probe: unparseable JSON: %s", e.what());
+        }
+    } else {
+        diag("internal-session probe: PROXYSQL INTERNAL SESSION failed: %s",
+             PQerrorMessage(c.get()));
+    }
+    PQclear(r);
+    PQclear(PQexec(c.get(), "COMMIT"));
+    return out;
+}
+
+// backends[0].conn.pgsql, or a null json when no backend is attached.
+static json backend_pgsql(const json& j) {
+    try {
+        if (j.contains("backends") && j["backends"].is_array() && !j["backends"].empty()) {
+            const json& b = j["backends"][0];
+            if (b.contains("conn") && b["conn"].contains("pgsql")) return b["conn"]["pgsql"];
+        }
+    } catch (const std::exception&) {}
+    return json();
+}
+
+// One assertion that a reported field survived as a JSON string. A NULL returned
+// by a libpq accessor cannot reach this point: assigning it into a nlohmann::json
+// constructs a std::string from a null pointer and throws, taking the process
+// with it. So this passes only once the accessor has a native branch returning a
+// real C string.
+static void ok_pgsql_string_field(const json& pg, const char* key) {
+    const bool present = pg.is_object() && pg.contains(key);
+    const std::string got = present ? pg[key].dump() : std::string("<absent>");
+    ok(present && pg[key].is_string(),
+       "native: backends[0].conn.pgsql.%s is a string (got %s)", key, got.c_str());
+}
+
 // One query: 2 assertions (result match, native path used).
 // On mismatch, log the diff to help diagnose.
 static void assert_query(const char* label, const std::vector<QueryResult>& libpq_res,
@@ -248,8 +334,9 @@ static void assert_query(const char* label, const std::vector<QueryResult>& libp
 }
 
 int main(int /*argc*/, char** /*argv*/) {
-    // 15 query-result assertions + 1 native-path assertion = 16 lines.
-    plan(16);
+    // 15 query-result assertions + 1 native-path assertion
+    // + 9 PROXYSQL INTERNAL SESSION assertions = 25 lines.
+    plan(25);
 
     if (cl.getEnv())
         return exit_status();
@@ -368,6 +455,101 @@ int main(int /*argc*/, char** /*argv*/) {
     // Native-path assertion (counted as 1 line for the whole phase).
     bool fell_back = nativeFallbackObserved();
     ok(!fell_back, "native phase used native path (no libpq fallback in log)");
+
+    // ---- PROXYSQL INTERNAL SESSION, libpq oracle vs native ------------------
+    //
+    // Same two-phase method as the corpus above, on a query the corpus cannot
+    // carry: the two paths return legitimately DIFFERENT documents (they
+    // describe different backend connections), so what is compared is whether
+    // the command is answered at all, plus the shape of the native document.
+    //
+    // REGRESSION GUARD. generate_proxysql_internal_session_json() describes the
+    // attached backend through the get_pg_*() accessors. Four of them USED TO have
+    // no native branch and called libpq on the PGconn, which is NULL for a native
+    // connection: get_pg_hostaddr(), get_pg_port(), get_pg_password() and
+    // get_pg_options(). PQhostaddr(NULL) & co. return NULL, that NULL was assigned
+    // straight into a nlohmann::json, which constructs a std::string from a null
+    // pointer and throws std::logic_error, and nothing on the path catches it --
+    // so three ordinary statements from any authenticated client took down the
+    // whole proxy process. An exception, not an assertion, so release builds died
+    // identically. Those four accessors now have native branches returning a real
+    // C string (include/PgSQL_Connection.h). The libpq branches are untouched: on a
+    // live PGconn none of the PQ*() calls can return NULL -- PQhost/PQhostaddr/
+    // PQport/PQpass fall back to "" themselves, PQdb/PQuser are filled by
+    // connectOptions2() or the connect fails, and `options` has the compiled-in
+    // default DefaultOption "". Only a NULL PGconn produces NULL, which is exactly
+    // what a native connection has and a libpq one never does here.
+    //
+    // The oracle leg runs FIRST on purpose. Taken the other way round, a native
+    // leg that kills the proxy also takes the oracle leg down with it, and the
+    // run then reads as "libpq is broken too" -- the wrong diagnosis.
+    {
+        InternalSession oracle;
+        if (setNativeMode(admin.get(), false) &&
+            flushBackendPool(admin.get(), BACKEND_HG, saved)) {
+            oracle = probe_internal_session();
+        } else {
+            diag("internal session: could not return the proxy to libpq mode for the oracle leg");
+        }
+
+        InternalSession candidate;
+        if (setNativeMode(admin.get(), true) &&
+            flushBackendPool(admin.get(), BACKEND_HG, saved)) {
+            candidate = probe_internal_session();
+        } else {
+            diag("internal session: could not put the proxy into native mode for the candidate leg");
+        }
+
+        const json opg = backend_pgsql(oracle.doc);
+        const json npg = backend_pgsql(candidate.doc);
+
+        ok(oracle.answered, "libpq: PROXYSQL INTERNAL SESSION answers");
+        // Guards the probe recipe itself: if BEGIN + create_new_connection stops
+        // attaching a backend, every native assertion below would pass vacuously.
+        ok(opg.is_object(), "libpq: INTERNAL SESSION reports an attached backend (probe recipe works)");
+
+        ok(candidate.answered, "native: PROXYSQL INTERNAL SESSION answers");
+
+        // Confirms the attached connection really is native: the reported address
+        // is PgSQL_Connection::get_pg_connection(), the libpq PGconn, which a
+        // native connection does not have. A real pointer here would mean the
+        // session fell back to libpq and the field assertions prove nothing.
+        {
+            const bool present = npg.is_object() && npg.contains("address") && npg["address"].is_string();
+            const std::string addr = present ? npg["address"].get<std::string>() : std::string("<absent>");
+            const bool no_pgconn = (addr == "(nil)" || addr == "0x0" || addr == "0");
+            ok(npg.is_object() && no_pgconn,
+               "native: the attached backend has no libpq PGconn, i.e. it is native (address=%s)",
+               addr.c_str());
+        }
+
+        ok_pgsql_string_field(npg, "host_addr");   // was PQhostaddr(NULL) -> NULL
+        ok_pgsql_string_field(npg, "port");        // was PQport(NULL)     -> NULL
+        ok_pgsql_string_field(npg, "options");     // was PQoptions(NULL)  -> NULL
+
+        // password is reported only by DEBUG builds (#ifdef DEBUG in
+        // generate_proxysql_internal_session_json), so its absence is not a
+        // failure -- but a missing document is, or this reads as "release build,
+        // nothing to check" when the truth is that the proxy died.
+        {
+            const bool have_doc = npg.is_object();
+            const bool present = have_doc && npg.contains("password");
+            ok(have_doc && (!present || npg["password"].is_string()),
+               "native: backends[0].conn.pgsql.password is a string when reported%s",
+               have_doc ? (present ? "" : " [absent: release build]") : " [no document]");
+        }
+
+        {
+            auto a2 = createAdminConn();
+            bool alive = false;
+            if (a2 && PQstatus(a2.get()) == CONNECTION_OK) {
+                PGresult* r = PQexec(a2.get(), "SELECT 1");
+                alive = (PQresultStatus(r) == PGRES_TUPLES_OK);
+                PQclear(r);
+            }
+            ok(alive, "ProxySQL still alive after the internal-session probes");
+        }
+    }
 
     // Restore native mode to default (off) and flush the pool.
     setNativeMode(admin.get(), false);
