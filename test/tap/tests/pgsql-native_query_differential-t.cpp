@@ -17,7 +17,7 @@
  * Like the auth test, it ALSO asserts the native run actually used the native
  * path (no fallback warning in the proxy log).
  *
- * PROXYSQL INTERNAL SESSION (the last 9 assertions)
+ * PROXYSQL INTERNAL SESSION (the last 12 assertions)
  * -------------------------------------------------
  * The corpus above compares RESULTS. The tail of main() applies the same
  * two-phase method to `PROXYSQL INTERNAL SESSION`, which the corpus cannot
@@ -314,6 +314,33 @@ static void ok_pgsql_string_field(const json& pg, const char* key) {
        "native: backends[0].conn.pgsql.%s is a string (got %s)", key, got.c_str());
 }
 
+// backends[0].conn.pgsql.address is PgSQL_Connection::get_pg_connection(), the libpq
+// PGconn. A libpq connection always has one; a native connection never does. That is
+// what tells the two legs apart, and each leg asserts its own so neither can be served
+// by the wrong kind of pooled connection without the run saying so.
+static std::string pgconn_address(const json& pg) {
+    if (pg.is_object() && pg.contains("address") && pg["address"].is_string())
+        return pg[std::string("address")].get<std::string>();
+    return "<absent>";
+}
+static bool is_null_pgconn(const std::string& addr) {
+    return addr == "(nil)" || addr == "0x0" || addr == "0";
+}
+
+// One assertion that a reported field is IDENTICAL on both paths. Used for values
+// that describe the SERVER rather than the connection, so unlike host_addr / port /
+// options they must not differ between libpq and native. Compared against the oracle
+// rather than a literal, so the assertion does not pin the infra's PostgreSQL version.
+static void ok_pgsql_field_matches(const json& opg, const json& npg, const char* key) {
+    const bool have = opg.is_object() && npg.is_object() &&
+                      opg.contains(key) && npg.contains(key);
+    const std::string o = have ? opg[key].dump() : std::string("<absent>");
+    const std::string n = have ? npg[key].dump() : std::string("<absent>");
+    ok(have && opg[key] == npg[key],
+       "native: backends[0].conn.pgsql.%s matches libpq (libpq=%s native=%s)",
+       key, o.c_str(), n.c_str());
+}
+
 // One query: 2 assertions (result match, native path used).
 // On mismatch, log the diff to help diagnose.
 static void assert_query(const char* label, const std::vector<QueryResult>& libpq_res,
@@ -335,8 +362,8 @@ static void assert_query(const char* label, const std::vector<QueryResult>& libp
 
 int main(int /*argc*/, char** /*argv*/) {
     // 15 query-result assertions + 1 native-path assertion
-    // + 9 PROXYSQL INTERNAL SESSION assertions = 25 lines.
-    plan(25);
+    // + 12 PROXYSQL INTERNAL SESSION assertions = 28 lines.
+    plan(28);
 
     if (cl.getEnv())
         return exit_status();
@@ -507,6 +534,11 @@ int main(int /*argc*/, char** /*argv*/) {
         // Guards the probe recipe itself: if BEGIN + create_new_connection stops
         // attaching a backend, every native assertion below would pass vacuously.
         ok(opg.is_object(), "libpq: INTERNAL SESSION reports an attached backend (probe recipe works)");
+        {
+            const std::string addr = pgconn_address(opg);
+            ok(opg.is_object() && addr != "<absent>" && !is_null_pgconn(addr),
+               "libpq: the oracle leg really is libpq, it has a PGconn (address=%s)", addr.c_str());
+        }
 
         ok(candidate.answered, "native: PROXYSQL INTERNAL SESSION answers");
 
@@ -515,10 +547,8 @@ int main(int /*argc*/, char** /*argv*/) {
         // native connection does not have. A real pointer here would mean the
         // session fell back to libpq and the field assertions prove nothing.
         {
-            const bool present = npg.is_object() && npg.contains("address") && npg["address"].is_string();
-            const std::string addr = present ? npg["address"].get<std::string>() : std::string("<absent>");
-            const bool no_pgconn = (addr == "(nil)" || addr == "0x0" || addr == "0");
-            ok(npg.is_object() && no_pgconn,
+            const std::string addr = pgconn_address(npg);
+            ok(npg.is_object() && is_null_pgconn(addr),
                "native: the attached backend has no libpq PGconn, i.e. it is native (address=%s)",
                addr.c_str());
         }
@@ -538,6 +568,14 @@ int main(int /*argc*/, char** /*argv*/) {
                "native: backends[0].conn.pgsql.password is a string when reported%s",
                have_doc ? (present ? "" : " [absent: release build]") : " [no document]");
         }
+
+        // Both of these describe the SERVER, so they must agree across paths.
+        // client_encoding came back -1 on native -- PQclientEncoding()'s error
+        // sentinel, returned because a native connection has no PGconn -- and
+        // server_version used the pre-PostgreSQL-10 numeric encoding, so a 16.14
+        // backend reported "16.14.0" where libpq reports "16.0.14" from 160014.
+        ok_pgsql_field_matches(opg, npg, "client_encoding");
+        ok_pgsql_field_matches(opg, npg, "server_version");
 
         {
             auto a2 = createAdminConn();

@@ -426,6 +426,7 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	pgsql_txn_state_unit-t \
 	sqlite3db_unit-t \
 	pgsql_error_helper_unit-t \
+	pgsql_native_params_unit-t \
 	charset_find_unit-t \
 	config_validation_unit-t \
 	config_write_unit-t \

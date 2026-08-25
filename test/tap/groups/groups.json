@@ -248,6 +248,7 @@
   "pgsql_conninfo_credentials_unit-t" : [ "unit-tests-g1" ],
   "pgsql_error_classifier_unit-t" : [ "unit-tests-g1" ],
   "pgsql_error_helper_unit-t" : [ "unit-tests-g1" ],
+  "pgsql_native_params_unit-t" : [ "unit-tests-g1" ],
   "pgsql_monitor_unit-t" : [ "unit-tests-g1" ],
   "pgsql_query_logging_autodump-t" : [ "legacy-g6","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1" ],
   "pgsql_query_logging_memory-t" : [ "legacy-g6","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1" ],
