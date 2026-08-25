@@ -510,12 +510,15 @@ public:
 	}
 	inline int get_pg_protocol_version() { return native_mode ? 3 : PQprotocolVersion(pgsql_conn); }
 	inline const char* get_pg_host() { return native_mode ? native_host.c_str() : PQhost(pgsql_conn); }
-	inline const char* get_pg_hostaddr() { return PQhostaddr(pgsql_conn); }
-	inline const char* get_pg_port() { return PQport(pgsql_conn); }
+	inline const char* get_pg_hostaddr() { return native_mode ? native_hostaddr.c_str() : PQhostaddr(pgsql_conn); }
+	inline const char* get_pg_port() { return native_mode ? native_port.c_str() : PQport(pgsql_conn); }
 	inline const char* get_pg_dbname() { return native_mode ? (userinfo ? userinfo->dbname : "") : PQdb(pgsql_conn); }
 	inline const char* get_pg_user() { return native_mode ? (userinfo ? userinfo->username : "") : PQuser(pgsql_conn); }
-	inline const char* get_pg_password() { return PQpass(pgsql_conn); }
-	inline const char* get_pg_options() { return PQoptions(pgsql_conn); }
+	inline const char* get_pg_password() { return native_mode ? (userinfo && userinfo->password ? userinfo->password : "") : PQpass(pgsql_conn); }
+	// TODO: this needs to be fixed for native. pg_build_startup() (lib/PgSQL_Backend_Auth.cpp)
+	// emits only the `user` and `database` keys, so the native StartupMessage carries no
+	// `options` at all and there is nothing to report here yet.
+	inline const char* get_pg_options() { return native_mode ? "" : PQoptions(pgsql_conn); }
 	inline int get_pg_socket_fd() { return native_mode ? fd : PQsocket(pgsql_conn); }
 	inline int get_pg_backend_pid() { return native_mode ? native_backend_pid : PQbackendPID(pgsql_conn); }
 	inline int get_pg_connection_needs_password() { return PQconnectionNeedsPassword(pgsql_conn); }
@@ -698,6 +701,8 @@ public:
 	bool handler_first_call = true;                  // one-shot first-call detector for handler() (both libpq and native paths)
 	std::map<std::string, std::string> native_params; // ParameterStatus name->value
 	std::string native_host;                         // backend host (parent->address, captured at connect)
+	std::string native_hostaddr;                     // resolved numeric IP, or "" — mirrors when the libpq path passes hostaddr=
+	std::string native_port;                         // backend port as a decimal string, matching PQport()'s shape
 	int native_backend_pid = 0;                      // BackendKeyData PID
 	int native_backend_secret = 0;                   // BackendKeyData secret key
 	char native_txn_status = 'I';                    // ReadyForQuery status byte ('I'/'T'/'E')

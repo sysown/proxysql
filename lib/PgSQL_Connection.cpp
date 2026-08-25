@@ -1768,6 +1768,11 @@ void PgSQL_Connection::native_connect_start() {
 
 	this->fd = sock;
 	native_host = parent->address ? parent->address : "";
+	// Mirror the libpq path's rule for `hostaddr` (connect_start(): passed only when
+	// the DNS cache resolved something DIFFERENT from parent->address) so that both
+	// paths report the same value for the same server configuration.
+	native_hostaddr = (!ip.empty() && parent->address && ip != std::string(parent->address)) ? ip : "";
+	native_port = portstr;
 	native_st = PG_Native_Conn_St::TCP_CONNECTING;
 	native_framer.reset();
 	native_outbuf.clear();
