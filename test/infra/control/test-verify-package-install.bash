@@ -9,7 +9,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 FAKE_BIN="$TMP_DIR/bin"
 ZYPPER_ARGS_LOG="$TMP_DIR/zypper-args"
 mkdir -p "$FAKE_BIN"
-touch "$TMP_DIR/proxysql-3.1.11-1-opensuse15.x86_64.rpm"
+touch "$TMP_DIR/proxysql-3.1.11-1-opensuse15-clang.x86_64.rpm"
 
 cat >"$FAKE_BIN/rpm" <<'EOF'
 #!/usr/bin/env bash
@@ -18,6 +18,9 @@ EOF
 
 cat >"$FAKE_BIN/docker" <<'EOF'
 #!/usr/bin/env bash
+if [[ "${FAKE_DOCKER_FAIL_COMMAND:-}" == "$1" ]]; then
+  exit 1
+fi
 case "$1" in
   pull|run|cp|kill|rm)
     exit 0
@@ -58,7 +61,7 @@ export ZYPPER_ARGS_LOG
 
 PATH="$FAKE_BIN:$PATH" \
   "$ROOT_DIR/test/infra/control/verify-package-install.bash" \
-  "$TMP_DIR/proxysql-3.1.11-1-opensuse15.x86_64.rpm"
+  "$TMP_DIR/proxysql-3.1.11-1-opensuse15-clang.x86_64.rpm"
 
 expected='--non-interactive --no-gpg-checks install -y /tmp/pkg.rpm'
 actual=$(<"$ZYPPER_ARGS_LOG")
@@ -67,5 +70,15 @@ if [[ "$actual" != "$expected" ]]; then
   echo "actual zypper arguments:   $actual" >&2
   exit 1
 fi
+
+for failed_command in pull run; do
+  if PATH="$FAKE_BIN:$PATH" FAKE_DOCKER_FAIL_COMMAND="$failed_command" \
+    "$ROOT_DIR/test/infra/control/verify-package-install.bash" \
+    "$TMP_DIR/proxysql-3.1.11-1-opensuse15-clang.x86_64.rpm" \
+    >/dev/null 2>&1; then
+    echo "docker $failed_command failure must fail package verification" >&2
+    exit 1
+  fi
+done
 
 echo 'verify-package-install openSUSE unsigned-RPM test: PASS'
