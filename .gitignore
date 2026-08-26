@@ -231,6 +231,7 @@ test-scripts/deps/
 test/tap/tests/parsersql_digest_test
 test/tap/tests/setparser_parsersql_test
 deps/protobuf/protobuf-*/
+deps/duckdb/duckdb/
 
 # pg-compat report output (run-pg-compat.bash's default host bind-mount
 # target; see test/pg-compat/README.md "Report output")
