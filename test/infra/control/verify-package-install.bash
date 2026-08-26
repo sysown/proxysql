@@ -119,7 +119,10 @@ case "$PKG_TYPE" in
         elif command -v yum &>/dev/null; then
             yum install -y -q /tmp/pkg.rpm 2>&1
         elif command -v zypper &>/dev/null; then
-            zypper --non-interactive install -y /tmp/pkg.rpm 2>&1
+            # Release-build RPMs are intentionally unsigned until the
+            # release-kraken signing step.  Keep dependency resolution and
+            # installation strict while deferring only the signature gate.
+            zypper --non-interactive --no-gpg-checks install -y /tmp/pkg.rpm 2>&1
         else
             echo "ERROR: no supported package manager (dnf/yum/zypper)" >&2
             exit 1
