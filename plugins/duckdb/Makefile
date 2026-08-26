@@ -17,10 +17,20 @@ PLUGIN_DIR := $(PROXYSQL_PATH)/plugins/duckdb
 ODIR := $(PLUGIN_DIR)/obj
 PLUGIN_SO := $(PLUGIN_DIR)/ProxySQL_DuckDB_Plugin.so
 
+# duckdb_session.cpp is the first plugin source to include the full
+# MySQL_Session.h / PgSQL_Session.h stack (needed for the templated
+# session handler): that chain pulls in cpp.h -> PgSQL_Thread.h ->
+# proxysql_admin.h -> ProxySQL_RESTAPI_Server.hpp -> httpserver.hpp,
+# plus prometheus's Exposer and libcurl/libev/libdaemon/microhttpd
+# headers that Admin's REST API server declares inline. None of the
+# earlier plugin sources needed these, so they were not in IDIRS before.
 IDIRS := -I$(PROXYSQL_IDIR) -I$(PLUGIN_DIR)/include -I$(SQLITE3_IDIR) \
 	-I$(DUCKDB_IDIR) -I$(SSL_IDIR) -I$(PROMETHEUS_IDIR) -I$(LIBCONFIG_IDIR) \
 	-I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) -I$(RE2_IDIR) -I$(ZSTD_IDIR) \
 	-I$(POSTGRESQL_IDIR) -I$(LIBUSUAL_IDIR) \
+	-I$(LIBHTTPSERVER_IDIR) -I$(MICROHTTPD_IDIR) -I$(CURL_IDIR) \
+	-I$(EV_IDIR) -I$(LIBDAEMON_IDIR) -I$(JSON_IDIR) -I$(LIBSCRAM_IDIR) \
+	-I$(PARSERSQL_IDIR) \
 	-I$(PROXYSQL_PATH)/deps/lz4/lz4/lib
 
 OPTZ ?= -O2 -ggdb
@@ -103,7 +113,7 @@ DUCKDB_ARS = $(shell find $(DUCKDB_PATH)/build/release -name '*.a' 2>/dev/null)
 # should update this constant, not silently pass a stale check.
 DUCKDB_MIN_ARCHIVES := 16
 
-SRCS := $(PLUGIN_DIR)/src/duckdb_plugin.cpp $(PLUGIN_DIR)/src/duckdb_config.cpp $(PLUGIN_DIR)/src/duckdb_engine.cpp $(PLUGIN_DIR)/src/duckdb_result.cpp $(PLUGIN_DIR)/src/duckdb_admin_schema.cpp
+SRCS := $(PLUGIN_DIR)/src/duckdb_plugin.cpp $(PLUGIN_DIR)/src/duckdb_config.cpp $(PLUGIN_DIR)/src/duckdb_engine.cpp $(PLUGIN_DIR)/src/duckdb_result.cpp $(PLUGIN_DIR)/src/duckdb_admin_schema.cpp $(PLUGIN_DIR)/src/duckdb_session.cpp
 HEADERS := $(wildcard $(PLUGIN_DIR)/include/*.h) $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h
 OBJS := $(patsubst $(PLUGIN_DIR)/src/%.cpp,$(ODIR)/%.o,$(SRCS))
 
