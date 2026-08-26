@@ -2,8 +2,26 @@
 
 #include "duckdb_admin_schema.h"
 #include "duckdb_config.h"
+#include "duckdb_engine.h"
+#include "duckdb_listener.h"
+
+#include <string>
 
 namespace {
+
+void log_warn(const std::string& msg) {
+	DuckDBPluginContext& ctx = duckdb_context();
+	if (ctx.services != nullptr && ctx.services->log_message != nullptr) {
+		ctx.services->log_message(2 /* warn */, msg.c_str());
+	}
+}
+
+void log_error(const std::string& msg) {
+	DuckDBPluginContext& ctx = duckdb_context();
+	if (ctx.services != nullptr && ctx.services->log_message != nullptr) {
+		ctx.services->log_message(3 /* error */, msg.c_str());
+	}
+}
 
 bool duckdb_register_schemas(ProxySQL_PluginServices* services) {
 	if (services == nullptr) return false;
@@ -19,23 +37,66 @@ bool duckdb_init(ProxySQL_PluginServices* services) {
 }
 
 bool duckdb_start() {
-	duckdb_context().started = true;
-	return true;   // Task 8 opens the engine and binds listeners here.
+	DuckDBPluginContext& ctx = duckdb_context();
+
+	if (ctx.services != nullptr && ctx.services->get_admindb != nullptr) {
+		if (SQLite3DB* admindb = ctx.services->get_admindb()) {
+			// disk -> memory, then memory -> module, the canonical order.
+			std::string err;
+			if (!duckdb_sync_variables_disk_to_memory(*admindb, err)) log_warn(err);
+			err.clear();
+			if (!duckdb_install_variables_from_admin(*admindb, *ctx.config_store, err) || !err.empty())
+				log_warn(err);
+		}
+	}
+
+	std::string err;
+	ctx.engine = std::make_unique<DuckDBEngine>();
+	if (!ctx.engine->open(*ctx.config_store, err)) {
+		log_error("duckdb: engine open failed: " + err);
+		ctx.engine.reset();
+		return false;
+	}
+
+	ctx.listener = std::make_unique<DuckDBListener>();
+	if (!ctx.listener->start(*ctx.config_store, *ctx.engine, err)) {
+		log_error("duckdb: listener start failed: " + err);
+		ctx.listener.reset();
+		ctx.engine->close();
+		ctx.engine.reset();
+		return false;
+	}
+
+	ctx.started = true;
+	return true;
 }
 
+// Order matters: the listener joins every connection thread, so no thread
+// can still hold a duckdb_connection by the time the engine closes.
+//
 // Pairs with init(), not start(): the chassis guarantees stop() runs for
 // any plugin whose init() returned true, even if start() failed or never
-// ran. Every teardown below must tolerate a null / never-started member.
+// ran. Every teardown step below must tolerate a null / never-started
+// member, and stop() itself must tolerate being called twice.
 bool duckdb_stop() {
 	DuckDBPluginContext& ctx = duckdb_context();
+	if (ctx.listener) { ctx.listener->stop(); ctx.listener.reset(); }
+	if (ctx.engine)   { ctx.engine->close(); ctx.engine.reset(); }
 	ctx.started = false;
 	return true;
 }
 
 const char* duckdb_status_json() {
-	return duckdb_context().started
-		? "{\"name\":\"duckdb\",\"state\":\"running\"}"
-		: "{\"name\":\"duckdb\",\"state\":\"stopped\"}";
+	DuckDBPluginContext& ctx = duckdb_context();
+	static std::string status; // must outlive the call: the ABI returns a raw pointer
+	if (!ctx.started || !ctx.engine) {
+		status = "{\"name\":\"duckdb\",\"state\":\"stopped\"}";
+		return status.c_str();
+	}
+	status = "{\"name\":\"duckdb\",\"state\":\"running\",\"database_path\":\"" +
+		ctx.config_store->database_path() + "\",\"open_connections\":" +
+		std::to_string(ctx.engine->open_connections()) + "}";
+	return status.c_str();
 }
 
 const ProxySQL_PluginDescriptor duckdb_descriptor = {
