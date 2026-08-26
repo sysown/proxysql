@@ -507,6 +507,7 @@ UNIT_TESTS += \
 	test_mysqlx_plugin_load-t \
 	test_duckdb_plugin_load-t \
 	duckdb_config_unit-t \
+	duckdb_engine_unit-t \
 	test_mysqlx_admin_tables-t \
 	mysqlx_config_store_unit-t \
 	mysqlx_config_store_concurrent_unit-t \
@@ -626,6 +627,27 @@ duckdb_config_unit-t: duckdb_config_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/s
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
 		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
 		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
+
+# libduckdb_static.a alone does not satisfy DuckDB's symbols -- see the long
+# comment in plugins/duckdb/Makefile. It's kept as the prerequisite that
+# forces the deps/duckdb build; DUCKDB_ARS enumerates the full 16-archive
+# set actually needed on the link line. Recursively-expanded (=), not
+# simply-expanded (:=), so `find` runs at recipe time, after $(DUCKDB_AR)
+# has forced the deps build to complete.
+DUCKDB_AR := $(DUCKDB_LDIR)/libduckdb_static.a
+DUCKDB_ARS = $(shell find $(DUCKDB_PATH)/build/release -name '*.a' 2>/dev/null)
+
+DUCKDB_LINK_GROUP_START :=
+DUCKDB_LINK_GROUP_END :=
+ifneq ($(UNAME_S),Darwin)
+DUCKDB_LINK_GROUP_START := -Wl,--start-group
+DUCKDB_LINK_GROUP_END := -Wl,--end-group
+endif
+
+duckdb_engine_unit-t: duckdb_engine_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(DUCKDB_AR)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(TEST_HELPERS_OBJ) $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
+		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
+		$(WHOLE_LIBPROXYSQL) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 
 mysqlx_config_store_unit-t: mysqlx_config_store_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \

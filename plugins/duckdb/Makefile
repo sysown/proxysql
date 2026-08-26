@@ -103,7 +103,7 @@ DUCKDB_ARS = $(shell find $(DUCKDB_PATH)/build/release -name '*.a' 2>/dev/null)
 # should update this constant, not silently pass a stale check.
 DUCKDB_MIN_ARCHIVES := 16
 
-SRCS := $(PLUGIN_DIR)/src/duckdb_plugin.cpp $(PLUGIN_DIR)/src/duckdb_config.cpp
+SRCS := $(PLUGIN_DIR)/src/duckdb_plugin.cpp $(PLUGIN_DIR)/src/duckdb_config.cpp $(PLUGIN_DIR)/src/duckdb_engine.cpp
 HEADERS := $(wildcard $(PLUGIN_DIR)/include/*.h) $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h
 OBJS := $(patsubst $(PLUGIN_DIR)/src/%.cpp,$(ODIR)/%.o,$(SRCS))
 
@@ -120,6 +120,23 @@ $(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) $(DUCKDB_AR) | $(ODIR)
 PLUGIN_LDFLAGS :=
 ifeq ($(UNAME_S),Darwin)
 PLUGIN_LDFLAGS += -Wl,-undefined,dynamic_lookup
+else
+# The 16 vendored DuckDB archives were built by DuckDB's own CMake, not by
+# this Makefile, so none of their objects carry -fvisibility=hidden -- that
+# flag only applies to duckdb_plugin.o/duckdb_config.o/duckdb_engine.o
+# above. As long as no plugin code referenced any DuckDB symbol (true
+# through Task 3), --start-group never pulled any archive member into the
+# .so and this went unnoticed. Task 4 is the first to call duckdb_open_ext
+# et al., which pulls in real archive objects and, with their default
+# visibility, re-exposes thousands of DuckDB-internal symbols (fmt, hll,
+# mbedtls, re2, ...) from the plugin .so -- exactly the ODR-collision risk
+# -fvisibility=hidden exists to prevent. --exclude-libs,ALL tells GNU ld to
+# treat every symbol pulled from a static archive as local in the output,
+# without touching which archives/objects are selected (unlike
+# --whole-archive or hand-listing archives). Apple's ld64 has no equivalent
+# flag; not needed there since ld64 already defaults to hiding non-explicit
+# exports.
+PLUGIN_LDFLAGS += -Wl,--exclude-libs,ALL
 endif
 
 # --start-group/--end-group (not --whole-archive) resolves the circular
