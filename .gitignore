@@ -242,3 +242,6 @@ deps/protobuf/protobuf-*/
 test/scripts/deps/mysqlbinlog
 
 # Temporary ASAN CI end-to-end validation trigger; this branch will not merge.
+
+# superpowers subagent-driven-development scratch (ledger, briefs, review packages)
+.superpowers/
