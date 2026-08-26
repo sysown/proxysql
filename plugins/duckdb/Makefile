@@ -117,10 +117,6 @@ $(DUCKDB_AR):
 $(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) $(DUCKDB_AR) | $(ODIR)
 	$(CXX) -c -o $@ $< $(CXXFLAGS) $(IDIRS)
 
-PLUGIN_LDFLAGS :=
-ifeq ($(UNAME_S),Darwin)
-PLUGIN_LDFLAGS += -Wl,-undefined,dynamic_lookup
-else
 # The 16 vendored DuckDB archives were built by DuckDB's own CMake, not by
 # this Makefile, so none of their objects carry -fvisibility=hidden -- that
 # flag only applies to duckdb_plugin.o/duckdb_config.o/duckdb_engine.o
@@ -130,12 +126,32 @@ else
 # et al., which pulls in real archive objects and, with their default
 # visibility, re-exposes thousands of DuckDB-internal symbols (fmt, hll,
 # mbedtls, re2, ...) from the plugin .so -- exactly the ODR-collision risk
-# -fvisibility=hidden exists to prevent. --exclude-libs,ALL tells GNU ld to
-# treat every symbol pulled from a static archive as local in the output,
-# without touching which archives/objects are selected (unlike
-# --whole-archive or hand-listing archives). Apple's ld64 has no equivalent
-# flag; not needed there since ld64 already defaults to hiding non-explicit
-# exports.
+# -fvisibility=hidden exists to prevent. This is a per-linker problem, not a
+# Linux-only one: static-archive objects retain default visibility on both
+# ELF and Mach-O, since the archives were compiled by DuckDB's own CMake
+# build with no knowledge of this plugin's CXXFLAGS. Each linker needs its
+# own explicit instrument to re-hide them:
+#   - GNU ld (Linux): --exclude-libs,ALL treats every symbol pulled from a
+#     static archive as local in the output.
+#   - Apple's ld64 (macOS): no --exclude-libs equivalent exists.
+#     -exported_symbol,_<name> is the ld64 analogue -- it hides everything
+#     except the named symbol(s) (Mach-O prepends "_" to C symbol names).
+#     Used in the single-flag form (rather than -exported_symbols_list with
+#     a file) because exactly one symbol -- the extern "C" entry point
+#     proxysql_plugin_descriptor_v1 -- is meant to be exported.
+# Neither branch changes which archives/objects get linked (unlike
+# --whole-archive or hand-listing archives).
+#
+# The Darwin branch is unverified locally (no macOS environment here); it
+# is confirmed by the first macOS CI run (CI-build-macos-macos-14-genai.yml
+# sets PROXYSQL40=1 and builds this plugin). The named symbol certainly
+# exists (it's this plugin's own extern "C" entry point), so ld64's
+# "exported symbol not found" error should not fire; if the flag is
+# otherwise wrong, CI fails loudly rather than leaking symbols silently.
+PLUGIN_LDFLAGS :=
+ifeq ($(UNAME_S),Darwin)
+PLUGIN_LDFLAGS += -Wl,-undefined,dynamic_lookup -Wl,-exported_symbol,_proxysql_plugin_descriptor_v1
+else
 PLUGIN_LDFLAGS += -Wl,--exclude-libs,ALL
 endif
 
