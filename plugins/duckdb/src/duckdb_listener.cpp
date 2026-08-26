@@ -245,15 +245,43 @@ size_t DuckDBListener::connection_thread_count() const {
 // listener -- conn_threads_ would only ever shrink in stop(). Called
 // once per accept_loop() wakeup, so reaping keeps pace with connection
 // churn even when nothing new is being accepted.
+//
+// Mirrors stop()'s own "move out under the lock, join outside it" shape
+// for the same reason stop() uses it: join() must never run while
+// mutex_ is held, or every other mutex_ user (accept_loop()'s own
+// push_back later in this function, connection_thread_count(),
+// listener_count(), and stop()'s move-out step) stalls for however long
+// the OS takes to finish tearing the thread down -- an interval that,
+// unlike done->load(), is not contractually bounded.
+//
+// This cannot double-join against stop(): both this function and
+// stop()'s harvest step remove an entry from conn_threads_ only while
+// holding mutex_, so whichever of the two reaches a given entry first
+// takes it out of conn_threads_ inside that critical section, and the
+// other can no longer see it there to move out (or join) a second time.
+// A given ConnThread therefore ends up in exactly one local vector --
+// `finished` here or `joining` in stop() -- never both. (In practice the
+// two never even run concurrently: reap_finished_threads() only runs on
+// accept_thread_, and stop() only reaches its own conn_threads_ access
+// after accept_thread_.join() has returned, i.e. after accept_loop() --
+// and therefore every call to this function -- has already finished.
+// The move-out-under-lock discipline holds regardless of that ordering,
+// so the no-double-join property doesn't depend on it either.)
 void DuckDBListener::reap_finished_threads() {
-	std::lock_guard<std::mutex> lock(mutex_);
-	for (auto it = conn_threads_.begin(); it != conn_threads_.end(); ) {
-		if (it->done->load()) {
-			if (it->th.joinable()) it->th.join();
-			it = conn_threads_.erase(it);
-		} else {
-			++it;
+	std::vector<ConnThread> finished;
+	{
+		std::lock_guard<std::mutex> lock(mutex_);
+		for (auto it = conn_threads_.begin(); it != conn_threads_.end(); ) {
+			if (it->done->load()) {
+				finished.push_back(std::move(*it));
+				it = conn_threads_.erase(it);
+			} else {
+				++it;
+			}
 		}
+	}
+	for (ConnThread& c : finished) {
+		if (c.th.joinable()) c.th.join();
 	}
 }
 
