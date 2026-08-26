@@ -33,6 +33,10 @@ jobs:
         run: test/infra/control/test-cluster-simulator-coverage.bash
       - name: Check coverage collector invariants
         run: test/infra/control/validate-coverage-gcov-toolchain.bash
+      - name: Check package CI verification hook
+        run: test/infra/control/test-package-ci-verification.bash
+      - name: Check package install verifier
+        run: test/infra/control/test-verify-package-install.bash
       - name: Check group infra/workflow coverage (warn-only)
         # Warns when a group references a missing infra (phantom), or when no
         # workflow on either branch can select the group at all -- meaning

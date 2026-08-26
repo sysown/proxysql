@@ -51,7 +51,7 @@ PKG_STEM="${PKG_STEM%-clang}"
 DISTRO="${PKG_STEM##*-}"
 if [[ -z "$DISTRO" ]]; then
     echo "ERROR: could not extract distro from filename: $PKG_FILE" >&2
-    echo "  Expected: proxysql_<vers>-<distro>_<arch>.deb or proxysql-<vers>-1-<distro>.<arch>.rpm" >&2
+    echo "  Expected: proxysql_<vers>-<distro>[-clang]_<arch>.deb or proxysql-<vers>-1-<distro>[-clang].<arch>.rpm" >&2
     exit 1
 fi
 
