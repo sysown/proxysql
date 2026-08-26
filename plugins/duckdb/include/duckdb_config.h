@@ -14,7 +14,9 @@ struct DuckDBIface {
 
 // Parses "addr:port" entries separated by ';'. IPv6 literals must be
 // bracketed: "[::1]:6031". An empty spec is valid and yields no ifaces.
-// Returns false and fills `err` on the first malformed entry.
+// Returns false and fills `err` on the first malformed entry; on failure,
+// `out` is left empty (any entries parsed before the failing one are
+// discarded, not left partially populated).
 bool duckdb_parse_ifaces(const std::string& spec,
                          std::vector<DuckDBIface>& out,
                          std::string& err);

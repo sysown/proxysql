@@ -5,7 +5,7 @@
 #include <vector>
 
 int main() {
-	plan(14);
+	plan(15);
 
 	// --- iface parsing -------------------------------------------------
 	std::vector<DuckDBIface> ifaces;
@@ -40,6 +40,10 @@ int main() {
 	ifaces.clear(); err.clear();
 	ok(duckdb_parse_ifaces("127.0.0.1:70000", ifaces, err) == false,
 	   "port above 65535 is rejected");
+
+	ifaces.clear(); err.clear();
+	ok(duckdb_parse_ifaces("0.0.0.0:6031;bad", ifaces, err) == false && ifaces.empty(),
+	   "a later malformed entry fails the whole spec and leaves out empty");
 
 	// --- defaults ------------------------------------------------------
 	DuckDBConfigStore cfg;

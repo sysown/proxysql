@@ -88,7 +88,14 @@ bool duckdb_parse_ifaces(const std::string& spec,
 	while (std::getline(ss, entry, ';')) {
 		if (entry.empty()) continue;
 		DuckDBIface iface;
-		if (!parse_one_iface(entry, iface, err)) return false;
+		if (!parse_one_iface(entry, iface, err)) {
+			// Guarantee out is left empty on any failure, even when an
+			// earlier entry in a multi-entry spec already parsed
+			// successfully -- callers rely on "false means out is
+			// untouched" rather than partially populated.
+			out.clear();
+			return false;
+		}
 		out.push_back(iface);
 	}
 	return true;
