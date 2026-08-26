@@ -5,6 +5,7 @@
 #include "duckdb_engine.h"
 #include "duckdb_listener.h"
 
+#include <mutex>
 #include <string>
 
 namespace {
@@ -86,9 +87,21 @@ bool duckdb_stop() {
 	return true;
 }
 
+// ABI contract: the returned pointer aliases a shared static buffer, the
+// same pattern as strerror() -- it is valid only until the NEXT call to
+// duckdb_status_json() on any thread; a caller that needs to keep the
+// value must copy it before calling again. The mutex below only makes
+// the write itself well-defined under concurrent callers (an
+// unsynchronized std::string assigned to from two threads is a data
+// race, i.e. UB, regardless of this function's single-threaded callers
+// today) -- it cannot and does not extend the pointer's validity past a
+// following call, which is a limitation of the const char* ABI itself,
+// not something a lock inside this function can fix.
 const char* duckdb_status_json() {
 	DuckDBPluginContext& ctx = duckdb_context();
+	static std::mutex status_mutex;
 	static std::string status; // must outlive the call: the ABI returns a raw pointer
+	std::lock_guard<std::mutex> lock(status_mutex);
 	if (!ctx.started || !ctx.engine) {
 		status = "{\"name\":\"duckdb\",\"state\":\"stopped\"}";
 		return status.c_str();

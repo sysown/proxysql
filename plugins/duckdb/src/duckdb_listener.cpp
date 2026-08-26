@@ -63,16 +63,26 @@ extern PgSQL_Query_Processor* GloPgQPro;
 
 namespace {
 
-bool wait_for_glo_qpro_mysql() {
+// `shutdown_flag` is DuckDBListener::shutdown_, checked alongside
+// glovars.shutdown (process-wide shutdown) so a thread parked here
+// during a plugin unload or process shutdown gives up within one
+// 50ms tick instead of riding out the full ~10s bound -- mirroring
+// the idiom lib/ProxySQL_Admin.cpp:2208 uses around wait_for_glo_mth():
+// "if (shutdown || !wait_for_glo_mth() || !GloMTH)". wait_for_glo_mth()
+// itself is core and cannot be changed to check shutdown internally;
+// these two gates are ours, so they can and do.
+bool wait_for_glo_qpro_mysql(const std::atomic<bool>& shutdown_flag) {
 	for (int i = 0; i < 200; ++i) { // ~10s total, mirrors wait_for_glo_mth()
+		if (shutdown_flag.load() || __sync_fetch_and_add(&glovars.shutdown, 0) != 0) return false;
 		if (GloMyQPro) return true;
 		usleep(50000);
 	}
 	return false;
 }
 
-bool wait_for_glo_qpro_pgsql() {
+bool wait_for_glo_qpro_pgsql(const std::atomic<bool>& shutdown_flag) {
 	for (int i = 0; i < 200; ++i) {
+		if (shutdown_flag.load() || __sync_fetch_and_add(&glovars.shutdown, 0) != 0) return false;
 		if (GloPgQPro) return true;
 		usleep(50000);
 	}
@@ -197,14 +207,14 @@ void DuckDBListener::stop() {
 	for (const Listener& l : listeners_) close(l.fd);
 	listeners_.clear();
 
-	std::vector<std::thread> joining;
+	std::vector<ConnThread> joining;
 	{
 		std::lock_guard<std::mutex> lock(mutex_);
 		joining = std::move(conn_threads_);
 		conn_threads_.clear();
 	}
-	for (std::thread& t : joining) {
-		if (t.joinable()) t.join();
+	for (ConnThread& c : joining) {
+		if (c.th.joinable()) c.th.join();
 	}
 
 	if (signal_pipe_[0] >= 0) close(signal_pipe_[0]);
@@ -227,10 +237,37 @@ size_t DuckDBListener::connection_thread_count() const {
 	return conn_threads_.size();
 }
 
+// Sweeps conn_threads_ for entries whose handle_connection() has already
+// returned (done->load() == true), joins them and erases them. A
+// finished-but-unjoined std::thread stays joinable and keeps its OS
+// thread control block and stack alive, so without this every
+// connection ever served would leak those resources for the life of the
+// listener -- conn_threads_ would only ever shrink in stop(). Called
+// once per accept_loop() wakeup, so reaping keeps pace with connection
+// churn even when nothing new is being accepted.
+void DuckDBListener::reap_finished_threads() {
+	std::lock_guard<std::mutex> lock(mutex_);
+	for (auto it = conn_threads_.begin(); it != conn_threads_.end(); ) {
+		if (it->done->load()) {
+			if (it->th.joinable()) it->th.join();
+			it = conn_threads_.erase(it);
+		} else {
+			++it;
+		}
+	}
+}
+
 void DuckDBListener::accept_loop() {
 	std::vector<struct pollfd> fds;
 
 	while (true) {
+		// Reap before (re)building the poll set: keeps conn_threads_ (and
+		// connection_thread_count()) close to "currently active" even
+		// during a quiet period with no new connections, since the bounded
+		// timeout below guarantees this loop wakes up periodically either
+		// way.
+		reap_finished_threads();
+
 		fds.clear();
 		struct pollfd sp { signal_pipe_[0], POLLIN, 0 };
 		fds.push_back(sp);
@@ -239,11 +276,15 @@ void DuckDBListener::accept_loop() {
 			fds.push_back(pfd);
 		}
 
-		const int rc = poll(fds.data(), fds.size(), -1);
+		// Bounded (not infinite) so a quiet listener still wakes up
+		// regularly to reap finished connection threads; 100ms matches
+		// the per-connection loop's own poll timeout in run_session().
+		const int rc = poll(fds.data(), fds.size(), 100);
 		if (rc < 0) {
 			if (errno == EINTR) continue;
 			break;
 		}
+		if (rc == 0) continue; // timeout: nothing to accept, loop back to reap
 
 		if (fds[0].revents & POLLIN) {
 			// Shutdown signal: drain and stop accepting.
@@ -267,23 +308,38 @@ void DuckDBListener::accept_loop() {
 			}
 
 			const Proto proto = listeners_[i].proto;
+			auto done = std::make_shared<std::atomic<bool>>(false);
+			std::thread th(&DuckDBListener::handle_connection, this, client_fd, proto, done);
 			std::lock_guard<std::mutex> lock(mutex_);
-			conn_threads_.emplace_back(&DuckDBListener::handle_connection, this, client_fd, proto);
+			conn_threads_.push_back(ConnThread { std::move(th), std::move(done) });
 		}
 	}
 }
 
-void DuckDBListener::handle_connection(int client_fd, Proto proto) {
+void DuckDBListener::handle_connection(int client_fd, Proto proto, std::shared_ptr<std::atomic<bool>> done) {
 	if (proto == Proto::mysql) {
 		run_session<MySQL_Thread, MySQL_Session*>(client_fd);
 	} else {
 		run_session<PgSQL_Thread, PgSQL_Session*>(client_fd);
 	}
 	engine_->release_connection();
+	// Signals reap_finished_threads() that this entry can be joined and
+	// erased. Set last: everything this thread touches (engine_, the
+	// session/thread it built) is done by this point.
+	done->store(true);
 }
 
 template <typename Thr, typename Sess>
 void DuckDBListener::run_session(int client_fd) {
+	// Mirrors lib/ProxySQL_Admin.cpp:2208's
+	// "if (shutdown || !wait_for_glo_mth() || !GloMTH)" idiom: check
+	// shutdown first so an already-shutting-down process/listener never
+	// even enters wait_for_glo_mth()'s own (unshutdown-aware, core,
+	// unmodifiable) up-to-10s poll.
+	if (shutdown_.load() || __sync_fetch_and_add(&glovars.shutdown, 0) != 0) {
+		close(client_fd);
+		return;
+	}
 	// Plugins start() before Phase 3 brings GloMTH/GloPTH fully up, so wait.
 	if (!wait_for_glo_mth()) { close(client_fd); return; }
 	if (GloMTH == nullptr) { close(client_fd); return; }
@@ -291,10 +347,12 @@ void DuckDBListener::run_session(int client_fd) {
 	// See the wait_for_glo_qpro_{mysql,pgsql} comment above: without this,
 	// deleting `thr` below could run ~MySQL_Thread()/~PgSQL_Thread() while
 	// GloMyQPro/GloPgQPro is still null (Phase 2 vs. Phase 3 startup race).
+	// shutdown_ is passed through so these gates give up promptly on
+	// shutdown instead of riding out their own ~10s bound (Finding 1).
 	if constexpr (std::is_same_v<Thr, MySQL_Thread>) {
-		if (!wait_for_glo_qpro_mysql()) { close(client_fd); return; }
+		if (!wait_for_glo_qpro_mysql(shutdown_)) { close(client_fd); return; }
 	} else {
-		if (!wait_for_glo_qpro_pgsql()) { close(client_fd); return; }
+		if (!wait_for_glo_qpro_pgsql(shutdown_)) { close(client_fd); return; }
 	}
 
 	DuckDBSessionState& st = duckdb_session_state();
@@ -346,6 +404,14 @@ void DuckDBListener::run_session(int client_fd) {
 		fds[0].revents = 0;
 		const int rc = poll(fds, 1, 100);
 		if (rc == -1) { if (errno == EINTR) continue; break; }
+		// Refreshed every iteration, matching lib/ProxySQL_Admin.cpp's
+		// child_postgres (not src/SQLite3_Server.cpp's child_mysql, which
+		// omits it but only ever serves short admin queries). thr->curtime
+		// feeds CurrentQuery.start_time and session-age/timeout
+		// comparisons; this plugin serves long-lived analytical
+		// connections, so a value set once before the loop would go ever
+		// staler for the connection's whole lifetime.
+		thr->curtime = monotonic_time();
 		myds->revents = fds[0].revents;
 		int rb = myds->read_from_net();
 		if (myds->net_failure) break;

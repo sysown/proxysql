@@ -106,7 +106,7 @@ bool stays_open(int fd, int timeout_ms) {
 } // namespace
 
 int main() {
-	plan(15);
+	plan(16);
 
 	// A connection thread's run_session() waits for GloMTH/GloMyQPro (and
 	// their PgSQL equivalents) before touching a session -- see the
@@ -196,6 +196,19 @@ int main() {
 
 	if (rejected_fd >= 0) close(rejected_fd);
 	if (held_fd >= 0) close(held_fd);
+
+	// The rejected connection never got a thread (closed straight from
+	// accept_loop(), before try_reserve_connection() succeeds), but the
+	// admitted one did; closing held_fd makes its connection thread's
+	// poll()/read_from_net() observe EOF and return from run_session().
+	// A finished-but-unjoined std::thread stays joinable and keeps its
+	// OS thread resources alive, so this is the assertion that proves
+	// the accept loop reaps it on its own (without waiting for stop()) --
+	// connection_thread_count() must drop back to 0, not sit at 1
+	// (the total ever accepted) until stop() finally joins it.
+	const bool reaped = wait_until([&]() { return listener2.connection_thread_count() == 0; }, 2000);
+	if (!reaped) diag("connection_thread_count() still %zu after closing held_fd", listener2.connection_thread_count());
+	ok(reaped, "the finished connection thread is reaped without waiting for stop()");
 
 	listener2.stop();
 	ok(listener2.is_running() == false, "second listener reports stopped");
