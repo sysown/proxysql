@@ -103,7 +103,7 @@ DUCKDB_ARS = $(shell find $(DUCKDB_PATH)/build/release -name '*.a' 2>/dev/null)
 # should update this constant, not silently pass a stale check.
 DUCKDB_MIN_ARCHIVES := 16
 
-SRCS := $(PLUGIN_DIR)/src/duckdb_plugin.cpp
+SRCS := $(PLUGIN_DIR)/src/duckdb_plugin.cpp $(PLUGIN_DIR)/src/duckdb_config.cpp
 HEADERS := $(wildcard $(PLUGIN_DIR)/include/*.h) $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h
 OBJS := $(patsubst $(PLUGIN_DIR)/src/%.cpp,$(ODIR)/%.o,$(SRCS))
 

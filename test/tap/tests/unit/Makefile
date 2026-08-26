@@ -506,6 +506,7 @@ UNIT_TESTS += \
 	plugin_runtime_views_unit-t \
 	test_mysqlx_plugin_load-t \
 	test_duckdb_plugin_load-t \
+	duckdb_config_unit-t \
 	test_mysqlx_admin_tables-t \
 	mysqlx_config_store_unit-t \
 	mysqlx_config_store_concurrent_unit-t \
@@ -618,6 +619,11 @@ test_mysqlx_plugin_load-t: ../test_mysqlx_plugin_load-t.cpp $(ODIR)/tap.o $(ODIR
 test_duckdb_plugin_load-t: ../test_duckdb_plugin_load-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) duckdb_plugin_build
 	$(CXX) ../test_duckdb_plugin_load-t.cpp $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
 		-DPROXYSQL_DUCKDB_PLUGIN_PATH='"$(DUCKDB_PLUGIN_SO)"' \
+		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
+
+duckdb_config_unit-t: duckdb_config_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
 		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
 		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 
