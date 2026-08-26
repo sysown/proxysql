@@ -342,6 +342,7 @@ FAKE_PLUGIN2_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin2.so
 MYSQLX_PLUGIN_SO := $(PROXYSQL_PATH)/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
 MYSQLX_PLUGIN_OPTZ := -O0 -ggdb $(filter -DDEBUG,$(OPT))
 DUCKDB_PLUGIN_SO := $(PROXYSQL_PATH)/plugins/duckdb/ProxySQL_DuckDB_Plugin.so
+DUCKDB_PLUGIN_OPTZ := -O0 -ggdb $(filter -DDEBUG,$(OPT))
 ODIR := obj
 PROXYSQL_TEST_HEADERS := $(wildcard $(PROXYSQL_PATH)/include/*.h) $(wildcard $(PROXYSQL_PATH)/include/*.hpp)
 
@@ -378,7 +379,11 @@ mysqlx_plugin_build:
 .PHONY: duckdb_plugin_build
 duckdb_plugin_build:
 	$(MAKE) -C $(PROXYSQL_PATH)/plugins/duckdb all \
-		PROXYSQL40=1 CC=$(CC) CXX=$(CXX)
+		CC=$(CC) CXX=$(CXX) OPTZ="$(DUCKDB_PLUGIN_OPTZ)" \
+		WGCOV="$(WGCOV)" WASAN="$(WASAN)" \
+		PROXYSQL40=$(PROXYSQL40) \
+		PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) \
+		PROXYSQLTSDB=$(PROXYSQLTSDB)
 
 # Same source compiled with different macros to produce a second plugin .so
 # with a distinct plugin name and env-var prefix.  Used by multi-plugin tests.

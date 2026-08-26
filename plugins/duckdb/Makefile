@@ -89,6 +89,20 @@ CXXFLAGS += -fstack-protector-strong
 DUCKDB_AR := $(DUCKDB_LDIR)/libduckdb_static.a
 DUCKDB_ARS = $(shell find $(DUCKDB_PATH)/build/release -name '*.a' 2>/dev/null)
 
+# $(DUCKDB_AR) as a prerequisite only re-triggers the deps build when
+# libduckdb_static.a itself is missing. An interrupted or partial deps/duckdb
+# build can leave that one archive present while others under third_party/ or
+# extension/ are absent or stale; `find` would then silently return a short
+# list, the -shared link below would "succeed" anyway (shared objects
+# tolerate undefined symbols), and the plugin would only fail later at
+# dlopen(RTLD_NOW) -- exactly the failure mode DUCKDB_ARS exists to avoid.
+# So: assert the count before linking. 16 is what DuckDB 1.4.5's vendored
+# CMake build produces (1 src/ + 12 third_party/ + 3 extension/ archives,
+# confirmed via `find deps/duckdb/duckdb/build/release -name '*.a'`); a
+# future DuckDB version bump that legitimately changes the archive count
+# should update this constant, not silently pass a stale check.
+DUCKDB_MIN_ARCHIVES := 16
+
 SRCS := $(PLUGIN_DIR)/src/duckdb_plugin.cpp
 HEADERS := $(wildcard $(PLUGIN_DIR)/include/*.h) $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h
 OBJS := $(patsubst $(PLUGIN_DIR)/src/%.cpp,$(ODIR)/%.o,$(SRCS))
@@ -113,9 +127,27 @@ endif
 # from every archive into the .so -- --whole-archive was tried and works,
 # but bloats the .so enormously since it forces in the whole set
 # unconditionally instead of just what's referenced.
+#
+# Apple's ld64 does not understand GNU --start-group/--end-group (and does
+# not need it: ld64 resolves archive member references in multiple passes
+# by default), so the group flags are Linux-only. macOS CI does build this
+# plugin (CI-build-macos-macos-14-genai.yml sets PROXYSQL40=1), so this is
+# not a hypothetical.
+DUCKDB_LINK_GROUP_START :=
+DUCKDB_LINK_GROUP_END :=
+ifneq ($(UNAME_S),Darwin)
+DUCKDB_LINK_GROUP_START := -Wl,--start-group
+DUCKDB_LINK_GROUP_END := -Wl,--end-group
+endif
+
 $(PLUGIN_SO): $(OBJS) $(DUCKDB_AR)
+	@n=$$(echo "$(DUCKDB_ARS)" | wc -w); \
+	if [ "$$n" -lt $(DUCKDB_MIN_ARCHIVES) ]; then \
+		echo "ERROR: expected at least $(DUCKDB_MIN_ARCHIVES) DuckDB static archives under $(DUCKDB_PATH)/build/release (DuckDB 1.4.5 layout: src/ + third_party/ + extension/), found $$n. This usually means an interrupted or partial deps/duckdb build; rerun: make -C $(PROXYSQL_PATH)/deps PROXYSQL40=1 duckdb" >&2; \
+		exit 1; \
+	fi
 	$(CXX) -shared -o $@ $(OBJS) $(CXXFLAGS) -pthread \
-		-Wl,--start-group $(DUCKDB_ARS) -Wl,--end-group \
+		$(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) \
 		-L$(SSL_LDIR) -lssl -lcrypto $(PLUGIN_LDFLAGS) -lstdc++ -lm -ldl -lpthread
 
 .PHONY: all
