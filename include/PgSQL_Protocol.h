@@ -1088,8 +1088,6 @@ public:
 	unsigned int copy_describe_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, 
 		const PGresult* result, uint8_t stmt_type);
 
-private:
-
 	/**
 	 * @brief Extracts the header information from a PostgreSQL packet.
 	 *
@@ -1106,8 +1104,18 @@ private:
 	 *
 	 * @note This function performs basic validation on the packet length and
 	 *       header fields to ensure that the packet is valid.
+	 *
+	 * Public (not private, unlike most of this class's parsing helpers):
+	 * any plugin session handler that serves the PG protocol -- core's own
+	 * admin_session_handler, and plugins/duckdb's duckdb_session_handler --
+	 * needs this to extract the SQL text from a simple-query packet before
+	 * core's dispatch has populated anything richer (e.g. CurrentQuery) to
+	 * read it from instead. It is a stateless parse helper guarding no
+	 * class invariant, so exposing it costs no encapsulation.
 	 */
 	bool get_header(unsigned char* pkt, unsigned int len, pgsql_hdr* hdr);
+
+private:
 
 	/**
 	 * @brief Loads the connection parameters from a PostgreSQL startup packet.
