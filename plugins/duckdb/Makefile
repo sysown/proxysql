@@ -1,0 +1,126 @@
+#!/bin/make -f
+
+# Walk upward until we find the repo root (src/proxysql_global.cpp).  A hop
+# counter stops the climb at / on a sparse checkout that omits the marker
+# file -- otherwise we'd loop forever.  Fails fast with a clear message so
+# build output doesn't look like it's hanging.
+PROXYSQL_PATH := $(shell set -e; d="$$PWD"; for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do if [ -f "$$d/src/proxysql_global.cpp" ]; then echo "$$d"; exit 0; fi; if [ "$$d" = "/" ]; then break; fi; d="$$(dirname "$$d")"; done; echo "ERROR: plugins/duckdb/Makefile: could not find src/proxysql_global.cpp (repo root) from $$PWD; sparse checkout missing include/ and src/proxysql_global.cpp?" >&2; exit 1)
+
+ifneq (,$(findstring ERROR,$(PROXYSQL_PATH)))
+$(error $(PROXYSQL_PATH))
+endif
+
+include $(PROXYSQL_PATH)/include/makefiles_vars.mk
+include $(PROXYSQL_PATH)/include/makefiles_paths.mk
+
+PLUGIN_DIR := $(PROXYSQL_PATH)/plugins/duckdb
+ODIR := $(PLUGIN_DIR)/obj
+PLUGIN_SO := $(PLUGIN_DIR)/ProxySQL_DuckDB_Plugin.so
+
+IDIRS := -I$(PROXYSQL_IDIR) -I$(PLUGIN_DIR)/include -I$(SQLITE3_IDIR) \
+	-I$(DUCKDB_IDIR) -I$(SSL_IDIR) -I$(PROMETHEUS_IDIR) -I$(LIBCONFIG_IDIR) \
+	-I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) -I$(RE2_IDIR) -I$(ZSTD_IDIR) \
+	-I$(POSTGRESQL_IDIR) -I$(LIBUSUAL_IDIR) \
+	-I$(PROXYSQL_PATH)/deps/lz4/lz4/lib
+
+OPTZ ?= -O2 -ggdb
+# Propagate feature-tier flags from the top-level build.  These MUST match
+# the flags libproxysql.a was built with; a mismatch silently changes the
+# ProxySQL_PluginDescriptor / ProxySQL_PluginServices layout the core and
+# the plugin each see, and the loader then reads past the end of the
+# plugin's static descriptor.
+#
+# Tier cascade (mirrors the top-level Makefile):
+#   PROXYSQL40=1 ⇒ PROXYSQL31=1 ⇒ PROXYSQLFFTO=1 + PROXYSQLTSDB=1
+ifeq ($(PROXYSQL40),1)
+	PROXYSQL31 := 1
+endif
+ifeq ($(PROXYSQL31),1)
+	PROXYSQLFFTO := 1
+	PROXYSQLTSDB := 1
+endif
+
+PSQL40 :=
+ifeq ($(PROXYSQL40),1)
+	PSQL40 := -DPROXYSQL40
+endif
+PSQL31 :=
+ifeq ($(PROXYSQL31),1)
+	PSQL31 := -DPROXYSQL31
+endif
+PSQLFFTO :=
+ifeq ($(PROXYSQLFFTO),1)
+	PSQLFFTO := -DPROXYSQLFFTO
+endif
+PSQLTSDB :=
+ifeq ($(PROXYSQLTSDB),1)
+	PSQLTSDB := -DPROXYSQLTSDB
+endif
+
+# -fvisibility=hidden + -fvisibility-inlines-hidden hides every C++ symbol by
+# default; only the explicitly extern "C"-declared
+# proxysql_plugin_descriptor_v1 entry point is exported. This prevents ODR
+# collisions with the proxysql core when the .so is dlopen'd, and avoids
+# leaking template instantiations across the boundary.
+CXXFLAGS := $(STDCPP) -fPIC -fvisibility=hidden -fvisibility-inlines-hidden \
+	$(OPTZ) $(WGCOV) $(WASAN) -pthread \
+	$(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB)
+
+# Hardening flags. Skip _FORTIFY_SOURCE under ASAN (incompatible) and when
+# OPTZ contains -O0 (requires optimisation to take effect).
+ifeq ($(WASAN),)
+    ifeq (,$(findstring -O0,$(OPTZ)))
+        CXXFLAGS += -D_FORTIFY_SOURCE=2
+    endif
+endif
+CXXFLAGS += -fstack-protector-strong
+
+.DEFAULT_GOAL := all
+
+# libduckdb_static.a alone does not satisfy DuckDB's symbols -- the vendored
+# build produces 16 static archives (src/ + 12 third_party/ + 3 extension/),
+# with circular references between them. libduckdb_static.a is kept as the
+# make PREREQUISITE that triggers the deps/duckdb build (via $(DUCKDB_AR)
+# below); DUCKDB_ARS enumerates the full set for the actual link. It's a
+# recursively-expanded (=) variable, not simply-expanded (:=), so the `find`
+# runs when the link recipe executes -- after the $(DUCKDB_AR) prerequisite
+# has forced deps/duckdb to build -- rather than at Makefile parse time, when
+# a fresh checkout wouldn't have any of these archives on disk yet.
+DUCKDB_AR := $(DUCKDB_LDIR)/libduckdb_static.a
+DUCKDB_ARS = $(shell find $(DUCKDB_PATH)/build/release -name '*.a' 2>/dev/null)
+
+SRCS := $(PLUGIN_DIR)/src/duckdb_plugin.cpp
+HEADERS := $(wildcard $(PLUGIN_DIR)/include/*.h) $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h
+OBJS := $(patsubst $(PLUGIN_DIR)/src/%.cpp,$(ODIR)/%.o,$(SRCS))
+
+$(ODIR):
+	mkdir -p $(ODIR)
+
+$(DUCKDB_AR):
+	$(MAKE) -C $(PROXYSQL_PATH)/deps PROXYSQL40=1 duckdb
+	@test -f $@ || { echo "ERROR: deps duckdb build did not produce $@" >&2; exit 1; }
+
+$(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) $(DUCKDB_AR) | $(ODIR)
+	$(CXX) -c -o $@ $< $(CXXFLAGS) $(IDIRS)
+
+PLUGIN_LDFLAGS :=
+ifeq ($(UNAME_S),Darwin)
+PLUGIN_LDFLAGS += -Wl,-undefined,dynamic_lookup
+endif
+
+# --start-group/--end-group (not --whole-archive) resolves the circular
+# references between the 16 DuckDB archives without pulling every object
+# from every archive into the .so -- --whole-archive was tried and works,
+# but bloats the .so enormously since it forces in the whole set
+# unconditionally instead of just what's referenced.
+$(PLUGIN_SO): $(OBJS) $(DUCKDB_AR)
+	$(CXX) -shared -o $@ $(OBJS) $(CXXFLAGS) -pthread \
+		-Wl,--start-group $(DUCKDB_ARS) -Wl,--end-group \
+		-L$(SSL_LDIR) -lssl -lcrypto $(PLUGIN_LDFLAGS) -lstdc++ -lm -ldl -lpthread
+
+.PHONY: all
+all: $(PLUGIN_SO)
+
+.PHONY: clean
+clean:
+	rm -rf $(ODIR) $(PLUGIN_SO)
