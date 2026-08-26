@@ -1,10 +1,13 @@
 #include "duckdb_plugin.h"
 
+#include "duckdb_admin_schema.h"
+#include "duckdb_config.h"
+
 namespace {
 
 bool duckdb_register_schemas(ProxySQL_PluginServices* services) {
 	if (services == nullptr) return false;
-	return true;   // Task 6 registers the schema here.
+	return duckdb_register_admin_schema(*services);
 }
 
 bool duckdb_init(ProxySQL_PluginServices* services) {
@@ -48,7 +51,11 @@ const ProxySQL_PluginDescriptor duckdb_descriptor = {
 } // namespace
 
 DuckDBPluginContext& duckdb_context() {
-	static DuckDBPluginContext ctx {};
+	static DuckDBPluginContext ctx = [] {
+		DuckDBPluginContext c {};
+		c.config_store = std::make_unique<DuckDBConfigStore>();
+		return c;
+	}();
 	return ctx;
 }
 

@@ -509,6 +509,7 @@ UNIT_TESTS += \
 	duckdb_config_unit-t \
 	duckdb_engine_unit-t \
 	duckdb_result_unit-t \
+	duckdb_admin_schema_unit-t \
 	test_mysqlx_admin_tables-t \
 	mysqlx_config_store_unit-t \
 	mysqlx_config_store_concurrent_unit-t \
@@ -654,6 +655,14 @@ duckdb_result_unit-t: duckdb_result_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/s
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(TEST_HELPERS_OBJ) $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
 		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
 		$(WHOLE_LIBPROXYSQL) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
+
+# duckdb_plugin.cpp is linked in for duckdb_context() (the process-wide
+# DuckDBPluginContext accessor); duckdb_admin_schema.cpp calls it to reach
+# the DuckDBConfigStore singleton.
+duckdb_admin_schema_unit-t: duckdb_admin_schema_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_admin_schema.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_plugin.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_admin_schema.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_plugin.cpp $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 
 mysqlx_config_store_unit-t: mysqlx_config_store_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
