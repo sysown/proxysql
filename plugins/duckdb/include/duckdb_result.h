@@ -9,64 +9,100 @@ class SQLite3_result;
 // core's MySQL and PostgreSQL serialisers both consume.
 //
 // Every value is rendered with duckdb_value_varchar(), which is correct on
-// the wire for the types it actually supports: both text protocols
+// the wire for the column types it actually supports: both text protocols
 // transmit values as strings and both serialisers label every column as
 // text anyway (MYSQL_TYPE_VAR_STRING / TEXTOID). Verified against DuckDB
-// 1.4.5's deprecated C API (duckdb/src/main/capi/cast/generic.hpp,
-// GetInternalCValue's switch on deprecated_type): BOOLEAN, TINYINT/
-// SMALLINT/INTEGER/BIGINT (+ their U* unsigned variants), FLOAT, DOUBLE,
-// DATE, TIME, TIMESTAMP, HUGEINT, UHUGEINT, DECIMAL, INTERVAL, VARCHAR and
-// BLOB all render as text correctly (empirically confirmed, e.g. DECIMAL(
-// 10,2) -> "1.50", INTERVAL 3 DAY -> "3 days").
+// 1.4.5's deprecated C API (duckdb/src/include/duckdb/main/capi/cast/
+// generic.hpp, GetInternalCValue's switch on deprecated_type) -- this is
+// the authoritative source, not a probed sample of types:
 //
-// duckdb_value_varchar() converts anything else -- any column type not
-// listed in that switch -- to a NULL field, because DuckDB's deprecated
-// value-materialisation API only special-cases those source types and
-// falls through to its "unsupported type" default for the rest. This is
-// NOT limited to nested/composite types (LIST, STRUCT, MAP, ARRAY, UNION,
-// none of which duckdb_value_varchar can render -- confirmed empirically
-// and via GetInternalCValue's `default:` branch). It also silently NULLs
-// out several scalar types that are easy to assume "just work": UUID,
-// ENUM, BIT, TIME_TZ, TIMESTAMP_TZ, BIGNUM, and the TIMESTAMP_S/MS/NS
-// variants are all empirically confirmed to render as NULL too, since
-// none of them appear in GetInternalCValue's switch either. Callers that
-// route queries capable of producing those column types must not assume
-// duckdb_value_varchar() renders them.
+//   RENDERS AS TEXT (has a case in that switch): BOOLEAN, TINYINT,
+//   SMALLINT, INTEGER, BIGINT, UTINYINT, USMALLINT, UINTEGER, UBIGINT,
+//   FLOAT, DOUBLE, DATE, TIME, TIMESTAMP, HUGEINT, UHUGEINT, DECIMAL,
+//   INTERVAL, VARCHAR, BLOB -- 20 types, empirically confirmed too (e.g.
+//   DECIMAL(10,2) -> "1.50", INTERVAL 3 DAY -> "3 days").
 //
-// duckdb_result_has_nested_column() (declared below) detects the
-// container/composite subset of that gap -- LIST, STRUCT, MAP, ARRAY,
-// UNION, the types DuckDB's own documentation classifies as "nested" --
-// so Task 7 can special-case those. It deliberately does NOT cover the
-// non-nested scalar gaps above (UUID, ENUM, BIT, TIME_TZ, TIMESTAMP_TZ,
-// BIGNUM, TIMESTAMP_S/MS/NS): those are a separate, real limitation this
-// task surfaces but does not attempt to fix or detect.
+//   RENDERS AS NULL (falls through to that switch's `default:` branch,
+//   which produces a NULL char* regardless of whether the value is
+//   actually SQL NULL): every other duckdb_type. That includes the
+//   nested/composite types (LIST, STRUCT, MAP, ARRAY, UNION) but is NOT
+//   limited to them -- several ordinary scalar types are just as
+//   unrenderable: UUID, ENUM, BIT, TIME_TZ, TIMESTAMP_TZ, BIGNUM, and the
+//   TIMESTAMP_S/MS/NS variants are all empirically confirmed to render as
+//   NULL, since none of them appear in GetInternalCValue's switch either
+//   (UUID in particular is easy to assume "just works" -- it doesn't).
 //
-// SQL NULL becomes a null field pointer, which SQLite3_row stores with
-// size 0 and SQLite3_to_Postgres emits as a -1 length.
+// Consequently a null field in the converted SQLite3_result is AMBIGUOUS
+// on its own: it means either "the value was genuinely SQL NULL" or "the
+// column's type cannot be rendered by duckdb_value_varchar()". Callers
+// must not treat a null field as proof of SQL NULL. Call
+// duckdb_result_has_unrenderable_column() (declared below) on the
+// duckdb_result BEFORE conversion to tell the two apart -- it answers
+// exactly the question a caller of this function needs answered ("can
+// duckdb_value_varchar render every column of this result?"), not merely
+// "does this result contain a nested column?".
 //
 // Returns nullptr when the result has no columns. In DuckDB 1.4.5 this is
 // NOT what DDL/DML statements (CREATE TABLE, INSERT, ...) produce -- every
 // one of those returns a 1-column result named "Count" holding the
 // affected-row count, not a zero-column result (empirically verified). A
 // genuinely zero-column duckdb_result only occurs for a query with no
-// actual SQL statement content (e.g. a comment-only query). Callers that
-// need to detect "this was DDL/DML, take the affected-rows path" must
-// check duckdb_column_count()/duckdb_rows_changed() on the raw
-// duckdb_result themselves -- they cannot rely on this function returning
-// nullptr for that case.
+// actual SQL statement content (e.g. a comment-only query, which is
+// itself classified DUCKDB_RESULT_TYPE_QUERY_RESULT -- see below -- despite
+// having zero columns). Callers that need to detect "this was DDL/DML,
+// take the affected-rows path" must not rely on this function returning
+// nullptr for that case; see the next paragraph for the actual signal.
+//
+// DDL/DML dispatch signal for callers (documented here, not implemented,
+// since this file owns the conversion contract but not Task 7's dispatch
+// logic): call `duckdb_result_return_type(*res)` (duckdb.h, returns
+// duckdb_result_type) on the raw duckdb_result BEFORE conversion.
+// Empirically confirmed against DuckDB 1.4.5:
+//   DUCKDB_RESULT_TYPE_NOTHING (2)       -- CREATE TABLE, SET, and other
+//                                            DDL/session statements with
+//                                            no meaningful row count.
+//   DUCKDB_RESULT_TYPE_CHANGED_ROWS (1)  -- INSERT/UPDATE/DELETE; the
+//                                            1-column "Count" result
+//                                            carries the affected-row
+//                                            count (duckdb_rows_changed()
+//                                            or the "Count" column itself).
+//   DUCKDB_RESULT_TYPE_QUERY_RESULT (3)  -- SELECT, and also a
+//                                            comment-only/blank statement
+//                                            (which is the genuinely
+//                                            zero-column case above).
+// This is a single already-existing DuckDB C API call with no state or
+// error handling of its own to wrap, so it is documented here rather than
+// given a redundant one-line accessor -- Task 7 is expected to call
+// duckdb_result_return_type() directly against the duckdb_result it
+// already holds, alongside whatever else it needs to inspect on the same
+// raw result (duckdb_rows_changed(), etc.), rather than through an extra
+// indirection that would add nothing beyond forwarding the call.
 //
 // The caller owns the returned object and must `delete` it.
 SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res);
 
-// Detects columns whose type duckdb_value_varchar() cannot render because
-// they are DuckDB "nested"/composite types -- LIST, STRUCT, MAP, ARRAY or
-// UNION. duckdb_result_to_sqlite3() silently converts such a column's
-// values to SQL NULL (see the comment above); callers that need to
-// preserve nested-type data must check this first and handle the result
-// differently (e.g. render each such column with duckdb's JSON/Vector
-// APIs instead of the deprecated value accessors).
+// Answers "can duckdb_value_varchar() render every column of this
+// result?" -- true if ANY column's duckdb_column_type() is one that
+// GetInternalCValue's switch (see the comment above) does not handle, and
+// duckdb_result_to_sqlite3() will therefore silently convert that
+// column's values to a null field regardless of whether they were
+// actually SQL NULL.
+//
+// This covers the nested/composite types (LIST, STRUCT, MAP, ARRAY,
+// UNION) but is NOT limited to them: it also flags non-nested scalar
+// types the switch doesn't handle either -- UUID, ENUM, BIT, TIME_TZ,
+// TIMESTAMP_TZ, BIGNUM, TIMESTAMP_S, TIMESTAMP_MS, TIMESTAMP_NS, as well
+// as any other duckdb_type this build defines that isn't in the switch's
+// allowlist (see the implementation: it mirrors the switch's positive
+// list rather than hand-maintaining a list of "known bad" types, so a
+// future DuckDB version's new type is treated as unrenderable by default
+// rather than silently slipping through undetected).
+//
+// Callers that need to preserve data for a flagged column must handle
+// that column differently -- e.g. via duckdb's JSON/Vector APIs -- rather
+// than assume duckdb_result_to_sqlite3()'s NULL means SQL NULL.
 //
 // Returns false for a null res or a result with zero columns.
-bool duckdb_result_has_nested_column(duckdb_result* res);
+bool duckdb_result_has_unrenderable_column(duckdb_result* res);
 
 #endif // __DUCKDB_RESULT_H

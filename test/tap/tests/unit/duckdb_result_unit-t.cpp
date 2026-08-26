@@ -23,7 +23,7 @@ SQLite3_result* run(duckdb_connection conn, const char* sql) {
 } // namespace
 
 int main() {
-	plan(19);
+	plan(22);
 
 	duckdb_database db = nullptr;
 	duckdb_connection conn = nullptr;
@@ -57,9 +57,9 @@ int main() {
 		// NULL default (verified against DuckDB 1.4.5's
 		// GetInternalCValue and empirically via a standalone probe).
 		// duckdb_result_to_sqlite3() therefore converts the value to SQL
-		// NULL rather than crashing or fabricating data; the detector
+		// NULL rather than crashing or fabricating data; the predicate
 		// below is how a caller distinguishes "genuinely NULL" from
-		// "nested type that came out as NULL".
+		// "unrenderable type that came out as NULL".
 		duckdb_result list_res;
 		if (duckdb_query(conn, "SELECT [1,2,3] AS l", &list_res) != DuckDBSuccess) {
 			BAIL_OUT("could not run LIST query");
@@ -68,17 +68,37 @@ int main() {
 		ok(r && r->rows_count == 1, "LIST result converts with one row");
 		ok(r && r->rows[0]->fields[0] == nullptr,
 		   "LIST value converts to a null field (duckdb_value_varchar cannot render nested types)");
-		ok(duckdb_result_has_nested_column(&list_res) == true,
-		   "detector flags the LIST column as nested");
+		ok(duckdb_result_has_unrenderable_column(&list_res) == true,
+		   "predicate flags the LIST column as unrenderable");
 		duckdb_destroy_result(&list_res);
 
 		duckdb_result plain_res;
 		if (duckdb_query(conn, "SELECT 42", &plain_res) != DuckDBSuccess) {
 			BAIL_OUT("could not run plain query");
 		}
-		ok(duckdb_result_has_nested_column(&plain_res) == false,
-		   "detector does not flag a plain SELECT 42 result");
+		ok(duckdb_result_has_unrenderable_column(&plain_res) == false,
+		   "predicate does not flag a plain SELECT 42 result");
 		duckdb_destroy_result(&plain_res);
+	}
+
+	{
+		// UUID is a non-nested SCALAR type that is just as unrenderable as
+		// the nested types above -- it has no case in GetInternalCValue's
+		// switch either, so duckdb_value_varchar() returns nullptr for it
+		// despite the value not being SQL NULL. This is exactly the case
+		// the predicate must catch that a nested-types-only check would
+		// miss: a UUID column would otherwise reach a client as a silent,
+		// indistinguishable-from-genuine NULL.
+		duckdb_result uuid_res;
+		if (duckdb_query(conn, "SELECT gen_random_uuid() AS u", &uuid_res) != DuckDBSuccess) {
+			BAIL_OUT("could not run UUID query");
+		}
+		std::unique_ptr<SQLite3_result> r(duckdb_result_to_sqlite3(&uuid_res));
+		ok(r && r->rows_count == 1 && r->rows[0]->fields[0] == nullptr,
+		   "UUID value converts to a null field (duckdb_value_varchar cannot render UUID)");
+		ok(duckdb_result_has_unrenderable_column(&uuid_res) == true,
+		   "predicate flags the non-nested UUID column as unrenderable");
+		duckdb_destroy_result(&uuid_res);
 	}
 
 	{
@@ -102,8 +122,8 @@ int main() {
 		duckdb_query(conn, "-- no-op", &res);
 		SQLite3_result* r = duckdb_result_to_sqlite3(&res);
 		ok(r == nullptr, "a genuinely zero-column result converts to nullptr");
-		ok(duckdb_result_has_nested_column(&res) == false,
-		   "detector returns false for a zero-column result");
+		ok(duckdb_result_has_unrenderable_column(&res) == false,
+		   "predicate returns false for a zero-column result");
 		delete r;
 		duckdb_destroy_result(&res);
 	}
@@ -113,21 +133,24 @@ int main() {
 		// documenting: CREATE TABLE's result is NOT nullptr from
 		// duckdb_result_to_sqlite3(). A caller cannot use "converted to
 		// nullptr" as its DDL/DML detection signal -- it must inspect
-		// duckdb_column_count()/duckdb_rows_changed() on the raw
-		// duckdb_result directly, before conversion.
+		// duckdb_result_return_type() on the raw duckdb_result directly,
+		// before conversion (see the header's doc comment for the full
+		// NOTHING/CHANGED_ROWS/QUERY_RESULT breakdown).
 		duckdb_result ddl_res;
 		duckdb_query(conn, "CREATE TABLE t(a INTEGER)", &ddl_res);
 		std::unique_ptr<SQLite3_result> r(duckdb_result_to_sqlite3(&ddl_res));
 		ok(r != nullptr, "CREATE TABLE's 1-column \"Count\" result is NOT nullptr");
 		ok(r && r->columns == 1 && r->rows_count == 0,
 		   "CREATE TABLE's result has one column and zero rows");
+		ok(duckdb_result_return_type(ddl_res) == DUCKDB_RESULT_TYPE_NOTHING,
+		   "CREATE TABLE's return_type is DUCKDB_RESULT_TYPE_NOTHING, the real DDL signal");
 		duckdb_destroy_result(&ddl_res);
 	}
 
 	ok(duckdb_result_to_sqlite3(nullptr) == nullptr,
 	   "a null duckdb_result* converts to nullptr");
-	ok(duckdb_result_has_nested_column(nullptr) == false,
-	   "detector returns false for a null duckdb_result*");
+	ok(duckdb_result_has_unrenderable_column(nullptr) == false,
+	   "predicate returns false for a null duckdb_result*");
 
 	duckdb_disconnect(&conn);
 	duckdb_close(&db);
