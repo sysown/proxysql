@@ -2276,7 +2276,21 @@ __implicit_sync:
 				}
 				c = *((unsigned char*)pkt.ptr);
 				if (client_myds != NULL) {
-					if (session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
+					// PROXYSQL_SESSION_SQLITE is included here alongside ADMIN/STATS
+					// because plugin session handlers that serve the PgSQL protocol
+					// (e.g. the duckdb plugin's DuckDBListener) use this session type
+					// for their own client-facing sessions -- there is no backend
+					// connection to route a query to, only the plugin's own
+					// handler_function. handler___status_WAITING_CLIENT_DATA___
+					// STATE_SLEEP___MYSQL_COM_QUERY___not_mysql() (below) already has
+					// an explicit `case PROXYSQL_SESSION_SQLITE:` arm that dispatches
+					// to GloSQLite3Server/the session's handler_function; without this
+					// session type in this gate, that arm was unreachable dead code --
+					// a 'Q' packet on such a session fell through untouched, leaking
+					// pkt.ptr and leaving the client waiting forever for a response
+					// that was never generated.
+					if (session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS ||
+						session_type == PROXYSQL_SESSION_SQLITE) {
 						c = *((unsigned char*)pkt.ptr);
 						if (c == 'Q') {
 							handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(pkt);
