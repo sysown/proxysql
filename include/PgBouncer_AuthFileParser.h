@@ -1,5 +1,5 @@
-#ifndef PGBOUNCER_AUTH_FILE_PARSER_H
-#define PGBOUNCER_AUTH_FILE_PARSER_H
+#ifndef __CLASS_PGBOUNCER_AUTH_FILE_PARSER_H
+#define __CLASS_PGBOUNCER_AUTH_FILE_PARSER_H
 
 #include "PgBouncer_Config.h"
 #include <string>
@@ -32,4 +32,4 @@ private:
 
 } // namespace PgBouncer
 
-#endif
+#endif // __CLASS_PGBOUNCER_AUTH_FILE_PARSER_H

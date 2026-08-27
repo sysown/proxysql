@@ -7,6 +7,18 @@
 #include <iostream>
 #include <fstream>
 
+// Single-quote a path for the copy-pasteable example command, so a path with
+// spaces or shell metacharacters does not turn into something else when run.
+static std::string shell_quote(const std::string& s) {
+    std::string out = "'";
+    for (char c : s) {
+        if (c == '\'') out += "'\\''";
+        else out += c;
+    }
+    out += "'";
+    return out;
+}
+
 static void print_usage() {
     std::cerr << "Usage: proxysql-cli <command> [options]\n"
               << "\n"
@@ -24,6 +36,16 @@ static int cmd_import_pgbouncer(int argc, const char* argv[]) {
     // Parse arguments: import-pgbouncer <path> [--dry-run] [--ignore-warnings]
     if (argc < 3) {
         std::cerr << "Error: import-pgbouncer requires a config file path.\n\n";
+        print_usage();
+        return 1;
+    }
+
+    // argv[2] is the config path, not an option. Catching an option here turns
+    // "import-pgbouncer --dry-run" into a usage error rather than a confusing
+    // "cannot open file: --dry-run".
+    if (argv[2][0] == '-') {
+        std::cerr << "Error: import-pgbouncer requires a config file path "
+                     "before any options (got '" << argv[2] << "').\n\n";
         print_usage();
         return 1;
     }
@@ -116,7 +138,7 @@ static int cmd_import_pgbouncer(int argc, const char* argv[]) {
               << result.rule_count << " query rules, "
               << result.variable_count << " variables.\n"
               << "Pipe the output to ProxySQL admin interface to apply:\n"
-              << "  proxysql-cli import-pgbouncer " << config_path
+              << "  proxysql-cli import-pgbouncer " << shell_quote(config_path)
               << " | mysql -h 127.0.0.1 -P 6032 -u admin -p\n";
     return 0;
 }

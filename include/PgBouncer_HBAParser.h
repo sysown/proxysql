@@ -1,5 +1,5 @@
-#ifndef PGBOUNCER_HBA_PARSER_H
-#define PGBOUNCER_HBA_PARSER_H
+#ifndef __CLASS_PGBOUNCER_HBA_PARSER_H
+#define __CLASS_PGBOUNCER_HBA_PARSER_H
 
 #include "PgBouncer_Config.h"
 #include <string>
@@ -22,8 +22,10 @@ public:
                std::vector<ParseMessage>& errors);
 
 private:
-    // Tokenize a line respecting double-quoted strings
-    static std::vector<std::string> tokenize(const std::string& line);
+    // Tokenize a line respecting double-quoted strings (a doubled "" inside a
+    // quoted run is a literal quote). Returns false if a quote is left open,
+    // in which case the tokens are incomplete and must not be used.
+    static bool tokenize(const std::string& line, std::vector<std::string>& tokens);
 
     // Parse a single HBA record from tokens
     bool parse_record(const std::vector<std::string>& tokens,
@@ -34,4 +36,4 @@ private:
 
 } // namespace PgBouncer
 
-#endif
+#endif // __CLASS_PGBOUNCER_HBA_PARSER_H

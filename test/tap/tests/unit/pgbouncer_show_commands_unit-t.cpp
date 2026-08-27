@@ -187,18 +187,98 @@ void test_unsupported_commands() {
     CHECK(msg.empty(), "SHOW POOLS is not unsupported");
 }
 
+
+// ============================================================
+// Test: SHOW EXTENDED adds ProxySQL columns for every command
+//
+// Regression: only POOLS and SERVERS honoured `extended`; the other eight
+// generators ignored the flag, so SHOW EXTENDED <cmd> returned the plain
+// PgBouncer column set.
+// ============================================================
+static bool extended_differs_from_plain(const char* cmd) {
+    std::string plain_q, ext_q;
+    bool e1 = false, e2 = false;
+    std::string plain = std::string("SHOW ") + cmd;
+    std::string ext = std::string("SHOW EXTENDED ") + cmd;
+    if (!PgBouncer::translate_show_command(plain.c_str(), (int)plain.size(), plain_q, e1))
+        return false;
+    if (!PgBouncer::translate_show_command(ext.c_str(), (int)ext.size(), ext_q, e2))
+        return false;
+    return e2 && !e1 && ext_q != plain_q && ext_q.size() > plain_q.size();
+}
+
+void test_extended_all_commands() {
+    const char* cmds[] = {"POOLS", "STATS", "SERVERS", "CLIENTS", "DATABASES",
+                          "USERS", "CONFIG", "VERSION", "STATE", "LISTS"};
+    for (const char* c : cmds) {
+        std::string msg = std::string("SHOW EXTENDED ") + c + " adds columns";
+        CHECK(extended_differs_from_plain(c), msg.c_str());
+    }
+}
+
+// ============================================================
+// Test: translations only reference columns that actually exist
+//
+// Regression: SHOW CLIENTS selected `db` (the column is `database`), and
+// SHOW DATABASES / SHOW EXTENDED SERVERS selected weight, max_connections and
+// max_replication_lag from stats_pgsql_connection_pool, which has none of
+// them. These are string-level guards; pgbouncer_show_commands-t executes the
+// same queries against a live admin interface.
+// ============================================================
+void test_no_phantom_columns() {
+    std::string q;
+    bool ext = false;
+
+    PgBouncer::translate_show_command("SHOW CLIENTS", 12, q, ext);
+    CHECK(q.find("db AS database") == std::string::npos,
+          "SHOW CLIENTS does not select the nonexistent `db` column");
+    CHECK(q.find("database AS database") != std::string::npos,
+          "SHOW CLIENTS selects `database`");
+
+    PgBouncer::translate_show_command("SHOW DATABASES", 14, q, ext);
+    CHECK(q.find("stats_pgsql_connection_pool") == std::string::npos,
+          "SHOW DATABASES no longer reads max_connections from the stats table");
+    CHECK(q.find("runtime_pgsql_servers") != std::string::npos,
+          "SHOW DATABASES reads runtime_pgsql_servers");
+
+    PgBouncer::translate_show_command("SHOW EXTENDED SERVERS", 21, q, ext);
+    CHECK(q.find("runtime_pgsql_servers") != std::string::npos,
+          "SHOW EXTENDED SERVERS joins runtime_pgsql_servers for weight/max_connections");
+    CHECK(q.find("s.weight") != std::string::npos,
+          "SHOW EXTENDED SERVERS takes weight from the servers table");
+}
+
+// ============================================================
+// Test: trailing tokens are not a PgBouncer command
+//
+// "SHOW POOLS foo" used to translate as "SHOW POOLS", swallowing a query the
+// admin interface should have handled (or rejected) itself.
+// ============================================================
+void test_trailing_tokens_rejected() {
+    std::string q;
+    bool ext = false;
+
+    CHECK(!PgBouncer::translate_show_command("SHOW POOLS foo", 14, q, ext),
+          "SHOW POOLS foo is not translated");
+    CHECK(!PgBouncer::translate_show_command("SHOW EXTENDED SERVERS bar", 25, q, ext),
+          "SHOW EXTENDED SERVERS bar is not translated");
+    CHECK(PgBouncer::translate_show_command("SHOW POOLS", 10, q, ext),
+          "SHOW POOLS alone still translates");
+}
+
 int main() {
-    plan(39);
+    plan(58);
 
-    test_show_command_recognition();  // 10
-    test_case_insensitive();          // 3
-    test_trailing_semicolon();        // 3
-    test_extended_variant();          // 4
-    test_sql_output_columns();        // 10
-    test_non_matching_queries();      // 3
-    test_unsupported_commands();      // 5
+    test_show_command_recognition();
+    test_case_insensitive();
+    test_trailing_semicolon();
+    test_extended_variant();
+    test_sql_output_columns();
+    test_non_matching_queries();
+    test_unsupported_commands();
+    test_extended_all_commands();
+    test_no_phantom_columns();
+    test_trailing_tokens_rejected();
 
-    // Note: 10+3+3+4+10+3+5 = 38, but plan says 40.
-    // If count is off, adjust the plan number.
     return exit_status();
 }

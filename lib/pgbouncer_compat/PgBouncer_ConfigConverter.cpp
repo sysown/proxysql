@@ -44,8 +44,8 @@ ConversionResult ConfigConverter::convert(const Config& config, bool strict) {
 
     ConversionResult result;
 
-    convert_databases(config, result);
-    convert_users(config, result);
+    convert_databases(config, result, strict);
+    convert_users(config, result, strict);
     convert_globals(config, result, strict);
     convert_hba_rules(config, result, strict);
     check_unmappable(config, result, strict);
@@ -75,7 +75,7 @@ static std::vector<std::string> split(const std::string& s, char delim) {
 // convert_databases
 // ---------------------------------------------------------------------------
 void ConfigConverter::convert_databases(const Config& config,
-                                         ConversionResult& result) {
+                                         ConversionResult& result, bool strict) {
     if (config.databases.empty()) return;
 
     // Clean slate
@@ -135,22 +135,34 @@ void ConfigConverter::convert_databases(const Config& config,
         if (db.name != "*") {
             int rule_id = next_rule_id_++;
 
-            std::string dest_db = db.dbname.empty() ? db.name : db.dbname;
-
+            // The routing column in pgsql_query_rules is `database` (the
+            // MySQL table calls it `schemaname`; the PgSQL one does not).
             std::ostringstream sql;
             sql << "INSERT INTO pgsql_query_rules "
-                << "(rule_id, active, schemaname, destination_hostgroup, apply) "
+                << "(rule_id, active, database, destination_hostgroup, apply) "
                 << "VALUES ("
                 << rule_id << ", 1, "
                 << "'" << sql_escape(db.name) << "', "
                 << hg << ", 1);";
 
             std::string comment = "Route database '" + db.name + "' to hostgroup " + std::to_string(hg);
-            if (db.dbname != "" && db.dbname != db.name)
-                comment += " (backend db: " + db.dbname + ")";
 
             result.entries.push_back({sql.str(), comment});
             result.rule_count++;
+
+            // `dbname=` makes PgBouncer connect to a backend database under a
+            // different name than the one the client asked for. ProxySQL routes
+            // to a hostgroup but does not rewrite the database in the startup
+            // packet, so the alias cannot be honoured -- say so instead of
+            // emitting a rule that quietly connects to the wrong database.
+            if (!db.dbname.empty() && db.dbname != db.name) {
+                add_issue(result, strict,
+                    "database '" + db.name + "' maps to backend database '" +
+                    db.dbname + "' (dbname=), which ProxySQL cannot rewrite; "
+                    "rule_id " + std::to_string(rule_id) +
+                    " routes to the hostgroup but the backend database name is "
+                    "passed through unchanged");
+            }
         }
     }
 }
@@ -159,11 +171,15 @@ void ConfigConverter::convert_databases(const Config& config,
 // convert_users
 // ---------------------------------------------------------------------------
 void ConfigConverter::convert_users(const Config& config,
-                                     ConversionResult& result) {
-    // Build a password lookup from auth_entries
-    std::map<std::string, std::string> passwords;
+                                     ConversionResult& result, bool strict) {
+    // Build a password lookup from auth_entries, keeping the detected type.
+    // The type matters: ProxySQL derives both the MD5 challenge response and
+    // the SCRAM verifier from the *cleartext* password in pgsql_users.password
+    // (see PgSQL_Protocol.cpp), so a pre-hashed userlist.txt entry cannot be
+    // imported as a working credential.
+    std::map<std::string, const AuthFileEntry*> passwords;
     for (const auto& ae : config.auth_entries) {
-        passwords[ae.username] = ae.password;
+        passwords[ae.username] = &ae;
     }
 
     // Collect users from [users] section; also add any auth_entries users not
@@ -194,7 +210,19 @@ void ConfigConverter::convert_users(const Config& config,
         // Resolve password from auth_entries
         std::string password;
         auto it = passwords.find(u.name);
-        if (it != passwords.end()) password = it->second;
+        if (it != passwords.end()) {
+            password = it->second->password;
+            if (it->second->type != AuthType::PLAIN) {
+                const char* kind =
+                    (it->second->type == AuthType::MD5) ? "MD5" : "SCRAM-SHA-256";
+                add_issue(result, strict,
+                    "user '" + u.name + "' has a " + kind + " verifier in the "
+                    "auth file; ProxySQL needs the cleartext password in "
+                    "pgsql_users.password to answer PostgreSQL authentication, "
+                    "so this credential is imported verbatim but will not "
+                    "authenticate until it is replaced with the cleartext value");
+            }
+        }
 
         // Pool mode mapping
         std::string pool = u.pool_mode.empty() ? config.global.pool_mode : u.pool_mode;
@@ -322,7 +350,9 @@ void ConfigConverter::convert_globals(const Config& config,
                          g.server_tls_sslmode == "verify-ca" ||
                          g.server_tls_sslmode == "verify-full");
         if (need_ssl) {
-            // Update all previously inserted server rows to use_ssl=1
+            // Safe to apply unscoped: convert_databases() emits
+            // "DELETE FROM pgsql_servers" before its INSERTs, so every row in
+            // the table at this point came from this import.
             result.entries.push_back({
                 "UPDATE pgsql_servers SET use_ssl=1;",
                 "PgBouncer server_tls_sslmode=" + g.server_tls_sslmode +
@@ -425,14 +455,15 @@ void ConfigConverter::convert_hba_rules(const Config& config,
         // absence from the whitelist effectively blocks access when whitelist mode
         // is enabled; we emit a comment explaining this)
         if (rule.method == "reject") {
-            result.entries.push_back({
-                "-- HBA reject rule: " + rule.conn_type + " " + rule.database +
-                " " + rule.user + " " + addr + " reject",
-                "ProxySQL firewall whitelist is allow-only; not adding this "
-                "source/user means traffic from " + addr + " is implicitly denied "
-                "when pgsql-firewall_whitelist_enabled=1"
-            });
-            any_converted = true;
+            // The ProxySQL whitelist is allow-only and has no deny entry. An
+            // HBA `reject` that precedes a broader allow rule therefore cannot
+            // be reproduced: the allow would win. Surface it rather than
+            // emitting a comment and implying the deny was handled.
+            add_issue(result, strict,
+                      "HBA 'reject' rule (" + rule.conn_type + " " + rule.database +
+                      " " + rule.user + " " + addr + ") cannot be represented: "
+                      "the ProxySQL firewall whitelist is allow-only, so this "
+                      "denial must be reproduced manually or enforced upstream");
             continue;
         }
 
@@ -443,18 +474,24 @@ void ConfigConverter::convert_hba_rules(const Config& config,
             std::string user_val = (rule.user == "all") ? "" : rule.user;
             std::string db_val = (rule.database == "all") ? "" : rule.database;
 
+            std::string comment = "HBA allow: " + rule.conn_type + " " +
+                                  rule.database + " " + rule.user + " " +
+                                  addr + " " + rule.method;
+
+            // The column is `database` (not `schemaname`), and both `digest`
+            // and `comment` are NOT NULL without a default, so they must be
+            // supplied explicitly. An empty digest whitelists every query for
+            // the (user, address, database) triple, which is the closest
+            // equivalent to an HBA allow rule.
             std::ostringstream sql;
             sql << "INSERT INTO pgsql_firewall_whitelist_rules "
-                << "(active, client_address, username, schemaname, flagIN) "
+                << "(active, client_address, username, database, flagIN, digest, comment) "
                 << "VALUES (1, "
                 << "'" << sql_escape(addr) << "', "
                 << "'" << sql_escape(user_val) << "', "
                 << "'" << sql_escape(db_val) << "', "
-                << "0);";
-
-            std::string comment = "HBA allow: " + rule.conn_type + " " +
-                                  rule.database + " " + rule.user + " " +
-                                  addr + " " + rule.method;
+                << "0, '', "
+                << "'" << sql_escape(comment) << "');";
 
             result.entries.push_back({sql.str(), comment});
             any_converted = true;

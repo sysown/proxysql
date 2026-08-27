@@ -41,17 +41,28 @@ static bool looks_like_address(const std::string& tok) {
 // as single tokens (quotes are stripped from the result).
 // ---------------------------------------------------------------------------
 
-std::vector<std::string> HBAParser::tokenize(const std::string& line) {
-    std::vector<std::string> tokens;
+bool HBAParser::tokenize(const std::string& line,
+                         std::vector<std::string>& tokens) {
+    tokens.clear();
     std::string token;
     bool in_quotes = false;
+    // A token that came from a quoted run is emitted even when empty, so that
+    // `""` is a real (empty) field rather than silently disappearing.
+    bool quoted_token = false;
 
     for (size_t i = 0; i < line.size(); ++i) {
         char c = line[i];
 
         if (in_quotes) {
             if (c == '"') {
-                in_quotes = false;
+                // PostgreSQL/PgBouncer escape a quote inside a quoted string by
+                // doubling it ("").
+                if (i + 1 < line.size() && line[i + 1] == '"') {
+                    token += '"';
+                    ++i;
+                } else {
+                    in_quotes = false;
+                }
             } else {
                 token += c;
             }
@@ -61,20 +72,24 @@ std::vector<std::string> HBAParser::tokenize(const std::string& line) {
                 break;
             } else if (c == '"') {
                 in_quotes = true;
+                quoted_token = true;
             } else if (std::isspace(static_cast<unsigned char>(c))) {
-                if (!token.empty()) {
+                if (!token.empty() || quoted_token) {
                     tokens.push_back(token);
                     token.clear();
+                    quoted_token = false;
                 }
             } else {
                 token += c;
             }
         }
     }
-    if (!token.empty()) {
+    if (!token.empty() || quoted_token) {
         tokens.push_back(token);
     }
-    return tokens;
+    // An unterminated quote means the line is malformed; the caller must not
+    // treat the partial tokens as a valid record.
+    return !in_quotes;
 }
 
 // ---------------------------------------------------------------------------
@@ -172,6 +187,10 @@ bool HBAParser::parse_record(const std::vector<std::string>& tokens,
 bool HBAParser::parse(const std::string& filepath,
                       std::vector<HBARule>& rules,
                       std::vector<ParseMessage>& errors) {
+    // parse() is a full load, not an append: reusing the vector across calls
+    // must not accumulate duplicate rules. `errors` is deliberately left alone,
+    // since callers thread one diagnostic list through several parsers.
+    rules.clear();
     std::ifstream in(filepath);
     if (!in.is_open()) {
         errors.push_back({filepath, 0,
@@ -186,7 +205,13 @@ bool HBAParser::parse(const std::string& filepath,
     while (std::getline(in, line)) {
         ++lineno;
 
-        std::vector<std::string> tokens = tokenize(line);
+        std::vector<std::string> tokens;
+        if (!tokenize(line, tokens)) {
+            errors.push_back({filepath, lineno,
+                "unterminated double quote"});
+            ok = false;
+            continue;
+        }
         if (tokens.empty())
             continue;
 

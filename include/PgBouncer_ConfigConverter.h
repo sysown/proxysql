@@ -1,5 +1,5 @@
-#ifndef PGBOUNCER_CONFIG_CONVERTER_H
-#define PGBOUNCER_CONFIG_CONVERTER_H
+#ifndef __CLASS_PGBOUNCER_CONFIG_CONVERTER_H
+#define __CLASS_PGBOUNCER_CONFIG_CONVERTER_H
 
 #include "PgBouncer_Config.h"
 #include <string>
@@ -42,8 +42,8 @@ private:
     int next_rule_id_ = 1;
     int wildcard_hostgroup_ = -1;  // hostgroup for the * database, or -1
 
-    void convert_databases(const Config& config, ConversionResult& result);
-    void convert_users(const Config& config, ConversionResult& result);
+    void convert_databases(const Config& config, ConversionResult& result, bool strict);
+    void convert_users(const Config& config, ConversionResult& result, bool strict);
     void convert_globals(const Config& config, ConversionResult& result, bool strict);
     void convert_hba_rules(const Config& config, ConversionResult& result, bool strict);
     void add_load_and_save(ConversionResult& result);
@@ -61,4 +61,4 @@ private:
 
 } // namespace PgBouncer
 
-#endif
+#endif // __CLASS_PGBOUNCER_CONFIG_CONVERTER_H

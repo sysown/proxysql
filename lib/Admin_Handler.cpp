@@ -5128,6 +5128,37 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		}
 	}
 
+	// =========================================================================
+	// PgBouncer-compatible SHOW commands (PgSQL admin port only)
+	//
+	// This must run BEFORE the generic SHOW dispatch below: ProxySQL already
+	// owns some of the same command words (notably `SHOW DATABASES`), so a
+	// translation placed after that block would never be reached for them.
+	// translate_show_command() only claims the exact PgBouncer command set and
+	// rejects anything with trailing tokens, so every other SHOW still falls
+	// through to the normal handling.
+	// =========================================================================
+	if constexpr (std::is_same_v<S, PgSQL_Session>) {
+		// Check for unsupported PgBouncer SHOW commands first
+		std::string unsupported_msg = PgBouncer::get_unsupported_show_message(query_no_space, query_no_space_length);
+		if (!unsupported_msg.empty()) {
+			SPA->send_error_msg_to_client(sess, (char *)unsupported_msg.c_str());
+			run_query = false;
+			goto __run_query;
+		}
+
+		// Try to translate PgBouncer SHOW commands
+		std::string translated_query;
+		bool is_extended = false;
+		if (PgBouncer::translate_show_command(query_no_space, query_no_space_length,
+		                                      translated_query, is_extended)) {
+			l_free(query_length, query);
+			query = l_strdup(translated_query.c_str());
+			query_length = strlen(query) + 1;
+			goto __run_query;
+		}
+	}
+
 	if (strncasecmp("SHOW ", query_no_space, 5)) {
 		goto __end_show_commands; // in the next block there are only SHOW commands
 	}
@@ -5598,30 +5629,6 @@ __end_show_commands:
 		}
 		run_query = false;
 		goto __run_query;
-	}
-
-	// =========================================================================
-	// PgBouncer-compatible SHOW commands (PgSQL admin port only)
-	// =========================================================================
-	if constexpr (std::is_same_v<S, PgSQL_Session>) {
-		// Check for unsupported PgBouncer SHOW commands first
-		std::string unsupported_msg = PgBouncer::get_unsupported_show_message(query_no_space, query_no_space_length);
-		if (!unsupported_msg.empty()) {
-			SPA->send_error_msg_to_client(sess, (char *)unsupported_msg.c_str());
-			run_query = false;
-			goto __run_query;
-		}
-
-		// Try to translate PgBouncer SHOW commands
-		std::string translated_query;
-		bool is_extended = false;
-		if (PgBouncer::translate_show_command(query_no_space, query_no_space_length,
-		                                      translated_query, is_extended)) {
-			l_free(query_length, query);
-			query = l_strdup(translated_query.c_str());
-			query_length = strlen(query) + 1;
-			goto __run_query;
-		}
 	}
 
 	if (sess->session_type == PROXYSQL_SESSION_STATS) { // no admin

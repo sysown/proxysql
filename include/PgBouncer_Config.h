@@ -1,5 +1,5 @@
-#ifndef PGBOUNCER_CONFIG_H
-#define PGBOUNCER_CONFIG_H
+#ifndef __CLASS_PGBOUNCER_CONFIG_H
+#define __CLASS_PGBOUNCER_CONFIG_H
 
 #include <string>
 #include <vector>
@@ -221,4 +221,4 @@ bool parse_hba_file(const std::string& filepath, std::vector<HBARule>& rules, st
 
 } // namespace PgBouncer
 
-#endif // PGBOUNCER_CONFIG_H
+#endif // __CLASS_PGBOUNCER_CONFIG_H

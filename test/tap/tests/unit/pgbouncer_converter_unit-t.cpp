@@ -274,8 +274,175 @@ void test_tls_conversion() {
     CHECK(has_sql_containing(result, "/etc/ssl/ca.pem"), "correct CA path");
 }
 
+
+// Helper: does any warning or error mention this substring?
+static bool has_issue_containing(const PgBouncer::ConversionResult& r,
+                                 const std::string& substr) {
+    for (const auto& w : r.warnings)
+        if (w.message.find(substr) != std::string::npos) return true;
+    for (const auto& e : r.errors)
+        if (e.message.find(substr) != std::string::npos) return true;
+    return false;
+}
+
+// ============================================================
+// Test: generated SQL uses the real pgsql_* column names
+//
+// Regression: routing rules were emitted as
+//   INSERT INTO pgsql_query_rules (..., schemaname, ...)
+// but pgsql_query_rules has no `schemaname` column (that is the MySQL table);
+// the PgSQL one calls it `database`. Every generated rule failed on execute.
+// ============================================================
+void test_query_rule_column_names() {
+    PgBouncer::Config config;
+    PgBouncer::Database db;
+    db.name = "mydb";
+    db.host = "10.0.0.1";
+    config.databases.push_back(db);
+
+    PgBouncer::ConfigConverter converter;
+    PgBouncer::ConversionResult result = converter.convert(config, false);
+
+    CHECK(!has_sql_containing(result, "schemaname"),
+          "query rules do not reference the nonexistent `schemaname` column");
+    CHECK(has_sql_containing(result, "(rule_id, active, database, destination_hostgroup, apply)"),
+          "query rules use the `database` column");
+}
+
+// ============================================================
+// Test: firewall whitelist INSERT satisfies the table's NOT NULL columns
+//
+// pgsql_firewall_whitelist_rules declares `digest` and `comment` NOT NULL with
+// no default, and names the database column `database`.
+// ============================================================
+void test_firewall_rule_columns() {
+    PgBouncer::Config config;
+    PgBouncer::Database db;
+    db.name = "mydb";
+    db.host = "10.0.0.1";
+    config.databases.push_back(db);
+
+    PgBouncer::HBARule rule;
+    rule.conn_type = "host";
+    rule.database = "all";
+    rule.user = "all";
+    rule.address = "10.0.0.0/8";
+    rule.method = "md5";
+    config.hba_rules.push_back(rule);
+
+    PgBouncer::ConfigConverter converter;
+    PgBouncer::ConversionResult result = converter.convert(config, false);
+
+    CHECK(has_sql_containing(result,
+            "(active, client_address, username, database, flagIN, digest, comment)"),
+          "firewall INSERT lists database, digest and comment");
+    CHECK(!has_sql_containing(result, "pgsql_firewall_whitelist_rules (active, client_address, username, schemaname"),
+          "firewall INSERT does not use `schemaname`");
+}
+
+// ============================================================
+// Test: HBA reject rules are reported, not silently swallowed
+//
+// The ProxySQL whitelist is allow-only, so a `reject` cannot be reproduced.
+// It used to be emitted as an SQL comment and still flipped the whitelist on.
+// ============================================================
+void test_hba_reject_is_reported() {
+    PgBouncer::Config config;
+    PgBouncer::Database db;
+    db.name = "mydb";
+    db.host = "10.0.0.1";
+    config.databases.push_back(db);
+
+    PgBouncer::HBARule rule;
+    rule.conn_type = "host";
+    rule.database = "all";
+    rule.user = "baduser";
+    rule.address = "192.168.0.0/16";
+    rule.method = "reject";
+    config.hba_rules.push_back(rule);
+
+    PgBouncer::ConfigConverter converter;
+    PgBouncer::ConversionResult relaxed = converter.convert(config, false);
+    CHECK(has_issue_containing(relaxed, "reject"),
+          "reject rule raises an issue in relaxed mode");
+
+    PgBouncer::ConfigConverter strict_conv;
+    PgBouncer::ConversionResult strict = strict_conv.convert(config, true);
+    CHECK(!strict.success, "reject rule fails the import in strict mode");
+}
+
+// ============================================================
+// Test: hashed auth-file passwords are flagged
+//
+// ProxySQL derives the MD5 challenge response and the SCRAM verifier from the
+// cleartext password in pgsql_users.password, so importing a pre-hashed
+// userlist.txt entry produces a credential that cannot authenticate.
+// ============================================================
+void test_hashed_password_is_flagged() {
+    PgBouncer::Config config;
+    PgBouncer::Database db;
+    db.name = "mydb";
+    db.host = "10.0.0.1";
+    config.databases.push_back(db);
+
+    PgBouncer::AuthFileEntry md5e;
+    md5e.username = "alice";
+    md5e.password = "md5d41d8cd98f00b204e9800998ecf8427";
+    md5e.type = PgBouncer::AuthType::MD5;
+    config.auth_entries.push_back(md5e);
+
+    PgBouncer::AuthFileEntry scram;
+    scram.username = "bob";
+    scram.password = "SCRAM-SHA-256$4096:c2FsdA==$c3Ry:c3Ry";
+    scram.type = PgBouncer::AuthType::SCRAM;
+    config.auth_entries.push_back(scram);
+
+    PgBouncer::AuthFileEntry plain;
+    plain.username = "carol";
+    plain.password = "secret";
+    plain.type = PgBouncer::AuthType::PLAIN;
+    config.auth_entries.push_back(plain);
+
+    PgBouncer::ConfigConverter converter;
+    PgBouncer::ConversionResult result = converter.convert(config, false);
+
+    CHECK(has_issue_containing(result, "alice"), "MD5 verifier for alice is flagged");
+    CHECK(has_issue_containing(result, "bob"), "SCRAM verifier for bob is flagged");
+    CHECK(!has_issue_containing(result, "carol"), "cleartext password for carol is not flagged");
+    CHECK(has_sql_containing(result, "'carol'"), "carol is still imported");
+
+    PgBouncer::ConfigConverter strict_conv;
+    PgBouncer::ConversionResult strict = strict_conv.convert(config, true);
+    CHECK(!strict.success, "hashed passwords fail the import in strict mode");
+}
+
+// ============================================================
+// Test: a dbname alias is reported rather than silently dropped
+//
+// PgBouncer's `dbname=` connects to a differently-named backend database.
+// ProxySQL routes to a hostgroup but does not rewrite the startup packet.
+// ============================================================
+void test_dbname_alias_is_reported() {
+    PgBouncer::Config config;
+    PgBouncer::Database db;
+    db.name = "alias";
+    db.dbname = "real_backend_db";
+    db.host = "10.0.0.1";
+    config.databases.push_back(db);
+
+    PgBouncer::ConfigConverter converter;
+    PgBouncer::ConversionResult result = converter.convert(config, false);
+
+    CHECK(has_issue_containing(result, "real_backend_db"),
+          "dbname alias is reported");
+
+    PgBouncer::ConfigConverter strict_conv;
+    PgBouncer::ConversionResult strict = strict_conv.convert(config, true);
+    CHECK(!strict.success, "dbname alias fails the import in strict mode");
+}
+
 int main() {
-    plan(39);
+    plan(52);
 
     test_minimal_conversion();     // 6
     test_multi_host_conversion();  // 5
@@ -287,7 +454,11 @@ int main() {
     test_query_rules();            // 5
     test_dry_run_format();         // 5
     test_tls_conversion();         // 3
+    test_query_rule_column_names();
+    test_firewall_rule_columns();
+    test_hba_reject_is_reported();
+    test_hashed_password_is_flagged();
+    test_dbname_alias_is_reported();
 
-    // Note: plan count = sum above. Adjust if needed.
     return exit_status();
 }
