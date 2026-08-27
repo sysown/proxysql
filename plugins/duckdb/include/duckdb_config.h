@@ -40,6 +40,7 @@ public:
 	int threads() const;
 	int max_connections() const;
 	bool read_only() const;
+	bool enable_external_access() const;
 	std::vector<DuckDBIface> mysql_ifaces() const;
 	std::vector<DuckDBIface> pgsql_ifaces() const;
 

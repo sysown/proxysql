@@ -5,7 +5,7 @@
 #include <vector>
 
 int main() {
-	plan(15);
+	plan(18);
 
 	// --- iface parsing -------------------------------------------------
 	std::vector<DuckDBIface> ifaces;
@@ -49,6 +49,10 @@ int main() {
 	DuckDBConfigStore cfg;
 	ok(cfg.database_path() == ":memory:", "database_path defaults to :memory:");
 	ok(cfg.read_only() == false, "read_only defaults to false");
+	// I1 fix: DuckDB's own default is true (deny-by-default is a deliberate
+	// override of DuckDB, not DuckDB's own default) -- see the comment on
+	// kDefaultEnableExternalAccess in duckdb_config.cpp.
+	ok(cfg.enable_external_access() == false, "enable_external_access defaults to false");
 	ok(cfg.max_connections() > 0, "max_connections has a positive default");
 
 	// --- set / get -----------------------------------------------------
@@ -68,6 +72,15 @@ int main() {
 	cfg.set("read_only", "true", err);
 	ok(cfg.validate(err) == false && err.find("read_only") != std::string::npos,
 	   "read_only with :memory: fails validation and names the variable");
+
+	// --- enable_external_access set/get ---------------------------------
+	err.clear();
+	ok(cfg.set("enable_external_access", "true", err) && cfg.enable_external_access() == true,
+	   "enable_external_access round-trips to true");
+
+	err.clear();
+	ok(cfg.set("enable_external_access", "not-a-bool", err) == false && !err.empty(),
+	   "non-boolean enable_external_access is rejected with a message");
 
 	return exit_status();
 }

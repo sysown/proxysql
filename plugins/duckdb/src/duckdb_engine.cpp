@@ -36,6 +36,18 @@ bool DuckDBEngine::open(const DuckDBConfigStore& cfg, std::string& err) {
 	bool ok = set_or_fail("memory_limit", cfg.memory_limit())
 	       && set_or_fail("threads", std::to_string(cfg.threads()));
 	if (ok && cfg.read_only()) ok = set_or_fail("access_mode", "READ_ONLY");
+	// DuckDB's own default for enable_external_access is true (deps/duckdb/
+	// duckdb/src/include/duckdb/main/config.hpp); DuckDBConfigStore's
+	// default is false (see the comment on kDefaultEnableExternalAccess in
+	// duckdb_config.cpp), so this is always set explicitly rather than
+	// only on a non-default value -- silently relying on DuckDB's own
+	// default here would reopen the exact gap this setting exists to
+	// close. Applied at open() time only: DuckDB accepts true->false on a
+	// running database but throws on false->true (deps/duckdb/duckdb/src/
+	// main/settings/custom_settings.cpp), so tightening this at runtime
+	// could in principle be layered on top later, but loosening it always
+	// requires the engine to reopen -- see the README's Security section.
+	if (ok) ok = set_or_fail("enable_external_access", cfg.enable_external_access() ? "true" : "false");
 	if (!ok) { duckdb_destroy_config(&config); return false; }
 
 	char* open_err = nullptr;

@@ -2,10 +2,11 @@
 #include "duckdb_engine.h"
 #include "tap.h"
 
+#include <cstdio>
 #include <string>
 
 int main() {
-	plan(10);
+	plan(11);
 
 	DuckDBConfigStore cfg;
 	std::string err;
@@ -30,6 +31,27 @@ int main() {
 	const bool q_ok = (duckdb_query(conn, "SELECT 42 AS answer", &res) == DuckDBSuccess);
 	ok(q_ok, "a trivial query executes on the connection");
 	if (q_ok) duckdb_destroy_result(&res);
+
+	// I1 fix: DuckDB's own default for enable_external_access is true
+	// (deps/duckdb/duckdb/src/include/duckdb/main/config.hpp), which would
+	// let any mysql_users/pgsql_users credential read/write arbitrary local
+	// files as the ProxySQL process user. DuckDBEngine::open() must
+	// override that default; assert it on the *default* DuckDBConfigStore
+	// (cfg above, untouched) so this test fails if the override is ever
+	// dropped, not just if someone explicitly sets the variable wrong.
+	{
+		const char* tmp_csv = "/tmp/duckdb_engine_unit_test_external_access.csv";
+		FILE* f = std::fopen(tmp_csv, "w");
+		if (f != nullptr) { std::fputs("a,b\n1,2\n", f); std::fclose(f); }
+
+		const std::string q = std::string("SELECT * FROM read_csv('") + tmp_csv + "')";
+		duckdb_result ext_res;
+		const bool denied = (duckdb_query(conn, q.c_str(), &ext_res) != DuckDBSuccess);
+		ok(denied, "read_csv of a local file is denied with the default configuration "
+		           "(enable_external_access=false)");
+		duckdb_destroy_result(&ext_res);
+		std::remove(tmp_csv);
+	}
 
 	engine.disconnect(&conn);
 	ok(conn == nullptr, "disconnect nulls the caller's handle");

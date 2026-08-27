@@ -13,6 +13,21 @@ const char* const kDefaultMemoryLimit    = "1GB";
 const int         kDefaultThreads        = 2;
 const int         kDefaultMaxConnections = 100;
 const bool        kDefaultReadOnly       = false;
+// DuckDB's own default for this setting is `true` (deps/duckdb/duckdb/src/
+// include/duckdb/main/config.hpp): "Allow the database to access external
+// state (through e.g. loading/installing modules, COPY TO/FROM, CSV
+// readers, pandas replacement scans, etc)". Left at DuckDB's default, any
+// credential in mysql_users/pgsql_users -- the same credentials routed
+// application users hold -- could run e.g. `SELECT * FROM
+// read_csv('/etc/passwd')`, `COPY (...) TO '/some/path'`, or `ATTACH` an
+// arbitrary local database, as the ProxySQL process user. `read_only`
+// above does NOT prevent this: that governs DuckDB's `access_mode`
+// (writes to the main database), not filesystem/external-state access.
+// So this plugin overrides DuckDB's default to `false` here (deny by
+// default) and only grants the capability when an operator opts in via
+// `duckdb_variables.enable_external_access`. See the Security section of
+// plugins/duckdb/README.md.
+const bool        kDefaultEnableExternalAccess = false;
 const char* const kDefaultMysqlIfaces    = "0.0.0.0:6031";
 // 6032 is ProxySQL's own Admin interface (admin_variables.mysql_ifaces,
 // etc/proxysql.cnf). Since duckdb_listener.cpp binds with SO_REUSEPORT,
@@ -117,6 +132,7 @@ DuckDBConfigStore::DuckDBConfigStore() {
 		{ "threads",         std::to_string(kDefaultThreads) },
 		{ "max_connections", std::to_string(kDefaultMaxConnections) },
 		{ "read_only",       kDefaultReadOnly ? "true" : "false" },
+		{ "enable_external_access", kDefaultEnableExternalAccess ? "true" : "false" },
 	};
 }
 
@@ -144,6 +160,12 @@ bool DuckDBConfigStore::set(const std::string& name, const std::string& value, s
 		bool v = false;
 		if (!parse_bool(value, v)) {
 			err = "invalid value for 'read_only': expected a boolean";
+			return false;
+		}
+	} else if (name == "enable_external_access") {
+		bool v = false;
+		if (!parse_bool(value, v)) {
+			err = "invalid value for 'enable_external_access': expected a boolean";
 			return false;
 		}
 	} else if (name == "mysql_ifaces" || name == "pgsql_ifaces") {
@@ -218,6 +240,13 @@ bool DuckDBConfigStore::read_only() const {
 	std::lock_guard<std::mutex> lock(mutex_);
 	bool v = kDefaultReadOnly;
 	if (!parse_bool(get_locked("read_only"), v)) return kDefaultReadOnly;
+	return v;
+}
+
+bool DuckDBConfigStore::enable_external_access() const {
+	std::lock_guard<std::mutex> lock(mutex_);
+	bool v = kDefaultEnableExternalAccess;
+	if (!parse_bool(get_locked("enable_external_access"), v)) return kDefaultEnableExternalAccess;
 	return v;
 }
 
