@@ -309,6 +309,28 @@ $(MYSQLX_BRIDGE_TESTS): mysqlx-bridge-tests
 # path in 98aee7db2. Listener-lifecycle coverage now lives in
 # mysqlx_thread_unit-t and mysqlx_robustness_unit-t under unit/.
 
+# test_duckdb_plugin_load-t.cpp (like the mysqlx bridge tests above) links
+# ProxySQL_PluginManager, which transitively needs symbols (GloVars, MyHGM,
+# mysql_thread___* variables, ...) that are normally only pulled into a link
+# via --whole-archive. unit/Makefile's own rule for this target already
+# builds it that way (via $(WHOLE_LIBPROXYSQL)) and depends on
+# duckdb_plugin_build to make sure the plugin .so exists first; this
+# top-level directory's generic `%-t: %-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)`
+# pattern rule does neither, so without this explicit (higher-precedence)
+# rule `make tests` falls through to the generic one and fails to link with
+# "undefined reference to `GloVars'" / `MyHGM` / `mysql_thread___ffto_max_
+# buffer_size` etc. -- the classic symptom of a static archive linked
+# without --whole-archive missing globals nothing else in the link
+# references. Mirrors the $(MYSQLX_BRIDGE_TESTS) rule above exactly.
+DUCKDB_BRIDGE_TESTS := test_duckdb_plugin_load-t
+
+.PHONY: duckdb-bridge-tests $(DUCKDB_BRIDGE_TESTS)
+duckdb-bridge-tests:
+	$(MAKE) -C unit $(DUCKDB_BRIDGE_TESTS)
+
+$(DUCKDB_BRIDGE_TESTS): duckdb-bridge-tests
+	ln -fs unit/$@ $@
+
 sqlite3-t: sqlite3-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 ifneq ($(PROXYSQL40),)
 	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(SQLITE3_LDIR)/vec.o -o $@
