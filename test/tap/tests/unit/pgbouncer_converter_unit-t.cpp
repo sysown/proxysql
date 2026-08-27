@@ -441,8 +441,73 @@ void test_dbname_alias_is_reported() {
     CHECK(!strict.success, "dbname alias fails the import in strict mode");
 }
 
+
+// ============================================================
+// Test: auth_type is mapped, not silently dropped
+//
+// Regression: auth_type was parsed into the Config and then ignored by the
+// converter entirely -- neither mapped nor reported. The frontend
+// authentication method of the pooler being replaced simply vanished, which
+// under the converter's strict-by-default contract should never happen.
+// ============================================================
+static PgBouncer::Config config_with_auth_type(const char* auth_type) {
+    PgBouncer::Config config;
+    PgBouncer::Database db;
+    db.name = "mydb";
+    db.host = "10.0.0.1";
+    config.databases.push_back(db);
+    config.global.auth_type = auth_type;
+    return config;
+}
+
+void test_auth_type_mapping() {
+    // Match the whole emitted statement, so a wrong level fails the assertion
+    // rather than passing on an incidental substring.
+    struct { const char* auth_type; const char* expect_sql; } mapped[] = {
+        { "plain",         "SET pgsql-authentication_method=1;" },
+        { "password",      "SET pgsql-authentication_method=1;" },
+        { "md5",           "SET pgsql-authentication_method=2;" },
+        { "scram-sha-256", "SET pgsql-authentication_method=3;" },
+    };
+    for (const auto& m : mapped) {
+        PgBouncer::Config config = config_with_auth_type(m.auth_type);
+        PgBouncer::ConfigConverter conv;
+        PgBouncer::ConversionResult r = conv.convert(config, false);
+        std::string msg = std::string("auth_type=") + m.auth_type + " emits " + m.expect_sql;
+        CHECK(has_sql_containing(r, m.expect_sql), msg.c_str());
+    }
+
+    // A mapped auth_type must not also be reported as a problem.
+    {
+        PgBouncer::ConfigConverter conv;
+        PgBouncer::ConversionResult r = conv.convert(config_with_auth_type("md5"), true);
+        CHECK(r.success, "a mappable auth_type does not fail strict mode");
+    }
+
+    // Case-insensitive, matching the rest of the INI handling.
+    {
+        PgBouncer::ConfigConverter conv;
+        PgBouncer::ConversionResult r = conv.convert(config_with_auth_type("MD5"), false);
+        CHECK(has_sql_containing(r, "pgsql-authentication_method"),
+              "auth_type matching is case-insensitive");
+    }
+
+    // The methods ProxySQL cannot express are reported, not dropped.
+    for (const char* unmappable : { "trust", "hba", "any", "cert", "pam" }) {
+        PgBouncer::ConfigConverter conv;
+        PgBouncer::ConversionResult r = conv.convert(config_with_auth_type(unmappable), false);
+        std::string msg = std::string("auth_type=") + unmappable + " is reported as unmappable";
+        CHECK(has_issue_containing(r, unmappable), msg.c_str());
+
+        PgBouncer::ConfigConverter sconv;
+        PgBouncer::ConversionResult sr = sconv.convert(config_with_auth_type(unmappable), true);
+        std::string smsg = std::string("auth_type=") + unmappable + " fails the import in strict mode";
+        CHECK(!sr.success, smsg.c_str());
+    }
+}
+
 int main() {
-    plan(52);
+    plan(68);
 
     test_minimal_conversion();     // 6
     test_multi_host_conversion();  // 5
@@ -459,6 +524,7 @@ int main() {
     test_hba_reject_is_reported();
     test_hashed_password_is_flagged();
     test_dbname_alias_is_reported();
+    test_auth_type_mapping();
 
     return exit_status();
 }

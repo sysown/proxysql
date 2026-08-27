@@ -1,6 +1,7 @@
 #include "PgBouncer_ConfigConverter.h"
 #include <sstream>
 #include <algorithm>
+#include <cctype>
 #include <ctime>
 
 namespace PgBouncer {
@@ -291,6 +292,45 @@ void ConfigConverter::convert_globals(const Config& config,
         std::string iface = g.listen_addr + ":" + std::to_string(g.listen_port);
         emit_set("pgsql-interfaces", iface,
                  "PgBouncer listen_addr:listen_port -> ProxySQL pgsql-interfaces");
+    }
+
+    // -- auth_type -> pgsql-authentication_method
+    //
+    // pgsql-authentication_method selects the method ProxySQL challenges
+    // clients with: 1 = cleartext, 2 = md5, 3 = scram-sha-256.
+    {
+        std::string at = g.auth_type;
+        std::transform(at.begin(), at.end(), at.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+
+        if (at == "plain" || at == "password") {
+            emit_set_int("pgsql-authentication_method", 1,
+                         "PgBouncer auth_type=" + g.auth_type +
+                         " -> ProxySQL cleartext authentication");
+        } else if (at == "md5") {
+            emit_set_int("pgsql-authentication_method", 2,
+                         "PgBouncer auth_type=md5 -> ProxySQL md5 authentication");
+        } else if (at == "scram-sha-256") {
+            emit_set_int("pgsql-authentication_method", 3,
+                         "PgBouncer auth_type=scram-sha-256 -> ProxySQL SCRAM authentication");
+        } else if (at == "trust") {
+            add_issue(result, strict,
+                      "auth_type=trust has no ProxySQL equivalent; ProxySQL always "
+                      "authenticates clients against pgsql_users and cannot accept "
+                      "unauthenticated connections");
+        } else if (at == "hba") {
+            add_issue(result, strict,
+                      "auth_type=hba has no ProxySQL equivalent; the per-rule methods "
+                      "in pg_hba.conf cannot select the frontend authentication method, "
+                      "which is global (pgsql-authentication_method)");
+        } else if (at == "any") {
+            add_issue(result, strict,
+                      "auth_type=any has no ProxySQL equivalent; ProxySQL always "
+                      "verifies the username against pgsql_users");
+        } else if (!at.empty()) {
+            add_issue(result, strict,
+                      "auth_type=" + g.auth_type + " has no ProxySQL equivalent");
+        }
     }
 
     // -- max_client_conn -> pgsql-max_connections (ProxySQL default: 2048)
