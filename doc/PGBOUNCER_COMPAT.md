@@ -87,6 +87,7 @@ rather than a silently truncated field.
 | PgBouncer | ProxySQL | Note |
 |---|---|---|
 | `listen_addr` + `listen_port` | `pgsql-interfaces` | |
+| `auth_type` | `pgsql-authentication_method` | `plain`/`password`→1, `md5`→2, `scram-sha-256`→3 |
 | `max_client_conn` | `pgsql-max_connections` | |
 | `server_connect_timeout` | `pgsql-connect_timeout_server` | |
 | `server_lifetime` | `pgsql-connection_max_age_ms` | s → ms |
@@ -138,11 +139,25 @@ These are reported per occurrence — fatal in strict mode, warnings otherwise.
 **Authentication.** `auth_query`, `auth_user`, `auth_dbname`. ProxySQL
 authenticates from `pgsql_users` (or LDAP), not by querying the backend.
 
+**`auth_type` values with no equivalent.** `trust` and `any` (ProxySQL always
+verifies the user against `pgsql_users` and cannot accept an unauthenticated
+connection), `hba` (`pgsql-authentication_method` is global, so per-rule methods
+from `pg_hba.conf` cannot select the frontend method), and `cert`/`pam`.
+
 **Pre-hashed passwords.** A `userlist.txt` entry holding an MD5 or SCRAM verifier
 is imported verbatim but **will not authenticate**. ProxySQL derives both the MD5
 challenge response and the SCRAM verifier from the *cleartext* password stored in
 `pgsql_users.password`, so a pre-hashed value cannot be used. Replace those
 entries with the cleartext password after importing.
+
+> This limitation is expected to lift with PR #5865 / issue #5863, which teaches
+> `pgsql_users.password` to hold a SCRAM verifier or an `md5…` hash directly —
+> exactly the formats `userlist.txt` already stores. When that lands, this
+> section and the strict-mode error in `convert_users()` should be revisited so a
+> `userlist.txt` imports as-is. Note the constraints that come with it: an
+> md5-stored user needs an md5 backend, a verifier-stored user needs a
+> `scram-sha-256` backend, and the verifier must be byte-identical to the
+> backend's `rolpassword` (same salt and iterations).
 
 **`dbname=` aliases.** PgBouncer's `dbname=` connects to a backend database under
 a different name than the client asked for. ProxySQL routes to a hostgroup but
