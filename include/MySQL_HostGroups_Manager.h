@@ -217,6 +217,9 @@ class MySrvC {	// MySQL Server Container
 	unsigned int connect_ERR_at_time_last_detected_error;
 	unsigned long long queries_sent;
 	unsigned long long queries_gtid_sync;
+	unsigned long long queries_ok;
+	unsigned long long queries_err;
+	unsigned long long queries_warnings;
 	unsigned long long bytes_sent;
 	unsigned long long bytes_recv;
 	// shunned_automatic acts as a guard for server auto-recovery. When true, the shun recovery path

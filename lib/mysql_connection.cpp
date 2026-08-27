@@ -2356,9 +2356,13 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length,
 	if (async_state_machine==ASYNC_QUERY_END) {
 		PROXY_TRACE2();
 		compute_unknown_transaction_status();
-		if (mysql_errno(mysql)) {
+		int _myerrno = mysql_errno(mysql);
+		if (_myerrno) {
+			if (_myerrno < 2000) __sync_fetch_and_add(&parent->queries_err, 1);
 			return -1;
 		} else {
+			__sync_fetch_and_add(&parent->queries_ok, 1);
+			if (warning_count > 0) __sync_fetch_and_add(&parent->queries_warnings, warning_count);
 			return 0;
 		}
 	}
@@ -2367,9 +2371,13 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length,
 		query.stmt_meta=NULL;
 		async_state_machine=ASYNC_QUERY_END;
 		compute_unknown_transaction_status();
-		if (mysql_stmt_errno(query.stmt)) {
+		unsigned int _stmt_errno = mysql_stmt_errno(query.stmt);
+		if (_stmt_errno) {
+			if (_stmt_errno < 2000) __sync_fetch_and_add(&parent->queries_err, 1);
 			return -1;
 		} else {
+			__sync_fetch_and_add(&parent->queries_ok, 1);
+			if (warning_count > 0) __sync_fetch_and_add(&parent->queries_warnings, warning_count);
 			return 0;
 		}
 	}
@@ -2377,9 +2385,12 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length,
 		query.stmt_meta=NULL;
 		compute_unknown_transaction_status();
 		if (async_state_machine==ASYNC_STMT_PREPARE_FAILED) {
+			unsigned int _prep_errno = query.stmt ? mysql_stmt_errno(query.stmt) : mysql_errno(mysql);
+			if (_prep_errno < 2000) __sync_fetch_and_add(&parent->queries_err, 1);
 			return -1;
 		} else {
 			*_stmt=query.stmt;
+			__sync_fetch_and_add(&parent->queries_ok, 1);
 			return 0;
 		}
 	}
