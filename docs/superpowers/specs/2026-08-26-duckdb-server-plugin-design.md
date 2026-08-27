@@ -535,7 +535,8 @@ isn't required, not the original (false) "empty diff" premise.
 | Whether the DuckDB amalgamation build is still supported upstream, and whether it beats the CMake build | Check during implementation. It trades parallelism for several GB of RAM in one TU, so it may well be worse. Not a design-blocking question. |
 | Merge conflicts with the two in-flight LFS branches, which create `.gitattributes` and edit up to 177 of the same workflow files | Sequence deliberately. If `feature/issue-6115-vendored-openssl` lands first, this diff shrinks to one `.gitattributes` line plus the `PROXYSQL40` workflows it did not already cover. |
 | `duckdb_value_varchar()` allocates per value, so wide analytical resultsets do many small allocations | Acceptable for v1 and no worse than the existing Admin path. Typed conversion in sub-project 3 removes it. |
-| **Open, unresolved: intermittent `assert(0)` crash in `generate_pkt_ERR`, added by Task 11 (§15).** A malformed query on the plugin's MySQL listener has twice triggered `assert(0)` at `lib/MySQL_Protocol.cpp:434`, inside `generate_pkt_ERR`, reached via the plugin's MySQL error emitter. This aborts the **entire ProxySQL process**, Admin port included, not just the offending session. | **Not resolved and not to be called flaky.** Two identical backtraces occurred early in Task 9. Since then, roughly 500 further executions of the same code path — a dedicated stress campaign, a 50-iteration control run against core's own `SQLite3_Server` on port 6030 using the identical error-emitter pattern, and several TAP harness runs — have all been clean, with the data-stream state (`DSS`) instrumented and confirmed correct on every one of them. The leading, unproven hypothesis is that the harness's bind-mounted `.so` kept a stale `dlopen`'d inode across a container that was not recreated after a rebuild, so the two early crashes may have run pre-fix code rather than being a live, reproducible defect. Track down with a full backtrace (crash_handler / `docker logs`) compared against the two on record before assuming a new occurrence is the same bug, or that it is fixed. |
+| **Resolved (final fix wave, I1): unrestricted filesystem access, default on.** `DuckDBEngine::open()` originally set only `memory_limit`/`threads`/`access_mode`, leaving DuckDB's own `enable_external_access` at its default of `true`. Any `mysql_users`/`pgsql_users` credential could run `read_csv()`/`COPY TO`/`ATTACH` against arbitrary local paths as the ProxySQL process user; `read_only=true` does not prevent this (it governs `access_mode`, not external-state access). | Added `duckdb_variables.enable_external_access`, default `false` (deny by default — overriding DuckDB's own default), applied in `DuckDBEngine::open()`. Loosening it requires the engine to reopen (DuckDB throws changing `false`→`true` on a running database); tightening could be applied live. Documented in `plugins/duckdb/README.md` §5 (Security), including that extension autoload/autoinstall are already off and unaffected by this setting. Covered by a unit test asserting the default denies `read_csv()` of a local file. |
+| **Resolved (final fix wave, C1): intermittent `assert(0)` crash in `generate_pkt_ERR`, added by Task 11 (§15).** A malformed query on the plugin's MySQL listener had twice triggered `assert(0)` at `lib/MySQL_Protocol.cpp:434`, inside `generate_pkt_ERR`, reached via the plugin's MySQL error emitter, aborting the entire ProxySQL process, Admin port included. | **Root-caused: a plugin/core `-DDEBUG` build-tier mismatch, not flakiness.** The bind-mounted-stale-`.so` hypothesis recorded here originally (and in §15 item D) was investigated and is **superseded — it was wrong.** `include/MySQL_Protocol.h`'s `bool dump_pkt;` (DEBUG-only) changes `sizeof(MySQL_Protocol)` (80 bytes release vs. 88 `-DDEBUG`); `MySQL_Data_Stream` embeds `MySQL_Protocol` **by value**, so every field after it — including `DSS`, the field `generate_pkt_ERR`'s switch reads — shifts offset (`offsetof(DSS)`: 768 vs. 776) between a release and a `-DDEBUG` build. `plugins/duckdb/Makefile`'s object rule didn't depend on `$(CXXFLAGS)`, so a plugin built with different flags than the last build silently reused stale objects instead of recompiling — the mechanism that let a release-flavoured plugin end up loaded into a `-DDEBUG` core. Fixed in two parts: the chassis loader (`lib/ProxySQL_PluginManager.cpp`) now refuses to `dlopen` a plugin whose `-DDEBUG` setting disagrees with the core's (`PROXYSQL_PLUGIN_ABI_DEBUG_BIT` in `include/ProxySQL_Plugin.h`), protecting every chassis plugin, not just this one; and the Makefile's `.o` rule now depends on a `$(ODIR)/.buildflags` stamp so a flag change forces recompilation. Reproduced and verified end-to-end before and after the fix — see `plugins/duckdb/README.md` §7 for the full writeup, including a second confirmed symptom (a silent per-connection hang via `fill_client_addr()`, not only the `assert(0)`) of the same root cause. |
 
 ## 15. Post-implementation corrections (Task 11)
 
@@ -582,14 +583,19 @@ Admin interface and this plugin. Caught before merge; the shipped default
 is `6034`. §9 now states the port defaults explicitly so this ambiguity
 cannot recur.
 
-**D — Known open defect added to §14.** An intermittent `assert(0)` in
-`generate_pkt_ERR` (`lib/MySQL_Protocol.cpp:434`), reached via the
-plugin's MySQL error emitter, aborted the entire ProxySQL process twice
-during Task 9. Roughly 500 subsequent executions across a stress
-campaign, a control run against core's own `SQLite3_Server`, and harness
-runs have been clean. This is recorded as **open and unresolved**, not as
-fixed and not as flaky — see §14's table entry for the full evidence on
-both sides.
+**D — Known open defect added to §14, later resolved in the final fix
+wave (C1).** An intermittent `assert(0)` in `generate_pkt_ERR`
+(`lib/MySQL_Protocol.cpp:434`), reached via the plugin's MySQL error
+emitter, aborted the entire ProxySQL process twice during Task 9. The
+bind-mounted-stale-`.so` hypothesis recorded here at the time was
+investigated and is **superseded — it was wrong.** The real root cause
+is a plugin/core `-DDEBUG` build-tier mismatch that shifts
+`MySQL_Data_Stream`'s member offsets (`MySQL_Protocol` is embedded by
+value and gains a DEBUG-only field), silently reproducible whenever
+`plugins/duckdb` is built with different flags than the core it loads
+into. See §14's table entry and `plugins/duckdb/README.md` §7 for the
+full mechanism and the fix (a chassis-level ABI guard plus a build-flag
+freshness check in the plugin Makefile).
 
 **E — Build-cost measurement (§4 D2).** `deps/duckdb/README.md` now
 carries a "Build cost" section. It is an **observation**, not a

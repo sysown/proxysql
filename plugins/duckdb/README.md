@@ -63,7 +63,7 @@ populates it.** The module boots with compiled-in defaults regardless
 (so the plugin itself always comes up correctly configured), but nothing
 `INSERT`s rows into the editable `duckdb_variables` admin table on boot.
 An operator who opens Admin right after a fresh install or restart and
-runs `SELECT * FROM duckdb_variables` expecting to see the seven defaults
+runs `SELECT * FROM duckdb_variables` expecting to see the eight defaults
 listed below will get zero rows, not the defaults. Two ways to get rows
 into the table: `SAVE DUCKDB VARIABLES TO MEMORY` dumps the module's
 current (default, if untouched) state into it; or, on a restart where
@@ -83,6 +83,7 @@ editable table automatically, but a truly first-ever boot does not.
 | `threads` | `2` | DuckDB's own internal worker-thread count for parallelizing a single query. Integer ≥ 1. |
 | `max_connections` | `100` | Enforced in the accept loop; rejected with a protocol-correct error before a session object is constructed. |
 | `read_only` | `false` | `true` sets `access_mode=READ_ONLY`. Rejected at validation time if combined with `database_path=:memory:` (a read-only in-memory database cannot be usefully opened). |
+| `enable_external_access` | `false` | Passed to DuckDB's own `enable_external_access` setting at open. **Deny by default — see Security below before enabling.** |
 
 ### LOAD / SAVE commands
 
@@ -103,7 +104,55 @@ dumps the module into the editable table; neither command touches the
 runtime view directly, and an edit to `duckdb_variables` is not visible
 in `runtime_duckdb_variables` until a `LOAD ... TO RUNTIME`.
 
-## 5. Connect
+## 5. Security
+
+**`enable_external_access` (default `false`) gates DuckDB's own
+`enable_external_access` setting**, which DuckDB itself defaults to
+`true` (`deps/duckdb/duckdb/src/include/duckdb/main/config.hpp`):
+*"Allow the database to access external state (through e.g.
+loading/installing modules, COPY TO/FROM, CSV readers, pandas
+replacement scans, etc)"*.
+
+**What enabling it grants, and to whom.** If set to `true`, *every*
+credential in `mysql_users`/`pgsql_users` — the same credentials your
+routed application users hold, not a separate administrative tier — can
+run queries such as `SELECT * FROM read_csv('/etc/passwd')`,
+`COPY (SELECT ...) TO '/some/path'`, or `ATTACH 'other.db'` against
+arbitrary paths reachable by the **ProxySQL process's own filesystem
+credentials**. `read_only=true` (above) does **not** prevent this: that
+setting governs DuckDB's `access_mode` (writes to the main database);
+`enable_external_access` is a separate, orthogonal gate on filesystem/
+external-state access, and DuckDB enforces it independently of
+`access_mode`.
+
+**Applying a change.** DuckDB accepts `enable_external_access` being
+tightened (`true` → `false`) on a running database, but *throws* trying
+to loosen it (`false` → `true`) on one that is already open — "Cannot
+change enable_external_access setting while database is running"
+(`deps/duckdb/duckdb/src/main/settings/custom_settings.cpp`). This
+plugin only ever applies the setting at `DuckDBEngine::open()` (plugin
+start / engine reopen), not on a live database, so both directions are
+accepted there — but that also means: **tightening this setting could in
+principle be applied live in a future change, but loosening it always
+requires the engine to reopen.** Flipping `duckdb_variables.
+enable_external_access` from `false` to `true` and running `LOAD DUCKDB
+VARIABLES TO RUNTIME` updates the *stored* configuration but has **no
+effect on an already-open engine** — do not assume it took effect just
+because the load command succeeded. Restart the plugin (or the process)
+to actually open the database with external access enabled.
+
+**What is already safe and does not need this setting.** Extension
+autoload and autoinstall are compiled **off**
+(`ENABLE_EXTENSION_AUTOLOADING:BOOL=OFF`,
+`ENABLE_EXTENSION_AUTOINSTALL:BOOL=OFF` in
+`deps/duckdb/duckdb/build/release/CMakeCache.txt`), and
+`allow_unsigned_extensions` defaults to `false`. This plugin does not
+fetch extensions from the internet, with or without
+`enable_external_access` set — do not conflate the two. What this
+setting does gate is the local-filesystem/external-state surface
+described above.
+
+## 6. Connect
 
 The plugin's listeners are independent of ProxySQL's own MySQL (6033)
 and Admin (6032) interfaces. With the defaults above:
@@ -124,7 +173,7 @@ INSERT INTO t VALUES (1), (2), (3);
 SELECT * FROM t;
 ```
 
-## 6. Limitations
+## 7. Limitations
 
 Stated plainly, not buried:
 
@@ -164,26 +213,69 @@ Stated plainly, not buried:
   ignored, matching what the SQLite3 Server does for session-state
   statements DuckDB has no equivalent for). Anything else goes to DuckDB
   as-is.
-- **Known open defect — intermittent MySQL-path crash, unresolved.** Twice
-  during this plugin's development, a malformed query on the MySQL
-  listener (port 6031) triggered `assert(0)` at
+- **Root-caused and fixed — the "intermittent MySQL-path crash" was a
+  plugin/core `-DDEBUG` build-tier mismatch, not flakiness.** An earlier
+  revision of this section described a rare `assert(0)` at
   `lib/MySQL_Protocol.cpp:434` inside `generate_pkt_ERR`, aborting the
-  **entire ProxySQL process** (including the Admin port on 6032) via the
-  plugin's MySQL error emitter. Since those two occurrences, roughly 500
-  further executions of the same code path — a stress campaign, a
-  50-iteration control run against core's own SQLite3 Server on port 6030
-  using the identical emitter pattern, and several TAP harness runs — have
-  all been clean, with the data-stream state instrumented and confirmed
-  correct on every one of them. The leading (unproven) hypothesis is that
-  the two early crashes ran against a stale `dlopen`'d `.so` inode from a
-  bind-mounted container that was not recreated after a rebuild, i.e.
-  pre-fix code. **This is not resolved and must not be described as
-  flaky.** Anyone hitting it should capture a full backtrace (see
-  `docker logs`, `crash_handler` output) and compare it against the two
-  on record before assuming it is the same defect. See the design spec's
-  risks section for the evidence on both sides.
+  entire ProxySQL process, and speculated the cause was a stale
+  `dlopen`'d `.so` inode from a bind-mounted container that hadn't been
+  recreated after a rebuild. **That hypothesis was investigated and is
+  superseded — it was wrong; the real mechanism is below.**
 
-## 7. Design note: session → connection mapping
+  Root cause: `include/MySQL_Protocol.h` declares `bool dump_pkt;` (and
+  `include/PgSQL_Session.h` declares `PgSQL_Connection*
+  dbg_extended_query_backend_conn;`) only under `#ifdef DEBUG`.
+  `MySQL_Data_Stream` holds `MySQL_Protocol myprot;` **by value**, so
+  `dump_pkt` changes `sizeof(MySQL_Protocol)` (measured: 80 bytes release
+  vs. 88 bytes `-DDEBUG`), which shifts the byte offset of every
+  `MySQL_Data_Stream` field declared after `myprot` — including `DSS`,
+  the wire-protocol send-state enum (measured `offsetof`: 768 vs. 776) —
+  between a release and a `-DDEBUG` build. `plugins/duckdb/Makefile`'s
+  object rule used to depend only on sources/headers/the DuckDB archive,
+  not on `$(CXXFLAGS)`, so building the plugin with a different `OPTZ`
+  (in particular, with or without `-DDEBUG`) than the last build silently
+  reused stale, wrongly-flavoured `.o` files instead of recompiling — the
+  exact mechanism that can put a release-built `ProxySQL_DuckDB_Plugin.so`
+  next to a `-DDEBUG` core, or vice versa, without anyone intending it.
+
+  With that skew, any plugin code that directly touches
+  `MySQL_Data_Stream`/`PgSQL_Session` members beyond `myprot` itself —
+  `duckdb_send_mysql_error()`'s `myds->DSS = STATE_QUERY_SENT_DS;`, and
+  also `duckdb_listener.cpp`'s `fill_client_addr()`, which writes
+  `client_addr`/`client_addrlen`/`addr.addr`/`addr.port` on *every*
+  accepted connection, before any query is even read — writes through an
+  offset computed from the plugin's own (mismatched) struct layout,
+  landing on a different member than intended. The specific symptom
+  observed depends on which field absorbs the wayward write: the
+  `assert(0)` described above is one confirmed outcome (`generate_pkt_ERR`
+  reads the real, untouched `DSS` field — still at its construction-time
+  default, `STATE_SLEEP` — and its state-machine `switch` falls through to
+  `default: assert(0)`); a silent, indefinite per-connection hang (the
+  connection is accepted, authenticates, and then never receives a
+  response to any query, MySQL client included) is another, reproduced via
+  the `fill_client_addr()` path, which runs earlier in the connection
+  lifecycle and does not depend on a query ever reaching an error path.
+  Both are symptoms of the same underlying memory-layout corruption, not
+  two different defects.
+
+  **Fixed in two parts:** (1) `include/ProxySQL_Plugin.h` now encodes
+  whether a plugin/core was built with `-DDEBUG` as a bit in the plugin
+  ABI descriptor's `abi_version` (`PROXYSQL_PLUGIN_ABI_DEBUG_BIT`); the
+  chassis loader (`lib/ProxySQL_PluginManager.cpp`) refuses to `dlopen` a
+  plugin whose bit disagrees with the core's, with a clear error message,
+  instead of loading it and corrupting memory. This protects every
+  chassis plugin (mysqlx, genai, duckdb), not just this one. (2)
+  `plugins/duckdb/Makefile`'s object rule now depends on a
+  `$(ODIR)/.buildflags` stamp file containing `$(CXXFLAGS)`, regenerated
+  whenever the flags change, so switching `OPTZ`/`-DDEBUG` between builds
+  forces a real recompile instead of silently reusing stale objects.
+  Building the plugin through the top-level Makefile (`make` /
+  `make debug`, optionally with `PROXYSQL40=1`) already passes matching
+  flags automatically; this defect was only reachable by building
+  `plugins/duckdb` directly with flags that didn't match the core it
+  would be loaded into.
+
+## 8. Design note: session → connection mapping
 
 - **One shared `duckdb_database`.** `DuckDBEngine` opens the database
   once (a file path or `:memory:`) at plugin start; DuckDB's own
