@@ -105,4 +105,14 @@ SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res);
 // Returns false for a null res or a result with zero columns.
 bool duckdb_result_has_unrenderable_column(duckdb_result* res);
 
+// The single-column predicate behind duckdb_result_has_unrenderable_column()
+// above -- "can duckdb_value_varchar() render a column of this type?" --
+// exported so duckdb_session.cpp's prepare-time renderability check
+// (deciding, from a duckdb_prepared_statement's column types alone,
+// BEFORE anything executes, whether the COLUMNS(*)::VARCHAR rewrap is
+// needed) can call the exact same allowlist rather than hand-maintaining
+// a second copy of it. See the .cpp for the full mirrors-DuckDB's-switch
+// rationale.
+bool duckdb_type_renders_as_text(duckdb_type t);
+
 #endif // __DUCKDB_RESULT_H

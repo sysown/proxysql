@@ -94,69 +94,6 @@ DuckDBSessionState& duckdb_session_state() {
 // against information_schema so they return live data rather than a
 // canned row.
 
-// --- C3 safety gate: is `sql` safe to run a second time? ---------------
-//
-// duckdb_execute_effective() (below) re-executes an unrenderable
-// QUERY_RESULT wrapped in a subquery to force every column to render as
-// VARCHAR. That re-execution runs the ENTIRE statement a second time --
-// including any side effects. `INSERT ... RETURNING`, `UPDATE ...
-// RETURNING`, and `DELETE ... RETURNING` all classify as QUERY_RESULT in
-// DuckDB 1.4.5 (confirmed by probe), so wrapping one unguarded is a real
-// risk of writing twice for one client statement.
-//
-// Verified by direct probe against the built library: in DuckDB 1.4.5,
-// wrapping a bare `INSERT`/`UPDATE`/`DELETE ... RETURNING` in
-// `SELECT COLUMNS(*)::VARCHAR FROM (<stmt>)` is itself a parser error
-// ("syntax error at or near INTO/SET/...", since a bare DML statement is
-// not valid FROM-clause subquery content) -- so the PRE-FIX code's
-// wrap-failure fallback already happened to prevent an actual double
-// write for every RETURNING-DML shape tested here; a probed
-// `WITH x AS (INSERT ... RETURNING id) SELECT * FROM x` fails even
-// earlier, since this DuckDB build does not implement writable CTEs at
-// all ("Not implemented Error: A CTE needs a SELECT"). That protection
-// is incidental, not structural: it depends on today's DuckDB grammar
-// rejecting these shapes, not on this code refusing to try. A future
-// DuckDB version that accepts DML in a FROM-clause subquery or adds
-// writable-CTE support would silently turn that same fallback path into
-// a real double-write, with no code here changing. This gate makes
-// correctness independent of that parser limitation: it must return
-// false for any such statement regardless of whether the current parser
-// happens to also reject it.
-bool duckdb_is_safe_to_rewrap(const char* sql, size_t len) {
-	if (sql == nullptr || len == 0) return false;
-	const std::string q = normalize(sql, len);
-	if (q.empty()) return false;
-
-	static const char* const read_keywords[] = {
-		"SELECT", "WITH", "TABLE", "VALUES", "DESCRIBE", "SHOW", "PRAGMA", "EXPLAIN"
-	};
-	size_t i = 0;
-	while (i < q.size() && std::isalpha(static_cast<unsigned char>(q[i]))) i++;
-	const std::string first_word = q.substr(0, i);
-	bool starts_with_read = false;
-	for (const char* kw : read_keywords) {
-		if (first_word == kw) { starts_with_read = true; break; }
-	}
-	if (!starts_with_read) return false;
-
-	// Belt and braces: a CTE can hide DML inside a WITH, e.g.
-	// `WITH x AS (INSERT ... RETURNING id) SELECT * FROM x`, which would
-	// otherwise pass the keyword-prefix check above. Reject a whole-word
-	// "RETURNING" anywhere in the statement, not just at the top level.
-	const std::string needle = "RETURNING";
-	size_t pos = 0;
-	while ((pos = q.find(needle, pos)) != std::string::npos) {
-		const bool left_ok = (pos == 0) ||
-			!(std::isalnum(static_cast<unsigned char>(q[pos - 1])) || q[pos - 1] == '_');
-		const size_t end = pos + needle.size();
-		const bool right_ok = (end >= q.size()) ||
-			!(std::isalnum(static_cast<unsigned char>(q[end])) || q[end] == '_');
-		if (left_ok && right_ok) return false;
-		pos = end;
-	}
-	return true;
-}
-
 namespace {
 
 // Strips trailing whitespace and any trailing `;` characters (there may
@@ -182,20 +119,128 @@ std::string trim_trailing_semicolons(const std::string& sql) {
 
 } // namespace
 
-// --- duckdb_execute_effective: DDL/DML/QUERY_RESULT dispatch (C2/C3) ---
+// --- duckdb_execute_effective: DDL/DML/QUERY_RESULT dispatch (C2), and
+// the unrenderable-column rewrap decided BEFORE execution (C3) ---------
 //
 // Runs `effective` and translates the outcome into a DuckDBExecOutcome
 // with no protocol-specific code in it, so the templated handler below
 // stays a thin packet-in/response-out shim and this logic can be
 // exercised directly against a live duckdb_connection in tests.
+//
+// C3 background: duckdb_value_varchar() (used by
+// duckdb_result_to_sqlite3()) cannot render 11+ column types (LIST,
+// STRUCT, MAP, ARRAY, UNION, UUID, ENUM, BIT, TIMESTAMP_S/MS/NS, ...) --
+// it silently converts them to a null field, indistinguishable from a
+// genuine SQL NULL. The fix is to run `SELECT COLUMNS(*)::VARCHAR FROM
+// (<effective sql>)` instead, which casts every column (nested values
+// included, e.g. `[1, 2, 3]`) to a renderable VARCHAR.
+//
+// An earlier version of this function executed `effective` first via
+// duckdb_query(), inspected the REAL result for an unrenderable column,
+// and -- if found -- ran the wrapped SQL as a SECOND, separate
+// duckdb_query() call, guarded by a lexical "is this safe to run twice"
+// check. That was wrong: `effective` is not necessarily side-effect-free
+// just because it starts with SELECT/WITH. `SELECT [nextval('s')]`
+// returns a LIST (unrenderable) and advances the sequence on its FIRST
+// execution; the lexical gate passed it (no RETURNING, starts with
+// SELECT) and re-ran it, silently advancing the sequence a second time
+// and returning the wrong value to the client. The same problem applies
+// to any volatile function (random(), now(), uuid(), ...): a lexical
+// "looks like a read" check cannot tell side-effect-free apart from
+// side-effect-free-looking.
+//
+// The fix here is structural rather than lexical: decide whether the
+// rewrap is needed by inspecting a *prepared* statement's column types
+// (duckdb_prepared_statement_column_type(), via
+// duckdb_type_renders_as_text() in duckdb_result.h) -- preparing a
+// statement parses and binds it but does NOT execute it (confirmed by
+// probe: preparing `SELECT [nextval('s')]` does not advance the
+// sequence) -- and only THEN execute exactly one of the two candidate
+// statements (original or wrapped), via duckdb_execute_prepared().
+// `effective` is therefore executed exactly once no matter which way
+// the decision goes, which is what makes the old lexical safety gate
+// (duckdb_is_safe_to_rewrap) unnecessary: it existed solely to stop a
+// second execution that this design no longer performs, so it has been
+// removed rather than kept as inert legacy code.
+//
+// A prepared statement must always be destroyed via
+// duckdb_destroy_prepare(), even when duckdb_prepare() itself failed
+// (documented in duckdb.h above duckdb_prepare()) -- every prepare below
+// is paired with a destroy on every path.
 DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective) {
 	DuckDBExecOutcome outcome;
 
+	duckdb_prepared_statement stmt = nullptr;
+	if (duckdb_prepare(conn, effective.c_str(), &stmt) != DuckDBSuccess) {
+		// duckdb_prepare_error() must be read BEFORE duckdb_destroy_prepare()
+		// -- like duckdb_result_error(), the message lives inside the
+		// prepared statement and does not survive its destruction.
+		const char* msg = duckdb_prepare_error(stmt);
+		outcome.ok = false;
+		outcome.error = msg != nullptr ? msg : "DuckDB prepare failed";
+		duckdb_destroy_prepare(&stmt);
+		return outcome;
+	}
+
+	// Inspect the prepared statement's output schema -- no execution has
+	// happened yet -- for any column duckdb_value_varchar() cannot
+	// render. DDL/DML's 1-column "Count" result (see duckdb_result.h) is
+	// always BIGINT, which renders fine, so this is false for every
+	// CREATE/SET/plain INSERT/UPDATE/DELETE; it can only be true for a
+	// genuine QUERY_RESULT-shaped statement (a SELECT, or DML with
+	// RETURNING).
+	bool needs_wrap = false;
+	const idx_t ncols = duckdb_prepared_statement_column_count(stmt);
+	for (idx_t c = 0; c < ncols; c++) {
+		if (!duckdb_type_renders_as_text(duckdb_prepared_statement_column_type(stmt, c))) {
+			needs_wrap = true;
+			break;
+		}
+	}
+
+	// `exec_stmt` is whichever prepared statement we end up actually
+	// running -- exactly one, exactly once, below.
+	duckdb_prepared_statement exec_stmt = stmt;
+
+	if (needs_wrap) {
+		// The subquery is wrapped with newlines around `effective`
+		// (`FROM (\n<sql>\n)`), not straight concatenation: a trailing
+		// `-- comment` immediately before a `)` would otherwise swallow
+		// it, breaking the wrap silently. Trailing `;` (almost every CLI
+		// client sends one) is stripped first for the same reason -- a
+		// `;` inside the subquery is itself a parser error.
+		const std::string trimmed = trim_trailing_semicolons(effective);
+		const std::string wrapped =
+			"SELECT COLUMNS(*)::VARCHAR FROM (\n" + trimmed + "\n)";
+
+		duckdb_prepared_statement wrap_stmt = nullptr;
+		if (duckdb_prepare(conn, wrapped.c_str(), &wrap_stmt) == DuckDBSuccess) {
+			// The wrap parses -- which on its own proves `trimmed` is
+			// valid FROM-clause subquery content, i.e. a read-shaped
+			// statement, since DuckDB's grammar rejects a bare
+			// INSERT/UPDATE/DELETE (even with RETURNING) in that
+			// position (confirmed by probe: "syntax error at or near
+			// INTO") and this build has no writable-CTE support either.
+			// Discard the original prepared statement WITHOUT ever
+			// executing it, and run the wrap instead.
+			duckdb_destroy_prepare(&stmt);
+			exec_stmt = wrap_stmt;
+		} else {
+			// The wrap doesn't parse (e.g. RETURNING DML, which cannot
+			// legally sit inside a FROM-clause subquery in this DuckDB
+			// grammar). Fall back to the ORIGINAL prepared statement --
+			// still not executed yet either way -- and accept the
+			// degraded (NULL-rendering) output for the unrenderable
+			// column: degraded output beats no output for a query that
+			// is about to succeed.
+			duckdb_destroy_prepare(&wrap_stmt);
+		}
+	}
+
 	duckdb_result res;
-	if (duckdb_query(conn, effective.c_str(), &res) != DuckDBSuccess) {
-		// duckdb_result_error() must be read BEFORE duckdb_destroy_result()
-		// -- the error message lives inside the result and does not
-		// survive destruction.
+	const duckdb_state exec_state = duckdb_execute_prepared(exec_stmt, &res);
+	duckdb_destroy_prepare(&exec_stmt);
+	if (exec_state != DuckDBSuccess) {
 		const char* msg = duckdb_result_error(&res);
 		outcome.ok = false;
 		outcome.error = msg != nullptr ? msg : "DuckDB query failed";
@@ -224,56 +269,10 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 		return outcome;
 	}
 
-	// rtype == DUCKDB_RESULT_TYPE_QUERY_RESULT from here on.
-	//
-	// duckdb_value_varchar() (used by duckdb_result_to_sqlite3()) cannot
-	// render 11+ column types (LIST, STRUCT, MAP, ARRAY, UNION, UUID,
-	// ENUM, BIT, TIMESTAMP_S/MS/NS, ...) -- it silently converts them to
-	// a null field, indistinguishable from a genuine SQL NULL. When any
-	// column of this result is such a type AND `effective` is provably
-	// safe to run again (duckdb_is_safe_to_rewrap -- e.g. NOT
-	// `INSERT ... RETURNING`), re-run the query wrapped as
-	// `SELECT COLUMNS(*)::VARCHAR FROM (<effective sql>)`, which casts
-	// every column (nested values included, e.g. `[1, 2, 3]`) to a
-	// renderable VARCHAR, and convert THAT result instead.
-	//
-	// Three caveats, all intentional:
-	//  - The wrap renames duplicate column names (`SELECT 1 AS a, 2 AS a`
-	//    -> `a`, `a_1`), which is why we only wrap when a column actually
-	//    needs it -- `SELECT * FROM a JOIN b` sharing a column name is
-	//    common and must stay unwrapped.
-	//  - This re-executes the query a second time on this path -- which
-	//    is exactly why duckdb_is_safe_to_rewrap must gate it: a
-	//    statement that is not lexically a read is never re-executed,
-	//    full stop, regardless of what its unrenderable column is.
-	//  - The subquery is wrapped with newlines around `effective`
-	//    (`FROM (\n<sql>\n)`), not straight concatenation: a trailing
-	//    `-- comment` immediately before a `)` would otherwise swallow
-	//    it, breaking the wrap silently.
-	//
-	// If the statement isn't safe to rewrap, or the wrapped re-query
-	// itself fails, we fall back to sending the ORIGINAL (possibly
-	// NULL-rendering) result rather than erroring out -- degraded output
-	// beats no output for a query that DID succeed.
-	if (duckdb_result_has_unrenderable_column(&res) &&
-	    duckdb_is_safe_to_rewrap(effective.c_str(), effective.size())) {
-		const std::string trimmed = trim_trailing_semicolons(effective);
-		const std::string wrapped =
-			"SELECT COLUMNS(*)::VARCHAR FROM (\n" + trimmed + "\n)";
-		duckdb_result res2;
-		if (duckdb_query(conn, wrapped.c_str(), &res2) == DuckDBSuccess) {
-			duckdb_destroy_result(&res);
-			outcome.has_resultset = true;
-			outcome.result = duckdb_result_to_sqlite3(&res2);
-			duckdb_destroy_result(&res2);
-			return outcome;
-		}
-		// Wrapped re-query failed (e.g. a type COLUMNS(*)::VARCHAR can't
-		// cast) -- fall back to the original, possibly NULL-rendering
-		// result rather than erroring on a query that already succeeded.
-		duckdb_destroy_result(&res2);
-	}
-
+	// rtype == DUCKDB_RESULT_TYPE_QUERY_RESULT: either the original
+	// query (renderable, or unrenderable-but-fell-back-to-degraded), or
+	// the wrap (every column now VARCHAR). Either way it already ran
+	// exactly once above, so just convert it.
 	outcome.has_resultset = true;
 	outcome.result = duckdb_result_to_sqlite3(&res);
 	duckdb_destroy_result(&res);

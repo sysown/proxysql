@@ -59,7 +59,7 @@ SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res) {
 // list, including nested/composite types (LIST, STRUCT, MAP, ARRAY, UNION)
 // and non-nested scalars that are easy to assume "just work" (UUID, ENUM,
 // BIT, TIME_TZ, TIMESTAMP_TZ, BIGNUM, TIMESTAMP_S/MS/NS).
-static bool duckdb_type_renders_as_text(duckdb_type t) {
+bool duckdb_type_renders_as_text(duckdb_type t) {
 	switch (t) {
 		case DUCKDB_TYPE_BOOLEAN:
 		case DUCKDB_TYPE_TINYINT:

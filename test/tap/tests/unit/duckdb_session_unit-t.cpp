@@ -12,10 +12,6 @@ DuckDBIntercept classify(const char* s) {
 	return duckdb_classify_query(s, std::strlen(s));
 }
 
-bool safe_to_rewrap(const char* s) {
-	return duckdb_is_safe_to_rewrap(s, std::strlen(s));
-}
-
 // Runs a single scalar-count query (e.g. "SELECT COUNT(*) FROM t") and
 // returns the integer value of its single cell, or -1 on any failure.
 // Used to prove double-execution does NOT happen: the whole point of the
@@ -39,7 +35,7 @@ int scalar_count(duckdb_connection conn, const char* sql) {
 } // namespace
 
 int main() {
-	plan(23);
+	plan(21);
 
 	ok(classify("SELECT @@version") == DuckDBIntercept::version,
 	   "SELECT @@version is intercepted");
@@ -74,24 +70,6 @@ int main() {
 		   "the version intercept builds a one-cell resultset");
 	}
 
-	// --- duckdb_is_safe_to_rewrap: the C3 double-execution safety gate ---
-	//
-	// A plain read is safe to re-execute; anything with side effects, or
-	// with DML hidden inside a CTE, must never be, since
-	// duckdb_execute_effective() would otherwise run it a second time.
-	ok(safe_to_rewrap("SELECT 1") == true,
-	   "a plain SELECT is safe to rewrap");
-	ok(safe_to_rewrap("INSERT INTO t(n) VALUES (1) RETURNING id") == false,
-	   "INSERT ... RETURNING is not safe to rewrap");
-	ok(safe_to_rewrap("UPDATE t SET n=2 RETURNING id") == false,
-	   "UPDATE ... RETURNING is not safe to rewrap");
-	ok(safe_to_rewrap("DELETE FROM t RETURNING id") == false,
-	   "DELETE ... RETURNING is not safe to rewrap");
-	ok(safe_to_rewrap(
-	       "WITH x AS (INSERT INTO t(n) VALUES (1) RETURNING id) SELECT * FROM x") == false,
-	   "DML hidden inside a CTE's WITH clause is not safe to rewrap, "
-	   "even though the statement starts with SELECT/WITH");
-
 	// --- Live-connection behavioural tests -------------------------------
 
 	duckdb_database db = nullptr;
@@ -105,19 +83,17 @@ int main() {
 		// Regression guard for the C3 double-execution risk: INSERT ...
 		// RETURNING over a UUID column classifies as QUERY_RESULT (not
 		// CHANGED_ROWS) in DuckDB 1.4.5, and its "id" column is
-		// unrenderable, so this statement reaches the re-query branch
-		// duckdb_is_safe_to_rewrap gates. NOTE, verified directly: in
-		// this DuckDB build the wrap itself is a parser error for a bare
-		// INSERT ("syntax error at or near INTO"), so the PRE-FIX code's
-		// wrap-failure fallback already happened to keep this specific
-		// case at one row -- disabling the gate and re-running this exact
-		// test still passes for that reason. The gate is still the
-		// correct fix (see the long comment on duckdb_is_safe_to_rewrap):
-		// it makes correctness independent of that parser limitation
-		// rather than relying on it. This test is kept as the intended
-		// regression guard -- assert row count, not response shape --
-		// should a future DuckDB grammar change ever make the wrap
-		// parse.
+		// unrenderable, so duckdb_execute_effective() decides (from the
+		// PREPARED statement's schema, before executing anything) that
+		// this needs the rewrap. Preparing the wrap itself then fails --
+		// verified directly: in this DuckDB build, wrapping a bare
+		// INSERT in `SELECT COLUMNS(*)::VARCHAR FROM (<stmt>)` is a
+		// parser error ("syntax error at or near INTO"), since a bare
+		// DML statement is not valid FROM-clause subquery content -- so
+		// duckdb_execute_effective() falls back to the ORIGINAL prepared
+		// statement, which has not executed yet at that point either.
+		// Either way `effective` runs exactly once: assert row count,
+		// not response shape, which is what actually proves that.
 		duckdb_result setup;
 		if (duckdb_query(conn,
 		        "CREATE TABLE t(id UUID DEFAULT gen_random_uuid(), n INTEGER)",
@@ -138,8 +114,49 @@ int main() {
 		std::unique_ptr<SQLite3_result> r(outcome.result);
 		ok(outcome.has_resultset && r && r->rows_count == 1 &&
 		   r->rows[0]->fields[0] == nullptr,
-		   "the RETURNING id is sent as NULL (degraded, not re-executed) "
-		   "since the statement is not safe to rewrap");
+		   "the RETURNING id is sent as NULL (degraded output) since the "
+		   "wrap could not be prepared for this statement shape");
+	}
+
+	{
+		// The reviewer's example for the P1 double-execution finding:
+		// `SELECT [nextval('s')]` returns a LIST (unrenderable), so it
+		// takes the rewrap path -- but nextval() is NOT idempotent. The
+		// earlier "execute original, detect unrenderable column, execute
+		// wrapped as a SECOND duckdb_query() call" design would advance
+		// the sequence TWICE per client statement and return the second
+		// (discarded-looking) value while silently burning the first.
+		// duckdb_execute_effective() now decides whether to wrap from a
+		// *prepared* statement's column types -- which does not execute
+		// anything -- so `effective` runs exactly once regardless of
+		// which branch (original vs. wrapped) is chosen. The sequence
+		// ending up at exactly 1, not 2, is the actual proof of that;
+		// checking the rendered value alone would NOT catch a double
+		// execution (both executions return a list, just with different
+		// contents).
+		duckdb_result setup;
+		if (duckdb_query(conn, "CREATE SEQUENCE seq_nextval_once", &setup) != DuckDBSuccess) {
+			BAIL_OUT("could not create test sequence seq_nextval_once");
+		}
+		duckdb_destroy_result(&setup);
+
+		const DuckDBExecOutcome outcome =
+			duckdb_execute_effective(conn, "SELECT [nextval('seq_nextval_once')] AS v");
+		ok(outcome.ok,
+		   "SELECT [nextval(...)] over an unrenderable LIST column does not error");
+
+		const int cur = scalar_count(conn, "SELECT currval('seq_nextval_once')");
+		ok(cur == 1,
+		   "nextval() advances the sequence EXACTLY ONCE per client statement "
+		   "-- the P1 regression: a lexical-only safety check would have let "
+		   "this same statement run twice");
+
+		std::unique_ptr<SQLite3_result> r(outcome.result);
+		ok(outcome.has_resultset && r && r->rows_count == 1 &&
+		   r->rows[0]->fields[0] != nullptr &&
+		   std::string(r->rows[0]->fields[0]) == "[1]",
+		   "the rendered value ([1]) matches the single sequence advance "
+		   "proved above, not a second, discarded execution's value");
 	}
 
 	{

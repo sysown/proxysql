@@ -52,27 +52,6 @@ void duckdb_send_mysql_error(MySQL_Session* sess, uint16_t code,
 void duckdb_send_pgsql_error(PgSQL_Session* sess, const char* sqlstate,
                              const char* msg);
 
-// Exposed for testing (not called from the header's other public API
-// directly -- duckdb_execute_effective() below is the actual gate).
-// Returns true only when `sql` is lexically a read: it starts with a
-// read keyword (SELECT, WITH, TABLE, VALUES, DESCRIBE, SHOW, PRAGMA,
-// EXPLAIN) AND contains no whole-word "RETURNING" anywhere in the
-// statement (belt and braces -- a CTE can hide DML inside a WITH, e.g.
-// `WITH x AS (INSERT ... RETURNING id) SELECT * FROM x`, which would
-// otherwise pass the keyword-prefix check alone). Matching ignores case
-// and collapses whitespace exactly like duckdb_classify_query.
-//
-// This exists because the C3 unrenderable-column re-query
-// (duckdb_execute_effective) executes `sql` a SECOND time verbatim
-// (wrapped in a subquery); re-executing anything that is not provably
-// read-only risks running a DML statement twice. In DuckDB 1.4.5 the
-// wrap syntax itself happens to reject bare DML (a parser error, caught
-// by the wrap-failure fallback) -- but that protection is incidental to
-// today's grammar, not structural, so this gate does not rely on it.
-// When this returns false, the re-query is skipped entirely and the
-// original (possibly NULL-rendering) result is sent instead.
-bool duckdb_is_safe_to_rewrap(const char* sql, size_t len);
-
 // Outcome of duckdb_execute_effective(): everything the session handler
 // needs to know to respond to the client, with no protocol-specific
 // code in it. Exposed so it can be exercised directly against a live
@@ -88,12 +67,20 @@ struct DuckDBExecOutcome {
 
 // Runs `effective` (already intercept-rewritten DuckDB SQL) on `conn`
 // and applies the DDL/DML/QUERY_RESULT dispatch (C2, via
-// duckdb_result_return_type()) and the unrenderable-column re-query
-// (C3, via duckdb_result_has_unrenderable_column() and
-// duckdb_is_safe_to_rewrap()). The re-query is skipped -- and the
-// original, possibly NULL-rendering result sent instead -- both when
-// `effective` is not lexically a read (see duckdb_is_safe_to_rewrap)
-// and when the wrapped re-query itself fails.
+// duckdb_result_return_type()) and the unrenderable-column rewrap (C3).
+//
+// C3 is decided from a *prepared* statement's column types -- via
+// duckdb_prepared_statement_column_type() and
+// duckdb_type_renders_as_text() (duckdb_result.h) -- BEFORE anything is
+// executed, so `effective` runs exactly once no matter which way the
+// decision goes. There used to be a lexical "is this safe to run a
+// second time" gate (duckdb_is_safe_to_rewrap) here; it is gone because
+// nothing is ever run a second time any more, so it had nothing left to
+// guard -- see the long comment on duckdb_execute_effective's
+// definition for the full reasoning, including why a bare DML statement
+// can never reach the wrapped-execution path at all (it fails to
+// *parse* as `SELECT COLUMNS(*)::VARCHAR FROM (<stmt>)`, so the decision
+// falls back to the original statement before anything runs).
 DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective);
 
 // Registered as sess->handler_function. `pa` is core's hardcoded global
