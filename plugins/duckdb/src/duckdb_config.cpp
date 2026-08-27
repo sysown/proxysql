@@ -14,7 +14,14 @@ const int         kDefaultThreads        = 2;
 const int         kDefaultMaxConnections = 100;
 const bool        kDefaultReadOnly       = false;
 const char* const kDefaultMysqlIfaces    = "0.0.0.0:6031";
-const char* const kDefaultPgsqlIfaces    = "0.0.0.0:6032";
+// 6032 is ProxySQL's own Admin interface (admin_variables.mysql_ifaces,
+// etc/proxysql.cnf). Since duckdb_listener.cpp binds with SO_REUSEPORT,
+// defaulting to 6032 here would let the kernel silently split incoming
+// Admin connections between the real Admin interface and this plugin
+// instead of failing the bind outright. 6034 is unused elsewhere in this
+// tree (6030 sqlite3-server, 6031 duckdb mysql, 6032 admin, 6033 mysql
+// proxy, 6070/6080/6090 clickhouse).
+const char* const kDefaultPgsqlIfaces    = "0.0.0.0:6034";
 
 bool parse_int(const std::string& s, long& out) {
 	if (s.empty()) return false;
