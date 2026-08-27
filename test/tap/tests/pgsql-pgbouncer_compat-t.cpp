@@ -158,7 +158,7 @@ static PgBouncer::Config build_representative_config() {
 
 	PgBouncer::AuthFileEntry auth;
 	auth.username = "appuser";
-	auth.password = "appsecret";
+	auth.password = "appsecret"; // NOSONAR(cpp:S2068): synthetic fixture value for an in-memory PgBouncer::Config; never reaches a real credential store.
 	auth.type = PgBouncer::AuthType::PLAIN;
 	config.auth_entries.push_back(auth);
 

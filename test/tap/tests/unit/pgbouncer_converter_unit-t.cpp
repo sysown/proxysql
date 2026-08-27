@@ -88,7 +88,7 @@ void test_wildcard_database() {
 
     PgBouncer::AuthFileEntry auth;
     auth.username = "testuser";
-    auth.password = "secret";
+    auth.password = "secret"; // NOSONAR(cpp:S2068): synthetic fixture value; the converter is exercised entirely in memory.
     auth.type = PgBouncer::AuthType::PLAIN;
     config.auth_entries.push_back(auth);
 
@@ -110,13 +110,13 @@ void test_user_pool_mode_mapping() {
 
     PgBouncer::AuthFileEntry auth1;
     auth1.username = "session_user";
-    auth1.password = "pass1";
+    auth1.password = "pass1"; // NOSONAR(cpp:S2068): synthetic fixture value.
     auth1.type = PgBouncer::AuthType::PLAIN;
     config.auth_entries.push_back(auth1);
 
     PgBouncer::AuthFileEntry auth2;
     auth2.username = "txn_user";
-    auth2.password = "pass2";
+    auth2.password = "pass2"; // NOSONAR(cpp:S2068): synthetic fixture value.
     auth2.type = PgBouncer::AuthType::PLAIN;
     config.auth_entries.push_back(auth2);
 
@@ -387,19 +387,19 @@ void test_hashed_password_is_flagged() {
 
     PgBouncer::AuthFileEntry md5e;
     md5e.username = "alice";
-    md5e.password = "md5d41d8cd98f00b204e9800998ecf8427";
+    md5e.password = "md5d41d8cd98f00b204e9800998ecf8427"; // NOSONAR(cpp:S2068): md5 of the empty string, used to assert the MD5 verifier is reported as unusable.
     md5e.type = PgBouncer::AuthType::MD5;
     config.auth_entries.push_back(md5e);
 
     PgBouncer::AuthFileEntry scram;
     scram.username = "bob";
-    scram.password = "SCRAM-SHA-256$4096:c2FsdA==$c3Ry:c3Ry";
+    scram.password = "SCRAM-SHA-256$4096:c2FsdA==$c3Ry:c3Ry"; // NOSONAR(cpp:S2068): structurally-valid but meaningless verifier ("salt"/"str" base64), used to assert SCRAM is reported as unusable.
     scram.type = PgBouncer::AuthType::SCRAM;
     config.auth_entries.push_back(scram);
 
     PgBouncer::AuthFileEntry plain;
     plain.username = "carol";
-    plain.password = "secret";
+    plain.password = "secret"; // NOSONAR(cpp:S2068): synthetic fixture value; the control case that must NOT be reported.
     plain.type = PgBouncer::AuthType::PLAIN;
     config.auth_entries.push_back(plain);
 
