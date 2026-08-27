@@ -150,9 +150,10 @@ templated-SQL-extraction claim held there without modification.
 1. **`include/PgSQL_Protocol.h` — `PgSQL_Protocol::get_header()` made
    public.** It was private. It is the only route to the SQL text on this
    path: unlike the MySQL path, `PgSQL_Session::CurrentQuery` is not
-   populated before `handler_function` runs (dispatch happens at
-   `lib/PgSQL_Session.cpp:2282`; `CurrentQuery.begin()` only happens on
-   other branches, at `:2370`). Reimplementing `get_header()`'s v2/v3
+   populated before `handler_function` runs (the `PROXYSQL_SESSION_SQLITE`
+   dispatch gate is `lib/PgSQL_Session.cpp:2279-2293`, the same site item 2
+   below modifies; `CurrentQuery.begin()` only happens on other branches,
+   at `:2384`). Reimplementing `get_header()`'s v2/v3
    packet-format parsing in the plugin instead of exposing it would have
    duplicated 60+ lines of wire-format logic that core already gets
    right.
@@ -466,7 +467,13 @@ annotated `@proxysql_min_version:4.0`, mirroring
 `test/tap/groups/groups.json:133-142`:
 
 - `duckdb_result_unit-t` — conversion across integer, float, decimal,
-  timestamp, blob, `LIST` and `STRUCT`; NULL handling; empty resultsets.
+  timestamp, and blob; NULL handling; empty resultsets; and (**corrected
+  by Task 11, see §15** — this originally implied `LIST`/`STRUCT` convert
+  like the scalar types, which §7's correction shows is false) that
+  `LIST`, `STRUCT`, and `UUID` columns correctly degrade to a null field
+  through `duckdb_value_varchar()` and are flagged by
+  `duckdb_result_has_unrenderable_column()`, not that their values
+  convert.
 - `duckdb_config_unit-t` — variable and iface parsing; the `read_only` plus
   `:memory:` rejection.
 - `test_duckdb_plugin_load-t` — dlopen, descriptor, ABI version, clean unload.
@@ -489,9 +496,26 @@ Tests are registered in `groups.json` only; the pattern rule in
 `test/tap/tests/Makefile` builds `<name>-t` from `<name>-t.cpp` with no
 Makefile change.
 
-No test is required for "no impact when the plugin is not loaded": by D3
-nothing outside `plugins/duckdb/`, `deps/duckdb/` and build glue changes, so
-the existing suites cover it by construction.
+**Corrected by Task 11 (post-implementation) — see §15.** This paragraph
+originally read the same way D3 originally did: "by D3 nothing outside
+`plugins/duckdb/`, `deps/duckdb/` and build glue changes, so the existing
+suites cover it by construction." That premise is false for the same
+reason D3's is — two core files did change
+(`include/PgSQL_Protocol.h`, `lib/PgSQL_Session.cpp`) — so an argument
+built on "nothing changed" cannot stand here either.
+
+The surviving argument is narrower: both core changes are inert for
+every session that isn't this plugin's. Making `get_header()` public
+changes no behavior at any existing call site (its body is untouched);
+adding `PROXYSQL_SESSION_SQLITE` to the PostgreSQL query-dispatch gate
+only matters for a session of that type on the PostgreSQL path, and no
+such session existed before this plugin created one (the SQLite3 Server
+has always been MySQL-only). So the existing test suites — which
+exercise every session type and code path that predates this plugin —
+still cover "no impact when the plugin is not loaded" by construction,
+just not for the reason ("nothing changed") originally given. No new
+test was added for this criterion; the reasoning above is why one still
+isn't required, not the original (false) "empty diff" premise.
 
 ## 13. Documentation deliverables
 
@@ -577,3 +601,42 @@ cores) are read back from the two occasions this dep genuinely was built
 from scratch earlier in the sub-project, not freshly measured. A real
 controlled measurement on an actual CI runner is still owed before D2's
 gating decision can be considered settled with real data.
+
+**F — Follow-up sweep (post-review).** A first pass at this section
+fixed D3, §7, and §9 directly but missed that §12 (Testing) repeated
+D3's original "nothing outside `plugins/duckdb/`... changes" premise
+almost verbatim to justify skipping a test — leaving the document
+correcting the claim in one place while still asserting it, unchanged,
+a few sections later. Fixed: §12 now states the same correction and
+gives the narrower, still-true argument (both core changes are inert
+for every session type that predates this plugin) for why no test was
+still added, rather than repeating the false "nothing changed" premise.
+A full-document sweep for every other repetition of the corrected
+claims turned up two more, both now fixed:
+
+- §12's `duckdb_result_unit-t` bullet described that unit test as
+  covering "conversion across ... `LIST` and `STRUCT`", the same
+  overclaim §7 makes about `duckdb_value_varchar()` itself. Corrected to
+  say what the test actually asserts (checked directly against
+  `test/tap/tests/unit/duckdb_result_unit-t.cpp`): that `LIST`,
+  `STRUCT`, and `UUID` degrade to a null field and get flagged by
+  `duckdb_result_has_unrenderable_column()`, not that their values
+  convert.
+- The `include/PgSQL_Protocol.h` bullet in D3's numbered list cited
+  `lib/PgSQL_Session.cpp:2282` and `:2370` for the dispatch gate and
+  `CurrentQuery.begin()` respectively — both copied from the task brief
+  without checking them against the file as it stands. Verified against
+  the current source: the gate is `2279-2293` (matching the range item 2
+  already used) and `CurrentQuery.begin()` for this branch is at `2384`.
+  Both citations corrected and now consistent with each other.
+
+The 6032/6034 port correction (C3) and the §7 nested-types correction
+(C2) were each already applied everywhere they occurred in the document
+at the time of the original pass — the sweep found no further
+uncorrected instance of either. Confirmed by re-reading every `grep -n`
+hit for `"6032"`, `"renders"`, `"at no cost"`, `"for free"`, and `"UUID"`
+in the document: every remaining `6032` hit is a correction explaining
+the earlier draft's mistake (§9, and this section), not a live default
+or example; the one remaining `"for free"` hit (§4, on F3/authentication
+semantics) is unrelated to the type-mapping claim and is accurate as
+written.
