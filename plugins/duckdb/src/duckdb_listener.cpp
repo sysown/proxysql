@@ -14,6 +14,8 @@
 #include "MySQL_Data_Stream.h"
 #include "PgSQL_Data_Stream.h"
 #include "MySQL_Protocol.h"
+#include "MySQL_Query_Processor.h"
+#include "PgSQL_Query_Processor.h"
 
 #include <arpa/inet.h>
 #include <cerrno>
@@ -389,6 +391,42 @@ void DuckDBListener::run_session(int client_fd) {
 
 	Thr* thr = new Thr();
 	thr->curtime = monotonic_time();
+	// Required per-thread Query_Processor init. MySQL_Thread::init() /
+	// PgSQL_Thread::init() -- the canonical thread-startup path used by
+	// every other core accept loop, including src/SQLite3_Server.cpp's own
+	// child_mysql() for the same PROXYSQL_SESSION_SQLITE session type --
+	// always call GloMyQPro->init_thread() / GloPgQPro->init_thread()
+	// before refresh_variables(). This constructs `Thr` directly via
+	// `new Thr()` rather than through init(), so without this call the
+	// thread-local Query_Processor rule table (_thr_SQP_rules, a `__thread`
+	// pointer -- lib/Query_Processor.cpp) is left null for the life of the
+	// thread. MySQL_Session::handler()'s query-processing path is not
+	// skipped for PROXYSQL_SESSION_SQLITE (only the eventual backend-routing
+	// decision is, via the plugin's handler_function); left uninitialized,
+	// every query on this connection hung indefinitely with its
+	// connection thread spinning at ~100% CPU instead of returning a
+	// response -- reproduced end-to-end (Task 9) with a real MySQL client:
+	// AUTH completes, but SELECT 42 (and even the @@VERSION fast-path
+	// query) never got a reply. Confirmed fixed by adding this call:
+	// query round-trip time went from "never returns" to ~4ms.
+	// ~MySQL_Thread()/~PgSQL_Thread() unconditionally call end_thread()
+	// (see the wait_for_glo_qpro_{mysql,pgsql} comment above), so leaving
+	// init_thread() uncalled also meant end_thread() ran against never-
+	// initialized per-thread state on every connection teardown. The
+	// pairing is symmetric for both protocols: register_session() (called
+	// from create_new_session_and_client_data_stream() below, via
+	// Base_Thread.cpp) self-allocates `mysql_sessions` the first time a
+	// session is registered on a thread that skipped init(), so the
+	// destructor's `if (mysql_sessions)` guard around end_thread() is true
+	// regardless -- end_thread() always ran here, unpaired, before this
+	// fix. And this call site sits after the wait_for_glo_qpro_{mysql,
+	// pgsql} gate above, so GloMyQPro/GloPgQPro are already confirmed
+	// non-null by the time either init_thread() call below runs.
+	if constexpr (std::is_same_v<Thr, MySQL_Thread>) {
+		GloMyQPro->init_thread();
+	} else {
+		GloPgQPro->init_thread();
+	}
 	// Left null on purpose: core casts gen_args to SQLite3_Session* for
 	// PROXYSQL_SESSION_SQLITE and null-checks first. Anything else here
 	// would be type confusion.
