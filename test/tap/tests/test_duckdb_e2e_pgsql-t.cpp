@@ -55,11 +55,22 @@ int main(int argc, char** argv) {
 
 	{
 		// CommandComplete tag: SQLite3_to_Postgres derives it from the
-		// first word of the query, so "SELECT n" must come back.
-		PGresult* r = PQexec(c, "SELECT 1 UNION ALL SELECT 2");
+		// first whitespace-delimited word of whatever string it is
+		// handed. "SHOW TABLES" is the discriminator that actually
+		// proves which string that is: duckdb_classify_query() (in
+		// duckdb_session.cpp) intercepts it and *rewrites* `effective`
+		// to "SELECT table_name FROM information_schema.tables ...",
+		// while the ORIGINAL `sql` -- "SHOW TABLES" -- is what
+		// duckdb_send_result() must pass to SQLite3_to_Postgres(). A
+		// plain "SELECT ..." query can't distinguish the two, because
+		// for such a query `effective == sql` byte-for-byte and the
+		// tag would read "SELECT" regardless of which one was passed.
+		// If the rewritten form ever leaked through instead, this tag
+		// would read "SELECT", not "SHOW".
+		PGresult* r = PQexec(c, "SHOW TABLES");
 		ok(PQresultStatus(r) == PGRES_TUPLES_OK &&
-		   std::strncmp(PQcmdStatus(r), "SELECT", 6) == 0,
-		   "the CommandComplete tag says SELECT");
+		   std::strncmp(PQcmdStatus(r), "SHOW", 4) == 0,
+		   "the CommandComplete tag says SHOW (the original sql, not the rewritten effective query)");
 		PQclear(r);
 	}
 
@@ -75,8 +86,8 @@ int main(int argc, char** argv) {
 		PGresult* r = PQexec(c, "SELECT FROM WHERE");
 		const char* state = PQresultErrorField(r, PG_DIAG_SQLSTATE);
 		ok(PQresultStatus(r) == PGRES_FATAL_ERROR, "a malformed query returns an error");
-		ok(state != NULL && std::strcmp(state, "28000") != 0,
-		   "the error SQLSTATE is not the misleading 28000");
+		ok(state != NULL && std::strcmp(state, "42601") == 0,
+		   "the error SQLSTATE is the plugin's syntax_error 42601, not core's misleading 28000");
 		PQclear(r);
 	}
 
