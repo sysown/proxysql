@@ -41,6 +41,11 @@ mkdir -p %{buildroot}
 cp -a * %{buildroot}
 mkdir -p %{buildroot}/var/run/%{name}
 mkdir -p %{buildroot}/var/lib/%{name}
+# proxysql-cli is the same binary under a second name; main() dispatches on
+# argv[0] (see src/main.cpp) and never starts the daemon in that mode. Shipped
+# as a real symlink so rpm owns it and removes it on uninstall; the existing
+# %{_bindir}/* glob in %files already picks it up.
+ln -sf proxysql %{buildroot}%{_bindir}/proxysql-cli
 
 %clean
 rm -rf %{buildroot}

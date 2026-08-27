@@ -53,6 +53,23 @@ exec "${BIN_DIR}/proxysql.bin" "$@"
 EOF
 chmod 0755 "pkgroot/${DIR_NAME}/bin/proxysql"
 
+# proxysql-cli: the same binary, selected by argv[0]. main() compares the
+# basename against "proxysql-cli" exactly, and the wrapper above execs
+# proxysql.bin -- which would make argv[0] "proxysql.bin". So the wrapper for
+# the CLI execs a correctly-named symlink under libexec/ instead. `exec -a` is
+# not available in POSIX sh, which is why this needs the extra indirection.
+mkdir -p "pkgroot/${DIR_NAME}/libexec"
+ln -sf ../bin/proxysql.bin "pkgroot/${DIR_NAME}/libexec/proxysql-cli"
+cat > "pkgroot/${DIR_NAME}/bin/proxysql-cli" <<'EOF'
+#!/bin/sh
+set -eu
+
+BIN_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export LD_LIBRARY_PATH="${BIN_DIR}/../lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+exec "${BIN_DIR}/../libexec/proxysql-cli" "$@"
+EOF
+chmod 0755 "pkgroot/${DIR_NAME}/bin/proxysql-cli"
+
 bundle_runtime_library() {
     local soname="$1"
     local resolved_path

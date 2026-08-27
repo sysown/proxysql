@@ -143,8 +143,28 @@ echo "==> Binary smoke test (proxysql --version)"
 proxysql --version 2>&1 | head -5
 echo ""
 
-echo "==> Plugin .so presence check"
+echo "==> proxysql-cli check"
 ALL_OK=0
+# proxysql-cli is the same binary under a second name (main() dispatches on
+# argv[0]). It is created by the rpm %install symlink and the deb postinst, so
+# a packaging regression that drops it is invisible to the proxysql smoke test
+# above -- check it explicitly.
+if command -v proxysql-cli >/dev/null 2>&1; then
+    echo "  OK   proxysql-cli (on PATH at $(command -v proxysql-cli))"
+    if proxysql-cli help 2>&1 | grep -q "import-pgbouncer"; then
+        echo "  OK   proxysql-cli dispatches to CLI mode"
+    else
+        echo "  FAIL proxysql-cli did not dispatch to CLI mode" >&2
+        proxysql-cli help 2>&1 | head -5 >&2
+        ALL_OK=1
+    fi
+else
+    echo "  FAIL proxysql-cli not found on PATH" >&2
+    ALL_OK=1
+fi
+echo ""
+
+echo "==> Plugin .so presence check"
 if [[ "$HAS_PLUGINS" == "true" ]]; then
     for plugin in ProxySQL_MySQLX_Plugin.so ProxySQL_GenAI_Plugin.so; do
         path="/usr/lib/proxysql/${plugin}"

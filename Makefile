@@ -588,6 +588,9 @@ cleanbuild:
 .PHONY: install
 install: src/proxysql
 	install -m 0755 src/proxysql /usr/bin
+	# proxysql-cli is the same binary; main() dispatches on argv[0] and never
+	# starts the daemon when invoked under this name.
+	ln -sf proxysql /usr/bin/proxysql-cli
 	install -m 0600 etc/proxysql.cnf /etc
 	if [ ! -d /var/lib/proxysql ]; then mkdir /var/lib/proxysql ; fi
 	if [ -f plugins/mysqlx/ProxySQL_MySQLX_Plugin.so ]; then \
@@ -635,6 +638,7 @@ endif
 .PHONY: uninstall
 uninstall:
 	if [ -f /etc/proxysql.cnf ]; then rm /etc/proxysql.cnf ; fi
+	if [ -L /usr/bin/proxysql-cli ]; then rm /usr/bin/proxysql-cli ; fi
 	if [ -f /usr/bin/proxysql ]; then rm /usr/bin/proxysql ; fi
 	if [ -f /usr/lib/proxysql/plugins/ProxySQL_MySQLX_Plugin.so ]; then rm /usr/lib/proxysql/plugins/ProxySQL_MySQLX_Plugin.so ; fi
 	if [ -f /usr/lib/proxysql/plugins/ProxySQL_GenAI_Plugin.so ]; then rm /usr/lib/proxysql/plugins/ProxySQL_GenAI_Plugin.so ; fi
