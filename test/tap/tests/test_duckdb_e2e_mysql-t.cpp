@@ -37,7 +37,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(9);
+	plan(10);
 
 	MYSQL* c = connect_duckdb(cl, cl.username, cl.password);
 	ok(c != NULL, "connect to the DuckDB MySQL port with mysql_users credentials");
