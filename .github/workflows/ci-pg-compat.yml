@@ -35,8 +35,17 @@ jobs:
     timeout-minutes: 120
     permissions: write-all
     steps:
+      # This job builds from source (see below), so it needs real content for
+      # whatever the checked-out branch vendors via git-lfs, not pointer
+      # stubs. `lfs: true` has actions/checkout fetch everything that
+      # branch's .gitattributes declares -- generic like ci-builds.yml's
+      # hydration step, just via the action's built-in mechanism, since this
+      # GH-hosted runner has none of ci-builds.yml's self-hosted persistent-
+      # workspace reasons to defer/skip smudging at checkout time.
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          lfs: true
 
       # Inline build (CI-3p-* model, not the CI-trigger/CI-builds cache-chain
       # model used by the TAP families): no ccache pattern exists elsewhere
