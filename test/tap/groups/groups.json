@@ -391,6 +391,7 @@
   "test_default_value_transaction_isolation_attr-t" : [ "legacy-g3","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3","mysql84-g3","mysql90-g3","mysql95-g3" ],
   "test_digest_umap_aux-t" : [ "legacy-g3","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3","mysql84-g3","mysql90-g3","mysql95-g3" ],
   "test_dns_cache-t" : [ "legacy-g3","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3","mysql84-g3","mysql90-g3","mysql95-g3" ],
+  "test_duckdb_e2e_mysql-t" : [ "duckdb-e2e-g1","@proxysql_min_version:4.0" ],
   "test_duckdb_plugin_load-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "test_ed25519_auth-t" : [ "mariadb10-galera-g4","@proxysql_min_version:3.1" ],
   "test_empty_query-t" : [ "legacy-g3","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3","mysql84-g3","mysql90-g3","mysql95-g3" ],
