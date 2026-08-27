@@ -57,7 +57,18 @@ int main(int argc, char** argv) {
 	}
 
 	// DDL + DML must report affected rows.
-	ok(mysql_query(c, "CREATE TABLE t_e2e(a INTEGER)") == 0, "CREATE TABLE succeeds");
+	//
+	// CREATE OR REPLACE TABLE, not a bare CREATE TABLE: the plugin's
+	// default database_path is ":memory:" (duckdb_config.cpp), so this
+	// database lives for the whole ProxySQL process, shared across every
+	// test invocation against the same container -- a bare CREATE TABLE
+	// would fail with "table already exists" on any run after the first
+	// against a warm container. OR REPLACE makes this test runnable
+	// twice in a row without recreating the container, and since it
+	// fully replaces (empties) the table, the INSERT below always sees
+	// an empty table and its affected-rows count stays correct
+	// regardless of how many times this test has already run.
+	ok(mysql_query(c, "CREATE OR REPLACE TABLE t_e2e(a INTEGER)") == 0, "CREATE TABLE succeeds");
 	ok(mysql_query(c, "INSERT INTO t_e2e VALUES (1),(2),(3)") == 0 &&
 	   mysql_affected_rows(c) == 3, "INSERT reports three affected rows");
 

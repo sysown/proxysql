@@ -75,7 +75,15 @@ int main(int argc, char** argv) {
 	}
 
 	{
-		PGresult* r = PQexec(c, "CREATE TABLE t_pg_e2e(a INTEGER)");
+		// CREATE OR REPLACE TABLE, not a bare CREATE TABLE: the plugin's
+		// default database_path is ":memory:" (duckdb_config.cpp), so
+		// this database lives for the whole ProxySQL process, shared
+		// across every test invocation against the same container -- a
+		// bare CREATE TABLE would fail with "table already exists" on
+		// any run after the first against a warm container. OR REPLACE
+		// makes this test runnable twice in a row without recreating
+		// the container.
+		PGresult* r = PQexec(c, "CREATE OR REPLACE TABLE t_pg_e2e(a INTEGER)");
 		ok(PQresultStatus(r) == PGRES_COMMAND_OK, "CREATE TABLE succeeds");
 		PQclear(r);
 	}
