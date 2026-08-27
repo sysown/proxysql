@@ -150,7 +150,7 @@ challenge response and the SCRAM verifier from the *cleartext* password stored i
 `pgsql_users.password`, so a pre-hashed value cannot be used. Replace those
 entries with the cleartext password after importing.
 
-> This limitation is expected to lift with PR #5865 / issue #5863, which teaches
+> Tracked in #6134. This limitation is expected to lift with PR #5865 / issue #5863, which teaches
 > `pgsql_users.password` to hold a SCRAM verifier or an `md5…` hash directly —
 > exactly the formats `userlist.txt` already stores. When that lands, this
 > section and the strict-mode error in `convert_users()` should be revisited so a
