@@ -126,7 +126,15 @@ will be the largest compile in the tree (estimated 10–30 minutes). **Action:**
 measure the actual CI wall-clock delta on the first green build and report it,
 so the decision can be revisited with data rather than an estimate.
 
-### D3 — Core seam: reuse `PROXYSQL_SESSION_SQLITE`, zero core changes
+### D3 — Core seam: reuse `PROXYSQL_SESSION_SQLITE`
+
+**Corrected by Task 11 (post-implementation) — see §15 for the full
+account.** This decision originally read "zero core changes" and claimed
+the diff outside `plugins/duckdb/`, `deps/duckdb/` and build glue was
+empty. That was true for the MySQL path only. The PostgreSQL path
+required two core changes, both narrow and both load-bearing; the text
+below is corrected to say so plainly rather than leave the false
+guarantee standing.
 
 The plugin sets `session_type = PROXYSQL_SESSION_SQLITE` and its own
 `handler_function`, leaves `thread->gen_args = nullptr` (F4), and ignores the
@@ -134,9 +142,45 @@ The plugin sets `session_type = PROXYSQL_SESSION_SQLITE` and its own
 static in the `.so` instead.
 
 By F3 this inherits the correct authentication and protocol semantics for free.
-The diff outside `plugins/duckdb/`, `deps/duckdb/` and build glue is empty,
-which satisfies the "no impact on core when the plugin is not loaded"
-criterion by construction.
+**On the MySQL path this genuinely needed zero core changes**, and F9's
+templated-SQL-extraction claim held there without modification.
+
+**On the PostgreSQL path it did not.** Two core changes were required:
+
+1. **`include/PgSQL_Protocol.h` — `PgSQL_Protocol::get_header()` made
+   public.** It was private. It is the only route to the SQL text on this
+   path: unlike the MySQL path, `PgSQL_Session::CurrentQuery` is not
+   populated before `handler_function` runs (dispatch happens at
+   `lib/PgSQL_Session.cpp:2282`; `CurrentQuery.begin()` only happens on
+   other branches, at `:2370`). Reimplementing `get_header()`'s v2/v3
+   packet-format parsing in the plugin instead of exposing it would have
+   duplicated 60+ lines of wire-format logic that core already gets
+   right.
+2. **`lib/PgSQL_Session.cpp` (~line 2279) — `PROXYSQL_SESSION_SQLITE`
+   added to the gate that routes query packets to the non-backend query
+   handler.** Without it, a `'Q'` packet arriving on a
+   `PROXYSQL_SESSION_SQLITE` PostgreSQL session fell through unhandled:
+   the packet leaked and the client hung forever waiting for a response
+   that was never generated. Worth recording as an irony: the handler
+   this gate dispatches to
+   (`handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql`)
+   already had a `case PROXYSQL_SESSION_SQLITE:` arm — it was simply
+   unreachable dead code, because the SQLite3 Server has always been
+   MySQL-only and nothing PostgreSQL-side had ever used this session type
+   before this plugin.
+
+Both changes are header-visibility / dispatch-condition level, not new
+logic: `get_header()`'s body is unchanged, and the gate addition is one
+enum value in an existing `||` chain. Neither has any behavioural, ABI,
+or codegen effect on a build where the duckdb plugin is not loaded — the
+gate is reachable but a `PROXYSQL_SESSION_SQLITE` PostgreSQL session
+never existed before this plugin created one, and `get_header()` being
+public rather than private changes nothing at the call sites that already
+used it as a member function. So **the practical property behind the "no
+impact on core when the plugin is not loaded" criterion survives** —
+existing behavior for every other session type is provably unchanged —
+**but the literal claim of an empty diff outside `plugins/duckdb/` does
+not**, and this document said the literal thing. That was the error.
 
 Rejected: adding `PROXYSQL_SESSION_DUCKDB` — ~25 edits across the protocol,
 logger and session layers, all of which would have to treat it identically to
@@ -250,15 +294,73 @@ derives the `CommandComplete` tag from its first whitespace-delimited word
 
 ## 7. Type mapping
 
-Both serializers already flatten every column to text (F6). v1 therefore
-converts each value with `duckdb_value_varchar()` and releases it with
-`duckdb_free()`; a SQL NULL becomes a `nullptr` field, which F5 confirms
-round-trips correctly and which `SQLite3_to_Postgres` emits as a `-1` length.
+**Corrected by Task 11 (post-implementation) — see §15.** This section
+originally claimed `duckdb_value_varchar()` renders `UUID` and the nested
+`LIST` / `STRUCT` / `MAP` types "at no cost". That is false and was never
+verified against the actual DuckDB C API before being written; the
+correction below describes what was actually built once it was checked.
 
-This yields DuckDB's own rendering of `DECIMAL`, `TIMESTAMP`, `INTERVAL`,
-`UUID`, and the nested `LIST` / `STRUCT` / `MAP` types at no cost, and is
-correct on the wire because both text protocols transmit values as strings
-regardless.
+Both serializers already flatten every column to text (F6). v1 converts
+each value with the deprecated `duckdb_value_varchar()` accessor and
+releases it with `duckdb_free()`; a SQL NULL becomes a `nullptr` field,
+which F5 confirms round-trips correctly and which `SQLite3_to_Postgres`
+emits as a `-1` length.
+
+**`duckdb_value_varchar()` does not render every type.** Verified both by
+reading `GetInternalCValue`'s switch on `deprecated_type` in
+`duckdb/src/include/duckdb/main/capi/cast/generic.hpp` (the sole
+authoritative source for which `duckdb_type` values this accessor can
+actually cast) and empirically, by probing the built library: for `LIST`,
+`STRUCT`, `MAP`, `ARRAY`, `UNION`, `UUID`, `ENUM`, `BIT`, and
+`TIMESTAMP_S`/`MS`/`NS`, it returns `nullptr` regardless of
+`duckdb_value_is_null()` — indistinguishable, downstream, from a genuine
+SQL NULL. There is no free ride here for nested or composite types, nor
+for `UUID`; only the flat scalar types DuckDB can cast through its
+deprecated string-cast path render correctly (`BOOLEAN`, the integer and
+unsigned-integer families, `FLOAT`/`DOUBLE`, `DATE`/`TIME`/`TIMESTAMP`,
+`HUGEINT`/`UHUGEINT`, `DECIMAL`, `INTERVAL`, `VARCHAR`, `BLOB`).
+
+**What was actually built: an allowlist predicate plus a guarded
+re-query**, not a denylist (`duckdb_result_has_unrenderable_column()` in
+`plugins/duckdb/src/duckdb_result.cpp`, called from
+`duckdb_execute_effective()` in `plugins/duckdb/src/duckdb_session.cpp`):
+
+1. `duckdb_type_renders_as_text()` mirrors the C API's positive list
+   exactly — a type not on the list (including a hypothetical future
+   DuckDB type this file's author never considered) is treated as
+   unrenderable by default, the opposite failure mode from a
+   hand-maintained denylist that would silently pass an unrecognised type
+   through unrendered.
+2. When any result column is unrenderable **and** the original statement
+   is provably safe to run a second time (`duckdb_is_safe_to_rewrap()` —
+   lexically a read: `SELECT`/`WITH`/`TABLE`/`VALUES`/`DESCRIBE`/`SHOW`/
+   `PRAGMA`/`EXPLAIN`, with a whole-word `RETURNING` anywhere in the
+   statement — including inside a CTE — disqualifying it), the plugin
+   re-executes the statement wrapped as
+   `SELECT COLUMNS(*)::VARCHAR FROM (<statement>)`, which casts every
+   column, nested values included, to a renderable VARCHAR, and converts
+   that result instead.
+3. **This re-executes the entire statement a second time, side effects
+   included.** The safety gate exists specifically because
+   `INSERT ... RETURNING` / `UPDATE ... RETURNING` / `DELETE ... RETURNING`
+   all classify as a query result in DuckDB 1.4.5 and would otherwise be
+   eligible for the same wrap-and-rerun treatment as a `SELECT` — which
+   would write twice for one client statement. The plugin refuses to
+   rewrap anything that is not lexically a read, full stop, regardless of
+   whether today's DuckDB grammar happens to also reject wrapping a bare
+   DML statement in a `FROM`-clause subquery (it does, in 1.4.5 — but
+   that is incidental parser behaviour, not something this code relies
+   on).
+4. The wrap trims trailing semicolons from the original statement first
+   (`trim_trailing_semicolons()`) — DuckDB's parser errors on a trailing
+   `;` inside the wrapping subquery, and essentially every interactive
+   client sends one — and wraps with newlines around the original text
+   rather than straight concatenation, so a trailing `-- comment`
+   immediately before the closing `)` cannot swallow it.
+5. If the statement isn't safe to rewrap, or the wrapped re-query itself
+   fails (e.g. a type `COLUMNS(*)::VARCHAR` genuinely cannot cast), the
+   plugin falls back to sending the original, possibly NULL-rendering
+   result rather than erroring out on a query that already succeeded.
 
 Column names come from `duckdb_column_name()` into `add_column_definition()`.
 A DDL or DML statement produces a NULL resultset with `duckdb_rows_changed()`
@@ -295,7 +397,14 @@ CREATE TABLE duckdb_variables (
 )
 ```
 
-Seeded variables: `mysql_ifaces`, `pgsql_ifaces`, `database_path` (default
+Seeded variables: `mysql_ifaces` (default `0.0.0.0:6031`), `pgsql_ifaces`
+(default `0.0.0.0:6034` — **corrected by Task 11, see §15**: an earlier
+implementation draft of this plan defaulted `pgsql_ifaces` to `6032`,
+which is ProxySQL's own Admin interface; since the plugin's listener
+binds with `SO_REUSEPORT`, that default would not have failed the bind
+outright, it would have silently split incoming Admin connections between
+the real Admin interface and this plugin. `6034` is what shipped and is
+the only value this document should ever show), `database_path` (default
 `:memory:`), `memory_limit`, `threads`, `max_connections`, `read_only`.
 
 - `LOAD DUCKDB VARIABLES TO RUNTIME` and `SAVE DUCKDB VARIABLES TO DISK` via
@@ -402,3 +511,69 @@ the existing suites cover it by construction.
 | Whether the DuckDB amalgamation build is still supported upstream, and whether it beats the CMake build | Check during implementation. It trades parallelism for several GB of RAM in one TU, so it may well be worse. Not a design-blocking question. |
 | Merge conflicts with the two in-flight LFS branches, which create `.gitattributes` and edit up to 177 of the same workflow files | Sequence deliberately. If `feature/issue-6115-vendored-openssl` lands first, this diff shrinks to one `.gitattributes` line plus the `PROXYSQL40` workflows it did not already cover. |
 | `duckdb_value_varchar()` allocates per value, so wide analytical resultsets do many small allocations | Acceptable for v1 and no worse than the existing Admin path. Typed conversion in sub-project 3 removes it. |
+| **Open, unresolved: intermittent `assert(0)` crash in `generate_pkt_ERR`, added by Task 11 (§15).** A malformed query on the plugin's MySQL listener has twice triggered `assert(0)` at `lib/MySQL_Protocol.cpp:434`, inside `generate_pkt_ERR`, reached via the plugin's MySQL error emitter. This aborts the **entire ProxySQL process**, Admin port included, not just the offending session. | **Not resolved and not to be called flaky.** Two identical backtraces occurred early in Task 9. Since then, roughly 500 further executions of the same code path — a dedicated stress campaign, a 50-iteration control run against core's own `SQLite3_Server` on port 6030 using the identical error-emitter pattern, and several TAP harness runs — have all been clean, with the data-stream state (`DSS`) instrumented and confirmed correct on every one of them. The leading, unproven hypothesis is that the harness's bind-mounted `.so` kept a stale `dlopen`'d inode across a container that was not recreated after a rebuild, so the two early crashes may have run pre-fix code rather than being a live, reproducible defect. Track down with a full backtrace (crash_handler / `docker logs`) compared against the two on record before assuming a new occurrence is the same bug, or that it is fixed. |
+
+## 15. Post-implementation corrections (Task 11)
+
+This is a committed design document, written before implementation, and
+several of its claims turned out to be wrong once the plugin was actually
+built and tested end-to-end (Tasks 1–10). Per this sub-project's own
+standards on test/documentation honesty, those claims are corrected in
+place above rather than left standing — but a design doc should not
+silently rewrite its own history either, so this section records what
+changed and why, addressed by the implementation task that discovered
+each gap.
+
+**C1 — §4 D3 ("zero core changes").** False as originally written. The
+PostgreSQL path required two core changes: `PgSQL_Protocol::get_header()`
+made public (`include/PgSQL_Protocol.h`), and `PROXYSQL_SESSION_SQLITE`
+added to the query-dispatch gate in `lib/PgSQL_Session.cpp` (~line 2279)
+— without which a `'Q'` packet on such a session leaked and the client
+hung forever. Discovered building and testing the PostgreSQL e2e path
+(Tasks 7–9). The MySQL path genuinely needed zero core changes; only the
+PostgreSQL claim was wrong. §4 D3 now describes both changes, why each
+was necessary, and why the practical "no impact on core when unloaded"
+property still holds even though the literal "empty diff" claim does
+not.
+
+**C2 — §7 (type mapping, "at no cost").** False as originally written.
+`duckdb_value_varchar()` cannot render `LIST`, `STRUCT`, `MAP`, `ARRAY`,
+`UNION`, `UUID`, `ENUM`, `BIT`, or `TIMESTAMP_S`/`MS`/`NS` — it returns
+`nullptr` for all of them, indistinguishable from a genuine SQL NULL,
+confirmed both against the DuckDB C API source and empirically. This was
+never checked against the actual API before this document asserted it.
+Discovered implementing result conversion (Task 5) and hardened with the
+allowlist predicate and guarded re-query (Task 5/6). §7 now describes the
+`duckdb_result_has_unrenderable_column()` allowlist and the
+`SELECT COLUMNS(*)::VARCHAR FROM (...)` re-query it triggers, including
+why the re-query is gated to lexical reads only (it re-executes the
+statement, side effects included) and its trailing-`;` handling.
+
+**C3 — §9 (`pgsql_ifaces` default).** An earlier implementation draft of
+this sub-project defaulted `pgsql_ifaces` to `6032` — ProxySQL's own
+Admin interface. Because the plugin's listener binds with
+`SO_REUSEPORT`, that default would not have failed the bind outright; it
+would have silently split incoming Admin connections between the real
+Admin interface and this plugin. Caught before merge; the shipped default
+is `6034`. §9 now states the port defaults explicitly so this ambiguity
+cannot recur.
+
+**D — Known open defect added to §14.** An intermittent `assert(0)` in
+`generate_pkt_ERR` (`lib/MySQL_Protocol.cpp:434`), reached via the
+plugin's MySQL error emitter, aborted the entire ProxySQL process twice
+during Task 9. Roughly 500 subsequent executions across a stress
+campaign, a control run against core's own `SQLite3_Server`, and harness
+runs have been clean. This is recorded as **open and unresolved**, not as
+fixed and not as flaky — see §14's table entry for the full evidence on
+both sides.
+
+**E — Build-cost measurement (§4 D2).** `deps/duckdb/README.md` now
+carries a "Build cost" section. It is an **observation**, not a
+controlled from-scratch measurement: the DuckDB build tree could not be
+destroyed and rebuilt under `/usr/bin/time -v` in the same session
+without risking the working tree that later verification depends on, so
+the recorded wall-clock times (~10 minutes and ~7 minutes, both on 32
+cores) are read back from the two occasions this dep genuinely was built
+from scratch earlier in the sub-project, not freshly measured. A real
+controlled measurement on an actual CI runner is still owed before D2's
+gating decision can be considered settled with real data.
