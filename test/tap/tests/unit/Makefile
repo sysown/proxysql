@@ -364,8 +364,16 @@ $(ODIR)/test_globals.o: $(TEST_HELPERS_DIR)/test_globals.cpp $(PROXYSQL_TEST_HEA
 $(ODIR)/test_init.o: $(TEST_HELPERS_DIR)/test_init.cpp $(PROXYSQL_TEST_HEADERS) | $(ODIR)
 	$(CXX) -c -o $@ $< $(OPT) $(IDIRS) -Wall
 
+# Must carry $(PSQLDEBUG) alongside $(PSQL40): the loader now refuses to
+# dlopen a plugin whose -DDEBUG setting disagrees with the core's (see
+# ProxySQL_Plugin.h / PROXYSQL_PLUGIN_ABI_DEBUG_BIT) because DEBUG-only
+# fields in core headers shift MySQL_Data_Stream/PgSQL_Session member
+# offsets. fake_plugin.cpp's abi_version literals already fold in that bit
+# via kFakeAbiDebugBit when -DDEBUG is defined here, so this .so must be
+# compiled with the same DEBUG setting as $(LIBPROXYSQLAR)/the test binary
+# or the loader will reject it.
 $(FAKE_PLUGIN_SO): $(TEST_HELPERS_DIR)/fake_plugin.cpp $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h | $(TEST_HELPERS_DIR)
-	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(IDIRS) -ldl
+	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(PSQLDEBUG) $(IDIRS) -ldl
 
 .PHONY: mysqlx_plugin_build
 mysqlx_plugin_build:
@@ -387,8 +395,9 @@ duckdb_plugin_build:
 
 # Same source compiled with different macros to produce a second plugin .so
 # with a distinct plugin name and env-var prefix.  Used by multi-plugin tests.
+# Same $(PSQLDEBUG) requirement as $(FAKE_PLUGIN_SO) above.
 $(FAKE_PLUGIN2_SO): $(TEST_HELPERS_DIR)/fake_plugin.cpp $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h | $(TEST_HELPERS_DIR)
-	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(IDIRS) -ldl \
+	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(PSQLDEBUG) $(IDIRS) -ldl \
 		-DFAKE_PLUGIN_NAME=\"fake_plugin2\" \
 		-DFAKE_PLUGIN_ENV_PREFIX=\"PROXYSQL_FAKE_PLUGIN2_\"
 

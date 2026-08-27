@@ -40,8 +40,61 @@ namespace prometheus { class Registry; }
 //          handoff callbacks. Plugins use them only around work that can wait
 //          for another Admin consumer; older plugins continue to use the
 //          unchanged three DB-handle prefix.
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = 5u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = 5u;
+//
+// DEBUG-tier tagging (root-caused from a real crash, do not remove):
+//
+// A handful of core headers add fields ONLY under `#ifdef DEBUG` --
+// notably MySQL_Protocol.h's `bool dump_pkt;` and PgSQL_Session.h's
+// `PgSQL_Connection* dbg_extended_query_backend_conn;`. MySQL_Data_Stream
+// holds a `MySQL_Protocol myprot;` member BY VALUE (not by pointer), so
+// `dump_pkt` changes `sizeof(MySQL_Protocol)`, which shifts the byte
+// offset of every MySQL_Data_Stream field declared after `myprot` --
+// including `DSS`, the wire-protocol send-state enum -- by
+// sizeof(bool) (padded) bytes between a `-DDEBUG` and a non-`-DDEBUG`
+// build. PgSQL_Session has the identical pattern around
+// `dbg_extended_query_backend_conn` shifting `handler_function` and
+// everything after it.
+//
+// A plugin built without -DDEBUG, loaded into a core built with
+// -DDEBUG (or vice versa), silently disagrees with the core about these
+// offsets while still reporting a numerically "compatible" abi_version
+// under the plain ABI 1..5 scheme above (e.g. a release plugin's
+// abi_version=5 is <= a debug core's max=5, so the ordinary
+// forward-compatibility range check does not catch it). The plugin then
+// writes through what it believes is MySQL_Data_Stream::DSS but is
+// actually a different member a few bytes off -- e.g.
+// duckdb_send_mysql_error() setting STATE_QUERY_SENT_DS lands on
+// connect_retries_on_failure instead, DSS is never touched and stays
+// STATE_SLEEP, and generate_pkt_ERR()'s state-machine switch
+// (lib/MySQL_Protocol.cpp) falls through to `default: assert(0)`,
+// aborting the entire ProxySQL process (Admin port included) the next
+// time that plugin's error path runs. Reproduced and confirmed via an
+// offsetof() probe: sizeof(MySQL_Protocol) is 80 bytes release / 88
+// bytes -DDEBUG, and offsetof(MySQL_Data_Stream, DSS) is 768 / 776
+// respectively.
+//
+// PROXYSQL_PLUGIN_ABI_DEBUG_BIT reserves a high bit that is either set
+// (this build has -DDEBUG) or clear (it doesn't) in `abi_version`, kept
+// in a numeric space (bit 30) the plain layout-version numbers (1..5,
+// and unlikely to reach 2^30 for a long time) never touch, so a
+// DEBUG-tagged and a non-DEBUG-tagged abi_version can never compare as
+// "compatible" via ordinary integer range comparison -- the loader
+// checks this bit for an EXACT match, as a step separate from (and in
+// addition to) the ABI 1..5 forward-compatibility range check below.
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_DEBUG_BIT = 0x40000000u;
+
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 5u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 5u;
+
+#ifdef DEBUG
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION | PROXYSQL_PLUGIN_ABI_DEBUG_BIT;
+#else
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION;
+#endif
+// Layout-only ceiling used for the ABI 1..5 range check. Callers must mask
+// off PROXYSQL_PLUGIN_ABI_DEBUG_BIT before comparing a raw abi_version
+// against this constant -- see lib/ProxySQL_PluginManager.cpp.
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX;
 
 enum class ProxySQL_PluginDBKind : uint8_t {
 	admin_db = 0,

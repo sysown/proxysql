@@ -124,7 +124,37 @@ $(DUCKDB_AR):
 	$(MAKE) -C $(PROXYSQL_PATH)/deps PROXYSQL40=1 duckdb
 	@test -f $@ || { echo "ERROR: deps duckdb build did not produce $@" >&2; exit 1; }
 
-$(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) $(DUCKDB_AR) | $(ODIR)
+# Build-flag freshness stamp (root cause C1 fix, part 2). The .o rule below
+# previously depended only on sources, headers and $(DUCKDB_AR) -- NOT on
+# $(CXXFLAGS) -- so running `make` here with a different OPTZ (in
+# particular, with or without -DDEBUG) than the last build silently reused
+# stale .o files instead of recompiling. That is exactly how a
+# release-flavoured ProxySQL_DuckDB_Plugin.so could end up loaded into a
+# core built with `make debug`: MySQL_Protocol.h's `dump_pkt` and
+# PgSQL_Session.h's `dbg_extended_query_backend_conn` are DEBUG-only
+# fields that shift the byte offsets of every member declared after them
+# in MySQL_Data_Stream / PgSQL_Session (MySQL_Data_Stream holds
+# MySQL_Protocol BY VALUE), so a plugin built for the wrong DEBUG setting
+# corrupts memory instead of failing to build. The loader now also refuses
+# such a mismatched plugin at dlopen time (see
+# PROXYSQL_PLUGIN_ABI_DEBUG_BIT in include/ProxySQL_Plugin.h) -- this
+# stamp is the build-side half: it makes a flag change force a real
+# recompile so the mismatch is far less likely to be produced in the
+# first place.
+BUILDFLAGS_STAMP := $(ODIR)/.buildflags
+
+.PHONY: FORCE
+FORCE:
+
+# Rewrite the stamp only when CXXFLAGS actually changed, so its mtime
+# doesn't tick (forcing a same-flags rebuild) on every invocation, but
+# building with different flags always finally does force one.
+$(BUILDFLAGS_STAMP): FORCE | $(ODIR)
+	@if [ ! -f $@ ] || [ "$$(cat $@ 2>/dev/null)" != "$(CXXFLAGS)" ]; then \
+		echo "$(CXXFLAGS)" > $@; \
+	fi
+
+$(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) $(DUCKDB_AR) $(BUILDFLAGS_STAMP) | $(ODIR)
 	$(CXX) -c -o $@ $< $(CXXFLAGS) $(IDIRS)
 
 # The 16 vendored DuckDB archives were built by DuckDB's own CMake, not by
