@@ -107,6 +107,35 @@ static int get_conn_ok(MYSQL* proxyadmin, long long* out) {
 }
 
 /**
+ * @brief Restores the ProxySQL configuration mutated by this test, and closes
+ *   the connections it opened.
+ *
+ * The test disables the monitor, changes global variables, adds a hostgroup and
+ * replaces every query rule of a ProxySQL instance shared with the rest of the
+ * TAP group. Every early return has to undo that: not only the explicit ones,
+ * but also the ones hidden inside the MYSQL_QUERY macro, which returns
+ * EXIT_FAILURE on its own. As a RAII guard this runs on all of them.
+ */
+class TestConfigGuard {
+	MYSQL* proxyadmin;
+	MYSQL* backend;
+	public:
+	TestConfigGuard(MYSQL* _proxyadmin, MYSQL* _backend) :
+		proxyadmin(_proxyadmin), backend(_backend) {}
+	~TestConfigGuard() {
+		std::string q = "DELETE FROM mysql_servers WHERE hostgroup_id=" + std::to_string(TEST_HG);
+		mysql_query(proxyadmin, q.c_str());
+		mysql_query(proxyadmin, "LOAD MYSQL SERVERS TO RUNTIME");
+		mysql_query(proxyadmin, "LOAD MYSQL QUERY RULES FROM DISK");
+		mysql_query(proxyadmin, "LOAD MYSQL QUERY RULES TO RUNTIME");
+		mysql_query(proxyadmin, "LOAD MYSQL VARIABLES FROM DISK");
+		mysql_query(proxyadmin, "LOAD MYSQL VARIABLES TO RUNTIME");
+		mysql_close(backend);
+		mysql_close(proxyadmin);
+	}
+};
+
+/**
  * @brief Opens NCONN connections to ProxySQL, each one creating and then
  *   releasing a backend connection towards TEST_HG .
  * @return The number of connections for which the query succeeded.
@@ -172,6 +201,9 @@ int main(int argc, char** argv) {
 	}
 	diag("Reading the status counters directly from backend %s:%d", cl.mysql_host, cl.mysql_port);
 
+	/* from here on the ProxySQL configuration is mutated: restore it on any exit path */
+	TestConfigGuard config_guard(proxyadmin, backend);
+
 	/**
 	 * - the monitor is disabled: monitoring connections are opened and closed
 	 *   towards the very same backend, and they would add noise to
@@ -205,7 +237,7 @@ int main(int argc, char** argv) {
 		 * Every rule is removed: the rules loaded by the infra match '^SELECT'
 		 * with 'apply=1' and a lower rule_id, so they would be applied before
 		 * the one created here and TEST_QUERY would never reach TEST_HG .
-		 * They are restored from disk at the end of the test.
+		 * They are restored from disk by TestConfigGuard .
 		 */
 		MYSQL_QUERY(proxyadmin, "DELETE FROM mysql_query_rules");
 		q = "INSERT INTO mysql_query_rules (rule_id,active,match_pattern,destination_hostgroup,apply) VALUES ("
@@ -294,19 +326,6 @@ int main(int argc, char** argv) {
 		"SSL phase: 'Aborted_clients' didn't increase. Delta: %lld (non-SSL phase delta was %lld)",
 		ssl_aborted, nossl_aborted);
 
-	/* restore the configuration */
-	{
-		std::string q = "DELETE FROM mysql_servers WHERE hostgroup_id=" + std::to_string(TEST_HG);
-		mysql_query(proxyadmin, q.c_str());
-		mysql_query(proxyadmin, "LOAD MYSQL SERVERS TO RUNTIME");
-		mysql_query(proxyadmin, "LOAD MYSQL QUERY RULES FROM DISK");
-		mysql_query(proxyadmin, "LOAD MYSQL QUERY RULES TO RUNTIME");
-		mysql_query(proxyadmin, "LOAD MYSQL VARIABLES FROM DISK");
-		mysql_query(proxyadmin, "LOAD MYSQL VARIABLES TO RUNTIME");
-	}
-
-	mysql_close(backend);
-	mysql_close(proxyadmin);
-
+	/* the configuration is restored, and the connections closed, by config_guard */
 	return exit_status();
 }
