@@ -321,10 +321,11 @@ deprecated string-cast path render correctly (`BOOLEAN`, the integer and
 unsigned-integer families, `FLOAT`/`DOUBLE`, `DATE`/`TIME`/`TIMESTAMP`,
 `HUGEINT`/`UHUGEINT`, `DECIMAL`, `INTERVAL`, `VARCHAR`, `BLOB`).
 
-**What was actually built: an allowlist predicate plus a guarded
-re-query**, not a denylist (`duckdb_result_has_unrenderable_column()` in
-`plugins/duckdb/src/duckdb_result.cpp`, called from
-`duckdb_execute_effective()` in `plugins/duckdb/src/duckdb_session.cpp`):
+**What was actually built: an allowlist predicate plus a prepare-first
+rewrap decision** (`duckdb_result_has_unrenderable_column()` and
+`duckdb_type_renders_as_text()` in `plugins/duckdb/src/duckdb_result.cpp`,
+consumed from `duckdb_execute_effective()` in
+`plugins/duckdb/src/duckdb_session.cpp`):
 
 1. `duckdb_type_renders_as_text()` mirrors the C API's positive list
    exactly — a type not on the list (including a hypothetical future
@@ -332,36 +333,88 @@ re-query**, not a denylist (`duckdb_result_has_unrenderable_column()` in
    unrenderable by default, the opposite failure mode from a
    hand-maintained denylist that would silently pass an unrecognised type
    through unrendered.
-2. When any result column is unrenderable **and** the original statement
-   is provably safe to run a second time (`duckdb_is_safe_to_rewrap()` —
-   lexically a read: `SELECT`/`WITH`/`TABLE`/`VALUES`/`DESCRIBE`/`SHOW`/
-   `PRAGMA`/`EXPLAIN`, with a whole-word `RETURNING` anywhere in the
-   statement — including inside a CTE — disqualifying it), the plugin
-   re-executes the statement wrapped as
-   `SELECT COLUMNS(*)::VARCHAR FROM (<statement>)`, which casts every
-   column, nested values included, to a renderable VARCHAR, and converts
-   that result instead.
-3. **This re-executes the entire statement a second time, side effects
-   included.** The safety gate exists specifically because
-   `INSERT ... RETURNING` / `UPDATE ... RETURNING` / `DELETE ... RETURNING`
-   all classify as a query result in DuckDB 1.4.5 and would otherwise be
-   eligible for the same wrap-and-rerun treatment as a `SELECT` — which
-   would write twice for one client statement. The plugin refuses to
-   rewrap anything that is not lexically a read, full stop, regardless of
-   whether today's DuckDB grammar happens to also reject wrapping a bare
-   DML statement in a `FROM`-clause subquery (it does, in 1.4.5 — but
-   that is incidental parser behaviour, not something this code relies
-   on).
-4. The wrap trims trailing semicolons from the original statement first
+2. `duckdb_execute_effective()` first calls `duckdb_prepare()` on the
+   statement — this parses and binds it but does **not** execute it — and
+   inspects the prepared statement's column types
+   (`duckdb_prepared_statement_column_type()`) against that same
+   allowlist. This decision happens **before anything runs**.
+3. If any column is unrenderable, it tries to `duckdb_prepare()` a second
+   statement, `SELECT COLUMNS(*)::VARCHAR FROM (<statement>)`, which
+   casts every column (nested values included) to a renderable VARCHAR.
+   If that second prepare succeeds, the original prepared statement is
+   destroyed **without ever having executed**, and the wrap is what
+   actually runs (`duckdb_execute_prepared()`). If the wrap fails to
+   *parse* — a bare `INSERT`/`UPDATE`/`DELETE ... RETURNING` cannot
+   legally sit inside a `FROM`-clause subquery in DuckDB's grammar — the
+   plugin falls back to executing the *original* prepared statement,
+   which has likewise not executed yet at that point: degraded
+   (NULL-rendering) output for the unrenderable column, rather than an
+   error, since the query does go on to succeed.
+4. **The client's statement executes exactly once, on every path.** This
+   is a structural guarantee, not a lexical one: an earlier revision of
+   this plugin executed the statement via `duckdb_query()` first,
+   inspected the *real* result for an unrenderable column, and only then
+   conditionally re-executed a wrapped copy as a second `duckdb_query()`
+   call — gated by a lexical `duckdb_is_safe_to_rewrap()` check ("starts
+   with a read keyword, no whole-word `RETURNING` anywhere, including
+   inside a CTE"). That check is not sufficient to prove the statement is
+   side-effect-free: `SELECT [nextval('s')]` returns a `LIST`
+   (unrenderable), starts with `SELECT`, and contains no `RETURNING` — so
+   it passed the gate and was silently re-executed, advancing the
+   sequence twice per client statement and returning the second value
+   while the first was discarded. The same problem applies to any
+   volatile function (`random()`, `now()`, `uuid()`, ...). The
+   prepare-first design above replaced `duckdb_is_safe_to_rewrap()`
+   entirely — it has been deleted, not kept as a secondary guard —
+   because deciding from the prepared statement's schema, before either
+   candidate statement executes, removes the double-execution risk
+   structurally: there is no "first execution" to accidentally repeat.
+   A useful corollary: a statement whose wrap successfully *parses* is,
+   by DuckDB's own grammar, proven to be valid `FROM`-clause subquery
+   content — which excludes bare DML — so "the wrap parses" is itself
+   sufficient proof of read-shapedness, making a hand-maintained keyword
+   list redundant as well as insufficient.
+5. The wrap trims trailing semicolons from the original statement first
    (`trim_trailing_semicolons()`) — DuckDB's parser errors on a trailing
    `;` inside the wrapping subquery, and essentially every interactive
    client sends one — and wraps with newlines around the original text
    rather than straight concatenation, so a trailing `-- comment`
    immediately before the closing `)` cannot swallow it.
-5. If the statement isn't safe to rewrap, or the wrapped re-query itself
-   fails (e.g. a type `COLUMNS(*)::VARCHAR` genuinely cannot cast), the
-   plugin falls back to sending the original, possibly NULL-rendering
-   result rather than erroring out on a query that already succeeded.
+6. **Consequence: multi-statement input is now rejected**, where the
+   earlier `duckdb_query()`-based path silently accepted it —
+   `duckdb_prepare()` refuses more than one statement per call
+   ("Cannot prepare multiple statements at once!"). This is a deliberate
+   improvement, not just a side effect: `duckdb_query()` used to execute
+   *every* statement in the packet but return only the *last* one's
+   result, so `SELECT 1; DROP TABLE t;` would run the `DROP` while the
+   client only ever saw the `SELECT`'s result — a statement-smuggling
+   path with the destructive half invisible in the response. Rejecting
+   the whole packet up front instead matches what a MySQL server does
+   for a client without `CLIENT_MULTI_STATEMENTS`. No currently-tested
+   code path (the compatibility intercept table, `SET`, or DDL/DML) ever
+   sent multi-statement input through this plugin, so this closes a real
+   gap without narrowing anything that was relied upon.
+7. **Also as a consequence: a comment-only "statement"** (no actual SQL,
+   e.g. `-- just a comment`) **now errors** (`"No statement to
+   prepare!"`) rather than the previous silent empty-success via
+   `duckdb_query()`. Not exercised by any tested workflow.
+8. This internal use of `duckdb_prepare()` is **not** the client-facing
+   prepared-statement protocol deferred to sub-project 3 (§2): the plugin
+   still does not support `COM_STMT_PREPARE`/`COM_STMT_EXECUTE` (MySQL)
+   or `Parse`/`Bind`/`Execute` (PostgreSQL) — every client-visible
+   statement is still a one-shot text query. `duckdb_prepare()` is used
+   purely as an internal mechanism to inspect a statement's schema
+   without executing it, and to guarantee single execution; no prepared
+   statement handle is ever exposed over the wire.
+9. Fallback in this design happens only at the *prepare* stage (item 3
+   above) — never after execution. If the statement chosen for execution
+   (wrap or original) fails to *prepare*, the other candidate is tried
+   instead, before anything has run. If the chosen statement's
+   *execution* itself then fails, the plugin reports that as an error
+   rather than silently falling back to something else, since by that
+   point nothing "already succeeded" to fall back in favour of — unlike
+   the earlier execute-first design, where a failed second `duckdb_query()`
+   could safely fall back to a first result that had already succeeded.
 
 Column names come from `duckdb_column_name()` into `add_column_definition()`.
 A DDL or DML statement produces a NULL resultset with `duckdb_rows_changed()`
@@ -573,6 +626,13 @@ allowlist predicate and guarded re-query (Task 5/6). §7 now describes the
 `SELECT COLUMNS(*)::VARCHAR FROM (...)` re-query it triggers, including
 why the re-query is gated to lexical reads only (it re-executes the
 statement, side effects included) and its trailing-`;` handling.
+**Superseded by a later revision** (PR #6133 review, P1): the lexical
+gate (`duckdb_is_safe_to_rewrap()`) proved insufficient — it let
+`SELECT [nextval('s')]` through and silently double-executed it — and
+was replaced with a prepare-first design that decides the rewrap from a
+prepared statement's schema before anything executes, guaranteeing
+single execution structurally rather than lexically. §7 has been updated
+to describe that design; `duckdb_is_safe_to_rewrap()` no longer exists.
 
 **C3 — §9 (`pgsql_ifaces` default).** An earlier implementation draft of
 this sub-project defaulted `pgsql_ifaces` to `6032` — ProxySQL's own

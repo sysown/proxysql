@@ -152,6 +152,18 @@ fetch extensions from the internet, with or without
 setting does gate is the local-filesystem/external-state surface
 described above.
 
+**Multi-statement input is rejected, closing a statement-smuggling path.**
+Every statement now goes through `duckdb_prepare()` before it is executed
+(see the rewrap mechanism in Limitations, below), and `duckdb_prepare()`
+refuses more than one statement per request. The direct-execution path
+this plugin used before ran every statement present in the packet but
+returned only the *last* one's result — so a single client request like
+`SELECT 1; DROP TABLE t;` would execute the `DROP` while the client only
+ever saw the `SELECT`'s result, with the destructive statement invisible
+in the response. Rejecting the whole packet now matches what a MySQL
+server does for a client that has not negotiated
+`CLIENT_MULTI_STATEMENTS`, and removes that smuggling vector outright.
+
 ## 6. Connect
 
 The plugin's listeners are independent of ProxySQL's own MySQL (6033)
@@ -182,23 +194,60 @@ Stated plainly, not buried:
   what ProxySQL's own Admin interface and the SQLite3 Server do today.
   Typed (non-text) result columns are deferred to a later sub-project.
 - **Some DuckDB types cannot render through the deprecated
-  `duckdb_value_varchar()` accessor**, and are handled by a re-query, not
-  a silent gap: `LIST`, `STRUCT`, `MAP`, `ARRAY`, `UNION`, `UUID`, `ENUM`,
+  `duckdb_value_varchar()` accessor**, and are handled by a rewrap, not a
+  silent gap: `LIST`, `STRUCT`, `MAP`, `ARRAY`, `UNION`, `UUID`, `ENUM`,
   `BIT`, and `TIMESTAMP_S`/`MS`/`NS` all render as NULL through the direct
-  path. When a result contains any such column, the plugin transparently
-  re-runs the query wrapped as `SELECT COLUMNS(*)::VARCHAR FROM (<query>)`,
-  which casts every column (nested values included) to a renderable
-  VARCHAR. **This re-executes the statement a second time**, including any
-  side effects — so the plugin only does this for statements it can prove
-  are safe to run twice (a lexical read: `SELECT`/`WITH`/`TABLE`/`VALUES`/
-  `DESCRIBE`/`SHOW`/`PRAGMA`/`EXPLAIN`, with a `RETURNING` anywhere in the
-  statement, including inside a CTE, disqualifying it). It deliberately
-  refuses to re-execute anything that is not a read — in particular,
-  `INSERT ... RETURNING` / `UPDATE ... RETURNING` / `DELETE ... RETURNING`
-  are never re-run, even if their result contains an unrenderable column;
-  such a result falls back to its original (possibly NULL-rendering) form
-  rather than risking a double write.
-- **No prepared statements.** Every statement is a one-shot text query.
+  path. The plugin decides whether a rewrap is needed by first calling
+  `duckdb_prepare()` on the statement — which parses and binds but does
+  **not** execute — and inspecting the prepared statement's column types.
+  If any column is unrenderable, it tries to prepare a second statement,
+  `SELECT COLUMNS(*)::VARCHAR FROM (<query>)`, which casts every column
+  (nested values included) to a renderable VARCHAR; if that prepares
+  successfully, it is the one actually executed, and the original
+  prepared statement is discarded without ever having run. If the wrap
+  does not parse (a bare `INSERT`/`UPDATE`/`DELETE ... RETURNING` cannot
+  legally sit inside a `FROM`-clause subquery in DuckDB's grammar), the
+  plugin falls back to executing the original prepared statement instead
+  — degraded (NULL-rendering) output for the unrenderable column, rather
+  than an error, since the query did succeed. **Either way, the client's
+  statement executes exactly once**: the rewrap decision is made from the
+  prepared statement's schema before anything runs, not by executing the
+  statement and conditionally re-running it afterwards. An earlier
+  revision of this plugin did exactly that — execute, inspect the real
+  result, and conditionally re-execute a wrapped copy — gated by a
+  lexical "starts with a read keyword, no `RETURNING`" check. That check
+  let `SELECT [nextval('s')]` through (it starts with `SELECT` and has no
+  `RETURNING`), silently advancing the sequence twice per client
+  statement and returning the second value while discarding the first.
+  That design has been replaced by the prepare-first design described
+  above.
+- **Multi-statement input is rejected.** `duckdb_prepare()`, which the
+  plugin now always calls before executing anything, refuses to prepare
+  more than one statement in a single request
+  ("Cannot prepare multiple statements at once!"). This is deliberate,
+  not merely a side effect of preparing first: the previous
+  direct-execution path (`duckdb_query()`) silently ran **every**
+  statement in the packet but returned only the **last** one's result to
+  the client — so `SELECT 1; DROP TABLE t;` would execute the `DROP`
+  while the client only ever saw the `SELECT`'s result, with the
+  destructive statement invisible in the response (statement smuggling).
+  Rejecting the whole packet up front instead matches what a MySQL server
+  does for a client that has not negotiated `CLIENT_MULTI_STATEMENTS`,
+  and removes that smuggling path entirely. See also the Security section
+  below.
+- **A comment-only "statement"** (e.g. a bare `-- comment` with no actual
+  SQL) **now errors** (`"No statement to prepare!"`) instead of the
+  previous silent empty-success. Not exercised by any documented client
+  workflow; noted here because it is an observable behavior change from
+  switching to `duckdb_prepare()`.
+- **No prepared statements are exposed to clients.** The plugin does
+  internally call `duckdb_prepare()` on every statement — to inspect
+  column types before deciding whether the unrenderable-column rewrap
+  above is needed, and to guarantee each statement executes exactly once
+  — but it never exposes a prepared-statement handle over the wire: there
+  is no `COM_STMT_PREPARE`/`COM_STMT_EXECUTE` (MySQL) or
+  `Parse`/`Bind`/`Execute` (PostgreSQL) support. Every client-visible
+  statement is still a one-shot text query.
 - **No query timeout.** A runaway query is not interrupted; `duckdb_interrupt()`-based
   timeouts are deferred to a later sub-project.
 - **Sessions report as `PROXYSQL_SESSION_SQLITE`** in ProxySQL logs and in
