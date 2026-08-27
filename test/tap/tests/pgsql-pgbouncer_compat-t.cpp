@@ -182,9 +182,23 @@ static void test_converter_sql_executes(PGconn* admin) {
 
 	int executed = 0;
 	int failed = 0;
+	int skipped_persist = 0;
 	for (const auto& e : result.entries) {
 		// Comment-only entries carry no statement to run.
 		if (e.sql.empty() || e.sql.compare(0, 2, "--") == 0) continue;
+
+		// Never execute the converter's "SAVE ... TO DISK" statements. They
+		// would overwrite this instance's on-disk configuration permanently,
+		// which no LOAD ... FROM DISK could then undo -- it would restore the
+		// clobbered copy. Every other statement touches memory/runtime only,
+		// so the restore at the end of main() puts things back. The SAVE
+		// statements are plain, fixed SQL with no generated identifiers, so
+		// skipping them costs no coverage of the mapping logic.
+		if (strncasecmp(e.sql.c_str(), "SAVE ", 5) == 0) {
+			skipped_persist++;
+			continue;
+		}
+
 		executed++;
 		PGresult* res = PQexec(admin, e.sql.c_str());
 		ExecStatusType st = PQresultStatus(res);
@@ -199,6 +213,9 @@ static void test_converter_sql_executes(PGconn* admin) {
 	ok(executed > 0, "converter SQL contained executable statements (%d)", executed);
 	ok(failed == 0, "every converter statement executed cleanly (%d failed of %d)",
 	   failed, executed);
+	ok(skipped_persist > 0,
+	   "converter emits SAVE ... TO DISK statements (%d, deliberately not executed here)",
+	   skipped_persist);
 }
 
 // After the import the tables it targets must actually hold the imported rows.
@@ -242,8 +259,8 @@ int main(int argc, char** argv) {
 	}
 
 	// 10 plain SHOW + 10 EXTENDED SHOW + 10 column-count + 8 unsupported
-	// + 3 native SHOW + 3 converter SQL + 3 populated tables + 2 import
-	plan(NUM_SUPPORTED * 3 + NUM_UNSUPPORTED + 3 + 3 + 3 + 2);
+	// + 3 native SHOW + 4 converter SQL + 3 populated tables + 2 import
+	plan(NUM_SUPPORTED * 3 + NUM_UNSUPPORTED + 3 + 4 + 3 + 2);
 
 	PGconn* admin = connect_admin(cl);
 	if (PQstatus(admin) != CONNECTION_OK) {
@@ -261,14 +278,35 @@ int main(int argc, char** argv) {
 	test_converter_populated_tables(admin);
 	test_import_missing_file(admin);
 
-	// Put the runtime configuration back the way we found it: the converter
-	// statements above rewrote pgsql_servers/users/query_rules in memory.
-	PQclear(PQexec(admin, "LOAD PGSQL SERVERS FROM DISK"));
-	PQclear(PQexec(admin, "LOAD PGSQL USERS FROM DISK"));
-	PQclear(PQexec(admin, "LOAD PGSQL QUERY RULES FROM DISK"));
-	PQclear(PQexec(admin, "LOAD PGSQL SERVERS TO RUNTIME"));
-	PQclear(PQexec(admin, "LOAD PGSQL USERS TO RUNTIME"));
-	PQclear(PQexec(admin, "LOAD PGSQL QUERY RULES TO RUNTIME"));
+	// Put the configuration back the way we found it. The converter statements
+	// above rewrote pgsql_servers / pgsql_users / pgsql_query_rules / the
+	// firewall whitelist and set pgsql-* variables, all in memory only -- the
+	// SAVE ... TO DISK statements were deliberately skipped, so the on-disk
+	// copy is still the one this instance was configured with and is a valid
+	// source to restore from. Other tests share this instance; leaving it
+	// holding a PgBouncer import would break them.
+	static const char* RESTORE[] = {
+		"LOAD PGSQL SERVERS FROM DISK",
+		"LOAD PGSQL USERS FROM DISK",
+		"LOAD PGSQL QUERY RULES FROM DISK",
+		"LOAD PGSQL VARIABLES FROM DISK",
+		"LOAD PGSQL FIREWALL FROM DISK",
+		"LOAD PGSQL SERVERS TO RUNTIME",
+		"LOAD PGSQL USERS TO RUNTIME",
+		"LOAD PGSQL QUERY RULES TO RUNTIME",
+		"LOAD PGSQL VARIABLES TO RUNTIME",
+		"LOAD PGSQL FIREWALL TO RUNTIME",
+	};
+	for (const char* stmt : RESTORE) {
+		PGresult* res = PQexec(admin, stmt);
+		ExecStatusType st = PQresultStatus(res);
+		if (st != PGRES_COMMAND_OK && st != PGRES_TUPLES_OK) {
+			// Not an assertion (the plan is fixed), but it must be visible:
+			// a failed restore leaves the shared instance misconfigured.
+			diag("RESTORE FAILED: %s -> %s", stmt, PQerrorMessage(admin));
+		}
+		PQclear(res);
+	}
 
 	PQfinish(admin);
 	return exit_status();
