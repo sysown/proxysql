@@ -122,14 +122,24 @@ class TestConfigGuard {
 	public:
 	TestConfigGuard(MYSQL* _proxyadmin, MYSQL* _backend) :
 		proxyadmin(_proxyadmin), backend(_backend) {}
+	/**
+	 * A failed restore leaves the mutated configuration behind for the rest of
+	 * the TAP group: we can't fail the test from a destructor, but it must not
+	 * happen silently either.
+	 */
+	void restore(const char* q) {
+		if (mysql_query(proxyadmin, q)) {
+			diag("Failed to restore the configuration, '%s' returned: %s", q, mysql_error(proxyadmin));
+		}
+	}
 	~TestConfigGuard() {
 		std::string q = "DELETE FROM mysql_servers WHERE hostgroup_id=" + std::to_string(TEST_HG);
-		mysql_query(proxyadmin, q.c_str());
-		mysql_query(proxyadmin, "LOAD MYSQL SERVERS TO RUNTIME");
-		mysql_query(proxyadmin, "LOAD MYSQL QUERY RULES FROM DISK");
-		mysql_query(proxyadmin, "LOAD MYSQL QUERY RULES TO RUNTIME");
-		mysql_query(proxyadmin, "LOAD MYSQL VARIABLES FROM DISK");
-		mysql_query(proxyadmin, "LOAD MYSQL VARIABLES TO RUNTIME");
+		restore(q.c_str());
+		restore("LOAD MYSQL SERVERS TO RUNTIME");
+		restore("LOAD MYSQL QUERY RULES FROM DISK");
+		restore("LOAD MYSQL QUERY RULES TO RUNTIME");
+		restore("LOAD MYSQL VARIABLES FROM DISK");
+		restore("LOAD MYSQL VARIABLES TO RUNTIME");
 		mysql_close(backend);
 		mysql_close(proxyadmin);
 	}
