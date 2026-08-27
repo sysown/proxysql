@@ -240,22 +240,30 @@ Stated plainly, not buried:
   exact mechanism that can put a release-built `ProxySQL_DuckDB_Plugin.so`
   next to a `-DDEBUG` core, or vice versa, without anyone intending it.
   This was independently deliberately reproduced: building the plugin
-  release and loading it into a `-DDEBUG` core demonstrably corrupts
-  memory reachable through `MySQL_Data_Stream`.
+  release and loading it into a `-DDEBUG` core reliably produced
+  incorrect behavior consistent with memory corruption at the offsets
+  measured above — not merely a hypothetical risk.
 
   **Observed under that reproduction — an indefinite per-connection hang,
   not an abort.** Every connection through the mismatched plugin's MySQL
   listener hung indefinitely: the client connected and authenticated but
   never received a response to any query, including a trivial `SELECT
-  1`, and the process never crashed. Traced with a debugger to
-  `duckdb_listener.cpp`'s `fill_client_addr()`, which runs on *every*
-  accepted connection, before any query is even read, and writes
-  `client_addr`/`client_addrlen`/`addr.addr`/`addr.port` — fields in the
-  same post-`myprot` region as `DSS` — through the plugin's mismatched
-  offsets. A breakpoint on the plugin's own query-dispatch entry point
-  was never hit, confirming the hang happens before any query reaches
-  the plugin at all, and specifically before `duckdb_send_mysql_error()`
-  (the function that would trip the `assert(0)`) is ever called.
+  1`, and the process never crashed. A breakpoint on the plugin's own
+  query-dispatch entry point was never hit — a negative result, but a
+  load-bearing one: it confirms the hang happens before any query
+  reaches the plugin at all, and specifically before
+  `duckdb_send_mysql_error()` (the function that would trip the
+  `assert(0)`) is ever called.
+
+  **Inferred (from the proven offsets above plus that negative debugging
+  result, not from directly inspecting the corrupted memory) — the
+  responsible write.** `duckdb_listener.cpp`'s `fill_client_addr()` runs
+  on *every* accepted connection, before any query is even read, and
+  writes `client_addr`/`client_addrlen`/`addr.addr`/`addr.port` — fields
+  in the same post-`myprot` region as `DSS` — through the plugin's
+  mismatched offsets. That a hang precedes query dispatch is consistent
+  with this being the corrupting write; it was not confirmed by reading
+  the corrupted bytes directly.
 
   **Plausible but not reproduced — the `assert(0)` at
   `MySQL_Protocol.cpp:434`.** The mechanism above is consistent with that

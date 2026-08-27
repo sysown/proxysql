@@ -41,7 +41,7 @@ namespace prometheus { class Registry; }
 //          for another Admin consumer; older plugins continue to use the
 //          unchanged three DB-handle prefix.
 //
-// DEBUG-tier tagging (root-caused from a real crash, do not remove):
+// DEBUG-tier tagging (do not remove -- see the certainty breakdown below):
 //
 // A handful of core headers add fields ONLY under `#ifdef DEBUG` --
 // notably MySQL_Protocol.h's `bool dump_pkt;` and PgSQL_Session.h's
@@ -60,18 +60,44 @@ namespace prometheus { class Registry; }
 // offsets while still reporting a numerically "compatible" abi_version
 // under the plain ABI 1..5 scheme above (e.g. a release plugin's
 // abi_version=5 is <= a debug core's max=5, so the ordinary
-// forward-compatibility range check does not catch it). The plugin then
-// writes through what it believes is MySQL_Data_Stream::DSS but is
-// actually a different member a few bytes off -- e.g.
-// duckdb_send_mysql_error() setting STATE_QUERY_SENT_DS lands on
-// connect_retries_on_failure instead, DSS is never touched and stays
-// STATE_SLEEP, and generate_pkt_ERR()'s state-machine switch
-// (lib/MySQL_Protocol.cpp) falls through to `default: assert(0)`,
-// aborting the entire ProxySQL process (Admin port included) the next
-// time that plugin's error path runs. Reproduced and confirmed via an
-// offsetof() probe: sizeof(MySQL_Protocol) is 80 bytes release / 88
-// bytes -DDEBUG, and offsetof(MySQL_Data_Stream, DSS) is 768 / 776
-// respectively.
+// forward-compatibility range check does not catch it).
+//
+// What is PROVEN (measured, both ways, against MySQL_Data_Stream.h):
+// sizeof(MySQL_Protocol) is 80 bytes release / 88 bytes -DDEBUG, and
+// offsetof(MySQL_Data_Stream, DSS) is 768 / 776 respectively -- release
+// offset 768 is debug offset connect_retries_on_failure.
+//
+// What was OBSERVED when a mismatched plugin was deliberately loaded
+// into a mismatched core: an indefinite per-connection hang, not a
+// crash. Every connection through the mismatched plugin's MySQL
+// listener authenticated but then never received a response to any
+// query, and the process never aborted. A debugger breakpoint on the
+// plugin's own query-dispatch entry point was never hit -- confirming
+// only that the hang precedes any query, not by itself identifying which
+// write caused it.
+//
+// What is INFERRED (from the proven offsets plus that negative
+// debugging result, not from directly inspecting the corrupted memory):
+// the responsible write is duckdb_listener.cpp's fill_client_addr(),
+// which touches the same post-`myprot` field region as `DSS` on every
+// accepted connection, before any query is read -- consistent with a
+// hang that precedes query dispatch.
+//
+// What is PLAUSIBLE but NOT reproduced: that a corrupted DSS write
+// specifically (e.g. duckdb_send_mysql_error() setting
+// STATE_QUERY_SENT_DS landing on connect_retries_on_failure instead)
+// would leave the real DSS at its construction-time default
+// (STATE_SLEEP), driving generate_pkt_ERR()'s state-machine switch
+// (lib/MySQL_Protocol.cpp) into `default: assert(0)` and aborting the
+// entire process (Admin port included) the next time that plugin's
+// error path runs. This is a plausible consequence of the same
+// offset-shift mechanism, but reproduction produced the hang above, not
+// this abort -- see plugins/duckdb/README.md's Limitations section for
+// the full account, including why two real aborts recorded during that
+// plugin's development are not conclusively attributed to this
+// mechanism. The guard below does not depend on that question: it closes
+// the proven offset-shift hazard regardless of which symptom a given
+// mismatch happens to produce.
 //
 // PROXYSQL_PLUGIN_ABI_DEBUG_BIT reserves a high bit that is either set
 // (this build has -DDEBUG) or clear (it doesn't) in `abi_version`, kept
