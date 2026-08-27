@@ -345,11 +345,123 @@ void test_defaults() {
     CHECK_INT(config.global.max_prepared_statements, 200, "default max_prepared_statements is 200");
 }
 
+
+// ============================================================
+// Test: quoting and inline comments in the [pgbouncer] section
+//
+// Regression: comment stripping was skipped entirely for any value starting
+// with a quote (so '...' kept its quotes and a '#' inside a quoted value could
+// still truncate a value that did not start with one).
+// ============================================================
+void test_global_value_quoting() {
+    PgBouncer::Config config;
+    bool ok_result = PgBouncer::parse_config_file(
+        "fixtures/pgbouncer_compat/quoting.ini", config);
+
+    CHECK(ok_result, "quoting.ini parses successfully");
+    CHECK(config.errors.empty(), "quoting.ini has no errors");
+
+    // Quoted value: quotes stripped, '#' inside preserved as data.
+    CHECK_STR(config.global.auth_query,
+              "SELECT usename, passwd FROM pg_shadow WHERE usename=$1 # not a comment",
+              "quoted value keeps its '#' and loses its quotes");
+
+    // Unquoted value: truncated at the inline '#' comment.
+    CHECK_STR(config.global.logfile, "/var/log/pgbouncer.log",
+              "unquoted value is truncated at '#'");
+
+    // Doubled quote inside a quoted value is a literal quote.
+    CHECK_STR(config.global.unix_socket_dir, "A'B",
+              "doubled single quote unescapes to one quote");
+
+    // ';' also starts an inline comment.
+    CHECK_STR(config.global.pidfile, "/var/run/pgbouncer.pid",
+              "unquoted value is truncated at ';'");
+}
+
+// ============================================================
+// Test: parse() is a full load, not an append
+//
+// Regression: parsing twice into the same Config duplicated every database,
+// user and rule, and kept stale errors alive.
+// ============================================================
+void test_reparse_is_not_additive() {
+    PgBouncer::Config config;
+    PgBouncer::parse_config_file("fixtures/pgbouncer_compat/full.ini", config);
+    size_t dbs_first = config.databases.size();
+    size_t users_first = config.users.size();
+
+    CHECK(dbs_first > 0, "first parse found databases");
+
+    PgBouncer::parse_config_file("fixtures/pgbouncer_compat/full.ini", config);
+    CHECK(config.databases.size() == dbs_first,
+          "re-parsing does not duplicate databases");
+    CHECK(config.users.size() == users_first,
+          "re-parsing does not duplicate users");
+
+    // A failed parse into a previously-populated Config must not leave the
+    // old content behind.
+    PgBouncer::parse_config_file("fixtures/pgbouncer_compat/minimal.ini", config);
+    CHECK(config.databases.size() != dbs_first || dbs_first == 1,
+          "parsing a different file replaces the previous content");
+}
+
+// ============================================================
+// Test: HBA tokenizer quoting
+// ============================================================
+void test_hba_quoting() {
+    PgBouncer::Config config;
+    std::vector<PgBouncer::HBARule> rules;
+    std::vector<PgBouncer::ParseMessage> errors;
+
+    bool ok_result = PgBouncer::parse_hba_file(
+        "fixtures/pgbouncer_compat/hba_quoting.conf", rules, errors);
+
+    CHECK(ok_result, "hba_quoting.conf parses successfully");
+    CHECK_INT((int)rules.size(), 3, "three HBA rules parsed");
+
+    if (rules.size() >= 2) {
+        // "db""quoted" -> db"quoted ; "user name" keeps its space
+        CHECK_STR(rules[0].database, "db\"quoted",
+                  "doubled double-quote unescapes inside an HBA token");
+        CHECK_STR(rules[0].user, "user name",
+                  "quoted HBA token keeps its space");
+        // "" is an empty token, not a dropped one
+        CHECK_STR(rules[1].database, "",
+                  "empty quoted HBA token is preserved as an empty field");
+        CHECK_STR(rules[1].user, "all",
+                  "field after an empty quoted token is not shifted");
+    } else {
+        CHECK(false, "doubled double-quote unescapes inside an HBA token");
+        CHECK(false, "quoted HBA token keeps its space");
+        CHECK(false, "empty quoted HBA token is preserved as an empty field");
+        CHECK(false, "field after an empty quoted token is not shifted");
+    }
+}
+
+// ============================================================
+// Test: an unterminated quote in pg_hba.conf is an error
+//
+// Regression: tokenize() returned partial tokens for a line with a dangling
+// quote, so the record was accepted with silently truncated fields.
+// ============================================================
+void test_hba_unterminated_quote() {
+    std::vector<PgBouncer::HBARule> rules;
+    std::vector<PgBouncer::ParseMessage> errors;
+
+    bool ok_result = PgBouncer::parse_hba_file(
+        "fixtures/pgbouncer_compat/hba_unterminated.conf", rules, errors);
+
+    CHECK(!ok_result, "unterminated quote fails the HBA parse");
+    CHECK(!errors.empty(), "unterminated quote reports an error");
+    CHECK(rules.empty(), "no rule is produced from the malformed line");
+}
+
 // ============================================================
 // Main
 // ============================================================
 int main() {
-    plan(127);
+    plan(146);
 
     test_minimal_config();        // 7 tests
     test_full_config();           // 42 tests
@@ -359,6 +471,10 @@ int main() {
     test_include_directive();     // 7 tests
     test_nonexistent_file();      // 2 tests
     test_defaults();              // 9 tests (adjusted: removed 1 duplicate)
+    test_global_value_quoting();
+    test_reparse_is_not_additive();
+    test_hba_quoting();
+    test_hba_unterminated_quote();
 
     return exit_status();
 }

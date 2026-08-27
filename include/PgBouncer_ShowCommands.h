@@ -1,5 +1,5 @@
-#ifndef PGBOUNCER_SHOW_COMMANDS_H
-#define PGBOUNCER_SHOW_COMMANDS_H
+#ifndef __CLASS_PGBOUNCER_SHOW_COMMANDS_H
+#define __CLASS_PGBOUNCER_SHOW_COMMANDS_H
 
 #include <string>
 
@@ -19,4 +19,4 @@ std::string get_unsupported_show_message(const char* query, int query_len);
 
 } // namespace PgBouncer
 
-#endif
+#endif // __CLASS_PGBOUNCER_SHOW_COMMANDS_H

@@ -37,6 +37,30 @@ std::string ConfigParser::unquote(const std::string& s) {
     return s;
 }
 
+std::string ConfigParser::strip_inline_comment(const std::string& s) {
+    // Truncate at the first '#' or ';' that sits outside a single-quoted run and
+    // is preceded by whitespace (or starts the value). PgBouncer escapes a quote
+    // inside a quoted value by doubling it ('').
+    bool in_quote = false;
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\'') {
+            if (in_quote && i + 1 < s.size() && s[i + 1] == '\'') {
+                ++i;              // escaped quote, stays inside the quoted run
+                continue;
+            }
+            in_quote = !in_quote;
+            continue;
+        }
+        if (in_quote) continue;
+        if (s[i] == '#' || s[i] == ';') {
+            if (i == 0 || std::isspace(static_cast<unsigned char>(s[i - 1]))) {
+                return trim(s.substr(0, i));
+            }
+        }
+    }
+    return s;
+}
+
 bool ConfigParser::parse_bool(const std::string& value, bool& result) {
     std::string lower = value;
     std::transform(lower.begin(), lower.end(), lower.begin(),
@@ -68,11 +92,14 @@ bool ConfigParser::parse_int(const std::string& value, int& result) {
 
 bool ConfigParser::parse_uint(const std::string& value, unsigned int& result) {
     if (value.empty()) return false;
+    // std::stoul wraps a negative literal around instead of throwing, so reject
+    // the sign up front rather than relying on the range check below.
+    if (value[0] == '-') return false;
     try {
         size_t pos = 0;
         unsigned long v = std::stoul(value, &pos);
         if (pos != value.size()) return false;
-        if (v > UINT_MAX) return false;
+        if (v > static_cast<unsigned long>(UINT_MAX)) return false;
         result = static_cast<unsigned int>(v);
         return true;
     } catch (...) {
@@ -594,18 +621,14 @@ bool ConfigParser::parse_ini(
         std::string key = trim(trimmed.substr(0, eq_pos));
         std::string value = trim(trimmed.substr(eq_pos + 1));
 
-        // Strip inline comments from values (only for [pgbouncer] section, not connection strings)
+        // Strip inline comments from values (only for [pgbouncer] section; the
+        // other sections hold connection strings, parsed by parse_connstr_pairs).
+        // A '#' or ';' inside a quoted value is data, not a comment.
         if (current_section == Section::PGBOUNCER) {
-            // Remove trailing comments, but be careful with quoted values
-            if (!value.empty() && value[0] != '\'') {
-                auto comment_pos = value.find(" #");
-                if (comment_pos == std::string::npos) comment_pos = value.find(" ;");
-                if (comment_pos == std::string::npos) comment_pos = value.find("\t#");
-                if (comment_pos == std::string::npos) comment_pos = value.find("\t;");
-                if (comment_pos != std::string::npos) {
-                    value = trim(value.substr(0, comment_pos));
-                }
-            }
+            value = strip_inline_comment(value);
+            // PgBouncer allows quoting a global value to protect spaces and
+            // comment characters; the quotes are not part of the value.
+            value = unquote(value);
         }
 
         if (current_section == Section::NONE) {
@@ -687,6 +710,10 @@ bool ConfigParser::parse(
     const std::string& filepath, Config& config,
     bool resolve_includes, bool resolve_referenced_files)
 {
+    // Start from a clean slate: parse() is a full load, not an append. Without
+    // this, reusing a Config (or a ConfigParser) across calls duplicates every
+    // database/user/rule and keeps stale errors alive.
+    config = Config();
     include_depth_ = 0;
     return parse_ini(filepath, config, resolve_includes, resolve_referenced_files);
 }

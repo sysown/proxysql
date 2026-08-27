@@ -1,5 +1,5 @@
-#ifndef PGBOUNCER_CONFIG_PARSER_H
-#define PGBOUNCER_CONFIG_PARSER_H
+#ifndef __CLASS_PGBOUNCER_CONFIG_PARSER_H
+#define __CLASS_PGBOUNCER_CONFIG_PARSER_H
 
 #include "PgBouncer_Config.h"
 #include <string>
@@ -47,6 +47,7 @@ private:
     // String utilities
     static std::string trim(const std::string& s);
     static std::string unquote(const std::string& s);
+    static std::string strip_inline_comment(const std::string& s);
     static bool parse_bool(const std::string& value, bool& result);
     static bool parse_int(const std::string& value, int& result);
     static bool parse_uint(const std::string& value, unsigned int& result);
@@ -54,4 +55,4 @@ private:
 
 } // namespace PgBouncer
 
-#endif
+#endif // __CLASS_PGBOUNCER_CONFIG_PARSER_H

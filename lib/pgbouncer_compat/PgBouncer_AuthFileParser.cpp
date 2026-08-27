@@ -76,6 +76,8 @@ AuthType AuthFileParser::detect_password_type(const std::string& password) {
 bool AuthFileParser::parse(const std::string& filepath,
                            std::vector<AuthFileEntry>& entries,
                            std::vector<ParseMessage>& errors) {
+    // Full load, not an append -- see the note in HBAParser::parse.
+    entries.clear();
     std::ifstream file(filepath);
     if (!file.is_open()) {
         errors.push_back({filepath, 0, "Cannot open auth file: " + filepath});
