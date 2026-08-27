@@ -128,6 +128,44 @@ of its on-demand build rule.
    ```
 9. Update this README's "Pinned version" and "Result-API shape" sections.
 
+## Build cost
+
+Design decision D2 (`docs/superpowers/specs/2026-08-26-duckdb-server-plugin-design.md`,
+§4) committed to measuring the real cost of this dep build rather than
+leaving the original 10–30 minute estimate standing.
+
+**This is an observation, not a controlled from-scratch measurement.**
+A true `cleanall` + timed rebuild was not performed in the session that
+recorded these numbers, specifically to avoid destroying the working
+DuckDB build tree that later verification and review depend on (per that
+task's explicit instructions). What follows is the actual wall-clock this
+dep build took the two times it was genuinely built from scratch during
+this sub-project's development, read back from that session's own
+transcript rather than re-measured:
+
+| Run | What happened | Wall-clock | Cores |
+|---|---|---|---|
+| Initial vendoring build | `make -C deps PROXYSQL40=1 duckdb` — verify, extract, cmake configure, `cmake --build build/release -j32` | ~10 minutes | 32 (`nproc`) |
+| Rebuild after the `DUCKDB_EXPLICIT_VERSION` fix | `libduckdb_static.a` deleted and the same recipe re-run in full (re-verify, re-extract, reconfigure, rebuild) | ~7 minutes | 32 (`nproc`) |
+
+No peak-RSS figure was captured for either run (`/usr/bin/time -v` was
+not used at the time); only wall-clock is known. Both runs were on the
+same 32-core machine this repository's DuckDB build tree currently lives
+on. Artifact sizes at the time of writing:
+
+- `deps/duckdb/duckdb-1.4.5.tar.gz` (the vendored source archive): 98,359,161 bytes (~94 MiB)
+- `deps/duckdb/duckdb/build/release/src/libduckdb_static.a` (the built static library): 73,663,416 bytes (~70 MiB)
+- `deps/duckdb/duckdb/` (full extracted + built tree): ~606 MiB
+
+**Verdict on D2's gating decision, pending a real controlled measurement:**
+~7–10 minutes wall-clock on 32 cores is well inside the original 10–30
+minute estimate's low end, not near its high end — DuckDB's build does not
+appear to be the largest compile in the tree in practice, at least on a
+high-core-count machine. A slower/fewer-core CI runner will see a larger
+number; anyone revisiting D2 should get a genuine `/usr/bin/time -v make
+-C deps PROXYSQL40=1 duckdb` run (after `cleanall`) on the actual CI
+runner class, not extrapolate from this workstation figure.
+
 ## Result-API shape (checked against v1.4.5)
 
 `deps/duckdb/duckdb/src/include/duckdb.h` in the pinned v1.4.5 tree still
