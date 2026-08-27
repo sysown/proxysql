@@ -53,6 +53,45 @@ exec "${BIN_DIR}/proxysql.bin" "$@"
 EOF
 chmod 0755 "pkgroot/${DIR_NAME}/bin/proxysql"
 
+# proxysql-cli: the same binary, selected by argv[0]. main() compares the
+# basename against "proxysql-cli" exactly, and the wrapper above execs
+# proxysql.bin -- which would make argv[0] "proxysql.bin". So the wrapper for
+# the CLI execs a correctly-named symlink under libexec/ instead. `exec -a` is
+# not available in POSIX sh, which is why this needs the extra indirection.
+mkdir -p "pkgroot/${DIR_NAME}/libexec"
+ln -sf ../bin/proxysql.bin "pkgroot/${DIR_NAME}/libexec/proxysql-cli"
+cat > "pkgroot/${DIR_NAME}/bin/proxysql-cli" <<'EOF'
+#!/bin/sh
+set -eu
+
+BIN_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export LD_LIBRARY_PATH="${BIN_DIR}/../lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+exec "${BIN_DIR}/../libexec/proxysql-cli" "$@"
+EOF
+chmod 0755 "pkgroot/${DIR_NAME}/bin/proxysql-cli"
+
+bundle_runtime_library() {
+    local soname="$1"
+    local resolved_path
+    local library_name
+
+    resolved_path=$(ldd src/proxysql | awk -v soname="${soname}" '$1 == soname && $2 == "=>" { print $3; exit }')
+    if [[ -z "${resolved_path}" || ! -f "${resolved_path}" ]]; then
+        echo "ERROR: unable to resolve ${soname} for the tarball" >&2
+        exit 1
+    fi
+
+    resolved_path=$(readlink -f "${resolved_path}")
+    library_name=$(basename "${resolved_path}")
+    cp "${resolved_path}" "pkgroot/${DIR_NAME}/lib/${library_name}"
+    if [[ "${library_name}" != "${soname}" ]]; then
+        ln -s "${library_name}" "pkgroot/${DIR_NAME}/lib/${soname}"
+    fi
+}
+
+bundle_runtime_library libssl.so.3
+bundle_runtime_library libcrypto.so.3
+
 cp etc/proxysql.cnf "pkgroot/${DIR_NAME}/etc/"
 cp etc/logrotate.d/proxysql "pkgroot/${DIR_NAME}/etc/logrotate.d/"
 cp tools/proxysql_galera_checker.sh tools/proxysql_galera_writer.pl "pkgroot/${DIR_NAME}/share/proxysql/tools/"
