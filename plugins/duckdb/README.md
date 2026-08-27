@@ -58,6 +58,22 @@ setting, `variable_name` / `variable_value`, both `VARCHAR`). The
 in-memory module (`DuckDBConfigStore`) is the runtime source of truth
 once the plugin has started; the table is how you edit it.
 
+**`duckdb_variables` is empty after a fresh start, until something
+populates it.** The module boots with compiled-in defaults regardless
+(so the plugin itself always comes up correctly configured), but nothing
+`INSERT`s rows into the editable `duckdb_variables` admin table on boot.
+An operator who opens Admin right after a fresh install or restart and
+runs `SELECT * FROM duckdb_variables` expecting to see the seven defaults
+listed below will get zero rows, not the defaults. Two ways to get rows
+into the table: `SAVE DUCKDB VARIABLES TO MEMORY` dumps the module's
+current (default, if untouched) state into it; or, on a restart where
+`disk.duckdb_variables` already has rows from a prior `SAVE DUCKDB
+VARIABLES TO DISK`, the plugin's own startup sequence copies
+`disk.duckdb_variables` into `main.duckdb_variables` before installing it
+into the module (`duckdb_sync_variables_disk_to_memory`, run from
+`duckdb_start()`) — so a previously-persisted config reappears in the
+editable table automatically, but a truly first-ever boot does not.
+
 | Variable | Default | Notes |
 |---|---|---|
 | `mysql_ifaces` | `0.0.0.0:6031` | MySQL-protocol listener. `addr:port` entries separated by `;`; IPv6 literals bracketed (`[::1]:6031`). |

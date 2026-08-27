@@ -127,9 +127,16 @@ int main(int argc, char** argv) {
 	// invocation.
 	exec("SAVE DUCKDB VARIABLES TO MEMORY");
 
-	// 1. The plugin's table exists and is seeded.
+	// 1. The plugin's table is registered, and SAVE populates it. Do not
+	// call this "seeded" -- the table starts with zero rows on a true
+	// cold boot (confirmed by direct inspection of a running container
+	// before this test was written: no code path INSERTs default rows
+	// into `duckdb_variables`). What this assertion actually proves is
+	// that `SAVE DUCKDB VARIABLES TO MEMORY` above dumped the module's
+	// state into the table, i.e. the table is registered and reachable
+	// and the SAVE command's dump path works end to end.
 	ok(rows_of("SELECT COUNT(*) FROM duckdb_variables") > 0,
-	   "duckdb_variables is registered and seeded");
+	   "SAVE DUCKDB VARIABLES TO MEMORY populates the editable table");
 
 	// 2. The runtime view projects module state, not stored rows. Right
 	// after the seed SAVE above, the editable table and the module agree
