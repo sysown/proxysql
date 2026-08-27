@@ -445,8 +445,21 @@ bool ProxySQL_PluginManager::invoke_register_schemas_phase(std::string &err) {
 		// from a v1 plugin's static descriptor would be an out-of-bounds
 		// read -- v1 plugins allocate only the first 6 fields.  Treat v1
 		// plugins as if they opted out of Phase B.
+		//
+		// abi_version must be masked before this comparison: it carries
+		// PROXYSQL_PLUGIN_ABI_DEBUG_BIT in a high bit orthogonal to the
+		// ABI 1..5 layout-version number (see the contract comment next
+		// to PROXYSQL_PLUGIN_ABI_DEBUG_BIT in ProxySQL_Plugin.h). A
+		// DEBUG-tagged ABI-1 descriptor has abi_version == 0x40000001,
+		// which satisfies a raw ">= 2u" and would wrongly dereference
+		// register_schemas on a struct that doesn't have that field --
+		// exactly the out-of-bounds read this comment says is prevented.
 		proxysql_plugin_register_schemas_cb register_schemas_cb = nullptr;
-		if (plugin.descriptor != nullptr && plugin.descriptor->abi_version >= 2u) {
+		const unsigned int schema_layout_version =
+			(plugin.descriptor != nullptr)
+				? (plugin.descriptor->abi_version & ~PROXYSQL_PLUGIN_ABI_DEBUG_BIT)
+				: 0u;
+		if (plugin.descriptor != nullptr && schema_layout_version >= 2u) {
 			register_schemas_cb = plugin.descriptor->register_schemas;
 		}
 		if (register_schemas_cb == nullptr) {
