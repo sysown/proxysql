@@ -213,16 +213,18 @@ Stated plainly, not buried:
   ignored, matching what the SQLite3 Server does for session-state
   statements DuckDB has no equivalent for). Anything else goes to DuckDB
   as-is.
-- **Root-caused and fixed — the "intermittent MySQL-path crash" was a
-  plugin/core `-DDEBUG` build-tier mismatch, not flakiness.** An earlier
-  revision of this section described a rare `assert(0)` at
+- **A real memory-corruption mechanism was found and closed; the original
+  "intermittent MySQL-path crash" is not conclusively explained by it.**
+  An earlier revision of this section described a rare `assert(0)` at
   `lib/MySQL_Protocol.cpp:434` inside `generate_pkt_ERR`, aborting the
   entire ProxySQL process, and speculated the cause was a stale
   `dlopen`'d `.so` inode from a bind-mounted container that hadn't been
   recreated after a rebuild. **That hypothesis was investigated and is
-  superseded — it was wrong; the real mechanism is below.**
+  superseded — it was wrong.** What follows is what was actually
+  measured and observed, kept separate from what is still inferred.
 
-  Root cause: `include/MySQL_Protocol.h` declares `bool dump_pkt;` (and
+  **Proven — a plugin/core `-DDEBUG` build-tier mismatch corrupts memory.**
+  `include/MySQL_Protocol.h` declares `bool dump_pkt;` (and
   `include/PgSQL_Session.h` declares `PgSQL_Connection*
   dbg_extended_query_backend_conn;`) only under `#ifdef DEBUG`.
   `MySQL_Data_Stream` holds `MySQL_Protocol myprot;` **by value**, so
@@ -237,26 +239,54 @@ Stated plainly, not buried:
   reused stale, wrongly-flavoured `.o` files instead of recompiling — the
   exact mechanism that can put a release-built `ProxySQL_DuckDB_Plugin.so`
   next to a `-DDEBUG` core, or vice versa, without anyone intending it.
+  This was independently deliberately reproduced: building the plugin
+  release and loading it into a `-DDEBUG` core demonstrably corrupts
+  memory reachable through `MySQL_Data_Stream`.
 
-  With that skew, any plugin code that directly touches
-  `MySQL_Data_Stream`/`PgSQL_Session` members beyond `myprot` itself —
-  `duckdb_send_mysql_error()`'s `myds->DSS = STATE_QUERY_SENT_DS;`, and
-  also `duckdb_listener.cpp`'s `fill_client_addr()`, which writes
-  `client_addr`/`client_addrlen`/`addr.addr`/`addr.port` on *every*
-  accepted connection, before any query is even read — writes through an
-  offset computed from the plugin's own (mismatched) struct layout,
-  landing on a different member than intended. The specific symptom
-  observed depends on which field absorbs the wayward write: the
-  `assert(0)` described above is one confirmed outcome (`generate_pkt_ERR`
-  reads the real, untouched `DSS` field — still at its construction-time
-  default, `STATE_SLEEP` — and its state-machine `switch` falls through to
-  `default: assert(0)`); a silent, indefinite per-connection hang (the
-  connection is accepted, authenticates, and then never receives a
-  response to any query, MySQL client included) is another, reproduced via
-  the `fill_client_addr()` path, which runs earlier in the connection
-  lifecycle and does not depend on a query ever reaching an error path.
-  Both are symptoms of the same underlying memory-layout corruption, not
-  two different defects.
+  **Observed under that reproduction — an indefinite per-connection hang,
+  not an abort.** Every connection through the mismatched plugin's MySQL
+  listener hung indefinitely: the client connected and authenticated but
+  never received a response to any query, including a trivial `SELECT
+  1`, and the process never crashed. Traced with a debugger to
+  `duckdb_listener.cpp`'s `fill_client_addr()`, which runs on *every*
+  accepted connection, before any query is even read, and writes
+  `client_addr`/`client_addrlen`/`addr.addr`/`addr.port` — fields in the
+  same post-`myprot` region as `DSS` — through the plugin's mismatched
+  offsets. A breakpoint on the plugin's own query-dispatch entry point
+  was never hit, confirming the hang happens before any query reaches
+  the plugin at all, and specifically before `duckdb_send_mysql_error()`
+  (the function that would trip the `assert(0)`) is ever called.
+
+  **Plausible but not reproduced — the `assert(0)` at
+  `MySQL_Protocol.cpp:434`.** The mechanism above is consistent with that
+  abort: if the corrupted write instead lands elsewhere and the real,
+  untouched `DSS` field is read by `generate_pkt_ERR` still at its
+  construction-time default (`STATE_SLEEP`), its state-machine `switch`
+  falls through to `default: assert(0)`. This is a plausible consequence
+  of the same offset-shift mechanism, but it was **not** produced during
+  reproduction — only the hang was.
+
+  **Task 9's two original aborts remain unexplained, not attributed to
+  this mechanism.** They are consistent with it in kind but not
+  conclusively linked to it, and there is a specific reason for doubt:
+  both crashes occurred after several prior queries on the same
+  connection had already succeeded (the malformed-query assertion in
+  `test_duckdb_e2e_mysql-t` runs after seven earlier assertions pass,
+  including a `CREATE TABLE` and an `INSERT`). The hang mechanism
+  reproduced here corrupts state during connection setup, before the
+  first query — a connection that reaches its eighth query has already
+  survived whatever `fill_client_addr()` wrote. Reconciling that with
+  Task 9's two aborts, if they share this root cause, would require a
+  different corrupted field or a different code path than the one
+  reproduced here. Anyone hitting this again should capture a full
+  backtrace and compare it against Task 9's two on record rather than
+  assuming either that it is the same defect or that it is newly
+  introduced.
+
+  **The guard below is correct and necessary regardless of that
+  unresolved question** — it closes a real, demonstrated class of silent
+  memory corruption (the hang reproduced here) whether or not it fully
+  explains the two earlier aborts.
 
   **Fixed in two parts:** (1) `include/ProxySQL_Plugin.h` now encodes
   whether a plugin/core was built with `-DDEBUG` as a bit in the plugin
