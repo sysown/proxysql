@@ -5139,6 +5139,9 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	// through to the normal handling.
 	// =========================================================================
 	if constexpr (std::is_same_v<S, PgSQL_Session>) {
+	  // Cheap gate: this block now sits ahead of the generic SHOW dispatch, so
+	  // without it every admin query would be normalized and tokenized twice.
+	  if (query_no_space_length > 5 && !strncasecmp("SHOW ", query_no_space, 5)) {
 		// Check for unsupported PgBouncer SHOW commands first
 		std::string unsupported_msg = PgBouncer::get_unsupported_show_message(query_no_space, query_no_space_length);
 		if (!unsupported_msg.empty()) {
@@ -5157,6 +5160,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			query_length = strlen(query) + 1;
 			goto __run_query;
 		}
+	  }
 	}
 
 	if (strncasecmp("SHOW ", query_no_space, 5)) {
