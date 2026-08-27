@@ -23,7 +23,7 @@ SQLite3_result* run(duckdb_connection conn, const char* sql) {
 } // namespace
 
 int main() {
-	plan(22);
+	plan(28);
 
 	duckdb_database db = nullptr;
 	duckdb_connection conn = nullptr;
@@ -41,6 +41,34 @@ int main() {
 		   "column name is preserved");
 		ok(r && std::string(r->rows[0]->fields[0]) == "42",
 		   "integer value renders as text");
+	}
+
+	{
+		// The §12 "conversion across integer, float, decimal, timestamp,
+		// and blob" claim in the design spec had no assertions backing
+		// float/decimal/timestamp/blob before this block -- found during
+		// Task 11's own self-check for exactly the defect class the
+		// review was about (a claim about test coverage that the test
+		// didn't actually assert). All four types render through
+		// duckdb_value_varchar() (duckdb_type_renders_as_text() allows
+		// them), unlike the nested/UUID/etc. types covered above.
+		std::unique_ptr<SQLite3_result> r(run(conn, "SELECT CAST(1.5 AS DOUBLE) AS d"));
+		ok(r && std::string(r->rows[0]->fields[0]) == "1.5", "float/double value renders as text");
+	}
+
+	{
+		std::unique_ptr<SQLite3_result> r(run(conn, "SELECT CAST(1.23 AS DECIMAL(10,2)) AS dec"));
+		ok(r && std::string(r->rows[0]->fields[0]) == "1.23", "decimal value renders as text");
+	}
+
+	{
+		std::unique_ptr<SQLite3_result> r(run(conn, "SELECT TIMESTAMP '2024-01-01 12:00:00' AS ts"));
+		ok(r && std::string(r->rows[0]->fields[0]) == "2024-01-01 12:00:00", "timestamp value renders as text");
+	}
+
+	{
+		std::unique_ptr<SQLite3_result> r(run(conn, "SELECT 'hello'::BLOB AS b"));
+		ok(r && std::string(r->rows[0]->fields[0]) == "hello", "blob value renders as text");
 	}
 
 	{
@@ -99,6 +127,24 @@ int main() {
 		ok(duckdb_result_has_unrenderable_column(&uuid_res) == true,
 		   "predicate flags the non-nested UUID column as unrenderable");
 		duckdb_destroy_result(&uuid_res);
+	}
+
+	{
+		// STRUCT is named alongside LIST/MAP/ARRAY/UNION in the comment
+		// above the LIST block as one of the nested types
+		// duckdb_value_varchar() cannot render, but until now nothing in
+		// this file actually asserted that -- it appeared only in prose.
+		// Mirrors the LIST block's two checks exactly.
+		duckdb_result struct_res;
+		if (duckdb_query(conn, "SELECT {'a': 1, 'b': 2} AS s", &struct_res) != DuckDBSuccess) {
+			BAIL_OUT("could not run STRUCT query");
+		}
+		std::unique_ptr<SQLite3_result> r(duckdb_result_to_sqlite3(&struct_res));
+		ok(r && r->rows_count == 1 && r->rows[0]->fields[0] == nullptr,
+		   "STRUCT value converts to a null field (duckdb_value_varchar cannot render nested types)");
+		ok(duckdb_result_has_unrenderable_column(&struct_res) == true,
+		   "predicate flags the STRUCT column as unrenderable");
+		duckdb_destroy_result(&struct_res);
 	}
 
 	{
