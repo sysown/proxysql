@@ -28,7 +28,6 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
-        lfs: true
         repository: ${{ github.repository }}
         ref: ${{ github.sha }}
         fetch-depth: 0
@@ -108,7 +107,6 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
-        lfs: true
         repository: ${{ github.repository }}
         ref: ${{ github.sha }}
         fetch-depth: 0
