@@ -253,6 +253,7 @@
   "reg_test_1574-stmt_metadata-t" : [ "legacy-g6","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1","mysql84-g6","mysql90-g1","mysql95-g1" ],
   "reg_test_2233_mirror_fast_routing-t" : [ "legacy-g6","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1","mysql84-g6","mysql90-g1","mysql95-g1" ],
   "reg_test_2793-compression-t" : [ "legacy-g6","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1","mysql84-g6","mysql90-g1","mysql95-g1" ],
+  "reg_test_2800-com_quit_ssl-t" : [ "legacy-g5","mysql84-g5","mysql90-g5","mysql95-g5" ],
   "reg_test_3184-set_wait_timeout-t" : [ "legacy-g6","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1","mysql84-g6","mysql90-g1","mysql95-g1","set_parser_algorithm_3-g1" ],
   "reg_test_3223-restapi_return_codes-t" : [ "legacy-g6","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1","mysql84-g6","mysql90-g1","mysql95-g1" ],
   "reg_test_3247-mycli_support-t" : [ "legacy-g6","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1","mysql84-g6","mysql90-g1","mysql95-g1" ],
