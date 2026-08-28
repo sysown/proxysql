@@ -8438,6 +8438,9 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
+		// clear the error so it cannot leak into the next block's check
+		free(error);
+		error = NULL;
 	}
 	else {
 		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {

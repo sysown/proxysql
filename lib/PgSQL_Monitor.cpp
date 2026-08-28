@@ -347,7 +347,7 @@ unsigned int PgSQL_Monitor::estimate_lag(char* server_id, PgSQL_AWS_Aurora_statu
 			break;
 		for (auto hse : *(aase[idx]->host_statuses)) {
 			// NULL check for hse->server_id
-			if (hse && hse->server_id && strcmp(server_id, hse->server_id) == 0 && (unsigned int)hse->replica_lag_ms != 0) {
+			if (hse && hse->server_id && strcmp(server_id, hse->server_id) == 0 && hse->replica_lag_ms >= 1.0f) {
 				unsigned int ms = std::max(((unsigned int)hse->replica_lag_ms + add_lag_ms), min_lag_ms);
 				if (ms > mlag) mlag = ms;
 			}
@@ -1097,8 +1097,16 @@ pair<short,bool> handle_async_connect_cont(state_t& st, short revent) {
 		case PGRES_POLLING_FAILED: {
 			// During connection phase use `PQerrorMessage`
 			// Note: Error is recorded in pgsql_server_connect_log table; logging here would be noisy
-			// as this fires on every connection failure. The shunning logic will log when max_failures is reached.
+			// as this fires on every connection failure. The shunning logic will log when max_failures
+			// is reached. Auth failures are excluded from that path, so they must stay visible here.
 			auto err { strdup_no_lf(PQerrorMessage(pgconn.conn)) };
+			if (err && strstr(err.get(), "password authentication failed")) {
+				const mon_srv_t& srv { st.task.op_st.srv_info };
+				proxy_error(
+					"Server %s:%d is returning \"Access denied\" for monitoring user\n",
+					srv.addr.c_str(), srv.port
+				);
+			}
 			set_failed_st(st, ASYNC_CONNECT_FAILED, std::move(err));
 			break;
 		}
@@ -1434,6 +1442,14 @@ pgsql_conn_t create_new_conn(task_st_t& task_st) {
 
 		if (pgconn.conn) {
 			auto error { strdup_no_lf(PQerrorMessage(pgconn.conn)) };
+			if (error && strstr(error.get(), "password authentication failed")) {
+				// Auth failures are excluded from the shun/heartbeat error path,
+				// so they must stay visible here (MySQL logs the same case)
+				proxy_error(
+					"Server %s:%d is returning \"Access denied\" for monitoring user\n",
+					srv.addr.c_str(), srv.port
+				);
+			}
 			proxy_debug(PROXY_DEBUG_MONITOR, 5,
 				"Monitor connect failed   addr='%s:%d' error='%s'\n",
 				srv.addr.c_str(), srv.port, error.get()
@@ -3412,6 +3428,16 @@ struct pgsql_host_def_t {
 	int use_ssl;
 };
 
+// Argument for a per-hostgroup Aurora monitor thread: the writer hostgroup and
+// the hosts-resultset checksum generation the coordinator spawned it against
+// (handing the checksum over avoids a race where the resultset changes between
+// the coordinator reading it and the thread reading it again, which would make
+// the thread miss its exit condition while the coordinator waits in join)
+struct pgsql_aurora_hg_thread_arg_t {
+	unsigned int writer_hg;
+	uint64_t initial_checksum;
+};
+
 // Helper function to shuffle hosts array
 static void shuffle_pgsql_hosts(pgsql_host_def_t* arr, unsigned int n) {
 	if (n <= 1) return;
@@ -3437,14 +3463,14 @@ static void shuffle_pgsql_hosts(pgsql_host_def_t* arr, unsigned int n) {
  */
 static PGconn* aurora_pgsql_connect_with_timeout(
 	const char* host, int port, const char* user, const char* pass,
-	int use_ssl, unsigned int timeout_ms, std::string& err
+	const char* dbname, int use_ssl, unsigned int timeout_ms, std::string& err
 ) {
 	char port_str[16];
 	snprintf(port_str, sizeof(port_str), "%d", port);
 
-	// dbname=postgres is used because aurora_replica_status() is a system function
+	// use_ssl mapping matches the shared monitor connect path (0 -> disable)
 	const char* keywords[] = { "host", "port", "dbname", "user", "password", "sslmode", "application_name", NULL };
-	const char* values[] = { host, port_str, "postgres", user, pass, use_ssl ? "require" : "prefer", "proxysql_monitor", NULL };
+	const char* values[] = { host, port_str, dbname, user, pass, use_ssl ? "require" : "disable", "proxysql_monitor", NULL };
 
 	PGconn* conn = PQconnectStartParams(keywords, values, 0);
 	if (conn == NULL) {
@@ -3501,19 +3527,17 @@ static PGconn* aurora_pgsql_connect_with_timeout(
  *   'err' describing the reason. On timeout the connection is left with an
  *   in-flight query, so the caller must close it instead of reusing it.
  */
-static PGresult* aurora_pgsql_exec_with_timeout(
-	PGconn* conn, const char* query, unsigned int timeout_ms, std::string& err
-) {
-	if (PQsendQuery(conn, query) == 0) {
-		err = PQerrorMessage(conn);
-		return nullptr;
-	}
-	const unsigned long long deadline = monotonic_time() + (unsigned long long)timeout_ms * 1000;
+/**
+ * @brief Waits until PQgetResult() would not block, bounded by 'deadline'.
+ * @return true when the connection is ready; false on timeout or socket error,
+ *   with 'err' describing the reason.
+ */
+static bool aurora_pgsql_wait_ready(PGconn* conn, unsigned long long deadline, std::string& err) {
 	while (PQisBusy(conn)) {
 		const unsigned long long now = monotonic_time();
 		if (now >= deadline) {
 			err = "Query timeout";
-			return nullptr;
+			return false;
 		}
 		pollfd fds[1];
 		fds[0].fd = PQsocket(conn);
@@ -3523,23 +3547,47 @@ static PGresult* aurora_pgsql_exec_with_timeout(
 		const int rc = poll(fds, 1, wait_ms);
 		if (rc < 0 && errno != EINTR) {
 			err = "poll() failed during query";
-			return nullptr;
+			return false;
 		}
 		if (rc > 0) {
 			if (PQconsumeInput(conn) == 0) {
 				err = PQerrorMessage(conn);
-				return nullptr;
+				return false;
 			}
 		}
+	}
+	return true;
+}
+
+static PGresult* aurora_pgsql_exec_with_timeout(
+	PGconn* conn, const char* query, unsigned int timeout_ms, std::string& err
+) {
+	if (PQsendQuery(conn, query) == 0) {
+		err = PQerrorMessage(conn);
+		return nullptr;
+	}
+	const unsigned long long deadline = monotonic_time() + (unsigned long long)timeout_ms * 1000;
+	if (!aurora_pgsql_wait_ready(conn, deadline, err)) {
+		return nullptr;
 	}
 	PGresult* res = PQgetResult(conn);
 	if (res == NULL) {
 		err = PQerrorMessage(conn);
 		return nullptr;
 	}
-	// Drain the trailing NULL result of the single-statement query
-	PGresult* extra = nullptr;
-	while ((extra = PQgetResult(conn)) != NULL) {
+	// Drain the trailing NULL result of the single-statement query. Each
+	// PQgetResult() may block on the pending ReadyForQuery message, so the
+	// wait is bounded by the same deadline; on timeout the whole check fails
+	// and the caller closes the connection.
+	while (true) {
+		if (!aurora_pgsql_wait_ready(conn, deadline, err)) {
+			PQclear(res);
+			return nullptr;
+		}
+		PGresult* extra = PQgetResult(conn);
+		if (extra == NULL) {
+			break;
+		}
 		PQclear(extra);
 	}
 	return res;
@@ -3703,7 +3751,8 @@ void PgSQL_Monitor::evaluate_pgsql_aws_aurora_results(unsigned int wHG, unsigned
  * @details This thread periodically queries aurora_replica_status() to discover cluster topology
  */
 void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
-	unsigned int wHG = *(unsigned int*)arg;
+	const pgsql_aurora_hg_thread_arg_t* hg_arg = (const pgsql_aurora_hg_thread_arg_t*)arg;
+	unsigned int wHG = hg_arg->writer_hg;
 	unsigned int rHG = 0;
 	unsigned int num_hosts = 0;
 	unsigned int cur_host_idx = 0;
@@ -3728,10 +3777,6 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 	PgSQL_Monitor__thread_PgSQL_Thread_Variables_version = GloPTH->get_global_version();
 	pgsql_thr->refresh_variables();
 
-	// Get monitor credentials from GloPTH
-	char* monitor_user = GloPTH->get_variable_string((char*)"monitor_username");
-	char* monitor_pass = GloPTH->get_variable_string((char*)"monitor_password");
-
 	uint64_t initial_raw_checksum = 0;
 
 	// Static array of the latest reads
@@ -3744,9 +3789,9 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 	// Initialize hpa to NULL for proper cleanup
 	pgsql_host_def_t* hpa = nullptr;
 
-	// Initial data load
+	// Initial data load; the checksum generation comes from the coordinator
+	initial_raw_checksum = hg_arg->initial_checksum;
 	pthread_mutex_lock(&GloPgMon->aws_aurora_mutex);
-	initial_raw_checksum = GloPgMon->AWS_Aurora_Hosts_resultset_checksum;
 
 	// Count the number of hosts
 	if (GloPgMon->AWS_Aurora_Hosts_resultset != nullptr)
@@ -3776,9 +3821,6 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 	if (num_hosts == 0) {
 		pthread_mutex_unlock(&GloPgMon->aws_aurora_mutex);
 		proxy_warning("Aurora PostgreSQL Monitor: No hosts found for writer HG %u\n", wHG);
-		// Cleanup before early return
-		if (monitor_user) free(monitor_user);
-		if (monitor_pass) free(monitor_pass);
 		delete pgsql_thr;
 		return nullptr;
 	}
@@ -3881,10 +3923,14 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 		// mirroring the MySQL Aurora monitor behavior)
 		PGconn* conn = GloPgMon->My_Conn_Pool->get_connection(hpa[cur_host_idx].host, hpa[cur_host_idx].port);
 		if (!conn) {
+			// Credentials and dbname come from the thread-refreshed monitor
+			// variables, so a runtime rotation (LOAD PGSQL VARIABLES TO RUNTIME)
+			// is picked up on the next check, matching the MySQL Aurora monitor
 			conn = aurora_pgsql_connect_with_timeout(
 				hpa[cur_host_idx].host, hpa[cur_host_idx].port,
-				monitor_user ? monitor_user : "",
-				monitor_pass ? monitor_pass : "",
+				pgsql_thread___monitor_username ? pgsql_thread___monitor_username : "",
+				pgsql_thread___monitor_password ? pgsql_thread___monitor_password : "",
+				pgsql_thread___monitor_dbname ? pgsql_thread___monitor_dbname : "postgres",
 				hpa[cur_host_idx].use_ssl,
 				check_timeout_ms, check_err
 			);
@@ -3897,8 +3943,9 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 		if (conn == nullptr) {
 			proxy_error("Error on AWS Aurora PostgreSQL check for %s:%d after %llums. Unable to create a connection. Error: %s\n",
 				hpa[cur_host_idx].host, hpa[cur_host_idx].port, (t2 - start_time) / 1000, check_err.c_str());
-			ase = new PgSQL_AWS_Aurora_status_entry(start_time, t2 - start_time, (char*)check_err.c_str());
-			ase_l = new PgSQL_AWS_Aurora_status_entry(start_time, t2 - start_time, (char*)check_err.c_str());
+			unsigned long long err_time = realtime_time() - (t2 - start_time);
+			ase = new PgSQL_AWS_Aurora_status_entry(err_time, t2 - start_time, (char*)check_err.c_str());
+			ase_l = new PgSQL_AWS_Aurora_status_entry(err_time, t2 - start_time, (char*)check_err.c_str());
 		} else {
 			// Execute the aurora_replica_status() query.
 			// Writer is identified by session_id = 'MASTER_SESSION_ID'.
@@ -3938,8 +3985,9 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 				}
 				proxy_error("Error on AWS Aurora PostgreSQL check for %s:%d after %llums. Query failed. Error: %s\n",
 					hpa[cur_host_idx].host, hpa[cur_host_idx].port, (t2 - start_time) / 1000, check_err.c_str());
-				ase = new PgSQL_AWS_Aurora_status_entry(start_time, t2 - start_time, (char*)check_err.c_str());
-				ase_l = new PgSQL_AWS_Aurora_status_entry(start_time, t2 - start_time, (char*)check_err.c_str());
+				unsigned long long err_time = realtime_time() - (t2 - start_time);
+				ase = new PgSQL_AWS_Aurora_status_entry(err_time, t2 - start_time, (char*)check_err.c_str());
+				ase_l = new PgSQL_AWS_Aurora_status_entry(err_time, t2 - start_time, (char*)check_err.c_str());
 			} else {
 				unsigned long long time_now = realtime_time();
 				time_now = time_now - (t2 - start_time);
@@ -4026,13 +4074,11 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 		}
 
 		next_loop_at = t1 + (check_interval_ms * 1000);
+		next_loop_at -= (t2 - t1);
 	}
 
 __exit_pgsql_monitor_AWS_Aurora_thread_HG_now:
 	// Cleanup
-	if (monitor_user) free(monitor_user);
-	if (monitor_pass) free(monitor_pass);
-
 	if (hpa) {
 		for (unsigned int i = 0; i < num_hosts; i++) {
 			if (hpa[i].host) {
@@ -4074,7 +4120,7 @@ void* PgSQL_monitor_aws_aurora(void* arg) {
 	pgsql_thr->refresh_variables();
 
 	uint64_t last_raw_checksum = 0;
-	unsigned int* hgs_array = nullptr;
+	pgsql_aurora_hg_thread_arg_t* hg_args = nullptr;
 	pthread_t* pthreads_array = nullptr;
 	bool* threads_started = nullptr;
 	unsigned int hgs_num = 0;
@@ -4095,13 +4141,16 @@ void* PgSQL_monitor_aws_aurora(void* arg) {
 			pgsql_thr->refresh_variables();
 		}
 
-		// Check if list of servers or HG or options has changed
+		// Check if list of servers or HG or options has changed. The checksum
+		// field is maintained by update_aws_aurora_hosts_monitor_resultset(),
+		// so no full resultset re-hash is needed here.
 		pthread_mutex_lock(&GloPgMon->aws_aurora_mutex);
-		uint64_t new_raw_checksum = 0;
-		if (GloPgMon->AWS_Aurora_Hosts_resultset) {
-			new_raw_checksum = GloPgMon->AWS_Aurora_Hosts_resultset->raw_checksum();
-		}
+		uint64_t new_raw_checksum = GloPgMon->AWS_Aurora_Hosts_resultset_checksum;
 		pthread_mutex_unlock(&GloPgMon->aws_aurora_mutex);
+
+		// Periodically trim and health-check pooled monitor connections,
+		// like the MySQL Aurora monitor does in its main loop
+		GloPgMon->My_Conn_Pool->purge_some_connections();
 
 		if (new_raw_checksum != last_raw_checksum) {
 			proxy_info("Aurora PostgreSQL: Detected new/changed definition for monitoring\n");
@@ -4112,13 +4161,13 @@ void* PgSQL_monitor_aws_aurora(void* arg) {
 				for (unsigned int i = 0; i < hgs_num; i++) {
 					if (threads_started[i] == false) continue;
 					pthread_join(pthreads_array[i], nullptr);
-					proxy_info("Stopped Aurora PostgreSQL Monitor thread for writer HG %u\n", hgs_array[i]);
+					proxy_info("Stopped Aurora PostgreSQL Monitor thread for writer HG %u\n", hg_args[i].writer_hg);
 				}
 				free(pthreads_array);
-				free(hgs_array);
+				free(hg_args);
 				free(threads_started);
 				pthreads_array = nullptr;
-				hgs_array = nullptr;
+				hg_args = nullptr;
 				threads_started = nullptr;
 				hgs_num = 0;
 			}
@@ -4136,12 +4185,13 @@ void* PgSQL_monitor_aws_aurora(void* arg) {
 				hgs_num = unique_whgs.size();
 				if (hgs_num) {
 					proxy_info("Activating Monitoring of %u AWS Aurora PostgreSQL clusters\n", hgs_num);
-					hgs_array = (unsigned int*)malloc(sizeof(unsigned int) * hgs_num);
+					hg_args = (pgsql_aurora_hg_thread_arg_t*)malloc(sizeof(pgsql_aurora_hg_thread_arg_t) * hgs_num);
 					pthreads_array = (pthread_t*)malloc(sizeof(pthread_t) * hgs_num);
 					threads_started = (bool*)calloc(hgs_num, sizeof(bool));
 					unsigned int idx = 0;
 					for (auto& it : unique_whgs) {
-						hgs_array[idx] = it.first;
+						hg_args[idx].writer_hg = it.first;
+						hg_args[idx].initial_checksum = new_raw_checksum;
 						idx++;
 					}
 				}
@@ -4150,9 +4200,9 @@ void* PgSQL_monitor_aws_aurora(void* arg) {
 
 			// Start threads for each writer hostgroup
 			for (unsigned int i = 0; i < hgs_num; i++) {
-				proxy_info("Starting Monitor thread for AWS Aurora PostgreSQL writer HG %u\n", hgs_array[i]);
-				if (pthread_create(&pthreads_array[i], nullptr, PgSQL_monitor_AWS_Aurora_thread_HG, &hgs_array[i]) != 0) {
-					proxy_error("Thread creation failed for AWS Aurora PostgreSQL writer HG %u\n", hgs_array[i]);
+				proxy_info("Starting Monitor thread for AWS Aurora PostgreSQL writer HG %u\n", hg_args[i].writer_hg);
+				if (pthread_create(&pthreads_array[i], nullptr, PgSQL_monitor_AWS_Aurora_thread_HG, &hg_args[i]) != 0) {
+					proxy_error("Thread creation failed for AWS Aurora PostgreSQL writer HG %u\n", hg_args[i].writer_hg);
 				} else {
 					threads_started[i] = true;
 				}
@@ -4176,7 +4226,7 @@ __exit_pgsql_monitor_aws_aurora:
 			pthread_join(pthreads_array[i], nullptr);
 		}
 		free(pthreads_array);
-		free(hgs_array);
+		free(hg_args);
 		free(threads_started);
 	}
 
