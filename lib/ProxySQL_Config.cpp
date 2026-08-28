@@ -2365,8 +2365,9 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 			char *o=escape_string_single_quotes(o1, false);
 			char *p1=strdup(domain_name.c_str());
 			char *p=escape_string_single_quotes(p1, false);
-			char *query=(char *)malloc(strlen(q)+strlen(o)+strlen(p)+256);
-			sprintf(query,q, writer_hostgroup, reader_hostgroup, active, aurora_port, p, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, o);
+			const size_t query_len = strlen(q)+strlen(o)+strlen(p)+256;
+			char *query=(char *)malloc(query_len);
+			snprintf(query, query_len, q, writer_hostgroup, reader_hostgroup, active, aurora_port, p, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, o);
 			admindb->execute(query);
 			if (o!=o1) free(o);
 			free(o1);

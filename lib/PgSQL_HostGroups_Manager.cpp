@@ -4345,7 +4345,7 @@ PgSQL_AWS_Aurora_Info::PgSQL_AWS_Aurora_Info(int w, int r, int _port, char *_dom
 	check_interval_ms = ci;
 	check_timeout_ms = ct;
 	active = _a;
-	__active = true;
+	active_ = true;
 	writer_is_also_reader = wiar;
 	new_reader_weight = nrw;
 	comment = c ? strdup(c) : strdup("");
@@ -4353,7 +4353,7 @@ PgSQL_AWS_Aurora_Info::PgSQL_AWS_Aurora_Info(int w, int r, int _port, char *_dom
 
 bool PgSQL_AWS_Aurora_Info::update(int r, int _port, char *_domain, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c) {
 	bool ret = false;
-	__active = true;
+	active_ = true;
 	if (reader_hostgroup != r) {
 		reader_hostgroup = r;
 		ret = true;
@@ -4433,7 +4433,7 @@ void PgSQL_HostGroups_Manager::generate_pgsql_aws_aurora_hostgroups_table() {
 	for (std::map<int, PgSQL_AWS_Aurora_Info *>::iterator it1 = AWS_Aurora_Info_Map.begin(); it1 != AWS_Aurora_Info_Map.end(); ++it1) {
 		PgSQL_AWS_Aurora_Info *info = nullptr;
 		info = it1->second;
-		info->__active = false;
+		info->active_ = false;
 	}
 	// Process incoming entries
 	for (std::vector<SQLite3_row *>::iterator it = incoming_aws_aurora_hostgroups->rows.begin(); it != incoming_aws_aurora_hostgroups->rows.end(); ++it) {
@@ -4492,7 +4492,7 @@ void PgSQL_HostGroups_Manager::generate_pgsql_aws_aurora_hostgroups_table() {
 	// Remove inactive entries
 	for (auto it3 = AWS_Aurora_Info_Map.begin(); it3 != AWS_Aurora_Info_Map.end(); ) {
 		PgSQL_AWS_Aurora_Info *info = it3->second;
-		if (info->__active == false) {
+		if (info->active_ == false) {
 			delete info;
 			it3 = AWS_Aurora_Info_Map.erase(it3);
 		} else {
@@ -4531,8 +4531,9 @@ bool PgSQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int 
 		}
 		pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
 	}
-	char *address = (char *)malloc(strlen(_server_id) + strlen(domain_name) + 1);
-	sprintf(address, "%s%s", _server_id, domain_name);
+	const size_t address_len = strlen(_server_id) + strlen(domain_name) + 1;
+	char *address = (char *)malloc(address_len);
+	snprintf(address, address_len, "%s%s", _server_id, domain_name);
 
 	GloAdmin->pgsql_servers_wrlock();
 	wrlock();
@@ -4644,8 +4645,9 @@ void PgSQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 	}
 
 	q = (char *)"SELECT hostgroup_id FROM pgsql_servers JOIN pgsql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s%s' AND port=%d AND status<>3 AND hostgroup_id IN (%d, %d)";
-	query = (char *)malloc(strlen(q) + strlen(_server_id) + strlen(domain_name) + 1024);
-	sprintf(query, q, _server_id, domain_name, aurora_port, _whid, _rhid);
+	size_t query_len = strlen(q) + strlen(_server_id) + strlen(domain_name) + 1024;
+	query = (char *)malloc(query_len);
+	snprintf(query, query_len, q, _server_id, domain_name, aurora_port, _whid, _rhid);
 	mydb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
 	if (error) {
 		free(error);
@@ -4685,35 +4687,35 @@ void PgSQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 			GloAdmin->pgsql_servers_wrlock();
 			mydb->execute("DELETE FROM pgsql_servers_incoming");
 			q = (char *)"INSERT INTO pgsql_servers_incoming SELECT hostgroup_id, hostname, port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM pgsql_servers WHERE hostgroup_id=%d";
-			sprintf(query, q, _rhid);
+			snprintf(query, query_len, q, _rhid);
 			mydb->execute(query);
 			q = (char *)"INSERT INTO pgsql_servers_incoming SELECT hostgroup_id, hostname, port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM pgsql_servers WHERE hostgroup_id=%d AND hostname='%s%s' AND port=%d";
-			sprintf(query, q, _writer_hostgroup, _server_id, domain_name, aurora_port);
+			snprintf(query, query_len, q, _writer_hostgroup, _server_id, domain_name, aurora_port);
 			mydb->execute(query);
 			q = (char *)"UPDATE OR IGNORE pgsql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s%s' AND port=%d AND hostgroup_id<>%d";
-			sprintf(query, q, _writer_hostgroup, _server_id, domain_name, aurora_port, _writer_hostgroup);
+			snprintf(query, query_len, q, _writer_hostgroup, _server_id, domain_name, aurora_port, _writer_hostgroup);
 			mydb->execute(query);
 			q = (char *)"DELETE FROM pgsql_servers_incoming WHERE hostname='%s%s' AND port=%d AND hostgroup_id<>%d";
-			sprintf(query, q, _server_id, domain_name, aurora_port, _writer_hostgroup);
+			snprintf(query, query_len, q, _server_id, domain_name, aurora_port, _writer_hostgroup);
 			mydb->execute(query);
 			q = (char *)"UPDATE pgsql_servers_incoming SET status=0 WHERE hostname='%s%s' AND port=%d AND hostgroup_id=%d";
-			sprintf(query, q, _server_id, domain_name, aurora_port, _writer_hostgroup);
+			snprintf(query, query_len, q, _server_id, domain_name, aurora_port, _writer_hostgroup);
 			mydb->execute(query);
 
 			// Move the old writer into the reader HG
 			q = (char *)"DELETE FROM pgsql_servers_incoming WHERE status=3 AND hostgroup_id=%d";
-			sprintf(query, q, _rhid);
+			snprintf(query, query_len, q, _rhid);
 			mydb->execute(query);
 			q = (char *)"INSERT OR IGNORE INTO pgsql_servers_incoming SELECT %d, hostname, port, %d, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM pgsql_servers WHERE hostgroup_id=%d AND status=0";
-			sprintf(query, q, _rhid, new_reader_weight, _whid);
+			snprintf(query, query_len, q, _rhid, new_reader_weight, _whid);
 			mydb->execute(query);
 
 			if (writer_is_also_reader && read_HG >= 0) {
 				q = (char *)"INSERT OR IGNORE INTO pgsql_servers_incoming (hostgroup_id,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment) SELECT %d,hostname,port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM pgsql_servers_incoming WHERE hostgroup_id=%d AND hostname='%s%s' AND port=%d";
-				sprintf(query, q, read_HG, _writer_hostgroup, _server_id, domain_name, aurora_port);
+				snprintf(query, query_len, q, read_HG, _writer_hostgroup, _server_id, domain_name, aurora_port);
 				mydb->execute(query);
 				q = (char *)"UPDATE pgsql_servers_incoming SET weight=%d WHERE hostgroup_id=%d AND hostname='%s%s' AND port=%d";
-				sprintf(query, q, new_reader_weight, read_HG, _server_id, domain_name, aurora_port);
+				snprintf(query, query_len, q, new_reader_weight, read_HG, _server_id, domain_name, aurora_port);
 				mydb->execute(query);
 			}
 
@@ -4728,8 +4730,9 @@ void PgSQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 				char *chk_error = nullptr;
 				const char *q1 = "SELECT DISTINCT hostgroup_id, hostname, port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, pgsql_servers.comment FROM pgsql_servers JOIN pgsql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE writer_hostgroup=%d ORDER BY hostgroup_id, hostname, port";
 				const char *q2 = "SELECT DISTINCT hostgroup_id, hostname, port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, pgsql_servers_incoming.comment FROM pgsql_servers_incoming JOIN pgsql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE writer_hostgroup=%d ORDER BY hostgroup_id, hostname, port";
-				chk_query = (char *)malloc(strlen(q2) + 128);
-				sprintf(chk_query, q1, _writer_hostgroup);
+				const size_t chk_query_len = strlen(q2) + 128;
+				chk_query = (char *)malloc(chk_query_len);
+				snprintf(chk_query, chk_query_len, q1, _writer_hostgroup);
 				mydb->execute_statement(chk_query, &chk_error, &chk_cols, &chk_affected_rows, &resultset_servers);
 				if (chk_error == nullptr) {
 					if (resultset_servers) {
@@ -4741,7 +4744,7 @@ void PgSQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 					delete resultset_servers;
 					resultset_servers = nullptr;
 				}
-				sprintf(chk_query, q2, _writer_hostgroup);
+				snprintf(chk_query, chk_query_len, q2, _writer_hostgroup);
 				mydb->execute_statement(chk_query, &chk_error, &chk_cols, &chk_affected_rows, &resultset_servers);
 				if (chk_error == nullptr) {
 					if (resultset_servers) {
@@ -4759,12 +4762,12 @@ void PgSQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 			if (checksum_incoming != checksum_current) {
 				proxy_warning("Aurora PostgreSQL: setting host %s%s:%d as writer\n", _server_id, domain_name, aurora_port);
 				q = (char *)"INSERT INTO pgsql_servers_incoming SELECT hostgroup_id, hostname, port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM pgsql_servers WHERE hostgroup_id NOT IN (%d, %d)";
-				sprintf(query, q, _rhid, _whid);
+				snprintf(query, query_len, q, _rhid, _whid);
 				mydb->execute(query);
 				commit();
 				wrlock();
 				q = (char *)"DELETE FROM pgsql_servers WHERE hostgroup_id IN (%d, %d)";
-				sprintf(query, q, _whid, _rhid);
+				snprintf(query, query_len, q, _whid, _rhid);
 				mydb->execute(query);
 				generate_pgsql_servers_table(&_whid);
 				generate_pgsql_servers_table(&_rhid);
@@ -4877,8 +4880,9 @@ void PgSQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 	}
 
 	q = (char *)"SELECT hostgroup_id FROM pgsql_servers JOIN pgsql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s%s' AND port=%d AND status<>3 AND hostgroup_id IN (%d,%d)";
-	query = (char *)malloc(strlen(q) + strlen(_server_id) + strlen(domain_name) + 64);
-	sprintf(query, q, _server_id, domain_name, aurora_port, _whid, _rhid);
+	size_t query_len = strlen(q) + strlen(_server_id) + strlen(domain_name) + 64;
+	query = (char *)malloc(query_len);
+	snprintf(query, query_len, q, _server_id, domain_name, aurora_port, _whid, _rhid);
 	mydb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
 	if (error) {
 		free(error);
@@ -4895,21 +4899,22 @@ void PgSQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 			mydb->execute("INSERT INTO pgsql_servers_incoming SELECT hostgroup_id, hostname, port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM pgsql_servers");
 			// If server present as WRITER try moving it to reader_hostgroup
 			q = (char *)"UPDATE OR IGNORE pgsql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s%s' AND port=%d AND hostgroup_id=%d";
-			query = (char *)malloc(strlen(q) + strlen(_server_id) + strlen(domain_name) + 512);
-			sprintf(query, q, _rhid, _server_id, domain_name, aurora_port, _whid);
+			query_len = strlen(q) + strlen(_server_id) + strlen(domain_name) + 512;
+			query = (char *)malloc(query_len);
+			snprintf(query, query_len, q, _rhid, _server_id, domain_name, aurora_port, _whid);
 			mydb->execute(query);
 			// If server is still in writer_hostgroup, remove it
 			q = (char *)"DELETE FROM pgsql_servers_incoming WHERE hostname='%s%s' AND port=%d AND hostgroup_id=%d";
-			sprintf(query, q, _server_id, domain_name, aurora_port, _whid);
+			snprintf(query, query_len, q, _server_id, domain_name, aurora_port, _whid);
 			mydb->execute(query);
 			q = (char *)"UPDATE pgsql_servers_incoming SET status=0 WHERE hostname='%s%s' AND port=%d AND hostgroup_id=%d";
-			sprintf(query, q, _server_id, domain_name, aurora_port, _rhid);
+			snprintf(query, query_len, q, _server_id, domain_name, aurora_port, _rhid);
 			mydb->execute(query);
 			commit();
 			wrlock();
 
 			q = (char *)"DELETE FROM pgsql_servers WHERE hostgroup_id IN (%d, %d)";
-			sprintf(query, q, _whid, _rhid);
+			snprintf(query, query_len, q, _whid, _rhid);
 			mydb->execute(query);
 			generate_pgsql_servers_table(&_whid);
 			generate_pgsql_servers_table(&_rhid);
@@ -4936,8 +4941,9 @@ void PgSQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 				purge_pgsql_servers_table();
 
 				char *q1 = (char *)"DELETE FROM pgsql_servers WHERE hostgroup_id IN (%d, %d)";
-				char *q2 = (char *)malloc(strlen(q1) + 64);
-				sprintf(q2, q1, _whid, _rhid);
+				const size_t q2_len = strlen(q1) + 64;
+				char *q2 = (char *)malloc(q2_len);
+				snprintf(q2, q2_len, q1, _whid, _rhid);
 				mydb->execute(q2);
 				free(q2);
 

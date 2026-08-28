@@ -2,6 +2,13 @@
 #include "PgSQL_Monitor.hpp"
 #include "PgSQL_Thread.h"
 
+// Number of the most recent Aurora status entries evaluated for lag estimation.
+// MySQL_Monitor.hpp defines the same constant for the MySQL Aurora monitor; the
+// guard keeps both definitions in sync regardless of include order.
+#ifndef N_L_ASE
+#define N_L_ASE 16
+#endif
+
 #include "gen_utils.h"
 
 #include <pthread.h>
@@ -334,7 +341,6 @@ unsigned int PgSQL_Monitor::estimate_lag(char* server_id, PgSQL_AWS_Aurora_statu
 	if (lag_num_checks <= 0) lag_num_checks = 1;
 
 	unsigned int mlag = 0;
-	unsigned int lag = 0;
 
 	for (unsigned int i = 1; i <= lag_num_checks; i++) {
 		if (!aase[idx] || !aase[idx]->host_statuses)
@@ -344,7 +350,6 @@ unsigned int PgSQL_Monitor::estimate_lag(char* server_id, PgSQL_AWS_Aurora_statu
 			if (hse && hse->server_id && strcmp(server_id, hse->server_id) == 0 && (unsigned int)hse->replica_lag_ms != 0) {
 				unsigned int ms = std::max(((unsigned int)hse->replica_lag_ms + add_lag_ms), min_lag_ms);
 				if (ms > mlag) mlag = ms;
-				if (!lag) lag = ms;
 			}
 		}
 		if (idx == 0) idx = N_L_ASE;
@@ -3400,9 +3405,6 @@ void* PgSQL_monitor_dns_cache_pthread(void* /*arg*/) {
 
 extern PgSQL_HostGroups_Manager* PgHGM;
 
-// Number of last Aurora status entries to keep
-#define N_L_ASE 16
-
 // Structure to hold host definitions for Aurora monitoring
 struct pgsql_host_def_t {
 	char* host;
@@ -3666,16 +3668,17 @@ void PgSQL_Monitor::evaluate_pgsql_aws_aurora_results(unsigned int wHG, unsigned
 						PgHGM->update_aws_aurora_set_writer(wHG, rHG, hse->server_id);
 
 						// Log failover event
-						time_t __timer;
+						time_t t_now;
 						char lut[30];
-						struct tm __tm_info;
-						time(&__timer);
-						localtime_r(&__timer, &__tm_info);
-						strftime(lut, 25, "%Y-%m-%d %H:%M:%S", &__tm_info);
+						struct tm tm_info;
+						time(&t_now);
+						localtime_r(&t_now, &tm_info);
+						strftime(lut, sizeof(lut), "%Y-%m-%d %H:%M:%S", &tm_info);
 
 						char* q1 = (char*)"INSERT INTO pgsql_server_aws_aurora_failovers VALUES (%d, '%s', '%s')";
-						char* q2 = (char*)malloc(strlen(q1) + strlen(lut) + strlen(hse->server_id) + 32);
-						sprintf(q2, q1, wHG, hse->server_id, lut);
+						const size_t q2_len = strlen(q1) + strlen(lut) + strlen(hse->server_id) + 32;
+						char* q2 = (char*)malloc(q2_len);
+						snprintf(q2, q2_len, q1, wHG, hse->server_id, lut);
 						monitordb.execute(q2);
 						free(q2);
 					} else {
@@ -4265,9 +4268,9 @@ void PgSQL_Monitor::populate_monitor_pgsql_server_aws_aurora_check_status() {
 			}
 		}
 		char lut[30];
-		struct tm __tm_info;
-		localtime_r(&node->last_checked_at, &__tm_info);
-		strftime(lut, 25, "%Y-%m-%d %H:%M:%S", &__tm_info);
+		struct tm tm_info;
+		localtime_r(&node->last_checked_at, &tm_info);
+		strftime(lut, sizeof(lut), "%Y-%m-%d %H:%M:%S", &tm_info);
 
 		rc = (*proxy_sqlite3_bind_int64)(statement1, 1, node->writer_hostgroup); ASSERT_SQLITE_OK(rc, db);
 		rc = (*proxy_sqlite3_bind_text)(statement1, 2, host.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);

@@ -233,7 +233,6 @@ public:
 };
 
 void* PgSQL_monitor_scheduler_thread();
-void* PgSQL_monitor_AWS_Aurora_thread(void* arg);
 void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg);
 void* PgSQL_monitor_aws_aurora(void* arg);
 

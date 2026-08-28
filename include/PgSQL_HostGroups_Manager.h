@@ -412,7 +412,7 @@ public:
 	int check_interval_ms;
 	int check_timeout_ms;
 	bool active;
-	bool __active;  // temporary flag for tracking during regeneration
+	bool active_;  // temporary flag for tracking during regeneration
 	int writer_is_also_reader;
 	int new_reader_weight;
 	char *domain_name;
