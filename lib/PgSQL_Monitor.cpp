@@ -3416,13 +3416,131 @@ static void shuffle_pgsql_hosts(pgsql_host_def_t* arr, unsigned int n) {
 	for (unsigned int i = n - 1; i > 0; i--) {
 		unsigned int j = rand_fast() % (i + 1);
 		if (i != j) {
-			pgsql_host_def_t tmp;
-			size_t stride = sizeof(pgsql_host_def_t);
-			memcpy(&tmp, arr + i * stride / sizeof(pgsql_host_def_t), sizeof(pgsql_host_def_t));
-			memcpy(arr + i * stride / sizeof(pgsql_host_def_t), arr + j * stride / sizeof(pgsql_host_def_t), sizeof(pgsql_host_def_t));
-			memcpy(arr + j * stride / sizeof(pgsql_host_def_t), &tmp, sizeof(pgsql_host_def_t));
+			std::swap(arr[i], arr[j]);
 		}
 	}
+}
+
+/**
+ * @brief Establishes a libpq connection enforcing 'timeout_ms' over the whole
+ *   connect phase, mirroring how the MySQL Aurora monitor bounds its checks
+ *   with 'aws_aurora_check_timeout_ms'.
+ * @details Credentials are passed via PQconnectStartParams keyword/value
+ *   arrays, so they never require conninfo escaping. The handshake is driven
+ *   with PQconnectPoll + poll() against a monotonic deadline, providing
+ *   millisecond granularity (libpq's own 'connect_timeout' only supports
+ *   whole seconds, and 0 means "wait forever").
+ * @return A connected PGconn on success; nullptr on failure or timeout, with
+ *   'err' describing the reason.
+ */
+static PGconn* aurora_pgsql_connect_with_timeout(
+	const char* host, int port, const char* user, const char* pass,
+	unsigned int timeout_ms, std::string& err
+) {
+	char port_str[16];
+	snprintf(port_str, sizeof(port_str), "%d", port);
+
+	// dbname=postgres is used because aurora_replica_status() is a system function
+	const char* keywords[] = { "host", "port", "dbname", "user", "password", "application_name", NULL };
+	const char* values[] = { host, port_str, "postgres", user, pass, "proxysql_monitor", NULL };
+
+	PGconn* conn = PQconnectStartParams(keywords, values, 0);
+	if (conn == NULL) {
+		err = "Out of memory";
+		return nullptr;
+	}
+	if (PQstatus(conn) == CONNECTION_BAD) {
+		err = PQerrorMessage(conn);
+		PQfinish(conn);
+		return nullptr;
+	}
+
+	const unsigned long long deadline = monotonic_time() + (unsigned long long)timeout_ms * 1000;
+	PostgresPollingStatusType poll_st = PGRES_POLLING_WRITING;
+
+	while (poll_st != PGRES_POLLING_OK) {
+		if (poll_st == PGRES_POLLING_FAILED) {
+			err = PQerrorMessage(conn);
+			PQfinish(conn);
+			return nullptr;
+		}
+		const unsigned long long now = monotonic_time();
+		if (now >= deadline) {
+			err = "Connection timeout";
+			PQfinish(conn);
+			return nullptr;
+		}
+		pollfd fds[1];
+		fds[0].fd = PQsocket(conn);
+		fds[0].events = (poll_st == PGRES_POLLING_READING ? POLLIN : POLLOUT);
+		fds[0].revents = 0;
+		const int wait_ms = (int)((deadline - now) / 1000) + 1;
+		const int rc = poll(fds, 1, wait_ms);
+		if (rc < 0 && errno != EINTR) {
+			err = "poll() failed during connect";
+			PQfinish(conn);
+			return nullptr;
+		}
+		if (rc > 0) {
+			poll_st = PQconnectPoll(conn);
+		}
+		// rc == 0 (poll timeout) falls through to the deadline check above
+	}
+
+	return conn;
+}
+
+/**
+ * @brief Executes 'query' on 'conn' enforcing 'timeout_ms' over the whole
+ *   query phase (PQexec is fully blocking and honors no timeout).
+ * @details Uses PQsendQuery + PQconsumeInput/PQisBusy driven by poll()
+ *   against a monotonic deadline.
+ * @return The query result on success; nullptr on failure or timeout, with
+ *   'err' describing the reason. On timeout the connection is left with an
+ *   in-flight query, so the caller must close it instead of reusing it.
+ */
+static PGresult* aurora_pgsql_exec_with_timeout(
+	PGconn* conn, const char* query, unsigned int timeout_ms, std::string& err
+) {
+	if (PQsendQuery(conn, query) == 0) {
+		err = PQerrorMessage(conn);
+		return nullptr;
+	}
+	const unsigned long long deadline = monotonic_time() + (unsigned long long)timeout_ms * 1000;
+	while (PQisBusy(conn)) {
+		const unsigned long long now = monotonic_time();
+		if (now >= deadline) {
+			err = "Query timeout";
+			return nullptr;
+		}
+		pollfd fds[1];
+		fds[0].fd = PQsocket(conn);
+		fds[0].events = POLLIN;
+		fds[0].revents = 0;
+		const int wait_ms = (int)((deadline - now) / 1000) + 1;
+		const int rc = poll(fds, 1, wait_ms);
+		if (rc < 0 && errno != EINTR) {
+			err = "poll() failed during query";
+			return nullptr;
+		}
+		if (rc > 0) {
+			if (PQconsumeInput(conn) == 0) {
+				err = PQerrorMessage(conn);
+				return nullptr;
+			}
+		}
+	}
+	PGresult* res = PQgetResult(conn);
+	if (res == NULL) {
+		err = PQerrorMessage(conn);
+		return nullptr;
+	}
+	// Drain the trailing NULL result of the single-statement query
+	PGresult* extra = nullptr;
+	while ((extra = PQgetResult(conn)) != NULL) {
+		PQclear(extra);
+	}
+	return res;
 }
 
 #ifdef TEST_AURORA
@@ -3753,54 +3871,66 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 
 		// Execute Aurora replica status query
 		start_time = t1;
-		char* error_msg = nullptr;
+		std::string check_err {};
 
-		// Try to get connection from pool first (crc=false means from pool, crc=true means new connection)
-		// Note: crc is kept for MySQL parity and potential future use (e.g., connection timeout tracking)
-		bool crc __attribute__((unused)) = false;
+		// Try to get a connection from the pool first; otherwise open a new one
+		// bounded by check_timeout_ms (both connect and query phases are bounded,
+		// mirroring the MySQL Aurora monitor behavior)
 		PGconn* conn = GloPgMon->My_Conn_Pool->get_connection(hpa[cur_host_idx].host, hpa[cur_host_idx].port);
 		if (!conn) {
-			// Build connection string with monitor credentials
-			// Note: dbname=postgres is used because aurora_replica_status() is a system function
-			char conninfo[1024];
-			snprintf(conninfo, sizeof(conninfo), "host=%s port=%d dbname=postgres user=%s password=%s connect_timeout=%d",
+			conn = aurora_pgsql_connect_with_timeout(
 				hpa[cur_host_idx].host, hpa[cur_host_idx].port,
 				monitor_user ? monitor_user : "",
 				monitor_pass ? monitor_pass : "",
-				check_timeout_ms / 1000);
-			conn = PQconnectdb(conninfo);
-			crc = true;  // Mark as new connection
+				check_timeout_ms, check_err
+			);
 		}
 
 		unsigned long long t2 = monotonic_time();
 		PgSQL_AWS_Aurora_status_entry* ase = nullptr;
 		PgSQL_AWS_Aurora_status_entry* ase_l = nullptr;
 
-		if (PQstatus(conn) != CONNECTION_OK) {
-			error_msg = strdup(PQerrorMessage(conn));
+		if (conn == nullptr) {
 			proxy_error("Error on AWS Aurora PostgreSQL check for %s:%d after %llums. Unable to create a connection. Error: %s\n",
-				hpa[cur_host_idx].host, hpa[cur_host_idx].port, (t2 - start_time) / 1000, error_msg);
-			ase = new PgSQL_AWS_Aurora_status_entry(start_time, t2 - start_time, error_msg);
-			ase_l = new PgSQL_AWS_Aurora_status_entry(start_time, t2 - start_time, error_msg);
-			free(error_msg);
+				hpa[cur_host_idx].host, hpa[cur_host_idx].port, (t2 - start_time) / 1000, check_err.c_str());
+			ase = new PgSQL_AWS_Aurora_status_entry(start_time, t2 - start_time, (char*)check_err.c_str());
+			ase_l = new PgSQL_AWS_Aurora_status_entry(start_time, t2 - start_time, (char*)check_err.c_str());
 		} else {
-			// Execute the aurora_replica_status() query
-			// Aurora PostgreSQL provides: server_id, session_id, replica_lag_in_msec
-			// Writer is identified by session_id = 'MASTER_SESSION_ID'
-			const char* query = "SELECT server_id, session_id, replica_lag_in_msec, "
-				"CASE WHEN session_id = 'MASTER_SESSION_ID' THEN true ELSE false END as is_writer "
-				"FROM aurora_replica_status()";
+			// Execute the aurora_replica_status() query.
+			// Writer is identified by session_id = 'MASTER_SESSION_ID'.
+			// The query ports the safeguards of the MySQL Aurora monitor query:
+			// - a stale MASTER_SESSION_ID left on the old writer during a failover is
+			//   demoted (only the row with the freshest last_update_timestamp counts)
+			// - the writer lag is forced to 0
+			// - rows with nonsensical lag are filtered out
+			// - decommissioned/renamed nodes are ignored (last_update_timestamp older
+			//   than 180 seconds), see sysown/proxysql#3484 for the MySQL equivalent
+			const char* query =
+				"SELECT server_id, "
+				"CASE WHEN session_id = 'MASTER_SESSION_ID' AND server_id <> "
+					"(SELECT server_id FROM aurora_replica_status() WHERE session_id = 'MASTER_SESSION_ID' ORDER BY last_update_timestamp DESC LIMIT 1) "
+					"THEN 'probably_former_MASTER_SESSION_ID' ELSE session_id END AS session_id, "
+				"last_update_timestamp, "
+				"CASE WHEN session_id = 'MASTER_SESSION_ID' THEN 0 ELSE replica_lag_in_msec END AS replica_lag_in_msec, "
+				"CASE WHEN session_id = 'MASTER_SESSION_ID' AND server_id = "
+					"(SELECT server_id FROM aurora_replica_status() WHERE session_id = 'MASTER_SESSION_ID' ORDER BY last_update_timestamp DESC LIMIT 1) "
+					"THEN true ELSE false END AS is_writer "
+				"FROM aurora_replica_status() "
+				"WHERE ((replica_lag_in_msec >= 0 AND replica_lag_in_msec <= 600000) OR session_id = 'MASTER_SESSION_ID') "
+				"AND last_update_timestamp > NOW() - INTERVAL '180 seconds' "
+				"ORDER BY server_id";
 
-			PGresult* res = PQexec(conn, query);
+			PGresult* res = aurora_pgsql_exec_with_timeout(conn, query, check_timeout_ms, check_err);
 			t2 = monotonic_time();
 
-			if (PQresultStatus(res) != PGRES_TUPLES_OK) {
-				error_msg = strdup(PQerrorMessage(conn));
+			if (res == nullptr || PQresultStatus(res) != PGRES_TUPLES_OK) {
+				if (check_err.empty()) {
+					check_err = PQerrorMessage(conn);
+				}
 				proxy_error("Error on AWS Aurora PostgreSQL check for %s:%d after %llums. Query failed. Error: %s\n",
-					hpa[cur_host_idx].host, hpa[cur_host_idx].port, (t2 - start_time) / 1000, error_msg);
-				ase = new PgSQL_AWS_Aurora_status_entry(start_time, t2 - start_time, error_msg);
-				ase_l = new PgSQL_AWS_Aurora_status_entry(start_time, t2 - start_time, error_msg);
-				free(error_msg);
+					hpa[cur_host_idx].host, hpa[cur_host_idx].port, (t2 - start_time) / 1000, check_err.c_str());
+				ase = new PgSQL_AWS_Aurora_status_entry(start_time, t2 - start_time, (char*)check_err.c_str());
+				ase_l = new PgSQL_AWS_Aurora_status_entry(start_time, t2 - start_time, (char*)check_err.c_str());
 			} else {
 				unsigned long long time_now = realtime_time();
 				time_now = time_now - (t2 - start_time);
@@ -3811,32 +3941,32 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 				for (int i = 0; i < nrows; i++) {
 					char* server_id = PQgetvalue(res, i, 0);
 					char* session_id = PQgetvalue(res, i, 1);
-					char* replica_lag_str = PQgetvalue(res, i, 2);
-					char* is_writer_str = PQgetvalue(res, i, 3);
+					char* last_update_timestamp = PQgetvalue(res, i, 2);
+					char* replica_lag_str = PQgetvalue(res, i, 3);
+					char* is_writer_str = PQgetvalue(res, i, 4);
 
 					float replica_lag = replica_lag_str ? atof(replica_lag_str) : 0.0f;
-					bool is_writer = (is_writer_str && (strcmp(is_writer_str, "t") == 0 || strcmp(is_writer_str, "true") == 0 || strcmp(is_writer_str, "1") == 0));
+					bool is_writer = (is_writer_str && strcmp(is_writer_str, "t") == 0);
 
-					// Use session_id as last_update placeholder (not available in aurora_replica_status())
 					PgSQL_AWS_Aurora_replica_host_status_entry* arhse =
-						new PgSQL_AWS_Aurora_replica_host_status_entry(server_id, session_id, session_id, replica_lag, is_writer);
+						new PgSQL_AWS_Aurora_replica_host_status_entry(server_id, session_id, last_update_timestamp, replica_lag, is_writer);
 					ase->add_host_status(arhse);
 
 					PgSQL_AWS_Aurora_replica_host_status_entry* arhse_l =
-						new PgSQL_AWS_Aurora_replica_host_status_entry(server_id, session_id, session_id, replica_lag, is_writer);
+						new PgSQL_AWS_Aurora_replica_host_status_entry(server_id, session_id, last_update_timestamp, replica_lag, is_writer);
 					ase_l->add_host_status(arhse_l);
 				}
 				// Query succeeded, return connection to pool
-				// Note: MySQL distinguishes between pool connections (crc=false) and new connections (crc=true)
-				// with set_wait_timeout() for new connections. PostgreSQL doesn't have this, so we always
-				// return the connection to pool on success regardless of crc flag.
 				GloPgMon->My_Conn_Pool->put_connection(hpa[cur_host_idx].host, hpa[cur_host_idx].port, conn);
 				conn = nullptr;  // Mark as handled
 			}
-			PQclear(res);
+			if (res) {
+				PQclear(res);
+			}
 		}
-		// If connection wasn't returned to pool (error case), close it
-		// This matches MySQL's behavior: on error, connection is closed (not returned to pool)
+		// If connection wasn't returned to pool (error/timeout case), close it.
+		// This matches MySQL's behavior: on error, the connection is closed (not
+		// returned to the pool); after a query timeout it cannot be reused anyway.
 		if (conn) {
 			PQfinish(conn);
 			conn = nullptr;
