@@ -3382,6 +3382,8 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			tn = "cluster_pgsql_servers";
 		} else if (!strncasecmp(CLUSTER_QUERY_PGSQL_REPLICATION_HOSTGROUPS, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_REPLICATION_HOSTGROUPS) - 1)) {
 			tn = "pgsql_replication_hostgroups";
+		} else if (!strncasecmp(CLUSTER_QUERY_PGSQL_AWS_AURORA_HOSTGROUPS, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_AWS_AURORA_HOSTGROUPS) - 1)) {
+			tn = "pgsql_aws_aurora_hostgroups";
 		} else if (!strncasecmp(CLUSTER_QUERY_PGSQL_HOSTGROUP_ATTRIBUTES, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_HOSTGROUP_ATTRIBUTES) - 1)) {
 			tn = "pgsql_hostgroup_attributes";
 		} else if (!strncasecmp(CLUSTER_QUERY_PGSQL_SERVERS_V2, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_SERVERS_V2) - 1)) {
