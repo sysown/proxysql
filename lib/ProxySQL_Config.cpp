@@ -2122,6 +2122,47 @@ int ProxySQL_Config::Write_PgSQL_Servers_to_configfile(std::string& data) {
 		sqlite_resultset = NULL;
 	}
 
+	query = (char*)"SELECT * FROM pgsql_aws_aurora_hostgroups";
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
+	if (error) {
+		// tolerate missing table (e.g. partial schemas in unit tests or old DBs)
+		if (sqlite_resultset) { delete sqlite_resultset; sqlite_resultset = NULL; }
+		free(error); // execute_statement strdup's the message
+		error = NULL;
+	}
+	else if (sqlite_resultset) {
+		data += "pgsql_aws_aurora_hostgroups:\n(\n";
+		bool isNext = false;
+		for (auto r : sqlite_resultset->rows) {
+			if (isNext)
+				data += ",\n";
+			data += "\t{\n";
+			addField(data, "writer_hostgroup", r->fields[0], "");
+			addField(data, "reader_hostgroup", r->fields[1], "");
+			addField(data, "active", r->fields[2], "");
+			addField(data, "aurora_port", r->fields[3], "");
+			addField(data, "domain_name", r->fields[4]);
+			addField(data, "max_lag_ms", r->fields[5], "");
+			addField(data, "check_interval_ms", r->fields[6], "");
+			addField(data, "check_timeout_ms", r->fields[7], "");
+			addField(data, "writer_is_also_reader", r->fields[8], "");
+			addField(data, "new_reader_weight", r->fields[9], "");
+			addField(data, "add_lag_ms", r->fields[10], "");
+			addField(data, "min_lag_ms", r->fields[11], "");
+			addField(data, "lag_num_checks", r->fields[12], "");
+			addField(data, "comment", r->fields[13]);
+
+			data += "\t}";
+			isNext = true;
+		}
+		data += "\n)\n";
+	}
+
+	if (sqlite_resultset) {
+		delete sqlite_resultset;
+		sqlite_resultset = NULL;
+	}
+
 	query = (char*)"SELECT * FROM pgsql_hostgroup_attributes";
 	admindb->execute_statement(query, &error, &cols, &affected_rows, &sqlite_resultset);
 	if (error) {
