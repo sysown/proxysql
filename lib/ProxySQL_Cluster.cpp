@@ -1546,12 +1546,17 @@ void update_pgsql_aws_aurora_hostgroups(SQLite3_result* resultset) {
 		rc = (*proxy_sqlite3_bind_text)(statement1, 14, row->fields[13] ? row->fields[13] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 
 		SAFE_SQLITE3_STEP2(statement1);
-		if (rc != SQLITE_DONE) {
+		if (rc == SQLITE_CONSTRAINT) {
 			// tolerate a peer row violating a CHECK constraint (e.g. version
 			// skew): skip the row instead of aborting on the reset below
 			proxy_error(
 				"Cluster: skipping invalid pgsql_aws_aurora_hostgroups row from peer (writer_hostgroup=%s): %s\n",
 				row->fields[0] ? row->fields[0] : "", (*proxy_sqlite3_errmsg)(GloAdmin->admindb->get_db())
+			);
+		} else if (rc != SQLITE_DONE) {
+			proxy_error(
+				"Cluster: error %d writing pgsql_aws_aurora_hostgroups row (writer_hostgroup=%s): %s\n",
+				rc, row->fields[0] ? row->fields[0] : "", (*proxy_sqlite3_errmsg)(GloAdmin->admindb->get_db())
 			);
 		}
 		(*proxy_sqlite3_clear_bindings)(statement1);

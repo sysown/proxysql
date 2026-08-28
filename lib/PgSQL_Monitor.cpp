@@ -104,6 +104,7 @@ bool server_responds_to_ping(SQLite3DB& db, const char* addr, int port, int max_
 		);
 		free(err);
 		assert(0);
+		return false;
 	} else {
 		return !result->rows_count;
 	}
@@ -3996,7 +3997,9 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 			// aurora_replica_status() is evaluated once via the CTE
 			const char* query =
 				"WITH ars AS (SELECT * FROM aurora_replica_status()), "
-				"cur_master AS (SELECT server_id FROM ars WHERE session_id = 'MASTER_SESSION_ID' ORDER BY last_update_timestamp DESC NULLS LAST LIMIT 1) "
+				"cur_master AS (SELECT server_id FROM ars WHERE session_id = 'MASTER_SESSION_ID' "
+					"AND (last_update_timestamp IS NULL OR last_update_timestamp > NOW() - INTERVAL '180 seconds') "
+					"ORDER BY last_update_timestamp DESC NULLS LAST LIMIT 1) "
 				"SELECT server_id, "
 				"CASE WHEN session_id = 'MASTER_SESSION_ID' AND server_id <> (SELECT server_id FROM cur_master) "
 					"THEN 'probably_former_MASTER_SESSION_ID' ELSE session_id END AS session_id, "
@@ -4106,8 +4109,12 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 			ase = nullptr;
 		}
 
-		next_loop_at = t1 + (check_interval_ms * 1000);
-		next_loop_at -= (t2 - t1);
+		{
+			const unsigned long long interval_us = (unsigned long long)check_interval_ms * 1000ULL;
+			const unsigned long long elapsed_us = (t2 > t1 ? t2 - t1 : 0);
+			// Compensate for the check duration, but never schedule in the past
+			next_loop_at = t1 + (elapsed_us < interval_us ? interval_us - elapsed_us : 0);
+		}
 	}
 
 __exit_pgsql_monitor_AWS_Aurora_thread_HG_now:
