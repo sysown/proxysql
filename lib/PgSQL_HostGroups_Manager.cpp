@@ -4450,8 +4450,11 @@ void PgSQL_HostGroups_Manager::generate_pgsql_aws_aurora_hostgroups_table() {
 		int add_lag_ms = atoi(r->fields[10]);
 		int min_lag_ms = atoi(r->fields[11]);
 		int lag_num_checks = atoi(r->fields[12]);
+		// the admin table allows a NULL comment while the in-memory table does
+		// not: normalize it once here so every consumer below sees a string
+		char *comment_fld = r->fields[13] ? r->fields[13] : (char *)"";
 		proxy_info("Loading AWS Aurora PostgreSQL info for (%d,%d,%s,%d,\"%s\",%d,%d,%d,%d,%d,%d,\"%s\")\n", writer_hostgroup, reader_hostgroup, (active ? "on" : "off"), aurora_port,
-				   r->fields[4], max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks, check_interval_ms, check_timeout_ms, r->fields[13]);
+				   r->fields[4], max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks, check_interval_ms, check_timeout_ms, comment_fld);
 		rc = (*proxy_sqlite3_bind_int64)(statement, 1, writer_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
 		rc = (*proxy_sqlite3_bind_int64)(statement, 2, reader_hostgroup); ASSERT_SQLITE_OK(rc, mydb);
 		rc = (*proxy_sqlite3_bind_int64)(statement, 3, active); ASSERT_SQLITE_OK(rc, mydb);
@@ -4465,7 +4468,7 @@ void PgSQL_HostGroups_Manager::generate_pgsql_aws_aurora_hostgroups_table() {
 		rc = (*proxy_sqlite3_bind_int64)(statement, 11, add_lag_ms); ASSERT_SQLITE_OK(rc, mydb);
 		rc = (*proxy_sqlite3_bind_int64)(statement, 12, min_lag_ms); ASSERT_SQLITE_OK(rc, mydb);
 		rc = (*proxy_sqlite3_bind_int64)(statement, 13, lag_num_checks); ASSERT_SQLITE_OK(rc, mydb);
-		rc = (*proxy_sqlite3_bind_text)(statement, 14, r->fields[13], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+		rc = (*proxy_sqlite3_bind_text)(statement, 14, comment_fld, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
 
 		SAFE_SQLITE3_STEP2(statement);
 		rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mydb);
@@ -4476,12 +4479,12 @@ void PgSQL_HostGroups_Manager::generate_pgsql_aws_aurora_hostgroups_table() {
 		if (it2 != AWS_Aurora_Info_Map.end()) {
 			info = it2->second;
 			bool changed = false;
-			changed = info->update(reader_hostgroup, aurora_port, r->fields[4], max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks, check_interval_ms, check_timeout_ms, (bool)active, writer_is_also_reader, new_reader_weight, r->fields[13]);
+			changed = info->update(reader_hostgroup, aurora_port, r->fields[4], max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks, check_interval_ms, check_timeout_ms, (bool)active, writer_is_also_reader, new_reader_weight, comment_fld);
 			if (changed) {
 				// info->need_converge = true;
 			}
 		} else {
-			info = new PgSQL_AWS_Aurora_Info(writer_hostgroup, reader_hostgroup, aurora_port, r->fields[4], max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks, check_interval_ms, check_timeout_ms, (bool)active, writer_is_also_reader, new_reader_weight, r->fields[13]);
+			info = new PgSQL_AWS_Aurora_Info(writer_hostgroup, reader_hostgroup, aurora_port, r->fields[4], max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks, check_interval_ms, check_timeout_ms, (bool)active, writer_is_also_reader, new_reader_weight, comment_fld);
 			AWS_Aurora_Info_Map.insert(AWS_Aurora_Info_Map.begin(), std::pair<int, PgSQL_AWS_Aurora_Info *>(writer_hostgroup, info));
 		}
 	}
