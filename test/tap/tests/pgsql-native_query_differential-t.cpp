@@ -230,6 +230,34 @@ static PGConnPtr createClientConn() {
     return PGConnPtr(PQconnectdb(ss.str().c_str()), &PQfinish);
 }
 
+// Same as createClientConn(), plus the client-supplied `options` a real client passes
+// as PGOPTIONS / options= in its conninfo.
+static PGConnPtr createClientConnWithOptions(const std::string& options) {
+    std::stringstream ss;
+    ss << "host=" << cl.pgsql_host << " port=" << cl.pgsql_port
+       << " user=" << cl.pgsql_username << " password=" << cl.pgsql_password
+       << " dbname=" << cl.pgsql_username << " sslmode=disable";
+    if (!options.empty()) ss << " options='" << options << "'";
+    return PGConnPtr(PQconnectdb(ss.str().c_str()), &PQfinish);
+}
+
+// Connects with `options` and reports what the BACKEND session ended up with, as one
+// comparable string. A connection failure is folded into the same string rather than
+// bailing, because failing to connect on one path and not the other is exactly the
+// divergence this phase is here to catch.
+static std::string options_outcome(const std::string& options, const std::string& probe) {
+    PGConnPtr c = createClientConnWithOptions(options);
+    if (!c || PQstatus(c.get()) != CONNECTION_OK) {
+        std::string e = c ? PQerrorMessage(c.get()) : "PQconnectdb returned null";
+        for (char& ch : e) if (ch == '\n') ch = ' ';
+        return "CONNECT-FAILED: " + e;
+    }
+    QueryResult r = run_one_query(c.get(), probe);
+    if (!r.ok) return "QUERY-FAILED: sqlstate=" + r.err_sqlstate;
+    if (r.rows.empty() || r.rows[0].empty()) return "NO-ROWS";
+    return r.rows[0][0];
+}
+
 static std::fstream f_proxysql_log{};
 
 static bool nativeFallbackObserved() {
@@ -363,7 +391,7 @@ static void assert_query(const char* label, const std::vector<QueryResult>& libp
 int main(int /*argc*/, char** /*argv*/) {
     // 15 query-result assertions + 1 native-path assertion
     // + 12 PROXYSQL INTERNAL SESSION assertions = 28 lines.
-    plan(28);
+    plan(31);
 
     if (cl.getEnv())
         return exit_status();
@@ -586,6 +614,73 @@ int main(int /*argc*/, char** /*argv*/) {
                 PQclear(r);
             }
             ok(alive, "ProxySQL still alive after the internal-session probes");
+        }
+    }
+
+    // ---- Client connection options, libpq oracle vs native -----------------
+    //
+    // A client's `options` reach the backend inside the StartupMessage `options`
+    // parameter, which the backend splits on unescaped whitespace (pg_split_opts,
+    // postinit.c). A value that itself contains a space therefore has to arrive
+    // escaped, and at the right level: a conninfo value passes through libpq, which
+    // strips one level of backslashes before it reaches the wire, while the native
+    // path writes to the wire directly and must not carry that extra level.
+    //
+    // REGRESSION GUARD. Untracked options used to be stored already escaped for a
+    // conninfo and then handed to the native path verbatim, so the backend saw the
+    // over-escaped form: an option whose value held a space FAILED THE CONNECTION on
+    // native while libpq was fine, e.g.
+    //     ERROR:  invalid value for parameter "work_mem": "4\"
+    // The tracked variables carry the same hazard through DateStyle, whose default
+    // value "ISO, MDY" contains a space.
+    {
+        // The options string below is a CONNINFO value, and libpq strips one level of
+        // backslashes while parsing it. So a value that must reach the wire as `4\ MB`
+        // is written here as `4\\ MB`. Getting this level wrong makes both paths fail to
+        // connect, which would still compare equal and quietly assert nothing -- hence
+        // the explicit `expected` below rather than a bare libpq-vs-native comparison.
+        struct OptCase {
+            const char* label;
+            const char* options;    // as a client passes it in its conninfo
+            const char* probe;      // what to read back from the backend session
+            const char* expected;   // what BOTH paths must report
+        };
+        // work_mem, geqo and join_collapse_limit must stay OUT of pgsql_variable_name for
+        // these to exercise the untracked path -- note maintenance_work_mem IS tracked
+        // while work_mem is not. If one of them is ever added to that enum, the case
+        // silently starts testing the tracked path instead and still passes; pick a
+        // different GUC then rather than leaving it.
+        // Every expected value below MUST differ from the backend's own default, or the
+        // case cannot tell "the option arrived" from "the option was silently dropped" --
+        // it would only ever catch a failure to connect. Defaults on PostgreSQL 16 are
+        // work_mem=4MB, DateStyle='ISO, MDY', geqo=on, join_collapse_limit=8.
+        const OptCase cases[] = {
+            {"untracked value containing a space",
+             "-c work_mem=8\\\\ MB",
+             "SELECT current_setting('work_mem')",
+             "8MB"},
+            {"untracked values needing no escaping",
+             "-c geqo=off -c join_collapse_limit=3",
+             "SELECT current_setting('geqo')||' '||current_setting('join_collapse_limit')",
+             "off 3"},
+            {"tracked value containing a space (DateStyle)",
+             "-c DateStyle=ISO,\\\\ DMY",
+             "SELECT current_setting('DateStyle')",
+             "ISO, DMY"},
+        };
+        for (const auto& oc : cases) {
+            setNativeMode(admin.get(), false);
+            flushBackendPool(admin.get(), BACKEND_HG, saved);
+            const std::string lp = options_outcome(oc.options, oc.probe);
+
+            setNativeMode(admin.get(), true);
+            flushBackendPool(admin.get(), BACKEND_HG, saved);
+            const std::string nt = options_outcome(oc.options, oc.probe);
+
+            ok(lp == oc.expected && nt == oc.expected,
+               "client options -- %s -- reach the backend on both paths "
+               "(expected='%s' libpq='%s' native='%s')",
+               oc.label, oc.expected, lp.c_str(), nt.c_str());
         }
     }
 
