@@ -3902,9 +3902,14 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 		} else {
 			// Execute the aurora_replica_status() query.
 			// Writer is identified by session_id = 'MASTER_SESSION_ID'.
+			// NOTE: in aurora_replica_status() output the row of the instance being
+			// queried reports last_update_timestamp = NULL (and the writer row
+			// reports replica_lag_in_msec = NULL), so NULL means "self, alive by
+			// definition" and must never be treated as stale.
 			// The query ports the safeguards of the MySQL Aurora monitor query:
 			// - a stale MASTER_SESSION_ID left on the old writer during a failover is
-			//   demoted (only the row with the freshest last_update_timestamp counts)
+			//   demoted (only the master row with the freshest last_update_timestamp
+			//   counts; the self row counts as freshest via COALESCE(.., NOW()))
 			// - the writer lag is forced to 0
 			// - rows with nonsensical lag are filtered out
 			// - decommissioned/renamed nodes are ignored (last_update_timestamp older
@@ -3912,16 +3917,16 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 			const char* query =
 				"SELECT server_id, "
 				"CASE WHEN session_id = 'MASTER_SESSION_ID' AND server_id <> "
-					"(SELECT server_id FROM aurora_replica_status() WHERE session_id = 'MASTER_SESSION_ID' ORDER BY last_update_timestamp DESC LIMIT 1) "
+					"(SELECT server_id FROM aurora_replica_status() WHERE session_id = 'MASTER_SESSION_ID' ORDER BY COALESCE(last_update_timestamp, NOW()) DESC LIMIT 1) "
 					"THEN 'probably_former_MASTER_SESSION_ID' ELSE session_id END AS session_id, "
 				"last_update_timestamp, "
 				"CASE WHEN session_id = 'MASTER_SESSION_ID' THEN 0 ELSE replica_lag_in_msec END AS replica_lag_in_msec, "
 				"CASE WHEN session_id = 'MASTER_SESSION_ID' AND server_id = "
-					"(SELECT server_id FROM aurora_replica_status() WHERE session_id = 'MASTER_SESSION_ID' ORDER BY last_update_timestamp DESC LIMIT 1) "
+					"(SELECT server_id FROM aurora_replica_status() WHERE session_id = 'MASTER_SESSION_ID' ORDER BY COALESCE(last_update_timestamp, NOW()) DESC LIMIT 1) "
 					"THEN true ELSE false END AS is_writer "
 				"FROM aurora_replica_status() "
 				"WHERE ((replica_lag_in_msec >= 0 AND replica_lag_in_msec <= 600000) OR session_id = 'MASTER_SESSION_ID') "
-				"AND last_update_timestamp > NOW() - INTERVAL '180 seconds' "
+				"AND (last_update_timestamp IS NULL OR last_update_timestamp > NOW() - INTERVAL '180 seconds') "
 				"ORDER BY server_id";
 
 			PGresult* res = aurora_pgsql_exec_with_timeout(conn, query, check_timeout_ms, check_err);
