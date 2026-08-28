@@ -4162,9 +4162,10 @@ PgSQL_SrvC* PgSQL_HostGroups_Manager::find_server_in_hg(unsigned int _hid, const
 
 	PgSQL_HGC* myhgc = nullptr;
 	for (uint32_t i = 0; i < MyHostGroups->len; i++) {
-		myhgc = static_cast<PgSQL_HGC*>(MyHostGroups->index(i));
+		PgSQL_HGC* hgc = static_cast<PgSQL_HGC*>(MyHostGroups->index(i));
 
-		if (myhgc->hid == _hid) {
+		if (hgc->hid == _hid) {
+			myhgc = hgc;
 			break;
 		}
 	}
