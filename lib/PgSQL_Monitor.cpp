@@ -3437,14 +3437,14 @@ static void shuffle_pgsql_hosts(pgsql_host_def_t* arr, unsigned int n) {
  */
 static PGconn* aurora_pgsql_connect_with_timeout(
 	const char* host, int port, const char* user, const char* pass,
-	unsigned int timeout_ms, std::string& err
+	int use_ssl, unsigned int timeout_ms, std::string& err
 ) {
 	char port_str[16];
 	snprintf(port_str, sizeof(port_str), "%d", port);
 
 	// dbname=postgres is used because aurora_replica_status() is a system function
-	const char* keywords[] = { "host", "port", "dbname", "user", "password", "application_name", NULL };
-	const char* values[] = { host, port_str, "postgres", user, pass, "proxysql_monitor", NULL };
+	const char* keywords[] = { "host", "port", "dbname", "user", "password", "sslmode", "application_name", NULL };
+	const char* values[] = { host, port_str, "postgres", user, pass, use_ssl ? "require" : "prefer", "proxysql_monitor", NULL };
 
 	PGconn* conn = PQconnectStartParams(keywords, values, 0);
 	if (conn == NULL) {
@@ -3885,6 +3885,7 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 				hpa[cur_host_idx].host, hpa[cur_host_idx].port,
 				monitor_user ? monitor_user : "",
 				monitor_pass ? monitor_pass : "",
+				hpa[cur_host_idx].use_ssl,
 				check_timeout_ms, check_err
 			);
 		}
