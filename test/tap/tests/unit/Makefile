@@ -215,8 +215,10 @@ LIBPROXYSQLAR_FULL := $(LIBPROXYSQLAR)
 # pull every .oo in twice, producing ODR violations under ASAN
 # (`detect_odr_violation=1` aborts at startup; ld is silenced by
 # `--allow-multiple-definition`).
-MYLIBS := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -lcurl -lssl -lcrypto -luuid \
-		  -Wl,-Bstatic -lconfig -lsqlparser -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre \
+# -lre2 is dynamic on purpose: libre2.so is already loaded via the $(TAP_LDIR)
+# rpath, so linking it statically too put a second copy of re2 in every binary.
+MYLIBS := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -lcurl -lssl -lcrypto -luuid -lre2 \
+		  -Wl,-Bstatic -lconfig -lsqlparser -ldaemon -lconfig++ -lpcrecpp -lpcre \
 		  -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev \
 		  -lprometheus-cpp-pull -lprometheus-cpp-core \
 		  -Wl,-Bstatic -lpq -lpgcommon -lpgport \
