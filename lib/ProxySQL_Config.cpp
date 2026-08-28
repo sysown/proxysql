@@ -2402,6 +2402,10 @@ int ProxySQL_Config::Read_PgSQL_Servers_from_configfile(std::string& error) {
 			line.lookupValue("active", active);
 			line.lookupValue("comment", comment);
 			line.lookupValue("domain_name", domain_name);
+			if (domain_name.empty() || domain_name[0] != '.') {
+				proxy_error("Admin: detected a pgsql_aws_aurora_hostgroups in config file with an invalid domain_name \"%s\" (it must start with '.')\n", domain_name.c_str());
+				continue;
+			}
 			char *o1=strdup(comment.c_str());
 			char *o=escape_string_single_quotes(o1, false);
 			char *p1=strdup(domain_name.c_str());

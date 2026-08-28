@@ -3,8 +3,8 @@
 #include "PgSQL_Thread.h"
 
 // Number of the most recent Aurora status entries evaluated for lag estimation.
-// MySQL_Monitor.hpp defines the same constant for the MySQL Aurora monitor; the
-// guard keeps both definitions in sync regardless of include order.
+// MySQL_Monitor.hpp defines an identical constant for the MySQL Aurora monitor,
+// but that header is not included here; this is an independent local definition.
 #ifndef N_L_ASE
 #define N_L_ASE 16
 #endif
@@ -129,6 +129,13 @@ void check_and_build_standard_tables(SQLite3DB& db, const vector<table_def_t>& t
  * @details Holds connections per server (hostname:port) for reuse
  *          Equivalent to MySQL's MonMySrvC class
  */
+// A pooled monitor connection with its last-used timestamp, so idle
+// connections can be expired like in the MySQL monitor connection pool
+struct MonPgConn_t {
+	PGconn* conn;
+	unsigned long long last_used_us;
+};
+
 class MonPgSrvC {
 public:
 	char* address;
@@ -143,10 +150,12 @@ public:
 		free(address);
 		if (conns) {
 			while (conns->len) {
-				PGconn* pg = static_cast<PGconn*>(conns->index(0));
-				if (pg) {
-					PQfinish(pg);
-					pg = nullptr;
+				MonPgConn_t* mc = static_cast<MonPgConn_t*>(conns->index(0));
+				if (mc) {
+					if (mc->conn) {
+						PQfinish(mc->conn);
+					}
+					free(mc);
 				}
 				conns->remove_index_fast(0);
 			}
@@ -176,9 +185,17 @@ public:
 	}
 };
 
+// Pooled monitor connections idle longer than this are closed (the MySQL
+// monitor pool uses 10x the ping interval for the same purpose)
+static unsigned long long mon_pool_idle_limit_us() {
+	return (unsigned long long)pgsql_thread___monitor_ping_interval * 1000 * 10;
+}
+
 PGconn* PgSQL_Monitor_Connection_Pool::get_connection(char* hostname, int port) {
 	std::lock_guard<std::mutex> lock(mutex);
 	PGconn* pg = nullptr;
+	const unsigned long long now = monotonic_time();
+	const unsigned long long idle_limit = mon_pool_idle_limit_us();
 
 	for (unsigned int i = 0; i < servers->len; i++) {
 		MonPgSrvC* srv = (MonPgSrvC*)servers->index(i);
@@ -186,12 +203,16 @@ PGconn* PgSQL_Monitor_Connection_Pool::get_connection(char* hostname, int port) 
 			if (srv->conns->len) {
 				while (srv->conns->len) {
 					unsigned int idx = rand_fast() % srv->conns->len;
-					PGconn* pgconn = (PGconn*)srv->conns->remove_index_fast(idx);
+					MonPgConn_t* mc = (MonPgConn_t*)srv->conns->remove_index_fast(idx);
 
+					if (!mc) continue;
+					PGconn* pgconn = mc->conn;
+					const unsigned long long last_used = mc->last_used_us;
+					free(mc);
 					if (!pgconn) continue;
 
-					// Check if connection is still alive
-					if (PQstatus(pgconn) != CONNECTION_OK) {
+					// Expire idle connections and drop dead ones
+					if (now - last_used > idle_limit || PQstatus(pgconn) != CONNECTION_OK) {
 						PQfinish(pgconn);
 						continue;
 					}
@@ -208,36 +229,48 @@ PGconn* PgSQL_Monitor_Connection_Pool::get_connection(char* hostname, int port) 
 
 void PgSQL_Monitor_Connection_Pool::put_connection(char* hostname, int port, PGconn* pg) {
 	std::lock_guard<std::mutex> lock(mutex);
+	MonPgConn_t* mc = (MonPgConn_t*)malloc(sizeof(MonPgConn_t));
+	mc->conn = pg;
+	mc->last_used_us = monotonic_time();
 	for (unsigned int i = 0; i < servers->len; i++) {
 		MonPgSrvC* srv = (MonPgSrvC*)servers->index(i);
 		if (srv->port == port && strcmp(hostname, srv->address) == 0) {
-			srv->conns->add(pg);
+			srv->conns->add(mc);
 			return;
 		}
 	}
 	// if no server was found
 	MonPgSrvC* srv = new MonPgSrvC(hostname, port);
-	srv->conns->add(pg);
+	srv->conns->add(mc);
 	servers->add(srv);
 }
 
 void PgSQL_Monitor_Connection_Pool::purge_some_connections() {
 	std::lock_guard<std::mutex> lock(mutex);
+	const unsigned long long now = monotonic_time();
+	const unsigned long long idle_limit = mon_pool_idle_limit_us();
 	for (unsigned int i = 0; i < servers->len; i++) {
 		MonPgSrvC* srv = (MonPgSrvC*)servers->index(i);
 		// Keep at most 4 connections per server (same as MySQL)
 		while (srv->conns->len > 4) {
-			PGconn* pg = (PGconn*)srv->conns->remove_index_fast(0);
-			if (pg) {
-				PQfinish(pg);
+			MonPgConn_t* mc = (MonPgConn_t*)srv->conns->remove_index_fast(0);
+			if (mc) {
+				if (mc->conn) {
+					PQfinish(mc->conn);
+				}
+				free(mc);
 			}
 		}
-		// Also check connection status and close dead connections
+		// Close idle-expired and dead connections
 		for (unsigned int j = 0; j < srv->conns->len; j++) {
-			PGconn* pg = (PGconn*)srv->conns->index(j);
-			if (pg && PQstatus(pg) != CONNECTION_OK) {
+			MonPgConn_t* mc = (MonPgConn_t*)srv->conns->index(j);
+			if (mc && (now - mc->last_used_us > idle_limit
+					|| mc->conn == nullptr || PQstatus(mc->conn) != CONNECTION_OK)) {
 				srv->conns->remove_index_fast(j);
-				PQfinish(pg);
+				if (mc->conn) {
+					PQfinish(mc->conn);
+				}
+				free(mc);
 				j--; // Recheck this index
 			}
 		}
@@ -313,17 +346,7 @@ PgSQL_Monitor::~PgSQL_Monitor() {
 }
 
 bool PgSQL_Monitor::server_responds_to_ping(const char* addr, int port) {
-	int max_fails = 3; // Could be made configurable
-	cfmt_t q_fmt { cstr_format(RESP_SERVERS_QUERY_T, addr, port, max_fails, max_fails) };
-
-	char* err { nullptr };
-	unique_ptr<SQLite3_result> result { monitordb.execute_statement(q_fmt.str.c_str(), &err) };
-
-	if (err || result == nullptr) {
-		free(err);
-		return false;
-	}
-	return !result->rows_count;
+	return ::server_responds_to_ping(monitordb, addr, port, pgsql_thread___monitor_ping_max_failures);
 }
 
 unsigned int PgSQL_Monitor::estimate_lag(char* server_id, PgSQL_AWS_Aurora_status_entry** aase, unsigned int idx,
@@ -333,6 +356,7 @@ unsigned int PgSQL_Monitor::estimate_lag(char* server_id, PgSQL_AWS_Aurora_statu
 	if (!aase || !server_id) {
 		return 0;
 	}
+	assert(idx < N_L_ASE);
 	if (idx >= N_L_ASE) {
 		return 0;
 	}
@@ -3792,6 +3816,13 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 	// Initial data load; the checksum generation comes from the coordinator
 	initial_raw_checksum = hg_arg->initial_checksum;
 	pthread_mutex_lock(&GloPgMon->aws_aurora_mutex);
+	if (GloPgMon->AWS_Aurora_Hosts_resultset_checksum != initial_raw_checksum) {
+		// A newer generation replaced the resultset before this thread ran its
+		// initial scan; exit and let the coordinator respawn against it
+		pthread_mutex_unlock(&GloPgMon->aws_aurora_mutex);
+		delete pgsql_thr;
+		return nullptr;
+	}
 
 	// Count the number of hosts
 	if (GloPgMon->AWS_Aurora_Hosts_resultset != nullptr)
@@ -3955,23 +3986,25 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 			// definition" and must never be treated as stale.
 			// The query ports the safeguards of the MySQL Aurora monitor query:
 			// - a stale MASTER_SESSION_ID left on the old writer during a failover is
-			//   demoted (only the master row with the freshest last_update_timestamp
-			//   counts; the self row counts as freshest via COALESCE(.., NOW()))
+			//   demoted: among multiple master claimants the freshest real heartbeat
+			//   wins (NULLS LAST, matching the MySQL freshest-timestamp semantics);
+			//   the self row is only picked when it is the sole claimant
 			// - the writer lag is forced to 0
 			// - rows with nonsensical lag are filtered out
 			// - decommissioned/renamed nodes are ignored (last_update_timestamp older
 			//   than 180 seconds), see sysown/proxysql#3484 for the MySQL equivalent
+			// aurora_replica_status() is evaluated once via the CTE
 			const char* query =
+				"WITH ars AS (SELECT * FROM aurora_replica_status()), "
+				"cur_master AS (SELECT server_id FROM ars WHERE session_id = 'MASTER_SESSION_ID' ORDER BY last_update_timestamp DESC NULLS LAST LIMIT 1) "
 				"SELECT server_id, "
-				"CASE WHEN session_id = 'MASTER_SESSION_ID' AND server_id <> "
-					"(SELECT server_id FROM aurora_replica_status() WHERE session_id = 'MASTER_SESSION_ID' ORDER BY COALESCE(last_update_timestamp, NOW()) DESC LIMIT 1) "
+				"CASE WHEN session_id = 'MASTER_SESSION_ID' AND server_id <> (SELECT server_id FROM cur_master) "
 					"THEN 'probably_former_MASTER_SESSION_ID' ELSE session_id END AS session_id, "
 				"last_update_timestamp, "
 				"CASE WHEN session_id = 'MASTER_SESSION_ID' THEN 0 ELSE replica_lag_in_msec END AS replica_lag_in_msec, "
-				"CASE WHEN session_id = 'MASTER_SESSION_ID' AND server_id = "
-					"(SELECT server_id FROM aurora_replica_status() WHERE session_id = 'MASTER_SESSION_ID' ORDER BY COALESCE(last_update_timestamp, NOW()) DESC LIMIT 1) "
+				"CASE WHEN session_id = 'MASTER_SESSION_ID' AND server_id = (SELECT server_id FROM cur_master) "
 					"THEN true ELSE false END AS is_writer "
-				"FROM aurora_replica_status() "
+				"FROM ars "
 				"WHERE ((replica_lag_in_msec >= 0 AND replica_lag_in_msec <= 600000) OR session_id = 'MASTER_SESSION_ID') "
 				"AND (last_update_timestamp IS NULL OR last_update_timestamp > NOW() - INTERVAL '180 seconds') "
 				"ORDER BY server_id";

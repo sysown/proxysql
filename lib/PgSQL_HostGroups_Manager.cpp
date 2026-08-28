@@ -4479,11 +4479,7 @@ void PgSQL_HostGroups_Manager::generate_pgsql_aws_aurora_hostgroups_table() {
 		PgSQL_AWS_Aurora_Info *info = nullptr;
 		if (it2 != AWS_Aurora_Info_Map.end()) {
 			info = it2->second;
-			bool changed = false;
-			changed = info->update(reader_hostgroup, aurora_port, r->fields[4], max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks, check_interval_ms, check_timeout_ms, (bool)active, writer_is_also_reader, new_reader_weight, comment_fld);
-			if (changed) {
-				// info->need_converge = true;
-			}
+			info->update(reader_hostgroup, aurora_port, r->fields[4], max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks, check_interval_ms, check_timeout_ms, (bool)active, writer_is_also_reader, new_reader_weight, comment_fld);
 		} else {
 			info = new PgSQL_AWS_Aurora_Info(writer_hostgroup, reader_hostgroup, aurora_port, r->fields[4], max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks, check_interval_ms, check_timeout_ms, (bool)active, writer_is_also_reader, new_reader_weight, comment_fld);
 			AWS_Aurora_Info_Map.insert(AWS_Aurora_Info_Map.begin(), std::pair<int, PgSQL_AWS_Aurora_Info *>(writer_hostgroup, info));

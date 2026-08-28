@@ -51,7 +51,7 @@
 
 // AWS Aurora PostgreSQL hostgroups table definition
 #define MYHGM_PgSQL_AWS_AURORA_HOSTGROUPS "CREATE TABLE pgsql_aws_aurora_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , " \
-										  "active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , aurora_port INT NOT NULL DEFAULT 5432 , domain_name VARCHAR NOT NULL DEFAULT '' , " \
+										  "active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , aurora_port INT CHECK (aurora_port >= 0 AND aurora_port <= 65535) NOT NULL DEFAULT 5432 , domain_name VARCHAR NOT NULL DEFAULT '' , " \
 										  "max_lag_ms INT NOT NULL CHECK (max_lag_ms>= 10 AND max_lag_ms <= 600000) DEFAULT 600000 , check_interval_ms INT NOT NULL CHECK (check_interval_ms >= 100 AND check_interval_ms <= 600000) DEFAULT 1000 , " \
 										  "check_timeout_ms INT NOT NULL CHECK (check_timeout_ms >= 80 AND check_timeout_ms <= 3000) DEFAULT 800 , " \
 										  "writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , new_reader_weight INT CHECK (new_reader_weight >= 0 AND new_reader_weight <=10000000) NOT NULL DEFAULT 1 , " \
