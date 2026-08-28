@@ -2797,12 +2797,14 @@ void* PgSQL_monitor_scheduler_thread() {
 
 	// Start Aurora PostgreSQL monitoring thread
 	pthread_t pgsql_monitor_aws_aurora_thread;
+	bool aurora_thread_started = false;
 	pthread_attr_t aurora_attr;
 	pthread_attr_init(&aurora_attr);
 	pthread_attr_setstacksize(&aurora_attr, 2048 * 1024);
 	if (pthread_create(&pgsql_monitor_aws_aurora_thread, &aurora_attr, PgSQL_monitor_aws_aurora, NULL) != 0) {
 		proxy_error("Failed to create Aurora PostgreSQL monitor thread\n");
 	} else {
+		aurora_thread_started = true;
 		proxy_info("Started Aurora PostgreSQL monitor thread\n");
 	}
 	pthread_attr_destroy(&aurora_attr);
@@ -3014,8 +3016,10 @@ void* PgSQL_monitor_scheduler_thread() {
 		}
 
 		// Wait for Aurora thread to exit
-		pthread_join(pgsql_monitor_aws_aurora_thread, NULL);
-		proxy_info("Aurora PostgreSQL monitor thread joined\n");
+		if (aurora_thread_started) {
+			pthread_join(pgsql_monitor_aws_aurora_thread, NULL);
+			proxy_info("Aurora PostgreSQL monitor thread joined\n");
+		}
 
 		// Cleanup the global connection pool; no mutex, threads joined
 		for (auto& entry : mon_conn_pool.conn_map) {
@@ -3591,22 +3595,17 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 
 	proxy_info("Started Aurora PostgreSQL Monitor thread for writer HG %u\n", wHG);
 
+	// Quick exit during shutdown/restart
+	if (!GloPTH || !GloPgMon) {
+		return nullptr;
+	}
+
 	// Initialize thread-local variables (matching MySQL pattern)
 	unsigned int PgSQL_Monitor__thread_PgSQL_Thread_Variables_version;
 	PgSQL_Thread* pgsql_thr = new PgSQL_Thread();
 	pgsql_thr->curtime = monotonic_time();
 	PgSQL_Monitor__thread_PgSQL_Thread_Variables_version = GloPTH->get_global_version();
 	pgsql_thr->refresh_variables();
-
-	// Quick exit checks
-	if (!GloPTH) {
-		delete pgsql_thr;
-		return nullptr;
-	}
-	if (!GloPgMon) {
-		delete pgsql_thr;
-		return nullptr;
-	}
 
 	// Get monitor credentials from GloPTH
 	char* monitor_user = GloPTH->get_variable_string((char*)"monitor_username");
@@ -3629,6 +3628,7 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 	initial_raw_checksum = GloPgMon->AWS_Aurora_Hosts_resultset_checksum;
 
 	// Count the number of hosts
+	if (GloPgMon->AWS_Aurora_Hosts_resultset != nullptr)
 	for (auto it = GloPgMon->AWS_Aurora_Hosts_resultset->rows.begin();
 		 it != GloPgMon->AWS_Aurora_Hosts_resultset->rows.end(); ++it) {
 		SQLite3_row* r = *it;
@@ -3658,6 +3658,7 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 		// Cleanup before early return
 		if (monitor_user) free(monitor_user);
 		if (monitor_pass) free(monitor_pass);
+		delete pgsql_thr;
 		return nullptr;
 	}
 
@@ -3923,7 +3924,8 @@ __exit_pgsql_monitor_AWS_Aurora_thread_HG_now:
  */
 void* PgSQL_monitor_aws_aurora(void* arg) {
 	(void)arg;  // unused
-	if (!GloPgMon) return nullptr;
+	// Quick exit during shutdown/restart
+	if (!GloPgMon || !GloPTH) return nullptr;
 
 	// Initialize the PgSQL Thread (note: this is not a real thread, just the structures associated with it)
 	unsigned int PgSQL_Monitor__thread_PgSQL_Thread_Variables_version;
@@ -3931,11 +3933,11 @@ void* PgSQL_monitor_aws_aurora(void* arg) {
 	pgsql_thr->curtime = monotonic_time();
 	PgSQL_Monitor__thread_PgSQL_Thread_Variables_version = GloPTH->get_global_version();
 	pgsql_thr->refresh_variables();
-	if (!GloPTH) return nullptr;  // quick exit during shutdown/restart
 
 	uint64_t last_raw_checksum = 0;
 	unsigned int* hgs_array = nullptr;
 	pthread_t* pthreads_array = nullptr;
+	bool* threads_started = nullptr;
 	unsigned int hgs_num = 0;
 
 	proxy_info("Started Aurora PostgreSQL Monitor main thread\n");
@@ -3967,15 +3969,18 @@ void* PgSQL_monitor_aws_aurora(void* arg) {
 			last_raw_checksum = new_raw_checksum;
 
 			if (pthreads_array) {
-				// Wait for all threads to terminate
+				// Wait for all successfully started threads to terminate
 				for (unsigned int i = 0; i < hgs_num; i++) {
+					if (threads_started[i] == false) continue;
 					pthread_join(pthreads_array[i], nullptr);
 					proxy_info("Stopped Aurora PostgreSQL Monitor thread for writer HG %u\n", hgs_array[i]);
 				}
 				free(pthreads_array);
 				free(hgs_array);
+				free(threads_started);
 				pthreads_array = nullptr;
 				hgs_array = nullptr;
+				threads_started = nullptr;
 				hgs_num = 0;
 			}
 
@@ -3994,6 +3999,7 @@ void* PgSQL_monitor_aws_aurora(void* arg) {
 					proxy_info("Activating Monitoring of %u AWS Aurora PostgreSQL clusters\n", hgs_num);
 					hgs_array = (unsigned int*)malloc(sizeof(unsigned int) * hgs_num);
 					pthreads_array = (pthread_t*)malloc(sizeof(pthread_t) * hgs_num);
+					threads_started = (bool*)calloc(hgs_num, sizeof(bool));
 					unsigned int idx = 0;
 					for (auto& it : unique_whgs) {
 						hgs_array[idx] = it.first;
@@ -4008,6 +4014,8 @@ void* PgSQL_monitor_aws_aurora(void* arg) {
 				proxy_info("Starting Monitor thread for AWS Aurora PostgreSQL writer HG %u\n", hgs_array[i]);
 				if (pthread_create(&pthreads_array[i], nullptr, PgSQL_monitor_AWS_Aurora_thread_HG, &hgs_array[i]) != 0) {
 					proxy_error("Thread creation failed for AWS Aurora PostgreSQL writer HG %u\n", hgs_array[i]);
+				} else {
+					threads_started[i] = true;
 				}
 			}
 		}
@@ -4025,10 +4033,12 @@ __exit_pgsql_monitor_aws_aurora:
 	// Cleanup on shutdown
 	if (pthreads_array) {
 		for (unsigned int i = 0; i < hgs_num; i++) {
+			if (threads_started[i] == false) continue;
 			pthread_join(pthreads_array[i], nullptr);
 		}
 		free(pthreads_array);
 		free(hgs_array);
+		free(threads_started);
 	}
 
 	proxy_info("Stopping Aurora PostgreSQL Monitor main thread\n");
