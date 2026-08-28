@@ -178,7 +178,7 @@ PGconn* PgSQL_Monitor_Connection_Pool::get_connection(char* hostname, int port) 
 		if (srv->port == port && strcmp(hostname, srv->address) == 0) {
 			if (srv->conns->len) {
 				while (srv->conns->len) {
-					unsigned int idx = rand() % srv->conns->len;
+					unsigned int idx = rand_fast() % srv->conns->len;
 					PGconn* pgconn = (PGconn*)srv->conns->remove_index_fast(idx);
 
 					if (!pgconn) continue;
@@ -3414,7 +3414,7 @@ struct pgsql_host_def_t {
 static void shuffle_pgsql_hosts(pgsql_host_def_t* arr, unsigned int n) {
 	if (n <= 1) return;
 	for (unsigned int i = n - 1; i > 0; i--) {
-		unsigned int j = rand() % (i + 1);
+		unsigned int j = rand_fast() % (i + 1);
 		if (i != j) {
 			pgsql_host_def_t tmp;
 			size_t stride = sizeof(pgsql_host_def_t);
@@ -3450,10 +3450,10 @@ void PgSQL_Monitor::evaluate_pgsql_aws_aurora_results(unsigned int wHG, unsigned
 	unsigned int action_no = 0;
 	unsigned int enabling = 0;
 	unsigned int disabling = 0;
-	if (rand() % 500 == 0) {
+	if (rand_fast() % 500 == 0) {
 		verbose = true;
 		bool ev = false;
-		if (rand() % 1000 == 0) {
+		if (rand_fast() % 1000 == 0) {
 			ev = true;
 		}
 		for (i = 0; i < N_L_ASE; i++) {
@@ -3729,7 +3729,7 @@ void* PgSQL_monitor_AWS_Aurora_thread_HG(void* arg) {
 		found_pingable_host = false;
 
 		// Pick a random host
-		size_t rnd = (size_t)rand();
+		size_t rnd = (size_t)rand_fast();
 		rnd %= num_hosts;
 		if (GloPgMon->server_responds_to_ping(hpa[rnd].host, hpa[rnd].port)) {
 			found_pingable_host = true;
