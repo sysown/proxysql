@@ -264,6 +264,21 @@ public:
 
 	PG_ASYNC_ST handler(short event);
 	void connect_start();
+	// Builds the session settings a backend StartupMessage must carry: the
+	// client_encoding value and the "-c name=value ..." options string (tracked
+	// variables followed by the client's own untracked options). Also records what is
+	// being sent via server_set_hash_and_value(), so requires_RESETTING_CONNECTION()
+	// does not afterwards see a false mismatch and resync settings already applied.
+	// Returns false when there is no client session to read settings from, leaving
+	// both outputs untouched.
+	// Escaping differs by transport. Conninfo goes through libpq's parser, which strips
+	// one level of backslashes before the value reaches the wire; the native path writes
+	// the wire bytes directly, so it must emit exactly what the backend's pg_split_opts()
+	// expects (one level less).
+	enum class StartupParamEscape { Conninfo, Wire };
+	bool build_and_record_startup_session_params(std::string& client_encoding_out,
+	                                             std::string& options_out,
+	                                             StartupParamEscape escape_mode);
 	void connect_cont(short event);
 	// Consults PgSQL_Monitor::dns_lookup; returns the cached IP on a hit,
 	// empty std::string on a miss.  Used by connect_start() to set
@@ -521,10 +536,7 @@ public:
 	inline const char* get_pg_dbname() { return native_mode ? (userinfo ? userinfo->dbname : "") : PQdb(pgsql_conn); }
 	inline const char* get_pg_user() { return native_mode ? (userinfo ? userinfo->username : "") : PQuser(pgsql_conn); }
 	inline const char* get_pg_password() { return native_mode ? (userinfo && userinfo->password ? userinfo->password : "") : PQpass(pgsql_conn); }
-	// TODO: this needs to be fixed for native. pg_build_startup() (lib/PgSQL_Backend_Auth.cpp)
-	// emits only the `user` and `database` keys, so the native StartupMessage carries no
-	// `options` at all and there is nothing to report here yet.
-	inline const char* get_pg_options() { return native_mode ? "" : PQoptions(pgsql_conn); }
+	inline const char* get_pg_options() { return native_mode ? native_options.c_str() : PQoptions(pgsql_conn); }
 	inline int get_pg_socket_fd() { return native_mode ? fd : PQsocket(pgsql_conn); }
 	inline int get_pg_backend_pid() { return native_mode ? native_backend_pid : PQbackendPID(pgsql_conn); }
 	inline int get_pg_connection_needs_password() { return PQconnectionNeedsPassword(pgsql_conn); }
@@ -716,6 +728,7 @@ public:
 	bool handler_first_call = true;                  // one-shot first-call detector for handler() (both libpq and native paths)
 	std::map<std::string, std::string> native_params; // ParameterStatus name->value
 	std::string native_host;                         // backend host (parent->address, captured at connect)
+	std::string native_options;                      // the `options` value sent in the StartupMessage
 	std::string native_hostaddr;                     // resolved numeric IP, or "" — mirrors when the libpq path passes hostaddr=
 	std::string native_port;                         // backend port as a decimal string, matching PQport()'s shape
 	int native_backend_pid = 0;                      // BackendKeyData PID

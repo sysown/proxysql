@@ -1243,6 +1243,77 @@ std::string PgSQL_Connection::connect_start_DNS_lookup() {
 	return ip;
 }
 
+// Raises a wire-form value to the level a libpq conninfo needs. libpq parses the conninfo
+// and strips one level of backslash escaping before the value reaches the wire, so doubling
+// every backslash of the wire form is what makes the backend see that exact wire form.
+// Only backslashes need it: both values are single-quoted in the conninfo, so the spaces
+// separating the "-c key=value" tokens pass through untouched.
+static std::string pg_conninfo_escape_level(const std::string& wire) {
+	std::string out;
+	// Worst case is every character being a backslash, so reserve once rather than
+	// regrowing part-way through.
+	out.reserve(wire.size() * 2);
+	for (char c : wire) {
+		if (c == '\\') out += '\\';
+		out += c;
+	}
+	return out;
+}
+
+bool PgSQL_Connection::build_and_record_startup_session_params(std::string& client_encoding_out,
+                                                   std::string& options_out,
+                                                   StartupParamEscape escape_mode) {
+	if (!(myds && myds->sess && myds->sess->client_myds)) return false;
+
+	// Client encoding is always set; it travels as its own startup key, not inside options.
+	const char* client_charset = pgsql_variables.client_get_value(myds->sess, PGSQL_CLIENT_ENCODING);
+	assert(client_charset);
+	const uint32_t client_charset_hash = pgsql_variables.client_get_hash(myds->sess, PGSQL_CLIENT_ENCODING);
+	assert(client_charset_hash);
+	// A startup key's value is a plain NUL-terminated string, so the wire form is the raw
+	// value; the conninfo form is derived from it at the end of this function.
+	client_encoding_out.assign(client_charset);
+	// charset validation is already done
+	pgsql_variables.server_set_hash_and_value(myds->sess, PGSQL_CLIENT_ENCODING, client_charset, client_charset_hash);
+
+	// The tracked variables, as "-c name=value" tokens, escaped for the wire.
+	std::string opts;
+	const char* separator = "";
+	for (int idx = 1; idx < PGSQL_NAME_LAST_LOW_WM; idx++) {
+		const char* value = pgsql_variables.client_get_value(myds->sess, idx);
+		opts += separator;
+		opts += "-c ";
+		opts += pgsql_tracked_variables[idx].set_variable_name;
+		opts += "=";
+		pg_append_escaped_option_value(opts, value);
+		separator = " ";
+		const uint32_t hash = pgsql_variables.client_get_hash(myds->sess, idx);
+		pgsql_variables.server_set_hash_and_value(myds->sess, idx, value, hash);
+	}
+	// The client's own connection options, which it supplied as options='-c ...'.
+	if (myds->sess->untracked_option_parameters.empty() == false) {
+		opts += separator;
+		opts += myds->sess->untracked_option_parameters;
+	}
+	options_out = std::move(opts);
+
+	// Snapshot variables[] into startup_parameters[] so requires_RESETTING_CONNECTION()
+	// knows these are already applied. server_set_hash_and_value() above wrote into
+	// sess->mybe->server_myds->myconn, and this copy is intra-object (variables[] ->
+	// startup_parameters[] on whichever connection it is called on), so it has to run on
+	// that same connection -- hence the same expression rather than `this`.
+	myds->sess->mybe->server_myds->myconn->copy_pgsql_variables_to_startup_parameters(true);
+
+	// Everything above is the wire form, which is what untracked_option_parameters is
+	// stored in too. The libpq path needs one level more, since libpq strips one while
+	// parsing the conninfo.
+	if (escape_mode == StartupParamEscape::Conninfo) {
+		client_encoding_out = pg_conninfo_escape_level(client_encoding_out);
+		options_out = pg_conninfo_escape_level(options_out);
+	}
+	return true;
+}
+
 void PgSQL_Connection::connect_start() {
 	PROXY_TRACE();
 	assert(pgsql_conn == NULL); // already there is a connection
@@ -1320,47 +1391,16 @@ void PgSQL_Connection::connect_start() {
 		conninfo << "sslmode='disable' "; // not supporting SSL
 	}
 
-	if (myds && myds->sess && myds->sess->client_myds) {
-		// Client Encoding should be always set
-		const char* client_charset = pgsql_variables.client_get_value(myds->sess, PGSQL_CLIENT_ENCODING);
-		assert(client_charset);
-		uint32_t client_charset_hash = pgsql_variables.client_get_hash(myds->sess, PGSQL_CLIENT_ENCODING);
-		assert(client_charset_hash);
-		const char* escaped_str = escape_string_backslash_spaces(client_charset);
-		conninfo << "client_encoding='" << escaped_str << "' ";
-		if (escaped_str != client_charset)
-			free((char*)escaped_str);
-
-		// charset validation is already done 
-		pgsql_variables.server_set_hash_and_value(myds->sess, PGSQL_CLIENT_ENCODING, client_charset, client_charset_hash);
-
-		// optimized way to set client parameters on backend connection when creating a new connection
-		// Join the "-c key=value" tokens with a leading separator so the options value has
-		// no trailing space before the closing quote. PgBouncer rejects a startup packet
-		// whose options value ends in whitespace (#5801).
-		conninfo << "options='";
-		const char* separator = "";
-		// excluding client_encoding, which is already set above
-		for (int idx = 1; idx < PGSQL_NAME_LAST_LOW_WM; idx++) {
-			const char* value = pgsql_variables.client_get_value(myds->sess, idx);
-			const char* escaped_str = escape_string_backslash_spaces(value);
-			conninfo << separator << "-c " << pgsql_tracked_variables[idx].set_variable_name << "=" << escaped_str;
-			separator = " ";
-			if (escaped_str != value)
-				free((char*)escaped_str);
-
-			const uint32_t hash = pgsql_variables.client_get_hash(myds->sess, idx);
-			pgsql_variables.server_set_hash_and_value(myds->sess, idx, value, hash);
+	{
+		std::string startup_encoding, startup_options;
+		if (build_and_record_startup_session_params(startup_encoding, startup_options,
+		                                           StartupParamEscape::Conninfo)) {
+			conninfo << "client_encoding='" << startup_encoding << "' ";
+			// Join the "-c key=value" tokens with a leading separator so the options value
+			// has no trailing space before the closing quote. PgBouncer rejects a startup
+			// packet whose options value ends in whitespace (#5801).
+			conninfo << "options='" << startup_options << "'";
 		}
-
-		myds->sess->mybe->server_myds->myconn->copy_pgsql_variables_to_startup_parameters(true);
-
-		// if there are untracked parameters, the session should lock on the host group
-		if (myds->sess->untracked_option_parameters.empty() == false) {
-			conninfo << separator << myds->sess->untracked_option_parameters;
-		}
-		conninfo << "'";
-		
 	}
 
 	/*conninfo << "postgres://";
@@ -1990,16 +2030,33 @@ void PgSQL_Connection::native_connect_cont(short event) {
 }
 
 bool PgSQL_Connection::native_send_startup() {
-	unsigned char startup[2048];
 	size_t slen2 = 0;
 	const char* user = userinfo->username ? userinfo->username : "";
 	const char* db = (userinfo->dbname && userinfo->dbname[0]) ? userinfo->dbname : user;
-	if (!pg_build_startup(startup, &slen2, sizeof(startup), user, db)) {
+
+	// Carry the session settings the libpq path sends in its conninfo. Without these a
+	// client's connection options are silently dropped, and every new backend connection
+	// pays a SET round-trip because requires_RESETTING_CONNECTION() sees a mismatch.
+	std::string startup_encoding, startup_options;
+	const bool have_params = build_and_record_startup_session_params(startup_encoding, startup_options,
+	                                                                 StartupParamEscape::Wire);
+
+	// The untracked half of the options string is client-controlled, so size the buffer
+	// from the content rather than assuming a fixed ceiling.
+	std::vector<unsigned char> startup(512 + strlen(user) + strlen(db) +
+	                                   startup_encoding.size() + startup_options.size());
+	if (!pg_build_startup(startup.data(), &slen2, startup.size(), user, db,
+	                      have_params ? startup_encoding.c_str() : nullptr,
+	                      have_params ? startup_options.c_str()  : nullptr,
+	                      "proxysql")) {
 		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE),
 			"startup message too large", false);
 		return false;
 	}
-	native_outbuf.assign((const char*)startup, slen2);
+	// Keep the options value for reporting (PROXYSQL INTERNAL SESSION / stats), matching
+	// what PQoptions() returns on the libpq path.
+	native_options = have_params ? startup_options : std::string();
+	native_outbuf.assign((const char*)startup.data(), slen2);
 	// After the StartupMessage flushes, wait for the AuthenticationRequest. On the
 	// TLS path native_send_or_buffer routes the plaintext through SSL_write.
 	if (!native_send_or_buffer(PG_Native_Conn_St::AUTH)) {

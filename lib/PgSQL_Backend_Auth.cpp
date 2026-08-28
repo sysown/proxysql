@@ -23,11 +23,24 @@ void pg_build_ssl_request(unsigned char out[8]) {
 }
 
 bool pg_build_startup(unsigned char* out, size_t* out_len, size_t out_cap,
-                      const char* user, const char* database) {
+                      const char* user, const char* database,
+                      const char* client_encoding, const char* options,
+                      const char* application_name) {
+    const bool has_enc  = (client_encoding != nullptr && client_encoding[0] != '\0');
+    const bool has_opts = (options != nullptr && options[0] != '\0');
+    const bool has_app  = (application_name != nullptr && application_name[0] != '\0');
+
     // Compute the required size first so a bound check can reject before any write,
-    // guaranteeing no partial/oversized output is left in the caller buffer.
-    //   length(4) + protocol(4) + "user\0" + user\0 + "database\0" + database\0 + \0
-    size_t need = 8 + 5 + (strlen(user) + 1) + 9 + (strlen(database) + 1) + 1;
+    // guaranteeing no partial/oversized output is left in the caller buffer. Every
+    // parameter costs "key\0" + "value\0"; sizeof() on the key literal already counts
+    // its NUL, so renaming a key can never leave a stale hand-counted length behind.
+    size_t need = 4 + 4                                             // length + protocol
+                + sizeof("user")     + (strlen(user) + 1)
+                + sizeof("database") + (strlen(database) + 1)
+                + 1;                                                // terminating empty key
+    if (has_opts) need += sizeof("options")          + strlen(options) + 1;
+    if (has_app)  need += sizeof("application_name") + strlen(application_name) + 1;
+    if (has_enc)  need += sizeof("client_encoding")  + strlen(client_encoding) + 1;
     if (need > out_cap) {
         *out_len = 0;
         return false;
@@ -35,8 +48,13 @@ bool pg_build_startup(unsigned char* out, size_t* out_len, size_t out_cap,
 
     size_t off = 8;                 // reserve length(4) + protocol(4)
     auto add = [&](const char* s) { size_t l = strlen(s) + 1; memcpy(out + off, s, l); off += l; };
+    // Emitted in the same order libpq uses, so a packet capture lines up parameter for
+    // parameter with one from the libpq path.
     add("user");     add(user);
     add("database"); add(database);
+    if (has_opts) { add("options");          add(options); }
+    if (has_app)  { add("application_name"); add(application_name); }
+    if (has_enc)  { add("client_encoding");  add(client_encoding); }
     out[off++] = 0;                 // terminating empty key
 
     put_be32(out, (uint32_t)off);   // total length (includes the length field itself)

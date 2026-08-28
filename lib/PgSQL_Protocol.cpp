@@ -1418,7 +1418,6 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 				// parameter provided is not part of the tracked variables. Will lock on hostgroup on next query.
 				const char* val_cstr = param_val.c_str();
 				proxy_warning("Unrecognized connection parameter. Please report this as a bug for future enhancements:%s:%s\n", param_key.c_str(), val_cstr);
-				const char* escaped_str = escape_string_backslash_spaces(val_cstr);
 				std::string& untracked = sess->untracked_option_parameters;
 				// Append the "[ ]-c <key>=<value>" token in place, avoiding the
 				// temporary strings a "-c " + key + "=" + value concatenation creates.
@@ -1427,9 +1426,11 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 				untracked += "-c ";
 				untracked += param_key;
 				untracked += '=';
-				untracked += escaped_str;
-				if (escaped_str != val_cstr)
-					free((char*)escaped_str);
+				// Escaped for the StartupMessage wire form. The libpq path raises this to
+				// its own level when it builds the conninfo; storing the conninfo form here
+				// instead would reach the native path over-escaped, and the backend would
+				// reject it with `invalid value for parameter "<key>": "<truncated>\"`.
+				pg_append_escaped_option_value(untracked, val_cstr);
 			}
 		}
 

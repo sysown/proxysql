@@ -43,14 +43,19 @@ class PgSQL_Backend_Msg_Framer {
 // Writes the fixed 8-byte SSLRequest packet: length=8, code=80877103 (0x04d2162f).
 void pg_build_ssl_request(unsigned char out[8]);
 
-// Encodes a protocol-3.0 StartupMessage into out[0..*out_len).
-// Layout: int32 length (incl. itself), int32 protocol (196608 = 0x00030000),
-// then "user\0<user>\0database\0<database>\0" and a terminating empty key (\0).
-// Bounds: writes nothing past out_cap. If the encoded message would exceed
-// out_cap, sets *out_len = 0 and returns false (no partial/oversized write).
-// Returns true on success with *out_len set to the number of bytes written.
+// Builds the protocol-3.0 StartupMessage that opens a backend connection, carrying the
+// user and database to connect as and, when given, the options, application_name and
+// client_encoding to start the session with. Pass NULL or an empty string to leave any
+// of those three out; options is a "-c name=value ..." string of settings for the
+// backend to apply, and application_name is what the session reports in
+// pg_stat_activity.
+// Writes nothing past out_cap: if the message would not fit it sets *out_len = 0 and
+// returns false, leaving no partial write. On success returns true with *out_len set to
+// the number of bytes written.
 bool pg_build_startup(unsigned char* out, size_t* out_len, size_t out_cap,
-                      const char* user, const char* database);
+                      const char* user, const char* database,
+                      const char* client_encoding, const char* options,
+                      const char* application_name);
 
 // Builds the PostgreSQL AuthenticationMD5Password response into out[36]:
 //   "md5" + hex(md5( hex(md5(password+user)) + salt[4] ))
