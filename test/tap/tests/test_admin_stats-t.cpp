@@ -33,6 +33,7 @@ DELETE FROM history_mysql_status_variables;
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
+#include "noise_utils.h"
 
 using std::string;
 using std::to_string;
@@ -82,10 +83,18 @@ int main(int argc, char** argv) {
 		return -1;
 	}
 
+	spawn_internal_noise(cl, internal_noise_admin_pinger);
+	spawn_internal_noise(cl, internal_noise_random_stats_poller);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
+
     /** @brief Minimum number of distinct variable_name strings in the history_mysql_status_variables_lookup table */
     const int min_distinct_variable_names = 50;
 
-	plan(5);
+	if (cl.use_noise) {
+		plan(5 + 3);
+	} else {
+		plan(5);
+	}
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
 
@@ -100,6 +109,9 @@ int main(int argc, char** argv) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return -1;
 	}
+
+	// Clear history table to ensure all variables start with the same number of rows
+	MYSQL_QUERY(proxysql_admin, "DELETE FROM history_mysql_status_variables");
 
 	// Setup the interval of how often new status entries are created
 	uint16_t new_stats_interval_sec = 5; // @note: valid values 5, 10, 30, 60, 120, 300
@@ -189,8 +201,7 @@ int main(int argc, char** argv) {
 	// In practice, they could differ if new metrics variables are added.
 
 	std::vector<int64_t> rows_per_var_id;
-	time_t two_mins_ago = time(nullptr) - 60*2;
-	const string query = "SELECT variable_id, COUNT(*) FROM history_mysql_status_variables WHERE timestamp < " + to_string(two_mins_ago) + " GROUP BY variable_id";
+	const string query = "SELECT variable_id, COUNT(*) FROM history_mysql_status_variables GROUP BY variable_id";
 	MYSQL_QUERY(proxysql_admin, query.c_str());
 	result = mysql_store_result(proxysql_admin);
 

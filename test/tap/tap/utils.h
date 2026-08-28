@@ -156,6 +156,14 @@ inline static int mysql_query_t__(MYSQL* mysql, const std::string& query, const 
 #define mysql_query_t(mysql, query)\
 	mysql_query_t__(mysql, query, __FILE__, __LINE__, __func__)
 
+/**
+ * @brief Dump hostgroup diagnostic info when a connection/query fails.
+ * @details Queries runtime_mysql_servers and stats_mysql_connection_pool
+ *   for the given hostgroup, printing results via diag(). Requires an
+ *   admin connection. Safe to call with NULL admin (no-op).
+ */
+void dump_hostgroup_debug(MYSQL* admin, int hostgroup);
+
 #define MYSQL_QUERY(mysql, query) \
 	do { \
 		if (mysql_query(mysql, query)) { \
@@ -176,7 +184,7 @@ inline static int mysql_query_t__(MYSQL* mysql, const std::string& query, const 
 #define MYSQL_QUERY_T(mysql, query) \
 	do { \
 		if (mysql_query_t(mysql, query)) { \
-			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql)); \
+			fprintf(stderr, "File %s, line %d, Error: %d - %s\n", __FILE__, __LINE__, mysql_errno(mysql), mysql_error(mysql)); \
 			return EXIT_FAILURE; \
 		} \
 	} while(0)
@@ -261,10 +269,23 @@ sq3_res_t sqlite3_execute_stmt(sqlite3* db, const std::string& query);
  * @param val The 'ext_val_t<T>' to be checked.
  * @return In case of failure, 'EXIT_FAILURE' after logging the error, continues otherwise.
  */
-#define CHECK_EXT_VAL(val)\
+#define CHECK_EXT_VAL(conn, val)\
 	do {\
 		if (val.err) {\
-			diag("%s:%d: Query failed   err=\"%s\"", __func__, __LINE__, val.str.c_str());\
+			diag("%s:%d: Query failed   err=\"%s\"", __func__, __LINE__, get_ext_val_err(conn, val).c_str());\
+			return EXIT_FAILURE;\
+		}\
+	} while(0)
+
+/**
+ * @brief Utility one-liner macro to check for query failure on a 'ext_val_t<T>'.
+ * @param val The 'ext_val_t<T>' to be checked.
+ * @return In case of failure, 'EXIT_FAILURE' after logging the error, continues otherwise.
+ */
+#define SQ3_CHECK_EXT_VAL(val)\
+	do {\
+		if (val.err) {\
+			diag("%s:%d: Query failed   err=\"%s\"", __func__, __LINE__, sq3_get_ext_val_err(val).c_str());\
 			return EXIT_FAILURE;\
 		}\
 	} while(0)
@@ -397,7 +418,9 @@ int wait_post_enpoint_ready(
 	std::string endpoint, std::string post_params, uint32_t timeout, uint32_t delay=100
 );
 
-int wait_get_enpoint_ready(std::string endpoint, uint32_t timeout, uint32_t delay=100);
+int wait_get_enpoint_ready(
+	std::string endpoint, uint32_t timeout, uint32_t delay=100, const std::string& userpwd=""
+);
 
 /**
  * @brief Perform a simple POST query to the specified endpoint using the supplied
@@ -417,7 +440,7 @@ CURLcode perform_simple_post(
 	const std::string& endpoint, const std::string& params, uint64_t& curl_res_code, std::string& curl_res_data
 );
 
-CURLcode perform_simple_get(const std::string& endpoint, uint64_t& curl_res_code, std::string& curl_res_data);
+CURLcode perform_simple_get(const std::string& endpoint, uint64_t& curl_res_code, std::string& curl_res_data, const std::string& userpwd = "");
 
 /**
  * @brief Generates a random string of the length of the provider 'strSize'
@@ -542,6 +565,54 @@ struct conn_opts_t {
  *  'nullptr' otherwise.
  */
 MYSQL* wait_for_proxysql(const conn_opts_t& opts, int timeout);
+
+/**
+ * @brief Probe a set of ProxySQL admin endpoints and wait until every one of
+ *  them accepts a plain (no SSL, no compression) admin login.
+ *
+ * @details Useful for cluster-style tests where multiple ProxySQL instances are
+ *  expected to be up before the test starts issuing real queries. The probe
+ *  is intentionally cheap — it opens a connection, observes that login
+ *  succeeds, closes the connection. It does not exercise SSL, compression,
+ *  or any query path; those are left to the real test connections.
+ *
+ *  Endpoints are probed round-robin. Each attempt uses a short connect
+ *  timeout (2s). Endpoints that respond are removed from the pending set;
+ *  endpoints that fail keep their last 'mysql_error' for diagnostics. The
+ *  loop sleeps 'poll_interval_s' between rounds until either every
+ *  endpoint has responded or the overall 'timeout_s' deadline expires.
+ *
+ *  On deadline expiry the function emits a single diag() line per still-
+ *  unresponsive endpoint with its last observed error, so the test fails
+ *  with an actionable message rather than a cryptic EINPROGRESS later.
+ *
+ * @param nodes Vector of (host, admin_port) pairs to probe.
+ * @param admin_user Admin username for login.
+ * @param admin_password Admin password for login.
+ * @param timeout_s Overall wall-clock budget in seconds. Default 60.
+ * @param poll_interval_s Sleep between rounds, in seconds. Default 2.
+ * @return 0 if every endpoint responded within the deadline; 1 otherwise.
+ */
+int wait_for_proxysql_cluster(
+	const std::vector<std::pair<std::string,int>>& nodes,
+	const std::string& admin_user,
+	const std::string& admin_password,
+	int timeout_s = 60,
+	int poll_interval_s = 2);
+
+/**
+ * @brief Convenience overload: probe a list of ports on a single host.
+ *
+ * @details Builds the {host, port} vector internally and delegates to the
+ *  pair-based overload. Default values for timeout_s / poll_interval_s match.
+ */
+int wait_for_proxysql_cluster(
+	const std::string& host,
+	const std::vector<int>& ports,
+	const std::string& admin_user,
+	const std::string& admin_password,
+	int timeout_s = 60,
+	int poll_interval_s = 2);
 
 /**
  * @brief Extract the current value for a given 'variable_name' from
@@ -768,6 +839,38 @@ std::pair<size_t,std::vector<line_match_t>> get_matching_lines(
 
 
 /**
+ * @brief Poll a log stream for a regex match, retrying until a match appears or the
+ *        timeout elapses. Handles the EOF sticky state that a single-shot
+ *        `get_matching_lines()` leaves behind after exhausting the stream.
+ *
+ * Use this in place of single-shot `get_matching_lines()` calls that check whether
+ * a log line was emitted as a consequence of an earlier action: ProxySQL's writes
+ * to its log are asynchronous with respect to the SQL that triggers them, so a
+ * single scan immediately after the SQL completes is racy. Retrying gives the
+ * producer time to flush; when the match is already present the first iteration
+ * returns immediately.
+ *
+ * @param f_stream Log stream (opened with `open_file_and_seek_end` or similar). On
+ *                 match, the stream position is advanced past the last match (same
+ *                 semantics as `get_matching_lines`); on no-match, the stream is
+ *                 rewound to its position at entry.
+ * @param regex Pattern to search for.
+ * @param timeout_ms Maximum wall time to wait for the first match. Defaults to
+ *                   2000 ms (20 attempts of 100 ms), which is the same budget used
+ *                   by admin_set_credentials_logging-t.
+ * @param poll_interval_ms Delay between scans when no match has appeared yet.
+ *                         Defaults to 100 ms.
+ * @return true if at least one matching line was observed within the budget.
+ */
+bool wait_for_log_match(
+	std::fstream& f_stream,
+	const std::string& regex,
+	uint32_t timeout_ms = 2000,
+	uint32_t poll_interval_ms = 100
+);
+
+
+/**
  * @brief Scan last N lines from a file and find lines matching a regex pattern.
  *
  * This function provides memory-efficient scanning of log files by processing only
@@ -959,6 +1062,23 @@ using pool_state_t = std::map<uint32_t,mysql_row_t>;
 std::pair<int,pool_state_t> fetch_conn_stats(MYSQL* admin, const std::vector<uint32_t> hgs);
 
 /**
+ * @brief Fetches GTID info for a backend from the gtid_executed set.
+ * @param admin An already opened connection to ProxySQL admin interface.
+ * @param backend_host The hostname of the backend server.
+ * @param backend_port The port of the backend server.
+ * @param server_uuid Output: the UUID of the first GTID entry in gtid_executed set, with dashes stripped.
+ * @param max_trxid Output: the maximum transaction ID found in the first GTID entry.
+ * @return 0 on success, -1 on failure (query error, missing UUID, parse error).
+ */
+int get_backend_gtid_position(
+	MYSQL* admin,
+	const std::string& backend_host,
+	uint32_t backend_port,
+	std::string& server_uuid,
+	uint64_t& max_trxid
+);
+
+/**
  * @brief Waits for a generic condition.
  * @details Wait finishes by a non-zero return code by the condition or by timeout.
  * @param cond Condition to be evaluated at each wait interval.
@@ -1062,5 +1182,24 @@ bool get_env_bool(const char* envname, bool envdefault);
 
 MYSQL* init_mysql_conn(char* host, int port, char* user, char* pass, bool ssl=false, bool cmp=false);
 int run_q(MYSQL *mysql, const char *q);
+
+/**
+ * @brief Spawns a background noise tool if noise is enabled in CommandLine.
+ * @param cl The CommandLine object containing configuration.
+ * @param tool_path Path to the executable tool.
+ * @param args Vector of arguments to pass to the tool.
+ */
+void spawn_noise(const CommandLine& cl, const std::string& tool_path, const std::vector<std::string>& args);
+
+/**
+ * @brief Stops all background noise tools spawned by spawn_noise.
+ * @details This is intended to be called at the end of a TAP test.
+ */
+extern "C" void stop_noise_tools();
+
+/**
+ * @brief Returns the number of background noise tools currently running.
+ */
+extern "C" int get_noise_tools_count();
 
 #endif // #define UTILS_H

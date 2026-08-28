@@ -285,6 +285,33 @@ int check_connect_retries(
 	return tests_failed();
 }
 
+int query_until_connect_error(MYSQL* proxy) {
+	constexpr uint32_t max_attempts = 2;
+	// get_random_MySrvC() requires the elapsed whole seconds to be strictly
+	// greater than the one-second desperate-unshun interval.  Waiting 2.1
+	// seconds also accounts for the coarse time_t granularity used there.
+	constexpr useconds_t shunned_server_recovery_wait_us = 2100 * 1000;
+
+	for (uint32_t attempt = 0; attempt < max_attempts; attempt++) {
+		mysql_query_t(proxy, "DO 1");
+		int q_err = mysql_errno(proxy);
+		diag("Query failed with error '%d' with message '%s'", q_err, mysql_error(proxy));
+
+		if (q_err != 9001 || attempt + 1 == max_attempts) {
+			return q_err;
+		}
+
+		diag(
+			"Received max connect timeout while the only test backend is automatically shunned; "
+			"waiting %u us and retrying once",
+			static_cast<uint32_t>(shunned_server_recovery_wait_us)
+		);
+		usleep(shunned_server_recovery_wait_us);
+	}
+
+	return 9001;
+}
+
 int check_connect_error_consistency(
 	const CommandLine& cl, MYSQL* admin, uint32_t hg, bool ff, uint32_t queries
 ) {
@@ -321,17 +348,13 @@ int check_connect_error_consistency(
 	}
 
 	diag("START: checking behavior first 'ConnectionError' in the connection");
-	mysql_query_t(proxy, "DO 1");
-	int q_err = mysql_errno(proxy);
-	diag("Query failed with error '%d' with message '%s'", q_err, mysql_error(proxy));
+	int q_err = query_until_connect_error(proxy);
 
 	ok(q_err == 2002, "Connection should have failed with error 'Can't connect to MySQL server...'");
 
 	diag("START: Checking behavior of subsequent connection attempts (queries) in the connection");
 	for (uint32_t i = 0; i < queries; i++) {
-		mysql_query_t(proxy, "DO 1");
-		int q_err = mysql_errno(proxy);
-		diag("Query failed with error '%d' with message '%s'", q_err, mysql_error(proxy));
+		int q_err = query_until_connect_error(proxy);
 
 		ok(q_err == 2002, "Connection should have failed with error 'Can't connect to MySQL server...'");
 	}
@@ -340,9 +363,7 @@ int check_connect_error_consistency(
 	diag("Wait at least timeout '%d'us before issuing next query", timeout_sleep);
 	usleep(timeout_sleep);
 
-	mysql_query_t(proxy, "DO 1");
-	q_err = mysql_errno(proxy);
-	diag("Query failed with error '%d' with message '%s'", q_err, mysql_error(proxy));
+	q_err = query_until_connect_error(proxy);
 
 	ok(q_err == 2002, "Error should still be '2002' after waiting beyond 'connect_timeout_server'");
 	mysql_close(proxy);
@@ -457,12 +478,39 @@ int main(int, char**) {
 		if (rc) { break; }
 	}
 
+	// Reset server status to ONLINE to clear any shunned state accumulated during
+	// the retries phase. Shunning is triggered by MySQL_Thread's internal logic
+	// (MySrvC::connect_error) when enough connection errors occur within the same
+	// second, independent of the monitor. Reloading from the config table (where
+	// status is 'ONLINE') clears the in-memory SHUNNED state.
+	diag("Resetting server status to ONLINE to clear shunned state from previous retries phase");
+	MYSQL_QUERY_T(admin, string {"DELETE FROM mysql_servers WHERE hostgroup_id=" + std::to_string(hg)}.c_str());
+	MYSQL_QUERY_T(admin, INSERT_SERVER_QUERY.c_str());
+	MYSQL_QUERY_T(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
 	// Check several connect errors in the same connection behave in a consistent way
 	check_connect_error_consistency(cl, admin, hg, 0, ERR_QUERIES);
+
+	diag("Resetting server status to ONLINE to clear shunned state from consistency check");
+	MYSQL_QUERY_T(admin, string {"DELETE FROM mysql_servers WHERE hostgroup_id=" + std::to_string(hg)}.c_str());
+	MYSQL_QUERY_T(admin, INSERT_SERVER_QUERY.c_str());
+	MYSQL_QUERY_T(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
 	check_connect_error_consistency(cl, admin, hg, 1, ERR_QUERIES);
+
+	diag("Resetting server status to ONLINE to clear shunned state before timeout precedence check");
+	MYSQL_QUERY_T(admin, string {"DELETE FROM mysql_servers WHERE hostgroup_id=" + std::to_string(hg)}.c_str());
+	MYSQL_QUERY_T(admin, INSERT_SERVER_QUERY.c_str());
+	MYSQL_QUERY_T(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
 	// Check that retries never takes precedence over the 'connect_timeout'
 	check_connect_timeout_precedence(cl, admin, hg, 0);
+
+	diag("Resetting server status to ONLINE to clear shunned state before timeout precedence check");
+	MYSQL_QUERY_T(admin, string {"DELETE FROM mysql_servers WHERE hostgroup_id=" + std::to_string(hg)}.c_str());
+	MYSQL_QUERY_T(admin, INSERT_SERVER_QUERY.c_str());
+	MYSQL_QUERY_T(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
 	check_connect_timeout_precedence(cl, admin, hg, 1);
 
 	mysql_close(admin);

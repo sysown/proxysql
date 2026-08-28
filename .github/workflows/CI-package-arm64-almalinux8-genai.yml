@@ -1,0 +1,151 @@
+name: CI-package-arm64-almalinux8-genai
+run-name: '${{ github.ref_name }} ${{ github.workflow }} ${{ github.sha }}'
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  checks: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  init_release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    # No concurrency group: GitHub's "1 running + 1 pending" rule causes
+    # mass cancellations when many workflows share a group. Instead we
+    # run all init jobs in parallel and converge via a race-tolerant
+    # find-or-create loop; all workers deterministically pick the
+    # lowest-id draft matching this SHA+tag.
+    outputs:
+      release_id: ${{ steps.release.outputs.release_id }}
+      release_name: ${{ steps.release.outputs.release_name }}
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ github.sha }}
+        fetch-depth: 0
+
+    - name: Find or create draft release
+      id: release
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+        GIT_DESC=$(git describe --long --abbrev=7 --tags)
+        TAG_NAME="${{ github.ref_name }}-head"
+        RELEASE_NAME="${TAG_NAME} - ${GIT_DESC}"
+        REPO="${{ github.repository }}"
+        SHA="${{ github.sha }}"
+        echo "Target: $RELEASE_NAME (sha $SHA)"
+
+        # Stagger start to reduce the thundering-herd on first create
+        sleep $(( RANDOM % 10 ))
+
+        RELEASE_ID=""
+        for attempt in 1 2 3 4 5 6; do
+          IDS=$(gh api "repos/${REPO}/releases" --paginate \
+            --jq ".[] | select(.draft==true and .target_commitish==\"${SHA}\" and .tag_name==\"${TAG_NAME}\") | .id" \
+            | sort -n)
+          if [ -n "$IDS" ]; then
+            RELEASE_ID=$(echo "$IDS" | head -1)
+            NDUPES=$(echo "$IDS" | wc -l)
+            echo "attempt ${attempt}: found ${NDUPES} draft(s); using lowest id=${RELEASE_ID}"
+            break
+          fi
+          echo "attempt ${attempt}: no matching draft; creating"
+          gh api -X POST "repos/${REPO}/releases" \
+            -f tag_name="${TAG_NAME}" \
+            -f name="${RELEASE_NAME}" \
+            -f target_commitish="${SHA}" \
+            -F draft=true -F prerelease=true >/dev/null 2>&1 || true
+          sleep $(( (RANDOM % 4) + 2 ))
+        done
+
+        if [ -z "$RELEASE_ID" ]; then
+          echo "ERROR: could not find or create draft release after retries" >&2
+          exit 1
+        fi
+
+        echo "release_id=${RELEASE_ID}" >> "$GITHUB_OUTPUT"
+        echo "release_name=${RELEASE_NAME}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: init_release
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    env:
+      ARCH: arm64
+      DIST: almalinux8
+      MAKE_TARGET: almalinux8
+      MATRIX: '(arm64,almalinux8-genai)'
+      BRANCH: ${{ github.ref_name }}
+      RELEASE_ID: ${{ needs.init_release.outputs.release_id }}
+
+    steps:
+    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
+      id: checks
+      if: always()
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        name: '${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}'
+        repo: ${{ github.repository }}
+        sha: ${{ github.sha }}
+        status: 'in_progress'
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+
+    - name: Checkout repository
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ github.sha }}
+        fetch-depth: 0
+
+    - name: Build package
+      run: |
+        PROXYSQL40=1 make ${{ env.MAKE_TARGET }}
+
+    - name: Upload to release
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+        shopt -s nullglob
+        uploaded=0
+        for f in binaries/*[mb] binaries/*.id-hash; do
+          FNAME=$(basename "$f")
+          EXISTING=$(gh api "repos/${{ github.repository }}/releases/${RELEASE_ID}/assets" \
+            --jq ".[] | select(.name==\"${FNAME}\") | .id" | head -1)
+          if [ -n "$EXISTING" ]; then
+            echo "Replacing existing asset ${FNAME} (id=${EXISTING})"
+            gh api -X DELETE "repos/${{ github.repository }}/releases/assets/${EXISTING}"
+          fi
+          echo "Uploading ${FNAME}"
+          gh api --method POST \
+            "https://uploads.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets?name=${FNAME}" \
+            --header "Content-Type: application/octet-stream" \
+            --input "$f"
+          uploaded=$((uploaded+1))
+        done
+        if [ "$uploaded" -eq 0 ]; then
+          echo "ERROR: no package files matched binaries/*[mb] or binaries/*.id-hash" >&2
+          ls -la binaries/ || true
+          exit 1
+        fi
+        echo "Uploaded $uploaded asset(s) to release id=${RELEASE_ID}"
+
+    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
+      if: always()
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        check_id: ${{ steps.checks.outputs.check_id }}
+        repo: ${{ github.repository }}
+        sha: ${{ github.sha }}
+        conclusion: ${{ job.status }}
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'

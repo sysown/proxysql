@@ -14,6 +14,7 @@
 #include <thread>
 #include "libpq-fe.h"
 #include "command_line.h"
+#include "noise_utils.h"
 #include "tap.h"
 #include "utils.h"
 
@@ -955,7 +956,7 @@ void execute_query_cache_notice_test(PGconn* admin_conn, PGconn* conn) {
 
 void execute_prepared_test(PGconn* admin_conn, PGconn* conn) {
     // 1) Enable query-cache-for-SELECT rules (same as basic test) so the system *would* cache
-    //    simple queries — but extended query protocol should bypass cache.
+    //    simple queries -- but extended query protocol should bypass cache.
     if (!executeQueries(admin_conn, {
         "DELETE FROM pgsql_query_rules",
         "INSERT INTO pgsql_query_rules (rule_id,active,match_digest,cache_ttl) VALUES (2,1,'^SELECT',4000)",
@@ -1093,11 +1094,18 @@ void execute_tests(bool with_ssl, bool diff_conn) {
 }
 
 int main(int argc, char** argv) {
-
-    plan(206*2); // Total number of tests planned
-
     if (cl.getEnv())
         return exit_status();
+
+	spawn_internal_noise(cl, internal_noise_mysql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}});
+	spawn_internal_noise(cl, internal_noise_prometheus_poller);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
+
+	if (cl.use_noise) {
+		plan(206*2 + 3);
+	} else {
+		plan(206*2);
+	}
 
     execute_tests(false, false);
 	execute_tests(false, true);

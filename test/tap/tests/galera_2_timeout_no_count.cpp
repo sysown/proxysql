@@ -23,11 +23,18 @@
 #include <resolv.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include <random>
 
 #include <fcntl.h>
 #include <sys/utsname.h>
 
 #include "tap.h"
+
+static int random_replication_lag_seconds() {
+	static thread_local std::random_device random_source;
+	static thread_local std::uniform_int_distribution<int> distribution(10, 39);
+	return distribution(random_source);
+}
 
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
 #define SELECT_VERSION_COMMENT_LEN 32
@@ -85,7 +92,7 @@ void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 	cluster_id--;
 	int hg_id = 2270+(cluster_id*10)+1;
 	char buf[1024];
-	sprintf(buf, (char *)"SELECT * FROM HOST_STATUS_GALERA WHERE hostgroup_id = %d LIMIT 1", hg_id);
+	snprintf(buf, sizeof(buf), "SELECT * FROM HOST_STATUS_GALERA WHERE hostgroup_id = %d LIMIT 1", hg_id);
 	sessdb->execute_statement(buf, &error , &cols , &affected_rows , &resultset);
 	if (resultset->rows_count==0) {
 		//sessdb->execute("DELETE FROM HOST_STATUS_GALERA");
@@ -93,7 +100,10 @@ void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 		int rc;
 		char *query=(char *)"INSERT INTO HOST_STATUS_GALERA VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
 		//rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
-		rc = sessdb->prepare_v2(query, &statement);
+		auto prepared_statement = sessdb->prepare_v2(query);
+		rc = prepared_statement.first;
+		stmt_unique_ptr statement_unique = std::move(prepared_statement.second);
+		statement = statement_unique.get();
 		ASSERT_SQLITE_OK(rc, sessdb);
 		for (unsigned int i=0; i<num_galera_servers[cluster_id]; i++) {
 			string serverid = "";
@@ -114,7 +124,6 @@ void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 			rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, sessdb);
 			rc=sqlite3_reset(statement); ASSERT_SQLITE_OK(rc, sessdb);
 		}
-		sqlite3_finalize(statement);
 	}
 	sessdb->execute("COMMIT");
 }
@@ -202,10 +211,11 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 				GloSQLite3Server->populate_galera_table(sess);
 			}
 			if (strstr(query_no_space,(char *)"Seconds_Behind_Master")) {
-				free(query);
-				char *a = (char *)"SELECT %d as Seconds_Behind_Master";
-				query = (char *)malloc(strlen(a)+4);
-				sprintf(query,a,rand()%30+10);
+				l_free(0, query);
+				const std::string formatted_query = cstr_format(
+					"SELECT %d as Seconds_Behind_Master", random_replication_lag_seconds()
+				).str;
+				query = l_strdup(formatted_query.c_str());
 			}
 		}
 		SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
@@ -272,4 +282,3 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 	l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
 	l_free(query_length,query);
 }
-

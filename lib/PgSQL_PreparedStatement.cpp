@@ -290,21 +290,15 @@ void PgSQL_STMT_Manager::ref_count_client___purge_stmts_if_needed() noexcept {
 		// use_count() == 1 indicates that only map_stmt_hash_to_info holds a reference,
 		// meaning there are no other references (from client or server) to this prepared statement.
 		// So we can safely remove this entry.
-		if (global_stmt_info.use_count() == 1) {
-
-			// ref_count_client and ref_count_server should both be 0 in this case
-			assert(global_stmt_info->ref_count_client.load(std::memory_order_relaxed) == 0);
-			assert(global_stmt_info->ref_count_server.load(std::memory_order_relaxed) == 0);
-
+		if (global_stmt_info.use_count() == 1 &&
+			global_stmt_info->ref_count_client.load(std::memory_order_acquire) == 0 && // Use memory_order_acquire to see latest refcount modifications
+			global_stmt_info->ref_count_server.load(std::memory_order_acquire) == 0) { // Since write lock prevents NEW references, only existing raw pointers can race
 			// Atomic counters
 			num_stmt_with_ref_client_count_zero.fetch_sub(1, std::memory_order_relaxed);
 			num_stmt_with_ref_server_count_zero.fetch_sub(1, std::memory_order_relaxed);
 
 			// Free ID
 			free_stmt_ids.push(global_stmt_info->statement_id);
-
-			// Update totals
-			//stat_totals.s_total -= global_stmt_info->ref_count_server.load(std::memory_order_relaxed);
 
 			// Safe erase from map while iterating
 			it = map_stmt_hash_to_info.erase(it);

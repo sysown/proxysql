@@ -2,9 +2,13 @@
 #include <sstream>      // std::stringstream
 #include <fstream>
 #include <algorithm>    // std::sort
+#include <cstdlib>
+#include <cctype>
 #include <memory>
 #include <vector>       // std::vector
 #include <unordered_set>
+#include <cstring>
+#include "gen_utils.h"
 
 #include "MySQL_Query_Processor.h"
 #include "PgSQL_Query_Processor.h"
@@ -34,7 +38,7 @@ static void init_rand_del() {
 		static const char alphanum[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 		rand_del[0] = '-';
 		for (int i = 1; i < 4; i++) {
-			rand_del[i] = alphanum[rand() % (sizeof(alphanum) - 1)];
+			rand_del[i] = alphanum[rand_fast() % (sizeof(alphanum) - 1)];
 		}
 		rand_del[4] = '-';
 		rand_del[5] = 0;
@@ -44,7 +48,7 @@ static void init_rand_del() {
 int ProxySQL_Test___GetDigestTable(bool reset, bool use_swap);
 bool ProxySQL_Test___Refresh_MySQL_Variables(unsigned int cnt);
 template<enum SERVER_TYPE>
-int ProxySQL_Test___PurgeDigestTable(bool async_purge, bool parallel, char **msg);
+int ProxySQL_Test___PurgeDigestTable(bool async_purge, bool parallel, time_t last_seen);
 int ProxySQL_Test___GenerateRandomQueryInDigestTable(int n);
 
 void ProxySQL_Admin::map_test_mysql_firewall_whitelist_rules_cleanup() {
@@ -320,20 +324,22 @@ bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(
 unsigned int ProxySQL_Admin::ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(unsigned int cnt, bool empty) {
 	char *a = (char *)"INSERT OR IGNORE INTO mysql_query_rules_fast_routing VALUES (?1, ?2, ?3, ?4, '')";
 	int rc;
-	sqlite3_stmt *statement1=NULL;
-	rc=admindb->prepare_v2(a, &statement1);
-	ASSERT_SQLITE_OK(rc, admindb);
+	auto [rc1, statement1_unique] = admindb->prepare_v2(a);
+	ASSERT_SQLITE_OK(rc1, admindb);
+	sqlite3_stmt *statement1 = statement1_unique.get();
 	admindb->execute("DELETE FROM mysql_query_rules_fast_routing");
 	char * username_buf = (char *)malloc(128);
 	char * schemaname_buf = (char *)malloc(256);
 	//ui.username = username_buf;
 	//ui.schemaname = schemaname_buf;
+	static const char user_name_prefix[] = "user_name_";
+	static const char schema_name_prefix[] = "shard_name_";
 	if (empty==false) {
-		strcpy(username_buf,"user_name_");
+		memcpy(username_buf, user_name_prefix, sizeof(user_name_prefix));
 	} else {
-		strcpy(username_buf,"");
+		*username_buf = '\0';
 	}
-	strcpy(schemaname_buf,"shard_name_");
+	memcpy(schemaname_buf, schema_name_prefix, sizeof(schema_name_prefix));
 	int _k;
 	for (unsigned int i=0; i<cnt; i++) {
 		_k = fastrand()%117 + 1;
@@ -363,7 +369,6 @@ unsigned int ProxySQL_Admin::ProxySQL_Test___GenerateRandom_mysql_query_rules_fa
 		rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, admindb);
 		rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, admindb);
 	}
-	(*proxy_sqlite3_finalize)(statement1);
 	free(username_buf);
 	free(schemaname_buf);
 	return cnt;
@@ -376,19 +381,19 @@ void ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_generate_many_clus
 	char *q1 = (char *)"INSERT INTO mysql_servers (hostgroup_id, hostname, port) VALUES (?1, ?2, ?3), (?4, ?5, ?6), (?7, ?8, ?9)";
 	char *q2 = (char *)"INSERT INTO mysql_replication_hostgroups (writer_hostgroup, reader_hostgroup) VALUES (?1, ?2)";
 	int rc;
-	sqlite3_stmt *statement1=NULL;
-	sqlite3_stmt *statement2=NULL;
-	rc=admindb->prepare_v2(q1, &statement1);
-	ASSERT_SQLITE_OK(rc, admindb);
-	rc=admindb->prepare_v2(q2, &statement2);
-	ASSERT_SQLITE_OK(rc, admindb);
+	auto [rc1, statement1_unique] = admindb->prepare_v2(q1);
+	ASSERT_SQLITE_OK(rc1, admindb);
+	auto [rc2, statement2_unique] = admindb->prepare_v2(q2);
+	ASSERT_SQLITE_OK(rc2, admindb);
+	sqlite3_stmt *statement1 = statement1_unique.get();
+	sqlite3_stmt *statement2 = statement2_unique.get();
 	char hostnamebuf1[32];
 	char hostnamebuf2[32];
 	char hostnamebuf3[32];
 	for (int i=1000; i<2000; i++) {
-		sprintf(hostnamebuf1,"hostname%d", i*10+1);
-		sprintf(hostnamebuf2,"hostname%d", i*10+2);
-		sprintf(hostnamebuf3,"hostname%d", i*10+3);
+		snprintf(hostnamebuf1, sizeof(hostnamebuf1), "hostname%d", i*10+1);
+		snprintf(hostnamebuf2, sizeof(hostnamebuf2), "hostname%d", i*10+2);
+		snprintf(hostnamebuf3, sizeof(hostnamebuf3), "hostname%d", i*10+3);
 		rc=(*proxy_sqlite3_bind_int64)(statement1, 1, i*10+1); ASSERT_SQLITE_OK(rc, admindb);
 		rc=(*proxy_sqlite3_bind_text)(statement1, 2, hostnamebuf1, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 		rc=(*proxy_sqlite3_bind_int64)(statement1, 3, 3306); ASSERT_SQLITE_OK(rc, admindb);
@@ -407,8 +412,6 @@ void ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_generate_many_clus
 		rc=(*proxy_sqlite3_clear_bindings)(statement2); ASSERT_SQLITE_OK(rc, admindb);
 		rc=(*proxy_sqlite3_reset)(statement2); ASSERT_SQLITE_OK(rc, admindb);
 	}
-	(*proxy_sqlite3_finalize)(statement1);
-	(*proxy_sqlite3_finalize)(statement2);
 	load_mysql_servers_to_runtime();
 	mysql_servers_wrunlock();
 }
@@ -423,9 +426,9 @@ unsigned long long ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_read
 	//for (int j=0 ; j<500; j++) {
 	for (int j=0 ; j<1000; j++) {
 		for (int i=1000; i<2000; i++) {
-			sprintf(hostnamebuf1,"hostname%d", i*10+1);
-			sprintf(hostnamebuf2,"hostname%d", i*10+2);
-			sprintf(hostnamebuf3,"hostname%d", i*10+3);
+			snprintf(hostnamebuf1, sizeof(hostnamebuf1), "hostname%d", i*10+1);
+			snprintf(hostnamebuf2, sizeof(hostnamebuf2), "hostname%d", i*10+2);
+			snprintf(hostnamebuf3, sizeof(hostnamebuf3), "hostname%d", i*10+3);
 			MyHGM->read_only_action_v2( std::list<read_only_server_t> {
 										read_only_server_t { std::string(hostnamebuf1), 3306, 0 },
 										read_only_server_t { std::string(hostnamebuf2), 3306, 1 },
@@ -625,6 +628,505 @@ bool ProxySQL_Admin::ProxySQL_Test___WatchDog(int type) {
 	return true;
 }
 
+namespace {
+
+/**
+ * @brief Minimal row projection used by Top-K internal verification.
+ *
+ * The struct mirrors all user-visible fields returned by
+ * `Query_Processor::get_query_digests_topk()` so the DEBUG validator can build
+ * a reference result from `get_query_digests()` and compare end-to-end output.
+ */
+struct query_digest_test_row_t {
+	int hid {0};
+	std::string schemaname {};
+	std::string username {};
+	std::string client_address {};
+	uint64_t digest {0};
+	std::string digest_text {};
+	uint32_t count_star {0};
+	uint64_t first_seen {0};
+	uint64_t last_seen {0};
+	uint64_t sum_time {0};
+	uint64_t min_time {0};
+	uint64_t max_time {0};
+	uint64_t rows_affected {0};
+	uint64_t rows_sent {0};
+};
+
+/**
+ * @brief Parse an unsigned integer from SQLite result text.
+ *
+ * @param value NUL-terminated text representation.
+ * @return Parsed value, or `0` for null/empty input.
+ */
+uint64_t parse_u64_or_zero(const char* value) {
+	if (!value || value[0] == '\0') {
+		return 0;
+	}
+	return strtoull(value, nullptr, 0);
+}
+
+/**
+ * @brief Parse an integer from SQLite result text.
+ *
+ * @param value NUL-terminated text representation.
+ * @return Parsed value, or `0` for null/empty input.
+ */
+int parse_int_or_zero(const char* value) {
+	if (!value || value[0] == '\0') {
+		return 0;
+	}
+	return atoi(value);
+}
+
+/**
+ * @brief Compute the selected primary sort metric for a digest row.
+ *
+ * @param row Candidate digest row.
+ * @param sort_by Requested primary sort mode.
+ * @return Metric value used as first ordering key (descending).
+ */
+uint64_t query_digest_test_sort_metric(const query_digest_test_row_t& row, query_digest_sort_by_t sort_by) {
+	switch (sort_by) {
+		case query_digest_sort_by_t::avg_time:
+			return row.count_star ? (row.sum_time / row.count_star) : 0;
+		case query_digest_sort_by_t::sum_time:
+			return row.sum_time;
+		case query_digest_sort_by_t::max_time:
+			return row.max_time;
+		case query_digest_sort_by_t::rows_sent:
+			return row.rows_sent;
+		case query_digest_sort_by_t::count_star:
+		default:
+			return row.count_star;
+	}
+}
+
+/**
+ * @brief Deterministic ordering predicate matching Top-K implementation.
+ *
+ * The ordering keys are intentionally identical to the production comparator
+ * used by Query Processor Top-K so the reference calculation is equivalent.
+ *
+ * @param lhs Left candidate row.
+ * @param rhs Right candidate row.
+ * @param sort_by Primary sort metric selector.
+ * @return true if @p lhs ranks before @p rhs.
+ */
+bool query_digest_test_better(
+	const query_digest_test_row_t& lhs,
+	const query_digest_test_row_t& rhs,
+	query_digest_sort_by_t sort_by
+) {
+	const uint64_t lhs_sort = query_digest_test_sort_metric(lhs, sort_by);
+	const uint64_t rhs_sort = query_digest_test_sort_metric(rhs, sort_by);
+	if (lhs_sort != rhs_sort) {
+		return lhs_sort > rhs_sort;
+	}
+	if (lhs.sum_time != rhs.sum_time) {
+		return lhs.sum_time > rhs.sum_time;
+	}
+	if (lhs.count_star != rhs.count_star) {
+		return lhs.count_star > rhs.count_star;
+	}
+	if (lhs.digest != rhs.digest) {
+		return lhs.digest < rhs.digest;
+	}
+	if (lhs.hid != rhs.hid) {
+		return lhs.hid < rhs.hid;
+	}
+	if (lhs.username != rhs.username) {
+		return lhs.username < rhs.username;
+	}
+	if (lhs.schemaname != rhs.schemaname) {
+		return lhs.schemaname < rhs.schemaname;
+	}
+	return lhs.client_address < rhs.client_address;
+}
+
+/**
+ * @brief Check substring match over digest text for Top-K reference filters.
+ *
+ * @param digest_text Candidate digest text.
+ * @param needle Requested substring.
+ * @param case_sensitive Whether match should be case-sensitive.
+ * @return true when @p needle occurs in @p digest_text.
+ */
+bool query_digest_test_text_matches(
+	const std::string& digest_text,
+	const std::string& needle,
+	bool case_sensitive
+) {
+	if (needle.empty()) {
+		return true;
+	}
+	if (case_sensitive) {
+		return digest_text.find(needle) != std::string::npos;
+	}
+	for (size_t p = 0; p < digest_text.size(); ++p) {
+		size_t i = 0;
+		while (i < needle.size() && (p + i) < digest_text.size()) {
+			const unsigned char lhs = static_cast<unsigned char>(digest_text[p + i]);
+			const unsigned char rhs = static_cast<unsigned char>(needle[i]);
+			if (std::tolower(lhs) != std::tolower(rhs)) {
+				break;
+			}
+			++i;
+		}
+		if (i == needle.size()) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * @brief Evaluate whether a row satisfies a Top-K filter set.
+ *
+ * @param row Input row.
+ * @param filters Filter configuration.
+ * @return true if all active predicates match.
+ */
+bool query_digest_test_matches(const query_digest_test_row_t& row, const query_digest_filter_opts_t& filters) {
+	if (!filters.schemaname.empty() && row.schemaname != filters.schemaname) {
+		return false;
+	}
+	if (!filters.username.empty() && row.username != filters.username) {
+		return false;
+	}
+	if (filters.hostgroup >= 0 && row.hid != filters.hostgroup) {
+		return false;
+	}
+	if (!filters.match_digest_text.empty() &&
+		!query_digest_test_text_matches(row.digest_text, filters.match_digest_text, filters.digest_text_case_sensitive)) {
+		return false;
+	}
+	if (filters.has_digest && row.digest != filters.digest) {
+		return false;
+	}
+	if (filters.min_count > 0 && row.count_star < filters.min_count) {
+		return false;
+	}
+	if (filters.min_avg_time_us > 0) {
+		const uint64_t avg_time = row.count_star ? (row.sum_time / row.count_star) : 0;
+		if (avg_time < filters.min_avg_time_us) {
+			return false;
+		}
+	}
+	return true;
+}
+
+/**
+ * @brief Build a reference Top-K result from a digest snapshot.
+ *
+ * This helper replays the production semantics used by
+ * `Query_Processor::get_query_digests_topk()`:
+ * - apply filters,
+ * - compute aggregate match counters,
+ * - sort deterministically,
+ * - retain `min(max_window, limit + offset)` rows,
+ * - apply offset/limit pagination.
+ *
+ * @param snapshot Immutable digest row snapshot.
+ * @param filters Filter set.
+ * @param sort_by Primary sort mode.
+ * @param limit Requested page size.
+ * @param offset Requested page offset.
+ * @param max_window Maximum retained Top-K window.
+ * @param expected Output reference result.
+ */
+void query_digest_test_compute_expected(
+	const std::vector<query_digest_test_row_t>& snapshot,
+	const query_digest_filter_opts_t& filters,
+	query_digest_sort_by_t sort_by,
+	uint32_t limit,
+	uint32_t offset,
+	uint32_t max_window,
+	query_digest_topk_result_t& expected
+) {
+	expected = {};
+	std::vector<query_digest_test_row_t> matched_rows {};
+	matched_rows.reserve(snapshot.size());
+
+	for (const auto& row : snapshot) {
+		if (!query_digest_test_matches(row, filters)) {
+			continue;
+		}
+		expected.matched_count++;
+		expected.matched_total_queries += row.count_star;
+		expected.matched_total_time_us += row.sum_time;
+		matched_rows.push_back(row);
+	}
+
+	std::sort(matched_rows.begin(), matched_rows.end(),
+		[&sort_by](const query_digest_test_row_t& lhs, const query_digest_test_row_t& rhs) -> bool {
+			return query_digest_test_better(lhs, rhs, sort_by);
+		}
+	);
+
+	uint32_t retained_window = limit + offset;
+	if (max_window > 0 && retained_window > max_window) {
+		retained_window = max_window;
+	}
+	if (matched_rows.size() > retained_window) {
+		matched_rows.resize(retained_window);
+	}
+
+	if (offset >= matched_rows.size()) {
+		return;
+	}
+
+	const size_t begin = static_cast<size_t>(offset);
+	const size_t end = std::min(matched_rows.size(), begin + static_cast<size_t>(limit));
+	expected.rows.reserve(end > begin ? end - begin : 0);
+	for (size_t i = begin; i < end; ++i) {
+		const auto& src = matched_rows[i];
+		query_digest_topk_row_t dst {};
+		dst.hid = src.hid;
+		dst.schemaname = src.schemaname;
+		dst.username = src.username;
+		dst.client_address = src.client_address;
+		dst.digest = src.digest;
+		dst.digest_text = src.digest_text;
+		dst.count_star = src.count_star;
+		dst.first_seen = src.first_seen;
+		dst.last_seen = src.last_seen;
+		dst.sum_time = src.sum_time;
+		dst.min_time = src.min_time;
+		dst.max_time = src.max_time;
+		dst.rows_affected = src.rows_affected;
+		dst.rows_sent = src.rows_sent;
+		expected.rows.push_back(std::move(dst));
+	}
+}
+
+/**
+ * @brief Compare two epoch second values with a small tolerance.
+ *
+ * The Top-K API computes timestamps relative to current wall clock and
+ * monotonic time. A 1-2 second drift can appear between independent snapshots.
+ *
+ * @param lhs First epoch value.
+ * @param rhs Second epoch value.
+ * @return true if absolute difference is <= 2 seconds.
+ */
+bool query_digest_test_epoch_close(uint64_t lhs, uint64_t rhs) {
+	if (lhs > rhs) {
+		return (lhs - rhs) <= 2;
+	}
+	return (rhs - lhs) <= 2;
+}
+
+/**
+ * @brief Compare a reference row against an actual Top-K row.
+ *
+ * @param expected Reference row.
+ * @param actual Actual row returned by production Top-K API.
+ * @return true when all relevant fields match.
+ */
+bool query_digest_test_row_equal(const query_digest_topk_row_t& expected, const query_digest_topk_row_t& actual) {
+	return expected.hid == actual.hid &&
+		expected.schemaname == actual.schemaname &&
+		expected.username == actual.username &&
+		expected.client_address == actual.client_address &&
+		expected.digest == actual.digest &&
+		expected.digest_text == actual.digest_text &&
+		expected.count_star == actual.count_star &&
+		query_digest_test_epoch_close(expected.first_seen, actual.first_seen) &&
+		query_digest_test_epoch_close(expected.last_seen, actual.last_seen) &&
+		expected.sum_time == actual.sum_time &&
+		expected.min_time == actual.min_time &&
+		expected.max_time == actual.max_time &&
+		expected.rows_affected == actual.rows_affected &&
+		expected.rows_sent == actual.rows_sent;
+}
+
+} // namespace
+
+/**
+ * @brief DEBUG-only in-process validator for query digest Top-K semantics.
+ *
+ * The validator snapshots digest rows using `get_query_digests()`, computes a
+ * reference result entirely in test code, then compares it against
+ * `QueryDigestTopK<SERVER_TYPE_MYSQL>()` across multiple filter/sort/pagination
+ * combinations.
+ *
+ * @param rounds Number of parameter combinations to verify.
+ * @param limit_max Maximum generated `limit` value.
+ * @param offset_max Maximum generated `offset` value.
+ * @param passed Output count of successful rounds.
+ * @param failed Output count of failed rounds.
+ * @return true if every round passed.
+ */
+bool ProxySQL_Admin::ProxySQL_Test___Verify_QueryDigestTopK(
+	int rounds,
+	int limit_max,
+	int offset_max,
+	int* passed,
+	int* failed
+) {
+	if (!passed || !failed) {
+		return false;
+	}
+	*passed = 0;
+	*failed = 0;
+
+	if (!GloMyQPro) {
+		proxy_error("ProxySQL_Test___Verify_QueryDigestTopK: MySQL Query Processor not available\n");
+		return false;
+	}
+
+	if (rounds <= 0) {
+		rounds = 16;
+	}
+	if (limit_max <= 0) {
+		limit_max = 200;
+	}
+	if (offset_max < 0) {
+		offset_max = 200;
+	}
+
+	std::unique_ptr<SQLite3_result> snapshot_rs(GloMyQPro->get_query_digests());
+	if (!snapshot_rs) {
+		proxy_error("ProxySQL_Test___Verify_QueryDigestTopK: unable to snapshot digest rows\n");
+		return false;
+	}
+
+	std::vector<query_digest_test_row_t> snapshot {};
+	snapshot.reserve(snapshot_rs->rows_count);
+	for (auto* src : snapshot_rs->rows) {
+		if (!src || src->cnt < 14) {
+			continue;
+		}
+		query_digest_test_row_t row {};
+		row.schemaname = src->fields[0] ? src->fields[0] : "";
+		row.username = src->fields[1] ? src->fields[1] : "";
+		row.client_address = src->fields[2] ? src->fields[2] : "";
+		row.digest = parse_u64_or_zero(src->fields[3]);
+		row.digest_text = src->fields[4] ? src->fields[4] : "";
+		row.count_star = static_cast<uint32_t>(parse_u64_or_zero(src->fields[5]));
+		row.first_seen = parse_u64_or_zero(src->fields[6]);
+		row.last_seen = parse_u64_or_zero(src->fields[7]);
+		row.sum_time = parse_u64_or_zero(src->fields[8]);
+		row.min_time = parse_u64_or_zero(src->fields[9]);
+		row.max_time = parse_u64_or_zero(src->fields[10]);
+		row.hid = parse_int_or_zero(src->fields[11]);
+		row.rows_affected = parse_u64_or_zero(src->fields[12]);
+		row.rows_sent = parse_u64_or_zero(src->fields[13]);
+		snapshot.push_back(std::move(row));
+	}
+
+	/**
+	 * Empty digest map is a valid scenario (e.g. startup). Validate that
+	 * Top-K also returns an empty result and treat it as a passing round.
+	 */
+	if (snapshot.empty()) {
+		const query_digest_filter_opts_t no_filters {};
+		const query_digest_topk_result_t actual = QueryDigestTopK<SERVER_TYPE_MYSQL>(
+			no_filters, query_digest_sort_by_t::count_star, 10, 0, 10
+		);
+		if (actual.rows.empty() && actual.matched_count == 0 && actual.matched_total_queries == 0 && actual.matched_total_time_us == 0) {
+			*passed = 1;
+			return true;
+		}
+		*failed = 1;
+		return false;
+	}
+
+	const query_digest_sort_by_t sort_modes[] = {
+		query_digest_sort_by_t::count_star,
+		query_digest_sort_by_t::avg_time,
+		query_digest_sort_by_t::sum_time,
+		query_digest_sort_by_t::max_time,
+		query_digest_sort_by_t::rows_sent
+	};
+
+	for (int round = 0; round < rounds; ++round) {
+		const query_digest_test_row_t& seed = snapshot[static_cast<size_t>((round * 17) % snapshot.size())];
+		const query_digest_sort_by_t sort_by = sort_modes[round % 5];
+
+		query_digest_filter_opts_t filters {};
+		if (round & 0x1) {
+			filters.username = seed.username;
+		}
+		if (round & 0x2) {
+			filters.schemaname = seed.schemaname;
+		}
+		if (round & 0x4) {
+			filters.hostgroup = seed.hid;
+		}
+		if (round % 3 == 0 && !seed.digest_text.empty()) {
+			const size_t match_len = std::min<size_t>(12, seed.digest_text.size());
+			filters.match_digest_text = seed.digest_text.substr(0, match_len);
+			filters.digest_text_case_sensitive = (round % 2 == 0);
+		}
+		if (round & 0x8) {
+			filters.min_count = std::max<uint32_t>(1, seed.count_star / 2);
+		}
+		if (round & 0x10) {
+			filters.min_avg_time_us = seed.count_star ? (seed.sum_time / seed.count_star) : 0;
+		}
+		if (round % 5 == 0) {
+			filters.has_digest = true;
+			filters.digest = seed.digest;
+		}
+
+		const uint32_t limit = static_cast<uint32_t>((round * 31) % (limit_max + 1));
+		const uint32_t offset = static_cast<uint32_t>((round * 43) % (offset_max + 1));
+		const uint32_t requested_window = limit + offset;
+		uint32_t max_window = 0;
+		switch (round % 4) {
+			case 0:
+				max_window = requested_window;
+				break;
+			case 1:
+				max_window = requested_window > 0 ? requested_window - 1 : 0;
+				break;
+			case 2:
+				max_window = requested_window + 5;
+				break;
+			case 3:
+			default:
+				max_window = static_cast<uint32_t>(std::max(1, limit_max / 2));
+				break;
+		}
+
+		query_digest_topk_result_t expected {};
+		query_digest_test_compute_expected(snapshot, filters, sort_by, limit, offset, max_window, expected);
+
+		const query_digest_topk_result_t actual = QueryDigestTopK<SERVER_TYPE_MYSQL>(
+			filters, sort_by, limit, offset, max_window
+		);
+
+		bool round_ok = true;
+		round_ok = round_ok && (expected.matched_count == actual.matched_count);
+		round_ok = round_ok && (expected.matched_total_queries == actual.matched_total_queries);
+		round_ok = round_ok && (expected.matched_total_time_us == actual.matched_total_time_us);
+		round_ok = round_ok && (expected.rows.size() == actual.rows.size());
+
+		const size_t rows_to_check = std::min(expected.rows.size(), actual.rows.size());
+		for (size_t i = 0; i < rows_to_check && round_ok; ++i) {
+			if (!query_digest_test_row_equal(expected.rows[i], actual.rows[i])) {
+				round_ok = false;
+			}
+		}
+
+		if (round_ok) {
+			(*passed)++;
+		} else {
+			(*failed)++;
+			proxy_error(
+				"ProxySQL_Test___Verify_QueryDigestTopK failed at round=%d "
+				"(sort=%d limit=%u offset=%u max_window=%u expected_rows=%zu actual_rows=%zu)\n",
+				round, static_cast<int>(sort_by), limit, offset, max_window, expected.rows.size(), actual.rows.size()
+			);
+		}
+	}
+
+	return (*failed == 0);
+}
+
 #endif //DEBUG
 
 
@@ -681,21 +1183,20 @@ void ProxySQL_Admin::ProxySQL_Test_Handler(ProxySQL_Admin *SPA, S* sess, char *q
 				break;
 			case 4:
 				// purge the digest map, synchronously, in single thread
-				r1 = ProxySQL_Test___PurgeDigestTable<SERVER_TYPE_MYSQL>(false, false, NULL);
+				r1 = ProxySQL_Test___PurgeDigestTable<SERVER_TYPE_MYSQL>(false, false, test_arg1);
 				SPA->send_ok_msg_to_client(sess, NULL, r1, query_no_space);
 				run_query=false;
 				break;
 			case 5:
 				// purge the digest map, synchronously, in multiple threads
-				r1 = ProxySQL_Test___PurgeDigestTable<SERVER_TYPE_MYSQL>(false, true, NULL);
+				r1 = ProxySQL_Test___PurgeDigestTable<SERVER_TYPE_MYSQL>(false, true, test_arg1);
 				SPA->send_ok_msg_to_client(sess, NULL, r1, query_no_space);
 				run_query=false;
 				break;
 			case 6:
 				// purge the digest map, asynchronously, in single thread
-				r1 = ProxySQL_Test___PurgeDigestTable<SERVER_TYPE_MYSQL>(true, false, &msg);
-				SPA->send_ok_msg_to_client(sess, msg, r1, query_no_space);
-				free(msg);
+				r1 = ProxySQL_Test___PurgeDigestTable<SERVER_TYPE_MYSQL>(true, false, test_arg1);
+				SPA->send_ok_msg_to_client(sess, NULL, r1, query_no_space);
 				run_query=false;
 				break;
 			case 7:
@@ -892,7 +1393,7 @@ void ProxySQL_Admin::ProxySQL_Test_Handler(ProxySQL_Admin *SPA, S* sess, char *q
 				{
 					char msg[256];
 					unsigned long long d = SPA->ProxySQL_Test___MySQL_HostGroups_Manager_read_only_action();
-					sprintf(msg, "Tested in %llums\n", d);
+					snprintf(msg, sizeof(msg), "Tested in %llums\n", d);
 					SPA->send_ok_msg_to_client(sess, msg, 0, query_no_space);
 					run_query=false;
 				}
@@ -902,7 +1403,7 @@ void ProxySQL_Admin::ProxySQL_Test_Handler(ProxySQL_Admin *SPA, S* sess, char *q
 				{
 					char msg[256];
 					unsigned long long d = SPA->ProxySQL_Test___MySQL_HostGroups_Manager_HG_lookup();
-					sprintf(msg, "Tested in %llums\n", d);
+					snprintf(msg, sizeof(msg), "Tested in %llums\n", d);
 					SPA->send_ok_msg_to_client(sess, msg, 0, query_no_space);
 					run_query=false;
 				}
@@ -920,7 +1421,7 @@ void ProxySQL_Admin::ProxySQL_Test_Handler(ProxySQL_Admin *SPA, S* sess, char *q
 					SPA->mysql_servers_wrunlock();
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers to RUNTIME\n");
 					unsigned long long d = SPA->ProxySQL_Test___MySQL_HostGroups_Manager_Balancing_HG5211();
-					sprintf(msg, "Tested in %llums\n", d);
+					snprintf(msg, sizeof(msg), "Tested in %llums\n", d);
 					SPA->mysql_servers_wrlock();
 					SPA->admindb->execute("DELETE FROM mysql_servers WHERE hostgroup_id=5211");
 					SPA->load_mysql_servers_to_runtime();
@@ -935,7 +1436,7 @@ void ProxySQL_Admin::ProxySQL_Test_Handler(ProxySQL_Admin *SPA, S* sess, char *q
 					// test_arg1: 1 = ON, 0 = OFF
 					char msg[256];
 					GloMyMon->proxytest_forced_timeout = (test_arg1) ? true : false;
-					sprintf(msg, "Monitor task timeout flag is:%s\n", GloMyMon->proxytest_forced_timeout ? "ON" : "OFF");
+					snprintf(msg, sizeof(msg), "Monitor task timeout flag is:%s\n", GloMyMon->proxytest_forced_timeout ? "ON" : "OFF");
 					SPA->send_ok_msg_to_client(sess, msg, 0, query_no_space);
 					run_query = false;
 				}
@@ -955,7 +1456,7 @@ void ProxySQL_Admin::ProxySQL_Test_Handler(ProxySQL_Admin *SPA, S* sess, char *q
 				uint64_t duration = 0ULL;
 				if (SPA->ProxySQL_Test___CA_Certificate_Load_And_Verify(&duration, test_arg1, GloMTH->variables.ssl_p2s_ca,
 					GloMTH->variables.ssl_p2s_capath)) {
-					sprintf(msg, "Took %lums in loading and verifying CA Certificate for %d times\n", duration, test_arg1);
+					snprintf(msg, sizeof(msg), "Took %llums in loading and verifying CA Certificate for %d times\n", static_cast<unsigned long long>(duration), test_arg1);
 					SPA->send_ok_msg_to_client(sess, msg, 0, query_no_space);
 				}
 				else {
@@ -971,6 +1472,46 @@ void ProxySQL_Admin::ProxySQL_Test_Handler(ProxySQL_Admin *SPA, S* sess, char *q
 					SPA->send_error_msg_to_client(sess, (char*)"WatchDog test failed");
 				}
 				run_query = false;
+				break;
+			case 56:
+				{
+					/**
+					 * Internal validator for in-memory QueryDigestTopK implementation.
+					 * Args:
+					 *   - test_arg1: rounds (default 16)
+					 *   - test_arg2: limit max (default 200)
+					 *   - test_arg3: offset max (default 200)
+					 */
+					if (test_arg1 <= 0) {
+						test_arg1 = 16;
+					}
+					if (test_arg2 <= 0) {
+						test_arg2 = 200;
+					}
+					if (test_arg3 < 0) {
+						test_arg3 = 200;
+					}
+
+					int passed = 0;
+					int failed = 0;
+					const bool ok = SPA->ProxySQL_Test___Verify_QueryDigestTopK(
+						test_arg1, test_arg2, test_arg3, &passed, &failed
+					);
+
+					char test_msg[256];
+					snprintf(
+						test_msg, sizeof(test_msg),
+						"QueryDigestTopK internal test rounds=%d passed=%d failed=%d",
+						test_arg1, passed, failed
+					);
+
+					if (ok) {
+						SPA->send_ok_msg_to_client(sess, test_msg, passed, query_no_space);
+					} else {
+						SPA->send_error_msg_to_client(sess, test_msg);
+					}
+					run_query = false;
+				}
 				break;
 #endif // DEBUG
 			default:

@@ -1,6 +1,10 @@
 #include "GTID_Server_Data.h"
 #include "MySQL_HostGroups_Manager.h"
 
+#include <algorithm>
+#include <cerrno>
+#include <climits>
+#include <cstring>
 #include "ev.h"
 #include <iterator>
 
@@ -81,6 +85,15 @@ void reader_cb(struct ev_loop *loop, struct ev_io *w, int revents) {
 			sd->w = nullptr;
 		} else {
 			sd->dump();
+			if (sd->active == false) {
+				// protocol error detected during parsing (e.g. unsupported message type)
+				MyHGM->gtid_missing_nodes = true;
+				proxy_warning("GTID: protocol error from ProxySQL binlog reader on port %d for server %s:%d , disconnecting\n", sd->port, sd->address, sd->mysql_port);
+				ev_io_stop(MyHGM->gtid_ev_loop, w);
+				close(w->fd);
+				free(w);
+				sd->w = nullptr;
+			}
 		}
 	}
 	pthread_mutex_unlock(&ev_loop_mutex);
@@ -147,7 +160,6 @@ struct ev_io * new_connect_watcher(char *address, uint16_t gtid_port, uint16_t m
 
 	if ((s = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
 		perror("socket");
-		close(s);
 		return NULL;
 	}
 
@@ -161,11 +173,14 @@ struct ev_io * new_connect_watcher(char *address, uint16_t gtid_port, uint16_t m
 	hints.ai_socktype= SOCK_STREAM;
 
 	char str_port[NI_MAXSERV+1];
-	sprintf(str_port,"%d", gtid_port);
+	snprintf(str_port, sizeof(str_port), "%d", gtid_port);
 
 	int gai_rc = getaddrinfo(address, str_port, &hints, &res);
-	if (gai_rc) {
-		freeaddrinfo(res);
+	if (gai_rc || res == NULL) {
+		if (res != NULL) {
+			freeaddrinfo(res);
+		}
+		close(s);
 		//exit here
 		return NULL;
 	}
@@ -183,6 +198,7 @@ struct ev_io * new_connect_watcher(char *address, uint16_t gtid_port, uint16_t m
 		}
 		/* else error */
 	}
+	close(s);
 	return NULL;
 }
 
@@ -198,6 +214,7 @@ GTID_Server_Data::GTID_Server_Data(struct ev_io *_w, char *_address, uint16_t _p
 	port = _port;
 	mysql_port = _mysql_port;
 	events_read = 0;
+	pthread_rwlock_init(&executed_rwlock, nullptr);
 }
 
 void GTID_Server_Data::resize(size_t _s) {
@@ -209,6 +226,7 @@ void GTID_Server_Data::resize(size_t _s) {
 }
 
 GTID_Server_Data::~GTID_Server_Data() {
+	pthread_rwlock_destroy(&executed_rwlock);
 	free(address);
 	free(data);
 }
@@ -261,21 +279,58 @@ bool GTID_Server_Data::readall() {
 
 
 bool GTID_Server_Data::gtid_exists(char *gtid_uuid, uint64_t gtid_trxid) {
-	std::string s = gtid_uuid;
-	auto it = gtid_executed.find(s);
-//	fprintf(stderr,"Checking if server %s:%d has GTID %s:%lu ... ", address, port, gtid_uuid, gtid_trxid);
-	if (it == gtid_executed.end()) {
-//		fprintf(stderr,"NO\n");
+	pthread_rwlock_rdlock(&executed_rwlock);
+	bool found = gtid_executed.has_gtid((std::string)gtid_uuid, gtid_trxid);
+	pthread_rwlock_unlock(&executed_rwlock);
+	return found;
+}
+
+bool GTID_Server_Data::add_gtid_from_ok(const char* gtid) {
+	if (gtid == nullptr) {
 		return false;
 	}
-	for (auto itr = it->second.begin(); itr != it->second.end(); ++itr) {
-		if ((int64_t)gtid_trxid >= itr->first && (int64_t)gtid_trxid <= itr->second) {
-//			fprintf(stderr,"YES\n");
-			return true;
-		}
+
+	const char* sep = strrchr(gtid, ':');
+	if (sep == nullptr || sep == gtid || sep[1] == '\0') {
+		return false;
 	}
-//	fprintf(stderr,"NO\n");
-	return false;
+
+	std::string uuid(gtid, static_cast<size_t>(sep - gtid));
+	uuid.erase(std::remove(uuid.begin(), uuid.end(), '-'), uuid.end());
+	if (uuid.size() != 32 || !std::all_of(uuid.begin(), uuid.end(), [](unsigned char c) {
+			return (c >= '0' && c <= '9') ||
+				(c >= 'a' && c <= 'f') ||
+				(c >= 'A' && c <= 'F');
+		})) {
+		return false;
+	}
+	std::transform(uuid.begin(), uuid.end(), uuid.begin(), [](char c) {
+		return c >= 'A' && c <= 'F' ? static_cast<char>(c + ('a' - 'A')) : c;
+	});
+
+	errno = 0;
+	char* end = nullptr;
+	unsigned long long parsed = strtoull(sep + 1, &end, 10);
+	if (errno == ERANGE || end == sep + 1 || *end != '\0' || parsed == 0 ||
+			parsed > static_cast<unsigned long long>(LLONG_MAX)) {
+		return false;
+	}
+
+	pthread_rwlock_wrlock(&executed_rwlock);
+	bool updated = gtid_executed.add(uuid, static_cast<trxid_t>(parsed));
+	pthread_rwlock_unlock(&executed_rwlock);
+	return updated;
+}
+
+std::string GTID_Server_Data::gtid_executed_to_string() {
+	return get_gtid_executed_snapshot().gtid_executed;
+}
+
+GTID_Executed_Snapshot GTID_Server_Data::get_gtid_executed_snapshot() {
+	pthread_rwlock_rdlock(&executed_rwlock);
+	GTID_Executed_Snapshot snapshot { gtid_executed.to_string(), events_read };
+	pthread_rwlock_unlock(&executed_rwlock);
+	return snapshot;
 }
 
 void GTID_Server_Data::read_all_gtids() {
@@ -313,19 +368,32 @@ bool GTID_Server_Data::writeout() {
 	return ret;
 }
 
+/*
+ * The wire format for the binlogreader is five distinct messages, in plaintext:
+ *
+ * ST=<uuid>:<trxid>[-<trxid>][,<uuid>:<trxid>[-<trxid>], ...] : Bootstrap message, providing individual transaction ID or trxid ranges for all seen UUID servers.
+ * I1=<uuid>:<trxid>                                            : Latest seen single trxid for a given UUID.
+ * I2=<trxid>                                                   : Latest seen single trxid, reusing UUID from previous I1/I3 message.
+ * I3=<uuid>:<trxid_start>-<trxid_end>                         : Latest seen trxid range for a given UUID.
+ * I4=<trxid_start>-<trxid_end>                                : Latest seen trxid range, reusing UUID from previous I1/I3 message.
+ */
 bool GTID_Server_Data::read_next_gtid() {
+	pthread_rwlock_wrlock(&executed_rwlock);
 	if (len==0) {
+		pthread_rwlock_unlock(&executed_rwlock);
 		return false;
 	}
 	void *nlp = NULL;
 	nlp = memchr(data+pos,'\n',len-pos);
 	if (nlp == NULL) {
+		pthread_rwlock_unlock(&executed_rwlock);
 		return false;
 	}
 	int l = (char *)nlp - (data+pos);
 	char rec_msg[80];
 	if (strncmp(data+pos,(char *)"ST=",3)==0) {
 		// we are reading the bootstrap
+		bool invalid_msg = false;
 		char *bs = (char *)malloc(l+1-3); // length + 1 (null byte) - 3 (header)
 		memcpy(bs, data+pos+3, l-3);
 		bs[l-3] = '\0';
@@ -350,190 +418,130 @@ bool GTID_Server_Data::read_next_gtid() {
 					}
 				j++;
 				if (j%2 == 1) { // we are reading the uuid
-					char *p = uuid_server;
-					for (unsigned int k=0; k<strlen(subtoken); k++) {
-						if (subtoken[k]!='-') {
-							*p = subtoken[k];
-							p++;
+					size_t uuid_len = 0;
+					for (const char *uuid_char = subtoken; *uuid_char; ++uuid_char) {
+						if (*uuid_char == '-') {
+							continue;
 						}
+						if (uuid_len + 1 >= sizeof(uuid_server)) {
+							invalid_msg = true;
+							break;
+						}
+						uuid_server[uuid_len++] = *uuid_char;
 					}
-				} else { // we are reading the trxids
-					uint64_t trx_from;
-					uint64_t trx_to;
-					sscanf(subtoken,"%lu-%lu",&trx_from,&trx_to);
-					updated = addGtidInterval(gtid_executed, uuid_server, trx_from, trx_to) || updated;
-			   }
+					if (invalid_msg) {
+						break;
+					}
+					uuid_server[uuid_len] = '\0';
+				} else { // we are reading the trxid or trxid range
+					TrxId_Interval iv(trxid_t(0));
+					if (!TrxId_Interval::parse(subtoken, &iv)) {
+						invalid_msg = true;
+						break;
+					}
+					updated = gtid_executed.add((std::string)uuid_server, iv) || updated;
+				}
+			}
+			if (invalid_msg || j == 0 || j%2 != 0) {
+				invalid_msg = true;
+				break;
 			}
 		}
 		pos += l+1;
 		free(bs);
 
+		if (invalid_msg) {
+			proxy_warning("GTID: invalid bootstrap message from binlog reader on port %d for server %s:%d, disconnecting\n",
+				port, address, mysql_port);
+			active = false;
+			pthread_rwlock_unlock(&executed_rwlock);
+			return false;
+		}
+
 		if (updated) {
 			events_read++;
 		}
 	} else {
-		strncpy(rec_msg,data+pos,l);
+		if (l >= (int)sizeof(rec_msg)) {
+			pos += l + 1;
+			proxy_warning("GTID: oversized message from binlog reader on port %d for server %s:%d, disconnecting\n",
+				port, address, mysql_port);
+			active = false;
+			pthread_rwlock_unlock(&executed_rwlock);
+			return false;
+		}
+		size_t rec_msg_len = (size_t)l;
+		memcpy(rec_msg, data + pos, rec_msg_len);
 		pos += l+1;
-		rec_msg[l] = 0;
-		if (rec_msg[0]=='I') {
-			uint64_t rec_trxid = 0;
-			char *a = NULL;
-			int ul = 0;
-			switch (rec_msg[1]) {
-				case '1':
-					a = strchr(rec_msg+3,':');
-					ul = a-rec_msg-3;
-					strncpy(uuid_server,rec_msg+3,ul);
-					uuid_server[ul] = 0;
-					rec_trxid=atoll(a+1);
-					break;
-				case '2':
-					rec_trxid=atoll(rec_msg+3);
-					break;
-				default:
-					break;
+		rec_msg[rec_msg_len] = 0;
+		if (rec_msg[0] != 'I') {
+			pthread_rwlock_unlock(&executed_rwlock);
+			return true;
+		}
+		bool invalid_msg = false;
+		auto copy_uuid = [this, &rec_msg](char *delimiter) {
+			const int uuid_len = delimiter - (rec_msg + 3);
+			if (uuid_len < 0 || (size_t)uuid_len >= sizeof(uuid_server)) {
+				return false;
 			}
-			std::string s = uuid_server;
-			gtid_t new_gtid = std::make_pair(s,rec_trxid);
-			addGtid(new_gtid,gtid_executed);
+			memcpy(uuid_server, rec_msg + 3, (size_t)uuid_len);
+			uuid_server[uuid_len] = 0;
+			return true;
+		};
+		char *a = NULL;
+		switch (rec_msg[1]) {
+		case '1': // single trxid with UUID
+			a = strchr(rec_msg+3,':');
+			if (a == NULL || !copy_uuid(a)) {
+				invalid_msg = true;
+				break;
+			}
+			gtid_executed.add((std::string)uuid_server, (trxid_t)atoll(a+1));
 			events_read++;
-		}
-	}
-	return true;
-}
-
-std::string gtid_executed_to_string(gtid_set_t& gtid_executed) {
-	std::string gtid_set;
-	for (auto it=gtid_executed.begin(); it!=gtid_executed.end(); ++it) {
-		std::string s = it->first;
-		s.insert(8,"-");
-		s.insert(13,"-");
-		s.insert(18,"-");
-		s.insert(23,"-");
-		s = s + ":";
-		for (auto itr = it->second.begin(); itr != it->second.end(); ++itr) {
-			std::string s2 = s;
-			s2 = s2 + std::to_string(itr->first);
-			s2 = s2 + "-";
-			s2 = s2 + std::to_string(itr->second);
-			s2 = s2 + ",";
-			gtid_set = gtid_set + s2;
-		}
-	}
-	// Extract latest comma only in case 'gtid_executed' isn't empty
-	if (gtid_set.empty() == false) {
-		gtid_set.pop_back();
-	}
-	return gtid_set;
-}
-
-
-
-void addGtid(const gtid_t& gtid, gtid_set_t& gtid_executed) {
-	auto it = gtid_executed.find(gtid.first);
-	if (it == gtid_executed.end())
-	{
-		gtid_executed[gtid.first].emplace_back(gtid.second, gtid.second);
-		return;
-	}
-
-	bool flag = true;
-	for (auto itr = it->second.begin(); itr != it->second.end(); ++itr)
-	{
-		if (gtid.second >= itr->first && gtid.second <= itr->second)
-			return;
-		if (gtid.second + 1 == itr->first)
-		{
-			--itr->first;
-			flag = false;
 			break;
-		}
-		else if (gtid.second == itr->second + 1)
-		{
-			++itr->second;
-			flag = false;
+		case '2': // single trxid, reuse last UUID
+			gtid_executed.add((std::string)uuid_server, (trxid_t)atoll(rec_msg+3));
+			events_read++;
 			break;
-		}
-		else if (gtid.second < itr->first)
-		{
-			it->second.emplace(itr, gtid.second, gtid.second);
-			return;
-		}
-	}
-
-	if (flag)
-		it->second.emplace_back(gtid.second, gtid.second);
-
-	for (auto itr = it->second.begin(); itr != it->second.end(); ++itr)
-	{
-		auto next_itr = std::next(itr);
-		if (next_itr != it->second.end() && itr->second + 1 == next_itr->first)
-		{
-			itr->second = next_itr->second;
-			it->second.erase(next_itr);
-			break;
-		}
-	}
-}
-
-/**
- * @brief Adds or updates a GTID interval in the executed set
- *
- * This function intelligently merges GTID intervals to prevent events_count reset
- * when a binlog reader reconnects and provides updated GTID sets. It handles
- * reconnection scenarios where the server provides updated transaction ID ranges.
- *
- * For example, during reconnection:
- * - Before disconnection: server_UUID:1-10
- * - After reconnection: server_UUID:1-19
- *
- * This function will update the existing interval rather than replacing it,
- * preserving the events_count metric accuracy.
- *
- * @param gtid_executed Reference to the GTID set to update
- * @param server_uuid The server UUID string
- * @param txid_start Starting transaction ID of the interval
- * @param txid_end Ending transaction ID of the interval
- * @return bool True if the GTID set was updated, false if interval already existed
- *
- * @note This function is critical for maintaining accurate GTID metrics across
- *       binlog reader reconnections and preventing events_count resets.
- */
-bool addGtidInterval(gtid_set_t& gtid_executed, std::string server_uuid, int64_t txid_start, int64_t txid_end) {
-	bool updated = true;
-
-	auto it = gtid_executed.find(server_uuid);
-	if (it == gtid_executed.end()) {
-		gtid_executed[server_uuid].emplace_back(txid_start, txid_end);
-		return updated;
-	}
-
-	bool insert = true;
-
-	// When ProxySQL reconnects with binlog reader, it might
-	// receive updated txid intervals in the bootstrap message.
-	// For example,
-	// before disconnection -> server_UUID:1-10
-	// after reconnection   -> server_UUID:1-19
-	auto &txid_intervals = it->second;
-	for (auto &interval : txid_intervals) {
-		if (interval.first == txid_start) {
-			if(interval.second == txid_end) {
-				updated = false;
-			} else {
-				interval.second = txid_end;
+		case '3': { // trxid range with UUID
+			a = strchr(rec_msg+3,':');
+			if (a == NULL || !copy_uuid(a)) {
+				invalid_msg = true;
+				break;
 			}
-			insert = false;
+			TrxId_Interval iv(trxid_t(0));
+			if (!TrxId_Interval::parse(a+1, &iv)) {
+				invalid_msg = true;
+				break;
+			}
+			gtid_executed.add((std::string)uuid_server, iv);
+			events_read++;
 			break;
 		}
+		case '4': { // trxid range, reuse last UUID
+			TrxId_Interval iv(trxid_t(0));
+			if (!TrxId_Interval::parse(rec_msg+3, &iv)) {
+				invalid_msg = true;
+				break;
+			}
+			gtid_executed.add((std::string)uuid_server, iv);
+			events_read++;
+			break;
+		}
+		default:
+			invalid_msg = true;
+		}
+
+		if (invalid_msg) {
+			proxy_warning("GTID: invalid or unsupported message (%s) from binlog reader on port %d for server %s:%d, disconnecting\n",
+				rec_msg, port, address, mysql_port);
+			active = false;
+			pthread_rwlock_unlock(&executed_rwlock);
+			return false;
+		}
 	}
-
-	if (insert) {
-		txid_intervals.emplace_back(txid_start, txid_end);
-
-	}
-
-	return updated;
+	pthread_rwlock_unlock(&executed_rwlock);
+	return true;
 }
 
 void * GTID_syncer_run() {
@@ -558,4 +566,3 @@ void * GTID_syncer_run() {
 	//sleep(1000);
 	return NULL;
 }
-

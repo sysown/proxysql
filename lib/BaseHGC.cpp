@@ -71,6 +71,7 @@ void BaseHGC<HGC>::reset_attributes() {
 	attributes.free_connections_pct = 10;
 	attributes.handle_warnings = -1;
 	attributes.monitor_slave_lag_when_null = -1;
+	attributes.default_query_timeout = -1;
 	attributes.multiplex = true;
 	attributes.connection_warming = false;
 	free(attributes.init_connect);

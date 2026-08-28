@@ -1,0 +1,25 @@
+Fix build against libstdc++ shipped with GCC 16, which no longer
+exposes the internal symbol std::__throw_bad_alloc() through <new>.
+
+Backports the user-visible part of jemalloc upstream commit 1a15fe33
+("Replace std::__throw_bad_alloc call with standard C++"), restricted
+to the call site itself.  jemalloc's upstream patch also adds a
+configure-time check that conditionally compiles either
+'throw std::bad_alloc()' or 'std::terminate()' depending on whether
+C++ exceptions are enabled, but ProxySQL always builds with C++
+exceptions, so the simpler unconditional form is sufficient.
+
+Refs:
+  https://github.com/sysown/proxysql/issues/5770
+  https://github.com/jemalloc/jemalloc/commit/1a15fe33a48c52bfe26ea83e49f0d317a47da3ea
+
+--- src/jemalloc_cpp.cpp.orig
++++ src/jemalloc_cpp.cpp
+@@ -67,7 +67,7 @@
+ 	}
+
+ 	if (ptr == nullptr && !nothrow)
+-		std::__throw_bad_alloc();
++		throw std::bad_alloc();
+ 	return ptr;
+ }

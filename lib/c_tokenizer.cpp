@@ -8,25 +8,34 @@ extern __thread int  mysql_thread___query_digests_max_query_length;
 extern __thread bool mysql_thread___query_digests_lowercase;
 extern __thread bool mysql_thread___query_digests_replace_null;
 extern __thread bool mysql_thread___query_digests_no_digits;
-extern __thread bool mysql_thread___query_digests_grouping_limit;
-extern __thread bool mysql_thread___query_digests_groups_grouping_limit;
+extern __thread int  mysql_thread___query_digests_grouping_limit;
+extern __thread int  mysql_thread___query_digests_groups_grouping_limit;
 extern __thread bool mysql_thread___query_digests_keep_comment;
+
+static inline size_t tokenizer_strlen(const char* s) {
+	size_t len = 0;
+	if (s == NULL) return 0;
+	while (s[len]) {
+		++len;
+	}
+	return len;
+}
 
 void tokenizer(tokenizer_t *result, const char* s, const char* delimiters, int empties )
 {
 
 	//tokenizer_t result;
 
-	result->s_length = ( (s && delimiters) ? strlen(s) : 0 );
-	result->s = NULL;
-	if (result->s_length) {
+		result->s_length = ( (s && delimiters) ? tokenizer_strlen(s) : 0 );
+		result->s = NULL;
+		if (result->s_length) {
 		if (result->s_length > (PROXYSQL_TOKENIZER_BUFFSIZE-1)) {
 			result->s = strdup(s);
 		} else {
-			strcpy(result->buffer,s);
+			snprintf(result->buffer, sizeof(result->buffer), "%.*s", (int)result->s_length, s);
 			result->s = result->buffer;
 		}
-	}
+		}
 	result->delimiters				= delimiters;
 	result->current					 = NULL;
 	result->next							= result->s;
@@ -37,7 +46,7 @@ void tokenizer(tokenizer_t *result, const char* s, const char* delimiters, int e
 
 const char* free_tokenizer( tokenizer_t* tokenizer )
 {
-	if (tokenizer->s_length > (PROXYSQL_TOKENIZER_BUFFSIZE-1)) {
+	if (tokenizer->s && tokenizer->s != tokenizer->buffer) {
 		free(tokenizer->s);
 	}
 	tokenizer->s = NULL;
@@ -519,7 +528,7 @@ void copy_next_char(shared_st* shared_st, const options* opts) {
 	inc_proc_pos(shared_st);
 }
 
-char cur_cmd_cmnt[FIRST_COMMENT_MAX_LENGTH];
+static thread_local char cur_cmd_cmnt[FIRST_COMMENT_MAX_LENGTH];
 
 /**
  * @brief Safer version of 'is_digit_string' performing boundary checks.
@@ -2009,7 +2018,7 @@ char* mysql_query_digest_second_stage(const char* const q, int q_len, char** con
  *
  * @return A pointer to the start of the supplied buffer, or the allocated memory containing the digest.
  */
-char* query_digest_and_first_comment_2(const char* const q, int q_len, char** const fst_cmnt, char* const buf, const options* opts) {
+char* mysql_query_digest_and_first_comment(const char* const q, int q_len, char** const fst_cmnt, char* const buf, const options* opts) {
 #ifdef DEBUG
 	if (buf != NULL) {
 		memset(buf, 0, 127);
@@ -2091,7 +2100,7 @@ char* mysql_query_digest_and_first_comment_2(const char* const q, int q_len, cha
 	// global options
 	options opts;
 	get_mysql_options(&opts);
-	return query_digest_and_first_comment_2(q, q_len, fst_cmnt, buf, &opts);
+	return mysql_query_digest_and_first_comment(q, q_len, fst_cmnt, buf, &opts);
 }
 
 static __attribute__((always_inline)) inline
@@ -2523,7 +2532,7 @@ char* mysql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 	return res;
 }
 
-char *query_strip_comments(char *s, int _len, bool lowercase) {
+char* mysql_query_strip_comments(char *s, int _len, bool lowercase) {
 	int i = 0;
 	int len = _len;
 	char *r = (char *) malloc(len + SIZECHAR);
@@ -2641,4 +2650,3 @@ char *query_strip_comments(char *s, int _len, bool lowercase) {
 
 	return r;
 }
-

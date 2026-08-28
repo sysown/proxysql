@@ -26,18 +26,22 @@ PgSQL_Authentication::PgSQL_Authentication() {
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_init(&creds_backends.lock, NULL);
 	pthread_rwlock_init(&creds_frontends.lock, NULL);
+	pthread_rwlock_init(&creds_admins.lock, NULL);
 #else
 	spinlock_rwlock_init(&creds_backends.lock);
 	spinlock_rwlock_init(&creds_frontends.lock);
+	spinlock_rwlock_init(&creds_admins.lock);
 #endif
 	creds_backends.cred_array = new PtrArray();
 	creds_frontends.cred_array = new PtrArray();
+	creds_admins.cred_array = new PtrArray();
 };
 
 PgSQL_Authentication::~PgSQL_Authentication() {
 	reset();
 	delete creds_backends.cred_array;
 	delete creds_frontends.cred_array;
+	delete creds_admins.cred_array;
 };
 
 void PgSQL_Authentication::print_version() {
@@ -45,7 +49,7 @@ void PgSQL_Authentication::print_version() {
 	};
 
 void PgSQL_Authentication::set_all_inactive(enum cred_username_type usertype) {
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	creds_group_t &cg = creds_for(usertype);
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&cg.lock);
 #else
@@ -54,7 +58,7 @@ void PgSQL_Authentication::set_all_inactive(enum cred_username_type usertype) {
 	unsigned int i;
 	for (i=0; i<cg.cred_array->len; i++) {
 		pgsql_account_details_t *ado=(pgsql_account_details_t *)cg.cred_array->index(i);
-		ado->__active=false;
+		ado->active_=false;
 	}
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&cg.lock);
@@ -64,26 +68,45 @@ void PgSQL_Authentication::set_all_inactive(enum cred_username_type usertype) {
 }
 
 void PgSQL_Authentication::remove_inactives(enum cred_username_type usertype) {
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	creds_group_t &cg = creds_for(usertype);
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&cg.lock);
 #else
 	spin_wrlock(&cg.lock);
 #endif
-	unsigned int i;
-__loop_remove_inactives:
-	for (i=0; i<cg.cred_array->len; i++) {
+	unsigned int i = 0;
+	while (i < cg.cred_array->len) {
 		pgsql_account_details_t *ado=(pgsql_account_details_t *)cg.cred_array->index(i);
-		if (ado->__active==false) {
-			del(ado->username,usertype,false);
-			goto __loop_remove_inactives; // we aren't sure how the underlying structure changes, so we jump back to 0
+		if (ado->active_==false) {
+			if (del(ado->username,usertype,false)==false) {
+				++i;
+			}
+			continue;
 		}
+		++i;
 	}
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&cg.lock);
 #else
 	spin_wrunlock(&cg.lock);
 #endif
+}
+
+/**
+ * @brief Select the credential scope for a username type.
+ * @details Mirrors MySQL_Authentication::creds_for(). USERNAME_ADMIN is only
+ *   passed when PROXYSQL31 is defined; otherwise ADMIN_CRED_SCOPE is
+ *   USERNAME_FRONTEND and 'creds_admins' is never reached.
+ */
+creds_group_t& PgSQL_Authentication::creds_for(enum cred_username_type usertype) {
+	switch (usertype) {
+		case USERNAME_BACKEND:
+			return creds_backends;
+		case USERNAME_ADMIN:
+			return creds_admins;
+		default:
+			return creds_frontends;
+	}
 }
 
 bool PgSQL_Authentication::add(char * username, char * password, enum cred_username_type usertype, bool use_ssl, int default_hostgroup, bool transaction_persistent, bool fast_forward, int max_connections, char* attributes, char *comment) {
@@ -93,7 +116,7 @@ bool PgSQL_Authentication::add(char * username, char * password, enum cred_usern
 	myhash.Update(username,strlen(username));
 	myhash.Final(&hash1,&hash2);
 
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	creds_group_t &cg = creds_for(usertype);
 	
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&cg.lock);
@@ -201,7 +224,7 @@ bool PgSQL_Authentication::add(char * username, char * password, enum cred_usern
 	ad->transaction_persistent=transaction_persistent;
 	ad->fast_forward=fast_forward;
 	ad->max_connections=max_connections;
-	ad->__active=true;
+	ad->active_=true;
 	if (new_ad) {
 		cg.bt_map.insert(std::make_pair(hash1,ad));
 		cg.cred_array->add(ad);
@@ -250,11 +273,11 @@ unsigned int PgSQL_Authentication::memory_usage() {
 	ret += sizeof(PtrArray);
 	ret += (creds_backends.cred_array->size * sizeof(void *));
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
-	pthread_rwlock_unlock(&creds_frontends.lock);
 	pthread_rwlock_unlock(&creds_backends.lock);
+	pthread_rwlock_unlock(&creds_frontends.lock);
 #else
-	spin_rdunlock(&creds_frontends.lock);
 	spin_rdunlock(&creds_backends.lock);
+	spin_rdunlock(&creds_frontends.lock);
 #endif
 	return ret;
 }
@@ -297,8 +320,8 @@ int PgSQL_Authentication::dump_all_users(pgsql_account_details_t***ads, bool _co
 			ad->comment=strdup(ado->comment);
 			ad->transaction_persistent=ado->transaction_persistent;
 			ad->fast_forward=ado->fast_forward;
-			ad->__frontend=1;
-			ad->__backend=0;
+			ad->frontend_=1;
+			ad->backend_=0;
 		}
 		_ads[idx_]=ad;
 		idx_++;
@@ -318,8 +341,8 @@ int PgSQL_Authentication::dump_all_users(pgsql_account_details_t***ads, bool _co
 		ad->transaction_persistent=ado->transaction_persistent;
 		ad->fast_forward=ado->fast_forward;
 		ad->max_connections=ado->max_connections;
-		ad->__frontend=0;
-		ad->__backend=1;
+		ad->frontend_=0;
+		ad->backend_=1;
 		_ads[idx_]=ad;
 		idx_++;
 	}
@@ -327,11 +350,11 @@ int PgSQL_Authentication::dump_all_users(pgsql_account_details_t***ads, bool _co
 	*ads=_ads;
 __exit_dump_all_users:
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
-	pthread_rwlock_unlock(&creds_frontends.lock);
 	pthread_rwlock_unlock(&creds_backends.lock);
+	pthread_rwlock_unlock(&creds_frontends.lock);
 #else
-	spin_rdunlock(&creds_frontends.lock);
 	spin_rdunlock(&creds_backends.lock);
+	spin_rdunlock(&creds_frontends.lock);
 #endif
 	return total_size;
 }
@@ -408,7 +431,7 @@ bool PgSQL_Authentication::del(char * username, enum cred_username_type usertype
 	myhash->Final(&hash1,&hash2);
 	delete myhash;
 
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	creds_group_t &cg = creds_for(usertype);
 
 	if (set_lock)
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
@@ -448,7 +471,7 @@ bool PgSQL_Authentication::set_SHA1(char * username, enum cred_username_type use
 	myhash->Final(&hash1,&hash2);
 	delete myhash;
 
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	creds_group_t &cg = creds_for(usertype);
 
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&cg.lock);
@@ -501,7 +524,7 @@ char * PgSQL_Authentication::lookup(char * username, enum cred_username_type use
 	myhash.Update(username,strlen(username));
 	myhash.Final(&hash1,&hash2);
 
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	creds_group_t &cg = creds_for(usertype);
 
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_rdlock(&cg.lock);
@@ -536,7 +559,7 @@ char * PgSQL_Authentication::lookup(char * username, enum cred_username_type use
 }
 
 bool PgSQL_Authentication::_reset(enum cred_username_type usertype) {
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	creds_group_t &cg = creds_for(usertype);
 
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&cg.lock);
@@ -617,7 +640,7 @@ static uint64_t compute_accounts_hash(const umap_pgauth& accs_map) {
 }
 
 uint64_t PgSQL_Authentication::_get_runtime_checksum(enum cred_username_type usertype) {
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	creds_group_t &cg = creds_for(usertype);
 	uint64_t accs_hash = compute_accounts_hash(cg.bt_map);
 
 	return accs_hash;
@@ -653,13 +676,13 @@ static pair<umap_pgauth, umap_pgauth> extract_accounts_details(MYSQL_RES* result
 
 		acc_details->username = row[0];
 		acc_details->password = row[1] ? row[1] : const_cast<char*>("");
-		acc_details->__active = true;
+		acc_details->active_ = true;
 		acc_details->use_ssl = strcmp(row[2], "1") == 0 ? true : false;
 		acc_details->default_hostgroup = atoi(row[3]);
 		acc_details->transaction_persistent = strcmp(row[4], "1") == 0 ? true : false;
 		acc_details->fast_forward = strcmp(row[5], "1") == 0 ? true : false;
-		acc_details->__backend = strcmp(row[6], "1") == 0 ? true : false;
-		acc_details->__frontend = strcmp(row[7], "1") == 0 ? true : false;
+		acc_details->backend_ = strcmp(row[6], "1") == 0 ? true : false;
+		acc_details->frontend_ = strcmp(row[7], "1") == 0 ? true : false;
 		acc_details->max_connections = atoi(row[8]);
 		acc_details->attributes = row[9] ? row[9] : const_cast<char*>("");
 		acc_details->comment = row[10] ? row[10] : const_cast<char*>("");

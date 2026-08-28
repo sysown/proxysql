@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 
+import os
 import pymysql
 import time
+
+def get_env_with_default(key, default):
+	return os.environ.get(key, default)
 
 def open_mysql_conn(host, port=3306, user=None, passwd=None, timeout=60):
 	conn = None
@@ -39,14 +43,54 @@ def pmysql_command(command, display=False):
 		print(result)
 	return result
 
-admin_conn_args = { 'host':'127.0.0.1', 'port':6032, 'user':'admin', 'passwd':'admin' }
-mysql_conn_args = { 'host':'127.0.0.1', 'port':6033, 'user':'root',  'passwd':'root' }
-puser_conn_args = { 'host':'127.0.0.1', 'port':6033, 'user':'user',  'passwd':'user' }
+# Connection arguments from environment variables (with defaults for local testing)
+admin_conn_args = {
+	'host': get_env_with_default('TAP_ADMINHOST', '127.0.0.1'),
+	'port': int(get_env_with_default('TAP_ADMINPORT', '6032')),
+	'user': get_env_with_default('TAP_ADMINUSERNAME', 'radmin'),
+	'passwd': get_env_with_default('TAP_ADMINPASSWORD', 'radmin')
+}
+mysql_conn_args = {
+	'host': get_env_with_default('TAP_HOST', '127.0.0.1'),
+	'port': int(get_env_with_default('TAP_PORT', '6033')),
+	'user': get_env_with_default('TAP_USERNAME', 'root'),
+	'passwd': get_env_with_default('TAP_PASSWORD', 'root')
+}
+puser_conn_args = {
+	'host': get_env_with_default('TAP_HOST', '127.0.0.1'),
+	'port': int(get_env_with_default('TAP_PORT', '6033')),
+	'user': get_env_with_default('TAP_USERNAME', 'user'),
+	'passwd': get_env_with_default('TAP_PASSWORD', 'user')
+}
 
 
 if __name__ == '__main__':
+	# Verbose test header
+	print("================================================================================")
+	print("Test: test_sqlite3_from_unixtime-t")
+	print("================================================================================")
+	print("This test verifies the SQLite3 Server's FROM_UNIXTIME function integration")
+	print("with ProxySQL admin interface.")
+	print("")
+	print("Test scenarios:")
+	print("  - FROM_UNIXTIME() with no arguments returns NULL")
+	print("  - FROM_UNIXTIME(0) returns '1970-01-01 00:00:00'")
+	print("  - FROM_UNIXTIME(-1) returns '1969-12-31 23:59:59'")
+	print("  - FROM_UNIXTIME(2147483647) handles 32-bit timestamp limit")
+	print("  - FROM_UNIXTIME(2147483648) handles 64-bit timestamps")
+	print("  - FROM_UNIXTIME on monitor.mysql_server_ping_log data")
+	print("")
+	print("Connection parameters:")
+	print("  - Admin Host: {}".format(admin_conn_args['host']))
+	print("  - Admin Port: {}".format(admin_conn_args['port']))
+	print("  - Admin User: {}".format(admin_conn_args['user']))
+	print("================================================================================")
+	print("")
 
+	print("Attempting to connect to admin interface at {}:{}".format(admin_conn_args['host'], admin_conn_args['port']))
 	padmin_conn = open_mysql_conn(**admin_conn_args)
+	print("Successfully connected to admin interface")
+	print("")
 
 	# test edge cases
 	assert padmin_command('SELECT from_unixtime();', display=True) == [{'from_unixtime()': None}]

@@ -119,7 +119,10 @@ int main(int argc, char** argv) {
         return exit_status();
     }
 
-    string config_file = "/tmp/proxysql_test_prefix_stripping.cfg";
+        const char* datadir = getenv("REGULAR_INFRA_DATADIR");
+    string config_file = (datadir ? string(datadir) : "/tmp");
+    if (config_file.back() != '/') config_file += '/';
+    config_file += "proxysql_test_prefix_stripping.cfg";
     create_config_with_prefixed_variables(config_file);
 
     // Set config file

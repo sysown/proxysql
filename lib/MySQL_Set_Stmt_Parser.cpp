@@ -244,16 +244,58 @@ void MySQL_Set_Stmt_Parser::generateRE_parse1v2() {
 	vp = "(?:| *(?:\\+|\\-) *)\\d+(?:|\\.\\d+)"; // a signed or unsigned integer or decimal , N7 = merge of N3 and N6
 	var_patterns.push_back(vp);
 
+	/**
+	 * @page time_zone_parsing MySQL time_zone Variable Parsing
+	 *
+	 * The MySQL @c time_zone system variable accepts two formats:
+	 *
+	 * @section tz_numeric_format Numeric Offset Format
+	 * Specifies timezone as an offset from UTC in the format [+|-]HH:MM.
+	 * Examples: @c '+08:00' , @c '-05:30' , @c '+00:00' (UTC)
+	 *
+	 * @section tz_iana_format IANA Timezone Name Format
+	 * Specifies timezone using IANA timezone database names.
+	 * The naming convention follows the pattern @c Area/Location or
+	 * @c Area/Country/Location.
+	 *
+	 * @subsection tz_iana_components IANA Timezone Name Components
+	 * - **Area**: Continent, ocean, or special region (e.g., America, Europe, Asia, Etc)
+	 * - **Location**: City, island, or country name
+	 *
+	 * IANA timezone names may contain:
+	 * - Word characters (letters, digits, underscores): @c [a-zA-Z0-9_]
+	 * - Hyphens in place of spaces: @c Port-au-Prince , @c Rio_Gallegos
+	 *
+	 * @subsection tz_iana_examples IANA Timezone Examples
+	 * - 2 components: @c Europe/London , @c America/New_York , @c Asia/Tokyo
+	 * - 3 components: @c America/Argentina/Buenos_Aires , @c America/Indiana/Indianapolis
+	 * - With hyphens: @c America/Port-au-Prince , @c America/Blanc-Sablon
+	 *
+	 * @subsection tz_special_values Special Values
+	 * The following special values are also supported (matched by other patterns):
+	 * - @c SYSTEM : Use the system's timezone
+	 * - @c UTC : Coordinated Universal Time
+	 *
+	 * @subsection tz_limitations Limitations
+	 * The regex pattern limits matching to 2-3 components (e.g., @c Area/Location or
+	 * @c Area/Country/Location). While IANA timezone names with 4+ components are
+	 * theoretically possible, they are extremely rare and not currently supported.
+	 *
+	 * @see https://dev.mysql.com/doc/refman/8.0/en/time-zone-support.html
+	 * @see https://www.iana.org/time-zones
+	 */
 	{
-		// time_zone in numeric format:
-		// - +/- sign
-		// 1 or 2 digits
-		// :
-		// 2 digits
+		// time_zone in numeric format: [+|-]HH:MM
+		// Examples: '+08:00', '-05:30', '+00:00'
 		string tzd =  "(?:(?:\\+|\\-)(?:|\\d)\\d:\\d\\d)";
-		// time_zone in string format:
-		// word / word
-		string tzw =  "(?:\\w+/\\w+)";
+		// time_zone in string format: IANA timezone names
+		// Supports 2-3 components with optional hyphens:
+		//   - 2 components: Area/Location (e.g., Europe/London, America/New_York)
+		//   - 3 components: Area/Country/Location (e.g., America/Argentina/Buenos_Aires)
+		//   - With hyphens: America/Port-au-Prince, America/Blanc-Sablon
+		// Note: Does not match bare words like 'SYSTEM' or 'UTC' - these are matched
+		//       by other patterns in var_patterns (e.g., vp2 at line ~197)
+		string tzw =  "(?:[\\w-]+(?:/[\\w-]+){1,2})";
 		vp = "(?:" + tzd + "|" + tzw + ")"; // time_zone in numeric and string format
 	}
 	for (auto it = quote_symbol.begin(); it != quote_symbol.end(); it++) {
@@ -565,7 +607,6 @@ std::string MySQL_Set_Stmt_Parser::remove_comments(const std::string& q) {
 
 
 #ifdef DEBUG
-
 void MySQL_Set_Stmt_Parser::test_parse_USE_query() {
 
 	// Define vector of pairs (query, expected dbname)

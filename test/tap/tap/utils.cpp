@@ -8,6 +8,7 @@
 #include <string>
 #include <sstream>
 #include <random>
+#include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <utility>
@@ -21,6 +22,7 @@
 #include "mysql.h"
 #include "utils.h"
 #include "tap.h"
+#include "noise_utils.h"
 
 using std::pair;
 using std::map;
@@ -245,22 +247,6 @@ string to_string(std::thread::id id) {
 	return helper.str();
 }
 
-string replace_str(const string& str, const string& match, const string& repl) {
-	if(match.empty()) {
-		return str;
-	}
-
-	string result { str };
-	size_t start_pos = 0;
-
-	while((start_pos = result.find(match, start_pos)) != std::string::npos) {
-		result.replace(start_pos, match.length(), repl);
-		start_pos += repl.length();
-	}
-
-	return result;
-}
-
 pair<int,vector<MYSQL*>> disable_core_nodes_scheduler(CommandLine& cl, MYSQL* admin) {
 	vector<MYSQL*> nodes_conns {};
 
@@ -465,6 +451,59 @@ int add_more_rows_test_sbtest1(int num_rows, MYSQL *mysql, bool sqlite) {
 	}
 	diag("Done!");
 	return 0;
+}
+
+void dump_hostgroup_debug(MYSQL* admin, int hostgroup) {
+	if (!admin) return;
+	char query[512];
+
+	diag("=== Hostgroup %d Debug Dump ===", hostgroup);
+
+	// Dump runtime_mysql_servers for this hostgroup
+	snprintf(query, sizeof(query),
+		"SELECT hostgroup_id, hostname, port, status, max_connections, comment "
+		"FROM runtime_mysql_servers WHERE hostgroup_id=%d ORDER BY hostname", hostgroup);
+	if (mysql_query(admin, query) == 0) {
+		MYSQL_RES* res = mysql_store_result(admin);
+		if (res) {
+			MYSQL_ROW row;
+			diag("runtime_mysql_servers (hg=%d):", hostgroup);
+			while ((row = mysql_fetch_row(res))) {
+				diag("  hg=%s host=%s port=%s status=%s max_conn=%s comment=%s",
+					row[0], row[1], row[2], row[3], row[4], row[5] ? row[5] : "");
+			}
+			if (mysql_num_rows(res) == 0) {
+				diag("  (no servers in hostgroup %d)", hostgroup);
+			}
+			mysql_free_result(res);
+		}
+	} else {
+		diag("  Failed to query runtime_mysql_servers: %s", mysql_error(admin));
+	}
+
+	// Dump connection pool stats
+	snprintf(query, sizeof(query),
+		"SELECT hostgroup, srv_host, srv_port, status, ConnUsed, ConnFree, ConnOK, ConnERR, MaxConnUsed, Queries "
+		"FROM stats_mysql_connection_pool WHERE hostgroup=%d", hostgroup);
+	if (mysql_query(admin, query) == 0) {
+		MYSQL_RES* res = mysql_store_result(admin);
+		if (res) {
+			MYSQL_ROW row;
+			diag("stats_mysql_connection_pool (hg=%d):", hostgroup);
+			while ((row = mysql_fetch_row(res))) {
+				diag("  hg=%s host=%s port=%s status=%s ConnUsed=%s ConnFree=%s ConnOK=%s ConnERR=%s Queries=%s",
+					row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[9]);
+			}
+			if (mysql_num_rows(res) == 0) {
+				diag("  (no pool entries for hostgroup %d)", hostgroup);
+			}
+			mysql_free_result(res);
+		}
+	} else {
+		diag("  Failed to query stats_mysql_connection_pool: %s", mysql_error(admin));
+	}
+
+	diag("=== End Hostgroup %d Debug Dump ===", hostgroup);
 }
 
 int create_table_test_sbtest1(int num_rows, MYSQL *mysql) {
@@ -780,7 +819,7 @@ CURLcode perform_simple_post(
 }
 
 CURLcode perform_simple_get(
-	const string& endpoint, uint64_t& curl_res_code, string& curl_res_data
+	const string& endpoint, uint64_t& curl_res_code, string& curl_res_data, const string& userpwd
 ) {
 	CURL *curl;
 	CURLcode res;
@@ -790,6 +829,9 @@ CURLcode perform_simple_get(
 	curl = curl_easy_init();
 	if(curl) {
 		curl_easy_setopt(curl, CURLOPT_URL, endpoint.c_str());
+		if (!userpwd.empty()) {
+			curl_easy_setopt(curl, CURLOPT_USERPWD, userpwd.c_str());
+		}
 		struct memory response = { 0 };
 		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
 		curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&response);
@@ -832,14 +874,14 @@ int wait_post_enpoint_ready(string endpoint, string post_params, uint32_t timeou
 	return res;
 }
 
-int wait_get_enpoint_ready(string endpoint, uint32_t timeout, uint32_t delay) {
+int wait_get_enpoint_ready(string endpoint, uint32_t timeout, uint32_t delay, const string& userpwd) {
 	double waited = 0;
 	int res = -1;
 
 	while (waited < timeout) {
 		string curl_resp_err {};
 		uint64_t curl_res_code = 0;
-		int curl_res = perform_simple_get(endpoint, curl_res_code, curl_resp_err);
+		int curl_res = perform_simple_get(endpoint, curl_res_code, curl_resp_err, userpwd);
 
 		if (curl_res != CURLE_OK || curl_res_code != 200) {
 			diag("'curl_res': %d, 'curl_err': '%s', waiting for '%d'ms...", curl_res, curl_resp_err.c_str(), delay);
@@ -857,26 +899,18 @@ int wait_get_enpoint_ready(string endpoint, uint32_t timeout, uint32_t delay) {
 string random_string(std::size_t strSize) {
 	string dic { "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" };
 
-	std::random_device rd {};
-	std::mt19937 generator { rd() };
+	std::random_device rd;
+	std::mt19937 gen(rd());
+	std::uniform_int_distribution<std::size_t> dist(0, dic.size() - 1);
 
-	std::shuffle(dic.begin(), dic.end(), generator);
+	std::string res;
+	res.reserve(strSize);
 
-	if (strSize < dic.size()) {
-		return dic.substr(0, strSize);
-	} else {
-		std::size_t req_modulus = static_cast<std::size_t>(strSize / dic.size());
-		std::size_t req_reminder = strSize % dic.size();
-		string random_str {};
-
-		for (std::size_t i = 0; i < req_modulus; i++) {
-			random_str.append(dic);
-		}
-
-		random_str.append(dic.substr(0, req_reminder));
-
-		return random_str;
+	for (std::size_t i = 0; i < strSize; ++i) {
+		res.push_back(dic[dist(gen)]);
 	}
+
+	return res;
 }
 
 const double COLISSION_PROB = 1e-8;
@@ -1000,9 +1034,21 @@ int create_mysql_user(
 	string drop_user_query {};
 	string_format(t_drop_user_query, drop_user_query, user.c_str());
 
-	const string t_create_user_query {
-		"CREATE USER IF NOT EXISTS %s@'%%' IDENTIFIED WITH 'mysql_native_password' BY \"%s\""
-	};
+	// Pick the authentication plugin based on the backend version.
+	// MySQL 9.0 removed the 'mysql_native_password' server plugin; using
+	// IDENTIFIED WITH 'mysql_native_password' there returns
+	// ER_PLUGIN_IS_NOT_LOADED. Pre-9.0 keeps the explicit plugin clause so
+	// tests that implicitly rely on a native-password user continue to work
+	// on 5.7 / 8.4 backends.
+	const unsigned long server_version = mysql_get_server_version(mysql_server);
+	string t_create_user_query;
+	if (server_version >= 90000) {
+		t_create_user_query =
+			"CREATE USER IF NOT EXISTS %s@'%%' IDENTIFIED BY \"%s\"";
+	} else {
+		t_create_user_query =
+			"CREATE USER IF NOT EXISTS %s@'%%' IDENTIFIED WITH 'mysql_native_password' BY \"%s\"";
+	}
 	string create_user_query {};
 	string_format(t_create_user_query, create_user_query, user.c_str(), pass.c_str());
 
@@ -1198,6 +1244,91 @@ MYSQL* wait_for_proxysql(const conn_opts_t& opts, int timeout) {
 	} else {
 		return admin;
 	}
+}
+
+int wait_for_proxysql_cluster(
+	const std::vector<std::pair<std::string,int>>& nodes,
+	const std::string& admin_user,
+	const std::string& admin_password,
+	int timeout_s,
+	int poll_interval_s
+) {
+	if (nodes.empty()) return 0;
+
+	struct pending_t {
+		std::string host;
+		int port;
+		std::string last_error;
+	};
+	std::vector<pending_t> pending;
+	pending.reserve(nodes.size());
+	for (const auto& n : nodes) {
+		pending.push_back({n.first, n.second, "(no attempt yet)"});
+	}
+
+	const unsigned long long start_us = monotonic_time();
+	const unsigned long long deadline_us =
+		start_us + static_cast<unsigned long long>(timeout_s) * 1000000ULL;
+
+	const unsigned int connect_timeout_per_attempt = 2;
+	while (!pending.empty() && monotonic_time() < deadline_us) {
+		auto it = pending.begin();
+		while (it != pending.end()) {
+			MYSQL* probe = mysql_init(NULL);
+			if (!probe) {
+				it->last_error = "mysql_init returned NULL";
+				++it;
+				continue;
+			}
+			mysql_options(probe, MYSQL_OPT_CONNECT_TIMEOUT, &connect_timeout_per_attempt);
+
+			MYSQL* rc = mysql_real_connect(
+				probe, it->host.c_str(), admin_user.c_str(), admin_password.c_str(),
+				NULL, it->port, NULL, 0
+			);
+			if (rc) {
+				mysql_close(probe);
+				it = pending.erase(it);
+			} else {
+				it->last_error = mysql_error(probe);
+				mysql_close(probe);
+				++it;
+			}
+		}
+		if (!pending.empty() && monotonic_time() < deadline_us) {
+			sleep(poll_interval_s);
+		}
+	}
+
+	if (pending.empty()) {
+		const unsigned long long elapsed_us = monotonic_time() - start_us;
+		diag("wait_for_proxysql_cluster: all %zu endpoint(s) ready in %.2fs",
+			nodes.size(), elapsed_us / 1000000.0);
+		return 0;
+	}
+
+	diag("wait_for_proxysql_cluster: %zu/%zu endpoint(s) did not respond within %ds",
+		pending.size(), nodes.size(), timeout_s);
+	for (const auto& p : pending) {
+		diag("  not ready: %s:%d  last error: %s",
+			p.host.c_str(), p.port, p.last_error.c_str());
+	}
+	return 1;
+}
+
+int wait_for_proxysql_cluster(
+	const std::string& host,
+	const std::vector<int>& ports,
+	const std::string& admin_user,
+	const std::string& admin_password,
+	int timeout_s,
+	int poll_interval_s
+) {
+	std::vector<std::pair<std::string,int>> nodes;
+	nodes.reserve(ports.size());
+	for (int p : ports) nodes.emplace_back(host, p);
+	return wait_for_proxysql_cluster(
+		nodes, admin_user, admin_password, timeout_s, poll_interval_s);
 }
 
 int get_variable_value(
@@ -1437,8 +1568,24 @@ const char t_restapi_insert[] {
 		"VALUES (1,%ld,'%s','%s','%s','comm')",
 };
 
-const string base_address { "http://localhost:6070/sync/" };
+// Use TAP_HOST environment variable so the REST API address works in both
+// local (127.0.0.1) and container-isolated (hostname) CI environments.
+static string build_restapi_base_address() {
+	const char* tap_host = getenv("TAP_HOST");
+	return string("http://") + (tap_host ? tap_host : "proxysql") + ":6070/sync/";
+}
 
+struct RestapiBaseAddress {
+	std::string value() const {
+		return build_restapi_base_address();
+	}
+
+	operator std::string() const {
+		return value();
+	}
+};
+
+static RestapiBaseAddress base_address{};
 int configure_endpoints(
 	MYSQL* admin,
 	const string& script_base_path,
@@ -1483,7 +1630,8 @@ int configure_endpoints(
 	int endpoint_timeout = wait_post_enpoint_ready(full_endpoint, "{}", 1000, 100);
 
 	if (endpoint_timeout) {
-		diag("Timeout while trying to reach first valid enpoint");
+		diag("Timeout while trying to reach first valid endpoint: %s", full_endpoint.c_str());
+		diag("This usually means RESTAPI enabled but script failed to execute. Check TAP_WORKDIR.");
 		return EXIT_FAILURE;
 	}
 
@@ -1500,6 +1648,13 @@ int extract_sqlite3_host_port(MYSQL* admin, std::pair<std::string, int>& host_po
 	if (get_variable_value(admin, varname, sqlite3_ifaces)) {
 		diag("ProxySQL was launched without '--sqlite3-server' flag");
 		return EXIT_FAILURE;
+	}
+
+	// The SQLite3 server may expose multiple listeners. Existing tests using
+	// this helper connect to the first TCP listener.
+	const std::string::size_type first_iface_end = sqlite3_ifaces.find(";");
+	if (first_iface_end != std::string::npos) {
+		sqlite3_ifaces.erase(first_iface_end);
 	}
 
 	// Extract the correct port to connect to SQLite server
@@ -1627,6 +1782,36 @@ pair<size_t,vector<line_match_t>> get_matching_lines(
 	}
 
 	return { insp_lines, found_matches };
+}
+
+
+bool wait_for_log_match(
+	fstream& f_stream, const string& s_regex, uint32_t timeout_ms, uint32_t poll_interval_ms
+) {
+	// Guard against a zero interval, which would spin.
+	if (poll_interval_ms == 0) { poll_interval_ms = 10; }
+
+	const useconds_t poll_us = poll_interval_ms * 1000;
+	uint32_t elapsed_ms = 0;
+
+	while (true) {
+		// Clear both eofbit and failbit so the subsequent getline() in
+		// get_matching_lines() can read any bytes appended since the last scan.
+		// Without this, once the stream hits EOF on the first iteration, every
+		// retry short-circuits and returns no matches.
+		f_stream.clear(f_stream.rdstate() & ~std::ios_base::eofbit & ~std::ios_base::failbit);
+
+		const auto& [_, matches] = get_matching_lines(f_stream, s_regex);
+		if (!matches.empty()) {
+			return true;
+		}
+		if (elapsed_ms >= timeout_ms) {
+			return false;
+		}
+
+		usleep(poll_us);
+		elapsed_ms += poll_interval_ms;
+	}
 }
 
 
@@ -2432,7 +2617,7 @@ MYSQL* init_mysql_conn(char* host, int port, char* user, char* pass, bool ssl, b
 		cflags |= CLIENT_SSL;
 	}
 
-	if (!mysql_real_connect(mysql, host, user, pass, NULL, port, NULL, cflags)) {
+	if (!mysql_real_connect(mysql, host, user, pass, NULL, port, NULL, cflags)) { diag("init_mysql_conn failed: %s (Host: %s, Port: %d, User: %s)", mysql_error(mysql), host, port, user); mysql_close(mysql);
 		return nullptr;
 	}
 
@@ -2441,5 +2626,198 @@ MYSQL* init_mysql_conn(char* host, int port, char* user, char* pass, bool ssl, b
 
 int run_q(MYSQL *mysql, const char *q) {
 	MYSQL_QUERY_T(mysql,q);
+	return 0;
+}
+
+static std::vector<pid_t> background_noise_pids;
+extern "C" void stop_noise_tools() {
+
+	static std::atomic<bool> already_stopped{false};
+	if (already_stopped.exchange(true)) {
+		return;
+	}
+	stop_internal_noise_threads();
+	for (pid_t pid : background_noise_pids) {
+		kill(pid, SIGTERM);
+		// Small wait and reap
+		usleep(100000);
+		int status;
+		if (waitpid(pid, &status, WNOHANG) == 0) {
+			kill(pid, SIGKILL);
+			waitpid(pid, &status, 0);
+		}
+	}
+	background_noise_pids.clear();
+}
+
+extern "C" int get_noise_tools_count() {
+	return (int)background_noise_pids.size() + get_internal_noise_threads_count();
+}
+
+void spawn_noise(const CommandLine& cl, const std::string& tool_path, const std::vector<std::string>& args) {
+	if (!cl.use_noise) {
+		return;
+	}
+
+	static std::once_flag atexit_flag;
+	std::call_once(atexit_flag, [](){
+		atexit(stop_noise_tools);
+	});
+
+	pid_t pid = fork();
+	if (pid == 0) {
+		// Child
+		setpgid(0, 0);
+		int fd_null = open("/dev/null", O_RDWR);
+		if (fd_null != -1) {
+			dup2(fd_null, STDIN_FILENO);
+			dup2(fd_null, STDOUT_FILENO);
+			dup2(fd_null, STDERR_FILENO);
+			if (fd_null > 2) {
+				close(fd_null);
+			}
+		} else {
+			// Cannot redirect I/O; abort rather than pollute test output
+			_exit(1);
+		}
+
+		std::vector<char*> c_args;
+		c_args.push_back(const_cast<char*>(tool_path.c_str()));
+		for (const auto& arg : args) {
+			c_args.push_back(const_cast<char*>(arg.c_str()));
+		}
+		c_args.push_back(nullptr);
+
+		::execvp(tool_path.c_str(), c_args.data());
+		// If we are here, exec failed
+		fprintf(stderr, "Failed to exec noise tool: %s\n", tool_path.c_str());
+		_exit(1);
+	} else if (pid > 0) {
+		background_noise_pids.push_back(pid);
+		diag("Spawned background noise tool '%s' with PID %d", tool_path.c_str(), pid);
+	} else {
+		fprintf(stderr, "Failed to fork for noise tool: %s\n", tool_path.c_str());
+	}
+}
+
+int get_backend_gtid_position(
+	MYSQL* admin,
+	const std::string& backend_host,
+	uint32_t backend_port,
+	std::string& server_uuid,
+	uint64_t& max_trxid
+) {
+	auto trim = [](const std::string& s) -> std::string {
+		size_t start = s.find_first_not_of(" \t\n\r");
+		if (start == std::string::npos) return "";
+		size_t end = s.find_last_not_of(" \t\n\r");
+		return s.substr(start, end - start + 1);
+	};
+
+	auto strip_dashes = [](const std::string& uuid) -> std::string {
+		std::string result;
+		result.reserve(uuid.size());
+		for (char c : uuid) {
+			if (c != '-') result.push_back(c);
+		}
+		return result;
+	};
+
+	auto parse_interval_end = [](const std::string& token, uint64_t& interval_end) -> bool {
+		size_t dash_pos = token.find('-');
+		if (dash_pos == std::string::npos) {
+			interval_end = std::stoull(token);
+			return true;
+		}
+		std::string to_str = token.substr(dash_pos + 1);
+		if (to_str.empty()) return false;
+		interval_end = std::stoull(to_str);
+		return true;
+	};
+
+	// A GTID executed set may contain multiple comma-separated GTID entries,
+	// we parse only the first GTID entry from the set.
+	auto parse_first_gtid = [&](const std::string& gtid_executed_raw) -> bool {
+		std::string gtid_executed = trim(gtid_executed_raw);
+		if (gtid_executed.empty()) return false;
+
+		size_t comma_pos = gtid_executed.find(',');
+		std::string group = trim(
+			(comma_pos == std::string::npos) ? gtid_executed : gtid_executed.substr(0, comma_pos)
+		);
+		if (group.empty()) return false;
+
+		size_t colon_pos = group.find(':');
+		if (colon_pos == std::string::npos || colon_pos == 0 || colon_pos == group.size() - 1) {
+			return false;
+		}
+
+		server_uuid = strip_dashes(group.substr(0, colon_pos));
+		if (server_uuid.empty()) return false;
+
+		std::string intervals_str = group.substr(colon_pos + 1);
+		max_trxid = 0;
+		bool found = false;
+
+		size_t ipos = 0;
+		while (ipos < intervals_str.size()) {
+			size_t next_colon = intervals_str.find(':', ipos);
+			std::string token = trim(
+				(next_colon == std::string::npos) ? intervals_str.substr(ipos) : intervals_str.substr(ipos, next_colon - ipos)
+			);
+
+			if (!token.empty()) {
+				uint64_t interval_end = 0;
+				if (!parse_interval_end(token, interval_end)) {
+					return false;
+				}
+				if (interval_end > max_trxid) {
+					max_trxid = interval_end;
+				}
+				found = true;
+			}
+
+			if (next_colon == std::string::npos) {
+				break;
+			}
+			ipos = next_colon + 1;
+		}
+
+		return found;
+	};
+
+	std::string gtid_query = "SELECT gtid_executed FROM stats.stats_mysql_gtid_executed"
+		" WHERE hostname='" + backend_host + "' AND port=" + std::to_string(backend_port) +
+		" AND gtid_executed IS NOT NULL AND gtid_executed != ''";
+
+	int rc = mysql_query(admin, gtid_query.c_str());
+	if (rc != 0) {
+		diag("Failed to query gtid_executed from stats: %s", mysql_error(admin));
+		return -1;
+	}
+
+	MYSQL_RES* res = mysql_store_result(admin);
+	MYSQL_ROW row = nullptr;
+
+	if (!res) {
+		diag("Failed to store result for gtid_executed query");
+		return -1;
+	}
+
+	row = mysql_fetch_row(res);
+	if (!row || !row[0]) {
+		mysql_free_result(res);
+		diag("No GTID info for backend %s:%d", backend_host.c_str(), backend_port);
+		return -1;
+	}
+
+	std::string gtid_executed = row[0];
+	mysql_free_result(res);
+
+	if (!parse_first_gtid(gtid_executed)) {
+		diag("Failed to parse GTID entry from gtid_executed: %s", gtid_executed.c_str());
+		return -1;
+	}
+
 	return 0;
 }

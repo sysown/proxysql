@@ -7,6 +7,7 @@
 
 #include "tap.h"
 #include "command_line.h"
+#include "noise_utils.h"
 #include "utils.h"
 
 
@@ -26,16 +27,23 @@ const int NUM_CONNS = 5;
 int main(int argc, char** argv) {
 	CommandLine cl;
 
+	if (cl.getEnv()) {
+		diag("Failed to get the required environmental variables.");
+		return -1;
+	}
+
+	spawn_internal_noise(cl, internal_noise_mysql_traffic);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
+
 	int np = NUM_CONNS ; // for last insert id
 	np += NUM_CONNS -1 ;	// to compare all last insert id
 	np += NUM_CONNS ;	// to get connection id
 	np += NUM_CONNS -1 ;	// failed query on killed connection
 
-	plan(np);
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
+	if (cl.use_noise) {
+		plan(np + 2);
+	} else {
+		plan(np);
 	}
 
 	MYSQL * conns[NUM_CONNS];

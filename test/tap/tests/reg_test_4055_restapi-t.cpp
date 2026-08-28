@@ -17,6 +17,7 @@
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <netdb.h>
 
 #include "mysql.h"
 
@@ -30,8 +31,6 @@ using std::string;
 uint32_t SUPPORTED_METRICS = 148;
 
 int main(int argc, char** argv) {
-	plan(5);
-
 	CommandLine cl;
 
 	if (cl.getEnv()) {
@@ -39,14 +38,28 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
+	diag("=== Regression Test #4055: RESTAPI Robustness against Malformed Input ===");
+	diag("This test verifies that ProxySQL remains stable and operational when");
+	diag("receiving a malformed request on its RESTAPI interface.");
+	diag("The test strategy is:");
+	diag("1. Enable RESTAPI on port 6070.");
+	diag("2. Send a malformed byte sequence directly to the RESTAPI socket.");
+	diag("3. Verify that ProxySQL Admin interface is still responsive.");
+	diag("4. Verify that the RESTAPI 'metrics' endpoint is still responding correctly.");
+	diag("==========================================================================");
+
+	plan(5);
+
 	MYSQL* admin = mysql_init(NULL);
 
+	diag("Connecting to ProxySQL Admin at %s:%d as %s", cl.host, cl.admin_port, cl.admin_username);
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
 	}
 
 	// Enable 'RESTAPI'
+	diag("Enabling RESTAPI on port 6070");
 	MYSQL_QUERY(admin, "SET admin-restapi_enabled='true'");
 	MYSQL_QUERY(admin, "SET admin-restapi_port=6070");
 	MYSQL_QUERY(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
@@ -54,26 +67,40 @@ int main(int argc, char** argv) {
 	int socket_desc;
 	struct sockaddr_in server;
 
+	diag("Creating socket to send malformed data to %s:6070", cl.host);
 	socket_desc = socket(AF_INET , SOCK_STREAM , 0);
 	if (socket_desc == -1) {
+		diag("Failed to create socket: %s", strerror(errno));
 		return errno;
 	}
 
-	server.sin_addr.s_addr = inet_addr("127.0.0.1");
-	server.sin_family = AF_INET;
-	server.sin_port = htons(6070);
+	struct addrinfo hints{}, *res;
+	hints.ai_family = AF_INET;
+	hints.ai_socktype = SOCK_STREAM;
+	int status = getaddrinfo(cl.host, "6070", &hints, &res);
+	if (status != 0) {
+		diag("Failed to resolve host %s: %s", cl.host, gai_strerror(status));
+		close(socket_desc);
+		return EXIT_FAILURE;
+	}
 
-	if (connect(socket_desc , (struct sockaddr *)&server , sizeof(server)) < 0) {
+	if (connect(socket_desc , res->ai_addr , res->ai_addrlen) < 0) {
+		diag("Failed to connect to RESTAPI socket at %s:6070: %s", cl.host, strerror(errno));
+		freeaddrinfo(res);
+		close(socket_desc);
 		return errno;
 	}
+	freeaddrinfo(res);
 
 	// Perform the invalid request, and add a sleep to let ProxySQL process the data
 	{
+		diag("Sending malformed byte sequence to RESTAPI...");
 		ssize_t n = write(socket_desc, static_cast<const void*>(" \n"), strlen(" \n"));
 		diag("Written '%lu' bytes into socket", n);
 		sleep(1);
 	}
 
+	diag("Verifying ProxySQL Admin responsiveness...");
 	int myrc = mysql_query(admin, "SELECT version()");
 	ok(myrc == EXIT_SUCCESS, "ProxySQL is still up and reachable");
 
@@ -89,7 +116,9 @@ int main(int argc, char** argv) {
 	uint64_t curl_res_code = 0;
 	string curl_res_data {};
 
-	CURLcode code = perform_simple_get("http://localhost:6070/metrics/", curl_res_code, curl_res_data);
+	diag("Verifying RESTAPI /metrics endpoint responsiveness via %s:6070...", cl.host);
+	const string metrics_url { string("http://") + string(cl.host) + ":6070/metrics/" };
+	CURLcode code = perform_simple_get(metrics_url, curl_res_code, curl_res_data);
 
 	ok(
 		code == CURLE_OK && curl_res_code == 200,

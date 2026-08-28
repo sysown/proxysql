@@ -1,5 +1,5 @@
-#ifndef __CLASS_PROXYSQL_ADMIN_H
-#define __CLASS_PROXYSQL_ADMIN_H
+#ifndef PROXYSQL_ADMIN_H
+#define PROXYSQL_ADMIN_H
 
 #include "prometheus/exposer.h"
 #include "prometheus/counter.h"
@@ -12,14 +12,18 @@
 #include <tuple>
 #include <vector>
 #include <array>
+#include <limits>
 
 #include "ProxySQL_RESTAPI_Server.hpp"
 
-#include "proxysql_typedefs.h"
+#include "ProxySQL_Plugin.h"
 
-#define PROCESSLIST_MAX_QUERY_LEN_DEFAULT    2 * 1024 * 1024  //  2 MiB
-#define PROCESSLIST_MAX_QUERY_LEN_MIN        1 * 1024         //  1 KiB
-#define PROCESSLIST_MAX_QUERY_LEN_MAX       32 * 1024 * 1024  // 32 MiB
+#include "proxysql_typedefs.h"
+#include "query_digest_topk.h"
+
+#define PROCESSLIST_MAX_QUERY_LEN_DEFAULT    (2 * 1024 * 1024)  //  2 MiB
+#define PROCESSLIST_MAX_QUERY_LEN_MIN        (1 * 1024)         //  1 KiB
+#define PROCESSLIST_MAX_QUERY_LEN_MAX       (32 * 1024 * 1024)  // 32 MiB
 
 typedef struct { uint32_t hash; uint32_t key; } t_symstruct;
 class ProxySQL_Config;
@@ -63,15 +67,15 @@ class ProxySQL_External_Scheduler {
 };
 
 struct p_admin_counter {
-	enum metric {
+	enum metric : uint8_t {
 		uptime = 0,
 		jemalloc_allocated,
-		__size
+		SIZE_
 	};
 };
 
 struct p_admin_gauge {
-	enum metric {
+	enum metric : uint8_t {
 		// memory metrics
 		connpool_memory_bytes = 0,
 		sqlite3_memory_bytes,
@@ -103,20 +107,20 @@ struct p_admin_gauge {
 		version_info,
 		mysql_listener_paused,
 		pgsql_listener_paused,
-		__size
+		SIZE_
 	};
 };
 
 struct p_admin_dyn_counter {
-	enum metric {
-		__size
+	enum metric : uint8_t {
+		SIZE_
 	};
 };
 
 struct p_admin_dyn_gauge {
-	enum metric {
+	enum metric : uint8_t {
 		proxysql_servers_clients_status_last_seen_at = 0,
-		__size
+		SIZE_
 	};
 };
 
@@ -156,10 +160,11 @@ struct incoming_servers_t {
 	SQLite3_result* incoming_aurora_hostgroups = NULL;
 	SQLite3_result* incoming_hostgroup_attributes = NULL;
 	SQLite3_result* incoming_mysql_servers_ssl_params = NULL;
+	SQLite3_result* incoming_aws_rds_bgd_hostgroups = NULL;
 	SQLite3_result* runtime_mysql_servers = NULL;
 
 	incoming_servers_t();
-	incoming_servers_t(SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*);
+	incoming_servers_t(SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*);
 };
 
 // Separate structs for runtime mysql server and mysql server v2 to avoid human error
@@ -202,10 +207,11 @@ struct incoming_pgsql_servers_t {
 	SQLite3_result* incoming_replication_hostgroups = NULL;
 	SQLite3_result* incoming_aurora_hostgroups = NULL;
 	SQLite3_result* incoming_hostgroup_attributes = NULL;
+	SQLite3_result* incoming_pgsql_servers_ssl_params = NULL;
 	SQLite3_result* runtime_pgsql_servers = NULL;
 
 	incoming_pgsql_servers_t();
-	incoming_pgsql_servers_t(SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*);
+	incoming_pgsql_servers_t(SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*);
 };
 
 // Separate structs for runtime pgsql server and pgsql server v2 to avoid human error
@@ -242,15 +248,81 @@ struct peer_pgsql_servers_v2_t {
 	peer_pgsql_servers_v2_t(SQLite3_result*, const pgsql_servers_v2_checksum_t&);
 };
 
+/**
+ * @brief Sort keys supported by in-memory processlist queries.
+ *
+ * These keys are intentionally limited to fields that are available for both
+ * MySQL and PgSQL processlist rows so callers can use a single contract.
+ */
+enum class processlist_sort_by_t {
+	none,       ///< Keep producer order (no explicit sorting).
+	time_ms,    ///< Sort by session runtime in milliseconds.
+	session_id, ///< Sort by ProxySQL session id.
+	username,   ///< Sort by authenticated username.
+	hostgroup,  ///< Sort by current hostgroup id.
+	command     ///< Sort by command/status text.
+};
+
+/**
+ * @brief Typed filtering, ordering, and pagination options for processlist.
+ *
+ * The options are consumed by `MySQL_Threads_Handler::SQL3_Processlist()` and
+ * `PgSQL_Threads_Handler::SQL3_Processlist()` to query live in-memory session
+ * state without going through runtime-populated `stats_*_processlist` tables.
+ *
+ * All string filters are exact matches unless noted otherwise.
+ */
+struct processlist_query_options_t {
+	bool enabled {false};                   ///< Enables query-options processing.
+	std::string username {};                ///< Optional exact username filter.
+	std::string database {};                ///< Optional exact schema/database filter.
+	int hostgroup {-1};                     ///< Optional hostgroup filter (`-1` disables).
+	std::string command {};                 ///< Optional exact command/status filter.
+	int min_time_ms {-1};                   ///< Optional minimum runtime (`-1` disables).
+	bool has_session_id {false};            ///< Whether @ref session_id is active.
+	uint32_t session_id {0};                ///< Optional exact session identifier.
+	std::string match_info {};              ///< Optional substring filter on `info`.
+	bool info_case_sensitive {false};       ///< Case sensitivity mode for @ref match_info.
+	processlist_sort_by_t sort_by {processlist_sort_by_t::none}; ///< Optional primary sort key.
+	bool sort_desc {true};                  ///< Sort direction for @ref sort_by.
+	bool disable_pagination {false};        ///< If true, ignore @ref limit and @ref offset.
+	uint32_t limit {std::numeric_limits<uint32_t>::max()}; ///< Page size (defaults to no limit).
+	uint32_t offset {0};                    ///< Number of rows to skip before page.
+};
+
+/**
+ * @brief Processlist extraction configuration.
+ *
+ * This structure combines legacy processlist rendering controls
+ * (`show_extended`, `max_query_length`) with optional query-time filters,
+ * ordering, and pagination in @ref query_options.
+ */
 struct processlist_config_t {
 #ifdef IDLE_THREADS
 	bool show_idle_session;
 #endif
 	int show_extended;
 	int max_query_length;
+	processlist_query_options_t query_options {};
+};
+
+/**
+ * @brief Refresh all module metrics in the global Prometheus registry.
+ *
+ * Calls p_update_metrics() on every ProxySQL module so that gauges and
+ * counters reflect the current state before the registry is collected.
+ */
+void update_modules_metrics();
+
+struct FlushVariableStats {
+	int records  = 0;
+	int updated  = 0;
+	int rejected = 0;
+	int unknown  = 0;
 };
 
 class ProxySQL_Admin {
+	friend class TestDiskUpgrade;
 	private:
 	volatile int main_shutdown;
 
@@ -263,6 +335,7 @@ class ProxySQL_Admin {
 	int main_poll_nfds;
 	struct pollfd *main_poll_fds;
 	int *main_callback_func;
+	bool admin_threads_shutdown;
 
 	bool registered_prometheus_collectable;
 
@@ -314,6 +387,10 @@ class ProxySQL_Admin {
 		int cluster_mysql_variables_diffs_before_sync;
 		int cluster_admin_variables_diffs_before_sync;
 		int cluster_ldap_variables_diffs_before_sync;
+		int cluster_pgsql_variables_diffs_before_sync;
+		int cluster_pgsql_query_rules_diffs_before_sync;
+		int cluster_pgsql_servers_diffs_before_sync;
+		int cluster_pgsql_users_diffs_before_sync;
 		int cluster_mysql_servers_sync_algorithm;
 		bool cluster_mysql_query_rules_save_to_disk;
 		bool cluster_mysql_servers_save_to_disk;
@@ -322,11 +399,17 @@ class ProxySQL_Admin {
 		bool cluster_mysql_variables_save_to_disk;
 		bool cluster_admin_variables_save_to_disk;
 		bool cluster_ldap_variables_save_to_disk;
+		bool cluster_pgsql_variables_save_to_disk;
+		bool cluster_pgsql_query_rules_save_to_disk;
+		bool cluster_pgsql_servers_save_to_disk;
+		bool cluster_pgsql_users_save_to_disk;
 		int stats_mysql_connection_pool;
 		int stats_mysql_connections;
 		int stats_mysql_query_cache;
 		int stats_mysql_query_digest_to_disk;
 		int stats_mysql_eventslog_sync_buffer_to_disk;
+		/** @brief Periodic disk sync interval (seconds) for PostgreSQL eventslog buffer. */
+		int stats_pgsql_eventslog_sync_buffer_to_disk;
 		int stats_system_cpu;
 		int stats_system_memory;
 		bool restapi_enabled;
@@ -344,6 +427,25 @@ class ProxySQL_Admin {
 #endif /* DEBUG */
 		int coredump_generation_interval_ms;
 		int coredump_generation_threshold;
+		/**
+		 * @brief Path to the SSL/TLS key log file for decrypting traffic
+		 *
+		 * When set, ProxySQL writes TLS secrets to this file in NSS Key Log Format.
+		 * This allows tools like Wireshark to decrypt SSL/TLS traffic for debugging.
+		 *
+		 * Format: "<Label> <ClientRandom> <Secret>\n"
+		 *
+		 * Path handling:
+		 * - Absolute path: used as-is (e.g., "/var/log/proxysql/keylog.txt")
+		 * - Relative path: resolved relative to ProxySQL data directory
+		 * - Empty string (""): disables key logging (default)
+		 *
+		 * Security: This file contains cryptographic secrets that can decrypt
+		 * all TLS traffic. Access must be tightly restricted. Only enable for debugging.
+		 *
+		 * @see https://wiki.wireshark.org/TLS#TLS_Decryption
+		 * @see https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSS/Key_Log_Format
+		 */
 		char* ssl_keylog_file;
 		/**
 		 *   Processlist configurations are owned by MySQL/PgSQL Threads_Handlers.
@@ -357,9 +459,9 @@ class ProxySQL_Admin {
 	unsigned long long last_p_memory_metrics_ts;
 
 	struct {
-		std::array<prometheus::Counter*, p_admin_counter::__size> p_counter_array {};
-		std::array<prometheus::Gauge*, p_admin_gauge::__size> p_gauge_array {};
-		std::array<prometheus::Family<prometheus::Gauge>*, p_admin_dyn_gauge::__size> p_dyn_gauge_array {};
+		std::array<prometheus::Counter*, p_admin_counter::SIZE_> p_counter_array {};
+		std::array<prometheus::Gauge*, p_admin_gauge::SIZE_> p_gauge_array {};
+		std::array<prometheus::Family<prometheus::Gauge>*, p_admin_dyn_gauge::SIZE_> p_dyn_gauge_array {};
 
 		std::map<std::string, prometheus::Gauge*> p_proxysql_servers_clients_status_map {};
 	} metrics;
@@ -419,23 +521,28 @@ class ProxySQL_Admin {
 	void __add_active_users_ldap();
 
 	void flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false, bool use_lock=true);
-	void flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
+	FlushVariableStats flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
 
 	void flush_GENERIC_variables__checksum__database_to_runtime(const std::string& modname, const std::string& checksum, const time_t epoch);
 	bool flush_GENERIC_variables__retrieve__database_to_runtime(const std::string& modname, char* &error, int& cols, int& affected_rows, SQLite3_result* &resultset);
-	void flush_GENERIC_variables__process__database_to_runtime(
+	/**
+	 * @brief Apply generic variables from a result set and report per-row statistics.
+	 * @param accepted_variables Optional output containing only names successfully applied by this generic pass.
+	 */
+	FlushVariableStats flush_GENERIC_variables__process__database_to_runtime(
 		const std::string& modname, SQLite3DB *db, SQLite3_result* resultset,
 		const bool& lock, const bool& replace,
 		const std::unordered_set<std::string>& variables_read_only,
 		const std::unordered_set<std::string>& variables_to_delete_silently,
 		const std::unordered_set<std::string>& variables_deprecated,
 		const std::unordered_set<std::string>& variables_special_values,
-		std::function<void(const std::string&, const char *, SQLite3DB *)> special_variable_action = nullptr
+		std::function<void(const std::string&, const char *, SQLite3DB *)> special_variable_action = nullptr,
+		std::unordered_set<std::string>* accepted_variables = nullptr
 	);
 
 	char **get_variables_list();
 	bool set_variable(char *name, char *value, bool lock = true);
-	void flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0, bool lock = true);
+	FlushVariableStats flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0, bool lock = true);
 	void flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void disk_upgrade_mysql_query_rules();
 	void disk_upgrade_mysql_servers();
@@ -462,7 +569,7 @@ class ProxySQL_Admin {
 	void __add_active_clickhouse_users(char *user=NULL);
 	void __delete_inactive_clickhouse_users();
 	void flush_clickhouse_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
-	void flush_clickhouse_variables___database_to_runtime(SQLite3DB *db, bool replace);
+	FlushVariableStats flush_clickhouse_variables___database_to_runtime(SQLite3DB *db, bool replace);
 #endif /* PROXYSQLCLICKHOUSE */
 
 	// PostgreSQL
@@ -470,15 +577,15 @@ class ProxySQL_Admin {
 	//void __add_active_pgsql_users(char* user = NULL);
 	//void __delete_inactive_pgsql_users();
 	void flush_pgsql_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime = false, bool use_lock = true);
-	void flush_pgsql_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
+	FlushVariableStats flush_pgsql_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
 	//
 
 	void flush_sqliteserver_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
-	void flush_sqliteserver_variables___database_to_runtime(SQLite3DB *db, bool replace);
-	
+	FlushVariableStats flush_sqliteserver_variables___database_to_runtime(SQLite3DB *db, bool replace);
+
 	// LDAP
 	void flush_ldap_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
-	void flush_ldap_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
+	FlushVariableStats flush_ldap_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
 
 	public:
 	/**
@@ -498,6 +605,10 @@ class ProxySQL_Admin {
 		bool checksum_mysql_variables;
 		bool checksum_admin_variables;
 		bool checksum_ldap_variables;
+		bool checksum_pgsql_query_rules;
+		bool checksum_pgsql_servers;
+		bool checksum_pgsql_users;
+		bool checksum_pgsql_variables;
 	} checksum_variables;
 	template<enum SERVER_TYPE pt>
 	void public_add_active_users(enum cred_username_type usertype, char *user=NULL) {
@@ -574,13 +685,18 @@ class ProxySQL_Admin {
 	 */
 	void save_mysql_servers_runtime_to_database(bool _runtime);
 	void admin_shutdown();
+	void shutdown_threads();
 	bool is_command(std::string);
 
 	template <typename S>
 	void send_ok_msg_to_client(S* sess, const char *msg, int rows, const char* query);
 	template <typename S>
 	void send_error_msg_to_client(S* sess, const char *msg, uint16_t mysql_err_code=1045);
-#ifdef DEBUG
+#ifdef PROXYSQL40
+	template <typename S>
+	bool dispatch_plugin_admin_command(S* sess, const char *sql);
+#endif /* PROXYSQL40 */
+	#ifdef DEBUG
 	// these two following functions used to just call and return one function each
 	// this approach was replaced when we introduced debug filters
 	//int load_debug_to_runtime() { return flush_debug_levels_database_to_runtime(admindb); }
@@ -599,6 +715,7 @@ class ProxySQL_Admin {
 //	void flush_admin_variables__from_disk_to_memory(); // commented in 2.3 because unused
 	void flush_admin_variables__from_memory_to_disk();
 	void flush_ldap_variables__from_memory_to_disk();
+	void flush_pgsql_variables__from_memory_to_disk();
 	void load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers = {}, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server = {},
 		const mysql_servers_v2_checksum_t& peer_mysql_server_v2 = {});
 	void save_mysql_servers_from_runtime();
@@ -643,9 +760,17 @@ class ProxySQL_Admin {
 	void load_admin_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0, bool lock = true) { flush_admin_variables___database_to_runtime(admindb, true, checksum, epoch, lock); }
 	void save_admin_variables_from_runtime() { flush_admin_variables___runtime_to_database(admindb, true, true, false); }
 
+#ifdef PROXYSQLTSDB
+	// TSDB
+	void init_tsdb_variables();
+	void flush_tsdb_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
+	FlushVariableStats flush_tsdb_variables___database_to_runtime(SQLite3DB *db, bool replace);
+	void load_tsdb_variables_to_runtime() { flush_tsdb_variables___database_to_runtime(admindb, true); }
+	void save_tsdb_variables_from_runtime() { flush_tsdb_variables___runtime_to_database(admindb, true, true, false); }
+#endif
 	void load_or_update_global_settings(SQLite3DB *);
 
-	void load_mysql_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_mysql_variables___database_to_runtime(admindb, true, checksum, epoch); }
+	FlushVariableStats load_mysql_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { return flush_mysql_variables___database_to_runtime(admindb, true, checksum, epoch); }
 	void save_mysql_variables_from_runtime() { flush_mysql_variables___runtime_to_database(admindb, true, true, false); }
 	
 	// Coredump filters
@@ -668,6 +793,9 @@ class ProxySQL_Admin {
 	void stats___mysql_errors(bool reset);
 	void stats___memory_metrics();
 	void stats___mysql_global();
+#ifdef PROXYSQLTSDB
+	void stats___tsdb();
+#endif
 	void stats___mysql_users();
 
 	void stats___pgsql_global();
@@ -691,6 +819,10 @@ class ProxySQL_Admin {
 	void stats___mysql_prepared_statements_info();
 	void stats___mysql_gtid_executed();
 	void stats___mysql_client_host_cache(bool reset);
+	void stats___mysql_passthrough_auth_cache();
+	void stats___mysql_passthrough_auth_metrics();
+	void stats___tls_certificates();
+	void stats___proxysql_global();
 
 	// Update prometheus metrics
 	void p_stats___memory_metrics();
@@ -724,7 +856,7 @@ class ProxySQL_Admin {
 
 	// LDAP
 	void init_ldap_variables();
-	void load_ldap_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_ldap_variables___database_to_runtime(admindb, true, checksum, epoch); }
+	FlushVariableStats load_ldap_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { return flush_ldap_variables___database_to_runtime(admindb, true, checksum, epoch); }
 	void save_ldap_variables_from_runtime() { flush_ldap_variables___runtime_to_database(admindb, true, true, false); }
 	void save_mysql_ldap_mapping_runtime_to_database(bool);
 
@@ -753,8 +885,9 @@ class ProxySQL_Admin {
 	void init_pgsql_firewall();
 
 	void init_pgsql_variables();
-	void load_pgsql_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_pgsql_variables___database_to_runtime(admindb, true, checksum, epoch); }
+	FlushVariableStats load_pgsql_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { return flush_pgsql_variables___database_to_runtime(admindb, true, checksum, epoch); }
 	void save_pgsql_variables_from_runtime() { flush_pgsql_variables___runtime_to_database(admindb, true, true, false); }
+
 	void init_pgsql_users(std::unique_ptr<SQLite3_result>&& pgsql_users_resultset = nullptr, const std::string& checksum = "", const time_t epoch = 0);
 	void flush_pgsql_users__from_memory_to_disk();
 	void flush_pgsql_users__from_disk_to_memory();
@@ -782,6 +915,28 @@ class ProxySQL_Admin {
 
 	template <enum SERVER_TYPE pt>
 	int FlushDigestTableToDisk(SQLite3DB *);
+	/**
+	 * @brief Return Top-K query digests directly from Query Processor memory.
+	 *
+	 * This API bypasses runtime-populated `stats.*` tables and is intended for
+	 * callers that need fresh in-memory digest statistics (for example MCP tools).
+	 *
+	 * @tparam pt Protocol selector (`SERVER_TYPE_MYSQL` or `SERVER_TYPE_PGSQL`).
+	 * @param filters Row-level filter predicates.
+	 * @param sort_by Primary metric used for ordering.
+	 * @param limit Requested page size.
+	 * @param offset Requested page offset.
+	 * @param max_window Optional retained window cap; `0` disables this cap.
+	 * @return Aggregated match counters plus paged Top-K rows.
+	 */
+	template <enum SERVER_TYPE pt>
+	query_digest_topk_result_t QueryDigestTopK(
+		const query_digest_filter_opts_t& filters,
+		query_digest_sort_by_t sort_by,
+		uint32_t limit,
+		uint32_t offset,
+		uint32_t max_window
+	);
 
 	bool ProxySQL_Test___Load_MySQL_Whitelist(int *, int *, int, int);
 	void map_test_mysql_firewall_whitelist_rules_cleanup();
@@ -821,11 +976,19 @@ class ProxySQL_Admin {
 	unsigned long long ProxySQL_Test___MySQL_HostGroups_Manager_Balancing_HG5211();
 	bool ProxySQL_Test___CA_Certificate_Load_And_Verify(uint64_t* duration, int cnt, const char* cacert, const char* capath);
 	bool ProxySQL_Test___WatchDog(int type);
+	bool ProxySQL_Test___Verify_QueryDigestTopK(int rounds, int limit_max, int offset_max, int* passed, int* failed);
 #endif
 	template<typename S>
 	friend void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt);
 
 	// FLUSH LOGS
 	void flush_logs();
+
+#ifdef DEBUG
+	// FLUSH STATS
+	void flush_stats();           // Reset all statistics
+	void flush_mysql_stats();     // Reset MySQL statistics only
+	void flush_pgsql_stats();     // Reset PostgreSQL statistics only
+#endif // DEBUG
 };
-#endif /* __CLASS_PROXYSQL_ADMIN_H */
+#endif /* PROXYSQL_ADMIN_H */

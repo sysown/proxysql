@@ -1,4 +1,5 @@
 #include "MySQL_HostGroups_Manager.h"
+#include "ConnectionPoolDecision.h"
 
 #include "MySQL_Data_Stream.h"
 
@@ -45,6 +46,73 @@ void MySrvConnList::drop_all_connections() {
 		MySQL_Connection *conn=(MySQL_Connection *)conns->remove_index_fast(0);
 		delete conn;
 	}
+}
+
+void MySrvConnList::mark_connections_unhealthy() {
+	for (unsigned int i = 0; i < conns_length(); i++) {
+		MySQL_Connection *conn = index(i);
+		conn->healthy=false;
+		conn->reusable=false;
+	}
+}
+
+unsigned int calculate_eviction_count(unsigned int conns_free, unsigned int conns_used, unsigned int max_connections) {
+	if (conns_free < 1) return 0;
+	unsigned int pct_max_connections = (3 * max_connections) / 4;
+	unsigned int total = conns_free + conns_used;
+	if (pct_max_connections <= total) {
+		unsigned int count = total - pct_max_connections;
+		return (count == 0) ? 1 : count;
+	}
+	return 0;
+}
+
+bool should_throttle_connection_creation(unsigned int new_connections_now, unsigned int throttle_connections_per_sec) {
+	return new_connections_now > throttle_connections_per_sec;
+}
+
+ConnectionPoolDecision evaluate_pool_state(
+	unsigned int conns_free,
+	unsigned int conns_used,
+	unsigned int max_connections,
+	unsigned int connection_quality_level,
+	bool connection_warming,
+	int free_connections_pct
+) {
+	ConnectionPoolDecision decision = { false, false, 0, false };
+
+	// Check connection warming threshold first
+	if (connection_warming) {
+		unsigned int total = conns_free + conns_used;
+		unsigned int expected_warm = (unsigned int)(free_connections_pct) * max_connections / 100;
+		if (total < expected_warm) {
+			decision.needs_warming = true;
+			decision.create_new_connection = true;
+			return decision;
+		}
+	}
+
+	switch (connection_quality_level) {
+		case 0: // no good match — must create new, possibly after evicting stale free connections
+			decision.create_new_connection = true;
+			decision.num_to_evict = calculate_eviction_count(conns_free, conns_used, max_connections);
+			decision.evict_connections = (decision.num_to_evict > 0);
+			break;
+		case 1: // tracked options OK but CHANGE_USER / session reset required — may create new
+			if ((conns_used > conns_free) && (max_connections > (conns_free / 2 + conns_used / 2))) {
+				decision.create_new_connection = true;
+			}
+			break;
+		case 2: // partial match — reuse
+		case 3: // perfect match — reuse
+			decision.create_new_connection = false;
+			break;
+		default:
+			decision.create_new_connection = true;
+			break;
+	}
+
+	return decision;
 }
 
 void MySrvConnList::get_random_MyConn_inner_search(unsigned int start, unsigned int end, unsigned int& conn_found_idx, unsigned int& connection_quality_level, unsigned int& number_of_matching_session_variables, const MySQL_Connection * client_conn) {
@@ -115,10 +183,9 @@ void MySrvConnList::get_random_MyConn_inner_search(unsigned int start, unsigned 
 MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff) {
 	MySQL_Connection * conn=NULL;
 	unsigned int i;
-	unsigned int conn_found_idx;
+	unsigned int conn_found_idx = 0;
 	unsigned int l=conns_length();
 	unsigned int connection_quality_level = 0;
-	bool needs_warming = false;
 	// connection_quality_level:
 	// 0 : not found any good connection, tracked options are not OK
 	// 1 : tracked options are OK , but CHANGE USER is required
@@ -132,25 +199,29 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 		connection_warming = mysrvc->myhgc->attributes.connection_warming;
 		free_connections_pct = mysrvc->myhgc->attributes.free_connections_pct;
 	}
+	unsigned int conns_free = mysrvc->ConnectionsFree->conns_length();
+	unsigned int conns_used = mysrvc->ConnectionsUsed->conns_length();
+	bool needs_warming = false;
 	if (connection_warming == true) {
-		unsigned int total_connections = mysrvc->ConnectionsFree->conns_length()+mysrvc->ConnectionsUsed->conns_length();
-		unsigned int expected_warm_connections = free_connections_pct*mysrvc->max_connections/100;
+		unsigned int total_connections = conns_free + conns_used;
+		unsigned int expected_warm_connections = (unsigned int)free_connections_pct * mysrvc->max_connections / 100;
 		if (total_connections < expected_warm_connections) {
 			needs_warming = true;
 		}
 	}
 	if (l && ff==false && needs_warming==false) {
-		if (l>32768) {
-			i=rand()%l;
-		} else {
-			i=fastrand()%l;
-		}
+		i=rand_fast()%l;
 		if (sess && sess->client_myds && sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {
 			MySQL_Connection * client_conn = sess->client_myds->myconn;
 			get_random_MyConn_inner_search(i, l, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn);
 			if (connection_quality_level !=3 ) { // we didn't find the perfect connection
 				get_random_MyConn_inner_search(0, i, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn);
 			}
+			// Evaluate pool state to determine create-vs-reuse and eviction (warming already handled above)
+			ConnectionPoolDecision decision = evaluate_pool_state(
+				conns_free, conns_used, (unsigned int)mysrvc->max_connections,
+				connection_quality_level, false, 0
+			);
 			// connection_quality_level:
 			// 1 : tracked options are OK , but CHANGE USER is required
 			// 2 : tracked options are OK , CHANGE USER is not required, but some SET statement or INIT_DB needs to be executed
@@ -159,25 +230,14 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 					// we must check if connections need to be freed before
 					// creating a new connection
 					{
-						unsigned int conns_free = mysrvc->ConnectionsFree->conns_length();
-						unsigned int conns_used = mysrvc->ConnectionsUsed->conns_length();
-						unsigned int pct_max_connections = (3 * mysrvc->max_connections) / 4;
-						unsigned int connections_to_free = 0;
+						if (decision.evict_connections) {
+							unsigned int cur_free = conns_free;
+							unsigned int connections_to_free = decision.num_to_evict;
+							while (cur_free && connections_to_free) {
+								MySQL_Connection* c = mysrvc->ConnectionsFree->remove(0);
+								delete c;
 
-						if (conns_free >= 1) {
-							// connection cleanup is triggered when connections exceed 3/4 of the total
-							// allowed max connections, this cleanup ensures that at least *one connection*
-							// will be freed.
-							if (pct_max_connections <= (conns_free + conns_used)) {
-								connections_to_free = (conns_free + conns_used) - pct_max_connections;
-								if (connections_to_free == 0) connections_to_free = 1;
-							}
-
-							while (conns_free && connections_to_free) {
-								MySQL_Connection* conn = mysrvc->ConnectionsFree->remove(0);
-								delete conn;
-
-								conns_free = mysrvc->ConnectionsFree->conns_length();
+								cur_free = mysrvc->ConnectionsFree->conns_length();
 								connections_to_free -= 1;
 							}
 						}
@@ -194,9 +254,7 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 				case 1: //tracked options are OK , but CHANGE USER is required
 					// we may consider creating a new connection
 					{
-					unsigned int conns_free = mysrvc->ConnectionsFree->conns_length();
-					unsigned int conns_used = mysrvc->ConnectionsUsed->conns_length();
-					if ((conns_used > conns_free) && (mysrvc->max_connections > (conns_free/2 + conns_used/2)) ) {
+					if (decision.create_new_connection) {
 						conn = new MySQL_Connection();
 						conn->parent=mysrvc;
 						// if attributes.multiplex == true , STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG is set to false. And vice-versa
@@ -238,7 +296,7 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 			// mysql_hostgroup_attributes takes priority
 			throttle_connections_per_sec_to_hostgroup = _myhgc->attributes.throttle_connections_per_sec;
 		}
-		if (_myhgc->new_connections_now > (unsigned int) throttle_connections_per_sec_to_hostgroup) {
+		if (should_throttle_connection_creation(_myhgc->new_connections_now, throttle_connections_per_sec_to_hostgroup)) {
 			__sync_fetch_and_add(&MyHGM->status.server_connections_delayed, 1);
 			return NULL;
 		} else {
@@ -253,4 +311,3 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 	}
 	return NULL; // never reach here
 }
-

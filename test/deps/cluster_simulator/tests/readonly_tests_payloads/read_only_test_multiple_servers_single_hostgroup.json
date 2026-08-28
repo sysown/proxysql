@@ -1,0 +1,85 @@
+[
+    {
+        "__comment__": "All transitions for multiple servers for single 'mysql_replication_hostgroup' - writer_is_also_reader=1",
+        "cluster_type": "READ_ONLY",
+        "mysql_servers": [
+            { "hostgroup_id": 2271, "hostname": "127.1.1.11", "port": 3306 },
+            { "hostgroup_id": 2271, "hostname": "127.1.1.12", "port": 3306 },
+            { "hostgroup_id": 2271, "hostname": "127.1.1.13", "port": 3306 },
+            { "hostgroup_id": 2272, "hostname": "127.1.1.14", "port": 3306 }
+        ],
+        "mysql_replication_hostgroups": [
+            { "writer_hostgroup": 2271, "reader_hostgroup": 2272, "check_type": "read_only", "comment": "" }
+        ],
+        "mysql_monitor_config": [
+            { "monitor_writer_is_also_reader": 1 }
+        ],
+        "readonly_servers_init_state": [
+            { "hostname": "127.1.1.11", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.12", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.13", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.14", "port": 3306, "read_only": 0 }
+        ],
+        "readonly_servers_new_state": [
+            { "hostname": "127.1.1.11", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.12", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.13", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.14", "port": 3306, "read_only": 0 }
+        ],
+        "proxysql_init_state": [
+            { "hostgroup_id":2271,"hostname":"127.1.1.11","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2271,"hostname":"127.1.1.14","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2272,"hostname":"127.1.1.12","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2272,"hostname":"127.1.1.13","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2272,"hostname":"127.1.1.14","port":3306,"status":"ONLINE" }
+        ],
+        "proxysql_final_state": [
+            { "hostgroup_id":2272,"hostname":"127.1.1.11","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2271,"hostname":"127.1.1.12","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2272,"hostname":"127.1.1.12","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2272,"hostname":"127.1.1.13","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2271,"hostname":"127.1.1.14","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2272,"hostname":"127.1.1.14","port":3306,"status":"ONLINE" }
+        ]
+    },
+    {
+        "__comment__": "All transitions for multiple servers for single 'mysql_replication_hostgroup' - writer_is_also_reader=0",
+        "cluster_type": "READ_ONLY",
+        "mysql_servers": [
+            { "hostgroup_id": 2271, "hostname": "127.1.1.11", "port": 3306 },
+            { "hostgroup_id": 2271, "hostname": "127.1.1.12", "port": 3306 },
+            { "hostgroup_id": 2271, "hostname": "127.1.1.13", "port": 3306 },
+            { "hostgroup_id": 2272, "hostname": "127.1.1.14", "port": 3306 }
+        ],
+        "mysql_replication_hostgroups": [
+            { "writer_hostgroup": 2271, "reader_hostgroup": 2272, "check_type": "read_only", "comment": "" }
+        ],
+        "mysql_monitor_config": [
+            { "monitor_writer_is_also_reader": 0 }
+        ],
+        "readonly_servers_init_state": [
+            { "hostname": "127.1.1.11", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.12", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.13", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.14", "port": 3306, "read_only": 0 }
+        ],
+        "readonly_servers_new_state": [
+            { "hostname": "127.1.1.11", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.12", "port": 3306, "read_only": 0 },
+            { "hostname": "127.1.1.13", "port": 3306, "read_only": 1 },
+            { "hostname": "127.1.1.14", "port": 3306, "read_only": 0 }
+        ],
+        "proxysql_init_state": [
+            { "hostgroup_id":2271,"hostname":"127.1.1.11","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2271,"hostname":"127.1.1.14","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2272,"hostname":"127.1.1.12","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2272,"hostname":"127.1.1.13","port":3306,"status":"ONLINE" }
+        ],
+        "proxysql_final_state": [
+            { "hostgroup_id":2272,"hostname":"127.1.1.11","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2271,"hostname":"127.1.1.12","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2272,"hostname":"127.1.1.13","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2271,"hostname":"127.1.1.14","port":3306,"status":"ONLINE" }
+        ]
+    }
+]

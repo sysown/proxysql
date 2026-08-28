@@ -1,0 +1,208 @@
+name: CI-unit-tests-tsan
+run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
+
+# Builds the mysqlx + plugin-chassis unit tests with WITHTSAN=1 and
+# runs them under ThreadSanitizer to catch race conditions. Closes
+# Phase 2 of issue #5675.
+#
+# Architecture (vs. the earlier closed PR #5720):
+#
+#   The build phase runs INSIDE A DOCKER CONTAINER via
+#   `make ubuntu24-tap` driven by docker-compose.yml's
+#   `ubuntu24_dbg_build` service. This is the same Docker
+#   isolation pattern every other CI-* workflow uses (CI-builds,
+#   CI-mysql84-g1, etc.). Two parallel runs on a shared / self-
+#   hosted runner stay fully isolated — different docker-compose
+#   project namespaces, different volume mounts, different build
+#   trees. No host-direct `apt install` / `make build_deps_debug`
+#   polluting the runner.
+#
+#   The test phase runs the resulting *-t binaries through
+#   `test/infra/control/run-tests-isolated.bash` driving TAP_GROUP
+#   `mysqlx-tsan-g1`. The harness is the same one used locally.
+#
+# Why this PR doesn't restore the CI-builds cache:
+#
+#   The unit-test binaries are deleted from the _test cache before
+#   save (each is ~170 MB statically-linked debug; 52 binaries
+#   would blow the 10 GB per-repo cache quota — see ci-builds.yml
+#   on GH-Actions). Cache-restore-then-run isn't viable until the
+#   cache strategy is reworked (tracked in #5721). For now, we
+#   build fresh each run inside Docker — the cost is ~15 min build
+#   time, the benefit is full multi-tenant isolation without
+#   complicating the cache architecture. The architectural concern
+#   in #5721 was about Docker isolation; that's solved here.
+#
+# Local repro — same harness, same TAP group, same TSAN_OPTIONS:
+#
+#   sudo sysctl -w vm.mmap_rnd_bits=28
+#   WITHTSAN=1 PROXYSQL40=1 make ubuntu24-tap
+#   WORKSPACE=$(pwd) INFRA_ID=dev-$USER TAP_GROUP=mysqlx-tsan-g1 \
+#       test/infra/control/run-tests-isolated.bash
+#
+# Security note: every 'run:' step uses only env-injected values
+# from env: blocks or GitHub-provided env vars — no untrusted
+# user input is interpolated into a shell command.
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: [ CI-trigger ]
+    types: [ completed ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  SHA: ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
+
+jobs:
+  unit-tests-tsan:
+    if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
+    # `write-all` is required so the workflow_run event's GITHUB_TOKEN has
+    # the cache-writable scope (GitHub started enforcing this for workflow_run
+    # in early July 2026). Without it actions/cache/save@v4 fails with
+    # 'cache write denied: token has no writable scopes'.
+    permissions: write-all
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+
+    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
+      id: checks
+      if: always()
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        name: '${{ github.workflow }} / ${{ github.job }}'
+        repo: ${{ github.repository }}
+        sha: ${{ env.SHA }}
+        status: 'in_progress'
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+
+    - name: Checkout repository
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ env.SHA }}
+        fetch-depth: 0
+        lfs: true
+        submodules: 'false'
+
+    - name: Relax ASLR for ThreadSanitizer
+      # TSAN cannot reserve its shadow region on kernels with the default
+      # vm.mmap_rnd_bits=32. Lower it to 28 BEFORE any sanitized binary
+      # is loaded — same constraint as ASAN. Set on the host because
+      # the TSAN runtime that loads inside the Docker container inherits
+      # the host's ASLR setting via the privileged container model.
+      run: sudo sysctl -w vm.mmap_rnd_bits=28
+
+    - name: Build (WITHTSAN=1, PROXYSQL40=1) inside Docker
+      env:
+        WITHTSAN: "1"
+        PROXYSQL40: "1"
+      # `make ubuntu24-tap` invokes docker-compose to spin up the
+      # ubuntu24_dbg_build service, which builds inside the container
+      # with the source tree volume-mounted in. Output binaries land
+      # back on the host filesystem (under test/tap/tests/unit/) via
+      # the same volume mount.
+      #
+      # WITHTSAN=1: enables -fsanitize=thread (auto-forces
+      #             NOJEMALLOC=1 via include/makefiles_vars.mk).
+      # PROXYSQL40=1: enables the chassis tier — required for the
+      #             mysqlx plugin to build at all. The cascade in
+      #             plugins/mysqlx/Makefile implies PROXYSQL31 +
+      #             PROXYSQLFFTO + PROXYSQLTSDB. We deliberately do
+      #             NOT set PROXYSQL40=1: the GenAI/MCP/AI/RAG
+      #             modules aren't on the concurrency-heavy code
+      #             paths TSAN targets and would just add wall-clock.
+      run: |
+        make ubuntu24-tap
+
+    - name: Run mysqlx-tsan-g1 TAP group inside Docker
+      # Run the TSAN-instrumented unit tests INSIDE the same Docker
+      # image used for the build — same source mount at /opt/proxysql,
+      # same toolchain, same libstdc++/libgcc that the binaries linked
+      # against. This is the actual isolation contract: ProxySQL test
+      # execution stays containerised, so two parallel CI runs on a
+      # shared / self-hosted runner can never collide on the host
+      # filesystem (no /opt/proxysql clash, no kernel-namespace
+      # sharing beyond what privileged docker already gives us).
+      #
+      # The build phase wrote the *-t binaries into the bind-mounted
+      # /opt/proxysql/test/tap/tests/unit/ — they're visible from
+      # both inside and outside the container. We re-enter via
+      # `docker compose run --rm` so we don't have to keep the build
+      # container alive between steps; same image, fresh container,
+      # same volume mounts (defined on ubuntu24_dbg_build →
+      # ubuntu24_build → _build).
+      #
+      # No `-p PROJECT` flag: the Makefile's `binaries/proxysql%`
+      # rule writes `-p "${GIT_VERSION/./}"` which *make* expands as
+      # a make variable reference (not bash parameter expansion), so
+      # the project name comes out as the empty string and docker
+      # compose falls back to the directory basename. We rely on the
+      # same default here so we land in the same project namespace.
+      # An earlier follow-up commit attempted to mirror the literal
+      # Makefile expression in bash, which kept a dot in the result
+      # and got rejected by docker compose v2's project-name
+      # validator ("invalid project name '30.8-693-gXXXX': must
+      # consist only of lowercase alphanumeric characters, hyphens,
+      # and underscores").
+      #
+      # SKIP_PROXYSQL=1 short-circuits the daemon + backend checks in
+      # run-tests-isolated.bash, so it just iterates groups.json and
+      # execs each *-t binary in turn — no nested docker, no Python
+      # tester. TSAN_OPTIONS comes from mysqlx-tsan-g1/env.sh.
+      env:
+        TAP_GROUP: mysqlx-tsan-g1
+        INFRA_ID: ci-unit-tests-tsan
+      run: |
+        # Two on-the-fly apt installs: the build image is package-build-
+        # focused, not test-execution-focused, so it ships neither.
+        #   * python3-packaging: run-tests-isolated.bash uses it to
+        #     compare @proxysql_min_version tags from groups.json.
+        #   * libprotobuf-dev: the mysqlx_*-t binaries link dynamically
+        #     against libprotobuf.so.32 (mysqlx plugin's protobuf-3.x
+        #     dependency). The build entrypoint installs it during the
+        #     build phase, but `docker compose run --rm` starts from
+        #     the original image so the runtime lib has to be
+        #     re-installed here.
+        docker compose run --rm \
+          -e WORKSPACE=/opt/proxysql \
+          -e INFRA_ID="${INFRA_ID}" \
+          -e TAP_GROUP="${TAP_GROUP}" \
+          --entrypoint bash \
+          ubuntu24_dbg_build \
+          -lc 'apt-get update -qq \
+               && apt-get install -y --no-install-recommends python3-packaging libprotobuf-dev \
+               && cd /opt/proxysql \
+               && test/infra/control/run-tests-isolated.bash'
+
+    - name: Fix artifact permissions
+      if: ${{ failure() && !cancelled() }}
+      run: |
+        # actions/upload-artifact dies with EACCES when it scandirs
+        # into directories under ci_*_logs/ that were created inside
+        # the docker build container (root-owned). Make everything
+        # readable by the runner user before upload.
+        sudo chmod -R a+rX ci_*_logs/ 2>/dev/null || true
+
+    - name: Archive logs
+      if: ${{ failure() && !cancelled() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: ${{ github.workflow }}-${{ env.SHA }}-logs
+        path: |
+          ci_*_logs/
+
+    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
+      if: always()
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        check_id: ${{ steps.checks.outputs.check_id }}
+        repo: ${{ github.repository }}
+        sha: ${{ env.SHA }}
+        conclusion: ${{ job.status }}
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'

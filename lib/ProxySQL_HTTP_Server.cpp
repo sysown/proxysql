@@ -1,6 +1,7 @@
 #include <iostream>     // std::cout
 #include <algorithm>    // std::sort
 #include <vector>       // std::vector
+#include <random>
 #include "re2/re2.h"
 #include "re2/regexp.h"
 #include "proxysql.h"
@@ -144,7 +145,7 @@ static char *generate_home() {
 		unsigned long long hours = (uptime - days*86400)/3600;
 		unsigned long long mins = (uptime % 3600)/60;
 		unsigned long long secs = uptime % 60;
-		sprintf(buf1,"%llud %02lluh%02llum%02llus", days, hours, mins, secs);
+		snprintf(buf1, sizeof(buf1), "%llud %02lluh%02llum%02llus", days, hours, mins, secs);
 		html.append(buf1);
 	}
 	html.append("<br>\n");
@@ -166,7 +167,7 @@ static char *generate_home() {
 	html.append("<b>Worker threads = </b>");
 	{
 		char buf[16];
-		sprintf(buf,"%u",GloMTH->num_threads);
+		snprintf(buf, sizeof(buf), "%u", GloMTH->num_threads);
 		html.append(buf);
 	}
 	html.append("<br>\n");
@@ -386,7 +387,15 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 		MHD_destroy_response(response);
 		return ret;
 	}
-	account_details_t ad { GloMyAuth->lookup(username, USERNAME_FRONTEND, { false, false, false }) };
+	// The web UI authenticates the 'stats' account, which is populated from
+	// 'admin-stats_credentials' (see add_credentials() in ProxySQL_Admin.cpp).
+	// It must therefore be looked up in the SAME scope those credentials are
+	// added to -- ADMIN_CRED_SCOPE -- not in USERNAME_FRONTEND. On the stable
+	// tier ADMIN_CRED_SCOPE *is* USERNAME_FRONTEND, so this is a no-op there;
+	// under PROXYSQL31 the admin/stats accounts live in USERNAME_ADMIN and a
+	// USERNAME_FRONTEND lookup returns no password, failing every request with
+	// HTTP 401. See #5987.
+	account_details_t ad { GloMyAuth->lookup(username, ADMIN_CRED_SCOPE, { false, false, false }) };
 	{
 		if (
 			(ad.default_hostgroup != STATS_HOSTGROUP)
@@ -436,6 +445,11 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 
 	if (0 != strcmp (method, "GET"))
 		return MHD_NO;              /* unexpected method */
+
+	/* The TSDB dashboard previously served here is now served by the
+	 * REST API server (admin-restapi_port). Serving it here resulted in
+	 * a cross-origin mismatch between the dashboard's port and the
+	 * /api/tsdb/* endpoints, which broke the metric fetch (#5684). */
 
 	if (strcmp(url,"/stats")==0) {
 		valmetric = (char *)MHD_lookup_connection_value (connection, MHD_GET_ARGUMENT_KIND, (char *)"metric");
@@ -855,6 +869,14 @@ ProxySQL_HTTP_Server::ProxySQL_HTTP_Server() {
 	variables.proxysql_latest_version = NULL;
 }
 
+namespace {
+char random_hex_char() {
+	thread_local std::mt19937 rng(std::random_device{}());
+	thread_local std::uniform_int_distribution<int> dist(0, 15);
+	return "0123456789abcdef"[dist(rng)];
+}
+} // namespace
+
 ProxySQL_HTTP_Server::~ProxySQL_HTTP_Server() {
 	if (variables.proxysql_latest_version) {
 		free(variables.proxysql_latest_version);
@@ -863,7 +885,6 @@ ProxySQL_HTTP_Server::~ProxySQL_HTTP_Server() {
 }
 
 string ProxySQL_HTTP_Server::generate_chart(char *chart_name, char *ts, int nsets, char **dname, char **llabel, char **values) {
-	char *h=(char *)"0123456789abcdef";
 	string ret{};
 	int i;
 	ret.append("<script>\n");
@@ -892,7 +913,7 @@ string ProxySQL_HTTP_Server::generate_chart(char *chart_name, char *ts, int nset
 		ret.append("        label: \""); ret.append(llabel[i]); ret.append("\",\n");
 		int j;
 		char pal[7];
-		for (j=0; j<6; j++) { pal[j]=h[rand()%16]; }
+		for (j=0; j<6; j++) { pal[j]=random_hex_char(); }
 		pal[6]='\0';
 		ret.append("        borderColor: \"#"); ret.append(pal); ret.append("\",\n");
 		ret.append("        fill: false\n");

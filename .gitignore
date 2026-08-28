@@ -1,9 +1,18 @@
 # Internal Repos
 priv-infra/
 
+# Git worktrees
+.worktrees/
+
+# Lint output (do not commit)
+/lint/
+
 # direnv
 .envrc.local
 
+# bear/clangd
+compile_commands.json
+compile_commands.events.json
 
 # Intelij
 .idea/
@@ -63,17 +72,30 @@ oldcode/tests/connect_speed
 #pidfile and errorlog
 *.pid
 *.log
+*.log.*
 *.err
+
+# generated test pems
+test/tap/tests/*.pem
+test/tap/tests/test_cluster_sync_config/proxysql*.pem
+test/tap/pgsql_user_sync/
 
 #binary
 src/proxysql
-src/*pem
+src/*.pem
+test/deps/cluster_simulator/cluster_simulator
 binaries/*deb
 binaries/*rpm
 tools/eventslog_reader_sample
 tools/eventlog_reader_to_json
 src/proxysql-save.cfg
 src/*log*
+
+#test artifacts
+ci_infra_logs/
+src/coverage_reports/
+test/tap/tap/*.mri
+test/tap/tests/test_cluster_sync_config/test_cluster_sync_withmonitor/cluster_sync_node_stderr.txt
 
 proxysql-2.0.0/
 docker/images/proxysql/rhel-compliant/rpmmacros
@@ -83,6 +105,8 @@ core
 
 #config
 proxysql.cnf*
+# ...but keep the vendored repl-suite config (global rule above would drop it):
+!test/repl/proxysql_repl_tests/conf/proxysql/proxysql.cnf
 proxysql.db*
 
 jeprof*heap
@@ -119,11 +143,14 @@ deps/coredumper/coredumper-*/
 deps/postgresql/postgresql-*/
 deps/postgresql/postgres-*/
 deps/libusual/libusual-*/
+deps/zstd/zstd-*/
+deps/parsersql/parsersql-*/
 
 test/.vagrant
 .DS_Store
 proxysql-tests.ini
 test/sqlite_history_convert
+test/rag/test_rag_schema
 
 #heaptrack
 heaptrack.*
@@ -145,9 +172,12 @@ test/deps/mysql-connector-c-8.4.0/mysql-8.4.*/
 test/deps/mysql-connector-c-8.4.0/mysql-8.4.*.tar.gz
 
 #tap tests
-test/tap/tap/cpp-dotenv/cpp-dotenv-*
-test/tap/tap/cpp-dotenv/static/cpp-dotenv-*
-test/tap/tap/cpp-dotenv/dynamic/cpp-dotenv-*
+# cpp-dotenv vendored release tarball must be tracked
+!test/tap/tap/cpp-dotenv/cpp-dotenv-*.tar.gz
+# but ignore the extracted source trees
+test/tap/tap/cpp-dotenv/cpp-dotenv-*/
+test/tap/tap/cpp-dotenv/static/cpp-dotenv-*/
+test/tap/tap/cpp-dotenv/dynamic/cpp-dotenv-*/
 *-t
 test/tap/tests/galera_1_timeout_count
 test/tap/tests/galera_2_timeout_no_count
@@ -169,8 +199,46 @@ pkgroot/
 
 #files generated during CI run
 proxysql-save.cfg
+.cluster-simulator-binaries
+.cluster-simulator-runtime/
 test/tap/tests/test_cluster_sync_config/cluster_sync_node_stderr.txt
 test/tap/tests/test_cluster_sync_config/proxysql*.pem
 test/tap/tests/test_cluster_sync_config/test_cluster_sync.cnf
 .aider*
 GEMINI.md
+.gemini
+.worktrees/
+
+# generated MySQL parser artifacts
+lib/MySQL_Lexer.yy.c
+lib/MySQL_Parser.output
+lib/MySQL_Parser.tab.c
+lib/MySQL_Parser.tab.h
+
+# Database discovery output files
+discovery_*.md
+database_discovery_report.md
+scripts/mcp/DiscoveryAgent/ClaudeCode_Headless/tmp/
+test/tap/tests/test_cluster_sync_config/test_cluster_sync_nomonitor/cluster_sync_node_stderr.txt
+test/tap/tests/test_cluster_sync_config/test_cluster_sync_withmonitor/cluster_sync_node_stderr.txt
+
+# unit test binaries (built but not tracked)
+test/tap/tests/unit/*-t
+
+# test-scripts runtime dependencies (created by run-tests-isolated.bash)
+test-scripts/deps/
+.worktrees/
+test/tap/tests/parsersql_digest_test
+test/tap/tests/setparser_parsersql_test
+deps/protobuf/protobuf-*/
+
+# pg-compat report output (run-pg-compat.bash's default host bind-mount
+# target; see test/pg-compat/README.md "Report output")
+/pg-compat-reports/
+
+# Stray build artifact: run-tests-isolated.bash creates the real mysqlbinlog
+# symlink at runtime under test-scripts/deps/; never commit this one (it was
+# accidentally committed once with an absolute /home path).
+test/scripts/deps/mysqlbinlog
+
+# Temporary ASAN CI end-to-end validation trigger; this branch will not merge.

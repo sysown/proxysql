@@ -149,10 +149,10 @@ graph LR
 ```
 
 **Available Test Groups**:
-- `default-g1` through `default-g4`: Standard configuration
+- `legacy-g1` through `legacy-g4`: Standard configuration
 - `mysql-multiplexing=false-g1-g4`: Multiplexing disabled
 - `mysql-query_digests=0-g1-g4`: Query digest disabled
-- `mysql84-g1`, `mysql90-g1`, `mysql91-g1`: Version-specific
+- `mysql84-g1`, `mysql90-g1`, `mysql95-g1`: Version-specific
 - `mysql84-gr-g1`, `mysql90-gr-g1`: Group Replication
 
 ## Third-Party Integration Testing

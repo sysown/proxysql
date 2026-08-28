@@ -622,14 +622,32 @@ int main(int, char**) {
 	vector<svr_addr> s_server_test;
 	vector<svr_addr> m_server_test;
 
-	const string docker_mode = getenv("DOCKER_MODE");
-	if (docker_mode.find("dns") == docker_mode.size() - 3) {
-		s_server_test.assign({ { "mysql1.infra-mysql57", 3306 } });
-		m_server_test.assign({
-			{ "mysql1.infra-mysql57", 3306 },
-			{ "mysql2.infra-mysql57", 3306 },
-			{ "mysql3.infra-mysql57", 3306 }
-		});
+	// Use TAP_MYSQLHOST/TAP_MYSQLPORT for the primary server, and query
+	// ProxySQL's runtime_mysql_servers for the full server list. This works
+	// with both old-style (3 hostnames, port 3306) and dbdeployer (1 hostname,
+	// ports 3306/3307/3308) infras.
+	const string docker_mode = getenv("DOCKER_MODE") ? getenv("DOCKER_MODE") : "";
+	if (docker_mode.find("dns") != string::npos) {
+		s_server_test.assign({ { cl.mysql_host, cl.mysql_port } });
+		// Query ProxySQL for all MySQL backend servers
+		MYSQL* admin_conn = mysql_init(NULL);
+		if (admin_conn && mysql_real_connect(admin_conn, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+			if (mysql_query(admin_conn, "SELECT DISTINCT hostname, port FROM runtime_mysql_servers WHERE status='ONLINE' AND comment LIKE '%mysql%' ORDER BY port") == 0) {
+				MYSQL_RES* res = mysql_store_result(admin_conn);
+				if (res && mysql_num_rows(res) > 0) {
+					MYSQL_ROW row;
+					while ((row = mysql_fetch_row(res))) {
+						m_server_test.push_back({ row[0], atoi(row[1]) });
+					}
+				}
+				mysql_free_result(res);
+			}
+			mysql_close(admin_conn);
+		}
+		if (m_server_test.empty()) {
+			// Fallback: use primary only
+			m_server_test.assign({ { cl.mysql_host, cl.mysql_port } });
+		}
 	} else {
 		s_server_test.assign({ { "127.0.0.1", 13306 } });
 		m_server_test.assign({ { "127.0.0.1", 13306 }, { "127.0.0.1", 13307 }, { "127.0.0.1", 13308 } });

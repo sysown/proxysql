@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 #./scripts/export_users.py '{"db":{"user":"root", "password":"a", "port":"3306", "host":"127.0.0.1"},"admin":{"user":"admin","password":"admin","port":"6032","host":"127.0.0.1"}}'
 #

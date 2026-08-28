@@ -1,5 +1,6 @@
 #include "proxysql.h"
 #include "cpp.h"
+#include <string_view>
 
 #ifndef SPOOKYV2
 #include "SpookyV2.h"
@@ -21,41 +22,38 @@ const int PS_GLOBAL_STATUS_FIELD_NUM = 9;
 static uint64_t stmt_compute_hash(char *user,
                                   char *schema, char *query,
                                   unsigned int query_length) {
-	int l = 0;
-	l += strlen(user);
-	l += strlen(schema);
+	size_t user_len = user ? std::string_view(user).size() : 0;
+	size_t schema_len = schema ? std::string_view(schema).size() : 0;
 // two random seperators
 #define _COMPUTE_HASH_DEL1_ "-ujhtgf76y576574fhYTRDFwdt-"
 #define _COMPUTE_HASH_DEL2_ "-8k7jrhtrgJHRgrefgreRFewg6-"
-	l += strlen(_COMPUTE_HASH_DEL1_);
-	l += strlen(_COMPUTE_HASH_DEL2_);
-	l += query_length;
-	char *buf = (char *)malloc(l);
-	l = 0;
+	size_t delimiter1_len = strlen(_COMPUTE_HASH_DEL1_);
+	size_t delimiter2_len = strlen(_COMPUTE_HASH_DEL2_);
+	size_t hash_input_length = user_len + schema_len + delimiter1_len + delimiter2_len + query_length;
+
+	std::string hash_input;
+	hash_input.reserve(hash_input_length);
 
 	// write user
-	strcpy(buf + l, user);
-	l += strlen(user);
+	if (user) {
+		hash_input.append(user, user_len);
+	}
 
 	// write delimiter1
-	strcpy(buf + l, _COMPUTE_HASH_DEL1_);
-	l += strlen(_COMPUTE_HASH_DEL1_);
+	hash_input.append(_COMPUTE_HASH_DEL1_);
 
 	// write schema
-	strcpy(buf + l, schema);
-	l += strlen(schema);
+	if (schema) {
+		hash_input.append(schema, schema_len);
+	}
 
 	// write delimiter2
-	strcpy(buf + l, _COMPUTE_HASH_DEL2_);
-	l += strlen(_COMPUTE_HASH_DEL2_);
+	hash_input.append(_COMPUTE_HASH_DEL2_);
 
 	// write query
-	memcpy(buf + l, query, query_length);
-	l += query_length;
+	hash_input.append(query, query_length);
 
-	uint64_t hash = SpookyHash::Hash64(buf, l, 0);
-	free(buf);
-	return hash;
+	return SpookyHash::Hash64(hash_input.data(), hash_input.size(), 0);
 }
 
 void MySQL_STMT_Global_info::compute_hash() {
@@ -794,10 +792,31 @@ uint64_t MySQL_STMTs_local_v14::find_global_stmt_id_from_client(uint32_t client_
 	return ret;
 }
 
+void MySQL_STMTs_local_v14::set_client_min_gtid(uint32_t client_stmt_id, const char* min_gtid) {
+	if (min_gtid && min_gtid[0] != '\0') {
+		client_stmt_to_min_gtid[client_stmt_id] = min_gtid;
+	} else {
+		client_stmt_to_min_gtid.erase(client_stmt_id);
+	}
+}
+
+const char* MySQL_STMTs_local_v14::find_client_min_gtid(uint32_t client_stmt_id) const {
+	auto s = client_stmt_to_min_gtid.find(client_stmt_id);
+	if (s != client_stmt_to_min_gtid.end()) {
+		return s->second.c_str();
+	}
+	return NULL;
+}
+
+void MySQL_STMTs_local_v14::erase_client_min_gtid(uint32_t client_stmt_id) {
+	client_stmt_to_min_gtid.erase(client_stmt_id);
+}
+
 bool MySQL_STMTs_local_v14::client_close(uint32_t client_statement_id) {
 	auto s = client_stmt_to_global_ids.find(client_statement_id);
 	if (s != client_stmt_to_global_ids.end()) {  // found
 		uint64_t global_stmt_id = s->second;
+		erase_client_min_gtid(client_statement_id);
 		client_stmt_to_global_ids.erase(s);
 		GloMyStmt->ref_count_client(global_stmt_id, -1);
 		//auto s2 = global_stmt_to_client_ids.find(global_stmt_id);
@@ -985,25 +1004,25 @@ class PS_global_stats {
 	char **get_row() {
 		char buf[128];
 		char **pta=(char **)malloc(sizeof(char *)*PS_GLOBAL_STATUS_FIELD_NUM);
-		sprintf(buf,"%lu",statement_id);
+		snprintf(buf, sizeof(buf), "%lu",statement_id);
 		pta[0]=strdup(buf);
 		assert(schemaname);
 		pta[1]=strdup(schemaname);
 		assert(username);
 		pta[2]=strdup(username);
 
-		sprintf(buf,"0x%016llX", (long long unsigned int)digest);
+		snprintf(buf, sizeof(buf), "0x%016llX", (long long unsigned int)digest);
 		pta[3]=strdup(buf);
 
 		assert(query);
 		pta[4]=strdup(query);
-		sprintf(buf,"%llu",ref_count_client);
+		snprintf(buf, sizeof(buf), "%llu",ref_count_client);
 		pta[5]=strdup(buf);
-		sprintf(buf,"%llu",ref_count_server);
+		snprintf(buf, sizeof(buf), "%llu",ref_count_server);
 		pta[6]=strdup(buf);
-		sprintf(buf,"%lu",num_columns);
+		snprintf(buf, sizeof(buf), "%lu",num_columns);
 		pta[7]=strdup(buf);
-		sprintf(buf,"%lu",num_params);
+		snprintf(buf, sizeof(buf), "%lu",num_params);
 		pta[8]=strdup(buf);
 
 		return pta;

@@ -151,7 +151,7 @@ void run_stats_digest_query(MYSQL* proxy_admin) {
 	const int num_queries = 3;
 	MYSQL_RES *res;
 
-	for (int i; i < num_queries; i++) {
+	for (int i = 0; i < num_queries; i++) {
 		diag("Running: %s", count_digest_stats_query);
 		timer stopwatch;
 		int err = mysql_query(proxy_admin, count_digest_stats_query);
@@ -178,7 +178,7 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	int nplan = (1 + DUMMY_QUERIES.size() * 5); // always specify the number of tests that are going to be performed
+	int nplan = (1 + static_cast<int>(DUMMY_QUERIES.size()) * 5); // always specify the number of tests that are going to be performed
 	plan(nplan);
 
 	MYSQL *proxy_admin = mysql_init(NULL);
@@ -315,7 +315,10 @@ int main(int argc, char** argv) {
 		);
 	}
 
-	if (tests_last() == nplan && tests_failed == 0) {
+	// Missing parentheses on tests_failed turned this into a comparison
+	// of the function's address against 0. The address is never NULL so
+	// the second operand was always false and the TRUNCATE was never run.
+	if (tests_last() == nplan && tests_failed() == 0) {
 		string q = "TRUNCATE TABLE stats.stats_mysql_query_digest";
 		diag("Running %s", q.c_str());
 		MYSQL_QUERY(proxy_admin, q.c_str());

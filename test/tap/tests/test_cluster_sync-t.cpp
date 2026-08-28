@@ -62,6 +62,9 @@
  */
 
 #include <unistd.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/wait.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <time.h>
@@ -84,6 +87,7 @@
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
+#include "noise_utils.h"
 
 #define MYSQL_QUERY__(mysql, query) \
 	do { \
@@ -104,6 +108,24 @@ using std::function;
 const uint32_t SYNC_TIMEOUT = 10;
 const uint32_t CONNECT_TIMEOUT = 10;
 const uint32_t R_PORT = 16062;
+// The replica ProxySQL is spawned locally inside the test-runner container.
+// Use 127.0.0.1 to connect to it, not cl.host (which may point to a different container).
+const char* R_HOST = "127.0.0.1";
+
+// Hostname visible to other containers on the Docker network.
+// Used when registering the replica in proxysql_servers on the primary so the
+// primary's cluster monitor can reach the replica.  Falls back to R_HOST when
+// not running in a container (e.g. bare-metal testing).
+const char* get_cluster_visible_host() {
+	// Detect hostname from env or from gethostname() — the test-runner container
+	// has --hostname set by the Unified CI infra.
+	static char buf[256] = {};
+	if (buf[0]) return buf;
+	if (gethostname(buf, sizeof(buf)) != 0) {
+		snprintf(buf, sizeof(buf), "%s", R_HOST);
+	}
+	return buf;
+}
 
 int setup_config_file(const CommandLine& cl) {
 	const std::string t_fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync-t.cnf";
@@ -216,10 +238,29 @@ int check_mysql_servers_sync(
 	uint64_t wait = std::stol(monitor_read_only_interval) / 1000 + std::stol(monitor_read_only_timeout) / 1000;
 	sleep(wait*2);
 
-	std::string print_master_mysql_servers_hostgroups = "";
-	string_format(t_debug_query, print_master_mysql_servers_hostgroups, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_mysql_servers");
-	std::string print_replica_mysql_servers_hostgroups = "";
-	string_format(t_debug_query, print_replica_mysql_servers_hostgroups, "radmin", "radmin", cl.host, R_PORT, "SELECT * FROM mysql_servers");
+	auto dump_mysql_servers = [](MYSQL* conn, const char* label) {
+		if (mysql_query(conn, "SELECT hostgroup_id, hostname, port, status, comment FROM runtime_mysql_servers")) return;
+		MYSQL_RES* res = mysql_store_result(conn);
+		if (!res) return;
+		diag("--- %s: runtime_mysql_servers ---", label);
+		MYSQL_ROW row;
+		while ((row = mysql_fetch_row(res))) {
+			diag("HG: %s, Host: %s:%s, Status: %s, Comment: %s", 
+				 row[0] ? row[0] : "NULL", row[1] ? row[1] : "NULL", 
+				 row[2] ? row[2] : "NULL", row[3] ? row[3] : "NULL", 
+				 row[4] ? row[4] : "NULL");
+		}
+		mysql_free_result(res);
+	};
+
+	dump_mysql_servers(proxy_admin, "Master");
+	
+	// Create temporary connection to replica for debugging
+	MYSQL* replica_admin = mysql_init(NULL);
+	if (mysql_real_connect(replica_admin, R_HOST, cl.admin_username, cl.admin_password, NULL, R_PORT, NULL, 0)) {
+		dump_mysql_servers(replica_admin, "Replica");
+		mysql_close(replica_admin);
+	}
 
 	// Configure 'mysql_servers' and check sync with NULL comments
 	const char* t_insert_mysql_servers =
@@ -304,8 +345,8 @@ int check_mysql_servers_sync(
 	}
 	MYSQL_QUERY(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
-	std::cout << "MASTER TABLE BEFORE SYNC:" << std::endl;
-	system(print_master_mysql_servers_hostgroups.c_str());
+	diag("MASTER TABLE BEFORE SYNC:");
+	dump_mysql_servers(proxy_admin, "Master");
 
 	// SYNCH CHECK
 
@@ -337,8 +378,8 @@ int check_mysql_servers_sync(
 		}
 	}
 
-	std::cout << "REPLICA TABLE AFTER SYNC:" << std::endl;
-	system(print_replica_mysql_servers_hostgroups.c_str());
+	diag("REPLICA TABLE AFTER SYNC:");
+	dump_mysql_servers(r_proxy_admin, "Replica");
 	ok(not_synced_query == false, "'mysql_servers' with NULL comments should be synced.");
 
 	// TEARDOWN CONFIG
@@ -525,7 +566,19 @@ int wait_for_node_sync(MYSQL* admin, const vector<string> queries, uint32_t time
 
 			mysql_free_result(myres);
 
-			if (row_value == 0) {
+			// <= 0 rather than == 0: "== 0" only flagged "row present but zero",
+			// which missed the "row absent" case (row_value stays at its -1
+			// default when mysql_fetch_row returns NULL). For the common
+			// 'SELECT LENGTH(checksum) FROM stats_proxysql_servers_checksums
+			// WHERE hostname=... AND port=... AND name=...' predicate the row
+			// does not yet exist at the moment a freshly-spawned replica is
+			// polled — so the loop was exiting as "synced" before the replica
+			// had recorded a checksum for its peer, after which the caller's
+			// fetch_remote_checksum() correctly returned empty and aborted the
+			// test with "Failed to fetch current checksum". The race is
+			// load-dependent: mysql95-g5 passed because it started minutes
+			// later when concurrent groups had finished.
+			if (row_value <= 0) {
 				not_synced = true;
 				failed_query = query;
 
@@ -630,7 +683,17 @@ int32_t get_checksum_sync_timeout(MYSQL* admin) {
 		return -1;
 	}
 
-	return ((ext_check_intv.val/1000) * ext_sts_freq.val) + 1;
+	// Compute the status-collection period in ms and round up to avoid the
+	// integer-division truncation of the earlier (interval_ms/1000 * freq) + 1
+	// formula (1001ms would collapse to 1s of period). Then enforce a 30s
+	// floor: the +1s slack was too tight under concurrent CI load — a single
+	// missed cycle on legacy-g5 / mysql84-g5 / mysql90-g5 was enough to time
+	// out. The fast path still exits on the first synced poll, so healthy
+	// clusters pay no extra cost.
+	const int64_t period_ms = ext_check_intv.val * ext_sts_freq.val;
+	const int32_t period_s = static_cast<int32_t>((period_ms + 999) / 1000);
+	const int32_t timeout_s = period_s + 5;
+	return timeout_s > 30 ? timeout_s : 30;
 }
 
 int check_module_checksums_sync(
@@ -837,7 +900,15 @@ int check_module_checksums_sync(
 			diag("Enabling sync for module '%s'", module.c_str());
 
 			// NOTE: Redundant, but left as DOC since this should be the value
-			MYSQL_QUERY_T(r_admin, ("SET " + module_sync.checksum_variable + "=true").c_str());
+			/**
+			 * @brief Re-enable synchronization for the module.
+			 *
+			 * Module 'proxysql_servers' is an exception as it lacks an associated 'admin-checksum_*'
+			 * global variable. Attempting to set it would result in an 'Unknown global variable' error.
+			 */
+			if (module != "proxysql_servers") {
+				MYSQL_QUERY_T(r_admin, ("SET " + module_sync.checksum_variable + "=true").c_str());
+			}
 			MYSQL_QUERY_T(r_admin, string {"SET " + module_sync.sync_variable + "=" + std::to_string(3)}.c_str());
 			MYSQL_QUERY_T(r_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
 
@@ -872,40 +943,47 @@ int check_module_checksums_sync(
 	// This is important to avoid race conditions. If this sync is not performed, the primary may detect the
 	// new checksum in the replica confusing this with the previous check.
 	{
-		const char prim_repl_sync_t[] {
+		// Both assertions originally formatted the same template with the same
+		// args (conn_opts = primary), so "own" and "in the replica" polled the
+		// identical query. Distinguish them: the replica-check filters on
+		// r_admin, the own-check filters on admin (== conn_opts in this call).
+		const char prim_chksm_sync_t[] {
 			"SELECT count(*) FROM stats_proxysql_servers_checksums WHERE "
 				"hostname='%s' AND port='%d' AND name='%s' AND checksum='%s'"
 		};
 		cfmt_t wait_remote_chksm_syn {
-			cstr_format( prim_repl_sync_t,
-				conn_opts.host.c_str(),
-				conn_opts.port,
+			cstr_format( prim_chksm_sync_t,
+				r_admin->host,
+				r_admin->port,
 				module.c_str(),
 				ext_checksum.str.c_str()
 			)
 		};
-		const char prim_own_sync_t[] {
-			"SELECT count(*) FROM stats_proxysql_servers_checksums WHERE "
-				"hostname='%s' AND port='%d' AND name='%s' AND checksum='%s'"
-		};
 		cfmt_t wait_own_chksm_sync {
-			cstr_format(
-				prim_repl_sync_t,
-				conn_opts.host.c_str(),
-				conn_opts.port,
+			cstr_format( prim_chksm_sync_t,
+				admin->host,
+				admin->port,
 				module.c_str(),
 				ext_checksum.str.c_str()
 			)
 		};
 
 		int sync_res = wait_for_node_sync(admin, { wait_remote_chksm_syn.str }, CHECKSUM_SYNC_TIMEOUT);
-		ok(
-			sync_res == 0,
-			"Primary(%s:%d) has detected the new checksum '%s' in the replica(%s:%d)",
-			admin->host, admin->port, ext_checksum.str.c_str(), r_admin->host, r_admin->port
-		);
+		if (module == "admin_variables" && diffs_sync == 0) {
+			ok(
+				sync_res == 1,
+				"Primary(%s:%d) has not detected disabled admin_variables checksum '%s' in the replica(%s:%d)",
+				admin->host, admin->port, ext_checksum.str.c_str(), r_admin->host, r_admin->port
+			);
+		} else {
+			ok(
+				sync_res == 0,
+				"Primary(%s:%d) has detected the new checksum '%s' in the replica(%s:%d)",
+				admin->host, admin->port, ext_checksum.str.c_str(), r_admin->host, r_admin->port
+			);
+		}
 
-		sync_res = wait_for_node_sync(admin, { wait_remote_chksm_syn.str }, CHECKSUM_SYNC_TIMEOUT);
+		sync_res = wait_for_node_sync(admin, { wait_own_chksm_sync.str }, CHECKSUM_SYNC_TIMEOUT);
 		ok(
 			sync_res == 0,
 			"Primary(%s:%d) has detected its own new checksum '%s'",
@@ -1110,6 +1188,10 @@ int main(int, char**) {
 		return EXIT_FAILURE;
 	}
 
+	spawn_internal_noise(cl, internal_noise_admin_pinger);
+	spawn_internal_noise(cl, internal_noise_prometheus_poller);
+	spawn_internal_noise(cl, internal_noise_random_stats_poller);
+
 	const size_t dis_mod_checks = 7;
 	const size_t ena_mod_checks = 5;
 	const size_t sync_pls = module_sync_payloads.size();
@@ -1134,7 +1216,8 @@ int main(int, char**) {
 		// Sync tests by values
 		16 +
 		// Module checkums tests; enabled and disabled checksums
-		check_modules_checksums_sync__tests
+		check_modules_checksums_sync__tests +
+		(cl.use_noise ? 3 : 0)
 	);
 
 	const std::string fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync.cnf";
@@ -1170,8 +1253,20 @@ int main(int, char**) {
 	MYSQL_QUERY(proxy_admin, "CREATE TABLE proxysql_servers_sync_test_backup_2687 AS SELECT * FROM proxysql_servers");
 
 	// 2. Remove primary from Core nodes
-	MYSQL_QUERY(proxy_admin, "DELETE FROM proxysql_servers WHERE hostname=='127.0.0.1' AND PORT==6032");
-	MYSQL_QUERY(proxy_admin, "DELETE FROM proxysql_servers WHERE hostname=='127.0.0.1' AND PORT==16062");
+	// CI-isolated: Use cl.host and cl.admin_port instead of hardcoded values
+	std::string delete_primary_query1;
+	string_format(
+		"DELETE FROM proxysql_servers WHERE hostname='%s' AND port=%d",
+		delete_primary_query1, cl.host, cl.admin_port
+	);
+	MYSQL_QUERY(proxy_admin, delete_primary_query1.c_str());
+	// Also remove the secondary node with the same hostname but different port
+	std::string delete_primary_query2;
+	string_format(
+		"DELETE FROM proxysql_servers WHERE hostname='%s' AND port=%d",
+		delete_primary_query2, cl.host, 16062
+	);
+	MYSQL_QUERY(proxy_admin, delete_primary_query2.c_str());
 	MYSQL_QUERY(proxy_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
 
 	pair<int,vector<srv_addr_t>> nodes_fetch { fetch_cluster_nodes(proxy_admin) };
@@ -1192,32 +1287,80 @@ int main(int, char**) {
 	MYSQL_QUERY(proxy_admin, update_proxysql_servers.c_str());
 	MYSQL_QUERY(proxy_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
 
-	// Launch proxysql with cluster config
-	std::thread proxy_replica_th([&save_proxy_stderr, &cl] () {
+	// Launch proxysql with cluster config via fork/exec so we can track the PID
+	std::atomic<pid_t> replica_pid { 0 };
+	std::atomic<bool> replica_exited { false };
+
+	std::thread proxy_replica_th([&save_proxy_stderr, &replica_pid, &replica_exited, &cl] () {
 		const string replica_stderr { string(cl.workdir) + "test_cluster_sync_config/cluster_sync_node_stderr.txt" };
 		const std::string proxysql_db = std::string(cl.workdir) + "test_cluster_sync_config/proxysql.db";
 		const std::string stats_db = std::string(cl.workdir) + "test_cluster_sync_config/proxysql_stats.db";
 		const std::string fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync.cnf";
 
-		std::string proxy_stdout {};
-		std::string proxy_stderr {};
 		const string proxy_binary_path { string { cl.workdir } + "../../../src/proxysql" };
+		diag("Launching replica ProxySQL via fork/exec: `%s -f -M -c %s`", proxy_binary_path.c_str(), fmt_config_file.c_str());
 
-		const string proxy_command {
-			proxy_binary_path + " -f -M -c " + fmt_config_file + " > " + replica_stderr + " 2>&1"
-		};
+		int stderr_fd = open(replica_stderr.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+		if (stderr_fd == -1) {
+			diag("Failed to open replica stderr file '%s': %s", replica_stderr.c_str(), strerror(errno));
+			ok(false, "proxysql cluster node should execute and shutdown nicely. Failed to open stderr file");
+			replica_exited.store(true);
+			return;
+		}
 
-		diag("Launching replica ProxySQL via 'system' with command: `%s`", proxy_command.c_str());
-		int exec_res = system(proxy_command.c_str());
+		pid_t pid = fork();
+		if (pid == 0) {
+			if (dup2(stderr_fd, STDOUT_FILENO) == -1 || dup2(stderr_fd, STDERR_FILENO) == -1) {
+				_exit(errno);
+			}
+			close_all_non_term_fd({});
+			execl(proxy_binary_path.c_str(), proxy_binary_path.c_str(), "-f", "-M", "-c", fmt_config_file.c_str(), nullptr);
+			_exit(errno);
+		}
 
-		ok(exec_res == 0, "proxysql cluster node should execute and shutdown nicely. 'system' result was: %d", exec_res);
+		close(stderr_fd);
+		if (pid == -1) {
+			diag("Failed to fork replica ProxySQL: %s", strerror(errno));
+			ok(false, "proxysql cluster node should execute and shutdown nicely. Failed to fork");
+			replica_exited.store(true);
+			return;
+		}
 
-		// In case of error place in log the reason
+		replica_pid.store(pid);
+
+		int status = 0;
+		pid_t wait_res = 0;
+		do {
+			wait_res = waitpid(pid, &status, 0);
+		} while (wait_res == -1 && errno == EINTR);
+
+		int exec_res = wait_res == pid && WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+		replica_exited.store(true);
+
+		ok(exec_res == 0, "proxysql cluster node should execute and shutdown nicely. Exit status was: %d", exec_res);
+
 		if (exec_res || save_proxy_stderr.load()) {
 			if (exec_res) {
 				diag("LOG: Proxysql cluster node execution failed, logging stderr into 'test_cluster_sync_config/cluster_sync_node_stderr.txt'");
 			} else {
 				diag("LOG: One of the tests failed to pass, logging stderr 'test_cluster_sync_config/cluster_sync_node_stderr.txt'");
+			}
+
+			std::ifstream stderr_stream { replica_stderr };
+			constexpr std::streamoff max_stderr_bytes = 64 * 1024;
+			stderr_stream.seekg(0, std::ios::end);
+			std::streamoff stderr_size = stderr_stream.tellg();
+			if (stderr_size > max_stderr_bytes) {
+				stderr_stream.seekg(stderr_size - max_stderr_bytes);
+				std::string partial_line {};
+				std::getline(stderr_stream, partial_line);
+				diag("REPLICA STDERR: [showing final 64 KiB]");
+			} else {
+				stderr_stream.seekg(0);
+			}
+			std::string stderr_line {};
+			while (std::getline(stderr_stream, stderr_line)) {
+				diag("REPLICA STDERR: %s", stderr_line.c_str());
 			}
 		}
 
@@ -1226,10 +1369,13 @@ int main(int, char**) {
 	});
 
 	// Waiting for proxysql to be ready
+	// Use the cluster-visible hostname so the primary can also reach the replica
+	// via proxysql_servers.  Inside the test-runner container this resolves to
+	// the container's own IP, so the local connection works too.
 	conn_opts_t conn_opts {};
-	conn_opts.host = cl.host;
-	conn_opts.user = "radmin";
-	conn_opts.pass = "radmin";
+	conn_opts.host = get_cluster_visible_host();
+	conn_opts.user = cl.admin_username;
+	conn_opts.pass = cl.admin_password;
 	conn_opts.port = R_PORT;
 
 	MYSQL* r_proxy_admin = wait_for_proxysql(conn_opts, CONNECT_TIMEOUT);
@@ -1278,7 +1424,7 @@ int main(int, char**) {
 		std::string print_master_hostgroup_attributes = "";
 		string_format(t_debug_query, print_master_hostgroup_attributes, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_mysql_hostgroup_attributes");
 		std::string print_replica_hostgroup_attributes = "";
-		string_format(t_debug_query, print_replica_hostgroup_attributes, "radmin", "radmin", cl.host, R_PORT, "SELECT * FROM runtime_mysql_hostgroup_attributes");
+		string_format(t_debug_query, print_replica_hostgroup_attributes, cl.admin_username, cl.admin_password, R_HOST, R_PORT, "SELECT * FROM runtime_mysql_hostgroup_attributes");
 
 		// Configure 'runtime_mysql_hostgroup_attributes' and check sync
 		const char* t_insert_mysql_hostgroup_attributes =
@@ -1405,7 +1551,7 @@ int main(int, char**) {
 		std::string print_master_galera_hostgroups = "";
 		string_format(t_debug_query, print_master_galera_hostgroups, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_mysql_galera_hostgroups");
 		std::string print_replica_galera_hostgroups = "";
-		string_format(t_debug_query, print_replica_galera_hostgroups, "radmin", "radmin", cl.host, R_PORT, "SELECT * FROM runtime_mysql_galera_hostgroups");
+		string_format(t_debug_query, print_replica_galera_hostgroups, cl.admin_username, cl.admin_password, R_HOST, R_PORT, "SELECT * FROM runtime_mysql_galera_hostgroups");
 
 		// Configure 'mysql_galera_hostgroups' and check sync with NULL comments
 		const char* t_insert_mysql_galera_hostgroups =
@@ -1523,7 +1669,7 @@ int main(int, char**) {
 		std::string print_master_galera_hostgroups = "";
 		string_format(t_debug_query, print_master_galera_hostgroups, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_mysql_galera_hostgroups");
 		std::string print_replica_galera_hostgroups = "";
-		string_format(t_debug_query, print_replica_galera_hostgroups, "radmin", "radmin", cl.host, R_PORT, "SELECT * FROM runtime_mysql_galera_hostgroups");
+		string_format(t_debug_query, print_replica_galera_hostgroups, cl.admin_username, cl.admin_password, R_HOST, R_PORT, "SELECT * FROM runtime_mysql_galera_hostgroups");
 
 		// Configure 'mysql_galera_hostgroups' and check sync
 		const char* t_insert_mysql_galera_hostgroups =
@@ -1639,7 +1785,7 @@ int main(int, char**) {
 		std::string print_master_group_replication_hostgroups = "";
 		string_format(t_debug_query, print_master_group_replication_hostgroups, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_mysql_group_replication_hostgroups");
 		std::string print_replica_group_replication_hostgroups = "";
-		string_format(t_debug_query, print_replica_group_replication_hostgroups, "radmin", "radmin", cl.host, R_PORT, "SELECT * FROM runtime_mysql_group_replication_hostgroups");
+		string_format(t_debug_query, print_replica_group_replication_hostgroups, cl.admin_username, cl.admin_password, R_HOST, R_PORT, "SELECT * FROM runtime_mysql_group_replication_hostgroups");
 
 		// Configure 'mysql_group_replication_hostgroups' and check sync
 		const char* t_insert_mysql_group_replication_hostgroups =
@@ -1756,7 +1902,7 @@ int main(int, char**) {
 		std::string print_master_group_replication_hostgroups = "";
 		string_format(t_debug_query, print_master_group_replication_hostgroups, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_mysql_group_replication_hostgroups");
 		std::string print_replica_group_replication_hostgroups = "";
-		string_format(t_debug_query, print_replica_group_replication_hostgroups, "radmin", "radmin", cl.host, R_PORT, "SELECT * FROM runtime_mysql_group_replication_hostgroups");
+		string_format(t_debug_query, print_replica_group_replication_hostgroups, cl.admin_username, cl.admin_password, R_HOST, R_PORT, "SELECT * FROM runtime_mysql_group_replication_hostgroups");
 
 		// Configure 'mysql_group_replication_hostgroups' and check sync
 		const char* t_insert_mysql_group_replication_hostgroups =
@@ -1877,7 +2023,7 @@ int main(int, char**) {
 		);
 		std::string print_replica_proxysql_servers = "";
 		string_format(
-			t_debug_query, print_replica_proxysql_servers, "radmin", "radmin", cl.host, R_PORT,
+			t_debug_query, print_replica_proxysql_servers, cl.admin_username, cl.admin_password, R_HOST, R_PORT,
 			"SELECT * FROM runtime_proxysql_servers"
 		);
 
@@ -1892,7 +2038,7 @@ int main(int, char**) {
 
 		std::vector<std::tuple<const char*,int,int,std::string>> insert_proxysql_servers_values {};
 
-		std::string s_host = "127.0.0.1";
+		char* env_hostname = getenv("HOSTNAME"); std::string s_host = (env_hostname ? env_hostname : "127.0.0.1");
 		uint32_t s_port = 26091;
 		std::string s_base_comment { "invalid_server_" };
 
@@ -1976,7 +2122,7 @@ int main(int, char**) {
 		);
 		std::string print_replica_proxysql_servers = "";
 		string_format(
-			t_debug_query, print_replica_proxysql_servers, "radmin", "radmin", cl.host, R_PORT,
+			t_debug_query, print_replica_proxysql_servers, cl.admin_username, cl.admin_password, R_HOST, R_PORT,
 			"SELECT * FROM runtime_proxysql_servers"
 		);
 
@@ -2027,7 +2173,7 @@ int main(int, char**) {
 		std::string print_master_aws_aurora_hostgroups = "";
 		string_format(t_debug_query, print_master_aws_aurora_hostgroups, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_mysql_aws_aurora_hostgroups");
 		std::string print_replica_aws_aurora_hostgroups = "";
-		string_format(t_debug_query, print_replica_aws_aurora_hostgroups, "radmin", "radmin", cl.host, R_PORT, "SELECT * FROM runtime_mysql_aws_aurora_hostgroups");
+		string_format(t_debug_query, print_replica_aws_aurora_hostgroups, cl.admin_username, cl.admin_password, R_HOST, R_PORT, "SELECT * FROM runtime_mysql_aws_aurora_hostgroups");
 
 		// Configure 'mysql_aws_aurora_hostgroups' and check sync
 		const char* t_insert_mysql_aws_aurora_hostgroups =
@@ -2154,7 +2300,7 @@ int main(int, char**) {
 		std::string print_master_aws_aurora_hostgroups = "";
 		string_format(t_debug_query, print_master_aws_aurora_hostgroups, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_mysql_aws_aurora_hostgroups");
 		std::string print_replica_aws_aurora_hostgroups = "";
-		string_format(t_debug_query, print_replica_aws_aurora_hostgroups, "radmin", "radmin", cl.host, R_PORT, "SELECT * FROM runtime_mysql_aws_aurora_hostgroups");
+		string_format(t_debug_query, print_replica_aws_aurora_hostgroups, cl.admin_username, cl.admin_password, R_HOST, R_PORT, "SELECT * FROM runtime_mysql_aws_aurora_hostgroups");
 
 		// Configure 'mysql_aws_aurora_hostgroups' and check sync
 		const char* t_insert_mysql_aws_aurora_hostgroups =
@@ -2279,7 +2425,7 @@ int main(int, char**) {
 		std::string print_master_mysql_variables = "";
 		string_format(t_debug_query, print_master_mysql_variables, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_global_variables WHERE variable_name LIKE 'mysql-%'");
 		std::string print_replica_mysql_variables = "";
-		string_format(t_debug_query, print_replica_mysql_variables, "radmin", "radmin", cl.host, R_PORT, "SELECT * FROM runtime_global_variables WHERE variable_name LIKE 'mysql-%'");
+		string_format(t_debug_query, print_replica_mysql_variables, cl.admin_username, cl.admin_password, R_HOST, R_PORT, "SELECT * FROM runtime_global_variables WHERE variable_name LIKE 'mysql-%'");
 
 		// Configure 'mysql_mysql_variables_hostgroups' and check sync
 		const char* t_update_mysql_variables =
@@ -2367,6 +2513,7 @@ int main(int, char**) {
 			std::make_tuple("mysql-keep_multiplexing_variables"                            , "tx_isolation,version"       ),
 			std::make_tuple("mysql-kill_backend_connection_when_disconnect"                , "true"                       ),
 			std::make_tuple("mysql-client_session_track_gtid"                              , "true"                       ),
+			std::make_tuple("mysql-update_gtid_from_ok"                                    , "true"                       ),
 			std::make_tuple("mysql-session_idle_show_processlist"                          , "true"                       ),
 			std::make_tuple("mysql-show_processlist_extended"                              , "0"                          ),
 			std::make_tuple("mysql-query_digests"                                          , "true"                       ),
@@ -2484,7 +2631,7 @@ int main(int, char**) {
 		std::string print_master_admin_variables = "";
 		string_format(t_debug_query, print_master_admin_variables, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_global_variables WHERE variable_name LIKE 'admin-%'");
 		std::string print_replica_admin_variables = "";
-		string_format(t_debug_query, print_replica_admin_variables, "radmin", "radmin", cl.host, R_PORT, "SELECT * FROM runtime_global_variables WHERE variable_name LIKE 'admin-%'");
+		string_format(t_debug_query, print_replica_admin_variables, cl.admin_username, cl.admin_password, R_HOST, R_PORT, "SELECT * FROM runtime_global_variables WHERE variable_name LIKE 'admin-%'");
 
 		// Configure 'mysql_admin_variables_hostgroups' and check sync
 		const char* t_update_admin_variables =
@@ -2680,8 +2827,32 @@ cleanup:
 		mysql_options(r_proxy_admin, MYSQL_OPT_CONNECT_TIMEOUT, &mysql_timeout);
 		mysql_options(r_proxy_admin, MYSQL_OPT_READ_TIMEOUT, &mysql_timeout);
 		mysql_options(r_proxy_admin, MYSQL_OPT_WRITE_TIMEOUT, &mysql_timeout);
-		mysql_query(r_proxy_admin, "PROXYSQL SHUTDOWN");
+		int shutdown_rc = mysql_query(r_proxy_admin, "PROXYSQL SHUTDOWN");
+		if (shutdown_rc != 0) {
+			diag("PROXYSQL SHUTDOWN returned %d: %s", shutdown_rc, mysql_error(r_proxy_admin));
+		}
 		mysql_close(r_proxy_admin);
+	}
+
+	// Ensure the replica process is dead before joining the thread. The worker
+	// is the only thread that reaps it; polling waitpid() here would race with it.
+	// If PROXYSQL SHUTDOWN failed or r_proxy_admin was NULL, the process
+	// launched via fork() would block the thread forever.
+	{
+		pid_t pid = replica_pid.load();
+		if (pid > 0) {
+			const int wait_secs = get_env_int("WITHASAN", 0) ? 90 : 5;
+			const uint64_t wait_us = wait_secs * 1000 * 1000ULL;
+			const uint64_t wait_started = get_timestamp_us();
+			while (!replica_exited.load() && get_timestamp_us() - wait_started < wait_us) {
+				usleep(100 * 1000);
+			}
+			if (!replica_exited.load()) {
+				diag("Replica ProxySQL (pid=%d) did not exit within %d seconds after SHUTDOWN, sending SIGKILL", pid, wait_secs);
+				save_proxy_stderr.store(true);
+				kill(pid, SIGKILL);
+			}
+		}
 	}
 
 	proxy_replica_th.join();

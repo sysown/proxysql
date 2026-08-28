@@ -7,6 +7,7 @@ using json = nlohmann::json;
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
 #include "PgSQL_Data_Stream.h"
+#include "PgSQL_ExplicitTxnStateMgr.h"
 
 #define SELECT_DB_USER "select DATABASE(), USER() limit 1"
 #define SELECT_DB_USER_LEN 33
@@ -85,6 +86,9 @@ void Base_Session<S,DS,B,T>::init() {
 		MySQL_Session* mysession = static_cast<S*>(this);
 		mysession->sess_STMTs_meta = new MySQL_STMTs_meta();
 		mysession->SLDH = new StmtLongDataHandler();
+		// GenAI async epoll-fd init removed in Step 4 of the GenAI
+		// plugin carve-out (Base_Session.h GenAI async members are
+		// gone with the GENAI:/LLM: prefix handlers).
 	}
 };
 
@@ -389,9 +393,8 @@ bool Base_Session<S,DS,B,T>::has_any_backend() {
  */
 template<typename S, typename DS, typename B, typename T>
 void Base_Session<S,DS,B,T>::reset_all_backends() {
-	B *mybe;
 	while(mybes->len) {
-		mybe=(B *)mybes->remove_index_fast(0);
+		B *mybe=(B *)mybes->remove_index_fast(0);
 		mybe->reset();
 		delete mybe;
 	}
@@ -508,7 +511,7 @@ void Base_Session<S,DS,B,T>::housekeeping_before_pkts() {
 				DS * myds = mybe->server_myds;
 				if constexpr (std::is_same_v<S, MySQL_Session>) {
 					if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit() == false) {
-						if (mysql_thread___reset_connection_algorithm == 2) {
+						if (mysql_thread___reset_connection_algorithm == 2 && myds->myconn->healthy) {
 							create_new_session_and_reset_connection(myds);
 						} else {
 							myds->destroy_MySQL_Connection_From_Pool(true);
@@ -517,6 +520,11 @@ void Base_Session<S,DS,B,T>::housekeeping_before_pkts() {
 						myds->return_MySQL_Connection_To_Pool();
 					}
 				} else if constexpr (std::is_same_v<S, PgSQL_Session>) {
+					// Reset transaction state before returning connection to pool
+					if (static_cast<PgSQL_Session*>(this)->transaction_state_manager) {
+						static_cast<PgSQL_Session*>(this)->transaction_state_manager->reset_state();
+					}
+
 					if (myds->myconn->is_pipeline_active() == true) {
 						create_new_session_and_reset_connection(myds);
 					} else {

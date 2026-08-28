@@ -1,0 +1,19 @@
+services:
+
+  dbdeployer1:
+    hostname: dbdeployer1.${INFRA}
+    image: proxysql/ci-infra:dbdeployer-mariadb10-galera
+    container_name: ${COMPOSE_PROJECT}-dbdeployer1-1
+    environment:
+      - ROOT_PASSWORD=${ROOT_PASSWORD}
+      - INFRA=${INFRA}
+    networks:
+      backend:
+        aliases:
+          - dbdeployer1.${INFRA}
+          - dbdeployer1.infra-dbdeployer-mariadb10-galera
+
+networks:
+  backend:
+    name: "${INFRA_ID}_backend"
+    external: true

@@ -18,6 +18,7 @@ Files: proxysql /usr/bin/
  systemd/system/proxysql.service /lib/systemd/system/
  tools/proxysql_galera_checker.sh /usr/share/proxysql/tools/
  tools/proxysql_galera_writer.pl /usr/share/proxysql/tools/
+PKG_PLUGIN_FILES_PLACEHOLDER
 Description: High performance MySQL and PostgreSQL proxy
  ProxySQL is a fast, reliable MySQL and PostgreSQL proxy with advanced runtime configuration management (virtually no configuration change requires a restart). 
  .

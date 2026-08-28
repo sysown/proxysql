@@ -1,0 +1,364 @@
+[
+    {
+        "__comment__": [
+            "Cluster with 1 node config, 2 nodes autodiscovered:",
+            " - Cluster starts with only 1 node.",
+            " - Two extra healthy nodes are added to the cluster.",
+            " - Primary should be writer, two extra nodes whould be configured as readers.",
+            "Extra nodes are detected as readers because 'read_only=1' is the default value for new servers",
+            "imposed by the simulator. Simulation is right now constrained to 'single_primary_mode'."
+        ],
+        "cluster_type": "GROUP_REPLICATION",
+        "mysql_servers": [
+            { "hostgroup_id": 2272, "hostname": "127.2.1.1", "port": 3306 }
+        ],
+        "mysql_hostgroup_attributes": [
+            { "hostgroup_id": 2273, "weight": 50, "max_connections": 2000, "use_ssl": 1 }
+        ],
+        "mysql_group_replication_hostgroups": [
+            {
+                "writer_hostgroup": 2272,
+                "reader_hostgroup": 2273,
+                "backup_writer_hostgroup": 2274,
+                "offline_hostgroup": 2271,
+                "active": 1,
+                "max_writers": 1,
+                "writer_is_also_reader": 1,
+                "max_transactions_behind": 0,
+                "comment": ""
+            }
+        ],
+        "mysql_monitor_config": [
+            { "monitor_groupreplication_max_transactions_behind_for_read_only": 1 },
+            { "monitor_groupreplication_max_transactions_behind_count": 3 }
+        ],
+        "grouprep_servers_init_state": [
+            {
+                "hostname": "127.2.1.1",
+                "port": 3306,
+                "viable_candidate": "YES",
+                "read_only": "NO",
+                "transactions_behind": 0,
+                "members": ""
+            }
+        ],
+        "grouprep_servers_new_state": [
+            {
+                "hostname": "127.2.1.1",
+                "port": 3306,
+                "viable_candidate": "YES",
+                "read_only": "NO",
+                "transactions_behind": 0,
+                "members": "127.2.1.1:3306,127.2.1.2:3306,127.2.1.3:3306"
+            }
+        ],
+        "proxysql_init_state": [
+            { "hostgroup_id":2272,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" }
+        ],
+        "proxysql_final_state": [
+            { "hostgroup_id":2272,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.2","port":3306,"status":"ONLINE","weight":50,"max_connections":2000,"use_ssl":1 },
+            { "hostgroup_id":2273,"hostname":"127.2.1.3","port":3306,"status":"ONLINE","weight":50,"max_connections":2000,"use_ssl":1 }
+        ]
+    },
+    {
+        "__comment__": [
+            "Cluster with 1 node config, 2 nodes autodiscovered:",
+            " - Cluster starts with 3 nodes, 2 of them autodiscovered readers (end of first test).",
+            " - Column 'members' becomes empty, since only used for autodiscovery, state is not changed."
+        ],
+        "cluster_type": "GROUP_REPLICATION",
+        "mysql_servers": [
+            { "hostgroup_id": 2272, "hostname": "127.2.1.1", "port": 3306 }
+        ],
+        "mysql_hostgroup_attributes": [
+            { "hostgroup_id": 2273, "weight": 50, "max_connections": 2000, "use_ssl": 1 }
+        ],
+        "mysql_group_replication_hostgroups": [
+            {
+                "writer_hostgroup": 2272,
+                "reader_hostgroup": 2273,
+                "backup_writer_hostgroup": 2274,
+                "offline_hostgroup": 2271,
+                "active": 1,
+                "max_writers": 1,
+                "writer_is_also_reader": 1,
+                "max_transactions_behind": 0,
+                "comment": ""
+            }
+        ],
+        "mysql_monitor_config": [
+            { "monitor_groupreplication_max_transactions_behind_for_read_only": 1 },
+            { "monitor_groupreplication_max_transactions_behind_count": 3 }
+        ],
+        "grouprep_servers_init_state": [
+            {
+                "hostname": "127.2.1.1",
+                "port": 3306,
+                "viable_candidate": "YES",
+                "read_only": "NO",
+                "transactions_behind": 0,
+                "members": "127.2.1.1:3306,127.2.1.2:3306,127.2.1.3:3306"
+            }
+        ],
+        "grouprep_servers_new_state": [
+            {
+                "hostname": "127.2.1.1",
+                "port": 3306,
+                "viable_candidate": "YES",
+                "read_only": "NO",
+                "transactions_behind": 0,
+                "members": ""
+            }
+        ],
+        "proxysql_init_state": [
+            { "hostgroup_id":2272,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.2","port":3306,"status":"ONLINE","weight":50,"max_connections":2000,"use_ssl":1 },
+            { "hostgroup_id":2273,"hostname":"127.2.1.3","port":3306,"status":"ONLINE","weight":50,"max_connections":2000,"use_ssl":1 }
+        ],
+        "proxysql_final_state": [
+            { "hostgroup_id":2272,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.2","port":3306,"status":"ONLINE","weight":50,"max_connections":2000,"use_ssl":1 },
+            { "hostgroup_id":2273,"hostname":"127.2.1.3","port":3306,"status":"ONLINE","weight":50,"max_connections":2000,"use_ssl":1 }
+        ]
+    },
+    {
+        "__comment__": [
+            "Cluster with 1 node config, 2 nodes autodiscovered:",
+            " - Cluster starts with 3 nodes, 2 of them autodiscovered readers (end of first test).",
+            " - The two discovered readers are found to be 'viable_candidate=NO'.",
+            " - Servers should be moved to OFFLINE HARD."
+        ],
+        "cluster_type": "GROUP_REPLICATION",
+        "mysql_servers": [
+            { "hostgroup_id": 2272, "hostname": "127.2.1.1", "port": 3306 }
+        ],
+        "mysql_hostgroup_attributes": [
+            { "hostgroup_id": 2273, "weight": 50, "max_connections": 2000, "use_ssl": 1 }
+        ],
+        "mysql_group_replication_hostgroups": [
+            {
+                "writer_hostgroup": 2272,
+                "reader_hostgroup": 2273,
+                "backup_writer_hostgroup": 2274,
+                "offline_hostgroup": 2271,
+                "active": 1,
+                "max_writers": 1,
+                "writer_is_also_reader": 1,
+                "max_transactions_behind": 0,
+                "comment": ""
+            }
+        ],
+        "mysql_monitor_config": [
+            { "monitor_groupreplication_max_transactions_behind_for_read_only": 1 },
+            { "monitor_groupreplication_max_transactions_behind_count": 3 }
+        ],
+        "grouprep_servers_init_state": [
+            {
+                "hostname": "127.2.1.1",
+                "port": 3306,
+                "viable_candidate": "YES",
+                "read_only": "NO",
+                "transactions_behind": 0,
+                "members": "127.2.1.1:3306,127.2.1.2:3306,127.2.1.3:3306"
+            }
+        ],
+        "grouprep_servers_new_state": [
+            {
+                "hostname": "127.2.1.1",
+                "port": 3306,
+                "viable_candidate": "YES",
+                "read_only": "NO",
+                "transactions_behind": 0,
+                "members": "127.2.1.1:3306,127.2.1.2:3306,127.2.1.3:3306"
+            },
+            {
+                "hostname": "127.2.1.2",
+                "port": 3306,
+                "viable_candidate": "NO",
+                "read_only": "NO",
+                "transactions_behind": 0,
+                "members": "127.2.1.1:3306,127.2.1.2:3306,127.2.1.3:3306"
+            },
+            {
+                "hostname": "127.2.1.3",
+                "port": 3306,
+                "viable_candidate": "NO",
+                "read_only": "NO",
+                "transactions_behind": 0,
+                "members": "127.2.1.1:3306,127.2.1.2:3306,127.2.1.3:3306"
+            }
+        ],
+        "proxysql_init_state": [
+            { "hostgroup_id":2272,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.2","port":3306,"status":"ONLINE","weight":50,"max_connections":2000,"use_ssl":1 },
+            { "hostgroup_id":2273,"hostname":"127.2.1.3","port":3306,"status":"ONLINE","weight":50,"max_connections":2000,"use_ssl":1 }
+        ],
+        "proxysql_final_state": [
+            { "hostgroup_id":2272,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2271,"hostname":"127.2.1.2","port":3306,"status":"ONLINE","weight":50,"max_connections":2000,"use_ssl":1 },
+            { "hostgroup_id":2271,"hostname":"127.2.1.3","port":3306,"status":"ONLINE","weight":50,"max_connections":2000,"use_ssl":1 }
+        ]
+    },
+    {
+        "__comment__": [
+            "Cluster with 1 node config, 3 nodes autodiscovered:",
+            " - Cluster starts with only 1 node.",
+            " - Two extra healthy nodes are added to the cluster.",
+            " - Primary should be writer, two extra nodes whould be configured as readers.",
+            "Extra nodes are detected as readers because 'read_only=1' is the default value for new servers",
+            "imposed by the simulator. Simulation is right now constrained to 'single_primary_mode'."
+        ],
+        "cluster_type": "GROUP_REPLICATION",
+        "mysql_servers": [
+            { "hostgroup_id": 2272, "hostname": "127.2.1.1", "port": 3306 }
+        ],
+        "mysql_hostgroup_attributes": [
+            { "hostgroup_id": 2273, "weight": 60, "max_connections": 500, "use_ssl": 0 }
+        ],
+        "mysql_group_replication_hostgroups": [
+            {
+                "writer_hostgroup": 2272,
+                "reader_hostgroup": 2273,
+                "backup_writer_hostgroup": 2274,
+                "offline_hostgroup": 2271,
+                "active": 1,
+                "max_writers": 1,
+                "writer_is_also_reader": 1,
+                "max_transactions_behind": 0,
+                "comment": ""
+            }
+        ],
+        "mysql_monitor_config": [
+            { "monitor_groupreplication_max_transactions_behind_for_read_only": 1 },
+            { "monitor_groupreplication_max_transactions_behind_count": 3 }
+        ],
+        "grouprep_servers_init_state": [
+            {
+                "hostname": "127.2.1.1",
+                "port": 3306,
+                "viable_candidate": "YES",
+                "read_only": "NO",
+                "transactions_behind": 0,
+                "members": ""
+            }
+        ],
+        "grouprep_servers_new_state": [
+            {
+                "hostname": "127.2.1.1",
+                "port": 3306,
+                "viable_candidate": "YES",
+                "read_only": "NO",
+                "transactions_behind": 0,
+                "members": "127.2.1.1:3306,127.2.1.2:3306,127.2.1.3:3306,127.2.1.4:3306"
+            }
+        ],
+        "proxysql_init_state": [
+            { "hostgroup_id":2272,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" }
+        ],
+        "proxysql_final_state": [
+            { "hostgroup_id":2272,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.2","port":3306,"status":"ONLINE","weight":60,"max_connections":500,"use_ssl":0 },
+            { "hostgroup_id":2273,"hostname":"127.2.1.3","port":3306,"status":"ONLINE","weight":60,"max_connections":500,"use_ssl":0 },
+            { "hostgroup_id":2273,"hostname":"127.2.1.4","port":3306,"status":"ONLINE","weight":60,"max_connections":500,"use_ssl":0 }
+        ]
+    },
+    {
+        "__comment__": [
+            "Cluster with 1 node config, 3 nodes autodiscovered:",
+            " - Cluster starts with 4 nodes, 3 of them autodiscovered readers.",
+            " - Column 'members' becomes empty, since only used for autodiscovery, state is not changed."
+        ],
+        "cluster_type": "GROUP_REPLICATION",
+        "mysql_servers": [
+            { "hostgroup_id": 2272, "hostname": "127.2.1.1", "port": 3306 }
+        ],
+        "mysql_hostgroup_attributes": [
+            { "hostgroup_id": 2273, "weight": 60, "max_connections": 500, "use_ssl": 0 }
+        ],
+        "mysql_group_replication_hostgroups": [
+            {
+                "writer_hostgroup": 2272,
+                "reader_hostgroup": 2273,
+                "backup_writer_hostgroup": 2274,
+                "offline_hostgroup": 2271,
+                "active": 1,
+                "max_writers": 2,
+                "writer_is_also_reader": 1,
+                "max_transactions_behind": 0,
+                "comment": ""
+            }
+        ],
+        "mysql_monitor_config": [
+            { "monitor_groupreplication_max_transactions_behind_for_read_only": 1 },
+            { "monitor_groupreplication_max_transactions_behind_count": 3 }
+        ],
+        "grouprep_servers_init_state": [
+            {
+                "hostname": "127.2.1.1",
+                "port": 3306,
+                "viable_candidate": "YES",
+                "read_only": "NO",
+                "transactions_behind": 0,
+                "members": "127.2.1.1:3306,127.2.1.2:3306,127.2.1.3:3306,127.2.1.4:3306"
+            }
+        ],
+        "grouprep_servers_new_state": [
+            {
+                "hostname": "127.2.1.1",
+                "port": 3306,
+                "viable_candidate": "YES",
+                "read_only": "NO",
+                "transactions_behind": 0,
+                "members": "127.2.1.1:3306,127.2.1.2:3306,127.2.1.3:3306"
+            },
+            {
+                "hostname": "127.2.1.2",
+                "port": 3306,
+                "viable_candidate": "YES",
+                "read_only": "YES",
+                "transactions_behind": 0,
+                "members": "127.2.1.1:3306,127.2.1.2:3306,127.2.1.3:3306"
+            },
+            {
+                "hostname": "127.2.1.3",
+                "port": 3306,
+                "viable_candidate": "YES",
+                "read_only": "YES",
+                "transactions_behind": 0,
+                "members": "127.2.1.1:3306,127.2.1.2:3306,127.2.1.3:3306"
+            },
+            {
+                "hostname": "127.2.1.4",
+                "port": 3306,
+                "viable_candidate": "YES",
+                "read_only": "NO",
+                "transactions_behind": 0,
+                "members": "127.2.1.1:3306,127.2.1.2:3306,127.2.1.3:3306"
+            }
+        ],
+        "proxysql_init_state": [
+            { "hostgroup_id":2272,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.2","port":3306,"status":"ONLINE","weight":60,"max_connections":500,"use_ssl":0 },
+            { "hostgroup_id":2273,"hostname":"127.2.1.3","port":3306,"status":"ONLINE","weight":60,"max_connections":500,"use_ssl":0 },
+            { "hostgroup_id":2273,"hostname":"127.2.1.4","port":3306,"status":"ONLINE","weight":60,"max_connections":500,"use_ssl":0 }
+        ],
+        "proxysql_final_state": [
+            { "hostgroup_id":2272,"hostname":"127.2.1.1","port":3306,"status":"ONLINE","weight":1,"max_connections":1000,"use_ssl":0 },
+            { "hostgroup_id":2272,"hostname":"127.2.1.4","port":3306,"status":"ONLINE","weight":60,"max_connections":500,"use_ssl":0 },
+            { "hostgroup_id":2273,"hostname":"127.2.1.1","port":3306,"status":"ONLINE","weight":1,"max_connections":1000,"use_ssl":0 },
+            { "hostgroup_id":2273,"hostname":"127.2.1.2","port":3306,"status":"ONLINE","weight":60,"max_connections":500,"use_ssl":0 },
+            { "hostgroup_id":2273,"hostname":"127.2.1.3","port":3306,"status":"ONLINE","weight":60,"max_connections":500,"use_ssl":0 },
+            { "hostgroup_id":2273,"hostname":"127.2.1.4","port":3306,"status":"ONLINE","weight":60,"max_connections":500,"use_ssl":0 }
+        ]
+    }
+]

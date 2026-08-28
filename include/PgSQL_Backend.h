@@ -1,5 +1,5 @@
-#ifndef __CLASS_PGSQL_BACKEND_H
-#define __CLASS_PGSQL_BACKEND_H
+#ifndef PROXYSQL_PGSQL_BACKEND_H
+#define PROXYSQL_PGSQL_BACKEND_H
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -22,4 +22,4 @@ class PgSQL_Backend
 	void reset(); //< A method that resets and releases resources associated with this backend instance
 };
 
-#endif /* __CLASS_PGSQLL_BACKEND_H */
+#endif /* PROXYSQL_PGSQL_BACKEND_H */

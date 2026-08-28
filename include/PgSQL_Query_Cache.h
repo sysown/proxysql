@@ -1,5 +1,5 @@
-#ifndef __CLASS_PGSQL_QUERY_CACHE_H
-#define __CLASS_PGSQL_QUERY_CACHE_H
+#ifndef PROXYSQL_PGSQL_QUERY_CACHE_H
+#define PROXYSQL_PGSQL_QUERY_CACHE_H
 
 #include "proxysql.h"
 #include "cpp.h"
@@ -19,4 +19,4 @@ public:
 	//void* purgeHash_thread(void*);
 };
 
-#endif /* __CLASS_PGSQL_QUERY_CACHE_H */
+#endif /* PROXYSQL_PGSQL_QUERY_CACHE_H */

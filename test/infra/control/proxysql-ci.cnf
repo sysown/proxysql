@@ -1,0 +1,24 @@
+admin_variables=
+{
+    admin_credentials="admin:admin;radmin:radmin"
+    mysql_ifaces="0.0.0.0:6032"
+}
+
+mysql_variables=
+{
+    threads=4
+    max_connections=2048
+    interfaces="0.0.0.0:6033"
+    monitor_username="monitor"
+    monitor_password="monitor"
+}
+
+pgsql_variables=
+{
+    interfaces="0.0.0.0:6133"
+}
+
+sqliteserver_variables=
+{
+    mysql_ifaces="0.0.0.0:6030;/tmp/proxysql_sqlite.sock"
+}

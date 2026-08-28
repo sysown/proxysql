@@ -3,13 +3,116 @@
 #include "cpp.h"
 
 #include "ProxySQL_Statistics.hpp"
+#include "MySQL_HostGroups_Manager.h"
+#include "PgSQL_HostGroups_Manager.h"
+
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
 
 //#include "thread.h"
 //#include "wqueue.h"
 
 #include <fcntl.h>
 #include <sys/times.h>
+#include <poll.h>
+#include <algorithm>
+#include <cctype>
+#include <cerrno>
+#include <cmath>
+#include <sstream>
+#include <netdb.h>
+#include <future>
+#include <cassert>
 
+#ifdef PROXYSQLTSDB
+namespace {
+class PthreadMutexGuard {
+public:
+	explicit PthreadMutexGuard(pthread_mutex_t& mutex) : mutex_(mutex) {
+		const int rc = pthread_mutex_lock(&mutex_);
+		assert(rc == 0);
+		(void)rc;
+	}
+	~PthreadMutexGuard() {
+		const int rc = pthread_mutex_unlock(&mutex_);
+		assert(rc == 0);
+		(void)rc;
+	}
+
+	PthreadMutexGuard(const PthreadMutexGuard&) = delete;
+	PthreadMutexGuard& operator=(const PthreadMutexGuard&) = delete;
+
+private:
+	pthread_mutex_t& mutex_;
+};
+
+std::string escape_sql_string_literal(const std::string& value) {
+	std::string escaped;
+	escaped.reserve(value.size() + 8);
+	for (const char c : value) {
+		if (c == '\'') {
+			escaped += "''";
+		} else {
+			escaped += c;
+		}
+	}
+	return escaped;
+}
+
+bool valid_label_key(const std::string& key) {
+	if (key.empty()) {
+		return false;
+	}
+	for (const unsigned char c : key) {
+		if (!(std::isalnum(c) || c == '_' || c == '-' || c == ':')) {
+			return false;
+		}
+	}
+	return true;
+}
+
+std::string format_prometheus_label_double(const double value) {
+	if (std::isnan(value)) {
+		return "nan";
+	}
+	if (std::isinf(value)) {
+		return value > 0 ? "+Inf" : "-Inf";
+	}
+	std::ostringstream oss;
+	oss.setf(std::ios::fmtflags(0), std::ios::floatfield);
+	oss.precision(17);
+	oss << value;
+	return oss.str();
+}
+
+struct probe_target_t {
+	int hg;
+	std::string host;
+	int port;
+};
+
+void append_probe_targets(SQLite3_result* resultset, std::vector<probe_target_t>& targets) {
+	if (!resultset) {
+		return;
+	}
+	for (int i = 0; i < static_cast<int>(resultset->rows_count); i++) {
+		SQLite3_row* row = resultset->rows[i];
+		if (!row || !row->fields[0] || !row->fields[1] || !row->fields[2]) {
+			continue;
+		}
+
+		const int hg = atoi(row->fields[0]);
+		const std::string host = row->fields[1];
+		const int port = atoi(row->fields[2]);
+
+		if (host.empty() || port <= 0 || port > 65535) {
+			continue;
+		}
+		targets.push_back({hg, host, port});
+	}
+}
+} // namespace
+#endif
 #ifdef DEBUG
 #define DEB "_DEBUG"
 #else
@@ -52,15 +155,120 @@ ProxySQL_Statistics::ProxySQL_Statistics() {
 	next_timer_system_memory = 0;
 #endif
 	next_timer_MySQL_Query_Cache = 0;
+#ifdef PROXYSQLTSDB
+	next_timer_tsdb_sampler = 0;
+	next_timer_tsdb_downsample = 0;
+	next_timer_tsdb_monitor = 0;
+	next_timer_tsdb_retention = 0;
+
+	stmt_insert_tsdb_metric = NULL;
+#endif
+	stmt_insert_backend_health = NULL;
+
+#ifdef PROXYSQLTSDB
+	variables.tsdb_enabled = 0;
+	variables.tsdb_sample_interval = 5;
+	variables.tsdb_retention_days = 7;
+	variables.tsdb_monitor_enabled = 0;
+	variables.tsdb_monitor_interval = 10;
+#endif
 }
 
+#ifdef PROXYSQLTSDB
+static const struct {
+    const char *name;
+    int min_val;
+    int max_val;
+} tsdb_variable_meta[] = {
+    {"enabled", 0, 1},
+    {"sample_interval", 1, 3600},
+    {"retention_days", 1, 3650},
+    {"monitor_enabled", 0, 1},
+    {"monitor_interval", 1, 3600},
+    {NULL, 0, 0}
+};
+
+bool ProxySQL_Statistics::set_variable(const char *name, const char *value) {
+	if (name == NULL || value == NULL || value[0] == '\0') return false;
+	char *endptr;
+	errno = 0;
+	long intv = strtol(value, &endptr, 10);
+	if (endptr == value || *endptr != '\0' || errno == ERANGE) return false; // Not a valid integer or out of range
+
+	for (int i=0; tsdb_variable_meta[i].name; i++) {
+		if (!strcasecmp(name, tsdb_variable_meta[i].name)) {
+			if (intv >= tsdb_variable_meta[i].min_val && intv <= tsdb_variable_meta[i].max_val) {
+				if (i == 0) variables.tsdb_enabled = (int)intv;
+				else if (i == 1) variables.tsdb_sample_interval = (int)intv;
+				else if (i == 2) variables.tsdb_retention_days = (int)intv;
+				else if (i == 3) variables.tsdb_monitor_enabled = (int)intv;
+				else if (i == 4) variables.tsdb_monitor_interval = (int)intv;
+				return true;
+			}
+			return false;
+		}
+	}
+	return false;
+}
+
+char *ProxySQL_Statistics::get_variable(const char *name) {
+	if (name == NULL) return NULL;
+	char buf[32];
+	if (!strcasecmp(name, "enabled")) {
+		snprintf(buf, sizeof(buf), "%d", variables.tsdb_enabled);
+		return strdup(buf);
+	} else if (!strcasecmp(name, "sample_interval")) {
+		snprintf(buf, sizeof(buf), "%d", variables.tsdb_sample_interval);
+		return strdup(buf);
+	} else if (!strcasecmp(name, "retention_days")) {
+		snprintf(buf, sizeof(buf), "%d", variables.tsdb_retention_days);
+		return strdup(buf);
+	} else if (!strcasecmp(name, "monitor_enabled")) {
+		snprintf(buf, sizeof(buf), "%d", variables.tsdb_monitor_enabled);
+		return strdup(buf);
+	} else if (!strcasecmp(name, "monitor_interval")) {
+		snprintf(buf, sizeof(buf), "%d", variables.tsdb_monitor_interval);
+		return strdup(buf);
+	}
+	return NULL;
+}
+
+char **ProxySQL_Statistics::get_variables_list() {
+	int count = 0;
+	while (tsdb_variable_meta[count].name) count++;
+	char **list = (char **)malloc(sizeof(char *) * (count + 1));
+	for (int i = 0; i < count; i++) {
+		list[i] = strdup(tsdb_variable_meta[i].name);
+	}
+	list[count] = NULL;
+	return list;
+}
+
+bool ProxySQL_Statistics::has_variable(const char *name) {
+	if (name == NULL) return false;
+	for (int i = 0; tsdb_variable_meta[i].name; i++) {
+		if (!strcasecmp(name, tsdb_variable_meta[i].name)) return true;
+	}
+	return false;
+}
+#endif
+
 ProxySQL_Statistics::~ProxySQL_Statistics() {
+#ifdef PROXYSQLTSDB
+	if (stmt_insert_tsdb_metric) {
+		(*proxy_sqlite3_finalize)(stmt_insert_tsdb_metric);
+	}
+	if (stmt_insert_backend_health) {
+		(*proxy_sqlite3_finalize)(stmt_insert_backend_health);
+	}
+	pthread_mutex_destroy(&tsdb_mutex);
+#endif
 	drop_tables_defs(tables_defs_statsdb_mem);
 	delete tables_defs_statsdb_mem;
 	drop_tables_defs(tables_defs_statsdb_disk);
 	delete tables_defs_statsdb_disk;
 	delete statsdb_mem;
-//	delete statsdb_disk;
+	delete statsdb_disk;
 }
 
 void ProxySQL_Statistics::init() {
@@ -102,6 +310,14 @@ void ProxySQL_Statistics::init() {
 
 
 	insert_into_tables_defs(tables_defs_statsdb_disk,"history_mysql_query_events", STATSDB_SQLITE_TABLE_HISTORY_MYSQL_QUERY_EVENTS);
+	insert_into_tables_defs(tables_defs_statsdb_disk,"history_pgsql_query_events", STATSDB_SQLITE_TABLE_HISTORY_PGSQL_QUERY_EVENTS);
+
+#ifdef PROXYSQLTSDB
+	// TSDB tables
+	insert_into_tables_defs(tables_defs_statsdb_disk,"tsdb_metrics", STATSDB_SQLITE_TABLE_TSDB_METRICS);
+	insert_into_tables_defs(tables_defs_statsdb_disk,"tsdb_metrics_hour", STATSDB_SQLITE_TABLE_TSDB_METRICS_HOUR);
+	insert_into_tables_defs(tables_defs_statsdb_disk,"tsdb_backend_health", STATSDB_SQLITE_TABLE_TSDB_BACKEND_HEALTH);
+#endif
 
 	disk_upgrade_mysql_connections();
 
@@ -123,31 +339,90 @@ void ProxySQL_Statistics::init() {
 
 	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_mysql_query_events_start_time ON history_mysql_query_events(start_time)");
 	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_mysql_query_events_query_digest ON history_mysql_query_events(query_digest)");
+	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_pgsql_query_events_start_time ON history_pgsql_query_events(start_time)");
+	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_pgsql_query_events_query_digest ON history_pgsql_query_events(query_digest)");
+
+#ifdef PROXYSQLTSDB
+	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_tsdb_metrics_metric_time ON tsdb_metrics(metric_name, timestamp)");
+	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_tsdb_metrics_hour_metric_bucket ON tsdb_metrics_hour(metric_name, bucket)");
+	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_tsdb_backend_health_time ON tsdb_backend_health(timestamp)");
+	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_tsdb_backend_health_host_time ON tsdb_backend_health(hostgroup, hostname, port, timestamp)");
+#endif
 }
 
 void ProxySQL_Statistics::disk_upgrade_mysql_connections() {
 	int rci;
-	rci=statsdb_disk->check_table_structure((char *)"mysql_connections",(char *)STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_V1_4);
+	rci=statsdb_disk->check_table_structure("mysql_connections", STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_V1_4);
 	if (rci) {
 		proxy_warning("Detected version v1.4 of table mysql_connections\n");
 		proxy_warning("ONLINE UPGRADE of table mysql_connections in progress\n");
 		statsdb_disk->execute("ALTER TABLE mysql_connections ADD COLUMN GTID_consistent_queries INT NOT NULL DEFAULT 0");
 		proxy_warning("ONLINE UPGRADE of table mysql_connections completed\n");
 	}
-	rci=statsdb_disk->check_table_structure((char *)"mysql_connections_hour",(char *)STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_HOUR_V1_4);
+	rci=statsdb_disk->check_table_structure("mysql_connections_hour", STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_HOUR_V1_4);
 	if (rci) {
 		proxy_warning("Detected version v1.4 of table mysql_connections_hour\n");
 		proxy_warning("ONLINE UPGRADE of table mysql_connections_hour in progress\n");
 		statsdb_disk->execute("ALTER TABLE mysql_connections_hour ADD COLUMN GTID_consistent_queries INT NOT NULL DEFAULT 0");
 		proxy_warning("ONLINE UPGRADE of table mysql_connections_hour completed\n");
 	}
-	rci=statsdb_disk->check_table_structure((char *)"mysql_connections_day",(char *)STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_DAY_V1_4);
+	rci=statsdb_disk->check_table_structure("mysql_connections_day", STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_DAY_V1_4);
 	if (rci) {
 		proxy_warning("Detected version v1.4 of table mysql_connections_day\n");
 		proxy_warning("ONLINE UPGRADE of table mysql_connections_day in progress\n");
 		statsdb_disk->execute("ALTER TABLE mysql_connections_day ADD COLUMN GTID_consistent_queries INT NOT NULL DEFAULT 0");
 		proxy_warning("ONLINE UPGRADE of table mysql_connections_day completed\n");
 	}
+
+	#ifdef PROXYSQLTSDB
+		const char* tsdb_metrics_old =
+				"CREATE TABLE tsdb_metrics (timestamp INT NOT NULL, metric_name TEXT NOT NULL, labels TEXT, value REAL, PRIMARY KEY (timestamp, metric_name)) WITHOUT ROWID";
+		rci = statsdb_disk->check_table_structure("tsdb_metrics", tsdb_metrics_old);
+		if (rci) {
+				proxy_warning("Detected legacy schema for tsdb_metrics\n");
+				if (!statsdb_disk->execute("BEGIN IMMEDIATE")) return;
+				bool success = true;
+				if (!statsdb_disk->execute("ALTER TABLE tsdb_metrics RENAME TO tsdb_metrics_old")) success = false;
+				if (success && !statsdb_disk->execute(STATSDB_SQLITE_TABLE_TSDB_METRICS)) success = false;
+				if (success && !statsdb_disk->execute(
+						"INSERT OR IGNORE INTO tsdb_metrics(timestamp, metric_name, labels, value) "
+						"SELECT timestamp, metric_name, COALESCE(labels,'{}'), value FROM tsdb_metrics_old"
+				)) success = false;
+				if (success && !statsdb_disk->execute("DROP TABLE tsdb_metrics_old")) success = false;
+
+				if (success) {
+					statsdb_disk->execute("COMMIT");
+					proxy_warning("ONLINE UPGRADE of table tsdb_metrics completed\n");
+				} else {
+					statsdb_disk->execute("ROLLBACK");
+					proxy_error("ONLINE UPGRADE of table tsdb_metrics failed\n");
+				}
+		}
+
+		const char* tsdb_metrics_hour_old =
+				"CREATE TABLE tsdb_metrics_hour (bucket INT NOT NULL, metric_name TEXT NOT NULL, labels TEXT, avg_value REAL, max_value REAL, min_value REAL, count INT, PRIMARY KEY (bucket, metric_name)) WITHOUT ROWID";
+		rci = statsdb_disk->check_table_structure("tsdb_metrics_hour", tsdb_metrics_hour_old);
+		if (rci) {
+				proxy_warning("Detected legacy schema for tsdb_metrics_hour\n");
+				if (!statsdb_disk->execute("BEGIN IMMEDIATE")) return;
+				bool success = true;
+				if (!statsdb_disk->execute("ALTER TABLE tsdb_metrics_hour RENAME TO tsdb_metrics_hour_old")) success = false;
+				if (success && !statsdb_disk->execute(STATSDB_SQLITE_TABLE_TSDB_METRICS_HOUR)) success = false;
+				if (success && !statsdb_disk->execute(
+						"INSERT OR IGNORE INTO tsdb_metrics_hour(bucket, metric_name, labels, avg_value, max_value, min_value, count) "
+						"SELECT bucket, metric_name, COALESCE(labels,'{}'), avg_value, max_value, min_value, count FROM tsdb_metrics_hour_old"
+				)) success = false;
+				if (success && !statsdb_disk->execute("DROP TABLE tsdb_metrics_hour_old")) success = false;
+
+				if (success) {
+					statsdb_disk->execute("COMMIT");
+					proxy_warning("ONLINE UPGRADE of table tsdb_metrics_hour completed\n");
+				} else {
+					statsdb_disk->execute("ROLLBACK");
+					proxy_error("ONLINE UPGRADE of table tsdb_metrics_hour failed\n");
+				}
+		}
+#endif
 }
 
 void ProxySQL_Statistics::print_version() {
@@ -193,6 +468,18 @@ bool ProxySQL_Statistics::MySQL_Logger_dump_eventslog_timetoget(unsigned long lo
 		t = t * 1000 * 1000;
 		if (currentTimeMicros > last_timer_mysql_dump_eventslog_to_disk + t) {
 			last_timer_mysql_dump_eventslog_to_disk = currentTimeMicros;
+			return true;
+		}
+	}
+	return false;
+}
+
+bool ProxySQL_Statistics::PgSQL_Logger_dump_eventslog_timetoget(unsigned long long currentTimeMicros) {
+	if (variables.stats_pgsql_eventslog_sync_buffer_to_disk) { // only proceed if not zero
+		unsigned long long t = variables.stats_pgsql_eventslog_sync_buffer_to_disk; // originally in seconds
+		t = t * 1000 * 1000;
+		if (currentTimeMicros > last_timer_pgsql_dump_eventslog_to_disk + t) {
+			last_timer_pgsql_dump_eventslog_to_disk = currentTimeMicros;
 			return true;
 		}
 	}
@@ -550,26 +837,26 @@ void ProxySQL_Statistics::system_cpu_sets() {
 		} else {
 			char buf[256];
 			if (resultset->rows_count == 0) {
-				sprintf(buf,"INSERT INTO system_cpu_hour SELECT timestamp/3600*3600 , SUM(tms_utime), SUM(tms_stime) FROM system_cpu WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
+					snprintf(buf, sizeof(buf), "INSERT INTO system_cpu_hour SELECT timestamp/3600*3600 , SUM(tms_utime), SUM(tms_stime) FROM system_cpu WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
 				statsdb_disk->execute(buf);
 			} else {
 				SQLite3_row *r = resultset->rows[0];
 				if (r->fields[0]) {
 					time_t t = atol(r->fields[0]);
 					if (ts >= t + 3600) {
-						sprintf(buf,"INSERT INTO system_cpu_hour SELECT timestamp/3600*3600 , SUM(tms_utime), SUM(tms_stime) FROM system_cpu WHERE timestamp >= %ld AND timestamp < %ld GROUP BY timestamp/3600", t+3600 , (ts/3600)*3600);
+						snprintf(buf, sizeof(buf), "INSERT INTO system_cpu_hour SELECT timestamp/3600*3600 , SUM(tms_utime), SUM(tms_stime) FROM system_cpu WHERE timestamp >= %ld AND timestamp < %ld GROUP BY timestamp/3600", t+3600 , (ts/3600)*3600);
 						statsdb_disk->execute(buf);
 					}
 				} else {
-					sprintf(buf,"INSERT INTO system_cpu_hour SELECT timestamp/3600*3600 , SUM(tms_utime), SUM(tms_stime) FROM system_cpu WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
+				snprintf(buf, sizeof(buf), "INSERT INTO system_cpu_hour SELECT timestamp/3600*3600 , SUM(tms_utime), SUM(tms_stime) FROM system_cpu WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
 					statsdb_disk->execute(buf);
 				}
 			}
 			delete resultset;
 			resultset = NULL;
-			sprintf(buf,"DELETE FROM system_cpu WHERE timestamp < %ld", ts - 3600*24*7);
+			snprintf(buf, sizeof(buf), "DELETE FROM system_cpu WHERE timestamp < %ld", ts - 3600*24*7);
 			statsdb_disk->execute(buf);
-			sprintf(buf,"DELETE FROM system_cpu_hour WHERE timestamp < %ld", ts - 3600*24*365);
+			snprintf(buf, sizeof(buf), "DELETE FROM system_cpu_hour WHERE timestamp < %ld", ts - 3600*24*365);
 			statsdb_disk->execute(buf);
 		}
 	}
@@ -630,26 +917,26 @@ void ProxySQL_Statistics::system_memory_sets() {
 		} else {
 			char buf[512];
 			if (resultset->rows_count == 0) {
-				sprintf(buf,"INSERT INTO system_memory_hour SELECT timestamp/3600*3600 , AVG(allocated), AVG(resident), AVG(active), AVG(mapped), AVG(metadata), AVG(retained) FROM system_memory WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
+					snprintf(buf, sizeof(buf), "INSERT INTO system_memory_hour SELECT timestamp/3600*3600 , AVG(allocated), AVG(resident), AVG(active), AVG(mapped), AVG(metadata), AVG(retained) FROM system_memory WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
 				statsdb_disk->execute(buf);
 			} else {
 				SQLite3_row *r = resultset->rows[0];
 				if (r->fields[0]) {
 					time_t t = atol(r->fields[0]);
 					if (ts >= t + 3600) {
-						sprintf(buf,"INSERT INTO system_memory_hour SELECT timestamp/3600*3600 , AVG(allocated), AVG(resident), AVG(active), AVG(mapped), AVG(metadata), AVG(retained) FROM system_memory WHERE timestamp >= %ld AND timestamp < %ld GROUP BY timestamp/3600", t+3600 , (ts/3600)*3600);
+						snprintf(buf, sizeof(buf), "INSERT INTO system_memory_hour SELECT timestamp/3600*3600 , AVG(allocated), AVG(resident), AVG(active), AVG(mapped), AVG(metadata), AVG(retained) FROM system_memory WHERE timestamp >= %ld AND timestamp < %ld GROUP BY timestamp/3600", t+3600 , (ts/3600)*3600);
 						statsdb_disk->execute(buf);
 					}
 				} else {
-					sprintf(buf,"INSERT INTO system_memory_hour SELECT timestamp/3600*3600 , AVG(allocated), AVG(resident), AVG(active), AVG(mapped), AVG(metadata), AVG(retained) FROM system_memory WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
+				snprintf(buf, sizeof(buf), "INSERT INTO system_memory_hour SELECT timestamp/3600*3600 , AVG(allocated), AVG(resident), AVG(active), AVG(mapped), AVG(metadata), AVG(retained) FROM system_memory WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
 					statsdb_disk->execute(buf);
 				}
 			}
 			delete resultset;
 			resultset = NULL;
-			sprintf(buf,"DELETE FROM system_memory WHERE timestamp < %ld", ts - 3600*24*7);
+			snprintf(buf, sizeof(buf), "DELETE FROM system_memory WHERE timestamp < %ld", ts - 3600*24*7);
 			statsdb_disk->execute(buf);
-			sprintf(buf,"DELETE FROM system_memory_hour WHERE timestamp < %ld", ts - 3600*24*365);
+			snprintf(buf, sizeof(buf), "DELETE FROM system_memory_hour WHERE timestamp < %ld", ts - 3600*24*365);
 			statsdb_disk->execute(buf);
 		}
 	}
@@ -783,26 +1070,26 @@ void ProxySQL_Statistics::MyHGM_Handler_sets_v1(SQLite3_result *resultset) {
 	} else {
 		char buf[1024];
 		if (resultset2->rows_count == 0) {
-			sprintf(buf,"INSERT INTO myhgm_connections_hour SELECT timestamp/3600*3600 , MAX(MyHGM_myconnpoll_destroy), MAX(MyHGM_myconnpoll_get), MAX(MyHGM_myconnpoll_get_ok), MAX(MyHGM_myconnpoll_push), MAX(MyHGM_myconnpoll_reset) FROM myhgm_connections WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
+			snprintf(buf, sizeof(buf), "INSERT INTO myhgm_connections_hour SELECT timestamp/3600*3600 , MAX(MyHGM_myconnpoll_destroy), MAX(MyHGM_myconnpoll_get), MAX(MyHGM_myconnpoll_get_ok), MAX(MyHGM_myconnpoll_push), MAX(MyHGM_myconnpoll_reset) FROM myhgm_connections WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
 			statsdb_disk->execute(buf);
 		} else {
 			SQLite3_row *r = resultset2->rows[0];
 			if (r->fields[0]) {
 				time_t t = atol(r->fields[0]);
 				if (ts >= t + 3600) {
-					sprintf(buf,"INSERT INTO myhgm_connections_hour SELECT timestamp/3600*3600 , MAX(MyHGM_myconnpoll_destroy), MAX(MyHGM_myconnpoll_get), MAX(MyHGM_myconnpoll_get_ok), MAX(MyHGM_myconnpoll_push), MAX(MyHGM_myconnpoll_reset) FROM myhgm_connections WHERE timestamp >= %ld AND timestamp < %ld GROUP BY timestamp/3600", t+3600 , (ts/3600)*3600);
+					snprintf(buf, sizeof(buf), "INSERT INTO myhgm_connections_hour SELECT timestamp/3600*3600 , MAX(MyHGM_myconnpoll_destroy), MAX(MyHGM_myconnpoll_get), MAX(MyHGM_myconnpoll_get_ok), MAX(MyHGM_myconnpoll_push), MAX(MyHGM_myconnpoll_reset) FROM myhgm_connections WHERE timestamp >= %ld AND timestamp < %ld GROUP BY timestamp/3600", t+3600 , (ts/3600)*3600);
 					statsdb_disk->execute(buf);
 				}
 			} else {
-				sprintf(buf,"INSERT INTO myhgm_connections_hour SELECT timestamp/3600*3600 , MAX(MyHGM_myconnpoll_destroy), MAX(MyHGM_myconnpoll_get), MAX(MyHGM_myconnpoll_get_ok), MAX(MyHGM_myconnpoll_push), MAX(MyHGM_myconnpoll_reset) FROM myhgm_connections WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
+				snprintf(buf, sizeof(buf), "INSERT INTO myhgm_connections_hour SELECT timestamp/3600*3600 , MAX(MyHGM_myconnpoll_destroy), MAX(MyHGM_myconnpoll_get), MAX(MyHGM_myconnpoll_get_ok), MAX(MyHGM_myconnpoll_push), MAX(MyHGM_myconnpoll_reset) FROM myhgm_connections WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
 				statsdb_disk->execute(buf);
 			}
 		}
 		delete resultset2;
 		resultset2 = NULL;
-		sprintf(buf,"DELETE FROM myhgm_connections WHERE timestamp < %ld", ts - 3600*24*7);
+		snprintf(buf, sizeof(buf), "DELETE FROM myhgm_connections WHERE timestamp < %ld", ts - 3600*24*7);
 		statsdb_disk->execute(buf);
-		sprintf(buf,"DELETE FROM myhgm_connections_hour WHERE timestamp < %ld", ts - 3600*24*365);
+		snprintf(buf, sizeof(buf), "DELETE FROM myhgm_connections_hour WHERE timestamp < %ld", ts - 3600*24*365);
 		statsdb_disk->execute(buf);
 	}
 }
@@ -968,26 +1255,26 @@ void ProxySQL_Statistics::MySQL_Threads_Handler_sets_v1(SQLite3_result *resultse
 	} else {
 		char buf[1024];
 		if (resultset2->rows_count == 0) {
-			sprintf(buf,"INSERT INTO mysql_connections_hour SELECT timestamp/3600*3600 , MAX(Client_Connections_aborted), AVG(Client_Connections_connected), MAX(Client_Connections_created), MAX(Server_Connections_aborted), AVG(Server_Connections_connected), MAX(Server_Connections_created), MAX(ConnPool_get_conn_failure), MAX(ConnPool_get_conn_immediate), MAX(ConnPool_get_conn_success), MAX(Questions), MAX(Slow_queries), MAX(GTID_consistent_queries) FROM mysql_connections WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
+			snprintf(buf, sizeof(buf), "INSERT INTO mysql_connections_hour SELECT timestamp/3600*3600 , MAX(Client_Connections_aborted), AVG(Client_Connections_connected), MAX(Client_Connections_created), MAX(Server_Connections_aborted), AVG(Server_Connections_connected), MAX(Server_Connections_created), MAX(ConnPool_get_conn_failure), MAX(ConnPool_get_conn_immediate), MAX(ConnPool_get_conn_success), MAX(Questions), MAX(Slow_queries), MAX(GTID_consistent_queries) FROM mysql_connections WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
 			statsdb_disk->execute(buf);
 		} else {
 			SQLite3_row *r = resultset2->rows[0];
 			if (r->fields[0]) {
 				time_t t = atol(r->fields[0]);
 				if (ts >= t + 3600) {
-					sprintf(buf,"INSERT INTO mysql_connections_hour SELECT timestamp/3600*3600 , MAX(Client_Connections_aborted), AVG(Client_Connections_connected), MAX(Client_Connections_created), MAX(Server_Connections_aborted), AVG(Server_Connections_connected), MAX(Server_Connections_created), MAX(ConnPool_get_conn_failure), MAX(ConnPool_get_conn_immediate), MAX(ConnPool_get_conn_success), MAX(Questions), MAX(Slow_queries), MAX(GTID_consistent_queries) FROM mysql_connections WHERE timestamp >= %ld AND timestamp < %ld GROUP BY timestamp/3600", t+3600 , (ts/3600)*3600);
+					snprintf(buf, sizeof(buf), "INSERT INTO mysql_connections_hour SELECT timestamp/3600*3600 , MAX(Client_Connections_aborted), AVG(Client_Connections_connected), MAX(Client_Connections_created), MAX(Server_Connections_aborted), AVG(Server_Connections_connected), MAX(Server_Connections_created), MAX(ConnPool_get_conn_failure), MAX(ConnPool_get_conn_immediate), MAX(ConnPool_get_conn_success), MAX(Questions), MAX(Slow_queries), MAX(GTID_consistent_queries) FROM mysql_connections WHERE timestamp >= %ld AND timestamp < %ld GROUP BY timestamp/3600", t+3600 , (ts/3600)*3600);
 					statsdb_disk->execute(buf);
 				}
 			} else {
-				sprintf(buf,"INSERT INTO mysql_connections_hour SELECT timestamp/3600*3600 , MAX(Client_Connections_aborted), AVG(Client_Connections_connected), MAX(Client_Connections_created), MAX(Server_Connections_aborted), AVG(Server_Connections_connected), MAX(Server_Connections_created), MAX(ConnPool_get_conn_failure), MAX(ConnPool_get_conn_immediate), MAX(ConnPool_get_conn_success), MAX(Questions), MAX(Slow_queries), MAX(GTID_consistent_queries) FROM mysql_connections WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
+				snprintf(buf, sizeof(buf), "INSERT INTO mysql_connections_hour SELECT timestamp/3600*3600 , MAX(Client_Connections_aborted), AVG(Client_Connections_connected), MAX(Client_Connections_created), MAX(Server_Connections_aborted), AVG(Server_Connections_connected), MAX(Server_Connections_created), MAX(ConnPool_get_conn_failure), MAX(ConnPool_get_conn_immediate), MAX(ConnPool_get_conn_success), MAX(Questions), MAX(Slow_queries), MAX(GTID_consistent_queries) FROM mysql_connections WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
 				statsdb_disk->execute(buf);
 			}
 		}
 		delete resultset2;
 		resultset2 = NULL;
-		sprintf(buf,"DELETE FROM mysql_connections WHERE timestamp < %ld", ts - 3600*24*7);
+		snprintf(buf, sizeof(buf), "DELETE FROM mysql_connections WHERE timestamp < %ld", ts - 3600*24*7);
 		statsdb_disk->execute(buf);
-		sprintf(buf,"DELETE FROM mysql_connections_hour WHERE timestamp < %ld", ts - 3600*24*365);
+		snprintf(buf, sizeof(buf), "DELETE FROM mysql_connections_hour WHERE timestamp < %ld", ts - 3600*24*365);
 		statsdb_disk->execute(buf);
 	}
 }
@@ -1199,3 +1486,613 @@ void ProxySQL_Statistics::load_variable_name_id_map_if_empty() {
 		delete result;
 	}
 }
+
+#ifdef PROXYSQLTSDB
+// TSDB Metric Insertion
+void ProxySQL_Statistics::insert_tsdb_metric(const std::string& metric_name,
+                                             const std::map<std::string, std::string>& labels,
+                                             double value,
+                                             time_t timestamp) {
+    PthreadMutexGuard lock(tsdb_mutex);
+    insert_tsdb_metric_unlocked(metric_name, labels, value, timestamp);
+}
+
+void ProxySQL_Statistics::insert_tsdb_metric_unlocked(const std::string& metric_name,
+                                                      const std::map<std::string, std::string>& labels,
+                                                      double value,
+                                                      time_t timestamp) {
+    if (!statsdb_disk) return;
+    sqlite3 *mydb3 = statsdb_disk->get_db();
+    int rc;
+
+    if (stmt_insert_tsdb_metric == NULL) {
+        const char* query = "INSERT OR REPLACE INTO tsdb_metrics(timestamp, metric_name, labels, value) VALUES (?1, ?2, ?3, ?4)";
+        rc = (*proxy_sqlite3_prepare_v2)(mydb3, query, -1, &stmt_insert_tsdb_metric, 0);
+        if (rc != SQLITE_OK) {
+            proxy_error("Failed to prepare statement: %s\n", (*proxy_sqlite3_errmsg)(mydb3));
+            return;
+        }
+    }
+
+    sqlite3_stmt *statement = stmt_insert_tsdb_metric;
+
+    // Convert labels map to JSON string
+    json j_labels(labels);
+    std::string labels_str = j_labels.dump();
+    if (labels_str.empty()) {
+        labels_str = "{}";
+    }
+
+    rc = (*proxy_sqlite3_bind_int64)(statement, 1, timestamp); ASSERT_SQLITE_OK(rc, statsdb_disk);
+    rc = (*proxy_sqlite3_bind_text)(statement, 2, metric_name.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb_disk);
+    rc = (*proxy_sqlite3_bind_text)(statement, 3, labels_str.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb_disk);
+    rc = (*proxy_sqlite3_bind_double)(statement, 4, value); ASSERT_SQLITE_OK(rc, statsdb_disk);
+
+    SAFE_SQLITE3_STEP2(statement);
+    rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, statsdb_disk);
+    rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, statsdb_disk);
+}
+
+// TSDB Backend Health Insertion
+void ProxySQL_Statistics::insert_backend_health(int hostgroup,
+                                                const std::string& hostname,
+                                                int port,
+                                                bool probe_up,
+                                                int connect_ms,
+                                                time_t timestamp) {
+    PthreadMutexGuard lock(tsdb_mutex);
+    insert_backend_health_unlocked(hostgroup, hostname, port, probe_up, connect_ms, timestamp);
+}
+
+void ProxySQL_Statistics::insert_backend_health_unlocked(int hostgroup,
+                                                         const std::string& hostname,
+                                                         int port,
+                                                         bool probe_up,
+                                                         int connect_ms,
+                                                         time_t timestamp) {
+    if (!statsdb_disk) return;
+    sqlite3 *mydb3 = statsdb_disk->get_db();
+    int rc;
+
+    if (stmt_insert_backend_health == NULL) {
+        const char* query = "INSERT OR REPLACE INTO tsdb_backend_health(timestamp, hostgroup, hostname, port, probe_up, connect_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
+        rc = (*proxy_sqlite3_prepare_v2)(mydb3, query, -1, &stmt_insert_backend_health, 0);
+        if (rc != SQLITE_OK) {
+            proxy_error("Failed to prepare statement: %s\n", (*proxy_sqlite3_errmsg)(mydb3));
+            return;
+        }
+    }
+
+    sqlite3_stmt *statement = stmt_insert_backend_health;
+
+    rc = (*proxy_sqlite3_bind_int64)(statement, 1, timestamp); ASSERT_SQLITE_OK(rc, statsdb_disk);
+    rc = (*proxy_sqlite3_bind_int)(statement, 2, hostgroup); ASSERT_SQLITE_OK(rc, statsdb_disk);
+    rc = (*proxy_sqlite3_bind_text)(statement, 3, hostname.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb_disk);
+    rc = (*proxy_sqlite3_bind_int)(statement, 4, port); ASSERT_SQLITE_OK(rc, statsdb_disk);
+    rc = (*proxy_sqlite3_bind_int)(statement, 5, probe_up ? 1 : 0); ASSERT_SQLITE_OK(rc, statsdb_disk);
+    rc = (*proxy_sqlite3_bind_int)(statement, 6, connect_ms); ASSERT_SQLITE_OK(rc, statsdb_disk);
+
+    SAFE_SQLITE3_STEP2(statement);
+    rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, statsdb_disk);
+    rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, statsdb_disk);
+}
+
+// TSDB Downsampling
+void ProxySQL_Statistics::tsdb_downsample_metrics() {
+    if (!variables.tsdb_enabled) return;
+    if (!statsdb_disk) return;
+
+    PthreadMutexGuard lock(tsdb_mutex);
+
+    time_t ts = time(NULL);
+    time_t current_hour = (ts / 3600) * 3600;
+
+    // Get last processed hour
+    char *query = (char *)"SELECT MAX(bucket) FROM tsdb_metrics_hour";
+    SQLite3_result *resultset = NULL;
+    int cols, affected_rows;
+    char *error = NULL;
+    statsdb_disk->execute_statement(query, &error, &cols, &affected_rows, &resultset);
+    if (error) {
+        proxy_error("tsdb_downsample_metrics: %s\n", error);
+        free(error);
+        if (resultset) delete resultset;
+        return;
+    }
+
+    time_t last_hour = 0;
+    if (resultset && resultset->rows_count > 0 && resultset->rows[0]->fields[0]) {
+        last_hour = atol(resultset->rows[0]->fields[0]);
+    }
+    if (resultset) delete resultset;
+
+    // Reprocess the latest completed bucket as well as new buckets. Metrics can
+    // arrive just after an hourly pass has committed, and INSERT OR REPLACE
+    // makes refreshing that boundary bucket idempotent.
+    if (last_hour <= current_hour - 3600) {
+        char buf[2048];
+        snprintf(buf, sizeof(buf),
+            "INSERT OR REPLACE INTO tsdb_metrics_hour "
+            "SELECT "
+            "  (timestamp/3600)*3600 as bucket,"
+            "  metric_name,"
+            "  labels,"
+            "  AVG(value) as avg_value,"
+            "  MAX(value) as max_value,"
+            "  MIN(value) as min_value,"
+            "  COUNT(*) as count "
+            "FROM tsdb_metrics "
+            "WHERE timestamp >= %ld AND timestamp < %ld "
+            "GROUP BY bucket, metric_name, labels",
+            last_hour > 0 ? last_hour : 0,
+            current_hour);
+
+        statsdb_disk->execute(buf);
+    }
+}
+
+void ProxySQL_Statistics::tsdb_retention_cleanup() {
+    if (!variables.tsdb_enabled) return;
+    if (!statsdb_disk) return;
+
+    PthreadMutexGuard lock(tsdb_mutex);
+
+    time_t ts = time(NULL);
+    const int retention_days = std::max(1, variables.tsdb_retention_days);
+    char delete_buf[256];
+
+    // Retention: delete raw data older than configured days
+    snprintf(delete_buf, sizeof(delete_buf),
+        "DELETE FROM tsdb_metrics WHERE timestamp < %ld",
+        ts - 86400 * retention_days);
+    statsdb_disk->execute(delete_buf);
+
+    // Retention: delete hourly data older than 1 year
+    snprintf(delete_buf, sizeof(delete_buf),
+        "DELETE FROM tsdb_metrics_hour WHERE bucket < %ld",
+        ts - 86400 * 365);
+    statsdb_disk->execute(delete_buf);
+
+    // Retention: delete backend probe data older than configured days
+    snprintf(delete_buf, sizeof(delete_buf),
+        "DELETE FROM tsdb_backend_health WHERE timestamp < %ld",
+        ts - 86400 * retention_days);
+    statsdb_disk->execute(delete_buf);
+}
+
+// TSDB Status
+ProxySQL_Statistics::tsdb_status_t ProxySQL_Statistics::get_tsdb_status() {
+    tsdb_status_t status = {0, 0, 0, 0, 0};
+
+    if (!statsdb_disk) return status;
+
+    PthreadMutexGuard lock(tsdb_mutex);
+
+    char *error = NULL;
+    int cols = 0;
+    int affected_rows = 0;
+    SQLite3_result *resultset = NULL;
+
+    // Count total series (unique metric_name + labels combinations)
+    statsdb_disk->execute_statement(
+        "SELECT COUNT(DISTINCT metric_name || CHAR(31) || labels) FROM tsdb_metrics",
+        &error, &cols, &affected_rows, &resultset);
+    if (error) {
+        free(error);
+        error = NULL;
+    }
+    if (resultset) {
+        if (resultset->rows_count > 0 && resultset->rows[0]->fields[0]) {
+            status.total_series = atol(resultset->rows[0]->fields[0]);
+        }
+        delete resultset;
+    }
+
+    // Count total datapoints
+    resultset = NULL;
+    statsdb_disk->execute_statement(
+        "SELECT COUNT(*) FROM tsdb_metrics",
+        &error, &cols, &affected_rows, &resultset);
+    if (error) {
+        free(error);
+        error = NULL;
+    }
+    if (resultset) {
+        if (resultset->rows_count > 0 && resultset->rows[0]->fields[0]) {
+            status.total_datapoints = atol(resultset->rows[0]->fields[0]);
+        }
+        delete resultset;
+    }
+
+    // Get oldest and newest datapoint timestamps
+    resultset = NULL;
+    statsdb_disk->execute_statement(
+        "SELECT MIN(timestamp), MAX(timestamp) FROM tsdb_metrics",
+        &error, &cols, &affected_rows, &resultset);
+    if (error) {
+        free(error);
+        error = NULL;
+    }
+    if (resultset) {
+        if (resultset->rows_count > 0) {
+            if (resultset->rows[0]->fields[0]) {
+                status.oldest_datapoint = atol(resultset->rows[0]->fields[0]);
+            }
+            if (resultset->rows[0]->fields[1]) {
+                status.newest_datapoint = atol(resultset->rows[0]->fields[1]);
+            }
+        }
+        delete resultset;
+    }
+
+    long long page_count = statsdb_disk->return_one_int((char*)"PRAGMA page_count");
+    long long page_size = statsdb_disk->return_one_int((char*)"PRAGMA page_size");
+    if (page_count > 0 && page_size > 0) {
+        status.disk_size_bytes = page_count * page_size;
+    }
+
+    return status;
+}
+
+// TSDB Timer Checks
+bool ProxySQL_Statistics::tsdb_sampler_timetoget(unsigned long long curtime) {
+    if (!variables.tsdb_enabled || variables.tsdb_sample_interval <= 0) {
+        return false;
+    }
+    if (curtime > next_timer_tsdb_sampler) {
+        next_timer_tsdb_sampler = curtime + (unsigned long long)variables.tsdb_sample_interval * 1000000ULL;
+        return true;
+    }
+    return false;
+}
+
+bool ProxySQL_Statistics::tsdb_downsample_timetoget(unsigned long long curtime) {
+    if (!variables.tsdb_enabled) {
+        return false;
+    }
+    if (curtime > next_timer_tsdb_downsample) {
+        next_timer_tsdb_downsample = curtime + 3600ULL * 1000000ULL;  // Hourly
+        return true;
+    }
+    return false;
+}
+
+bool ProxySQL_Statistics::tsdb_monitor_timetoget(unsigned long long curtime) {
+    if (!variables.tsdb_enabled || !variables.tsdb_monitor_enabled || variables.tsdb_monitor_interval <= 0) {
+        return false;
+    }
+    if (curtime > next_timer_tsdb_monitor) {
+        next_timer_tsdb_monitor = curtime + (unsigned long long)variables.tsdb_monitor_interval * 1000000ULL;
+        return true;
+    }
+    return false;
+}
+
+bool ProxySQL_Statistics::tsdb_retention_timetoget(unsigned long long curtime) {
+    if (!variables.tsdb_enabled) {
+        return false;
+    }
+    if (curtime > next_timer_tsdb_retention) {
+        next_timer_tsdb_retention = curtime + 3600ULL * 1000000ULL; // Once per hour
+        return true;
+    }
+    return false;
+}
+
+SQLite3_result* ProxySQL_Statistics::list_tsdb_metric_names() {
+    if (!statsdb_disk) return NULL;
+    PthreadMutexGuard lock(tsdb_mutex);
+
+    char* error = NULL;
+    int cols = 0;
+    int affected_rows = 0;
+    SQLite3_result* resultset = NULL;
+    statsdb_disk->execute_statement(
+        "SELECT DISTINCT metric_name FROM tsdb_metrics ORDER BY metric_name",
+        &error, &cols, &affected_rows, &resultset);
+    if (error) {
+        proxy_error("list_tsdb_metric_names failed: %s\n", error);
+        free(error);
+        if (resultset) delete resultset;
+        return NULL;
+    }
+    return resultset;
+}
+
+// TSDB Query with Label Filtering
+SQLite3_result* ProxySQL_Statistics::query_tsdb_metrics(
+        const std::string& metric_name,
+        const std::map<std::string, std::string>& label_filters,
+        time_t from,
+        time_t to,
+        const std::string& aggregation) {
+
+    if (!statsdb_disk) return NULL;
+
+    PthreadMutexGuard lock(tsdb_mutex);
+
+    if (to < from) {
+        std::swap(from, to);
+    }
+
+    const bool use_hourly = (to - from > 86400);
+    const std::string agg = aggregation.empty() ? "raw" : aggregation;
+    std::string query;
+
+    if (use_hourly) {
+        std::string value_expr = "avg_value";
+        if (agg == "max") {
+            value_expr = "max_value";
+        } else if (agg == "min") {
+            value_expr = "min_value";
+        } else if (agg == "count") {
+            value_expr = "count";
+        }
+        query =
+            "SELECT bucket AS ts, metric_name, labels, " + value_expr + " AS value "
+            "FROM tsdb_metrics_hour "
+            "WHERE metric_name='" + escape_sql_string_literal(metric_name) + "' "
+            "AND bucket BETWEEN " + std::to_string(from) + " AND " + std::to_string(to);
+    } else {
+        query =
+            "SELECT timestamp AS ts, metric_name, labels, value "
+            "FROM tsdb_metrics "
+            "WHERE metric_name='" + escape_sql_string_literal(metric_name) + "' "
+            "AND timestamp BETWEEN " + std::to_string(from) + " AND " + std::to_string(to);
+    }
+
+    for (const auto& kv : label_filters) {
+        if (!valid_label_key(kv.first)) {
+            proxy_error("Invalid TSDB label key: %s\n", kv.first.c_str());
+            return NULL;
+        }
+        query += " AND json_extract(labels, '$.\"" + kv.first + "\"')='" + escape_sql_string_literal(kv.second) + "'";
+    }
+
+    query += std::string(" ORDER BY ") + (use_hourly ? "bucket" : "timestamp");
+
+    char* error = NULL;
+    int cols = 0;
+    int affected_rows = 0;
+    SQLite3_result* resultset = NULL;
+    statsdb_disk->execute_statement((char*)query.c_str(), &error, &cols, &affected_rows, &resultset);
+    if (error) {
+        proxy_error("query_tsdb_metrics failed: %s -- sql: %s\n", error, query.c_str());
+        free(error);
+        if (resultset) {
+            delete resultset;
+        }
+        return NULL;
+    }
+    return resultset;
+}
+
+// TSDB Backend Health Query
+SQLite3_result* ProxySQL_Statistics::get_backend_health_metrics(time_t from, time_t to, int hostgroup) {
+    if (!statsdb_disk) return NULL;
+
+    PthreadMutexGuard lock(tsdb_mutex);
+
+    if (to < from) {
+        std::swap(from, to);
+    }
+
+    std::string query =
+        "SELECT timestamp, hostgroup, hostname, port, probe_up, connect_ms "
+        "FROM tsdb_backend_health "
+        "WHERE timestamp BETWEEN " + std::to_string(from) + " AND " + std::to_string(to);
+    if (hostgroup >= 0) {
+        query += " AND hostgroup = " + std::to_string(hostgroup);
+    }
+    query += " ORDER BY timestamp";
+
+    char* error = NULL;
+    int cols = 0;
+    int affected_rows = 0;
+    SQLite3_result* resultset = NULL;
+    statsdb_disk->execute_statement((char*)query.c_str(), &error, &cols, &affected_rows, &resultset);
+    if (error) {
+        proxy_error("get_backend_health_metrics failed: %s -- sql: %s\n", error, query.c_str());
+        free(error);
+        if (resultset) {
+            delete resultset;
+        }
+        return NULL;
+    }
+    return resultset;
+}
+
+// TSDB Sampler Loop
+void ProxySQL_Statistics::tsdb_sampler_loop() {
+    if (!variables.tsdb_enabled) return;
+
+    // Sample Prometheus metrics if registry exists
+    if (GloVars.prometheus_registry) {
+        // Refresh all module metrics before collecting, ensuring gauges
+        // and counters reflect the current state (mirrors what the
+        // Prometheus /metrics endpoint does via serial_exposer).
+        update_modules_metrics();
+        auto metrics = GloVars.prometheus_registry->Collect();
+        time_t now = time(NULL);
+        PthreadMutexGuard lock(tsdb_mutex);
+        statsdb_disk->execute("BEGIN");
+        for (const auto& family : metrics) {
+            for (const auto& metric : family.metric) {
+                std::map<std::string, std::string> labels;
+                for (const auto& lp : metric.label) {
+                    labels[lp.name] = lp.value;
+                }
+                switch (family.type) {
+                    case prometheus::MetricType::Counter:
+                        insert_tsdb_metric_unlocked(family.name, labels, metric.counter.value, now);
+                        break;
+                    case prometheus::MetricType::Gauge:
+                        insert_tsdb_metric_unlocked(family.name, labels, metric.gauge.value, now);
+                        break;
+                    case prometheus::MetricType::Summary: {
+                        insert_tsdb_metric_unlocked(family.name + "_count", labels, static_cast<double>(metric.summary.sample_count), now);
+                        insert_tsdb_metric_unlocked(family.name + "_sum", labels, metric.summary.sample_sum, now);
+                        for (const auto& q : metric.summary.quantile) {
+                            std::map<std::string, std::string> q_labels(labels);
+                            q_labels["quantile"] = format_prometheus_label_double(q.quantile);
+                            insert_tsdb_metric_unlocked(family.name, q_labels, q.value, now);
+                        }
+                        break;
+                    }
+                    case prometheus::MetricType::Histogram: {
+                        insert_tsdb_metric_unlocked(family.name + "_count", labels, static_cast<double>(metric.histogram.sample_count), now);
+                        insert_tsdb_metric_unlocked(family.name + "_sum", labels, metric.histogram.sample_sum, now);
+                        for (const auto& b : metric.histogram.bucket) {
+                            std::map<std::string, std::string> b_labels(labels);
+                            b_labels["le"] = format_prometheus_label_double(b.upper_bound);
+                            insert_tsdb_metric_unlocked(
+                                family.name + "_bucket",
+                                b_labels,
+                                static_cast<double>(b.cumulative_count),
+                                now
+                            );
+                        }
+                        break;
+                    }
+                    case prometheus::MetricType::Info:
+                        insert_tsdb_metric_unlocked(family.name, labels, metric.info.value, now);
+                        break;
+                    case prometheus::MetricType::Untyped:
+                    default:
+                        insert_tsdb_metric_unlocked(family.name, labels, metric.untyped.value, now);
+                        break;
+                }
+            }
+        }
+        statsdb_disk->execute("COMMIT");
+    }
+
+}
+
+struct probe_result_t {
+    int hg;
+    std::string host;
+    int port;
+    bool probe_up;
+    int connect_ms;
+    time_t timestamp;
+};
+
+probe_result_t probe_backend(int hg, std::string host, int port, time_t now) {
+    bool probe_up = false;
+    int connect_ms = -1;
+
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_family = AF_UNSPEC;
+
+    struct addrinfo* res = NULL;
+    char port_str[16];
+    snprintf(port_str, sizeof(port_str), "%d", port);
+
+    if (getaddrinfo(host.c_str(), port_str, &hints, &res) == 0 && res) {
+        for (struct addrinfo* ai = res; ai != NULL; ai = ai->ai_next) {
+            int sock = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+            if (sock < 0) {
+                continue;
+            }
+
+            // Set non-blocking
+            int flags = fcntl(sock, F_GETFL, 0);
+            fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+
+            auto start = std::chrono::steady_clock::now();
+            int cres = connect(sock, ai->ai_addr, ai->ai_addrlen);
+            
+            if (cres < 0) {
+                if (errno == EINPROGRESS) {
+                    struct pollfd fds[1];
+                    fds[0].fd = sock;
+                    fds[0].events = POLLOUT;
+                    int p_res = poll(fds, 1, 1000); // 1s timeout
+                    if (p_res > 0) {
+                        int error = 0;
+                        socklen_t len = sizeof(error);
+                        getsockopt(sock, SOL_SOCKET, SO_ERROR, &error, &len);
+                        if (error == 0) {
+                            cres = 0;
+                        }
+                    }
+                }
+            }
+
+            auto end = std::chrono::steady_clock::now();
+            connect_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+            close(sock);
+            if (cres == 0) {
+                probe_up = true;
+                break;
+            }
+        }
+        freeaddrinfo(res);
+    }
+    return {hg, host, port, probe_up, connect_ms, now};
+}
+
+// TSDB Monitor Loop
+void ProxySQL_Statistics::tsdb_monitor_loop() {
+	if (!variables.tsdb_enabled || !variables.tsdb_monitor_enabled || !statsdb_disk) return;
+
+	std::vector<probe_target_t> targets;
+
+	// Pull backend servers through the same hostgroup-manager paths used to build runtime tables.
+	if (MyHGM) {
+		SQLite3_result* mysql_servers = MyHGM->dump_table_mysql("mysql_servers");
+		append_probe_targets(mysql_servers, targets);
+		if (mysql_servers) {
+			delete mysql_servers;
+		}
+	}
+
+	if (PgHGM) {
+		SQLite3_result* pgsql_servers = PgHGM->dump_table_pgsql("pgsql_servers");
+		append_probe_targets(pgsql_servers, targets);
+		if (pgsql_servers) {
+			delete pgsql_servers;
+		}
+	}
+
+	if (targets.empty()) {
+		return;
+	}
+
+	time_t now = time(NULL);
+	size_t max_concurrent = 16;
+	for (size_t i = 0; i < targets.size(); i += max_concurrent) {
+		size_t batch_end = std::min(i + max_concurrent, targets.size());
+		std::vector<std::future<probe_result_t>> batch_futures;
+		for (size_t j = i; j < batch_end; ++j) {
+			batch_futures.push_back(std::async(std::launch::async, probe_backend, targets[j].hg, targets[j].host, targets[j].port, now));
+		}
+
+		// Network completion is independent of SQLite. Collect every result
+		// before taking the TSDB mutex so an unreachable backend cannot block
+		// samplers, status queries, downsampling, or retention for the probe
+		// timeout.
+		std::vector<probe_result_t> batch_results;
+		batch_results.reserve(batch_futures.size());
+		for (auto& f : batch_futures) {
+			try {
+				batch_results.push_back(f.get());
+			} catch (const std::exception& e) {
+				proxy_error("TSDB monitor probe failed: %s\n", e.what());
+			}
+		}
+
+		PthreadMutexGuard lock(tsdb_mutex);
+		statsdb_disk->execute("BEGIN");
+		for (const probe_result_t& res : batch_results) {
+			insert_backend_health_unlocked(
+				res.hg, res.host, res.port, res.probe_up, res.connect_ms, res.timestamp);
+		}
+		statsdb_disk->execute("COMMIT");
+	}
+}
+
+#endif

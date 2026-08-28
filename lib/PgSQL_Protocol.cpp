@@ -1,7 +1,11 @@
 
+#include <openssl/evp.h>
 #include <openssl/rand.h>
+#include <limits>
+#include <locale>
 #include "proxysql.h"
 #include "cpp.h"
+#include "gen_utils.h"
 #include "PgSQL_Authentication.h"
 #include "PgSQL_Data_Stream.h"
 #include "PgSQL_Protocol.h"
@@ -20,6 +24,31 @@ extern PgSQL_Authentication* GloPgAuth;
 #define INT4OID 23
 #define TEXTOID 25
 #define NUMERICOID 1700
+
+static char *encode_bytea(const uint8_t *data, int length) {
+	if (length < 0 || (data == nullptr && length != 0)) {
+		return nullptr;
+	}
+
+	const size_t byte_len = static_cast<size_t>(length);
+	const size_t max_byte_len = (std::numeric_limits<size_t>::max() - 3) / 2;
+	if (byte_len > max_byte_len) {
+		return nullptr;
+	}
+
+	const size_t required = 2 + byte_len * 2 + 1;
+	char *encoded = (char *)l_alloc(required);
+	if (encoded == nullptr) {
+		return nullptr;
+	}
+	encoded[0] = '\\';
+	encoded[1] = 'x';
+	encoded[2] = '\0';
+	for (size_t i = 0; i < byte_len; ++i) {
+		snprintf(encoded + 2 + i * 2, 3, "%02x", data[i]);
+	}
+	return encoded;
+}
 
 
 void PG_pkt::make_space(unsigned int len) {
@@ -199,20 +228,11 @@ void PG_pkt::write_RowDescription(const char *tupdesc, ...) {
 void SQLite3_to_Postgres(PtrSizeArray *psa, SQLite3_result *result, char *error, int affected_rows, const char *query_type, bool send_ready_for_query,
 	char txn_state) {
 	assert(psa != NULL);
-	const char *fs = strchr(query_type, ' ');
-	int qtlen = strlen(query_type);
-	if (fs != NULL) {
-		qtlen = (fs - query_type) + 1;
-	}
-	char buf[qtlen];
-	memcpy(buf,query_type, qtlen-1);
-	buf[qtlen-1] = 0;
-	{
-		char *s = buf;
-		while (*s) {
-			*s = toupper((unsigned char) *s);
-			s++;
-		}
+	const char *query = query_type ? query_type : "";
+	const size_t command_len = strcspn(query, " \t\r\n");
+	std::string buf(query, command_len);
+	for (char& c : buf) {
+		c = std::toupper(c, std::locale::classic());
 	}
 	if (result) {
 		int ncol = result->columns;
@@ -249,12 +269,11 @@ void SQLite3_to_Postgres(PtrSizeArray *psa, SQLite3_result *result, char *error,
 			pkt.to_PtrSizeArray(psa);
 		}
 
-		if (strcmp(buf,"SELECT") == 0) {
-			char tmpbuf[128];
-			sprintf(tmpbuf,"%s %d", buf, result->rows_count);
-			pkt.write_generic('C', "s", tmpbuf);
+		if (buf == "SELECT") {
+			const std::string completion_tag = buf + " " + std::to_string(result->rows_count);
+			pkt.write_generic('C', "s", completion_tag.c_str());
 		} else {
-			pkt.write_CommandComplete(buf);
+			pkt.write_CommandComplete(buf.c_str());
 		}
 		pkt.to_PtrSizeArray(psa);
 		if (send_ready_for_query) pkt.write_ReadyForQuery(txn_state);
@@ -277,15 +296,14 @@ void SQLite3_to_Postgres(PtrSizeArray *psa, SQLite3_result *result, char *error,
 */
 			// see https://www.postgresql.org/docs/current/protocol-message-formats.html
 		} else {
-			char tmpbuf[128];
-			if (strcmp(buf,"INSERT") == 0) {
-				sprintf(tmpbuf,"%s 0 %d", buf, affected_rows);
-				pkt.write_generic('C', "s", tmpbuf);
-			} else if (strcmp(buf,"UPDATE") == 0 || strcmp(buf,"DELETE") == 0) {
-				sprintf(tmpbuf,"%s %d", buf, affected_rows);
-				pkt.write_generic('C', "s", tmpbuf);
+			if (buf == "INSERT") {
+				const std::string completion_tag = buf + " 0 " + std::to_string(affected_rows);
+				pkt.write_generic('C', "s", completion_tag.c_str());
+			} else if (buf == "UPDATE" || buf == "DELETE") {
+				const std::string completion_tag = buf + " " + std::to_string(affected_rows);
+				pkt.write_generic('C', "s", completion_tag.c_str());
 			} else {
-				pkt.write_CommandComplete(buf);
+				pkt.write_CommandComplete(buf.c_str());
 			}
 		}
 		pkt.to_PtrSizeArray(psa);
@@ -314,20 +332,11 @@ void PG_pkt::write_DataRow(const char *tupdesc, ...) {
 			val = tmp;
 		} else if (tupdesc[i] == 's') {
 			val = va_arg(ap, char *);
-		} else if (tupdesc[i] == 'b') {
-			int blen = va_arg(ap, int);
-			if (blen >= 0) {
-				uint8_t *bval = va_arg(ap, uint8_t *);
-				size_t required = 2 + blen * 2 + 1;
-				tmp2 = (char *)malloc(required);
-				strcpy(tmp2, "\\x");
-				for (int j = 0; j < blen; j++)
-					sprintf(tmp2 + (2 + j * 2), "%02x", bval[j]);
-				val = tmp2;
-			} else {
-				(void) va_arg(ap, uint8_t *);
-				val = NULL;
-			}
+				} else if (tupdesc[i] == 'b') {
+					const int blen = va_arg(ap, int);
+					const uint8_t *bval = va_arg(ap, uint8_t *);
+					tmp2 = encode_bytea(bval, blen);
+					val = tmp2;
 		} else if (tupdesc[i] == 'T') {
 			usec_t time = va_arg(ap, usec_t);
 			val = format_time_s(time, tmp, sizeof(tmp));
@@ -341,7 +350,7 @@ void PG_pkt::write_DataRow(const char *tupdesc, ...) {
 			put_uint32(len);
 			put_bytes(val, len);
 			if (tmp2 != NULL) {
-				free(tmp2);
+				l_free(0, tmp2);
 				tmp2 = NULL;
 			}
 		} else {
@@ -401,11 +410,8 @@ bool PgSQL_Protocol::generate_pkt_initial_handshake(bool send, void** _ptr, unsi
 	case AUTHENTICATION_METHOD::MD5_PASSWORD:
 		memset((*myds)->tmp_login_salt, 0, sizeof((*myds)->tmp_login_salt));
 		if (RAND_bytes((*myds)->tmp_login_salt, sizeof((*myds)->tmp_login_salt)) != 1) {
-			// Fallback method: using a basic pseudo-random generator
-			srand((unsigned int)time(NULL));  
-			for (size_t i = 0; i < sizeof((*myds)->tmp_login_salt); i++) {
-				(*myds)->tmp_login_salt[i] = rand_fast() % 256;
-			}
+			proxy_error("RAND_bytes() failed generating PostgreSQL login salt\n");
+			return false;
 		}
 		pgpkt.write_generic(type, "ib", PG_PKT_AUTH_MD5, (*myds)->tmp_login_salt, sizeof((*myds)->tmp_login_salt));
 		break;
@@ -579,7 +585,7 @@ unsigned int get_string(const char* data, unsigned int len, const char** dst_p)
 
 bool PgSQL_Protocol::load_conn_parameters(pgsql_hdr* pkt)
 {
-	uint32_t offset = 0; 
+	uint32_t offset = 0;
 
 	while (offset < pkt->data.size) {
 		char* nameptr = (char*)pkt->data.ptr + offset;
@@ -587,15 +593,28 @@ bool PgSQL_Protocol::load_conn_parameters(pgsql_hdr* pkt)
 		char* valptr;
 
 		if (*nameptr == '\0')
-			break;			/* found packet terminator */
-		valoffset = offset + strlen(nameptr) + 1;
+			break;			// found terminator
+
+		// Find null terminator for name within bounds
+		const char* name_nul = (const char*)memchr(nameptr, 0, pkt->data.size - offset);
+		if (!name_nul)
+			break; // malformed: name not null-terminated
+
+		valoffset = offset + (name_nul - nameptr) + 1;
+		
 		if (valoffset >= pkt->data.size)
-			break;			/* missing value, will complain below */
+			break;			// missing value, will complain below
+
 		valptr = (char*)pkt->data.ptr + valoffset;
+
+		// Find null terminator for value within bounds
+		const char* val_nul = (const char*)memchr(valptr, 0, pkt->data.size - valoffset);
+		if (!val_nul)
+			break; // malformed: name not null-terminated
 
 		(*myds)->myconn->conn_params.set_value(nameptr, valptr);
 
-		offset = valoffset + strlen(valptr) + 1;
+		offset = valoffset + (val_nul - valptr) + 1;
 	}
 
 	if (offset != pkt->data.size - 1) {
@@ -731,68 +750,121 @@ char* extract_password(const pgsql_hdr* hdr, uint32_t* len) {
 	return pass;
 }
 
-std::vector<std::pair<std::string, std::string>> PgSQL_Protocol::parse_options(const char* options) {
-	std::vector<std::pair<std::string, std::string>> options_list;
+bool PgSQL_Protocol::parse_options(const char* options, std::vector<std::pair<std::string, std::string>>& options_list) {
+	options_list.clear();
 
-	if (!options) return options_list;
+	if (!options) {
+		return true;
+	}
 
-	std::string input(options);
+	const std::string input(options);
 	size_t pos = 0;
+	const size_t len = input.size();
 
-	while (pos < input.size()) {
-		// Skip leading spaces
-		while (pos < input.size() && fast_isspace(input[pos])) {
+	while (pos < len) {
+		// Skip leading whitespace
+		while (pos < len && fast_isspace(input[pos])) {
 			++pos;
 		}
 
-		// Check for -c or --
-		if (input.compare(pos, 2, "-c") == 0 || 
-			input.compare(pos, 2, "--") == 0) {
-			pos += 2; // Skip "-c", "--"
+		if (pos >= len) {
+			break;
 		}
 
-		while (pos < input.size() && fast_isspace(input[pos])) {
+		// Must start with -c or --
+		const bool has_prefix = (input.compare(pos, 2, "-c") == 0 ||
+		                         input.compare(pos, 2, "--") == 0);
+		if (!has_prefix) {
+			// Reject malformed options - token doesn't start with -c or --
+			proxy_error("Invalid options parameter: token must start with '-c' or '--'\n");
+			options_list.clear();
+			return false;
+		}
+		pos += 2; // Skip prefix
+
+		// Skip whitespace after prefix
+		while (pos < len && fast_isspace(input[pos])) {
 			++pos;
 		}
 
-		// Parse key
-		size_t key_start = pos;
-		while (pos < input.size() && input[pos] != '=') {
+		if (pos >= len) {
+			break; // Nothing after -c
+		}
+
+		// Parse key (until = or whitespace)
+		const size_t key_start = pos;
+		while (pos < len && !fast_isspace(input[pos]) && input[pos] != '=') {
 			++pos;
 		}
+
+		if (pos >= len || input[pos] != '=') {
+			// No equals found - malformed
+			proxy_error("Invalid options parameter: missing '=' after parameter name\n");
+			options_list.clear();
+			return false;
+		}
+
 		std::string key = input.substr(key_start, pos - key_start);
-
-		// Skip '='
-		if (pos < input.size() && input[pos] == '=') {
-			++pos;
+		if (key.empty()) {
+			proxy_error("Invalid options parameter: empty key before '='\n");
+			options_list.clear();
+			return false;
 		}
+
+		++pos; // Skip =
 
 		// Parse value
 		std::string value;
 		bool last_was_escape = false;
-		while (pos < input.size()) {
-			char c = input[pos];
+		bool unescaped_space = false;
+
+		while (pos < len) {
+			const char c = input[pos];
+
 			if (fast_isspace(c) && !last_was_escape) {
+				// Check if this space separates options (followed by -c or --)
+				size_t next = pos + 1;
+				while (next < len && fast_isspace(input[next])) {
+					++next;
+				}
+
+				const bool is_separator = (next < len &&
+				    (input.compare(next, 2, "-c") == 0 ||
+				     input.compare(next, 2, "--") == 0));
+
+				if (is_separator) {
+					break; // Valid separator
+				}
+
+				// Unescaped space within value
+				unescaped_space = true;
 				break;
 			}
+
 			if (c == '\\' && !last_was_escape) {
 				last_was_escape = true;
-			}
-			else {
+			} else {
 				value += c;
 				last_was_escape = false;
 			}
 			++pos;
 		}
 
-		// Add key-value pair to the list
-		if (!key.empty()) {
-			std::transform(key.begin(), key.end(), key.begin(), ::tolower);
-			options_list.emplace_back(std::move(key), std::move(value));
+		if (unescaped_space) {
+			proxy_error("Invalid options parameter: unescaped space in value for '%s'. "
+			           "Use backslash before space or quote the value.\n", key.c_str());
+			options_list.clear();
+			return false;
 		}
+
+		// Normalize key to lowercase
+		std::transform(key.begin(), key.end(), key.begin(),
+		              [](unsigned char c) { return std::tolower(c); });
+
+		options_list.emplace_back(std::move(key), std::move(value));
 	}
 
-	return options_list;
+	return true;
 }
 
 EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char* pkt, unsigned int len) {
@@ -837,7 +909,10 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 		goto __exit_process_pkt_handshake_response;
 	}
 
-	password = GloPgAuth->lookup((char*)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass, &attributes);
+	// ADMIN/STATS sessions resolve against the Admin credential scope; see
+	// cred_scope_for_session(). On the stable tier this is USERNAME_FRONTEND and
+	// behaviour is unchanged. See #5987.
+	password = GloPgAuth->lookup((char*)user, cred_scope_for_session((*myds)->sess->session_type), &_ret_use_ssl, &default_hostgroup, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass, &attributes);
 
 	if (password) {
 #ifdef DEBUG
@@ -860,6 +935,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 			(*myds)->sess->session_fast_forward = fast_forward ? SESSION_FORWARD_TYPE_PERMANENT : SESSION_FORWARD_TYPE_NONE;
 		}
 		(*myds)->sess->user_max_connections = max_connections;
+		(*myds)->sess->use_ssl = _ret_use_ssl;
 	} else {
 
 		if (
@@ -906,23 +982,24 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 
 			unsigned char md5_digest[MD5_DIGEST_LENGTH];
 			char md5_string[MD5_DIGEST_LENGTH * 2 + sizeof((*myds)->tmp_login_salt)];
-			MD5_CTX md5_context;
-			// needs to be precalculated and stored in DB
-			MD5_Init(&md5_context);
-			MD5_Update(&md5_context, password, strlen(password));
-			MD5_Update(&md5_context, user, strlen(user));
-			MD5_Final(md5_digest, &md5_context);
+			EVP_MD_CTX* md5_context = EVP_MD_CTX_new();
+			EVP_DigestInit_ex(md5_context, EVP_md5(), NULL);
+			EVP_DigestUpdate(md5_context, password, strlen(password));
+			EVP_DigestUpdate(md5_context, user, strlen(user));
+			unsigned int md5_len = 0;
+			EVP_DigestFinal_ex(md5_context, md5_digest, &md5_len);
 			for (int i = 0; i < MD5_DIGEST_LENGTH; i++) {
-				sprintf(&md5_string[i * 2], "%02x", (unsigned int)md5_digest[i]);
+				snprintf(&md5_string[i * 2], 3, "%02x", (unsigned int)md5_digest[i]);
 			}
 			//
 			memcpy(md5_string+(MD5_DIGEST_LENGTH*2), (*myds)->tmp_login_salt, sizeof((*myds)->tmp_login_salt));
-			MD5_Init(&md5_context);
-			MD5_Update(&md5_context, md5_string, (MD5_DIGEST_LENGTH*2)+sizeof((*myds)->tmp_login_salt));
-			MD5_Final(md5_digest, &md5_context);
+			EVP_DigestInit_ex(md5_context, EVP_md5(), NULL);
+			EVP_DigestUpdate(md5_context, md5_string, (MD5_DIGEST_LENGTH*2)+sizeof((*myds)->tmp_login_salt));
+			EVP_DigestFinal_ex(md5_context, md5_digest, &md5_len);
+			EVP_MD_CTX_free(md5_context);
 			memcpy(md5_string, "md5", 3);
 			for (int i = 0, j = 3;  i < MD5_DIGEST_LENGTH; i++, j+=2) {
-				sprintf(&md5_string[j], "%02x", (unsigned int)md5_digest[i]);
+				snprintf(&md5_string[j], 3, "%02x", (unsigned int)md5_digest[i]);
 			}
 
 			if (strlen(md5_string) == pass_len && strcmp(md5_string, pass) == 0) {
@@ -960,8 +1037,8 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 			}
 
 			PgCredentials stored_user_info{ '\0' };
-			strncpy(stored_user_info.name, user, MAX_USERNAME);
-			strncpy(stored_user_info.passwd, password, MAX_PASSWORD);
+			snprintf(stored_user_info.name, sizeof(stored_user_info.name), "%.*s", (int)(sizeof(stored_user_info.name) - 1), user);
+			snprintf(stored_user_info.passwd, sizeof(stored_user_info.passwd), "%.*s", (int)(sizeof(stored_user_info.passwd) - 1), password);
 
 			if (!(*myds)->scram_state->server_nonce) {
 				/* process as SASLInitialResponse */
@@ -1121,7 +1198,17 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 				if (param_name_lowercase.compare("database") == 0) {
 					userinfo->set_dbname(param_val.empty() ? user : param_val.c_str());
 				} else if (param_name_lowercase.compare("options") == 0) {
-					options_list = parse_options(param_val.c_str());
+					if (!parse_options(param_val.c_str(), options_list)) {
+						generate_error_packet(true, false,
+							"invalid value for parameter \"options\"",
+							PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE, true);
+						ret = EXECUTION_STATE::FAILED;
+						free(userinfo->username);
+						free(userinfo->password);
+						userinfo->username = strdup("");
+						userinfo->password = strdup("");
+						goto __exit_process_pkt_handshake_response;
+					}
 				}
 			} else {
 				// session parameters/variables?
@@ -1225,7 +1312,15 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 				const char* val_cstr = param_val.c_str();
 				proxy_warning("Unrecognized connection parameter. Please report this as a bug for future enhancements:%s:%s\n", param_key.c_str(), val_cstr);
 				const char* escaped_str = escape_string_backslash_spaces(val_cstr);
-				sess->untracked_option_parameters = "-c " + param_key + "=" + escaped_str + " ";
+				std::string& untracked = sess->untracked_option_parameters;
+				// Append the "[ ]-c <key>=<value>" token in place, avoiding the
+				// temporary strings a "-c " + key + "=" + value concatenation creates.
+				if (!untracked.empty())
+					untracked += ' ';
+				untracked += "-c ";
+				untracked += param_key;
+				untracked += '=';
+				untracked += escaped_str;
 				if (escaped_str != val_cstr)
 					free((char*)escaped_str);
 			}
@@ -1268,7 +1363,7 @@ __exit_process_pkt_handshake_response:
 	return ret;
 }
 
-void PgSQL_Protocol::welcome_client() {
+bool PgSQL_Protocol::welcome_client() {
 	PG_pkt pgpkt(128);
 
 	pgpkt.set_multi_pkt_mode(true);
@@ -1319,8 +1414,8 @@ void PgSQL_Protocol::welcome_client() {
 	uint32_t backend_pid = (*myds)->sess->thread_session_id;
 	uint32_t cancel_key = -1;
 	if (RAND_bytes((unsigned char*)&cancel_key, sizeof(cancel_key)) != 1) {
-		// Fallback: use libc PRNG
-		cancel_key = (uint32_t)random();
+		proxy_error("RAND_bytes() failed generating PostgreSQL cancel key\n");
+		return false;
 	}
 	(*myds)->sess->cancel_secret_key = cancel_key;
 
@@ -1339,6 +1434,7 @@ void PgSQL_Protocol::welcome_client() {
 	(*myds)->PSarrayOUT->add((void*)buff.first, buff.second);
 	//(*myds)->DSS = STATE_CLIENT_AUTH_OK;
 	//(*myds)->sess->status = WAITING_CLIENT_DATA;
+	return true;
 }
 
 void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* msg, PGSQL_ERROR_CODES code, bool fatal, bool track, PtrSize_t* _ptr) {
@@ -1346,9 +1442,10 @@ void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* ms
 	assert(send == true || _ptr);
 
 	if (send) {
-		// in case of fatal error we dont generate ready packets
-		ready = !fatal;
+		if (ready == fatal)
+			ready = !ready;
 	}
+
 
 	PG_pkt pgpkt{};
 
@@ -1519,6 +1616,9 @@ char* extract_tag_from_query(const char* query) {
 	constexpr size_t deallocate_prepare_all_len = sizeof("DEALLOCATE PREPARE ALL") - 1;
 	constexpr size_t discard_all_len = sizeof("DISCARD ALL") - 1;
 
+	if (query == nullptr) {
+		return strdup("");
+	}
 	size_t qtlen = strlen(query);
 	if ((qtlen > create_table_len) && strncasecmp(query, "CREATE TABLE AS", create_table_len) == 0) {
 		return strdup("SELECT");
@@ -1529,73 +1629,94 @@ char* extract_tag_from_query(const char* query) {
 	} else if ((qtlen >= discard_all_len) && (strncasecmp(query, "DISCARD ALL", discard_all_len) == 0)) {
 		return strdup("DISCARD ALL");
 	} else {
-		const char* fs = strchr(query, ' ');
-
-		if (fs != NULL) {
-			qtlen = (fs - query) + 1;
-		}
-		char buf[qtlen];
-		memcpy(buf, query, qtlen - 1);
-		buf[qtlen - 1] = 0;
-		{
-			char* s = buf;
-			while (*s) {
-				*s = toupper((unsigned char)*s);
-				s++;
-			}
+		qtlen = strcspn(query, " \t\r\n");
+		std::string buf(query, qtlen);
+		for (char& c : buf) {
+			c = std::toupper(c, std::locale::classic());
 		}
 
-		return strdup(buf);
+		return strdup(buf.c_str());
 	}
 }
 
 
-bool PgSQL_Protocol::generate_ok_packet(bool send, bool ready, const char* msg, int rows, const char* query, char trx_state, PtrSize_t* _ptr,
+bool PgSQL_Protocol::generate_ok_packet(bool send, bool ready, const char* msg, int rows, const char* query, char txn_state, PtrSize_t* _ptr,
 	const std::vector<std::pair<std::string, std::string>>& param_status) {
 	// to avoid memory leak
 	assert(send == true || _ptr);
 
-	PG_pkt pgpkt{};
-
-	if (ready == true) {
-		pgpkt.set_multi_pkt_mode(true);
-	}
+	// Calculate required buffer size and get tag first
+	unsigned int buf_size = 0;
+	const char* tag = nullptr;
+	char* allocated_tag = nullptr;
+	char tmpbuf[128];
 
 	if (query) {
-		char* tag = extract_tag_from_query(query);
-		assert(tag);
-
-		char tmpbuf[128];
-		if (strcmp(tag, "INSERT") == 0) {
-			sprintf(tmpbuf, "%s 0 %d", tag, rows);
-			pgpkt.write_CommandComplete(tmpbuf);
+		allocated_tag = extract_tag_from_query(query);
+		assert(allocated_tag);
+		if (strcmp(allocated_tag, "INSERT") == 0) {
+			snprintf(tmpbuf, sizeof(tmpbuf), "%s 0 %d", allocated_tag, rows);
+			tag = tmpbuf;
+		} else if (strcmp(allocated_tag, "UPDATE") == 0 ||
+			strcmp(allocated_tag, "DELETE") == 0 ||
+			strcmp(allocated_tag, "MERGE") == 0 ||
+			strcmp(allocated_tag, "MOVE") == 0 ||
+			strcmp(allocated_tag, "FETCH") == 0 ||
+			strcmp(allocated_tag, "COPY") == 0 ||
+			strcmp(allocated_tag, "SELECT") == 0) {
+			snprintf(tmpbuf, sizeof(tmpbuf), "%s %d", allocated_tag, rows);
+			tag = tmpbuf;
+		} else {
+			tag = allocated_tag;
 		}
-		else if (strcmp(tag, "UPDATE") == 0 ||
-			strcmp(tag, "DELETE") == 0 ||
-			strcmp(tag, "MERGE") == 0 ||
-			strcmp(tag, "MOVE") == 0 ||
-			strcmp(tag, "FETCH") == 0 ||
-			strcmp(tag, "COPY") == 0 ||
-			strcmp(tag, "SELECT") == 0) {
-			sprintf(tmpbuf, "%s %d", tag, rows);
-			pgpkt.write_CommandComplete(tmpbuf);
-		}
-		else {
-			pgpkt.write_CommandComplete(tag);
-		}
-		free(tag);
 	} else if (msg) {
 		// if no query, but message is provided, use it as tag
-		pgpkt.write_CommandComplete(msg);
+		tag = msg;
 	}
 
+	if (tag) {
+		// CommandComplete: 1 (type) + 4 (length) + strlen(tag) + 1 (null)
+		buf_size += 1 + 4 + strlen(tag) + 1;
+	}
+
+	// ParameterStatus size
 	for (auto& [param_name, param_value] : param_status) {
-		pgpkt.write_ParameterStatus(param_name.c_str(), param_value.c_str());
+		// ParameterStatus: 1 (type) + 4 (length) + strlen(name) + 1 + strlen(value) + 1
+		buf_size += 1 + 4 + param_name.length() + 1 + param_value.length() + 1;
 	}
 
-	if (ready == true) {
-		pgpkt.write_ReadyForQuery(trx_state);
-		pgpkt.set_multi_pkt_mode(false);
+	// ReadyForQuery size
+	if (ready) {
+		// ReadyForQuery: 1 (type) + 4 (length) + 1 (status)
+		buf_size += 1 + 4 + 1;
+	}
+
+	PG_pkt pgpkt(buf_size);
+
+	// Write CommandComplete
+	if (tag) {
+		pgpkt.put_char('C');
+		pgpkt.put_uint32(4 + strlen(tag) + 1);
+		pgpkt.put_string(tag);
+	}
+
+	if (allocated_tag) {
+		free(allocated_tag);
+	}
+
+	// Write ParameterStatus messages
+	for (auto& [param_name, param_value] : param_status) {
+		pgpkt.put_char('S');
+		pgpkt.put_uint32(4 + param_name.length() + 1 + param_value.length() + 1);
+		pgpkt.put_string(param_name.c_str());
+		pgpkt.put_string(param_value.c_str());
+	}
+
+	// Write ReadyForQuery
+	if (ready) {
+		pgpkt.put_char('Z');
+		pgpkt.put_uint32(5);
+		pgpkt.put_char(txn_state);
 	}
 
 	auto buff = pgpkt.detach();

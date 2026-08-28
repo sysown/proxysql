@@ -29,6 +29,19 @@ using std::pair;
 
 const uint32_t SYNC_TIMEOUT = 10;
 
+// Writer and reader hostgroups — read from TAP_MYSQL8_BACKEND_HG env var.
+// Defaults to 0/1 for backward compatibility with legacy infra.
+static int WHG = 0;
+static int RHG = 1;
+
+static void init_hostgroups() {
+	const char* hg_env = getenv("TAP_MYSQL8_BACKEND_HG");
+	if (hg_env) {
+		WHG = atoi(hg_env);
+		RHG = WHG + 1;
+	}
+}
+
 using mysql_server_tuple = std::tuple<int,std::string,int,int,std::string,int,int,int,int,int,int,std::string>;
 using replication_hostgroups_tuple = std::tuple<int,int,std::string>;
 
@@ -172,7 +185,7 @@ int set_read_only_value(const std::string& host, uint16_t port, const std::strin
 	}
 
 	char query[256];
-	sprintf(query, "SET @@global.read_only=%d", read_only_val);
+	snprintf(query, sizeof(query), "SET @@global.read_only=%d", read_only_val);
 
 	rc_query = mysql_query(mysqldb,query);
 
@@ -198,17 +211,34 @@ int test_scenario_1(MYSQL* proxy_admin, const CommandLine& cl) {
 	MYSQL* dummy_mysqldb = NULL;
 	
 	const std::vector<mysql_server_tuple> insert_mysql_servers_values {
-		std::make_tuple(0, cl.mysql_host, cl.mysql_port, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, "") // this server has read_only value 0 (writer)
+		std::make_tuple(WHG, cl.mysql_host, cl.mysql_port, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, "") // this server has read_only value 0 (writer)
 	};
 
 	const std::vector<replication_hostgroups_tuple> insert_replication_hostgroups_values {
-		std::make_tuple(0, 1, "read_only") 
+		std::make_tuple(WHG, RHG, "read_only")
 	};
 
 	// cleaning old records
 	MYSQL_QUERY__(proxy_admin, "DELETE FROM mysql_servers");
 	MYSQL_QUERY__(proxy_admin, "DELETE FROM mysql_replication_hostgroups");
 	MYSQL_QUERY__(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
+	// Set default_hostgroup to match writer_hostgroup (WHG) used in this
+	// test. WHG defaults to 0 for the legacy infra but is overridden to
+	// 2900 by the mysql84-g4 group via TAP_MYSQL8_BACKEND_HG — see
+	// init_hostgroups() above. If we hardcode 0 here, the mysql84 group
+	// routes the test's BEGIN query to an empty hostgroup 0 and times
+	// out at 10 s. A previous fix (26c5a2572) hardcoded 0 because it
+	// predated the mysql84 hostgroup migration in 4f9ab49e7 — this
+	// commit finishes that fix by making the default_hostgroup follow
+	// WHG at runtime.
+	{
+		std::string update_user;
+		string_format("UPDATE mysql_users SET default_hostgroup=%d WHERE username='%s'",
+		              update_user, WHG, cl.root_username);
+		MYSQL_QUERY__(proxy_admin, update_user.c_str());
+		MYSQL_QUERY__(proxy_admin, "LOAD MYSQL USERS TO RUNTIME");
+	}
 
 	MYSQL_QUERY__(proxy_admin, "SET mysql-monitor_read_only_interval=200"); // setting read_only variables
 	MYSQL_QUERY__(proxy_admin, "SET mysql-monitor_read_only_timeout=100");
@@ -225,14 +255,14 @@ int test_scenario_1(MYSQL* proxy_admin, const CommandLine& cl) {
 
 		ok(read_only_val == 0, "MySQL Server '%s:%d' should function as a writer", cl.mysql_host, cl.mysql_port);
 
-		// Inserting new records into 'mysql_servers' and 'mysql_replication_hostgroups'. 
+		// Inserting new records into 'mysql_servers' and 'mysql_replication_hostgroups'.
 		result = insert_mysql_servers_records(proxy_admin, insert_mysql_servers_values, insert_replication_hostgroups_values);
 
 		if (result != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Failed to insert records in mysql_servers table.");
 			goto cleanup;
 		}
-	
+
 		std::string variable_val;
 
 		// get read_only interval variable value
@@ -351,17 +381,34 @@ int test_scenario_2(MYSQL* proxy_admin, const CommandLine& cl) {
 	MYSQL* dummy_mysqldb = NULL;
 
 	const std::vector<mysql_server_tuple> insert_mysql_servers_values {
-		std::make_tuple(1, cl.mysql_host, cl.mysql_port, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, "") // this server has read_only value 0 (writer)
+		std::make_tuple(RHG, cl.mysql_host, cl.mysql_port, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, "") // this server has read_only value 0 (writer)
 	};
 
 	const std::vector<replication_hostgroups_tuple> insert_replication_hostgroups_values {
-		std::make_tuple(0, 1, "read_only") 
+		std::make_tuple(WHG, RHG, "read_only")
 	};
 
 	// cleaning old records
 	MYSQL_QUERY__(proxy_admin, "DELETE FROM mysql_servers");
 	MYSQL_QUERY__(proxy_admin, "DELETE FROM mysql_replication_hostgroups");
 	MYSQL_QUERY__(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
+	// Set default_hostgroup to match writer_hostgroup (WHG) used in this
+	// test. WHG defaults to 0 for the legacy infra but is overridden to
+	// 2900 by the mysql84-g4 group via TAP_MYSQL8_BACKEND_HG — see
+	// init_hostgroups() above. If we hardcode 0 here, the mysql84 group
+	// routes the test's BEGIN query to an empty hostgroup 0 and times
+	// out at 10 s. A previous fix (26c5a2572) hardcoded 0 because it
+	// predated the mysql84 hostgroup migration in 4f9ab49e7 — this
+	// commit finishes that fix by making the default_hostgroup follow
+	// WHG at runtime.
+	{
+		std::string update_user;
+		string_format("UPDATE mysql_users SET default_hostgroup=%d WHERE username='%s'",
+		              update_user, WHG, cl.root_username);
+		MYSQL_QUERY__(proxy_admin, update_user.c_str());
+		MYSQL_QUERY__(proxy_admin, "LOAD MYSQL USERS TO RUNTIME");
+	}
 
 	MYSQL_QUERY__(proxy_admin, "SET mysql-monitor_read_only_interval=200"); // setting read_only variables
 	MYSQL_QUERY__(proxy_admin, "SET mysql-monitor_read_only_timeout=100");
@@ -473,7 +520,13 @@ int test_read_only_offline_hard_servers(MYSQL* proxy_admin, const CommandLine& c
 		MYSQL_QUERY__(proxy_admin, "CREATE TABLE proxysql_servers_sync_test_backup_2687 AS SELECT * FROM proxysql_servers");
 
 		// 2. Remove primary from Core nodes
-		MYSQL_QUERY__(proxy_admin, "DELETE FROM proxysql_servers WHERE hostname=='127.0.0.1' AND PORT==6032");
+		// CI-isolated: Use cl.host and cl.admin_port instead of hardcoded values
+		std::string delete_primary_query;
+		string_format(
+			"DELETE FROM proxysql_servers WHERE hostname='%s' AND port=%d",
+			delete_primary_query, cl.host, cl.admin_port
+		);
+		MYSQL_QUERY__(proxy_admin, delete_primary_query.c_str());
 		MYSQL_QUERY__(proxy_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
 
 		core_nodes = fetch_cluster_nodes(proxy_admin);
@@ -580,6 +633,9 @@ int main(int, char**) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
+
+	init_hostgroups();
+	diag("Using hostgroups: WHG=%d, RHG=%d", WHG, RHG);
 
 	plan(9+9);
 

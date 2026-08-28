@@ -169,7 +169,7 @@ int main(int argc, char** argv) {
 			// send a large packet
 			if (i==1) {
 				std::string s = "";
-				while (s.length() < 3*1024*1024) {
+				while (s.length() < static_cast<size_t>(3*1024*1024)) {
 					s += "blahblahblah1234567890blahblahblah1234567890blahblahblah1234567890blahblahblah1234567890" + std::to_string(rand()%100);
 				}
 				p2 += s;

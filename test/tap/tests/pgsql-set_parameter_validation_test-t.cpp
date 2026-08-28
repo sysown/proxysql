@@ -19,15 +19,19 @@ using PGConnPtr = std::unique_ptr<PGconn, decltype(&PQfinish)>;
 
 enum ConnType {
     ADMIN,
-    BACKEND
+    BACKEND,
+    CLIENT
 };
 
 PGConnPtr createNewConnection(ConnType conn_type, const std::string& options = "", bool with_ssl = false) {
-    
-    const char* host = (conn_type == BACKEND) ? cl.pgsql_host : cl.pgsql_admin_host;
-    int port = (conn_type == BACKEND) ? cl.pgsql_port : cl.pgsql_admin_port;
-    const char* username = (conn_type == BACKEND) ? cl.pgsql_root_username : cl.admin_username;
-    const char* password = (conn_type == BACKEND) ? cl.pgsql_root_password : cl.admin_password;
+    const char* host = (conn_type == ADMIN) ? cl.pgsql_admin_host : cl.pgsql_host;
+    int port = (conn_type == ADMIN) ? cl.pgsql_admin_port : cl.pgsql_port;
+    const char* username = (conn_type == ADMIN) ? cl.admin_username :
+        (conn_type == BACKEND ? cl.pgsql_root_username : cl.pgsql_username);
+    const char* password = (conn_type == ADMIN) ? cl.admin_password :
+        (conn_type == BACKEND ? cl.pgsql_root_password : cl.pgsql_password);
+    const char* connection_name = (conn_type == ADMIN) ? "Admin" :
+        (conn_type == BACKEND ? "Backend" : "Client");
 
     std::stringstream ss;
 
@@ -41,17 +45,40 @@ PGConnPtr createNewConnection(ConnType conn_type, const std::string& options = "
 
     PGconn* conn = PQconnectdb(ss.str().c_str());
     if (PQstatus(conn) != CONNECTION_OK) {
-        fprintf(stderr, "Connection failed to '%s': %s", (conn_type == BACKEND ? "Backend" : "Admin"), PQerrorMessage(conn));
+        fprintf(stderr, "Connection failed to '%s': %s", connection_name, PQerrorMessage(conn));
         PQfinish(conn);
         return PGConnPtr(nullptr, &PQfinish);
     }
     return PGConnPtr(conn, &PQfinish);
 }
 
+std::string queryCurrentUser(PGconn* conn) {
+    PGresult* res = PQexec(conn, "SELECT current_user");
+    std::string username;
+    if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) == 1) {
+        username = PQgetvalue(res, 0, 0);
+    }
+    PQclear(res);
+    return username;
+}
+
 struct SetCommandTest {
     std::string command;
     bool expect_success;
     std::string expected_value;
+    // Optional override for `pgsql-set_parser_algorithm = 3` (the ParserSQL
+    // walker path). Some cases like #150 below have algorithm-dependent SHOW
+    // output: under algorithms 0/1/2 the regex-based SET parser runs
+    // remove_spaces() on the whole query (including inside string literals,
+    // which is destructive but historical), so values like
+    // `'"$user"   ,    public'` reach PG already collapsed to
+    // `'"$user" , public'`. The walker (algo 3) keeps the original input,
+    // so PG stores and SHOWs the multi-space version verbatim -- which is
+    // actually PG's correct behaviour, but diverges from algorithms 0/1/2.
+    // If `expected_value_algo3` is non-empty, the test uses it when running
+    // against a proxysql configured with algo 3; otherwise the same
+    // `expected_value` is used regardless of algorithm.
+    std::string expected_value_algo3;
 };
 
 struct SetTestCase {
@@ -301,7 +328,17 @@ std::vector<SetTestCase> test_cases = {
         // Valid values
         {"SET search_path TO \"$user\", public", true, "\"$user\", public"},
         {"SET search_path TO \"$user\",public", true, "\"$user\", public"},
-        {"SET search_path = '\"$user\"   ,    public'", true, "\"\"\"$user\"\" , public\""},
+        // Algorithm-dependent: under algo 0/1/2 proxysql's remove_spaces()
+        // destructively collapses internal whitespace inside the string
+        // literal before sending to PG, so PG sees `'"$user" , public'` and
+        // SHOWs `"""$user"" , public"`. Under algo 3 (ParserSQL walker)
+        // the original multi-space input reaches PG unchanged and SHOW
+        // returns `"""$user""   ,    public"`. Both are accepted; the
+        // walker's behaviour is closer to what PG would do without proxysql
+        // in the path.
+        {"SET search_path = '\"$user\"   ,    public'", true,
+            "\"\"\"$user\"\" , public\"",
+            "\"\"\"$user\"\"   ,    public\""},
         {"SET search_path = 'public '", true, "\"public \""},
         {"SET search_path = \"$user\"", true, "\"$user\""},
         {"SET search_path = '$user'", true, "\"$user\""},
@@ -341,23 +378,59 @@ std::vector<SetTestCase> test_cases = {
     }}
 };
 
+// Query proxysql admin for the currently-configured pgsql-set_parser_algorithm.
+// Returns 0/1/2/3 or -1 if the lookup fails (treated as "use default expected"
+// downstream, which is the algo 0/1/2 column).
+static int query_pgsql_set_parser_algorithm() {
+    PGConnPtr admin = createNewConnection(ConnType::ADMIN, "", false);
+    if (!admin || PQstatus(admin.get()) != CONNECTION_OK) return -1;
+    PGresult* r = PQexec(admin.get(),
+        "SELECT variable_value FROM global_variables "
+        "WHERE variable_name = 'pgsql-set_parser_algorithm'");
+    int algo = -1;
+    if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) >= 1) {
+        try { algo = std::stoi(PQgetvalue(r, 0, 0)); } catch (...) {}
+    }
+    PQclear(r);
+    return algo;
+}
+
 int main(int argc, char** argv) {
-    int total_tests = 0;
+    int total_tests = 2;
 
 	for (const auto& test_case : test_cases) {
 		total_tests += test_case.commands.size();
 	}
-   
+
     plan(total_tests);
 
     if (cl.getEnv())
         return exit_status();
+
+    const int parser_algorithm = query_pgsql_set_parser_algorithm();
+    diag("pgsql-set_parser_algorithm = %d (per-case algo3 override %s)",
+         parser_algorithm, parser_algorithm == 3 ? "ACTIVE" : "ignored");
+
+    PGConnPtr client_conn = createNewConnection(ConnType::CLIENT, "", false);
+    if (!client_conn || PQstatus(client_conn.get()) != CONNECTION_OK) {
+        BAIL_OUT("Error: failed to create an unprivileged PostgreSQL connection");
+        return exit_status();
+    }
+    const std::string client_user = queryCurrentUser(client_conn.get());
+    ok(client_user == cl.pgsql_username,
+        "unprivileged frontend retains its backend identity (expected '%s', got '%s')",
+        cl.pgsql_username, client_user.c_str());
+    client_conn.reset();
 
     PGConnPtr conn = createNewConnection(ConnType::BACKEND, "", false);
     if (!conn || PQstatus(conn.get()) != CONNECTION_OK) {
         BAIL_OUT("Error: failed to connect to the database in file %s, line %d", __FILE__, __LINE__);
         return exit_status();
     }
+    const std::string backend_user = queryCurrentUser(conn.get());
+    ok(backend_user == cl.pgsql_root_username,
+        "privileged frontend does not reuse the unprivileged backend identity (expected '%s', got '%s')",
+        cl.pgsql_root_username, backend_user.c_str());
 
     for (const auto& test_case : test_cases) {
         for (const auto& cmd_test : test_case.commands) {
@@ -406,8 +479,16 @@ int main(int argc, char** argv) {
                 PQclear(res_new);
 
                 if (cmd_test.expect_success) {
-                    if (new_value != cmd_test.expected_value) {
-                        error_msg = "Expected '" + cmd_test.expected_value +
+                    // Pick algo3 override only when (a) the proxysql we are
+                    // talking to is configured with pgsql-set_parser_algorithm=3
+                    // AND (b) the test case actually provided one. Otherwise
+                    // fall back to the standard expected value.
+                    const std::string& effective_expected =
+                        (parser_algorithm == 3 && !cmd_test.expected_value_algo3.empty())
+                            ? cmd_test.expected_value_algo3
+                            : cmd_test.expected_value;
+                    if (new_value != effective_expected) {
+                        error_msg = "Expected '" + effective_expected +
                             "' got '" + new_value + "'";
                         test_ok = false;
                     }

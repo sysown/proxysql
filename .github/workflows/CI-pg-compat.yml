@@ -1,0 +1,47 @@
+# PAIRED FILE -- caller half of the CI-pg-compat pair (lives on v3.0). The
+# reusable half, .github/workflows/gh-actions-reusable/ci-pg-compat.yml, is
+# staged in THIS repo for review but must be merged to the `GH-Actions`
+# branch FIRST, at path `.github/workflows/ci-pg-compat.yml`, before (never
+# after) this caller file merges to v3.0 -- see doc/GH-Actions/README.md
+# "Merge order" (~line 816): `workflow_run`/`workflow_call` references are
+# only resolved against files that already exist on the target branch, so a
+# caller landing before its reusable exists on GH-Actions fails immediately
+# with "Unable to resolve action". See doc/GH-Actions/README.md (~lines
+# 42-170) for the full two-branch caller/reusable split rationale.
+name: CI-pg-compat
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  pg-compat:
+    # Runs on: the nightly schedule, a manual dispatch, or a pull_request
+    # that carries the 'pg-compat' label (checked on every listed pull_request
+    # type, including 'labeled', so adding the label to an already-open PR
+    # triggers a run without needing a new commit). Unlike the TAP families,
+    # this does NOT chain off CI-trigger/CI-builds -- it builds ProxySQL
+    # inline in the reusable job, so it doesn't need CI-builds' cache to
+    # exist first (nightly/label runs have no guaranteed prior CI-builds run
+    # to restore from).
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'pg-compat')
+    # write-all: reusable-workflow permissions are the intersection of
+    # caller + callee: the callee at ci-pg-compat.yml@GH-Actions also
+    # declares write-all (needed for actions/upload-artifact's write scope
+    # under the pull_request event, matching CI-3p-postgresql.yml's
+    # documented rationale).
+    permissions: write-all # NOSONAR githubactions:S8234 — see the note above; matches all other caller workflows
+    uses: sysown/proxysql/.github/workflows/ci-pg-compat.yml@GH-Actions # NOSONAR githubactions:S7637 — branch ref matches all other caller workflows
+    secrets: inherit # NOSONAR githubactions:S7635 — matches all other caller workflows
+    with:
+      trigger: ${{ toJson(github) }}

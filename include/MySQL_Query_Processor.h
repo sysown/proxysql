@@ -1,5 +1,5 @@
-#ifndef __CLASS_MYSQL_QUERY_PROCESSOR_H
-#define __CLASS_MYSQL_QUERY_PROCESSOR_H
+#ifndef PROXYSQL_MYSQL_QUERY_PROCESSOR_H
+#define PROXYSQL_MYSQL_QUERY_PROCESSOR_H
 #include "proxysql.h"
 #include "cpp.h"
 #include "QP_rule_text.h"
@@ -12,7 +12,7 @@ typedef struct _MySQL_Query_processor_Rule_t : public QP_rule_t {
 
 class MySQL_Query_Processor_Output : public Query_Processor_Output {
 public:
-	MySQL_Query_Processor_Output() = default;
+MySQL_Query_Processor_Output() : Query_Processor_Output(), min_gtid(nullptr), gtid_from_hostgroup(-1) {}
 	~MySQL_Query_Processor_Output() = default;
 
 	void init() {
@@ -60,7 +60,7 @@ public:
 
 private:
 	Command_Counter* commands_counters[MYSQL_COM_QUERY___NONE];
-	static bool _is_valid_gtid(char* gtid, size_t gtid_len);
+	static bool _is_valid_gtid(const char* gtid, size_t gtid_len);
 	static MySQL_Query_Processor_Rule_t* new_query_rule(const MySQL_Query_Processor_Rule_t* mqr);
 
 	inline
@@ -74,28 +74,32 @@ private:
 
 	inline
 	void query_parser_first_comment_extended(const char* key, const char* value, MySQL_Query_Processor_Output* qpo) {
-		if (!strcasecmp(key, "min_gtid")) {
-			if (mysql_thread___ignore_min_gtid_annotations) {
-				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Ignoring min_gtid=%s\n", value);
-			} else {
-				size_t l = strlen(value);
-				if (_is_valid_gtid((char*)value, l)) {
-					char* buf = (char*)malloc(l + 1);
-					strncpy(buf, value, l);
-					buf[l] = '\0';
-
-					if (qpo->min_gtid) {
-						free(qpo->min_gtid);
-					}
-					qpo->min_gtid = buf;
-				} else {
-					proxy_warning("Invalid min_gtid value=%s\n", value);
-				}
-			}
+		if (strcasecmp(key, "min_gtid")) {
+			return;
 		}
+		if (mysql_thread___ignore_min_gtid_annotations) {
+			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Ignoring min_gtid=%s\n", value);
+			return;
+		}
+		size_t l = strlen(value);
+		if (!_is_valid_gtid(value, l)) {
+			proxy_warning("Invalid min_gtid value=%s\n", value);
+			return;
+		}
+		char* buf = (char*)l_alloc(l + 1);
+		if (buf == nullptr) {
+			proxy_warning("Unable to allocate memory for min_gtid=%s\n", value);
+			return;
+		}
+		memcpy(buf, value, l);
+		buf[l] = '\0';
+		if (qpo->min_gtid) {
+			l_free(0, qpo->min_gtid);
+		}
+		qpo->min_gtid = buf;
 	}
 
 	friend class Query_Processor;
 };
 
-#endif /* __CLASS_MYSQL_QUERY_PROCESSOR_H */
+#endif /* PROXYSQL_MYSQL_QUERY_PROCESSOR_H */

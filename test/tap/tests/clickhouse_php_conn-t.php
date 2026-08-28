@@ -25,6 +25,12 @@ $port=6090;
 #$password="sbtest1";
 #$port=13306;
 
+
+$admin_host = getenv("TAP_ADMINHOST");
+$admin_host = $admin_host == false ? "127.0.0.1" : $admin_host;
+
+$proxy_host = getenv("TAP_HOST");
+$proxy_host = $proxy_host == false ? "127.0.0.1" : $proxy_host;
 $admin_user = getenv("TAP_ADMINUSERNAME");
 $admin_user = $admin_user == false ? "admin" : $admin_user;
 
@@ -35,7 +41,7 @@ $admin_port = getenv("TAP_ADMINPORT");
 $admin_port = $admin_port == false ? 6032 : $admin_port;
 
 echo ":: Creating ProxySQL Admin connection...".PHP_EOL;
-$proxy_admin = new mysqli("127.0.0.1", $admin_user, $admin_pass, "", $admin_port);
+$proxy_admin = new mysqli($admin_host, $admin_user, $admin_pass, "", $admin_port);
 if ($proxy_admin->connect_errno) {
     die("PorxySQL connect failed: " . $proxy->connect_error);
 }
@@ -47,7 +53,7 @@ $proxy_admin->query("LOAD CLICKHOUSE USERS TO RUNTIME");
 echo ":: Finished creating users".PHP_EOL;
 
 echo ":: Creating ProxySQL connection...".PHP_EOL;
-$proxy = new mysqli("127.0.0.1", $username, $password, "", $port);
+$proxy = new mysqli($proxy_host, $username, $password, "", $port);
 if ($proxy->connect_errno) {
     die("PorxySQL connect failed: " . $proxy->connect_error);
 }
@@ -83,7 +89,7 @@ if ($port !== 6090) {
 	$proxy->query("CREATE DATABASE IF NOT EXISTS test");
 	$proxy->query("USE test");
 	$proxy->query("DROP TABLE IF EXISTS types_table");
-	$proxy->query("CREATE TABLE IF NOT EXISTS types_table (EventDate DATE, DateTime DATETIME, col1 UInt8, col2 Int16, col3 Int32, col4 Int64, col5 Nullable(Float32), col6 Float64, col7 Decimal64(3)) ENGINE=MergeTree(EventDate, (EventDate), 8192)");
+	$proxy->query("CREATE TABLE IF NOT EXISTS types_table (EventDate DATE, DateTime DATETIME, col1 UInt8, col2 Int16, col3 Int32, col4 Int64, col5 Nullable(Float32), col6 Float64, col7 Decimal64(3)) ENGINE=MergeTree() ORDER BY (EventDate)");
 }
 
 $shortName = exec('date +%Z');

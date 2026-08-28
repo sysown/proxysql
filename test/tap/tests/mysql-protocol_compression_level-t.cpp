@@ -25,6 +25,7 @@
 
 #include "tap.h"
 #include "command_line.h"
+#include "noise_utils.h"
 #include "utils.h"
 
 using std::string;
@@ -51,7 +52,7 @@ uint64_t measure_avg_query_time(
 
 	uint64_t avg { 0 };
 	uint64_t row_count { 0 };
-	uint64_t delay_us = std::pow(10, 6) / its;
+	uint64_t delay_us = static_cast<uint64_t>(std::pow(10, 6) / its);
 
 	for (uint32_t i = 0; i < its; i++) {
 		const string it_fields { get_rnd_fields(fields) };
@@ -91,7 +92,7 @@ uint64_t measure_avg_query_time(
 
 const char version_comment_query[] { "select @@version_comment limit 1" };
 
-int check_perf_diff(const string tcase, double time1, double time2, double exp_diff, bool _diag=false) {
+int check_perf_diff(const string& tcase, double time1, double time2, double exp_diff, bool _diag=false) {
 	double diff = time2 - time1;
 	double perf_diff = double(diff * 100) / time1;
 
@@ -112,22 +113,40 @@ int check_perf_diff(const string tcase, double time1, double time2, double exp_d
 }
 
 int main(int argc, char** argv) {
-	plan(8);
-
 	CommandLine cl;
 
 	if (cl.getEnv()) {
+        diag("=== MySQL Protocol Compression Level Test ===");
+        diag("This test measures the performance impact of different compression levels");
+        diag("on artificially large resultsets (~40MB).");
+        diag("It compares latency across:");
+        diag("  1. ProxySQL without compression.");
+        diag("  2. ProxySQL with compression (levels 3 and 8).");
+        diag("  3. Direct MySQL backend with and without compression.");
+        diag("====================================================");
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
 
-	MYSQL* admin = init_mysql_conn(cl.host, cl.admin_port, cl.admin_username, cl.admin_password);
+	spawn_internal_noise(cl, internal_noise_random_stats_poller);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
+	spawn_internal_noise(cl, internal_noise_pgsql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}});
+
+	if (cl.use_noise) {
+		plan(8 + 3);
+	} else {
+		plan(8);
+	}
+
+	diag("Connecting to ProxySQL Admin: %s:%d", cl.host, cl.admin_port);
+        MYSQL* admin = init_mysql_conn(cl.host, cl.admin_port, cl.admin_username, cl.admin_password);
 	if (!admin) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
 	}
 
-	MYSQL* proxy = init_mysql_conn(cl.host, cl.port, cl.username, cl.password);
+	diag("Connecting to ProxySQL Frontend: %s:%d", cl.host, cl.port);
+        MYSQL* proxy = init_mysql_conn(cl.host, cl.port, cl.username, cl.password);
 	if (!proxy) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
@@ -171,12 +190,14 @@ int main(int argc, char** argv) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_cmp));
 		return EXIT_FAILURE;
 	}
-	MYSQL* mysql = init_mysql_conn(cl.host, cl.mysql_port, cl.username, cl.password, false, false);
+	diag("Connecting directly to MySQL backend: %s:%d", cl.mysql_host, cl.mysql_port);
+        MYSQL* mysql = mysql_init(NULL); if (!mysql_real_connect(mysql, cl.mysql_host, cl.mysql_username, cl.mysql_password, NULL, cl.mysql_port, NULL, 0)) { diag("Direct connection failed: %s (User: %s, Pass: %s)", mysql_error(mysql), cl.mysql_username, cl.mysql_password); return EXIT_FAILURE; }
 	if (!mysql) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 		return EXIT_FAILURE;
 	}
-	MYSQL* mysql_cmp = init_mysql_conn(cl.host, cl.mysql_port, cl.username, cl.password, false, true);
+	diag("Connecting directly to MySQL backend (Compressed): %s:%d", cl.mysql_host, cl.mysql_port);
+        MYSQL* mysql_cmp = init_mysql_conn(cl.mysql_host, cl.mysql_port, cl.mysql_username, cl.mysql_password, false, true);
 	if (!mysql_cmp) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql_cmp));
 		return EXIT_FAILURE;
@@ -267,20 +288,20 @@ int main(int argc, char** argv) {
 	// proxy < proxy_cmp(3): Normally this value goes below '200%'. When the value goes above that threshold,
 	// isn't because the compressed workload is slower than in other runs, but because the non-compressed load
 	// slightly faster than usual. No further investigation have gone into this.
-	int rc = check_perf_diff("proxysql-proxysql_cmp(3)", proxy_time, proxy_cmp_time, 350);
+	int rc = check_perf_diff("proxysql-proxysql_cmp(3)", static_cast<double>(proxy_time), static_cast<double>(proxy_cmp_time), 350);
 	if (rc) { return EXIT_FAILURE; }
 
 	// proxy < proxy_cmp(8): Normally this diff goes below '500%'. See comment for 'proxysql-proxysql_cmp(3)'.
-	rc = check_perf_diff("proxysql-proxysql_cmp(8)", proxy_time, proxy_cmp8_time, 650);
+	rc = check_perf_diff("proxysql-proxysql_cmp(8)", static_cast<double>(proxy_time), static_cast<double>(proxy_cmp8_time), 650);
 	if (rc) { return EXIT_FAILURE; }
 
 	// proxy_cmp(3) < proxy_cmp(8)
-	rc = check_perf_diff("proxysql_cmp(3)-proxysql_cmp(8)", proxy_cmp_time, proxy_cmp8_time, 250);
+	rc = check_perf_diff("proxysql_cmp(3)-proxysql_cmp(8)", static_cast<double>(proxy_cmp_time), static_cast<double>(proxy_cmp8_time), 250);
 	if (rc) { return EXIT_FAILURE; }
 
 	// mysql < mysql_cmp: Normally this sits between 305-350. Since this measurement in isolation is the least
 	// interesting to us, we give it a bigger threshold.
-	rc = check_perf_diff("mysql-mysql_cmp", mysql_time, mysql_cmp_time, 550);
+	rc = check_perf_diff("mysql-mysql_cmp", static_cast<double>(mysql_time), static_cast<double>(mysql_cmp_time), 550);
 	if (rc) { return EXIT_FAILURE; }
 
 	// MYSQL PERF COMPARISONS
@@ -288,12 +309,12 @@ int main(int argc, char** argv) {
 	// proxy < mysql_cmp: Local tests show ProxySQL having at least a '200%' perf diff to MySQL. This
 	// measurements can't be reproduced on the CI, as the base 'proxy_time' is slower. The diff is left for
 	// further diagnosing.
-	rc = check_perf_diff("proxysql-mysql_cmp", proxy_time, mysql_cmp_time, -150, true);
+	check_perf_diff("proxysql-mysql_cmp", static_cast<double>(proxy_time), static_cast<double>(mysql_cmp_time), -150, true);
 
 	// proxy_cmp < mysql_cmp: Local tests show ProxySQL having at least a '60%' perf diff to MySQL. This
 	// measurements can't be reproduced on the CI, as the base 'proxy_time' is slower. But the diff is left
 	// for further diagnosing.
-	rc = check_perf_diff("proxysql_cmp-mysql_cmp", proxy_cmp_time, mysql_cmp_time, -5, true);
+	rc = check_perf_diff("proxysql_cmp-mysql_cmp", static_cast<double>(proxy_cmp_time), static_cast<double>(mysql_cmp_time), -5, true);
 	if (rc) { return EXIT_FAILURE; }
 
 	// Recover default query rules

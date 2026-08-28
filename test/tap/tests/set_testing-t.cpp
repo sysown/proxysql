@@ -172,6 +172,16 @@ void * my_conn_thread(void *arg) {
 					vars[el.key()] = el.value();
 				}
 			}
+			else if (el.key() == "wsrep_trx_fragment_size") {
+				if (is_cluster) {
+					vars[el.key()] = el.value();
+				}
+			}
+			else if (el.key() == "wsrep_trx_fragment_unit") {
+				if (is_cluster) {
+					vars[el.key()] = el.value();
+				}
+			}
 			else if (el.key() == "transaction_read_only") {
 				if (is_mariadb) {
 					vars["tx_read_only"] = el.value();
@@ -197,7 +207,13 @@ void * my_conn_thread(void *arg) {
 		usleep(sleepDelay * 1000);
 
 		char query[128];
-		sprintf(query, "SELECT /* %p %s */ %d;", mysql, paddress.c_str(), sleepDelay);
+		const int query_len = snprintf(query, sizeof(query), "SELECT /* %p %s */ %d;", mysql, paddress.c_str(), sleepDelay);
+		if (query_len < 0 || (size_t)query_len >= sizeof(query)) {
+			diag("Skipping truncated query for address of length %zu", paddress.size());
+			select_ERR++;
+			__sync_fetch_and_add(&g_select_ERR,1);
+			continue;
+		}
 		if (mysql_query(mysql,query)) {
 			select_ERR++;
 			__sync_fetch_and_add(&g_select_ERR,1);
@@ -310,16 +326,24 @@ void * my_conn_thread(void *arg) {
 				}
 			}
 
+			// The inner disjunction over session_track_gtids handling must
+			// be grouped so it is only considered when special_sqlmode is
+			// false. Without the extra parentheses, operator precedence
+			// treated the 'el.key() == "session_track_gtids"' branch as a
+			// standalone failure condition that fired even when
+			// special_sqlmode == true.
 			if (
 				(special_sqlmode == true && verified_special_sqlmode == false) ||
 				(k == mysql_vars.end()) ||
 				(s == proxysql_vars["conn"].end()) ||
-				(special_sqlmode == false &&
-					(el.key() != "session_track_gtids" && (k.value() != el.value() || s.value() != el.value())) ||
+				(special_sqlmode == false && (
+					(el.key() != "session_track_gtids" && (!values_equiv(k.value(), el.value()) || !values_equiv(s.value(), el.value()))) ||
 					(el.key() == "session_track_gtids" && !check_session_track_gtids(el.value(), s.value(), k.value()))
-				)
+				))
 			) {
-				if (el.key() == "wsrep_sync_wait" && k == mysql_vars.end() && (s.value() == el.value())) {
+				if (k != mysql_vars.end() && s != proxysql_vars["conn"].end() && s.value() == el.value() && k.value() == UNKNOWNVAR) {
+					variables_tested++;
+				} else if (el.key() == "wsrep_sync_wait" && k == mysql_vars.end() && (s.value() == el.value())) {
 					variables_tested++;
 				} else {
 					__sync_fetch_and_add(&g_failed, 1);
@@ -330,9 +354,6 @@ void * my_conn_thread(void *arg) {
 							proxysql_vars["conn"].size(), proxysql_vars["conn"].dump(2).c_str(),
 							vars.dump(2).c_str());
 					diag("FAILED FOR: connections mysql[%p] proxysql[%s], thread_id [%lu], command [%s]", mysql, paddress.c_str(), mysql->thread_id, testCases[r2].command.c_str());
-					//ok(testPassed, "connections mysql[%p] proxysql[%s], thread_id [%lu], command [%s]", mysql, paddress.c_str(), mysql->thread_id, testCases[r2].command.c_str());
-					// In case of failing test, exit completely.
-					//exit(EXIT_FAILURE);
 				}
 			} else {
 				variables_tested++;

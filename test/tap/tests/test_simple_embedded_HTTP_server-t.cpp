@@ -105,9 +105,11 @@ int main() {
 	MYSQL_QUERY(proxysql_admin, "SET admin-web_port=6080");
 	MYSQL_QUERY(proxysql_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
 
-	run_request("https://127.0.0.1:6080");
-	run_request("https://127.0.0.1:6080/stats?metric=system");
-	run_request("https://127.0.0.1:6080/stats?metric=mysql");
-	run_request("https://127.0.0.1:6080/stats?metric=cache");
+	// CI-isolated: Use cl.host instead of hardcoded 127.0.0.1 for HTTP requests
+	string base_url = "https://" + string(cl.host) + ":6080";
+	run_request((base_url).c_str());
+	run_request((base_url + "/stats?metric=system").c_str());
+	run_request((base_url + "/stats?metric=mysql").c_str());
+	run_request((base_url + "/stats?metric=cache").c_str());
 	return exit_status();
 }

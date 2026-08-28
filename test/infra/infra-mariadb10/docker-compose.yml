@@ -1,0 +1,60 @@
+services:
+
+  mariadb1:
+    hostname: mariadb1.${INFRA}
+    image: mariadb:10
+    container_name: ${COMPOSE_PROJECT}-mariadb1-1
+    volumes:
+      - ./conf/mysql/mysql1/my.cnf:/etc/mysql/my.cnf
+      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/mariadb1:/var/lib/mysql
+    networks:
+      backend:
+        aliases:
+          - mariadb1.${INFRA}
+          - mariadb1.infra-mariadb10
+          - mysql1.infra-mariadb10
+    environment:
+      - MYSQL_ROOT_PASSWORD=${ROOT_PASSWORD}
+    cap_add:
+      - SYS_NICE
+
+  mariadb2:
+    hostname: mariadb2.${INFRA}
+    image: mariadb:10
+    container_name: ${COMPOSE_PROJECT}-mariadb2-1
+    volumes:
+      - ./conf/mysql/mysql2/my.cnf:/etc/mysql/my.cnf
+      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/mariadb2:/var/lib/mysql
+    networks:
+      backend:
+        aliases:
+          - mariadb2.${INFRA}
+          - mariadb2.infra-mariadb10
+          - mysql2.infra-mariadb10
+    environment:
+      - MYSQL_ROOT_PASSWORD=${ROOT_PASSWORD}
+    cap_add:
+      - SYS_NICE
+
+  mariadb3:
+    hostname: mariadb3.${INFRA}
+    image: mariadb:10
+    container_name: ${COMPOSE_PROJECT}-mariadb3-1
+    volumes:
+      - ./conf/mysql/mysql3/my.cnf:/etc/mysql/my.cnf
+      - ${INFRA_LOGS_PATH}/${COMPOSE_PROJECT}/mariadb3:/var/lib/mysql
+    networks:
+      backend:
+        aliases:
+          - mariadb3.${INFRA}
+          - mariadb3.infra-mariadb10
+          - mysql3.infra-mariadb10
+    environment:
+      - MYSQL_ROOT_PASSWORD=${ROOT_PASSWORD}
+    cap_add:
+      - SYS_NICE
+
+networks:
+  backend:
+    name: "${INFRA_ID}_backend"
+    external: true

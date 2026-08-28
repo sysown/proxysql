@@ -5,6 +5,7 @@ using json = nlohmann::json;
 #include "proxysql.h"
 #include "cpp.h"
 #include <zlib.h>
+#include <zstd.h>
 #ifndef UNIX_PATH_MAX
 #define UNIX_PATH_MAX    108
 #endif 
@@ -13,11 +14,86 @@ using json = nlohmann::json;
 #include "MySQL_Data_Stream.h"
 
 #include "openssl/x509v3.h"
+#include <openssl/crypto.h>
 
 #define RESULTSET_BUFLEN_DS_16K 16000
 #define RESULTSET_BUFLEN_DS_1M 1000*1024
 
 extern MySQL_Threads_Handler *GloMTH;
+
+static inline bool use_zstd_compression(const MySQL_Connection* myconn) {
+	return myconn && myconn->options.compression_zstd;
+}
+
+static int get_zstd_compression_level(const MySQL_Connection* myconn) {
+	const int zstd_level = myconn ? myconn->options.zstd_compression_level : 0;
+	if (zstd_level > 0 && zstd_level <= ZSTD_maxCLevel()) {
+		return zstd_level;
+	}
+	if (mysql_thread___zstd_compression_level > 0 && mysql_thread___zstd_compression_level <= ZSTD_maxCLevel()) {
+		return mysql_thread___zstd_compression_level;
+	}
+	return ZSTD_CLEVEL_DEFAULT;
+}
+
+bool decompress_mysql_payload(
+	const MySQL_Connection* myconn, Bytef* dest, uLongf destLen, const unsigned char* source, size_t sourceLen
+) {
+	if (use_zstd_compression(myconn)) {
+		const size_t rc = ZSTD_decompress(dest, destLen, source, sourceLen);
+		return !ZSTD_isError(rc) && rc == destLen;
+	}
+
+	// GHSA-fvch-fpgq-pwfx: uncompress() updates its length argument in place to
+	// the number of bytes actually written. destLen is passed by value here, so
+	// we must capture the caller's claimed (pre-compression) length before the
+	// call and require the actual decompressed size to match it. Without this
+	// check a client can declare a large payload_length in the compressed packet
+	// header while sending a zlib stream that inflates to fewer bytes:
+	// uncompress() returns Z_OK having written only the smaller amount, leaving
+	// the tail of the malloc'd destination buffer uninitialized. The caller then
+	// walks the full claimed length, parsing stale heap memory as MySQL packet
+	// headers (heap information disclosure). This mirrors the size check the
+	// zstd path above already performs.
+	const uLongf claimed_len = destLen;
+	const int rc = uncompress(dest, &destLen, source, sourceLen);
+	return rc == Z_OK && destLen == claimed_len;
+}
+
+static bool fallback_to_uncompressed_mysql_payload(
+	Bytef* dest, uLongf destLen, unsigned int& datalength, const unsigned char* source, size_t sourceLen,
+	const unsigned char* packet
+) {
+	if (sourceLen > destLen || sourceLen < 3) {
+		return false;
+	}
+
+	memcpy(dest, source, sourceLen);
+	datalength = sourceLen;
+
+	return packet[9] == 0 && packet[8] == 0 && packet[7] == sourceLen;
+}
+
+static bool compress_mysql_payload(
+	const MySQL_Connection* myconn, Bytef* dest, size_t& destLen, const unsigned char* source, size_t sourceLen
+) {
+	if (use_zstd_compression(myconn)) {
+		const size_t rc = ZSTD_compress(dest, destLen, source, sourceLen, get_zstd_compression_level(myconn));
+		if (ZSTD_isError(rc)) {
+			return false;
+		}
+		destLen = rc;
+		return true;
+	}
+
+	uLongf zlib_dest_len = destLen;
+	const int rc = compress2(dest, &zlib_dest_len, source, sourceLen, mysql_thread___protocol_compression_level);
+	if (rc != Z_OK) {
+		return false;
+	}
+	destLen = zlib_dest_len;
+	return true;
+}
 
 #ifdef DEBUG
 static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) {
@@ -111,8 +187,13 @@ static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) 
 
 static enum sslstatus get_sslstatus(SSL* ssl, int n)
 {
+	// See issue #5792.
+	// SSL_get_error() classifies based on the return code + SSL_want() state, not on the
+	// thread-local OpenSSL error queue. For SSL_ERROR_NONE / WANT_READ / WANT_WRITE no error is
+	// pushed onto the queue, so there is nothing to clear. Only the actual error classifications
+	// (ZERO_RETURN / SYSCALL / SSL / default) need the queue drained so the next SSL op on this
+	// thread starts clean.
 	int err = SSL_get_error(ssl, n);
-	ERR_clear_error();
 	switch (err) {
 	case SSL_ERROR_NONE:
 		return SSLSTATUS_OK;
@@ -122,6 +203,9 @@ static enum sslstatus get_sslstatus(SSL* ssl, int n)
 	case SSL_ERROR_ZERO_RETURN:
 	case SSL_ERROR_SYSCALL:
 	default:
+		// drain the queue; any consumer that wanted the details should have read them
+		// before returning to this point
+		while (ERR_get_error()) { /* discard */ }
 		return SSLSTATUS_FAIL;
 	}
 }
@@ -134,38 +218,48 @@ void MySQL_Data_Stream::queue_encrypted_bytes(const char *buf, size_t len)	{
 	//proxy_info("New ssl_write_len size: %u\n", ssl_write_len);
 }
 
+static std::unique_ptr<char[]> extract_first_spiffe_uri(const GENERAL_NAMES* alt_names) {
+	static constexpr char SPIFFE_PREFIX[] = "spiffe";
+	const int alt_name_count = sk_GENERAL_NAME_num(alt_names);
+
+	for (int i = 0; i < alt_name_count; ++i) {
+		const GENERAL_NAME* san = sk_GENERAL_NAME_value(alt_names, i);
+		if (!san || san->type != GEN_URI || !san->d.uniformResourceIdentifier) continue;
+
+		const ASN1_STRING* uri = san->d.uniformResourceIdentifier;
+		const unsigned char* data = ASN1_STRING_get0_data(uri);
+		const int length = ASN1_STRING_length(uri);
+		if (!data || length < static_cast<int>(sizeof(SPIFFE_PREFIX) - 1)) continue;
+		if (memcmp(data, SPIFFE_PREFIX, sizeof(SPIFFE_PREFIX) - 1) != 0) continue;
+		if (memchr(data, '\0', length) != nullptr) continue;
+
+		auto value = std::make_unique<char[]>(static_cast<size_t>(length) + 1);
+		memcpy(value.get(), data, length);
+		value[length] = '\0';
+		return value;
+	}
+
+	return nullptr;
+}
+
 enum sslstatus MySQL_Data_Stream::do_ssl_handshake() {
 	char buf[MY_SSL_BUFFER];
 	enum sslstatus status;
 	int n = SSL_do_handshake(ssl);
 	if (n == 1) {
 		//proxy_info("SSL handshake completed\n");
-		X509 *cert;
-		cert = SSL_get_peer_certificate(ssl);
+		reset_frontend_certificate_evidence();
+		X509 *cert = SSL_get_peer_certificate(ssl);
+#ifdef PROXYSQL31
+		client_cert_present = (cert != nullptr);
+		client_cert_verify_result = cert ? SSL_get_verify_result(ssl) : X509_V_OK;
+#endif
 		if (cert) {
 			GENERAL_NAMES *alt_names = (stack_st_GENERAL_NAME *)X509_get_ext_d2i((X509*)cert, NID_subject_alt_name, 0, 0);
-			int alt_name_count = sk_GENERAL_NAME_num(alt_names);
-
-			// Iterate all the SAN names, looking for SPIFFE identifier
-			for (int i = 0; i < alt_name_count; i++) {
-				GENERAL_NAME *san = sk_GENERAL_NAME_value(alt_names, i);
-
-				// We only care about URI names
-				if (san->type == GEN_URI) {
-					if (san->d.uniformResourceIdentifier->data) {
-						const char* resource_data =
-							reinterpret_cast<const char*>(san->d.uniformResourceIdentifier->data);
-						const char* spiffe_loc = strstr(resource_data, "spiffe");
-
-						// First name starting with 'spiffe' is considered the match.
-						if (spiffe_loc == resource_data) {
-							x509_subject_alt_name = strdup(resource_data);
-						}
-					}
-				}
+			if (alt_names) {
+				x509_subject_alt_name = extract_first_spiffe_uri(alt_names);
+				sk_GENERAL_NAME_pop_free(alt_names, GENERAL_NAME_free);
 			}
-
-			sk_GENERAL_NAME_pop_free(alt_names, GENERAL_NAME_free);
 			X509_free(cert);
 		} else {
 			// we currently disable this annoying error
@@ -175,12 +269,10 @@ enum sslstatus MySQL_Data_Stream::do_ssl_handshake() {
 		}
 		// In case the supplied certificate has a 'SAN'-'URI' identifier
 		// starting with 'spiffe', client certificate verification is performed.
-		if (x509_subject_alt_name != NULL) {
+		if (x509_subject_alt_name && SSL_get_verify_result(ssl) != X509_V_OK) {
 			long rc = SSL_get_verify_result(ssl);
-			if (rc != X509_V_OK) {
-				proxy_error("Disconnecting %s:%d: X509 client SSL certificate verify error: (%ld:%s)\n" , addr.addr, addr.port, rc, X509_verify_cert_error_string(rc));
-				return SSLSTATUS_FAIL;
-			}
+			proxy_error("Disconnecting %s:%d: X509 client SSL certificate verify error: (%ld:%s)\n" , addr.addr, addr.port, rc, X509_verify_cert_error_string(rc));
+			return SSLSTATUS_FAIL;
 		}
 	}
 	status = get_sslstatus(ssl, n);
@@ -241,6 +333,8 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	connect_tries=0;
 	poll_fds_idx=-1;
 	resultset_length=0;
+	status=0;
+	fd=-1;
 
 	revents = 0;
 
@@ -259,7 +353,14 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	switching_auth_type = AUTH_UNKNOWN_PLUGIN;
 	switching_auth_sent = AUTH_UNKNOWN_PLUGIN;
 	auth_in_progress = 0;
-	x509_subject_alt_name=NULL;
+	passthrough_cleartext = NULL;
+	tmp_charset = 0;
+	x509_subject_alt_name = nullptr;
+#ifdef PROXYSQL31
+	client_cert_present=false;
+	client_cert_verify_result=X509_V_OK;
+	frontend_authenticated_via_spiffe=false;
+#endif
 	ssl=NULL;
 	rbio_ssl = NULL;
 	wbio_ssl = NULL;
@@ -311,6 +412,14 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 		com_field_wild=NULL;
 	}
 
+	if (passthrough_cleartext) {
+		// Scrub before free; the cleartext password should
+		// not linger in freed heap memory.
+		OPENSSL_cleanse(passthrough_cleartext, strlen(passthrough_cleartext));
+		free(passthrough_cleartext);
+		passthrough_cleartext = NULL;
+	}
+
 	proxy_debug(PROXY_DEBUG_NET,1, "Shutdown Data Stream. Session=%p, DataStream=%p\n" , sess, this);
 	PtrSize_t pkt;
 	if (PSarrayIN) {
@@ -334,6 +443,24 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 		}
 	delete resultset;
 	}
+	/**
+	 * @brief Remove data stream from poll set during MySQL_Data_Stream destruction
+	 *
+	 * This usage pattern demonstrates how ProxySQL_Poll is used during data stream cleanup:
+	 * - Removes the data stream entry from the poll set to prevent polling on closed socket
+	 * - Uses the stored poll_fds_idx for efficient removal (O(1) operation)
+	 * - Called only if mypolls is not NULL (data stream is registered with a poll instance)
+	 *
+	 * Usage pattern: if (mypolls) mypolls->remove_index_fast(poll_fds_idx)
+	 * - mypolls: Check if data stream is registered with a poll instance
+	 * - remove_index_fast(poll_fds_idx): Remove by stored index from data stream
+	 *
+	 * Called during: MySQL_Data_Stream destructor
+	 * Purpose: Prevent memory leaks and ensure proper cleanup of poll entries
+	 *
+	 * Note: Each data stream maintains its poll_fds_idx to track its position in the poll array
+	 *       for efficient removal without requiring find_index() lookup.
+	 */
 	if (mypolls) mypolls->remove_index_fast(poll_fds_idx);
 
 
@@ -376,10 +503,16 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 		CompPktOUT.pkt.ptr=NULL;
 		CompPktOUT.pkt.size=0;
 	}
-	if (x509_subject_alt_name) {
-		free(x509_subject_alt_name);
-		x509_subject_alt_name=NULL;
-	}
+	reset_frontend_certificate_evidence();
+}
+
+void MySQL_Data_Stream::reset_frontend_certificate_evidence() {
+	x509_subject_alt_name.reset();
+#ifdef PROXYSQL31
+	client_cert_present = false;
+	client_cert_verify_result = X509_V_OK;
+	frontend_authenticated_via_spiffe = false;
+#endif
 }
 
 // this function initializes a MySQL_Data_Stream 
@@ -412,6 +545,7 @@ void MySQL_Data_Stream::reinit_queues() {
 // this function initializes a MySQL_Data_Stream with arguments
 void MySQL_Data_Stream::init(enum MySQL_DS_type _type, MySQL_Session *_sess, int _fd) {
 	myds_type=_type;
+	if (_type == MYDS_FRONTEND) reset_frontend_certificate_evidence();
 	sess=_sess;
 	init();
 	fd=_fd;
@@ -475,6 +609,42 @@ void MySQL_Data_Stream::shut_hard() {
  */
 void MySQL_Data_Stream::check_data_flow() {
 	if ( (PSarrayIN->len || queue_data(queueIN) ) && ( PSarrayOUT->len || queue_data(queueOUT) ) ){
+		// NOTE: Unexpected-Ping-Handling: Section 1-2
+		///////////////////////////////////////////////////////////////////////////////////////////////
+		// Implements part-1 of the temporary workaround for the handling of unexpected 'COM_PING' packets
+		// received during query processing, while a resultset is yet being streamed to the client. Received
+		// 'COM_PING' packets are queued in the form of a counter. This counter is later used to sent the
+		// corresponding number of 'OK' packets to the client. This should be ALWAYS done before
+		// 'MySQL_Session' transitions back to 'WAITING_CLIENT_DATA'.
+		//
+		// @note This is a "temporary" solution that should be removed if packet queueing is implemented, since
+		// it will make the 'unexp_com_pings' field obsolete.
+		///////////////////////////////////////////////////////////////////////////////////////////////
+		if (PSarrayIN->len >= 1 && PSarrayIN->pdata[0].size == 5) {
+			const uint8_t c = *(static_cast<uint8_t*>(PSarrayIN->pdata[0].ptr) + sizeof(mysql_hdr));
+
+			if (c == _MYSQL_COM_PING && this->sess->status != WAITING_CLIENT_DATA) {
+				const string cli_addr { get_client_addr(this->client_addr) };
+				proxy_warning(
+					"Handling unexpected COM_PING packet   client_addr=\"%s\" sess_status=%d myds_status=%d\n",
+					cli_addr.c_str(), this->sess->status, this->DSS
+				);
+
+				// Queue the COM_PING for later handling at MySQL_Session level
+				this->unexp_com_pings += 1;
+				this->sess->thread->status_variables.stvar[st_var_unexpected_com_ping] += 1;
+
+				// Discard the packet before session attempts to handle it
+				PtrSize_t pkt {};
+				PSarrayIN->remove_index(0, &pkt);
+				l_free(pkt.size, pkt.ptr);
+
+				// Return without further checks
+				return;
+			}
+		}
+		///////////////////////////////////////////////////////////////////////////////////////////////
+
 		if (sess && sess->status == FAST_FORWARD && sess->session_fast_forward == SESSION_FORWARD_TYPE_PERMANENT) {
 			// Permanent fast-forward sessions: log warning but continue
 			proxy_warning("Session=%p, DataStream=%p -- Data at both ends of a MySQL data stream: IN <%d bytes %d packets> , OUT <%d bytes %d packets>\n", sess, this, queue_data(queueIN), PSarrayIN->len, queue_data(queueOUT), PSarrayOUT->len);
@@ -532,10 +702,28 @@ int MySQL_Data_Stream::read_from_net() {
 				// to avoid issue with SSL, we will only read the header and eventually the first packet
 				r = recv(fd, queue_w_ptr(queueIN), 4, 0);
 				if (r == 4) {
-					// let's try to read a whole packet
-					mysql_hdr Hdr;
-					memcpy(&Hdr,queueIN.buffer,sizeof(mysql_hdr));
-					r += recv(fd, queue_w_ptr(queueIN)+4, Hdr.pkt_length, 0);
+					// Check for PROXY protocol before treating as MySQL header
+					// PROXY protocol starts with "PROXY " (6 bytes), but we only have 4 bytes here
+					// If first 4 bytes are "PROX", don't interpret as MySQL header
+					if (strncmp((char *)queueIN.buffer, "PROX", 4) == 0) {
+						// PROXY protocol detected - read more data without MySQL header parsing
+						r += recv(fd, queue_w_ptr(queueIN)+4, s-4, 0);
+					} else {
+						// let's try to read a whole packet
+						mysql_hdr Hdr;
+						memcpy(&Hdr,queueIN.buffer,sizeof(mysql_hdr));
+						// GHSA-58ww-865x-grpr: bound the declared packet length by the
+						// remaining capacity of queueIN. Without this check an unauthenticated
+						// client can drive a heap out-of-bounds write into the fixed-size
+						// 32KB input queue by sending an oversized first MySQL packet.
+						if (Hdr.pkt_length > (unsigned int)(s - 4)) {
+							proxy_error("Oversized first packet from client: pkt_length=%u exceeds queue capacity (%d). Closing fd=%d\n",
+								Hdr.pkt_length, s - 4, fd);
+							shut_soft();
+							return -1;
+						}
+						r += recv(fd, queue_w_ptr(queueIN)+4, Hdr.pkt_length, 0);
+					}
 				}
 			} else {
 				r = recv(fd, queue_w_ptr(queueIN), s, 0);
@@ -702,6 +890,25 @@ int MySQL_Data_Stream::read_from_net() {
 	} else {
 		queue_w(queueIN,r);
 		bytes_info.bytes_recv+=r;
+		/**
+	 * @brief Update receive timestamp in ProxySQL_Poll for activity tracking
+	 *
+	 * This usage pattern demonstrates how ProxySQL_Poll is used for activity monitoring:
+	 * - Updates the last receive timestamp in the poll entry for timeout management
+	 * - Called after successful data reception to track connection activity
+	 * - Uses the stored poll_fds_idx for direct array access (O(1) operation)
+	 *
+	 * Usage pattern: if (mypolls) mypolls->last_recv[poll_fds_idx] = sess->thread->curtime
+	 * - mypolls: Check if data stream is registered with a poll instance
+	 * - last_recv[poll_fds_idx]: Update the receive timestamp for this data stream
+	 * - sess->thread->curtime: Current timestamp from the thread
+	 *
+	 * Called during: After receiving data on the data stream
+	 * Purpose: Enable timeout management and connection activity monitoring
+	 *
+	 * Note: This timestamp is used by the idle connection timeout system to detect
+	 *       inactive connections that should be closed.
+	 */
 		if (mypolls) mypolls->last_recv[poll_fds_idx]=sess->thread->curtime;
 	}
 	return r;
@@ -803,6 +1010,26 @@ int MySQL_Data_Stream::write_to_net() {
 		}
 	} else {
 		queue_r(queueOUT, bytes_io);
+
+		/**
+		 * @brief Update send timestamp in ProxySQL_Poll for activity tracking
+		 *
+		 * This usage pattern demonstrates how ProxySQL_Poll is used for activity monitoring:
+		 * - Updates the last send timestamp in the poll entry for timeout management
+		 * - Called after successful data transmission to track connection activity
+		 * - Uses the stored poll_fds_idx for direct array access (O(1) operation)
+		 *
+		 * Usage pattern: if (mypolls) mypolls->last_sent[poll_fds_idx] = sess->thread->curtime
+		 * - mypolls: Check if data stream is registered with a poll instance
+		 * - last_sent[poll_fds_idx]: Update the send timestamp for this data stream
+		 * - sess->thread->curtime: Current timestamp from the thread
+		 *
+		 * Called during: After sending data on the data stream
+		 * Purpose: Enable timeout management and connection activity monitoring
+		 *
+		 * Note: This timestamp is used by the idle connection timeout system to detect
+		 *       inactive connections that should be closed.
+		 */
 		if (mypolls) mypolls->last_sent[poll_fds_idx]=sess->thread->curtime;
 		bytes_info.bytes_sent+=bytes_io;
 	}
@@ -1130,6 +1357,26 @@ int MySQL_Data_Stream::buffer2array() {
 							// we override old address/port
 							addr.addr = strdup(PROXY_info->source_address);
 							addr.port = PROXY_info->source_port;
+						} else if (ppi.header_was_unknown) {
+							// GHSA-gw94-85m2-x8v2: PP1 UNKNOWN frame.
+							// Per HAProxy spec the receiver MUST ignore
+							// any address fields that follow UNKNOWN, so
+							// addr.addr stays pointing at the real TCP
+							// peer. We still record that we observed a
+							// PROXY header so audit/log code can see the
+							// frame was present, and we populate
+							// proxy_address/proxy_port from the real TCP
+							// peer (mirroring what the TCP4/TCP6 branch
+							// does) so JSON serialization reports the
+							// upstream LB consistently across all branches.
+							PROXY_info = new ProxyProtocolInfo(ppi);
+							if (addr.addr) {
+								strncpy(PROXY_info->proxy_address, addr.addr, INET6_ADDRSTRLEN);
+							}
+							PROXY_info->proxy_port = addr.port;
+							if (addr.addr) {
+								proxy_info("Ignoring PROXY UNKNOWN header from IP %s; using real TCP peer as client address\n", addr.addr);
+							}
 						} else {
 							if (addr.addr) {
 								proxy_warning("Unable to parse PROXY header from IP %s . Skipping PROXY header\n", addr.addr);
@@ -1196,36 +1443,19 @@ int MySQL_Data_Stream::buffer2array() {
 				destLen=payload_length;
 				//dest=(Bytef *)l_alloc(destLen);
 				dest=(Bytef *)malloc(destLen);
-				int rc=uncompress(dest, &destLen, _ptr, queueIN.pkt.size-7);
-				if (rc!=Z_OK) {
+				const bool decompressed = decompress_mysql_payload(myconn, dest, destLen, _ptr, queueIN.pkt.size-7);
+				if (!decompressed) {
 					// for some reason, uncompress failed
 					// accoding to debugging on #1410 , it seems some library may send uncompress data claiming it is compressed
 					// we try to assume it is not compressed, and we do some sanity check
-					memcpy(dest, _ptr, queueIN.pkt.size-7);
-					datalength=queueIN.pkt.size-7;
-					// some sanity check now
-					unsigned char _u;
-					bool sanity_check = false;
-					_u = *(u+9);
-					// 2nd and 3rd bytes are 0
-					if (_u == 0) {
-						_u = *(u+8);
-						if (_u == 0) {
-							_u = *(u+7);
-							// 1st byte = size - 7
-							unsigned int _size = _u ;
-							if (queueIN.pkt.size-7 == _size) {
-								sanity_check = true;
-							}
-						}
-					}
-					if (sanity_check == false) {
+					if (!fallback_to_uncompressed_mysql_payload(dest, destLen, datalength, _ptr, queueIN.pkt.size-7, u)) {
 						proxy_error("Unable to uncompress a compressed packet\n");
 						shut_soft();
 						return ret;
 					}
+				} else {
+					datalength=payload_length;
 				}
-				datalength=payload_length;
 				// change _ptr to the new buffer
 				_ptr=dest;
 			} else {
@@ -1313,7 +1543,7 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 		// this worked in the past . it applies for small packets
 		uLong sourceLen=total_size;
 		Bytef *source=(Bytef *)l_alloc(total_size);
-		uLongf destLen=total_size*120/100+12;
+		size_t destLen=use_zstd_compression(myconn) ? ZSTD_compressBound(total_size) : total_size*120/100+12;
 		Bytef *dest=(Bytef *)malloc(destLen);
 		i=0;
 		total_size=0;
@@ -1324,8 +1554,8 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 			total_size+=p2.size;
 			l_free(p2.size,p2.ptr);
 		}
-		int rc=compress2(dest, &destLen, source, sourceLen, mysql_thread___protocol_compression_level);
-		assert(rc==Z_OK);
+		const bool compressed = compress_mysql_payload(myconn, dest, destLen, source, sourceLen);
+		assert(compressed);
 		l_free(total_size, source);
 		queueOUT.pkt.size=destLen+7;
 		queueOUT.pkt.ptr=l_alloc(queueOUT.pkt.size);
@@ -1344,22 +1574,21 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 
 		unsigned int len1=MAX_COMPRESSED_PACKET_SIZE/2;
 		unsigned int len2=p2.size-len1;
-		uLongf destLen1;
-		uLongf destLen2;
+		size_t destLen1;
+		size_t destLen2;
 		Bytef *dest1;
 		Bytef *dest2;
-		int rc;
 
 		mysql_hdr hdr;
 
-		destLen1=len1*120/100+12;
+		destLen1=use_zstd_compression(myconn) ? ZSTD_compressBound(len1) : len1*120/100+12;
 		dest1=(Bytef *)malloc(destLen1+7);
-		destLen2=len2*120/100+12;
+		destLen2=use_zstd_compression(myconn) ? ZSTD_compressBound(len2) : len2*120/100+12;
 		dest2=(Bytef *)malloc(destLen2+7);
-		rc=compress2(dest1+7, &destLen1, (const unsigned char *)p2.ptr, len1, mysql_thread___protocol_compression_level);
-		assert(rc==Z_OK);
-		rc=compress2(dest2+7, &destLen2, (const unsigned char *)p2.ptr+len1, len2, mysql_thread___protocol_compression_level);
-		assert(rc==Z_OK);
+		const bool compressed1 = compress_mysql_payload(myconn, dest1+7, destLen1, (const unsigned char *)p2.ptr, len1);
+		assert(compressed1);
+		const bool compressed2 = compress_mysql_payload(myconn, dest2+7, destLen2, (const unsigned char *)p2.ptr+len1, len2);
+		assert(compressed2);
 
 		hdr.pkt_length=destLen1;
 		hdr.pkt_id=++myconn->compression_pkt_id;
@@ -1428,13 +1657,15 @@ int MySQL_Data_Stream::array2buffer() {
 					if (DSS==STATE_CLIENT_AUTH_OK && idx == PSarrayOUT->len) {
 						DSS=STATE_SLEEP;
 						// enable compression
-						if (myconn->options.server_capabilities & CLIENT_COMPRESS) {
+						if (myconn->options.server_capabilities & (CLIENT_COMPRESS | CLIENT_ZSTD_COMPRESSION_ALGORITHM)) {
 							if (myconn->options.compression_min_length) {
 								myconn->set_status(true, STATUS_MYSQL_CONNECTION_COMPRESSION);
 							}
 						} else {
 							//explicitly disable compression
 							myconn->options.compression_min_length=0;
+							myconn->options.compression_zstd=false;
+							myconn->options.zstd_compression_level=0;
 							myconn->set_status(false, STATUS_MYSQL_CONNECTION_COMPRESSION);
 						}
 					}
@@ -1575,12 +1806,19 @@ void MySQL_Data_Stream::setDSS_STATE_QUERY_SENT_NET() {
 void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 	MySQL_Connection *mc=myconn;
 	mc->last_time_used=sess->thread->curtime;
+
 	// before detaching, check if last_HG_affected_rows matches . if yes, set it back to -1
 	if (mybe) {
 		if (mybe->hostgroup_id == sess->last_HG_affected_rows) {
 			sess->last_HG_affected_rows = -1;
 		}
 	}
+
+	if (!mc->reusable) {
+		destroy_MySQL_Connection_From_Pool(true);
+		return;
+	}
+
 	unsigned long long intv = mysql_thread___connection_max_age_ms;
 	intv *= 1000;
 	if (
@@ -1595,7 +1833,7 @@ void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 		// is used outside 'PINGING_SERVER' operation. For more context see #3502.
 		sess->status != PINGING_SERVER
 	) {
-		if (mysql_thread___reset_connection_algorithm == 2) {
+		if (mysql_thread___reset_connection_algorithm == 2 && mc->healthy) {
 			sess->create_new_session_and_reset_connection(this);
 		} else {
 			destroy_MySQL_Connection_From_Pool(true);
@@ -1640,7 +1878,7 @@ bool MySQL_Data_Stream::data_in_rbio() {
 
 void MySQL_Data_Stream::reset_connection() {
 	if (myconn) {
-		if (mysql_thread___multiplexing && (DSS == STATE_MARIADB_GENERIC || DSS == STATE_READY) && myconn->reusable == true && myconn->IsActiveTransaction() == false && myconn->MultiplexDisabled() == false && myconn->async_state_machine == ASYNC_IDLE) {
+		if (mysql_thread___multiplexing && (DSS == STATE_MARIADB_GENERIC || DSS == STATE_READY) && myconn->healthy == true && myconn->reusable == true && myconn->IsActiveTransaction() == false && myconn->MultiplexDisabled() == false && myconn->async_state_machine == ASYNC_IDLE) {
 			myconn->last_time_used = sess->thread->curtime;
 			return_MySQL_Connection_To_Pool();
 		}
@@ -1673,6 +1911,11 @@ void MySQL_Data_Stream::get_client_myds_info_json(json& j) {
 		jc1["PROXY_V1"]["source_port"] = PROXY_info->source_port;
 		jc1["PROXY_V1"]["destination_port"] = PROXY_info->destination_port;
 		jc1["PROXY_V1"]["proxy_port"] = PROXY_info->proxy_port;
+		// GHSA-gw94-85m2-x8v2: expose the UNKNOWN-frame signal so audit
+		// consumers can distinguish a spec-compliant UNKNOWN observation
+		// (source_address/destination_address intentionally empty) from
+		// any other state where the address fields happen to be empty.
+		jc1["PROXY_V1"]["header_was_unknown"] = PROXY_info->header_was_unknown;
 	}
 	jc1["encrypted"] = encrypted;
 	if (encrypted) {
@@ -1689,6 +1932,12 @@ void MySQL_Data_Stream::get_client_myds_info_json(json& j) {
 	jc1["switching_auth_type"] = switching_auth_type;
 	jc1["prot"]["sent_auth_plugin_id"] = myprot.sent_auth_plugin_id;
 	jc1["prot"]["auth_plugin_id"] = myprot.auth_plugin_id;
+	if (!client_connect_attrs.empty()) {
+		json& connect_attrs = jc1["connect_attrs"];
+		for (const auto& [key, value] : client_connect_attrs) {
+			connect_attrs[key] = value;
+		}
+	}
 
 	switch (myprot.auth_plugin_id) {
 		case AUTH_MYSQL_NATIVE_PASSWORD:
@@ -1700,6 +1949,11 @@ void MySQL_Data_Stream::get_client_myds_info_json(json& j) {
 		case AUTH_MYSQL_CACHING_SHA2_PASSWORD:
 			jc1["prot"]["auth_plugin"] = "caching_sha2_password";
 			break;
+#ifdef PROXYSQLED25519
+		case AUTH_MYSQL_ED25519:
+			jc1["prot"]["auth_plugin"] = "client_ed25519";
+			break;
+#endif
 		default:
 			break;
 	}
@@ -1708,10 +1962,17 @@ void MySQL_Data_Stream::get_client_myds_info_json(json& j) {
 			jc1["userinfo"]["username"]   = ( myconn->userinfo->username   ? myconn->userinfo->username   : "" );
 			jc1["userinfo"]["schemaname"] = ( myconn->userinfo->schemaname ? myconn->userinfo->schemaname : "" );
 #ifdef DEBUG
-			jc1["userinfo"]["password"]   = ( myconn->userinfo->password   ? myconn->userinfo->password   : "" );
+			jc1["userinfo"]["password"]   = ( myconn->userinfo->password   ? "(redacted)" : "" );
 #endif
 		}
 		jc2["session_track_gtids"] = ( myconn->options.session_track_gtids ? myconn->options.session_track_gtids : "") ;
+		json& user_variables_json = jc2["user_variables"];
+		user_variables_json["count"] = myconn->user_variables.size();
+		user_variables_json["stored_bytes"] = myconn->user_variables.stored_bytes();
+		const std::string user_variables_fingerprint = myconn->user_variables.diagnostic_fingerprint();
+		if (!user_variables_fingerprint.empty()) {
+			user_variables_json["fingerprint"] = user_variables_fingerprint;
+		}
 		for (auto idx = 0; idx < SQL_NAME_LAST_LOW_WM; idx++) {
 			myconn->variables[idx].fill_client_internal_session(jc2, idx);
 		}

@@ -1,5 +1,5 @@
-#ifndef __CLASS_PGSQL_AUTHENTICATION_H
-#define __CLASS_PGSQL_AUTHENTICATION_H
+#ifndef PROXYSQL_PGSQL_AUTHENTICATION_H
+#define PROXYSQL_PGSQL_AUTHENTICATION_H
 
 #include "proxysql.h"
 #include "cpp.h"
@@ -28,9 +28,9 @@ typedef struct _pgsql_account_details_t {
 	bool use_ssl;
 	bool transaction_persistent;
 	bool fast_forward;
-	bool __frontend;	// this is used only during the dump
-	bool __backend;	// this is used only during the dump
-	bool __active;
+	bool frontend_;	// this is used only during the dump
+	bool backend_;	// this is used only during the dump
+	bool active_;
 
 } pgsql_account_details_t;
 
@@ -69,6 +69,16 @@ class PgSQL_Authentication {
 	std::unique_ptr<SQLite3_result> pgsql_users_resultset { nullptr };
 	creds_group_t creds_backends;
 	creds_group_t creds_frontends;
+	/**
+	 * @brief Scope holding 'admin-admin_credentials' / 'admin-stats_credentials'.
+	 * @details Mirrors MySQL_Authentication::creds_admins. Only populated when
+	 *   PROXYSQL31 is defined (see ADMIN_CRED_SCOPE in MySQL_Authentication.hpp);
+	 *   on the stable tier admin credentials stay in 'creds_frontends' alongside
+	 *   'pgsql_users' and behaviour is unchanged. Never walked by
+	 *   dump_all_users(), so 'runtime_pgsql_users' and the checksum are unaffected.
+	 */
+	creds_group_t creds_admins;
+	creds_group_t& creds_for(enum cred_username_type usertype);
 	bool _reset(enum cred_username_type usertype);
 	uint64_t _get_runtime_checksum(enum cred_username_type usertype);
 	public:
@@ -113,4 +123,4 @@ class PgSQL_Authentication {
 	SQLite3_result* get_current_pgsql_users();
 };
 
-#endif /* __CLASS_PGSQL_AUTHENTICATION_H */
+#endif /* PROXYSQL_PGSQL_AUTHENTICATION_H */

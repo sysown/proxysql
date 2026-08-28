@@ -56,6 +56,8 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(proxysql_admin, "SET mysql-eventslog_filename='loginsertid.log'");
 	MYSQL_QUERY(proxysql_admin, "SET mysql-eventslog_default_log=1");
 	MYSQL_QUERY(proxysql_admin, "SET mysql-eventslog_format=2");
+	/* in 3.0.6 we added buffering for query log . So we either flush logs or set mysql-eventslog_flush_timeout = 0 */
+	MYSQL_QUERY(proxysql_admin, "SET mysql-eventslog_flush_timeout=0");
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 	
 	if (!mysql_real_connect(proxysql_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
@@ -66,6 +68,8 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
+	/* database may not exist , create it */
+	MYSQL_QUERY(proxysql_mysql, "CREATE DATABASE IF NOT EXISTS test");
 	MYSQL_QUERY(proxysql_mysql, "DROP TABLE IF EXISTS test.test_insert_id");
 	MYSQL_QUERY(proxysql_mysql, "CREATE TABLE test.test_insert_id (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY) ENGINE=INNODB");
 	MYSQL_QUERY(proxysql_mysql, "INSERT INTO test.test_insert_id VALUES (NULL)");
@@ -73,6 +77,10 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(proxysql_mysql, "INSERT INTO test.test_insert_id VALUES (NULL)");
 	MYSQL_QUERY(proxysql_mysql, "DO 1");
 
+	/* in 3.0.6 we added buffering for query log; flush_timeout=0 alone leaves a race
+	 * between query completion and the periodic flush thread, so force a flush here. */
+	MYSQL_QUERY(proxysql_admin, "PROXYSQL FLUSH LOGS");
+	sleep(1);
 	{
 		const string f_path { get_env("REGULAR_INFRA_DATADIR") + "/loginsertid.log.00000001" };
 		diag("Trying to open file %s" , f_path.c_str());
@@ -92,7 +100,7 @@ int main(int argc, char** argv) {
 					ok(lid == last_insert_id, "Detected last_insert_id: %d , expected: %d", last_insert_id, lid);
 				}
 			}
-			ok(nentries == 6, "Expected queries: 6, actual: %d", nentries);
+			ok(nentries == 7, "Expected queries: 7, actual: %d", nentries);
 		} else {
 			diag("Failed to open file %s" , f_path.c_str());
 		}

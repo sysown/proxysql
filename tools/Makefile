@@ -18,6 +18,9 @@ eventlog_reader_to_json: eventlog_reader_to_json.cpp
 	$(CXX) -std=c++17 -ggdb -o $@ $<  $(IDIRS)
 
 
+bench_connect: bench_connect.c
+	$(CC) -O2 -o $@ $< -I$(POSTGRESQL_IDIR) -L$(POSTGRESQL_PATH)/interfaces/libpq -L$(POSTGRESQL_PATH)/common -L$(POSTGRESQL_PATH)/port -lpq -lpgcommon -lpgport -lm -lpthread
+
 .PHONY: clean
 clean:
-	rm -f eventlog_reader_to_json eventslog_reader_sample
+	rm -f eventlog_reader_to_json eventslog_reader_sample bench_connect

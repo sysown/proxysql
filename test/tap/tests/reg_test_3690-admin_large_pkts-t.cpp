@@ -194,6 +194,12 @@ int main(int argc, char** argv) {
 	// Get the rows
 	MYSQL_QUERY(proxysql_admin, "SELECT * FROM reg_test_3690_table");
 	MYSQL_RES* select_res = mysql_store_result(proxysql_admin);
+
+	if (select_res == NULL) {
+		diag("Failed to store result: %s", mysql_error(proxysql_admin));
+		return EXIT_FAILURE;
+	}
+
 	match_row_lens(select_res, inserted_rows);
 
 	// Cleanup the used table

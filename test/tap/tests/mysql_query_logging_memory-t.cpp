@@ -19,6 +19,7 @@
 
 #include "tap.h"
 #include "command_line.h"
+#include "noise_utils.h"
 #include "utils.h"
 
 using std::string;
@@ -185,6 +186,10 @@ int main() {
         return -1;
     }
 
+	spawn_internal_noise(cl, internal_noise_random_stats_poller);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
+	spawn_internal_noise(cl, internal_noise_pgsql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}});
+
     const unsigned int num_selects = 200; // Number of "SELECT 1" queries to run
     unsigned int p = 2; // Number of tests for table structure checks
     p += num_selects/10; // Number of tests for SELECT 1 queries (one every 10 iterations)
@@ -192,7 +197,11 @@ int main() {
     p += 1; // Number of tests for empty hostgroup error
     p += 1; // Number of tests for non-existing schema error
     p += 2; // Number of tests for checking query results in stats and history tables
-	plan(p);
+	if (cl.use_noise) {
+		plan(static_cast<int>(p + 3));
+	} else {
+		plan(static_cast<int>(p));
+	}
 
     MYSQL* admin_conn = mysql_init(nullptr);
     if (!admin_conn) {
@@ -253,7 +262,7 @@ int main() {
     // Test syntax error
     if (mysql_query(proxy, "SELEEEEECT 1")) {
         //Check if we received a syntax error (adjust error code as needed for your MySQL version).  
-        int error_code = mysql_errno(proxy);
+        int error_code = static_cast<int>(mysql_errno(proxy));
         ok(error_code == 1064, "Syntax error detected correctly (error code: %d)", error_code); //1064 is a common syntax error code
     } else {
         diag("Expected syntax error, but query succeeded.");
@@ -264,7 +273,7 @@ int main() {
 
     // Test hostgroup error
     if (mysql_query(proxy, "SELECT /* hostgroup=1234 */ 1")) {
-        int error_code = mysql_errno(proxy);
+        int error_code = static_cast<int>(mysql_errno(proxy));
         ok(error_code == 9001, "Hostgroup error detected correctly (error code: %d)", error_code);
     } else {
         diag("Expected hostgroup error (error code 9001), but query succeeded.");
@@ -292,8 +301,17 @@ int main() {
     }
 
     if (mysql_query(nonExistentSchemaConn, "SELECT /* create_new_connection=1 */ 1")) {
-        int error_code = mysql_errno(nonExistentSchemaConn);
-        ok(error_code == 1044, "Query on non-existent schema returned expected error (1044): %d", error_code);
+        int error_code = static_cast<int>(mysql_errno(nonExistentSchemaConn));
+        const char* error_msg = mysql_error(nonExistentSchemaConn);
+        diag("Query failed with error code %d: %s", error_code, error_msg);
+        // MySQL 5.7/8.0 returns 1044 (Access denied) when connecting to non-existent schema.
+        // MySQL 8.4+ returns 1049 (Unknown database) for the same scenario.
+        // Accept both error codes for compatibility across versions.
+        bool is_expected_error = (error_code == 1044 || error_code == 1049);
+        ok(
+            is_expected_error,
+            "Query on non-existent schema returned expected error (1044 or 1049). Actual: %d", error_code
+        );
     } else {
         diag("Query on non-existent schema succeeded unexpectedly.");
         mysql_close(nonExistentSchemaConn);

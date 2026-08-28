@@ -8,7 +8,7 @@
 #include "command_line.h"
 #include "utils.h"
 
-uint32_t EXECUTIONS = 100;
+static constexpr unsigned int EXECUTIONS = 100U;
 
 int main(int argc, char** argv) {
 	plan(1);
@@ -20,15 +20,15 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	MYSQL* proxy = mysql_init(NULL);
+	MYSQL* proxy = mysql_init(nullptr);
 
-	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, nullptr, cl.port, nullptr, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 		return EXIT_FAILURE;
 	}
 
-	int exp_myerr = 1065;
-	int act_myerr = 0;
+	const unsigned int exp_myerr = 1065U;
+	unsigned int act_myerr = 0U;
 
 	for (uint32_t i = 0; i < EXECUTIONS; i++) {
 		mysql_query(proxy, "");

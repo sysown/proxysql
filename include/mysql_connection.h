@@ -1,8 +1,9 @@
-#ifndef __CLASS_MYSQL_CONNECTION_H
-#define __CLASS_MYSQL_CONNECTION_H
+#ifndef PROXYSQL_MYSQL_CONNECTION_H
+#define PROXYSQL_MYSQL_CONNECTION_H
 
 #include "proxysql.h"
 #include "cpp.h"
+#include "MySQL_User_Variables.h"
 
 //#include "../deps/json/json.hpp"
 //using json = nlohmann::json;
@@ -26,7 +27,11 @@
 #define STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT        0x00000800
 #define STATUS_MYSQL_CONNECTION_HAS_WARNINGS         0x00001000
 
-class MySQLServers_SslParams;
+#include "Servers_SslParams.h"
+
+#ifdef PROXYSQLED25519
+#include "MySQL_Ed25519.h"
+#endif
 
 class Variable {
 public:
@@ -55,10 +60,25 @@ class MySQL_Connection_userinfo {
 	char *fe_username;
 	MySQL_Connection_userinfo();
 	~MySQL_Connection_userinfo();
+	/** @brief Cleanse and release the owned cleartext password, if present. */
+	void clear_password();
 	void set(char *, char *, char *, char *);
 	void set(MySQL_Connection_userinfo *);
 	bool set_schemaname(char *, int);
 };
+
+const char* mysql_simple_command_log_text(const char* stmt, bool redact_statement);
+bool mysql_user_variable_tracking_can_stage(
+	int mode, int set_parser_algorithm, int query_processor_parser,
+	bool plain_text_com_query, bool connection_bound_fallback);
+bool mysql_user_variable_set_uses_qpo_epilogue(
+	UserVariableSetStatus analysis_status,
+	MySQL_User_Variable_Apply_Result preflight_result);
+bool mysql_user_variable_commit_post_ok(
+	MySQL_User_Variable_State& frontend,
+	MySQL_User_Variable_State& backend,
+	const std::vector<UserVariableAssignment>& assignments);
+unsigned int mysql_user_variable_replay_error_code(unsigned int backend_error_code);
 
 class MySQL_Connection {
 	private:
@@ -83,21 +103,26 @@ class MySQL_Connection {
 		uint32_t server_capabilities;
 		uint32_t client_flag;
 		unsigned int compression_min_length;
+		uint8_t zstd_compression_level;
 		char *init_connect;
 		bool init_connect_sent;
 		char * session_track_gtids;
 		char *ldap_user_variable;
 		char *ldap_user_variable_value;
-		bool session_track_gtids_sent;
+		bool session_track_gtids_sent;		///< Flag indicating if GTID session tracking has been configured on this connection
+		bool session_track_variables_sent;	///< Flag indicating if session_track_system_variables has been configured on this connection
+		bool session_track_state_sent;		///< Flag indicating if session_track_state_change has been configured on this connection
 		bool ldap_user_variable_sent;
 		uint8_t protocol_version;
 		int8_t last_set_autocommit;
 		bool autocommit;
+		bool compression_zstd;
 		bool no_backslash_escapes;
 	} options;
 
 	Variable variables[SQL_NAME_LAST_HIGH_WM];
 	uint32_t var_hash[SQL_NAME_LAST_HIGH_WM];
+	MySQL_User_Variable_State user_variables;
 	// for now we store possibly missing variables in the lower range
 	// we may need to fix that, but this will cost performance
 	bool var_absent[SQL_NAME_LAST_HIGH_WM] = {false};
@@ -113,6 +138,13 @@ class MySQL_Connection {
 		stmt_execute_metadata_t *stmt_meta;
 	} query;
 	char scramble_buff[40];
+#ifdef PROXYSQLED25519
+	// Challenge for the client_ed25519 Auth Switch. Kept separate from
+	// scramble_buff: the native scramble lives for the whole client
+	// connection and is consumed by later COM_CHANGE_USER / caching_sha2
+	// verifications, so the 32-byte binary nonce must not overwrite it.
+	unsigned char ed25519_nonce[ED25519_NONCE_LEN];
+#endif
 	unsigned long long creation_time;
 	unsigned long long last_time_used;
 	unsigned long long timeout;
@@ -162,6 +194,7 @@ class MySQL_Connection {
 	my_bool ret_bool;
 	bool async_fetch_row_start;
 	bool send_quit;
+	bool healthy;
 	bool reusable;
 	bool processing_multi_statement;
 	bool multiplex_delayed;
@@ -210,7 +243,7 @@ class MySQL_Connection {
 	int async_select_db(short event);
 	int async_set_autocommit(short event, bool);
 	int async_set_names(short event, unsigned int nr);
-	int async_send_simple_command(short event, char *stmt, unsigned long length); // no result set expected
+	int async_send_simple_command(short event, char *stmt, unsigned long length, bool redact_statement=false); // no result set expected
 	int async_query(short event, char *stmt, unsigned long length, MYSQL_STMT **_stmt=NULL, stmt_execute_metadata_t *_stmt_meta=NULL);
 	int async_ping(short event);
 	int async_set_option(short event, bool mask);
@@ -253,7 +286,7 @@ class MySQL_Connection {
 	bool AutocommitFalse_AndSavepoint();
 	bool MultiplexDisabled(bool check_delay_token = true);
 	bool IsKeepMultiplexEnabledVariables(char *query_digest_text);
-	void ProcessQueryAndSetStatusFlags(char *query_digest_text);
+	void ProcessQueryAndSetStatusFlags(char *query_digest_text, bool user_variable_usage_is_safe);
 	void optimize();
 	void close_mysql();
 
@@ -262,6 +295,36 @@ class MySQL_Connection {
 	void reset();
 
 	bool get_gtid(char *buff, uint64_t *trx_id);
+	/**
+	 * @brief Extract session variable changes from MySQL's session tracking system.
+	 *
+	 * === PR 5166: Backend Variable Extraction ===
+	 *
+	 * This method is the interface to MySQL's native session tracking protocol and
+	 * extracts system variable changes that occurred during the last query execution.
+	 *
+	 * TECHNICAL DETAILS:
+	 * - Uses mysql_session_track_get_first/next() to iterate through SESSION_TRACK_SYSTEM_VARIABLES
+	 * - Only processes when SERVER_SESSION_STATE_CHANGED flag is set and no errors occurred
+	 * - Handles the variable/value pairing protocol where variables and values are returned alternately
+	 * - Populates a map with variable names as keys and their new values as values
+	 *
+	 * PROTOCOL FLOW:
+	 * 1. Check if session state changed and no errors occurred
+	 * 2. Get first tracked system variable (name)
+	 * 3. Iterate to get corresponding value, next variable name, etc.
+	 * 4. Build variable_name → value mappings in the provided map
+	 *
+	 * INTEGRATION POINT:
+	 * This is called by handler_rc0_Process_Variables() which then processes the
+	 * extracted changes to update ProxySQL's internal state. The separation allows
+	 * for testing and potential future extensions of the tracking protocol.
+	 *
+	 * @param variables Reference to unordered_map that will be populated with
+	 *                 variable names as keys and their new values as values
+	 * @return true if session variable changes were found and extracted, false otherwise
+	 */
+	bool get_variables(std::unordered_map<std::string, std::string>&);
 	void reduce_auto_increment_delay_token() { if (auto_increment_delay_token) auto_increment_delay_token--; };
 
 	bool match_ff_req_options(const MySQL_Connection *c);
@@ -274,4 +337,4 @@ class MySQL_Connection {
 	void get_mysql_info_json(nlohmann::json&);
 	void get_backend_conn_info_json(nlohmann::json&);
 };
-#endif /* __CLASS_MYSQL_CONNECTION_H */
+#endif /* PROXYSQL_MYSQL_CONNECTION_H */

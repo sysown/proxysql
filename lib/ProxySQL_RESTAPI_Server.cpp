@@ -9,6 +9,7 @@ using json = nlohmann::json;
 #include <functional>
 
 #include "ProxySQL_RESTAPI_Server.hpp"
+#include "ProxySQL_Statistics.hpp"
 #include "proxysql_utils.h"
 
 #ifdef DEBUG
@@ -31,17 +32,22 @@ private:
 	}
 
 	const std::shared_ptr<http_response> find_script(const http_request& req, std::string& script, int &interval_ms) {
-		char *error=NULL;
 		const string req_uri { req.get_path_piece(1) };
 		const string req_path { req.get_path() };
-		const string select_query {
-			"SELECT * FROM runtime_restapi_routes WHERE uri='" + req_uri + "' and"
-				" method='" + req.get_method() + "' and active=1"
-		};
+		const string select_query { "SELECT * FROM runtime_restapi_routes WHERE uri=?1 AND method=?2 AND active=1" };
 
-		std::unique_ptr<SQLite3_result> resultset {
-			std::unique_ptr<SQLite3_result>(GloAdmin->admindb->execute_statement(select_query.c_str(), &error))
-		};
+		std::unique_ptr<SQLite3_result> resultset = nullptr;
+		char* error = NULL;
+		int cols = 0;
+		int affected_rows = 0;
+
+		auto [rc, statement1] = GloAdmin->admindb->prepare_v2(select_query.c_str());
+		ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_text)(statement1.get(), 1, req_uri.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_text)(statement1.get(), 2, req.get_method().c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		resultset = std::unique_ptr<SQLite3_result>(GloAdmin->admindb->execute_prepared(statement1.get(), &error, &cols, &affected_rows));
+		rc = (*proxy_sqlite3_clear_bindings)(statement1.get()); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_reset)(statement1.get()); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 
 		if (!resultset) {
 			proxy_error(
@@ -336,6 +342,139 @@ public:
 
 };
 
+extern ProxySQL_Statistics *GloProxyStats;
+
+#ifdef PROXYSQLTSDB
+class tsdb_resource : public http_resource {
+private:
+    void add_headers(std::shared_ptr<http_response> &response) {
+        response->with_header("Content-Type", "application/json");
+        response->with_header("Access-Control-Allow-Origin", "*");
+    }
+
+public:
+    const std::shared_ptr<http_response> render_GET(const http_request& req) override {
+        const string req_path { req.get_path() };
+        json j_resp;
+
+        if (req_path == "/api/tsdb/metrics") {
+            if (!GloProxyStats || !GloProxyStats->statsdb_disk) {
+                j_resp = json {{"error", "TSDB not initialized"}};
+                auto response = std::shared_ptr<http_response>(new string_response(j_resp.dump(), http::http_utils::http_internal_server_error));
+                add_headers(response);
+                return response;
+            }
+            
+            SQLite3_result *res = GloProxyStats->list_tsdb_metric_names();
+            if (!res) {
+                j_resp = json {{"error", "Unable to list TSDB metrics"}};
+            } else {
+                std::vector<string> metrics;
+                for (int i = 0; i < res->rows_count; i++) {
+                    metrics.push_back(res->rows[i]->fields[0]);
+                }
+                delete res;
+                j_resp = metrics;
+            }
+        } else if (req_path == "/api/tsdb/query") {
+            if (!GloProxyStats || !GloProxyStats->statsdb_disk) {
+                j_resp = json {{"error", "TSDB not initialized"}};
+                auto response = std::shared_ptr<http_response>(new string_response(j_resp.dump(), http::http_utils::http_internal_server_error));
+                add_headers(response);
+                return response;
+            }
+            string metric = req.get_arg("metric");
+            if (metric.empty()) {
+                j_resp = json {{"error", "Missing 'metric' parameter"}};
+                auto response = std::shared_ptr<http_response>(new string_response(j_resp.dump(), http::http_utils::http_bad_request));
+                add_headers(response);
+                return response;
+            }
+
+            time_t now = time(NULL);
+            time_t from = now - 3600;
+            time_t to = now;
+
+            string s_from = req.get_arg("from");
+            if (!s_from.empty()) from = atol(s_from.c_str());
+            string s_to = req.get_arg("to");
+            if (!s_to.empty()) to = atol(s_to.c_str());
+            string agg = req.get_arg("agg");
+
+            std::map<string, string> labels;
+            auto all_args = req.get_args();
+            for (auto const& [key, val] : all_args) {
+                if (key != "metric" && key != "from" && key != "to" && key != "agg") {
+                    labels[key] = val;
+                }
+            }
+
+		SQLite3_result *res = GloProxyStats->query_tsdb_metrics(metric, labels, from, to, agg);
+            if (!res) {
+                j_resp = json::array();
+            } else {
+                for (int i = 0; i < res->rows_count; i++) {
+                    json row;
+                    row["ts"] = atol(res->rows[i]->fields[0]);
+                    row["metric"] = res->rows[i]->fields[1];
+                    try {
+                        row["labels"] = json::parse(res->rows[i]->fields[2]);
+                    } catch (const json::parse_error& e) {
+                        row["labels"] = res->rows[i]->fields[2];
+                    }
+                    row["value"] = atof(res->rows[i]->fields[3]);
+                    j_resp.push_back(row);
+                }
+                delete res;
+            }
+	} else if (req_path == "/api/tsdb/status") {
+		if (!GloProxyStats) {
+			j_resp = json {{"error", "TSDB not initialized"}};
+			auto response = std::shared_ptr<http_response>(new string_response(j_resp.dump(), http::http_utils::http_internal_server_error));
+			add_headers(response);
+			return response;
+		}
+		ProxySQL_Statistics::tsdb_status_t status = GloProxyStats->get_tsdb_status();
+		j_resp["total_series"] = status.total_series;
+		j_resp["total_datapoints"] = status.total_datapoints;
+		j_resp["disk_size_bytes"] = status.disk_size_bytes;
+		j_resp["oldest_datapoint"] = status.oldest_datapoint;
+		j_resp["newest_datapoint"] = status.newest_datapoint;
+        } else {
+            return std::shared_ptr<http_response>(new string_response("Not Found", http::http_utils::http_not_found));
+        }
+
+        auto response = std::shared_ptr<http_response>(new string_response(j_resp.dump(), http::http_utils::http_ok));
+        add_headers(response);
+        return response;
+    }
+};
+
+/* The TSDB dashboard HTML and its Chart.bundle.js asset are served from
+ * the REST API port so the dashboard's fetch('/api/tsdb/...') calls are
+ * same-origin and resolve to the real handlers above. See issue #5684. */
+extern const char* TSDB_Dashboard_html_c;
+extern char* Chart_bundle_js_c;
+
+class tsdb_dashboard_resource : public http_resource {
+public:
+    const std::shared_ptr<http_response> render_GET(const http_request& /*req*/) override {
+        auto response = std::shared_ptr<http_response>(new string_response(TSDB_Dashboard_html_c, http::http_utils::http_ok));
+        response->with_header("Content-Type", "text/html; charset=utf-8");
+        return response;
+    }
+};
+
+class tsdb_chart_js_resource : public http_resource {
+public:
+    const std::shared_ptr<http_response> render_GET(const http_request& /*req*/) override {
+        auto response = std::shared_ptr<http_response>(new string_response(Chart_bundle_js_c, http::http_utils::http_ok));
+        response->with_header("Content-Type", "application/javascript; charset=utf-8");
+        return response;
+    }
+};
+#endif
+
 class gen_get_endpoint : public http_resource {
 private:
 	std::function<std::shared_ptr<http_response>(const http_request&)> _get_fn {};
@@ -386,6 +525,22 @@ ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
 	endpoint = std::unique_ptr<httpserver::http_resource>(sr);
 
     ws->register_resource("/sync", endpoint.get(), true);
+
+#ifdef PROXYSQLTSDB
+	auto tsdb_res = new tsdb_resource();
+	tsdb_endpoint = std::unique_ptr<httpserver::http_resource>(tsdb_res);
+	ws->register_resource("/api/tsdb/metrics", tsdb_endpoint.get(), true);
+	ws->register_resource("/api/tsdb/query", tsdb_endpoint.get(), true);
+	ws->register_resource("/api/tsdb/status", tsdb_endpoint.get(), true);
+
+	/* Serve the dashboard HTML and its Chart.bundle.js asset on the
+	 * same port as the API, so the dashboard's relative fetch() calls
+	 * are same-origin. See issue #5684. */
+	tsdb_dashboard_endpoint = std::unique_ptr<httpserver::http_resource>(new tsdb_dashboard_resource());
+	tsdb_chart_js_endpoint = std::unique_ptr<httpserver::http_resource>(new tsdb_chart_js_resource());
+	ws->register_resource("/tsdb", tsdb_dashboard_endpoint.get(), true);
+	ws->register_resource("/Chart.bundle.js", tsdb_chart_js_endpoint.get(), true);
+#endif
 	if (pthread_create(&thread_id, NULL, restapi_server_thread, ws.get()) !=0 ) {
 		perror("Thread creation");
 		exit(EXIT_FAILURE);

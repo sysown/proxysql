@@ -1,5 +1,5 @@
-#ifndef __PROXYSQL_CONFIG_H__
-#define __PROXYSQL_CONFIG_H__
+#ifndef PROXYSQL_CONFIG_H
+#define PROXYSQL_CONFIG_H
 
 #include <string>
 #include <libconfig.h++>
@@ -26,6 +26,7 @@ enum proxysql_config_type {
  * cases where users mistakenly include the module prefix (e.g., "mysql-") in variable names.
  */
 class ProxySQL_Config {
+	friend class ProxySQL_Config_TestHelper;
 public:
 	SQLite3DB* admindb;
 	/** @brief Constructs ProxySQL_Config with a database handle */
@@ -56,6 +57,15 @@ public:
 	int Write_Scheduler_to_configfile(std::string& data);
 	int Write_Restapi_to_configfile(std::string& data);
 	int Write_ProxySQL_Servers_to_configfile(std::string& data);
+	int Write_MySQL_Query_Rules_Fast_Routing_to_configfile(std::string& data);
+	int Write_MySQL_Firewall_to_configfile(std::string& data);
+	int Write_PgSQL_Query_Rules_Fast_Routing_to_configfile(std::string& data);
+	int Write_PgSQL_Firewall_to_configfile(std::string& data);
+
+	int Read_MySQL_Query_Rules_Fast_Routing_from_configfile();
+	int Read_MySQL_Firewall_from_configfile();
+	int Read_PgSQL_Query_Rules_Fast_Routing_from_configfile();
+	int Read_PgSQL_Firewall_from_configfile();
 
 private:
 	bool validate_backend_users(proxysql_config_type type, const libconfig::Setting& config, std::string& error);

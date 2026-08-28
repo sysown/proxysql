@@ -1,0 +1,38 @@
+name: verify-package-install
+run-name: 'Verify ${{ inputs.distro }} package install'
+
+on:
+  workflow_call:
+    inputs:
+      distro:
+        type: string
+        required: true
+        description: 'Distro name (ubuntu24, centos9, etc.) — used for the verify log'
+    secrets:
+      GITHUB_TOKEN:
+        required: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04-arm
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      with:
+        fetch-depth: 0
+
+    - name: Locate package
+      id: locate
+      run: |
+        set -euo pipefail
+        PKG=$(ls binaries/*.deb binaries/*.rpm 2>/dev/null | head -1)
+        if [[ -z "$PKG" ]]; then
+          echo "ERROR: no package file found in binaries/" >&2
+          ls -la binaries/
+          exit 1
+        fi
+        echo "package=$PKG" >> "$GITHUB_OUTPUT"
+
+    - name: Verify package installs on clean ${{ inputs.distro }}
+      run: |
+        test/infra/control/verify-package-install.bash "${{ steps.locate.outputs.package }}"

@@ -38,6 +38,17 @@ int main(int argc, char** argv) {
 		diag("Failed to get the required environmental variables.");
 		return -1;
 	}
+
+	diag("=== Regression Test #3591: RESTAPI with High Number of FDs ===");
+	diag("This test verifies that the ProxySQL metrics endpoint remains functional");
+	diag("even when a large number of client connections (2047) are opened.");
+	diag("The test strategy is:");
+	diag("1. Elevate process FD limits.");
+	diag("2. Enable RESTAPI on port 6070.");
+	diag("3. Open 2047 concurrent MySQL connections to ProxySQL.");
+	diag("4. Verify that the /metrics endpoint is still reachable.");
+	diag("==============================================================");
+
 	struct rlimit limits { 0, 0 };
 	getrlimit(RLIMIT_NOFILE, &limits);
 	diag("Old process limits: { %ld, %ld }", limits.rlim_cur, limits.rlim_max);
@@ -48,6 +59,7 @@ int main(int argc, char** argv) {
 	MYSQL* admin = mysql_init(NULL);
 
 	// Initialize connections
+	diag("Connecting to ProxySQL Admin at %s:%d as %s", cl.host, cl.admin_port, cl.admin_username);
 	if (!admin) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return -1;
@@ -59,12 +71,14 @@ int main(int argc, char** argv) {
 	}
 
 	// Enable 'RESTAPI'
+	diag("Enabling RESTAPI on port 6070");
 	MYSQL_QUERY(admin, "SET admin-restapi_enabled='true'");
 	MYSQL_QUERY(admin, "SET admin-restapi_port=6070");
 	MYSQL_QUERY(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
 
 	std::vector<MYSQL*> mysql_connections {};
 
+	diag("Establishing %d connections to ProxySQL...", NUM_CONNECTIONS);
 	for (int i = 0; i < NUM_CONNECTIONS; i++) {
 		MYSQL* proxy = mysql_init(NULL);
 		if (
@@ -79,11 +93,16 @@ int main(int argc, char** argv) {
 			return EXIT_FAILURE;
 		}
 		mysql_connections.push_back(proxy);
+		if ((i + 1) % 500 == 0) diag("  Established %d/%d connections...", i + 1, NUM_CONNECTIONS);
 	}
+	diag("Connections established.");
 
-	int endpoint_timeout = wait_get_enpoint_ready("http://localhost:6070/metrics/", 1000, 100);
+	const string metrics_url { string("http://") + string(cl.host) + ":6070/metrics/" };
+	diag("Verifying RESTAPI /metrics endpoint via %s...", metrics_url.c_str());
+	int endpoint_timeout = wait_get_enpoint_ready(metrics_url, 1000, 100);
 	ok(endpoint_timeout == 0, "The endpoint should be available instead of timing out.");
 
+	diag("Closing connections and cleaning up...");
 	for (int i = 0; i < NUM_CONNECTIONS; i++) {
 		mysql_close(mysql_connections[i]);
 	}

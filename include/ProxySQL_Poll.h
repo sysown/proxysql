@@ -1,5 +1,5 @@
-#ifndef __CLASS_PROXYSQL_POLL
-#define __CLASS_PROXYSQL_POLL
+#ifndef PROXYSQL_POLL_H
+#define PROXYSQL_POLL_H
 
 //#include "MySQL_Data_Stream.h"
 
@@ -20,6 +20,8 @@ class iface_info {
 		free(address);
 		close(fd);
 	}
+	iface_info(const iface_info&) = delete;
+	iface_info& operator=(const iface_info&) = delete;
 };
 
 template<class T>

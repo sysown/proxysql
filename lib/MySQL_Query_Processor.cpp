@@ -11,6 +11,7 @@ using json = nlohmann::json;
 #include "Command_Counter.h"
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Query_Processor.h"
+#include "Query_Processor_ParserSQL.h"
 
 extern MySQL_Threads_Handler *GloMTH;
 extern ProxySQL_Admin *GloAdmin;
@@ -93,7 +94,7 @@ MySQL_Rule_Text::MySQL_Rule_Text(const MySQL_Query_Processor_Rule_t* mqr) {
 
 	char buf[20];
 	if (mqr->digest) {
-		sprintf(buf, "0x%016llX", (long long unsigned int)mqr->digest);
+		snprintf(buf, sizeof(buf), "0x%016llX", (long long unsigned int)mqr->digest);
 		pta[8] = strdup(buf);
 	}
 	else {
@@ -161,6 +162,14 @@ enum MYSQL_COM_QUERY_command MySQL_Query_Processor::query_parser_command_type(SQ
 	}
 
 	enum MYSQL_COM_QUERY_command ret = MYSQL_COM_QUERY_UNKNOWN;
+
+	if (mysql_thread___query_processor_parser == 1) {
+		if (text) {
+			return parsersql_command_type_mysql(text, strlen(text)); // NOSONAR
+		}
+		return MYSQL_COM_QUERY_UNKNOWN;
+	}
+
 	char c1;
 
 	tokenizer_t tok;
@@ -557,11 +566,11 @@ __exit__query_parser_command_type:
 	return ret;
 }
 
-bool MySQL_Query_Processor::_is_valid_gtid(char* gtid, size_t gtid_len) {
+bool MySQL_Query_Processor::_is_valid_gtid(const char* gtid, size_t gtid_len) {
 	if (gtid_len < 3) {
 		return false;
 	}
-	char* sep_pos = index(gtid, ':');
+	const char* sep_pos = index(gtid, ':');
 	if (sep_pos == NULL) {
 		return false;
 	}
@@ -822,7 +831,7 @@ MySQL_Query_Processor_Rule_t* MySQL_Query_Processor::new_query_rule(const MySQL_
 
 	char buf[20];
 	if (mqr->digest) { // not 0
-		sprintf(buf, "0x%016llX", (long long unsigned int)mqr->digest);
+		snprintf(buf, sizeof(buf), "0x%016llX", (long long unsigned int)mqr->digest);
 	}
 
 	std::string re_mod;

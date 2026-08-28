@@ -62,7 +62,7 @@ public:
         if (pos_ + 2 > size_) throw PgException("Buffer underrun");
         int16_t value;
         memcpy(&value, data_ + pos_, 2);
-        pos_ += 2;
+        pos_ += static_cast<int>(2);
         return ntohs(value);
     }
 
@@ -70,7 +70,7 @@ public:
         if (pos_ + 4 > size_) throw PgException("Buffer underrun");
         int32_t value;
         memcpy(&value, data_ + pos_, 4);
-        pos_ += 4;
+        pos_ += static_cast<int>(4);
         return ntohl(value);
     }
 
@@ -142,6 +142,7 @@ public:
     void disconnect();
     bool isConnected() const;
     inline int getSocket() const { return sock_; }
+    inline int getLastAuthType() const { return last_auth_type_; }
 
     void execute(const std::string& query);
     void executeParams(
@@ -162,6 +163,26 @@ public:
         const std::vector<int16_t>& resultFormats = {},
 		bool sync = false
     );
+    // Extended bind with explicit format control
+    void bindStatementEx(
+        const std::string & stmtName,
+        const std::string & portalName,
+        const std::vector<Param>&params,
+        const std::vector<int16_t>&paramFormats,  // Explicit format array
+        const std::vector<int16_t>&resultFormats = {},
+        bool sync = false
+    );
+        
+    // Helper for single format case
+    void bindStatementSingleFormat(
+        const std::string & stmtName,
+        const std::string & portalName,
+        const std::vector<Param>&params,
+        int16_t singleFormat,  // Applied to all parameters
+        const std::vector<int16_t>&resultFormats = {},
+        bool sync = false
+    );
+
     void executePortal(
         const std::string& portalName,
         int maxRows = 0,  // 0 = all rows
@@ -187,10 +208,13 @@ private:
 	int timeout_ms_ = 0;
     std::string user_;
     std::string dbname_;
+    int last_auth_type_ = 0;
     
     void sendStartupPacket();
     void handleAuthentication(const std::string& password);
     void sendPassword(const std::string& password);
+    void sendMD5Password(const std::string& password, const uint8_t salt[4]);
+    void doSASLAuth(const std::string& password, const std::vector<uint8_t>& mechListMsg);
     
     
     void sendParse(const std::string& query, const std::string& stmtName, const std::vector<uint32_t>& paramType);

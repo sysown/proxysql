@@ -9,15 +9,26 @@ endif
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
 
-DISTRO := $(shell grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
+ifeq ($(UNAME_S),Darwin)
+SHLIB_EXT  := .dylib
+SHARED_FLAGS := -dynamiclib
+FORCE_LOAD := -force_load
+else
+SHLIB_EXT  := .so
+SHARED_FLAGS := -shared
+FORCE_LOAD := -Wl,--whole-archive
+endif
+
+DISTRO := $(shell if [ -f /etc/os-release ]; then grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"'; else echo "unknown"; fi)
 
 CENTOSVER := Unknown
 ifneq (,$(wildcard /etc/system-release))
 	CENTOSVER := $(shell rpm --eval %rhel)
 endif
 
-IS_ARM := $(if $(findstring aarch64, $(UNAME_M)),true,false)
-IS_CENTOS := $(if $(findstring Unknown, $(CENTOSVER)),false,true)
+# NOTE: CENTOSVER is still used in deps/Makefile for CentOS 6 workarounds.
+# IS_ARM and IS_CENTOS were removed when jemalloc page-size detection
+# switched from arch-specific to auto-detection (see deps/Makefile).
 
 
 ### detect compiler support for c++11/17
@@ -48,6 +59,24 @@ ifeq ($(WITHASAN),1)
 endif
 ifeq ($(TEST_WITHASAN),1)
 	WASAN += -DTEST_WITHASAN
+endif
+
+# ThreadSanitizer support. Mutually exclusive with WITHASAN — both
+# sanitizers reroute the same memory-management hooks and the linker
+# rejects the combination outright. Like ASAN, TSAN is incompatible
+# with jemalloc, so NOJEMALLOC is forced. The flag is added to both
+# CXX_FLAGS and LD_FLAGS via $(WASAN) — TSAN piggybacks on the same
+# variable name to keep the propagation paths unchanged across deps/
+# lib/ src/ test/ Makefiles. Reuse means a build is *either* ASAN
+# *or* TSAN, never both. TSAN inherits ASAN's ASLR width constraint
+# (Linux 5.18+ defaults vm.mmap_rnd_bits=32; TSAN expects 28).
+ifeq ($(WITHTSAN),1)
+ifeq ($(WITHASAN),1)
+    $(error WITHASAN=1 and WITHTSAN=1 are mutually exclusive — pick one)
+endif
+	WASAN := -fsanitize=thread
+	export NOJEMALLOC=1
+    $(warning TSAN needs ASLR =< 28bits, make sure 'sysctl vm.mmap_rnd_bits=28' is set.)
 endif
 
 NOJEM :=

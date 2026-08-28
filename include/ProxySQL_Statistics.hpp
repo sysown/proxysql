@@ -2,6 +2,7 @@
 #define CLASS_PROXYSQL_STATISTICS_H
 #include "proxysql.h"
 #include "cpp.h"
+#include "ProxySQL_Admin_Tables_Definitions.h"
 //#include "thread.h"
 //#include "wqueue.h"
 #include <vector>
@@ -92,6 +93,24 @@
 
 
 #define STATSDB_SQLITE_TABLE_HISTORY_MYSQL_QUERY_EVENTS "CREATE TABLE history_mysql_query_events (id INTEGER PRIMARY KEY AUTOINCREMENT , thread_id INTEGER , username TEXT , schemaname TEXT , start_time INTEGER , end_time INTEGER , query_digest TEXT , query TEXT , server TEXT , client TEXT , event_type INTEGER , hid INTEGER , extra_info TEXT , affected_rows INTEGER , last_insert_id INTEGER , rows_sent INTEGER , client_stmt_id INTEGER , gtid TEXT , errno INT , error TEXT)"
+/**
+ * @brief On-disk PostgreSQL query events table used by advanced events logging.
+ */
+#define STATSDB_SQLITE_TABLE_HISTORY_PGSQL_QUERY_EVENTS "CREATE TABLE history_pgsql_query_events (id INTEGER PRIMARY KEY AUTOINCREMENT , thread_id INTEGER , username TEXT , database TEXT , start_time INTEGER , end_time INTEGER , query_digest TEXT , query TEXT , server TEXT , client TEXT , event_type INTEGER , hid INTEGER , extra_info TEXT , affected_rows INTEGER , rows_sent INTEGER , client_stmt_name TEXT , sqlstate TEXT , error TEXT)"
+
+// Generic time-series metrics table
+#ifdef PROXYSQLTSDB
+#define STATSDB_SQLITE_TABLE_TSDB_METRICS \
+"CREATE TABLE tsdb_metrics (timestamp INT NOT NULL, metric_name TEXT NOT NULL, labels TEXT NOT NULL DEFAULT '{}', value REAL, PRIMARY KEY (timestamp, metric_name, labels)) WITHOUT ROWID"
+
+// Hourly downsampled table
+#define STATSDB_SQLITE_TABLE_TSDB_METRICS_HOUR \
+"CREATE TABLE tsdb_metrics_hour (bucket INT NOT NULL, metric_name TEXT NOT NULL, labels TEXT NOT NULL DEFAULT '{}', avg_value REAL, max_value REAL, min_value REAL, count INT, PRIMARY KEY (bucket, metric_name, labels)) WITHOUT ROWID"
+
+// Backend health monitoring table
+#define STATSDB_SQLITE_TABLE_TSDB_BACKEND_HEALTH \
+"CREATE TABLE tsdb_backend_health (timestamp INT NOT NULL, hostgroup INT NOT NULL, hostname TEXT NOT NULL, port INT NOT NULL, probe_up INT NOT NULL, connect_ms INT, PRIMARY KEY (timestamp, hostgroup, hostname, port)) WITHOUT ROWID"
+#endif
 
 class ProxySQL_Statistics {
 	SQLite3DB *statsdb_mem; // internal statistics DB
@@ -105,10 +124,20 @@ class ProxySQL_Statistics {
 	unsigned long long next_timer_mysql_query_digest_to_disk;
 	unsigned long long next_timer_system_cpu;
 	unsigned long long last_timer_mysql_dump_eventslog_to_disk = 0;
+	unsigned long long last_timer_pgsql_dump_eventslog_to_disk = 0;
 #ifndef NOJEM
 	unsigned long long next_timer_system_memory;
 #endif
 	unsigned long long next_timer_MySQL_Query_Cache;
+#ifdef PROXYSQLTSDB
+	// TSDB timers
+	unsigned long long next_timer_tsdb_sampler;
+	unsigned long long next_timer_tsdb_downsample;
+	unsigned long long next_timer_tsdb_monitor;
+	unsigned long long next_timer_tsdb_retention;
+	sqlite3_stmt *stmt_insert_tsdb_metric;
+#endif
+	sqlite3_stmt *stmt_insert_backend_health;
 	void MySQL_Threads_Handler_sets_v1(SQLite3_result *);
 	void MySQL_Threads_Handler_sets_v2(SQLite3_result *);
 	void MyHGM_Handler_sets_v1(SQLite3_result *);
@@ -121,8 +150,18 @@ class ProxySQL_Statistics {
 		int stats_system_cpu;
 		int stats_mysql_query_digest_to_disk;
 		int stats_mysql_eventslog_sync_buffer_to_disk;
+		/** @brief Periodic disk sync interval (seconds) for PostgreSQL eventslog buffer. */
+		int stats_pgsql_eventslog_sync_buffer_to_disk;
 #ifndef NOJEM
 		int stats_system_memory;
+#endif
+#ifdef PROXYSQLTSDB
+		// TSDB variables
+		int tsdb_enabled;
+		int tsdb_sample_interval;
+		int tsdb_retention_days;
+		int tsdb_monitor_enabled;
+		int tsdb_monitor_interval;
 #endif
 	} variables;
 	ProxySQL_Statistics();
@@ -130,6 +169,15 @@ class ProxySQL_Statistics {
 	SQLite3DB *statsdb_disk; // internal statistics DB
 	void init();
 	void print_version();
+
+	// Variable management
+#ifdef PROXYSQLTSDB
+	bool set_variable(const char *name, const char *value);
+	char *get_variable(const char *name);
+	bool has_variable(const char *name);
+	char **get_variables_list();
+#endif
+
 	bool MySQL_Threads_Handler_timetoget(unsigned long long);
 	bool mysql_query_digest_to_disk_timetoget(unsigned long long);
 	bool system_cpu_timetoget(unsigned long long);
@@ -142,6 +190,12 @@ class ProxySQL_Statistics {
 	 * The dump interval is retrieved from the ProxySQL configuration.  If the dump interval is 0, no dumping is performed.
 	 */
 	bool MySQL_Logger_dump_eventslog_timetoget(unsigned long long currentTimeMicros);
+	/**
+	 * @brief Checks if it's time to dump PostgreSQL eventslog buffer to disk.
+	 * @param currentTimeMicros The current time in microseconds.
+	 * @return True when periodic PostgreSQL events dump should run.
+	 */
+	bool PgSQL_Logger_dump_eventslog_timetoget(unsigned long long currentTimeMicros);
 
 #ifndef NOJEM
 	bool system_memory_timetoget(unsigned long long);
@@ -164,6 +218,50 @@ class ProxySQL_Statistics {
 	SQLite3_result * get_MySQL_Query_Cache_metrics(int interval);
 	void disk_upgrade_mysql_connections();
 
+#ifdef PROXYSQLTSDB
+	// TSDB methods
+	// Metric insertion
+	void insert_tsdb_metric(const std::string& metric_name,
+		const std::map<std::string, std::string>& labels,
+		double value,
+		time_t timestamp = time(NULL));
+	void insert_backend_health(int hostgroup,
+		const std::string& hostname,
+		int port,
+		bool probe_up,
+		int connect_ms,
+		time_t timestamp = time(NULL));
+	// Downsampling
+	void tsdb_downsample_metrics();
+	void tsdb_retention_cleanup();
+	// Query interface with label filtering
+	SQLite3_result* query_tsdb_metrics(const std::string& metric_name,
+		const std::map<std::string, std::string>& label_filters,
+		time_t from,
+		time_t to,
+		const std::string& aggregation = "");
+	SQLite3_result* list_tsdb_metric_names();
+	// Backend health queries
+	SQLite3_result* get_backend_health_metrics(time_t from, time_t to, int hostgroup = -1);
+	// Status
+	struct tsdb_status_t {
+		size_t total_series;
+		size_t total_datapoints;
+		size_t disk_size_bytes;
+		time_t oldest_datapoint;
+		time_t newest_datapoint;
+	};
+	tsdb_status_t get_tsdb_status();
+	// Timer checks
+	bool tsdb_sampler_timetoget(unsigned long long curtime);
+	bool tsdb_downsample_timetoget(unsigned long long curtime);
+	bool tsdb_monitor_timetoget(unsigned long long curtime);
+	bool tsdb_retention_timetoget(unsigned long long curtime);
+	// Main loops
+	void tsdb_sampler_loop();
+	void tsdb_monitor_loop();
+#endif
+
 	/** 
 	 * @brief Retreives the variable id mapped to the provided variable name associated in the history_mysql_variables_lookup table.
 	 * 
@@ -182,6 +280,20 @@ class ProxySQL_Statistics {
 	bool knows_variable_name(const std::string & variable_name) const;
 
 	private:
+#ifdef PROXYSQLTSDB
+	/** Serialize compound operations performed through the shared TSDB SQLite connection. */
+	pthread_mutex_t tsdb_mutex = PTHREAD_MUTEX_INITIALIZER;
+	void insert_tsdb_metric_unlocked(const std::string& metric_name,
+		const std::map<std::string, std::string>& labels,
+		double value,
+		time_t timestamp);
+	void insert_backend_health_unlocked(int hostgroup,
+		const std::string& hostname,
+		int port,
+		bool probe_up,
+		int connect_ms,
+		time_t timestamp);
+#endif
 	/** @brief Map with the key being the variable_name and the value being the variable_id, used for history_mysql_variables data. Matches the history_mysql_variables_lookup. */
 	std::map<std::string, int64_t> variable_name_id_map;
 	std::mutex mu;

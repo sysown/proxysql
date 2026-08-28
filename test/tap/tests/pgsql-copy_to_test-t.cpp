@@ -10,6 +10,7 @@
 #include <thread>
 #include "libpq-fe.h"
 #include "command_line.h"
+#include "noise_utils.h"
 #include "tap.h"
 #include "utils.h"
 
@@ -58,7 +59,7 @@ bool executeQueries(PGconn* conn, const std::vector<std::string>& queries) {
         if (strncasecmp(buf, "SELECT", sizeof("SELECT") - 1) == 0) {
             return PGRES_TUPLES_OK;
         }
-        else if (strncasecmp(buf, "COPY", sizeof("COPY") - 1) == 0) {
+        if (strncasecmp(buf, "COPY", sizeof("COPY") - 1) == 0) {
             return PGRES_COPY_OUT;
         }
 
@@ -284,12 +285,12 @@ void testLargeDataVolume(PGconn* admin_conn, PGconn* conn) {
         return;
 
     // Insert a large number of rows
-    for (int i = 0; i < 1000; i++) {
-        char query[256];
-        sprintf(query, "INSERT INTO copy_test (name, value, active, created_at) VALUES ('User%d', %d, %s, NOW())",
-            i, i * 10, (i % 2 == 0) ? "TRUE" : "FALSE");
-        if (!executeQueries(conn, {
-            query
+	for (int i = 0; i < 1000; i++) {
+		char query[256];
+		snprintf(query, sizeof(query), "INSERT INTO copy_test (name, value, active, created_at) VALUES ('User%d', %d, %s, NOW())",
+			i, i * 10, (i % 2 == 0) ? "TRUE" : "FALSE");
+		if (!executeQueries(conn, {
+			query
             }))
             return;
     }
@@ -490,11 +491,18 @@ void execute_tests(bool with_ssl, bool diff_conn) {
 }
 
 int main(int argc, char** argv) {
-
-    plan(42 * 2); // Total number of tests planned
-
     if (cl.getEnv())
         return exit_status();
+
+	spawn_internal_noise(cl, internal_noise_mysql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}});
+	spawn_internal_noise(cl, internal_noise_prometheus_poller);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
+
+	if (cl.use_noise) {
+		plan(42 * 2 + 3);
+	} else {
+		plan(42 * 2);
+	}
 
     execute_tests(true, false);
     execute_tests(false, false);

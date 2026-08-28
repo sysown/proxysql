@@ -49,7 +49,10 @@ void insert_row(SQLite3DB& statsdb, unordered_map<string,int>& varmap, SQLite3_r
 	query.pop_back();
 	query += ")";
     sqlite3_stmt *statement=NULL;
-	int rc = statsdb.prepare_v2(query.c_str(), &statement);
+	auto prepared_statement = statsdb.prepare_v2(query.c_str());
+	int rc = prepared_statement.first;
+	stmt_unique_ptr statement_unique = std::move(prepared_statement.second);
+	statement = statement_unique.get();
 	assert(rc==SQLITE_OK);
 	for (auto it = res->rows.begin() ; it != res->rows.end(); ++it) {
 		SQLite3_row *r=*it;

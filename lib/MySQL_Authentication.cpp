@@ -9,32 +9,55 @@
 
 #include "MySQL_Authentication.hpp"
 
+#include <openssl/crypto.h>
+
 #ifndef SPOOKYV2
 #include "SpookyV2.h"
 #define SPOOKYV2
 #endif
 
-void free_account_details(account_details_t& ad) {
-	if (ad.password) {
-		free(ad.password);
-		ad.password = nullptr;
+#ifdef PROXYSQLED25519
+#include "MySQL_Ed25519.h"
+#endif
+
+namespace {
+
+#ifdef PROXYSQL31
+void validate_require_x509_attribute(
+	const nlohmann::json& valid,
+	const char* username,
+	enum cred_username_type usertype
+) {
+	if (usertype == USERNAME_FRONTEND && valid.is_object()) {
+		const auto require_x509 = valid.find("require_x509");
+		if (require_x509 != valid.end() && !require_x509->is_boolean()) {
+			proxy_error(
+				"Invalid require_x509 attribute for user %s: expected JSON boolean; "
+				"authentication will be denied until corrected\n",
+				username);
+		}
 	}
+}
+#endif
+
+void cleanse_and_free_password(char*& password) {
+	if (password != nullptr) {
+		OPENSSL_cleanse(password, strlen(password));
+		free(password);
+		password = nullptr;
+	}
+}
+
+} // namespace
+
+void free_account_details(account_details_t& ad) {
+	cleanse_and_free_password(ad.password);
 	if (ad.sha1_pass) {
 		free(ad.sha1_pass);
 		ad.sha1_pass=NULL;
 	}
-	if (ad.password) {
-		free(ad.password);
-		ad.password = nullptr;
-	}
-	if (ad.clear_text_password[PASSWORD_TYPE::PRIMARY]) {
-		free(ad.clear_text_password[PASSWORD_TYPE::PRIMARY]);
-		ad.clear_text_password[PASSWORD_TYPE::PRIMARY] = nullptr;
-	}
-	if (ad.clear_text_password[PASSWORD_TYPE::ADDITIONAL]) {
-		free(ad.clear_text_password[PASSWORD_TYPE::ADDITIONAL]);
-		ad.clear_text_password[PASSWORD_TYPE::ADDITIONAL] = nullptr;
-	}
+	cleanse_and_free_password(ad.clear_text_password[PASSWORD_TYPE::PRIMARY]);
+	cleanse_and_free_password(ad.clear_text_password[PASSWORD_TYPE::ADDITIONAL]);
 	if (ad.default_schema) {
 		free(ad.default_schema);
 		ad.default_schema = nullptr;
@@ -61,18 +84,22 @@ MySQL_Authentication::MySQL_Authentication() {
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_init(&creds_backends.lock, NULL);
 	pthread_rwlock_init(&creds_frontends.lock, NULL);
+	pthread_rwlock_init(&creds_admins.lock, NULL);
 #else
 	spinlock_rwlock_init(&creds_backends.lock);
 	spinlock_rwlock_init(&creds_frontends.lock);
+	spinlock_rwlock_init(&creds_admins.lock);
 #endif
 	creds_backends.cred_array = new PtrArray();
 	creds_frontends.cred_array = new PtrArray();
+	creds_admins.cred_array = new PtrArray();
 };
 
 MySQL_Authentication::~MySQL_Authentication() {
 	reset();
 	delete creds_backends.cred_array;
 	delete creds_frontends.cred_array;
+	delete creds_admins.cred_array;
 };
 
 void MySQL_Authentication::print_version() {
@@ -80,7 +107,7 @@ void MySQL_Authentication::print_version() {
 	};
 
 void MySQL_Authentication::set_all_inactive(enum cred_username_type usertype) {
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	creds_group_t &cg = creds_for(usertype);
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&cg.lock);
 #else
@@ -89,7 +116,7 @@ void MySQL_Authentication::set_all_inactive(enum cred_username_type usertype) {
 	unsigned int i;
 	for (i=0; i<cg.cred_array->len; i++) {
 		account_details_t *ado=(account_details_t *)cg.cred_array->index(i);
-		ado->__active=false;
+		ado->active_=false;
 	}
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&cg.lock);
@@ -99,20 +126,22 @@ void MySQL_Authentication::set_all_inactive(enum cred_username_type usertype) {
 }
 
 void MySQL_Authentication::remove_inactives(enum cred_username_type usertype) {
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	creds_group_t &cg = creds_for(usertype);
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&cg.lock);
 #else
 	spin_wrlock(&cg.lock);
 #endif
-	unsigned int i;
-__loop_remove_inactives:
-	for (i=0; i<cg.cred_array->len; i++) {
+	unsigned int i = 0;
+	while (i < cg.cred_array->len) {
 		account_details_t *ado=(account_details_t *)cg.cred_array->index(i);
-		if (ado->__active==false) {
-			del(ado->username,usertype,false);
-			goto __loop_remove_inactives; // we aren't sure how the underlying structure changes, so we jump back to 0
+		if (ado->active_==false) {
+			if (del(ado->username,usertype,false)==false) {
+				++i;
+			}
+			continue;
 		}
+		++i;
 	}
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&cg.lock);
@@ -121,14 +150,43 @@ __loop_remove_inactives:
 #endif
 }
 
+/**
+ * @brief Select the credential scope for a username type.
+ * @details USERNAME_ADMIN is only ever passed when PROXYSQL31 is defined; on the
+ *   stable tier ADMIN_CRED_SCOPE is USERNAME_FRONTEND so this never returns
+ *   'creds_admins' and behaviour is unchanged.
+ */
+creds_group_t& MySQL_Authentication::creds_for(enum cred_username_type usertype) {
+	switch (usertype) {
+		case USERNAME_BACKEND:
+			return creds_backends;
+		case USERNAME_ADMIN:
+			return creds_admins;
+		default:
+			return creds_frontends;
+	}
+}
+
 bool MySQL_Authentication::add(char * username, char * password, enum cred_username_type usertype, bool use_ssl, int default_hostgroup, char *default_schema, bool schema_locked, bool transaction_persistent, bool fast_forward, int max_connections, char* attributes, char *comment) {
+#ifdef PROXYSQLED25519
+	if (password && strncasecmp(password, ED25519_STORED_PREFIX, ED25519_STORED_PREFIX_LEN) == 0) {
+		unsigned char tmp_pk[ED25519_PUBKEY_LEN];
+		if (proxysql_ed25519_decode_pubkey(password, tmp_pk) == false) {
+			proxy_warning(
+				"mysql_users entry for '%s' has a malformed $ED$ ed25519 credential"
+				" (expected \"$ED$\" followed by exactly 43 base64 characters);"
+				" every authentication attempt for this user will fail\n", username);
+		}
+	}
+#endif
 	uint64_t hash1, hash2;
+	bool effective_use_ssl = use_ssl;
 	SpookyHash myhash;
 	myhash.Init(1,2);
 	myhash.Update(username,strlen(username));
 	myhash.Final(&hash1,&hash2);
 
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	creds_group_t &cg = creds_for(usertype);
 	
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&cg.lock);
@@ -144,20 +202,14 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 		ad=lookup->second;
 		if (strcmp(ad->password,password)) {
 			// the password has changed
-			free(ad->password);
+			cleanse_and_free_password(ad->password);
 			ad->password=strdup(password);
 			if (ad->sha1_pass) {
 				free(ad->sha1_pass);
 				ad->sha1_pass=NULL;
 			}
-			if (ad->clear_text_password[0]) {
-				free(ad->clear_text_password[0]);
-				ad->clear_text_password[0]=NULL;
-			}
-			if (ad->clear_text_password[1]) {
-				free(ad->clear_text_password[1]);
-				ad->clear_text_password[1]=NULL;
-			}
+			cleanse_and_free_password(ad->clear_text_password[0]);
+			cleanse_and_free_password(ad->clear_text_password[1]);
 			// FIXME: if the password is a clear text password, automatically generate sha1_pass and clear_text_password
 		}
 		if (strcmp(ad->default_schema,default_schema)) {
@@ -174,6 +226,10 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 				// NOTE: add() is only place where we do input validation
 				try {
 					nlohmann::json valid=nlohmann::json::parse(attributes);
+
+#ifdef PROXYSQL31
+					validate_require_x509_attribute(valid, username, usertype);
+#endif
 					// we do further input validation here, and possibly transforming the JSON itself
 					bool json_rewritten = false;
 					auto default_transaction_isolation = valid.find("default-transaction_isolation");
@@ -232,6 +288,10 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 			// NOTE: add() is only place where we do input validation
 			try {
 				nlohmann::json valid=nlohmann::json::parse(attributes);
+
+#ifdef PROXYSQL31
+				validate_require_x509_attribute(valid, username, usertype);
+#endif
 				ad->attributes=strdup(attributes);
 			}
 			catch(nlohmann::json::exception& e) {
@@ -249,13 +309,25 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 		// FIXME: if the password is a clear text password, automatically generate sha1_pass and clear_text_password
 	}
 
-	ad->use_ssl=use_ssl;
+	if (ad->attributes && strlen(ad->attributes)) {
+		try {
+			nlohmann::json valid=nlohmann::json::parse(ad->attributes);
+			if (valid.find("spiffe_id") != valid.end()) {
+				effective_use_ssl = true;
+			}
+		}
+		catch(nlohmann::json::exception&) {
+			// Invalid attributes do not require TLS.
+		}
+	}
+
+	ad->use_ssl=effective_use_ssl;
 	ad->default_hostgroup=default_hostgroup;
 	ad->schema_locked=schema_locked;
 	ad->transaction_persistent=transaction_persistent;
 	ad->fast_forward=fast_forward;
 	ad->max_connections=max_connections;
-	ad->__active=true;
+	ad->active_=true;
 	if (new_ad) {
 		cg.bt_map.insert(std::make_pair(hash1,ad));
 		cg.cred_array->add(ad);
@@ -310,11 +382,11 @@ unsigned int MySQL_Authentication::memory_usage() {
 	ret += sizeof(PtrArray);
 	ret += (creds_backends.cred_array->size * sizeof(void *));
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
-	pthread_rwlock_unlock(&creds_frontends.lock);
 	pthread_rwlock_unlock(&creds_backends.lock);
+	pthread_rwlock_unlock(&creds_frontends.lock);
 #else
-	spin_rdunlock(&creds_frontends.lock);
 	spin_rdunlock(&creds_backends.lock);
+	spin_rdunlock(&creds_frontends.lock);
 #endif
 	return ret;
 }
@@ -362,8 +434,8 @@ int MySQL_Authentication::dump_all_users(account_details_t ***ads, bool _complet
 			ad->schema_locked=ado->schema_locked;
 			ad->transaction_persistent=ado->transaction_persistent;
 			ad->fast_forward=ado->fast_forward;
-			ad->__frontend=1;
-			ad->__backend=0;
+			ad->frontend_=1;
+			ad->backend_=0;
 		}
 		_ads[idx_]=ad;
 		idx_++;
@@ -387,8 +459,8 @@ int MySQL_Authentication::dump_all_users(account_details_t ***ads, bool _complet
 		ad->transaction_persistent=ado->transaction_persistent;
 		ad->fast_forward=ado->fast_forward;
 		ad->max_connections=ado->max_connections;
-		ad->__frontend=0;
-		ad->__backend=1;
+		ad->frontend_=0;
+		ad->backend_=1;
 		_ads[idx_]=ad;
 		idx_++;
 	}
@@ -396,11 +468,11 @@ int MySQL_Authentication::dump_all_users(account_details_t ***ads, bool _complet
 	*ads=_ads;
 __exit_dump_all_users:
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
-	pthread_rwlock_unlock(&creds_frontends.lock);
 	pthread_rwlock_unlock(&creds_backends.lock);
+	pthread_rwlock_unlock(&creds_frontends.lock);
 #else
-	spin_rdunlock(&creds_frontends.lock);
 	spin_rdunlock(&creds_backends.lock);
+	spin_rdunlock(&creds_frontends.lock);
 #endif
 	return total_size;
 }
@@ -487,7 +559,7 @@ bool MySQL_Authentication::del(char * username, enum cred_username_type usertype
 	myhash->Final(&hash1,&hash2);
 	delete myhash;
 
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	creds_group_t &cg = creds_for(usertype);
 
 	if (set_lock)
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
@@ -502,10 +574,10 @@ bool MySQL_Authentication::del(char * username, enum cred_username_type usertype
 		cg.cred_array->remove_fast(ad);
 		cg.bt_map.erase(lookup);
 		free(ad->username);
-		free(ad->password);
+		cleanse_and_free_password(ad->password);
 		if (ad->sha1_pass) { free(ad->sha1_pass); ad->sha1_pass=NULL; }
-		if (ad->clear_text_password[0]) { free(ad->clear_text_password[0]); ad->clear_text_password[0]=NULL; }
-		if (ad->clear_text_password[1]) { free(ad->clear_text_password[1]); ad->clear_text_password[1]=NULL; }
+		cleanse_and_free_password(ad->clear_text_password[0]);
+		cleanse_and_free_password(ad->clear_text_password[1]);
 		free(ad->default_schema);
 		free(ad->attributes);
 		free(ad->comment);
@@ -521,7 +593,7 @@ bool MySQL_Authentication::del(char * username, enum cred_username_type usertype
 	return ret;
 };
 
-bool MySQL_Authentication::set_SHA1(char * username, enum cred_username_type usertype, void *sha_pass) {
+bool MySQL_Authentication::set_SHA1(const char * username, enum cred_username_type usertype, void *sha_pass) {
 	bool ret=false;
 	uint64_t hash1, hash2;
 	SpookyHash *myhash=new SpookyHash();
@@ -530,7 +602,7 @@ bool MySQL_Authentication::set_SHA1(char * username, enum cred_username_type use
 	myhash->Final(&hash1,&hash2);
 	delete myhash;
 
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	creds_group_t &cg = creds_for(usertype);
 
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&cg.lock);
@@ -567,7 +639,7 @@ bool MySQL_Authentication::set_clear_text_password(
 	myhash->Final(&hash1,&hash2);
 	delete myhash;
 
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	creds_group_t &cg = creds_for(usertype);
 
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&cg.lock);
@@ -579,18 +651,12 @@ bool MySQL_Authentication::set_clear_text_password(
 	if (lookup != cg.bt_map.end()) {
 		account_details_t *ad=lookup->second;
 		if (passtype == PASSWORD_TYPE::PRIMARY) {
-			if (ad->clear_text_password[0]) {
-				free(ad->clear_text_password[0]);
-				ad->clear_text_password[0]=NULL;
-			}
+			cleanse_and_free_password(ad->clear_text_password[0]);
 			if (clear_text_password) {
 				ad->clear_text_password[0] = strdup(clear_text_password);
 			}
 		} else {
-			if (ad->clear_text_password[1]) {
-				free(ad->clear_text_password[1]);
-				ad->clear_text_password[1]=NULL;
-			}
+			cleanse_and_free_password(ad->clear_text_password[1]);
 			if (clear_text_password) {
 				ad->clear_text_password[1] = strdup(clear_text_password);
 			}
@@ -635,7 +701,7 @@ account_details_t MySQL_Authentication::lookup(
 	myhash.Update(username,strlen(username));
 	myhash.Final(&hash1,&hash2);
 
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	creds_group_t &cg = creds_for(usertype);
 
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_rdlock(&cg.lock);
@@ -692,7 +758,7 @@ account_details_t MySQL_Authentication::lookup(
 }
 
 bool MySQL_Authentication::_reset(enum cred_username_type usertype) {
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	creds_group_t &cg = creds_for(usertype);
 
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_wrlock(&cg.lock);
@@ -707,16 +773,10 @@ bool MySQL_Authentication::_reset(enum cred_username_type usertype) {
 			account_details_t *ad=lookup->second;
 			cg.bt_map.erase(lookup);
 			free(ad->username);
-			free(ad->password);
+			cleanse_and_free_password(ad->password);
 			if (ad->sha1_pass) { free(ad->sha1_pass); ad->sha1_pass=NULL; }
-			if (ad->clear_text_password[0]) {
-				free(ad->clear_text_password[0]);
-				ad->clear_text_password[0] = NULL;
-			}
-			if (ad->clear_text_password[1]) {
-				free(ad->clear_text_password[1]);
-				ad->clear_text_password[1] = NULL;
-			}
+			cleanse_and_free_password(ad->clear_text_password[0]);
+			cleanse_and_free_password(ad->clear_text_password[1]);
 			free(ad->default_schema);
 			free(ad->comment);
 			free(ad->attributes);
@@ -737,6 +797,11 @@ bool MySQL_Authentication::_reset(enum cred_username_type usertype) {
 bool MySQL_Authentication::reset() {
 	_reset(USERNAME_BACKEND);
 	_reset(USERNAME_FRONTEND);
+	// creds_admins is a distinct scope from PROXYSQL31 onward; without this its
+	// accounts are handed to setAllInactive() without ever being released and the
+	// account_details strings leak. On the stable tier ADMIN_CRED_SCOPE is
+	// USERNAME_FRONTEND so the scope is empty and this is a no-op.
+	_reset(USERNAME_ADMIN);
 	return true;
 }
 
@@ -784,7 +849,7 @@ static uint64_t compute_accounts_hash(const umap_auth& accs_map) {
 }
 
 uint64_t MySQL_Authentication::_get_runtime_checksum(enum cred_username_type usertype) {
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	creds_group_t &cg = creds_for(usertype);
 	uint64_t accs_hash = compute_accounts_hash(cg.bt_map);
 
 	return accs_hash;
@@ -820,15 +885,15 @@ static pair<umap_auth, umap_auth> extract_accounts_details(MYSQL_RES* resultset,
 
 		acc_details->username = row[0];
 		acc_details->password = row[1] ? row[1] : const_cast<char*>("");
-		acc_details->__active = true;
+		acc_details->active_ = true;
 		acc_details->use_ssl = strcmp(row[2], "1") == 0 ? true : false;
 		acc_details->default_hostgroup = atoi(row[3]);
 		acc_details->default_schema = row[4] ? row[4] : const_cast<char*>("");
 		acc_details->schema_locked = strcmp(row[5], "1") == 0 ? true : false;
 		acc_details->transaction_persistent = strcmp(row[6], "1") == 0 ? true : false;
 		acc_details->fast_forward = strcmp(row[7], "1") == 0 ? true : false;
-		acc_details->__backend = strcmp(row[8], "1") == 0 ? true : false;
-		acc_details->__frontend = strcmp(row[9], "1") == 0 ? true : false;
+		acc_details->backend_ = strcmp(row[8], "1") == 0 ? true : false;
+		acc_details->frontend_ = strcmp(row[9], "1") == 0 ? true : false;
 		acc_details->max_connections = atoi(row[10]);
 		acc_details->attributes = row[11] ? row[11] : const_cast<char*>("");
 		acc_details->comment = row[12] ? row[12] : const_cast<char*>("");

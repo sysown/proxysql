@@ -1,10 +1,10 @@
 #ifndef PROXYSQL_MACROS_H
 #define PROXYSQL_MACROS_H
-#define strdup_null(__c) ( __c ? strdup(__c) : __c )
+#define strdup_null(__c) ( (__c) ? strdup(__c) : (__c) )
 #define char_malloc (char *)malloc
-#define free_null(__c) { if(__c) { free(__c); __c=NULL; } }
+#define free_null(__c) { if(__c) { free(__c); (__c)=NULL; } }
 
-#define itostr(__s, __i)  { __s=char_malloc(32); sprintf(__s, "%lld", __i); }
+#define itostr(__s, __i)  { (__s)=char_malloc(32); snprintf((__s), 32, "%lld", (__i)); }
 
 // fast memory copy forward . Use this instead of memcpy for small buffers
 #define MEM_COPY_FWD(dst_p, src_p, bytes)  \
@@ -53,8 +53,8 @@
 // copy 4 bytes
 #define Copy4B(x,y) \
 	do { \
-		uint32_t *a=(uint32_t *)x; \
-		*a=*((uint32_t *)y); \
+		uint32_t *a=(uint32_t *)(x); \
+		*a=*((uint32_t *)(y)); \
 	} while(0)
 
 #ifndef PROXYSQL_LIKELY
@@ -70,4 +70,9 @@
 #ifndef ENABLE_TIMER
 #define ENABLE_TIMER false
 #endif // ENABLE_TIMER
+
+/// @brief How often wait_for_all_threads_to_exit_run_loop() logs that it is still waiting.
+#ifndef THREADS_EXIT_REPORT_INTERVAL_US
+#define THREADS_EXIT_REPORT_INTERVAL_US (10*1000*1000ULL)
+#endif
 #endif // PROXYSQL_MACROS_H

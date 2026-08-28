@@ -1,5 +1,5 @@
-#ifndef __CLASS_PGSQL_QUERY_PROCESSOR_H
-#define __CLASS_PGSQL_QUERY_PROCESSOR_H
+#ifndef PROXYSQL_PGSQL_QUERY_PROCESSOR_H
+#define PROXYSQL_PGSQL_QUERY_PROCESSOR_H
 #include "proxysql.h"
 #include "cpp.h"
 #include "QP_rule_text.h"
@@ -42,4 +42,4 @@ private:
 	friend class Query_Processor;
 };
 
-#endif /* __CLASS_PGSQL_QUERY_PROCESSOR_H */
+#endif /* PROXYSQL_PGSQL_QUERY_PROCESSOR_H */

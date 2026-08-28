@@ -31,7 +31,9 @@ using std::vector;
 using hrc = std::chrono::high_resolution_clock;
 using nlohmann::json;
 
-const string base_address { "http://localhost:6070/sync/" };
+// base_address is constructed at runtime using the ProxySQL host from the environment.
+// It is defined as a mutable global so check functions at file scope can access it.
+static string base_address { "http://proxysql:6070/sync/" };
 
 const vector<honest_req_t> honest_requests {
 	{ { "valid_output_script", "%s.py", "POST", 1000 }, { "{}" } },
@@ -126,11 +128,33 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
+	// Build the RESTAPI base address using the actual ProxySQL host from the environment.
+	// This ensures the test works in both local and containerized CI environments.
+	base_address = string("http://") + string(cl.host) + ":6070/sync/";
+	diag("Using RESTAPI base address: %s", base_address.c_str());
+
+	diag("=== Regression Test #3223: RESTAPI Script Execution & Return Codes ===");
+	diag("%s", "");
+	diag("PURPOSE:");
+	diag("  This test validates that ProxySQL's RESTAPI correctly handles script");
+	diag("  execution and returns appropriate HTTP status codes and error codes.");
+	diag("%s", "");
+	diag("TEST SCENARIOS:");
+	diag("  - Valid requests: Scripts returning proper JSON output (200 OK)");
+	diag("  - Invalid input: Malformed JSON or missing parameters (400 Bad Request)");
+	diag("  - Script failures: Timeouts, permission errors, signals (424 Failed)");
+	diag("  - Edge cases: Large outputs, partial flushes, closed pipes");
+	diag("%s", "");
+	diag("SCRIPT PATH: Using '%s' for script resolution",
+		getenv("REGULAR_INFRA_DATADIR") ? getenv("REGULAR_INFRA_DATADIR") : cl.workdir);
+	diag("=========================================================================");
+
 	plan(count_exp_tests(honest_requests, invalid_requests));
 
 	MYSQL* admin = mysql_init(NULL);
 
 	// Initialize connections
+	diag("Connecting to ProxySQL Admin at %s:%d as %s", cl.host, cl.admin_port, cl.admin_username);
 	if (!admin) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
@@ -142,16 +166,20 @@ int main(int argc, char** argv) {
 	}
 
 	// Enable 'RESTAPI'
+	diag("Enabling RESTAPI on port 6070");
 	MYSQL_QUERY(admin, "SET admin-restapi_enabled='true'");
 	MYSQL_QUERY(admin, "SET admin-restapi_port=6070");
 
 	MYSQL_QUERY(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
 
 	// Clean current 'restapi_routes' if any
+	diag("Configuring RESTAPI routes...");
 	MYSQL_QUERY(admin, "DELETE FROM restapi_routes");
 
 	// Configure restapi_routes to be used
-	string script_base_path { string { cl.workdir  } + "reg_test_3223_scripts" };
+	const char* d_env = getenv("REGULAR_INFRA_DATADIR");
+	string script_base_path = (d_env ? string(d_env) + "/reg_test_3223_scripts" : string(cl.workdir) + "reg_test_3223_scripts");
+	diag("Script base path: %s", script_base_path.c_str());
 	const ept_info_t dummy_ept { "dummy_ept_script", "%s.py", "POST", 1000 };
 
 	// Configure the valid requests
@@ -161,18 +189,20 @@ int main(int argc, char** argv) {
 		honest_requests.begin(), honest_requests.end(), std::back_inserter(v_epts_info), ext_v_epts_info
 	);
 
+	diag("Initializing endpoints for valid requests...");
 	int ept_conf_res = configure_endpoints(admin, script_base_path, v_epts_info, dummy_ept, true);
 	if (ept_conf_res) {
 		diag("Endpoint configuration failed. Skipping endpoint testing...");
 		return EXIT_FAILURE;
 	}
 
+	diag("Testing valid RESTAPI requests...");
 	{
 		for (const auto& req : honest_requests) {
 			for (const string& params : req.params) {
 				const string ept { join_path(base_address, req.ept_info.name) };
 				diag(
-					"Checking valid '%s' request - ept: '%s', params: '%s'",
+					"  Checking valid '%s' request - ept: '%s', params: '%s'",
 					req.ept_info.method.c_str(), ept.c_str(), params.c_str()
 				);
 				std::chrono::nanoseconds duration;
@@ -280,9 +310,9 @@ int main(int argc, char** argv) {
 	vector<ept_info_t> i_epts_info {};
 	const auto ext_i_epts_info = [] (const faulty_req_t& req) { return req.ept_info; };
 
-	// Failed scripts may require to read the full output from ASAN leaks report. This in combination with the
-	// forked process shutdown slowdown can take a considerable amount of time. A cleaner solution would be
-	// to disable 'detect_leaks' at runtime, but doesn't look feasible at the moment.
+	// ASAN makes forked child shutdown slower even though the isolated runner
+	// disables LeakSanitizer for daemon processes. Preserve extra headroom for
+	// these intentionally failing script executions.
 	int wasan = get_env_int("WITHASAN", 0);
 	if (wasan) {
 		for (auto& req : invalid_requests) {
@@ -294,12 +324,14 @@ int main(int argc, char** argv) {
 		invalid_requests.begin(), invalid_requests.end(), std::back_inserter(i_epts_info), ext_i_epts_info
 	);
 
+	diag("Initializing endpoints for invalid requests...");
 	ept_conf_res = configure_endpoints(admin, script_base_path, i_epts_info, dummy_ept, true);
 	if (ept_conf_res) {
 		diag("Endpoint configuration failed. Skipping endpoint testing...");
 		return EXIT_FAILURE;
 	}
 
+	diag("Testing invalid RESTAPI requests...");
 	for (const auto& req : invalid_requests) {
 		for (const ept_pl_t& ept_pl : req.ept_pls) {
 			std::chrono::nanoseconds duration;
@@ -308,7 +340,7 @@ int main(int argc, char** argv) {
 
 			const string ept { join_path(base_address, req.ept_info.name) };
 			diag(
-				"Checking valid '%s' request - ept: '%s', params: '%s'",
+				"  Checking invalid '%s' request - ept: '%s', params: '%s'",
 				req.ept_info.method.c_str(), ept.c_str(), ept_pl.params.c_str()
 			);
 

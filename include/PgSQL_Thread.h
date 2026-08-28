@@ -1,6 +1,6 @@
-#ifndef __CLASS_PGSQL_THREAD_H
-#define __CLASS_PGSQL_THREAD_H
-#define ____CLASS_STANDARD_PGSQL_THREAD_H
+#ifndef PROXYSQL_PGSQL_THREAD_H
+#define PROXYSQL_PGSQL_THREAD_H
+#define PROXYSQL_STANDARD_PGSQL_THREAD_H
 #include <prometheus/counter.h>
 #include <prometheus/gauge.h>
 
@@ -41,9 +41,9 @@ constexpr const char* AUTHENTICATION_METHOD_STR[] = {
 #define MY_EPOLL_THREAD_MAXEVENTS 128
 */
 
-#define ADMIN_HOSTGROUP	-2
-#define STATS_HOSTGROUP	-3
-#define SQLITE_HOSTGROUP -4
+#define ADMIN_HOSTGROUP	(-2)
+#define STATS_HOSTGROUP	(-3)
+#define SQLITE_HOSTGROUP (-4)
 
 
 #define MYSQL_DEFAULT_COLLATION_CONNECTION	""
@@ -139,9 +139,8 @@ struct CopyCmdMatcher {
 	CopyCmdMatcher() : 
 		options(RE2::Quiet), 
 		pattern(
-			R"(((?is)(?:--.*?$|/\*[\s\S]*?\*/|\s)*\bCOPY\b\s+[^;]*?\bFROM\b\s+(?:STDIN|STDOUT)\b(?:\s+WITH\s*\([^)]*\))?))",
+			R"(((?is)\bCOPY\b[^;]*?\bFROM\b[^;]*?\b(?:STDIN|STDOUT)\b))",
 			options) {
-		//((?is)(?:--.*?$|/\*[\s\S]*?\*/|\s)*\bCOPY\b\s+[^;]*?\bFROM\b\s+STDIN\b(?:\s+WITH\s*\([^)]*\))?)
 	}
 
 	inline
@@ -161,6 +160,7 @@ private:
 	//bool maintenance_loop;
 
 	PtrArray* cached_connections;
+	unsigned int push_local_counter;	// round-robin counter for bounded local caching: cache 1-in-N where N = pgsql_threads
 
 #ifdef IDLE_THREADS
 	struct epoll_event events[MY_EPOLL_THREAD_MAXEVENTS];
@@ -228,9 +228,9 @@ public:
 #ifdef IDLE_THREADS
 	PtrArray* idle_mysql_sessions;
 	PtrArray* resume_mysql_sessions;
-	CopyCmdMatcher *copy_cmd_matcher;
 	pgsql_conn_exchange_t myexchange;
 #endif // IDLE_THREADS
+	CopyCmdMatcher *copy_cmd_matcher;
 
 	int pipefd[2];
 	PgSQL_Session_Interrupt_Queue_t sess_intrpt_queue;
@@ -244,6 +244,12 @@ public:
 	struct {
 		unsigned long long stvar[PG_st_var_END];
 		unsigned int active_transactions;
+		// tx-poisoned feature counters. Each PgSQL thread maintains its own
+		// (lock-free) and PgSQL_Threads_Handler aggregates across threads for
+		// stats_pgsql_global exposure. See preserve_client_on_broken_backend_in_tx.
+		unsigned long long tx_poisoned_total;
+		unsigned long long tx_poisoned_recovered_total;
+		unsigned long long tx_poisoned_rejected_statements_total;
 	} status_variables;
 
 	struct {
@@ -841,6 +847,10 @@ class PgSQL_Threads_Handler
 {
 private:
 	int shutdown_;
+	/// @brief Number of worker + idle threads that registered before entering PgSQL_Thread::run().
+	std::atomic<unsigned int> threads_registered;
+	/// @brief Number of worker + idle threads that already left PgSQL_Thread::run().
+	std::atomic<unsigned int> threads_exited_run_loop;
 	size_t stacksize;
 	pthread_attr_t attr;
 	pthread_rwlock_t rwlock;
@@ -904,6 +914,7 @@ public:
 		bool monitor_replication_lag_group_by_host;
 		//! How frequently a replication lag check is performed. Unit: 'ms'.
 		int monitor_replication_lag_interval;
+		int monitor_replication_lag_interval_window;
 		//! Read only check timeout. Unit: 'ms'.
 		int monitor_replication_lag_timeout;
 		int monitor_replication_lag_count;
@@ -976,6 +987,7 @@ public:
 		bool have_ssl;
 		bool multiplexing;
 		//		bool stmt_multiplexing;
+		bool preserve_client_on_broken_backend_in_tx;
 		bool log_unhealthy_connections;
 		bool enforce_autocommit_on_reads;
 		bool autocommit_false_not_reusable;
@@ -1006,7 +1018,16 @@ public:
 		int default_query_delay;
 		int default_query_timeout;
 		int query_processor_iterations;
+		/**
+		 * @brief Defines when the first comment of a query needs to be processed.
+		 * 0 : comment ignored
+		 * 1 : comment processed before the query rules
+		 * 2 : comment processed after the query rules (default behavior)
+		 * 3 : comment processed before and after the query rules
+		 */
+		int query_processor_first_comment_parsing;
 		int query_processor_regex;
+		int query_processor_parser;
 		int set_query_lock_on_hostgroup;
 		int set_parser_algorithm;
 		int auto_increment_delay_multiplex;
@@ -1026,10 +1047,21 @@ public:
 		int poll_timeout_on_failure;
 		char* eventslog_filename;
 		int eventslog_filesize;
+		/** @brief Circular buffer size for PostgreSQL advanced events logging. */
+		int eventslog_buffer_history_size;
+		/** @brief Maximum rows retained in stats_pgsql_query_events in-memory table. */
+		int eventslog_table_memory_size;
+		/** @brief Maximum query length copied into PostgreSQL eventslog circular buffer. */
+		int eventslog_buffer_max_query_length;
 		int eventslog_default_log;
 		int eventslog_format;
+		int eventslog_flush_timeout;
+ 		int eventslog_flush_size;
+ 		int eventslog_rate_limit;
 		char* auditlog_filename;
 		int auditlog_filesize;
+		int auditlog_flush_timeout;
+ 		int auditlog_flush_size;
 		// SSL related, proxy to server
 		char* ssl_p2s_ca;
 		char* ssl_p2s_capath;
@@ -1066,6 +1098,10 @@ public:
 #endif
 		int show_processlist_extended;
 		int processlist_max_query_length;
+#ifdef PROXYSQLFFTO
+		bool ffto_enabled;
+		int ffto_max_buffer_size;
+#endif
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;
@@ -1404,6 +1440,57 @@ public:
 	void shutdown_threads();
 
 	/**
+	 * @brief Rendezvous for all worker and idle threads before they self-delete.
+	 *
+	 * Worker and idle threads dereference each other's PgSQL_Thread objects:
+	 * PgSQL_Thread::run_MoveSessionsBetweenThreads() reads
+	 * pgsql_threads_idles[rand()].worker, and the idle branch of
+	 * PgSQL_Thread::run() reads pgsql_threads[rand()].worker and then locks that
+	 * worker's myexchange mutex unconditionally. Because the peer is picked at
+	 * random and both directions exist, no pthread_join() ordering in
+	 * shutdown_threads() can make self-deletion safe -- each thread destroys its
+	 * own PgSQL_Thread from its own thread function, which pthread_join() only
+	 * observes after the fact.
+	 *
+	 * Destruction must nevertheless stay on the owning thread, because
+	 * ~PgSQL_Thread() frees __thread variables (pgsql_thread___*) and calls
+	 * GloPgQPro->end_thread().
+	 *
+	 * Every worker and idle thread therefore calls this right after
+	 * PgSQL_Thread::run() returns and before deleting its own PgSQL_Thread (and
+	 * before clearing its slot in pgsql_threads[], which another thread may still
+	 * be about to load). It returns only once all of them have left run(), so no
+	 * PgSQL_Thread is ever freed while another thread may still reach into it.
+	 *
+	 * The participant count comes from register_thread_before_run_loop(), not from
+	 * num_threads: every thread that registers is exactly a thread that will call
+	 * this, so the barrier is self-consistent and does not depend on every slot of
+	 * pgsql_threads[]/pgsql_threads_idles[] being populated. That matters because
+	 * the rest of this class deliberately tolerates a NULL worker slot (see
+	 * signal_all_threads() and the guards in shutdown_threads()).
+	 *
+	 * @note The wait is unbounded, but adds no new liveness requirement. A thread
+	 *   that never leaves run() still holds a non-NULL slot -- it registers right
+	 *   after storing that pointer -- so shutdown_threads() would block forever in
+	 *   the pthread_join() it performs under exactly that non-NULL guard. Leaving
+	 *   run() strictly precedes the thread exit that join waits for, so any hang
+	 *   this barrier can produce is a hang the pre-existing join already produced.
+	 *   The wait logs via proxy_error() every THREADS_EXIT_REPORT_INTERVAL_US so a
+	 *   stalled shutdown is diagnosable instead of silent; it never aborts.
+	 */
+	void wait_for_all_threads_to_exit_run_loop();
+
+	/**
+	 * @brief Register the calling thread as a participant of the shutdown barrier.
+	 *
+	 * Must be called by each worker/idle thread function before it releases the
+	 * start-up gate (`load_`), so that the count is complete before any thread can
+	 * enter PgSQL_Thread::run() and therefore before any thread can reach
+	 * wait_for_all_threads_to_exit_run_loop().
+	 */
+	void register_thread_before_run_loop();
+
+	/**
 	 * @brief Adds a new listener to the thread pool, based on an interface string.
 	 *
 	 * @param iface The interface string in the format "address:port" or "[ipv6_address]:port".
@@ -1515,7 +1602,10 @@ public:
 	/**
 	 * @brief Retrieves a process list for all threads in the thread pool.
 	 *
-	 * @param args Processlist configuration of PgSQL.
+	 * @param args
+	 *   Processlist rendering options and optional typed query controls.
+	 *   When `args.query_options.enabled=true`, filtering/sorting/pagination is
+	 *   applied in memory after the live snapshot is collected.
 	 *
 	 * @return A `SQLite3_result` object containing the process list, or `NULL` if an error
 	 * occurred.
@@ -1600,6 +1690,13 @@ public:
 	 *
 	 */
 	unsigned int get_active_transations();
+
+	// Aggregated tx-poisoned counters across all PgSQL threads. These back the
+	// pgsql_tx_poisoned_total / pgsql_tx_poisoned_recovered_total /
+	// pgsql_tx_poisoned_rejected_statements_total rows in stats_pgsql_global.
+	unsigned long long get_tx_poisoned_total();
+	unsigned long long get_tx_poisoned_recovered_total();
+	unsigned long long get_tx_poisoned_rejected_statements_total();
 
 #ifdef IDLE_THREADS
 	/**
@@ -1704,4 +1801,4 @@ public:
 };
 	
 	
-#endif /* __CLASS_PGSQL_THREAD_H */
+#endif /* PROXYSQL_PGSQL_THREAD_H */

@@ -12,13 +12,18 @@ IDIRS :=	-I$(PROXYSQL_IDIR) \
 			-I${CURL_IDIR} \
 			-I${SQLITE3_IDIR} \
 			-I$(DOTENV_IDIR) \
+			-I$(POSTGRESQL_IDIR) \
 			-I$(RE2_IDIR)
 
 
 LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
 
+AR ?= ar
 
-OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed $(WASAN)
+OPT := $(STDCPP) -O2 -ggdb $(WASAN)
+ifneq ($(UNAME_S),Darwin)
+OPT += -Wl,--no-as-needed
+endif
 
 # NOTE-LWGCOV (LinkWithGCOV):
 # Linking against GCOV is required when ProxySQL is build with support for it. This is because
@@ -26,79 +31,102 @@ OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed $(WASAN)
 # being used inside ProxySQL linked 'SQLite3', which is also used by `libtap.so`.
 LWGCOV :=
 ifeq ($(WITHGCOV),1)
-	LWGCOV := -lgcov
+	LWGCOV := -lgcov --coverage
 endif
 
 
 ### main targets
 
-.PHONY: default
+.PHONY: default debug
 default: all
 
-.PHONY: all
+.PHONY: all debug
 all: libtap_mariadb.a libtap_mysql57.a libtap_mysql8.a \
-	libtap.so libcpp_dotenv.so libre2.so
+	libtap.a libtap$(SHLIB_EXT) libcpp_dotenv$(SHLIB_EXT) libre2$(SHLIB_EXT)
 
-debug: OPT := $(STDCPP) -O0 -DDEBUG -ggdb -Wl,--no-as-needed $(WASAN)
-debug: libtap_mariadb.a libtap_mysql57.a libtap_mysql8.a libtap.so
+DEBUG_OPT := $(STDCPP) -O0 -DDEBUG -ggdb $(WASAN)
+ifneq ($(UNAME_S),Darwin)
+DEBUG_OPT += -Wl,--no-as-needed
+endif
+debug: OPT := $(DEBUG_OPT)
+debug: libtap_mariadb.a libtap_mysql57.a libtap_mysql8.a libtap.a libtap$(SHLIB_EXT)
 
 ### helper targets
 
-command_line.o: command_line.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so -lssl -lcrypto libcpp_dotenv.so
+command_line.o: command_line.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl$(SHLIB_EXT) -lssl -lcrypto libcpp_dotenv$(SHLIB_EXT)
 	$(CXX) -fPIC -c command_line.cpp $(IDIRS) $(OPT)
 
-utils_mariadb.o: utils.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so -lssl -lcrypto libcpp_dotenv.so
+utils_mariadb.o: utils.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl$(SHLIB_EXT) -lssl -lcrypto libcpp_dotenv$(SHLIB_EXT)
 	$(CXX) -fPIC -c utils.cpp $(IDIRS) -I$(MARIADB_IDIR) $(OPT) -o $@
 
-utils_mysql57.o: utils.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so -lssl -lcrypto libcpp_dotenv.so
+utils_mysql57.o: utils.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl$(SHLIB_EXT) -lssl -lcrypto libcpp_dotenv$(SHLIB_EXT)
 	$(CXX) -DDISABLE_WARNING_COUNT_LOGGING -fPIC -c utils.cpp $(IDIRS) -I$(TEST_MYSQL_IDIR) -I$(TEST_MYSQL_EDIR) $(OPT) -o $@
 
-utils_mysql8.o: utils.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so -lssl -lcrypto libcpp_dotenv.so
+utils_mysql8.o: utils.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl$(SHLIB_EXT) -lssl -lcrypto libcpp_dotenv$(SHLIB_EXT)
 	$(CXX) -DDISABLE_WARNING_COUNT_LOGGING -fPIC -c utils.cpp $(IDIRS) -I$(TEST_MYSQL8_IDIR) -I$(TEST_MYSQL_EDIR) $(OPT) -o $@
 
-tap.o: tap.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so -lssl -lcrypto libcpp_dotenv.so
+tap.o: tap.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl$(SHLIB_EXT) -lssl -lcrypto libcpp_dotenv$(SHLIB_EXT)
 	$(CXX) -fPIC -c tap.cpp $(IDIRS) $(OPT)
 
-libtap_mariadb.a: tap.o command_line.o utils_mariadb.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
-	ar rcs libtap_mariadb.a tap.o command_line.o utils_mariadb.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
+noise_utils_mariadb.o: noise_utils.cpp noise_utils.h utils.h command_line.h cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl$(SHLIB_EXT) -lssl -lcrypto libcpp_dotenv$(SHLIB_EXT)
+	$(CXX) -DEXCLUDE_REPLACE_STR -fPIC -c noise_utils.cpp $(IDIRS) -I$(MARIADB_IDIR) -I$(POSTGRESQL_IDIR) $(OPT) -o $@
 
-libtap_mysql57.a: tap.o command_line.o utils_mysql57.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
-	ar rcs libtap_mysql57.a tap.o command_line.o utils_mysql57.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
+noise_utils_mysql57.o: noise_utils.cpp noise_utils.h utils.h command_line.h cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl$(SHLIB_EXT) -lssl -lcrypto libcpp_dotenv$(SHLIB_EXT)
+	$(CXX) -DEXCLUDE_REPLACE_STR -DDISABLE_WARNING_COUNT_LOGGING -fPIC -c noise_utils.cpp $(IDIRS) -I$(TEST_MYSQL_IDIR) -I$(TEST_MYSQL_EDIR) -I$(POSTGRESQL_IDIR) $(OPT) -o $@
 
-libtap_mysql8.a: tap.o command_line.o utils_mysql8.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
-	ar rcs libtap_mysql8.a tap.o command_line.o utils_mysql8.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
+noise_utils_mysql8.o: noise_utils.cpp noise_utils.h utils.h command_line.h cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl$(SHLIB_EXT) -lssl -lcrypto libcpp_dotenv$(SHLIB_EXT)
+	$(CXX) -DEXCLUDE_REPLACE_STR -DDISABLE_WARNING_COUNT_LOGGING -fPIC -c noise_utils.cpp $(IDIRS) -I$(TEST_MYSQL8_IDIR) -I$(TEST_MYSQL_EDIR) -I$(POSTGRESQL_IDIR) $(OPT) -o $@
 
-libtap.so: libtap_mariadb.a cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so libre2.so
-	$(CXX) -shared -o libtap.so -Wl,--whole-archive libtap_mariadb.a -Wl,--no-whole-archive $(LWGCOV)
+mcp_client.o: mcp_client.cpp mcp_client.h libcurl$(SHLIB_EXT)
+	$(CXX) -fPIC -c mcp_client.cpp $(IDIRS) $(OPT)
+
+cluster_simulator.o: cluster_simulator.cpp cluster_simulator.h
+	$(CXX) -fPIC -c cluster_simulator.cpp $(IDIRS) -I$(MARIADB_IDIR) $(OPT)
+
+rds_bgd_simulator.o: rds_bgd_simulator.cpp rds_bgd_simulator.h cluster_simulator.h utils.h
+	$(CXX) -fPIC -c rds_bgd_simulator.cpp $(IDIRS) -I$(MARIADB_IDIR) $(OPT)
+
+libtap_mariadb.a: tap.o command_line.o utils_mariadb.o noise_utils_mariadb.o mcp_client.o cluster_simulator.o rds_bgd_simulator.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
+	$(AR) rcs libtap_mariadb.a tap.o command_line.o utils_mariadb.o noise_utils_mariadb.o mcp_client.o cluster_simulator.o rds_bgd_simulator.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
+
+libtap_mysql57.a: tap.o command_line.o utils_mysql57.o noise_utils_mysql57.o mcp_client.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
+	$(AR) rcs libtap_mysql57.a tap.o command_line.o utils_mysql57.o noise_utils_mysql57.o mcp_client.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
+
+libtap_mysql8.a: tap.o command_line.o utils_mysql8.o noise_utils_mysql8.o mcp_client.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
+	$(AR) rcs libtap_mysql8.a tap.o command_line.o utils_mysql8.o noise_utils_mysql8.o mcp_client.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
+
+libtap.a: libtap_mariadb.a
+	cp libtap_mariadb.a libtap.a
+
+libtap$(SHLIB_EXT): libtap_mariadb.a cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv$(SHLIB_EXT) libre2$(SHLIB_EXT)
+ifeq ($(UNAME_S),Darwin)
+	$(CXX) -dynamiclib -o libtap$(SHLIB_EXT) -force_load libtap_mariadb.a -L$(POSTGRESQL_PATH)/interfaces/libpq -lpq -L$(RE2_LDIR)/so -lre2 -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl,-rpath,$(RE2_LDIR)/so $(LWGCOV)
+else
+	$(CXX) -shared -o libtap$(SHLIB_EXT) -Wl,--whole-archive libtap_mariadb.a -Wl,--no-whole-archive -L$(POSTGRESQL_PATH)/interfaces/libpq -lpq -L$(RE2_LDIR)/so -lre2 -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl,-rpath,$(RE2_LDIR)/so $(LWGCOV)
+endif
 
 
 ### tap deps targets
 
-libcpp_dotenv.so: cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so
-	find cpp-dotenv/dynamic/cpp-dotenv/ -name '*.so' -exec cp -a {} . \;
+libcpp_dotenv$(SHLIB_EXT): cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv$(SHLIB_EXT)
+	find cpp-dotenv/dynamic/cpp-dotenv/ \( -name '*.so' -o -name '*.dylib' \) -exec cp -a {} . \;
 
-libcurl.so: $(DEPS_PATH)/curl/curl/lib/.libs/libcurl.so
-	cp -a $(DEPS_PATH)/curl/curl/lib/.libs/libcurl.so* .
+libcurl$(SHLIB_EXT): $(DEPS_PATH)/curl/curl/lib/.libs/libcurl$(SHLIB_EXT)
+	cp -a $(DEPS_PATH)/curl/curl/lib/.libs/libcurl$(SHLIB_EXT)* .
 
-libre2.so: $(DEPS_PATH)/re2/re2/obj/so/libre2.so
-	cp -a $(DEPS_PATH)/re2/re2/obj/so/libre2.so* .
+libre2$(SHLIB_EXT): $(DEPS_PATH)/re2/re2/obj/so/libre2$(SHLIB_EXT)
+	cp -a $(DEPS_PATH)/re2/re2/obj/so/libre2$(SHLIB_EXT)* .
 
 cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a:
 	cd cpp-dotenv/static && rm -rf cpp-dotenv-*/ || true
 	cd cpp-dotenv/static && tar -zxf ../cpp-dotenv-*.tar.gz
-	cd cpp-dotenv/static/cpp-dotenv && patch src/dotenv.cpp < ../../dotenv.cpp.patch
-	cd cpp-dotenv/static/cpp-dotenv && patch include/dotenv.h < ../../dotenv.h.patch
-	cd cpp-dotenv/static/cpp-dotenv && patch -p0 < ../../nm_clang_fix.patch
-	cd cpp-dotenv/static/cpp-dotenv && cmake . -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_BUILD_TYPE=Debug
+	cd cpp-dotenv/static/cpp-dotenv && cmake . -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 	cd cpp-dotenv/static/cpp-dotenv && CC=${CC} CXX=${CXX} ${MAKE}
 
-cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so:
+cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv$(SHLIB_EXT):
 	cd cpp-dotenv/dynamic && rm -rf cpp-dotenv-*/ || true
 	cd cpp-dotenv/dynamic && tar -zxf ../cpp-dotenv-*.tar.gz
-	cd cpp-dotenv/dynamic/cpp-dotenv && patch src/dotenv.cpp < ../../dotenv.cpp.patch
-	cd cpp-dotenv/dynamic/cpp-dotenv && patch include/dotenv.h < ../../dotenv.h.patch
-	cd cpp-dotenv/dynamic/cpp-dotenv && patch -p0 < ../../nm_clang_fix.patch
-	cd cpp-dotenv/dynamic/cpp-dotenv && cmake . -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_RPATH="../tap:../../tap" -DCMAKE_BUILD_TYPE=Debug
+	cd cpp-dotenv/dynamic/cpp-dotenv && cmake . -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_RPATH="../tap:../../tap" -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 	cd cpp-dotenv/dynamic/cpp-dotenv && CC=${CC} CXX=${CXX} ${MAKE}
 
 
@@ -107,17 +135,32 @@ cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so:
 .SILENT: clean_utils
 .PHONY: clean_utils
 clean_utils:
-	find . -name 'utils_*.*' -delete || true
-	find . -name 'libtap_*.*' -delete || true
+	find . -name 'utils_*.o' -delete || true
+	find . -name 'noise_utils_*.o' -delete || true
+	find . -name 'libtap_*.a' -delete || true
 	find . -name 'libtap.so' -delete || true
+	find . -name 'libtap.dylib' -delete || true
 
 .SILENT: clean
 .PHONY: clean
 clean:
-	find . -name '*.a' -delete || true
-	find . -name '*.o' -delete || true
-	find . -name '*.so' -delete || true
-	find . -name '*.so.*' -delete || true
+	# Clean build artifacts but exclude cpp-dotenv directories (preserve 213MB extracted source)
+	find . -path ./cpp-dotenv -prune -o \( -name '*.a' -o -name '*.o' -o -name '*.so' -o -name '*.so.*' -o -name '*.dylib' -o -name '*.dylib.*' \) -delete || true
+
+.SILENT: cleanall
+.PHONY: cleanall
+cleanall: clean
+	# Remove cpp-dotenv source directories (213MB)
 	cd cpp-dotenv/static && rm -rf cpp-dotenv-*/ || true
 	cd cpp-dotenv/dynamic && rm -rf cpp-dotenv-*/ || true
 
+# Rebuild archives when the Makefile itself changes (order-only).
+LIBTAP_ARCHIVES := libtap_mariadb.a libtap_mysql57.a libtap_mysql8.a
+$(LIBTAP_ARCHIVES): | Makefile
+
+ifeq ($(wildcard noise_utils.cpp noise_utils.h),)
+NOISE_UTILS_STUBS := noise_utils_mariadb.o noise_utils_mysql57.o noise_utils_mysql8.o
+
+$(NOISE_UTILS_STUBS):
+	$(CXX) -x c++ -fPIC -c /dev/null $(IDIRS) $(OPT) -o $@
+endif

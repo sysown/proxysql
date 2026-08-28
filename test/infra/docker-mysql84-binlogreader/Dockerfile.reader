@@ -1,0 +1,12 @@
+# Standalone proxysql_binlog_reader (v2.3+ with MySQL 8.4 support)
+FROM debian:bookworm-slim
+
+COPY proxysql-mysqlbinlog_*.deb /tmp/
+RUN dpkg -i /tmp/proxysql-mysqlbinlog_*.deb || apt-get -f install -y && \
+    rm -f /tmp/proxysql-mysqlbinlog_*.deb
+
+RUN mkdir -p /var/log/mysqlbinlog
+
+EXPOSE 6020
+
+CMD ["bash", "-c", "while true; do sleep 5; proxysql_binlog_reader -h \"${MYSQL_HOST:-127.0.0.1}\" -u \"${MYSQL_USER:=root}\" -p \"${MYSQL_PASSWORD:-root}\" -P \"${MYSQL_PORT:-3306}\" -l \"${LISTEN_PORT:-6020}\" -f 2>&1 | tee -a /var/log/mysqlbinlog/error.log; done"]

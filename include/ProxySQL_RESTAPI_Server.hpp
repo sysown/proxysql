@@ -14,6 +14,9 @@ class ProxySQL_RESTAPI_Server {
 	int port;
 	pthread_t thread_id;
 	std::unique_ptr<httpserver::http_resource> endpoint;
+	std::unique_ptr<httpserver::http_resource> tsdb_endpoint;
+	std::unique_ptr<httpserver::http_resource> tsdb_dashboard_endpoint;
+	std::unique_ptr<httpserver::http_resource> tsdb_chart_js_endpoint;
 	std::vector<std::pair<std::string, std::unique_ptr<httpserver::http_resource>>> _endpoints {};
 	public:
 	ProxySQL_RESTAPI_Server(

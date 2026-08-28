@@ -1,0 +1,278 @@
+[
+    {
+        "__comment__": "",
+        "cluster_type": "REPLICATION_LAG",
+        "mysql_servers": [
+            { "hostgroup_id": 5272, "hostname": "127.1.1.11", "port": 3306, "max_replication_lag": 50 },
+            { "hostgroup_id": 5272, "hostname": "127.1.1.12", "port": 3306, "max_replication_lag": 25 },
+            { "hostgroup_id": 5272, "hostname": "127.1.1.13", "port": 3306 },
+
+            { "hostgroup_id": 5273, "hostname": "127.1.1.14", "port": 3306 },
+            { "hostgroup_id": 5273, "hostname": "127.1.1.15", "port": 3306, "max_replication_lag": 10 },
+            { "hostgroup_id": 5273, "hostname": "127.1.1.16", "port": 3306, "max_replication_lag": 20 },
+
+            { "hostgroup_id": 5274, "hostname": "127.1.1.17", "port": 3306, "max_replication_lag": 79 },
+            { "hostgroup_id": 5274, "hostname": "127.1.1.18", "port": 3306, "max_replication_lag": 44 },
+            { "hostgroup_id": 5274, "hostname": "127.1.1.19", "port": 3306, "max_replication_lag": 38 },
+
+            { "hostgroup_id": 5275, "hostname": "127.1.1.20", "port": 3306, "max_replication_lag": 65 },
+            { "hostgroup_id": 5275, "hostname": "127.1.1.21", "port": 3306, "max_replication_lag": 80 },
+            { "hostgroup_id": 5275, "hostname": "127.1.1.22", "port": 3306, "max_replication_lag": 21 },
+
+            { "hostgroup_id": 5276, "hostname": "127.1.1.23", "port": 3306, "max_replication_lag": 21 },
+            { "hostgroup_id": 5276, "hostname": "127.1.1.24", "port": 3306, "max_replication_lag": 10 },
+            { "hostgroup_id": 5276, "hostname": "127.1.1.25", "port": 3306, "max_replication_lag": 20 },
+
+            { "hostgroup_id": 5277, "hostname": "127.1.1.26", "port": 3306, "max_replication_lag": 19 },
+            { "hostgroup_id": 5277, "hostname": "127.1.1.27", "port": 3306, "max_replication_lag": 94 },
+            { "hostgroup_id": 5277, "hostname": "127.1.1.28", "port": 3306, "max_replication_lag": 56 },
+
+            { "hostgroup_id": 5278, "hostname": "127.1.1.29", "port": 3306, "max_replication_lag": 27 },
+            { "hostgroup_id": 5278, "hostname": "127.1.1.30", "port": 3306, "max_replication_lag": 67 },
+            { "hostgroup_id": 5278, "hostname": "127.1.1.31", "port": 3306, "max_replication_lag": 99 },
+
+            { "hostgroup_id": 5279, "hostname": "127.1.1.32", "port": 3306, "max_replication_lag": 77 },
+            { "hostgroup_id": 5279, "hostname": "127.1.1.33", "port": 3306, "max_replication_lag": 5 },
+            { "hostgroup_id": 5279, "hostname": "127.1.1.34", "port": 3306, "max_replication_lag": 23 },
+
+            { "hostgroup_id": 5280, "hostname": "127.1.1.11", "port": 3306, "max_replication_lag": 76 },
+            { "hostgroup_id": 5280, "hostname": "127.1.1.13", "port": 3306, "max_replication_lag": 2 },
+            { "hostgroup_id": 5280, "hostname": "127.1.1.15", "port": 3306, "max_replication_lag": 5 },
+
+            { "hostgroup_id": 5281, "hostname": "127.1.1.12", "port": 3306, "max_replication_lag": 35 },
+            { "hostgroup_id": 5281, "hostname": "127.1.1.14", "port": 3306, "max_replication_lag": 5 },
+            { "hostgroup_id": 5281, "hostname": "127.1.1.16", "port": 3306, "max_replication_lag": 15 },
+
+ 	        { "hostgroup_id": 5282, "hostname": "127.1.1.40", "port": 3306, "max_replication_lag": 20 },
+            { "hostgroup_id": 5282, "hostname": "127.1.1.41", "port": 3306, "max_replication_lag": 23 },
+            { "hostgroup_id": 5282, "hostname": "127.1.1.42", "port": 3306, "max_replication_lag": 26 },
+
+	        { "hostgroup_id": 5283, "hostname": "127.1.1.43", "port": 3306, "max_replication_lag": 21 },
+            { "hostgroup_id": 5283, "hostname": "127.1.1.44", "port": 3306, "max_replication_lag": 25 },
+            { "hostgroup_id": 5283, "hostname": "127.1.1.45", "port": 3306, "max_replication_lag": 27 },
+
+	        { "hostgroup_id": 5284, "hostname": "127.1.1.46", "port": 3306, "max_replication_lag": 29 },
+            { "hostgroup_id": 5284, "hostname": "127.1.1.47", "port": 3306, "max_replication_lag": 26 },
+            { "hostgroup_id": 5284, "hostname": "127.1.1.48", "port": 3306, "max_replication_lag": 35 },
+
+	        { "hostgroup_id": 5285, "hostname": "127.1.1.46", "port": 3306, "max_replication_lag": 11 },
+            { "hostgroup_id": 5285, "hostname": "127.1.1.47", "port": 3306, "max_replication_lag": 16 },
+            { "hostgroup_id": 5285, "hostname": "127.1.1.48", "port": 3306, "max_replication_lag": 20 }
+
+        ],
+	  "mysql_monitor_config": [
+            { "monitor_replication_lag_count": 1 },
+	        { "monitor_replication_lag_group_by_host": 0 },
+	        { "monitor_slave_lag_when_null": 25 }
+        ],
+	 "mysql_hostgroup_attributes": [
+	        { "hostgroup_id": 5284, "monitor_slave_lag_when_null": 30 },
+	        { "hostgroup_id": 5285, "monitor_slave_lag_when_null": 15 }
+        ],
+
+        "replicationlag_servers_init_state": [
+            { "hostname": "127.1.1.11", "port": 3306, "seconds_behind_master": 10 },
+            { "hostname": "127.1.1.12", "port": 3306, "seconds_behind_master": 30 },
+            { "hostname": "127.1.1.13", "port": 3306, "seconds_behind_master": 5  },
+
+            { "hostname": "127.1.1.14", "port": 3306, "seconds_behind_master": 100 },
+            { "hostname": "127.1.1.15", "port": 3306, "seconds_behind_master": 15 },
+            { "hostname": "127.1.1.16", "port": 3306, "seconds_behind_master": 10 },
+
+		    { "hostname": "127.1.1.17", "port": 3306, "seconds_behind_master": 65 },
+            { "hostname": "127.1.1.18", "port": 3306, "seconds_behind_master": 45 },
+            { "hostname": "127.1.1.19", "port": 3306, "seconds_behind_master": 22 },
+
+		    { "hostname": "127.1.1.20", "port": 3306, "seconds_behind_master": 100 },
+            { "hostname": "127.1.1.21", "port": 3306, "seconds_behind_master": 12 },
+            { "hostname": "127.1.1.22", "port": 3306, "seconds_behind_master": 22 },
+
+		    { "hostname": "127.1.1.23", "port": 3306, "seconds_behind_master": 100 },
+            { "hostname": "127.1.1.24", "port": 3306, "seconds_behind_master": 12 },
+            { "hostname": "127.1.1.25", "port": 3306, "seconds_behind_master": 14 },
+
+		    { "hostname": "127.1.1.26", "port": 3306, "seconds_behind_master": 15 },
+            { "hostname": "127.1.1.27", "port": 3306, "seconds_behind_master": 90 },
+            { "hostname": "127.1.1.28", "port": 3306, "seconds_behind_master": 20 },
+
+		    { "hostname": "127.1.1.29", "port": 3306, "seconds_behind_master": 30 },
+            { "hostname": "127.1.1.30", "port": 3306, "seconds_behind_master": 26 },
+            { "hostname": "127.1.1.31", "port": 3306, "seconds_behind_master": 78 },
+
+		    { "hostname": "127.1.1.32", "port": 3306, "seconds_behind_master": 96 },
+            { "hostname": "127.1.1.33", "port": 3306, "seconds_behind_master": 2 },
+            { "hostname": "127.1.1.34", "port": 3306, "seconds_behind_master": 15 },
+
+            { "hostname": "127.1.1.40", "port": 3306, "seconds_behind_master": 10 },
+            { "hostname": "127.1.1.41", "port": 3306, "seconds_behind_master": -30 },
+            { "hostname": "127.1.1.42", "port": 3306, "seconds_behind_master": 55 },
+
+            { "hostname": "127.1.1.43", "port": 3306, "seconds_behind_master": null },
+            { "hostname": "127.1.1.44", "port": 3306, "seconds_behind_master": 26 },
+            { "hostname": "127.1.1.45", "port": 3306, "seconds_behind_master": null },
+
+            { "hostname": "127.1.1.46", "port": 3306, "seconds_behind_master": null },
+            { "hostname": "127.1.1.47", "port": 3306, "seconds_behind_master": null },
+            { "hostname": "127.1.1.48", "port": 3306, "seconds_behind_master": null }
+        ],
+        "replicationlag_servers_new_state": [
+            { "hostname": "127.1.1.11", "port": 3306, "seconds_behind_master": 30 },
+            { "hostname": "127.1.1.12", "port": 3306, "seconds_behind_master": 15 },
+            { "hostname": "127.1.1.13", "port": 3306, "seconds_behind_master": 1  },
+
+            { "hostname": "127.1.1.14", "port": 3306, "seconds_behind_master": 100 },
+            { "hostname": "127.1.1.15", "port": 3306, "seconds_behind_master": 12 },
+            { "hostname": "127.1.1.16", "port": 3306, "seconds_behind_master": 22 },
+
+		    { "hostname": "127.1.1.17", "port": 3306, "seconds_behind_master": 80 },
+            { "hostname": "127.1.1.18", "port": 3306, "seconds_behind_master": 50 },
+            { "hostname": "127.1.1.19", "port": 3306, "seconds_behind_master": 35 },
+
+		    { "hostname": "127.1.1.20", "port": 3306, "seconds_behind_master": 100 },
+            { "hostname": "127.1.1.21", "port": 3306, "seconds_behind_master": 12 },
+            { "hostname": "127.1.1.22", "port": 3306, "seconds_behind_master": 22 },
+
+		    { "hostname": "127.1.1.23", "port": 3306, "seconds_behind_master": 100 },
+            { "hostname": "127.1.1.24", "port": 3306, "seconds_behind_master": 8 },
+            { "hostname": "127.1.1.25", "port": 3306, "seconds_behind_master": 18 },
+
+		    { "hostname": "127.1.1.26", "port": 3306, "seconds_behind_master": 25 },
+            { "hostname": "127.1.1.27", "port": 3306, "seconds_behind_master": 99 },
+            { "hostname": "127.1.1.28", "port": 3306, "seconds_behind_master": 45 },
+
+		    { "hostname": "127.1.1.29", "port": 3306, "seconds_behind_master": 38 },
+            { "hostname": "127.1.1.30", "port": 3306, "seconds_behind_master": 48 },
+            { "hostname": "127.1.1.31", "port": 3306, "seconds_behind_master": 105 },
+
+		    { "hostname": "127.1.1.32", "port": 3306, "seconds_behind_master": 87 },
+            { "hostname": "127.1.1.33", "port": 3306, "seconds_behind_master": 3 },
+            { "hostname": "127.1.1.34", "port": 3306, "seconds_behind_master": 10 },
+
+            { "hostname": "127.1.1.40", "port": 3306, "seconds_behind_master": -2 },
+            { "hostname": "127.1.1.41", "port": 3306, "seconds_behind_master": 50 },
+            { "hostname": "127.1.1.42", "port": 3306, "seconds_behind_master": -3 },
+
+            { "hostname": "127.1.1.43", "port": 3306, "seconds_behind_master": 20 },
+            { "hostname": "127.1.1.44", "port": 3306, "seconds_behind_master": null },
+            { "hostname": "127.1.1.45", "port": 3306, "seconds_behind_master": 30 },
+
+            { "hostname": "127.1.1.46", "port": 3306, "seconds_behind_master": -1 },
+            { "hostname": "127.1.1.47", "port": 3306, "seconds_behind_master": -2 },
+            { "hostname": "127.1.1.48", "port": 3306, "seconds_behind_master": 30 }
+        ],
+        "proxysql_init_state": [
+		    { "hostgroup_id":5272,"hostname":"127.1.1.11","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":5272,"hostname":"127.1.1.12","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":5272,"hostname":"127.1.1.13","port":3306,"status":"ONLINE" },
+             
+	        { "hostgroup_id":5273,"hostname":"127.1.1.14","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":5273,"hostname":"127.1.1.15","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":5273,"hostname":"127.1.1.16","port":3306,"status":"ONLINE" },
+                
+		    { "hostgroup_id":5274,"hostname":"127.1.1.17","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":5274,"hostname":"127.1.1.18","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":5274,"hostname":"127.1.1.19","port":3306,"status":"ONLINE" },
+                
+		    { "hostgroup_id":5275,"hostname":"127.1.1.20","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":5275,"hostname":"127.1.1.21","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":5275,"hostname":"127.1.1.22","port":3306,"status":"SHUNNED" },
+                
+		    { "hostgroup_id":5276,"hostname":"127.1.1.23","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":5276,"hostname":"127.1.1.24","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":5276,"hostname":"127.1.1.25","port":3306,"status":"ONLINE" },
+                
+		    { "hostgroup_id":5277,"hostname":"127.1.1.26","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":5277,"hostname":"127.1.1.27","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":5277,"hostname":"127.1.1.28","port":3306,"status":"ONLINE" },
+                
+		    { "hostgroup_id":5278,"hostname":"127.1.1.29","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":5278,"hostname":"127.1.1.30","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":5278,"hostname":"127.1.1.31","port":3306,"status":"ONLINE" },
+                
+		    { "hostgroup_id":5279,"hostname":"127.1.1.32","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":5279,"hostname":"127.1.1.33","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":5279,"hostname":"127.1.1.34","port":3306,"status":"ONLINE" },
+                
+		    { "hostgroup_id":5280,"hostname":"127.1.1.11","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":5280,"hostname":"127.1.1.13","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":5280,"hostname":"127.1.1.15","port":3306,"status":"SHUNNED" },
+                
+		    { "hostgroup_id":5281,"hostname":"127.1.1.12","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":5281,"hostname":"127.1.1.14","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":5281,"hostname":"127.1.1.16","port":3306,"status":"ONLINE" },
+
+            { "hostgroup_id":5282,"hostname":"127.1.1.40","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":5282,"hostname":"127.1.1.41","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":5282,"hostname":"127.1.1.42","port":3306,"status":"SHUNNED" },
+
+            { "hostgroup_id":5283,"hostname":"127.1.1.43","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":5283,"hostname":"127.1.1.44","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":5283,"hostname":"127.1.1.45","port":3306,"status":"ONLINE" },
+
+            { "hostgroup_id":5284,"hostname":"127.1.1.46","port": 3306,"status":"SHUNNED" },
+            { "hostgroup_id":5284,"hostname":"127.1.1.47","port": 3306,"status":"SHUNNED" },
+            { "hostgroup_id":5284,"hostname":"127.1.1.48","port": 3306,"status":"ONLINE" },
+
+            { "hostgroup_id":5285,"hostname":"127.1.1.46","port": 3306,"status":"SHUNNED" },
+            { "hostgroup_id":5285,"hostname":"127.1.1.47","port": 3306,"status":"ONLINE" },
+            { "hostgroup_id":5285,"hostname":"127.1.1.48","port": 3306,"status":"ONLINE" }
+        ],
+        "proxysql_final_state": [
+            { "hostgroup_id":5272,"hostname":"127.1.1.11","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":5272,"hostname":"127.1.1.12","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":5272,"hostname":"127.1.1.13","port":3306,"status":"ONLINE" },
+            
+	        { "hostgroup_id":5273,"hostname":"127.1.1.14","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":5273,"hostname":"127.1.1.15","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":5273,"hostname":"127.1.1.16","port":3306,"status":"SHUNNED" },
+        
+	        { "hostgroup_id":5274,"hostname":"127.1.1.17","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":5274,"hostname":"127.1.1.18","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":5274,"hostname":"127.1.1.19","port":3306,"status":"ONLINE" },
+      
+	        { "hostgroup_id":5275,"hostname":"127.1.1.20","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":5275,"hostname":"127.1.1.21","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":5275,"hostname":"127.1.1.22","port":3306,"status":"SHUNNED" },
+      
+            { "hostgroup_id":5276,"hostname":"127.1.1.23","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":5276,"hostname":"127.1.1.24","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":5276,"hostname":"127.1.1.25","port":3306,"status":"ONLINE" },
+  
+            { "hostgroup_id":5277,"hostname":"127.1.1.26","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":5277,"hostname":"127.1.1.27","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":5277,"hostname":"127.1.1.28","port":3306,"status":"ONLINE" },
+
+            { "hostgroup_id":5278,"hostname":"127.1.1.29","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":5278,"hostname":"127.1.1.30","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":5278,"hostname":"127.1.1.31","port":3306,"status":"SHUNNED" },
+
+            { "hostgroup_id":5279,"hostname":"127.1.1.32","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":5279,"hostname":"127.1.1.33","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":5279,"hostname":"127.1.1.34","port":3306,"status":"ONLINE" },
+
+            { "hostgroup_id":5280,"hostname":"127.1.1.11","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":5280,"hostname":"127.1.1.13","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":5280,"hostname":"127.1.1.15","port":3306,"status":"SHUNNED" },
+
+            { "hostgroup_id":5281,"hostname":"127.1.1.12","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":5281,"hostname":"127.1.1.14","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":5281,"hostname":"127.1.1.16","port":3306,"status":"SHUNNED" },
+
+            { "hostgroup_id":5282,"hostname": "127.1.1.40","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":5282,"hostname": "127.1.1.41","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":5282,"hostname": "127.1.1.42","port":3306,"status":"ONLINE" },
+
+            { "hostgroup_id":5283,"hostname": "127.1.1.43","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":5283,"hostname": "127.1.1.44","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":5283,"hostname": "127.1.1.45","port":3306,"status":"SHUNNED" },
+
+            { "hostgroup_id":5284,"hostname":"127.1.1.46","port": 3306,"status":"ONLINE" },
+            { "hostgroup_id":5284,"hostname":"127.1.1.47","port": 3306,"status":"ONLINE" },
+            { "hostgroup_id":5284,"hostname":"127.1.1.48","port": 3306,"status":"ONLINE" },
+
+            { "hostgroup_id":5285,"hostname":"127.1.1.46","port": 3306,"status":"ONLINE" },
+            { "hostgroup_id":5285,"hostname":"127.1.1.47","port": 3306,"status":"ONLINE" },
+            { "hostgroup_id":5285,"hostname":"127.1.1.48","port": 3306,"status":"SHUNNED" }
+        ]
+    }
+]

@@ -48,7 +48,7 @@ void ClickHouse_Authentication::set_all_inactive(enum cred_username_type usertyp
 	unsigned int i;
 	for (i=0; i<cg.cred_array->len; i++) {
 		ch_account_details_t *ado=(ch_account_details_t *)cg.cred_array->index(i);
-		ado->__active=false;
+		ado->active_=false;
 	}
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&cg.lock);
@@ -68,7 +68,7 @@ void ClickHouse_Authentication::remove_inactives(enum cred_username_type usertyp
 __loop_remove_inactives:
 	for (i=0; i<cg.cred_array->len; i++) {
 		ch_account_details_t *ado=(ch_account_details_t *)cg.cred_array->index(i);
-		if (ado->__active==false) {
+		if (ado->active_==false) {
 			del(ado->username,usertype,false);
 			goto __loop_remove_inactives; // we aren't sure how the underlying structure changes, so we jump back to 0
 		}
@@ -129,7 +129,7 @@ bool ClickHouse_Authentication::add(char * username, char * password, enum cred_
 	ad->transaction_persistent=transaction_persistent;
 	ad->fast_forward=fast_forward;
 	ad->max_connections=max_connections;
-	ad->__active=true;
+	ad->active_=true;
 	if (new_ad) {
 		cg.bt_map.insert(std::make_pair(hash1,ad));
 		cg.cred_array->add(ad);
@@ -180,8 +180,8 @@ int ClickHouse_Authentication::dump_all_users(ch_account_details_t ***ads, bool 
 			ad->schema_locked=ado->schema_locked;
 			ad->transaction_persistent=ado->transaction_persistent;
 			ad->fast_forward=ado->fast_forward;
-			ad->__frontend=1;
-			ad->__backend=0;
+			ad->frontend_=1;
+			ad->backend_=0;
 		}
 		_ads[idx_]=ad;
 		idx_++;
@@ -201,8 +201,8 @@ int ClickHouse_Authentication::dump_all_users(ch_account_details_t ***ads, bool 
 		ad->transaction_persistent=ado->transaction_persistent;
 		ad->fast_forward=ado->fast_forward;
 		ad->max_connections=ado->max_connections;
-		ad->__frontend=0;
-		ad->__backend=1;
+		ad->frontend_=0;
+		ad->backend_=1;
 		_ads[idx_]=ad;
 		idx_++;
 	}
@@ -210,11 +210,11 @@ int ClickHouse_Authentication::dump_all_users(ch_account_details_t ***ads, bool 
 	*ads=_ads;
 __exit_dump_all_users:
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
-	pthread_rwlock_unlock(&creds_frontends.lock);
 	pthread_rwlock_unlock(&creds_backends.lock);
+	pthread_rwlock_unlock(&creds_frontends.lock);
 #else
-	spin_rdunlock(&creds_frontends.lock);
 	spin_rdunlock(&creds_backends.lock);
+	spin_rdunlock(&creds_frontends.lock);
 #endif
 	return total_size;
 }

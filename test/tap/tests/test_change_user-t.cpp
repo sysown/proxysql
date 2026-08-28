@@ -66,6 +66,17 @@ int get_internal_session(MYSQL *my, json& j) {
 MYSQL* proxy[NCONNS];
 MYSQL* admin = NULL;
 
+// Close any proxy[] slot that holds a non-NULL handle. Safe to call
+// multiple times; each slot is NULLed so repeat calls are no-ops.
+void close_connections() {
+	for (int i=0; i<NCONNS; i++) {
+		if (proxy[i]) {
+			mysql_close(proxy[i]);
+			proxy[i] = NULL;
+		}
+	}
+}
+
 bool create_connections(const CommandLine& cl, const char *plugin, bool use_ssl, bool check_plugin, bool check_ssl, bool incorrect_connect_password) {
 	diag("Calling create_connections with plugin: %s , use_ssl: %d , check_plugin: %d , check_ssl: %d , incorrect_connect_password: %d",
 		plugin, use_ssl, check_plugin, check_ssl, incorrect_connect_password);
@@ -75,6 +86,7 @@ bool create_connections(const CommandLine& cl, const char *plugin, bool use_ssl,
 		proxy[i] = mysql_init(NULL);
 		if (proxy[i] == NULL) {
 			diag("Error on mysql_init()");
+			close_connections();  // release proxy[0..i-1]
 			return false;
 		}
 		int flags = 0;
@@ -98,18 +110,21 @@ bool create_connections(const CommandLine& cl, const char *plugin, bool use_ssl,
 			ok(my != NULL , "Connection created: %d", i);
 			if (my == NULL) {
 				diag("File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy[i]));
+				close_connections();  // release proxy[0..i], including the failed slot
 				return false;
 			}
 			if (use_ssl && check_ssl) {
 				const char * c = mysql_get_ssl_cipher(proxy[i]);
 				diag("Cipher in use for connection %d: %s", i, c == NULL ? "NULL" : c);
 				if (c == NULL) {
+					close_connections();
 					return false;
 				}
 			}
 			if (check_plugin) {
 				if (strcmp(plugin,proxy[i]->options.extension->default_auth) != 0) {
 					ok(false, "Plugin wanted: %s , used: %s", plugin, proxy[i]->options.extension->default_auth);
+					close_connections();
 					return false;
 				}
 			}
@@ -118,13 +133,6 @@ bool create_connections(const CommandLine& cl, const char *plugin, bool use_ssl,
 		}
 	}
 	return true;
-}
-
-void close_connections() {
-	for (int i=0; i<NCONNS; i++) {
-		mysql_close(proxy[i]);
-		proxy[i] = NULL;
-	}
 }
 
 
@@ -142,14 +150,21 @@ int TestSet1(const CommandLine& cl, const char *plugin, bool test_ssl , bool tes
 
 		diag("Setting mysql-default_authentication_plugin='%s'", plugin);
 		vector<string> query_set1 = {"SET mysql-default_authentication_plugin='" + string(plugin) + "'", "LOAD MYSQL VARIABLES TO RUNTIME"};
-		if (run_queries_sets( query_set1 , admin, "Running on Admin"))
+		if (run_queries_sets( query_set1 , admin, "Running on Admin")) {
+			close_connections();
 			return exit_status();
+		}
 
 		const char *auth_plugin = it->first.c_str();
 		vector<string> query_set2 = {string(string("SET mysql-have_ssl='") + (it->second ? "true" : "false") + "'"), "LOAD MYSQL VARIABLES TO RUNTIME"};
-		if (run_queries_sets( query_set2 , admin, "Running on Admin"))
+		if (run_queries_sets( query_set2 , admin, "Running on Admin")) {
+			close_connections();
 			return exit_status();
+		}
 		if (create_connections(cl, auth_plugin, false, true, test_ssl, incorrect_connect_password) != true) {
+			// create_connections already closed any partially opened
+			// handles on failure, but be explicit for readability.
+			close_connections();
 			return exit_status();
 		}
 		if (incorrect_connect_password == false) {
@@ -236,11 +251,17 @@ int main(int argc, char** argv) {
 
 	int rc = 0;
 	admin = mysql_init(NULL);
+	if (admin == NULL) {
+		diag("File %s, line %d, Error: mysql_init failed for admin\n", __FILE__, __LINE__);
+		return exit_status();
+	}
 	{
 		MYSQL * my = mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0);
 		ok(my != NULL , "Connected to admin");
 		if (my == NULL) {
 			diag("File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
+			mysql_close(admin);
+			admin = NULL;
 			return exit_status();
 		}
 	}
@@ -260,13 +281,13 @@ int main(int argc, char** argv) {
 	plugin = (char *)"mysql_native_password";
 	diag("%d: Starting batch tests", __LINE__);
 	if (TestSet1(cl, plugin, test_ssl, test_plugin, change_user, incorrect_connect_password, incorrect_change_user_password)) {
-		return exit_status();
+		goto cleanup;
 	}
 	// ok() NCONNS*2*2 + NCONNS*2*1
 	plugin = (char *)"caching_sha2_password";
 	diag("%d: Starting batch tests", __LINE__);
 	if (TestSet1(cl, plugin, test_ssl, test_plugin, change_user, incorrect_connect_password, incorrect_change_user_password)) {
-		return exit_status();
+		goto cleanup;
 	}
 
 	test_ssl=false; test_plugin=false; change_user=true; incorrect_connect_password=false; incorrect_change_user_password=false;
@@ -275,13 +296,13 @@ int main(int argc, char** argv) {
 	plugin = (char *)"mysql_native_password";
 	diag("%d: Starting batch tests", __LINE__);
 	if (TestSet1(cl, plugin, test_ssl, test_plugin, change_user, incorrect_connect_password, incorrect_change_user_password)) {
-		return exit_status();
+		goto cleanup;
 	}
 	// ok() NCONNS*2*2 + NCONNS*2*1
 	plugin = (char *)"caching_sha2_password";
 	diag("%d: Starting batch tests", __LINE__);
 	if (TestSet1(cl, plugin, test_ssl, test_plugin, change_user, incorrect_connect_password, incorrect_change_user_password)) {
-		return exit_status();
+		goto cleanup;
 	}
 
 	test_ssl=false; test_plugin=false; change_user=true; incorrect_connect_password=true;  incorrect_change_user_password=false;
@@ -290,13 +311,13 @@ int main(int argc, char** argv) {
 	plugin = (char *)"mysql_native_password";
 	diag("%d: Starting batch tests", __LINE__);
 	if (TestSet1(cl, plugin, test_ssl, test_plugin, change_user, incorrect_connect_password, incorrect_change_user_password)) {
-		return exit_status();
+		goto cleanup;
 	}
 	// ok() NCONNS*1*2 + NCONNS*1*1
 	diag("%d: Starting batch tests", __LINE__);
 	plugin = (char *)"caching_sha2_password";
 	if (TestSet1(cl, plugin, test_ssl, test_plugin, change_user, incorrect_connect_password, incorrect_change_user_password)) {
-		return exit_status();
+		goto cleanup;
 	}
 
 	test_ssl=false; test_plugin=false; change_user=true; incorrect_connect_password=false; incorrect_change_user_password=true;
@@ -305,19 +326,24 @@ int main(int argc, char** argv) {
 	plugin = (char *)"mysql_native_password";
 	diag("%d: Starting batch tests", __LINE__);
 	if (TestSet1(cl, plugin, test_ssl, test_plugin, change_user, incorrect_connect_password, incorrect_change_user_password)) {
-		return exit_status();
+		goto cleanup;
 	}
 	// ok() NCONNS*2*2 + NCONNS*2*1
 	plugin = (char *)"caching_sha2_password";
 	diag("%d: Starting batch tests", __LINE__);
 	if (TestSet1(cl, plugin, test_ssl, test_plugin, change_user, incorrect_connect_password, incorrect_change_user_password)) {
-		return exit_status();
+		goto cleanup;
 	}
 
-	return exit_status();
-
 cleanup:
-
+	// Close any still-open backend connections (TestSet1 normally closes
+	// them at the end of each iteration but error returns may leave some
+	// open) and the admin connection. Previously this label was dead code
+	// — the function returned on the line above and never reached it.
 	close_connections();
+	if (admin) {
+		mysql_close(admin);
+		admin = NULL;
+	}
 	return exit_status();
 }

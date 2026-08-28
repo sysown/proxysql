@@ -14,6 +14,17 @@ Check existing issues: Someone might already be working on something similar.
 
 Reference issues: When fixing bugs or implementing requested features, mention the issue number in your PR.
 
+## Contributor License Agreement (CLA)
+
+Before we can merge your pull request you must agree to the [ProxySQL Contributor License Agreement](.github/CLA.md).
+
+Signing is automated: when you open your first PR, the [CLA assistant](https://cla-assistant.io/) bot comments with a link. Click it, review the agreement, and confirm — the signature is recorded and applies to all of your future contributions. No PDF, no email.
+
+Two variants exist in the same document:
+
+- **Individual CLA** — default, for contributions you make personally.
+- **Corporate CLA** — for contributions made on behalf of an employer. If your employer owns the IP in code you write, your employer must sign the Corporate CLA (or give you a written waiver so you can sign the Individual CLA).
+
 ## Development Setup
 
 ProxySQL provides Docker build images for development. The required packages for building are listed in the Dockerfiles at: https://github.com/ProxySQL/docker-images/tree/main/build-images

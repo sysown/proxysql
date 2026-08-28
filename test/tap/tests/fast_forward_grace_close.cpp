@@ -39,18 +39,7 @@
 
 using std::string;
 
-#if 0
-
-// on the first iteration we used pv to throttle traffic
-// Function to check if pv is available
-bool is_pv_available() {
-	return system("which pv > /dev/null 2>&1") == 0;
-}
-#endif // 0
-
 int main() {
-	// 0 means no limit
-	// we skip 8 because or the edge
 	std::vector<long> target_times = {0, 1, 2, 3, 4, 5, 6, 7, /* 8, */ 20, 30, 60};
 	plan(8 + target_times.size());
 
@@ -60,76 +49,73 @@ int main() {
 		return -1;
 	}
 
-	// 1. Generate a large binlog file
-	MYSQL* backend_conn = mysql_init(NULL);
-	if (!mysql_real_connect(backend_conn, cl.host, cl.mysql_username, cl.mysql_password, "information_schema", cl.port, NULL, 0)) {
-		diag("Backend connection failed: %s", mysql_error(backend_conn));
+	// 1. Generate a large binlog file - MUST connect via ProxySQL
+	MYSQL* proxysql_conn = mysql_init(NULL);
+	if (!mysql_real_connect(proxysql_conn, cl.host, cl.root_username, cl.root_password, "information_schema", cl.port, NULL, 0)) {
+		diag("ProxySQL connection failed: %s", mysql_error(proxysql_conn));
 		return -1;
 	}
-	ok(1, "Connected to backend server");
-	MYSQL_QUERY(backend_conn, "CREATE DATABASE IF NOT EXISTS test");
-	MYSQL_QUERY(backend_conn, "USE test");
-	MYSQL_QUERY(backend_conn, "CREATE TABLE IF NOT EXISTS dummy_log_table (id INT PRIMARY KEY AUTO_INCREMENT, data LONGTEXT)");
-	MYSQL_QUERY(backend_conn, "INSERT INTO dummy_log_table (data) VALUES (REPEAT('a', 1024*50))");
-	MYSQL_QUERY(backend_conn, "INSERT INTO dummy_log_table (data) VALUES (REPEAT('a', 1024*50))");
-	MYSQL_QUERY(backend_conn, "INSERT INTO dummy_log_table (data) VALUES (REPEAT('a', 1024*50))");
-	int rc = mysql_query(backend_conn, "FLUSH LOGS");
-	ok(rc == 0, "Generated data and flushed logs on backend");
+	ok(1, "Connected to ProxySQL for data generation");
+	MYSQL_QUERY(proxysql_conn, "CREATE DATABASE IF NOT EXISTS test");
+	MYSQL_QUERY(proxysql_conn, "USE test");
+	MYSQL_QUERY(proxysql_conn, "CREATE TABLE IF NOT EXISTS dummy_log_table (id INT PRIMARY KEY AUTO_INCREMENT, data LONGTEXT)");
+	// Generate enough binlog data that the client's kernel recv buffer can
+	// hold only a small fraction of it. For target_time > 8s, grace close
+	// must fire before the full binlog (including the empty-event EOF marker)
+	// has been delivered to the client's socket — otherwise the client sees
+	// EOF anyway and the "expected FALSE" assertions flake. With autotuned
+	// recv buffers that can grow to several MB on some kernels/runners, a
+	// small binlog lets the EOF marker slip through during the 8s grace
+	// window. 1000 x 50 KB = ~50 MB gives a comfortable multiple of any
+	// realistic recv buffer.
+	for (int i = 0; i < 1000; i++) {
+		MYSQL_QUERY(proxysql_conn, "INSERT INTO dummy_log_table (data) VALUES (REPEAT('a', 1024*50))");
+	}
+	int rc = mysql_query(proxysql_conn, "FLUSH LOGS");
+	ok(rc == 0, "Generated data and flushed logs on backend via ProxySQL");
 
-	// 2. Configure ProxySQL
+	// 2. Configure ProxySQL Admin
 	MYSQL* proxysql_admin = mysql_init(NULL);
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		diag("Admin connection failed: %s", mysql_error(proxysql_admin));
-		mysql_close(backend_conn);
+		mysql_close(proxysql_conn);
 		return -1;
 	}
 	ok(1, "Connected to ProxySQL admin");
 
 	rc = mysql_query(proxysql_admin, "UPDATE global_variables SET variable_value='8000' WHERE variable_name='mysql-fast_forward_grace_close_ms'");
 	ok(rc == 0, "Set mysql-fast_forward_grace_close_ms=8000");
-//	rc = mysql_query(proxysql_admin, "SET mysql-have_ssl=0");
-//	ok(rc == 0, "Set mysql-have_ssl=0");
 	rc = mysql_query(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 	ok(rc == 0, "Loaded MYSQL variables to runtime");
 
-	// 3. Get first binary log file name and estimate total bytes
+	// 3. Get first binary log file name and its size
+	// Use the size of the FIRST binlog file (the one we'll read), not the total
+	// of all files. With dbdeployer, the binlog accumulates data from all earlier
+	// tests, making total_bytes much larger than the first file we actually read.
 	string binlog_file;
 	long total_bytes = 0;
-	if (mysql_query(backend_conn, "SHOW BINARY LOGS") == 0) {
-		MYSQL_RES *res = mysql_store_result(backend_conn);
+	if (mysql_query(proxysql_conn, "SHOW BINARY LOGS") == 0) {
+		MYSQL_RES *res = mysql_store_result(proxysql_conn);
 		if (res) {
 			MYSQL_ROW row;
 			while ((row = mysql_fetch_row(res))) {
-				if (!binlog_file.empty() || row[0]) {
-					if (binlog_file.empty()) {
-						binlog_file = row[0];
-					}
-					total_bytes += atol(row[1]);
+				if (binlog_file.empty() && row[0]) {
+					binlog_file = row[0];
+					total_bytes = atol(row[1]);
 				}
 			}
 			mysql_free_result(res);
 		}
 	}
-	mysql_close(backend_conn);
-	ok(!binlog_file.empty(), "Retrieved first binary log file name: %s", binlog_file.c_str());
-	diag("Estimated total bytes: %ld", total_bytes);
+	diag("Binlog file: %s, size: %ld bytes", binlog_file.c_str(), total_bytes);
+	mysql_close(proxysql_conn);
+	ok(!binlog_file.empty(), "Retrieved binary log: %s", binlog_file.c_str());
 
-#if 0
-	// 4. Check if pv is available
-	if (!is_pv_available()) {
-		diag("pv is not available, cannot run the test");
-		mysql_close(proxysql_admin);
-		return -1;
-	}
-	ok(1, "pv is available");
-#endif // 0
-
-	// 5. Run 5 iterations with different throttling using MariaDB RPL API
+	// 5. Run iterations through ProxySQL
 	for (int i = 0; i < target_times.size() ; i++) {
-		// Connect for binlog reading
 		MYSQL* binlog_conn = mysql_init(NULL);
-		if (!mysql_real_connect(binlog_conn, cl.host, cl.mysql_username, cl.mysql_password, NULL, cl.port, NULL, 0)) {
-			diag("Binlog connection failed for iteration %d: %s", i, mysql_error(binlog_conn));
+		if (!mysql_real_connect(binlog_conn, cl.host, cl.root_username, cl.root_password, NULL, cl.port, NULL, 0)) {
+			diag("Binlog connection failed: %s", mysql_error(binlog_conn));
 			mysql_close(proxysql_admin);
 			return -1;
 		}
@@ -142,12 +128,11 @@ int main() {
 		rpl.flags = BINLOG_DUMP_NON_BLOCK;
 		int rc = mysql_binlog_open(binlog_conn, &rpl);
 		if (rc != 0) {
-			diag("mysql_binlog_open failed for iteration %d: %s", i, mysql_error(binlog_conn));
+			diag("mysql_binlog_open failed: %s", mysql_error(binlog_conn));
 			mysql_close(binlog_conn);
 			mysql_close(proxysql_admin);
 			return -1;
 		}
-		diag("mysql_binlog_open succeeded for iteration %d", i);
 
 		long bytes_read = 0;
 		time_t start_time = time(NULL);
@@ -157,38 +142,22 @@ int main() {
 		while (true) {
 			rc = mysql_binlog_fetch(binlog_conn, &rpl);
 			if (rc != 0) break;
-			long tmp_bytes_read = bytes_read;
 			bytes_read += rpl.size;
-			const long chunk_size = 1024*1024;
-			if (bytes_read/chunk_size > tmp_bytes_read/chunk_size) {
-				diag("Bytes read: %ld", bytes_read);
-			}
 			if (target_rate > 0) {
 				usleep((rpl.size * 1000000LL) / target_rate);
 			}
 			if (rpl.size == 0) {
-				//when size is 0 , we reached EOF
 				reached_EOF = true;
 				break;
 			}
 		}
 		if (target_times[i] <= 8) {
-			ok(reached_EOF == true , "Reached EOF: %s . Total Bytes read: %ld", (reached_EOF == true ? "TRUE" : "FALSE") , bytes_read);
+			ok(reached_EOF == true , "Reached EOF (Expected TRUE): %s", reached_EOF ? "TRUE" : "FALSE");
 		} else {
-			diag("Target time greater than grace time, it should fail -- Reached EOF should be FALSE");
-			ok(reached_EOF == false , "Reached EOF: %s . Total Bytes read: %ld", (reached_EOF == true ? "TRUE" : "FALSE") , bytes_read);
+			ok(reached_EOF == false , "Reached EOF (Expected FALSE): %s", reached_EOF ? "TRUE" : "FALSE");
 		}
-		time_t end_time = time(NULL);
-		diag("Binlog fetch ended with rc=%d, error=%s", rc, (rc == 0 ? "None" : mysql_error(binlog_conn)));
 		mysql_binlog_close(binlog_conn, &rpl);
 		mysql_close(binlog_conn);
-
-		long taken = (long)(end_time - start_time);
-		char desc[50];
-		if (i == 0) strcpy(desc, "no limit");
-		else sprintf(desc, "target %ld s", target_times[i]);
-		diag("Iteration %d (%s): time %ld seconds, bytes %ld", i, desc, taken, bytes_read);
-		//ok(1, "Iteration %d completed", i);
 	}
 
 	// 8. Cleanup
@@ -197,11 +166,12 @@ int main() {
 	rc = mysql_query(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 	ok(rc == 0, "Loaded MYSQL variables to runtime for cleanup");
 
-	backend_conn = mysql_init(NULL);
-	mysql_real_connect(backend_conn, cl.host, cl.username, cl.password, "test", cl.port, NULL, 0);
-	MYSQL_QUERY(backend_conn, "DROP TABLE dummy_log_table");
-	mysql_close(backend_conn);
-
+	proxysql_conn = mysql_init(NULL);
+	if (mysql_real_connect(proxysql_conn, cl.host, cl.root_username, cl.root_password, "test", cl.port, NULL, 0)) {
+		MYSQL_QUERY(proxysql_conn, "DROP TABLE dummy_log_table");
+		mysql_close(proxysql_conn);
+	}
+	
 	mysql_close(proxysql_admin);
 
 	return exit_status();

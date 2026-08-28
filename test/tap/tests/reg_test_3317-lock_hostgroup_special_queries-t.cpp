@@ -3,8 +3,9 @@
  * @brief This test verifies that after locking on a hostgroup, ProxySQL forwards
  *  several simple special queries in a proper way, forwarding them to the backend
  *  connection.
- * Note: queries have hostgroup=0 to avoid getting lock on hostgroup 0 and
- *       attempting to run queries on hostgroup 1
+ * Note: After locking on a hostgroup via a failing SET, all subsequent queries are
+ *       forwarded to the locked hostgroup. No hostgroup hint is needed because
+ *       lock_hostgroup prevents re-routing to reader hostgroups.
  */
 
 #include <cstring>
@@ -18,6 +19,9 @@
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
+
+// Read from TAP_MYSQL8_BACKEND_HG env var if it is defined; otherwise, fall back to 1300.
+static const int WRITER_HG = get_env_int("TAP_MYSQL8_BACKEND_HG", 1300);
 
 /**
  * @brief Checks that 'SET NAMES' is being executed properly in the backend connection.
@@ -33,7 +37,8 @@ void check_set_names(MYSQL* proxysql_mysql) {
 		return;
 	}
 
-	query_res = mysql_query(proxysql_mysql, "SELECT /* ;hostgroup=0 */ @@character_set_client, @@character_set_results, @@character_set_connection");
+	std::string set_names_q = "SELECT /* ;hostgroup=" + std::to_string(WRITER_HG) + " */ @@character_set_client, @@character_set_results, @@character_set_connection";
+	query_res = mysql_query(proxysql_mysql, set_names_q.c_str());
 	if (query_res) {
 		diag("Query failed with error: %s", mysql_error(proxysql_mysql));
 		return;
@@ -77,7 +82,8 @@ void check_set_names(MYSQL* proxysql_mysql) {
  * @param proxysql_mysql A MYSQL handle to an already stablished MySQL connection.
  */
 void check_autocommit(MYSQL* proxysql_mysql) {
-	int query_res = mysql_query(proxysql_mysql, "SELECT /* ;hostgroup=0 */ @@autocommit");
+	std::string autocommit_sel_q = "SELECT /* ;hostgroup=" + std::to_string(WRITER_HG) + " */ @@autocommit";
+	int query_res = mysql_query(proxysql_mysql, autocommit_sel_q.c_str());
 	if (query_res) {
 		diag("Query failed with error: %s", mysql_error(proxysql_mysql));
 		return;
@@ -104,7 +110,7 @@ void check_autocommit(MYSQL* proxysql_mysql) {
 	}
 
 	// Check new status on @@autocommit
-	query_res = mysql_query(proxysql_mysql, "SELECT /* ;hostgroup=0 */ @@autocommit");
+	query_res = mysql_query(proxysql_mysql, autocommit_sel_q.c_str());
 	if (query_res) {
 		diag("Query failed with error: %s", mysql_error(proxysql_mysql));
 		return;
@@ -139,7 +145,8 @@ void check_session_character_set_server(MYSQL* proxysql_mysql) {
 		return;
 	}
 
-	query_res = mysql_query(proxysql_mysql, "SELECT /* ;hostgroup=0 */ @@character_set_server");
+	std::string charset_server_q = "SELECT /* ;hostgroup=" + std::to_string(WRITER_HG) + " */ @@character_set_server";
+	query_res = mysql_query(proxysql_mysql, charset_server_q.c_str());
 	if (query_res) {
 		diag("Query failed with error: %s", mysql_error(proxysql_mysql));
 		return;
@@ -178,7 +185,8 @@ void check_session_character_set_results(MYSQL* proxysql_mysql) {
 		return;
 	}
 
-	query_res = mysql_query(proxysql_mysql, "SELECT /* ;hostgroup=0 */ @@character_set_results");
+	std::string charset_results_q = "SELECT /* ;hostgroup=" + std::to_string(WRITER_HG) + " */ @@character_set_results";
+	query_res = mysql_query(proxysql_mysql, charset_results_q.c_str());
 	if (query_res) {
 		diag("Query failed with error: %s", mysql_error(proxysql_mysql));
 		return;
@@ -211,12 +219,116 @@ std::vector<std::pair<std::string, std::function<void(MYSQL*)>>> special_queries
 	{ "'SET SESSION character_set_results' check", check_session_character_set_results }
 };
 
+/**
+ * @brief Dumps ProxySQL configuration tables for debugging.
+ * @param admin_mysql A MYSQL handle to the ProxySQL Admin interface.
+ */
+void dump_proxysql_config(MYSQL* admin_mysql) {
+	diag("================================================================================");
+	diag("ProxySQL Configuration Dump");
+	diag("================================================================================");
+
+	// Dump mysql_servers
+	diag("--- mysql_servers ---");
+	if (mysql_query(admin_mysql, "SELECT hostgroup_id, hostname, port, status FROM mysql_servers ORDER BY hostgroup_id, hostname") == 0) {
+		MYSQL_RES* res = mysql_store_result(admin_mysql);
+		MYSQL_ROW row;
+		while ((row = mysql_fetch_row(res))) {
+			diag("hostgroup_id: %s, hostname: %s, port: %s, status: %s", row[0], row[1], row[2], row[3]);
+		}
+		mysql_free_result(res);
+	} else {
+		diag("Failed to query mysql_servers: %s", mysql_error(admin_mysql));
+	}
+
+	// Dump mysql_users
+	diag("--- mysql_users ---");
+	if (mysql_query(admin_mysql, "SELECT username, default_hostgroup, transaction_persistent FROM mysql_users ORDER BY username") == 0) {
+		MYSQL_RES* res = mysql_store_result(admin_mysql);
+		MYSQL_ROW row;
+		while ((row = mysql_fetch_row(res))) {
+			diag("username: %s, default_hostgroup: %s, transaction_persistent: %s", row[0], row[1], row[2]);
+		}
+		mysql_free_result(res);
+	} else {
+		diag("Failed to query mysql_users: %s", mysql_error(admin_mysql));
+	}
+
+	// Dump mysql_query_rules
+	diag("--- mysql_query_rules ---");
+	if (mysql_query(admin_mysql, "SELECT rule_id, active, match_pattern, destination_hostgroup, apply, comment FROM mysql_query_rules ORDER BY rule_id") == 0) {
+		MYSQL_RES* res = mysql_store_result(admin_mysql);
+		MYSQL_ROW row;
+		int num_rows = mysql_num_rows(res);
+		if (num_rows == 0) {
+			diag("No query rules configured (empty table)");
+		} else {
+			while ((row = mysql_fetch_row(res))) {
+				diag("rule_id: %s, active: %s, match_pattern: %s, destination_hostgroup: %s, apply: %s, comment: %s",
+					row[0], row[1], row[2] ? row[2] : "NULL", row[3] ? row[3] : "NULL", row[4], row[5] ? row[5] : "NULL");
+			}
+		}
+		mysql_free_result(res);
+	} else {
+		diag("Failed to query mysql_query_rules: %s", mysql_error(admin_mysql));
+	}
+
+	// Dump runtime_mysql_query_rules (to see what's actually loaded)
+	diag("--- runtime_mysql_query_rules ---");
+	if (mysql_query(admin_mysql, "SELECT rule_id, active, match_pattern, destination_hostgroup, apply, comment FROM runtime_mysql_query_rules ORDER BY rule_id") == 0) {
+		MYSQL_RES* res = mysql_store_result(admin_mysql);
+		MYSQL_ROW row;
+		int num_rows = mysql_num_rows(res);
+		if (num_rows == 0) {
+			diag("No runtime query rules configured (empty table)");
+		} else {
+			while ((row = mysql_fetch_row(res))) {
+				diag("rule_id: %s, active: %s, match_pattern: %s, destination_hostgroup: %s, apply: %s, comment: %s",
+					row[0], row[1], row[2] ? row[2] : "NULL", row[3] ? row[3] : "NULL", row[4], row[5] ? row[5] : "NULL");
+			}
+		}
+		mysql_free_result(res);
+	} else {
+		diag("Failed to query runtime_mysql_query_rules: %s", mysql_error(admin_mysql));
+	}
+
+	// Check for any variables related to lock_hostgroup
+	diag("--- global_variables (lock_hostgroup related) ---");
+	if (mysql_query(admin_mysql, "SELECT variable_name, variable_value FROM global_variables WHERE variable_name LIKE '%lock%' ORDER BY variable_name") == 0) {
+		MYSQL_RES* res = mysql_store_result(admin_mysql);
+		MYSQL_ROW row;
+		int num_rows = mysql_num_rows(res);
+		if (num_rows == 0) {
+			diag("No lock_hostgroup related variables found");
+		} else {
+			while ((row = mysql_fetch_row(res))) {
+				diag("%s = %s", row[0], row[1]);
+			}
+		}
+		mysql_free_result(res);
+	} else {
+		diag("Failed to query global_variables: %s", mysql_error(admin_mysql));
+	}
+
+	diag("================================================================================");
+}
+
 int main(int argc, char** argv) {
 	CommandLine cl;
 
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
 		return -1;
+	}
+
+	// Connect to Admin interface and dump configuration for debugging
+	MYSQL* admin_mysql = mysql_init(NULL);
+	if (!mysql_real_connect(admin_mysql, cl.admin_host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+		diag("Failed to connect to Admin interface: %s", mysql_error(admin_mysql));
+		// Continue anyway - this is just for debugging
+	} else {
+		dump_proxysql_config(admin_mysql);
+		mysql_close(admin_mysql);
 	}
 
 	plan(special_queries_checks.size() * 2);

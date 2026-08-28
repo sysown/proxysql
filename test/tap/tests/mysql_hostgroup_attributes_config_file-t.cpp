@@ -15,6 +15,7 @@
 
 #include "tap.h"
 #include "utils.h"
+#include "noise_utils.h"
 #include "command_line.h"
 
 using nlohmann::json;
@@ -216,8 +217,6 @@ int write_mysql_hostgroup_attributes_to_config(MYSQL* admin) {
 }
 
 int main(int, char**) {
-	plan(3);
-
 	CommandLine cl;
 
 	if (cl.getEnv()) {
@@ -225,25 +224,67 @@ int main(int, char**) {
 		return EXIT_FAILURE;
 	}
 
-	MYSQL* admin = mysql_init(NULL);
+	spawn_internal_noise(cl, internal_noise_random_stats_poller);
+	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
+	spawn_internal_noise(cl, internal_noise_pgsql_traffic_v2, {{"num_connections", "100"}, {"reconnect_interval", "100"}, {"avg_delay_ms", "300"}});
 
-	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
+	if (cl.use_noise) {
+		plan(3 + 3);
+	} else {
+		plan(3);
+	}
+
+	MYSQL* admin = mysql_init(NULL);
+	if (!admin) {
+		fprintf(stderr, "File %s, line %d, Error: mysql_init failed for admin\n",
+			__FILE__, __LINE__);
 		return EXIT_FAILURE;
 	}
 
-	// For cleanup
-	MYSQL_QUERY_T(admin, "DROP TABLE IF EXISTS mysql_hostgroup_attributes_0508");
-	MYSQL_QUERY_T(admin, "CREATE TABLE mysql_hostgroup_attributes_0508 AS SELECT * FROM mysql_hostgroup_attributes");
+	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
+		mysql_close(admin);
+		return EXIT_FAILURE;
+	}
+
+	// Track whether the backup table has been created; only then should
+	// the restore path run.
+	bool backup_created = false;
+	// Runs the restore (if the backup exists) and closes admin. Every
+	// error path after the backup is created must go through this lambda;
+	// the previous version had a 'cleanup:' label nothing ever jumped to,
+	// which meant every test failure leaked admin and left the
+	// mysql_hostgroup_attributes table corrupted for downstream tests.
+	auto run_cleanup_and_exit = [&]() -> int {
+		if (backup_created) {
+			if (mysql_query_t(admin, "DELETE FROM mysql_hostgroup_attributes")) {
+				fprintf(stderr, "File %s, line %d, Error: %s\n",
+					__FILE__, __LINE__, mysql_error(admin));
+			}
+			if (mysql_query_t(admin, "INSERT INTO mysql_hostgroup_attributes SELECT * FROM mysql_hostgroup_attributes_0508")) {
+				fprintf(stderr, "File %s, line %d, Error: %s\n",
+					__FILE__, __LINE__, mysql_error(admin));
+			}
+		}
+		mysql_close(admin);
+		return exit_status();
+	};
+
+	// For cleanup: create a backup of the current runtime state. Use
+	// explicit mysql_query_t so failures go through run_cleanup_and_exit
+	// rather than being swallowed by MYSQL_QUERY_T's early return.
+	if (mysql_query_t(admin, "DROP TABLE IF EXISTS mysql_hostgroup_attributes_0508")) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
+		return run_cleanup_and_exit();
+	}
+	if (mysql_query_t(admin, "CREATE TABLE mysql_hostgroup_attributes_0508 AS SELECT * FROM mysql_hostgroup_attributes")) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
+		return run_cleanup_and_exit();
+	}
+	backup_created = true;
 
 	validate_mysql_hostgroup_attributes_from_config(admin);
 	write_mysql_hostgroup_attributes_to_config(admin);
 
-cleanup:
-
-	MYSQL_QUERY_T(admin, "DELETE FROM mysql_hostgroup_attributes");
-	MYSQL_QUERY_T(admin, "INSERT INTO mysql_hostgroup_attributes SELECT * FROM mysql_hostgroup_attributes_0508");
-	mysql_close(admin);
-
-	return exit_status();
+	return run_cleanup_and_exit();
 }

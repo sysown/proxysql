@@ -1,0 +1,13 @@
+--- external/zlib/zutil.h.orig	2024-05-22 17:34:00.000000000 +0200
++++ external/zlib/zutil.h	2024-05-22 17:34:00.000000000 +0200
+@@ -143,9 +143,7 @@
+ #    if defined(__MWERKS__) && __dest_os != __be_os && __dest_os != __win32_os
+ #      include <unix.h> /* for fdopen */
+ #    else
+-#      ifndef fdopen
+-#        define fdopen(fd,mode) NULL /* No fdopen() */
+-#      endif
++
+ #    endif
+ #  endif
+ #endif

@@ -1,0 +1,240 @@
+name: CI-unit-tests-asan-coverage
+run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
+
+# Builds ProxySQL with PROXYSQL40=1, WITHASAN=1 (forces NOJEMALLOC=1),
+# WITHGCOV=1, runs every unit test under test/tap/tests/unit/, and
+# publishes an LCOV coverage report.
+#
+# Both the build and the test+coverage phase run INSIDE the
+# ubuntu24_dbg_build container — same isolation contract as
+# CI-unit-tests-tsan (PR #5725). Two parallel CI runs on a shared /
+# self-hosted runner can never collide on the host filesystem (no
+# /opt/proxysql contention, no toolchain skew between build env and
+# run env). No host-direct `apt install` polluting the runner.
+#
+# The test+coverage logic lives in
+# `test/infra/control/run-unit-tests-asan-coverage.bash` so local and
+# CI run the exact same script. PROXYSQL40=1 is used because the
+# unit test set includes genai_*_unit-t entries that only build under
+# the genai tier — coverage scope is unchanged from the pre-Docker
+# workflow.
+#
+# Local repro — same image, same script, same flags as CI:
+#
+#   sudo sysctl -w vm.mmap_rnd_bits=28
+#   WITHASAN=1 WITHGCOV=1 NOJEMALLOC=1 PROXYSQL40=1 make ubuntu24-tap
+#   docker compose run --rm \
+#     -e ASAN_OPTIONS="detect_leaks=0:abort_on_error=1:symbolize=1:print_stacktrace=1:halt_on_error=1" \
+#     --entrypoint bash ubuntu24_dbg_build \
+#     -lc 'cd /opt/proxysql && test/infra/control/run-unit-tests-asan-coverage.bash'
+#
+# The script is the canonical test+coverage runner; this workflow
+# is just a wrapper that drives it from a GitHub Actions runner.
+#
+# Security note: every 'run:' step uses only env-injected values from
+# env: blocks or GitHub-provided env vars — no untrusted user input is
+# interpolated into a shell command.
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: [ CI-trigger ]
+    types: [ completed ]
+
+concurrency:
+  # Include `github.event_name` so a workflow_run-triggered run never
+  # falls into the same group as a workflow_dispatch run on the same
+  # branch. Without this, dispatching on a feature branch while a
+  # workflow_run for v3.0 is also active cancels the dispatch even
+  # though the branches differ -- GitHub's concurrency comparison
+  # appears to ignore the head_branch suffix in practice. Two
+  # workflow_runs for the same branch still serialize via this group;
+  # so do two dispatches for the same branch.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  SHA: ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
+  # ASAN options live alongside gcov instrumentation.
+  # - detect_leaks=0 because the current TAP unit tests were not
+  #   written leak-free; flip to 1 once known leaks are cleaned up
+  #   and this workflow becomes a leak regression guard.
+  # - abort_on_error=1 makes ASAN produce a non-zero exit on the first
+  #   hard error (UAF, buffer overflow, uninit read, etc.).
+  # - symbolize=1 + print_stacktrace=1 give usable reports in CI logs.
+  ASAN_OPTIONS: "detect_leaks=0:abort_on_error=1:symbolize=1:print_stacktrace=1:halt_on_error=1"
+
+jobs:
+  unit-tests:
+    if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    # codecov/codecov-action@v4 needs `id-token: write` to mint a
+    # GitHub OIDC token for tokenless uploads against the Codecov
+    # GitHub App. Without this, the upload falls back to legacy
+    # token-based auth and fails on protected target branches with
+    # `HTTP 400: Token required because branch is protected` even
+    # though the app is installed. We keep `contents: read` (the
+    # GitHub default) explicit so granting id-token: write here
+    # doesn't implicitly widen any other scope.
+    # `write-all` mirrors what every TAP-group reusable workflow on
+    # GH-Actions declares. The narrower
+    #   contents: read / id-token: write / checks: write
+    # set was insufficient: the final `LouisBrunner/checks-action@v2.0.0`
+    # step kept failing with "Resource not accessible by integration"
+    # because this workflow runs via `workflow_run` from CI-trigger and
+    # the GITHUB_TOKEN it gets is the default-branch context, which
+    # can't act on a PR-branch SHA without broader scopes (matches the
+    # exact same reason the legacy-g2-genai pipeline ratcheted up to
+    # write-all in PR #5818). id-token:write is included automatically.
+    permissions: write-all
+
+    steps:
+
+    - name: Checkout repository
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ env.SHA }}
+        fetch-depth: 0
+        lfs: true
+        submodules: 'false'
+
+    - name: Relax ASLR for AddressSanitizer
+      # ASAN cannot reserve its shadow region on kernels with the
+      # default vm.mmap_rnd_bits=32. Lower it to 28 BEFORE any
+      # sanitized binary is loaded. The privileged container that
+      # runs the tests inherits the host's ASLR setting.
+      run: sudo sysctl -w vm.mmap_rnd_bits=28
+
+    - name: Build (WITHASAN=1, WITHGCOV=1, PROXYSQL40=1) inside Docker
+      env:
+        WITHASAN: "1"
+        WITHGCOV: "1"
+        NOJEMALLOC: "1"
+        PROXYSQL40: "1"
+      # `make ubuntu24-tap` invokes docker-compose to spin up the
+      # ubuntu24_dbg_build service, which builds inside the container
+      # with the source tree volume-mounted in. Output binaries land
+      # back on the host filesystem (under test/tap/tests/unit/) via
+      # the same volume mount.
+      #
+      # WITHASAN=1: enables -fsanitize=address (forces NOJEMALLOC=1
+      #             via include/makefiles_vars.mk).
+      # WITHGCOV=1: enables -fprofile-arcs -ftest-coverage and links
+      #             libgcov so .gcda/.gcno files are produced.
+      # PROXYSQL40=1: enables the full chassis + genai tier so
+      #             genai_*_unit-t binaries (registered in
+      #             unit-tests-g1) build. Cascades to PROXYSQL40 +
+      #             PROXYSQL31 + PROXYSQLFFTO + PROXYSQLTSDB via the
+      #             Makefile cascade.
+      run: |
+        make ubuntu24-tap
+
+    - name: Run unit tests + capture coverage inside Docker
+      # Re-enter the same image used for the build via
+      # `docker compose run --rm` and delegate to the canonical
+      # script `test/infra/control/run-unit-tests-asan-coverage.bash`.
+      # The script is the single source of truth for the test loop +
+      # LCOV capture; local repro is exactly the same `docker compose
+      # run` invocation.
+      #
+      # No `-p PROJECT` flag: the Makefile's `binaries/proxysql%`
+      # rule writes `-p "${GIT_VERSION/./}"` which make expands as a
+      # make variable reference (not bash parameter expansion), so
+      # the project name comes out as the empty string and docker
+      # compose falls back to the directory basename. We rely on the
+      # same default here so we land in the same project namespace.
+      run: |
+        docker compose run --rm \
+          -e ASAN_OPTIONS="${ASAN_OPTIONS}" \
+          --entrypoint bash \
+          ubuntu24_dbg_build \
+          -lc 'cd /opt/proxysql && test/infra/control/run-unit-tests-asan-coverage.bash'
+
+    - name: Fix artifact permissions
+      if: always()
+      # actions/upload-artifact dies with EACCES when it scandirs
+      # into directories that were created inside the docker build
+      # container (root-owned). Make everything readable by the
+      # runner user before upload.
+      run: |
+        sudo chmod -R a+rX coverage/ unit-test-logs/ 2>/dev/null || true
+
+    - name: Upload coverage LCOV file
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: unit-tests-coverage-lcov-${{ env.SHA }}
+        path: coverage/lcov.info
+        if-no-files-found: warn
+
+    - name: Require non-empty coverage/lcov.info
+      # With disable_search + plugins:noop, a missing/empty LCOV would
+      # make the Codecov step a silent no-op while fail_ci_if_error:false
+      # keeps the job green. Fail here so coverage-generation regressions
+      # are visible; Codecov SaaS outages remain non-blocking below.
+      id: require-lcov
+      if: always()
+      run: test -s coverage/lcov.info
+
+    - name: Upload coverage to Codecov
+      # Send the same lcov.info we already archive as a workflow artifact
+      # to Codecov so PRs get the "this PR changes coverage of touched
+      # files from N% to M%" comment and main accumulates a historical
+      # graph at https://app.codecov.io/gh/sysown/proxysql.
+      #
+      # Upload when LCOV exists even if unit tests failed (partial coverage
+      # is still useful). Skip only when require-lcov failed. Codecov SaaS
+      # outages stay non-blocking via fail_ci_if_error: false.
+      if: always() && steps.require-lcov.outcome == 'success'
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4
+      with:
+        codecov_yml_path: codecov.yml
+        override_commit: ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
+        files: coverage/lcov.info
+        flags: unit-tests
+        name: unit-tests-asan-coverage
+        # Tokenless upload via GitHub OIDC. Codecov treats every branch
+        # as "protected" by default and rejects unauthenticated uploads
+        # with HTTP 400 "Token required because branch is protected" --
+        # this is Codecov's own branch-protection concept, unrelated to
+        # GitHub's. The fix is `use_oidc: true`, which makes the action
+        # mint a GitHub OIDC token (granted by `permissions:
+        # id-token: write` on this job) and present it to Codecov in
+        # place of a static upload token. Without `use_oidc: true` the
+        # action silently falls back to legacy tokenless mode and the
+        # upload fails.
+        use_oidc: true
+        # Only the explicit LCOV file. Default plugins include gcov which
+        # auto-discovers leftover .gcno and pollutes the upload.
+        disable_search: true
+        plugins: noop
+        fail_ci_if_error: false
+        verbose: true
+
+    - name: Upload coverage HTML report
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: unit-tests-coverage-html-${{ env.SHA }}
+        path: coverage/html/
+        if-no-files-found: warn
+
+    - name: Upload unit-test logs
+      if: ${{ failure() && !cancelled() }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: unit-tests-logs-${{ env.SHA }}
+        path: unit-test-logs/
+        if-no-files-found: warn
+
+    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
+      if: always()
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        name: '${{ github.workflow }} / ${{ github.job }}'
+        repo: ${{ github.repository }}
+        sha: ${{ env.SHA }}
+        conclusion: ${{ job.status }}
+        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'

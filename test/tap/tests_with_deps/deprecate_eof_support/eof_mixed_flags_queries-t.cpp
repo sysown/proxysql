@@ -49,6 +49,26 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
+	// Verbose test header
+	diag("================================================================================");
+	diag("Test: eof_mixed_flags_queries-t");
+	diag("================================================================================");
+	diag("This test verifies ProxySQL handles combinations of:");
+	diag("  - mysql-enable_client_deprecate_eof");
+	diag("  - mysql-enable_server_deprecate_eof");
+	diag("  - Compression (frontend and backend)");
+	diag("  - Fast forward");
+	diag(" ");
+	diag("For both TEXT and BINARY protocols over fresh/reused backend connections.");
+	diag(" ");
+	diag("Connection parameters:");
+	diag("  - Host: %s", cl.host);
+	diag("  - Port: %d", cl.port);
+	diag("  - Admin Port: %d", cl.admin_port);
+	diag("  - Workdir: %s", cl.workdir);
+	diag("================================================================================");
+	diag(" ");
+
 	const string FF_USER { cl.username };
 
 	MYSQL* admin = mysql_init(NULL);

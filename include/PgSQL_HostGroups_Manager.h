@@ -1,5 +1,5 @@
-#ifndef __CLASS_PGSQL_HOSTGROUPS_MANAGER_H
-#define __CLASS_PGSQL_HOSTGROUPS_MANAGER_H
+#ifndef PROXYSQL_PGSQL_HOSTGROUPS_MANAGER_H
+#define PROXYSQL_PGSQL_HOSTGROUPS_MANAGER_H
 #include "proxysql.h"
 #include "cpp.h"
 #include "proxysql_gtid.h"
@@ -46,6 +46,7 @@
 #define MYHGM_PgSQL_SERVERS "CREATE TABLE pgsql_servers ( hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 5432 , weight INT NOT NULL DEFAULT 1 , status INT NOT NULL DEFAULT 0 , compression INT NOT NULL DEFAULT 0 , max_connections INT NOT NULL DEFAULT 1000 , max_replication_lag INT NOT NULL DEFAULT 0 , use_ssl INT NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , mem_pointer INT NOT NULL DEFAULT 0 , PRIMARY KEY (hostgroup_id, hostname, port) )"
 #define MYHGM_PgSQL_SERVERS_INCOMING "CREATE TABLE pgsql_servers_incoming ( hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 5432 , weight INT NOT NULL DEFAULT 1 , status INT NOT NULL DEFAULT 0 , compression INT NOT NULL DEFAULT 0 , max_connections INT NOT NULL DEFAULT 1000 , max_replication_lag INT NOT NULL DEFAULT 0 , use_ssl INT NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup_id, hostname, port))"
 #endif /* DEBUG */
+#define MYHGM_PgSQL_SERVERS_SSL_PARAMS "CREATE TABLE pgsql_servers_ssl_params (hostname VARCHAR NOT NULL , port INT CHECK (port >= 0 AND port <= 65535) NOT NULL DEFAULT 5432 , username VARCHAR NOT NULL DEFAULT '' , ssl_ca VARCHAR NOT NULL DEFAULT '' , ssl_cert VARCHAR NOT NULL DEFAULT '' , ssl_key VARCHAR NOT NULL DEFAULT '' , ssl_crl VARCHAR NOT NULL DEFAULT '' , ssl_crlpath VARCHAR NOT NULL DEFAULT '' , ssl_protocol_version_range VARCHAR NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostname, port, username) )"
 #define MYHGM_PgSQL_REPLICATION_HOSTGROUPS "CREATE TABLE pgsql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>=0) , check_type VARCHAR CHECK (LOWER(check_type) IN ('read_only')) NOT NULL DEFAULT 'read_only' , comment VARCHAR NOT NULL DEFAULT '' , UNIQUE (reader_hostgroup))"
 
 // AWS Aurora PostgreSQL hostgroups table definition
@@ -116,6 +117,13 @@ class PgSQL_SrvC;
 class PgSQL_SrvList;
 class PgSQL_HGC;
 
+// Forward declaration for WebUI monitoring metrics collector
+namespace ProxySQL {
+namespace Monitoring {
+class MetricsCollector;
+}
+}
+
 class PgSQL_Errors_stats {
 public:
 	PgSQL_Errors_stats(int _hostgroup, const char* _hostname, int _port, const char* _username, const char* _address, const char* _dbname,
@@ -147,7 +155,7 @@ class PgSQL_SrvConnList {
 	int find_idx(PgSQL_Connection *c) {
 		//for (unsigned int i=0; i<conns_length(); i++) {
 		for (unsigned int i=0; i<conns->len; i++) {
-			PgSQL_Connection *conn = NULL;
+			PgSQL_Connection *conn = nullptr;
 			conn = (PgSQL_Connection *)conns->index(i);
 			if (conn==c) {
 				return (unsigned int)i;
@@ -288,7 +296,7 @@ struct PgSQL_p_hg_counter {
 		pghgm_pgconnpool_reset,
 		pghgm_pgconnpool_destroy,
 		auto_increment_delay_multiplex,
-		__size
+		SIZE_
 	};
 };
 
@@ -296,12 +304,12 @@ struct PgSQL_p_hg_gauge {
 	enum metric {
 		server_connections_connected = 0,
 		client_connections_connected,
-		__size
+		SIZE_
 	};
 };
 
 struct PgSQL_p_hg_dyn_counter {
-	enum metric {
+	enum metric : uint8_t {
 		conn_pool_bytes_data_recv = 0,
 		conn_pool_bytes_data_sent,
 		connection_pool_conn_err,
@@ -310,22 +318,22 @@ struct PgSQL_p_hg_dyn_counter {
 		gtid_executed,
 		proxysql_pgsql_error,
 		pgsql_error,
-		__size
+		SIZE_
 	};
 };
 
-enum class p_pgsql_error_type {
+enum class p_pgsql_error_type : uint8_t {
 	pgsql,
 	proxysql
 };
 
 struct PgSQL_p_hg_dyn_gauge {
-	enum metric {
+	enum metric : uint8_t {
 		connection_pool_conn_free = 0,
 		connection_pool_conn_used,
 		connection_pool_latency_us,
 		connection_pool_status,
-		__size
+		SIZE_
 	};
 };
 
@@ -356,7 +364,7 @@ enum PgSQL_READ_ONLY_SERVER_T {
 	PG_ROS_HOSTNAME = 0,
 	PG_ROS_PORT,
 	PG_ROS_READONLY,
-	PG_ROS__SIZE
+	PG_ROS_SIZE_
 };
 
 enum PgSQL_REPLICATION_LAG_SERVER_T {
@@ -364,7 +372,7 @@ enum PgSQL_REPLICATION_LAG_SERVER_T {
 	PG_RLS_ADDRESS,
 	PG_RLS_PORT,
 	PG_RLS_CURRENT_REPLICATION_LAG,
-	PG_RLS__SIZE
+	PG_RLS_SIZE_
 };
 
 /**
@@ -432,12 +440,13 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 		PgSQL_GALERA_HOSTGROUPS,
 		PgSQL_AWS_AURORA_HOSTGROUPS,
 		PgSQL_HOSTGROUP_ATTRIBUTES,
+		PgSQL_SERVERS_SSL_PARAMS,
 		PgSQL_SERVERS,
 
-		__HGM_TABLES_SIZE
+		HGM_TABLES_SIZE_
 	};
 
-	std::array<uint64_t, __HGM_TABLES_SIZE> table_resultset_checksum { {0} };
+	std::array<uint64_t, HGM_TABLES_SIZE_> table_resultset_checksum { {0} };
 
 	class HostGroup_Server_Mapping {
 	public:
@@ -445,11 +454,11 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 			WRITER = 0,
 			READER = 1,
 
-			__TYPE_SIZE
+			TYPE_SIZE_
 		};
 
 		struct Node {
-			PgSQL_SrvC* srv = NULL;
+			PgSQL_SrvC* srv = nullptr;
 			unsigned int reader_hostgroup_id = -1;
 			unsigned int writer_hostgroup_id = -1;
 			//MySerStatus server_status = PgSQL_SERVER_STATUS_OFFLINE_HARD;
@@ -510,7 +519,7 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 		PgSQL_SrvC* insert_HGM(unsigned int hostgroup_id, const PgSQL_SrvC* srv);
 		void remove_HGM(PgSQL_SrvC* srv);
 
-		std::array<std::vector<Node>, __TYPE_SIZE> mapping; // index 0 contains reader and 1 contains writer hostgroups
+		std::array<std::vector<Node>, TYPE_SIZE_> mapping; // index 0 contains reader and 1 contains writer hostgroups
 		int readonly_flag;
 		PgSQL_HostGroups_Manager* myHGM;
 	};
@@ -536,6 +545,9 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	 *   and 'hostgroup_server_mapping' should be rebuild.
 	 */
 	uint64_t hgsm_pgsql_replication_hostgroups_checksum = 0;
+
+	std::mutex PgSQL_Servers_SSL_Params_map_mutex;
+	std::unordered_map<std::string, PgSQLServers_SslParams> PgSQL_Servers_SSL_Params_map;
 
 #if 0
 	PtrArray *MyHostGroups;
@@ -591,7 +603,9 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	std::map<int, PgSQL_AWS_Aurora_Info*> AWS_Aurora_Info_Map;
 
 	void generate_pgsql_hostgroup_attributes_table();
+	void generate_pgsql_servers_ssl_params_table();
 	SQLite3_result *incoming_hostgroup_attributes;
+	SQLite3_result *incoming_pgsql_servers_ssl_params = nullptr;
 
 	SQLite3_result* incoming_pgsql_servers_v2;
 
@@ -614,6 +628,9 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	);
 
 	public:
+	// Friend declaration for WebUI monitoring metrics collector
+	friend class ProxySQL::Monitoring::MetricsCollector;
+
 	/**
 	 * @brief Mutex used to guard 'pgsql_servers_to_monitor' resulset.
 	 */
@@ -665,12 +682,12 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 		//////////////////////////////////////////////////////
 
 		/// Prometheus metrics arrays
-		std::array<prometheus::Counter*, PgSQL_p_hg_counter::__size> p_counter_array {};
-		std::array<prometheus::Gauge*, PgSQL_p_hg_gauge::__size> p_gauge_array {};
+		std::array<prometheus::Counter*, PgSQL_p_hg_counter::SIZE_> p_counter_array {};
+		std::array<prometheus::Gauge*, PgSQL_p_hg_gauge::SIZE_> p_gauge_array {};
 
 		// Prometheus dyn_metrics families arrays
-		std::array<prometheus::Family<prometheus::Counter>*, PgSQL_p_hg_dyn_counter::__size> p_dyn_counter_array {};
-		std::array<prometheus::Family<prometheus::Gauge>*, PgSQL_p_hg_dyn_gauge::__size> p_dyn_gauge_array {};
+		std::array<prometheus::Family<prometheus::Counter>*, PgSQL_p_hg_dyn_counter::SIZE_> p_dyn_counter_array {};
+		std::array<prometheus::Family<prometheus::Gauge>*, PgSQL_p_hg_dyn_gauge::SIZE_> p_dyn_gauge_array {};
 
 		/// Prometheus connection_pool metrics
 		std::map<std::string, prometheus::Counter*> p_conn_pool_bytes_data_recv_map {};
@@ -805,6 +822,7 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	 * @return The generated resultset.
 	 */
 	SQLite3_result* dump_table_pgsql(const string&);
+	PgSQLServers_SslParams * get_Server_SSL_Params(char *hostname, int port, char *username);
 
 	/**
 	 * @brief Update the public member resulset 'pgsql_servers_to_monitor'. This resulset should contain the latest
@@ -854,7 +872,7 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 
 	void drop_all_idle_connections();
 	int get_multiple_idle_connections(int, unsigned long long, PgSQL_Connection **, int);
-	SQLite3_result * SQL3_Connection_Pool(bool _reset, int *hid = NULL);
+	SQLite3_result * SQL3_Connection_Pool(bool _reset, int *hid = nullptr);
 	SQLite3_result * SQL3_Free_Connections();
 
 	void push_MyConn_to_pool(PgSQL_Connection *, bool _lock=true);
@@ -900,4 +918,4 @@ private:
 };
 
 
-#endif /* __CLASS_PGSQL_HOSTGROUPS_MANAGER_H */
+#endif /* PROXYSQL_PGSQL_HOSTGROUPS_MANAGER_H */

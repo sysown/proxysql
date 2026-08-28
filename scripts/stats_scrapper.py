@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 """
 Retuns the content of a particular table from Admin 'stats' schema.

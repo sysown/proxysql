@@ -12,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <queue>
+#include <climits>
 #include <stdint.h>
 #include <utility>
 #include <vector>
@@ -35,6 +36,22 @@ const char PING_QUERY[] { "" };
  * @details If the server is not in this mode would be assumed to be a primary.
  */
 const char READ_ONLY_QUERY[] { "SELECT pg_is_in_recovery()" };
+/**
+ * @brief Used to detect the current replication lag in a PostgreSQL instance.
+ * @details Lag measurement is based in a difference between the most recent WAL location that has been
+ *  received and synced to disk (pg_last_wal_receive_lsn) and the most recent WAL location that has been
+ *  replayed the most recent WAL location that has been replayed (pg_last_wal_replay_lsn).
+ */
+const char REPLICATION_LAG_QUERY[] {
+	"SELECT CASE WHEN pg_last_wal_receive_lsn() = pg_last_wal_replay_lsn() THEN 0 ELSE GREATEST"
+		" (0, EXTRACT (EPOCH FROM now() - pg_last_xact_replay_timestamp())) END AS replication_lag"
+};
+/*
+ * @brief Used to detect current replication lag in a PostgreSQL instance when pt-heartbeat is used.
+ */
+const char REPLICATION_LAG_QUERY_PT_HEARTBEAT[] {
+	"SELECT EXTRACT(EPOCH FROM (LOCALTIMESTAMP - ts :: timestamp)) AS Seconds_Behind_Master FROM "
+};
 
 template <typename T>
 void append(std::vector<T>& dest, std::vector<T>&& src) {
@@ -240,6 +257,9 @@ PgSQL_Monitor::PgSQL_Monitor() {
 	AWS_Aurora_Hosts_resultset_checksum = 0;
 	My_Conn_Pool = new PgSQL_Monitor_Connection_Pool();
 
+	dns_cache = std::make_shared<DNS_Cache>();
+	dns_cache->set_counters(&dns_cache_queried, &dns_cache_lookup_success, &dns_cache_record_updated);
+
 	int rc = monitordb.open(
 		const_cast<char*>("file:mem_monitordb?mode=memory&cache=shared"),
 		SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
@@ -434,24 +454,24 @@ unique_ptr<PgSQL_Thread> init_pgsql_thread_struct() {
 // Helper function for binding text
 void sqlite_bind_text(sqlite3_stmt* stmt, int index, const char* text) {
 	int rc = (*proxy_sqlite3_bind_text)(stmt, index, text, -1, SQLITE_TRANSIENT);
-	ASSERT_SQLITE3_OK(rc, sqlite3_db_handle(stmt));
+	ASSERT_SQLITE3_OK(rc, (*proxy_sqlite3_db_handle)(stmt));
 }
 
 // Helper function for binding integers
 void sqlite_bind_int(sqlite3_stmt* stmt, int index, int value) {
 	int rc = (*proxy_sqlite3_bind_int)(stmt, index, value);
-	ASSERT_SQLITE3_OK(rc, sqlite3_db_handle(stmt));
+	ASSERT_SQLITE3_OK(rc, (*proxy_sqlite3_db_handle)(stmt));
 }
 
 // Helper function for binding 64-bit integers
 void sqlite_bind_int64(sqlite3_stmt* stmt, int index, long long value) {
 	int rc = (*proxy_sqlite3_bind_int64)(stmt, index, value);
-	ASSERT_SQLITE3_OK(rc, sqlite3_db_handle(stmt));
+	ASSERT_SQLITE3_OK(rc, (*proxy_sqlite3_db_handle)(stmt));
 }
 
 void sqlite_bind_null(sqlite3_stmt* stmt, int index) {
 	int rc = (*proxy_sqlite3_bind_null)(stmt, index);
-	ASSERT_SQLITE3_OK(rc, sqlite3_db_handle(stmt));
+	ASSERT_SQLITE3_OK(rc, (*proxy_sqlite3_db_handle)(stmt));
 }
 
 // Helper function for executing a statement
@@ -471,13 +491,13 @@ int sqlite_execute_statement(sqlite3_stmt* stmt) {
 // Helper function for clearing bindings
 void sqlite_clear_bindings(sqlite3_stmt* stmt) {
 	int rc = (*proxy_sqlite3_clear_bindings)(stmt);
-	ASSERT_SQLITE3_OK(rc, sqlite3_db_handle(stmt));
+	ASSERT_SQLITE3_OK(rc, (*proxy_sqlite3_db_handle)(stmt));
 }
 
 // Helper function for resetting a statement
 void sqlite_reset_statement(sqlite3_stmt* stmt) {
 	int rc = (*proxy_sqlite3_reset)(stmt);
-	ASSERT_SQLITE3_OK(rc, sqlite3_db_handle(stmt));
+	ASSERT_SQLITE3_OK(rc, (*proxy_sqlite3_db_handle)(stmt));
 }
 
 // Helper function for finalizing a statement
@@ -500,19 +520,18 @@ void update_monitor_pgsql_servers(SQLite3_result* rs, SQLite3DB* db) {
 	if (rs != nullptr) {
 		db->execute("DELETE FROM monitor_internal.pgsql_servers");
 
-		sqlite3_stmt* stmt1 = nullptr;
-		int rc = db->prepare_v2(
-			"INSERT INTO monitor_internal.pgsql_servers VALUES (?, ?, ?, ?)", &stmt1
+		auto [rc1, stmt1_unique] = db->prepare_v2(
+			"INSERT INTO monitor_internal.pgsql_servers VALUES (?, ?, ?, ?)"
 		);
-		ASSERT_SQLITE_OK(rc, db);
+		ASSERT_SQLITE_OK(rc1, db);
 
-		sqlite3_stmt* stmt32 = nullptr;
-		rc = db->prepare_v2(
+		auto [rc2, stmt32_unique] = db->prepare_v2(
 			("INSERT INTO monitor_internal.pgsql_servers VALUES " +
-				generate_multi_rows_query(32, 4)).c_str(),
-			&stmt32
+				generate_multi_rows_query(32, 4)).c_str()
 		);
-		ASSERT_SQLITE_OK(rc, db);
+		ASSERT_SQLITE_OK(rc2, db);
+		sqlite3_stmt* stmt1 = stmt1_unique.get();
+		sqlite3_stmt* stmt32 = stmt32_unique.get();
 
 		// Iterate through rows
 		int row_idx = 0;
@@ -545,18 +564,41 @@ void update_monitor_pgsql_servers(SQLite3_result* rs, SQLite3DB* db) {
 			row_idx++;
 		}
 
-		// Finalize statements
-		sqlite_finalize_statement(stmt1);
-		sqlite_finalize_statement(stmt32);
+		// RAII auto-finalizes stmt1 and stmt32
 	}
 }
 
-enum class task_type_t { ping, connect, readonly };
+enum class task_type_t { ping, connect, readonly, repl_lag };
+
+const char* get_task_type_str(task_type_t task_type) {
+	if (task_type == task_type_t::ping) {
+		return "ping";
+	} else if (task_type == task_type_t::connect) {
+		return "connect";
+	} else if (task_type == task_type_t::readonly) {
+		return "readonly";
+	} else if (task_type == task_type_t::repl_lag) {
+		return "replication_lag";
+	} else {
+		assert(0 && "Invalid task type");
+	}
+}
 
 struct mon_srv_t {
+	int32_t hostgroup_id;
 	string addr;
 	uint16_t port;
 	bool ssl;
+	struct ssl_opts_t {
+		string ssl_p2s_key;
+		string ssl_p2s_cert;
+		string ssl_p2s_ca;
+		string ssl_p2s_crl;
+		string ssl_p2s_crlpath;
+		// Pre-parsed from ssl_protocol_version_range; empty when unset/malformed.
+		string ssl_min_protocol_version;
+		string ssl_max_protocol_version;
+	} ssl_opt;
 };
 
 struct mon_user_t {
@@ -573,6 +615,10 @@ struct ping_params_t {
 };
 
 struct readonly_res_t {
+	int32_t val;
+};
+
+struct repl_lag_res_t {
 	int32_t val;
 };
 
@@ -609,10 +655,50 @@ struct readonly_conf_t {
 	readonly_params_t params;
 };
 
+struct repl_lag_params_t {
+	int32_t interval;
+	double interval_window;
+	int32_t timeout;
+	int32_t ping_max_failures;
+	int32_t ping_interval;
+	mf_unique_ptr<char> pt_heartbeat {};
+
+	repl_lag_params_t(
+		int32_t _interval,
+		double _interval_window,
+		int32_t _timeout,
+		int32_t _ping_max_failures,
+		int32_t _ping_interval,
+		char* _pt_heartbeat
+	) :
+		interval(_interval),
+		interval_window(_interval_window),
+		timeout(_timeout),
+		ping_max_failures(_ping_max_failures),
+		ping_interval(_ping_interval),
+		pt_heartbeat(_pt_heartbeat ? strdup(_pt_heartbeat) : nullptr)
+	{}
+
+	repl_lag_params_t(const repl_lag_params_t& o) :
+		interval(o.interval),
+		interval_window(o.interval_window),
+		timeout(o.timeout),
+		ping_max_failures(o.ping_max_failures),
+		ping_interval(o.ping_interval),
+		pt_heartbeat(o.pt_heartbeat ? strdup(o.pt_heartbeat.get()) : nullptr)
+	{}
+};
+
+struct repl_lag_conf_t {
+	unique_ptr<SQLite3_result> srvs_info;
+	repl_lag_params_t params;
+};
+
 struct tasks_conf_t {
 	ping_conf_t ping;
 	connect_conf_t connect;
 	readonly_conf_t readonly;
+	repl_lag_conf_t repl_lag;
 	mon_user_t user_info;
 };
 
@@ -644,15 +730,47 @@ unique_ptr<SQLite3_result> fetch_hgm_srvs_conf(PgSQL_HostGroups_Manager* hgm, co
 
 vector<mon_srv_t> ext_srvs(const unique_ptr<SQLite3_result>& srvs_info) {
 	vector<mon_srv_t> srvs {};
-
+	srvs.reserve(srvs_info->rows.size());
 	for (const auto& row : srvs_info->rows) {
 		srvs.push_back({
-			string { row->fields[0] },
-			static_cast<uint16_t>(std::atoi(row->fields[1])),
-			static_cast<bool>(std::atoi(row->fields[2]))
+			static_cast<int32_t>(std::atoi(row->fields[0])),
+			string { row->fields[1] },
+			static_cast<uint16_t>(std::atoi(row->fields[2])),
+			static_cast<bool>(std::atoi(row->fields[3])),
+			[&]() -> mon_srv_t::ssl_opts_t {
+				bool use_ssl_val = static_cast<bool>(std::atoi(row->fields[3]));
+				if (use_ssl_val) {
+					std::unique_ptr<PgSQLServers_SslParams> ssl_params {
+						PgHGM->get_Server_SSL_Params(
+							row->fields[1],
+							std::atoi(row->fields[2]),
+							pgsql_thread___monitor_username ? pgsql_thread___monitor_username : (char*)""
+						)
+					};
+					if (ssl_params != nullptr) {
+						return mon_srv_t::ssl_opts_t {
+							ssl_params->ssl_key,
+							ssl_params->ssl_cert,
+							ssl_params->ssl_ca,
+							ssl_params->ssl_crl,
+							ssl_params->ssl_crlpath,
+							ssl_params->ssl_min_protocol_version,
+							ssl_params->ssl_max_protocol_version
+						};
+					}
+				}
+				return mon_srv_t::ssl_opts_t {
+					string { pgsql_thread___ssl_p2s_key ? pgsql_thread___ssl_p2s_key : ""},
+					string { pgsql_thread___ssl_p2s_cert ? pgsql_thread___ssl_p2s_cert : "" },
+					string { pgsql_thread___ssl_p2s_ca ? pgsql_thread___ssl_p2s_ca : "" },
+					string { pgsql_thread___ssl_p2s_crl ? pgsql_thread___ssl_p2s_crl : "" },
+					string { pgsql_thread___ssl_p2s_crlpath ? pgsql_thread___ssl_p2s_crlpath : ""},
+					string { "" },
+					string { "" }
+				};
+			}()
 		});
 	}
-
 	return srvs;
 }
 
@@ -674,22 +792,28 @@ tasks_conf_t fetch_updated_conf(PgSQL_Monitor* mon, PgSQL_HostGroups_Manager* hg
 	}
 
 	unique_ptr<SQLite3_result> ping_srvrs { fetch_mon_srvs_conf(mon,
-		"SELECT hostname, port, MAX(use_ssl) use_ssl FROM monitor_internal.pgsql_servers"
+		"SELECT 0 hostgroup_id, hostname, port, MAX(use_ssl) use_ssl FROM monitor_internal.pgsql_servers"
 			" GROUP BY hostname, port ORDER BY RANDOM()"
 	)};
 
 	unique_ptr<SQLite3_result> connect_srvrs { fetch_mon_srvs_conf(mon,
-		"SELECT hostname, port, MAX(use_ssl) use_ssl FROM monitor_internal.pgsql_servers"
+		"SELECT 0 hostgroup_id, hostname, port, MAX(use_ssl) use_ssl FROM monitor_internal.pgsql_servers"
 			" GROUP BY hostname, port ORDER BY RANDOM()"
 	)};
 
 	unique_ptr<SQLite3_result> readonly_srvs { fetch_hgm_srvs_conf(hgm,
-		"SELECT hostname, port, MAX(use_ssl) use_ssl, check_type, reader_hostgroup"
+		"SELECT hostgroup_id, hostname, port, MAX(use_ssl) use_ssl, check_type, reader_hostgroup"
 			" FROM pgsql_servers JOIN pgsql_replication_hostgroups"
 				" ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup"
 			" WHERE status NOT IN (2,3) GROUP BY hostname, port ORDER BY RANDOM()"
 	)};
 
+	unique_ptr<SQLite3_result> repl_srvs { fetch_hgm_srvs_conf(hgm,
+		"SELECT hostgroup_id, hostname, port, MAX(use_ssl) use_ssl FROM pgsql_servers"
+			" JOIN pgsql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup"
+			" WHERE max_replication_lag > 0 AND status NOT IN (2,3)"
+			" GROUP BY hostgroup_id, hostname, port ORDER BY RANDOM()"
+	)};
 
 	return tasks_conf_t {
 		ping_conf_t {
@@ -726,11 +850,22 @@ tasks_conf_t fetch_updated_conf(PgSQL_Monitor* mon, PgSQL_HostGroups_Manager* hg
 				pgsql_thread___monitor_writer_is_also_reader
 			}
 		},
+		repl_lag_conf_t {
+			std::move(repl_srvs),
+			repl_lag_params_t {
+				pgsql_thread___monitor_replication_lag_interval * 1000,
+				pgsql_thread___monitor_replication_lag_interval_window / 100.0,
+				pgsql_thread___monitor_replication_lag_timeout * 1000,
+				pgsql_thread___monitor_ping_max_failures,
+				pgsql_thread___monitor_ping_interval * 1000,
+				pgsql_thread___monitor_replication_lag_use_percona_heartbeat
+			}
+		},
 		mon_user_t {
 			pgsql_thread___monitor_username,
 			pgsql_thread___monitor_password,
 			pgsql_thread___monitor_dbname
-		}
+		},
 	};
 }
 
@@ -842,15 +977,29 @@ short handle_async_check_cont(state_t& st, short _) {
 			int row_count = PQntuples(res);
 
 			if (row_count > 0) {
-				const char* value_str { PQgetvalue(res, 0, 0) };
-				bool value { strcmp(value_str, "t") == 0 };
+				if (st.task.type == task_type_t::readonly) {
+					const char* value_str { PQgetvalue(res, 0, 0) };
+					bool value { strcmp(value_str, "t") == 0 };
 
-				set_finish_st(st, ASYNC_QUERY_END,
-					op_result_t {
-						new readonly_res_t { value },
-						[] (void* v) { delete static_cast<readonly_res_t*>(v); }
-					}
-				);
+					set_finish_st(st, ASYNC_QUERY_END,
+						op_result_t {
+							new readonly_res_t { value },
+							[] (void* v) { delete static_cast<readonly_res_t*>(v); }
+						}
+					);
+				} else if (st.task.type == task_type_t::repl_lag) {
+					const char* value_str { PQgetvalue(res, 0, 0) };
+					int32_t value { std::atoi(value_str) };
+
+					set_finish_st(st, ASYNC_QUERY_END,
+						op_result_t {
+							new repl_lag_res_t { value },
+							[] (void* v) { delete static_cast<repl_lag_res_t*>(v); }
+						}
+					);
+				} else {
+					assert(0 && "Invalid task type");
+				}
 			} else {
 				const mon_srv_t& srv { st.task.op_st.srv_info };
 				const char err_t[] { "Invalid number of rows '%d'" };
@@ -858,8 +1007,8 @@ short handle_async_check_cont(state_t& st, short _) {
 
 				cstr_format(err_b, err_t, row_count);
 				proxy_error(
-					"Monitor readonly failed   addr='%s:%d' status=%d error='%s'\n",
-					srv.addr.c_str(), srv.port, status, err_b
+					"Monitor %s failed   addr='%s:%d' status=%d error='%s'\n",
+					get_task_type_str(st.task.type), srv.addr.c_str(), srv.port, status, err_b
 				);
 				set_failed_st(st, ASYNC_QUERY_FAILED, mf_unique_ptr<char>(strdup(err_b)));
 			}
@@ -879,6 +1028,12 @@ short handle_async_check_cont(state_t& st, short _) {
 			} else if (st.task.type == task_type_t::readonly) {
 				proxy_error(
 					"Monitor readonly failed   addr='%s:%d' status=%d error='%s'\n",
+					srv.addr.c_str(), srv.port, status, err.get()
+				);
+				set_failed_st(st, ASYNC_QUERY_FAILED, std::move(err));
+			} else if (st.task.type == task_type_t::repl_lag) {
+				proxy_error(
+					"Monitor repl_lag failed   addr='%s:%d' status=%d error='%s'\n",
 					srv.addr.c_str(), srv.port, status, err.get()
 				);
 				set_failed_st(st, ASYNC_QUERY_FAILED, std::move(err));
@@ -915,11 +1070,20 @@ pair<short,bool> handle_async_connect_cont(state_t& st, short revent) {
 		case PGRES_POLLING_OK:
 			pgconn.state = ASYNC_ST::ASYNC_CONNECT_END;
 
+			// connection successful, update SSL stats
+			if (PQsslInUse(pgconn.conn)) {
+				__sync_fetch_and_add(&GloPgMon->ssl_connections_OK, 1);
+			} else {
+				__sync_fetch_and_add(&GloPgMon->non_ssl_connections_OK, 1);
+			}
+
 			if (st.task.type == task_type_t::connect) {
 				st.task.end = monotonic_time();
 			} else if (st.task.type == task_type_t::ping) {
 				proc_again = true;
 			} else if (st.task.type == task_type_t::readonly) {
+				proc_again = true;
+			} else if (st.task.type == task_type_t::repl_lag) {
 				proc_again = true;
 			} else {
 				assert(0 && "Non-implemented task-type");
@@ -938,13 +1102,38 @@ pair<short,bool> handle_async_connect_cont(state_t& st, short revent) {
 	return { req_events, proc_again };
 }
 
+string get_task_query(const state_t& st) {
+	const task_type_t task_type { st.task.type };
+
+	if (task_type == task_type_t::ping) {
+		return PING_QUERY;
+	} else if (task_type == task_type_t::readonly) {
+		return READ_ONLY_QUERY;
+	} else if (task_type == task_type_t::repl_lag) {
+		repl_lag_params_t* params {
+			static_cast<repl_lag_params_t*>(st.task.op_st.op_params.get())
+		};
+
+		if (params->pt_heartbeat && strlen(params->pt_heartbeat.get())) {
+			// FIXME: This is a SQL injection vulnerability. 
+			// pt-heartbeat support for PostgreSQL is currently disabled.
+			// return string { REPLICATION_LAG_QUERY_PT_HEARTBEAT } + params->pt_heartbeat.get();
+			return REPLICATION_LAG_QUERY;
+		} else {
+			return REPLICATION_LAG_QUERY;
+		}
+	} else {
+		assert(0 && "Invalid task type");
+	}
+}
+
 short handle_async_connect_end(state_t& st, short _) {
 	pgsql_conn_t& pgconn { st.conn };
 
 	short req_events { 0 };
-	const char* QUERY { st.task.type == task_type_t::ping ? PING_QUERY : READ_ONLY_QUERY };
+	const string QUERY { get_task_query(st) };
 
-	int rc = PQsendQuery(pgconn.conn, QUERY);
+	int rc = PQsendQuery(pgconn.conn, QUERY.c_str());
 	if (rc == 0) {
 		const mon_srv_t& srv { st.task.op_st.srv_info };
 		auto err { strdup_no_lf(PQerrorMessage(pgconn.conn)) };
@@ -958,6 +1147,12 @@ short handle_async_connect_end(state_t& st, short _) {
 		} else if (st.task.type == task_type_t::readonly) {
 			proxy_error(
 				"Monitor readonly start failed   addr='%s:%d' error='%s'\n",
+				srv.addr.c_str(), srv.port, err.get()
+			);
+			set_failed_st(st, ASYNC_QUERY_FAILED, std::move(err));
+		} else if (st.task.type == task_type_t::repl_lag) {
+			proxy_error(
+				"Monitor repl_lag start failed   addr='%s:%d' error='%s'\n",
 				srv.addr.c_str(), srv.port, err.get()
 			);
 			set_failed_st(st, ASYNC_QUERY_FAILED, std::move(err));
@@ -983,6 +1178,12 @@ short handle_async_connect_end(state_t& st, short _) {
 					srv.addr.c_str(), srv.port, err.get()
 				);
 				set_failed_st(st, ASYNC_QUERY_FAILED, std::move(err));
+			} else if (st.task.type == task_type_t::repl_lag) {
+				proxy_error(
+					"Monitor repl_lag start failed   addr='%s:%d' error='%s'\n",
+					srv.addr.c_str(), srv.port, err.get()
+				);
+				set_failed_st(st, ASYNC_QUERY_FAILED, std::move(err));
 			} else {
 				assert(0 && "Invalid task type");
 			}
@@ -992,6 +1193,8 @@ short handle_async_connect_end(state_t& st, short _) {
 			if (st.task.type == task_type_t::ping) {
 				pgconn.state = ASYNC_ST::ASYNC_PING_CONT;
 			} else if (st.task.type == task_type_t::readonly) {
+				pgconn.state = ASYNC_ST::ASYNC_QUERY_CONT;
+			} else if (st.task.type == task_type_t::repl_lag) {
 				pgconn.state = ASYNC_ST::ASYNC_QUERY_CONT;
 			} else {
 				assert(0 && "Invalid task type");
@@ -1139,6 +1342,12 @@ uint64_t get_connpool_cleanup_intv(task_st_t& task) {
 		};
 
 		res = params->ping_interval;
+	} else if (task.type == task_type_t::repl_lag){
+		repl_lag_params_t* params {
+			static_cast<repl_lag_params_t*>(task.op_st.op_params.get())
+		};
+
+		res = params->ping_interval;
 	} else {
 		assert(0 && "Non-implemented task-type");
 	}
@@ -1157,18 +1366,55 @@ pair<bool,pgsql_conn_t> get_task_conn(conn_pool_t& conn_pool, task_st_t& task_st
 	}
 }
 
+static void append_conninfo_param(std::ostringstream& conninfo, const std::string& key, const std::string& val) {
+	if (val.empty()) return;
+
+	std::string escaped_val;
+	escaped_val.reserve(val.length() * 2);  // Reserve maximum possible size
+
+	for (char c : val) {
+		if (c == '\'' || c == '\\') {
+			escaped_val.push_back('\\');
+		}
+		escaped_val.push_back(c);
+	}
+
+	conninfo << key << "='" << escaped_val << "' ";
+}
+
 string build_conn_str(const task_st_t& task_st) {
 	const mon_srv_t& srv_info { task_st.op_st.srv_info };
 	const mon_user_t& user_info { task_st.op_st.user_info };
 
-	return string {
-		"host='" + srv_info.addr + "' "
-			+ "port='" + std::to_string(srv_info.port) + "' "
-			+ "user='" + user_info.user + "' "
-			+ "password='" + user_info.pass + "' "
-			+ "dbname='" + user_info.dbname + "' "
-			+ "application_name=ProxySQL-Monitor"
-	};
+	std::ostringstream conninfo;
+	append_conninfo_param(conninfo, "user", user_info.user); // username
+	append_conninfo_param(conninfo, "password", user_info.pass); // password
+	append_conninfo_param(conninfo, "dbname", user_info.dbname); // dbname
+	append_conninfo_param(conninfo, "host", srv_info.addr); // backend address
+	// port=0 means address is a Unix-domain socket path; libpq rejects
+	// "port=0" with "invalid port number: \"0\"".
+	if (srv_info.port != 0) {
+		conninfo << "port=" << srv_info.port << " ";
+	}
+	conninfo << "application_name=ProxySQL-Monitor "; // application name
+	if (srv_info.ssl) {
+		conninfo << "sslmode='require' "; // SSL required
+		append_conninfo_param(conninfo, "sslkey", srv_info.ssl_opt.ssl_p2s_key);
+		append_conninfo_param(conninfo, "sslcert", srv_info.ssl_opt.ssl_p2s_cert);
+		append_conninfo_param(conninfo, "sslrootcert", srv_info.ssl_opt.ssl_p2s_ca);
+		append_conninfo_param(conninfo, "sslcrl", srv_info.ssl_opt.ssl_p2s_crl);
+		append_conninfo_param(conninfo, "sslcrldir", srv_info.ssl_opt.ssl_p2s_crlpath);
+		// Per-server TLS protocol pinning was pre-parsed from
+		// ssl_protocol_version_range when the row was loaded into
+		// PgSQLServers_SslParams. Empty fields => libpq defaults.
+		if (!srv_info.ssl_opt.ssl_min_protocol_version.empty())
+			append_conninfo_param(conninfo, "ssl_min_protocol_version", srv_info.ssl_opt.ssl_min_protocol_version);
+		if (!srv_info.ssl_opt.ssl_max_protocol_version.empty())
+			append_conninfo_param(conninfo, "ssl_max_protocol_version", srv_info.ssl_opt.ssl_max_protocol_version);
+	} else {
+		conninfo << "sslmode='disable' "; // not supporting SSL
+	}
+	return conninfo.str();
 }
 
 pgsql_conn_t create_new_conn(task_st_t& task_st) {
@@ -1284,6 +1530,7 @@ struct tasks_intvs_t {
 	uint64_t next_ping_at;
 	uint64_t next_connect_at;
 	uint64_t next_readonly_at;
+	uint64_t next_repl_lag_at;
 };
 
 struct task_poll_t {
@@ -1528,7 +1775,8 @@ bool is_task_success(pgsql_conn_t& c, task_st_t& st) {
 			|| (c.state != ASYNC_ST::ASYNC_QUERY_FAILED && c.state != ASYNC_QUERY_TIMEOUT))
 		&& ((c.state == ASYNC_ST::ASYNC_CONNECT_END && st.type == task_type_t::connect)
 			|| (c.state == ASYNC_ST::ASYNC_PING_END && st.type == task_type_t::ping)
-			|| (c.state == ASYNC_ST::ASYNC_QUERY_END && st.type == task_type_t::readonly));
+			|| (c.state == ASYNC_ST::ASYNC_QUERY_END && st.type == task_type_t::readonly)
+			|| (c.state == ASYNC_ST::ASYNC_QUERY_END && st.type == task_type_t::repl_lag));
 }
 
 bool is_task_finish(pgsql_conn_t& c, task_st_t& st) {
@@ -1538,15 +1786,16 @@ bool is_task_finish(pgsql_conn_t& c, task_st_t& st) {
 			|| (c.state == ASYNC_ST::ASYNC_QUERY_FAILED || c.state == ASYNC_ST::ASYNC_QUERY_TIMEOUT))
 		|| (c.state == ASYNC_ST::ASYNC_CONNECT_END && st.type == task_type_t::connect)
 		|| (c.state == ASYNC_ST::ASYNC_PING_END && st.type == task_type_t::ping)
-		|| (c.state == ASYNC_ST::ASYNC_QUERY_END && st.type == task_type_t::readonly);
+		|| (c.state == ASYNC_ST::ASYNC_QUERY_END && st.type == task_type_t::readonly)
+		|| (c.state == ASYNC_ST::ASYNC_QUERY_END && st.type == task_type_t::repl_lag);
 }
 
 void update_connect_table(SQLite3DB* db, state_t& state) {
-	sqlite3_stmt* stmt = nullptr;
-	int rc = db->prepare_v2(
-		"INSERT OR REPLACE INTO pgsql_server_connect_log VALUES (?1 , ?2 , ?3 , ?4 , ?5)", &stmt
+	auto [rc, stmt_unique] = db->prepare_v2(
+		"INSERT OR REPLACE INTO pgsql_server_connect_log VALUES (?1 , ?2 , ?3 , ?4 , ?5)"
 	);
 	ASSERT_SQLITE_OK(rc, db);
+	sqlite3_stmt* stmt = stmt_unique.get();
 
 	uint64_t op_dur_us { state.task.end - state.task.start };
 
@@ -1564,7 +1813,7 @@ void update_connect_table(SQLite3DB* db, state_t& state) {
 
 	sqlite_clear_bindings(stmt);
 	sqlite_reset_statement(stmt);
-	sqlite_finalize_statement(stmt);
+	// RAII auto-finalizes stmt
 
 	if (state.conn.err) {
 		const mon_srv_t& srv { state.task.op_st.srv_info };
@@ -1587,11 +1836,11 @@ void update_connect_table(SQLite3DB* db, state_t& state) {
 }
 
 void update_ping_table(SQLite3DB* db, state_t& state) {
-	sqlite3_stmt* stmt = nullptr;
-	int rc = db->prepare_v2(
-		"INSERT OR REPLACE INTO pgsql_server_ping_log VALUES (?1, ?2, ?3, ?4, ?5)", &stmt
+	auto [rc, stmt_unique] = db->prepare_v2(
+		"INSERT OR REPLACE INTO pgsql_server_ping_log VALUES (?1, ?2, ?3, ?4, ?5)"
 	);
 	ASSERT_SQLITE_OK(rc, db);
+	sqlite3_stmt* stmt = stmt_unique.get();
 
 	uint64_t op_dur_us { state.task.end - state.task.start };
 
@@ -1609,7 +1858,7 @@ void update_ping_table(SQLite3DB* db, state_t& state) {
 
 	sqlite_clear_bindings(stmt);
 	sqlite_reset_statement(stmt);
-	sqlite_finalize_statement(stmt);
+	// RAII auto-finalizes stmt
 
 	if (state.conn.err) {
 		const mon_srv_t& srv { state.task.op_st.srv_info };
@@ -1636,11 +1885,11 @@ void update_readonly_table(SQLite3DB* db, state_t& state) {
 		static_cast<readonly_res_t*>(state.task.op_st.op_result.get())
 	};
 
-	sqlite3_stmt* stmt = nullptr;
-	int rc = db->prepare_v2(
-		"INSERT OR REPLACE INTO pgsql_server_read_only_log VALUES (?1, ?2, ?3, ?4, ?5, ?6)", &stmt
+	auto [rc, stmt_unique] = db->prepare_v2(
+		"INSERT OR REPLACE INTO pgsql_server_read_only_log VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
 	);
 	ASSERT_SQLITE_OK(rc, db);
+	sqlite3_stmt* stmt = stmt_unique.get();
 
 	uint64_t op_dur_us { state.task.end - state.task.start };
 
@@ -1665,7 +1914,7 @@ void update_readonly_table(SQLite3DB* db, state_t& state) {
 
 	sqlite_clear_bindings(stmt);
 	sqlite_reset_statement(stmt);
-	sqlite_finalize_statement(stmt);
+	// RAII auto-finalizes stmt
 
 	if (state.conn.err) {
 		const mon_srv_t& srv { state.task.op_st.srv_info };
@@ -1684,6 +1933,62 @@ void update_readonly_table(SQLite3DB* db, state_t& state) {
 		__sync_fetch_and_add(&GloPgMon->readonly_check_ERR, 1);
 	} else {
 		__sync_fetch_and_add(&GloPgMon->readonly_check_OK, 1);
+	}
+}
+
+void update_repl_lag_table(SQLite3DB* db, state_t& state) {
+	repl_lag_res_t* op_result {
+		static_cast<repl_lag_res_t*>(state.task.op_st.op_result.get())
+	};
+
+	auto [rc, stmt_unique] = db->prepare_v2(
+		"INSERT OR REPLACE INTO pgsql_server_replication_lag_log VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
+	);
+	ASSERT_SQLITE_OK(rc, db);
+	sqlite3_stmt* stmt = stmt_unique.get();
+
+	uint64_t op_dur_us { state.task.end - state.task.start };
+
+	sqlite_bind_text(stmt, 1, state.task.op_st.srv_info.addr.c_str());
+	sqlite_bind_int(stmt, 2, state.task.op_st.srv_info.port);
+
+	uint64_t time_start_us { realtime_time() - op_dur_us };
+	sqlite_bind_int64(stmt, 3, time_start_us);
+
+	uint64_t succ_time_us { is_task_success(state.conn, state.task) ? op_dur_us : 0 };
+	sqlite_bind_int64(stmt, 4, succ_time_us);
+
+	if (op_result) {
+		sqlite_bind_int64(stmt, 5, op_result->val);
+	} else {
+		sqlite_bind_null(stmt, 5);
+	}
+
+	sqlite_bind_text(stmt, 6, state.conn.err.get());
+
+	SAFE_SQLITE3_STEP2(stmt);
+
+	sqlite_clear_bindings(stmt);
+	sqlite_reset_statement(stmt);
+	// RAII auto-finalizes stmt
+
+	if (state.conn.err) {
+		const mon_srv_t& srv { state.task.op_st.srv_info };
+		char* srv_addr { const_cast<char*>(srv.addr.c_str()) };
+		int err_code { 0 };
+
+		if (state.conn.state != ASYNC_ST::ASYNC_QUERY_TIMEOUT) {
+			err_code = 9100 + state.conn.state;
+		} else {
+			err_code = ER_PROXYSQL_REPL_LAG_TIMEOUT;
+		};
+
+		PgHGM->p_update_pgsql_error_counter(
+			p_pgsql_error_type::proxysql, 0, srv_addr, srv.port, err_code
+		);
+		__sync_fetch_and_add(&GloPgMon->repl_lag_check_ERR, 1);
+	} else {
+		__sync_fetch_and_add(&GloPgMon->repl_lag_check_OK, 1);
 	}
 }
 
@@ -1706,7 +2011,7 @@ const char CHECK_HOST_ERR_LIMIT_QUERY[] {
 		" COUNT(*) = ?"
 };
 
-thread_local sqlite3_stmt* CHECK_HOST_ERR_LIMIT_STMT { nullptr };
+thread_local stmt_unique_ptr CHECK_HOST_ERR_LIMIT_STMT {};
 
 void shunn_non_resp_srv(SQLite3DB* db, state_t& state) {
 	ping_params_t* params { static_cast<ping_params_t*>(state.task.op_st.op_params.get()) };
@@ -1716,17 +2021,20 @@ void shunn_non_resp_srv(SQLite3DB* db, state_t& state) {
 	int port { srv.port };
 	int32_t max_fails { params->max_failures };
 
-	if (CHECK_HOST_ERR_LIMIT_STMT == nullptr) {
-		int rc = db->prepare_v2(CHECK_HOST_ERR_LIMIT_QUERY, &CHECK_HOST_ERR_LIMIT_STMT);
+	if (!CHECK_HOST_ERR_LIMIT_STMT) {
+		auto [rc, stmt_unique] = db->prepare_v2(CHECK_HOST_ERR_LIMIT_QUERY);
 		ASSERT_SQLITE_OK(rc, db);
+		CHECK_HOST_ERR_LIMIT_STMT = std::move(stmt_unique);
 	}
 
-	sqlite_bind_text(CHECK_HOST_ERR_LIMIT_STMT, 1, addr);
-	sqlite_bind_int(CHECK_HOST_ERR_LIMIT_STMT, 2, port);
-	sqlite_bind_int(CHECK_HOST_ERR_LIMIT_STMT, 3, max_fails);
-	sqlite_bind_int(CHECK_HOST_ERR_LIMIT_STMT, 4, max_fails);
+	sqlite3_stmt* check_host_err_limit_stmt = CHECK_HOST_ERR_LIMIT_STMT.get();
 
-	unique_ptr<SQLite3_result> limit_set { sqlite_fetch_and_clear(CHECK_HOST_ERR_LIMIT_STMT) };
+	sqlite_bind_text(check_host_err_limit_stmt, 1, addr);
+	sqlite_bind_int(check_host_err_limit_stmt, 2, port);
+	sqlite_bind_int(check_host_err_limit_stmt, 3, max_fails);
+	sqlite_bind_int(check_host_err_limit_stmt, 4, max_fails);
+
+	unique_ptr<SQLite3_result> limit_set { sqlite_fetch_and_clear(check_host_err_limit_stmt) };
 
 	if (limit_set && limit_set->rows_count) {
 		bool shunned { PgHGM->shun_and_killall(addr, port) };
@@ -1755,22 +2063,25 @@ const char HOST_FETCH_UPD_LATENCY_QUERY[] {
 	" GROUP BY hostname, port"
 };
 
-thread_local sqlite3_stmt* FETCH_HOST_LATENCY_STMT { nullptr };
+thread_local stmt_unique_ptr FETCH_HOST_LATENCY_STMT {};
 
 void update_srv_latency(SQLite3DB* db, state_t& state) {
 	const mon_srv_t& srv { state.task.op_st.srv_info };
 	char* addr { const_cast<char*>(srv.addr.c_str()) };
 	int port { srv.port };
 
-	if (FETCH_HOST_LATENCY_STMT == nullptr) {
-		int rc = db->prepare_v2(HOST_FETCH_UPD_LATENCY_QUERY, &FETCH_HOST_LATENCY_STMT);
+	if (!FETCH_HOST_LATENCY_STMT) {
+		auto [rc, stmt_unique] = db->prepare_v2(HOST_FETCH_UPD_LATENCY_QUERY);
 		ASSERT_SQLITE_OK(rc, db);
+		FETCH_HOST_LATENCY_STMT = std::move(stmt_unique);
 	}
 
-	sqlite_bind_text(FETCH_HOST_LATENCY_STMT, 1, addr);
-	sqlite_bind_int(FETCH_HOST_LATENCY_STMT, 2, port);
+	sqlite3_stmt* fetch_host_latency_stmt = FETCH_HOST_LATENCY_STMT.get();
 
-	unique_ptr<SQLite3_result> resultset { sqlite_fetch_and_clear(FETCH_HOST_LATENCY_STMT) };
+	sqlite_bind_text(fetch_host_latency_stmt, 1, addr);
+	sqlite_bind_int(fetch_host_latency_stmt, 2, port);
+
+	unique_ptr<SQLite3_result> resultset { sqlite_fetch_and_clear(fetch_host_latency_stmt) };
 
 	if (resultset && resultset->rows_count) {
 		for (const SQLite3_row* srv : resultset->rows) {
@@ -1858,6 +2169,28 @@ void perf_readonly_actions(SQLite3DB* db, state_t& state) {
 	}
 }
 
+void perf_repl_lag_actions(SQLite3DB* db, state_t& state) {
+	// Update table entries
+	update_repl_lag_table(db, state);
+
+	// Perform the repl_lag actions
+	{
+		const op_st_t& op_st { state.task.op_st };
+		const mon_srv_t& srv { state.task.op_st.srv_info };
+
+		if (is_task_success(state.conn, state.task)) {
+			repl_lag_res_t* op_result { static_cast<repl_lag_res_t*>(op_st.op_result.get()) };
+
+			// TODO: Override replication is hardcoded to 'false', this should be revisited.
+			PgHGM->replication_lag_action({{ srv.hostgroup_id, srv.addr, srv.port, op_result->val, false }});
+		} else {
+			proxy_error(
+				"Replication lag checked failed   error='%s'\n", state.conn.err.get()
+			);
+		}
+	}
+}
+
 uint64_t get_task_timeout(task_st_t& task) {
 	uint64_t task_to = 0;
 
@@ -1876,6 +2209,12 @@ uint64_t get_task_timeout(task_st_t& task) {
 	} else if (task.type == task_type_t::readonly) {
 		readonly_params_t* params {
 			static_cast<readonly_params_t*>(task.op_st.op_params.get())
+		};
+
+		task_to = params->timeout;
+	} else if (task.type == task_type_t::repl_lag) {
+		repl_lag_params_t* params {
+			static_cast<repl_lag_params_t*>(task.op_st.op_params.get())
 		};
 
 		task_to = params->timeout;
@@ -1904,6 +2243,12 @@ uint64_t get_task_max_ping_fails(task_st_t& task) {
 	} else if (task.type == task_type_t::readonly) {
 		readonly_params_t* params {
 			static_cast<readonly_params_t*>(task.op_st.op_params.get())
+		};
+
+		max_fails = params->ping_max_failures;
+	} else if (task.type == task_type_t::repl_lag) {
+		repl_lag_params_t* params {
+			static_cast<repl_lag_params_t*>(task.op_st.op_params.get())
 		};
 
 		max_fails = params->ping_max_failures;
@@ -1954,6 +2299,18 @@ void proc_task_state(state_t& state, uint64_t task_start) {
 		} else if (is_task_finish(state.conn, state.task)) {
 			perf_readonly_actions(&GloPgMon->monitordb, state);
 		}
+	} else if (state.task.type == task_type_t::repl_lag) {
+		if (monotonic_time() - state.task.start > get_task_timeout(state.task)) {
+			// TODO: Unified state processing
+			pg_conn.state = ASYNC_ST::ASYNC_QUERY_TIMEOUT;
+			pg_conn.err = mf_unique_ptr<char>(strdup("Operation timed out"));
+			state.task.end = monotonic_time();
+
+			// TODO: proxy_error + metrics update
+			perf_repl_lag_actions(&GloPgMon->monitordb, state);
+		} else if (is_task_finish(state.conn, state.task)) {
+			perf_repl_lag_actions(&GloPgMon->monitordb, state);
+		}
 	} else {
 		assert(0 && "Non-implemented task-type");
 	}
@@ -1988,6 +2345,20 @@ void* worker_thread(void* args) {
 	bool recv_stop_signal = 0;
 	uint64_t prev_it_time = 0;
 
+	//                        VARIABLE SYNCHRONIZATION
+	///////////////////////////////////////////////////////////////////////////
+	// NOTE: Ideally this section should be removed. It's required since some monitoring
+	// actions can internally use `pgsql_thread___` variables. This actions normally
+	// belong to 'PgSQL_HostGroups_Manager' and are out of the scope of this module, for
+	// now, until a refactor of those actions can take place and parametrize this
+	// configurations, this sync mechanism is required.
+	///////////////////////////////////////////////////////////////////////////
+	// Initial Monitor thread variables version
+	unsigned int PgSQL_Thread__variables_version = GloPTH->get_global_version();
+	// PgSQL thread structure used for variable refreshing
+	unique_ptr<PgSQL_Thread> pgsql_thread { init_pgsql_thread_struct() };
+	///////////////////////////////////////////////////////////////////////////
+
 	// Insert dummy task for scheduler comms
 	add_scheduler_comm_task(tasks_queue, task_poll);
 
@@ -2001,6 +2372,18 @@ void* worker_thread(void* args) {
 				continue;
 			}
 		}
+
+		//                     VARIABLE SYNCHRONIZATION
+		///////////////////////////////////////////////////////////////////////
+		// See NOTE above on this section.
+		///////////////////////////////////////////////////////////////////////
+		// Check variable version changes; refresh if needed
+		unsigned int glover = GloPTH->get_global_version();
+		if (PgSQL_Thread__variables_version < glover) {
+			PgSQL_Thread__variables_version = glover;
+			pgsql_thread->refresh_variables();
+		}
+		///////////////////////////////////////////////////////////////////////
 
 		// Fetch the next tasks from the queue
 		{
@@ -2061,7 +2444,7 @@ void* worker_thread(void* args) {
 			add_task(task_poll, POLLOUT, std::move(init_st));
 		}
 
-		uint64_t next_timeout_at = ULONG_LONG_MAX;
+		uint64_t next_timeout_at = ULLONG_MAX;
 		uint64_t tasks_start = monotonic_time();
 
 		// Continue processing tasks; Next async operation
@@ -2171,16 +2554,16 @@ void* worker_thread(void* args) {
 		}
 	}
 
-	sqlite_finalize_statement(CHECK_HOST_ERR_LIMIT_STMT);
-	sqlite_finalize_statement(FETCH_HOST_LATENCY_STMT);
+	CHECK_HOST_ERR_LIMIT_STMT.reset();
+	FETCH_HOST_LATENCY_STMT.reset();
 
 	return NULL;
 }
 
 void maint_monitor_table(SQLite3DB* db, const char query[], const ping_params_t& params) {
-	sqlite3_stmt* stmt { nullptr };
-	int rc = db->prepare_v2(query, &stmt);
+	auto [rc, stmt_unique] = db->prepare_v2(query);
 	ASSERT_SQLITE_OK(rc, db);
+	sqlite3_stmt* stmt = stmt_unique.get();
 
 	if (pgsql_thread___monitor_history < (params.interval * (params.max_failures + 1)) / 1000) {
 		if (static_cast<uint64_t>(params.interval) < uint64_t(3600000) * 1000) {
@@ -2194,7 +2577,7 @@ void maint_monitor_table(SQLite3DB* db, const char query[], const ping_params_t&
 
 	sqlite_clear_bindings(stmt);
 	sqlite_reset_statement(stmt);
-	sqlite_finalize_statement(stmt);
+	// RAII auto-finalizes stmt
 }
 
 const char MAINT_PING_LOG_QUERY[] {
@@ -2207,6 +2590,10 @@ const char MAINT_CONNECT_LOG_QUERY[] {
 
 const char MAINT_READONLY_LOG_QUERY[] {
 	"DELETE FROM pgsql_server_read_only_log WHERE time_start_us < ?1"
+};
+
+const char MAINT_REPLICATION_LAG_LOG_QUERY[] {
+	"DELETE FROM pgsql_server_replication_lag_log WHERE time_start_us < ?1"
 };
 
 /**
@@ -2242,6 +2629,15 @@ void maint_mon_tables(
 		);
 		maint_monitor_table(
 			&GloPgMon->monitordb, MAINT_READONLY_LOG_QUERY, tasks_conf.ping.params
+		);
+	}
+
+	if (next_intvs.next_repl_lag_at <= intv_start) {
+		proxy_debug(PROXY_DEBUG_MONITOR, 5,
+			"Performed REPLICATION_LAG table maintenance   intv_start=%lu\n", intv_start
+		);
+		maint_monitor_table(
+			&GloPgMon->monitordb, MAINT_REPLICATION_LAG_LOG_QUERY, tasks_conf.ping.params
 		);
 	}
 }
@@ -2309,6 +2705,23 @@ vector<task_batch_t> build_intv_batches(
 		);
 	}
 
+	if (next_intvs.next_repl_lag_at <= intv_start && tasks_conf.repl_lag.srvs_info->rows_count) {
+		intv_tasks.push_back({
+			task_type_t::repl_lag,
+			uint64_t(tasks_conf.repl_lag.srvs_info->rows_count),
+			tasks_conf.repl_lag.params.interval,
+			tasks_conf.repl_lag.params.interval_window,
+			intv_start,
+			create_simple_tasks<repl_lag_conf_t,repl_lag_params_t>(
+				intv_start, tasks_conf.user_info, tasks_conf.repl_lag, task_type_t::repl_lag
+			)
+		});
+		proxy_debug(PROXY_DEBUG_MONITOR, 5,
+			"Created REPL_LAG tasks   tasks=%lu intv_start=%lu\n",
+			intv_tasks.back().tasks.size(), intv_start
+		);
+	}
+
 	return intv_tasks;
 }
 
@@ -2343,6 +2756,13 @@ tasks_intvs_t compute_next_intvs(
 			upd_intvs.next_readonly_at = intv_start + conf.readonly.params.interval;
 		} else {
 			upd_intvs.next_readonly_at = ULONG_MAX;
+		}
+	}
+	if (next_intvs.next_repl_lag_at <= intv_start && conf.repl_lag.params.interval != 0) {
+		if (conf.repl_lag.params.interval != 0) {
+			upd_intvs.next_repl_lag_at = intv_start + conf.repl_lag.params.interval;
+		} else {
+			upd_intvs.next_repl_lag_at = ULONG_MAX;
 		}
 	}
 
@@ -2391,25 +2811,27 @@ void* PgSQL_monitor_scheduler_thread() {
 	tasks_intvs_t next_intvs {};
 	vector<task_batch_t> tasks_batches {};
 
-	while (GloPgMon->shutdown == false && pgsql_thread___monitor_enabled == true) {
+	while (GloPgMon->shutdown.load(std::memory_order_acquire) == false && pgsql_thread___monitor_enabled == true) {
 		cur_intv_start = monotonic_time();
 
 		uint64_t closest_intv {
 			std::min({
 				next_intvs.next_ping_at,
 				next_intvs.next_connect_at,
-				next_intvs.next_readonly_at
+				next_intvs.next_readonly_at,
+				next_intvs.next_repl_lag_at
 			})
 		};
 
 		if (cur_intv_start >= closest_intv)	 {
 			proxy_debug(PROXY_DEBUG_MONITOR, 5,
-				"Scheduling interval   time=%lu delta=%lu ping=%lu connect=%lu readonly=%lu\n",
+				"Scheduling interval   time=%lu delta=%lu ping=%lu connect=%lu readonly=%lu repl_lag=%lu\n",
 				cur_intv_start,
 				cur_intv_start - closest_intv,
 				next_intvs.next_ping_at,
 				next_intvs.next_connect_at,
-				next_intvs.next_readonly_at
+				next_intvs.next_readonly_at,
+				next_intvs.next_repl_lag_at
 			);
 
 			// Quick exit during shutdown/restart
@@ -2417,13 +2839,82 @@ void* PgSQL_monitor_scheduler_thread() {
 
 			// Check variable version changes; refresh if needed
 			unsigned int glover = GloPTH->get_global_version();
+			bool vars_refreshed = false;
 			if (PgSQL_Thread__variables_version < glover) {
 				PgSQL_Thread__variables_version = glover;
 				pgsql_thread->refresh_variables();
+				vars_refreshed = true;
 			}
 
 			// Fetch config for next task scheduling
 			tasks_conf_t tasks_conf { fetch_updated_conf(GloPgMon, PgHGM) };
+
+			// When runtime variables were just refreshed (i.e. someone did
+			// SET pgsql-monitor_*_interval=<smaller_value>; LOAD PGSQL
+			// VARIABLES TO RUNTIME;), the newly-read interval values may be
+			// smaller than the ones we used the last time we recomputed
+			// next_intvs. Without the clamp below, each next_<type>_at still
+			// points at the cycle that was scheduled under the OLD (larger)
+			// interval, so a LOAD doesn't visibly take effect until the old
+			// cycle elapses — which can be up to ~2 minutes for connect
+			// checks under the default pgsql-monitor_connect_interval=120000.
+			//
+			// Example of the surprise this avoids:
+			//
+			//   T=0    proxysql starts with monitor_connect_interval=120000,
+			//          next_connect_at is scheduled for T=120000ms.
+			//   T=5    user runs SET pgsql-monitor_connect_interval=2000;
+			//          LOAD PGSQL VARIABLES TO RUNTIME; expecting the next
+			//          connect cycle within ~2 seconds.
+			//   T=7    without this clamp, next_connect_at is still 120000
+			//          — no new connect fires for another 113 seconds.
+			//
+			// The fix: after every successful refresh, shrink any
+			// next_<type>_at that's now farther in the future than
+			// (now + new_interval). We never push next_<type>_at further
+			// into the future — growing the interval should not delay an
+			// already-imminent check — so the direction of the clamp is
+			// one-way (min()). Types whose interval is 0 (disabled) are
+			// skipped and handled by the existing compute_next_intvs()
+			// which sets them to ULONG_MAX.
+			if (vars_refreshed) {
+				if (tasks_conf.ping.params.interval > 0) {
+					const uint64_t clamped = cur_intv_start + tasks_conf.ping.params.interval;
+					if (next_intvs.next_ping_at > clamped) {
+						proxy_debug(PROXY_DEBUG_MONITOR, 5,
+							"Clamped next_ping_at   old=%lu new=%lu interval=%d\n",
+							next_intvs.next_ping_at, clamped, tasks_conf.ping.params.interval);
+						next_intvs.next_ping_at = clamped;
+					}
+				}
+				if (tasks_conf.connect.params.interval > 0) {
+					const uint64_t clamped = cur_intv_start + tasks_conf.connect.params.interval;
+					if (next_intvs.next_connect_at > clamped) {
+						proxy_debug(PROXY_DEBUG_MONITOR, 5,
+							"Clamped next_connect_at   old=%lu new=%lu interval=%d\n",
+							next_intvs.next_connect_at, clamped, tasks_conf.connect.params.interval);
+						next_intvs.next_connect_at = clamped;
+					}
+				}
+				if (tasks_conf.readonly.params.interval > 0) {
+					const uint64_t clamped = cur_intv_start + tasks_conf.readonly.params.interval;
+					if (next_intvs.next_readonly_at > clamped) {
+						proxy_debug(PROXY_DEBUG_MONITOR, 5,
+							"Clamped next_readonly_at   old=%lu new=%lu interval=%d\n",
+							next_intvs.next_readonly_at, clamped, tasks_conf.readonly.params.interval);
+						next_intvs.next_readonly_at = clamped;
+					}
+				}
+				if (tasks_conf.repl_lag.params.interval > 0) {
+					const uint64_t clamped = cur_intv_start + tasks_conf.repl_lag.params.interval;
+					if (next_intvs.next_repl_lag_at > clamped) {
+						proxy_debug(PROXY_DEBUG_MONITOR, 5,
+							"Clamped next_repl_lag_at   old=%lu new=%lu interval=%d\n",
+							next_intvs.next_repl_lag_at, clamped, tasks_conf.repl_lag.params.interval);
+						next_intvs.next_repl_lag_at = clamped;
+					}
+				}
+			}
 
 			// Perform table maintenance
 			maint_mon_tables(tasks_conf, next_intvs, cur_intv_start);
@@ -2490,7 +2981,8 @@ void* PgSQL_monitor_scheduler_thread() {
 				std::min({
 					next_intvs.next_ping_at,
 					next_intvs.next_connect_at,
-					next_intvs.next_readonly_at
+					next_intvs.next_readonly_at,
+					next_intvs.next_repl_lag_at
 				})
 			};
 			const uint64_t next_intv_diff { upd_closest_intv < curtime ? 0 : upd_closest_intv - curtime };
@@ -2536,6 +3028,367 @@ void* PgSQL_monitor_scheduler_thread() {
 
 	return nullptr;
 }
+
+// ============================================================================
+// PgSQL_Monitor DNS cache
+// ----------------------------------------------------------------------------
+// Mirrors MySQL_Monitor's DNS cache: a hostname -> [IP] map populated by a
+// background resolver loop and consulted on the PgSQL connect path so the
+// worker thread doesn't block on getaddrinfo inside libpq's PQconnectStart.
+//
+// Cache state is INDEPENDENT of MySQL_Monitor's cache.  The two share only
+// the DNS_Cache class itself (see DNS_Cache.hpp); each monitor owns its own
+// DNS_Cache instance, its own counters, and its own resolver loop.  This way
+// pgsql-monitor_local_dns_cache_* settings on one side don't affect the
+// other.
+// ============================================================================
+
+std::string PgSQL_Monitor::dns_lookup(const std::string& hostname,
+	bool return_hostname_if_lookup_fails, size_t* ip_count) {
+
+	static thread_local std::shared_ptr<DNS_Cache> dns_cache_thread;
+
+	// If hostname is already an IP, return as-is (cache miss avoided).
+	if (hostname.empty() || validate_ip(hostname))
+		return hostname;
+
+	if (!dns_cache_thread && GloPgMon)
+		dns_cache_thread = GloPgMon->dns_cache;
+
+	std::string ip;
+
+	if (dns_cache_thread) {
+		ip = dns_cache_thread->lookup(trim(hostname), ip_count);
+	}
+
+	// Apply the hostname fallback even when the cache facade is unavailable
+	// (e.g. early startup or shutdown), so callers consistently get the
+	// hostname back as documented when return_hostname_if_lookup_fails=true.
+	if (ip.empty() && return_hostname_if_lookup_fails) {
+		ip = hostname;
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+			"DNS cache lookup was a miss. (Hostname:[%s])\n", hostname.c_str());
+	}
+
+	return ip;
+}
+
+std::string PgSQL_Monitor::dns_lookup(const char* hostname,
+	bool return_hostname_if_lookup_fails, size_t* ip_count) {
+	return PgSQL_Monitor::dns_lookup(std::string(hostname),
+		return_hostname_if_lookup_fails, ip_count);
+}
+
+bool PgSQL_Monitor::update_dns_cache_from_pgsql_conn(PGconn* pgsql_conn) {
+	if (!pgsql_conn) return false;
+
+	// PQhost returns "host" parameter value (hostname or IP); PQsocket gives
+	// the actual fd we can call getpeername on.
+	const char* host_param = PQhost(pgsql_conn);
+	if (!host_param || !host_param[0])
+		return false;
+
+	const std::string hostname { host_param };
+
+	// If user configured an IP directly, no cache update needed.
+	if (validate_ip(hostname))
+		return false;
+
+	const int sock = PQsocket(pgsql_conn);
+	if (sock < 0)
+		return false;
+
+	const std::string& ip_addr = get_connected_peer_ip_from_socket(sock);
+	if (ip_addr.empty())
+		return false;
+
+	return _dns_cache_update(hostname, { ip_addr });
+}
+
+bool PgSQL_Monitor::_dns_cache_update(const std::string& hostname,
+	std::vector<std::string>&& ip_address) {
+
+	static thread_local std::shared_ptr<DNS_Cache> dns_cache_thread;
+
+	if (!dns_cache_thread && GloPgMon)
+		dns_cache_thread = GloPgMon->dns_cache;
+
+	if (dns_cache_thread) {
+		if (dns_cache_thread->add_if_not_exist(trim(hostname), std::move(ip_address))) {
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+				"Direct DNS cache update. (Hostname:[%s] IP:[%s])\n",
+				hostname.c_str(), debug_iplisttostring(ip_address).c_str());
+			return true;
+		}
+	}
+
+	return false;
+}
+
+void PgSQL_Monitor::trigger_dns_cache_update() {
+	if (GloPgMon) {
+		GloPgMon->force_dns_cache_update = true;
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+			"Triggering PgSQL DNS cache update sequence.\n");
+	}
+}
+
+// Background loop that drives the pgsql DNS cache.  Mirrors
+// MySQL_Monitor::monitor_dns_cache structurally but pulls hostnames from
+// PgHGM->pgsql_servers_to_monitor instead of MyHGM, and reads the
+// pgsql-monitor_local_dns_* settings.
+void* PgSQL_Monitor::monitor_dns_cache() {
+	constexpr unsigned int num_dns_resolver_threads = 1;
+	constexpr unsigned int num_dns_resolver_max_threads = 32;
+	unsigned long long t1 = 0;
+	unsigned long long t2 = 0;
+	unsigned long long next_loop_at = 0;
+	bool dns_cache_enable = true;
+
+	// Per-instance Thread variable refresher.  Without this the pgsql_thread___
+	// globals stay at their startup defaults inside this worker.  Refresh
+	// once up-front so the first loop iteration sees the configured TTL /
+	// refresh interval rather than zero-initialized values — the
+	// version-bump check below then only fires on later config changes.
+	std::unique_ptr<PgSQL_Thread> pgsql_thr { new PgSQL_Thread() };
+	pgsql_thr->curtime = monotonic_time();
+	pgsql_thr->refresh_variables();
+	unsigned int local_thread_vars_version = GloPTH ? GloPTH->get_global_version() : 0;
+	if (pgsql_thread___monitor_local_dns_cache_ttl == 0 ||
+		pgsql_thread___monitor_local_dns_cache_refresh_interval == 0) {
+		dns_cache_enable = false;
+		dns_cache->set_enabled_flag(false);
+	} else {
+		dns_cache->set_enabled_flag(true);
+	}
+
+	std::list<DNS_Cache_Record> dns_records_bookkeeping;
+	wqueue<DNS_Resolve_Data*> dns_resolver_queue;
+
+	while (GloPgMon->shutdown.load(std::memory_order_acquire) == false) {
+		if (!GloPTH) return nullptr;
+
+		const unsigned int glover = GloPTH->get_global_version();
+		if (local_thread_vars_version < glover) {
+			local_thread_vars_version = glover;
+			pgsql_thr->refresh_variables();
+			next_loop_at = 0;
+
+			if (pgsql_thread___monitor_local_dns_cache_ttl == 0 ||
+				pgsql_thread___monitor_local_dns_cache_refresh_interval == 0) {
+				dns_cache_enable = false;
+				dns_cache->set_enabled_flag(false);
+				dns_cache->clear();
+				dns_records_bookkeeping.clear();
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "PgSQL DNS cache is disabled.\n");
+			} else {
+				dns_cache_enable = true;
+				dns_cache->set_enabled_flag(true);
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "PgSQL DNS cache is enabled.\n");
+			}
+		}
+
+		if (!dns_cache_enable) {
+			usleep(200000);
+			continue;
+		}
+
+		t1 = monotonic_time();
+		if (t1 >= next_loop_at || force_dns_cache_update) {
+			force_dns_cache_update = false;
+			next_loop_at = t1 + (1000ULL * pgsql_thread___monitor_local_dns_cache_refresh_interval);
+
+			// Collect the set of distinct hostnames currently configured.  Done
+			// under the pgsql_servers_to_monitor mutex because the resultset
+			// pointer can be swapped by an admin LOAD.
+			std::set<std::string> hostnames;
+			{
+				std::lock_guard<std::mutex> guard(PgHGM->pgsql_servers_to_monitor_mutex);
+				SQLite3_result* rs = PgHGM->pgsql_servers_to_monitor;
+				if (rs != nullptr) {
+					int hostname_col = -1;
+					for (int i = 0; i < rs->columns; i++) {
+						if (rs->column_definition[i] &&
+							rs->column_definition[i]->name &&
+							strcmp(rs->column_definition[i]->name, "hostname") == 0) {
+							hostname_col = static_cast<int>(i);
+							break;
+						}
+					}
+					if (hostname_col >= 0) {
+						for (const auto row : rs->rows) {
+							if (!row || !row->fields[hostname_col]) continue;
+							// Trim before validate_ip / insert so the lookup
+							// path (which also trims) and the bookkeeper
+							// agree on the hostname key.  Matches the
+							// SELECT trim(hostname) the MySQL resolver does
+							// in SQL.
+							const std::string hostname { trim(row->fields[hostname_col]) };
+							if (hostname.empty()) continue;
+							if (!validate_ip(hostname))
+								hostnames.insert(hostname);
+						}
+					}
+				}
+			}
+
+			if (hostnames.empty()) {
+				if (!dns_cache->empty()) {
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+						"Clearing all orphaned PgSQL DNS records from cache.\n");
+					dns_cache->clear();
+				}
+				if (!dns_records_bookkeeping.empty()) {
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+						"Clearing all orphaned PgSQL DNS records from bookkeeper.\n");
+					dns_records_bookkeeping.clear();
+				}
+			} else {
+				std::vector<DNSResolverWorker*> dns_resolver_threads(num_dns_resolver_threads);
+				for (unsigned int i = 0; i < num_dns_resolver_threads; i++) {
+					dns_resolver_threads[i] = new DNSResolverWorker(dns_resolver_queue, "pgDnsResolver");
+					dns_resolver_threads[i]->start(2048, false);
+				}
+
+				std::list<std::future<std::tuple<bool, DNS_Cache_Record>>> dns_resolve_result;
+
+				// Stagger enqueueing so the resolver pool doesn't see a burst.
+				int delay_us = 100;
+				if (!hostnames.empty()) {
+					delay_us = pgsql_thread___monitor_local_dns_cache_refresh_interval / 2 / hostnames.size();
+					delay_us *= 40;
+					if (delay_us > 1000000 || delay_us <= 0)
+						delay_us = 10000;
+					delay_us = delay_us + rand() % delay_us; // NOSONAR cpp:S2245 — non-crypto jitter to spread DNS refresh load; no security boundary.
+				}
+
+				// Walk the bookkeeper: drop orphans, requeue expired ones, keep
+				// the rest.  Items that survive are also removed from the
+				// "hostnames" set so we don't enqueue them twice below.
+				if (!dns_records_bookkeeping.empty()) {
+					const unsigned long long current_time = monotonic_time();
+					for (auto itr = dns_records_bookkeeping.begin();
+						 itr != dns_records_bookkeeping.end(); ) {
+						if (hostnames.find(itr->hostname_) == hostnames.end()) {
+							dns_cache->remove(itr->hostname_);
+							proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+								"Removing orphaned PgSQL DNS record from bookkeeper. (Hostname:[%s] IP:[%s])\n",
+								itr->hostname_.c_str(), debug_iplisttostring(itr->ips_).c_str());
+							itr = dns_records_bookkeeping.erase(itr);
+						} else {
+							hostnames.erase(itr->hostname_);
+							if (current_time > itr->ttl_) {
+								std::unique_ptr<DNS_Resolve_Data> dns_resolve_data(new DNS_Resolve_Data());
+								dns_resolve_data->hostname = std::move(itr->hostname_);
+								dns_resolve_data->cached_ips = std::move(itr->ips_);
+								dns_resolve_data->ttl = pgsql_thread___monitor_local_dns_cache_ttl;
+								dns_resolve_data->refresh_intv = pgsql_thread___monitor_local_dns_cache_refresh_interval;
+								dns_resolve_data->dns_cache = dns_cache;
+								// PgSQL has no separate resolution-family setting yet;
+								// default to AF_UNSPEC so we honor the OS resolver.
+								dns_resolve_data->ai_family = AF_UNSPEC;
+								dns_resolve_result.emplace_back(dns_resolve_data->result.get_future());
+
+								// Capture the IP list for the debug log
+								// BEFORE std::move'ing dns_resolve_data away.
+								const std::string ip_log = debug_iplisttostring(dns_resolve_data->cached_ips);
+								proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+									"Removing expired PgSQL DNS record from bookkeeper. (Hostname:[%s] IP:[%s])\n",
+									dns_resolve_data->hostname.c_str(),
+									ip_log.c_str());
+								dns_resolver_queue.add(dns_resolve_data.release());
+								itr = dns_records_bookkeeping.erase(itr);
+								usleep(delay_us);
+								continue;
+							}
+							itr++;
+						}
+					}
+				}
+
+				// Scale the resolver pool up if the queue is filling.
+				auto maybe_scale_pool = [&](unsigned int divisor) {
+					unsigned int qsize = dns_resolver_queue.size();
+					unsigned int num_threads = dns_resolver_threads.size();
+					if (qsize > (static_cast<unsigned int>(pgsql_thread___monitor_local_dns_resolver_queue_maxsize) / divisor)) {
+						proxy_warning("PgSQL DNS resolver queue too big: %d.\n", qsize);
+						unsigned int threads_max = num_dns_resolver_max_threads;
+						if (threads_max > num_threads) {
+							unsigned int new_threads = threads_max - num_threads;
+							if ((qsize / divisor) < new_threads)
+								new_threads = qsize / divisor;
+							if (new_threads) {
+								unsigned int old_num_threads = num_threads;
+								num_threads += new_threads;
+								dns_resolver_threads.resize(num_threads);
+								for (unsigned int i = old_num_threads; i < num_threads; i++) {
+									dns_resolver_threads[i] = new DNSResolverWorker(dns_resolver_queue, "pgDnsResolver");
+									dns_resolver_threads[i]->start(2048, false);
+								}
+							}
+						}
+					}
+				};
+				maybe_scale_pool(8);
+
+				// Enqueue the remaining (new) hostnames.
+				for (const std::string& hostname : hostnames) {
+					std::unique_ptr<DNS_Resolve_Data> dns_resolve_data(new DNS_Resolve_Data());
+					dns_resolve_data->hostname = hostname;
+					dns_resolve_data->ttl = pgsql_thread___monitor_local_dns_cache_ttl;
+					dns_resolve_data->refresh_intv = pgsql_thread___monitor_local_dns_cache_refresh_interval;
+					dns_resolve_data->dns_cache = dns_cache;
+					dns_resolve_data->ai_family = AF_UNSPEC;
+					dns_resolve_result.emplace_back(dns_resolve_data->result.get_future());
+					dns_resolver_queue.add(dns_resolve_data.release());
+					usleep(delay_us);
+				}
+
+				maybe_scale_pool(4);
+
+				// Push one NULL per worker so each loop's `remove()` returns
+				// the sentinel and the worker exits cleanly.
+				for (size_t i = 0; i < dns_resolver_threads.size(); i++)
+					dns_resolver_queue.add(nullptr);
+
+				// Collect results.  Successful resolutions feed the bookkeeper.
+				for (auto& dns_result : dns_resolve_result) {
+					auto ret_value = dns_result.get();
+					if (std::get<0>(ret_value)) {
+						DNS_Cache_Record dns_record = std::get<1>(ret_value);
+						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+							"Adding PgSQL DNS record to bookkeeper. (Hostname:[%s] IP:[%s])\n",
+							dns_record.hostname_.c_str(), debug_iplisttostring(dns_record.ips_).c_str());
+						dns_records_bookkeeping.emplace_back(std::move(dns_record));
+					}
+				}
+
+				for (DNSResolverWorker* const w : dns_resolver_threads) {
+					w->join();
+					delete w;
+				}
+
+				if (GloPgMon->shutdown.load(std::memory_order_acquire)) return nullptr;
+			}
+		}
+
+		t2 = monotonic_time();
+		if (t2 < next_loop_at) {
+			unsigned long long st = next_loop_at - t2;
+			if (st > 500000) st = 500000;
+			usleep(st);
+		}
+	}
+
+	return nullptr;
+}
+
+void* PgSQL_monitor_dns_cache_pthread(void* /*arg*/) {
+	if (GloPgMon)
+		GloPgMon->monitor_dns_cache();
+	return nullptr;
+}
+
 
 // =========================================================================
 // AWS Aurora PostgreSQL Monitoring Implementation

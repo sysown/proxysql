@@ -11,6 +11,7 @@
 #include <tuple>
 #include <string>
 #include <stdio.h>
+#include <unistd.h>
 
 #include "mysql.h"
 #include "mysqld_error.h"
@@ -170,9 +171,17 @@ using mysql_res_row = std::vector<std::string>;
 void helper_test_load_data_local_infile(
 	const CommandLine& cl, MYSQL* proxysql, int exp_err=0, bool test_for_success=true
 ) {
-	std::string datafile {
-		std::string { cl.workdir } + "load_data_local_datadir/insert_data.txt"
-	};
+	// Provision test data to shared volume
+	std::string script_dst = "/var/lib/proxysql/load_data_local_datadir";
+	std::string datafile_ci = script_dst + "/insert_data.txt";
+	std::string cmd = "mkdir -p " + script_dst + " && printf '1,\"a string\",100.20\n2,\"a string containing a , comma\",102.20\n3,\"a string containing a \\\" quote\",102.20\n4,\"a string containing a \\\", quote and comma\",102.20\n' > " + datafile_ci + " && chmod -R 777 " + script_dst;
+	system(cmd.c_str());
+
+	const char* d_env = getenv("REGULAR_INFRA_DATADIR");
+
+	std::string datafile = (d_env ? std::string(d_env) + "/load_data_local_datadir/insert_data.txt"
+	                              : std::string(cl.workdir) + "load_data_local_datadir/insert_data.txt");
+	diag("Data file path: %s", datafile.c_str());
 
 	bool table_prep_success = true;
 
@@ -363,9 +372,10 @@ void test_failing_load_data_local_infile(
 	const CommandLine& cl, MYSQL* proxysql, int exp_err=0, bool test_for_success=true
 ) {
 	// Supply an invalid file
-	std::string datafile {
-		std::string { cl.workdir } + "load_data_local_datadir/non_existing_file.txt"
-	};
+	const char* d_env = getenv("REGULAR_INFRA_DATADIR");
+	std::string datafile = (d_env ? std::string(d_env) + "/load_data_local_datadir/non_existing_file.txt"
+	                              : std::string(cl.workdir) + "load_data_local_datadir/non_existing_file.txt");
+	diag("Data file path: %s", datafile.c_str());
 
 	bool table_prep_success = true;
 
@@ -492,6 +502,14 @@ std::vector<query_test_info> queries_tests_info {
 int main(int argc, char** argv) {
 	CommandLine cl;
 
+	diag("================================================================================");
+	diag("TEST DESCRIPTION: ProxySQL Unsupported and Conditional Query Validation");
+	diag("This test verifies that ProxySQL handles unsupported commands (like LOAD DATA LOCAL)");
+	diag("correctly by returning error 1047, and that these commands can be enabled");
+	diag("conditionally via global variables.");
+	diag("================================================================================");
+
+
 	// plan as many tests as queries
 	plan(unsupported_queries.size() + 4 * queries_tests_info.size());
 
@@ -499,6 +517,45 @@ int main(int argc, char** argv) {
 		diag("Failed to get the required environmental variables.");
 		return -1;
 	}
+
+	// Verbose test header
+	diag("================================================================================");
+	diag("Test: test_unsupported_queries-t");
+	diag("================================================================================");
+	diag("This test verifies that unsupported queries return the expected error codes,");
+	diag("and that conditionally-enabled queries work correctly when enabled/disabled.");
+	diag("%s", "");
+	diag("Test scenarios:");
+	diag("  - Unsupported queries (LOAD DATA LOCAL INFILE) should fail with error 1047");
+	diag("  - Conditionally enabled queries should work when enabled");
+	diag("  - Conditionally enabled queries should fail when disabled");
+	diag("%s", "");
+	diag("Connection parameters:");
+	diag("  - Host: %s", cl.host);
+	diag("  - Port: %d", cl.port);
+	diag("  - Admin Port: %d", cl.admin_port);
+	diag("================================================================================");
+
+	// Dump hostgroup state for debugging CI failures
+	{
+		MYSQL* dbg_admin = mysql_init(NULL);
+		if (dbg_admin && mysql_real_connect(dbg_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+			// Get default hostgroup for the test user
+			std::string hg_query = "SELECT default_hostgroup FROM mysql_users WHERE username='" + std::string(cl.username) + "' LIMIT 1";
+			int target_hg = 0;
+			if (mysql_query(dbg_admin, hg_query.c_str()) == 0) {
+				MYSQL_RES *res = mysql_store_result(dbg_admin);
+				if (res) {
+					MYSQL_ROW row = mysql_fetch_row(res);
+					if (row) target_hg = atoi(row[0]);
+					mysql_free_result(res);
+				}
+			}
+			dump_hostgroup_debug(dbg_admin, target_hg);
+			mysql_close(dbg_admin);
+		}
+	}
+	diag("%s", "");
 
 	// perform a different connection per query
 	for (const auto& unsupported_query : unsupported_queries) {

@@ -2,6 +2,7 @@
 #include "PgSQL_Variables_Validator.h"
 #include "PgSQL_Session.h"
 #include "cpp.h"
+#include <string_view>
 
 /**
  * @brief Validates a boolean variable for PostgreSQL.
@@ -261,12 +262,12 @@ bool pgsql_variable_validate_maintenance_work_mem_v2(const char* value, const pa
 	/* Parse unit part */
 	const char* unit_ptr = endptr;
 	uint64_t multiplier;
-	char unit[3] = { 0 };
+	const char* unit = "kB"; // default unit
 	size_t unit_len = strlen(unit_ptr);
+	size_t actual_unit_len = 2;
 
 	/* Handle default unit (kB) if no unit specified */
 	if (unit_len == 0) {
-		strcpy(unit, "kB");
 		multiplier = 1024;
 	}
 	else {
@@ -277,23 +278,27 @@ bool pgsql_variable_validate_maintenance_work_mem_v2(const char* value, const pa
 
 		/* Validate unit and set multiplier */
 		if (unit_len == 1 && u[0] == 'b') {
-			strcpy(unit, "B");
+			unit = "B";
+			actual_unit_len = 1;
 			multiplier = 1;
 		}
 		else if (strcmp(u, "kb") == 0) {
-			strcpy(unit, "kB");
+			unit = "kB";
 			multiplier = 1024;
 		}
 		else if (strcmp(u, "mb") == 0) {
-			strcpy(unit, "MB");
+			unit = "MB";
+			actual_unit_len = 2;
 			multiplier = 1024 * 1024;
 		}
 		else if (strcmp(u, "gb") == 0) {
-			strcpy(unit, "GB");
+			unit = "GB";
+			actual_unit_len = 2;
 			multiplier = 1024ULL * 1024 * 1024;
 		}
 		else if (strcmp(u, "tb") == 0) {
-			strcpy(unit, "TB");
+			unit = "TB";
+			actual_unit_len = 2;
 			multiplier = 1024ULL * 1024 * 1024 * 1024;
 		}
 		else {
@@ -301,7 +306,6 @@ bool pgsql_variable_validate_maintenance_work_mem_v2(const char* value, const pa
 		}
 
 		/* Validate unit length matches parsed characters */
-		size_t actual_unit_len = (unit[1] == 'B') ? 2 : (unit[0] == 'B') ? 1 : 0;
 		if (strlen(unit_ptr) != actual_unit_len)
 			return false;
 	}
@@ -359,39 +363,44 @@ bool pgsql_variable_validate_maintenance_work_mem_v3(const char* value, const pa
 	// Parse unit
 	const char* unit_ptr = endptr;
 	uint64_t multiplier;
-	char unit[3] = { 0 };
+	const char* unit = "kB"; // default unit
 	size_t unit_len = strlen(unit_ptr);
+	size_t actual_unit_len = 2;
 
 	// Default to kB if no unit specified
 	if (unit_len == 0) {
-		strcpy(unit, "kB");
 		multiplier = 1024;
 	}
 	else {
 		// Convert unit to lowercase for validation
 		char u[3] = { 0 };
-		for (int i = 0; i < 2 && unit_ptr[i]; i++)
+		for (int i = 0; i < 2 && unit_ptr[i]; i++) {
 			u[i] = ::tolower((unsigned char)unit_ptr[i]);
+		}
 
 		// Validate units and set multipliers
 		if (unit_len == 1 && u[0] == 'b') {
-			strcpy(unit, "B");
+			unit = "B";
+			actual_unit_len = 1;
 			multiplier = 1;
 		}
 		else if (strcmp(u, "kb") == 0) {
-			strcpy(unit, "kB");
+			unit = "kB";
 			multiplier = 1024;
 		}
 		else if (strcmp(u, "mb") == 0) {
-			strcpy(unit, "MB");
+			unit = "MB";
+			actual_unit_len = 2;
 			multiplier = 1024 * 1024;
 		}
 		else if (strcmp(u, "gb") == 0) {
-			strcpy(unit, "GB");
+			unit = "GB";
+			actual_unit_len = 2;
 			multiplier = 1024ULL * 1024 * 1024;
 		}
 		else if (strcmp(u, "tb") == 0) {
-			strcpy(unit, "TB");
+			unit = "TB";
+			actual_unit_len = 2;
 			multiplier = 1024ULL * 1024 * 1024 * 1024;
 		}
 		else {
@@ -399,9 +408,9 @@ bool pgsql_variable_validate_maintenance_work_mem_v3(const char* value, const pa
 		}
 
 		// Validate unit length matches parsed characters
-		size_t expected_len = (unit[1] == 'B') ? 2 : (unit[0] == 'B') ? 1 : 0;
-		if (strlen(unit_ptr) != expected_len)
+		if (std::string_view(unit_ptr).size() != actual_unit_len) {
 			return false;
+		}
 	}
 
 	// Calculate total bytes with floating point
@@ -459,11 +468,9 @@ bool pgsql_variable_validate_search_path(const char* value, const params_t* para
 	size_t value_len = strlen(value); // NOSONAR
 	if (value_len > SIZE_MAX - 1) return false;
 
-	char* normalized = (char*)malloc(value_len + 1);
-	if (normalized == nullptr) return false;
-	normalized[0] = '\0';
+	std::string normalized;
+	normalized.reserve(value_len + 1);
 
-	size_t norm_pos = 0;
 	bool first = true;
 	bool result = true;
 
@@ -529,18 +536,15 @@ bool pgsql_variable_validate_search_path(const char* value, const params_t* para
 			if (!result) break;
 		}
 
-		// add to normalized
 		if (!first) {
-			normalized[norm_pos++] = ',';
+			normalized.push_back(',');
 		}
 		first = false;
 
 		// append the part bytes
 		if (part_len > 0) {
-			memcpy(normalized + norm_pos, part_start, part_len);
-			norm_pos += part_len;
+			normalized.append(part_start, part_len);
 		}
-		normalized[norm_pos] = '\0';
 
 		// skip whitespace after part
 		while (*token && fast_isspace(*token)) token++;
@@ -557,12 +561,10 @@ bool pgsql_variable_validate_search_path(const char* value, const params_t* para
 
 	if (result) {
 		if (transformed_value) {
-			*transformed_value = normalized;
+			*transformed_value = strdup(normalized.c_str());
 		} else {
-			free(normalized);
+			// no output requested; keep as no-op
 		}
-	} else {
-		free(normalized);
 	}
 
 	return result;
@@ -637,5 +639,35 @@ const pgsql_variable_validator pgsql_variable_validator_client_encoding = {
 const pgsql_variable_validator pgsql_variable_validator_search_path = {
 	.type = VARIABLE_TYPE_STRING,
 	.validate = &pgsql_variable_validate_search_path,
+	.params = {}
+};
+
+/**
+ * @brief Validates an integer variable for PostgreSQL.
+ *
+ * This function checks if the provided value is a valid integer representation
+ * and falls within the specified range. The range is defined by the params
+ * parameter.
+ *
+ * @param value The value to validate.
+ * @param params The parameter structure containing the integer range.
+ * @param session Unused parameter.
+ * @param transformed_value If not null, will be set to null.
+ * @return true if the value is a valid integer representation within the specified range, false otherwise.
+ */
+bool pgsql_variable_validate_integer(const char* value, const params_t* params, PgSQL_Session* session, char** transformed_value) {
+   (void)session;
+   if (transformed_value) *transformed_value = nullptr;
+   char* end = nullptr;
+   errno = 0;
+   long num = strtol(value, &end, 10);
+   if (end == value || *end != '\0' || errno == ERANGE) return false;
+   if (num < params->int_range.min || num > params->int_range.max) return false;
+   return true;
+}
+
+const pgsql_variable_validator pgsql_variable_validator_integer = {
+	.type = VARIABLE_TYPE_INT,
+	.validate = &pgsql_variable_validate_integer,
 	.params = {}
 };

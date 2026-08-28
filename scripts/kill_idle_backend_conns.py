@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
 Kills all ProxySQL idle backend connections from a particular instance.
 

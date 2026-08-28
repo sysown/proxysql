@@ -16,6 +16,10 @@
  *       2. Attempts to perform a query, forcing the creation of a backend conn.
  *       3. Performs multiple checks over the query and ProxySQL error log metrics:
  *          - Checks if the query was expected to fail/succeed (conn creation).
+ *          - For the two normal backend-request cases, checks that a one-row result is parsed through the
+ *            SQLite3 self-loop. `mysql-enable_server_deprecate_eof` requests `CLIENT_DEPRECATE_EOF` on the
+ *            outbound connect call, while `mysql-enable_client_deprecate_eof` controls whether the SQLite3
+ *            backend greeting advertises support. Thus both deprecated-EOF and legacy-EOF results are tested.
  *          - Checks error log for conn creation failures (caps mismatch).
  *          - Checks audit log for number of conn received (SQLite3 backend ProxySQL-ProxySQL).
  *          - Checks stats on connection creation to be increased by the expected amount.
@@ -56,14 +60,6 @@ using std::vector;
 
 #define _S(s) ( std::string {s} )
 #define _TO_S(s) ( std::to_string(s) )
-
-#define CHECK_EXT_VAL(val)\
-	do {\
-		if (val.err) {\
-			diag("%s:%d: Query failed   err=\"%s\"", __func__, __LINE__, val.str.c_str());\
-			return EXIT_FAILURE;\
-		}\
-	} while(0)
 
 MYSQL* create_mysql_conn(const conn_opts_t& opts) {
 	const char* host { opts.host.c_str() };
@@ -269,6 +265,35 @@ string find_latest_split(const std::string &dir_path, const string& prefix) {
 	return latest_split_fname;
 }
 
+/**
+ * @brief Robustly counts occurrences of a regex in all ProxySQL audit log split files.
+ * @details ProxySQL uses per-thread buffering for audit logs. When `PROXYSQL FLUSH LOGS` is called,
+ *   buffers are flushed and the log file is rotated. This function ensures we count matches
+ *   across all historical and current log files by using a shell-based grep across all splits.
+ * @param admin MySQL connection to the admin interface to retrieve current log filename.
+ * @param regex The regex pattern to count in the audit logs.
+ * @return Total number of occurrences across all audit log files.
+ */
+uint32_t get_audit_count_all(MYSQL* admin, const string& regex) {
+	const ext_val_t<string> audit_fname {
+		mysql_query_ext_val(admin, SELECT_RUNTIME_VAR"'mysql-auditlog_filename'", _S("audit.log"))
+	};
+	if (audit_fname.err) return 0;
+
+	// Count occurrences in all split files using grep -hc and awk to sum them up
+	// grep -hc suppresses filenames and outputs only the count for each file
+	string cmd = "grep -hc \"" + regex + "\" " + PROXYSQL_AUDIT_DIR + "/" + audit_fname.val + ".* 2>/dev/null | awk '{sum+=$1} END {print sum+0}' || true";
+	string result;
+	if (exec(cmd, result) == 0) {
+		try {
+			return (uint32_t)std::stoul(result);
+		} catch (...) {
+			return 0;
+		}
+	}
+	return 0;
+}
+
 struct pool_cnf_t {
 	bool warmup { false };
 	uint32_t conn_caps { 0 };
@@ -304,6 +329,26 @@ struct test_cnf_t {
 	conn_conf_t conn_conf;
 	proxy_cnf_t proxy_conf;
 };
+
+const vector<proxy_cnf_t> backend_result_proxy_cnfs {
+	{ .cli_depr_eof = true,  .srv_depr_eof = true, .force_mismatch = false },
+	{ .cli_depr_eof = false, .srv_depr_eof = true, .force_mismatch = false },
+};
+
+bool should_check_backend_result(const test_cnf_t& test_cnf) {
+	if (test_cnf.pool_status.warmup || test_cnf.conn_conf.fast_forward) {
+		return false;
+	}
+
+	return std::any_of(
+		backend_result_proxy_cnfs.begin(), backend_result_proxy_cnfs.end(),
+		[&test_cnf] (const proxy_cnf_t& cnf) {
+			return cnf.cli_depr_eof == test_cnf.proxy_conf.cli_depr_eof
+				&& cnf.srv_depr_eof == test_cnf.proxy_conf.srv_depr_eof
+				&& cnf.force_mismatch == test_cnf.proxy_conf.force_mismatch;
+		}
+	);
+}
 
 vector<proxy_cnf_t> gen_all_proxy_cnfs() {
 	vector<vector<bool>> all_bin_vec { get_all_bin_vec(4) };
@@ -370,11 +415,11 @@ int test_conn_acquisition(MYSQL* admin, const test_cnf_t& test_conf) {
 	const ext_val_t<int32_t> retries_delay {
 		mysql_query_ext_val(admin, SELECT_RUNTIME_VAR"'mysql-connect_retries_delay'", -1)
 	};
-	CHECK_EXT_VAL(retries_delay);
+	CHECK_EXT_VAL(admin, retries_delay);
 	const ext_val_t<int32_t> to_server_max {
 		mysql_query_ext_val(admin, SELECT_RUNTIME_VAR"'mysql-connect_timeout_server_max'", -1)
 	};
-	CHECK_EXT_VAL(to_server_max);
+	CHECK_EXT_VAL(admin, to_server_max);
 	///////////////////////////////////////////////////////////////////////////
 
 	diag(
@@ -404,12 +449,18 @@ int test_conn_acquisition(MYSQL* admin, const test_cnf_t& test_conf) {
 
 	diag("Get pre-conn attempt stats from target hostgroup   tg=%d", SQLITE3_HG);
 	const ext_val_t<hg_pool_st_t> pre_hg_st { get_conn_pool_hg_stats(admin, SQLITE3_HG) };
-	CHECK_EXT_VAL(pre_hg_st);
+	CHECK_EXT_VAL(admin, pre_hg_st);
 	const ext_val_t<int64_t> pre_srv_conns { mysql_query_ext_val(admin,
 		"SELECT variable_value FROM stats.stats_mysql_global WHERE variable_name='Server_Connections_created'",
 		int64_t(-1)
 	)};
-	CHECK_EXT_VAL(pre_srv_conns);
+	CHECK_EXT_VAL(admin, pre_srv_conns);
+
+	const string audit_regex { "SQLite3_Connect_OK.*" + _S(FF_USER) };
+	// Audit logs are per-thread buffered. PROXYSQL FLUSH LOGS ensures buffers are written
+	// to disk but also triggers a log rotation. get_audit_count_all handles this correctly.
+	MYSQL_QUERY_T(admin, "PROXYSQL FLUSH LOGS");
+	const uint32_t pre_audit_count { get_audit_count_all(admin, audit_regex) };
 
 	fstream logfile_fs {};
 
@@ -419,27 +470,40 @@ int test_conn_acquisition(MYSQL* admin, const test_cnf_t& test_conf) {
 		if (of_err != EXIT_SUCCESS) { return of_err; }
 	}
 
-	diag("Open ProxySQL audit log to check the connections attempts   path=\"%s\"", PROXYSQL_LOG_PATH.c_str());
-	const ext_val_t<string> audit_fname {
-		mysql_query_ext_val(admin, SELECT_RUNTIME_VAR"'mysql-auditlog_filename'", _S("audit.log"))
-	};
-	CHECK_EXT_VAL(audit_fname);
-
-	const string latest_split { find_latest_split(PROXYSQL_AUDIT_DIR, audit_fname.val) };
-	const string audit_path { PROXYSQL_AUDIT_DIR + "/" + latest_split };
-	fstream auditlog_fs {};
-
-	{
-		diag("Open Audit log to check for conns   path=\"%s\"", audit_path.c_str());
-		int of_err = open_file_and_seek_end(audit_path, auditlog_fs);
-		if (of_err != EXIT_SUCCESS) { return of_err; }
-	}
-
 	diag("Issuing query (trx) creating new backend conn");
 	rc = mysql_query_t(proxy, "BEGIN");
 	if (rc == 0) {
 		diag("Previous query successful; closing trx is required");
 		mysql_query_t(proxy, "COMMIT");
+	}
+
+	if (rc == 0 && should_check_backend_result(test_conf)) {
+		const string expected_value { "proxysql-backend-deprecate-eof" };
+		const string result_query {
+			"/* hostgroup=" + _TO_S(SQLITE3_HG) + " */ SELECT '" + expected_value + "'"
+		};
+		diag("Issue row-returning query through SQLite3 backend   query=\"%s\"", result_query.c_str());
+
+		const int result_rc { mysql_query_t(proxy, result_query) };
+		MYSQL_RES* result { result_rc == 0 ? mysql_store_result(proxy) : nullptr };
+		MYSQL_ROW row { result ? mysql_fetch_row(result) : nullptr };
+		const bool valid_result {
+			result
+			&& mysql_num_fields(result) == 1
+			&& mysql_num_rows(result) == 1
+			&& row && row[0]
+			&& expected_value == row[0]
+		};
+
+		ok(
+			result_rc == 0 && valid_result,
+			"Backend result should parse with negotiated EOF mode   proxy_conf='%s'",
+			to_string(proxy_cnf).c_str()
+		);
+
+		if (result) {
+			mysql_free_result(result);
+		}
 	}
 
 	// Sanity check; query should **NEVER** fail if mismatch is allowed (no fast-forward).
@@ -556,20 +620,18 @@ int test_conn_acquisition(MYSQL* admin, const test_cnf_t& test_conf) {
 	);
 
 	diag("Check Audit log for connections attempts on SQLite3");
-	const auto& [_b, audit_lines] { get_matching_lines(auditlog_fs,
-		"SQLite3_Connect_OK.*" + _S(FF_USER)
-	)};
-	diag("Found Audit log matching lines   count=%ld", audit_lines.size());
+	MYSQL_QUERY_T(admin, "PROXYSQL FLUSH LOGS");
+	const uint32_t post_audit_count { get_audit_count_all(admin, audit_regex) };
 
 	ok(
-		audit_lines.size() == exp_conns,
-		"Audit log should contain SQLite3 created conns   lines=%ld exp_conns=%d",
-		audit_lines.size(), exp_conns
+		post_audit_count == pre_audit_count + exp_conns,
+		"Audit log should contain SQLite3 created conns   lines=%d exp_conns=%d",
+		post_audit_count - pre_audit_count, exp_conns
 	);
 
 	diag("Get post-conn attempt stats from target hostgroup   tg=%d", SQLITE3_HG);
 	const ext_val_t<hg_pool_st_t> post_hg_st { get_conn_pool_hg_stats(admin, SQLITE3_HG) };
-	CHECK_EXT_VAL(post_hg_st);
+	CHECK_EXT_VAL(admin, post_hg_st);
 
 	ok(
 		pre_hg_st.val.conn_ok + exp_conns == post_hg_st.val.conn_ok,
@@ -585,7 +647,7 @@ int test_conn_acquisition(MYSQL* admin, const test_cnf_t& test_conf) {
 			int64_t(-1)
 		)
 	};
-	CHECK_EXT_VAL(post_srv_conns);
+	CHECK_EXT_VAL(admin, post_srv_conns);
 
 	ok(
 		pre_srv_conns.val + exp_conns == post_srv_conns.val,
@@ -600,7 +662,6 @@ int test_conn_acquisition(MYSQL* admin, const test_cnf_t& test_conf) {
 
 	return EXIT_SUCCESS;
 }
-
 int test_conn_acquisition(
 	MYSQL* admin, const CommandLine& cl, bool ff, bool client_eof, bool force_match, bool warmup_pool
 ) {
@@ -615,11 +676,11 @@ int test_conn_acquisition(
 	const ext_val_t<int32_t> retries_delay {
 		mysql_query_ext_val(admin, SELECT_RUNTIME_VAR"'mysql-connect_retries_delay'", -1)
 	};
-	CHECK_EXT_VAL(retries_delay);
+	CHECK_EXT_VAL(admin, retries_delay);
 	const ext_val_t<int32_t> to_server_max {
 		mysql_query_ext_val(admin, SELECT_RUNTIME_VAR"'mysql-connect_timeout_server_max'", -1)
 	};
-	CHECK_EXT_VAL(to_server_max);
+	CHECK_EXT_VAL(admin, to_server_max);
 	//////
 
 	diag("Update 'fast-forward' for testing user   user=\"%s\" fast_forward=%d", FF_USER, ff);
@@ -643,34 +704,24 @@ int test_conn_acquisition(
 
 	diag("Get pre-conn attempt stats from target hostgroup   tg=%d", SQLITE3_HG);
 	const ext_val_t<hg_pool_st_t> pre_hg_st { get_conn_pool_hg_stats(admin, SQLITE3_HG) };
-	CHECK_EXT_VAL(pre_hg_st);
+	CHECK_EXT_VAL(admin, pre_hg_st);
 	const ext_val_t<int64_t> pre_srv_conns { mysql_query_ext_val(admin,
 		"SELECT variable_value FROM stats.stats_mysql_global WHERE variable_name='Server_Connections_created'",
 		int64_t(-1)
 	)};
-	CHECK_EXT_VAL(pre_srv_conns);
+	CHECK_EXT_VAL(admin, pre_srv_conns);
+
+	const string audit_regex { "SQLite3_Connect_OK.*" + _S(FF_USER) };
+	// ProxySQL audit logs are per-thread buffered. PROXYSQL FLUSH LOGS ensures buffers
+	// are written to disk but also triggers a log rotation. get_audit_count_all handles this.
+	MYSQL_QUERY_T(admin, "PROXYSQL FLUSH LOGS");
+	const uint32_t pre_audit_count = get_audit_count_all(admin, audit_regex);
 
 	fstream logfile_fs {};
 
 	{
 		diag("Open General log to check for errors   path=\"%s\"", PROXYSQL_LOG_PATH.c_str());
 		int of_err = open_file_and_seek_end(PROXYSQL_LOG_PATH, logfile_fs);
-		if (of_err != EXIT_SUCCESS) { return of_err; }
-	}
-
-	diag("Open ProxySQL audit log to check the connections attempts   path=\"%s\"", PROXYSQL_LOG_PATH.c_str());
-	const ext_val_t<string> audit_fname {
-		mysql_query_ext_val(admin, SELECT_RUNTIME_VAR"'mysql-auditlog_filename'", _S("audit.log"))
-	};
-	CHECK_EXT_VAL(audit_fname);
-
-	const string latest_split { find_latest_split(PROXYSQL_AUDIT_DIR, audit_fname.val) };
-	const string audit_path { PROXYSQL_AUDIT_DIR + "/" + latest_split };
-	fstream auditlog_fs {};
-
-	{
-		diag("Open Audit log to check for conns   path=\"%s\"", audit_path.c_str());
-		int of_err = open_file_and_seek_end(audit_path, auditlog_fs);
 		if (of_err != EXIT_SUCCESS) { return of_err; }
 	}
 
@@ -719,20 +770,18 @@ int test_conn_acquisition(
 	);
 
 	diag("Check Audit log for connections attempts on SQLite3");
-	const auto& [_b, audit_lines] { get_matching_lines(auditlog_fs,
-		"SQLite3_Connect_OK.*" + _S(FF_USER)
-	)};
-	diag("Found Audit log matching lines   count=%ld", audit_lines.size());
+	MYSQL_QUERY_T(admin, "PROXYSQL FLUSH LOGS");
+	const uint32_t post_audit_count = get_audit_count_all(admin, audit_regex);
 
 	ok(
-		audit_lines.size() == exp_conns,
-		"Audit log should contain SQLite3 created conns   lines=%ld exp_lines=%d",
-		audit_lines.size(), exp_conns
+		post_audit_count == pre_audit_count + exp_conns,
+		"Audit log should contain SQLite3 created conns   lines=%d exp_conns=%d",
+		post_audit_count - pre_audit_count, exp_conns
 	);
 
 	diag("Get post-conn attempt stats from target hostgroup   tg=%d", SQLITE3_HG);
 	const ext_val_t<hg_pool_st_t> post_hg_st { get_conn_pool_hg_stats(admin, SQLITE3_HG) };
-	CHECK_EXT_VAL(post_hg_st);
+	CHECK_EXT_VAL(admin, post_hg_st);
 
 	ok(
 		pre_hg_st.val.conn_ok + exp_conns == post_hg_st.val.conn_ok,
@@ -748,7 +797,7 @@ int test_conn_acquisition(
 			int64_t(-1)
 		)
 	};
-	CHECK_EXT_VAL(post_srv_conns);
+	CHECK_EXT_VAL(admin, post_srv_conns);
 
 	ok(
 		pre_srv_conns.val + exp_conns == post_srv_conns.val,
@@ -881,12 +930,12 @@ int test_conn_ff_conv(MYSQL* admin, const CommandLine& cl, bool client_eof) {
 
 	diag("Get pre-conn attempt stats from target hostgroup   tg=%d", SQLITE3_HG);
 	const ext_val_t<hg_pool_st_t> pre_hg_st { get_conn_pool_hg_stats(admin, SQLITE3_HG) };
-	CHECK_EXT_VAL(pre_hg_st);
+	CHECK_EXT_VAL(admin, pre_hg_st);
 	const ext_val_t<int64_t> pre_srv_conns { mysql_query_ext_val(admin,
 		"SELECT variable_value FROM stats.stats_mysql_global WHERE variable_name='Server_Connections_created'",
 		int64_t(-1)
 	)};
-	CHECK_EXT_VAL(pre_srv_conns);
+	CHECK_EXT_VAL(admin, pre_srv_conns);
 
 	diag("Issue query (start trx) to create new backend conn   query=\"%s\"", "BEGIN");
 	rc = mysql_query_t(proxy, "/* hostgroup=" + std::to_string(SQLITE3_HG) +  " */ BEGIN");
@@ -897,7 +946,7 @@ int test_conn_ff_conv(MYSQL* admin, const CommandLine& cl, bool client_eof) {
 
 	diag("Get post-conn attempt stats from target hostgroup   tg=%d", SQLITE3_HG);
 	const ext_val_t<hg_pool_st_t> post_hg_st { get_conn_pool_hg_stats(admin, SQLITE3_HG) };
-	CHECK_EXT_VAL(post_hg_st);
+	CHECK_EXT_VAL(admin, post_hg_st);
 
 	ok(
 		pre_hg_st.val.conn_used + 1 == post_hg_st.val.conn_used,
@@ -943,6 +992,8 @@ int main(int argc, char** argv) {
 #else
 		* 2
 #endif
+		// gen_all_proxy_cnfs() projects a four-bit matrix onto three fields, so each case occurs twice.
+		+ 2 * backend_result_proxy_cnfs.size()
 	);
 
 	MYSQL* admin { create_mysql_conn({ cl.admin_host, cl.admin_username, cl.admin_password, cl.admin_port }) };

@@ -1,0 +1,49 @@
+# Codecov configuration for ProxySQL.
+#
+# Path contract (both upload pipelines MUST emit the same shape):
+#
+#   TAP integration (flag integration-tests)
+#     test/infra/control/run-tests-isolated.bash normalizes every LCOV SF:
+#     path to repo-root-relative form (lib/MySQL_Monitor.cpp, src/main.cpp,
+#     test/tap/..., include/...).
+#
+#   Unit tests (flag unit-tests)
+#     test/infra/control/run-unit-tests-asan-coverage.bash already emits
+#     repo-root-relative paths (lcov --directory lib).
+#
+# Historically TAP prefixed paths with proxysql/ (matching the CI checkout
+# subdirectory). That created a phantom proxysql/ namespace on Codecov that
+# never merged with unit-tests lib/, so daemon-only files like
+# lib/MySQL_Monitor.cpp showed 0% despite thousands of real TAP hits.
+# The TAP sed rewrite and the GH-Actions codecov-action settings
+# (no network_prefix, disable_search, plugins:noop, root_dir:proxysql)
+# keep both pipelines on the git-tree path scheme.
+#
+# fixes: kept as a safety net for any leftover proxysql/-prefixed SF: lines
+# from older artifacts or partial rollouts. Becomes a no-op once every
+# producer emits repo-root paths.
+
+codecov:
+  # GitHub default branch is v3.0 (master is stale and has no codecov.yml).
+  branch: v3.0
+
+fixes:
+  - "proxysql/::"
+
+# Vendored test dependencies (Boost, googletest, etc.) drown out daemon
+# coverage. Keep test/tap/** included -- those are first-party TAP sources.
+ignore:
+  - "test/deps/**"
+
+# Flags represent test/binary classes, not individual matrix shards. All TAP
+# groups exercise the same regular ProxySQL daemon and therefore merge under
+# integration-tests. The ASAN unit-test and cluster-simulator binaries use
+# different build flags and remain separate. Keep carryforward disabled:
+# manually dispatched single TAP groups must not appear as complete coverage.
+flags:
+  unit-tests:
+    carryforward: false
+  integration-tests:
+    carryforward: false
+  simulation-tests:
+    carryforward: false

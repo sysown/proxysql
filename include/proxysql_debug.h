@@ -1,5 +1,5 @@
-#ifndef __PROXYSQL_DEBUG_H
-#define __PROXYSQL_DEBUG_H
+#ifndef PROXYSQL_DEBUG_H
+#define PROXYSQL_DEBUG_H
 
 #include <chrono>
 #include <iostream>
@@ -100,10 +100,10 @@ class Timer {
 	do { \
 		time_t __timer; \
 		char __buffer[25]; \
-		struct tm *__tm_info; \
+		struct tm __tm_info; \
 		time(&__timer); \
-		__tm_info = localtime(&__timer); \
-		strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", __tm_info); \
+		localtime_r(&__timer, &__tm_info); \
+		strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", &__tm_info); \
 		proxy_error_func(0, "%s %s:%d:%s(): [WARNING] " fmt, __buffer, __FILE__, __LINE__, __func__ , ## __VA_ARGS__); \
 	} while(0)
 
@@ -111,10 +111,10 @@ class Timer {
 	do { \
 		time_t __timer; \
 		char __buffer[25]; \
-		struct tm *__tm_info; \
+		struct tm __tm_info; \
 		time(&__timer); \
-		__tm_info = localtime(&__timer); \
-		strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", __tm_info); \
+		localtime_r(&__timer, &__tm_info); \
+		strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", &__tm_info); \
 		proxy_error_func(ecode, "%s %s:%d:%s(): [WARNING] " fmt, __buffer, __FILE__, __LINE__, __func__ , ## __VA_ARGS__); \
 	} while(0)
 
@@ -123,10 +123,10 @@ class Timer {
 	do { \
 		time_t __timer; \
 		char __buffer[25]; \
-		struct tm *__tm_info; \
+		struct tm __tm_info; \
 		time(&__timer); \
-		__tm_info = localtime(&__timer); \
-		strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", __tm_info); \
+		localtime_r(&__timer, &__tm_info); \
+		strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", &__tm_info); \
 		proxy_error_func(0, "%s %s:%d:%s(): [INFO] " fmt, __buffer, __FILE__, __LINE__, __func__ , ## __VA_ARGS__); \
 	} while(0)
 
@@ -134,10 +134,10 @@ class Timer {
 	do { \
 		time_t __timer; \
 		char __buffer[25]; \
-		struct tm *__tm_info; \
+		struct tm __tm_info; \
 		time(&__timer); \
-		__tm_info = localtime(&__timer); \
-		strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", __tm_info); \
+		localtime_r(&__timer, &__tm_info); \
+		strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", &__tm_info); \
 		proxy_error_func(ecode, "%s %s:%d:%s(): [INFO] " fmt, __buffer, __FILE__, __LINE__, __func__ , ## __VA_ARGS__); \
 	} while(0)
 #else
@@ -145,21 +145,21 @@ class Timer {
 	do { \
 		time_t __timer; \
 		char __buffer[25]; \
-		struct tm *__tm_info; \
+		struct tm __tm_info; \
 		time(&__timer); \
-		__tm_info = localtime(&__timer); \
-		strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", __tm_info); \
+		localtime_r(&__timer, &__tm_info); \
+		strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", &__tm_info); \
 		proxy_error_func(0, "%s [INFO] " fmt , __buffer , ## __VA_ARGS__); \
 	} while(0)
 
-#define proxy_info2(fmt, ...) \
+#define proxy_info2(ecode, fmt, ...) \
 	do { \
 		time_t __timer; \
 		char __buffer[25]; \
-		struct tm *__tm_info; \
+		struct tm __tm_info; \
 		time(&__timer); \
-		__tm_info = localtime(&__timer); \
-		strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", __tm_info); \
+		localtime_r(&__timer, &__tm_info); \
+		strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", &__tm_info); \
 		proxy_error_func(ecode, "%s [INFO] " fmt , __buffer , ## __VA_ARGS__); \
 	} while(0)
 #endif
@@ -171,28 +171,28 @@ class Timer {
 
 #define ASSERT_SQLITE_OK(rc, db) \
 	do { \
-		if (rc!=SQLITE_OK) { \
+		if ((rc)!=SQLITE_OK) { \
 			proxy_error( \
 				"SQLite3 error. Shutting down   rc=%d msg='%s'\n", \
-				rc, db ? (*proxy_sqlite3_errmsg)(db->get_db()) : NULL_DB_MSG); \
+				rc, (db) ? (*proxy_sqlite3_errmsg)((db)->get_db()) : NULL_DB_MSG); \
 			assert(0); \
 		} \
 	} while(0)
 
 #define ASSERT_SQLITE3_OK(rc, db) \
 	do { \
-		if (rc!=SQLITE_OK) { \
+		if ((rc)!=SQLITE_OK) { \
 			proxy_error( \
 				"SQLite3 error. Shutting down   rc=%d msg='%s'\n", \
-				rc, db ? (*proxy_sqlite3_errmsg)(db) : NULL_DB_MSG); \
+				rc, (db) ? (*proxy_sqlite3_errmsg)(db) : NULL_DB_MSG); \
 			assert(0); \
 		} \
 	} while(0)
 
 struct p_debug_dyn_counter {
-	enum metric {
+	enum metric : uint8_t {
 		proxysql_message_count = 0,
-		__size
+		SIZE_
 	};
 };
 

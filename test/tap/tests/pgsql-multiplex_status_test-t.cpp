@@ -213,15 +213,15 @@ void test_table_locks(Oid test_table_oid) {
             };
             executeQuery(conn, "BEGIN;");
             ok(!has_lock(conn, "relation", names[i], test_table_oid),
-                ("No " + std::string(names[i]) + " before LOCK TABLE").c_str());
+                "No %s before LOCK TABLE", names[i].c_str());
             ok(!get_proxysql_lock_status(conn, "lock_tables"), "No 'lock_tables' in ProxySQL before LOCK TABLE");
             executeQuery(conn, ("LOCK TABLE test_table IN " + mode_sql + " MODE;").c_str());
             ok(has_lock(conn, "relation", names[i], test_table_oid),
-                (names[i] + " acquired via LOCK TABLE " + mode_sql).c_str());
+                "%s acquired via LOCK TABLE %s", names[i].c_str(), mode_sql.c_str());
             ok(get_proxysql_lock_status(conn, "lock_tables"), "'lock_tables' in ProxySQL after LOCK TABLE");
             executeQuery(conn, "COMMIT;");
             ok(!has_lock(conn, "relation", names[i], test_table_oid),
-                (names[i] + " released after COMMIT").c_str());
+                "%s released after COMMIT", names[i].c_str());
             ok(!get_proxysql_lock_status(conn, "lock_tables"), "No 'lock_tables' in ProxySQL after COMMIT");
         }
     }

@@ -141,6 +141,7 @@ int main(int argc, char** argv) {
 	std::string ch_pass {};
 	std::string auth {};
 	std::string charset {};
+	std::string host {};
 	int         port;
 	bool        SSL;
 	bool        CHANGE_USER;
@@ -169,6 +170,7 @@ int main(int argc, char** argv) {
 			ch_pass = input.at("ch_pass");
 			auth = input.at("auth");
 			charset = input.at("charset");
+			host = input.value("host", "127.0.0.1");
 			port = input.at("port");
 			SSL = input.at("SSL");
 			CHANGE_USER = input.at("CHANGE_USER");
@@ -206,7 +208,7 @@ int main(int argc, char** argv) {
 
 	if (
 		!mysql_real_connect(
-			&mysql, "127.0.0.1", user.c_str(), pass.c_str(), "information_schema",
+			&mysql, host.c_str(), user.c_str(), pass.c_str(), "information_schema",
 			port, NULL, 0
 		)
 	) {
@@ -220,12 +222,12 @@ int main(int argc, char** argv) {
 	if (SSL == true) {
 		mysql_ssl_set(&mysql, NULL, NULL, NULL, NULL, NULL);
 		conn_res = mysql_real_connect(
-			&mysql, "127.0.0.1", user.c_str(), pass.c_str(), "information_schema",
+			&mysql, host.c_str(), user.c_str(), pass.c_str(), "information_schema",
 			port, NULL, CLIENT_SSL
 		);
 	} else {
 		conn_res = mysql_real_connect(
-			&mysql, "127.0.0.1", user.c_str(), pass.c_str(), "information_schema",
+			&mysql, host.c_str(), user.c_str(), pass.c_str(), "information_schema",
 			port, NULL, 0
 		);
 	}

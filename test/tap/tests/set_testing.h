@@ -21,6 +21,8 @@ const std::vector<std::string> possible_unknown_variables = {
 	"group_replication_consistency",
 	"query_cache_type",
 	"wsrep_osu_method",
+	"wsrep_trx_fragment_size",
+	"wsrep_trx_fragment_unit",
 	"log_slow_filter",
 	"sql_quote_show_create",
 	};
@@ -135,6 +137,21 @@ void parseResultJsonColumn(MYSQL_RES *result, json& j) {
 
 	while ((row = mysql_fetch_row(result)))
 		j = json::parse(row[0]);
+}
+
+// Check if two JSON values are equivalent, treating 'utf8' and 'utf8mb3' prefixes as equal.
+// MySQL 8.4+ reports 'utf8mb3' / 'utf8mb3_general_ci' where older versions report 'utf8' / 'utf8_general_ci'.
+static inline bool values_equiv(const json& ja, const json& jb) {
+	if (ja == jb) return true;
+	if (!ja.is_string() || !jb.is_string()) return false;
+	const std::string a = ja.get<std::string>();
+	const std::string b = jb.get<std::string>();
+	// exact charset match
+	if ((a == "utf8" && b == "utf8mb3") || (a == "utf8mb3" && b == "utf8")) return true;
+	// collation match: e.g. "utf8_general_ci" vs "utf8mb3_general_ci"
+	if (a.rfind("utf8_", 0) == 0 && b == "utf8mb3" + a.substr(4)) return true;
+	if (b.rfind("utf8_", 0) == 0 && a == "utf8mb3" + b.substr(4)) return true;
+	return false;
 }
 
 void parseResult(MYSQL_RES *result, json& j) {
@@ -450,17 +467,14 @@ void queryInternalStatus(MYSQL *mysql, json& j, std::string& paddress) {
  * @return True in case the check succeed, false otherwise.
  */
 bool check_session_track_gtids(const std::string& expVal, const std::string& sVal, const std::string& mVal) {
-	bool res = false;
-
 	if (expVal == "OFF") {
-		res = expVal == sVal;
+		return expVal == sVal;
 	} else if (expVal == "OWN_GTID" && (sVal == mVal && sVal == "OWN_GTID")) {
-		res = true;
+		return true;
 	} else if (expVal == "ALL_GTIDS" && (sVal == mVal && sVal == "OWN_GTID")) {
-		res = true;
+		return true;
 	}
-
-	return res;
+	return false;
 }
 
 int detect_version(CommandLine& cl, bool& is_mariadb, bool& is_cluster) {

@@ -1,22 +1,19 @@
-#ifndef __CLASS_MYSQL_HOSTGROUPS_MANAGER_H
-#define __CLASS_MYSQL_HOSTGROUPS_MANAGER_H
+#ifndef PROXYSQL_MYSQL_HOSTGROUPS_MANAGER_H
+#define PROXYSQL_MYSQL_HOSTGROUPS_MANAGER_H
 #include "proxysql.h"
 #include "cpp.h"
 #include "proxysql_gtid.h"
 
 #include <atomic>
 #include <thread>
-#include <iostream>
 #include <mutex>
+
+#include "ev.h"
+#include "wqueue.h"
 
 // Headers for declaring Prometheus counters
 #include "prometheus/counter.h"
 #include "prometheus/gauge.h"
-
-#include "thread.h"
-#include "wqueue.h"
-
-#include "ev.h"
 
 #ifndef SPOOKYV2
 #include "SpookyV2.h"
@@ -28,6 +25,11 @@
 #include "../deps/json/json_fwd.hpp"
 #endif // PROXYJSON
 
+#include "proxysql.h"
+#include "cpp.h"
+#include "Base_HostGroups_Manager.h"
+#include "GTID_Server_Data.h"
+
 #ifdef DEBUG
 /* */
 //	Enabling STRESSTEST_POOL ProxySQL will do a lot of loops in the connection pool
@@ -35,13 +37,10 @@
 //#define STRESSTEST_POOL
 #endif // DEBUG
 
-
-#include "Base_HostGroups_Manager.h"
-
 // we have 2 versions of the same tables: with (debug) and without (no debug) checks
 #ifdef DEBUG
-#define MYHGM_MYSQL_SERVERS "CREATE TABLE mysql_servers ( hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , gtid_port INT NOT NULL DEFAULT 0 , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , status INT CHECK (status IN (0, 1, 2, 3, 4)) NOT NULL DEFAULT 0 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , mem_pointer INT NOT NULL DEFAULT 0 , PRIMARY KEY (hostgroup_id, hostname, port) )"
-#define MYHGM_MYSQL_SERVERS_INCOMING "CREATE TABLE mysql_servers_incoming ( hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , gtid_port INT NOT NULL DEFAULT 0 , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , status INT CHECK (status IN (0, 1, 2, 3, 4)) NOT NULL DEFAULT 0 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup_id, hostname, port))"
+#define MYHGM_MYSQL_SERVERS "CREATE TABLE mysql_servers ( hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , gtid_port INT NOT NULL DEFAULT 0 , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , status INT CHECK (status IN (0, 1, 2, 3, 4, 5)) NOT NULL DEFAULT 0 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , mem_pointer INT NOT NULL DEFAULT 0 , PRIMARY KEY (hostgroup_id, hostname, port) )"
+#define MYHGM_MYSQL_SERVERS_INCOMING "CREATE TABLE mysql_servers_incoming ( hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , gtid_port INT NOT NULL DEFAULT 0 , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 1 , status INT CHECK (status IN (0, 1, 2, 3, 4, 5)) NOT NULL DEFAULT 0 , compression INT CHECK (compression >=0 AND compression <= 102400) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup_id, hostname, port))"
 #else
 #define MYHGM_MYSQL_SERVERS "CREATE TABLE mysql_servers ( hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , gtid_port INT NOT NULL DEFAULT 0 , weight INT NOT NULL DEFAULT 1 , status INT NOT NULL DEFAULT 0 , compression INT NOT NULL DEFAULT 0 , max_connections INT NOT NULL DEFAULT 1000 , max_replication_lag INT NOT NULL DEFAULT 0 , use_ssl INT NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , mem_pointer INT NOT NULL DEFAULT 0 , PRIMARY KEY (hostgroup_id, hostname, port) )"
 #define MYHGM_MYSQL_SERVERS_INCOMING "CREATE TABLE mysql_servers_incoming ( hostgroup_id INT NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , gtid_port INT NOT NULL DEFAULT 0 , weight INT NOT NULL DEFAULT 1 , status INT NOT NULL DEFAULT 0 , compression INT NOT NULL DEFAULT 0 , max_connections INT NOT NULL DEFAULT 1000 , max_replication_lag INT NOT NULL DEFAULT 0 , use_ssl INT NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup_id, hostname, port))"
@@ -61,10 +60,25 @@
 										  "new_reader_weight INT CHECK (new_reader_weight >= 0 AND new_reader_weight <=10000000) NOT NULL DEFAULT 1 , " \
 										  "add_lag_ms INT NOT NULL CHECK (add_lag_ms >= 0 AND add_lag_ms <= 600000) DEFAULT 30 , " \
 										  "min_lag_ms INT NOT NULL CHECK (min_lag_ms >= 0 AND min_lag_ms <= 600000) DEFAULT 30 , " \
-										  "lag_num_checks INT NOT NULL CHECK (lag_num_checks >= 1 AND lag_num_checks <= 16) DEFAULT 1 , comment VARCHAR ," \
+										  "lag_num_checks INT NOT NULL CHECK (lag_num_checks >= 1 AND lag_num_checks <= 16) DEFAULT 1 , " \
+										  "autopurge_missing_checks INT NOT NULL CHECK (autopurge_missing_checks >= 0 AND autopurge_missing_checks <= 100) DEFAULT 0 , " \
+										  "comment VARCHAR , UNIQUE (reader_hostgroup))"
+
+#define MYHGM_MYSQL_AWS_RDS_BGD_HOSTGROUPS "CREATE TABLE mysql_aws_rds_bgd_hostgroups ("\
+										  "writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , "\
+										  "reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0), " \
+										  "green_writer_hostgroup INT DEFAULT NULL CHECK (green_writer_hostgroup IS NULL OR green_writer_hostgroup>=0), " \
+										  "green_reader_hostgroup INT DEFAULT NULL CHECK (green_reader_hostgroup IS NULL OR green_reader_hostgroup>=0), " \
+										  "active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , " \
+										  "writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , " \
+										  "check_interval_ms INT NOT NULL CHECK (check_interval_ms >= 100 AND check_interval_ms <= 600000) DEFAULT 1000, " \
+										  "check_timeout_ms INT NOT NULL CHECK (check_timeout_ms >= 80 AND check_timeout_ms <= 3000) DEFAULT 800, " \
+										  "comment VARCHAR NOT NULL DEFAULT '', " \
+										  "auto_generated INT CHECK (auto_generated IN (0,1)) NOT NULL DEFAULT 0, " \
+										  "status INT NOT NULL DEFAULT 0, " \
 										  "UNIQUE (reader_hostgroup))"
 
-#define MYHGM_GEN_ADMIN_RUNTIME_SERVERS "SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers ORDER BY hostgroup_id, hostname, port"
+#define MYHGM_GEN_ADMIN_RUNTIME_SERVERS "SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" WHEN 5 THEN \"SHUNNED_AWS_BGD\" END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers ORDER BY hostgroup_id, hostname, port"
 
 #define MYHGM_MYSQL_HOSTGROUP_ATTRIBUTES "CREATE TABLE mysql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers <= 1000000) NOT NULL DEFAULT 1000000 , autocommit INT CHECK (autocommit IN (-1, 0, 1)) NOT NULL DEFAULT -1 , free_connections_pct INT CHECK (free_connections_pct >= 0 AND free_connections_pct <= 100) NOT NULL DEFAULT 10 , init_connect VARCHAR NOT NULL DEFAULT '' , multiplex INT CHECK (multiplex IN (0, 1)) NOT NULL DEFAULT 1 , connection_warming INT CHECK (connection_warming IN (0, 1)) NOT NULL DEFAULT 0 , throttle_connections_per_sec INT CHECK (throttle_connections_per_sec >= 1 AND throttle_connections_per_sec <= 1000000) NOT NULL DEFAULT 1000000 , ignore_session_variables VARCHAR CHECK (JSON_VALID(ignore_session_variables) OR ignore_session_variables = '') NOT NULL DEFAULT '' , hostgroup_settings VARCHAR CHECK (JSON_VALID(hostgroup_settings) OR hostgroup_settings = '') NOT NULL DEFAULT '' , servers_defaults VARCHAR CHECK (JSON_VALID(servers_defaults) OR servers_defaults = '') NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '')"
 
@@ -73,7 +87,7 @@
 
 /*
  * @brief Generates the 'runtime_mysql_servers' resultset exposed to other ProxySQL cluster members.
- * @details Makes 'SHUNNED' and 'SHUNNED_REPLICATION_LAG' statuses equivalent to 'ONLINE'. 'SHUNNED' states
+ * @details Makes 'SHUNNED', 'SHUNNED_REPLICATION_LAG' and 'SHUNNED_AWS_BGD' statuses equivalent to 'ONLINE'. 'SHUNNED' states
  *  are by definition local transitory states, this is why a 'mysql_servers' table reconfiguration isn't
  *  normally performed when servers are internally imposed with these statuses. This means, that propagating
  *  this state to other cluster members is undesired behavior, and so it's generating a different checksum,
@@ -95,6 +109,7 @@
 		" WHEN 2 THEN \"OFFLINE_SOFT\"" \
 		" WHEN 3 THEN \"OFFLINE_HARD\"" \
 		" WHEN 4 THEN \"ONLINE\" " \
+		" WHEN 5 THEN \"ONLINE\" " \
 		"END status," \
 		"weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment " \
 	"FROM mysql_servers " \
@@ -105,7 +120,7 @@
  * @brief Generates the 'mysql_servers_v2' resultset exposed to other ProxySQL cluster members.
  * @details The generated resultset is used for the checksum computation of the runtime ProxySQL config
  *  ('mysql_servers_v2' checksum), and it's also forwarded to other cluster members when querying the Admin
- *  interface with 'CLUSTER_QUERY_MYSQL_SERVERS_V2'. It makes 'SHUNNED' state equivalent to 'ONLINE', and also
+ *  interface with 'CLUSTER_QUERY_MYSQL_SERVERS_V2'. It makes 'SHUNNED' and 'SHUNNED_AWS_BGD' states equivalent to 'ONLINE', and also
  *  filters out any 'OFFLINE_HARD' entries. This is done because none of the statuses are valid configuration
  *  statuses, they are local, transient status that ProxySQL uses during operation.
  */
@@ -114,6 +129,7 @@
 		"hostgroup_id, hostname, port, gtid_port, " \
 		"CASE" \
 		" WHEN status=\"SHUNNED\" THEN \"ONLINE\"" \
+		" WHEN status=\"SHUNNED_AWS_BGD\" THEN \"ONLINE\"" \
 		" ELSE status " \
 		"END AS status, " \
 		"weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment " \
@@ -123,6 +139,13 @@
 
 typedef std::unordered_map<std::uint64_t, void *> umap_mysql_errors;
 
+// Forward declaration for WebUI monitoring metrics collector
+namespace ProxySQL {
+namespace Monitoring {
+class MetricsCollector;
+}
+}
+
 class MySrvConnList;
 class MySrvC;
 class MySrvList;
@@ -131,37 +154,6 @@ class MyHGC;
 struct peer_runtime_mysql_servers_t;
 struct peer_mysql_servers_v2_t;
 
-std::string gtid_executed_to_string(gtid_set_t& gtid_executed);
-void addGtid(const gtid_t& gtid, gtid_set_t& gtid_executed);
-
-#include "GTID_Server_Data.h"
-
-/*
-class GTID_Server_Data {
-	public:
-	char *address;
-	uint16_t port;
-	uint16_t mysql_port;
-	char *data;
-	size_t len;
-	size_t size;
-	size_t pos;
-	struct ev_io *w;
-	char uuid_server[64];
-	unsigned long long events_read;
-	gtid_set_t gtid_executed;
-	bool active;
-	GTID_Server_Data(struct ev_io *_w, char *_address, uint16_t _port, uint16_t _mysql_port);
-	void resize(size_t _s);
-	~GTID_Server_Data();
-	bool readall();
-	bool writeout();
-	bool read_next_gtid();
-	bool gtid_exists(char *gtid_uuid, uint64_t gtid_trxid);
-	void read_all_gtids();
-	void dump();
-};
-*/
 
 
 class MySrvConnList {
@@ -170,10 +162,13 @@ class MySrvConnList {
 	int find_idx(MySQL_Connection *c) {
 		//for (unsigned int i=0; i<conns_length(); i++) {
 		for (unsigned int i=0; i<conns->len; i++) {
-			MySQL_Connection *conn = NULL;
+			MySQL_Connection *conn = nullptr;
 			conn = (MySQL_Connection *)conns->index(i);
 			if (conn==c) {
-				return (unsigned int)i;
+				// 'find_idx' returns an int; cast the unsigned loop index to int
+				// to avoid unsigned->signed narrowing warnings and keep the
+				// sentinel return value of -1 for "not found".
+				return static_cast<int>(i);
 			}
 		}
 		return -1;
@@ -194,6 +189,7 @@ class MySrvConnList {
 	void get_random_MyConn_inner_search(unsigned int start, unsigned int end, unsigned int& conn_found_idx, unsigned int& connection_quality_level, unsigned int& number_of_matching_session_variables, const MySQL_Connection * client_conn);
 	unsigned int conns_length() { return conns->len; }
 	void drop_all_connections();
+	void mark_connections_unhealthy();
 	MySQL_Connection *index(unsigned int);
 };
 
@@ -223,10 +219,33 @@ class MySrvC {	// MySQL Server Container
 	unsigned long long queries_gtid_sync;
 	unsigned long long bytes_sent;
 	unsigned long long bytes_recv;
+	// shunned_automatic acts as a guard for server auto-recovery. When true, the shun recovery path
+	// (MyHGC::get_random_MySrvC) brings the server back online after shun_recovery_time; when false,
+	// the shun is held until an explicit unshun.
 	bool shunned_automatic;
 	bool shunned_and_kill_all_connections; // if a serious failure is detected, this will cause all connections to die even if the server is just shunned
 	int32_t use_ssl;
 	char *comment;
+
+	// 'session_track_backoff_until' stores a monotonic timestamp (in microseconds, matching
+	// 'MySQL_Thread::curtime' / 'MySQL_Session::thread->curtime') that prevents the server
+	// from being considered for selection by 'MyHGC::get_random_MySrvC()' and
+	// 'MySQL_Thread::get_MyConn_local()' until 'curtime' exceeds it.
+	//
+	// Scope: populated exclusively by 'MySQL_Session::handle_session_track_capabilities()'
+	// when 'mysql-session_track_variables' is in ENFORCED mode and the backend lacks the
+	// 'CLIENT_SESSION_TRACKING' / 'CLIENT_DEPRECATE_EOF' capabilities required to honor the
+	// mode. The name is intentionally feature-specific: if future code needs to exclude
+	// servers for an unrelated reason, introduce a separate field or rename this one to a
+	// more generic identifier at that point rather than overloading it silently.
+	//
+	// Reset policy: no explicit reset path; the field ages out naturally once 'curtime'
+	// surpasses the stored deadline. Selection sites must read it via 'load()' and may
+	// elide the atomic read entirely when 'mysql-session_track_variables' is not ENFORCED
+	// (since only that mode ever writes the field), keeping the hot connection-selection
+	// path free of atomic loads in default configurations.
+	std::atomic<unsigned long long> session_track_backoff_until;
+
 	MySrvConnList *ConnectionsUsed;
 	MySrvConnList *ConnectionsFree;
 	/**
@@ -296,7 +315,7 @@ class Group_Replication_Info {
 	char *comment;
 	bool active;
 	int writer_is_also_reader;
-	bool __active;
+	bool active_;
 	bool need_converge; // this is set to true on LOAD MYSQL SERVERS TO RUNTIME . This ensure that checks wil take an action
 	int current_num_writers;
 	int current_num_backup_writers;
@@ -305,6 +324,8 @@ class Group_Replication_Info {
 	Group_Replication_Info(int w, int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c);
 	bool update(int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c);
 	~Group_Replication_Info();
+	Group_Replication_Info(const Group_Replication_Info&) = delete;
+	Group_Replication_Info& operator=(const Group_Replication_Info&) = delete;
 };
 
 class Galera_Info {
@@ -318,7 +339,7 @@ class Galera_Info {
 	char *comment;
 	bool active;
 	int writer_is_also_reader;
-	bool __active;
+	bool active_;
 	bool need_converge; // this is set to true on LOAD MYSQL SERVERS TO RUNTIME . This ensure that checks wil take an action
 	int current_num_writers;
 	int current_num_backup_writers;
@@ -327,6 +348,8 @@ class Galera_Info {
 	Galera_Info(int w, int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c);
 	bool update(int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c);
 	~Galera_Info();
+	Galera_Info(const Galera_Info&) = delete;
+	Galera_Info& operator=(const Galera_Info&) = delete;
 };
 
 class AWS_Aurora_Info {
@@ -342,77 +365,18 @@ class AWS_Aurora_Info {
 	int check_timeout_ms;
 	int writer_is_also_reader;
 	int new_reader_weight;
+	int autopurge_missing_checks;
 	// TODO
 	// add intermediary status value, for example the last check time
 	char * domain_name;
 	char * comment;
 	bool active;
-	bool __active;
-	AWS_Aurora_Info(int w, int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c);
-	bool update(int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c);
+	bool active_;
+	AWS_Aurora_Info(int w, int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, int amc, char *c);
+	bool update(int r, int _port, char *_end_addr, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, int amc, char *c);
 	~AWS_Aurora_Info();
-};
-
-class MySQLServers_SslParams {
-	public:
-	string hostname;
-	int port;
-	string username;
-	string ssl_ca;
-	string ssl_cert;
-	string ssl_key;
-	string ssl_capath;
-	string ssl_crl;
-	string ssl_crlpath;
-	string ssl_cipher;
-	string tls_version;
-	string comment;
-	string MapKey;
-	MySQLServers_SslParams(string _h, int _p, string _u,
-		string ca, string cert, string key, string capath,
-		string crl, string crlpath, string cipher, string tls,
-		string c) {
-		hostname = _h;
-		port = _p;
-		username = _u;
-		ssl_ca = ca;
-		ssl_cert = cert;
-		ssl_key = key;
-		ssl_capath = capath;
-		ssl_crl = crl;
-		ssl_crlpath = crlpath;
-		ssl_cipher = cipher;
-		tls_version = tls;
-		comment = c;
-		MapKey = "";
-	}
-	MySQLServers_SslParams(char * _h, int _p, char * _u,
-		char * ca, char * cert, char * key, char * capath,
-		char * crl, char * crlpath, char * cipher, char * tls,
-		char * c) {
-		hostname = string(_h);
-		port = _p;
-		username = string(_u);
-		ssl_ca = string(ca);
-		ssl_cert = string(cert);
-		ssl_key = string(key);
-		ssl_capath = string(capath);
-		ssl_crl = string(crl);
-		ssl_crlpath = string(crlpath);
-		ssl_cipher = string(cipher);
-		tls_version = string(tls);
-		comment = string(c);
-		MapKey = "";
-	}
-	MySQLServers_SslParams(string _h, int _p, string _u) {
-		MySQLServers_SslParams(_h, _p, _u, "", "", "", "", "", "", "", "", "");
-	}
-	string getMapKey(const char *del) {
-		if (MapKey == "") {
-			MapKey = hostname + string(del) + to_string(port) + string(del) + username;
-		}
-		return MapKey;
-	}
+	AWS_Aurora_Info(const AWS_Aurora_Info&) = delete;
+	AWS_Aurora_Info& operator=(const AWS_Aurora_Info&) = delete;
 };
 
 struct p_hg_counter {
@@ -448,7 +412,7 @@ struct p_hg_counter {
 		myhgm_myconnpool_reset,
 		myhgm_myconnpool_destroy,
 		auto_increment_delay_multiplex,
-		__size
+		SIZE_
 	};
 };
 
@@ -458,12 +422,12 @@ struct p_hg_gauge {
 		client_connections_connected,
 		client_connections_connected_prim,
 		client_connections_connected_addl,
-		__size
+		SIZE_
 	};
 };
 
 struct p_hg_dyn_counter {
-	enum metric {
+	enum metric : uint8_t {
 		conn_pool_bytes_data_recv = 0,
 		conn_pool_bytes_data_sent,
 		connection_pool_conn_err,
@@ -472,22 +436,22 @@ struct p_hg_dyn_counter {
 		gtid_executed,
 		proxysql_mysql_error,
 		mysql_error,
-		__size
+		SIZE_
 	};
 };
 
-enum class p_mysql_error_type {
+enum class p_mysql_error_type : uint8_t {
 	mysql,
 	proxysql
 };
 
 struct p_hg_dyn_gauge {
-	enum metric {
+	enum metric : uint8_t {
 		connection_pool_conn_free = 0,
 		connection_pool_conn_used,
 		connection_pool_latency_us,
 		connection_pool_status,
-		__size
+		SIZE_
 	};
 };
 
@@ -518,7 +482,7 @@ enum READ_ONLY_SERVER_T {
 	ROS_HOSTNAME = 0,
 	ROS_PORT,
 	ROS_READONLY,
-	ROS__SIZE
+	ROS_SIZE_
 };
 
 enum REPLICATION_LAG_SERVER_T {
@@ -527,7 +491,7 @@ enum REPLICATION_LAG_SERVER_T {
 	RLS_PORT,
 	RLS_CURRENT_REPLICATION_LAG,
 	RLS_OVERRIDE_REPLICATION_LAG,
-	RLS__SIZE
+	RLS_SIZE_
 };
 
 /**
@@ -569,12 +533,13 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 		MYSQL_AWS_AURORA_HOSTGROUPS,
 		MYSQL_HOSTGROUP_ATTRIBUTES,
 		MYSQL_SERVERS_SSL_PARAMS,
+		MYSQL_AWS_RDS_BGD_HOSTGROUPS,
 		MYSQL_SERVERS,
 
-		__HGM_TABLES_SIZE
+		HGM_TABLES_SIZE_
 	};
 
-	std::array<uint64_t, __HGM_TABLES_SIZE> table_resultset_checksum { {0} };
+	std::array<uint64_t, HGM_TABLES_SIZE_> table_resultset_checksum { {0} };
 
 	class HostGroup_Server_Mapping {
 	public:
@@ -582,11 +547,11 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 			WRITER = 0,
 			READER = 1,
 
-			__TYPE_SIZE
+			TYPE_SIZE_
 		};
 
 		struct Node {
-			MySrvC* srv = NULL;
+			MySrvC* srv = nullptr;
 			unsigned int reader_hostgroup_id = -1;
 			unsigned int writer_hostgroup_id = -1;
 			//MySerStatus server_status = MYSQL_SERVER_STATUS_OFFLINE_HARD;
@@ -647,7 +612,7 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 		MySrvC* insert_HGM(unsigned int hostgroup_id, const MySrvC* srv);
 		void remove_HGM(MySrvC* srv);
 
-		std::array<std::vector<Node>, __TYPE_SIZE> mapping; // index 0 contains reader and 1 contains writer hostgroups
+		std::array<std::vector<Node>, TYPE_SIZE_> mapping; // index 0 contains reader and 1 contains writer hostgroups
 		int readonly_flag;
 		MySQL_HostGroups_Manager* myHGM;
 	};
@@ -753,6 +718,17 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	pthread_mutex_t AWS_Aurora_Info_mutex;
 	std::map<int , AWS_Aurora_Info *> AWS_Aurora_Info_Map;
 
+	/**
+	 * @brief Materializes the runtime `mysql_aws_rds_bgd_hostgroups` table from the staged
+	 *   `incoming_aws_rds_bgd_hostgroups` resultset.
+	 *
+	 * @details Inserts each staged row with `auto_generated=0` (config-loaded entries are
+	 *   user-defined) and NULL green hostgroups preserved, then clears the staging resultset.
+	 *   No-op when nothing is staged.
+	 */
+	void generate_mysql_aws_rds_bgd_hostgroups_table();
+	SQLite3_result *incoming_aws_rds_bgd_hostgroups;
+
 	void generate_mysql_hostgroup_attributes_table();
 	SQLite3_result *incoming_hostgroup_attributes;
 
@@ -792,6 +768,9 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	void group_replication_lag_action_set_server_status(MyHGC* myhgc, char* address, int port, int lag_count, bool enable);
 
 	public:
+	// Friend declaration for WebUI monitoring metrics collector
+	friend class ProxySQL::Monitoring::MetricsCollector;
+
 	std::mutex galera_set_writer_mutex;
 	/**
 	 * @brief Mutex used to guard 'mysql_servers_to_monitor' resulset.
@@ -853,12 +832,12 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 		//////////////////////////////////////////////////////
 
 		/// Prometheus metrics arrays
-		std::array<prometheus::Counter*, p_hg_counter::__size> p_counter_array {};
-		std::array<prometheus::Gauge*, p_hg_gauge::__size> p_gauge_array {};
+		std::array<prometheus::Counter*, p_hg_counter::SIZE_> p_counter_array {};
+		std::array<prometheus::Gauge*, p_hg_gauge::SIZE_> p_gauge_array {};
 
 		// Prometheus dyn_metrics families arrays
-		std::array<prometheus::Family<prometheus::Counter>*, p_hg_dyn_counter::__size> p_dyn_counter_array {};
-		std::array<prometheus::Family<prometheus::Gauge>*, p_hg_dyn_gauge::__size> p_dyn_gauge_array {};
+		std::array<prometheus::Family<prometheus::Counter>*, p_hg_dyn_counter::SIZE_> p_dyn_counter_array {};
+		std::array<prometheus::Family<prometheus::Gauge>*, p_hg_dyn_gauge::SIZE_> p_dyn_gauge_array {};
 
 		/// Prometheus connection_pool metrics
 		std::map<std::string, prometheus::Counter*> p_conn_pool_bytes_data_recv_map {};
@@ -1059,7 +1038,7 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 
 	void drop_all_idle_connections();
 	int get_multiple_idle_connections(int, unsigned long long, MySQL_Connection **, int);
-	SQLite3_result * SQL3_Connection_Pool(bool _reset, int *hid = NULL);
+	SQLite3_result * SQL3_Connection_Pool(bool _reset, int *hid = nullptr);
 	SQLite3_result * SQL3_Free_Connections();
 
 	void push_MyConn_to_pool(MySQL_Connection *, bool _lock=true);
@@ -1068,13 +1047,87 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 
 	void replication_lag_action_inner(MyHGC *, const char*, unsigned int, int, bool);
 	void replication_lag_action(const std::list<replication_lag_server_t>& mysql_servers);
-//	void read_only_action(char *hostname, int port, int read_only);
-	void read_only_action_v2(const std::list<read_only_server_t>& mysql_servers);
+	/**
+	 * @brief Reconcile writer/reader hostgroup placement from read_only monitor results.
+	 *
+	 * @details New implementation of the read_only_action that does not depend on the admin table.
+	 *   Checks each server in the provided list and adjusts writer/reader hostgroup placement
+	 *   according to the corresponding read_only value. If any change occurs, the runtime
+	 *   mysql_servers table and checksum are regenerated.
+	 *
+	 * @param mysql_servers Servers and their observed/read-only state.
+	 * @param ignore_aws_bgd True to apply the result while BGD switchover is in progress.
+	 */
+	void read_only_action_v2(const std::list<read_only_server_t>& mysql_servers, bool ignore_aws_bgd = false);
 	unsigned int get_servers_table_version();
 	void wait_servers_table_version(unsigned, unsigned);
 	bool shun_and_killall(char *hostname, int port);
 	void set_server_current_latency_us(char *hostname, int port, unsigned int _current_latency_us);
 	void set_Readyset_status(char *hostname, int port, enum MySerStatus status);
+	/**
+	* @brief Set or clear AWS RDS BGD shun state for a matching server.
+	*
+	* @details When shunning, transitions an ONLINE server to SHUNNED_AWS_BGD,
+	*   enables shun metadata, and drops free connections. When unshunning,
+	*   transitions only SHUNNED_AWS_BGD back to ONLINE and clears shun metadata.
+	*   Servers in other statuses are left unchanged.
+	*
+	* @param hostgroup_id Hostgroup to search.
+	* @param hostname     Address of the server to match.
+	* @param port         Port of the server to match.
+	* @param shun         true to shun the server, false to unshun it.
+	*
+	* @return true if this call changed a server's status.
+	*
+	* @note Caller must hold wrlock().
+	*/
+	bool aws_rds_bgd_set_shun_server(unsigned int hostgroup_id, const char *hostname, int port, bool shun);
+	/**
+	 * @brief Configure the AWS RDS BGD writer's writer/reader hostgroup membership.
+	 *
+	 * @details Ensures the writer is present in its writer hostgroup, with optional reader
+	 *   hostgroup membership controlled by writer_is_also_reader.
+	 *
+	 * @param hostname Server hostname to configure.
+	 * @param port Server port to configure.
+	 * @param writer_is_also_reader Whether the writer should also be present in reader hostgroup.
+	 *
+	 * @return true if hostgroup membership changed.
+	 *
+	 * @note Caller must hold wrlock().
+	 */
+	bool aws_rds_bgd_configure_writer(const char *hostname, int port, bool writer_is_also_reader);
+	/**
+	 * @brief Set AWS RDS BGD switchover status in runtime mysql_aws_rds_bgd_hostgroups table
+	 *
+	 * @param writer_hg Writer hostgroup identifying the deployment.
+	 * @param status    AWS_RDS_BGD_Status underlying value.
+	 */
+	void aws_rds_bgd_set_runtime_status(unsigned int writer_hg, int status);
+	/**
+	 * @brief Aligns the runtime 'mysql_servers' table + checksums with the server state in MyHGM.
+	 *
+	 * @details One-way alignment (in-memory -> runtime): regenerates the runtime 'mysql_servers' table
+	 *   from the current in-memory MyHGM state, recomputes/republishes the global checksum, and refreshes
+	 *   'mysql_servers_to_monitor' for the regular monitor threads.
+	 *
+	 * @note Caller must hold wrlock().
+	 */
+	void publish_mysql_servers_to_runtime();
+	/**
+	 * @brief Drain existing backend connections for a server in all hostgroups.
+	 *
+	 * @details Drops free connections immediately and marks used connections as unhealthy and non-reusable,
+	 *   so in-flight operations fail on their next backend step and the connection is never pooled again.
+	 *
+	 * @param hostname     Address of the server to match.
+	 * @param port         Port of the server to match.
+	 * @return true if a matching server was found.
+	 *
+	 * @note Caller must hold wrlock().
+	 */
+	bool drain_server_connections(const char *hostname, int port);
+
 	unsigned long long Get_Memory_Stats();
 
 	void add_discovered_servers_to_mysql_servers_and_replication_hostgroups(const vector<tuple<string, int, int>>& new_servers);
@@ -1160,10 +1213,31 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 *   be taken or not.
 	 */
 	void update_aws_aurora_hosts_monitor_resultset(bool lock=false);
+	/**
+	 * @brief Rebuilds the AWS RDS BGD monitor's host resultset.
+	 *
+	 * @details Rebuilds `GloMyMon->AWS_RDS_BGD_Hosts_resultset` and publishes both the full BGD hosts
+	 *   checksum and one checksum per writer hostgroup.
+	 */
+	void update_aws_rds_bgd_hosts_monitor_resultset();
+	/**
+	 * @brief Auto-generate a runtime `mysql_aws_rds_bgd_hostgroups` entry for a server's writer hostgroup.
+	 *
+	 * @details Called when the read_only monitor detects a blue/green deployment. The writer/reader
+	 *   hostgroups are derived from the server's `hostgroup_server_mapping`. Green hostgroups are
+	 *   stored NULL with `auto_generated=1`. Idempotent.
+	 *
+	 * @param hostname    Hostname of the server that exposed the blue/green topology.
+	 * @param port        Port of the server.
+	 *
+	 * @return true if a new entry was added; false otherwise.
+	 */
+	bool add_aws_rds_bgd_hostgroup_entry(const std::string& hostname, int port);
 
 	SQLite3_result * get_stats_mysql_gtid_executed();
 	void generate_mysql_gtid_executed_tables();
 	bool gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uint64_t gtid_trxid);
+	bool update_gtid_from_ok(MySrvC* mysrvc, const char* gtid);
 
 	SQLite3_result *SQL3_Get_ConnPool_Stats();
 	void increase_reset_counter();
@@ -1178,10 +1252,12 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	MySQLServers_SslParams * get_Server_SSL_Params(char *hostname, int port, char *username);
 
 private:
+	GTID_Server_Data* get_or_create_gtid_server_data(MySrvC* server, const std::string& endpoint);
+	void start_gtid_reader_if_needed(MySrvC* server, GTID_Server_Data* gtid_data);
 	void update_hostgroup_manager_mappings();
 	uint64_t get_mysql_servers_checksum(SQLite3_result* runtime_mysql_servers = nullptr);
 	uint64_t get_mysql_servers_v2_checksum(SQLite3_result* incoming_mysql_servers_v2 = nullptr);
 };
 
 
-#endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */
+#endif /* PROXYSQL_MYSQL_HOSTGROUPS_MANAGER_H */

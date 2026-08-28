@@ -49,16 +49,42 @@ std::tuple<bool, unsigned int, unsigned int> execute_query_and_check_result(MYSQ
 
 int main(int argc, char** argv) {
 	CommandLine cl;
+	MYSQL* proxysql_admin = nullptr;
+	MYSQL* proxysql = nullptr;
+	bool result = false;
+	unsigned int errcode = 0;
+	unsigned int query_exec_count = 0;
+
+
+
+
+
+	diag("================================================================================");
+	diag("TEST DESCRIPTION: Hostgroup Attributes 'max_num_online_servers' Validation");
+	diag("This test evaluates if ProxySQL correctly enforces the maximum number of online");
+	diag("servers allowed in a hostgroup before it starts failing connections.");
+	diag("We test two scenarios:");
+	diag("  1. max_num_online_servers=1: If more than 1 server is online in HG 1, ProxySQL");
+	diag("     should return error 9001 (Max online servers reached).");
+	diag("  2. max_num_online_servers=100: Normal operation allowed.");
+	diag("The test automatically configures Hostgroup 1 and routing rules.");
+	diag("================================================================================");
 
 	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
+		diag("ERROR: Failed to get the required environmental variables.");
 		return -1;
 	}
+
+	diag("Connection Context:");
+	diag("  - Target Host: %s", cl.host);
+	diag("  - Admin Port:  %d", cl.admin_port);
+	diag("  - Main Port:   %d", cl.port);
+	diag("  - User:        %s", cl.username);
 
 	plan(4*3);
 
 	// Initialize Admin connection
-	MYSQL* proxysql_admin = mysql_init(NULL);
+	proxysql_admin = mysql_init(NULL);
 	if (!proxysql_admin) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return -1;
@@ -68,9 +94,33 @@ int main(int argc, char** argv) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return -1;
 	}
+	diag("Successfully connected to ProxySQL Admin.");
+
+	// SELF-CONFIGURATION: Ensure Hostgroup 1 and 0 are usable and isolated
+	diag("Configuring ProxySQL environment for the test...");
+	diag("  - Clearing existing query rules...");
+	MYSQL_QUERY__(proxysql_admin, "DELETE FROM mysql_query_rules");
+	
+	diag("  - Resetting Hostgroups 0 and 1...");
+	MYSQL_QUERY__(proxysql_admin, "DELETE FROM mysql_servers WHERE hostgroup_id IN (0,1)");
+	
+	diag("  - Populating Hostgroup 1 with up to 3 online servers...");
+	MYSQL_QUERY__(proxysql_admin, "INSERT INTO mysql_servers (hostgroup_id, hostname, port) SELECT DISTINCT 1, hostname, port FROM mysql_servers WHERE status='ONLINE' LIMIT 3");
+	
+	diag("  - Populating Hostgroup 0 with 1 server from HG 1...");
+	MYSQL_QUERY__(proxysql_admin, "INSERT INTO mysql_servers (hostgroup_id, hostname, port) SELECT 0, hostname, port FROM mysql_servers WHERE hostgroup_id=1 LIMIT 1");
+	
+	diag("  - Setting up test routing rules (SELECT -> HG 1, others -> HG 0)...");
+	MYSQL_QUERY__(proxysql_admin, "INSERT INTO mysql_query_rules(rule_id, active, username, match_digest, destination_hostgroup, apply) VALUES (1, 1, 'testuser', '^SELECT', 1, 1)");
+	MYSQL_QUERY__(proxysql_admin, "INSERT INTO mysql_query_rules(rule_id, active, username, match_digest, destination_hostgroup, apply) VALUES (2, 1, 'testuser', '.*', 0, 1)");
+	
+	diag("  - Loading configuration to runtime...");
+	MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
+	MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
+	diag("ProxySQL configuration applied successfully.");
 
 	// Initialize ProxySQL connection
-	MYSQL* proxysql = mysql_init(NULL);
+	proxysql = mysql_init(NULL);
 	if (!proxysql) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql));
 		return -1;
@@ -82,9 +132,9 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	bool result;
-	unsigned int errcode;
-	unsigned int query_exec_count;
+
+
+
 
 	diag("## Pre-test Check ##\n");
 	diag("Executing query... [Reader HG]\n");

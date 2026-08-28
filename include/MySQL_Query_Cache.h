@@ -1,5 +1,5 @@
-#ifndef __CLASS_MYSQL_QUERY_CACHE_H
-#define __CLASS_MYSQL_QUERY_CACHE_H
+#ifndef PROXYSQL_MYSQL_QUERY_CACHE_H
+#define PROXYSQL_MYSQL_QUERY_CACHE_H
 
 #include "proxysql.h"
 #include "cpp.h"
@@ -23,4 +23,4 @@ public:
 	//void* purgeHash_thread(void*);
 };
 
-#endif /* __CLASS_MYSQL_QUERY_CACHE_H */
+#endif /* PROXYSQL_MYSQL_QUERY_CACHE_H */

@@ -3,14 +3,30 @@
 
 #define CLUSTER_SYNC_INTERFACES_ADMIN "('admin-mysql_ifaces','admin-restapi_port','admin-telnet_admin_ifaces','admin-telnet_stats_ifaces','admin-web_port','admin-pgsql_ifaces')"
 #define CLUSTER_SYNC_INTERFACES_MYSQL "('mysql-interfaces')"
+#define CLUSTER_SYNC_INTERFACES_PGSQL "('pgsql-interfaces')"
 
 #include <memory>
+#include <vector>
 #include <string.h>
 #include "prometheus/registry.h"
 
 #include "configfile.hpp"
 #include "proxy_defines.h"
 #include "proxysql_utils.h"
+#include <openssl/ssl.h>
+
+#ifdef DEBUG
+// `debug_level` is fully defined in proxysql_structs.h which itself
+// #include's this header at the bottom (circular chain -- structs.h
+// defines debug_level, then includes glovars.hpp to declare GloVars,
+// then glovars.hpp needs debug_level as a member pointer type).  Any
+// caller that #include's proxysql_structs.h gets the full definition
+// transitively; callers that #include glovars.hpp directly (e.g. the
+// plugin unit tests, which only need the GloVars layout) need this
+// forward decl so a pointer-typed member compiles.
+struct _debug_level;
+typedef struct _debug_level debug_level;
+#endif /* DEBUG */
 
 namespace ez {
 class ezOptionParser;
@@ -32,9 +48,12 @@ class ProxySQL_Checksum_Value {
 		epoch = 0;
 		in_shutdown = false;
 	}
-	void set_checksum(char *c) {
+	void set_checksum(const char *c) {
 		memset(checksum,0,ProxySQL_Checksum_Value_LENGTH);
-		strncpy(checksum,c,ProxySQL_Checksum_Value_LENGTH);
+		if (c) {
+			const size_t length = strnlen(c, ProxySQL_Checksum_Value_LENGTH);
+			memcpy(checksum, c, length);
+		}
 		replace_checksum_zeros(checksum);
 	}
 	~ProxySQL_Checksum_Value() {
@@ -79,6 +98,18 @@ class ProxySQL_GlobalVariables {
 	char * sqlite3_plugin;
 	char * web_interface_plugin;
 	char * ldap_auth_plugin;
+#ifdef PROXYSQL40
+	// Loadable plugin modules (chassis only -- v3.x has no plugin loader).
+	std::vector<std::string> plugin_modules;
+	// Operator kill switch. When set (via --no-plugins CLI flag or
+	// PROXYSQL_NO_PLUGINS=1 env var), the plugin chassis is bypassed
+	// entirely: LoadConfiguredPlugins / InitConfiguredPlugins /
+	// StartConfiguredPlugins become no-ops, and the chassis-aware
+	// admin command dispatcher refuses plugin commands. Lets an
+	// operator disable a misbehaving plugin without editing the config
+	// file or downgrading. CLI takes priority over env, env over config.
+	bool no_plugins;
+#endif /* PROXYSQL40 */
 	SSL_CTX *get_SSL_ctx();
 	SSL *get_SSL_new();
 	void get_SSL_pem_mem(char **key, char **cert);
@@ -118,6 +149,7 @@ class ProxySQL_GlobalVariables {
 #ifdef PROXYSQLCLICKHOUSE
 		bool clickhouse_server;
 #endif /* PROXYSQLCLICKHOUSE */
+
 		int gr_bootstrap_mode;
 		char* gr_bootstrap_uri;
 		char* gr_bootstrap_account;
@@ -139,6 +171,12 @@ class ProxySQL_GlobalVariables {
 		pthread_mutex_t ext_glomth_mutex;
 		pthread_mutex_t ext_glopth_mutex;
 		bool ssl_keylog_enabled;
+		uint64_t tls_load_count;
+		time_t tls_last_load_timestamp;
+		bool tls_last_load_ok;
+		char *tls_cert_file;
+		char *tls_ca_file;
+		char *tls_key_file;
 	} global;
 	struct mysql {
 		char *server_version;
@@ -178,6 +216,13 @@ class ProxySQL_GlobalVariables {
 	void parse(int argc, const char * argv[]);
 	void install_signal_handler();
 };
+
+#ifdef PROXYSQL40
+void proxysql_load_plugin_modules_from_config(
+	const Setting& root,
+	std::vector<std::string>& plugin_modules
+);
+#endif /* PROXYSQL40 */
 
 /*
 #ifndef PROXYSQL_EXTERN

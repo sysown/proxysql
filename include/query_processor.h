@@ -1,5 +1,5 @@
-#ifndef __CLASS_QUERY_PROCESSOR_H
-#define __CLASS_QUERY_PROCESSOR_H
+#ifndef PROXYSQL_QUERY_PROCESSOR_H
+#define PROXYSQL_QUERY_PROCESSOR_H
 #include <type_traits>
 #include <set>
 #include "proxysql.h"
@@ -17,6 +17,7 @@
 #include "../deps/json/json_fwd.hpp"
 #endif // PROXYJSON
 
+#include "query_digest_topk.h"
 #include "khash.h"
 KHASH_MAP_INIT_STR(khStrInt, int)
 
@@ -80,8 +81,9 @@ class QP_query_digest_stats {
 		unsigned long long t, unsigned long long n, unsigned long long ra, unsigned long long rs,
 		unsigned long long cnt = 1
 	);
+	void merge(const QP_query_digest_stats *other);
 	~QP_query_digest_stats();
-	char *get_digest_text(const umap_query_digest_text *digest_text_umap);
+	char *get_digest_text(const umap_query_digest_text *digest_text_umap) const;
 	char **get_row(umap_query_digest_text *digest_text_umap, query_digest_stats_pointers_t *qdsp);
 };
 
@@ -184,7 +186,7 @@ class Query_Processor_Output {
 		l_free(sizeof(Query_Processor_Output),ptr);
 	}
 	Query_Processor_Output() {
-		//init();
+		init();
 	}
 	~Query_Processor_Output() {
 		//destroy();
@@ -238,6 +240,41 @@ class Query_Processor_Output {
  * @brief Frees the supplied query rules and cleans the vector.
  */
 void __reset_rules(std::vector<QP_rule_t*>* qrs);
+
+/**
+ * @brief Evaluates whether a query rule matches the supplied query and session attributes.
+ * @details The predicate only depends on the provided inputs. If the rule references regex
+ * patterns and does not already hold compiled regex engines, temporary regex objects are
+ * compiled on demand using the requested regex engine.
+ *
+ * @param rule Rule to evaluate.
+ * @param current_flagIN Current query flag.
+ * @param username Session username.
+ * @param schemaname Session schema name.
+ * @param client_addr Client address.
+ * @param proxy_addr Proxy listener address.
+ * @param proxy_port Proxy listener port.
+ * @param digest Parsed query digest.
+ * @param digest_text Parsed digest text.
+ * @param query_text Original query text.
+ * @param rewritten_query Rewritten query text produced by a previous rule, if any.
+ * @param query_processor_regex Regex engine selector: PCRE (1) or RE2 (2).
+ * @return true when all rule criteria match, otherwise false.
+ */
+bool rule_matches_query(
+	const QP_rule_t* rule,
+	int current_flagIN,
+	const char* username,
+	const char* schemaname,
+	const char* client_addr,
+	const char* proxy_addr,
+	int proxy_port,
+	uint64_t digest,
+	const char* digest_text,
+	const char* query_text,
+	const char* rewritten_query,
+	int query_processor_regex
+);
 
 /**
  * @brief Helper type for performing the 'mysql_rules_fast_routing' hashmaps creation.
@@ -301,8 +338,15 @@ public:
 		unsigned long long rows_affected, unsigned long long rows_sent);
 	std::pair<SQLite3_result*,int> get_query_digests_v2(const bool use_resultset = true);
 	std::pair<SQLite3_result*,int> get_query_digests_reset_v2(const bool copy, const bool use_resultset = true);
+	query_digest_topk_result_t get_query_digests_topk(
+		const query_digest_filter_opts_t& filters,
+		query_digest_sort_by_t sort_by,
+		uint32_t limit,
+		uint32_t offset,
+		uint32_t max_window
+	);
 	void get_query_digests_reset(umap_query_digest* uqd, umap_query_digest_text* uqdt);
-	unsigned long long purge_query_digests(bool async_purge, bool parallel, char** msg);
+	unsigned long long purge_query_digests(bool async_purge, bool parallel, time_t last_seen = 0);
 
 	void save_query_rules(SQLite3_result* resultset);
 
@@ -414,8 +458,8 @@ private:
 	DEFINE_HAS_METHOD_STRUCT(query_parser_first_comment_extended);
 	DEFINE_HAS_METHOD_STRUCT(process_query_extended);
 
-	unsigned long long purge_query_digests_async(char** msg);
-	unsigned long long purge_query_digests_sync(bool parallel);
+	unsigned long long purge_query_digests_async(time_t last_seen = 0);
+	unsigned long long purge_query_digests_sync(bool parallel, time_t last_seen = 0);
 
 	/**
 	 * @brief Searches for a matching rule in the supplied map, returning the destination hostgroup.
@@ -437,4 +481,4 @@ private:
 	friend Web_Interface_plugin;
 };
 
-#endif /* __CLASS_QUERY_PROCESSOR_H */
+#endif /* PROXYSQL_QUERY_PROCESSOR_H */

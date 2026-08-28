@@ -99,6 +99,11 @@ class Base_Session {
 	//MySQL_STMTs_meta *sess_STMTs_meta;
 	//StmtLongDataHandler *SLDH;
 
+	// GenAI async support (per-session epoll fd + pending-request map)
+	// removed in Step 4 of the GenAI plugin carve-out -- the
+	// GENAI:/LLM: prefix handlers that owned this state are gone.
+	// See decision Q2 in the design doc.
+
 
 
 	void init();

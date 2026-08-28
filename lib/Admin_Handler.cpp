@@ -16,6 +16,7 @@ using json = nlohmann::json;
 
 #include "Base_Thread.h"
 
+#include "MySQL_Passthrough_Auth_Cache.h"
 #include "MySQL_HostGroups_Manager.h"
 #include "PgSQL_HostGroups_Manager.h"
 #include "mysql.h"
@@ -40,8 +41,13 @@ using json = nlohmann::json;
 #include "MySQL_PreparedStatement.h"
 #include "ProxySQL_Cluster.hpp"
 #include "ProxySQL_Statistics.hpp"
+#ifdef PROXYSQL40
+#include "ProxySQL_PluginManager.h"
+#endif /* PROXYSQL40 */
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
+// MCP_Thread.h moved to plugins/genai/include/ in Step 4.C;
+// GenAI_Thread.h moved in Step 5.
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
 
@@ -77,6 +83,7 @@ using json = nlohmann::json;
 #include <uuid/uuid.h>
 
 #include "PgSQL_Protocol.h"
+#include "MySQL_Protocol.h"
 #include "MySQL_Query_Cache.h"
 #include "PgSQL_Query_Cache.h"
 //#include "usual/time.h"
@@ -114,9 +121,6 @@ extern struct MHD_Daemon *Admin_HTTP_Server;
 
 extern ProxySQL_Statistics *GloProxyStats;
 
-template<enum SERVER_TYPE>
-int ProxySQL_Test___PurgeDigestTable(bool async_purge, bool parallel, char **msg);
-
 extern char *ssl_key_fp;
 extern char *ssl_cert_fp;
 extern char *ssl_ca_fp;
@@ -141,6 +145,7 @@ extern MySQL_Query_Cache *GloMyQC;
 extern PgSQL_Query_Cache* GloPgQC;
 extern MySQL_Authentication *GloMyAuth;
 extern PgSQL_Authentication *GloPgAuth;
+extern MySQL_Passthrough_Auth_Cache *GloMyPTAuthCache;
 extern MySQL_LDAP_Authentication *GloMyLdapAuth;
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Query_Processor* GloMyQPro;
@@ -269,6 +274,50 @@ const std::vector<std::string> SAVE_PGSQL_VARIABLES_TO_MEMORY = {
 	"SAVE PGSQL VARIABLES TO MEM" ,
 	"SAVE PGSQL VARIABLES FROM RUNTIME" ,
 	"SAVE PGSQL VARIABLES FROM RUN" };
+
+const std::vector<std::string> LOAD_MCP_VARIABLES_FROM_MEMORY = {
+	"LOAD MCP VARIABLES FROM MEMORY" ,
+	"LOAD MCP VARIABLES FROM MEM" ,
+	"LOAD MCP VARIABLES TO RUNTIME" ,
+	"LOAD MCP VARIABLES TO RUN" };
+
+const std::vector<std::string> SAVE_MCP_VARIABLES_TO_MEMORY = {
+	"SAVE MCP VARIABLES TO MEMORY" ,
+	"SAVE MCP VARIABLES TO MEM" ,
+	"SAVE MCP VARIABLES FROM RUNTIME" ,
+	"SAVE MCP VARIABLES FROM RUN" };
+// GenAI
+const std::vector<std::string> LOAD_GENAI_VARIABLES_FROM_MEMORY = {
+	"LOAD GENAI VARIABLES FROM MEMORY" ,
+	"LOAD GENAI VARIABLES FROM MEM" ,
+	"LOAD GENAI VARIABLES TO RUNTIME" ,
+	"LOAD GENAI VARIABLES TO RUN" };
+
+const std::vector<std::string> SAVE_GENAI_VARIABLES_TO_MEMORY = {
+	"SAVE GENAI VARIABLES TO MEMORY" ,
+	"SAVE GENAI VARIABLES TO MEM" ,
+	"SAVE GENAI VARIABLES FROM RUNTIME" ,
+	"SAVE GENAI VARIABLES FROM RUN" };
+
+const std::vector<std::string> LOAD_TSDB_VARIABLES_FROM_MEMORY = {
+	"LOAD TSDB VARIABLES FROM MEMORY" ,
+	"LOAD TSDB VARIABLES FROM MEM" ,
+	"LOAD TSDB VARIABLES TO RUNTIME" ,
+	"LOAD TSDB VARIABLES TO RUN" };
+
+const std::vector<std::string> SAVE_TSDB_VARIABLES_TO_MEMORY = {
+	"SAVE TSDB VARIABLES TO MEMORY" ,
+	"SAVE TSDB VARIABLES TO MEM" ,
+	"SAVE TSDB VARIABLES FROM RUNTIME" ,
+	"SAVE TSDB VARIABLES FROM RUN" };
+
+// MYSQLX admin-command alias groups previously lived here as hardcoded
+// vectors paired with a 16-deep if-ladder in admin_session_handler().
+// They now live entirely inside the mysqlx plugin (registered via
+// services->register_command + services->register_command_alias) and the
+// dispatcher consults the plugin manager generically.  v3.0/v3.1 builds
+// have no plugin loader at all -- the mysqlx plugin only loads under
+// PROXYSQL40.
 //
 const std::vector<std::string> LOAD_COREDUMP_FROM_MEMORY = {
 	"LOAD COREDUMP FROM MEMORY" ,
@@ -276,7 +325,197 @@ const std::vector<std::string> LOAD_COREDUMP_FROM_MEMORY = {
 	"LOAD COREDUMP TO RUNTIME" ,
 	"LOAD COREDUMP TO RUN" };
 
+const std::vector<std::string> CMD_PREFIX_PURGE_QUERY_DIGESTS = {
+	"PURGE TABLE stats.stats_mysql_query_digest TO ",
+	"PURGE TABLE stats_mysql_query_digest TO ",
+	"PURGE stats.stats_mysql_query_digest TO ",
+	"PURGE stats_mysql_query_digest TO ",
+	"PURGE TABLE stats.stats_pgsql_query_digest TO ",
+	"PURGE TABLE stats_pgsql_query_digest TO ",
+	"PURGE stats.stats_pgsql_query_digest TO ",
+	"PURGE stats_pgsql_query_digest TO ",
+};
+
 extern unordered_map<string,std::tuple<string, vector<string>, vector<string>>> load_save_disk_commands;
+
+// Helper function: Extract pattern from c.relname OPERATOR or LIKE clause
+// Returns true if pattern was found, false otherwise
+// pattern_buf must be at least 128 bytes
+// Note: Returns raw unescaped pattern - escaping happens in convert_regex_to_like
+static bool extract_psql_pattern(const char* query, char* pattern_buf, size_t buf_size) {
+	if (!query || !pattern_buf || buf_size < 128) return false;
+
+	pattern_buf[0] = '\0';
+
+	// Look for pattern in c.relname
+	const char* relname_pos = strcasestr(query, "c.relname");
+	if (!relname_pos) return false;
+
+	// Skip to the operator or LIKE keyword
+	const char* value_pos = relname_pos + sizeof("c.relname") - 1;
+	while (*value_pos && *value_pos == ' ') value_pos++;
+
+	// Safety check: ensure we haven't gone past end of string
+	if (!*value_pos) return false;
+
+	const char* pattern = nullptr;
+
+	// Check for LIKE operator first
+	const char* like_pos = strcasestr(value_pos, "LIKE");
+	if (like_pos) {
+		like_pos += 4; // Skip "LIKE"
+		while (*like_pos && *like_pos == ' ') like_pos++;
+		// Skip opening quote if present
+		if (*like_pos == '\'') like_pos++;
+		pattern = like_pos;
+	}
+	// Check for OPERATOR operator
+	else if (strcasestr(value_pos, "OPERATOR")) {
+		const char* op_pos = strcasestr(value_pos, "OPERATOR");
+		if (op_pos) {
+			const char* value_start = strchr(op_pos, '\'');
+			if (value_start) {
+				value_start++;
+				pattern = value_start;
+			}
+		}
+	}
+
+	if (!pattern) return false;
+
+	// Skip leading spaces
+	while (*pattern && *pattern == ' ') pattern++;
+
+	// Find end of pattern (first quote or newline)
+	const char* end = pattern;
+	size_t max_len = buf_size - 1; // Reserve one byte for null terminator
+	while (*end && *end != '\'' && *end != '\n' && (size_t)(end - pattern) < max_len) end++;
+
+	// Copy raw pattern to buffer (no escaping here - happens in convert_regex_to_like)
+	size_t len = end - pattern;
+	if (len > 0 && len < buf_size) {
+		memcpy(pattern_buf, pattern, len);
+		pattern_buf[len] = '\0';
+		return true;
+	}
+
+	return false;
+}
+// Helper function: Convert PostgreSQL regex pattern to SQLite LIKE pattern
+// Handles: ^, $, (), and .* to % conversion
+// Also escapes single quotes for SQL safety
+// dst_size should be at least 128 (twice src size for potential escaping)
+static void convert_regex_to_like(char* dst, const char* src, size_t dst_size) {
+	if (!dst || !src || dst_size < 128) return;
+
+	char* dst_end = dst + dst_size - 1;
+
+	// Skip ^ at start
+	if (*src == '^') src++;
+
+	// Copy pattern, converting regex to LIKE
+	while (*src && dst < dst_end - 1) { // Reserve space for potential escape
+		if (*src == '.' && *(src + 1) == '*') {
+			*dst++ = '%';
+			src += 2;
+		}
+		else if (*src == '$' && (*(src + 1) == '\0' || *(src + 1) == '\'')) {
+			// Skip $ at end
+			break;
+		}
+		else if (*src == '(' || *src == ')') {
+			// Skip regex grouping parentheses
+			src++;
+		}
+		else if (*src == '\'') {
+			// Escape single quotes for SQL safety (double them)
+			*dst++ = '\'';
+			*dst++ = '\'';
+			src++;
+		}
+		else {
+			*dst++ = *src++;
+		}
+	}
+	*dst = '\0';
+}
+
+// Return a pointer into `q` past leading whitespace and /* ... */ block
+// comments. `len` bounds the scan; the returned pointer is within
+// [q, q+len]. The buffer is not mutated; an unterminated /* consumes
+// the rest.
+//
+// Used so the connect-setup matchers below recognise queries prefixed
+// by SQL tracing comments emitted by SQLCommenter, Datadog Agent's
+// mysql integration CommenterCursor, Sequelize, Hibernate, etc. — all
+// of which use the /* ... */ form. See sysown/proxysql#5786.
+//
+// Only block comments are handled here on purpose: by the time this
+// helper runs, remove_spaces() above has already collapsed runs of
+// whitespace (including '\n' and '\r') to a single space, so MySQL
+// `-- ` / `#` line-comment terminators no longer exist in the buffer
+// and cannot be parsed unambiguously. Block-comment recognition is
+// unaffected by remove_spaces because `*/` survives intact.
+static const char* skip_leading_sql_comments(const char* q, size_t len) {
+	// SQL whitespace is a fixed ASCII set; using an inline check rather
+	// than <cctype> isspace() avoids any C-locale dependency.
+	auto is_sql_ws = [](char c) -> bool {
+		return c == ' ' || c == '\t' || c == '\n'
+			|| c == '\r' || c == '\v' || c == '\f';
+	};
+	const char* p = q;
+	size_t      n = len;
+	while (n > 0) {
+		while (n > 0 && is_sql_ws(*p)) {
+			p++; n--;
+		}
+		if (n == 0) break;
+
+		// /* ... */ block comment (SQL: no nesting)
+		if (n >= 2 && p[0] == '/' && p[1] == '*') {
+			p += 2; n -= 2;
+			while (n >= 2 && !(p[0] == '*' && p[1] == '/')) {
+				p++; n--;
+			}
+			if (n >= 2) {
+				p += 2; n -= 2;   // consume closing */
+			} else {
+				p += n; n = 0;    // unterminated /* — consume rest
+			}
+			continue;
+		}
+
+		break;
+	}
+	return p;
+}
+
+// Unified handler for \dt, \di, \dv commands
+// sqlite_type: "table", "index", or "view"
+// columns: columns to SELECT (e.g., "name" or "name, tbl_name")
+static void handle_psql_list_command(const char* query_no_space, char** query, unsigned int* query_length,
+	const char* sqlite_type, const char* columns) {
+	// Check for pattern in WHERE clause
+	const char* where_clause = strcasestr(query_no_space, "WHERE");
+	char pattern_buf[128] = { 0 };
+	char converted_pattern[256] = { 0 };
+	char buf[512] = { 0 };
+
+	if (where_clause && extract_psql_pattern(where_clause, pattern_buf, sizeof(pattern_buf))) {
+		convert_regex_to_like(converted_pattern, pattern_buf, sizeof(converted_pattern));
+		// Build query with pattern - note: converted_pattern is already escaped
+		snprintf(buf, sizeof(buf), "SELECT %s FROM sqlite_master WHERE type='%s' AND name NOT LIKE 'sqlite_%%' AND name LIKE '%s' ORDER BY name",
+			columns, sqlite_type, converted_pattern);
+	}
+	else {
+		// Build query without pattern
+		snprintf(buf, sizeof(buf), "SELECT %s FROM sqlite_master WHERE type='%s' AND name NOT LIKE 'sqlite_%%' ORDER BY name",
+			columns, sqlite_type);
+	}
+
+	*query = l_strdup(buf);
+	*query_length = strlen(*query) + 1;
+}
 
 bool is_admin_command_or_alias(const std::vector<std::string>& cmds, char *query_no_space, int query_no_space_length) {
 	for (std::vector<std::string>::const_iterator it=cmds.begin(); it!=cmds.end(); ++it) {
@@ -286,6 +525,20 @@ bool is_admin_command_or_alias(const std::vector<std::string>& cmds, char *query
 		}
 	}
 	return false;
+}
+
+const char * match_command_prefix(const std::vector<std::string>& cmd_prefix, char *query, int query_len, size_t &prefix_len) {
+	for (auto &prefix : cmd_prefix) {
+		if ((unsigned int) query_len >= prefix.length()
+			&& !strncasecmp(prefix.c_str(), query, prefix.length()))
+		{
+			prefix_len = prefix.length();
+			return prefix.c_str();
+		}
+	}
+	prefix_len = 0;
+
+	return nullptr;
 }
 
 
@@ -322,6 +575,41 @@ bool FlushCommandWrapper(S* sess, const string& modname, char *query_no_space, i
 	return false;
 }
 
+std::tuple<bool, enum SERVER_TYPE, time_t> parse_command_purge_query_digests(char *query, int query_len) {
+	bool match = false;
+	enum SERVER_TYPE server_type = SERVER_TYPE_MYSQL;
+	time_t last_seen = 0;
+	size_t prefix_len = 0;
+
+	const char *prefix = match_command_prefix(CMD_PREFIX_PURGE_QUERY_DIGESTS, query, query_len, prefix_len);
+	if (prefix) {
+		match = true;
+
+		const std::string_view prefix_sv(prefix, prefix_len);
+		const std::string_view pgsql_tag("_pgsql_");
+		if (prefix_sv.find(pgsql_tag) != std::string_view::npos) {
+			server_type = SERVER_TYPE_PGSQL;
+		}
+
+		// parse timestamp
+		mf_unique_ptr<char> ts_str(strdup(query + prefix_len));
+		char *ts_end = nullptr;
+		long long ts = strtoll(trim_spaces_in_place(ts_str.get()), &ts_end, 10);
+
+		// ts_str should only contain digits and respresent a valid timestamp
+		if ((*ts_end == 0) && (ts > 0)) {
+			last_seen = realtime_to_monotonic_time(ts);
+			if (last_seen <= 0) {
+				// valid timestamp, but older than the monotonic clock epoch (system
+				// boot): no entry can match, make the command a successful no-op
+				last_seen = 1;
+			}
+		}
+	}
+
+	return std::make_tuple(match, server_type, last_seen);
+}
+
 template <typename S>
 bool admin_handler_command_kill_pgsql_connection(uint32_t session_thd_id, S* sess, ProxySQL_Admin* pa) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Trying to kill pgsql session %u\n", session_thd_id);
@@ -331,7 +619,7 @@ bool admin_handler_command_kill_pgsql_connection(uint32_t session_thd_id, S* ses
 		SPA->send_ok_msg_to_client(sess, NULL, 0, "KILL PGSQL CONNECTION");
 	} else {
 		char buf[1024];
-		sprintf(buf, "Unknown thread id: %u", session_thd_id);
+		snprintf(buf, sizeof(buf), "Unknown thread id: %u", session_thd_id);
 		SPA->send_error_msg_to_client(sess, buf);
 	}
 	return false;
@@ -346,7 +634,7 @@ bool admin_handler_command_kill_mysql_connection(uint32_t session_thd_id, S* ses
 		SPA->send_ok_msg_to_client(sess, NULL, 0, NULL);
 	} else {
 		char buf[1024];
-		sprintf(buf,"Unknown thread id: %u", session_thd_id);
+		snprintf(buf, sizeof(buf), "Unknown thread id: %u", session_thd_id);
 		SPA->send_error_msg_to_client(sess, buf);
 	}
 	return false;
@@ -355,17 +643,24 @@ bool admin_handler_command_kill_mysql_connection(uint32_t session_thd_id, S* ses
 template <typename S>
 bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_space_length, S* sess, ProxySQL_Admin *pa) {
 
+	static const char cmd_coredump[] = "PROXYSQL COREDUMP";
+	static const size_t cmd_coredump_len = sizeof(cmd_coredump) - 1;
+	static const char cmd_coredump_compressed[] = "PROXYSQL COMPRESSEDCOREDUMP";
+	static const size_t cmd_coredump_compressed_len = sizeof(cmd_coredump_compressed) - 1;
+	static const char cmd_cluster_node_uuid[] = "PROXYSQL CLUSTER_NODE_UUID ";
+	static const size_t cmd_cluster_node_uuid_len = sizeof(cmd_cluster_node_uuid) - 1;
+
 #if (defined(__i386__) || defined(__x86_64__) || defined(__ARM_ARCH_3__) || defined(__mips__)) && defined(__linux)
-	// currently only support x86-32, x86-64, ARM, and MIPS on Linux
-	if (!(strncasecmp("PROXYSQL COREDUMP", query_no_space, strlen("PROXYSQL COREDUMP")))) {
-		string filename = "core";
-		if (query_no_space_length > strlen("PROXYSQL COREDUMP")) {
-			if (query_no_space[strlen("PROXYSQL COREDUMP")] == ' ') {
-				filename = string(query_no_space+strlen("PROXYSQL COREDUMP "));
-			} else {
-				filename = "";
+		// currently only support x86-32, x86-64, ARM, and MIPS on Linux
+		if (!(strncasecmp(cmd_coredump, query_no_space, cmd_coredump_len))) {
+			string filename = "core";
+			if (query_no_space_length > (unsigned int)cmd_coredump_len) {
+				if (query_no_space[cmd_coredump_len] == ' ') {
+					filename = string(query_no_space + cmd_coredump_len + 1);
+				} else {
+					filename = "";
+				}
 			}
-		}
 		if (filename == "") {
 			proxy_error("Received incorrect PROXYSQL COREDUMP command: %s\n", query_no_space);
 		} else {
@@ -376,17 +671,17 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			string msg = "Coredump: " + filename;
 			SPA->send_ok_msg_to_client(sess, (char *)msg.c_str(), 0, query_no_space);
 			return false;
-		}
-	}
-	if (!(strncasecmp("PROXYSQL COMPRESSEDCOREDUMP", query_no_space, strlen("PROXYSQL COMPRESSEDCOREDUMP")))) {
-		string filename = "core";
-		if (query_no_space_length > strlen("PROXYSQL COMPRESSEDCOREDUMP")) {
-			if (query_no_space[strlen("PROXYSQL COMPRESSEDCOREDUMP")] == ' ') {
-				filename = string(query_no_space+strlen("PROXYSQL COMPRESSEDCOREDUMP "));
-			} else {
-				filename = "";
 			}
 		}
+		if (!(strncasecmp(cmd_coredump_compressed, query_no_space, cmd_coredump_compressed_len))) {
+			string filename = "core";
+			if (query_no_space_length > (unsigned int)cmd_coredump_compressed_len) {
+				if (query_no_space[cmd_coredump_compressed_len] == ' ') {
+					filename = string(query_no_space + cmd_coredump_compressed_len + 1);
+				} else {
+					filename = "";
+				}
+			}
 		if (filename == "") {
 			proxy_error("Received incorrect PROXYSQL COMPRESSEDCOREDUMP command: %s\n", query_no_space);
 		} else {
@@ -401,8 +696,8 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	}
 #endif
 
-	if (!(strncasecmp("PROXYSQL CLUSTER_NODE_UUID ", query_no_space, strlen("PROXYSQL CLUSTER_NODE_UUID ")))) {
-		int l = strlen("PROXYSQL CLUSTER_NODE_UUID ");
+		if (!(strncasecmp(cmd_cluster_node_uuid, query_no_space, cmd_cluster_node_uuid_len))) {
+			int l = cmd_cluster_node_uuid_len;
 		if (sess->client_myds->addr.port == 0) {
 			proxy_warning("Received PROXYSQL CLUSTER_NODE_UUID not from TCP socket. Exiting client\n");
 			SPA->send_error_msg_to_client(sess, (char *)"Received PROXYSQL CLUSTER_NODE_UUID not from TCP socket");
@@ -460,7 +755,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			return false;
 		}
 	}
-	if (query_no_space_length==strlen("PROXYSQL READONLY") && !strncasecmp("PROXYSQL READONLY",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==sizeof("PROXYSQL READONLY") - 1 && !strncasecmp("PROXYSQL READONLY",query_no_space, query_no_space_length)) {
 		// this command enables admin_read_only , so the admin module is in read_only mode
 		proxy_info("Received PROXYSQL READONLY command\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -468,7 +763,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 		return false;
 	}
-	if (query_no_space_length==strlen("PROXYSQL READWRITE") && !strncasecmp("PROXYSQL READWRITE",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==sizeof("PROXYSQL READWRITE") - 1 && !strncasecmp("PROXYSQL READWRITE",query_no_space, query_no_space_length)) {
 		// this command disables admin_read_only , so the admin module won't be in read_only mode
 		proxy_info("Received PROXYSQL WRITE command\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -476,7 +771,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 		return false;
 	}
-	if (query_no_space_length == strlen("PROXYSQL START") && !strncasecmp("PROXYSQL START", query_no_space, query_no_space_length)) {
+	if (query_no_space_length == sizeof("PROXYSQL START") - 1 && !strncasecmp("PROXYSQL START", query_no_space, query_no_space_length)) {
 
 		proxy_info("Received PROXYSQL START command\n");
 		ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
@@ -513,7 +808,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		return false;
 	}
 
-	if (query_no_space_length==strlen("PROXYSQL RESTART") && !strncasecmp("PROXYSQL RESTART",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==sizeof("PROXYSQL RESTART") - 1 && !strncasecmp("PROXYSQL RESTART",query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL RESTART command\n");
 		// This function was introduced into 'prometheus::Registry' for being
 		// able to do a complete reset of all the 'prometheus counters'. It
@@ -524,7 +819,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		return false;
 	}
 
-	if (query_no_space_length == strlen("PROXYSQL STOP") && !strncasecmp("PROXYSQL STOP", query_no_space, query_no_space_length)) {
+	if (query_no_space_length == sizeof("PROXYSQL STOP") - 1 && !strncasecmp("PROXYSQL STOP", query_no_space, query_no_space_length)) {
 
 		proxy_info("Received PROXYSQL STOP command\n");
 		ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
@@ -539,14 +834,12 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		char buf[32];
 
 		// ----- MySQL module stop -----
-		int admin_old_wait_timeout = GloMTH->get_variable_int((char*)"wait_timeout");
-		GloMTH->set_variable((char*)"wait_timeout", (char*)"0");
-		GloMTH->commit();
+		int admin_old_wait_timeout =
+			GloMTH->set_int_variable_and_commit("wait_timeout", "0");
 		GloMTH->signal_all_threads(0);
 		GloMTH->stop_listeners();
-		sprintf(buf, "%d", admin_old_wait_timeout);
-		GloMTH->set_variable((char*)"wait_timeout", buf);
-		GloMTH->commit();
+		snprintf(buf, sizeof(buf), "%d", admin_old_wait_timeout);
+		(void)GloMTH->set_int_variable_and_commit("wait_timeout", buf);
 
 		// ----- PgSQL module stop -----
 		admin_old_wait_timeout = GloPTH->get_variable_int((char*)"wait_timeout");
@@ -554,7 +847,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		GloPTH->commit();
 		GloPTH->signal_all_threads(0);
 		GloPTH->stop_listeners();
-		sprintf(buf, "%d", admin_old_wait_timeout);
+		snprintf(buf, sizeof(buf), "%d", admin_old_wait_timeout);
 		GloPTH->set_variable((char*)"wait_timeout", buf);
 		GloPTH->commit();
 
@@ -579,7 +872,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		return false;
 	}
 
-	if (query_no_space_length==strlen("PROXYSQL PAUSE") && !strncasecmp("PROXYSQL PAUSE",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==sizeof("PROXYSQL PAUSE") - 1 && !strncasecmp("PROXYSQL PAUSE",query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL PAUSE command\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		if (admin_nostart_) {
@@ -597,17 +890,15 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		if (admin_proxysql_mysql_paused==false) {
 			// to speed up this process we first change poll_timeout to 10
 			// MySQL_thread will call poll() with a maximum timeout of 10ms
-			admin_old_wait_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
-			GloMTH->set_variable((char *)"poll_timeout",(char *)"10");
-			GloMTH->commit();
+			admin_old_wait_timeout =
+				GloMTH->set_int_variable_and_commit("poll_timeout", "10");
 			GloMTH->signal_all_threads(0);
 			GloMTH->stop_listeners();
-			admin_proxysql_mysql_paused=true;	
+			admin_proxysql_mysql_paused=true;
 			// we now rollback poll_timeout
 			char buf[32];
-			sprintf(buf,"%d",admin_old_wait_timeout);
-			GloMTH->set_variable((char *)"poll_timeout",buf);
-			GloMTH->commit();
+			snprintf(buf, sizeof(buf), "%d", admin_old_wait_timeout);
+			(void)GloMTH->set_int_variable_and_commit("poll_timeout", buf);
 		}
 
 		if (admin_proxysql_pgsql_paused == false) {
@@ -621,7 +912,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			admin_proxysql_pgsql_paused = true;
 			// we now rollback poll_timeout
 			char buf[32];
-			sprintf(buf, "%d", admin_old_wait_timeout);
+			snprintf(buf, sizeof(buf), "%d", admin_old_wait_timeout);
 			GloPTH->set_variable((char*)"poll_timeout", buf);
 			GloPTH->commit();
 		}
@@ -633,7 +924,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		return false;
 	}
 
-	if (query_no_space_length==strlen("PROXYSQL RESUME") && !strncasecmp("PROXYSQL RESUME",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==sizeof("PROXYSQL RESUME") - 1 && !strncasecmp("PROXYSQL RESUME",query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL RESUME command\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		if (admin_nostart_) {
@@ -651,9 +942,8 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		if (admin_proxysql_mysql_paused==true) {
 			// to speed up this process we first change poll_timeout to 10
 			// MySQL_thread will call poll() with a maximum timeout of 10ms
-			admin_old_wait_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
-			GloMTH->set_variable((char *)"poll_timeout",(char *)"10");
-			GloMTH->commit();
+			admin_old_wait_timeout =
+				GloMTH->set_int_variable_and_commit("poll_timeout", "10");
 			GloMTH->signal_all_threads(0);
 			GloMTH->start_listeners();
 			//char buf[32];
@@ -663,9 +953,8 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			admin_proxysql_mysql_paused=false;
 			// we now rollback poll_timeout
 			char buf[32];
-			sprintf(buf,"%d",admin_old_wait_timeout);
-			GloMTH->set_variable((char *)"poll_timeout",buf);
-			GloMTH->commit();
+			snprintf(buf, sizeof(buf), "%d", admin_old_wait_timeout);
+			(void)GloMTH->set_int_variable_and_commit("poll_timeout", buf);
 		}
 
 		if (admin_proxysql_pgsql_paused == true) {
@@ -683,7 +972,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			admin_proxysql_pgsql_paused = false;
 			// we now rollback poll_timeout
 			char buf[32];
-			sprintf(buf, "%d", admin_old_wait_timeout);
+			snprintf(buf, sizeof(buf), "%d", admin_old_wait_timeout);
 			GloPTH->set_variable((char*)"poll_timeout", buf);
 			GloPTH->commit();
 		}
@@ -695,7 +984,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		return false;
 	}
 
-	if (query_no_space_length==strlen("PROXYSQL SHUTDOWN SLOW") && !strncasecmp("PROXYSQL SHUTDOWN SLOW",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==sizeof("PROXYSQL SHUTDOWN SLOW") - 1 && !strncasecmp("PROXYSQL SHUTDOWN SLOW",query_no_space, query_no_space_length)) {
 		glovars.proxy_restart_on_error=false;
 		glovars.reload=0;
 		proxy_info("Received PROXYSQL SHUTDOWN SLOW command\n");
@@ -703,7 +992,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		return false;
 	}
 
-	if (query_no_space_length==strlen("PROXYSQL FLUSH LOGS") && !strncasecmp("PROXYSQL FLUSH LOGS",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==sizeof("PROXYSQL FLUSH LOGS") - 1 && !strncasecmp("PROXYSQL FLUSH LOGS",query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL FLUSH LOGS command\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		SPA->flush_logs();
@@ -711,7 +1000,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		return false;
 	}
 
-	if (query_no_space_length==strlen("PROXYSQL FLUSH QUERY CACHE") && !strncasecmp("PROXYSQL FLUSH QUERY CACHE",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==sizeof("PROXYSQL FLUSH QUERY CACHE") - 1 && !strncasecmp("PROXYSQL FLUSH QUERY CACHE",query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL FLUSH QUERY CACHE command\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		if (GloMyQC) {
@@ -724,7 +1013,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		return false;
 	}
 
-	if (query_no_space_length == strlen("PROXYSQL FLUSH MYSQL QUERY CACHE") && !strncasecmp("PROXYSQL FLUSH MYSQL QUERY CACHE", query_no_space, query_no_space_length)) {
+	if (query_no_space_length == sizeof("PROXYSQL FLUSH MYSQL QUERY CACHE") - 1 && !strncasecmp("PROXYSQL FLUSH MYSQL QUERY CACHE", query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL FLUSH MYSQL QUERY CACHE command\n");
 		ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 		if (GloMyQC) {
@@ -734,7 +1023,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		return false;
 	}
 
-	if (query_no_space_length == strlen("PROXYSQL FLUSH PGSQL QUERY CACHE") && !strncasecmp("PROXYSQL FLUSH PGSQL QUERY CACHE", query_no_space, query_no_space_length)) {
+	if (query_no_space_length == sizeof("PROXYSQL FLUSH PGSQL QUERY CACHE") - 1 && !strncasecmp("PROXYSQL FLUSH PGSQL QUERY CACHE", query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL FLUSH PGSQL QUERY CACHE command\n");
 		ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 		uint64_t count = 0;
@@ -765,9 +1054,52 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		return false;
 	}
 
+	static const char *flush_pass_query = "PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE";
+	static const size_t flush_pass_query_len = sizeof("PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE") - 1;
 	if (
-		(query_no_space_length==strlen("PROXYSQL FLUSH CONFIGDB") && !strncasecmp("PROXYSQL FLUSH CONFIGDB",query_no_space, query_no_space_length)) // see #923
+		query_no_space_length == static_cast<int>(flush_pass_query_len)
+		&& !strncasecmp(flush_pass_query, query_no_space, flush_pass_query_len)
 	) {
+		proxy_info("Received PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE command\n");
+		ProxySQL_Admin *SPA = (ProxySQL_Admin *)pa;
+		if (GloMyPTAuthCache) {
+			GloMyPTAuthCache->clear();
+		}
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		return false;
+	}
+
+	{
+		static const char *pt_prefix = "PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE FOR USER ";
+		static const size_t pt_prefix_len = sizeof("PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE FOR USER ") - 1;
+		if (query_no_space_length > pt_prefix_len
+			&& !strncasecmp(pt_prefix, query_no_space, pt_prefix_len)) {
+			const char *user_start = query_no_space + pt_prefix_len;
+			while (*user_start == ' ' || *user_start == '\t') user_start++;
+			std::string user_arg(user_start);
+			while (!user_arg.empty()
+				&& (user_arg.back() == ' '
+					|| user_arg.back() == '\t'
+					|| user_arg.back() == ';')) {
+				user_arg.pop_back();
+			}
+			if (user_arg.size() >= 2 && (
+				(user_arg.front() == '\'' && user_arg.back() == '\'')
+				|| (user_arg.front() == '"'  && user_arg.back() == '"')
+				|| (user_arg.front() == '`'  && user_arg.back() == '`'))) {
+				user_arg = user_arg.substr(1, user_arg.size() - 2);
+			}
+			proxy_info("Received PROXYSQL FLUSH PASSTHROUGH_AUTH_CACHE FOR USER '%s' command\n", user_arg.c_str());
+			ProxySQL_Admin *SPA = (ProxySQL_Admin *)pa;
+			if (GloMyPTAuthCache) {
+				GloMyPTAuthCache->evict(user_arg);
+			}
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			return false;
+		}
+	}
+
+	if (query_no_space_length==sizeof("PROXYSQL FLUSH CONFIGDB") - 1 && !strncasecmp("PROXYSQL FLUSH CONFIGDB",query_no_space, query_no_space_length)) { // see #923
 		proxy_info("Received %s command\n", query_no_space);
 		proxy_warning("A misconfigured configdb will cause undefined behaviors\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -775,6 +1107,44 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 		return false;
 	}
+
+#ifdef DEBUG
+	if (query_no_space_length == sizeof("PROXYSQL FLUSH STATS") - 1 && !strncasecmp("PROXYSQL FLUSH STATS", query_no_space, query_no_space_length)) {
+		proxy_info("Received PROXYSQL FLUSH STATS command\n");
+		ProxySQL_Admin *SPA = (ProxySQL_Admin *)pa;
+		SPA->flush_stats();
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		return false;
+	}
+
+	if (query_no_space_length == sizeof("PROXYSQL FLUSH MYSQL STATS") - 1 && !strncasecmp("PROXYSQL FLUSH MYSQL STATS", query_no_space, query_no_space_length)) {
+		proxy_info("Received PROXYSQL FLUSH MYSQL STATS command\n");
+		ProxySQL_Admin *SPA = (ProxySQL_Admin *)pa;
+		SPA->flush_mysql_stats();
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		return false;
+	}
+
+	if (query_no_space_length == sizeof("PROXYSQL FLUSH PGSQL STATS") - 1 && !strncasecmp("PROXYSQL FLUSH PGSQL STATS", query_no_space, query_no_space_length)) {
+		proxy_info("Received PROXYSQL FLUSH PGSQL STATS command\n");
+		ProxySQL_Admin *SPA = (ProxySQL_Admin *)pa;
+		SPA->flush_pgsql_stats();
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		return false;
+	}
+#endif // DEBUG
+
+#ifdef PROXYSQLTSDB
+	if (query_no_space_length == sizeof("PROXYSQL TSDB DOWNSAMPLE") - 1 && !strncasecmp("PROXYSQL TSDB DOWNSAMPLE", query_no_space, query_no_space_length)) {
+		proxy_info("Received PROXYSQL TSDB DOWNSAMPLE command\n");
+		if (GloProxyStats) {
+			GloProxyStats->tsdb_downsample_metrics();
+		}
+		ProxySQL_Admin *SPA = (ProxySQL_Admin *)pa;
+		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		return false;
+	}
+#endif
 
 	if (strcasecmp("PROXYSQL RELOAD TLS",query_no_space) == 0) {
 		proxy_info("Received %s command\n", query_no_space);
@@ -812,13 +1182,13 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	}
 
 #ifndef NOJEM
-	if (query_no_space_length==strlen("PROXYSQL MEMPROFILE START") && !strncasecmp("PROXYSQL MEMPROFILE START",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==sizeof("PROXYSQL MEMPROFILE START") - 1 && !strncasecmp("PROXYSQL MEMPROFILE START",query_no_space, query_no_space_length)) {
 		bool en=true;
 		mallctl("prof.active", NULL, NULL, &en, sizeof(bool));
 		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 		return false;
 	}
-	if (query_no_space_length==strlen("PROXYSQL MEMPROFILE STOP") && !strncasecmp("PROXYSQL MEMPROFILE STOP",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==sizeof("PROXYSQL MEMPROFILE STOP") - 1 && !strncasecmp("PROXYSQL MEMPROFILE STOP",query_no_space, query_no_space_length)) {
 		bool en=false;
 		mallctl("prof.active", NULL, NULL, &en, sizeof(bool));
 		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
@@ -827,13 +1197,13 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 #endif
 
 #ifdef WITHGCOV
-	if (query_no_space_length==strlen("PROXYSQL GCOV DUMP") && !strncasecmp("PROXYSQL GCOV DUMP",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==sizeof("PROXYSQL GCOV DUMP") - 1 && !strncasecmp("PROXYSQL GCOV DUMP",query_no_space, query_no_space_length)) {
 		proxy_info("Received %s command\n", query_no_space);
 		__gcov_dump();
 		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 		return false;
 	}
-	if (query_no_space_length==strlen("PROXYSQL GCOV RESET") && !strncasecmp("PROXYSQL GCOV RESET",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==sizeof("PROXYSQL GCOV RESET") - 1 && !strncasecmp("PROXYSQL GCOV RESET",query_no_space, query_no_space_length)) {
 		proxy_info("Received %s command\n", query_no_space);
 		__gcov_reset();
 		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
@@ -841,40 +1211,229 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	}
 #endif
 
-	if (query_no_space_length==strlen("PROXYSQL KILL") && !strncasecmp("PROXYSQL KILL",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==sizeof("PROXYSQL KILL") - 1 && !strncasecmp("PROXYSQL KILL",query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL KILL command\n");
+	#ifdef DEBUG
+		// In debug builds prefer coordinated shutdown to avoid teardown races.
+		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
+		return false;
+	#else
 		exit(EXIT_SUCCESS);
+	#endif
 	}
 
-	if (query_no_space_length==strlen("PROXYSQL SHUTDOWN") && !strncasecmp("PROXYSQL SHUTDOWN",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==sizeof("PROXYSQL SHUTDOWN") - 1 && !strncasecmp("PROXYSQL SHUTDOWN",query_no_space, query_no_space_length)) {
 		// in 2.1 , PROXYSQL SHUTDOWN behaves like PROXYSQL KILL : quick exit
 		// the former PROXYQL SHUTDOWN is now replaced with PROXYSQL SHUTDOWN SLOW
 		proxy_info("Received PROXYSQL SHUTDOWN command\n");
+	#ifdef DEBUG
+		// In debug builds prefer coordinated shutdown to avoid teardown races.
+		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
+		return false;
+	#else
 		exit(EXIT_SUCCESS);
+	#endif
 	}
 
 	return true;
 }
 
-// Returns true if the given name is either a know mysql or admin global variable.
+// Creates a masked copy of the query string for logging, masking sensitive values like API keys
+// Returns a newly allocated string that must be freed by the caller
+static char* mask_sensitive_values_in_query(const char* query) {
+	if (!query || !strstr(query, "_key="))
+		return strdup(query);
+
+	char* masked = strdup(query);
+	char* key_pos = strstr(masked, "_key=");
+	if (key_pos) {
+		key_pos += 5; // Move past "_key="
+		char* value_start = key_pos;
+		// Find the end of the value (either single quote, space, or end of string)
+		char* value_end = value_start;
+		if (*value_start == '\'') {
+			value_start++; // Skip opening quote
+			value_end = value_start;
+			while (*value_end && *value_end != '\'')
+				value_end++;
+		} else {
+			while (*value_end && *value_end != ' ' && *value_end != '\0')
+				value_end++;
+		}
+
+		size_t value_len = value_end - value_start;
+		if (value_len > 2) {
+			// Keep first 2 chars, mask the rest
+			for (size_t i = 2; i < value_len; i++) {
+				value_start[i] = 'x';
+			}
+		}
+	}
+	return masked;
+}
+
+/**
+ * @brief Checks if a given variable name is considered sensitive (e.g., passwords, credentials).
+ *
+ * This function identifies variable names that, if logged in plaintext, could
+ * expose sensitive information.
+ *
+ * @param var_name The name of the variable to check.
+ * @return True if the variable name is sensitive, false otherwise.
+ */
+static bool is_sensitive_set_variable_name(const char* var_name) {
+	if (var_name == NULL) {
+		return false;
+	}
+	return strstr(var_name, "password") ||
+		strcmp(var_name, "mysql-default_authentication_plugin") == 0 ||
+		strcmp(var_name, "admin-admin_credentials") == 0;
+}
+
+// Returns true if the given name is either a known mysql or admin global variable.
 bool is_valid_global_variable(const char *var_name) {
-	if (strlen(var_name) > 6 && !strncmp(var_name, "mysql-", 6) && GloMTH->has_variable(var_name + 6)) {
+	if (var_name == NULL) {
+		return false;
+	}
+	const std::string_view name = var_name;
+
+	if (name.size() > 6 && name.compare(0, 6, "mysql-") == 0 && GloMTH->has_variable(var_name + 6)) {
 		return true;
-	} else if (strlen(var_name) > 6 && !strncmp(var_name, "pgsql-", 6) && GloPTH->has_variable(var_name + 6)) {
+	} else if (name.size() > 6 && name.compare(0, 6, "pgsql-") == 0 && GloPTH->has_variable(var_name + 6)) {
 		return true;
-	} else if (strlen(var_name) > 6 && !strncmp(var_name, "admin-", 6) && SPA->has_variable(var_name + 6)) {
+	} else if (name.size() > 6 && name.compare(0, 6, "admin-") == 0 && SPA->has_variable(var_name + 6)) {
 		return true;
-	} else if (strlen(var_name) > 5 && !strncmp(var_name, "ldap-", 5) && GloMyLdapAuth && GloMyLdapAuth->has_variable(var_name + 5)) {
+	#ifdef PROXYSQLTSDB
+	} else if (name.size() > 5 && name.compare(0, 5, "tsdb-") == 0 && GloProxyStats && GloProxyStats->has_variable(var_name + 5)) {
 		return true;
-	} else if (strlen(var_name) > 13 && !strncmp(var_name, "sqliteserver-", 13) && GloSQLite3Server && GloSQLite3Server->has_variable(var_name + 13)) {
+	#endif
+	} else if (name.size() > 5 && name.compare(0, 5, "ldap-") == 0 && GloMyLdapAuth && GloMyLdapAuth->has_variable(var_name + 5)) {
 		return true;
-#ifdef PROXYSQLCLICKHOUSE
-	} else if (strlen(var_name) > 11 && !strncmp(var_name, "clickhouse-", 11) && GloClickHouseServer && GloClickHouseServer->has_variable(var_name + 11)) {
+	} else if (name.size() > 13 && name.compare(0, 13, "sqliteserver-") == 0 && GloSQLite3Server && GloSQLite3Server->has_variable(var_name + 13)) {
 		return true;
-#endif /* PROXYSQLCLICKHOUSE */
+	#ifdef PROXYSQLCLICKHOUSE
+	} else if (name.size() > 11 && name.compare(0, 11, "clickhouse-") == 0 && GloClickHouseServer && GloClickHouseServer->has_variable(var_name + 11)) {
+		return true;
+	#endif /* PROXYSQLCLICKHOUSE */
+	// `mcp-*` and `genai-*` variables live in the genai plugin
+	// (carve-out Steps 4.C and 5).  Core no longer holds an
+	// authoritative list, so we accept any `mcp-<name>` /
+	// `genai-<name>` token as a valid global_variables key here so
+	// the SET / UPDATE admin path can reach `main.global_variables`.
+	// The plugin's `LOAD {MCP,GENAI} VARIABLES TO RUNTIME` is what
+	// actually validates each name at push-into-runtime time.
+	//
+	// Trade-off: a typo (e.g. `SET mcp-prot=9090`) writes the row
+	// silently and goes ignored at runtime.  Acceptable until a
+	// chassis-side `register_variable_namespace` ABI exists.
+	//
+	// Step 7 removed the surrounding `#ifdef PROXYSQLGENAI` — these
+	// loose prefix checks are unconditional now: SET only succeeds
+	// at write-into-runtime time when the genai plugin is loaded.
+	} else if (name.size() > 4 && name.compare(0, 4, "mcp-") == 0) {
+		return true;
+	} else if (name.size() > 6 && name.compare(0, 6, "genai-") == 0) {
+		return true;
 	} else {
 		return false;
 	}
+}
+
+enum class admin_set_scope { implicit, session, local, global };
+
+static bool is_admin_set_whitespace(char character) {
+	return character == ' ' || (character >= '\t' && character <= '\r');
+}
+
+static admin_set_scope strip_admin_set_scope(char*& variable_name) {
+	while (is_admin_set_whitespace(*variable_name)) {
+		++variable_name;
+	}
+
+	struct scope_token_t {
+		const char* token;
+		admin_set_scope scope;
+	};
+	const scope_token_t scope_tokens[] = {
+		{"SESSION", admin_set_scope::session},
+		{"LOCAL", admin_set_scope::local},
+		{"GLOBAL", admin_set_scope::global},
+	};
+
+	for (const auto& scope_token : scope_tokens) {
+		const size_t token_length = strlen(scope_token.token);
+		if (strncasecmp(variable_name, scope_token.token, token_length) == 0 && is_admin_set_whitespace(variable_name[token_length])) {
+			variable_name += token_length;
+			while (is_admin_set_whitespace(*variable_name)) {
+				++variable_name;
+			}
+			return scope_token.scope;
+		}
+	}
+
+	return admin_set_scope::implicit;
+}
+
+static bool is_ignored_mysql_variable(const char* variable_name) {
+	return std::any_of(mysql_variables.ignore_vars.cbegin(), mysql_variables.ignore_vars.cend(),
+		[variable_name](const std::string& ignored) {
+			return strcasecmp(ignored.c_str(), variable_name) == 0;
+		});
+}
+
+static bool is_ignored_scoped_set(char* assignments) {
+	std::string mutable_assignments(assignments);
+	char* assignment = mutable_assignments.data();
+	bool has_assignment = false;
+	char quote = '\0';
+	int parenthesis_depth = 0;
+
+	for (char* current = assignment;; ++current) {
+		if (quote != '\0') {
+			if (*current == '\\' && quote != '`' && current[1] != '\0') {
+				++current;
+			} else if (*current == quote) {
+				quote = '\0';
+			}
+		} else if (*current == '\'' || *current == '"' || *current == '`') {
+			quote = *current;
+		} else if (*current == '(') {
+			++parenthesis_depth;
+		} else if (*current == ')') {
+			if (parenthesis_depth == 0) {
+				return false;
+			}
+			--parenthesis_depth;
+		}
+
+		if ((*current != ',' || quote != '\0' || parenthesis_depth != 0) && *current != '\0') {
+			continue;
+		}
+		if (*current == '\0' && (quote != '\0' || parenthesis_depth != 0)) {
+			return false;
+		}
+
+		const bool at_end = *current == '\0';
+		*current = '\0';
+		char* equals = strchr(assignment, '=');
+		if (equals == NULL) {
+			return false;
+		}
+		*equals = '\0';
+		char* variable_name = trim_spaces_in_place(assignment);
+		const admin_set_scope scope = strip_admin_set_scope(variable_name);
+		if ((scope != admin_set_scope::session && scope != admin_set_scope::local) || !is_ignored_mysql_variable(variable_name)) {
+			return false;
+		}
+		has_assignment = true;
+
+		if (at_end) {
+			break;
+		}
+		assignment = current + 1;
+	}
+
+	return has_assignment;
 }
 
 
@@ -884,24 +1443,36 @@ bool is_valid_global_variable(const char *var_name) {
 // It modifies the original query.
 template <typename S>
 bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space_length, S* sess, ProxySQL_Admin *pa, char **q, unsigned int *ql) {
-	if (!strstr(query_no_space,(char *)"password")) { // issue #599
+	bool skip_raw_query_log = strstr(query_no_space, (char *)"password") ||
+		strstr(query_no_space, (char *)"admin-admin_credentials") ||
+		strstr(query_no_space, (char *)"mysql-default_authentication_plugin");
+	if (!skip_raw_query_log) { // issue #599
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received command %s\n", query_no_space);
-		if (strncasecmp(query_no_space,(char *)"set autocommit",strlen((char *)"set autocommit"))) {
-			if (strncasecmp(query_no_space,(char *)"SET @@session.autocommit",strlen((char *)"SET @@session.autocommit"))) {
-				proxy_info("Received command %s\n", query_no_space);
+		if (strncasecmp(query_no_space,"set autocommit",sizeof("set autocommit") - 1)) {
+			if (strncasecmp(query_no_space,"SET @@session.autocommit",sizeof("SET @@session.autocommit") - 1)) {
+				char* masked_query = mask_sensitive_values_in_query(query_no_space);
+				proxy_info("Received command %s\n", masked_query);
+				free(masked_query);
 			}
 		}
 	}
-	// Get a pointer to the beginnig of var=value entry and split to get var name and value
-	char *set_entry = query_no_space + strlen("SET ");
+
+	if (is_ignored_scoped_set(query_no_space + sizeof("SET ") - 1)) {
+		pa->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+		return false;
+	}
+
+	// Get a pointer to the beginning of var=value entry and split to get var name and value
+	char *set_entry = query_no_space + sizeof("SET ") - 1;
 	char *untrimmed_var_name=NULL;
 	char *var_value=NULL;
 	c_split_2(set_entry, "=", &untrimmed_var_name, &var_value);
 
 	// Trim spaces from var name to allow writing like 'var = value'
 	char *var_name = trim_spaces_in_place(untrimmed_var_name);
+	strip_admin_set_scope(var_name);
 
-	if (strstr(var_name,(char *)"password") || strcmp(var_name,(char *)"mysql-default_authentication_plugin")==0) {
+	if (is_sensitive_set_variable_name(var_name)) {
 		proxy_info("Received SET command for %s\n", var_name);
 	}
 
@@ -921,11 +1492,19 @@ bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space
 			size_t buff_len = strlen(err_msg_fmt) + strlen(var_name) + 1;
 			char *buff = (char *) malloc(buff_len);
 			snprintf(buff, buff_len, err_msg_fmt, var_name);
-			SPA->send_ok_msg_to_client(sess, buff, 0, query_no_space);
+			SPA->send_error_msg_to_client(sess, buff);
 			free(buff);
 			run_query = false;
 		} else {
-			const char *update_format = (char *)"UPDATE global_variables SET variable_value=%s WHERE variable_name='%s'";
+			// Check if the value is a boolean literal that needs to be quoted as a string
+			// to prevent SQLite from interpreting it as a boolean keyword (storing 1 or 0)
+			bool is_boolean = (strcasecmp(var_value, "true") == 0 || strcasecmp(var_value, "false") == 0);
+			const char *update_format;
+			if (is_boolean) {
+				update_format = (char *)"UPDATE global_variables SET variable_value='%s' WHERE variable_name='%s'";
+			} else {
+				update_format = (char *)"UPDATE global_variables SET variable_value=%s WHERE variable_name='%s'";
+			}
 			// Computed length is more than needed since it also counts the format modifiers (%s).
 			size_t query_len = strlen(update_format) + strlen(var_name) + strlen(var_value) + 1;
 			char *query = (char *)l_alloc(query_len);
@@ -952,11 +1531,11 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 #ifdef DEBUG
 	if ((query_no_space_length>11) && ( (!strncasecmp("SAVE DEBUG ", query_no_space, 11)) || (!strncasecmp("LOAD DEBUG ", query_no_space, 11))) ) {
 		if (
-			(query_no_space_length==strlen("LOAD DEBUG TO MEMORY") && !strncasecmp("LOAD DEBUG TO MEMORY",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD DEBUG TO MEMORY") - 1 && !strncasecmp("LOAD DEBUG TO MEMORY",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD DEBUG TO MEM") && !strncasecmp("LOAD DEBUG TO MEM",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD DEBUG TO MEM") - 1 && !strncasecmp("LOAD DEBUG TO MEM",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD DEBUG FROM DISK") && !strncasecmp("LOAD DEBUG FROM DISK",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD DEBUG FROM DISK") - 1 && !strncasecmp("LOAD DEBUG FROM DISK",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			// we are now copying the data from memory to disk
@@ -976,11 +1555,11 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		if (
-			(query_no_space_length==strlen("SAVE DEBUG FROM MEMORY") && !strncasecmp("SAVE DEBUG FROM MEMORY",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE DEBUG FROM MEMORY") - 1 && !strncasecmp("SAVE DEBUG FROM MEMORY",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE DEBUG FROM MEM") && !strncasecmp("SAVE DEBUG FROM MEM",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE DEBUG FROM MEM") - 1 && !strncasecmp("SAVE DEBUG FROM MEM",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE DEBUG TO DISK") && !strncasecmp("SAVE DEBUG TO DISK",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE DEBUG TO DISK") - 1 && !strncasecmp("SAVE DEBUG TO DISK",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			// we are now copying the data from disk to memory
@@ -1000,13 +1579,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		if (
-			(query_no_space_length==strlen("LOAD DEBUG FROM MEMORY") && !strncasecmp("LOAD DEBUG FROM MEMORY",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD DEBUG FROM MEMORY") - 1 && !strncasecmp("LOAD DEBUG FROM MEMORY",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD DEBUG FROM MEM") && !strncasecmp("LOAD DEBUG FROM MEM",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD DEBUG FROM MEM") - 1 && !strncasecmp("LOAD DEBUG FROM MEM",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD DEBUG TO RUNTIME") && !strncasecmp("LOAD DEBUG TO RUNTIME",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD DEBUG TO RUNTIME") - 1 && !strncasecmp("LOAD DEBUG TO RUNTIME",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD DEBUG TO RUN") && !strncasecmp("LOAD DEBUG TO RUN",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD DEBUG TO RUN") - 1 && !strncasecmp("LOAD DEBUG TO RUN",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -1022,13 +1601,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		if (
-			(query_no_space_length==strlen("SAVE DEBUG TO MEMORY") && !strncasecmp("SAVE DEBUG TO MEMORY",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE DEBUG TO MEMORY") - 1 && !strncasecmp("SAVE DEBUG TO MEMORY",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE DEBUG TO MEM") && !strncasecmp("SAVE DEBUG TO MEM",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE DEBUG TO MEM") - 1 && !strncasecmp("SAVE DEBUG TO MEM",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE DEBUG FROM RUNTIME") && !strncasecmp("SAVE DEBUG FROM RUNTIME",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE DEBUG FROM RUNTIME") - 1 && !strncasecmp("SAVE DEBUG FROM RUNTIME",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE DEBUG FROM RUN") && !strncasecmp("SAVE DEBUG FROM RUN",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE DEBUG FROM RUN") - 1 && !strncasecmp("SAVE DEBUG FROM RUN",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -1047,13 +1626,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return false;
 
 		if (
-			(query_no_space_length==strlen("LOAD RESTAPI FROM MEMORY") && !strncasecmp("LOAD RESTAPI FROM MEMORY",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD RESTAPI FROM MEMORY") - 1 && !strncasecmp("LOAD RESTAPI FROM MEMORY",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD RESTAPI FROM MEM") && !strncasecmp("LOAD RESTAPI FROM MEM",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD RESTAPI FROM MEM") - 1 && !strncasecmp("LOAD RESTAPI FROM MEM",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD RESTAPI TO RUNTIME") && !strncasecmp("LOAD RESTAPI TO RUNTIME",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD RESTAPI TO RUNTIME") - 1 && !strncasecmp("LOAD RESTAPI TO RUNTIME",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD RESTAPI TO RUN") && !strncasecmp("LOAD RESTAPI TO RUN",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD RESTAPI TO RUN") - 1 && !strncasecmp("LOAD RESTAPI TO RUN",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -1064,7 +1643,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		if (
-			(query_no_space_length==strlen("LOAD RESTAPI FROM CONFIG") && !strncasecmp("LOAD RESTAPI FROM CONFIG",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD RESTAPI FROM CONFIG") - 1 && !strncasecmp("LOAD RESTAPI FROM CONFIG",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			if (GloVars.configfile_open) {
@@ -1092,13 +1671,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		if (
-			(query_no_space_length==strlen("SAVE RESTAPI TO MEMORY") && !strncasecmp("SAVE RESTAPI TO MEMORY",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE RESTAPI TO MEMORY") - 1 && !strncasecmp("SAVE RESTAPI TO MEMORY",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE RESTAPI TO MEM") && !strncasecmp("SAVE RESTAPI TO MEM",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE RESTAPI TO MEM") - 1 && !strncasecmp("SAVE RESTAPI TO MEM",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE RESTAPI FROM RUNTIME") && !strncasecmp("SAVE RESTAPI FROM RUNTIME",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE RESTAPI FROM RUNTIME") - 1 && !strncasecmp("SAVE RESTAPI FROM RUNTIME",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE RESTAPI FROM RUN") && !strncasecmp("SAVE RESTAPI FROM RUN",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE RESTAPI FROM RUN") - 1 && !strncasecmp("SAVE RESTAPI FROM RUN",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -1115,13 +1694,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return false;
 
 		if (
-			(query_no_space_length==strlen("LOAD SCHEDULER FROM MEMORY") && !strncasecmp("LOAD SCHEDULER FROM MEMORY",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD SCHEDULER FROM MEMORY") - 1 && !strncasecmp("LOAD SCHEDULER FROM MEMORY",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD SCHEDULER FROM MEM") && !strncasecmp("LOAD SCHEDULER FROM MEM",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD SCHEDULER FROM MEM") - 1 && !strncasecmp("LOAD SCHEDULER FROM MEM",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD SCHEDULER TO RUNTIME") && !strncasecmp("LOAD SCHEDULER TO RUNTIME",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD SCHEDULER TO RUNTIME") - 1 && !strncasecmp("LOAD SCHEDULER TO RUNTIME",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD SCHEDULER TO RUN") && !strncasecmp("LOAD SCHEDULER TO RUN",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD SCHEDULER TO RUN") - 1 && !strncasecmp("LOAD SCHEDULER TO RUN",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -1132,7 +1711,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		if (
-			(query_no_space_length==strlen("LOAD SCHEDULER FROM CONFIG") && !strncasecmp("LOAD SCHEDULER FROM CONFIG",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD SCHEDULER FROM CONFIG") - 1 && !strncasecmp("LOAD SCHEDULER FROM CONFIG",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			if (GloVars.configfile_open) {
@@ -1160,13 +1739,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		if (
-			(query_no_space_length==strlen("SAVE SCHEDULER TO MEMORY") && !strncasecmp("SAVE SCHEDULER TO MEMORY",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE SCHEDULER TO MEMORY") - 1 && !strncasecmp("SAVE SCHEDULER TO MEMORY",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE SCHEDULER TO MEM") && !strncasecmp("SAVE SCHEDULER TO MEM",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE SCHEDULER TO MEM") - 1 && !strncasecmp("SAVE SCHEDULER TO MEM",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE SCHEDULER FROM RUNTIME") && !strncasecmp("SAVE SCHEDULER FROM RUNTIME",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE SCHEDULER FROM RUNTIME") - 1 && !strncasecmp("SAVE SCHEDULER FROM RUNTIME",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE SCHEDULER FROM RUN") && !strncasecmp("SAVE SCHEDULER FROM RUN",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE SCHEDULER FROM RUN") - 1 && !strncasecmp("SAVE SCHEDULER FROM RUN",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -1181,8 +1760,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		if (query_no_space_length>27) {
 			if (!strncasecmp(" TO RUNTIME", query_no_space+query_no_space_length-11, 11)) {
 				char *name=(char *)malloc(query_no_space_length-27+1);
-				strncpy(name,query_no_space+16,query_no_space_length-27);
-				name[query_no_space_length-27]=0;
+				size_t name_len = (size_t)(query_no_space_length - 27);
+				memcpy(name,query_no_space+16, name_len);
+				name[name_len]=0;
 				int i=0;
 				int s=strlen(name);
 				bool legitname=true;
@@ -1231,11 +1811,11 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 #ifdef PROXYSQLCLICKHOUSE
 	if ( ( GloVars.global.clickhouse_server == true ) && (query_no_space_length>22) && ( (!strncasecmp("SAVE CLICKHOUSE USERS ", query_no_space, 22)) || (!strncasecmp("LOAD CLICKHOUSE USERS ", query_no_space, 22))) ) {
 		if (
-			(query_no_space_length==strlen("LOAD CLICKHOUSE USERS TO MEMORY") && !strncasecmp("LOAD CLICKHOUSE USERS TO MEMORY",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD CLICKHOUSE USERS TO MEMORY") - 1 && !strncasecmp("LOAD CLICKHOUSE USERS TO MEMORY",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD CLICKHOUSE USERS TO MEM") && !strncasecmp("LOAD CLICKHOUSE USERS TO MEM",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD CLICKHOUSE USERS TO MEM") - 1 && !strncasecmp("LOAD CLICKHOUSE USERS TO MEM",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD CLICKHOUSE USERS FROM DISK") && !strncasecmp("LOAD CLICKHOUSE USERS FROM DISK",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD CLICKHOUSE USERS FROM DISK") - 1 && !strncasecmp("LOAD CLICKHOUSE USERS FROM DISK",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -1246,11 +1826,11 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		if (
-			(query_no_space_length==strlen("SAVE CLICKHOUSE USERS FROM MEMORY") && !strncasecmp("SAVE CLICKHOUSE USERS FROM MEMORY",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE CLICKHOUSE USERS FROM MEMORY") - 1 && !strncasecmp("SAVE CLICKHOUSE USERS FROM MEMORY",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE CLICKHOUSE USERS FROM MEM") && !strncasecmp("SAVE CLICKHOUSE USERS FROM MEM",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE CLICKHOUSE USERS FROM MEM") - 1 && !strncasecmp("SAVE CLICKHOUSE USERS FROM MEM",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE CLICKHOUSE USERS TO DISK") && !strncasecmp("SAVE CLICKHOUSE USERS TO DISK",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE CLICKHOUSE USERS TO DISK") - 1 && !strncasecmp("SAVE CLICKHOUSE USERS TO DISK",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -1261,13 +1841,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		if (
-			(query_no_space_length==strlen("LOAD CLICKHOUSE USERS FROM MEMORY") && !strncasecmp("LOAD CLICKHOUSE USERS FROM MEMORY",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD CLICKHOUSE USERS FROM MEMORY") - 1 && !strncasecmp("LOAD CLICKHOUSE USERS FROM MEMORY",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD CLICKHOUSE USERS FROM MEM") && !strncasecmp("LOAD CLICKHOUSE USERS FROM MEM",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD CLICKHOUSE USERS FROM MEM") - 1 && !strncasecmp("LOAD CLICKHOUSE USERS FROM MEM",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD CLICKHOUSE USERS TO RUNTIME") && !strncasecmp("LOAD CLICKHOUSE USERS TO RUNTIME",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD CLICKHOUSE USERS TO RUNTIME") - 1 && !strncasecmp("LOAD CLICKHOUSE USERS TO RUNTIME",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD CLICKHOUSE USERS TO RUN") && !strncasecmp("LOAD CLICKHOUSE USERS TO RUN",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD CLICKHOUSE USERS TO RUN") - 1 && !strncasecmp("LOAD CLICKHOUSE USERS TO RUN",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -1278,13 +1858,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		if (
-			(query_no_space_length==strlen("SAVE CLICKHOUSE USERS TO MEMORY") && !strncasecmp("SAVE CLICKHOUSE USERS TO MEMORY",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE CLICKHOUSE USERS TO MEMORY") - 1 && !strncasecmp("SAVE CLICKHOUSE USERS TO MEMORY",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE CLICKHOUSE USERS TO MEM") && !strncasecmp("SAVE CLICKHOUSE USERS TO MEM",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE CLICKHOUSE USERS TO MEM") - 1 && !strncasecmp("SAVE CLICKHOUSE USERS TO MEM",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE CLICKHOUSE USERS FROM RUNTIME") && !strncasecmp("SAVE CLICKHOUSE USERS FROM RUNTIME",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE CLICKHOUSE USERS FROM RUNTIME") - 1 && !strncasecmp("SAVE CLICKHOUSE USERS FROM RUNTIME",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE CLICKHOUSE USERS FROM RUN") && !strncasecmp("SAVE CLICKHOUSE USERS FROM RUN",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE CLICKHOUSE USERS FROM RUN") - 1 && !strncasecmp("SAVE CLICKHOUSE USERS FROM RUN",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -1321,7 +1901,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		return false;
 	}
 
-	if ((query_no_space_length>17) && 
+	if ((query_no_space_length>17) &&
 		((!strncasecmp("SAVE MYSQL USERS ", query_no_space, 17)) || (!strncasecmp("LOAD MYSQL USERS ", query_no_space, 17)) ||
 		((!strncasecmp("SAVE PGSQL USERS ", query_no_space, 17)) || (!strncasecmp("LOAD PGSQL USERS ", query_no_space, 17))))) {
 
@@ -1331,7 +1911,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		tuple<string, vector<string>, vector<string>>& t = load_save_disk_commands[modname];
 		if ( is_admin_command_or_alias(get<1>(t), query_no_space, query_no_space_length) ) {
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-			
+
 			if (is_pgsql)
 				SPA->flush_pgsql_users__from_disk_to_memory();
 			else
@@ -1348,7 +1928,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				SPA->flush_pgsql_users__from_memory_to_disk();
 			else
 				SPA->flush_mysql_users__from_memory_to_disk();
-			
+
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saving %s to DISK\n", modname.c_str());
 			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 			return false;
@@ -1373,7 +1953,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		if (
-			(query_no_space_length==strlen("LOAD MYSQL USERS FROM CONFIG") && (!strncasecmp("LOAD MYSQL USERS FROM CONFIG",query_no_space, query_no_space_length) || 
+			(query_no_space_length==sizeof("LOAD MYSQL USERS FROM CONFIG") - 1 && (!strncasecmp("LOAD MYSQL USERS FROM CONFIG",query_no_space, query_no_space_length) ||
 				!strncasecmp("LOAD PGSQL USERS FROM CONFIG", query_no_space, query_no_space_length)))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
@@ -1441,11 +2021,11 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 	if ((query_no_space_length>28) && ( (!strncasecmp("SAVE SQLITESERVER VARIABLES ", query_no_space, 28)) || (!strncasecmp("LOAD SQLITESERVER VARIABLES ", query_no_space, 28))) ) {
 
 		if (
-			(query_no_space_length==strlen("LOAD SQLITESERVER VARIABLES TO MEMORY") && !strncasecmp("LOAD SQLITESERVER VARIABLES TO MEMORY",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD SQLITESERVER VARIABLES TO MEMORY") - 1 && !strncasecmp("LOAD SQLITESERVER VARIABLES TO MEMORY",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD SQLITESERVER VARIABLES TO MEM") && !strncasecmp("LOAD SQLITESERVER VARIABLES TO MEM",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD SQLITESERVER VARIABLES TO MEM") - 1 && !strncasecmp("LOAD SQLITESERVER VARIABLES TO MEM",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD SQLITESERVER VARIABLES FROM DISK") && !strncasecmp("LOAD SQLITESERVER VARIABLES FROM DISK",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD SQLITESERVER VARIABLES FROM DISK") - 1 && !strncasecmp("LOAD SQLITESERVER VARIABLES FROM DISK",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			l_free(*ql,*q);
@@ -1455,11 +2035,11 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		if (
-			(query_no_space_length==strlen("SAVE SQLITESERVER VARIABLES FROM MEMORY") && !strncasecmp("SAVE SQLITESERVER VARIABLES FROM MEMORY",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE SQLITESERVER VARIABLES FROM MEMORY") - 1 && !strncasecmp("SAVE SQLITESERVER VARIABLES FROM MEMORY",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE SQLITESERVER VARIABLES FROM MEM") && !strncasecmp("SAVE SQLITESERVER VARIABLES FROM MEM",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE SQLITESERVER VARIABLES FROM MEM") - 1 && !strncasecmp("SAVE SQLITESERVER VARIABLES FROM MEM",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE SQLITESERVER VARIABLES TO DISK") && !strncasecmp("SAVE SQLITESERVER VARIABLES TO DISK",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE SQLITESERVER VARIABLES TO DISK") - 1 && !strncasecmp("SAVE SQLITESERVER VARIABLES TO DISK",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			l_free(*ql,*q);
@@ -1469,13 +2049,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		if (
-			(query_no_space_length==strlen("LOAD SQLITESERVER VARIABLES FROM MEMORY") && !strncasecmp("LOAD SQLITESERVER VARIABLES FROM MEMORY",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD SQLITESERVER VARIABLES FROM MEMORY") - 1 && !strncasecmp("LOAD SQLITESERVER VARIABLES FROM MEMORY",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD SQLITESERVER VARIABLES FROM MEM") && !strncasecmp("LOAD SQLITESERVER VARIABLES FROM MEM",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD SQLITESERVER VARIABLES FROM MEM") - 1 && !strncasecmp("LOAD SQLITESERVER VARIABLES FROM MEM",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD SQLITESERVER VARIABLES TO RUNTIME") && !strncasecmp("LOAD SQLITESERVER VARIABLES TO RUNTIME",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD SQLITESERVER VARIABLES TO RUNTIME") - 1 && !strncasecmp("LOAD SQLITESERVER VARIABLES TO RUNTIME",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD SQLITESERVER VARIABLES TO RUN") && !strncasecmp("LOAD SQLITESERVER VARIABLES TO RUN",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD SQLITESERVER VARIABLES TO RUN") - 1 && !strncasecmp("LOAD SQLITESERVER VARIABLES TO RUN",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -1486,13 +2066,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		if (
-			(query_no_space_length==strlen("SAVE SQLITESERVER VARIABLES TO MEMORY") && !strncasecmp("SAVE SQLITESERVER VARIABLES TO MEMORY",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE SQLITESERVER VARIABLES TO MEMORY") - 1 && !strncasecmp("SAVE SQLITESERVER VARIABLES TO MEMORY",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE SQLITESERVER VARIABLES TO MEM") && !strncasecmp("SAVE SQLITESERVER VARIABLES TO MEM",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE SQLITESERVER VARIABLES TO MEM") - 1 && !strncasecmp("SAVE SQLITESERVER VARIABLES TO MEM",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE SQLITESERVER VARIABLES FROM RUNTIME") && !strncasecmp("SAVE SQLITESERVER VARIABLES FROM RUNTIME",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE SQLITESERVER VARIABLES FROM RUNTIME") - 1 && !strncasecmp("SAVE SQLITESERVER VARIABLES FROM RUNTIME",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE SQLITESERVER VARIABLES FROM RUN") && !strncasecmp("SAVE SQLITESERVER VARIABLES FROM RUN",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE SQLITESERVER VARIABLES FROM RUN") - 1 && !strncasecmp("SAVE SQLITESERVER VARIABLES FROM RUN",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -1506,11 +2086,11 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 	if ((query_no_space_length>26) && ( (!strncasecmp("SAVE CLICKHOUSE VARIABLES ", query_no_space, 26)) || (!strncasecmp("LOAD CLICKHOUSE VARIABLES ", query_no_space, 26))) ) {
 
 		if (
-			(query_no_space_length==strlen("LOAD CLICKHOUSE VARIABLES TO MEMORY") && !strncasecmp("LOAD CLICKHOUSE VARIABLES TO MEMORY",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD CLICKHOUSE VARIABLES TO MEMORY") - 1 && !strncasecmp("LOAD CLICKHOUSE VARIABLES TO MEMORY",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD CLICKHOUSE VARIABLES TO MEM") && !strncasecmp("LOAD CLICKHOUSE VARIABLES TO MEM",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD CLICKHOUSE VARIABLES TO MEM") - 1 && !strncasecmp("LOAD CLICKHOUSE VARIABLES TO MEM",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD CLICKHOUSE VARIABLES FROM DISK") && !strncasecmp("LOAD CLICKHOUSE VARIABLES FROM DISK",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD CLICKHOUSE VARIABLES FROM DISK") - 1 && !strncasecmp("LOAD CLICKHOUSE VARIABLES FROM DISK",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			l_free(*ql,*q);
@@ -1520,11 +2100,11 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		if (
-			(query_no_space_length==strlen("SAVE CLICKHOUSE VARIABLES FROM MEMORY") && !strncasecmp("SAVE CLICKHOUSE VARIABLES FROM MEMORY",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE CLICKHOUSE VARIABLES FROM MEMORY") - 1 && !strncasecmp("SAVE CLICKHOUSE VARIABLES FROM MEMORY",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE CLICKHOUSE VARIABLES FROM MEM") && !strncasecmp("SAVE CLICKHOUSE VARIABLES FROM MEM",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE CLICKHOUSE VARIABLES FROM MEM") - 1 && !strncasecmp("SAVE CLICKHOUSE VARIABLES FROM MEM",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE CLICKHOUSE VARIABLES TO DISK") && !strncasecmp("SAVE CLICKHOUSE VARIABLES TO DISK",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE CLICKHOUSE VARIABLES TO DISK") - 1 && !strncasecmp("SAVE CLICKHOUSE VARIABLES TO DISK",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			l_free(*ql,*q);
@@ -1534,13 +2114,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		if (
-			(query_no_space_length==strlen("LOAD CLICKHOUSE VARIABLES FROM MEMORY") && !strncasecmp("LOAD CLICKHOUSE VARIABLES FROM MEMORY",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD CLICKHOUSE VARIABLES FROM MEMORY") - 1 && !strncasecmp("LOAD CLICKHOUSE VARIABLES FROM MEMORY",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD CLICKHOUSE VARIABLES FROM MEM") && !strncasecmp("LOAD CLICKHOUSE VARIABLES FROM MEM",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD CLICKHOUSE VARIABLES FROM MEM") - 1 && !strncasecmp("LOAD CLICKHOUSE VARIABLES FROM MEM",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD CLICKHOUSE VARIABLES TO RUNTIME") && !strncasecmp("LOAD CLICKHOUSE VARIABLES TO RUNTIME",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD CLICKHOUSE VARIABLES TO RUNTIME") - 1 && !strncasecmp("LOAD CLICKHOUSE VARIABLES TO RUNTIME",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD CLICKHOUSE VARIABLES TO RUN") && !strncasecmp("LOAD CLICKHOUSE VARIABLES TO RUN",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD CLICKHOUSE VARIABLES TO RUN") - 1 && !strncasecmp("LOAD CLICKHOUSE VARIABLES TO RUN",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -1551,13 +2131,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		if (
-			(query_no_space_length==strlen("SAVE CLICKHOUSE VARIABLES TO MEMORY") && !strncasecmp("SAVE CLICKHOUSE VARIABLES TO MEMORY",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE CLICKHOUSE VARIABLES TO MEMORY") - 1 && !strncasecmp("SAVE CLICKHOUSE VARIABLES TO MEMORY",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE CLICKHOUSE VARIABLES TO MEM") && !strncasecmp("SAVE CLICKHOUSE VARIABLES TO MEM",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE CLICKHOUSE VARIABLES TO MEM") - 1 && !strncasecmp("SAVE CLICKHOUSE VARIABLES TO MEM",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE CLICKHOUSE VARIABLES FROM RUNTIME") && !strncasecmp("SAVE CLICKHOUSE VARIABLES FROM RUNTIME",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE CLICKHOUSE VARIABLES FROM RUNTIME") - 1 && !strncasecmp("SAVE CLICKHOUSE VARIABLES FROM RUNTIME",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE CLICKHOUSE VARIABLES FROM RUN") && !strncasecmp("SAVE CLICKHOUSE VARIABLES FROM RUN",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE CLICKHOUSE VARIABLES FROM RUN") - 1 && !strncasecmp("SAVE CLICKHOUSE VARIABLES FROM RUN",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -1571,13 +2151,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 
 		if (GloMyLdapAuth) {
 		if ((query_no_space_length>20) && ( (!strncasecmp("SAVE LDAP VARIABLES ", query_no_space, 20)) || (!strncasecmp("LOAD LDAP VARIABLES ", query_no_space, 20))) ) {
-	
+
 			if (
-				(query_no_space_length==strlen("LOAD LDAP VARIABLES TO MEMORY") && !strncasecmp("LOAD LDAP VARIABLES TO MEMORY",query_no_space, query_no_space_length))
+				(query_no_space_length==sizeof("LOAD LDAP VARIABLES TO MEMORY") - 1 && !strncasecmp("LOAD LDAP VARIABLES TO MEMORY",query_no_space, query_no_space_length))
 				||
-				(query_no_space_length==strlen("LOAD LDAP VARIABLES TO MEM") && !strncasecmp("LOAD LDAP VARIABLES TO MEM",query_no_space, query_no_space_length))
+				(query_no_space_length==sizeof("LOAD LDAP VARIABLES TO MEM") - 1 && !strncasecmp("LOAD LDAP VARIABLES TO MEM",query_no_space, query_no_space_length))
 				||
-				(query_no_space_length==strlen("LOAD LDAP VARIABLES FROM DISK") && !strncasecmp("LOAD LDAP VARIABLES FROM DISK",query_no_space, query_no_space_length))
+				(query_no_space_length==sizeof("LOAD LDAP VARIABLES FROM DISK") - 1 && !strncasecmp("LOAD LDAP VARIABLES FROM DISK",query_no_space, query_no_space_length))
 			) {
 				proxy_info("Received %s command\n", query_no_space);
 				l_free(*ql,*q);
@@ -1585,13 +2165,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				*ql=strlen(*q)+1;
 				return true;
 			}
-	
+
 			if (
-				(query_no_space_length==strlen("SAVE LDAP VARIABLES FROM MEMORY") && !strncasecmp("SAVE LDAP VARIABLES FROM MEMORY",query_no_space, query_no_space_length))
+				(query_no_space_length==sizeof("SAVE LDAP VARIABLES FROM MEMORY") - 1 && !strncasecmp("SAVE LDAP VARIABLES FROM MEMORY",query_no_space, query_no_space_length))
 				||
-				(query_no_space_length==strlen("SAVE LDAP VARIABLES FROM MEM") && !strncasecmp("SAVE LDAP VARIABLES FROM MEM",query_no_space, query_no_space_length))
+				(query_no_space_length==sizeof("SAVE LDAP VARIABLES FROM MEM") - 1 && !strncasecmp("SAVE LDAP VARIABLES FROM MEM",query_no_space, query_no_space_length))
 				||
-				(query_no_space_length==strlen("SAVE LDAP VARIABLES TO DISK") && !strncasecmp("SAVE LDAP VARIABLES TO DISK",query_no_space, query_no_space_length))
+				(query_no_space_length==sizeof("SAVE LDAP VARIABLES TO DISK") - 1 && !strncasecmp("SAVE LDAP VARIABLES TO DISK",query_no_space, query_no_space_length))
 			) {
 				proxy_info("Received %s command\n", query_no_space);
 				l_free(*ql,*q);
@@ -1599,32 +2179,36 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				*ql=strlen(*q)+1;
 				return true;
 			}
-	
+
 			if (
-				(query_no_space_length==strlen("LOAD LDAP VARIABLES FROM MEMORY") && !strncasecmp("LOAD LDAP VARIABLES FROM MEMORY",query_no_space, query_no_space_length))
+				(query_no_space_length==sizeof("LOAD LDAP VARIABLES FROM MEMORY") - 1 && !strncasecmp("LOAD LDAP VARIABLES FROM MEMORY",query_no_space, query_no_space_length))
 				||
-				(query_no_space_length==strlen("LOAD LDAP VARIABLES FROM MEM") && !strncasecmp("LOAD LDAP VARIABLES FROM MEM",query_no_space, query_no_space_length))
+				(query_no_space_length==sizeof("LOAD LDAP VARIABLES FROM MEM") - 1 && !strncasecmp("LOAD LDAP VARIABLES FROM MEM",query_no_space, query_no_space_length))
 				||
-				(query_no_space_length==strlen("LOAD LDAP VARIABLES TO RUNTIME") && !strncasecmp("LOAD LDAP VARIABLES TO RUNTIME",query_no_space, query_no_space_length))
+				(query_no_space_length==sizeof("LOAD LDAP VARIABLES TO RUNTIME") - 1 && !strncasecmp("LOAD LDAP VARIABLES TO RUNTIME",query_no_space, query_no_space_length))
 				||
-				(query_no_space_length==strlen("LOAD LDAP VARIABLES TO RUN") && !strncasecmp("LOAD LDAP VARIABLES TO RUN",query_no_space, query_no_space_length))
+				(query_no_space_length==sizeof("LOAD LDAP VARIABLES TO RUN") - 1 && !strncasecmp("LOAD LDAP VARIABLES TO RUN",query_no_space, query_no_space_length))
 			) {
 				proxy_info("Received %s command\n", query_no_space);
 				ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-				SPA->load_ldap_variables_to_runtime();
+				FlushVariableStats stats = SPA->load_ldap_variables_to_runtime();
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded ldap variables to RUNTIME\n");
-				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+				char info[160];
+				snprintf(info, sizeof(info),
+					"Records: %d Updated: %d Rejected: %d Unknown: %d",
+					stats.records, stats.updated, stats.rejected, stats.unknown);
+				SPA->send_ok_msg_to_client(sess, info, 0, query_no_space);
 				return false;
 			}
-	
+
 			if (
-				(query_no_space_length==strlen("SAVE LDAP VARIABLES TO MEMORY") && !strncasecmp("SAVE LDAP VARIABLES TO MEMORY",query_no_space, query_no_space_length))
+				(query_no_space_length==sizeof("SAVE LDAP VARIABLES TO MEMORY") - 1 && !strncasecmp("SAVE LDAP VARIABLES TO MEMORY",query_no_space, query_no_space_length))
 				||
-				(query_no_space_length==strlen("SAVE LDAP VARIABLES TO MEM") && !strncasecmp("SAVE LDAP VARIABLES TO MEM",query_no_space, query_no_space_length))
+				(query_no_space_length==sizeof("SAVE LDAP VARIABLES TO MEM") - 1 && !strncasecmp("SAVE LDAP VARIABLES TO MEM",query_no_space, query_no_space_length))
 				||
-				(query_no_space_length==strlen("SAVE LDAP VARIABLES FROM RUNTIME") && !strncasecmp("SAVE LDAP VARIABLES FROM RUNTIME",query_no_space, query_no_space_length))
+				(query_no_space_length==sizeof("SAVE LDAP VARIABLES FROM RUNTIME") - 1 && !strncasecmp("SAVE LDAP VARIABLES FROM RUNTIME",query_no_space, query_no_space_length))
 				||
-				(query_no_space_length==strlen("SAVE LDAP VARIABLES FROM RUN") && !strncasecmp("SAVE LDAP VARIABLES FROM RUN",query_no_space, query_no_space_length))
+				(query_no_space_length==sizeof("SAVE LDAP VARIABLES FROM RUN") - 1 && !strncasecmp("SAVE LDAP VARIABLES FROM RUN",query_no_space, query_no_space_length))
 			) {
 				proxy_info("Received %s command\n", query_no_space);
 				ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -1637,16 +2221,50 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 	}
 
 		if ((query_no_space_length > 21) && ((!strncasecmp("SAVE MYSQL VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD MYSQL VARIABLES ", query_no_space, 21)) ||
-			(!strncasecmp("SAVE PGSQL VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD PGSQL VARIABLES ", query_no_space, 21)))) {
+			(!strncasecmp("SAVE PGSQL VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD PGSQL VARIABLES ", query_no_space, 21)) ||
+			(!strncasecmp("SAVE GENAI VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD GENAI VARIABLES ", query_no_space, 21)) ||
+			(!strncasecmp("SAVE TSDB VARIABLES ", query_no_space, 20)) || (!strncasecmp("LOAD TSDB VARIABLES ", query_no_space, 20)))) {
 
-			const bool is_pgsql = (query_no_space[5] == 'P' || query_no_space[5] == 'p') ? true : false;
-			const std::string modname = is_pgsql ? "pgsql_variables" : "mysql_variables";
+			const bool is_pgsql = strcasestr(query_no_space, "PGSQL") ? true : false;
+			const bool is_genai = strcasestr(query_no_space, "GENAI") ? true : false;
+			const bool is_tsdb = strcasestr(query_no_space, "TSDB") ? true : false;
+			const std::string modname = is_pgsql ? "pgsql_variables" : (is_genai ? "genai_variables" : (is_tsdb ? "tsdb_variables" : "mysql_variables"));
+
+			if (is_tsdb) {
+				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+				if (is_admin_command_or_alias(LOAD_TSDB_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length)) {
+#ifdef PROXYSQLTSDB
+					SPA->load_tsdb_variables_to_runtime();
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded tsdb variables to RUNTIME\n");
+					SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+#else
+					SPA->send_error_msg_to_client(sess, "TSDB support not compiled/enabled");
+#endif
+					return false;
+				}
+				if (is_admin_command_or_alias(SAVE_TSDB_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length)) {
+#ifdef PROXYSQLTSDB
+					SPA->save_tsdb_variables_from_runtime();
+					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved tsdb variables from RUNTIME\n");
+					SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+#else
+					SPA->send_error_msg_to_client(sess, "TSDB support not compiled/enabled");
+#endif
+					return false;
+				}
+			}
 
 			tuple<string, vector<string>, vector<string>>& t = load_save_disk_commands[modname];
 			if (is_admin_command_or_alias(get<1>(t), query_no_space, query_no_space_length)) {
 				l_free(*ql, *q);
 				if (is_pgsql) {
 					*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'pgsql-%'");
+				}
+				else if (is_genai) {
+					*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'genai-%'");
+				}
+				else if (is_tsdb) {
+					*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'tsdb-%'");
 				}
 				else {
 					*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'mysql-%'");
@@ -1660,6 +2278,12 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				if (is_pgsql) {
 					*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'pgsql-%'");
 				}
+				else if (is_genai) {
+					*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'genai-%'");
+				}
+				else if (is_tsdb) {
+					*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'tsdb-%'");
+				}
 				else {
 					*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'mysql-%'");
 				}
@@ -1670,25 +2294,37 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			if (is_pgsql) {
 				if (is_admin_command_or_alias(LOAD_PGSQL_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length)) {
 					ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
-					SPA->load_pgsql_variables_to_runtime();
+					FlushVariableStats stats = SPA->load_pgsql_variables_to_runtime();
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql variables to RUNTIME\n");
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql variables to RUNTIME\n");
-					SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+					char info[160];
+					snprintf(info, sizeof(info),
+						"Records: %d Updated: %d Rejected: %d Unknown: %d",
+						stats.records, stats.updated, stats.rejected, stats.unknown);
+					SPA->send_ok_msg_to_client(sess, info, 0, query_no_space);
 					return false;
 				}
-			} else {
+			}
+			else {
 				if (is_admin_command_or_alias(LOAD_MYSQL_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length)) {
 					ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
-					SPA->load_mysql_variables_to_runtime();
+					FlushVariableStats stats = SPA->load_mysql_variables_to_runtime();
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql variables to RUNTIME\n");
-					SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+					char info[160];
+					snprintf(info, sizeof(info),
+						"Records: %d Updated: %d Rejected: %d Unknown: %d",
+						stats.records, stats.updated, stats.rejected, stats.unknown);
+					SPA->send_ok_msg_to_client(sess, info, 0, query_no_space);
 					return false;
 			}
 		}
 
 		if (
-			(query_no_space_length==strlen("LOAD MYSQL VARIABLES FROM CONFIG") && (!strncasecmp("LOAD MYSQL VARIABLES FROM CONFIG",query_no_space, query_no_space_length) ||
-				!strncasecmp("LOAD PGSQL VARIABLES FROM CONFIG", query_no_space, query_no_space_length)))
+			(query_no_space_length==sizeof("LOAD MYSQL VARIABLES FROM CONFIG") - 1 && !strncasecmp("LOAD MYSQL VARIABLES FROM CONFIG",query_no_space, query_no_space_length)) ||
+			(query_no_space_length==sizeof("LOAD PGSQL VARIABLES FROM CONFIG") - 1 && !strncasecmp("LOAD PGSQL VARIABLES FROM CONFIG", query_no_space, query_no_space_length)) ||
+			(query_no_space_length==sizeof("LOAD SQLITESERVER VARIABLES FROM CONFIG") - 1 && !strncasecmp("LOAD SQLITESERVER VARIABLES FROM CONFIG", query_no_space, query_no_space_length)) ||
+			(query_no_space_length==sizeof("LOAD TSDB VARIABLES FROM CONFIG") - 1 && !strncasecmp("LOAD TSDB VARIABLES FROM CONFIG", query_no_space, query_no_space_length)) ||
+			(query_no_space_length==sizeof("LOAD GENAI VARIABLES FROM CONFIG") - 1 && !strncasecmp("LOAD GENAI VARIABLES FROM CONFIG", query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			if (GloVars.configfile_open) {
@@ -1696,9 +2332,18 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				if (GloVars.confFile->OpenFile(NULL)==true) {
 					int rows=0;
 					ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-					if (query_no_space[5] == 'P' || query_no_space[5] == 'p') {
+					if (strcasestr(query_no_space, "PGSQL")) {
 						rows=SPA->proxysql_config().Read_Global_Variables_from_configfile("pgsql");
 						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql global variables from CONFIG\n");
+					} else if (strcasestr(query_no_space, "SQLITESERVER")) {
+						rows=SPA->proxysql_config().Read_Global_Variables_from_configfile("sqliteserver");
+						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded sqliteserver global variables from CONFIG\n");
+					} else if (strcasestr(query_no_space, "GENAI")) {
+						rows=SPA->proxysql_config().Read_Global_Variables_from_configfile("genai");
+						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded genai global variables from CONFIG\n");
+					} else if (strcasestr(query_no_space, "TSDB")) {
+						rows=SPA->proxysql_config().Read_Global_Variables_from_configfile("tsdb");
+						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded tsdb global variables from CONFIG\n");
 					} else {
 						rows = SPA->proxysql_config().Read_Global_Variables_from_configfile("mysql");
 						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql global variables from CONFIG\n");
@@ -1728,7 +2373,8 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 				return false;
 			}
-		} else {
+		}
+		else {
 			if (is_admin_command_or_alias(SAVE_MYSQL_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length)) {
 				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 				SPA->save_mysql_variables_from_runtime();
@@ -1738,6 +2384,31 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			}
 		}
 	}
+
+	// MCP (Model Context Protocol) VARIABLES - DISK commands.
+	// Step 7 dropped the PROXYSQLGENAI gate: the disk <-> main copy is
+	// pure SQL DML against global_variables (LIKE 'mcp-%') and has no
+	// plugin runtime dependency, so it can stay in core unconditionally.
+	// Plugin-side LOAD MCP VARIABLES TO RUNTIME (registered via
+	// register_command in plugin_commands.cpp) handles the
+	// main -> running plugin push.
+	if ((query_no_space_length > 19) && ((!strncasecmp("SAVE MCP VARIABLES ", query_no_space, 19)) || (!strncasecmp("LOAD MCP VARIABLES ", query_no_space, 19)))) {
+		const std::string modname = "mcp_variables";
+		tuple<string, vector<string>, vector<string>>& t = load_save_disk_commands[modname];
+		if (is_admin_command_or_alias(get<1>(t), query_no_space, query_no_space_length)) {
+			l_free(*ql, *q);
+			*q = l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'mcp-%'");
+			*ql = strlen(*q) + 1;
+			return true;
+		}
+		if (is_admin_command_or_alias(get<2>(t), query_no_space, query_no_space_length)) {
+			l_free(*ql, *q);
+			*q = l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'mcp-%'");
+			*ql = strlen(*q) + 1;
+			return true;
+		}
+	}
+
 
 	if ((query_no_space_length > 14) && (!strncasecmp("LOAD COREDUMP ", query_no_space, 14))) {
 
@@ -1786,9 +2457,9 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				return false;
 			}
 		}
-		
+
 		if (
-			(query_no_space_length==strlen("LOAD MYSQL SERVERS FROM CONFIG") && (!strncasecmp("LOAD MYSQL SERVERS FROM CONFIG",query_no_space, query_no_space_length) ||
+			(query_no_space_length==sizeof("LOAD MYSQL SERVERS FROM CONFIG") - 1 && (!strncasecmp("LOAD MYSQL SERVERS FROM CONFIG",query_no_space, query_no_space_length) ||
 				!strncasecmp("LOAD PGSQL SERVERS FROM CONFIG", query_no_space, query_no_space_length) ))) {
 
 			proxy_info("Received %s command\n", query_no_space);
@@ -1872,13 +2543,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return false;
 */
 		if (
-			(query_no_space_length==strlen("LOAD PROXYSQL SERVERS FROM MEMORY") && !strncasecmp("LOAD PROXYSQL SERVERS FROM MEMORY",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD PROXYSQL SERVERS FROM MEMORY") - 1 && !strncasecmp("LOAD PROXYSQL SERVERS FROM MEMORY",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD PROXYSQL SERVERS FROM MEM") && !strncasecmp("LOAD PROXYSQL SERVERS FROM MEM",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD PROXYSQL SERVERS FROM MEM") - 1 && !strncasecmp("LOAD PROXYSQL SERVERS FROM MEM",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD PROXYSQL SERVERS TO RUNTIME") && !strncasecmp("LOAD PROXYSQL SERVERS TO RUNTIME",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD PROXYSQL SERVERS TO RUNTIME") - 1 && !strncasecmp("LOAD PROXYSQL SERVERS TO RUNTIME",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD PROXYSQL SERVERS TO RUN") && !strncasecmp("LOAD PROXYSQL SERVERS TO RUN",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD PROXYSQL SERVERS TO RUN") - 1 && !strncasecmp("LOAD PROXYSQL SERVERS TO RUN",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -1898,13 +2569,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return false;
 		}
 		if (
-			(query_no_space_length==strlen("SAVE PROXYSQL SERVERS TO MEMORY") && !strncasecmp("SAVE PROXYSQL SERVERS TO MEMORY",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE PROXYSQL SERVERS TO MEMORY") - 1 && !strncasecmp("SAVE PROXYSQL SERVERS TO MEMORY",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE PROXYSQL SERVERS TO MEM") && !strncasecmp("SAVE PROXYSQL SERVERS TO MEM",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE PROXYSQL SERVERS TO MEM") - 1 && !strncasecmp("SAVE PROXYSQL SERVERS TO MEM",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE PROXYSQL SERVERS FROM RUNTIME") && !strncasecmp("SAVE PROXYSQL SERVERS FROM RUNTIME",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE PROXYSQL SERVERS FROM RUNTIME") - 1 && !strncasecmp("SAVE PROXYSQL SERVERS FROM RUNTIME",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE PROXYSQL SERVERS FROM RUN") && !strncasecmp("SAVE PROXYSQL SERVERS FROM RUN",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE PROXYSQL SERVERS FROM RUN") - 1 && !strncasecmp("SAVE PROXYSQL SERVERS FROM RUN",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -1925,7 +2596,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		if (
-			(query_no_space_length==strlen("LOAD PROXYSQL SERVERS FROM CONFIG") && !strncasecmp("LOAD PROXYSQL SERVERS FROM CONFIG",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD PROXYSQL SERVERS FROM CONFIG") - 1 && !strncasecmp("LOAD PROXYSQL SERVERS FROM CONFIG",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			if (GloVars.configfile_open) {
@@ -1970,7 +2641,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return false;
 
 		if (
-			(query_no_space_length==strlen("LOAD MYSQL FIREWALL FROM CONFIG") && (!strncasecmp("LOAD MYSQL FIREWALL FROM CONFIG",query_no_space, query_no_space_length) ||
+			(query_no_space_length==sizeof("LOAD MYSQL FIREWALL FROM CONFIG") - 1 && (!strncasecmp("LOAD MYSQL FIREWALL FROM CONFIG",query_no_space, query_no_space_length) ||
 				!strncasecmp("LOAD PGSQL FIREWALL FROM CONFIG", query_no_space, query_no_space_length)))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
@@ -1979,12 +2650,11 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				if (GloVars.confFile->OpenFile(NULL)==true) {
 					ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 					int rows=0;
-					// FIXME: not implemented yet
 					if (query_no_space[5] == 'P' || query_no_space[5] == 'p') {
-					//	rows=SPA->proxysql_config().Read_PgSQL_Firewall_from_configfile();
+						rows = SPA->proxysql_config().Read_PgSQL_Firewall_from_configfile();
 						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql firewall from CONFIG\n");
 					} else {
-					//	rows=SPA->proxysql_config().Read_MySQL_Firewall_from_configfile();
+						rows = SPA->proxysql_config().Read_MySQL_Firewall_from_configfile();
 						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql firewall from CONFIG\n");
 					}
 					SPA->send_ok_msg_to_client(sess, NULL, rows, query_no_space);
@@ -2005,21 +2675,21 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		if (
-			(query_no_space_length==strlen("LOAD MYSQL FIREWALL FROM MEMORY") && !strncasecmp("LOAD MYSQL FIREWALL FROM MEMORY",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD MYSQL FIREWALL FROM MEMORY") - 1 && !strncasecmp("LOAD MYSQL FIREWALL FROM MEMORY",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD MYSQL FIREWALL FROM MEM") && !strncasecmp("LOAD MYSQL FIREWALL FROM MEM",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD MYSQL FIREWALL FROM MEM") - 1 && !strncasecmp("LOAD MYSQL FIREWALL FROM MEM",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD MYSQL FIREWALL TO RUNTIME") && !strncasecmp("LOAD MYSQL FIREWALL TO RUNTIME",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD MYSQL FIREWALL TO RUNTIME") - 1 && !strncasecmp("LOAD MYSQL FIREWALL TO RUNTIME",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD MYSQL FIREWALL TO RUN") && !strncasecmp("LOAD MYSQL FIREWALL TO RUN",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD MYSQL FIREWALL TO RUN") - 1 && !strncasecmp("LOAD MYSQL FIREWALL TO RUN",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length == strlen("LOAD PGSQL FIREWALL FROM MEMORY") && !strncasecmp("LOAD PGSQL FIREWALL FROM MEMORY", query_no_space, query_no_space_length))
+			(query_no_space_length == sizeof("LOAD PGSQL FIREWALL FROM MEMORY") - 1 && !strncasecmp("LOAD PGSQL FIREWALL FROM MEMORY", query_no_space, query_no_space_length))
 			||
-			(query_no_space_length == strlen("LOAD PGSQL FIREWALL FROM MEM") && !strncasecmp("LOAD PGSQL FIREWALL FROM MEM", query_no_space, query_no_space_length))
+			(query_no_space_length == sizeof("LOAD PGSQL FIREWALL FROM MEM") - 1 && !strncasecmp("LOAD PGSQL FIREWALL FROM MEM", query_no_space, query_no_space_length))
 			||
-			(query_no_space_length == strlen("LOAD PGSQL FIREWALL TO RUNTIME") && !strncasecmp("LOAD PGSQL FIREWALL TO RUNTIME", query_no_space, query_no_space_length))
+			(query_no_space_length == sizeof("LOAD PGSQL FIREWALL TO RUNTIME") - 1 && !strncasecmp("LOAD PGSQL FIREWALL TO RUNTIME", query_no_space, query_no_space_length))
 			||
-			(query_no_space_length == strlen("LOAD PGSQL FIREWALL TO RUN") && !strncasecmp("LOAD PGSQL FIREWALL TO RUN", query_no_space, query_no_space_length))
+			(query_no_space_length == sizeof("LOAD PGSQL FIREWALL TO RUN") - 1 && !strncasecmp("LOAD PGSQL FIREWALL TO RUN", query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -2034,21 +2704,21 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		if (
-			(query_no_space_length==strlen("SAVE MYSQL FIREWALL TO MEMORY") && !strncasecmp("SAVE MYSQL FIREWALL TO MEMORY",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE MYSQL FIREWALL TO MEMORY") - 1 && !strncasecmp("SAVE MYSQL FIREWALL TO MEMORY",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE MYSQL FIREWALL TO MEM") && !strncasecmp("SAVE MYSQL FIREWALL TO MEM",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE MYSQL FIREWALL TO MEM") - 1 && !strncasecmp("SAVE MYSQL FIREWALL TO MEM",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE MYSQL FIREWALL FROM RUNTIME") && !strncasecmp("SAVE MYSQL FIREWALL FROM RUNTIME",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE MYSQL FIREWALL FROM RUNTIME") - 1 && !strncasecmp("SAVE MYSQL FIREWALL FROM RUNTIME",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("SAVE MYSQL FIREWALL FROM RUN") && !strncasecmp("SAVE MYSQL FIREWALL FROM RUN",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("SAVE MYSQL FIREWALL FROM RUN") - 1 && !strncasecmp("SAVE MYSQL FIREWALL FROM RUN",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length == strlen("SAVE PGSQL FIREWALL TO MEMORY") && !strncasecmp("SAVE PGSQL FIREWALL TO MEMORY", query_no_space, query_no_space_length))
+			(query_no_space_length == sizeof("SAVE PGSQL FIREWALL TO MEMORY") - 1 && !strncasecmp("SAVE PGSQL FIREWALL TO MEMORY", query_no_space, query_no_space_length))
 			||
-			(query_no_space_length == strlen("SAVE PGSQL FIREWALL TO MEM") && !strncasecmp("SAVE PGSQL FIREWALL TO MEM", query_no_space, query_no_space_length))
+			(query_no_space_length == sizeof("SAVE PGSQL FIREWALL TO MEM") - 1 && !strncasecmp("SAVE PGSQL FIREWALL TO MEM", query_no_space, query_no_space_length))
 			||
-			(query_no_space_length == strlen("SAVE PGSQL FIREWALL FROM RUNTIME") && !strncasecmp("SAVE PGSQL FIREWALL FROM RUNTIME", query_no_space, query_no_space_length))
+			(query_no_space_length == sizeof("SAVE PGSQL FIREWALL FROM RUNTIME") - 1 && !strncasecmp("SAVE PGSQL FIREWALL FROM RUNTIME", query_no_space, query_no_space_length))
 			||
-			(query_no_space_length == strlen("SAVE PGSQL FIREWALL FROM RUN") && !strncasecmp("SAVE PGSQL FIREWALL FROM RUN", query_no_space, query_no_space_length))
+			(query_no_space_length == sizeof("SAVE PGSQL FIREWALL FROM RUN") - 1 && !strncasecmp("SAVE PGSQL FIREWALL FROM RUN", query_no_space, query_no_space_length))
 
 		) {
 			proxy_info("Received %s command\n", query_no_space);
@@ -2074,7 +2744,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return false;
 
 		if (
-			(query_no_space_length==strlen("LOAD MYSQL QUERY RULES FROM CONFIG") && (!strncasecmp("LOAD MYSQL QUERY RULES FROM CONFIG",query_no_space, query_no_space_length) ||
+			(query_no_space_length==sizeof("LOAD MYSQL QUERY RULES FROM CONFIG") - 1 && (!strncasecmp("LOAD MYSQL QUERY RULES FROM CONFIG",query_no_space, query_no_space_length) ||
 				!strncasecmp("LOAD PGSQL QUERY RULES FROM CONFIG", query_no_space, query_no_space_length)))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
@@ -2085,9 +2755,11 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					int rows=0;
 					if (query_no_space[5] == 'P' || query_no_space[5] == 'p') {
 						rows = SPA->proxysql_config().Read_PgSQL_Query_Rules_from_configfile();
+						rows += SPA->proxysql_config().Read_PgSQL_Query_Rules_Fast_Routing_from_configfile();
 						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql query rules from CONFIG\n");
 					} else {
 						rows = SPA->proxysql_config().Read_MySQL_Query_Rules_from_configfile();
+						rows += SPA->proxysql_config().Read_MySQL_Query_Rules_Fast_Routing_from_configfile();
 						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql query rules from CONFIG\n");
 					}
 					SPA->send_ok_msg_to_client(sess, NULL, rows, query_no_space);
@@ -2108,27 +2780,27 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		if (
-			(query_no_space_length==strlen("LOAD MYSQL QUERY RULES FROM MEMORY") && !strncasecmp("LOAD MYSQL QUERY RULES FROM MEMORY",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD MYSQL QUERY RULES FROM MEMORY") - 1 && !strncasecmp("LOAD MYSQL QUERY RULES FROM MEMORY",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD MYSQL QUERY RULES FROM MEM") && !strncasecmp("LOAD MYSQL QUERY RULES FROM MEM",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD MYSQL QUERY RULES FROM MEM") - 1 && !strncasecmp("LOAD MYSQL QUERY RULES FROM MEM",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD MYSQL QUERY RULES TO RUNTIME") && !strncasecmp("LOAD MYSQL QUERY RULES TO RUNTIME",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD MYSQL QUERY RULES TO RUNTIME") - 1 && !strncasecmp("LOAD MYSQL QUERY RULES TO RUNTIME",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length==strlen("LOAD MYSQL QUERY RULES TO RUN") && !strncasecmp("LOAD MYSQL QUERY RULES TO RUN",query_no_space, query_no_space_length)) 
+			(query_no_space_length==sizeof("LOAD MYSQL QUERY RULES TO RUN") - 1 && !strncasecmp("LOAD MYSQL QUERY RULES TO RUN",query_no_space, query_no_space_length))
 			||
-			(query_no_space_length == strlen("LOAD PGSQL QUERY RULES FROM MEMORY") && !strncasecmp("LOAD PGSQL QUERY RULES FROM MEMORY", query_no_space, query_no_space_length))
+			(query_no_space_length == sizeof("LOAD PGSQL QUERY RULES FROM MEMORY") - 1 && !strncasecmp("LOAD PGSQL QUERY RULES FROM MEMORY", query_no_space, query_no_space_length))
 			||
-			(query_no_space_length == strlen("LOAD PGSQL QUERY RULES FROM MEM") && !strncasecmp("LOAD PGSQL QUERY RULES FROM MEM", query_no_space, query_no_space_length))
+			(query_no_space_length == sizeof("LOAD PGSQL QUERY RULES FROM MEM") - 1 && !strncasecmp("LOAD PGSQL QUERY RULES FROM MEM", query_no_space, query_no_space_length))
 			||
-			(query_no_space_length == strlen("LOAD PGSQL QUERY RULES TO RUNTIME") && !strncasecmp("LOAD PGSQL QUERY RULES TO RUNTIME", query_no_space, query_no_space_length))
+			(query_no_space_length == sizeof("LOAD PGSQL QUERY RULES TO RUNTIME") - 1 && !strncasecmp("LOAD PGSQL QUERY RULES TO RUNTIME", query_no_space, query_no_space_length))
 			||
-			(query_no_space_length == strlen("LOAD PGSQL QUERY RULES TO RUN") && !strncasecmp("LOAD PGSQL QUERY RULES TO RUN", query_no_space, query_no_space_length))
+			(query_no_space_length == sizeof("LOAD PGSQL QUERY RULES TO RUN") - 1 && !strncasecmp("LOAD PGSQL QUERY RULES TO RUN", query_no_space, query_no_space_length))
 
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			char* err = NULL;
-			
+
 			if (query_no_space[5] == 'P' || query_no_space[5] == 'p')
 				err = SPA->load_pgsql_query_rules_to_runtime();
 			else
@@ -2139,7 +2811,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql query rules to RUNTIME\n");
 				else
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql query rules to RUNTIME\n");
-				
+
 				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 			} else {
 				SPA->send_error_msg_to_client(sess, err);
@@ -2148,21 +2820,21 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		if (
-			(query_no_space_length == strlen("SAVE MYSQL QUERY RULES TO MEMORY") && !strncasecmp("SAVE MYSQL QUERY RULES TO MEMORY", query_no_space, query_no_space_length))
+			(query_no_space_length == sizeof("SAVE MYSQL QUERY RULES TO MEMORY") - 1 && !strncasecmp("SAVE MYSQL QUERY RULES TO MEMORY", query_no_space, query_no_space_length))
 			||
-			(query_no_space_length == strlen("SAVE MYSQL QUERY RULES TO MEM") && !strncasecmp("SAVE MYSQL QUERY RULES TO MEM", query_no_space, query_no_space_length))
+			(query_no_space_length == sizeof("SAVE MYSQL QUERY RULES TO MEM") - 1 && !strncasecmp("SAVE MYSQL QUERY RULES TO MEM", query_no_space, query_no_space_length))
 			||
-			(query_no_space_length == strlen("SAVE MYSQL QUERY RULES FROM RUNTIME") && !strncasecmp("SAVE MYSQL QUERY RULES FROM RUNTIME", query_no_space, query_no_space_length))
+			(query_no_space_length == sizeof("SAVE MYSQL QUERY RULES FROM RUNTIME") - 1 && !strncasecmp("SAVE MYSQL QUERY RULES FROM RUNTIME", query_no_space, query_no_space_length))
 			||
-			(query_no_space_length == strlen("SAVE MYSQL QUERY RULES FROM RUN") && !strncasecmp("SAVE MYSQL QUERY RULES FROM RUN", query_no_space, query_no_space_length))
+			(query_no_space_length == sizeof("SAVE MYSQL QUERY RULES FROM RUN") - 1 && !strncasecmp("SAVE MYSQL QUERY RULES FROM RUN", query_no_space, query_no_space_length))
 			||
-			(query_no_space_length == strlen("SAVE PGSQL QUERY RULES TO MEMORY") && !strncasecmp("SAVE PGSQL QUERY RULES TO MEMORY", query_no_space, query_no_space_length))
+			(query_no_space_length == sizeof("SAVE PGSQL QUERY RULES TO MEMORY") - 1 && !strncasecmp("SAVE PGSQL QUERY RULES TO MEMORY", query_no_space, query_no_space_length))
 			||
-			(query_no_space_length == strlen("SAVE PGSQL QUERY RULES TO MEM") && !strncasecmp("SAVE PGSQL QUERY RULES TO MEM", query_no_space, query_no_space_length))
+			(query_no_space_length == sizeof("SAVE PGSQL QUERY RULES TO MEM") - 1 && !strncasecmp("SAVE PGSQL QUERY RULES TO MEM", query_no_space, query_no_space_length))
 			||
-			(query_no_space_length == strlen("SAVE PGSQL QUERY RULES FROM RUNTIME") && !strncasecmp("SAVE PGSQL QUERY RULES FROM RUNTIME", query_no_space, query_no_space_length))
+			(query_no_space_length == sizeof("SAVE PGSQL QUERY RULES FROM RUNTIME") - 1 && !strncasecmp("SAVE PGSQL QUERY RULES FROM RUNTIME", query_no_space, query_no_space_length))
 			||
-			(query_no_space_length == strlen("SAVE PGSQL QUERY RULES FROM RUN") && !strncasecmp("SAVE PGSQL QUERY RULES FROM RUN", query_no_space, query_no_space_length))
+			(query_no_space_length == sizeof("SAVE PGSQL QUERY RULES FROM RUN") - 1 && !strncasecmp("SAVE PGSQL QUERY RULES FROM RUN", query_no_space, query_no_space_length))
 
 			) {
 			proxy_info("Received %s command\n", query_no_space);
@@ -2180,6 +2852,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return false;
 		}
 	}
+
 
 	if ((query_no_space_length>21) && ( (!strncasecmp("SAVE ADMIN VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD ADMIN VARIABLES ", query_no_space, 21))) ) {
 
@@ -2206,7 +2879,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		}
 
 		if (
-			(query_no_space_length==strlen("LOAD ADMIN VARIABLES FROM CONFIG") && !strncasecmp("LOAD ADMIN VARIABLES FROM CONFIG",query_no_space, query_no_space_length))
+			(query_no_space_length==sizeof("LOAD ADMIN VARIABLES FROM CONFIG") - 1 && !strncasecmp("LOAD ADMIN VARIABLES FROM CONFIG",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			if (GloVars.configfile_open) {
@@ -2243,8 +2916,8 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 
 	}
 
-	if (!strncasecmp("SAVE CONFIG TO FILE", query_no_space, strlen("SAVE CONFIG TO FILE"))) {
-		std::string fileName = query_no_space + strlen("SAVE CONFIG TO FILE");
+	if (!strncasecmp("SAVE CONFIG TO FILE", query_no_space, sizeof("SAVE CONFIG TO FILE") - 1)) {
+		std::string fileName = query_no_space + sizeof("SAVE CONFIG TO FILE") - 1;
 
 		fileName.erase(0, fileName.find_first_not_of("\t\n\v\f\r "));
 		fileName.erase(fileName.find_last_not_of("\t\n\v\f\r ") + 1);
@@ -2265,6 +2938,10 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		rc = pa->proxysql_config().Write_PgSQL_Servers_to_configfile(data);
 		rc = pa->proxysql_config().Write_Scheduler_to_configfile(data);
 		rc = pa->proxysql_config().Write_ProxySQL_Servers_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_MySQL_Query_Rules_Fast_Routing_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_PgSQL_Query_Rules_Fast_Routing_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_MySQL_Firewall_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_PgSQL_Firewall_to_configfile(data);
 		if (rc) {
 			std::stringstream ss;
 			proxy_error("ProxySQL Admin Error: Cannot extract configuration\n");
@@ -2314,19 +2991,77 @@ std::string timediff_timezone_offset() {
     std::string time_zone_offset {};
     char result[8];
     time_t rawtime;
-    struct tm *info;
+    struct tm info;
     int offset;
 
     time(&rawtime);
-    info = localtime(&rawtime);
-    strftime(result, 8, "%z", info);
-    offset = (result[0] == '+') ? 1 : 0; 
+    localtime_r(&rawtime, &info);
+    strftime(result, 8, "%z", &info);
+    offset = (result[0] == '+') ? 1 : 0;
     time_zone_offset = ((std::string)(result)).substr(offset, 3-offset) + ":" + ((std::string)(result)).substr(3, 2) + ":00";
 
     return time_zone_offset;
 }
 
 
+
+// Helper function to transform PRAGMA table_info result to PostgreSQL pg_attribute format
+static SQLite3_result* transform_pragma_table_info_to_pg_attribute(SQLite3_result* pragma_result) {
+	if (!pragma_result) {
+		return nullptr; // Return NULL if input is NULL
+	}
+
+	// Create new resultset with 7 columns as PostgreSQL expects
+	SQLite3_result* new_result = new SQLite3_result(7);
+	new_result->add_column_definition(SQLITE_TEXT, "attname");
+	new_result->add_column_definition(SQLITE_TEXT, "format_type");
+	new_result->add_column_definition(SQLITE_TEXT, "pg_get_expr");
+	new_result->add_column_definition(SQLITE_TEXT, "attnotnull");
+	new_result->add_column_definition(SQLITE_TEXT, "attcollation");
+	new_result->add_column_definition(SQLITE_TEXT, "attidentity");
+	new_result->add_column_definition(SQLITE_TEXT, "attgenerated");
+
+	// If empty result, return the empty pg_attribute-shaped result
+	if (pragma_result->rows_count == 0) {
+		return new_result;
+	}
+
+	// Transform each row from PRAGMA format to PostgreSQL format
+	// PRAGMA returns: cid, name, type, notnull, dflt_value, pk
+	for (int r = 0; r < pragma_result->rows_count; r++) {
+		char* row[7] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+
+		// attname (column 1 from PRAGMA - index 1 is name)
+		row[0] = pragma_result->rows[r]->fields[1];
+
+		// format_type - just use the SQLite type as-is
+		row[1] = pragma_result->rows[r]->fields[2];
+
+		// pg_get_expr (default value) - column 4 from PRAGMA
+		row[2] = pragma_result->rows[r]->fields[4];
+
+		// attnotnull - 't' if notnull is 1, 'f' otherwise
+		const char* notnull = pragma_result->rows[r]->fields[3];
+		if (notnull && strcmp(notnull, "1") == 0) {
+			row[3] = (char*)"t";
+		} else {
+			row[3] = (char*)"f";
+		}
+
+		// attcollation - always NULL for SQLite
+		row[4] = NULL;
+
+		// attidentity - always empty for SQLite (no identity columns)
+		row[5] = (char*)"";
+
+		// attgenerated - always empty for SQLite (no generated columns)
+		row[6] = (char*)"";
+
+		new_result->add_row(row);
+	}
+
+	return new_result;
+}
 
 template<typename S>
 void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
@@ -2345,6 +3080,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	unsigned int query_length = 0;
 	char* query_no_space = NULL;
 	unsigned int query_no_space_length = 0;
+	bool transform_pg_attribute_result = false;
 
 	if constexpr (std::is_same_v<S,MySQL_Session>) {
 		query_length = pkt->size - sizeof(mysql_hdr);
@@ -2361,7 +3097,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			run_query = false;
 			goto __run_query;
 		}
-		
+
 		switch (hdr.type) {
 		case PG_PKT_STARTUP_V2:
 		case PG_PKT_STARTUP:
@@ -2376,6 +3112,16 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		}
 
 		query_length = hdr.data.size;
+
+		// Validate minimum query size (need at least 1 byte + null terminator)
+		if (query_length < 2 || hdr.data.ptr == NULL ||
+			((const char*)hdr.data.ptr)[query_length - 1] != '\0') {
+			proxy_warning("Malformed query packet: %u bytes\n", query_length);
+			SPA->send_error_msg_to_client(sess, "Malformed query packet");
+			run_query = false;
+			goto __run_query;
+		}
+
 		query = (char*)l_alloc(query_length);
 		memcpy(query, (char*)hdr.data.ptr, query_length - 1);
 	} else {
@@ -2383,7 +3129,6 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	}
 
 	query[query_length-1]=0;
-
 	query_no_space=(char *)l_alloc(query_length);
 	memcpy(query_no_space,query,query_length);
 
@@ -2392,7 +3137,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 
 	if (query_no_space_length) {
 		// fix bug #925
-		while (query_no_space_length && 
+		while (query_no_space_length &&
 			(query_no_space[query_no_space_length-1]==';' || query_no_space[query_no_space_length-1]==' ')) {
 			query_no_space_length--;
 			query_no_space[query_no_space_length]=0;
@@ -2409,15 +3154,17 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	// add global mutex, see bug #1188
 	pthread_mutex_lock(&pa->sql_query_global_mutex);
 
-	if (strcasestr(query_no_space, "INFORMATION_SCHEMA.TABLES") != nullptr) {
-		const char* info_table_name = "SELECT table_name FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = DATABASE() AND table_name = '";
-		const char* info_engine_table_type = "SELECT engine, table_type FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = DATABASE() AND table_name = '";
+		if (strcasestr(query_no_space, "INFORMATION_SCHEMA.TABLES") != nullptr) {
+			const char* info_table_name = "SELECT table_name FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = DATABASE() AND table_name = '";
+			const size_t info_table_name_len = sizeof("SELECT table_name FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = DATABASE() AND table_name = '") - 1;
+			const char* info_engine_table_type = "SELECT engine, table_type FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = DATABASE() AND table_name = '";
+			const size_t info_engine_table_type_len = sizeof("SELECT engine, table_type FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = DATABASE() AND table_name = '") - 1;
 
-		if (query_no_space_length > strlen(info_table_name) &&
-			strncasecmp(query_no_space, info_table_name, strlen(info_table_name)) == 0) {
-			std::string query_str(query_no_space, query_no_space_length);
+			if (query_no_space_length > static_cast<int>(info_table_name_len) &&
+				strncasecmp(query_no_space, info_table_name, info_table_name_len) == 0) {
+				std::string query_str(query_no_space, query_no_space_length);
 
-			size_t start_pos = strlen(info_table_name);
+				size_t start_pos = info_table_name_len;
 			size_t end_pos = query_str.find('\'', start_pos);
 
 			if (end_pos != std::string::npos) {
@@ -2435,11 +3182,11 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			}
 		}
 
-		if (query_no_space_length > strlen(info_engine_table_type) &&
-			strncasecmp(query_no_space, info_engine_table_type, strlen(info_engine_table_type)) == 0) {
-			std::string query_str(query_no_space, query_no_space_length);
+			if (query_no_space_length > static_cast<int>(info_engine_table_type_len) &&
+				strncasecmp(query_no_space, info_engine_table_type, info_engine_table_type_len) == 0) {
+				std::string query_str(query_no_space, query_no_space_length);
 
-			size_t start_pos = strlen(info_engine_table_type);
+				size_t start_pos = info_engine_table_type_len;
 			size_t end_pos = query_str.find('\'', start_pos);
 
 			if (end_pos != std::string::npos) {
@@ -2459,13 +3206,14 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	}
 
 	if (strcasestr(query_no_space, "INFORMATION_SCHEMA.COLUMNS") != nullptr) {
-		const char* info_column_data_type = "SELECT column_name, extra, generation_expression, data_type FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema=database() AND table_name='";
+			const char* info_column_data_type = "SELECT column_name, extra, generation_expression, data_type FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema=database() AND table_name='";
+			const size_t info_column_data_type_len = sizeof("SELECT column_name, extra, generation_expression, data_type FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema=database() AND table_name='") - 1;
 
-		if (query_no_space_length > strlen(info_column_data_type) &&
-			strncasecmp(query_no_space, info_column_data_type, strlen(info_column_data_type)) == 0) {
-			std::string query_str(query_no_space, query_no_space_length);
+			if (query_no_space_length > static_cast<int>(info_column_data_type_len) &&
+				strncasecmp(query_no_space, info_column_data_type, info_column_data_type_len) == 0) {
+				std::string query_str(query_no_space, query_no_space_length);
 
-			size_t start_pos = strlen(info_column_data_type);
+				size_t start_pos = info_column_data_type_len;
 			size_t end_pos = query_str.find('\'', start_pos);
 
 			if (end_pos != std::string::npos) {
@@ -2484,7 +3232,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		}
 	}
 
-	if (!strncasecmp("SELECT LOGFILE", query_no_space, strlen("SELECT LOGFILE")) && strcasestr(query_no_space, "FROM INFORMATION_SCHEMA.FILES") != nullptr) {
+	if (!strncasecmp("SELECT LOGFILE", query_no_space, sizeof("SELECT LOGFILE") - 1) && strcasestr(query_no_space, "FROM INFORMATION_SCHEMA.FILES") != nullptr) {
 		string err_msg = "Invalid command - SELECT .. FROM INFORMATION_SCHEMA.FILES. ";
 		err_msg += "If you are using mysqldump, use --no-tablespaces flag to avoid this error message";
 		SPA->send_error_msg_to_client(sess, const_cast<char*>(err_msg.c_str()));
@@ -2493,9 +3241,9 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	}
 
 	if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
-		if (!strncasecmp("LOGENTRY ", query_no_space, strlen("LOGENTRY "))) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received command LOGENTRY: %s\n", query_no_space + strlen("LOGENTRY "));
-			proxy_info("Received command LOGENTRY: %s\n", query_no_space + strlen("LOGENTRY "));
+		if (!strncasecmp("LOGENTRY ", query_no_space, sizeof("LOGENTRY ") - 1)) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received command LOGENTRY: %s\n", query_no_space + sizeof("LOGENTRY ") - 1);
+			proxy_info("Received command LOGENTRY: %s\n", query_no_space + sizeof("LOGENTRY ") - 1);
 			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 			run_query=false;
 			goto __run_query;
@@ -2503,7 +3251,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	 }
 
 
-	if (!strncasecmp("DUMP EVENTSLOG ", query_no_space, strlen("DUMP EVENTSLOG "))) {
+	if (!strncasecmp("DUMP EVENTSLOG ", query_no_space, sizeof("DUMP EVENTSLOG ") - 1)) {
 		int num_rows = 0;
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received command DUMP EVENTSLOG: %s\n", query_no_space);
 		proxy_info("Received command DUMP EVENTSLOG: %s\n", query_no_space);
@@ -2529,29 +3277,62 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
+	if (!strncasecmp("DUMP PGSQL EVENTSLOG ", query_no_space, sizeof("DUMP PGSQL EVENTSLOG ") - 1)) {
+		int num_rows = 0;
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received command DUMP PGSQL EVENTSLOG: %s\n", query_no_space);
+		proxy_info("Received command DUMP PGSQL EVENTSLOG: %s\n", query_no_space);
+
+		std::map<std::string, std::pair<SQLite3DB*, SQLite3DB*>> commandMap = {
+			{"DUMP PGSQL EVENTSLOG FROM BUFFER TO MEMORY", {SPA->statsdb, nullptr}},
+			{"DUMP PGSQL EVENTSLOG FROM BUFFER TO DISK",   {nullptr,      SPA->statsdb_disk}},
+			{"DUMP PGSQL EVENTSLOG FROM BUFFER TO BOTH",   {SPA->statsdb, SPA->statsdb_disk}}
+		};
+
+		string s = string(query_no_space);
+		auto it = commandMap.find(s);
+		if (it != commandMap.end()) {
+			if (GloPgSQL_Logger == nullptr) {
+				proxy_warning("PgSQL logger not initialized for command: %s\n", query_no_space);
+				const string err_msg = "PgSQL logger not initialized";
+				SPA->send_error_msg_to_client(sess, const_cast<char*>(err_msg.c_str()));
+			} else {
+				num_rows = GloPgSQL_Logger->processEvents(it->second.first, it->second.second);
+				SPA->send_ok_msg_to_client(sess, NULL, num_rows, query_no_space);
+			}
+		} else {
+			proxy_warning("Received invalid command DUMP PGSQL EVENTSLOG: %s\n", query_no_space);
+			const string err_msg = "Invalid DUMP PGSQL EVENTSLOG command";
+			SPA->send_error_msg_to_client(sess, const_cast<char*>(err_msg.c_str()));
+		}
+		run_query = false;
+		goto __run_query;
+	}
+
 
 	// handle special queries from Cluster
 	// for bug #1188 , ProxySQL Admin needs to know the exact query
 
-	if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
-		string tn = "";
-		if (!strncasecmp(CLUSTER_QUERY_RUNTIME_MYSQL_SERVERS, query_no_space, strlen(CLUSTER_QUERY_RUNTIME_MYSQL_SERVERS))) {
-			tn = "cluster_mysql_servers";
-		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS))) {
-			tn = "mysql_replication_hostgroups";
-		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS))) {
-			tn = "mysql_group_replication_hostgroups";
-		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_GALERA, query_no_space, strlen(CLUSTER_QUERY_MYSQL_GALERA))) {
-			tn = "mysql_galera_hostgroups";
-		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_AWS_AURORA, query_no_space, strlen(CLUSTER_QUERY_MYSQL_AWS_AURORA))) {
-			tn = "mysql_aws_aurora_hostgroups";
-		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_HOSTGROUP_ATTRIBUTES, query_no_space, strlen(CLUSTER_QUERY_MYSQL_HOSTGROUP_ATTRIBUTES))) {
-			tn = "mysql_hostgroup_attributes";
-		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_SERVERS_SSL_PARAMS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_SERVERS_SSL_PARAMS))) {
-			tn = "mysql_servers_ssl_params";
-		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_SERVERS_V2, query_no_space, strlen(CLUSTER_QUERY_MYSQL_SERVERS_V2))) {
-			tn = "mysql_servers_v2";
-		}
+		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
+			string tn = "";
+			if (!strncasecmp(CLUSTER_QUERY_RUNTIME_MYSQL_SERVERS, query_no_space, sizeof(CLUSTER_QUERY_RUNTIME_MYSQL_SERVERS) - 1)) {
+				tn = "cluster_mysql_servers";
+			} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS) - 1)) {
+				tn = "mysql_replication_hostgroups";
+			} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS) - 1)) {
+				tn = "mysql_group_replication_hostgroups";
+			} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_GALERA, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_GALERA) - 1)) {
+				tn = "mysql_galera_hostgroups";
+			} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_AWS_AURORA, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_AWS_AURORA) - 1)) {
+				tn = "mysql_aws_aurora_hostgroups";
+			} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_HOSTGROUP_ATTRIBUTES, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_HOSTGROUP_ATTRIBUTES) - 1)) {
+				tn = "mysql_hostgroup_attributes";
+			} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_SERVERS_SSL_PARAMS, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_SERVERS_SSL_PARAMS) - 1)) {
+				tn = "mysql_servers_ssl_params";
+			} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_AWS_RDS_BGD, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_AWS_RDS_BGD) - 1)) {
+				tn = "mysql_aws_rds_bgd_hostgroups";
+			} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_SERVERS_V2, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_SERVERS_V2) - 1)) {
+				tn = "mysql_servers_v2";
+			}
 		if (tn != "") {
 			GloAdmin->mysql_servers_wrlock();
 			resultset = MyHGM->get_current_mysql_table(tn);
@@ -2591,11 +3372,64 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 				run_query=false;
 				goto __run_query;
 			}
-			
+
 		}
 	}
 
-	if (!strncasecmp(CLUSTER_QUERY_MYSQL_USERS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_USERS))) {
+	if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
+		string tn = "";
+		if (!strncasecmp(CLUSTER_QUERY_RUNTIME_PGSQL_SERVERS, query_no_space, sizeof(CLUSTER_QUERY_RUNTIME_PGSQL_SERVERS) - 1)) {
+			tn = "cluster_pgsql_servers";
+		} else if (!strncasecmp(CLUSTER_QUERY_PGSQL_REPLICATION_HOSTGROUPS, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_REPLICATION_HOSTGROUPS) - 1)) {
+			tn = "pgsql_replication_hostgroups";
+		} else if (!strncasecmp(CLUSTER_QUERY_PGSQL_HOSTGROUP_ATTRIBUTES, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_HOSTGROUP_ATTRIBUTES) - 1)) {
+			tn = "pgsql_hostgroup_attributes";
+		} else if (!strncasecmp(CLUSTER_QUERY_PGSQL_SERVERS_V2, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_SERVERS_V2) - 1)) {
+			tn = "pgsql_servers_v2";
+		} else if (!strncasecmp(CLUSTER_QUERY_PGSQL_SERVERS_SSL_PARAMS, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_SERVERS_SSL_PARAMS) - 1)) {
+			tn = "pgsql_servers_ssl_params";
+		}
+		if (tn != "") {
+			GloAdmin->pgsql_servers_wrlock();
+			resultset = PgHGM->get_current_pgsql_table(tn);
+			GloAdmin->pgsql_servers_wrunlock();
+
+			if (resultset == nullptr) {
+				if (tn == "pgsql_servers_v2") {
+					const string query_empty_resultset {
+						string { PGHGM_GEN_CLUSTER_ADMIN_PGSQL_SERVERS } + " LIMIT 0"
+					};
+
+					char* exec_error = NULL;
+					int cols = 0;
+					int affected_rows = 0;
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
+					GloAdmin->pgsql_servers_wrlock();
+					GloAdmin->admindb->execute_statement(query_empty_resultset.c_str(), &exec_error, &cols, &affected_rows, &resultset);
+					GloAdmin->pgsql_servers_wrunlock();
+					if (exec_error) {
+						proxy_error("Cluster: execute_statement failed for pgsql_servers_v2 fallback: %s\n", exec_error);
+						free(exec_error);
+					}
+				} else {
+					resultset = PgHGM->dump_table_pgsql(tn);
+				}
+
+				if (resultset) {
+					sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+					delete resultset;
+					run_query = false;
+					goto __run_query;
+				}
+			} else {
+				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+				run_query = false;
+				goto __run_query;
+			}
+		}
+	}
+
+	if (!strncasecmp(CLUSTER_QUERY_MYSQL_USERS, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_USERS) - 1)) {
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) {
 			pthread_mutex_lock(&users_mutex);
 			resultset = GloMyAuth->get_current_mysql_users();
@@ -2608,8 +3442,21 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		}
 	}
 
+	if (!strncasecmp(CLUSTER_QUERY_PGSQL_USERS, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_USERS) - 1)) {
+		if (sess->session_type == PROXYSQL_SESSION_ADMIN) {
+			pthread_mutex_lock(&users_mutex);
+			resultset = GloPgAuth->get_current_pgsql_users();
+			pthread_mutex_unlock(&users_mutex);
+			if (resultset != nullptr) {
+				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+				run_query = false;
+				goto __run_query;
+			}
+		}
+	}
+
 	if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
-		if (!strncasecmp(CLUSTER_QUERY_MYSQL_QUERY_RULES, query_no_space, strlen(CLUSTER_QUERY_MYSQL_QUERY_RULES))) {
+		if (!strncasecmp(CLUSTER_QUERY_MYSQL_QUERY_RULES, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_QUERY_RULES) - 1)) {
 			GloMyQPro->wrlock();
 			resultset = GloMyQPro->get_current_query_rules_inner();
 			if (resultset == NULL) {
@@ -2629,7 +3476,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 				goto __run_query;
 			}
 		}
-		if (!strncasecmp(CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING, query_no_space, strlen(CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING))) {
+		if (!strncasecmp(CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING) - 1)) {
 			GloMyQPro->wrlock();
 			resultset = GloMyQPro->get_current_query_rules_fast_routing_inner();
 			if (resultset == NULL) {
@@ -2651,6 +3498,75 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		}
 	}
 
+	if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
+		if (!strncasecmp(CLUSTER_QUERY_PGSQL_QUERY_RULES, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_QUERY_RULES) - 1)) {
+			GloPgQPro->wrlock();
+			resultset = GloPgQPro->get_current_query_rules_inner();
+			if (resultset == NULL) {
+				GloPgQPro->wrunlock(); // unlock first
+				resultset = GloPgQPro->get_current_query_rules();
+				if (resultset) {
+					sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+					delete resultset;
+					run_query = false;
+					goto __run_query;
+				} else {
+					proxy_error("Cluster: Both get_current_query_rules_inner() and "
+						"get_current_query_rules() returned NULL for pgsql query rules\n");
+				}
+			} else {
+				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+				// DO NOT DELETE: this is the inner resultset of Query_Processor
+				GloPgQPro->wrunlock();
+				run_query = false;
+				goto __run_query;
+			}
+		}
+		if (!strncasecmp(CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING) - 1)) {
+			GloPgQPro->wrlock();
+			resultset = GloPgQPro->get_current_query_rules_fast_routing_inner();
+			if (resultset == NULL) {
+				GloPgQPro->wrunlock(); // unlock first
+				resultset = GloPgQPro->get_current_query_rules_fast_routing();
+				if (resultset) {
+					sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+					delete resultset;
+					run_query = false;
+					goto __run_query;
+				} else {
+					proxy_error("Cluster: Both get_current_query_rules_fast_routing_inner() and "
+						"get_current_query_rules_fast_routing() returned NULL for pgsql fast routing\n");
+				}
+			} else {
+				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+				// DO NOT DELETE: this is the inner resultset of Query_Processor
+				GloPgQPro->wrunlock();
+				run_query = false;
+				goto __run_query;
+			}
+		}
+	}
+
+	if (!strncasecmp(CLUSTER_QUERY_PGSQL_VARIABLES, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_VARIABLES) - 1)) {
+		if (sess->session_type == PROXYSQL_SESSION_ADMIN) {
+			pthread_mutex_lock(&GloVars.checksum_mutex);
+			GloAdmin->flush_pgsql_variables___runtime_to_database(GloAdmin->admindb, false, false, false, true, true);
+			pthread_mutex_unlock(&GloVars.checksum_mutex);
+
+			l_free(query_length, query);
+			string q {
+				"SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'pgsql-%'"
+			};
+			if (GloVars.cluster_sync_interfaces == false) {
+				q += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_PGSQL);
+			}
+			q += " ORDER BY variable_name";
+			query = l_strdup(q.c_str());
+			query_length = strlen(query) + 1;
+			goto __run_query;
+		}
+	}
+
 	// if the client simply executes:
 	// SELECT COUNT(*) FROM runtime_mysql_query_rules_fast_routing
 	// we just return the count
@@ -2658,7 +3574,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		int cnt = GloMyQPro->get_current_query_rules_fast_routing_count();
 		l_free(query_length,query);
 		char buf[256];
-		sprintf(buf,"SELECT %d AS 'COUNT(*)'", cnt);
+		snprintf(buf, sizeof(buf), "SELECT %d AS 'COUNT(*)'", cnt);
 		query=l_strdup(buf);
 		query_length=strlen(query)+1;
 		goto __run_query;
@@ -2671,13 +3587,13 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		int cnt = GloPgQPro->get_current_query_rules_fast_routing_count();
 		l_free(query_length, query);
 		char buf[256];
-		sprintf(buf, "SELECT %d AS 'COUNT(*)'", cnt);
+		snprintf(buf, sizeof(buf), "SELECT %d AS 'COUNT(*)'", cnt);
 		query = l_strdup(buf);
 		query_length = strlen(query) + 1;
 		goto __run_query;
 	}
 
-	if (!strncasecmp("TRUNCATE ", query_no_space, strlen("TRUNCATE "))) {
+	if (!strncasecmp("TRUNCATE ", query_no_space, sizeof("TRUNCATE ") - 1)) {
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 			if (strstr(query_no_space,"stats_mysql_query_digest")) {
 				bool truncate_digest_table = false;
@@ -2706,10 +3622,8 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 					SPA->admindb->execute("DELETE FROM stats.stats_mysql_query_digest_reset");
 					SPA->vacuum_stats(true);
 					// purge the digest map, asynchronously, in single thread
-					char *msg = NULL;
-					int r1 = ProxySQL_Test___PurgeDigestTable<SERVER_TYPE_MYSQL>(true, false, &msg);
-					SPA->send_ok_msg_to_client(sess, msg, r1, query_no_space);
-					free(msg);
+					int r1 = GloMyQPro->purge_query_digests(true, false);
+					SPA->send_ok_msg_to_client(sess, NULL, r1, query_no_space);
 					run_query=false;
 					goto __run_query;
 				}
@@ -2742,16 +3656,45 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 					SPA->admindb->execute("DELETE FROM stats.stats_pgsql_query_digest_reset");
 					SPA->vacuum_stats(true);
 					// purge the digest map, asynchronously, in single thread
-					char* msg = NULL;
-					int r1 = ProxySQL_Test___PurgeDigestTable<SERVER_TYPE_PGSQL>(true, false, &msg);
-					SPA->send_ok_msg_to_client(sess, msg, r1, query_no_space);
-					free(msg);
+					int r1 = GloPgQPro->purge_query_digests(true, false);
+					SPA->send_ok_msg_to_client(sess, NULL, r1, query_no_space);
 					run_query = false;
 					goto __run_query;
 				}
 			}
 		}
 	}
+
+	// handles 'PURGE stats_mysql_query_digest TO <value>'.
+	// any entry in stats_mysql_query_digest where last_seen is less than <value> will be deleted.
+	if (!strncasecmp("PURGE ", query_no_space, sizeof("PURGE ") - 1)
+		&& sess->session_type == PROXYSQL_SESSION_ADMIN
+	) {
+		auto result = parse_command_purge_query_digests(query_no_space, query_no_space_length);
+		bool match = std::get<0>(result);
+
+		if (match == true) {
+			int ret = 0;
+			enum SERVER_TYPE type = std::get<1>(result);
+			time_t last_seen = std::get<2>(result);
+
+			if (last_seen > 0) {
+				if (type == SERVER_TYPE_MYSQL) {
+					ret = GloMyQPro->purge_query_digests(true, false, last_seen);
+				} else if (type == SERVER_TYPE_PGSQL) {
+					ret = GloPgQPro->purge_query_digests(true, false, last_seen);
+				}
+
+				pa->send_ok_msg_to_client(sess, NULL, ret, query_no_space);
+			} else {
+				pa->send_error_msg_to_client(sess, "Invalid timestamp");
+			}
+
+			run_query = false;
+			goto __run_query;
+		}
+	}
+
 #ifdef DEBUG
 	/**
 	 * @brief Handles the 'PROXYSQL_SIMULATOR' command. Performing the operation specified in the payload
@@ -2771,13 +3714,13 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	 *   PROXYSQL_SIMULATOR mysql_error 1 127.0.0.1 3306 1234
 	 *   ```
 	 */
-	if (!strncasecmp("PROXYSQL_SIMULATOR ", query_no_space, strlen("PROXYSQL_SIMULATOR "))) {
+	if (!strncasecmp("PROXYSQL_SIMULATOR ", query_no_space, sizeof("PROXYSQL_SIMULATOR ") - 1)) {
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 			proxy_warning("Received PROXYSQL_SIMULATOR command: %s\n", query_no_space);
 
 			re2::RE2::Options opts = re2::RE2::Options(RE2::Quiet);
 			re2::RE2 pattern("\\s*(\\w+) (\\d+) (\\d+\\.\\d+\\.\\d+\\.\\d+):(\\d+) (\\d+)\\s*\\;*", opts);
-			re2::StringPiece input(query_no_space + strlen("PROXYSQL_SIMULATOR"));
+			re2::StringPiece input(query_no_space + sizeof("PROXYSQL_SIMULATOR") - 1);
 
 			std::string command, s_hg, srv_addr, s_port, s_errcode {};
 			bool c_res = re2::RE2::Consume(&input, pattern, &command, &s_hg, &srv_addr, &s_port, &s_errcode);
@@ -2802,7 +3745,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 
 					MySrvC* mysrvc = MyHGM->find_server_in_hg(i_hg, srv_addr, i_port);
 					if (mysrvc != nullptr) {
-						int backup_shun_on_failures;			
+						int backup_shun_on_failures;
 						backup_shun_on_failures = mysql_thread___shun_on_failures;
 						mysql_thread___shun_on_failures = 1;
 						// Set the error twice to surpass 'mysql_thread___shun_on_failures' value.
@@ -2854,7 +3797,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		}
 	}
 #endif // DEBUG
-	if (!strncasecmp("PROXYSQLTEST ", query_no_space, strlen("PROXYSQLTEST "))) {
+	if (!strncasecmp("PROXYSQLTEST ", query_no_space, sizeof("PROXYSQLTEST ") - 1)) {
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->ProxySQL_Test_Handler(SPA, sess, query_no_space, run_query);
@@ -2867,7 +3810,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	}
 
 
-	if (!strncasecmp("SHOW GLOBAL VARIABLES LIKE 'read_only'", query_no_space, strlen("SHOW GLOBAL VARIABLES LIKE 'read_only'"))) {
+	if (!strncasecmp("SHOW GLOBAL VARIABLES LIKE 'read_only'", query_no_space, sizeof("SHOW GLOBAL VARIABLES LIKE 'read_only'") - 1)) {
 		l_free(query_length,query);
 		char *q=(char *)"SELECT 'read_only' Variable_name, '%s' Value FROM global_variables WHERE Variable_name='admin-read_only'";
 		query_length=strlen(q)+5;
@@ -2892,7 +3835,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
-	if (!strncasecmp("SELECT @@global.read_only", query_no_space, strlen("SELECT @@global.read_only"))) {
+	if (!strncasecmp("SELECT @@global.read_only", query_no_space, sizeof("SELECT @@global.read_only") - 1)) {
 		l_free(query_length,query);
 		char *q=(char *)"SELECT 'read_only' Variable_name, '%s' Value FROM global_variables WHERE Variable_name='admin-read_only'";
 		query_length=strlen(q)+5;
@@ -2934,7 +3877,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 					l_free(query_length,query);
 					unsigned int curver = MyHGM->get_servers_table_version();
 					char buf[256];
-					sprintf(buf,"SELECT %u AS 'version'", curver);
+					snprintf(buf, sizeof(buf), "SELECT %u AS 'version'", curver);
 					query=l_strdup(buf);
 					query_length=strlen(query)+1;
 					//SPA->send_ok_msg_to_client(sess,  , NULL);
@@ -2945,10 +3888,10 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		}
 
 
-		if ((query_no_space_length == strlen("SELECT GLOBAL_CHECKSUM()")) && (!strncasecmp("SELECT GLOBAL_CHECKSUM()", query_no_space, strlen("SELECT GLOBAL_CHECKSUM()")))) {
+		if ((query_no_space_length == sizeof("SELECT GLOBAL_CHECKSUM()") - 1) && (!strncasecmp("SELECT GLOBAL_CHECKSUM()", query_no_space, sizeof("SELECT GLOBAL_CHECKSUM()") - 1))) {
 			char buf[32];
 			pthread_mutex_lock(&GloVars.checksum_mutex);
-			sprintf(buf,"%lu",GloVars.checksums_values.global_checksum);
+			snprintf(buf, sizeof(buf), "%llu", static_cast<unsigned long long>(GloVars.checksums_values.global_checksum));
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
 			uint16_t setStatus = 0;
 			auto *myds=sess->client_myds;
@@ -2981,6 +3924,37 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			//pthread_mutex_unlock(&admin_mutex);
 			goto __run_query;
 		}
+#ifdef PROXYSQL40
+		// Generic plugin admin-command dispatch.  Each loaded plugin
+		// registers its admin commands (plus user-friendly aliases) with
+		// the plugin manager during init; the manager resolves an
+		// incoming query to the canonical SQL a plugin registered.  No
+		// per-plugin knowledge in core.
+		//
+		// v3.0/v3.1 builds have no plugin loader at all -- this whole
+		// branch compiles out.
+		{
+			std::string query_str(query_no_space, query_no_space_length);
+			std::string plugin_canonical = proxysql_resolve_configured_plugin_admin_alias(query_str);
+			if (!plugin_canonical.empty()) {
+				// Hold a std::string by value (not a borrowed c_str())
+				// so a concurrent plugin-manager reload between resolve
+				// and dispatch can't dangle the canonical-SQL pointer.
+				ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+				if (SPA->dispatch_plugin_admin_command(sess, plugin_canonical.c_str())) {
+					run_query = false;
+					goto __run_query;
+				}
+				// Reachable only if the command's plugin uninstalled its
+				// callback between resolve() and dispatch(). Treat as
+				// generic "plugin failed to handle command".
+				SPA->send_error_msg_to_client(sess, (char*)"Plugin failed to handle registered command");
+				run_query = false;
+				goto __run_query;
+			}
+		}
+#endif /* PROXYSQL40 */
+
 		if ((query_no_space_length>5) && ( (!strncasecmp("SAVE ", query_no_space, 5)) || (!strncasecmp("LOAD ", query_no_space, 5))) ) {
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received LOAD or SAVE command\n");
 			run_query=admin_handler_command_load_or_save(query_no_space, query_no_space_length, sess, pa, &query, &query_length);
@@ -3022,127 +3996,134 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			!strncmp("/*!50503 SET ", query_no_space, 13) ||
 			!strncmp("/*!50717 SET ", query_no_space, 13) ||
 			!strncmp("/*M!100100 SET ", query_no_space, 15) ||
-			!strncmp("/*!50717 SELECT ", query_no_space, strlen("/*!50717 SELECT ")) ||
-			!strncmp("/*!50717 PREPARE ", query_no_space, strlen("/*!50717 PREPARE ")) ||
-			!strncmp("/*!50717 EXECUTE ", query_no_space, strlen("/*!50717 EXECUTE ")) ||
-			!strncmp("/*!50717 DEALLOCATE ", query_no_space, strlen("/*!50717 DEALLOCATE ")) ||
-			!strncmp("/*!50112 SET ", query_no_space, strlen("/*!50112 SET ")) ||
-			!strncmp("/*!50112 PREPARE ", query_no_space, strlen("/*!50112 PREPARE ")) ||
-			!strncmp("/*!50112 EXECUTE ", query_no_space, strlen("/*!50112 EXECUTE ")) ||
-			!strncmp("/*!50112 DEALLOCATE ", query_no_space, strlen("/*!50112 DEALLOCATE ")) ||
-			!strncmp("/*!40000 ALTER TABLE", query_no_space, strlen("/*!40000 ALTER TABLE"))
+			!strncmp("/*!50717 SELECT ", query_no_space, sizeof("/*!50717 SELECT ") - 1) ||
+			!strncmp("/*!50717 PREPARE ", query_no_space, sizeof("/*!50717 PREPARE ") - 1) ||
+			!strncmp("/*!50717 EXECUTE ", query_no_space, sizeof("/*!50717 EXECUTE ") - 1) ||
+			!strncmp("/*!50717 DEALLOCATE ", query_no_space, sizeof("/*!50717 DEALLOCATE ") - 1) ||
+			!strncmp("/*!50112 SET ", query_no_space, sizeof("/*!50112 SET ") - 1) ||
+			!strncmp("/*!50112 PREPARE ", query_no_space, sizeof("/*!50112 PREPARE ") - 1) ||
+			!strncmp("/*!50112 EXECUTE ", query_no_space, sizeof("/*!50112 EXECUTE ") - 1) ||
+			!strncmp("/*!50112 DEALLOCATE ", query_no_space, sizeof("/*!50112 DEALLOCATE ") - 1) ||
+			!strncmp("/*!40000 ALTER TABLE", query_no_space, sizeof("/*!40000 ALTER TABLE") - 1)
 				||
-			!strncmp("/*!40100 SET @@SQL_MODE='' */", query_no_space, strlen("/*!40100 SET @@SQL_MODE='' */"))
+			!strncmp("/*!40100 SET @@SQL_MODE='' */", query_no_space, sizeof("/*!40100 SET @@SQL_MODE='' */") - 1)
 				||
-			!strncmp("/*!40103 SET TIME_ZONE=", query_no_space, strlen("/*!40103 SET TIME_ZONE="))
+			!strncmp("/*!40103 SET TIME_ZONE=", query_no_space, sizeof("/*!40103 SET TIME_ZONE=") - 1)
 				||
-			!strncmp("LOCK TABLES", query_no_space, strlen("LOCK TABLES"))
+			!strncmp("LOCK TABLES", query_no_space, sizeof("LOCK TABLES") - 1)
 				||
-			!strncmp("UNLOCK TABLES", query_no_space, strlen("UNLOCK TABLES"))
+			!strncmp("UNLOCK TABLES", query_no_space, sizeof("UNLOCK TABLES") - 1)
 				||
-			!strncmp("SET SQL_QUOTE_SHOW_CREATE=1", query_no_space, strlen("SET SQL_QUOTE_SHOW_CREATE=1"))
+			!strncmp("SET SQL_QUOTE_SHOW_CREATE=1", query_no_space, sizeof("SET SQL_QUOTE_SHOW_CREATE=1") - 1)
 				||
-			!strncmp("SET SESSION character_set_results", query_no_space, strlen("SET SESSION character_set_results"))
+			!strncmp("SET SESSION character_set_results", query_no_space, sizeof("SET SESSION character_set_results") - 1)
 				||
-			!strncasecmp("FLUSH /*!40101 LOCAL */ TABLES", query_no_space, strlen("FLUSH /*!40101 LOCAL */ TABLES"))
+			!strncasecmp("FLUSH /*!40101 LOCAL */ TABLES", query_no_space, sizeof("FLUSH /*!40101 LOCAL */ TABLES") - 1)
 				||
-			!strncasecmp("FLUSH /*!40101 LOCAL */ LOGS", query_no_space, strlen("FLUSH /*!40101 LOCAL */ LOGS"))
+			!strncasecmp("FLUSH /*!40101 LOCAL */ LOGS", query_no_space, sizeof("FLUSH /*!40101 LOCAL */ LOGS") - 1)
 				||
-			!strncasecmp("FLUSH TABLES WITH READ LOCK", query_no_space, strlen("FLUSH TABLES WITH READ LOCK"))
+			!strncasecmp("FLUSH TABLES WITH READ LOCK", query_no_space, sizeof("FLUSH TABLES WITH READ LOCK") - 1)
 				||
-			!strncasecmp("USE ", query_no_space, strlen("USE ")) // this applies to all clients, not only mysqldump
+			!strncasecmp("USE ", query_no_space, sizeof("USE ") - 1) // this applies to all clients, not only mysqldump
 		) {
 			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 			run_query=false;
 			goto __run_query;
 		}
 
-		if (query_no_space_length == strlen("SHOW MASTER STATUS") && !strncasecmp("SHOW MASTER STATUS", query_no_space, query_no_space_length)) {
+		if (query_no_space_length == sizeof("SHOW MASTER STATUS") - 1 && !strncasecmp("SHOW MASTER STATUS", query_no_space, query_no_space_length)) {
 			l_free(query_length, query);
 			query = l_strdup("SELECT '' AS 'File', 0 AS 'Position', '' AS 'Binlog_Do_DB', '' AS 'Binlog_Ignore_DB', '' AS 'Executed_Gtid_Set' WHERE 1=0");
 			query_length = strlen(query) + 1;
 			goto __run_query;
 		}
 
-		if (query_no_space_length == strlen("SHOW BINARY LOG STATUS") && !strncasecmp("SHOW BINARY LOG STATUS", query_no_space, query_no_space_length)) {
+		if (query_no_space_length == sizeof("SHOW BINARY LOG STATUS") - 1 && !strncasecmp("SHOW BINARY LOG STATUS", query_no_space, query_no_space_length)) {
 			l_free(query_length, query);
 			query = l_strdup("SELECT '' AS 'File', 0 AS 'Position', '' AS 'Binlog_Do_DB', '' AS 'Binlog_Ignore_DB', '' AS 'Executed_Gtid_Set' WHERE 1=0");
 			query_length = strlen(query) + 1;
 			goto __run_query;
 		}
 
-		if (query_no_space_length >= strlen("SHOW FUNCTION STATUS") && !strncasecmp("SHOW FUNCTION STATUS", query_no_space, strlen("SHOW FUNCTION STATUS"))) {
+		if (query_no_space_length >= sizeof("SHOW FUNCTION STATUS") - 1 && !strncasecmp("SHOW FUNCTION STATUS", query_no_space, sizeof("SHOW FUNCTION STATUS") - 1)) {
 			l_free(query_length, query);
 			query = l_strdup("SELECT '' AS 'Db', '' AS 'Name', '' AS 'Type', '' AS 'Definer', '' AS 'Modified', '' AS 'Created', '' AS 'Security_type', '' AS 'Comment', '' AS 'character_set_client', '' AS 'collation_connection', '' AS 'Database Collation' WHERE 1=0");
 			query_length = strlen(query) + 1;
 			goto __run_query;
 		}
 
-		if (query_no_space_length >= strlen("SHOW PROCEDURE STATUS") && !strncasecmp("SHOW PROCEDURE STATUS", query_no_space, strlen("SHOW PROCEDURE STATUS"))) {
+		if (query_no_space_length >= sizeof("SHOW PROCEDURE STATUS") - 1 && !strncasecmp("SHOW PROCEDURE STATUS", query_no_space, sizeof("SHOW PROCEDURE STATUS") - 1)) {
 			l_free(query_length, query);
 			query = l_strdup("SELECT '' AS 'Db', '' AS 'Name', '' AS 'Type', '' AS 'Definer', '' AS 'Modified', '' AS 'Created', '' AS 'Security_type', '' AS 'Comment', '' AS 'character_set_client', '' AS 'collation_connection', '' AS 'Database Collation' WHERE 1=0");
 			query_length = strlen(query) + 1;
 			goto __run_query;
 		}
 
-		if (query_no_space_length >= strlen("SHOW TRIGGERS") && !strncasecmp("SHOW TRIGGERS", query_no_space, strlen("SHOW TRIGGERS"))) {
+		if (query_no_space_length >= sizeof("SHOW TRIGGERS") - 1 && !strncasecmp("SHOW TRIGGERS", query_no_space, sizeof("SHOW TRIGGERS") - 1)) {
 			l_free(query_length, query);
 			query = l_strdup("SELECT '' AS 'Trigger', '' AS 'Event', '' AS 'Table', '' AS 'Statement', '' AS 'Timing', '' AS 'Created', '' AS 'sql_mode', '' AS 'Definer', '' AS 'character_set_client', '' AS 'collation_connection', '' AS 'Database Collation' WHERE 1=0");
 			query_length = strlen(query) + 1;
 			goto __run_query;
 		}
 
-		if (query_no_space_length >= strlen("SELECT TRIGGER_NAME FROM INFORMATION_SCHEMA.TRIGGERS") && !strncasecmp("SELECT TRIGGER_NAME FROM INFORMATION_SCHEMA.TRIGGERS", query_no_space, strlen("SELECT TRIGGER_NAME FROM INFORMATION_SCHEMA.TRIGGERS"))) {
+		if (query_no_space_length >= sizeof("SELECT TRIGGER_NAME FROM INFORMATION_SCHEMA.TRIGGERS") - 1 && !strncasecmp("SELECT TRIGGER_NAME FROM INFORMATION_SCHEMA.TRIGGERS", query_no_space, sizeof("SELECT TRIGGER_NAME FROM INFORMATION_SCHEMA.TRIGGERS") - 1)) {
 			l_free(query_length, query);
 			query = l_strdup("SELECT '' AS 'TRIGGER_NAME' WHERE 1=0");
 			query_length = strlen(query) + 1;
 			goto __run_query;
 		}
 
-		if (query_no_space_length >= strlen("SHOW EVENTS") && !strncasecmp("SHOW EVENTS", query_no_space, strlen("SHOW EVENTS"))) {
+		if (query_no_space_length >= sizeof("SHOW EVENTS") - 1 && !strncasecmp("SHOW EVENTS", query_no_space, sizeof("SHOW EVENTS") - 1)) {
 			l_free(query_length, query);
 			query = l_strdup("SELECT '' AS 'Db', '' AS 'Name', '' AS 'Definer', '' AS 'Time zone', '' AS 'Type', '' AS 'Execute at', '' AS 'Interval value', '' AS 'Interval field', '' AS 'Starts', '' AS 'Ends', '' AS 'Status', '' AS 'Originator', '' AS 'character_set_client', '' AS 'collation_connection', '' AS 'Database Collation' WHERE 1=0");
 			query_length = strlen(query) + 1;
 			goto __run_query;
 		}
 
-		if (!strncmp("SHOW STATUS LIKE 'binlog_snapshot_gtid_executed'", query_no_space, strlen("SHOW STATUS LIKE 'binlog_snapshot_gtid_executed'"))) {
+		if (!strncmp("SHOW STATUS LIKE 'binlog_snapshot_gtid_executed'", query_no_space, sizeof("SHOW STATUS LIKE 'binlog_snapshot_gtid_executed'") - 1)) {
 			l_free(query_length, query);
 			query = l_strdup("SELECT variable_name AS Variable_name, Variable_value AS Value FROM global_variables WHERE 1=0");
 			query_length = strlen(query)+1;
 			goto __run_query;
 		}
-		if (!strncmp("SELECT COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.\"number-of-buckets-specified\"') FROM information_schema.COLUMN_STATISTICS", query_no_space, strlen("SELECT COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.\"number-of-buckets-specified\"') FROM information_schema.COLUMN_STATISTICS"))) {
+			constexpr size_t select_column_statistics_len =
+				sizeof("SELECT COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.\"number-of-buckets-specified\"') FROM information_schema.COLUMN_STATISTICS") - 1;
+			if (
+				!strncmp(
+					"SELECT COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.\"number-of-buckets-specified\"') FROM information_schema.COLUMN_STATISTICS",
+					query_no_space,
+					select_column_statistics_len)
+			) {
 			l_free(query_length, query);
 			query = l_strdup("SELECT variable_name AS COLUMN_NAME, Variable_value AS 'JSON_EXTRACT(HISTOGRAM, ''$.\"number-of-buckets-specified\"'')' FROM global_variables WHERE 1=0");
 			query_length = strlen(query)+1;
 			goto __run_query;
 		}
-		if (!strncmp("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = 'performance_schema' AND table_name = 'session_variables'", query_no_space, strlen("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = 'performance_schema' AND table_name = 'session_variables'")))  {
+		if (!strncmp("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = 'performance_schema' AND table_name = 'session_variables'", query_no_space, sizeof("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = 'performance_schema' AND table_name = 'session_variables'") - 1))  {
 			l_free(query_length,query);
 			query=l_strdup("SELECT 0 as 'COUNT(*)'");
 			query_length=strlen(query)+1;
 			goto __run_query;
 		}
-		if (!strncmp("SHOW VARIABLES LIKE 'gtid\\_mode'", query_no_space, strlen("SHOW VARIABLES LIKE 'gtid\\_mode'"))) {
+		if (!strncmp("SHOW VARIABLES LIKE 'gtid\\_mode'", query_no_space, sizeof("SHOW VARIABLES LIKE 'gtid\\_mode'") - 1)) {
 			l_free(query_length,query);
 			query=l_strdup("SELECT variable_name Variable_name, Variable_value Value FROM global_variables WHERE Variable_name='gtid_mode'");
 			query_length=strlen(query)+1;
 			goto __run_query;
 		}
-		if (!strncmp("select @@collation_database", query_no_space, strlen("select @@collation_database"))) {
+		if (!strncmp("select @@collation_database", query_no_space, sizeof("select @@collation_database") - 1)) {
 			l_free(query_length,query);
 			query=l_strdup("SELECT Collation '@@collation_database' FROM mysql_collations WHERE Collation='utf8_general_ci' LIMIT 1");
 			query_length=strlen(query)+1;
 			goto __run_query;
 		}
-		if (!strncmp("SHOW VARIABLES LIKE 'ndbinfo\\_version'", query_no_space, strlen("SHOW VARIABLES LIKE 'ndbinfo\\_version'"))) {
+		if (!strncmp("SHOW VARIABLES LIKE 'ndbinfo\\_version'", query_no_space, sizeof("SHOW VARIABLES LIKE 'ndbinfo\\_version'") - 1)) {
 			l_free(query_length,query);
 			query=l_strdup("SELECT variable_name Variable_name, Variable_value Value FROM global_variables WHERE Variable_name='ndbinfo_version'");
 			query_length=strlen(query)+1;
 			goto __run_query;
 		}
-		if (!strncasecmp("show table status like '", query_no_space, strlen("show table status like '"))) {
+		if (!strncasecmp("show table status like '", query_no_space, sizeof("show table status like '") - 1)) {
 			char *strA=query_no_space+24;
 			int strAl=strlen(strA);
 			if (strAl<2) { // error
@@ -3156,7 +4137,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			run_query=false;
 			goto __run_query;
 		}
-		if (!strncasecmp("show fields from ", query_no_space, strlen("show fields from "))) {
+		if (!strncasecmp("show fields from ", query_no_space, sizeof("show fields from ") - 1)) {
 			char *strA=query_no_space+17;
 			int strAl=strlen(strA);
 			if (strAl==0) { // error
@@ -3180,7 +4161,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	}
 
 	// FIXME: this should be removed, it is just a POC for issue #253 . What is important is the call to GloMTH->signal_all_threads();
-	if (!strncasecmp("SIGNAL MYSQL THREADS", query_no_space, strlen("SIGNAL MYSQL THREADS"))) {
+	if (!strncasecmp("SIGNAL MYSQL THREADS", query_no_space, sizeof("SIGNAL MYSQL THREADS") - 1)) {
 		GloMTH->signal_all_threads();
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -3191,38 +4172,56 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
-	// fix bug #442
-	if (!strncmp("SET SQL_SAFE_UPDATES=1", query_no_space, strlen("SET SQL_SAFE_UPDATES=1"))) {
-		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
-		run_query=false;
-		goto __run_query;
-	}
+	// Strip leading SQL comments once for the two connect-setup accept
+	// blocks below, so clients that prepend SQL tracing comments
+	// (SQLCommenter, Datadog Agent's mysql integration CommenterCursor,
+	// Sequelize, Hibernate, …) are recognised. The original
+	// `query_no_space` is unchanged and is what gets passed to
+	// `send_ok_msg_to_client` for audit/digest fidelity. The local
+	// `mb` is wrapped in its own block scope so the existing `goto
+	// __run_query` statements earlier in this function do not jump
+	// past its initialiser (cpp:S1036).
+	// See sysown/proxysql#5786.
+	{
+		const char *mb = skip_leading_sql_comments(query_no_space, query_no_space_length);
 
-	// fix bug #1047
-	if (
-		(!strncasecmp("BEGIN", query_no_space, strlen("BEGIN")))
-		||
-		(!strncasecmp("START TRANSACTION", query_no_space, strlen("START TRANSACTION")))
-		||
-		(!strncasecmp("COMMIT", query_no_space, strlen("COMMIT")))
-		||
-		(!strncasecmp("ROLLBACK", query_no_space, strlen("ROLLBACK")))
-		||
-		(!strncasecmp("SET character_set_results", query_no_space, strlen("SET character_set_results")))
-		||
-		(!strncasecmp("SET SQL_AUTO_IS_NULL", query_no_space, strlen("SET SQL_AUTO_IS_NULL")))
-		||
-		(!strncasecmp("SET NAMES", query_no_space, strlen("SET NAMES")))
-		||
-		(!strncasecmp("SET AUTOCOMMIT", query_no_space, strlen("SET AUTOCOMMIT")))
-	) {
-		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
-		run_query=false;
-		goto __run_query;
+		// fix bug #442
+		if (!strncmp("SET SQL_SAFE_UPDATES=1", mb, sizeof("SET SQL_SAFE_UPDATES=1") - 1)) {
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			run_query=false;
+			goto __run_query;
+		}
+
+		// fix bug #1047
+		if (
+			(!strncasecmp("BEGIN", mb, sizeof("BEGIN") - 1))
+			||
+			(!strncasecmp("START TRANSACTION", mb, sizeof("START TRANSACTION") - 1))
+			||
+			(!strncasecmp("COMMIT", mb, sizeof("COMMIT") - 1))
+			||
+			(!strncasecmp("ROLLBACK", mb, sizeof("ROLLBACK") - 1))
+			||
+			(!strncasecmp("SET character_set_results", mb, sizeof("SET character_set_results") - 1))
+			||
+			(!strncasecmp("SET SQL_AUTO_IS_NULL", mb, sizeof("SET SQL_AUTO_IS_NULL") - 1))
+			||
+			(!strncasecmp("SET NAMES", mb, sizeof("SET NAMES") - 1))
+			||
+			(!strncasecmp("SET AUTOCOMMIT", mb, sizeof("SET AUTOCOMMIT") - 1))
+			||
+			(!strncasecmp("SET @@session.autocommit", mb, sizeof("SET @@session.autocommit") - 1))
+			||
+			(!strncasecmp("SET LOCK_WAIT_TIMEOUT", mb, sizeof("SET LOCK_WAIT_TIMEOUT") - 1))
+		) {
+			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			run_query=false;
+			goto __run_query;
+		}
 	}
 
 	// MySQL client check command for dollars quote support, starting at version '8.1.0'. See #4300.
-	if (!strncasecmp("SELECT $$", query_no_space, strlen("SELECT $$"))) {
+	if (!strncasecmp("SELECT $$", query_no_space, sizeof("SELECT $$") - 1)) {
 		pair<int,const char*> err_info { get_dollar_quote_error(mysql_thread___server_version) };
 		SPA->send_error_msg_to_client(sess, const_cast<char*>(err_info.second), err_info.first);
 		run_query=false;
@@ -3238,7 +4237,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		}
 	}
 
-	if (!strncasecmp("select concat(@@version, ' ', @@version_comment)", query_no_space, strlen("select concat(@@version, ' ', @@version_comment)"))) {
+	if (!strncasecmp("select concat(@@version, ' ', @@version_comment)", query_no_space, sizeof("select concat(@@version, ' ', @@version_comment)") - 1)) {
 		l_free(query_length,query);
 		char *q = const_cast<char*>("SELECT '%s Admin Module'");
 		query_length = strlen(q) + strlen(PROXYSQL_VERSION) + 1;
@@ -3274,7 +4273,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
-	if (!strncasecmp("select @@sql_mode", query_no_space, strlen("select @@sql_mode"))) {
+	if (!strncasecmp("select @@sql_mode", query_no_space, sizeof("select @@sql_mode") - 1)) {
 		l_free(query_length,query);
 		char *q = const_cast<char*>("SELECT \"\" as \"@@sql_mode\"");
 		query_length = strlen(q) + strlen(PROXYSQL_VERSION) + 1;
@@ -3284,7 +4283,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	}
 
 	// trivial implementation for 'connection_id()' to support 'mycli'. See #3247
-	if (!strncasecmp("select connection_id()", query_no_space, strlen("select connection_id()"))) {
+	if (!strncasecmp("select connection_id()", query_no_space, sizeof("select connection_id()") - 1)) {
 		l_free(query_length,query);
 		// 'connection_id()' is always forced to be '0'
 		query=l_strdup("SELECT 0 AS 'CONNECTION_ID()'");
@@ -3293,7 +4292,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	}
 
 	// implementation for 'SELECT TIMEDIFF(NOW(), UTC_TIMESTAMP())' in order to support'csharp' connector. See #2543
-	if (!strncasecmp("SELECT TIMEDIFF(NOW(), UTC_TIMESTAMP())", query_no_space, strlen("SELECT TIMEDIFF(NOW(), UTC_TIMESTAMP())"))) {
+	if (!strncasecmp("SELECT TIMEDIFF(NOW(), UTC_TIMESTAMP())", query_no_space, sizeof("SELECT TIMEDIFF(NOW(), UTC_TIMESTAMP())") - 1)) {
 		l_free(query_length,query);
 		char *query1=(char*)"SELECT '%s' as 'TIMEDIFF(NOW(), UTC_TIMESTAMP()'";
 
@@ -3319,7 +4318,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		!strncasecmp(
 			"select @@max_allowed_packet, @@character_set_client, @@character_set_connection, @@license, @@sql_mode, @@lower_case_table_names",
 			query_no_space,
-			strlen("select @@max_allowed_packet, @@character_set_client, @@character_set_connection, @@license, @@sql_mode, @@lower_case_table_names")
+			sizeof("select @@max_allowed_packet, @@character_set_client, @@character_set_connection, @@license, @@sql_mode, @@lower_case_table_names") - 1
 		)
 	) {
 		l_free(query_length,query);
@@ -3355,13 +4354,13 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		}
 	}
 
-	if (!strncasecmp("SELECT @@version", query_no_space, strlen("SELECT @@version"))) {
+	if (!strncasecmp("SELECT @@version", query_no_space, sizeof("SELECT @@version") - 1)) {
 		l_free(query_length,query);
 		char *q=(char *)"SELECT '%s' AS '@@version'";
 		if (GloMyLdapAuth == nullptr) {
 			query_length=strlen(q)+20+strlen(PROXYSQL_VERSION);
 		} else {
-			query_length=strlen(q)+20+strlen(PROXYSQL_VERSION)+strlen("-Enterprise");
+			query_length=strlen(q)+20+strlen(PROXYSQL_VERSION)+sizeof("-Enterprise") - 1;
 		}
 		query=(char *)l_alloc(query_length);
 		if (GloMyLdapAuth == nullptr) {
@@ -3372,13 +4371,13 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
-	if (!strncasecmp("SELECT version()", query_no_space, strlen("SELECT version()"))) {
+	if (!strncasecmp("SELECT version()", query_no_space, sizeof("SELECT version()") - 1)) {
 		l_free(query_length,query);
 		char *q=(char *)"SELECT '%s' AS 'version()'";
 		if (GloMyLdapAuth == nullptr) {
 			query_length=strlen(q)+20+strlen(PROXYSQL_VERSION);
 		} else {
-			query_length=strlen(q)+20+strlen(PROXYSQL_VERSION)+strlen("-Enterprise");
+			query_length=strlen(q)+20+strlen(PROXYSQL_VERSION)+sizeof("-Enterprise") - 1;
 		}
 		query=(char *)l_alloc(query_length);
 		if (GloMyLdapAuth == nullptr) {
@@ -3389,9 +4388,9 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
-	if (!strncasecmp("SHOW VARIABLES WHERE Variable_name in", query_no_space, strlen("SHOW VARIABLES WHERE Variable_name in"))) {
+	if (!strncasecmp("SHOW VARIABLES WHERE Variable_name in", query_no_space, sizeof("SHOW VARIABLES WHERE Variable_name in") - 1)) {
 		// Allow MariaDB ConnectorJ to connect to Admin #743
-		if (!strncasecmp("SHOW VARIABLES WHERE Variable_name in ('max_allowed_packet','system_time_zone','time_zone','sql_mode')", query_no_space, strlen("SHOW VARIABLES WHERE Variable_name in ('max_allowed_packet','system_time_zone','time_zone','sql_mode')"))) {
+		if (!strncasecmp("SHOW VARIABLES WHERE Variable_name in ('max_allowed_packet','system_time_zone','time_zone','sql_mode')", query_no_space, sizeof("SHOW VARIABLES WHERE Variable_name in ('max_allowed_packet','system_time_zone','time_zone','sql_mode')") - 1)) {
 			l_free(query_length,query);
 			char *q=(char *)"SELECT 'max_allowed_packet' Variable_name,'4194304' Value UNION ALL SELECT 'sql_mode', 'STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION' UNION ALL SELECT 'system_time_zone', 'UTC' UNION ALL SELECT 'time_zone','SYSTEM'";
 			query_length=strlen(q)+20;
@@ -3400,7 +4399,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			goto __run_query;
 		}
 		// Allow MariaDB ConnectorJ 2.4.1 to connect to Admin #2009
-		if (!strncasecmp("SHOW VARIABLES WHERE Variable_name in ('max_allowed_packet','system_time_zone','time_zone','auto_increment_increment')", query_no_space, strlen("SHOW VARIABLES WHERE Variable_name in ('max_allowed_packet','system_time_zone','time_zone','auto_increment_increment')"))) {
+		if (!strncasecmp("SHOW VARIABLES WHERE Variable_name in ('max_allowed_packet','system_time_zone','time_zone','auto_increment_increment')", query_no_space, sizeof("SHOW VARIABLES WHERE Variable_name in ('max_allowed_packet','system_time_zone','time_zone','auto_increment_increment')") - 1)) {
 			l_free(query_length,query);
 			char *q=(char *)"SELECT 'max_allowed_packet' Variable_name,'4194304' Value UNION ALL SELECT 'auto_increment_increment', '1' UNION ALL SELECT 'system_time_zone', 'UTC' UNION ALL SELECT 'time_zone','SYSTEM'";
 			query_length=strlen(q)+20;
@@ -3502,130 +4501,156 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		char *error=NULL;
 		int affected_rows=0;
 		int cols=0;
-		if (strlen(query_no_space)==strlen("CHECKSUM DISK MYSQL SERVERS") && !strncasecmp("CHECKSUM DISK MYSQL SERVERS", query_no_space, strlen(query_no_space))){
+		if (query_no_space_length==sizeof("CHECKSUM DISK MYSQL SERVERS") - 1 && !strncasecmp("CHECKSUM DISK MYSQL SERVERS", query_no_space, query_no_space_length)){
 			char *q=(char *)"SELECT * FROM mysql_servers ORDER BY hostgroup_id, hostname, port";
 			tablename=(char *)"MYSQL SERVERS";
 			SPA->configdb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
 
-		if (strlen(query_no_space)==strlen("CHECKSUM DISK MYSQL USERS") && !strncasecmp("CHECKSUM DISK MYSQL USERS", query_no_space, strlen(query_no_space))){
+		if (query_no_space_length==sizeof("CHECKSUM DISK MYSQL USERS") - 1 && !strncasecmp("CHECKSUM DISK MYSQL USERS", query_no_space, query_no_space_length)){
 			char *q=(char *)"SELECT * FROM mysql_users ORDER BY username";
 			tablename=(char *)"MYSQL USERS";
 			SPA->configdb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
 
-		if (strlen(query_no_space)==strlen("CHECKSUM DISK MYSQL QUERY RULES") && !strncasecmp("CHECKSUM DISK MYSQL QUERY RULES", query_no_space, strlen(query_no_space))){
+		if (query_no_space_length==sizeof("CHECKSUM DISK MYSQL QUERY RULES") - 1 && !strncasecmp("CHECKSUM DISK MYSQL QUERY RULES", query_no_space, query_no_space_length)){
 			char *q=(char *)"SELECT * FROM mysql_query_rules ORDER BY rule_id";
 			tablename=(char *)"MYSQL QUERY RULES";
 			SPA->configdb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
 
-		if (strlen(query_no_space)==strlen("CHECKSUM DISK MYSQL VARIABLES") && !strncasecmp("CHECKSUM DISK MYSQL VARIABLES", query_no_space, strlen(query_no_space))){
+		if (query_no_space_length==sizeof("CHECKSUM DISK MYSQL VARIABLES") - 1 && !strncasecmp("CHECKSUM DISK MYSQL VARIABLES", query_no_space, query_no_space_length)){
 			char *q=(char *)"SELECT * FROM global_variables WHERE variable_name LIKE 'mysql-%' ORDER BY variable_name";
 			tablename=(char *)"MYSQL VARIABLES";
 			SPA->configdb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
 
-		if (strlen(query_no_space)==strlen("CHECKSUM DISK MYSQL REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM DISK MYSQL REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space))){
+		if (query_no_space_length==sizeof("CHECKSUM DISK MYSQL REPLICATION HOSTGROUPS") - 1 && !strncasecmp("CHECKSUM DISK MYSQL REPLICATION HOSTGROUPS", query_no_space, query_no_space_length)){
 			char *q=(char *)"SELECT * FROM mysql_replication_hostgroups ORDER BY writer_hostgroup";
 			tablename=(char *)"MYSQL REPLICATION HOSTGROUPS";
 			SPA->configdb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
 
-		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL SERVERS") && !strncasecmp("CHECKSUM MEMORY MYSQL SERVERS", query_no_space, strlen(query_no_space)))
+		if ((query_no_space_length==sizeof("CHECKSUM MEMORY MYSQL SERVERS") - 1 && !strncasecmp("CHECKSUM MEMORY MYSQL SERVERS", query_no_space, query_no_space_length))
 		||
-		(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL SERVERS") && !strncasecmp("CHECKSUM MEM MYSQL SERVERS", query_no_space, strlen(query_no_space)))
+		(query_no_space_length==sizeof("CHECKSUM MEM MYSQL SERVERS") - 1 && !strncasecmp("CHECKSUM MEM MYSQL SERVERS", query_no_space, query_no_space_length))
 		||
-		(strlen(query_no_space)==strlen("CHECKSUM MYSQL SERVERS") && !strncasecmp("CHECKSUM MYSQL SERVERS", query_no_space, strlen(query_no_space)))){
+		(query_no_space_length==sizeof("CHECKSUM MYSQL SERVERS") - 1 && !strncasecmp("CHECKSUM MYSQL SERVERS", query_no_space, query_no_space_length))){
 			char *q=(char *)"SELECT * FROM mysql_servers ORDER BY hostgroup_id, hostname, port";
 			tablename=(char *)"MYSQL SERVERS";
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
 
-		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL USERS") && !strncasecmp("CHECKSUM MEMORY MYSQL USERS", query_no_space, strlen(query_no_space)))
+		if ((query_no_space_length==sizeof("CHECKSUM MEMORY MYSQL USERS") - 1 && !strncasecmp("CHECKSUM MEMORY MYSQL USERS", query_no_space, query_no_space_length))
 		||
-		(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL USERS") && !strncasecmp("CHECKSUM MEM MYSQL USERS", query_no_space, strlen(query_no_space)))
+		(query_no_space_length==sizeof("CHECKSUM MEM MYSQL USERS") - 1 && !strncasecmp("CHECKSUM MEM MYSQL USERS", query_no_space, query_no_space_length))
 		||
-		(strlen(query_no_space)==strlen("CHECKSUM MYSQL USERS") && !strncasecmp("CHECKSUM MYSQL USERS", query_no_space, strlen(query_no_space)))){
+		(query_no_space_length==sizeof("CHECKSUM MYSQL USERS") - 1 && !strncasecmp("CHECKSUM MYSQL USERS", query_no_space, query_no_space_length))){
 			char *q=(char *)"SELECT * FROM mysql_users ORDER BY username";
 			tablename=(char *)"MYSQL USERS";
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
 
-		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL QUERY RULES") && !strncasecmp("CHECKSUM MEMORY MYSQL QUERY RULES", query_no_space, strlen(query_no_space)))
+		if ((query_no_space_length==sizeof("CHECKSUM MEMORY MYSQL QUERY RULES") - 1 && !strncasecmp("CHECKSUM MEMORY MYSQL QUERY RULES", query_no_space, query_no_space_length))
 		||
-		(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL QUERY RULES") && !strncasecmp("CHECKSUM MEM MYSQL QUERY RULES", query_no_space, strlen(query_no_space)))
+		(query_no_space_length==sizeof("CHECKSUM MEM MYSQL QUERY RULES") - 1 && !strncasecmp("CHECKSUM MEM MYSQL QUERY RULES", query_no_space, query_no_space_length))
 		||
-		(strlen(query_no_space)==strlen("CHECKSUM MYSQL QUERY RULES") && !strncasecmp("CHECKSUM MYSQL QUERY RULES", query_no_space, strlen(query_no_space)))){
+		(query_no_space_length==sizeof("CHECKSUM MYSQL QUERY RULES") - 1 && !strncasecmp("CHECKSUM MYSQL QUERY RULES", query_no_space, query_no_space_length))){
 			char *q=(char *)"SELECT * FROM mysql_query_rules ORDER BY rule_id";
 			tablename=(char *)"MYSQL QUERY RULES";
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
 
-		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL VARIABLES") && !strncasecmp("CHECKSUM MEMORY MYSQL VARIABLES", query_no_space, strlen(query_no_space)))
+		if ((query_no_space_length==sizeof("CHECKSUM MEMORY MYSQL VARIABLES") - 1 && !strncasecmp("CHECKSUM MEMORY MYSQL VARIABLES", query_no_space, query_no_space_length))
 		||
-		(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL VARIABLES") && !strncasecmp("CHECKSUM MEM MYSQL VARIABLES", query_no_space, strlen(query_no_space)))
+		(query_no_space_length==sizeof("CHECKSUM MEM MYSQL VARIABLES") - 1 && !strncasecmp("CHECKSUM MEM MYSQL VARIABLES", query_no_space, query_no_space_length))
 		||
-		(strlen(query_no_space)==strlen("CHECKSUM MYSQL VARIABLES") && !strncasecmp("CHECKSUM MYSQL VARIABLES", query_no_space, strlen(query_no_space)))){
+		(query_no_space_length==sizeof("CHECKSUM MYSQL VARIABLES") - 1 && !strncasecmp("CHECKSUM MYSQL VARIABLES", query_no_space, query_no_space_length))){
 			char *q=(char *)"SELECT * FROM global_variables WHERE variable_name LIKE 'mysql-%' ORDER BY variable_name";
 			tablename=(char *)"MYSQL VARIABLES";
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
 
-		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM MEMORY MYSQL REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))
+		if ((query_no_space_length==sizeof("CHECKSUM MEMORY MYSQL REPLICATION HOSTGROUPS") - 1 && !strncasecmp("CHECKSUM MEMORY MYSQL REPLICATION HOSTGROUPS", query_no_space, query_no_space_length))
 			||
-			(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM MEM MYSQL REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))
+			(query_no_space_length==sizeof("CHECKSUM MEM MYSQL REPLICATION HOSTGROUPS") - 1 && !strncasecmp("CHECKSUM MEM MYSQL REPLICATION HOSTGROUPS", query_no_space, query_no_space_length))
 			||
-			(strlen(query_no_space)==strlen("CHECKSUM MYSQL REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM MYSQL REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))){
+			(query_no_space_length==sizeof("CHECKSUM MYSQL REPLICATION HOSTGROUPS") - 1 && !strncasecmp("CHECKSUM MYSQL REPLICATION HOSTGROUPS", query_no_space, query_no_space_length))){
 			char *q=(char *)"SELECT * FROM mysql_replication_hostgroups ORDER BY writer_hostgroup";
 			tablename=(char *)"MYSQL REPLICATION HOSTGROUPS";
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
 
-		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL GROUP REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM MEMORY MYSQL GROUP REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))
+		if ((query_no_space_length==sizeof("CHECKSUM MEMORY MYSQL GROUP REPLICATION HOSTGROUPS") - 1 && !strncasecmp("CHECKSUM MEMORY MYSQL GROUP REPLICATION HOSTGROUPS", query_no_space, query_no_space_length))
 			||
-			(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL GROUP REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM MEM MYSQL GROUP REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))
+			(query_no_space_length==sizeof("CHECKSUM MEM MYSQL GROUP REPLICATION HOSTGROUPS") - 1 && !strncasecmp("CHECKSUM MEM MYSQL GROUP REPLICATION HOSTGROUPS", query_no_space, query_no_space_length))
 			||
-			(strlen(query_no_space)==strlen("CHECKSUM MYSQL GROUP REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM MYSQL GROUP REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))){
+			(query_no_space_length==sizeof("CHECKSUM MYSQL GROUP REPLICATION HOSTGROUPS") - 1 && !strncasecmp("CHECKSUM MYSQL GROUP REPLICATION HOSTGROUPS", query_no_space, query_no_space_length))){
 			char *q=(char *)"SELECT * FROM mysql_group_replication_hostgroups ORDER BY writer_hostgroup";
 			tablename=(char *)"MYSQL GROUP REPLICATION HOSTGROUPS";
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
 
-		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL GALERA HOSTGROUPS") && !strncasecmp("CHECKSUM MEMORY MYSQL GALERA HOSTGROUPS", query_no_space, strlen(query_no_space)))
+		if ((query_no_space_length==sizeof("CHECKSUM MEMORY MYSQL GALERA HOSTGROUPS") - 1 && !strncasecmp("CHECKSUM MEMORY MYSQL GALERA HOSTGROUPS", query_no_space, query_no_space_length))
 			||
-			(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL GALERA HOSTGROUPS") && !strncasecmp("CHECKSUM MEM MYSQL GALERA HOSTGROUPS", query_no_space, strlen(query_no_space)))
+			(query_no_space_length==sizeof("CHECKSUM MEM MYSQL GALERA HOSTGROUPS") - 1 && !strncasecmp("CHECKSUM MEM MYSQL GALERA HOSTGROUPS", query_no_space, query_no_space_length))
 			||
-			(strlen(query_no_space)==strlen("CHECKSUM MYSQL GALERA HOSTGROUPS") && !strncasecmp("CHECKSUM MYSQL GALERA HOSTGROUPS", query_no_space, strlen(query_no_space)))){
+			(query_no_space_length==sizeof("CHECKSUM MYSQL GALERA HOSTGROUPS") - 1 && !strncasecmp("CHECKSUM MYSQL GALERA HOSTGROUPS", query_no_space, query_no_space_length))){
 			char *q=(char *)"SELECT * FROM mysql_galera_hostgroups ORDER BY writer_hostgroup";
 			tablename=(char *)"MYSQL GALERA HOSTGROUPS";
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
-		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL AURORA HOSTGROUPS") && !strncasecmp("CHECKSUM MEMORY MYSQL AURORA HOSTGROUPS", query_no_space, strlen(query_no_space)))
+		if ((query_no_space_length==sizeof("CHECKSUM MEMORY MYSQL AURORA HOSTGROUPS") - 1 && !strncasecmp("CHECKSUM MEMORY MYSQL AURORA HOSTGROUPS", query_no_space, query_no_space_length))
 			||
-			(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL AURORA HOSTGROUPS") && !strncasecmp("CHECKSUM MEM MYSQL AURORA HOSTGROUPS", query_no_space, strlen(query_no_space)))
+			(query_no_space_length==sizeof("CHECKSUM MEM MYSQL AURORA HOSTGROUPS") - 1 && !strncasecmp("CHECKSUM MEM MYSQL AURORA HOSTGROUPS", query_no_space, query_no_space_length))
 			||
-			(strlen(query_no_space)==strlen("CHECKSUM MYSQL AURORA HOSTGROUPS") && !strncasecmp("CHECKSUM MYSQL AURORA HOSTGROUPS", query_no_space, strlen(query_no_space)))){
+			(query_no_space_length==sizeof("CHECKSUM MYSQL AURORA HOSTGROUPS") - 1 && !strncasecmp("CHECKSUM MYSQL AURORA HOSTGROUPS", query_no_space, query_no_space_length))){
 			char *q=(char *)"SELECT * FROM mysql_aws_aurora_hostgroups ORDER BY writer_hostgroup";
 			tablename=(char *)"MYSQL AURORA HOSTGROUPS";
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
-		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL HOSTGROUP ATTRIBUTES") && !strncasecmp("CHECKSUM MEMORY MYSQL HOSTGROUP ATTRIBUTES", query_no_space, strlen(query_no_space)))
+		if ((query_no_space_length==sizeof("CHECKSUM MEMORY MYSQL RDS BGD HOSTGROUPS") - 1 && !strncasecmp("CHECKSUM MEMORY MYSQL RDS BGD HOSTGROUPS", query_no_space, query_no_space_length))
 			||
-			(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL HOSTGROUP ATTRIBUTES") && !strncasecmp("CHECKSUM MEM MYSQL HOSTGROUP ATTRIBUTES", query_no_space, strlen(query_no_space)))
+			(query_no_space_length==sizeof("CHECKSUM MEM MYSQL RDS BGD HOSTGROUPS") - 1 && !strncasecmp("CHECKSUM MEM MYSQL RDS BGD HOSTGROUPS", query_no_space, query_no_space_length))
 			||
-			(strlen(query_no_space)==strlen("CHECKSUM MYSQL HOSTGROUP ATTRIBUTES") && !strncasecmp("CHECKSUM MYSQL HOSTGROUP ATTRIBUTES", query_no_space, strlen(query_no_space)))){
+			(query_no_space_length==sizeof("CHECKSUM MYSQL RDS BGD HOSTGROUPS") - 1 && !strncasecmp("CHECKSUM MYSQL RDS BGD HOSTGROUPS", query_no_space, query_no_space_length))){
+			char *q=(char *)"SELECT * FROM mysql_aws_rds_bgd_hostgroups ORDER BY writer_hostgroup";
+			tablename=(char *)"MYSQL RDS BGD HOSTGROUPS";
+			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
+		if ((query_no_space_length==sizeof("CHECKSUM MEMORY MYSQL HOSTGROUP ATTRIBUTES") - 1 && !strncasecmp("CHECKSUM MEMORY MYSQL HOSTGROUP ATTRIBUTES", query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==sizeof("CHECKSUM MEM MYSQL HOSTGROUP ATTRIBUTES") - 1 && !strncasecmp("CHECKSUM MEM MYSQL HOSTGROUP ATTRIBUTES", query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==sizeof("CHECKSUM MYSQL HOSTGROUP ATTRIBUTES") - 1 && !strncasecmp("CHECKSUM MYSQL HOSTGROUP ATTRIBUTES", query_no_space, query_no_space_length))){
 			char *q=(char *)"SELECT * FROM mysql_hostgroup_attributes ORDER BY hostgroup_id";
 			tablename=(char *)"MYSQL HOSTGROUP ATTRIBUTES";
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
-		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL SERVERS SSL PARAMS") && !strncasecmp("CHECKSUM MEMORY MYSQL SERVERS SSL PARAMS", query_no_space, strlen(query_no_space)))
+		if ((query_no_space_length==sizeof("CHECKSUM MEMORY MYSQL SERVERS SSL PARAMS") - 1 && !strncasecmp("CHECKSUM MEMORY MYSQL SERVERS SSL PARAMS", query_no_space, query_no_space_length))
 			||
-			(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL SERVERS SSL PARAMS") && !strncasecmp("CHECKSUM MEM MYSQL SERVERS SSL PARAMS", query_no_space, strlen(query_no_space)))
+			(query_no_space_length==sizeof("CHECKSUM MEM MYSQL SERVERS SSL PARAMS") - 1 && !strncasecmp("CHECKSUM MEM MYSQL SERVERS SSL PARAMS", query_no_space, query_no_space_length))
 			||
-			(strlen(query_no_space)==strlen("CHECKSUM MYSQL SERVERS SSL PARAMS") && !strncasecmp("CHECKSUM MYSQL SERVERS SSL PARAMS", query_no_space, strlen(query_no_space)))){
+			(query_no_space_length==sizeof("CHECKSUM MYSQL SERVERS SSL PARAMS") - 1 && !strncasecmp("CHECKSUM MYSQL SERVERS SSL PARAMS", query_no_space, query_no_space_length))){
 			char *q=(char *)"SELECT * FROM mysql_servers_ssl_params ORDER BY hostname, port, username";
 			tablename=(char *)"MYSQL HOSTGROUP ATTRIBUTES";
+			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
+
+		// MCP (Model Context Protocol) VARIABLES CHECKSUM
+		if (query_no_space_length==sizeof("CHECKSUM DISK MCP VARIABLES") - 1 && !strncasecmp("CHECKSUM DISK MCP VARIABLES", query_no_space, query_no_space_length)){
+			char *q=(char *)"SELECT * FROM global_variables WHERE variable_name LIKE 'mcp-%' ORDER BY variable_name";
+			tablename=(char *)"MCP VARIABLES";
+			SPA->configdb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
+
+		if ((query_no_space_length==sizeof("CHECKSUM MEMORY MCP VARIABLES") - 1 && !strncasecmp("CHECKSUM MEMORY MCP VARIABLES", query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==sizeof("CHECKSUM MEM MCP VARIABLES") - 1 && !strncasecmp("CHECKSUM MEM MCP VARIABLES", query_no_space, query_no_space_length))
+			||
+			(query_no_space_length==sizeof("CHECKSUM MCP VARIABLES") - 1 && !strncasecmp("CHECKSUM MCP VARIABLES", query_no_space, query_no_space_length))){
+			char *q=(char *)"SELECT * FROM global_variables WHERE variable_name LIKE 'mcp-%' ORDER BY variable_name";
+			tablename=(char *)"MCP VARIABLES";
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
 
@@ -3648,8 +4673,8 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
-	if (!strncasecmp("SELECT CONFIG INTO OUTFILE", query_no_space, strlen("SELECT CONFIG INTO OUTFILE"))) {
-		std::string fileName = query_no_space + strlen("SELECT CONFIG INTO OUTFILE");
+	if (!strncasecmp("SELECT CONFIG INTO OUTFILE", query_no_space, sizeof("SELECT CONFIG INTO OUTFILE") - 1)) {
+		std::string fileName = query_no_space + sizeof("SELECT CONFIG INTO OUTFILE") - 1;
 		fileName.erase(0, fileName.find_first_not_of("\t\n\v\f\r "));
 		fileName.erase(fileName.find_last_not_of("\t\n\v\f\r ") + 1);
 		if (fileName.size() == 0) {
@@ -3670,6 +4695,10 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		rc = pa->proxysql_config().Write_Scheduler_to_configfile(data);
 		rc = pa->proxysql_config().Write_Restapi_to_configfile(data);
 		rc = pa->proxysql_config().Write_ProxySQL_Servers_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_MySQL_Query_Rules_Fast_Routing_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_PgSQL_Query_Rules_Fast_Routing_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_MySQL_Firewall_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_PgSQL_Firewall_to_configfile(data);
 		if (rc) {
 			std::stringstream ss;
 			ss << "ProxySQL Admin Error: Cannot extract configuration";
@@ -3699,7 +4728,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
-	if (query_no_space_length==strlen("SELECT CONFIG FILE") && !strncasecmp("SELECT CONFIG FILE", query_no_space, query_no_space_length)) {
+	if (query_no_space_length==sizeof("SELECT CONFIG FILE") - 1 && !strncasecmp("SELECT CONFIG FILE", query_no_space, query_no_space_length)) {
 		std::string data;
 		data.reserve(100000);
 		data += config_header;
@@ -3713,6 +4742,10 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		rc = pa->proxysql_config().Write_Scheduler_to_configfile(data);
 		rc = pa->proxysql_config().Write_Restapi_to_configfile(data);
 		rc = pa->proxysql_config().Write_ProxySQL_Servers_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_MySQL_Query_Rules_Fast_Routing_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_PgSQL_Query_Rules_Fast_Routing_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_MySQL_Firewall_to_configfile(data);
+		if (rc == 0) rc = pa->proxysql_config().Write_PgSQL_Firewall_to_configfile(data);
 		if (rc) {
 			std::stringstream ss;
 			ss << "ProxySQL Admin Error: Cannot write proxysql.cnf";
@@ -3731,11 +4764,372 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
+
+	// Handle PostgreSQL meta commands expanded by psql client
+	// These commands are intercepted and converted to appropriate SQLite queries
+	if constexpr (std::is_same_v<S, PgSQL_Session>) {
+		if (query_no_space_length >= sizeof("SELECT") - 1 && !strncasecmp("SELECT", query_no_space, sizeof("SELECT") - 1)) {
+			// Track if this query is the FIRST describe query (sets describe_mode)
+			// and if it matches ANY describe pattern (prevents reset during sequence)
+			bool is_describe_query = false;
+			bool matched_describe_pattern = false;
+
+			// \l, \l+ : List databases
+			// psql: SELECT ... FROM pg_catalog.pg_database ...
+			// sqlite: PRAGMA DATABASE_LIST
+			if (strcasestr(query_no_space, "FROM pg_catalog.pg_database") != nullptr ||
+				strcasestr(query_no_space, "FROM pg_database") != nullptr) {
+				l_free(query_length, query);
+				query = l_strdup("PRAGMA DATABASE_LIST");
+				query_length = strlen(query) + 1;
+				goto __run_query;
+			}
+
+			// \d : List all relations (without table name)
+			// psql: SELECT ... FROM pg_catalog.pg_class c ... WHERE c.relkind IN ('r','p','v','m','S','f','')
+			// sqlite: SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view', 'index', 'trigger') ...
+			// Note: \d includes 'v' (views) in relkind, \dt does not
+			if ((strcasestr(query_no_space, "FROM pg_catalog.pg_class c") != nullptr ||
+				strcasestr(query_no_space, "FROM pg_class c") != nullptr) &&
+				strcasestr(query_no_space, "c.relkind IN ('r','p','v'") != nullptr) {
+
+				l_free(query_length, query);
+				// List all relations
+				query = l_strdup("SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view', 'index', 'trigger') AND name NOT LIKE 'sqlite_%' ORDER BY type, name");
+				query_length = strlen(query) + 1;
+				goto __run_query;
+			}
+
+			// \dt [pattern] : List tables (with optional pattern)
+			// psql: SELECT ... FROM pg_catalog.pg_class c ... WHERE c.relkind IN ('r','p', ...)
+			if ((strcasestr(query_no_space, "FROM pg_catalog.pg_class c") != nullptr ||
+				strcasestr(query_no_space, "FROM pg_class c") != nullptr) &&
+				strcasestr(query_no_space, "c.relkind IN ('r'") != nullptr) {
+				l_free(query_length, query);
+				handle_psql_list_command(query_no_space, &query, &query_length, "table", "name");
+				goto __run_query;
+			}
+
+			// \di [pattern] : List indexes (with optional pattern)
+			if ((strcasestr(query_no_space, "FROM pg_catalog.pg_class c") != nullptr ||
+				 strcasestr(query_no_space, "FROM pg_class c") != nullptr) &&
+				strcasestr(query_no_space, "c.relkind IN ('i'") != nullptr) {
+				l_free(query_length, query);
+				handle_psql_list_command(query_no_space, &query, &query_length, "index", "name, tbl_name");
+				goto __run_query;
+			}
+
+			// \dv [pattern] : List views (with optional pattern)
+			if ((strcasestr(query_no_space, "FROM pg_catalog.pg_class c") != nullptr ||
+				 strcasestr(query_no_space, "FROM pg_class c") != nullptr) &&
+				strcasestr(query_no_space, "c.relkind IN ('v'") != nullptr) {
+				l_free(query_length, query);
+				handle_psql_list_command(query_no_space, &query, &query_length, "view", "name");
+				goto __run_query;
+			}
+
+			// \d tablename : Describe table (first query from psql)
+			// psql: SELECT c.oid, n.nspname, c.relname FROM pg_catalog.pg_class c
+			//       LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+			//       WHERE c.relname OPERATOR(pg_catalog.~) '^(tablename)' ...
+			//       AND pg_catalog.pg_table_is_visible(c.oid) ORDER BY 2, 3;
+			// We return: c.oid as table name, n.nspname as 'public', c.relname as table name
+			// Key identifiers: has pg_catalog.pg_class, c.relname OPERATOR, and pg_table_is_visible
+			if ((strcasestr(query_no_space, "FROM pg_catalog.pg_class c") != nullptr ||
+				 strcasestr(query_no_space, "FROM pg_class c") != nullptr) &&
+				strcasestr(query_no_space, "c.relname OPERATOR") != nullptr &&
+				strcasestr(query_no_space, "pg_catalog.pg_table_is_visible") != nullptr) {
+				is_describe_query = true;
+				matched_describe_pattern = true;
+
+				// Extract table name from c.relname OPERATOR clause and save to session
+				const char* relname_pos = strcasestr(query_no_space, "c.relname");
+				if (relname_pos) {
+					// Find the pattern value after OPERATOR(...)
+					const char* pattern_pos = strcasestr(relname_pos, "OPERATOR");
+					if (pattern_pos) {
+						// Find the opening quote after OPERATOR
+						const char* quote_start = strchr(pattern_pos, '\'');
+						if (quote_start) {
+							// Skip leading regex characters like ^( and ^
+							const char* start = quote_start + 1;
+							while (*start && (*start == '^' || *start == '(')) start++;
+
+							// Find end of pattern (closing quote or whitespace)
+							const char* end = start;
+							while (*end && *end != '\'' && *end != ')' && *end != ' ' &&
+								   *end != '\t' && *end != '\n' && *end != '\r') end++;
+
+							// Copy table name to session (limit to 256 chars)
+							size_t len = end - start;
+							if (len > 0 && len < sizeof(sess->describe_table_name) - 1) {
+								// Extract and escape table name for SQL safety (escape once, use everywhere)
+								char temp_table[256] = { 0 };
+								memcpy(temp_table, start, len);
+								temp_table[len] = '\0';
+
+								char* escaped = escape_string_single_quotes(temp_table, false);
+								snprintf(sess->describe_table_name, sizeof(sess->describe_table_name), "%s", escaped);
+								// Only free if escape_string_single_quotes allocated new memory
+								if (escaped != temp_table) {
+									free(escaped);
+								}
+
+								// Only report a hit if the relation exists in sqlite_master.
+								// Query sqlite_master to verify the table exists before arming describe mode.
+								char buf[768] = { 0 };
+								snprintf(buf, sizeof(buf),
+									 "SELECT name AS oid, 'public' AS nspname, name AS relname "
+									 "FROM sqlite_master "
+									 "WHERE name='%s' AND type IN ('table','view','index') "
+									 "AND name NOT LIKE 'sqlite_%%' "
+									 "LIMIT 1",
+									 sess->describe_table_name);
+								l_free(query_length, query);
+								query = l_strdup(buf);
+								query_length = strlen(query) + 1;
+								sess->describe_mode = true;
+								goto __run_query;
+							}
+						}
+					}
+				}
+
+				// If we couldn't extract the table name, return error
+				error = strdup("could not extract table name from pattern");
+				proxy_error("Error: %s\n", error);
+				SPA->send_error_msg_to_client(sess, error);
+				run_query = false;
+				free(error);
+				error = nullptr;
+				goto __run_query;
+			}
+
+			// \d tablename : Second query - get table attributes
+			// psql: SELECT c.relchecks, c.relkind, c.relhasindex, c.relhasrules, c.relhastriggers,
+			//       c.relrowsecurity, c.relforcerowsecurity, false AS relhasoids, c.relispartition,
+			//       '', c.reltablespace, CASE WHEN ..., c.relpersistence, c.relreplident, am.amname
+			//       FROM pg_catalog.pg_class c ... WHERE c.oid = 'tablename';
+			// We return appropriate default values based on detected type
+			// Key identifiers: has pg_catalog.pg_class c, WHERE c.oid = (with quotes)
+			if ((strcasestr(query_no_space, "FROM pg_catalog.pg_class c") != nullptr ||
+				 strcasestr(query_no_space, "FROM pg_class c") != nullptr) &&
+				strcasestr(query_no_space, "WHERE c.oid =") != nullptr &&
+				strcasestr(query_no_space, "c.relchecks") != nullptr &&
+				strcasestr(query_no_space, "am.amname") != nullptr) {
+				matched_describe_pattern = true;
+
+				// Use table name from session (already escaped in first query)
+				if (sess->describe_mode && sess->describe_table_name[0] != '\0') {
+					// Build SELECT returning all columns psql expects
+					// Using actual SQLite metadata where possible:
+					// - relkind: determined from sqlite_master type
+					// - relhasindex: check if table has indexes
+					// - relhastriggers: check if table has triggers
+					// Buffer: ~400 fixed + 5*255 table names = ~1675, round to 2048
+					char buf[2048] = { 0 };
+					snprintf(buf, sizeof(buf),
+						"SELECT 0 AS relchecks, "
+						"CASE WHEN (SELECT type FROM sqlite_master WHERE name='%s' AND type='table' LIMIT 1) = 'table' THEN 'r' "
+						"WHEN (SELECT type FROM sqlite_master WHERE name='%s' AND type='view' LIMIT 1) = 'view' THEN 'v' "
+						"WHEN (SELECT type FROM sqlite_master WHERE name='%s' AND type='index' LIMIT 1) = 'index' THEN 'i' "
+						"ELSE 'r' END AS relkind, "
+						"(SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND tbl_name='%s')) AS relhasindex, "
+						"0 AS relhasrules, "
+						"(SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='trigger' AND tbl_name='%s')) AS relhastriggers, "
+						"0 AS relrowsecurity, 0 AS relforcerowsecurity, 0 AS relhasoids, 0 AS relispartition, "
+						"'' AS empty1, 0 AS reltablespace, '' AS reloftype, "
+						"'p' AS relpersistence, 'd' AS relreplident, 'heap' AS amname",
+						sess->describe_table_name, sess->describe_table_name, sess->describe_table_name,
+						sess->describe_table_name, sess->describe_table_name);
+					l_free(query_length, query);
+					query = l_strdup(buf);
+					query_length = strlen(query) + 1;
+					goto __run_query;
+				}
+
+				// Not in describe mode or no table name - return error
+				error = strdup("describe mode not initialized - first describe query not executed");
+				proxy_error("Error: %s\n", error);
+				SPA->send_error_msg_to_client(sess, error);
+				run_query = false;
+				free(error);
+				error = nullptr;
+				goto __run_query;
+			}
+
+			// \\d tablename : Third query - get column attributes
+			// psql: SELECT a.attname, pg_catalog.format_type(...), pg_catalog.pg_get_expr(...),
+			//       (SELECT pg_catalog.pg_collation c...) AS attcollation, a.attidentity, a.attgenerated
+			//       FROM pg_catalog.pg_attribute a WHERE a.attrelid = 'tablename' ...
+			// We return all columns PostgreSQL expects, extracting real type from SQLite
+			// Key identifiers: pg_attribute a, a.attrelid =, a.attname, pg_get_expr
+			if ((strcasestr(query_no_space, "FROM pg_catalog.pg_attribute a") != nullptr ||
+				 strcasestr(query_no_space, "FROM pg_attribute a") != nullptr) &&
+				strcasestr(query_no_space, "a.attrelid =") != nullptr &&
+				strcasestr(query_no_space, "a.attname") != nullptr &&
+				strcasestr(query_no_space, "pg_get_expr") != nullptr) {
+				matched_describe_pattern = true;
+
+				// Use table name from session (already escaped in first query)
+				// Execute PRAGMA table_info and transform result
+				if (sess->describe_mode && sess->describe_table_name[0] != '\0') {
+					// Buffer: 25 fixed + 255 table name + null = 281, round to 320
+					char buf[320];
+					snprintf(buf, sizeof(buf), "PRAGMA table_info('%s')", sess->describe_table_name);
+					l_free(query_length, query);
+					query = l_strdup(buf);
+					query_length = strlen(query) + 1;
+					transform_pg_attribute_result = true;
+					goto __run_query;
+				}
+
+				// If we couldn't match table name, return error
+				error = strdup("describe mode not initialized - first describe query not executed");
+				proxy_error("Error: %s\n", error);
+				SPA->send_error_msg_to_client(sess, error);
+				run_query = false;
+				free(error);
+				error = nullptr;
+				goto __run_query;
+			}
+			// \\d tablename : Fourth query - get row-level security policies
+			// psql: SELECT pol.polname, pol.polpermissive, CASE WHEN pol.polroles...,
+			//       pg_get_expr(pol.polqual, ...), pg_get_expr(pol.polwithcheck, ...),
+			//       CASE pol.polcmd WHEN 'r' THEN 'SELECT' ... END AS cmd
+			//       FROM pg_catalog.pg_policy pol WHERE pol.polrelid = 'tablename'
+			// SQLite doesn't have RLS policies, so return empty result
+			if (strcasestr(query_no_space, "FROM pg_catalog.pg_policy pol") != nullptr &&
+				strcasestr(query_no_space, "pol.polrelid =") != nullptr) {
+				matched_describe_pattern = true;
+
+				// Return empty result with correct column names and types
+				l_free(query_length, query);
+				query = l_strdup("SELECT '' AS polname, 't' AS polpermissive, NULL AS polroles, "
+								"NULL AS pg_get_expr_1, NULL AS pg_get_expr_2, '' AS cmd WHERE 0=1");
+				query_length = strlen(query) + 1;
+				goto __run_query;
+			}
+
+			// \\d tablename : Fifth query - get extended statistics objects
+			// psql: SELECT oid, stxrelid::regclass, stxnamespace::regnamespace::text AS nsp, stxname,
+			//       pg_get_statisticsobjdef_columns(oid) AS columns,
+			//       'd' = any(stxkind) AS ndist_enabled, 'f' = any(stxkind) AS deps_enabled,
+			//       'm' = any(stxkind) AS mcv_enabled, stxstattarget
+			//       FROM pg_catalog.pg_statistic_ext WHERE stxrelid = 'tablename'
+			// SQLite doesn't have extended statistics, so return empty result
+			if (strcasestr(query_no_space, "FROM pg_catalog.pg_statistic_ext") != nullptr &&
+				strcasestr(query_no_space, "stxrelid =") != nullptr) {
+				matched_describe_pattern = true;
+
+				// Return empty result with correct column names
+				l_free(query_length, query);
+				query = l_strdup("SELECT 0 AS oid, '' AS stxrelid, '' AS nsp, '' AS stxname, "
+								"NULL AS columns, 0 AS ndist_enabled, 0 AS deps_enabled, "
+								"0 AS mcv_enabled, 0 AS stxstattarget WHERE 0=1");
+				query_length = strlen(query) + 1;
+				goto __run_query;
+			}
+
+			// \\d tablename : Sixth query - get logical replication publications
+			// psql: Complex query joining pg_publication, pg_publication_namespace, pg_publication_rel, pg_class
+			//       to find publications that include the table
+			// SQLite doesn't have logical replication, so return empty result
+			if (strcasestr(query_no_space, "FROM pg_catalog.pg_publication p") != nullptr &&
+				strcasestr(query_no_space, "pg_relation_is_publishable") != nullptr) {
+				matched_describe_pattern = true;
+
+				// Return empty result with correct column names (3 columns: pubname, expr1, expr2)
+				l_free(query_length, query);
+				query = l_strdup("SELECT '' AS pubname, NULL AS prqual, NULL AS prattrs WHERE 0=1");
+				query_length = strlen(query) + 1;
+				goto __run_query;
+			}
+
+			// \\d tablename : Seventh query - get inheritance parents
+			// psql: SELECT c.oid::regclass FROM pg_class c, pg_inherits i
+			//       WHERE c.oid = i.inhparent AND i.inhrelid = 'tablename'
+			//       AND c.relkind != 'p' AND c.relkind != 'I' ORDER BY inhseqno
+			// SQLite doesn't have table inheritance, so return empty result
+			if (strcasestr(query_no_space, "FROM pg_catalog.pg_class c") != nullptr &&
+				strcasestr(query_no_space, "pg_catalog.pg_inherits i") != nullptr &&
+				strcasestr(query_no_space, "c.oid = i.inhparent") != nullptr &&
+				strcasestr(query_no_space, "i.inhrelid =") != nullptr) {
+				matched_describe_pattern = true;
+
+				// Return empty result with correct column name (oid as regclass)
+				l_free(query_length, query);
+				query = l_strdup("SELECT '' AS oid WHERE 0=1");
+				query_length = strlen(query) + 1;
+				goto __run_query;
+			}
+
+			// \\d tablename : Eighth query - get table partitions (child tables)
+			// psql: SELECT c.oid::regclass, c.relkind, inhdetachpending, pg_get_expr(c.relpartbound, c.oid)
+			//       FROM pg_class c, pg_inherits i WHERE c.oid = i.inhrelid AND i.inhparent = 'tablename'
+			//       ORDER BY pg_get_expr(c.relpartbound, c.oid) = 'DEFAULT', c.oid::regclass::text
+			// SQLite doesn't have table partitioning, so return empty result
+			if (strcasestr(query_no_space, "FROM pg_catalog.pg_class c") != nullptr &&
+				strcasestr(query_no_space, "pg_catalog.pg_inherits i") != nullptr &&
+				strcasestr(query_no_space, "c.oid = i.inhrelid") != nullptr &&
+				strcasestr(query_no_space, "i.inhparent =") != nullptr) {
+				matched_describe_pattern = true;
+
+				// Return empty result with correct column names
+				l_free(query_length, query);
+				query = l_strdup("SELECT '' AS oid, '' AS relkind, 0 AS inhdetachpending, NULL AS pg_get_expr WHERE 0=1");
+				query_length = strlen(query) + 1;
+				goto __run_query;
+			}
+
+			// \d tablename : Ninth query - get foreign key constraints (variant 1)
+			// psql: SELECT true as sametable, conname, pg_catalog.pg_get_constraintdef(r.oid, true) as condef,
+			//       conrelid::pg_catalog.regclass AS ontable FROM pg_catalog.pg_constraint r
+			//       WHERE r.conrelid = 'tablename' AND r.contype = 'f' AND conparentid = 0 ORDER BY conname
+			// SQLite doesn't have pg_constraint catalog, so return empty result
+			if (strcasestr(query_no_space, "FROM pg_catalog.pg_constraint r") != nullptr &&
+			    strcasestr(query_no_space, "r.contype = 'f'") != nullptr) {
+				matched_describe_pattern = true;
+
+				// Return empty result with correct column names
+				l_free(query_length, query);
+				query = l_strdup("SELECT 1 AS sametable, '' AS conname, '' AS condef, '' AS ontable WHERE 0=1");
+				query_length = strlen(query) + 1;
+				goto __run_query;
+			}
+
+			// \d tablename : Tenth query - get foreign key constraints referencing table (variant 2 with partition ancestors)
+			// psql: SELECT conname, conrelid::pg_catalog.regclass AS ontable,
+			//       pg_catalog.pg_get_constraintdef(oid, true) AS condef FROM pg_catalog.pg_constraint c
+			//       WHERE confrelid IN (SELECT pg_catalog.pg_partition_ancestors('tablename')
+			//       UNION ALL VALUES ('tablename'::pg_catalog.regclass)) AND contype = 'f' AND conparentid = 0
+			// SQLite doesn't have pg_constraint or partitioning, so return empty result
+			if (strcasestr(query_no_space, "FROM pg_catalog.pg_constraint c") != nullptr &&
+			    strcasestr(query_no_space, "contype = 'f'") != nullptr &&
+			    strcasestr(query_no_space, "pg_partition_ancestors") != nullptr) {
+				matched_describe_pattern = true;
+
+				// Return empty result with correct column names
+				l_free(query_length, query);
+				query = l_strdup("SELECT '' AS conname, '' AS ontable, '' AS condef WHERE 0=1");
+				query_length = strlen(query) + 1;
+				goto __run_query;
+			}
+
+			// If this query didn't match any describe pattern, reset describe mode and clear table name
+			// This ensures the state is cleaned up after the \d sequence completes
+			if (!matched_describe_pattern) {
+				sess->describe_mode = false;
+				sess->describe_table_name[0] = '\0';
+			}
+		}
+	}
+
 	if (strncasecmp("SHOW ", query_no_space, 5)) {
 		goto __end_show_commands; // in the next block there are only SHOW commands
 	}
 
-	if (!strncasecmp("SHOW PROMETHEUS METRICS", query_no_space, strlen("SHOW PROMETHEUS METRICS"))) {
+	if (!strncasecmp("SHOW PROMETHEUS METRICS", query_no_space, sizeof("SHOW PROMETHEUS METRICS") - 1)) {
 		char* pta[1];
 		pta[0] = NULL;
 		SQLite3_result* resultset = new SQLite3_result(1);
@@ -3756,7 +5150,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
-	if (!strncasecmp("SHOW GLOBAL VARIABLES LIKE 'version'", query_no_space, strlen("SHOW GLOBAL VARIABLES LIKE 'version'"))) {
+	if (!strncasecmp("SHOW GLOBAL VARIABLES LIKE 'version'", query_no_space, sizeof("SHOW GLOBAL VARIABLES LIKE 'version'") - 1)) {
 		l_free(query_length,query);
 		char *q=(char *)"SELECT 'version' Variable_name, '%s' Value FROM global_variables WHERE Variable_name='admin-version'";
 		query_length=strlen(q)+20+strlen(PROXYSQL_VERSION);
@@ -3766,21 +5160,21 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	}
 
 
-	if (query_no_space_length==strlen("SHOW TABLES") && !strncasecmp("SHOW TABLES",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==sizeof("SHOW TABLES") - 1 && !strncasecmp("SHOW TABLES",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
 		query=l_strdup("SELECT name AS tables FROM sqlite_master WHERE type='table' AND name NOT IN ('sqlite_sequence') ORDER BY name");
 		query_length=strlen(query)+1;
 		goto __run_query;
 	}
 
-	if (query_no_space_length==strlen("SHOW CHARSET") && !strncasecmp("SHOW CHARSET",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==sizeof("SHOW CHARSET") - 1 && !strncasecmp("SHOW CHARSET",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
 		query=l_strdup("SELECT Charset, Collation AS 'Default collation' FROM mysql_collations WHERE `Default`='Yes'");
 		query_length=strlen(query)+1;
 		goto __run_query;
 	}
 
-	if (query_no_space_length==strlen("SHOW COLLATION") && !strncasecmp("SHOW COLLATION",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==sizeof("SHOW COLLATION") - 1 && !strncasecmp("SHOW COLLATION",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
 		query=l_strdup("SELECT * FROM mysql_collations");
 		query_length=strlen(query)+1;
@@ -3844,14 +5238,14 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
-	if (query_no_space_length==strlen("SHOW MYSQL USERS") && !strncasecmp("SHOW MYSQL USERS",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==sizeof("SHOW MYSQL USERS") - 1 && !strncasecmp("SHOW MYSQL USERS",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
 		query=l_strdup("SELECT * FROM mysql_users ORDER BY username, active DESC, username ASC");
 		query_length=strlen(query)+1;
 		goto __run_query;
 	}
 
-	if (query_no_space_length==strlen("SHOW MYSQL SERVERS") && !strncasecmp("SHOW MYSQL SERVERS",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==sizeof("SHOW MYSQL SERVERS") - 1 && !strncasecmp("SHOW MYSQL SERVERS",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
 		query=l_strdup("SELECT * FROM mysql_servers ORDER BY hostgroup_id, hostname, port");
 		query_length=strlen(query)+1;
@@ -3859,11 +5253,11 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	}
 
 	if (
-		(query_no_space_length==strlen("SHOW GLOBAL VARIABLES") && !strncasecmp("SHOW GLOBAL VARIABLES",query_no_space, query_no_space_length))
+		(query_no_space_length==sizeof("SHOW GLOBAL VARIABLES") - 1 && !strncasecmp("SHOW GLOBAL VARIABLES",query_no_space, query_no_space_length))
 		||
-		(query_no_space_length==strlen("SHOW ALL VARIABLES") && !strncasecmp("SHOW ALL VARIABLES",query_no_space, query_no_space_length))
+		(query_no_space_length==sizeof("SHOW ALL VARIABLES") - 1 && !strncasecmp("SHOW ALL VARIABLES",query_no_space, query_no_space_length))
 		||
-		(query_no_space_length==strlen("SHOW VARIABLES") && !strncasecmp("SHOW VARIABLES",query_no_space, query_no_space_length))
+		(query_no_space_length==sizeof("SHOW VARIABLES") - 1 && !strncasecmp("SHOW VARIABLES",query_no_space, query_no_space_length))
 	) {
 		l_free(query_length,query);
 		query=l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables ORDER BY variable_name");
@@ -3872,7 +5266,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	}
 
 	if (GloMyLdapAuth) {
-		if (query_no_space_length==strlen("SHOW LDAP VARIABLES") && !strncasecmp("SHOW LDAP VARIABLES",query_no_space, query_no_space_length)) {
+		if (query_no_space_length==sizeof("SHOW LDAP VARIABLES") - 1 && !strncasecmp("SHOW LDAP VARIABLES",query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
 			query=l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables WHERE variable_name LIKE 'ldap-\%' ORDER BY variable_name");
 			query_length=strlen(query)+1;
@@ -3880,21 +5274,21 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		}
 	}
 
-	if (query_no_space_length==strlen("SHOW ADMIN VARIABLES") && !strncasecmp("SHOW ADMIN VARIABLES",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==sizeof("SHOW ADMIN VARIABLES") - 1 && !strncasecmp("SHOW ADMIN VARIABLES",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
 		query=l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables WHERE variable_name LIKE 'admin-\%' ORDER BY variable_name");
 		query_length=strlen(query)+1;
 		goto __run_query;
 	}
 
-	if (query_no_space_length==strlen("SHOW MYSQL VARIABLES") && !strncasecmp("SHOW MYSQL VARIABLES",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==sizeof("SHOW MYSQL VARIABLES") - 1 && !strncasecmp("SHOW MYSQL VARIABLES",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
 		query=l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables WHERE variable_name LIKE 'mysql-\%' ORDER BY variable_name");
 		query_length=strlen(query)+1;
 		goto __run_query;
 	}
 
-	if (query_no_space_length==strlen("SHOW MYSQL STATUS") && !strncasecmp("SHOW MYSQL STATUS",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==sizeof("SHOW MYSQL STATUS") - 1 && !strncasecmp("SHOW MYSQL STATUS",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
 		query=l_strdup("SELECT Variable_Name AS Variable_name, Variable_Value AS Value FROM stats_mysql_global ORDER BY variable_name");
 		query_length=strlen(query)+1;
@@ -3902,18 +5296,44 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
-	if (query_no_space_length == strlen("SHOW PGSQL VARIABLES") && !strncasecmp("SHOW PGSQL VARIABLES", query_no_space, query_no_space_length)) {
+	if (query_no_space_length == sizeof("SHOW PGSQL VARIABLES") - 1 && !strncasecmp("SHOW PGSQL VARIABLES", query_no_space, query_no_space_length)) {
 		l_free(query_length, query);
 		query = l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables WHERE variable_name LIKE 'pgsql-\%' ORDER BY variable_name");
 		query_length = strlen(query) + 1;
 		goto __run_query;
 	}
 
-	if (query_no_space_length == strlen("SHOW PGSQL STATUS") && !strncasecmp("SHOW PGSQL STATUS", query_no_space, query_no_space_length)) {
+#ifdef PROXYSQLTSDB
+	if (query_no_space_length == sizeof("SHOW TSDB VARIABLES") - 1 && !strncasecmp("SHOW TSDB VARIABLES", query_no_space, query_no_space_length)) {
+		l_free(query_length, query);
+		query = l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables WHERE variable_name LIKE 'tsdb-%' ORDER BY variable_name");
+		query_length = strlen(query) + 1;
+		goto __run_query;
+	}
+#endif
+
+#ifdef PROXYSQLTSDB
+	if (query_no_space_length == sizeof("SHOW TSDB STATUS") - 1 && !strncasecmp("SHOW TSDB STATUS", query_no_space, query_no_space_length)) {
+		l_free(query_length, query);
+		query = l_strdup("SELECT Variable_Name AS Variable_name, Variable_Value AS Value FROM stats_tsdb ORDER BY Variable_name");
+		query_length = strlen(query) + 1;
+		SPA->stats___tsdb();
+		goto __run_query;
+	}
+#endif
+
+	if (query_no_space_length == sizeof("SHOW PGSQL STATUS") - 1 && !strncasecmp("SHOW PGSQL STATUS", query_no_space, query_no_space_length)) {
 		l_free(query_length, query);
 		query = l_strdup("SELECT Variable_Name AS Variable_name, Variable_Value AS Value FROM stats_pgsql_global ORDER BY variable_name");
 		query_length = strlen(query) + 1;
 		GloAdmin->stats___pgsql_global();
+		goto __run_query;
+	}
+
+	if (query_no_space_length == sizeof("SHOW MCP VARIABLES") - 1 && !strncasecmp("SHOW MCP VARIABLES", query_no_space, query_no_space_length)) {
+		l_free(query_length, query);
+		query = l_strdup("SELECT variable_name AS Variable_name, variable_value AS Value FROM global_variables WHERE variable_name LIKE 'mcp-%' ORDER BY variable_name");
+		query_length = strlen(query) + 1;
 		goto __run_query;
 	}
 
@@ -3924,25 +5344,33 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		strBl=strlen(strB);
 		char *dbh=NULL;
 		char *tbh=NULL;
+		bool tbh_uses_l_alloc = false;
 		c_split_2(query_no_space+strAl,".",&dbh,&tbh);
 
-		if (strlen(tbh)==0) {
+		if (std::string_view(tbh).empty()) {
 			free(tbh);
 			tbh=dbh;
 			dbh=strdup("main");
 		}
-		if (strlen(tbh)>=3 && tbh[0]=='`' && tbh[strlen(tbh)-1]=='`') { // tablename is quoted
-			char *tbh_tmp=(char *)malloc(strlen(tbh)-1);
-			strncpy(tbh_tmp,tbh+1,strlen(tbh)-2);
-			tbh_tmp[strlen(tbh)-2]=0;
-			free(tbh);
-			tbh=tbh_tmp;
-		}
+	const size_t tbh_len = std::string_view(tbh).size();
+	if (tbh_len>=3 && tbh[0]=='`' && tbh[tbh_len-1]=='`') { // tablename is quoted
+		char *tbh_tmp=(char *)l_alloc(tbh_len-1);
+		size_t quoted_len = tbh_len - 2;
+		memcpy(tbh_tmp,tbh+1,quoted_len);
+		tbh_tmp[quoted_len]=0;
+		free(tbh);
+		tbh=tbh_tmp;
+		tbh_uses_l_alloc = true;
+	}
 		int l=strBl+strlen(tbh)*3+strlen(dbh)-8;
 		char *buff=(char *)l_alloc(l+1);
 		snprintf(buff,l+1,strB,tbh,tbh,dbh,tbh);
 		buff[l]=0;
-		free(tbh);
+		if (tbh_uses_l_alloc) {
+			l_free(tbh_len-1,tbh);
+		} else {
+			free(tbh);
+		}
 		free(dbh);
 		l_free(query_length,query);
 		query=buff;
@@ -3951,9 +5379,9 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	}
 
 	if (
-		(query_no_space_length==strlen("SHOW DATABASES") && !strncasecmp("SHOW DATABASES",query_no_space, query_no_space_length))
+		(query_no_space_length==sizeof("SHOW DATABASES") - 1 && !strncasecmp("SHOW DATABASES",query_no_space, query_no_space_length))
 		||
-		(query_no_space_length==strlen("SHOW SCHEMAS") && !strncasecmp("SHOW SCHEMAS",query_no_space, query_no_space_length))
+		(query_no_space_length==sizeof("SHOW SCHEMAS") - 1 && !strncasecmp("SHOW SCHEMAS",query_no_space, query_no_space_length))
 	) {
 		l_free(query_length,query);
 		query=l_strdup("PRAGMA DATABASE_LIST");
@@ -3961,42 +5389,42 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
-	if (query_no_space_length==strlen("SHOW FULL PROCESSLIST") && !strncasecmp("SHOW FULL PROCESSLIST",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==sizeof("SHOW FULL PROCESSLIST") - 1 && !strncasecmp("SHOW FULL PROCESSLIST",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
 		query=l_strdup("SELECT * FROM stats_mysql_processlist");
 		query_length=strlen(query)+1;
 		goto __run_query;
 	}
 
-	if (query_no_space_length==strlen("SHOW PROCESSLIST") && !strncasecmp("SHOW PROCESSLIST",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==sizeof("SHOW PROCESSLIST") - 1 && !strncasecmp("SHOW PROCESSLIST",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
 		query=l_strdup("SELECT SessionID, user, db, hostgroup, command, time_ms, info FROM stats_mysql_processlist");
 		query_length=strlen(query)+1;
 		goto __run_query;
 	}
 
-	if (query_no_space_length == strlen("SHOW FULL PGSQL PROCESSLIST") && !strncasecmp("SHOW FULL PGSQL PROCESSLIST", query_no_space, query_no_space_length)) {
+	if (query_no_space_length == sizeof("SHOW FULL PGSQL PROCESSLIST") - 1 && !strncasecmp("SHOW FULL PGSQL PROCESSLIST", query_no_space, query_no_space_length)) {
 		l_free(query_length, query);
 		query = l_strdup("SELECT * FROM stats_pgsql_processlist");
 		query_length = strlen(query) + 1;
 		goto __run_query;
 	}
 
-	if (query_no_space_length == strlen("SHOW FULL PGSQL ACTIVITY") && !strncasecmp("SHOW FULL PGSQL ACTIVITY", query_no_space, query_no_space_length)) {
+	if (query_no_space_length == sizeof("SHOW FULL PGSQL ACTIVITY") - 1 && !strncasecmp("SHOW FULL PGSQL ACTIVITY", query_no_space, query_no_space_length)) {
 		l_free(query_length, query);
 		query = l_strdup("SELECT * FROM stats_pgsql_stat_activity");
 		query_length = strlen(query) + 1;
 		goto __run_query;
 	}
 
-	if (query_no_space_length == strlen("SHOW PGSQL PROCESSLIST") && !strncasecmp("SHOW PGSQL PROCESSLIST", query_no_space, query_no_space_length)) {
+	if (query_no_space_length == sizeof("SHOW PGSQL PROCESSLIST") - 1 && !strncasecmp("SHOW PGSQL PROCESSLIST", query_no_space, query_no_space_length)) {
 		l_free(query_length, query);
 		query = l_strdup("SELECT SessionID, user, database, hostgroup, backend_pid, backend_state, command, time_ms, info FROM stats_pgsql_processlist");
 		query_length = strlen(query) + 1;
 		goto __run_query;
 	}
 
-	if (query_no_space_length == strlen("SHOW PGSQL ACTIVITY") && !strncasecmp("SHOW PGSQL ACTIVITY", query_no_space, query_no_space_length)) {
+	if (query_no_space_length == sizeof("SHOW PGSQL ACTIVITY") - 1 && !strncasecmp("SHOW PGSQL ACTIVITY", query_no_space, query_no_space_length)) {
 		l_free(query_length, query);
 		query = l_strdup("SELECT datname, pid, usename, hostgroup, backend_pid, state, command, duration_ms, query FROM stats_pgsql_stat_activity");
 		query_length = strlen(query) + 1;
@@ -4005,7 +5433,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 
 __end_show_commands:
 
-	if (query_no_space_length==strlen("SELECT DATABASE()") && !strncasecmp("SELECT DATABASE()",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==sizeof("SELECT DATABASE()") - 1 && !strncasecmp("SELECT DATABASE()",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 			query=l_strdup("SELECT \"admin\" AS 'DATABASE()'");
@@ -4017,7 +5445,7 @@ __end_show_commands:
 	}
 
 	// see issue #1022
-	if (query_no_space_length==strlen("SELECT DATABASE() AS name") && !strncasecmp("SELECT DATABASE() AS name",query_no_space, query_no_space_length)) {
+	if (query_no_space_length==sizeof("SELECT DATABASE() AS name") - 1 && !strncasecmp("SELECT DATABASE() AS name",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 			query=l_strdup("SELECT \"admin\" AS 'name'");
@@ -4098,6 +5526,14 @@ __run_query:
 			}
 		}
 		if (error == NULL) {
+			// Transform PRAGMA table_info result to pg_attribute format if needed
+			if (transform_pg_attribute_result && resultset) {
+				SQLite3_result* transformed = transform_pragma_table_info_to_pg_attribute(resultset);
+				if (transformed != resultset) {
+					delete resultset;
+					resultset = transformed;
+				}
+			}
 
 			if constexpr (std::is_same_v<S, MySQL_Session>) {
 				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
@@ -4128,7 +5564,7 @@ __run_query:
 		pthread_mutex_unlock(&pa->sql_query_global_mutex);
 	} else {
 		// The admin module may have already been freed in case of "PROXYSQL STOP"
-		if (strcasecmp(query_no_space, "PROXYSQL STOP") == 0) {
+		if (query_no_space && strcasecmp(query_no_space, "PROXYSQL STOP") == 0) {
 			// Command is "PROXYSQL STOP"
 			if (admin_nostart_ && __sync_fetch_and_add((uint8_t*)&GloVars.global.nostart, 0)) {
 				pthread_mutex_unlock(&pa->sql_query_global_mutex);
@@ -4137,11 +5573,15 @@ __run_query:
 			pthread_mutex_unlock(&pa->sql_query_global_mutex);
 		}
 	}
-	l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
-	l_free(query_length,query);
+
+	if (query_no_space) {
+		l_free(query_length, query_no_space);
+	}
+	if (query) {
+		l_free(query_length, query);
+	}
 }
 
 // Explicitly instantiate the required template class and member functions
 template void admin_session_handler<MySQL_Session>(MySQL_Session* sess, void *_pa, PtrSize_t *pkt);
 template void admin_session_handler<PgSQL_Session>(PgSQL_Session* sess, void *_pa, PtrSize_t *pkt);
-

@@ -8,8 +8,14 @@ get_file_size (const char *filename) {
 	fp = fopen (filename, "rb");
 	if (fp) {
 		long size;
-		if ((0 != fseek (fp, 0, SEEK_END)) || (-1 == (size = ftell (fp))))
+		if (fseek (fp, 0, SEEK_END) != 0) {
 			size = 0;
+		} else {
+			size = ftell (fp);
+			if (size == -1) {
+				size = 0;
+			}
+		}
 		fclose (fp);
 		return size;
 	} else
@@ -38,6 +44,11 @@ static char * load_file (const char *filename) {
 	}
 	fclose (fp);
 	return buffer;
+}
+
+static char *make_ssl_path(const char *datadir, const char *filename) {
+	const std::string path = std::string(datadir) + "/" + filename;
+	return l_strdup(path.c_str());
 }
 
 // absolute path of ssl files
@@ -144,17 +155,17 @@ void write_x509(const char *filen, X509 *x) {
 	BIO_free_all( x509file );
 }
 
-void write_rsa_key(const char *filen, RSA *rsa) {
+void write_rsa_key(const char *filen, EVP_PKEY *pkey) {
 	BIO* pOut = BIO_new_file(filen, "w");
 	if (!pOut) {
 		proxy_error("Error on BIO_new_file\n");
 		exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
 	}
-	if (!PEM_write_bio_RSAPrivateKey( pOut, rsa, NULL, NULL, 0, NULL, NULL)) {
-		proxy_error("Error on PEM_write_bio_RSAPrivateKey for %s\n", filen);
+	if (!PEM_write_bio_PrivateKey(pOut, pkey, NULL, NULL, 0, NULL, NULL)) {
+		proxy_error("Error on PEM_write_bio_PrivateKey for %s\n", filen);
 		exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
 	}
-	BIO_free_all( pOut );
+	BIO_free_all(pOut);
 }
 
 
@@ -216,10 +227,9 @@ X509 * proxy_read_x509(const char *filen, bool bootstrap, std::string& msg) {
 
 // return 0 un success
 int ssl_mkit(X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days, bool bootstrap, std::string& msg) {
-	X509 *x1;
-	X509 *x2;
-	EVP_PKEY *pk;
-	RSA *rsa;
+	X509 *x1 = NULL;
+	X509 *x2 = NULL;
+	EVP_PKEY *pk = NULL;
 
 	// relative path to datadir of ssl files
 	const char * ssl_key_rp = (const char *)"proxysql-key.pem";
@@ -234,24 +244,39 @@ int ssl_mkit(X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days, boo
 
 	// check if files exists
 	if (bootstrap == true) {
-		ssl_key_fp = (char *)malloc(strlen(GloVars.datadir)+strlen(ssl_key_rp)+8);
-		sprintf(ssl_key_fp,"%s/%s",GloVars.datadir,ssl_key_rp);
+		ssl_key_fp = make_ssl_path(GloVars.datadir, ssl_key_rp);
+		if (ssl_key_fp == NULL) {
+			msg = "Unable to allocate memory for the TLS key path";
+			return 1;
+		}
 	}
 	if (access(ssl_key_fp, R_OK)) {
 		ssl_key_exists = false;
 	}
 
 	if (bootstrap == true) {
-		ssl_cert_fp = (char *)malloc(strlen(GloVars.datadir)+strlen(ssl_cert_rp)+8);
-		sprintf(ssl_cert_fp,"%s/%s",GloVars.datadir,ssl_cert_rp);
+		ssl_cert_fp = make_ssl_path(GloVars.datadir, ssl_cert_rp);
+		if (ssl_cert_fp == NULL) {
+			l_free(0, ssl_key_fp);
+			ssl_key_fp = NULL;
+			msg = "Unable to allocate memory for the TLS certificate path";
+			return 1;
+		}
 	}
 	if (access(ssl_cert_fp, R_OK)) {
 		ssl_cert_exists = false;
 	}
 
 	if (bootstrap == true) {
-		ssl_ca_fp = (char *)malloc(strlen(GloVars.datadir)+strlen(ssl_ca_rp)+8);
-		sprintf(ssl_ca_fp,"%s/%s",GloVars.datadir,ssl_ca_rp);
+		ssl_ca_fp = make_ssl_path(GloVars.datadir, ssl_ca_rp);
+		if (ssl_ca_fp == NULL) {
+			l_free(0, ssl_key_fp);
+			l_free(0, ssl_cert_fp);
+			ssl_key_fp = NULL;
+			ssl_cert_fp = NULL;
+			msg = "Unable to allocate memory for the TLS CA path";
+			return 1;
+		}
 	}
 	if (access(ssl_ca_fp, R_OK)) {
 		ssl_ca_exists = false;
@@ -286,46 +311,38 @@ int ssl_mkit(X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days, boo
 	if (bootstrap == true && nfiles == 0) {
 		proxy_info("No SSL keys/certificates found in datadir (%s). Generating new keys/certificates.\n", GloVars.datadir);
 		if ((pkeyp == NULL) || (*pkeyp == NULL)) {
-			if ((pk = EVP_PKEY_new()) == NULL) {
-				proxy_error("Unable to run EVP_PKEY_new()\n");
+			// Generate RSA key using OpenSSL 3.0 EVP_PKEY API
+			EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new_from_name(NULL, "RSA", NULL);
+			if (!ctx) {
+				proxy_error("Unable to create EVP_PKEY_CTX for RSA\n");
 				exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
 			}
+			if (EVP_PKEY_keygen_init(ctx) <= 0) {
+				proxy_error("Unable to initialize EVP_PKEY keygen\n");
+				EVP_PKEY_CTX_free(ctx);
+				exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+			}
+			if (EVP_PKEY_CTX_set_rsa_keygen_bits(ctx, bits) <= 0) {
+				proxy_error("Unable to set RSA key size\n");
+				EVP_PKEY_CTX_free(ctx);
+				exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+			}
+			if (EVP_PKEY_generate(ctx, &pk) <= 0) {
+				proxy_error("Unable to generate RSA key: %s\n", ERR_error_string(ERR_get_error(), NULL));
+				EVP_PKEY_CTX_free(ctx);
+				exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+			}
+			EVP_PKEY_CTX_free(ctx);
 		} else
 			pk = *pkeyp;
 
-		rsa = RSA_new();
+		write_rsa_key(ssl_key_fp, pk);
 
-		if (!rsa) {
-			proxy_error("Unable to run RSA_new()\n");
-			exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
-		}
-		BIGNUM *e= BN_new();
-		if (!e) {
-			proxy_error("Unable to run BN_new()\n");
-			exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
-		}
-		if (!BN_set_word(e, RSA_F4) || !RSA_generate_key_ex(rsa, bits, e, NULL)) {
-			RSA_free(rsa);
-			BN_free(e);
-			proxy_error("Unable to run BN_new()\n");
-			exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
-		}
-		BN_free(e);
-
-
-		write_rsa_key(ssl_key_fp, rsa);
-
-		if (!EVP_PKEY_assign_RSA(pk, rsa)) {
-			proxy_error("Unable to run EVP_PKEY_assign_RSA()\n");
-			exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
-		}
 		time_t t = time(NULL);
 		x1 = generate_x509(pk, (const unsigned char *)"ProxySQL_Auto_Generated_CA_Certificate", t, 3650, NULL, NULL);
 		write_x509(ssl_ca_fp, x1);
 		x2 = generate_x509(pk, (const unsigned char *)"ProxySQL_Auto_Generated_Server_Certificate", t, 3650, x1, pk);
 		write_x509(ssl_cert_fp, x2);
-
-		rsa = NULL;
 	} else {
 		proxy_info("SSL keys/certificates found in datadir (%s): loading them.\n", GloVars.datadir);
 		if (bootstrap == true) {
@@ -415,6 +432,20 @@ int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg) {
 		// clients (MySQL > 8.0.29) attempt session reuses during reconnect operations.
 		SSL_CTX_set_options(GloVars.global.ssl_ctx, SSL_OP_NO_TICKET);
 		SSL_CTX_set_session_cache_mode(GloVars.global.ssl_ctx, SSL_SESS_CACHE_OFF);
+
+		// Store TLS file paths and tracking info for stats table
+		{
+			std::lock_guard<std::mutex> lock(GloVars.global.ssl_mutex);
+			free(GloVars.global.tls_key_file);
+			GloVars.global.tls_key_file = ssl_key_fp ? strdup(ssl_key_fp) : NULL;
+			free(GloVars.global.tls_cert_file);
+			GloVars.global.tls_cert_file = ssl_cert_fp ? strdup(ssl_cert_fp) : NULL;
+			free(GloVars.global.tls_ca_file);
+			GloVars.global.tls_ca_file = ssl_ca_fp ? strdup(ssl_ca_fp) : NULL;
+			GloVars.global.tls_load_count++;
+			GloVars.global.tls_last_load_timestamp = time(NULL);
+			GloVars.global.tls_last_load_ok = true;
+		}
 	} else {
 		// here we use global.tmp_ssl_ctx instead of global.ssl_ctx
 		// because we will try to swap at the end
@@ -434,6 +465,16 @@ int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg) {
 							free(GloVars.global.ssl_cert_pem_mem);
 							GloVars.global.ssl_key_pem_mem = load_file(ssl_key_fp);
         					GloVars.global.ssl_cert_pem_mem = load_file(ssl_cert_fp);
+							// Update TLS tracking fields for stats table (under ssl_mutex)
+							free(GloVars.global.tls_key_file);
+							GloVars.global.tls_key_file = ssl_key_fp ? strdup(ssl_key_fp) : NULL;
+							free(GloVars.global.tls_cert_file);
+							GloVars.global.tls_cert_file = ssl_cert_fp ? strdup(ssl_cert_fp) : NULL;
+							free(GloVars.global.tls_ca_file);
+							GloVars.global.tls_ca_file = ssl_ca_fp ? strdup(ssl_ca_fp) : NULL;
+							GloVars.global.tls_load_count++;
+							GloVars.global.tls_last_load_timestamp = time(NULL);
+							GloVars.global.tls_last_load_ok = true;
 
 							} else {
 								proxy_error("Failed to load location of CA certificates for verification\n");
@@ -470,6 +511,12 @@ int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg) {
 		// Completely disable session tickets and session-cache. See comment above.
 		SSL_CTX_set_options(GloVars.global.ssl_ctx, SSL_OP_NO_TICKET);
 		SSL_CTX_set_session_cache_mode(GloVars.global.ssl_ctx, SSL_SESS_CACHE_OFF);
+	} else if (!bootstrap) {
+		// Record reload failure in TLS tracking stats
+		std::lock_guard<std::mutex> lock(GloVars.global.ssl_mutex);
+		GloVars.global.tls_load_count++;
+		GloVars.global.tls_last_load_timestamp = time(NULL);
+		GloVars.global.tls_last_load_ok = false;
 	}
 	X509_free(x509);
 	EVP_PKEY_free(pkey);
@@ -478,4 +525,3 @@ int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg) {
 	BIO_free(bio_err);
 	return ret;
 }
-

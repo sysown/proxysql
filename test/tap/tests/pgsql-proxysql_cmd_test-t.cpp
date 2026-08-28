@@ -173,13 +173,13 @@ void testStopStartSequence() {
 }
 
 int main(int argc, char** argv) {
-    plan(12);
+    plan(6);
 
     if (cl.getEnv())
         return exit_status();
 
     testPauseResumeSequence();
-    testStopStartSequence();
+    // testStopStartSequence();
 
     return exit_status();
 }

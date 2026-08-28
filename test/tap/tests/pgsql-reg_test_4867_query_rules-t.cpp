@@ -122,21 +122,21 @@ int next_val(ValueGenerator* vg) {
 
 char* unique_str(ValueGenerator* vg, const char* field) {
     char* str = (char*)malloc(32);
-    sprintf(str, "%s_%d", field, next_val(vg));
+    snprintf(str, 32, "%s_%d", field, next_val(vg));
     return str;
 }
 
 char* unique_ip(ValueGenerator* vg) {
-    char* ip = (char*)malloc(16);
-    int octet = vg->base + vg->offset++;
-    sprintf(ip, "%d.%d.%d.%d",
+    char* ip = (char*)malloc(24);
+    unsigned int octet = vg->base + vg->offset++;
+    snprintf(ip, 24, "%u.%u.%u.%u",
         octet % 256, (octet + 1) % 256, (octet + 2) % 256, (octet + 3) % 256);
     return ip;
 }
 
 char* unique_json(ValueGenerator* vg) {
     char* json = (char*)malloc(50);
-    sprintf(json, "{\"%s\":%d}", "unique_key", next_val(vg));
+    snprintf(json, 50, "{\"%s\":%d}", "unique_key", next_val(vg));
     return json;
 }
 
@@ -343,7 +343,7 @@ bool check_result(PGresult* res, RuleData* expected, bool runtime_table) {
 
         // converting digest to hex string
         char hex_string[20];
-        sprintf(hex_string, "0x%016X", expected->digest);
+        snprintf(hex_string, sizeof(hex_string), "0x%016X", expected->digest);
         f = PQfnumber(res, "digest");
         if (!compare_str(PQgetvalue(res, 0, f), hex_string)) {
             match = false;
@@ -515,7 +515,7 @@ int main() {
     // Check rules in runtime table
     for (int i = 0; i < num_tests; i++) {
         char query[256];
-        sprintf(query, "SELECT * FROM runtime_pgsql_query_rules WHERE rule_id = %d", rule_ids[i]);
+        snprintf(query, sizeof(query), "SELECT * FROM runtime_pgsql_query_rules WHERE rule_id = %d", rule_ids[i]);
         PGresult* res = PQexec(conn.get(), query);
         if (PQresultStatus(res) != PGRES_TUPLES_OK || PQntuples(res) == 0) {
             fprintf(stderr, "Rule %d not found\n", rule_ids[i]);
@@ -536,7 +536,7 @@ int main() {
     // Check rules in runtime table
     for (int i = 0; i < num_tests; i++) {
         char query[256];
-        sprintf(query, "SELECT * FROM disk.pgsql_query_rules WHERE rule_id = %d", rule_ids[i]);
+        snprintf(query, sizeof(query), "SELECT * FROM disk.pgsql_query_rules WHERE rule_id = %d", rule_ids[i]);
         PGresult* res = PQexec(conn.get(), query);
         if (PQresultStatus(res) != PGRES_TUPLES_OK || PQntuples(res) == 0) {
             fprintf(stderr, "Rule %d not found\n", rule_ids[i]);

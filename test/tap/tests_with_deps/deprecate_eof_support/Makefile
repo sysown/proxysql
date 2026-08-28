@@ -37,7 +37,7 @@ LDIRS :=	-L$(TAP_LDIR) \
 			-L$(POSTGRESQL_LDIR) \
 			-L$(SSL_LDIR) 
 
-OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed -Wl,-rpath,"../../tap" $(WGCOV) $(WASAN)
+OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV) $(WASAN)
 
 
 ### main targets
@@ -51,7 +51,7 @@ all: tests
 
 .PHONY: debug
 debug: DEBUG := -DDEBUG
-debug: OPT := $(STDCPP) -O0 -DDEBUG -ggdb -Wl,--no-as-needed -Wl,-rpath,"../../tap" $(WGCOV) $(WASAN)
+debug: OPT := $(STDCPP) -O0 -DDEBUG -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV) $(WASAN)
 debug: tests
 
 
@@ -78,7 +78,7 @@ tests:
 	@echo "Removing empty .gcno files ..."
 	find -L . -type f -name '*.gcno' -empty -ls -delete
 
-COMMONARGS = $(OPT) -Wl,-Bdynamic -ltap -lcpp_dotenv -lcurl -lre2 -lssl -lcrypto -lz -ldl -lpthread -DGITVERSION=\"$(GIT_VERSION)\"
+COMMONARGS = $(OPT) -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl,-rpath,$(RE2_LDIR) -Wl,-Bdynamic -ltap -lcpp_dotenv -lcurl -lre2 -lssl -lcrypto -lz -ldl -lpthread -DGITVERSION=\"$(GIT_VERSION)\"
 
 ok_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp
 	$(CXX) $< -I$(MARIADB_IDIR) $(IDIRS) -L$(MARIADB_LDIR) $(LDIRS) -lmariadbclient $(COMMONARGS) -o $@
@@ -90,12 +90,23 @@ fwd_eof_query: fwd_eof_query.cpp
 	$(CXX) -DNON_EOF_SUPPORT $< -I$(TEST_MARIADB_IDIR) $(IDIRS) -L$(TEST_MARIADB_LDIR) $(LDIRS) -lmariadbclient $(COMMONARGS) -o $@
 
 # NOTE: Compilation with 'libmysql' instead of 'libmariadb' client to confirm packet sequence id isn't check by 'libmariadb'
+#
+# fwd_eof_ok_query is linked against libmysqlclient (Oracle MySQL connector),
+# so we must compile against libmysqlclient's mysql.h to avoid an ABI mismatch
+# in the MYSQL struct layout. With MariaDB headers in front, sizeof(MYSQL) and
+# offsetof(MYSQL,server_status) differ from what libmysqlclient's mysql_init()
+# allocates, and proxy->server_status reads past the end of the allocation
+# (returning heap-adjacent garbage that looked like the proxysql port number).
+# See issue #5781 for the analysis.
 fwd_eof_ok_query: fwd_eof_query.cpp
-	$(CXX) $< -I$(TEST_MARIADB_IDIR) -I$(TEST_MYSQL_IDIR) -I$(TEST_MYSQL_EDIR) $(IDIRS) -L$(TEST_MYSQL_LDIR) $(LDIRS) -lmysqlclient $(COMMONARGS) -o $@
+	$(CXX) $< -I$(TEST_MYSQL_IDIR) -I$(TEST_MYSQL_EDIR) -I$(TEST_MARIADB_IDIR) $(IDIRS) -L$(TEST_MYSQL_LDIR) $(LDIRS) -lmysqlclient $(COMMONARGS) -o $@
 # NOTE end
 
 deprecate_eof_cache-t: deprecate_eof_cache-t.cpp
 	$(CXX) $< -I$(TEST_MARIADB_IDIR) $(IDIRS) -L$(TEST_MARIADB_LDIR) $(LDIRS) $(PROXYSQL_LDIR)/proxysql_utils.cpp -lmariadbclient $(COMMONARGS) -o $@
+
+eof_cache_conversion_workload-t: eof_cache_conversion_workload-t.cpp
+	$(CXX) $< -I$(TEST_MARIADB_IDIR) $(IDIRS) -L$(TEST_MARIADB_LDIR) $(LDIRS) $(COMMONARGS) -lmariadbclient -o $@
 
 eof_cache_mixed_flags-t: eof_cache_mixed_flags-t.cpp
 	$(CXX) $< -I$(TEST_MARIADB_IDIR) $(IDIRS) -L$(TEST_MARIADB_LDIR) $(LDIRS) -lmariadbclient $(COMMONARGS) -o $@

@@ -95,14 +95,16 @@ int main(int argc, char** argv) {
 	std::string var_charset_results = "character_set_results";
 	std::string var_value;
 
+	// Accept both 'utf8' and 'utf8mb3' — they are the same charset.
+	// MySQL 8.4+ reports 'utf8mb3', older versions report 'utf8'.
 	show_variable(mysql, var_charset_client, var_value);
-	ok(var_value.compare("utf8") == 0, "Initial client character set. Actual %s", var_value.c_str()); // ok_1
+	ok(var_value == "utf8" || var_value == "utf8mb3", "Initial client character set. Actual %s", var_value.c_str()); // ok_1
 
 	show_variable(mysql, var_charset_connection, var_value);
-	ok(var_value.compare("utf8") == 0, "Initial connection character set. Actual %s", var_value.c_str()); // ok_2
+	ok(var_value == "utf8" || var_value == "utf8mb3", "Initial connection character set. Actual %s", var_value.c_str()); // ok_2
 
 	show_variable(mysql, var_charset_results, var_value);
-	ok(var_value.compare("utf8") == 0, "Initial results character set. Actual %s", var_value.c_str()); // ok_3
+	ok(var_value == "utf8" || var_value == "utf8mb3", "Initial results character set. Actual %s", var_value.c_str()); // ok_3
 
 	if (mysql_query(mysql, "set character set latin1")) {
 	    fprintf(stderr, "SET CHARACTER SET : Error: %s\n",

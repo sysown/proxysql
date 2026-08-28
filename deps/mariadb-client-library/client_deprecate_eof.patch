@@ -486,17 +486,18 @@ index 75e3c9a4..916024a8 100644
    {
      if (mysql->net.last_errno == CR_SERVER_LOST)
        my_set_error(mysql, CR_SERVER_LOST, SQLSTATE_UNKNOWN,
-@@ -1894,6 +2049,16 @@ restart:
+@@ -1894,6 +2049,17 @@ restart:
      }
    }
  
-+  /* If client flags doesn't have 'deprecate_eof' we forcely disable the server capability,
-+   * This, in combination with the capability flag 'CLIENT_DEPRECATE_EOF' being disabled by default,
-+   * completely disables the library support for CLIENT_DEPRECATE_EOF. This two changes were introduced
-+   * as part of ProxySQL capability for controlling 'deprecate_eof' support in both client and
-+   * backend connections. For more context see: #3280.
++  /* `client_flag` is the effective request for this connection: mysql_real_connect()
++   * has already merged its public client-flag argument with mysql->options.client_flag.
++   * If that merged request omits CLIENT_DEPRECATE_EOF, hide support advertised by the
++   * server so the remaining result parser consistently expects legacy EOF packets.
++   * This check only removes an unrequested capability from the greeting; it must never
++   * add CLIENT_DEPRECATE_EOF when the server itself did not advertise support. See #3280.
 +   */
-+  if ((mysql->options.client_flag & CLIENT_DEPRECATE_EOF) == 0) {
++  if ((client_flag & CLIENT_DEPRECATE_EOF) == 0) {
 +    mysql->server_capabilities &= ~CLIENT_DEPRECATE_EOF;
 +  }
 +

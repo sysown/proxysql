@@ -29,6 +29,21 @@
 #ifdef PROXYSQLCLICKHOUSE
 #include "ClickHouse_Server.h"
 #endif /* PROXYSQLCLICKHOUSE */
+
+// All GenAI-tier headers have moved to plugins/genai/include/ over
+// the carve-out:
+//   Step 3: Anomaly_Detector.h
+//   Step 4.C: Admin/Cache/Config/Observe/Stats/MCP_Tool/MySQL/Query
+//             tool handlers, MCP_Endpoint, MCP_Thread,
+//             ProxySQL_MCP_Server, MySQL_FTS
+//   Step 5:   GenAI_Thread, LLM_Bridge, LLM_Clients,
+//             AI_Features_Manager, AI_Tool_Handler, RAG_Tool_Handler
+//   Step 6:   AI_Vector_Storage, MySQL_Catalog, Discovery_Schema,
+//             Static_Harvester, PgSQL_Static_Harvester
+// PROXYSQLGENAI is no longer a build flag — PROXYSQL40=1 builds and
+// packages all v4.0 plugins (mysqlx, genai/MCP, ...).  All
+// genai/MCP/AI/RAG code lives in plugins/genai/.
+
 #include "MySQL_HostGroups_Manager.h"
 #include "PgSQL_HostGroups_Manager.h"
 #include "PgSQL_Connection.h"

@@ -74,22 +74,21 @@ int next_val(ValueGenerator* vg) {
 }
 
 char* unique_str(ValueGenerator* vg, const char* field) {
-    char* str = (char*)malloc(32);
-    sprintf(str, "%s_%d", field, next_val(vg));
-    return str;
+    const std::string value = std::string(field) + "_" + std::to_string(next_val(vg));
+    return strdup(value.c_str());
 }
 
 char* unique_ip(ValueGenerator* vg) {
-    char* ip = (char*)malloc(16);
-    int octet = vg->base + vg->offset++;
-    sprintf(ip, "%d.%d.%d.%d",
+    char* ip = (char*)malloc(24);
+    unsigned int octet = vg->base + vg->offset++;
+    snprintf(ip, 24, "%u.%u.%u.%u",
         octet % 256, (octet + 1) % 256, (octet + 2) % 256, (octet + 3) % 256);
     return ip;
 }
 
 char* unique_json(ValueGenerator* vg) {
     char* json = (char*)malloc(50);
-    sprintf(json, "{\"%s\":%d}", "unique_key", next_val(vg));
+    snprintf(json, 50, "{\"%s\":%d}", "unique_key", next_val(vg));
     return json;
 }
 
@@ -136,13 +135,17 @@ char* psprintf(const char* fmt, ...) {
 }
 
 char* escape_str(MYSQL* mysql, const char* str) {
-    if (!str) return strdup("NULL");
-    char* escaped = (char*)malloc(2 * strlen(str) + 1);
-    mysql_real_escape_string(mysql, escaped, str, strlen(str));
-    char* result = (char*)malloc(strlen(escaped) + 3);
-    sprintf(result, "'%s'", escaped);
-    free(escaped);
-    return result;
+	if (!str) return strdup("NULL");
+	const std::string input(str);
+	const size_t input_len = input.size();
+	std::string escaped(2 * input_len + 1, '\0');
+	const unsigned long escaped_len = mysql_real_escape_string(mysql, escaped.data(), input.c_str(), input_len);
+	std::string result;
+	result.reserve(escaped_len + 2);
+	result.push_back('\'');
+	result.append(escaped.data(), escaped_len);
+	result.push_back('\'');
+	return strdup(result.c_str());
 }
 
 // Build INSERT query for a rule
@@ -257,13 +260,13 @@ bool check_result(MYSQL_RES* res, RuleData* expected, bool runtime_table) {
     int field_idx = 1; // excluding rule_id
 #define COMPARE_INT(expected_val, col) \
         if (row[field_idx] == NULL) { \
-            if (expected_val != -1) { \
+            if ((expected_val) != -1) { \
                 diag("Expected %s to be %d, got NULL", #col, expected_val); \
                 match = false; \
             } \
         } else { \
             int val = atoi(row[field_idx]); \
-            if (val != expected_val) { \
+            if (val != (expected_val)) { \
                 diag("Expected %s to be %d, got %d", #col, expected_val, val); \
                 match = false; \
             } \
@@ -272,12 +275,12 @@ bool check_result(MYSQL_RES* res, RuleData* expected, bool runtime_table) {
 
 #define COMPARE_STR(expected_str, col) \
         if (row[field_idx] == NULL) { \
-            if (expected_str != NULL) { \
+            if ((expected_str) != NULL) { \
                 diag("Expected %s to be '%s', got NULL", #col, expected_str); \
                 match = false; \
             } \
         } else { \
-            if (strcmp(row[field_idx], expected_str ? expected_str : "") != 0) { \
+            if (strcmp(row[field_idx], (expected_str) ? (expected_str) : "") != 0) { \
                 diag("Expected %s to be '%s', got '%s'", #col, expected_str, row[field_idx]); \
                 match = false; \
             } \
@@ -297,7 +300,7 @@ bool check_result(MYSQL_RES* res, RuleData* expected, bool runtime_table) {
 
         // converting digest to hex string
         char hex_string[20];
-        sprintf(hex_string, "0x%016X", expected->digest);
+        snprintf(hex_string, sizeof(hex_string), "0x%016X", expected->digest);
 
         if (strcmp(row[field_idx], hex_string ? hex_string : "") != 0) {
                 diag("Expected digest to be '%s', got '%s'", hex_string, row[field_idx]);
@@ -392,7 +395,7 @@ int main() {
             MYSQL_ROW row;
             res = mysql_store_result(proxysql_admin);
             while ((row = mysql_fetch_row(res))) {
-                rule_ids[i] = atoll(row[0]);
+                rule_ids[i] = static_cast<int>(atoll(row[0]));
             }
             mysql_free_result(res);
         } else {
@@ -408,7 +411,7 @@ int main() {
     // Check rules in runtime table
     for (int i = 0; i < num_tests; i++) {
         char query[256];
-        sprintf(query, "SELECT * FROM runtime_mysql_query_rules WHERE rule_id = %d", rule_ids[i]);
+        snprintf(query, sizeof(query), "SELECT * FROM runtime_mysql_query_rules WHERE rule_id = %d", rule_ids[i]);
         MYSQL_QUERY_ON_ERR_CLEANUP(proxysql_admin, query);
         MYSQL_RES* res = mysql_store_result(proxysql_admin);
         if (!res || mysql_num_rows(res) == 0) {
@@ -429,7 +432,7 @@ int main() {
     // Check rules in runtime table
     for (int i = 0; i < num_tests; i++) {
         char query[256];
-        sprintf(query, "SELECT * FROM disk.mysql_query_rules WHERE rule_id = %d", rule_ids[i]);
+        snprintf(query, sizeof(query), "SELECT * FROM disk.mysql_query_rules WHERE rule_id = %d", rule_ids[i]);
 
         if (mysql_query(proxysql_admin, query)) {
             fprintf(stderr, "File %s, line %d, Error: %s (%s)\n", __FILE__, __LINE__, mysql_error(proxysql_admin), query);

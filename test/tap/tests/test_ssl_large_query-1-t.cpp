@@ -57,38 +57,51 @@ int main(int argc, char** argv) {
 	plan(33);
 	diag("Testing SSL and fast_forward");
 
-	MYSQL* mysqladmin = mysql_init(NULL);
+	MYSQL* mysqladmin = NULL;
+	MYSQL* mysql = NULL;
+	auto close_all = [&]() {
+		if (mysql)      { mysql_close(mysql);      mysql      = NULL; }
+		if (mysqladmin) { mysql_close(mysqladmin); mysqladmin = NULL; }
+	};
+
+	mysqladmin = mysql_init(NULL);
 	if (!mysqladmin)
 		return exit_status();
 
 	if (!mysql_real_connect(mysqladmin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 	    fprintf(stderr, "File %s, line %d, Error: %s\n",
 	              __FILE__, __LINE__, mysql_error(mysqladmin));
+		close_all();
 		return exit_status();
 	}
 
-	MYSQL * mysql = NULL;
-
 	diag("We will reconfigure ProxySQL to use SQLite3 Server on hostgroup 1459, IP 127.0.0.1 and port 6030");
-	if (run_queries_sets(queries_set1, mysqladmin, "Running on Admin"))
+	if (run_queries_sets(queries_set1, mysqladmin, "Running on Admin")) {
+		close_all();
 		return exit_status();
+	}
 
 	mysql = mysql_init(NULL);
-	if (!mysql)
+	if (!mysql) {
+		close_all();
 		return exit_status();
+	}
 
 	mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(mysql, cl.host, username, password, NULL, cl.port, NULL, CLIENT_SSL)) {
 	    fprintf(stderr, "Failed to connect to database: Error: %s\n",
 	              mysql_error(mysql));
+		close_all();
 		return exit_status();
 	}
 	const char * c = mysql_get_ssl_cipher(mysql);
 	ok(c != NULL , "Cipher in use: %s", c == NULL ? "NULL" : c);
 
 	// We now create a table named tbl1459
-	if (run_queries_sets(queries_SQL1, mysql, "Running on SQLite3"))
+	if (run_queries_sets(queries_SQL1, mysql, "Running on SQLite3")) {
+		close_all();
 		return exit_status();
+	}
 
 	std::string s0 = "0";
 	for (int i=16001; i<=48000; i++) {
@@ -103,12 +116,12 @@ int main(int argc, char** argv) {
 		}
 	}
 
-	if (run_queries_sets(queries_SQL4, mysql, "Running on SQLite3"))
+	if (run_queries_sets(queries_SQL4, mysql, "Running on SQLite3")) {
+		close_all();
 		return exit_status();
+	}
 
-	mysql_close(mysql);
-	mysql_close(mysqladmin);
-
+	close_all();
 	return exit_status();
 }
 

@@ -11,11 +11,7 @@ PgSQL_ExplicitTxnStateMgr::PgSQL_ExplicitTxnStateMgr(PgSQL_Session* sess) : sess
 }
 
 PgSQL_ExplicitTxnStateMgr::~PgSQL_ExplicitTxnStateMgr() {
-    for (auto& tran_state : transaction_state) {
-		reset_variable_snapshot(tran_state);
-    }
-    transaction_state.clear();
-    savepoint.clear();
+    reset_state();
 }
 
 void PgSQL_ExplicitTxnStateMgr::reset_variable_snapshot(PgSQL_Variable_Snapshot& var_snapshot) noexcept {
@@ -133,9 +129,16 @@ void PgSQL_ExplicitTxnStateMgr::rollback(bool rollback_and_chain) {
         verify_server_variables(session);
 	}
 
-    // Keep the transaction state intact when executing ROLLBACK AND CHAIN
-    if (rollback_and_chain == false) {
-        // Clear savepoints and reset the initial snapshot
+    // Handle transaction state cleanup based on rollback type
+    if (rollback_and_chain) {
+        // For ROLLBACK AND CHAIN: keep only initial snapshot, remove savepoint snapshots
+        while (transaction_state.size() > 1) {
+            reset_variable_snapshot(transaction_state.back());
+            transaction_state.pop_back();
+        }
+    }
+    else {
+        // For regular ROLLBACK: clear all snapshots
         for (auto& tran_state : transaction_state) {
             reset_variable_snapshot(tran_state);
         }
@@ -300,7 +303,7 @@ void PgSQL_ExplicitTxnStateMgr::fill_internal_session(nlohmann::json& j) {
 }
 
 bool PgSQL_ExplicitTxnStateMgr::handle_transaction(std::string_view input) {
-	TxnCmd cmd = tx_parser.parse(input, (session->active_transactions > 0));
+	TxnCmd cmd = tx_parser.parse(input);
     switch (cmd.type) {
     case TxnCmd::BEGIN:
         start_transaction();
@@ -327,7 +330,16 @@ bool PgSQL_ExplicitTxnStateMgr::handle_transaction(std::string_view input) {
 	return true;
 }
 
-TxnCmd PgSQL_TxnCmdParser::parse(std::string_view input, bool in_transaction_mode) noexcept {
+void PgSQL_ExplicitTxnStateMgr::reset_state() {
+
+    for (auto& tran_state : transaction_state) {
+        reset_variable_snapshot(tran_state);
+    }
+    transaction_state.clear();
+    savepoint.clear();
+}
+
+TxnCmd PgSQL_TxnCmdParser::parse(std::string_view input) noexcept {
     TxnCmd cmd;
 
     if (input.empty()) return cmd;
@@ -367,36 +379,24 @@ TxnCmd PgSQL_TxnCmdParser::parse(std::string_view input, bool in_transaction_mod
     // Check if this is a transaction command we care about
 	TxnCmd::Type cmd_type = TxnCmd::UNKNOWN;
 
-    if (in_transaction_mode) {
-        if (iequals(first_word, "begin")) {
-            cmd.type = TxnCmd::BEGIN;
-            return cmd;
-        }
-        
-        if (iequals(first_word, "start")) {
-			cmd_type = TxnCmd::BEGIN;
-		} else if (iequals(first_word, "savepoint")) {
-			cmd_type = TxnCmd::SAVEPOINT;
-		} else if (iequals(first_word, "release")) {
-			cmd_type = TxnCmd::RELEASE;
-		} else if (iequals(first_word, "rollback")) {
-			cmd_type = TxnCmd::ROLLBACK;
-		}
-    } else {
-
-        if (iequals(first_word, "commit") || iequals(first_word, "end")) {
-            cmd.type = TxnCmd::COMMIT;
-			return cmd;
-        }
-
-        if (iequals(first_word, "abort")) {
-            cmd.type = TxnCmd::ROLLBACK;
-			return cmd;
-        }
-
-        if (iequals(first_word, "rollback")) {
-            cmd_type = TxnCmd::ROLLBACK;
-        }
+    // Parse transaction commands regardless of current transaction state.
+    // This is required for pipeline mode where multiple commands are sent
+    // before ReadyForQuery packets return the actual transaction status.
+    if (iequals(first_word, "begin")) {
+        cmd.type = TxnCmd::BEGIN;
+        return cmd;
+    } else if (iequals(first_word, "start")) {
+        cmd_type = TxnCmd::BEGIN;
+    } else if (iequals(first_word, "savepoint")) {
+        cmd_type = TxnCmd::SAVEPOINT;
+    } else if (iequals(first_word, "release")) {
+        cmd_type = TxnCmd::RELEASE;
+    } else if (iequals(first_word, "rollback") || iequals(first_word, "abort")) {
+        // ABORT is a synonym for ROLLBACK (including ABORT AND CHAIN = ROLLBACK AND CHAIN)
+        cmd_type = TxnCmd::ROLLBACK;
+    } else if (iequals(first_word, "commit") || iequals(first_word, "end")) {
+        cmd.type = TxnCmd::COMMIT;
+        return cmd;
     }
 
     // If not a transaction command, return early
@@ -443,28 +443,22 @@ TxnCmd PgSQL_TxnCmdParser::parse(std::string_view input, bool in_transaction_mod
 
     size_t pos = 0;
 
-    if (in_transaction_mode) {
-
-		switch (cmd_type) {
-		case TxnCmd::BEGIN:
-			cmd = parse_start(pos);
-            break;
-		case TxnCmd::SAVEPOINT:
-            cmd = parse_savepoint(pos);
-			break;
-        case TxnCmd::RELEASE:
-			cmd = parse_release(pos);
-            break;
-		case TxnCmd::ROLLBACK:
-            cmd = parse_rollback(pos);
-			break;
-		default:
-			break;
-		}
-    } else {
-        if (cmd_type == TxnCmd::ROLLBACK)
-            cmd = parse_rollback(pos);
-    }
+	switch (cmd_type) {
+	case TxnCmd::BEGIN:
+		cmd = parse_start(pos);
+        break;
+	case TxnCmd::SAVEPOINT:
+        cmd = parse_savepoint(pos);
+		break;
+    case TxnCmd::RELEASE:
+		cmd = parse_release(pos);
+        break;
+	case TxnCmd::ROLLBACK:
+        cmd = parse_rollback(pos);
+		break;
+	default:
+		break;
+	}
 
     return cmd;
 }

@@ -5,6 +5,11 @@ using json = nlohmann::json;
 #include <iostream>     // std::cout
 #include <algorithm>    // std::sort
 #include <vector>       // std::vector
+#include <queue>
+#include <unordered_set>
+#include <cstring>
+#include <cctype>
+#include <functional>
 #include <thread>
 #include <future>
 #include "re2/re2.h"
@@ -15,10 +20,12 @@ using json = nlohmann::json;
 
 #include "PgSQL_Data_Stream.h"
 #include "MySQL_Data_Stream.h"
+#include "gen_utils.h"
 #include "query_processor.h"
 #include "QP_rule_text.h"
 #include "MySQL_Query_Processor.h"
 #include "PgSQL_Query_Processor.h"
+#include "Query_Processor_ParserSQL.h"
 
 #ifdef DEBUG
 #define DEB "_DEBUG"
@@ -93,7 +100,130 @@ static unsigned long long mem_used_rule(QP_rule_t *qr) {
 	return s;
 }
 
-static re2_t * compile_query_rule(QP_rule_t *qr, int i, int query_processor_regex) {
+/**
+ * @brief Lightweight candidate wrapper used by in-memory query digest Top-K.
+ */
+struct query_digest_topk_candidate_t {
+	const QP_query_digest_stats* qds {nullptr};
+	uint64_t sort_value {0};
+};
+
+/**
+ * @brief Compute the primary sort metric for a digest row.
+ *
+ * @param qds Source digest row.
+ * @param sort_by Requested primary sort mode.
+ * @return Primary sort metric in descending order domain.
+ */
+static uint64_t query_digest_sort_metric(
+	const QP_query_digest_stats* qds,
+	query_digest_sort_by_t sort_by
+) {
+	switch (sort_by) {
+		case query_digest_sort_by_t::avg_time:
+			return qds->count_star ? (qds->sum_time / qds->count_star) : 0;
+		case query_digest_sort_by_t::sum_time:
+			return qds->sum_time;
+		case query_digest_sort_by_t::max_time:
+			return qds->max_time;
+		case query_digest_sort_by_t::rows_sent:
+			return qds->rows_sent;
+		case query_digest_sort_by_t::count_star:
+		default:
+			return qds->count_star;
+	}
+}
+
+/**
+ * @brief Determine whether candidate @p lhs ranks ahead of @p rhs.
+ *
+ * Ordering is stable and deterministic:
+ * 1) primary selected sort metric (DESC)
+ * 2) `sum_time` (DESC)
+ * 3) `count_star` (DESC)
+ * 4) `digest` (ASC)
+ * 5) `hid` (ASC)
+ * 6) `username` (ASC lexical)
+ * 7) `schemaname` (ASC lexical)
+ * 8) `client_address` (ASC lexical)
+ *
+ * @param lhs Left candidate.
+ * @param rhs Right candidate.
+ * @return true if lhs should appear before rhs in output.
+ */
+static bool query_digest_candidate_better(
+	const query_digest_topk_candidate_t& lhs,
+	const query_digest_topk_candidate_t& rhs
+) {
+	if (lhs.sort_value != rhs.sort_value) {
+		return lhs.sort_value > rhs.sort_value;
+	}
+	if (lhs.qds->sum_time != rhs.qds->sum_time) {
+		return lhs.qds->sum_time > rhs.qds->sum_time;
+	}
+	if (lhs.qds->count_star != rhs.qds->count_star) {
+		return lhs.qds->count_star > rhs.qds->count_star;
+	}
+	if (lhs.qds->digest != rhs.qds->digest) {
+		return lhs.qds->digest < rhs.qds->digest;
+	}
+	if (lhs.qds->hid != rhs.qds->hid) {
+		return lhs.qds->hid < rhs.qds->hid;
+	}
+
+	const int user_cmp = strcmp(lhs.qds->username ? lhs.qds->username : "", rhs.qds->username ? rhs.qds->username : "");
+	if (user_cmp != 0) {
+		return user_cmp < 0;
+	}
+	const int schema_cmp = strcmp(lhs.qds->schemaname ? lhs.qds->schemaname : "", rhs.qds->schemaname ? rhs.qds->schemaname : "");
+	if (schema_cmp != 0) {
+		return schema_cmp < 0;
+	}
+	return strcmp(lhs.qds->client_address ? lhs.qds->client_address : "", rhs.qds->client_address ? rhs.qds->client_address : "") < 0;
+}
+
+/**
+ * @brief Check whether a digest text contains a requested substring.
+ *
+ * @param digest_text Candidate digest text (`nullptr` means no match).
+ * @param needle Substring filter.
+ * @param case_sensitive Whether comparison should be case-sensitive.
+ * @return true when @p needle occurs in @p digest_text.
+ */
+static bool query_digest_text_matches(
+	const char* digest_text,
+	const std::string& needle,
+	bool case_sensitive
+) {
+	if (!digest_text) {
+		return false;
+	}
+	if (needle.empty()) {
+		return true;
+	}
+	if (case_sensitive) {
+		return strstr(digest_text, needle.c_str()) != nullptr;
+	}
+
+	/**
+	 * Case-insensitive ASCII substring search. Digest text is generated from SQL
+	 * tokenization and does not require locale-dependent collation.
+	 */
+	const char* digest_end = digest_text + std::strlen(digest_text);
+	const auto it = std::search(
+		digest_text,
+		digest_end,
+		needle.begin(),
+		needle.end(),
+		[](char lhs, char rhs) {
+			return std::tolower(static_cast<unsigned char>(lhs)) ==
+			       std::tolower(static_cast<unsigned char>(rhs));
+		}
+	);
+	return it != digest_end;
+}
+
+static re2_t * compile_query_rule(const QP_rule_t *qr, int i, int query_processor_regex) {
 	re2_t *r=(re2_t *)malloc(sizeof(re2_t));
 	r->opt1=NULL;
 	r->re1=NULL;
@@ -123,6 +253,121 @@ static re2_t * compile_query_rule(QP_rule_t *qr, int i, int query_processor_rege
 	return r;
 };
 
+static void free_compiled_query_rule(re2_t *r) {
+	if (r == NULL) return;
+	if (r->opt1) { delete r->opt1; r->opt1=NULL; }
+	if (r->re1) { delete r->re1; r->re1=NULL; }
+	if (r->opt2) { delete r->opt2; r->opt2=NULL; }
+	if (r->re2) { delete r->re2; r->re2=NULL; }
+	free(r);
+}
+
+static bool rule_matches_regex(
+	const QP_rule_t* qr,
+	void* regex_engine,
+	int regex_index,
+	const char* subject,
+	int query_processor_regex
+) {
+	if (subject == NULL) return false;
+
+	re2_t *compiled_regex = static_cast<re2_t *>(regex_engine);
+	re2_t *temporary_regex = NULL;
+
+	if (compiled_regex == NULL) {
+		temporary_regex = compile_query_rule(qr, regex_index, query_processor_regex);
+		compiled_regex = temporary_regex;
+	}
+
+	bool rc = false;
+	if (compiled_regex) {
+		if (compiled_regex->re2) {
+			rc = RE2::PartialMatch(subject, *compiled_regex->re2);
+		} else if (compiled_regex->re1) {
+			rc = compiled_regex->re1->PartialMatch(subject);
+		}
+	}
+
+	free_compiled_query_rule(temporary_regex);
+	return (qr->negate_match_pattern ? (rc == false) : (rc == true));
+}
+
+bool rule_matches_query(
+	const QP_rule_t* qr,
+	int current_flagIN,
+	const char* username,
+	const char* schemaname,
+	const char* client_addr,
+	const char* proxy_addr,
+	int proxy_port,
+	uint64_t digest,
+	const char* digest_text,
+	const char* query_text,
+	const char* rewritten_query,
+	int query_processor_regex
+) {
+	if (qr == NULL) return false;
+
+	if (qr->flagIN != current_flagIN) {
+		return false;
+	}
+
+	if (qr->username && strlen(qr->username)) {
+		if (username == NULL || strcmp(qr->username, username) != 0) {
+			return false;
+		}
+	}
+
+	if (qr->schemaname && strlen(qr->schemaname)) {
+		if (schemaname == NULL || strcmp(qr->schemaname, schemaname) != 0) {
+			return false;
+		}
+	}
+
+	if (qr->client_addr && strlen(qr->client_addr)) {
+		if (client_addr) {
+			if (qr->client_addr_wildcard_position == -1) {
+				if (strcmp(qr->client_addr, client_addr) != 0) {
+					return false;
+				}
+			} else if (mywildcmp(qr->client_addr, client_addr) == false) {
+				return false;
+			}
+		}
+	}
+
+	if (qr->proxy_addr && strlen(qr->proxy_addr)) {
+		if (proxy_addr) {
+			if (strcmp(qr->proxy_addr, proxy_addr) != 0) {
+				return false;
+			}
+		}
+	}
+
+	if (qr->proxy_port >= 0 && qr->proxy_port != proxy_port) {
+		return false;
+	}
+
+	if (qr->digest && digest && qr->digest != digest) {
+		return false;
+	}
+
+	if (qr->match_digest && digest_text) {
+		if (rule_matches_regex(qr, qr->regex_engine1, 1, digest_text, query_processor_regex) == false) {
+			return false;
+		}
+	}
+
+	if (qr->match_pattern) {
+		const char* match_query = (rewritten_query ? rewritten_query : query_text);
+		if (rule_matches_regex(qr, qr->regex_engine2, 2, match_query, query_processor_regex) == false) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
 static void __delete_query_rule(QP_rule_t *qr) {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Deleting rule in %p : rule_id:%d, active:%d, username=%s, schemaname=%s, flagIN:%d, %smatch_pattern=\"%s\", flagOUT:%d replace_pattern=\"%s\", destination_hostgroup:%d, apply:%d\n", qr, qr->rule_id, qr->active, qr->username, qr->schemaname, qr->flagIN, (qr->negate_match_pattern ? "(!)" : "") , qr->match_pattern, qr->flagOUT, qr->replace_pattern, qr->destination_hostgroup, qr->apply);
 	if (qr->username)
@@ -148,20 +393,10 @@ static void __delete_query_rule(QP_rule_t *qr) {
 	if (qr->comment)
 		free(qr->comment);
 	if (qr->regex_engine1) {
-		re2_t *r=(re2_t *)qr->regex_engine1;
-		if (r->opt1) { delete r->opt1; r->opt1=NULL; }
-		if (r->re1) { delete r->re1; r->re1=NULL; }
-		if (r->opt2) { delete r->opt2; r->opt2=NULL; }
-		if (r->re2) { delete r->re2; r->re2=NULL; }
-		free(qr->regex_engine1);
+		free_compiled_query_rule((re2_t *)qr->regex_engine1);
 	}
 	if (qr->regex_engine2) {
-		re2_t *r=(re2_t *)qr->regex_engine2;
-		if (r->opt1) { delete r->opt1; r->opt1=NULL; }
-		if (r->re1) { delete r->re1; r->re1=NULL; }
-		if (r->opt2) { delete r->opt2; r->opt2=NULL; }
-		if (r->re2) { delete r->re2; r->re2=NULL; }
-		free(qr->regex_engine2);
+		free_compiled_query_rule((re2_t *)qr->regex_engine2);
 	}
 	if (qr->flagOUT_ids != NULL) {
 		qr->flagOUT_ids->clear();
@@ -624,123 +859,285 @@ void * get_query_digests_parallel(void *_arg) {
 	return NULL;
 }
 
-void * purge_query_digests_parallel(void *_arg) {
-	get_query_digests_parallel_args *arg = (get_query_digests_parallel_args *)_arg;
-	unsigned long long i = 0;
-	unsigned long long r = 0;
-	unsigned long long m = arg->m;
-	set_thread_name("PurgeQueryDgest", GloVars.set_thread_name);
-	for (std::unordered_map<uint64_t, void *>::iterator it=arg->gu->begin(); it!=arg->gu->end(); ++it) {
-		if ((i%DIGEST_STATS_FAST_THREADS)==m) {
-			QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
+struct purge_query_digests_args {
+	umap_query_digest *digest_umap = nullptr;
+	umap_query_digest_text *digest_text_umap = nullptr;
+	std::function<bool(std::unordered_map<uint64_t, void *>::iterator it)> match_delete_entry = nullptr;
+	bool erase_umap = true;
+
+	// only used for synchronous multi-threaded purge operation
+	int scan_idx = -1;
+	int thread_idx = -1;
+	unsigned long long digest_deleted = 0;
+};
+
+// NOTE: digest_umap is keyed by 'digest_total' (hash of user+schema+digest+hostgroup+client),
+// while digest_text_umap is keyed by the plain 'digest'; multiple digest_umap entries can
+// share a single digest_text_umap entry. This function only releases digest_umap entries;
+// digest_text_umap entries must be released by the caller (see purge_expired_digest_texts()).
+unsigned long long purge_query_digest_entry(purge_query_digests_args* args) {
+	unsigned long long digest_deleted = 0;
+
+	umap_query_digest *digest_umap = args->digest_umap;
+
+	for (auto it = digest_umap->begin(); it != digest_umap->end();) {
+		// by default, delete all entries
+		bool delete_entry = true;
+
+		if (args->match_delete_entry) {
+			delete_entry = args->match_delete_entry(it);
+		}
+
+		if (delete_entry) {
+			QP_query_digest_stats *qds = (QP_query_digest_stats *)it->second;
 			delete qds;
-			r++;
+
+			digest_deleted++;
 		}
-		i++;
+
+		if (delete_entry && args->erase_umap) {
+			it = digest_umap->erase(it);
+		} else {
+			it++;
+		}
 	}
-	arg->ret = r;
-	i = 0;
-	for (std::unordered_map<uint64_t, char *>::iterator it=arg->gtu->begin(); it!=arg->gtu->end(); ++it) {
-		if ((i%DIGEST_STATS_FAST_THREADS)==m) {
+
+	return digest_deleted;
+}
+
+// Removes (and frees) every digest_text_umap entry whose digest is no longer referenced by
+// any entry in digest_umap. Both maps must be stable for the duration of the call.
+static void purge_expired_digest_texts(umap_query_digest *digest_umap, umap_query_digest_text *digest_text_umap) {
+	if (digest_text_umap->empty()) {
+		return;
+	}
+
+	std::unordered_set<uint64_t> referenced_digests;
+	referenced_digests.reserve(digest_umap->size());
+	for (const auto& entry : *digest_umap) {
+		referenced_digests.insert(((QP_query_digest_stats *)entry.second)->digest);
+	}
+
+	for (auto it = digest_text_umap->begin(); it != digest_text_umap->end();) {
+		if (referenced_digests.find(it->first) == referenced_digests.end()) {
 			free(it->second);
+			it = digest_text_umap->erase(it);
+		} else {
+			++it;
 		}
 	}
-	return NULL;
+}
+
+void * purge_query_digests_parallel(void *_args) {
+	set_thread_name("PurgeQueryDgest", GloVars.set_thread_name);
+
+	auto args = (purge_query_digests_args *)_args;
+	args->digest_deleted = purge_query_digest_entry(args);
+
+	// full parallel purge: free this thread's share of the digest texts
+	if (args->digest_text_umap != nullptr && args->thread_idx >= 0) {
+		unsigned long long i = 0;
+		for (auto it = args->digest_text_umap->begin(); it != args->digest_text_umap->end(); ++it) {
+			if ((i % DIGEST_STATS_FAST_THREADS) == (unsigned long long)args->thread_idx) {
+				free(it->second);
+			}
+			i++;
+		}
+	}
+
+	return nullptr;
 }
 
 template <typename QP_DERIVED>
-unsigned long long Query_Processor<QP_DERIVED>::purge_query_digests(bool async_purge, bool parallel, char **msg) {
+unsigned long long Query_Processor<QP_DERIVED>::purge_query_digests(bool async_purge, bool parallel, time_t last_seen) {
 	unsigned long long ret = 0;
 	if (async_purge) {
-		ret = purge_query_digests_async(msg);
+		ret = purge_query_digests_async(last_seen);
 	} else {
-		ret = purge_query_digests_sync(parallel);
+		ret = purge_query_digests_sync(parallel, last_seen);
 	}
 	return ret;
 }
 
 template <typename QP_DERIVED>
-unsigned long long Query_Processor<QP_DERIVED>::purge_query_digests_async(char **msg) {
-	unsigned long long ret = 0;
+unsigned long long Query_Processor<QP_DERIVED>::purge_query_digests_async(time_t last_seen) {
 	umap_query_digest digest_umap_aux;
 	umap_query_digest_text digest_text_umap_aux;
+
 	pthread_rwlock_wrlock(&digest_rwlock);
 	digest_umap.swap(digest_umap_aux);
 	digest_text_umap.swap(digest_text_umap_aux);
 	pthread_rwlock_unlock(&digest_rwlock);
-	unsigned long long curtime1=monotonic_time();
-	size_t map1_size = digest_umap_aux.size();
-	size_t map2_size = digest_text_umap_aux.size();
-	ret = map1_size + map2_size;
 
+	unsigned long long digest_deleted = 0;
+	unsigned long long curtime1 = monotonic_time();
+	bool selective_purge = (last_seen > 0);
+	size_t purged_map_size = digest_umap_aux.size();
 
-	for (
-		std::unordered_map<uint64_t, void *>::iterator it = digest_umap_aux.begin();
-		it != digest_umap_aux.end();
-		++it
-	) {
-		QP_query_digest_stats *qds = (QP_query_digest_stats *)it->second;
-		delete qds;
+	purge_query_digests_args args;
+	args.digest_umap = &digest_umap_aux;
+	// full purge: no need to erase entries one by one, the aux map is discarded
+	args.erase_umap = selective_purge;
+
+	if (selective_purge) {
+		args.match_delete_entry = [&](std::unordered_map<uint64_t, void *>::iterator it) {
+			QP_query_digest_stats *qds = (QP_query_digest_stats *)it->second;
+			return (last_seen >= qds->last_seen);
+		};
 	}
-	digest_umap_aux.clear();
-	for (std::unordered_map<uint64_t, char *>::iterator it=digest_text_umap_aux.begin(); it!=digest_text_umap_aux.end(); ++it) {
-		free(it->second);
+
+	digest_deleted = purge_query_digest_entry(&args);
+
+	if (selective_purge == false) {
+		// full purge: release every digest text
+		for (auto& text_entry : digest_text_umap_aux) {
+			free(text_entry.second);
+		}
+		digest_text_umap_aux.clear();
 	}
-	digest_text_umap_aux.clear();
 
+	if (purged_map_size >= DIGEST_STATS_FAST_MINSIZE) {
+		const char *cmd = (selective_purge) ? "PURGE" : "TRUNCATE";
 
-	if (map1_size >= DIGEST_STATS_FAST_MINSIZE) {
-		unsigned long long curtime2=monotonic_time();
-		curtime1 = curtime1/1000;
-		curtime2 = curtime2/1000;
+		unsigned long long curtime2 = monotonic_time();
+		curtime1 = curtime1 / 1000;
+		curtime2 = curtime2 / 1000;
+
 		if constexpr (std::is_same_v<QP_DERIVED, MySQL_Query_Processor>) {
-			proxy_info("TRUNCATE stats_mysql_query_digest: (not locked) %llums to remove %lu entries\n", curtime2 - curtime1, map1_size);
+			proxy_info("%s stats_mysql_query_digest: (not locked) %llums to remove %llu of %lu entries\n", cmd, curtime2 - curtime1, digest_deleted, purged_map_size);
 		} else if constexpr (std::is_same_v<QP_DERIVED, PgSQL_Query_Processor>) {
-			proxy_info("TRUNCATE stats_pgsql_query_digest: (not locked) %llums to remove %lu entries\n", curtime2 - curtime1, map1_size);
+			proxy_info("%s stats_pgsql_query_digest: (not locked) %llums to remove %llu of %lu entries\n", cmd, curtime2 - curtime1, digest_deleted, purged_map_size);
 		}
 	}
-	return ret;
+
+	if (selective_purge) {
+		std::vector<char *> texts_to_free;
+
+		// digests referenced by the surviving entries; built before taking the
+		// lock so the work under the lock stays proportional to the purge window
+		std::unordered_set<uint64_t> referenced_digests;
+		referenced_digests.reserve(digest_umap_aux.size());
+		for (const auto& entry : digest_umap_aux) {
+			referenced_digests.insert(((QP_query_digest_stats *)entry.second)->digest);
+		}
+
+		pthread_rwlock_wrlock(&digest_rwlock);
+		digest_umap_aux.swap(digest_umap);
+		// digest_umap now holds the surviving entries, digest_umap_aux the
+		// entries created while the purge was running (purge window)
+
+		// merge stats entries created during the purge window into digest_umap
+		for (const auto& aux_entry : digest_umap_aux) {
+			uint64_t aux_key = aux_entry.first;
+			QP_query_digest_stats *aux_qds = (QP_query_digest_stats *)aux_entry.second;
+
+			referenced_digests.insert(aux_qds->digest);
+
+			auto it = digest_umap.find(aux_key);
+			if (it != digest_umap.end()) {
+				QP_query_digest_stats *digest_qds = (QP_query_digest_stats *)it->second;
+
+				digest_qds->merge(aux_qds);
+				delete aux_qds;
+			} else {
+				digest_umap.insert(aux_entry);
+			}
+		}
+
+		// digest texts: keep one entry per digest still referenced by digest_umap,
+		// preferring the copy created during the purge window (already in digest_text_umap);
+		// release the rest
+		for (const auto& text_entry : digest_text_umap_aux) {
+			if (referenced_digests.find(text_entry.first) != referenced_digests.end()
+				&& digest_text_umap.find(text_entry.first) == digest_text_umap.end()
+			) {
+				digest_text_umap.insert(text_entry);
+			} else {
+				texts_to_free.push_back(text_entry.second);
+			}
+		}
+		digest_text_umap_aux.clear();
+
+		pthread_rwlock_unlock(&digest_rwlock);
+		digest_umap_aux.clear();
+
+		for (char *text : texts_to_free) {
+			free(text);
+		}
+	}
+
+	return digest_deleted;
 }
 
 template <typename QP_DERIVED>
-unsigned long long Query_Processor<QP_DERIVED>::purge_query_digests_sync(bool parallel) {
-	unsigned long long ret = 0;
+unsigned long long Query_Processor<QP_DERIVED>::purge_query_digests_sync(bool parallel, time_t last_seen) {
+	unsigned long long digest_deleted = 0;
+
 	pthread_rwlock_wrlock(&digest_rwlock);
+
 	size_t map_size = digest_umap.size();
-	if (parallel && map_size >= DIGEST_STATS_FAST_MINSIZE) { // parallel purge
-		int n=DIGEST_STATS_FAST_THREADS;
-		get_query_digests_parallel_args args[n];
-		for (int i=0; i<n; i++) {
-			args[i].m=i;
-			args[i].ret=0;
-			args[i].gu = &digest_umap;
-			args[i].gtu = &digest_text_umap;
+
+	// multi-threaded purge
+	if (parallel
+		&& (last_seen == 0)
+		&& (map_size >= DIGEST_STATS_FAST_MINSIZE)
+	) {
+		pthread_t tid[DIGEST_STATS_FAST_THREADS];
+		purge_query_digests_args args[DIGEST_STATS_FAST_THREADS];
+
+		for (int i = 0; i < DIGEST_STATS_FAST_THREADS; i++) {
+			args[i].digest_umap = &digest_umap;
+			args[i].digest_text_umap = &digest_text_umap;
+			args[i].erase_umap = false;
+			args[i].scan_idx = -1;
+			args[i].thread_idx = i;
+
+			args[i].match_delete_entry = [&, i](std::unordered_map<uint64_t, void *>::iterator it) {
+				args[i].scan_idx++;
+				return (args[i].scan_idx % DIGEST_STATS_FAST_THREADS == i);
+			};
 		}
-		for (int i=0; i<n; i++) {
-			if ( pthread_create(&args[i].thr, NULL, &purge_query_digests_parallel, &args[i]) != 0 ) {
+
+		for (int i = 0; i < DIGEST_STATS_FAST_THREADS; i++) {
+			if (pthread_create(&tid[i], NULL, &purge_query_digests_parallel, &args[i]) != 0 ) {
 				// LCOV_EXCL_START
 				assert(0);
 				// LCOV_EXCL_STOP
 			}
 		}
-		for (int i=0; i<n; i++) {
-			pthread_join(args[i].thr, NULL);
-			ret += args[i].ret;
+
+		for (int i = 0; i < DIGEST_STATS_FAST_THREADS; i++) {
+			pthread_join(tid[i], NULL);
+			digest_deleted += args[i].digest_deleted;
 		}
+
+		digest_umap.clear();
+		digest_text_umap.clear();
 	} else {
-		for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
-			QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
-			delete qds;
-			ret++;
-		}
-		for (std::unordered_map<uint64_t, char *>::iterator it=digest_text_umap.begin(); it!=digest_text_umap.end(); ++it) {
-			free(it->second);
+		purge_query_digests_args args;
+		args.digest_umap = &digest_umap;
+
+		if (last_seen > 0) {
+			args.match_delete_entry = [&](std::unordered_map<uint64_t, void *>::iterator it) {
+				QP_query_digest_stats *qds = (QP_query_digest_stats *)it->second;
+				return (last_seen >= qds->last_seen);
+			};
+
+			digest_deleted = purge_query_digest_entry(&args);
+			purge_expired_digest_texts(&digest_umap, &digest_text_umap);
+		} else {
+			digest_deleted = purge_query_digest_entry(&args);
+
+			for (auto& text_entry : digest_text_umap) {
+				free(text_entry.second);
+			}
+			digest_text_umap.clear();
 		}
 	}
-	digest_umap.erase(digest_umap.begin(),digest_umap.end());
-	digest_text_umap.erase(digest_text_umap.begin(),digest_text_umap.end());
+
 	pthread_rwlock_unlock(&digest_rwlock);
-	return ret;
+
+	return digest_deleted;
 }
 
 template <typename QP_DERIVED>
@@ -1033,6 +1430,162 @@ SQLite3_result * Query_Processor<QP_DERIVED>::get_query_digests() {
 			proxy_info("Running query on stats_pgsql_query_digest: locked for %llums to retrieve %lu entries\n", curtime2 - curtime1, map_size);
 		}
 	}
+	return result;
+}
+
+template <typename QP_DERIVED>
+query_digest_topk_result_t Query_Processor<QP_DERIVED>::get_query_digests_topk(
+	const query_digest_filter_opts_t& filters,
+	query_digest_sort_by_t sort_by,
+	uint32_t limit,
+	uint32_t offset,
+	uint32_t max_window
+) {
+	query_digest_topk_result_t result {};
+
+	/**
+	 * Keep at most `window_size = min(max_window, limit + offset)` best rows.
+	 * This preserves deterministic paging semantics while bounding memory.
+	 */
+	uint64_t window_size_u64 = static_cast<uint64_t>(limit) + static_cast<uint64_t>(offset);
+	if (max_window > 0 && window_size_u64 > max_window) {
+		window_size_u64 = max_window;
+	}
+	const size_t window_size = static_cast<size_t>(window_size_u64);
+
+	const auto matches_filters = [this, &filters](const QP_query_digest_stats* qds) -> bool {
+		if (filters.hostgroup >= 0 && qds->hid != filters.hostgroup) {
+			return false;
+		}
+		if (!filters.schemaname.empty()) {
+			const char* schema = qds->schemaname ? qds->schemaname : "";
+			if (strcmp(schema, filters.schemaname.c_str()) != 0) {
+				return false;
+			}
+		}
+		if (!filters.username.empty()) {
+			const char* user = qds->username ? qds->username : "";
+			if (strcmp(user, filters.username.c_str()) != 0) {
+				return false;
+			}
+		}
+		if (!filters.match_digest_text.empty()) {
+			const char* digest_text = qds->get_digest_text(&digest_text_umap);
+			if (!query_digest_text_matches(digest_text, filters.match_digest_text, filters.digest_text_case_sensitive)) {
+				return false;
+			}
+		}
+		if (filters.has_digest && qds->digest != filters.digest) {
+			return false;
+		}
+		if (filters.min_count > 0 && qds->count_star < filters.min_count) {
+			return false;
+		}
+		if (filters.min_avg_time_us > 0) {
+			const uint64_t avg_time = qds->count_star ? (qds->sum_time / qds->count_star) : 0;
+			if (avg_time < filters.min_avg_time_us) {
+				return false;
+			}
+		}
+		return true;
+	};
+
+	const auto better = [](const query_digest_topk_candidate_t& lhs, const query_digest_topk_candidate_t& rhs) -> bool {
+		return query_digest_candidate_better(lhs, rhs);
+	};
+
+	/**
+	 * The priority queue uses `worse` as comparator so the heap top is the
+	 * current "worst" row among retained candidates. This allows us to
+	 * efficiently evict the worst candidate when the heap is full.
+	 */
+	const auto worse = [](const query_digest_topk_candidate_t& lhs, const query_digest_topk_candidate_t& rhs) -> bool {
+		return query_digest_candidate_better(lhs, rhs);
+	};
+	std::priority_queue<
+		query_digest_topk_candidate_t,
+		std::vector<query_digest_topk_candidate_t>,
+		std::function<bool(const query_digest_topk_candidate_t&, const query_digest_topk_candidate_t&)>
+	> heap(worse);
+
+	pthread_rwlock_rdlock(&digest_rwlock);
+
+	for (const auto& it : digest_umap) {
+		const QP_query_digest_stats* qds = static_cast<const QP_query_digest_stats*>(it.second);
+		if (!qds || !matches_filters(qds)) {
+			continue;
+		}
+
+		result.matched_count++;
+		result.matched_total_queries += qds->count_star;
+		result.matched_total_time_us += qds->sum_time;
+
+		if (window_size == 0) {
+			continue;
+		}
+
+		query_digest_topk_candidate_t cand {};
+		cand.qds = qds;
+		cand.sort_value = query_digest_sort_metric(qds, sort_by);
+
+		if (heap.size() < window_size) {
+			heap.push(cand);
+		} else if (better(cand, heap.top())) {
+			heap.pop();
+			heap.push(cand);
+		}
+	}
+
+	std::vector<query_digest_topk_candidate_t> selected;
+	selected.reserve(heap.size());
+	while (!heap.empty()) {
+		selected.push_back(heap.top());
+		heap.pop();
+	}
+	std::sort(selected.begin(), selected.end(), better);
+
+	time_t now = 0;
+	time(&now);
+	const uint64_t monotonic_now_us = monotonic_time();
+
+	for (const auto& cand : selected) {
+		const QP_query_digest_stats* qds = cand.qds;
+		query_digest_topk_row_t row {};
+		row.hid = qds->hid;
+		row.schemaname = qds->schemaname ? qds->schemaname : "";
+		row.username = qds->username ? qds->username : "";
+		row.client_address = qds->client_address ? qds->client_address : "";
+		row.digest = qds->digest;
+		row.digest_text = qds->get_digest_text(&digest_text_umap);
+		row.count_star = qds->count_star;
+		row.first_seen = static_cast<uint64_t>(now - monotonic_now_us / 1000000 + qds->first_seen / 1000000);
+		row.last_seen = static_cast<uint64_t>(now - monotonic_now_us / 1000000 + qds->last_seen / 1000000);
+		row.sum_time = qds->sum_time;
+		row.min_time = qds->min_time;
+		row.max_time = qds->max_time;
+		row.rows_affected = qds->rows_affected;
+		row.rows_sent = qds->rows_sent;
+		result.rows.push_back(std::move(row));
+	}
+
+	pthread_rwlock_unlock(&digest_rwlock);
+
+	/**
+	 * Apply pagination on the post-sort retained window.
+	 */
+	if (offset >= result.rows.size()) {
+		result.rows.clear();
+	} else {
+		const size_t begin = static_cast<size_t>(offset);
+		const size_t end = std::min(result.rows.size(), begin + static_cast<size_t>(limit));
+		std::vector<query_digest_topk_row_t> paged;
+		paged.reserve(end - begin);
+		for (size_t i = begin; i < end; ++i) {
+			paged.push_back(std::move(result.rows[i]));
+		}
+		result.rows.swap(paged);
+	}
+
 	return result;
 }
 
@@ -1352,13 +1905,22 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 		wrunlock();
 	}
 	QP_rule_t *qr = NULL;
-	re2_t *re2p;
 	int flagIN=0;
 	ret->next_query_flagIN=-1; // reset
 	if (sess->next_query_flagIN >= 0) {
 		flagIN=sess->next_query_flagIN;
 	}
 	int reiterate=GET_THREAD_VARIABLE(query_processor_iterations);
+	int first_comment_parsing=GET_THREAD_VARIABLE(query_processor_first_comment_parsing);
+	if (sess->mirror==false) { // we process comments only on original queries, not on mirrors
+		if (qp && qp->first_comment) {
+			// Process first comment before query rules if configured (values 1 or 3)
+			if (first_comment_parsing == 1 || first_comment_parsing == 3) {
+				// we have a comment to parse
+				query_parser_first_comment(ret, qp->first_comment);
+			}
+		}
+	}
 	if (sess->mirror==true) {
 		// we are into a mirror session
 		// we immediately set a destination_hostgroup
@@ -1366,297 +1928,219 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 		if (sess->mirror_flagOUT != -1) {
 			// the original session has set a mirror flagOUT
 			flagIN=sess->mirror_flagOUT;
-		} else {
-			// the original session did NOT set any mirror flagOUT
-			// so we exit here
-			// the only thing set so far is destination_hostgroup
-			goto __exit_process_mysql_query;
 		}
 	}
-__internal_loop:
-	for (std::vector<QP_rule_t *>::iterator it=_thr_SQP_rules->begin(); it!=_thr_SQP_rules->end(); ++it) {
-		qr=*it;
-		if (qr->flagIN != flagIN) {
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 6, "query rule %d has no matching flagIN\n", qr->rule_id);
-			continue;
-		}
-		if (qr->username && strlen(qr->username)) {
-			if (strcmp(qr->username,sess->client_myds->myconn->userinfo->username)!=0) {
-				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching username\n", qr->rule_id);
+	bool iterate_rules = !((sess->mirror == true) && (sess->mirror_flagOUT == -1));
+	while (iterate_rules) {
+		iterate_rules = false;
+		for (std::vector<QP_rule_t *>::iterator it=_thr_SQP_rules->begin(); it!=_thr_SQP_rules->end(); ++it) {
+			qr=*it;
+			if (rule_matches_query(
+				qr,
+				flagIN,
+				sess->client_myds->myconn->userinfo->username,
+				sess->client_myds->myconn->userinfo->schemaname,
+				sess->client_myds->addr.addr,
+				sess->client_myds->proxy_addr.addr,
+				sess->client_myds->proxy_addr.port,
+				(qp ? qp->digest : 0),
+				(qp ? qp->digest_text : NULL),
+				query,
+				((ret && ret->new_query) ? ret->new_query->c_str() : NULL),
+				GET_THREAD_VARIABLE(query_processor_regex)
+			) == false) {
+				// Reset qr so a non-matching rule does not leak into the
+				// fast-routing check. That check reads qr->apply to decide
+				// whether a rule was already applied.
+				qr = NULL;
 				continue;
 			}
-		}
-		if (qr->schemaname && strlen(qr->schemaname)) {
-			if (strcmp(qr->schemaname,sess->client_myds->myconn->userinfo->schemaname)!=0) {
-				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching schemaname\n", qr->rule_id);
-				continue;
-			}
-		}
 
-		// match on client address
-		if (qr->client_addr && strlen(qr->client_addr)) {
-			if (sess->client_myds->addr.addr) {
-				if (qr->client_addr_wildcard_position == -1) { // no wildcard , old algorithm
-					if (strcmp(qr->client_addr,sess->client_myds->addr.addr)!=0) {
-						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching client_addr\n", qr->rule_id);
-						continue;
+			// if we arrived here, we have a match
+			qr->hits++; // this is done without atomic function because it updates only the local variables
+			bool set_flagOUT=false;
+			if (qr->flagOUT_weights_total > 0) {
+				int rnd = rand_fast() % qr->flagOUT_weights_total;
+				for (unsigned int i=0; i< qr->flagOUT_weights->size(); i++) {
+					int w = qr->flagOUT_weights->at(i);
+					if (rnd < w) {
+						flagIN= qr->flagOUT_ids->at(i);
+						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has changed flagOUT based on weight\n", qr->rule_id);
+						set_flagOUT=true;
+						break;
+					} else {
+						rnd -= w;
 					}
-				} else if (qr->client_addr_wildcard_position==0) {
-					// catch all!
-					// therefore we have a match
-				} else { // client_addr_wildcard_position > 0
-					if (strncmp(qr->client_addr,sess->client_myds->addr.addr,qr->client_addr_wildcard_position)!=0) {
-						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching client_addr\n", qr->rule_id);
-						continue;
+				}
+			}
+			if (qr->flagOUT >= 0) {
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has changed flagOUT\n", qr->rule_id);
+				flagIN=qr->flagOUT;
+				set_flagOUT=true;
+				//sess->query_info.flagOUT=flagIN;
+			}
+			if (qr->reconnect >= 0) {
+				// Note: negative reconnect means this rule doesn't change
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set reconnect: %d. Query will%s be rexecuted if connection is lost\n", qr->rule_id, qr->reconnect, (qr->reconnect == 0 ? " NOT" : "" ));
+				ret->reconnect=qr->reconnect;
+			}
+			if (qr->timeout >= 0) {
+				// Note: negative timeout means this rule doesn't change
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set timeout: %d. Query will%s be interrupted if exceeding %dms\n", qr->rule_id, qr->timeout, (qr->timeout == 0 ? " NOT" : "" ) , qr->timeout);
+				ret->timeout=qr->timeout;
+			}
+		    if (qr->retries >= 0) {
+				// Note: negative retries means this rule doesn't change
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set retries: %d. Query will be re-executed %d times in case of failure\n", qr->rule_id, qr->retries, qr->retries);
+				ret->retries=qr->retries;
+			}
+			if (qr->delay >= 0) {
+				// Note: negative delay means this rule doesn't change
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set delay: %d. Session will%s be paused for %dms\n", qr->rule_id, qr->delay, (qr->delay == 0 ? " NOT" : "" ) , qr->delay);
+				ret->delay=qr->delay;
+			}
+			if (qr->next_query_flagIN >= 0) {
+				// Note: Negative next_query_flagIN means this rule doesn't change the next query flagIN
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set next query flagIN: %d\n", qr->rule_id, qr->next_query_flagIN);
+				ret->next_query_flagIN=qr->next_query_flagIN;
+			}
+			if (qr->mirror_flagOUT >= 0) {
+				// Note: negative mirror_flagOUT means this rule doesn't change the mirror flagOUT
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set mirror flagOUT: %d\n", qr->rule_id, qr->mirror_flagOUT);
+				ret->mirror_flagOUT=qr->mirror_flagOUT;
+			}
+			if (qr->mirror_hostgroup >= 0) {
+				// Note: negative mirror_hostgroup means this rule doesn't change the mirror
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set mirror hostgroup: %d. A new session will be created\n", qr->rule_id, qr->mirror_hostgroup);
+				ret->mirror_hostgroup=qr->mirror_hostgroup;
+			}
+			if (qr->error_msg) {
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set error_msg: %s\n", qr->rule_id, qr->error_msg);
+				//proxy_warning("User \"%s\" has issued query that has been filtered: %s \n " , sess->client_myds->myconn->userinfo->username, query);
+				ret->error_msg=strdup(qr->error_msg);
+			}
+			if (qr->OK_msg) {
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set error_msg: %s\n", qr->rule_id, qr->OK_msg);
+				//proxy_warning("User \"%s\" has issued query that has been filtered: %s \n " , sess->client_myds->myconn->userinfo->username, query);
+				ret->OK_msg=strdup(qr->OK_msg);
+			}
+			if (qr->cache_ttl >= 0) {
+				// Note: negative TTL means this rule doesn't change
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set cache_ttl: %d. Query will%s hit the cache\n", qr->rule_id, qr->cache_ttl, (qr->cache_ttl == 0 ? " NOT" : "" ));
+				ret->cache_ttl=qr->cache_ttl;
+			}
+			if (qr->cache_empty_result >= 0) {
+				// Note: negative value means this rule doesn't change
+				// cache_empty_result values:
+				// -1: Use global setting (query_cache_stores_empty_result)
+				//  0: Do NOT cache empty resultsets, but cache non-empty resultsets
+				//  1: Always cache resultsets (both empty and non-empty)
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set cache_empty_result: %d. Query with empty result will%s hit the cache\n", qr->rule_id, qr->cache_empty_result, (qr->cache_empty_result == 0 ? " NOT" : "" ));
+				ret->cache_empty_result=qr->cache_empty_result;
+			}
+			if (qr->cache_timeout >= 0) {
+				// Note: negative value means this rule doesn't change
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set cache_timeout: %dms. Query will wait up resulset to be avaiable in query cache before running on backend\n", qr->rule_id, qr->cache_timeout);
+				ret->cache_timeout=qr->cache_timeout;
+			}
+			if (qr->sticky_conn >= 0) {
+				// Note: negative sticky_conn means this rule doesn't change
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set sticky_conn: %d. Connection will%s stick\n", qr->rule_id, qr->sticky_conn, (qr->sticky_conn == 0 ? " NOT" : "" ));
+				ret->sticky_conn=qr->sticky_conn;
+			}
+			if (qr->multiplex >= 0) {
+				// Note: negative multiplex means this rule doesn't change
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set multiplex: %d. Connection will%s multiplex\n", qr->rule_id, qr->multiplex, (qr->multiplex == 0 ? " NOT" : "" ));
+				ret->multiplex=qr->multiplex;
+			}
+			if (qr->log >= 0) {
+				// Note: negative log means this rule doesn't change
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set log: %d. Query will%s logged\n", qr->rule_id, qr->log, (qr->log == 0 ? " NOT" : "" ));
+				ret->log=qr->log;
+			}
+			if (qr->destination_hostgroup >= 0) {
+				// Note: negative hostgroup means this rule doesn't change
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set destination hostgroup: %d\n", qr->rule_id, qr->destination_hostgroup);
+				ret->destination_hostgroup=qr->destination_hostgroup;
+			}
+			if constexpr (has_process_query_extended<QP_DERIVED>::value) {
+				(static_cast<QP_DERIVED*>(this))->process_query_extended(static_cast<TypeQPOutput*>(ret), static_cast<TypeQueryRule*>(qr));
+			}
+			if (stmt_exec == false) { // we aren't processing a STMT_EXECUTE
+				if (qr->replace_pattern) {
+					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d on match_pattern \"%s\" has a replace_pattern \"%s\" to apply\n", qr->rule_id, qr->match_pattern, qr->replace_pattern);
+					if (ret->new_query==NULL) ret->new_query=new std::string(query);
+					re2_t *re2p=(re2_t *)qr->regex_engine2;
+					if (re2p->re2) {
+						//RE2::Replace(ret->new_query,qr->match_pattern,qr->replace_pattern);
+						if ((qr->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL) {
+							re2p->re2->GlobalReplace(ret->new_query,qr->match_pattern,qr->replace_pattern);
+						} else {
+							re2p->re2->Replace(ret->new_query,qr->match_pattern,qr->replace_pattern);
+						}
+					} else {
+						//re2p->re1->Replace(ret->new_query,qr->replace_pattern);
+						if ((qr->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL) {
+							re2p->re1->GlobalReplace(qr->replace_pattern,ret->new_query);
+						} else {
+							re2p->re1->Replace(qr->replace_pattern,ret->new_query);
+						}
 					}
 				}
 			}
-		}
 
-		// match on proxy_addr
-		if (qr->proxy_addr && strlen(qr->proxy_addr)) {
-			if (sess->client_myds->proxy_addr.addr) {
-				if (strcmp(qr->proxy_addr,sess->client_myds->proxy_addr.addr)!=0) {
-					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching proxy_addr\n", qr->rule_id);
-					continue;
-				}
+			if (qr->apply==true) {
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d is the last one to apply: exit!\n", qr->rule_id);
+				iterate_rules = false;
+				break;
 			}
-		}
-
-		// match on proxy_port
-		if (qr->proxy_port>=0) {
-			if (qr->proxy_port!=sess->client_myds->proxy_addr.port) {
-				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching proxy_port\n", qr->rule_id);
-				continue;
-			}
-		}
-
-		// match on digest
-		if (qp && qp->digest) {
-			if (qr->digest) {
-				if (qr->digest != qp->digest) {
-					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching digest\n", qr->rule_id);
-					continue;
-				}
-			}
-		}
-
-		// match on query digest
-		if (qp && qp->digest_text ) { // we call this only if we have a query digest
-			re2p=(re2_t *)qr->regex_engine1;
-			if (qr->match_digest) {
-				bool rc;
-				// we always match on original query
-				if (re2p->re2) {
-					rc=RE2::PartialMatch(qp->digest_text,*re2p->re2);
-				} else {
-					rc=re2p->re1->PartialMatch(qp->digest_text);
-				}
-				if ((rc==true && qr->negate_match_pattern==true) || ( rc==false && qr->negate_match_pattern==false )) {
-					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching pattern\n", qr->rule_id);
-					continue;
-				}
-			}
-		}
-		// match on query
-		re2p=(re2_t *)qr->regex_engine2;
-		if (qr->match_pattern) {
-			bool rc;
-			if (ret && ret->new_query) {
-				// if we already rewrote the query, process the new query
-				//std::string *s=ret->new_query;
-				if (re2p->re2) {
-					rc=RE2::PartialMatch(ret->new_query->c_str(),*re2p->re2);
-				} else {
-					rc=re2p->re1->PartialMatch(ret->new_query->c_str());
-				}
-			} else {
-				// we never rewrote the query
-				if (re2p->re2) {
-					rc=RE2::PartialMatch(query,*re2p->re2);
-				} else {
-					rc=re2p->re1->PartialMatch(query);
-				}
-			}
-			if ((rc==true && qr->negate_match_pattern==true) || ( rc==false && qr->negate_match_pattern==false )) {
-				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching pattern\n", qr->rule_id);
-				continue;
-			}
-		}
-
-		// if we arrived here, we have a match
-		qr->hits++; // this is done without atomic function because it updates only the local variables
-		bool set_flagOUT=false;
-		if (qr->flagOUT_weights_total > 0) {
-			int rnd = random() % qr->flagOUT_weights_total;
-			for (unsigned int i=0; i< qr->flagOUT_weights->size(); i++) {
-				int w = qr->flagOUT_weights->at(i);
-				if (rnd < w) {
-					flagIN= qr->flagOUT_ids->at(i);
-					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has changed flagOUT based on weight\n", qr->rule_id);
-					set_flagOUT=true;
+			if (set_flagOUT==true) {
+				if (reiterate) {
+					reiterate--;
+					iterate_rules = true;
 					break;
-				} else {
-					rnd -= w;
 				}
-			}
-		}
-		if (qr->flagOUT >= 0) {
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has changed flagOUT\n", qr->rule_id);
-			flagIN=qr->flagOUT;
-			set_flagOUT=true;
-			//sess->query_info.flagOUT=flagIN;
-		}
-		if (qr->reconnect >= 0) {
-			// Note: negative reconnect means this rule doesn't change
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set reconnect: %d. Query will%s be rexecuted if connection is lost\n", qr->rule_id, qr->reconnect, (qr->reconnect == 0 ? " NOT" : "" ));
-			ret->reconnect=qr->reconnect;
-		}
-		if (qr->timeout >= 0) {
-			// Note: negative timeout means this rule doesn't change
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set timeout: %d. Query will%s be interrupted if exceeding %dms\n", qr->rule_id, qr->timeout, (qr->timeout == 0 ? " NOT" : "" ) , qr->timeout);
-			ret->timeout=qr->timeout;
-		}
-	    if (qr->retries >= 0) {
-			// Note: negative retries means this rule doesn't change
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set retries: %d. Query will be re-executed %d times in case of failure\n", qr->rule_id, qr->retries, qr->retries);
-			ret->retries=qr->retries;
-		}
-		if (qr->delay >= 0) {
-			// Note: negative delay means this rule doesn't change
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set delay: %d. Session will%s be paused for %dms\n", qr->rule_id, qr->delay, (qr->delay == 0 ? " NOT" : "" ) , qr->delay);
-			ret->delay=qr->delay;
-		}
-		if (qr->next_query_flagIN >= 0) {
-			// Note: Negative next_query_flagIN means this rule doesn't change the next query flagIN
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set next query flagIN: %d\n", qr->rule_id, qr->next_query_flagIN);
-			ret->next_query_flagIN=qr->next_query_flagIN;
-		}
-		if (qr->mirror_flagOUT >= 0) {
-			// Note: negative mirror_flagOUT means this rule doesn't change the mirror flagOUT
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set mirror flagOUT: %d\n", qr->rule_id, qr->mirror_flagOUT);
-			ret->mirror_flagOUT=qr->mirror_flagOUT;
-		}
-		if (qr->mirror_hostgroup >= 0) {
-			// Note: negative mirror_hostgroup means this rule doesn't change the mirror
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set mirror hostgroup: %d. A new session will be created\n", qr->rule_id, qr->mirror_hostgroup);
-			ret->mirror_hostgroup=qr->mirror_hostgroup;
-		}
-		if (qr->error_msg) {
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set error_msg: %s\n", qr->rule_id, qr->error_msg);
-			//proxy_warning("User \"%s\" has issued query that has been filtered: %s \n " , sess->client_myds->myconn->userinfo->username, query);
-			ret->error_msg=strdup(qr->error_msg);
-		}
-		if (qr->OK_msg) {
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set error_msg: %s\n", qr->rule_id, qr->OK_msg);
-			//proxy_warning("User \"%s\" has issued query that has been filtered: %s \n " , sess->client_myds->myconn->userinfo->username, query);
-			ret->OK_msg=strdup(qr->OK_msg);
-		}
-		if (qr->cache_ttl >= 0) {
-			// Note: negative TTL means this rule doesn't change
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set cache_ttl: %d. Query will%s hit the cache\n", qr->rule_id, qr->cache_ttl, (qr->cache_ttl == 0 ? " NOT" : "" ));
-			ret->cache_ttl=qr->cache_ttl;
-		}
-		if (qr->cache_empty_result >= 0) {
-			// Note: negative value means this rule doesn't change
-			// cache_empty_result values:
-			// -1: Use global setting (query_cache_stores_empty_result)
-			//  0: Do NOT cache empty resultsets, but cache non-empty resultsets
-			//  1: Always cache resultsets (both empty and non-empty)
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set cache_empty_result: %d. Query with empty result will%s hit the cache\n", qr->rule_id, qr->cache_empty_result, (qr->cache_empty_result == 0 ? " NOT" : "" ));
-			ret->cache_empty_result=qr->cache_empty_result;
-		}
-		if (qr->cache_timeout >= 0) {
-			// Note: negative value means this rule doesn't change
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set cache_timeout: %dms. Query will wait up resulset to be avaiable in query cache before running on backend\n", qr->rule_id, qr->cache_timeout);
-			ret->cache_timeout=qr->cache_timeout;
-		}
-		if (qr->sticky_conn >= 0) {
-			// Note: negative sticky_conn means this rule doesn't change
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set sticky_conn: %d. Connection will%s stick\n", qr->rule_id, qr->sticky_conn, (qr->sticky_conn == 0 ? " NOT" : "" ));
-			ret->sticky_conn=qr->sticky_conn;
-		}
-		if (qr->multiplex >= 0) {
-			// Note: negative multiplex means this rule doesn't change
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set multiplex: %d. Connection will%s multiplex\n", qr->rule_id, qr->multiplex, (qr->multiplex == 0 ? " NOT" : "" ));
-			ret->multiplex=qr->multiplex;
-		}
-		if (qr->log >= 0) {
-			// Note: negative log means this rule doesn't change
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set log: %d. Query will%s logged\n", qr->rule_id, qr->log, (qr->log == 0 ? " NOT" : "" ));
-			ret->log=qr->log;
-		}
-		if (qr->destination_hostgroup >= 0) {
-			// Note: negative hostgroup means this rule doesn't change
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set destination hostgroup: %d\n", qr->rule_id, qr->destination_hostgroup);
-			ret->destination_hostgroup=qr->destination_hostgroup;
-		}	
-		if constexpr (has_process_query_extended<QP_DERIVED>::value) {
-			(static_cast<QP_DERIVED*>(this))->process_query_extended(static_cast<TypeQPOutput*>(ret), static_cast<TypeQueryRule*>(qr));
-		}
-		if (stmt_exec == false) { // we aren't processing a STMT_EXECUTE
-			if (qr->replace_pattern) {
-				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d on match_pattern \"%s\" has a replace_pattern \"%s\" to apply\n", qr->rule_id, qr->match_pattern, qr->replace_pattern);
-				if (ret->new_query==NULL) ret->new_query=new std::string(query);
-				re2_t *re2p=(re2_t *)qr->regex_engine2;
-				if (re2p->re2) {
-					//RE2::Replace(ret->new_query,qr->match_pattern,qr->replace_pattern);
-					if ((qr->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL) {
-						re2p->re2->GlobalReplace(ret->new_query,qr->match_pattern,qr->replace_pattern);
-					} else {
-						re2p->re2->Replace(ret->new_query,qr->match_pattern,qr->replace_pattern);
-					}
-				} else {
-					//re2p->re1->Replace(ret->new_query,qr->replace_pattern);
-					if ((qr->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL) {
-						re2p->re1->GlobalReplace(qr->replace_pattern,ret->new_query);
-					} else {
-						re2p->re1->Replace(qr->replace_pattern,ret->new_query);
-					}
-				}
-			}	
-		}
-
-		if (qr->apply==true) {
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d is the last one to apply: exit!\n", qr->rule_id);
-			goto __exit_process_mysql_query;
-		}
-		if (set_flagOUT==true) {
-			if (reiterate) {
-				reiterate--;
-				goto __internal_loop;
 			}
 		}
 	}
 
-__exit_process_mysql_query:
 	if (qr == NULL || qr->apply == false) {
-		// now it is time to check mysql_query_rules_fast_routing
-		// it is only check if "apply" is not true
-		const char * u = sess->client_myds->myconn->userinfo->username;
-		const char * s = sess->client_myds->myconn->userinfo->schemaname;
+		// Skip fast routing for mirror sessions - they already have their destination
+		if (sess->mirror == false) {
+			// now it is time to check mysql_query_rules_fast_routing
+			// it is only check if "apply" is not true
+			const char * u = sess->client_myds->myconn->userinfo->username;
+			const char * s = sess->client_myds->myconn->userinfo->schemaname;
 
-		int dst_hg = -1;
+			int dst_hg = -1;
 
-		if (_thr_SQP_rules_fast_routing != nullptr) {
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 7, "Searching thread-local 'rules_fast_routing' hashmap with: user='%s', schema='%s', and flagIN='%d'\n", u, s, flagIN);
-			dst_hg = search_rules_fast_routing_dest_hg(&_thr_SQP_rules_fast_routing, u, s, flagIN, false);
-		} else if (rules_fast_routing != nullptr) {
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 7, "Searching global 'rules_fast_routing' hashmap with: user='%s', schema='%s', and flagIN='%d'\n", u, s, flagIN);
-			// NOTE: A pointer to the member 'this->rules_fast_routing' is required, since the value of the
-			// member could have changed before the function acquires the internal lock. See function doc.
-			dst_hg = search_rules_fast_routing_dest_hg(&this->rules_fast_routing, u, s, flagIN, true);
-		}
+			if (_thr_SQP_rules_fast_routing != nullptr) {
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 7, "Searching thread-local 'rules_fast_routing' hashmap with: user='%s', schema='%s', and flagIN='%d'\n", u, s, flagIN);
+				dst_hg = search_rules_fast_routing_dest_hg(&_thr_SQP_rules_fast_routing, u, s, flagIN, false);
+			} else if (rules_fast_routing != nullptr) {
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 7, "Searching global 'rules_fast_routing' hashmap with: user='%s', schema='%s', and flagIN='%d'\n", u, s, flagIN);
+				// NOTE: A pointer to the member 'this->rules_fast_routing' is required, since the value of the
+				// member could have changed before the function acquires the internal lock. See function doc.
+				dst_hg = search_rules_fast_routing_dest_hg(&this->rules_fast_routing, u, s, flagIN, true);
+			}
 
-		if (dst_hg != -1) {
-			ret->destination_hostgroup = dst_hg;
+			if (dst_hg != -1) {
+				ret->destination_hostgroup = dst_hg;
+			}
 		}
 	}
 	
 	if (sess->mirror==false) { // we process comments only on original queries, not on mirrors
-		if (qp && qp->first_comment) {
-			// we have a comment to parse
-			query_parser_first_comment(ret, qp->first_comment);
+		if (qp) {
+			if (ret->new_query) {
+				query_parser_free(qp);
+				query_parser_init(qp, ret->new_query->c_str(), ret->new_query->length(), 0);
+			}
+			// Process first comment after query rules if configured (values 2 or 3)
+			if (qp->first_comment && (first_comment_parsing == 2 || first_comment_parsing == 3)) {
+				// we have a comment to parse
+				query_parser_first_comment(ret, qp->first_comment);
+			}
 		}
 	}
 	if (GET_THREAD_VARIABLE(firewall_whitelist_enabled)) {
@@ -1704,9 +2188,9 @@ __exit_process_mysql_query:
 					if (ret->firewall_whitelist_mode == WUS_DETECTING || ret->firewall_whitelist_mode == WUS_PROTECTING) {
 						char buf[32];
 						if (qp && qp->digest) {
-							sprintf(buf,"0x%016llX", (long long unsigned int)qp->digest);
+							snprintf(buf, sizeof(buf), "0x%016llX", (long long unsigned int)qp->digest);
 						} else {
-							sprintf(buf,"unknown");
+							snprintf(buf, sizeof(buf), "unknown");
 						}
 						char *action = (char *)"blocked";
 						if (ret->firewall_whitelist_mode == WUS_DETECTING) {
@@ -1804,32 +2288,52 @@ void Query_Processor<QP_DERIVED>::update_query_processor_stats() {
 };
 
 template <typename QP_DERIVED>
+static void qp_digest_parsersql(SQP_par_t* qp, const char* query, int query_length) {
+	if constexpr (std::is_same_v<QP_DERIVED, MySQL_Query_Processor>) {
+		parsersql_digest_init_mysql(qp, query, query_length);
+	} else if constexpr (std::is_same_v<QP_DERIVED, PgSQL_Query_Processor>) {
+		parsersql_digest_init_pgsql(qp, query, query_length);
+	}
+}
+
+template <typename QP_DERIVED>
+static void qp_digest_legacy(SQP_par_t* qp, const char* query, int query_length) {
+	options opts;
+	opts.lowercase = GET_THREAD_VARIABLE(query_digests_lowercase);
+	opts.replace_null = GET_THREAD_VARIABLE(query_digests_replace_null);
+	opts.replace_number = GET_THREAD_VARIABLE(query_digests_no_digits);
+	opts.grouping_limit = GET_THREAD_VARIABLE(query_digests_grouping_limit);
+	opts.groups_grouping_limit = GET_THREAD_VARIABLE(query_digests_groups_grouping_limit);
+	opts.keep_comment = GET_THREAD_VARIABLE(query_digests_keep_comment);
+	opts.max_query_length = GET_THREAD_VARIABLE(query_digests_max_query_length);
+
+	if constexpr (std::is_same_v<QP_DERIVED, MySQL_Query_Processor>) {
+		qp->digest_text = mysql_query_digest_and_first_comment(query, query_length, &qp->first_comment,
+			((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL), &opts);
+	} else if constexpr (std::is_same_v<QP_DERIVED, PgSQL_Query_Processor>) {
+		qp->digest_text = pgsql_query_digest_and_first_comment(query, query_length, &qp->first_comment,
+			((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL), &opts);
+	}
+	const int digest_text_length=strnlen(qp->digest_text, GET_THREAD_VARIABLE(query_digests_max_digest_length));
+	qp->digest=SpookyHash::Hash64(qp->digest_text, digest_text_length, 0);
+#ifdef DEBUG
+	if (qp->first_comment && strlen(qp->first_comment)) {
+		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Comment in query = %s \n", qp->first_comment);
+	}
+#endif
+}
+
+template <typename QP_DERIVED>
 void Query_Processor<QP_DERIVED>::query_parser_init(SQP_par_t *qp, const char *query, int query_length, int flags) {
-	// trying to get rid of libinjection
-	// instead of initializing qp->sf , we copy query info later in this function
 	qp->digest_text=NULL;
 	qp->first_comment=NULL;
 	qp->query_prefix=NULL;
 	if (GET_THREAD_VARIABLE(query_digests)) {
-		options opts;
-		opts.lowercase = GET_THREAD_VARIABLE(query_digests_lowercase);
-		opts.replace_null = GET_THREAD_VARIABLE(query_digests_replace_null);
-		opts.replace_number = GET_THREAD_VARIABLE(query_digests_no_digits);
-		opts.grouping_limit = GET_THREAD_VARIABLE(query_digests_grouping_limit);
-		opts.groups_grouping_limit = GET_THREAD_VARIABLE(query_digests_groups_grouping_limit);
-		opts.keep_comment = GET_THREAD_VARIABLE(query_digests_keep_comment);
-		opts.max_query_length = GET_THREAD_VARIABLE(query_digests_max_query_length);
-
-		qp->digest_text=query_digest_and_first_comment_2(query, query_length, &qp->first_comment, 
-			((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL), &opts);
-		// the hash is computed only up to query_digests_max_digest_length bytes
-		const int digest_text_length=strnlen(qp->digest_text, GET_THREAD_VARIABLE(query_digests_max_digest_length));
-		qp->digest=SpookyHash::Hash64(qp->digest_text, digest_text_length, 0);
-#ifdef DEBUG
-		if (qp->first_comment && strlen(qp->first_comment)) {
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Comment in query = %s \n", qp->first_comment);
+		if (GET_THREAD_VARIABLE(query_processor_parser) == 1) {
+			qp_digest_parsersql<QP_DERIVED>(qp, query, query_length);
+		} else {
+			qp_digest_legacy<QP_DERIVED>(qp, query, query_length);
 		}
-#endif /* DEBUG */
 	} else {
 		if (GET_THREAD_VARIABLE(commands_stats)) {
 			size_t sl=32;

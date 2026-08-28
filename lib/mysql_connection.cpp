@@ -8,12 +8,20 @@ using json = nlohmann::json;
 //#include "SpookyV2.h"
 #include <fcntl.h>
 #include <sstream>
+#include <openssl/crypto.h>
 
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
 #include "MySQL_Query_Processor.h"
 #include "MySQL_Variables.h"
+#include "mysqld_error.h"
 #include <atomic>
+#include <mutex>
+#include <set>
+
+#ifdef PROXYSQLED25519
+#include "MySQL_Ed25519.h"
+#endif
 
 // some of the code that follows is from mariadb client library memory allocator
 typedef int     myf;    // Type of MyFlags in my_funcs
@@ -266,9 +274,17 @@ MySQL_Connection_userinfo::MySQL_Connection_userinfo() {
 MySQL_Connection_userinfo::~MySQL_Connection_userinfo() {
 	if (username) free(username);
 	if (fe_username) free(fe_username);
-	if (password) free(password);
+	clear_password();
 	if (sha1_pass) free(sha1_pass);
 	if (schemaname) free(schemaname);
+}
+
+void MySQL_Connection_userinfo::clear_password() {
+	if (password != nullptr) {
+		OPENSSL_cleanse(password, strlen(password));
+		free(password);
+		password = nullptr;
+	}
 }
 
 void MySQL_Connection::compute_unknown_transaction_status() {
@@ -335,6 +351,7 @@ uint64_t MySQL_Connection_userinfo::compute_hash() {
 	strcpy(buf+l,_COMPUTE_HASH_DEL2_);
 	l+=strlen(_COMPUTE_HASH_DEL2_);
 	hash=SpookyHash::Hash64(buf,l,0);
+	OPENSSL_cleanse(buf, l);
 	free(buf);
 	return hash;
 }
@@ -353,7 +370,7 @@ void MySQL_Connection_userinfo::set(char *u, char *p, char *s, char *sh1) {
 	if (p) {
 		if (password) {
 			if (strcmp(p,password)) {
-				free(password);
+				clear_password();
 				password=strdup(p);
 			}
 		} else {
@@ -428,6 +445,7 @@ MySQL_Connection::MySQL_Connection() {
 	async_state_machine=ASYNC_CONNECT_START;
 	ret_mysql=NULL;
 	send_quit=true;
+	healthy=true;
 	myds=NULL;
 	inserted_into_pool=0;
 	reusable=false;
@@ -444,19 +462,24 @@ MySQL_Connection::MySQL_Connection() {
 
 	options.client_flag = 0;
 	options.compression_min_length=0;
+	options.zstd_compression_level=0;
 	options.server_version=NULL;
 	options.last_set_autocommit=-1;	// -1 = never set
 	options.autocommit=true;
+	options.compression_zstd=false;
 	options.no_backslash_escapes=false;
 	options.init_connect=NULL;
 	options.init_connect_sent=false;
 	options.session_track_gtids = NULL;
 	options.session_track_gtids_sent = false;
+	options.session_track_variables_sent = false;
+	options.session_track_state_sent = false;
 	options.ldap_user_variable=NULL;
 	options.ldap_user_variable_value=NULL;
 	options.ldap_user_variable_sent=false;
 	options.session_track_gtids_int=0;
 	options.server_capabilities=0;
+	options.max_allowed_pkt=0;
 
 	compression_pkt_id=0;
 	mysql_result=NULL;
@@ -483,6 +506,12 @@ MySQL_Connection::MySQL_Connection() {
 	statuses.myconnpoll_put = 0;
 	memset(gtid_uuid,0,sizeof(gtid_uuid));
 	memset(&connected_host_details, 0, sizeof(connected_host_details));
+#ifdef PROXYSQLED25519
+	// Zero-initialize so an ASAN/MSAN run never reads an uninitialized nonce
+	// on the (unreachable in practice) path where it would be read before
+	// PPHR_ed25519_switch() first populates it via RAND_bytes().
+	memset(ed25519_nonce, 0, sizeof(ed25519_nonce));
+#endif
 };
 
 MySQL_Connection::~MySQL_Connection() {
@@ -668,6 +697,11 @@ bool MySQL_Connection::requires_CHANGE_USER(const MySQL_Connection *client_conn)
 		// the server connection has more variables set than the client
 		return true;
 	}
+	if (user_variables.has_names_absent_from(client_conn->user_variables)) {
+		// The backend has a user variable that the frontend does not have.
+		// User variables cannot be unset, so reset the backend with CHANGE_USER.
+		return true;
+	}
 	std::vector<uint32_t>::const_iterator it_c = client_conn->dynamic_variables_idx.begin(); // client connection iterator
 	std::vector<uint32_t>::const_iterator it_s = dynamic_variables_idx.begin();              // server connection iterator
 	for ( ; it_s != dynamic_variables_idx.end() ; it_s++) {
@@ -728,6 +762,12 @@ unsigned int MySQL_Connection::number_of_matching_session_variables(const MySQL_
 			}
 		}
 	}
+	unsigned int user_variables_not_matching = 0;
+	ret += user_variables.count_matches(client_conn->user_variables, user_variables_not_matching);
+	not_matching += user_variables_not_matching;
+	if (user_variables.size() > client_conn->user_variables.size()) {
+		not_matching += user_variables.size() - client_conn->user_variables.size();
+	}
 	return ret;
 }
 
@@ -787,15 +827,20 @@ void MySQL_Connection::connect_start_SetAttributes() {
 	{
 		time_t __timer;
 		char __buffer[25];
-		struct tm *__tm_info;
+		struct tm __tm_info;
+		struct tm *tm_info_ptr;
 		time(&__timer);
-		__tm_info = localtime(&__timer);
-		strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", __tm_info);
+		tm_info_ptr = localtime_r(&__timer, &__tm_info);
+		if (tm_info_ptr == NULL) {
+			__buffer[0] = 0;
+		} else {
+			strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", tm_info_ptr);
+		}
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "connection_creation_time", __buffer);
 		unsigned long long t1=monotonic_time();
 		sprintf(__buffer,"%llu",(t1-GloVars.global.start_time)/1000/1000);
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "proxysql_uptime", __buffer);
-		sprintf(__buffer,"%d", parent->myhgc->hid);
+		snprintf(__buffer, sizeof(__buffer), "%d", parent->myhgc->hid);
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "hostgroup_id", __buffer);
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "compile_time", __TIMESTAMP__);
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "proxysql_version", PROXYSQL_VERSION);
@@ -862,8 +907,10 @@ void MySQL_Connection::connect_start_SetCharset() {
 
 void MySQL_Connection::connect_start_SetClientFlag(unsigned long& client_flags) {
 	client_flags = 0;
-	if (parent->compression)
+	if (parent->compression) {
 		client_flags |= CLIENT_COMPRESS;
+		client_flags |= CLIENT_ZSTD_COMPRESSION_ALGORITHM;
+	}
 
 	if (myds) {
 		if (myds->sess) {
@@ -887,11 +934,28 @@ void MySQL_Connection::connect_start_SetClientFlag(unsigned long& client_flags) 
 		}
 	}
 
-	// set 'CLIENT_DEPRECATE_EOF' flag if explicitly stated by 'mysql-enable_server_deprecate_eof'.
-	// Capability is disabled by default in 'mariadb_client', so setting this option is not optional
-	// for having 'CLIENT_DEPRECATE_EOF' in the connection to be stablished.
+	/**
+	 * @brief Select the backend CLIENT_DEPRECATE_EOF request for this connect attempt.
+	 * @details The local connect-call flags express a client preference only.  Connector/C
+	 *          records actual support from the backend greeting in server_capabilities;
+	 *          a backend that does not advertise the bit remains a legacy-EOF backend.
+	 *
+	 * @par Normal backend connections
+	 *      Request CLIENT_DEPRECATE_EOF when mysql-enable_server_deprecate_eof is enabled.
+	 * @par Enforced session tracking
+	 *      Request CLIENT_DEPRECATE_EOF regardless of that setting because session tracking
+	 *      requires the deprecate-EOF protocol.
+	 * @par Fast-forward connections
+	 *      Replace the normal preference with the frontend's negotiated state.  Forward the
+	 *      request only when the frontend both requested the capability and saw it advertised.
+	 */
 	if (mysql_thread___enable_server_deprecate_eof) {
-		mysql->options.client_flag |= CLIENT_DEPRECATE_EOF;
+		client_flags |= CLIENT_DEPRECATE_EOF;
+	}
+
+	// override 'mysql-enable_server_deprecate_eof' behavior if 'session_track_variables' is set to 'ENFORCED'
+	if (mysql_thread___session_track_variables == session_track_variables::ENFORCED) {
+		client_flags |= CLIENT_DEPRECATE_EOF;
 	}
 
 	if (myds != NULL) {
@@ -900,19 +964,23 @@ void MySQL_Connection::connect_start_SetClientFlag(unsigned long& client_flags) 
 				assert(myds->sess->client_myds != NULL);
 				MySQL_Connection * c = myds->sess->client_myds->myconn;
 				assert(c != NULL);
-				mysql->options.client_flag &= ~(CLIENT_DEPRECATE_EOF); // we disable it by default
+				client_flags &= ~(CLIENT_DEPRECATE_EOF); // we disable it by default
 				// if both client_flag and server_capabilities (used for client) , set CLIENT_DEPRECATE_EOF
 				if (c->options.client_flag & CLIENT_DEPRECATE_EOF) {
 					if (c->options.server_capabilities & CLIENT_DEPRECATE_EOF) {
-						mysql->options.client_flag |= CLIENT_DEPRECATE_EOF;
+						client_flags |= CLIENT_DEPRECATE_EOF;
 					}
 				}
 				// In case of 'fast_forward', we only enable compression if both, client and backend matches. Otherwise,
 				// we honor the behavior of a regular connection of when a connection doesn't agree on using compression
 				// during handshake, and we fallback to an uncompressed connection.
-				client_flags &= ~(CLIENT_COMPRESS); // we disable it by default
-				if (c->options.client_flag & CLIENT_COMPRESS) {
-					if (c->options.server_capabilities & CLIENT_COMPRESS) {
+				client_flags &= ~(CLIENT_COMPRESS | CLIENT_ZSTD_COMPRESSION_ALGORITHM); // we disable it by default
+				if (c->options.compression_min_length > 0) {
+					if (c->options.compression_zstd) {
+						if (c->options.server_capabilities & CLIENT_ZSTD_COMPRESSION_ALGORITHM) {
+							client_flags |= CLIENT_ZSTD_COMPRESSION_ALGORITHM;
+						}
+					} else if (c->options.server_capabilities & CLIENT_COMPRESS) {
 						client_flags |= CLIENT_COMPRESS;
 					}
 				}
@@ -994,11 +1062,41 @@ void MySQL_Connection::connect_start() {
 			auth_password=userinfo->password;
 		}
 	}
+#ifdef PROXYSQLED25519
+	// Prefix match, not full-validity match: a "$ED$"-prefixed value of the
+	// wrong length is just as unusable as cleartext against a backend as a
+	// well-formed one -- the "$ED$" marker is reserved and never a real
+	// cleartext password either way.
+	if (userinfo->password && proxysql_ed25519_has_prefix(userinfo->password)) {
+		// connect_start() runs for every backend connect attempt and the pool
+		// retries failed connects, so warn once per user rather than flooding
+		// the error log; MySQL_Authentication::add() already flags the row at
+		// load time. The set is bounded by the number of distinct usernames,
+		// and this branch is only entered for misconfigured $ED$ users.
+		static std::mutex ed25519_warned_mutex;
+		static std::set<std::string> ed25519_warned_users;
+		const std::string ed25519_uname { userinfo->username ? userinfo->username : "" };
+		bool ed25519_first_warning = false;
+		{
+			std::lock_guard<std::mutex> lock(ed25519_warned_mutex);
+			ed25519_first_warning = ed25519_warned_users.insert(ed25519_uname).second;
+		}
+		if (ed25519_first_warning) {
+			proxy_warning(
+				"User '%s' has an ed25519 public-key-only ($ED$) credential;"
+				" backend authentication requires the cleartext password and will fail\n",
+				ed25519_uname.c_str());
+		}
+	}
+#endif
 	if (parent->port) {
 		char* host_ip = connect_start_DNS_lookup();
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, host_ip, userinfo->username, auth_password, userinfo->schemaname, parent->port, NULL, client_flags);
 	} else {
-		client_flags &= ~(CLIENT_COMPRESS); // disabling compression for connections made via Unix socket
+		const bool fast_forward = myds && myds->sess && myds->sess->session_fast_forward;
+		if (!fast_forward) {
+			client_flags &= ~(CLIENT_COMPRESS | CLIENT_ZSTD_COMPRESSION_ALGORITHM); // disabling compression for regular connections made via Unix socket
+		}
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, "localhost", userinfo->username, auth_password, userinfo->schemaname, parent->port, parent->address, client_flags);
 	}
 	fd=mysql_get_socket(mysql);
@@ -1825,7 +1923,16 @@ handler_again:
 					update_warning_count_from_connection();
 					// we reach here if there was no error
 					// exclude warning_count from the OK/EOF packet for the SHOW WARNINGS statement
-					MyRS->add_eof(query.length == 13 && strncasecmp(query.ptr, "SHOW WARNINGS", 13) == 0);
+					bool is_show_warnings = false;
+					if (myds && myds->sess && myds->sess->CurrentQuery.QueryParserArgs.digest_text) {
+						const char* dig_text = myds->sess->CurrentQuery.QueryParserArgs.digest_text;
+						const size_t dig_len = strlen(dig_text);
+						is_show_warnings = (dig_len == 13 && strncasecmp(dig_text, "SHOW WARNINGS", 13) == 0);
+					} else {
+						// Fallback to raw query when digest is unavailable (digests disabled)
+						is_show_warnings = (query.length == 13 && strncasecmp(query.ptr, "SHOW WARNINGS", 13) == 0);
+					}
+					MyRS->add_eof(is_show_warnings);
 					NEXT_IMMEDIATE(ASYNC_QUERY_END);
 				}
 			}
@@ -2113,6 +2220,15 @@ int MySQL_Connection::async_connect(short event) {
 		creation_time = monotonic_time();
 		return 0;
 	}
+
+	// Abort if the server went offline or was marked unhealthy while waiting to connect.
+	// The server status can change (shunned by monitor, AWS BGD switchover, manual OFFLINE)
+	// or the connection can be marked unhealthy (AWS BGD drain) between server selection and
+	// connection completion.
+	if (IsServerOffline()) {
+		return -1;
+	}
+
 	handler(event);
 	switch (async_state_machine) {
 		case ASYNC_CONNECT_SUCCESSFUL:
@@ -2135,21 +2251,28 @@ int MySQL_Connection::async_connect(short event) {
 
 
 bool MySQL_Connection::IsServerOffline() {
-	bool ret=false;
-	if (parent==NULL)
+	bool ret = false;
+	if (parent == NULL)
 		return ret;
-	server_status=parent->get_status(); // we copy it here to avoid race condition. The caller will see this
+
+	if (healthy == false)
+		return true;
+
+	server_status = parent->get_status(); // we copy it here to avoid race condition. The caller will see this
+	bool server_shunned = (server_status == MYSQL_SERVER_STATUS_SHUNNED) || (server_status == MYSQL_SERVER_STATUS_SHUNNED_AWS_BGD);
+
 	if (
-		(server_status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
+		(server_status == MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
 		||
-		(server_status==MYSQL_SERVER_STATUS_SHUNNED && parent->shunned_automatic==true && parent->shunned_and_kill_all_connections==true) // the server is SHUNNED due to a serious issue
+		(server_shunned && parent->shunned_automatic == true && parent->shunned_and_kill_all_connections == true) // the server is SHUNNED due to a serious issue
 		||
-		(server_status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG)  // slave is lagging! see #774
+		(server_status == MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG)  // slave is lagging! see #774
 		||
 		(parent->myhgc->online_servers_within_threshold() == false) // number of online servers in a hostgroup exceeds the configured maximum servers
 	) {
-		ret=true;
+		ret = true;
 	}
+
 	return ret;
 }
 
@@ -2896,7 +3019,45 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags_SetBackslashEscapes() {
 	}
 }
 
-void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
+bool mysql_user_variable_tracking_can_stage(
+	int mode, int set_parser_algorithm, int query_processor_parser,
+	bool plain_text_com_query, bool connection_bound_fallback) {
+	return mode == 1 && (set_parser_algorithm == 3 || query_processor_parser == 1) &&
+		plain_text_com_query && !connection_bound_fallback;
+}
+
+bool mysql_user_variable_set_uses_qpo_epilogue(
+	UserVariableSetStatus analysis_status,
+	MySQL_User_Variable_Apply_Result preflight_result) {
+	return analysis_status == UserVariableSetStatus::SUPPORTED &&
+		preflight_result == MySQL_User_Variable_Apply_Result::OK;
+}
+
+bool mysql_user_variable_commit_post_ok(
+	MySQL_User_Variable_State& frontend,
+	MySQL_User_Variable_State& backend,
+	const std::vector<UserVariableAssignment>& assignments) {
+	MySQL_User_Variable_State staged_frontend;
+	MySQL_User_Variable_State staged_backend;
+	const MySQL_User_Variable_Apply_Result frontend_result =
+		frontend.stage(assignments, staged_frontend);
+	const MySQL_User_Variable_Apply_Result backend_result =
+		backend.stage(assignments, staged_backend);
+	if (frontend_result != MySQL_User_Variable_Apply_Result::OK ||
+		backend_result != MySQL_User_Variable_Apply_Result::OK) {
+		return false;
+	}
+	frontend = std::move(staged_frontend);
+	backend = std::move(staged_backend);
+	return true;
+}
+
+unsigned int mysql_user_variable_replay_error_code(unsigned int backend_error_code) {
+	return backend_error_code == 0 ? ER_UNKNOWN_ERROR : backend_error_code;
+}
+
+void MySQL_Connection::ProcessQueryAndSetStatusFlags(
+	char *query_digest_text, bool user_variable_usage_is_safe) {
 	if (query_digest_text==NULL) return;
 	// unknown what to do with multiplex
 	int mul=-1;
@@ -2917,7 +3078,9 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 
 	ProcessQueryAndSetStatusFlags_Warnings(query_digest_text);
 
-	ProcessQueryAndSetStatusFlags_UserVariables(query_digest_text, mul);
+	if (!user_variable_usage_is_safe) {
+		ProcessQueryAndSetStatusFlags_UserVariables(query_digest_text, mul);
+	}
 
 	if (get_status(STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT)==false) { // we search if prepared was already executed
 		if (!strncasecmp(query_digest_text,"PREPARE ", strlen("PREPARE "))) {
@@ -2979,7 +3142,7 @@ void MySQL_Connection::optimize() {
 // if avoids that a QUIT command stops forever
 // FIXME: currently doesn't support encryption and compression
 void MySQL_Connection::close_mysql() {
-	if ((send_quit) && (mysql->net.pvio) && ret_mysql) {
+	if ((send_quit) && (mysql->net.pvio) && ret_mysql && !mysql->options.use_ssl) {
 		char buff[5];
 		mysql_hdr myhdr;
 		myhdr.pkt_id=0;
@@ -3000,16 +3163,24 @@ void MySQL_Connection::close_mysql() {
 }
 
 
+const char* mysql_simple_command_log_text(const char* stmt, bool redact_statement) {
+	return redact_statement ? "<redacted>" : stmt;
+}
+
 // this function is identical to async_query() , with the only exception that MyRS should never be set
-int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigned long length) {
+int MySQL_Connection::async_send_simple_command(
+	short event, char *stmt, unsigned long length, bool redact_statement) {
 	PROXY_TRACE();
 	assert(mysql);
 	assert(ret_mysql);
 	server_status=parent->get_status(); // we copy it here to avoid race condition. The caller will see this
+	bool server_shunned = (server_status == MYSQL_SERVER_STATUS_SHUNNED) || (server_status == MYSQL_SERVER_STATUS_SHUNNED_AWS_BGD);
 	if (
-		(parent->get_status()==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
+		(healthy == false)
 		||
-		(parent->get_status()==MYSQL_SERVER_STATUS_SHUNNED && parent->shunned_automatic==true && parent->shunned_and_kill_all_connections==true) // the server is SHUNNED due to a serious issue
+		(server_status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
+		||
+		(server_shunned && parent->shunned_automatic == true && parent->shunned_and_kill_all_connections==true) // the server is SHUNNED due to a serious issue
 	) {
 		return -1;
 	}
@@ -3033,7 +3204,11 @@ int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigne
 		// shouldn't retrieve any resultset.
 		// A common issue for triggering this error is to have configure mysql-init_connect to
 		// run a statement that returns a resultset.
-		proxy_error2(10003, "PMC-10003: Retrieved a resultset while running a simple command. This is an error!! Simple command: %s\n", stmt);
+		proxy_error2(
+			10003,
+			"PMC-10003: Retrieved a resultset while running a simple command. This is an error!! Simple command: %s\n",
+			mysql_simple_command_log_text(stmt, redact_statement)
+		);
 		return -2;
 	}
 	if (async_state_machine==ASYNC_QUERY_END) {
@@ -3082,6 +3257,7 @@ void MySQL_Connection::reset() {
 		}
 	}
 	dynamic_variables_idx.clear();
+	user_variables.clear();
 
 	if (options.init_connect) {
 		free(options.init_connect);
@@ -3103,6 +3279,8 @@ void MySQL_Connection::reset() {
 		options.session_track_gtids = NULL;
 		options.session_track_gtids_sent = false;
 	}
+	options.session_track_variables_sent = false;
+	options.session_track_state_sent = false;
 }
 
 bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
@@ -3137,6 +3315,46 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 	return ret;
 }
 
+bool MySQL_Connection::get_variables(std::unordered_map<string, string>& variables) {
+	bool ret = false;
+
+	if ((mysql != nullptr)
+		&& (mysql->net.last_errno == 0)
+		&& (mysql->server_status & SERVER_SESSION_STATE_CHANGED)) {
+		// when there is no error and status changed
+		const char *data;
+		size_t length;
+
+		if (mysql_session_track_get_first(mysql, SESSION_TRACK_SYSTEM_VARIABLES, &data, &length) == 0) {
+			string var_name(data, length);
+			string val;
+
+			// get_first() returns a variable_name
+			// get_next() will return the value
+			bool expect_value = true;
+
+			while (mysql_session_track_get_next(mysql, SESSION_TRACK_SYSTEM_VARIABLES, &data, &length) == 0) {
+				if (expect_value) {
+					val = string(data, length);
+					variables[var_name] = val;
+					// got a value in this iteration
+					// in the next iteration, we have to expect a variable_name
+					expect_value = false;
+				} else {
+					var_name = string(data, length);
+					// got a variable_name in this iteration
+					// in the next iteration, we have to expect the value of this variable
+					expect_value = true;
+				}
+			}
+
+			ret = true;
+		}
+	}
+
+	return ret;
+}
+
 void MySQL_Connection::set_ssl_params(MYSQL *mysql, MySQLServers_SslParams *ssl_params) {
 	if (ssl_params == NULL) {
 		mysql_ssl_set(mysql,
@@ -3164,7 +3382,7 @@ void MySQL_Connection::set_ssl_params(MYSQL *mysql, MySQLServers_SslParams *ssl_
 
 void MySQL_Connection::get_mysql_info_json(json& j) {
 	char buff[32];
-	sprintf(buff,"%p",mysql);
+	snprintf(buff, sizeof(buff), "%p", static_cast<void*>(mysql));
 	j["address"] = buff;
 	j["host"] = ( mysql->host ? mysql->host : "" );
 	j["host_info"] = ( mysql->host_info ? mysql->host_info : "" );
@@ -3195,7 +3413,7 @@ void MySQL_Connection::get_backend_conn_info_json(json& j) {
 		variables[*it_c].fill_server_internal_session(j, *it_c);
 	}
 	char buff[32];
-	sprintf(buff,"%p", this);
+	snprintf(buff, sizeof(buff), "%p", static_cast<void*>(this));
 	j["address"] = buff;
 	j["auto_increment_delay_token"] = auto_increment_delay_token;
 	j["bytes_recv"] = bytes_info.bytes_recv;
@@ -3210,6 +3428,13 @@ void MySQL_Connection::get_backend_conn_info_json(json& j) {
 	j["last_set_autocommit"] = options.last_set_autocommit;
 	j["no_backslash_escapes"] = options.no_backslash_escapes;
 	j["warning_count"] = warning_count;
+	json& user_variables_json = j["user_variables"];
+	user_variables_json["count"] = user_variables.size();
+	user_variables_json["stored_bytes"] = user_variables.stored_bytes();
+	const std::string user_variables_fingerprint = user_variables.diagnostic_fingerprint();
+	if (!user_variables_fingerprint.empty()) {
+		user_variables_json["fingerprint"] = user_variables_fingerprint;
+	}
 	json& js = j["status"];
 	js["get_lock"] = get_status(STATUS_MYSQL_CONNECTION_GET_LOCK);
 	js["lock_tables"] = get_status(STATUS_MYSQL_CONNECTION_LOCK_TABLES);

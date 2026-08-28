@@ -46,30 +46,47 @@ int main(int argc, char** argv) {
 	plan(2+2*ITER);
 	diag("Testing SSL and fast_forward");
 
-	MYSQL* mysqladmin = mysql_init(NULL);
+	// Declare all owned handles up front so a single close_all lambda can
+	// release every resource on any early-return path.
+	MYSQL* mysqladmin = NULL;
+	MYSQL* mysqladmin2 = NULL;
+	MYSQL* mysqllite3 = NULL;
+	auto close_all = [&]() {
+		if (mysqladmin)  { mysql_close(mysqladmin);  mysqladmin  = NULL; }
+		if (mysqladmin2) { mysql_close(mysqladmin2); mysqladmin2 = NULL; }
+		if (mysqllite3)  { mysql_close(mysqllite3);  mysqllite3  = NULL; }
+	};
+
+	mysqladmin = mysql_init(NULL);
 	if (!mysqladmin)
 		return exit_status();
 
 	if (!mysql_real_connect(mysqladmin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 	    fprintf(stderr, "File %s, line %d, Error: %s\n",
 	              __FILE__, __LINE__, mysql_error(mysqladmin));
+		close_all();
 		return exit_status();
 	}
 
 
 
-	if (run_queries_sets(queries_set1, mysqladmin, "Running on Admin"))
+	if (run_queries_sets(queries_set1, mysqladmin, "Running on Admin")) {
+		close_all();
 		return exit_status();
+	}
 
 
-	MYSQL * mysqladmin2 = mysql_init(NULL);
-	if (!mysqladmin2)
+	mysqladmin2 = mysql_init(NULL);
+	if (!mysqladmin2) {
+		close_all();
 		return exit_status();
+	}
 
 	mysql_ssl_set(mysqladmin2, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(mysqladmin2, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 	    fprintf(stderr, "File %s, line %d, Error: %s\n",
 	              __FILE__, __LINE__, mysql_error(mysqladmin2));
+		close_all();
 		return exit_status();
 	}
 
@@ -78,14 +95,17 @@ int main(int argc, char** argv) {
 		ok(c != NULL , "Cipher in use: %s", c == NULL ? "NULL" : c);
 	}
 
-	MYSQL * mysqllite3 = mysql_init(NULL);
-	if (!mysqllite3)
+	mysqllite3 = mysql_init(NULL);
+	if (!mysqllite3) {
+		close_all();
 		return exit_status();
+	}
 
 	mysql_ssl_set(mysqllite3, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(mysqllite3, cl.host, username, password, NULL, 6030, NULL, 0)) {
 	    fprintf(stderr, "File %s, line %d, Error: %s\n",
 	              __FILE__, __LINE__, mysql_error(mysqllite3));
+		close_all();
 		return exit_status();
 	}
 
@@ -93,7 +113,7 @@ int main(int argc, char** argv) {
 		const char * c = mysql_get_ssl_cipher(mysqllite3);
 		ok(c != NULL , "Cipher in use: %s", c == NULL ? "NULL" : c);
 	}
-	
+
 	for (int i=1; i<=ITER; i++) {
 		std::string s = "SELECT ''";
 		for (int j=0; j<i; j++) {
@@ -101,22 +121,33 @@ int main(int argc, char** argv) {
 		}
 		MYSQL_QUERY(mysqladmin2, s.c_str());
 		MYSQL_RES* result = mysql_store_result(mysqladmin2);
+		if (!result) {
+			fprintf(stderr, "File %s, line %d, Error: mysql_store_result: %s\n",
+				__FILE__, __LINE__, mysql_error(mysqladmin2));
+			close_all();
+			return exit_status();
+		}
 		MYSQL_ROW row = mysql_fetch_row(result);
-		long int rl = strlen(row[0]);
+		long int rl = (row && row[0]) ? (long int)strlen(row[0]) : -1;
 		mysql_free_result(result);
 		ok(s.length() == rl + strlen((const char *)"SELECT ''") + i*4 , "Line %d , Admin:   Executed SELECT %ld bytes long. Length returned: %ld", __LINE__ , s.length(), rl);
 
 		MYSQL_QUERY(mysqllite3, s.c_str());
 		result = mysql_store_result(mysqllite3);
+		if (!result) {
+			fprintf(stderr, "File %s, line %d, Error: mysql_store_result: %s\n",
+				__FILE__, __LINE__, mysql_error(mysqllite3));
+			close_all();
+			return exit_status();
+		}
 		row = mysql_fetch_row(result);
-		rl = strlen(row[0]);
+		rl = (row && row[0]) ? (long int)strlen(row[0]) : -1;
 		mysql_free_result(result);
 		ok(s.length() == rl + strlen((const char *)"SELECT ''") + i*4 , "Line %d , SQLite3: Executed SELECT %ld bytes long. Length returned: %ld", __LINE__ , s.length(), rl);
 
 	}
 
-	mysql_close(mysqladmin);
-
+	close_all();
 	return exit_status();
 }
 

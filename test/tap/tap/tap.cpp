@@ -29,10 +29,21 @@ typedef char my_bool;
 #include <signal.h>
 #include <time.h>
 #include <unistd.h>
+#include <atomic>
 
 #include <sys/time.h>
+#include <mutex>
+#include <vector>
+#include <string>
 
 using std::size_t;
+
+#ifdef __APPLE__
+typedef unsigned long ulong;
+#endif
+
+extern std::vector<std::string> noise_failures;
+extern std::mutex noise_failure_mutex;
 
 static ulong start_timer(void);
 static void end_timer(ulong start_time,char *buff);
@@ -264,17 +275,7 @@ plan(int count)
 }
 
 
-void
-skip_all(char const *reason, ...)
-{
-  va_list ap;
-  va_start(ap, reason);
-  fprintf(tapout, "1..0 # skip ");
-  vfprintf(tapout, reason, ap);
-  fflush(tapout);
-  va_end(ap);
-  exit(0);
-}
+// skip_all() removed — see comment in tap.h. Use BAIL_OUT() instead.
 
 void
 ok(int pass, char const *fmt, ...)
@@ -350,9 +351,28 @@ todo_end()
   *g_test.todo = '\0';
 }
 
+extern "C" void stop_noise_tools();
+extern "C" int get_noise_tools_count();
+
 int exit_status()
 {
   char buff[60];
+
+  int noise_count = get_noise_tools_count();
+  stop_noise_tools();
+
+  {
+    std::lock_guard<std::mutex> lock(noise_failure_mutex);
+    if (!noise_failures.empty()) {
+      for (const auto& failed_routine : noise_failures) {
+        diag("Noise failure detected in: %s", failed_routine.c_str());
+      }
+      return EXIT_FAILURE;
+    }
+  }
+
+  // Add noise tools to the count of executed tests if they didn't fail
+  __sync_add_and_fetch(&g_test.last, noise_count);
 
   /*
     If there were no plan, we write one last instead.
@@ -415,28 +435,40 @@ static ulong start_timer(void)
 static void nice_time(double sec,char *buff, my_bool part_second)
 {
   ulong tmp;
+  size_t remaining = 53;  // per comment above: 52 chars + '\0'
+  char *p = buff;
+
   if (sec >= 3600.0*24)
   {
     tmp=(ulong) (sec/(3600.0*24));
     sec-=3600.0*24*tmp;
-    buff+= sprintf(buff, "%ld %s", tmp, tmp > 1 ? " days " : " day ");
+	int n = snprintf(p, remaining, "%lu %s", tmp, tmp > 1 ? " days " : " day ");
+    if (n < 0 || (size_t)n >= remaining) return;
+    p += n;
+    remaining -= n;
   }
   if (sec >= 3600.0)
   {
     tmp=(ulong) (sec/3600.0);
     sec-=3600.0*tmp;
-    buff+= sprintf(buff, "%ld %s", tmp, tmp > 1 ? " hours " : " hour ");
+	int n = snprintf(p, remaining, "%lu %s", tmp, tmp > 1 ? " hours " : " hour ");
+    if (n < 0 || (size_t)n >= remaining) return;
+    p += n;
+    remaining -= n;
   }
   if (sec >= 60.0)
   {
     tmp=(ulong) (sec/60.0);
     sec-=60.0*tmp;
-    buff+= sprintf(buff, "%ld min ", tmp);
+	int n = snprintf(p, remaining, "%lu min ", tmp);
+    if (n < 0 || (size_t)n >= remaining) return;
+    p += n;
+    remaining -= n;
   }
   if (part_second)
-    sprintf(buff,"%.2f sec",sec);
+    snprintf(p, remaining, "%.2f sec",sec);
   else
-    sprintf(buff,"%d sec",(int) sec);
+    snprintf(p, remaining,"%d sec",(int) sec);
 }
 
 
@@ -741,11 +773,5 @@ int tests_last() {
    to use anything than a block.
 */
 
-/**
-   @example skip_all.t.c
-
-   Sometimes, you skip an entire test because it's testing a feature
-   that doesn't exist on the system that you're testing. To skip an
-   entire test, use the <code>skip_all()</code> function according to
-   this example.
- */
+// (The @example skip_all.t.c doc reference was removed alongside the
+// skip_all() function itself — see comment in tap.h.)

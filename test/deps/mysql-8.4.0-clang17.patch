@@ -1,0 +1,178 @@
+--- libs/mysql/serialization/archive.h	2024-04-10 08:26:28
++++ libs/mysql/serialization/archive.h	2026-01-21 00:07:15
+@@ -81,14 +81,15 @@
+   /// @note To be implemented in Archive_derived_type
+   template <typename Type>
+   static std::size_t get_size(Type &&arg) {
+-    return Archive_derived_type::template get_size(std::forward<Type>(arg));
++    return Archive_derived_type::template get_size<Type>(
++        std::forward<Type>(arg));
+   }
+ 
+   /// @brief Returns archive size - size of data written to the archive
+   /// @return archive size - size of data written to the archive
+   /// @note To be implemented in Archive_derived_type
+   inline std::size_t get_size_written() const {
+-    return Archive_derived_type::template get_size_written();
++    return Archive_derived_type::get_size_written();
+   }
+ 
+   /// @brief Function returns maximum size of the Type
+--- libs/mysql/serialization/serializer_impl.hpp	2024-04-10 08:26:28
++++ libs/mysql/serialization/serializer_impl.hpp	2026-01-21 00:07:15
+@@ -51,8 +51,8 @@
+ Serializer<Serializer_derived_type, Archive_type>::get_size_field_def(
+     Field_id_type field_id,
+     const Field_definition<Field_type, field_size_defined> &field_definition) {
+-  return Serializer_derived_type::template get_size_field_def(field_id,
+-                                                              field_definition);
++  return Serializer_derived_type::template get_size_field_def<
++      Field_type, field_size_defined>(field_id, field_definition);
+ }
+ 
+ template <class Serializer_derived_type, class Archive_type>
+@@ -61,8 +61,8 @@
+ Serializer<Serializer_derived_type, Archive_type>::get_size_serializable(
+     Field_id_type field_id, const Serializable_concrete_type &serializable,
+     bool skip_id) {
+-  return Serializer_derived_type::template get_size_serializable(
+-      field_id, serializable, skip_id);
++  return Serializer_derived_type::template get_size_serializable<
++      Serializable_concrete_type>(field_id, serializable, skip_id);
+ }
+ 
+ template <class Serializer_derived_type, class Archive_type>
+@@ -83,8 +83,8 @@
+ 
+ template <class Serializer_derived_type, class Archive_type>
+ template <typename T>
+-Serializer<Serializer_derived_type, Archive_type>
+-    &Serializer<Serializer_derived_type, Archive_type>::operator>>(T &arg) {
++Serializer<Serializer_derived_type, Archive_type> &
++Serializer<Serializer_derived_type, Archive_type>::operator>>(T &arg) {
+   Field_id_type field_id = serialization_format_version;
+   // passing 0 as serializable_end_pos
+   decode_serializable(m_level, field_id, 0, arg, false);
+@@ -101,12 +101,11 @@
+ void Serializer<Serializer_derived_type, Archive_type>::
+     encode_serializable_fields(const Serializable_type &serializable,
+                                Level_type level) {
+-  auto process_serializable =
+-      [ this, level ](const auto &field, auto field_id) -> auto {
++  auto process_serializable = [this, level](const auto &field,
++                                            auto field_id) -> auto {
+     this->encode_serializable(level, field_id, field, false);
+   };
+-  auto process_field =
+-      [ this, level ](const auto &field, auto field_id) -> auto {
++  auto process_field = [this, level](const auto &field, auto field_id) -> auto {
+     this->encode_field(level, field_id, field);
+     ++field_id;
+   };
+@@ -139,13 +138,13 @@
+     decode_serializable_fields(Serializable_type &serializable,
+                                Level_type level,
+                                std::size_t serializable_end_pos) {
+-  auto process_serializable = [ this, level, serializable_end_pos ](
+-      auto &field, auto field_id) -> auto {
++  auto process_serializable = [this, level, serializable_end_pos](
++                                  auto &field, auto field_id) -> auto {
+     this->decode_serializable(level, field_id, serializable_end_pos, field,
+                               false);
+   };
+-  auto process_field = [ this, level, serializable_end_pos ](
+-      auto &field, auto field_id) -> auto {
++  auto process_field = [this, level, serializable_end_pos](
++                           auto &field, auto field_id) -> auto {
+     this->decode_field(level, field_id, serializable_end_pos, field);
+ 
+     ++field_id;
+--- libs/mysql/serialization/serializer_default_impl.hpp	2024-04-10 08:26:28
++++ libs/mysql/serialization/serializer_default_impl.hpp	2026-01-21 00:11:38
+@@ -205,8 +205,8 @@
+ template <class Field_type, Field_size field_size_defined, typename Enabler>
+ void Serializer_default<Archive_concrete_type>::encode_field(
+     const Field_type &field, Serializer_array_tag) {
+-  using value_type = std::remove_reference_t<decltype(
+-      *std::begin(std::declval<Field_type &>()))>;
++  using value_type = std::remove_reference_t<decltype(*std::begin(
++      std::declval<Field_type &>()))>;
+   for (const auto &internal_field : field) {
+     // we use default size for internal fields (0)
+     encode_field<value_type, 0>(internal_field);
+@@ -219,8 +219,8 @@
+ template <class Field_type, Field_size field_size_defined, typename Enabler>
+ void Serializer_default<Archive_concrete_type>::decode_field(
+     Field_type &field, Serializer_array_tag) {
+-  using value_type = std::remove_reference_t<decltype(
+-      *std::begin(std::declval<Field_type &>()))>;
++  using value_type = std::remove_reference_t<decltype(*std::begin(
++      std::declval<Field_type &>()))>;
+   for (auto &internal_field : field) {
+     // we use default size for internal fields (0)
+     decode_field<value_type, 0>(internal_field);
+@@ -233,7 +233,8 @@
+ template <class Field_type, Field_size field_size_defined, typename Enabler>
+ std::size_t Serializer_default<Archive_concrete_type>::get_field_size(
+     const Field_type &field) {
+-  return Archive_concrete_type::template get_size(
++  return Archive_concrete_type::template get_size<
++      Field_wrapper<const Field_type, field_size_defined>>(
+       Field_wrapper<const Field_type, field_size_defined>(field));
+ }
+ 
+@@ -304,8 +305,8 @@
+ std::size_t Serializer_default<Archive_concrete_type>::get_field_size(
+     const Field_type &field, Serializer_array_tag) {
+   std::size_t field_size = 0;
+-  using value_type = std::remove_reference_t<decltype(
+-      *std::begin(std::declval<Field_type &>()))>;
++  using value_type = std::remove_reference_t<decltype(*std::begin(
++      std::declval<Field_type &>()))>;
+   for (const auto &internal_field : field) {
+     field_size += get_field_size<value_type, 0>(internal_field);
+   }
+@@ -397,7 +398,7 @@
+     }
+   };
+   auto func_f = [&last_non_ignorable_field_id](
+-      const auto &field, auto processed_field_id) -> auto {
++                    const auto &field, auto processed_field_id) -> auto {
+     if (field.run_encode_predicate() && field.is_field_ignorable() == false) {
+       last_non_ignorable_field_id = processed_field_id + 1;
+     }
+@@ -473,8 +474,8 @@
+   std::size_t calculated_size = 0;
+   bool is_provided = field_definition.run_encode_predicate();
+   if (is_provided) {
+-    auto size_id_type = Archive_concrete_type::template get_size(
+-        create_varlen_field_wrapper(field_id));
++    auto size_id_type = Archive_concrete_type::template get_size<
++        Field_wrapper<Field_id_type, 0>>(create_varlen_field_wrapper(field_id));
+     calculated_size = get_field_size<Field_type, field_size_defined>(
+                           field_definition.get_ref()) +
+                       size_id_type;
+@@ -489,18 +490,19 @@
+     bool skip_id) {
+   std::size_t serializable_overhead_type = 0;
+   if (skip_id == false) {
+-    serializable_overhead_type = Archive_concrete_type::template get_size(
+-        create_varlen_field_wrapper(field_id));
++    serializable_overhead_type = Archive_concrete_type::template get_size<
++        Field_wrapper<Field_id_type, 0>>(create_varlen_field_wrapper(field_id));
+   }
+   auto serializable_size = serializable.template get_size_internal<Base_type>();
+-  auto serializable_overhead_size = Archive_concrete_type::template get_size(
++  auto serializable_overhead_size = Archive_concrete_type::template get_size<
++      Field_wrapper<decltype(serializable_size), 0>>(
+       create_varlen_field_wrapper(serializable_size));
+ 
+   Field_id_type last_non_ignorable_field_id =
+       find_last_non_ignorable_field_id(serializable);
+ 
+   auto serializable_overhead_last_non_ignorable_field_id =
+-      Archive_concrete_type::template get_size(
++      Archive_concrete_type::template get_size<Field_wrapper<Field_id_type, 0>>(
+           create_varlen_field_wrapper(last_non_ignorable_field_id));
+   return serializable_overhead_type + serializable_overhead_size +
+          serializable_overhead_last_non_ignorable_field_id + serializable_size;

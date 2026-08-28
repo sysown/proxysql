@@ -45,6 +45,9 @@ int main(int argc, char** argv) {
 	MYSQL_RES *res;
 	if (create_table_test_sbtest1(100,mysql)) {
 		fprintf(stderr, "File %s, line %d, Error: create_table_test_sbtest1() failed\n", __FILE__, __LINE__);
+		dump_hostgroup_debug(mysqladmin, 1300);
+		dump_hostgroup_debug(mysqladmin, 0);
+		dump_hostgroup_debug(mysqladmin, 1);
 		return exit_status();
 	}
 	diag("Waiting few seconds for replication...");

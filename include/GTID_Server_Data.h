@@ -3,8 +3,14 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <string>
+#include <pthread.h>
 #include <proxysql_gtid.h>
+#include <string>
+
+struct GTID_Executed_Snapshot {
+	std::string gtid_executed;
+	unsigned long long events_read;
+};
 
 class GTID_Server_Data {
 	public:
@@ -18,7 +24,7 @@ class GTID_Server_Data {
 	struct ev_io *w;
 	char uuid_server[64];
 	unsigned long long events_read;
-	gtid_set_t gtid_executed;
+	GTID_Set gtid_executed;
 	bool active;
 	GTID_Server_Data(struct ev_io *_w, char *_address, uint16_t _port, uint16_t _mysql_port);
 	void resize(size_t _s);
@@ -29,8 +35,14 @@ class GTID_Server_Data {
 	bool gtid_exists(char *gtid_uuid, uint64_t gtid_trxid);
 	void read_all_gtids();
 	void dump();
-};
 
-bool addGtidInterval(gtid_set_t& gtid_executed, std::string server_uuid, int64_t txid_start, int64_t txid_end);
+	private:
+	pthread_rwlock_t executed_rwlock;
+
+	public:
+	bool add_gtid_from_ok(const char* gtid);
+	GTID_Executed_Snapshot get_gtid_executed_snapshot();
+	std::string gtid_executed_to_string();
+};
 
 #endif // CLASS_GTID_Server_Data_H

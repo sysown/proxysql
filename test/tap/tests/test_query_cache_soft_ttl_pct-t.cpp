@@ -182,24 +182,25 @@ int main(int argc, char** argv) {
 	int expected_num_slow_clients = 1;
 	ok(
 		num_slow_clients == expected_num_slow_clients,
-		"Only one client should take 1 second to execute the query. "
+		"Clients taking >1s should be %d. "
 		"Number of clients that take more than 1 second - Exp:'%d', Act:'%d'",
-		expected_num_slow_clients, num_slow_clients
+		expected_num_slow_clients, expected_num_slow_clients, num_slow_clients
 	);
 
 	std::map<string, int> stats_after = get_digest_stats_dummy_query(proxy_admin);
 
 	std::map<string, int> expected_stats {{"cache", NUM_THREADS*NUM_QUERIES-1}, {"hostgroups", 2}};
+	int actual_cache = stats_after["cache"] - stats_before["cache"];
+	int actual_hg = stats_after["hostgroups"] - stats_before["hostgroups"];
 	ok(
-		expected_stats["cache"] == stats_after["cache"] - stats_before["cache"],
-		"Query cache should have been hit %d times. Number of hits - Exp:'%d', Act:'%d'",
-		expected_stats["cache"], expected_stats["cache"], stats_after["cache"] - stats_before["cache"]
+		actual_cache == expected_stats["cache"],
+		"Query cache hits should be exact. Number of hits - Exp:'%d', Act:'%d'",
+		expected_stats["cache"], actual_cache
 	);
 	ok(
-		expected_stats["hostgroups"] == stats_after["hostgroups"] - stats_before["hostgroups"],
-		"Hostgroups should have been hit %d times. Number of hits - Exp:'%d', Act:'%d'",
-		expected_stats["hostgroups"], expected_stats["hostgroups"],
-		stats_after["hostgroups"] - stats_before["hostgroups"]
+		actual_hg == expected_stats["hostgroups"],
+		"Hostgroup hits should be exact. Number of hits - Exp:'%d', Act:'%d'",
+		expected_stats["hostgroups"], actual_hg
 	);
 
 	return exit_status();

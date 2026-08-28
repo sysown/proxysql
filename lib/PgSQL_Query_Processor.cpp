@@ -10,6 +10,7 @@ using json = nlohmann::json;
 #include "Command_Counter.h"
 #include "PgSQL_PreparedStatement.h"
 #include "PgSQL_Query_Processor.h"
+#include "Query_Processor_ParserSQL.h"
 
 extern PgSQL_Threads_Handler* GloPTH;
 extern ProxySQL_Admin *GloAdmin;
@@ -188,7 +189,7 @@ PgSQL_Rule_Text::PgSQL_Rule_Text(const PgSQL_Query_Processor_Rule_t* pqr) {
 
 	char buf[20];
 	if (pqr->digest) {
-		sprintf(buf, "0x%016llX", (long long unsigned int)pqr->digest);
+		snprintf(buf, sizeof(buf), "0x%016llX", (long long unsigned int)pqr->digest);
 		pta[8] = strdup(buf);
 	}
 	else {
@@ -245,7 +246,9 @@ PgSQL_Query_Processor::~PgSQL_Query_Processor() {
 
 void PgSQL_Query_Processor::update_query_processor_stats() {
 	Query_Processor::update_query_processor_stats();
-	for (int i = 0; i < PGSQL_QUERY___NONE; i++) commands_counters[i]->add_and_reset(_thr_commands_counters[i]);
+	for (int i = 0; i < PGSQL_QUERY___NONE; i++) {
+		commands_counters[i]->add_and_reset(_thr_commands_counters[i]);
+	}
 }
 
 void PgSQL_Query_Processor::init_thread() {
@@ -446,7 +449,7 @@ PgSQL_Query_Processor_Rule_t* PgSQL_Query_Processor::new_query_rule(const PgSQL_
 
 	char buf[20];
 	if (pqr->digest) { // not 0
-		sprintf(buf, "0x%016llX", (long long unsigned int)pqr->digest);
+		snprintf(buf, sizeof(buf), "0x%016llX", (long long unsigned int)pqr->digest);
 	}
 
 	std::string re_mod;
@@ -664,6 +667,14 @@ enum PGSQL_QUERY_command PgSQL_Query_Processor::query_parser_command_type(SQP_pa
 	}
 
 	enum PGSQL_QUERY_command ret = PGSQL_QUERY_UNKNOWN;
+
+	if (pgsql_thread___query_processor_parser == 1) {
+		if (text) {
+			return parsersql_command_type_pgsql(text, strlen(text)); // NOSONAR
+		}
+		return PGSQL_QUERY_UNKNOWN;
+	}
+
 	char c1;
 
 	tokenizer_t tok;

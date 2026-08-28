@@ -1,0 +1,511 @@
+[
+    {
+        "__comment__": [
+            "Five nodes in multimaster configuration - SHUNNED preservation:",
+            " - monitor_groupreplication_max_transaction_behind_for_read_only = 2",
+            " - SHUNNED node is promote to writter",
+            " - max_writers = 1",
+            " - Server moved back as writer due to 'read_only'=NO",
+            "Server should stay SHUNNED until UNSHUNNED by replication lag via 'group_replication_lag_action_set_server_status'.",
+            "LIMITATION: Right now this can be verified by finding '[INFO] Re-enabling server...' in error log"
+        ],
+        "cluster_type": "GROUP_REPLICATION",
+        "mysql_servers": [
+            { "hostgroup_id": 2272, "hostname": "127.2.1.1", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.2.1.2", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.2.1.3", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.2.1.4", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.2.1.5", "port": 3306, "status": "SHUNNED" }
+        ],
+        "mysql_group_replication_hostgroups": [
+            {
+                "writer_hostgroup": 2272,
+                "reader_hostgroup": 2273,
+                "backup_writer_hostgroup": 2274,
+                "offline_hostgroup": 2271,
+                "active": 1,
+                "max_writers": 1,
+                "writer_is_also_reader": 1,
+                "max_transactions_behind": 0,
+                "comment": ""
+            }
+        ],
+        "mysql_monitor_config": [
+            { "monitor_groupreplication_max_transactions_behind_for_read_only": 2 },
+            { "monitor_groupreplication_max_transactions_behind_count": 3 }
+        ],
+        "grouprep_servers_init_state": [
+            { "hostname": "127.2.1.1", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.2", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.3", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.4", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.5", "port": 3306, "viable_candidate": "YES", "read_only": "YES", "transactions_behind": 5 }
+        ],
+        "grouprep_servers_new_state": [
+            { "hostname": "127.2.1.1", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.2", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.3", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.4", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.5", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 }
+        ],
+        "proxysql_init_state": [
+            { "hostgroup_id":2272,"hostname":"127.2.1.4","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.2","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.3","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.4","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.5","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.2","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.3","port":3306,"status":"ONLINE" }
+        ],
+        "proxysql_final_state": [
+            { "hostgroup_id":2272,"hostname":"127.2.1.5","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.2","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.3","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.4","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.5","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.2","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.3","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.4","port":3306,"status":"ONLINE" }
+        ]
+    },
+    {
+        "__comment__": [
+            "Five nodes in multimaster configuration - SHUNNED preservation:",
+            " - monitor_groupreplication_max_transaction_behind_for_read_only = 0",
+            " - SHUNNED node is promote to writter",
+            " - max_writers = 2",
+            " - Server initially specify as SHUNNED via 'mysql_servers'",
+            "Server '127.2.1.3' should be moved as 'SHUNNED' to BACKUP WRITER, and later when promoted as 'WRITER'",
+            "NOTE-LIMITATION: We need to see in log the server being 'UNSHUNNED' in target hostgroup"
+        ],
+        "cluster_type": "GROUP_REPLICATION",
+        "mysql_servers": [
+            { "hostgroup_id": 2272, "hostname": "127.2.1.1", "port": 3306, "status": "SHUNNED" },
+            { "hostgroup_id": 2273, "hostname": "127.2.1.2", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.2.1.3", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.2.1.4", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.2.1.5", "port": 3306 }
+        ],
+        "mysql_group_replication_hostgroups": [
+            {
+                "writer_hostgroup": 2272,
+                "reader_hostgroup": 2273,
+                "backup_writer_hostgroup": 2274,
+                "offline_hostgroup": 2271,
+                "active": 1,
+                "max_writers": 2,
+                "writer_is_also_reader": 0,
+                "max_transactions_behind": 0,
+                "comment": ""
+            }
+        ],
+        "mysql_monitor_config": [
+            { "monitor_groupreplication_max_transactions_behind_for_read_only": 0 },
+            { "monitor_groupreplication_max_transactions_behind_count": 3 }
+        ],
+        "grouprep_servers_init_state": [
+            { "hostname": "127.2.1.1", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.2", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.3", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.4", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.5", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 }
+        ],
+        "grouprep_servers_new_state": [
+            { "hostname": "127.2.1.1", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.2", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.3", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.4", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.5", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 }
+        ],
+        "proxysql_init_state": [
+            { "hostgroup_id":2272,"hostname":"127.2.1.4","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2272,"hostname":"127.2.1.5","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.2","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.3","port":3306,"status":"ONLINE" }
+        ],
+        "proxysql_final_state": [
+            { "hostgroup_id":2272,"hostname":"127.2.1.4","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2272,"hostname":"127.2.1.5","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.2","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.3","port":3306,"status":"ONLINE" }
+        ]
+    },
+    {
+        "__comment__": [
+            "Five nodes in multimaster configuration - SHUNNE preservation:",
+            " - monitor_groupreplication_max_transaction_behind_for_read_only = 0",
+            " - SHUNNED node is promote to writter",
+            " - Server initially specify as SHUNNED via 'mysql_servers'",
+            "Server should stay SHUNNED until UNSHUNNED by replication lag",
+
+            "TODO-NOTE: Right now we can't verify that promotion happens correctly by means of 'LOAD MYSQL SERVERS TO RUNTIME'.",
+            "In the future, we may be able to know how many reconfigurations ProxySQL has taken, and inject a check after each",
+            "servers reconfiguration, until them, we induce a similar behavior using 'hostgroup movements', i.e. placing the",
+            "servers in the non-final hostgroups, and letting ProxySQL do the converge of the configuration.",
+            "This test is an example of the described situation, instead of testing the correct preservation via",
+            "'LOAD MYSQL SERVERS TO RUNTIME', we are testing the SHUNNING|UNSHUNNING of the server due to replication lag.",
+
+            "Another possible way of perfomring this check, would be with support for the number of reconfigurations; setting the",
+            "server in the correct state and hostgroup, adn checking that no movement has been performed. Sadly this approach",
+            "wont cover the scenario for this test, since SHUNNING doesn't imply reconfiguration for GR"
+        ],
+        "cluster_type": "GROUP_REPLICATION",
+        "mysql_servers": [
+            { "hostgroup_id": 2273, "hostname": "127.2.1.1", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.2.1.2", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.2.1.3", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.2.1.4", "port": 3306 },
+            { "hostgroup_id": 2272, "hostname": "127.2.1.5", "port": 3306, "status": "SHUNNED" }
+        ],
+        "mysql_group_replication_hostgroups": [
+            {
+                "writer_hostgroup": 2272,
+                "reader_hostgroup": 2273,
+                "backup_writer_hostgroup": 2274,
+                "offline_hostgroup": 2271,
+                "active": 1,
+                "max_writers": 1,
+                "writer_is_also_reader": 1,
+                "max_transactions_behind": 0,
+                "comment": ""
+            }
+        ],
+        "mysql_monitor_config": [
+            { "monitor_groupreplication_max_transactions_behind_for_read_only": 0 },
+            { "monitor_groupreplication_max_transactions_behind_count": 3 }
+        ],
+        "grouprep_servers_init_state": [
+            { "hostname": "127.2.1.1", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.2", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.3", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.4", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.5", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 }
+        ],
+        "grouprep_servers_new_state": [
+            { "hostname": "127.2.1.1", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.2", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.3", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.4", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.5", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 }
+        ],
+        "proxysql_init_state_comments": [
+            {
+                "server": {
+                    "hostgroup_id":2272,"hostname":"127.2.1.5","port":3306,"status":"ONLINE"
+                },
+                "__comment__": "This should be SHUNNED! It's re-enabled due to replication lag. See TODO in test description"
+            }
+        ],
+        "proxysql_init_state": [
+            { "hostgroup_id":2272,"hostname":"127.2.1.5","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.2","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.3","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.4","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.5","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.2","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.3","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.4","port":3306,"status":"ONLINE" }
+        ],
+        "proxysql_final_state": [
+            { "hostgroup_id":2272,"hostname":"127.2.1.5","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.2","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.3","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.4","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.5","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.2","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.3","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.4","port":3306,"status":"ONLINE" }
+        ]
+    },
+    {
+        "__comment__": [
+            "Five nodes in multimaster configuration - SHUNNED preservation:",
+            " - monitor_groupreplication_max_transaction_behind_for_read_only = 0",
+            " - SHUNNED node is promote to writter",
+            " - Server stay SHUNNED when moved from READER to WRITER due to '..._for_read_only=0'"
+        ],
+        "cluster_type": "GROUP_REPLICATION",
+        "mysql_servers": [
+            { "hostgroup_id": 2272, "hostname": "127.2.1.1", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.2.1.2", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.2.1.3", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.2.1.4", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.2.1.5", "port": 3306 }
+        ],
+        "mysql_group_replication_hostgroups": [
+            {
+                "writer_hostgroup": 2272,
+                "reader_hostgroup": 2273,
+                "backup_writer_hostgroup": 2274,
+                "offline_hostgroup": 2271,
+                "active": 1,
+                "max_writers": 1,
+                "writer_is_also_reader": 1,
+                "max_transactions_behind": 0,
+                "comment": ""
+            }
+        ],
+        "mysql_monitor_config": [
+            { "monitor_groupreplication_max_transactions_behind_for_read_only": 2 },
+            { "monitor_groupreplication_max_transactions_behind_count": 3 }
+        ],
+        "grouprep_servers_init_state": [
+            { "hostname": "127.2.1.1", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.2", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.3", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.4", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.5", "port": 3306, "viable_candidate": "YES", "read_only": "YES", "transactions_behind": 5 }
+        ],
+        "grouprep_servers_new_state": [
+            { "hostname": "127.2.1.1", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.2", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.3", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.4", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.5", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 5 }
+        ],
+        "proxysql_init_state": [
+            { "hostgroup_id":2272,"hostname":"127.2.1.4","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.2","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.3","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.4","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.5","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.2","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.3","port":3306,"status":"ONLINE" }
+        ],
+        "proxysql_final_state": [
+            { "hostgroup_id":2272,"hostname":"127.2.1.5","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.2","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.3","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.4","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.5","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.2","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.3","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.4","port":3306,"status":"ONLINE" }
+        ]
+    },
+    {
+        "__comment__": [
+            "Five nodes in multimaster configuration - SHUNNED preservation:",
+            " - monitor_groupreplication_max_transaction_behind_for_read_only = 1",
+            " - SHUNNED node is promote to writter",
+            "Server should change to ONLINE when moved from READER to WRITER due to 'max_transactions_behind_for_read_only=1'"
+        ],
+        "cluster_type": "GROUP_REPLICATION",
+        "mysql_servers": [
+            { "hostgroup_id": 2272, "hostname": "127.2.1.1", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.2.1.2", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.2.1.3", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.2.1.4", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.2.1.5", "port": 3306, "status": "SHUNNED" }
+        ],
+        "mysql_group_replication_hostgroups": [
+            {
+                "writer_hostgroup": 2272,
+                "reader_hostgroup": 2273,
+                "backup_writer_hostgroup": 2274,
+                "offline_hostgroup": 2271,
+                "active": 1,
+                "max_writers": 1,
+                "writer_is_also_reader": 1,
+                "max_transactions_behind": 0,
+                "comment": ""
+            }
+        ],
+        "mysql_monitor_config": [
+            { "monitor_groupreplication_max_transactions_behind_for_read_only": 1 },
+            { "monitor_groupreplication_max_transactions_behind_count": 3 }
+        ],
+        "grouprep_servers_init_state": [
+            { "hostname": "127.2.1.1", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.2", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.3", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.4", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.5", "port": 3306, "viable_candidate": "YES", "read_only": "YES", "transactions_behind": 5 }
+        ],
+        "grouprep_servers_new_state": [
+            { "hostname": "127.2.1.1", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.2", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.3", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.4", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.5", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 5 }
+        ],
+        "proxysql_init_state": [
+            { "hostgroup_id":2272,"hostname":"127.2.1.4","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.2","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.3","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.4","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.5","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.2","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.3","port":3306,"status":"ONLINE" }
+        ],
+        "proxysql_final_state": [
+            { "hostgroup_id":2272,"hostname":"127.2.1.5","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.2","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.3","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.4","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.5","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.2","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.3","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.4","port":3306,"status":"ONLINE" }
+        ]
+    },
+    {
+        "__comment__": [
+            "Five nodes in multimaster configuration - SHUNNED preservation:",
+            " - monitor_groupreplication_max_transaction_behind_for_read_only = 2",
+            " - SHUNNED node is promote to writter",
+            "Server should stay SHUNNED when moved from READER to WRITER due to 'max_transactions_behind_for_read_only=2'"
+        ],
+        "cluster_type": "GROUP_REPLICATION",
+        "mysql_servers": [
+            { "hostgroup_id": 2272, "hostname": "127.2.1.1", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.2.1.2", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.2.1.3", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.2.1.4", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.2.1.5", "port": 3306, "status": "SHUNNED" }
+        ],
+        "mysql_group_replication_hostgroups": [
+            {
+                "writer_hostgroup": 2272,
+                "reader_hostgroup": 2273,
+                "backup_writer_hostgroup": 2274,
+                "offline_hostgroup": 2271,
+                "active": 1,
+                "max_writers": 1,
+                "writer_is_also_reader": 1,
+                "max_transactions_behind": 0,
+                "comment": ""
+            }
+        ],
+        "mysql_monitor_config": [
+            { "monitor_groupreplication_max_transactions_behind_for_read_only": 2 },
+            { "monitor_groupreplication_max_transactions_behind_count": 3 }
+        ],
+        "grouprep_servers_init_state": [
+            { "hostname": "127.2.1.1", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.2", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.3", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.4", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.5", "port": 3306, "viable_candidate": "YES", "read_only": "YES", "transactions_behind": 5 }
+        ],
+        "grouprep_servers_new_state": [
+            { "hostname": "127.2.1.1", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.2", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.3", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.4", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.5", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 5 }
+        ],
+        "proxysql_init_state": [
+            { "hostgroup_id":2272,"hostname":"127.2.1.4","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.2","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.3","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.4","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.5","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.2","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.3","port":3306,"status":"ONLINE" }
+        ],
+        "proxysql_final_state": [
+            { "hostgroup_id":2272,"hostname":"127.2.1.5","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.2","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.3","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.4","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.5","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.2","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.3","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.4","port":3306,"status":"ONLINE" }
+        ]
+    },
+    {
+        "__comment__": [
+            "Five nodes in multimaster configuration - SHUNNED preservation:",
+            " 1. monitor_groupreplication_max_transaction_behind_for_read_only = 2",
+            " 2. SHUNNED node is promote to writter",
+            "Server '127.2.1.3' should be moved as 'SHUNNED' to BACKUP WRITER, and later when promoted as 'WRITER'",
+            "NOTE-LIMITATION: We need to see in log the server being 'UNSHUNNED' in target hostgroup"
+        ],
+        "cluster_type": "GROUP_REPLICATION",
+        "mysql_servers": [
+            { "hostgroup_id": 2273, "hostname": "127.2.1.1", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.2.1.2", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.2.1.3", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.2.1.4", "port": 3306 },
+            { "hostgroup_id": 2273, "hostname": "127.2.1.5", "port": 3306 }
+        ],
+        "mysql_group_replication_hostgroups": [
+            {
+                "writer_hostgroup": 2272,
+                "reader_hostgroup": 2273,
+                "backup_writer_hostgroup": 2274,
+                "offline_hostgroup": 2271,
+                "active": 1,
+                "max_writers": 2,
+                "writer_is_also_reader": 1,
+                "max_transactions_behind": 0,
+                "comment": ""
+            }
+        ],
+        "mysql_monitor_config": [
+            { "monitor_groupreplication_max_transactions_behind_for_read_only": 2 },
+            { "monitor_groupreplication_max_transactions_behind_count": 3 }
+        ],
+        "grouprep_servers_init_state": [
+            { "hostname": "127.2.1.1", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.2", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.3", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 5 },
+            { "hostname": "127.2.1.4", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.5", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 }
+        ],
+        "grouprep_servers_new_state": [
+            { "hostname": "127.2.1.1", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.2", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.3", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.4", "port": 3306, "viable_candidate": "NO", "read_only": "NO", "transactions_behind": 0 },
+            { "hostname": "127.2.1.5", "port": 3306, "viable_candidate": "YES", "read_only": "NO", "transactions_behind": 0 }
+        ],
+        "proxysql_init_state": [
+            { "hostgroup_id":2272,"hostname":"127.2.1.4","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2272,"hostname":"127.2.1.5","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.2","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.3","port":3306,"status":"SHUNNED" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.4","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.5","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.2","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.3","port":3306,"status":"ONLINE" }
+        ],
+        "proxysql_final_state": [
+            { "hostgroup_id":2271,"hostname":"127.2.1.4","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2272,"hostname":"127.2.1.3","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2272,"hostname":"127.2.1.5","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.2","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.3","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2273,"hostname":"127.2.1.5","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.1","port":3306,"status":"ONLINE" },
+            { "hostgroup_id":2274,"hostname":"127.2.1.2","port":3306,"status":"ONLINE" }
+        ]
+    }
+]

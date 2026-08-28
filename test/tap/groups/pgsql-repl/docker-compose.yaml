@@ -1,0 +1,70 @@
+x-pg-common:
+  &pg-common
+  image: postgres-tc:17
+  user: postgres
+  restart: always
+  healthcheck:
+    test: 'pg_isready -U postgres --dbname=postgres'
+    interval: 10s
+    timeout: 5s
+    retries: 5
+
+services:
+  pg_primary:
+    <<: *pg-common
+    ports:
+      - 15432:5432
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST_AUTH_METHOD: "scram-sha-256\nhost replication all 0.0.0.0/0 md5"
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    networks:
+      default: {}
+      pg_backend:
+        aliases:
+          - pg_primary_int
+    cap_add:
+      - NET_ADMIN
+    command: |
+      postgres
+        -c wal_level=replica
+        -c hot_standby=on
+        -c max_wal_senders=10
+        -c max_connections=500
+        -c max_replication_slots=10
+        -c hot_standby_feedback=on
+    volumes:
+      - ./conf/postgres/00_init.sql:/docker-entrypoint-initdb.d/00_init.sql
+
+  pg_replica:
+    <<: *pg-common
+    ports:
+      - 15433:5432
+    environment:
+      PGUSER: repluser
+      PGPASSWORD: replpass
+    networks:
+      - default
+      - pg_backend
+    cap_add:
+      - NET_ADMIN
+    command: |
+      bash -c "
+      until pg_basebackup --pgdata=/var/lib/postgresql/data -R --slot=replication_slot --host=pg_primary_int --port=5432
+      do
+      echo 'Waiting for primary to connect...'
+      sleep 1s
+      done
+      echo 'Backup done, starting replica...'
+      chmod 0700 /var/lib/postgresql/data
+      postgres -c max_connections=500
+      "
+    depends_on:
+      - pg_primary
+
+networks:
+  pg_backend:
+    driver: bridge
+    internal: true

@@ -10,6 +10,7 @@
 #include "MySQL_Data_Stream.h"
 #include "query_processor.h"
 #include "SQLite3_Server.h"
+#include "proxysql_utils.h"
 
 #include <search.h>
 #include <stdlib.h>
@@ -23,6 +24,7 @@
 #include <resolv.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include <random>
 
 #include <fcntl.h>
 #include <sys/utsname.h>
@@ -40,6 +42,12 @@
 #define READ_ONLY_ON "\x01\x00\x00\x01\x02\x23\x00\x00\x02\x03\x64\x65\x66\x00\x00\x00\x0d\x56\x61\x72\x69\x61\x62\x6c\x65\x5f\x6e\x61\x6d\x65\x00\x0c\x21\x00\x0f\x00\x00\x00\xfd\x01\x00\x1f\x00\x00\x1b\x00\x00\x03\x03\x64\x65\x66\x00\x00\x00\x05\x56\x61\x6c\x75\x65\x00\x0c\x21\x00\x0f\x00\x00\x00\xfd\x01\x00\x1f\x00\x00\x05\x00\x00\x04\xfe\x00\x00\x02\x00\x0d\x00\x00\x05\x09\x72\x65\x61\x64\x5f\x6f\x6e\x6c\x79\x02\x4f\x4e\x05\x00\x00\x06\xfe\x00\x00\x02\x00"
 
 extern SQLite3_Server *GloSQLite3Server;
+
+static int random_replication_lag_seconds() {
+	static thread_local std::random_device random_source;
+	static thread_local std::uniform_int_distribution<int> distribution(10, 39);
+	return distribution(random_source);
+}
 
 void SQLite3_Server::init_aurora_ifaces_string(std::string& s) {
 	if(!s.empty())
@@ -69,7 +77,10 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess) {
 	int rc;
     char *query=(char *)"INSERT INTO REPLICA_HOST_STATUS VALUES (?1, ?2, ?3, ?4, ?5)";
     //rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
-    rc = sessdb->prepare_v2(query, &statement);
+    auto prepared_statement = sessdb->prepare_v2(query);
+    rc = prepared_statement.first;
+    stmt_unique_ptr statement_unique = std::move(prepared_statement.second);
+    statement = statement_unique.get();
     ASSERT_SQLITE_OK(rc, sessdb);
 	time_t __timer;
 	char lut[30];
@@ -132,7 +143,6 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess) {
 		rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, sessdb);
 		rc=sqlite3_reset(statement); ASSERT_SQLITE_OK(rc, sessdb);
 	}
-	sqlite3_finalize(statement);
 }
 
 void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
@@ -254,10 +264,16 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 	if (query_no_space_length==SELECT_VERSION_COMMENT_LEN) {
 		if (!strncasecmp(SELECT_VERSION_COMMENT, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
-			char *a = (char *)"SELECT '(ProxySQL Automated Test Server) - %s'";
-			query = (char *)malloc(strlen(a)+strlen(sess->client_myds->proxy_addr.addr));
-			sprintf(query,a,sess->client_myds->proxy_addr.addr);
-			query_length=strlen(query)+1;
+			const char* proxy_addr = sess->client_myds->proxy_addr.addr;
+			const std::string query_text =
+				std::string("SELECT '(ProxySQL Automated Test Server) - ")
+				+ (proxy_addr ? proxy_addr : "") + "'";
+			query = l_strdup(query_text.c_str());
+			if (!query) {
+				l_free(pkt->size-sizeof(mysql_hdr), query_no_space);
+				return;
+			}
+			query_length = query_text.size() + 1;
 			goto __run_query;
 		}
 	}
@@ -265,12 +281,16 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 	if (query_no_space_length==SELECT_DB_USER_LEN) {
 		if (!strncasecmp(SELECT_DB_USER, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
-			char *query1=(char *)"SELECT \"admin\" AS 'DATABASE()', \"%s\" AS 'USER()'";
-			char *query2=(char *)malloc(strlen(query1)+strlen(sess->client_myds->myconn->userinfo->username)+10);
-			sprintf(query2,query1,sess->client_myds->myconn->userinfo->username);
-			query=l_strdup(query2);
-			query_length=strlen(query2)+1;
-			free(query2);
+			const char* username = sess->client_myds->myconn->userinfo->username;
+			const std::string query_text =
+				std::string("SELECT \"admin\" AS 'DATABASE()', \"")
+				+ (username ? username : "") + "\" AS 'USER()'";
+			query = l_strdup(query_text.c_str());
+			if (!query) {
+				l_free(pkt->size-sizeof(mysql_hdr), query_no_space);
+				return;
+			}
+			query_length = query_text.size() + 1;
 			goto __run_query;
 		}
 	}
@@ -290,7 +310,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		char *q=(char *)"SELECT '%s' AS '@@version'";
 		query_length=strlen(q)+20;
 		query=(char *)l_alloc(query_length);
-		sprintf(query,q,PROXYSQL_VERSION);
+		snprintf(query, query_length, q, PROXYSQL_VERSION);
 		goto __run_query;
 	}
 
@@ -299,7 +319,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		char *q=(char *)"SELECT '%s' AS 'version()'";
 		query_length=strlen(q)+20;
 		query=(char *)l_alloc(query_length);
-		sprintf(query,q,PROXYSQL_VERSION);
+		snprintf(query, query_length, q, PROXYSQL_VERSION);
 		goto __run_query;
 	}
 
@@ -365,27 +385,40 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		char *tbh=NULL;
 		c_split_2(query_no_space+strAl,".",&dbh,&tbh);
 
-		if (strlen(tbh)==0) {
-			free(tbh);
+		if (std::string_view(tbh).empty()) {
+			l_free(0, tbh);
 			tbh=dbh;
 			dbh=strdup("main");
 		}
-		if (strlen(tbh)>=3 && tbh[0]=='`' && tbh[strlen(tbh)-1]=='`') { // tablename is quoted
-			char *tbh_tmp=(char *)malloc(strlen(tbh)-1);
-			strncpy(tbh_tmp,tbh+1,strlen(tbh)-2);
-			tbh_tmp[strlen(tbh)-2]=0;
+		size_t tbh_len = std::string_view(tbh).size();
+		if (tbh_len>=3 && tbh[0]=='`' && tbh[tbh_len-1]=='`') { // tablename is quoted
+			size_t db_len = tbh_len - 2;
+			const std::string unquoted_table(tbh + 1, db_len);
 			free(tbh);
-			tbh=tbh_tmp;
+			tbh = l_strdup(unquoted_table.c_str());
+			if (!tbh) {
+				free(dbh);
+				l_free(query_length, query);
+				return;
+			}
 		}
-		int l=strBl+strlen(tbh)*3+strlen(dbh)-8;
-		char *buff=(char *)l_alloc(l+1);
-		snprintf(buff,l+1,strB,tbh,tbh,dbh,tbh);
-		buff[l]=0;
-		free(tbh);
-		free(dbh);
+		const std::string table_query =
+			std::string("SELECT name AS 'table' , REPLACE(REPLACE(sql,' , ', X'2C0A20202020'),")
+			+ "'CREATE TABLE " + tbh + " (','CREATE TABLE " + tbh
+			+ " ('||X'0A20202020') AS 'Create Table' FROM " + dbh
+			+ ".sqlite_master WHERE type='table' AND name='" + tbh + "'";
+		char *buff = l_strdup(table_query.c_str());
+		if (!buff) {
+			l_free(0, tbh);
+			l_free(0, dbh);
+			l_free(query_length, query);
+			return;
+		}
+		l_free(0, tbh);
+		l_free(0, dbh);
 		l_free(query_length,query);
 		query=buff;
-		query_length=l+1;
+		query_length=table_query.size()+1;
 		goto __run_query;
 	}
 
@@ -437,10 +470,11 @@ __run_query:
 				GloSQLite3Server->populate_aws_aurora_table(sess);
 			}
 			if (strstr(query_no_space,(char *)"Seconds_Behind_Master")) {
-				free(query);
-				char *a = (char *)"SELECT %d as Seconds_Behind_Master";
-				query = (char *)malloc(strlen(a)+4);
-				sprintf(query,a,rand()%30+10);
+				l_free(0, query);
+				const std::string formatted_query = cstr_format(
+					"SELECT %d as Seconds_Behind_Master", random_replication_lag_seconds()
+				).str;
+				query = l_strdup(formatted_query.c_str());
 			}
 		}
 		SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
@@ -471,5 +505,3 @@ __run_query:
 	l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
 	l_free(query_length,query);
 }
-
-

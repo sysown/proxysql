@@ -1,7 +1,7 @@
 #ifdef CLASS_BASE_SESSION_H
 
-#ifndef __CLASS_PGSQL_SESSION_H
-#define __CLASS_PGSQL_SESSION_H
+#ifndef PROXYSQL_PGSQL_SESSION_H
+#define PROXYSQL_PGSQL_SESSION_H
 
 #include <functional>
 #include <vector>
@@ -20,6 +20,7 @@ class PgSQL_Describe_Message;
 class PgSQL_Close_Message;
 class PgSQL_Bind_Message;
 class PgSQL_Execute_Message;
+struct PgSQL_Param_Value;
 
 #ifndef PROXYJSON
 #define PROXYJSON
@@ -215,6 +216,8 @@ inline void PgSQL_Query_Info::set_end_time(unsigned long long time) {
 #endif // CLOCK_MONOTONIC_RAW
 }
 
+class TrafficObserver;
+
 class PgSQL_Session : public Base_Session<PgSQL_Session, PgSQL_Data_Stream, PgSQL_Backend, PgSQL_Thread> {
 private:
 	using PktType = std::variant<std::unique_ptr<PgSQL_Parse_Message>,std::unique_ptr<PgSQL_Describe_Message>,
@@ -384,6 +387,19 @@ private:
 	int handler_ProcessingQueryError_CheckBackendConnectionStatus(PgSQL_Data_Stream* myds);
 	void SetQueryTimeout();
 	bool handler_minus1_ClientLibraryError(PgSQL_Data_Stream* myds);
+	// Synthesize ErrorResponse(25P02) + NoticeResponse(backend text, no 57P01) +
+	// ReadyForQuery('E') to the client, destroy the backend pool connection, set
+	// tx_poisoned=true. Returns true if poison was applied; false means the
+	// caller must fall back to the current terminate-the-session flow (e.g.
+	// admin var off, result transfer already started, or a preflight failed).
+	bool handler_minus1_PoisonTransaction(PgSQL_Data_Stream* myds);
+	// While tx_poisoned, classify a 'Q' packet and either clear the poison
+	// and synthesize a ROLLBACK response (for plain whole-transaction
+	// ROLLBACK / COMMIT / ABORT / END) or reject with ERROR 25P02
+	// (anything else, including ROLLBACK TO SAVEPOINT).
+	// Returns true if the packet was handled here. Increments the
+	// pgsql_tx_poisoned_{recovered,rejected_statements}_total counters.
+	bool handler_poisoned_simple_query(PtrSize_t* pkt);
 	void handler_minus1_LogErrorDuringQuery(PgSQL_Connection* myconn);
 	bool handler_minus1_HandleErrorCodes(PgSQL_Data_Stream* myds, int& handler_ret);
 	void handler_minus1_GenerateErrorMessage(PgSQL_Data_Stream* myds, bool& wrong_pass);
@@ -416,9 +432,9 @@ private:
 	 * @param command Command that causes the session to switch to fast forward mode.
 	 * @param session_type SESSION_FORWARD_TYPE indicating the type of session.
 	 *
-	 * @return void.
+	 * @return bool.
 	 */
-	void switch_normal_to_fast_forward_mode(PtrSize_t& pkt, std::string_view command, SESSION_FORWARD_TYPE session_type);
+	bool switch_normal_to_fast_forward_mode(PtrSize_t& pkt, std::string_view command, SESSION_FORWARD_TYPE session_type);
 
 	/**
 	 * @brief Switches session from fast forward mode to normal mode.
@@ -429,6 +445,8 @@ private:
 	void switch_fast_forward_to_normal_mode();
 
 public:
+	void handle_transaction_state();
+
 	inline bool is_extended_query_frame_empty() const {
 		return extended_query_frame.empty();
 	}
@@ -453,6 +471,24 @@ public:
 	std::string untracked_option_parameters;
 	PgSQL_DateStyle_t current_datestyle = {};
 	uint32_t cancel_secret_key;
+
+	// Describe mode state for \d tablename meta command
+	bool describe_mode{ false };
+	char describe_table_name[256]{ 0 };
+
+	// When a backend connection breaks mid-transaction AND the admin var
+	// pgsql-preserve_client_on_broken_backend_in_tx is on, we synthesize an
+	// ERROR 25P02 (current transaction is aborted) + ReadyForQuery('E') to
+	// the client, destroy the backend pool connection, and set this flag
+	// true instead of tearing down the client session. While this is true,
+	// the query intake path short-circuits before query rules:
+	//   plain ROLLBACK / ABORT -> synthesize
+	//     CommandComplete('ROLLBACK') + ReadyForQuery('I'), clear flag.
+	//   plain COMMIT / END -> same ROLLBACK response + NoticeResponse carrying the
+	//     "there is no transaction in progress" warning, clear flag.
+	//   anything else (including ROLLBACK TO SAVEPOINT and RELEASE SAVEPOINT)
+	//     -> reply ERROR 25P02 + ReadyForQuery('E'), stay poisoned.
+	bool tx_poisoned{ false };
 
 #ifdef DEBUG
 	PgSQL_Connection* dbg_extended_query_backend_conn = nullptr;
@@ -528,21 +564,17 @@ public:
 	//bool started_sending_data_to_client; // this status variable tracks if some result set was sent to the client, or if proxysql is still buffering everything
 	bool use_ssl;
 #endif // 0
-	/**
-	 * @brief This status variable tracks whether the session is performing an
-	 *   'Auth Switch' due to a 'COM_CHANGE_USER' packet.
-	 * @details It becomes 'true' when the packet is detected and processed by:
-	 *    - 'MySQL_Protocol::process_pkt_COM_CHANGE_USER'
-	 *   It's reset before sending the final response for 'Auth Switch' to the client by:
-	 *   -  'PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE'
-	 *   This flag was introduced for issue #3504.
-	 */
-	bool change_user_auth_switch;
 
 //	MySQL_STMTs_meta* sess_STMTs_meta;
 //	StmtLongDataHandler* SLDH;
 
 	Session_Regex** match_regexes;
+#ifdef PROXYSQLFFTO
+	std::unique_ptr<TrafficObserver> m_ffto;
+	bool ffto_bypassed { false };
+	void observe_ffto_client_packet(const PtrSize_t& pkt);
+	void observe_ffto_server_packet(const PtrSize_t& pkt);
+#endif
 	CopyCmdMatcher* copy_cmd_matcher;
 
 	ProxySQL_Node_Address* proxysql_node_address; // this is used ONLY for Admin, and only if the other party is another proxysql instance part of a cluster
@@ -565,7 +597,7 @@ public:
 	//PgSQL_Backend* find_or_create_backend(int, PgSQL_Data_Stream* _myds = NULL);
 
 	void SQLite3_to_MySQL(SQLite3_result*, char*, int, MySQL_Protocol*, bool in_transaction = false, bool deprecate_eof_active = false) override;
-	void PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* conn, PgSQL_Data_Stream* _myds = NULL);
+	void PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* conn, PgSQL_Data_Stream* _myds = nullptr);
 	
 	//unsigned int NumActiveTransactions(bool check_savpoint = false);
 	//bool HasOfflineBackends();
@@ -590,6 +622,7 @@ public:
 	void Memory_Stats();
 	void create_new_session_and_reset_connection(PgSQL_Data_Stream* _myds) override;
 	bool handle_command_query_kill(PtrSize_t*);
+
 	//void update_expired_conns(const std::vector<std::function<bool(PgSQL_Connection*)>>&);
 	/**
 	 * @brief Performs the final operations after current query has finished to be executed. It updates the session
@@ -612,6 +645,13 @@ public:
 	void generate_status_one_hostgroup(int hid, std::string& s);
 	void set_previous_status_mode3(bool allow_execute = true);
 	char* get_current_query(int max_length = -1);
+	bool is_in_transaction() const;
+
+private:
+	int32_t extract_pid_from_param(const PgSQL_Param_Value& param, uint16_t format) const;
+	void send_parameter_error_response(const char* error_message, PGSQL_ERROR_CODES code = PGSQL_ERROR_CODES::ERRCODE_INVALID_TEXT_REPRESENTATION);
+	bool handle_kill_success(int32_t pid, int tki, const char* digest_text, PgSQL_Connection* mc, PtrSize_t* pkt);
+	bool handle_literal_kill_query(PtrSize_t* pkt, PgSQL_Connection* mc);
 
 #if defined(__clang__)
 	template<typename SESS, typename DS, typename BE, typename THD>
@@ -623,5 +663,5 @@ public:
 
 
 
-#endif /* __CLASS_PGSQL_SESSION_H */
+#endif /* PROXYSQL_PGSQL_SESSION_H */
 #endif // CLASS_BASE_SESSION_H

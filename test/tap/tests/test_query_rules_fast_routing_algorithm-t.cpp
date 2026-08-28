@@ -200,7 +200,7 @@ int check_fast_routing_rules(
 
 	diag("Getting last 'debug_log' entry id");
 	ext_val_t<uint32_t> last_id { sq3_query_ext_val(sq3_db, SELECT_LAST_DEBUG_ID, uint32_t(0)) };
-	CHECK_EXT_VAL(last_id);
+	SQ3_CHECK_EXT_VAL(last_id);
 	diag("Fetched last 'debug_log' entry id   id=%d", last_id.val);
 
 	// Check that fast_routing rules are properly working for the defined range
@@ -231,7 +231,7 @@ int check_fast_routing_rules(
 			};
 			ext_val_t<int64_t> entries { sq3_query_ext_val(sq3_db, select_count, int64_t(-1))};
 			if (entries.err) {
-				const string err { get_ext_val_err(admin, entries) };
+				const string err { sq3_get_ext_val_err(entries) };
 				diag("%s:%d: Query failed   err=\"%s\"", __func__, __LINE__, err.c_str());
 				return { -1, 0 };
 			}
@@ -272,12 +272,12 @@ int threads_warmup(const CommandLine& cl, MYSQL* admin, sqlite3* sq3_db) {
 			"SELECT variable_value FROM global_variables WHERE variable_name='mysql-threads'", 0
 		)
 	};
-	CHECK_EXT_VAL(mysql_threads);
+	CHECK_EXT_VAL(admin, mysql_threads);
 
 	const ext_val_t<string> qlog_fname {
 		mysql_query_ext_val(admin, SELECT_RUNTIME_VAR"'mysql-eventslog_filename'", _S("query.log"))
 	};
-	CHECK_EXT_VAL(qlog_fname);
+	CHECK_EXT_VAL(admin, qlog_fname);
 	const string PROXYSQL_AUDIT_LOG { PROXYSQL_QLOG_DIR + "/" + qlog_fname.str };
 
 	diag("Flush debug logs to ensure getting the latest id");
@@ -285,7 +285,7 @@ int threads_warmup(const CommandLine& cl, MYSQL* admin, sqlite3* sq3_db) {
 
 	diag("Getting last 'debug_log' entry id");
 	ext_val_t<uint32_t> last_id { sq3_query_ext_val(sq3_db, SELECT_LAST_DEBUG_ID, uint32_t(0)) };
-	CHECK_EXT_VAL(last_id);
+	SQ3_CHECK_EXT_VAL(last_id);
 	diag("Fetched last 'debug_log' entry id   id=%d", last_id.val);
 
 	int conns { find_min_elems(1.0 - pow(10, -6), mysql_threads.val) /* * 2 */ };
@@ -409,7 +409,7 @@ int test_fast_routing_algorithm(
 	MYSQL_QUERY_T(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
 	ext_val_t<int> init_mem_stats { mysql_query_ext_val(admin, q_query_rules_mem_stats, -1) };
-	CHECK_EXT_VAL(init_mem_stats);
+	CHECK_EXT_VAL(admin, init_mem_stats);
 	diag("Initial 'mysql_query_rules_memory' of '%d'", init_mem_stats.val);
 
 	c_err = create_fast_routing_rules_range(cl, admin, rng_init, rng_end);
@@ -426,7 +426,7 @@ int test_fast_routing_algorithm(
 	printf("\n");
 
 	ext_val_t<int> old_mem_stats { mysql_query_ext_val(admin, q_query_rules_mem_stats, -1) };
-	CHECK_EXT_VAL(old_mem_stats);
+	CHECK_EXT_VAL(admin, old_mem_stats);
 
 	diag("*ONLY* Changing the algorithm shouldn't have any effect");
 	diag("Testing 'query_rules_fast_routing_algorithm=%d'", new_algo);
@@ -439,7 +439,7 @@ int test_fast_routing_algorithm(
 	printf("\n");
 
 	ext_val_t<int> new_mem_stats { mysql_query_ext_val(admin, q_query_rules_mem_stats, -1) };
-	CHECK_EXT_VAL(new_mem_stats);
+	CHECK_EXT_VAL(admin, new_mem_stats);
 
 	diag("Memory SHOULDN'T have changed just because of a variable change");
 	ok(
@@ -459,7 +459,7 @@ int test_fast_routing_algorithm(
 	if (chk_res) { return EXIT_FAILURE; }
 
 	new_mem_stats = mysql_query_ext_val(admin, q_query_rules_mem_stats, -1);
-	CHECK_EXT_VAL(new_mem_stats);
+	CHECK_EXT_VAL(admin, new_mem_stats);
 
 	bool mem_check_res = false;
 	string exp_change { "" };
@@ -517,7 +517,7 @@ int main(int argc, char** argv) {
 	}
 
 	pair<string,int> host_port {};
-	int host_port_err = extract_module_host_port(admin, "sqliteserver-mysql_ifaces", host_port);
+	int host_port_err = extract_module_host_port(admin, "sqliteserver-mysql_ifaces", host_port, true);
 
 	if (host_port_err) {
 		goto cleanup;

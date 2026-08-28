@@ -1,5 +1,5 @@
-#ifndef __CLASS_PTR_ARRAY_H
-#define __CLASS_PTR_ARRAY_H
+#ifndef PROXYSQL_PTR_ARRAY_H
+#define PROXYSQL_PTR_ARRAY_H
 
 #include <memory>
 #include <queue>
@@ -146,21 +146,24 @@ class PtrArray {
 	}
 	void shrink() {
 		unsigned int new_size=l_near_pow_2(len+1);
-		pdata=(void **)realloc(pdata,new_size*sizeof(void *));
-		size=new_size;
+		void *new_pdata = realloc(pdata, new_size * sizeof(void *));
+		if (new_pdata) {
+			pdata = (void **)new_pdata;
+			size = new_size;
+		}
 	}
 	public:
 	unsigned int len;
 	unsigned int size;
 	void **pdata;
-	PtrArray(unsigned int __size=0) {
+	explicit PtrArray(unsigned int sz=0) {
 		len=0;
 		pdata=NULL;
 		size=0;
-		if (__size) {
-			expand(__size);
+		if (sz) {
+			expand(sz);
 		}
-		size=__size;
+		size=sz;
 	}
 	~PtrArray() {
 		if (pdata) ( free(pdata) );
@@ -240,7 +243,7 @@ class PtrSizeArray {
 	unsigned int len;
 	unsigned int size;
 	PtrSize_t *pdata;
-	PtrSizeArray(unsigned int __size=0);
+	explicit PtrSizeArray(unsigned int sz=0);
 	~PtrSizeArray();
 
 	void add(void *p, unsigned int s) {
@@ -374,7 +377,7 @@ public:
 	}
 };
 
-#endif /* __CLASS_PTR_ARRAY_H */
+#endif /* PROXYSQL_PTR_ARRAY_H */
 
 
 #ifdef CLOCK_MONOTONIC_RAW
@@ -383,8 +386,8 @@ public:
 #define PROXYSQL_CLOCK_MONOTONIC CLOCK_MONOTONIC
 #endif
 
-#ifndef __GEN_FUNCTIONS
-#define __GEN_FUNCTIONS
+#ifndef PROXYSQL_GEN_FUNCTIONS
+#define PROXYSQL_GEN_FUNCTIONS
 
 #ifdef __APPLE__
 #include <sys/types.h>
@@ -436,6 +439,31 @@ inline T overflow_safe_multiply(T val) {
 	return (val * FACTOR);
 }
 
+/**
+ * @brief Read a 64-bit unsigned integer from a big-endian byte buffer.
+ *
+ * Reads 8 bytes from the provided buffer and converts them from
+ * big-endian (network byte order) into host byte order.
+ *
+ * @param pkt   Pointer to at least 8 bytes of input data.
+ * @param dst_p Pointer to the destination uint64_t where the result
+ *              will be stored.
+ *
+ * @return true Always returns true.
+ */
+inline bool get_uint64be(const unsigned char* pkt, uint64_t* dst_p) {
+	*dst_p =
+		((uint64_t)pkt[0] << 56) |
+		((uint64_t)pkt[1] << 48) |
+		((uint64_t)pkt[2] << 40) |
+		((uint64_t)pkt[3] << 32) |
+		((uint64_t)pkt[4] << 24) |
+		((uint64_t)pkt[5] << 16) |
+		((uint64_t)pkt[6] << 8)  |
+		((uint64_t)pkt[7]);
+	return true;
+}
+
 /*
  * @brief Reads and converts a big endian 32-bit unsigned integer from the provided packet buffer into the destination pointer.
  *
@@ -448,9 +476,9 @@ inline T overflow_safe_multiply(T val) {
  */
 inline bool get_uint32be(const unsigned char* pkt, uint32_t* dst_p) {
 	*dst_p = ((uint32_t)pkt[0] << 24) |
-			 ((uint32_t)pkt[1] << 16) |
-			 ((uint32_t)pkt[2] << 8) |
-			 ((uint32_t)pkt[3]);
+		((uint32_t)pkt[1] << 16) |
+		((uint32_t)pkt[2] << 8) |
+		((uint32_t)pkt[3]);
 	return true;
 }
 
@@ -488,6 +516,9 @@ bool mywildcmp(const char *p, const char *str);
 std::string trim(const std::string& s);
 char* escape_string_single_quotes_and_backslashes(char* input, bool free_it);
 const char* escape_string_backslash_spaces(const char* input);
+time_t monotonic_time_to_realtime(time_t mt);
+time_t realtime_to_monotonic_time(time_t rt);
+
 std::string strip_schema_from_query(const char* query, const char* schema,
                                     const std::vector<std::string>& tables = {}, bool ansi_quotes = false);
 /**
@@ -528,4 +559,4 @@ inline constexpr char* fast_uint32toa(uint32_t value, char* out) noexcept {
 	return p;
 }
 
-#endif /* __GEN_FUNCTIONS */
+#endif /* PROXYSQL_GEN_FUNCTIONS */

@@ -1,5 +1,5 @@
-#ifndef __POSTGRES_PROTOCOL_H
-#define __POSTGRES_PROTOCOL_H
+#ifndef PROXYSQL_PGSQL_PROTOCOL_H
+#define PROXYSQL_PGSQL_PROTOCOL_H
 
 #include "proxysql.h"
 #include "gen_utils.h"
@@ -751,9 +751,11 @@ public:
 	 * messages and a ready-for-query message.
 	 *
 	 * @note This function updates the output buffer with the welcome message
-	 *       data. It also sets the session state to `STATE_CLIENT_AUTH_OK`.
+	 *       data. The caller updates the session state after a successful return.
+	 * @return true when the complete message was queued, false if generating the
+	 *         cancel key failed.
 	 */
-	void welcome_client();
+	bool welcome_client();
 
 	/**
 	 * @brief Generates an error packet for the PostgreSQL protocol.
@@ -806,7 +808,7 @@ public:
 	 *       updates the output buffer with the generated packet. If `ready` is 
 	 *       true, it also generates and sends a ready-for-query packet.
 	 */
-	bool generate_ok_packet(bool send, bool ready, const char* msg, int rows, const char* query, char trx_state = 'I', PtrSize_t* _ptr = NULL, 
+	bool generate_ok_packet(bool send, bool ready, const char* msg, int rows, const char* query, char txn_state = 'I', PtrSize_t* _ptr = NULL,
 		const std::vector<std::pair<std::string,std::string>>& param_status = std::vector<std::pair<std::string, std::string>>());
 
 	bool generate_parse_completion_packet(bool send, bool ready, char trx_state, PtrSize_t* _ptr = NULL);
@@ -1177,7 +1179,7 @@ private:
 	bool scram_handle_client_final(ScramState* scram_state, PgCredentials* user, const unsigned char* data, uint32_t datalen);
 
 	// parse options parameter
-	static std::vector<std::pair<std::string, std::string>> parse_options(const char* options);
+	static bool parse_options(const char* options, std::vector<std::pair<std::string, std::string>>& options_list);
 
 	PgSQL_Data_Stream** myds;
 	PgSQL_Connection_userinfo* userinfo;

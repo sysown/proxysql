@@ -12,6 +12,7 @@
  */
 
 #include <unistd.h>
+#include <sys/stat.h>
 #include <vector>
 #include <string>
 #include <string.h>
@@ -510,6 +511,30 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
+	// Verbose test header
+	diag("================================================================================");
+	diag("Test: eof_packet_mixed_queries-t");
+	diag("================================================================================");
+	diag("This test performs generic load in both TEXT and BINARY protocols.");
+	diag("It is cross-compiled with/without support for 'deprecate_eof'.");
+	diag(" ");
+	diag("Test scenarios:");
+	diag("  - TEXT protocol: INSERT, SELECT, UPDATE operations");
+	diag("  - BINARY protocol: Prepared statements for INSERT, SELECT, UPDATE");
+	diag(" ");
+	diag("Connection parameters:");
+	diag("  - Host: %s", cl.host);
+	diag("  - Port: %d", cl.port);
+	diag("  - Admin Port: %d", cl.admin_port);
+	diag("  - Workdir: %s", cl.workdir);
+#ifdef NON_EOF_SUPPORT
+	diag("  - Build: NON_EOF_SUPPORT (no CLIENT_DEPRECATE_EOF)");
+#else
+	diag("  - Build: EOF_SUPPORT (with CLIENT_DEPRECATE_EOF)");
+#endif
+	diag("================================================================================");
+	diag(" ");
+
 	MYSQL* admin = mysql_init(NULL);
 	if (!admin) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
@@ -534,6 +559,16 @@ int main(int argc, char** argv) {
 
 	#ifdef NON_EOF_SUPPORT
 		std::string mdb_plugins_dir = std::string(cl.workdir) + "../deps/mariadb-connector-c";
+		diag("DEBUG: NON_EOF_SUPPORT build - checking MariaDB plugins dir: '%s'", mdb_plugins_dir.c_str());
+
+		// Check if the plugins directory exists
+		struct stat st;
+		if (stat(mdb_plugins_dir.c_str(), &st) != 0) {
+			diag("WARNING: MariaDB plugins directory does not exist: '%s'", mdb_plugins_dir.c_str());
+			diag("WARNING: This may cause connection failures due to missing auth plugins");
+		} else {
+			diag("DEBUG: MariaDB plugins directory exists");
+		}
 		mysql_options(proxy, MYSQL_PLUGIN_DIR, mdb_plugins_dir.c_str());
 	#else
 		// Ensure that we make the connection with ProxySQL with 'DEPRECATED_EOF' support
@@ -541,12 +576,15 @@ int main(int argc, char** argv) {
 	#endif
 
 	bool eof_support = proxy->options.client_flag & (1UL << 24);
+	diag("DEBUG: eof_support flag: %d", eof_support);
 
 	// Perform the connection
+	diag("DEBUG: Attempting connection to %s:%d with user '%s', flags=%lu", cl.host, cl.port, cl.username, cl.client_flags);
 	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, cl.client_flags)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 		return EXIT_FAILURE;
 	}
+	diag("DEBUG: Connection established successfully");
 
 	diag(
 		"Testing 'TEXT PROTOCOL' with: { 'eof_support': %d, 'user': '%s', 'client_flags': %lu }",

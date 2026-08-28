@@ -5,8 +5,10 @@
 #include <functional>
 #include <sstream>
 #include <algorithm>
+#include <cmath>
 #include <climits>
 
+#include <arpa/inet.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <random>
@@ -16,6 +18,15 @@
 #include <sys/wait.h>
 #include <string.h>
 #include <unistd.h>
+#include <dirent.h>
+#include <sys/syscall.h>
+#ifdef __linux__
+#include <linux/close_range.h>
+#endif
+#ifdef __FreeBSD__
+#include <sys/socket.h>
+#include <netinet/in.h>
+#endif
 
 using std::function;
 using std::string;
@@ -253,6 +264,14 @@ int wexecvp(
 	if (opts.waitpid_delay_us != 0) to_opts.waitpid_delay_us = opts.waitpid_delay_us;
 	if (opts.sigkill_to_us != 0) to_opts.sigkill_to_us = opts.sigkill_to_us;
 
+	// Prepare argv before fork(). The child may run in a multi-threaded process
+	// where another thread held an allocator lock at the time of fork.
+	std::vector<const char*> child_argv {};
+	child_argv.reserve(argv.size() + 2);
+	child_argv.push_back(file.c_str());
+	child_argv.insert(child_argv.end(), argv.begin(), argv.end());
+	child_argv.push_back(nullptr);
+
 	// Pipes for parent to write and read
 	int read_p_err = pipe(pipes[PARENT_READ_PIPE]);
 	int write_p_err = pipe(pipes[PARENT_WRITE_PIPE]);
@@ -268,44 +287,22 @@ int wexecvp(
 	}
 
 	if(child_pid == 0) {
-		int child_err = 0;
-		std::vector<const char*> _argv = argv;
-
-		// Append null to end of _argv for extra safety
-		_argv.push_back(nullptr);
-		// Duplicate file argument to avoid manual duplication
-		_argv.insert(_argv.begin(), file.c_str());
-
-		// close all files , with the exception of the pipes
-		close_all_non_term_fd({ CHILD_READ_FD, CHILD_WRITE_FD, CHILD_WRITE_ERR, PARENT_READ_FD, PARENT_READ_ERR, PARENT_WRITE_FD});
-
 		// Copy the pipe descriptors
 		int dup_read_err = dup2(CHILD_READ_FD, STDIN_FILENO);
 		int dup_write_err = dup2(CHILD_WRITE_FD, STDOUT_FILENO);
 		int dup_err_err = dup2(CHILD_WRITE_ERR, STDERR_FILENO);
 
 		if (dup_read_err == -1 || dup_write_err == -1 || dup_err_err == -1) {
-			exit(errno);
+			_exit(errno);
 		}
 
-		// Close no longer needed pipes
-		close(CHILD_READ_FD);
-		close(CHILD_WRITE_FD);
-		close(CHILD_WRITE_ERR);
+		// The pipe endpoints now live on stdin/stdout/stderr. With no exclusions,
+		// descriptor cleanup can use close_range() (or its allocation-free fallback).
+		close_all_non_term_fd({});
 
-		close(PARENT_READ_FD);
-		close(PARENT_READ_ERR);
-		close(PARENT_WRITE_FD);
-
-
-		char** args = const_cast<char**>(_argv.data());
-		child_err = execvp(file.c_str(), args);
-
-		if (child_err) {
-			exit(errno);
-		} else {
-			exit(0);
-		}
+		char** args = const_cast<char**>(child_argv.data());
+		execvp(file.c_str(), args);
+		_exit(errno);
 	} else {
 		std::string stdout_ {};
 		std::string stderr_ {};
@@ -487,16 +484,173 @@ std::string get_checksum_from_hash(uint64_t hash) {
 	return string { &s_buf.front() };
 }
 
-void close_all_non_term_fd(std::vector<int> excludeFDs) {
+/**
+ * @brief Closes all open file descriptors except stdin (0), stdout (1), stderr (2), and a specified exclusion list
+ *
+ * This function is typically called after fork() in the child process before exec() to ensure that
+ * the child process does not inherit unintended file descriptors from the parent. This is crucial
+ * for security, resource management, and preventing deadlocks in daemonized processes.
+ *
+ * **Security Implications:**
+ * - Prevents child processes from accessing sensitive file descriptors (database connections, sockets, log files)
+ * - Prevents information leaks through unintended descriptor inheritance
+ * - Required for secure privilege separation and sandboxing
+ *
+ * **Resource Management:**
+ * - Prevents resource exhaustion by closing descriptors not needed by the child
+ * - Allows the parent to close descriptors without affecting the child
+ * - Ensures proper cleanup in daemon/service contexts
+ *
+ * **Deadlock Prevention:**
+ * - In multi-threaded programs, if fork() is called while other threads hold locks or resources,
+ *   the child process inherits a "frozen" state where only the forking thread exists but the
+ *   locked resources remain held. Closing file descriptors prevents potential deadlocks
+ *   when those descriptors are associated with pipes or sockets that may block on I/O.
+ *
+ * **Implementation Details:**
+ *
+ * The function uses three strategies, tried in order:
+ *
+ * 1. **Primary Method (Linux 5.9+, empty excludeFDs only):** close_range() syscall
+ *    - Uses syscall(__NR_close_range, 3, ~0U, 0) to atomically close all fds >= 3
+ *    - Runtime detection: first call checks if syscall is available
+ *    - This method is O(1) and the most efficient
+ *    - ONLY used when excludeFDs is empty (otherwise would close excluded fds)
+ *
+ * 2. **Secondary Method (non-empty excludeFDs only):** Iterate through /proc/self/fd
+ *    - Uses opendir("/proc/self/fd") to get a directory stream of open file descriptors
+ *    - Uses dirfd() to get the directory's own fd and skips closing it (prevents self-referential closure bug)
+ *    - Reads each entry and uses atoi() to convert to fd (no heap allocation)
+ *    - Closes all descriptors > 2 (stdin/stdout/stderr) that are not in the exclusion list
+ *    - This method is O(n) where n is the number of open file descriptors
+ *
+ * 3. **Fallback Method:** Iterate through rlimit
+ *    - For an empty excludeFDs list, this is used directly when close_range() is unavailable,
+ *      because opendir() may allocate and is unsafe after a multi-threaded fork
+ *    - For a non-empty list, this is used if /proc/self/fd is unavailable
+ *    - Iterates from 3 to rlim_cur-1, attempting to close each descriptor
+ *    - Ignores EBADF errors for descriptors that aren't actually open
+ *    - This method is O(rlim_cur) which can be much slower if rlim_max is large (e.g., 1048576)
+ *
+ * **Important Design Considerations for fork() Safety:**
+ *
+ * 1. **Heap Allocation Avoidance:** This function avoids heap allocations in the /proc/self/fd path:
+ *    - Uses atoi() instead of std::stol(std::string(...))
+ *    - Uses simple loops instead of std::find() which may allocate
+ *    - This is critical in multi-threaded programs after fork() where malloc locks may be held
+ *
+ * 2. **Self-Referential Directory FD Closure Prevention:**
+ *    - The opendir() call creates a fd for the directory stream
+ *    - We use dirfd() to get this fd and explicitly skip closing it
+ *    - This prevents undefined behavior from closing the fd while iterating
+ *
+ * **Thread Safety Considerations:**
+ * - With an empty excludeFDs list, this function is safe to call in the child process
+ *   between fork() and execve(): both close_range() and the rlimit fallback avoid allocation
+ * - A non-empty excludeFDs list may use opendir() and should not be used after a
+ *   multi-threaded fork
+ *
+ * **Parameters:**
+ * @param excludeFDs A vector of file descriptor numbers to keep open (in addition to 0, 1, 2)
+ *                   For example, if you have pipes for communication with the parent process,
+ *                   pass those pipe fds in this vector to preserve them.
+ *                   When non-empty, close_range() optimization cannot be used.
+ *
+ * **Example Usage:**
+ * @code
+ * // In forked child before exec - close everything except stdin/stdout/stderr
+ * close_all_non_term_fd({});
+ *
+ * // Keep specific communication pipes open (works with /proc and rlimit methods)
+ * close_all_non_term_fd({read_pipe, write_pipe});
+ *
+ * // After fork() in a daemon that keeps log files open
+ * close_all_non_term_fd({log_fd, status_pipe_fd});
+ * @endcode
+ *
+ * **Portability:**
+ * - /proc/self/fd is Linux-specific. FreeBSD has /dev/fd, macOS has /dev/fd as well
+ * - The fallback method using getrlimit() is more portable but less efficient
+ * - close_range() is Linux 5.9+, with runtime detection for backward compatibility
+ *
+ * **See Also:**
+ * - close_range(2) - Linux 5.9+ syscall for efficient bulk closing
+ * - posix_spawn(3) - Alternative to fork+exec that handles fd closing atomically
+ * - fdwalk() - Solaris/IllumOS function for similar purposes
+ *
+ * @param excludeFDs Vector of file descriptors to preserve (in addition to 0, 1, 2)
+ * @return void
+ */
+void close_all_non_term_fd(const std::vector<int>& excludeFDs) {
+	// Try close_range() syscall first (Linux 5.9+) - most efficient and safe
+	// We use syscall directly with runtime detection to avoid hard dependency on kernel version
+	// close_range() can ONLY be used when excludeFDs is empty, because it closes all fds >= 3
+#ifdef __NR_close_range
+	if (excludeFDs.empty()) {
+		static int close_range_available = -1;  // -1 = unknown, 0 = not available, 1 = available
+		if (close_range_available == 1) {
+			// close_range is available, use it to close all fds >= 3
+			long ret = syscall(__NR_close_range, 3, ~0U, 0);
+			if (ret == 0) {
+				return;
+			}
+			if (errno == ENOSYS) {
+				close_range_available = 0;
+			}
+		}
+		if (close_range_available == -1) {
+			// First call: check if close_range is available
+			long ret = syscall(__NR_close_range, 3, ~0U, 0);
+			if (ret == 0) {
+				close_range_available = 1;
+				return;
+			}
+			// Only cache as "not available" on ENOSYS
+			// For other errors (EBADF, EINVAL, etc.), don't cache - might be transient
+			if (errno == ENOSYS) {
+				close_range_available = 0;
+			}
+		}
+	}
+#endif
+
+	// For an empty exclusion list, callers can be in the child of a
+	// multi-threaded fork. Avoid opendir(), which may allocate internally.
+	if (excludeFDs.empty()) {
+		struct rlimit nlimit;
+		int rc = getrlimit(RLIMIT_NOFILE, &nlimit);
+		if (rc == 0) {
+			for (rlim_t fd_rlim = 3; fd_rlim < nlimit.rlim_cur && fd_rlim <= INT_MAX; fd_rlim++) {
+				close(static_cast<int>(fd_rlim));
+			}
+		}
+		return;
+	}
+
+	// Fallback: iterate through /proc/self/fd
 	DIR *d;
 	struct dirent *dir;
 	d = opendir("/proc/self/fd");
 	if (d) {
+		int dir_fd = dirfd(d);  // Get the fd of the directory stream we're reading
 		while ((dir = readdir(d)) != NULL) {
 			if (strlen(dir->d_name) && dir->d_name[0] != '.') {
-				int fd = std::stol(std::string(dir->d_name));
+				// Use atoi() instead of std::stol(std::string(...)) to avoid heap allocation
+				// This is critical in fork() context where malloc locks may be held
+				int fd = atoi(dir->d_name);
 				if (fd > 2) {
-					if (std::find(excludeFDs.begin(), excludeFDs.end(), fd) == excludeFDs.end()) {
+					// Skip the directory fd itself to avoid closing what we're reading from
+					if (fd == dir_fd)
+						continue;
+					// Check if fd is in exclusion list
+					bool exclude = false;
+					for (size_t i = 0; i < excludeFDs.size(); i++) {
+						if (excludeFDs[i] == fd) {
+							exclude = true;
+							break;
+						}
+					}
+					if (!exclude) {
 						close(fd);
 					}
 				}
@@ -504,11 +658,23 @@ void close_all_non_term_fd(std::vector<int> excludeFDs) {
 		}
 		closedir(d);
 	} else {
+		// Final fallback: iterate through rlimit
 		struct rlimit nlimit;
 		int rc = getrlimit(RLIMIT_NOFILE, &nlimit);
 		if (rc == 0) {
-			for (unsigned int fd = 3; fd < nlimit.rlim_cur; fd++) {
-				if (std::find(excludeFDs.begin(), excludeFDs.end(), fd) == excludeFDs.end()) {
+			// Use rlim_t for the loop variable to avoid infinite loop when rlim_cur > UINT_MAX
+			// Cap at INT_MAX since file descriptors are signed ints
+			for (rlim_t fd_rlim = 3; fd_rlim < nlimit.rlim_cur && fd_rlim <= INT_MAX; fd_rlim++) {
+				int fd = (int)fd_rlim;
+				// Check if fd is in exclusion list
+				bool exclude = false;
+				for (size_t i = 0; i < excludeFDs.size(); i++) {
+					if (excludeFDs[i] == fd) {
+						exclude = true;
+						break;
+					}
+				}
+				if (!exclude) {
 					close(fd);
 				}
 			}
@@ -549,4 +715,233 @@ const nlohmann::json* get_nested_elem(const nlohmann::json& j, const vector<stri
 	}
 
 	return next_step;
+}
+
+/**
+ * @brief Gets the client address stored in 'client_addr' member as
+ *   an string if available. If member 'client_addr' is NULL, returns an
+ *   empty string.
+ *
+ * @return Either an string holding the string representation of internal
+ *   member 'client_addr', or empty string if this member is NULL.
+ */
+std::string get_client_addr(struct sockaddr* client_addr) {
+	char buf[INET6_ADDRSTRLEN];
+	std::string str_client_addr {};
+
+	if (client_addr == NULL) {
+		return str_client_addr;
+	}
+
+	switch (client_addr->sa_family) {
+		case AF_INET: {
+			struct sockaddr_in *ipv4 = (struct sockaddr_in *)client_addr;
+			inet_ntop(client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
+			str_client_addr = std::string { buf };
+			break;
+		}
+		case AF_INET6: {
+			struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)client_addr;
+			inet_ntop(client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
+			str_client_addr = std::string { buf };
+			break;
+		}
+		default:
+			str_client_addr = std::string { "localhost" };
+			break;
+	}
+
+	return str_client_addr;
+}
+
+/**
+ * @brief Escape a raw value for inclusion in a single-quoted SQL literal.
+ *
+ * This function is intentionally SQLite-centric and escapes only single quotes
+ * by doubling them (`'` -> `''`). Backslashes are preserved verbatim.
+ * NOT safe for MySQL backslash-escape mode.
+ *
+ * @param input Raw untrusted input value.
+ * @return Escaped value suitable for `... WHERE col = '<escaped>'`.
+ */
+std::string sql_escape(const std::string& input) {
+	std::string output;
+	output.reserve(input.size() * 2);
+	for (char c : input) {
+		if (c == '\'') {
+			output += "''";
+		} else {
+			output += c;
+		}
+	}
+	return output;
+}
+
+/**
+ * @brief Estimate a percentile from bucketed histogram counters.
+ *
+ * The function validates histogram shape, clamps percentile to `[0.0, 1.0]`,
+ * accumulates counts in 64-bit space, and returns the first threshold whose
+ * cumulative rank reaches the requested percentile. For p0, the first non-zero
+ * bucket threshold is returned.
+ *
+ * @param buckets Histogram counts by bucket.
+ * @param thresholds Upper-bound value for each bucket, same size as buckets.
+ * @param percentile Requested percentile in `[0.0, 1.0]` (clamped if out-of-range).
+ * @return Matching threshold, or 0 for empty/invalid/all-zero histograms.
+ */
+int calculate_percentile_from_histogram(
+	const std::vector<int>& buckets,
+	const std::vector<int>& thresholds,
+	double percentile
+) {
+	if (buckets.empty() || thresholds.empty() || buckets.size() != thresholds.size()) {
+		return 0;
+	}
+
+	if (percentile < 0.0) {
+		percentile = 0.0;
+	} else if (percentile > 1.0) {
+		percentile = 1.0;
+	}
+
+	long long total = 0;
+	for (int b : buckets) {
+		if (b > 0) {
+			total += b;
+		}
+	}
+
+	if (total == 0) return 0;
+
+	if (percentile == 0.0) {
+		for (size_t i = 0; i < buckets.size(); i++) {
+			if (buckets[i] > 0) {
+				return thresholds[i];
+			}
+		}
+		return 0;
+	}
+
+	long long target = static_cast<long long>(std::ceil(static_cast<long double>(total) * percentile));
+	if (target < 1) {
+		target = 1;
+	}
+	long long cumulative = 0;
+
+	for (size_t i = 0; i < buckets.size(); i++) {
+		if (buckets[i] > 0) {
+			cumulative += buckets[i];
+		}
+		if (cumulative >= target) {
+			return thresholds[i];
+		}
+	}
+
+	return thresholds.back();
+}
+
+/**
+ * @brief Pretty-print a MySQL result set into a string.
+ *
+ * @details Formats the full buffered result set as an ASCII table. The current row cursor is preserved:
+ * the function seeks to the first row for formatting and restores the original cursor before returning.
+ *
+ * @param result  MySQL result set to format.
+ *
+ * @return        Pretty-printed result set, or an empty string if the result is NULL or has no fields.
+ */
+std::string mysql_result_to_string(MYSQL_RES* result) {
+	if (!result) return "";
+
+	MYSQL_ROW_OFFSET original_row = mysql_row_tell(result);
+	mysql_data_seek(result, 0);
+
+	int num_fields = mysql_num_fields(result);
+	MYSQL_FIELD* fields = mysql_fetch_fields(result);
+	if (!fields || num_fields == 0) {
+		mysql_row_seek(result, original_row);
+		return "";
+	}
+
+	std::vector<std::vector<std::string>> rows;
+	MYSQL_ROW row;
+	while ((row = mysql_fetch_row(result))) {
+		unsigned long* lens = mysql_fetch_lengths(result);
+		std::vector<std::string> r;
+		r.reserve(num_fields);
+		for (int i = 0; i < num_fields; i++) {
+			r.emplace_back(row[i] ? std::string(row[i], lens[i]) : "NULL");
+		}
+		rows.push_back(std::move(r));
+	}
+
+	std::vector<size_t> widths(num_fields);
+	for (int i = 0; i < num_fields; i++) {
+		widths[i] = fields[i].name_length;
+	}
+	for (const auto& r : rows) {
+		for (int i = 0; i < num_fields; i++) {
+			if (r[i].size() > widths[i]) widths[i] = r[i].size();
+		}
+	}
+
+	std::string s;
+	std::string out;
+
+	auto append_border = [&]() {
+		s = "+";
+		for (int i = 0; i < num_fields; i++) {
+			for (size_t j = 0; j < widths[i] + 2; j++) s += "-";
+			s += "+";
+		}
+		out += s;
+		out += "\n";
+	};
+
+	append_border();
+	s = "|";
+	for (int i = 0; i < num_fields; i++) {
+		const char* safe_name = fields[i].name ? fields[i].name : "";
+		const size_t len = fields[i].name_length;
+		s += " "; s += safe_name;
+		for (size_t j = 0; j < widths[i] - len + 1; j++) s += " ";
+		s += "|";
+	}
+	out += s;
+	out += "\n";
+	append_border();
+
+	for (const auto& r : rows) {
+		s = "|";
+		for (int i = 0; i < num_fields; i++) {
+			s += " "; s += r[i];
+			for (size_t j = 0; j < widths[i] - r[i].size() + 1; j++) s += " ";
+			s += "|";
+		}
+		out += s;
+		out += "\n";
+	}
+	append_border();
+
+	mysql_row_seek(result, original_row);
+	return out;
+}
+
+/**
+ * @brief Pretty-print a MySQL result set to a file stream.
+ *
+ * @details Uses mysql_result_to_string() for formatting and writes the resulting string to the supplied
+ * file stream. The result set row cursor is preserved.
+ *
+ * @param file    Destination file stream.
+ * @param result  MySQL result set to format.
+ */
+void dump_mysql_result(FILE* file, MYSQL_RES* result) {
+	if (!file) return;
+
+	std::string result_string = mysql_result_to_string(result);
+	if (!result_string.empty()) {
+		fputs(result_string.c_str(), file);
+	}
 }

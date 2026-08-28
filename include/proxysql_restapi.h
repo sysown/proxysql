@@ -1,5 +1,5 @@
-#ifndef __PROXYSQL_RESTAPI_H__
-#define __PROXYSQL_RESTAPI_H__
+#ifndef PROXYSQL_RESTAPI_H
+#define PROXYSQL_RESTAPI_H
 
 #include "proxy_defines.h"
 #include "proxysql.h"
@@ -40,4 +40,4 @@ public:
 	void save_restapi_runtime_to_database(bool);
 };
 
-#endif // #ifndef __PROXYSQL_RESTAPI_H__
+#endif /* PROXYSQL_RESTAPI_H */

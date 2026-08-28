@@ -102,7 +102,15 @@ bool exp_first_login_failure(const test_creds_t& creds, const test_conf_t& conf)
 }
 
 int main(int argc, char** argv) {
-	plan(864);
+	diag("Regression test for issue #4935: caching_sha2_password authentication");
+	diag("This test verifies that connection attributes sent during the initial handshake");
+	diag("are correctly preserved after a successful authentication, specifically:");
+	diag("  - character_set_client");
+	diag("  - default_schema");
+	diag("The test covers various combinations of:");
+	diag("  - Authentication plugins (mysql_native_password, caching_sha2_password)");
+	diag("  - Password hashing, SSL, and compression");
+	diag("  - Different character sets and default schemas");
 
 	CommandLine cl;
 
@@ -120,11 +128,27 @@ int main(int argc, char** argv) {
 
 	MYSQL* mysql = mysql_init(NULL);
 
-	if (!mysql_real_connect(mysql, cl.host, cl.mysql_username, cl.mysql_password, NULL, cl.mysql_port, NULL, 0)) {
+	if (!mysql_real_connect(mysql, cl.mysql_host, cl.mysql_username, cl.mysql_password, NULL, cl.mysql_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 		return EXIT_FAILURE;
 	}
 
+	// The hardcoded fixture matrix assumes 'mysql_native_password' is a usable
+	// backend auth plugin. MySQL 9.0 removed it entirely: CREATE USER ...
+	// IDENTIFIED WITH 'mysql_native_password' returns ER_PLUGIN_IS_NOT_LOADED.
+	// The #4935 regression is still covered on 5.7 and 8.4 backends (where
+	// the full plugin matrix runs). On 9.x, skip with plan(0).
+	unsigned long server_version = mysql_get_server_version(mysql);
+	if (server_version >= 90000) {
+		diag("Backend MySQL %lu: 'mysql_native_password' plugin not loadable on 9.x. "
+			"Skipping — regression coverage remains on 5.7 / 8.4 infras.", server_version);
+		plan(0);
+		mysql_close(admin);
+		mysql_close(mysql);
+		return EXIT_SUCCESS;
+	}
+
+	plan(864);
 
 	const auto cbres { config_mysql_backend_users(mysql, ::backend_users) };
 	if (cbres.first) { return EXIT_FAILURE; }

@@ -9,7 +9,7 @@
 // NOTE: Avoids the definition of 'global_variables glovars' in 'proxysql_structs.h'
 #define PROXYSQL_EXTERN
 // NOTE: Avoids definition of 'proxy_sqlite3_*' functions as 'extern'
-#define MAIN_PROXY_SQLITE3
+// Removed: #define MAIN_PROXY_SQLITE3  // libproxysql.a now provides canonical definitions
 
 #include "re2/re2.h"
 #include "re2/regexp.h"
