@@ -143,8 +143,11 @@ ifeq ($(PROXYSQL40),1)
 endif
 
 OPT := $(STDCPP) -O2 -ggdb $(PSQL40) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
+# -gz compresses the .debug_* sections (~80% of every test binary); gdb reads
+# them transparently. Linux only: -gz is an ELF feature with no Mach-O
+# equivalent.
 ifneq ($(UNAME_S),Darwin)
-OPT += -Wl,--no-as-needed
+OPT += -Wl,--no-as-needed -gz
 endif
 OPT += -Wl,-rpath,$(TAP_LDIR) -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl,-rpath,$(RE2_LDIR)
 
@@ -172,7 +175,7 @@ tests_no_infra: admin_set_credentials_logging-t listener_conflicts_validation-t
 
 DEBUG_OPT := $(STDCPP) -O0 -DDEBUG -ggdb $(PSQL40) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
 ifneq ($(UNAME_S),Darwin)
-DEBUG_OPT += -Wl,--no-as-needed
+DEBUG_OPT += -Wl,--no-as-needed -gz
 endif
 DEBUG_OPT += -Wl,-rpath,$(TAP_LDIR) -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl,-rpath,$(RE2_LDIR)
 debug: OPT := $(DEBUG_OPT)

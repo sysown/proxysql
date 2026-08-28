@@ -324,9 +324,13 @@ endif
 # misused (most importantly identity-forgery setters), while tests that include
 # the plugin headers and link against the plugin sources still see the helpers
 # they need.
+
+# -gz compresses the .debug_* sections (~80% of every test binary); gdb reads
+# them transparently. Linux only: -gz is an ELF feature with no Mach-O
+# equivalent.
 OPT := $(STDCPP) -O0 -ggdb $(PSQLCH) $(PSQLGA) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLED25519) $(PSQLDEBUG) \
 	   -DGITVERSION=\"$(GIT_VERSION)\" -DMYSQLX_TEST_BUILD $(NOJEM) $(WGCOV) $(WASAN) \
-	   -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR)
+	   -Wl,--no-as-needed -gz -Wl,-rpath,$(TAP_LDIR)
 
 ifeq ($(UNAME_S),Darwin)
 	OPT := $(STDCPP) -O0 -ggdb $(PSQLCH) $(PSQLGA) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLED25519) $(PSQLDEBUG) \
