@@ -901,8 +901,35 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	PgSQL_SrvC* find_server_in_hg(unsigned int _hid, const std::string& addr, int port);
 
 	// AWS Aurora PostgreSQL methods
+	/**
+	 * @brief Applies the outcome of an Aurora PostgreSQL lag check to a server.
+	 * @param _whid The writer hostgroup of the cluster.
+	 * @param _rhid The reader hostgroup of the cluster.
+	 * @param server_id The Aurora server id (hostname is server_id + domain_name).
+	 * @param current_replication_lag_ms The estimated replication lag.
+	 * @param enable False shuns the server for lag, true re-enables it.
+	 * @param is_writer Whether the check reported the server as the writer.
+	 * @param verbose Whether to log shun/re-enable actions.
+	 * @return True if the server is found in the hostgroup expected for its
+	 *   role; false signals the caller that a topology change is required.
+	 */
 	bool aws_aurora_replication_lag_action(int _whid, int _rhid, char *server_id, float current_replication_lag_ms, bool enable, bool is_writer, bool verbose=true);
+	/**
+	 * @brief Places 'server_id' as the writer of the cluster, moving the old
+	 *   writer to the reader hostgroup, auto-discovering the server if needed.
+	 * @param _whid The writer hostgroup of the cluster.
+	 * @param _rhid The reader hostgroup of the cluster.
+	 * @param server_id The Aurora server id of the new writer.
+	 * @param verbose Whether to log the reconfiguration verbosely.
+	 */
 	void update_aws_aurora_set_writer(int _whid, int _rhid, char *server_id, bool verbose=true);
+	/**
+	 * @brief Places 'server_id' as a reader of the cluster, moving it out of
+	 *   the writer hostgroup if present, auto-discovering the server if needed.
+	 * @param _whid The writer hostgroup of the cluster.
+	 * @param _rhid The reader hostgroup of the cluster.
+	 * @param server_id The Aurora server id of the reader.
+	 */
 	void update_aws_aurora_set_reader(int _whid, int _rhid, char *server_id);
 	/**
 	 * @brief Updates the resultset and corresponding checksum used by Monitor for AWS Aurora PostgreSQL.

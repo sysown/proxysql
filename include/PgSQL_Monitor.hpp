@@ -133,15 +133,52 @@ struct PgSQL_Monitor {
 	~PgSQL_Monitor();
 
 	// AWS Aurora PostgreSQL methods
+	/**
+	 * @brief Estimates the replication lag of 'server_id' over the most recent
+	 *   'lag_num_checks' Aurora status entries.
+	 * @param server_id The Aurora server id to estimate the lag for.
+	 * @param aase Ring buffer of the latest status entries (N_L_ASE slots).
+	 * @param idx Index of the most recent entry in 'aase'.
+	 * @param add_lag_ms Compensation added to each lag sample.
+	 * @param min_lag_ms Minimum value each lag sample is floored to.
+	 * @param lag_num_checks Number of recent checks considered.
+	 * @return The maximum compensated lag over the window, 0 without samples.
+	 */
 	unsigned int estimate_lag(char* server_id, PgSQL_AWS_Aurora_status_entry** aase, unsigned int idx,
 		unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks);
+	/**
+	 * @brief Evaluates the latest Aurora status entries for a cluster and
+	 *   triggers lag shunning and writer/reader topology actions.
+	 * @param wHG The writer hostgroup of the cluster.
+	 * @param rHG The reader hostgroup of the cluster.
+	 * @param lasts_ase Ring buffer of the latest status entries.
+	 * @param ase_idx Index of the most recent entry in 'lasts_ase'.
+	 * @param max_latency_ms Lag threshold above which a reader is shunned.
+	 * @param add_lag_ms Compensation added to each lag sample.
+	 * @param min_lag_ms Minimum value each lag sample is floored to.
+	 * @param lag_num_checks Number of recent checks used for lag estimation.
+	 */
 	void evaluate_pgsql_aws_aurora_results(unsigned int wHG, unsigned int rHG,
 		PgSQL_AWS_Aurora_status_entry** lasts_ase, unsigned int ase_idx,
 		unsigned int max_latency_ms, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks);
+	/**
+	 * @brief Checks whether 'addr:port' recently responded to monitor pings.
+	 * @param addr The server address.
+	 * @param port The server port.
+	 * @return True if the server did not fail its recent pings.
+	 */
 	bool server_responds_to_ping(const char* addr, int port);
 
 	// Populate AWS Aurora monitoring tables
+	/**
+	 * @brief Rebuilds the 'pgsql_server_aws_aurora_log' monitor table from the
+	 *   retained per-node Aurora check history.
+	 */
 	void populate_monitor_pgsql_server_aws_aurora_log();
+	/**
+	 * @brief Rebuilds the 'pgsql_server_aws_aurora_check_status' monitor table
+	 *   with per-node check counters and the last error.
+	 */
 	void populate_monitor_pgsql_server_aws_aurora_check_status();
 
 	// DNS cache facade.  Mirrors MySQL_Monitor's surface so PgSQL_Connection
