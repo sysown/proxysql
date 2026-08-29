@@ -2328,6 +2328,7 @@ void Query_Processor<QP_DERIVED>::query_parser_init(SQP_par_t *qp, const char *q
 	qp->digest_text=NULL;
 	qp->first_comment=NULL;
 	qp->query_prefix=NULL;
+	qp->parsersql_stmt_type=-1;
 	if (GET_THREAD_VARIABLE(query_digests)) {
 		if (GET_THREAD_VARIABLE(query_processor_parser) == 1) {
 			qp_digest_parsersql<QP_DERIVED>(qp, query, query_length);
