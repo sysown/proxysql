@@ -1265,9 +1265,13 @@ void PgSQL_Data_Stream::destroy_queues() {
 void PgSQL_Data_Stream::destroy_MySQL_Connection_From_Pool(bool sq) {
 	PgSQL_Connection* mc = myconn;
 	PgSQL_SrvC* mysrvc = mc->parent;
+	// A connection past 'pgsql-connection_max_lifetime_ms' must never be saved: resetting it
+	// keeps the same socket (and thus the same backend) alive and restarts its lifetime,
+	// which is exactly what the variable exists to prevent.
 	if (sq && mysrvc->status == MYSQL_SERVER_STATUS_ONLINE &&
 		mc->async_state_machine == ASYNC_IDLE &&
-		mc->is_connection_in_reusable_state() == true) {
+		mc->is_connection_in_reusable_state() == true &&
+		mc->LifetimeExpired(sess->thread->curtime) == false) {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Trying to reset PgSQL_Connection %p, server %s:%d\n", mc, mysrvc->address, mysrvc->port);
 		sess->create_new_session_and_reset_connection(this);
 	} else {

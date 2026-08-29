@@ -9577,7 +9577,11 @@ void MySQL_Session::finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *mycon
 					// connection keeps the same socket and therefore the same backend, which would
 					// defeat the purpose when a hostname resolves to several addresses or sits
 					// behind a load balancer.
-					if (myds->myconn->LifetimeExpired(thread->curtime) && conn_is_reusable) {
+					// 'prepared_stmt_with_no_params' keeps the connection so the statement just
+					// prepared on it can be executed (issue #1432); retirement waits for the next
+					// boundary. It is only set on the COM_STMT_PREPARE response, so the following
+					// COM_STMT_EXECUTE will retire the connection.
+					if (myds->myconn->LifetimeExpired(thread->curtime) && conn_is_reusable && prepared_stmt_with_no_params == false) {
 						myconn->multiplex_delayed=false;
 						myds->wait_until=0;
 						myds->DSS=STATE_NOT_INITIALIZED;

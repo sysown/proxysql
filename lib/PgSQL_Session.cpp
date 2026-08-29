@@ -6251,7 +6251,9 @@ void PgSQL_Session::finishQuery(PgSQL_Data_Stream* myds, PgSQL_Connection* mycon
 	// a reset connection keeps the same socket and therefore the same backend, which would
 	// defeat the purpose when a hostname resolves to several addresses or sits behind a load
 	// balancer.
-	if (myds->myconn->LifetimeExpired(thread->curtime) && conn_is_reusable) {
+	// 'sticky_backend_connection' means extended_query_frame still holds messages that must run
+	// on this very backend connection, so retirement waits for the next boundary.
+	if (myds->myconn->LifetimeExpired(thread->curtime) && conn_is_reusable && sticky_backend_connection == false) {
 		if (transaction_state_manager) {
 			transaction_state_manager->reset_state();
 		}
