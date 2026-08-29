@@ -289,6 +289,7 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"connect_retries_delay",
 	(char*)"connection_delay_multiplex_ms",
 	(char*)"connection_max_age_ms",
+	(char*)"connection_max_lifetime_ms",
 	(char*)"connect_timeout_client",
 	(char*)"connect_timeout_server",
 	(char*)"connect_timeout_server_max",
@@ -1056,6 +1057,7 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.connect_retries_on_failure = 10;
 	variables.connection_delay_multiplex_ms = 0;
 	variables.connection_max_age_ms = 0;
+	variables.connection_max_lifetime_ms = 0;
 	variables.connect_timeout_client = 10000;
 	variables.connect_timeout_server = 1000;
 	variables.connect_timeout_server_max = 10000;
@@ -2336,6 +2338,7 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["connect_timeout_server_max"] = make_tuple(&variables.connect_timeout_server_max, 10, 3600 * 1000, false);
 		VariablesPointers_int["connection_delay_multiplex_ms"] = make_tuple(&variables.connection_delay_multiplex_ms, 0, 300 * 1000, false);
 		VariablesPointers_int["connection_max_age_ms"] = make_tuple(&variables.connection_max_age_ms, 0, 3600 * 24 * 1000, false);
+		VariablesPointers_int["connection_max_lifetime_ms"] = make_tuple(&variables.connection_max_lifetime_ms, 0, 3600 * 24 * 1000, false);
 		VariablesPointers_int["handle_unknown_charset"] = make_tuple(&variables.handle_unknown_charset, 0, HANDLE_UNKNOWN_CHARSET__MAX_HANDLE_VALUE, false);
 		VariablesPointers_int["ping_interval_server_msec"] = make_tuple(&variables.ping_interval_server_msec, 1000, 7 * 24 * 3600 * 1000, false);
 		VariablesPointers_int["ping_timeout_server"] = make_tuple(&variables.ping_timeout_server, 10, 600 * 1000, false);
@@ -4007,6 +4010,7 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___preserve_client_on_broken_backend_in_tx = (bool)GloPTH->get_variable_int((char*)"preserve_client_on_broken_backend_in_tx");
 	pgsql_thread___connection_delay_multiplex_ms = GloPTH->get_variable_int((char*)"connection_delay_multiplex_ms");
 	pgsql_thread___connection_max_age_ms = GloPTH->get_variable_int((char*)"connection_max_age_ms");
+	pgsql_thread___connection_max_lifetime_ms = GloPTH->get_variable_int((char*)"connection_max_lifetime_ms");
 	pgsql_thread___connect_timeout_client = GloPTH->get_variable_int((char*)"connect_timeout_client");
 	pgsql_thread___connect_timeout_server = GloPTH->get_variable_int((char*)"connect_timeout_server");
 	pgsql_thread___connect_timeout_server_max = GloPTH->get_variable_int((char*)"connect_timeout_server_max");

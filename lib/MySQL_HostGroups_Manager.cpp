@@ -2990,15 +2990,18 @@ void MySQL_HostGroups_Manager::drop_all_idle_connections() {
 				delete mc;
 			}
 
-			// drop all connections with life exceeding mysql-connection_max_age
-			if (mysql_thread___connection_max_age_ms) {
+			// drop all connections with life exceeding mysql-connection_max_age , or
+			// mysql-connection_max_lifetime_ms . The latter also applies to connections
+			// currently attached to a session, but a connection that expired while sitting
+			// here must be reaped too, otherwise an idle pool entry would outlive its lifetime.
+			if (mysql_thread___connection_max_age_ms || mysql_thread___connection_max_lifetime_ms) {
 				unsigned long long curtime=monotonic_time();
 				int i=0;
 				for (i=0; i<(int)mscl->conns_length() ; i++) {
 					MySQL_Connection *mc=mscl->index(i);
 					unsigned long long intv = mysql_thread___connection_max_age_ms;
 					intv *= 1000;
-					if (curtime > mc->creation_time + intv) {
+					if ((intv && curtime > mc->creation_time + intv) || mc->LifetimeExpired(curtime)) {
 						mc=mscl->remove(i);
 						delete mc;
 						i--;

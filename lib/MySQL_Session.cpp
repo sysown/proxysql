@@ -5799,7 +5799,11 @@ void MySQL_Session::handler_minus1_GenerateErrorMessage(MySQL_Data_Stream *myds,
 void MySQL_Session::handler_minus1_HandleBackendConnection(MySQL_Data_Stream *myds, MySQL_Connection *myconn) {
 	if (myds->myconn) {
 		myds->myconn->reduce_auto_increment_delay_token();
-		if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+		// 'mysql-connection_max_lifetime_ms' , see MySQL_Session::finishQuery()
+		if (myds->myconn->LifetimeExpired(thread->curtime) && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+			myds->DSS=STATE_NOT_INITIALIZED;
+			myds->destroy_MySQL_Connection_From_Pool(true);
+		} else if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 			myds->DSS=STATE_NOT_INITIALIZED;
 			if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
 				if (mysql_thread___reset_connection_algorithm == 2 && myds->myconn->healthy) {
@@ -9562,7 +9566,26 @@ void MySQL_Session::finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *mycon
 					const bool multiplex_disabled = !multiplex_disabled_by_status && (!multiplex_delayed || multiplex_delayed_with_timeout);
 					const bool conn_is_reusable = myds->myconn->reusable == true && !is_active_transaction && multiplex_disabled;
 
-					if (mysql_thread___multiplexing && conn_is_reusable) {
+					// 'mysql-connection_max_lifetime_ms': retire a backend connection that has
+					// outlived its configured lifetime. This is evaluated even when multiplexing is
+					// disabled, which is the point of the variable: with multiplexing off a backend
+					// connection stays attached to this session until the client disconnects, so it
+					// can never be reaped by 'mysql-connection_max_age_ms' (which only walks the
+					// free/idle pool). 'conn_is_reusable' guarantees we are at a safe boundary (no
+					// active transaction, no pinned session state), so no query is interrupted.
+					// The connection is closed, not returned to the pool and not reset: a reset
+					// connection keeps the same socket and therefore the same backend, which would
+					// defeat the purpose when a hostname resolves to several addresses or sits
+					// behind a load balancer.
+					if (myds->myconn->LifetimeExpired(thread->curtime) && conn_is_reusable) {
+						myconn->multiplex_delayed=false;
+						myds->wait_until=0;
+						myds->DSS=STATE_NOT_INITIALIZED;
+						myds->destroy_MySQL_Connection_From_Pool(true);
+						if (transaction_persistent==true) {
+							transaction_persistent_hostgroup=-1;
+						}
+					} else if (mysql_thread___multiplexing && conn_is_reusable) {
 						if ((mysql_thread___connection_delay_multiplex_ms || multiplex_delayed_with_timeout) && mirror==false) {
 							if (multiplex_delayed_with_timeout) {
 								uint64_t delay_multiplex_us = mysql_thread___connection_delay_multiplex_ms * 1000;

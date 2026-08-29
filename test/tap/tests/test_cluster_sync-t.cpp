@@ -2437,6 +2437,7 @@ int main(int, char**) {
 			std::make_tuple("mysql-connect_retries_delay"                                  , "2"                          ),
 			std::make_tuple("mysql-connection_delay_multiplex_ms"                          , "1"                          ),
 			std::make_tuple("mysql-connection_max_age_ms"                                  , "1"                          ),
+			std::make_tuple("mysql-connection_max_lifetime_ms"                             , "1"                          ),
 			std::make_tuple("mysql-connect_timeout_server_max"                             , "10001"                      ),
 			std::make_tuple("mysql-eventslog_filename"                                     , ""                           ),
 			std::make_tuple("mysql-eventslog_filesize"                                     , "104857601"                  ),

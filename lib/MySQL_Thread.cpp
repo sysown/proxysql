@@ -372,6 +372,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"connect_retries_delay",
 	(char *)"connection_delay_multiplex_ms",
 	(char *)"connection_max_age_ms",
+	(char *)"connection_max_lifetime_ms",
 	(char *)"connect_timeout_client",
 	(char *)"connect_timeout_server",
 	(char *)"connect_timeout_server_max",
@@ -1354,6 +1355,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.connect_retries_on_failure=10;
 	variables.connection_delay_multiplex_ms=0;
 	variables.connection_max_age_ms=0;
+	variables.connection_max_lifetime_ms=0;
 	variables.connect_timeout_client=10000;
 	variables.connect_timeout_server=1000;
 	variables.connect_timeout_server_max=10000;
@@ -3006,6 +3008,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["connect_timeout_server_max"]    = make_tuple(&variables.connect_timeout_server_max,   10,      3600*1000, false);
 		VariablesPointers_int["connection_delay_multiplex_ms"] = make_tuple(&variables.connection_delay_multiplex_ms, 0,       300*1000, false);
 		VariablesPointers_int["connection_max_age_ms"]         = make_tuple(&variables.connection_max_age_ms,         0,   3600*24*1000, false);
+		VariablesPointers_int["connection_max_lifetime_ms"]    = make_tuple(&variables.connection_max_lifetime_ms,    0,   3600*24*1000, false);
 		VariablesPointers_int["handle_unknown_charset"]        = make_tuple(&variables.handle_unknown_charset,        0, HANDLE_UNKNOWN_CHARSET__MAX_HANDLE_VALUE, false);
 		VariablesPointers_int["ping_interval_server_msec"]     = make_tuple(&variables.ping_interval_server_msec,  1000, 7*24*3600*1000, false);
 		VariablesPointers_int["ping_timeout_server"]           = make_tuple(&variables.ping_timeout_server,          10,       600*1000, false);
@@ -5015,6 +5018,7 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(connect_retries_on_failure);
 	REFRESH_VARIABLE_INT(connection_delay_multiplex_ms);
 	REFRESH_VARIABLE_INT(connection_max_age_ms);
+	REFRESH_VARIABLE_INT(connection_max_lifetime_ms);
 	REFRESH_VARIABLE_INT(connect_timeout_client);
 	REFRESH_VARIABLE_INT(connect_timeout_server);
 	REFRESH_VARIABLE_INT(connect_timeout_server_max);

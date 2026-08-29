@@ -90,6 +90,7 @@ mysql_variables =
 	connect_timeout_server_max="mysql"
 	connection_delay_multiplex_ms="mysql"
 	connection_max_age_ms="mysql"
+	connection_max_lifetime_ms="mysql"
 	connection_warming="mysql"
 	connpoll_reset_queue_length="mysql"
 	default_CHARSET="mysql"

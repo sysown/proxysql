@@ -957,6 +957,7 @@ public:
 		int connect_retries_delay;
 		int connection_delay_multiplex_ms;
 		int connection_max_age_ms;
+		int connection_max_lifetime_ms;
 		int connect_timeout_client;
 		int connect_timeout_server;
 		int connect_timeout_server_max;

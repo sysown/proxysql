@@ -2643,6 +2643,14 @@ bool PgSQL_Connection::get_status(uint32_t status_flag) {
 	return this->status_flags & status_flag;
 }
 
+bool PgSQL_Connection::LifetimeExpired(unsigned long long curtime) {
+	if (pgsql_thread___connection_max_lifetime_ms == 0) {
+		return false;
+	}
+	unsigned long long intv = (unsigned long long)pgsql_thread___connection_max_lifetime_ms * 1000;
+	return curtime > creation_time + intv;
+}
+
 bool PgSQL_Connection::MultiplexDisabled(bool check_delay_token) {
 	// status_flags stores information about the status of the connection
 	// can be used to determine if multiplexing can be enabled or not

@@ -534,6 +534,17 @@ public:
 	void set_status(bool set, uint32_t status_flag);
 	bool get_status(uint32_t status_flag);
 	bool MultiplexDisabled(bool check_delay_token = true);
+	/**
+	 * @brief Returns true if the connection has outlived 'pgsql-connection_max_lifetime_ms'.
+	 * @details Unlike 'pgsql-connection_max_age_ms', which is only evaluated for connections
+	 *  sitting unused in the pool, this is meant to be evaluated for connections that are
+	 *  currently attached to a session, so that a long lived session cannot keep the same
+	 *  backend connection forever. The connection is never interrupted: callers must only
+	 *  act on this at a safe boundary (see 'PgSQL_Session::finishQuery()').
+	 * @param curtime Current monotonic time, in microseconds.
+	 * @return True if a lifetime is configured and it has been exceeded.
+	 */
+	bool LifetimeExpired(unsigned long long curtime);
 
 	unsigned int reorder_dynamic_variables_idx();
 	unsigned int number_of_matching_session_variables(const PgSQL_Connection* client_conn, unsigned int& not_matching);

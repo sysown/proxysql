@@ -285,6 +285,17 @@ class MySQL_Connection {
 	bool IsAutoCommit();
 	bool AutocommitFalse_AndSavepoint();
 	bool MultiplexDisabled(bool check_delay_token = true);
+	/**
+	 * @brief Returns true if the connection has outlived 'mysql-connection_max_lifetime_ms'.
+	 * @details Unlike 'mysql-connection_max_age_ms', which is only evaluated for connections
+	 *  sitting unused in the pool, this is meant to be evaluated for connections that are
+	 *  currently attached to a session, so that a long lived session cannot keep the same
+	 *  backend connection forever. The connection is never interrupted: callers must only
+	 *  act on this at a safe boundary (see 'MySQL_Session::finishQuery()').
+	 * @param curtime Current monotonic time, in microseconds.
+	 * @return True if a lifetime is configured and it has been exceeded.
+	 */
+	bool LifetimeExpired(unsigned long long curtime);
 	bool IsKeepMultiplexEnabledVariables(char *query_digest_text);
 	void ProcessQueryAndSetStatusFlags(char *query_digest_text, bool user_variable_usage_is_safe);
 	void optimize();

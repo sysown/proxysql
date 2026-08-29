@@ -2787,6 +2787,14 @@ bool MySQL_Connection::IsAutoCommit() {
 	return ret;
 }
 
+bool MySQL_Connection::LifetimeExpired(unsigned long long curtime) {
+	if (mysql_thread___connection_max_lifetime_ms == 0) {
+		return false;
+	}
+	unsigned long long intv = (unsigned long long)mysql_thread___connection_max_lifetime_ms * 1000;
+	return curtime > creation_time + intv;
+}
+
 bool MySQL_Connection::MultiplexDisabled(bool check_delay_token) {
 // status_flags stores information about the status of the connection
 // can be used to determine if multiplexing can be enabled or not

@@ -1220,8 +1220,12 @@ void PgSQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 	}
 	unsigned long long intv = pgsql_thread___connection_max_age_ms;
 	intv *= 1000;
+	// A connection past 'pgsql-connection_max_lifetime_ms' must be closed rather than reset:
+	// resetting keeps the same socket, hence the same backend. See PgSQL_Session::finishQuery().
+	const bool lifetime_expired = mc->LifetimeExpired(mc->last_time_used);
 	if (
 		(((intv) && (mc->last_time_used > mc->creation_time + intv)) ||
+		lifetime_expired ||
 		(mc->local_stmts->get_num_backend_stmts() > (unsigned int)GloPTH->variables.max_stmts_per_connection))
 		&&
 		// NOTE: If the current session if in 'PINGING_SERVER' status, there is
@@ -1231,7 +1235,11 @@ void PgSQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 		// is used outside 'PINGING_SERVER' operation. For more context see #3502.
 		sess->status != PINGING_SERVER
 		) {
-		sess->create_new_session_and_reset_connection(this);
+		if (lifetime_expired) {
+			destroy_MySQL_Connection_From_Pool(true);
+		} else {
+			sess->create_new_session_and_reset_connection(this);
+		}
 	} else {
 		detach_connection();
 		unplug_backend();

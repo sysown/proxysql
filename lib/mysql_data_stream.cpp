@@ -1821,8 +1821,13 @@ void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 
 	unsigned long long intv = mysql_thread___connection_max_age_ms;
 	intv *= 1000;
+	// A connection past 'mysql-connection_max_lifetime_ms' must be closed rather than reset:
+	// resetting keeps the same socket, hence the same backend. See MySQL_Session::finishQuery().
+	const bool lifetime_expired = mc->LifetimeExpired(mc->last_time_used);
 	if (
 		(( (intv) && (mc->last_time_used > mc->creation_time + intv) )
+		||
+		lifetime_expired
 		||
 		( mc->local_stmts->get_num_backend_stmts() > (unsigned int)GloMTH->variables.max_stmts_per_connection ))
 		&&
@@ -1833,7 +1838,7 @@ void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 		// is used outside 'PINGING_SERVER' operation. For more context see #3502.
 		sess->status != PINGING_SERVER
 	) {
-		if (mysql_thread___reset_connection_algorithm == 2 && mc->healthy) {
+		if (lifetime_expired == false && mysql_thread___reset_connection_algorithm == 2 && mc->healthy) {
 			sess->create_new_session_and_reset_connection(this);
 		} else {
 			destroy_MySQL_Connection_From_Pool(true);
