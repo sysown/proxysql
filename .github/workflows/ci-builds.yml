@@ -395,9 +395,11 @@ jobs:
           # that does not exist post-checkout. CI-mysqlx exports
           # LD_LIBRARY_PATH pointing at this directory when running the
           # e2e binaries inside the build image, which overrides RUNPATH
-          # lookup. libpq is deliberately absent: issue #6115 links
-          # libpq.a into every consumer and no longer builds or ships
-          # libpq.so.
+          # lookup. The normal TAP executables link libpq statically, but
+          # libtap.so is a shared object and has a DT_NEEDED entry for the
+          # project-built libpq.so.5.  The libpq static archive is not PIC,
+          # so it cannot be linked into libtap.so.  Carry that exact shared
+          # library with the handoff instead of relying on a runner package.
           if [[ "${{ matrix.type }}" =~ "-mysqlx" ]]; then
             mkdir -p test/tap/tap/_runtime_libs
             # Stage the versioned runtime .so by its SONAME, tolerating a lost
@@ -427,6 +429,7 @@ jobs:
             else
               echo "RE2 is static-only; no libre2 runtime library to stage"
             fi
+            stage_lib deps/postgresql/postgresql/src/interfaces/libpq libpq.so.5 test/tap/tap/_runtime_libs
             # Stage the chassis plugin .so files into the same dir for
             # the same reason: the _src cache path list is shared
             # infrastructure that we MUST NOT extend (changing it
