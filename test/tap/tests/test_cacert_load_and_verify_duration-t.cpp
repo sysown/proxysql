@@ -195,7 +195,7 @@ int main() {
 	} else {
 		const std::string& msg = mysql_info(proxysql_admin);
 		const auto duration { parse_proxysqltest_duration_ms(msg) };
-		if (!duration) {
+		if (!duration.has_value()) {
 			diag("Invalid PROXYSQLTEST 54 1000 response: %s", msg.c_str());
 			return fail_performance_assertion(
 				proxysql_admin,

@@ -3,8 +3,8 @@ set -euo pipefail
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(CDPATH='' cd -- "${script_dir}/../../.." && pwd)
-ssl_archive="${repo_root}/deps/libssl/openssl/libssl.a"
-crypto_archive="${repo_root}/deps/libssl/openssl/libcrypto.a"
+ssl_archive=${OPENSSL_SSL_ARCHIVE:-${repo_root}/deps/libssl/openssl/libssl.a}
+crypto_archive=${OPENSSL_CRYPTO_ARCHIVE:-${repo_root}/deps/libssl/openssl/libcrypto.a}
 
 if (( $# < 1 )); then
 	echo "Usage: $0 EXECUTABLE [PLUGIN ...]" >&2

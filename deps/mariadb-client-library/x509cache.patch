@@ -150,7 +150,7 @@ index 916024a8..79564a10 100644
    /* add cipher */
    if ((mysql->options.ssl_cipher &&
          mysql->options.ssl_cipher[0] != 0))
-@@ -340,10 +429,24 @@
+@@ -340,10 +429,28 @@
    /* ca_file and ca_path */
 -  if (!SSL_CTX_load_verify_locations(ctx,
 +  if (local_x509store != NULL && mysql->options.ssl_ca != NULL && mysql->options.ssl_capath == NULL) {
@@ -167,6 +167,10 @@ index 916024a8..79564a10 100644
 +      if (local_x509store == NULL && SSL_CTX_get_cert_store(ctx) != NULL) {
 +        local_x509store = SSL_CTX_get_cert_store(ctx);
 +        thread_ctx = SSL_CTX_new(TLS_client_method());
++        if (thread_ctx == NULL) {
++          local_x509store = NULL;
++          goto error;
++        }
 +        SSL_CTX_set1_cert_store(thread_ctx, local_x509store);
 +        if (mysql->options.ssl_ca != NULL) {
 +          proxysql_SSL_CTX_local_x509store_add_file(ctx,mysql->options.ssl_ca, 0);

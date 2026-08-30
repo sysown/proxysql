@@ -260,7 +260,7 @@ int main(int argc, char **argv)
   test_valid_bundle(argv[1], argv[6]);
   test_corrupt_first_bundle_stops(argv[3], argv[2]);
   test_symlinked_bundle(argv[5], argv[1]);
-  test_unsafe_bundle_is_skipped(argv[4], argv[1], argv[2], argv[2]);
+  test_unsafe_bundle_is_skipped(argv[4], argv[4], argv[2], argv[2]);
   test_empty_environment_value("SSL_CERT_FILE", argv[1]);
   test_empty_environment_value("SSL_CERT_DIR", argv[1]);
   test_no_candidate_fallback(argv[6], argv[1]);

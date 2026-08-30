@@ -16,6 +16,70 @@ MYSQLX_BRIDGE_TARGETS = (
 
 
 class MakefileDependencyTest(unittest.TestCase):
+    def required_output_line(self, lines, predicate, description, output):
+        line = next((line for line in lines if predicate(line)), None)
+        self.assertIsNotNone(
+            line,
+            f"missing {description} in make output:\n{output}",
+        )
+        return line
+
+    def test_required_output_line_reports_its_description(self):
+        with self.assertRaisesRegex(AssertionError, "target compile line"):
+            self.required_output_line(
+                [],
+                lambda line: "target.cpp" in line,
+                "target compile line",
+                "make printed nothing",
+            )
+
+    def test_genai_unit_manifest_is_shared_by_staging_and_unit_build(self):
+        expected = [
+            "genai_config_query_unit-t",
+            "genai_discovery_schema_unit-t",
+            "genai_fts_string_unit-t",
+            "genai_llm_clients_unit-t",
+            "genai_mcp_endpoint_unit-t",
+            "genai_mcp_thread_unit-t",
+            "genai_mysql_catalog_unit-t",
+            "genai_query_handler_unit-t",
+            "genai_rag_fetch_from_source_unit-t",
+            "genai_stats_parsing_unit-t",
+            "genai_thread_unit-t",
+        ]
+        for directory in (ROOT / "test/tap", ROOT / "test/tap/tests/unit"):
+            with self.subTest(directory=directory):
+                with tempfile.TemporaryDirectory() as tmp:
+                    probe_makefile = Path(tmp) / "probe.mk"
+                    probe_makefile.write_text(
+                        ".PHONY: print-ai-genai-unit-tests\n"
+                        "print-ai-genai-unit-tests:\n"
+                        "\t@printf '%s\\n' $(AI_GENAI_UNIT_TESTS)\n"
+                    )
+                    result = subprocess.run(
+                        [
+                            "make",
+                            "--no-print-directory",
+                            "-s",
+                            "-C",
+                            str(directory),
+                            "-f",
+                            "Makefile",
+                            "-f",
+                            str(probe_makefile),
+                            "print-ai-genai-unit-tests",
+                        ],
+                        cwd=ROOT,
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                        timeout=30,
+                    )
+                    self.assertEqual(
+                        result.returncode, 0, result.stdout + result.stderr
+                    )
+                    self.assertEqual(result.stdout.splitlines(), expected)
+
     def test_vendored_openssl_version_define_is_private_to_test_targets(self):
         """The version assertion define must not be applied to shared test inputs."""
         for directory, target, probe, shared_sources in (
@@ -65,16 +129,22 @@ class MakefileDependencyTest(unittest.TestCase):
 
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 lines = result.stdout.splitlines()
-                compile_line = next(
-                    line for line in lines if f"{target}.cpp" in line
+                compile_line = self.required_output_line(
+                    lines,
+                    lambda line: f"{target}.cpp" in line,
+                    f"target compile line for {target}",
+                    result.stdout,
                 )
                 self.assertIn(
                     "-DPROXYSQL_VENDORED_OPENSSL_VERSION=\\\"3.5.7\\\"",
                     compile_line,
                     result.stdout,
                 )
-                probe_line = next(
-                    line for line in lines if f"TASK4_PROBE={probe}" in line
+                probe_line = self.required_output_line(
+                    lines,
+                    lambda line: f"TASK4_PROBE={probe}" in line,
+                    f"probe line for {probe}",
+                    result.stdout,
                 )
                 self.assertNotIn(
                     "PROXYSQL_VENDORED_OPENSSL_VERSION",
@@ -82,7 +152,12 @@ class MakefileDependencyTest(unittest.TestCase):
                     result.stdout,
                 )
                 for source in shared_sources:
-                    shared_compile_line = next(line for line in lines if source in line)
+                    shared_compile_line = self.required_output_line(
+                        lines,
+                        lambda line: source in line,
+                        f"shared compile line for {source}",
+                        result.stdout,
+                    )
                     self.assertNotIn(
                         "PROXYSQL_VENDORED_OPENSSL_VERSION",
                         shared_compile_line,

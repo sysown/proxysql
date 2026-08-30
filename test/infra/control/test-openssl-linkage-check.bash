@@ -16,6 +16,10 @@ cat > "${tmp_dir}/fake_ssl.c" <<'EOF'
 void *SSL_CTX_new(void) { return (void *)1; }
 EOF
 
+cat > "${tmp_dir}/fake_crypto.c" <<'EOF'
+void *BN_new(void) { return (void *)1; }
+EOF
+
 cat > "${tmp_dir}/dynamic_executable.c" <<'EOF'
 extern void *SSL_CTX_new(void);
 int main(void) { return SSL_CTX_new() == 0; }
@@ -131,11 +135,22 @@ case $(uname -s) in
 		;;
 esac
 
+cc -c -fPIC -o "${tmp_dir}/fake_ssl.o" "${tmp_dir}/fake_ssl.c"
+cc -c -fPIC -o "${tmp_dir}/fake_crypto.o" "${tmp_dir}/fake_crypto.c"
+ar rcs "${tmp_dir}/fixture-libssl.a" "${tmp_dir}/fake_ssl.o"
+ar rcs "${tmp_dir}/fixture-libcrypto.a" "${tmp_dir}/fake_crypto.o"
+checker_command=(
+	env
+	OPENSSL_SSL_ARCHIVE="${tmp_dir}/fixture-libssl.a"
+	OPENSSL_CRYPTO_ARCHIVE="${tmp_dir}/fixture-libcrypto.a"
+	"${checker}"
+)
+
 expect_rejected() {
 	local expected=$1
 	shift
 	local output
-	if output=$("${checker}" "$@" 2>&1); then
+	if output=$("${checker_command[@]}" "$@" 2>&1); then
 		fail "linkage checker unexpectedly accepted: $*"
 	fi
 	[[ "${output}" == *"${expected}"* ]] || \
@@ -178,7 +193,7 @@ expect_rejected 'imports SSL_CTX_new but the executable does not export it' \
 expect_rejected 'imports curl_easy_init but the executable does not export it' \
 	"${tmp_dir}/plain-executable" "${tmp_dir}/curl-importing-plugin.${plugin_suffix}"
 
-pass_output=$("${checker}" \
+pass_output=$("${checker_command[@]}" \
 	"${tmp_dir}/exporting-executable" \
 	"${tmp_dir}/importing-plugin.${plugin_suffix}") || \
 	fail "linkage checker rejected the valid ownership fixture"
@@ -194,6 +209,15 @@ if missing_output=$("${missing_checker}" "${tmp_dir}/plain-executable" 2>&1); th
 fi
 [[ "${missing_output}" == *'required vendored OpenSSL ownership archive is missing:'* ]] || \
 	fail "missing default archive rejection was unclear; got: ${missing_output}"
+
+if ! override_output=$(OPENSSL_SSL_ARCHIVE="${tmp_dir}/fixture-libssl.a" \
+		OPENSSL_CRYPTO_ARCHIVE="${tmp_dir}/fixture-libcrypto.a" \
+		"${missing_checker}" "${tmp_dir}/exporting-executable" \
+		"${tmp_dir}/importing-plugin.${plugin_suffix}" 2>&1); then
+	fail "linkage checker ignored explicit ownership archives: ${override_output}"
+fi
+[[ "${override_output}" == *'OpenSSL linkage check passed'* ]] || \
+	fail "archive override fixture did not report success; got: ${override_output}"
 
 if [[ $(uname -s) == Linux ]]; then
 	cat > "${tmp_dir}/host_curl.c" <<'EOF'
@@ -224,7 +248,7 @@ EOF
 	"${tmp_dir}/curl-owning-executable" \
 		"${tmp_dir}/curl-importing-plugin.${plugin_suffix}" || \
 		fail "plugin did not resolve curl from the force-loaded executable archive"
-	"${checker}" "${tmp_dir}/curl-owning-executable" \
+	"${checker_command[@]}" "${tmp_dir}/curl-owning-executable" \
 		"${tmp_dir}/curl-importing-plugin.${plugin_suffix}" >/dev/null || \
 		fail "linkage checker rejected executable-owned curl fixture"
 fi

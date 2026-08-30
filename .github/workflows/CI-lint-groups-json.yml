@@ -33,6 +33,8 @@ jobs:
         run: test/infra/control/test-cluster-simulator-coverage.bash
       - name: Check coverage collector invariants
         run: test/infra/control/validate-coverage-gcov-toolchain.bash
+      - name: Check system OpenSSL audit regressions
+        run: test/infra/control/test-no-system-openssl-links-regressions.bash
       - name: Check group infra/workflow coverage (warn-only)
         # Warns when a group references a missing infra (phantom), or when no
         # workflow on either branch can select the group at all -- meaning

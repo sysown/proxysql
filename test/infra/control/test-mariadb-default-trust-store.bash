@@ -83,7 +83,7 @@ test -f "${source_dir}/libmariadb/libmariadbclient.a" || \
 
 fixture_dir="${tmp_dir}/trust-fixtures"
 mkdir "${fixture_dir}" "${fixture_dir}/explicit-capath"
-for name in one two; do
+for name in one two unsafe; do
 	"${openssl_root}/apps/openssl" req -x509 -newkey rsa:2048 -nodes \
 		-subj "/CN=ProxySQL trust-store fixture ${name}" -days 1 \
 		-keyout "${fixture_dir}/${name}.key" \
@@ -92,7 +92,6 @@ done
 chmod 0644 "${fixture_dir}/one.pem" "${fixture_dir}/two.pem"
 printf '%s\n' 'not a certificate bundle' > "${fixture_dir}/corrupt.pem"
 chmod 0644 "${fixture_dir}/corrupt.pem"
-cp "${fixture_dir}/one.pem" "${fixture_dir}/unsafe.pem"
 chmod 0666 "${fixture_dir}/unsafe.pem"
 ln -s "${fixture_dir}/one.pem" "${fixture_dir}/symlink.pem"
 cp "${fixture_dir}/one.pem" "${fixture_dir}/explicit-capath/one.pem"
@@ -113,3 +112,17 @@ ${CC:-cc} -std=c99 -Wall -Wextra -Werror -pedantic \
 	"${fixture_dir}/symlink.pem" \
 	"${fixture_dir}/missing.pem" \
 	"${fixture_dir}/explicit-capath"
+
+if [[ $(uname -s) == Linux ]]; then
+	${CC:-cc} -std=gnu99 -Wall -Wextra -Werror \
+		-DHAVE_OPENSSL -DHAVE_TLS -DLIBMARIADB -DTHREAD \
+		-I"${source_dir}/include" \
+		-I"${source_dir}/libmariadb" \
+		-I"${openssl_root}/include" \
+		"${script_dir}/fixtures/mariadb-thread-ctx-allocation.c" \
+		"${source_dir}/libmariadb/libmariadbclient.a" \
+		"${openssl_root}/libssl.a" "${openssl_root}/libcrypto.a" \
+		-Wl,--wrap=SSL_CTX_new -pthread -ldl \
+		-o "${tmp_dir}/mariadb-thread-ctx-allocation"
+	"${tmp_dir}/mariadb-thread-ctx-allocation" "${fixture_dir}/one.pem"
+fi

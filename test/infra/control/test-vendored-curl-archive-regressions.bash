@@ -110,6 +110,13 @@ EOF
 "${ar}" rcs "${tmp_dir}/fake-libssl.a" "${tmp_dir}/fake-libssl.o"
 "${ar}" rcs "${tmp_dir}/fake-libcrypto.a" "${tmp_dir}/fake-libcrypto.o"
 
+fixture_archive_check="${tmp_dir}/test/infra/control/test-vendored-curl-archive.bash"
+fixture_openssl_dir="${tmp_dir}/deps/libssl/openssl"
+mkdir -p "$(dirname -- "${fixture_archive_check}")" "${fixture_openssl_dir}"
+cp "${archive_check}" "${fixture_archive_check}"
+cp "${tmp_dir}/fake-libssl.a" "${fixture_openssl_dir}/libssl.a"
+cp "${tmp_dir}/fake-libcrypto.a" "${fixture_openssl_dir}/libcrypto.a"
+
 check_archive() {
 	local archive=$1
 	local curl_la=${2:-}
@@ -280,6 +287,9 @@ EOF
 cat > "${tmp_dir}/complete.pc" <<'EOF'
 Libs: -L${libdir} -lcurl -lssl -lcrypto -lz /vendored/openssl/libssl.a /vendored/openssl/libcrypto.a
 EOF
+expect_fail "partial curl dependency metadata arguments" \
+	"Usage:" \
+	bash "${fixture_archive_check}" "${tmp_dir}/good.a" "${tmp_dir}/incomplete.la"
 expect_fail "incomplete curl dependency metadata" \
 	"libcurl.la is missing required dependency" \
 	check_archive "${tmp_dir}/good.a" \

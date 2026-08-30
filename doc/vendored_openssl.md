@@ -147,6 +147,7 @@ test/infra/control/test-vendored-openssl-build-contract.bash
 test/infra/control/test-vendored-openssl-consumers.bash
 test/infra/control/test-openssl-linkage-check.bash
 test/infra/control/test-no-system-openssl-links.bash
+test/infra/control/test-no-system-openssl-links-regressions.bash
 test/infra/control/test-openssl-package-contract.bash
 test/infra/control/validate-openssl-lfs-workflows.bash
 ```

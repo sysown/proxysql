@@ -7,11 +7,15 @@ repo_root=$(CDPATH='' cd -- "${script_dir}/../../.." && pwd)
 platform=$(uname -s)
 default_ssl_archive="${repo_root}/deps/libssl/openssl/libssl.a"
 default_crypto_archive="${repo_root}/deps/libssl/openssl/libcrypto.a"
-if (( $# > 5 )); then
-	printf 'Usage: %s [CURL_ARCHIVE [CURL_LA CURL_PC [LIBSSL_ARCHIVE LIBCRYPTO_ARCHIVE]]]\n' \
-		"$0" >&2
-	exit 2
-fi
+case $# in
+	0|1|3|5)
+		;;
+	*)
+		printf 'Usage: %s [CURL_ARCHIVE [CURL_LA CURL_PC [LIBSSL_ARCHIVE LIBCRYPTO_ARCHIVE]]]\n' \
+			"$0" >&2
+		exit 2
+		;;
+esac
 if (( $# == 0 )); then
 	curl_archive="${repo_root}/deps/curl/curl/lib/.libs/libcurl.a"
 	curl_la="${repo_root}/deps/curl/curl/lib/libcurl.la"
