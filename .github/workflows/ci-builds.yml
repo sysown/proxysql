@@ -423,67 +423,6 @@ jobs:
           # to fail and the entire TAP pipeline to break.
           # ------------------------------------------------------------
 
-          # Stage the runtime .so needed by the e2e test binaries
-          # into a path that's both already part of the _test cache
-          # (test/tap/tap/ is in `tar -cf - test/`) AND has its parent
-          # git-tracked (so post-checkout `mkdir -p` works on restore
-          # at the consumer side). The e2e -t binaries DT_NEEDED
-          # libre2.so.10 when built as a shared library; static RE2
-          # builds do not need it. Its baked RUNPATH points at
-          # /opt/proxysql/deps/re2/.../obj/so, a tarball-unpacked path
-          # that does not exist post-checkout. CI-mysqlx exports
-          # LD_LIBRARY_PATH pointing at this directory when running the
-          # e2e binaries inside the build image, which overrides RUNPATH
-          # lookup. The normal TAP executables link libpq statically, but
-          # libtap.so is a shared object and has a DT_NEEDED entry for the
-          # project-built libpq.so.5.  The libpq static archive is not PIC,
-          # so it cannot be linked into libtap.so.  Carry that exact shared
-          # library with the handoff instead of relying on a runner package.
-          if [[ "${{ matrix.type }}" =~ "-mysqlx" ]]; then
-            mkdir -p test/tap/tap/_runtime_libs
-            # Stage the versioned runtime .so by its SONAME, tolerating a lost
-            # symlink. Resolve the SONAME if present, else fall back to the
-            # newest matching real file. Only a genuine deps-build break (no
-            # file at all) fails loudly, with a directory listing.
-            stage_lib() {
-              local dir="$1" soname="$2" dest="$3" src=""
-              if [ -e "$dir/$soname" ]; then
-                src="$dir/$soname"
-              else
-                src=$(ls -1 "$dir/$soname."* 2>/dev/null | sort -V | tail -n1 || true)
-              fi
-              if [ -z "$src" ] || [ ! -e "$src" ]; then
-                echo "ERROR: cannot stage $soname -- no file matching $dir/$soname* (deps build incomplete or shared lib not produced)"
-                ls -la "$dir" || true
-                return 1
-              fi
-              cp -L "$src" "$dest/$soname"
-              echo "staged $soname <- $(readlink -f "$src")"
-            }
-            # Current v3.0 RE2 builds are static-only, so obj/so is not
-            # created. Keep staging for branches that intentionally build
-            # shared RE2, where a missing library remains a real failure.
-            if [ -d deps/re2/re2/obj/so ]; then
-              stage_lib deps/re2/re2/obj/so libre2.so.10 test/tap/tap/_runtime_libs
-            else
-              echo "RE2 is static-only; no libre2 runtime library to stage"
-            fi
-            stage_lib deps/postgresql/postgresql/src/interfaces/libpq libpq.so.5 test/tap/tap/_runtime_libs
-            # Stage the chassis plugin .so files into the same dir for
-            # the same reason: the _src cache path list is shared
-            # infrastructure that we MUST NOT extend (changing it
-            # invalidates every downstream workflow's cache restore).
-            # The _test cache covers anything under test/, so anything
-            # we stash here travels along with the test/ tree from
-            # CI-builds to CI-mysqlx. CI-mysqlx's restore step copies
-            # them back to plugins/mysqlx/ before the soak harness
-            # bind-mounts the .so into the ProxySQL container.
-            cp -L plugins/mysqlx/ProxySQL_MySQLX_Plugin.so test/tap/tap/_runtime_libs/
-            cp -L plugins/genai/ProxySQL_GenAI_Plugin.so test/tap/tap/_runtime_libs/ 2>/dev/null || true
-            ls -la test/tap/tap/_runtime_libs/
-          fi
-          # ------------------------------------------------------------
-
           # Compile-time safety checks. A normal TAP build produces the
           # integration binaries in tests/; it need not build tests/unit.
           # The -tap-mysqlx cache is the exception: CI-mysqlx runs its
@@ -628,6 +567,59 @@ jobs:
         for LOG in proxysql/ci_build_log/build*.log ; do
           grep 'exited with code 0' ${LOG} || exit 1
         done
+
+    - name: Stage MySQLX runtime libraries in test handoff
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-mysqlx') }}
+      run: |
+        set -euo pipefail
+        cd proxysql/
+        runtime_dir="test/tap/tap/_runtime_libs"
+        mkdir -p "${runtime_dir}"
+
+        # Stage a versioned runtime .so by its SONAME, tolerating a lost
+        # symlink. Resolve the SONAME if present, else fall back to the newest
+        # matching real file. A missing library is fatal only when a built
+        # consumer actually declares it in DT_NEEDED.
+        stage_lib() {
+          local dir="$1" soname="$2" dest="$3" src=""
+          if [ -e "$dir/$soname" ]; then
+            src="$dir/$soname"
+          else
+            src=$(ls -1 "$dir/$soname."* 2>/dev/null | sort -V | tail -n1 || true)
+          fi
+          if [ -z "$src" ] || [ ! -e "$src" ]; then
+            echo "ERROR: cannot stage $soname -- no file matching $dir/$soname* (deps build incomplete or shared lib not produced)"
+            ls -la "$dir" || true
+            return 1
+          fi
+          cp -L "$src" "$dest/$soname"
+          echo "staged $soname <- $(readlink -f "$src")"
+        }
+
+        # Shared RE2 is optional because some branches build it statically.
+        if [ -d deps/re2/re2/obj/so ]; then
+          stage_lib deps/re2/re2/obj/so libre2.so.10 "${runtime_dir}"
+        else
+          echo "RE2 is static-only; no libre2 runtime library to stage"
+        fi
+
+        # v3.0 links libpq into libtap.so dynamically. Issue #6115 links
+        # libpq.a into each TAP executable and deliberately omits libpq.so.
+        # Inspect the built consumer so both source layouts work with this
+        # reusable workflow, while still failing if a required .so is absent.
+        if ! libtap_dynamic=$(readelf -d test/tap/tap/libtap.so); then
+          echo "ERROR: cannot inspect test/tap/tap/libtap.so" >&2
+          exit 1
+        fi
+        if grep -Fq 'Shared library: [libpq.so.5]' <<< "${libtap_dynamic}"; then
+          stage_lib deps/postgresql/postgresql/src/interfaces/libpq libpq.so.5 "${runtime_dir}"
+        else
+          echo "libtap.so uses static libpq; no libpq runtime library to stage"
+        fi
+
+        cp -L plugins/mysqlx/ProxySQL_MySQLX_Plugin.so "${runtime_dir}/"
+        cp -L plugins/genai/ProxySQL_GenAI_Plugin.so "${runtime_dir}/" 2>/dev/null || true
+        ls -la "${runtime_dir}/"
 
     - name: Stage GenAI plugin in test handoff
       if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-genai') }}
