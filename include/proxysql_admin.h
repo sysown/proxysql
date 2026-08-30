@@ -545,6 +545,7 @@ class ProxySQL_Admin {
 	void flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void disk_upgrade_mysql_query_rules();
 	void disk_upgrade_mysql_servers();
+	bool verify_registered_server_module_tables_after_upgrade();
 	void disk_upgrade_mysql_users();
 	void disk_upgrade_scheduler();
 	void disk_upgrade_rest_api_routes();
@@ -682,7 +683,14 @@ class ProxySQL_Admin {
 	 *   admindb->execute("ATTACH DATABASE 'file:mem_mydb?mode=memory&cache=shared' AS myhgm");
 	 *   ```
 	 */
-	void save_mysql_servers_runtime_to_database(bool _runtime);
+	bool save_mysql_servers_runtime_to_database(bool _runtime);
+	bool save_mysql_servers_runtime_to_database_scoped(
+		const std::vector<uint32_t>& hostgroups);
+	bool save_mysql_servers_memory_to_disk_scoped(
+		const std::vector<uint32_t>& hostgroups);
+	size_t drain_server_discovery_updates();
+	void shutdown_server_discovery_updates();
+	void close_server_discovery_wake_pipe();
 	void admin_shutdown();
 	void shutdown_threads();
 	bool is_command(std::string);
@@ -704,7 +712,7 @@ class ProxySQL_Admin {
 	void save_debug_from_runtime();
 #endif // DEBUG
 
-	void flush_GENERIC__from_to(const std::string&, const std::string&);
+	bool flush_GENERIC__from_to(const std::string&, const std::string&);
 
 	void flush_mysql_users__from_memory_to_disk();
 	void flush_mysql_users__from_disk_to_memory();
@@ -716,7 +724,7 @@ class ProxySQL_Admin {
 	void flush_ldap_variables__from_memory_to_disk();
 	void flush_pgsql_variables__from_memory_to_disk();
 	void load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers = {}, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server = {},
-		const mysql_servers_v2_checksum_t& peer_mysql_server_v2 = {});
+		const mysql_servers_v2_checksum_t& peer_mysql_server_v2 = {}, bool emit_runtime_install = true);
 	void save_mysql_servers_from_runtime();
 	/**
 	 * @brief Performs the load to runtime of the current configuration in 'main' for 'mysql_query_rules' and
@@ -894,12 +902,16 @@ class ProxySQL_Admin {
 	void save_pgsql_users_runtime_to_database(bool _runtime);
 
 	void load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t& incoming_pgsql_servers = {}, const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server = {},
-		const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2 = {});
+		const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2 = {}, bool emit_runtime_install = true);
 
 	char* load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset = NULL, 
 		SQLite3_result* SQLite3_query_rules_fast_routing_resultset = NULL, const std::string& checksum = "", const time_t epoch = 0);
 
-	void save_pgsql_servers_runtime_to_database(bool _runtime);
+	bool save_pgsql_servers_runtime_to_database(bool _runtime);
+	bool save_pgsql_servers_runtime_to_database_scoped(
+		const std::vector<uint32_t>& hostgroups);
+	bool save_pgsql_servers_memory_to_disk_scoped(
+		const std::vector<uint32_t>& hostgroups);
 	void save_pgsql_firewall_from_runtime(bool);
 	void save_pgsql_query_rules_from_runtime(bool);
 	void save_pgsql_query_rules_fast_routing_from_runtime(bool);

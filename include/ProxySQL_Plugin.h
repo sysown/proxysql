@@ -12,6 +12,8 @@
 #include <cstdint>
 #include <string>
 
+#include "ProxySQL_ServerDiscovery.h"
+
 class SQLite3DB;
 class SQLite3_result;
 class AwsIamTokenSource;
@@ -39,16 +41,20 @@ namespace prometheus { class Registry; }
 //          struct with {table_name, refresh, opaque} automatically get
 //          db_kind = admin_db (value 0) via zero-initialization of the
 //          trailing field — matching the pre-ABI-4 behaviour.
-//   ABI 5: ProxySQL_PluginServices gains AWS IAM provider installation and
-//          sizing callbacks. They are live only during normal plugin init.
+//   ABI 5: ProxySQL_PluginCommandContext appends optional Admin global-mutex
+//          handoff callbacks, and ProxySQL_PluginServices gains AWS IAM
+//          provider installation and sizing callbacks. The provider callbacks
+//          are live only during normal plugin init.
 //   ABI 6: ProxySQL_PluginServices gains the general AWS metadata-provider
 //          installation callback used by locality discovery.
 //   ABI 7: ProxySQL_PluginServices gains the MySQL-owned AWS-locality stats
 //          projection callback used by the AWS plugin's runtime view.
 //   ABI 8: ProxySQL_PluginServices gains an IAM-provider uninstall callback
 //          so a plugin can roll back a partially successful init.
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = 8u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = 8u;
+//   ABI 9: ProxySQL_PluginServices gains provider-neutral server discovery
+//          module/controller registration and desired-set submission.
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = 9u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = 9u;
 
 enum class ProxySQL_PluginDBKind : uint8_t {
 	admin_db = 0,
@@ -70,6 +76,17 @@ struct ProxySQL_PluginCommandContext {
 	SQLite3DB *admindb;
 	SQLite3DB *configdb;
 	SQLite3DB *statsdb;
+
+	// Optional handoff for commands that must wait for work which can itself
+	// enter the Admin interface.  Admin_Handler holds its global query mutex
+	// while dispatching plugin commands; a callback that drains worker threads
+	// while retaining that mutex can deadlock with a worker already waiting for
+	// Admin.  Such callbacks may release the mutex for the blocking portion and
+	// must reacquire it before returning.  Direct/unit-test dispatchers leave
+	// these null, in which case the callback must not attempt a handoff.
+	void *admin_mutex_context { nullptr };
+	void (*release_admin_mutex)(void *) { nullptr };
+	void (*acquire_admin_mutex)(void *) { nullptr };
 };
 
 // NOTE: ProxySQL_PluginCommandResult contains std::string. Plugins MUST
@@ -331,6 +348,18 @@ struct ProxySQL_PluginServices {
 	// ABI-8 extension. Live only during normal plugin init and intended for
 	// rollback of the same plugin's partially installed IAM provider.
 	proxysql_plugin_uninstall_aws_iam_token_source_cb uninstall_aws_iam_token_source;
+	// ABI-9 extension. Server modules can register during Phase B or normal
+	// init; discovery controllers install only during normal init. Uninstall is
+	// live during normal init and the owning plugin's stop() callback so its
+	// installed controller can synchronously drain and be destroyed before
+	// stop returns. A plugin cannot uninstall another plugin's controller.
+	// A plugin may retain post_server_desired_set and call it from start or
+	// steady-state workers. The callback pins the active manager through the
+	// synchronous acknowledgement and fails closed after manager unpublication.
+	proxysql_plugin_register_server_module_cb register_server_module;
+	proxysql_plugin_install_server_discovery_controller_cb install_server_discovery_controller;
+	proxysql_plugin_uninstall_server_discovery_controller_cb uninstall_server_discovery_controller;
+	proxysql_plugin_post_server_desired_set_cb post_server_desired_set;
 #endif /* PROXYSQL40 */
 };
 

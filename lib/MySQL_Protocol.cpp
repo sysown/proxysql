@@ -1298,21 +1298,27 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	}
 	*_thread_id=thread_id;
 
-  rand_struct rand_st;
-  //randominit(&rand_st,rand(),rand());
-  rand_st.max_value= 0x3FFFFFFFL;
-  rand_st.max_value_dbl=0x3FFFFFFFL;
-  rand_st.seed1=rand()%rand_st.max_value;
-  rand_st.seed2=rand()%rand_st.max_value;
+	unsigned char scramble[20];
+	if (RAND_bytes(scramble, sizeof(scramble)) != 1) {
+		proxy_error("RAND_bytes() failed generating initial handshake scramble for thread %u\n", thread_id);
+		free(_ptr);
+		return false;
+	}
+	for (unsigned int i = 0; i < sizeof(scramble); i++) {
+		unsigned char c = scramble[i];
+		if (c > 127) {
+			c -= 128;
+		}
+		if (c == 0) {
+			c = 'a';
+		}
+		(*myds)->myconn->scramble_buff[i] = c;
+	}
+	(*myds)->myconn->scramble_buff[sizeof(scramble)] = '\0';
 
   memcpy(_ptr+l, &protocol_version, sizeof(protocol_version)); l+=sizeof(protocol_version);
   memcpy(_ptr+l, mysql_thread___server_version, strlen(mysql_thread___server_version)); l+=strlen(mysql_thread___server_version)+1;
   memcpy(_ptr+l, &thread_id, sizeof(uint32_t)); l+=sizeof(uint32_t);
-//#ifdef MARIADB_BASE_VERSION
-//  proxy_create_random_string(myds->myconn->myconn.scramble_buff+0,8,(struct my_rnd_struct *)&rand_st);
-//#else
-  proxy_create_random_string((*myds)->myconn->scramble_buff+0,8,(struct rand_struct *)&rand_st);
-//#endif
 
   int i;
 
@@ -1395,12 +1401,6 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 
   for (i=0;i<10; i++) { _ptr[l]=0x00; l++; } //filler
   //create_random_string(mypkt->data+l,12,(struct my_rnd_struct *)&rand_st); l+=12;
-//#ifdef MARIADB_BASE_VERSION
-//  proxy_create_random_string(myds->myconn->myconn.scramble_buff+8,12,(struct my_rnd_struct *)&rand_st);
-//#else
-  proxy_create_random_string((*myds)->myconn->scramble_buff+8,12,(struct rand_struct *)&rand_st);
-//#endif
-  //create_random_string(scramble_buf+8,12,&rand_st);
 
 //  for (i=8;i<20;i++) {
 //    if ((*myds)->myconn->scramble_buff[i]==0) {

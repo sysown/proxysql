@@ -12,6 +12,7 @@ using json = nlohmann::json;
 #include <memory>
 #include <pthread.h>
 #include <string>
+#include "gen_utils.h"
 
 #include "prometheus/counter.h"
 #include "prometheus/detail/builder.h"
@@ -725,7 +726,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 		static const char alphanum[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 		rand_del[0] = '-';
 		for (int i = 1; i < 6; i++) {
-			rand_del[i] = alphanum[rand() % (sizeof(alphanum) - 1)];
+			rand_del[i] = alphanum[rand_fast() % (sizeof(alphanum) - 1)];
 		}
 		rand_del[6] = '-';
 		rand_del[7] = 0;
@@ -3343,7 +3344,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 					if (resultset2) { delete resultset2; resultset2=NULL; }
 					free(query2);
 				}
-				GloAdmin->load_mysql_servers_to_runtime(); // LOAD MYSQL SERVERS TO RUNTIME
+				GloAdmin->load_mysql_servers_to_runtime({}, {}, {}, false); // monitor-internal reload
 				GloAdmin->mysql_servers_wrunlock();
 			} else {
 				// there is a server in writer hostgroup, let check the status of present and not present hosts
@@ -3454,7 +3455,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 						if (resultset2) { delete resultset2; resultset2=NULL; }
 						free(query2);
 					}
-					GloAdmin->load_mysql_servers_to_runtime(); // LOAD MYSQL SERVERS TO RUNTIME
+					GloAdmin->load_mysql_servers_to_runtime({}, {}, {}, false); // monitor-internal reload
 					GloAdmin->mysql_servers_wrunlock();
 				}
 			}
@@ -3531,7 +3532,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 					if (resultset2) { delete resultset2; resultset2=NULL; }
 					free(query2);
 				}
-				GloAdmin->load_mysql_servers_to_runtime(); // LOAD MYSQL SERVERS TO RUNTIME
+				GloAdmin->load_mysql_servers_to_runtime({}, {}, {}, false); // monitor-internal reload
 				GloAdmin->mysql_servers_wrunlock();
 			}
 			break;

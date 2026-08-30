@@ -447,12 +447,14 @@ void MysqlxSession::handler_capabilities_get() {
 	// → CON_CAPABILITIES_GET) routinely query capabilities and should
 	// not trip the bound. status_ == WAITING_CLIENT_XMSG indicates auth
 	// completed.
-	if (status_ != WAITING_CLIENT_XMSG &&
-	    ++pre_auth_cap_msgs_ > MAX_PRE_AUTH_CAP_MSGS) {
-		client_ds_.pop_frame();
-		send_error(5008, "Too many pre-auth capability messages", true);
-		healthy = false;
-		return;
+	if (status_ != WAITING_CLIENT_XMSG) {
+		++pre_auth_cap_msgs_;
+		if (pre_auth_cap_msgs_ > MAX_PRE_AUTH_CAP_MSGS) {
+			client_ds_.pop_frame();
+			send_error(5008, "Too many pre-auth capability messages", true);
+			healthy = false;
+			return;
+		}
 	}
 
 	client_ds_.pop_frame();
@@ -544,12 +546,14 @@ void MysqlxSession::handler_capabilities_set() {
 
 	// Same per-session bound as handler_capabilities_get(); see comment
 	// there. Counter only applies pre-auth.
-	if (status_ != WAITING_CLIENT_XMSG &&
-	    ++pre_auth_cap_msgs_ > MAX_PRE_AUTH_CAP_MSGS) {
-		client_ds_.pop_frame();
-		send_error(5008, "Too many pre-auth capability messages", true);
-		healthy = false;
-		return;
+	if (status_ != WAITING_CLIENT_XMSG) {
+		++pre_auth_cap_msgs_;
+		if (pre_auth_cap_msgs_ > MAX_PRE_AUTH_CAP_MSGS) {
+			client_ds_.pop_frame();
+			send_error(5008, "Too many pre-auth capability messages", true);
+			healthy = false;
+			return;
+		}
 	}
 
 	const auto& frame = client_ds_.front_frame();

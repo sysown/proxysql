@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
+#include <vector>
 
 __thread unsigned int g_seed;
 
@@ -28,18 +29,20 @@ struct cpu_timer
 
 
 int main(int argc, char** argv) {
-	unsigned int * usedConns = NULL;
-	unsigned int * weights = NULL;
+	std::vector<unsigned int> usedConns(NSRV);
+	std::vector<unsigned int> weights(NSRV);
 	unsigned int sum = 0;
 	unsigned int TotalUsedConn = 0;
 
-	srand(monotonic_time());
-	usedConns = (unsigned int *)malloc(NSRV*sizeof(unsigned int));
-	weights = (unsigned int *)malloc(NSRV*sizeof(unsigned int));
+	g_seed = static_cast<unsigned int>(monotonic_time());
 	for (int i=0 ; i < NSRV ; i++ ) {
-		usedConns[i] = 20+rand()%1000;
-		weights[i] = 20+rand()%10000;
+		usedConns[i] = 20+fastrand()%1000;
+		weights[i] = 20+fastrand()%10000;
 	}
+	auto random_u30 = []() -> unsigned int {
+		return (static_cast<unsigned int>(fastrand()) << 15) | static_cast<unsigned int>(fastrand());
+	};
+
 	for (int N=4; N<=NSRV; N+=4) {
 	std::cerr << "Test with " << N << " servers:" << std::endl;
 	{
@@ -62,8 +65,11 @@ int main(int argc, char** argv) {
 				}
 			}
 			unsigned int k;
+			if (New_sum == 0) {
+				continue;
+			}
 			if (New_sum > 32768) {
-				k = rand() % New_sum;
+				k = random_u30() % New_sum;
 			} else {
 				k = fastrand() % New_sum;
 			}
@@ -101,8 +107,11 @@ int main(int argc, char** argv) {
 				}
 			}
 			double k;
+			if (New_sum == 0) {
+				continue;
+			}
 			if (New_sum > 32768) {
-				k = drand48() * New_sum;
+				k = static_cast<double>(random_u30() % static_cast<unsigned int>(New_sum));
 			} else {
 				k = fastrand() % (unsigned int)New_sum;
 			}

@@ -45,6 +45,16 @@ bool run_admin_stmt(MYSQL* admin, const std::string& query, const char* context)
 	return true;
 }
 
+std::string escape_sql_literal(MYSQL* admin, const char* input) {
+	if (input == nullptr) return {};
+	const size_t input_length = std::strlen(input);
+	std::string escaped(input_length * 2 + 1, '\0');
+	const unsigned long escaped_length = mysql_real_escape_string(
+		admin, escaped.data(), input, static_cast<unsigned long>(input_length));
+	escaped.resize(escaped_length);
+	return escaped;
+}
+
 /**
  * @brief Configure MCP runtime variables required by this test.
  *
@@ -53,11 +63,13 @@ bool run_admin_stmt(MYSQL* admin, const std::string& query, const char* context)
  * @return true if all configuration statements succeeded.
  */
 bool configure_mcp_stats_endpoint(MYSQL* admin, const CommandLine& cl) {
+	const std::string auth_token = escape_sql_literal(admin, cl.mcp_auth_token);
 	const std::vector<std::string> statements = {
 		"SET mcp-port=" + std::to_string(cl.mcp_port),
 		"SET mcp-use_ssl=false",
 		"SET mcp-enabled=true",
-		"SET mcp-stats_endpoint_auth=''",
+		"SET mcp-config_endpoint_auth='" + auth_token + "'",
+		"SET mcp-stats_endpoint_auth='" + auth_token + "'",
 		"LOAD MCP VARIABLES TO RUNTIME"
 	};
 
@@ -208,38 +220,21 @@ int main(int argc, char** argv) {
 	}
 
 	bool mcp_reachable = false;
-	bool using_ssl = false;
 	if (can_continue) {
 		// Retry loop: MCP server may need a moment to start after LOAD MCP VARIABLES TO RUNTIME
 		const int k_max_retries = 30;  // 30 retries * 100ms = 3 seconds max wait
 		const int k_retry_delay_ms = 100;
 		int retry_count = 0;
 
-		// First try HTTP, then HTTPS if HTTP fails
-		for (int ssl_attempt = 0; ssl_attempt <= 1 && !mcp_reachable; ssl_attempt++) {
-			bool try_ssl = (ssl_attempt == 1);
-			mcp->set_use_ssl(try_ssl);
-
-			if (try_ssl) {
-				diag("HTTP failed, trying HTTPS...");
-			}
-
-			retry_count = 0;
-			while (!mcp_reachable && retry_count < k_max_retries) {
-				usleep(k_retry_delay_ms * 1000);
-				mcp_reachable = mcp->check_server();
-				retry_count++;
-			}
-
-			if (mcp_reachable) {
-				using_ssl = try_ssl;
-				diag("MCP server reachable via %s after %d retries (%dms)",
-					try_ssl ? "HTTPS" : "HTTP", retry_count, retry_count * k_retry_delay_ms);
-			}
+		while (!mcp_reachable && retry_count < k_max_retries) {
+			usleep(k_retry_delay_ms * 1000);
+			mcp_reachable = mcp->check_server();
+			retry_count++;
 		}
 
-		ok(mcp_reachable, "MCP server reachable at %s (%s)", mcp->get_connection_info().c_str(),
-			using_ssl ? "HTTPS" : "HTTP");
+		diag("MCP HTTP server readiness after %d retries (%dms)",
+			retry_count, retry_count * k_retry_delay_ms);
+		ok(mcp_reachable, "MCP HTTP server reachable at %s", mcp->get_connection_info().c_str());
 		if (!mcp_reachable) {
 			skip(7, "Cannot continue without MCP connectivity");
 			can_continue = false;
@@ -359,9 +354,7 @@ int main(int argc, char** argv) {
 	}
 
 	if (admin) {
-		run_q(admin, "SET mcp-stats_endpoint_auth=''");
-		run_q(admin, "SET mcp-enabled=false");
-		run_q(admin, "LOAD MCP VARIABLES TO RUNTIME");
+		run_q(admin, "LOAD MCP VARIABLES FROM DISK");
 		mysql_close(admin);
 	}
 

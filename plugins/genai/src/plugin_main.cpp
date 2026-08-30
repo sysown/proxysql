@@ -39,6 +39,8 @@
 #include "Discovery_Schema.h"     // load_mcp_query_rules / get_mcp_query_rules
 #include "GenAI_Thread.h"
 #include "AI_Features_Manager.h"
+#include "AI_Tool_Handler.h"
+#include "RAG_Tool_Handler.h"
 #include "sqlite3db.h"
 #include "proxysql_utils.h"
 #include "proxysql.h"
@@ -51,6 +53,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
+#include <mutex>
+#include <utility>
+#include <vector>
 
 class ProxySQL_Admin;
 extern ProxySQL_Admin* GloAdmin;
@@ -83,6 +89,20 @@ extern std::atomic<genai_anomaly_embed_fn_t> genai_anomaly_embed_fn;
 
 namespace {
 
+using VariableDefaults = std::vector<std::pair<std::string, std::string>>;
+using VariableValues = std::vector<std::pair<std::string, std::string>>;
+
+struct VariableNamesDeleter {
+	void operator()(char** names) const {
+		if (names == nullptr) return;
+		free_deleter release;
+		for (int i = 0; names[i] != nullptr; ++i) release(names[i]);
+		release(names);
+	}
+};
+
+using VariableNamesOwner = std::unique_ptr<char*, VariableNamesDeleter>;
+
 std::vector<float> embed_query_via_glogath(const std::string& query) {
 	if (GloGATH == nullptr) return {};
 	std::vector<std::string> docs { query };
@@ -91,6 +111,121 @@ std::vector<float> embed_query_via_glogath(const std::string& query) {
 		return {};
 	}
 	return std::vector<float>(res.data, res.data + res.embedding_size);
+}
+
+bool collect_variable_defaults(GenAIPluginContext& ctx, VariableDefaults& defaults) {
+	if (ctx.mcp == nullptr || GloGATH == nullptr) return false;
+
+	VariableNamesOwner mcp_names { ctx.mcp->get_variables_list() };
+	if (!mcp_names) return false;
+	for (int i = 0; mcp_names.get()[i] != nullptr; ++i) {
+		std::string value;
+		if (!ctx.mcp->get_variable_string(mcp_names.get()[i], value)) return false;
+		defaults.emplace_back(std::string("mcp-") + mcp_names.get()[i], std::move(value));
+	}
+
+	VariableNamesOwner genai_names { GloGATH->get_variables_list() };
+	if (!genai_names) return false;
+	for (int i = 0; genai_names.get()[i] != nullptr; ++i) {
+		mf_unique_ptr<char> value { GloGATH->get_variable(genai_names.get()[i]) };
+		if (!value) {
+			genai_log(6, "genai plugin: failed to read default for genai-%s\n",
+			          genai_names.get()[i]);
+			return false;
+		}
+		defaults.emplace_back(std::string("genai-") + genai_names.get()[i], value.get());
+	}
+	return true;
+}
+
+bool seed_variable_defaults(SQLite3DB* db, const VariableDefaults& defaults,
+		const char* database_name) {
+	if (db == nullptr) {
+		genai_log(6, "genai plugin: cannot seed defaults in %s: null database\n", database_name);
+		return false;
+	}
+
+	auto [prep_rc, stmt] = db->prepare_v2(
+		"INSERT OR IGNORE INTO global_variables(variable_name, variable_value) VALUES(?1, ?2)"
+	);
+	if (prep_rc != SQLITE_OK) {
+		genai_log(6, "genai plugin: failed to prepare default seeding for %s (rc=%d)\n",
+		          database_name, prep_rc);
+		return false;
+	}
+	sqlite3_stmt* statement = stmt.get();
+
+	if (!db->execute("BEGIN")) {
+		genai_log(6, "genai plugin: failed to begin default seeding transaction for %s\n",
+		          database_name);
+		return false;
+	}
+
+	for (const auto& item : defaults) {
+		int rc = (*proxy_sqlite3_bind_text)(statement, 1, item.first.c_str(), -1, SQLITE_TRANSIENT);
+		if (rc != SQLITE_OK) {
+			genai_log(6, "genai plugin: failed to bind default %s for %s (rc=%d)\n",
+			          item.first.c_str(), database_name, rc);
+			db->execute("ROLLBACK");
+			return false;
+		}
+
+		rc = (*proxy_sqlite3_bind_text)(statement, 2, item.second.c_str(), -1, SQLITE_TRANSIENT);
+		if (rc != SQLITE_OK) {
+			genai_log(6, "genai plugin: failed to bind default %s for %s (rc=%d)\n",
+			          item.first.c_str(), database_name, rc);
+			db->execute("ROLLBACK");
+			return false;
+		}
+
+		rc = (*proxy_sqlite3_step)(statement);
+		if (rc != SQLITE_DONE) {
+			genai_log(6, "genai plugin: failed to seed default %s for %s (rc=%d)\n",
+			          item.first.c_str(), database_name, rc);
+			db->execute("ROLLBACK");
+			return false;
+		}
+
+		rc = (*proxy_sqlite3_clear_bindings)(statement);
+		if (rc != SQLITE_OK) {
+			genai_log(6, "genai plugin: failed to clear default bindings for %s in %s (rc=%d)\n",
+			          item.first.c_str(), database_name, rc);
+			db->execute("ROLLBACK");
+			return false;
+		}
+
+		rc = (*proxy_sqlite3_reset)(statement);
+		if (rc != SQLITE_OK) {
+			genai_log(6, "genai plugin: failed to reset default statement for %s in %s (rc=%d)\n",
+			          item.first.c_str(), database_name, rc);
+			db->execute("ROLLBACK");
+			return false;
+		}
+	}
+
+	if (!db->execute("COMMIT")) {
+		genai_log(6, "genai plugin: failed to commit default seeding transaction for %s\n",
+		          database_name);
+		db->execute("ROLLBACK");
+		return false;
+	}
+	return true;
+}
+
+bool seed_plugin_variable_defaults(GenAIPluginContext& ctx) {
+	if (ctx.services == nullptr ||
+	    ctx.services->get_configdb == nullptr ||
+	    ctx.services->get_admindb == nullptr) {
+		return false;
+	}
+
+	VariableDefaults defaults;
+	if (!collect_variable_defaults(ctx, defaults)) return false;
+
+	SQLite3DB* configdb = ctx.services->get_configdb();
+	SQLite3DB* admindb = ctx.services->get_admindb();
+	return seed_variable_defaults(configdb, defaults, "configdb") &&
+	       seed_variable_defaults(admindb, defaults, "admindb");
 }
 
 } // namespace
@@ -241,14 +376,116 @@ bool genai_register_schemas(ProxySQL_PluginServices* services) {
 //               externally visible, declared in genai_plugin.h, and
 //               called from plugin_commands.cpp.)
 
+namespace {
+
+bool collect_mcp_handler_values(MCP_Threads_Handler* handler, VariableValues& values) {
+	values.clear();
+	if (handler == nullptr) return false;
+
+	VariableNamesOwner names { handler->get_variables_list() };
+	if (!names) return false;
+
+	for (int i = 0; names.get()[i] != nullptr; ++i) {
+		std::string value;
+		if (!handler->get_variable_string(names.get()[i], value)) {
+			genai_log(6, "genai plugin: failed to read active mcp-%s\n", names.get()[i]);
+			return false;
+		}
+		values.emplace_back(names.get()[i], std::move(value));
+	}
+	return !values.empty();
+}
+
+bool apply_mcp_handler_values(MCP_Threads_Handler* handler, const VariableValues& values,
+		const char* operation) {
+	for (const auto& item : values) {
+		if (handler->set_variable(item.first.c_str(), item.second.c_str()) != 0) {
+			// Endpoint-auth values are credentials.  Name the rejected setting
+			// without echoing its value into proxysql.log.
+			genai_log(6, "genai plugin: %s rejected mcp-%s\n", operation,
+			          item.first.c_str());
+			return false;
+		}
+	}
+	return true;
+}
+
+bool contains_mcp_variable(const VariableValues& values, const std::string& name) {
+	for (const auto& item : values) {
+		if (item.first == name) return true;
+	}
+	return false;
+}
+
+bool publish_mcp_runtime_values(SQLite3DB* admindb, const VariableValues& values) {
+	auto [prep_rc, stmt] = admindb->prepare_v2(
+		"INSERT INTO main.runtime_global_variables(variable_name, variable_value)"
+		" VALUES(?1, ?2)"
+	);
+	if (prep_rc != SQLITE_OK) {
+		genai_log(6, "genai plugin: failed to prepare MCP runtime publication (rc=%d)\n",
+		          prep_rc);
+		return false;
+	}
+
+	if (!admindb->execute("BEGIN")) {
+		genai_log(6, "genai plugin: failed to begin MCP runtime publication\n");
+		return false;
+	}
+
+	if (!admindb->execute(
+			"DELETE FROM main.runtime_global_variables WHERE variable_name LIKE 'mcp-%'")) {
+		genai_log(6, "genai plugin: failed to clear the prior MCP runtime snapshot\n");
+		admindb->execute("ROLLBACK");
+		return false;
+	}
+
+	sqlite3_stmt* statement = stmt.get();
+	for (const auto& item : values) {
+		const std::string qualified = std::string("mcp-") + item.first;
+		int rc = (*proxy_sqlite3_bind_text)(
+			statement, 1, qualified.c_str(), -1, SQLITE_TRANSIENT);
+		if (rc == SQLITE_OK) {
+			rc = (*proxy_sqlite3_bind_text)(
+				statement, 2, item.second.c_str(), -1, SQLITE_TRANSIENT);
+		}
+		if (rc == SQLITE_OK) rc = (*proxy_sqlite3_step)(statement);
+		if (rc != SQLITE_DONE) {
+			genai_log(6, "genai plugin: failed to publish runtime %s (rc=%d)\n",
+			          qualified.c_str(), rc);
+			admindb->execute("ROLLBACK");
+			return false;
+		}
+
+		rc = (*proxy_sqlite3_clear_bindings)(statement);
+		if (rc == SQLITE_OK) rc = (*proxy_sqlite3_reset)(statement);
+		if (rc != SQLITE_OK) {
+			genai_log(6, "genai plugin: failed to reset MCP runtime publication"
+			          " for %s (rc=%d)\n", qualified.c_str(), rc);
+			admindb->execute("ROLLBACK");
+			return false;
+		}
+	}
+
+	if (!admindb->execute("COMMIT")) {
+		genai_log(6, "genai plugin: failed to commit MCP runtime publication\n");
+		admindb->execute("ROLLBACK");
+		return false;
+	}
+	return true;
+}
+
+} // namespace
+
 /**
- * @brief Push admin DB's mcp-* variables into the running
- *        MCP_Threads_Handler.  Mirrors the pre-4.C
- *        flush_mcp_variables___database_to_runtime in core.
+ * @brief Validate and push admin DB's complete mcp-* configuration into the
+ *        running handler, then atomically publish the normalized active values
+ *        to runtime_global_variables.
  *
  * @param ctx  Plugin context (provides services + ctx.mcp).
- * @return true on success; false on SQL error (logged and propagated
- *         to caller).
+ * @return true on success; false on an incomplete/invalid configuration or a
+ *         SQL error.  Failures restore the previous handler values and leave
+ *         the previously committed runtime table snapshot visible.
  */
 bool mcp_load_variables_from_admindb(GenAIPluginContext& ctx) {
 	if (ctx.services == nullptr || ctx.services->get_admindb == nullptr || ctx.mcp == nullptr) {
@@ -270,15 +507,55 @@ bool mcp_load_variables_from_admindb(GenAIPluginContext& ctx) {
 		if (rs != nullptr) delete rs;
 		return false;
 	}
+
+	VariableValues previous;
+	if (!collect_mcp_handler_values(ctx.mcp, previous)) {
+		if (rs != nullptr) delete rs;
+		return false;
+	}
+
+	VariableValues desired;
 	if (rs != nullptr) {
 		for (auto* row : rs->rows) {
 			const char* qualified = row->fields[0];
 			const char* value = row->fields[1];
-			if (qualified != nullptr && std::strncmp(qualified, "mcp-", 4) == 0) {
-				ctx.mcp->set_variable(qualified + 4, value ? value : "");
+			if (qualified == nullptr || std::strncmp(qualified, "mcp-", 4) != 0 ||
+				!ctx.mcp->has_variable(qualified + 4)) {
+				genai_log(6, "genai plugin: unknown MCP variable %s\n",
+				          qualified ? qualified : "(null)");
+				delete rs;
+				return false;
 			}
+			desired.emplace_back(qualified + 4, value ? value : "");
 		}
 		delete rs;
+	}
+
+	if (desired.size() != previous.size()) {
+		genai_log(6, "genai plugin: incomplete MCP variable set: expected %zu, got %zu\n",
+		          previous.size(), desired.size());
+		return false;
+	}
+	for (const auto& item : previous) {
+		if (!contains_mcp_variable(desired, item.first)) {
+			genai_log(6, "genai plugin: missing mcp-%s from global_variables\n",
+			          item.first.c_str());
+			return false;
+		}
+	}
+
+	if (!apply_mcp_handler_values(ctx.mcp, desired, "LOAD")) {
+		apply_mcp_handler_values(ctx.mcp, previous, "rollback");
+		return false;
+	}
+
+	VariableValues active;
+	if (!collect_mcp_handler_values(ctx.mcp, active) ||
+		!publish_mcp_runtime_values(admindb, active)) {
+		if (!apply_mcp_handler_values(ctx.mcp, previous, "rollback")) {
+			genai_log(3, "genai plugin: failed to restore MCP handler after LOAD failure\n");
+		}
+		return false;
 	}
 	return true;
 }
@@ -413,7 +690,14 @@ bool genai_load_variables_from_admindb(GenAIPluginContext& ctx) {
  * bridge from the refreshed GenAI configuration.
  */
 bool genai_refresh_runtime_components(GenAIPluginContext& ctx) {
-	(void)ctx;
+	// AI/RAG endpoint resources persist across a GenAI reload, but their tool
+	// handlers borrow objects owned by GloGATH/GloAI.  Wait for current AI/RAG
+	// calls, rebuild the owners, and rebind those borrowed pointers before the
+	// next endpoint call can enter.  Command callbacks release the Admin mutex
+	// before reaching this lock, so a request already waiting for Admin cannot
+	// form Admin -> reload -> request -> Admin lock inversion.
+	std::unique_lock<GenAIRWLock> runtime_guard(ctx.runtime_dependencies_mutex);
+
 	if (GloGATH != nullptr) {
 		GloGATH->shutdown();
 		GloGATH->init();
@@ -421,9 +705,23 @@ bool genai_refresh_runtime_components(GenAIPluginContext& ctx) {
 	if (GloAI != nullptr) {
 		GloAI->shutdown();
 		if (GloAI->init() != 0) {
+			if (ctx.mcp != nullptr && ctx.mcp->ai_tool_handler != nullptr) {
+				ctx.mcp->ai_tool_handler->set_llm_bridge(nullptr);
+			}
+			if (ctx.mcp != nullptr && ctx.mcp->rag_tool_handler != nullptr) {
+				ctx.mcp->rag_tool_handler->refresh_runtime_dependencies(GloAI);
+			}
 			genai_log(6, "genai plugin: AI_Features_Manager::init() failed during reload\n");
 			return false;
 		}
+	}
+
+	if (ctx.mcp != nullptr && ctx.mcp->ai_tool_handler != nullptr) {
+		ctx.mcp->ai_tool_handler->set_llm_bridge(
+			GloAI != nullptr ? GloAI->get_llm_bridge() : nullptr);
+	}
+	if (ctx.mcp != nullptr && ctx.mcp->rag_tool_handler != nullptr) {
+		ctx.mcp->rag_tool_handler->refresh_runtime_dependencies(GloAI);
 	}
 	return true;
 }
@@ -603,6 +901,9 @@ bool mcp_save_target_auth_map_to_admindb(GenAIPluginContext& ctx) {
  */
 void mcp_start_listener_if_enabled(GenAIPluginContext& ctx) {
 	if (ctx.mcp == nullptr) return;
+	// Listener teardown joins request threads. AI/RAG request threads hold the
+	// shared runtime-dependency lock while executing, so the listener must be
+	// stopped before taking the exclusive side or a reload can deadlock.
 	if (!ctx.mcp->variables.mcp_enabled) {
 		if (ctx.mcp->mcp_server != nullptr) {
 			delete ctx.mcp->mcp_server;
@@ -645,6 +946,10 @@ void mcp_start_listener_if_enabled(GenAIPluginContext& ctx) {
 		return;
 	}
 
+	// The constructor snapshots GloAI/GloGATH dependencies for the new AI/RAG
+	// handlers. Serialize that snapshot with runtime replacement after every
+	// previous listener and its request threads have been drained.
+	std::unique_lock<GenAIRWLock> runtime_guard(ctx.runtime_dependencies_mutex);
 	ctx.mcp->mcp_server = new ProxySQL_MCP_Server(port, ctx.mcp);
 	if (ctx.mcp->mcp_server != nullptr) {
 		ctx.mcp->mcp_server->start();
@@ -676,6 +981,12 @@ bool genai_start() {
 	GenAIPluginContext& ctx = genai_context();
 	ctx.started = true;
 
+	if (!seed_plugin_variable_defaults(ctx)) {
+		genai_log(6, "genai plugin: failed to seed MCP/GenAI variable defaults\n");
+		ctx.started = false;
+		return false;
+	}
+
 	if (!mcp_load_variables_from_admindb(ctx)) {
 		genai_log(6, "genai plugin: failed to load MCP variables at startup\n");
 		ctx.started = false;
@@ -703,21 +1014,16 @@ bool genai_start() {
  *
  * Tear-down order is the reverse of construction in genai_init() so
  * that consumers go away before producers:
- *   1. flip `started` to false — the query-hook adapter switches to
- *      ALLOW-everything once this flips, draining in-flight readers
- *      that observed `started == true` before the flip.
- *   2. delete MCP_Threads_Handler — its destructor stops the
- *      ProxySQL_MCP_Server (joining accept + worker threads), so by
- *      the time we move on no listener thread is still alive that
- *      could touch GloGATH/GloAI.
- *   3. delete AI_Features_Manager and GenAI_Threads_Handler — safe
- *      now because the listener / tool handlers (their only callers)
- *      are gone.
- *   4. clear the embedding hook ATOMICALLY before deleting the
- *      anomaly detector, so any straggling hot-path reader (the
- *      query hook ran concurrently with step 1) sees a null pointer
- *      and short-circuits, not a dangling GenAI handler.
- *   5. delete the anomaly detector itself.
+ *   1. flip `started` to false — new query-hook calls become no-ops.
+ *   2. stop the MCP server without holding runtime_dependencies_mutex.
+ *      Its destructor joins accept + worker threads, including workers
+ *      that may already hold the shared side of that mutex. Taking the
+ *      writer first would deadlock while waiting for those workers.
+ *   3. take the exclusive runtime lock. This drains any query-hook or
+ *      stats-view reader that entered before step 1 and prevents another
+ *      runtime consumer from observing teardown in progress.
+ *   4. clear the embedding callback, then destroy the MCP handler,
+ *      AI/GenAI runtime objects, and anomaly detector in reverse order.
  *
  * Prometheus counters stay registered: prometheus-cpp has no
  * Unregister API and re-registering them on a future load+start of
@@ -729,14 +1035,24 @@ bool genai_start() {
 bool genai_stop() {
 	GenAIPluginContext& ctx = genai_context();
 	ctx.started = false;
+
+	// The server owns threads whose AI/RAG calls take the shared runtime lock.
+	// Drain them before requesting the exclusive side below.
 	if (ctx.mcp != nullptr) {
-		// MCP listener teardown.  ~MCP_Threads_Handler stops the
-		// embedded ProxySQL_MCP_Server (if running) and joins worker
-		// threads.  Mirrors the pre-4.C `delete GloMCPH` in main.cpp.
+		ctx.mcp->shutdown();
+	}
+
+	std::unique_lock<GenAIRWLock> runtime_guard(ctx.runtime_dependencies_mutex);
+	if (ctx.mcp != nullptr) {
 		delete ctx.mcp;
 		ctx.mcp = nullptr;
 		GloMCPH = nullptr;
 	}
+
+	// No shared runtime consumer can retain the embedding callback after the
+	// exclusive lock was acquired, so clear it before deleting GloGATH.
+	genai_anomaly_embed_fn.store(nullptr, std::memory_order_release);
+
 	// Step 5: tear down AI_Features_Manager and GenAI_Threads_Handler
 	// in reverse construction order.  Mirrors the pre-Step-5 shutdown
 	// in src/main.cpp.
@@ -749,17 +1065,6 @@ bool genai_stop() {
 		GloGATH = nullptr;
 	}
 	if (ctx.anomaly_detector != nullptr) {
-		// Clear the embedding hook before deleting the detector so
-		// any in-flight hot-path call sees a null pointer rather
-		// than a dangling GenAI_Threads_Handler reference.  Release
-		// ordering pairs with the acquire load in
-		// Anomaly_Detector::get_query_embedding so subsequent
-		// readers either observe the null (and short-circuit)
-		// before the GloGATH delete becomes visible, or observe
-		// the prior non-null pointer paired with the
-		// still-live GloGATH from genai_init.
-		genai_anomaly_embed_fn.store(nullptr, std::memory_order_release);
-		ctx.anomaly_detector->close();
 		delete ctx.anomaly_detector;
 		ctx.anomaly_detector = nullptr;
 	}

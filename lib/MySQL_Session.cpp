@@ -8187,19 +8187,21 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							char *v1 = strdup(value1.c_str());
 							char *v1t = v1;
 							proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Found @ in SQL_MODE . v1 = %s\n", v1);
-							char *v2 = NULL;
-							while (v1 && (v2 = strstr(v1,(const char *)"@"))) {
+							char *v2 = v1 ? strstr(v1,(const char *)"@") : NULL;
+							while (v2) {
 								// we found a @ . Maybe we need to lock hostgroup
 								proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Found @ in SQL_MODE . v2 = %s\n", v2);
 								if (strncasecmp(v2,(const char *)"@@sql_mode",strlen((const char *)"@@sql_mode"))) {
 									unable_to_parse_set_statement(lock_hostgroup);
-									free(v1);
+									free(v1t);
 									return false;
 								} else {
 									v2++;
 								}
 								if (strlen(v2) > 1) {
-									v1 = v2+1;
+									v2 = strstr(v2 + 1,(const char *)"@");
+								} else {
+									v2 = nullptr;
 								}
 							}
 							free(v1t);
@@ -8667,8 +8669,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							std::size_t found_at = s1.find("@");
 							if (found_at != std::string::npos) {
 								char *v1 = strdup(s1.c_str());
-								char *v2 = NULL;
-								while (v1 && (v2 = strstr(v1,(const char *)"@"))) {
+								char *v1t = v1;
+								char *v2 = v1 ? strstr(v1,(const char *)"@") : NULL;
+								while (v2) {
 									// we found a @ . Maybe we need to lock hostgroup
 									if (strncasecmp(v2,(const char *)"@@sql_mode",strlen((const char *)"@@sql_mode"))) {
 #ifdef DEBUG
@@ -8678,10 +8681,12 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 										*lock_hostgroup = true;
 									}
 									if (strlen(v2) > 1) {
-										v1 = v2+1;
+										v2 = strstr(v2 + 1,(const char *)"@");
+									} else {
+										v2 = nullptr;
 									}
 								}
-								free(v1);
+								free(v1t);
 								if (*lock_hostgroup) {
 									unable_to_parse_set_statement(lock_hostgroup);
 									return false;

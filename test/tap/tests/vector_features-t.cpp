@@ -1,339 +1,159 @@
 /**
  * @file vector_features-t.cpp
- * @brief TAP unit tests for Vector Features (NL2SQL cache & Anomaly similarity)
- *
- * Test Categories:
- * 1. Virtual vec0 table creation
- * 2. NL2SQL vector cache operations
- * 3. Anomaly threat pattern management
- * 4. Embedding generation (requires GenAI/llama-server)
- *
- * Prerequisites:
- * - ProxySQL with AI features enabled
- * - Admin interface on localhost:6032
- * - GenAI module with llama-server (for embedding tests)
- *
- * Usage:
- *   make vector_features
- *   ./vector_features
- *
- * @date 2025-01-16
+ * @brief Verify vector, cache, anomaly, and GenAI status configuration.
  */
 
-#include <algorithm>
+#include <cstdlib>
 #include <string>
-#include <string.h>
-#include <stdio.h>
 #include <unistd.h>
-#include <vector>
 
 #include "mysql.h"
-#include "mysqld_error.h"
 
-#include "tap.h"
 #include "command_line.h"
-#include "utils.h"
+#include "tap.h"
 
 using std::string;
-using std::vector;
 
-// Global admin connection
-MYSQL* g_admin = nullptr;
+namespace {
 
-// Global ProxySQL connection for testing
-MYSQL* g_proxy = nullptr;
-
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-/**
- * @brief Get AI variable value via Admin interface
- * AI variables are stored as columns in mysql_servers table with ai_ prefix
- */
-string get_ai_variable(const char* name) {
-	char query[256];
-	snprintf(query, sizeof(query),
-			 "SELECT ai_%s FROM mysql_servers LIMIT 1", name);
-
-	if (mysql_query(g_admin, query)) {
-		diag("Failed to query variable: %s", mysql_error(g_admin));
-		return "";
-	}
-
-	MYSQL_RES* result = mysql_store_result(g_admin);
-	if (!result) {
-		return "";
-	}
-
-	MYSQL_ROW row = mysql_fetch_row(result);
-	string value = row ? (row[0] ? row[0] : "") : "";
-
-	mysql_free_result(result);
-	return value;
-}
-
-/**
- * @brief Set AI variable
- */
-bool set_ai_variable(const char* name, const char* value) {
-	char query[256];
-	snprintf(query, sizeof(query),
-			 "UPDATE mysql_servers SET ai_%s='%s'",
-			 name, value);
-
-	if (mysql_query(g_admin, query)) {
-		diag("Failed to set variable: %s", mysql_error(g_admin));
+bool execute_admin(MYSQL* admin, const string& sql) {
+	if (mysql_query(admin, sql.c_str()) != 0) {
+		diag("Admin command failed: %s: %s", sql.c_str(), mysql_error(admin));
 		return false;
 	}
-
-	snprintf(query, sizeof(query), "LOAD MYSQL VARIABLES TO RUNTIME");
-	if (mysql_query(g_admin, query)) {
-		diag("Failed to load variables: %s", mysql_error(g_admin));
-		return false;
-	}
-
+	MYSQL_RES* result = mysql_store_result(admin);
+	if (result != nullptr) mysql_free_result(result);
 	return true;
 }
 
-/**
- * @brief Check if AI features are initialized
- */
-bool check_ai_initialized() {
-	// Check if GloAI exists by trying to access AI variables
-	string enabled = get_ai_variable("nl2sql_enabled");
-	return !enabled.empty() || (enabled.empty() && true); // May be empty but OK
+string quote_value(MYSQL* admin, const string& value) {
+	string escaped(value.size() * 2 + 1, '\0');
+	const unsigned long length = mysql_real_escape_string(
+		admin, escaped.data(), value.c_str(), static_cast<unsigned long>(value.size()));
+	escaped.resize(length);
+	return "'" + escaped + "'";
 }
 
-// ============================================================================
-// Test 1: Virtual vec0 Table Creation
-// ============================================================================
-
-/**
- * @test Virtual vec0 tables are created
- * @description Verify that sqlite-vec virtual tables were created during init
- * @expected nl2sql_cache_vec, anomaly_patterns_vec, query_history_vec should exist
- */
-void test_virtual_tables_created() {
-	diag("=== Virtual vec0 Table Creation Tests ===");
-
-	// Note: We can't directly query the vector DB from SQL client
-	// This test verifies the AI features are initialized
-	ok(check_ai_initialized(), "AI features initialized");
-
-	// Check that vector DB path is configured
-	string db_path = get_ai_variable("vector_db_path");
-	ok(!db_path.empty() || db_path.empty(), "Vector DB path configured (or default used)");
-
-	// Check vector dimension
-	string dim = get_ai_variable("vector_dimension");
-	ok(dim == "1536" || dim.empty(), "Vector dimension is 1536 or default");
-}
-
-// ============================================================================
-// Test 2: NL2SQL Vector Cache Configuration
-// ============================================================================
-
-/**
- * @test NL2SQL cache configuration
- * @description Verify NL2SQL cache variables are accessible
- */
-void test_nl2sql_cache_config() {
-	diag("=== NL2SQL Vector Cache Configuration Tests ===");
-
-	// Test 1: Check cache enabled by default
-	string enabled = get_ai_variable("nl2sql_enabled");
-	ok(enabled == "true" || enabled == "1" || enabled.empty(),
-	   "NL2SQL enabled by default");
-
-	// Test 2: Check cache similarity threshold
-	string threshold = get_ai_variable("nl2sql_cache_similarity_threshold");
-	ok(threshold == "85" || threshold.empty(),
-	   "Cache similarity threshold is 85 or default");
-
-	// Test 3: Set and verify cache threshold
-	if (set_ai_variable("nl2sql_cache_similarity_threshold", "90")) {
-		string new_threshold = get_ai_variable("nl2sql_cache_similarity_threshold");
-		ok(new_threshold == "90" || new_threshold.empty(), "Cache threshold changed to 90");
-
-		// Restore default
-		set_ai_variable("nl2sql_cache_similarity_threshold", "85");
-	} else {
-		skip(1, "Cannot set cache threshold variable");
+bool query_scalar(MYSQL* admin, const string& sql, string& value) {
+	value.clear();
+	if (mysql_query(admin, sql.c_str()) != 0) {
+		diag("Admin query failed: %s: %s", sql.c_str(), mysql_error(admin));
+		return false;
 	}
+	MYSQL_RES* result = mysql_store_result(admin);
+	if (result == nullptr) return false;
+	MYSQL_ROW row = mysql_fetch_row(result);
+	const bool found = row != nullptr && row[0] != nullptr;
+	if (found) value = row[0];
+	mysql_free_result(result);
+	return found;
 }
 
-// ============================================================================
-// Test 3: Anomaly Detection Embedding Configuration
-// ============================================================================
-
-/**
- * @test Anomaly embedding similarity configuration
- * @description Verify anomaly embedding similarity variables are accessible
- */
-void test_anomaly_embedding_config() {
-	diag("=== Anomaly Embedding Configuration Tests ===");
-
-	// Test 1: Check anomaly enabled
-	string enabled = get_ai_variable("anomaly_enabled");
-	ok(enabled == "true" || enabled == "1" || enabled.empty(),
-	   "Anomaly Detection enabled by default");
-
-	// Test 2: Check similarity threshold
-	string threshold = get_ai_variable("anomaly_similarity_threshold");
-	ok(threshold == "85" || threshold.empty(),
-	   "Similarity threshold is 85 or default");
-
-	// Test 3: Check risk threshold
-	string risk = get_ai_variable("anomaly_risk_threshold");
-	ok(risk == "70" || risk.empty(),
-	   "Risk threshold is 70 or default");
+bool read_variable(MYSQL* admin, const string& canonical_name, string& value) {
+	return query_scalar(
+		admin,
+		"SELECT variable_value FROM global_variables WHERE variable_name=" +
+			quote_value(admin, canonical_name),
+		value);
 }
 
-// ============================================================================
-// Test 4: Vector Database File
-// ============================================================================
+bool set_variable(MYSQL* admin, const string& canonical_name, const string& value) {
+	return execute_admin(
+		admin, "SET " + canonical_name + "=" + quote_value(admin, value));
+}
 
-/**
- * @test Vector database file exists
- * @description Verify that the vector database file is created
- */
-void test_vector_db_file() {
-	diag("=== Vector Database File Tests ===");
+void expect_variable(MYSQL* admin, const string& canonical_name, const string& expected) {
+	string value;
+	const bool found = read_variable(admin, canonical_name, value);
+	ok(found && value == expected,
+	   "%s is '%s' (got '%s')",
+	   canonical_name.c_str(), expected.c_str(), value.c_str());
+}
 
-	// Get the vector DB path
-	string db_path = get_ai_variable("vector_db_path");
-	if (db_path.empty()) {
-		db_path = "/var/lib/proxysql/ai_features.db";
+void expect_status(MYSQL* admin, const string& name) {
+	string value;
+	const bool found = query_scalar(
+		admin,
+		"SELECT Value FROM stats_genai_global WHERE Variable_name=" +
+			quote_value(admin, name),
+		value);
+	bool numeric = found && !value.empty();
+	for (char character : value) {
+		if ((character < '0' || character > '9') && character != '.') numeric = false;
 	}
-
-	// Check if file exists (we can't directly access from test, but verify path is set)
-	ok(!db_path.empty(), "Vector DB path is configured");
-
-	diag("Vector DB path: %s", db_path.c_str());
+	ok(numeric, "stats_genai_global publishes numeric %s (got '%s')", name.c_str(), value.c_str());
 }
 
-// ============================================================================
-// Test 5: Status Variables
-// ============================================================================
+} // namespace
 
-/**
- * @test AI status variables exist
- * @description Verify Prometheus metrics are available
- */
-void test_status_variables() {
-	diag("=== Status Variables Tests ===");
-
-	// Test 1: Check ai_detected_anomalies exists
-	char query[256];
-	snprintf(query, sizeof(query), "SHOW STATUS LIKE 'ai_detected_anomalies'");
-
-	if (mysql_query(g_admin, query) == 0) {
-		MYSQL_RES* result = mysql_store_result(g_admin);
-		if (result) {
-			unsigned long rows = mysql_num_rows(result);
-			ok(rows > 0, "ai_detected_anomalies status variable exists");
-			mysql_free_result(result);
-		} else {
-			ok(false, "ai_detected_anomalies status variable exists");
-		}
-	} else {
-		ok(false, "ai_detected_anomalies status variable query succeeded");
-	}
-
-	// Test 2: Check ai_blocked_queries exists
-	snprintf(query, sizeof(query), "SHOW STATUS LIKE 'ai_blocked_queries'");
-
-	if (mysql_query(g_admin, query) == 0) {
-		MYSQL_RES* result = mysql_store_result(g_admin);
-		if (result) {
-			unsigned long rows = mysql_num_rows(result);
-			ok(rows > 0, "ai_blocked_queries status variable exists");
-			mysql_free_result(result);
-		} else {
-			ok(false, "ai_blocked_queries status variable exists");
-		}
-	} else {
-		ok(false, "ai_blocked_queries status variable query succeeded");
-	}
-}
-
-// ============================================================================
-// Test 6: Cache Statistics
-// ============================================================================
-
-/**
- * @test Cache statistics interface
- * @description Verify cache statistics can be retrieved
- */
-void test_cache_statistics() {
-	diag("=== Cache Statistics Tests ===");
-
-	// Note: We can't directly call get_cache_stats from SQL
-	// But we can verify the configuration allows it
-
-	// Test 1: Verify cache is enabled
-	string enabled = get_ai_variable("nl2sql_enabled");
-	ok(enabled == "true" || enabled == "1" || enabled.empty(),
-	   "Cache is enabled for statistics");
-
-	diag("Cache statistics available via: SHOW STATUS LIKE 'ai_nl2sql_cache_%%'");
-}
-
-// ============================================================================
-// Test 7: GenAI Module Check
-// ============================================================================
-
-/**
- * @test GenAI module availability
- * @description Check if GenAI module is loaded for embedding generation
- */
-void test_genai_module() {
-	diag("=== GenAI Module Tests ===");
-
-	// GenAI module is loaded via GloGATH
-	// We can't directly check it from SQL, but we can verify configuration
-
-	string genai_enabled = get_ai_variable("genai_enabled");
-	ok(genai_enabled == "true" || genai_enabled == "1" || genai_enabled.empty(),
-	   "GenAI module enabled or default");
-
-	diag("GenAI endpoint: http://127.0.0.1:8013/embedding");
-	diag("Note: Embedding tests require llama-server to be running");
-}
-
-// ============================================================================
-// Main
-// ============================================================================
-
-int main(int argc, char** argv) {
-	// Parse command line
+int main() {
 	CommandLine cl;
 	if (cl.getEnv()) {
-		diag("Error getting environment variables");
-		return exit_status();
+		diag("Failed to read TAP environment");
+		return EXIT_FAILURE;
 	}
 
-	// Connect to admin interface
-	g_admin = mysql_init(nullptr);
-	if (!mysql_real_connect(g_admin, cl.host, cl.admin_username, cl.admin_password,
-						nullptr, cl.admin_port, nullptr, 0)) {
-		diag("Failed to connect to admin interface");
-		return exit_status();
+	MYSQL* admin = mysql_init(nullptr);
+	if (admin == nullptr ||
+	    mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password,
+	                       nullptr, cl.admin_port, nullptr, 0) == nullptr) {
+		diag("Failed to connect to ProxySQL admin: %s", admin ? mysql_error(admin) : "mysql_init failed");
+		if (admin != nullptr) mysql_close(admin);
+		return EXIT_FAILURE;
 	}
 
-	// Plan tests: 7 categories with ~3 tests each
-	plan(20);
+	plan(22);
 
-	// Run test categories
-	test_virtual_tables_created();
-	test_nl2sql_cache_config();
-	test_anomaly_embedding_config();
-	test_vector_db_file();
-	test_status_variables();
-	test_cache_statistics();
-	test_genai_module();
+	string vector_count;
+	const bool count_found = query_scalar(
+		admin,
+		"SELECT COUNT(*) FROM global_variables WHERE variable_name IN ("
+		"'genai-vector_db_path','genai-vector_dimension',"
+		"'genai-llm_cache_enabled','genai-llm_cache_similarity_threshold',"
+		"'genai-anomaly_enabled','genai-anomaly_similarity_threshold',"
+		"'genai-anomaly_risk_threshold')",
+		vector_count);
+	ok(count_found && vector_count == "7",
+	   "all seven canonical vector/cache/anomaly variables exist (got '%s')",
+	   vector_count.c_str());
 
-	mysql_close(g_admin);
+	string vector_path;
+	const bool path_found = read_variable(admin, "genai-vector_db_path", vector_path);
+	ok(path_found && vector_path == "/var/lib/proxysql/ai_features.db",
+	   "canonical vector database path is configured (got '%s')", vector_path.c_str());
+	expect_variable(admin, "genai-vector_dimension", "1536");
+	ok(path_found && access(vector_path.c_str(), F_OK) == 0,
+	   "configured vector database exists in the shared isolated datadir");
+	expect_variable(admin, "genai-llm_cache_enabled", "true");
+	expect_variable(admin, "genai-llm_cache_similarity_threshold", "85");
+	expect_variable(admin, "genai-anomaly_enabled", "false");
+	expect_variable(admin, "genai-anomaly_similarity_threshold", "80");
+	expect_variable(admin, "genai-anomaly_risk_threshold", "70");
+
+	expect_status(admin, "genai_threads_initialized");
+	expect_status(admin, "anomaly_blocked_queries");
+	expect_status(admin, "mcp_total_requests");
+
+	const string threshold_name = "genai-llm_cache_similarity_threshold";
+	string original_threshold;
+	if (!read_variable(admin, threshold_name, original_threshold)) original_threshold = "85";
+
+	ok(set_variable(admin, threshold_name, "90"), "set canonical cache threshold in memory");
+	ok(execute_admin(admin, "LOAD GENAI VARIABLES TO RUNTIME"), "load cache threshold to runtime");
+	ok(set_variable(admin, threshold_name, "75"), "change cache threshold only in memory");
+	ok(execute_admin(admin, "SAVE GENAI VARIABLES FROM RUNTIME"), "save cache threshold from runtime");
+	expect_variable(admin, threshold_name, "90");
+	ok(execute_admin(admin, "SAVE GENAI VARIABLES TO DISK"), "save cache threshold to disk");
+	ok(set_variable(admin, threshold_name, "70"), "change cache threshold after disk save");
+	ok(execute_admin(admin, "LOAD GENAI VARIABLES FROM DISK"), "load cache threshold from disk");
+	expect_variable(admin, threshold_name, "90");
+
+	const bool memory_restored = set_variable(admin, threshold_name, original_threshold);
+	const bool runtime_restored = execute_admin(admin, "LOAD GENAI VARIABLES TO RUNTIME");
+	const bool disk_restored = execute_admin(admin, "SAVE GENAI VARIABLES TO DISK");
+	const bool restored = memory_restored && runtime_restored && disk_restored;
+	ok(restored, "restore original cache threshold in memory, runtime, and disk");
+
+	mysql_close(admin);
 	return exit_status();
 }

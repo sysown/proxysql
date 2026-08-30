@@ -3,6 +3,7 @@ using json = nlohmann::json;
 #define PROXYJSON
 
 #include "MySQL_HostGroups_Manager.h"
+#include "ProxySQL_ServerDiscovery.h"
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -12,6 +13,7 @@ using json = nlohmann::json;
 #include <memory>
 #include <pthread.h>
 #include <string>
+#include "gen_utils.h"
 
 #include "prometheus/counter.h"
 #include "prometheus/detail/builder.h"
@@ -34,6 +36,73 @@ using json = nlohmann::json;
 #include <type_traits>
 
 using std::function;
+
+extern "C" void proxysql_servers_v2_refresh_exception_for_test(int, int)
+	__attribute__((weak));
+
+#ifdef PROXYSQL40
+namespace {
+
+std::unique_ptr<SQLite3_result> mysql_desired_rows(
+	const std::vector<ProxySQL_ServerRow>& rows) {
+	auto result = std::make_unique<SQLite3_result>(12);
+	for (const auto& row : rows) {
+		std::array<std::string, 12> values {{
+			std::to_string(row.hostgroup_id), row.hostname, std::to_string(row.port),
+			std::to_string(row.gtid_port), row.status, std::to_string(row.weight),
+			std::to_string(row.compression), std::to_string(row.max_connections),
+			std::to_string(row.max_replication_lag), std::to_string(row.use_ssl),
+			std::to_string(row.max_latency_ms), row.comment
+		}};
+		char* fields[12];
+		for (size_t index = 0; index < values.size(); ++index) fields[index] = values[index].data();
+		result->add_row(fields);
+	}
+	return result;
+}
+
+bool same_server_hostgroup_claims(const std::vector<ProxySQL_ServerHostgroupClaim>& left,
+	const std::vector<ProxySQL_ServerHostgroupClaim>& right) {
+	return left.size() == right.size() && std::equal(left.begin(), left.end(), right.begin(),
+		[](const ProxySQL_ServerHostgroupClaim& lhs, const ProxySQL_ServerHostgroupClaim& rhs) {
+			return lhs.writer_hostgroup == rhs.writer_hostgroup &&
+				lhs.reader_hostgroup == rhs.reader_hostgroup;
+		});
+}
+
+std::string mysql_active_replication_hostgroups_cte(
+	const std::vector<ProxySQL_ServerHostgroupClaim>& claims) {
+	std::string query =
+		"WITH active_replication_hostgroups(writer_hostgroup,reader_hostgroup,check_type) AS ("
+		"SELECT writer_hostgroup,reader_hostgroup,check_type FROM mysql_replication_hostgroups";
+	if (!claims.empty()) {
+		query += " UNION ALL SELECT column1,column2,'read_only' FROM (VALUES ";
+		for (size_t index = 0; index < claims.size(); ++index) {
+			if (index != 0) query += ",";
+			query += "(" + std::to_string(claims[index].writer_hostgroup) + "," +
+				std::to_string(claims[index].reader_hostgroup) + ")";
+		}
+		query += ")";
+	}
+	query += ") ";
+	return query;
+}
+
+class ScopedMySQLHostgroupLock {
+public:
+	explicit ScopedMySQLHostgroupLock(MySQL_HostGroups_Manager* manager) : manager_(manager) {
+		manager_->wrlock();
+	}
+	~ScopedMySQLHostgroupLock() { manager_->wrunlock(); }
+	ScopedMySQLHostgroupLock(const ScopedMySQLHostgroupLock&) = delete;
+	ScopedMySQLHostgroupLock& operator=(const ScopedMySQLHostgroupLock&) = delete;
+
+private:
+	MySQL_HostGroups_Manager* manager_;
+};
+
+} // namespace
+#endif
 
 extern MySQL_Authentication *GloMyAuth;
 
@@ -776,7 +845,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 		static const char alphanum[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 		rand_del[0] = '-';
 		for (int i = 1; i < 6; i++) {
-			rand_del[i] = alphanum[rand() % (sizeof(alphanum) - 1)];
+			rand_del[i] = alphanum[rand_fast() % (sizeof(alphanum) - 1)];
 		}
 		rand_del[6] = '-';
 		rand_del[7] = 0;
@@ -1180,10 +1249,19 @@ void MySQL_HostGroups_Manager::commit_update_checksums_from_tables(SpookyHash& m
  * IMPORTANT: Make sure wrlock() is called before calling this method.
  * 
 */
-void MySQL_HostGroups_Manager::update_hostgroup_manager_mappings() {
+bool MySQL_HostGroups_Manager::update_hostgroup_manager_mappings() {
+
+#ifdef PROXYSQL40
+	auto active_claims = proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::mysql);
+	const bool server_module_claims_changed =
+		!same_server_hostgroup_claims(active_claims, hgsm_server_module_claims_);
+#else
+	const bool server_module_claims_changed = false;
+#endif
 
 	if (hgsm_mysql_servers_checksum != table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS] ||
-		hgsm_mysql_replication_hostgroups_checksum != table_resultset_checksum[HGM_TABLES::MYSQL_REPLICATION_HOSTGROUPS])
+		hgsm_mysql_replication_hostgroups_checksum != table_resultset_checksum[HGM_TABLES::MYSQL_REPLICATION_HOSTGROUPS] ||
+		server_module_claims_changed)
 	{
 		proxy_info("Rebuilding 'Hostgroup_Manager_Mapping' due to checksums change - mysql_servers { old: 0x%lX, new: 0x%lX }, mysql_replication_hostgroups { old:0x%lX, new:0x%lX }\n",
 			hgsm_mysql_servers_checksum, table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS],
@@ -1194,14 +1272,33 @@ void MySQL_HostGroups_Manager::update_hostgroup_manager_mappings() {
 		int affected_rows = 0;
 		SQLite3_result* resultset = NULL;
 
+		std::string query;
+#ifdef PROXYSQL40
+		query = mysql_active_replication_hostgroups_cte(active_claims);
+#endif
+		query += "SELECT DISTINCT hostname, port, '1' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer FROM "
+			"active_replication_hostgroups JOIN mysql_servers ON hostgroup_id=writer_hostgroup WHERE status<>3 "
+			"UNION "
+			"SELECT DISTINCT hostname, port, '0' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer FROM "
+			"active_replication_hostgroups JOIN mysql_servers ON hostgroup_id=reader_hostgroup WHERE status<>3 "
+			"ORDER BY hostname, port";
+#ifndef PROXYSQL40
+		query.replace(0, 0,
+			"WITH active_replication_hostgroups(writer_hostgroup,reader_hostgroup,check_type) AS ("
+			"SELECT writer_hostgroup,reader_hostgroup,check_type FROM mysql_replication_hostgroups) ");
+#endif
+
+		const bool query_ok = mydb->execute_statement(
+			query.c_str(), &error, &cols, &affected_rows, &resultset);
+		if (!query_ok || error != nullptr || resultset == nullptr) {
+			proxy_error("Unable to rebuild MySQL hostgroup server mapping: %s\n",
+				error != nullptr ? error : "query returned no result");
+			if (error != nullptr) free(error);
+			delete resultset;
+			return false;
+		}
+
 		hostgroup_server_mapping.clear();
-
-		const char* query = "SELECT DISTINCT hostname, port, '1' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer FROM mysql_replication_hostgroups JOIN mysql_servers ON hostgroup_id=writer_hostgroup WHERE status<>3 \
-							 UNION \
-							 SELECT DISTINCT hostname, port, '0' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer FROM mysql_replication_hostgroups JOIN mysql_servers ON hostgroup_id=reader_hostgroup WHERE status<>3 \
-							 ORDER BY hostname, port";
-
-		mydb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
 
 		if (resultset && resultset->rows_count) {
 			std::string fetched_server_id;
@@ -1243,7 +1340,44 @@ void MySQL_HostGroups_Manager::update_hostgroup_manager_mappings() {
 
 		hgsm_mysql_servers_checksum = table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS];
 		hgsm_mysql_replication_hostgroups_checksum = table_resultset_checksum[HGM_TABLES::MYSQL_REPLICATION_HOSTGROUPS];
+#ifdef PROXYSQL40
+		hgsm_server_module_claims_ = std::move(active_claims);
+#endif
 	}
+	return true;
+}
+
+SQLite3_result* MySQL_HostGroups_Manager::get_read_only_servers(char** error) {
+	char* local_error = nullptr;
+	char** error_target = error == nullptr ? &local_error : error;
+#ifdef PROXYSQL40
+	ScopedServerDiscoveryProtocolLock protocol_lock(ProxySQL_ServerProtocol::mysql);
+	ScopedMySQLHostgroupLock hostgroup_lock(this);
+	std::string query = mysql_active_replication_hostgroups_cte(
+		proxysql_active_server_hostgroup_claims(ProxySQL_ServerProtocol::mysql));
+#else
+	std::string query =
+		"WITH active_replication_hostgroups(writer_hostgroup,reader_hostgroup,check_type) AS ("
+		"SELECT writer_hostgroup,reader_hostgroup,check_type FROM mysql_replication_hostgroups) ";
+#endif
+	query += "SELECT hostname, port, MAX(use_ssl) use_ssl, check_type, reader_hostgroup "
+		"FROM mysql_servers JOIN active_replication_hostgroups "
+		"ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup "
+		"WHERE status NOT IN (2,3) GROUP BY hostname, port ORDER BY RANDOM()";
+#ifdef PROXYSQL40
+	int columns = 0;
+	int affected_rows = 0;
+	SQLite3_result* result = nullptr;
+	mydb->execute_statement(query.c_str(), error_target, &columns, &affected_rows, &result);
+#else
+	SQLite3_result* result = execute_query(const_cast<char*>(query.c_str()), error_target);
+#endif
+	if (result == nullptr) result = new SQLite3_result(5);
+	if (error == nullptr && local_error != nullptr) {
+		proxy_error("Error enumerating read-only monitor servers: %s\n", local_error);
+		free(local_error);
+	}
+	return result;
 }
 
 /**
@@ -1359,7 +1493,8 @@ static void update_glovars_mysql_servers_checksum(
 static void update_glovars_mysql_servers_v2_checksum(
 	const string& new_checksum,
 	const mysql_servers_v2_checksum_t& peer_checksum = {},
-	bool update_version = false
+	bool update_version = false,
+	bool publish_global = false
 ) {
 	time_t new_epoch = time(NULL);
 
@@ -1371,6 +1506,11 @@ static void update_glovars_mysql_servers_v2_checksum(
 		peer_checksum.epoch,
 		update_version
 	);
+	if (publish_global) {
+		GloVars.checksums_values.updates_cnt++;
+		GloVars.generate_global_checksum();
+		GloVars.epoch_version = new_epoch;
+	}
 }
 
 /**
@@ -1450,6 +1590,26 @@ std::string MySQL_HostGroups_Manager::gen_global_mysql_servers_v2_checksum(uint6
 	return mysrvs_checksum;
 }
 
+void MySQL_HostGroups_Manager::refresh_mysql_servers_v2_checksum() {
+	wrlock();
+	struct WriteUnlockGuard {
+		MySQL_HostGroups_Manager& manager;
+		~WriteUnlockGuard() { manager.wrunlock(); }
+	} write_unlock_guard {*this};
+	if (proxysql_servers_v2_refresh_exception_for_test != nullptr)
+		proxysql_servers_v2_refresh_exception_for_test(0, 1);
+	const uint64_t new_hash = commit_update_checksum_from_mysql_servers_v2();
+	const string global_checksum_v2 = gen_global_mysql_servers_v2_checksum(new_hash);
+	pthread_mutex_lock(&GloVars.checksum_mutex);
+	struct MutexUnlockGuard {
+		pthread_mutex_t& mutex;
+		~MutexUnlockGuard() { pthread_mutex_unlock(&mutex); }
+	} checksum_unlock_guard {GloVars.checksum_mutex};
+	if (proxysql_servers_v2_refresh_exception_for_test != nullptr)
+		proxysql_servers_v2_refresh_exception_for_test(0, 2);
+	update_glovars_mysql_servers_v2_checksum(global_checksum_v2, {}, true, true);
+}
+
 bool MySQL_HostGroups_Manager::commit() {
 	return commit({},{});
 }
@@ -1469,6 +1629,19 @@ bool MySQL_HostGroups_Manager::commit(
 
 	unsigned long long curtime1=monotonic_time();
 	wrlock();
+	const bool result = commit_locked(peer_runtime_mysql_servers, peer_mysql_servers_v2,
+		only_commit_runtime_mysql_servers, update_version);
+	wrunlock();
+	finish_commit(curtime1);
+	return result;
+}
+
+bool MySQL_HostGroups_Manager::commit_locked(
+	const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers,
+	const peer_mysql_servers_v2_t& peer_mysql_servers_v2,
+	bool only_commit_runtime_mysql_servers,
+	bool update_version
+) {
 	// purge table
 	purge_mysql_servers_table();
 	// if any server has gtid_port enabled, use_gtid is set to true
@@ -1778,6 +1951,7 @@ bool MySQL_HostGroups_Manager::commit(
 	read_only_set2.erase(read_only_set2.begin(), read_only_set2.end());
 
 	this->status.p_counter_array[p_hg_counter::servers_table_version]->Increment();
+	pthread_mutex_lock(&status.servers_table_version_lock);
 	pthread_cond_broadcast(&status.servers_table_version_cond);
 	pthread_mutex_unlock(&status.servers_table_version_lock);
 
@@ -1787,7 +1961,10 @@ bool MySQL_HostGroups_Manager::commit(
 	// Refresh BGD monitoring after all runtime server changes are applied.
 	update_aws_rds_bgd_hosts_monitor_resultset();
 
-	wrunlock();
+	return true;
+}
+
+void MySQL_HostGroups_Manager::finish_commit(unsigned long long curtime1) {
 #ifdef PROXYSQL40
 	refresh_aws_locality_configuration();
 #endif
@@ -1800,7 +1977,6 @@ bool MySQL_HostGroups_Manager::commit(
 		GloMTH->signal_all_threads(1);
 	}
 
-	return true;
 }
 
 /** 
@@ -2454,6 +2630,13 @@ void MySQL_HostGroups_Manager::update_table_mysql_servers_for_monitor(bool lock)
  * @note If the provided table name is not recognized, the function assertion fails.
  */
 SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) {
+	wrlock();
+	SQLite3_result *resultset = dump_table_mysql_locked(name);
+	wrunlock();
+	return resultset;
+}
+
+SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_locked(const string& name) {
 	char * query = (char *)"";
 	if (name == "mysql_aws_aurora_hostgroups") {
 		query=(char *)"SELECT writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,"
@@ -2478,7 +2661,6 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) 
 	} else {
 		assert(0);
 	}
-	wrlock();
 	if (name == "mysql_servers") {
 		purge_mysql_servers_table();
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
@@ -2491,7 +2673,6 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) 
 	SQLite3_result *resultset=NULL;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
 	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	wrunlock();
 	return resultset;
 }
 
@@ -3151,6 +3332,56 @@ __exit_replication_lag_action:
 	wrunlock();
 	GloAdmin->mysql_servers_wrunlock();
 }
+
+#ifdef PROXYSQL40
+extern "C" void proxysql_server_reconcile_after_hgm_snapshot_for_test(
+	ProxySQL_ServerProtocol) __attribute__((weak));
+
+bool MySQL_HostGroups_Manager::reconcile_server_desired_set(
+	const ProxySQL_ServerDesiredSet& desired_set, std::string& error) {
+	if (desired_set.protocol != ProxySQL_ServerProtocol::mysql) {
+		error = "invalid protocol for MySQL Hostgroup Manager";
+		return false;
+	}
+	const unsigned long long started_at = monotonic_time();
+	proxy_info("Generating runtime mysql servers records only.\n");
+	wrlock();
+	bool result = false;
+	try {
+		std::unique_ptr<SQLite3_result> current_rows(dump_table_mysql_locked("mysql_servers"));
+		if (!current_rows || current_rows->columns != 12) {
+			error = "malformed MySQL runtime server snapshot";
+		} else {
+			if (proxysql_server_reconcile_after_hgm_snapshot_for_test != nullptr)
+				proxysql_server_reconcile_after_hgm_snapshot_for_test(desired_set.protocol);
+			ProxySQL_ServerRuntimeSnapshot current = proxysql_server_runtime_snapshot_from_rows(
+				ProxySQL_ServerProtocol::mysql, desired_set.generation, *current_rows);
+			std::vector<ProxySQL_ServerRow> merged;
+			if (proxysql_merge_server_desired_set(current, desired_set, merged, error)) {
+				std::unique_ptr<SQLite3_result> incoming = mysql_desired_rows(merged);
+				servers_add(incoming.get());
+				result = commit_locked({}, {}, true, false);
+				if (!result) error = "MySQL Hostgroup Manager rejected desired servers";
+			}
+		}
+	} catch (...) {
+		wrunlock();
+		throw;
+	}
+	wrunlock();
+	if (result) finish_commit(started_at);
+	return result;
+}
+
+bool proxysql_reconcile_mysql_server_desired_set(
+	const ProxySQL_ServerDesiredSet& desired_set, std::string& error) {
+	if (MyHGM == nullptr || desired_set.protocol != ProxySQL_ServerProtocol::mysql) {
+		error = "MySQL Hostgroup Manager is unavailable";
+		return false;
+	}
+	return MyHGM->reconcile_server_desired_set(desired_set, error);
+}
+#endif
 
 void MySQL_HostGroups_Manager::drop_all_idle_connections() {
 	// NOTE: the caller should hold wrlock
@@ -3832,7 +4063,14 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_ser
 	bool update_mysql_servers_table = false;
 
 	unsigned long long curtime1 = monotonic_time();
+#ifdef PROXYSQL40
+	ScopedServerDiscoveryProtocolLock protocol_lock(ProxySQL_ServerProtocol::mysql);
+#endif
 	wrlock();
+	if (!update_hostgroup_manager_mappings()) {
+		wrunlock();
+		return;
+	}
 	for (const auto& server : filtered_servers) {
 		bool is_writer = false;
 		const std::string& hostname = std::get<READ_ONLY_SERVER_T::ROS_HOSTNAME>(server);

@@ -868,6 +868,12 @@ ProxySQL_HTTP_Server::ProxySQL_HTTP_Server() {
 	variables.proxysql_latest_version = NULL;
 }
 
+namespace {
+char random_hex_char() {
+	return "0123456789abcdef"[rand_fast() & 0x0f];
+}
+} // namespace
+
 ProxySQL_HTTP_Server::~ProxySQL_HTTP_Server() {
 	if (variables.proxysql_latest_version) {
 		free(variables.proxysql_latest_version);
@@ -876,7 +882,6 @@ ProxySQL_HTTP_Server::~ProxySQL_HTTP_Server() {
 }
 
 string ProxySQL_HTTP_Server::generate_chart(char *chart_name, char *ts, int nsets, char **dname, char **llabel, char **values) {
-	char *h=(char *)"0123456789abcdef";
 	string ret{};
 	int i;
 	ret.append("<script>\n");
@@ -905,7 +910,7 @@ string ProxySQL_HTTP_Server::generate_chart(char *chart_name, char *ts, int nset
 		ret.append("        label: \""); ret.append(llabel[i]); ret.append("\",\n");
 		int j;
 		char pal[7];
-		for (j=0; j<6; j++) { pal[j]=h[rand()%16]; }
+		for (j=0; j<6; j++) { pal[j]=random_hex_char(); }
 		pal[6]='\0';
 		ret.append("        borderColor: \"#"); ret.append(pal); ret.append("\",\n");
 		ret.append("        fill: false\n");

@@ -1,5 +1,27 @@
 #!/bin/make -f
 
+AI_GENAI_UNIT_TESTS := \
+	genai_config_query_unit-t \
+	genai_discovery_schema_unit-t \
+	genai_fts_string_unit-t \
+	genai_llm_clients_unit-t \
+	genai_mcp_endpoint_unit-t \
+	genai_mcp_thread_unit-t \
+	genai_mysql_catalog_unit-t \
+	genai_query_handler_unit-t \
+	genai_rag_fetch_from_source_unit-t \
+	genai_stats_parsing_unit-t \
+	genai_thread_unit-t
+AI_GENAI_STAGE_DIR := tap_tests_ai_unit
+
+AI_GENAI_HANDOFF_ENABLED := 0
+ifeq ($(PROXYSQL40),1)
+ifeq ($(WITHGCOV),1)
+ifeq ($(SKIP_GENAI_UNIT_TESTS),1)
+AI_GENAI_HANDOFF_ENABLED := 1
+endif
+endif
+endif
 
 .DEFAULT: all
 .PHONY: all
@@ -61,6 +83,39 @@ tests_with_deps: tap test_deps
 .PHONY: unit_tests
 unit_tests: tap test_deps
 	cd tests/unit && CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
+	@if [ "$(AI_GENAI_HANDOFF_ENABLED)" = "1" ]; then \
+		$(MAKE) ai_genai_unit_tests; \
+	fi
+
+
+.PHONY: ai_genai_unit_tests stage_ai_genai_unit_tests
+.NOTPARALLEL: ai_genai_unit_tests
+ai_genai_unit_tests: tap test_deps
+	@set -eu; \
+		if [ -d "$(AI_GENAI_STAGE_DIR)" ]; then \
+			for test_name in $(AI_GENAI_UNIT_TESTS); do \
+				if [ -x "$(AI_GENAI_STAGE_DIR)/$$test_name" ] && [ ! -e "tests/unit/$$test_name" ]; then \
+					ln "$(AI_GENAI_STAGE_DIR)/$$test_name" "tests/unit/$$test_name"; \
+				fi; \
+			done; \
+		fi
+	cd tests/unit && CC=${CC} CXX=${CXX} ${MAKE} ai_genai_unit_tests
+	$(MAKE) stage_ai_genai_unit_tests
+
+stage_ai_genai_unit_tests:
+	@set -eu; \
+		rm -rf "$(AI_GENAI_STAGE_DIR)"; \
+		mkdir -p "$(AI_GENAI_STAGE_DIR)"; \
+		for test_name in $(AI_GENAI_UNIT_TESTS); do \
+			test -x "tests/unit/$$test_name"; \
+			ln "tests/unit/$$test_name" "$(AI_GENAI_STAGE_DIR)/$$test_name"; \
+		done; \
+		printf '%s\n' $(AI_GENAI_UNIT_TESTS) | LC_ALL=C sort > "$(AI_GENAI_STAGE_DIR)/manifest.txt"; \
+		find "$(AI_GENAI_STAGE_DIR)" -maxdepth 1 -type f ! -name manifest.txt -printf '%f\n' \
+			| LC_ALL=C sort | cmp -s "$(AI_GENAI_STAGE_DIR)/manifest.txt" -; \
+		for test_name in $(AI_GENAI_UNIT_TESTS); do \
+			rm -f "tests/unit/$$test_name"; \
+		done
 
 
 .PHONY: clean_utils
@@ -75,7 +130,7 @@ clean:
 	cd tests && ${MAKE} -s clean
 	cd tests_with_deps && ${MAKE} -s clean
 	cd tests/unit && ${MAKE} -s clean
-	rm -rf pgsql_user_sync
+	rm -rf pgsql_user_sync $(AI_GENAI_STAGE_DIR)
 
 .PHONY: cleanall
 .SILENT: cleanall
@@ -85,3 +140,4 @@ cleanall:
 	cd tests && ${MAKE} -s clean
 	cd tests_with_deps && ${MAKE} -s clean
 	cd tests/unit && ${MAKE} -s clean
+	rm -rf $(AI_GENAI_STAGE_DIR)

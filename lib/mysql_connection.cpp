@@ -916,10 +916,15 @@ void MySQL_Connection::connect_start_SetAttributes() {
 	{
 		time_t __timer;
 		char __buffer[25];
-		struct tm *__tm_info;
+		struct tm __tm_info;
+		struct tm *tm_info_ptr;
 		time(&__timer);
-		__tm_info = localtime(&__timer);
-		strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", __tm_info);
+		tm_info_ptr = localtime_r(&__timer, &__tm_info);
+		if (tm_info_ptr == NULL) {
+			__buffer[0] = 0;
+		} else {
+			strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", tm_info_ptr);
+		}
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "connection_creation_time", __buffer);
 		unsigned long long t1=monotonic_time();
 		sprintf(__buffer,"%llu",(t1-GloVars.global.start_time)/1000/1000);

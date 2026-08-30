@@ -1,8 +1,12 @@
 #include "ProxySQL_Plugin.h"
+#include "sqlite3db.h"
 
 #include <cstdio>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <dlfcn.h>
+#include <stdexcept>
 #include <string>
 
 // Two builds of this source produce two distinct .so files used together
@@ -21,6 +25,13 @@
 namespace {
 
 ProxySQL_PluginServices* fake_services = nullptr;
+#ifdef PROXYSQL40
+proxysql_plugin_post_server_desired_set_cb fake_post_server_desired_set = nullptr;
+proxysql_plugin_uninstall_server_discovery_controller_cb
+	fake_uninstall_server_discovery_controller = nullptr;
+std::atomic<unsigned int> retained_fixture_module_calls {0};
+std::atomic<unsigned int> retained_fixture_controller_calls {0};
+#endif
 
 ProxySQL_PluginCommandResult fake_command(const ProxySQL_PluginCommandContext&, const char*) {
 	return {0, 1, "fake command executed"};
@@ -63,6 +74,163 @@ void fake_log_event(const char *event) {
 	std::fprintf(log_file, "%s:%s\n", FAKE_PLUGIN_NAME, event);
 	std::fclose(log_file);
 }
+
+#ifdef PROXYSQL40
+void fake_server_module_installed(void *, ProxySQL_ServerRuntimeSnapshot) {}
+void fake_log_generation(const char* event, uint64_t generation) {
+	char value[128];
+	std::snprintf(value, sizeof(value), "%s=%llu", event,
+		static_cast<unsigned long long>(generation));
+	fake_log_event(value);
+}
+
+bool fake_server_module_prepare(void *, const ProxySQL_ServerModuleSnapshot& snapshot,
+	std::vector<ProxySQL_ServerHostgroupClaim>& claims, std::string&) {
+	fake_log_event("server_module_prepare");
+	fake_log_generation("runtime_prepare_generation", snapshot.runtime.generation);
+	if (env("SERVER_MODULE_PREPARE_THROW") != nullptr)
+		throw std::runtime_error("injected server-module prepare failure");
+	if (env("SERVER_MODULE_PREPARE_FAIL") != nullptr)
+		return false;
+	if (env("SERVER_MODULE_CONFLICT_CLAIM") != nullptr)
+		claims.push_back({17, 18});
+	if (env("SERVER_MODULE_SECOND_CLAIM") != nullptr)
+		claims.push_back({27, 28});
+	if (env("SERVER_MODULE_ZERO_CLAIM") != nullptr) {
+		if (snapshot.runtime.protocol == ProxySQL_ServerProtocol::mysql)
+			claims.push_back({0, 1});
+		else if (snapshot.runtime.protocol == ProxySQL_ServerProtocol::pgsql)
+			claims.push_back({1, 0});
+	}
+	if (env("SERVER_MODULE_CONFLICT_BUILTIN_CLAIM") != nullptr)
+		claims.push_back({31, 32});
+	return true;
+}
+void fake_server_module_commit(void *, uint64_t generation) {
+	fake_log_event("server_module_commit");
+	fake_log_generation("runtime_commit_generation", generation);
+}
+SQLite3_result* fake_server_module_table_snapshot(void *, const char *) {
+	if (env("SERVER_MODULE_SNAPSHOT") == nullptr) return nullptr;
+	auto* result = new SQLite3_result(2);
+	char writer[] = "17";
+	char label[] = "runtime-policy";
+	char* fields[] = {writer, label};
+	result->add_row(fields);
+	return result;
+}
+void fake_server_module_shutdown(void *) {}
+void fake_destroy_server_module(ProxySQL_ServerModuleHooks *) {
+	fake_log_event("server_module_destroyed");
+}
+
+ProxySQL_ServerModuleHooks fake_server_module_hooks {
+	ProxySQL_ServerProtocol::mysql, &fake_server_module_installed, nullptr
+};
+ProxySQL_ServerModuleHooks fake_affiliated_server_module_hooks {
+	ProxySQL_ServerProtocol::mysql,
+	{{ProxySQL_ServerProtocol::mysql, "mysql_fake_server_module_claims", "runtime_mysql_fake_server_module_claims", "writer"}}
+};
+ProxySQL_ServerModuleHooks fake_server_module_hooks_pgsql {
+	ProxySQL_ServerProtocol::pgsql, &fake_server_module_installed, nullptr
+};
+ProxySQL_ServerModuleHooks fake_affiliated_server_module_hooks_pgsql {
+	ProxySQL_ServerProtocol::pgsql,
+	{{ProxySQL_ServerProtocol::pgsql, "pgsql_fake_server_module_claims", "runtime_pgsql_fake_server_module_claims", "writer"}}
+};
+
+void *retain_fake_module() {
+	Dl_info info {};
+	if (dladdr(reinterpret_cast<void *>(&fake_server_module_installed), &info) == 0 ||
+		info.dli_fname == nullptr) {
+		return nullptr;
+	}
+	return dlopen(info.dli_fname, RTLD_NOW | RTLD_LOCAL);
+}
+
+bool fake_register_server_module(ProxySQL_PluginServices *services,
+	ProxySQL_ServerProtocol protocol = ProxySQL_ServerProtocol::mysql) {
+	if (services == nullptr || services->register_server_module == nullptr) return false;
+	void *module = retain_fake_module();
+	if (module == nullptr) return false;
+	ProxySQL_ServerModuleHooks *hooks = protocol == ProxySQL_ServerProtocol::mysql
+		? &fake_server_module_hooks : &fake_server_module_hooks_pgsql;
+	if (env("AFFILIATED") != nullptr) {
+		ProxySQL_ServerModuleHooks *affiliated = protocol == ProxySQL_ServerProtocol::mysql
+			? &fake_affiliated_server_module_hooks : &fake_affiliated_server_module_hooks_pgsql;
+		affiliated->prepare_runtime = &fake_server_module_prepare;
+		affiliated->commit_runtime = &fake_server_module_commit;
+		affiliated->runtime_table_snapshot = &fake_server_module_table_snapshot;
+		affiliated->shutdown = &fake_server_module_shutdown;
+		hooks = affiliated;
+	}
+	if (!services->register_server_module(hooks,
+		&fake_destroy_server_module, module)) {
+		dlclose(module);
+		return false;
+	}
+	return true;
+}
+
+class FakeServerDiscoveryController final : public ProxySQL_ServerDiscoveryController {
+public:
+	void runtime_configuration_installed(ProxySQL_ServerRuntimeSnapshot snapshot) override {
+		fake_log_event("server_controller_runtime");
+		fake_log_generation("runtime_controller_generation", snapshot.generation);
+		fake_log_generation("runtime_controller_topology_count",
+			snapshot.topology_hostgroups.size());
+	}
+	void desired_set_applied(uint64_t, bool) override {
+		fake_log_event("server_controller_desired_set");
+	}
+	void shutdown() override {
+		fake_log_event("server_controller_shutdown");
+	}
+};
+
+void retained_fixture_module_installed(void *, ProxySQL_ServerRuntimeSnapshot) {
+	retained_fixture_module_calls.fetch_add(1);
+}
+
+void retained_fixture_destroy_module(ProxySQL_ServerModuleHooks *module) {
+	fake_log_event("retained_fixture_module_destroyed");
+	delete module;
+}
+
+class RetainedFixtureController final : public ProxySQL_ServerDiscoveryController {
+public:
+	void runtime_configuration_installed(ProxySQL_ServerRuntimeSnapshot) override {
+		retained_fixture_controller_calls.fetch_add(1);
+	}
+	void desired_set_applied(uint64_t, bool) override {}
+	void shutdown() override { fake_log_event("retained_fixture_controller_shutdown"); }
+};
+
+void retained_fixture_destroy_controller(ProxySQL_ServerDiscoveryController *controller) {
+	fake_log_event("retained_fixture_controller_destroyed");
+	delete controller;
+}
+
+void fake_destroy_server_discovery_controller(ProxySQL_ServerDiscoveryController *controller) {
+	fake_log_event("server_controller_destroyed");
+	delete controller;
+}
+
+bool fake_install_server_discovery_controller(ProxySQL_PluginServices *services,
+	ProxySQL_ServerProtocol protocol = ProxySQL_ServerProtocol::mysql) {
+	if (services == nullptr || services->install_server_discovery_controller == nullptr) return false;
+	void *module = retain_fake_module();
+	if (module == nullptr) return false;
+	auto *controller = new FakeServerDiscoveryController();
+	if (!services->install_server_discovery_controller(protocol,
+		controller, &fake_destroy_server_discovery_controller, module)) {
+		delete controller;
+		dlclose(module);
+		return false;
+	}
+	return true;
+}
+#endif /* PROXYSQL40 */
 
 #ifdef PROXYSQL40
 // Phase-B callback (Step 2 chassis ABI extension).  Only wired into the
@@ -128,6 +296,22 @@ bool fake_register_schemas(ProxySQL_PluginServices *services) {
 		};
 		services->register_table(table);
 	}
+	if (env("PHASE_B_SERVER_DISCOVERY") != nullptr && services != nullptr) {
+		if (services->register_server_module != nullptr &&
+			services->install_server_discovery_controller == nullptr &&
+			services->uninstall_server_discovery_controller == nullptr &&
+			services->post_server_desired_set == nullptr) {
+			fake_log_event("phase_b_server_discovery_availability");
+		}
+		const bool registered = fake_register_server_module(services) &&
+			(env("SERVER_MODULE_BOTH_PROTOCOLS") == nullptr ||
+			 fake_register_server_module(services, ProxySQL_ServerProtocol::pgsql));
+		if (registered) {
+			fake_log_event("phase_b_server_module_registered");
+		} else {
+			fake_log_event("phase_b_server_module_rejected");
+		}
+	}
 	fake_log_event("phase_b");
 	return true;
 }
@@ -156,6 +340,31 @@ bool fake_init(ProxySQL_PluginServices *services) {
 		services->register_command(sql != nullptr ? sql : "PLUGIN FAKE NOOP", &fake_command);
 	}
 #ifdef PROXYSQL40
+	if (env("CHECK_SERVER_DISCOVERY_INIT") != nullptr && services != nullptr) {
+		if (services->register_server_module != nullptr &&
+			services->install_server_discovery_controller != nullptr &&
+			services->uninstall_server_discovery_controller != nullptr &&
+			services->post_server_desired_set != nullptr) {
+			fake_log_event("init_server_discovery_live");
+		} else {
+			fake_log_event("init_server_discovery_unavailable");
+		}
+	}
+	if (services != nullptr) {
+		fake_post_server_desired_set = services->post_server_desired_set;
+		fake_uninstall_server_discovery_controller =
+			services->uninstall_server_discovery_controller;
+	}
+	if (env("INSTALL_SERVER_DISCOVERY_CONTROLLER") != nullptr) {
+		const bool installed = fake_install_server_discovery_controller(services) &&
+			(env("SERVER_MODULE_BOTH_PROTOCOLS") == nullptr ||
+			 fake_install_server_discovery_controller(services, ProxySQL_ServerProtocol::pgsql));
+		if (installed) {
+			fake_log_event("init_server_controller_installed");
+		} else {
+			fake_log_event("init_server_controller_rejected");
+		}
+	}
 	if (env("REGISTER_COMMAND_ALIAS") != nullptr &&
 	    services != nullptr &&
 	    services->register_command_alias != nullptr) {
@@ -206,11 +415,55 @@ bool fake_start() {
 	    fake_services->get_statsdb() == nullptr) {
 		return false;
 	}
+#ifdef PROXYSQL40
+	if (env("START_REGISTER_SERVER_MODULE") != nullptr) {
+		if (fake_register_server_module(fake_services)) {
+			fake_log_event("start_server_module_registered");
+		} else {
+			fake_log_event("start_server_module_rejected");
+		}
+	}
+	if (env("START_POST_SERVER_DESIRED_SET") != nullptr) {
+		const ProxySQL_ServerDesiredSet desired {
+			ProxySQL_ServerProtocol::mysql, 42, {}, {}, ProxySQL_ServerPersistence::runtime_only
+		};
+		if (fake_services != nullptr && fake_services->post_server_desired_set != nullptr &&
+			fake_services->post_server_desired_set(desired)) {
+			fake_log_event("start_server_desired_set_posted");
+		} else {
+			fake_log_event("start_server_desired_set_rejected");
+		}
+	}
+#endif /* PROXYSQL40 */
 	fake_log_event("start");
 	return true;
 }
 
 bool fake_stop() {
+#ifdef PROXYSQL40
+	if (env("STOP_UNINSTALL_SERVER_DISCOVERY_CONTROLLER") != nullptr) {
+		const bool uninstalled = fake_uninstall_server_discovery_controller != nullptr &&
+			fake_uninstall_server_discovery_controller(ProxySQL_ServerProtocol::mysql);
+		fake_log_event(uninstalled ? "stop_server_controller_uninstalled" :
+			"stop_server_controller_uninstall_rejected");
+	}
+	if (env("STOP_CHECK_SERVER_DISCOVERY_PHASE") != nullptr) {
+		fake_log_event(fake_install_server_discovery_controller(fake_services)
+			? "stop_server_controller_installed" : "stop_server_controller_install_rejected");
+		fake_log_event(fake_register_server_module(fake_services)
+			? "stop_server_module_registered" : "stop_server_module_register_rejected");
+		const ProxySQL_ServerDesiredSet desired {
+			ProxySQL_ServerProtocol::mysql, 44, {}, {}, ProxySQL_ServerPersistence::runtime_only
+		};
+		fake_log_event(fake_post_server_desired_set != nullptr &&
+			fake_post_server_desired_set(desired)
+			? "stop_server_desired_set_posted" : "stop_server_desired_set_rejected");
+	}
+#endif /* PROXYSQL40 */
+	if (env("STOP_THROW") != nullptr) {
+		fake_log_event("stop_throw");
+		throw std::runtime_error("injected plugin stop failure");
+	}
 	if (env("STOP_FAIL") != nullptr) {
 		fake_log_event("stop_fail");
 		return false;
@@ -278,3 +531,61 @@ extern "C" const ProxySQL_PluginDescriptor *proxysql_plugin_descriptor_v1() {
 #endif /* PROXYSQL40 */
 	return &fake_descriptor;
 }
+
+#ifdef PROXYSQL40
+// This intentionally retains only the service function pointer, never the
+// transient services table.  Unit tests keep this DSO separately loaded and
+// invoke it after manager unpublication to prove the callback fails closed.
+extern "C" bool proxysql_fake_post_server_desired_set_for_test() {
+	if (fake_post_server_desired_set == nullptr) return false;
+	const ProxySQL_ServerDesiredSet desired {
+		ProxySQL_ServerProtocol::mysql, 43, {}, {}, ProxySQL_ServerPersistence::runtime_only
+	};
+	return fake_post_server_desired_set(desired);
+}
+
+extern "C" proxysql_plugin_post_server_desired_set_cb
+proxysql_fake_post_server_desired_set_callback_for_test() {
+	return fake_post_server_desired_set;
+}
+
+extern "C" bool proxysql_fake_uninstall_server_discovery_controller_for_test() {
+	return fake_uninstall_server_discovery_controller != nullptr &&
+		fake_uninstall_server_discovery_controller(ProxySQL_ServerProtocol::mysql);
+}
+
+// These factories, callbacks, and destroy functions are intentionally
+// exported from the fixture DSO.  The lease tests pass their addresses into
+// the manager, so its retained dlopen reference protects code it really
+// invokes (rather than only an unrelated fixture handle).
+extern "C" ProxySQL_ServerModuleHooks *proxysql_fake_retained_module_create(
+	ProxySQL_ServerProtocol protocol) {
+	return new ProxySQL_ServerModuleHooks {protocol, &retained_fixture_module_installed, nullptr};
+}
+
+extern "C" void proxysql_fake_retained_module_destroy(ProxySQL_ServerModuleHooks *module) {
+	retained_fixture_destroy_module(module);
+}
+
+extern "C" ProxySQL_ServerDiscoveryController *proxysql_fake_retained_controller_create() {
+	return new RetainedFixtureController();
+}
+
+extern "C" void proxysql_fake_retained_controller_destroy(
+	ProxySQL_ServerDiscoveryController *controller) {
+	retained_fixture_destroy_controller(controller);
+}
+
+extern "C" void proxysql_fake_retained_fixture_reset() {
+	retained_fixture_module_calls.store(0);
+	retained_fixture_controller_calls.store(0);
+}
+
+extern "C" unsigned int proxysql_fake_retained_fixture_module_calls() {
+	return retained_fixture_module_calls.load();
+}
+
+extern "C" unsigned int proxysql_fake_retained_fixture_controller_calls() {
+	return retained_fixture_controller_calls.load();
+}
+#endif /* PROXYSQL40 */
