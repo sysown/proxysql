@@ -5,14 +5,25 @@ set -euo pipefail
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH='' cd -- "${script_dir}/../../.." && pwd)
 platform=$(uname -s)
+default_ssl_archive="${repo_root}/deps/libssl/openssl/libssl.a"
+default_crypto_archive="${repo_root}/deps/libssl/openssl/libcrypto.a"
+if (( $# > 5 )); then
+	printf 'Usage: %s [CURL_ARCHIVE [CURL_LA CURL_PC [LIBSSL_ARCHIVE LIBCRYPTO_ARCHIVE]]]\n' \
+		"$0" >&2
+	exit 2
+fi
 if (( $# == 0 )); then
 	curl_archive="${repo_root}/deps/curl/curl/lib/.libs/libcurl.a"
 	curl_la="${repo_root}/deps/curl/curl/lib/libcurl.la"
 	curl_pc="${repo_root}/deps/curl/curl/libcurl.pc"
+	ssl_archive=${default_ssl_archive}
+	crypto_archive=${default_crypto_archive}
 else
 	curl_archive=$1
 	curl_la=${2:-}
 	curl_pc=${3:-}
+	ssl_archive=${4:-${default_ssl_archive}}
+	crypto_archive=${5:-${default_crypto_archive}}
 fi
 required_curl_apis=(
 	curl_easy_cleanup
@@ -55,6 +66,14 @@ if [[ ! -f "${curl_archive}" ]]; then
 	exit 1
 fi
 
+for openssl_archive in "${ssl_archive}" "${crypto_archive}"; do
+	if [[ ! -f "${openssl_archive}" ]]; then
+		printf 'ERROR: required vendored OpenSSL deny archive is missing: %s\n' \
+			"${openssl_archive}" >&2
+		exit 1
+	fi
+done
+
 nested_archives=$(ar t "${curl_archive}" | awk '/\.a$/ { print }')
 if [[ -n "${nested_archives}" ]]; then
 	printf 'ERROR: vendored curl contains nested archive member(s):\n%s\n' \
@@ -80,15 +99,26 @@ done < <(ar t "${curl_archive}")
 case ${platform} in
 	Linux|FreeBSD)
 	elf_symbols=$(readelf -Ws "${curl_archive}" 2>/dev/null)
-	defined_global_symbols=$(awk '
-		$5 == "GLOBAL" && $7 != "UND" {
+	openssl_elf_symbols=$(
+		readelf -Ws "${ssl_archive}" "${crypto_archive}" 2>/dev/null
+	)
+	defined_openssl_symbols=$(awk '
+		NF >= 8 && $7 != "UND" && $4 != "FILE" && $4 != "SECTION" &&
+			($5 == "GLOBAL" || $5 == "WEAK" || $5 == "UNIQUE") {
+			name = $8
+			sub(/@.*/, "", name)
+			print name
+		}
+	' <<<"${openssl_elf_symbols}" | sort -u)
+	defined_all_symbols=$(awk '
+		NF >= 8 && $7 != "UND" && $4 != "FILE" && $4 != "SECTION" {
 			name = $8
 			sub(/@.*/, "", name)
 			print name
 		}
 	' <<<"${elf_symbols}" | sort -u)
 	defined_public_symbols=$(awk '
-		$5 == "GLOBAL" && $6 == "DEFAULT" && $7 != "UND" {
+		NF >= 8 && $5 == "GLOBAL" && $6 == "DEFAULT" && $7 != "UND" {
 			name = $8
 			sub(/@.*/, "", name)
 			print name
@@ -96,14 +126,29 @@ case ${platform} in
 	' <<<"${elf_symbols}" | sort -u)
 	;;
 	Darwin)
-	defined_global_symbols=$(nm -gU "${curl_archive}" 2>/dev/null | awk '
-		NF >= 1 {
+	defined_openssl_symbols=$(
+		nm -gU "${ssl_archive}" "${crypto_archive}" 2>/dev/null | awk '
+		NF >= 2 && $(NF - 1) ~ /^[A-Za-z]$/ {
+			name = $NF
+			sub(/^_/, "", name)
+			print name
+		}
+	' | sort -u
+	)
+	defined_all_symbols=$(nm -U "${curl_archive}" 2>/dev/null | awk '
+		NF >= 2 && $(NF - 1) ~ /^[A-Za-z]$/ {
 			name = $NF
 			sub(/^_/, "", name)
 			print name
 		}
 	' | sort -u)
-	defined_public_symbols=${defined_global_symbols}
+	defined_public_symbols=$(nm -gU "${curl_archive}" 2>/dev/null | awk '
+		NF >= 2 && $(NF - 1) ~ /^[A-Za-z]$/ {
+			name = $NF
+			sub(/^_/, "", name)
+			print name
+		}
+	' | sort -u)
 	;;
 esac
 
@@ -115,11 +160,18 @@ for symbol in "${required_curl_apis[@]}"; do
 	fi
 done
 
-embedded_openssl=$(grep -E \
-	'^(ASN1|BIO|BN|CMS|COMP|CONF|CRYPTO|DH|DSA|DTLS|EC|ENGINE|ERR|EVP|HMAC|KDF|MD5|NCONF|OBJ|OCSP|OPENSSL|OpenSSL|OSSL|PEM|PKCS|RAND|RSA|SHA|SRP|SSL|TS|UI|X509)_[A-Za-z0-9_]+$|^(d2i|i2d)_[A-Za-z0-9_]+$|^ossl_[A-Za-z0-9_]+$|^TLS_(client_|server_)?method$|^TLSv1(_[0-9]+)?_(client_|server_)?method$' \
-	<<<"${defined_global_symbols}" | sort -u || true)
+embedded_openssl=$(awk '
+	NR == FNR {
+		if ($0 != "") {
+			denied[$0] = 1
+		}
+		next
+	}
+	$0 in denied { print }
+' <(printf '%s\n' "${defined_openssl_symbols}") \
+	<(printf '%s\n' "${defined_all_symbols}") | sort -u)
 if [[ -n "${embedded_openssl}" ]]; then
-	printf 'ERROR: vendored curl contains embedded OpenSSL definition(s):\n%s\n' \
+	printf 'ERROR: vendored curl contains embedded OpenSSL definition(s) from exact vendored archives:\n%s\n' \
 		"${embedded_openssl}" >&2
 	exit 1
 fi
