@@ -5398,6 +5398,8 @@ void* PgSQL_backend_kill_thread(void* arg) {
 			proxy_error("Terminate failed: %s\n", PQerrorMessage(kill_conn));
 		}
 		PQclear(res);
+		// release the connection used to run the terminate
+		PQfinish(kill_conn);
 
 
 		//proxy_warning("Terminating connection on %s:%d with backend PID %d\n", ka->hostname, ka->port, ka->backend_pid);
