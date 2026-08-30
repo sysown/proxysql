@@ -51,7 +51,7 @@ index 916024a8..79564a10 100644
  #if defined(_WIN32) && !defined(_OPENSSL_Applink) && defined(HAVE_OPENSSL_APPLINK_C)
  #include <openssl/applink.c>
  #endif
-@@ -70,6 +76,119 @@
+@@ -70,6 +76,89 @@
  extern my_bool ma_tls_initialized;
  extern unsigned int mariadb_deinitialize_ssl;
  
@@ -59,36 +59,6 @@ index 916024a8..79564a10 100644
 +__thread void * local_x509store = NULL;
 +__thread char **local_x509_files = NULL;
 +__thread char **local_x509_sha1s = NULL;
-+
-+static int proxysql_SSL_CTX_load_verify_locations(void *context,
-+                                                  const char *CAfile,
-+                                                  const char *CApath) {
-+  return SSL_CTX_load_verify_locations((SSL_CTX *)context, CAfile, CApath);
-+}
-+
-+static int proxysql_SSL_CTX_set_default_verify_paths(void *context) {
-+  return SSL_CTX_set_default_verify_paths((SSL_CTX *)context);
-+}
-+
-+static int proxysql_ERR_set_mark(void *context) {
-+  (void)context;
-+  return ERR_set_mark();
-+}
-+
-+static int proxysql_ERR_pop_to_mark(void *context) {
-+  (void)context;
-+  return ERR_pop_to_mark();
-+}
-+
-+static int proxysql_ERR_clear_last_mark(void *context) {
-+  (void)context;
-+  return ERR_clear_last_mark();
-+}
-+
-+static void proxysql_ERR_clear_error(void *context) {
-+  (void)context;
-+  ERR_clear_error();
-+}
 +
 +static int proxysql_SSL_CTX_local_x509store_add_file(SSL_CTX *ctx, const char *CAfile, int add_in_store) {
 +  int found=0, i=0, fd=-1;
@@ -171,25 +141,16 @@ index 916024a8..79564a10 100644
  #define MAX_SSL_ERR_LEN 100
  char tls_library_version[TLS_VERSION_LENGTH];
  
-@@ -331,7 +450,16 @@
+@@ -331,7 +420,7 @@
         *keyfile= mysql->options.ssl_key;
    char *pw= (mysql->options.extension) ?
              mysql->options.extension->tls_pw : NULL;
 -
 +  int ssl_rc = 0;
-+  struct proxysql_ssl_verify_ops verify_ops;
-+  verify_ops.context = ctx;
-+  verify_ops.load_verify_locations = proxysql_SSL_CTX_load_verify_locations;
-+  verify_ops.set_default_verify_paths = proxysql_SSL_CTX_set_default_verify_paths;
-+  verify_ops.set_error_mark = proxysql_ERR_set_mark;
-+  verify_ops.pop_error_to_mark = proxysql_ERR_pop_to_mark;
-+  verify_ops.clear_last_error_mark = proxysql_ERR_clear_last_mark;
-+  verify_ops.clear_error = proxysql_ERR_clear_error;
-+
    /* add cipher */
    if ((mysql->options.ssl_cipher &&
          mysql->options.ssl_cipher[0] != 0))
-@@ -340,10 +468,25 @@
+@@ -340,10 +429,24 @@
    /* ca_file and ca_path */
 -  if (!SSL_CTX_load_verify_locations(ctx,
 +  if (local_x509store != NULL && mysql->options.ssl_ca != NULL && mysql->options.ssl_capath == NULL) {
@@ -197,11 +158,10 @@ index 916024a8..79564a10 100644
 +    ssl_rc = proxysql_SSL_CTX_local_x509store_add_file(ctx, mysql->options.ssl_ca, 1);
 +  } else {
 +    ssl_rc = proxysql_ssl_load_verify_locations(
++        ctx,
 +        mysql->options.ssl_ca,
 +        mysql->options.ssl_capath,
-+        proxysql_default_ca_files,
-+        proxysql_default_ca_directories,
-+        &verify_ops);
++        proxysql_default_ca_files);
 +    if (ssl_rc == 1 &&
 +        (mysql->options.ssl_ca != NULL || mysql->options.ssl_capath != NULL)) {
 +      if (local_x509store == NULL && SSL_CTX_get_cert_store(ctx) != NULL) {
@@ -226,35 +186,17 @@ index 916024a8..79564a10 100644
 -  }
 diff --git libmariadb/secure/proxysql_default_ca.h libmariadb/secure/proxysql_default_ca.h
 new file mode 100644
-index 00000000..f2cb3eb0
+index 00000000..4cb3bb94
 --- /dev/null
 +++ libmariadb/secure/proxysql_default_ca.h
-@@ -0,0 +1,186 @@
+@@ -0,0 +1,56 @@
 +#ifndef PROXYSQL_DEFAULT_CA_H
 +#define PROXYSQL_DEFAULT_CA_H
 +
-+#include <ctype.h>
-+#include <dirent.h>
++#include <openssl/ssl.h>
 +#include <stdlib.h>
-+#include <string.h>
 +#include <sys/stat.h>
 +#include <unistd.h>
-+
-+typedef int (*proxysql_ssl_load_verify_locations_fn)(void *, const char *,
-+                                                     const char *);
-+typedef int (*proxysql_ssl_set_default_verify_paths_fn)(void *);
-+typedef void (*proxysql_ssl_clear_error_fn)(void *);
-+typedef int (*proxysql_ssl_error_mark_fn)(void *);
-+
-+struct proxysql_ssl_verify_ops {
-+  void *context;
-+  proxysql_ssl_load_verify_locations_fn load_verify_locations;
-+  proxysql_ssl_set_default_verify_paths_fn set_default_verify_paths;
-+  proxysql_ssl_error_mark_fn set_error_mark;
-+  proxysql_ssl_error_mark_fn pop_error_to_mark;
-+  proxysql_ssl_error_mark_fn clear_last_error_mark;
-+  proxysql_ssl_clear_error_fn clear_error;
-+};
 +
 +static const char *const proxysql_default_ca_files[]= {
 +  "/etc/ssl/certs/ca-certificates.crt",
@@ -265,22 +207,6 @@ index 00000000..f2cb3eb0
 +  "/usr/local/share/certs/ca-root-nss.crt",
 +  "/etc/ssl/cert.pem",
 +  "/private/etc/ssl/cert.pem",
-+  "/opt/homebrew/etc/ca-certificates/cert.pem",
-+  "/opt/homebrew/etc/openssl@3/cert.pem",
-+  "/usr/local/etc/ca-certificates/cert.pem",
-+  "/usr/local/etc/openssl@3/cert.pem",
-+  NULL
-+};
-+
-+static const char *const proxysql_default_ca_directories[]= {
-+  "/etc/ssl/certs",
-+  "/etc/pki/tls/certs",
-+  "/etc/pki/ca-trust/extracted/openssl",
-+  "/var/lib/ca-certificates/openssl",
-+  "/usr/local/share/certs",
-+  "/private/etc/ssl/certs",
-+  "/opt/homebrew/etc/openssl@3/certs",
-+  "/usr/local/etc/openssl@3/certs",
 +  NULL
 +};
 +
@@ -288,131 +214,35 @@ index 00000000..f2cb3eb0
 +{
 +  struct stat status;
 +
-+  return path != NULL && stat(path, &status) == 0 && S_ISREG(status.st_mode) &&
++  return path != NULL && stat(path, &status) == 0 &&
++         S_ISREG(status.st_mode) &&
++         (status.st_mode & (S_IWGRP | S_IWOTH)) == 0 &&
 +         access(path, R_OK) == 0;
 +}
 +
-+static int proxysql_ssl_is_hash_name(const char *name)
-+{
-+  size_t index;
-+
-+  if (name == NULL || strlen(name) < 10)
-+    return 0;
-+  for (index= 0; index < 8; index++) {
-+    if (!isxdigit((unsigned char)name[index]))
-+      return 0;
-+  }
-+  if (name[8] != '.' || name[9] == '\0')
-+    return 0;
-+  for (index= 9; name[index] != '\0'; index++) {
-+    if (!isdigit((unsigned char)name[index]))
-+      return 0;
-+  }
-+  return 1;
-+}
-+
-+static int proxysql_ssl_is_readable_hash_entry(const char *directory,
-+                                               const char *name)
-+{
-+  size_t directory_length= strlen(directory);
-+  size_t name_length= strlen(name);
-+  char *entry_path;
-+  int readable;
-+
-+  if (directory_length > (size_t)-1 - name_length - 2)
-+    return 0;
-+  entry_path= (char *)malloc(directory_length + name_length + 2);
-+  if (entry_path == NULL)
-+    return 0;
-+  memcpy(entry_path, directory, directory_length);
-+  entry_path[directory_length]= '/';
-+  memcpy(entry_path + directory_length + 1, name, name_length + 1);
-+  readable= proxysql_ssl_is_readable_file(entry_path);
-+  free(entry_path);
-+  return readable;
-+}
-+
-+static int proxysql_ssl_is_usable_hash_directory(const char *path)
-+{
-+  DIR *directory;
-+  struct dirent *entry;
-+  struct stat status;
-+  int usable= 0;
-+
-+  if (path == NULL || stat(path, &status) != 0 || !S_ISDIR(status.st_mode) ||
-+      access(path, R_OK | X_OK) != 0)
-+    return 0;
-+
-+  directory= opendir(path);
-+  if (directory == NULL)
-+    return 0;
-+  while ((entry= readdir(directory)) != NULL) {
-+    if (proxysql_ssl_is_hash_name(entry->d_name) &&
-+        proxysql_ssl_is_readable_hash_entry(path, entry->d_name)) {
-+      usable= 1;
-+      break;
-+    }
-+  }
-+  closedir(directory);
-+  return usable;
-+}
-+
-+static void proxysql_ssl_finish_probe(
-+    const struct proxysql_ssl_verify_ops *ops,
-+    int marked,
-+    int succeeded)
-+{
-+  if (marked) {
-+    if (succeeded)
-+      ops->clear_last_error_mark(ops->context);
-+    else
-+      ops->pop_error_to_mark(ops->context);
-+  } else if (!succeeded) {
-+    ops->clear_error(ops->context);
-+  }
-+}
-+
 +static int proxysql_ssl_load_verify_locations(
++    SSL_CTX *context,
 +    const char *connector_ca_file,
 +    const char *connector_ca_directory,
-+    const char *const *default_ca_files,
-+    const char *const *default_ca_directories,
-+    const struct proxysql_ssl_verify_ops *ops)
++    const char *const *default_ca_files)
 +{
 +  size_t index;
-+  int marked;
 +
 +  if (connector_ca_file != NULL || connector_ca_directory != NULL)
-+    return ops->load_verify_locations(ops->context, connector_ca_file,
-+                                      connector_ca_directory);
++    return SSL_CTX_load_verify_locations(context, connector_ca_file,
++                                         connector_ca_directory);
 +
 +  if (getenv("SSL_CERT_FILE") != NULL || getenv("SSL_CERT_DIR") != NULL)
-+    return ops->set_default_verify_paths(ops->context);
++    return SSL_CTX_set_default_verify_paths(context);
 +
 +  for (index= 0; default_ca_files[index] != NULL; index++) {
 +    if (!proxysql_ssl_is_readable_file(default_ca_files[index]))
 +      continue;
-+    marked= ops->set_error_mark(ops->context);
-+    if (ops->load_verify_locations(ops->context, default_ca_files[index], NULL)) {
-+      proxysql_ssl_finish_probe(ops, marked, 1);
-+      return 1;
-+    }
-+    proxysql_ssl_finish_probe(ops, marked, 0);
++    return SSL_CTX_load_verify_locations(context, default_ca_files[index],
++                                         NULL);
 +  }
 +
-+  for (index= 0; default_ca_directories[index] != NULL; index++) {
-+    if (!proxysql_ssl_is_usable_hash_directory(default_ca_directories[index]))
-+      continue;
-+    marked= ops->set_error_mark(ops->context);
-+    if (ops->load_verify_locations(ops->context, NULL,
-+                                   default_ca_directories[index])) {
-+      proxysql_ssl_finish_probe(ops, marked, 1);
-+      return 1;
-+    }
-+    proxysql_ssl_finish_probe(ops, marked, 0);
-+  }
-+
-+  return ops->set_default_verify_paths(ops->context);
++  return SSL_CTX_set_default_verify_paths(context);
 +}
 +
 +#endif
