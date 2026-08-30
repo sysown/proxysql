@@ -146,6 +146,10 @@ class MySQL_Connection {
 	unsigned char ed25519_nonce[ED25519_NONCE_LEN];
 #endif
 	unsigned long long creation_time;
+	// When the backend socket was established. Unlike creation_time this is NEVER refreshed
+	// by reset(), so mysql-connection_max_lifetime_ms bounds the life of the socket itself
+	// and a COM_CHANGE_USER cannot extend it.
+	unsigned long long socket_creation_time;
 	unsigned long long last_time_used;
 	unsigned long long timeout;
 	int auto_increment_delay_token;

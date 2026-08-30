@@ -639,6 +639,10 @@ public:
 	PgSQL_Query_Result* query_result;
 	PgSQL_Query_Result* query_result_reuse;
 	unsigned long long creation_time;
+	// When the backend socket was established. Unlike creation_time this is NEVER refreshed
+	// by reset(), so pgsql-connection_max_lifetime_ms bounds the life of the socket itself
+	// and a DISCARD ALL cannot extend it.
+	unsigned long long socket_creation_time;
 	unsigned long long last_time_used;
 	unsigned long long timeout;
 	int auto_increment_delay_token;

@@ -495,6 +495,7 @@ MySQL_Connection::MySQL_Connection() {
 	MyRS_reuse=NULL;
 	unknown_transaction_status = false;
 	creation_time=0;
+	socket_creation_time=0;
 	auto_increment_delay_token = 0;
 	processing_multi_statement=false;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Creating new MySQL_Connection %p\n", this);
@@ -2218,6 +2219,7 @@ int MySQL_Connection::async_connect(short event) {
 		async_state_machine=ASYNC_IDLE;
 		myds->wait_until=0;
 		creation_time = monotonic_time();
+		socket_creation_time = creation_time;
 		return 0;
 	}
 
@@ -2788,11 +2790,11 @@ bool MySQL_Connection::IsAutoCommit() {
 }
 
 bool MySQL_Connection::LifetimeExpired(unsigned long long curtime) {
-	if (mysql_thread___connection_max_lifetime_ms == 0) {
+	if (mysql_thread___connection_max_lifetime_ms == 0 || socket_creation_time == 0) {
 		return false;
 	}
 	unsigned long long intv = (unsigned long long)mysql_thread___connection_max_lifetime_ms * 1000;
-	return curtime > creation_time + intv;
+	return curtime > socket_creation_time + intv;
 }
 
 bool MySQL_Connection::MultiplexDisabled(bool check_delay_token) {

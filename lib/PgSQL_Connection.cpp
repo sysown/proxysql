@@ -169,6 +169,7 @@ PgSQL_Connection::PgSQL_Connection(bool is_client_conn) {
 	async_state_machine = ASYNC_CONNECT_START;
 	last_time_used = 0;
 	creation_time = 0;
+	socket_creation_time = 0;
 	auto_increment_delay_token = 0;
 	query.ptr = NULL;
 	query.length = 0;
@@ -1300,6 +1301,7 @@ int PgSQL_Connection::async_connect(short event) {
 		async_state_machine = ASYNC_IDLE;
 		myds->wait_until = 0;
 		creation_time = monotonic_time();
+		socket_creation_time = creation_time;
 		return 0;
 	}
 	handler(event);
@@ -2644,11 +2646,11 @@ bool PgSQL_Connection::get_status(uint32_t status_flag) {
 }
 
 bool PgSQL_Connection::LifetimeExpired(unsigned long long curtime) {
-	if (pgsql_thread___connection_max_lifetime_ms == 0) {
+	if (pgsql_thread___connection_max_lifetime_ms == 0 || socket_creation_time == 0) {
 		return false;
 	}
 	unsigned long long intv = (unsigned long long)pgsql_thread___connection_max_lifetime_ms * 1000;
-	return curtime > creation_time + intv;
+	return curtime > socket_creation_time + intv;
 }
 
 bool PgSQL_Connection::MultiplexDisabled(bool check_delay_token) {
