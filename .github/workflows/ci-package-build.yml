@@ -136,13 +136,21 @@ jobs:
 #        action_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
         details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
     
+    # This job builds a shippable package from source, so it needs real
+    # content for whatever the checked-out branch vendors via git-lfs, not
+    # pointer stubs. `lfs: true` has actions/checkout fetch everything that
+    # branch's .gitattributes declares -- generic like ci-builds.yml's
+    # hydration step, just via the action's built-in mechanism, since this
+    # GH-hosted runner has none of ci-builds.yml's self-hosted persistent-
+    # workspace reasons to defer/skip smudging at checkout time.
     - name: Checkout repository
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         repository: ${{ github.repository }}
         ref: ${{ env.SHA }}
         fetch-depth: 0
-       
+        lfs: true
+
     - name: Build package
       run: |
         #[[ $(git describe --long --abbrev=7) == ${{ needs.clean.outputs.gitdescribe }} ]] || exit 1
