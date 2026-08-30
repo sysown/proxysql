@@ -12,7 +12,7 @@ created_stubs=()
 cleanup() {
 	local path
 	for path in "${created_stubs[@]}"; do
-		rm -rf "${path}"
+		rmdir "${path}" 2>/dev/null || true
 	done
 }
 trap cleanup EXIT

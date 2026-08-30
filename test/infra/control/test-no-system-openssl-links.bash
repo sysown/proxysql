@@ -2,7 +2,7 @@
 set -euo pipefail
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-repo_root=$(CDPATH='' cd -- "${script_dir}/../../.." && pwd)
+repo_root=${OPENSSL_AUDIT_ROOT:-$(CDPATH='' cd -- "${script_dir}/../../.." && pwd)}
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "${tmp_dir}"' EXIT
 
@@ -12,7 +12,7 @@ violations="${tmp_dir}/violations"
 git -C "${repo_root}" ls-files -z -- \
 	'*Makefile*' '*.mk' '*.bash' '*.sh' > "${candidate_list}"
 
-pattern="(^|[[:space:]\"'])(-lssl|-lcrypto)([[:space:]\"']|$)|brew --prefix openssl|CUSTOM_OPENSSL_PATH|OPENSSL_ROOT_DIR=(/usr|/opt)|/usr/include/openssl"
+pattern="(^|[[:space:]\"'=])(-lssl|-lcrypto)([[:space:]\"'=]|$)|-Wl,[^[:space:]]*-l(ssl|crypto)(,|[[:space:]]|$)|-Xlinker([[:space:]]|=)+-l(ssl|crypto)([[:space:]\"'=]|$)|-l:(libssl|libcrypto)([.[:space:]\"'=]|$)|brew --prefix openssl|CUSTOM_OPENSSL_PATH|OPENSSL_ROOT_DIR[[:space:]]*[:?+]?=[[:space:]]*(/usr|/opt)|/usr/include/openssl|/(usr|lib|opt)/(local/)?lib[^[:space:]\"']*/lib(ssl|crypto)[.](a|so([.][0-9]+)*)"
 
 while IFS= read -r -d '' file; do
 	case ${file} in

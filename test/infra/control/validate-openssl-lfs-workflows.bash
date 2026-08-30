@@ -3,7 +3,7 @@ set -euo pipefail
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(CDPATH='' cd -- "${script_dir}/../../.." && pwd)
-workflow_dir=${repo_root}/.github/workflows
+workflow_dir=${OPENSSL_LFS_WORKFLOW_DIR:-${repo_root}/.github/workflows}
 
 errors=0
 checked_build_jobs=0
@@ -69,7 +69,7 @@ job_invokes_build() {
 	' <<< "${body}"
 }
 
-checkout_steps_have_lfs() {
+checkout_steps_have_required_settings() {
 	local body=$1
 
 	awk '
@@ -77,19 +77,25 @@ checkout_steps_have_lfs() {
 			if (is_checkout) {
 				checkout_count++
 				if (!has_lfs) missing_lfs++
+				if (!has_no_persisted_credentials) missing_no_persisted_credentials++
 			}
 		}
 		/^    - / {
 			finish_step()
 			is_checkout = 0
 			has_lfs = 0
+			has_no_persisted_credentials = 0
+			line = $0
+			sub(/^[[:space:]]*-[[:space:]]*/, "", line)
+			if (line ~ /^uses:[[:space:]]*actions\/checkout@/) is_checkout = 1
 			next
 		}
 		/^[[:space:]]+uses:[[:space:]]*actions\/checkout@/ { is_checkout = 1 }
 		is_checkout && /^[[:space:]]+lfs:[[:space:]]*true[[:space:]]*$/ { has_lfs = 1 }
+		is_checkout && /^[[:space:]]+persist-credentials:[[:space:]]*false[[:space:]]*$/ { has_no_persisted_credentials = 1 }
 		END {
 			finish_step()
-			exit(checkout_count > 0 && missing_lfs == 0 ? 0 : 1)
+			exit(checkout_count > 0 && missing_lfs == 0 && missing_no_persisted_credentials == 0 ? 0 : 1)
 		}
 	' <<< "${body}"
 }
@@ -107,8 +113,8 @@ validate_lfs_job() {
 
 	checked_jobs["${workflow}:${job}"]=1
 	((checked_build_jobs += 1))
-	if ! checkout_steps_have_lfs "${body}"; then
-		report_error "${relative_workflow}: job '${job}' must set lfs: true on every checkout"
+	if ! checkout_steps_have_required_settings "${body}"; then
+		report_error "${relative_workflow}: job '${job}' must set lfs: true and persist-credentials: false on every checkout"
 	fi
 }
 

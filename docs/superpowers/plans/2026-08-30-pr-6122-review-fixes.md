@@ -27,6 +27,13 @@ mandatory vendored-OpenSSL or single-OpenSSL-core contracts.
 - Keep the build-contract and consumer-contract tests separately scoped; document
   why the existing review request to merge their scope is rejected.
 
+The build-contract test validates shared Make variables, source preparation, and
+timestamp semantics.  The consumer-contract test validates each dependent
+recipe's flags and link order.  Merging them would require consumer stubs and
+platform loops to exercise core build invariants, obscuring failures and making
+the timestamp-boundary regression harder to diagnose; the requested merge is
+therefore rejected.
+
 ## Task 2: Executable/plugin linkage ownership
 
 - Separate executable symbol-export flags from archive force-load flags.

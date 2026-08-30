@@ -4,13 +4,28 @@ set -euo pipefail
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(CDPATH='' cd -- "${script_dir}/../../.." && pwd)
 source_dir="${repo_root}/deps/libssl/openssl-3.5.7"
+test_connector_archive="${repo_root}/test/deps/mariadb-connector-c/mariadb-connector-c/libmariadb/libmariadbclient.a"
+test_connector_archive_dir=$(dirname -- "${test_connector_archive}")
+test_connector_build_dir=$(dirname -- "${test_connector_archive_dir}")
 tmp_dir=$(mktemp -d)
 created_source_stub=0
+created_connector_archive=0
+created_connector_archive_dir=0
+created_connector_build_dir=0
 
 cleanup() {
 	rm -rf "${tmp_dir}"
 	if [[ "${created_source_stub}" == 1 ]]; then
 		rmdir "${source_dir}" 2>/dev/null || true
+	fi
+	if [[ "${created_connector_archive}" == 1 ]]; then
+		rm -f "${test_connector_archive}"
+	fi
+	if [[ "${created_connector_archive_dir}" == 1 ]]; then
+		rmdir "${test_connector_archive_dir}" 2>/dev/null || true
+	fi
+	if [[ "${created_connector_build_dir}" == 1 ]]; then
+		rmdir "${test_connector_build_dir}" 2>/dev/null || true
 	fi
 }
 trap cleanup EXIT
@@ -23,6 +38,14 @@ fail() {
 if [[ ! -d "${source_dir}" ]]; then
 	mkdir "${source_dir}"
 	created_source_stub=1
+fi
+
+if [[ ! -e "${test_connector_archive}" ]]; then
+	[[ -d "${test_connector_build_dir}" ]] || created_connector_build_dir=1
+	[[ -d "${test_connector_archive_dir}" ]] || created_connector_archive_dir=1
+	mkdir -p "${test_connector_archive_dir}"
+	: > "${test_connector_archive}"
+	created_connector_archive=1
 fi
 
 contract_makefile="${tmp_dir}/contract.mk"
@@ -103,5 +126,13 @@ if ! clean_commands=$(make -C "${repo_root}/deps" --no-print-directory \
 fi
 [[ "${clean_commands}" == *'cd libssl && rm -rf openssl-3.5.7'* ]] || \
 	fail "cleanall does not remove the extracted OpenSSL build tree"
+
+openssl_bridge_commands=$(make -C "${repo_root}/test/deps" --no-print-directory \
+	-n mariadb_client MAKE=/bin/true -W "${expected_path}/.proxysql-build-complete" 2>&1)
+[[ "${openssl_bridge_commands}" == *"-C ${repo_root}/deps libssl"* ]] || \
+	fail "test/deps does not reevaluate the incremental OpenSSL target"
+
+[[ "${openssl_bridge_commands}" != *'cd mariadb-connector-c && rm -rf mariadb-connector-c-'* ]] || \
+	fail "a refreshed OpenSSL stamp forces the MariaDB connector recipe to rebuild"
 
 echo "Vendored OpenSSL build contract tests passed"

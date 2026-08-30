@@ -109,6 +109,7 @@ jobs:
         ref: ${{ github.sha }}
         fetch-depth: 0
         lfs: true
+        persist-credentials: false
 
     - name: Build package
       run: |
