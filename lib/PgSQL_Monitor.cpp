@@ -2966,7 +2966,7 @@ void* PgSQL_Monitor::monitor_dns_cache() {
 					delay_us *= 40;
 					if (delay_us > 1000000 || delay_us <= 0)
 						delay_us = 10000;
-					delay_us = delay_us + rand() % delay_us; // NOSONAR cpp:S2245 — non-crypto jitter to spread DNS refresh load; no security boundary.
+					delay_us = delay_us + rand_fast() % delay_us;
 				}
 
 				// Walk the bookkeeper: drop orphans, requeue expired ones, keep

@@ -13,8 +13,11 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cerrno>
 #include <cstdlib>
 #include <dlfcn.h>
+#include <fcntl.h>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -26,6 +29,7 @@
 extern ProxySQL_Admin* GloAdmin;
 extern ProxySQL_Statistics* GloProxyStats;
 extern MySQL_Monitor* GloMyMon;
+extern void proxysql_wake_server_discovery_admin();
 
 #ifndef PROXYSQL_FAKE_PLUGIN_PATH
 #error "PROXYSQL_FAKE_PLUGIN_PATH must be defined"
@@ -303,7 +307,7 @@ ProxySQL_ServerDesiredSet pgsql_desired(uint64_t generation,
 } // namespace
 
 int main() {
-	plan(83);
+	plan(84);
 	test_init_minimal();
 	test_init_query_processor();
 	test_init_hostgroups();
@@ -909,6 +913,10 @@ int main() {
 		"shutdown releases all queued leases before one destroy per protocol controller");
 	ok(!manager->post_server_desired_set(desired(newer_generation, {shunned})),
 		"an unregistered controller rejects desired work without an acknowledgement");
+	// The duplicate Admin above exists only to exercise inbox reopening. Restore
+	// the fully initialized fixture before later HGM commits consult GloAdmin's
+	// admindb while recomputing their v2 checksums.
+	GloAdmin = admin;
 
 	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_CLAIM");
 	unsetenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_SECOND_CLAIM");
@@ -1019,7 +1027,26 @@ int main() {
 	close(premature_admin->pipefd[1]);
 	close(reopened_admin->pipefd[0]);
 	close(reopened_admin->pipefd[1]);
-	close(duplicate_admin->pipefd[0]);
-	close(duplicate_admin->pipefd[1]);
+	GloAdmin = duplicate_admin;
+	duplicate_admin->close_server_discovery_wake_pipe();
+	int replacement_pipe[2] {-1, -1};
+	const bool replacement_opened = pipe(replacement_pipe) == 0;
+	if (replacement_opened) {
+		const int flags = fcntl(replacement_pipe[0], F_GETFL, 0);
+		fcntl(replacement_pipe[0], F_SETFL, flags | O_NONBLOCK);
+	}
+	proxysql_wake_server_discovery_admin();
+	unsigned char unexpected_wake = 0;
+	errno = 0;
+	const ssize_t replacement_read = replacement_opened
+		? read(replacement_pipe[0], &unexpected_wake, sizeof(unexpected_wake)) : -2;
+	ok(duplicate_admin->pipefd[0] == -1 && duplicate_admin->pipefd[1] == -1 &&
+		GloAdmin == nullptr && replacement_opened && replacement_read == -1 &&
+		(errno == EAGAIN || errno == EWOULDBLOCK),
+		"closed Admin wake descriptors cannot receive a later discovery wake after reuse");
+	if (replacement_opened) {
+		close(replacement_pipe[0]);
+		close(replacement_pipe[1]);
+	}
 	return exit_status();
 }

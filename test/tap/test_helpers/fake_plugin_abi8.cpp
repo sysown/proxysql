@@ -30,6 +30,9 @@ struct ProxySQL_PluginCommandContext {
 	SQLite3DB *admindb;
 	SQLite3DB *configdb;
 	SQLite3DB *statsdb;
+	void *admin_mutex_context;
+	void (*release_admin_mutex)(void *);
+	void (*acquire_admin_mutex)(void *);
 };
 
 struct ProxySQL_PluginCommandResult {

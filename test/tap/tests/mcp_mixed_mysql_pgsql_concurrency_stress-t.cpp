@@ -297,7 +297,7 @@ void restore_mcp_runtime(MYSQL* admin) {
 	if (!admin) {
 		return;
 	}
-	run_q(admin, "LOAD MCP VARIABLES FROM DISK");
+	run_admin_stmt(admin, "LOAD MCP VARIABLES FROM DISK", "MCP mixed stress restore");
 }
 
 /**

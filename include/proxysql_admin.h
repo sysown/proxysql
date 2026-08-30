@@ -690,6 +690,7 @@ class ProxySQL_Admin {
 		const std::vector<uint32_t>& hostgroups);
 	size_t drain_server_discovery_updates();
 	void shutdown_server_discovery_updates();
+	void close_server_discovery_wake_pipe();
 	void admin_shutdown();
 	void shutdown_threads();
 	bool is_command(std::string);

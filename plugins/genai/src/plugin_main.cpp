@@ -901,10 +901,9 @@ bool mcp_save_target_auth_map_to_admindb(GenAIPluginContext& ctx) {
  */
 void mcp_start_listener_if_enabled(GenAIPluginContext& ctx) {
 	if (ctx.mcp == nullptr) return;
-	// Serialize listener construction/destruction with GenAI reloads.  The
-	// server constructor snapshots GloAI/GloGATH dependencies for its AI/RAG
-	// handlers, and its destructor drains those handlers before freeing them.
-	std::unique_lock<GenAIRWLock> runtime_guard(ctx.runtime_dependencies_mutex);
+	// Listener teardown joins request threads. AI/RAG request threads hold the
+	// shared runtime-dependency lock while executing, so the listener must be
+	// stopped before taking the exclusive side or a reload can deadlock.
 	if (!ctx.mcp->variables.mcp_enabled) {
 		if (ctx.mcp->mcp_server != nullptr) {
 			delete ctx.mcp->mcp_server;
@@ -947,6 +946,10 @@ void mcp_start_listener_if_enabled(GenAIPluginContext& ctx) {
 		return;
 	}
 
+	// The constructor snapshots GloAI/GloGATH dependencies for the new AI/RAG
+	// handlers. Serialize that snapshot with runtime replacement after every
+	// previous listener and its request threads have been drained.
+	std::unique_lock<GenAIRWLock> runtime_guard(ctx.runtime_dependencies_mutex);
 	ctx.mcp->mcp_server = new ProxySQL_MCP_Server(port, ctx.mcp);
 	if (ctx.mcp->mcp_server != nullptr) {
 		ctx.mcp->mcp_server->start();
@@ -1062,7 +1065,6 @@ bool genai_stop() {
 		GloGATH = nullptr;
 	}
 	if (ctx.anomaly_detector != nullptr) {
-		ctx.anomaly_detector->close();
 		delete ctx.anomaly_detector;
 		ctx.anomaly_detector = nullptr;
 	}

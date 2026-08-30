@@ -3331,7 +3331,13 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		const auto endpoint = proxysql_server_module_cluster_endpoint(
 			query_no_space, *GloAdmin->admindb, module_result, module_error);
 		if (endpoint == ProxySQL_ServerModuleClusterEndpointResult::handled) {
-			sess->SQLite3_to_MySQL(module_result.get(), nullptr, 0, &sess->client_myds->myprot);
+			if constexpr (std::is_same_v<S, MySQL_Session>) {
+				sess->SQLite3_to_MySQL(module_result.get(), nullptr, 0,
+					&sess->client_myds->myprot);
+			} else {
+				SQLite3_to_Postgres(sess->client_myds->PSarrayOUT,
+					module_result.get(), nullptr, 0, query);
+			}
 			run_query = false;
 			goto __run_query;
 		}

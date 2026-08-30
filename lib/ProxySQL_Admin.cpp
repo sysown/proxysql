@@ -7,6 +7,7 @@ using json = nlohmann::json;
 #include <fstream>
 #include <algorithm>    // std::sort
 #include <memory>
+#include <mutex>
 #include <vector>       // std::vector
 #include <unordered_set>
 #include "prometheus/exposer.h"
@@ -444,6 +445,10 @@ extern MySQL_Authentication *GloMyAuth;
 extern PgSQL_Authentication *GloPgAuth;
 extern MySQL_LDAP_Authentication *GloMyLdapAuth;
 extern ProxySQL_Admin *GloAdmin;
+
+namespace {
+std::mutex server_discovery_admin_wake_mutex;
+}
 extern MySQL_Query_Processor* GloMyQPro;
 extern PgSQL_Query_Processor* GloPgQPro;
 extern MySQL_Threads_Handler *GloMTH;
@@ -2945,6 +2950,8 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	serial_exposer(std::function<void()> { update_modules_metrics })
 {
 	admin_threads_shutdown = false;
+	pipefd[0] = -1;
+	pipefd[1] = -1;
 #ifdef PROXYSQL40
 	proxysql_reopen_server_desired_sets();
 #endif
@@ -3391,10 +3398,7 @@ void ProxySQL_Admin::admin_shutdown() {
 	delete tables_defs_stats;
 	drop_tables_defs(tables_defs_config);
 	delete tables_defs_config;
-	shutdown(pipefd[0],SHUT_RDWR);
-	shutdown(pipefd[1],SHUT_RDWR);
-	close(pipefd[0]);
-	close(pipefd[1]);
+	close_server_discovery_wake_pipe();
 
 	// delete the scheduler
 	delete scheduler;
@@ -3481,12 +3485,31 @@ void ProxySQL_Admin::shutdown_server_discovery_updates() {
 #endif
 }
 
+void ProxySQL_Admin::close_server_discovery_wake_pipe() {
+	std::lock_guard<std::mutex> lock(server_discovery_admin_wake_mutex);
+	const int read_fd = pipefd[0];
+	const int write_fd = pipefd[1];
+	pipefd[0] = -1;
+	pipefd[1] = -1;
+	if (GloAdmin == this) GloAdmin = nullptr;
+	if (read_fd >= 0) {
+		shutdown(read_fd, SHUT_RDWR);
+		close(read_fd);
+	}
+	if (write_fd >= 0) {
+		shutdown(write_fd, SHUT_RDWR);
+		close(write_fd);
+	}
+}
+
 #ifdef PROXYSQL40
 bool proxysql_server_discovery_admin_available() {
-	return GloAdmin != nullptr;
+	std::lock_guard<std::mutex> lock(server_discovery_admin_wake_mutex);
+	return GloAdmin != nullptr && GloAdmin->pipefd[1] >= 0;
 }
 
 void proxysql_wake_server_discovery_admin() {
+	std::lock_guard<std::mutex> lock(server_discovery_admin_wake_mutex);
 	if (GloAdmin == nullptr || GloAdmin->pipefd[1] < 0) return;
 	const unsigned char wake = 1;
 	const ssize_t ignored = write(GloAdmin->pipefd[1], &wake, sizeof(wake));

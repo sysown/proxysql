@@ -79,7 +79,7 @@ std::unique_ptr<SQLite3_result> select_rows(SQLite3DB& db, const std::string& sq
 }
 
 std::string snapshot(SQLite3DB& db, const std::string& table) {
-	auto rows = select_rows(db, "SELECT * FROM " + table + " ORDER BY 1,2,3");
+	auto rows = select_rows(db, "SELECT * FROM " + table + " ORDER BY 1,2");
 	if (!rows) return "<query-error>";
 	std::string value;
 	for (const auto* row : rows->rows) {

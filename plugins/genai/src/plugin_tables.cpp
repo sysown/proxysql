@@ -122,28 +122,36 @@ static constexpr const char* kStatsGenaiGlobal =
 // is unused — the singleton genai_context() owns the handler.
 void refresh_runtime_mcp_auth_profiles(SQLite3DB* admindb, void*) {
 	if (admindb == nullptr) return;
-	MCP_Threads_Handler* mcp = genai_context().mcp;
+	GenAIPluginContext& ctx = genai_context();
+	std::shared_lock<GenAIRWLock> runtime_guard(ctx.runtime_dependencies_mutex);
+	MCP_Threads_Handler* mcp = ctx.mcp;
 	if (mcp == nullptr) return;
 	mcp->project_auth_profiles_to_runtime_view(*admindb);
 }
 
 void refresh_runtime_mcp_target_profiles(SQLite3DB* admindb, void*) {
 	if (admindb == nullptr) return;
-	MCP_Threads_Handler* mcp = genai_context().mcp;
+	GenAIPluginContext& ctx = genai_context();
+	std::shared_lock<GenAIRWLock> runtime_guard(ctx.runtime_dependencies_mutex);
+	MCP_Threads_Handler* mcp = ctx.mcp;
 	if (mcp == nullptr) return;
 	mcp->project_target_profiles_to_runtime_view(*admindb);
 }
 
 void refresh_runtime_mcp_query_rules(SQLite3DB* admindb, void*) {
 	if (admindb == nullptr) return;
-	MCP_Threads_Handler* mcp = genai_context().mcp;
+	GenAIPluginContext& ctx = genai_context();
+	std::shared_lock<GenAIRWLock> runtime_guard(ctx.runtime_dependencies_mutex);
+	MCP_Threads_Handler* mcp = ctx.mcp;
 	if (mcp == nullptr) return;
 	mcp->project_query_rules_to_runtime_view(*admindb);
 }
 
 void refresh_stats_mcp_query_digest(SQLite3DB* db, void*) {
 	if (db == nullptr) return;
-	MCP_Threads_Handler* mcp = genai_context().mcp;
+	GenAIPluginContext& ctx = genai_context();
+	std::shared_lock<GenAIRWLock> runtime_guard(ctx.runtime_dependencies_mutex);
+	MCP_Threads_Handler* mcp = ctx.mcp;
 	if (mcp == nullptr) return;
 	Query_Tool_Handler* qth = mcp->query_tool_handler;
 	if (qth == nullptr) return;
@@ -171,7 +179,9 @@ void refresh_stats_mcp_query_digest(SQLite3DB* db, void*) {
 
 void refresh_stats_mcp_query_digest_reset(SQLite3DB* db, void*) {
 	if (db == nullptr) return;
-	MCP_Threads_Handler* mcp = genai_context().mcp;
+	GenAIPluginContext& ctx = genai_context();
+	std::shared_lock<GenAIRWLock> runtime_guard(ctx.runtime_dependencies_mutex);
+	MCP_Threads_Handler* mcp = ctx.mcp;
 	if (mcp == nullptr) return;
 	Query_Tool_Handler* qth = mcp->query_tool_handler;
 	if (qth == nullptr) return;
@@ -248,7 +258,9 @@ bool insert_tool_counter_rows(
 
 void refresh_stats_mcp_tool_counters(SQLite3DB* db, bool reset) {
 	if (db == nullptr) return;
-	MCP_Threads_Handler* mcp = genai_context().mcp;
+	GenAIPluginContext& ctx = genai_context();
+	std::shared_lock<GenAIRWLock> runtime_guard(ctx.runtime_dependencies_mutex);
+	MCP_Threads_Handler* mcp = ctx.mcp;
 	if (mcp == nullptr) return;
 
 	SQLite3_result* query_result = mcp->query_tool_handler

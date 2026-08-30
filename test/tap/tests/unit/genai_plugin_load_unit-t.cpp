@@ -8,7 +8,9 @@
 #include "sqlite3db.h"
 #include "tap.h"
 
+#include <atomic>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -92,7 +94,7 @@ SQLite3DB* proxysql_plugin_get_configdb() { return g_configdb; }
 SQLite3DB* proxysql_plugin_get_statsdb()  { return g_statsdb; }
 
 int main() {
-	plan(95);
+	plan(96);
 
 	g_admindb  = new SQLite3DB();
 	g_configdb = new SQLite3DB();
@@ -102,6 +104,11 @@ int main() {
 	g_statsdb->open((char*)":memory:", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 	setup_admindb_schema(g_admindb);
 	setup_global_variables_schema(g_configdb);
+	g_statsdb->execute(
+		"CREATE TABLE stats_mcp_query_tools_counters ("
+		" endpoint TEXT, tool TEXT, schema TEXT, count INTEGER,"
+		" first_seen INTEGER, last_seen INTEGER, sum_time INTEGER,"
+		" min_time INTEGER, max_time INTEGER)");
 
 	// Exercise a genuinely fresh installation before setting up the partial
 	// installation used by the rest of this regression. Both stores begin with
@@ -455,7 +462,29 @@ int main() {
 		"SELECT hostgroup_id FROM mcp_target_profiles WHERE target_id='t'") == 1,
 	   "SAVE restored hostgroup_id=1 from in-memory snapshot");
 
-	ok(mgr.stop_all(),     "stop_all succeeds");
+	std::atomic<bool> stop_stats_refresh {false};
+	std::atomic<unsigned int> stats_refreshes {0};
+	std::vector<std::thread> stats_threads;
+	for (unsigned int i = 0; i < 1; ++i) {
+		stats_threads.emplace_back([&] {
+			while (!stop_stats_refresh.load(std::memory_order_acquire)) {
+				mgr.refresh_runtime_views_for_query(
+					"SELECT * FROM stats_mcp_query_tools_counters",
+					nullptr, nullptr, g_statsdb);
+				stats_refreshes.fetch_add(1, std::memory_order_release);
+			}
+		});
+	}
+	while (stats_refreshes.load(std::memory_order_acquire) < 20) {
+		std::this_thread::yield();
+	}
+	ok(stats_refreshes.load(std::memory_order_acquire) >= 20,
+	   "stats callbacks are active before plugin stop begins");
+	const bool stopped = mgr.stop_all();
+	stop_stats_refresh.store(true, std::memory_order_release);
+	for (auto& thread : stats_threads) thread.join();
+	ok(stopped && stats_refreshes.load(std::memory_order_acquire) >= 20,
+	   "stats callbacks and plugin stop overlap without losing lifecycle completion");
 
 	// Verify the plugin handles are still live (pre-destructor).
 	ok(mgr.size() == 1, "plugin handle still present after stop_all");

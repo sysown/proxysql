@@ -1012,7 +1012,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 				proxy_error("Cluster: detected a peer %s:%d with mysql_servers_v2 version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %u checks until LOAD MYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_ms * 10));
 				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_conflict_mysql_servers_share_epoch]->Increment();
 			}
-		} else {
+		} else if (!module_mysql_v2) {
 			if (v->diff_check && (v->diff_check % (diff_ms * 10)) == 0) {
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with mysql_servers_v2 version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %u checks until LOAD MYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_ms * 10));
 				proxy_warning("Cluster: detected a peer %s:%d with mysql_servers_v2 version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %u checks until LOAD MYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_ms * 10));
@@ -1021,7 +1021,8 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 		}
 
 		if (module_mysql_v1 && mysql_server_sync_algo ==
-			mysql_servers_sync_algorithm::runtime_mysql_servers_and_mysql_servers_v2) {
+			mysql_servers_sync_algorithm::runtime_mysql_servers_and_mysql_servers_v2 &&
+			!runtime_mysql_servers_already_loaded) {
 			v = &checksums_values.mysql_servers;
 			GloProxyCluster->pull_runtime_mysql_servers_from_peer(
 				{v->checksum, static_cast<time_t>(v->epoch)});
@@ -1148,14 +1149,16 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 		unsigned long long own_epoch = __sync_fetch_and_add(&GloVars.checksums_values.pgsql_servers_v2.epoch,0);
 		char* own_checksum = __sync_fetch_and_add(&GloVars.checksums_values.pgsql_servers_v2.checksum,0);
 		const std::string v_exp_checksum { v->checksum };
+		bool runtime_pgsql_servers_already_loaded = false;
 		if (module_pgsql_v2) {
 			ProxySQL_Checksum_Value_2* runtime_pgsql_server_checksum = &checksums_values.pgsql_servers;
 			GloProxyCluster->pull_pgsql_servers_v2_from_peer(
 				{v_exp_checksum, static_cast<time_t>(v->epoch)},
 				{runtime_pgsql_server_checksum->checksum,
 					static_cast<time_t>(runtime_pgsql_server_checksum->epoch)}, true);
+			runtime_pgsql_servers_already_loaded = true;
 		}
-		if (module_pgsql_v1) {
+		if (module_pgsql_v1 && !runtime_pgsql_servers_already_loaded) {
 			ProxySQL_Checksum_Value_2* runtime_pgsql_server_checksum = &checksums_values.pgsql_servers;
 			GloProxyCluster->pull_runtime_pgsql_servers_from_peer(
 				{runtime_pgsql_server_checksum->checksum,
@@ -1181,7 +1184,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 				proxy_error("Cluster: detected a peer %s:%d with pgsql_servers_v2 version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %u checks until LOAD PGSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_ms_pgsql*10));
 				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_conflict_pgsql_servers_share_epoch]->Increment();
 			}
-		} else {
+		} else if (!module_pgsql_v2) {
 			if (v->diff_check && (v->diff_check % (diff_ms_pgsql*10)) == 0) {
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with pgsql_servers_v2 version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %u checks until LOAD PGSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_ms_pgsql * 10));
 				proxy_warning("Cluster: detected a peer %s:%d with pgsql_servers_v2 version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %u checks until LOAD PGSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_ms_pgsql*10));
@@ -2165,6 +2168,7 @@ bool proxysql_cluster_install_v1_runtime_post_fetch(
 			*rows, module_tables, installed_topology_hostgroups, error))) return false;
 	ProxySQL_ServerRuntimeSnapshot installed_snapshot =
 		proxysql_server_runtime_snapshot_from_rows(protocol, transaction.generation(), *rows);
+	installed_snapshot.topology_hostgroups = installed_topology_hostgroups;
 	try {
 		stage_core_rows(rows.get());
 	} catch (...) {
@@ -2329,10 +2333,10 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 						if (!fetch_failed && GloProxyCluster->cluster_mysql_servers_save_to_disk == true) {
 							proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving Runtime MySQL Servers to Database\n");
 							const bool saved = GloAdmin->save_mysql_servers_runtime_to_database(false);
-							proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving to disk MySQL Servers v2 from peer %s:%d\n", hostname, port);
-							proxy_info("Cluster: Saving to disk MySQL Servers v2 from peer %s:%d\n", hostname, port);
+							proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving to disk Runtime MySQL Servers from peer %s:%d\n", hostname, port);
+							proxy_info("Cluster: Saving to disk Runtime MySQL Servers from peer %s:%d\n", hostname, port);
 							if (!saved || !GloAdmin->flush_GENERIC__from_to("mysql_servers", "memory_to_disk")) {
-								proxy_error("Cluster: persisting MySQL server-module tables failed\n");
+								proxy_error("Cluster: persisting mysql_servers failed\n");
 								fetch_failed = true;
 							}
 						}
@@ -2609,8 +2613,6 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 
 					if (computed_checksum == peer_mysql_servers_v2_checksum && runtime_checksum_matches == true) {
 						do {
-						// No need to perform the conversion if checksums don't match
-						const incoming_servers_t incoming_servers{ convert_mysql_servers_resultsets(results) };
 						// we are OK to sync!
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching checksum for 'MySQL Servers' from peer %s:%d successful. Checksum: %s\n", hostname, port, computed_checksum.c_str());
 						proxy_info("Cluster: Fetching checksum for 'MySQL Servers' from peer %s:%d successful. Checksum: %s\n", hostname, port, computed_checksum.c_str());
@@ -2626,6 +2628,10 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 							}
 						}
 #endif
+						// Convert only after every operation that can reject the fetched
+						// module state. The runtime load path takes ownership of these
+						// SQLite resultsets.
+						const incoming_servers_t incoming_servers{ convert_mysql_servers_resultsets(results) };
 						// sync mysql_servers
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Writing mysql_servers table\n");
 						proxy_info("Cluster: Writing mysql_servers table\n");
@@ -2932,12 +2938,12 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 							proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving to disk MySQL Servers v2 from peer %s:%d\n", hostname, port);
 							proxy_info("Cluster: Saving to disk MySQL Servers v2 from peer %s:%d\n", hostname, port);
 							if (!saved || !GloAdmin->flush_GENERIC__from_to("mysql_servers", "memory_to_disk")) {
-								proxy_error("Cluster: persisting MySQL server-module tables failed\n");
+								proxy_error("Cluster: persisting mysql_servers failed\n");
 								fetch_failed = true;
 							}
 						} else {
-							proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Not saving to disk MySQL Servers from peer %s:%d failed.\n", hostname, port);
-							proxy_info("Cluster: Not saving to disk MySQL Servers from peer %s:%d failed.\n", hostname, port);
+							proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Not saving to disk MySQL Servers from peer %s:%d\n", hostname, port);
+							proxy_info("Cluster: Not saving to disk MySQL Servers from peer %s:%d\n", hostname, port);
 						}
 						GloAdmin->mysql_servers_wrunlock();
 						} while (false);
@@ -2952,13 +2958,16 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 						fetch_failed = true;
 					}
 
-					// free results
-					for (MYSQL_RES* result : results) {
-						mysql_free_result(result);
-					}
-
 					if (!fetch_failed)
 						metrics.p_counter_array[p_cluster_counter::pulled_mysql_servers_success]->Increment();
+				}
+
+				// A later peer/module fetch can fail after earlier resultsets were
+				// stored, so cleanup cannot depend on the aggregate fetch status.
+				for (MYSQL_RES* result : results) {
+					if (result) {
+						mysql_free_result(result);
+					}
 				}
 			} else {
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching MySQL Servers from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
@@ -3921,7 +3930,7 @@ void ProxySQL_Cluster::pull_runtime_pgsql_servers_from_peer(const runtime_pgsql_
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving to disk PostgreSQL Servers from peer %s:%d\n", hostname, port);
 					proxy_info("Cluster: Saving to disk PostgreSQL Servers from peer %s:%d\n", hostname, port);
 					if (!saved || !GloAdmin->flush_GENERIC__from_to(ClusterModules::PGSQL_SERVERS, "memory_to_disk")) {
-						proxy_error("Cluster: persisting PostgreSQL server-module tables failed\n");
+						proxy_error("Cluster: persisting pgsql_servers failed\n");
 						fetch_failed = true;
 					}
 				}
@@ -4156,7 +4165,6 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 					computed_pgsql_v2_checksum == expected_pgsql_v2_checksum &&
 					runtime_checksum_matches == true) {
 					do {
-					const incoming_pgsql_servers_t incoming_pgsql_servers { convert_pgsql_servers_resultsets(results) };
 					const runtime_pgsql_servers_checksum_t expected_runtime_pgsql_server {
 						expected_runtime_pgsql_checksum, peer_runtime_pgsql_server.epoch
 					};
@@ -4174,9 +4182,10 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 							fetch_failed = true;
 							GloAdmin->pgsql_servers_wrunlock();
 							break;
-						}
+							}
 					}
 #endif
+					const incoming_pgsql_servers_t incoming_pgsql_servers { convert_pgsql_servers_resultsets(results) };
 					update_pgsql_servers(incoming_pgsql_servers.incoming_pgsql_servers_v2);
 					update_pgsql_replication_hostgroups(incoming_pgsql_servers.incoming_replication_hostgroups);
 					update_pgsql_hostgroup_attributes(incoming_pgsql_servers.incoming_hostgroup_attributes);
@@ -4196,7 +4205,7 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving to disk PostgreSQL Servers from peer %s:%d\n", hostname, port);
 						proxy_info("Cluster: Saving to disk PostgreSQL Servers from peer %s:%d\n", hostname, port);
 						if (!saved || !GloAdmin->flush_GENERIC__from_to(ClusterModules::PGSQL_SERVERS, "memory_to_disk")) {
-							proxy_error("Cluster: persisting PostgreSQL server-module tables failed\n");
+							proxy_error("Cluster: persisting pgsql_servers failed\n");
 							fetch_failed = true;
 						}
 					}

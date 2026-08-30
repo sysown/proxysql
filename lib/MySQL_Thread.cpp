@@ -5441,6 +5441,8 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 			sess->client_myds->proxy_addr.port=ifi->port;
 		}
 		if (sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, true) == false) {
+			assert(mysql_sessions->len != 0 && mysql_sessions->index(mysql_sessions->len - 1) == sess);
+			unregister_session(mysql_sessions->len - 1);
 			delete sess;
 			return;
 		}

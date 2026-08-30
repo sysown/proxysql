@@ -70,11 +70,13 @@ bool restore_variables(
 	const string& model,
 	const string& timeout
 ) {
-	return set_variable(admin, "genai-llm_provider", provider) &&
-		set_variable(admin, "genai-llm_provider_model", model) &&
-		set_variable(admin, "genai-llm_timeout_ms", timeout) &&
-		execute_admin(admin, "LOAD GENAI VARIABLES TO RUNTIME") &&
-		execute_admin(admin, "SAVE GENAI VARIABLES TO DISK");
+	const bool provider_restored = set_variable(admin, "genai-llm_provider", provider);
+	const bool model_restored = set_variable(admin, "genai-llm_provider_model", model);
+	const bool timeout_restored = set_variable(admin, "genai-llm_timeout_ms", timeout);
+	const bool runtime_restored = execute_admin(admin, "LOAD GENAI VARIABLES TO RUNTIME");
+	const bool disk_restored = execute_admin(admin, "SAVE GENAI VARIABLES TO DISK");
+	return provider_restored && model_restored && timeout_restored &&
+		runtime_restored && disk_restored;
 }
 
 } // namespace

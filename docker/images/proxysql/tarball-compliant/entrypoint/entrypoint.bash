@@ -47,7 +47,8 @@ cat > "pkgroot/${DIR_NAME}/bin/proxysql" <<'EOF'
 #!/bin/sh
 set -eu
 
-BIN_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+LAUNCHER=$(readlink -f -- "$0")
+BIN_DIR=$(CDPATH= cd -- "$(dirname -- "${LAUNCHER}")" && pwd)
 export LD_LIBRARY_PATH="${BIN_DIR}/../lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 exec "${BIN_DIR}/proxysql.bin" "$@"
 EOF

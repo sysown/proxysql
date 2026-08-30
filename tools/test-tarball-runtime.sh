@@ -58,5 +58,8 @@ EOF
                 esac
             done
             "${launcher}" --version
+            launcher_link="${workdir}/proxysql"
+            ln -s "${launcher}" "${launcher_link}"
+            "${launcher_link}" --version
         ' sh "${archive_name}"
 done

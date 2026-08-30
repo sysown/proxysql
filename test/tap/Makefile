@@ -91,6 +91,14 @@ unit_tests: tap test_deps
 .PHONY: ai_genai_unit_tests stage_ai_genai_unit_tests
 .NOTPARALLEL: ai_genai_unit_tests
 ai_genai_unit_tests: tap test_deps
+	@set -eu; \
+		if [ -d "$(AI_GENAI_STAGE_DIR)" ]; then \
+			for test_name in $(AI_GENAI_UNIT_TESTS); do \
+				if [ -x "$(AI_GENAI_STAGE_DIR)/$$test_name" ] && [ ! -e "tests/unit/$$test_name" ]; then \
+					ln "$(AI_GENAI_STAGE_DIR)/$$test_name" "tests/unit/$$test_name"; \
+				fi; \
+			done; \
+		fi
 	cd tests/unit && CC=${CC} CXX=${CXX} ${MAKE} ai_genai_unit_tests
 	$(MAKE) stage_ai_genai_unit_tests
 

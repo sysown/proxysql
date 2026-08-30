@@ -1,6 +1,8 @@
 #include "tap.h"
 #include "ProxySQL_PluginManager.h"
 #include "ProxySQL_ServerDiscovery.h"
+#include "test_globals.h"
+#include "test_init.h"
 
 #include <dlfcn.h>
 #include <stdexcept>
@@ -38,6 +40,7 @@ void destroy_module(ProxySQL_ServerModuleHooks* module) { delete module; }
 
 int main() {
 	plan(12);
+	test_init_minimal();
 	ProxySQL_PluginManager manager;
 	void* handle = dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
 	ProxySQL_ServerModuleTable mysql_a {

@@ -81,6 +81,10 @@ class AIUnitHandoffTests(unittest.TestCase):
         self.assertRegex(
             self.top_makefile, r"(?m)^ai_genai_unit_tests:\s*"
         )
+        self.assertIn(
+            'ln "$(AI_GENAI_STAGE_DIR)/$$test_name" "tests/unit/$$test_name"',
+            self.top_makefile,
+        )
 
     def test_built_manifest_and_stage_match_contract_when_present(self):
         stage_values = parse_make_list(

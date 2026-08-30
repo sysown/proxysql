@@ -66,13 +66,13 @@ bool run_admin_stmt(MYSQL* admin, const std::string& query, const char* context)
 	return true;
 }
 
-std::string escape_sql_literal(const char* input) {
-	std::string escaped = input ? input : "";
-	size_t pos = 0;
-	while ((pos = escaped.find('\'', pos)) != std::string::npos) {
-		escaped.insert(pos, 1, '\'');
-		pos += 2;
-	}
+std::string escape_sql_literal(MYSQL* admin, const char* input) {
+	if (input == nullptr) return {};
+	const size_t input_length = std::strlen(input);
+	std::string escaped(input_length * 2 + 1, '\0');
+	const unsigned long escaped_length = mysql_real_escape_string(
+		admin, escaped.data(), input, static_cast<unsigned long>(input_length));
+	escaped.resize(escaped_length);
 	return escaped;
 }
 
@@ -86,7 +86,7 @@ std::string escape_sql_literal(const char* input) {
  * @return true if all setup statements succeeded.
  */
 bool configure_mcp_runtime(MYSQL* admin, const CommandLine& cl) {
-	const std::string auth_token = escape_sql_literal(cl.mcp_auth_token);
+	const std::string auth_token = escape_sql_literal(admin, cl.mcp_auth_token);
 	const std::vector<std::string> statements = {
 		"SET mcp-port=" + std::to_string(cl.mcp_port),
 		"SET mcp-use_ssl=false",
@@ -113,7 +113,7 @@ void restore_mcp_runtime(MYSQL* admin) {
 	if (!admin) {
 		return;
 	}
-	run_q(admin, "LOAD MCP VARIABLES FROM DISK");
+	run_admin_stmt(admin, "LOAD MCP VARIABLES FROM DISK", "MCP restore");
 }
 
 /**

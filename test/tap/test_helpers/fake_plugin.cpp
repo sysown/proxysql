@@ -177,6 +177,8 @@ public:
 	void runtime_configuration_installed(ProxySQL_ServerRuntimeSnapshot snapshot) override {
 		fake_log_event("server_controller_runtime");
 		fake_log_generation("runtime_controller_generation", snapshot.generation);
+		fake_log_generation("runtime_controller_topology_count",
+			snapshot.topology_hostgroups.size());
 	}
 	void desired_set_applied(uint64_t, bool) override {
 		fake_log_event("server_controller_desired_set");

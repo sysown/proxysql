@@ -59,8 +59,8 @@ The chassis (`lib/ProxySQL_PluginManager.cpp:324–383`) enforces:
 ### Current ABI version
 
 ```c
-#define PROXYSQL_PLUGIN_ABI_VERSION       5
-#define PROXYSQL_PLUGIN_ABI_VERSION_MAX   5
+#define PROXYSQL_PLUGIN_ABI_VERSION       9
+#define PROXYSQL_PLUGIN_ABI_VERSION_MAX   9
 ```
 
 ABI evolution so far:
@@ -73,6 +73,15 @@ ABI evolution so far:
   consumer may release the mutex during that wait and reacquire it before
   returning. ABI-4 plugins see the unchanged `{admindb, configdb, statsdb}`
   prefix and continue to load without using the new callbacks.
+- **ABI 5 → ABI 6:** `ProxySQL_PluginServices` appends the general AWS
+  metadata-provider installation callback used by locality discovery.
+- **ABI 6 → ABI 7:** `ProxySQL_PluginServices` appends the MySQL-owned AWS
+  locality statistics projection callback.
+- **ABI 7 → ABI 8:** `ProxySQL_PluginServices` appends the IAM-provider
+  uninstall callback used to roll back a partially successful plugin init.
+- **ABI 8 → ABI 9:** `ProxySQL_PluginServices` appends the provider-neutral
+  server-module/controller registration, runtime snapshot, and desired-set
+  submission services.
 
 Future ABI versions append fields. The chassis bumps `PROXYSQL_PLUGIN_ABI_VERSION_MAX` and gates each new field's read on `abi_version >= N`.
 
@@ -257,7 +266,7 @@ static bool my_stop(const ProxySQL_PluginServices* services) {
 
 static const ProxySQL_PluginDescriptor descriptor = {
     "my_plugin",                          // name
-    PROXYSQL_PLUGIN_ABI_VERSION,          // abi_version (= 5)
+    PROXYSQL_PLUGIN_ABI_VERSION,          // abi_version (= 9)
     my_init,                              // init   (Phase D)
     my_start,                             // start  (Phase E)
     my_stop,                              // stop

@@ -76,7 +76,7 @@ size_t occurrences(const std::string& value, const std::string& needle) {
 } // namespace
 
 int main() {
-	plan(37);
+	plan(38);
 	test_init_minimal();
 	char path[] = "/tmp/proxysql_server_runtime_install.XXXXXX";
 	const int fd = mkstemp(path);
@@ -372,6 +372,17 @@ int main() {
 				: "SELECT * FROM pgsql_fake_server_module_claims ORDER BY writer"))});
 		return tables;
 	};
+	const size_t before_topology_snapshot = occurrences(
+		read_log(), "runtime_controller_topology_count=2");
+	auto mysql_topology_snapshot_tables = module_tables(ProxySQL_ServerProtocol::mysql);
+	ok(proxysql_cluster_install_v1_runtime_post_fetch(ProxySQL_ServerProtocol::mysql,
+		select_rows("SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers"),
+		true, mysql_topology_snapshot_tables,
+		[](SQLite3_result* rows) { MyHGM->servers_add(rows); },
+		[](SQLite3_result* rows) { return MyHGM->commit({rows, {}}, {nullptr, {}}, true, true); }) &&
+		occurrences(read_log(), "runtime_controller_topology_count=2") ==
+			before_topology_snapshot + 1,
+		"MySQL Cluster v1 publishes the installed built-in topology with its runtime snapshot");
 	setenv("PROXYSQL_FAKE_PLUGIN_SERVER_MODULE_CONFLICT_BUILTIN_CLAIM", "1", 1);
 	admin_db.execute("DELETE FROM mysql_replication_hostgroups");
 	auto mysql_missed_conflict_tables = module_tables(ProxySQL_ServerProtocol::mysql);
