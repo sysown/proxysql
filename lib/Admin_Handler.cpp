@@ -50,6 +50,9 @@ using json = nlohmann::json;
 // GenAI_Thread.h moved in Step 5.
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
+#include "PgBouncer_Config.h"
+#include "PgBouncer_ConfigConverter.h"
+#include "PgBouncer_ShowCommands.h"
 
 #include <dirent.h>
 #include <search.h>
@@ -5125,6 +5128,41 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		}
 	}
 
+	// =========================================================================
+	// PgBouncer-compatible SHOW commands (PgSQL admin port only)
+	//
+	// This must run BEFORE the generic SHOW dispatch below: ProxySQL already
+	// owns some of the same command words (notably `SHOW DATABASES`), so a
+	// translation placed after that block would never be reached for them.
+	// translate_show_command() only claims the exact PgBouncer command set and
+	// rejects anything with trailing tokens, so every other SHOW still falls
+	// through to the normal handling.
+	// =========================================================================
+	if constexpr (std::is_same_v<S, PgSQL_Session>) {
+	  // Cheap gate: this block now sits ahead of the generic SHOW dispatch, so
+	  // without it every admin query would be normalized and tokenized twice.
+	  if (query_no_space_length > 5 && !strncasecmp("SHOW ", query_no_space, 5)) {
+		// Check for unsupported PgBouncer SHOW commands first
+		std::string unsupported_msg = PgBouncer::get_unsupported_show_message(query_no_space, query_no_space_length);
+		if (!unsupported_msg.empty()) {
+			SPA->send_error_msg_to_client(sess, (char *)unsupported_msg.c_str());
+			run_query = false;
+			goto __run_query;
+		}
+
+		// Try to translate PgBouncer SHOW commands
+		std::string translated_query;
+		bool is_extended = false;
+		if (PgBouncer::translate_show_command(query_no_space, query_no_space_length,
+		                                      translated_query, is_extended)) {
+			l_free(query_length, query);
+			query = l_strdup(translated_query.c_str());
+			query_length = strlen(query) + 1;
+			goto __run_query;
+		}
+	  }
+	}
+
 	if (strncasecmp("SHOW ", query_no_space, 5)) {
 		goto __end_show_commands; // in the next block there are only SHOW commands
 	}
@@ -5453,6 +5491,147 @@ __end_show_commands:
 			query=l_strdup("SELECT \"stats\" AS 'name'");
 		}
 		query_length=strlen(query)+1;
+		goto __run_query;
+	}
+
+	// =========================================================================
+	// IMPORT PGBOUNCER CONFIG FROM '/path/to/pgbouncer.ini' [DRY RUN] [IGNORE WARNINGS]
+	// =========================================================================
+	if ((query_no_space_length > 30) && !strncasecmp("IMPORT PGBOUNCER CONFIG FROM ", query_no_space, 29)) {
+		proxy_info("Received %s command\n", query_no_space);
+
+		// Only allow from admin sessions, not stats
+		if (sess->session_type != PROXYSQL_SESSION_ADMIN) {
+			SPA->send_error_msg_to_client(sess, (char *)"IMPORT PGBOUNCER CONFIG requires admin privileges");
+			run_query = false;
+			goto __run_query;
+		}
+
+		// Parse flags as trailing tokens (after the quoted path).
+		// Syntax: IMPORT PGBOUNCER CONFIG FROM '/path' [DRY RUN] [IGNORE WARNINGS]
+		// Extract the quoted path first, then check remaining tokens for flags.
+		std::string cmd_rest = std::string(query_no_space + 29);
+		bool dry_run = false;
+		bool ignore_warnings = false;
+
+		// Find the file path (first quoted or unquoted token)
+		std::string file_path_str;
+		std::string remaining;
+		{
+			size_t start = cmd_rest.find_first_not_of(" \t");
+			if (start == std::string::npos) {
+				SPA->send_error_msg_to_client(sess, (char *)"Missing file path");
+				run_query = false;
+				goto __run_query;
+			}
+			if (cmd_rest[start] == '\'' || cmd_rest[start] == '"') {
+				char quote = cmd_rest[start];
+				size_t end = cmd_rest.find(quote, start + 1);
+				if (end == std::string::npos) {
+					SPA->send_error_msg_to_client(sess, (char *)"Unterminated quote in file path");
+					run_query = false;
+					goto __run_query;
+				}
+				file_path_str = cmd_rest.substr(start + 1, end - start - 1);
+				remaining = cmd_rest.substr(end + 1);
+			} else {
+				size_t end = cmd_rest.find_first_of(" \t", start);
+				if (end == std::string::npos) {
+					file_path_str = cmd_rest.substr(start);
+				} else {
+					file_path_str = cmd_rest.substr(start, end - start);
+					remaining = cmd_rest.substr(end);
+				}
+			}
+		}
+
+		// Parse remaining tokens for flags
+		{
+			std::string upper_rem = remaining;
+			std::transform(upper_rem.begin(), upper_rem.end(), upper_rem.begin(), ::toupper);
+			// Remove extra whitespace for matching
+			// Check for "DRY RUN" and "IGNORE WARNINGS" as whole tokens
+			if (upper_rem.find("DRY RUN") != std::string::npos) {
+				dry_run = true;
+			}
+			if (upper_rem.find("IGNORE WARNINGS") != std::string::npos) {
+				ignore_warnings = true;
+			}
+		}
+
+		// Stage 1: Parse PgBouncer config
+		PgBouncer::Config pgb_config;
+		bool parse_ok = PgBouncer::parse_config_file(file_path_str, pgb_config);
+		if (!parse_ok) {
+			std::string err_msg = "Failed to parse PgBouncer config: " + file_path_str;
+			for (const auto& e : pgb_config.errors) {
+				err_msg += "\n  " + e.file + ":" + std::to_string(e.line) + ": " + e.message;
+			}
+			SPA->send_error_msg_to_client(sess, (char *)err_msg.c_str());
+			run_query = false;
+			goto __run_query;
+		}
+
+		// Stage 2: Convert
+		bool strict = !ignore_warnings;
+		PgBouncer::ConfigConverter converter;
+		PgBouncer::ConversionResult result = converter.convert(pgb_config, strict);
+
+		if (!result.success) {
+			std::string err_msg = "Conversion failed (unmappable parameters). Use IGNORE WARNINGS to proceed.";
+			for (const auto& e : result.errors) {
+				err_msg += "\n  ERROR: " + e.message;
+			}
+			if (dry_run) {
+				err_msg += "\n\n" + PgBouncer::ConfigConverter::format_dry_run(result, file_path_str.c_str(), strict);
+			}
+			SPA->send_error_msg_to_client(sess, (char *)err_msg.c_str());
+			run_query = false;
+			goto __run_query;
+		}
+
+		if (dry_run) {
+			std::string dry_output = PgBouncer::ConfigConverter::format_dry_run(result, file_path_str.c_str(), strict);
+			std::string escaped = dry_output;
+			size_t pos = 0;
+			while ((pos = escaped.find('\'', pos)) != std::string::npos) {
+				escaped.replace(pos, 1, "''");
+				pos += 2;
+			}
+			l_free(query_length, query);
+			std::string select_q = "SELECT '" + escaped + "' AS dry_run_output";
+			query = l_strdup(select_q.c_str());
+			query_length = strlen(query) + 1;
+			goto __run_query;
+		}
+
+		// Execute atomically: wrap in transaction so partial failure rolls back
+		SPA->admindb->execute("BEGIN");
+		bool exec_ok = true;
+		for (const auto& entry : result.entries) {
+			if (!entry.sql.empty()) {
+				bool rc = SPA->admindb->execute(entry.sql.c_str());
+				if (!rc) {
+					exec_ok = false;
+					SPA->admindb->execute("ROLLBACK");
+					SPA->send_error_msg_to_client(sess, (char *)"Import failed during SQL execution; changes rolled back");
+					break;
+				}
+			}
+		}
+		if (exec_ok) {
+			SPA->admindb->execute("COMMIT");
+			std::string ok_msg = "PgBouncer config imported: " +
+				std::to_string(result.server_count) + " servers, " +
+				std::to_string(result.user_count) + " users, " +
+				std::to_string(result.rule_count) + " query rules, " +
+				std::to_string(result.variable_count) + " variables";
+			if (!result.warnings.empty()) {
+				ok_msg += " (" + std::to_string(result.warnings.size()) + " warnings)";
+			}
+			SPA->send_ok_msg_to_client(sess, (char *)ok_msg.c_str(), 0, query_no_space);
+		}
+		run_query = false;
 		goto __run_query;
 	}
 
