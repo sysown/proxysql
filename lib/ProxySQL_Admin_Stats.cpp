@@ -1223,6 +1223,40 @@ void ProxySQL_Admin::stats___mysql_connection_pool(bool _reset) {
 	delete resultset;
 }
 
+#ifdef PROXYSQL31
+static void stats___hostgroup_connection_pool(
+	SQLite3DB *statsdb, SQLite3_result *resultset, const char *table,
+	const char *reset_table, bool reset
+) {
+	if (!resultset) return;
+	const std::string delete_live = std::string("DELETE FROM ") + table;
+	const std::string insert_prefix = std::string("INSERT INTO ") + table + " VALUES (";
+	statsdb->execute("BEGIN");
+	statsdb->execute(delete_live.c_str());
+	for (SQLite3_row *row : resultset->rows) {
+		const std::string query = insert_prefix + row->fields[0] + "," + row->fields[1] + "," +
+			row->fields[2] + "," + row->fields[3] + "," + row->fields[4] + ")";
+		statsdb->execute(query.c_str());
+	}
+	if (reset) {
+		const std::string delete_reset = std::string("DELETE FROM ") + reset_table;
+		const std::string copy_reset = std::string("INSERT INTO ") + reset_table + " SELECT * FROM " + table;
+		statsdb->execute(delete_reset.c_str());
+		statsdb->execute(copy_reset.c_str());
+	}
+	statsdb->execute("COMMIT");
+	delete resultset;
+}
+
+void ProxySQL_Admin::stats___mysql_hostgroup_connection_pool(bool reset) {
+	if (!MyHGM) return;
+	stats___hostgroup_connection_pool(
+		statsdb, MyHGM->SQL3_Hostgroup_Connection_Pool(reset),
+		"stats_mysql_hostgroup_connection_pool",
+		"stats_mysql_hostgroup_connection_pool_reset", reset);
+}
+#endif
+
 void ProxySQL_Admin::stats___pgsql_connection_pool(bool _reset) {
 	if (!PgHGM) return;
 	SQLite3_result* resultset = PgHGM->SQL3_Connection_Pool(_reset);
@@ -1248,6 +1282,16 @@ void ProxySQL_Admin::stats___pgsql_connection_pool(bool _reset) {
 	statsdb->execute("COMMIT");
 	delete resultset;
 }
+
+#ifdef PROXYSQL31
+void ProxySQL_Admin::stats___pgsql_hostgroup_connection_pool(bool reset) {
+	if (!PgHGM) return;
+	stats___hostgroup_connection_pool(
+		statsdb, PgHGM->SQL3_Hostgroup_Connection_Pool(reset),
+		"stats_pgsql_hostgroup_connection_pool",
+		"stats_pgsql_hostgroup_connection_pool_reset", reset);
+}
+#endif
 
 void ProxySQL_Admin::stats___mysql_free_connections() {
 	int rc;

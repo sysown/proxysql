@@ -286,14 +286,17 @@ ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c proxysql_ed25519_verify
 	PSQLED25519 := -DPROXYSQLED25519
 endif
 
-# PROXYSQL31 is the parent tier flag for FFTO + TSDB; the codebase has no
-# #ifdef PROXYSQL31 blocks of its own, so autodetect it as "at least one
-# of FFTO or TSDB is enabled".  This matches the top-level Makefile's
-# cascade (PROXYSQL31=1 => PROXYSQLFFTO=1 && PROXYSQLTSDB=1).
+# PROXYSQL31 changes shared class layouts, so detect a symbol emitted only by
+# the PROXYSQL31-gated hostgroup statistics implementation. Do not infer it
+# from child feature flags: FFTO or TSDB can be enabled independently.
 PSQL31 :=
-ifneq ($(PROXYSQLFFTO)$(PROXYSQLTSDB),)
+ifeq ($(PROXYSQL31),1)
+	PSQL31 := -DPROXYSQL31
+else
+ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c SQL3_Hostgroup_Connection_Pool),0)
 	PROXYSQL31 := 1
 	PSQL31 := -DPROXYSQL31
+endif
 endif
 
 ifneq ($(PROXYSQL40),)
@@ -455,7 +458,7 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	mcp_client_unit-t
 
 ifeq ($(PROXYSQL31),1)
-UNIT_TESTS += caching_sha2_rsa_unit-t
+UNIT_TESTS += caching_sha2_rsa_unit-t hostgroup_pool_stats_unit-t
 endif
 
 ifeq ($(PROXYSQLED25519),1)
@@ -566,6 +569,11 @@ ezoption_parser_unit-t: ezoption_parser_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noi
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
 		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include \
 		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
+
+hostgroup_pool_stats_unit-t: hostgroup_pool_stats_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include \
+		$(STDCPP) -O0 -ggdb -DPROXYSQL31 $(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
 
 mcp_client_unit-t: mcp_client_unit-t.cpp $(TAP_PATH)/mcp_client.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
 	$(CXX) $< $(TAP_PATH)/mcp_client.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \

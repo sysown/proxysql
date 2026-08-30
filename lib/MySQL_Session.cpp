@@ -8907,6 +8907,12 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 #endif // STRESSTESTPOOL_MEASURE
 		}
 #endif // STRESSTEST_POOL
+#ifdef PROXYSQL31
+		HostgroupPoolStats *pool_stats = mc
+			? &mc->parent->myhgc->pool_stats
+			: MyHGM->get_hostgroup_pool_stats(mybe->hostgroup_id);
+		hostgroup_pool_wait.observe(pool_stats, thread->curtime, mc != nullptr);
+#endif
 		if (mc) {
 			mybe->server_myds->attach_connection(mc);
 			thread->status_variables.stvar[st_var_ConnPool_get_conn_success]++;
@@ -9245,6 +9251,9 @@ void MySQL_Session::LogQuery(MySQL_Data_Stream *myds, const unsigned int myerrno
 }
 
 void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds,const unsigned int myerrno, const char * errmsg) {
+#ifdef PROXYSQL31
+	hostgroup_pool_wait.finish(thread ? thread->curtime : monotonic_time());
+#endif
 	// check if multiplexing needs to be disabled
 	char *qdt = NULL;
 
