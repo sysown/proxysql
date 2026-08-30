@@ -455,7 +455,7 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	mcp_client_unit-t
 
 ifeq ($(PROXYSQL31),1)
-UNIT_TESTS += caching_sha2_rsa_unit-t
+UNIT_TESTS += caching_sha2_rsa_unit-t mysql_server_version_by_interface_unit-t
 endif
 
 ifeq ($(PROXYSQLED25519),1)
