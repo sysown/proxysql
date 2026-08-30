@@ -169,6 +169,23 @@ bool query_returns_version(MYSQL* mysql, const char* query, const char* expected
 	return error == EXIT_SUCCESS && rows.size() == 1 && rows.front().size() == 1 && actual == expected;
 }
 
+bool admin_variable_equals(
+	MYSQL* admin,
+	const char* table,
+	const char* variable_name,
+	const string& expected,
+	string& actual
+) {
+	const string query =
+		"SELECT variable_value FROM " + string { table } +
+		" WHERE variable_name='" + variable_name + "'";
+	auto [error, rows] = mysql_query_ext_rows(admin, query);
+	if (error == EXIT_SUCCESS && rows.size() == 1 && rows.front().size() == 1) {
+		actual = rows.front().front();
+	}
+	return error == EXIT_SUCCESS && rows.size() == 1 && rows.front().size() == 1 && actual == expected;
+}
+
 bool dollar_quote_error_matches(MYSQL* mysql, bool supports_dollar_quotes, string& actual) {
 	const int rc = mysql_query(mysql, "SELECT $$");
 	const int expected_code = supports_dollar_quotes ? ER_PARSE_ERROR : ER_BAD_FIELD_ERROR;
@@ -228,7 +245,7 @@ int main(int, char**) {
 	}
 
 	const bool use_ipv6 = ipv6_loopback_available();
-	plan(use_ipv6 ? 23 : 22);
+	plan(use_ipv6 ? 28 : 27);
 
 	const fs::path runtime_dir { fs::path { cl.workdir } / "mysql_server_version_by_interface" };
 	const fs::path config_file { runtime_dir / "proxysql.cfg" };
@@ -352,6 +369,42 @@ int main(int, char**) {
 			for (int i = 0; i < 3; ++i) ok(false, "Reloaded session assertion unavailable");
 		}
 
+		MYSQL_QUERY_T(admin, "SAVE MYSQL VARIABLES TO DISK");
+		string actual;
+		bool matches = admin_variable_equals(
+			admin, "disk.global_variables", "mysql-server_version_by_interface", reloaded_catalog, actual
+		);
+		ok(matches, "SAVE MYSQL VARIABLES persists the exact JSON catalog (received '%s')", actual.c_str());
+
+		MYSQL_QUERY_T(admin,
+			"UPDATE global_variables SET variable_value='{}' "
+			"WHERE variable_name='mysql-server_version_by_interface'");
+		MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+		MYSQL* cleared_ipv4_a = connect_frontend("127.0.0.1", FRONTEND_PORT);
+		matches = cleared_ipv4_a != nullptr &&
+			strcmp(mysql_get_server_info(cleared_ipv4_a), FALLBACK_VERSION) == 0;
+		ok(matches, "An empty runtime catalog makes new sessions use mysql-server_version fallback");
+		if (cleared_ipv4_a != nullptr) mysql_close(cleared_ipv4_a);
+
+		MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES FROM DISK");
+		MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+		actual.clear();
+		matches = admin_variable_equals(
+			admin, "global_variables", "mysql-server_version_by_interface", reloaded_catalog, actual
+		);
+		ok(matches, "LOAD MYSQL VARIABLES restores the exact JSON catalog (received '%s')", actual.c_str());
+		actual.clear();
+		matches = admin_variable_equals(
+			admin, "runtime_global_variables", "mysql-server_version_by_interface", reloaded_catalog, actual
+		);
+		ok(matches, "The restored JSON catalog is loaded to runtime unchanged (received '%s')", actual.c_str());
+
+		MYSQL* restored_ipv4_a = connect_frontend("127.0.0.1", FRONTEND_PORT);
+		matches = restored_ipv4_a != nullptr &&
+			strcmp(mysql_get_server_info(restored_ipv4_a), RELOADED_IPV4_A_VERSION) == 0;
+		ok(matches, "A new session uses the per-interface version restored from disk");
+		if (restored_ipv4_a != nullptr) mysql_close(restored_ipv4_a);
+
 		if (reloaded_ipv4_a != nullptr) mysql_close(reloaded_ipv4_a);
 		if (socket_client != nullptr) mysql_close(socket_client);
 		if (original_ipv4_a != nullptr) mysql_close(original_ipv4_a);
@@ -360,7 +413,7 @@ int main(int, char**) {
 		if (shutdown_rc != 0) diag("Shutdown query failed: %s", mysql_error(admin));
 		mysql_close(admin);
 	} else {
-		for (int i = 0; i < (use_ipv6 ? 21 : 20); ++i) {
+		for (int i = 0; i < (use_ipv6 ? 26 : 25); ++i) {
 			ok(false, "Handshake version unavailable because secondary ProxySQL did not start");
 		}
 	}
