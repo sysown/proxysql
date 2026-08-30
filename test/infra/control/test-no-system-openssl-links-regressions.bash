@@ -31,7 +31,11 @@ assert_rejected() {
 assert_rejected compact_assignment 'OPENSSL_LIBS=-lssl -lcrypto'
 assert_rejected forwarded_selector 'LDFLAGS=-Wl,-z,defs,-lssl'
 assert_rejected forwarded_filename 'LDFLAGS=-Wl,-l:libssl.a'
+assert_rejected forwarded_split_ssl 'LDFLAGS=-Wl,-l,ssl'
+assert_rejected forwarded_split_crypto 'LDFLAGS=-Wl,-l,crypto'
 assert_rejected linker_filename 'LDLIBS=-l:libcrypto.a'
 assert_rejected system_library_path 'OPENSSL_LIB=/usr/lib/x86_64-linux-gnu/libssl.so.3'
+assert_rejected darwin_system_library_path 'OPENSSL_LIB=/usr/lib/libssl.dylib'
+assert_rejected homebrew_system_library_path 'OPENSSL_LIB=/opt/homebrew/opt/openssl@3/lib/libcrypto.dylib'
 
 echo "System OpenSSL audit regression tests passed"
