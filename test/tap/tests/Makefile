@@ -184,7 +184,7 @@ DEBUG_OPT += -Wl,-rpath,$(TAP_LDIR) -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/lib
 debug: OPT := $(DEBUG_OPT)
 debug: tests
 
-test_cacert_load_and_verify_duration-t: OPT += -DPROXYSQL_VENDORED_OPENSSL_VERSION=\"$(OPENSSL_VERSION)\"
+test_cacert_load_and_verify_duration-t: private OPT += -DPROXYSQL_VENDORED_OPENSSL_VERSION=\"$(OPENSSL_VERSION)\"
 
 tests: CUSTOMARGS += $(OPT)
 tests: tests-cpp \

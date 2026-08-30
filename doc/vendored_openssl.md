@@ -8,6 +8,21 @@ design rather than an incidental dependency update.
 This document is the supported maintenance procedure for
 [issue #6115](https://github.com/sysown/proxysql/issues/6115).
 
+## Build selection and version checks
+
+Host- or environment-selected `OPENSSL_ROOT_DIR` is forbidden: do not export
+it or use it to select a system OpenSSL installation. CMake dependency builds
+must instead receive the fixed internal hint `OPENSSL_ROOT_DIR=$(SSL_PATH)`,
+which points only at ProxySQL's extracted vendored source tree. The CMake hint
+is required alongside the vendored include and exact static-library paths; it
+is not an operator override.
+
+The focused version test verifies three separate contracts for this pin:
+
+1. the OpenSSL header string is exactly `3.5.7`;
+2. the runtime version string has the prefix `OpenSSL 3.5.7`; and
+3. the runtime numeric version encodes major/minor/patch `3/5/7`.
+
 ## Hydrate and verify a checkout
 
 Install Git LFS before cloning, or install it and hydrate an existing checkout:

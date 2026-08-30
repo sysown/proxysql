@@ -28,6 +28,23 @@ using std::string;
 
 CommandLine cl;
 
+static int fail_and_skip_performance_assertion(MYSQL* proxysql_admin, const char* failure) {
+	ok(0, "%s", failure);
+	skip(1, "certificate-duration performance assertion not run");
+	if (proxysql_admin) {
+		mysql_close(proxysql_admin);
+	}
+	return exit_status();
+}
+
+static int skip_performance_assertion(MYSQL* proxysql_admin, const char* reason) {
+	skip(1, "%s", reason);
+	if (proxysql_admin) {
+		mysql_close(proxysql_admin);
+	}
+	return exit_status();
+}
+
 int main() {
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
@@ -49,13 +66,18 @@ int main() {
 
 	// Initialize connection
 	if (!proxysql_admin) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
-		return -1;
+		diag("Failed to initialize the ProxySQL Admin connection");
+		return fail_and_skip_performance_assertion(
+			proxysql_admin, "initialized a ProxySQL Admin connection"
+		);
 	}
 
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
-		return -1;
+		const char* const error { mysql_error(proxysql_admin) };
+		diag("Failed to connect to ProxySQL Admin: %s", error);
+		return fail_and_skip_performance_assertion(
+			proxysql_admin, "connected to ProxySQL Admin"
+		);
 	}
 
 	const string select_query {
@@ -64,7 +86,9 @@ int main() {
 	if (ssl_ver_ext.err) {
 		const string err { get_ext_val_err(proxysql_admin, ssl_ver_ext) };
 		diag("Failed query   query:`%s`, err:`%s`", select_query.c_str(), err.c_str());
-		return EXIT_FAILURE;
+		return fail_and_skip_performance_assertion(
+			proxysql_admin, "queried OpenSSL_Version_Num from ProxySQL stats"
+		);
 	}
 	const string select_version_query {
 		"SELECT variable_value FROM stats.stats_mysql_global WHERE variable_name='OpenSSL_Version'"
@@ -78,7 +102,9 @@ int main() {
 			"Failed query   query:`%s`, err:`%s`",
 			select_version_query.c_str(), err.c_str()
 		);
-		return EXIT_FAILURE;
+		return fail_and_skip_performance_assertion(
+			proxysql_admin, "queried OpenSSL_Version from ProxySQL stats"
+		);
 	}
 
 	const string expected_version_prefix {
@@ -93,8 +119,10 @@ int main() {
 		expected_version_prefix.c_str(), ssl_version_ext.val.c_str()
 	);
 	if (!version_matches) {
-		mysql_close(proxysql_admin);
-		return exit_status();
+		return skip_performance_assertion(
+			proxysql_admin,
+			"certificate-duration performance assertion skipped after runtime version mismatch"
+		);
 	}
 
 	// OPENSSL_VERSION_NUMBER: 0xMNN00PP0L
@@ -133,15 +161,27 @@ int main() {
 	const std::string& ca_full_path = std::string(p_infra_datadir) + "/cert-bundle-rnd.pem";
 	diag("Setting mysql-ssl_p2s_ca to '%s'", ca_full_path.c_str());
 	const std::string& set_ssl_p2s_ca = "SET mysql-ssl_p2s_ca='" + ca_full_path + "'";
-	MYSQL_QUERY(proxysql_admin, set_ssl_p2s_ca.c_str());
-	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+	if (mysql_query(proxysql_admin, set_ssl_p2s_ca.c_str())) {
+		const char* const error { mysql_error(proxysql_admin) };
+		diag("Failed query   query:`%s`, err:`%s`", set_ssl_p2s_ca.c_str(), error);
+		return fail_and_skip_performance_assertion(
+			proxysql_admin, "set mysql-ssl_p2s_ca before the performance assertion"
+		);
+	}
+	if (mysql_query(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME")) {
+		const char* const error { mysql_error(proxysql_admin) };
+		diag("Failed to load MySQL variables to runtime: %s", error);
+		return fail_and_skip_performance_assertion(
+			proxysql_admin, "loaded MySQL variables to runtime before the performance assertion"
+		);
+	}
 	diag("Running ProxySQL Test...");
 	if (mysql_query(proxysql_admin, "PROXYSQLTEST 54 1000")) {
 		const std::string& error_msg = mysql_error(proxysql_admin);
 		if (error_msg.find("Invalid test") != std::string::npos) {
 			ok(true, "ProxySQL is not compiled in Debug mode. Skipping test");
 		} else {
-			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, error_msg.c_str());
+			ok(false, "PROXYSQLTEST 54 1000 failed: %s", error_msg.c_str());
 		}
 	} else {
 		const std::string& msg = mysql_info(proxysql_admin);
@@ -151,6 +191,8 @@ int main() {
 			end_pos != std::string::npos) {
 			uint64_t time = std::stoull(msg.substr(start_pos + 5, end_pos - (start_pos + 5)));
 			ok(time < EXP_TIME, "Total duration is '%lu ms' should be less than %d Seconds", time, EXP_TIME/1000);
+		} else {
+			ok(false, "PROXYSQLTEST 54 1000 response did not report a duration: %s", msg.c_str());
 		}
 	}
 	mysql_close(proxysql_admin);
