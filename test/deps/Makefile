@@ -27,13 +27,19 @@ all: mariadb_client mysql_client mysql8_client
 
 ### test deps targets
 
-.PHONY: force_openssl_build
-force_openssl_build:
-
-$(OPENSSL_BUILD_STAMP_PATH): force_openssl_build
+.PHONY: ensure_vendored_openssl
+ensure_vendored_openssl:
 	$(MAKE) -C $(DEPS_PATH) libssl
 
-mariadb-connector-c/mariadb-connector-c/libmariadb/libmariadbclient.a: | $(OPENSSL_BUILD_STAMP_PATH)
+$(OPENSSL_BUILD_STAMP_PATH): | ensure_vendored_openssl
+	@test -f $@
+
+# Keep the delegation as the last declared prerequisite rule: GNU Make then
+# completes it before comparing the normal stamp prerequisite with the archive.
+# This observes a stamp advanced by the recursive build without treating a
+# no-op delegation as a reason to rebuild the connector.
+mariadb-connector-c/mariadb-connector-c/libmariadb/libmariadbclient.a: $(OPENSSL_BUILD_STAMP_PATH)
+mariadb-connector-c/mariadb-connector-c/libmariadb/libmariadbclient.a: | ensure_vendored_openssl
 	cd mariadb-connector-c && rm -rf mariadb-connector-c-*/ || true
 	cd mariadb-connector-c && tar -zxf mariadb-connector-c-*.tar.gz
 	cd mariadb-connector-c/mariadb-connector-c && patch -p0 < ../CMakeLists.txt.patch
@@ -67,7 +73,8 @@ endef
 mysql-connector-c/mysql-boost-5.7.44.tar.gz:
 	$(call fetch_tarball,mysql-connector-c,mysql-boost-5.7.44.tar.gz,https://cdn.mysql.com//Downloads/MySQL-5.7/mysql-boost-5.7.44.tar.gz)
 
-mysql-connector-c/mysql-connector-c/libmysql/libmysqlclient.a: mysql-connector-c/mysql-boost-5.7.44.tar.gz | $(OPENSSL_BUILD_STAMP_PATH)
+mysql-connector-c/mysql-connector-c/libmysql/libmysqlclient.a: mysql-connector-c/mysql-boost-5.7.44.tar.gz $(OPENSSL_BUILD_STAMP_PATH)
+mysql-connector-c/mysql-connector-c/libmysql/libmysqlclient.a: | ensure_vendored_openssl
 	cd mysql-connector-c && rm -rf mysql-*/ || true
 	cd mysql-connector-c && tar -zxf mysql-boost-5.7.*.tar.gz
 ifeq ($(UNAME_S),Darwin)
@@ -102,7 +109,8 @@ mysql_client: mysql-connector-c/mysql-connector-c/libmysql/libmysqlclient.a
 mysql-connector-c-8.4.0/mysql-8.4.0.tar.gz:
 	$(call fetch_tarball,mysql-connector-c-8.4.0,mysql-8.4.0.tar.gz,https://cdn.mysql.com//Downloads/MySQL-8.4/mysql-8.4.0.tar.gz)
 
-mysql-connector-c-8.4.0/mysql-connector-c/libmysql/libmysqlclient.a: mysql-connector-c-8.4.0/mysql-8.4.0.tar.gz | $(OPENSSL_BUILD_STAMP_PATH)
+mysql-connector-c-8.4.0/mysql-connector-c/libmysql/libmysqlclient.a: mysql-connector-c-8.4.0/mysql-8.4.0.tar.gz $(OPENSSL_BUILD_STAMP_PATH)
+mysql-connector-c-8.4.0/mysql-connector-c/libmysql/libmysqlclient.a: | ensure_vendored_openssl
 	cd mysql-connector-c-8.4.0 && rm -rf mysql-*/ || true
 	cd mysql-connector-c-8.4.0 && tar -zxf mysql-*.tar.gz
 ifeq ($(UNAME_S),Darwin)

@@ -127,12 +127,57 @@ fi
 [[ "${clean_commands}" == *'cd libssl && rm -rf openssl-3.5.7'* ]] || \
 	fail "cleanall does not remove the extracted OpenSSL build tree"
 
-openssl_bridge_commands=$(make -C "${repo_root}/test/deps" --no-print-directory \
-	-n mariadb_client MAKE=/bin/true -W "${expected_path}/.proxysql-build-complete" 2>&1)
-[[ "${openssl_bridge_commands}" == *"-C ${repo_root}/deps libssl"* ]] || \
-	fail "test/deps does not reevaluate the incremental OpenSSL target"
+fixture_root="${tmp_dir}/connector-stamp-fixture"
+fixture_test_deps="${fixture_root}/test/deps"
+fixture_openssl="${fixture_root}/deps/libssl/openssl"
+fixture_stamp="${fixture_openssl}/.proxysql-build-complete"
+fixture_connector="${fixture_test_deps}/mariadb-connector-c/mariadb-connector-c/libmariadb/libmariadbclient.a"
+mkdir -p "${fixture_root}/src" "${fixture_root}/include" \
+	"${fixture_openssl}" "$(dirname -- "${fixture_connector}")"
+: > "${fixture_root}/src/proxysql_global.cpp"
+: > "${fixture_root}/include/makefiles_vars.mk"
+cat > "${fixture_root}/include/makefiles_paths.mk" <<EOF
+SSL_PATH := ${fixture_openssl}
+SSL_IDIR := ${fixture_openssl}/include
+LIB_SSL_PATH := ${fixture_openssl}/libssl.a
+LIB_CRYPTO_PATH := ${fixture_openssl}/libcrypto.a
+EOF
+noop_make="${fixture_root}/noop-make"
+advanced_make="${fixture_root}/advanced-make"
+cat > "${noop_make}" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+cat > "${advanced_make}" <<EOF
+#!/usr/bin/env bash
+if [[ "\$*" == *'-C ${fixture_root}/deps libssl'* ]]; then
+	touch ${fixture_stamp}
+fi
+exit 0
+EOF
+chmod +x "${noop_make}" "${advanced_make}"
+: > "${fixture_stamp}"
+: > "${fixture_connector}"
+python3 - "${fixture_stamp}" "${fixture_connector}" <<'PY'
+import os
+import sys
 
-[[ "${openssl_bridge_commands}" != *'cd mariadb-connector-c && rm -rf mariadb-connector-c-'* ]] || \
-	fail "a refreshed OpenSSL stamp forces the MariaDB connector recipe to rebuild"
+os.utime(sys.argv[1], (1_700_000_000, 1_700_000_000))
+os.utime(sys.argv[2], (1_700_000_100, 1_700_000_100))
+PY
+
+no_op_bridge_commands=$(make -C "${fixture_test_deps}" --no-print-directory \
+	-f "${repo_root}/test/deps/Makefile" -n mariadb_client \
+	MAKE="${noop_make}" 2>&1)
+[[ "${no_op_bridge_commands}" == *"-C ${fixture_root}/deps libssl"* ]] || \
+	fail "test/deps does not reevaluate the incremental OpenSSL target"
+[[ "${no_op_bridge_commands}" != *'cd mariadb-connector-c && rm -rf mariadb-connector-c-'* ]] || \
+	fail "a no-op OpenSSL delegation rebuilds an up-to-date connector"
+
+advanced_bridge_commands=$(make -C "${fixture_test_deps}" --no-print-directory \
+	-f "${repo_root}/test/deps/Makefile" -n mariadb_client \
+	MAKE="${advanced_make}" 2>&1)
+[[ "${advanced_bridge_commands}" == *'cd mariadb-connector-c && rm -rf mariadb-connector-c-'* ]] || \
+	fail "an advanced OpenSSL stamp does not rebuild the stale connector"
 
 echo "Vendored OpenSSL build contract tests passed"

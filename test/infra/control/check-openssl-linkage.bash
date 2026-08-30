@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(CDPATH='' cd -- "${script_dir}/../../.." && pwd)
+ssl_archive="${repo_root}/deps/libssl/openssl/libssl.a"
+crypto_archive="${repo_root}/deps/libssl/openssl/libcrypto.a"
+
 if (( $# < 1 )); then
 	echo "Usage: $0 EXECUTABLE [PLUGIN ...]" >&2
 	exit 2
@@ -20,6 +25,10 @@ fail() {
 
 for binary in "${executable}" "${plugins[@]}"; do
 	[[ -f "${binary}" ]] || fail "binary does not exist: ${binary}"
+done
+for archive in "${ssl_archive}" "${crypto_archive}"; do
+	[[ -f "${archive}" ]] || \
+		fail "required vendored OpenSSL ownership archive is missing: ${archive}"
 done
 
 case ${platform} in
@@ -91,6 +100,30 @@ all_defined_symbols() {
 	esac
 }
 
+archive_defined_symbols() {
+	case ${platform} in
+		Linux|FreeBSD)
+			readelf -Ws "$@" 2>/dev/null | awk '
+				NF >= 8 && $7 != "UND" && $4 != "FILE" && $4 != "SECTION" &&
+					($5 == "GLOBAL" || $5 == "WEAK" || $5 == "UNIQUE") {
+					name = $8
+					sub(/@.*/, "", name)
+					print name
+				}
+			' | sort -u
+			;;
+		Darwin)
+			nm -gU "$@" 2>/dev/null | awk '
+				NF >= 2 && $(NF - 1) ~ /^[A-Za-z]$/ {
+					name = $NF
+					sub(/^_/, "", name)
+					print name
+				}
+			' | sort -u
+			;;
+	esac
+}
+
 undefined_symbols() {
 	local binary=$1
 	case ${platform} in
@@ -125,6 +158,9 @@ done
 
 executable_exports="${tmp_dir}/executable.exports"
 defined_symbols "${executable}" > "${executable_exports}"
+openssl_definitions="${tmp_dir}/openssl.definitions"
+archive_defined_symbols "${ssl_archive}" "${crypto_archive}" > \
+	"${openssl_definitions}"
 
 sentinels=(OpenSSL_version SSL_CTX_new EVP_MD_fetch OSSL_PROVIDER_load)
 for plugin in "${plugins[@]}"; do
@@ -136,6 +172,23 @@ for plugin in "${plugins[@]}"; do
 			fail "plugin ${plugin} defines OpenSSL core sentinel ${sentinel}"
 		fi
 	done
+
+	embedded_openssl=$(awk '
+		NR == FNR {
+			if ($0 != "") denied[$0] = 1
+			next
+		}
+		$0 in denied { print; exit }
+	' "${openssl_definitions}" "${plugin_definitions}")
+	if [[ -n "${embedded_openssl}" ]]; then
+		fail "plugin ${plugin} defines vendored OpenSSL symbol ${embedded_openssl}"
+	fi
+
+	embedded_curl=$(grep -E '^curl_[A-Za-z0-9_]+$' \
+		"${plugin_definitions}" | head -n 1 || true)
+	if [[ -n "${embedded_curl}" ]]; then
+		fail "plugin ${plugin} defines curl API ${embedded_curl}"
+	fi
 
 	while IFS= read -r symbol; do
 		[[ -n "${symbol}" ]] || continue

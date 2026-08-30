@@ -46,6 +46,14 @@ const char *fixture_local_openssl_version(int type) {
 }
 EOF
 
+cat > "${tmp_dir}/partial_embedded_plugin.c" <<'EOF'
+void *BN_new(void) { return (void *)1; }
+EOF
+
+cat > "${tmp_dir}/curl_embedded_plugin.c" <<'EOF'
+void *curl_easy_init(void) { return (void *)1; }
+EOF
+
 cat > "${tmp_dir}/curl_importing_plugin.c" <<'EOF'
 extern void *curl_easy_init(void);
 void *plugin_curl_handle(void) { return curl_easy_init(); }
@@ -79,6 +87,10 @@ case $(uname -s) in
 			"${tmp_dir}/embedded_plugin.c"
 		cc -dynamiclib -o "${tmp_dir}/local-embedded-plugin.dylib" \
 			"${tmp_dir}/local_embedded_plugin.c"
+		cc -dynamiclib -o "${tmp_dir}/partial-embedded-plugin.dylib" \
+			"${tmp_dir}/partial_embedded_plugin.c"
+		cc -dynamiclib -o "${tmp_dir}/curl-embedded-plugin.dylib" \
+			"${tmp_dir}/curl_embedded_plugin.c"
 		cc -o "${tmp_dir}/plain-executable" "${tmp_dir}/plain_executable.c"
 		cc -o "${tmp_dir}/exporting-executable" \
 			"${tmp_dir}/exporting_executable.c" -Wl,-export_dynamic
@@ -102,6 +114,10 @@ case $(uname -s) in
 			"${tmp_dir}/embedded_plugin.c"
 		cc -shared -fPIC -o "${tmp_dir}/local-embedded-plugin.so" \
 			"${tmp_dir}/local_embedded_plugin.c"
+		cc -shared -fPIC -o "${tmp_dir}/partial-embedded-plugin.so" \
+			"${tmp_dir}/partial_embedded_plugin.c"
+		cc -shared -fPIC -o "${tmp_dir}/curl-embedded-plugin.so" \
+			"${tmp_dir}/curl_embedded_plugin.c"
 		cc -o "${tmp_dir}/plain-executable" "${tmp_dir}/plain_executable.c"
 		cc -o "${tmp_dir}/exporting-executable" \
 			"${tmp_dir}/exporting_executable.c" -Wl,--export-dynamic
@@ -153,6 +169,10 @@ expect_rejected 'defines OpenSSL core sentinel OpenSSL_version' \
 	"${tmp_dir}/plain-executable" "${tmp_dir}/embedded-plugin.${plugin_suffix}"
 expect_rejected 'defines OpenSSL core sentinel OpenSSL_version' \
 	"${tmp_dir}/plain-executable" "${tmp_dir}/local-embedded-plugin.${plugin_suffix}"
+expect_rejected 'defines vendored OpenSSL symbol BN_new' \
+	"${tmp_dir}/plain-executable" "${tmp_dir}/partial-embedded-plugin.${plugin_suffix}"
+expect_rejected 'defines curl API curl_easy_init' \
+	"${tmp_dir}/plain-executable" "${tmp_dir}/curl-embedded-plugin.${plugin_suffix}"
 expect_rejected 'imports SSL_CTX_new but the executable does not export it' \
 	"${tmp_dir}/plain-executable" "${tmp_dir}/importing-plugin.${plugin_suffix}"
 expect_rejected 'imports curl_easy_init but the executable does not export it' \
@@ -164,6 +184,16 @@ pass_output=$("${checker}" \
 	fail "linkage checker rejected the valid ownership fixture"
 [[ "${pass_output}" == *'OpenSSL linkage check passed'* ]] || \
 	fail "valid fixture did not report success; got: ${pass_output}"
+
+missing_root="${tmp_dir}/missing-archives"
+missing_checker="${missing_root}/test/infra/control/check-openssl-linkage.bash"
+mkdir -p "$(dirname -- "${missing_checker}")"
+cp "${checker}" "${missing_checker}"
+if missing_output=$("${missing_checker}" "${tmp_dir}/plain-executable" 2>&1); then
+	fail "linkage checker accepted missing default vendored OpenSSL archives"
+fi
+[[ "${missing_output}" == *'required vendored OpenSSL ownership archive is missing:'* ]] || \
+	fail "missing default archive rejection was unclear; got: ${missing_output}"
 
 if [[ $(uname -s) == Linux ]]; then
 	cat > "${tmp_dir}/host_curl.c" <<'EOF'
