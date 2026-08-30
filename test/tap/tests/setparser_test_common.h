@@ -6,7 +6,7 @@
 #include "command_line.h"
 #include "tap.h"
 
-#include <stdlib.h>
+#include <cstdlib>
 
 #include "re2/re2.h"
 #include "re2/regexp.h"
@@ -15,6 +15,7 @@
 #include <vector>
 #include <map>
 #include <algorithm>
+#include <iterator>
 #include <iostream>
 
 #include "openssl/ssl.h"
@@ -28,15 +29,19 @@ using namespace std;
 MySQL_LDAP_Authentication *GloMyLdapAuth = nullptr;
 // ******************************************************************************************
 
-[[maybe_unused]] static void check_failed(const char* expression, const char* file, int line) {
-	std::cerr << file << ':' << line << ": check failed: " << expression << std::endl;
+[[noreturn]] static void check_failed(const char* description, const char* file, int line) {
+	std::cerr << file << ':' << line << ": check failed: " << description << std::endl;
 	std::abort();
 }
 
-#define CHECK(expression) \
-	do { if (!(expression)) check_failed(#expression, __FILE__, __LINE__); } while (0)
-#define CHECK_EQ(left, right) CHECK((left) == (right))
-#define arraysize(array) (sizeof(array) / sizeof((array)[0]))
+static void check(bool expression, const char* description, const char* file, int line) {
+	if (!expression) check_failed(description, file, line);
+}
+
+template <typename Left, typename Right>
+static void check_equal(const Left& left, const Right& right, const char* file, int line) {
+	check(left == right, "values are equal", file, line);
+}
 
 bool iequals(const std::string& a, const std::string& b)
 {
