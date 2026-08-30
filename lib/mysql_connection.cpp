@@ -2237,6 +2237,13 @@ int MySQL_Connection::async_connect(short event) {
 			compute_unknown_transaction_status();
 			async_state_machine=ASYNC_IDLE;
 			myds->wait_until=0;
+			// The socket is up on this path too, so the lifetime clock has to start here as
+			// well; otherwise socket_creation_time stays 0 and LifetimeExpired() silently
+			// never fires for connections that complete inside handler().
+			// NOTE: creation_time is deliberately left alone here. It is 0 on this path in
+			// current ProxySQL too, and changing that would alter connection_max_age_ms
+			// behaviour independently of this feature.
+			socket_creation_time = monotonic_time();
 			return 0;
 			break;
 		case ASYNC_CONNECT_FAILED:

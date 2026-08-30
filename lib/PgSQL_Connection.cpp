@@ -1310,6 +1310,8 @@ int PgSQL_Connection::async_connect(short event) {
 		compute_unknown_transaction_status();
 		async_state_machine = ASYNC_IDLE;
 		myds->wait_until = 0;
+		// See the MySQL counterpart: the lifetime clock must start on this path too.
+		socket_creation_time = monotonic_time();
 		return 0;
 	case ASYNC_CONNECT_FAILED:
 		return -1;
