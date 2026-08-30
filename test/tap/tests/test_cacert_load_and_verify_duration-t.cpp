@@ -19,6 +19,7 @@
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
+#include "cacert_duration_parser.h"
 
 using std::string;
 
@@ -39,6 +40,14 @@ static int fail_and_skip_performance_assertion(MYSQL* proxysql_admin, const char
 
 static int skip_performance_assertion(MYSQL* proxysql_admin, const char* reason) {
 	skip(1, "%s", reason);
+	if (proxysql_admin) {
+		mysql_close(proxysql_admin);
+	}
+	return exit_status();
+}
+
+static int fail_performance_assertion(MYSQL* proxysql_admin, const char* failure) {
+	ok(0, "%s", failure);
 	if (proxysql_admin) {
 		mysql_close(proxysql_admin);
 	}
@@ -164,14 +173,14 @@ int main() {
 	if (mysql_query(proxysql_admin, set_ssl_p2s_ca.c_str())) {
 		const char* const error { mysql_error(proxysql_admin) };
 		diag("Failed query   query:`%s`, err:`%s`", set_ssl_p2s_ca.c_str(), error);
-		return fail_and_skip_performance_assertion(
+		return fail_performance_assertion(
 			proxysql_admin, "set mysql-ssl_p2s_ca before the performance assertion"
 		);
 	}
 	if (mysql_query(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME")) {
 		const char* const error { mysql_error(proxysql_admin) };
 		diag("Failed to load MySQL variables to runtime: %s", error);
-		return fail_and_skip_performance_assertion(
+		return fail_performance_assertion(
 			proxysql_admin, "loaded MySQL variables to runtime before the performance assertion"
 		);
 	}
@@ -185,15 +194,15 @@ int main() {
 		}
 	} else {
 		const std::string& msg = mysql_info(proxysql_admin);
-		const std::size_t start_pos = msg.find("Took ");
-		const std::size_t end_pos = msg.find("ms ");
-		if (start_pos != std::string::npos &&
-			end_pos != std::string::npos) {
-			uint64_t time = std::stoull(msg.substr(start_pos + 5, end_pos - (start_pos + 5)));
-			ok(time < EXP_TIME, "Total duration is '%lu ms' should be less than %d Seconds", time, EXP_TIME/1000);
-		} else {
-			ok(false, "PROXYSQLTEST 54 1000 response did not report a duration: %s", msg.c_str());
+		const auto duration { parse_proxysqltest_duration_ms(msg) };
+		if (!duration) {
+			diag("Invalid PROXYSQLTEST 54 1000 response: %s", msg.c_str());
+			return fail_performance_assertion(
+				proxysql_admin,
+				"PROXYSQLTEST 54 1000 response did not report a valid duration"
+			);
 		}
+		ok(*duration < EXP_TIME, "Total duration is '%lu ms' should be less than %d Seconds", *duration, EXP_TIME/1000);
 	}
 	mysql_close(proxysql_admin);
 	return exit_status();
