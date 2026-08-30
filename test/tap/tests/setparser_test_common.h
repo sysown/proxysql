@@ -28,7 +28,7 @@ using namespace std;
 MySQL_LDAP_Authentication *GloMyLdapAuth = nullptr;
 // ******************************************************************************************
 
-static void check_failed(const char* expression, const char* file, int line) {
+[[maybe_unused]] static void check_failed(const char* expression, const char* file, int line) {
 	std::cerr << file << ':' << line << ": check failed: " << expression << std::endl;
 	std::abort();
 }
