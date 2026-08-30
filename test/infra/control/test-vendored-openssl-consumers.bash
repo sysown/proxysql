@@ -65,6 +65,14 @@ assert_contains() {
 		fail "${context} is missing '${expected}'"
 }
 
+assert_not_contains() {
+	local output=$1
+	local forbidden=$2
+	local context=$3
+	[[ "${output}" != *"${forbidden}"* ]] || \
+		fail "${context} contains forbidden '${forbidden}'"
+}
+
 assert_in_order() {
 	local output=$1
 	local context=$2
@@ -112,7 +120,7 @@ assert_no_system_openssl() {
 	fi
 }
 
-for platform in Linux Darwin; do
+for platform in Linux Darwin FreeBSD; do
 	curl_output=$(dry_run "${repo_root}/deps" curl "${platform}")
 	assert_vendored_first "${curl_output}" './configure' "curl/${platform}"
 	assert_contains "${curl_output}" "CPPFLAGS=-I${openssl_root}/include" "curl/${platform}"
@@ -120,8 +128,12 @@ for platform in Linux Darwin; do
 	assert_contains "${curl_output}" "LIBS=${ssl_archive} ${crypto_archive}" "curl/${platform}"
 	assert_contains "${curl_output}" "--with-openssl=${openssl_root}" "curl/${platform}"
 	assert_contains "${curl_output}" '--disable-symbol-hiding' "curl/${platform}"
-	assert_contains "${curl_output}" "s|${ssl_archive}||g" "curl/${platform}"
-	assert_contains "${curl_output}" "s|${crypto_archive}||g" "curl/${platform}"
+	assert_contains "${curl_output}" 'BLANK_AT_MAKETIME=' "curl/${platform}"
+	assert_contains "${curl_output}" 'LIBCURL_PC_LIBS_PRIVATE=' "curl/${platform}"
+	assert_contains "${curl_output}" \
+		"filter-out ${ssl_archive} ${crypto_archive}" "curl/${platform}"
+	assert_contains "${curl_output}" "\$(LIBCURL_PC_LIBS)" "curl/${platform}"
+	assert_not_contains "${curl_output}" 'lib/Makefile' "curl/${platform}"
 	assert_contains "${curl_output}" '--disable-shared' "curl/${platform}"
 	assert_contains "${curl_output}" '--enable-static' "curl/${platform}"
 	assert_no_system_openssl "${curl_output}" "curl/${platform}"
