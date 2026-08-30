@@ -294,9 +294,9 @@ jobs:
     # deps/libssl/ has one); run whichever exist. The glob is guarded so a
     # branch with no verifier scripts (or no LFS files at all) still
     # succeeds. `git lfs pull` itself fails when the branch has no LFS
-    # attributes, so enumerate tracked paths first; `for` over a non-matching
-    # glob iterates the literal, unexpanded pattern once, so the `[ -x ... ]`
-    # test is what actually skips it.
+    # attributes, so enumerate tracked paths first; enable nullglob so a
+    # missing verifier expands to no loop iterations rather than a literal
+    # non-executable pattern that would fail under `set -e`.
     - name: Hydrate vendored source archives
       if: ${{ inputs.trusted && steps.cache-check.outputs.cache-hit != 'true' }}
       working-directory: proxysql
@@ -306,8 +306,9 @@ jobs:
         if [ -n "${lfs_files}" ]; then
           git lfs pull --include="" --exclude=""
         fi
+        shopt -s nullglob
         for v in deps/*/verify-source.bash; do
-          [ -x "$v" ] && "$v"
+          "$v"
         done
 
 #    - name: Patch TAP-tests
