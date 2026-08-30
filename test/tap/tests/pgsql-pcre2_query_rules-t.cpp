@@ -70,8 +70,6 @@ static bool run_rewrite_case(PGconn* admin, PGconn* proxy, const char* insert_ru
 	const bool setup_ok =
 		run_admin_checked(admin, "DELETE FROM pgsql_query_rules WHERE rule_id BETWEEN 61190 AND 61194") &&
 		run_admin_checked(admin, insert_rule) &&
-		run_admin_checked(admin, "SAVE PGSQL QUERY RULES TO DISK") &&
-		run_admin_checked(admin, "LOAD PGSQL QUERY RULES FROM DISK") &&
 		run_admin_checked(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
 	const bool query_ok = setup_ok && get_single_value(proxy, query, value);
 	ok(query_ok && value == expected, "%s (expected '%s', got '%s')", label, expected,
@@ -84,8 +82,6 @@ static void run_negated_error_case(PGconn* admin, PGconn* proxy, const char* ins
 	const bool setup_ok =
 		run_admin_checked(admin, "DELETE FROM pgsql_query_rules WHERE rule_id BETWEEN 61190 AND 61194") &&
 		run_admin_checked(admin, insert_rule) &&
-		run_admin_checked(admin, "SAVE PGSQL QUERY RULES TO DISK") &&
-		run_admin_checked(admin, "LOAD PGSQL QUERY RULES FROM DISK") &&
 		run_admin_checked(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
 	const bool matching_ok = setup_ok && get_single_value(proxy, "SELECT 8", value);
 	ok(matching_ok && value == "8",
@@ -160,7 +156,6 @@ int main(int, char**) {
 
 	bool teardown_ok = true;
 	teardown_ok &= run_admin_checked(admin.get(), "DELETE FROM pgsql_query_rules WHERE rule_id BETWEEN 61190 AND 61194");
-	teardown_ok &= run_admin_checked(admin.get(), "SAVE PGSQL QUERY RULES TO DISK");
 	teardown_ok &= run_admin_checked(admin.get(), "LOAD PGSQL QUERY RULES TO RUNTIME");
 	if (!original_regex.empty()) {
 		teardown_ok &= run_admin_checked(admin.get(), ("SET pgsql-query_processor_regex=" + original_regex).c_str());
