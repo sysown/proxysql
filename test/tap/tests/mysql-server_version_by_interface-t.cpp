@@ -20,6 +20,7 @@
 #include <unistd.h>
 
 #include "command_line.h"
+#include "mysqld_error.h"
 #include "proxysql_utils.h"
 #include "tap.h"
 #include "utils.h"
@@ -36,10 +37,11 @@ constexpr int FALLBACK_PORT = 36085;
 constexpr int IPV6_PORT = 36086;
 constexpr int WAIT_TIMEOUT_S = 25;
 constexpr const char* FALLBACK_VERSION = "8.0.11-fallback";
-constexpr const char* IPV4_A_VERSION = "8.0.30-interface-a";
+constexpr const char* IPV4_A_VERSION = "8.1.0-interface-a";
 constexpr const char* IPV4_B_VERSION = "5.7.44-interface-b";
-constexpr const char* SOCKET_VERSION = "8.4.1-interface-socket";
+constexpr const char* SOCKET_VERSION = "8.1.4-interface-socket";
 constexpr const char* IPV6_VERSION = "8.1.0-interface-v6";
+constexpr const char* RELOADED_IPV4_A_VERSION = "5.7.99-reloaded";
 
 bool ipv6_loopback_available() {
 	const int fd = socket(AF_INET6, SOCK_STREAM, 0);
@@ -63,6 +65,28 @@ bool read_exact(int fd, void* buffer, size_t length) {
 		length -= static_cast<size_t>(count);
 	}
 	return true;
+}
+
+string make_catalog(const fs::path& mysql_socket, bool use_ipv6, const char* ipv4_a_version) {
+	string catalog =
+		"{\"127.0.0.1:36084\":\"" + string { ipv4_a_version } +
+		"\",\"127.0.0.2:36084\":\"" + IPV4_B_VERSION +
+		"\",\"" + mysql_socket.string() + "\":\"" + SOCKET_VERSION +
+		"\",\"192.0.2.10:49999\":\"9.9.9-unused\"";
+	if (use_ipv6) {
+		catalog += ",\"[::1]:36086\":\"" + string { IPV6_VERSION } + "\"";
+	}
+	return catalog + "}";
+}
+
+string escape_libconfig_string(const string& value) {
+	string escaped;
+	escaped.reserve(value.size() * 2);
+	for (const char ch : value) {
+		if (ch == '\\' || ch == '"') escaped += '\\';
+		escaped += ch;
+	}
+	return escaped;
 }
 
 string read_handshake_version(int fd) {
@@ -126,6 +150,33 @@ string unix_handshake_version(const fs::path& socket_path) {
 	return version;
 }
 
+MYSQL* connect_frontend(const char* host, int port, const char* socket_path = nullptr) {
+	MYSQL* mysql = mysql_init(nullptr);
+	if (mysql == nullptr) return nullptr;
+	if (mysql_real_connect(mysql, host, "tapuser", "tappass", nullptr, port, socket_path, 0) == nullptr) {
+		diag("Frontend connection failed: %s", mysql_error(mysql));
+		mysql_close(mysql);
+		return nullptr;
+	}
+	return mysql;
+}
+
+bool query_returns_version(MYSQL* mysql, const char* query, const char* expected, string& actual) {
+	auto [error, rows] = mysql_query_ext_rows(mysql, query);
+	if (error == EXIT_SUCCESS && rows.size() == 1 && !rows.front().empty()) {
+		actual = rows.front().front();
+	}
+	return error == EXIT_SUCCESS && rows.size() == 1 && rows.front().size() == 1 && actual == expected;
+}
+
+bool dollar_quote_error_matches(MYSQL* mysql, bool supports_dollar_quotes, string& actual) {
+	const int rc = mysql_query(mysql, "SELECT $$");
+	const int expected_code = supports_dollar_quotes ? ER_PARSE_ERROR : ER_BAD_FIELD_ERROR;
+	const int actual_code = mysql_errno(mysql);
+	actual = std::to_string(actual_code) + " (" + mysql_error(mysql) + ")";
+	return rc != 0 && actual_code == expected_code;
+}
+
 int prepare_runtime(
 	const CommandLine& cl,
 	const fs::path& runtime_dir,
@@ -143,15 +194,7 @@ int prepare_runtime(
 			"127.0.0.1:36084;127.0.0.2:36084;127.0.0.1:36085;" + mysql_socket.string();
 		if (use_ipv6) interfaces += ";[::1]:36086";
 
-		string catalog =
-			"{\\\"127.0.0.1:36084\\\":\\\"" + string { IPV4_A_VERSION } +
-			"\\\",\\\"127.0.0.2:36084\\\":\\\"" + IPV4_B_VERSION +
-			"\\\",\\\"" + mysql_socket.string() + "\\\":\\\"" + SOCKET_VERSION +
-			"\\\",\\\"192.0.2.10:49999\\\":\\\"9.9.9-unused\\\"";
-		if (use_ipv6) {
-			catalog += ",\\\"[::1]:36086\\\":\\\"" + string { IPV6_VERSION } + "\\\"";
-		}
-		catalog += "}";
+		const string catalog = escape_libconfig_string(make_catalog(mysql_socket, use_ipv6, IPV4_A_VERSION));
 
 		cfg
 			<< "datadir=\"" << runtime_dir.string() << "\"\n"
@@ -185,7 +228,7 @@ int main(int, char**) {
 	}
 
 	const bool use_ipv6 = ipv6_loopback_available();
-	plan(use_ipv6 ? 7 : 6);
+	plan(use_ipv6 ? 23 : 22);
 
 	const fs::path runtime_dir { fs::path { cl.workdir } / "mysql_server_version_by_interface" };
 	const fs::path config_file { runtime_dir / "proxysql.cfg" };
@@ -216,6 +259,9 @@ int main(int, char**) {
 
 	conn_opts_t admin_opts { ADMIN_HOST, cl.admin_username, cl.admin_password, ADMIN_PORT, 0 };
 	MYSQL* admin = wait_for_proxysql(admin_opts, WAIT_TIMEOUT_S);
+	MYSQL* original_ipv4_a = nullptr;
+	MYSQL* socket_client = nullptr;
+	MYSQL* reloaded_ipv4_a = nullptr;
 	ok(admin != nullptr, "Secondary ProxySQL started with per-interface version configuration");
 
 	if (admin != nullptr) {
@@ -232,11 +278,89 @@ int main(int, char**) {
 			ok(ipv6 == IPV6_VERSION, "Bracketed IPv6 token uses its exact mapped version (received '%s')", ipv6.c_str());
 		}
 
+		original_ipv4_a = connect_frontend("127.0.0.1", FRONTEND_PORT);
+		ok(original_ipv4_a != nullptr, "Authenticated session connects through the mapped IPv4 interface");
+		if (original_ipv4_a != nullptr) {
+			ok(strcmp(mysql_get_server_info(original_ipv4_a), IPV4_A_VERSION) == 0,
+				"Authenticated IPv4 session receives the mapped handshake version");
+			string actual;
+			bool matches = query_returns_version(original_ipv4_a, "SELECT @@version", IPV4_A_VERSION, actual);
+			ok(matches,
+				"SELECT @@version uses the pinned interface version (received '%s')", actual.c_str());
+			matches = query_returns_version(original_ipv4_a, "SELECT VERSION()", IPV4_A_VERSION, actual);
+			ok(matches,
+				"SELECT VERSION() uses the pinned interface version (received '%s')", actual.c_str());
+			matches = dollar_quote_error_matches(original_ipv4_a, true, actual);
+			ok(matches,
+				"SELECT $$ uses the pinned 8.1+ error semantics (received '%s')", actual.c_str());
+		} else {
+			for (int i = 0; i < 4; ++i) ok(false, "IPv4 session assertion unavailable");
+		}
+
+		socket_client = connect_frontend(nullptr, 0, mysql_socket.c_str());
+		ok(socket_client != nullptr, "Authenticated session connects through the mapped Unix socket");
+		if (socket_client != nullptr) {
+			ok(strcmp(mysql_get_server_info(socket_client), SOCKET_VERSION) == 0,
+				"Authenticated Unix-socket session receives the mapped handshake version");
+			string actual;
+			bool matches = query_returns_version(socket_client, "SELECT @@version", SOCKET_VERSION, actual);
+			ok(matches,
+				"Unix-socket SELECT @@version uses its pinned version (received '%s')", actual.c_str());
+			matches = dollar_quote_error_matches(socket_client, true, actual);
+			ok(matches,
+				"Unix-socket SELECT $$ uses its pinned version semantics (received '%s')", actual.c_str());
+		} else {
+			for (int i = 0; i < 3; ++i) ok(false, "Unix-socket session assertion unavailable");
+		}
+
+		const string reloaded_catalog = make_catalog(mysql_socket, use_ipv6, RELOADED_IPV4_A_VERSION);
+		MYSQL_QUERY_T(admin, (
+			"UPDATE global_variables SET variable_value='" + reloaded_catalog +
+			"' WHERE variable_name='mysql-server_version_by_interface'"
+		).c_str());
+		MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+
+		if (original_ipv4_a != nullptr) {
+			ok(strcmp(mysql_get_server_info(original_ipv4_a), IPV4_A_VERSION) == 0,
+				"Existing session retains its original handshake version after reload");
+			string actual;
+			bool matches = query_returns_version(original_ipv4_a, "SELECT @@version", IPV4_A_VERSION, actual);
+			ok(matches,
+				"Existing session retains its pinned internal version after reload (received '%s')", actual.c_str());
+			matches = dollar_quote_error_matches(original_ipv4_a, true, actual);
+			ok(matches,
+				"Existing session retains its pinned error semantics after reload (received '%s')", actual.c_str());
+		} else {
+			for (int i = 0; i < 3; ++i) ok(false, "Reload assertion unavailable without original session");
+		}
+
+		reloaded_ipv4_a = connect_frontend("127.0.0.1", FRONTEND_PORT);
+		ok(reloaded_ipv4_a != nullptr, "New IPv4 session connects after catalog reload");
+		if (reloaded_ipv4_a != nullptr) {
+			ok(strcmp(mysql_get_server_info(reloaded_ipv4_a), RELOADED_IPV4_A_VERSION) == 0,
+				"New session receives the reloaded handshake version");
+			string actual;
+			bool matches = query_returns_version(
+				reloaded_ipv4_a, "SELECT VERSION()", RELOADED_IPV4_A_VERSION, actual
+			);
+			ok(matches,
+				"New session uses the reloaded internal version (received '%s')", actual.c_str());
+			matches = dollar_quote_error_matches(reloaded_ipv4_a, false, actual);
+			ok(matches,
+				"New session uses the reloaded pre-8.1 error semantics (received '%s')", actual.c_str());
+		} else {
+			for (int i = 0; i < 3; ++i) ok(false, "Reloaded session assertion unavailable");
+		}
+
+		if (reloaded_ipv4_a != nullptr) mysql_close(reloaded_ipv4_a);
+		if (socket_client != nullptr) mysql_close(socket_client);
+		if (original_ipv4_a != nullptr) mysql_close(original_ipv4_a);
+
 		const int shutdown_rc = mysql_query(admin, "PROXYSQL SHUTDOWN SLOW");
 		if (shutdown_rc != 0) diag("Shutdown query failed: %s", mysql_error(admin));
 		mysql_close(admin);
 	} else {
-		for (int i = 0; i < (use_ipv6 ? 5 : 4); ++i) {
+		for (int i = 0; i < (use_ipv6 ? 21 : 20); ++i) {
 			ok(false, "Handshake version unavailable because secondary ProxySQL did not start");
 		}
 	}
