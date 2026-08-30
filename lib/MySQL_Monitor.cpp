@@ -29,6 +29,7 @@ using json = nlohmann::json;
 #include "cpp.h"
 #include "MySQL_Resolution.h"
 #include "proxysql_utils.h"
+#include "gen_utils.h"
 
 #include "thread.h"
 #include "wqueue.h"
@@ -416,7 +417,7 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port, 
 #endif // DEBUG
 				std::vector<MYSQL*> skipped_conn;
 				while (srv->conns->len) {
-					unsigned int idx = rand() % srv->conns->len;
+					unsigned int idx = rand_fast() % srv->conns->len;
 					MYSQL* mysql = (MYSQL*)srv->conns->remove_index_fast(idx);
 
 					if (!mysql) continue;
@@ -2549,7 +2550,7 @@ void * monitor_galera_thread(const std::vector<MySQL_Monitor_State_Data*>& data)
 	} else {
 		if (crc==false) {
 #ifdef TEST_GALERA
-			if ( rand()%3 == 0) { // drop the connection once every 3 checks
+			if (rand_fast()%3 == 0) { // drop the connection once every 3 checks
 				GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
 			} else {
 				GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
@@ -3221,7 +3222,7 @@ void * MySQL_Monitor::monitor_connect() {
 				if (us > 1000000 || us <= 0) {
 					us = 10000;
 				}
-				us = us + rand()%us;
+				us = us + rand_fast()%us;
 				if (resultset->rows_count==1) {
 					// only 1 server, sleep also before creating the job
 					usleep(us);
@@ -4443,7 +4444,7 @@ void* monitor_GR_thread_HG(void *arg) {
 			}
 		}
 
-		int rnd_discoverer = conn_mmsds.size() == 0 ? -1 : rand() % conn_mmsds.size();
+		int rnd_discoverer = conn_mmsds.size() == 0 ? -1 : rand_fast() % conn_mmsds.size();
 		if (rnd_discoverer != -1) {
 			conn_mmsds[rnd_discoverer]->cur_monitored_gr_srvs = &hosts_defs;
 		}
@@ -5021,7 +5022,7 @@ void* MySQL_Monitor::monitor_dns_cache() {
 				if (delay_us > 1000000 || delay_us <= 0) {
 					delay_us = 10000;
 				}
-				delay_us = delay_us + rand() % delay_us;
+				delay_us = delay_us + rand_fast() % delay_us;
 			}
 
 			if (dns_records_bookkeeping.empty() == false) {
@@ -5306,7 +5307,7 @@ __monitor_run:
 		pthread_mutex_lock(&mon_en_mutex);
 		monitor_enabled=mysql_thread___monitor_enabled;
 		pthread_mutex_unlock(&mon_en_mutex);
-		if ( rand()%10 == 0) { // purge once in a while
+		if (rand_fast()%10 == 0) { // purge once in a while
 			My_Conn_Pool->purge_some_connections();
 		}
 		usleep(200000);
@@ -6213,12 +6214,12 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 
 		rc_ping = false;
 		// pick a random host
-		rnd = (size_t) rand();
+		rnd = (size_t) rand_fast();
 		rnd %= num_hosts;
 		rc_ping = GloMyMon->server_responds_to_ping(hpa[rnd].host, hpa[rnd].port);
 		//proxy_info("Looping Monitor thread for AWS Aurora writer HG %u\n", wHG);
 #ifdef TEST_AURORA_RANDOM
-		if (rand() % 100 < 30) {
+		if (rand_fast() % 100 < 30) {
 			// we randomly fail 30% of the requests
 			rc_ping = false;
 		}
@@ -6246,7 +6247,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 		}
 
 #ifdef TEST_AURORA_RANDOM
-		if (rand() % 200 == 0) {
+		if (rand_fast() % 200 == 0) {
 			// we randomly fail 0.5% of the requests
 			found_pingable_host = false;
 		}
@@ -6258,7 +6259,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 			continue;
 		}
 #ifdef TEST_AURORA
-		if (rand() % 1000 == 0) { // suppress 99.9% of the output, too verbose
+		if (rand_fast() % 1000 == 0) { // suppress 99.9% of the output, too verbose
 			proxy_info("Running check for AWS Aurora writer HG %u on %s:%d\n", wHG , hpa[cur_host_idx].host, hpa[cur_host_idx].port);
 		}
 #endif // TEST_AURORA
@@ -6947,7 +6948,7 @@ void* monitor_RDS_BGD_thread_HG(void* arg) {
 
 		if (st.next_check_host.empty()) {
 			found_pingable_host = false;
-			rnd = (size_t) rand();
+			rnd = (size_t) rand_fast();
 			rnd %= st.probe_hosts.size();
 			for (size_t i = 0; found_pingable_host == false && i < st.probe_hosts.size(); i++) {
 				size_t host_idx = (rnd + i) % st.probe_hosts.size();
@@ -8312,10 +8313,10 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 	unsigned int action_no = 0;
 	unsigned int enabling = 0;
 	unsigned int disabling = 0;
-	if (rand() % 500 == 0) {
+	if (rand_fast() % 500 == 0) {
 		verbose = true;
 		bool ev = false;
-		if (rand() % 1000 == 0) {
+		if (rand_fast() % 1000 == 0) {
 			ev = true;
 		}
 		for (i=0; i < N_L_ASE; i++) {
@@ -9908,7 +9909,7 @@ bool MySQL_Monitor::monitor_galera_process_ready_tasks(const std::vector<MySQL_M
 		if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS) {
 
 #ifdef TEST_GALERA
-			if (rand() % 3 == 0) { // drop the connection once every 3 checks
+			if (rand_fast() % 3 == 0) { // drop the connection once every 3 checks
 				My_Conn_Pool->destroy_mysql_connection(mmsd);
 			} else {
 				My_Conn_Pool->put_connection(mmsd->hostname, mmsd);

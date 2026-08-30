@@ -293,15 +293,17 @@ test_tokenizer-t: test_tokenizer-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 test_mysql_query_digests_stages-t: test_mysql_query_digests_stages-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
 
-.PHONY: test_mysqlx_plugin_load-t
-test_mysqlx_plugin_load-t:
-	$(MAKE) -C unit test_mysqlx_plugin_load-t
-	ln -fs unit/test_mysqlx_plugin_load-t $@
+MYSQLX_BRIDGE_TESTS := test_mysqlx_plugin_load-t test_mysqlx_admin_tables-t
 
-.PHONY: test_mysqlx_admin_tables-t
-test_mysqlx_admin_tables-t:
-	$(MAKE) -C unit test_mysqlx_admin_tables-t
-	ln -fs unit/test_mysqlx_admin_tables-t $@
+# Build both bridge tests in one unit submake. Separate recursive makes do not
+# share a dependency graph and can otherwise rebuild common objects such as
+# unit/obj/test_init.o concurrently.
+.PHONY: mysqlx-bridge-tests $(MYSQLX_BRIDGE_TESTS)
+mysqlx-bridge-tests:
+	$(MAKE) -C unit $(MYSQLX_BRIDGE_TESTS)
+
+$(MYSQLX_BRIDGE_TESTS): mysqlx-bridge-tests
+	ln -fs unit/$@ $@
 
 # test_mysqlx_listener_smoke-t was retired with the dormant MysqlxWorker
 # path in 98aee7db2. Listener-lifecycle coverage now lives in

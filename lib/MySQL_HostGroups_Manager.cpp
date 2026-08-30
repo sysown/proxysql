@@ -13,6 +13,7 @@ using json = nlohmann::json;
 #include <memory>
 #include <pthread.h>
 #include <string>
+#include "gen_utils.h"
 
 #include "prometheus/counter.h"
 #include "prometheus/detail/builder.h"
@@ -844,7 +845,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 		static const char alphanum[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 		rand_del[0] = '-';
 		for (int i = 1; i < 6; i++) {
-			rand_del[i] = alphanum[rand() % (sizeof(alphanum) - 1)];
+			rand_del[i] = alphanum[rand_fast() % (sizeof(alphanum) - 1)];
 		}
 		rand_del[6] = '-';
 		rand_del[7] = 0;

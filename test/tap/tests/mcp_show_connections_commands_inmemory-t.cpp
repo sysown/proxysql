@@ -66,6 +66,16 @@ bool run_admin_stmt(MYSQL* admin, const std::string& query, const char* context)
 	return true;
 }
 
+std::string escape_sql_literal(const char* input) {
+	std::string escaped = input ? input : "";
+	size_t pos = 0;
+	while ((pos = escaped.find('\'', pos)) != std::string::npos) {
+		escaped.insert(pos, 1, '\'');
+		pos += 2;
+	}
+	return escaped;
+}
+
 /**
  * @brief Configure MCP runtime for stats tool tests.
  *
@@ -76,11 +86,13 @@ bool run_admin_stmt(MYSQL* admin, const std::string& query, const char* context)
  * @return true if all setup statements succeeded.
  */
 bool configure_mcp_runtime(MYSQL* admin, const CommandLine& cl) {
+	const std::string auth_token = escape_sql_literal(cl.mcp_auth_token);
 	const std::vector<std::string> statements = {
 		"SET mcp-port=" + std::to_string(cl.mcp_port),
 		"SET mcp-use_ssl=false",
 		"SET mcp-enabled=true",
-		"SET mcp-stats_endpoint_auth=''",
+		"SET mcp-config_endpoint_auth='" + auth_token + "'",
+		"SET mcp-stats_endpoint_auth='" + auth_token + "'",
 		"SET mcp-stats_enable_debug_tools=false",
 		"LOAD MCP VARIABLES TO RUNTIME"
 	};
@@ -101,10 +113,7 @@ void restore_mcp_runtime(MYSQL* admin) {
 	if (!admin) {
 		return;
 	}
-	run_q(admin, "SET mcp-stats_enable_debug_tools=false");
-	run_q(admin, "SET mcp-stats_endpoint_auth=''");
-	run_q(admin, "SET mcp-enabled=false");
-	run_q(admin, "LOAD MCP VARIABLES TO RUNTIME");
+	run_q(admin, "LOAD MCP VARIABLES FROM DISK");
 }
 
 /**

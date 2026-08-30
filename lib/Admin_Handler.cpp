@@ -3003,12 +3003,12 @@ std::string timediff_timezone_offset() {
     std::string time_zone_offset {};
     char result[8];
     time_t rawtime;
-    struct tm *info;
+    struct tm info;
     int offset;
 
     time(&rawtime);
-    info = localtime(&rawtime);
-    strftime(result, 8, "%z", info);
+    localtime_r(&rawtime, &info);
+    strftime(result, 8, "%z", &info);
     offset = (result[0] == '+') ? 1 : 0;
     time_zone_offset = ((std::string)(result)).substr(offset, 3-offset) + ":" + ((std::string)(result)).substr(3, 2) + ":00";
 

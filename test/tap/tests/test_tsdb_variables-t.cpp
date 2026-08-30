@@ -45,6 +45,62 @@ static bool fetch_single_string(MYSQL* mysql, const string& query, string& out) 
 	return true;
 }
 
+static bool fetch_total_datapoints(MYSQL* admin, long long& total) {
+	if (mysql_query(admin, "SHOW TSDB STATUS")) {
+		diag("SHOW TSDB STATUS failed: %s", mysql_error(admin));
+		return false;
+	}
+	MYSQL_RES* res = mysql_store_result(admin);
+	if (res) mysql_free_result(res);
+	drain_results(admin);
+
+	string value;
+	if (!fetch_single_string(
+			admin,
+			"SELECT Variable_Value FROM stats_tsdb WHERE Variable_Name='Total_Datapoints'",
+			value)) {
+		return false;
+	}
+	total = atoll(value.c_str());
+	return true;
+}
+
+static bool fetch_admin_datapoints(MYSQL* admin, long long& total) {
+	string value;
+	if (!fetch_single_string(admin, "SELECT COUNT(*) FROM stats_history.tsdb_metrics", value)) {
+		return false;
+	}
+	total = atoll(value.c_str());
+	return true;
+}
+
+static bool wait_for_tsdb_connections_to_agree(MYSQL* admin, long long& total) {
+	long long admin_before = 0;
+	long long stats_total = 0;
+	long long admin_after = 0;
+
+	// SHOW TSDB STATUS reads through ProxySQL_Statistics::statsdb_disk, while
+	// stats_history is the Admin connection's attachment to the same file. A
+	// matching count bracketed by two Admin reads proves both connections see
+	// the same committed snapshot even if a final sampler pass lands between
+	// attempts.
+	for (int attempt = 0; attempt < 100; ++attempt) {
+		if (!fetch_admin_datapoints(admin, admin_before)
+				|| !fetch_total_datapoints(admin, stats_total)
+				|| !fetch_admin_datapoints(admin, admin_after)) {
+			return false;
+		}
+		if (admin_before == stats_total && stats_total == admin_after) {
+			total = stats_total;
+			return true;
+		}
+		usleep(100000);
+	}
+	diag("TSDB connections did not converge (admin before: %lld, stats: %lld, admin after: %lld)",
+		admin_before, stats_total, admin_after);
+	return false;
+}
+
 int main() {
 	CommandLine cl;
 	if (cl.getEnv()) {
@@ -52,7 +108,7 @@ int main() {
 		return EXIT_FAILURE;
 	}
 
-	plan(19);
+	plan(28);
 
 	MYSQL* admin = mysql_init(NULL);
 	if (!admin) {
@@ -193,37 +249,67 @@ int main() {
 	bool dp_ok = fetch_single_string(admin, "SELECT Variable_Value FROM stats_tsdb WHERE Variable_Name='Total_Datapoints'", count);
 	ok(dp_ok && atoi(count.c_str()) > 0, "SHOW TSDB STATUS reports datapoints > 0 (found %s)", count.c_str());
 
+	// Reduce background TSDB writes before crossing from the Admin connection
+	// (stats_history attachment) to the statistics module's own SQLite
+	// connection. A sampler pass that was already in flight is handled by the
+	// explicit cross-connection snapshot check below.
+	rc = mysql_query(admin, "SET tsdb-sample_interval='3600'");
+	ok(rc == 0, "SET tsdb-sample_interval=3600 works");
+	drain_results(admin);
+	rc = mysql_query(admin, "SET tsdb-monitor_enabled='0'");
+	ok(rc == 0, "SET tsdb-monitor_enabled=0 works");
+	drain_results(admin);
+	rc = mysql_query(admin, "LOAD TSDB VARIABLES TO RUNTIME");
+	ok(rc == 0, "Quiescent TSDB variables load to runtime");
+	drain_results(admin);
+
 	// 12. Test Downsampling command
 	// NOTE: Downsampling only processes COMPLETED hours (data with timestamps before current_hour).
-	// Since we only have a few seconds of data, we need to insert test data with timestamps
-	// from at least 1 hour ago for the downsample to produce results.
+	// Since we only have a few seconds of data, insert test data in the most recently
+	// completed hour. Downsampling deliberately refreshes this boundary bucket so
+	// metrics committed just after an earlier pass are not lost.
 	diag("Testing TSDB downsampling via command...");
 
-	// Get current timestamp and calculate timestamp from 2 hours ago
-	time_t now = time(NULL);
-	time_t two_hours_ago = ((now - 7200) / 3600) * 3600; // Start of the hour, 2 hours ago
-	diag("Current time: %ld, Two hours ago (hour boundary): %ld", now, two_hours_ago);
+	// A prior interrupted invocation must not affect the exact fixture counts
+	// or satisfy the hourly assertion with stale data.
+	mysql_query(admin,
+		"DELETE FROM stats_history.tsdb_metrics WHERE metric_name='test_downsample_metric'");
+	drain_results(admin);
+	mysql_query(admin,
+		"DELETE FROM stats_history.tsdb_metrics_hour WHERE metric_name='test_downsample_metric'");
+	drain_results(admin);
 
-	// Insert test data with timestamps from 2 hours ago (completed hour)
+	long long clean_baseline = 0;
+	const bool clean_connections_agree = wait_for_tsdb_connections_to_agree(admin, clean_baseline);
+	ok(clean_connections_agree,
+		"Admin and statistics connections agree after fixture cleanup (count: %lld)",
+		clean_baseline);
+
+	// Get current timestamp and calculate the start of the previous hour.
+	time_t now = time(NULL);
+	time_t completed_hour = ((now - 3600) / 3600) * 3600;
+	diag("Current time: %ld, Previous hour boundary: %ld", now, completed_hour);
+
+	// Insert test data with timestamps from the completed hour.
 	diag("Inserting test metrics data with timestamps from completed hour...");
 	char insert_query[512];
 	snprintf(insert_query, sizeof(insert_query),
 		"INSERT OR REPLACE INTO stats_history.tsdb_metrics (timestamp, metric_name, labels, value) "
 		"VALUES (%ld, 'test_downsample_metric', '{\"test\":\"true\"}', 42.0)",
-		two_hours_ago);
+		completed_hour);
 	rc = mysql_query(admin, insert_query);
 	if (rc != 0) {
 		diag("Failed to insert test data: %s", mysql_error(admin));
 	}
 	drain_results(admin);
-	diag("Inserted test metric at timestamp %ld", two_hours_ago);
+	diag("Inserted test metric at timestamp %ld", completed_hour);
 
 	// Also insert a few more data points in the same hour for realistic test
 	for (int i = 1; i <= 3; i++) {
 		snprintf(insert_query, sizeof(insert_query),
 			"INSERT OR REPLACE INTO stats_history.tsdb_metrics (timestamp, metric_name, labels, value) "
 			"VALUES (%ld, 'test_downsample_metric', '{\"test\":\"true\"}', %f)",
-			two_hours_ago + i * 60, 42.0 + i); // Add data points every minute
+			completed_hour + i * 60, 42.0 + i); // Add data points every minute
 		mysql_query(admin, insert_query);
 		drain_results(admin);
 	}
@@ -231,8 +317,41 @@ int main() {
 
 	// Check metrics count before downsampling
 	string before_count;
-	fetch_single_string(admin, "SELECT COUNT(*) FROM stats_history.tsdb_metrics WHERE metric_name='test_downsample_metric'", before_count);
+	const bool fixture_count_ok = fetch_single_string(
+		admin,
+		"SELECT COUNT(*) FROM stats_history.tsdb_metrics WHERE metric_name='test_downsample_metric'",
+		before_count);
 	diag("Test metrics in tsdb_metrics before downsample: %s", before_count.c_str());
+	ok(fixture_count_ok && before_count == "4", "Admin connection sees all four fixture rows");
+
+	// Re-evaluate the boundary immediately before the command. A test that
+	// starts in the final milliseconds of an hour must not leave its fixture in
+	// what has just become the second-most-recent completed bucket.
+	const time_t command_now = time(NULL);
+	const time_t command_completed_hour = ((command_now - 3600) / 3600) * 3600;
+	if (command_completed_hour != completed_hour) {
+		diag("Hour rolled over during fixture setup; moving data from %ld to %ld",
+			completed_hour, command_completed_hour);
+		mysql_query(admin,
+			"DELETE FROM stats_history.tsdb_metrics WHERE metric_name='test_downsample_metric'");
+		drain_results(admin);
+		completed_hour = command_completed_hour;
+		for (int i = 0; i <= 3; ++i) {
+			snprintf(insert_query, sizeof(insert_query),
+				"INSERT OR REPLACE INTO stats_history.tsdb_metrics "
+				"(timestamp, metric_name, labels, value) "
+				"VALUES (%ld, 'test_downsample_metric', '{\"test\":\"true\"}', %f)",
+				completed_hour + i * 60, 42.0 + i);
+			mysql_query(admin, insert_query);
+			drain_results(admin);
+		}
+	}
+
+	long long visible_datapoints = 0;
+	const bool connections_agree = wait_for_tsdb_connections_to_agree(admin, visible_datapoints);
+	ok(connections_agree && visible_datapoints >= clean_baseline + 4,
+		"Statistics connection sees the four new fixture rows (before: %lld, after: %lld)",
+		clean_baseline, visible_datapoints);
 
 	// Run the downsample command
 	rc = mysql_query(admin, "PROXYSQL TSDB DOWNSAMPLE");
@@ -263,6 +382,18 @@ int main() {
 	mysql_query(admin, "DELETE FROM stats_history.tsdb_metrics WHERE metric_name='test_downsample_metric'");
 	drain_results(admin);
 	mysql_query(admin, "DELETE FROM stats_history.tsdb_metrics_hour WHERE metric_name='test_downsample_metric'");
+	drain_results(admin);
+
+	// Restore the runtime state established and persisted earlier in this test
+	// so later TAP tests do not inherit the temporary quiescent settings.
+	rc = mysql_query(admin, "SET tsdb-sample_interval='1'");
+	ok(rc == 0, "Restore tsdb-sample_interval=1");
+	drain_results(admin);
+	rc = mysql_query(admin, "SET tsdb-monitor_enabled='1'");
+	ok(rc == 0, "Restore tsdb-monitor_enabled=1");
+	drain_results(admin);
+	rc = mysql_query(admin, "LOAD TSDB VARIABLES TO RUNTIME");
+	ok(rc == 0, "Restored TSDB variables load to runtime");
 	drain_results(admin);
 
 	mysql_close(admin);
