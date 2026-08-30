@@ -75,6 +75,22 @@ defined_symbols() {
 	esac
 }
 
+all_defined_symbols() {
+	local binary=$1
+	case ${platform} in
+		Linux|FreeBSD)
+			nm --defined-only --format=posix "${binary}" 2>/dev/null | \
+				awk '{ symbol=$1; sub(/@.*/, "", symbol); print symbol }' | \
+				sort -u
+			;;
+		Darwin)
+			nm -U "${binary}" 2>/dev/null | \
+				awk '{ symbol=$NF; sub(/^_/, "", symbol); print symbol }' | \
+				sort -u
+			;;
+	esac
+}
+
 undefined_symbols() {
 	local binary=$1
 	case ${platform} in
@@ -97,6 +113,11 @@ openssl_imports() {
 		'^(ASN1|BIO|BN|CMS|COMP|CONF|CRYPTO|DH|DSA|DTLS|EC|ENGINE|ERR|EVP|HMAC|KDF|MD5|NCONF|OBJ|OCSP|OPENSSL|OSSL|PEM|PKCS|RAND|RSA|SHA|SRP|SSL|TLS|TS|UI|X509)_[A-Za-z0-9_]+$|^(d2i|i2d)_[A-Za-z0-9_]+' || true
 }
 
+curl_imports() {
+	local binary=$1
+	undefined_symbols "${binary}" | grep -E '^curl_[A-Za-z0-9_]+$' || true
+}
+
 check_dynamic_dependencies "${executable}"
 for plugin in "${plugins[@]}"; do
 	check_dynamic_dependencies "${plugin}"
@@ -108,7 +129,7 @@ defined_symbols "${executable}" > "${executable_exports}"
 sentinels=(OpenSSL_version SSL_CTX_new EVP_MD_fetch OSSL_PROVIDER_load)
 for plugin in "${plugins[@]}"; do
 	plugin_definitions="${tmp_dir}/plugin-definitions"
-	defined_symbols "${plugin}" > "${plugin_definitions}"
+	all_defined_symbols "${plugin}" > "${plugin_definitions}"
 
 	for sentinel in "${sentinels[@]}"; do
 		if grep -Fxq "${sentinel}" "${plugin_definitions}"; then
@@ -122,6 +143,13 @@ for plugin in "${plugins[@]}"; do
 			fail "plugin ${plugin} imports ${symbol} but the executable does not export it"
 		fi
 	done < <(openssl_imports "${plugin}")
+
+	while IFS= read -r symbol; do
+		[[ -n "${symbol}" ]] || continue
+		if ! grep -Fxq "${symbol}" "${executable_exports}"; then
+			fail "plugin ${plugin} imports ${symbol} but the executable does not export it"
+		fi
+	done < <(curl_imports "${plugin}")
 done
 
 echo "OpenSSL linkage check passed: 1 executable, ${#plugins[@]} plugin(s)"

@@ -9,9 +9,11 @@ LIB_CRYPTO_PATH := $(SSL_LDIR)/libcrypto.a
 OPENSSL_STATIC_LIBS := $(LIB_SSL_PATH) $(LIB_CRYPTO_PATH)
 
 ifeq ($(UNAME_S),Darwin)
-OPENSSL_EXPORT_LIBS := -Wl,-force_load,$(LIB_SSL_PATH) \
-	-Wl,-force_load,$(LIB_CRYPTO_PATH)
+EXECUTABLE_EXPORT_FLAGS := -Wl,-export_dynamic
+force_load_archives = $(foreach archive,$(1),-Wl,-force_load,$(archive))
 else
-OPENSSL_EXPORT_LIBS := -Wl,--whole-archive $(OPENSSL_STATIC_LIBS) \
-	-Wl,--no-whole-archive
+EXECUTABLE_EXPORT_FLAGS := -Wl,--export-dynamic
+force_load_archives = -Wl,--whole-archive $(1) -Wl,--no-whole-archive
 endif
+
+OPENSSL_FORCE_LOAD_LIBS := $(call force_load_archives,$(OPENSSL_STATIC_LIBS))

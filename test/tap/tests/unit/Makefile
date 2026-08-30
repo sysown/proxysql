@@ -181,7 +181,7 @@ endif
 CURL_STATIC_LIB := $(CURL_LDIR)/libcurl.a
 # Keep static curl consumers on the vendored archive and follow it with the
 # vendored OpenSSL archives that satisfy curl's TLS symbols.
-CURL_STATIC_DEPS := $(CURL_STATIC_LIB) $(OPENSSL_EXPORT_LIBS)
+CURL_STATIC_DEPS := $(CURL_STATIC_LIB) $(OPENSSL_FORCE_LOAD_LIBS)
 MCP_CLIENT_LIBS := $(CURL_STATIC_DEPS) -lz -lpthread
 ifeq ($(UNAME_S),Linux)
 # libcrypto.a uses dlopen-family functions. glibc before 2.34 supplies them
@@ -216,7 +216,7 @@ LIBPROXYSQLAR_FULL := $(LIBPROXYSQLAR) \
 	$(POSTGRESQL_PATH)/common/libpgcommon.a \
 	$(POSTGRESQL_PATH)/port/libpgport.a
 
-MYLIBS := $(OPENSSL_EXPORT_LIBS) -lpthread -lm -lz \
+MYLIBS := $(OPENSSL_FORCE_LOAD_LIBS) -lpthread -lm -lz \
 		  -liconv -lgnutls -lprometheus-cpp-pull -lprometheus-cpp-core -luuid \
 		  -lzstd $(LWGCOV)
 else
