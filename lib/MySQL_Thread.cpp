@@ -32,6 +32,7 @@ using json = nlohmann::json;
 #include "MySQL_Resolution.h"
 #ifdef PROXYSQL31
 #include "MySQL_Caching_Sha2_RSA.h"
+#include "MySQL_Server_Version_By_Interface.h"
 #endif
 
 #include <fcntl.h>
@@ -499,6 +500,9 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"poll_timeout_on_failure",
 	(char *)"server_capabilities",
 	(char *)"server_version",
+#ifdef PROXYSQL31
+	(char *)"server_version_by_interface",
+#endif
 	(char *)"select_version_forwarding",
 	(char *)"keep_multiplexing_variables",
 	(char *)"default_authentication_plugin",
@@ -1464,6 +1468,9 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.handle_unknown_charset=1;
 	variables.interfaces=strdup((char *)"");
 	variables.server_version=strdup((char *)"8.0.11"); // changed in 2.6.0 , was 5.5.30
+#ifdef PROXYSQL31
+	variables.server_version_by_interface=strdup((char *)"{}");
+#endif
 	variables.select_version_forwarding=3;  // 0=never, 1=always, 2=smart(fallback to 0), 3=smart(fallback to 1, default)
 	variables.eventslog_filename=strdup((char *)""); // proxysql-mysql-eventslog is recommended
 	variables.eventslog_filesize=100*1024*1024;
@@ -1756,6 +1763,24 @@ MySQLThreadsCommitResult MySQL_Threads_Handler::commit() {
 		variables.caching_sha2_password_public_key_path =
 			strdup(caching_sha2_rsa_accepted_public_path_.c_str());
 	}
+
+	const auto parsed_server_versions = parse_mysql_server_version_by_interface(
+		variables.server_version_by_interface != nullptr
+			? variables.server_version_by_interface : ""
+	);
+	if (parsed_server_versions.accepted()) {
+		accepted_server_version_by_interface_ = variables.server_version_by_interface;
+		server_version_by_interface_snapshot_ = parsed_server_versions.catalog;
+	} else {
+		proxy_error(
+			"Rejected mysql-server_version_by_interface: %s\n",
+			parsed_server_versions.error.c_str()
+		);
+		free(variables.server_version_by_interface);
+		variables.server_version_by_interface =
+			strdup(accepted_server_version_by_interface_.c_str());
+		commit_result.rejected_variables.push_back("server_version_by_interface");
+	}
 #endif
 	__sync_add_and_fetch(&__global_MySQL_Thread_Variables_version,1);
 	proxy_debug(PROXY_DEBUG_MYSQL_SERVER, 1, "Increasing version number to %d - all threads will notice this and refresh their variables\n", __global_MySQL_Thread_Variables_version);
@@ -1951,6 +1976,9 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 		if (!strcmp(name,"default_schema")) return strdup(variables.default_schema);
 	}
 	if (!strcmp(name,"server_version")) return strdup(variables.server_version);
+#ifdef PROXYSQL31
+	if (!strcmp(name,"server_version_by_interface")) return strdup(variables.server_version_by_interface);
+#endif
 	if (!strcmp(name,"eventslog_filename")) return strdup(variables.eventslog_filename);
 	if (!strcmp(name,"auditlog_filename")) return strdup(variables.auditlog_filename);
 	if (!strcmp(name,"interfaces")) return strdup(variables.interfaces);
@@ -2123,6 +2151,9 @@ char * MySQL_Threads_Handler::get_variable(const char *name) {	// this is the pu
 	}
 	if (!strcasecmp(name,"firewall_whitelist_errormsg")) return strdup(variables.firewall_whitelist_errormsg);
 	if (!strcasecmp(name,"server_version")) return strdup(variables.server_version);
+#ifdef PROXYSQL31
+	if (!strcasecmp(name,"server_version_by_interface")) return strdup(variables.server_version_by_interface);
+#endif
 	if (!strcasecmp(name,"auditlog_filename")) return strdup(variables.auditlog_filename);
 	if (!strcasecmp(name,"eventslog_filename")) return strdup(variables.eventslog_filename);
 	if (!strcasecmp(name,"default_schema")) return strdup(variables.default_schema);
@@ -2470,6 +2501,13 @@ bool MySQL_Threads_Handler::set_variable(const char *name, const char *value) {	
 			return false;
 		}
 	}
+#ifdef PROXYSQL31
+	if (!strcasecmp(name,"server_version_by_interface")) {
+		free(variables.server_version_by_interface);
+		variables.server_version_by_interface = strdup(value);
+		return true;
+	}
+#endif
 
 	if (!strcasecmp(name,"init_connect")) {
 		if (variables.init_connect) free(variables.init_connect);
@@ -3511,6 +3549,9 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.default_schema) free(variables.default_schema);
 	if (variables.interfaces) free(variables.interfaces);
 	if (variables.server_version) free(variables.server_version);
+#ifdef PROXYSQL31
+	if (variables.server_version_by_interface) free(variables.server_version_by_interface);
+#endif
 	if (variables.keep_multiplexing_variables) free(variables.keep_multiplexing_variables);
 	if (variables.default_authentication_plugin) free(variables.default_authentication_plugin);
 #ifdef PROXYSQL31
