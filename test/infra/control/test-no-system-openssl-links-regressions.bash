@@ -41,5 +41,8 @@ assert_rejected intel_homebrew_opt_path 'OPENSSL_LIB=/usr/local/opt/openssl@3/li
 assert_rejected intel_homebrew_cellar_path 'OPENSSL_LIB=/usr/local/Cellar/openssl@3/3.5.7/lib/libcrypto.dylib'
 assert_rejected arm_homebrew_cellar_ssl_path 'OPENSSL_LIB=/opt/homebrew/Cellar/openssl@3/3.5.7/lib/libssl.dylib'
 assert_rejected arm_homebrew_cellar_crypto_path 'OPENSSL_LIB=/opt/homebrew/Cellar/openssl@3/3.5.7/lib/libcrypto.dylib'
+assert_rejected intel_homebrew_opt_versioned_path 'OPENSSL_LIB=/usr/local/opt/openssl@3/lib/libssl.3.dylib'
+assert_rejected arm_homebrew_cellar_versioned_path 'OPENSSL_LIB=/opt/homebrew/Cellar/openssl@3/3.5.7/lib/libcrypto.3.dylib'
+assert_rejected darwin_system_versioned_path 'OPENSSL_LIB=/usr/lib/libssl.3.dylib'
 
 echo "System OpenSSL audit regression tests passed"
