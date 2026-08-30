@@ -294,20 +294,17 @@ test_tokenizer-t: test_tokenizer-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 test_mysql_query_digests_stages-t: test_mysql_query_digests_stages-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
 
-# Both bridge targets use the shared test/tap/tests/unit object directory.
-# Build them in one recursive make so a parallel parent make never starts two
-# independent writers for obj/test_*.o.
-.PHONY: mysqlx_unit_test_bridges
-mysqlx_unit_test_bridges:
-	$(MAKE) -C unit test_mysqlx_plugin_load-t test_mysqlx_admin_tables-t
+MYSQLX_BRIDGE_TESTS := test_mysqlx_plugin_load-t test_mysqlx_admin_tables-t
 
-.PHONY: test_mysqlx_plugin_load-t
-test_mysqlx_plugin_load-t: mysqlx_unit_test_bridges
-	ln -fs unit/test_mysqlx_plugin_load-t $@
+# Build both bridge tests in one unit submake. Separate recursive makes do not
+# share a dependency graph and can otherwise rebuild common objects such as
+# unit/obj/test_init.o concurrently.
+.PHONY: mysqlx-bridge-tests $(MYSQLX_BRIDGE_TESTS)
+mysqlx-bridge-tests:
+	$(MAKE) -C unit $(MYSQLX_BRIDGE_TESTS)
 
-.PHONY: test_mysqlx_admin_tables-t
-test_mysqlx_admin_tables-t: mysqlx_unit_test_bridges
-	ln -fs unit/test_mysqlx_admin_tables-t $@
+$(MYSQLX_BRIDGE_TESTS): mysqlx-bridge-tests
+	ln -fs unit/$@ $@
 
 # test_mysqlx_listener_smoke-t was retired with the dormant MysqlxWorker
 # path in 98aee7db2. Listener-lifecycle coverage now lives in
