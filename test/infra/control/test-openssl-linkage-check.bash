@@ -34,6 +34,18 @@ const char *OpenSSL_version(int type) {
 }
 EOF
 
+cat > "${tmp_dir}/local_embedded_plugin.c" <<'EOF'
+__attribute__((used, noinline))
+static const char *OpenSSL_version(int type) {
+	(void)type;
+	return "local fixture";
+}
+
+const char *fixture_local_openssl_version(int type) {
+	return OpenSSL_version(type);
+}
+EOF
+
 cat > "${tmp_dir}/curl_importing_plugin.c" <<'EOF'
 extern void *curl_easy_init(void);
 void *plugin_curl_handle(void) { return curl_easy_init(); }
@@ -65,6 +77,8 @@ case $(uname -s) in
 			-Wl,-rpath,"${tmp_dir}" -lssl
 		cc -dynamiclib -o "${tmp_dir}/embedded-plugin.dylib" \
 			"${tmp_dir}/embedded_plugin.c"
+		cc -dynamiclib -o "${tmp_dir}/local-embedded-plugin.dylib" \
+			"${tmp_dir}/local_embedded_plugin.c"
 		cc -o "${tmp_dir}/plain-executable" "${tmp_dir}/plain_executable.c"
 		cc -o "${tmp_dir}/exporting-executable" \
 			"${tmp_dir}/exporting_executable.c" -Wl,-export_dynamic
@@ -86,6 +100,8 @@ case $(uname -s) in
 			-Wl,-rpath,"${tmp_dir}" -Wl,--no-as-needed -lssl
 		cc -shared -fPIC -o "${tmp_dir}/embedded-plugin.so" \
 			"${tmp_dir}/embedded_plugin.c"
+		cc -shared -fPIC -o "${tmp_dir}/local-embedded-plugin.so" \
+			"${tmp_dir}/local_embedded_plugin.c"
 		cc -o "${tmp_dir}/plain-executable" "${tmp_dir}/plain_executable.c"
 		cc -o "${tmp_dir}/exporting-executable" \
 			"${tmp_dir}/exporting_executable.c" -Wl,--export-dynamic
@@ -115,12 +131,28 @@ if [[ $(uname -s) == Darwin ]]; then
 	plugin_suffix=dylib
 fi
 
+case $(uname -s) in
+	Darwin)
+	nm -U "${tmp_dir}/local-embedded-plugin.${plugin_suffix}" | \
+		grep -Eq '[[:space:]]t[[:space:]]_OpenSSL_version$' || \
+		fail "local OpenSSL fixture does not have local text binding"
+		;;
+	Linux|FreeBSD)
+	nm --defined-only --format=posix \
+		"${tmp_dir}/local-embedded-plugin.${plugin_suffix}" | \
+		grep -Eq '^OpenSSL_version t ' || \
+		fail "local OpenSSL fixture does not have local text binding"
+		;;
+esac
+
 expect_rejected 'dynamically depends on forbidden OpenSSL library' \
 	"${tmp_dir}/dynamic-executable"
 expect_rejected 'dynamically depends on forbidden OpenSSL library' \
 	"${tmp_dir}/plain-executable" "${tmp_dir}/dynamic-plugin.${plugin_suffix}"
 expect_rejected 'defines OpenSSL core sentinel OpenSSL_version' \
 	"${tmp_dir}/plain-executable" "${tmp_dir}/embedded-plugin.${plugin_suffix}"
+expect_rejected 'defines OpenSSL core sentinel OpenSSL_version' \
+	"${tmp_dir}/plain-executable" "${tmp_dir}/local-embedded-plugin.${plugin_suffix}"
 expect_rejected 'imports SSL_CTX_new but the executable does not export it' \
 	"${tmp_dir}/plain-executable" "${tmp_dir}/importing-plugin.${plugin_suffix}"
 expect_rejected 'imports curl_easy_init but the executable does not export it' \
@@ -213,24 +245,46 @@ linux_executable_contract=$(make -s -C "${repo_root}/src" \
 	print-executable-link-contract)
 linux_static_libs=$(printf '%s\n' "${linux_executable_contract}" | \
 	awk -F= '$1 == "STATICMYLIBS" { sub(/^[^=]*=/, ""); print }')
+linux_executable_libs=$(printf '%s\n' "${linux_executable_contract}" | \
+	awk -F= '$1 == "MYLIBS" { sub(/^[^=]*=/, ""); print }')
 [[ "${linux_executable_contract}" == *"CURL_FORCE_LOAD_LIBS=-Wl,--whole-archive ${repo_root}/deps/curl/curl/lib/.libs/libcurl.a -Wl,--no-whole-archive"* ]] || \
 	fail "Linux executable does not force-load vendored curl: ${linux_executable_contract}"
 [[ "${linux_static_libs}" != *'-lcurl'* ]] || \
 	fail "Linux executable still links curl outside its ownership flags: ${linux_executable_contract}"
 [[ "${linux_executable_contract}" == *'MYLIBS=-Wl,--export-dynamic '* ]] || \
 	fail "Linux executable does not export its force-loaded symbols: ${linux_executable_contract}"
+[[ "${linux_executable_libs}" == *"${repo_root}/deps/curl/curl/lib/.libs/libcurl.a"*"${repo_root}/deps/libssl/openssl/libssl.a"*' -lz '*' -ldl'* ]] || \
+	fail "Linux executable link order must be curl, OpenSSL, zlib, then libdl: ${linux_executable_contract}"
+
+freebsd_executable_contract=$(make -s -C "${repo_root}/src" \
+	-f Makefile -f "${tmp_dir}/src-contract.mk" UNAME_S=FreeBSD \
+	print-executable-link-contract)
+freebsd_executable_libs=$(printf '%s\n' "${freebsd_executable_contract}" | \
+	awk -F= '$1 == "MYLIBS" { sub(/^[^=]*=/, ""); print }')
+[[ "${freebsd_executable_contract}" == *"CURL_FORCE_LOAD_LIBS=-Wl,--whole-archive ${repo_root}/deps/curl/curl/lib/.libs/libcurl.a -Wl,--no-whole-archive"* ]] || \
+	fail "FreeBSD executable does not force-load vendored curl: ${freebsd_executable_contract}"
+[[ "${freebsd_executable_contract}" == *'MYLIBS=-Wl,--export-dynamic '* ]] || \
+	fail "FreeBSD executable does not export its force-loaded symbols: ${freebsd_executable_contract}"
+[[ "${freebsd_executable_libs}" == *"${repo_root}/deps/curl/curl/lib/.libs/libcurl.a"*"${repo_root}/deps/libssl/openssl/libssl.a"*' -lz '* ]] || \
+	fail "FreeBSD executable link order must be curl, OpenSSL, then zlib: ${freebsd_executable_contract}"
+[[ "${freebsd_executable_contract}" != *' -ldl'* ]] || \
+	fail "FreeBSD executable must not link Linux-only libdl: ${freebsd_executable_contract}"
 
 darwin_executable_contract=$(make -s -C "${repo_root}/src" \
 	-f Makefile -f "${tmp_dir}/src-contract.mk" UNAME_S=Darwin \
 	print-executable-link-contract)
 darwin_archives=$(printf '%s\n' "${darwin_executable_contract}" | \
 	awk -F= '$1 == "LIBPROXYSQLAR" { sub(/^[^=]*=/, ""); print }')
+darwin_executable_libs=$(printf '%s\n' "${darwin_executable_contract}" | \
+	awk -F= '$1 == "MYLIBS" { sub(/^[^=]*=/, ""); print }')
 [[ "${darwin_executable_contract}" == *"CURL_FORCE_LOAD_LIBS=-Wl,-force_load,${repo_root}/deps/curl/curl/lib/.libs/libcurl.a"* ]] || \
 	fail "macOS executable does not force-load vendored curl: ${darwin_executable_contract}"
 [[ "${darwin_archives}" != *"${repo_root}/deps/curl/curl/lib/.libs/libcurl.a"* ]] || \
 	fail "macOS executable still links curl outside its ownership flags: ${darwin_executable_contract}"
 [[ "${darwin_executable_contract}" == *'MYLIBS=-Wl,-export_dynamic '* ]] || \
 	fail "macOS executable does not export its force-loaded symbols: ${darwin_executable_contract}"
+[[ "${darwin_executable_libs}" == *"${repo_root}/deps/curl/curl/lib/.libs/libcurl.a"*"${repo_root}/deps/libssl/openssl/libssl.a"*' -lz '* ]] || \
+	fail "macOS executable link order must be curl, OpenSSL, then zlib: ${darwin_executable_contract}"
 
 genai_link=$(make -Bn -C "${repo_root}/plugins/genai" \
 	UNAME_S=Linux "${repo_root}/plugins/genai/ProxySQL_GenAI_Plugin.so" | \
@@ -238,6 +292,41 @@ genai_link=$(make -Bn -C "${repo_root}/plugins/genai" \
 [[ -n "${genai_link}" ]] || fail "unable to inspect the GenAI plugin link command"
 [[ "${genai_link}" != *"${repo_root}/deps/curl/curl/lib/.libs/libcurl.a"* ]] || \
 	fail "GenAI plugin must import curl instead of embedding its archive: ${genai_link}"
+
+genai_loader_link() {
+	local platform=$1
+	make -Bn -C "${repo_root}/test/tap/tests/unit" \
+		UNAME_S="${platform}" genai_plugin_load_unit-t | \
+		awk '
+			/^[^[:space:]].*genai_plugin_load_unit-t\.cpp .*ProxySQL_PluginManager\.cpp/ {
+				capture = 1
+			}
+			capture {
+				line = line " " $0
+				if ($0 ~ /-o genai_plugin_load_unit-t/) capture = 0
+			}
+			END { print line }
+		'
+}
+
+linux_genai_loader_link=$(genai_loader_link Linux)
+[[ "${linux_genai_loader_link}" == *'-Wl,--export-dynamic '*"-Wl,--whole-archive ${repo_root}/deps/curl/curl/lib/.libs/libcurl.a -Wl,--no-whole-archive"*"-Wl,--whole-archive ${repo_root}/deps/libssl/openssl/libssl.a ${repo_root}/deps/libssl/openssl/libcrypto.a -Wl,--no-whole-archive -lz -ldl"* ]] || \
+	fail "Linux GenAI loader host must force-load/export curl before OpenSSL, zlib, and libdl: ${linux_genai_loader_link}"
+
+freebsd_genai_loader_link=$(genai_loader_link FreeBSD)
+[[ "${freebsd_genai_loader_link}" == *'-Wl,--export-dynamic '*"-Wl,--whole-archive ${repo_root}/deps/curl/curl/lib/.libs/libcurl.a -Wl,--no-whole-archive"*"-Wl,--whole-archive ${repo_root}/deps/libssl/openssl/libssl.a ${repo_root}/deps/libssl/openssl/libcrypto.a -Wl,--no-whole-archive -lz"* ]] || \
+	fail "FreeBSD GenAI loader host must force-load/export curl before OpenSSL and zlib: ${freebsd_genai_loader_link}"
+[[ "${freebsd_genai_loader_link}" != *' -ldl'* ]] || \
+	fail "FreeBSD GenAI loader host must not link Linux-only libdl: ${freebsd_genai_loader_link}"
+
+darwin_genai_loader_link=$(genai_loader_link Darwin)
+[[ "${darwin_genai_loader_link}" == *'-Wl,-export_dynamic '*"-Wl,-force_load,${repo_root}/deps/curl/curl/lib/.libs/libcurl.a"*"-Wl,-force_load,${repo_root}/deps/libssl/openssl/libssl.a -Wl,-force_load,${repo_root}/deps/libssl/openssl/libcrypto.a -lz"* ]] || \
+	fail "macOS GenAI loader host must force-load/export curl before OpenSSL and zlib: ${darwin_genai_loader_link}"
+darwin_loader_without_force_load=${darwin_genai_loader_link//-Wl,-force_load,${repo_root}\/deps\/curl\/curl\/lib\/.libs\/libcurl.a/}
+[[ "${darwin_loader_without_force_load}" != *"${repo_root}/deps/curl/curl/lib/.libs/libcurl.a"* ]] || \
+	fail "macOS GenAI loader host must not contain an ordinary duplicate curl archive: ${darwin_genai_loader_link}"
+[[ "${darwin_genai_loader_link}" != *' -ldl'* ]] || \
+	fail "macOS GenAI loader host must not link Linux-only libdl: ${darwin_genai_loader_link}"
 
 linux_mcp_link=$(make -Bn -C "${repo_root}/test/tap/tests/unit" \
 	UNAME_S=Linux mcp_client_unit-t | tr '\n' ' ')

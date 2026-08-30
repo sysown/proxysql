@@ -261,6 +261,26 @@ ifeq ($(UNAME_S),Linux)
 endif
 endif
 
+# The real GenAI plugin is loaded with RTLD_NOW after this test executable is
+# linked. No reference from the host can make the static linker pull the curl
+# members needed only by that future plugin, so this one loader host mirrors
+# the production executable's ownership contract. Keep the ordinary standalone
+# unit links above unchanged.
+GENAI_PLUGIN_HOST_WHOLE_LIBPROXYSQL = $(WHOLE_LIBPROXYSQL)
+ifeq ($(UNAME_S),Darwin)
+GENAI_PLUGIN_HOST_WHOLE_LIBPROXYSQL = $(filter-out $(CURL_STATIC_LIB),$(WHOLE_LIBPROXYSQL))
+endif
+GENAI_PLUGIN_HOST_BASE_LIBS = $(filter-out \
+	$(EXECUTABLE_EXPORT_FLAGS) $(CURL_STATIC_LIB) \
+	$(OPENSSL_FORCE_LOAD_LIBS) -lz -ldl,$(MYLIBS))
+GENAI_PLUGIN_HOST_DLOPEN_LIBS :=
+ifeq ($(UNAME_S),Linux)
+GENAI_PLUGIN_HOST_DLOPEN_LIBS := -ldl
+endif
+GENAI_PLUGIN_HOST_OWNED_LIBS = $(EXECUTABLE_EXPORT_FLAGS) \
+	$(call force_load_archives,$(CURL_STATIC_LIB)) \
+	$(OPENSSL_FORCE_LOAD_LIBS) -lz $(GENAI_PLUGIN_HOST_DLOPEN_LIBS)
+
 
 # ===========================================================================
 # Compiler flags
@@ -838,8 +858,9 @@ $(GENAI_PLUGIN_SO):
 genai_plugin_load_unit-t: genai_plugin_load_unit-t.cpp $(GENAI_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/lib/ProxySQL_PluginManager.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		-DPROXYSQL40 -DPROXYSQL_GENAI_PLUGIN_PATH=\"$(GENAI_PLUGIN_SO)\" $(GENAI_PLUGIN_DEFINES) \
-		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
-		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+		$(IDIRS) $(LDIRS) $(OPT) $(GENAI_PLUGIN_HOST_WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(GENAI_PLUGIN_HOST_BASE_LIBS) $(GENAI_PLUGIN_HOST_OWNED_LIBS) \
+		$(ALLOW_MULTI_DEF) -o $@
 
 # Compile the plugin source set once for the eleven shard-declared tests. The
 # object path preserves each source's plugins/genai/src/... location, avoiding
