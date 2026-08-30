@@ -2,7 +2,6 @@
 set -euo pipefail
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-repo_root=$(CDPATH='' cd -- "${script_dir}/../../.." && pwd)
 audit_script="${script_dir}/test-no-system-openssl-links.bash"
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "${tmp_dir}"' EXIT
