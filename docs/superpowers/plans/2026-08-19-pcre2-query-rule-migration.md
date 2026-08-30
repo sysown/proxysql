@@ -89,17 +89,22 @@
   -- global replacement: SELECT 1 + 2 becomes SELECT 9 + 9
   (61191, 1, '[0-9]', '9', 'CASELESS,GLOBAL', 1)
 
-  -- pcrecpp whole match and capture expansion
-  (61192, 1, '^SELECT ([0-9]+)$', 'SELECT ''\\0:'' || ''\\1''', 'CASELESS', 1)
+  -- pcrecpp whole match and capture expansion: SELECT 1 becomes SELECT 1 + 1
+  (61192, 1, '^SELECT ([0-9]+)$', '\\0 + \\1', 'CASELESS', 1)
 
   -- literal backslash in a pcrecpp replacement
-  (61193, 1, '^SELECT 1$', 'SELECT ''\\\\''', 'CASELESS', 1)
+  (61193, 1, 'TOKEN', '\\\\*/ + 1 /*', 'CASELESS', 1)
 
   -- malformed legacy escape: query remains SELECT 7
   (61194, 1, '^SELECT 7$', 'SELECT \\x', 'CASELESS', 1)
   ```
 
-  Use dialect-specific string concatenation for the whole-match case: `CONCAT('\\0:', '\\1')` for MySQL and `''\\0:'' || ''\\1''` for PostgreSQL. Fetch the sole result value and assert the exact rewritten result for every valid case; for the malformed case assert `7` is returned.
+  SQLite stores backslashes literally, so the C++ fixtures must emit one stored
+  backslash for `\\0` and `\\1`, and two for the legacy literal-backslash form.
+  Fetch the sole result value and assert the exact rewritten result for every
+  valid case; for the malformed case assert `7` is returned. After inserting
+  each rule, save the frontend's rules to disk, reload from disk, and only then
+  load them to runtime before executing the rewrite.
 
 - [ ] **Step 4: Register the tests before building them**
 
@@ -236,7 +241,7 @@
 
 - [ ] **Step 3: Implement rewrite translation and substitution**
 
-  Add a private helper that converts only the legacy rewrite forms: `\\0` through `\\9` become `${0}` through `${9}`, and `\\\\` becomes a literal backslash escaped for PCRE2 substitution. Return false for every other backslash escape. In `replace`, call `pcre2_substitute` first with a null/zero output buffer and `PCRE2_SUBSTITUTE_OVERFLOW_LENGTH`; allocate the reported size plus one byte, then rerun with `PCRE2_SUBSTITUTE_GLOBAL` when `global` is true. Assign to `*subject` only after a successful second call.
+  Add a private helper that converts only the legacy rewrite forms: `\\0` through `\\9` become `${0}` through `${9}`, `\\\\` becomes a literal backslash, and every literal `$` becomes `$$` for PCRE2 substitution. Return false for every other backslash escape. In `replace`, build one substitution-options value containing `PCRE2_SUBSTITUTE_UNSET_EMPTY` and, when requested, `PCRE2_SUBSTITUTE_GLOBAL`. Call `pcre2_substitute` with that value plus `PCRE2_SUBSTITUTE_OVERFLOW_LENGTH` and a null/zero output buffer; require `PCRE2_ERROR_NOMEMORY`, allocate the reported size plus one byte, then rerun with the same base options. Assign to `*subject` only after a successful second call.
 
   Replace the current `re1->Replace` and `re1->GlobalReplace` branch with:
 
@@ -253,6 +258,8 @@
   Run:
 
   ```bash
+  PROXYSQL31=1 make cleanall
+  PROXYSQL31=1 make debug
   make -C test/tap/tests/unit rule_matching_unit-t
   ./test/tap/tests/unit/rule_matching_unit-t
   git diff --check
@@ -278,13 +285,16 @@
 **Interfaces:**
 
 - Consumes: a built ProxySQL, configured test MySQL/PostgreSQL backends, and the query-rule admin tables.
-- Produces: deterministic TAP evidence for first/global replacements, capture expansion, literal backslashes, and malformed rewrites.
+- Produces: deterministic TAP evidence for persisted first/global replacements,
+  capture expansion, literal backslashes, and malformed rewrites.
 
 - [ ] **Step 1: Build the new TAP binaries**
 
   Run:
 
   ```bash
+  PROXYSQL31=1 make cleanall
+  PROXYSQL31=1 make debug
   make -C test/tap/tests pcre2_query_rules-t pgsql-pcre2_query_rules-t
   ```
 

@@ -57,24 +57,28 @@ interface will expose PCRE2 types. The PCRE slot in the compiled-rule structure
 will own one immutable `pcre2_code` object. Its lifetime remains tied to the
 loaded query rule, exactly as the current `pcrecpp::RE` object is.
 
-Compilation will select the 8-bit API and map `CASELESS` to
-`PCRE2_CASELESS`. Invalid patterns will produce an actionable diagnostic using
-the PCRE2 error text and act as a non-match, preserving the safe operational
-outcome of a regex that cannot be compiled. Per-match data is allocated for an
-operation and released before it returns, so a compiled query rule remains safe
-to use concurrently.
+The adapter selects PCRE2's generic 8-bit API by defining
+`PCRE2_CODE_UNIT_WIDTH 8` before including `pcre2.h`, then maps `CASELESS` to
+`PCRE2_CASELESS`. Invalid patterns produce an actionable diagnostic using the
+PCRE2 error text and make the rule fail closed: a compile failure is not a raw
+regex non-match that `negate_match_pattern` can invert. Per-match data is
+allocated for an operation and released before it returns, so a compiled query
+rule remains safe to use concurrently.
 
 Matching will use PCRE2 unanchored matching, which is the equivalent of the
 current `PartialMatch` behavior. Negated rules will retain their current
 inversion after the match result is known.
 
-The adapter will translate the established `pcrecpp` rewrite form into PCRE2
+The adapter translates the established `pcrecpp` rewrite form into PCRE2
 substitution form before calling `pcre2_substitute`: `\\0` through `\\9` map to
-the corresponding capture references and `\\\\` stays a literal backslash.
-Malformed legacy rewrite escapes will leave the query unchanged and emit a
-diagnostic. `GLOBAL` controls whether the substitution has the global flag;
-without it, only the first match is replaced. Buffer growth will follow the
-PCRE2 length-reporting path, so a valid rewrite is never truncated.
+the corresponding capture references, `\\\\` stays a literal backslash, and
+every legacy literal `$` becomes `$$` for PCRE2. Any other backslash escape is
+malformed and leaves the query unchanged with a diagnostic. Optional captures
+expand to empty text, as they did with pcrecpp. `GLOBAL` controls whether the
+substitution has the global flag; without it, only the first match is replaced.
+The same substitute options, including `GLOBAL` and `UNSET_EMPTY`, are used for
+the sizing and execution calls. Buffer growth follows PCRE2's length-reporting
+path, so a valid rewrite is never truncated.
 
 The adapter will retain the existing behavior for both rule storage locations:
 one compiled pattern for `match_digest` and a second for `match_pattern`.
@@ -90,8 +94,8 @@ The cases must cover:
 - `CASELESS` matching and negated matching;
 - first-only and `GLOBAL` replacement;
 - whole-match, capture-group, and literal-backslash rewrites;
-- a malformed pattern and a malformed rewrite, with no crash and no altered
-  query text;
+- a malformed pattern, including a negated rule, and a malformed rewrite, with
+  no crash and no altered query text;
 - a replacement that requires the PCRE2 output buffer to grow.
 
 Run existing query-rule TAP regressions, including the MySQL and PostgreSQL
@@ -105,5 +109,9 @@ the unit-test source-group check and format check.
 - ProxySQL no longer includes or links PCRE1 or `pcrecpp`.
 - Builds are self-contained from vendored PCRE2 10.47 on supported platforms.
 - Existing persisted query-rule patterns, modifiers, and rewrites preserve the
-  behavior defined above for MySQL and PostgreSQL.
+  behavior defined above for MySQL and PostgreSQL. The repository has no
+  versioned historical PCRE1 rule corpus, so this migration's compatibility
+  boundary is the documented pcrecpp rewrite grammar. The MySQL and PostgreSQL
+  frontend cases save each representative rule to disk, reload it, then verify
+  first/global rewrites and malformed-input fallback through runtime.
 - Focused unit and TAP coverage pass after a clean build.

@@ -459,16 +459,22 @@ static bool rule_matches_regex(
 		compiled_regex = temporary_regex;
 	}
 
+	bool regex_is_valid = false;
 	bool rc = false;
 	if (compiled_regex) {
 		if (compiled_regex->re2) {
-			rc = RE2::PartialMatch(subject, *compiled_regex->re2);
-		} else if (compiled_regex->re1) {
+			if (compiled_regex->re2->ok()) {
+				regex_is_valid = true;
+				rc = RE2::PartialMatch(subject, *compiled_regex->re2);
+			}
+		} else if (compiled_regex->re1 && compiled_regex->re1->valid()) {
+			regex_is_valid = true;
 			rc = compiled_regex->re1->partial_match(subject);
 		}
 	}
 
 	free_compiled_query_rule(temporary_regex);
+	if (!regex_is_valid) return false;
 	return (qr->negate_match_pattern ? (rc == false) : (rc == true));
 }
 

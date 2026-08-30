@@ -49,6 +49,8 @@ static bool run_rewrite_case(MYSQL* admin, MYSQL* proxy, const char* insert_rule
 	const bool setup_ok =
 		run_admin_checked(admin, "DELETE FROM mysql_query_rules WHERE rule_id BETWEEN 61190 AND 61194") &&
 		run_admin_checked(admin, insert_rule) &&
+		run_admin_checked(admin, "SAVE MYSQL QUERY RULES TO DISK") &&
+		run_admin_checked(admin, "LOAD MYSQL QUERY RULES FROM DISK") &&
 		run_admin_checked(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 	const bool query_ok = setup_ok && get_single_value(proxy, query, value);
 	ok(query_ok && value == expected, "%s (expected '%s', got '%s')", label, expected,
@@ -61,6 +63,8 @@ static void run_negated_error_case(MYSQL* admin, MYSQL* proxy, const char* inser
 	const bool setup_ok =
 		run_admin_checked(admin, "DELETE FROM mysql_query_rules WHERE rule_id BETWEEN 61190 AND 61194") &&
 		run_admin_checked(admin, insert_rule) &&
+		run_admin_checked(admin, "SAVE MYSQL QUERY RULES TO DISK") &&
+		run_admin_checked(admin, "LOAD MYSQL QUERY RULES FROM DISK") &&
 		run_admin_checked(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 	const bool matching_ok = setup_ok && get_single_value(proxy, "SELECT 8", value);
 	ok(matching_ok && value == "8",
@@ -136,6 +140,7 @@ int main(int, char**) {
 
 	const bool teardown_ok =
 		run_admin_checked(admin, "DELETE FROM mysql_query_rules WHERE rule_id BETWEEN 61190 AND 61194") &&
+		run_admin_checked(admin, "SAVE MYSQL QUERY RULES TO DISK") &&
 		run_admin_checked(admin, "LOAD MYSQL QUERY RULES TO RUNTIME") &&
 		(!original_regex.empty() &&
 		 run_admin_checked(admin, ("SET mysql-query_processor_regex=" + original_regex).c_str()) &&

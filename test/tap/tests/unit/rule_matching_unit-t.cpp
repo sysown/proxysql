@@ -163,6 +163,15 @@ static void test_invalid_pcre2_pattern() {
 		"invalid PCRE2 pattern safely returns no match");
 }
 
+static void test_invalid_negated_pcre2_pattern() {
+	QP_rule_t r = make_rule();
+	r.match_pattern = const_cast<char *>("(");
+	r.negate_match_pattern = true;
+	ok(!rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 1),
+		"invalid PCRE2 pattern does not match a negated rule");
+}
+
 static void test_match_pattern() {
 	QP_rule_t r = make_rule();
 	r.match_pattern = const_cast<char *>("SELECT .* FROM orders");
@@ -287,9 +296,9 @@ static void test_null_rule() {
 
 int main() {
 #ifdef DEBUG
-	plan(33);
+	plan(34);
 #else
-	plan(26);
+	plan(27);
 #endif
 
 	test_init_minimal();
@@ -305,6 +314,7 @@ int main() {
 	test_match_digest_pcre();       // 1
 	test_match_digest_pcre2();      // 1
 	test_invalid_pcre2_pattern();   // 1
+	test_invalid_negated_pcre2_pattern(); // 1
 	test_match_pattern();           // 1
 	test_negate_match_pattern();    // 2
 	test_caseless_modifier();       // 1
@@ -315,9 +325,9 @@ int main() {
 	test_combined_criteria();       // 2
 	test_null_rule();               // 1
 #ifdef DEBUG
-	// Total: 33
+	// Total: 34
 #else
-	// Total: 26
+	// Total: 27
 #endif
 
 	test_cleanup_minimal();
