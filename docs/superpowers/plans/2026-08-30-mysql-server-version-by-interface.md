@@ -612,7 +612,10 @@ make -C test/tap/tests \
   mysql-select_version_without_backend-t \
   reg_test_4300-dollar_quote_check-t
 WORKSPACE=$(pwd) INFRA_ID=dev-$USER TAP_GROUP=legacy-g1 \
-  TEST_PY_TAP_INCL="mysql-server_version_by_interface-t mysql-select_version_without_backend-t reg_test_4300-dollar_quote_check-t" \
+  TEST_PY_TAP_INCL="mysql-server_version_by_interface-t mysql-select_version_without_backend-t" \
+  test/infra/control/run-tests-isolated.bash
+WORKSPACE=$(pwd) INFRA_ID=dev-$USER TAP_GROUP=legacy-g2 \
+  TEST_PY_TAP_INCL=reg_test_4300-dollar_quote_check-t \
   test/infra/control/run-tests-isolated.bash
 ```
 
@@ -681,7 +684,7 @@ make -C test/tap/tests \
 WORKSPACE=$(pwd) INFRA_ID=dev-$USER TAP_GROUP=legacy-g1 \
   TEST_PY_TAP_INCL=mysql-server_version_by_interface-t \
   test/infra/control/run-tests-isolated.bash
-WORKSPACE=$(pwd) INFRA_ID=dev-$USER TAP_GROUP=legacy-g1 \
+WORKSPACE=$(pwd) INFRA_ID=dev-$USER TAP_GROUP=legacy-g5 \
   TEST_PY_TAP_INCL=test_cluster_sync-t \
   test/infra/control/run-tests-isolated.bash
 ```
@@ -741,7 +744,13 @@ make -C test/tap/tests \
   reg_test_4300-dollar_quote_check-t \
   test_cluster_sync-t
 WORKSPACE=$(pwd) INFRA_ID=dev-$USER TAP_GROUP=legacy-g1 \
-  TEST_PY_TAP_INCL="mysql-server_version_by_interface-t mysql-select_version_without_backend-t reg_test_4300-dollar_quote_check-t test_cluster_sync-t" \
+  TEST_PY_TAP_INCL="mysql-server_version_by_interface-t mysql-select_version_without_backend-t" \
+  test/infra/control/run-tests-isolated.bash
+WORKSPACE=$(pwd) INFRA_ID=dev-$USER TAP_GROUP=legacy-g2 \
+  TEST_PY_TAP_INCL=reg_test_4300-dollar_quote_check-t \
+  test/infra/control/run-tests-isolated.bash
+WORKSPACE=$(pwd) INFRA_ID=dev-$USER TAP_GROUP=legacy-g5 \
+  TEST_PY_TAP_INCL=test_cluster_sync-t \
   test/infra/control/run-tests-isolated.bash
 ```
 

@@ -69,7 +69,7 @@ int test_supports_dollar_quote(MYSQL* conn, int v_idx, int v8_1_0_idx) {
 	return EXIT_SUCCESS;
 }
 
-int test_versions_mysql(MYSQL* admin, MYSQL* proxy, const vector<string>& versions) {
+int test_versions_mysql(CommandLine& cl, MYSQL* admin, const vector<string>& versions) {
 	const int64_t v8_1_0_idx { get_elem_idx(string { "8.1.0" }, versions) };
 	assert(v8_1_0_idx != -1 && "Invalid test payload, no '8.1.0' present in tested versions");
 
@@ -78,9 +78,18 @@ int test_versions_mysql(MYSQL* admin, MYSQL* proxy, const vector<string>& versio
 		const string v_minor { v == "8.1.0" ? v : v + "." + std::to_string(rand()) };
 
 		MYSQL_QUERY_T(admin, ("UPDATE global_variables SET variable_value='" + v_minor + "' WHERE variable_name='mysql-server_version'").c_str());
+		MYSQL_QUERY_T(admin, "UPDATE global_variables SET variable_value='{}' WHERE variable_name='mysql-server_version_by_interface'");
 		MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
+		MYSQL* proxy = mysql_init(NULL);
+
+		if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
+			return EXIT_FAILURE;
+		}
+
 		test_supports_dollar_quote(proxy, i, v8_1_0_idx);
+		mysql_close(proxy);
 	}
 
 	return EXIT_SUCCESS;
@@ -123,26 +132,19 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	MYSQL* proxy = mysql_init(NULL);
 	MYSQL* admin = mysql_init(NULL);
-
-	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
-		return EXIT_FAILURE;
-	}
 
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
 	}
 
-	int rc = test_versions_mysql(admin, proxy, versions);
+	int rc = test_versions_mysql(cl, admin, versions);
 	ok(rc == EXIT_SUCCESS, "Multiple 'mysql-server_version' tested correctly against MySQL interface");
 
 	rc = test_versions_admin(cl, admin, versions);
 	ok(rc == EXIT_SUCCESS, "Multiple 'mysql-server_version' tested correctly against Admin interface");
 
-	mysql_close(proxy);
 	mysql_close(admin);
 
 	return exit_status();

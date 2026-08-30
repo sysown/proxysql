@@ -247,7 +247,11 @@ int main(int, char**) {
 	const bool use_ipv6 = ipv6_loopback_available();
 	plan(use_ipv6 ? 28 : 27);
 
-	const fs::path runtime_dir { fs::path { cl.workdir } / "mysql_server_version_by_interface" };
+	// Keep the Unix listener below sockaddr_un::sun_path even when TAP_WORKDIR
+	// is an absolute repository path supplied by the isolated test harness.
+	const fs::path runtime_dir {
+		fs::temp_directory_path() / ("proxysql-svbi-" + std::to_string(getpid()))
+	};
 	const fs::path config_file { runtime_dir / "proxysql.cfg" };
 	const fs::path mysql_socket { runtime_dir / "mysql.sock" };
 	if (prepare_runtime(cl, runtime_dir, config_file, mysql_socket, use_ipv6) != EXIT_SUCCESS) {
