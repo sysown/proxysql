@@ -137,6 +137,12 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 
 	PtrArray *cached_connections;
 	unsigned int push_local_counter;	// round-robin counter for bounded local caching: cache 1-in-N where N = mysql_threads
+#ifdef PROXYSQL31
+	std::shared_ptr<const MySQLServerVersionByInterfaceMap>
+		server_version_by_interface_snapshot_ {
+			std::make_shared<const MySQLServerVersionByInterfaceMap>()
+		};
+#endif
 
 #ifdef IDLE_THREADS
 	struct epoll_event events[MY_EPOLL_THREAD_MAXEVENTS];

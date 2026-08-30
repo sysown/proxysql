@@ -244,6 +244,7 @@ MySQL_Listeners_Manager::~MySQL_Listeners_Manager() {
 }
 
 int MySQL_Listeners_Manager::add(const char *iface, unsigned int num_threads, int **perthrsocks) {
+	const std::string original_iface { iface };
 	for (unsigned int i=0; i<ifaces->len; i++) {
 		iface_info *ifi=(iface_info *)ifaces->index(i);
 		if (strcmp(ifi->iface,iface)==0) {
@@ -285,7 +286,7 @@ int MySQL_Listeners_Manager::add(const char *iface, unsigned int num_threads, in
 			for (i=0;i<num_threads;i++) {
 				s=listen_on_port(address, atoi(port), PROXYSQL_LISTEN_LEN, true);
 				ioctl_FIONBIO(s,1);
-				iface_info *ifi=new iface_info((char *)iface, address, atoi(port), s);
+				iface_info *ifi=new iface_info((char *)original_iface.c_str(), address, atoi(port), s);
 				ifaces->add(ifi);
 				l_perthrsocks[i]=s;
 			}
@@ -306,7 +307,7 @@ int MySQL_Listeners_Manager::add(const char *iface, unsigned int num_threads, in
 	}
 	if (s>0) {
 		ioctl_FIONBIO(s,1);
-		iface_info *ifi=new iface_info((char *)iface, address, atoi(port), s);
+		iface_info *ifi=new iface_info((char *)original_iface.c_str(), address, atoi(port), s);
 		ifaces->add(ifi);
 	}
 	if (is_ipv6 == false) {
@@ -5140,6 +5141,9 @@ void MySQL_Thread::refresh_variables() {
 	}
 
 	REFRESH_VARIABLE_CHAR(server_version);
+#ifdef PROXYSQL31
+	server_version_by_interface_snapshot_ = GloMTH->server_version_by_interface_snapshot();
+#endif
 	REFRESH_VARIABLE_INT(eventslog_filesize);
 	REFRESH_VARIABLE_INT(eventslog_table_memory_size);
 	REFRESH_VARIABLE_INT(eventslog_buffer_history_size);
@@ -5418,6 +5422,12 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 		if (ifi) {
 			sess->client_myds->proxy_addr.addr=strdup(ifi->address);
 			sess->client_myds->proxy_addr.port=ifi->port;
+#ifdef PROXYSQL31
+			const string server_version = resolve_mysql_server_version_for_interface(
+				*server_version_by_interface_snapshot_, ifi->iface, mysql_thread___server_version
+			);
+			sess->client_myds->pin_frontend_server_version(server_version);
+#endif
 		}
 		if (sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, true) == false) {
 			delete sess;
