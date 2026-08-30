@@ -4,6 +4,7 @@ set -euo pipefail
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH='' cd -- "${script_dir}/../../.." && pwd)
+platform=$(uname -s)
 if (( $# == 0 )); then
 	curl_archive="${repo_root}/deps/curl/curl/lib/.libs/libcurl.a"
 	curl_la="${repo_root}/deps/curl/curl/lib/libcurl.la"
@@ -24,6 +25,30 @@ required_curl_apis=(
 	curl_slist_append
 	curl_slist_free_all
 )
+
+case ${platform} in
+	Linux|FreeBSD)
+	required_tools=(ar nm readelf)
+	missing_api_diagnostic='missing required GLOBAL DEFAULT curl definition'
+	;;
+	Darwin)
+	required_tools=(ar nm)
+	missing_api_diagnostic='missing required external curl definition'
+	;;
+	*)
+	printf 'ERROR: unsupported archive inspection platform: %s\n' \
+		"${platform}" >&2
+	exit 1
+	;;
+esac
+
+for tool in "${required_tools[@]}"; do
+	if ! command -v "${tool}" >/dev/null 2>&1; then
+		printf 'ERROR: required archive inspection tool is unavailable on %s: %s\n' \
+			"${platform}" "${tool}" >&2
+		exit 1
+	fi
+done
 
 if [[ ! -f "${curl_archive}" ]]; then
 	printf 'ERROR: vendored curl archive is missing: %s\n' "${curl_archive}" >&2
@@ -52,28 +77,47 @@ while IFS= read -r member; do
 	fi
 done < <(ar t "${curl_archive}")
 
-defined_external_symbols=$(nm -g "${curl_archive}" 2>/dev/null | awk '
-	NF >= 2 {
-		type = $(NF - 1)
-		name = $NF
-		sub(/^_/, "", name)
-		if (type ~ /^[A-TV-Z]$/) {
+case ${platform} in
+	Linux|FreeBSD)
+	elf_symbols=$(readelf -Ws "${curl_archive}" 2>/dev/null)
+	defined_global_symbols=$(awk '
+		$5 == "GLOBAL" && $7 != "UND" {
+			name = $8
+			sub(/@.*/, "", name)
 			print name
 		}
-	}
-')
+	' <<<"${elf_symbols}" | sort -u)
+	defined_public_symbols=$(awk '
+		$5 == "GLOBAL" && $6 == "DEFAULT" && $7 != "UND" {
+			name = $8
+			sub(/@.*/, "", name)
+			print name
+		}
+	' <<<"${elf_symbols}" | sort -u)
+	;;
+	Darwin)
+	defined_global_symbols=$(nm -gU "${curl_archive}" 2>/dev/null | awk '
+		NF >= 1 {
+			name = $NF
+			sub(/^_/, "", name)
+			print name
+		}
+	' | sort -u)
+	defined_public_symbols=${defined_global_symbols}
+	;;
+esac
 
 for symbol in "${required_curl_apis[@]}"; do
-	if ! grep -Fxq "${symbol}" <<<"${defined_external_symbols}"; then
-		printf 'ERROR: vendored curl is missing required external curl definition: %s\n' \
-			"${symbol}" >&2
+	if ! grep -Fxq "${symbol}" <<<"${defined_public_symbols}"; then
+		printf 'ERROR: vendored curl is %s: %s\n' \
+			"${missing_api_diagnostic}" "${symbol}" >&2
 		exit 1
 	fi
 done
 
 embedded_openssl=$(grep -E \
-	'^(OPENSSL_|OpenSSL_|SSL_|TLS_|EVP_|OSSL_|BIO_|X509_|CRYPTO_)' \
-	<<<"${defined_external_symbols}" | sort -u || true)
+	'^(ASN1|BIO|BN|CMS|COMP|CONF|CRYPTO|DH|DSA|DTLS|EC|ENGINE|ERR|EVP|HMAC|KDF|MD5|NCONF|OBJ|OCSP|OPENSSL|OpenSSL|OSSL|PEM|PKCS|RAND|RSA|SHA|SRP|SSL|TS|UI|X509)_[A-Za-z0-9_]+$|^(d2i|i2d)_[A-Za-z0-9_]+$|^ossl_[A-Za-z0-9_]+$|^TLS_(client_|server_)?method$|^TLSv1(_[0-9]+)?_(client_|server_)?method$' \
+	<<<"${defined_global_symbols}" | sort -u || true)
 if [[ -n "${embedded_openssl}" ]]; then
 	printf 'ERROR: vendored curl contains embedded OpenSSL definition(s):\n%s\n' \
 		"${embedded_openssl}" >&2
