@@ -155,6 +155,14 @@ static void test_match_digest_pcre2() {
 		"PCRE-compatible mode accepts PCRE2 variable-length lookbehind");
 }
 
+static void test_match_digest_pcre2_lookaround_reset_start() {
+	QP_rule_t r = make_rule();
+	r.match_digest = const_cast<char *>("(?=a\\K)a");
+	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+		"127.0.0.1", 6033, 0, "a", "SELECT 1", nullptr, 1),
+		"PCRE-compatible mode accepts legacy \\K inside positive lookahead");
+}
+
 static void test_invalid_pcre2_pattern() {
 	QP_rule_t r = make_rule();
 	r.match_pattern = const_cast<char *>("(");
@@ -296,9 +304,9 @@ static void test_null_rule() {
 
 int main() {
 #ifdef DEBUG
-	plan(34);
+	plan(35);
 #else
-	plan(27);
+	plan(28);
 #endif
 
 	test_init_minimal();
@@ -313,6 +321,7 @@ int main() {
 	test_match_digest_re2();        // 1
 	test_match_digest_pcre();       // 1
 	test_match_digest_pcre2();      // 1
+	test_match_digest_pcre2_lookaround_reset_start(); // 1
 	test_invalid_pcre2_pattern();   // 1
 	test_invalid_negated_pcre2_pattern(); // 1
 	test_match_pattern();           // 1
@@ -325,9 +334,9 @@ int main() {
 	test_combined_criteria();       // 2
 	test_null_rule();               // 1
 #ifdef DEBUG
-	// Total: 34
+	// Total: 35
 #else
-	// Total: 27
+	// Total: 28
 #endif
 
 	test_cleanup_minimal();

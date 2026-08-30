@@ -94,14 +94,24 @@ Pcre2Regex::Pcre2Regex(const char* pattern, uint32_t options) {
 
 	int error_code = 0;
 	PCRE2_SIZE error_offset = 0;
+	pcre2_compile_context* compile_context = pcre2_compile_context_create(nullptr);
+	if (compile_context == nullptr) return;
+	if (pcre2_set_compile_extra_options(
+		compile_context,
+		PCRE2_EXTRA_ALLOW_LOOKAROUND_BSK
+	) != 0) {
+		pcre2_compile_context_free(compile_context);
+		return;
+	}
 	code_ = pcre2_compile(
 		reinterpret_cast<PCRE2_SPTR>(pattern),
 		PCRE2_ZERO_TERMINATED,
 		options,
 		&error_code,
 		&error_offset,
-		nullptr
+		compile_context
 	);
+	pcre2_compile_context_free(compile_context);
 	if (code_ == nullptr) {
 		PCRE2_UCHAR error_message[256] {};
 		const int message_rc = pcre2_get_error_message(
