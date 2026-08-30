@@ -73,6 +73,10 @@ checkout_steps_have_required_settings() {
 	local body=$1
 
 	awk '
+		function leading_spaces(value) {
+			match(value, /[^ ]/)
+			return RSTART ? RSTART - 1 : length(value)
+		}
 		function finish_step() {
 			if (is_checkout) {
 				checkout_count++
@@ -85,14 +89,32 @@ checkout_steps_have_required_settings() {
 			is_checkout = 0
 			has_lfs = 0
 			has_no_persisted_credentials = 0
+			in_step = 1
+			in_with = 0
+			step_indent = 4
 			line = $0
 			sub(/^[[:space:]]*-[[:space:]]*/, "", line)
 			if (line ~ /^uses:[[:space:]]*actions\/checkout@/) is_checkout = 1
 			next
 		}
-		/^[[:space:]]+uses:[[:space:]]*actions\/checkout@/ { is_checkout = 1 }
-		is_checkout && /^[[:space:]]+lfs:[[:space:]]*true[[:space:]]*$/ { has_lfs = 1 }
-		is_checkout && /^[[:space:]]+persist-credentials:[[:space:]]*false[[:space:]]*$/ { has_no_persisted_credentials = 1 }
+		in_step {
+			line = $0
+			if (line ~ /^[[:space:]]*$/) next
+			indent = leading_spaces(line)
+			sub(/^[[:space:]]*/, "", line)
+			if (in_with && indent <= with_indent) in_with = 0
+			if (indent == step_indent + 2 && line == "with:") {
+				in_with = 1
+				with_indent = indent
+				next
+			}
+			if (indent == step_indent + 2 && line ~ /^uses:[[:space:]]*actions\/checkout@/) {
+				is_checkout = 1
+				next
+			}
+			if (in_with && indent == with_indent + 2 && line ~ /^lfs:[[:space:]]*true[[:space:]]*$/) has_lfs = 1
+			if (in_with && indent == with_indent + 2 && line ~ /^persist-credentials:[[:space:]]*false[[:space:]]*$/) has_no_persisted_credentials = 1
+		}
 		END {
 			finish_step()
 			exit(checkout_count > 0 && missing_lfs == 0 && missing_no_persisted_credentials == 0 ? 0 : 1)

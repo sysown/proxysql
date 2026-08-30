@@ -49,13 +49,65 @@ import sys
 
 path = pathlib.Path(sys.argv[1])
 text = path.read_text()
-old = '      lfs: true\n'
+old = '        lfs: true\n'
 if old not in text:
     raise SystemExit("single-line checkout fixture was not found")
-path.write_text(text.replace(old, old + '      persist-credentials: false\n', 1))
+path.write_text(text.replace(old, old + '        persist-credentials: false\n', 1))
 PY
 if ! OPENSSL_LFS_WORKFLOW_DIR="${tmp_dir}/.github/workflows" "${validator}" >/dev/null 2>&1; then
 	fail "validator rejected a single-line build checkout with both required settings"
 fi
+
+valid_workflow="${tmp_dir}/valid-CI-cluster-simulator.yml"
+cp "${workflow}" "${valid_workflow}"
+
+assert_misplaced_settings_rejected() {
+	local name=$1
+	if OPENSSL_LFS_WORKFLOW_DIR="${tmp_dir}/.github/workflows" "${validator}" >/dev/null 2>&1; then
+		fail "validator accepted checkout settings misplaced under ${name}"
+	fi
+	cp "${valid_workflow}" "${workflow}"
+}
+
+python3 - "${workflow}" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+old = '''      with:
+        lfs: true
+        persist-credentials: false
+'''
+new = '''      with:
+        fetch-depth: |
+          lfs: true
+          persist-credentials: false
+'''
+if old not in text:
+    raise SystemExit("valid checkout settings fixture was not found")
+path.write_text(text.replace(old, new, 1))
+PY
+assert_misplaced_settings_rejected 'a block scalar'
+
+python3 - "${workflow}" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+old = '''      with:
+        lfs: true
+        persist-credentials: false
+'''
+new = '''      env:
+        lfs: true
+        persist-credentials: false
+'''
+if old not in text:
+    raise SystemExit("valid checkout settings fixture was not found")
+path.write_text(text.replace(old, new, 1))
+PY
+assert_misplaced_settings_rejected 'env'
 
 echo "OpenSSL LFS workflow regression tests passed"

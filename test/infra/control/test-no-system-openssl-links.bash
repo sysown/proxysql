@@ -12,7 +12,7 @@ violations="${tmp_dir}/violations"
 git -C "${repo_root}" ls-files -z -- \
 	'*Makefile*' '*.mk' '*.bash' '*.sh' > "${candidate_list}"
 
-pattern="(^|[[:space:]\"'=])(-lssl|-lcrypto)([[:space:]\"'=]|$)|-Wl,[^[:space:]]*-l(ssl|crypto)(,|[[:space:]]|$)|-Wl,[^[:space:]]*-l,(ssl|crypto)(,|[[:space:]]|$)|-Xlinker([[:space:]]|=)+-l(ssl|crypto)([[:space:]\"'=]|$)|-l:(libssl|libcrypto)([.[:space:]\"'=]|$)|brew --prefix openssl|CUSTOM_OPENSSL_PATH|OPENSSL_ROOT_DIR[[:space:]]*[:?+]?=[[:space:]]*(/usr|/opt)|/usr/include/openssl|/(usr|lib|opt)/(local/)?lib[^[:space:]\"']*/lib(ssl|crypto)[.](a|so([.][0-9]+)*|dylib|[0-9]+[.]dylib)|/(usr/local|opt/homebrew)/(opt|Cellar)/openssl[^[:space:]\"']*/lib/lib(ssl|crypto)[.](a|so([.][0-9]+)*|dylib|[0-9]+[.]dylib)"
+pattern="(^|[[:space:]\"'=])(-lssl|-lcrypto)([[:space:]\"'=]|$)|-Wl,[^[:space:]]*-l(ssl|crypto)(,|[[:space:]]|$)|-Wl,[^[:space:]]*-l,(ssl|crypto)(,|[[:space:]]|$)|-Xlinker([[:space:]]|=)+-l(ssl|crypto)([[:space:]\"'=]|$)|-Xlinker([[:space:]]|=)+-l([[:space:]]|=)+-Xlinker([[:space:]]|=)+(ssl|crypto)([[:space:]\"'=]|$)|-l:(libssl|libcrypto)([.[:space:]\"'=]|$)|brew --prefix openssl|CUSTOM_OPENSSL_PATH|OPENSSL_ROOT_DIR[[:space:]]*[:?+]?=[[:space:]]*(/usr|/opt)|/usr/include/openssl|/(usr|lib|opt)/(local/)?lib[^[:space:]\"']*/lib(ssl|crypto)[.](a|so([.][0-9]+)*|dylib|[0-9]+[.]dylib)|/lib64/lib(ssl|crypto)[.](a|so([.][0-9]+)*)|/lib/[^/[:space:]\"']+/lib(ssl|crypto)[.](a|so([.][0-9]+)*)|/(usr/local|opt/homebrew)/(opt|Cellar)/openssl[^[:space:]\"']*/lib/lib(ssl|crypto)[.](a|so([.][0-9]+)*|dylib|[0-9]+[.]dylib)"
 
 while IFS= read -r -d '' file; do
 	case ${file} in
