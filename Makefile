@@ -502,6 +502,7 @@ build-%: PKG_FILE=$(if $(filter tarball,$(shell echo ${BLD_NAME} | grep -o 'tarb
 build-%:
 	@echo 'building $@'
 	@IMG_NAME=$(PKG_NAME) IMG_TYPE=$(subst -,_,$(PKG_TYPE)) IMG_COMP=$(subst -,_,$(PKG_COMP)) BLD_NAME=$(BLD_NAME) $(MAKE) $(PKG_FILE)
+	$(if $(filter 1,$(WITHASAN) $(WITHTSAN)),@:,$(if $(and $(filter true,$(GITHUB_ACTIONS)),$(filter-out tar.gz,$(PKG_KIND))),@test/infra/control/verify-package-install.bash "$(PKG_FILE)",@:))
 
 # Scope the compose project per build variant, not just per commit. On shared
 # self-hosted CI runners several matrix variants of the same commit build

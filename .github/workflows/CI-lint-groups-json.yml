@@ -11,6 +11,8 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
       - name: Fetch GH-Actions branch
         # The reusable half of every workflow pair lives on GH-Actions, so the
         # coverage lint needs that ref to tell an unwired group from one wired
@@ -27,12 +29,18 @@ jobs:
         run: python3 test/tap/groups/test_ai_group_shards.py
       - name: Check TAP Makefile dependency graph
         run: python3 test/tap/groups/test_makefile_dependencies.py
+      - name: Check binlog reader infrastructure contract
+        run: python3 test/tap/groups/test_binlog_reader_infra.py
       - name: Check every TAP source is registered in groups.json
         run: python3 test/tap/groups/check_groups.py --source
       - name: Check cluster simulator coverage contract
         run: test/infra/control/test-cluster-simulator-coverage.bash
       - name: Check coverage collector invariants
         run: test/infra/control/validate-coverage-gcov-toolchain.bash
+      - name: Check package CI verification hook
+        run: test/infra/control/test-package-ci-verification.bash
+      - name: Check package install verifier
+        run: test/infra/control/test-verify-package-install.bash
       - name: Check system OpenSSL audit regressions
         run: test/infra/control/test-no-system-openssl-links-regressions.bash
       - name: Check group infra/workflow coverage (warn-only)

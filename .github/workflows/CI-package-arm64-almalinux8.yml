@@ -113,16 +113,6 @@ jobs:
       run: |
         make ${{ env.MAKE_TARGET }}
 
-    - name: Verify package installs on clean ${{ env.DISTRO }}
-      run: |
-        PKG=$(ls binaries/*.deb binaries/*.rpm 2>/dev/null | head -1)
-        if [[ -z "$PKG" ]]; then
-          echo "ERROR: no package file found in binaries/" >&2
-          ls -la binaries/
-          exit 1
-        fi
-        test/infra/control/verify-package-install.bash "$PKG"
-
     - name: Upload to release
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
