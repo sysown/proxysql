@@ -293,15 +293,19 @@ jobs:
     # Each vendored dep may ship its own verify-source.bash (today only
     # deps/libssl/ has one); run whichever exist. The glob is guarded so a
     # branch with no verifier scripts (or no LFS files at all) still
-    # succeeds -- `for` over a non-matching glob iterates the literal,
-    # unexpanded pattern once, so the `[ -x ... ]` test is what actually
-    # skips it.
+    # succeeds. `git lfs pull` itself fails when the branch has no LFS
+    # attributes, so enumerate tracked paths first; `for` over a non-matching
+    # glob iterates the literal, unexpanded pattern once, so the `[ -x ... ]`
+    # test is what actually skips it.
     - name: Hydrate vendored source archives
-      if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
+      if: ${{ inputs.trusted && steps.cache-check.outputs.cache-hit != 'true' }}
       working-directory: proxysql
       run: |
         set -euo pipefail
-        git lfs pull
+        lfs_files="$(git lfs ls-files --name-only)"
+        if [ -n "${lfs_files}" ]; then
+          git lfs pull --include="" --exclude=""
+        fi
         for v in deps/*/verify-source.bash; do
           [ -x "$v" ] && "$v"
         done
