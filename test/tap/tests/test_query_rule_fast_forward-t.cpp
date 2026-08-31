@@ -27,7 +27,7 @@ namespace {
 
 constexpr int kTargetHostgroup = 61460;
 constexpr int kFirstRule = 614600;
-constexpr int kLastRule = 614605;
+constexpr int kLastRule = 614606;
 constexpr const char* kComment = "test_query_rule_fast_forward-t";
 constexpr const char* kUser = "sbtest1";
 constexpr const char* kTable = "query_rule_ff_once";
@@ -145,6 +145,19 @@ bool wait_for_state(MYSQL* admin, unsigned long session_id, int expected_hostgro
 		int fast_forward = -1;
 		if (processlist_state(admin, session_id, hostgroup, fast_forward) &&
 			hostgroup == expected_hostgroup && fast_forward == expected_fast_forward) {
+			return true;
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	} while (std::chrono::steady_clock::now() < deadline);
+	return false;
+}
+
+bool wait_for_rule_hit(MYSQL* admin, int rule_id, unsigned int timeout_ms = 3000) {
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+	do {
+		if (scalar_int(admin,
+			"SELECT hits FROM stats_mysql_query_rules WHERE rule_id=" +
+			std::to_string(rule_id), 0) > 0) {
 			return true;
 		}
 		std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -367,8 +380,12 @@ int main() {
 
 	const bool collision_free = admin_ff >= 0 && runtime_ff >= 0 &&
 		admin_extended >= 0 && runtime_extended >= 0 && admin_packet >= 0 && runtime_packet >= 0 &&
-		scalar_int(admin.get(), "SELECT COUNT(*) FROM mysql_query_rules WHERE rule_id BETWEEN 614600 AND 614604") == 0 &&
-		scalar_int(admin.get(), "SELECT COUNT(*) FROM runtime_mysql_query_rules WHERE rule_id BETWEEN 614600 AND 614604") == 0 &&
+		scalar_int(admin.get(),
+			"SELECT COUNT(*) FROM mysql_query_rules WHERE rule_id BETWEEN " +
+			std::to_string(kFirstRule) + " AND " + std::to_string(kLastRule)) == 0 &&
+		scalar_int(admin.get(),
+			"SELECT COUNT(*) FROM runtime_mysql_query_rules WHERE rule_id BETWEEN " +
+			std::to_string(kFirstRule) + " AND " + std::to_string(kLastRule)) == 0 &&
 		scalar_int(admin.get(), "SELECT COUNT(*) FROM mysql_servers WHERE hostgroup_id=61460") == 0 &&
 		scalar_int(admin.get(), "SELECT COUNT(*) FROM runtime_mysql_servers WHERE hostgroup_id=61460") == 0 &&
 		scalar_int(backend.get(), "SELECT COUNT(*) FROM information_schema.tables "
@@ -444,6 +461,10 @@ int main() {
 		"the triggering COM_QUERY executes exactly once");
 	ok(text_client && query_and_drain(text_client.get(), "SELECT 1"),
 		"subsequent traffic remains live in fast-forward");
+	ok(text_client && scalar_int(admin.get(),
+		"SELECT info IS NULL FROM stats_mysql_processlist WHERE SessionID=" +
+		std::to_string(mysql_thread_id(text_client.get()))) == 1,
+		"ordinary fast-forward handoff does not retain a packet-backed query pointer");
 	text_client.reset();
 
 	ok(install_rule(admin.get(),
@@ -493,6 +514,31 @@ int main() {
 		mysql_stmt_close(statement);
 	}
 	prepared_client.reset();
+
+	ok(install_rule(admin.get(),
+		"rule_id,active,username,match_pattern,destination_hostgroup,apply,attributes,comment) VALUES"
+		"(614606,1,'sbtest1','^SELECT \\* FROM `query_rule_ff_once` WHERE 1=0$',61460,1,"
+		"'{\"switch_to_fast_forward\":true}','test_query_rule_fast_forward-t')"),
+		"the converted COM_FIELD_LIST matching rule is loaded");
+	MysqlPtr field_client = connect_frontend(cl);
+	ok(field_client != nullptr, "the COM_FIELD_LIST frontend connection is available");
+	MYSQL_RES* field_result = field_client ?
+		mysql_list_fields(field_client.get(), kTable, "%") : nullptr;
+	ok(field_result != nullptr, "COM_FIELD_LIST succeeds through the normal query path");
+	if (!field_result && field_client) {
+		diag("mysql_list_fields failed: %s", mysql_error(field_client.get()));
+	}
+	if (field_result) {
+		mysql_free_result(field_result);
+	}
+	ok(wait_for_rule_hit(admin.get(), 614606),
+		"the converted COM_FIELD_LIST SQL matched the fast-forward rule");
+	int field_hostgroup = -1;
+	int field_fast_forward = -1;
+	ok(field_client && processlist_state(admin.get(), mysql_thread_id(field_client.get()),
+		field_hostgroup, field_fast_forward) && field_fast_forward == 0,
+		"COM_FIELD_LIST does not consume the COM_QUERY-only fast-forward action");
+	field_client.reset();
 
 	ok(install_rule(admin.get(),
 		"rule_id,active,username,match_pattern,destination_hostgroup,apply,attributes,comment) VALUES"
