@@ -405,7 +405,7 @@ re2/re2/obj/libre2.a: $(ABSL_STAMP)
 #	cd re2/re2 && patch util/mutex.h < ../mutex.h.patch
 	cd re2/re2 && patch re2/onepass.cc < ../onepass.cc-multiplication-overflow.patch
 	cd re2/re2 && PKG_CONFIG_PATH="" PKG_CONFIG_LIBDIR="$(ABSL_INSTALL)/lib/pkgconfig" \
-		CC=${CC} CXX=${CXX} CXXFLAGS="-O3 -g $(STDCPP) -fPIC -DMEMORY_SANITIZER -DRE2_ON_VALGRIND" ${MAKE} static
+		CC=${CC} CXX=${CXX} CXXFLAGS="-O3 -g $(STDCPP) -fPIC $(WASAN)" ${MAKE} static
 
 re2: re2/re2/obj/libre2.a
 

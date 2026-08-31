@@ -1,6 +1,12 @@
+#include <type_traits>
+
 #include "tap.h"
 #include "re2/re2.h"
 #include "absl/base/config.h"
+
+static_assert(std::conjunction<std::true_type>::value);
+
+#include "proxysql_utils.h"
 
 int main() {
 	plan(2);
