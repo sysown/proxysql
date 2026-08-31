@@ -468,6 +468,7 @@ class ProxySQL_Admin {
 	ProxySQL_External_Scheduler *scheduler;
 
 	void dump_mysql_collations();
+	void dump_ssl_ciphers();
 	void insert_into_tables_defs(std::vector<table_def_t *> *, const char *table_name, const char *table_def);
 	void drop_tables_defs(std::vector<table_def_t *> *tables_defs);
 	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
@@ -789,6 +790,9 @@ class ProxySQL_Admin {
 	void stats___mysql_processlist();
 	void stats___mysql_free_connections();
 	void stats___mysql_connection_pool(bool _reset);
+#ifdef PROXYSQL31
+	void stats___mysql_hostgroup_connection_pool(bool reset);
+#endif
 	void stats___mysql_errors(bool reset);
 	void stats___memory_metrics();
 	void stats___mysql_global();
@@ -801,6 +805,9 @@ class ProxySQL_Admin {
 	void stats___pgsql_users();
 	void stats___pgsql_free_connections();
 	void stats___pgsql_connection_pool(bool _reset);
+#ifdef PROXYSQL31
+	void stats___pgsql_hostgroup_connection_pool(bool reset);
+#endif
 	void stats___pgsql_processlist();
 	void stats___pgsql_errors(bool reset);
 	void stats___pgsql_client_host_cache(bool reset);
