@@ -11,6 +11,13 @@ fail() {
 	exit 1
 }
 
+audit_path="${tmp_dir}/audit-bin"
+mkdir -p "${audit_path}"
+for tool in bash dirname git grep mktemp rm sort; do
+	tool_path=$(command -v "${tool}") || fail "required test tool is unavailable: ${tool}"
+	ln -s "${tool_path}" "${audit_path}/${tool}"
+done
+
 assert_rejected() {
 	local name=$1
 	local contents=$2
@@ -22,7 +29,8 @@ assert_rejected() {
 	git -C "${fixture}" add build.mk
 	git -C "${fixture}" -c user.email=test@example.invalid -c user.name=test commit -qm fixture
 
-	if OPENSSL_AUDIT_ROOT="${fixture}" "${audit_script}" >/dev/null 2>&1; then
+	if PATH="${audit_path}" OPENSSL_AUDIT_ROOT="${fixture}" \
+		"${audit_script}" >/dev/null 2>&1; then
 		fail "audit accepted ${name}"
 	fi
 }
@@ -38,7 +46,8 @@ assert_accepted() {
 	git -C "${fixture}" add build.mk
 	git -C "${fixture}" -c user.email=test@example.invalid -c user.name=test commit -qm fixture
 
-	if ! OPENSSL_AUDIT_ROOT="${fixture}" "${audit_script}" >/dev/null 2>&1; then
+	if ! PATH="${audit_path}" OPENSSL_AUDIT_ROOT="${fixture}" \
+		"${audit_script}" >/dev/null 2>&1; then
 		fail "audit rejected ${name}"
 	fi
 }

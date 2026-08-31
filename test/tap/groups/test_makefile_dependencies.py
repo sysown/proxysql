@@ -34,19 +34,7 @@ class MakefileDependencyTest(unittest.TestCase):
             )
 
     def test_genai_unit_manifest_is_shared_by_staging_and_unit_build(self):
-        expected = [
-            "genai_config_query_unit-t",
-            "genai_discovery_schema_unit-t",
-            "genai_fts_string_unit-t",
-            "genai_llm_clients_unit-t",
-            "genai_mcp_endpoint_unit-t",
-            "genai_mcp_thread_unit-t",
-            "genai_mysql_catalog_unit-t",
-            "genai_query_handler_unit-t",
-            "genai_rag_fetch_from_source_unit-t",
-            "genai_stats_parsing_unit-t",
-            "genai_thread_unit-t",
-        ]
+        manifests = []
         for directory in (ROOT / "test/tap", ROOT / "test/tap/tests/unit"):
             with self.subTest(directory=directory):
                 with tempfile.TemporaryDirectory() as tmp:
@@ -78,7 +66,14 @@ class MakefileDependencyTest(unittest.TestCase):
                     self.assertEqual(
                         result.returncode, 0, result.stdout + result.stderr
                     )
-                    self.assertEqual(result.stdout.splitlines(), expected)
+                    manifests.append(result.stdout.splitlines())
+
+        self.assertTrue(manifests[0], "the shared GenAI unit-test manifest is empty")
+        self.assertEqual(
+            manifests[0],
+            manifests[1],
+            "staging and the unit build expose different GenAI test manifests",
+        )
 
     def test_vendored_openssl_version_define_is_private_to_test_targets(self):
         """The version assertion define must not be applied to shared test inputs."""

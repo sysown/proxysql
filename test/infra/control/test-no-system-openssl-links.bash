@@ -21,7 +21,7 @@ while IFS= read -r -d '' file; do
 			;;
 	esac
 
-	if matches=$(rg -n --no-heading -- "${pattern}" "${repo_root}/${file}"); then
+	if matches=$(grep -E -n -- "${pattern}" "${repo_root}/${file}"); then
 		while IFS= read -r match; do
 			printf '%s:%s\n' "${file}" "${match}" >> "${violations}"
 		done <<< "${matches}"
