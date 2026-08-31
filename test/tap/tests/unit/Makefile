@@ -521,6 +521,7 @@ UNIT_TESTS += \
 	plugin_router_chassis_contract_unit-t \
 	mysql_router_plugin_load_unit-t \
 	mysql_router_admin_schema_unit-t \
+	mysql_router_bootstrap_options_unit-t \
 	test_mysqlx_plugin_load-t \
 	test_mysqlx_admin_tables-t \
 	mysqlx_config_store_unit-t \
@@ -655,6 +656,14 @@ mysql_router_plugin_load_unit-t: mysql_router_plugin_load_unit-t.cpp $(ODIR)/tap
 mysql_router_admin_schema_unit-t: mysql_router_admin_schema_unit-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) mysql_router_plugin_build
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		-DPROXYSQL_MYSQL_ROUTER_PLUGIN_PATH=\"$(MYSQL_ROUTER_PLUGIN_SO)\" \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@
+
+mysql_router_bootstrap_options_unit-t: mysql_router_bootstrap_options_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysql_router/src/bootstrap_options.cpp $(PROXYSQL_PATH)/plugins/mysql_router/src/config_store.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysql_router/src/bootstrap_options.cpp \
+		$(PROXYSQL_PATH)/plugins/mysql_router/src/config_store.cpp \
+		$(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-I$(PROXYSQL_PATH)/plugins/mysql_router/include \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@
 

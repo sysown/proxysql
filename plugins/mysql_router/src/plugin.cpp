@@ -1,15 +1,28 @@
 #include "mysql_router_admin.h"
+#include "mysql_router_bootstrap.h"
 #include "mysql_router_plugin.h"
 
 namespace {
 
 bool register_cli_options(ProxySQL_PluginCLIRegistry* registry) {
-	return registry != nullptr;
+	return mysql_router_register_cli_options(registry);
 }
 
 ProxySQL_PluginEarlyActionResult early_action(
-		const ProxySQL_PluginEarlyActionContext&) {
-	return ProxySQL_PluginEarlyActionResult::not_requested;
+		const ProxySQL_PluginEarlyActionContext& action_context) {
+	try {
+		const BootstrapOptions options = parse_bootstrap_options(action_context);
+		if (!options.requested) return ProxySQL_PluginEarlyActionResult::not_requested;
+		MysqlRouterContext& context = mysql_router_context();
+		std::lock_guard<std::mutex> guard(context.status_mutex);
+		context.status.last_error = "MySQL Router bootstrap engine is not available yet";
+		return ProxySQL_PluginEarlyActionResult::exit_failure;
+	} catch (const std::exception& exception) {
+		MysqlRouterContext& context = mysql_router_context();
+		std::lock_guard<std::mutex> guard(context.status_mutex);
+		context.status.last_error = exception.what();
+		return ProxySQL_PluginEarlyActionResult::exit_failure;
+	}
 }
 
 bool init(ProxySQL_PluginServices* services) {

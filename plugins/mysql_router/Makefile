@@ -52,6 +52,8 @@ endif
 
 SRCS := $(PLUGIN_DIR)/src/plugin.cpp \
 	$(PLUGIN_DIR)/src/admin_schema.cpp \
+	$(PLUGIN_DIR)/src/bootstrap_options.cpp \
+	$(PLUGIN_DIR)/src/config_store.cpp \
 	$(PLUGIN_DIR)/src/status.cpp \
 	$(PLUGIN_DIR)/src/metrics.cpp
 HEADERS := $(wildcard $(PLUGIN_DIR)/include/*.h) \
