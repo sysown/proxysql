@@ -223,12 +223,17 @@ A typical integration test file has the following structure:
 A test should not depend on the state left behind by other tests.
 
 The TAP tester restores the persistent ProxySQL configuration from disk between
-tests. Consequently, ordinary TAP tests and test-group setup/teardown scripts
-**must never execute** `SAVE ... TO DISK`: doing so writes test state into the
-baseline used by later tests. Setup and cleanup must modify only the relevant
-admin tables and use `LOAD ... TO RUNTIME` to apply those in-memory changes. The
-sole exception is a test whose explicit subject is `SAVE ... TO DISK`; it must
-restore the original on-disk configuration before it exits.
+tests. Consequently, ordinary TAP test binaries and their per-test
+setup/teardown helpers **must never execute** `SAVE ... TO DISK`: doing so writes
+test state into the baseline used by later tests. Setup and cleanup must modify
+only the relevant admin tables and use `LOAD ... TO RUNTIME` to apply those
+in-memory changes. The sole exception is a test whose explicit subject is `SAVE
+... TO DISK`; it must restore the original on-disk configuration before it exits.
+
+One-time test-group baseline setup is not per-test execution. Its
+`pre-proxysql` scripts may save the deliberate group baseline that the tester
+will restore between tests, but they must not save state created by an individual
+test.
 
 * **GOOD:** Start by deleting any existing configuration relevant to your test.
     ```cpp

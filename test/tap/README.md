@@ -2,10 +2,14 @@
 
 ## Persistent configuration policy
 
-The TAP tester restores ProxySQL configuration from disk between tests. Therefore,
-TAP tests and test-group setup/teardown scripts **must not execute** `SAVE ... TO
-DISK` commands: they write test state into the persistent configuration and corrupt
-the baseline for later tests.
+The TAP tester restores ProxySQL configuration from disk between individual tests.
+Therefore, ordinary TAP test binaries and their per-test setup/teardown helpers
+**must not execute** `SAVE ... TO DISK` commands: they write test state into the
+persistent configuration and corrupt the baseline for later tests.
+
+One-time test-group baseline setup is different: its `pre-proxysql` scripts may
+save the deliberate group baseline that the tester restores between tests. Those
+scripts must never save per-test state.
 
 For normal setup and cleanup, change only the relevant in-memory admin tables and
 use `LOAD ... TO RUNTIME` to apply or remove those changes. A test may use `SAVE

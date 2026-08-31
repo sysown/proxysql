@@ -144,6 +144,7 @@
   pcre2/pcre2/.libs/libpcre2-8.a:
   	cd pcre2 && rm -rf pcre2-*/ || true
   	cd pcre2 && tar -zxf pcre2-10.47.tar.gz
+	cd pcre2 && mv pcre2-10.47 pcre2
   	cd pcre2/pcre2 && ./configure --disable-shared --enable-static \
   		--enable-pcre2-8 --disable-pcre2-16 --disable-pcre2-32 \
   		--disable-jit --disable-pcre2test-libreadline
