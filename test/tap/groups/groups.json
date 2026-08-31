@@ -476,6 +476,7 @@
   "test_ps_no_store-t" : [ "legacy-g8","mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3","mysql84-g8","mysql90-g3","mysql95-g3" ],
   "test_purge_query_digest-t" : [ "legacy-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2","mysql84-g2","mysql90-g2","mysql95-g2" ],
   "test_query_cache_soft_ttl_pct-t" : [ "legacy-g9","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g4","mysql90-g4","mysql95-g4" ],
+  "test_query_rule_fast_forward-t" : [ "mysql84-g9" ],
   "test_query_rules_fast_routing_algorithm-t" : [ "legacy-g9","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g4","mysql90-g4","mysql95-g4" ],
   "test_query_rules_routing-t" : [ "legacy-g9","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g4","mysql90-g4","mysql95-g4" ],
   "test_query_timeout-t" : [ "legacy-g9","mariadb10-galera-g9","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g9","mysql84-gr-g9","mysql90-g4","mysql95-g4" ],
