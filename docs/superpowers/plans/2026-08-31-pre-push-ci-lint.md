@@ -105,6 +105,7 @@ git commit -m "test: define pre-push lint hook contract"
 **Files:**
 - Create: `test/infra/control/run-ci-lint.bash`
 - Modify: `.github/workflows/CI-lint-groups-json.yml`
+- Modify: `test/infra/control/validate-coverage-gcov-toolchain.bash`
 
 - [ ] **Step 1: Add the canonical fail-fast lint runner**
 
@@ -166,7 +167,18 @@ individual validation steps with:
         run: test/infra/control/run-ci-lint.bash
 ```
 
-- [ ] **Step 4: Run the shared runner and confirm the existing failure**
+- [ ] **Step 4: Update the coverage validator for the shared runner**
+
+Update the coverage toolchain validator so it follows the centralized lint
+entry point instead of requiring its command directly in the workflow:
+
+```bash
+lint_runner="${root}/test/infra/control/run-ci-lint.bash"
+grep -Eq 'run-ci-lint\.bash' "${lint_workflow}"
+grep -Eq 'validate-coverage-gcov-toolchain\.bash' "${lint_runner}"
+```
+
+- [ ] **Step 5: Run the shared runner and confirm the existing failure**
 
 Run:
 

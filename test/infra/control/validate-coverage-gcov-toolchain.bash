@@ -6,6 +6,7 @@ dockerfile="${root}/test/infra/docker-base/Dockerfile"
 runner="${root}/test/infra/control/run-tests-isolated.bash"
 multi="${root}/test/infra/control/run-multi-group.bash"
 lint_workflow="${root}/.github/workflows/CI-lint-groups-json.yml"
+lint_runner="${root}/test/infra/control/run-ci-lint.bash"
 
 if grep -Eq '^[[:space:]]*gcc-11[[:space:]\\]*$' "${dockerfile}"; then
     echo "coverage image must use the compiler's default GCOV reader" >&2
@@ -24,6 +25,7 @@ for file in "${runner}" "${multi}"; do
 done
 grep -Eq -- '-s .*coverage_file' "${runner}"
 grep -Eq -- '-s .*GROUP_INFO' "${multi}"
-grep -Eq 'validate-coverage-gcov-toolchain\.bash' "${lint_workflow}"
+grep -Eq 'run-ci-lint\.bash' "${lint_workflow}"
+grep -Eq 'validate-coverage-gcov-toolchain\.bash' "${lint_runner}"
 
 "${root}/test/infra/control/test-final-gcov-dump.bash"
