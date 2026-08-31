@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Add a failing pre-push hook contract test
+## Task 1: Add a failing pre-push hook contract test
 
 **Files:**
 - Create: `test/infra/control/test-pre-push-lint-hook.bash`
@@ -37,6 +37,12 @@ fail() {
   exit 1
 }
 
+clear_git_local_environment() {
+  while IFS= read -r variable_name; do
+    unset "${variable_name}"
+  done < <(git rev-parse --local-env-vars)
+}
+
 [[ -x "${hook}" ]] || fail "${hook} must exist and be executable"
 [[ -x "${runner}" ]] || fail "${runner} must exist and be executable"
 grep -Fq "test/infra/control/run-ci-lint.bash" "${workflow}" \
@@ -44,6 +50,7 @@ grep -Fq "test/infra/control/run-ci-lint.bash" "${workflow}" \
 
 fixture="$(mktemp -d)"
 trap 'rm -rf "${fixture}"' EXIT
+clear_git_local_environment
 git -C "${fixture}" init -q
 mkdir -p "${fixture}/.githooks" "${fixture}/test/infra/control" "${fixture}/nested"
 cp "${hook}" "${fixture}/.githooks/pre-push"
@@ -57,14 +64,17 @@ chmod +x "${fixture}/test/infra/control/run-ci-lint.bash"
 
 probe="${fixture}/probe"
 (
+  clear_git_local_environment
   cd "${fixture}/nested"
   LINT_HOOK_PROBE="${probe}" LINT_HOOK_STATUS=0 \
     "${fixture}/.githooks/pre-push" origin example.invalid
 ) || fail "hook must return success when the lint runner succeeds"
-[[ "$(<"${probe}")" == "${fixture}" ]] \
+fixture_root="$(cd "${fixture}" && pwd -P)"
+[[ "$(<"${probe}")" == "${fixture_root}" ]] \
   || fail "hook must execute the lint runner from the worktree root"
 
 if (
+  clear_git_local_environment
   cd "${fixture}/nested"
   LINT_HOOK_PROBE="${probe}" LINT_HOOK_STATUS=23 \
     "${fixture}/.githooks/pre-push" origin example.invalid
@@ -100,7 +110,7 @@ git add test/infra/control/test-pre-push-lint-hook.bash
 git commit -m "test: define pre-push lint hook contract"
 ```
 
-### Task 2: Centralize the complete CI lint suite
+## Task 2: Centralize the complete CI lint suite
 
 **Files:**
 - Create: `test/infra/control/run-ci-lint.bash`
@@ -174,8 +184,16 @@ entry point instead of requiring its command directly in the workflow:
 
 ```bash
 lint_runner="${root}/test/infra/control/run-ci-lint.bash"
-grep -Eq 'run-ci-lint\.bash' "${lint_workflow}"
-grep -Eq 'validate-coverage-gcov-toolchain\.bash' "${lint_runner}"
+grep -Eq '^[[:space:]]*run:[[:space:]]+test/infra/control/run-ci-lint\.bash[[:space:]]*$' "${lint_workflow}"
+awk '
+  /^[[:space:]]*run_check[[:space:]]+"Check coverage collector invariants"[[:space:]]*\\[[:space:]]*$/ {
+    getline
+    if ($0 ~ /^[[:space:]]*test\/infra\/control\/validate-coverage-gcov-toolchain\.bash[[:space:]]*$/) {
+      found = 1
+    }
+  }
+  END { exit(found ? 0 : 1) }
+' "${lint_runner}"
 ```
 
 - [ ] **Step 5: Run the shared runner and confirm the existing failure**
@@ -191,7 +209,7 @@ Expected: exit 1 at `Lint groups.json format`, reporting that
 `mysql_server_version_by_interface_unit-t`. This proves the shared entry point
 reproduces CI before the data fix.
 
-### Task 3: Add and document the tracked pre-push hook
+## Task 3: Add and document the tracked pre-push hook
 
 **Files:**
 - Create: `.githooks/pre-push`
@@ -262,7 +280,7 @@ git add .github/workflows/CI-lint-groups-json.yml .githooks \
 git commit -m "ci: run lint suite before pushes"
 ```
 
-### Task 4: Fix the current lint violation and activate the hook
+## Task 4: Fix the current lint violation and activate the hook
 
 **Files:**
 - Modify: `test/tap/groups/groups.json`
@@ -312,7 +330,7 @@ git add test/tap/groups/groups.json
 git commit -m "test: keep TAP group registry sorted"
 ```
 
-### Task 5: Final verification and publication
+## Task 5: Final verification and publication
 
 **Files:**
 - Verify only; no expected source changes.
