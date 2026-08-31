@@ -1,5 +1,5 @@
-#ifndef __DUCKDB_SESSION_H
-#define __DUCKDB_SESSION_H
+#ifndef DUCKDB_SESSION_H
+#define DUCKDB_SESSION_H
 
 #include "duckdb.h"
 
@@ -26,6 +26,7 @@ enum class DuckDBIntercept {
 	database,
 	show_tables,
 	show_databases,
+	show_schemas,
 	ok_noop           // answer with a bare OK
 };
 
@@ -52,6 +53,13 @@ void duckdb_send_mysql_error(MySQL_Session* sess, uint16_t code,
 void duckdb_send_pgsql_error(PgSQL_Session* sess, const char* sqlstate,
                              const char* msg);
 
+// Maps DuckDB's typed errors to PostgreSQL SQLSTATEs where the categories
+// have an unambiguous counterpart. Unknown categories use XX000.
+const char* duckdb_pgsql_sqlstate(duckdb_error_type type, const std::string& message);
+
+// PostgreSQL ReadyForQuery transaction-status byte for a DuckDB connection.
+char duckdb_pgsql_transaction_status(duckdb_connection conn);
+
 // Outcome of duckdb_execute_effective(): everything the session handler
 // needs to know to respond to the client, with no protocol-specific
 // code in it. Exposed so it can be exercised directly against a live
@@ -60,6 +68,7 @@ void duckdb_send_pgsql_error(PgSQL_Session* sess, const char* sqlstate,
 struct DuckDBExecOutcome {
 	bool ok { true };                    // false: `error` is set, nothing else is meaningful
 	std::string error;
+	duckdb_error_type error_type { DUCKDB_ERROR_INVALID };
 	bool has_resultset { false };        // true: `result` holds the resultset to send
 	SQLite3_result* result { nullptr };  // caller-owned when has_resultset; nullptr otherwise
 	int affected_rows { 0 };             // meaningful only when ok && !has_resultset
@@ -89,4 +98,4 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 template <typename S>
 void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt);
 
-#endif // __DUCKDB_SESSION_H
+#endif // DUCKDB_SESSION_H

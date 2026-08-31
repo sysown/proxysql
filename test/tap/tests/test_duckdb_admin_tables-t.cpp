@@ -161,9 +161,9 @@ int main(int argc, char** argv) {
 	const std::string threads_after_edit =
 		cell("SELECT variable_value FROM runtime_duckdb_variables "
 		     "WHERE variable_name='threads'");
-	ok(threads_after_edit != "7" && threads_after_edit == threads_before_edit,
+	ok(threads_after_edit == threads_before_edit,
 	   "an uncommitted edit is not visible in the runtime view "
-	   "(runtime view still reads '%s', not the edited '7')",
+	   "(runtime view remains '%s')",
 	   threads_after_edit.c_str());
 
 	// 4. LOAD ... TO RUNTIME installs it.

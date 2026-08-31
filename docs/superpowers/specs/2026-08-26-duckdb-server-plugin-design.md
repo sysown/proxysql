@@ -1,7 +1,7 @@
 # DuckDB Server Plugin — External Design
 
 Date: 2026-08-26
-Status: approved design, pending implementation plan
+Status: implemented
 Tier: v4.0 (Plugin Chassis, `PROXYSQL40=1`)
 
 ## 1. Goal
@@ -283,11 +283,16 @@ classes, mirroring `admin_session_handler<S>` (F9):
    (accept-and-ignore) and driver handshake probes without touching DuckDB.
    Same role as `src/SQLite3_Server.cpp:412-880`, but a fraction of the size —
    no Aurora/Galera/monitor simulation.
-3. **Execute.** `duckdb_query(state.conn, sql, &res)`.
-4. **Convert.** `duckdb_result` → `SQLite3_result` (section 7).
-5. **Serialize.**
+3. **Prepare.** `duckdb_execute_effective()` calls `duckdb_prepare()` and
+   inspects the prepared output schema. If needed, it prepares the wrapped
+   query described in section 7 and selects either that prepared statement or
+   the original without executing either candidate during the decision.
+4. **Execute once.** `duckdb_execute_prepared()` executes the selected prepared
+   statement exactly once.
+5. **Convert.** `duckdb_result` → `SQLite3_result` (section 7).
+6. **Serialize.**
    - MySQL: `sess->SQLite3_to_MySQL(r, error, affected_rows, &sess->client_myds->myprot)`
-   - PG: `SQLite3_to_Postgres(&sess->client_myds->PSarrayOUT, r, error, affected_rows, sql)`
+   - PG: `SQLite3_to_Postgres(sess->client_myds->PSarrayOUT, r, error, affected_rows, sql)`
 
 The PG `query_type` argument must be the original SQL text: `SQLite3_to_Postgres`
 derives the `CommandComplete` tag from its first whitespace-delimited word
@@ -301,19 +306,19 @@ originally claimed `duckdb_value_varchar()` renders `UUID` and the nested
 verified against the actual DuckDB C API before being written; the
 correction below describes what was actually built once it was checked.
 
-Both serializers already flatten every column to text (F6). v1 converts
-each value with the deprecated `duckdb_value_varchar()` accessor and
-releases it with `duckdb_free()`; a SQL NULL becomes a `nullptr` field,
+Both serializers already flatten every column to text (F6). v1 reads
+materialized chunks through DuckDB's vector API and converts each allowed
+value through its length-aware `Value`; a SQL NULL becomes a `nullptr` field,
 which F5 confirms round-trips correctly and which `SQLite3_to_Postgres`
 emits as a `-1` length.
 
-**`duckdb_value_varchar()` does not render every type.** Verified both by
+**The deprecated result-materialization cast does not render every type.** Verified both by
 reading `GetInternalCValue`'s switch on `deprecated_type` in
 `duckdb/src/include/duckdb/main/capi/cast/generic.hpp` (the sole
 authoritative source for which `duckdb_type` values this accessor can
 actually cast) and empirically, by probing the built library: for `LIST`,
 `STRUCT`, `MAP`, `ARRAY`, `UNION`, `UUID`, `ENUM`, `BIT`, and
-`TIMESTAMP_S`/`MS`/`NS`, it returns `nullptr` regardless of
+`TIMESTAMP_S`/`MS`/`NS`, it returns a null data pointer regardless of
 `duckdb_value_is_null()` — indistinguishable, downstream, from a genuine
 SQL NULL. There is no free ride here for nested or composite types, nor
 for `UUID`; only the flat scalar types DuckDB can cast through its
@@ -386,11 +391,11 @@ consumed from `duckdb_execute_effective()` in
    ("Cannot prepare multiple statements at once!"). This is a deliberate
    improvement, not just a side effect: `duckdb_query()` used to execute
    *every* statement in the packet but return only the *last* one's
-   result, so `SELECT 1; DROP TABLE t;` would run the `DROP` while the
-   client only ever saw the `SELECT`'s result — a statement-smuggling
-   path with the destructive half invisible in the response. Rejecting
-   the whole packet up front instead matches what a MySQL server does
-   for a client without `CLIENT_MULTI_STATEMENTS`. No currently-tested
+   result, so `DROP TABLE t; SELECT 1;` would run the `DROP` while the
+   client only saw the final `SELECT` result — a statement-smuggling
+   path with the destructive first statement invisible in the response.
+   Rejecting the whole packet up front instead matches what a MySQL server
+   does for a client without `CLIENT_MULTI_STATEMENTS`. No currently-tested
    code path (the compatibility intercept table, `SET`, or DDL/DML) ever
    sent multi-statement input through this plugin, so this closes a real
    gap without narrowing anything that was relied upon.
@@ -417,8 +422,12 @@ consumed from `duckdb_execute_effective()` in
    could safely fall back to a first result that had already succeeded.
 
 Column names come from `duckdb_column_name()` into `add_column_definition()`.
-A DDL or DML statement produces a NULL resultset with `duckdb_rows_changed()`
-as `affected_rows`.
+DuckDB reports DDL and session statements as `DUCKDB_RESULT_TYPE_NOTHING`;
+the plugin sends those without a resultset and with zero affected rows. It
+reports row-changing DML as `DUCKDB_RESULT_TYPE_CHANGED_ROWS`; the plugin also
+sends those without a resultset and uses `duckdb_rows_changed()` for
+`affected_rows`. The raw DuckDB result can still contain a one-column `Count`
+value, so zero columns are not used to identify DDL or DML.
 
 **Documented limitation:** typed client accessors see VARCHAR (MySQL) and
 `TEXTOID` (PG) for every column — identical to what the Admin interface and
@@ -437,8 +446,10 @@ sub-project 3.
   than *syntax error*. That is a pre-existing core wart; the plugin keeps the
   fix local rather than changing core, consistent with D3.
 
-Malformed packets, unsupported PG packet types, and connection-limit rejections
-all produce a protocol-correct error before any DuckDB work is attempted.
+Malformed packets and unsupported PG packet types produce a protocol-correct
+error before any DuckDB work is attempted. A connection rejected at
+`max_connections` is closed without a protocol error, before a session object
+is constructed.
 
 ## 9. Admin surface (v1)
 
@@ -507,8 +518,9 @@ prompt instead of up to one `refresh_interval` late.
 - `read_only` — `access_mode=READ_ONLY`. Valid only for file-backed databases;
   combined with `:memory:` it must be **rejected at config-validation time with
   a clear message**, not left to fail at open.
-- `max_connections` — enforced in the accept loop, rejecting with a
-  protocol-correct error *before* a session object is constructed.
+- `max_connections` — enforced in the accept loop. A newly accepted socket is
+  closed without a protocol error when the limit has been reached, *before* a
+  session object is constructed.
 - Query timeouts — require `duckdb_interrupt()` on a watchdog thread. Deferred
   to sub-project 3 rather than half-built here.
 
@@ -524,7 +536,7 @@ annotated `@proxysql_min_version:4.0`, mirroring
   by Task 11, see §15** — this originally implied `LIST`/`STRUCT` convert
   like the scalar types, which §7's correction shows is false) that
   `LIST`, `STRUCT`, and `UUID` columns correctly degrade to a null field
-  through `duckdb_value_varchar()` and are flagged by
+  through the direct-conversion compatibility allowlist and are flagged by
   `duckdb_result_has_unrenderable_column()`, not that their values
   convert.
 - `duckdb_config_unit-t` — variable and iface parsing; the `read_only` plus
@@ -587,7 +599,7 @@ isn't required, not the original (false) "empty diff" premise.
 | AlmaLinux 8 — the oldest distro in the package matrix — may not have a new enough GCC for the pinned DuckDB version | Verify during implementation; if it fails, pin an older DuckDB or raise the toolchain for the plugin only. |
 | Whether the DuckDB amalgamation build is still supported upstream, and whether it beats the CMake build | Check during implementation. It trades parallelism for several GB of RAM in one TU, so it may well be worse. Not a design-blocking question. |
 | Merge conflicts with the two in-flight LFS branches, which create `.gitattributes` and edit up to 177 of the same workflow files | Sequence deliberately. If `feature/issue-6115-vendored-openssl` lands first, this diff shrinks to one `.gitattributes` line plus the `PROXYSQL40` workflows it did not already cover. |
-| `duckdb_value_varchar()` allocates per value, so wide analytical resultsets do many small allocations | Acceptable for v1 and no worse than the existing Admin path. Typed conversion in sub-project 3 removes it. |
+| Vector values are rendered to temporary strings per field, so wide analytical resultsets do many small allocations | Acceptable for v1 and no worse than the existing Admin path. Typed conversion in sub-project 3 removes it. |
 | **Resolved (final fix wave, I1): unrestricted filesystem access, default on.** `DuckDBEngine::open()` originally set only `memory_limit`/`threads`/`access_mode`, leaving DuckDB's own `enable_external_access` at its default of `true`. Any `mysql_users`/`pgsql_users` credential could run `read_csv()`/`COPY TO`/`ATTACH` against arbitrary local paths as the ProxySQL process user; `read_only=true` does not prevent this (it governs `access_mode`, not external-state access). | Added `duckdb_variables.enable_external_access`, default `false` (deny by default — overriding DuckDB's own default), applied in `DuckDBEngine::open()`. Loosening it requires the engine to reopen (DuckDB throws changing `false`→`true` on a running database); tightening could be applied live. Documented in `plugins/duckdb/README.md` §5 (Security), including that extension autoload/autoinstall are already off and unaffected by this setting. Covered by a unit test asserting the default denies `read_csv()` of a local file. |
 | **Guard shipped (final fix wave, C1); the original `assert(0)` crash in `generate_pkt_ERR`, added by Task 11 (§15), is not conclusively explained.** A malformed query on the plugin's MySQL listener had twice triggered `assert(0)` at `lib/MySQL_Protocol.cpp:434`, inside `generate_pkt_ERR`, reached via the plugin's MySQL error emitter, aborting the entire ProxySQL process, Admin port included. | **Proven: a plugin/core `-DDEBUG` build-tier mismatch corrupts memory. Observed under reproduction: a hang, not an abort. The `assert(0)` is plausible but unreproduced.** The bind-mounted-stale-`.so` hypothesis recorded here originally (and in §15 item D) was investigated and is **superseded — it was wrong.** Measured: `include/MySQL_Protocol.h`'s `bool dump_pkt;` (DEBUG-only) changes `sizeof(MySQL_Protocol)` (80 bytes release vs. 88 `-DDEBUG`); `MySQL_Data_Stream` embeds `MySQL_Protocol` **by value**, so every field after it — including `DSS`, the field `generate_pkt_ERR`'s switch reads — shifts offset (`offsetof(DSS)`: 768 vs. 776) between a release and a `-DDEBUG` build, and `plugins/duckdb/Makefile`'s object rule didn't depend on `$(CXXFLAGS)`, letting a release-flavoured plugin silently end up loaded into a `-DDEBUG` core. Reproduced: loading a deliberately mismatched plugin into a `-DDEBUG` core produced an indefinite per-connection hang, traced to `fill_client_addr()` in `duckdb_listener.cpp` corrupting the same post-`myprot` field region as `DSS` — not the `assert(0)`. A debugger breakpoint on the plugin's query-dispatch entry was never hit, confirming the hang precedes any query, including the one that would reach `duckdb_send_mysql_error()`. The `assert(0)` remains a plausible consequence of the same mechanism (a different corrupted field leaving the real `DSS` at its `STATE_SLEEP` default) but was not produced. Task 9's two aborts are therefore consistent with this mechanism in kind but not conclusively attributed to it — notably, both occurred after seven prior assertions on the same connection had already passed, which is hard to reconcile with a mechanism that corrupts connection-setup state before the first query. Fixed regardless, on its own merits: the chassis loader (`lib/ProxySQL_PluginManager.cpp`) now refuses to `dlopen` a plugin whose `-DDEBUG` setting disagrees with the core's (`PROXYSQL_PLUGIN_ABI_DEBUG_BIT` in `include/ProxySQL_Plugin.h`), protecting every chassis plugin, not just this one; and the Makefile's `.o` rule now depends on a `$(ODIR)/.buildflags` stamp so a flag change forces recompilation. See `plugins/duckdb/README.md` §7 for the full writeup. |
 

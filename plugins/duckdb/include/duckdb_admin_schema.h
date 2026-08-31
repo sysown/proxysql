@@ -1,5 +1,5 @@
-#ifndef __DUCKDB_ADMIN_SCHEMA_H
-#define __DUCKDB_ADMIN_SCHEMA_H
+#ifndef DUCKDB_ADMIN_SCHEMA_H
+#define DUCKDB_ADMIN_SCHEMA_H
 
 #include "ProxySQL_Plugin.h"
 
@@ -29,6 +29,8 @@ bool duckdb_save_variables_to_admin(SQLite3DB& admindb,
                                    std::string& err);
 
 // register_runtime_view refresh callback. `opaque` is a DuckDBConfigStore*.
+// The chassis callback returns void, so projection failures are reported via
+// ProxySQL_PluginServices::log_message when that service is available.
 void duckdb_refresh_runtime_variables(SQLite3DB* db, void* opaque);
 
 // Startup disk -> memory refresh of the editable table, matching what
@@ -36,4 +38,4 @@ void duckdb_refresh_runtime_variables(SQLite3DB* db, void* opaque);
 // no module involvement, no runtime view.
 bool duckdb_sync_variables_disk_to_memory(SQLite3DB& admindb, std::string& err);
 
-#endif // __DUCKDB_ADMIN_SCHEMA_H
+#endif // DUCKDB_ADMIN_SCHEMA_H

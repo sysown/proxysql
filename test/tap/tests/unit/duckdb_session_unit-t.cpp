@@ -35,7 +35,7 @@ int scalar_count(duckdb_connection conn, const char* sql) {
 } // namespace
 
 int main() {
-	plan(21);
+	plan(38);
 
 	ok(classify("SELECT @@version") == DuckDBIntercept::version,
 	   "SELECT @@version is intercepted");
@@ -47,12 +47,22 @@ int main() {
 	   "SELECT version() is intercepted");
 	ok(classify("SELECT DATABASE()") == DuckDBIntercept::database,
 	   "SELECT DATABASE() is intercepted");
+	ok(classify("SELECT DATABASE();  ") == DuckDBIntercept::database,
+	   "SELECT DATABASE() accepts a trailing semicolon");
+	ok(classify("SELECT VERSION();") == DuckDBIntercept::version,
+	   "SELECT VERSION() accepts a trailing semicolon");
 	ok(classify("SHOW TABLES") == DuckDBIntercept::show_tables,
 	   "SHOW TABLES is intercepted");
+	ok(classify("SHOW TABLES;") == DuckDBIntercept::show_tables,
+	   "SHOW accepts a trailing semicolon");
 	ok(classify("SHOW DATABASES") == DuckDBIntercept::show_databases,
 	   "SHOW DATABASES is intercepted");
+	ok(classify("SHOW SCHEMAS") == DuckDBIntercept::show_schemas,
+	   "SHOW SCHEMAS has a distinct metadata path from SHOW DATABASES");
 	ok(classify("SET autocommit=1") == DuckDBIntercept::ok_noop,
 	   "SET is accepted as a no-op");
+	ok(classify("SET threads=2") == DuckDBIntercept::none,
+	   "DuckDB-native SET statements are executed instead of swallowed");
 	ok(classify("SELECT * FROM t") == DuckDBIntercept::none,
 	   "an ordinary query is not intercepted");
 	ok(classify("") == DuckDBIntercept::none,
@@ -61,6 +71,8 @@ int main() {
 	// A prefix must not match: "SELECT @@version_comment" is a real query.
 	ok(classify("SELECT @@version_comment") == DuckDBIntercept::none,
 	   "a longer variable name is not mistaken for @@version");
+	ok(classify("SELECT VERSION(); SELECT 1") == DuckDBIntercept::none,
+	   "a multi-statement query is not mistaken for a version intercept");
 
 	{
 		std::unique_ptr<SQLite3_result> r(
@@ -70,6 +82,18 @@ int main() {
 		   "the version intercept builds a one-cell resultset");
 	}
 
+	ok(std::strcmp(duckdb_pgsql_sqlstate(DUCKDB_ERROR_PARSER, ""), "42601") == 0,
+	   "DuckDB parser errors map to PostgreSQL syntax_error");
+	ok(std::strcmp(duckdb_pgsql_sqlstate(DUCKDB_ERROR_INVALID,
+	                                  "Parser Error: syntax error"), "42601") == 0,
+	   "prepare-time parser errors retain syntax_error SQLSTATE");
+	ok(std::strcmp(duckdb_pgsql_sqlstate(DUCKDB_ERROR_CONSTRAINT, ""), "23000") == 0,
+	   "DuckDB constraint errors map to integrity_constraint_violation");
+	ok(std::strcmp(duckdb_pgsql_sqlstate(DUCKDB_ERROR_CONVERSION, ""), "22018") == 0,
+	   "DuckDB conversion errors map to invalid_character_value_for_cast");
+	ok(std::strcmp(duckdb_pgsql_sqlstate(DUCKDB_ERROR_INVALID, "unknown"), "XX000") == 0,
+	   "unclassified DuckDB errors use PostgreSQL internal_error fallback");
+
 	// --- Live-connection behavioural tests -------------------------------
 
 	duckdb_database db = nullptr;
@@ -77,6 +101,33 @@ int main() {
 	if (duckdb_open(":memory:", &db) != DuckDBSuccess ||
 	    duckdb_connect(db, &conn) != DuckDBSuccess) {
 		BAIL_OUT("could not open an in-memory duckdb");
+	}
+
+	ok(duckdb_pgsql_transaction_status(conn) == 'I',
+	   "a new DuckDB connection reports PostgreSQL idle transaction state");
+	{
+		duckdb_result setup;
+		if (duckdb_query(conn, "CREATE TABLE tx_error(v VARCHAR)", &setup) != DuckDBSuccess) {
+			BAIL_OUT("could not create transaction-error test table");
+		}
+		duckdb_destroy_result(&setup);
+		if (duckdb_query(conn, "INSERT INTO tx_error VALUES ('not-an-integer')", &setup) != DuckDBSuccess) {
+			BAIL_OUT("could not populate transaction-error test table");
+		}
+		duckdb_destroy_result(&setup);
+
+		const DuckDBExecOutcome begin = duckdb_execute_effective(conn, "BEGIN");
+		ok(begin.ok && duckdb_pgsql_transaction_status(conn) == 'T',
+		   "BEGIN changes ReadyForQuery state to in-transaction");
+
+		const DuckDBExecOutcome failed = duckdb_execute_effective(
+			conn, "SELECT CAST(v AS INTEGER) FROM tx_error");
+		ok(!failed.ok && duckdb_pgsql_transaction_status(conn) == 'E',
+		   "an invalidating DuckDB error changes ReadyForQuery state to failed");
+
+		const DuckDBExecOutcome rollback = duckdb_execute_effective(conn, "ROLLBACK");
+		ok(rollback.ok && duckdb_pgsql_transaction_status(conn) == 'I',
+		   "ROLLBACK restores ReadyForQuery state to idle");
 	}
 
 	{
@@ -184,6 +235,24 @@ int main() {
 		ok(outcome.ok && outcome.has_resultset && r && r->rows_count == 1 &&
 		   r->rows[0]->fields[0] != nullptr,
 		   "a trailing line comment does not defeat the unrenderable-column rewrap");
+	}
+
+	{
+		const DuckDBExecOutcome outcome = duckdb_execute_effective(
+			conn, "SELECT gen_random_uuid() AS u; -- trailing comment");
+		std::unique_ptr<SQLite3_result> r(outcome.result);
+		ok(outcome.ok && outcome.has_resultset && r && r->rows_count == 1 &&
+		   r->rows[0]->fields[0] != nullptr,
+		   "a semicolon before a trailing line comment is removed for rewrap");
+	}
+
+	{
+		const DuckDBExecOutcome outcome = duckdb_execute_effective(
+			conn, "SELECT gen_random_uuid() AS u; /* trailing comment */");
+		std::unique_ptr<SQLite3_result> r(outcome.result);
+		ok(outcome.ok && outcome.has_resultset && r && r->rows_count == 1 &&
+		   r->rows[0]->fields[0] != nullptr,
+		   "a semicolon before a trailing block comment is removed for rewrap");
 	}
 
 	{

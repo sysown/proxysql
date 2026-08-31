@@ -232,7 +232,13 @@ const char *fake_status_json() {
 // whenever the core/test binary under test is a debug build -- these fake
 // descriptors exist to test the layout-version compatibility path, not the
 // DEBUG-tag path.
+#if defined(PROXYSQL_FAKE_PLUGIN_FORCE_DEBUG_MISMATCH)
 #ifdef DEBUG
+constexpr uint32_t kFakeAbiDebugBit = 0u;
+#else
+constexpr uint32_t kFakeAbiDebugBit = PROXYSQL_PLUGIN_ABI_DEBUG_BIT;
+#endif
+#elif defined(DEBUG)
 constexpr uint32_t kFakeAbiDebugBit = PROXYSQL_PLUGIN_ABI_DEBUG_BIT;
 #else
 constexpr uint32_t kFakeAbiDebugBit = 0u;

@@ -1,5 +1,7 @@
 #include "duckdb_config.h"
 
+#include <cerrno>
+#include <climits>
 #include <cstdlib>
 #include <sstream>
 
@@ -40,9 +42,10 @@ const char* const kDefaultPgsqlIfaces    = "0.0.0.0:6034";
 
 bool parse_int(const std::string& s, long& out) {
 	if (s.empty()) return false;
+	errno = 0;
 	char* end = nullptr;
 	const long v = std::strtol(s.c_str(), &end, 10);
-	if (end == nullptr || *end != '\0') return false;
+	if (errno == ERANGE || end == nullptr || *end != '\0') return false;
 	out = v;
 	return true;
 }
@@ -152,8 +155,8 @@ bool DuckDBConfigStore::set(const std::string& name, const std::string& value, s
 
 	if (name == "threads" || name == "max_connections") {
 		long v = 0;
-		if (!parse_int(value, v) || v < 1) {
-			err = "invalid value for '" + name + "': expected an integer >= 1";
+		if (!parse_int(value, v) || v < 1 || v > INT_MAX) {
+			err = "invalid value for '" + name + "': expected an integer between 1 and INT_MAX";
 			return false;
 		}
 	} else if (name == "read_only") {
@@ -200,7 +203,10 @@ bool DuckDBConfigStore::validate(std::string& err) const {
 
 	bool read_only_v = kDefaultReadOnly;
 	parse_bool(get_locked("read_only"), read_only_v);
-	const std::string database_path_v = get_locked("database_path");
+	const std::string raw_database_path = get_locked("database_path");
+	const std::string database_path_v = raw_database_path.empty()
+		? kDefaultDatabasePath
+		: raw_database_path;
 
 	if (read_only_v && database_path_v == ":memory:") {
 		err = "read_only=true requires a file-backed database_path; ':memory:' cannot be opened read-only";

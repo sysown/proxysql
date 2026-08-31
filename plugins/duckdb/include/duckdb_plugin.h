@@ -1,5 +1,5 @@
-#ifndef __DUCKDB_PLUGIN_H
-#define __DUCKDB_PLUGIN_H
+#ifndef DUCKDB_PLUGIN_H
+#define DUCKDB_PLUGIN_H
 
 #include "ProxySQL_Plugin.h"
 
@@ -30,4 +30,4 @@ struct DuckDBPluginContext {
 
 DuckDBPluginContext& duckdb_context();
 
-#endif // __DUCKDB_PLUGIN_H
+#endif // DUCKDB_PLUGIN_H

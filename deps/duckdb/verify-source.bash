@@ -40,12 +40,12 @@ actual=$(sha256_file "${archive}")
 [[ "${expected}" == "${actual}" ]] || \
 	fail "SHA-256 mismatch for ${archive}: expected ${expected}, got ${actual}"
 
-# pipefail is disabled around this pipeline: DuckDB's archive has thousands
-# of entries, so `tar -tzf` reliably outlives `head -1` and gets SIGPIPE
-# (exit 141) once head closes the pipe; that is not a real failure.
-set +o pipefail
-root=$(tar -tzf "${archive}" | head -1 | cut -d/ -f1)
-set -o pipefail
+# awk waits for the complete listing before printing the first entry's root.
+# This keeps tar's exit status meaningful: truncated or otherwise corrupt
+# streams must fail verification even if their first member was readable.
+if ! root=$(tar -tzf "${archive}" | awk -F/ 'NR == 1 { root = $1 } END { print root }'); then
+	fail "cannot read complete archive listing: ${archive}"
+fi
 [[ "${root}" == "${required_root}" ]] || \
 	fail "unexpected archive root '${root}', expected '${required_root}'"
 

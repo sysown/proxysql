@@ -42,7 +42,11 @@ int main() {
 	{
 		const char* tmp_csv = "/tmp/duckdb_engine_unit_test_external_access.csv";
 		FILE* f = std::fopen(tmp_csv, "w");
-		if (f != nullptr) { std::fputs("a,b\n1,2\n", f); std::fclose(f); }
+		if (f == nullptr) {
+			BAIL_OUT("could not create the external-access CSV fixture");
+		}
+		std::fputs("a,b\n1,2\n", f);
+		std::fclose(f);
 
 		const std::string q = std::string("SELECT * FROM read_csv('") + tmp_csv + "')";
 		duckdb_result ext_res;

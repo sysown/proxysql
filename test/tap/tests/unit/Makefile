@@ -377,6 +377,7 @@ endif
 TEST_HELPERS_DIR := $(PROXYSQL_PATH)/test/tap/test_helpers
 FAKE_PLUGIN_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin.so
 FAKE_PLUGIN2_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin2.so
+FAKE_PLUGIN_DEBUG_MISMATCH_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin_debug_mismatch.so
 MYSQLX_PLUGIN_SO := $(PROXYSQL_PATH)/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
 MYSQLX_PLUGIN_OPTZ := -O0 -ggdb $(filter -DDEBUG,$(OPT))
 DUCKDB_PLUGIN_SO := $(PROXYSQL_PATH)/plugins/duckdb/ProxySQL_DuckDB_Plugin.so
@@ -412,6 +413,12 @@ $(ODIR)/test_init.o: $(TEST_HELPERS_DIR)/test_init.cpp $(PROXYSQL_TEST_HEADERS) 
 # or the loader will reject it.
 $(FAKE_PLUGIN_SO): $(TEST_HELPERS_DIR)/fake_plugin.cpp $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h | $(TEST_HELPERS_DIR)
 	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(PSQLDEBUG) $(IDIRS) -ldl
+
+# Deliberately advertises the opposite DEBUG ABI tag while retaining the
+# current build's layout, so the loader rejection path can be tested safely.
+$(FAKE_PLUGIN_DEBUG_MISMATCH_SO): $(TEST_HELPERS_DIR)/fake_plugin.cpp $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h | $(TEST_HELPERS_DIR)
+	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(PSQLDEBUG) $(IDIRS) -ldl \
+		-DPROXYSQL_FAKE_PLUGIN_FORCE_DEBUG_MISMATCH
 
 .PHONY: mysqlx_plugin_build
 mysqlx_plugin_build:
@@ -684,6 +691,10 @@ duckdb_config_unit-t: duckdb_config_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/s
 DUCKDB_AR := $(DUCKDB_LDIR)/libduckdb_static.a
 DUCKDB_ARS = $(shell find $(DUCKDB_PATH)/build/release -name '*.a' 2>/dev/null)
 
+$(DUCKDB_AR):
+	$(MAKE) -C $(PROXYSQL_PATH)/deps PROXYSQL40=1 duckdb
+	@test -f $@ || { echo "ERROR: deps duckdb build did not produce $@" >&2; exit 1; }
+
 DUCKDB_LINK_GROUP_START :=
 DUCKDB_LINK_GROUP_END :=
 ifneq ($(UNAME_S),Darwin)
@@ -910,9 +921,10 @@ plugin_prometheus_unit-t: plugin_prometheus_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
-plugin_lifecycle_unit-t: plugin_lifecycle_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+plugin_lifecycle_unit-t: plugin_lifecycle_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN_DEBUG_MISMATCH_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
+		-DPROXYSQL_FAKE_PLUGIN_DEBUG_MISMATCH_PATH=\"$(FAKE_PLUGIN_DEBUG_MISMATCH_SO)\" \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
@@ -1008,4 +1020,4 @@ vendored_openssl_version_unit-t: private OPT += -DPROXYSQL_VENDORED_OPENSSL_VERS
 .SILENT: clean
 clean:
 	rm -rf $(ODIR)
-	rm -f *-t $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO)
+	rm -f *-t $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(FAKE_PLUGIN_DEBUG_MISMATCH_SO)

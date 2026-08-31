@@ -31,6 +31,7 @@ jobs:
         repository: ${{ github.repository }}
         ref: ${{ github.sha }}
         fetch-depth: 0
+        persist-credentials: false
 
     - name: Find or create draft release
       id: release

@@ -2,8 +2,8 @@
 
 DuckDB source is vendored under this directory and built from source as a
 static library (`libduckdb_static.a`) for the `PROXYSQL40` plugin-chassis
-tier, following the same pattern already used for `deps/libssl` and
-`deps/re2`: an LFS-stored source archive, a SHA-256 sidecar, and a
+tier, following the same pattern already used for `deps/libssl`: an
+LFS-stored source archive, a SHA-256 sidecar, and a
 `verify-source.bash` that fails fast and legibly if the archive is an
 unfetched LFS pointer or has been corrupted/tampered with.
 

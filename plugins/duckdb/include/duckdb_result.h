@@ -1,5 +1,5 @@
-#ifndef __DUCKDB_RESULT_H
-#define __DUCKDB_RESULT_H
+#ifndef DUCKDB_RESULT_H
+#define DUCKDB_RESULT_H
 
 #include "duckdb.h"
 
@@ -8,8 +8,11 @@ class SQLite3_result;
 // Converts a materialised duckdb_result into the SQLite3_result that
 // core's MySQL and PostgreSQL serialisers both consume.
 //
-// Every value is rendered with duckdb_value_varchar(), which is correct on
-// the wire for the column types it actually supports: both text protocols
+// Values are read through DuckDB's chunk/vector API and rendered from a
+// length-aware Value. This preserves embedded NUL bytes that DuckDB 1.4.5's
+// legacy result materialisation loses even through duckdb_value_string().
+// This is correct on the wire for the column types the compatibility
+// allowlist supports: both text protocols
 // transmit values as strings and both serialisers label every column as
 // text anyway (MYSQL_TYPE_VAR_STRING / TEXTOID). Verified against DuckDB
 // 1.4.5's deprecated C API (duckdb/src/include/duckdb/main/capi/cast/
@@ -34,12 +37,12 @@ class SQLite3_result;
 //
 // Consequently a null field in the converted SQLite3_result is AMBIGUOUS
 // on its own: it means either "the value was genuinely SQL NULL" or "the
-// column's type cannot be rendered by duckdb_value_varchar()". Callers
+// column's type is outside the compatibility allowlist". Callers
 // must not treat a null field as proof of SQL NULL. Call
 // duckdb_result_has_unrenderable_column() (declared below) on the
 // duckdb_result BEFORE conversion to tell the two apart -- it answers
-// exactly the question a caller of this function needs answered ("can
-// duckdb_value_varchar render every column of this result?"), not merely
+// exactly the question a caller of this function needs answered ("is
+// every column on the direct-conversion allowlist?"), not merely
 // "does this result contain a nested column?".
 //
 // Returns nullptr when the result has no columns. In DuckDB 1.4.5 this is
@@ -81,10 +84,10 @@ class SQLite3_result;
 // The caller owns the returned object and must `delete` it.
 SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res);
 
-// Answers "can duckdb_value_varchar() render every column of this
-// result?" -- true if ANY column's duckdb_column_type() is one that
-// GetInternalCValue's switch (see the comment above) does not handle, and
-// duckdb_result_to_sqlite3() will therefore silently convert that
+// Answers "is every column on the direct-conversion allowlist?" -- true
+// if ANY column's duckdb_column_type() is one that GetInternalCValue's
+// compatibility switch (see the comment above) does not handle, and
+// duckdb_result_to_sqlite3() will therefore deliberately convert that
 // column's values to a null field regardless of whether they were
 // actually SQL NULL.
 //
@@ -106,7 +109,7 @@ SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res);
 bool duckdb_result_has_unrenderable_column(duckdb_result* res);
 
 // The single-column predicate behind duckdb_result_has_unrenderable_column()
-// above -- "can duckdb_value_varchar() render a column of this type?" --
+// above -- "is this type on the direct-conversion compatibility allowlist?" --
 // exported so duckdb_session.cpp's prepare-time renderability check
 // (deciding, from a duckdb_prepared_statement's column types alone,
 // BEFORE anything executes, whether the COLUMNS(*)::VARCHAR rewrap is
@@ -115,4 +118,4 @@ bool duckdb_result_has_unrenderable_column(duckdb_result* res);
 // rationale.
 bool duckdb_type_renders_as_text(duckdb_type t);
 
-#endif // __DUCKDB_RESULT_H
+#endif // DUCKDB_RESULT_H

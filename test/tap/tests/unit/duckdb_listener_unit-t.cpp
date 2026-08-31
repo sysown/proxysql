@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include <functional>
+#include <system_error>
 #include <string>
 
 // Neither test_init_minimal() nor test_init_query_processor() constructs
@@ -106,7 +107,7 @@ bool stays_open(int fd, int timeout_ms) {
 } // namespace
 
 int main() {
-	plan(16);
+	plan(19);
 
 	// A connection thread's run_session() waits for GloMTH/GloMyQPro (and
 	// their PgSQL equivalents) before touching a session -- see the
@@ -214,6 +215,40 @@ int main() {
 	ok(listener2.is_running() == false, "second listener reports stopped");
 
 	engine2.close();
+
+	// --- thread-launch failure recovery ---------------------------------
+	// A transient pthread_create/resource failure must reject only that
+	// client. The accept loop stays alive and releases the reserved slot so
+	// the next client can still be admitted.
+	const uint16_t pg_port3 = 26034;
+	std::atomic<unsigned int> launch_attempts { 0 };
+	DuckDBListener listener3([&launch_attempts](std::function<void()> task) {
+		if (launch_attempts.fetch_add(1) == 0) {
+			throw std::system_error(
+				std::make_error_code(std::errc::resource_unavailable_try_again));
+		}
+		return std::thread(std::move(task));
+	});
+	DuckDBConfigStore cfg3;
+	std::string err3;
+	cfg3.set("mysql_ifaces", "", err3);
+	cfg3.set("pgsql_ifaces", "127.0.0.1:" + std::to_string(pg_port3), err3);
+	cfg3.set("max_connections", "1", err3);
+	DuckDBEngine engine3;
+	ok(engine3.open(cfg3, err3) && listener3.start(cfg3, engine3, err3),
+	   "listener with injectable thread launcher starts");
+	const int failed_launch_fd = connect_and_hold(pg_port3);
+	ok(failed_launch_fd >= 0 && closed_promptly(failed_launch_fd, 1000),
+	   "thread-launch failure rejects only that client and closes its socket");
+	if (failed_launch_fd >= 0) close(failed_launch_fd);
+	const int recovered_fd = connect_and_hold(pg_port3);
+	const bool recovered = recovered_fd >= 0 &&
+		wait_until([&]() { return listener3.connection_thread_count() == 1; }, 2000);
+	if (!recovered) diag("listener did not admit a client after thread-launch failure");
+	ok(recovered, "accept loop survives thread-launch failure and releases the reservation");
+	if (recovered_fd >= 0) close(recovered_fd);
+	listener3.stop();
+	engine3.close();
 
 	if (GloMyLogger != nullptr) { delete GloMyLogger; GloMyLogger = nullptr; }
 	if (GloPgSQL_Logger != nullptr) { delete GloPgSQL_Logger; GloPgSQL_Logger = nullptr; }

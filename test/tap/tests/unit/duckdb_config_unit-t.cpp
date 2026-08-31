@@ -1,11 +1,12 @@
 #include "duckdb_config.h"
 #include "tap.h"
 
+#include <climits>
 #include <string>
 #include <vector>
 
 int main() {
-	plan(18);
+	plan(21);
 
 	// --- iface parsing -------------------------------------------------
 	std::vector<DuckDBIface> ifaces;
@@ -63,6 +64,15 @@ int main() {
 	ok(cfg.set("threads", "not-a-number", err) == false && !err.empty(),
 	   "non-numeric threads is rejected with a message");
 
+	const std::string above_int_max = std::to_string(static_cast<long long>(INT_MAX) + 1);
+	err.clear();
+	ok(cfg.set("threads", above_int_max, err) == false && !err.empty(),
+	   "threads above INT_MAX is rejected instead of narrowing to int");
+
+	err.clear();
+	ok(cfg.set("max_connections", above_int_max, err) == false && !err.empty(),
+	   "max_connections above INT_MAX is rejected instead of narrowing to int");
+
 	// --- cross-field validation ----------------------------------------
 	// READ_ONLY is meaningless for an in-memory database and DuckDB rejects
 	// the combination at open time; catch it at config time with a clear
@@ -72,6 +82,13 @@ int main() {
 	cfg.set("read_only", "true", err);
 	ok(cfg.validate(err) == false && err.find("read_only") != std::string::npos,
 	   "read_only with :memory: fails validation and names the variable");
+
+	// An empty database_path is normalized to :memory: by database_path(), so
+	// validation must reject the effective path rather than only the raw value.
+	err.clear();
+	cfg.set("database_path", "", err);
+	ok(cfg.validate(err) == false && err.find("read_only") != std::string::npos,
+	   "read_only with an empty database_path rejects the effective :memory: path");
 
 	// --- enable_external_access set/get ---------------------------------
 	err.clear();

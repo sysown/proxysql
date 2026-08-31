@@ -161,6 +161,31 @@ void SQLite3_row::add_fields(char **_fields) {
 		ds=data_size;
 }
 
+void SQLite3_row::add_fields(char **_fields, const unsigned long *_sizes) {
+	int data_size = 0;
+	for (int i = 0; i < cnt; i++) {
+		if (_fields[i] != nullptr) {
+			sizes[i] = static_cast<int>(_sizes[i]);
+			data_size += sizes[i] + 1;
+		} else {
+			sizes[i] = 0;
+		}
+	}
+	data = data_size > 0 ? static_cast<char *>(malloc(data_size)) : nullptr;
+	int data_ptr = 0;
+	for (int i = 0; i < cnt; i++) {
+		if (_fields[i] != nullptr && data != nullptr) {
+			memcpy(data + data_ptr, _fields[i], sizes[i]);
+			fields[i] = data + data_ptr;
+			data_ptr += sizes[i];
+			data[data_ptr++] = '\0';
+		} else {
+			fields[i] = nullptr;
+		}
+	}
+	ds = data_size;
+}
+
 
 /**
  * @brief Constructor for the SQLite3DB class.
@@ -903,6 +928,20 @@ int SQLite3_result::add_row(sqlite3_stmt *stmt, bool skip) {
 int SQLite3_result::add_row(char **_fields) {
 	SQLite3_row *row=new SQLite3_row(columns);
 	row->add_fields(_fields);
+	if (enabled_mutex) {
+		pthread_mutex_lock(&m);
+	}
+	rows.push_back(row);
+	rows_count++;
+	if (enabled_mutex) {
+		pthread_mutex_unlock(&m);
+	}
+	return SQLITE_ROW;
+}
+
+int SQLite3_result::add_row(char **_fields, const unsigned long *_sizes) {
+	SQLite3_row *row = new SQLite3_row(columns);
+	row->add_fields(_fields, _sizes);
 	if (enabled_mutex) {
 		pthread_mutex_lock(&m);
 	}

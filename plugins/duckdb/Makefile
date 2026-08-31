@@ -116,6 +116,8 @@ DUCKDB_MIN_ARCHIVES := 16
 SRCS := $(PLUGIN_DIR)/src/duckdb_plugin.cpp $(PLUGIN_DIR)/src/duckdb_config.cpp $(PLUGIN_DIR)/src/duckdb_engine.cpp $(PLUGIN_DIR)/src/duckdb_result.cpp $(PLUGIN_DIR)/src/duckdb_admin_schema.cpp $(PLUGIN_DIR)/src/duckdb_session.cpp $(PLUGIN_DIR)/src/duckdb_listener.cpp
 HEADERS := $(wildcard $(PLUGIN_DIR)/include/*.h) $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h
 OBJS := $(patsubst $(PLUGIN_DIR)/src/%.cpp,$(ODIR)/%.o,$(SRCS))
+DEPS := $(OBJS:.o=.d)
+DEPFLAGS := -MMD -MP
 
 $(ODIR):
 	mkdir -p $(ODIR)
@@ -155,7 +157,9 @@ $(BUILDFLAGS_STAMP): FORCE | $(ODIR)
 	fi
 
 $(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) $(DUCKDB_AR) $(BUILDFLAGS_STAMP) | $(ODIR)
-	$(CXX) -c -o $@ $< $(CXXFLAGS) $(IDIRS)
+	$(CXX) -c -o $@ $< $(CXXFLAGS) $(DEPFLAGS) $(IDIRS)
+
+-include $(DEPS)
 
 # The 16 vendored DuckDB archives were built by DuckDB's own CMake, not by
 # this Makefile, so none of their objects carry -fvisibility=hidden -- that
@@ -189,10 +193,12 @@ $(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) $(DUCKDB_AR) $(BUILDFLAGS_STAMP)
 # "exported symbol not found" error should not fire; if the flag is
 # otherwise wrong, CI fails loudly rather than leaking symbols silently.
 PLUGIN_LDFLAGS :=
+PLUGIN_SYSTEM_LIBS := -lm -lpthread
 ifeq ($(UNAME_S),Darwin)
 PLUGIN_LDFLAGS += -Wl,-undefined,dynamic_lookup -Wl,-exported_symbol,_proxysql_plugin_descriptor_v1
 else
 PLUGIN_LDFLAGS += -Wl,--exclude-libs,ALL
+PLUGIN_SYSTEM_LIBS += -ldl
 endif
 
 # --start-group/--end-group (not --whole-archive) resolves the circular
@@ -219,9 +225,9 @@ $(PLUGIN_SO): $(OBJS) $(DUCKDB_AR)
 		echo "ERROR: expected at least $(DUCKDB_MIN_ARCHIVES) DuckDB static archives under $(DUCKDB_PATH)/build/release (DuckDB 1.4.5 layout: src/ + third_party/ + extension/), found $$n. This usually means an interrupted or partial deps/duckdb build; rerun: make -C $(PROXYSQL_PATH)/deps PROXYSQL40=1 duckdb" >&2; \
 		exit 1; \
 	fi
-	$(CXX) -shared -o $@ $(OBJS) $(CXXFLAGS) -pthread \
+	$(CXX) $(SHARED_FLAGS) -o $@ $(OBJS) $(CXXFLAGS) -pthread \
 		$(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) \
-		-L$(SSL_LDIR) -lssl -lcrypto $(PLUGIN_LDFLAGS) -lstdc++ -lm -ldl -lpthread
+		-L$(SSL_LDIR) -lssl -lcrypto $(PLUGIN_LDFLAGS) $(PLUGIN_SYSTEM_LIBS)
 
 .PHONY: all
 all: $(PLUGIN_SO)

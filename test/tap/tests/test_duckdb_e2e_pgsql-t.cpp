@@ -3,7 +3,12 @@
 #include "command_line.h"
 
 #include <cstring>
+#include <cstdint>
 #include <string>
+
+#include <arpa/inet.h>
+#include <poll.h>
+#include <sys/socket.h>
 
 namespace {
 
@@ -25,13 +30,34 @@ PGconn* connect_duckdb(CommandLine& cl, const char* user, const char* pass) {
 	return c;
 }
 
+bool unsupported_message_gets_error(PGconn* c, char type) {
+	unsigned char packet[5] = { static_cast<unsigned char>(type), 0, 0, 0, 0 };
+	const uint32_t length = htonl(4);
+	std::memcpy(packet + 1, &length, sizeof(length));
+	if (send(PQsocket(c), packet, sizeof(packet), 0) != sizeof(packet)) return false;
+
+	pollfd pfd { PQsocket(c), POLLIN, 0 };
+	if (poll(&pfd, 1, 1000) != 1 || (pfd.revents & POLLIN) == 0) return false;
+	unsigned char response_type = 0;
+	return recv(PQsocket(c), &response_type, 1, MSG_PEEK) == 1 && response_type == 'E';
+}
+
+bool result_has_value(PGresult* r, const char* value) {
+	if (r == nullptr || PQnfields(r) < 1) return false;
+	for (int row = 0; row < PQntuples(r); row++) {
+		if (!PQgetisnull(r, row, 0) && std::strcmp(PQgetvalue(r, row, 0), value) == 0)
+			return true;
+	}
+	return false;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(8);
+	plan(20);
 
 	PGconn* c = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password);
 	ok(c != NULL, "connect to the DuckDB PgSQL port with pgsql_users credentials");
@@ -47,10 +73,44 @@ int main(int argc, char** argv) {
 	}
 
 	{
+		PGresult* setup = PQexec(c, "CREATE SCHEMA IF NOT EXISTS duckdb_e2e_schema");
+		if (PQresultStatus(setup) != PGRES_COMMAND_OK) BAIL_OUT("could not create test schema");
+		PQclear(setup);
+		setup = PQexec(c, "ATTACH ':memory:' AS duckdb_e2e_catalog");
+		if (PQresultStatus(setup) != PGRES_COMMAND_OK) BAIL_OUT("could not attach test catalog");
+		PQclear(setup);
+
+		PGresult* databases = PQexec(c, "SHOW DATABASES");
+		ok(PQresultStatus(databases) == PGRES_TUPLES_OK &&
+		   result_has_value(databases, "duckdb_e2e_catalog") &&
+		   !result_has_value(databases, "duckdb_e2e_schema"),
+		   "SHOW DATABASES enumerates catalogs, not schemas");
+		PQclear(databases);
+
+		PGresult* schemas = PQexec(c, "SHOW SCHEMAS");
+		ok(PQresultStatus(schemas) == PGRES_TUPLES_OK &&
+		   result_has_value(schemas, "duckdb_e2e_schema") &&
+		   !result_has_value(schemas, "duckdb_e2e_catalog"),
+		   "SHOW SCHEMAS enumerates schema metadata separately");
+		PQclear(schemas);
+	}
+
+	{
 		PGresult* r = PQexec(c, "SELECT NULL AS n");
 		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQgetisnull(r, 0, 0) == 1,
 		   "NULL arrives as a real SQL NULL");
 		PQclear(r);
+	}
+
+	{
+		PGresult* set = PQexec(c, "SET threads=2");
+		const bool set_ok = PQresultStatus(set) == PGRES_COMMAND_OK;
+		PQclear(set);
+		PGresult* current = PQexec(c, "SELECT current_setting('threads')");
+		ok(set_ok && PQresultStatus(current) == PGRES_TUPLES_OK &&
+		   PQntuples(current) == 1 && std::strcmp(PQgetvalue(current, 0, 0), "2") == 0,
+		   "DuckDB-native SET reaches the engine and changes the setting");
+		PQclear(current);
 	}
 
 	{
@@ -97,6 +157,43 @@ int main(int argc, char** argv) {
 		ok(state != NULL && std::strcmp(state, "42601") == 0,
 		   "the error SQLSTATE is the plugin's syntax_error 42601, not core's misleading 28000");
 		PQclear(r);
+	}
+
+	{
+		PGresult* setup = PQexec(c, "CREATE OR REPLACE TABLE tx_error(v VARCHAR)");
+		if (PQresultStatus(setup) != PGRES_COMMAND_OK) BAIL_OUT("could not create transaction-error table");
+		PQclear(setup);
+		setup = PQexec(c, "INSERT INTO tx_error VALUES ('not-an-integer')");
+		if (PQresultStatus(setup) != PGRES_COMMAND_OK) BAIL_OUT("could not populate transaction-error table");
+		PQclear(setup);
+
+		PGresult* r = PQexec(c, "BEGIN");
+		ok(PQresultStatus(r) == PGRES_COMMAND_OK &&
+		   PQtransactionStatus(c) == PQTRANS_INTRANS,
+		   "ReadyForQuery reports an active DuckDB transaction after BEGIN");
+		PQclear(r);
+
+		r = PQexec(c, "SELECT CAST(v AS INTEGER) FROM tx_error");
+		const char* state = PQresultErrorField(r, PG_DIAG_SQLSTATE);
+		ok(PQresultStatus(r) == PGRES_FATAL_ERROR && state != NULL &&
+		   std::strcmp(state, "22018") == 0,
+		   "a DuckDB conversion error uses SQLSTATE 22018 instead of syntax_error");
+		ok(PQtransactionStatus(c) == PQTRANS_INERROR,
+		   "ReadyForQuery reports DuckDB's invalidated transaction state");
+		PQclear(r);
+
+		r = PQexec(c, "ROLLBACK");
+		ok(PQresultStatus(r) == PGRES_COMMAND_OK &&
+		   PQtransactionStatus(c) == PQTRANS_IDLE,
+		   "ReadyForQuery returns to idle after ROLLBACK");
+		PQclear(r);
+	}
+
+	for (char type : { 'P', 'B', 'C', 'D', 'E' }) {
+		PGconn* extended = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password);
+		ok(extended != NULL && unsupported_message_gets_error(extended, type),
+		   "unsupported extended-query message %c gets an immediate ErrorResponse", type);
+		if (extended != NULL) PQfinish(extended);
 	}
 
 	PQfinish(c);

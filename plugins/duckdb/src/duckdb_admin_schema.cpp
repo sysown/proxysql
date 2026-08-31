@@ -1,6 +1,7 @@
 #include "duckdb_admin_schema.h"
 
 #include "duckdb_config.h"
+#include "duckdb_engine.h"
 #include "duckdb_plugin.h"
 #include "sqlite3db.h"
 
@@ -25,6 +26,13 @@ std::string sqlite_quote(const std::string& s) {
 
 ProxySQL_PluginCommandResult command_failure(const std::string& message) {
 	return {1, 0, message.empty() ? "duckdb admin command failed" : message};
+}
+
+void log_refresh_error(const char* message) {
+	DuckDBPluginContext& plugin_ctx = duckdb_context();
+	if (plugin_ctx.services != nullptr && plugin_ctx.services->log_message != nullptr) {
+		plugin_ctx.services->log_message(3 /* error */, message);
+	}
 }
 
 // Atomically wipe and refill `table_name` in `db` from the rows of
@@ -90,13 +98,17 @@ ProxySQL_PluginCommandResult cmd_load_variables(const ProxySQL_PluginCommandCont
 	if (ctx.admindb == nullptr) {
 		return command_failure("duckdb variables load requires admin db");
 	}
-	DuckDBConfigStore* store = duckdb_context().config_store.get();
+	DuckDBPluginContext& plugin_ctx = duckdb_context();
+	DuckDBConfigStore* store = plugin_ctx.config_store.get();
 	if (store == nullptr) {
 		return command_failure("duckdb config store not available");
 	}
 	std::string err;
 	if (!duckdb_install_variables_from_admin(*ctx.admindb, *store, err)) {
 		return command_failure(err.empty() ? "duckdb_install_variables_from_admin failed" : err);
+	}
+	if (plugin_ctx.engine != nullptr) {
+		plugin_ctx.engine->set_max_connections(static_cast<size_t>(store->max_connections()));
 	}
 	uint64_t row_count = ctx.admindb->return_one_int("SELECT COUNT(*) FROM duckdb_variables");
 	ProxySQL_PluginCommandResult res{0, row_count, "duckdb variables loaded to runtime"};
@@ -195,10 +207,13 @@ bool duckdb_save_variables_to_admin(SQLite3DB& admindb,
 
 void duckdb_refresh_runtime_variables(SQLite3DB* db, void* opaque) {
 	if (db == nullptr || opaque == nullptr) {
+		log_refresh_error("duckdb: cannot refresh runtime_duckdb_variables: missing db or config store");
 		return;
 	}
 	const DuckDBConfigStore* store = static_cast<const DuckDBConfigStore*>(opaque);
-	replace_variables_table(*db, "runtime_duckdb_variables", *store);
+	if (!replace_variables_table(*db, "runtime_duckdb_variables", *store)) {
+		log_refresh_error("duckdb: failed to refresh runtime_duckdb_variables");
+	}
 }
 
 bool duckdb_sync_variables_disk_to_memory(SQLite3DB& admindb, std::string& err) {

@@ -65,6 +65,19 @@ extern PgSQL_Query_Processor* GloPgQPro;
 
 namespace {
 
+class PthreadMutexGuard {
+public:
+	explicit PthreadMutexGuard(pthread_mutex_t& mutex) : mutex_(mutex) {
+		pthread_mutex_lock(&mutex_);
+	}
+	~PthreadMutexGuard() { pthread_mutex_unlock(&mutex_); }
+	PthreadMutexGuard(const PthreadMutexGuard&) = delete;
+	PthreadMutexGuard& operator=(const PthreadMutexGuard&) = delete;
+
+private:
+	pthread_mutex_t& mutex_;
+};
+
 // `shutdown_flag` is DuckDBListener::shutdown_, checked alongside
 // glovars.shutdown (process-wide shutdown) so a thread parked here
 // during a plugin unload or process shutdown gives up within one
@@ -146,8 +159,19 @@ void fill_client_addr(DS* myds, int fd) {
 
 } // namespace
 
+DuckDBListener::DuckDBListener()
+	: DuckDBListener([](std::function<void()> task) {
+		return std::thread(std::move(task));
+	}) {}
+
+DuckDBListener::DuckDBListener(ThreadLauncher thread_launcher)
+	: thread_launcher_(std::move(thread_launcher)) {
+	pthread_mutex_init(&mutex_, nullptr);
+}
+
 DuckDBListener::~DuckDBListener() {
 	stop();
+	pthread_mutex_destroy(&mutex_);
 }
 
 bool DuckDBListener::start(DuckDBConfigStore& cfg, DuckDBEngine& engine, std::string& err) {
@@ -211,7 +235,7 @@ void DuckDBListener::stop() {
 
 	std::vector<ConnThread> joining;
 	{
-		std::lock_guard<std::mutex> lock(mutex_);
+		PthreadMutexGuard lock(mutex_);
 		joining = std::move(conn_threads_);
 		conn_threads_.clear();
 	}
@@ -230,12 +254,12 @@ void DuckDBListener::stop() {
 }
 
 size_t DuckDBListener::listener_count() const {
-	std::lock_guard<std::mutex> lock(mutex_);
+	PthreadMutexGuard lock(mutex_);
 	return listeners_.size();
 }
 
 size_t DuckDBListener::connection_thread_count() const {
-	std::lock_guard<std::mutex> lock(mutex_);
+	PthreadMutexGuard lock(mutex_);
 	return conn_threads_.size();
 }
 
@@ -272,7 +296,7 @@ size_t DuckDBListener::connection_thread_count() const {
 void DuckDBListener::reap_finished_threads() {
 	std::vector<ConnThread> finished;
 	{
-		std::lock_guard<std::mutex> lock(mutex_);
+		PthreadMutexGuard lock(mutex_);
 		for (auto it = conn_threads_.begin(); it != conn_threads_.end(); ) {
 			if (it->done->load()) {
 				finished.push_back(std::move(*it));
@@ -338,10 +362,33 @@ void DuckDBListener::accept_loop() {
 			}
 
 			const Proto proto = listeners_[i].proto;
-			auto done = std::make_shared<std::atomic<bool>>(false);
-			std::thread th(&DuckDBListener::handle_connection, this, client_fd, proto, done);
-			std::lock_guard<std::mutex> lock(mutex_);
-			conn_threads_.push_back(ConnThread { std::move(th), std::move(done) });
+			try {
+				auto done = std::make_shared<std::atomic<bool>>(false);
+				PthreadMutexGuard lock(mutex_);
+				// Allocate the tracking slot before starting the thread. Once
+				// thread_launcher_ succeeds, assigning the returned std::thread
+				// into the default-constructed slot is noexcept, so there is no
+				// untracked joinable thread if vector allocation fails.
+				conn_threads_.emplace_back();
+				ConnThread& tracked = conn_threads_.back();
+				tracked.done = done;
+				try {
+					tracked.th = thread_launcher_([this, client_fd, proto, done]() {
+						handle_connection(client_fd, proto, done);
+					});
+				} catch (...) {
+					conn_threads_.pop_back();
+					throw;
+				}
+			} catch (const std::exception& e) {
+				proxy_error("DuckDB listener could not start connection thread: %s\n", e.what());
+				close(client_fd);
+				engine_->release_connection();
+			} catch (...) {
+				proxy_error("DuckDB listener could not start connection thread: unknown error\n");
+				close(client_fd);
+				engine_->release_connection();
+			}
 		}
 	}
 }

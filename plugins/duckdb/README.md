@@ -37,7 +37,8 @@ first — see the tier-mismatch warning in the repo's top-level
 `CLAUDE.md`.
 
 The plugin `.so` lands at `plugins/duckdb/ProxySQL_DuckDB_Plugin.so` in
-the build tree, and installs to `/usr/lib/proxysql/ProxySQL_DuckDB_Plugin.so`.
+the build tree, and installs to
+`/usr/lib/proxysql/plugins/ProxySQL_DuckDB_Plugin.so`.
 
 ## 3. Loading
 
@@ -45,9 +46,9 @@ Add the plugin path to the `plugins` array in `proxysql.cnf` **before**
 starting ProxySQL — plugins cannot be loaded after startup, and removing
 the line and restarting unloads the plugin cleanly:
 
-```
+```ini
 plugins = (
-    "/usr/lib/proxysql/ProxySQL_DuckDB_Plugin.so"
+    "/usr/lib/proxysql/plugins/ProxySQL_DuckDB_Plugin.so"
 )
 ```
 
@@ -81,7 +82,7 @@ editable table automatically, but a truly first-ever boot does not.
 | `database_path` | `:memory:` | A file path opens (and creates, if absent) a persistent database; `:memory:` is process-lifetime only and shared by every connection to this process. |
 | `memory_limit` | `1GB` | Passed to DuckDB at open. |
 | `threads` | `2` | DuckDB's own internal worker-thread count for parallelizing a single query. Integer ≥ 1. |
-| `max_connections` | `100` | Enforced in the accept loop; rejected with a protocol-correct error before a session object is constructed. |
+| `max_connections` | `100` | Enforced in the accept loop. When the limit is reached, the newly accepted socket is closed without a protocol error, before a session object is constructed. |
 | `read_only` | `false` | `true` sets `access_mode=READ_ONLY`. Rejected at validation time if combined with `database_path=:memory:` (a read-only in-memory database cannot be usefully opened). |
 | `enable_external_access` | `false` | Passed to DuckDB's own `enable_external_access` setting at open. **Deny by default — see Security below before enabling.** |
 
@@ -152,17 +153,8 @@ fetch extensions from the internet, with or without
 setting does gate is the local-filesystem/external-state surface
 described above.
 
-**Multi-statement input is rejected, closing a statement-smuggling path.**
-Every statement now goes through `duckdb_prepare()` before it is executed
-(see the rewrap mechanism in Limitations, below), and `duckdb_prepare()`
-refuses more than one statement per request. The direct-execution path
-this plugin used before ran every statement present in the packet but
-returned only the *last* one's result — so a single client request like
-`SELECT 1; DROP TABLE t;` would execute the `DROP` while the client only
-ever saw the `SELECT`'s result, with the destructive statement invisible
-in the response. Rejecting the whole packet now matches what a MySQL
-server does for a client that has not negotiated
-`CLIENT_MULTI_STATEMENTS`, and removes that smuggling vector outright.
+The multi-statement rejection and the statement-smuggling behavior it
+prevents are documented under Limitations below.
 
 ## 6. Connect
 
@@ -193,8 +185,8 @@ Stated plainly, not buried:
   for every column; PostgreSQL clients see `TEXTOID`. This is identical to
   what ProxySQL's own Admin interface and the SQLite3 Server do today.
   Typed (non-text) result columns are deferred to a later sub-project.
-- **Some DuckDB types cannot render through the deprecated
-  `duckdb_value_varchar()` accessor**, and are handled by a rewrap, not a
+- **Some DuckDB types remain outside the direct-conversion compatibility
+  allowlist**, and are handled by a rewrap, not a
   silent gap: `LIST`, `STRUCT`, `MAP`, `ARRAY`, `UNION`, `UUID`, `ENUM`,
   `BIT`, and `TIMESTAMP_S`/`MS`/`NS` all render as NULL through the direct
   path. The plugin decides whether a rewrap is needed by first calling
@@ -228,13 +220,13 @@ Stated plainly, not buried:
   not merely a side effect of preparing first: the previous
   direct-execution path (`duckdb_query()`) silently ran **every**
   statement in the packet but returned only the **last** one's result to
-  the client — so `SELECT 1; DROP TABLE t;` would execute the `DROP`
-  while the client only ever saw the `SELECT`'s result, with the
-  destructive statement invisible in the response (statement smuggling).
+  the client — so `DROP TABLE t; SELECT 1;` would execute the `DROP`
+  while the client only saw the final `SELECT` result, with the
+  destructive first statement invisible in the response (statement
+  smuggling).
   Rejecting the whole packet up front instead matches what a MySQL server
   does for a client that has not negotiated `CLIENT_MULTI_STATEMENTS`,
-  and removes that smuggling path entirely. See also the Security section
-  below.
+  and removes that smuggling path entirely.
 - **A comment-only "statement"** (e.g. a bare `-- comment` with no actual
   SQL) **now errors** (`"No statement to prepare!"`) instead of the
   previous silent empty-success. Not exercised by any documented client

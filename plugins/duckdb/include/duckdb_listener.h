@@ -1,10 +1,11 @@
-#ifndef __DUCKDB_LISTENER_H
-#define __DUCKDB_LISTENER_H
+#ifndef DUCKDB_LISTENER_H
+#define DUCKDB_LISTENER_H
 
 #include <atomic>
 #include <cstddef>
+#include <functional>
 #include <memory>
-#include <mutex>
+#include <pthread.h>
 #include <string>
 #include <thread>
 #include <vector>
@@ -22,7 +23,10 @@ class DuckDBEngine;
 // rather than detached the way SQLite3_Server's are.
 class DuckDBListener {
 public:
-	DuckDBListener() = default;
+	using ThreadLauncher = std::function<std::thread(std::function<void()>)>;
+
+	DuckDBListener();
+	explicit DuckDBListener(ThreadLauncher thread_launcher);
 	~DuckDBListener();
 
 	DuckDBListener(const DuckDBListener&) = delete;
@@ -64,10 +68,11 @@ private:
 
 	DuckDBEngine* engine_ { nullptr };
 
-	mutable std::mutex mutex_;
+	mutable pthread_mutex_t mutex_;
 	std::vector<Listener> listeners_;
 	std::vector<ConnThread> conn_threads_;
 	std::thread accept_thread_;
+	ThreadLauncher thread_launcher_;
 };
 
-#endif // __DUCKDB_LISTENER_H
+#endif // DUCKDB_LISTENER_H

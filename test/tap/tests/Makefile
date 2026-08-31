@@ -236,7 +236,7 @@ TESTS_FILTER_DARWIN := test_wexecvp_syscall_failures-t
 TESTS_CPP_FILTER := $(if $(filter Darwin,$(UNAME_S)),$(TESTS_FILTER_DARWIN),)
 
 ifeq ($(PROXYSQL40_DETECTED),0)
-TESTS_CPP := $(filter-out test_mysqlx_% $(TESTS_CPP_FILTER),$(patsubst %.cpp,%,$(wildcard *-t.cpp)))
+TESTS_CPP := $(filter-out test_mysqlx_% test_duckdb_plugin_load-t $(TESTS_CPP_FILTER),$(patsubst %.cpp,%,$(wildcard *-t.cpp)))
 else
 TESTS_CPP := $(filter-out $(TESTS_CPP_FILTER),$(patsubst %.cpp,%,$(wildcard *-t.cpp)))
 endif

@@ -10,6 +10,32 @@
 
 namespace {
 
+std::string json_escape(const std::string& value) {
+	static const char hex[] = "0123456789abcdef";
+	std::string escaped;
+	escaped.reserve(value.size());
+	for (unsigned char c : value) {
+		switch (c) {
+		case '"': escaped += "\\\""; break;
+		case '\\': escaped += "\\\\"; break;
+		case '\b': escaped += "\\b"; break;
+		case '\f': escaped += "\\f"; break;
+		case '\n': escaped += "\\n"; break;
+		case '\r': escaped += "\\r"; break;
+		case '\t': escaped += "\\t"; break;
+		default:
+			if (c < 0x20) {
+				escaped += "\\u00";
+				escaped.push_back(hex[c >> 4]);
+				escaped.push_back(hex[c & 0x0f]);
+			} else {
+				escaped.push_back(static_cast<char>(c));
+			}
+		}
+	}
+	return escaped;
+}
+
 void log_warn(const std::string& msg) {
 	DuckDBPluginContext& ctx = duckdb_context();
 	if (ctx.services != nullptr && ctx.services->log_message != nullptr) {
@@ -107,7 +133,7 @@ const char* duckdb_status_json() {
 		return status.c_str();
 	}
 	status = "{\"name\":\"duckdb\",\"state\":\"running\",\"database_path\":\"" +
-		ctx.config_store->database_path() + "\",\"open_connections\":" +
+		json_escape(ctx.config_store->database_path()) + "\",\"open_connections\":" +
 		std::to_string(ctx.engine->open_connections()) + "}";
 	return status.c_str();
 }

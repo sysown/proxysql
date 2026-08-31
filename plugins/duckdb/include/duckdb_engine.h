@@ -1,5 +1,5 @@
-#ifndef __DUCKDB_ENGINE_H
-#define __DUCKDB_ENGINE_H
+#ifndef DUCKDB_ENGINE_H
+#define DUCKDB_ENGINE_H
 
 #include "duckdb.h"
 
@@ -50,4 +50,4 @@ private:
 	std::atomic<size_t> max_connections_ { 100 };
 };
 
-#endif // __DUCKDB_ENGINE_H
+#endif // DUCKDB_ENGINE_H

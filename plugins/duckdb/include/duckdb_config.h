@@ -1,5 +1,5 @@
-#ifndef __DUCKDB_CONFIG_H
-#define __DUCKDB_CONFIG_H
+#ifndef DUCKDB_CONFIG_H
+#define DUCKDB_CONFIG_H
 
 #include <cstdint>
 #include <map>
@@ -51,4 +51,4 @@ private:
 	std::string get_locked(const std::string& name) const;
 };
 
-#endif // __DUCKDB_CONFIG_H
+#endif // DUCKDB_CONFIG_H

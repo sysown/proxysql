@@ -3,6 +3,7 @@
 #include "sqlite3db.h"
 #include "tap.h"
 
+#include <cstring>
 #include <memory>
 #include <string>
 
@@ -20,10 +21,19 @@ SQLite3_result* run(duckdb_connection conn, const char* sql) {
 	return out;
 }
 
+bool field_equals(const SQLite3_result* result, size_t row, size_t column,
+	              const char* expected) {
+	return result != nullptr && row < result->rows.size() &&
+		result->rows[row] != nullptr && result->rows[row]->fields != nullptr &&
+		column < static_cast<size_t>(result->rows[row]->cnt) &&
+		result->rows[row]->fields[column] != nullptr &&
+		std::string(result->rows[row]->fields[column]) == expected;
+}
+
 } // namespace
 
 int main() {
-	plan(28);
+	plan(30);
 
 	duckdb_database db = nullptr;
 	duckdb_connection conn = nullptr;
@@ -39,7 +49,7 @@ int main() {
 		ok(r && r->rows_count == 1, "one row");
 		ok(r && std::string(r->column_definition[0]->name) == "answer",
 		   "column name is preserved");
-		ok(r && std::string(r->rows[0]->fields[0]) == "42",
+		ok(field_equals(r.get(), 0, 0, "42"),
 		   "integer value renders as text");
 	}
 
@@ -50,25 +60,25 @@ int main() {
 		// Task 11's own self-check for exactly the defect class the
 		// review was about (a claim about test coverage that the test
 		// didn't actually assert). All four types render through
-		// duckdb_value_varchar() (duckdb_type_renders_as_text() allows
+		// direct conversion (duckdb_type_renders_as_text() allows
 		// them), unlike the nested/UUID/etc. types covered above.
 		std::unique_ptr<SQLite3_result> r(run(conn, "SELECT CAST(1.5 AS DOUBLE) AS d"));
-		ok(r && std::string(r->rows[0]->fields[0]) == "1.5", "float/double value renders as text");
+		ok(field_equals(r.get(), 0, 0, "1.5"), "float/double value renders as text");
 	}
 
 	{
 		std::unique_ptr<SQLite3_result> r(run(conn, "SELECT CAST(1.23 AS DECIMAL(10,2)) AS dec"));
-		ok(r && std::string(r->rows[0]->fields[0]) == "1.23", "decimal value renders as text");
+		ok(field_equals(r.get(), 0, 0, "1.23"), "decimal value renders as text");
 	}
 
 	{
 		std::unique_ptr<SQLite3_result> r(run(conn, "SELECT TIMESTAMP '2024-01-01 12:00:00' AS ts"));
-		ok(r && std::string(r->rows[0]->fields[0]) == "2024-01-01 12:00:00", "timestamp value renders as text");
+		ok(field_equals(r.get(), 0, 0, "2024-01-01 12:00:00"), "timestamp value renders as text");
 	}
 
 	{
 		std::unique_ptr<SQLite3_result> r(run(conn, "SELECT 'hello'::BLOB AS b"));
-		ok(r && std::string(r->rows[0]->fields[0]) == "hello", "blob value renders as text");
+		ok(field_equals(r.get(), 0, 0, "hello"), "blob value renders as text");
 	}
 
 	{
@@ -79,8 +89,20 @@ int main() {
 	}
 
 	{
-		// Nested types cannot round-trip through duckdb's deprecated value
-		// API: duckdb_value_varchar() has no case for LIST/STRUCT/MAP/
+		// A VARCHAR may contain an embedded NUL. The wire serializers consume
+		// SQLite3_row::sizes, so preserving the explicit byte count here is the
+		// boundary contract that prevents the value being truncated by strlen().
+		std::unique_ptr<SQLite3_result> r(
+			run(conn, "SELECT varchar FROM test_all_types() WHERE bool"));
+		ok(r && r->rows_count == 1 && r->rows[0]->sizes[0] == 6,
+		   "VARCHAR conversion preserves the byte length across an embedded NUL");
+		ok(r && r->rows[0]->fields[0] != nullptr &&
+		   std::memcmp(r->rows[0]->fields[0], "goo\0se", 6) == 0,
+		   "VARCHAR conversion preserves every byte across an embedded NUL");
+	}
+
+	{
+		// The direct compatibility allowlist has no case for LIST/STRUCT/MAP/
 		// ARRAY/UNION in its internal cast switch and falls through to a
 		// NULL default (verified against DuckDB 1.4.5's
 		// GetInternalCValue and empirically via a standalone probe).
@@ -92,11 +114,12 @@ int main() {
 		if (duckdb_query(conn, "SELECT [1,2,3] AS l", &list_res) != DuckDBSuccess) {
 			BAIL_OUT("could not run LIST query");
 		}
+		const bool list_unrenderable = duckdb_result_has_unrenderable_column(&list_res);
 		std::unique_ptr<SQLite3_result> r(duckdb_result_to_sqlite3(&list_res));
 		ok(r && r->rows_count == 1, "LIST result converts with one row");
 		ok(r && r->rows[0]->fields[0] == nullptr,
-		   "LIST value converts to a null field (duckdb_value_varchar cannot render nested types)");
-		ok(duckdb_result_has_unrenderable_column(&list_res) == true,
+		   "LIST value converts to a null field on the direct compatibility path");
+		ok(list_unrenderable,
 		   "predicate flags the LIST column as unrenderable");
 		duckdb_destroy_result(&list_res);
 
@@ -112,7 +135,7 @@ int main() {
 	{
 		// UUID is a non-nested SCALAR type that is just as unrenderable as
 		// the nested types above -- it has no case in GetInternalCValue's
-		// switch either, so duckdb_value_varchar() returns nullptr for it
+		// switch either, so the direct compatibility path emits a null field for it
 		// despite the value not being SQL NULL. This is exactly the case
 		// the predicate must catch that a nested-types-only check would
 		// miss: a UUID column would otherwise reach a client as a silent,
@@ -121,28 +144,30 @@ int main() {
 		if (duckdb_query(conn, "SELECT gen_random_uuid() AS u", &uuid_res) != DuckDBSuccess) {
 			BAIL_OUT("could not run UUID query");
 		}
+		const bool uuid_unrenderable = duckdb_result_has_unrenderable_column(&uuid_res);
 		std::unique_ptr<SQLite3_result> r(duckdb_result_to_sqlite3(&uuid_res));
 		ok(r && r->rows_count == 1 && r->rows[0]->fields[0] == nullptr,
-		   "UUID value converts to a null field (duckdb_value_varchar cannot render UUID)");
-		ok(duckdb_result_has_unrenderable_column(&uuid_res) == true,
+		   "UUID value converts to a null field on the direct compatibility path");
+		ok(uuid_unrenderable,
 		   "predicate flags the non-nested UUID column as unrenderable");
 		duckdb_destroy_result(&uuid_res);
 	}
 
 	{
 		// STRUCT is named alongside LIST/MAP/ARRAY/UNION in the comment
-		// above the LIST block as one of the nested types
-		// duckdb_value_varchar() cannot render, but until now nothing in
+		// above the LIST block as one of the nested types the direct
+		// compatibility path cannot render, but until now nothing in
 		// this file actually asserted that -- it appeared only in prose.
 		// Mirrors the LIST block's two checks exactly.
 		duckdb_result struct_res;
 		if (duckdb_query(conn, "SELECT {'a': 1, 'b': 2} AS s", &struct_res) != DuckDBSuccess) {
 			BAIL_OUT("could not run STRUCT query");
 		}
+		const bool struct_unrenderable = duckdb_result_has_unrenderable_column(&struct_res);
 		std::unique_ptr<SQLite3_result> r(duckdb_result_to_sqlite3(&struct_res));
 		ok(r && r->rows_count == 1 && r->rows[0]->fields[0] == nullptr,
-		   "STRUCT value converts to a null field (duckdb_value_varchar cannot render nested types)");
-		ok(duckdb_result_has_unrenderable_column(&struct_res) == true,
+		   "STRUCT value converts to a null field on the direct compatibility path");
+		ok(struct_unrenderable,
 		   "predicate flags the STRUCT column as unrenderable");
 		duckdb_destroy_result(&struct_res);
 	}

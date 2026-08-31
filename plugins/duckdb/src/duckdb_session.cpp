@@ -1,3 +1,7 @@
+#include "duckdb/main/connection.hpp"
+#include "duckdb/main/client_context.hpp"
+#include "duckdb/main/valid_checker.hpp"
+
 #include "duckdb_session.h"
 #include "duckdb_result.h"
 #include "sqlite3db.h"
@@ -34,7 +38,22 @@ std::string normalize(const char* sql, size_t len) {
 		}
 	}
 	while (!out.empty() && out.back() == ' ') out.pop_back();
+	while (!out.empty() && out.back() == ';') {
+		out.pop_back();
+		while (!out.empty() && out.back() == ' ') out.pop_back();
+	}
 	return out;
+}
+
+bool is_client_compatibility_set(const std::string& q) {
+	std::string compact;
+	compact.reserve(q.size());
+	for (char c : q) {
+		if (c != ' ') compact.push_back(c);
+	}
+	if (compact == "SETAUTOCOMMIT=0" || compact == "SETAUTOCOMMIT=1")
+		return true;
+	return q.rfind("SET NAMES ", 0) == 0;
 }
 
 } // namespace
@@ -49,11 +68,11 @@ DuckDBIntercept duckdb_classify_query(const char* sql, size_t len) {
 	if (q == "SELECT DATABASE()" || q == "SELECT CURRENT_DATABASE()")
 		return DuckDBIntercept::database;
 	if (q == "SHOW TABLES")     return DuckDBIntercept::show_tables;
-	if (q == "SHOW DATABASES" || q == "SHOW SCHEMAS")
-		return DuckDBIntercept::show_databases;
-	// Session-state statements clients send unprompted. DuckDB has no
-	// equivalent; accepting them silently is what SQLite3_Server does.
-	if (q.rfind("SET ", 0) == 0)  return DuckDBIntercept::ok_noop;
+	if (q == "SHOW DATABASES") return DuckDBIntercept::show_databases;
+	if (q == "SHOW SCHEMAS")   return DuckDBIntercept::show_schemas;
+	// Client-compatibility statements DuckDB does not implement. Other SET
+	// statements are DuckDB configuration and must reach the engine.
+	if (is_client_compatibility_set(q)) return DuckDBIntercept::ok_noop;
 	return DuckDBIntercept::none;
 }
 
@@ -76,6 +95,7 @@ SQLite3_result* duckdb_build_intercept_result(DuckDBIntercept kind) {
 	}
 	case DuckDBIntercept::show_tables:
 	case DuckDBIntercept::show_databases:
+	case DuckDBIntercept::show_schemas:
 		// Answered by rewriting to DuckDB SQL in the handler, not here.
 		return nullptr;
 	case DuckDBIntercept::none:
@@ -90,14 +110,70 @@ DuckDBSessionState& duckdb_session_state() {
 	return state;
 }
 
+const char* duckdb_pgsql_sqlstate(duckdb_error_type type, const std::string& message) {
+	switch (type) {
+	case DUCKDB_ERROR_PARSER:
+	case DUCKDB_ERROR_SYNTAX:
+		return "42601";
+	case DUCKDB_ERROR_OUT_OF_RANGE:
+	case DUCKDB_ERROR_DECIMAL:
+		return "22003";
+	case DUCKDB_ERROR_CONVERSION:
+		return "22018";
+	case DUCKDB_ERROR_DIVIDE_BY_ZERO:
+		return "22012";
+	case DUCKDB_ERROR_TRANSACTION:
+		return "25000";
+	case DUCKDB_ERROR_NOT_IMPLEMENTED:
+	case DUCKDB_ERROR_MISSING_EXTENSION:
+	case DUCKDB_ERROR_AUTOLOAD:
+		return "0A000";
+	case DUCKDB_ERROR_CONSTRAINT:
+		return "23000";
+	case DUCKDB_ERROR_CONNECTION:
+		return "08000";
+	case DUCKDB_ERROR_NETWORK:
+		return "08006";
+	case DUCKDB_ERROR_IO:
+		return "58030";
+	case DUCKDB_ERROR_INTERRUPT:
+		return "57014";
+	case DUCKDB_ERROR_OUT_OF_MEMORY:
+		return "53200";
+	case DUCKDB_ERROR_PERMISSION:
+		return "42501";
+	case DUCKDB_ERROR_SETTINGS:
+	case DUCKDB_ERROR_INVALID_INPUT:
+	case DUCKDB_ERROR_PARAMETER_NOT_RESOLVED:
+	case DUCKDB_ERROR_PARAMETER_NOT_ALLOWED:
+		return "22023";
+	default:
+		// duckdb_prepare_error() has no companion type accessor. Preserve the
+		// one reliable prepare-time category exposed in its message prefix.
+		if (message.rfind("Parser Error:", 0) == 0 ||
+		    message.rfind("Syntax Error:", 0) == 0)
+			return "42601";
+		return "XX000";
+	}
+}
+
+char duckdb_pgsql_transaction_status(duckdb_connection conn) {
+	if (conn == nullptr) return 'I';
+	auto* connection = reinterpret_cast<duckdb::Connection*>(conn);
+	if (connection->IsAutoCommit() || !connection->HasActiveTransaction()) return 'I';
+	return duckdb::ValidChecker::IsInvalidated(connection->context->ActiveTransaction())
+		? 'E' : 'T';
+}
+
 // `show_tables` / `show_databases` are answered by rewriting to DuckDB SQL
 // against information_schema so they return live data rather than a
 // canned row.
 
 namespace {
 
-// Strips trailing whitespace and any trailing `;` characters (there may
-// be more than one, e.g. "SELECT 1;;") from `sql`. Confirmed by probe:
+// Strips statement-terminating `;` characters even when trailing SQL
+// comments follow them. Semicolons inside strings/comments or before more
+// executable SQL are left alone. Confirmed by probe:
 // wrapping a statement with a trailing `;` in
 // `SELECT COLUMNS(*)::VARCHAR FROM (<sql>)` is a DuckDB parser error at
 // the `;` -- and almost every CLI client sends a trailing `;`, so
@@ -105,14 +181,65 @@ namespace {
 // common input shape there is.
 std::string trim_trailing_semicolons(const std::string& sql) {
 	std::string out = sql;
-	auto trim_ws = [&out]() {
-		while (!out.empty() && std::isspace(static_cast<unsigned char>(out.back())))
-			out.pop_back();
-	};
-	trim_ws();
-	while (!out.empty() && out.back() == ';') {
-		out.pop_back();
-		trim_ws();
+	for (;;) {
+		enum class ScanState { normal, single_quote, double_quote, line_comment, block_comment };
+		ScanState state = ScanState::normal;
+		size_t block_depth = 0;
+		size_t last_code = std::string::npos;
+		for (size_t i = 0; i < out.size(); i++) {
+			const char c = out[i];
+			const char next = i + 1 < out.size() ? out[i + 1] : '\0';
+			switch (state) {
+			case ScanState::normal:
+				if (c == '-' && next == '-') {
+					state = ScanState::line_comment;
+					i++;
+				} else if (c == '/' && next == '*') {
+					state = ScanState::block_comment;
+					block_depth = 1;
+					i++;
+				} else if (c == '\'') {
+					last_code = i;
+					state = ScanState::single_quote;
+				} else if (c == '"') {
+					last_code = i;
+					state = ScanState::double_quote;
+				} else if (!std::isspace(static_cast<unsigned char>(c))) {
+					last_code = i;
+				}
+				break;
+			case ScanState::single_quote:
+				last_code = i;
+				if (c == '\'' && next == '\'') {
+					last_code = ++i;
+				} else if (c == '\'') {
+					state = ScanState::normal;
+				}
+				break;
+			case ScanState::double_quote:
+				last_code = i;
+				if (c == '"' && next == '"') {
+					last_code = ++i;
+				} else if (c == '"') {
+					state = ScanState::normal;
+				}
+				break;
+			case ScanState::line_comment:
+				if (c == '\n' || c == '\r') state = ScanState::normal;
+				break;
+			case ScanState::block_comment:
+				if (c == '/' && next == '*') {
+					block_depth++;
+					i++;
+				} else if (c == '*' && next == '/') {
+					i++;
+					if (--block_depth == 0) state = ScanState::normal;
+				}
+				break;
+			}
+		}
+		if (last_code == std::string::npos || out[last_code] != ';') break;
+		out.erase(last_code, 1);
 	}
 	return out;
 }
@@ -127,8 +254,8 @@ std::string trim_trailing_semicolons(const std::string& sql) {
 // stays a thin packet-in/response-out shim and this logic can be
 // exercised directly against a live duckdb_connection in tests.
 //
-// C3 background: duckdb_value_varchar() (used by
-// duckdb_result_to_sqlite3()) cannot render 11+ column types (LIST,
+// C3 background: duckdb_result_to_sqlite3() preserves the established
+// direct-conversion allowlist and does not render 11+ column types (LIST,
 // STRUCT, MAP, ARRAY, UNION, UUID, ENUM, BIT, TIMESTAMP_S/MS/NS, ...) --
 // it silently converts them to a null field, indistinguishable from a
 // genuine SQL NULL. The fix is to run `SELECT COLUMNS(*)::VARCHAR FROM
@@ -183,8 +310,8 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 	}
 
 	// Inspect the prepared statement's output schema -- no execution has
-	// happened yet -- for any column duckdb_value_varchar() cannot
-	// render. DDL/DML's 1-column "Count" result (see duckdb_result.h) is
+	// happened yet -- for any column outside the direct-conversion
+	// allowlist. DDL/DML's 1-column "Count" result (see duckdb_result.h) is
 	// always BIGINT, which renders fine, so this is false for every
 	// CREATE/SET/plain INSERT/UPDATE/DELETE; it can only be true for a
 	// genuine QUERY_RESULT-shaped statement (a SELECT, or DML with
@@ -244,6 +371,7 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 		const char* msg = duckdb_result_error(&res);
 		outcome.ok = false;
 		outcome.error = msg != nullptr ? msg : "DuckDB query failed";
+		outcome.error_type = duckdb_result_error_type(&res);
 		duckdb_destroy_result(&res);
 		return outcome;
 	}
@@ -304,7 +432,8 @@ void duckdb_send_result(PgSQL_Session* sess, SQLite3_result* r, char* err,
 	// so it is passed as-is: `&sess->client_myds->PSarrayOUT` would be a
 	// PtrSizeArray**, which does not convert to the PtrSizeArray*
 	// SQLite3_to_Postgres() expects.
-	SQLite3_to_Postgres(sess->client_myds->PSarrayOUT, r, err, affected, sql);
+	SQLite3_to_Postgres(sess->client_myds->PSarrayOUT, r, err, affected, sql,
+		true, duckdb_pgsql_transaction_status(duckdb_session_state().conn));
 }
 
 // --- error emitters ----------------------------------------------------
@@ -333,7 +462,8 @@ void duckdb_send_pgsql_error(PgSQL_Session* sess, const char* sqlstate,
 	// PSarrayOUT is already a PtrSizeArray* -- see the comment on the
 	// duckdb_send_result(PgSQL_Session*, ...) overload above.
 	pkt.to_PtrSizeArray(sess->client_myds->PSarrayOUT);
-	pkt.write_ReadyForQuery('I');
+	pkt.write_ReadyForQuery(
+		duckdb_pgsql_transaction_status(duckdb_session_state().conn));
 	pkt.to_PtrSizeArray(sess->client_myds->PSarrayOUT);
 }
 
@@ -359,6 +489,16 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 			return;
 		}
 		switch (hdr.type) {
+		case 'Q':
+			break;
+		case 'P':
+		case 'B':
+		case 'C':
+		case 'D':
+		case 'E':
+			duckdb_send_pgsql_error(sess, "0A000",
+				"DuckDB plugin does not support the PostgreSQL extended-query protocol");
+			return;
 		case PG_PKT_STARTUP_V2:
 		case PG_PKT_STARTUP:
 		case PG_PKT_CANCEL:
@@ -385,8 +525,14 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 		            "WHERE table_schema='main'";
 		break;
 	case DuckDBIntercept::show_databases:
-		effective = "SELECT DISTINCT table_schema AS \"Database\" "
-		            "FROM information_schema.tables";
+		effective = "SELECT database_name AS \"Database\" "
+		            "FROM duckdb_databases() WHERE NOT internal "
+		            "ORDER BY database_name";
+		break;
+	case DuckDBIntercept::show_schemas:
+		effective = "SELECT DISTINCT schema_name AS \"Schema\" "
+		            "FROM information_schema.schemata "
+		            "ORDER BY schema_name";
 		break;
 	case DuckDBIntercept::version:
 	case DuckDBIntercept::database: {
@@ -424,9 +570,9 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 		if constexpr (std::is_same_v<S, MySQL_Session>)
 			duckdb_send_mysql_error(sess, 1064, "42000", outcome.error.c_str());
 		else
-			// 42601 (syntax_error) rather than SQLite3_to_Postgres's
-			// hardcoded 28000 -- see the comment on duckdb_send_pgsql_error.
-			duckdb_send_pgsql_error(sess, "42601", outcome.error.c_str());
+			duckdb_send_pgsql_error(sess,
+				duckdb_pgsql_sqlstate(outcome.error_type, outcome.error),
+				outcome.error.c_str());
 		return;
 	}
 	if (outcome.has_resultset) {

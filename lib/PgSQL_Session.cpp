@@ -2301,8 +2301,18 @@ __implicit_sync:
 							handler_ret = -1;
 							return handler_ret;
 						} else if (c == 'P' || c == 'B' || c == 'C' || c == 'D' || c == 'E') {
-							l_free(pkt.size, pkt.ptr);
-							continue;
+							if (session_type == PROXYSQL_SESSION_SQLITE) {
+								// Plugin-backed sessions get the message so the plugin can
+								// return its protocol-specific error and transaction state.
+								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(pkt);
+							} else {
+								client_myds->setDSS_STATE_QUERY_SENT_NET();
+								client_myds->myprot.generate_error_packet(true, true,
+									"Extended-query protocol is not supported on this interface",
+									PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true);
+								l_free(pkt.size, pkt.ptr);
+								client_myds->DSS = STATE_SLEEP;
+							}
 						} else {
 							proxy_error("Not implemented yet. Message type:'0x%02X'\n", c);
 							client_myds->setDSS_STATE_QUERY_SENT_NET();
