@@ -1231,25 +1231,22 @@ static void stats___hostgroup_connection_pool(
 	std::unique_ptr<SQLite3_result> owned_resultset { resultset };
 	if (!owned_resultset) return;
 
-	constexpr const char *savepoint = "proxysql_hostgroup_connection_pool_stats";
 	const std::string delete_live = std::string("DELETE FROM ") + table;
 	const std::string insert_prefix = std::string("INSERT INTO ") + table + " VALUES (";
-	std::string query = std::string("SAVEPOINT ") + savepoint + ";" + delete_live + ";";
+	statsdb->execute("BEGIN");
+	statsdb->execute(delete_live.c_str());
 	for (SQLite3_row *row : owned_resultset->rows) {
-		query += insert_prefix + row->fields[0] + "," + row->fields[1] + "," +
-			row->fields[2] + "," + row->fields[3] + "," + row->fields[4] + ");";
+		const std::string query = insert_prefix + row->fields[0] + "," + row->fields[1] + "," +
+			row->fields[2] + "," + row->fields[3] + "," + row->fields[4] + ")";
+		statsdb->execute(query.c_str());
 	}
 	if (reset) {
 		const std::string delete_reset = std::string("DELETE FROM ") + reset_table;
 		const std::string copy_reset = std::string("INSERT INTO ") + reset_table + " SELECT * FROM " + table;
-		query += delete_reset + ";" + copy_reset + ";";
+		statsdb->execute(delete_reset.c_str());
+		statsdb->execute(copy_reset.c_str());
 	}
-	query += std::string("RELEASE SAVEPOINT ") + savepoint;
-	if (!statsdb->execute(query.c_str())) {
-		const std::string rollback = std::string("ROLLBACK TO SAVEPOINT ") + savepoint +
-			";RELEASE SAVEPOINT " + savepoint;
-		statsdb->execute(rollback.c_str());
-	}
+	statsdb->execute("COMMIT");
 }
 
 void ProxySQL_Admin::stats___mysql_hostgroup_connection_pool(bool reset) {
