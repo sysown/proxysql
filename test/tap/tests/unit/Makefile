@@ -342,6 +342,7 @@ FAKE_PLUGIN2_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin2.so
 ROUTER_CONTRACT_FAKE_SO := $(TEST_HELPERS_DIR)/proxysql_router_contract_fake.so
 PROXYSQL_BINARY := $(PROXYSQL_PATH)/src/proxysql
 MYSQLX_PLUGIN_SO := $(PROXYSQL_PATH)/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
+MYSQL_ROUTER_PLUGIN_SO := $(PROXYSQL_PATH)/plugins/mysql_router/proxysql_mysql_router.so
 MYSQLX_PLUGIN_OPTZ := -O0 -ggdb $(filter -DDEBUG,$(OPT))
 ODIR := obj
 PROXYSQL_TEST_HEADERS := $(wildcard $(PROXYSQL_PATH)/include/*.h) $(wildcard $(PROXYSQL_PATH)/include/*.hpp)
@@ -370,6 +371,15 @@ $(FAKE_PLUGIN_SO): $(TEST_HELPERS_DIR)/fake_plugin.cpp $(PROXYSQL_PATH)/include/
 .PHONY: mysqlx_plugin_build
 mysqlx_plugin_build:
 	$(MAKE) -C $(PROXYSQL_PATH)/plugins/mysqlx all \
+		CC=$(CC) CXX=$(CXX) OPTZ="$(MYSQLX_PLUGIN_OPTZ)" \
+		WGCOV="$(WGCOV)" WASAN="$(WASAN)" \
+		PROXYSQL40=$(PROXYSQL40) \
+		PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) \
+		PROXYSQLTSDB=$(PROXYSQLTSDB)
+
+.PHONY: mysql_router_plugin_build
+mysql_router_plugin_build:
+	$(MAKE) -C $(PROXYSQL_PATH)/plugins/mysql_router all \
 		CC=$(CC) CXX=$(CXX) OPTZ="$(MYSQLX_PLUGIN_OPTZ)" \
 		WGCOV="$(WGCOV)" WASAN="$(WASAN)" \
 		PROXYSQL40=$(PROXYSQL40) \
@@ -509,6 +519,8 @@ UNIT_TESTS += \
 	plugin_listener_gate_unit-t \
 	plugin_mysql_config_unit-t \
 	plugin_router_chassis_contract_unit-t \
+	mysql_router_plugin_load_unit-t \
+	mysql_router_admin_schema_unit-t \
 	test_mysqlx_plugin_load-t \
 	test_mysqlx_admin_tables-t \
 	mysqlx_config_store_unit-t \
@@ -631,6 +643,18 @@ plugin_mysql_config_unit-t: plugin_mysql_config_unit-t.cpp $(ODIR)/tap.o $(ODIR)
 plugin_router_chassis_contract_unit-t: plugin_router_chassis_contract_unit-t.cpp $(ROUTER_CONTRACT_FAKE_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		-DPROXYSQL_ROUTER_CONTRACT_FAKE_PATH=\"$(ROUTER_CONTRACT_FAKE_SO)\" \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@
+
+mysql_router_plugin_load_unit-t: mysql_router_plugin_load_unit-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) mysql_router_plugin_build
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-DPROXYSQL_MYSQL_ROUTER_PLUGIN_PATH=\"$(MYSQL_ROUTER_PLUGIN_SO)\" \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@
+
+mysql_router_admin_schema_unit-t: mysql_router_admin_schema_unit-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) mysql_router_plugin_build
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-DPROXYSQL_MYSQL_ROUTER_PLUGIN_PATH=\"$(MYSQL_ROUTER_PLUGIN_SO)\" \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@
 
