@@ -33,6 +33,8 @@ run_check "Check cluster simulator coverage contract" \
 	test/infra/control/test-cluster-simulator-coverage.bash
 run_check "Check coverage collector invariants" \
 	test/infra/control/validate-coverage-gcov-toolchain.bash
+run_check "Check interface TAP disk-safety contract" \
+	test/infra/control/validate-interface-tap-disk-safety.bash
 run_check "Check pre-push lint hook contract" \
 	test/infra/control/test-pre-push-lint-hook.bash
 run_check "Check package CI verification hook" \
