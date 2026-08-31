@@ -78,6 +78,8 @@ public:
 	std::optional<BootstrapIdentity> identity;
 	std::vector<uint8_t> secret;
 	unsigned complete_writes {0};
+	unsigned publications {0};
+	bool fail_publication {false};
 
 	std::optional<BootstrapJournal> load_journal(std::string_view) override { return journal; }
 	std::optional<BootstrapIdentity> load_identity() override { return identity; }
@@ -85,6 +87,12 @@ public:
 	void put_secret(std::string_view, const std::vector<uint8_t>& value) override { secret = value; }
 	std::optional<std::vector<uint8_t>> get_secret(std::string_view) override {
 		return secret.empty() ? std::nullopt : std::optional<std::vector<uint8_t>>(secret);
+	}
+	uint64_t publish_topology(const DesiredTopology&, const ListenerProfile&, uint64_t generation) override {
+		if (fail_publication) throw std::runtime_error("injected topology publication failure");
+		if (generation != 1) throw std::runtime_error("unexpected bootstrap generation");
+		++publications;
+		return publications;
 	}
 	void save_complete(const BootstrapIdentity& value, const ListenerProfile&) override {
 		identity = value;
@@ -111,7 +119,7 @@ BootstrapOptions options() {
 } // namespace
 
 int main() {
-	plan(21);
+	plan(23);
 
 	BootstrapSession session;
 	MemoryBootstrapStore store;
@@ -129,7 +137,9 @@ int main() {
 	ok(store.identity && store.identity->topology_uuid == "cluster-1" &&
 	   store.identity->metadata_user == first.metadata_user,
 	   "local identity records topology and metadata account");
-	ok(store.complete_writes == 1, "local identity and listener configuration commit once");
+	ok(store.publications == 1 && store.complete_writes == 1 &&
+	   store.identity && store.identity->topology_generation == 1,
+	   "generation 1 publishes before local identity and listener configuration commit");
 
 	MysqlRouterBootstrap retry(session, store, topology(), "proxy.example");
 	auto second = retry.run(options());
@@ -139,7 +149,8 @@ int main() {
 	   "retry converges to one registration and one account");
 	ok(session.registration_updates == 3,
 	   "retry refreshes Shell-visible attributes without adding registrations");
-	ok(store.secret.size() == 32 && store.complete_writes == 2,
+	ok(store.secret.size() == 32 && store.complete_writes == 2 &&
+	   store.identity && store.identity->topology_generation == 2,
 	   "retry preserves the encrypted credential and idempotently persists local state");
 
 	MemoryBootstrapStore conflicting_store = store;
@@ -213,6 +224,17 @@ int main() {
 	ok(resumed.success && interrupted_session.account_alters == 1 &&
 	   interrupted_session.grants == 6 && interrupted_store.secret.size() == 32,
 	   "retry recovers a plugin-generated account interrupted before secret persistence");
+
+	BootstrapSession publication_session;
+	MemoryBootstrapStore publication_store;
+	publication_store.fail_publication = true;
+	auto publication = MysqlRouterBootstrap(publication_session, publication_store, topology(),
+		"proxy.example").run(options());
+	ok(!publication.success && publication.error.find("publication failure") != std::string::npos,
+	   "a generation-1 publisher failure aborts bootstrap");
+	ok(publication_store.complete_writes == 0 && publication_store.journal &&
+	   publication_store.journal->phase == BootstrapPhase::registered,
+	   "publisher failure leaves local configuration uncommitted and the journal resumable");
 
 	return exit_status();
 }

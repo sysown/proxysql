@@ -1,5 +1,6 @@
 #include "mysql_router_bootstrap.h"
 
+#include "mysql_router_compiler.h"
 #include "mysql_router_metadata.h"
 
 #include <algorithm>
@@ -207,6 +208,7 @@ BootstrapResult MysqlRouterBootstrap::run(const BootstrapOptions& options) {
 		BootstrapIdentity completed {topology_.topology_uuid, topology_.topology_name,
 			registration.router_id, options.router_name, router_address_, metadata_user,
 			options.seed.host, options.seed.port};
+		completed.topology_generation = store_.publish_topology(topology_, options.listeners, 1);
 		store_.save_complete(completed, options.listeners);
 		progress->phase = BootstrapPhase::local_configured;
 		store_.save_journal(*progress);
@@ -231,6 +233,7 @@ BootstrapResult MysqlRouterBootstrap::run(const BootstrapOptions& options) {
 
 #include <cstdlib>
 #include <memory>
+#include <set>
 
 namespace {
 
@@ -263,10 +266,61 @@ int64_t local_int64(const char* value, const char* field) {
 	return parsed;
 }
 
+std::unique_ptr<SQLite3_result> local_query(SQLite3DB& db, const std::string& sql) {
+	char* error = nullptr;
+	std::unique_ptr<SQLite3_result> result(db.execute_statement(sql.c_str(), &error));
+	if (error != nullptr) {
+		std::string message(error);
+		free(error);
+		throw std::runtime_error(message);
+	}
+	if (!result) throw std::runtime_error("local Router configuration query failed");
+	return result;
+}
+
+int column_index(const SQLite3_result& result, std::string_view name) {
+	for (size_t i = 0; i < result.column_definition.size(); ++i) {
+		if (result.column_definition[i] && result.column_definition[i]->name &&
+			name == result.column_definition[i]->name) return static_cast<int>(i);
+	}
+	throw std::runtime_error("runtime snapshot is missing column " + std::string(name));
+}
+
+void collect_snapshot_column(const SQLite3_result& result, std::string_view name,
+	std::set<int>& destination) {
+	const int column = column_index(result, name);
+	for (auto* row : result.rows) {
+		destination.insert(static_cast<int>(local_int64(row->fields[column], name.data())));
+	}
+}
+
+void collect_query_column(SQLite3DB& db, const std::string& sql,
+	std::set<int>& destination) {
+	auto rows = local_query(db, sql);
+	for (auto* row : rows->rows) {
+		destination.insert(static_cast<int>(local_int64(row->fields[0], "configuration ID")));
+	}
+}
+
+std::vector<std::string> split_interfaces(std::string_view value) {
+	std::vector<std::string> result;
+	size_t start = 0;
+	while (start <= value.size()) {
+		const size_t end = value.find(';', start);
+		const std::string item(value.substr(start,
+			end == std::string_view::npos ? std::string_view::npos : end - start));
+		if (!item.empty()) result.push_back(item);
+		if (end == std::string_view::npos) break;
+		start = end + 1;
+	}
+	return result;
+}
+
 class PluginBootstrapStore final : public IBootstrapStore {
 public:
-	explicit PluginBootstrapStore(ProxySQL_PluginServices& services)
-		: services_(services), db_(services.get_configdb ? services.get_configdb() : nullptr) {
+	explicit PluginBootstrapStore(ProxySQL_PluginServices& services, IMetadataSession& session)
+		: services_(services), session_(session),
+		  db_(services.get_configdb ? services.get_configdb() : nullptr) {
 		if (db_ == nullptr || services_.put_secret == nullptr || services_.get_secret == nullptr) {
 			throw std::runtime_error("bootstrap persistence services are unavailable");
 		}
@@ -345,20 +399,26 @@ public:
 		return value;
 	}
 
+	uint64_t publish_topology(const DesiredTopology& topology,
+		const ListenerProfile& listeners, uint64_t generation) override;
+
 	void save_complete(const BootstrapIdentity& identity,
 		const ListenerProfile& listeners) override {
 		if (!db_->execute("BEGIN IMMEDIATE")) throw std::runtime_error("failed to begin local bootstrap commit");
 		const std::string instance = "INSERT INTO mysql_router_instance"
 			"(singleton_id,topology_type,topology_uuid,cluster_id,clusterset_id,router_id,router_name,router_address,"
-			"metadata_user,metadata_host,metadata_port,metadata_schema,advertised_version) VALUES(1,'innodb_cluster'," +
+			"metadata_user,metadata_host,metadata_port,metadata_schema,advertised_version,topology_generation) "
+			"VALUES(1,'innodb_cluster'," +
 			sqlite_quote(identity.topology_uuid) + "," + sqlite_quote(identity.topology_uuid) + ",NULL," +
 			std::to_string(identity.router_id) + "," + sqlite_quote(identity.router_name) + "," +
 			sqlite_quote(identity.router_address) + "," + sqlite_quote(identity.metadata_user) + "," +
-			sqlite_quote(identity.metadata_host) + "," + std::to_string(identity.metadata_port) + ",'2.2','8.4.0') "
+			sqlite_quote(identity.metadata_host) + "," + std::to_string(identity.metadata_port) +
+			",'2.2','8.4.0'," + std::to_string(identity.topology_generation) + ") "
 			"ON CONFLICT(singleton_id) DO UPDATE SET topology_type=excluded.topology_type,topology_uuid=excluded.topology_uuid,"
 			"cluster_id=excluded.cluster_id,clusterset_id=NULL,router_id=excluded.router_id,router_name=excluded.router_name,"
 			"router_address=excluded.router_address,metadata_user=excluded.metadata_user,metadata_host=excluded.metadata_host,"
-			"metadata_port=excluded.metadata_port,metadata_schema=excluded.metadata_schema,advertised_version=excluded.advertised_version";
+			"metadata_port=excluded.metadata_port,metadata_schema=excluded.metadata_schema,"
+			"advertised_version=excluded.advertised_version,topology_generation=excluded.topology_generation";
 		bool ok = db_->execute(instance.c_str());
 		for (const auto& item : std::array<std::pair<const char*, std::string>, 4>{{
 			{"bind_address", listeners.bind_address}, {"rw_port", std::to_string(listeners.rw_port)},
@@ -377,8 +437,103 @@ public:
 
 private:
 	ProxySQL_PluginServices& services_;
+	IMetadataSession& session_;
 	SQLite3DB* db_;
 };
+
+uint64_t PluginBootstrapStore::publish_topology(const DesiredTopology& topology,
+	const ListenerProfile& listeners, uint64_t generation) {
+	if (services_.apply_mysql_config == nullptr || services_.set_listener_gate == nullptr ||
+		services_.get_mysql_servers_snapshot == nullptr ||
+		services_.get_mysql_group_replication_hostgroups_snapshot == nullptr ||
+		services_.get_admindb == nullptr) {
+		throw std::runtime_error("native MySQL configuration services are unavailable");
+	}
+	SQLite3DB* admindb = services_.get_admindb();
+	if (admindb == nullptr) throw std::runtime_error("Admin DB is unavailable during bootstrap");
+
+	HostgroupAllocationInput allocation;
+	std::unique_ptr<SQLite3_result> servers(services_.get_mysql_servers_snapshot());
+	std::unique_ptr<SQLite3_result> gr(services_.get_mysql_group_replication_hostgroups_snapshot());
+	if (!servers || !gr) throw std::runtime_error("cannot capture live hostgroup inventory");
+	collect_snapshot_column(*servers, "hostgroup_id", allocation.occupied_hostgroups);
+	for (const char* column : {"writer_hostgroup", "backup_writer_hostgroup",
+		"reader_hostgroup", "offline_hostgroup"}) {
+		collect_snapshot_column(*gr, column, allocation.occupied_hostgroups);
+	}
+	for (const std::string& sql : {
+		"SELECT hostgroup_id FROM mysql_servers",
+		"SELECT writer_hostgroup FROM mysql_replication_hostgroups UNION SELECT reader_hostgroup FROM mysql_replication_hostgroups",
+		"SELECT writer_hostgroup FROM mysql_group_replication_hostgroups UNION SELECT backup_writer_hostgroup FROM mysql_group_replication_hostgroups UNION SELECT reader_hostgroup FROM mysql_group_replication_hostgroups UNION SELECT offline_hostgroup FROM mysql_group_replication_hostgroups",
+		"SELECT writer_hostgroup FROM mysql_galera_hostgroups UNION SELECT backup_writer_hostgroup FROM mysql_galera_hostgroups UNION SELECT reader_hostgroup FROM mysql_galera_hostgroups UNION SELECT offline_hostgroup FROM mysql_galera_hostgroups",
+		"SELECT writer_hostgroup FROM mysql_aws_aurora_hostgroups UNION SELECT reader_hostgroup FROM mysql_aws_aurora_hostgroups",
+		"SELECT writer_hostgroup FROM mysql_aws_rds_bgd_hostgroups UNION SELECT reader_hostgroup FROM mysql_aws_rds_bgd_hostgroups UNION SELECT green_writer_hostgroup FROM mysql_aws_rds_bgd_hostgroups UNION SELECT green_reader_hostgroup FROM mysql_aws_rds_bgd_hostgroups",
+	}) {
+		collect_query_column(*db_, sql, allocation.occupied_hostgroups);
+		collect_query_column(*admindb, sql, allocation.occupied_hostgroups);
+	}
+	ManagedHostgroups hostgroups = HostgroupAllocator::load_or_allocate(
+		*db_, topology.topology_uuid, allocation);
+
+	uint64_t current_generation = 0;
+	for (SQLite3DB* database : {db_, admindb}) {
+		auto rows = local_query(*database,
+			"SELECT generation FROM proxysql_plugin_config_generations WHERE owner='mysql_router'");
+		if (!rows->rows.empty()) {
+			current_generation = std::max<uint64_t>(current_generation,
+				static_cast<uint64_t>(local_int64(rows->rows[0]->fields[0], "active generation")));
+		}
+	}
+	if (current_generation == static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+		throw std::runtime_error("Router topology generation is exhausted");
+	}
+	const uint64_t publish_generation = current_generation == 0
+		? generation : current_generation + 1;
+	ConfigCompileInput input;
+	input.generation = publish_generation;
+	input.listeners = listeners;
+	collect_query_column(*db_, "SELECT rule_id FROM mysql_query_rules", input.occupied_rule_ids);
+	collect_query_column(*admindb, "SELECT rule_id FROM mysql_query_rules", input.occupied_rule_ids);
+	auto owned_rules = local_query(*db_,
+		"SELECT object_key FROM proxysql_plugin_owned_objects WHERE owner='mysql_router' "
+		"AND object_type='mysql_query_rule' ORDER BY CAST(object_key AS INTEGER)");
+	if (!owned_rules->rows.empty()) {
+		if (owned_rules->rows.size() != mysql_router_rule_intents().size()) {
+			throw std::runtime_error("persisted baseline query rule mapping is incomplete");
+		}
+		for (size_t i = 0; i < owned_rules->rows.size(); ++i) {
+			input.owned_rule_ids.emplace(mysql_router_rule_intents()[i],
+				static_cast<int>(local_int64(owned_rules->rows[i]->fields[0], "owned rule ID")));
+		}
+	}
+	auto interfaces = local_query(*admindb,
+		"SELECT variable_value FROM global_variables WHERE variable_name='mysql-interfaces'");
+	if (!interfaces->rows.empty() && interfaces->rows[0]->fields[0]) {
+		input.operator_interfaces = split_interfaces(interfaces->rows[0]->fields[0]);
+	}
+
+	ObservedHealth health = GrHealthReader::read(session_);
+	EffectiveTopology effective = evaluate_innodb_cluster(topology, health);
+	CompiledMysqlConfig config = ConfigCompiler::compile_topology(
+		topology, effective, hostgroups, input);
+	for (const std::string& endpoint : config.interfaces) {
+		const size_t colon = endpoint.rfind(':');
+		if (colon == std::string::npos) throw std::runtime_error("compiled listener endpoint is invalid");
+		const std::string address = endpoint.substr(0, colon);
+		const uint16_t port = static_cast<uint16_t>(std::stoul(endpoint.substr(colon + 1)));
+		const ProxySQL_PluginListenerGate gate {"mysql_router", address.c_str(), port,
+			ProxySQL_PluginListenerState::closed, "waiting for initial Router generation"};
+		if (!services_.set_listener_gate(gate)) {
+			throw std::runtime_error("cannot close Router listener gate before publication");
+		}
+	}
+	const ProxySQL_PluginMysqlConfigResult published = services_.apply_mysql_config(config.plan());
+	if (!published.applied || published.generation != publish_generation) {
+		throw std::runtime_error(published.message.empty()
+			? "initial Router generation publication failed" : published.message);
+	}
+	return published.generation;
+}
 
 } // namespace
 
@@ -386,7 +541,7 @@ BootstrapResult run_mysql_router_bootstrap(
 	const BootstrapOptions& options, IMetadataSession& session,
 	DesiredTopology topology, std::string router_address,
 	ProxySQL_PluginServices& services) {
-	PluginBootstrapStore store(services);
+	PluginBootstrapStore store(services, session);
 	return MysqlRouterBootstrap(session, store, std::move(topology),
 		std::move(router_address)).run(options);
 }

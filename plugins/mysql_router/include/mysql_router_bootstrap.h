@@ -122,6 +122,7 @@ struct BootstrapIdentity {
 	std::string metadata_user;
 	std::string metadata_host;
 	uint16_t metadata_port {3306};
+	uint64_t topology_generation {0};
 };
 
 struct BootstrapResult {
@@ -140,6 +141,8 @@ public:
 	virtual void save_journal(const BootstrapJournal& journal) = 0;
 	virtual void put_secret(std::string_view name, const std::vector<uint8_t>& value) = 0;
 	virtual std::optional<std::vector<uint8_t>> get_secret(std::string_view name) = 0;
+	virtual uint64_t publish_topology(const DesiredTopology& topology,
+		const ListenerProfile& listeners, uint64_t generation) = 0;
 	virtual void save_complete(const BootstrapIdentity& identity,
 		const ListenerProfile& listeners) = 0;
 };

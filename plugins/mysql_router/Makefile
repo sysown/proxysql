@@ -61,6 +61,8 @@ SRCS := $(PLUGIN_DIR)/src/plugin.cpp \
 	$(PLUGIN_DIR)/src/gr_health.cpp \
 	$(PLUGIN_DIR)/src/bootstrap.cpp \
 	$(PLUGIN_DIR)/src/router_registration.cpp \
+	$(PLUGIN_DIR)/src/hostgroup_allocator.cpp \
+	$(PLUGIN_DIR)/src/config_compiler.cpp \
 	$(PLUGIN_DIR)/src/status.cpp \
 	$(PLUGIN_DIR)/src/metrics.cpp
 HEADERS := $(wildcard $(PLUGIN_DIR)/include/*.h) \
