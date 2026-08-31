@@ -79,7 +79,17 @@ tests:
 	@echo "Removing empty .gcno files ..."
 	find -L . -type f -name '*.gcno' -empty -ls -delete
 
-COMMONARGS = $(OPT) -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl,-rpath,$(RE2_LDIR) -Wl,-Bdynamic -ltap -lcpp_dotenv -lcurl $(RE2_STATIC_LIBS) -lssl -lcrypto -lz -ldl -lpthread -DGITVERSION=\"$(GIT_VERSION)\"
+CURL_STATIC_LIB := $(CURL_LDIR)/libcurl.a
+TEST_MARIADB_STATIC_LIB := $(TEST_MARIADB_LDIR)/libmariadbclient.a
+POSTGRESQL_STATIC_LIBS := $(POSTGRESQL_PATH)/interfaces/libpq/libpq.a \
+	$(POSTGRESQL_PATH)/common/libpgcommon.a \
+	$(POSTGRESQL_PATH)/port/libpgport.a
+
+COMMON_LINK_PREFIX = $(OPT) -Wl,-rpath,$(RE2_LDIR) -Wl,--export-dynamic \
+	-Wl,-Bdynamic -ltap
+COMMON_LINK_SUFFIX = -lcpp_dotenv $(RE2_STATIC_LIBS) $(POSTGRESQL_STATIC_LIBS) $(CURL_STATIC_LIB) \
+	$(OPENSSL_STATIC_LIBS) -lz -ldl -lpthread -DGITVERSION=\"$(GIT_VERSION)\"
+COMMONARGS = $(COMMON_LINK_PREFIX) $(COMMON_LINK_SUFFIX)
 
 ok_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp
 	$(CXX) $< -I$(MARIADB_IDIR) $(IDIRS) -L$(MARIADB_LDIR) $(LDIRS) -lmariadbclient $(COMMONARGS) -o $@
@@ -107,7 +117,8 @@ deprecate_eof_cache-t: deprecate_eof_cache-t.cpp
 	$(CXX) $< -I$(TEST_MARIADB_IDIR) $(IDIRS) -L$(TEST_MARIADB_LDIR) $(LDIRS) $(PROXYSQL_LDIR)/proxysql_utils.cpp -lmariadbclient $(COMMONARGS) -o $@
 
 eof_cache_conversion_workload-t: eof_cache_conversion_workload-t.cpp
-	$(CXX) $< -I$(TEST_MARIADB_IDIR) $(IDIRS) -L$(TEST_MARIADB_LDIR) $(LDIRS) $(COMMONARGS) -lmariadbclient -o $@
+	$(CXX) $< -I$(TEST_MARIADB_IDIR) $(IDIRS) -L$(TEST_MARIADB_LDIR) $(LDIRS) \
+		$(COMMON_LINK_PREFIX) $(TEST_MARIADB_STATIC_LIB) $(COMMON_LINK_SUFFIX) -o $@
 
 eof_cache_mixed_flags-t: eof_cache_mixed_flags-t.cpp
 	$(CXX) $< -I$(TEST_MARIADB_IDIR) $(IDIRS) -L$(TEST_MARIADB_LDIR) $(LDIRS) -lmariadbclient $(COMMONARGS) -o $@

@@ -122,7 +122,6 @@ STATICMYLIBS := -Wl,-Bstatic \
 				-lhttpserver \
 				-lmicrohttpd \
 				-linjection \
-				-lcurl \
 				-lev \
 				-lscram \
 				-lusual \
@@ -138,15 +137,13 @@ ifeq ($(UNAME_S),Linux)
 	STATICMYLIBS += -lcoredumper
 endif
 
-MYLIBS := -Wl,--export-dynamic $(STATICMYLIBS) -Wl,-Bdynamic -lgnutls -lpthread -lssl -lcrypto -lm -lz -lrt -lprometheus-cpp-pull -lprometheus-cpp-core -luuid $(EXTRALINK)
-ifeq ($(DISTRO),almalinux)
-ifeq ($(CENTOSVER),8)
-	MYLIBS := -Wl,--export-dynamic $(STATICMYLIBS) -Wl,-Bdynamic -lgnutls -lpthread $(LIB_SSL_PATH) $(LIB_CRYPTO_PATH) -lm -lz -lrt -lprometheus-cpp-pull -lprometheus-cpp-core -luuid $(EXTRALINK)
-endif
-endif
+CURL_AR := $(CURL_LDIR)/libcurl.a
+CURL_FORCE_LOAD_LIBS := $(call force_load_archives,$(CURL_AR))
+
+MYLIBS := $(EXECUTABLE_EXPORT_FLAGS) $(STATICMYLIBS) $(CURL_FORCE_LOAD_LIBS) $(OPENSSL_FORCE_LOAD_LIBS) -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt -lprometheus-cpp-pull -lprometheus-cpp-core -luuid $(EXTRALINK)
 
 ifeq ($(UNAME_S),Darwin)
-	MYLIBS := $(RE2_STATIC_LIBS) -lmariadbclient -lssl -lcrypto -lpthread -lm -lz -liconv -lgnutls -lprometheus-cpp-pull -lprometheus-cpp-core
+	MYLIBS := $(EXECUTABLE_EXPORT_FLAGS) $(RE2_STATIC_LIBS) -lmariadbclient $(CURL_FORCE_LOAD_LIBS) $(OPENSSL_FORCE_LOAD_LIBS) -lpthread -lm -lz -liconv -lgnutls -lprometheus-cpp-pull -lprometheus-cpp-core
 else
 	CURL_DIR := $(DEPS_PATH)/curl/curl
 	IDIRS += -L$(CURL_DIR)/include
@@ -173,7 +170,6 @@ ifeq ($(UNAME_S),Darwin)
 	LIBPROXYSQLAR += $(LIBDAEMON_LDIR)/libdaemon.a
 	LIBPROXYSQLAR += $(LIBCONFIG_LDIR)/libconfig++.a
 	LIBPROXYSQLAR += $(LIBCONFIG_LDIR)/libconfig.a
-	LIBPROXYSQLAR += $(CURL_LDIR)/libcurl.a
 	LIBPROXYSQLAR += $(PARSERSQL_LDIR)/libsqlparser.a
 	LIBPROXYSQLAR += $(LIBINJECTION_LDIR)/libinjection.a
 	LIBPROXYSQLAR += $(EV_LDIR)/libev.a
@@ -199,7 +195,7 @@ OBJ := $(patsubst %,$(ODIR)/%,$(_OBJ))
 $(ODIR)/%.o: %.cpp
 	$(CXX) -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS) -Wall
 
-$(EXECUTABLE): $(ODIR) $(OBJ) $(LIBPROXYSQLAR)
+$(EXECUTABLE): $(ODIR) $(OBJ) $(LIBPROXYSQLAR) $(CURL_AR) $(LIB_SSL_PATH) $(LIB_CRYPTO_PATH)
 ifeq ($(PROXYSQLCLICKHOUSE),1)
 	$(CXX) -o $@ $(OBJ) $(CLANGFIX) -Wl,--whole-archive $(PROXYSQL_LDIR)/libproxysql.a -Wl,--no-whole-archive $(filter-out $(PROXYSQL_LDIR)/libproxysql.a,$(LIBPROXYSQLAR)) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(LZ4_LDIR)/liblz4.a $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
 else ifeq ($(UNAME_S),Darwin)
