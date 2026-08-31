@@ -892,7 +892,7 @@ static ExtQCaseRunResult run_describe_cached(PGconn* admin, bool first_native,
 // native path here; the libpq-path equivalent lives in
 // pgsql-extended_query_protocol_test-t (test_deallocate_sql_prepared_via_simple_query).
 // ===========================================================================
-static const int N_DEALLOC_REG_PER_MODE = 6;
+static const int N_DEALLOC_REG_PER_MODE = 9;
 
 static void run_dealloc_regression(PGconn* admin, bool native,
                                    const std::vector<ServerRow>& saved) {
@@ -951,6 +951,25 @@ static void run_dealloc_regression(PGconn* admin, bool native,
 	  bool good = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1
 	              && std::string(PQgetvalue(r, 0, 0)) == "1";
 	  ok(good, "[%s] session still usable after a bogus DEALLOCATE", m);
+	  PQclear(r); }
+
+	// 7-9. ALL-prefix guard: a statement whose name starts with "all" must be
+	//      treated as a normal DEALLOCATE (forwarded), not mistaken for
+	//      DEALLOCATE ALL. Without the exact-match fix, DEALLOCATE all_users
+	//      returns the tag "DEALLOCATE ALL" and never frees the statement.
+	{ PGresult* r = PQexec(cc, "PREPARE all_users AS SELECT 7");
+	  ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] PREPARE all_users", m);
+	  PQclear(r); }
+	{ PGresult* r = PQexec(cc, "DEALLOCATE all_users");
+	  const char* tag = PQcmdStatus(r);
+	  ok(PQresultStatus(r) == PGRES_COMMAND_OK && tag && strcmp(tag, "DEALLOCATE") == 0,
+	     "[%s] DEALLOCATE all_users -> tag '%s' (a normal DEALLOCATE, not DEALLOCATE ALL)",
+	     m, tag ? tag : "");
+	  PQclear(r); }
+	{ PGresult* r = PQexec(cc, "EXECUTE all_users");
+	  ok(PQresultStatus(r) == PGRES_FATAL_ERROR,
+	     "[%s] EXECUTE all_users after DEALLOCATE errors, so it was really deallocated -> %s",
+	     m, PQresStatus(PQresultStatus(r)));
 	  PQclear(r); }
 }
 

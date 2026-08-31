@@ -3882,6 +3882,22 @@ void test_deallocate_sql_prepared_via_simple_query() {
 		conn->readMessage(type, buffer);
 		ok(type == PgConnection::ERROR_RESPONSE, "EXECUTE after DEALLOCATE errors, statement is gone");
 		conn->waitForReady();
+
+		// ALL-prefix guard: a statement named "all_users" must be a normal
+		// DEALLOCATE (forwarded + freed), not mistaken for DEALLOCATE ALL. The
+		// CommandComplete arrives either way, so the EXECUTE-errors check below is
+		// what proves it was actually deallocated.
+		conn->execute("PREPARE all_users AS SELECT 7");
+		conn->waitForReady();
+		conn->execute("DEALLOCATE all_users");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE, "CommandComplete after DEALLOCATE all_users");
+		conn->waitForReady();
+		conn->execute("EXECUTE all_users");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::ERROR_RESPONSE,
+		   "EXECUTE all_users after DEALLOCATE errors, so it was really deallocated (not swallowed as DEALLOCATE ALL)");
+		conn->waitForReady();
 	}
 	catch (const PgException& e) {
 		ok(false, "DEALLOCATE of a SQL-level PREPARE failed with error:%s", e.what());
@@ -5092,9 +5108,9 @@ int main(int argc, char** argv) {
 	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
 
 	if (cl.use_noise) {
-		plan(1064 + 3);
+		plan(1066 + 3);
 	} else {
-		plan(1064);
+		plan(1066);
 	}
 
 	std::string f_path{get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log"};
