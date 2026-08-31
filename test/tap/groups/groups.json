@@ -60,6 +60,7 @@
   "gtid_server_data_unit-t" : [ "unit-tests-g1" ],
   "gtid_set_unit-t" : [ "unit-tests-g1" ],
   "gtid_trxid_interval_unit-t" : [ "unit-tests-g1" ],
+  "hostgroup_pool_stats_unit-t" : [ "unit-tests-g1","@proxysql_min_version:3.1" ],
   "hostgroup_routing_unit-t" : [ "unit-tests-g1" ],
   "hostgroups_unit-t" : [ "unit-tests-g1" ],
   "http_server_unit-t" : [ "unit-tests-g1" ],
