@@ -89,7 +89,7 @@ ScriptedMetadataSession valid_session() {
 	session.expected.push_back({kRouterOptions, {int64_t(42)}, {{row({
 		{"router_options", "{\"read_only_targets\":\"all\","
 			"\"unreachable_quorum_allowed_traffic\":\"read\","
-			"\"stats_updates_frequency\":5}"}})}}});
+			"\"stats_updates_frequency\":5,\"guideline\":\"rg-main\"}"}})}}});
 	return session;
 }
 
@@ -105,7 +105,7 @@ bool read_throws(ScriptedMetadataSession session, const char* needle) {
 } // namespace
 
 int main() {
-	plan(26);
+	plan(27);
 
 	ScriptedMetadataSession probe;
 	probe.expected.push_back({kSchemaVersion, {}, {{row({
@@ -143,6 +143,8 @@ int main() {
 	ok(topology.options.stats_updates_frequency &&
 	   *topology.options.stats_updates_frequency == 5,
 	   "a nonnegative stats update frequency is retained");
+	ok(topology.options.routing_guideline_unsupported,
+	   "a non-null Routing Guideline is retained as an explicitly unsupported option");
 
 	ScriptedMetadataSession old;
 	old.expected.push_back({kSchemaVersion, {}, {{row({

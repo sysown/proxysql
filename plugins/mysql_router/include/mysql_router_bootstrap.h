@@ -178,5 +178,14 @@ BootstrapResult run_mysql_router_bootstrap(
 	const BootstrapOptions& options, IMetadataSession& session,
 	DesiredTopology topology, std::string router_address,
 	ProxySQL_PluginServices& services);
+uint64_t publish_mysql_router_topology(ProxySQL_PluginServices& services,
+	IMetadataSession& session, const DesiredTopology& topology,
+	const EffectiveTopology& effective, const ListenerProfile& listeners,
+	uint64_t generation);
+uint64_t publish_mysql_router_users(ProxySQL_PluginServices& services,
+	IMetadataSession& session, const DesiredTopology& topology,
+	const EffectiveTopology& effective, const ListenerProfile& listeners,
+	const AccountSnapshot& snapshot, std::string_view metadata_user,
+	uint64_t generation);
 
 #endif

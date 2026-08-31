@@ -1,6 +1,7 @@
 #include "tap.h"
 
 #include "ProxySQL_PluginManager.h"
+#include "sqlite3db.h"
 
 #include <cstring>
 #include <map>
@@ -19,6 +20,7 @@ const TableMap kPersistentTables {
 	{"mysql_router_instance", "CREATE TABLE mysql_router_instance (singleton_id INTEGER PRIMARY KEY CHECK(singleton_id=1),topology_type TEXT NOT NULL,topology_uuid TEXT NOT NULL,cluster_id TEXT,clusterset_id TEXT,router_id INTEGER NOT NULL,router_name TEXT NOT NULL,router_address TEXT NOT NULL,metadata_user TEXT NOT NULL,metadata_host TEXT NOT NULL,metadata_port INTEGER NOT NULL,metadata_schema TEXT NOT NULL,advertised_version TEXT NOT NULL,topology_generation INTEGER NOT NULL DEFAULT 0,user_generation INTEGER NOT NULL DEFAULT 0)"},
 	{"mysql_router_hostgroups", "CREATE TABLE mysql_router_hostgroups (role TEXT NOT NULL,scope_uuid TEXT NOT NULL,hostgroup_id INTEGER NOT NULL UNIQUE,PRIMARY KEY(role,scope_uuid))"},
 	{"mysql_router_users", "CREATE TABLE mysql_router_users (username TEXT PRIMARY KEY,source_fingerprint TEXT NOT NULL,auth_plugin TEXT NOT NULL,state TEXT NOT NULL,last_error TEXT NOT NULL DEFAULT '',generation INTEGER NOT NULL)"},
+	{"mysql_router_topology_cache", "CREATE TABLE mysql_router_topology_cache (instance_uuid TEXT PRIMARY KEY,topology_uuid TEXT NOT NULL,topology_name TEXT NOT NULL,group_name TEXT NOT NULL,metadata_major INTEGER NOT NULL,metadata_minor INTEGER NOT NULL,metadata_patch INTEGER NOT NULL,label TEXT NOT NULL,endpoint_host TEXT NOT NULL,endpoint_port INTEGER NOT NULL,instance_kind INTEGER NOT NULL,attributes TEXT NOT NULL,read_only_targets INTEGER NOT NULL,quorum_traffic INTEGER NOT NULL,stats_updates_frequency INTEGER,routing_guideline_unsupported INTEGER NOT NULL)"},
 	{"mysql_router_bootstrap_journal", "CREATE TABLE mysql_router_bootstrap_journal (topology_uuid TEXT PRIMARY KEY,router_name TEXT NOT NULL,phase TEXT NOT NULL,router_id INTEGER,metadata_user TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL,last_error TEXT NOT NULL DEFAULT '')"},
 };
 
@@ -50,7 +52,7 @@ bool has_exact_tables(const std::vector<ProxySQL_PluginTableDef>& actual,
 } // namespace
 
 int main() {
-	plan(10);
+	plan(14);
 
 	ProxySQL_PluginManager manager;
 	std::string error;
@@ -62,9 +64,9 @@ int main() {
 	TableMap expected_admin = kPersistentTables;
 	expected_admin.insert(kRuntimeTables.begin(), kRuntimeTables.end());
 	ok(has_exact_tables(manager.tables(ProxySQL_PluginDBKind::admin_db), expected_admin),
-	   "Admin DB contains the five exact persistent and four exact runtime tables");
+	   "Admin DB contains the six exact persistent and four exact runtime tables");
 	ok(has_exact_tables(manager.tables(ProxySQL_PluginDBKind::config_db), kPersistentTables),
-	   "config DB contains the five exact persistent Router tables");
+	   "config DB contains the six exact persistent Router tables");
 	ok(has_exact_tables(manager.tables(ProxySQL_PluginDBKind::stats_db), kStatsTables),
 	   "stats DB contains the three exact Router history tables");
 
@@ -79,6 +81,31 @@ int main() {
 	   "MYSQL ROUTER RECONCILE is registered exactly");
 	ok(manager.resolve_alias_to_canonical("SELECT 1").empty(),
 	   "unrelated Admin SQL remains unclaimed");
+
+	SQLite3DB admindb;
+	admindb.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+	bool materialized = true;
+	for (const auto& table : manager.tables(ProxySQL_PluginDBKind::admin_db)) {
+		materialized = materialized && admindb.execute(table.table_def);
+	}
+	ok(materialized, "the declared Router Admin schema materializes in SQLite");
+	manager.refresh_runtime_views_for_query(
+		"SELECT * FROM runtime_mysql_router_status", &admindb, nullptr, nullptr);
+	ok(admindb.return_one_int("SELECT COUNT(*) FROM runtime_mysql_router_status") >= 20 &&
+	   admindb.return_one_int("SELECT COUNT(*) FROM runtime_mysql_router_status "
+		   "WHERE status_key='advertised_contract' AND status_value='8.4.0'") == 1,
+	   "the status projection publishes the complete Router observability contract");
+	manager.refresh_runtime_views_for_query(
+		"SELECT * FROM runtime_mysql_router_topology", &admindb, nullptr, nullptr);
+	ok(admindb.return_one_int("SELECT COUNT(*) FROM runtime_mysql_router_topology") == 0,
+	   "the topology projection does not invent unknown cached health rows");
+	admindb.execute("INSERT INTO mysql_router_users(username,source_fingerprint,auth_plugin,state,last_error,generation) "
+		"VALUES('app','fingerprint','caching_sha2_password','active','',7)");
+	manager.refresh_runtime_views_for_query(
+		"SELECT * FROM runtime_mysql_router_users", &admindb, nullptr, nullptr);
+	ok(admindb.return_one_int("SELECT COUNT(*) FROM runtime_mysql_router_users "
+		"WHERE username='app' AND generation=7") == 1,
+	   "the managed-user runtime projection carries exact persisted state");
 	ok(manager.stop_all(), "schema-only manager teardown is clean");
 
 	return exit_status();

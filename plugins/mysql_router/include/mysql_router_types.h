@@ -10,8 +10,37 @@
 struct MysqlRouterStatus {
 	std::string state {"loaded"};
 	std::string last_error {};
+	std::string topology_type {"innodb_cluster"};
+	std::string topology_uuid {};
+	std::string metadata_version {};
+	std::string advertised_contract {"8.4.0"};
+	std::string router_label {};
+	std::string writer_uuid {};
+	std::map<std::string, int> managed_hostgroups;
+	uint64_t router_id {0};
 	uint64_t topology_generation {0};
 	uint64_t user_generation {0};
+	uint64_t topology_last_success {0};
+	uint64_t user_last_success {0};
+	uint64_t metadata_last_success {0};
+	uint64_t stale_seconds {0};
+	uint64_t user_collisions {0};
+	uint64_t unsupported_auth_plugins {0};
+	bool metadata_available {false};
+	bool registration_exists {false};
+	bool gates_ready {false};
+	bool unsupported_router_options {false};
+};
+
+struct MysqlRouterRuntimeTopologyRow {
+	std::string cluster_uuid;
+	std::string instance_uuid;
+	std::string endpoint;
+	std::string instance_kind;
+	std::string desired_role;
+	std::string observed_state;
+	std::string effective_role;
+	uint64_t last_observed_at {0};
 };
 
 struct MetadataVersion {
@@ -40,6 +69,7 @@ struct RouterOptions {
 	ReadOnlyTargets read_only_targets {ReadOnlyTargets::secondaries};
 	QuorumTraffic quorum_traffic {QuorumTraffic::none};
 	std::optional<uint64_t> stats_updates_frequency;
+	bool routing_guideline_unsupported {false};
 };
 
 struct DesiredInstance {

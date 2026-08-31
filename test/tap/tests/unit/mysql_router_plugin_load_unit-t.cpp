@@ -6,6 +6,7 @@
 #include "test_init.h"
 
 #include "prometheus/text_serializer.h"
+#include <json.hpp>
 
 #include <dlfcn.h>
 
@@ -19,7 +20,7 @@ extern ProxySQL_GlobalVariables GloVars;
 #endif
 
 int main() {
-	plan(24);
+	plan(26);
 	test_init_minimal();
 
 	void* handle = dlopen(PROXYSQL_MYSQL_ROUTER_PLUGIN_PATH, RTLD_NOW | RTLD_LOCAL);
@@ -61,6 +62,21 @@ int main() {
 		? descriptor->status_json() : "";
 	ok(status.find("mysql_router") != std::string::npos,
 	   "the live status JSON identifies the real mysql_router plugin");
+	const nlohmann::json status_document = nlohmann::json::parse(status);
+	ok(status_document.contains("topology_uuid") &&
+	   status_document.contains("metadata_version") &&
+	   status_document.contains("advertised_contract") &&
+	   status_document.contains("router_id") &&
+	   status_document.contains("router_label") &&
+	   status_document.contains("managed_hostgroups"),
+	   "status exposes Router identity, contract, metadata, and hostgroup mapping");
+	ok(status_document.contains("topology_last_success") &&
+	   status_document.contains("user_last_success") &&
+	   status_document.contains("stale_seconds") &&
+	   status_document.contains("user_collisions") &&
+	   status_document.contains("unsupported_auth_plugins") &&
+	   status_document.contains("unsupported_router_options"),
+	   "status exposes refresh age and managed-user diagnostics");
 
 	prometheus::TextSerializer serializer;
 	const std::string metrics = serializer.Serialize(GloVars.prometheus_registry->Collect());

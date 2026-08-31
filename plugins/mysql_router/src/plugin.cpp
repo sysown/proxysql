@@ -8,6 +8,14 @@
 
 namespace {
 
+void close_router_gates_noexcept(MysqlRouterContext& context, std::string_view reason) noexcept {
+	if (!context.reconcile_backend) return;
+	try {
+		context.reconcile_backend->set_gates(false, reason);
+	} catch (...) {
+	}
+}
+
 bool register_cli_options(ProxySQL_PluginCLIRegistry* registry) {
 	return mysql_router_register_cli_options(registry);
 }
@@ -49,6 +57,20 @@ bool init(ProxySQL_PluginServices* services) {
 	MysqlRouterContext& context = mysql_router_context();
 	context.services = services;
 	if (!mysql_router_register_metrics(*services)) return false;
+	try {
+		context.reconcile_backend = create_mysql_router_reconcile_backend(*services);
+		if (context.reconcile_backend) {
+			context.reconciler = std::make_unique<MysqlRouterReconciler>(
+				*context.reconcile_backend, context.reconcile_backend->schedule(),
+				context.reconcile_backend->initial_topology_generation(),
+				context.reconcile_backend->initial_user_generation());
+		}
+	} catch (const std::exception& error) {
+		std::lock_guard<std::mutex> guard(context.status_mutex);
+		context.status.state = "configuration_error";
+		context.status.last_error = error.what();
+		return false;
+	}
 	context.initialized.store(true);
 	{
 		std::lock_guard<std::mutex> guard(context.status_mutex);
@@ -70,19 +92,63 @@ bool start() {
 }
 
 bool runtime_ready(ProxySQL_PluginRuntimeContext* runtime_context) {
-	if (runtime_context == nullptr) return false;
+	if (runtime_context == nullptr || runtime_context->services == nullptr) return false;
 	MysqlRouterContext& context = mysql_router_context();
 	if (!context.started.load()) return false;
-	context.runtime_ready.store(true);
-	{
+	try {
+		context.runtime_ready.store(true);
+		if (!context.reconciler || !context.reconcile_backend) {
+			for (uint16_t port : {uint16_t(6446), uint16_t(6447), uint16_t(6450)}) {
+				const ProxySQL_PluginListenerGate gate {"mysql_router", "0.0.0.0", port,
+					ProxySQL_PluginListenerState::closed, "MySQL Router is not bootstrapped"};
+				if (runtime_context->services->set_listener_gate != nullptr) {
+					(void)runtime_context->services->set_listener_gate(gate);
+				}
+			}
+			std::lock_guard<std::mutex> guard(context.status_mutex);
+			context.status.state = "unconfigured";
+			context.status.gates_ready = false;
+			return true;
+		}
+		context.reconcile_backend->set_gates(false, "initial topology validation in progress");
+		const ReconcileResult result = context.reconciler->refresh({true, true});
+		{
+			std::lock_guard<std::mutex> guard(context.status_mutex);
+			context.status.topology_generation = result.topology_generation;
+			context.status.user_generation = result.user_generation;
+			context.status.metadata_available = result.metadata_available;
+			context.status.registration_exists = result.registration_exists;
+			context.status.gates_ready = result.gates_ready;
+			if (!result.topology_error.empty()) context.status.last_error = result.topology_error;
+			else if (!result.user_error.empty()) context.status.last_error = result.user_error;
+			context.status.state = result.gates_ready && context.status.last_error.empty()
+				? "ready" : "degraded";
+		}
+		return context.reconciler->start(false);
+	} catch (const std::exception& error) {
+		context.runtime_ready.store(false);
+		close_router_gates_noexcept(context, "Router runtime initialization failed");
 		std::lock_guard<std::mutex> guard(context.status_mutex);
-		context.status.state = "ready";
+		context.status.state = "runtime_error";
+		context.status.gates_ready = false;
+		context.status.last_error = error.what();
+		return false;
+	} catch (...) {
+		context.runtime_ready.store(false);
+		close_router_gates_noexcept(context, "Router runtime initialization failed");
+		std::lock_guard<std::mutex> guard(context.status_mutex);
+		context.status.state = "runtime_error";
+		context.status.gates_ready = false;
+		context.status.last_error = "unknown Router runtime-ready failure";
+		return false;
 	}
-	return true;
 }
 
 bool stop() {
 	MysqlRouterContext& context = mysql_router_context();
+	if (context.reconciler) context.reconciler->stop();
+	context.reconciler.reset();
+	context.reconcile_backend.reset();
 	context.runtime_ready.store(false);
 	context.started.store(false);
 	context.initialized.store(false);
@@ -92,6 +158,50 @@ bool stop() {
 		context.status.state = "stopped";
 	}
 	return true;
+}
+
+ProxySQL_PluginCommandResult force_reconcile(
+		const ProxySQL_PluginCommandContext& command_context) {
+	MysqlRouterContext& context = mysql_router_context();
+	if (!context.reconciler) return {1, 0, "MySQL Router is not bootstrapped"};
+	bool released = false;
+	try {
+		if (command_context.release_admin_mutex != nullptr &&
+			command_context.acquire_admin_mutex != nullptr) {
+			command_context.release_admin_mutex(command_context.admin_mutex_context);
+			released = true;
+		}
+		const ReconcileResult result = context.reconciler->refresh({true, true});
+		if (released) {
+			command_context.acquire_admin_mutex(command_context.admin_mutex_context);
+			released = false;
+		}
+		{
+			std::lock_guard<std::mutex> guard(context.status_mutex);
+			context.status.topology_generation = result.topology_generation;
+			context.status.user_generation = result.user_generation;
+			context.status.metadata_available = result.metadata_available;
+			context.status.registration_exists = result.registration_exists;
+			context.status.gates_ready = result.gates_ready;
+			if (!result.topology_error.empty()) context.status.last_error = result.topology_error;
+			else if (!result.user_error.empty()) context.status.last_error = result.user_error;
+			context.status.state = result.gates_ready && context.status.last_error.empty()
+				? "ready" : "degraded";
+		}
+		const bool success = result.topology_error.empty() && result.user_error.empty();
+		uint64_t collisions = 0;
+		{
+			std::lock_guard<std::mutex> guard(context.status_mutex);
+			collisions = context.status.user_collisions;
+		}
+		return {success ? 0 : 1, 0,
+			"topology_generation=" + std::to_string(result.topology_generation) +
+			" user_generation=" + std::to_string(result.user_generation) +
+			" collisions=" + std::to_string(collisions)};
+	} catch (const std::exception& error) {
+		if (released) command_context.acquire_admin_mutex(command_context.admin_mutex_context);
+		return {1, 0, error.what()};
+	}
 }
 
 bool register_schemas(ProxySQL_PluginServices* services) {
@@ -112,6 +222,11 @@ const ProxySQL_PluginDescriptor descriptor {
 };
 
 } // namespace
+
+ProxySQL_PluginCommandResult mysql_router_reconcile_command(
+	const ProxySQL_PluginCommandContext& command_context, const char*) {
+	return force_reconcile(command_context);
+}
 
 MysqlRouterContext& mysql_router_context() {
 	static MysqlRouterContext context;

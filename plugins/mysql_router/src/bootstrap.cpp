@@ -523,6 +523,13 @@ public:
 	uint64_t publish_users(const DesiredTopology& topology,
 		const ListenerProfile& listeners, const AccountSnapshot& snapshot,
 		std::string_view metadata_user, uint64_t generation) override;
+	uint64_t publish_topology_snapshot(const DesiredTopology& topology,
+		const EffectiveTopology& effective, const ListenerProfile& listeners,
+		uint64_t generation);
+	uint64_t publish_users_snapshot(const DesiredTopology& topology,
+		const EffectiveTopology& effective, const ListenerProfile& listeners,
+		const AccountSnapshot& snapshot, std::string_view metadata_user,
+		uint64_t generation);
 
 	void save_complete(const BootstrapIdentity& identity,
 		const ListenerProfile& listeners) override {
@@ -561,15 +568,17 @@ public:
 
 private:
 	uint64_t publish_generation(const DesiredTopology& topology,
+		const EffectiveTopology& effective,
 		const ListenerProfile& listeners, uint64_t generation,
 		const std::vector<ManagedMysqlUser>& users);
 	ProxySQL_PluginServices& services_;
 	IMetadataSession& session_;
 	SQLite3DB* db_;
+	std::optional<EffectiveTopology> last_effective_;
 };
 
 uint64_t PluginBootstrapStore::publish_generation(const DesiredTopology& topology,
-	const ListenerProfile& listeners, uint64_t generation,
+	const EffectiveTopology& effective, const ListenerProfile& listeners, uint64_t generation,
 	const std::vector<ManagedMysqlUser>& users) {
 	if (services_.apply_mysql_config == nullptr || services_.set_listener_gate == nullptr ||
 		services_.get_mysql_servers_snapshot == nullptr ||
@@ -641,8 +650,6 @@ uint64_t PluginBootstrapStore::publish_generation(const DesiredTopology& topolog
 		input.operator_interfaces = split_interfaces(interfaces->rows[0]->fields[0]);
 	}
 
-	ObservedHealth health = GrHealthReader::read(session_);
-	EffectiveTopology effective = evaluate_innodb_cluster(topology, health);
 	CompiledMysqlConfig config = ConfigCompiler::compile_topology(
 		topology, effective, hostgroups, input);
 	for (const std::string& endpoint : config.interfaces) {
@@ -666,12 +673,38 @@ uint64_t PluginBootstrapStore::publish_generation(const DesiredTopology& topolog
 
 uint64_t PluginBootstrapStore::publish_topology(const DesiredTopology& topology,
 	const ListenerProfile& listeners, uint64_t generation) {
-	return publish_generation(topology, listeners, generation, {});
+	ObservedHealth health = GrHealthReader::read(session_);
+	last_effective_ = evaluate_innodb_cluster(topology, health);
+	return publish_topology_snapshot(topology, *last_effective_, listeners, generation);
+}
+
+uint64_t PluginBootstrapStore::publish_topology_snapshot(const DesiredTopology& topology,
+	const EffectiveTopology& effective, const ListenerProfile& listeners, uint64_t generation) {
+	SQLite3DB* admindb = services_.get_admindb ? services_.get_admindb() : nullptr;
+	if (admindb == nullptr) throw std::runtime_error("Admin DB is unavailable during topology publication");
+	std::vector<ManagedMysqlUser> preserved;
+	for (const CurrentMysqlUser& current : current_mysql_users(*admindb)) {
+		if (!current.owned) continue;
+		ManagedMysqlUser user;
+		static_cast<CurrentMysqlUser&>(user) = current;
+		preserved.push_back(std::move(user));
+	}
+	return publish_generation(topology, effective, listeners, generation, preserved);
 }
 
 uint64_t PluginBootstrapStore::publish_users(const DesiredTopology& topology,
 	const ListenerProfile& listeners, const AccountSnapshot& snapshot,
 	std::string_view, uint64_t generation) {
+	if (!last_effective_) {
+		ObservedHealth health = GrHealthReader::read(session_);
+		last_effective_ = evaluate_innodb_cluster(topology, health);
+	}
+	return publish_users_snapshot(topology, *last_effective_, listeners, snapshot, {}, generation);
+}
+
+uint64_t PluginBootstrapStore::publish_users_snapshot(const DesiredTopology& topology,
+	const EffectiveTopology& effective, const ListenerProfile& listeners,
+	const AccountSnapshot& snapshot, std::string_view, uint64_t generation) {
 	SQLite3DB* admindb = services_.get_admindb ? services_.get_admindb() : nullptr;
 	if (admindb == nullptr) throw std::runtime_error("Admin DB is unavailable during user synchronization");
 	UserSyncInput input;
@@ -685,7 +718,8 @@ uint64_t PluginBootstrapStore::publish_users(const DesiredTopology& topology,
 	input.current_users = current_mysql_users(*admindb);
 	input.persisted = persisted_mysql_router_users(*db_);
 	ManagedUserGeneration normalized = UserSynchronizer::normalize(snapshot, input);
-	const uint64_t published = publish_generation(topology, listeners, generation, normalized.users);
+	const uint64_t published = publish_generation(
+		topology, effective, listeners, generation, normalized.users);
 	persist_mysql_router_users(*admindb, published, normalized.status);
 	return published;
 }
@@ -699,6 +733,24 @@ BootstrapResult run_mysql_router_bootstrap(
 	PluginBootstrapStore store(services, session);
 	return MysqlRouterBootstrap(session, store, std::move(topology),
 		std::move(router_address)).run(options);
+}
+
+uint64_t publish_mysql_router_topology(ProxySQL_PluginServices& services,
+	IMetadataSession& session, const DesiredTopology& topology,
+	const EffectiveTopology& effective, const ListenerProfile& listeners,
+	uint64_t generation) {
+	PluginBootstrapStore store(services, session);
+	return store.publish_topology_snapshot(topology, effective, listeners, generation);
+}
+
+uint64_t publish_mysql_router_users(ProxySQL_PluginServices& services,
+	IMetadataSession& session, const DesiredTopology& topology,
+	const EffectiveTopology& effective, const ListenerProfile& listeners,
+	const AccountSnapshot& snapshot, std::string_view metadata_user,
+	uint64_t generation) {
+	PluginBootstrapStore store(services, session);
+	return store.publish_users_snapshot(
+		topology, effective, listeners, snapshot, metadata_user, generation);
 }
 
 #endif

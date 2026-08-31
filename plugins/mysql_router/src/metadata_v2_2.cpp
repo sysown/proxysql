@@ -96,6 +96,11 @@ RouterOptions parse_options(const std::string& value) {
 		if (frequency < 0) throw std::runtime_error("invalid stats update frequency");
 		options.stats_updates_frequency = static_cast<uint64_t>(frequency);
 	}
+	for (const char* key : {"guideline", "routing_guideline"}) {
+		if (json.contains(key) && !json[key].is_null()) {
+			options.routing_guideline_unsupported = true;
+		}
+	}
 	return options;
 }
 
