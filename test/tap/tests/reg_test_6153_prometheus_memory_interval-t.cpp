@@ -84,26 +84,36 @@ public:
 	MemoryIntervalRestorer(MemoryIntervalRestorer&&) = delete;
 	MemoryIntervalRestorer& operator=(MemoryIntervalRestorer&&) = delete;
 
-	~MemoryIntervalRestorer() {
-		if (!set_memory_interval(admin_, original_value_)) {
+	bool restore() {
+		if (!active_) {
+			return true;
+		}
+
+		const bool restored = set_memory_interval(admin_, original_value_);
+		if (!restored) {
 			diag("Failed to restore %s=%s", MEMORY_INTERVAL, original_value_.c_str());
 		}
+		active_ = false;
+		return restored;
 	}
+
+	~MemoryIntervalRestorer() { (void)restore(); }
 
 private:
 	MYSQL* admin_;
 	std::string original_value_;
+	bool active_ = true;
 };
 
 } // namespace
 
 int main() {
-	plan(7);
+	plan(8);
 
 	CommandLine cl;
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables");
-		skip(7, "Cannot continue without the required TAP environment");
+		skip(8, "Cannot continue without the required TAP environment");
 		return EXIT_FAILURE;
 	}
 
@@ -171,6 +181,7 @@ int main() {
 		cached,
 		refreshed
 	);
+	ok(restore_interval.restore(), "Original Prometheus memory metrics interval is restored");
 
 	return exit_status();
 }
