@@ -5041,6 +5041,19 @@ int MySQL_Session::enter_permanent_fast_forward(PtrSize_t& pkt, int destination_
 	return 0;
 }
 
+void MySQL_Session::GPFC_QueryRule_FinalizeFastForwardHandoff() {
+	CurrentQuery.set_end_time(thread->curtime);
+	CurrentQuery.end();
+	CurrentQuery.MyComQueryCmd = MYSQL_COM_QUERY___NONE;
+	CurrentQuery.QueryPointer = nullptr;
+	CurrentQuery.QueryLength = 0;
+	GloMyQPro->delete_QP_out(qpo);
+	current_query_user_variable_safe = false;
+	current_query_user_variable_unsafe_fallback = false;
+	current_query_user_variable_context_change = false;
+	pending_user_variable_set.reset();
+}
+
 int MySQL_Session::GPFC_QueryRule_SwitchToFastForward(PtrSize_t& pkt) {
 	auto reject_transition = [this, &pkt](char* message) {
 		char sql_state[] = "HY000";
@@ -5067,9 +5080,8 @@ int MySQL_Session::GPFC_QueryRule_SwitchToFastForward(PtrSize_t& pkt) {
 		char message[] = "Unable to reconstruct COM_QUERY for fast-forward";
 		return reject_transition(message);
 	}
+	GPFC_QueryRule_FinalizeFastForwardHandoff();
 	if (reconstructed.ptr != pkt.ptr) {
-		CurrentQuery.QueryPointer = nullptr;
-		CurrentQuery.QueryLength = 0;
 		l_free(pkt.size, pkt.ptr);
 		pkt = reconstructed;
 	}

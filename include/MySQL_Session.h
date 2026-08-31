@@ -346,6 +346,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	int GPFC_WaitingClientData_FastForwardSession(PtrSize_t&);
 	void GPFC_PreparedStatements(PtrSize_t&, unsigned char);
 	int GPFC_Replication_SwitchToFastForward(PtrSize_t&, unsigned char);
+	void GPFC_QueryRule_FinalizeFastForwardHandoff();
 	int GPFC_QueryRule_SwitchToFastForward(PtrSize_t&);
 	int enter_permanent_fast_forward(PtrSize_t&, int);
 	bool GPFC_QueryUSE(PtrSize_t&, int&);
