@@ -40,6 +40,9 @@ using json = nlohmann::json;
 #include "libinjection.h"
 #include "libinjection_sqli.h"
 
+#include <algorithm>
+#include <limits>
+
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
 #define SELECT_VERSION_COMMENT_LEN 32
 //#define SELECT_DB_USER "select DATABASE(), USER() limit 1"
@@ -87,6 +90,64 @@ static inline char is_digit(char c) {
 		return 1;
 	return 0;
 }
+
+static bool reconstruct_fast_forward_query(const PtrSize_t& pkt, PtrSize_t& reconstructed_pkt) {
+	constexpr size_t header_size = sizeof(mysql_hdr);
+	constexpr size_t max_payload = 0x00ffffff;
+	if (!pkt.ptr || pkt.size < header_size) {
+		return false;
+	}
+
+	const size_t logical_size = static_cast<size_t>(pkt.size) - header_size;
+	if (logical_size < max_payload) {
+		reconstructed_pkt = pkt;
+		return true;
+	}
+
+	const size_t full_packets = logical_size / max_payload;
+	const size_t remainder = logical_size % max_payload;
+	const size_t packet_count = full_packets + (remainder ? 1 : 0) + (remainder == 0 ? 1 : 0);
+	if (packet_count > (std::numeric_limits<size_t>::max() - logical_size) / header_size) {
+		return false;
+	}
+	const size_t reconstructed_size = logical_size + packet_count * header_size;
+	if (reconstructed_size > std::numeric_limits<unsigned int>::max()) {
+		return false;
+	}
+
+	auto* output = static_cast<unsigned char*>(l_alloc(reconstructed_size));
+	if (!output) {
+		return false;
+	}
+	const auto* source = static_cast<const unsigned char*>(pkt.ptr);
+	size_t logical_offset = 0;
+	size_t output_offset = 0;
+	unsigned int sequence = source[3];
+	do {
+		const size_t payload = std::min(max_payload, logical_size - logical_offset);
+		output[output_offset] = payload & 0xff;
+		output[output_offset + 1] = (payload >> 8) & 0xff;
+		output[output_offset + 2] = (payload >> 16) & 0xff;
+		output[output_offset + 3] = sequence++ & 0xff;
+		if (payload) {
+			memcpy(output + output_offset + header_size,
+				source + header_size + logical_offset, payload);
+		}
+		logical_offset += payload;
+		output_offset += header_size + payload;
+	} while (logical_offset < logical_size);
+
+	if (remainder == 0) {
+		memset(output + output_offset, 0, header_size);
+		output[output_offset + 3] = sequence & 0xff;
+		output_offset += header_size;
+	}
+	assert(output_offset == reconstructed_size);
+	reconstructed_pkt.ptr = output;
+	reconstructed_pkt.size = static_cast<unsigned int>(reconstructed_size);
+	return true;
+}
+
 static inline char is_normal_char(char c) {
 	if(c >= 'a' && c <= 'z')
 		return 1;
@@ -4851,6 +4912,10 @@ int MySQL_Session::GPFC_Replication_SwitchToFastForward(PtrSize_t& pkt, unsigned
 		q += " . Changing session fast_forward to true";
 		proxy_info("%s\n", q.c_str());
 	}
+	return enter_permanent_fast_forward(pkt, previous_hostgroup);
+}
+
+int MySQL_Session::enter_permanent_fast_forward(PtrSize_t& pkt, int destination_hostgroup) {
 	session_fast_forward = SESSION_FORWARD_TYPE_PERMANENT;
 
 	if (client_myds->PSarrayIN->len) {
@@ -4862,7 +4927,7 @@ int MySQL_Session::GPFC_Replication_SwitchToFastForward(PtrSize_t& pkt, unsigned
 	// The following code prepares the session as if it was configured with fast
 	// forward before receiving the command. This way the state machine will
 	// handle the command automatically.
-	current_hostgroup = previous_hostgroup;
+	current_hostgroup = destination_hostgroup;
 	mybe = find_or_create_backend(current_hostgroup); // set a backend
 	mybe->server_myds->reinit_queues(); // reinitialize the queues in the myds . By default, they are not active
 	// We reinitialize the 'wait_until' since this session shouldn't wait for processing as
@@ -4974,6 +5039,40 @@ int MySQL_Session::GPFC_Replication_SwitchToFastForward(PtrSize_t& pkt, unsigned
 	}
 
 	return 0;
+}
+
+int MySQL_Session::GPFC_QueryRule_SwitchToFastForward(PtrSize_t& pkt) {
+	if (client_myds->myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION)) {
+		const char* message = "Query-rule fast-forward does not support compressed frontend sessions";
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true, nullptr, nullptr,
+			client_myds->pkt_sid + 1, 1815, (char*)"HY000", (char*)message, true);
+		RequestEnd(nullptr, 1815, message);
+		l_free(pkt.size, pkt.ptr);
+		pkt = {};
+		return -1;
+	}
+
+	PtrSize_t reconstructed {};
+	if (!reconstruct_fast_forward_query(pkt, reconstructed)) {
+		const char* message = "Unable to reconstruct COM_QUERY for fast-forward";
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true, nullptr, nullptr,
+			client_myds->pkt_sid + 1, 1815, (char*)"HY000", (char*)message, true);
+		RequestEnd(nullptr, 1815, message);
+		l_free(pkt.size, pkt.ptr);
+		pkt = {};
+		return -1;
+	}
+	if (reconstructed.ptr != pkt.ptr) {
+		l_free(pkt.size, pkt.ptr);
+		pkt = reconstructed;
+	}
+
+	proxy_info(
+		"Switching MySQL COM_QUERY session to permanent fast-forward: session_id=%u hostgroup=%d\n",
+		thread_session_id, current_hostgroup);
+	return enter_permanent_fast_forward(pkt, current_hostgroup);
 }
 
 bool MySQL_Session::GPFC_QueryUSE(PtrSize_t& pkt, int& handler_ret) {
@@ -5290,6 +5389,14 @@ sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str());
 												break;
 											}
 										}
+									}
+									if (mirror == false && session_type == PROXYSQL_SESSION_MYSQL &&
+										qpo->switch_to_fast_forward) {
+										handler_ret = GPFC_QueryRule_SwitchToFastForward(pkt);
+										if (handler_ret != 0) {
+											return handler_ret;
+										}
+										break;
 									}
 									mybe=find_or_create_backend(current_hostgroup);
 									status=PROCESSING_QUERY;
