@@ -34,7 +34,7 @@ LDIRS :=	-L$(TAP_LDIR) \
 			-L$(EV_LDIR) \
 			-L$(PROMETHEUS_LDIR) \
 			-L$(SQLITE3_LDIR) \
-			-L$(PCRE_LDIR) \
+			-L$(PCRE2_LDIR) \
 			-L$(POSTGRESQL_LDIR) \
 			-L$(SSL_LDIR) 
 

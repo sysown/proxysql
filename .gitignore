@@ -1,6 +1,9 @@
 # Internal Repos
 priv-infra/
 
+# Unpacked PCRE2 source and dependency build output; keep the release archive tracked.
+deps/pcre2/pcre2/
+
 # Git worktrees
 .worktrees/
 

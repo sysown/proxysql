@@ -93,7 +93,7 @@ LDIRS :=	-L$(TAP_LDIR) \
 			-L$(CURL_LDIR) -L$(EV_LDIR) \
 			-L$(PROMETHEUS_LDIR) \
 			-L$(DOTENV_DYN_LDIR) \
-			-L$(PCRE_LDIR) \
+			-L$(PCRE2_LDIR) \
 			-L$(LIBINJECTION_LDIR) \
 			-L$(POSTGRESQL_LDIR) \
 			-L$(LIBSCRAM_LDIR) \
@@ -200,8 +200,7 @@ LIBPROXYSQLAR_FULL := $(LIBPROXYSQLAR) \
 	$(JEMALLOC_LDIR)/libjemalloc.a \
 	$(MICROHTTPD_LDIR)/libmicrohttpd.a \
 	$(LIBHTTPSERVER_LDIR)/libhttpserver.a \
-	$(PCRE_LDIR)/libpcre.a \
-	$(PCRE_LDIR)/libpcrecpp.a \
+	$(PCRE2_LDIR)/libpcre2-8.a \
 	$(LIBDAEMON_LDIR)/libdaemon.a \
 	$(LIBCONFIG_LDIR)/libconfig++.a \
 	$(LIBCONFIG_LDIR)/libconfig.a \
@@ -231,7 +230,7 @@ LIBPROXYSQLAR_FULL := $(LIBPROXYSQLAR)
 # (`detect_odr_violation=1` aborts at startup; ld is silenced by
 # `--allow-multiple-definition`).
 MYLIBS := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -luuid \
-		  -Wl,-Bstatic -lconfig -lsqlparser -ldaemon -lconfig++ $(RE2_STATIC_LIBS) -lpcrecpp -lpcre \
+		  -Wl,-Bstatic -lconfig -lsqlparser -ldaemon -lconfig++ $(RE2_STATIC_LIBS) $(PCRE2_LIBS) \
 		  -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev \
 		  -lprometheus-cpp-pull -lprometheus-cpp-core \
 		  $(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a \
