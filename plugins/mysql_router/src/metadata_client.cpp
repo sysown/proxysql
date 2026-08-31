@@ -263,4 +263,17 @@ ServerVersion ConnectorCMetadataSession::server_version() const {
 		static_cast<int>(version % 100)};
 }
 
+std::string ConnectorCMetadataSession::quote_sql_string(std::string_view value) const {
+	if (value.size() > (std::numeric_limits<unsigned long>::max() - 3) / 2) {
+		throw std::runtime_error("SQL string is too large to escape");
+	}
+	std::string quoted(value.size() * 2 + 3, '\0');
+	quoted[0] = '\'';
+	unsigned long length = mysql_real_escape_string(impl_->mysql, quoted.data() + 1,
+		value.data(), static_cast<unsigned long>(value.size()));
+	quoted[length + 1] = '\'';
+	quoted.resize(length + 2);
+	return quoted;
+}
+
 #endif

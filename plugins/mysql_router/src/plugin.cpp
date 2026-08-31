@@ -1,6 +1,10 @@
 #include "mysql_router_admin.h"
 #include "mysql_router_bootstrap.h"
 #include "mysql_router_plugin.h"
+#include "mysql_router_metadata.h"
+
+#include <cstdio>
+#include <unistd.h>
 
 namespace {
 
@@ -11,12 +15,27 @@ bool register_cli_options(ProxySQL_PluginCLIRegistry* registry) {
 ProxySQL_PluginEarlyActionResult early_action(
 		const ProxySQL_PluginEarlyActionContext& action_context) {
 	try {
-		const BootstrapOptions options = parse_bootstrap_options(action_context);
+		BootstrapOptions options = parse_bootstrap_options(action_context);
 		if (!options.requested) return ProxySQL_PluginEarlyActionResult::not_requested;
-		MysqlRouterContext& context = mysql_router_context();
-		std::lock_guard<std::mutex> guard(context.status_mutex);
-		context.status.last_error = "MySQL Router bootstrap engine is not available yet";
-		return ProxySQL_PluginEarlyActionResult::exit_failure;
+		if (action_context.services == nullptr) throw std::runtime_error("plugin services are unavailable");
+		char hostname[256] {};
+		if (gethostname(hostname, sizeof(hostname) - 1) != 0 || hostname[0] == '\0') {
+			throw std::runtime_error("cannot determine Router hostname");
+		}
+		if (options.router_name.empty()) options.router_name = std::string(hostname) + "_proxysql";
+		SecureBytes password = read_bootstrap_password(options);
+		auto session = ConnectorCMetadataSession::connect(options.seed, options.tls, password, 5);
+		DesiredTopology topology = MetadataV2_2::read_innodb_cluster(*session, {}, 0);
+		BootstrapResult result = run_mysql_router_bootstrap(options, *session,
+			std::move(topology), hostname, *action_context.services);
+		if (!result.success) throw std::runtime_error(result.error);
+		std::fprintf(stdout,
+			"MySQL Router bootstrap complete\nRouter: %s\nTopology: %s (InnoDB Cluster)\n"
+			"Classic endpoints: RW=%u RO=%u R/W-split=%u\nStart ProxySQL normally to activate routing.\n",
+			options.router_name.c_str(), result.topology_uuid.c_str(),
+			options.listeners.rw_port, options.listeners.ro_port,
+			options.listeners.rw_split_port);
+		return ProxySQL_PluginEarlyActionResult::exit_success;
 	} catch (const std::exception& exception) {
 		MysqlRouterContext& context = mysql_router_context();
 		std::lock_guard<std::mutex> guard(context.status_mutex);

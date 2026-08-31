@@ -34,7 +34,7 @@ PSQLTSDB := $(if $(filter 1,$(PROXYSQLTSDB)),-DPROXYSQLTSDB)
 
 CXXFLAGS := $(STDCPP) -fPIC -fvisibility=hidden -fvisibility-inlines-hidden \
 	$(OPTZ) $(WGCOV) $(WASAN) -pthread -fstack-protector-strong \
-	$(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB)
+	$(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) -DGITVERSION=\"$(GIT_VERSION)\"
 CXXFLAGS += -DMYSQL_ROUTER_CONNECTOR_C
 
 ifeq ($(WASAN),)
@@ -59,6 +59,8 @@ SRCS := $(PLUGIN_DIR)/src/plugin.cpp \
 	$(PLUGIN_DIR)/src/metadata_client.cpp \
 	$(PLUGIN_DIR)/src/metadata_v2_2.cpp \
 	$(PLUGIN_DIR)/src/gr_health.cpp \
+	$(PLUGIN_DIR)/src/bootstrap.cpp \
+	$(PLUGIN_DIR)/src/router_registration.cpp \
 	$(PLUGIN_DIR)/src/status.cpp \
 	$(PLUGIN_DIR)/src/metrics.cpp
 HEADERS := $(wildcard $(PLUGIN_DIR)/include/*.h) \

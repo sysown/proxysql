@@ -2,6 +2,9 @@
 #define PROXYSQL_MYSQL_ROUTER_BOOTSTRAP_H
 
 #include "ProxySQL_Plugin.h"
+#include "mysql_router_types.h"
+
+#include <json.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -84,10 +87,88 @@ private:
 	std::vector<unsigned char> bytes_;
 };
 
+class IMetadataSession;
+
+struct RouterRegistration {
+	int64_t router_id {0};
+	std::string product_name;
+	std::string version;
+	nlohmann::json attributes;
+};
+
+enum class BootstrapPhase : uint8_t {
+	discovered,
+	account_ready,
+	registered,
+	local_configured,
+	complete,
+};
+
+struct BootstrapJournal {
+	std::string topology_uuid;
+	std::string router_name;
+	BootstrapPhase phase {BootstrapPhase::discovered};
+	int64_t router_id {0};
+	std::string metadata_user;
+	std::string last_error;
+};
+
+struct BootstrapIdentity {
+	std::string topology_uuid;
+	std::string topology_name;
+	int64_t router_id {0};
+	std::string router_name;
+	std::string router_address;
+	std::string metadata_user;
+	std::string metadata_host;
+	uint16_t metadata_port {3306};
+};
+
+struct BootstrapResult {
+	bool success {false};
+	int64_t router_id {0};
+	std::string topology_uuid;
+	std::string metadata_user;
+	std::string error;
+};
+
+class IBootstrapStore {
+public:
+	virtual ~IBootstrapStore() = default;
+	virtual std::optional<BootstrapJournal> load_journal(std::string_view topology_uuid) = 0;
+	virtual std::optional<BootstrapIdentity> load_identity() = 0;
+	virtual void save_journal(const BootstrapJournal& journal) = 0;
+	virtual void put_secret(std::string_view name, const std::vector<uint8_t>& value) = 0;
+	virtual std::optional<std::vector<uint8_t>> get_secret(std::string_view name) = 0;
+	virtual void save_complete(const BootstrapIdentity& identity,
+		const ListenerProfile& listeners) = 0;
+};
+
+class MysqlRouterBootstrap {
+public:
+	MysqlRouterBootstrap(IMetadataSession& session, IBootstrapStore& store,
+		DesiredTopology topology, std::string router_address);
+	BootstrapResult run(const BootstrapOptions& options);
+
+private:
+	IMetadataSession& session_;
+	IBootstrapStore& store_;
+	DesiredTopology topology_;
+	std::string router_address_;
+};
+
 bool mysql_router_register_cli_options(ProxySQL_PluginCLIRegistry* registry);
 MetadataEndpoint parse_metadata_uri(std::string_view uri);
 BootstrapOptions parse_bootstrap_options(
 	const ProxySQL_PluginEarlyActionContext& context);
 SecureBytes read_bootstrap_password(const BootstrapOptions& options);
+RouterRegistration register_or_adopt_router(
+	IMetadataSession& session, const DesiredTopology& topology,
+	const BootstrapOptions& options, std::string_view address,
+	std::string_view metadata_user);
+BootstrapResult run_mysql_router_bootstrap(
+	const BootstrapOptions& options, IMetadataSession& session,
+	DesiredTopology topology, std::string router_address,
+	ProxySQL_PluginServices& services);
 
 #endif

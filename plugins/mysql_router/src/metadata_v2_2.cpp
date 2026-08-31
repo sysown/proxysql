@@ -108,26 +108,27 @@ DesiredTopology MetadataV2_2::read_innodb_cluster(
 	QueryResult current = session.query(kThisInstance, {});
 	if (current.rows.size() != 1) throw std::runtime_error("metadata this_instance row is missing");
 	const QueryRow& this_instance = current.rows[0];
-	if (required(this_instance, "cluster_id") != cluster_uuid) {
+	const std::string& discovered_cluster = required(this_instance, "cluster_id");
+	if (!cluster_uuid.empty() && discovered_cluster != cluster_uuid) {
 		throw std::runtime_error("requested cluster does not match this metadata instance");
 	}
 	if (required(this_instance, "cluster_type") != "gr") {
 		throw std::runtime_error("metadata cluster type is not Group Replication");
 	}
 	topology.type = TopologyType::innodb_cluster;
-	topology.topology_uuid = std::string(cluster_uuid);
+	topology.topology_uuid = discovered_cluster;
 	topology.topology_name = required(this_instance, "cluster_name");
 
-	QueryResult instances = session.query(kInstances, {std::string(cluster_uuid)});
+	QueryResult instances = session.query(kInstances, {topology.topology_uuid});
 	if (instances.rows.empty()) throw std::runtime_error("metadata cluster has no instances");
 	std::set<std::string> uuids;
 	std::set<std::string> endpoints;
 	for (const QueryRow& row : instances.rows) {
-		if (required(row, "cluster_id") != cluster_uuid) {
+		if (required(row, "cluster_id") != topology.topology_uuid) {
 			throw std::runtime_error("cross-cluster metadata instance row");
 		}
 		DesiredInstance instance;
-		instance.cluster_uuid = std::string(cluster_uuid);
+		instance.cluster_uuid = topology.topology_uuid;
 		instance.server_uuid = required(row, "mysql_server_uuid");
 		instance.label = required(row, "label");
 		const std::string& endpoint = required(row, "endpoint");
