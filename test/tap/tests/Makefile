@@ -39,7 +39,7 @@ LDIRS :=	-L$(TAP_LDIR) \
 			-L$(CURL_LDIR) -L$(EV_LDIR) \
 			-L$(PROMETHEUS_LDIR) \
 			-L$(DOTENV_DYN_LDIR) \
-			-L$(PCRE_LDIR) \
+			-L$(PCRE2_LDIR) \
 			-L$(LIBINJECTION_LDIR) \
 			-L$(POSTGRESQL_LDIR) \
 			-L$(LIBSCRAM_LDIR) \
@@ -92,14 +92,14 @@ POSTGRESQL_STATIC_LIBS := $(POSTGRESQL_PATH)/interfaces/libpq/libpq.a \
 
 ifeq ($(UNAME_S),Darwin)
 MYLIBS_DYNAMIC_PART := -lgnutls -lcpp_dotenv -luuid
-MYLIBS_STATIC_PART := -lconfig -lproxysql -lsqlparser -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core
+MYLIBS_STATIC_PART := -lconfig -lproxysql -lsqlparser -ldaemon -lconfig++ -lre2 $(PCRE2_LIBS) -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core
 MYLIBS_LAST_PART := -lpthread -lm -lz -lzstd -liconv -ldl $(EXTRALINK)
 MYLIBS := -ltap $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) \
 	$(POSTGRESQL_STATIC_LIBS) $(CURL_STATIC_LIB) $(OPENSSL_STATIC_LIBS) \
 	$(MYLIBS_LAST_PART)
 else
 MYLIBS_DYNAMIC_PART := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -lcpp_dotenv -luuid
-MYLIBS_STATIC_PART := -Wl,-Bstatic -lconfig -lproxysql -lsqlparser -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core
+MYLIBS_STATIC_PART := -Wl,-Bstatic -lconfig -lproxysql -lsqlparser -ldaemon -lconfig++ -lre2 $(PCRE2_LIBS) -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core
 MYLIBS_LAST_PART := -Wl,-Bdynamic -lpthread -lm -lz -lzstd -lrt -ldl $(EXTRALINK)
 MYLIBS := -Wl,-Bdynamic -ltap $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) \
 	$(POSTGRESQL_STATIC_LIBS) $(CURL_STATIC_LIB) $(OPENSSL_STATIC_LIBS) \
