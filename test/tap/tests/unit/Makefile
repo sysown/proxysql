@@ -178,6 +178,20 @@ endif
 # Linker flags — platform-specific
 # ===========================================================================
 
+CURL_STATIC_LIB := $(CURL_LDIR)/libcurl.a
+# Keep static curl consumers on the vendored archive and follow it with the
+# vendored OpenSSL archives that satisfy curl's TLS symbols.
+CURL_STATIC_DEPS := $(CURL_STATIC_LIB) $(OPENSSL_FORCE_LOAD_LIBS)
+MCP_CLIENT_LIBS := $(CURL_STATIC_DEPS) -lz -lpthread
+ifeq ($(UNAME_S),Linux)
+# libcrypto.a uses dlopen-family functions. glibc before 2.34 supplies them
+# from libdl rather than libc.
+MCP_CLIENT_LIBS += -ldl
+endif
+POSTGRESQL_STATIC_LIBS := $(POSTGRESQL_PATH)/interfaces/libpq/libpq.a \
+	$(POSTGRESQL_PATH)/common/libpgcommon.a \
+	$(POSTGRESQL_PATH)/port/libpgport.a
+
 ifeq ($(UNAME_S),Darwin)
 # macOS: No -Bstatic/-Bdynamic; use explicit .a paths for static linking.
 # libproxysql.a already bundles most deps on Darwin (see src/Makefile).
@@ -202,7 +216,7 @@ LIBPROXYSQLAR_FULL := $(LIBPROXYSQLAR) \
 	$(POSTGRESQL_PATH)/common/libpgcommon.a \
 	$(POSTGRESQL_PATH)/port/libpgport.a
 
-MYLIBS := -lssl -lcrypto -lpthread -lm -lz \
+MYLIBS := $(OPENSSL_FORCE_LOAD_LIBS) -lpthread -lm -lz \
 		  -liconv -lgnutls -lprometheus-cpp-pull -lprometheus-cpp-core -luuid \
 		  -lzstd $(LWGCOV)
 else
@@ -215,13 +229,14 @@ LIBPROXYSQLAR_FULL := $(LIBPROXYSQLAR)
 # pull every .oo in twice, producing ODR violations under ASAN
 # (`detect_odr_violation=1` aborts at startup; ld is silenced by
 # `--allow-multiple-definition`).
-MYLIBS := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -lcurl -lssl -lcrypto -luuid \
+MYLIBS := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -luuid \
 		  -Wl,-Bstatic -lconfig -lsqlparser -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre \
 		  -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev \
 		  -lprometheus-cpp-pull -lprometheus-cpp-core \
-		  -Wl,-Bstatic -lpq -lpgcommon -lpgport \
+		  $(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a \
+		  $(LIBUSUAL_LDIR)/libusual.a $(CURL_STATIC_DEPS) \
 		  -Wl,-Bdynamic -lpthread -lm -lz -lzstd -lrt -ldl \
-		  -lscram -lusual -Wl,--allow-multiple-definition \
+		  -Wl,--allow-multiple-definition \
 		  $(LWGCOV)
 endif
 
@@ -245,6 +260,26 @@ ifeq ($(UNAME_S),Linux)
 	MYLIBS += -Wl,-Bstatic -ljemalloc -Wl,-Bdynamic
 endif
 endif
+
+# The real GenAI plugin is loaded with RTLD_NOW after this test executable is
+# linked. No reference from the host can make the static linker pull the curl
+# members needed only by that future plugin, so this one loader host mirrors
+# the production executable's ownership contract. Keep the ordinary standalone
+# unit links above unchanged.
+GENAI_PLUGIN_HOST_WHOLE_LIBPROXYSQL = $(WHOLE_LIBPROXYSQL)
+ifeq ($(UNAME_S),Darwin)
+GENAI_PLUGIN_HOST_WHOLE_LIBPROXYSQL = $(filter-out $(CURL_STATIC_LIB),$(WHOLE_LIBPROXYSQL))
+endif
+GENAI_PLUGIN_HOST_BASE_LIBS = $(filter-out \
+	$(EXECUTABLE_EXPORT_FLAGS) $(CURL_STATIC_LIB) \
+	$(OPENSSL_FORCE_LOAD_LIBS) -lz -ldl,$(MYLIBS))
+GENAI_PLUGIN_HOST_DLOPEN_LIBS :=
+ifeq ($(UNAME_S),Linux)
+GENAI_PLUGIN_HOST_DLOPEN_LIBS := -ldl
+endif
+GENAI_PLUGIN_HOST_OWNED_LIBS = $(EXECUTABLE_EXPORT_FLAGS) \
+	$(call force_load_archives,$(CURL_STATIC_LIB)) \
+	$(OPENSSL_FORCE_LOAD_LIBS) -lz $(GENAI_PLUGIN_HOST_DLOPEN_LIBS)
 
 
 # ===========================================================================
@@ -286,14 +321,17 @@ ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c proxysql_ed25519_verify
 	PSQLED25519 := -DPROXYSQLED25519
 endif
 
-# PROXYSQL31 is the parent tier flag for FFTO + TSDB; the codebase has no
-# #ifdef PROXYSQL31 blocks of its own, so autodetect it as "at least one
-# of FFTO or TSDB is enabled".  This matches the top-level Makefile's
-# cascade (PROXYSQL31=1 => PROXYSQLFFTO=1 && PROXYSQLTSDB=1).
+# PROXYSQL31 changes shared class layouts, so detect a symbol emitted only by
+# the PROXYSQL31-gated hostgroup statistics implementation. Do not infer it
+# from child feature flags: FFTO or TSDB can be enabled independently.
 PSQL31 :=
-ifneq ($(PROXYSQLFFTO)$(PROXYSQLTSDB),)
+ifeq ($(PROXYSQL31),1)
+	PSQL31 := -DPROXYSQL31
+else
+ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c SQL3_Hostgroup_Connection_Pool),0)
 	PROXYSQL31 := 1
 	PSQL31 := -DPROXYSQL31
+endif
 endif
 
 ifneq ($(PROXYSQL40),)
@@ -401,7 +439,9 @@ $(LIBPROXYSQLAR): FORCE
 # Unit test targets
 # ===========================================================================
 
-UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
+UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
+	cacert_load_and_verify_duration_parser_unit-t \
+	query_cache_unit-t query_processor_unit-t \
 	protocol_unit-t auth_unit-t connection_pool_unit-t \
 	rule_matching_unit-t hostgroups_unit-t monitor_health_unit-t \
 	pgsql_command_complete_unit-t \
@@ -455,7 +495,7 @@ UNIT_TESTS := smoke_test-t query_cache_unit-t query_processor_unit-t \
 	mcp_client_unit-t
 
 ifeq ($(PROXYSQL31),1)
-UNIT_TESTS += caching_sha2_rsa_unit-t
+UNIT_TESTS += caching_sha2_rsa_unit-t hostgroup_pool_stats_unit-t
 endif
 
 ifeq ($(PROXYSQLED25519),1)
@@ -464,18 +504,7 @@ endif
 
 # GenAI units declared in the ai-g1/ai-g2 TAP shards. Keep this focused list
 # separate from the three plugin-lifecycle units, which are not group members.
-AI_GENAI_UNIT_TESTS := \
-	genai_config_query_unit-t \
-	genai_discovery_schema_unit-t \
-	genai_fts_string_unit-t \
-	genai_llm_clients_unit-t \
-	genai_mcp_endpoint_unit-t \
-	genai_mcp_thread_unit-t \
-	genai_mysql_catalog_unit-t \
-	genai_query_handler_unit-t \
-	genai_rag_fetch_from_source_unit-t \
-	genai_stats_parsing_unit-t \
-	genai_thread_unit-t
+include $(PROXYSQL_PATH)/test/tap/ai_genai_unit_tests.mk
 
 # Plugin-chassis + mysqlx-plugin unit tests — built only when
 # libproxysql.a was compiled with -DPROXYSQL40 (autodetected higher up
@@ -567,9 +596,14 @@ ezoption_parser_unit-t: ezoption_parser_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noi
 		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include \
 		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
 
+hostgroup_pool_stats_unit-t: hostgroup_pool_stats_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include \
+		$(STDCPP) -O0 -ggdb -DPROXYSQL31 $(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
+
 mcp_client_unit-t: mcp_client_unit-t.cpp $(TAP_PATH)/mcp_client.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
 	$(CXX) $< $(TAP_PATH)/mcp_client.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
-		$(IDIRS) $(LDIRS) $(OPT) -Wl,-Bdynamic -lcurl -lpthread -o $@
+		$(IDIRS) $(LDIRS) $(OPT) $(MCP_CLIENT_LIBS) -o $@
 
 plugin_manager_unit-t: plugin_manager_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
@@ -670,13 +704,13 @@ mysqlx_protocol_unit-t: mysqlx_protocol_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysq
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
-		$(MYLIBS) $(PROTOBUF_LIB) -lssl -lcrypto $(ALLOW_MULTI_DEF) -o $@
+		$(MYLIBS) $(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -o $@
 
 mysqlx_protocol_socket_unit-t: mysqlx_protocol_socket_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
-		$(MYLIBS) $(PROTOBUF_LIB) -lssl -lcrypto $(ALLOW_MULTI_DEF) -o $@
+		$(MYLIBS) $(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -o $@
 
 test_mysqlx_admin_tables-t: ../test_mysqlx_admin_tables-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) mysqlx_plugin_build
 	$(CXX) ../test_mysqlx_admin_tables-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
@@ -696,55 +730,55 @@ mysqlx_connection_unit-t: mysqlx_connection_unit-t.cpp $(PROXYSQL_PATH)/plugins/
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) \
 		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) \
-		$(PROTOBUF_LIB) -lssl -lcrypto $(ALLOW_MULTI_DEF) -o $@
+		$(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -o $@
 
 mysqlx_session_unit-t: mysqlx_session_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_session.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_thread.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_session.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_thread.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
-		$(MYLIBS) $(PROTOBUF_LIB) -lssl -lcrypto $(ALLOW_MULTI_DEF) -lpthread -o $@
+		$(MYLIBS) $(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -lpthread -o $@
 
 mysqlx_thread_unit-t: mysqlx_thread_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_thread.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_session.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_thread.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_session.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
-		$(MYLIBS) $(PROTOBUF_LIB) -lssl -lcrypto $(ALLOW_MULTI_DEF) -lpthread -o $@
+		$(MYLIBS) $(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -lpthread -o $@
 
 mysqlx_message_dispatch_unit-t: mysqlx_message_dispatch_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_thread.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_session.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_thread.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_session.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
-		$(MYLIBS) $(PROTOBUF_LIB) -lssl -lcrypto $(ALLOW_MULTI_DEF) -lpthread -o $@
+		$(MYLIBS) $(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -lpthread -o $@
 
 mysqlx_concurrent_unit-t: mysqlx_concurrent_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_thread.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_session.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_thread.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_session.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
-		$(MYLIBS) $(PROTOBUF_LIB) -lssl -lcrypto $(ALLOW_MULTI_DEF) -lpthread -o $@
+		$(MYLIBS) $(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -lpthread -o $@
 
 mysqlx_backend_auth_unit-t: mysqlx_backend_auth_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
-		$(MYLIBS) $(PROTOBUF_LIB) -lssl -lcrypto $(ALLOW_MULTI_DEF) -lpthread -o $@
+		$(MYLIBS) $(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -lpthread -o $@
 
 mysqlx_credential_verify_unit-t: mysqlx_credential_verify_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
-		$(MYLIBS) $(PROTOBUF_LIB) -lssl -lcrypto $(ALLOW_MULTI_DEF) -o $@
+		$(MYLIBS) $(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -o $@
 
 mysqlx_robustness_unit-t: mysqlx_robustness_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_session.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_thread.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_listener_reconcile.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_session.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_thread.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_listener_reconcile.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
-		$(MYLIBS) $(PROTOBUF_LIB) -lssl -lcrypto $(ALLOW_MULTI_DEF) -lpthread -o $@
+		$(MYLIBS) $(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -lpthread -o $@
 
 mysqlx_tls_unit-t: mysqlx_tls_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
-		$(MYLIBS) $(PROTOBUF_LIB) -lssl -lcrypto $(ALLOW_MULTI_DEF) -lpthread -o $@
+		$(MYLIBS) $(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -lpthread -o $@
 
 # X Protocol compression negotiation + decompression / compression wire-up.
 # Same source-set as mysqlx_session_unit-t since it drives MysqlxSession via
@@ -757,7 +791,7 @@ mysqlx_compression_unit-t: mysqlx_compression_unit-t.cpp $(PROXYSQL_PATH)/plugin
 		-I$(ZSTD_IDIR) -I$(PROXYSQL_PATH)/deps/lz4/lz4/lib \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(LZ4_LDIR)/liblz4.a \
-		$(MYLIBS) $(PROTOBUF_LIB) -lssl -lcrypto $(ALLOW_MULTI_DEF) -lpthread -o $@
+		$(MYLIBS) $(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -lpthread -o $@
 mysql_resolution_unit-t: mysql_resolution_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
 		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include \
@@ -822,8 +856,9 @@ $(GENAI_PLUGIN_SO):
 genai_plugin_load_unit-t: genai_plugin_load_unit-t.cpp $(GENAI_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/lib/ProxySQL_PluginManager.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		-DPROXYSQL40 -DPROXYSQL_GENAI_PLUGIN_PATH=\"$(GENAI_PLUGIN_SO)\" $(GENAI_PLUGIN_DEFINES) \
-		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
-		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+		$(IDIRS) $(LDIRS) $(OPT) $(GENAI_PLUGIN_HOST_WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(GENAI_PLUGIN_HOST_BASE_LIBS) $(GENAI_PLUGIN_HOST_OWNED_LIBS) \
+		$(ALLOW_MULTI_DEF) -o $@
 
 # Compile the plugin source set once for the eleven shard-declared tests. The
 # object path preserves each source's plugins/genai/src/... location, avoiding
@@ -852,6 +887,8 @@ ifeq ($(UNAME_S),Linux)
 # Let the RSA unit test observe the exact flock attempt without a production hook.
 caching_sha2_rsa_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=flock
 endif
+
+vendored_openssl_version_unit-t: private OPT += -DPROXYSQL_VENDORED_OPENSSL_VERSION=\"$(OPENSSL_VERSION)\"
 
 # Pattern rule: all unit tests use the same compile + link flags.
 # Each test binary is built from its .cpp source, linked against

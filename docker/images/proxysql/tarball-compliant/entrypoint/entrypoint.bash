@@ -53,28 +53,6 @@ exec "${BIN_DIR}/proxysql.bin" "$@"
 EOF
 chmod 0755 "pkgroot/${DIR_NAME}/bin/proxysql"
 
-bundle_runtime_library() {
-    local soname="$1"
-    local resolved_path
-    local library_name
-
-    resolved_path=$(ldd src/proxysql | awk -v soname="${soname}" '$1 == soname && $2 == "=>" { print $3; exit }')
-    if [[ -z "${resolved_path}" || ! -f "${resolved_path}" ]]; then
-        echo "ERROR: unable to resolve ${soname} for the tarball" >&2
-        exit 1
-    fi
-
-    resolved_path=$(readlink -f "${resolved_path}")
-    library_name=$(basename "${resolved_path}")
-    cp "${resolved_path}" "pkgroot/${DIR_NAME}/lib/${library_name}"
-    if [[ "${library_name}" != "${soname}" ]]; then
-        ln -s "${library_name}" "pkgroot/${DIR_NAME}/lib/${soname}"
-    fi
-}
-
-bundle_runtime_library libssl.so.3
-bundle_runtime_library libcrypto.so.3
-
 cp etc/proxysql.cnf "pkgroot/${DIR_NAME}/etc/"
 cp etc/logrotate.d/proxysql "pkgroot/${DIR_NAME}/etc/logrotate.d/"
 cp tools/proxysql_galera_checker.sh tools/proxysql_galera_writer.pl "pkgroot/${DIR_NAME}/share/proxysql/tools/"

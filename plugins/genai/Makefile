@@ -121,6 +121,8 @@ $(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) | $(ODIR)
 	@mkdir -p $(dir $@)
 	$(CXX) -c -o $@ $< $(CXXFLAGS) $(IDIRS)
 
+# The executable force-loads and exports vendored libcurl. Keep curl unresolved
+# here so the process has one libcurl owner and one OpenSSL owner.
 $(PLUGIN_SO): $(OBJS)
 	$(CXX) -shared -o $@ $^ $(CXXFLAGS) $(PLUGIN_LDFLAGS)
 
