@@ -13,6 +13,12 @@ fail() {
 	exit 1
 }
 
+clear_git_local_environment() {
+	while IFS= read -r variable_name; do
+		unset "${variable_name}"
+	done < <(git rev-parse --local-env-vars)
+}
+
 [[ -x "${hook}" ]] || fail "${hook} must exist and be executable"
 [[ -x "${runner}" ]] || fail "${runner} must exist and be executable"
 grep -Fq "test/infra/control/run-ci-lint.bash" "${workflow}" \
@@ -35,6 +41,7 @@ grep -Fq "envsubst" <<<"${missing_envsubst_output}" \
 grep -Eq 'gettext(-base)?' <<<"${missing_envsubst_output}" \
 	|| fail "missing envsubst error must name the package to install"
 
+clear_git_local_environment
 git -C "${fixture}" init -q
 mkdir -p "${fixture}/.githooks" "${fixture}/test/infra/control" "${fixture}/nested"
 cp "${hook}" "${fixture}/.githooks/pre-push"
@@ -48,6 +55,7 @@ chmod +x "${fixture}/test/infra/control/run-ci-lint.bash"
 
 probe="${fixture}/probe"
 (
+	clear_git_local_environment
 	cd "${fixture}/nested"
 	LINT_HOOK_PROBE="${probe}" LINT_HOOK_STATUS=0 \
 		"${fixture}/.githooks/pre-push" origin example.invalid
@@ -57,6 +65,7 @@ fixture_root="$(cd "${fixture}" && pwd -P)"
 	|| fail "hook must execute the lint runner from the worktree root"
 
 if (
+	clear_git_local_environment
 	cd "${fixture}/nested"
 	LINT_HOOK_PROBE="${probe}" LINT_HOOK_STATUS=23 \
 		"${fixture}/.githooks/pre-push" origin example.invalid
