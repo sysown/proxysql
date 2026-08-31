@@ -876,12 +876,158 @@ static ExtQCaseRunResult run_describe_cached(PGconn* admin, bool first_native,
 	return {result_match, fell_back, det.str()};
 }
 
+// ===========================================================================
+// DEALLOCATE-forwarding regression (ABSOLUTE, not differential).
+//
+// ProxySQL used to intercept every single-statement DEALLOCATE and resolve the
+// name only against local_stmts -- which tracks extended-query (binary)
+// prepares. A name from a SQL-level PREPARE is never in that map, so ProxySQL
+// answered with a fabricated "prepared statement does not exist" and never
+// forwarded the command, even though the statement was alive on the backend.
+//
+// The differential P0/P7 cases above cannot catch this: the interception lives
+// in the protocol-independent client handler, so libpq-through-ProxySQL and
+// native-through-ProxySQL are affected identically and still match each other.
+// These checks assert the real-PostgreSQL outcome directly. Driven on the
+// native path here; the libpq-path equivalent lives in
+// pgsql-extended_query_protocol_test-t (test_deallocate_sql_prepared_via_simple_query).
+// ===========================================================================
+static const int N_DEALLOC_REG_PER_MODE = 6;
+
+static void run_dealloc_regression(PGconn* admin, bool native,
+                                   const std::vector<ServerRow>& saved) {
+	const char* m = native ? "native" : "libpq";
+	if (!setNativeMode(admin, native) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		for (int i = 0; i < N_DEALLOC_REG_PER_MODE; i++)
+			ok(false, "[%s] dealloc-regression: admin setup failed", m);
+		return;
+	}
+	PGConnPtr c = open_client_conn();
+	if (!c || PQstatus(c.get()) != CONNECTION_OK) {
+		for (int i = 0; i < N_DEALLOC_REG_PER_MODE; i++)
+			ok(false, "[%s] dealloc-regression: client connect failed", m);
+		return;
+	}
+	PGconn* cc = c.get();
+
+	// 1. A SQL-level PREPARE succeeds (forwarded to the backend as usual).
+	{ PGresult* r = PQexec(cc, "PREPARE dealloc_reg AS SELECT 42");
+	  ok(PQresultStatus(r) == PGRES_COMMAND_OK,
+	     "[%s] SQL PREPARE dealloc_reg -> %s", m, PQresStatus(PQresultStatus(r)));
+	  PQclear(r); }
+
+	// 2. EXECUTE returns the row: the statement is genuinely live on the backend.
+	{ PGresult* r = PQexec(cc, "EXECUTE dealloc_reg");
+	  bool good = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1
+	              && std::string(PQgetvalue(r, 0, 0)) == "42";
+	  ok(good, "[%s] EXECUTE dealloc_reg returns 42", m);
+	  PQclear(r); }
+
+	// 3. THE FIX: DEALLOCATE of a SQL-prepared statement is forwarded and
+	//    succeeds, instead of a fabricated "does not exist" error.
+	{ PGresult* r = PQexec(cc, "DEALLOCATE dealloc_reg");
+	  ok(PQresultStatus(r) == PGRES_COMMAND_OK,
+	     "[%s] DEALLOCATE dealloc_reg succeeds (forwarded, not fabricated) -> %s",
+	     m, PQresStatus(PQresultStatus(r)));
+	  PQclear(r); }
+
+	// 4. It really was deallocated on the backend: a second EXECUTE now fails.
+	{ PGresult* r = PQexec(cc, "EXECUTE dealloc_reg");
+	  ok(PQresultStatus(r) == PGRES_FATAL_ERROR,
+	     "[%s] EXECUTE after DEALLOCATE fails, statement is gone -> %s",
+	     m, PQresStatus(PQresultStatus(r)));
+	  PQclear(r); }
+
+	// 5. A mistyped/unknown name returns the backend's real error (not silent OK).
+	{ PGresult* r = PQexec(cc, "DEALLOCATE dealloc_reg_never_prepared");
+	  ok(PQresultStatus(r) == PGRES_FATAL_ERROR,
+	     "[%s] DEALLOCATE of an unknown name errors -> %s",
+	     m, PQresStatus(PQresultStatus(r)));
+	  PQclear(r); }
+
+	// 6. ...and the session is still usable afterwards: a typo must not wedge it
+	//    or lock the connection onto a hostgroup.
+	{ PGresult* r = PQexec(cc, "SELECT 1");
+	  bool good = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1
+	              && std::string(PQgetvalue(r, 0, 0)) == "1";
+	  ok(good, "[%s] session still usable after a bogus DEALLOCATE", m);
+	  PQclear(r); }
+}
+
+// ===========================================================================
+// Cross-protocol DEALLOCATE (the tracked side of the same fix).
+//
+// A statement prepared via the EXTENDED (binary) protocol -- PQprepare -- is
+// tracked by ProxySQL in local_stmts and RENAMED on the backend
+// (proxysql_ps_<id>). A SQL-text DEALLOCATE of its client name must therefore
+// stay handled LOCALLY (client_close finds it) and must NOT be forwarded:
+// forwarding the client name would fail on the backend, which knows it only by
+// the renamed name. This guards that the DEALLOCATE-forwarding fix draws the
+// line at the tracked/untracked boundary, not at "any DEALLOCATE".
+// ===========================================================================
+static const int N_DEALLOC_XPROTO_PER_MODE = 5;
+
+static void run_dealloc_xproto_regression(PGconn* admin, bool native,
+                                          const std::vector<ServerRow>& saved) {
+	const char* m = native ? "native" : "libpq";
+	if (!setNativeMode(admin, native) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		for (int i = 0; i < N_DEALLOC_XPROTO_PER_MODE; i++)
+			ok(false, "[%s] xproto-dealloc: admin setup failed", m);
+		return;
+	}
+	PGConnPtr c = open_client_conn();
+	if (!c || PQstatus(c.get()) != CONNECTION_OK) {
+		for (int i = 0; i < N_DEALLOC_XPROTO_PER_MODE; i++)
+			ok(false, "[%s] xproto-dealloc: client connect failed", m);
+		return;
+	}
+	PGconn* cc = c.get();
+
+	// 1. Named binary prepare (extended protocol): ProxySQL tracks it and renames
+	//    it on the backend.
+	{ PGresult* r = PQprepare(cc, "xp_bp", "SELECT 77", 0, nullptr);
+	  ok(PQresultStatus(r) == PGRES_COMMAND_OK,
+	     "[%s] binary PQprepare xp_bp -> %s", m, PQresStatus(PQresultStatus(r)));
+	  PQclear(r); }
+
+	// 2. Binary execute returns the row.
+	{ PGresult* r = PQexecPrepared(cc, "xp_bp", 0, nullptr, nullptr, nullptr, 0);
+	  bool good = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1
+	              && std::string(PQgetvalue(r, 0, 0)) == "77";
+	  ok(good, "[%s] binary EXECUTE xp_bp returns 77", m);
+	  PQclear(r); }
+
+	// 3. SQL-text DEALLOCATE of the binary name is handled locally and succeeds
+	//    -- it must NOT be forwarded (the backend name differs).
+	{ PGresult* r = PQexec(cc, "DEALLOCATE xp_bp");
+	  ok(PQresultStatus(r) == PGRES_COMMAND_OK,
+	     "[%s] SQL DEALLOCATE of a binary-prepared name succeeds (handled locally) -> %s",
+	     m, PQresStatus(PQresultStatus(r)));
+	  PQclear(r); }
+
+	// 4. It is really gone: re-executing the binary statement now fails.
+	{ PGresult* r = PQexecPrepared(cc, "xp_bp", 0, nullptr, nullptr, nullptr, 0);
+	  ok(PQresultStatus(r) == PGRES_FATAL_ERROR,
+	     "[%s] binary EXECUTE after DEALLOCATE fails, statement is gone -> %s",
+	     m, PQresStatus(PQresultStatus(r)));
+	  PQclear(r); }
+
+	// 5. Session still usable.
+	{ PGresult* r = PQexec(cc, "SELECT 1");
+	  bool good = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1
+	              && std::string(PQgetvalue(r, 0, 0)) == "1";
+	  ok(good, "[%s] session still usable after cross-protocol DEALLOCATE", m);
+	  PQclear(r); }
+}
+
 int main(int /*argc*/, char** /*argv*/) {
 	auto sql_cases = build_sql_cases();
 	auto extq_cases = build_extq_cases();
 	const int n_extra_cases = 6; // EXT_MULTI_CYCLE, EXT_REUSE, EXT_GLOBAL_DEDUP, EXT_PARSE_ERR_MIDFRAME, 2x EXT_DESCRIBE_CACHED
 	int n_cases = (int)(sql_cases.size() + extq_cases.size()) + n_extra_cases;
-	plan(n_cases + 1);
+	const int n_dealloc_reg = N_DEALLOC_REG_PER_MODE;      // SQL DEALLOCATE forwarding, native path
+	const int n_dealloc_xproto = N_DEALLOC_XPROTO_PER_MODE; // binary-prepare + SQL DEALLOCATE, native path
+	plan(n_cases + 1 + n_dealloc_reg + n_dealloc_xproto);
 	if (cl.getEnv()) return exit_status();
 
 	std::string log_path = get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log";
@@ -986,5 +1132,13 @@ int main(int /*argc*/, char** /*argv*/) {
 	}
 
 	cov.emit_tap();
+
+	diag("=== DEALLOCATE-forwarding regression (native path; absolute checks) ===");
+	run_dealloc_regression(admin.get(), /*native=*/true, saved);
+
+	diag("=== Cross-protocol DEALLOCATE: binary prepare + SQL DEALLOCATE (native path) ===");
+	run_dealloc_xproto_regression(admin.get(), /*native=*/true, saved);
+	setNativeMode(admin.get(), false); // leave the proxy in the default mode
+
 	return exit_status();
 }

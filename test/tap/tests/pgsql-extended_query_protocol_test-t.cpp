@@ -3849,6 +3849,45 @@ void test_deallocate_non_existent_stmt() {
 	}
 }
 
+// Regression for the DEALLOCATE-forwarding fix (libpq path). A statement created
+// with a SQL-level PREPARE is NOT tracked in local_stmts (only the extended-query
+// Parse path records names), so ProxySQL used to answer DEALLOCATE locally with a
+// fabricated "prepared statement does not exist" and never forwarded it. It must
+// instead be forwarded to the backend and succeed. The tracked (binary-prepare)
+// side is covered by test_deallocate_having_stmt_name_via_simple_query above; the
+// native-path variants live in pgsql-native_prepared-t.
+void test_deallocate_sql_prepared_via_simple_query() {
+	diag("Test %d: Simple Query - DEALLOCATE a SQL-level PREPARE is forwarded", test_count++);
+	auto conn = create_connection(); if (!conn) return;
+
+	try {
+		conn->execute("PREPARE sql_pstmt AS SELECT 42");
+		conn->waitForReady();
+		conn->execute("EXECUTE sql_pstmt");
+		conn->waitForReady();
+
+		// DEALLOCATE of the SQL-prepared name must succeed (a CommandComplete),
+		// not a fabricated ErrorResponse.
+		conn->execute("DEALLOCATE sql_pstmt");
+		char type;
+		std::vector<uint8_t> buffer;
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::COMMAND_COMPLETE,
+		   "CommandComplete after DEALLOCATE of a SQL-prepared statement (forwarded, not fabricated)");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::READY_FOR_QUERY, "ReadyForQuery after DEALLOCATE");
+
+		// It really was deallocated on the backend: a later EXECUTE now errors.
+		conn->execute("EXECUTE sql_pstmt");
+		conn->readMessage(type, buffer);
+		ok(type == PgConnection::ERROR_RESPONSE, "EXECUTE after DEALLOCATE errors, statement is gone");
+		conn->waitForReady();
+	}
+	catch (const PgException& e) {
+		ok(false, "DEALLOCATE of a SQL-level PREPARE failed with error:%s", e.what());
+	}
+}
+
 void test_describe_portal_returns_no_data() {
 	diag("Test %d: Extended Query - Describe Returns No Data", test_count++);
 	auto conn = create_connection(); if (!conn) return;
@@ -5053,9 +5092,9 @@ int main(int argc, char** argv) {
 	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
 
 	if (cl.use_noise) {
-		plan(1061 + 3);
+		plan(1064 + 3);
 	} else {
-		plan(1061);
+		plan(1064);
 	}
 
 	std::string f_path{get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log"};
@@ -5155,6 +5194,7 @@ int main(int argc, char** argv) {
 		test_deallocate_all_via_simple_query();
 		test_deallocate_all_via_prepared();
 		test_deallocate_non_existent_stmt();
+		test_deallocate_sql_prepared_via_simple_query();
 		test_deallocate_statement_with_simple_query_mix();
 
 		// Tests for sending multiple simple queries and extended queries without waiting for response
