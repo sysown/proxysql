@@ -1271,25 +1271,39 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 #endif
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Generating handshake pkt\n");
 	assert(use_plugin_id == 0 || use_plugin_id == 2 ); // mysql_native_password or caching_sha2_password
+	constexpr size_t max_packet_payload_length = 0xFFFFFF;
+	const size_t server_version_length = strlen(server_version);
+	const size_t auth_plugin_length = strlen(plugins[use_plugin_id]);
+	const size_t payload_length_without_strings =
+		sizeof(protocol_version)
+		+ 1  // server_version terminator
+		+ sizeof(uint32_t)  // thread_id
+		+ 8  // scramble1
+		+ 1  // 0x00
+		+ sizeof(mysql_thread___server_capabilities) / 2
+		+ sizeof(uint8_t)  // charset in handshake is 1 byte
+		+ sizeof(server_status)
+		+ 3  // upper capabilities and auth-plugin-data length
+		+ 10  // filler
+		+ 12  // scramble2
+		+ 1  // 0x00
+		+ 1;  // auth plugin terminator
+	const size_t available_for_strings =
+		max_packet_payload_length - payload_length_without_strings;
+	if (auth_plugin_length > available_for_strings ||
+		server_version_length > available_for_strings - auth_plugin_length) {
+		proxy_error(
+			"Cannot generate initial handshake: server version length %zu exceeds "
+			"the MySQL packet payload limit\n",
+			server_version_length
+		);
+		return false;
+	}
+	const size_t payload_length = payload_length_without_strings
+		+ server_version_length + auth_plugin_length;
   mysql_hdr myhdr;
   myhdr.pkt_id=0;
-  myhdr.pkt_length=sizeof(protocol_version)
-    + (strlen(server_version)+1)
-    + sizeof(uint32_t)  // thread_id
-    + 8  // scramble1
-    + 1  // 0x00
-    //+ sizeof(glovars.server_capabilities)
-    //+ sizeof(glovars.server_language)
-    //+ sizeof(glovars.server_status)
-    + sizeof(mysql_thread___server_capabilities)/2
-    + sizeof(uint8_t) // charset in handshake is 1 byte
-    + sizeof(server_status)
-    + 3 // unknown stuff
-    + 10 // filler
-    + 12 // scramble2
-    + 1  // 0x00
-//    + (strlen("mysql_native_password")+1);
-    + (strlen(plugins[use_plugin_id])+1);
+	myhdr.pkt_length = static_cast<unsigned int>(payload_length);
 	sent_auth_plugin_id = (enum proxysql_auth_plugins)use_plugin_id;
 
   unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
@@ -1323,7 +1337,7 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	(*myds)->myconn->scramble_buff[sizeof(scramble)] = '\0';
 
   memcpy(_ptr+l, &protocol_version, sizeof(protocol_version)); l+=sizeof(protocol_version);
-  memcpy(_ptr+l, server_version, strlen(server_version)); l+=strlen(server_version)+1;
+	memcpy(_ptr+l, server_version, server_version_length); l+=server_version_length+1;
   memcpy(_ptr+l, &thread_id, sizeof(uint32_t)); l+=sizeof(uint32_t);
 
   int i;
@@ -1417,7 +1431,7 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   memcpy(_ptr+l, (*myds)->myconn->scramble_buff+8, 12); l+=12;
   l+=1; //0x00
   //memcpy(_ptr+l,"mysql_native_password",strlen("mysql_native_password"));
-  memcpy(_ptr+l,plugins[use_plugin_id],strlen(plugins[use_plugin_id]));
+	memcpy(_ptr+l, plugins[use_plugin_id], auth_plugin_length);
 
 	if (send==true) {
 		(*myds)->PSarrayOUT->add((void *)_ptr,size);

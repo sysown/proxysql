@@ -82,9 +82,14 @@ int test_versions_mysql(CommandLine& cl, MYSQL* admin, const vector<string>& ver
 		MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 		MYSQL* proxy = mysql_init(NULL);
+		if (proxy == nullptr) {
+			fprintf(stderr, "File %s, line %d, Error: mysql_init() failed\n", __FILE__, __LINE__);
+			return EXIT_FAILURE;
+		}
 
 		if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
+			mysql_close(proxy);
 			return EXIT_FAILURE;
 		}
 
@@ -108,9 +113,14 @@ int test_versions_admin(CommandLine& cl, MYSQL* admin, const vector<string>& ver
 		MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 		MYSQL* new_admin = mysql_init(NULL);
+		if (new_admin == nullptr) {
+			fprintf(stderr, "File %s, line %d, Error: mysql_init() failed\n", __FILE__, __LINE__);
+			return EXIT_FAILURE;
+		}
 
 		if (!mysql_real_connect(new_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(new_admin));
+			mysql_close(new_admin);
 			return EXIT_FAILURE;
 		}
 
@@ -133,9 +143,14 @@ int main(int argc, char** argv) {
 	}
 
 	MYSQL* admin = mysql_init(NULL);
+	if (admin == nullptr) {
+		fprintf(stderr, "File %s, line %d, Error: mysql_init() failed\n", __FILE__, __LINE__);
+		return EXIT_FAILURE;
+	}
 
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
+		mysql_close(admin);
 		return EXIT_FAILURE;
 	}
 

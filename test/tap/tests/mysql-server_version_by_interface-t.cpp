@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -42,6 +43,35 @@ constexpr const char* IPV4_B_VERSION = "5.7.44-interface-b";
 constexpr const char* SOCKET_VERSION = "8.1.4-interface-socket";
 constexpr const char* IPV6_VERSION = "8.1.0-interface-v6";
 constexpr const char* RELOADED_IPV4_A_VERSION = "5.7.99-reloaded";
+
+class TemporaryRuntimeDirectory {
+public:
+	TemporaryRuntimeDirectory() {
+		const string template_value =
+			(fs::temp_directory_path() / "proxysql-svbi-XXXXXX").string();
+		std::vector<char> path_template(template_value.begin(), template_value.end());
+		path_template.push_back('\0');
+		char* created = mkdtemp(path_template.data()); // NOSONAR: mkdtemp creates the directory atomically with owner-only permissions.
+		if (created != nullptr) path_ = created;
+	}
+
+	~TemporaryRuntimeDirectory() {
+		if (path_.empty()) return;
+		std::error_code cleanup_error;
+		fs::remove_all(path_, cleanup_error);
+	}
+
+	TemporaryRuntimeDirectory(const TemporaryRuntimeDirectory&) = delete;
+	TemporaryRuntimeDirectory& operator=(const TemporaryRuntimeDirectory&) = delete;
+	TemporaryRuntimeDirectory(TemporaryRuntimeDirectory&&) = delete;
+	TemporaryRuntimeDirectory& operator=(TemporaryRuntimeDirectory&&) = delete;
+
+	bool valid() const { return !path_.empty(); }
+	const fs::path& path() const { return path_; }
+
+private:
+	fs::path path_ {};
+};
 
 bool ipv6_loopback_available() {
 	const int fd = socket(AF_INET6, SOCK_STREAM, 0);
@@ -202,8 +232,6 @@ int prepare_runtime(
 	bool use_ipv6
 ) {
 	try {
-		fs::remove_all(runtime_dir);
-		fs::create_directories(runtime_dir);
 		std::ofstream cfg { config_file };
 		if (!cfg.is_open()) return EXIT_FAILURE;
 
@@ -249,9 +277,12 @@ int main(int, char**) {
 
 	// Keep the Unix listener below sockaddr_un::sun_path even when TAP_WORKDIR
 	// is an absolute repository path supplied by the isolated test harness.
-	const fs::path runtime_dir {
-		fs::temp_directory_path() / ("proxysql-svbi-" + std::to_string(getpid()))
-	};
+	TemporaryRuntimeDirectory temporary_runtime_directory;
+	if (!temporary_runtime_directory.valid()) {
+		diag("Failed to create a private ProxySQL runtime directory: %s", strerror(errno));
+		return EXIT_FAILURE;
+	}
+	const fs::path& runtime_dir = temporary_runtime_directory.path();
 	const fs::path config_file { runtime_dir / "proxysql.cfg" };
 	const fs::path mysql_socket { runtime_dir / "mysql.sock" };
 	if (prepare_runtime(cl, runtime_dir, config_file, mysql_socket, use_ipv6) != EXIT_SUCCESS) {
@@ -428,6 +459,5 @@ int main(int, char**) {
 		diag("Secondary ProxySQL stdout:\n%s", launch_stdout.c_str());
 		diag("Secondary ProxySQL stderr:\n%s", launch_stderr.c_str());
 	}
-	fs::remove_all(runtime_dir);
 	return exit_status();
 }

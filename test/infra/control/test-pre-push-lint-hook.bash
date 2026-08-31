@@ -17,9 +17,24 @@ fail() {
 [[ -x "${runner}" ]] || fail "${runner} must exist and be executable"
 grep -Fq "test/infra/control/run-ci-lint.bash" "${workflow}" \
 	|| fail "CI lint workflow must invoke the shared runner"
+grep -Eq '^[[:space:]]*test/infra/control/test-pre-push-lint-hook\.bash([[:space:]]|$)' "${runner}" \
+	|| fail "shared runner must execute the pre-push lint hook contract"
 
 fixture="$(mktemp -d)"
 trap 'rm -rf "${fixture}"' EXIT
+
+mkdir -p "${fixture}/missing-envsubst-bin"
+ln -s "$(command -v dirname)" "${fixture}/missing-envsubst-bin/dirname"
+if missing_envsubst_output="$(
+	PATH="${fixture}/missing-envsubst-bin" /bin/bash "${runner}" 2>&1
+)"; then
+	fail "shared runner must fail when envsubst is unavailable"
+fi
+grep -Fq "envsubst" <<<"${missing_envsubst_output}" \
+	|| fail "missing envsubst error must name the unavailable command"
+grep -Eq 'gettext(-base)?' <<<"${missing_envsubst_output}" \
+	|| fail "missing envsubst error must name the package to install"
+
 git -C "${fixture}" init -q
 mkdir -p "${fixture}/.githooks" "${fixture}/test/infra/control" "${fixture}/nested"
 cp "${hook}" "${fixture}/.githooks/pre-push"
@@ -37,7 +52,8 @@ probe="${fixture}/probe"
 	LINT_HOOK_PROBE="${probe}" LINT_HOOK_STATUS=0 \
 		"${fixture}/.githooks/pre-push" origin example.invalid
 ) || fail "hook must return success when the lint runner succeeds"
-[[ "$(<"${probe}")" == "${fixture}" ]] \
+fixture_root="$(cd "${fixture}" && pwd -P)"
+[[ "$(<"${probe}")" == "${fixture_root}" ]] \
 	|| fail "hook must execute the lint runner from the worktree root"
 
 if (

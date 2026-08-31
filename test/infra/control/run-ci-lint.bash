@@ -4,6 +4,12 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../../.." && pwd)"
+
+if ! command -v envsubst >/dev/null 2>&1; then
+	echo "CI lint prerequisite missing: envsubst (install gettext-base on Debian/Ubuntu or gettext on macOS)." >&2
+	exit 1
+fi
+
 cd "${repo_root}"
 
 run_check() {
@@ -27,6 +33,8 @@ run_check "Check cluster simulator coverage contract" \
 	test/infra/control/test-cluster-simulator-coverage.bash
 run_check "Check coverage collector invariants" \
 	test/infra/control/validate-coverage-gcov-toolchain.bash
+run_check "Check pre-push lint hook contract" \
+	test/infra/control/test-pre-push-lint-hook.bash
 run_check "Check package CI verification hook" \
 	test/infra/control/test-package-ci-verification.bash
 run_check "Check package install verifier" \

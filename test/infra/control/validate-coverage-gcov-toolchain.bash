@@ -25,7 +25,15 @@ for file in "${runner}" "${multi}"; do
 done
 grep -Eq -- '-s .*coverage_file' "${runner}"
 grep -Eq -- '-s .*GROUP_INFO' "${multi}"
-grep -Eq 'run-ci-lint\.bash' "${lint_workflow}"
-grep -Eq 'validate-coverage-gcov-toolchain\.bash' "${lint_runner}"
+grep -Eq '^[[:space:]]*run:[[:space:]]+test/infra/control/run-ci-lint\.bash[[:space:]]*$' "${lint_workflow}"
+awk '
+	/^[[:space:]]*run_check[[:space:]]+"Check coverage collector invariants"[[:space:]]*\\[[:space:]]*$/ {
+		getline
+		if ($0 ~ /^[[:space:]]*test\/infra\/control\/validate-coverage-gcov-toolchain\.bash[[:space:]]*$/) {
+			found = 1
+		}
+	}
+	END { exit(found ? 0 : 1) }
+' "${lint_runner}"
 
 "${root}/test/infra/control/test-final-gcov-dump.bash"

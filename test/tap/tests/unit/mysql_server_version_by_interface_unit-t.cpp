@@ -14,7 +14,7 @@ static void test_empty_catalog() {
 
 static void test_exact_interface_resolution() {
 	const auto parsed = parse_mysql_server_version_by_interface(
-		R"({"127.0.0.1:6033":"8.0.30-a","[::1]:6033":"8.0.31-v6","/tmp/proxysql.sock":"8.4.1-socket"})"
+		R"({"127.0.0.1:6033":"8.0.30-a","[::1]:6033":"8.0.31-v6","/run/proxysql.sock":"8.4.1-socket"})"
 	);
 
 	ok(parsed.accepted(), "a catalog with TCP and Unix interfaces is accepted");
@@ -27,7 +27,7 @@ static void test_exact_interface_resolution() {
 		*parsed.catalog, "[::1]:6033", "8.0.11") == "8.0.31-v6",
 		"an IPv6 interface resolves by its original bracketed text");
 	ok(resolve_mysql_server_version_for_interface(
-		*parsed.catalog, "/tmp/proxysql.sock", "8.0.11") == "8.4.1-socket",
+		*parsed.catalog, "/run/proxysql.sock", "8.0.11") == "8.4.1-socket",
 		"a Unix socket resolves its mapped version");
 	ok(resolve_mysql_server_version_for_interface(
 		*parsed.catalog, "127.0.0.1:6034", "8.0.11") == "8.0.11",

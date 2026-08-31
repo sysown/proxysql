@@ -43,7 +43,7 @@
 - Create `test/tap/tests/mysql-server_version_by_interface-t.cpp`: self-launched multi-listener end-to-end coverage without backend dependencies.
 - Modify `test/tap/tests/test_cluster_sync-t.cpp`: prove ordinary catalog sync independently from `mysql-interfaces`.
 
-### Task 1: Create an isolated implementation worktree
+## Task 1: Create an isolated implementation worktree
 
 **Files:**
 
@@ -73,7 +73,7 @@ git -C /data/rene/proxysql7/proxysql-server-version-by-interface status --short 
 
 Expected: the feature branch is based on the fetched `origin/v3.0` and the new worktree is clean.
 
-### Task 2: Build and test the JSON catalog as an isolated unit
+## Task 2: Build and test the JSON catalog as an isolated unit
 
 **Files:**
 
@@ -224,7 +224,7 @@ git add \
 git commit -m "feat: add interface server version catalog"
 ```
 
-### Task 3: Register the variable and make LOAD atomic
+## Task 3: Register the variable and make LOAD atomic
 
 **Files:**
 
@@ -364,7 +364,7 @@ git add include/MySQL_Thread.h lib/MySQL_Thread.cpp \
 git commit -m "feat: register interface server version variable"
 ```
 
-### Task 4: Resolve and pin the version on the accepting listener
+## Task 4: Resolve and pin the version on the accepting listener
 
 **Files:**
 
@@ -413,7 +413,7 @@ mysql-server_version: 8.0.11
 mysql-server_version_by_interface:
   127.0.0.1:36084 -> 8.0.30-interface-a
   127.0.0.2:36084 -> 5.7.44-interface-b
-  <runtime-dir>/proxysql.sock -> 8.4.1-interface-socket
+  <runtime-dir>/proxysql.sock -> 8.1.4-interface-socket
   [::1]:36086 -> 8.1.0-interface-v6 when enabled
   192.0.2.10:49999 -> 9.9.9-unused
 ```
@@ -544,7 +544,7 @@ git add \
 git commit -m "feat: advertise versions by MySQL listener"
 ```
 
-### Task 5: Keep internal frontend behavior consistent for the session lifetime
+## Task 5: Keep internal frontend behavior consistent for the session lifetime
 
 **Files:**
 
@@ -629,7 +629,7 @@ git add lib/MySQL_Session.cpp \
 git commit -m "fix: pin frontend version for internal responses"
 ```
 
-### Task 6: Prove persistence and ordinary cluster synchronization
+## Task 6: Prove persistence and ordinary cluster synchronization
 
 **Files:**
 
@@ -700,7 +700,7 @@ git add \
 git commit -m "test: cover interface version persistence and sync"
 ```
 
-### Task 7: Verify both feature tiers and review scope
+## Task 7: Verify both feature tiers and review scope
 
 **Files:**
 
@@ -799,7 +799,7 @@ Confirm explicitly:
 
 If verification required a focused correction, stage only its files and commit it with a message describing that correction. If no correction was needed, do not create an empty commit.
 
-### Task 8: Open the replacement PR, then close PR #4784
+## Task 8: Open the replacement PR, then close PR #4784
 
 **Files:**
 
