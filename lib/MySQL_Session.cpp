@@ -5042,29 +5042,34 @@ int MySQL_Session::enter_permanent_fast_forward(PtrSize_t& pkt, int destination_
 }
 
 int MySQL_Session::GPFC_QueryRule_SwitchToFastForward(PtrSize_t& pkt) {
-	if (client_myds->myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION)) {
-		const char* message = "Query-rule fast-forward does not support compressed frontend sessions";
+	auto reject_transition = [this, &pkt](char* message) {
+		char sql_state[] = "HY000";
 		client_myds->DSS = STATE_QUERY_SENT_NET;
 		client_myds->myprot.generate_pkt_ERR(true, nullptr, nullptr,
-			client_myds->pkt_sid + 1, 1815, (char*)"HY000", (char*)message, true);
+			client_myds->pkt_sid + 1, 1815, sql_state, message, true);
 		RequestEnd(nullptr, 1815, message);
 		l_free(pkt.size, pkt.ptr);
 		pkt = {};
 		return -1;
+	};
+
+	if (client_myds->myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION)) {
+		char message[] = "Query-rule fast-forward does not support compressed frontend sessions";
+		return reject_transition(message);
+	}
+	if (client_myds->PSarrayIN->len) {
+		char message[] = "Query-rule fast-forward does not support pipelined client packets";
+		return reject_transition(message);
 	}
 
 	PtrSize_t reconstructed {};
 	if (!reconstruct_fast_forward_query(pkt, reconstructed)) {
-		const char* message = "Unable to reconstruct COM_QUERY for fast-forward";
-		client_myds->DSS = STATE_QUERY_SENT_NET;
-		client_myds->myprot.generate_pkt_ERR(true, nullptr, nullptr,
-			client_myds->pkt_sid + 1, 1815, (char*)"HY000", (char*)message, true);
-		RequestEnd(nullptr, 1815, message);
-		l_free(pkt.size, pkt.ptr);
-		pkt = {};
-		return -1;
+		char message[] = "Unable to reconstruct COM_QUERY for fast-forward";
+		return reject_transition(message);
 	}
 	if (reconstructed.ptr != pkt.ptr) {
+		CurrentQuery.QueryPointer = nullptr;
+		CurrentQuery.QueryLength = 0;
 		l_free(pkt.size, pkt.ptr);
 		pkt = reconstructed;
 	}
