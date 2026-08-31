@@ -83,6 +83,7 @@ CompiledMysqlConfig ConfigCompiler::compile_topology(const DesiredTopology& topo
 	if (input.generation == 0) throw std::invalid_argument("configuration generation is zero");
 	CompiledMysqlConfig config;
 	config.generation = input.generation;
+	config.users = input.users;
 	for (const std::string& role : mysql_router_hostgroup_roles()) {
 		config.owned_hostgroups.push_back(hostgroups.at(role));
 		config.hostgroup_attributes.push_back({hostgroups.at(role),
@@ -155,13 +156,27 @@ const ProxySQL_PluginMysqlConfigPlan& CompiledMysqlConfig::plan() const {
 			nullptr, false, row.re_modifiers.c_str(), row.destination_hostgroup,
 			row.apply, row.comment.c_str()});
 	}
+	user_rows_.clear();
+	user_wire_comments_.clear();
+	user_wire_comments_.reserve(users.size());
+	for (const auto& row : users) {
+		user_wire_comments_.push_back(row.release
+			? proxysql_plugin_release_user_comment(row.comment) : row.comment);
+	}
+	for (size_t i = 0; i < users.size(); ++i) {
+		const auto& row = users[i];
+		user_rows_.push_back({row.username.c_str(), row.password.c_str(), row.active,
+			row.use_ssl, row.default_hostgroup, row.default_schema.c_str(), row.schema_locked,
+			row.transaction_persistent, row.fast_forward, row.frontend, row.backend,
+			row.max_connections, row.attributes.c_str(), user_wire_comments_[i].c_str()});
+	}
 	interface_rows_.clear();
 	for (const std::string& value : interfaces) interface_rows_.push_back(value.c_str());
 	plan_ = {"mysql_router", generation,
 		owned_hostgroups.data(), owned_hostgroups.size(),
 		server_rows_.data(), server_rows_.size(), nullptr, 0,
 		gr_rows_.data(), gr_rows_.size(), attribute_rows_.data(), attribute_rows_.size(),
-		nullptr, 0, rule_rows_.data(), rule_rows_.size(),
+		user_rows_.data(), user_rows_.size(), rule_rows_.data(), rule_rows_.size(),
 		interface_rows_.data(), interface_rows_.size()};
 	return plan_;
 }

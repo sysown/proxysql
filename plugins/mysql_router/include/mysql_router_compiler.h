@@ -4,6 +4,7 @@
 #include "ProxySQL_PluginConfig.h"
 #include "mysql_router_bootstrap.h"
 #include "mysql_router_types.h"
+#include "mysql_router_users.h"
 
 #include <map>
 #include <set>
@@ -89,6 +90,7 @@ struct ConfigCompileInput {
 	std::vector<std::string> operator_interfaces;
 	std::set<int> occupied_rule_ids;
 	std::map<std::string, int> owned_rule_ids;
+	std::vector<ManagedMysqlUser> users;
 };
 
 class CompiledMysqlConfig {
@@ -98,6 +100,7 @@ public:
 	std::vector<CompiledGroupReplication> group_replication;
 	std::vector<CompiledHostgroupAttributes> hostgroup_attributes;
 	std::vector<CompiledRule> rules;
+	std::vector<ManagedMysqlUser> users;
 	std::map<std::string, int> rule_ids;
 	std::vector<std::string> interfaces;
 	uint64_t generation {0};
@@ -109,6 +112,8 @@ private:
 	mutable std::vector<ProxySQL_PluginMysqlGroupReplicationHostgroupRow> gr_rows_;
 	mutable std::vector<ProxySQL_PluginMysqlHostgroupAttributesRow> attribute_rows_;
 	mutable std::vector<ProxySQL_PluginMysqlRuleRow> rule_rows_;
+	mutable std::vector<ProxySQL_PluginMysqlUserRow> user_rows_;
+	mutable std::vector<std::string> user_wire_comments_;
 	mutable std::vector<const char*> interface_rows_;
 	mutable ProxySQL_PluginMysqlConfigPlan plan_ {};
 };

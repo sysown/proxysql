@@ -2,6 +2,7 @@
 
 #include "mysql_router_compiler.h"
 #include "mysql_router_metadata.h"
+#include "mysql_router_users.h"
 
 #include <algorithm>
 #include <array>
@@ -205,10 +206,26 @@ BootstrapResult MysqlRouterBootstrap::run(const BootstrapOptions& options) {
 		store_.save_journal(*progress);
 		store_.put_secret(secret_name, password);
 
+		uint64_t next_generation = 1;
+		if (identity) {
+			const uint64_t active_generation = std::max(
+				identity->topology_generation, identity->user_generation);
+			if (active_generation == static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+				throw std::runtime_error("Router configuration generation is exhausted");
+			}
+			next_generation = active_generation + 1;
+		}
 		BootstrapIdentity completed {topology_.topology_uuid, topology_.topology_name,
 			registration.router_id, options.router_name, router_address_, metadata_user,
 			options.seed.host, options.seed.port};
-		completed.topology_generation = store_.publish_topology(topology_, options.listeners, 1);
+		completed.topology_generation = store_.publish_topology(
+			topology_, options.listeners, next_generation);
+		const AccountSnapshot accounts = UserSynchronizer::read(session_, metadata_user);
+		if (completed.topology_generation == static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+			throw std::runtime_error("Router user generation is exhausted");
+		}
+		completed.user_generation = store_.publish_users(topology_, options.listeners,
+			accounts, metadata_user, completed.topology_generation + 1);
 		store_.save_complete(completed, options.listeners);
 		progress->phase = BootstrapPhase::local_configured;
 		store_.save_journal(*progress);
@@ -266,6 +283,27 @@ int64_t local_int64(const char* value, const char* field) {
 	return parsed;
 }
 
+int64_t local_nonnegative(const char* value, const char* field) {
+	if (value == nullptr || *value == '\0') throw std::runtime_error(std::string(field) + " is NULL");
+	char* end = nullptr;
+	long long parsed = std::strtoll(value, &end, 10);
+	if (end == nullptr || *end != '\0' || parsed < 0) {
+		throw std::runtime_error(std::string(field) + " is invalid");
+	}
+	return parsed;
+}
+
+int local_integer(const char* value, const char* field) {
+	if (value == nullptr || *value == '\0') throw std::runtime_error(std::string(field) + " is NULL");
+	char* end = nullptr;
+	const long long parsed = std::strtoll(value, &end, 10);
+	if (end == nullptr || *end != '\0' || parsed < std::numeric_limits<int>::min() ||
+		parsed > std::numeric_limits<int>::max()) {
+		throw std::runtime_error(std::string(field) + " is invalid");
+	}
+	return static_cast<int>(parsed);
+}
+
 std::unique_ptr<SQLite3_result> local_query(SQLite3DB& db, const std::string& sql) {
 	char* error = nullptr;
 	std::unique_ptr<SQLite3_result> result(db.execute_statement(sql.c_str(), &error));
@@ -316,6 +354,79 @@ std::vector<std::string> split_interfaces(std::string_view value) {
 	return result;
 }
 
+std::vector<CurrentMysqlUser> current_mysql_users(SQLite3DB& db) {
+	auto rows = local_query(db,
+		"SELECT u.username,u.password,u.active,u.use_ssl,u.default_hostgroup,u.default_schema,"
+		"u.schema_locked,u.transaction_persistent,u.fast_forward,u.frontend,u.backend,"
+		"u.max_connections,u.attributes,u.comment,EXISTS(SELECT 1 FROM main.proxysql_plugin_owned_objects o "
+		"WHERE o.owner='mysql_router' AND ((o.object_type='mysql_user_v2' AND "
+		"o.object_key='v2:'||u.backend||':'||u.frontend||':'||upper(hex(u.username))) OR "
+		"(o.object_type='mysql_user' AND o.object_key=u.username AND u.comment LIKE 'mysql_router:%'))) AS owned "
+		"FROM main.mysql_users u ORDER BY u.username,u.backend DESC");
+	std::vector<CurrentMysqlUser> result;
+	for (auto* source : rows->rows) {
+		CurrentMysqlUser row;
+		row.username = source->fields[0] ? source->fields[0] : "";
+		row.password = source->fields[1] ? source->fields[1] : "";
+		row.active = local_nonnegative(source->fields[2], "active") != 0;
+		row.use_ssl = local_nonnegative(source->fields[3], "use_ssl") != 0;
+		row.default_hostgroup = local_integer(source->fields[4], "default_hostgroup");
+		row.default_schema = source->fields[5] ? source->fields[5] : "";
+		row.schema_locked = local_nonnegative(source->fields[6], "schema_locked") != 0;
+		row.transaction_persistent = local_nonnegative(source->fields[7], "transaction_persistent") != 0;
+		row.fast_forward = local_nonnegative(source->fields[8], "fast_forward") != 0;
+		row.frontend = local_nonnegative(source->fields[9], "frontend") != 0;
+		row.backend = local_nonnegative(source->fields[10], "backend") != 0;
+		row.max_connections = static_cast<int>(local_nonnegative(source->fields[11], "max_connections"));
+		row.attributes = source->fields[12] ? source->fields[12] : "";
+		row.comment = source->fields[13] ? source->fields[13] : "";
+		row.owned = local_nonnegative(source->fields[14], "owned") != 0;
+		if (row.username.empty()) throw std::runtime_error("current mysql_users contains an empty username");
+		result.push_back(std::move(row));
+	}
+	return result;
+}
+
+std::map<std::string, PersistedManagedUser> persisted_mysql_router_users(SQLite3DB& db) {
+	auto rows = local_query(db,
+		"SELECT username,source_fingerprint,state,auth_plugin FROM mysql_router_users ORDER BY username");
+	std::map<std::string, PersistedManagedUser> result;
+	for (auto* row : rows->rows) {
+		if (row->fields[0] == nullptr || row->fields[1] == nullptr ||
+			row->fields[2] == nullptr || row->fields[3] == nullptr) {
+			throw std::runtime_error("mysql_router_users contains a NULL field");
+		}
+		if (!result.emplace(row->fields[0], PersistedManagedUser {
+			row->fields[1], row->fields[2], row->fields[3]}).second) {
+			throw std::runtime_error("mysql_router_users contains duplicate usernames");
+		}
+	}
+	return result;
+}
+
+void persist_mysql_router_users(SQLite3DB& db, uint64_t generation,
+	const std::vector<ManagedUserStatus>& status) {
+	if (!db.execute("BEGIN IMMEDIATE")) throw std::runtime_error("failed to begin user-state commit");
+	bool ok = db.execute("DELETE FROM main.mysql_router_users") &&
+		db.execute("DELETE FROM disk.mysql_router_users");
+	for (const auto& row : status) {
+		const std::string values = sqlite_quote(row.username) + "," +
+			sqlite_quote(row.source_fingerprint) + "," + sqlite_quote(row.auth_plugin) + "," +
+			sqlite_quote(row.state) + "," + sqlite_quote(row.last_error) + "," +
+			std::to_string(generation);
+		ok = ok && db.execute(("INSERT INTO main.mysql_router_users"
+			"(username,source_fingerprint,auth_plugin,state,last_error,generation) VALUES(" +
+			values + ")").c_str());
+		ok = ok && db.execute(("INSERT INTO disk.mysql_router_users"
+			"(username,source_fingerprint,auth_plugin,state,last_error,generation) VALUES(" +
+			values + ")").c_str());
+	}
+	if (!ok || !db.execute("COMMIT")) {
+		db.execute("ROLLBACK");
+		throw std::runtime_error("failed to persist Router user state");
+	}
+}
+
 class PluginBootstrapStore final : public IBootstrapStore {
 public:
 	explicit PluginBootstrapStore(ProxySQL_PluginServices& services, IMetadataSession& session)
@@ -350,7 +461,8 @@ public:
 	std::optional<BootstrapIdentity> load_identity() override {
 		char* error = nullptr;
 		std::unique_ptr<SQLite3_result> result(db_->execute_statement(
-			"SELECT topology_uuid,router_id,router_name,router_address,metadata_user,metadata_host,metadata_port "
+			"SELECT topology_uuid,router_id,router_name,router_address,metadata_user,metadata_host,metadata_port,"
+			"topology_generation,user_generation "
 			"FROM mysql_router_instance WHERE singleton_id=1", &error));
 		if (error != nullptr) {
 			std::string message(error); free(error); throw std::runtime_error(message);
@@ -366,6 +478,13 @@ public:
 		identity.metadata_user = row->fields[4] ? row->fields[4] : "";
 		identity.metadata_host = row->fields[5] ? row->fields[5] : "";
 		identity.metadata_port = static_cast<uint16_t>(local_int64(row->fields[6], "metadata_port"));
+		const int64_t topology_generation = local_int64(row->fields[7], "topology_generation");
+		const int64_t user_generation = local_int64(row->fields[8], "user_generation");
+		if (topology_generation < 0 || user_generation < 0) {
+			throw std::runtime_error("persisted Router generation is negative");
+		}
+		identity.topology_generation = static_cast<uint64_t>(topology_generation);
+		identity.user_generation = static_cast<uint64_t>(user_generation);
 		return identity;
 	}
 
@@ -401,24 +520,29 @@ public:
 
 	uint64_t publish_topology(const DesiredTopology& topology,
 		const ListenerProfile& listeners, uint64_t generation) override;
+	uint64_t publish_users(const DesiredTopology& topology,
+		const ListenerProfile& listeners, const AccountSnapshot& snapshot,
+		std::string_view metadata_user, uint64_t generation) override;
 
 	void save_complete(const BootstrapIdentity& identity,
 		const ListenerProfile& listeners) override {
 		if (!db_->execute("BEGIN IMMEDIATE")) throw std::runtime_error("failed to begin local bootstrap commit");
 		const std::string instance = "INSERT INTO mysql_router_instance"
 			"(singleton_id,topology_type,topology_uuid,cluster_id,clusterset_id,router_id,router_name,router_address,"
-			"metadata_user,metadata_host,metadata_port,metadata_schema,advertised_version,topology_generation) "
+			"metadata_user,metadata_host,metadata_port,metadata_schema,advertised_version,topology_generation,user_generation) "
 			"VALUES(1,'innodb_cluster'," +
 			sqlite_quote(identity.topology_uuid) + "," + sqlite_quote(identity.topology_uuid) + ",NULL," +
 			std::to_string(identity.router_id) + "," + sqlite_quote(identity.router_name) + "," +
 			sqlite_quote(identity.router_address) + "," + sqlite_quote(identity.metadata_user) + "," +
 			sqlite_quote(identity.metadata_host) + "," + std::to_string(identity.metadata_port) +
-			",'2.2','8.4.0'," + std::to_string(identity.topology_generation) + ") "
+			",'2.2','8.4.0'," + std::to_string(identity.topology_generation) + "," +
+			std::to_string(identity.user_generation) + ") "
 			"ON CONFLICT(singleton_id) DO UPDATE SET topology_type=excluded.topology_type,topology_uuid=excluded.topology_uuid,"
 			"cluster_id=excluded.cluster_id,clusterset_id=NULL,router_id=excluded.router_id,router_name=excluded.router_name,"
 			"router_address=excluded.router_address,metadata_user=excluded.metadata_user,metadata_host=excluded.metadata_host,"
 			"metadata_port=excluded.metadata_port,metadata_schema=excluded.metadata_schema,"
-			"advertised_version=excluded.advertised_version,topology_generation=excluded.topology_generation";
+			"advertised_version=excluded.advertised_version,topology_generation=excluded.topology_generation,"
+			"user_generation=excluded.user_generation";
 		bool ok = db_->execute(instance.c_str());
 		for (const auto& item : std::array<std::pair<const char*, std::string>, 4>{{
 			{"bind_address", listeners.bind_address}, {"rw_port", std::to_string(listeners.rw_port)},
@@ -436,13 +560,17 @@ public:
 	}
 
 private:
+	uint64_t publish_generation(const DesiredTopology& topology,
+		const ListenerProfile& listeners, uint64_t generation,
+		const std::vector<ManagedMysqlUser>& users);
 	ProxySQL_PluginServices& services_;
 	IMetadataSession& session_;
 	SQLite3DB* db_;
 };
 
-uint64_t PluginBootstrapStore::publish_topology(const DesiredTopology& topology,
-	const ListenerProfile& listeners, uint64_t generation) {
+uint64_t PluginBootstrapStore::publish_generation(const DesiredTopology& topology,
+	const ListenerProfile& listeners, uint64_t generation,
+	const std::vector<ManagedMysqlUser>& users) {
 	if (services_.apply_mysql_config == nullptr || services_.set_listener_gate == nullptr ||
 		services_.get_mysql_servers_snapshot == nullptr ||
 		services_.get_mysql_group_replication_hostgroups_snapshot == nullptr ||
@@ -492,6 +620,7 @@ uint64_t PluginBootstrapStore::publish_topology(const DesiredTopology& topology,
 	ConfigCompileInput input;
 	input.generation = publish_generation;
 	input.listeners = listeners;
+	input.users = users;
 	collect_query_column(*db_, "SELECT rule_id FROM mysql_query_rules", input.occupied_rule_ids);
 	collect_query_column(*admindb, "SELECT rule_id FROM mysql_query_rules", input.occupied_rule_ids);
 	auto owned_rules = local_query(*db_,
@@ -533,6 +662,32 @@ uint64_t PluginBootstrapStore::publish_topology(const DesiredTopology& topology,
 			? "initial Router generation publication failed" : published.message);
 	}
 	return published.generation;
+}
+
+uint64_t PluginBootstrapStore::publish_topology(const DesiredTopology& topology,
+	const ListenerProfile& listeners, uint64_t generation) {
+	return publish_generation(topology, listeners, generation, {});
+}
+
+uint64_t PluginBootstrapStore::publish_users(const DesiredTopology& topology,
+	const ListenerProfile& listeners, const AccountSnapshot& snapshot,
+	std::string_view, uint64_t generation) {
+	SQLite3DB* admindb = services_.get_admindb ? services_.get_admindb() : nullptr;
+	if (admindb == nullptr) throw std::runtime_error("Admin DB is unavailable during user synchronization");
+	UserSyncInput input;
+	input.topology_uuid = topology.topology_uuid;
+	auto writer = local_query(*db_,
+		"SELECT hostgroup_id FROM mysql_router_hostgroups WHERE scope_uuid=" +
+		sqlite_quote(topology.topology_uuid) + " AND role='route_writer'");
+	if (writer->rows.size() != 1) throw std::runtime_error("stable writer hostgroup is unavailable");
+	input.route_writer_hostgroup = static_cast<int>(
+		local_int64(writer->rows[0]->fields[0], "route writer hostgroup"));
+	input.current_users = current_mysql_users(*admindb);
+	input.persisted = persisted_mysql_router_users(*db_);
+	ManagedUserGeneration normalized = UserSynchronizer::normalize(snapshot, input);
+	const uint64_t published = publish_generation(topology, listeners, generation, normalized.users);
+	persist_mysql_router_users(*admindb, published, normalized.status);
+	return published;
 }
 
 } // namespace

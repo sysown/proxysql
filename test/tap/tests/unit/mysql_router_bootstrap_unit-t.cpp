@@ -2,6 +2,7 @@
 
 #include "mysql_router_bootstrap.h"
 #include "mysql_router_metadata.h"
+#include "mysql_router_users.h"
 
 #include <optional>
 #include <stdexcept>
@@ -30,6 +31,11 @@ public:
 		}
 		if (sql.find("LAST_INSERT_ID") != std::string_view::npos) {
 			return {{row({{"router_id", "17"}})}};
+		}
+		if (sql.find("ORDER BY User,Host") != std::string_view::npos) {
+			return {{row({{"User", "app"}, {"Host", "%"},
+				{"plugin", "caching_sha2_password"}, {"authentication_string", "$A$005$app"},
+				{"account_locked", "N"}, {"password_expired", "N"}, {"ssl_type", ""}})}};
 		}
 		if (sql.find("FROM mysql.user") != std::string_view::npos) {
 			return account_exists ? QueryResult{{row({{"User", "mysql_router17_abcdefghijkl"},
@@ -63,6 +69,9 @@ public:
 			++account_alters;
 		} else if (sql.find("GRANT ") != std::string_view::npos) {
 			++grants;
+		} else if (sql.find("SET TRANSACTION") != std::string_view::npos ||
+			   sql.find("START TRANSACTION") != std::string_view::npos || sql == "COMMIT" ||
+			   sql == "ROLLBACK") {
 		} else {
 			return {false, 0, "unexpected bootstrap execute"};
 		}
@@ -79,6 +88,7 @@ public:
 	std::vector<uint8_t> secret;
 	unsigned complete_writes {0};
 	unsigned publications {0};
+	unsigned user_publications {0};
 	bool fail_publication {false};
 
 	std::optional<BootstrapJournal> load_journal(std::string_view) override { return journal; }
@@ -90,9 +100,21 @@ public:
 	}
 	uint64_t publish_topology(const DesiredTopology&, const ListenerProfile&, uint64_t generation) override {
 		if (fail_publication) throw std::runtime_error("injected topology publication failure");
-		if (generation != 1) throw std::runtime_error("unexpected bootstrap generation");
+		if (generation != publications + user_publications + 1) {
+			throw std::runtime_error("unexpected bootstrap generation");
+		}
 		++publications;
-		return publications;
+		return publications + user_publications;
+	}
+	uint64_t publish_users(const DesiredTopology&, const ListenerProfile&,
+		const AccountSnapshot& snapshot, std::string_view metadata_user,
+		uint64_t generation) override {
+		if (snapshot.accounts.size() != 1 || snapshot.accounts[0].username != "app" ||
+			metadata_user.empty() || generation != publications + user_publications + 1) {
+			throw std::runtime_error("unexpected user publication input");
+		}
+		++user_publications;
+		return publications + user_publications;
 	}
 	void save_complete(const BootstrapIdentity& value, const ListenerProfile&) override {
 		identity = value;
@@ -119,7 +141,7 @@ BootstrapOptions options() {
 } // namespace
 
 int main() {
-	plan(23);
+	plan(24);
 
 	BootstrapSession session;
 	MemoryBootstrapStore store;
@@ -137,9 +159,12 @@ int main() {
 	ok(store.identity && store.identity->topology_uuid == "cluster-1" &&
 	   store.identity->metadata_user == first.metadata_user,
 	   "local identity records topology and metadata account");
-	ok(store.publications == 1 && store.complete_writes == 1 &&
-	   store.identity && store.identity->topology_generation == 1,
-	   "generation 1 publishes before local identity and listener configuration commit");
+	ok(store.publications == 1 && store.user_publications == 1 && store.complete_writes == 1 &&
+	   store.identity && store.identity->topology_generation == 1 &&
+	   store.identity->user_generation == 2,
+	   "topology generation 1 and user generation 2 publish before local identity commit");
+	ok(store.identity && store.identity->user_generation > store.identity->topology_generation,
+	   "application users publish as a separate complete generation");
 
 	MysqlRouterBootstrap retry(session, store, topology(), "proxy.example");
 	auto second = retry.run(options());
@@ -150,7 +175,8 @@ int main() {
 	ok(session.registration_updates == 3,
 	   "retry refreshes Shell-visible attributes without adding registrations");
 	ok(store.secret.size() == 32 && store.complete_writes == 2 &&
-	   store.identity && store.identity->topology_generation == 2,
+	   store.identity && store.identity->topology_generation == 3 &&
+	   store.identity->user_generation == 4,
 	   "retry preserves the encrypted credential and idempotently persists local state");
 
 	MemoryBootstrapStore conflicting_store = store;

@@ -88,6 +88,7 @@ private:
 };
 
 class IMetadataSession;
+struct AccountSnapshot;
 
 struct RouterRegistration {
 	int64_t router_id {0};
@@ -123,6 +124,7 @@ struct BootstrapIdentity {
 	std::string metadata_host;
 	uint16_t metadata_port {3306};
 	uint64_t topology_generation {0};
+	uint64_t user_generation {0};
 };
 
 struct BootstrapResult {
@@ -143,6 +145,9 @@ public:
 	virtual std::optional<std::vector<uint8_t>> get_secret(std::string_view name) = 0;
 	virtual uint64_t publish_topology(const DesiredTopology& topology,
 		const ListenerProfile& listeners, uint64_t generation) = 0;
+	virtual uint64_t publish_users(const DesiredTopology& topology,
+		const ListenerProfile& listeners, const AccountSnapshot& snapshot,
+		std::string_view metadata_user, uint64_t generation) = 0;
 	virtual void save_complete(const BootstrapIdentity& identity,
 		const ListenerProfile& listeners) = 0;
 };

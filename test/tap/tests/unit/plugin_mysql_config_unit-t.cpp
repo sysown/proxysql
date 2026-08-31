@@ -732,6 +732,46 @@ int main() {
 		"publication migrates marker-proven ownership and preserves operator rows after schema upgrade");
 
 	Fixture f;
+	Fixture released_user;
+	const std::string release_comment = proxysql_plugin_release_user_comment("mysql_router:old");
+	ProxySQL_PluginMysqlUserRow release_row {
+		"old_owned", "old", true, false, 8100, "", false, true, false,
+		true, true, 100, "", release_comment.c_str()};
+	released_user.plan.users = &release_row;
+	released_user.plan.user_count = 1;
+	const std::string released_main_before = text_value(released_user.db,
+		"SELECT username||'|'||password||'|'||active||'|'||use_ssl||'|'||default_hostgroup||'|'||"
+		"default_schema||'|'||schema_locked||'|'||transaction_persistent||'|'||fast_forward||'|'||"
+		"backend||'|'||frontend||'|'||max_connections||'|'||attributes||'|'||comment "
+		"FROM main.mysql_users WHERE username='old_owned'");
+	const std::string released_disk_before = text_value(released_user.db,
+		"SELECT username||'|'||password||'|'||active||'|'||use_ssl||'|'||default_hostgroup||'|'||"
+		"default_schema||'|'||schema_locked||'|'||transaction_persistent||'|'||fast_forward||'|'||"
+		"backend||'|'||frontend||'|'||max_connections||'|'||attributes||'|'||comment "
+		"FROM disk.mysql_users WHERE username='old_owned'");
+	const auto released_result = proxysql_apply_plugin_mysql_config(
+		released_user.db, released_user.plan, released_user.runtime.hooks());
+	ok(released_result.applied,
+		"an exact previously-owned user can be released in one complete generation");
+	ok(text_value(released_user.db,
+		"SELECT username||'|'||password||'|'||active||'|'||use_ssl||'|'||default_hostgroup||'|'||"
+		"default_schema||'|'||schema_locked||'|'||transaction_persistent||'|'||fast_forward||'|'||"
+		"backend||'|'||frontend||'|'||max_connections||'|'||attributes||'|'||comment "
+		"FROM main.mysql_users WHERE username='old_owned'") == released_main_before &&
+	   text_value(released_user.db,
+		"SELECT username||'|'||password||'|'||active||'|'||use_ssl||'|'||default_hostgroup||'|'||"
+		"default_schema||'|'||schema_locked||'|'||transaction_persistent||'|'||fast_forward||'|'||"
+		"backend||'|'||frontend||'|'||max_connections||'|'||attributes||'|'||comment "
+		"FROM disk.mysql_users WHERE username='old_owned'") == released_disk_before,
+		"ownership release preserves the exact Admin and disk user row");
+	ok(scalar(released_user.db,
+		"SELECT COUNT(*) FROM main.proxysql_plugin_owned_objects WHERE owner='mysql_router' "
+		"AND object_type IN ('mysql_user','mysql_user_v2')") == 0 &&
+	   scalar(released_user.db,
+		"SELECT COUNT(*) FROM disk.proxysql_plugin_owned_objects WHERE owner='mysql_router' "
+		"AND object_type IN ('mysql_user','mysql_user_v2')") == 0,
+		"ownership release removes the exact user ledger in both storage tiers");
+
 	f.runtime.mutate_owner = f.owner;
 	const auto result = proxysql_apply_plugin_mysql_config(f.db, f.plan, f.runtime.hooks());
 	ok(result.applied && result.generation == 13, "a complete scoped generation is applied");

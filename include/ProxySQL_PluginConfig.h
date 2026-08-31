@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 class SQLite3DB;
@@ -42,6 +43,21 @@ struct ProxySQL_PluginMysqlUserRow {
 	const char* attributes;
 	const char* comment;
 };
+
+// User ownership release is encoded in an existing string field so ABI-8
+// plugins keep the original ProxySQL_PluginMysqlUserRow array stride. The
+// publisher decodes this envelope before staging and stores the original
+// comment byte-for-byte while omitting the ownership ledger entry.
+static inline std::string proxysql_plugin_release_user_comment(std::string_view original) {
+	static constexpr char hex[] = "0123456789ABCDEF";
+	std::string encoded = "@proxysql:release-user:";
+	encoded.reserve(encoded.size() + original.size() * 2);
+	for (unsigned char ch : original) {
+		encoded.push_back(hex[ch >> 4]);
+		encoded.push_back(hex[ch & 0x0F]);
+	}
+	return encoded;
+}
 
 struct ProxySQL_PluginMysqlRuleRow {
 	int rule_id;

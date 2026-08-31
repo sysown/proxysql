@@ -63,6 +63,7 @@ struct User {
 	int max_connections;
 	std::string attributes;
 	std::string comment;
+	bool release_ownership {false};
 };
 
 struct Rule {
@@ -125,6 +126,38 @@ struct OwnedPlan {
 	std::vector<std::string> interfaces;
 };
 
+bool decode_release_user_comment(const std::string& encoded, std::string& original,
+	bool& release, std::string& error) {
+	static constexpr std::string_view prefix = "@proxysql:release-user:";
+	release = encoded.compare(0, prefix.size(), prefix) == 0;
+	if (!release) {
+		original = encoded;
+		return true;
+	}
+	const std::string_view payload(encoded.data() + prefix.size(), encoded.size() - prefix.size());
+	if (payload.size() % 2 != 0) {
+		error = "user ownership-release comment has invalid hex length";
+		return false;
+	}
+	auto nibble = [](char ch) -> int {
+		if (ch >= '0' && ch <= '9') return ch - '0';
+		if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+		return -1;
+	};
+	original.clear();
+	original.reserve(payload.size() / 2);
+	for (size_t i = 0; i < payload.size(); i += 2) {
+		const int high = nibble(payload[i]);
+		const int low = nibble(payload[i + 1]);
+		if (high < 0 || low < 0) {
+			error = "user ownership-release comment contains invalid hex";
+			return false;
+		}
+		original.push_back(static_cast<char>((high << 4) | low));
+	}
+	return true;
+}
+
 template <typename T>
 bool present_for_count(const T* values, size_t count, const char* name, std::string& error) {
 	if (count != 0 && values == nullptr) {
@@ -178,10 +211,14 @@ bool copy_plan(const ProxySQL_PluginMysqlConfigPlan& source, OwnedPlan& target, 
 	target.users.reserve(source.user_count);
 	for (size_t i = 0; i < source.user_count; ++i) {
 		const auto& row = source.users[i];
+		std::string comment;
+		bool release_ownership = false;
+		if (!decode_release_user_comment(copied(row.comment), comment,
+			release_ownership, error)) return false;
 		target.users.push_back({copied(row.username), copied(row.password), row.active, row.use_ssl,
 			row.default_hostgroup, copied(row.default_schema), row.schema_locked,
 			row.transaction_persistent, row.fast_forward, row.frontend, row.backend,
-			row.max_connections, copied(row.attributes), copied(row.comment)});
+			row.max_connections, copied(row.attributes), std::move(comment), release_ownership});
 	}
 	target.rules.reserve(source.rule_count);
 	for (size_t i = 0; i < source.rule_count; ++i) {
@@ -573,6 +610,11 @@ bool preflight_collisions(SQLite3DB& db, const std::string& schema,
 		!ledger_keys(db, schema, plan.owner, "mysql_query_rule", state.old_rules, error) ||
 		!ledger_keys(db, schema, plan.owner, "mysql_interface", state.old_interfaces, error)) return false;
 	for (const auto& user : plan.users) {
+		const Preflight::UserIdentity identity {user.username, user.backend, user.frontend};
+		if (user.release_ownership && state.old_users.count(identity) == 0) {
+			error = "cannot release an unowned mysql_user identity: " + user.username;
+			return false;
+		}
 		std::vector<ExistingUserVariant> variants;
 		if (!query_user_variants(db, schema, user.username, variants, error)) return false;
 		bool collision = false;
@@ -783,7 +825,8 @@ bool stage_schema(SQLite3DB& db, const std::string& schema, const OwnedPlan& pla
 	if(!run_statement(db,"DELETE FROM "+schema+".proxysql_plugin_owned_objects WHERE owner=?1",{plan.owner},{},error))return false;
 	auto add_ledger=[&](const std::string&type,const std::string&key){return run_statement(db,"INSERT INTO "+schema+".proxysql_plugin_owned_objects(owner,object_type,object_key,generation) VALUES (?1,?2,?3,?4)",{plan.owner,type,key},{static_cast<long long>(plan.generation)},error);};
 	for(int id:plan.hostgroups)if(!add_ledger("hostgroup",std::to_string(id)))return false;
-	for(const auto& row:plan.users)if(!preflight.user_collisions.count(row.username)&&
+	for(const auto& row:plan.users)if(!row.release_ownership&&
+		!preflight.user_collisions.count(row.username)&&
 		!add_ledger("mysql_user_v2",user_identity_key(row)))return false;
 	for(const auto& row:plan.rules)if(!preflight.rule_collisions.count(row.rule_id)&&!add_ledger("mysql_query_rule",std::to_string(row.rule_id)))return false;
 	for(const auto& value:plan.interfaces)if(!add_ledger("mysql_interface",value))return false;

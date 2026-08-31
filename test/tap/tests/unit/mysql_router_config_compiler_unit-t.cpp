@@ -34,7 +34,7 @@ size_t server_count(const CompiledMysqlConfig& config, int hostgroup, const char
 } // namespace
 
 int main() {
-	plan(17);
+	plan(19);
 
 	DesiredTopology topology;
 	topology.topology_uuid = "cluster-1";
@@ -58,6 +58,17 @@ int main() {
 	input.listeners = {"0.0.0.0", 6446, 6447, 6450, false, false};
 	input.operator_interfaces = {"0.0.0.0:6033", "127.0.0.1:7000"};
 	input.occupied_rule_ids = {900000, 900002};
+	ManagedMysqlUser imported;
+	imported.username = "app";
+	imported.password = "$A$005$app";
+	imported.default_hostgroup = hostgroups.at("route_writer");
+	imported.comment = "mysql_router:cluster-1:app";
+	ManagedMysqlUser released = imported;
+	released.username = "released";
+	released.password = "$A$005$local";
+	released.comment = "operator-preserved";
+	released.release = true;
+	input.users = {imported, released};
 	auto compiled = ConfigCompiler::compile_topology(topology, effective, hostgroups, input);
 
 	ok(compiled.owned_hostgroups.size() == 8,
@@ -87,6 +98,9 @@ int main() {
 	ok(input.operator_interfaces == std::vector<std::string>({"0.0.0.0:6033", "127.0.0.1:7000"}),
 	   "unrelated operator interfaces remain outside plugin ownership");
 	ok(compiled.rules.size() == 5, "the compiler emits exactly five baseline rules");
+	ok(compiled.users.size() == 2 && compiled.users[0].username == "app" &&
+	   compiled.users[1].username == "released",
+	   "the compiler carries the normalized application-user generation");
 	const auto* rw = rule(compiled, "classic-rw");
 	const auto* ro = rule(compiled, "classic-ro");
 	const auto* locking = rule(compiled, "split-locking");
@@ -115,6 +129,10 @@ int main() {
 	   "owned rule IDs remain stable even when lower IDs become free");
 	ok(compiled.plan().generation == 1 && compiled.plan().owner == std::string("mysql_router"),
 	   "the ABI plan carries the exact owner and topology generation");
+	ok(compiled.plan().user_count == 2 &&
+	   std::string(compiled.plan().users[0].comment) == "mysql_router:cluster-1:app" &&
+	   std::string(compiled.plan().users[1].comment).find("@proxysql:release-user:") == 0,
+	   "the ABI plan preserves explicit user ownership-release intent");
 
 	return exit_status();
 }
