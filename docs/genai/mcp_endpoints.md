@@ -32,7 +32,7 @@ The `/mcp/rag` endpoint provides specialized tools for Retrieval Augmented Gener
 - **Request Format**: JSON-RPC 2.0
 
 ### Authentication
-Authentication is enforced via Bearer tokens configured in the [MCP Variables](../global_variables/mcp_variables).
+Authentication is enforced via Bearer tokens configured in the [MCP Variables](../references/mcp_variables).
 
 ```http
 POST /mcp/query HTTP/1.1

@@ -45,4 +45,4 @@ SET mcp-enabled='true';
 LOAD MCP VARIABLES TO RUNTIME;
 ```
 
-For more details on configuration, see the [MCP Variables](../global_variables/mcp_variables) and [MCP Configuration Tables](../main_runtime/mcp_tables) sections.
+For more details on configuration, see the [MCP Variables](../references/mcp_variables) and [MCP Configuration Tables](../main_runtime/mcp_tables) sections.

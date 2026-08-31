@@ -81,7 +81,7 @@ See the **[RAG Ingest CLI](../genai/rag_ingest)** documentation for detailed usa
 
 ## Configuration & Management
 
-The SQLite3 server behavior is controlled by specific variables prefixed with `sqliteserver-`. See the **[SQLite3 Server Variables](../global_variables/sqliteserver_variables)** reference for more details.
+The SQLite3 server behavior is controlled by specific variables prefixed with `sqliteserver-`. See the **[SQLite3 Server Variables](../references/sqliteserver_variables)** reference for more details.
 
 ### Variables
 

@@ -114,7 +114,7 @@ const config: Config = {
             },
             {
               label: 'Reference',
-              to: '/global_variables/quick-reference',
+              to: '/references/global_variables',
             },
           ],
         },

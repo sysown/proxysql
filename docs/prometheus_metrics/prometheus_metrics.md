@@ -3,6 +3,8 @@
 ProxySQL includes a built in Prometheus exporter. This exporter let's you expose and consume relevant
 system metrics through a friendly interface.
 
+For a complete list of all available metrics, see the [Prometheus Metrics](/proxysql/references/prometheus_metrics) reference.
+
 ### Admin variables
 
 - admin-restapi_enabled:
