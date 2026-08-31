@@ -33,30 +33,30 @@ for image in "${images[@]}"; do
             [ -x "${binary}" ] || { echo "ERROR: tarball binary is missing" >&2; exit 1; }
 
             export LD_LIBRARY_PATH="${root_dir}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
-            ldd_output=$(ldd "${binary}")
-            printf "%s\\n" "${ldd_output}"
-            ! printf "%s\\n" "${ldd_output}" | grep -q "not found"
-            for library in libssl.so.3 libcrypto.so.3; do
-                resolved_path=
-                while IFS= read -r dependency; do
-                    case "${dependency}" in
-                        *"${library} => "*)
-                            resolved_path=${dependency#*=> }
-                            resolved_path=${resolved_path%% *}
-                            break
-                            ;;
-                    esac
-                done <<EOF
-${ldd_output}
-EOF
-                case "${resolved_path}" in
-                    "${root_dir}"/lib/*) ;;
-                    *)
-                        echo "ERROR: ${library} did not resolve from the tarball" >&2
-                        exit 1
-                        ;;
-                esac
-            done
+            check_runtime_linkage() {
+                candidate=$1
+                ldd_output=$(ldd "${candidate}")
+                printf "%s\\n" "${ldd_output}"
+
+                if printf "%s\\n" "${ldd_output}" | grep -q "not found"; then
+                    echo "ERROR: unresolved runtime dependency in ${candidate}" >&2
+                    exit 1
+                fi
+                if printf "%s\\n" "${ldd_output}" | grep -Eq "lib(ssl|crypto)\\.so"; then
+                    echo "ERROR: forbidden OpenSSL runtime dependency in ${candidate}" >&2
+                    exit 1
+                fi
+            }
+
+            check_runtime_linkage "${binary}"
+
+            plugin_dir="${root_dir}/lib/proxysql"
+            if [ -d "${plugin_dir}" ]; then
+                for plugin in "${plugin_dir}"/*.so; do
+                    [ -f "${plugin}" ] || continue
+                    check_runtime_linkage "${plugin}"
+                done
+            fi
             "${launcher}" --version
         ' sh "${archive_name}"
 done
