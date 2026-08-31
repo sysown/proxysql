@@ -1,5 +1,5 @@
-#ifndef HOSTGROUP_POOL_STATS_H
-#define HOSTGROUP_POOL_STATS_H
+#ifndef __CLASS_HOSTGROUP_POOL_STATS_H
+#define __CLASS_HOSTGROUP_POOL_STATS_H
 
 #ifdef PROXYSQL31
 
@@ -16,60 +16,71 @@ struct HostgroupPoolStatsSnapshot {
 class HostgroupPoolStats {
 public:
 	void record_acquisition() {
-		acquisitions_total_.fetch_add(1, std::memory_order_relaxed);
+		acquisitions_total_.fetch_add(1);
 	}
 
 	void begin_wait() {
-		waits_total_.fetch_add(1, std::memory_order_relaxed);
-		waiters_.fetch_add(1, std::memory_order_relaxed);
+		waits_total_.fetch_add(1);
+		waiters_.fetch_add(1);
 	}
 
 	void end_wait(uint64_t duration_us) {
-		wait_time_us_total_.fetch_add(duration_us, std::memory_order_relaxed);
-		waiters_.fetch_sub(1, std::memory_order_relaxed);
+		wait_time_us_total_.fetch_add(duration_us);
+		waiters_.fetch_sub(1);
 	}
 
 	void cancel_wait() {
-		waiters_.fetch_sub(1, std::memory_order_relaxed);
+		waiters_.fetch_sub(1);
 	}
 
 	HostgroupPoolStatsSnapshot lifetime_snapshot() const {
 		return {
-			acquisitions_total_.load(std::memory_order_relaxed),
-			waits_total_.load(std::memory_order_relaxed),
-			wait_time_us_total_.load(std::memory_order_relaxed),
-			waiters_.load(std::memory_order_relaxed)
+			acquisitions_total_.load(),
+			waits_total_.load(),
+			wait_time_us_total_.load(),
+			waiters_.load()
 		};
 	}
 
 	HostgroupPoolStatsSnapshot window_snapshot() const {
-		const auto lifetime = lifetime_snapshot();
 		return {
-			lifetime.acquisitions_total - acquisitions_baseline_.load(std::memory_order_relaxed),
-			lifetime.waits_total - waits_baseline_.load(std::memory_order_relaxed),
-			lifetime.wait_time_us_total - wait_time_us_baseline_.load(std::memory_order_relaxed),
-			lifetime.waiters
+			window_value(acquisitions_total_, acquisitions_baseline_),
+			window_value(waits_total_, waits_baseline_),
+			window_value(wait_time_us_total_, wait_time_us_baseline_),
+			waiters_.load()
 		};
 	}
 
 	HostgroupPoolStatsSnapshot reset_window() {
-		const auto lifetime = lifetime_snapshot();
-		const uint64_t acquisitions_baseline = acquisitions_baseline_.exchange(
-			lifetime.acquisitions_total, std::memory_order_relaxed);
-		const uint64_t waits_baseline = waits_baseline_.exchange(
-			lifetime.waits_total, std::memory_order_relaxed);
-		const uint64_t wait_time_us_baseline = wait_time_us_baseline_.exchange(
-			lifetime.wait_time_us_total, std::memory_order_relaxed);
-
 		return {
-			lifetime.acquisitions_total - acquisitions_baseline,
-			lifetime.waits_total - waits_baseline,
-			lifetime.wait_time_us_total - wait_time_us_baseline,
-			lifetime.waiters
+			reset_counter(acquisitions_total_, acquisitions_baseline_),
+			reset_counter(waits_total_, waits_baseline_),
+			reset_counter(wait_time_us_total_, wait_time_us_baseline_),
+			waiters_.load()
 		};
 	}
 
 private:
+	static uint64_t window_value(
+		const std::atomic<uint64_t>& total, const std::atomic<uint64_t>& baseline
+	) {
+		const uint64_t baseline_value = baseline.load();
+		return total.load() - baseline_value;
+	}
+
+	static uint64_t reset_counter(
+		const std::atomic<uint64_t>& total, std::atomic<uint64_t>& baseline
+	) {
+		const uint64_t current = total.load();
+		uint64_t previous = baseline.load();
+		while (previous < current) {
+			if (baseline.compare_exchange_weak(previous, current)) {
+				return current - previous;
+			}
+		}
+		return 0;
+	}
+
 	std::atomic<uint64_t> acquisitions_total_ {0};
 	std::atomic<uint64_t> waits_total_ {0};
 	std::atomic<uint64_t> wait_time_us_total_ {0};
@@ -141,4 +152,4 @@ private:
 
 #endif // PROXYSQL31
 
-#endif // HOSTGROUP_POOL_STATS_H
+#endif // __CLASS_HOSTGROUP_POOL_STATS_H

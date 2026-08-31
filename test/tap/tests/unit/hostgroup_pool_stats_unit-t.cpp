@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <thread>
+#include <vector>
 
 static void test_immediate_acquisition() {
 	HostgroupPoolStats stats;
@@ -111,15 +112,15 @@ static void test_destructor_balances_waiter_gauge() {
 static void test_concurrent_resets_preserve_acquisitions() {
 	HostgroupPoolStats stats;
 	std::atomic<bool> done {false};
-	std::thread recorder([&]() {
+	std::thread recorder([&stats, &done]() {
 		for (uint64_t i = 0; i < 100'000; ++i) {
 			stats.record_acquisition();
 		}
-		done.store(true, std::memory_order_release);
+		done.store(true);
 	});
 
 	uint64_t reset_total = 0;
-	while (!done.load(std::memory_order_acquire)) {
+	while (!done.load()) {
 		reset_total += stats.reset_window().acquisitions_total;
 	}
 	recorder.join();
@@ -131,8 +132,51 @@ static void test_concurrent_resets_preserve_acquisitions() {
 		"concurrent Admin reset windows neither lose nor duplicate acquisitions");
 }
 
+static void test_concurrent_resetters_partition_acquisitions() {
+	HostgroupPoolStats stats;
+	std::atomic<bool> start {false};
+	std::atomic<bool> done {false};
+	std::atomic<uint64_t> reset_total {0};
+	std::vector<std::thread> resetters;
+
+	for (unsigned int i = 0; i < 32; ++i) {
+		resetters.emplace_back([&stats, &start, &done, &reset_total]() {
+			uint64_t local_total = 0;
+			while (!start.load()) {
+				std::this_thread::yield();
+			}
+			while (!done.load()) {
+				local_total += stats.reset_window().acquisitions_total;
+			}
+			reset_total.fetch_add(local_total);
+		});
+	}
+
+	std::thread recorder([&stats, &start, &done]() {
+		while (!start.load()) {
+			std::this_thread::yield();
+		}
+		for (uint64_t i = 0; i < 1'000'000; ++i) {
+			stats.record_acquisition();
+		}
+		done.store(true);
+	});
+
+	start.store(true);
+	recorder.join();
+	for (std::thread& resetter : resetters) {
+		resetter.join();
+	}
+	reset_total.fetch_add(stats.reset_window().acquisitions_total);
+
+	ok(stats.lifetime_snapshot().acquisitions_total == 1'000'000,
+		"multiple concurrent resetters preserve the lifetime acquisition count");
+	ok(reset_total.load() == 1'000'000,
+		"multiple concurrent resetters partition acquisitions without overlap or gaps");
+}
+
 int main() {
-	plan(25);
+	plan(27);
 	test_immediate_acquisition();
 	test_retry_is_one_wait_episode();
 	test_abandoned_wait();
@@ -140,5 +184,6 @@ int main() {
 	test_reset_preserves_lifetime_and_live_gauge();
 	test_destructor_balances_waiter_gauge();
 	test_concurrent_resets_preserve_acquisitions();
+	test_concurrent_resetters_partition_acquisitions();
 	return exit_status();
 }

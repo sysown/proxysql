@@ -2081,14 +2081,14 @@ HGC * Base_HostGroups_Manager<HGC>::MyHGC_lookup(unsigned int _hid) {
 template <typename HGC>
 HostgroupPoolStats * Base_HostGroups_Manager<HGC>::get_hostgroup_pool_stats(unsigned int hid) {
 	wrlock();
-	HGC *hgc = MyHGC_lookup(hid);
+	HGC *hgc = MyHGC_find(hid);
 	wrunlock();
-	return &hgc->pool_stats;
+	return hgc ? &hgc->pool_stats : nullptr;
 }
 
 template <typename HGC>
 SQLite3_result * Base_HostGroups_Manager<HGC>::SQL3_Hostgroup_Connection_Pool(bool reset) {
-	SQLite3_result *result = new SQLite3_result(5);
+	auto result = std::make_unique<SQLite3_result>(5);
 	result->add_column_definition(SQLITE_TEXT, "hostgroup");
 	result->add_column_definition(SQLITE_TEXT, "acquisitions_total");
 	result->add_column_definition(SQLITE_TEXT, "waits_total");
@@ -2106,17 +2106,17 @@ SQLite3_result * Base_HostGroups_Manager<HGC>::SQL3_Hostgroup_Connection_Pool(bo
 		const std::string waits = std::to_string(snapshot.waits_total);
 		const std::string wait_time = std::to_string(snapshot.wait_time_us_total);
 		const std::string waiters = std::to_string(snapshot.waiters);
-		char *row[] = {
-			const_cast<char *>(hostgroup.c_str()),
-			const_cast<char *>(acquisitions.c_str()),
-			const_cast<char *>(waits.c_str()),
-			const_cast<char *>(wait_time.c_str()),
-			const_cast<char *>(waiters.c_str())
+		const char *row[] = {
+			hostgroup.c_str(),
+			acquisitions.c_str(),
+			waits.c_str(),
+			wait_time.c_str(),
+			waiters.c_str()
 		};
 		result->add_row(row);
 	}
 	wrunlock();
-	return result;
+	return result.release();
 }
 #endif
 

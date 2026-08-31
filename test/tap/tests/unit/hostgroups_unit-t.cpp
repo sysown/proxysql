@@ -248,6 +248,17 @@ static SQLite3_row *find_hostgroup_row(SQLite3_result *result, unsigned int hid)
 }
 
 template <typename HGM>
+static void test_unknown_hostgroup_stats_lookup(HGM *hgm, const char *protocol) {
+	std::unique_ptr<SQLite3_result> before { hgm->SQL3_Hostgroup_Connection_Pool(false) };
+	const int rows_before = before->rows_count;
+	HostgroupPoolStats *stats = hgm->get_hostgroup_pool_stats(999'999);
+	std::unique_ptr<SQLite3_result> after { hgm->SQL3_Hostgroup_Connection_Pool(false) };
+
+	ok(stats == nullptr && after->rows_count == rows_before,
+		"%s HGM: stats lookup does not create an unknown hostgroup", protocol);
+}
+
+template <typename HGM>
 static void test_hostgroup_pool_stats(HGM *hgm, unsigned int hid, const char *protocol) {
 	HostgroupPoolStats *stats = hgm->get_hostgroup_pool_stats(hid);
 	HostgroupPoolWait wait;
@@ -295,7 +306,7 @@ static void test_hostgroup_pool_stats(HGM *hgm, unsigned int hid, const char *pr
 
 int main() {
 #ifdef PROXYSQL31
-	plan(27);
+	plan(29);
 #else
 	plan(17);
 #endif
@@ -320,6 +331,8 @@ int main() {
 #ifdef PROXYSQL31
 	test_hostgroup_pool_stats(MyHGM, 10, "MySQL"); // 5 tests
 	test_hostgroup_pool_stats(PgHGM, 100, "PgSQL"); // 5 tests
+	test_unknown_hostgroup_stats_lookup(MyHGM, "MySQL"); // 1 test
+	test_unknown_hostgroup_stats_lookup(PgHGM, "PgSQL"); // 1 test
 #endif
 	// Total: 1+1+3+2+2+1+2+1+3+1 = 17... let me recount
 	// init: 2, create: 3, remove: 2, status: 2, latency: 1,

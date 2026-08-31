@@ -168,8 +168,8 @@
 
 #define STATS_SQLITE_TABLE_MYSQL_CONNECTION_POOL_RESET "CREATE TABLE stats_mysql_connection_pool_reset (hostgroup INT , srv_host VARCHAR , srv_port INT , status VARCHAR , ConnUsed INT , ConnFree INT , ConnOK INT , ConnERR INT , MaxConnUsed INT , Queries INT , Queries_GTID_sync INT , Bytes_data_sent INT , Bytes_data_recv INT , Latency_us INT)"
 #ifdef PROXYSQL31
-#define STATS_SQLITE_TABLE_MYSQL_HOSTGROUP_CONNECTION_POOL "CREATE TABLE stats_mysql_hostgroup_connection_pool (hostgroup INT PRIMARY KEY , acquisitions_total INT NOT NULL , waits_total INT NOT NULL , wait_time_us_total INT NOT NULL , waiters INT NOT NULL)"
-#define STATS_SQLITE_TABLE_MYSQL_HOSTGROUP_CONNECTION_POOL_RESET "CREATE TABLE stats_mysql_hostgroup_connection_pool_reset (hostgroup INT PRIMARY KEY , acquisitions_total INT NOT NULL , waits_total INT NOT NULL , wait_time_us_total INT NOT NULL , waiters INT NOT NULL)"
+inline constexpr char STATS_SQLITE_TABLE_MYSQL_HOSTGROUP_CONNECTION_POOL[] = "CREATE TABLE stats_mysql_hostgroup_connection_pool (hostgroup INT PRIMARY KEY , acquisitions_total INT NOT NULL , waits_total INT NOT NULL , wait_time_us_total INT NOT NULL , waiters INT NOT NULL)";
+inline constexpr char STATS_SQLITE_TABLE_MYSQL_HOSTGROUP_CONNECTION_POOL_RESET[] = "CREATE TABLE stats_mysql_hostgroup_connection_pool_reset (hostgroup INT PRIMARY KEY , acquisitions_total INT NOT NULL , waits_total INT NOT NULL , wait_time_us_total INT NOT NULL , waiters INT NOT NULL)";
 #endif
 
 #define STATS_SQLITE_TABLE_MYSQL_FREE_CONNECTIONS "CREATE TABLE stats_mysql_free_connections (fd INT NOT NULL , hostgroup INT NOT NULL , srv_host VARCHAR NOT NULL , srv_port INT NOT NULL , user VARCHAR NOT NULL , schema VARCHAR , init_connect VARCHAR , time_zone VARCHAR , sql_mode VARCHAR , autocommit VARCHAR , idle_ms INT , statistics VARCHAR , mysql_info VARCHAR)"
@@ -355,8 +355,8 @@
 #define STATS_SQLITE_TABLE_PGSQL_CONNECTION_POOL "CREATE TABLE stats_pgsql_connection_pool (hostgroup INT , srv_host VARCHAR , srv_port INT , status VARCHAR , ConnUsed INT , ConnFree INT , ConnOK INT , ConnERR INT , MaxConnUsed INT , Queries INT , Bytes_data_sent INT , Bytes_data_recv INT , Latency_us INT)"
 #define STATS_SQLITE_TABLE_PGSQL_CONNECTION_POOL_RESET "CREATE TABLE stats_pgsql_connection_pool_reset (hostgroup INT , srv_host VARCHAR , srv_port INT , status VARCHAR , ConnUsed INT , ConnFree INT , ConnOK INT , ConnERR INT , MaxConnUsed INT , Queries INT , Bytes_data_sent INT , Bytes_data_recv INT , Latency_us INT)"
 #ifdef PROXYSQL31
-#define STATS_SQLITE_TABLE_PGSQL_HOSTGROUP_CONNECTION_POOL "CREATE TABLE stats_pgsql_hostgroup_connection_pool (hostgroup INT PRIMARY KEY , acquisitions_total INT NOT NULL , waits_total INT NOT NULL , wait_time_us_total INT NOT NULL , waiters INT NOT NULL)"
-#define STATS_SQLITE_TABLE_PGSQL_HOSTGROUP_CONNECTION_POOL_RESET "CREATE TABLE stats_pgsql_hostgroup_connection_pool_reset (hostgroup INT PRIMARY KEY , acquisitions_total INT NOT NULL , waits_total INT NOT NULL , wait_time_us_total INT NOT NULL , waiters INT NOT NULL)"
+inline constexpr char STATS_SQLITE_TABLE_PGSQL_HOSTGROUP_CONNECTION_POOL[] = "CREATE TABLE stats_pgsql_hostgroup_connection_pool (hostgroup INT PRIMARY KEY , acquisitions_total INT NOT NULL , waits_total INT NOT NULL , wait_time_us_total INT NOT NULL , waiters INT NOT NULL)";
+inline constexpr char STATS_SQLITE_TABLE_PGSQL_HOSTGROUP_CONNECTION_POOL_RESET[] = "CREATE TABLE stats_pgsql_hostgroup_connection_pool_reset (hostgroup INT PRIMARY KEY , acquisitions_total INT NOT NULL , waits_total INT NOT NULL , wait_time_us_total INT NOT NULL , waiters INT NOT NULL)";
 #endif
 #define STATS_SQLITE_TABLE_PGSQL_FREE_CONNECTIONS "CREATE TABLE stats_pgsql_free_connections (fd INT NOT NULL , hostgroup INT NOT NULL , srv_host VARCHAR NOT NULL , srv_port INT NOT NULL , user VARCHAR NOT NULL , database VARCHAR , init_connect VARCHAR , time_zone VARCHAR , sql_mode VARCHAR , idle_ms INT , statistics VARCHAR , pgsql_info VARCHAR)"
 #define STATS_SQLITE_TABLE_PGSQL_USERS "CREATE TABLE stats_pgsql_users (username VARCHAR PRIMARY KEY , frontend_connections INT NOT NULL , frontend_max_connections INT NOT NULL)"
