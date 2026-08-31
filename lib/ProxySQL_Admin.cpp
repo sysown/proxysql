@@ -3354,6 +3354,31 @@ void ProxySQL_Admin::dump_mysql_collations() {
 //	admindb->execute("INSERT INTO disk.mysql_collations SELECT * FROM main.mysql_collations");
 }
 
+void ProxySQL_Admin::dump_ssl_ciphers() {
+	char buf[1024];
+	char desc[128] = { 0 };
+	const char *query = "INSERT OR REPLACE INTO ssl_ciphers VALUES (\"%s\", \"%s\")";
+	admindb->execute("DELETE FROM ssl_ciphers");
+	if (GloVars.global.ssl_ctx == NULL) {
+		return;
+	}
+	STACK_OF(SSL_CIPHER) *ciphers = SSL_CTX_get_ciphers(GloVars.global.ssl_ctx);
+	if (ciphers == NULL) {
+		return;
+	}
+	int num = sk_SSL_CIPHER_num(ciphers);
+	for (int i = 0; i < num; i++) {
+		const SSL_CIPHER *cipher = sk_SSL_CIPHER_value(ciphers, i);
+		SSL_CIPHER_description(cipher, desc, sizeof(desc));
+		char *fst_newline = strchr(desc, '\n');
+		if (fst_newline) {
+			*fst_newline = '\0';
+		}
+		snprintf(buf, sizeof(buf), query, SSL_CIPHER_get_name(cipher), desc);
+		admindb->execute(buf);
+	}
+}
+
 void ProxySQL_Admin::check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs) {
 //	int i;
 	table_def_t *td;
