@@ -5104,7 +5104,7 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Parsing DEALLOCATE command = %s\n", nq.c_str());
 
 	const char* dealloc_value = nq.c_str();
-	if (strncasecmp(dealloc_value, "ALL", 3) == 0) {
+	if (strcasecmp(dealloc_value, "ALL") == 0) {
 		client_myds->myconn->local_stmts->client_close_all();
 	} else {
 		if (client_myds->myconn->local_stmts->client_close(dealloc_value) == false) {
