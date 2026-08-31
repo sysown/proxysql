@@ -41,6 +41,8 @@ run_check "Check package CI verification hook" \
 	test/infra/control/test-package-ci-verification.bash
 run_check "Check package install verifier" \
 	test/infra/control/test-verify-package-install.bash
+run_check "Check system OpenSSL audit regressions" \
+	test/infra/control/test-no-system-openssl-links-regressions.bash
 run_check "Check group infra/workflow coverage (warn-only)" \
 	python3 test/tap/groups/lint_group_coverage.py
 

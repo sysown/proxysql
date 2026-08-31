@@ -38,10 +38,11 @@ diff --git libmariadb/secure/openssl.c libmariadb/secure/openssl.c
 index 916024a8..79564a10 100644
 --- libmariadb/secure/openssl.c
 +++ libmariadb/secure/openssl.c
-@@ -30,6 +30,11 @@
+@@ -30,6 +30,12 @@
  #include <openssl/conf.h>
  #include <openssl/md4.h>
  
++#include "proxysql_default_ca.h"
 +#include <sys/mman.h>
 +#include <sys/types.h>
 +#include <sys/stat.h>
@@ -50,7 +51,7 @@ index 916024a8..79564a10 100644
  #if defined(_WIN32) && !defined(_OPENSSL_Applink) && defined(HAVE_OPENSSL_APPLINK_C)
  #include <openssl/applink.c>
  #endif
-@@ -70,6 +75,89 @@
+@@ -70,6 +76,89 @@
  extern my_bool ma_tls_initialized;
  extern unsigned int mariadb_deinitialize_ssl;
  
@@ -140,7 +141,7 @@ index 916024a8..79564a10 100644
  #define MAX_SSL_ERR_LEN 100
  char tls_library_version[TLS_VERSION_LENGTH];
  
-@@ -331,7 +419,7 @@
+@@ -331,7 +420,7 @@
         *keyfile= mysql->options.ssl_key;
    char *pw= (mysql->options.extension) ?
              mysql->options.extension->tls_pw : NULL;
@@ -149,34 +150,103 @@ index 916024a8..79564a10 100644
    /* add cipher */
    if ((mysql->options.ssl_cipher &&
          mysql->options.ssl_cipher[0] != 0))
-@@ -345,10 +433,27 @@
-   }
- 
+@@ -340,10 +429,28 @@
    /* ca_file and ca_path */
 -  if (!SSL_CTX_load_verify_locations(ctx,
 +  if (local_x509store != NULL && mysql->options.ssl_ca != NULL && mysql->options.ssl_capath == NULL) {
 +    SSL_CTX_set1_cert_store(ctx, local_x509store);
 +    ssl_rc = proxysql_SSL_CTX_local_x509store_add_file(ctx, mysql->options.ssl_ca, 1);
 +  } else {
-+    // default behavior
-+    ssl_rc = SSL_CTX_load_verify_locations(ctx,
-                                     mysql->options.ssl_ca,
--                                    mysql->options.ssl_capath))
--  {
-+                                    mysql->options.ssl_capath);
-+    if (ssl_rc == 1) {
-+      if (local_x509store == NULL)
-+        if (SSL_CTX_get_cert_store(ctx) != NULL) {
-+          local_x509store = SSL_CTX_get_cert_store(ctx);
-+          thread_ctx = SSL_CTX_new(TLS_client_method());
-+          SSL_CTX_set1_cert_store(thread_ctx, local_x509store);
-+          if (mysql->options.ssl_ca != NULL) {
-+            proxysql_SSL_CTX_local_x509store_add_file(ctx,mysql->options.ssl_ca, 0);
-+          }
++    ssl_rc = proxysql_ssl_load_verify_locations(
++        ctx,
++        mysql->options.ssl_ca,
++        mysql->options.ssl_capath,
++        proxysql_default_ca_files);
++    if (ssl_rc == 1 &&
++        (mysql->options.ssl_ca != NULL || mysql->options.ssl_capath != NULL)) {
++      if (local_x509store == NULL && SSL_CTX_get_cert_store(ctx) != NULL) {
++        local_x509store = SSL_CTX_get_cert_store(ctx);
++        thread_ctx = SSL_CTX_new(TLS_client_method());
++        if (thread_ctx == NULL) {
++          local_x509store = NULL;
++          goto error;
 +        }
++        SSL_CTX_set1_cert_store(thread_ctx, local_x509store);
++        if (mysql->options.ssl_ca != NULL) {
++          proxysql_SSL_CTX_local_x509store_add_file(ctx,mysql->options.ssl_ca, 0);
++        }
++      }
 +    }
 +  }
-+  if (ssl_rc == 0) {
-     if (mysql->options.ssl_ca || mysql->options.ssl_capath)
-       goto error;
-     if (SSL_CTX_set_default_verify_paths(ctx) == 0)
++  if (ssl_rc == 0)
++    goto error;
+-                                    mysql->options.ssl_ca,
+-                                    mysql->options.ssl_capath))
+-  {
+-    if (mysql->options.ssl_ca || mysql->options.ssl_capath)
+-      goto error;
+-    if (SSL_CTX_set_default_verify_paths(ctx) == 0)
+-      goto error;
+-  }
+diff --git libmariadb/secure/proxysql_default_ca.h libmariadb/secure/proxysql_default_ca.h
+new file mode 100644
+index 00000000..4cb3bb94
+--- /dev/null
++++ libmariadb/secure/proxysql_default_ca.h
+@@ -0,0 +1,56 @@
++#ifndef PROXYSQL_DEFAULT_CA_H
++#define PROXYSQL_DEFAULT_CA_H
++
++#include <openssl/ssl.h>
++#include <stdlib.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++static const char *const proxysql_default_ca_files[]= {
++  "/etc/ssl/certs/ca-certificates.crt",
++  "/etc/pki/tls/certs/ca-bundle.crt",
++  "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
++  "/etc/ssl/ca-bundle.pem",
++  "/var/lib/ca-certificates/ca-bundle.pem",
++  "/usr/local/share/certs/ca-root-nss.crt",
++  "/etc/ssl/cert.pem",
++  "/private/etc/ssl/cert.pem",
++  NULL
++};
++
++static int proxysql_ssl_is_readable_file(const char *path)
++{
++  struct stat status;
++
++  return path != NULL && stat(path, &status) == 0 &&
++         S_ISREG(status.st_mode) &&
++         (status.st_mode & (S_IWGRP | S_IWOTH)) == 0 &&
++         access(path, R_OK) == 0;
++}
++
++static int proxysql_ssl_load_verify_locations(
++    SSL_CTX *context,
++    const char *connector_ca_file,
++    const char *connector_ca_directory,
++    const char *const *default_ca_files)
++{
++  size_t index;
++
++  if (connector_ca_file != NULL || connector_ca_directory != NULL)
++    return SSL_CTX_load_verify_locations(context, connector_ca_file,
++                                         connector_ca_directory);
++
++  if (getenv("SSL_CERT_FILE") != NULL || getenv("SSL_CERT_DIR") != NULL)
++    return SSL_CTX_set_default_verify_paths(context);
++
++  for (index= 0; default_ca_files[index] != NULL; index++) {
++    if (!proxysql_ssl_is_readable_file(default_ca_files[index]))
++      continue;
++    return SSL_CTX_load_verify_locations(context, default_ca_files[index],
++                                         NULL);
++  }
++
++  return SSL_CTX_set_default_verify_paths(context);
++}
++
++#endif
