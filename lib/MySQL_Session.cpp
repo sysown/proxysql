@@ -5408,6 +5408,7 @@ sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str());
 										}
 									}
 									if (mirror == false && session_type == PROXYSQL_SESSION_MYSQL &&
+										client_myds->com_field_list == false &&
 										qpo->switch_to_fast_forward) {
 										handler_ret = GPFC_QueryRule_SwitchToFastForward(pkt);
 										if (handler_ret != 0) {
