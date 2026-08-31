@@ -287,10 +287,10 @@ sh-%:
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 
 galera_1_timeout_count: galera_1_timeout_count.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
-	$(CXX) -DTEST_GALERA $< ../../../src/SQLite3_Server.cpp ../../../lib/ProxySQL_Admin.cpp -I$(CLICKHOUSE_CPP_IDIR) -I$(COREDUMPER_IDIR) $(IDIRS) $(LDIRS) -L$(CLICKHOUSE_CPP_LDIR) -L$(LZ4_LDIR) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(CLICKHOUSE_CPP_PATH)/contrib/zstd/zstd/libzstdstatic.a $(LZ4_LDIR)/liblz4.a -lscram -lusual $(ALLOW_MULTI_DEF) -o $@
+	$(CXX) -DTEST_GALERA $< ../../../src/SQLite3_Server.cpp ../../../lib/ProxySQL_Admin.cpp -I$(COREDUMPER_IDIR) $(IDIRS) $(LDIRS) -L$(CLICKHOUSE_CPP_LDIR) -L$(LZ4_LDIR) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(CLICKHOUSE_CPP_PATH)/contrib/zstd/zstd/libzstdstatic.a $(LZ4_LDIR)/liblz4.a -lscram -lusual $(ALLOW_MULTI_DEF) -o $@
 
 galera_2_timeout_no_count: galera_2_timeout_no_count.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
-	$(CXX) -DTEST_GALERA $< ../../../src/SQLite3_Server.cpp ../../../lib/ProxySQL_Admin.cpp -I$(CLICKHOUSE_CPP_IDIR) -I$(COREDUMPER_IDIR) $(IDIRS) $(LDIRS) -L$(CLICKHOUSE_CPP_LDIR) -L$(LZ4_LDIR) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(CLICKHOUSE_CPP_PATH)/contrib/zstd/zstd/libzstdstatic.a $(LZ4_LDIR)/liblz4.a -lscram -lusual $(ALLOW_MULTI_DEF) -o $@
+	$(CXX) -DTEST_GALERA $< ../../../src/SQLite3_Server.cpp ../../../lib/ProxySQL_Admin.cpp -I$(COREDUMPER_IDIR) $(IDIRS) $(LDIRS) -L$(CLICKHOUSE_CPP_LDIR) -L$(LZ4_LDIR) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(CLICKHOUSE_CPP_PATH)/contrib/zstd/zstd/libzstdstatic.a $(LZ4_LDIR)/liblz4.a -lscram -lusual $(ALLOW_MULTI_DEF) -o $@
 
 generate_set_session_csv: generate_set_session_csv.cpp
 	$(CXX) $< $(OPT) -o $@
