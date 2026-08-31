@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <ctime>
+#include <exception>
 #include <memory>
 #include <set>
 #include <sstream>
@@ -241,7 +242,7 @@ public:
 		current_topology_ = load_cached_topology(*db_, topology_uuid_);
 		std::vector<uint8_t> password;
 		if (services_.get_secret == nullptr || services_.get_secret("mysql_router",
-			("metadata:" + topology_uuid_).c_str(), password) != ProxySQL_PluginSecretResult::ok) {
+			("metadata-" + topology_uuid_).c_str(), password) != ProxySQL_PluginSecretResult::ok) {
 			throw std::runtime_error("Router metadata credential is unavailable");
 		}
 		password_ = SecureBytes(std::move(password));
@@ -277,8 +278,8 @@ public:
 	}
 
 	ReconcileTopologySnapshot read_topology() override {
-		try {
-			session_ = ConnectorCMetadataSession::connect(endpoint_, tls_, password_,
+		auto read_metadata = [&](const MetadataEndpoint& candidate) {
+			session_ = ConnectorCMetadataSession::connect(candidate, tls_, password_,
 				std::max<unsigned>(1, config_.connect_timeout_ms / 1000));
 			QueryResult registration = session_->query(
 				"SELECT router_id FROM mysql_innodb_cluster_metadata.v2_routers WHERE router_id=?",
@@ -350,8 +351,32 @@ public:
 				}
 			}
 			return snapshot;
-		} catch (const std::exception&) {
-			MysqlRouterContext& failure_context = mysql_router_context();
+		};
+
+		std::exception_ptr metadata_failure;
+		std::set<std::pair<std::string, uint16_t>> attempted;
+		auto attempt_metadata = [&](const MetadataEndpoint& candidate,
+			ReconcileTopologySnapshot& snapshot) {
+			if (!attempted.emplace(candidate.host, candidate.port).second) return false;
+			try {
+				snapshot = read_metadata(candidate);
+				endpoint_ = candidate;
+				return true;
+			} catch (...) {
+				if (!metadata_failure) metadata_failure = std::current_exception();
+				return false;
+			}
+		};
+
+		ReconcileTopologySnapshot metadata_snapshot;
+		if (attempt_metadata(endpoint_, metadata_snapshot)) return metadata_snapshot;
+		for (const auto& instance : current_topology_.instances) {
+			MetadataEndpoint candidate {metadata_user_, instance.classic.host,
+				instance.classic.port};
+			if (attempt_metadata(candidate, metadata_snapshot)) return metadata_snapshot;
+		}
+
+		MysqlRouterContext& failure_context = mysql_router_context();
 			{
 				std::lock_guard<std::mutex> guard(failure_context.status_mutex);
 				failure_context.status.metadata_available = false;
@@ -359,7 +384,10 @@ public:
 			if (failure_context.metrics.metadata_available) {
 				failure_context.metrics.metadata_available->Set(0);
 			}
-			if (current_topology_.instances.empty()) throw;
+			if (current_topology_.instances.empty()) {
+				if (metadata_failure) std::rethrow_exception(metadata_failure);
+				throw std::runtime_error("Router metadata endpoints are unavailable");
+			}
 			for (const auto& instance : current_topology_.instances) {
 				try {
 					MetadataEndpoint health_endpoint {metadata_user_, instance.classic.host,
@@ -390,8 +418,8 @@ public:
 					return snapshot;
 				} catch (...) {}
 			}
-			throw;
-		}
+			if (metadata_failure) std::rethrow_exception(metadata_failure);
+			throw std::runtime_error("Router metadata endpoints are unavailable");
 	}
 
 	AccountSnapshot read_users() override {

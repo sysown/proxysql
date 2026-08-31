@@ -66,7 +66,7 @@ public:
 } // namespace
 
 int main() {
-	plan(17);
+	plan(18);
 
 	ReadSession reader;
 	auto snapshot = UserSynchronizer::read(reader, "router_metadata");
@@ -163,6 +163,27 @@ int main() {
 	   "release preserves the local row while transferring ownership to the operator");
 	ok(generation.users.size() == 6,
 	   "the normalized generation contains only active, inactive, retained, and release rows");
+
+	AccountSnapshot split_accounts;
+	split_accounts.accounts = {
+		account("split", "%", "caching_sha2_password", "$A$005$split"),
+	};
+	UserSyncInput split_input;
+	split_input.topology_uuid = "cluster-1";
+	split_input.route_writer_hostgroup = 8100;
+	CurrentMysqlUser split_frontend = current("split", "$A$005$split");
+	split_frontend.backend = false;
+	CurrentMysqlUser split_backend = current("split", "$A$005$split");
+	split_backend.frontend = false;
+	split_input.current_users = {split_frontend, split_backend};
+	bool split_collapsed = false;
+	try {
+		auto split_generation = UserSynchronizer::normalize(split_accounts, split_input);
+		const auto* split_user = managed(split_generation, "split");
+		split_collapsed = split_user != nullptr && split_user->frontend && split_user->backend;
+	} catch (const std::exception&) {}
+	ok(split_collapsed,
+	   "an owned complementary frontend/backend split collapses to one canonical managed user");
 
 	return exit_status();
 }

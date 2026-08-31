@@ -360,6 +360,12 @@ int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
 	plan(NO_PLAN);
 	ok(test_init_minimal() == 0, "minimal core globals initialize");
+#ifdef DEBUG
+	// Admin::init() persists the daemon's debug-module defaults. The full
+	// daemon initializes this array during option processing; this process-level
+	// fixture bypasses that path and must establish the same prerequisite.
+	init_debug_struct();
+#endif
 
 	const std::string temp_dir = make_temp_dir();
 	const std::string config_path = temp_dir + "/proxysql.cnf";

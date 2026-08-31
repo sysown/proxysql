@@ -7,6 +7,7 @@
 #include "MySQL_Thread.h"
 #include "MySQL_Thread_test.h"
 #include "ProxySQL_PluginConfig_test.h"
+#include "ProxySQL_PluginSecrets.h"
 #include "ProxySQL_Statistics.hpp"
 #include "proxysql_admin.h"
 #include "proxysql_utils.h"
@@ -49,6 +50,27 @@ public:
 		admin->drop_tables_defs(&definitions);
 		free(storage);
 		return materialized;
+	}
+
+	static bool materialize_plugin_secret_schema(SQLite3DB& db) {
+		void* storage = calloc(1, sizeof(ProxySQL_Admin));
+		auto* admin = reinterpret_cast<ProxySQL_Admin*>(storage);
+		std::vector<table_def_t*> definitions;
+		admin->insert_into_tables_defs(&definitions, "proxysql_plugin_secrets",
+			proxysql_plugin_secrets_table_definition());
+		const bool materialized = admin->check_and_build_standard_tables(&db, &definitions);
+		admin->drop_tables_defs(&definitions);
+		free(storage);
+		return materialized;
+	}
+
+	static bool restore_plugin_config_runtime_state(SQLite3DB& db) {
+		void* storage = calloc(1, sizeof(ProxySQL_Admin));
+		auto* admin = reinterpret_cast<ProxySQL_Admin*>(storage);
+		admin->admindb = &db;
+		const bool restored = admin->restore_plugin_config_runtime_state();
+		free(storage);
+		return restored;
 	}
 };
 
@@ -220,6 +242,7 @@ struct Runtime {
 	std::vector<std::string> trace;
 	char* mutate_owner {nullptr};
 	SQLite3DB* db {nullptr};
+	SQLite3DB* live_db {nullptr};
 	Mutation mutation {Mutation::none};
 	bool mutation_ok {true};
 
@@ -276,6 +299,16 @@ struct Runtime {
 	static bool publish(void* ptr, ProxySQL_PluginConfigStage stage, SQLite3DB&, uint64_t generation, std::string& error) {
 		auto& self = *static_cast<Runtime*>(ptr);
 		self.trace.push_back("P" + std::to_string(static_cast<int>(stage)));
+		if (stage == ProxySQL_PluginConfigStage::servers && self.live_db != nullptr) {
+			char* sqlite_error = nullptr;
+			const int rc = sqlite3_exec(self.live_db->get_db(),
+				"INSERT INTO runtime_publications VALUES (1)", nullptr, nullptr, &sqlite_error);
+			if (rc != SQLITE_OK) {
+				error = sqlite_error != nullptr ? sqlite_error : sqlite3_errstr(rc);
+				sqlite3_free(sqlite_error);
+				return false;
+			}
+		}
 		if (stage == self.throw_publish) throw std::runtime_error("injected publish exception");
 		if (stage == ProxySQL_PluginConfigStage::servers) self.servers = generation;
 		if (stage == ProxySQL_PluginConfigStage::users) self.users = generation;
@@ -528,6 +561,39 @@ int main() {
 			"('mysql_router','mysql_user_v2','v2:1:0:41',1)"),
 		"the ownership schema accepts discriminated exact user keys in main and disk");
 
+	SQLite3DB secret_schema;
+	secret_schema.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+	const bool secret_seeded = secret_schema.execute(proxysql_plugin_secrets_table_definition()) &&
+		secret_schema.execute("INSERT INTO proxysql_plugin_secrets VALUES "
+			"('mysql_router','metadata-topology',X'000000000000000000000000',X'01',"
+			"X'00000000000000000000000000000000',1)");
+	const bool secret_materialized = TestDiskUpgrade::materialize_plugin_secret_schema(secret_schema);
+	const bool secret_materialized_again = TestDiskUpgrade::materialize_plugin_secret_schema(secret_schema);
+	ok(secret_seeded && secret_materialized && secret_materialized_again &&
+		scalar(secret_schema, "SELECT COUNT(*) FROM proxysql_plugin_secrets "
+			"WHERE owner='mysql_router' AND secret_name='metadata-topology'") == 1,
+		"production schema materialization preserves encrypted plugin credentials across restarts");
+
+	Fixture attached_runtime;
+	SQLite3DB live_runtime;
+	char live_runtime_uri[] = "file:plugin_config_live_runtime?mode=memory&cache=shared";
+	live_runtime.open(live_runtime_uri,
+		SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI | SQLITE_OPEN_SHAREDCACHE);
+	const bool attached_runtime_ready = live_runtime.execute(
+		"CREATE TABLE runtime_publications (generation INTEGER NOT NULL)") &&
+		attached_runtime.db.execute(
+			"ATTACH DATABASE 'file:plugin_config_live_runtime?mode=memory&cache=shared' AS myhgm");
+	attached_runtime.runtime.live_db = &live_runtime;
+	const auto attached_runtime_result = proxysql_apply_plugin_mysql_config(
+		attached_runtime.db, attached_runtime.plan, attached_runtime.runtime.hooks());
+	ok(attached_runtime_ready && attached_runtime_result.applied &&
+		scalar(live_runtime, "SELECT COUNT(*) FROM runtime_publications") == 1 &&
+		scalar(attached_runtime.db, "SELECT generation FROM proxysql_plugin_config_generations "
+			"WHERE owner='mysql_router'") == 13 &&
+		scalar(attached_runtime.db, "SELECT generation FROM disk.proxysql_plugin_config_generations "
+			"WHERE owner='mysql_router'") == 13,
+		"publication updates a separately connected runtime database attached to Admin in DEBUG");
+
 	SQLite3DB upgraded_admin;
 	SQLite3DB upgraded_config;
 	upgraded_admin.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
@@ -707,6 +773,45 @@ int main() {
 		unknown_ownership_schema.check_table_structure(
 			"proxysql_plugin_owned_objects", k_ledger) == 1,
 		"an unknown ownership schema fails closed without destructive generic rebuilding");
+
+	SQLite3DB restored_plugin_state;
+	restored_plugin_state.open(
+		const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+	const bool restore_seeded = restored_plugin_state.execute(k_ledger_current) &&
+		restored_plugin_state.execute(k_generations) &&
+		restored_plugin_state.execute("ATTACH DATABASE ':memory:' AS disk") &&
+		restored_plugin_state.execute((std::string(k_ledger_current).replace(
+			std::string(k_ledger_current).find("proxysql_plugin_owned_objects"),
+			strlen("proxysql_plugin_owned_objects"), "disk.proxysql_plugin_owned_objects")).c_str()) &&
+		restored_plugin_state.execute("CREATE TABLE disk.proxysql_plugin_config_generations "
+			"(owner TEXT PRIMARY KEY, generation INTEGER NOT NULL)") &&
+		restored_plugin_state.execute("INSERT INTO main.proxysql_plugin_owned_objects VALUES "
+			"('stale','hostgroup','1',1)") &&
+		restored_plugin_state.execute("INSERT INTO main.proxysql_plugin_config_generations VALUES "
+			"('stale',1)") &&
+		restored_plugin_state.execute("INSERT INTO disk.proxysql_plugin_owned_objects VALUES "
+			"('mysql_router','hostgroup','8100',12),"
+			"('other_plugin','mysql_query_rule','77',8)") &&
+		restored_plugin_state.execute("INSERT INTO disk.proxysql_plugin_config_generations VALUES "
+			"('mysql_router',12),('other_plugin',8)");
+	const bool state_restored = restore_seeded &&
+		TestDiskUpgrade::restore_plugin_config_runtime_state(restored_plugin_state);
+	const bool state_restored_again = state_restored &&
+		TestDiskUpgrade::restore_plugin_config_runtime_state(restored_plugin_state);
+	ok(state_restored_again &&
+		text_value(restored_plugin_state,
+			"SELECT group_concat(value,';') FROM (SELECT owner||'|'||object_type||'|'||object_key||'|'||generation value "
+			"FROM main.proxysql_plugin_owned_objects ORDER BY owner,object_type,object_key)") ==
+		text_value(restored_plugin_state,
+			"SELECT group_concat(value,';') FROM (SELECT owner||'|'||object_type||'|'||object_key||'|'||generation value "
+			"FROM disk.proxysql_plugin_owned_objects ORDER BY owner,object_type,object_key)") &&
+		text_value(restored_plugin_state,
+			"SELECT group_concat(value,';') FROM (SELECT owner||'|'||generation value "
+			"FROM main.proxysql_plugin_config_generations ORDER BY owner)") ==
+		text_value(restored_plugin_state,
+			"SELECT group_concat(value,';') FROM (SELECT owner||'|'||generation value "
+			"FROM disk.proxysql_plugin_config_generations ORDER BY owner)"),
+		"startup restores the exact persistent plugin ownership and generation state idempotently");
 	ok(upgraded_admin.execute((std::string("ATTACH DATABASE '") + upgrade_config_uri + "' AS disk").c_str()),
 		"the upgraded persistent config tier attaches as disk for publication");
 	char upgrade_owner[] = "mysql_router";
@@ -914,6 +1019,74 @@ int main() {
 		scalar(divergent.db, "SELECT COUNT(*) FROM mysql_query_rules WHERE rule_id=9021 AND comment IS NULL") == 1 &&
 		scalar(divergent.db, "SELECT COUNT(*) FROM disk.mysql_query_rules WHERE rule_id=9021 AND comment IS NULL") == 1,
 		"nullable rule comments are non-owned collisions and remain untouched");
+
+	Fixture runtime_saved_user;
+	ProxySQL_PluginMysqlUserRow combined_user {
+		"runtime_saved", "plugin-secret", true, false, 8100, "appdb", false, true, false,
+		true, true, 100, "{}", "mysql_router:managed"};
+	runtime_saved_user.plan.users = &combined_user;
+	runtime_saved_user.plan.user_count = 1;
+	const auto combined_initial = proxysql_apply_plugin_mysql_config(
+		runtime_saved_user.db, runtime_saved_user.plan, runtime_saved_user.runtime.hooks());
+	bool split_saved = combined_initial.applied;
+	for (const char* schema : {"main", "disk"}) {
+		const std::string prefix = std::string(schema) + ".";
+		split_saved = split_saved && runtime_saved_user.db.execute(("DELETE FROM " + prefix +
+			"mysql_users WHERE username='runtime_saved'").c_str()) &&
+			runtime_saved_user.db.execute(("INSERT INTO " + prefix + "mysql_users VALUES "
+				"('runtime_saved','plugin-secret',1,0,8100,'appdb',0,1,0,1,0,100,'{}','mysql_router:managed'),"
+				"('runtime_saved','plugin-secret',1,0,8100,'appdb',0,1,0,0,1,100,'{}','mysql_router:managed')").c_str());
+	}
+	ok(split_saved,
+		"a standard runtime-user save materializes complementary rows under the combined ownership key");
+	runtime_saved_user.plan.generation = 14;
+	const auto split_recombined = proxysql_apply_plugin_mysql_config(
+		runtime_saved_user.db, runtime_saved_user.plan, runtime_saved_user.runtime.hooks());
+	ok(split_recombined.applied &&
+		!has_collision(split_recombined, "mysql_user:runtime_saved") &&
+		scalar(runtime_saved_user.db, "SELECT COUNT(*) FROM main.mysql_users WHERE "
+			"username='runtime_saved' AND backend=1 AND frontend=1") == 1 &&
+		scalar(runtime_saved_user.db, "SELECT COUNT(*) FROM disk.mysql_users WHERE "
+			"username='runtime_saved' AND backend=1 AND frontend=1") == 1 &&
+		scalar(runtime_saved_user.db, "SELECT COUNT(*) FROM main.mysql_users WHERE "
+			"username='runtime_saved'") == 1 &&
+		scalar(runtime_saved_user.db, "SELECT COUNT(*) FROM disk.mysql_users WHERE "
+			"username='runtime_saved'") == 1,
+		"an owned complementary runtime split canonicalizes without becoming an operator collision");
+
+	Fixture drifted_runtime_saved_user;
+	drifted_runtime_saved_user.plan.users = &combined_user;
+	drifted_runtime_saved_user.plan.user_count = 1;
+	const auto drifted_combined_initial = proxysql_apply_plugin_mysql_config(
+		drifted_runtime_saved_user.db, drifted_runtime_saved_user.plan,
+		drifted_runtime_saved_user.runtime.hooks());
+	bool drifted_split_seeded = drifted_combined_initial.applied;
+	for (const char* schema : {"main", "disk"}) {
+		const std::string prefix = std::string(schema) + ".";
+		drifted_split_seeded = drifted_split_seeded &&
+			drifted_runtime_saved_user.db.execute(("DELETE FROM " + prefix +
+				"mysql_users WHERE username='runtime_saved'").c_str()) &&
+			drifted_runtime_saved_user.db.execute(("INSERT INTO " + prefix + "mysql_users VALUES "
+				"('runtime_saved','plugin-secret',1,0,8100,'appdb',0,1,0,1,0,100,'{}','mysql_router:managed'),"
+				"('runtime_saved','drifted-secret',1,0,8100,'appdb',0,1,0,0,1,100,'{}','mysql_router:managed')").c_str());
+	}
+	drifted_runtime_saved_user.plan.generation = 14;
+	const auto drifted_split_result = proxysql_apply_plugin_mysql_config(
+		drifted_runtime_saved_user.db, drifted_runtime_saved_user.plan,
+		drifted_runtime_saved_user.runtime.hooks());
+	ok(drifted_split_seeded && !drifted_split_result.applied &&
+		drifted_split_result.message.find("split") != std::string::npos &&
+		scalar(drifted_runtime_saved_user.db,
+			"SELECT generation FROM main.proxysql_plugin_config_generations "
+			"WHERE owner='mysql_router'") == 13 &&
+		scalar(drifted_runtime_saved_user.db,
+			"SELECT generation FROM disk.proxysql_plugin_config_generations "
+			"WHERE owner='mysql_router'") == 13 &&
+		scalar(drifted_runtime_saved_user.db,
+			"SELECT COUNT(*) FROM main.mysql_users WHERE username='runtime_saved'") == 2 &&
+		scalar(drifted_runtime_saved_user.db,
+			"SELECT COUNT(*) FROM disk.mysql_users WHERE username='runtime_saved'") == 2,
+		"a drifted owned runtime split fails closed without orphaning rows or advancing ledgers");
 
 	Fixture complementary_variants;
 	ProxySQL_PluginMysqlUserRow backend_only {

@@ -481,6 +481,9 @@ class ProxySQL_Admin {
 	void insert_into_tables_defs(std::vector<table_def_t *> *, const char *table_name, const char *table_def);
 	void drop_tables_defs(std::vector<table_def_t *> *tables_defs);
 	bool check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
+#ifdef PROXYSQL40
+	bool restore_plugin_config_runtime_state();
+#endif
 
 #ifdef DEBUG
 	void flush_debug_levels_runtime_to_database(SQLite3DB *db, bool replace);

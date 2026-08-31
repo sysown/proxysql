@@ -9,6 +9,7 @@
 #include <cctype>
 #include <limits>
 #include <random>
+#include <set>
 #include <stdexcept>
 
 #ifdef MYSQL_ROUTER_CONNECTOR_C
@@ -98,6 +99,12 @@ void validate_grants(IMetadataSession& session, const std::string& account) {
 	}
 	for (const char* required : {
 		"SELECT, EXECUTE ON `MYSQL_INNODB_CLUSTER_METADATA`.*",
+		"UPDATE ON `MYSQL_INNODB_CLUSTER_METADATA`.`CLUSTERS`",
+		"UPDATE ON `MYSQL_INNODB_CLUSTER_METADATA`.`CLUSTERSETS`",
+		"INSERT, UPDATE, DELETE ON `MYSQL_INNODB_CLUSTER_METADATA`.`ROUTERS`",
+		"UPDATE ON `MYSQL_INNODB_CLUSTER_METADATA`.`V2_AR_CLUSTERS`",
+		"UPDATE ON `MYSQL_INNODB_CLUSTER_METADATA`.`V2_CS_CLUSTERSETS`",
+		"UPDATE ON `MYSQL_INNODB_CLUSTER_METADATA`.`V2_GR_CLUSTERS`",
 		"INSERT, UPDATE, DELETE ON `MYSQL_INNODB_CLUSTER_METADATA`.`V2_ROUTERS`",
 		"SELECT ON `PERFORMANCE_SCHEMA`.`REPLICATION_GROUP_MEMBERS`",
 		"SELECT ON `PERFORMANCE_SCHEMA`.`REPLICATION_GROUP_MEMBER_STATS`",
@@ -112,6 +119,12 @@ void validate_grants(IMetadataSession& session, const std::string& account) {
 void apply_grants(IMetadataSession& session, const std::string& account) {
 	for (const std::string& statement : {
 		"GRANT SELECT, EXECUTE ON mysql_innodb_cluster_metadata.* TO " + account,
+		"GRANT UPDATE ON mysql_innodb_cluster_metadata.clusters TO " + account,
+		"GRANT UPDATE ON mysql_innodb_cluster_metadata.clustersets TO " + account,
+		"GRANT INSERT, UPDATE, DELETE ON mysql_innodb_cluster_metadata.routers TO " + account,
+		"GRANT UPDATE ON mysql_innodb_cluster_metadata.v2_ar_clusters TO " + account,
+		"GRANT UPDATE ON mysql_innodb_cluster_metadata.v2_cs_clustersets TO " + account,
+		"GRANT UPDATE ON mysql_innodb_cluster_metadata.v2_gr_clusters TO " + account,
 		"GRANT INSERT, UPDATE, DELETE ON mysql_innodb_cluster_metadata.v2_routers TO " + account,
 		"GRANT SELECT ON performance_schema.replication_group_members TO " + account,
 		"GRANT SELECT ON performance_schema.replication_group_member_stats TO " + account,
@@ -189,7 +202,7 @@ BootstrapResult MysqlRouterBootstrap::run(const BootstrapOptions& options) {
 			BootstrapPhase::discovered, registration.router_id, metadata_user, {}};
 		store_.save_journal(*progress);
 
-		const std::string secret_name = "metadata:" + topology_.topology_uuid;
+		const std::string secret_name = "metadata-" + topology_.topology_uuid;
 		auto persisted_secret = store_.get_secret(secret_name);
 		std::vector<uint8_t> password = persisted_secret ? *persisted_secret : random_password();
 		PasswordWiper wipe(password);
@@ -360,7 +373,9 @@ std::vector<CurrentMysqlUser> current_mysql_users(SQLite3DB& db) {
 		"u.schema_locked,u.transaction_persistent,u.fast_forward,u.frontend,u.backend,"
 		"u.max_connections,u.attributes,u.comment,EXISTS(SELECT 1 FROM main.proxysql_plugin_owned_objects o "
 		"WHERE o.owner='mysql_router' AND ((o.object_type='mysql_user_v2' AND "
-		"o.object_key='v2:'||u.backend||':'||u.frontend||':'||upper(hex(u.username))) OR "
+		"(o.object_key='v2:'||u.backend||':'||u.frontend||':'||upper(hex(u.username)) OR "
+		"(o.object_key='v2:1:1:'||upper(hex(u.username)) AND u.comment LIKE 'mysql_router:%' AND "
+		"((u.backend=1 AND u.frontend=0) OR (u.backend=0 AND u.frontend=1))))) OR "
 		"(o.object_type='mysql_user' AND o.object_key=u.username AND u.comment LIKE 'mysql_router:%'))) AS owned "
 		"FROM main.mysql_users u ORDER BY u.username,u.backend DESC");
 	std::vector<CurrentMysqlUser> result;
@@ -384,7 +399,36 @@ std::vector<CurrentMysqlUser> current_mysql_users(SQLite3DB& db) {
 		if (row.username.empty()) throw std::runtime_error("current mysql_users contains an empty username");
 		result.push_back(std::move(row));
 	}
-	return result;
+	std::vector<CurrentMysqlUser> canonical;
+	for (size_t begin = 0; begin < result.size();) {
+		size_t end = begin + 1;
+		while (end < result.size() && result[end].username == result[begin].username) ++end;
+		if (end - begin == 2 && result[begin].owned && result[begin + 1].owned) {
+			const CurrentMysqlUser* backend = nullptr;
+			const CurrentMysqlUser* frontend = nullptr;
+			for (size_t index = begin; index < end; ++index) {
+				if (result[index].backend && !result[index].frontend) backend = &result[index];
+				if (!result[index].backend && result[index].frontend) frontend = &result[index];
+			}
+			const auto managed = [](const CurrentMysqlUser& user) {
+				return std::tie(user.username, user.password, user.active, user.use_ssl,
+					user.default_hostgroup, user.default_schema, user.schema_locked,
+					user.transaction_persistent, user.fast_forward, user.max_connections,
+					user.attributes, user.comment, user.owned);
+			};
+			if (backend != nullptr && frontend != nullptr && managed(*backend) == managed(*frontend)) {
+				CurrentMysqlUser combined = *backend;
+				combined.backend = true;
+				combined.frontend = true;
+				canonical.push_back(std::move(combined));
+				begin = end;
+				continue;
+			}
+		}
+		for (size_t index = begin; index < end; ++index) canonical.push_back(std::move(result[index]));
+		begin = end;
+	}
+	return canonical;
 }
 
 std::map<std::string, PersistedManagedUser> persisted_mysql_router_users(SQLite3DB& db) {
@@ -504,7 +548,8 @@ public:
 		auto result = services_.put_secret("mysql_router", std::string(name).c_str(),
 			value.data(), value.size());
 		if (result != ProxySQL_PluginSecretResult::ok) {
-			throw std::runtime_error("failed to persist encrypted metadata credential");
+			throw std::runtime_error("failed to persist encrypted metadata credential (secret service result " +
+				std::to_string(static_cast<unsigned>(result)) + ")");
 		}
 	}
 
@@ -513,7 +558,8 @@ public:
 		auto result = services_.get_secret("mysql_router", std::string(name).c_str(), value);
 		if (result == ProxySQL_PluginSecretResult::not_found) return std::nullopt;
 		if (result != ProxySQL_PluginSecretResult::ok) {
-			throw std::runtime_error("failed to read encrypted metadata credential");
+			throw std::runtime_error("failed to read encrypted metadata credential (secret service result " +
+				std::to_string(static_cast<unsigned>(result)) + ")");
 		}
 		return value;
 	}

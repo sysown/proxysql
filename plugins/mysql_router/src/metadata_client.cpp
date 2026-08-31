@@ -137,8 +137,49 @@ void prepare_and_bind(Statement& statement, std::string_view sql,
 	}
 }
 
+QueryResult execute_text_query(MYSQL* mysql, std::string_view sql,
+	uint64_t* affected_rows) {
+	if (sql.size() > std::numeric_limits<unsigned long>::max()) {
+		throw std::runtime_error("metadata SQL is too large");
+	}
+	if (mysql_real_query(mysql, sql.data(), static_cast<unsigned long>(sql.size())) != 0) {
+		throw std::runtime_error(std::string("mysql_real_query failed: ") + mysql_error(mysql));
+	}
+	if (affected_rows != nullptr) *affected_rows = mysql_affected_rows(mysql);
+	MYSQL_RES* raw_result = mysql_store_result(mysql);
+	if (raw_result == nullptr) {
+		if (mysql_field_count(mysql) != 0) {
+			throw std::runtime_error(std::string("mysql_store_result failed: ") + mysql_error(mysql));
+		}
+		return {};
+	}
+	std::unique_ptr<MYSQL_RES, decltype(&mysql_free_result)> result_guard(
+		raw_result, mysql_free_result);
+	const unsigned count = mysql_num_fields(raw_result);
+	MYSQL_FIELD* fields = mysql_fetch_fields(raw_result);
+	QueryResult result;
+	for (MYSQL_ROW source = mysql_fetch_row(raw_result); source != nullptr;
+		source = mysql_fetch_row(raw_result)) {
+		unsigned long* lengths = mysql_fetch_lengths(raw_result);
+		if (lengths == nullptr) {
+			throw std::runtime_error(std::string("mysql_fetch_lengths failed: ") + mysql_error(mysql));
+		}
+		QueryRow row;
+		for (unsigned i = 0; i < count; ++i) {
+			row[fields[i].name] = source[i] == nullptr
+				? SqlCell{} : SqlCell(std::string(source[i], lengths[i]));
+		}
+		result.rows.push_back(std::move(row));
+	}
+	if (mysql_errno(mysql) != 0) {
+		throw std::runtime_error(std::string("mysql_fetch_row failed: ") + mysql_error(mysql));
+	}
+	return result;
+}
+
 QueryResult execute_query(MYSQL* mysql, std::string_view sql,
 	const std::vector<SqlValue>& params, uint64_t* affected_rows) {
+	if (params.empty()) return execute_text_query(mysql, sql, affected_rows);
 	Statement statement(mysql);
 	std::vector<MYSQL_BIND> params_bind;
 	std::vector<int64_t> integers;

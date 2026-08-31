@@ -46,8 +46,16 @@ ProxySQL_PluginEarlyActionResult early_action(
 		return ProxySQL_PluginEarlyActionResult::exit_success;
 	} catch (const std::exception& exception) {
 		MysqlRouterContext& context = mysql_router_context();
-		std::lock_guard<std::mutex> guard(context.status_mutex);
-		context.status.last_error = exception.what();
+		const std::string message = "mysql_router bootstrap failed: " +
+			std::string(exception.what());
+		{
+			std::lock_guard<std::mutex> guard(context.status_mutex);
+			context.status.last_error = exception.what();
+		}
+		if (action_context.services != nullptr &&
+			action_context.services->log_message != nullptr) {
+			action_context.services->log_message(3, message.c_str());
+		}
 		return ProxySQL_PluginEarlyActionResult::exit_failure;
 	}
 }
@@ -66,6 +74,11 @@ bool init(ProxySQL_PluginServices* services) {
 				context.reconcile_backend->initial_user_generation());
 		}
 	} catch (const std::exception& error) {
+		if (services->log_message != nullptr) {
+			const std::string message = "mysql_router initialization failed: " +
+				std::string(error.what());
+			services->log_message(3, message.c_str());
+		}
 		std::lock_guard<std::mutex> guard(context.status_mutex);
 		context.status.state = "configuration_error";
 		context.status.last_error = error.what();

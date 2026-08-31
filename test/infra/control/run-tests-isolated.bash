@@ -310,6 +310,31 @@ if [ -z "${MYSQL_BINLOG_BIN}" ]; then
     MYSQL_BINLOG_BIN="$(command -v mysqlbinlog 2>/dev/null || true)"
 fi
 
+cleanup_test_runner() {
+    local exit_code=$?
+    trap - EXIT
+    set +e
+
+    # Run group cleanup on success, failure, interruption, or a crashed test
+    # container. This hook operates from the host while ProxySQL and its
+    # backing infrastructure are still reachable.
+    if [ -n "${TAP_GROUP}" ]; then
+        local pre_cleanup_hook="${WORKSPACE}/test/tap/groups/${TAP_GROUP}/pre-cleanup.bash"
+        if [ ! -f "${pre_cleanup_hook}" ]; then
+            pre_cleanup_hook="${WORKSPACE}/test/tap/groups/${BASE_GROUP}/pre-cleanup.bash"
+        fi
+        if [ -f "${pre_cleanup_hook}" ]; then
+            echo ">>> Executing group pre-cleanup hook: ${pre_cleanup_hook}"
+            "${pre_cleanup_hook}" || true
+        fi
+    fi
+
+    echo ">>> Cleaning up Test Runner container"
+    docker rm -f "${TEST_CONTAINER}" >/dev/null 2>&1 || true
+    exit "${exit_code}"
+}
+trap cleanup_test_runner EXIT
+
 # Execution: run the container
 docker run \
     --name "${TEST_CONTAINER}" \
@@ -588,22 +613,3 @@ docker run \
         # Execute the Python tester
         python3 "${WORKSPACE}/test/scripts/bin/proxysql-tester.py"
     "
-
-# Execute group-specific pre-cleanup hook if it exists
-# This runs before the test runner container is removed, allowing cleanup
-# of ProxySQL-specific configuration while admin is still accessible
-if [ -n "${TAP_GROUP}" ]; then
-    PRE_CLEANUP_HOOK="${WORKSPACE}/test/tap/groups/${TAP_GROUP}/pre-cleanup.bash"
-    if [ ! -f "${PRE_CLEANUP_HOOK}" ]; then
-        PRE_CLEANUP_HOOK="${WORKSPACE}/test/tap/groups/${BASE_GROUP}/pre-cleanup.bash"
-    fi
-
-    if [ -f "${PRE_CLEANUP_HOOK}" ]; then
-        echo ">>> Executing group pre-cleanup hook: ${PRE_CLEANUP_HOOK}"
-        "${PRE_CLEANUP_HOOK}" || true  # Allow cleanup to fail
-    fi
-fi
-
-# Clean up only the runner container
-echo ">>> Cleaning up Test Runner container"
-docker rm -f "${TEST_CONTAINER}" >/dev/null 2>&1 || true

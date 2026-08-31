@@ -34,7 +34,7 @@ size_t server_count(const CompiledMysqlConfig& config, int hostgroup, const char
 } // namespace
 
 int main() {
-	plan(19);
+	plan(20);
 
 	DesiredTopology topology;
 	topology.topology_uuid = "cluster-1";
@@ -92,6 +92,11 @@ int main() {
 	   compiled.group_replication[0].reader_hostgroup == hostgroups.at("gr_reader") &&
 	   compiled.group_replication[0].offline_hostgroup == hostgroups.at("gr_offline"),
 	   "only the four internal GR hostgroups form the monitor mapping");
+	ok(compiled.plan().hostgroup_attribute_count == 8 &&
+	   std::all_of(compiled.plan().hostgroup_attributes,
+		compiled.plan().hostgroup_attributes + compiled.plan().hostgroup_attribute_count,
+		[](const auto& row) { return row.max_num_online_servers == 1000; }),
+	   "managed hostgroups admit the published Router servers");
 
 	ok(compiled.interfaces == std::vector<std::string>({"0.0.0.0:6446", "0.0.0.0:6447", "0.0.0.0:6450"}),
 	   "the plan adds the three standard Classic interfaces");

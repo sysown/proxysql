@@ -44,6 +44,12 @@ public:
 		if (sql.find("SHOW GRANTS") != std::string_view::npos) {
 			QueryResult grants {{
 				row({{"grant", "GRANT SELECT, EXECUTE ON `mysql_innodb_cluster_metadata`.*"}}),
+				row({{"grant", "GRANT UPDATE ON `mysql_innodb_cluster_metadata`.`clusters`"}}),
+				row({{"grant", "GRANT UPDATE ON `mysql_innodb_cluster_metadata`.`clustersets`"}}),
+				row({{"grant", "GRANT INSERT, UPDATE, DELETE ON `mysql_innodb_cluster_metadata`.`routers`"}}),
+				row({{"grant", "GRANT UPDATE ON `mysql_innodb_cluster_metadata`.`v2_ar_clusters`"}}),
+				row({{"grant", "GRANT UPDATE ON `mysql_innodb_cluster_metadata`.`v2_cs_clustersets`"}}),
+				row({{"grant", "GRANT UPDATE ON `mysql_innodb_cluster_metadata`.`v2_gr_clusters`"}}),
 				row({{"grant", "GRANT INSERT, UPDATE, DELETE ON `mysql_innodb_cluster_metadata`.`v2_routers`"}}),
 				row({{"grant", "GRANT SELECT ON `performance_schema`.`replication_group_members`"}}),
 				row({{"grant", "GRANT SELECT ON `performance_schema`.`replication_group_member_stats`"}}),
@@ -150,7 +156,7 @@ int main() {
 	ok(first.success && first.router_id == 17, "a first bootstrap completes with the assigned router id");
 	ok(session.router_inserts == 1, "the Router registration is inserted exactly once");
 	ok(session.account_creates == 1 && session.account_exists, "one metadata service account is created");
-	ok(session.grants == 6, "the complete least-privilege grant set is applied");
+	ok(session.grants == 12, "the complete MySQL Shell-compatible grant set is applied");
 	ok(first.metadata_user.rfind("mysql_router17_", 0) == 0 && first.metadata_user.size() == 27,
 	   "an omitted account name derives from router id plus twelve lowercase characters");
 	ok(store.secret.size() == 32, "the generated service password is persisted as 32 bytes");
@@ -248,7 +254,7 @@ int main() {
 	auto resumed = MysqlRouterBootstrap(interrupted_session, interrupted_store, topology(),
 		"proxy.example").run(options());
 	ok(resumed.success && interrupted_session.account_alters == 1 &&
-	   interrupted_session.grants == 6 && interrupted_store.secret.size() == 32,
+	   interrupted_session.grants == 12 && interrupted_store.secret.size() == 32,
 	   "retry recovers a plugin-generated account interrupted before secret persistence");
 
 	BootstrapSession publication_session;

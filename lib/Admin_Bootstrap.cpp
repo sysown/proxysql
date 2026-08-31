@@ -1008,6 +1008,12 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	}
 
 	__attach_db(admindb, configdb, (char *)"disk");
+#ifdef PROXYSQL40
+	if (!restore_plugin_config_runtime_state()) {
+		proxy_error("Failed to restore persistent plugin ownership state\n");
+		return false;
+	}
+#endif
 	__attach_db(admindb, statsdb, (char *)"stats");
 	__attach_db(admindb, monitordb, (char *)"monitor");
 	__attach_db(statsdb, monitordb, (char *)"monitor");

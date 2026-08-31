@@ -37,6 +37,11 @@ ProxySQL_PluginMysqlConfigResult proxysql_plugin_apply_mysql_config(
 namespace {
 
 std::atomic<ProxySQL_PluginManager*> g_active_plugin_manager { nullptr };
+// The manager must be published before init() so plugins can register through
+// the service table, but readers must not observe command/query-hook state
+// while init_all()/start_all() are still mutating it.  Release this gate only
+// after every configured plugin has started successfully.
+std::atomic<bool> g_active_plugin_manager_ready { false };
 ProxySQL_PluginManager* g_registry_target = nullptr;
 // Guards swaps of g_active_plugin_manager. Readers (dispatch_admin_command,
 // dispatch_query_hook, resolve_alias_to_canonical) take a shared lock, so
@@ -1081,25 +1086,34 @@ bool proxysql_dispatch_configured_plugin_admin_command(
 	const std::string& sql,
 	ProxySQL_PluginCommandResult& result
 ) {
+	if (!g_active_plugin_manager_ready.load(std::memory_order_acquire)) {
+		return false;
+	}
 	// Reader: shared lock so concurrent admin sessions can dispatch
 	// plugin commands in parallel. The unique-lock writers (publish /
 	// unpublish in load_/stop_configured_plugins) still serialize swaps.
 	std::shared_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
-	if (g_active_plugin_manager.load() == nullptr) {
+	if (!g_active_plugin_manager_ready.load(std::memory_order_acquire)) {
 		return false;
 	}
-
-	return g_active_plugin_manager.load()->dispatch_admin_command(ctx, sql, result);
+	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load(std::memory_order_acquire);
+	return mgr != nullptr && mgr->dispatch_admin_command(ctx, sql, result);
 }
 
 #ifdef PROXYSQL40
 std::string proxysql_resolve_configured_plugin_admin_alias(const std::string& sql) {
+	if (!g_active_plugin_manager_ready.load(std::memory_order_acquire)) {
+		return {};
+	}
 	// Return-by-value (not const char*) intentional: the alias table lives
 	// in the manager, and the caller typically releases the lock before
 	// dispatching. A borrowed c_str() would dangle if the manager is swapped
 	// out on reload between resolve and dispatch. Copy out under the lock.
 	std::shared_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
-	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load();
+	if (!g_active_plugin_manager_ready.load(std::memory_order_acquire)) {
+		return {};
+	}
+	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load(std::memory_order_acquire);
 	if (mgr == nullptr) {
 		return {};
 	}
@@ -1111,12 +1125,18 @@ bool proxysql_dispatch_configured_plugin_query_hook(
 	const ProxySQL_PluginQueryHookPayload& payload,
 	ProxySQL_PluginQueryHookResult& result
 ) {
+	if (!g_active_plugin_manager_ready.load(std::memory_order_acquire)) {
+		return false;
+	}
 	// Reader: shared lock so query-hook dispatch on the data-plane hot
 	// path scales across MySQL_Thread / PgSQL_Thread workers instead of
 	// serializing on a single std::mutex. This is the change that lets a
 	// plugin wire a query hook without collapsing per-worker parallelism.
 	std::shared_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
-	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load();
+	if (!g_active_plugin_manager_ready.load(std::memory_order_acquire)) {
+		return false;
+	}
+	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load(std::memory_order_acquire);
 	if (mgr == nullptr) {
 		return false;
 	}
@@ -1124,12 +1144,15 @@ bool proxysql_dispatch_configured_plugin_query_hook(
 }
 
 bool proxysql_has_configured_plugin_query_hook(ProxySQL_PluginProtocol proto) {
-	// Hot path: lock-free.  Reads the atomic pointer; if non-null, calls
-	// has_query_hook() which only reads two pointer-sized fields.  A
-	// concurrent unload can null the pointer between this check and a
-	// subsequent dispatch call -- the dispatch helper handles that case
-	// by re-checking under the lock.  Callers must tolerate spurious
-	// "yes" returns.
+	if (!g_active_plugin_manager_ready.load(std::memory_order_acquire)) {
+		return false;
+	}
+	// Keep the manager alive across the readiness probe. Shutdown clears
+	// readiness and takes the unique lock before releasing manager storage.
+	std::shared_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
+	if (!g_active_plugin_manager_ready.load(std::memory_order_acquire)) {
+		return false;
+	}
 	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load(std::memory_order_acquire);
 	if (mgr == nullptr) {
 		return false;
@@ -1140,8 +1163,14 @@ bool proxysql_has_configured_plugin_query_hook(ProxySQL_PluginProtocol proto) {
 void proxysql_refresh_configured_plugin_runtime_views(const std::string& sql,
 	SQLite3DB* admindb, SQLite3DB* configdb, SQLite3DB* statsdb)
 {
+	if (!g_active_plugin_manager_ready.load(std::memory_order_acquire)) {
+		return;
+	}
 	std::shared_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
-	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load();
+	if (!g_active_plugin_manager_ready.load(std::memory_order_acquire)) {
+		return;
+	}
+	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load(std::memory_order_acquire);
 	if (mgr == nullptr) {
 		return;
 	}
@@ -1158,6 +1187,7 @@ bool proxysql_discover_configured_plugins(
 	// published until every requested module has loaded successfully.
 	std::lock_guard<std::mutex> lifecycle_lock(g_plugin_lifecycle_mutex);
 	err.clear();
+	g_active_plugin_manager_ready.store(false, std::memory_order_release);
 	{
 		std::unique_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
 		g_active_plugin_manager.store(nullptr, std::memory_order_release);
@@ -1176,19 +1206,9 @@ bool proxysql_discover_configured_plugins(
 		}
 	}
 
-	// Publish only after every module has been validated. The later CLI and
-	// schema phases use this same manager; neither reopens a module.
-	//
-	// INVARIANT (publish-before-Phase-E): after this point Phase E
-	// (init_all via proxysql_init_configured_plugins) WILL still write
-	// to commands_ / mysql_query_hook_ / pgsql_query_hook_ on the
-	// published manager.  This is only safe because Phase E runs during
-	// single-threaded startup — before ProxySQL_Main_init_phase3___
-	// start_all spawns the threads that take the lock-free read path
-	// (proxysql_has_configured_plugin_query_hook, Admin_Handler alias
-	// resolution).  Any reordering that moves listener startup before
-	// proxysql_init_configured_plugins() returns will race plain writes
-	// against plain reads.
+	// Publish only after every module has been validated. The manager remains
+	// reader-disabled until start_all() succeeds, so init callbacks may safely
+	// register commands and query hooks even when core workers already run.
 	{
 		std::unique_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
 		manager = std::move(next_manager);
@@ -1236,13 +1256,9 @@ bool proxysql_init_configured_plugins(
 	// tables, so each plugin's init() sees live DB handles against a
 	// schema that already contains its own tables.
 	//
-	// ORDERING INVARIANT: caller MUST invoke this BEFORE any thread
-	// that takes the lock-free read path on the manager
-	// (MySQL_Thread / PgSQL_Thread dispatch_query_hook, Admin_Handler
-	// alias resolution) comes up.  See src/main.cpp:
-	//   ProxySQL_Main_init_phase2___not_started  — runs Phase E
-	//   ProxySQL_Main_init_phase3___start_all    — spawns workers
-	// Phase 3 must run strictly after Phase 2 returns.
+	// Reader state remains disabled for the whole transition. This permits
+	// early actions that require live workers without exposing the manager's
+	// command/query-hook fields while init_all() mutates them.
 	//
 	// FAILURE MODE: if this function returns false, the caller in
 	// src/main.cpp calls exit(EXIT_FAILURE) — Phase E failure is a
@@ -1251,6 +1267,9 @@ bool proxysql_init_configured_plugins(
 	// process teardown (see stop_all's "initialized -> stop()"
 	// contract).  Runtime reload of plugin_modules is NOT supported by
 	// this code path: it is callable from the startup codepath only.
+	std::lock_guard<std::mutex> lifecycle_lock(g_plugin_lifecycle_mutex);
+	std::unique_lock<std::shared_mutex> active_lock(g_active_plugin_manager_mutex);
+	g_active_plugin_manager_ready.store(false, std::memory_order_release);
 	err.clear();
 	if (manager == nullptr) {
 		return true;
@@ -1264,12 +1283,18 @@ bool proxysql_start_configured_plugins(
 	std::string& err
 ) {
 	std::lock_guard<std::mutex> lifecycle_lock(g_plugin_lifecycle_mutex);
+	std::unique_lock<std::shared_mutex> active_lock(g_active_plugin_manager_mutex);
+	g_active_plugin_manager_ready.store(false, std::memory_order_release);
 	err.clear();
 	if (manager == nullptr) {
 		return true;
 	}
 
-	return manager->start_all(err);
+	if (!manager->start_all(err)) {
+		return false;
+	}
+	g_active_plugin_manager_ready.store(true, std::memory_order_release);
+	return true;
 }
 
 bool proxysql_runtime_ready_configured_plugins(
@@ -1289,6 +1314,7 @@ bool proxysql_stop_configured_plugins(
 ) {
 	std::lock_guard<std::mutex> lifecycle_lock(g_plugin_lifecycle_mutex);
 	err.clear();
+	g_active_plugin_manager_ready.store(false, std::memory_order_release);
 	{
 		std::unique_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
 		g_active_plugin_manager.store(nullptr, std::memory_order_release);

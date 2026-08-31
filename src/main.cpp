@@ -1552,18 +1552,17 @@ static void InitConfiguredPlugins() {
 	}
 }
 
-static void RunConfiguredPluginEarlyActions() {
-	if (GloVars.no_plugins) return;
+static ProxySQL_PluginEarlyActionResult RunConfiguredPluginEarlyActions() {
+	if (GloVars.no_plugins) return ProxySQL_PluginEarlyActionResult::not_requested;
 	ProxySQL_PluginParsedOptionContext parsed_options(*GloVars.opt);
 	const auto context = parsed_options.early_action_context(GloVars.config_file, GloVars.datadir);
 	std::string plugin_error {};
 	const auto result = proxysql_run_configured_plugin_early_actions(
 		GloPluginManager.get(), context, plugin_error);
-	if (result == ProxySQL_PluginEarlyActionResult::exit_success) exit(EXIT_SUCCESS);
 	if (result == ProxySQL_PluginEarlyActionResult::exit_failure) {
 		proxy_error("Plugin early action failed: %s\n", plugin_error.c_str());
-		exit(EXIT_FAILURE);
 	}
+	return result;
 }
 
 static void StartConfiguredPlugins() {
@@ -1628,16 +1627,12 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	//              tables_defs_{admin,config,stats} and runs the DDL via
 	//              check_and_build_standard_tables, all on the same
 	//              first-boot/reload code path as the core tables.
-	//   Phase D:   early_action() with parsed-option callbacks and full
-	//              services (live DB handles).
-	//   Phase E:   init() with full services (live DB handles pointing at
-	//              a schema that already contains the plugin's own tables).
-	//   Phase F:   start() launches the plugin's threads / accept loops.
+	//   Phase D-F are deferred to phase 3, after Auth, HGM, QPro, and MTH
+	//   are initialized. This makes the documented full snapshot/publication
+	//   services genuinely live for early actions such as Router bootstrap,
+	//   while still running plugins before listener validation and startup.
 	RegisterConfiguredPluginSchemas();
 	ProxySQL_Main_init_Admin_module(boostrap_info);
-	RunConfiguredPluginEarlyActions();
-	InitConfiguredPlugins();
-	StartConfiguredPlugins();
 #else  /* !PROXYSQL40 */
 	// v3.0/v3.1 builds: no plugin loader.  Plain admin init only.
 	ProxySQL_Main_init_Admin_module(boostrap_info);
@@ -1756,6 +1751,16 @@ bool ProxySQL_Main_init_phase3___start_all() {
 	__sync_fetch_and_add(&GloMTH->status_variables.threads_initialized, 1);
 	__sync_fetch_and_add(&GloPTH->status_variables.threads_initialized, 1);
 #ifdef PROXYSQL40
+	// Router bootstrap publishes interfaces through the live worker listener
+	// path, so workers must run before early actions. The plugin manager remains
+	// reader-disabled until init/start complete; workers cannot observe the
+	// command/query-hook state while those callbacks mutate it.
+	const auto early_action_result = RunConfiguredPluginEarlyActions();
+	if (early_action_result == ProxySQL_PluginEarlyActionResult::exit_success) exit(EXIT_SUCCESS);
+	if (early_action_result == ProxySQL_PluginEarlyActionResult::exit_failure) exit(EXIT_FAILURE);
+	InitConfiguredPlugins();
+	StartConfiguredPlugins();
+
 	// Runtime-ready callbacks run only now: HGM, Auth, QPro, and MTH all
 	// exist, but no listener has yet been validated or started.
 	RunConfiguredPluginsRuntimeReady();

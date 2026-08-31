@@ -520,13 +520,34 @@ UserKeyKind parse_user_identity_key(const std::string& key, Preflight::UserIdent
 
 struct ExistingUserVariant {
 	Preflight::UserIdentity identity;
+	std::string password;
+	bool active {false};
+	bool use_ssl {false};
+	int default_hostgroup {0};
+	std::string default_schema;
+	bool schema_locked {false};
+	bool transaction_persistent {false};
+	bool fast_forward {false};
+	int max_connections {0};
+	std::string attributes;
 	std::string comment;
 };
+
+bool same_managed_user(const ExistingUserVariant& left, const ExistingUserVariant& right) {
+	return std::tie(left.password, left.active, left.use_ssl, left.default_hostgroup,
+		left.default_schema, left.schema_locked, left.transaction_persistent,
+		left.fast_forward, left.max_connections, left.attributes, left.comment) ==
+		std::tie(right.password, right.active, right.use_ssl, right.default_hostgroup,
+		right.default_schema, right.schema_locked, right.transaction_persistent,
+		right.fast_forward, right.max_connections, right.attributes, right.comment);
+}
 
 bool query_user_variants(SQLite3DB& db, const std::string& schema, const std::string& username,
 	std::vector<ExistingUserVariant>& variants, std::string& error) {
 	sqlite3_stmt* statement = nullptr;
-	const std::string sql = "SELECT backend,frontend,comment FROM " + schema +
+	const std::string sql = "SELECT backend,frontend,password,active,use_ssl,default_hostgroup,"
+		"default_schema,schema_locked,transaction_persistent,fast_forward,max_connections,"
+		"attributes,comment FROM " + schema +
 		".mysql_users WHERE username=?1 ORDER BY backend DESC,frontend DESC";
 	if (sqlite3_prepare_v2(db.get_db(), sql.c_str(), -1, &statement, nullptr) != SQLITE_OK) {
 		error = sqlite3_errmsg(db.get_db());
@@ -535,10 +556,17 @@ bool query_user_variants(SQLite3DB& db, const std::string& schema, const std::st
 	sqlite3_bind_text(statement, 1, username.c_str(), -1, SQLITE_TRANSIENT);
 	int rc = SQLITE_ROW;
 	while ((rc = sqlite3_step(statement)) == SQLITE_ROW) {
-		const unsigned char* comment = sqlite3_column_text(statement, 2);
+		auto text_column = [statement](int column) {
+			const unsigned char* value = sqlite3_column_text(statement, column);
+			return value == nullptr ? std::string() : reinterpret_cast<const char*>(value);
+		};
 		variants.push_back({{username, sqlite3_column_int(statement, 0) != 0,
 			sqlite3_column_int(statement, 1) != 0},
-			comment == nullptr ? std::string() : reinterpret_cast<const char*>(comment)});
+			text_column(2), sqlite3_column_int(statement, 3) != 0,
+			sqlite3_column_int(statement, 4) != 0, sqlite3_column_int(statement, 5),
+			text_column(6), sqlite3_column_int(statement, 7) != 0,
+			sqlite3_column_int(statement, 8) != 0, sqlite3_column_int(statement, 9) != 0,
+			sqlite3_column_int(statement, 10), text_column(11), text_column(12)});
 	}
 	if (rc != SQLITE_DONE) error = sqlite3_errmsg(db.get_db());
 	sqlite3_finalize(statement);
@@ -554,6 +582,38 @@ bool load_owned_user_identities(SQLite3DB& db, const std::string& schema,
 		if (parse_user_identity_key(key, identity) != UserKeyKind::exact) {
 			error = "invalid mysql_user_v2 ownership key: " + key;
 			return false;
+		}
+		if (identity.backend && identity.frontend) {
+			std::vector<ExistingUserVariant> variants;
+			if (!query_user_variants(db, schema, identity.username, variants, error)) return false;
+			const auto exact = std::find_if(variants.begin(), variants.end(), [&identity](const auto& variant) {
+				return variant.identity.backend == identity.backend &&
+					variant.identity.frontend == identity.frontend;
+			});
+			if (exact == variants.end() && !variants.empty()) {
+				if (variants.size() == 2) {
+					const std::string marker = owner + ":";
+					const auto backend = std::find_if(variants.begin(), variants.end(), [](const auto& variant) {
+						return variant.identity.backend && !variant.identity.frontend;
+					});
+					const auto frontend = std::find_if(variants.begin(), variants.end(), [](const auto& variant) {
+						return !variant.identity.backend && variant.identity.frontend;
+					});
+					if (backend != variants.end() && frontend != variants.end() &&
+						backend->comment.compare(0, marker.size(), marker) == 0 &&
+						frontend->comment.compare(0, marker.size(), marker) == 0 &&
+						same_managed_user(*backend, *frontend)) {
+						if (!identities.insert(backend->identity).second ||
+							!identities.insert(frontend->identity).second) {
+							error = "duplicate exact mysql_user ownership identity";
+							return false;
+						}
+						continue;
+					}
+				}
+				error = "ambiguous owned mysql_user split representation for: " + identity.username;
+				return false;
+			}
 		}
 		if (!identities.insert(identity).second) {
 			error = "duplicate exact mysql_user ownership identity";
@@ -1014,7 +1074,11 @@ static ProxySQL_PluginMysqlConfigResult apply_plugin_mysql_config_impl(
 		}
 		if (hybrid) return fail("hostgroup mapping crosses the plugin ownership boundary");
 
-		if (!execute_transaction_sql(admindb, "BEGIN IMMEDIATE")) {
+		// A deferred transaction keeps main+disk staging atomic without reserving
+		// write locks on unrelated DEBUG-only databases attached to Admin (notably
+		// the shared in-memory HGM database). Runtime publication updates those
+		// databases through their owning connections while this transaction is open.
+		if (!execute_transaction_sql(admindb, "BEGIN")) {
 			return fail(std::string("cannot start publication transaction: ") + sqlite3_errmsg(admindb.get_db()));
 		}
 		transaction_open = true;

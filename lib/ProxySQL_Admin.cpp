@@ -20,6 +20,7 @@ using json = nlohmann::json;
 #include "PgSQL_HostGroups_Manager.h"
 #include "ProxySQL_PluginManager.h"
 #include "ProxySQL_PluginConfig.h"
+#include "ProxySQL_PluginSecrets.h"
 #include "mysql.h"
 #include "proxysql_admin.h"
 // Discovery_Schema.h moved to plugins/genai/include/ in Step 6.
@@ -3495,6 +3496,23 @@ bool admin_owned_objects_count(SQLite3DB* db, long long& count) {
 	return rc == SQLITE_ROW;
 }
 
+bool materialize_plugin_secrets_schema(SQLite3DB* db) {
+	if (db == nullptr || db->get_db() == nullptr) return false;
+	bool exists = false;
+	bool current = false;
+	if (!admin_table_schema_matches(db, "proxysql_plugin_secrets",
+		proxysql_plugin_secrets_table_definition(), exists, current)) return false;
+	if (current) return true;
+	if (exists) {
+		proxy_error("Refusing destructive rebuild of an unknown proxysql_plugin_secrets schema\n");
+		return false;
+	}
+	if (!db->build_table("proxysql_plugin_secrets",
+		proxysql_plugin_secrets_table_definition(), false)) return false;
+	return admin_table_schema_matches(db, "proxysql_plugin_secrets",
+		proxysql_plugin_secrets_table_definition(), exists, current) && exists && current;
+}
+
 bool upgrade_plugin_owned_objects_schema(SQLite3DB* db) {
 	if (db == nullptr || db->get_db() == nullptr) return false;
 	bool backup_exists = false;
@@ -3568,13 +3586,16 @@ bool ProxySQL_Admin::check_and_build_standard_tables(SQLite3DB *db, std::vector<
 	table_def_t *td;
 #ifdef PROXYSQL40
 	bool has_plugin_ownership_table = false;
+	bool has_plugin_secrets_table = false;
 	for (const table_def_t* definition : *tables_defs) {
 		if (strcmp(definition->table_name, "proxysql_plugin_owned_objects") == 0) {
 			has_plugin_ownership_table = true;
-			break;
 		}
+		if (strcmp(definition->table_name, "proxysql_plugin_secrets") == 0)
+			has_plugin_secrets_table = true;
 	}
 	if (has_plugin_ownership_table && !upgrade_plugin_owned_objects_schema(db)) return false;
+	if (has_plugin_secrets_table && !materialize_plugin_secrets_schema(db)) return false;
 #endif
 	db->execute("PRAGMA foreign_keys = OFF");
 	for (std::vector<table_def_t *>::iterator it=tables_defs->begin(); it!=tables_defs->end(); ++it) {
@@ -3582,12 +3603,35 @@ bool ProxySQL_Admin::check_and_build_standard_tables(SQLite3DB *db, std::vector<
 #ifdef PROXYSQL40
 		if (has_plugin_ownership_table &&
 			strcmp(td->table_name, "proxysql_plugin_owned_objects") == 0) continue;
+		if (has_plugin_secrets_table &&
+			strcmp(td->table_name, "proxysql_plugin_secrets") == 0) continue;
 #endif
 		db->check_and_build_table(td->table_name, td->table_def);
 	}
 	db->execute("PRAGMA foreign_keys = ON");
 	return true;
 };
+
+#ifdef PROXYSQL40
+bool ProxySQL_Admin::restore_plugin_config_runtime_state() {
+	if (admindb == nullptr || !admindb->execute("BEGIN")) return false;
+	const bool restored =
+		admindb->execute("DELETE FROM main.proxysql_plugin_owned_objects") &&
+		admindb->execute("INSERT INTO main.proxysql_plugin_owned_objects "
+			"(owner,object_type,object_key,generation) "
+			"SELECT owner,object_type,object_key,generation "
+			"FROM disk.proxysql_plugin_owned_objects") &&
+		admindb->execute("DELETE FROM main.proxysql_plugin_config_generations") &&
+		admindb->execute("INSERT INTO main.proxysql_plugin_config_generations "
+			"(owner,generation) SELECT owner,generation "
+			"FROM disk.proxysql_plugin_config_generations") &&
+		admindb->execute("COMMIT");
+	if (!restored && sqlite3_get_autocommit(admindb->get_db()) == 0) {
+		admindb->execute("ROLLBACK");
+	}
+	return restored;
+}
+#endif
 
 
 

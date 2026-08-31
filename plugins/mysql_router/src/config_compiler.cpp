@@ -147,7 +147,7 @@ const ProxySQL_PluginMysqlConfigPlan& CompiledMysqlConfig::plan() const {
 	}
 	attribute_rows_.clear();
 	for (const auto& row : hostgroup_attributes) {
-		attribute_rows_.push_back({row.hostgroup_id, 0, -1, 10, "", true, false,
+		attribute_rows_.push_back({row.hostgroup_id, 1000, -1, 10, "", true, false,
 			1000, "{}", "{}", "{}", row.comment.c_str()});
 	}
 	rule_rows_.clear();

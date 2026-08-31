@@ -80,6 +80,19 @@ ManagedMysqlUser retained_user(const CurrentMysqlUser& current,
 	return user;
 }
 
+bool same_managed_attributes(const CurrentMysqlUser& lhs, const CurrentMysqlUser& rhs) {
+	return lhs.username == rhs.username && lhs.password == rhs.password &&
+		lhs.active == rhs.active && lhs.use_ssl == rhs.use_ssl &&
+		lhs.default_hostgroup == rhs.default_hostgroup &&
+		lhs.default_schema == rhs.default_schema &&
+		lhs.schema_locked == rhs.schema_locked &&
+		lhs.transaction_persistent == rhs.transaction_persistent &&
+		lhs.fast_forward == rhs.fast_forward &&
+		lhs.max_connections == rhs.max_connections &&
+		lhs.attributes == rhs.attributes && lhs.comment == rhs.comment &&
+		lhs.owned && rhs.owned;
+}
+
 } // namespace
 
 AccountSnapshot UserSynchronizer::read(IMetadataSession& session,
@@ -133,13 +146,33 @@ ManagedUserGeneration UserSynchronizer::normalize(const AccountSnapshot& snapsho
 		const std::string& username = entry.first;
 		auto current_row = current.find(username);
 		const CurrentMysqlUser* owned_current = nullptr;
+		CurrentMysqlUser canonical_owned;
 		bool operator_current = false;
 		if (current_row != current.end()) {
+			std::vector<const CurrentMysqlUser*> owned_rows;
 			for (const CurrentMysqlUser* row : current_row->second) {
 				if (!row->owned) operator_current = true;
-				else if (owned_current != nullptr) {
+				else owned_rows.push_back(row);
+			}
+			if (owned_rows.size() == 1) {
+				owned_current = owned_rows.front();
+			} else if (owned_rows.size() == 2) {
+				const CurrentMysqlUser* frontend = nullptr;
+				const CurrentMysqlUser* backend = nullptr;
+				for (const CurrentMysqlUser* row : owned_rows) {
+					if (row->frontend && !row->backend) frontend = row;
+					if (!row->frontend && row->backend) backend = row;
+				}
+				if (frontend == nullptr || backend == nullptr ||
+					!same_managed_attributes(*frontend, *backend)) {
 					throw std::runtime_error("multiple owned mysql_users variants exist for one username");
-				} else owned_current = row;
+				}
+				canonical_owned = *frontend;
+				canonical_owned.frontend = true;
+				canonical_owned.backend = true;
+				owned_current = &canonical_owned;
+			} else if (!owned_rows.empty()) {
+				throw std::runtime_error("multiple owned mysql_users variants exist for one username");
 			}
 		}
 		auto persisted = input.persisted.find(username);
