@@ -35,7 +35,7 @@
 - Modify `test/tap/groups/groups.json`: register new unit and integration coverage at minimum ProxySQL version 3.1.
 - Modify `include/MySQL_Thread.h`: handler-owned accepted snapshot and worker-owned snapshot declarations.
 - Modify `lib/MySQL_Thread.cpp`: variable registration, staging, atomic commit/rollback, worker refresh, exact listener identity, and accept-time resolution.
-- Modify `test/tap/tests/unit/mysql_variables_unit-t.cpp`: tier registration, default, rejection rollback, getter, and Admin persistence coverage.
+- Modify `test/tap/tests/unit/mysql_variables_unit-t.cpp`: tier registration, default, rejection rollback, getter, and Admin runtime coverage.
 - Modify `include/MySQL_Data_Stream.h`: connection-pinned frontend version and effective-version accessor.
 - Modify `lib/mysql_data_stream.cpp`: effective-version accessor implementation.
 - Modify `lib/MySQL_Protocol.cpp`: use the pinned value in the initial handshake.
@@ -629,25 +629,27 @@ git add lib/MySQL_Session.cpp \
 git commit -m "fix: pin frontend version for internal responses"
 ```
 
-## Task 6: Prove persistence and ordinary cluster synchronization
+## Task 6: Prove runtime reload and ordinary cluster synchronization
 
 **Files:**
 
 - Modify: `test/tap/tests/mysql-server_version_by_interface-t.cpp`
 - Modify: `test/tap/tests/test_cluster_sync-t.cpp:2423-2625`
 
-- [ ] **Step 1: Add disk round-trip coverage to the self-launched test**
+- [ ] **Step 1: Add runtime reload coverage to the self-launched test**
 
 Through the secondary Admin connection:
 
 1. Set a catalog containing active and inactive mappings.
 2. `LOAD MYSQL VARIABLES TO RUNTIME`.
-3. `SAVE MYSQL VARIABLES TO DISK`.
+3. Assert existing sessions retain their pinned version while new sessions use
+   the updated mapping.
 4. Replace the in-memory catalog with `{}` and load it to runtime.
-5. `LOAD MYSQL VARIABLES FROM DISK`, then load to runtime again.
-6. Assert the exact saved JSON string is restored in both `global_variables` and `runtime_global_variables` and a new connection uses its mapped value.
+5. Assert a new connection uses the scalar `mysql-server_version` fallback.
 
-This proves ordinary persistence without adding a custom table or serialization path. The config-file startup portion of the same test proves initial loading before the Admin disk round trip.
+The config-file startup portion proves initial loading. The Admin portion proves
+runtime replacement without writing to or restoring ProxySQL's disk
+configuration, which does not belong to TAP tests.
 
 - [ ] **Step 2: Add the catalog to the existing cluster variable matrix when available**
 
@@ -675,7 +677,7 @@ assertion that it is byte-for-byte unchanged. This directly proves that the
 catalog follows normal MySQL-variable sync while listener configuration remains
 local.
 
-- [ ] **Step 3: Run persistence and cluster coverage**
+- [ ] **Step 3: Run runtime reload and cluster coverage**
 
 ```bash
 make -C test/tap/tests \
@@ -689,15 +691,18 @@ WORKSPACE=$(pwd) INFRA_ID=dev-$USER TAP_GROUP=legacy-g5 \
   test/infra/control/run-tests-isolated.bash
 ```
 
-Expected: the saved catalog round-trips exactly, and the replica receives `mysql-server_version_by_interface` while retaining its local `mysql-interfaces` value.
+Expected: runtime reload changes only new sessions, an empty runtime catalog
+uses the scalar fallback, and the replica receives
+`mysql-server_version_by_interface` while retaining its local
+`mysql-interfaces` value.
 
-- [ ] **Step 4: Commit persistence and cluster proof**
+- [ ] **Step 4: Commit runtime and cluster proof**
 
 ```bash
 git add \
   test/tap/tests/mysql-server_version_by_interface-t.cpp \
   test/tap/tests/test_cluster_sync-t.cpp
-git commit -m "test: cover interface version persistence and sync"
+git commit -m "test: cover interface version runtime reload and sync"
 ```
 
 ## Task 7: Verify both feature tiers and review scope

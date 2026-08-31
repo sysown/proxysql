@@ -102,8 +102,9 @@ variable rejection/reporting path. A successful load publishes the complete new
 catalog as one snapshot; readers never observe a partially replaced map.
 
 The raw JSON string remains available through the normal variable getter so the
-existing `SAVE MYSQL VARIABLES TO DISK`, restart loading, and cluster checksum
-mechanisms continue to work.
+established persistence and cluster-checksum mechanisms can treat it like any
+other MySQL variable. Feature TAP tests exercise runtime loading and cluster
+synchronization only; they never save or restore ProxySQL's disk configuration.
 
 ## Listener Identity
 
@@ -195,7 +196,7 @@ In a `PROXYSQL31=1` build, extend the MySQL variable unit coverage to verify:
   embedded NUL bytes, and duplicate keys are rejected;
 - rejection preserves the previous runtime snapshot; and
 - replacing the catalog, clearing it with `{}`, getter round-tripping, and
-  persistence behave correctly.
+  replacement and getter round-tripping behave correctly.
 
 In a default v3.0 build, verify that the variable is absent from the registry and
 the existing scalar behavior is unchanged.
