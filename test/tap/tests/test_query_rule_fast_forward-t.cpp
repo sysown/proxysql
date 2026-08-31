@@ -9,6 +9,10 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
+
+#include <poll.h>
+#include <sys/socket.h>
 
 #include "mysql.h"
 
@@ -23,10 +27,9 @@ namespace {
 
 constexpr int kTargetHostgroup = 61460;
 constexpr int kFirstRule = 614600;
-constexpr int kLastRule = 614604;
+constexpr int kLastRule = 614605;
 constexpr const char* kComment = "test_query_rule_fast_forward-t";
 constexpr const char* kUser = "sbtest1";
-constexpr const char* kPassword = "sbtest1";
 constexpr const char* kTable = "query_rule_ff_once";
 
 bool query_and_drain(MYSQL* mysql, const std::string& sql) {
@@ -168,11 +171,77 @@ MysqlPtr connect_frontend(const CommandLine& cl, bool compress = false) {
 	if (client && compress) {
 		mysql_options(client.get(), MYSQL_OPT_COMPRESS, nullptr);
 	}
-	if (!client || !mysql_real_connect(client.get(), cl.host, kUser, kPassword,
+	if (!client || !mysql_real_connect(client.get(), cl.host, kUser, kUser,
 		"test", cl.port, nullptr, 0)) {
 		return MysqlPtr(nullptr, &mysql_close);
 	}
 	return client;
+}
+
+std::vector<unsigned char> com_query_packet(const std::string& query) {
+	const size_t payload_size = query.size() + 1;
+	std::vector<unsigned char> packet(4 + payload_size);
+	packet[0] = payload_size & 0xff;
+	packet[1] = (payload_size >> 8) & 0xff;
+	packet[2] = (payload_size >> 16) & 0xff;
+	packet[3] = 0;
+	packet[4] = 0x03;
+	memcpy(packet.data() + 5, query.data(), query.size());
+	return packet;
+}
+
+bool send_all(int fd, const std::vector<unsigned char>& bytes) {
+	size_t sent_total = 0;
+	while (sent_total < bytes.size()) {
+		const ssize_t sent = send(fd, bytes.data() + sent_total,
+			bytes.size() - sent_total, MSG_NOSIGNAL);
+		if (sent <= 0) {
+			return false;
+		}
+		sent_total += static_cast<size_t>(sent);
+	}
+	return true;
+}
+
+bool recv_exact(int fd, unsigned char* output, size_t size) {
+	size_t received_total = 0;
+	while (received_total < size) {
+		pollfd descriptor { fd, POLLIN | POLLHUP, 0 };
+		if (poll(&descriptor, 1, 3000) <= 0) {
+			return false;
+		}
+		const ssize_t received = recv(fd, output + received_total,
+			size - received_total, 0);
+		if (received <= 0) {
+			return false;
+		}
+		received_total += static_cast<size_t>(received);
+	}
+	return true;
+}
+
+int read_mysql_error(int fd) {
+	unsigned char header[4] {};
+	if (!recv_exact(fd, header, sizeof(header))) {
+		return -1;
+	}
+	const size_t payload_size = header[0] |
+		(static_cast<size_t>(header[1]) << 8) |
+		(static_cast<size_t>(header[2]) << 16);
+	std::vector<unsigned char> payload(payload_size);
+	if (payload_size < 3 || !recv_exact(fd, payload.data(), payload.size()) || payload[0] != 0xff) {
+		return -1;
+	}
+	return payload[1] | (static_cast<int>(payload[2]) << 8);
+}
+
+bool wait_for_close(int fd) {
+	pollfd descriptor { fd, POLLIN | POLLHUP, 0 };
+	if (poll(&descriptor, 1, 3000) <= 0) {
+		return false;
+	}
+	unsigned char byte = 0;
+	return recv(fd, &byte, 1, 0) == 0;
 }
 
 class Cleanup {
@@ -461,7 +530,36 @@ int main() {
 		"the reconstructed large COM_QUERY executes exactly once");
 	ok(large_client && query_and_drain(large_client.get(), "SELECT 4"),
 		"traffic after the large trigger remains live");
+	ok(large_client && scalar_int(admin.get(),
+		"SELECT info IS NULL FROM stats_mysql_processlist WHERE SessionID=" +
+		std::to_string(mysql_thread_id(large_client.get()))) == 1,
+		"completed large-query state does not retain a freed query pointer");
 	large_client.reset();
+
+	ok(install_rule(admin.get(),
+		"rule_id,active,username,match_pattern,destination_hostgroup,apply,attributes,comment) VALUES"
+		"(614605,1,'sbtest1','qrff_pipeline',61460,1,'{\"switch_to_fast_forward\":true}',"
+		"'test_query_rule_fast_forward-t')"),
+		"the pipelined-query rejection rule is loaded");
+	MysqlPtr pipeline_client = connect_frontend(cl);
+	std::vector<unsigned char> pipelined = com_query_packet(
+		"INSERT /* qrff_pipeline */ INTO test.query_rule_ff_once VALUES(5,'pipeline')");
+	const std::vector<unsigned char> trailing = com_query_packet(
+		"INSERT INTO test.query_rule_ff_once VALUES(6,'trailing')");
+	pipelined.insert(pipelined.end(), trailing.begin(), trailing.end());
+	const int pipeline_fd = pipeline_client ? mysql_get_socket(pipeline_client.get()) : -1;
+	ok(pipeline_fd >= 0 && send_all(pipeline_fd, pipelined),
+		"two COM_QUERY packets are sent in one client write");
+	const int pipeline_error = pipeline_fd >= 0 ? read_mysql_error(pipeline_fd) : -1;
+	ok(pipeline_fd >= 0 && (pipeline_error == 1815 || pipeline_error == -1) &&
+		wait_for_close(pipeline_fd),
+		"a transition with buffered client packets is rejected and closed");
+	ok(mysql_ping(admin.get()) == 0,
+		"the rejected pipelined frontend does not crash ProxySQL");
+	ok(scalar_int(backend.get(),
+		"SELECT COUNT(*) FROM test.query_rule_ff_once WHERE id IN (5,6)") == 0,
+		"neither rejected pipelined query reaches the backend");
+	pipeline_client.reset();
 
 	ok(cleanup.run(), "all Admin, runtime, and backend fixture state is restored");
 	return exit_status();
