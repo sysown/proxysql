@@ -265,34 +265,30 @@ static void test_hostgroup_pool_stats(HGM *hgm, unsigned int hid, const char *pr
 	stats->record_acquisition();
 	wait.observe(stats, 100, false, hid);
 
-	SQLite3_result *live = hgm->SQL3_Hostgroup_Connection_Pool(false);
-	SQLite3_row *live_row = find_hostgroup_row(live, hid);
+	std::unique_ptr<SQLite3_result> live { hgm->SQL3_Hostgroup_Connection_Pool(false) };
+	SQLite3_row *live_row = find_hostgroup_row(live.get(), hid);
 	ok(live_row != nullptr, "%s HGM: live hostgroup pool stats expose the hostgroup", protocol);
 	ok(live_row && strcmp(live_row->fields[1], "1") == 0 &&
 		strcmp(live_row->fields[2], "1") == 0 &&
 		strcmp(live_row->fields[3], "0") == 0 &&
 		strcmp(live_row->fields[4], "1") == 0,
 		"%s HGM: live stats report acquisitions, waits, duration, and waiters", protocol);
-	delete live;
 
-	SQLite3_result *reset = hgm->SQL3_Hostgroup_Connection_Pool(true);
-	SQLite3_row *reset_row = find_hostgroup_row(reset, hid);
+	std::unique_ptr<SQLite3_result> reset { hgm->SQL3_Hostgroup_Connection_Pool(true) };
+	SQLite3_row *reset_row = find_hostgroup_row(reset.get(), hid);
 	ok(reset_row && strcmp(reset_row->fields[1], "1") == 0 &&
 		strcmp(reset_row->fields[2], "1") == 0 &&
 		strcmp(reset_row->fields[4], "1") == 0,
 		"%s HGM: reset returns the completed window without clearing waiters", protocol);
-	delete reset;
 
 	wait.observe(stats, 350, true, hid);
-	live = hgm->SQL3_Hostgroup_Connection_Pool(false);
-	live_row = find_hostgroup_row(live, hid);
+	live.reset(hgm->SQL3_Hostgroup_Connection_Pool(false));
+	live_row = find_hostgroup_row(live.get(), hid);
 	ok(live_row && strcmp(live_row->fields[1], "1") == 0 &&
 		strcmp(live_row->fields[2], "0") == 0 &&
 		strcmp(live_row->fields[3], "250") == 0 &&
 		strcmp(live_row->fields[4], "0") == 0,
 		"%s HGM: post-reset completions remain in the new window", protocol);
-	delete live;
-
 	const HostgroupPoolStatsSnapshot lifetime = stats->lifetime_snapshot();
 	ok(lifetime.acquisitions_total == 2 && lifetime.waits_total == 1 &&
 		lifetime.wait_time_us_total == 250 && lifetime.waiters == 0,
