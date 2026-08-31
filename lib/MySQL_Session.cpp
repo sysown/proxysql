@@ -8908,10 +8908,14 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		}
 #endif // STRESSTEST_POOL
 #ifdef PROXYSQL31
+		const unsigned int pool_stats_hid = mc ? mc->parent->myhgc->hid : mybe->hostgroup_id;
 		HostgroupPoolStats *pool_stats = mc
 			? &mc->parent->myhgc->pool_stats
-			: MyHGM->get_hostgroup_pool_stats(mybe->hostgroup_id);
-		hostgroup_pool_wait.observe(pool_stats, thread->curtime, mc != nullptr);
+			: hostgroup_pool_wait.active_stats(pool_stats_hid);
+		if (!pool_stats) {
+			pool_stats = MyHGM->get_hostgroup_pool_stats(pool_stats_hid);
+		}
+		hostgroup_pool_wait.observe(pool_stats, thread->curtime, mc != nullptr, pool_stats_hid);
 #endif
 		if (mc) {
 			mybe->server_myds->attach_connection(mc);

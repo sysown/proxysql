@@ -101,7 +101,13 @@ public:
 		cancel();
 	}
 
-	void observe(HostgroupPoolStats* stats, uint64_t now_us, bool acquired) {
+	HostgroupPoolStats* active_stats(unsigned int hostgroup_id) const {
+		return stats_ && hostgroup_id_ == hostgroup_id ? stats_ : nullptr;
+	}
+
+	void observe(
+		HostgroupPoolStats* stats, uint64_t now_us, bool acquired, unsigned int hostgroup_id
+	) {
 		if (acquired) {
 			finish(now_us);
 			if (stats) {
@@ -110,12 +116,13 @@ public:
 			return;
 		}
 
-		if (!stats || stats_ == stats) {
+		if (!stats || (stats_ == stats && hostgroup_id_ == hostgroup_id)) {
 			return;
 		}
 
 		finish(now_us);
 		stats_ = stats;
+		hostgroup_id_ = hostgroup_id;
 		started_us_ = now_us;
 		stats_->begin_wait();
 	}
@@ -128,6 +135,7 @@ public:
 		const uint64_t duration_us = now_us >= started_us_ ? now_us - started_us_ : 0;
 		stats_->end_wait(duration_us);
 		stats_ = nullptr;
+		hostgroup_id_ = 0;
 		started_us_ = 0;
 	}
 
@@ -138,6 +146,7 @@ public:
 
 		stats_->cancel_wait();
 		stats_ = nullptr;
+		hostgroup_id_ = 0;
 		started_us_ = 0;
 	}
 
@@ -147,6 +156,7 @@ public:
 
 private:
 	HostgroupPoolStats* stats_ {nullptr};
+	unsigned int hostgroup_id_ {0};
 	uint64_t started_us_ {0};
 };
 

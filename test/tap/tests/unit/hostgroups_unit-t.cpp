@@ -263,7 +263,7 @@ static void test_hostgroup_pool_stats(HGM *hgm, unsigned int hid, const char *pr
 	HostgroupPoolStats *stats = hgm->get_hostgroup_pool_stats(hid);
 	HostgroupPoolWait wait;
 	stats->record_acquisition();
-	wait.observe(stats, 100, false);
+	wait.observe(stats, 100, false, hid);
 
 	SQLite3_result *live = hgm->SQL3_Hostgroup_Connection_Pool(false);
 	SQLite3_row *live_row = find_hostgroup_row(live, hid);
@@ -283,7 +283,7 @@ static void test_hostgroup_pool_stats(HGM *hgm, unsigned int hid, const char *pr
 		"%s HGM: reset returns the completed window without clearing waiters", protocol);
 	delete reset;
 
-	wait.observe(stats, 350, true);
+	wait.observe(stats, 350, true, hid);
 	live = hgm->SQL3_Hostgroup_Connection_Pool(false);
 	live_row = find_hostgroup_row(live, hid);
 	ok(live_row && strcmp(live_row->fields[1], "1") == 0 &&

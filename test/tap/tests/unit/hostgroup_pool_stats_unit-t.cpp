@@ -10,7 +10,7 @@ static void test_immediate_acquisition() {
 	HostgroupPoolStats stats;
 	HostgroupPoolWait wait;
 
-	wait.observe(&stats, 100, true);
+	wait.observe(&stats, 100, true, 10);
 
 	const auto lifetime = stats.lifetime_snapshot();
 	ok(lifetime.acquisitions_total == 1, "immediate acquisition increments acquisitions once");
@@ -23,14 +23,16 @@ static void test_retry_is_one_wait_episode() {
 	HostgroupPoolStats stats;
 	HostgroupPoolWait wait;
 
-	wait.observe(&stats, 1'000, false);
-	wait.observe(&stats, 2'000, false);
+	wait.observe(&stats, 1'000, false, 10);
+	ok(wait.active_stats(10) == &stats, "active wait exposes cached stats for the same hostgroup");
+	ok(wait.active_stats(20) == nullptr, "active wait does not reuse stats after a hostgroup change");
+	wait.observe(&stats, 2'000, false, 10);
 
 	auto lifetime = stats.lifetime_snapshot();
 	ok(lifetime.waits_total == 1, "repeated misses count as one logical wait episode");
 	ok(lifetime.waiters == 1, "repeated misses keep exactly one current waiter");
 
-	wait.observe(&stats, 6'000, true);
+	wait.observe(&stats, 6'000, true, 10);
 	lifetime = stats.lifetime_snapshot();
 	ok(lifetime.acquisitions_total == 1, "acquisition after retries increments acquisitions once");
 	ok(lifetime.waits_total == 1, "successful completion does not recount the wait episode");
@@ -42,7 +44,7 @@ static void test_abandoned_wait() {
 	HostgroupPoolStats stats;
 	HostgroupPoolWait wait;
 
-	wait.observe(&stats, 10'000, false);
+	wait.observe(&stats, 10'000, false, 10);
 	wait.finish(13'500);
 	wait.finish(20'000);
 
@@ -57,8 +59,8 @@ static void test_reroute_moves_wait_between_hostgroups() {
 	HostgroupPoolStats second;
 	HostgroupPoolWait wait;
 
-	wait.observe(&first, 100, false);
-	wait.observe(&second, 400, false);
+	wait.observe(&first, 100, false, 10);
+	wait.observe(&second, 400, false, 20);
 
 	const auto first_lifetime = first.lifetime_snapshot();
 	const auto second_lifetime = second.lifetime_snapshot();
@@ -67,7 +69,7 @@ static void test_reroute_moves_wait_between_hostgroups() {
 	ok(second_lifetime.waiters == 1 && second_lifetime.waits_total == 1,
 		"reroute starts one wait episode in the new hostgroup");
 
-	wait.observe(&second, 900, true);
+	wait.observe(&second, 900, true, 20);
 	ok(second.lifetime_snapshot().wait_time_us_total == 500,
 		"rerouted acquisition records time only in its target hostgroup");
 }
@@ -76,8 +78,8 @@ static void test_reset_preserves_lifetime_and_live_gauge() {
 	HostgroupPoolStats stats;
 	HostgroupPoolWait wait;
 
-	wait.observe(&stats, 1'000, true);
-	wait.observe(&stats, 2'000, false);
+	wait.observe(&stats, 1'000, true, 10);
+	wait.observe(&stats, 2'000, false, 10);
 
 	const auto before_reset = stats.reset_window();
 	ok(before_reset.acquisitions_total == 1 && before_reset.waits_total == 1,
@@ -102,7 +104,7 @@ static void test_destructor_balances_waiter_gauge() {
 	HostgroupPoolStats stats;
 	{
 		HostgroupPoolWait wait;
-		wait.observe(&stats, 7'000, false);
+		wait.observe(&stats, 7'000, false, 10);
 	}
 
 	ok(stats.lifetime_snapshot().waiters == 0,
@@ -176,7 +178,7 @@ static void test_concurrent_resetters_partition_acquisitions() {
 }
 
 int main() {
-	plan(27);
+	plan(29);
 	test_immediate_acquisition();
 	test_retry_is_one_wait_episode();
 	test_abandoned_wait();
