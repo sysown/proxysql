@@ -6148,6 +6148,7 @@ handler_again:
 			} else {
 				MySQL_Data_Stream *myds=mybe->server_myds;
 				MySQL_Connection *myconn=myds->myconn;
+				MySQL_Connection *client_myconn = client_myds->myconn;
 				mybe->server_myds->max_connect_time=0;
 				// we insert it in mypolls only if not already there
 				if (myds->mypolls==NULL) {
@@ -6160,8 +6161,10 @@ handler_again:
 					if (mirror==false) { // do not care about autocommit and charset if mirror
 							proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , default_HG=%d server_myds DSS=%d , locked_on_HG=%d\n", this, default_hostgroup, mybe->server_myds->DSS, locked_on_hostgroup);
 						if (mybe->server_myds->DSS == STATE_READY || mybe->server_myds->DSS == STATE_MARIADB_GENERIC) {
-							if (handler_again___verify_init_connect()) {
-								goto handler_again;
+							if (unlikely(myconn->options.init_connect_sent==false)) { // micro-optimization. Perform this check outside handler_again___verify_init_connect()
+								if (handler_again___verify_init_connect()) {
+									goto handler_again;
+								}
 							}
 							if (use_ldap_auth) {
 								if (handler_again___verify_ldap_user_variable()) {
@@ -6173,8 +6176,10 @@ handler_again:
 							}
 							if (locked_on_hostgroup == -1 || locked_on_hostgroup_and_all_variables_set == false ) {
 
-								if (handler_again___verify_backend_multi_statement()) {
-									goto handler_again;
+								if (unlikely((client_myconn->options.client_flag & CLIENT_MULTI_STATEMENTS) != (myconn->options.client_flag & CLIENT_MULTI_STATEMENTS))) { // micro-optimization. Perform this check outside handler_again___verify_backend_multi_statement
+									if (handler_again___verify_backend_multi_statement()) {
+										goto handler_again;
+									}
 								}
 
 								if (handler_again___verify_backend_session_track_gtids()) {
@@ -8907,6 +8912,16 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 #endif // STRESSTESTPOOL_MEASURE
 		}
 #endif // STRESSTEST_POOL
+#ifdef PROXYSQL31
+		const unsigned int pool_stats_hid = mc ? mc->parent->myhgc->hid : mybe->hostgroup_id;
+		HostgroupPoolStats *pool_stats = mc
+			? &mc->parent->myhgc->pool_stats
+			: hostgroup_pool_wait.active_stats(pool_stats_hid);
+		if (!pool_stats) {
+			pool_stats = MyHGM->get_hostgroup_pool_stats(pool_stats_hid);
+		}
+		hostgroup_pool_wait.observe(pool_stats, thread->curtime, mc != nullptr, pool_stats_hid);
+#endif
 		if (mc) {
 			mybe->server_myds->attach_connection(mc);
 			thread->status_variables.stvar[st_var_ConnPool_get_conn_success]++;
@@ -9245,6 +9260,9 @@ void MySQL_Session::LogQuery(MySQL_Data_Stream *myds, const unsigned int myerrno
 }
 
 void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds,const unsigned int myerrno, const char * errmsg) {
+#ifdef PROXYSQL31
+	hostgroup_pool_wait.finish(thread ? thread->curtime : monotonic_time());
+#endif
 	// check if multiplexing needs to be disabled
 	char *qdt = NULL;
 
