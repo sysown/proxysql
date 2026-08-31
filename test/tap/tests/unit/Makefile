@@ -398,21 +398,22 @@ FORCE:
 # link. Empty on Darwin, so it drops out of the prerequisite lists below.
 STAGED_LIBPROXYSQLSO :=
 ifneq ($(UNAME_S),Darwin)
-LIBPROXYSQLSO := $(PROXYSQL_LDIR)/libproxysql.so
-STAGED_LIBPROXYSQLSO := $(TAP_LDIR)/libproxysql.so
-
+# Built directly into $(TAP_LDIR), which is already on every unit test's rpath,
+# so no rpath change is needed. It must be a real file inside test/ and not a
+# link into lib/: CI ships build output to the test jobs as a `_test` cache of
+# proxysql/test/ only, so anything pointing outside that tree arrives dangling
+# and every test linking it dies at startup.
+#
 # Depends on the archive, so it can never be staler than it. $(WASAN)/$(WGCOV)
 # must be passed: the archive is instrumented and the .so needs that runtime.
-$(LIBPROXYSQLSO): $(LIBPROXYSQLAR)
-	$(CXX) -shared -o $@ -Wl,--whole-archive $(LIBPROXYSQLAR) \
+# Linked under a temp name and renamed so a concurrent linker cannot open a
+# half-written library.
+STAGED_LIBPROXYSQLSO := $(TAP_LDIR)/libproxysql.so
+
+$(STAGED_LIBPROXYSQLSO): $(LIBPROXYSQLAR)
+	$(CXX) -shared -o $@.tmp -Wl,--whole-archive $(LIBPROXYSQLAR) \
 		-Wl,--no-whole-archive -Wl,--allow-multiple-definition -gz \
 		$(WASAN) $(WGCOV)
-
-# $(TAP_LDIR) is already on every unit test's rpath, so no rpath change needed.
-# Symlinked, not copied (libcurl.so/libre2.so there already are). Renamed into
-# place so a concurrent linker cannot see a half-written file.
-$(STAGED_LIBPROXYSQLSO): $(LIBPROXYSQLSO)
-	ln -sfn $(abspath $<) $@.tmp
 	mv -f $@.tmp $@
 endif
 
@@ -917,4 +918,7 @@ endif
 clean:
 	rm -rf $(ODIR)
 	rm -f *-t $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO)
-	rm -f $(STAGED_LIBPROXYSQLSO) $(STAGED_LIBPROXYSQLSO).tmp $(LIBPROXYSQLSO)
+	rm -f $(STAGED_LIBPROXYSQLSO) $(STAGED_LIBPROXYSQLSO).tmp
+	# Leftover from when the .so was built in lib/ and symlinked into place;
+	# a stale copy there could shadow the archive for -Bdynamic links.
+	rm -f $(PROXYSQL_LDIR)/libproxysql.so
