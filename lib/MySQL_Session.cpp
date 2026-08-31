@@ -5048,6 +5048,7 @@ void MySQL_Session::GPFC_QueryRule_FinalizeFastForwardHandoff() {
 	CurrentQuery.QueryPointer = nullptr;
 	CurrentQuery.QueryLength = 0;
 	GloMyQPro->delete_QP_out(qpo);
+	qpo->init();
 	current_query_user_variable_safe = false;
 	current_query_user_variable_unsafe_fallback = false;
 	current_query_user_variable_context_change = false;

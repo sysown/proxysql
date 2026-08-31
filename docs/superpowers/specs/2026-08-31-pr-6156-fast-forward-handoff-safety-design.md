@@ -15,10 +15,10 @@ fast-forward state machine. The helper will:
 
 - set the query end time and finalize `CurrentQuery`, releasing parser state and
   updating the normal query counters;
-- explicitly clear `QueryPointer`, `QueryLength`, and the command marker even
-  when query statistics are disabled and `Query_Info::end()` returns early;
-- destroy the populated query-processor output while retaining its reusable
-  object;
+- explicitly clear `QueryPointer`, `QueryLength`, and the command marker
+  regardless of query-statistics settings;
+- destroy and reinitialize the populated query-processor output while retaining
+  its reusable object;
 - clear pending per-query user-variable analysis state.
 
 The helper will not call `RequestEnd()`. At handoff, the backend has not replied,

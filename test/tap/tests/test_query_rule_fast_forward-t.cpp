@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #include <poll.h>
@@ -109,6 +110,7 @@ bool select_online_server(MYSQL* admin, OnlineServer& server) {
 struct ProcesslistState {
 	int hostgroup = -1;
 	int fast_forward = -1;
+	int qpo_destination_hostgroup = -2;
 };
 
 bool processlist_state(MYSQL* admin, unsigned long session_id, ProcesslistState& state) {
@@ -131,6 +133,12 @@ bool processlist_state(MYSQL* admin, unsigned long session_id, ProcesslistState&
 			} else if (info.contains("fast_forward") && info["fast_forward"].is_number_integer()) {
 				state.fast_forward = info["fast_forward"].get<int>();
 				valid = true;
+			}
+			if (info.contains("qpo") && info["qpo"].is_object() &&
+				info["qpo"].contains("destination_hostgroup") &&
+				info["qpo"]["destination_hostgroup"].is_number_integer()) {
+				state.qpo_destination_hostgroup =
+					info["qpo"]["destination_hostgroup"].get<int>();
 			}
 		} catch (const std::exception& error) {
 			diag("Unable to parse processlist state: %s", error.what());
@@ -280,6 +288,8 @@ public:
 		  admin_ff_(state.admin_ff), runtime_ff_(state.runtime_ff),
 		  admin_extended_(state.admin_extended), runtime_extended_(state.runtime_extended),
 		  admin_packet_(state.admin_packet), runtime_packet_(state.runtime_packet) {}
+	Cleanup(const Cleanup&) = delete;
+	Cleanup& operator=(const Cleanup&) = delete;
 
 	~Cleanup() { run(); }
 
@@ -345,6 +355,9 @@ private:
 	bool active_ { true };
 	bool result_ { true };
 };
+
+static_assert(!std::is_copy_constructible_v<Cleanup>);
+static_assert(!std::is_copy_assignable_v<Cleanup>);
 
 } // namespace
 
@@ -474,6 +487,10 @@ int main() {
 	ok(text_client && wait_for_state(admin.get(), mysql_thread_id(text_client.get()),
 		{ kTargetHostgroup, 1 }),
 		"COM_QUERY switches permanently to the final rule-chain hostgroup");
+	ProcesslistState handed_off_state;
+	ok(text_client && processlist_state(admin.get(), mysql_thread_id(text_client.get()),
+		handed_off_state) && handed_off_state.qpo_destination_hostgroup == -1,
+		"fast-forward handoff resets the reusable query-processor output");
 	ok(scalar_int(backend.get(),
 		"SELECT COUNT(*) FROM test.query_rule_ff_once WHERE id=1") == 1,
 		"the triggering COM_QUERY executes exactly once");
