@@ -22,6 +22,11 @@ ABSL_STAMP := $(ABSL_INSTALL)/lib/pkgconfig/absl_base.pc
 # to compile libmariadb_client with support for valgrind enabled, run:
 # export USEVALGRIND=1
 
+RE2_VALGRIND :=
+ifeq ($(USEVALGRIND),1)
+	RE2_VALGRIND := -DRE2_ON_VALGRIND
+endif
+
 ifeq ($(PROXYDEBUG),1)
 	MYCFLAGS := -O0
 	MYJEOPT := --enable-xmalloc --enable-prof --enable-fill --enable-debug
@@ -405,7 +410,7 @@ re2/re2/obj/libre2.a: $(ABSL_STAMP)
 #	cd re2/re2 && patch util/mutex.h < ../mutex.h.patch
 	cd re2/re2 && patch re2/onepass.cc < ../onepass.cc-multiplication-overflow.patch
 	cd re2/re2 && PKG_CONFIG_PATH="" PKG_CONFIG_LIBDIR="$(ABSL_INSTALL)/lib/pkgconfig" \
-		CC=${CC} CXX=${CXX} CXXFLAGS="-O3 -g $(STDCPP) -fPIC $(WASAN)" ${MAKE} static
+		CC=${CC} CXX=${CXX} CXXFLAGS="-O3 -g $(STDCPP) -fPIC $(WASAN) $(RE2_VALGRIND)" ${MAKE} static
 
 re2: re2/re2/obj/libre2.a
 

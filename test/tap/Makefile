@@ -72,7 +72,7 @@ tests_no_infra: tap test_deps
 
 .PHONY: tests_with_deps
 tests_with_deps: tap test_deps
-	cd tests_with_deps && CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
+	cd tests_with_deps && CC=${CC} CXX=${CXX} ${MAKE} $(TAP_CHILD_BUILD_GOAL)
 
 
 # `tap test_deps` is NOT optional here, even though nothing under tests/unit is
