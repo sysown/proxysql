@@ -1,17 +1,6 @@
 #!/bin/make -f
 
-AI_GENAI_UNIT_TESTS := \
-	genai_config_query_unit-t \
-	genai_discovery_schema_unit-t \
-	genai_fts_string_unit-t \
-	genai_llm_clients_unit-t \
-	genai_mcp_endpoint_unit-t \
-	genai_mcp_thread_unit-t \
-	genai_mysql_catalog_unit-t \
-	genai_query_handler_unit-t \
-	genai_rag_fetch_from_source_unit-t \
-	genai_stats_parsing_unit-t \
-	genai_thread_unit-t
+include $(dir $(lastword $(MAKEFILE_LIST)))ai_genai_unit_tests.mk
 AI_GENAI_STAGE_DIR := tap_tests_ai_unit
 
 AI_GENAI_HANDOFF_ENABLED := 0
@@ -64,22 +53,8 @@ tests_with_deps: tap test_deps
 	cd tests_with_deps && CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
 
 
-# `tap test_deps` is NOT optional here, even though nothing under tests/unit is
-# built by those targets. The unit tests link -lcurl with -L$(TAP_LDIR), i.e.
-# test/tap/tap, and the `tap` recipe populates that directory by copying the
-# vendored library into it:
-#
-#     libcurl$(SHLIB_EXT): $(DEPS_PATH)/curl/curl/lib/.libs/libcurl$(SHLIB_EXT)
-#             cp -a $(DEPS_PATH)/curl/curl/lib/.libs/libcurl$(SHLIB_EXT)* .
-#
-# Without this prerequisite `unit_tests` runs CONCURRENTLY with `tap` under the
-# `all`/`debug` targets above, so a unit test's linker can open libcurl.so while
-# that cp is still writing it and fail with `file too short`. Intermittent by
-# nature -- it needs the copy and a link to overlap -- and it presents as a
-# corrupt library rather than a build-order problem, which makes it easy to
-# misread as a real toolchain or dependency failure. Every sibling target here
-# (tests, tests_no_infra, tests_with_deps) already declares these prerequisites;
-# unit_tests was the only one that did not.
+# Unit tests consume the TAP helper artifacts and the statically built test
+# connectors, so keep their build ordered after both prerequisite targets.
 .PHONY: unit_tests
 unit_tests: tap test_deps
 	cd tests/unit && CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
