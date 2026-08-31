@@ -45,7 +45,6 @@ enum proxysql_auth_plugins {
 
 class MySQL_ResultSet {
 	private:
-	int nTrx;
 	bool deprecate_eof_active;
 	public:
 	bool transfer_started;
