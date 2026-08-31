@@ -5093,7 +5093,7 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 }
 
 bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_DEALLOCATE_command(const char* dig) {
-	
+
 	std::string nq = string((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
 
 	RE2::GlobalReplace(&nq, "(?U)/\\*.*\\*/", "");
@@ -5108,16 +5108,12 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 		client_myds->myconn->local_stmts->client_close_all();
 	} else {
 		if (client_myds->myconn->local_stmts->client_close(dealloc_value) == false) {
-			client_myds->DSS = STATE_QUERY_SENT_NET;
-			const std::string& errmsg = "prepared statement \"" + std::string(dealloc_value) + "\" does not exist";
-			client_myds->myprot.generate_error_packet(true, true, errmsg.c_str(), PGSQL_ERROR_CODES::ERRCODE_INVALID_SQL_STATEMENT_NAME, false, true);
-			if (mirror == false) {
-				RequestEnd(NULL, true);
-			} else {
-				client_myds->DSS = STATE_SLEEP;
-				status = WAITING_CLIENT_DATA;
-			}
-			return true;
+			// Untracked name = SQL-level PREPARE (local_stmts holds only binary
+			// prepares) or a typo. Forward it: a SQL PREPARE already pinned its
+			// connection (multiplexing off), so the backend deallocates it; a typo
+			// gets the backend's real error. No hostgroup lock, so a typo can't
+			// lock the session.
+			return false;
 		}
 	}
 
