@@ -6699,16 +6699,6 @@ void MySQL_Threads_Handler::p_update_metrics() {
 #ifdef IDLE_THREADS
 	get_non_idle_client_connections();
 #endif // IDLE_THREADS
-	// NOTE: This is a blocking operation that requires taking the `thread_mutex`,
-	// maybe it should be conditional, configurable or having it's own updating
-	// interval.
-	{
-		// Collect the memory stats to be reported
-		Get_Memory_Stats();
-		get_mysql_backend_buffers_bytes();
-		get_mysql_frontend_buffers_bytes();
-		get_mysql_session_internal_bytes();
-	}
 	for (unsigned int i=0; i<sizeof(MySQL_Thread_status_variables_counter_array)/sizeof(mythr_st_vars_t) ; i++) {
 		if (MySQL_Thread_status_variables_counter_array[i].name) {
 			get_status_variable(
