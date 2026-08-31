@@ -522,6 +522,8 @@ UNIT_TESTS += \
 	mysql_router_plugin_load_unit-t \
 	mysql_router_admin_schema_unit-t \
 	mysql_router_bootstrap_options_unit-t \
+	mysql_router_metadata_v2_2_unit-t \
+	mysql_router_gr_health_unit-t \
 	test_mysqlx_plugin_load-t \
 	test_mysqlx_admin_tables-t \
 	mysqlx_config_store_unit-t \
@@ -666,6 +668,19 @@ mysql_router_bootstrap_options_unit-t: mysql_router_bootstrap_options_unit-t.cpp
 		-I$(PROXYSQL_PATH)/plugins/mysql_router/include \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@
+
+MYSQL_ROUTER_METADATA_SRCS := \
+	$(PROXYSQL_PATH)/plugins/mysql_router/src/metadata_client.cpp \
+	$(PROXYSQL_PATH)/plugins/mysql_router/src/metadata_v2_2.cpp \
+	$(PROXYSQL_PATH)/plugins/mysql_router/src/gr_health.cpp
+
+mysql_router_metadata_v2_2_unit-t: mysql_router_metadata_v2_2_unit-t.cpp $(MYSQL_ROUTER_METADATA_SRCS) $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(MYSQL_ROUTER_METADATA_SRCS) $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(PROXYSQL_PATH)/plugins/mysql_router/include $(IDIRS) $(OPT) -lpthread -o $@
+
+mysql_router_gr_health_unit-t: mysql_router_gr_health_unit-t.cpp $(MYSQL_ROUTER_METADATA_SRCS) $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(MYSQL_ROUTER_METADATA_SRCS) $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(PROXYSQL_PATH)/plugins/mysql_router/include $(IDIRS) $(OPT) -lpthread -o $@
 
 test_mysqlx_plugin_load-t: ../test_mysqlx_plugin_load-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) mysqlx_plugin_build
 	$(CXX) ../test_mysqlx_plugin_load-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \

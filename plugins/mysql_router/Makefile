@@ -14,6 +14,7 @@ ODIR := $(PLUGIN_DIR)/obj
 PLUGIN_SO := $(PLUGIN_DIR)/proxysql_mysql_router.so
 
 IDIRS := -I$(PROXYSQL_IDIR) -I$(PLUGIN_DIR)/include -I$(SQLITE3_IDIR) \
+	-I$(JSON_IDIR) -I$(MARIADB_IDIR) \
 	-I$(PROMETHEUS_IDIR)
 
 OPTZ ?= -O2 -ggdb
@@ -34,6 +35,7 @@ PSQLTSDB := $(if $(filter 1,$(PROXYSQLTSDB)),-DPROXYSQLTSDB)
 CXXFLAGS := $(STDCPP) -fPIC -fvisibility=hidden -fvisibility-inlines-hidden \
 	$(OPTZ) $(WGCOV) $(WASAN) -pthread -fstack-protector-strong \
 	$(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB)
+CXXFLAGS += -DMYSQL_ROUTER_CONNECTOR_C
 
 ifeq ($(WASAN),)
 ifneq (,$(findstring -O,$(OPTZ)))
@@ -54,6 +56,9 @@ SRCS := $(PLUGIN_DIR)/src/plugin.cpp \
 	$(PLUGIN_DIR)/src/admin_schema.cpp \
 	$(PLUGIN_DIR)/src/bootstrap_options.cpp \
 	$(PLUGIN_DIR)/src/config_store.cpp \
+	$(PLUGIN_DIR)/src/metadata_client.cpp \
+	$(PLUGIN_DIR)/src/metadata_v2_2.cpp \
+	$(PLUGIN_DIR)/src/gr_health.cpp \
 	$(PLUGIN_DIR)/src/status.cpp \
 	$(PLUGIN_DIR)/src/metrics.cpp
 HEADERS := $(wildcard $(PLUGIN_DIR)/include/*.h) \
