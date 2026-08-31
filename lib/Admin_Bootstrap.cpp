@@ -763,6 +763,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_admin,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
 	insert_into_tables_defs(tables_defs_admin,"runtime_global_variables", ADMIN_SQLITE_RUNTIME_GLOBAL_VARIABLES);
 	insert_into_tables_defs(tables_defs_admin,"mysql_collations", ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS);
+	insert_into_tables_defs(tables_defs_admin,"ssl_ciphers", ADMIN_SQLITE_TABLE_SSL_CIPHERS);
 	insert_into_tables_defs(tables_defs_admin,"scheduler", ADMIN_SQLITE_TABLE_SCHEDULER);
 	insert_into_tables_defs(tables_defs_admin,"runtime_scheduler", ADMIN_SQLITE_TABLE_RUNTIME_SCHEDULER);
 	insert_into_tables_defs(tables_defs_admin,"mysql_firewall_whitelist_users", ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_USERS);
@@ -990,6 +991,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	__attach_db(statsdb, statsdb_disk, (char *)"stats_history");
 
 	dump_mysql_collations();
+	dump_ssl_ciphers();
 
 #ifdef DEBUG
 	admindb->execute("ATTACH DATABASE 'file:mem_mydb?mode=memory&cache=shared' AS myhgm");
