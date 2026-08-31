@@ -43,11 +43,19 @@ static bool get_single_value(MYSQL* conn, const char* sql, std::string& value) {
 	return success;
 }
 
+// Each case owns the complete in-memory rule set. A pre-existing apply=1 rule
+// could otherwise intercept the test query before its fixture rule runs. Keep
+// this runtime-only: the TAP harness restores persistent configuration itself.
+static bool reset_query_rules(MYSQL* admin) {
+	return run_admin_checked(admin, "DELETE FROM mysql_query_rules") &&
+		run_admin_checked(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
+}
+
 static bool run_rewrite_case(MYSQL* admin, MYSQL* proxy, const char* insert_rule,
 	const char* query, const char* expected, const char* label) {
 	std::string value;
 	const bool setup_ok =
-		run_admin_checked(admin, "DELETE FROM mysql_query_rules WHERE rule_id BETWEEN 61190 AND 61194") &&
+		reset_query_rules(admin) &&
 		run_admin_checked(admin, insert_rule) &&
 		run_admin_checked(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 	const bool query_ok = setup_ok && get_single_value(proxy, query, value);
@@ -59,7 +67,7 @@ static bool run_rewrite_case(MYSQL* admin, MYSQL* proxy, const char* insert_rule
 static void run_negated_error_case(MYSQL* admin, MYSQL* proxy, const char* insert_rule) {
 	std::string value;
 	const bool setup_ok =
-		run_admin_checked(admin, "DELETE FROM mysql_query_rules WHERE rule_id BETWEEN 61190 AND 61194") &&
+		reset_query_rules(admin) &&
 		run_admin_checked(admin, insert_rule) &&
 		run_admin_checked(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 	const bool matching_ok = setup_ok && get_single_value(proxy, "SELECT 8", value);
@@ -135,8 +143,7 @@ int main(int, char**) {
 	}
 
 	bool teardown_ok = true;
-	teardown_ok &= run_admin_checked(admin, "DELETE FROM mysql_query_rules WHERE rule_id BETWEEN 61190 AND 61194");
-	teardown_ok &= run_admin_checked(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
+	teardown_ok &= reset_query_rules(admin);
 	if (!original_regex.empty()) {
 		teardown_ok &= run_admin_checked(admin, ("SET mysql-query_processor_regex=" + original_regex).c_str());
 		teardown_ok &= run_admin_checked(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
