@@ -76,6 +76,7 @@ struct Rule {
 	std::string re_modifiers;
 	int destination_hostgroup;
 	bool apply;
+	std::string attributes;
 	std::string comment;
 };
 
@@ -225,10 +226,44 @@ bool copy_plan(const ProxySQL_PluginMysqlConfigPlan& source, OwnedPlan& target, 
 		const auto& row = source.rules[i];
 		target.rules.push_back({row.rule_id, row.active, row.proxy_port, copied(row.match_digest),
 			copied(row.match_pattern), row.negate_match_pattern, copied(row.re_modifiers),
-			row.destination_hostgroup, row.apply, copied(row.comment)});
+			row.destination_hostgroup, row.apply, std::string(), copied(row.comment)});
 	}
 	target.interfaces.reserve(source.interface_count);
 	for (size_t i = 0; i < source.interface_count; ++i) target.interfaces.push_back(copied(source.interfaces[i]));
+	return true;
+}
+
+bool copy_plan_v2(const ProxySQL_PluginMysqlConfigPlanV2& source, OwnedPlan& target,
+	std::string& error) {
+	if (!copy_plan(source.base, target, error) ||
+		!present_for_count(source.rule_attributes, source.rule_attribute_count,
+			"rule_attributes", error)) return false;
+	std::unordered_set<int> seen;
+	for (size_t i = 0; i < source.rule_attribute_count; ++i) {
+		const auto& attribute = source.rule_attributes[i];
+		if (!seen.insert(attribute.rule_id).second) {
+			error = "duplicate mysql query rule attributes for rule_id: " +
+				std::to_string(attribute.rule_id);
+			return false;
+		}
+		auto rule = std::find_if(target.rules.begin(), target.rules.end(),
+			[&attribute](const Rule& candidate) {
+				return candidate.rule_id == attribute.rule_id;
+			});
+		if (rule == target.rules.end()) {
+			error = "mysql query rule attributes reference an unknown rule_id: " +
+				std::to_string(attribute.rule_id);
+			return false;
+		}
+		const std::string value = copied(attribute.attributes);
+		const nlohmann::json document = nlohmann::json::parse(value, nullptr, false);
+		if (!document.is_object()) {
+			error = "mysql query rule attributes must be a JSON object for rule_id: " +
+				std::to_string(attribute.rule_id);
+			return false;
+		}
+		rule->attributes = value;
+	}
 	return true;
 }
 
@@ -874,8 +909,8 @@ bool stage_schema(SQLite3DB& db, const std::string& schema, const OwnedPlan& pla
 	}
 	for(const auto& row:plan.rules){
 		if(preflight.rule_collisions.count(row.rule_id))continue;
-		if(!run_statement(db,"INSERT INTO "+schema+".mysql_query_rules (rule_id,active,flagIN,proxy_port,match_digest,match_pattern,negate_match_pattern,re_modifiers,destination_hostgroup,apply,attributes,comment) VALUES (?5,?6,0,?7,NULLIF(?1,''),NULLIF(?2,''),?8,NULLIF(?3,''),?9,?10,'',?4)",
-			{row.match_digest,row.match_pattern,row.re_modifiers,row.comment},{row.rule_id,row.active,row.proxy_port,row.negate_match_pattern,row.destination_hostgroup,row.apply},error))return false;
+		if(!run_statement(db,"INSERT INTO "+schema+".mysql_query_rules (rule_id,active,flagIN,proxy_port,match_digest,match_pattern,negate_match_pattern,re_modifiers,destination_hostgroup,apply,attributes,comment) VALUES (?6,?7,0,?8,NULLIF(?1,''),NULLIF(?2,''),?9,NULLIF(?3,''),?10,?11,?4,?5)",
+			{row.match_digest,row.match_pattern,row.re_modifiers,row.attributes,row.comment},{row.rule_id,row.active,row.proxy_port,row.negate_match_pattern,row.destination_hostgroup,row.apply},error))return false;
 	}
 	std::vector<std::string> merged;
 	for(const auto& value:split_interfaces(current_interfaces(db,schema,error))) if(!preflight.old_interfaces.count(value)) merged.push_back(value);
@@ -938,11 +973,9 @@ bool proxysql_ensure_plugin_mysql_config_schema(SQLite3DB& db, const char* schem
 
 static ProxySQL_PluginMysqlConfigResult apply_plugin_mysql_config_impl(
 	SQLite3DB& admindb,
-	const ProxySQL_PluginMysqlConfigPlan& source,
+	OwnedPlan plan,
 	const ProxySQL_PluginConfigRuntimeHooks& runtime) {
-	OwnedPlan plan;
 	std::string error;
-	if (!copy_plan(source, plan, error) || !validate(plan, error)) return {false, 0, error, {}};
 	if (runtime.lock == nullptr || runtime.unlock == nullptr || runtime.capture == nullptr ||
 		runtime.publish == nullptr || runtime.restore == nullptr || runtime.checkpoint == nullptr) {
 		return {false, 0, "runtime publication hooks are incomplete", {}};
@@ -1122,7 +1155,29 @@ ProxySQL_PluginMysqlConfigResult proxysql_apply_plugin_mysql_config(
 	const ProxySQL_PluginConfigRuntimeHooks& runtime) {
 	try {
 		if (before_copy_hook != nullptr) before_copy_hook(test_hook_opaque);
-		return apply_plugin_mysql_config_impl(admindb, source, runtime);
+		OwnedPlan plan;
+		std::string error;
+		if (!copy_plan(source, plan, error) || !validate(plan, error)) {
+			return {false, 0, error, {}};
+		}
+		return apply_plugin_mysql_config_impl(admindb, std::move(plan), runtime);
+	} catch (...) {
+		return {false, 0, "plugin publication failed before lock acquisition", {}};
+	}
+}
+
+ProxySQL_PluginMysqlConfigResult proxysql_apply_plugin_mysql_config_v2(
+	SQLite3DB& admindb,
+	const ProxySQL_PluginMysqlConfigPlanV2& source,
+	const ProxySQL_PluginConfigRuntimeHooks& runtime) {
+	try {
+		if (before_copy_hook != nullptr) before_copy_hook(test_hook_opaque);
+		OwnedPlan plan;
+		std::string error;
+		if (!copy_plan_v2(source, plan, error) || !validate(plan, error)) {
+			return {false, 0, error, {}};
+		}
+		return apply_plugin_mysql_config_impl(admindb, std::move(plan), runtime);
 	} catch (...) {
 		return {false, 0, "plugin publication failed before lock acquisition", {}};
 	}

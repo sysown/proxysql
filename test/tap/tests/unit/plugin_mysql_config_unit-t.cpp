@@ -234,6 +234,10 @@ struct Runtime {
 	uint64_t captured_users {0};
 	uint64_t captured_rules {0};
 	uint64_t captured_interfaces {0};
+	bool runtime_rule_present {true};
+	bool captured_runtime_rule_present {false};
+	std::string runtime_rule_attributes;
+	std::string captured_runtime_rule_attributes;
 	ProxySQL_PluginConfigStage fail {ProxySQL_PluginConfigStage::none};
 	ProxySQL_PluginConfigLock throw_lock {static_cast<ProxySQL_PluginConfigLock>(0)};
 	ProxySQL_PluginConfigLock throw_unlock {static_cast<ProxySQL_PluginConfigLock>(0)};
@@ -293,10 +297,12 @@ struct Runtime {
 		self.captured_users = self.users;
 		self.captured_rules = self.rules;
 		self.captured_interfaces = self.interfaces;
+		self.captured_runtime_rule_present = self.runtime_rule_present;
+		self.captured_runtime_rule_attributes = self.runtime_rule_attributes;
 		self.trace.push_back("snapshot");
 		return true;
 	}
-	static bool publish(void* ptr, ProxySQL_PluginConfigStage stage, SQLite3DB&, uint64_t generation, std::string& error) {
+	static bool publish(void* ptr, ProxySQL_PluginConfigStage stage, SQLite3DB& db, uint64_t generation, std::string& error) {
 		auto& self = *static_cast<Runtime*>(ptr);
 		self.trace.push_back("P" + std::to_string(static_cast<int>(stage)));
 		if (stage == ProxySQL_PluginConfigStage::servers && self.live_db != nullptr) {
@@ -312,7 +318,14 @@ struct Runtime {
 		if (stage == self.throw_publish) throw std::runtime_error("injected publish exception");
 		if (stage == ProxySQL_PluginConfigStage::servers) self.servers = generation;
 		if (stage == ProxySQL_PluginConfigStage::users) self.users = generation;
-		if (stage == ProxySQL_PluginConfigStage::rules) self.rules = generation;
+		if (stage == ProxySQL_PluginConfigStage::rules) {
+			self.rules = generation;
+			self.runtime_rule_present = scalar(db,
+				"SELECT COUNT(*) FROM main.mysql_query_rules WHERE rule_id=9000") == 1;
+			self.runtime_rule_attributes = self.runtime_rule_present
+				? text_value(db, "SELECT attributes FROM main.mysql_query_rules WHERE rule_id=9000")
+				: std::string();
+		}
 		if (stage == ProxySQL_PluginConfigStage::interfaces) self.interfaces = generation;
 		if (self.fail == stage) { error = "injected publication failure"; return false; }
 		return true;
@@ -324,7 +337,11 @@ struct Runtime {
 		if (stage == self.throw_restore) throw std::runtime_error("injected restore exception");
 		if (stage == ProxySQL_PluginConfigStage::servers) self.servers = self.captured_servers;
 		if (stage == ProxySQL_PluginConfigStage::users) self.users = self.captured_users;
-		if (stage == ProxySQL_PluginConfigStage::rules) self.rules = self.captured_rules;
+		if (stage == ProxySQL_PluginConfigStage::rules) {
+			self.rules = self.captured_rules;
+			self.runtime_rule_present = self.captured_runtime_rule_present;
+			self.runtime_rule_attributes = self.captured_runtime_rule_attributes;
+		}
 		if (stage == ProxySQL_PluginConfigStage::interfaces) self.interfaces = self.captured_interfaces;
 		if (stage == self.fail) {
 			error = "injected restore failure";
@@ -390,7 +407,7 @@ struct Fixture {
 				"('old_owned','old',1,0,8100,'',0,1,0,1,1,100,'','mysql_router:old')").c_str()),
 				"user fixture is seeded in %s", schema);
 			ok(db.execute(("INSERT INTO " + p + ".mysql_query_rules(rule_id,active,proxy_port,destination_hostgroup,apply,attributes,comment) VALUES "
-				"(5,1,6033,10,1,'','operator'),(9000,1,6450,8101,1,'','mysql_router:old'),"
+				"(5,1,6033,10,1,'{\"operator\":true}','operator'),(9000,1,6450,8101,1,'','mysql_router:old'),"
 				"(9001,1,6446,10,1,'','operator')").c_str()),
 				"rule fixture is seeded in %s", schema);
 			ok(db.execute(("INSERT INTO " + p + ".global_variables VALUES "
@@ -422,6 +439,33 @@ bool rejected_without_lock(Fixture& f, const ProxySQL_PluginMysqlConfigPlan& pla
 	f.runtime.fail = saved_failure;
 	return !result.applied && f.runtime.trace.empty() &&
 		scalar(f.db, "SELECT generation FROM proxysql_plugin_config_generations WHERE owner='mysql_router'") == 12;
+}
+
+bool rejected_v2_without_lock(Fixture& f, const ProxySQL_PluginMysqlConfigPlanV2& plan,
+	const std::string& expected_message) {
+	f.runtime.trace.clear();
+	const std::string main_before = text_value(f.db,
+		"SELECT group_concat(rule_id||'|'||attributes,';') FROM "
+		"(SELECT rule_id,attributes FROM main.mysql_query_rules ORDER BY rule_id)");
+	const std::string disk_before = text_value(f.db,
+		"SELECT group_concat(rule_id||'|'||attributes,';') FROM "
+		"(SELECT rule_id,attributes FROM disk.mysql_query_rules ORDER BY rule_id)");
+	const bool runtime_present_before = f.runtime.runtime_rule_present;
+	const std::string runtime_attributes_before = f.runtime.runtime_rule_attributes;
+	const auto result = proxysql_apply_plugin_mysql_config_v2(f.db, plan, f.runtime.hooks());
+	return !result.applied && result.message == expected_message && f.runtime.trace.empty() &&
+		text_value(f.db,
+			"SELECT group_concat(rule_id||'|'||attributes,';') FROM "
+			"(SELECT rule_id,attributes FROM main.mysql_query_rules ORDER BY rule_id)") == main_before &&
+		text_value(f.db,
+			"SELECT group_concat(rule_id||'|'||attributes,';') FROM "
+			"(SELECT rule_id,attributes FROM disk.mysql_query_rules ORDER BY rule_id)") == disk_before &&
+		f.runtime.runtime_rule_present == runtime_present_before &&
+		f.runtime.runtime_rule_attributes == runtime_attributes_before &&
+		scalar(f.db, "SELECT generation FROM main.proxysql_plugin_config_generations "
+			"WHERE owner='mysql_router'") == 12 &&
+		scalar(f.db, "SELECT generation FROM disk.proxysql_plugin_config_generations "
+			"WHERE owner='mysql_router'") == 12;
 }
 
 bool has_collision(const ProxySQL_PluginMysqlConfigResult& result, const std::string& collision) {
@@ -835,6 +879,107 @@ int main() {
 		scalar(upgraded_admin,
 			"SELECT COUNT(*) FROM disk.proxysql_plugin_owned_objects WHERE owner='other_plugin'") == 1,
 		"publication migrates marker-proven ownership and preserves operator rows after schema upgrade");
+
+	Fixture v2_validation;
+	ProxySQL_PluginMysqlRuleAttributesRow valid_v2_attribute {
+		9000, "{\"switch_to_fast_forward\":true}"
+	};
+	ProxySQL_PluginMysqlConfigPlanV2 valid_v2_plan {
+		v2_validation.plan, &valid_v2_attribute, 1
+	};
+	ProxySQL_PluginMysqlConfigPlanV2 null_v2_array {v2_validation.plan, nullptr, 1};
+	ok(rejected_v2_without_lock(v2_validation, null_v2_array,
+		"rule_attributes is null while its count is non-zero"),
+		"a null V2 attributes array is rejected before locking without changing any tier");
+	ProxySQL_PluginMysqlRuleAttributesRow duplicate_v2_attributes[] {
+		{9000, "{}"}, {9000, "{\"switch_to_fast_forward\":true}"}
+	};
+	ProxySQL_PluginMysqlConfigPlanV2 duplicate_v2_plan {
+		v2_validation.plan, duplicate_v2_attributes, 2
+	};
+	ok(rejected_v2_without_lock(v2_validation, duplicate_v2_plan,
+		"duplicate mysql query rule attributes for rule_id: 9000"),
+		"duplicate V2 rule attributes are rejected before locking without changing any tier");
+	ProxySQL_PluginMysqlRuleAttributesRow unknown_v2_attribute {9009, "{}"};
+	ProxySQL_PluginMysqlConfigPlanV2 unknown_v2_plan {
+		v2_validation.plan, &unknown_v2_attribute, 1
+	};
+	ok(rejected_v2_without_lock(v2_validation, unknown_v2_plan,
+		"mysql query rule attributes reference an unknown rule_id: 9009"),
+		"unknown V2 rule IDs are rejected before locking without changing any tier");
+	ProxySQL_PluginMysqlRuleAttributesRow null_v2_attribute {9000, nullptr};
+	ProxySQL_PluginMysqlConfigPlanV2 null_v2_value_plan {
+		v2_validation.plan, &null_v2_attribute, 1
+	};
+	ok(rejected_v2_without_lock(v2_validation, null_v2_value_plan,
+		"mysql query rule attributes must be a JSON object for rule_id: 9000"),
+		"a null V2 rule value is rejected before locking without changing any tier");
+	for (const auto& invalid : std::vector<std::pair<const char*, const char*>> {
+		{"{", "malformed JSON"}, {"[]", "a JSON array"}, {"true", "a JSON scalar"}}) {
+		ProxySQL_PluginMysqlRuleAttributesRow invalid_attribute {9000, invalid.first};
+		ProxySQL_PluginMysqlConfigPlanV2 invalid_plan {
+			v2_validation.plan, &invalid_attribute, 1
+		};
+		ok(rejected_v2_without_lock(v2_validation, invalid_plan,
+			"mysql query rule attributes must be a JSON object for rule_id: 9000"),
+			"%s is rejected before locking without changing any tier", invalid.second);
+	}
+
+	Fixture v2;
+	ProxySQL_PluginMysqlRuleAttributesRow v2_attribute {
+		9000, "{\"switch_to_fast_forward\":true}"
+	};
+	ProxySQL_PluginMysqlConfigPlanV2 v2_plan {v2.plan, &v2_attribute, 1};
+	const auto v2_generation_one = proxysql_apply_plugin_mysql_config_v2(
+		v2.db, v2_plan, v2.runtime.hooks());
+	ok(v2_generation_one.applied && v2_generation_one.generation == 13 &&
+		text_value(v2.db, "SELECT attributes FROM main.mysql_query_rules WHERE rule_id=9000") ==
+			"{\"switch_to_fast_forward\":true}" &&
+		text_value(v2.db, "SELECT attributes FROM disk.mysql_query_rules WHERE rule_id=9000") ==
+			"{\"switch_to_fast_forward\":true}" &&
+		v2.runtime.runtime_rule_present &&
+		v2.runtime.runtime_rule_attributes == "{\"switch_to_fast_forward\":true}",
+		"V2 generation 1 publishes the exact rule attributes to main, disk, and runtime");
+	v2.plan.generation = 14;
+	v2_attribute.attributes = "{}";
+	v2_plan.base = v2.plan;
+	const auto v2_generation_two = proxysql_apply_plugin_mysql_config_v2(
+		v2.db, v2_plan, v2.runtime.hooks());
+	ok(v2_generation_two.applied && v2_generation_two.generation == 14 &&
+		text_value(v2.db, "SELECT attributes FROM main.mysql_query_rules WHERE rule_id=9000") == "{}" &&
+		text_value(v2.db, "SELECT attributes FROM disk.mysql_query_rules WHERE rule_id=9000") == "{}" &&
+		v2.runtime.runtime_rule_present && v2.runtime.runtime_rule_attributes == "{}",
+		"V2 generation 2 replaces rule attributes atomically in all three tiers");
+	v2.plan.generation = 15;
+	v2_attribute.attributes = "{\"switch_to_fast_forward\":false}";
+	v2_plan.base = v2.plan;
+	v2.runtime.fail = ProxySQL_PluginConfigStage::interfaces;
+	const auto v2_failed = proxysql_apply_plugin_mysql_config_v2(
+		v2.db, v2_plan, v2.runtime.hooks());
+	ok(!v2_failed.applied &&
+		text_value(v2.db, "SELECT attributes FROM main.mysql_query_rules WHERE rule_id=9000") == "{}" &&
+		text_value(v2.db, "SELECT attributes FROM disk.mysql_query_rules WHERE rule_id=9000") == "{}" &&
+		v2.runtime.runtime_rule_present && v2.runtime.runtime_rule_attributes == "{}" &&
+		scalar(v2.db, "SELECT generation FROM main.proxysql_plugin_config_generations "
+			"WHERE owner='mysql_router'") == 14 &&
+		scalar(v2.db, "SELECT generation FROM disk.proxysql_plugin_config_generations "
+			"WHERE owner='mysql_router'") == 14,
+		"a post-rules V2 failure restores prior attributes and generation in all three tiers");
+	v2.runtime.fail = ProxySQL_PluginConfigStage::none;
+	v2.plan.rules = nullptr;
+	v2.plan.rule_count = 0;
+	v2_plan = {v2.plan, nullptr, 0};
+	const auto v2_generation_three = proxysql_apply_plugin_mysql_config_v2(
+		v2.db, v2_plan, v2.runtime.hooks());
+	ok(v2_generation_three.applied && v2_generation_three.generation == 15 &&
+		scalar(v2.db, "SELECT COUNT(*) FROM main.mysql_query_rules WHERE rule_id=9000") == 0 &&
+		scalar(v2.db, "SELECT COUNT(*) FROM disk.mysql_query_rules WHERE rule_id=9000") == 0 &&
+		!v2.runtime.runtime_rule_present &&
+		text_value(v2.db, "SELECT attributes FROM main.mysql_query_rules WHERE rule_id=5") ==
+			"{\"operator\":true}" &&
+		text_value(v2.db, "SELECT attributes FROM disk.mysql_query_rules WHERE rule_id=5") ==
+			"{\"operator\":true}",
+		"V2 generation 3 removes only the managed rule and preserves operator attributes");
 
 	Fixture f;
 	Fixture released_user;
@@ -1888,6 +2033,23 @@ int main() {
 			"operator-live",
 		"removal deletes only the plugin variant from main, disk, and live Auth");
 
+	ProxySQL_PluginMysqlRuleAttributesRow live_v2_attribute {
+		9000, "{\"switch_to_fast_forward\":true}"
+	};
+	v.plan.generation = 17;
+	ProxySQL_PluginMysqlConfigPlanV2 live_v2_plan {v.plan, &live_v2_attribute, 1};
+	const auto live_v2_result = admin->apply_plugin_mysql_config_v2(live_v2_plan);
+	std::unique_ptr<SQLite3_result> live_rules(GloMyQPro->get_current_query_rules());
+	SQLite3_row* live_rule = result_row(live_rules.get(), 0, "9000");
+	ok(live_v2_result.applied && live_v2_result.generation == 17 &&
+		text_value(v.db, "SELECT attributes FROM main.mysql_query_rules WHERE rule_id=9000") ==
+			"{\"switch_to_fast_forward\":true}" &&
+		text_value(v.db, "SELECT attributes FROM disk.mysql_query_rules WHERE rule_id=9000") ==
+			"{\"switch_to_fast_forward\":true}" &&
+		live_rule != nullptr && live_rule->fields[33] != nullptr &&
+		std::string(live_rule->fields[33]) == "{\"switch_to_fast_forward\":true}",
+		"the live Admin V2 service publishes exact attributes to main, disk, and QPro");
+
 	bool misleading_legacy_seeded = true;
 	for (const char* schema : {"main", "disk"}) {
 		const std::string prefix = std::string(schema) + ".";
@@ -1895,7 +2057,7 @@ int main() {
 			v.db.execute(("INSERT INTO " + prefix + "mysql_users VALUES "
 				"('A','operator-a',1,0,10,'',0,1,0,1,0,100,'{}','operator')").c_str()) &&
 			v.db.execute(("INSERT INTO " + prefix + "proxysql_plugin_owned_objects VALUES "
-				"('mysql_router','mysql_user','v2:1:0:41',16)").c_str());
+				"('mysql_router','mysql_user','v2:1:0:41',17)").c_str());
 	}
 	auto misleading_legacy_users = result_value(v.db,
 		"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,"
@@ -1911,7 +2073,7 @@ int main() {
 		scalar(v.db, "SELECT COUNT(*) FROM main.mysql_users WHERE username='v2:1:0:41'") == 0 &&
 		scalar(v.db, "SELECT COUNT(*) FROM disk.mysql_users WHERE username='v2:1:0:41'") == 0,
 		"the live fixture seeds an encoded-looking legacy ledger beside unrelated operator user A");
-	v.plan.generation = 17;
+	v.plan.generation = 18;
 	const auto misleading_legacy_result = admin->apply_plugin_mysql_config(v.plan);
 	account_details_t operator_a_after = GloMyAuth->lookup(
 		const_cast<char*>("A"), USERNAME_BACKEND, {true, true, true});
@@ -1921,9 +2083,9 @@ int main() {
 	ok(!misleading_legacy_result.applied &&
 		misleading_legacy_result.message.find("ambiguous") != std::string::npos &&
 		scalar(v.db, "SELECT generation FROM main.proxysql_plugin_config_generations "
-			"WHERE owner='mysql_router'") == 16 &&
+			"WHERE owner='mysql_router'") == 17 &&
 		scalar(v.db, "SELECT generation FROM disk.proxysql_plugin_config_generations "
-			"WHERE owner='mysql_router'") == 16 &&
+			"WHERE owner='mysql_router'") == 17 &&
 		text_value(v.db, "SELECT password FROM main.mysql_users WHERE username='A' AND backend=1") ==
 			"operator-a" &&
 		text_value(v.db, "SELECT password FROM disk.mysql_users WHERE username='A' AND backend=1") ==

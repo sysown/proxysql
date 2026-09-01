@@ -6575,8 +6575,16 @@ ProxySQL_PluginMysqlConfigResult ProxySQL_Admin::apply_plugin_mysql_config(
 }
 
 ProxySQL_PluginMysqlConfigResult ProxySQL_Admin::apply_plugin_mysql_config_v2(
-	const ProxySQL_PluginMysqlConfigPlanV2&) {
-	return {false, 0, "MySQL rule attributes publication is not available", {}};
+	const ProxySQL_PluginMysqlConfigPlanV2& plan) {
+	try {
+		ProxySQL_PluginConfigRuntimeHooks hooks {
+			this, &plugin_config_lock, &plugin_config_unlock, &plugin_config_capture,
+			&plugin_config_publish, &plugin_config_restore, &plugin_config_checkpoint
+		};
+		return proxysql_apply_plugin_mysql_config_v2(*admindb, plan, hooks);
+	} catch (...) {
+		return {false, 0, "plugin publication failed at Admin service boundary", {}};
+	}
 }
 
 SQLite3_result* ProxySQL_Admin::get_mysql_users_snapshot() {
