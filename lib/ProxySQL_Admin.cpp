@@ -398,6 +398,12 @@ ProxySQL_PluginMysqlConfigResult proxysql_plugin_apply_mysql_config(
 	return GloAdmin ? GloAdmin->apply_plugin_mysql_config(plan) :
 		ProxySQL_PluginMysqlConfigResult{false, 0, "Admin module is not available", {}};
 }
+
+ProxySQL_PluginMysqlConfigResult proxysql_plugin_apply_mysql_config_v2(
+	const ProxySQL_PluginMysqlConfigPlanV2& plan) {
+	return GloAdmin ? GloAdmin->apply_plugin_mysql_config_v2(plan) :
+		ProxySQL_PluginMysqlConfigResult{false, 0, "Admin module is not available", {}};
+}
 #endif /* PROXYSQL40 */
 
 extern Web_Interface *GloWebInterface;
@@ -6566,6 +6572,11 @@ ProxySQL_PluginMysqlConfigResult ProxySQL_Admin::apply_plugin_mysql_config(
 	} catch (...) {
 		return {false, 0, "plugin publication failed at Admin service boundary", {}};
 	}
+}
+
+ProxySQL_PluginMysqlConfigResult ProxySQL_Admin::apply_plugin_mysql_config_v2(
+	const ProxySQL_PluginMysqlConfigPlanV2&) {
+	return {false, 0, "MySQL rule attributes publication is not available", {}};
 }
 
 SQLite3_result* ProxySQL_Admin::get_mysql_users_snapshot() {

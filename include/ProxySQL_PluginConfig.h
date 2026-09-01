@@ -127,6 +127,20 @@ struct ProxySQL_PluginMysqlConfigPlan {
 	size_t interface_count;
 };
 
+// ABI-9 extension. Query-rule attributes live in a separate rule-ID-indexed
+// array so the ABI-8 rule row and configuration plan retain their exact
+// compiled layouts.
+struct ProxySQL_PluginMysqlRuleAttributesRow {
+	int rule_id;
+	const char* attributes;
+};
+
+struct ProxySQL_PluginMysqlConfigPlanV2 {
+	ProxySQL_PluginMysqlConfigPlan base;
+	const ProxySQL_PluginMysqlRuleAttributesRow* rule_attributes;
+	size_t rule_attribute_count;
+};
+
 struct ProxySQL_PluginMysqlConfigResult {
 	bool applied {false};
 	uint64_t generation {0};
@@ -217,6 +231,10 @@ bool proxysql_ensure_plugin_mysql_config_schema(SQLite3DB& db, const char* schem
 ProxySQL_PluginMysqlConfigResult proxysql_apply_plugin_mysql_config(
 	SQLite3DB& admindb,
 	const ProxySQL_PluginMysqlConfigPlan& plan,
+	const ProxySQL_PluginConfigRuntimeHooks& runtime);
+ProxySQL_PluginMysqlConfigResult proxysql_apply_plugin_mysql_config_v2(
+	SQLite3DB& admindb,
+	const ProxySQL_PluginMysqlConfigPlanV2& plan,
 	const ProxySQL_PluginConfigRuntimeHooks& runtime);
 
 #endif /* PROXYSQL40 */

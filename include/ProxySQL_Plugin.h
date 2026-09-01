@@ -53,8 +53,11 @@ namespace prometheus { class Registry; }
 //   ABI 7: appends authenticated encrypted secret-store services.
 //   ABI 8: appends runtime readiness and listener-gate services, followed by
 //          the reserved scoped-MySQL-publication service slot.
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = 8u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = 8u;
+//   ABI 9: appends a V2 scoped-MySQL-publication service. Its plan carries
+//          query-rule attributes separately so every ABI-8 row and callback
+//          remains byte-for-byte compatible.
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = 9u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = 9u;
 
 struct ProxySQL_PluginCLIOptionDef {
 	const char* short_name;
@@ -387,6 +390,11 @@ struct ProxySQL_PluginServices {
 	// generic scoped MySQL configuration publisher without another ABI bump.
 	ProxySQL_PluginMysqlConfigResult (*apply_mysql_config)(
 		const ProxySQL_PluginMysqlConfigPlan& plan);
+
+	// ABI-9 final tail. ABI-8 plugins retain their original service-table
+	// prefix and continue publishing through apply_mysql_config.
+	ProxySQL_PluginMysqlConfigResult (*apply_mysql_config_v2)(
+		const ProxySQL_PluginMysqlConfigPlanV2& plan);
 #endif /* PROXYSQL40 */
 };
 

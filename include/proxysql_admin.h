@@ -676,6 +676,7 @@ class ProxySQL_Admin {
 	bool init_users_under_lock(std::unique_ptr<SQLite3_result>&& mysql_users_resultset, std::string& error,
 		const ProxySQL_PluginMysqlUsersChecksumSnapshot* exact_checksum = nullptr);
 	ProxySQL_PluginMysqlConfigResult apply_plugin_mysql_config(const ProxySQL_PluginMysqlConfigPlan& plan);
+	ProxySQL_PluginMysqlConfigResult apply_plugin_mysql_config_v2(const ProxySQL_PluginMysqlConfigPlanV2& plan);
 	SQLite3_result* get_mysql_users_snapshot();
 	SQLite3_result* get_mysql_servers_snapshot();
 	SQLite3_result* get_mysql_group_replication_hostgroups_snapshot();

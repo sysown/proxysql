@@ -33,6 +33,8 @@ SQLite3_result* proxysql_plugin_get_mysql_servers_snapshot();
 SQLite3_result* proxysql_plugin_get_mysql_group_replication_hostgroups_snapshot();
 ProxySQL_PluginMysqlConfigResult proxysql_plugin_apply_mysql_config(
 	const ProxySQL_PluginMysqlConfigPlan&);
+ProxySQL_PluginMysqlConfigResult proxysql_plugin_apply_mysql_config_v2(
+	const ProxySQL_PluginMysqlConfigPlanV2&);
 
 namespace {
 
@@ -298,6 +300,11 @@ ProxySQL_PluginMysqlConfigResult apply_mysql_config_not_available(
 	return { false, 0, "MySQL configuration publication is not available", {} };
 }
 
+ProxySQL_PluginMysqlConfigResult apply_mysql_config_v2_not_available(
+	const ProxySQL_PluginMysqlConfigPlanV2&) {
+	return { false, 0, "MySQL configuration publication is not available", {} };
+}
+
 bool sql_equals_ci(const std::string& lhs, const std::string& rhs) {
 	return strcasecmp(lhs.c_str(), rhs.c_str()) == 0;
 }
@@ -373,6 +380,7 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_.erase_secret = &erase_secret_service;
 	services_.set_listener_gate = &set_listener_gate_service;
 	services_.apply_mysql_config = &proxysql_plugin_apply_mysql_config;
+	services_.apply_mysql_config_v2 = &proxysql_plugin_apply_mysql_config_v2;
 
 	// Phase-B (register_schemas) services: same layout as init(), but DB
 	// handle getters and the query-hook registrar are stubbed -- see the
@@ -403,6 +411,7 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_phase_b_.erase_secret = &secret_erase_not_available;
 	services_phase_b_.set_listener_gate = &set_listener_gate_not_available;
 	services_phase_b_.apply_mysql_config = &apply_mysql_config_not_available;
+	services_phase_b_.apply_mysql_config_v2 = &apply_mysql_config_v2_not_available;
 #endif /* PROXYSQL40 */
 }
 

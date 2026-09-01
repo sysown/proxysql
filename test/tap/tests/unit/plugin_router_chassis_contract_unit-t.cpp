@@ -543,6 +543,19 @@ int main() {
 		interfaces, 1
 	};
 	ProxySQL_PluginServices* services = fake.services();
+	const ProxySQL_PluginMysqlRuleAttributesRow attributes_probe {
+		9000, "{\"switch_to_fast_forward\":true}"
+	};
+	const ProxySQL_PluginMysqlConfigPlanV2 generation_v2 {
+		generation, &attributes_probe, 1
+	};
+	ok(generation_v2.base.rules == generation.rules &&
+		generation_v2.rule_attributes == &attributes_probe &&
+		generation_v2.rule_attribute_count == 1,
+		"the ABI-9 V2 plan extends the unchanged ABI-8 plan with rule-ID attributes");
+	ok(services != nullptr && services->apply_mysql_config != nullptr &&
+		services->apply_mysql_config_v2 != nullptr,
+		"the live ABI-9 service table exposes both publisher generations");
 	const auto generation_one = services != nullptr && services->apply_mysql_config != nullptr
 		? services->apply_mysql_config(generation)
 		: ProxySQL_PluginMysqlConfigResult{};

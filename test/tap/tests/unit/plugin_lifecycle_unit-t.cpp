@@ -625,7 +625,11 @@ static void test_bogus_abi_version_rejected() {
 }
 
 int main() {
-	plan(68);
+	plan(69);
+
+	ok(PROXYSQL_PLUGIN_ABI_VERSION == 9u &&
+		PROXYSQL_PLUGIN_ABI_VERSION_MAX == 9u,
+		"the chassis advertises additive ABI 9");
 
 	make_log_path();
 
