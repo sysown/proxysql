@@ -2300,7 +2300,8 @@ __implicit_sync:
 							l_free(pkt.size, pkt.ptr);
 							handler_ret = -1;
 							return handler_ret;
-						} else if (c == 'P' || c == 'B' || c == 'C' || c == 'D' || c == 'E') {
+						} else if (c == 'P' || c == 'B' || c == 'C' || c == 'D' || c == 'E' ||
+						           (c == 'S' && session_type == PROXYSQL_SESSION_SQLITE)) {
 							if (session_type == PROXYSQL_SESSION_SQLITE) {
 								// Plugin-backed sessions get the message so the plugin can
 								// return its protocol-specific error and transaction state.

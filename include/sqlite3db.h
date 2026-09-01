@@ -166,7 +166,7 @@ class SQLite3_row {
 	~SQLite3_row();
 	void add_fields(sqlite3_stmt *stmt);
 	void add_fields(char **_fields);
-	void add_fields(char **_fields, const unsigned long *_sizes);
+	bool add_fields(char **_fields, const unsigned long *_sizes);
 };
 
 class SQLite3_column {

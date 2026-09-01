@@ -51,13 +51,13 @@ int main() {
 
 	// --- admin table -> module ----------------------------------------
 	db.execute("INSERT OR REPLACE INTO duckdb_variables VALUES ('threads','8')");
-	db.execute("INSERT OR REPLACE INTO duckdb_variables VALUES ('database_path','/tmp/x.db')");
+	db.execute("INSERT OR REPLACE INTO duckdb_variables VALUES ('database_path','/var/lib/proxysql/duckdb/x.db')");
 
 	DuckDBConfigStore store;
 	std::string err;
 	ok(duckdb_install_variables_from_admin(db, store, err), "install from admin succeeds");
 	ok(store.threads() == 8, "threads was installed into the module");
-	ok(store.database_path() == "/tmp/x.db", "database_path was installed into the module");
+	ok(store.database_path() == "/var/lib/proxysql/duckdb/x.db", "database_path was installed into the module");
 
 	// An unknown row must not abort the whole load, but must be reported.
 	db.execute("INSERT OR REPLACE INTO duckdb_variables VALUES ('nonsense','1')");
@@ -143,12 +143,12 @@ int main() {
 	// and otherwise-unprintable control bytes in an operator-supplied path
 	// must remain one valid JSON string value.
 	err.clear();
-	plugin_ctx.config_store->set("database_path", "/tmp/a\"b\\c\n\t\x01.db", err);
+	plugin_ctx.config_store->set("database_path", "/var/lib/proxysql/duckdb/a\"b\\c\n\t\x01.db", err);
 	plugin_ctx.started = true;
 	const std::string status_json = proxysql_plugin_descriptor_v1()->status_json();
 	ok(status_json ==
 	   "{\"name\":\"duckdb\",\"state\":\"running\",\"database_path\":"
-	   "\"/tmp/a\\\"b\\\\c\\n\\t\\u0001.db\",\"open_connections\":0}",
+	   "\"/var/lib/proxysql/duckdb/a\\\"b\\\\c\\n\\t\\u0001.db\",\"open_connections\":0}",
 	   "status JSON escapes database_path quotes, slashes, and control bytes");
 	plugin_ctx.started = false;
 

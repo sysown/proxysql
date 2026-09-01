@@ -103,7 +103,7 @@ All types are defined in `include/ProxySQL_Plugin.h`:
 ```cpp
 struct ProxySQL_PluginDescriptor {
     const char *name;                         // Human-readable plugin name
-    uint32_t abi_version;                     // PROXYSQL_PLUGIN_ABI_VERSION (currently 5)
+    uint32_t abi_version;                     // Always PROXYSQL_PLUGIN_ABI_VERSION
     proxysql_plugin_init_cb init;             // bool (*)(ProxySQL_PluginServices *)
     proxysql_plugin_start_cb start;           // bool (*)()
     proxysql_plugin_stop_cb stop;             // bool (*)()
@@ -115,7 +115,7 @@ struct ProxySQL_PluginDescriptor {
 | Field              | Type          | Description                                               |
 |--------------------|---------------|-----------------------------------------------------------|
 | `name`             | `const char*` | Plugin identifier, used in logging.                        |
-| `abi_version`      | `uint32_t`    | Set from `PROXYSQL_PLUGIN_ABI_VERSION`. Value `1` is the pre-chassis descriptor; `2` adds `register_schemas`; `3` adds `register_runtime_view`; `4` appends `db_kind` to runtime views; `5` appends optional Admin-mutex handoff callbacks to `ProxySQL_PluginCommandContext`. The current PROXYSQL40 core accepts `[1, 5]`. |
+| `abi_version`      | `uint32_t`    | Set from `PROXYSQL_PLUGIN_ABI_VERSION`. Layout `1` is the pre-chassis descriptor; `2` adds `register_schemas`; `3` adds `register_runtime_view`; `4` appends `db_kind` to runtime views; `5` appends optional Admin-mutex handoff callbacks to `ProxySQL_PluginCommandContext`. The loader accepts layout versions `[1, 5]` only when the plugin's DEBUG tag exactly matches the core. |
 | `init`             | callback      | Phase D — called with live services; register tables and commands here (or finish context setup if `register_schemas` already did it). |
 | `start`            | callback      | Phase E — start threads, open sockets, load config.        |
 | `stop`             | callback      | Called on shutdown.  Pairs with `init`, not `start`: if `init` returned true and `start` later failed, `stop` is still called so the plugin can release resources it allocated in `init`. |
@@ -128,15 +128,26 @@ Return `true` on success, `false` on failure. A `false` return from
 
 #### ABI version
 
-`include/ProxySQL_Plugin.h` exposes `PROXYSQL_PLUGIN_ABI_VERSION` (currently 5
-under PROXYSQL40, undefined in pre-chassis builds — the descriptor is then a
-legacy six-field struct with `abi_version = 1`). Plugins MUST assign
-`abi_version` from this macro rather than hard-coding a literal; the
-core's loader uses it to detect layout skew and reject plugins built
-for an unsupported ABI. All changes since ABI 2 have been tail additions or
-changes to tail-extensible callback payloads, so older plugins retain the
-prefix they were compiled against. See `ProxySQL_Plugin.h` for the exact
-rules.
+`include/ProxySQL_Plugin.h` exposes a layout version and a build-mode tag:
+
+- `PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION` is currently `5`.
+- `PROXYSQL_PLUGIN_ABI_DEBUG_BIT` is bit 30. It is set when the plugin is
+  compiled with `-DDEBUG` and clear otherwise.
+- `PROXYSQL_PLUGIN_ABI_VERSION` combines those values. Its raw value is
+  therefore `5` in a release build and `0x40000005` in a DEBUG build.
+
+Plugins MUST assign `abi_version` from `PROXYSQL_PLUGIN_ABI_VERSION` rather
+than hard-coding either raw value. The loader first requires the DEBUG bit to
+match the running core exactly, because DEBUG-only fields change core object
+layouts. It then masks that bit and checks that the layout portion is in the
+supported `[1, 5]` range. A release plugin cannot load into a DEBUG core, or
+vice versa, even when both use layout version 5.
+
+Pre-chassis builds do not expose this API. Their legacy six-field descriptor
+uses `abi_version = 1`. All chassis changes since layout 2 have been tail
+additions or changes to tail-extensible callback payloads, so older plugins
+retain the prefix they were compiled against. See `ProxySQL_Plugin.h` for the
+exact rules.
 
 ### The Entry Point
 
@@ -549,7 +560,10 @@ void register_stats_table(ProxySQL_PluginServices& services,
 - **No dependency resolution**: Plugins are loaded in the order listed in
   `proxysql.cnf`. If one plugin depends on another, the dependency must be
   listed first.
-- **ABI version range**: The current core accepts `abi_version` values in `[1, 5]`. Newly built plugins should set `abi_version = PROXYSQL_PLUGIN_ABI_VERSION`.
+- **ABI compatibility**: The current core accepts layout versions `[1, 5]`
+  after masking `PROXYSQL_PLUGIN_ABI_DEBUG_BIT`, and separately requires that
+  DEBUG bit to exactly match the core. Newly built plugins must set
+  `abi_version = PROXYSQL_PLUGIN_ABI_VERSION`.
 - **Compiler coupling**: Plugins must match the ProxySQL core's C++ compiler
   and standard library due to `std::string` in `ProxySQL_PluginCommandResult`.
 

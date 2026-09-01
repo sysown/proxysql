@@ -35,7 +35,7 @@ int scalar_count(duckdb_connection conn, const char* sql) {
 } // namespace
 
 int main() {
-	plan(38);
+	plan(43);
 
 	ok(classify("SELECT @@version") == DuckDBIntercept::version,
 	   "SELECT @@version is intercepted");
@@ -63,6 +63,8 @@ int main() {
 	   "SET is accepted as a no-op");
 	ok(classify("SET threads=2") == DuckDBIntercept::none,
 	   "DuckDB-native SET statements are executed instead of swallowed");
+	ok(classify("SET NAMES utf8; SELECT 1") == DuckDBIntercept::none,
+	   "SET NAMES followed by another statement is not swallowed as a compatibility no-op");
 	ok(classify("SELECT * FROM t") == DuckDBIntercept::none,
 	   "an ordinary query is not intercepted");
 	ok(classify("") == DuckDBIntercept::none,
@@ -93,6 +95,16 @@ int main() {
 	   "DuckDB conversion errors map to invalid_character_value_for_cast");
 	ok(std::strcmp(duckdb_pgsql_sqlstate(DUCKDB_ERROR_INVALID, "unknown"), "XX000") == 0,
 	   "unclassified DuckDB errors use PostgreSQL internal_error fallback");
+
+	DuckDBSessionState pgsql_state;
+	ok(duckdb_pgsql_message_action(pgsql_state, 'P') == DuckDBPgsqlAction::send_error,
+	   "the first extended-query message emits one ErrorResponse");
+	ok(duckdb_pgsql_message_action(pgsql_state, 'B') == DuckDBPgsqlAction::discard,
+	   "messages after an extended-query error are discarded until Sync");
+	ok(duckdb_pgsql_message_action(pgsql_state, 'S') == DuckDBPgsqlAction::send_ready,
+	   "Sync ends extended-query error recovery with ReadyForQuery");
+	ok(duckdb_pgsql_message_action(pgsql_state, 'Q') == DuckDBPgsqlAction::process,
+	   "simple queries resume after Sync");
 
 	// --- Live-connection behavioural tests -------------------------------
 

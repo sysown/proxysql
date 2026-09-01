@@ -1,377 +1,71 @@
-# ProxySQL DuckDB Server Plugin — Reference
+# ProxySQL DuckDB Server Plugin
 
-## 1. Overview
+This directory builds the ProxySQL v4.0 DuckDB server plugin. The plugin embeds
+DuckDB and exposes it through independent MySQL- and PostgreSQL-protocol
+listeners.
 
-The **duckdb plugin** embeds a [DuckDB](https://duckdb.org/) instance
-inside ProxySQL and serves it over both the MySQL and PostgreSQL wire
-protocols. Clients connect with an ordinary `mysql` or `psql` client (or
-any MySQL/PostgreSQL driver) and run DuckDB SQL directly against an
-in-process analytical engine — no backend database is involved.
+Operator and user documentation is canonical under [`doc/duckdb/`](../../doc/duckdb/index.md):
 
-This is the SQLite3 Server's role — an embedded engine behind a
-protocol gateway — rebuilt as a v4.0 Plugin Chassis plugin instead of
-being compiled into the core binary. It is **not** part of the core
-`proxysql` binary; it loads as a `.so` at runtime, only when configured.
+- [Five-minute tutorial](../../doc/duckdb/quickstart.md)
+- [Installation](../../doc/duckdb/installation.md)
+- [User guide](../../doc/duckdb/user-guide.md)
+- [Configuration reference](../../doc/duckdb/configuration-reference.md)
+- [Admin reference](../../doc/duckdb/admin-reference.md)
+- [Protocol compatibility](../../doc/duckdb/protocol-compatibility.md)
+- [Security](../../doc/duckdb/security.md)
+- [Operations](../../doc/duckdb/operations.md)
+- [Troubleshooting](../../doc/duckdb/troubleshooting.md)
 
-Design background: `docs/superpowers/specs/2026-08-26-duckdb-server-plugin-design.md`.
+## Developer build
 
-## 2. Building
+The plugin and vendored DuckDB dependency are enabled only in the Plugin
+Chassis tier:
 
 ```bash
-git lfs pull --include "deps/duckdb/duckdb-1.4.5.tar.gz"   # first build only
+git lfs pull --include="deps/duckdb/duckdb-1.4.5.tar.gz"
+deps/duckdb/verify-source.bash
 PROXYSQL40=1 make
 ```
 
-`deps/duckdb/duckdb-1.4.5.tar.gz` is vendored via git LFS (see
-`deps/duckdb/README.md`). A plain `git clone`/`git checkout` without LFS
-support leaves a pointer file in its place; `deps/duckdb/verify-source.bash`
-detects that case and prints fetch instructions instead of a confusing
-`tar` error, but you still need to have actually run `git lfs pull` (or
-have LFS-enabled `actions/checkout` in CI) before the first build.
+The build-tree artifact is:
 
-`PROXYSQL40=1` cascades to `PROXYSQL31=1` → `PROXYSQLFFTO=1` +
-`PROXYSQLTSDB=1`. `duckdb` is only added to the deps build (and
-`plugins/duckdb` only built) under `PROXYSQL40`; a bare `make` skips both
-entirely. If you built under a different tier previously, `make clean`
-first — see the tier-mismatch warning in the repo's top-level
-`CLAUDE.md`.
-
-The plugin `.so` lands at `plugins/duckdb/ProxySQL_DuckDB_Plugin.so` in
-the build tree, and installs to
-`/usr/lib/proxysql/plugins/ProxySQL_DuckDB_Plugin.so`.
-
-## 3. Loading
-
-Add the plugin path to the `plugins` array in `proxysql.cnf` **before**
-starting ProxySQL — plugins cannot be loaded after startup, and removing
-the line and restarting unloads the plugin cleanly:
-
-```ini
-plugins = (
-    "/usr/lib/proxysql/plugins/ProxySQL_DuckDB_Plugin.so"
-)
+```text
+plugins/duckdb/ProxySQL_DuckDB_Plugin.so
 ```
 
-## 4. Configure
+The standard installed path is:
 
-Settings live in the admin table `duckdb_variables` (one row per
-setting, `variable_name` / `variable_value`, both `VARCHAR`). The
-in-memory module (`DuckDBConfigStore`) is the runtime source of truth
-once the plugin has started; the table is how you edit it.
-
-**`duckdb_variables` is empty after a fresh start, until something
-populates it.** The module boots with compiled-in defaults regardless
-(so the plugin itself always comes up correctly configured), but nothing
-`INSERT`s rows into the editable `duckdb_variables` admin table on boot.
-An operator who opens Admin right after a fresh install or restart and
-runs `SELECT * FROM duckdb_variables` expecting to see the eight defaults
-listed below will get zero rows, not the defaults. Two ways to get rows
-into the table: `SAVE DUCKDB VARIABLES TO MEMORY` dumps the module's
-current (default, if untouched) state into it; or, on a restart where
-`disk.duckdb_variables` already has rows from a prior `SAVE DUCKDB
-VARIABLES TO DISK`, the plugin's own startup sequence copies
-`disk.duckdb_variables` into `main.duckdb_variables` before installing it
-into the module (`duckdb_sync_variables_disk_to_memory`, run from
-`duckdb_start()`) — so a previously-persisted config reappears in the
-editable table automatically, but a truly first-ever boot does not.
-
-| Variable | Default | Notes |
-|---|---|---|
-| `mysql_ifaces` | `0.0.0.0:6031` | MySQL-protocol listener. `addr:port` entries separated by `;`; IPv6 literals bracketed (`[::1]:6031`). |
-| `pgsql_ifaces` | `0.0.0.0:6034` | PostgreSQL-protocol listener. **Not** `6032` — that is ProxySQL's own Admin interface (`admin_variables.mysql_ifaces`). Because the plugin's listener binds with `SO_REUSEPORT`, defaulting to 6032 would not fail loudly; it would silently split incoming Admin connections between the real Admin interface and this plugin. Do not reintroduce 6032 as the pgsql default or example port. |
-| `database_path` | `:memory:` | A file path opens (and creates, if absent) a persistent database; `:memory:` is process-lifetime only and shared by every connection to this process. |
-| `memory_limit` | `1GB` | Passed to DuckDB at open. |
-| `threads` | `2` | DuckDB's own internal worker-thread count for parallelizing a single query. Integer ≥ 1. |
-| `max_connections` | `100` | Enforced in the accept loop. When the limit is reached, the newly accepted socket is closed without a protocol error, before a session object is constructed. |
-| `read_only` | `false` | `true` sets `access_mode=READ_ONLY`. Rejected at validation time if combined with `database_path=:memory:` (a read-only in-memory database cannot be usefully opened). |
-| `enable_external_access` | `false` | Passed to DuckDB's own `enable_external_access` setting at open. **Deny by default — see Security below before enabling.** |
-
-### LOAD / SAVE commands
-
-Issued over the Admin interface (`mysql -P 6032`, **not** the plugin's own
-ports). Canonical spellings plus their registered aliases:
-
-| Command | Alias | Effect |
-|---|---|---|
-| `LOAD DUCKDB VARIABLES TO RUNTIME` | `LOAD DUCKDB VARIABLES FROM MEMORY` | Reads the editable `duckdb_variables` table and installs every recognised row into the module. Unknown/invalid rows are skipped (reported in the command's message) rather than failing the whole load. |
-| `SAVE DUCKDB VARIABLES TO MEMORY` | `SAVE DUCKDB VARIABLES FROM RUNTIME TO MEMORY` | Dumps the module's current state back into the editable `duckdb_variables` table (full replace, not a merge). |
-| `SAVE DUCKDB VARIABLES TO DISK` | — | Copies `main.duckdb_variables` → `disk.duckdb_variables` for persistence across restarts. Does not touch the module or the runtime view. |
-
-`runtime_duckdb_variables` is a **read-only projection** of the module,
-refreshed on demand whenever it is queried through the Admin handler —
-per the chassis's separation-of-duties contract (`include/ProxySQL_Plugin.h`):
-`LOAD` reads the editable table and installs into the module; `SAVE`
-dumps the module into the editable table; neither command touches the
-runtime view directly, and an edit to `duckdb_variables` is not visible
-in `runtime_duckdb_variables` until a `LOAD ... TO RUNTIME`.
-
-## 5. Security
-
-**`enable_external_access` (default `false`) gates DuckDB's own
-`enable_external_access` setting**, which DuckDB itself defaults to
-`true` (`deps/duckdb/duckdb/src/include/duckdb/main/config.hpp`):
-*"Allow the database to access external state (through e.g.
-loading/installing modules, COPY TO/FROM, CSV readers, pandas
-replacement scans, etc)"*.
-
-**What enabling it grants, and to whom.** If set to `true`, *every*
-credential in `mysql_users`/`pgsql_users` — the same credentials your
-routed application users hold, not a separate administrative tier — can
-run queries such as `SELECT * FROM read_csv('/etc/passwd')`,
-`COPY (SELECT ...) TO '/some/path'`, or `ATTACH 'other.db'` against
-arbitrary paths reachable by the **ProxySQL process's own filesystem
-credentials**. `read_only=true` (above) does **not** prevent this: that
-setting governs DuckDB's `access_mode` (writes to the main database);
-`enable_external_access` is a separate, orthogonal gate on filesystem/
-external-state access, and DuckDB enforces it independently of
-`access_mode`.
-
-**Applying a change.** DuckDB accepts `enable_external_access` being
-tightened (`true` → `false`) on a running database, but *throws* trying
-to loosen it (`false` → `true`) on one that is already open — "Cannot
-change enable_external_access setting while database is running"
-(`deps/duckdb/duckdb/src/main/settings/custom_settings.cpp`). This
-plugin only ever applies the setting at `DuckDBEngine::open()` (plugin
-start / engine reopen), not on a live database, so both directions are
-accepted there — but that also means: **tightening this setting could in
-principle be applied live in a future change, but loosening it always
-requires the engine to reopen.** Flipping `duckdb_variables.
-enable_external_access` from `false` to `true` and running `LOAD DUCKDB
-VARIABLES TO RUNTIME` updates the *stored* configuration but has **no
-effect on an already-open engine** — do not assume it took effect just
-because the load command succeeded. Restart the plugin (or the process)
-to actually open the database with external access enabled.
-
-**What is already safe and does not need this setting.** Extension
-autoload and autoinstall are compiled **off**
-(`ENABLE_EXTENSION_AUTOLOADING:BOOL=OFF`,
-`ENABLE_EXTENSION_AUTOINSTALL:BOOL=OFF` in
-`deps/duckdb/duckdb/build/release/CMakeCache.txt`), and
-`allow_unsigned_extensions` defaults to `false`. This plugin does not
-fetch extensions from the internet, with or without
-`enable_external_access` set — do not conflate the two. What this
-setting does gate is the local-filesystem/external-state surface
-described above.
-
-The multi-statement rejection and the statement-smuggling behavior it
-prevents are documented under Limitations below.
-
-## 6. Connect
-
-The plugin's listeners are independent of ProxySQL's own MySQL (6033)
-and Admin (6032) interfaces. With the defaults above:
-
-```bash
-# MySQL protocol, port 6031 — authenticates against mysql_users
-mysql -h 127.0.0.1 -P 6031 -u <mysql_users user> -p
-
-# PostgreSQL protocol, port 6034 — authenticates against pgsql_users
-psql -h 127.0.0.1 -p 6034 -U <pgsql_users user> main
+```text
+/usr/lib/proxysql/plugins/ProxySQL_DuckDB_Plugin.so
 ```
 
-Once connected, run DuckDB SQL directly:
+Build the plugin and ProxySQL core with the same tier and DEBUG mode. The ABI
+encodes the DEBUG build tag and rejects a mismatched plugin/core pair.
 
-```sql
-CREATE OR REPLACE TABLE t(a INTEGER);
-INSERT INTO t VALUES (1), (2), (3);
-SELECT * FROM t;
-```
+## Source layout
 
-## 7. Limitations
+| Path | Responsibility |
+|---|---|
+| `include/duckdb_plugin.h` | Plugin process context |
+| `include/duckdb_config.h` | Configuration store and listener-address parsing |
+| `include/duckdb_engine.h` | Shared database and connection accounting |
+| `include/duckdb_listener.h` | MySQL/PostgreSQL listener lifecycle |
+| `include/duckdb_session.h` | Query classification, execution, and protocol responses |
+| `include/duckdb_result.h` | DuckDB-to-ProxySQL result conversion contract |
+| `src/duckdb_plugin.cpp` | Chassis descriptor and lifecycle callbacks |
+| `src/duckdb_admin_schema.cpp` | Admin tables, runtime view, and LOAD/SAVE commands |
+| `src/duckdb_engine.cpp` | DuckDB open/close and connection cap |
+| `src/duckdb_listener.cpp` | Socket accept and per-connection thread loop |
+| `src/duckdb_session.cpp` | SQL execution and wire-protocol adaptation |
+| `src/duckdb_result.cpp` | Length-aware text result conversion |
 
-Stated plainly, not buried:
+## Maintainer references
 
-- **Every column arrives as text.** MySQL clients see `MYSQL_TYPE_VAR_STRING`
-  for every column; PostgreSQL clients see `TEXTOID`. This is identical to
-  what ProxySQL's own Admin interface and the SQLite3 Server do today.
-  Typed (non-text) result columns are deferred to a later sub-project.
-- **Some DuckDB types remain outside the direct-conversion compatibility
-  allowlist**, and are handled by a rewrap, not a
-  silent gap: `LIST`, `STRUCT`, `MAP`, `ARRAY`, `UNION`, `UUID`, `ENUM`,
-  `BIT`, and `TIMESTAMP_S`/`MS`/`NS` all render as NULL through the direct
-  path. The plugin decides whether a rewrap is needed by first calling
-  `duckdb_prepare()` on the statement — which parses and binds but does
-  **not** execute — and inspecting the prepared statement's column types.
-  If any column is unrenderable, it tries to prepare a second statement,
-  `SELECT COLUMNS(*)::VARCHAR FROM (<query>)`, which casts every column
-  (nested values included) to a renderable VARCHAR; if that prepares
-  successfully, it is the one actually executed, and the original
-  prepared statement is discarded without ever having run. If the wrap
-  does not parse (a bare `INSERT`/`UPDATE`/`DELETE ... RETURNING` cannot
-  legally sit inside a `FROM`-clause subquery in DuckDB's grammar), the
-  plugin falls back to executing the original prepared statement instead
-  — degraded (NULL-rendering) output for the unrenderable column, rather
-  than an error, since the query did succeed. **Either way, the client's
-  statement executes exactly once**: the rewrap decision is made from the
-  prepared statement's schema before anything runs, not by executing the
-  statement and conditionally re-running it afterwards. An earlier
-  revision of this plugin did exactly that — execute, inspect the real
-  result, and conditionally re-execute a wrapped copy — gated by a
-  lexical "starts with a read keyword, no `RETURNING`" check. That check
-  let `SELECT [nextval('s')]` through (it starts with `SELECT` and has no
-  `RETURNING`), silently advancing the sequence twice per client
-  statement and returning the second value while discarding the first.
-  That design has been replaced by the prepare-first design described
-  above.
-- **Multi-statement input is rejected.** `duckdb_prepare()`, which the
-  plugin now always calls before executing anything, refuses to prepare
-  more than one statement in a single request
-  ("Cannot prepare multiple statements at once!"). This is deliberate,
-  not merely a side effect of preparing first: the previous
-  direct-execution path (`duckdb_query()`) silently ran **every**
-  statement in the packet but returned only the **last** one's result to
-  the client — so `DROP TABLE t; SELECT 1;` would execute the `DROP`
-  while the client only saw the final `SELECT` result, with the
-  destructive first statement invisible in the response (statement
-  smuggling).
-  Rejecting the whole packet up front instead matches what a MySQL server
-  does for a client that has not negotiated `CLIENT_MULTI_STATEMENTS`,
-  and removes that smuggling path entirely.
-- **A comment-only "statement"** (e.g. a bare `-- comment` with no actual
-  SQL) **now errors** (`"No statement to prepare!"`) instead of the
-  previous silent empty-success. Not exercised by any documented client
-  workflow; noted here because it is an observable behavior change from
-  switching to `duckdb_prepare()`.
-- **No prepared statements are exposed to clients.** The plugin does
-  internally call `duckdb_prepare()` on every statement — to inspect
-  column types before deciding whether the unrenderable-column rewrap
-  above is needed, and to guarantee each statement executes exactly once
-  — but it never exposes a prepared-statement handle over the wire: there
-  is no `COM_STMT_PREPARE`/`COM_STMT_EXECUTE` (MySQL) or
-  `Parse`/`Bind`/`Execute` (PostgreSQL) support. Every client-visible
-  statement is still a one-shot text query.
-- **No query timeout.** A runaway query is not interrupted; `duckdb_interrupt()`-based
-  timeouts are deferred to a later sub-project.
-- **Sessions report as `PROXYSQL_SESSION_SQLITE`** in ProxySQL logs and in
-  `stats_*_processlist` — the plugin reuses that session type rather than
-  adding a dedicated one (see the design note below). This is documented,
-  not worked around.
-- **Clients must write DuckDB SQL, not MySQL SQL**, beyond a small
-  compatibility intercept table (`duckdb_classify_query` in
-  `src/duckdb_session.cpp`): `SELECT @@version` / `SELECT VERSION()`,
-  `SELECT DATABASE()` / `SELECT CURRENT_DATABASE()`, `SHOW TABLES`,
-  `SHOW DATABASES` / `SHOW SCHEMAS`, and `SET ...` (accepted and silently
-  ignored, matching what the SQLite3 Server does for session-state
-  statements DuckDB has no equivalent for). Anything else goes to DuckDB
-  as-is.
-- **A real memory-corruption mechanism was found and closed; the original
-  "intermittent MySQL-path crash" is not conclusively explained by it.**
-  An earlier revision of this section described a rare `assert(0)` at
-  `lib/MySQL_Protocol.cpp:434` inside `generate_pkt_ERR`, aborting the
-  entire ProxySQL process, and speculated the cause was a stale
-  `dlopen`'d `.so` inode from a bind-mounted container that hadn't been
-  recreated after a rebuild. **That hypothesis was investigated and is
-  superseded — it was wrong.** What follows is what was actually
-  measured and observed, kept separate from what is still inferred.
+- [Vendored DuckDB](../../deps/duckdb/README.md)
+- [Plugin API](../../doc/PLUGIN_API.md)
+- [DuckDB plugin design](../../docs/superpowers/specs/2026-08-26-duckdb-server-plugin-design.md)
+- [Review-fix/documentation plan](../../docs/superpowers/plans/2026-09-01-duckdb-review-and-documentation.md)
 
-  **Proven — a plugin/core `-DDEBUG` build-tier mismatch corrupts memory.**
-  `include/MySQL_Protocol.h` declares `bool dump_pkt;` (and
-  `include/PgSQL_Session.h` declares `PgSQL_Connection*
-  dbg_extended_query_backend_conn;`) only under `#ifdef DEBUG`.
-  `MySQL_Data_Stream` holds `MySQL_Protocol myprot;` **by value**, so
-  `dump_pkt` changes `sizeof(MySQL_Protocol)` (measured: 80 bytes release
-  vs. 88 bytes `-DDEBUG`), which shifts the byte offset of every
-  `MySQL_Data_Stream` field declared after `myprot` — including `DSS`,
-  the wire-protocol send-state enum (measured `offsetof`: 768 vs. 776) —
-  between a release and a `-DDEBUG` build. `plugins/duckdb/Makefile`'s
-  object rule used to depend only on sources/headers/the DuckDB archive,
-  not on `$(CXXFLAGS)`, so building the plugin with a different `OPTZ`
-  (in particular, with or without `-DDEBUG`) than the last build silently
-  reused stale, wrongly-flavoured `.o` files instead of recompiling — the
-  exact mechanism that can put a release-built `ProxySQL_DuckDB_Plugin.so`
-  next to a `-DDEBUG` core, or vice versa, without anyone intending it.
-  This was independently deliberately reproduced: building the plugin
-  release and loading it into a `-DDEBUG` core reliably produced
-  incorrect behavior consistent with memory corruption at the offsets
-  measured above — not merely a hypothetical risk.
-
-  **Observed under that reproduction — an indefinite per-connection hang,
-  not an abort.** Every connection through the mismatched plugin's MySQL
-  listener hung indefinitely: the client connected and authenticated but
-  never received a response to any query, including a trivial `SELECT
-  1`, and the process never crashed. A breakpoint on the plugin's own
-  query-dispatch entry point was never hit — a negative result, but a
-  load-bearing one: it confirms the hang happens before any query
-  reaches the plugin at all, and specifically before
-  `duckdb_send_mysql_error()` (the function that would trip the
-  `assert(0)`) is ever called.
-
-  **Inferred (from the proven offsets above plus that negative debugging
-  result, not from directly inspecting the corrupted memory) — the
-  responsible write.** `duckdb_listener.cpp`'s `fill_client_addr()` runs
-  on *every* accepted connection, before any query is even read, and
-  writes `client_addr`/`client_addrlen`/`addr.addr`/`addr.port` — fields
-  in the same post-`myprot` region as `DSS` — through the plugin's
-  mismatched offsets. That a hang precedes query dispatch is consistent
-  with this being the corrupting write; it was not confirmed by reading
-  the corrupted bytes directly.
-
-  **Plausible but not reproduced — the `assert(0)` at
-  `MySQL_Protocol.cpp:434`.** The mechanism above is consistent with that
-  abort: if the corrupted write instead lands elsewhere and the real,
-  untouched `DSS` field is read by `generate_pkt_ERR` still at its
-  construction-time default (`STATE_SLEEP`), its state-machine `switch`
-  falls through to `default: assert(0)`. This is a plausible consequence
-  of the same offset-shift mechanism, but it was **not** produced during
-  reproduction — only the hang was.
-
-  **Task 9's two original aborts remain unexplained, not attributed to
-  this mechanism.** They are consistent with it in kind but not
-  conclusively linked to it, and there is a specific reason for doubt:
-  both crashes occurred after several prior queries on the same
-  connection had already succeeded (the malformed-query assertion in
-  `test_duckdb_e2e_mysql-t` runs after seven earlier assertions pass,
-  including a `CREATE TABLE` and an `INSERT`). The hang mechanism
-  reproduced here corrupts state during connection setup, before the
-  first query — a connection that reaches its eighth query has already
-  survived whatever `fill_client_addr()` wrote. Reconciling that with
-  Task 9's two aborts, if they share this root cause, would require a
-  different corrupted field or a different code path than the one
-  reproduced here. Anyone hitting this again should capture a full
-  backtrace and compare it against Task 9's two on record rather than
-  assuming either that it is the same defect or that it is newly
-  introduced.
-
-  **The guard below is correct and necessary regardless of that
-  unresolved question** — it closes a real, demonstrated class of silent
-  memory corruption (the hang reproduced here) whether or not it fully
-  explains the two earlier aborts.
-
-  **Fixed in two parts:** (1) `include/ProxySQL_Plugin.h` now encodes
-  whether a plugin/core was built with `-DDEBUG` as a bit in the plugin
-  ABI descriptor's `abi_version` (`PROXYSQL_PLUGIN_ABI_DEBUG_BIT`); the
-  chassis loader (`lib/ProxySQL_PluginManager.cpp`) refuses to `dlopen` a
-  plugin whose bit disagrees with the core's, with a clear error message,
-  instead of loading it and corrupting memory. This protects every
-  chassis plugin (mysqlx, genai, duckdb), not just this one. (2)
-  `plugins/duckdb/Makefile`'s object rule now depends on a
-  `$(ODIR)/.buildflags` stamp file containing `$(CXXFLAGS)`, regenerated
-  whenever the flags change, so switching `OPTZ`/`-DDEBUG` between builds
-  forces a real recompile instead of silently reusing stale objects.
-  Building the plugin through the top-level Makefile (`make` /
-  `make debug`, optionally with `PROXYSQL40=1`) already passes matching
-  flags automatically; this defect was only reachable by building
-  `plugins/duckdb` directly with flags that didn't match the core it
-  would be loaded into.
-
-## 8. Design note: session → connection mapping
-
-- **One shared `duckdb_database`.** `DuckDBEngine` opens the database
-  once (a file path or `:memory:`) at plugin start; DuckDB's own
-  concurrency control handles concurrent access from multiple connections.
-- **One `duckdb_connection` per connection thread, in `thread_local`
-  storage** (`DuckDBSessionState`, `include/duckdb_session.h`). The
-  listener is thread-per-connection — every accepted socket gets its own
-  OS thread running the accept/read/`handler()` loop — so a `thread_local`
-  is exactly session-scoped here; there is no worker pool multiplexing
-  many client sessions over fewer DuckDB connections.
-- **Why `stop()` joins connection threads before closing the engine.**
-  `SQLite3_Server`'s equivalent connection threads are fire-and-forget and
-  exit only at process shutdown, which is fine for something that only
-  dies at process exit. "The plugin can be unloaded without crashing" is a
-  requirement here, and a detached thread still holding a
-  `duckdb_connection` after `duckdb_close()` is a use-after-free. The
-  listener therefore tracks every connection thread in a vector under a
-  mutex and joins all of them — in `stop()`, and opportunistically as they
-  finish via `reap_finished_threads()` — before the engine is allowed to
-  close the database.
+Focused unit targets are defined in `test/tap/tests/unit/Makefile`; end-to-end
+tests live under `test/tap/tests/test_duckdb_*-t.cpp` and must be run through
+the repository's isolated TAP infrastructure.

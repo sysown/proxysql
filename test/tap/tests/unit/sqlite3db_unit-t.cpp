@@ -15,6 +15,7 @@
 #include "proxysql.h"
 #include "sqlite3db.h"
 
+#include <climits>
 #include <cstring>
 #include <string>
 
@@ -176,6 +177,27 @@ static void test_sqlite3_row_get_size() {
     delete result;
 }
 
+static void test_sized_row_rejects_int_overflow() {
+    char byte = 'x';
+    char *fields[] = { &byte, &byte };
+    const unsigned long oversized_field[] = {
+        static_cast<unsigned long>(INT_MAX) + 1UL,
+        0UL
+    };
+    const unsigned long oversized_row[] = {
+        static_cast<unsigned long>(INT_MAX),
+        1UL
+    };
+
+    SQLite3_result result(2);
+    ok(result.add_row(fields, oversized_field) == SQLITE_TOOBIG &&
+       result.rows_count == 0 && result.rows.empty(),
+       "a sized field larger than INT_MAX is rejected without adding a row");
+    ok(result.add_row(fields, oversized_row) == SQLITE_TOOBIG &&
+       result.rows_count == 0 && result.rows.empty(),
+       "a sized row larger than INT_MAX is rejected without adding a row");
+}
+
 // ============================================================
 // Locking operations (basic sanity)
 // ============================================================
@@ -194,7 +216,7 @@ static void test_wrlock_unlock() {
 }
 
 int main() {
-    plan(21);
+    plan(23);
     test_init_minimal();
 
     setup_db();
@@ -212,6 +234,7 @@ int main() {
     test_check_and_build_table_creates();   // 1
     test_check_and_build_table_idempotent();// 1
     test_sqlite3_row_get_size();            // 2
+    test_sized_row_rejects_int_overflow();  // 2
     test_rdlock_unlock();                   // 1
     test_wrlock_unlock();                   // 1
 

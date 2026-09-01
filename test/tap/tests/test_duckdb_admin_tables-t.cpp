@@ -157,7 +157,11 @@ int main(int argc, char** argv) {
 	const std::string threads_before_edit =
 		cell("SELECT variable_value FROM runtime_duckdb_variables "
 		     "WHERE variable_name='threads'");
-	exec("UPDATE duckdb_variables SET variable_value='7' WHERE variable_name='threads'");
+	const std::string threads_edit_value = threads_before_edit == "7" ? "6" : "7";
+	const std::string edit_sql =
+		"UPDATE duckdb_variables SET variable_value='" + threads_edit_value +
+		"' WHERE variable_name='threads'";
+	exec(edit_sql.c_str());
 	const std::string threads_after_edit =
 		cell("SELECT variable_value FROM runtime_duckdb_variables "
 		     "WHERE variable_name='threads'");
@@ -169,7 +173,7 @@ int main(int argc, char** argv) {
 	// 4. LOAD ... TO RUNTIME installs it.
 	exec("LOAD DUCKDB VARIABLES TO RUNTIME");
 	ok(cell("SELECT variable_value FROM runtime_duckdb_variables "
-	        "WHERE variable_name='threads'") == "7",
+	        "WHERE variable_name='threads'") == threads_edit_value,
 	   "LOAD DUCKDB VARIABLES TO RUNTIME installs the edit");
 
 	// 5. The documented alias resolves to the same command.

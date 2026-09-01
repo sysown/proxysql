@@ -4,6 +4,7 @@
 
 #include <cstdio>
 #include <string>
+#include <unistd.h>
 
 int main() {
 	plan(11);
@@ -40,9 +41,15 @@ int main() {
 	// (cfg above, untouched) so this test fails if the override is ever
 	// dropped, not just if someone explicitly sets the variable wrong.
 	{
-		const char* tmp_csv = "/tmp/duckdb_engine_unit_test_external_access.csv";
-		FILE* f = std::fopen(tmp_csv, "w");
+		char tmp_csv[] = "/tmp/proxysql-duckdb-engine-XXXXXX";
+		const int fd = mkstemp(tmp_csv);
+		if (fd == -1) {
+			BAIL_OUT("could not create the external-access CSV fixture");
+		}
+		FILE* f = fdopen(fd, "w");
 		if (f == nullptr) {
+			close(fd);
+			std::remove(tmp_csv);
 			BAIL_OUT("could not create the external-access CSV fixture");
 		}
 		std::fputs("a,b\n1,2\n", f);

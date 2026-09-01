@@ -45,8 +45,20 @@ SQLite3_result* duckdb_build_intercept_result(DuckDBIntercept kind);
 // thread_local storage is exactly session-scoped here.
 struct DuckDBSessionState {
 	duckdb_connection conn { nullptr };
+	bool pgsql_extended_error { false };
 };
 DuckDBSessionState& duckdb_session_state();
+
+enum class DuckDBPgsqlAction {
+	process,
+	discard,
+	send_error,
+	send_ready
+};
+
+// PostgreSQL extended-query error recovery: after the first unsupported
+// message, discard frontend messages until Sync, then resume normal input.
+DuckDBPgsqlAction duckdb_pgsql_message_action(DuckDBSessionState& state, char type);
 
 void duckdb_send_mysql_error(MySQL_Session* sess, uint16_t code,
                              const char* sqlstate, const char* msg);

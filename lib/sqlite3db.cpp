@@ -8,6 +8,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <climits>
 
 #ifdef DEBUG
 //#define VALGRIND_ENABLE_ERROR_REPORTING
@@ -161,17 +162,21 @@ void SQLite3_row::add_fields(char **_fields) {
 		ds=data_size;
 }
 
-void SQLite3_row::add_fields(char **_fields, const unsigned long *_sizes) {
-	int data_size = 0;
+bool SQLite3_row::add_fields(char **_fields, const unsigned long *_sizes) {
+	unsigned long long data_size = 0;
 	for (int i = 0; i < cnt; i++) {
 		if (_fields[i] != nullptr) {
+			if (_sizes[i] > static_cast<unsigned long>(INT_MAX) ||
+			    data_size + _sizes[i] + 1ULL > static_cast<unsigned long long>(INT_MAX)) {
+				return false;
+			}
 			sizes[i] = static_cast<int>(_sizes[i]);
 			data_size += sizes[i] + 1;
 		} else {
 			sizes[i] = 0;
 		}
 	}
-	data = data_size > 0 ? static_cast<char *>(malloc(data_size)) : nullptr;
+	data = data_size > 0 ? static_cast<char *>(malloc(static_cast<size_t>(data_size))) : nullptr;
 	int data_ptr = 0;
 	for (int i = 0; i < cnt; i++) {
 		if (_fields[i] != nullptr && data != nullptr) {
@@ -183,7 +188,8 @@ void SQLite3_row::add_fields(char **_fields, const unsigned long *_sizes) {
 			fields[i] = nullptr;
 		}
 	}
-	ds = data_size;
+	ds = static_cast<int>(data_size);
+	return true;
 }
 
 
@@ -941,7 +947,10 @@ int SQLite3_result::add_row(char **_fields) {
 
 int SQLite3_result::add_row(char **_fields, const unsigned long *_sizes) {
 	SQLite3_row *row = new SQLite3_row(columns);
-	row->add_fields(_fields, _sizes);
+	if (!row->add_fields(_fields, _sizes)) {
+		delete row;
+		return SQLITE_TOOBIG;
+	}
 	if (enabled_mutex) {
 		pthread_mutex_lock(&m);
 	}

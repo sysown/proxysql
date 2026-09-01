@@ -53,7 +53,7 @@ bool is_client_compatibility_set(const std::string& q) {
 	}
 	if (compact == "SETAUTOCOMMIT=0" || compact == "SETAUTOCOMMIT=1")
 		return true;
-	return q.rfind("SET NAMES ", 0) == 0;
+	return q.rfind("SET NAMES ", 0) == 0 && q.find(';') == std::string::npos;
 }
 
 } // namespace
@@ -108,6 +108,22 @@ SQLite3_result* duckdb_build_intercept_result(DuckDBIntercept kind) {
 DuckDBSessionState& duckdb_session_state() {
 	static thread_local DuckDBSessionState state {};
 	return state;
+}
+
+DuckDBPgsqlAction duckdb_pgsql_message_action(DuckDBSessionState& state, char type) {
+	if (state.pgsql_extended_error) {
+		if (type == 'S') {
+			state.pgsql_extended_error = false;
+			return DuckDBPgsqlAction::send_ready;
+		}
+		return DuckDBPgsqlAction::discard;
+	}
+	if (type == 'P' || type == 'B' || type == 'C' || type == 'D' || type == 'E') {
+		state.pgsql_extended_error = true;
+		return DuckDBPgsqlAction::send_error;
+	}
+	if (type == 'S') return DuckDBPgsqlAction::send_ready;
+	return DuckDBPgsqlAction::process;
 }
 
 const char* duckdb_pgsql_sqlstate(duckdb_error_type type, const std::string& message) {
@@ -452,8 +468,10 @@ void duckdb_send_mysql_error(MySQL_Session* sess, uint16_t code,
 // which is wrong for a syntax/malformed-packet/no-connection error. Keeping
 // our own emitter avoids a core change and lets each call site pass the
 // SQLSTATE that actually applies.
-void duckdb_send_pgsql_error(PgSQL_Session* sess, const char* sqlstate,
-                             const char* msg) {
+namespace {
+
+void duckdb_send_pgsql_error_response(PgSQL_Session* sess, const char* sqlstate,
+                                      const char* msg) {
 	PG_pkt pkt(64);
 	pkt.write_generic('E', "cscscsc",
 		'S', "ERROR",
@@ -462,9 +480,21 @@ void duckdb_send_pgsql_error(PgSQL_Session* sess, const char* sqlstate,
 	// PSarrayOUT is already a PtrSizeArray* -- see the comment on the
 	// duckdb_send_result(PgSQL_Session*, ...) overload above.
 	pkt.to_PtrSizeArray(sess->client_myds->PSarrayOUT);
+}
+
+void duckdb_send_pgsql_ready(PgSQL_Session* sess) {
+	PG_pkt pkt(16);
 	pkt.write_ReadyForQuery(
 		duckdb_pgsql_transaction_status(duckdb_session_state().conn));
 	pkt.to_PtrSizeArray(sess->client_myds->PSarrayOUT);
+}
+
+} // namespace
+
+void duckdb_send_pgsql_error(PgSQL_Session* sess, const char* sqlstate,
+                             const char* msg) {
+	duckdb_send_pgsql_error_response(sess, sqlstate, msg);
+	duckdb_send_pgsql_ready(sess);
 }
 
 // --- the templated handler ---------------------------------------------
@@ -488,17 +518,22 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 			duckdb_send_pgsql_error(sess, "08P01", "Malformed packet");
 			return;
 		}
+		switch (duckdb_pgsql_message_action(duckdb_session_state(), hdr.type)) {
+		case DuckDBPgsqlAction::discard:
+			return;
+		case DuckDBPgsqlAction::send_error:
+			duckdb_send_pgsql_error_response(sess, "0A000",
+				"DuckDB plugin does not support the PostgreSQL extended-query protocol");
+			return;
+		case DuckDBPgsqlAction::send_ready:
+			duckdb_send_pgsql_ready(sess);
+			return;
+		case DuckDBPgsqlAction::process:
+			break;
+		}
 		switch (hdr.type) {
 		case 'Q':
 			break;
-		case 'P':
-		case 'B':
-		case 'C':
-		case 'D':
-		case 'E':
-			duckdb_send_pgsql_error(sess, "0A000",
-				"DuckDB plugin does not support the PostgreSQL extended-query protocol");
-			return;
 		case PG_PKT_STARTUP_V2:
 		case PG_PKT_STARTUP:
 		case PG_PKT_CANCEL:
