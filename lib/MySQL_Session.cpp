@@ -1329,7 +1329,13 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 	}
 	// MySQL client check command for dollars quote support, starting at version '8.1.0'. See #4300.
 	if ((pkt->size == strlen("SELECT $$") + 5) && strncasecmp("SELECT $$", (char*)pkt->ptr + 5, pkt->size - 5) == 0) {
-		pair<int,const char*> err_info { get_dollar_quote_error(mysql_thread___server_version) };
+		const char* server_version = mysql_thread___server_version;
+#ifdef PROXYSQL31
+		if (!client_myds->frontend_server_version().empty()) {
+			server_version = client_myds->frontend_server_version().c_str();
+		}
+#endif
+		pair<int,const char*> err_info { get_dollar_quote_error(server_version) };
 
 		client_myds->DSS=STATE_QUERY_SENT_NET;
 		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, err_info.first, (char *)"HY000", err_info.second, true);
@@ -8591,7 +8597,13 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	// handle case, about SELECT_MYSQL_VERSION or SELECT VERSION()
 	if ((pkt->size==SELECT_MYSQL_VERSION_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_MYSQL_VERSION,(char *)pkt->ptr+5,pkt->size-5)==0) ||
 		(pkt->size==SELECT_MYSQL_VERSION_FUNC_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_MYSQL_VERSION_FUNC,(char *)pkt->ptr+5,pkt->size-5)==0)) {
-		char *version_to_return = NULL;
+		const char *version_to_return = NULL;
+		const char* internal_server_version = mysql_thread___server_version;
+#ifdef PROXYSQL31
+		if (!client_myds->frontend_server_version().empty()) {
+			internal_server_version = client_myds->frontend_server_version().c_str();
+		}
+#endif
 		int mode = mysql_thread___select_version_forwarding;  // SelectVersionForwardingMode enum values
 
 		if (mode == SELECT_VERSION_ALWAYS) {
@@ -8615,7 +8627,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			if (!version_to_return) {
 				if (mode == SELECT_VERSION_SMART_FALLBACK_INTERNAL) {
 					// fallback to internal (ProxySQL) version
-					version_to_return = mysql_thread___server_version;
+					version_to_return = internal_server_version;
 				} else {
 					// SELECT_VERSION_SMART_FALLBACK_PROXY: fallback to proxying the query
 					return false;
@@ -8624,7 +8636,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		}
 		else {
 			// SELECT_VERSION_NEVER (mode 0): use ProxySQL's version
-			version_to_return = mysql_thread___server_version;
+			version_to_return = internal_server_version;
 		}
 
 		// Generate response packet with version_to_return
@@ -8654,7 +8666,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		char **p=(char **)malloc(sizeof(char*)*1);
 		unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*1);
 		l[0]= strlen(version_to_return);
-		p[0]=version_to_return;
+		p[0]=const_cast<char*>(version_to_return);
 		myprot->generate_pkt_row(true,NULL,NULL,sid,1,l,p); sid++;
 		myds->DSS=STATE_ROW;
 		if (deprecate_eof_active) {

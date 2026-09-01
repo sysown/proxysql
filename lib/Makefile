@@ -128,7 +128,7 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	proxy_sqlite3_symbols.oo
 
 ifeq ($(PROXYSQL31),1)
-_OBJ_CXX += MySQL_Caching_Sha2_RSA.oo
+_OBJ_CXX += MySQL_Caching_Sha2_RSA.oo MySQL_Server_Version_By_Interface.oo
 endif
 
 # TSDB object files

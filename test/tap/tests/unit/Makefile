@@ -496,7 +496,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	mcp_client_unit-t
 
 ifeq ($(PROXYSQL31),1)
-UNIT_TESTS += caching_sha2_rsa_unit-t hostgroup_pool_stats_unit-t
+UNIT_TESTS += caching_sha2_rsa_unit-t hostgroup_pool_stats_unit-t mysql_server_version_by_interface_unit-t
 endif
 
 ifeq ($(PROXYSQLED25519),1)
