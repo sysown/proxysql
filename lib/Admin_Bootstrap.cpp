@@ -252,14 +252,6 @@ struct BOOT_SRV_INFO_T {
 	};
 };
 
-struct boot_user_info_t {
-	string user;
-	string ssl_type;
-	string auth_string;
-	string auth_plugin;
-	bool password_expired;
-};
-
 struct BOOT_USER_INFO_T {
 	enum {
 		USER,
@@ -329,47 +321,107 @@ string build_boot_servers_insert(const vector<boot_srv_cnf_t>& srvs_info_defs) {
 	return servers_insert;
 }
 
-string build_boot_users_insert(MYSQL_RES* users) {
-	vector<boot_user_info_t> users_info {};
+bool import_bootstrap_users(SQLite3DB* db, MYSQL_RES* users, string& error) {
+	error.clear();
+
+	if (db == nullptr || users == nullptr) {
+		error = "Invalid bootstrap user import arguments";
+		return false;
+	}
+
+	auto sqlite_error = [db](const char* operation) {
+		return cstr_format("%s: %s", operation, (*proxy_sqlite3_errmsg)(db->get_db())).str;
+	};
+	auto rollback = [db, &error]() {
+		if (!db->execute("ROLLBACK")) {
+			error += "; rollback failed";
+		}
+	};
+
+	if (!db->execute("BEGIN IMMEDIATE")) {
+		error = sqlite_error("Failed to begin mysql_users import");
+		return false;
+	}
+
+	auto [rc, stmt] = db->prepare_v2(
+		"INSERT INTO mysql_users (username,password,active,use_ssl) VALUES (?1,?2,1,?3)"
+	);
+	if (rc != SQLITE_OK) {
+		error = sqlite_error("Failed to prepare mysql_users import");
+		rollback();
+		return false;
+	}
+
+	if (!db->execute("DELETE FROM mysql_users")) {
+		error = sqlite_error("Failed to clear mysql_users");
+		rollback();
+		return false;
+	}
 
 	while (MYSQL_ROW row = mysql_fetch_row(users)) {
-		users_info.push_back({
-			string { row[BOOT_USER_INFO_T::USER] },
-			string { row[BOOT_USER_INFO_T::SSL_TYPE] },
-			string { row[BOOT_USER_INFO_T::AUTH_STRING] },
-			string { row[BOOT_USER_INFO_T::AUTH_PLUGIN] },
-			static_cast<bool>(atoi(row[BOOT_USER_INFO_T::PASSWORD_EXPIRED]))
-		});
-	}
-
-	// MySQL Users
-	const string t_users_insert {
-		"INSERT INTO mysql_users (username,password,active,use_ssl) VALUES "
-	};
-	string t_users_values {};
-
-	for (const boot_user_info_t& user : users_info) {
-		uint32_t use_ssl = user.ssl_type.empty() ? 0 : 1;
-		const char t_values[] { "(\"%s\", \"%s\", %d, %d)" };
-
-		string srv_values = cstr_format(
-			t_values,
-			user.user.c_str(),        // USERNAME
-			user.auth_string.c_str(), // HOSTNAME
-			1,                        // ACTIVE: Always ON
-			use_ssl                   // USE_SSL: Dependent on backend user
-		).str;
-
-		if (&user != &users_info.back()) {
-			srv_values += ",";
+		unsigned long* lengths = mysql_fetch_lengths(users);
+		if (lengths == nullptr || row[BOOT_USER_INFO_T::USER] == nullptr) {
+			error = "Bootstrap user row is missing its username or field lengths";
+			rollback();
+			return false;
 		}
 
-		t_users_values += srv_values;
+		const unsigned long username_len = lengths[BOOT_USER_INFO_T::USER];
+		const unsigned long password_len = lengths[BOOT_USER_INFO_T::AUTH_STRING];
+		if (username_len > static_cast<unsigned long>(std::numeric_limits<int>::max()) ||
+			password_len > static_cast<unsigned long>(std::numeric_limits<int>::max())) {
+			error = "Bootstrap username or password exceeds SQLite's binding limit";
+			rollback();
+			return false;
+		}
+
+		rc = (*proxy_sqlite3_bind_text)(
+			stmt.get(), 1, row[BOOT_USER_INFO_T::USER], static_cast<int>(username_len), SQLITE_TRANSIENT
+		);
+		if (rc == SQLITE_OK && row[BOOT_USER_INFO_T::AUTH_STRING] == nullptr) {
+			rc = (*proxy_sqlite3_bind_null)(stmt.get(), 2);
+		} else if (rc == SQLITE_OK) {
+			rc = (*proxy_sqlite3_bind_text)(
+				stmt.get(), 2, row[BOOT_USER_INFO_T::AUTH_STRING],
+				static_cast<int>(password_len), SQLITE_TRANSIENT
+			);
+		}
+		if (rc == SQLITE_OK) {
+			const int use_ssl = row[BOOT_USER_INFO_T::SSL_TYPE] != nullptr &&
+				lengths[BOOT_USER_INFO_T::SSL_TYPE] != 0;
+			rc = (*proxy_sqlite3_bind_int)(stmt.get(), 3, use_ssl);
+		}
+		if (rc != SQLITE_OK) {
+			error = sqlite_error("Failed to bind bootstrap user");
+			rollback();
+			return false;
+		}
+
+		SAFE_SQLITE3_STEP2(stmt.get());
+		if (rc != SQLITE_DONE) {
+			error = sqlite_error("Failed to insert bootstrap user");
+			rollback();
+			return false;
+		}
+
+		rc = (*proxy_sqlite3_reset)(stmt.get());
+		if (rc == SQLITE_OK) {
+			rc = (*proxy_sqlite3_clear_bindings)(stmt.get());
+		}
+		if (rc != SQLITE_OK) {
+			error = sqlite_error("Failed to reset mysql_users import statement");
+			rollback();
+			return false;
+		}
 	}
 
-	const string users_insert { t_users_insert + t_users_values };
+	if (!db->execute("COMMIT")) {
+		error = sqlite_error("Failed to commit mysql_users import");
+		rollback();
+		return false;
+	}
 
-	return users_insert;
+	return true;
 }
 
 map<uint64_t,srv_defs_t> get_cur_hg_attrs(SQLite3DB* admindb) {
@@ -1171,9 +1223,11 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 		admindb->execute("DELETE FROM mysql_servers");
 		admindb->execute(servers_insert.c_str());
 
-		const string users_insert { build_boot_users_insert(bootstrap_info.users) };
-		admindb->execute("DELETE FROM mysql_users");
-		admindb->execute(users_insert.c_str());
+		string users_import_error {};
+		if (!import_bootstrap_users(admindb, bootstrap_info.users, users_import_error)) {
+			proxy_error("Bootstrap failed while importing MySQL users: %s\n", users_import_error.c_str());
+			return false;
+		}
 
 		// Make the configuration persistent
 		flush_GENERIC__from_to("mysql_servers", "memory_to_disk");
