@@ -646,6 +646,12 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	 *   and 'hostgroup_server_mapping' should be rebuild.
 	 */
 	uint64_t hgsm_mysql_replication_hostgroups_checksum = 0;
+	/**
+	 * @brief Holds the previous checksum for the 'MYSQL_AWS_AURORA_HOSTGROUPS'.
+	 * @details Used during 'commit' to determine if config has changed for 'MYSQL_AWS_AURORA_HOSTGROUPS',
+	 *   and 'hostgroup_server_mapping' should be rebuild.
+	 */
+	uint64_t hgsm_mysql_aws_aurora_hostgroups_checksum = 0;
 
 
 #if 0
