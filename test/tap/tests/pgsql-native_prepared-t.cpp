@@ -67,8 +67,11 @@
 #include <memory>
 #include <fstream>
 #include <regex>
+#include <chrono>
 #include <unistd.h>
 #include <cstring>
+#include <cerrno>
+#include <sys/select.h>
 #include "libpq-fe.h"
 #include "command_line.h"
 #include "tap.h"
@@ -94,7 +97,7 @@ static PGConnPtr open_admin_conn() {
 	return PGConnPtr(PQconnectdb(ss.str().c_str()), &PQfinish);
 }
 
-static PGConnPtr open_client_conn() {
+static PGConnPtr open_client_conn(const std::string& extra_opts = "") {
 	std::stringstream ss;
 	ss << "host=" << cl.pgsql_host
 	   << " port=" << cl.pgsql_port
@@ -102,6 +105,7 @@ static PGConnPtr open_client_conn() {
 	   << " password=" << cl.pgsql_password
 	   << " dbname=" << cl.pgsql_username
 	   << " sslmode=disable";
+	if (!extra_opts.empty()) ss << " " << extra_opts;
 	return PGConnPtr(PQconnectdb(ss.str().c_str()), &PQfinish);
 }
 
@@ -1206,6 +1210,132 @@ static void run_dealloc_all_matrix(PGconn* admin, bool native,
 
 }
 
+// ===========================================================================
+// Variable-sync reuse regression (native path)
+// ===========================================================================
+// This case guards a hang that used to make a client session wait forever with no
+// error and no timeout. The fix is the end-state pin in ASYNC_QUERY_START in
+// lib/PgSQL_Connection.cpp, and the full write-up is in
+// docs/superpowers/specs/2026-09-01-pgsql-native-varsync-reuse-hang.md.
+//
+// The bug worked like this. When a client used a prepared statement, the backend
+// connection was left marked as ending in ASYNC_STMT_EXECUTE_END. Nothing cleared that
+// mark when the connection went back into the pool, so the next session inherited it.
+// If that next client happened to want a different client_encoding, ProxySQL sent it a
+// "SET client_encoding" to bring the connection into line, and the reply to that SET
+// was dispatched using the stale mark. The code driving the SET only ever accepted
+// ASYNC_QUERY_END, so it decided the SET had not finished and kept waiting.
+//
+// The test therefore does two things in order. It opens a client that asks for LATIN1
+// and runs a prepared statement, which leaves the mark behind, then closes it so the
+// connection returns to the pool. It then opens a second client asking for UTF8, which
+// is what forces ProxySQL to issue the SET on that same pooled connection.
+//
+// Both details matter. If the second client asked for the same encoding as the first,
+// ProxySQL would send no SET at all and the test would prove nothing. And the pool has
+// to be flushed beforehand, otherwise the second client may be handed some other clean
+// connection instead of the one this test just dirtied.
+//
+// Finally, this case brings its own deadline, built on libpq's async API and select(),
+// rather than calling PQexec. The failure being tested for is an unbounded hang, and a
+// plain PQexec would simply stop the whole TAP suite instead of reporting a failure.
+// That is also why it runs before the DEALLOCATE blocks further down, none of which
+// have a deadline of their own.
+static const int N_VARSYNC_REUSE = 4;
+
+// Runs `sql` on `c` under a hard wall-clock deadline.
+// Returns 1 = completed (result in *out, caller PQclears), 0 = deadline expired,
+// -1 = transport/libpq error. Never blocks past `timeout_ms`.
+static int exec_with_deadline(PGconn* c, const char* sql, int timeout_ms, PGresult** out) {
+	*out = nullptr;
+	if (PQsendQuery(c, sql) == 0) {
+		diag("varsync: PQsendQuery failed: %s", PQerrorMessage(c));
+		return -1;
+	}
+	const int sock = PQsocket(c);
+	if (sock < 0) return -1;
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+	while (PQisBusy(c)) {
+		const auto now = std::chrono::steady_clock::now();
+		if (now >= deadline) return 0;
+		const long long left_us =
+			std::chrono::duration_cast<std::chrono::microseconds>(deadline - now).count();
+		fd_set rfds;
+		FD_ZERO(&rfds);
+		FD_SET(sock, &rfds);
+		struct timeval tv;
+		tv.tv_sec = (time_t)(left_us / 1000000);
+		tv.tv_usec = (suseconds_t)(left_us % 1000000);
+		const int rc = select(sock + 1, &rfds, nullptr, nullptr, &tv);
+		if (rc < 0) {
+			if (errno == EINTR) continue;
+			diag("varsync: select() failed: %s", strerror(errno));
+			return -1;
+		}
+		if (rc == 0) return 0; // deadline
+		if (PQconsumeInput(c) == 0) {
+			diag("varsync: PQconsumeInput failed: %s", PQerrorMessage(c));
+			return -1;
+		}
+	}
+	*out = PQgetResult(c);
+	// Drain any trailing results, but only while libpq guarantees PQgetResult
+	// will not block -- never trade one hang for another.
+	while (!PQisBusy(c)) {
+		PGresult* extra = PQgetResult(c);
+		if (extra == nullptr) break;
+		PQclear(extra);
+	}
+	return 1;
+}
+
+static void run_varsync_reuse_regression(PGconn* admin, const std::vector<ServerRow>& saved) {
+	auto fail = [&](int n, const char* why) {
+		for (int i = 0; i < n; i++) ok(false, "[native] varsync-reuse: %s", why);
+	};
+	if (!setNativeMode(admin, true) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		fail(N_VARSYNC_REUSE, "admin setup failed");
+		return;
+	}
+
+	// --- seed: an extended-query cycle leaves ASYNC_STMT_EXECUTE_END pinned on
+	//     the backend connection, which then goes back to the pool. ---
+	{
+		PGConnPtr seed = open_client_conn("options='-c client_encoding=LATIN1'");
+		if (!seed || PQstatus(seed.get()) != CONNECTION_OK) {
+			fail(N_VARSYNC_REUSE, "seed conn failed");
+			return;
+		}
+		PGconn* sc = seed.get();
+		PGresult* r = PQprepare(sc, "vsb", "SELECT 88", 0, nullptr);
+		bool prepared = PQresultStatus(r) == PGRES_COMMAND_OK;
+		PQclear(r);
+		r = PQexecPrepared(sc, "vsb", 0, nullptr, nullptr, nullptr, 0);
+		ok(prepared && val_is(r, "88"),
+		   "[native] varsync-reuse: seed binary prepare+execute = 88 (pins stmt end state on the pooled conn)");
+		PQclear(r);
+	} // PQfinish -> the dirty connection returns to the pool
+
+	// --- reuse: a different client_encoding forces the variable-sync SET that
+	//     used to wedge in SETTING_VARIABLE forever. ---
+	PGConnPtr reuse = open_client_conn("options='-c client_encoding=UTF8'");
+	ok(reuse && PQstatus(reuse.get()) == CONNECTION_OK,
+	   "[native] varsync-reuse: reusing client (client_encoding=UTF8) connected");
+	if (!reuse || PQstatus(reuse.get()) != CONNECTION_OK) {
+		fail(2, "reuse conn failed");
+		return;
+	}
+
+	PGresult* res = nullptr;
+	const int rc = exec_with_deadline(reuse.get(), "SELECT 1", 10000, &res);
+	ok(rc == 1,
+	   "[native] varsync-reuse: SELECT 1 on the reused conn completed within 10s (rc=%d; 0 = the SETTING_VARIABLE hang)",
+	   rc);
+	ok(rc == 1 && val_is(res, "1"),
+	   "[native] varsync-reuse: SELECT 1 returned 1");
+	if (res) PQclear(res);
+}
+
 int main(int /*argc*/, char** /*argv*/) {
 	auto sql_cases = build_sql_cases();
 	auto extq_cases = build_extq_cases();
@@ -1214,7 +1344,8 @@ int main(int /*argc*/, char** /*argv*/) {
 	const int n_dealloc_reg = N_DEALLOC_REG_PER_MODE;      // SQL DEALLOCATE forwarding, native path
 	const int n_dealloc_xproto = N_DEALLOC_XPROTO_PER_MODE; // binary-prepare + SQL DEALLOCATE, native path
 	const int n_dealloc_all = N_DALLALL_MATRIX;           // DEALLOCATE ALL matrix, native path
-	plan(n_cases + 1 + n_dealloc_reg + n_dealloc_xproto + n_dealloc_all);
+	const int n_varsync = N_VARSYNC_REUSE;                // variable-sync reuse hang, native path
+	plan(n_cases + 1 + n_varsync + n_dealloc_reg + n_dealloc_xproto + n_dealloc_all);
 	if (cl.getEnv()) return exit_status();
 
 	std::string log_path = get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log";
@@ -1319,6 +1450,12 @@ int main(int /*argc*/, char** /*argv*/) {
 	}
 
 	cov.emit_tap();
+
+	// Runs first among the absolute-check blocks: it is the only one with its own
+	// deadline, so a regression here reports a clean failure instead of letting the
+	// deadline-less DEALLOCATE cases wedge the whole run.
+	diag("=== Variable-sync reuse regression (native path; 10s deadline) ===");
+	run_varsync_reuse_regression(admin.get(), saved);
 
 	diag("=== DEALLOCATE-forwarding regression (native path; absolute checks) ===");
 	run_dealloc_regression(admin.get(), /*native=*/true, saved);

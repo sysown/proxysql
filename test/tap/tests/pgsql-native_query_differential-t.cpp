@@ -42,7 +42,11 @@
 #include <vector>
 #include <memory>
 #include <fstream>
+#include <chrono>
+#include <cerrno>
+#include <cstring>
 #include <unistd.h>
+#include <sys/select.h>
 
 #include "libpq-fe.h"
 #include "command_line.h"
@@ -258,6 +262,70 @@ static std::string options_outcome(const std::string& options, const std::string
     return r.rows[0][0];
 }
 
+// Runs `sql` under a hard wall-clock deadline using libpq's async API.
+// Returns 1 = completed (result in *out, caller PQclears), 0 = deadline expired,
+// -1 = transport error. Copied from pgsql-native_prepared-t.cpp, in line with this
+// file's self-contained-helpers convention above.
+//
+// Needed because the failure this guards against is an unbounded hang: a plain
+// PQexec would wedge the whole TAP suite instead of reporting `not ok`.
+static int exec_with_deadline(PGconn* c, const char* sql, int timeout_ms, PGresult** out) {
+    *out = nullptr;
+    if (PQsendQuery(c, sql) == 0) return -1;
+    const int sock = PQsocket(c);
+    if (sock < 0) return -1;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+    while (PQisBusy(c)) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) return 0;
+        const long long left_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(deadline - now).count();
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(sock, &rfds);
+        struct timeval tv;
+        tv.tv_sec = (time_t)(left_us / 1000000);
+        tv.tv_usec = (suseconds_t)(left_us % 1000000);
+        const int rc = select(sock + 1, &rfds, nullptr, nullptr, &tv);
+        if (rc < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (rc == 0) return 0;
+        if (PQconsumeInput(c) == 0) return -1;
+    }
+    *out = PQgetResult(c);
+    while (!PQisBusy(c)) {
+        PGresult* extra = PQgetResult(c);
+        if (extra == nullptr) break;
+        PQclear(extra);
+    }
+    return 1;
+}
+
+// One step of the within-session variable-sync sequence, folded into a comparable
+// string. Any hang shows up as "TIMEOUT(<step>)" rather than wedging the run.
+static std::string deadline_step(PGconn* c, const char* step, const char* sql, bool want_rows) {
+    PGresult* r = nullptr;
+    const int rc = exec_with_deadline(c, sql, 10000, &r);
+    if (rc == 0) return std::string("TIMEOUT(") + step + ")";
+    if (rc < 0) { if (r) PQclear(r); return std::string("SENDFAIL(") + step + ")"; }
+    const ExecStatusType st = PQresultStatus(r);
+    std::string outcome;
+    if (st == PGRES_TUPLES_OK && want_rows) {
+        outcome = (PQntuples(r) == 1 && PQnfields(r) == 1 && !PQgetisnull(r, 0, 0))
+                      ? std::string(PQgetvalue(r, 0, 0))
+                      : std::string("BAD-SHAPE");
+    } else if (st == PGRES_COMMAND_OK || st == PGRES_TUPLES_OK) {
+        outcome = "OK";
+    } else {
+        const char* ss = PQresultErrorField(r, PG_DIAG_SQLSTATE);
+        outcome = std::string("ERR(") + step + "," + (ss ? ss : "?") + ")";
+    }
+    PQclear(r);
+    return outcome;
+}
+
 static std::fstream f_proxysql_log{};
 
 static bool nativeFallbackObserved() {
@@ -390,8 +458,9 @@ static void assert_query(const char* label, const std::vector<QueryResult>& libp
 
 int main(int /*argc*/, char** /*argv*/) {
     // 15 query-result assertions + 1 native-path assertion
-    // + 12 PROXYSQL INTERNAL SESSION assertions = 28 lines.
-    plan(31);
+    // + 12 PROXYSQL INTERNAL SESSION assertions + 3 client-options assertions
+    // + 2 within-session varsync assertions.
+    plan(33);
 
     if (cl.getEnv())
         return exit_status();
@@ -681,6 +750,93 @@ int main(int /*argc*/, char** /*argv*/) {
                "client options -- %s -- reach the backend on both paths "
                "(expected='%s' libpq='%s' native='%s')",
                oc.label, oc.expected, lp.c_str(), nt.c_str());
+        }
+    }
+
+    // ---- Within-session variable sync after an extended-query step ---------
+    //
+    // This guards the same hang as run_varsync_reuse_regression() in
+    // pgsql-native_prepared-t, but reaches it a different way. The fix is the end-state
+    // pin in ASYNC_QUERY_START in lib/PgSQL_Connection.cpp, and the full write-up is in
+    // docs/superpowers/specs/2026-09-01-pgsql-native-varsync-reuse-hang.md.
+    //
+    // That other test covers the pool boundary. A client dirties a backend connection by
+    // running a prepared statement, the connection goes back to the pool, and a second
+    // client picks it up and hangs. This test never lets the connection reach the pool
+    // at all. Everything happens on one session, holding the same backend connection
+    // throughout, first because a prepared statement keeps it attached and then, in the
+    // second sub-case, because an explicit transaction does. It is the same stale mark
+    // left by the prepared statement, but no pooling is involved in getting to it.
+    //
+    // The sequence is: prepare and execute a statement, send a SET client_encoding, then
+    // read the setting back. The deadline has to cover that last read, not just the SET.
+    // ProxySQL answers the SET to the client on its own and only passes it to the
+    // backend when the next query comes along, so that read is where the hang actually
+    // appears. A test that stopped after the SET would pass even with the bug present.
+    //
+    // Like everything else in this file the check is differential, with the libpq path
+    // as the oracle. libpq cannot hit this bug, because its flush never reports that it
+    // sent everything in one go, so a native-only regression shows up as the two paths
+    // disagreeing, and a break affecting both shows up as both disagreeing with the
+    // expected value.
+    {
+        struct VarSyncCase {
+            const char* label;
+            bool use_txn;   // pin the backend connection with an explicit txn too
+        };
+        const VarSyncCase cases[] = {
+            {"prepared-statement-pinned session", false},
+            {"explicit transaction", true},
+        };
+        // The SET must change client_encoding to something the session does not
+        // already have, or ProxySQL issues no sync at all and the case asserts nothing.
+        const char* expected = "LATIN1";
+
+        for (const auto& vc : cases) {
+            std::string outcome[2];
+            for (int native = 0; native <= 1; native++) {
+                setNativeMode(admin.get(), native != 0);
+                flushBackendPool(admin.get(), BACKEND_HG, saved);
+
+                PGConnPtr c = createClientConn();
+                if (!c || PQstatus(c.get()) != CONNECTION_OK) {
+                    outcome[native] = "CONNECT-FAILED";
+                    continue;
+                }
+                PGconn* cc = c.get();
+
+                if (vc.use_txn) {
+                    const std::string b = deadline_step(cc, "BEGIN", "BEGIN", false);
+                    if (b != "OK") { outcome[native] = b; continue; }
+                }
+
+                // Extended-query step: this is what pins ASYNC_STMT_EXECUTE_END.
+                PGresult* pr = PQprepare(cc, "vsd", "SELECT 88", 0, nullptr);
+                const bool prepared = PQresultStatus(pr) == PGRES_COMMAND_OK;
+                PQclear(pr);
+                if (!prepared) { outcome[native] = "PREPARE-FAILED"; continue; }
+                pr = PQexecPrepared(cc, "vsd", 0, nullptr, nullptr, nullptr, 0);
+                const bool executed = PQresultStatus(pr) == PGRES_TUPLES_OK;
+                PQclear(pr);
+                if (!executed) { outcome[native] = "EXECUTE-FAILED"; continue; }
+
+                // The variable sync. This is the step that used to hang forever.
+                const std::string s1 =
+                    deadline_step(cc, "SET", "SET client_encoding TO 'LATIN1'", false);
+                if (s1 != "OK") { outcome[native] = s1; continue; }
+
+                outcome[native] = deadline_step(
+                    cc, "probe", "SELECT current_setting('client_encoding')", true);
+
+                if (vc.use_txn) {
+                    const std::string cm = deadline_step(cc, "COMMIT", "COMMIT", false);
+                    if (cm != "OK" && outcome[native] == expected) outcome[native] = cm;
+                }
+            }
+            ok(outcome[0] == expected && outcome[1] == expected,
+               "within-session varsync after extended query -- %s -- no hang, both paths agree "
+               "(expected='%s' libpq='%s' native='%s')",
+               vc.label, expected, outcome[0].c_str(), outcome[1].c_str());
         }
     }
 
