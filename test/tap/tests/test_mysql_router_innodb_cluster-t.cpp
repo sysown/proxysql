@@ -92,16 +92,71 @@ bool wait_until(const std::function<bool()>& predicate, unsigned seconds = 30) {
     return false;
 }
 
+bool session_fast_forward(MYSQL* admin, unsigned long session_id, int expected) {
+    const std::string row = scalar(admin,
+        "SELECT extended_info FROM stats_mysql_processlist WHERE SessionID=" +
+        std::to_string(session_id));
+    if (row.empty()) return false;
+    try {
+        const json info = json::parse(row);
+        if (!info.contains("fast_forward")) return false;
+        if (info["fast_forward"].is_boolean()) {
+            return static_cast<int>(info["fast_forward"].get<bool>()) == expected;
+        }
+        return info["fast_forward"].is_number_integer() &&
+            info["fast_forward"].get<int>() == expected;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool wait_for_fast_forward(MYSQL* admin, unsigned long session_id, int expected) {
+    return wait_until([&] { return session_fast_forward(admin, session_id, expected); }, 5);
+}
+
+class ProcesslistExtendedRestore {
+public:
+    explicit ProcesslistExtendedRestore(MYSQL* admin)
+        : admin_(admin), original_(scalar(admin,
+            "SELECT variable_value FROM global_variables "
+            "WHERE variable_name='mysql-show_processlist_extended'")) {}
+    ~ProcesslistExtendedRestore() {
+        if (admin_ && !original_.empty()) {
+            (void)execute(admin_, "SET mysql-show_processlist_extended=" + original_);
+            (void)execute(admin_, "LOAD MYSQL VARIABLES TO RUNTIME");
+        }
+    }
+    bool enable() {
+        return !original_.empty() &&
+            execute(admin_, "SET mysql-show_processlist_extended=2") &&
+            execute(admin_, "LOAD MYSQL VARIABLES TO RUNTIME");
+    }
+
+private:
+    MYSQL* admin_;
+    std::string original_;
+};
+
 std::string endpoint_uuid(const char* host, unsigned port, const char* user,
         const char* password) {
     auto connection = connect_mysql(host, port, user, password, "router_e2e");
     return connection ? scalar(connection.get(), "SELECT @@server_uuid") : "";
 }
 
+std::string rule_row(MYSQL* admin, const char* table, int rule_id) {
+    return scalar(admin, "SELECT json_array(rule_id,active,username,schemaname,flagIN,"
+        "client_addr,proxy_addr,proxy_port,digest,match_digest,match_pattern,"
+        "negate_match_pattern,re_modifiers,flagOUT,replace_pattern,destination_hostgroup,"
+        "cache_ttl,cache_empty_result,cache_timeout,reconnect,timeout,retries,delay,"
+        "next_query_flagIN,mirror_flagOUT,mirror_hostgroup,error_msg,OK_msg,sticky_conn,"
+        "multiplex,gtid_from_hostgroup,log,apply,attributes,comment) FROM " +
+        std::string(table) + " WHERE rule_id=" + std::to_string(rule_id));
+}
+
 } // namespace
 
 int main() {
-    plan(58);
+    plan(65);
 
     const char* workspace = std::getenv("WORKSPACE");
     const char* infra_id = std::getenv("INFRA_ID");
@@ -132,6 +187,10 @@ int main() {
     ok(admin != nullptr, "ProxySQL Admin is reachable after public bootstrap");
     if (!admin) BAIL_OUT("Router E2E requires ProxySQL Admin");
 
+    ProcesslistExtendedRestore processlist_restore(admin.get());
+    ok(processlist_restore.enable(),
+        "the E2E enables extended processlist state and will restore the prior value");
+
     ok(scalar_int(admin.get(), "SELECT COUNT(*) FROM disk.mysql_router_instance") == 1,
         "bootstrap persisted one Router identity");
     ok(scalar_int(admin.get(), "SELECT COUNT(*) FROM disk.mysql_router_hostgroups") == 8,
@@ -144,6 +203,25 @@ int main() {
         "the real plugin projects all four topology instances");
     ok(scalar(admin.get(), "SELECT status_value FROM runtime_mysql_router_status "
         "WHERE status_key='gates_ready'") == "1", "the real plugin opened its listener gates");
+
+    const std::string main_rules = scalar(admin.get(),
+        "SELECT group_concat(value,';') FROM (SELECT rule_id||'|'||proxy_port||'|'||attributes||'|'||comment value "
+        "FROM main.mysql_query_rules WHERE comment LIKE 'mysql_router:%' ORDER BY rule_id)");
+    const std::string disk_rules = scalar(admin.get(),
+        "SELECT group_concat(value,';') FROM (SELECT rule_id||'|'||proxy_port||'|'||attributes||'|'||comment value "
+        "FROM disk.mysql_query_rules WHERE comment LIKE 'mysql_router:%' ORDER BY rule_id)");
+    const std::string runtime_rules = scalar(admin.get(),
+        "SELECT group_concat(value,';') FROM (SELECT rule_id||'|'||proxy_port||'|'||attributes||'|'||comment value "
+        "FROM runtime_mysql_query_rules WHERE comment LIKE 'mysql_router:%' ORDER BY rule_id)");
+    ok(!main_rules.empty() && main_rules == disk_rules && main_rules == runtime_rules &&
+       scalar_int(admin.get(), "SELECT COUNT(*) FROM main.mysql_query_rules WHERE "
+        "comment LIKE 'mysql_router:%'") == 5 &&
+       scalar_int(admin.get(), "SELECT COUNT(*) FROM main.mysql_query_rules WHERE "
+        "comment IN ('mysql_router:classic-rw','mysql_router:classic-ro') AND "
+        "attributes='{\"switch_to_fast_forward\":true}'") == 2 &&
+       scalar_int(admin.get(), "SELECT COUNT(*) FROM main.mysql_query_rules WHERE "
+        "comment LIKE 'mysql_router:split-%' AND attributes=''") == 3,
+        "main, disk, and runtime expose exact fast-forward defaults only on direct rules");
 
     const std::string shell_dump = shell_contract.dump();
     ok(!shell_contract.empty() && shell_dump.find("proxysql-e2e") != std::string::npos,
@@ -201,8 +279,24 @@ int main() {
     ok(std::all_of(reader_results.begin(), reader_results.end(), [&](const std::string& uuid) {
 		return eligible_readers.count(uuid) == 1;
 	}), "6447 routes only to explicit Shell-discovered eligible reader members");
-    ok(!read_replica_uuid.empty() && reader_results.count(read_replica_uuid) == 1,
+	ok(!read_replica_uuid.empty() && reader_results.count(read_replica_uuid) == 1,
 		"6447 includes the Shell-managed asynchronous read replica");
+
+    auto direct_rw = connect_mysql(admin_host, 6446, "app_writer",
+        "router-app-password", "router_e2e");
+    auto direct_ro = connect_mysql(admin_host, 6447, "app_reader",
+        "router-app-password", "router_e2e");
+    ok(direct_rw && direct_ro, "both direct Classic endpoints keep live test sessions");
+    const std::string direct_rw_uuid = direct_rw
+        ? scalar(direct_rw.get(), "SELECT @@server_uuid") : "";
+    ok(!direct_rw_uuid.empty() && direct_rw && wait_for_fast_forward(
+        admin.get(), mysql_thread_id(direct_rw.get()), 1),
+        "the 6446 direct rule switches its COM_QUERY session to fast-forward");
+    const std::string direct_ro_uuid = direct_ro
+        ? scalar(direct_ro.get(), "SELECT @@server_uuid") : "";
+    ok(!direct_ro_uuid.empty() && direct_ro && wait_for_fast_forward(
+        admin.get(), mysql_thread_id(direct_ro.get()), 1),
+        "the 6447 direct rule switches its COM_QUERY session to fast-forward");
 
 	MysqlPtr split(nullptr, mysql_close);
 	const bool split_ready = wait_until([&] {
@@ -211,26 +305,47 @@ int main() {
 	}, 20);
 	ok(split_ready, "the read/write-split Classic endpoint accepts the synchronized user");
     const std::string split_reader = split ? scalar(split.get(), "SELECT @@server_uuid") : "";
+    bool split_query_aware = split && wait_for_fast_forward(
+        admin.get(), mysql_thread_id(split.get()), 0);
     ok(!split_reader.empty() && split_reader != original_primary,
         "6450 sends a safe read to an eligible reader");
     ok(split && execute(split.get(), "CREATE TABLE IF NOT EXISTS route_probe"
         "(id BIGINT PRIMARY KEY, note VARCHAR(32))"), "6450 routes DDL to the writer");
+    split_query_aware = split_query_aware && split && wait_for_fast_forward(
+        admin.get(), mysql_thread_id(split.get()), 0);
     ok(split && execute(split.get(), "BEGIN; INSERT INTO route_probe VALUES"
         "(9001,'transaction') ON DUPLICATE KEY UPDATE note=VALUES(note)"),
         "6450 starts a write transaction");
     const std::string transaction_uuid = split ? scalar(split.get(), "SELECT @@server_uuid") : "";
     ok(transaction_uuid == original_primary, "6450 pins the transaction to the writer");
     ok(split && execute(split.get(), "COMMIT"), "the split-endpoint transaction commits");
+    split_query_aware = split_query_aware && split && wait_for_fast_forward(
+        admin.get(), mysql_thread_id(split.get()), 0);
     ok(split && execute(split.get(), "BEGIN") &&
 		scalar(split.get(), "SELECT @@server_uuid FROM route_probe WHERE id=9001 FOR UPDATE") ==
 			original_primary && execute(split.get(), "ROLLBACK"),
         "6450 routes a locking read to the writer UUID");
+    split_query_aware = split_query_aware && split && wait_for_fast_forward(
+        admin.get(), mysql_thread_id(split.get()), 0);
+    ok(split_query_aware,
+        "the 6450 session remains query-aware through read, DDL, transaction, and locking read");
 
     auto operator_connection = connect_mysql(admin_host, 6033, "operator_user",
         "operator-password", "router_e2e");
     ok(operator_connection != nullptr &&
 	   scalar(operator_connection.get(), "SELECT 1") == "1",
         "the existing operator route on 6033 survives bootstrap unchanged");
+    auto operator_direct = connect_mysql(admin_host, 6446, "operator_user",
+        "operator-password", "router_e2e");
+    ok(operator_direct && !scalar(operator_direct.get(), "SELECT @@server_uuid").empty() &&
+       wait_for_fast_forward(admin.get(), mysql_thread_id(operator_direct.get()), 0),
+        "the lower-ID operator apply rule overrides the 6446 fast-forward default");
+    const std::string operator_rule_before = rule_row(
+        admin.get(), "main.mysql_query_rules", 777001);
+    const std::string disk_operator_rule_before = rule_row(
+        admin.get(), "disk.mysql_query_rules", 777001);
+    const std::string runtime_operator_rule_before = rule_row(
+        admin.get(), "runtime_mysql_query_rules", 777001);
     ok(scalar_int(admin.get(), "SELECT COUNT(*) FROM stats_mysql_connection_pool "
         "WHERE ConnUsed+ConnFree>0") > 0, "native ProxySQL pooling serves Router traffic");
     ok(scalar_int(admin.get(), "SELECT COUNT(*) FROM stats_mysql_query_digest "
@@ -257,9 +372,11 @@ int main() {
     ok(scalar_int(admin.get(), "SELECT COUNT(*)=2 AND SUM(frontend)=1 AND SUM(backend)=1 "
         "FROM mysql_users WHERE username='operator_user' "
         "AND comment='mysql-router-e2e-operator'") == 1 &&
-       scalar_int(admin.get(), "SELECT COUNT(*) FROM mysql_query_rules WHERE rule_id=777001 "
-        "AND comment='mysql-router-e2e-operator'") == 1,
-        "the operator user and query rule survive reconciliation unchanged");
+       !operator_rule_before.empty() &&
+       rule_row(admin.get(), "main.mysql_query_rules", 777001) == operator_rule_before &&
+       rule_row(admin.get(), "disk.mysql_query_rules", 777001) == disk_operator_rule_before &&
+       rule_row(admin.get(), "runtime_mysql_query_rules", 777001) == runtime_operator_rule_before,
+        "the operator user and exact query rule survive reconciliation unchanged");
 
     const char* backend_host = "dbdeployer1.infra-mysql-router-ic";
     unsigned primary_port = 0;
@@ -271,12 +388,6 @@ int main() {
         }
     }
     ok(primary_port != 0, "the original primary was identified through real GR state");
-	const std::string operator_rule_before = scalar(admin.get(),
-		"SELECT rule_id||'|'||active||'|'||username||'|'||destination_hostgroup||'|'||apply||'|'||comment "
-		"FROM mysql_query_rules WHERE rule_id=777001");
-	const std::string disk_operator_rule_before = scalar(admin.get(),
-		"SELECT rule_id||'|'||active||'|'||username||'|'||destination_hostgroup||'|'||apply||'|'||comment "
-		"FROM disk.mysql_query_rules WHERE rule_id=777001");
     const std::string metadata_user = scalar(admin.get(),
         "SELECT metadata_user FROM disk.mysql_router_instance");
     const std::string account = "'" + metadata_user + "'@'%'";
@@ -301,13 +412,11 @@ int main() {
 		execute(split_after_failover.get(), "COMMIT");
     ok(split_write_converged,
         "6450 writes converge without replacing operator query rules");
-	ok(!operator_rule_before.empty() && operator_rule_before == scalar(admin.get(),
-		"SELECT rule_id||'|'||active||'|'||username||'|'||destination_hostgroup||'|'||apply||'|'||comment "
-		"FROM mysql_query_rules WHERE rule_id=777001") &&
-		disk_operator_rule_before == scalar(admin.get(),
-		"SELECT rule_id||'|'||active||'|'||username||'|'||destination_hostgroup||'|'||apply||'|'||comment "
-		"FROM disk.mysql_query_rules WHERE rule_id=777001"),
-		"failover preserves the exact operator query rule in main and disk");
+	ok(!operator_rule_before.empty() &&
+		rule_row(admin.get(), "main.mysql_query_rules", 777001) == operator_rule_before &&
+		rule_row(admin.get(), "disk.mysql_query_rules", 777001) == disk_operator_rule_before &&
+		rule_row(admin.get(), "runtime_mysql_query_rules", 777001) == runtime_operator_rule_before,
+		"failover preserves the exact operator query rule in main, disk, and runtime");
 	const int writer_hg = static_cast<int>(scalar_int(admin.get(),
 		"SELECT hostgroup_id FROM disk.mysql_router_hostgroups WHERE role='route_writer'"));
 	ok(writer_hg > 0 && wait_until([&] {

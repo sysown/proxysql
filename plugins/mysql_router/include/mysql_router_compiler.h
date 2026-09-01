@@ -82,6 +82,7 @@ struct CompiledRule {
 	int destination_hostgroup {0};
 	bool apply {true};
 	std::string comment;
+	std::string attributes;
 };
 
 struct ConfigCompileInput {
@@ -106,16 +107,19 @@ public:
 	uint64_t generation {0};
 
 	const ProxySQL_PluginMysqlConfigPlan& plan() const;
+	const ProxySQL_PluginMysqlConfigPlanV2& plan_v2() const;
 
 private:
 	mutable std::vector<ProxySQL_PluginMysqlServerRow> server_rows_;
 	mutable std::vector<ProxySQL_PluginMysqlGroupReplicationHostgroupRow> gr_rows_;
 	mutable std::vector<ProxySQL_PluginMysqlHostgroupAttributesRow> attribute_rows_;
 	mutable std::vector<ProxySQL_PluginMysqlRuleRow> rule_rows_;
+	mutable std::vector<ProxySQL_PluginMysqlRuleAttributesRow> rule_attribute_rows_;
 	mutable std::vector<ProxySQL_PluginMysqlUserRow> user_rows_;
 	mutable std::vector<std::string> user_wire_comments_;
 	mutable std::vector<const char*> interface_rows_;
 	mutable ProxySQL_PluginMysqlConfigPlan plan_ {};
+	mutable ProxySQL_PluginMysqlConfigPlanV2 plan_v2_ {};
 };
 
 class ConfigCompiler {

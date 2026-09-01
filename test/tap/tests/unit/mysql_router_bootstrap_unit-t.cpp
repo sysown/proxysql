@@ -144,13 +144,32 @@ BootstrapOptions options() {
 	return result;
 }
 
+ProxySQL_PluginMysqlConfigResult available_v1_publisher(
+	const ProxySQL_PluginMysqlConfigPlan&) {
+	return {true, 1, "V1 publisher should not be called", {}};
+}
+
 } // namespace
 
 int main() {
-	plan(24);
+	plan(25);
 
 	BootstrapSession session;
 	MemoryBootstrapStore store;
+	ProxySQL_PluginServices v1_only_services {};
+	v1_only_services.apply_mysql_config = &available_v1_publisher;
+	bool v2_required = false;
+	std::string v2_error;
+	try {
+		(void)publish_mysql_router_topology(v1_only_services, session, topology(),
+			EffectiveTopology {}, ListenerProfile {}, 1);
+	} catch (const std::runtime_error& error) {
+		v2_error = error.what();
+		v2_required = v2_error ==
+			"native MySQL configuration services are unavailable";
+	}
+	ok(v2_required, "Router publication rejects a service table whose V1 publisher exists but V2 is absent: %s",
+		v2_error.c_str());
 	MysqlRouterBootstrap bootstrap(session, store, topology(), "proxy.example");
 	auto first = bootstrap.run(options());
 	ok(first.success && first.router_id == 17, "a first bootstrap completes with the assigned router id");

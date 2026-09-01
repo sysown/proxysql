@@ -476,6 +476,9 @@ public:
 	explicit PluginBootstrapStore(ProxySQL_PluginServices& services, IMetadataSession& session)
 		: services_(services), session_(session),
 		  db_(services.get_configdb ? services.get_configdb() : nullptr) {
+		if (services_.apply_mysql_config_v2 == nullptr) {
+			throw std::runtime_error("native MySQL configuration services are unavailable");
+		}
 		if (db_ == nullptr || services_.put_secret == nullptr || services_.get_secret == nullptr) {
 			throw std::runtime_error("bootstrap persistence services are unavailable");
 		}
@@ -626,7 +629,7 @@ private:
 uint64_t PluginBootstrapStore::publish_generation(const DesiredTopology& topology,
 	const EffectiveTopology& effective, const ListenerProfile& listeners, uint64_t generation,
 	const std::vector<ManagedMysqlUser>& users) {
-	if (services_.apply_mysql_config == nullptr || services_.set_listener_gate == nullptr ||
+	if (services_.apply_mysql_config_v2 == nullptr || services_.set_listener_gate == nullptr ||
 		services_.get_mysql_servers_snapshot == nullptr ||
 		services_.get_mysql_group_replication_hostgroups_snapshot == nullptr ||
 		services_.get_admindb == nullptr) {
@@ -709,7 +712,7 @@ uint64_t PluginBootstrapStore::publish_generation(const DesiredTopology& topolog
 			throw std::runtime_error("cannot close Router listener gate before publication");
 		}
 	}
-	const ProxySQL_PluginMysqlConfigResult published = services_.apply_mysql_config(config.plan());
+	const ProxySQL_PluginMysqlConfigResult published = services_.apply_mysql_config_v2(config.plan_v2());
 	if (!published.applied || published.generation != publish_generation) {
 		throw std::runtime_error(published.message.empty()
 			? "initial Router generation publication failed" : published.message);

@@ -736,14 +736,22 @@ mysql_router_registration_unit-t: mysql_router_registration_unit-t.cpp \
 
 mysql_router_bootstrap_unit-t: mysql_router_bootstrap_unit-t.cpp \
 		$(PROXYSQL_PATH)/plugins/mysql_router/src/bootstrap.cpp \
+		$(PROXYSQL_PATH)/plugins/mysql_router/src/config_compiler.cpp \
+		$(PROXYSQL_PATH)/plugins/mysql_router/src/gr_health.cpp \
+		$(PROXYSQL_PATH)/plugins/mysql_router/src/hostgroup_allocator.cpp \
 		$(PROXYSQL_PATH)/plugins/mysql_router/src/user_sync.cpp \
 		$(PROXYSQL_PATH)/plugins/mysql_router/src/router_registration.cpp \
-		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+		$(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysql_router/src/bootstrap.cpp \
+		$(PROXYSQL_PATH)/plugins/mysql_router/src/config_compiler.cpp \
+		$(PROXYSQL_PATH)/plugins/mysql_router/src/gr_health.cpp \
+		$(PROXYSQL_PATH)/plugins/mysql_router/src/hostgroup_allocator.cpp \
 		$(PROXYSQL_PATH)/plugins/mysql_router/src/user_sync.cpp \
 		$(PROXYSQL_PATH)/plugins/mysql_router/src/router_registration.cpp \
-		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
-		-I$(PROXYSQL_PATH)/plugins/mysql_router/include $(IDIRS) $(OPT) -lcrypto -lpthread -o $@
+		$(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-DMYSQL_ROUTER_CONNECTOR_C -I$(PROXYSQL_PATH)/plugins/mysql_router/include \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lcrypto -lpthread -o $@
 
 mysql_router_hostgroup_allocator_unit-t: mysql_router_hostgroup_allocator_unit-t.cpp \
 		$(PROXYSQL_PATH)/plugins/mysql_router/src/hostgroup_allocator.cpp \

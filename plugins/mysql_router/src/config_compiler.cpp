@@ -11,14 +11,15 @@ struct RuleIntent {
 	int port;
 	const char* digest;
 	const char* destination_role;
+	const char* attributes;
 };
 
 const std::array<RuleIntent, 5> kRuleIntents {{
-	{"classic-rw", 6446, "^", "route_writer"},
-	{"classic-ro", 6447, "^", "route_reader"},
-	{"split-locking", 6450, "^SELECT.*(?:FOR UPDATE|FOR SHARE|LOCK IN SHARE MODE)(?:\\s|$)", "route_writer"},
-	{"split-unsafe-read", 6450, "^SELECT.*(?:\\sINTO(?:\\s|$)|@[A-Za-z0-9_]+\\s*:=)", "route_writer"},
-	{"split-read", 6450, "^(?:SELECT|SHOW|DESCRIBE|DESC|EXPLAIN|WITH)(?:\\s|$)", "route_reader"},
+	{"classic-rw", 6446, "^", "route_writer", "{\"switch_to_fast_forward\":true}"},
+	{"classic-ro", 6447, "^", "route_reader", "{\"switch_to_fast_forward\":true}"},
+	{"split-locking", 6450, "^SELECT.*(?:FOR UPDATE|FOR SHARE|LOCK IN SHARE MODE)(?:\\s|$)", "route_writer", ""},
+	{"split-unsafe-read", 6450, "^SELECT.*(?:\\sINTO(?:\\s|$)|@[A-Za-z0-9_]+\\s*:=)", "route_writer", ""},
+	{"split-read", 6450, "^(?:SELECT|SHOW|DESCRIBE|DESC|EXPLAIN|WITH)(?:\\s|$)", "route_reader", ""},
 }};
 
 std::string managed_comment(const DesiredTopology& topology, uint64_t generation,
@@ -129,6 +130,7 @@ CompiledMysqlConfig ConfigCompiler::compile_topology(const DesiredTopology& topo
 		row.match_digest = intent.digest;
 		row.destination_hostgroup = hostgroups.at(intent.destination_role);
 		row.comment = std::string("mysql_router:") + intent.name;
+		row.attributes = intent.attributes;
 		config.rules.push_back(std::move(row));
 	}
 	return config;
@@ -179,4 +181,16 @@ const ProxySQL_PluginMysqlConfigPlan& CompiledMysqlConfig::plan() const {
 		user_rows_.data(), user_rows_.size(), rule_rows_.data(), rule_rows_.size(),
 		interface_rows_.data(), interface_rows_.size()};
 	return plan_;
+}
+
+const ProxySQL_PluginMysqlConfigPlanV2& CompiledMysqlConfig::plan_v2() const {
+	const ProxySQL_PluginMysqlConfigPlan& base = plan();
+	rule_attribute_rows_.clear();
+	for (const auto& row : rules) {
+		if (!row.attributes.empty()) {
+			rule_attribute_rows_.push_back({row.rule_id, row.attributes.c_str()});
+		}
+	}
+	plan_v2_ = {base, rule_attribute_rows_.data(), rule_attribute_rows_.size()};
+	return plan_v2_;
 }

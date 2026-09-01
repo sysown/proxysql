@@ -34,7 +34,7 @@ size_t server_count(const CompiledMysqlConfig& config, int hostgroup, const char
 } // namespace
 
 int main() {
-	plan(20);
+	plan(24);
 
 	DesiredTopology topology;
 	topology.topology_uuid = "cluster-1";
@@ -125,6 +125,26 @@ int main() {
 	   "the unsafe-read guard covers SELECT INTO and user-variable assignment");
 	ok(read && read->match_digest == "^(?:SELECT|SHOW|DESCRIBE|DESC|EXPLAIN|WITH)(?:\\s|$)" && read->apply,
 	   "the final split rule accepts only the conservative read grammar");
+	ok(rw && rw->attributes == "{\"switch_to_fast_forward\":true}" &&
+	   ro && ro->attributes == "{\"switch_to_fast_forward\":true}",
+	   "the direct Classic endpoints switch COM_QUERY sessions to fast-forward");
+	ok(locking && locking->attributes.empty() && unsafe && unsafe->attributes.empty() &&
+	   read && read->attributes.empty(),
+	   "the split endpoint remains query-aware");
+	const auto& v2_plan = compiled.plan_v2();
+	ok(v2_plan.base.rules == compiled.plan().rules && v2_plan.rule_attribute_count == 2 &&
+	   v2_plan.rule_attributes[0].rule_id == rw->rule_id &&
+	   v2_plan.rule_attributes[1].rule_id == ro->rule_id,
+	   "the ABI-9 plan references only the two direct-rule attributes by stable rule ID");
+	ConfigCompileInput custom_listener_input = input;
+	custom_listener_input.listeners = {"127.0.0.1", 7446, 7447, 7450, false, false};
+	auto custom = ConfigCompiler::compile_topology(
+		topology, effective, hostgroups, custom_listener_input);
+	const auto* custom_rw = rule(custom, "classic-rw");
+	const auto* custom_ro = rule(custom, "classic-ro");
+	ok(custom_rw && custom_rw->proxy_port == 7446 && !custom_rw->attributes.empty() &&
+	   custom_ro && custom_ro->proxy_port == 7447 && !custom_ro->attributes.empty(),
+	   "fast-forward defaults follow direct endpoint intent rather than literal port numbers");
 
 	ConfigCompileInput retry = input;
 	retry.occupied_rule_ids.clear();
