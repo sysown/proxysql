@@ -9,6 +9,9 @@
 #include "proxysql_admin.h"
 
 #include "MySQL_Variables.h"
+#ifdef PROXYSQL31
+#include "MySQL_Server_Version_By_Interface.h"
+#endif
 #ifdef IDLE_THREADS
 #include <sys/epoll.h>
 #endif // IDLE_THREADS
@@ -138,6 +141,12 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 
 	PtrArray *cached_connections;
 	unsigned int push_local_counter;	// round-robin counter for bounded local caching: cache 1-in-N where N = mysql_threads
+#ifdef PROXYSQL31
+	std::shared_ptr<const MySQLServerVersionByInterfaceMap>
+		server_version_by_interface_snapshot_ {
+			std::make_shared<const MySQLServerVersionByInterfaceMap>()
+		};
+#endif
 
 #ifdef IDLE_THREADS
 	struct epoll_event events[MY_EPOLL_THREAD_MAXEVENTS];
@@ -465,6 +474,11 @@ class MySQL_Threads_Handler
 	bool caching_sha2_rsa_accepted_auto_generate_ { true };
 	std::string caching_sha2_rsa_accepted_private_path_;
 	std::string caching_sha2_rsa_accepted_public_path_;
+	std::string accepted_server_version_by_interface_ { "{}" };
+	std::shared_ptr<const MySQLServerVersionByInterfaceMap>
+		server_version_by_interface_snapshot_ {
+			std::make_shared<const MySQLServerVersionByInterfaceMap>()
+		};
 #endif
 	/**
 	 * @brief Holds the clients host cache. It keeps track of the number of
@@ -557,6 +571,9 @@ class MySQL_Threads_Handler
 		char *default_schema;
 		char *interfaces;
 		char *server_version;
+#ifdef PROXYSQL31
+		char *server_version_by_interface;
+#endif
 		int select_version_forwarding;
 		char *keep_multiplexing_variables;
 		char *default_authentication_plugin;
@@ -855,6 +872,11 @@ class MySQL_Threads_Handler
 #ifdef PROXYSQL31
 	/** @brief Return the handler-owned RSA snapshot manager; ownership is not transferred. */
 	MySQL_Caching_Sha2_RSA* caching_sha2_rsa() const { return caching_sha2_rsa_manager_.get(); }
+	/** @brief Return the accepted catalog. Caller holds the handler read or write lock. */
+	std::shared_ptr<const MySQLServerVersionByInterfaceMap>
+	server_version_by_interface_snapshot() const {
+		return server_version_by_interface_snapshot_;
+	}
 #endif
 
 	MySQL_Threads_Handler();

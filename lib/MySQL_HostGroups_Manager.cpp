@@ -629,6 +629,27 @@ hg_metrics_map = std::make_tuple(
 			"Tracks the mysql errors encountered.",
 			metric_tags {}
 		)
+#ifdef PROXYSQL31
+		,
+		std::make_tuple (
+			p_hg_dyn_counter::hostgroup_pool_acquisitions,
+			"proxysql_connpool_acquisitions_total",
+			"Successful backend connection acquisitions by hostgroup.",
+			metric_tags {{ "protocol", "mysql" }}
+		),
+		std::make_tuple (
+			p_hg_dyn_counter::hostgroup_pool_waits,
+			"proxysql_connpool_waits_total",
+			"Backend connection acquisition wait episodes by hostgroup.",
+			metric_tags {{ "protocol", "mysql" }}
+		),
+		std::make_tuple (
+			p_hg_dyn_counter::hostgroup_pool_wait_time,
+			"proxysql_connpool_wait_time_seconds_total",
+			"Cumulative duration of completed backend connection acquisition waits.",
+			metric_tags {{ "protocol", "mysql" }}
+		)
+#endif
 	},
 	// prometheus dynamic gauges
 	hg_dyn_gauge_vector {
@@ -666,6 +687,15 @@ hg_metrics_map = std::make_tuple(
 				{ "protocol", "mysql" }
 			}
 		)
+#ifdef PROXYSQL31
+		,
+		std::make_tuple (
+			p_hg_dyn_gauge::hostgroup_pool_waiters,
+			"proxysql_connpool_waiters",
+			"Sessions currently waiting to acquire a backend connection.",
+			metric_tags {{ "protocol", "mysql" }}
+		)
+#endif
 	}
 );
 
@@ -3451,6 +3481,26 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 			p_update_connection_pool_update_gauge(endpoint_id, common_labels,
 				status.p_connection_pool_status_map, ((int)mysrvc->get_status()) + 1, p_hg_dyn_gauge::connection_pool_status);
 		}
+#ifdef PROXYSQL31
+		const std::string hostgroup_id = std::to_string(myhgc->hid);
+		const std::map<std::string, std::string> labels {
+			{"hostgroup", hostgroup_id},
+			{"protocol", "mysql"}
+		};
+		const HostgroupPoolStatsSnapshot snapshot = myhgc->pool_stats.lifetime_snapshot();
+		p_update_map_counter(status.p_hostgroup_pool_acquisitions_map,
+			status.p_dyn_counter_array[p_hg_dyn_counter::hostgroup_pool_acquisitions],
+			hostgroup_id, labels, snapshot.acquisitions_total);
+		p_update_map_counter(status.p_hostgroup_pool_waits_map,
+			status.p_dyn_counter_array[p_hg_dyn_counter::hostgroup_pool_waits],
+			hostgroup_id, labels, snapshot.waits_total);
+		p_update_map_counter(status.p_hostgroup_pool_wait_time_map,
+			status.p_dyn_counter_array[p_hg_dyn_counter::hostgroup_pool_wait_time],
+			hostgroup_id, labels, snapshot.wait_time_us_total / 1000000.0);
+		p_update_map_gauge(status.p_hostgroup_pool_waiters_map,
+			status.p_dyn_gauge_array[p_hg_dyn_gauge::hostgroup_pool_waiters],
+			hostgroup_id, labels, snapshot.waiters);
+#endif
 	}
 
 	// Remove the non-present servers for the gauge metrics

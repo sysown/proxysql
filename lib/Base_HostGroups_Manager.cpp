@@ -42,6 +42,10 @@ template Base_HostGroups_Manager<MyHGC>::Base_HostGroups_Manager();
 template MyHGC * Base_HostGroups_Manager<MyHGC>::MyHGC_find(unsigned int);
 template MyHGC * Base_HostGroups_Manager<MyHGC>::MyHGC_create(unsigned int);
 template MyHGC * Base_HostGroups_Manager<MyHGC>::MyHGC_lookup(unsigned int);
+#ifdef PROXYSQL31
+template HostgroupPoolStats * Base_HostGroups_Manager<MyHGC>::get_hostgroup_pool_stats(unsigned int);
+template SQLite3_result * Base_HostGroups_Manager<MyHGC>::SQL3_Hostgroup_Connection_Pool(bool);
+#endif
 template void Base_HostGroups_Manager<MyHGC>::wrlock();
 template void Base_HostGroups_Manager<MyHGC>::wrunlock();
 
@@ -49,6 +53,10 @@ template Base_HostGroups_Manager<PgSQL_HGC>::Base_HostGroups_Manager();
 template PgSQL_HGC * Base_HostGroups_Manager<PgSQL_HGC>::MyHGC_find(unsigned int);
 template PgSQL_HGC * Base_HostGroups_Manager<PgSQL_HGC>::MyHGC_create(unsigned int);
 template PgSQL_HGC * Base_HostGroups_Manager<PgSQL_HGC>::MyHGC_lookup(unsigned int);
+#ifdef PROXYSQL31
+template HostgroupPoolStats * Base_HostGroups_Manager<PgSQL_HGC>::get_hostgroup_pool_stats(unsigned int);
+template SQLite3_result * Base_HostGroups_Manager<PgSQL_HGC>::SQL3_Hostgroup_Connection_Pool(bool);
+#endif
 template void Base_HostGroups_Manager<PgSQL_HGC>::wrlock();
 template void Base_HostGroups_Manager<PgSQL_HGC>::wrunlock();
 
@@ -2079,6 +2087,49 @@ HGC * Base_HostGroups_Manager<HGC>::MyHGC_lookup(unsigned int _hid) {
 	MyHostGroups_map.emplace(_hid,myhgc);
 	return myhgc;
 }
+
+#ifdef PROXYSQL31
+template <typename HGC>
+HostgroupPoolStats * Base_HostGroups_Manager<HGC>::get_hostgroup_pool_stats(unsigned int hid) {
+	wrlock();
+	HGC *hgc = MyHGC_find(hid);
+	wrunlock();
+	return hgc ? &hgc->pool_stats : nullptr;
+}
+
+template <typename HGC>
+SQLite3_result * Base_HostGroups_Manager<HGC>::SQL3_Hostgroup_Connection_Pool(bool reset) {
+	auto result = std::make_unique<SQLite3_result>(5);
+	result->add_column_definition(SQLITE_TEXT, "hostgroup");
+	result->add_column_definition(SQLITE_TEXT, "acquisitions_total");
+	result->add_column_definition(SQLITE_TEXT, "waits_total");
+	result->add_column_definition(SQLITE_TEXT, "wait_time_us_total");
+	result->add_column_definition(SQLITE_TEXT, "waiters");
+
+	wrlock();
+	for (unsigned int i = 0; i < MyHostGroups->len; ++i) {
+		HGC *hgc = static_cast<HGC *>(MyHostGroups->index(i));
+		const HostgroupPoolStatsSnapshot snapshot = reset
+			? hgc->pool_stats.reset_window()
+			: hgc->pool_stats.window_snapshot();
+		const std::string hostgroup = std::to_string(hgc->hid);
+		const std::string acquisitions = std::to_string(snapshot.acquisitions_total);
+		const std::string waits = std::to_string(snapshot.waits_total);
+		const std::string wait_time = std::to_string(snapshot.wait_time_us_total);
+		const std::string waiters = std::to_string(snapshot.waiters);
+		const char *row[] = {
+			hostgroup.c_str(),
+			acquisitions.c_str(),
+			waits.c_str(),
+			wait_time.c_str(),
+			waiters.c_str()
+		};
+		result->add_row(row);
+	}
+	wrunlock();
+	return result.release();
+}
+#endif
 
 #if 0
 void MySQL_HostGroups_Manager::increase_reset_counter() {

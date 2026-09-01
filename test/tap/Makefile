@@ -1,17 +1,6 @@
 #!/bin/make -f
 
-AI_GENAI_UNIT_TESTS := \
-	genai_config_query_unit-t \
-	genai_discovery_schema_unit-t \
-	genai_fts_string_unit-t \
-	genai_llm_clients_unit-t \
-	genai_mcp_endpoint_unit-t \
-	genai_mcp_thread_unit-t \
-	genai_mysql_catalog_unit-t \
-	genai_query_handler_unit-t \
-	genai_rag_fetch_from_source_unit-t \
-	genai_stats_parsing_unit-t \
-	genai_thread_unit-t
+include $(dir $(lastword $(MAKEFILE_LIST)))ai_genai_unit_tests.mk
 AI_GENAI_STAGE_DIR := tap_tests_ai_unit
 
 AI_GENAI_HANDOFF_ENABLED := 0
@@ -29,6 +18,11 @@ all: tests tests_with_deps unit_tests pgsql_user_sync_assets
 
 .PHONY: debug
 debug: tests tests_with_deps unit_tests pgsql_user_sync_assets
+
+# Child test Makefiles accept `all` and `debug`, but not this directory's
+# aggregate `tests` target. Preserve debug instrumentation when requested
+# without forwarding an unsupported goal to either child Makefile.
+TAP_CHILD_BUILD_GOAL := $(if $(filter debug,$(MAKECMDGOALS)),debug,all)
 
 # CI test workflows restore only the build outputs below src/ and test/.
 # Stage the canonical user-sync sample below test/ so its TAP tests exercise
@@ -52,8 +46,14 @@ tap: test_deps
 	cd tap && CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: tests
-tests: pgsql_user_sync_assets tap test_deps
-	cd tests && CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
+# `tests` contains the test_mysqlx_admin_tables-t bridge, which recursively
+# builds its real binary under tests/unit.  Building that bridge concurrently
+# with unit_tests launches two independent make processes in tests/unit and
+# races on the shared obj/test_*.o helper files.  Finish the canonical unit
+# build first so the bridge only creates its symlink to an already-built
+# binary.
+tests: unit_tests pgsql_user_sync_assets tap test_deps
+	cd tests && CC=${CC} CXX=${CXX} ${MAKE} $(TAP_CHILD_BUILD_GOAL)
 
 .PHONY: tests_no_infra
 tests_no_infra: tap test_deps
@@ -61,28 +61,14 @@ tests_no_infra: tap test_deps
 
 .PHONY: tests_with_deps
 tests_with_deps: tap test_deps
-	cd tests_with_deps && CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
+	cd tests_with_deps && CC=${CC} CXX=${CXX} ${MAKE} $(TAP_CHILD_BUILD_GOAL)
 
 
-# `tap test_deps` is NOT optional here, even though nothing under tests/unit is
-# built by those targets. The unit tests link -lcurl with -L$(TAP_LDIR), i.e.
-# test/tap/tap, and the `tap` recipe populates that directory by copying the
-# vendored library into it:
-#
-#     libcurl$(SHLIB_EXT): $(DEPS_PATH)/curl/curl/lib/.libs/libcurl$(SHLIB_EXT)
-#             cp -a $(DEPS_PATH)/curl/curl/lib/.libs/libcurl$(SHLIB_EXT)* .
-#
-# Without this prerequisite `unit_tests` runs CONCURRENTLY with `tap` under the
-# `all`/`debug` targets above, so a unit test's linker can open libcurl.so while
-# that cp is still writing it and fail with `file too short`. Intermittent by
-# nature -- it needs the copy and a link to overlap -- and it presents as a
-# corrupt library rather than a build-order problem, which makes it easy to
-# misread as a real toolchain or dependency failure. Every sibling target here
-# (tests, tests_no_infra, tests_with_deps) already declares these prerequisites;
-# unit_tests was the only one that did not.
+# Unit tests consume the TAP helper artifacts and the statically built test
+# connectors, so keep their build ordered after both prerequisite targets.
 .PHONY: unit_tests
 unit_tests: tap test_deps
-	cd tests/unit && CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
+	cd tests/unit && CC=${CC} CXX=${CXX} ${MAKE} $(TAP_CHILD_BUILD_GOAL)
 	@if [ "$(AI_GENAI_HANDOFF_ENABLED)" = "1" ]; then \
 		$(MAKE) ai_genai_unit_tests; \
 	fi

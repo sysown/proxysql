@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #include <poll.h>
@@ -27,7 +28,7 @@ namespace {
 
 constexpr int kTargetHostgroup = 61460;
 constexpr int kFirstRule = 614600;
-constexpr int kLastRule = 614605;
+constexpr int kLastRule = 614606;
 constexpr const char* kComment = "test_query_rule_fast_forward-t";
 constexpr const char* kUser = "sbtest1";
 constexpr const char* kTable = "query_rule_ff_once";
@@ -106,7 +107,13 @@ bool select_online_server(MYSQL* admin, OnlineServer& server) {
 	return found;
 }
 
-bool processlist_state(MYSQL* admin, unsigned long session_id, int& hostgroup, int& fast_forward) {
+struct ProcesslistState {
+	int hostgroup = -1;
+	int fast_forward = -1;
+	int qpo_destination_hostgroup = -2;
+};
+
+bool processlist_state(MYSQL* admin, unsigned long session_id, ProcesslistState& state) {
 	const std::string sql =
 		"SELECT hostgroup,extended_info FROM stats_mysql_processlist WHERE SessionID=" +
 		std::to_string(session_id);
@@ -119,13 +126,19 @@ bool processlist_state(MYSQL* admin, unsigned long session_id, int& hostgroup, i
 	if (row && row[0] && row[1]) {
 		try {
 			const json info = json::parse(row[1]);
-			hostgroup = std::atoi(row[0]);
+			state.hostgroup = std::atoi(row[0]);
 			if (info.contains("fast_forward") && info["fast_forward"].is_boolean()) {
-				fast_forward = info["fast_forward"].get<bool>() ? 1 : 0;
+				state.fast_forward = info["fast_forward"].get<bool>() ? 1 : 0;
 				valid = true;
 			} else if (info.contains("fast_forward") && info["fast_forward"].is_number_integer()) {
-				fast_forward = info["fast_forward"].get<int>();
+				state.fast_forward = info["fast_forward"].get<int>();
 				valid = true;
+			}
+			if (info.contains("qpo") && info["qpo"].is_object() &&
+				info["qpo"].contains("destination_hostgroup") &&
+				info["qpo"]["destination_hostgroup"].is_number_integer()) {
+				state.qpo_destination_hostgroup =
+					info["qpo"]["destination_hostgroup"].get<int>();
 			}
 		} catch (const std::exception& error) {
 			diag("Unable to parse processlist state: %s", error.what());
@@ -137,14 +150,27 @@ bool processlist_state(MYSQL* admin, unsigned long session_id, int& hostgroup, i
 	return valid;
 }
 
-bool wait_for_state(MYSQL* admin, unsigned long session_id, int expected_hostgroup,
-	int expected_fast_forward, unsigned int timeout_ms = 3000) {
+bool wait_for_state(MYSQL* admin, unsigned long session_id, const ProcesslistState& expected,
+	unsigned int timeout_ms = 3000) {
 	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
 	do {
-		int hostgroup = -1;
-		int fast_forward = -1;
-		if (processlist_state(admin, session_id, hostgroup, fast_forward) &&
-			hostgroup == expected_hostgroup && fast_forward == expected_fast_forward) {
+		ProcesslistState current;
+		if (processlist_state(admin, session_id, current) &&
+			current.hostgroup == expected.hostgroup &&
+			current.fast_forward == expected.fast_forward) {
+			return true;
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	} while (std::chrono::steady_clock::now() < deadline);
+	return false;
+}
+
+bool wait_for_rule_hit(MYSQL* admin, int rule_id) {
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(3000);
+	do {
+		if (scalar_int(admin,
+			"SELECT hits FROM stats_mysql_query_rules WHERE rule_id=" +
+			std::to_string(rule_id), 0) > 0) {
 			return true;
 		}
 		std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -244,14 +270,26 @@ bool wait_for_close(int fd) {
 	return recv(fd, &byte, 1, 0) == 0;
 }
 
+struct CleanupState {
+	MYSQL* admin = nullptr;
+	MYSQL* backend = nullptr;
+	long long admin_ff = -1;
+	long long runtime_ff = -1;
+	long long admin_extended = -1;
+	long long runtime_extended = -1;
+	long long admin_packet = -1;
+	long long runtime_packet = -1;
+};
+
 class Cleanup {
 public:
-	Cleanup(MYSQL* admin, MYSQL* backend, long long admin_ff, long long runtime_ff,
-		long long admin_extended, long long runtime_extended,
-		long long admin_packet, long long runtime_packet)
-		: admin_(admin), backend_(backend), admin_ff_(admin_ff), runtime_ff_(runtime_ff),
-		  admin_extended_(admin_extended), runtime_extended_(runtime_extended),
-		  admin_packet_(admin_packet), runtime_packet_(runtime_packet) {}
+	explicit Cleanup(const CleanupState& state)
+		: admin_(state.admin), backend_(state.backend),
+		  admin_ff_(state.admin_ff), runtime_ff_(state.runtime_ff),
+		  admin_extended_(state.admin_extended), runtime_extended_(state.runtime_extended),
+		  admin_packet_(state.admin_packet), runtime_packet_(state.runtime_packet) {}
+	Cleanup(const Cleanup&) = delete;
+	Cleanup& operator=(const Cleanup&) = delete;
 
 	~Cleanup() { run(); }
 
@@ -318,6 +356,9 @@ private:
 	bool result_ { true };
 };
 
+static_assert(!std::is_copy_constructible_v<Cleanup>);
+static_assert(!std::is_copy_assignable_v<Cleanup>);
+
 } // namespace
 
 int main() {
@@ -346,29 +387,36 @@ int main() {
 		return exit_status();
 	}
 
-	const long long admin_ff = scalar_int(admin.get(),
+	CleanupState original;
+	original.admin = admin.get();
+	original.backend = backend.get();
+	original.admin_ff = scalar_int(admin.get(),
 		"SELECT fast_forward FROM mysql_users WHERE username='sbtest1'");
-	const long long runtime_ff = scalar_int(admin.get(),
+	original.runtime_ff = scalar_int(admin.get(),
 		"SELECT fast_forward FROM runtime_mysql_users WHERE username='sbtest1'");
-	const long long admin_extended = scalar_int(admin.get(),
+	original.admin_extended = scalar_int(admin.get(),
 		"SELECT variable_value FROM global_variables "
 		"WHERE variable_name='mysql-show_processlist_extended'");
-	const long long runtime_extended = scalar_int(admin.get(),
+	original.runtime_extended = scalar_int(admin.get(),
 		"SELECT variable_value FROM runtime_global_variables "
 		"WHERE variable_name='mysql-show_processlist_extended'");
-	const long long admin_packet = scalar_int(admin.get(),
+	original.admin_packet = scalar_int(admin.get(),
 		"SELECT variable_value FROM global_variables "
 		"WHERE variable_name='mysql-max_allowed_packet'");
-	const long long runtime_packet = scalar_int(admin.get(),
+	original.runtime_packet = scalar_int(admin.get(),
 		"SELECT variable_value FROM runtime_global_variables "
 		"WHERE variable_name='mysql-max_allowed_packet'");
-	Cleanup cleanup(admin.get(), backend.get(), admin_ff, runtime_ff,
-		admin_extended, runtime_extended, admin_packet, runtime_packet);
+	Cleanup cleanup(original);
 
-	const bool collision_free = admin_ff >= 0 && runtime_ff >= 0 &&
-		admin_extended >= 0 && runtime_extended >= 0 && admin_packet >= 0 && runtime_packet >= 0 &&
-		scalar_int(admin.get(), "SELECT COUNT(*) FROM mysql_query_rules WHERE rule_id BETWEEN 614600 AND 614604") == 0 &&
-		scalar_int(admin.get(), "SELECT COUNT(*) FROM runtime_mysql_query_rules WHERE rule_id BETWEEN 614600 AND 614604") == 0 &&
+	const bool collision_free = original.admin_ff >= 0 && original.runtime_ff >= 0 &&
+		original.admin_extended >= 0 && original.runtime_extended >= 0 &&
+		original.admin_packet >= 0 && original.runtime_packet >= 0 &&
+		scalar_int(admin.get(),
+			"SELECT COUNT(*) FROM mysql_query_rules WHERE rule_id BETWEEN " +
+			std::to_string(kFirstRule) + " AND " + std::to_string(kLastRule)) == 0 &&
+		scalar_int(admin.get(),
+			"SELECT COUNT(*) FROM runtime_mysql_query_rules WHERE rule_id BETWEEN " +
+			std::to_string(kFirstRule) + " AND " + std::to_string(kLastRule)) == 0 &&
 		scalar_int(admin.get(), "SELECT COUNT(*) FROM mysql_servers WHERE hostgroup_id=61460") == 0 &&
 		scalar_int(admin.get(), "SELECT COUNT(*) FROM runtime_mysql_servers WHERE hostgroup_id=61460") == 0 &&
 		scalar_int(backend.get(), "SELECT COUNT(*) FROM information_schema.tables "
@@ -437,13 +485,21 @@ int main() {
 		"INSERT /* qrff_text */ INTO test.query_rule_ff_once VALUES(1,'text')"),
 		"the triggering COM_QUERY executes");
 	ok(text_client && wait_for_state(admin.get(), mysql_thread_id(text_client.get()),
-		kTargetHostgroup, 1),
+		{ kTargetHostgroup, 1 }),
 		"COM_QUERY switches permanently to the final rule-chain hostgroup");
+	ProcesslistState handed_off_state;
+	ok(text_client && processlist_state(admin.get(), mysql_thread_id(text_client.get()),
+		handed_off_state) && handed_off_state.qpo_destination_hostgroup == -1,
+		"fast-forward handoff resets the reusable query-processor output");
 	ok(scalar_int(backend.get(),
 		"SELECT COUNT(*) FROM test.query_rule_ff_once WHERE id=1") == 1,
 		"the triggering COM_QUERY executes exactly once");
 	ok(text_client && query_and_drain(text_client.get(), "SELECT 1"),
 		"subsequent traffic remains live in fast-forward");
+	ok(text_client && scalar_int(admin.get(),
+		"SELECT info IS NULL FROM stats_mysql_processlist WHERE SessionID=" +
+		std::to_string(mysql_thread_id(text_client.get()))) == 1,
+		"ordinary fast-forward handoff does not retain a packet-backed query pointer");
 	text_client.reset();
 
 	ok(install_rule(admin.get(),
@@ -457,7 +513,7 @@ int main() {
 		"the source COM_QUERY completes while a mirror session is created");
 	std::this_thread::sleep_for(std::chrono::milliseconds(300));
 	ok(mirror_client && wait_for_state(admin.get(), mysql_thread_id(mirror_client.get()),
-		kTargetHostgroup, 1) && mysql_ping(admin.get()) == 0 &&
+		{ kTargetHostgroup, 1 }) && mysql_ping(admin.get()) == 0 &&
 		query_and_drain(mirror_client.get(), "SELECT 2"),
 		"the source is forwarded and the mirror path does not crash ProxySQL");
 	ok(scalar_int(backend.get(),
@@ -481,10 +537,9 @@ int main() {
 		mysql_stmt_prepare(statement, statement_sql, std::strlen(statement_sql)) == 0 &&
 		mysql_stmt_bind_param(statement, &bind) == 0 && mysql_stmt_execute(statement) == 0;
 	ok(prepared_ok, "COM_STMT_PREPARE and COM_STMT_EXECUTE still execute normally");
-	int prepared_hostgroup = -1;
-	int prepared_ff = -1;
+	ProcesslistState prepared_state;
 	ok(prepared_client && processlist_state(admin.get(), mysql_thread_id(prepared_client.get()),
-		prepared_hostgroup, prepared_ff) && prepared_ff == 0,
+		prepared_state) && prepared_state.fast_forward == 0,
 		"the action is ignored outside COM_QUERY");
 	ok(scalar_int(backend.get(),
 		"SELECT COUNT(*) FROM test.query_rule_ff_once WHERE id=3") == 1,
@@ -493,6 +548,30 @@ int main() {
 		mysql_stmt_close(statement);
 	}
 	prepared_client.reset();
+
+	ok(install_rule(admin.get(),
+		"rule_id,active,username,match_pattern,destination_hostgroup,apply,attributes,comment) VALUES"
+		"(614606,1,'sbtest1','^SELECT \\* FROM `query_rule_ff_once` WHERE 1=0$',61460,1,"
+		"'{\"switch_to_fast_forward\":true}','test_query_rule_fast_forward-t')"),
+		"the converted COM_FIELD_LIST matching rule is loaded");
+	MysqlPtr field_client = connect_frontend(cl);
+	ok(field_client != nullptr, "the COM_FIELD_LIST frontend connection is available");
+	MYSQL_RES* field_result = field_client ?
+		mysql_list_fields(field_client.get(), kTable, "%") : nullptr;
+	ok(field_result != nullptr, "COM_FIELD_LIST succeeds through the normal query path");
+	if (!field_result && field_client) {
+		diag("mysql_list_fields failed: %s", mysql_error(field_client.get()));
+	}
+	if (field_result) {
+		mysql_free_result(field_result);
+	}
+	ok(wait_for_rule_hit(admin.get(), 614606),
+		"the converted COM_FIELD_LIST SQL matched the fast-forward rule");
+	ProcesslistState field_state;
+	ok(field_client && processlist_state(admin.get(), mysql_thread_id(field_client.get()),
+		field_state) && field_state.fast_forward == 0,
+		"COM_FIELD_LIST does not consume the COM_QUERY-only fast-forward action");
+	field_client.reset();
 
 	ok(install_rule(admin.get(),
 		"rule_id,active,username,match_pattern,destination_hostgroup,apply,attributes,comment) VALUES"
@@ -523,7 +602,7 @@ int main() {
 	ok(large_client && query_and_drain(large_client.get(), large_query),
 		"an uncompressed COM_QUERY crossing the 16 MiB packet boundary executes");
 	ok(large_client && wait_for_state(admin.get(), mysql_thread_id(large_client.get()),
-		kTargetHostgroup, 1),
+		{ kTargetHostgroup, 1 }),
 		"the large COM_QUERY enters permanent fast-forward");
 	ok(scalar_int(backend.get(),
 		"SELECT COUNT(*) FROM test.query_rule_ff_once WHERE id=4") == 1,

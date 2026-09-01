@@ -19,6 +19,9 @@ class MetricsCollector;
 #include "proxysql.h"
 #include "cpp.h"
 #include "GTID_Server_Data.h"
+#ifdef PROXYSQL31
+#include "HostgroupPoolStats.h"
+#endif
 
 
 #include <atomic>
@@ -298,6 +301,9 @@ template <typename HGC>
 class BaseHGC {	// MySQL Host Group Container
 	public:
 	unsigned int hid;
+#ifdef PROXYSQL31
+	HostgroupPoolStats pool_stats;
+#endif
 	std::atomic<uint32_t> num_online_servers;
 	time_t last_log_time_num_online_servers;
 	unsigned long long current_time_now;
@@ -580,6 +586,10 @@ class Base_HostGroups_Manager {
 	HGC * MyHGC_lookup(unsigned int);
 	SQLite3_result * execute_query(char *query, char **error);
 	SQLite3_result * execute_query_under_lock(const char *query, char **error);
+#ifdef PROXYSQL31
+	HostgroupPoolStats * get_hostgroup_pool_stats(unsigned int hid);
+	SQLite3_result * SQL3_Hostgroup_Connection_Pool(bool reset);
+#endif
 
 	void wrlock();
 	void wrunlock();

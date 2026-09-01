@@ -158,7 +158,7 @@ PLUGIN_LDFLAGS += -Wl,-undefined,dynamic_lookup
 endif
 
 $(PLUGIN_SO): $(OBJS) $(PROTO_OBJS) $(PROTOBUF_LIB)
-	$(CXX) -shared -o $@ $^ $(CXXFLAGS) -pthread -L$(SSL_LDIR) -lssl -lcrypto $(PLUGIN_LDFLAGS) \
+	$(CXX) -shared -o $@ $^ $(CXXFLAGS) -pthread $(PLUGIN_LDFLAGS) \
 		$(ZSTD_AR) $(LZ4_AR)
 
 .PHONY: all
