@@ -181,7 +181,7 @@
 - [ ] **Step 2: Build to establish RED**
 
   ```bash
-  make -C test/tap/tests/unit PROXYSQL40=1 \
+  make -C test/tap/tests/unit PROXYSQL40=1 PROXYSQL31=1 \
     plugin_lifecycle_unit-t plugin_router_chassis_contract_unit-t -B
   ```
 
@@ -235,7 +235,7 @@
 - [ ] **Step 5: Run ABI compatibility tests**
 
   ```bash
-  make -C test/tap/tests/unit PROXYSQL40=1 \
+  make -C test/tap/tests/unit PROXYSQL40=1 PROXYSQL31=1 \
     plugin_lifecycle_unit-t plugin_router_chassis_contract_unit-t -B
   test/tap/tests/unit/plugin_lifecycle_unit-t
   test/tap/tests/unit/plugin_router_chassis_contract_unit-t
@@ -306,7 +306,7 @@
 - [ ] **Step 3: Run the publisher test to establish RED**
 
   ```bash
-  make -C test/tap/tests/unit PROXYSQL40=1 plugin_mysql_config_unit-t -B
+  make -C test/tap/tests/unit PROXYSQL40=1 PROXYSQL31=1 plugin_mysql_config_unit-t -B
   test/tap/tests/unit/plugin_mysql_config_unit-t
   ```
 
@@ -359,7 +359,7 @@
 - [ ] **Step 7: Run publisher and adjacent lifecycle tests**
 
   ```bash
-  make -C test/tap/tests/unit PROXYSQL40=1 \
+  make -C test/tap/tests/unit PROXYSQL40=1 PROXYSQL31=1 \
     plugin_mysql_config_unit-t plugin_router_chassis_contract_unit-t \
     plugin_manager_unit-t plugin_lifecycle_unit-t -B
   test/tap/tests/unit/plugin_mysql_config_unit-t
@@ -435,11 +435,11 @@
 - [ ] **Step 2: Build and run to establish RED**
 
   ```bash
-  make -C test/tap/tests/unit PROXYSQL40=1 \
+  make -C test/tap/tests/unit PROXYSQL40=1 PROXYSQL31=1 \
     mysql_router_config_compiler_unit-t mysql_router_plugin_load_unit-t \
     mysql_router_bootstrap_unit-t -B
   test/tap/tests/unit/mysql_router_config_compiler_unit-t
-  make -C test/tap/tests PROXYSQL40=1 test_mysql_router_innodb_cluster-t -B
+  make -C test/tap/tests PROXYSQL40=1 PROXYSQL31=1 test_mysql_router_innodb_cluster-t -B
   INFRA_ID=mysql-router-ff-red-20260901 TAP_GROUP=mysql-router-ic-g1 \
     test/infra/control/ensure-infras.bash
   INFRA_ID=mysql-router-ff-red-20260901 TAP_GROUP=mysql-router-ic-g1 \
@@ -505,8 +505,8 @@
 - [ ] **Step 6: Run all Router units**
 
   ```bash
-  make PROXYSQL40=1 -C plugins/mysql_router clean all
-  make -C test/tap/tests/unit PROXYSQL40=1 \
+  make PROXYSQL40=1 PROXYSQL31=1 -C plugins/mysql_router clean all
+  make -C test/tap/tests/unit PROXYSQL40=1 PROXYSQL31=1 \
     mysql_router_plugin_load_unit-t mysql_router_admin_schema_unit-t \
     mysql_router_bootstrap_options_unit-t mysql_router_metadata_v2_2_unit-t \
     mysql_router_gr_health_unit-t mysql_router_registration_unit-t \
@@ -614,8 +614,8 @@
 - [ ] **Step 4: Run the complete affected unit gate**
 
   ```bash
-  make PROXYSQL40=1 -C plugins/mysql_router clean all
-  make -C test/tap/tests/unit PROXYSQL40=1 \
+  make PROXYSQL40=1 PROXYSQL31=1 -C plugins/mysql_router clean all
+  make -C test/tap/tests/unit PROXYSQL40=1 PROXYSQL31=1 \
     plugin_mysql_config_unit-t plugin_router_chassis_contract_unit-t \
     plugin_manager_unit-t plugin_lifecycle_unit-t plugin_hostgroups_unit-t \
     mysql_router_plugin_load_unit-t mysql_router_admin_schema_unit-t \
@@ -645,7 +645,7 @@
   make -C lib clean
   make -C src clean
   make PROXYSQL40=1 build_src -j2
-  make -C plugins/mysql_router PROXYSQL40=1 clean all
+  make -C plugins/mysql_router PROXYSQL40=1 PROXYSQL31=1 clean all
   ```
 
   Expected: `src/proxysql` and
