@@ -2637,6 +2637,26 @@ bool MySQL_Protocol::PPHR_4auth1(unsigned char *pkt, unsigned int len, bool& ret
 			}
 		}
 	}
+	else {
+		// If client uses mysql_clear_password but ProxySQL (default) expects caching_sha2_password or mysql_native_pasword (and no SSL), initiate auth switch to default configured auth plugin
+		// For security reasons, we should not allow mysql_clear_password over non-SSL connections if server is configured to use better.
+		// like this mysql -u stnduser -pstnduser -h 127.0.0.1 -P6033  --enable-cleartext-plugin --ssl-mode=DISABLED
+		if (!(*myds)->sess->use_ssl &&
+			(mysql_thread___default_authentication_plugin_int == AUTH_MYSQL_CACHING_SHA2_PASSWORD ||
+			mysql_thread___default_authentication_plugin_int == AUTH_MYSQL_NATIVE_PASSWORD) &&
+			sent_auth_plugin_id == AUTH_MYSQL_CLEAR_PASSWORD) {
+			(*myds)->switching_auth_type = static_cast<enum proxysql_auth_plugins>(mysql_thread___default_authentication_plugin_int);
+			(*myds)->switching_auth_stage = 1;
+			(*myds)->auth_in_progress = 1;
+			generate_pkt_auth_switch_request(true, NULL, NULL);
+			(*myds)->myconn->userinfo->set((char *)vars1.user, NULL, vars1.db, NULL);
+			ret = false;			
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
+						"Session=%p, DS=%p, client requested 'mysql_clear_password' over non-SSL - switching auth to %d",
+						(*myds)->sess, (*myds), (*myds)->switching_auth_type);
+			return false;
+		}
+	}
 	return true;
 }
 
