@@ -1046,11 +1046,13 @@ void MySQL_HostGroups_Manager::commit_update_checksums_from_tables(SpookyHash& m
 void MySQL_HostGroups_Manager::update_hostgroup_manager_mappings() {
 
 	if (hgsm_mysql_servers_checksum != table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS] ||
-		hgsm_mysql_replication_hostgroups_checksum != table_resultset_checksum[HGM_TABLES::MYSQL_REPLICATION_HOSTGROUPS])
+		hgsm_mysql_replication_hostgroups_checksum != table_resultset_checksum[HGM_TABLES::MYSQL_REPLICATION_HOSTGROUPS] ||
+		hgsm_mysql_aws_aurora_hostgroups_checksum != table_resultset_checksum[HGM_TABLES::MYSQL_AWS_AURORA_HOSTGROUPS])
 	{
-		proxy_info("Rebuilding 'Hostgroup_Manager_Mapping' due to checksums change - mysql_servers { old: 0x%lX, new: 0x%lX }, mysql_replication_hostgroups { old:0x%lX, new:0x%lX }\n",
+		proxy_info("Rebuilding 'Hostgroup_Manager_Mapping' due to checksums change - mysql_servers { old: 0x%lX, new: 0x%lX }, mysql_replication_hostgroups { old:0x%lX, new:0x%lX }, mysql_aws_aurora_hostgroups { old:0x%lX, new:0x%lX }\n",
 			hgsm_mysql_servers_checksum, table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS],
-			hgsm_mysql_replication_hostgroups_checksum, table_resultset_checksum[HGM_TABLES::MYSQL_REPLICATION_HOSTGROUPS]);
+			hgsm_mysql_replication_hostgroups_checksum, table_resultset_checksum[HGM_TABLES::MYSQL_REPLICATION_HOSTGROUPS],
+			hgsm_mysql_aws_aurora_hostgroups_checksum, table_resultset_checksum[HGM_TABLES::MYSQL_AWS_AURORA_HOSTGROUPS]);
 
 		char* error = NULL;
 		int cols = 0;
@@ -1059,10 +1061,21 @@ void MySQL_HostGroups_Manager::update_hostgroup_manager_mappings() {
 
 		hostgroup_server_mapping.clear();
 
-		const char* query = "SELECT DISTINCT hostname, port, '1' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer FROM mysql_replication_hostgroups JOIN mysql_servers ON hostgroup_id=writer_hostgroup WHERE status<>3 \
-							 UNION \
-							 SELECT DISTINCT hostname, port, '0' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer FROM mysql_replication_hostgroups JOIN mysql_servers ON hostgroup_id=reader_hostgroup WHERE status<>3 \
-							 ORDER BY hostname, port";
+		const char* query =
+			"SELECT DISTINCT hostname, port, '1' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer "
+			"FROM mysql_replication_hostgroups JOIN mysql_servers ON hostgroup_id=writer_hostgroup WHERE status<>3 "
+			"UNION "
+			"SELECT DISTINCT hostname, port, '0' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer "
+			"FROM mysql_replication_hostgroups JOIN mysql_servers ON hostgroup_id=reader_hostgroup WHERE status<>3 "
+			"UNION "
+			"SELECT DISTINCT srv.hostname, srv.port, '1' is_writer, srv.status, aur.reader_hostgroup, aur.writer_hostgroup, srv.mem_pointer "
+			"FROM mysql_aws_aurora_hostgroups aur JOIN mysql_servers srv ON srv.hostgroup_id=aur.writer_hostgroup "
+			"WHERE aur.active=1 AND srv.status<>3 "
+			"UNION "
+			"SELECT DISTINCT srv.hostname, srv.port, '0' is_writer, srv.status, aur.reader_hostgroup, aur.writer_hostgroup, srv.mem_pointer "
+			"FROM mysql_aws_aurora_hostgroups aur JOIN mysql_servers srv ON srv.hostgroup_id=aur.reader_hostgroup "
+			"WHERE aur.active=1 AND srv.status<>3 "
+			"ORDER BY hostname, port";
 
 		mydb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
 
@@ -1106,6 +1119,7 @@ void MySQL_HostGroups_Manager::update_hostgroup_manager_mappings() {
 
 		hgsm_mysql_servers_checksum = table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS];
 		hgsm_mysql_replication_hostgroups_checksum = table_resultset_checksum[HGM_TABLES::MYSQL_REPLICATION_HOSTGROUPS];
+		hgsm_mysql_aws_aurora_hostgroups_checksum = table_resultset_checksum[HGM_TABLES::MYSQL_AWS_AURORA_HOSTGROUPS];
 	}
 }
 
@@ -6966,6 +6980,16 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 		pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
 	}
 
+	const std::string aurora_hostname { std::string(_server_id) + std::string(domain_name) };
+	if (GloMyMon != nullptr && GloMyMon->is_aws_rds_bgd_server_in_progress(aurora_hostname, aurora_port)) {
+		proxy_info(
+			"AWS Aurora: skipping writer update for %s:%d because AWS RDS BGD switchover is in progress\n",
+			aurora_hostname.c_str(), aurora_port
+		);
+		free(domain_name);
+		return;
+	}
+
 	query=(char *)malloc(strlen(q)+strlen(_server_id)+strlen(domain_name)+1024*1024);
 	sprintf(query, q, _server_id, domain_name, aurora_port, _whid, _rhid);
 	mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
@@ -7190,6 +7214,17 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 		}
 		pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
 	}
+
+	const std::string aurora_hostname { std::string(_server_id) + std::string(domain_name) };
+	if (GloMyMon != nullptr && GloMyMon->is_aws_rds_bgd_server_in_progress(aurora_hostname, aurora_port)) {
+		proxy_info(
+			"AWS Aurora: skipping reader update for %s:%d because AWS RDS BGD switchover is in progress\n",
+			aurora_hostname.c_str(), aurora_port
+		);
+		free(domain_name);
+		return;
+	}
+
 	q = (char*)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s%s' AND port=%d AND status<>3 AND hostgroup_id IN (%d,%d)";
 	query=(char *)malloc(strlen(q)+strlen(_server_id)+strlen(domain_name)+32+32+32);
 	sprintf(query, q, _server_id, domain_name, aurora_port, _whid, _rhid);
