@@ -417,6 +417,7 @@ bool import_bootstrap_users(SQLite3DB* db, MYSQL_RES* users, string& error) {
 		return false;
 	}
 
+	mysql_data_seek(users, 0);
 	while (MYSQL_ROW row = mysql_fetch_row(users)) {
 		if (!insert_bootstrap_user(db, stmt.get(), row, mysql_fetch_lengths(users), error)) {
 			rollback_bootstrap_users(db, error);

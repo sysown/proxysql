@@ -86,6 +86,8 @@ void test_import_preserves_sql_metacharacters() {
 		{ username, "ANY", auth_string, "caching_sha2_password", "N" },
 		{ "plain_user", "", "plain_password", "mysql_native_password", "N" }
 	}};
+	// Bootstrap import must not depend on whether another reader inspected the result.
+	mysql_fetch_row(users.get());
 
 	std::string error;
 	const bool imported = import_bootstrap_users(&db, users.get(), error);
