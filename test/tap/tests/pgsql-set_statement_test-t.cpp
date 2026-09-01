@@ -129,11 +129,14 @@ static AdminRows pgsql_admin_rows(MYSQL* admin, const char* query) {
     return rows;
 }
 
-static std::string pgsql_admin_quote(MYSQL* admin, const std::string& value) {
-    std::vector<char> escaped(value.size() * 2 + 1);
-    const unsigned long escaped_length = mysql_real_escape_string(
-        admin, escaped.data(), value.c_str(), value.size());
-    return "'" + std::string(escaped.data(), escaped_length) + "'";
+static std::string pgsql_admin_quote(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (const char character : value) {
+        if (character == '\'') escaped += "''";
+        else escaped += character;
+    }
+    return "'" + escaped + "'";
 }
 
 class PgsqlPoolRuntimeGuard {
@@ -189,9 +192,12 @@ public:
 
     bool restore() {
         if (!initialized_ || restored_) return true;
-        restored_ = true;
 
         bool restored = true;
+        if (!set_free_connections_pct("0") || !wait_for_free_connections("0")) {
+            diag("Failed to drain PostgreSQL free connections before restoring pool configuration");
+            restored = false;
+        }
         if (!replace_main_servers(original_runtime_servers_) ||
             !replace_main_variables(original_runtime_variables_) ||
             !load_pool_configuration()) {
@@ -203,6 +209,7 @@ public:
             diag("Failed to restore PostgreSQL main configuration after pool test");
             restored = false;
         }
+        restored_ = restored;
         return restored;
     }
 
@@ -231,7 +238,7 @@ private:
                                 "comment) VALUES (";
             for (size_t i = 0; i < server.size(); ++i) {
                 if (i) query += ", ";
-                query += pgsql_admin_quote(admin_, server[i]);
+                query += pgsql_admin_quote(server[i]);
             }
             query += ")";
             if (!pgsql_admin_exec(admin_, query.c_str())) return false;
@@ -247,8 +254,8 @@ private:
             }
             const std::string query = "INSERT OR REPLACE INTO global_variables "
                                       "(variable_name, variable_value) VALUES (" +
-                                      pgsql_admin_quote(admin_, variable[0]) + ", " +
-                                      pgsql_admin_quote(admin_, variable[1]) + ")";
+                                      pgsql_admin_quote(variable[0]) + ", " +
+                                      pgsql_admin_quote(variable[1]) + ")";
             if (!pgsql_admin_exec(admin_, query.c_str())) return false;
         }
         return true;
