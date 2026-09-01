@@ -13,6 +13,7 @@
 
 #include <array>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -23,9 +24,9 @@ namespace {
 constexpr size_t USER_FIELD_COUNT = 5;
 using user_row_t = std::array<std::string, USER_FIELD_COUNT>;
 
-class mysql_result_fixture_t {
+class MySQL_Result_Fixture {
 public:
-	explicit mysql_result_fixture_t(const std::vector<user_row_t>& values)
+	explicit MySQL_Result_Fixture(const std::vector<user_row_t>& values)
 		: buffers_(values.size()), row_ptrs_(values.size()), rows_(values.size()) {
 		for (size_t row_idx = 0; row_idx < values.size(); ++row_idx) {
 			size_t buffer_size = 0;
@@ -70,28 +71,19 @@ private:
 	std::vector<MYSQL_ROWS> rows_;
 };
 
-SQLite3_result* query(SQLite3DB& db, const char* sql) {
-	char* error = nullptr;
-	SQLite3_result* result = db.execute_statement(sql, &error);
-	if (error != nullptr) {
-		diag("Query failed: %s", error);
-		free(error);
-	}
-	return result;
-}
-
 void test_import_preserves_sql_metacharacters() {
 	SQLite3DB db;
-	db.open((char*)":memory:", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	char db_path[] { ":memory:" };
+	db.open(db_path, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 	db.execute(ADMIN_SQLITE_TABLE_MYSQL_USERS);
 	db.execute("INSERT INTO mysql_users (username,password) VALUES ('old_user','old_password')");
 
 	const std::string username { "quoted\"user" };
-	const std::string password {
+	const std::string auth_string {
 		"$A$005$[:V=2k#\t\"SP+AgqtYBw6HA0wp/3.73nwB/oSh5eAzZxtu2Vc1SJMTrUTn8WLB"
 	};
-	mysql_result_fixture_t users {{
-		{ username, "ANY", password, "caching_sha2_password", "N" },
+	MySQL_Result_Fixture users {{
+		{ username, "ANY", auth_string, "caching_sha2_password", "N" },
 		{ "plain_user", "", "plain_password", "mysql_native_password", "N" }
 	}};
 
@@ -101,15 +93,16 @@ void test_import_preserves_sql_metacharacters() {
 	ok(db.return_one_int("SELECT COUNT(*) FROM mysql_users") == 2,
 		"bootstrap import atomically replaces the previous users");
 
-	SQLite3_result* result = query(db,
-		"SELECT username,password,use_ssl FROM mysql_users WHERE username='quoted\"user'");
+	std::unique_ptr<SQLite3_result> result { db.execute_statement(
+		"SELECT username,password,use_ssl FROM mysql_users WHERE username='quoted\"user'"
+	) };
 	ok(result != nullptr && result->rows_count == 1,
 		"bootstrap import stores a username containing a double quote");
 	if (result != nullptr && result->rows_count == 1) {
 		SQLite3_row* row = result->rows[0];
 		ok(std::string(row->fields[0], row->sizes[0]) == username,
 			"bootstrap import preserves the exact username bytes");
-		ok(std::string(row->fields[1], row->sizes[1]) == password,
+		ok(std::string(row->fields[1], row->sizes[1]) == auth_string,
 			"bootstrap import preserves the exact caching_sha2_password bytes");
 		ok(strcmp(row->fields[2], "1") == 0,
 			"bootstrap import maps a non-empty ssl_type to use_ssl=1");
@@ -118,16 +111,16 @@ void test_import_preserves_sql_metacharacters() {
 		ok(false, "bootstrap import preserves the exact caching_sha2_password bytes");
 		ok(false, "bootstrap import maps a non-empty ssl_type to use_ssl=1");
 	}
-	delete result;
 }
 
 void test_failed_import_rolls_back() {
 	SQLite3DB db;
-	db.open((char*)":memory:", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	char db_path[] { ":memory:" };
+	db.open(db_path, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 	db.execute(ADMIN_SQLITE_TABLE_MYSQL_USERS);
 	db.execute("INSERT INTO mysql_users (username,password) VALUES ('old_user','old_password')");
 
-	mysql_result_fixture_t users {{
+	MySQL_Result_Fixture users {{
 		{ "duplicate", "", "first", "mysql_native_password", "N" },
 		{ "duplicate", "", "second", "mysql_native_password", "N" }
 	}};

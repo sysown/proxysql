@@ -321,6 +321,74 @@ string build_boot_servers_insert(const vector<boot_srv_cnf_t>& srvs_info_defs) {
 	return servers_insert;
 }
 
+/** Formats the current SQLite error with bootstrap import context. */
+static string bootstrap_users_sqlite_error(SQLite3DB* db, const char* operation) {
+	return cstr_format("%s: %s", operation, (*proxy_sqlite3_errmsg)(db->get_db())).str;
+}
+
+/** Rolls back a bootstrap user import while preserving its original error. */
+static void rollback_bootstrap_users(SQLite3DB* db, string& error) {
+	if (!db->execute("ROLLBACK")) {
+		error += "; rollback failed";
+	}
+}
+
+/** Binds and inserts one bootstrap user without interpreting credential bytes. */
+static bool insert_bootstrap_user(
+	SQLite3DB* db, sqlite3_stmt* stmt, MYSQL_ROW row, unsigned long* lengths, string& error
+) {
+	if (lengths == nullptr || row[BOOT_USER_INFO_T::USER] == nullptr) {
+		error = "Bootstrap user row is missing its username or field lengths";
+		return false;
+	}
+
+	const unsigned long username_len = lengths[BOOT_USER_INFO_T::USER];
+	const unsigned long auth_string_len = lengths[BOOT_USER_INFO_T::AUTH_STRING];
+	if (username_len > static_cast<unsigned long>(std::numeric_limits<int>::max()) ||
+		auth_string_len > static_cast<unsigned long>(std::numeric_limits<int>::max())) {
+		error = "Bootstrap username or password exceeds SQLite's binding limit";
+		return false;
+	}
+
+	int rc = (*proxy_sqlite3_bind_text)(
+		stmt, 1, row[BOOT_USER_INFO_T::USER], static_cast<int>(username_len), SQLITE_TRANSIENT
+	);
+	if (rc == SQLITE_OK && row[BOOT_USER_INFO_T::AUTH_STRING] == nullptr) {
+		rc = (*proxy_sqlite3_bind_null)(stmt, 2);
+	} else if (rc == SQLITE_OK) {
+		rc = (*proxy_sqlite3_bind_text)(
+			stmt, 2, row[BOOT_USER_INFO_T::AUTH_STRING],
+			static_cast<int>(auth_string_len), SQLITE_TRANSIENT
+		);
+	}
+	if (rc == SQLITE_OK) {
+		const int use_ssl = row[BOOT_USER_INFO_T::SSL_TYPE] != nullptr &&
+			lengths[BOOT_USER_INFO_T::SSL_TYPE] != 0;
+		rc = (*proxy_sqlite3_bind_int)(stmt, 3, use_ssl);
+	}
+	if (rc != SQLITE_OK) {
+		error = bootstrap_users_sqlite_error(db, "Failed to bind bootstrap user");
+		return false;
+	}
+
+	SAFE_SQLITE3_STEP2(stmt);
+	if (rc != SQLITE_DONE) {
+		error = bootstrap_users_sqlite_error(db, "Failed to insert bootstrap user");
+		return false;
+	}
+
+	rc = (*proxy_sqlite3_reset)(stmt);
+	if (rc == SQLITE_OK) {
+		rc = (*proxy_sqlite3_clear_bindings)(stmt);
+	}
+	if (rc != SQLITE_OK) {
+		error = bootstrap_users_sqlite_error(db, "Failed to reset mysql_users import statement");
+		return false;
+	}
+
+	return true;
+}
+
 bool import_bootstrap_users(SQLite3DB* db, MYSQL_RES* users, string& error) {
 	error.clear();
 
@@ -329,17 +397,8 @@ bool import_bootstrap_users(SQLite3DB* db, MYSQL_RES* users, string& error) {
 		return false;
 	}
 
-	auto sqlite_error = [db](const char* operation) {
-		return cstr_format("%s: %s", operation, (*proxy_sqlite3_errmsg)(db->get_db())).str;
-	};
-	auto rollback = [db, &error]() {
-		if (!db->execute("ROLLBACK")) {
-			error += "; rollback failed";
-		}
-	};
-
 	if (!db->execute("BEGIN IMMEDIATE")) {
-		error = sqlite_error("Failed to begin mysql_users import");
+		error = bootstrap_users_sqlite_error(db, "Failed to begin mysql_users import");
 		return false;
 	}
 
@@ -347,77 +406,27 @@ bool import_bootstrap_users(SQLite3DB* db, MYSQL_RES* users, string& error) {
 		"INSERT INTO mysql_users (username,password,active,use_ssl) VALUES (?1,?2,1,?3)"
 	);
 	if (rc != SQLITE_OK) {
-		error = sqlite_error("Failed to prepare mysql_users import");
-		rollback();
+		error = bootstrap_users_sqlite_error(db, "Failed to prepare mysql_users import");
+		rollback_bootstrap_users(db, error);
 		return false;
 	}
 
 	if (!db->execute("DELETE FROM mysql_users")) {
-		error = sqlite_error("Failed to clear mysql_users");
-		rollback();
+		error = bootstrap_users_sqlite_error(db, "Failed to clear mysql_users");
+		rollback_bootstrap_users(db, error);
 		return false;
 	}
 
 	while (MYSQL_ROW row = mysql_fetch_row(users)) {
-		unsigned long* lengths = mysql_fetch_lengths(users);
-		if (lengths == nullptr || row[BOOT_USER_INFO_T::USER] == nullptr) {
-			error = "Bootstrap user row is missing its username or field lengths";
-			rollback();
-			return false;
-		}
-
-		const unsigned long username_len = lengths[BOOT_USER_INFO_T::USER];
-		const unsigned long password_len = lengths[BOOT_USER_INFO_T::AUTH_STRING];
-		if (username_len > static_cast<unsigned long>(std::numeric_limits<int>::max()) ||
-			password_len > static_cast<unsigned long>(std::numeric_limits<int>::max())) {
-			error = "Bootstrap username or password exceeds SQLite's binding limit";
-			rollback();
-			return false;
-		}
-
-		rc = (*proxy_sqlite3_bind_text)(
-			stmt.get(), 1, row[BOOT_USER_INFO_T::USER], static_cast<int>(username_len), SQLITE_TRANSIENT
-		);
-		if (rc == SQLITE_OK && row[BOOT_USER_INFO_T::AUTH_STRING] == nullptr) {
-			rc = (*proxy_sqlite3_bind_null)(stmt.get(), 2);
-		} else if (rc == SQLITE_OK) {
-			rc = (*proxy_sqlite3_bind_text)(
-				stmt.get(), 2, row[BOOT_USER_INFO_T::AUTH_STRING],
-				static_cast<int>(password_len), SQLITE_TRANSIENT
-			);
-		}
-		if (rc == SQLITE_OK) {
-			const int use_ssl = row[BOOT_USER_INFO_T::SSL_TYPE] != nullptr &&
-				lengths[BOOT_USER_INFO_T::SSL_TYPE] != 0;
-			rc = (*proxy_sqlite3_bind_int)(stmt.get(), 3, use_ssl);
-		}
-		if (rc != SQLITE_OK) {
-			error = sqlite_error("Failed to bind bootstrap user");
-			rollback();
-			return false;
-		}
-
-		SAFE_SQLITE3_STEP2(stmt.get());
-		if (rc != SQLITE_DONE) {
-			error = sqlite_error("Failed to insert bootstrap user");
-			rollback();
-			return false;
-		}
-
-		rc = (*proxy_sqlite3_reset)(stmt.get());
-		if (rc == SQLITE_OK) {
-			rc = (*proxy_sqlite3_clear_bindings)(stmt.get());
-		}
-		if (rc != SQLITE_OK) {
-			error = sqlite_error("Failed to reset mysql_users import statement");
-			rollback();
+		if (!insert_bootstrap_user(db, stmt.get(), row, mysql_fetch_lengths(users), error)) {
+			rollback_bootstrap_users(db, error);
 			return false;
 		}
 	}
 
 	if (!db->execute("COMMIT")) {
-		error = sqlite_error("Failed to commit mysql_users import");
-		rollback();
+		error = bootstrap_users_sqlite_error(db, "Failed to commit mysql_users import");
+		rollback_bootstrap_users(db, error);
 		return false;
 	}
 
