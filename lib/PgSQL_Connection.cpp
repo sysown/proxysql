@@ -501,6 +501,34 @@ handler_again:
 			if (is_error_present()) {
 				NEXT_IMMEDIATE(ASYNC_QUERY_END);
 			}
+			// Record where this query should go once its reply has been read.
+			//
+			// Two functions reach this case. async_query() runs ordinary client queries,
+			// and async_send_simple_command() is what ProxySQL uses internally to configure
+			// a backend connection, for example the "SET client_encoding" it sends when a
+			// pooled connection is given to a client that asked for a different encoding.
+			// Both send a single 'Q' message and both finish in ASYNC_QUERY_END, so that is
+			// the value stored here.
+			//
+			// ASYNC_QUERY_CONT below stores the same value, but it cannot be relied on to
+			// do it. query_start() will often write the whole 'Q' in one syscall, which is
+			// the normal outcome in native mode for something as short as a SET. When that
+			// happens there is nothing left to wait for, so we go straight to the result
+			// drain and never pass through ASYNC_QUERY_CONT at all.
+			//
+			// Nothing else ever clears this field. Without the line below it would still
+			// hold whatever an earlier extended-query step left on this connection, such as
+			// ASYNC_STMT_EXECUTE_END, and the result dispatch would jump there when the
+			// reply arrived. async_query() copes with that, because it accepts any *_END
+			// state as success. async_send_simple_command() does not: it accepts only
+			// ASYNC_QUERY_END, so anything else makes it answer "not finished yet" every
+			// time it is called, and the session then waits in SETTING_VARIABLE forever
+			// because nothing times it out.
+			//
+			// Only the native path can get into that state. libpq's flush never reports
+			// that it sent everything in one go, so a libpq connection always goes through
+			// ASYNC_QUERY_CONT and picks up the assignment there.
+			set_fetch_result_end_state(ASYNC_QUERY_END);
 			NEXT_IMMEDIATE(ASYNC_USE_RESULT_START);
 		}
 		break;
