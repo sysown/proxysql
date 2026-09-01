@@ -39,12 +39,13 @@ endif
 
 LDIRS :=	-L$(JEMALLOC_LDIR) \
 			-L$(RE2_LDIR) \
+			-L$(ABSL_LDIR) \
 			-L$(LIBINJECTION_LDIR) \
 			-L$(PROMETHEUS_LDIR) \
 			-L$(PARSERSQL_LDIR) \
 
-#LIBS := -rdynamic -Wl,-Bstatic -ljemalloc_pic -lre2 -Wl,-Bdynamic -ldl -lpthread -lm -lz -lrt $(EXTRALINK)
-#LIBS := -Wl,--export-dynamic -Wl,-Bstatic -ljemalloc_pic -lre2 -Wl,-Bdynamic -ldl -lpthread -lm -lz -lrt $(EXTRALINK)
+#LIBS := -rdynamic -Wl,-Bstatic -ljemalloc_pic $(RE2_STATIC_LIBS) -Wl,-Bdynamic -ldl -lpthread -lm -lz -lrt $(EXTRALINK)
+#LIBS := -Wl,--export-dynamic -Wl,-Bstatic -ljemalloc_pic $(RE2_STATIC_LIBS) -Wl,-Bdynamic -ldl -lpthread -lm -lz -lrt $(EXTRALINK)
 
 ODIR := obj
 

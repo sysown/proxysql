@@ -19,6 +19,11 @@ all: tests tests_with_deps unit_tests pgsql_user_sync_assets
 .PHONY: debug
 debug: tests tests_with_deps unit_tests pgsql_user_sync_assets
 
+# Child test Makefiles accept `all` and `debug`, but not this directory's
+# aggregate `tests` target. Preserve debug instrumentation when requested
+# without forwarding an unsupported goal to either child Makefile.
+TAP_CHILD_BUILD_GOAL := $(if $(filter debug,$(MAKECMDGOALS)),debug,all)
+
 # CI test workflows restore only the build outputs below src/ and test/.
 # Stage the canonical user-sync sample below test/ so its TAP tests exercise
 # the same files that are shipped to operators without duplicating them.
@@ -41,8 +46,14 @@ tap: test_deps
 	cd tap && CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: tests
-tests: pgsql_user_sync_assets tap test_deps
-	cd tests && CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
+# `tests` contains the test_mysqlx_admin_tables-t bridge, which recursively
+# builds its real binary under tests/unit.  Building that bridge concurrently
+# with unit_tests launches two independent make processes in tests/unit and
+# races on the shared obj/test_*.o helper files.  Finish the canonical unit
+# build first so the bridge only creates its symlink to an already-built
+# binary.
+tests: unit_tests pgsql_user_sync_assets tap test_deps
+	cd tests && CC=${CC} CXX=${CXX} ${MAKE} $(TAP_CHILD_BUILD_GOAL)
 
 .PHONY: tests_no_infra
 tests_no_infra: tap test_deps
@@ -50,14 +61,14 @@ tests_no_infra: tap test_deps
 
 .PHONY: tests_with_deps
 tests_with_deps: tap test_deps
-	cd tests_with_deps && CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
+	cd tests_with_deps && CC=${CC} CXX=${CXX} ${MAKE} $(TAP_CHILD_BUILD_GOAL)
 
 
 # Unit tests consume the TAP helper artifacts and the statically built test
 # connectors, so keep their build ordered after both prerequisite targets.
 .PHONY: unit_tests
 unit_tests: tap test_deps
-	cd tests/unit && CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
+	cd tests/unit && CC=${CC} CXX=${CXX} ${MAKE} $(TAP_CHILD_BUILD_GOAL)
 	@if [ "$(AI_GENAI_HANDOFF_ENABLED)" = "1" ]; then \
 		$(MAKE) ai_genai_unit_tests; \
 	fi

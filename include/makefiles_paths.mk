@@ -36,9 +36,18 @@ PROMETHEUS_LDIR := $(PROMETHEUS_PATH)/lib
 JSON_PATH := $(DEPS_PATH)/json
 JSON_IDIR := $(JSON_PATH)
 
+ABSL_VERSION := 20260107.0
+ABSL_PATH := $(DEPS_PATH)/abseil/abseil-cpp-$(ABSL_VERSION)
+ABSL_INSTALL := $(ABSL_PATH)/install
+ABSL_IDIR := $(ABSL_INSTALL)/include
+ABSL_LDIR := $(ABSL_INSTALL)/lib
+ABSL_PKG_CONFIG_PATH := $(ABSL_LDIR)/pkgconfig
 RE2_PATH := $(DEPS_PATH)/re2/re2
-RE2_IDIR := $(RE2_PATH)
+RE2_IDIR := $(RE2_PATH) -I$(ABSL_IDIR)
 RE2_LDIR := $(RE2_PATH)/obj
+RE2_STATIC_LIB := $(RE2_LDIR)/libre2.a
+RE2_ABSL_LIBS = $(shell if test -d "$(ABSL_PKG_CONFIG_PATH)"; then PKG_CONFIG_PATH= PKG_CONFIG_LIBDIR=$(ABSL_PKG_CONFIG_PATH) pkg-config --static --libs absl_absl_check absl_absl_log absl_base absl_core_headers absl_fixed_array absl_flags absl_flat_hash_map absl_flat_hash_set absl_hash absl_inlined_vector absl_optional absl_span absl_str_format absl_strings absl_synchronization; fi)
+RE2_STATIC_LIBS = $(RE2_STATIC_LIB) $(RE2_ABSL_LIBS)
 
 PCRE2_PATH := $(DEPS_PATH)/pcre2/pcre2
 PCRE2_IDIR := $(PCRE2_PATH)/src

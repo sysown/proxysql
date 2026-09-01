@@ -250,6 +250,7 @@
   "query_cache_unit-t" : [ "unit-tests-g1" ],
   "query_processor_firewall_unit-t" : [ "unit-tests-g1" ],
   "query_processor_unit-t" : [ "unit-tests-g1" ],
+  "re2_vendor_unit-t" : [ "unit-tests-g1" ],
   "reg_test_1288-load-mysql-variables-feedback-t" : [ "legacy-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2","mysql84-g2","mysql90-g2","mysql95-g2" ],
   "reg_test_1288-load-pgsql-variables-feedback-t" : [ "legacy-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2","pgsql17-repl-g4" ],
   "reg_test_1493-mixed_compression-t" : [ "legacy-g6","mysql-auto_increment_delay_multiplex=0-g1","mysql-multiplexing=false-g1","mysql-query_digests=0-g1","mysql-query_digests_keep_comment=1-g1","mysql84-g6","mysql90-g1","mysql95-g1" ],

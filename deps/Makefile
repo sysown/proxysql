@@ -4,9 +4,28 @@ PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; don
 
 include $(PROXYSQL_PATH)/include/makefiles_vars.mk
 
+DEPS_PATH := $(PROXYSQL_PATH)/deps
+NPROCS ?= 1
+ifeq ($(UNAME_S),Linux)
+	NPROCS := $(shell nproc)
+endif
+ifneq (,$(findstring $(UNAME_S),Darwin FreeBSD))
+	NPROCS := $(shell sysctl -n hw.ncpu)
+endif
+
+ABSL_VERSION := 20260107.0
+ABSL_PATH := $(DEPS_PATH)/abseil/abseil-cpp-$(ABSL_VERSION)
+ABSL_INSTALL := $(ABSL_PATH)/install
+ABSL_STAMP := $(ABSL_INSTALL)/lib/pkgconfig/absl_base.pc
+
 
 # to compile libmariadb_client with support for valgrind enabled, run:
 # export USEVALGRIND=1
+
+RE2_VALGRIND :=
+ifeq ($(USEVALGRIND),1)
+	RE2_VALGRIND := -DRE2_ON_VALGRIND
+endif
 
 ifeq ($(PROXYDEBUG),1)
 	MYCFLAGS := -O0
@@ -41,6 +60,7 @@ targets :=	libssl \
 			libdaemon \
 			jemalloc \
 			mariadb_client \
+			abseil \
 			re2 \
 			sqlite3 \
 			pcre2 \
@@ -134,7 +154,7 @@ ifeq ($(UNAME_S),FreeBSD)
 	sed -i -e 's/\/bin\/bash/\/usr\/local\/bin\/bash/' libhttpserver/libhttpserver/bootstrap
 endif
 	cd libhttpserver/libhttpserver && ./bootstrap && mkdir build
-	cd libhttpserver/libhttpserver/build && LDFLAGS=-L$(shell pwd)/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/ CPPFLAGS=-I$(shell pwd)/libmicrohttpd/libmicrohttpd/src/include ../configure --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html --enable-fastopen=false --disable-examples
+	cd libhttpserver/libhttpserver/build && LDFLAGS=-L$(shell pwd)/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/ CPPFLAGS="-I$(shell pwd)/libmicrohttpd/libmicrohttpd/src/include -I$(ABSL_INSTALL)/include" ../configure --disable-shared --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html --enable-fastopen=false --disable-examples
 	cd libhttpserver/libhttpserver/build && CC=${CC} CXX=${CXX} ${MAKE}
 
 libhttpserver: libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a
@@ -385,20 +405,34 @@ prometheus-cpp/prometheus-cpp/lib/libprometheus-cpp-core.a:
 prometheus-cpp: prometheus-cpp/prometheus-cpp/lib/libprometheus-cpp-core.a
 
 
-re2/re2/obj/libre2.a:
+$(ABSL_STAMP):
+	cd abseil && rm -rf abseil-cpp-*/ || true
+	cd abseil && tar -zxf abseil-cpp-$(ABSL_VERSION).tar.gz
+	cmake -S $(ABSL_PATH) -B $(ABSL_PATH)/build \
+		-DCMAKE_C_COMPILER="$(CC)" -DCMAKE_CXX_COMPILER="$(CXX)" \
+		-DCMAKE_CXX_STANDARD=17 -DCMAKE_CXX_STANDARD_REQUIRED=ON \
+		-DCMAKE_CXX_FLAGS="$(STDCPP) $(WASAN)" \
+		-DCMAKE_EXE_LINKER_FLAGS="$(WASAN)" \
+		-DCMAKE_SHARED_LINKER_FLAGS="$(WASAN)" \
+		-DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+		-DABSL_BUILD_TESTING=OFF -DABSL_ENABLE_INSTALL=ON \
+		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+		-DCMAKE_INSTALL_LIBDIR=lib \
+		-DCMAKE_INSTALL_PREFIX=$(ABSL_INSTALL)
+	cmake --build $(ABSL_PATH)/build --parallel $(NPROCS)
+	cmake --install $(ABSL_PATH)/build
+
+abseil: $(ABSL_STAMP)
+
+
+re2/re2/obj/libre2.a: $(ABSL_STAMP)
 	cd re2 && rm -rf re2-*/ || true
-	cd re2 && tar -zxf re2-*.tar.gz
+	cd re2 && tar -zxf re2-2025-11-05.tar.gz
 #	cd re2/re2 && sed -i -e 's/-O3 -g /-O3 -fPIC /' Makefile
 #	cd re2/re2 && patch util/mutex.h < ../mutex.h.patch
 	cd re2/re2 && patch re2/onepass.cc < ../onepass.cc-multiplication-overflow.patch
-ifeq ($(UNAME_S),Darwin)
-	cd re2/re2 && sed -i '' -e 's/-O3 -g/-O3 -g -${STDCPP} -fPIC -DMEMORY_SANITIZER -DRE2_ON_VALGRIND /' Makefile
-#	cd re2/re2 && sed -i '' -e 's/RE2_CXXFLAGS?=-std=c++11 /RE2_CXXFLAGS?=-std=c++11 -fPIC /' Makefile
-else
-	cd re2/re2 && sed -i -e 's/-O3 -g/-O3 -g ${STDCPP} -fPIC -DMEMORY_SANITIZER -DRE2_ON_VALGRIND /' Makefile
-#	cd re2/re2 && sed -i -e 's/RE2_CXXFLAGS?=-std=c++11 /RE2_CXXFLAGS?=-std=c++11 -fPIC /' Makefile
-endif
-	cd re2/re2 && CC=${CC} CXX=${CXX} ${MAKE}
+	cd re2/re2 && PKG_CONFIG_PATH="" PKG_CONFIG_LIBDIR="$(ABSL_INSTALL)/lib/pkgconfig" \
+		CC=${CC} CXX=${CXX} CXXFLAGS="-O3 -g $(STDCPP) -fPIC $(WASAN) $(RE2_VALGRIND)" ${MAKE} static
 
 re2: re2/re2/obj/libre2.a
 
@@ -475,6 +509,7 @@ cleanpart:
 
 cleanall:
 	cd libssl && rm -rf openssl-$(OPENSSL_VERSION) || true
+	cd abseil && rm -rf abseil-cpp-*/ || true
 	cd libinjection && rm -rf libinjection-*/ || true
 	cd libhttpserver && rm -rf libhttpserver-*/ || true
 	cd libdaemon && rm -rf libdaemon-*/ || true

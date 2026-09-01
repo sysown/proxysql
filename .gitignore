@@ -140,6 +140,7 @@ deps/lz4/lz4-*/
 deps/mariadb-client-library/mariadb-connector-c-*/
 deps/pcre/pcre-*/
 deps/prometheus-cpp/prometheus-cpp-*/
+deps/abseil/abseil-cpp-*/
 deps/re2/re2-*/
 deps/sqlite3/sqlite-amalgamation-*/
 deps/coredumper/coredumper-*/

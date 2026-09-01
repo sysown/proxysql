@@ -36,6 +36,7 @@ LDIRS :=	-L$(PROXYSQL_LDIR) \
 			-L$(LIBCONFIG_LDIR) \
 			-L$(LIBDAEMON_LDIR) \
 			-L$(RE2_LDIR) \
+			-L$(ABSL_LDIR) \
 			-L$(PCRE2_LDIR) \
 			-L$(MICROHTTPD_LDIR) \
 			-L$(LIBHTTPSERVER_LDIR) \
@@ -114,7 +115,7 @@ STATICMYLIBS := -Wl,-Bstatic \
 				-lproxysql \
 				-ldaemon \
 				-lconfig++ \
-				-lre2 \
+				$(RE2_STATIC_LIBS) \
 				$(PCRE2_LIBS) \
 				-lmariadbclient \
 				-lhttpserver \
@@ -141,7 +142,7 @@ CURL_FORCE_LOAD_LIBS := $(call force_load_archives,$(CURL_AR))
 MYLIBS := $(EXECUTABLE_EXPORT_FLAGS) $(STATICMYLIBS) $(CURL_FORCE_LOAD_LIBS) $(OPENSSL_FORCE_LOAD_LIBS) -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt -lprometheus-cpp-pull -lprometheus-cpp-core -luuid $(EXTRALINK)
 
 ifeq ($(UNAME_S),Darwin)
-	MYLIBS := $(EXECUTABLE_EXPORT_FLAGS) -lre2 -lmariadbclient $(CURL_FORCE_LOAD_LIBS) $(OPENSSL_FORCE_LOAD_LIBS) -lpthread -lm -lz -liconv -lgnutls -lprometheus-cpp-pull -lprometheus-cpp-core
+	MYLIBS := $(EXECUTABLE_EXPORT_FLAGS) $(RE2_STATIC_LIBS) -lmariadbclient $(CURL_FORCE_LOAD_LIBS) $(OPENSSL_FORCE_LOAD_LIBS) -lpthread -lm -lz -liconv -lgnutls -lprometheus-cpp-pull -lprometheus-cpp-core
 else
 	CURL_DIR := $(DEPS_PATH)/curl/curl
 	IDIRS += -L$(CURL_DIR)/include
