@@ -12,7 +12,7 @@ IDIRS :=	-I$(PROXYSQL_IDIR) \
 			-I$(LIBCONFIG_IDIR) \
 			-I$(LIBDAEMON_IDIR) \
 			-I$(RE2_IDIR) \
-			-I$(PCRE_IDIR) \
+			-I$(PCRE2_IDIR) \
 			-I$(CLICKHOUSE_CPP_IDIR) \
 			-I$(MICROHTTPD_IDIR) \
 			-I$(LIBHTTPSERVER_IDIR) \
@@ -39,12 +39,13 @@ endif
 
 LDIRS :=	-L$(JEMALLOC_LDIR) \
 			-L$(RE2_LDIR) \
+			-L$(ABSL_LDIR) \
 			-L$(LIBINJECTION_LDIR) \
 			-L$(PROMETHEUS_LDIR) \
 			-L$(PARSERSQL_LDIR) \
 
-#LIBS := -rdynamic -Wl,-Bstatic -ljemalloc_pic -lre2 -Wl,-Bdynamic -ldl -lpthread -lm -lz -lrt $(EXTRALINK)
-#LIBS := -Wl,--export-dynamic -Wl,-Bstatic -ljemalloc_pic -lre2 -Wl,-Bdynamic -ldl -lpthread -lm -lz -lrt $(EXTRALINK)
+#LIBS := -rdynamic -Wl,-Bstatic -ljemalloc_pic $(RE2_STATIC_LIBS) -Wl,-Bdynamic -ldl -lpthread -lm -lz -lrt $(EXTRALINK)
+#LIBS := -Wl,--export-dynamic -Wl,-Bstatic -ljemalloc_pic $(RE2_STATIC_LIBS) -Wl,-Bdynamic -ldl -lpthread -lm -lz -lrt $(EXTRALINK)
 
 ODIR := obj
 
@@ -127,7 +128,7 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	proxy_sqlite3_symbols.oo
 
 ifeq ($(PROXYSQL31),1)
-_OBJ_CXX += MySQL_Caching_Sha2_RSA.oo
+_OBJ_CXX += MySQL_Caching_Sha2_RSA.oo MySQL_Server_Version_By_Interface.oo
 endif
 
 # TSDB object files

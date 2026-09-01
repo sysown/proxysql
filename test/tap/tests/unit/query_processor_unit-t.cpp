@@ -12,10 +12,8 @@
  *   - Active/inactive rule filtering
  *   - PgSQL rule parity
  *
- * @note Full process_query() testing requires a MySQL_Session with
- *       populated connection data (username, schema, client address),
- *       which is beyond the scope of isolated unit tests. Those
- *       scenarios are covered by the existing E2E TAP tests.
+ * @note Matcher coverage creates a MySQL_Session with populated connection
+ *       data (username, schema, and client address) without a running proxy.
  *
  * @see Phase 2.4 of the Unit Testing Framework (GitHub issue #5476)
  */
@@ -25,7 +23,9 @@
 #include "test_init.h"
 
 #include "proxysql.h"
+#include "MySQL_Data_Stream.h"
 #include "MySQL_Query_Processor.h"
+#include "MySQL_Session.h"
 #include "PgSQL_Query_Processor.h"
 
 #include <cstring>
@@ -50,7 +50,8 @@ static MySQL_Query_Processor_Rule_t *mysql_simple_rule(
 	int destination_hostgroup = -1,
 	bool apply = false,
 	const char *username = nullptr,
-	int flagIN = 0, int flagOUT = -1)
+	int flagIN = 0, int flagOUT = -1,
+	const char* attributes = nullptr)
 {
 	return MySQL_Query_Processor::new_query_rule(
 		rule_id, active,
@@ -85,9 +86,36 @@ static MySQL_Query_Processor_Rule_t *mysql_simple_rule(
 		-1,                     // gtid_from_hostgroup
 		-1,                     // log
 		apply,                  // apply
-		nullptr,                // attributes
+		attributes,             // attributes
 		nullptr                 // comment
 	);
+}
+
+static void free_mysql_rule_fixture(MySQL_Query_Processor_Rule_t* rule) {
+	free(rule->username);
+	free(rule->schemaname);
+	free(rule->client_addr);
+	free(rule->proxy_addr);
+	free(rule->match_digest);
+	free(rule->match_pattern);
+	free(rule->replace_pattern);
+	free(rule->error_msg);
+	free(rule->OK_msg);
+	free(rule->attributes);
+	free(rule->comment);
+	delete rule->flagOUT_ids;
+	delete rule->flagOUT_weights;
+	free(rule);
+}
+
+static void free_mysql_rules_mem_sts(rules_mem_sts_t* rules_mem_sts) {
+	if (rules_mem_sts->rules_fast_routing) {
+		kh_destroy(khStrInt, rules_mem_sts->rules_fast_routing);
+	}
+	if (rules_mem_sts->rules_fast_routing___keys_values) {
+		free(rules_mem_sts->rules_fast_routing___keys_values);
+	}
+	__reset_rules(&rules_mem_sts->query_rules);
 }
 
 /**
@@ -126,6 +154,125 @@ static PgSQL_Query_Processor_Rule_t *pgsql_simple_rule(
 // ============================================================================
 // 1. Rule creation via new_query_rule()
 // ============================================================================
+
+static void test_mysql_switch_to_fast_forward_attributes() {
+	auto* absent = mysql_simple_rule(6100, true, nullptr, -1, false,
+		nullptr, 0, -1, R"({})");
+	auto* enabled = mysql_simple_rule(6101, true, nullptr, -1, false,
+		nullptr, 0, -1, R"({"switch_to_fast_forward":true})");
+	auto* disabled = mysql_simple_rule(6102, true, nullptr, -1, false,
+		nullptr, 0, -1, R"({"switch_to_fast_forward":false})");
+
+	ok(!absent->switch_to_fast_forward, "absent action stays disabled");
+	ok(enabled->switch_to_fast_forward, "JSON true enables the action");
+	ok(!disabled->switch_to_fast_forward, "JSON false does not request the action");
+
+	const char* invalid[] = {
+		R"({"switch_to_fast_forward":"true"})",
+		R"({"switch_to_fast_forward":1})",
+		R"({"switch_to_fast_forward":-1})",
+		R"({"switch_to_fast_forward":{}})",
+		R"({"switch_to_fast_forward":[]})",
+		R"({"switch_to_fast_forward":null})"
+	};
+	for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+		auto* rule = mysql_simple_rule(6110 + i, true, nullptr, -1,
+			false, nullptr, 0, -1, invalid[i]);
+		ok(!rule->switch_to_fast_forward,
+			"non-Boolean action value %zu does not enable conversion", i);
+		free_mysql_rule_fixture(rule);
+	}
+
+	auto* combined = mysql_simple_rule(6120, true, nullptr, -1, false,
+		nullptr, 0, -1,
+		R"({"flagOUTs":[{"id":7,"weight":1}],"switch_to_fast_forward":true})");
+	ok(combined->switch_to_fast_forward && combined->flagOUT_ids &&
+		combined->flagOUT_ids->size() == 1 && combined->flagOUT_ids->at(0) == 7,
+		"the action coexists with flagOUTs");
+
+	MySQL_Query_Processor_Output output;
+	output.switch_to_fast_forward = true;
+	output.init();
+	ok(!output.switch_to_fast_forward,
+		"output init clears a previous command's action");
+
+	free_mysql_rule_fixture(absent);
+	free_mysql_rule_fixture(enabled);
+	free_mysql_rule_fixture(disabled);
+	free_mysql_rule_fixture(combined);
+}
+
+static void test_mysql_switch_to_fast_forward_matcher() {
+	rules_mem_sts_t previous_rules = GloMyQPro->reset_all(true);
+	free_mysql_rules_mem_sts(&previous_rules);
+
+	auto* first = mysql_simple_rule(6130, true, "^SELECT 6146$", -1, false,
+		nullptr, 0, 7, R"({"switch_to_fast_forward":true})");
+	auto* second = mysql_simple_rule(6131, true, "^SELECT 6146$", 610, false,
+		nullptr, 7);
+	GloMyQPro->insert(first);
+	GloMyQPro->insert(second);
+	GloMyQPro->sort();
+	GloMyQPro->commit();
+
+	SQLite3_result* fast_routing = new SQLite3_result(4);
+	fast_routing->add_column_definition(SQLITE_TEXT, "username");
+	fast_routing->add_column_definition(SQLITE_TEXT, "schemaname");
+	fast_routing->add_column_definition(SQLITE_TEXT, "flagIN");
+	fast_routing->add_column_definition(SQLITE_TEXT, "destination_hostgroup");
+	char* fast_route[] = { (char*)"ff_qp", (char*)"test", (char*)"7", (char*)"611" };
+	fast_routing->add_row(fast_route);
+	fast_routing_hashmap_t hashmap = GloMyQPro->create_fast_routing_hashmap(fast_routing);
+	GloMyQPro->wrlock();
+	SQLite3_result* old_fast_routing = GloMyQPro->load_fast_routing(hashmap);
+	GloMyQPro->wrunlock();
+	if (old_fast_routing) {
+		delete old_fast_routing;
+	}
+
+	MySQL_Session* session = new MySQL_Session();
+	__sync_fetch_and_add(&MyHGM->status.client_connections, 1);
+	session->client_myds = new MySQL_Data_Stream();
+	session->client_myds->fd = 0;
+	session->client_myds->init(MYDS_FRONTEND, session, 0);
+	MySQL_Connection* connection = new MySQL_Connection();
+	session->client_myds->attach_connection(connection);
+	connection->set_is_client();
+	connection->userinfo->set((char*)"ff_qp", (char*)"", (char*)"test", (char*)"");
+	session->client_myds->addr.addr = strdup("127.0.0.1");
+	session->client_myds->addr.port = 3306;
+	session->client_myds->proxy_addr.addr = strdup("127.0.0.1");
+	session->client_myds->proxy_addr.port = 6033;
+
+	GloMyQPro->init_thread();
+	unsigned char query[] = { 12, 0, 0, 0, PROXYSQL_COM_QUERY,
+		'S', 'E', 'L', 'E', 'C', 'T', ' ', '6', '1', '4', '6' };
+	auto* output = GloMyQPro->process_query(session, query, sizeof(query), nullptr);
+	ok(output->switch_to_fast_forward,
+		"MySQL QP: matching rule makes the action sticky");
+	ok(output->destination_hostgroup == 611,
+		"MySQL QP: fast routing wins after a non-terminal matching rule");
+	output->init();
+	ok(!output->switch_to_fast_forward,
+		"MySQL QP: output init clears the action after matching");
+	GloMyQPro->update_query_processor_stats();
+
+	second->apply = true;
+	GloMyQPro->commit();
+	output = GloMyQPro->process_query(session, query, sizeof(query), nullptr);
+	GloMyQPro->update_query_processor_stats();
+	ok(output->switch_to_fast_forward,
+		"MySQL QP: terminal rule preserves an earlier requested action");
+	ok(output->destination_hostgroup == 610,
+		"MySQL QP: terminal rule prevents fast-routing override");
+	ok(first->hits == 2 && second->hits == 2,
+		"MySQL QP: both matching rules increment their hit counters");
+
+	GloMyQPro->end_thread();
+	delete session;
+	rules_mem_sts_t fixture_rules = GloMyQPro->reset_all(true);
+	free_mysql_rules_mem_sts(&fixture_rules);
+}
 
 /**
  * @brief Test that new_query_rule() allocates and populates a rule.
@@ -1477,12 +1624,15 @@ static void test_pgsql_memory_tracking() {
 // ============================================================================
 
 int main() {
-	plan(259);
+	plan(276);
 
 	test_init_minimal();
 	test_init_query_processor();
+	test_init_hostgroups();
 
 	// MySQL tests
+	test_mysql_switch_to_fast_forward_attributes(); // 11 tests
+	test_mysql_switch_to_fast_forward_matcher();    // 6 tests
 	test_mysql_rule_creation();              // 18 tests
 	test_mysql_insert_and_retrieve();        // 2 tests
 	test_mysql_rule_sorting();               // 4 tests
@@ -1513,6 +1663,7 @@ int main() {
 	test_pgsql_memory_tracking();            // 1 test
 
 	test_cleanup_query_processor();
+	test_cleanup_hostgroups();
 	test_cleanup_minimal();
 
 	return exit_status();

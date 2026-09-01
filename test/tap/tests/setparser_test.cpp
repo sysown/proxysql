@@ -13,12 +13,13 @@
 
 #include "re2/re2.h"
 #include "re2/regexp.h"
-#include "util/test.h"
 #include "MySQL_Set_Stmt_Parser.h"
+#include <cstdlib>
 #include <string>
 #include <vector>
 #include <map>
 #include <algorithm>
+#include <iterator>
 #include <iostream>
 
 // *******************************************************************************************
@@ -40,6 +41,22 @@
 #include "MySQL_LDAP_Authentication.hpp"
 MySQL_LDAP_Authentication *GloMyLdapAuth = nullptr;
 // ******************************************************************************************
+
+[[noreturn]] static void check_failed(const char* description, const char* file, int line) {
+	std::cerr << file << ':' << line << ": check failed: " << description << std::endl;
+	std::abort();
+}
+
+static void check(bool expression, const char* description, const char* file, int line) {
+	if (!expression) check_failed(description, file, line);
+}
+
+template <typename Left, typename Right>
+static void check_equal(const Left& left, const Right& right, const char* file, int line) {
+	check(left == right, "values are equal", file, line);
+}
+
+#define TEST(suite, name) static void suite##_##name()
 
 bool iequals(const std::string& a, const std::string& b)
 {
@@ -129,14 +146,14 @@ void TestParse(const Test* tests, int ntests, const std::string& title) {
     printMap("result", result);
     printMap("expected", data);
 
-    CHECK_EQ(result.size(), data.size());
-    CHECK(std::equal(std::begin(result), std::end(result), std::begin(data)));
+	check_equal(result.size(), data.size(), __FILE__, __LINE__);
+	check(std::equal(std::begin(result), std::end(result), std::begin(data)), "maps are equal", __FILE__, __LINE__);
   }
 }
 
 
 TEST(TestParse, SET_SQL_MODE) {
-  TestParse(sql_mode, arraysize(sql_mode), "sql_mode");
+  TestParse(sql_mode, std::size(sql_mode), "sql_mode");
 }
 
 static Test time_zone[] = {
@@ -149,7 +166,7 @@ static Test time_zone[] = {
 };
 
 TEST(TestParse, SET_TIME_ZONE) {
-  TestParse(time_zone, arraysize(time_zone), "time_zone");
+  TestParse(time_zone, std::size(time_zone), "time_zone");
 }
 
 static Test session_track_gtids[] = {
@@ -165,7 +182,7 @@ static Test session_track_gtids[] = {
 };
 
 TEST(TestParse, SET_SESSION_TRACK_GTIDS) {
-  TestParse(session_track_gtids, arraysize(session_track_gtids), "session_track_gtids");
+  TestParse(session_track_gtids, std::size(session_track_gtids), "session_track_gtids");
 }
 
 static Test character_set_results[] = {
@@ -178,7 +195,7 @@ static Test character_set_results[] = {
 };
 
 TEST(TestParse, SET_CHARACTER_SET_RESULTS) {
-  TestParse(character_set_results, arraysize(character_set_results), "character_set_results");
+  TestParse(character_set_results, std::size(character_set_results), "character_set_results");
 }
 
 static Test names[] = {
@@ -189,7 +206,7 @@ static Test names[] = {
 };
 
 TEST(TestParse, SET_NAMES) {
-  TestParse(names, arraysize(names), "names");
+  TestParse(names, std::size(names), "names");
 }
 static Test various[] = {
   { "SET @@SESSION.SQL_SELECT_LIMIT= DEFAULT", { Expected("sql_select_limit",  {"DEFAULT"}) } },
@@ -218,7 +235,7 @@ static Test various[] = {
 };
 
 TEST(TestParse, SET_VARIOUS) {
-  TestParse(various, arraysize(various), "various");
+  TestParse(various, std::size(various), "various");
 }
 
 static Test multiple[] = {
@@ -274,5 +291,16 @@ static Test multiple[] = {
 };
 
 TEST(TestParse, MULTIPLE) {
-  TestParse(multiple, arraysize(multiple), "multiple");
+  TestParse(multiple, std::size(multiple), "multiple");
+}
+
+int main() {
+	TestParse_SET_SQL_MODE();
+	TestParse_SET_TIME_ZONE();
+	TestParse_SET_SESSION_TRACK_GTIDS();
+	TestParse_SET_CHARACTER_SET_RESULTS();
+	TestParse_SET_NAMES();
+	TestParse_SET_VARIOUS();
+	TestParse_MULTIPLE();
+	return EXIT_SUCCESS;
 }

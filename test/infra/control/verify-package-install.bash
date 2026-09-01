@@ -37,13 +37,21 @@ else
     exit 1
 fi
 
-# Extract distro from filename.
-# DEB:   proxysql_<vers>-<distro>_<arch>.deb        => ubuntu24
-# RPM:   proxysql-<vers>-1-<distro>.<arch>.rpm       => centos9
-DISTRO="$(echo "$PKG_FILE" | sed -n 's/.*\-\([a-z0-9]\+\)[-_.].*\.\(deb\|rpm\)$/\1/p')"
+# Extract distro from filename after removing the extension, architecture,
+# and optional compiler suffix.
+# DEB: proxysql_<vers>-<distro>[-clang]_<arch>.deb  => ubuntu24
+# RPM: proxysql-<vers>-1-<distro>[-clang].<arch>.rpm => centos9
+PKG_STEM="${PKG_FILE%.deb}"
+PKG_STEM="${PKG_STEM%.rpm}"
+PKG_STEM="${PKG_STEM%_amd64}"
+PKG_STEM="${PKG_STEM%_arm64}"
+PKG_STEM="${PKG_STEM%.x86_64}"
+PKG_STEM="${PKG_STEM%.aarch64}"
+PKG_STEM="${PKG_STEM%-clang}"
+DISTRO="${PKG_STEM##*-}"
 if [[ -z "$DISTRO" ]]; then
     echo "ERROR: could not extract distro from filename: $PKG_FILE" >&2
-    echo "  Expected: proxysql_<vers>-<distro>_<arch>.deb or proxysql-<vers>-1-<distro>.<arch>.rpm" >&2
+    echo "  Expected: proxysql_<vers>-<distro>[-clang]_<arch>.deb or proxysql-<vers>-1-<distro>[-clang].<arch>.rpm" >&2
     exit 1
 fi
 
@@ -91,8 +99,8 @@ echo ""
 # ---- Pull the clean distro image ----
 echo "==> Pulling $IMAGE ..."
 if ! docker pull "$IMAGE" >/dev/null 2>&1; then
-    echo "WARNING: could not pull $IMAGE — skipping verification" >&2
-    exit 0
+    echo "ERROR: could not pull $IMAGE" >&2
+    exit 1
 fi
 echo ""
 
@@ -119,7 +127,10 @@ case "$PKG_TYPE" in
         elif command -v yum &>/dev/null; then
             yum install -y -q /tmp/pkg.rpm 2>&1
         elif command -v zypper &>/dev/null; then
-            zypper --non-interactive install -y /tmp/pkg.rpm 2>&1
+            # Release-build RPMs are intentionally unsigned until the
+            # release-kraken signing step.  Keep dependency resolution and
+            # installation strict while deferring only the signature gate.
+            zypper --non-interactive --no-gpg-checks install -y /tmp/pkg.rpm 2>&1
         else
             echo "ERROR: no supported package manager (dnf/yum/zypper)" >&2
             exit 1
@@ -182,8 +193,8 @@ trap cleanup EXIT
 
 echo "==> Starting clean container from $IMAGE ..."
 if ! docker run -d --name "$CID" "$IMAGE" sleep 120 >/dev/null 2>&1; then
-    echo "WARNING: could not start container from $IMAGE — skipping" >&2
-    exit 0
+    echo "ERROR: could not start container from $IMAGE" >&2
+    exit 1
 fi
 
 # Copy package into container

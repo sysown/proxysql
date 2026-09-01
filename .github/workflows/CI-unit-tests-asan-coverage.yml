@@ -98,6 +98,7 @@ jobs:
         ref: ${{ env.SHA }}
         fetch-depth: 0
         lfs: true
+        persist-credentials: false
         submodules: 'false'
 
     - name: Relax ASLR for AddressSanitizer
