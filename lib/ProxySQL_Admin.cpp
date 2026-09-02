@@ -6707,11 +6707,13 @@ bool ProxySQL_Admin::__refresh_users(
 		}
 	} checksum_mutex_guard {&GloVars.checksum_mutex};
 
+#ifdef PROXYSQL40
 	if (atomic_error != nullptr && mysql_users_resultset != nullptr) {
 		if (!GloMyAuth->replace_mysql_users_atomically(*mysql_users_resultset, *atomic_error)) {
 			return false;
 		}
 	} else {
+#endif
 		__delete_inactive_users<SERVER_TYPE_MYSQL>(USERNAME_BACKEND);
 		__delete_inactive_users<SERVER_TYPE_MYSQL>(USERNAME_FRONTEND);
 		GloMyAuth->set_all_inactive(USERNAME_BACKEND);
@@ -6726,7 +6728,9 @@ bool ProxySQL_Admin::__refresh_users(
 		}
 		GloMyAuth->remove_inactives(USERNAME_BACKEND);
 		GloMyAuth->remove_inactives(USERNAME_FRONTEND);
+#ifdef PROXYSQL40
 	}
+#endif
 
 	if (GloMyLdapAuth) {
 		__add_active_users_ldap();
