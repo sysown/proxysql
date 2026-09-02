@@ -80,7 +80,10 @@ ManagedMysqlUser retained_user(const CurrentMysqlUser& current,
 	return user;
 }
 
-bool same_managed_attributes(const CurrentMysqlUser& lhs, const CurrentMysqlUser& rhs) {
+} // namespace
+
+bool mysql_router_same_managed_user_attributes(
+	const CurrentMysqlUser& lhs, const CurrentMysqlUser& rhs) {
 	return lhs.username == rhs.username && lhs.password == rhs.password &&
 		lhs.active == rhs.active && lhs.use_ssl == rhs.use_ssl &&
 		lhs.default_hostgroup == rhs.default_hostgroup &&
@@ -92,8 +95,6 @@ bool same_managed_attributes(const CurrentMysqlUser& lhs, const CurrentMysqlUser
 		lhs.attributes == rhs.attributes && lhs.comment == rhs.comment &&
 		lhs.owned && rhs.owned;
 }
-
-} // namespace
 
 AccountSnapshot UserSynchronizer::read(IMetadataSession& session,
 	std::string_view metadata_username) {
@@ -164,7 +165,7 @@ ManagedUserGeneration UserSynchronizer::normalize(const AccountSnapshot& snapsho
 					if (!row->frontend && row->backend) backend = row;
 				}
 				if (frontend == nullptr || backend == nullptr ||
-					!same_managed_attributes(*frontend, *backend)) {
+					!mysql_router_same_managed_user_attributes(*frontend, *backend)) {
 					throw std::runtime_error("multiple owned mysql_users variants exist for one username");
 				}
 				canonical_owned = *frontend;

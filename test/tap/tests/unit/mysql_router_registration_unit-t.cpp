@@ -15,6 +15,7 @@ public:
 	std::vector<std::vector<SqlValue>> query_params;
 	std::vector<std::string> executions;
 	std::vector<std::vector<SqlValue>> execute_params;
+	uint64_t affected_rows {1};
 
 	QueryResult query(std::string_view sql, const std::vector<SqlValue>& params) override {
 		if (results.empty()) throw std::runtime_error("unexpected registration query");
@@ -27,9 +28,12 @@ public:
 	ExecResult execute(std::string_view sql, const std::vector<SqlValue>& params) override {
 		executions.emplace_back(sql);
 		execute_params.push_back(params);
-		return {true, 1, {}};
+		return {true, affected_rows, {}};
 	}
 	ServerVersion server_version() const override { return {8, 4, 6}; }
+	std::string quote_sql_string(std::string_view value) const override {
+		return "'" + std::string(value) + "'";
+	}
 };
 
 QueryRow row(std::initializer_list<std::pair<const std::string, SqlCell>> cells) {
@@ -56,10 +60,10 @@ BootstrapOptions options() {
 } // namespace
 
 int main() {
-	plan(14);
+	plan(18);
 
 	RegistrationSession created;
-	created.results.push_back({{}});
+	created.results.push_back(QueryResult {});
 	created.results.push_back({{row({{"router_id", "17"}})}});
 	auto registration = register_or_adopt_router(
 		created, topology(), options(), "proxy.example", "router_account");
@@ -92,8 +96,10 @@ int main() {
 
 	RegistrationSession adopted;
 	adopted.results.push_back({{row({{"router_id", "17"}, {"options", "{\"shell\":true}"}})}});
+	auto adoption_options = options();
+	adoption_options.force = true;
 	auto existing = register_or_adopt_router(
-		adopted, topology(), options(), "PROXY.EXAMPLE", "router_account");
+		adopted, topology(), adoption_options, "PROXY.EXAMPLE", "router_account");
 	ok(existing.router_id == 17 && adopted.executions.size() == 1,
 	   "an existing address/name registration is adopted without reinsertion");
 	ok(adopted.queries[0].find("LOWER(address)=LOWER(?)") != std::string::npos &&
@@ -103,6 +109,49 @@ int main() {
 	ok(adopted.executions[0].find("clusterset_id=NULL") != std::string::npos &&
 	   adopted.execute_params[0].back() == SqlValue(int64_t(17)),
 	   "an adopted row is retargeted to the exact cluster by bound router id");
+
+	RegistrationSession replaced;
+	replaced.results.push_back(QueryResult {});
+	replaced.results.push_back({{row({{"router_id", "19"}})}});
+	auto replacement = register_or_adopt_router(
+		replaced, topology(), adoption_options, "new-proxy.example", "router_account");
+	ok(replacement.router_id == 19 && replaced.executions.size() == 1 &&
+	   replaced.executions[0].find("address=?,router_name=?") != std::string::npos &&
+	   replaced.execute_params[0][0] == SqlValue(std::string("new-proxy.example")),
+	   "--force retargets one conflicting Router registration instead of inserting a duplicate");
+
+	bool force_required = false;
+	try {
+		RegistrationSession unforced;
+		unforced.results.push_back({{row({{"router_id", "17"}})}});
+		(void)register_or_adopt_router(unforced, topology(), options(),
+			"proxy.example", "router_account");
+	} catch (const std::exception& error) {
+		force_required = std::string(error.what()).find("--force") != std::string::npos;
+	}
+	ok(force_required, "an existing unowned registration requires explicit --force adoption");
+
+	RegistrationSession unchanged;
+	unchanged.affected_rows = 0;
+	unchanged.results.push_back({{row({{"router_id", "17"}})}});
+	unchanged.results.push_back({{row({{"router_id", "17"}})}});
+	auto retained = register_or_adopt_router(unchanged, topology(), adoption_options,
+		"proxy.example", "router_account");
+	ok(retained.router_id == 17,
+	   "an unchanged registration update is accepted after exact identity revalidation");
+
+	bool vanished_rejected = false;
+	try {
+		RegistrationSession vanished;
+		vanished.affected_rows = 0;
+		vanished.results.push_back({{row({{"router_id", "17"}})}});
+		vanished.results.push_back(QueryResult {});
+		(void)register_or_adopt_router(vanished, topology(), adoption_options,
+			"proxy.example", "router_account");
+	} catch (const std::exception& error) {
+		vanished_rejected = std::string(error.what()).find("disappeared") != std::string::npos;
+	}
+	ok(vanished_rejected, "a registration deleted before its update fails closed");
 
 	bool duplicates_rejected = false;
 	try {

@@ -10,6 +10,9 @@ namespace {
 constexpr const char* kLookup =
 	"SELECT router_id,options FROM mysql_innodb_cluster_metadata.v2_routers "
 	"WHERE LOWER(address)=LOWER(?) AND router_name=?";
+constexpr const char* kForceLookup =
+	"SELECT router_id,options FROM mysql_innodb_cluster_metadata.v2_routers "
+	"WHERE LOWER(address)=LOWER(?) OR router_name=? ORDER BY router_id";
 constexpr const char* kInsert =
 	"INSERT INTO mysql_innodb_cluster_metadata.v2_routers"
 	"(address,router_name,product_name,version,cluster_id,clusterset_id,attributes) "
@@ -17,7 +20,7 @@ constexpr const char* kInsert =
 constexpr const char* kLastInsertId = "SELECT LAST_INSERT_ID() AS router_id";
 constexpr const char* kUpdate =
 	"UPDATE mysql_innodb_cluster_metadata.v2_routers SET "
-	"product_name=?,version=?,cluster_id=?,clusterset_id=NULL,"
+	"address=?,router_name=?,product_name=?,version=?,cluster_id=?,clusterset_id=NULL,"
 	"attributes=JSON_SET(COALESCE(attributes,JSON_OBJECT()),"
 	"'$.RWEndpoint',?,'$.ROEndpoint',?,'$.RWSplitEndpoint',?,"
 	"'$.bootstrapTargetType',?,'$.MetadataUser',?,'$.ProxySQLVersion',?,"
@@ -63,6 +66,14 @@ RouterRegistration register_or_adopt_router(
 		throw std::runtime_error("multiple Router registrations match address and name");
 	}
 	int64_t id = 0;
+	if (existing.rows.empty() && options.force) {
+		existing = session.query(kForceLookup,
+			{std::string(address), options.router_name});
+		if (existing.rows.size() > 1) {
+			throw std::runtime_error(
+				"multiple Router registrations conflict with the requested address or name");
+		}
+	}
 	if (existing.rows.empty()) {
 		ExecResult inserted = session.execute(kInsert, {std::string(address), options.router_name,
 			std::string("ProxySQL"), std::string("8.4.0"), topology.topology_uuid});
@@ -80,6 +91,10 @@ RouterRegistration register_or_adopt_router(
 			id = router_id(assigned.rows[0]);
 		}
 	} else {
+		if (!options.force) {
+			throw std::runtime_error(
+				"Router registration already exists; use --force to adopt it");
+		}
 		id = router_id(existing.rows[0]);
 	}
 
@@ -98,7 +113,8 @@ RouterRegistration register_or_adopt_router(
 		{"ProxySQLTopologyUUID", topology.topology_uuid},
 	};
 	ExecResult updated = session.execute(kUpdate, {
-		registration.product_name, registration.version, topology.topology_uuid,
+		std::string(address), options.router_name, registration.product_name,
+		registration.version, topology.topology_uuid,
 		registration.attributes["RWEndpoint"].get<std::string>(),
 		registration.attributes["ROEndpoint"].get<std::string>(),
 		registration.attributes["RWSplitEndpoint"].get<std::string>(),
@@ -108,5 +124,11 @@ RouterRegistration register_or_adopt_router(
 		registration.attributes["ProxySQLPluginVersion"].get<std::string>(),
 		registration.attributes["ProxySQLTopologyUUID"].get<std::string>(), id});
 	if (!updated.ok) throw std::runtime_error("Router registration update failed: " + updated.error);
+	if (updated.affected_rows == 0) {
+		QueryResult retained = lookup(session, address, options.router_name);
+		if (retained.rows.size() != 1 || router_id(retained.rows[0]) != id) {
+			throw std::runtime_error("Router registration disappeared before update");
+		}
+	}
 	return registration;
 }

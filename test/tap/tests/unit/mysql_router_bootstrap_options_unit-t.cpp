@@ -72,7 +72,7 @@ bool uri_throws(const char* uri, const char* needle) {
 } // namespace
 
 int main() {
-	plan(49);
+	plan(53);
 
 	OptionFixture registry_fixture;
 	auto registry = registry_fixture.registry();
@@ -127,7 +127,7 @@ int main() {
 		{"--password-retries", "7"}, {"--bootstrap-password-fd", "9"},
 		{"--force", ""}, {"--replace-topology", ""},
 		{"--conf-bind-address", "127.0.0.1"}, {"--conf-base-port", "7000"},
-		{"--conf-use-sockets", ""}, {"--ssl-mode", "VERIFY_IDENTITY"},
+		{"--ssl-mode", "VERIFY_IDENTITY"},
 		{"--ssl-ca", "/ca.pem"}, {"--ssl-cert", "/cert.pem"},
 		{"--ssl-key", "/key.pem"}
 	};
@@ -144,15 +144,18 @@ int main() {
 	ok(parsed.listeners.bind_address == "127.0.0.1" && parsed.listeners.rw_port == 7000 &&
 	   parsed.listeners.ro_port == 7001 && parsed.listeners.rw_split_port == 7004,
 	   "the base port derives the three advertised listener ports");
-	ok(parsed.listeners.use_sockets && !parsed.listeners.skip_tcp,
-	   "socket listener selection is parsed independently");
+	ok(!parsed.listeners.use_sockets && !parsed.listeners.skip_tcp,
+	   "the supported listener profile remains TCP-only");
 	ok(parsed.tls.mode == MetadataTlsMode::verify_identity && parsed.tls.ca == "/ca.pem" &&
 	   parsed.tls.cert == "/cert.pem" && parsed.tls.key == "/key.pem",
 	   "TLS mode and certificate paths are parsed");
 
 	OptionFixture conflict;
-	conflict.values = {{"--conf-use-sockets", ""}, {"--conf-skip-tcp", ""}};
-	ok(throws_with(conflict, "conflict"), "conflicting socket-only settings are rejected");
+	conflict.values = {{"--conf-use-sockets", ""}};
+	ok(throws_with(conflict, "not supported"), "unsupported socket listeners are rejected explicitly");
+	OptionFixture skip_tcp;
+	skip_tcp.values = {{"--conf-skip-tcp", ""}};
+	ok(throws_with(skip_tcp, "not supported"), "unsupported TCP suppression is rejected explicitly");
 	OptionFixture bad_policy;
 	bad_policy.values = {{"--account-create", "sometimes"}};
 	ok(throws_with(bad_policy, "account-create"), "invalid account creation policy is rejected");
@@ -176,6 +179,18 @@ int main() {
 	ok(secret.size() == 14, "one trailing password newline is stripped");
 	ok(std::string(reinterpret_cast<const char*>(secret.data()), secret.size()) ==
 	   "s3cr3t-from-fd", "password bytes are read exactly from the descriptor");
+	int newline_fds[2] {-1, -1};
+	ok(pipe(newline_fds) == 0, "an embedded-newline password pipe is available");
+	const char embedded[] = "first-line\nignored";
+	ok(write(newline_fds[1], embedded, sizeof(embedded) - 1) ==
+	   static_cast<ssize_t>(sizeof(embedded) - 1), "the embedded-newline fixture is written");
+	close(newline_fds[1]);
+	BootstrapOptions newline_options;
+	newline_options.password_fd = newline_fds[0];
+	SecureBytes first_line = read_bootstrap_password(newline_options);
+	close(newline_fds[0]);
+	ok(std::string(reinterpret_cast<const char*>(first_line.data()), first_line.size()) ==
+	   "first-line", "password input stops at the first newline in a single read");
 	int write_only_fds[2] {-1, -1};
 	ok(pipe(write_only_fds) == 0, "a write-only descriptor fixture is available");
 	BootstrapOptions write_only_options;

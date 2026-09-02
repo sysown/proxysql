@@ -130,8 +130,10 @@ std::vector<unsigned char> read_password_bytes(int fd) {
 			throw std::runtime_error("cannot read bootstrap password");
 		}
 		if (count == 0) break;
-		bytes.insert(bytes.end(), buffer, buffer + count);
-		if (bytes.back() == '\n') break;
+		unsigned char* end = buffer + count;
+		unsigned char* newline = std::find(buffer, end, static_cast<unsigned char>('\n'));
+		bytes.insert(bytes.end(), buffer, newline == end ? end : newline + 1);
+		if (newline != end) break;
 	}
 	if (bytes.size() > kMaximumPasswordBytes) {
 		OPENSSL_cleanse(bytes.data(), bytes.size());
@@ -185,7 +187,8 @@ bool mysql_router_register_cli_options(ProxySQL_PluginCLIRegistry* registry) {
 		register_option(*registry, "", "--account", 1, "Router service account");
 		register_option(*registry, "", "--account-create", 1, "Service account creation policy");
 		register_option(*registry, "", "--account-host", 1, "Service account host pattern");
-		register_option(*registry, "", "--password-retries", 1, "Password prompt retry count");
+		register_option(*registry, "", "--password-retries", 1,
+			"Generated service-account password retry count");
 		register_option(*registry, "", "--bootstrap-password-fd", 1, "Read bootstrap password from FD");
 		register_option(*registry, "", "--force", 0, "Replace an existing Router registration");
 		register_option(*registry, "", "--replace-topology", 0, "Replace a different managed topology");
@@ -286,8 +289,9 @@ BootstrapOptions parse_bootstrap_options(const ProxySQL_PluginEarlyActionContext
 	}
 	options.listeners.use_sockets = is_set(context, "--conf-use-sockets");
 	options.listeners.skip_tcp = is_set(context, "--conf-skip-tcp");
-	if (options.listeners.use_sockets && options.listeners.skip_tcp) {
-		throw std::invalid_argument("--conf-use-sockets and --conf-skip-tcp conflict");
+	if (options.listeners.use_sockets || options.listeners.skip_tcp) {
+		throw std::invalid_argument(
+			"--conf-use-sockets and --conf-skip-tcp are not supported by the ProxySQL Router plugin");
 	}
 	if (auto value = get_value(context, "--ssl-mode")) options.tls.mode = parse_tls_mode(*value, "--ssl-mode");
 	if (auto value = get_value(context, "--ssl-ca")) options.tls.ca = *value;

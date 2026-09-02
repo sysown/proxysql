@@ -70,6 +70,9 @@ struct ManagedUserGeneration {
 	std::vector<ManagedUserStatus> status;
 };
 
+bool mysql_router_same_managed_user_attributes(
+	const CurrentMysqlUser& lhs, const CurrentMysqlUser& rhs);
+
 class UserSynchronizer {
 public:
 	static AccountSnapshot read(IMetadataSession& session,

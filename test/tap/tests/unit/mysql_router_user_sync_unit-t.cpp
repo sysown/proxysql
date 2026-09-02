@@ -61,6 +61,9 @@ public:
 		return {true, 0, {}};
 	}
 	ServerVersion server_version() const override { return {8, 4, 6}; }
+	std::string quote_sql_string(std::string_view value) const override {
+		return "'" + std::string(value) + "'";
+	}
 };
 
 } // namespace
@@ -176,14 +179,16 @@ int main() {
 	CurrentMysqlUser split_backend = current("split", "$A$005$split");
 	split_backend.frontend = false;
 	split_input.current_users = {split_frontend, split_backend};
+	split_input.persisted = {{"split", {"old-fingerprint", "released"}}};
 	bool split_collapsed = false;
 	try {
 		auto split_generation = UserSynchronizer::normalize(split_accounts, split_input);
 		const auto* split_user = managed(split_generation, "split");
-		split_collapsed = split_user != nullptr && split_user->frontend && split_user->backend;
+		split_collapsed = split_user != nullptr && split_user->release &&
+			split_user->frontend && split_user->backend;
 	} catch (const std::exception&) {}
 	ok(split_collapsed,
-	   "an owned complementary frontend/backend split collapses to one canonical managed user");
+	   "a released complementary frontend/backend split is retained as one canonical managed user");
 
 	return exit_status();
 }

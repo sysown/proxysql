@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <exception>
 #include <limits>
 #include <random>
 #include <set>
@@ -49,16 +50,26 @@ std::vector<uint8_t> random_password() {
 	return std::vector<uint8_t>(text.begin(), text.end());
 }
 
+void wipe_password(std::vector<uint8_t>& bytes) noexcept {
+#ifdef MYSQL_ROUTER_CONNECTOR_C
+	if (!bytes.empty()) OPENSSL_cleanse(bytes.data(), bytes.size());
+#else
+	std::fill(bytes.begin(), bytes.end(), 0);
+#endif
+}
+
+bool password_policy_rejection(std::string_view message) {
+	std::string lower(message);
+	std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char character) {
+		return static_cast<char>(std::tolower(character));
+	});
+	return lower.find("password") != std::string::npos;
+}
+
 class PasswordWiper {
 public:
 	explicit PasswordWiper(std::vector<uint8_t>& bytes) : bytes_(bytes) {}
-	~PasswordWiper() {
-#ifdef MYSQL_ROUTER_CONNECTOR_C
-		if (!bytes_.empty()) OPENSSL_cleanse(bytes_.data(), bytes_.size());
-#else
-		std::fill(bytes_.begin(), bytes_.end(), 0);
-#endif
-	}
+	~PasswordWiper() { wipe_password(bytes_); }
 private:
 	std::vector<uint8_t>& bytes_;
 };
@@ -90,53 +101,63 @@ std::string uppercase(std::string value) {
 	return value;
 }
 
-void validate_grants(IMetadataSession& session, const std::string& account) {
+void validate_grants(IMetadataSession& session, const std::string& account,
+	bool clusterset) {
 	QueryResult result = session.query("SHOW GRANTS FOR " + account, {});
 	std::string grants;
 	for (const QueryRow& row : result.rows) {
 		if (row.empty() || !row.begin()->second) continue;
 		grants += uppercase(*row.begin()->second) + "\n";
 	}
-	for (const char* required : {
+	std::vector<std::string> required {
 		"SELECT, EXECUTE ON `MYSQL_INNODB_CLUSTER_METADATA`.*",
 		"UPDATE ON `MYSQL_INNODB_CLUSTER_METADATA`.`CLUSTERS`",
-		"UPDATE ON `MYSQL_INNODB_CLUSTER_METADATA`.`CLUSTERSETS`",
 		"INSERT, UPDATE, DELETE ON `MYSQL_INNODB_CLUSTER_METADATA`.`ROUTERS`",
 		"UPDATE ON `MYSQL_INNODB_CLUSTER_METADATA`.`V2_AR_CLUSTERS`",
-		"UPDATE ON `MYSQL_INNODB_CLUSTER_METADATA`.`V2_CS_CLUSTERSETS`",
 		"UPDATE ON `MYSQL_INNODB_CLUSTER_METADATA`.`V2_GR_CLUSTERS`",
 		"INSERT, UPDATE, DELETE ON `MYSQL_INNODB_CLUSTER_METADATA`.`V2_ROUTERS`",
 		"SELECT ON `PERFORMANCE_SCHEMA`.`REPLICATION_GROUP_MEMBERS`",
 		"SELECT ON `PERFORMANCE_SCHEMA`.`REPLICATION_GROUP_MEMBER_STATS`",
 		"SELECT ON `PERFORMANCE_SCHEMA`.`GLOBAL_VARIABLES`",
-		"AUTHENTICATION_STRING"}) {
-		if (grants.find(required) == std::string::npos) {
+		"SELECT (USER, HOST, PLUGIN, AUTHENTICATION_STRING, ACCOUNT_LOCKED, PASSWORD_EXPIRED, SSL_TYPE) ON `MYSQL`.`USER`",
+	};
+	if (clusterset) {
+		required.push_back("UPDATE ON `MYSQL_INNODB_CLUSTER_METADATA`.`CLUSTERSETS`");
+		required.push_back("UPDATE ON `MYSQL_INNODB_CLUSTER_METADATA`.`V2_CS_CLUSTERSETS`");
+	}
+	for (const std::string& required_grant : required) {
+		if (grants.find(required_grant) == std::string::npos) {
 			throw std::runtime_error("existing metadata account is missing required grants");
 		}
 	}
 }
 
-void apply_grants(IMetadataSession& session, const std::string& account) {
-	for (const std::string& statement : {
+void apply_grants(IMetadataSession& session, const std::string& account,
+	bool clusterset) {
+	std::vector<std::string> statements {
 		"GRANT SELECT, EXECUTE ON mysql_innodb_cluster_metadata.* TO " + account,
 		"GRANT UPDATE ON mysql_innodb_cluster_metadata.clusters TO " + account,
-		"GRANT UPDATE ON mysql_innodb_cluster_metadata.clustersets TO " + account,
 		"GRANT INSERT, UPDATE, DELETE ON mysql_innodb_cluster_metadata.routers TO " + account,
 		"GRANT UPDATE ON mysql_innodb_cluster_metadata.v2_ar_clusters TO " + account,
-		"GRANT UPDATE ON mysql_innodb_cluster_metadata.v2_cs_clustersets TO " + account,
 		"GRANT UPDATE ON mysql_innodb_cluster_metadata.v2_gr_clusters TO " + account,
 		"GRANT INSERT, UPDATE, DELETE ON mysql_innodb_cluster_metadata.v2_routers TO " + account,
 		"GRANT SELECT ON performance_schema.replication_group_members TO " + account,
 		"GRANT SELECT ON performance_schema.replication_group_member_stats TO " + account,
 		"GRANT SELECT ON performance_schema.global_variables TO " + account,
-		"GRANT SELECT (User,Host,plugin,authentication_string,account_locked,password_expired,ssl_type) ON mysql.user TO " + account}) {
+		"GRANT SELECT (User,Host,plugin,authentication_string,account_locked,password_expired,ssl_type) ON mysql.user TO " + account,
+	};
+	if (clusterset) {
+		statements.push_back("GRANT UPDATE ON mysql_innodb_cluster_metadata.clustersets TO " + account);
+		statements.push_back("GRANT UPDATE ON mysql_innodb_cluster_metadata.v2_cs_clustersets TO " + account);
+	}
+	for (const std::string& statement : statements) {
 		require_execute(session, statement);
 	}
 }
 
 void ensure_account(IMetadataSession& session, const BootstrapOptions& options,
 	const std::string& username, const std::vector<uint8_t>& password,
-	bool have_persisted_secret, bool plugin_owned) {
+	bool have_persisted_secret, bool plugin_owned, bool clusterset) {
 	QueryResult users = session.query(
 		"SELECT User,Host,plugin,authentication_string,account_locked,password_expired,ssl_type "
 		"FROM mysql.user WHERE User=? AND Host=?",
@@ -152,12 +173,16 @@ void ensure_account(IMetadataSession& session, const BootstrapOptions& options,
 			!users.rows[0].at("plugin") || *users.rows[0].at("plugin") != "caching_sha2_password") {
 			throw std::runtime_error("existing metadata account does not use caching_sha2_password");
 		}
+		if (!plugin_owned && !have_persisted_secret) {
+			throw std::runtime_error(
+				"existing named metadata account has no persisted credential");
+		}
 		if (plugin_owned && !have_persisted_secret) {
 			require_execute(session, "ALTER USER " + account +
 				" IDENTIFIED WITH caching_sha2_password BY " + session.quote_sql_string(password_text));
-			apply_grants(session, account);
+			apply_grants(session, account, clusterset);
 		} else {
-			validate_grants(session, account);
+			validate_grants(session, account, clusterset);
 		}
 		return;
 	}
@@ -166,7 +191,7 @@ void ensure_account(IMetadataSession& session, const BootstrapOptions& options,
 	}
 	require_execute(session, "CREATE USER " + account +
 		" IDENTIFIED WITH caching_sha2_password BY " + session.quote_sql_string(password_text));
-	apply_grants(session, account);
+	apply_grants(session, account, clusterset);
 }
 
 } // namespace
@@ -187,34 +212,55 @@ BootstrapResult MysqlRouterBootstrap::run(const BootstrapOptions& options) {
 			throw std::runtime_error("persisted topology differs; use --replace-topology to continue");
 		}
 		auto journal = store_.load_journal(topology_.topology_uuid);
+		BootstrapOptions registration_options = options;
+		if (identity || journal) registration_options.force = true;
 		const bool generated_account = options.service_account.empty();
 		std::string metadata_user = options.service_account;
 		if (metadata_user.empty() && journal) metadata_user = journal->metadata_user;
-		const bool registration_has_metadata_user = !metadata_user.empty();
-
-		RouterRegistration registration = register_or_adopt_router(
-			session_, topology_, options, router_address_, metadata_user);
-		if (metadata_user.empty()) {
-			metadata_user = "mysql_router" + std::to_string(registration.router_id) + "_" +
-				random_text(12, kSuffixAlphabet);
-		}
-		progress = BootstrapJournal {topology_.topology_uuid, options.router_name,
-			BootstrapPhase::discovered, registration.router_id, metadata_user, {}};
-		store_.save_journal(*progress);
-
 		const std::string secret_name = "metadata-" + topology_.topology_uuid;
 		auto persisted_secret = store_.get_secret(secret_name);
 		std::vector<uint8_t> password = persisted_secret ? *persisted_secret : random_password();
 		PasswordWiper wipe(password);
-		ensure_account(session_, options, metadata_user, password,
-			persisted_secret.has_value(), generated_account);
+
+		RouterRegistration registration;
+		if (metadata_user.empty()) {
+			registration = register_or_adopt_router(
+				session_, topology_, registration_options, router_address_, {});
+			metadata_user = "mysql_router" + std::to_string(registration.router_id) + "_" +
+				random_text(12, kSuffixAlphabet);
+			progress = BootstrapJournal {topology_.topology_uuid, options.router_name,
+				BootstrapPhase::discovered, registration.router_id, metadata_user, {}};
+		} else {
+			progress = BootstrapJournal {topology_.topology_uuid, options.router_name,
+				BootstrapPhase::discovered, journal && journal->router_id ? journal->router_id : 0,
+				metadata_user, {}};
+		}
+		store_.save_journal(*progress);
+		unsigned password_retries_remaining = options.password_retries;
+		for (;;) {
+			try {
+				ensure_account(session_, options, metadata_user, password,
+					persisted_secret.has_value(), generated_account, false);
+				break;
+			} catch (const std::exception& error) {
+				if (persisted_secret || password_retries_remaining == 0 ||
+					!password_policy_rejection(error.what())) {
+					throw;
+				}
+				--password_retries_remaining;
+				wipe_password(password);
+				password = random_password();
+			}
+		}
 		progress->phase = BootstrapPhase::account_ready;
 		store_.save_journal(*progress);
 
-		if (!registration_has_metadata_user) {
+		if (registration.router_id == 0 || generated_account) {
+			registration_options.force = registration.router_id != 0 || registration_options.force;
 			registration = register_or_adopt_router(
-				session_, topology_, options, router_address_, metadata_user);
+				session_, topology_, registration_options, router_address_, metadata_user);
 		}
+		progress->router_id = registration.router_id;
 		progress->phase = BootstrapPhase::registered;
 		store_.save_journal(*progress);
 		store_.put_secret(secret_name, password);
@@ -231,9 +277,9 @@ BootstrapResult MysqlRouterBootstrap::run(const BootstrapOptions& options) {
 		BootstrapIdentity completed {topology_.topology_uuid, topology_.topology_name,
 			registration.router_id, options.router_name, router_address_, metadata_user,
 			options.seed.host, options.seed.port};
+		const AccountSnapshot accounts = UserSynchronizer::read(session_, metadata_user);
 		completed.topology_generation = store_.publish_topology(
 			topology_, options.listeners, next_generation);
-		const AccountSnapshot accounts = UserSynchronizer::read(session_, metadata_user);
 		if (completed.topology_generation == static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
 			throw std::runtime_error("Router user generation is exhausted");
 		}
@@ -341,7 +387,8 @@ void collect_snapshot_column(const SQLite3_result& result, std::string_view name
 	std::set<int>& destination) {
 	const int column = column_index(result, name);
 	for (auto* row : result.rows) {
-		destination.insert(static_cast<int>(local_int64(row->fields[column], name.data())));
+		const int64_t value = local_nonnegative(row->fields[column], name.data());
+		if (value != 0) destination.insert(static_cast<int>(value));
 	}
 }
 
@@ -349,7 +396,8 @@ void collect_query_column(SQLite3DB& db, const std::string& sql,
 	std::set<int>& destination) {
 	auto rows = local_query(db, sql);
 	for (auto* row : rows->rows) {
-		destination.insert(static_cast<int>(local_int64(row->fields[0], "configuration ID")));
+		const int64_t value = local_nonnegative(row->fields[0], "configuration ID");
+		if (value != 0) destination.insert(static_cast<int>(value));
 	}
 }
 
@@ -410,13 +458,8 @@ std::vector<CurrentMysqlUser> current_mysql_users(SQLite3DB& db) {
 				if (result[index].backend && !result[index].frontend) backend = &result[index];
 				if (!result[index].backend && result[index].frontend) frontend = &result[index];
 			}
-			const auto managed = [](const CurrentMysqlUser& user) {
-				return std::tie(user.username, user.password, user.active, user.use_ssl,
-					user.default_hostgroup, user.default_schema, user.schema_locked,
-					user.transaction_persistent, user.fast_forward, user.max_connections,
-					user.attributes, user.comment, user.owned);
-			};
-			if (backend != nullptr && frontend != nullptr && managed(*backend) == managed(*frontend)) {
+			if (backend != nullptr && frontend != nullptr &&
+				mysql_router_same_managed_user_attributes(*backend, *frontend)) {
 				CurrentMysqlUser combined = *backend;
 				combined.backend = true;
 				combined.frontend = true;
@@ -525,11 +568,9 @@ public:
 		identity.metadata_user = row->fields[4] ? row->fields[4] : "";
 		identity.metadata_host = row->fields[5] ? row->fields[5] : "";
 		identity.metadata_port = static_cast<uint16_t>(local_int64(row->fields[6], "metadata_port"));
-		const int64_t topology_generation = local_int64(row->fields[7], "topology_generation");
-		const int64_t user_generation = local_int64(row->fields[8], "user_generation");
-		if (topology_generation < 0 || user_generation < 0) {
-			throw std::runtime_error("persisted Router generation is negative");
-		}
+		const int64_t topology_generation = local_nonnegative(
+			row->fields[7], "topology_generation");
+		const int64_t user_generation = local_nonnegative(row->fields[8], "user_generation");
 		identity.topology_generation = static_cast<uint64_t>(topology_generation);
 		identity.user_generation = static_cast<uint64_t>(user_generation);
 		return identity;
@@ -769,7 +810,30 @@ uint64_t PluginBootstrapStore::publish_users_snapshot(const DesiredTopology& top
 	ManagedUserGeneration normalized = UserSynchronizer::normalize(snapshot, input);
 	const uint64_t published = publish_generation(
 		topology, effective, listeners, generation, normalized.users);
-	persist_mysql_router_users(*admindb, published, normalized.status);
+	try {
+		persist_mysql_router_users(*admindb, published, normalized.status);
+	} catch (...) {
+		const std::exception_ptr persistence_failure = std::current_exception();
+		if (published == static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+			throw std::runtime_error(
+				"user-state persistence failed and the active generation cannot be restored");
+		}
+		std::vector<ManagedMysqlUser> previous_owned;
+		for (const CurrentMysqlUser& current : input.current_users) {
+			if (!current.owned) continue;
+			ManagedMysqlUser user;
+			static_cast<CurrentMysqlUser&>(user) = current;
+			previous_owned.push_back(std::move(user));
+		}
+		try {
+			(void)publish_generation(topology, effective, listeners,
+				published + 1, previous_owned);
+		} catch (...) {
+			throw std::runtime_error(
+				"user-state persistence failed and the prior runtime users could not be restored");
+		}
+		std::rethrow_exception(persistence_failure);
+	}
 	return published;
 }
 

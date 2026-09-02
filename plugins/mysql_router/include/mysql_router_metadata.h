@@ -39,16 +39,9 @@ public:
 	virtual QueryResult query(std::string_view sql, const std::vector<SqlValue>& params) = 0;
 	virtual ExecResult execute(std::string_view sql, const std::vector<SqlValue>& params) = 0;
 	virtual ServerVersion server_version() const = 0;
-	virtual std::string quote_sql_string(std::string_view value) const {
-		std::string quoted("'");
-		quoted.reserve(value.size() + 2);
-		for (char character : value) {
-			if (character == '\'' || character == '\\') quoted.push_back(character);
-			quoted.push_back(character);
-		}
-		quoted.push_back('\'');
-		return quoted;
-	}
+	// Quoting must follow the live connection's SQL mode. Implementations may
+	// not assume whether NO_BACKSLASH_ESCAPES is enabled.
+	virtual std::string quote_sql_string(std::string_view value) const = 0;
 };
 
 class ConnectorCMetadataSession final : public IMetadataSession {

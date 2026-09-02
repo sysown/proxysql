@@ -4,6 +4,7 @@
 #include "mysql_router_metadata.h"
 #include "mysql_router_users.h"
 
+#include <algorithm>
 #include <optional>
 #include <stdexcept>
 
@@ -21,9 +22,11 @@ public:
 	bool complete_grants {true};
 	unsigned router_inserts {0};
 	unsigned account_creates {0};
+	unsigned rejected_passwords {0};
 	unsigned account_alters {0};
 	unsigned registration_updates {0};
 	unsigned grants {0};
+	std::vector<std::string> mutations;
 
 	QueryResult query(std::string_view sql, const std::vector<SqlValue>&) override {
 		if (sql.find("FROM mysql_innodb_cluster_metadata.v2_routers") != std::string_view::npos) {
@@ -63,14 +66,19 @@ public:
 	}
 
 	ExecResult execute(std::string_view sql, const std::vector<SqlValue>&) override {
+		mutations.emplace_back(sql);
 		if (sql.find("INSERT INTO mysql_innodb_cluster_metadata.v2_routers") != std::string_view::npos) {
 			router_exists = true;
 			++router_inserts;
 		} else if (sql.find("UPDATE mysql_innodb_cluster_metadata.v2_routers") != std::string_view::npos) {
 			++registration_updates;
 		} else if (sql.find("CREATE USER") != std::string_view::npos) {
-			account_exists = true;
 			++account_creates;
+			if (rejected_passwords != 0) {
+				--rejected_passwords;
+				return {false, 0, "password policy rejected generated password"};
+			}
+			account_exists = true;
 		} else if (sql.find("ALTER USER") != std::string_view::npos) {
 			++account_alters;
 		} else if (sql.find("GRANT ") != std::string_view::npos) {
@@ -85,6 +93,9 @@ public:
 	}
 
 	ServerVersion server_version() const override { return {8, 4, 6}; }
+	std::string quote_sql_string(std::string_view value) const override {
+		return "'" + std::string(value) + "'";
+	}
 };
 
 class MemoryBootstrapStore final : public IBootstrapStore {
@@ -97,7 +108,10 @@ public:
 	unsigned user_publications {0};
 	bool fail_publication {false};
 
-	std::optional<BootstrapJournal> load_journal(std::string_view) override { return journal; }
+	std::optional<BootstrapJournal> load_journal(std::string_view topology_uuid) override {
+		return journal && journal->topology_uuid == topology_uuid
+			? journal : std::nullopt;
+	}
 	std::optional<BootstrapIdentity> load_identity() override { return identity; }
 	void save_journal(const BootstrapJournal& value) override { journal = value; }
 	void put_secret(std::string_view, const std::vector<uint8_t>& value) override { secret = value; }
@@ -152,7 +166,7 @@ ProxySQL_PluginMysqlConfigResult available_v1_publisher(
 } // namespace
 
 int main() {
-	plan(25);
+	plan(27);
 
 	BootstrapSession session;
 	MemoryBootstrapStore store;
@@ -174,8 +188,7 @@ int main() {
 	auto first = bootstrap.run(options());
 	ok(first.success && first.router_id == 17, "a first bootstrap completes with the assigned router id");
 	ok(session.router_inserts == 1, "the Router registration is inserted exactly once");
-	ok(session.account_creates == 1 && session.account_exists, "one metadata service account is created");
-	ok(session.grants == 12, "the complete MySQL Shell-compatible grant set is applied");
+	ok(session.grants == 10, "the complete InnoDB Cluster grant set is applied without ClusterSet views");
 	ok(first.metadata_user.rfind("mysql_router17_", 0) == 0 && first.metadata_user.size() == 27,
 	   "an omitted account name derives from router id plus twelve lowercase characters");
 	ok(store.secret.size() == 32, "the generated service password is persisted as 32 bytes");
@@ -259,10 +272,50 @@ int main() {
 	grants_session.account_exists = true;
 	grants_session.complete_grants = false;
 	MemoryBootstrapStore grants_store;
+	grants_store.secret.assign(32, 'x');
 	auto missing_grants = MysqlRouterBootstrap(grants_session, grants_store, topology(),
 		"proxy.example").run(reuse_options);
 	ok(!missing_grants.success && missing_grants.error.find("required grants") != std::string::npos,
 	   "reusing an account with incomplete grants fails closed");
+
+	BootstrapSession unnamed_secret_session;
+	unnamed_secret_session.router_exists = true;
+	unnamed_secret_session.account_exists = true;
+	MemoryBootstrapStore unnamed_secret_store;
+	auto unnamed_secret = MysqlRouterBootstrap(unnamed_secret_session, unnamed_secret_store,
+		topology(), "proxy.example").run(reuse_options);
+	ok(!unnamed_secret.success && unnamed_secret.error.find("no persisted credential") !=
+	   std::string::npos && unnamed_secret_session.registration_updates == 0,
+	   "an existing named account without a persisted credential fails before registration mutation");
+
+	BootstrapSession explicit_session;
+	MemoryBootstrapStore explicit_store;
+	auto explicit_options = options();
+	explicit_options.service_account = "new_router_account";
+	auto explicit_result = MysqlRouterBootstrap(explicit_session, explicit_store, topology(),
+		"proxy.example").run(explicit_options);
+	auto account_mutation = std::find_if(explicit_session.mutations.begin(),
+		explicit_session.mutations.end(), [](const std::string& sql) {
+			return sql.find("CREATE USER") != std::string::npos;
+		});
+	auto registration_mutation = std::find_if(explicit_session.mutations.begin(),
+		explicit_session.mutations.end(), [](const std::string& sql) {
+			return sql.find("INSERT INTO mysql_innodb_cluster_metadata.v2_routers") != std::string::npos;
+		});
+	ok(explicit_result.success && account_mutation != explicit_session.mutations.end() &&
+	   registration_mutation != explicit_session.mutations.end() &&
+	   account_mutation < registration_mutation,
+	   "an explicit metadata account is created before its Router registration is published");
+
+	BootstrapSession password_policy_session;
+	password_policy_session.rejected_passwords = 2;
+	MemoryBootstrapStore password_policy_store;
+	auto password_policy_options = options();
+	password_policy_options.password_retries = 2;
+	auto password_policy_result = MysqlRouterBootstrap(password_policy_session,
+		password_policy_store, topology(), "proxy.example").run(password_policy_options);
+	ok(password_policy_result.success && password_policy_session.account_creates == 3,
+	   "password-retries regenerates a rejected service-account password before succeeding");
 
 	BootstrapSession interrupted_session;
 	interrupted_session.router_exists = true;
@@ -273,7 +326,7 @@ int main() {
 	auto resumed = MysqlRouterBootstrap(interrupted_session, interrupted_store, topology(),
 		"proxy.example").run(options());
 	ok(resumed.success && interrupted_session.account_alters == 1 &&
-	   interrupted_session.grants == 12 && interrupted_store.secret.size() == 32,
+	   interrupted_session.grants == 10 && interrupted_store.secret.size() == 32,
 	   "retry recovers a plugin-generated account interrupted before secret persistence");
 
 	BootstrapSession publication_session;

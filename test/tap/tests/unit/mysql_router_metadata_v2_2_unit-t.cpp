@@ -37,6 +37,9 @@ public:
 	}
 
 	ServerVersion server_version() const override { return {8, 4, 6}; }
+	std::string quote_sql_string(std::string_view value) const override {
+		return "'" + std::string(value) + "'";
+	}
 };
 
 const char* kSchemaVersion =
