@@ -89,6 +89,9 @@ RouterOptions parse_options(const std::string& value) {
 		else throw std::runtime_error("invalid quorum traffic policy");
 	}
 	if (json.contains("stats_updates_frequency")) {
+		if (json["stats_updates_frequency"].is_null()) {
+			return options;
+		}
 		if (!json["stats_updates_frequency"].is_number_integer()) {
 			throw std::runtime_error("invalid stats update frequency");
 		}

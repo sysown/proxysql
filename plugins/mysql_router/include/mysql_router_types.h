@@ -101,6 +101,7 @@ struct ObservedMember {
 
 struct ObservedHealth {
 	std::map<std::string, ObservedMember> members;
+	std::string session_server_uuid;
 	bool single_primary_mode {false};
 	bool quorum {false};
 	bool read_only {true};

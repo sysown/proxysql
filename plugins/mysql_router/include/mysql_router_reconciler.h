@@ -101,6 +101,8 @@ private:
 	std::string last_issue_;
 	uint64_t last_topology_attempt_ms_ {0};
 	uint64_t last_user_attempt_ms_ {0};
+	bool topology_attempted_ {false};
+	bool user_attempted_ {false};
 	bool first_valid_topology_ {false};
 
 	std::atomic<bool> running_ {false};

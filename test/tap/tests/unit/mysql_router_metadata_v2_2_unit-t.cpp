@@ -105,7 +105,7 @@ bool read_throws(ScriptedMetadataSession session, const char* needle) {
 } // namespace
 
 int main() {
-	plan(27);
+	plan(28);
 
 	ScriptedMetadataSession probe;
 	probe.expected.push_back({kSchemaVersion, {}, {{row({
@@ -195,6 +195,17 @@ int main() {
 		"{\"stats_updates_frequency\":-1}";
 	ok(read_throws(std::move(invalid_frequency), "frequency"),
 	   "negative stats update frequency is rejected");
+	auto null_frequency = valid_session();
+	null_frequency.expected[4].result.rows[0]["router_options"] =
+		"{\"stats_updates_frequency\":null}";
+	bool null_frequency_disabled = false;
+	try {
+		auto disabled_stats = MetadataV2_2::read_innodb_cluster(
+			null_frequency, "cluster-1", 42);
+		null_frequency_disabled = !disabled_stats.options.stats_updates_frequency.has_value();
+	} catch (const std::exception&) {}
+	ok(null_frequency_disabled,
+	   "a null stats update frequency disables metadata check-ins");
 	auto missing_capability = valid_session();
 	missing_capability.expected[1].result.rows[0]["instances_endpoint"] = "0";
 	ok(read_throws(std::move(missing_capability), "required metadata"),

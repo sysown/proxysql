@@ -55,14 +55,15 @@ GrSession healthy_session(bool primary_super_read_only = false) {
 			{"member_state", "RECOVERING"}, {"member_role", "SECONDARY"}, {"single_primary", "ON"}})
 	}});
 	session.results.push_back({{row({{"read_only", "0"},
-		{"super_read_only", primary_super_read_only ? "1" : "0"}})}});
+		{"super_read_only", primary_super_read_only ? "1" : "0"},
+		{"server_uuid", "server-1"}})}});
 	return session;
 }
 
 } // namespace
 
 int main() {
-	plan(21);
+	plan(24);
 
 	auto session = healthy_session();
 	auto observed = GrHealthReader::read(session);
@@ -99,6 +100,7 @@ int main() {
 
 	auto no_quorum = observed;
 	no_quorum.members["server-2"].state = HealthState::unreachable;
+	no_quorum.members["server-3"].state = HealthState::offline;
 	no_quorum.quorum = calculate_gr_quorum(no_quorum.members);
 	ok(!no_quorum.quorum, "one ONLINE member out of three has no quorum");
 	topology.options.quorum_traffic = QuorumTraffic::none;
@@ -118,11 +120,49 @@ int main() {
 	unreachable.members["server-1"] = {"server-1", "db1", 3306,
 		HealthState::unreachable, DesiredRole::writer};
 	unreachable.members["server-2"] = {"server-2", "db2", 3306,
-		HealthState::offline, DesiredRole::reader};
+		HealthState::recovering, DesiredRole::reader};
 	unreachable.members["server-3"] = {"server-3", "db3", 3306,
 		HealthState::recovering, DesiredRole::reader};
 	unreachable.quorum = calculate_gr_quorum(unreachable.members);
-	ok(!unreachable.quorum, "unreachable, offline, and recovering members never count toward quorum");
+	ok(unreachable.quorum,
+	   "RECOVERING members count toward the established GR view quorum without receiving traffic");
+
+	auto secondary_session = healthy_session();
+	secondary_session.results[1].rows[0]["read_only"] = "1";
+	secondary_session.results[1].rows[0]["super_read_only"] = "1";
+	secondary_session.results[1].rows[0]["server_uuid"] = "server-2";
+	auto observed_from_secondary = GrHealthReader::read(secondary_session);
+	auto routed_from_secondary = evaluate_innodb_cluster(desired(), observed_from_secondary);
+	ok(routed_from_secondary.writer && *routed_from_secondary.writer == "server-1",
+	   "read-only globals from the polled secondary do not suppress the observed PRIMARY writer");
+
+	GrSession error_member;
+	error_member.results.push_back({{
+		row({{"member_id", "server-1"}, {"member_host", "db1"}, {"member_port", "3306"},
+			{"member_state", "ONLINE"}, {"member_role", "PRIMARY"}, {"single_primary", "ON"}}),
+		row({{"member_id", "server-2"}, {"member_host", "db2"}, {"member_port", "3306"},
+			{"member_state", "ERROR"}, {"member_role", "SECONDARY"}, {"single_primary", "ON"}})
+	}});
+	error_member.results.push_back({{row({{"read_only", "0"}, {"super_read_only", "0"},
+		{"server_uuid", "server-1"}})}});
+	bool error_member_excluded = false;
+	try {
+		auto error_observed = GrHealthReader::read(error_member);
+		error_member_excluded =
+			error_observed.members.at("server-2").state == HealthState::offline;
+	} catch (const std::exception&) {}
+	ok(error_member_excluded,
+	   "an ERROR member is excluded without invalidating healthy GR observations");
+
+	bool multi_primary_rejected = false;
+	try {
+		auto multi_primary = observed;
+		multi_primary.single_primary_mode = false;
+		multi_primary.members["server-2"].role = DesiredRole::writer;
+		(void)evaluate_innodb_cluster(desired(), multi_primary);
+	} catch (const std::exception&) { multi_primary_rejected = true; }
+	ok(multi_primary_rejected,
+	   "unsupported multi-primary GR mode fails closed instead of selecting an order-dependent writer");
 
 	auto missing = observed;
 	missing.members.erase("server-2");

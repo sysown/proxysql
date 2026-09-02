@@ -12,7 +12,8 @@ constexpr const char* kMembers =
 	"FROM performance_schema.replication_group_members "
 	"WHERE CHANNEL_NAME='group_replication_applier'";
 constexpr const char* kWritableGlobals =
-	"SELECT @@global.read_only AS read_only, @@global.super_read_only AS super_read_only";
+	"SELECT @@server_uuid AS server_uuid, @@global.read_only AS read_only, "
+	"@@global.super_read_only AS super_read_only";
 
 const std::string& required(const QueryRow& row, const char* column) {
 	auto it = row.find(column);
@@ -44,7 +45,8 @@ bool calculate_gr_quorum(const std::map<std::string, ObservedMember>& members) {
 	if (members.empty()) return false;
 	size_t online = 0;
 	for (const auto& entry : members) {
-		if (entry.second.state == HealthState::online) ++online;
+		if (entry.second.state == HealthState::online ||
+			entry.second.state == HealthState::recovering) ++online;
 	}
 	return online > members.size() / 2;
 }
@@ -62,6 +64,7 @@ ObservedHealth GrHealthReader::read(IMetadataSession& session) {
 		else if (state == "RECOVERING") member.state = HealthState::recovering;
 		else if (state == "OFFLINE") member.state = HealthState::offline;
 		else if (state == "UNREACHABLE") member.state = HealthState::unreachable;
+		else if (state == "ERROR") member.state = HealthState::offline;
 		else throw std::runtime_error("invalid GR member state");
 		const std::string& role = required(row, "member_role");
 		if (role == "PRIMARY") member.role = DesiredRole::writer;
@@ -78,6 +81,7 @@ ObservedHealth GrHealthReader::read(IMetadataSession& session) {
 	}
 	QueryResult globals = session.query(kWritableGlobals, {});
 	if (globals.rows.size() != 1) throw std::runtime_error("GR writable globals row is missing");
+	observed.session_server_uuid = required(globals.rows[0], "server_uuid");
 	observed.read_only = bool_value(globals.rows[0], "read_only");
 	observed.super_read_only = bool_value(globals.rows[0], "super_read_only");
 	observed.quorum = calculate_gr_quorum(observed.members);
@@ -87,6 +91,9 @@ ObservedHealth GrHealthReader::read(IMetadataSession& session) {
 EffectiveTopology evaluate_innodb_cluster(
 	const DesiredTopology& desired, const ObservedHealth& observed) {
 	EffectiveTopology effective;
+	if (!observed.single_primary_mode) {
+		throw std::runtime_error("multi-primary Group Replication is unsupported");
+	}
 	if (!observed.quorum && desired.options.quorum_traffic == QuorumTraffic::none) return effective;
 	for (const DesiredInstance& instance : desired.instances) {
 		if (instance.kind == InstanceKind::read_replica) {
@@ -102,7 +109,10 @@ EffectiveTopology evaluate_innodb_cluster(
 		}
 		if (!observed.quorum && desired.options.quorum_traffic == QuorumTraffic::read) continue;
 		if (found->second.role == DesiredRole::writer) {
-			if (!observed.read_only && !observed.super_read_only) effective.writer = instance.server_uuid;
+			const bool polled_primary = observed.session_server_uuid == instance.server_uuid;
+			if (!polled_primary || (!observed.read_only && !observed.super_read_only)) {
+				effective.writer = instance.server_uuid;
+			}
 		} else {
 			if (desired.options.read_only_targets != ReadOnlyTargets::read_replicas) {
 				effective.readers.push_back(instance.server_uuid);

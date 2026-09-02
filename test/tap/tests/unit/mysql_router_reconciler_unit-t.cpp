@@ -30,7 +30,9 @@ public:
 	bool fail_users {false};
 	bool fail_topology {false};
 	bool gate_ready {false};
+	bool fail_gate_open {false};
 	unsigned topology_publishes {0};
+	unsigned topology_reads {0};
 	unsigned user_publishes {0};
 	unsigned transition_events {0};
 	unsigned transition_logs {0};
@@ -40,6 +42,7 @@ public:
 
 	uint64_t monotonic_ms() const override { return now; }
 	ReconcileTopologySnapshot read_topology() override {
+		++topology_reads;
 		if (candidates.empty()) throw std::runtime_error("metadata unavailable");
 		auto result = candidates.front();
 		candidates.pop_front();
@@ -61,7 +64,13 @@ public:
 		++user_publishes;
 		return generation;
 	}
-	void set_gates(bool ready, std::string_view) override { gate_ready = ready; }
+	void set_gates(bool ready, std::string_view) override {
+		gate_ready = ready;
+		if (ready && fail_gate_open) {
+			gate_ready = false;
+			throw std::runtime_error("listener gate publication failed");
+		}
+	}
 	void record_transition(std::string_view, std::string_view, std::string_view,
 		bool log_transition) override {
 		++transition_events;
@@ -78,7 +87,7 @@ public:
 } // namespace
 
 int main() {
-	plan(28);
+	plan(30);
 
 	Backend backend;
 	MysqlRouterReconciler reconciler(backend, {2000, 30000}, 10, 9);
@@ -216,6 +225,27 @@ int main() {
 	   "a failed topology publication retains the active topology generation");
 	ok(!rejected.users_published && failed_publish_backend.user_publishes == 1,
 	   "a due user refresh cannot publish the rejected topology in the same cycle");
+
+	Backend gate_failure_backend;
+	gate_failure_backend.candidates.push_back(topology("gate-ready"));
+	MysqlRouterReconciler gate_failure(gate_failure_backend, {1, 30000}, 0, 0);
+	(void)gate_failure.refresh({true, true});
+	gate_failure_backend.now += 1;
+	gate_failure_backend.fail_gate_open = true;
+	gate_failure_backend.candidates.push_back(topology("gate-failure"));
+	auto failed_gate = gate_failure.refresh({false, false});
+	ok(!failed_gate.gates_ready && !gate_failure_backend.gate_ready,
+	   "a failed listener-gate publication cannot retain a stale ready status");
+
+	Backend zero_clock_backend;
+	zero_clock_backend.now = 0;
+	zero_clock_backend.candidates.push_back(topology("zero-clock"));
+	MysqlRouterReconciler zero_clock(zero_clock_backend, {2000, 30000}, 0, 0);
+	(void)zero_clock.refresh({true, true});
+	(void)zero_clock.refresh({false, false});
+	ok(zero_clock_backend.topology_reads == 1 && zero_clock_backend.topology_publishes == 1 &&
+		zero_clock_backend.user_publishes == 1,
+	   "a zero monotonic timestamp remains a completed attempt instead of immediately repeating");
 
 	return exit_status();
 }

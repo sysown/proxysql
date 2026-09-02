@@ -7,8 +7,8 @@
 
 namespace {
 
-bool due(uint64_t now, uint64_t previous, uint64_t interval) {
-	return previous == 0 || interval == 0 || now < previous || now - previous >= interval;
+bool due(uint64_t now, uint64_t previous, uint64_t interval, bool attempted) {
+	return !attempted || interval == 0 || now < previous || now - previous >= interval;
 }
 
 } // namespace
@@ -70,11 +70,12 @@ ReconcileResult MysqlRouterReconciler::refresh(RefreshRequest request) {
 	status_.users_published = false;
 	const uint64_t now = backend_.monotonic_ms();
 	const bool topology_due = request.force_topology ||
-		due(now, last_topology_attempt_ms_, schedule_.topology_interval_ms);
+		due(now, last_topology_attempt_ms_, schedule_.topology_interval_ms, topology_attempted_);
 	const uint64_t topology_from = status_.topology_generation;
 	bool topology_refresh_valid = !topology_due;
 	if (topology_due) {
 		last_topology_attempt_ms_ = now;
+		topology_attempted_ = true;
 		try {
 			ReconcileTopologySnapshot candidate = backend_.read_topology();
 			status_.metadata_available = candidate.metadata_available;
@@ -104,8 +105,9 @@ ReconcileResult MysqlRouterReconciler::refresh(RefreshRequest request) {
 					if (drifted) backend_.record_drift_correction();
 				}
 				status_.topology_error.clear();
-				status_.gates_ready = true;
+				status_.gates_ready = false;
 				backend_.set_gates(true, {});
+				status_.gates_ready = true;
 				first_valid_topology_ = true;
 				if (!candidate.warning_code.empty()) {
 					issue(candidate.warning_kind.empty() ? "metadata" : candidate.warning_kind,
@@ -123,12 +125,13 @@ ReconcileResult MysqlRouterReconciler::refresh(RefreshRequest request) {
 	}
 
 	const bool users_due = request.force_users ||
-		(first_valid_topology_ && last_user_attempt_ms_ == 0) ||
-		due(now, last_user_attempt_ms_, schedule_.user_interval_ms);
+		(first_valid_topology_ && !user_attempted_) ||
+		due(now, last_user_attempt_ms_, schedule_.user_interval_ms, user_attempted_);
 	if (first_valid_topology_ && status_.registration_exists && status_.metadata_available &&
 		topology_refresh_valid && users_due) {
 		const uint64_t user_from = status_.user_generation;
 		last_user_attempt_ms_ = now;
+		user_attempted_ = true;
 		try {
 			AccountSnapshot snapshot = backend_.read_users();
 			const uint64_t requested = next_generation();

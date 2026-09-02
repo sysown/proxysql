@@ -336,8 +336,11 @@ public:
 			if (snapshot.desired.options.stats_updates_frequency &&
 				*snapshot.desired.options.stats_updates_frequency != 0) {
 				const uint64_t now = monotonic_ms();
+				const uint64_t frequency = *snapshot.desired.options.stats_updates_frequency;
+				const uint64_t interval = frequency > std::numeric_limits<uint64_t>::max() / 1000
+					? std::numeric_limits<uint64_t>::max() : frequency * 1000;
 				if (last_check_in_ms_ == 0 || now - last_check_in_ms_ >=
-					*snapshot.desired.options.stats_updates_frequency * 1000) {
+					interval) {
 					ExecResult checked_in = session_->execute(
 						"UPDATE mysql_innodb_cluster_metadata.v2_routers SET last_check_in=NOW() WHERE router_id=?",
 						{static_cast<int64_t>(router_id_)});
