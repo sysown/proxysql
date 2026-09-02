@@ -153,6 +153,12 @@ struct bootstrap_info_t {
 struct bootstrap_info_t {};
 #endif /* PROXYSQL40 */
 
+/**
+ * Atomically replaces mysql_users with users returned by the bootstrap query.
+ * MySQL field lengths are preserved when binding values to SQLite.
+ */
+bool import_bootstrap_users(SQLite3DB* db, MYSQL_RES* users, std::string& error);
+
 // ProxySQL_Admin shared variables
 extern int admin__web_verbosity;
 
