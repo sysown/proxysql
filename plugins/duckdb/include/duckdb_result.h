@@ -3,6 +3,8 @@
 
 #include "duckdb.h"
 
+#include <string>
+
 class SQLite3_result;
 
 // Converts a materialised duckdb_result into the SQLite3_result that
@@ -81,8 +83,16 @@ class SQLite3_result;
 // raw result (duckdb_rows_changed(), etc.), rather than through an extra
 // indirection that would add nothing beyond forwarding the call.
 //
-// The caller owns the returned object and must `delete` it.
-SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res);
+// The caller owns the returned object and must `delete` it. When `error` is
+// non-null, conversion failures are reported there and nullptr is returned.
+SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res,
+                                         std::string* error = nullptr);
+
+// Appends one length-aware converted row and translates SQLite's status into
+// the converter's error contract. This keeps an oversized row from being
+// silently omitted when SQLite3_result rejects its int-sized representation.
+bool duckdb_append_sqlite3_row(SQLite3_result& out, char** fields,
+                               const unsigned long* sizes, std::string& error);
 
 // Answers "is every column on the direct-conversion allowlist?" -- true
 // if ANY column's duckdb_column_type() is one that GetInternalCValue's

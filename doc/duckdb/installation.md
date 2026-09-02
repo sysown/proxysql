@@ -43,14 +43,23 @@ The build-tree artifact is:
 plugins/duckdb/ProxySQL_DuckDB_Plugin.so
 ```
 
+To install the built ProxySQL binary, configuration, and available plugins in
+their standard system locations, run:
+
+```bash
+sudo make PROXYSQL40=1 install
+```
+
 The standard installed location is:
 
 ```text
 /usr/lib/proxysql/plugins/ProxySQL_DuckDB_Plugin.so
 ```
 
-If a package or local installation uses another path, use that exact absolute
-path in `proxysql.cnf`.
+If you run directly from the source tree instead, configure the absolute path
+to `plugins/duckdb/ProxySQL_DuckDB_Plugin.so` in that checkout. Packages and
+custom installations must likewise use the artifact's exact absolute path in
+`proxysql.cnf`.
 
 ## Configure plugin loading
 

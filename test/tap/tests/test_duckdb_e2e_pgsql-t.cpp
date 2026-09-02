@@ -83,7 +83,7 @@ bool receive_message_type(PGconn* c, char& type, int timeout_ms) {
 }
 
 bool extended_error_resynchronizes_on_sync(PGconn* c) {
-	if (!send_empty_message(c, 'P') || !send_empty_message(c, 'B')) return false;
+	if (!send_empty_message(c, 'P') || !send_empty_message(c, 'H')) return false;
 
 	char type = 0;
 	if (!receive_message_type(c, type, 1000) || type != 'E') return false;
@@ -252,7 +252,7 @@ int main(int argc, char** argv) {
 	{
 		PGconn* extended = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password);
 		ok(extended != NULL && extended_error_resynchronizes_on_sync(extended),
-		   "extended-query rejection emits one error, discards until Sync, then sends ReadyForQuery");
+		   "extended-query rejection emits one error, discards Flush until Sync, then sends ReadyForQuery");
 		if (extended != NULL) PQfinish(extended);
 	}
 

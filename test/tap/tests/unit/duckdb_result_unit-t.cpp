@@ -3,6 +3,7 @@
 #include "sqlite3db.h"
 #include "tap.h"
 
+#include <climits>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -33,7 +34,7 @@ bool field_equals(const SQLite3_result* result, size_t row, size_t column,
 } // namespace
 
 int main() {
-	plan(30);
+	plan(31);
 
 	duckdb_database db = nullptr;
 	duckdb_connection conn = nullptr;
@@ -176,6 +177,17 @@ int main() {
 		std::unique_ptr<SQLite3_result> r(run(conn, "SELECT 1 WHERE false"));
 		ok(r && r->columns == 1 && r->rows_count == 0,
 		   "empty resultset keeps its column definitions");
+	}
+
+	{
+		char byte = 'x';
+		char* fields[] = { &byte };
+		const unsigned long sizes[] = { static_cast<unsigned long>(INT_MAX) + 1UL };
+		SQLite3_result result(1);
+		std::string error;
+		ok(!duckdb_append_sqlite3_row(result, fields, sizes, error) &&
+		   result.rows_count == 0 && error.find("INT_MAX") != std::string::npos,
+		   "DuckDB conversion propagates an oversized row instead of silently dropping it");
 	}
 
 	{

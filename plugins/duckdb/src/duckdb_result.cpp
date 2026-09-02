@@ -6,7 +6,20 @@
 #include <string>
 #include <vector>
 
-SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res) {
+bool duckdb_append_sqlite3_row(SQLite3_result& out, char** fields,
+                               const unsigned long* sizes, std::string& error) {
+	const int rc = out.add_row(fields, sizes);
+	if (rc == SQLITE_ROW) return true;
+	if (rc == SQLITE_TOOBIG) {
+		error = "DuckDB result row exceeds ProxySQL's INT_MAX row-size limit";
+	} else {
+		error = "failed to append DuckDB result row: SQLite status " + std::to_string(rc);
+	}
+	return false;
+}
+
+SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error) {
+	if (error != nullptr) error->clear();
 	if (res == nullptr) return nullptr;
 
 	const idx_t ncols = duckdb_column_count(res);
@@ -52,7 +65,13 @@ SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res) {
 				fields[c] = rendered[c].data();
 				sizes[c] = static_cast<unsigned long>(rendered[c].size());
 			}
-			out->add_row(fields.data(), sizes.data());
+			std::string row_error;
+			if (!duckdb_append_sqlite3_row(*out, fields.data(), sizes.data(), row_error)) {
+				duckdb_destroy_data_chunk(&chunk);
+				delete out;
+				if (error != nullptr) *error = row_error;
+				return nullptr;
+			}
 		}
 		duckdb_destroy_data_chunk(&chunk);
 	}

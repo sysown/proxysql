@@ -122,6 +122,7 @@ DuckDBPgsqlAction duckdb_pgsql_message_action(DuckDBSessionState& state, char ty
 		state.pgsql_extended_error = true;
 		return DuckDBPgsqlAction::send_error;
 	}
+	if (type == 'H') return DuckDBPgsqlAction::discard;
 	if (type == 'S') return DuckDBPgsqlAction::send_ready;
 	return DuckDBPgsqlAction::process;
 }
@@ -418,8 +419,15 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 	// the wrap (every column now VARCHAR). Either way it already ran
 	// exactly once above, so just convert it.
 	outcome.has_resultset = true;
-	outcome.result = duckdb_result_to_sqlite3(&res);
+	std::string conversion_error;
+	outcome.result = duckdb_result_to_sqlite3(&res, &conversion_error);
 	duckdb_destroy_result(&res);
+	if (!conversion_error.empty()) {
+		outcome.ok = false;
+		outcome.has_resultset = false;
+		outcome.error_type = DUCKDB_ERROR_OUT_OF_RANGE;
+		outcome.error = conversion_error;
+	}
 	return outcome;
 }
 

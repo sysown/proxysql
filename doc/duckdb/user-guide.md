@@ -58,7 +58,9 @@ a general dialect compatibility layer.
 
 ## Transactions
 
-DuckDB transaction commands can be issued as ordinary text queries:
+DuckDB transaction commands can be issued as ordinary text queries. Each line
+below must be sent as a separate request; interactive clients normally split
+them at the statement terminator:
 
 ```sql
 BEGIN;
@@ -72,7 +74,8 @@ invalidates an explicit transaction, issue `ROLLBACK` before continuing.
 
 ## Session settings
 
-DuckDB-native settings are sent to the engine:
+DuckDB-native settings are sent to the engine. In this example, `SET` and
+`SELECT` are two separate requests:
 
 ```sql
 SET threads=4;

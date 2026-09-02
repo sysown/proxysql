@@ -35,7 +35,7 @@ int scalar_count(duckdb_connection conn, const char* sql) {
 } // namespace
 
 int main() {
-	plan(43);
+	plan(44);
 
 	ok(classify("SELECT @@version") == DuckDBIntercept::version,
 	   "SELECT @@version is intercepted");
@@ -105,6 +105,9 @@ int main() {
 	   "Sync ends extended-query error recovery with ReadyForQuery");
 	ok(duckdb_pgsql_message_action(pgsql_state, 'Q') == DuckDBPgsqlAction::process,
 	   "simple queries resume after Sync");
+	DuckDBSessionState pgsql_flush_state;
+	ok(duckdb_pgsql_message_action(pgsql_flush_state, 'H') == DuckDBPgsqlAction::discard,
+	   "a normal PostgreSQL Flush is consumed as a protocol message, not parsed as SQL");
 
 	// --- Live-connection behavioural tests -------------------------------
 

@@ -38,7 +38,10 @@
 char byte = 'x';
 char* fields[] = { &byte, &byte };
 unsigned long one_too_large[] = { static_cast<unsigned long>(INT_MAX) + 1UL, 0UL };
-unsigned long cumulative_overflow[] = { static_cast<unsigned long>(INT_MAX), 1UL };
+unsigned long cumulative_overflow[] = {
+    static_cast<unsigned long>(INT_MAX / 2),
+    static_cast<unsigned long>(INT_MAX / 2)
+};
 
 SQLite3_result result(2);
 ok(result.add_row(fields, one_too_large) == SQLITE_TOOBIG && result.rows_count == 0,

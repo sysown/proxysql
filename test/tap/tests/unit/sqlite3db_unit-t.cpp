@@ -185,8 +185,8 @@ static void test_sized_row_rejects_int_overflow() {
         0UL
     };
     const unsigned long oversized_row[] = {
-        static_cast<unsigned long>(INT_MAX),
-        1UL
+        static_cast<unsigned long>(INT_MAX / 2),
+        static_cast<unsigned long>(INT_MAX / 2)
     };
 
     SQLite3_result result(2);
