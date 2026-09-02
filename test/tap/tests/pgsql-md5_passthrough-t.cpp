@@ -16,8 +16,16 @@
  * SCRAM floor (see pgsql_reconcile_auth_method in PgSQL_Protocol.cpp), so under the default floor=3
  * an md5-stored user is rejected on the FRONTEND before any backend leg. The floor is restored.
  *
+ * Assertions 3-4 cover the inverse mismatch: an md5-only stored secret against a backend that
+ * demands a CLEARTEXT password (infra role 'cleartextuser', pg_hba method 'password'). ProxySQL sends
+ * md5_secret and NO password, so libpq reaches pg_fe_sendauth() with password == NULL; upstream
+ * shares one "no password supplied" guard between AUTH_REQ_MD5 and AUTH_REQ_PASSWORD, which the
+ * patch relaxed on md5_secret alone, so the cleartext branch ran strlen(NULL) and crashed the whole
+ * proxy. Assertion 4 is the crash detector.
+ *
  * Self-gates: if the backend does not permit md5 for md5user (e.g. an older infra without the
- * pg_hba/role additions), the whole test skips cleanly rather than failing the suite.
+ * pg_hba/role additions), the whole test skips cleanly rather than failing the suite; the
+ * cleartext-password pair skips independently if 'cleartextuser' is absent.
  *
  * Per project rule: only LOAD ... TO RUNTIME (never SAVE ... TO DISK); runtime state (the injected
  * pgsql_user and the auth-method floor) is restored at the end. The infra-owned 'md5user' backend
@@ -75,7 +83,7 @@ static bool select_reaches_backend(const char* user, const char* pass) {
 }
 
 int main(int, char**) {
-	plan(2);
+	plan(4);
 	if (cl.getEnv()) return exit_status();
 
 	auto admin = openConn(cl.pgsql_admin_host, cl.pgsql_admin_port, cl.admin_username, cl.admin_password, nullptr);
@@ -100,7 +108,7 @@ int main(int, char**) {
 		md5_backend_ok = probe && PQstatus(probe.get()) == CONNECTION_OK;
 	}
 	if (!md5_backend_ok) {
-		skip(2, "backend does not permit md5 auth for '%s' (rolpassword='%.4s', probe %s) -- "
+		skip(4, "backend does not permit md5 auth for '%s' (rolpassword='%.4s', probe %s) -- "
 		        "md5 pass-through not exercised; infra needs the #5865 md5user + pg_hba md5 rule",
 		     U, M.empty() ? "(none)" : M.c_str(), M.rfind("md5", 0) == 0 ? "failed" : "skipped");
 		return exit_status();
@@ -128,6 +136,63 @@ int main(int, char**) {
 		auto c = openConn(cl.pgsql_host, cl.pgsql_port, U, "wrong-pw", "postgres");
 		ok(!c || PQstatus(c.get()) != CONNECTION_OK,
 		   "md5-only stored user '%s': wrong password rejected at the frontend", U);
+	}
+
+	// ---------------------------------------------------------------------------------------------
+	// (3)+(4) REGRESSION: md5-only stored secret vs a backend that demands a CLEARTEXT password.
+	//
+	// pgsql_append_conninfo_credentials() emits md5_secret='md5…' and NO password= at all, so libpq
+	// reaches pg_fe_sendauth() with password == NULL. Upstream fe-auth.c shares ONE "no password
+	// supplied" guard between `case AUTH_REQ_MD5:` and `case AUTH_REQ_PASSWORD:`, and
+	// deps/postgresql/scram_verifier_auth.patch relaxed that guard on md5_secret alone. The CLEARTEXT
+	// request therefore also proceeds with NULL, and pg_password_sendauth() does
+	//     case AUTH_REQ_PASSWORD: pwd_to_send = password;   /* NULL */
+	//     ... pqPacketSend(conn, 'p', pwd_to_send, strlen(pwd_to_send) + 1);
+	// -> strlen(NULL) -> SIGSEGV, taking the whole ProxySQL process down (not just the query).
+	//
+	// The fix restricts the exception to the request it was written for:
+	//     !(areq == AUTH_REQ_MD5 && conn->md5_secret && conn->md5_secret[0])
+	//
+	// Assertion 3 is the behavioural contract (the login must NOT succeed -- ProxySQL holds a hash
+	// and genuinely cannot answer a cleartext challenge). Assertion 4 is the crash detector, and is
+	// the one that goes red on the unfixed build: after a SIGSEGV there is no admin port to talk to.
+	const char* PWU = "cleartextuser";
+	const char* PWP = "cleartextuser";
+	std::string MPW = execScalar(be.get(),
+		std::string("SELECT rolpassword FROM pg_authid WHERE rolname='") + PWU + "'");
+	if (MPW.rfind("md5", 0) != 0) {
+		skip(2, "infra has no md5-stored cleartext-password role '%s' (rolpassword='%.4s') -- needs the "
+		        "'host all %s all password' pg_hba rule and the role from docker-pgsql-post.bash",
+		     PWU, MPW.empty() ? "(none)" : MPW.c_str(), PWU);
+	} else {
+		storeUser(admin.get(), PWU, MPW);
+		{
+			auto c = openConn(cl.pgsql_host, cl.pgsql_port, PWU, PWP, "postgres");
+			const bool connected = c && PQstatus(c.get()) == CONNECTION_OK;
+			const std::string got = connected ? execScalar(c.get(), "SELECT 1") : std::string("");
+			diag("cleartext-backend attempt: connected=%s result='%s' err='%s'",
+			     connected ? "yes" : "no", got.c_str(),
+			     c ? PQerrorMessage(c.get()) : "(null)");
+			ok(got != "1",
+			   "md5-only stored user '%s' cannot satisfy a backend CLEARTEXT password challenge "
+			   "(must fail cleanly, not authenticate)", PWU);
+		}
+		// Crash detector: a FRESH admin connection. If libpq segfaulted in the worker thread the
+		// whole process is gone and this cannot connect.
+		{
+			auto probe = openConn(cl.pgsql_admin_host, cl.pgsql_admin_port,
+			                      cl.admin_username, cl.admin_password, nullptr);
+			const bool alive = probe && PQstatus(probe.get()) == CONNECTION_OK
+			                   && execScalar(probe.get(), "SELECT 1") == "1";
+			if (!alive)
+				diag("admin port unreachable after the cleartext challenge: %s",
+				     probe ? PQerrorMessage(probe.get()) : "(no conn)");
+			ok(alive,
+			   "ProxySQL SURVIVED md5_secret + AuthenticationCleartextPassword "
+			   "(dead admin port == the strlen(NULL) crash in pg_password_sendauth)");
+		}
+		execOk(admin.get(), std::string("DELETE FROM pgsql_users WHERE username='") + PWU + "'");
+		execOk(admin.get(), "LOAD PGSQL USERS TO RUNTIME");
 	}
 
 	// --- restore runtime (user + floor); leave the infra-owned backend role intact ---
