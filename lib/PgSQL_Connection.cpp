@@ -1034,6 +1034,23 @@ bool pgsql_append_conninfo_credentials(std::ostringstream& conninfo, const char*
 	return false;
 }
 
+// escape_string_backslash_spaces() already emits DOUBLE backslashes for a space (and doubles a
+// literal backslash), i.e. it produces a value that survives libpq stripping one escape level out
+// of a single-quoted conninfo value. What it does NOT handle is the apostrophe: an unescaped ' ends
+// the quoted value and everything after it is parsed by libpq as further conninfo KEYWORDS
+// (host=, sslmode=, ...). This adds exactly that missing level and nothing else -- escaping
+// backslashes here as well would double what the helper already doubled and corrupt every value
+// containing a space (observed: DateStyle "ISO, MDY" arriving at the backend as "ISO,\\").
+static std::string pg_conninfo_escape_quotes(const char* v) {
+	std::string out;
+	if (v == nullptr) return out;
+	for (const char* c = v; *c; c++) {
+		if (*c == '\'') out += '\\';
+		out += *c;
+	}
+	return out;
+}
+
 std::string PgSQL_Connection::connect_start_DNS_lookup() {
 	// PgSQL_Monitor::dns_lookup() returns an IP on cache hit, or empty
 	// on miss / when 'parent->address' is itself an IP / when the cache is
@@ -1122,10 +1139,15 @@ void PgSQL_Connection::connect_start() {
 		assert(client_charset);
 		uint32_t client_charset_hash = pgsql_variables.client_get_hash(myds->sess, PGSQL_CLIENT_ENCODING);
 		assert(client_charset_hash);
-		const char* escaped_str = escape_string_backslash_spaces(client_charset);
-		conninfo << "client_encoding='" << escaped_str << "' ";
-		if (escaped_str != client_charset)
-			free((char*)escaped_str);
+		{
+			// escape_string_backslash_spaces() covers spaces and backslashes for BOTH the
+			// conninfo quoting layer and the backend's options tokeniser (it emits two
+			// backslashes per space). pg_conninfo_escape_quotes() adds the one case it misses:
+			// the apostrophe, which would otherwise close the quoted conninfo value early.
+			const char* wire = escape_string_backslash_spaces(client_charset);
+			conninfo << "client_encoding='" << pg_conninfo_escape_quotes(wire) << "' ";
+			if (wire != client_charset) free((char*)wire);
+		}
 
 		// charset validation is already done 
 		pgsql_variables.server_set_hash_and_value(myds->sess, PGSQL_CLIENT_ENCODING, client_charset, client_charset_hash);
@@ -1134,13 +1156,21 @@ void PgSQL_Connection::connect_start() {
 		// Join the "-c key=value" tokens with a leading separator so the options value has
 		// no trailing space before the closing quote. PgBouncer rejects a startup packet
 		// whose options value ends in whitespace (#5801).
-		conninfo << "options='";
+		// Build the whole options value in its WIRE form first, then apply the conninfo
+		// quoting layer once over the finished string (see the comment above). Assembling it
+		// straight into `conninfo` cannot work: the second layer has to see the complete
+		// value, including untracked_option_parameters, which is also stored wire-escaped.
+		std::string opts;
 		const char* separator = "";
 		// excluding client_encoding, which is already set above
 		for (int idx = 1; idx < PGSQL_NAME_LAST_LOW_WM; idx++) {
 			const char* value = pgsql_variables.client_get_value(myds->sess, idx);
 			const char* escaped_str = escape_string_backslash_spaces(value);
-			conninfo << separator << "-c " << pgsql_tracked_variables[idx].set_variable_name << "=" << escaped_str;
+			opts += separator;
+			opts += "-c ";
+			opts += pgsql_tracked_variables[idx].set_variable_name;
+			opts += "=";
+			opts += escaped_str;
 			separator = " ";
 			if (escaped_str != value)
 				free((char*)escaped_str);
@@ -1153,9 +1183,11 @@ void PgSQL_Connection::connect_start() {
 
 		// if there are untracked parameters, the session should lock on the host group
 		if (myds->sess->untracked_option_parameters.empty() == false) {
-			conninfo << separator << myds->sess->untracked_option_parameters;
+			opts += separator;
+			opts += myds->sess->untracked_option_parameters;
 		}
-		conninfo << "'";
+
+		conninfo << "options='" << pg_conninfo_escape_quotes(opts.c_str()) << "'";
 		
 	}
 
