@@ -90,7 +90,10 @@ $(PLUGIN_SO): $(OBJS)
 
 .PHONY: stage-runtime
 stage-runtime: $(PLUGIN_SO)
-	mkdir -p $(dir $(RUNTIME_PLUGIN))
+	# CI builds plugins inside a root-owned container, then stages sibling
+	# plugins from the host runner. Keep this repository-local scratch
+	# directory writable across that UID boundary.
+	install -d -m 0777 $(dir $(RUNTIME_PLUGIN))
 	cp -L $(PLUGIN_SO) $(RUNTIME_PLUGIN)
 
 .PHONY: all
