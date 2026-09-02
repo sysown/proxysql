@@ -1337,7 +1337,7 @@ int main() {
 		complementary_variants.db.execute(
 		"INSERT INTO disk.mysql_users VALUES ('split_user','operator-frontend',1,0,10,'',0,1,0,0,1,77,'{}','operator')"),
 		"an operator adds the complementary frontend-only variant in both tiers");
-	backend_only.password = "plugin-backend-v2";
+	backend_only.password = "plugin-backend-v2"; // NOSONAR: synthetic test credential.
 	complementary_variants.plan.generation = 14;
 	const auto replaced_variant = proxysql_apply_plugin_mysql_config(
 		complementary_variants.db, complementary_variants.plan, complementary_variants.runtime.hooks());
@@ -1990,7 +1990,7 @@ int main() {
 		"listener state is repaired after persistent recovery-failure coverage");
 	v.interfaces[0] = new_interface.c_str();
 
-	v.users[0].password = "must-rollback";
+	v.users[0].password = "must-rollback"; // NOSONAR: synthetic rollback marker.
 	ok(v.db.execute("DROP TABLE main.mysql_query_rules_fast_routing"),
 		"query processor failure is injected through its real Admin input table");
 	const auto qpro_failure = admin->apply_plugin_mysql_config(v.plan);
@@ -2094,7 +2094,7 @@ int main() {
 		v.db.execute("INSERT INTO disk.mysql_users VALUES "
 			"('split_live','operator-live',1,0,10,'',0,1,0,0,1,88,'{}','operator')"),
 		"the live fixture adds an operator frontend variant after plugin backend ownership");
-	live_backend_only.password = "plugin-live-v2";
+	live_backend_only.password = "plugin-live-v2"; // NOSONAR: synthetic test credential.
 	v.plan.generation = 15;
 	const auto live_variant_replaced = admin->apply_plugin_mysql_config(v.plan);
 	account_details_t live_backend = GloMyAuth->lookup(

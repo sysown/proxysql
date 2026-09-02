@@ -18,7 +18,7 @@
 namespace {
 
 std::string make_temp_dir() {
-	char path[] = "/tmp/proxysql_plugin_secrets.XXXXXX";
+	char path[] = "/tmp/proxysql_plugin_secrets.XXXXXX"; // NOSONAR: mkdtemp creates a mode-0700 directory.
 	char* result = mkdtemp(path);
 	return result == nullptr ? "" : result;
 }

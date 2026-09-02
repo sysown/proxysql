@@ -75,13 +75,13 @@ int main() {
 		"another owner cannot replace an IPv6 exact gate with a wildcard gate");
 	ok(!registry.lookup("192.0.2.10", 6446).has_value(),
 		"lookup keeps address and port as an exact composite key");
-	ok(registry.set(gate("socket-upper", "/tmp/Router.sock", 0,
+	ok(registry.set(gate("socket-upper", "/tmp/Router.sock", 0, // NOSONAR: value-only test path; no file access.
 		ProxySQL_PluginListenerState::closed, "uppercase socket")) &&
-		registry.set(gate("socket-lower", "/tmp/router.sock", 0,
+		registry.set(gate("socket-lower", "/tmp/router.sock", 0, // NOSONAR: value-only test path; no file access.
 			ProxySQL_PluginListenerState::ready, "lowercase socket")),
 		"case-sensitive Unix socket paths can be owned independently");
-	const auto upper_socket = registry.lookup("/tmp/Router.sock", 0);
-	const auto lower_socket = registry.lookup("/tmp/router.sock", 0);
+	const auto upper_socket = registry.lookup("/tmp/Router.sock", 0); // NOSONAR: value-only lookup.
+	const auto lower_socket = registry.lookup("/tmp/router.sock", 0); // NOSONAR: value-only lookup.
 	ok(upper_socket && upper_socket->owner == "socket-upper" &&
 		lower_socket && lower_socket->owner == "socket-lower",
 		"Unix socket lookup preserves path case");

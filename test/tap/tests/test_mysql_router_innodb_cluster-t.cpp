@@ -175,7 +175,7 @@ int main() {
 	const char* admin_user = std::getenv("TAP_ADMINUSERNAME");
 	if (!admin_user) admin_user = "radmin";
 	const char* admin_password = std::getenv("TAP_ADMINPASSWORD");
-	if (!admin_password) admin_password = "radmin";
+	if (!admin_password) admin_password = "radmin"; // NOSONAR: public isolated-test default, not a secret.
     const std::string result_dir = std::string(workspace ? workspace : ".") +
         "/ci_infra_logs/" + (infra_id ? infra_id : "") + "/mysql-router";
 

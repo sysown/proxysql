@@ -60,12 +60,12 @@ int main() {
 	input.occupied_rule_ids = {900000, 900002};
 	ManagedMysqlUser imported;
 	imported.username = "app";
-	imported.password = "$A$005$app";
+	imported.password = "$A$005$app"; // NOSONAR: synthetic authentication fixture.
 	imported.default_hostgroup = hostgroups.at("route_writer");
 	imported.comment = "mysql_router:cluster-1:app";
 	ManagedMysqlUser released = imported;
 	released.username = "released";
-	released.password = "$A$005$local";
+	released.password = "$A$005$local"; // NOSONAR: synthetic authentication fixture.
 	released.comment = "operator-preserved";
 	released.release = true;
 	input.users = {imported, released};

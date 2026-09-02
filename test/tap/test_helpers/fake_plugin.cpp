@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -281,7 +282,7 @@ bool fake_runtime_ready(ProxySQL_PluginRuntimeContext* context) {
 	if (!context->services->set_listener_gate(listener_gate)) return false;
 	if (env("RUNTIME_READY_THROW") != nullptr) {
 		fake_log_event("runtime_ready_throw");
-		throw "fake runtime readiness exception";
+		throw std::runtime_error("fake runtime readiness exception");
 	}
 	if (env("RUNTIME_READY_FAIL") != nullptr) {
 		fake_log_event("runtime_ready_fail");

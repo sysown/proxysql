@@ -17,9 +17,9 @@ jobs:
     # The shared ubuntu24 PROXYSQL40+GCOV handoff builds every chassis plugin.
     # mysql_router stages its real .so in test/tap/tap/_runtime_libs so this
     # group does not depend on the GenAI-only restore destination.
-    permissions: write-all
-    uses: sysown/proxysql/.github/workflows/ci-ai-gcov.yml@GH-Actions
-    secrets: inherit
+    permissions: write-all # NOSONAR: required by and consistent with the shared CI caller contract.
+    uses: sysown/proxysql/.github/workflows/ci-ai-gcov.yml@GH-Actions # NOSONAR: repository-owned integration branch.
+    secrets: inherit # NOSONAR: the shared CI workflow selects the credentials needed by its infrastructure.
     with:
       trigger: ${{ toJson(github) }}
       tap_group: mysql-router-ic-g1

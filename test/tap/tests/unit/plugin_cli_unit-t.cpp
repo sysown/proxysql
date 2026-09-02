@@ -30,7 +30,7 @@ struct ArgV {
 };
 
 std::string make_temp_dir() {
-	char path[] = "/tmp/proxysql_plugin_cli.XXXXXX";
+	char path[] = "/tmp/proxysql_plugin_cli.XXXXXX"; // NOSONAR: mkdtemp creates a mode-0700 directory.
 	return mkdtemp(path) != nullptr ? path : "";
 }
 

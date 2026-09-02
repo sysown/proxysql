@@ -168,7 +168,7 @@ int main() {
 
 	int fds[2] {-1, -1};
 	ok(pipe(fds) == 0, "a password pipe is available");
-	const char password[] = "s3cr3t-from-fd\n";
+	const char password[] = "s3cr3t-from-fd\n"; // NOSONAR: synthetic pipe-input fixture.
 	ok(write(fds[1], password, sizeof(password) - 1) ==
 	   static_cast<ssize_t>(sizeof(password) - 1), "the password fixture is written");
 	close(fds[1]);

@@ -119,7 +119,7 @@ static void test_phase_b_and_init_both_fire() {
 }
 
 static void test_duplicate_descriptor_names_are_rejected() {
-	char alias_path[] = "/tmp/proxysql_duplicate_plugin.XXXXXX";
+	char alias_path[] = "/tmp/proxysql_duplicate_plugin.XXXXXX"; // NOSONAR: mkstemp creates it atomically.
 	const int fd = mkstemp(alias_path);
 	if (fd >= 0) close(fd);
 	if (fd >= 0) std::remove(alias_path);
