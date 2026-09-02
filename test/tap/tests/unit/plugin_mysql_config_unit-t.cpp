@@ -472,6 +472,16 @@ bool has_collision(const ProxySQL_PluginMysqlConfigResult& result, const std::st
 	return std::find(result.collisions.begin(), result.collisions.end(), collision) != result.collisions.end();
 }
 
+int deny_mysql_interfaces_read(void*, int action, const char* table, const char* column,
+	const char*, const char*) {
+	if (action == SQLITE_READ && table != nullptr && column != nullptr &&
+		std::strcmp(table, "global_variables") == 0 &&
+		std::strcmp(column, "variable_value") == 0) {
+		return SQLITE_DENY;
+	}
+	return SQLITE_OK;
+}
+
 int reject_one_commit(void* opaque) {
 	auto& reject = *static_cast<bool*>(opaque);
 	if (!reject) return 0;
@@ -1054,6 +1064,73 @@ int main() {
 		text_value(f.db, "SELECT password FROM disk.mysql_users WHERE username='router_meta'") == "operator",
 		"disk receives the same scoped generation and preserves collisions");
 	ok(all_runtime_at(f.runtime, 13), "every runtime module publishes the complete generation");
+
+	Fixture unowned_hostgroup;
+	bool unowned_hostgroup_seeded = true;
+	for (const char* schema : {"main", "disk"}) {
+		const std::string prefix = std::string(schema) + ".";
+		unowned_hostgroup_seeded = unowned_hostgroup_seeded &&
+			unowned_hostgroup.db.execute(("DELETE FROM " + prefix +
+				"proxysql_plugin_owned_objects WHERE owner='mysql_router' AND object_type='hostgroup'").c_str()) &&
+			unowned_hostgroup.db.execute(("INSERT INTO " + prefix +
+				"mysql_servers VALUES (8100,'operator-host',4406,0,'ONLINE',77,0,321,0,0,0,'operator')").c_str());
+	}
+	const auto unowned_hostgroup_result = proxysql_apply_plugin_mysql_config(
+		unowned_hostgroup.db, unowned_hostgroup.plan, unowned_hostgroup.runtime.hooks());
+	ok(unowned_hostgroup_seeded && !unowned_hostgroup_result.applied &&
+		scalar(unowned_hostgroup.db, "SELECT COUNT(*) FROM main.mysql_servers "
+			"WHERE hostgroup_id=8100 AND hostname='operator-host' AND port=4406") == 1 &&
+		scalar(unowned_hostgroup.db, "SELECT COUNT(*) FROM disk.mysql_servers "
+			"WHERE hostgroup_id=8100 AND hostname='operator-host' AND port=4406") == 1 &&
+		all_runtime_at(unowned_hostgroup.runtime, 12),
+		"an unowned existing hostgroup collision fails closed without deleting operator servers");
+
+	Fixture unowned_interface;
+	ok(unowned_interface.db.execute("DELETE FROM main.proxysql_plugin_owned_objects "
+			"WHERE owner='mysql_router' AND object_type='mysql_interface'") &&
+		unowned_interface.db.execute("DELETE FROM disk.proxysql_plugin_owned_objects "
+			"WHERE owner='mysql_router' AND object_type='mysql_interface'"),
+		"an existing listener is made operator-owned in both tiers");
+	const auto unowned_interface_result = proxysql_apply_plugin_mysql_config(
+		unowned_interface.db, unowned_interface.plan, unowned_interface.runtime.hooks());
+	ok(!unowned_interface_result.applied &&
+		text_value(unowned_interface.db, "SELECT variable_value FROM main.global_variables "
+			"WHERE variable_name='mysql-interfaces'").find("127.0.0.1:6446") != std::string::npos &&
+		text_value(unowned_interface.db, "SELECT variable_value FROM disk.global_variables "
+			"WHERE variable_name='mysql-interfaces'").find("127.0.0.1:6446") != std::string::npos &&
+		all_runtime_at(unowned_interface.runtime, 12),
+		"an unowned existing mysql-interface collision fails closed without claiming the listener");
+
+	Fixture tier_divergent_user;
+	ProxySQL_PluginMysqlUserRow tier_user {
+		"tier_user", "plugin-secret", true, false, 8100, "appdb", false, true, false,
+		true, true, 100, "{}", "mysql_router:managed"};
+	tier_divergent_user.plan.users = &tier_user;
+	tier_divergent_user.plan.user_count = 1;
+	ok(tier_divergent_user.db.execute("INSERT INTO disk.mysql_users VALUES "
+		"('tier_user','operator-disk',1,0,10,'',0,1,0,1,1,77,'{}','operator')"),
+		"a disk-only operator user collision is seeded");
+	const auto tier_divergent_result = proxysql_apply_plugin_mysql_config(
+		tier_divergent_user.db, tier_divergent_user.plan, tier_divergent_user.runtime.hooks());
+	ok(!tier_divergent_result.applied &&
+		scalar(tier_divergent_user.db, "SELECT COUNT(*) FROM main.mysql_users WHERE username='tier_user'") == 0 &&
+		text_value(tier_divergent_user.db,
+			"SELECT password FROM disk.mysql_users WHERE username='tier_user'") == "operator-disk" &&
+		all_runtime_at(tier_divergent_user.runtime, 12),
+		"a collision present in only one storage tier rejects the generation without divergent publication");
+
+	Fixture unreadable_interfaces;
+	sqlite3_set_authorizer(unreadable_interfaces.db.get_db(), &deny_mysql_interfaces_read, nullptr);
+	const auto unreadable_interfaces_result = proxysql_apply_plugin_mysql_config(
+		unreadable_interfaces.db, unreadable_interfaces.plan, unreadable_interfaces.runtime.hooks());
+	sqlite3_set_authorizer(unreadable_interfaces.db.get_db(), nullptr, nullptr);
+	ok(!unreadable_interfaces_result.applied &&
+		scalar(unreadable_interfaces.db,
+			"SELECT generation FROM main.proxysql_plugin_config_generations WHERE owner='mysql_router'") == 12 &&
+		scalar(unreadable_interfaces.db,
+			"SELECT generation FROM disk.proxysql_plugin_config_generations WHERE owner='mysql_router'") == 12 &&
+		all_runtime_at(unreadable_interfaces.runtime, 12),
+		"a mysql-interfaces read failure aborts publication without replacing operator listeners");
 	const std::vector<std::string> expected_locks {"L1","L2","L3","L4","L5"};
 	ok(f.runtime.trace.size() >= expected_locks.size() &&
 		std::equal(expected_locks.begin(), expected_locks.end(), f.runtime.trace.begin()),

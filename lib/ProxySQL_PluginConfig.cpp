@@ -470,6 +470,9 @@ bool query_exists(SQLite3DB& db, const std::string& sql,
 	return rc == SQLITE_ROW || rc == SQLITE_DONE;
 }
 
+std::string current_interfaces(SQLite3DB& db, const std::string& schema, std::string& error);
+std::vector<std::string> split_interfaces(const std::string& value);
+
 bool ledger_keys(SQLite3DB& db, const std::string& schema, const std::string& owner, const std::string& type,
 	std::set<std::string>& keys, std::string& error) {
 	sqlite3_stmt* statement = nullptr;
@@ -704,6 +707,37 @@ bool preflight_collisions(SQLite3DB& db, const std::string& schema,
 		!load_owned_user_identities(db, schema, plan.owner, state.old_users, error) ||
 		!ledger_keys(db, schema, plan.owner, "mysql_query_rule", state.old_rules, error) ||
 		!ledger_keys(db, schema, plan.owner, "mysql_interface", state.old_interfaces, error)) return false;
+	for (int hostgroup : plan.hostgroups) {
+		if (state.old_hostgroups.count(std::to_string(hostgroup)) != 0) continue;
+		bool collision = false;
+		const std::string sql =
+			"SELECT 1 FROM " + schema + ".mysql_servers WHERE hostgroup_id=?1 "
+			"UNION ALL SELECT 1 FROM " + schema +
+			".mysql_replication_hostgroups WHERE writer_hostgroup=?1 OR reader_hostgroup=?1 "
+			"UNION ALL SELECT 1 FROM " + schema +
+			".mysql_group_replication_hostgroups WHERE writer_hostgroup=?1 OR "
+			"backup_writer_hostgroup=?1 OR reader_hostgroup=?1 OR offline_hostgroup=?1 "
+			"UNION ALL SELECT 1 FROM " + schema +
+			".mysql_hostgroup_attributes WHERE hostgroup_id=?1 LIMIT 1";
+		if (!query_exists(db, sql, {}, {hostgroup}, collision, error)) return false;
+		if (collision) {
+			error = "unowned hostgroup collision: " + std::to_string(hostgroup);
+			return false;
+		}
+	}
+	const std::string configured_interfaces = current_interfaces(db, schema, error);
+	if (!error.empty()) return false;
+	const std::vector<std::string> configured_interface_list =
+		split_interfaces(configured_interfaces);
+	const std::set<std::string> existing_interfaces(
+		configured_interface_list.begin(), configured_interface_list.end());
+	for (const std::string& interface : plan.interfaces) {
+		if (state.old_interfaces.count(interface) == 0 &&
+			existing_interfaces.count(interface) != 0) {
+			error = "unowned mysql interface collision: " + interface;
+			return false;
+		}
+	}
 	for (const auto& user : plan.users) {
 		const Preflight::UserIdentity identity {user.username, user.backend, user.frontend};
 		if (user.release_ownership && state.old_users.count(identity) == 0) {
@@ -913,7 +947,9 @@ bool stage_schema(SQLite3DB& db, const std::string& schema, const OwnedPlan& pla
 			{row.match_digest,row.match_pattern,row.re_modifiers,row.attributes,row.comment},{row.rule_id,row.active,row.proxy_port,row.negate_match_pattern,row.destination_hostgroup,row.apply},error))return false;
 	}
 	std::vector<std::string> merged;
-	for(const auto& value:split_interfaces(current_interfaces(db,schema,error))) if(!preflight.old_interfaces.count(value)) merged.push_back(value);
+	const std::string configured_interfaces = current_interfaces(db, schema, error);
+	if (!error.empty()) return false;
+	for(const auto& value:split_interfaces(configured_interfaces)) if(!preflight.old_interfaces.count(value)) merged.push_back(value);
 	for(const auto& value:plan.interfaces) if(std::find(merged.begin(),merged.end(),value)==merged.end()) merged.push_back(value);
 	std::string joined; for(const auto& value:merged){if(!joined.empty())joined+=';';joined+=value;}
 	if(!run_statement(db,"INSERT OR REPLACE INTO "+schema+".global_variables(variable_name,variable_value) VALUES ('mysql-interfaces',?1)",{joined},{},error))return false;
@@ -1090,12 +1126,12 @@ static ProxySQL_PluginMysqlConfigResult apply_plugin_mysql_config_impl(
 			!preflight_collisions(admindb, "disk", plan, disk_preflight, error)) {
 			return fail("cannot preflight plugin ownership: " + error);
 		}
-		std::set<std::string> user_collisions = main_preflight.user_collisions;
-		user_collisions.insert(disk_preflight.user_collisions.begin(), disk_preflight.user_collisions.end());
-		std::set<int> rule_collisions = main_preflight.rule_collisions;
-		rule_collisions.insert(disk_preflight.rule_collisions.begin(), disk_preflight.rule_collisions.end());
-		main_preflight.user_collisions = disk_preflight.user_collisions = user_collisions;
-		main_preflight.rule_collisions = disk_preflight.rule_collisions = rule_collisions;
+		if (main_preflight.user_collisions != disk_preflight.user_collisions ||
+			main_preflight.rule_collisions != disk_preflight.rule_collisions) {
+			return fail("plugin collisions differ between main and disk");
+		}
+		const std::set<std::string>& user_collisions = main_preflight.user_collisions;
+		const std::set<int>& rule_collisions = main_preflight.rule_collisions;
 		for (const std::string& username : user_collisions) collisions.push_back("mysql_user:" + username);
 		for (int rule_id : rule_collisions) collisions.push_back("mysql_query_rule:" + std::to_string(rule_id));
 
