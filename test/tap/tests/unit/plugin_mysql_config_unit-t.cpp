@@ -642,6 +642,8 @@ int main() {
 		attached_runtime.db, attached_runtime.plan, attached_runtime.runtime.hooks());
 	ok(attached_runtime_ready && attached_runtime_result.applied &&
 		scalar(live_runtime, "SELECT COUNT(*) FROM runtime_publications") == 1 &&
+		scalar(attached_runtime.db,
+			"SELECT COUNT(*) FROM myhgm.runtime_publications") == 1 &&
 		scalar(attached_runtime.db, "SELECT generation FROM proxysql_plugin_config_generations "
 			"WHERE owner='mysql_router'") == 13 &&
 		scalar(attached_runtime.db, "SELECT generation FROM disk.proxysql_plugin_config_generations "
@@ -993,7 +995,7 @@ int main() {
 
 	Fixture f;
 	Fixture released_user;
-	const std::string release_comment = proxysql_plugin_release_user_comment("mysql_router:old");
+	const std::string release_comment = proxysql_plugin_release_user_comment("released-to-operator");
 	ProxySQL_PluginMysqlUserRow release_row {
 		"old_owned", "old", true, false, 8100, "", false, true, false,
 		true, true, 100, "", release_comment.c_str()};
@@ -1017,13 +1019,19 @@ int main() {
 		"SELECT username||'|'||password||'|'||active||'|'||use_ssl||'|'||default_hostgroup||'|'||"
 		"default_schema||'|'||schema_locked||'|'||transaction_persistent||'|'||fast_forward||'|'||"
 		"backend||'|'||frontend||'|'||max_connections||'|'||attributes||'|'||comment "
-		"FROM main.mysql_users WHERE username='old_owned'") == released_main_before &&
+		"FROM main.mysql_users WHERE username='old_owned'") != released_main_before &&
 	   text_value(released_user.db,
 		"SELECT username||'|'||password||'|'||active||'|'||use_ssl||'|'||default_hostgroup||'|'||"
 		"default_schema||'|'||schema_locked||'|'||transaction_persistent||'|'||fast_forward||'|'||"
 		"backend||'|'||frontend||'|'||max_connections||'|'||attributes||'|'||comment "
-		"FROM disk.mysql_users WHERE username='old_owned'") == released_disk_before,
-		"ownership release preserves the exact Admin and disk user row");
+		"FROM disk.mysql_users WHERE username='old_owned'") != released_disk_before &&
+	   text_value(released_user.db,
+		"SELECT comment FROM main.mysql_users WHERE username='old_owned'") ==
+			"released-to-operator" &&
+	   text_value(released_user.db,
+		"SELECT comment FROM disk.mysql_users WHERE username='old_owned'") ==
+			"released-to-operator",
+		"ownership release decodes and stores the operator comment in both tiers");
 	ok(scalar(released_user.db,
 		"SELECT COUNT(*) FROM main.proxysql_plugin_owned_objects WHERE owner='mysql_router' "
 		"AND object_type IN ('mysql_user','mysql_user_v2')") == 0 &&

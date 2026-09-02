@@ -16,6 +16,18 @@ void close_router_gates_noexcept(MysqlRouterContext& context, std::string_view r
 	}
 }
 
+void mark_initialization_failed(MysqlRouterContext& context, std::string_view error) noexcept {
+	context.reconciler.reset();
+	context.reconcile_backend.reset();
+	context.runtime_ready.store(false);
+	context.started.store(false);
+	context.initialized.store(false);
+	context.services = nullptr;
+	std::lock_guard<std::mutex> guard(context.status_mutex);
+	context.status.state = "initialization_error";
+	context.status.last_error.assign(error);
+}
+
 bool register_cli_options(ProxySQL_PluginCLIRegistry* registry) {
 	return mysql_router_register_cli_options(registry);
 }
@@ -64,7 +76,10 @@ bool init(ProxySQL_PluginServices* services) {
 	if (services == nullptr) return false;
 	MysqlRouterContext& context = mysql_router_context();
 	context.services = services;
-	if (!mysql_router_register_metrics(*services)) return false;
+	if (!mysql_router_register_metrics(*services)) {
+		mark_initialization_failed(context, "metric registration failed");
+		return false;
+	}
 	try {
 		context.reconcile_backend = create_mysql_router_reconcile_backend(*services);
 		if (context.reconcile_backend) {
@@ -79,9 +94,7 @@ bool init(ProxySQL_PluginServices* services) {
 				std::string(error.what());
 			services->log_message(3, message.c_str());
 		}
-		std::lock_guard<std::mutex> guard(context.status_mutex);
-		context.status.state = "configuration_error";
-		context.status.last_error = error.what();
+		mark_initialization_failed(context, error.what());
 		return false;
 	}
 	context.initialized.store(true);

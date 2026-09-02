@@ -604,7 +604,8 @@ public:
 		MysqlRouterContext& context = mysql_router_context();
 		std::lock_guard<std::mutex> guard(context.status_mutex);
 		context.status.gates_ready = ready;
-		context.status.state = ready ? "ready" : "degraded";
+		if (ready) context.status.state = "ready";
+		else if (context.status.state != "registration_missing") context.status.state = "degraded";
 	}
 
 	void record_transition(std::string_view kind, std::string_view code,

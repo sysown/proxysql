@@ -52,7 +52,7 @@ bool has_exact_tables(const std::vector<ProxySQL_PluginTableDef>& actual,
 } // namespace
 
 int main() {
-	plan(14);
+	plan(16);
 
 	ProxySQL_PluginManager manager;
 	std::string error;
@@ -81,6 +81,19 @@ int main() {
 	   "MYSQL ROUTER RECONCILE is registered exactly");
 	ok(manager.resolve_alias_to_canonical("SELECT 1").empty(),
 	   "unrelated Admin SQL remains unclaimed");
+	ProxySQL_PluginCommandResult load_result {};
+	ProxySQL_PluginCommandContext command_context {};
+	ok(manager.dispatch_admin_command(command_context,
+	   "LOAD MYSQL ROUTER CONFIG TO RUNTIME", load_result) &&
+	   load_result.error_code != 0 && load_result.message.find("not implemented") !=
+	   std::string::npos,
+	   "the scaffold LOAD command reports an explicit error instead of false success");
+	ProxySQL_PluginCommandResult save_result {};
+	ok(manager.dispatch_admin_command(command_context,
+	   "SAVE MYSQL ROUTER CONFIG FROM RUNTIME", save_result) &&
+	   save_result.error_code != 0 && save_result.message.find("not implemented") !=
+	   std::string::npos,
+	   "the scaffold SAVE command reports an explicit error instead of false success");
 
 	SQLite3DB admindb;
 	admindb.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);

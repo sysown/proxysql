@@ -164,12 +164,12 @@ void refresh_users(SQLite3DB* db, void*) {
 
 ProxySQL_PluginCommandResult load_config(
 		const ProxySQL_PluginCommandContext&, const char*) {
-	return {0, 0, "mysql_router configuration loaded to runtime"};
+	return {1, 0, "LOAD MYSQL ROUTER CONFIG TO RUNTIME is not implemented"};
 }
 
 ProxySQL_PluginCommandResult save_config(
 		const ProxySQL_PluginCommandContext&, const char*) {
-	return {0, 0, "mysql_router runtime configuration saved to memory"};
+	return {1, 0, "SAVE MYSQL ROUTER CONFIG FROM RUNTIME is not implemented"};
 }
 
 ProxySQL_PluginCommandResult reconcile(

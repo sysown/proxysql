@@ -20,7 +20,7 @@ extern ProxySQL_GlobalVariables GloVars;
 #endif
 
 int main() {
-	plan(26);
+	plan(29);
 	test_init_minimal();
 
 	void* handle = dlopen(PROXYSQL_MYSQL_ROUTER_PLUGIN_PATH, RTLD_NOW | RTLD_LOCAL);
@@ -47,6 +47,22 @@ int main() {
 	ok(descriptor && descriptor->status_json,
 	   "the plugin exposes its status callback");
 
+	ProxySQL_PluginServices unavailable_services {};
+	ok(descriptor && !descriptor->init(&unavailable_services),
+	   "initialization fails when the Prometheus registry service is unavailable");
+	ok(descriptor && !descriptor->start(),
+	   "a failed initialization cannot leave the plugin startable");
+	const std::string failed_init_status = descriptor && descriptor->status_json
+		? descriptor->status_json() : "";
+	bool failed_init_reported = false;
+	try {
+		const auto document = nlohmann::json::parse(failed_init_status);
+		failed_init_reported = document.value("state", "") == "initialization_error";
+	} catch (const std::exception&) {
+	}
+	ok(failed_init_reported,
+	   "a failed initialization is exposed as a stable initialization error");
+
 	std::string error;
 	auto manager = std::make_unique<ProxySQL_PluginManager>();
 	ok(manager->load(PROXYSQL_MYSQL_ROUTER_PLUGIN_PATH, error),
@@ -62,7 +78,12 @@ int main() {
 		? descriptor->status_json() : "";
 	ok(status.find("mysql_router") != std::string::npos,
 	   "the live status JSON identifies the real mysql_router plugin");
-	const nlohmann::json status_document = nlohmann::json::parse(status);
+	nlohmann::json status_document;
+	try {
+		status_document = nlohmann::json::parse(status);
+	} catch (const std::exception& error) {
+		diag("Router status is not valid JSON: %s", error.what());
+	}
 	ok(status_document.contains("topology_uuid") &&
 	   status_document.contains("metadata_version") &&
 	   status_document.contains("advertised_contract") &&

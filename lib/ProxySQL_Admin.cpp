@@ -9346,6 +9346,17 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 			__reset_rules(&prev_rules_data.query_rules);
 		}
 	}
+	// Legacy callers historically receive only log-based error reporting and
+	// do not own a returned SQLite allocation. The atomic publisher disables
+	// lock acquisition and needs the error text to reject/roll back its plan.
+	if (acquire_lock &&
+		(SQLite3_query_rules_resultset == nullptr ||
+		 SQLite3_query_rules_fast_routing_resultset == nullptr) &&
+		(error != nullptr || error2 != nullptr)) {
+		if (error != nullptr) free(error);
+		if (error2 != nullptr) free(error2);
+		return nullptr;
+	}
 	if (error != nullptr) {
 		if (error2 != nullptr) free(error2);
 		return error;
