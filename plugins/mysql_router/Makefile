@@ -90,11 +90,10 @@ $(PLUGIN_SO): $(OBJS)
 
 .PHONY: stage-runtime
 stage-runtime: $(PLUGIN_SO)
-	# CI builds plugins inside a root-owned container, then stages sibling
-	# plugins from the host runner. Keep this repository-local scratch
-	# directory writable across that UID boundary.
-	install -d -m 0777 $(dir $(RUNTIME_PLUGIN))
-	cp -L $(PLUGIN_SO) $(RUNTIME_PLUGIN)
+	# This directory is tracked so the host checkout owns it before a
+	# root-in-container build writes the Router plugin into the bind mount.
+	install -d -m 0755 $(dir $(RUNTIME_PLUGIN))
+	install -m 0644 $(PLUGIN_SO) $(RUNTIME_PLUGIN)
 
 .PHONY: all
 all: stage-runtime
