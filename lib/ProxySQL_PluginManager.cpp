@@ -44,6 +44,10 @@ std::atomic<ProxySQL_PluginManager*> g_active_plugin_manager { nullptr };
 // while init_all()/start_all() are still mutating it.  Release this gate only
 // after every configured plugin has started successfully.
 std::atomic<bool> g_active_plugin_manager_ready { false };
+#ifdef PROXYSQL40
+std::atomic<bool> g_active_mysql_query_hook { false };
+std::atomic<bool> g_active_pgsql_query_hook { false };
+#endif
 ProxySQL_PluginManager* g_registry_target = nullptr;
 // Guards swaps of g_active_plugin_manager. Readers (dispatch_admin_command,
 // dispatch_query_hook, resolve_alias_to_canonical) take a shared lock, so
@@ -465,6 +469,14 @@ bool ProxySQL_PluginManager::load(const std::string &path, std::string &err) {
 		err = "plugin descriptor has null or empty name";
 		dlclose(handle);
 		return false;
+	}
+	for (const auto& existing : plugins_) {
+		if (existing.descriptor != nullptr && existing.descriptor->name != nullptr &&
+			std::strcmp(existing.descriptor->name, descriptor->name) == 0) {
+			err = "duplicate plugin descriptor name: " + std::string(descriptor->name);
+			dlclose(handle);
+			return false;
+		}
 	}
 
 	// Reject plugins built for a newer ABI than this core understands: the
@@ -1156,17 +1168,13 @@ bool proxysql_has_configured_plugin_query_hook(ProxySQL_PluginProtocol proto) {
 	if (!g_active_plugin_manager_ready.load(std::memory_order_acquire)) {
 		return false;
 	}
-	// Keep the manager alive across the readiness probe. Shutdown clears
-	// readiness and takes the unique lock before releasing manager storage.
-	std::shared_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
-	if (!g_active_plugin_manager_ready.load(std::memory_order_acquire)) {
-		return false;
+	switch (proto) {
+		case ProxySQL_PluginProtocol::mysql:
+			return g_active_mysql_query_hook.load(std::memory_order_acquire);
+		case ProxySQL_PluginProtocol::pgsql:
+			return g_active_pgsql_query_hook.load(std::memory_order_acquire);
 	}
-	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load(std::memory_order_acquire);
-	if (mgr == nullptr) {
-		return false;
-	}
-	return mgr->has_query_hook(proto);
+	return false;
 }
 
 void proxysql_refresh_configured_plugin_runtime_views(const std::string& sql,
@@ -1197,6 +1205,10 @@ bool proxysql_discover_configured_plugins(
 	std::lock_guard<std::mutex> lifecycle_lock(g_plugin_lifecycle_mutex);
 	err.clear();
 	g_active_plugin_manager_ready.store(false, std::memory_order_release);
+#ifdef PROXYSQL40
+	g_active_mysql_query_hook.store(false, std::memory_order_release);
+	g_active_pgsql_query_hook.store(false, std::memory_order_release);
+#endif
 	{
 		std::unique_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
 		g_active_plugin_manager.store(nullptr, std::memory_order_release);
@@ -1284,6 +1296,8 @@ bool proxysql_init_configured_plugins(
 	std::lock_guard<std::mutex> lifecycle_lock(g_plugin_lifecycle_mutex);
 	std::unique_lock<std::shared_mutex> active_lock(g_active_plugin_manager_mutex);
 	g_active_plugin_manager_ready.store(false, std::memory_order_release);
+	g_active_mysql_query_hook.store(false, std::memory_order_release);
+	g_active_pgsql_query_hook.store(false, std::memory_order_release);
 	err.clear();
 	if (manager == nullptr) {
 		return true;
@@ -1299,6 +1313,10 @@ bool proxysql_start_configured_plugins(
 	std::lock_guard<std::mutex> lifecycle_lock(g_plugin_lifecycle_mutex);
 	std::unique_lock<std::shared_mutex> active_lock(g_active_plugin_manager_mutex);
 	g_active_plugin_manager_ready.store(false, std::memory_order_release);
+#ifdef PROXYSQL40
+	g_active_mysql_query_hook.store(false, std::memory_order_release);
+	g_active_pgsql_query_hook.store(false, std::memory_order_release);
+#endif
 	err.clear();
 	if (manager == nullptr) {
 		return true;
@@ -1307,6 +1325,12 @@ bool proxysql_start_configured_plugins(
 	if (!manager->start_all(err)) {
 		return false;
 	}
+#ifdef PROXYSQL40
+	g_active_mysql_query_hook.store(
+		manager->has_query_hook(ProxySQL_PluginProtocol::mysql), std::memory_order_release);
+	g_active_pgsql_query_hook.store(
+		manager->has_query_hook(ProxySQL_PluginProtocol::pgsql), std::memory_order_release);
+#endif
 	g_active_plugin_manager_ready.store(true, std::memory_order_release);
 	return true;
 }
@@ -1329,6 +1353,10 @@ bool proxysql_stop_configured_plugins(
 	std::lock_guard<std::mutex> lifecycle_lock(g_plugin_lifecycle_mutex);
 	err.clear();
 	g_active_plugin_manager_ready.store(false, std::memory_order_release);
+#ifdef PROXYSQL40
+	g_active_mysql_query_hook.store(false, std::memory_order_release);
+	g_active_pgsql_query_hook.store(false, std::memory_order_release);
+#endif
 	{
 		std::unique_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
 		g_active_plugin_manager.store(nullptr, std::memory_order_release);

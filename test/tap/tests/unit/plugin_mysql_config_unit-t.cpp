@@ -1818,6 +1818,12 @@ int main() {
 	std::string atomic_old_error;
 	ok(admin->init_users_under_lock(std::move(atomic_old_users), atomic_old_error),
 		"atomic Auth fixture starts with complete old frontend and backend groups");
+	GloMyAuth->add(const_cast<char*>("admin_atomic"), const_cast<char*>("admin-secret"),
+		USERNAME_ADMIN, false, ADMIN_HOSTGROUP, const_cast<char*>(""), false, false,
+		false, 0, const_cast<char*>(""), const_cast<char*>("admin"));
+	GloMyAuth->add(const_cast<char*>("stats_atomic"), const_cast<char*>("stats-secret"),
+		USERNAME_ADMIN, false, STATS_HOSTGROUP, const_cast<char*>(""), false, false,
+		false, 0, const_cast<char*>(""), const_cast<char*>("stats"));
 	auto atomic_new_users = result_value(v.db,
 		"SELECT 'atomic_front','front-new',1,8200,'newdb',1,0,1,0,1,321,'{\"k\":1}','new' "
 		"UNION ALL SELECT 'atomic_back','back-new',1,8201,'newdb',1,0,1,1,0,654,'{\"k\":2}','new'");
@@ -1853,6 +1859,15 @@ int main() {
 		"frontend and backend lookups attempted mid-publish observe complete new Auth groups");
 	free_account_details(frontend_seen);
 	free_account_details(backend_seen);
+	account_details_t admin_seen = GloMyAuth->lookup(const_cast<char*>("admin_atomic"),
+		USERNAME_ADMIN, {true, true, true});
+	account_details_t stats_seen = GloMyAuth->lookup(const_cast<char*>("stats_atomic"),
+		USERNAME_ADMIN, {true, true, true});
+	ok(admin_seen.password != nullptr && std::string(admin_seen.password) == "admin-secret" &&
+		stats_seen.password != nullptr && std::string(stats_seen.password) == "stats-secret",
+		"atomic mysql_users replacement preserves the separate Admin and stats credential scope");
+	free_account_details(admin_seen);
+	free_account_details(stats_seen);
 
 	auto malformed_users = result_value(v.db,
 		"SELECT username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,"

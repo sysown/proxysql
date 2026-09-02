@@ -343,7 +343,7 @@ int main() {
 #ifdef PROXYSQL40
 	plan(49);  // PROXYSQL40: load succeeds; init fails separately (3 oks)
 #else
-	plan(47);  // Pre-chassis: load fails with init-side registration error (2 oks)
+	plan(48);  // Pre-chassis: load fails with init-side registration error (2 oks)
 #endif
 	make_log_path();
 

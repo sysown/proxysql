@@ -118,6 +118,23 @@ static void test_phase_b_and_init_both_fire() {
 	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
 }
 
+static void test_duplicate_descriptor_names_are_rejected() {
+	char alias_path[] = "/tmp/proxysql_duplicate_plugin.XXXXXX";
+	const int fd = mkstemp(alias_path);
+	if (fd >= 0) close(fd);
+	if (fd >= 0) std::remove(alias_path);
+	const bool linked = fd >= 0 && symlink(PROXYSQL_FAKE_PLUGIN_PATH, alias_path) == 0;
+	ProxySQL_PluginManager manager;
+	std::string error;
+	const bool first_loaded = manager.load(PROXYSQL_FAKE_PLUGIN_PATH, error);
+	const bool duplicate_rejected = linked && !manager.load(alias_path, error) &&
+		error.find("duplicate plugin descriptor name") != std::string::npos;
+	ok(first_loaded && duplicate_rejected,
+		"different modules cannot publish the same listener-gate owner name (err='%s')",
+		error.c_str());
+	if (linked) std::remove(alias_path);
+}
+
 // An early-action-capable plugin must run after Admin is live but before its
 // normal init/start lifecycle. The production regression this catches is
 // inserting the action phase before schema/Admin setup or after init/start.
@@ -629,12 +646,13 @@ static void test_bogus_abi_version_rejected() {
 }
 
 int main() {
-	plan(71);
+	plan(72);
 
 	ok(PROXYSQL_PLUGIN_ABI_VERSION <= PROXYSQL_PLUGIN_ABI_VERSION_MAX,
 		"the loader accepts the current additive ABI");
 
 	make_log_path();
+	test_duplicate_descriptor_names_are_rejected();
 
 	test_phase_b_and_init_both_fire();
 	test_early_action_runs_between_admin_and_init();

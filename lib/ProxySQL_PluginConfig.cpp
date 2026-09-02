@@ -180,7 +180,10 @@ bool copy_plan(const ProxySQL_PluginMysqlConfigPlan& source, OwnedPlan& target, 
 
 	target.owner = copied(source.owner);
 	target.generation = source.generation;
-	target.hostgroups.assign(source.owned_hostgroups, source.owned_hostgroups + source.owned_hostgroup_count);
+	if (source.owned_hostgroup_count != 0) {
+		target.hostgroups.assign(source.owned_hostgroups,
+			source.owned_hostgroups + source.owned_hostgroup_count);
+	}
 	target.servers.reserve(source.server_count);
 	for (size_t i = 0; i < source.server_count; ++i) {
 		const auto& row = source.servers[i];
