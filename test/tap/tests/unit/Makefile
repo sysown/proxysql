@@ -501,6 +501,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	gtid_trxid_interval_unit-t \
 	gtid_set_unit-t \
 	gtid_server_data_unit-t \
+	admin_bootstrap_users_unit-t \
 	admin_disk_upgrade_unit-t \
 	glovars_unit-t \
 	pgsql_servers_ssl_params_unit-t \
@@ -517,14 +518,6 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	re2_vendor_unit-t \
 	restapi_server_unit-t \
 	mcp_client_unit-t
-
-# The legacy bootstrap importer is intentionally compiled out of the
-# PROXYSQL40 chassis build, where Router plugins own bootstrap/account
-# publication. Keep its focused unit test on the default build tier that
-# actually emits import_bootstrap_users().
-ifneq ($(PROXYSQL40),1)
-UNIT_TESTS += admin_bootstrap_users_unit-t
-endif
 
 ifeq ($(PROXYSQL31),1)
 UNIT_TESTS += caching_sha2_rsa_unit-t hostgroup_pool_stats_unit-t mysql_server_version_by_interface_unit-t
