@@ -158,6 +158,32 @@ static bool deriveScramKeys(const std::string& verifier, const std::string& pass
 
 static bool connOk(const PGConnPtr& c) { return c && PQstatus(c.get()) == CONNECTION_OK; }
 
+// NOTE on cases (2) and (3): the patch's mutual-auth guard makes scram_init() return NULL, and
+// upstream fe-auth.c treats that as `goto oom_error` -- so libpq reports "out of memory" rather
+// than anything about SCRAM keys. The rejection is correct; only the message is misleading. That
+// is why these two cases assert the CLASS of failure (reached auth, not a transport error) instead
+// of a specific string: pinning "out of memory" would encode an upstream quirk into the test.
+//
+// A negative case is only meaningful if the connection was REFUSED BY AUTHENTICATION. Asserting
+// !CONNECTION_OK alone also passes when the backend is down, the role is missing, or pg_hba denies
+// the host -- i.e. the assertion would survive the patch being reverted. These two helpers pin the
+// reason: reachedAuth() rejects transport/lookup failures, and errHas() checks for the specific
+// diagnostic a case is meant to prove.
+static bool errHas(const PGConnPtr& c, const char* needle) {
+	return c && strstr(PQerrorMessage(c.get()), needle) != nullptr;
+}
+static bool reachedAuth(const PGConnPtr& c) {
+	if (!c) return false;
+	const std::string e = PQerrorMessage(c.get());
+	static const char* transport[] = {
+		"could not connect", "Connection refused", "could not translate host name",
+		"could not receive data", "server closed the connection unexpectedly",
+		"timeout expired", "No route to host", nullptr };
+	for (int i = 0; transport[i]; i++)
+		if (e.find(transport[i]) != std::string::npos) return false;
+	return true;
+}
+
 int main(int, char**) {
 	plan(6);
 	if (cl.getEnv()) return exit_status();
@@ -220,7 +246,8 @@ int main(int, char**) {
 		bool rejected = !connOk(c);
 		diag("(2) scram_client_key alone -> %s : %s", rejected ? "rejected" : "ACCEPTED",
 		     c ? PQerrorMessage(c.get()) : "(null)");
-		ok(rejected, "scram_client_key without scram_server_key is rejected");
+		ok(rejected && reachedAuth(c),
+		   "scram_client_key without scram_server_key is rejected BY AUTH (not by a transport failure)");
 	}
 
 	// (3) server key WITHOUT client key -> rejected (guard, or 'no password'/auth failure -- any clean reject).
@@ -230,7 +257,8 @@ int main(int, char**) {
 		bool rejected = !connOk(c);
 		diag("(3) scram_server_key alone -> %s : %s", rejected ? "rejected" : "ACCEPTED",
 		     c ? PQerrorMessage(c.get()) : "(null)");
-		ok(rejected, "scram_server_key without scram_client_key is rejected");
+		ok(rejected && reachedAuth(c),
+		   "scram_server_key without scram_client_key is rejected BY AUTH (not by a transport failure)");
 	}
 
 	// (4) malformed base64 key material -> rejected cleanly ("invalid scram_client_key"), not a crash.
@@ -240,7 +268,10 @@ int main(int, char**) {
 		bool rejected = !connOk(c);
 		diag("(4) malformed base64 keys -> %s : %s", rejected ? "rejected" : "ACCEPTED",
 		     c ? PQerrorMessage(c.get()) : "(null)");
-		ok(rejected, "invalid base64 SCRAM key material is rejected (no crash/UB)");
+		// This case exists to prove the PATCH reports the decode failure, so the diagnostic IS the
+		// signal: without it any unrelated connect failure would satisfy the assertion.
+		ok(rejected && errHas(c, "invalid scram_client_key"),
+		   "invalid base64 SCRAM key material is rejected with 'invalid scram_client_key' (no crash/UB)");
 	}
 
 	// (5) SECURITY: the raw SCRAM verifier string handed in via password= is NOT a plaintext password.
@@ -251,7 +282,8 @@ int main(int, char**) {
 		bool rejected = !connOk(c);
 		diag("(5) verifier-as-password -> %s : %s", rejected ? "rejected" : "ACCEPTED (SECURITY FINDING)",
 		     c ? PQerrorMessage(c.get()) : "(null)");
-		ok(rejected, "SCRAM verifier string used as plaintext password is rejected (not equivalent)");
+		ok(rejected && reachedAuth(c),
+		   "SCRAM verifier string used as plaintext password is rejected BY AUTH (not equivalent)");
 	}
 
 	// Cleanup: all ROLE connections above are closed (scoped); drop the role.

@@ -149,12 +149,22 @@ int main(int, char**) {
 	// cannot satisfy a SCRAM challenge and the floor forbids downgrading to md5, so the connect fails
 	// generically (the B-floor reject -> anti-enumeration mock-fail path).
 	setFloor(admin.get(), "3"); // raise floor to scram-sha-256
+	// Re-capture the wrong-password baseline UNDER FLOOR 3. deniedBaseline was taken at the top
+	// while the floor was still orig_floor, and this file states above that orig_floor is not
+	// guaranteed to be 3. Comparing errors produced under two different floors would fail this
+	// assertion for a configuration reason rather than an enumeration leak, so the comparison
+	// below uses a baseline captured under the same floor it is judging.
+	std::string deniedBaselineFloor3;
+	{
+		auto c = frontendConn("scram_user", "totally-wrong");
+		deniedBaselineFloor3 = (c ? PQerrorMessage(c.get()) : "");
+	}
 	{
 		auto c = frontendConn("md5_user", P); // correct password, but the md5 secret is below the SCRAM floor
 		std::string e = (c ? PQerrorMessage(c.get()) : "");
-		ok(c && PQstatus(c.get()) != CONNECTION_OK && maskUser(e) == maskUser(deniedBaseline),
+		ok(c && PQstatus(c.get()) != CONNECTION_OK && maskUser(e) == maskUser(deniedBaselineFloor3),
 		   "md5 secret under SCRAM floor rejected identically to a wrong password (no enumeration leak): got '%s' vs baseline '%s'",
-		   maskUser(e).c_str(), maskUser(deniedBaseline).c_str());
+		   maskUser(e).c_str(), maskUser(deniedBaselineFloor3).c_str());
 	}
 	delUser(admin.get(), "md5_user");
 
