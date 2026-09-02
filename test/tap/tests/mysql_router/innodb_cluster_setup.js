@@ -24,8 +24,8 @@ function waitForInstance(port) {
 for (var port = 3306; port <= 3309; ++port) {
     try {
         dba.configureInstance(uri(port), {restart: true});
-    } catch (error) {
-        print('configureInstance(' + port + '): ' + error.message);
+	} catch (error) {
+		throw new Error('configureInstance(' + port + ') failed: ' + error.message);
     }
 }
 
@@ -65,7 +65,6 @@ try {
             label: 'read-replica'
         });
     }
-    readReplicaAdded = true;
 } catch (error) {
     println('READ_REPLICA_UNAVAILABLE=' + error.message);
 }
@@ -85,9 +84,13 @@ session.runSql("GRANT ALL PRIVILEGES ON router_e2e.* TO 'operator_user'@'%'");
 var topologyUuid = session.runSql(
     "SELECT cluster_id FROM mysql_innodb_cluster_metadata.v2_gr_clusters WHERE cluster_name=?",
     [clusterName]).fetchOne()[0];
-var primaryUuid = session.runSql(
-    "SELECT MEMBER_ID FROM performance_schema.replication_group_members " +
-    "WHERE MEMBER_ROLE='PRIMARY' AND MEMBER_STATE='ONLINE'").fetchOne()[0];
+var primaryRow = session.runSql(
+	"SELECT MEMBER_ID FROM performance_schema.replication_group_members " +
+	"WHERE MEMBER_ROLE='PRIMARY' AND MEMBER_STATE='ONLINE'").fetchOne();
+if (primaryRow === null) {
+	throw new Error('the InnoDB Cluster has no ONLINE PRIMARY');
+}
+var primaryUuid = primaryRow[0];
 var instances = session.runSql(
     "SELECT mysql_server_uuid,address,instance_type FROM mysql_innodb_cluster_metadata.v2_instances " +
     "WHERE cluster_id=? ORDER BY address", [topologyUuid]).fetchAll();

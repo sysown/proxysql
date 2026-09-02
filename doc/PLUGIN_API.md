@@ -41,14 +41,13 @@ startup phase before the database takes precedence).
 
 ### Startup Sequence
 
-ProxySQL uses an ordered plugin lifecycle. Every phase but Phase B
-is mandatory; Phase B is optional via the `register_schemas` descriptor
-field and only enabled when the plugin declares ABI version 2 or higher.
+ProxySQL uses an ordered six-phase plugin lifecycle. Schema registration is
+optional via the `register_schemas` descriptor field and is enabled only when
+the plugin declares ABI version 2 or higher.
 
-1. **Phase A — load.**  ProxySQL parses `proxysql.cnf` and populates the
-   `plugins` list.  For each plugin path, ProxySQL calls `dlopen()`,
-   resolves the `proxysql_plugin_descriptor_v1` symbol, and validates
-   the descriptor (`abi_version`, `name`, callback pointers).
+1. **Phase A — discover and register CLI.**  ProxySQL parses `proxysql.cnf`,
+   loads and validates each plugin, then invokes `register_cli_options` (ABI
+   6+) before the one definitive command-line parse.
 2. **Phase B — register_schemas (optional, ABI 2+).**  If the
    descriptor wires `register_schemas`, the loader invokes it with a
    `ProxySQL_PluginServices` whose `register_table` /
@@ -58,22 +57,21 @@ field and only enabled when the plugin declares ABI version 2 or higher.
    are non-null stubs that return `nullptr`.  The plugin declares the
    tables it owns, its admin commands, and any admin-side runtime
    views it wants the chassis to project from module state; it MUST
-   NOT touch DB handles here.  Plugins that leave `register_schemas`
-   null (or that declare ABI 1) skip this phase entirely and do all
-   their setup in Phase D.
+   NOT touch DB handles here.
 3. **Phase C — admin materialization.**  The admin module initializes
    and materializes the SQLite schemas collected during Phase B
    (`merge_plugin_tables` + `CREATE TABLE`).  On DDL failure ProxySQL
    aborts startup.
-4. **Phase D — init.**  The plugin's `init()` callback is called,
-   receiving a fully live `ProxySQL_PluginServices` (DB handles now
-   valid).  Plugins that opted out of Phase B register their tables
-   AND commands here; plugins that used Phase B only finish their
-   context setup.
-5. **Phase E — start.**  The plugin's `start()` callback is called.
-   The plugin should start its threads, open listener sockets, and
-   load runtime configuration.  After this returns, ProxySQL is ready
-   and the plugin is live.
+4. **Phase D — early action (ABI 6+).**  After Admin is live, ProxySQL invokes
+   `early_action` once. It may continue normal startup or request a successful
+   or failed process exit (for example after bootstrap).
+5. **Phase E — init.**  The plugin's `init()` callback receives fully live
+   services. Plugins that omitted Phase B may register their schema and
+   commands here; plugins that used Phase B finish their context setup.
+6. **Phase F — start.**  The plugin's `start()` callback starts plugin-owned
+   workers and other active resources. After core runtime dependencies exist,
+   ABI-8 plugins also receive `runtime_ready()` immediately before listener
+   validation/start.
 
 ### Shutdown Sequence
 
@@ -119,8 +117,8 @@ struct ProxySQL_PluginDescriptor {
 |--------------------|---------------|-----------------------------------------------------------|
 | `name`             | `const char*` | Plugin identifier, used in logging.                        |
 | `abi_version`      | `uint32_t`    | Set from `PROXYSQL_PLUGIN_ABI_VERSION`. The current PROXYSQL40 core accepts `[1, 9]`; all evolution is tail-additive. See the ABI reference for the per-version matrix. |
-| `init`             | callback      | Phase D — called with live services; register tables and commands here (or finish context setup if `register_schemas` already did it). |
-| `start`            | callback      | Phase E — start threads, open sockets, load config.        |
+| `init`             | callback      | Phase E — called with live services; register tables and commands here (or finish context setup if `register_schemas` already did it). |
+| `start`            | callback      | Phase F — start threads, open sockets, load config.        |
 | `stop`             | callback      | Called on shutdown.  Pairs with `init`, not `start`: if `init` returned true and `start` later failed, `stop` is still called so the plugin can release resources it allocated in `init`. |
 | `status_json`      | callback      | Return a static JSON string describing plugin status.      |
 | `register_schemas` | callback      | Phase B (ABI 2+).  Optional; leave null to skip Phase B entirely.  Services passed here have `register_table` / `register_command` / `register_command_alias` / `register_runtime_view` LIVE but DB-handle getters returning `nullptr`. |
@@ -128,9 +126,12 @@ struct ProxySQL_PluginDescriptor {
 | `early_action` | callback | ABI 6+. Runs once after Admin is live and may continue startup or request process exit. |
 | `runtime_ready` | callback | ABI 8+. Runs after core runtime dependencies exist and before listener validation. |
 
-All callbacks return `bool` (except `status_json` which returns `const char*`).
-Return `true` on success, `false` on failure. A `false` return from
-`register_schemas`, `init`, or `start` causes ProxySQL to exit.
+Lifecycle and registration callbacks return `bool` (except `status_json`,
+which returns `const char*`). `early_action` instead returns
+`ProxySQL_PluginEarlyActionResult`: `continue_startup`, `exit_success`, or
+`exit_failure`. Return `true` on success and `false` on failure from boolean
+callbacks. A `false` return from `register_schemas`, `init`, or `start` causes
+ProxySQL to exit.
 
 #### ABI version
 

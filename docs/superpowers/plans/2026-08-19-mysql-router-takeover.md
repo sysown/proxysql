@@ -183,7 +183,11 @@
   }
   ```
 
-  and the ClusterSet form with `clusterset-id`. Reject both IDs together, neither ID, duplicate endpoint, password-bearing URI, non-MySQL scheme, port overflow, unknown top-level key, missing list, empty list, or file above 1 MiB.
+  and the ClusterSet form with `clusterset-id`. A ClusterSet state may also
+  carry `group-replication-id` for its member cluster; validate that pair
+  against the topology instead of rejecting it. Reject neither ID, duplicate
+  endpoint, password-bearing URI, non-MySQL scheme, port overflow, unknown
+  top-level key, missing list, empty list, or file above 1 MiB.
 
 - [ ] **Step 2: Add Classic route translation tests**
 
@@ -191,7 +195,8 @@
 
   ```text
   role=PRIMARY -> writer
-  role=SECONDARY or PRIMARY_AND_SECONDARY -> reader
+  role=SECONDARY -> reader
+  role=PRIMARY_AND_SECONDARY + access_mode=read_only -> reader
   role=PRIMARY_AND_SECONDARY + access_mode=auto -> rw_split
   ```
 

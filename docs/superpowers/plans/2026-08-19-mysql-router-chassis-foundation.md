@@ -173,7 +173,10 @@
     bool (*)(ProxySQL_PluginCLIRegistry*);
   ```
 
-  Set `PROXYSQL_PLUGIN_ABI_VERSION` and `_MAX` to `6u`, and append `register_cli_options` after `register_schemas` in `ProxySQL_PluginDescriptor`. Manager code may read it only when `abi_version >= 6`.
+  Historical implementation step: ABI 6 appended `register_cli_options` after
+  `register_schemas`. The completed chassis now publishes a later additive ABI;
+  do not reset `PROXYSQL_PLUGIN_ABI_VERSION` or `_MAX` when consulting this plan.
+  Manager code may read this field only when `abi_version >= 6`.
 
 - [ ] **Step 2: Write resolver and duplicate-option tests**
 
@@ -216,7 +219,11 @@
   };
   ```
 
-  Use `realpath()` for an existing plugin directory and candidate. Verify that a named candidate's canonical parent starts with `plugin_dir + '/'`. Absolute `.so` paths remain supported for the existing config contract; relative strings containing `/` are rejected. Deduplicate canonical paths while preserving first occurrence.
+  Use `realpath()` for an existing plugin directory and candidate. Verify that a
+  named candidate's canonical parent is the plugin directory itself or is below
+  `plugin_dir + '/'`. Absolute `.so` paths remain supported for the existing
+  config contract; relative strings containing `/` are rejected. Deduplicate
+  canonical paths while preserving first occurrence.
 
 - [ ] **Step 5: Split plugin discovery from Phase B**
 
@@ -464,7 +471,11 @@
 
 - [ ] **Step 5: Append ABI-v7 services and wire manager trampolines**
 
-  Set ABI current/max to `7u`. Append the three callbacks to `ProxySQL_PluginServices`; older plugin structs remain a valid prefix. Phase B callbacks return `not_available`; early action, init, start, and runtime callbacks use the live store.
+  Historical implementation step: ABI 7 appended the three callbacks to
+  `ProxySQL_PluginServices`; do not lower the completed chassis ABI when using
+  this plan. Older plugin structs remain a valid prefix. Phase B callbacks
+  return `not_available`; early action, init, start, and runtime callbacks use
+  the live store.
 
 - [ ] **Step 6: Run crypto and lifecycle regression tests**
 
@@ -546,7 +557,9 @@
 
 - [ ] **Step 4: Append ABI-v8 runtime fields**
 
-  Set ABI current/max to `8u`. Append `runtime_ready` to the descriptor and `set_listener_gate` to services. Define:
+  Historical implementation step: ABI 8 appended `runtime_ready` to the
+  descriptor and `set_listener_gate` to services. Preserve the completed
+  chassis's current additive ABI rather than resetting it to 8. Define:
 
   ```cpp
   struct ProxySQL_PluginRuntimeContext {

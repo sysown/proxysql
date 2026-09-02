@@ -11,6 +11,13 @@ ROOT_PASSWORD=${ROOT_PASSWORD:-$(printf '%s' "${INFRA_ID}" | sha256sum | head -c
 RESULT_DIR="${WORKSPACE}/ci_infra_logs/${INFRA_ID}/mysql-router"
 PROXY_DATA_DIR="${WORKSPACE}/ci_infra_logs/${INFRA_ID}/proxysql"
 PLUGIN="${WORKSPACE}/plugins/mysql_router/proxysql_mysql_router.so"
+if [ ! -s "${PLUGIN}" ]; then
+    PLUGIN="${WORKSPACE}/test/tap/tap/_runtime_libs/proxysql_mysql_router.so"
+fi
+if [ ! -s "${PLUGIN}" ]; then
+    echo "ERROR: real proxysql_mysql_router.so is absent from the build handoff" >&2
+    exit 1
+fi
 CONFIG="${WORKSPACE}/test/tap/groups/mysql-router-ic-g1/proxysql-ci.cnf"
 SETUP_COMPLETE=0
 PASSFILE=""
@@ -137,9 +144,9 @@ for port in 6446 6447 6450; do
     done
 done
 
-MYSQL_ROUTER_SHELL_ROUTER=$(docker exec "${BACKEND_CONTAINER}" mysql \
-	-h"${BACKEND_HOST}" -P3306 -uroot -p"${ROOT_PASSWORD}" -NBe \
-    "SELECT CONCAT(address,'::',router_name) FROM mysql_innodb_cluster_metadata.v2_routers ORDER BY router_id DESC LIMIT 1")
+MYSQL_ROUTER_SHELL_ROUTER=$(docker exec -e MYSQL_PWD="${ROOT_PASSWORD}" \
+	"${BACKEND_CONTAINER}" mysql -h"${BACKEND_HOST}" -P3306 -uroot -NBe \
+	"SELECT CONCAT(address,'::',router_name) FROM mysql_innodb_cluster_metadata.v2_routers ORDER BY router_id DESC LIMIT 1")
 export MYSQL_ROUTER_SHELL_ROUTER
 printf '%s\n' "${MYSQL_ROUTER_SHELL_ROUTER}" > "${RESULT_DIR}/router-key"
 

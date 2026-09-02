@@ -204,13 +204,17 @@
   ```sql
   SELECT channel_name, service_state, source_uuid
     FROM performance_schema.replication_connection_status
-   WHERE channel_name='';
+   WHERE channel_name=?;
   SELECT service_state, last_error_number
     FROM performance_schema.replication_applier_status_by_coordinator
-   WHERE channel_name='';
+   WHERE channel_name=?;
   ```
 
-  Assert source writable only when both read-only variables are 0; replica readable only when connection/applier are ON, source UUID matches metadata, and no apply error exists; unreachable/lagged nodes remain represented but ineligible.
+  Bind the ReplicaSet replication-channel name discovered from metadata (MySQL
+  Shell defaults it from the ReplicaSet name). Assert source writable only when
+  both read-only variables are 0; replica readable only when connection/applier
+  are ON, source UUID matches metadata, and no apply error exists;
+  unreachable/lagged nodes remain represented but ineligible.
 
 - [ ] **Step 3: Run the tests and establish RED**
 

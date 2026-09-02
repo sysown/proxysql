@@ -12,6 +12,7 @@ include $(PROXYSQL_PATH)/include/makefiles_paths.mk
 PLUGIN_DIR := $(PROXYSQL_PATH)/plugins/mysql_router
 ODIR := $(PLUGIN_DIR)/obj
 PLUGIN_SO := $(PLUGIN_DIR)/proxysql_mysql_router.so
+RUNTIME_PLUGIN := $(PROXYSQL_PATH)/test/tap/tap/_runtime_libs/proxysql_mysql_router.so
 
 IDIRS := -I$(PROXYSQL_IDIR) -I$(PLUGIN_DIR)/include -I$(SQLITE3_IDIR) \
 	-I$(JSON_IDIR) -I$(MARIADB_IDIR) \
@@ -87,9 +88,14 @@ $(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) | $(ODIR)
 $(PLUGIN_SO): $(OBJS)
 	$(CXX) -shared -o $@ $^ $(CXXFLAGS) $(PLUGIN_LDFLAGS)
 
+.PHONY: stage-runtime
+stage-runtime: $(PLUGIN_SO)
+	mkdir -p $(dir $(RUNTIME_PLUGIN))
+	cp -L $(PLUGIN_SO) $(RUNTIME_PLUGIN)
+
 .PHONY: all
-all: $(PLUGIN_SO)
+all: stage-runtime
 
 .PHONY: clean
 clean:
-	rm -rf $(ODIR) $(PLUGIN_SO)
+	rm -rf $(ODIR) $(PLUGIN_SO) $(RUNTIME_PLUGIN)

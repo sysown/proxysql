@@ -24,7 +24,8 @@ dbdeployer deploy multiple "${MYSQL_VERSION}" \
     -c binlog_checksum=NONE \
     -c innodb_use_native_aio=0
 
-MYSQL_CMD=(mysql -h127.0.0.1 -uroot -pmsandbox)
+export MYSQL_PWD=msandbox
+MYSQL_CMD=(mysql -h127.0.0.1 -uroot)
 for port in 3306 3307 3308 3309; do
     for attempt in $(seq 1 60); do
         if "${MYSQL_CMD[@]}" -P"${port}" -e 'SELECT 1' >/dev/null 2>&1; then

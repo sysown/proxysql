@@ -175,7 +175,7 @@ if [ "${PROXYSQL_LOAD_MYSQL_ROUTER_PLUGIN:-0}" = "1" ]; then
         echo "       Build it first: make -C plugins/mysql_router PROXYSQL40=1" >&2
         exit 1
     fi
-    MYSQL_ROUTER_PLUGIN_MOUNT="-v ${MYSQL_ROUTER_PLUGIN_SRC}:/usr/lib/proxysql/proxysql_mysql_router.so:ro"
+    MYSQL_ROUTER_PLUGIN_MOUNT="-v ${MYSQL_ROUTER_PLUGIN_SRC}:/usr/lib/proxysql/plugins/proxysql_mysql_router.so:ro"
     echo ">>> Mounting mysql_router plugin .so into ProxySQL container"
 fi
 

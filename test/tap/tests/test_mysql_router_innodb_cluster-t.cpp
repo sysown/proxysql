@@ -38,12 +38,21 @@ bool execute(MYSQL* connection, const std::string& sql) {
             sql.c_str());
         return false;
     }
-    do {
-        MYSQL_RES* result = mysql_store_result(connection);
-        if (result) mysql_free_result(result);
-        else if (mysql_field_count(connection) != 0) return false;
-    } while (mysql_next_result(connection) == 0);
-    return true;
+	for (;;) {
+		MYSQL_RES* result = mysql_store_result(connection);
+		if (result) mysql_free_result(result);
+		else if (mysql_field_count(connection) != 0) {
+			diag("cannot store query result: %s", mysql_error(connection));
+			return false;
+		}
+		const int next = mysql_next_result(connection);
+		if (next < 0) break;
+		if (next > 0) {
+			diag("later statement failed: %s; SQL: %s", mysql_error(connection), sql.c_str());
+			return false;
+		}
+	}
+	return true;
 }
 
 bool set_local_metadata_access(MYSQL* connection, const std::string& account,
