@@ -38,6 +38,7 @@ struct MysqlRouterContext {
 	std::atomic<bool> runtime_ready {false};
 	std::atomic<bool> metrics_registered {false};
 	std::mutex status_mutex;
+	std::mutex projection_mutex;
 	MysqlRouterStatus status;
 	std::vector<MysqlRouterRuntimeTopologyRow> runtime_topology;
 	MysqlRouterMetrics metrics;

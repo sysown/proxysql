@@ -357,14 +357,22 @@ public:
 		};
 
 		std::exception_ptr metadata_failure;
+		std::optional<ReconcileTopologySnapshot> invalid_metadata_snapshot;
 		std::set<std::pair<std::string, uint16_t>> attempted;
 		auto attempt_metadata = [&](const MetadataEndpoint& candidate,
 			ReconcileTopologySnapshot& snapshot) {
 			if (!attempted.emplace(candidate.host, candidate.port).second) return false;
 			try {
-				snapshot = read_metadata(candidate);
-				endpoint_ = candidate;
-				return true;
+				ReconcileTopologySnapshot candidate_snapshot = read_metadata(candidate);
+				if (candidate_snapshot.complete) {
+					snapshot = std::move(candidate_snapshot);
+					endpoint_ = candidate;
+					return true;
+				}
+				if (!invalid_metadata_snapshot) {
+					invalid_metadata_snapshot = std::move(candidate_snapshot);
+				}
+				return false;
 			} catch (...) {
 				if (!metadata_failure) metadata_failure = std::current_exception();
 				return false;
@@ -377,6 +385,10 @@ public:
 			MetadataEndpoint candidate {metadata_user_, instance.classic.host,
 				instance.classic.port};
 			if (attempt_metadata(candidate, metadata_snapshot)) return metadata_snapshot;
+		}
+		if (invalid_metadata_snapshot) {
+			ReconcileTopologySnapshot invalid = std::move(*invalid_metadata_snapshot);
+			return invalid;
 		}
 
 		MysqlRouterContext& failure_context = mysql_router_context();
@@ -442,6 +454,7 @@ public:
 		MysqlRouterContext& context = mysql_router_context();
 		std::lock_guard<std::mutex> guard(context.status_mutex);
 		context.status.topology_generation = published;
+		context.runtime_topology = pending_runtime_topology_;
 		if (context.metrics.topology_generation) context.metrics.topology_generation->Set(published);
 		return published;
 	}
@@ -709,7 +722,7 @@ private:
 		context.status.metadata_version = metadata_version(desired.metadata_version);
 		context.status.metadata_available = metadata_available;
 		if (metadata_available) context.status.metadata_last_success = observed_at;
-		context.runtime_topology = std::move(rows);
+		pending_runtime_topology_ = std::move(rows);
 		if (context.metrics.managed_writer_online) context.metrics.managed_writer_online->Set(writers);
 		if (context.metrics.managed_reader_online) context.metrics.managed_reader_online->Set(readers);
 		if (context.metrics.managed_excluded) context.metrics.managed_excluded->Set(excluded);
@@ -730,6 +743,7 @@ private:
 	std::map<std::string, int> managed_hostgroups_;
 	uint64_t router_id_ {0};
 	uint64_t topology_generation_ {0};
+	std::vector<MysqlRouterRuntimeTopologyRow> pending_runtime_topology_;
 	uint64_t user_generation_ {0};
 	uint64_t last_check_in_ms_ {0};
 	DesiredTopology current_topology_;

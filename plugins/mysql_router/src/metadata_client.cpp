@@ -257,8 +257,6 @@ std::unique_ptr<ConnectorCMetadataSession> ConnectorCMetadataSession::connect(
 	set_option(impl->mysql, MYSQL_OPT_WRITE_TIMEOUT, &timeout_seconds, "write timeout");
 	my_bool enforce = tls.mode != MetadataTlsMode::disabled && tls.mode != MetadataTlsMode::preferred;
 	my_bool verify = tls.mode == MetadataTlsMode::verify_ca || tls.mode == MetadataTlsMode::verify_identity;
-	set_option(impl->mysql, MYSQL_OPT_SSL_ENFORCE, &enforce, "TLS enforcement");
-	set_option(impl->mysql, MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &verify, "TLS verification");
 	if (tls.mode != MetadataTlsMode::disabled) {
 		if (mysql_ssl_set(impl->mysql,
 			tls.key.empty() ? nullptr : tls.key.c_str(), tls.cert.empty() ? nullptr : tls.cert.c_str(),
@@ -271,6 +269,8 @@ std::unique_ptr<ConnectorCMetadataSession> ConnectorCMetadataSession::connect(
 			set_option(impl->mysql, MYSQL_OPT_SSL_CRLPATH, tls.crlpath.c_str(), "TLS CRL path");
 		}
 	}
+	set_option(impl->mysql, MYSQL_OPT_SSL_ENFORCE, &enforce, "TLS enforcement");
+	set_option(impl->mysql, MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &verify, "TLS verification");
 	std::vector<char> password_copy(password.size() + 1, '\0');
 	if (!password.empty()) std::memcpy(password_copy.data(), password.data(), password.size());
 	MYSQL* connected = mysql_real_connect(impl->mysql, endpoint.host.c_str(), endpoint.username.c_str(),

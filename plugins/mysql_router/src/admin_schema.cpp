@@ -61,12 +61,13 @@ bool replace_empty_projection(SQLite3DB* db, const char* table) {
 }
 
 void refresh_status(SQLite3DB* db, void*) {
+	MysqlRouterContext& context = mysql_router_context();
+	std::lock_guard<std::mutex> projection_guard(context.projection_mutex);
 	if (db == nullptr || !db->execute("BEGIN")) return;
 	if (!db->execute("DELETE FROM runtime_mysql_router_status")) {
 		db->execute("ROLLBACK");
 		return;
 	}
-	MysqlRouterContext& context = mysql_router_context();
 	MysqlRouterStatus status;
 	{
 		std::lock_guard<std::mutex> guard(context.status_mutex);
@@ -108,8 +109,9 @@ void refresh_status(SQLite3DB* db, void*) {
 }
 
 void refresh_topology(SQLite3DB* db, void*) {
-	if (db == nullptr || !db->execute("BEGIN")) return;
 	MysqlRouterContext& context = mysql_router_context();
+	std::lock_guard<std::mutex> projection_guard(context.projection_mutex);
+	if (db == nullptr || !db->execute("BEGIN")) return;
 	uint64_t generation = 0;
 	std::vector<MysqlRouterRuntimeTopologyRow> rows;
 	{
@@ -133,8 +135,9 @@ void refresh_topology(SQLite3DB* db, void*) {
 }
 
 void refresh_hostgroups(SQLite3DB* db, void*) {
-	if (db == nullptr || !db->execute("BEGIN")) return;
 	MysqlRouterContext& context = mysql_router_context();
+	std::lock_guard<std::mutex> projection_guard(context.projection_mutex);
+	if (db == nullptr || !db->execute("BEGIN")) return;
 	uint64_t generation = 0;
 	{
 		std::lock_guard<std::mutex> guard(context.status_mutex);
@@ -150,6 +153,8 @@ void refresh_hostgroups(SQLite3DB* db, void*) {
 }
 
 void refresh_users(SQLite3DB* db, void*) {
+	MysqlRouterContext& context = mysql_router_context();
+	std::lock_guard<std::mutex> projection_guard(context.projection_mutex);
 	if (db == nullptr || !db->execute("BEGIN")) return;
 	if (!db->execute("DELETE FROM runtime_mysql_router_users") ||
 		!db->execute("INSERT INTO runtime_mysql_router_users(username,state,auth_plugin,last_error,generation) "

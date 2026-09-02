@@ -70,6 +70,9 @@ SRCS := $(PLUGIN_DIR)/src/plugin.cpp \
 	$(PLUGIN_DIR)/src/metrics.cpp
 HEADERS := $(wildcard $(PLUGIN_DIR)/include/*.h) \
 	$(PROXYSQL_PATH)/include/ProxySQL_Plugin.h \
+	$(PROXYSQL_PATH)/include/ProxySQL_PluginConfig.h \
+	$(PROXYSQL_PATH)/include/ProxySQL_PluginListenerGate.h \
+	$(PROXYSQL_PATH)/include/ProxySQL_PluginSecrets.h \
 	$(PLUGIN_DIR)/exports.map
 OBJS := $(patsubst $(PLUGIN_DIR)/src/%.cpp,$(ODIR)/%.o,$(SRCS))
 

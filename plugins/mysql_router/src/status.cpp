@@ -29,6 +29,6 @@ const char* mysql_router_status_json() {
 		{"user_collisions", context.status.user_collisions},
 		{"unsupported_auth_plugins", context.status.unsupported_auth_plugins},
 		{"last_error", context.status.last_error},
-	}.dump();
+	}.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 	return serialized.c_str();
 }
