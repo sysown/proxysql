@@ -453,6 +453,7 @@ $(LIBPROXYSQLAR): FORCE
 $(PROXYSQL_BINARY): $(LIBPROXYSQLAR)
 	$(MAKE) -C $(PROXYSQL_PATH)/src proxysql \
 		PROXYSQL40=$(PROXYSQL40) PROXYSQLCLICKHOUSE=$(PROXYSQLCLICKHOUSE) \
+		PROXYSQL31=$(PROXYSQL31) \
 		PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) \
 		PROXYSQLED25519=$(PROXYSQLED25519) CC=$(CC) CXX=$(CXX)
 
@@ -545,6 +546,7 @@ UNIT_TESTS += \
 	plugin_query_hook_unit-t \
 	plugin_prometheus_unit-t \
 	plugin_lifecycle_unit-t \
+	plugin_cli_unit-t \
 	plugin_runtime_views_unit-t \
 	plugin_listener_gate_unit-t \
 	plugin_mysql_config_unit-t \

@@ -11,8 +11,8 @@
 
 namespace {
 
-constexpr uint64_t warning_interval_us = 30ULL * 1000ULL * 1000ULL;
-constexpr const char* degraded_reason = "runtime readiness degraded";
+constexpr uint64_t WARNING_INTERVAL_US = 30ULL * 1000ULL * 1000ULL;
+constexpr const char* DEGRADED_REASON = "runtime readiness degraded";
 
 bool is_ipv6_address(const std::string& address) {
 	return address.find(':') != std::string::npos;
@@ -32,6 +32,7 @@ bool addresses_overlap(const std::string& lhs, const std::string& rhs) {
 
 std::optional<std::string> ProxySQL_PluginListenerGateRegistry::normalize_address(const char* address) {
 	if (address == nullptr || address[0] == '\0') return std::nullopt;
+	if (address[0] == '/' || address[0] == '@') return std::string(address);
 	char normalized[INET6_ADDRSTRLEN] {};
 	struct in_addr ipv4 {};
 	if (inet_pton(AF_INET, address, &ipv4) == 1) {
@@ -116,7 +117,7 @@ ProxySQL_PluginListenerGateRegistry::inspect_accept(
 	entry_t& entry = found->second;
 	decision.reject = true;
 	decision.should_warn = entry.last_warning_monotonic_us == 0 ||
-		now_monotonic_us - entry.last_warning_monotonic_us >= warning_interval_us;
+		now_monotonic_us - entry.last_warning_monotonic_us >= WARNING_INTERVAL_US;
 	if (decision.should_warn) entry.last_warning_monotonic_us = now_monotonic_us;
 	++entry.snapshot.rejected_accepts;
 	decision.gate = entry.snapshot;
@@ -130,7 +131,7 @@ void ProxySQL_PluginListenerGateRegistry::force_close_owner(const char* owner) {
 		entry_t& entry = gate.second;
 		if (entry.snapshot.owner == owner) {
 			entry.snapshot.state = ProxySQL_PluginListenerState::closed;
-			entry.snapshot.reason = degraded_reason;
+			entry.snapshot.reason = DEGRADED_REASON;
 		}
 	}
 }

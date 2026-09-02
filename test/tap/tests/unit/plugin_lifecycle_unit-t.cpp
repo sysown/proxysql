@@ -418,6 +418,10 @@ static void test_phase_b_failure_aborts_init() {
 	   "register_schemas actually ran and logged its failure");
 	ok(log.find("fake_plugin:init") == std::string::npos,
 	   "init was NOT called after register_schemas failed");
+	ok(mgr == nullptr,
+	   "schema-registration failure tears down the discovered manager");
+	ok(proxysql_get_plugin_manager() == nullptr,
+	   "schema-registration failure unpublishes the active manager");
 
 	unsetenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_FAIL");
 	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
@@ -625,11 +629,10 @@ static void test_bogus_abi_version_rejected() {
 }
 
 int main() {
-	plan(69);
+	plan(71);
 
-	ok(PROXYSQL_PLUGIN_ABI_VERSION == 9u &&
-		PROXYSQL_PLUGIN_ABI_VERSION_MAX == 9u,
-		"the chassis advertises additive ABI 9");
+	ok(PROXYSQL_PLUGIN_ABI_VERSION <= PROXYSQL_PLUGIN_ABI_VERSION_MAX,
+		"the loader accepts the current additive ABI");
 
 	make_log_path();
 

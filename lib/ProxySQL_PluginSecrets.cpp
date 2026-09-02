@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cerrno>
+#include <climits>
 #include <cstring>
 #include <fcntl.h>
 #include <mutex>
@@ -146,6 +147,16 @@ void observe_key_open(int flags) {
 	if (g_key_open_observer != nullptr) g_key_open_observer(flags);
 }
 
+void unlink_created_key_if_same(int fd, const std::string& path) {
+	struct stat opened_stat {};
+	struct stat path_stat {};
+	if (fstat(fd, &opened_stat) == 0 && lstat(path.c_str(), &path_stat) == 0 &&
+		opened_stat.st_dev == path_stat.st_dev &&
+		opened_stat.st_ino == path_stat.st_ino) {
+		(void)unlink(path.c_str());
+	}
+}
+
 } // namespace
 
 namespace proxysql_plugin_secrets_test {
@@ -208,6 +219,7 @@ ProxySQL_PluginSecretResult ProxySQL_PluginSecrets::load_master_key(uint8_t key[
 			const bool sync_ok = mode_ok && fsync(fd) == 0;
 			struct stat created_stat {};
 			const bool stat_ok = sync_ok && fstat(fd, &created_stat) == 0 && safe_key_stat(created_stat);
+			if (!stat_ok) unlink_created_key_if_same(fd, key_path);
 			close(fd);
 			if (!stat_ok) return ProxySQL_PluginSecretResult::key_error;
 			return ProxySQL_PluginSecretResult::ok;
@@ -229,7 +241,8 @@ ProxySQL_PluginSecretResult ProxySQL_PluginSecrets::load_master_key(uint8_t key[
 
 ProxySQL_PluginSecretResult ProxySQL_PluginSecrets::put(const char* owner, const char* name,
 	const uint8_t* bytes, size_t length) {
-	if (!valid_component(owner) || !valid_component(name) || (bytes == nullptr && length != 0)) {
+	if (!valid_component(owner) || !valid_component(name) ||
+		(bytes == nullptr && length != 0) || length > static_cast<size_t>(INT_MAX)) {
 		return ProxySQL_PluginSecretResult::invalid_argument;
 	}
 	if (!ensure_schema()) return ProxySQL_PluginSecretResult::storage_error;

@@ -75,6 +75,11 @@ void read_config_plugins(ProxySQL_PluginDiscovery& found, std::set<std::string>&
 		}
 		if (!root.exists("plugins")) return;
 		const Setting& plugins = root["plugins"];
+		if (plugins.getType() != Setting::TypeList &&
+			plugins.getType() != Setting::TypeArray) {
+			found.error = "plugins must be a list in " + found.config_file;
+			return;
+		}
 		for (int i = 0; i < plugins.getLength() && found.error.empty(); ++i) {
 			if (plugins[i].isString()) append_module(plugins[i].c_str(), found.plugin_dir, seen, found);
 		}
@@ -120,7 +125,10 @@ std::string proxysql_resolve_plugin(const std::string& plugin,
 		error = "invalid plugin name: " + plugin;
 		return {};
 	}
-	const std::string candidate = canonical_dir + "/proxysql_" + plugin + ".so";
+	std::string filename = "proxysql_" + plugin + ".so";
+	if (plugin == "mysqlx") filename = "ProxySQL_MySQLX_Plugin.so";
+	else if (plugin == "genai") filename = "ProxySQL_GenAI_Plugin.so";
+	const std::string candidate = canonical_dir + "/" + filename;
 	const std::string canonical_candidate = canonical_existing(candidate);
 	const std::string required_prefix = canonical_dir + "/";
 	if (canonical_candidate.empty() || !is_regular_file(canonical_candidate) ||
@@ -159,6 +167,8 @@ ProxySQL_PluginDiscovery proxysql_prescan_plugins(
 		};
 		if (arg == "-c" || arg == "--config") {
 			if (!next_value(found.config_file)) return found;
+		} else if (arg.rfind("--config=", 0) == 0) {
+			found.config_file = arg.substr(std::strlen("--config="));
 		} else if (arg.rfind("-c", 0) == 0 && arg.size() > 2) {
 			found.config_file = arg.substr(2);
 		} else if (arg == "-D") {

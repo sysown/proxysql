@@ -1252,7 +1252,12 @@ bool proxysql_load_configured_plugins(
 	std::string& err
 ) {
 	if (!proxysql_discover_configured_plugins(manager, plugin_modules, err)) return false;
-	return proxysql_register_configured_plugin_schemas(manager.get(), err);
+	if (proxysql_register_configured_plugin_schemas(manager.get(), err)) return true;
+	const std::string registration_error = err;
+	std::string cleanup_error;
+	(void)proxysql_stop_configured_plugins(manager, cleanup_error);
+	err = registration_error;
+	return false;
 }
 
 #ifdef PROXYSQL40

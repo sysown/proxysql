@@ -79,14 +79,14 @@ docker run --rm \
     --hostname proxysql-e2e \
     --network "${INFRA_ID}_backend" \
     -v "${WORKSPACE}/src/proxysql:/usr/bin/proxysql:ro" \
-    -v "${PLUGIN}:/usr/lib/proxysql/proxysql_mysql_router.so:ro" \
+    -v "${PLUGIN}:/usr/lib/proxysql/plugins/proxysql_mysql_router.so:ro" \
     -v "${CONFIG}:/etc/proxysql.cnf:ro" \
     -v "${PROXY_DATA_DIR}:/var/lib/proxysql" \
     -v "${PASSFILE}:/run/secrets/bootstrap_password:ro" \
     proxysql-ci-base:latest /bin/bash -c '
         exec 9</run/secrets/bootstrap_password
         /usr/bin/proxysql --idle-threads -f -c /etc/proxysql.cnf -D /var/lib/proxysql \
-            --plugin-dir=/usr/lib/proxysql --load-plugin=mysql_router \
+            --plugin-dir=/usr/lib/proxysql/plugins --load-plugin=mysql_router \
             --bootstrap root@dbdeployer1.infra-mysql-router-ic:3306 \
             --bootstrap-password-fd 9 --router-name proxysql-e2e \
             --ssl-mode=DISABLED &

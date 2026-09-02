@@ -183,15 +183,10 @@ std::string proxysql_resolve_configured_plugin_admin_alias(const std::string& sq
 // the correct one based on each view's registered db_kind.
 void proxysql_refresh_configured_plugin_runtime_views(const std::string& sql,
 	SQLite3DB* admindb, SQLite3DB* configdb, SQLite3DB* statsdb);
-// Phase A + B of the six-phase lifecycle: dlopen() each module, read its
-// descriptor, then call register_schemas() on plugins that opted in. On
-// success, `manager` is populated AND installed as the active manager so
-// that ProxySQL_Admin::init() can see the declared tables and merge them
-// into tables_defs_{admin,config,stats} for the existing
-// check_and_build_standard_tables DDL pass. Phase D (early action) and
-// Phase E (init) must be
-// invoked separately — after admin module bootstrap — via
-// proxysql_init_configured_plugins.
+// Phase A only: dlopen each module and validate its descriptor. On success,
+// `manager` is populated and installed as the active manager. Callers must
+// then register CLI options, invoke the schema-registration phase before
+// Admin materialization, and run early actions before init/start.
 bool proxysql_discover_configured_plugins(
 	std::unique_ptr<ProxySQL_PluginManager>& manager,
 	const std::vector<std::string>& plugin_modules,

@@ -4,12 +4,14 @@
 #include "tap.h"
 
 #include <cerrno>
+#include <climits>
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
 #include <openssl/evp.h>
 #include <string>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
 
@@ -108,11 +110,17 @@ ssize_t inject_eintr_and_short_io(bool is_write, int fd, void* buffer, size_t le
 
 int inject_busy_step(sqlite3_stmt*) { return SQLITE_BUSY; }
 
+ssize_t inject_write_failure(bool is_write, int, void*, size_t, int* error) {
+	if (!is_write) return 0;
+	*error = EIO;
+	return -1;
+}
+
 } // namespace
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(40);
+	plan(43);
 
 	SQLite3DB db;
 	db.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE); // NOSONAR: API requires char*
@@ -155,6 +163,16 @@ int main() {
 	   "invalid secret name is rejected before SQL");
 	ok(store.get("-not-an-owner", "metadata_password", out) == ProxySQL_PluginSecretResult::invalid_argument,
 	   "owner must begin with an ASCII alphanumeric character or underscore");
+	const pid_t oversized_child = fork();
+	if (oversized_child == 0) {
+		const auto result = store.put("mysql_router", "oversized",
+			reinterpret_cast<const uint8_t*>(1), static_cast<size_t>(INT_MAX) + 1);
+		_exit(result == ProxySQL_PluginSecretResult::invalid_argument ? 0 : 1);
+	}
+	int oversized_status = 0;
+	waitpid(oversized_child, &oversized_status, 0);
+	ok(WIFEXITED(oversized_status) && WEXITSTATUS(oversized_status) == 0,
+	   "oversized secrets are rejected before allocation or OpenSSL conversion");
 
 	ok(db.execute("UPDATE proxysql_plugin_secrets SET ciphertext = X'00' WHERE owner='mysql_router' AND secret_name='metadata_password'"),
 	   "tamper fixture changes ciphertext");
@@ -193,7 +211,9 @@ int main() {
 	   "erased secret is unavailable and output is empty");
 
 	{
-		proxysql_plugin_secrets_test::scoped_hooks_t hooks({ .cleanse_observer = &observe_cleanse });
+		proxysql_plugin_secrets_test::hooks_t hook_values {};
+		hook_values.cleanse_observer = &observe_cleanse;
+		proxysql_plugin_secrets_test::scoped_hooks_t hooks(hook_values);
 		g_cleanse_records.clear();
 		ok(store.put("mysql_router", "cleanse_test", secret.data(), secret.size()) == ProxySQL_PluginSecretResult::ok,
 		   "cleanse fixture writes secret");
@@ -213,7 +233,9 @@ int main() {
 	out.assign({0xa1, 0xa2, 0xa3});
 	const void* replaced_output_address = out.data();
 	{
-		proxysql_plugin_secrets_test::scoped_hooks_t hooks({ .cleanse_observer = &observe_cleanse });
+		proxysql_plugin_secrets_test::hooks_t hook_values {};
+		hook_values.cleanse_observer = &observe_cleanse;
+		proxysql_plugin_secrets_test::scoped_hooks_t hooks(hook_values);
 		g_cleanse_records.clear();
 		ok(store.get("mysql_router", "cleanse_failure", out) == ProxySQL_PluginSecretResult::authentication_failed && out.empty(),
 		   "failed decryption does not publish plaintext");
@@ -241,7 +263,9 @@ int main() {
 	const std::string flags_dir = make_temp_dir();
 	g_open_flags = 0;
 	{
-		proxysql_plugin_secrets_test::scoped_hooks_t hooks({ .key_open_observer = &observe_open_flags });
+		proxysql_plugin_secrets_test::hooks_t hook_values {};
+		hook_values.key_open_observer = &observe_open_flags;
+		proxysql_plugin_secrets_test::scoped_hooks_t hooks(hook_values);
 		ProxySQL_PluginSecrets flags_store(&db, flags_dir);
 		ok(flags_store.put("mysql_router", "flags_key", secret.data(), secret.size()) == ProxySQL_PluginSecretResult::ok,
 		   "first key creation succeeds");
@@ -250,13 +274,34 @@ int main() {
 	}
 	remove_temp_dir(flags_dir);
 
+	const std::string failed_create_dir = make_temp_dir();
+	{
+		proxysql_plugin_secrets_test::hooks_t hook_values {};
+		hook_values.key_io_hook = &inject_write_failure;
+		proxysql_plugin_secrets_test::scoped_hooks_t hooks(hook_values);
+		ProxySQL_PluginSecrets failed_create_store(&db, failed_create_dir);
+		ok(failed_create_store.put("mysql_router", "failed_create", secret.data(), secret.size()) ==
+			ProxySQL_PluginSecretResult::key_error,
+		   "an injected first-key write failure is reported");
+	}
+	struct stat failed_key_stat {};
+	const std::string failed_key_path = failed_create_dir + "/proxysql-plugin-secrets.key";
+	ProxySQL_PluginSecrets retried_create_store(&db, failed_create_dir);
+	ok(lstat(failed_key_path.c_str(), &failed_key_stat) != 0 && errno == ENOENT &&
+		retried_create_store.put("mysql_router", "failed_create", secret.data(), secret.size()) ==
+			ProxySQL_PluginSecretResult::ok,
+	   "failed key creation removes its partial file so a later call can retry");
+	remove_temp_dir(failed_create_dir);
+
 	const std::string io_dir = make_temp_dir();
 	g_write_eintr_count = 0;
 	g_read_eintr_count = 0;
 	g_short_write_count = 0;
 	g_short_read_count = 0;
 	{
-		proxysql_plugin_secrets_test::scoped_hooks_t hooks({ .key_io_hook = &inject_eintr_and_short_io });
+		proxysql_plugin_secrets_test::hooks_t hook_values {};
+		hook_values.key_io_hook = &inject_eintr_and_short_io;
+		proxysql_plugin_secrets_test::scoped_hooks_t hooks(hook_values);
 		ProxySQL_PluginSecrets io_store(&db, io_dir);
 		ok(io_store.put("mysql_router", "io_secret", secret.data(), secret.size()) == ProxySQL_PluginSecretResult::ok,
 		   "exclusive key creation survives injected EINTR and short writes");
@@ -272,7 +317,9 @@ int main() {
 
 	bool busy_step_reported = false;
 	{
-		proxysql_plugin_secrets_test::scoped_hooks_t hooks({ .sqlite_step_hook = &inject_busy_step });
+		proxysql_plugin_secrets_test::hooks_t hook_values {};
+		hook_values.sqlite_step_hook = &inject_busy_step;
+		proxysql_plugin_secrets_test::scoped_hooks_t hooks(hook_values);
 		out.assign({0x42});
 		busy_step_reported = store.get("mysql_router", "cleanse_test", out) == ProxySQL_PluginSecretResult::storage_error && out.empty();
 	}

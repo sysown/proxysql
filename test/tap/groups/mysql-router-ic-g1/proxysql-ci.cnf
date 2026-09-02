@@ -26,5 +26,5 @@ sqliteserver_variables=
 }
 
 plugins=(
-    "/usr/lib/proxysql/proxysql_mysql_router.so"
+    "/usr/lib/proxysql/plugins/proxysql_mysql_router.so"
 )

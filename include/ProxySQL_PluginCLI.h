@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-constexpr const char* PROXYSQL_DEFAULT_PLUGIN_DIR = "/usr/lib/proxysql";
+constexpr const char* PROXYSQL_DEFAULT_PLUGIN_DIR = "/usr/lib/proxysql/plugins";
 
 struct ProxySQL_PluginDiscovery {
 	bool disabled {false};

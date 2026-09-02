@@ -93,6 +93,8 @@ void remove_tree(const std::string& root) {
 	if (root.empty()) return;
 	(void)unlink((root + "/plugins/proxysql_mysql_router.so").c_str());
 	(void)unlink((root + "/plugins/proxysql_fake_plugin.so").c_str());
+	(void)unlink((root + "/plugins/ProxySQL_MySQLX_Plugin.so").c_str());
+	(void)unlink((root + "/plugins/ProxySQL_GenAI_Plugin.so").c_str());
 	(void)rmdir((root + "/plugins").c_str());
 	(void)unlink((root + "/custom.so").c_str());
 	(void)unlink((root + "/config.cnf").c_str());
@@ -105,12 +107,20 @@ void test_resolver_rejects_unsafe_names_and_canonicalizes() {
 	(void)mkdir(plugins.c_str(), 0700);
 	const std::string plugin = plugins + "/proxysql_mysql_router.so";
 	std::ofstream(plugin).put('\n');
+	const std::string mysqlx = plugins + "/ProxySQL_MySQLX_Plugin.so";
+	std::ofstream(mysqlx).put('\n');
+	const std::string genai = plugins + "/ProxySQL_GenAI_Plugin.so";
+	std::ofstream(genai).put('\n');
 	const std::string outside = root + "/custom.so";
 	std::ofstream(outside).put('\n');
 
 	std::string err;
 	ok(proxysql_resolve_plugin("mysql_router", plugins, err) == canonical(plugin),
 	   "name resolves below canonical plugin directory");
+	ok(proxysql_resolve_plugin("mysqlx", plugins, err) == canonical(mysqlx),
+	   "mysqlx logical name resolves to its installed artifact");
+	ok(proxysql_resolve_plugin("genai", plugins, err) == canonical(genai),
+	   "genai logical name resolves to its installed artifact");
 	ok(proxysql_resolve_plugin(outside, plugins, err) == canonical(outside),
 	   "explicit absolute existing .so path remains supported");
 	ok(proxysql_resolve_plugin(outside, root + "/missing-plugin-dir", err) == canonical(outside),
@@ -161,6 +171,26 @@ void test_prescan_honors_cli_config_datadir_plugin_dir_and_deduplicates() {
 		static_cast<int>(long_config.argv.size()), long_config.argv.data(), nullptr, plugins.c_str());
 	ok(long_found.error.empty() && long_found.config_file == config,
 	   "--config FILE selects config and discovers its plugins");
+	ArgV equals_config { "proxysql", ("--config=" + config).c_str(), "--plugin-dir", plugins.c_str() };
+	const ProxySQL_PluginDiscovery equals_found = proxysql_prescan_plugins(
+		static_cast<int>(equals_config.argv.size()), equals_config.argv.data(), nullptr, plugins.c_str());
+	ok(equals_found.error.empty() && equals_found.config_file == config &&
+		equals_found.module_paths.size() == 1,
+	   "--config=FILE selects the exact config before compact -c parsing");
+	remove_tree(root);
+}
+
+void test_prescan_rejects_invalid_plugin_config_type() {
+	const std::string root = make_temp_dir();
+	const std::string plugins = root + "/plugins";
+	(void)mkdir(plugins.c_str(), 0700);
+	const std::string config = root + "/config.cnf";
+	ok(write_config(config, "plugins=\"fake_plugin\";"),
+	   "invalid plugin config type fixture written");
+	ArgV args {"proxysql", "--config", config.c_str(), "--plugin-dir", plugins.c_str()};
+	const ProxySQL_PluginDiscovery found = proxysql_prescan_plugins(
+		static_cast<int>(args.argv.size()), args.argv.data(), nullptr, plugins.c_str());
+	ok(!found.error.empty(), "a non-list plugins value is rejected without throwing");
 	remove_tree(root);
 }
 
@@ -234,6 +264,14 @@ void test_executable_help_registers_plugin_options_unless_killed() {
 	   "executable help with a discovered ABI 6 plugin exits cleanly");
 	ok(enabled.output.find("--fake-plugin-action") != std::string::npos,
 	   "executable help includes the discovered plugin option");
+	const std::vector<std::string> compact_args {
+		PROXYSQL_BINARY_PATH, "-c" + config, "--plugin-dir", plugins,
+		"--load-plugin", "fake_plugin", "--help"
+	};
+	const CommandResult compact = run_executable_help(compact_args);
+	ok(WIFEXITED(compact.status) && WEXITSTATUS(compact.status) == 0 &&
+		compact.output.find("--fake-plugin-action") != std::string::npos,
+	   "compact -cFILE selects the same config in pre-scan and definitive parsing");
 
 	const std::vector<std::string> disabled_args {
 		PROXYSQL_BINARY_PATH, "--config", config, "--plugin-dir", plugins,
@@ -252,10 +290,13 @@ void test_executable_help_registers_plugin_options_unless_killed() {
 } // namespace
 
 int main() {
-	plan(34);
+	plan(41);
+	ok(std::string(PROXYSQL_DEFAULT_PLUGIN_DIR) == "/usr/lib/proxysql/plugins",
+	   "the default plugin directory matches the installation layout");
 	test_resolver_rejects_unsafe_names_and_canonicalizes();
 	test_registry_rejects_duplicate_option_names();
 	test_prescan_honors_cli_config_datadir_plugin_dir_and_deduplicates();
+	test_prescan_rejects_invalid_plugin_config_type();
 	test_prescan_supports_compact_config_and_no_plugins_kill_switch();
 	test_manager_registers_abi6_options_without_reading_abi5_tail();
 	test_executable_help_registers_plugin_options_unless_killed();

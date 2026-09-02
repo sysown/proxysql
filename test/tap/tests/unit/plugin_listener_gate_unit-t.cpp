@@ -18,7 +18,7 @@ ProxySQL_PluginListenerGate gate(const char* owner, const char* address,
 } // namespace
 
 int main() {
-	plan(29);
+	plan(31);
 
 	ProxySQL_PluginListenerGateRegistry registry;
 	char reason[] = "first publication is incomplete";
@@ -75,6 +75,16 @@ int main() {
 		"another owner cannot replace an IPv6 exact gate with a wildcard gate");
 	ok(!registry.lookup("192.0.2.10", 6446).has_value(),
 		"lookup keeps address and port as an exact composite key");
+	ok(registry.set(gate("socket-upper", "/tmp/Router.sock", 0,
+		ProxySQL_PluginListenerState::closed, "uppercase socket")) &&
+		registry.set(gate("socket-lower", "/tmp/router.sock", 0,
+			ProxySQL_PluginListenerState::ready, "lowercase socket")),
+		"case-sensitive Unix socket paths can be owned independently");
+	const auto upper_socket = registry.lookup("/tmp/Router.sock", 0);
+	const auto lower_socket = registry.lookup("/tmp/router.sock", 0);
+	ok(upper_socket && upper_socket->owner == "socket-upper" &&
+		lower_socket && lower_socket->owner == "socket-lower",
+		"Unix socket lookup preserves path case");
 
 	ok(!registry.set(gate("", "127.0.0.1", 6449,
 		ProxySQL_PluginListenerState::closed, "missing owner")),
