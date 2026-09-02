@@ -447,8 +447,9 @@ pcre2/pcre2/.libs/libpcre2-8.a:
 	cd pcre2/pcre2 && CC=${CC} CXX=${CXX} ${MAKE} libpcre2-8.la
 
 pcre2: pcre2/pcre2/.libs/libpcre2-8.a
-postgresql/postgresql/src/interfaces/libpq/libpq.a: $(OPENSSL_BUILD_STAMP)
-	cd postgresql && rm -rf postgresql-*/ || true
+postgresql/postgresql/src/interfaces/libpq/libpq.a: $(OPENSSL_BUILD_STAMP) \
+		postgresql/postgresql-16.10.tar.gz $(wildcard postgresql/*.patch)
+	cd postgresql && rm -rf postgresql-*/ postgres-*/ || true
 	cd postgresql && tar -zxf postgresql-*.tar.gz
 	cd postgresql/postgresql && patch -p0 < ../get_result_from_pgconn.patch
 	cd postgresql/postgresql && patch -p0 < ../handle_row_data.patch

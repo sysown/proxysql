@@ -283,7 +283,7 @@ sh-%:
 
  test_com_register_slave_enables_fast_forward-t: binlog_rpl.h
 
-%-t: %-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
+%-t: %-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT) $(POSTGRESQL_STATIC_LIBS)
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 
 galera_1_timeout_count: galera_1_timeout_count.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
