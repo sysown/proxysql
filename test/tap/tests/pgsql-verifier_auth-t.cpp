@@ -154,11 +154,18 @@ int main(int, char**) {
 	// guaranteed to be 3. Comparing errors produced under two different floors would fail this
 	// assertion for a configuration reason rather than an enumeration leak, so the comparison
 	// below uses a baseline captured under the same floor it is judging.
+	// scram_user was deleted at the (4) block above, so it must be re-loaded first: connecting as
+	// a NON-EXISTENT user would capture the unknown-user error, not the wrong-password error this
+	// baseline is supposed to represent. The two are deliberately identical today (that is what (4)
+	// asserts), so the mistake would not fail anything -- it would just stop this assertion from
+	// testing what it claims.
 	std::string deniedBaselineFloor3;
+	if (scram) addUser(admin.get(), "scram_user", scram);
 	{
 		auto c = frontendConn("scram_user", "totally-wrong");
 		deniedBaselineFloor3 = (c ? PQerrorMessage(c.get()) : "");
 	}
+	delUser(admin.get(), "scram_user");
 	{
 		auto c = frontendConn("md5_user", P); // correct password, but the md5 secret is below the SCRAM floor
 		std::string e = (c ? PQerrorMessage(c.get()) : "");
@@ -206,6 +213,7 @@ int main(int, char**) {
 	}
 	execAdmin(admin.get(), "DELETE FROM pgsql_users WHERE username='bad_verifier_user'");
 	execAdmin(admin.get(), "LOAD PGSQL USERS TO RUNTIME");
+
 
 	// Unconditional final restore: guarantee the suite-wide floor is left exactly as found,
 	// regardless of the scenario sequence above.

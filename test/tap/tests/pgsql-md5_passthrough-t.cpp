@@ -65,11 +65,15 @@ static std::string execScalar(PGconn* c, const std::string& q) {
 }
 // Store ONLY the md5 hash (no plaintext) in pgsql_users. DELETE-then-INSERT so a pre-existing
 // runtime entry for the user cannot cause a UNIQUE conflict.
+// BAIL_OUT rather than ignore failures: if the INSERT or LOAD silently fails the user is absent
+// from ProxySQL, every later connect fails at the FRONTEND, and the negative assertions below pass
+// for the wrong reason -- a green run that proves nothing.
 static void storeUser(PGconn* admin, const char* user, const std::string& secret) {
 	execOk(admin, std::string("DELETE FROM pgsql_users WHERE username='") + user + "'");
-	execOk(admin, std::string("INSERT INTO pgsql_users (username,password,active,default_hostgroup) "
-	                          "VALUES ('") + user + "','" + secret + "',1,0)");
-	execOk(admin, "LOAD PGSQL USERS TO RUNTIME");
+	if (!execOk(admin, std::string("INSERT INTO pgsql_users (username,password,active,default_hostgroup) "
+	                               "VALUES ('") + user + "','" + secret + "',1,0)") ||
+	    !execOk(admin, "LOAD PGSQL USERS TO RUNTIME"))
+		BAIL_OUT("could not store pgsql_users['%s'] in ProxySQL", user);
 }
 // Open a FRESH ProxySQL frontend connection as user/pass and return true iff `SELECT 1` returns 1 --
 // which requires the BACKEND leg to authenticate (md5_secret pass-through), the property under test.
@@ -160,10 +164,20 @@ int main(int, char**) {
 	const char* PWP = "cleartextuser";
 	std::string MPW = execScalar(be.get(),
 		std::string("SELECT rolpassword FROM pg_authid WHERE rolname='") + PWU + "'");
-	if (MPW.rfind("md5", 0) != 0) {
-		skip(2, "infra has no md5-stored cleartext-password role '%s' (rolpassword='%.4s') -- needs the "
-		        "'host all %s all password' pg_hba rule and the role from docker-pgsql-post.bash",
-		     PWU, MPW.empty() ? "(none)" : MPW.c_str(), PWU);
+	// The stored secret alone is not enough: if the pg_hba rule for this role were absent or
+	// changed, the role would fall through to the scram-sha-256 catch-all, ProxySQL could not
+	// satisfy SCRAM with an md5 hash, the connect would fail anyway, and BOTH assertions below
+	// would pass without ever reaching AuthenticationCleartextPassword. Ask the server which
+	// method it will actually use.
+	const std::string ct_method = execScalar(be.get(),
+		std::string("SELECT auth_method FROM pg_hba_file_rules WHERE '") + PWU +
+		"'=ANY(user_name) ORDER BY line_number LIMIT 1");
+	if (MPW.rfind("md5", 0) != 0 || ct_method != "password") {
+		skip(2, "infra cannot exercise a CLEARTEXT backend challenge for '%s' "
+		        "(rolpassword='%.4s', pg_hba auth_method='%s'; need md5-stored + 'password') -- "
+		        "add the role and the 'host all %s all password' rule in docker-pgsql-post.bash",
+		     PWU, MPW.empty() ? "(none)" : MPW.c_str(),
+		     ct_method.empty() ? "(no rule)" : ct_method.c_str(), PWU);
 	} else {
 		storeUser(admin.get(), PWU, MPW);
 		{

@@ -158,30 +158,22 @@ static bool deriveScramKeys(const std::string& verifier, const std::string& pass
 
 static bool connOk(const PGConnPtr& c) { return c && PQstatus(c.get()) == CONNECTION_OK; }
 
-// NOTE on cases (2) and (3): the patch's mutual-auth guard makes scram_init() return NULL, and
-// upstream fe-auth.c treats that as `goto oom_error` -- so libpq reports "out of memory" rather
-// than anything about SCRAM keys. The rejection is correct; only the message is misleading. That
-// is why these two cases assert the CLASS of failure (reached auth, not a transport error) instead
-// of a specific string: pinning "out of memory" would encode an upstream quirk into the test.
+// A negative case is only meaningful if the connection was refused for the REASON under test.
+// Asserting !CONNECTION_OK alone also passes when the backend is down, the role is missing, or
+// pg_hba denies the host -- the assertion would survive the patch being reverted entirely. Each
+// case below therefore pins its own diagnostic; the four are distinct and deterministic:
 //
-// A negative case is only meaningful if the connection was REFUSED BY AUTHENTICATION. Asserting
-// !CONNECTION_OK alone also passes when the backend is down, the role is missing, or pg_hba denies
-// the host -- i.e. the assertion would survive the patch being reverted. These two helpers pin the
-// reason: reachedAuth() rejects transport/lookup failures, and errHas() checks for the specific
-// diagnostic a case is meant to prove.
+//   (2) "out of memory"                    -- ck without sk trips the mutual-auth guard, which
+//                                             makes scram_init() return NULL, and upstream
+//                                             fe-auth.c treats that as `goto oom_error`. The
+//                                             rejection is right; only the message misleads.
+//   (3) "fe_sendauth: no password supplied" -- sk without ck never reaches scram_init: the
+//                                             password gate fires first because scram_client_key
+//                                             is unset.
+//   (4) "invalid scram_client_key"          -- the patch's own base64 decode check.
+//   (5) "password authentication failed"    -- the SERVER rejects the PBKDF2-over-verifier proof.
 static bool errHas(const PGConnPtr& c, const char* needle) {
 	return c && strstr(PQerrorMessage(c.get()), needle) != nullptr;
-}
-static bool reachedAuth(const PGConnPtr& c) {
-	if (!c) return false;
-	const std::string e = PQerrorMessage(c.get());
-	static const char* transport[] = {
-		"could not connect", "Connection refused", "could not translate host name",
-		"could not receive data", "server closed the connection unexpectedly",
-		"timeout expired", "No route to host", nullptr };
-	for (int i = 0; transport[i]; i++)
-		if (e.find(transport[i]) != std::string::npos) return false;
-	return true;
 }
 
 int main(int, char**) {
@@ -246,8 +238,9 @@ int main(int, char**) {
 		bool rejected = !connOk(c);
 		diag("(2) scram_client_key alone -> %s : %s", rejected ? "rejected" : "ACCEPTED",
 		     c ? PQerrorMessage(c.get()) : "(null)");
-		ok(rejected && reachedAuth(c),
-		   "scram_client_key without scram_server_key is rejected BY AUTH (not by a transport failure)");
+		ok(rejected && errHas(c, "out of memory"),
+		   "scram_client_key without scram_server_key trips the mutual-auth guard "
+		   "(scram_init -> NULL -> upstream oom_error)");
 	}
 
 	// (3) server key WITHOUT client key -> rejected (guard, or 'no password'/auth failure -- any clean reject).
@@ -257,8 +250,8 @@ int main(int, char**) {
 		bool rejected = !connOk(c);
 		diag("(3) scram_server_key alone -> %s : %s", rejected ? "rejected" : "ACCEPTED",
 		     c ? PQerrorMessage(c.get()) : "(null)");
-		ok(rejected && reachedAuth(c),
-		   "scram_server_key without scram_client_key is rejected BY AUTH (not by a transport failure)");
+		ok(rejected && errHas(c, "no password supplied"),
+		   "scram_server_key without scram_client_key is rejected at the password gate");
 	}
 
 	// (4) malformed base64 key material -> rejected cleanly ("invalid scram_client_key"), not a crash.
@@ -282,8 +275,9 @@ int main(int, char**) {
 		bool rejected = !connOk(c);
 		diag("(5) verifier-as-password -> %s : %s", rejected ? "rejected" : "ACCEPTED (SECURITY FINDING)",
 		     c ? PQerrorMessage(c.get()) : "(null)");
-		ok(rejected && reachedAuth(c),
-		   "SCRAM verifier string used as plaintext password is rejected BY AUTH (not equivalent)");
+		ok(rejected && errHas(c, "password authentication failed"),
+		   "SCRAM verifier string used as plaintext password is rejected BY THE SERVER "
+		   "(not equivalent to the plaintext)");
 	}
 
 	// Cleanup: all ROLE connections above are closed (scoped); drop the role.
