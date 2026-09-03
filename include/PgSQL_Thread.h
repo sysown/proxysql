@@ -175,7 +175,10 @@ private:
 	void worker_thread_assigns_sessions_to_idle_thread(PgSQL_Thread * thr);
 	void worker_thread_gets_sessions_from_idle_thread();
 	void idle_thread_gets_sessions_from_worker_thread();
-	void idle_thread_assigns_sessions_to_worker_thread(PgSQL_Thread * thr);
+	/// Hand resumed sessions from this idle thread to a worker.
+	/// max_sessions == 0 means "all of them"; a non-zero value moves at most
+	/// that many, so a batch can be split across more than one worker.
+	void idle_thread_assigns_sessions_to_worker_thread(PgSQL_Thread * thr, unsigned int max_sessions = 0);
 	void idle_thread_check_if_worker_thread_has_unprocess_resumed_sessions_and_signal_it(PgSQL_Thread * thr);
 	void idle_thread_prepares_session_to_send_to_worker_thread(int i);
 	void idle_thread_to_kill_idle_sessions();

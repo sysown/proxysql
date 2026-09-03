@@ -3424,29 +3424,36 @@ void PgSQL_Thread::run() {
 			unsigned int w = rand_fast() % (GloPTH->num_threads);
 			PgSQL_Thread* thr = GloPTH->pgsql_threads[w].worker;
 			if (resume_mysql_sessions->len) {
-				// TEMPORARY INSTRUMENTATION -- remove before merge.
-				// Testing whether the idle thread always picks the same worker.
-				// Per-idle-thread tallies, printed for the first 50 handoffs
-				// (covers the ~4s drain) and every 500th after, so the running
-				// distribution is visible without flooding the log.
-				{
-					static thread_local unsigned long long apt_dbg_calls = 0;
-					static thread_local unsigned long long apt_dbg_w[8] = {};
-					static thread_local unsigned long long apt_dbg_sess[8] = {};
-					++apt_dbg_calls;
-					if (w < 8) {
-						++apt_dbg_w[w];
-						apt_dbg_sess[w] += resume_mysql_sessions->len;
+				// Split the batch across two consecutive workers instead of
+				// dropping all of it on one. Handing the whole queue to a
+				// single randomly-chosen worker made the distribution
+				// unstable: measured 1598/2 across two workers at 1600
+				// clients, established during the connection ramp and never
+				// corrected, because migration stops once sessions are no
+				// longer idle.
+				//
+				// This is not affinity -- sessions still go to arbitrary
+				// workers by design. It only stops a single draw from
+				// deciding the fate of an entire batch.
+				//
+				// Cost is one extra mutex pair and one extra pipe write per
+				// handoff. At the observed handoff rate that is far below
+				// measurement noise.
+				//
+				// The two locks are taken sequentially, never held together,
+				// so two idle threads picking overlapping pairs in opposite
+				// order cannot deadlock.
+				unsigned int nthr = GloPTH->num_threads;
+				if (nthr > 1) {
+					unsigned int w2 = (w + 1) % nthr;
+					unsigned int half = resume_mysql_sessions->len / 2;
+					if (half) {
+						idle_thread_assigns_sessions_to_worker_thread(thr, half);
 					}
-					if (apt_dbg_calls <= 50 || (apt_dbg_calls % 500) == 0) {
-						proxy_info("PGSQL_IDLE_ASSIGN idle=%p call=%llu w=%u num_threads=%u thr=%p moving=%u | picks w0=%llu w1=%llu | sess w0=%llu w1=%llu\n",
-							this, apt_dbg_calls, w, GloPTH->num_threads, thr,
-							resume_mysql_sessions->len,
-							apt_dbg_w[0], apt_dbg_w[1],
-							apt_dbg_sess[0], apt_dbg_sess[1]);
-					}
+					idle_thread_assigns_sessions_to_worker_thread(GloPTH->pgsql_threads[w2].worker, 0);
+				} else {
+					idle_thread_assigns_sessions_to_worker_thread(thr, 0);
 				}
-				idle_thread_assigns_sessions_to_worker_thread(thr);
 			}
 			else {
 				idle_thread_check_if_worker_thread_has_unprocess_resumed_sessions_and_signal_it(thr);
@@ -3548,14 +3555,21 @@ void PgSQL_Thread::idle_thread_check_if_worker_thread_has_unprocess_resumed_sess
 	pthread_mutex_unlock(&thr->myexchange.mutex_resumes);
 }
 
-void PgSQL_Thread::idle_thread_assigns_sessions_to_worker_thread(PgSQL_Thread * thr) {
+void PgSQL_Thread::idle_thread_assigns_sessions_to_worker_thread(PgSQL_Thread * thr, unsigned int max_sessions) {
 	bool send_signal = false;
 	// send_signal variable will control if we need to signal or not
 	// the worker thread
 	pthread_mutex_lock(&thr->myexchange.mutex_resumes);
 	if (shutdown == 0 && thr->shutdown == 0)
 		if (resume_mysql_sessions->len) {
-			while (resume_mysql_sessions->len) {
+			// max_sessions == 0 means "move everything", preserving the
+			// original behaviour; a bound lets one batch be split across
+			// several workers instead of landing entirely on one.
+			unsigned int to_move = resume_mysql_sessions->len;
+			if (max_sessions && max_sessions < to_move) {
+				to_move = max_sessions;
+			}
+			while (to_move--) {
 				PgSQL_Session* mysess = (PgSQL_Session*)resume_mysql_sessions->remove_index_fast(0);
 				thr->myexchange.resume_mysql_sessions->add(mysess);
 			}
@@ -4108,8 +4122,8 @@ void PgSQL_Thread::process_all_sessions() {
 
 	// TEMPORARY INSTRUMENTATION -- one line per second (maintenance tick).
 	if (maintenance_loop) {
-		proxy_info("PGSQL_RESCAN sessions=%u nulls=%u attempts=%u cand=%u served=%u skip[noproc=%u hasconn=%u nombe=%u]\n",
-			mysql_sessions->len, partition_pool_nulls, partition_pool_attempts,
+		proxy_info("PGSQL_RESCAN thr=%p sessions=%u nulls=%u attempts=%u cand=%u served=%u skip[noproc=%u hasconn=%u nombe=%u]\n",
+			this, mysql_sessions->len, partition_pool_nulls, partition_pool_attempts,
 			rescan_cand, rescan_served,
 			rescan_skip_noproc, rescan_skip_hasconn, rescan_skip_nombe);
 	}
