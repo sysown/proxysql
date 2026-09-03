@@ -166,7 +166,7 @@ class MakefileDependencyTest(unittest.TestCase):
                     )
 
     def test_probe_keeps_pattern_rule_with_static_postgresql_prerequisites(self):
-        """The OpenSSL probe must still inspect a pattern target's compile line."""
+        """The probe must inspect a pattern target with static PostgreSQL prerequisites."""
         target = "test_static_postgresql_prerequisites-t"
         probe = "task4_static_postgresql_prerequisite"
 
@@ -206,10 +206,18 @@ class MakefileDependencyTest(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.required_output_line(
-                result.stdout.splitlines(),
+            lines = result.stdout.splitlines()
+            compile_line = self.required_output_line(
+                lines,
                 lambda line: f"{target}.cpp" in line,
                 f"target compile line for {target}",
+                result.stdout,
+            )
+            self.assertIn("-DTEST_STATIC_POSTGRESQL", compile_line, result.stdout)
+            self.required_output_line(
+                lines,
+                lambda line: f"TASK4_PROBE={probe}" in line,
+                f"probe line for {probe}",
                 result.stdout,
             )
 
