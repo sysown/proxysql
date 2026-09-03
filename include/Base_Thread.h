@@ -53,6 +53,11 @@ private:
 	// once per outer process_all_sessions iteration. Single-threaded per worker.
 	unsigned int partition_pool_attempts = 0;
 	unsigned int partition_pool_nulls = 0;
+	// The value update_partition_gate() last consumed. Kept because the live
+	// counter is zeroed at the top of every process_all_sessions() pass, so
+	// without it the first connection releases of a pass always look
+	// contention-free even in the middle of sustained starvation.
+	unsigned int partition_pool_nulls_prev = 0;
 	unsigned int partition_streak = 0;
 	bool partition_active = false;
 
@@ -73,6 +78,14 @@ public:
 	inline void note_pool_attempt(bool was_null) {
 		++partition_pool_attempts;
 		if (was_null) ++partition_pool_nulls;
+	}
+
+	/// True when a session failed to get a connection from the pool in this
+	/// pass or the one before it, i.e. somebody is waiting for a connection
+	/// right now. Cheap proxy for a real waiter count, using counters the
+	/// partition gate already maintains.
+	inline bool pool_has_waiters() const {
+		return partition_pool_nulls > 0 || partition_pool_nulls_prev > 0;
 	}
 
 	// Runs the hysteresis state machine from per-tick counters, resets them,

@@ -5936,10 +5936,18 @@ void PgSQL_Thread::push_MyConn_local(PgSQL_Connection * c) {
 	PgSQL_SrvC* mysrvc = (PgSQL_SrvC*)c->parent;
 	if (mysrvc->status == MYSQL_SERVER_STATUS_ONLINE) {
 		if (c->async_state_machine == ASYNC_IDLE) {
-			unsigned int n = (GloPTH && GloPTH->num_threads > 0) ? GloPTH->num_threads : 1;
-			if ((push_local_counter++ % n) == 0) {
-				cached_connections->add(c);
-				return;
+			// Never cache locally while somebody is waiting for a connection.
+			// return_local_connections() only publishes the cache at the end
+			// of the pass, and a pass walks every session this worker owns --
+			// so the time a cached connection stays invisible to peer workers
+			// grows with client count, precisely when starvation is worst.
+			// The 1-in-N ratio below is fixed and does not scale with that.
+			if (!pool_has_waiters()) {
+				unsigned int n = (GloPTH && GloPTH->num_threads > 0) ? GloPTH->num_threads : 1;
+				if ((push_local_counter++ % n) == 0) {
+					cached_connections->add(c);
+					return;
+				}
 			}
 		}
 	}

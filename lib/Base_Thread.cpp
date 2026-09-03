@@ -40,6 +40,7 @@ bool Base_Thread::update_partition_gate() {
 	const uint64_t nulls    = partition_pool_nulls;
 	partition_pool_attempts = 0;
 	partition_pool_nulls    = 0;
+	partition_pool_nulls_prev = (unsigned int)nulls;
 
 	// Low-volume ticks carry no signal; leave gate and streak unchanged.
 	if (attempts < PARTITION_GATE_MIN_ATTEMPTS) {
