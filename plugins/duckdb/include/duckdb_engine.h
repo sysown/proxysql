@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <mutex>
 #include <string>
+#include <vector>
 
 class DuckDBConfigStore;
 
@@ -33,6 +34,12 @@ public:
 	bool connect(duckdb_connection* out, std::string& err);
 	void disconnect(duckdb_connection* conn);
 
+	// Interrupts every live connection. Safe to call from stop() so an
+	// in-flight query cannot hold plugin unload / process shutdown.
+	void interrupt_all();
+
+	std::string database_path() const;
+
 	size_t open_connections() const;
 
 	// max_connections admission control, used by the accept loop before a
@@ -45,6 +52,8 @@ public:
 private:
 	mutable std::mutex mutex_;
 	duckdb_database database_ { nullptr };
+	std::string database_path_;
+	std::vector<duckdb_connection> live_connections_;
 	std::atomic<size_t> open_connections_ { 0 };
 	std::atomic<size_t> reserved_ { 0 };
 	std::atomic<size_t> max_connections_ { 100 };

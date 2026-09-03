@@ -2,12 +2,15 @@
 #include "duckdb_engine.h"
 #include "tap.h"
 
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <string>
+#include <thread>
 #include <unistd.h>
 
 int main() {
-	plan(11);
+	plan(12);
 
 	DuckDBConfigStore cfg;
 	std::string err;
@@ -74,6 +77,33 @@ int main() {
 	// close() must be idempotent: stop() can run without start().
 	engine.close();
 	ok(engine.is_open() == false, "close is idempotent");
+
+	{
+		err.clear();
+		if (!engine.open(cfg, err)) {
+			diag("reopen error: %s", err.c_str());
+			BAIL_OUT("engine must reopen for interrupt_all");
+		}
+		duckdb_connection ic = nullptr;
+		err.clear();
+		if (!engine.connect(&ic, err) || ic == nullptr) {
+			BAIL_OUT("interrupt test needs a live connection");
+		}
+		std::atomic<int> rc{-1};
+		std::thread t([&] {
+			duckdb_result r;
+			rc.store(duckdb_query(ic, "SELECT sum(i) FROM range(10000000000) t(i)", &r));
+			duckdb_destroy_result(&r);
+		});
+		for (int i = 0; i < 50 && rc.load() == -1; i++) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		}
+		engine.interrupt_all();
+		t.join();
+		ok(rc.load() != DuckDBSuccess, "interrupt_all stops an in-flight query");
+		engine.disconnect(&ic);
+		engine.close();
+	}
 
 	return exit_status();
 }

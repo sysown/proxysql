@@ -10,9 +10,10 @@ class SQLite3_result;
 // Converts a materialised duckdb_result into the SQLite3_result that
 // core's MySQL and PostgreSQL serialisers both consume.
 //
-// Values are read through DuckDB's chunk/vector API and rendered from a
-// length-aware Value. This preserves embedded NUL bytes that DuckDB 1.4.5's
-// legacy result materialisation loses even through duckdb_value_string().
+// Values are read through DuckDB's C chunk/vector API (string_t lengths for
+// VARCHAR/BLOB, typed vector data for everything else). This preserves
+// embedded NUL bytes that DuckDB 1.4.5's legacy result materialisation loses
+// even through duckdb_value_string().
 // This is correct on the wire for the column types the compatibility
 // allowlist supports: both text protocols
 // transmit values as strings and both serialisers label every column as

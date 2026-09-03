@@ -186,7 +186,8 @@ bool DuckDBListener::start(DuckDBConfigStore& cfg, DuckDBEngine& engine, std::st
 	}
 	for (int fd : signal_pipe_) {
 		const int flags = fcntl(fd, F_GETFL, 0);
-		fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+		const int base = flags >= 0 ? flags : 0;
+		fcntl(fd, F_SETFL, base | O_NONBLOCK);
 	}
 
 	std::vector<Listener> bound;
@@ -232,6 +233,8 @@ void DuckDBListener::stop() {
 
 	for (const Listener& l : listeners_) close(l.fd);
 	listeners_.clear();
+
+	if (engine_ != nullptr) engine_->interrupt_all();
 
 	std::vector<ConnThread> joining;
 	{
@@ -435,6 +438,11 @@ void DuckDBListener::run_session(int client_fd) {
 	DuckDBSessionState& st = duckdb_session_state();
 	std::string cerr;
 	if (!engine_->connect(&st.conn, cerr)) { close(client_fd); return; }
+	st.pgsql_txn_status = 'I';
+	st.database_name = engine_->database_path();
+	if (st.database_name.empty() || st.database_name == ":memory:") {
+		st.database_name = "memory";
+	}
 
 	Thr* thr = new Thr();
 	thr->curtime = monotonic_time();

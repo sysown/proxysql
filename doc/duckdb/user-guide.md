@@ -106,7 +106,9 @@ SELECT @@version;
 ```
 
 `SHOW DATABASES` lists DuckDB catalogs. `SHOW SCHEMAS` lists schemas; they are
-not aliases for the same metadata query.
+not aliases for the same metadata query. `SELECT DATABASE()` / `SELECT
+CURRENT_DATABASE()` return `memory` for `:memory:` and the configured
+`database_path` otherwise.
 
 ## Result values
 

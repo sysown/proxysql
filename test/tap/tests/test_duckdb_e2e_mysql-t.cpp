@@ -37,7 +37,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(10);
+	plan(16);
 
 	MYSQL* c = connect_duckdb(cl, cl.username, cl.password);
 	ok(c != NULL, "connect to the DuckDB MySQL port with mysql_users credentials");
@@ -75,6 +75,27 @@ int main(int argc, char** argv) {
 	// A syntax error must come back as an error, not a silent empty set.
 	ok(mysql_query(c, "SELECT FROM WHERE") != 0 && mysql_errno(c) != 0,
 	   "a malformed query returns a protocol error");
+
+	ok(one_cell(c, "SELECT DATABASE()") == "memory",
+	   "SELECT DATABASE() reports memory for the default in-memory engine");
+
+	ok(mysql_query(c, "SELECT gen_random_uuid()") == 0, "UUID rewrap succeeds on the wire");
+	{
+		MYSQL_RES* r = mysql_store_result(c);
+		MYSQL_ROW row = r ? mysql_fetch_row(r) : NULL;
+		ok(r != NULL && row != NULL && row[0] != NULL && std::strlen(row[0]) == 36,
+		   "UUID arrives as text, not NULL");
+		if (r) mysql_free_result(r);
+	}
+
+	ok(mysql_query(c, "SELECT 1; SELECT 2") != 0, "multi-statement is rejected");
+
+	bool errors_ok = true;
+	for (int i = 0; i < 20; i++) {
+		if (mysql_query(c, "SELECT FROM WHERE") == 0) errors_ok = false;
+	}
+	ok(errors_ok, "repeated syntax errors do not abort the connection");
+	ok(mysql_query(c, "SELECT 1") == 0, "connection still works after repeated errors");
 
 	mysql_close(c);
 

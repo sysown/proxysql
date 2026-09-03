@@ -38,7 +38,10 @@ DuckDBIntercept duckdb_classify_query(const char* sql, size_t len);
 
 // Builds the canned resultset for an intercept. Returns nullptr for
 // `none` and `ok_noop` (the caller sends an OK instead). Caller deletes.
-SQLite3_result* duckdb_build_intercept_result(DuckDBIntercept kind);
+// `database_name` is used only for DuckDBIntercept::database; nullptr,
+// empty, and ":memory:" all render as "memory".
+SQLite3_result* duckdb_build_intercept_result(DuckDBIntercept kind,
+                                              const char* database_name = nullptr);
 
 // One DuckDB connection per connection thread. The listener creates the
 // connection after accept and destroys it before the thread exits, so
@@ -46,6 +49,8 @@ SQLite3_result* duckdb_build_intercept_result(DuckDBIntercept kind);
 struct DuckDBSessionState {
 	duckdb_connection conn { nullptr };
 	bool pgsql_extended_error { false };
+	char pgsql_txn_status { 'I' };
+	std::string database_name { "memory" };
 };
 DuckDBSessionState& duckdb_session_state();
 
@@ -69,7 +74,13 @@ void duckdb_send_pgsql_error(PgSQL_Session* sess, const char* sqlstate,
 // have an unambiguous counterpart. Unknown categories use XX000.
 const char* duckdb_pgsql_sqlstate(duckdb_error_type type, const std::string& message);
 
-// PostgreSQL ReadyForQuery transaction-status byte for a DuckDB connection.
+// Maps DuckDB's typed errors to MySQL errno / SQLSTATE. Unknown categories
+// use 1105 / HY000 rather than labeling every failure as a syntax error.
+uint16_t duckdb_mysql_errno(duckdb_error_type type, const std::string& message);
+const char* duckdb_mysql_sqlstate(duckdb_error_type type, const std::string& message);
+
+// PostgreSQL ReadyForQuery transaction-status byte. Tracked in plugin
+// session state (BEGIN/COMMIT/ROLLBACK/error), not via DuckDB C++ internals.
 char duckdb_pgsql_transaction_status(duckdb_connection conn);
 
 // Outcome of duckdb_execute_effective(): everything the session handler

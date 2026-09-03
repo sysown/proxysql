@@ -111,7 +111,10 @@ ProxySQL_PluginCommandResult cmd_load_variables(const ProxySQL_PluginCommandCont
 		plugin_ctx.engine->set_max_connections(static_cast<size_t>(store->max_connections()));
 	}
 	uint64_t row_count = ctx.admindb->return_one_int("SELECT COUNT(*) FROM duckdb_variables");
-	ProxySQL_PluginCommandResult res{0, row_count, "duckdb variables loaded to runtime"};
+	ProxySQL_PluginCommandResult res{0, row_count,
+		"duckdb variables loaded to runtime (only max_connections applies immediately; "
+		"mysql_ifaces, pgsql_ifaces, database_path, memory_limit, threads, read_only, "
+		"enable_external_access require plugin reload)"};
 	if (!err.empty()) {
 		// Some rows were skipped (unknown/invalid); surface the details
 		// without failing the command.

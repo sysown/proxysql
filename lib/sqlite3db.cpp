@@ -176,7 +176,13 @@ bool SQLite3_row::add_fields(char **_fields, const unsigned long *_sizes) {
 			sizes[i] = 0;
 		}
 	}
-	data = data_size > 0 ? static_cast<char *>(malloc(static_cast<size_t>(data_size))) : nullptr;
+	data = nullptr;
+	if (data_size > 0) {
+		data = static_cast<char *>(malloc(static_cast<size_t>(data_size)));
+		if (data == nullptr) {
+			return false;
+		}
+	}
 	int data_ptr = 0;
 	for (int i = 0; i < cnt; i++) {
 		if (_fields[i] != nullptr && data != nullptr) {

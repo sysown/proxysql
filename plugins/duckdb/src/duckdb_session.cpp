@@ -1,7 +1,3 @@
-#include "duckdb/main/connection.hpp"
-#include "duckdb/main/client_context.hpp"
-#include "duckdb/main/valid_checker.hpp"
-
 #include "duckdb_session.h"
 #include "duckdb_result.h"
 #include "sqlite3db.h"
@@ -76,7 +72,7 @@ DuckDBIntercept duckdb_classify_query(const char* sql, size_t len) {
 	return DuckDBIntercept::none;
 }
 
-SQLite3_result* duckdb_build_intercept_result(DuckDBIntercept kind) {
+SQLite3_result* duckdb_build_intercept_result(DuckDBIntercept kind, const char* database_name) {
 	switch (kind) {
 	case DuckDBIntercept::version: {
 		SQLite3_result* r = new SQLite3_result(1);
@@ -89,7 +85,12 @@ SQLite3_result* duckdb_build_intercept_result(DuckDBIntercept kind) {
 	case DuckDBIntercept::database: {
 		SQLite3_result* r = new SQLite3_result(1);
 		r->add_column_definition(SQLITE_TEXT, "DATABASE()");
-		const char* row[1] = { "memory" };
+		const char* name = "memory";
+		if (database_name != nullptr && database_name[0] != '\0' &&
+		    std::strcmp(database_name, ":memory:") != 0) {
+			name = database_name;
+		}
+		const char* row[1] = { name };
 		r->add_row(row);
 		return r;
 	}
@@ -174,12 +175,129 @@ const char* duckdb_pgsql_sqlstate(duckdb_error_type type, const std::string& mes
 	}
 }
 
+uint16_t duckdb_mysql_errno(duckdb_error_type type, const std::string& message) {
+	switch (type) {
+	case DUCKDB_ERROR_PARSER:
+	case DUCKDB_ERROR_SYNTAX:
+		return 1064;
+	case DUCKDB_ERROR_OUT_OF_RANGE:
+	case DUCKDB_ERROR_DECIMAL:
+		return 1264;
+	case DUCKDB_ERROR_CONVERSION:
+		return 1366;
+	case DUCKDB_ERROR_DIVIDE_BY_ZERO:
+		return 1365;
+	case DUCKDB_ERROR_TRANSACTION:
+		return 1180;
+	case DUCKDB_ERROR_NOT_IMPLEMENTED:
+	case DUCKDB_ERROR_MISSING_EXTENSION:
+	case DUCKDB_ERROR_AUTOLOAD:
+		return 1235;
+	case DUCKDB_ERROR_CONSTRAINT:
+		return 1062;
+	case DUCKDB_ERROR_CONNECTION:
+	case DUCKDB_ERROR_NETWORK:
+		return 2013;
+	case DUCKDB_ERROR_IO:
+		return 1028;
+	case DUCKDB_ERROR_INTERRUPT:
+		return 1317;
+	case DUCKDB_ERROR_OUT_OF_MEMORY:
+		return 1037;
+	case DUCKDB_ERROR_PERMISSION:
+		return 1142;
+	case DUCKDB_ERROR_SETTINGS:
+	case DUCKDB_ERROR_INVALID_INPUT:
+	case DUCKDB_ERROR_PARAMETER_NOT_RESOLVED:
+	case DUCKDB_ERROR_PARAMETER_NOT_ALLOWED:
+		return 1525;
+	default:
+		if (message.rfind("Parser Error:", 0) == 0 ||
+		    message.rfind("Syntax Error:", 0) == 0)
+			return 1064;
+		return 1105;
+	}
+}
+
+const char* duckdb_mysql_sqlstate(duckdb_error_type type, const std::string& message) {
+	switch (type) {
+	case DUCKDB_ERROR_PARSER:
+	case DUCKDB_ERROR_SYNTAX:
+		return "42000";
+	case DUCKDB_ERROR_OUT_OF_RANGE:
+	case DUCKDB_ERROR_DECIMAL:
+		return "22003";
+	case DUCKDB_ERROR_CONVERSION:
+		return "22018";
+	case DUCKDB_ERROR_DIVIDE_BY_ZERO:
+		return "22012";
+	case DUCKDB_ERROR_TRANSACTION:
+		return "25000";
+	case DUCKDB_ERROR_NOT_IMPLEMENTED:
+	case DUCKDB_ERROR_MISSING_EXTENSION:
+	case DUCKDB_ERROR_AUTOLOAD:
+		return "0A000";
+	case DUCKDB_ERROR_CONSTRAINT:
+		return "23000";
+	case DUCKDB_ERROR_CONNECTION:
+	case DUCKDB_ERROR_NETWORK:
+		return "08S01";
+	case DUCKDB_ERROR_INTERRUPT:
+		return "70100";
+	case DUCKDB_ERROR_OUT_OF_MEMORY:
+		return "HY001";
+	case DUCKDB_ERROR_PERMISSION:
+		return "42000";
+	case DUCKDB_ERROR_SETTINGS:
+	case DUCKDB_ERROR_INVALID_INPUT:
+	case DUCKDB_ERROR_PARAMETER_NOT_RESOLVED:
+	case DUCKDB_ERROR_PARAMETER_NOT_ALLOWED:
+		return "HY000";
+	default:
+		if (message.rfind("Parser Error:", 0) == 0 ||
+		    message.rfind("Syntax Error:", 0) == 0)
+			return "42000";
+		return "HY000";
+	}
+}
+
+namespace {
+
+enum class DuckDBTxnVerb { none, begin, commit, rollback };
+
+DuckDBTxnVerb classify_txn_verb(const std::string& sql) {
+	const std::string q = normalize(sql.c_str(), sql.size());
+	if (q.rfind("ROLLBACK TO", 0) == 0) return DuckDBTxnVerb::none;
+	if (q == "BEGIN" || q.rfind("BEGIN ", 0) == 0 ||
+	    q == "START TRANSACTION" || q.rfind("START TRANSACTION", 0) == 0) {
+		return DuckDBTxnVerb::begin;
+	}
+	if (q == "COMMIT" || q.rfind("COMMIT ", 0) == 0 ||
+	    q == "END" || q.rfind("END ", 0) == 0) {
+		return DuckDBTxnVerb::commit;
+	}
+	if (q == "ROLLBACK" || q.rfind("ROLLBACK ", 0) == 0 ||
+	    q == "ABORT" || q.rfind("ABORT ", 0) == 0) {
+		return DuckDBTxnVerb::rollback;
+	}
+	return DuckDBTxnVerb::none;
+}
+
+void apply_txn_outcome(DuckDBSessionState& st, DuckDBTxnVerb verb, bool ok) {
+	if (verb == DuckDBTxnVerb::begin && ok) {
+		st.pgsql_txn_status = 'T';
+	} else if ((verb == DuckDBTxnVerb::commit || verb == DuckDBTxnVerb::rollback) && ok) {
+		st.pgsql_txn_status = 'I';
+	} else if (!ok && st.pgsql_txn_status == 'T') {
+		st.pgsql_txn_status = 'E';
+	}
+}
+
+} // namespace
+
 char duckdb_pgsql_transaction_status(duckdb_connection conn) {
 	if (conn == nullptr) return 'I';
-	auto* connection = reinterpret_cast<duckdb::Connection*>(conn);
-	if (connection->IsAutoCommit() || !connection->HasActiveTransaction()) return 'I';
-	return duckdb::ValidChecker::IsInvalidated(connection->context->ActiveTransaction())
-		? 'E' : 'T';
+	return duckdb_session_state().pgsql_txn_status;
 }
 
 // `show_tables` / `show_databases` are answered by rewriting to DuckDB SQL
@@ -313,6 +431,11 @@ std::string trim_trailing_semicolons(const std::string& sql) {
 // is paired with a destroy on every path.
 DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective) {
 	DuckDBExecOutcome outcome;
+	const DuckDBTxnVerb verb = classify_txn_verb(effective);
+	auto finish = [&]() {
+		apply_txn_outcome(duckdb_session_state(), verb, outcome.ok);
+		return outcome;
+	};
 
 	duckdb_prepared_statement stmt = nullptr;
 	if (duckdb_prepare(conn, effective.c_str(), &stmt) != DuckDBSuccess) {
@@ -323,7 +446,7 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 		outcome.ok = false;
 		outcome.error = msg != nullptr ? msg : "DuckDB prepare failed";
 		duckdb_destroy_prepare(&stmt);
-		return outcome;
+		return finish();
 	}
 
 	// Inspect the prepared statement's output schema -- no execution has
@@ -390,7 +513,7 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 		outcome.error = msg != nullptr ? msg : "DuckDB query failed";
 		outcome.error_type = duckdb_result_error_type(&res);
 		duckdb_destroy_result(&res);
-		return outcome;
+		return finish();
 	}
 
 	// DDL/DML in DuckDB 1.4.5 does NOT produce a zero-column result --
@@ -405,13 +528,13 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 		outcome.has_resultset = false;
 		outcome.affected_rows = 0;
 		duckdb_destroy_result(&res);
-		return outcome;
+		return finish();
 	}
 	if (rtype == DUCKDB_RESULT_TYPE_CHANGED_ROWS) {
 		outcome.has_resultset = false;
 		outcome.affected_rows = static_cast<int>(duckdb_rows_changed(&res));
 		duckdb_destroy_result(&res);
-		return outcome;
+		return finish();
 	}
 
 	// rtype == DUCKDB_RESULT_TYPE_QUERY_RESULT: either the original
@@ -428,7 +551,7 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 		outcome.error_type = DUCKDB_ERROR_OUT_OF_RANGE;
 		outcome.error = conversion_error;
 	}
-	return outcome;
+	return finish();
 }
 
 // --- duckdb_send_result: private overload pair -----------------------
@@ -579,7 +702,10 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 		break;
 	case DuckDBIntercept::version:
 	case DuckDBIntercept::database: {
-		SQLite3_result* r = duckdb_build_intercept_result(kind);
+		const char* dbname = (kind == DuckDBIntercept::database)
+			? duckdb_session_state().database_name.c_str()
+			: nullptr;
+		SQLite3_result* r = duckdb_build_intercept_result(kind, dbname);
 		duckdb_send_result(sess, r, nullptr, 0, sql.c_str());
 		delete r;
 		return;
@@ -611,7 +737,10 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 	const DuckDBExecOutcome outcome = duckdb_execute_effective(st.conn, effective);
 	if (!outcome.ok) {
 		if constexpr (std::is_same_v<S, MySQL_Session>)
-			duckdb_send_mysql_error(sess, 1064, "42000", outcome.error.c_str());
+			duckdb_send_mysql_error(sess,
+				duckdb_mysql_errno(outcome.error_type, outcome.error),
+				duckdb_mysql_sqlstate(outcome.error_type, outcome.error),
+				outcome.error.c_str());
 		else
 			duckdb_send_pgsql_error(sess,
 				duckdb_pgsql_sqlstate(outcome.error_type, outcome.error),

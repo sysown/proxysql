@@ -63,6 +63,7 @@ bool DuckDBEngine::open(const DuckDBConfigStore& cfg, std::string& err) {
 	}
 	if (open_err != nullptr) duckdb_free(open_err);
 
+	database_path_ = path;
 	max_connections_.store(static_cast<size_t>(cfg.max_connections()));
 	return true;
 }
@@ -70,6 +71,8 @@ bool DuckDBEngine::open(const DuckDBConfigStore& cfg, std::string& err) {
 void DuckDBEngine::close() {
 	std::lock_guard<std::mutex> lock(mutex_);
 	if (database_ == nullptr) return;
+	live_connections_.clear();
+	database_path_.clear();
 	duckdb_close(&database_);
 	database_ = nullptr;
 }
@@ -89,15 +92,37 @@ bool DuckDBEngine::connect(duckdb_connection* out, std::string& err) {
 		err = "duckdb_connect failed";
 		return false;
 	}
+	live_connections_.push_back(*out);
 	open_connections_.fetch_add(1);
 	return true;
 }
 
 void DuckDBEngine::disconnect(duckdb_connection* conn) {
 	if (conn == nullptr || *conn == nullptr) return;
+	{
+		std::lock_guard<std::mutex> lock(mutex_);
+		for (auto it = live_connections_.begin(); it != live_connections_.end(); ++it) {
+			if (*it == *conn) {
+				live_connections_.erase(it);
+				break;
+			}
+		}
+	}
 	duckdb_disconnect(conn);
 	*conn = nullptr;
 	open_connections_.fetch_sub(1);
+}
+
+void DuckDBEngine::interrupt_all() {
+	std::lock_guard<std::mutex> lock(mutex_);
+	for (duckdb_connection conn : live_connections_) {
+		if (conn != nullptr) duckdb_interrupt(conn);
+	}
+}
+
+std::string DuckDBEngine::database_path() const {
+	std::lock_guard<std::mutex> lock(mutex_);
+	return database_path_;
 }
 
 size_t DuckDBEngine::open_connections() const { return open_connections_.load(); }

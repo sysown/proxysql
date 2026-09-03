@@ -34,7 +34,7 @@ void capture_log_message(int level, const char* message) {
 extern "C" const ProxySQL_PluginDescriptor* proxysql_plugin_descriptor_v1();
 
 int main() {
-	plan(13);
+	plan(14);
 
 	SQLite3DB db;
 	// SQLite3DB::open() forwards its flags to sqlite3_open_v2(), which
@@ -121,6 +121,9 @@ int main() {
 	const bool second_reserved = plugin_ctx.engine->try_reserve_connection();
 	ok(load_result.error_code == 0 && first_reserved && !second_reserved,
 	   "runtime LOAD applies max_connections to an already-open engine");
+	ok(std::string(load_result.message).find("max_connections") != std::string::npos &&
+	   std::string(load_result.message).find("reload") != std::string::npos,
+	   "LOAD result says only max_connections is live and the rest need reload");
 	if (first_reserved) plugin_ctx.engine->release_connection();
 	if (second_reserved) plugin_ctx.engine->release_connection();
 

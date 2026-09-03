@@ -1,10 +1,200 @@
 #include "duckdb_result.h"
 #include "sqlite3db.h"
 
-#include "duckdb/common/types/vector.hpp"
-
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
 #include <string>
 #include <vector>
+
+namespace {
+
+bool cell_is_valid(uint64_t* validity, idx_t row) {
+	return validity == nullptr || duckdb_validity_row_is_valid(validity, row);
+}
+
+void assign_string_t(duckdb_string_t str, std::string& out) {
+	out.assign(duckdb_string_t_data(&str), static_cast<size_t>(duckdb_string_t_length(str)));
+}
+
+std::string format_double(double v) {
+	if (std::isnan(v)) return "nan";
+	if (std::isinf(v)) return v > 0 ? "inf" : "-inf";
+	char buf[64];
+	std::snprintf(buf, sizeof(buf), "%.15g", v);
+	return buf;
+}
+
+std::string format_decimal_int(int64_t raw, uint8_t scale) {
+	const bool neg = raw < 0;
+	uint64_t mag = neg ? static_cast<uint64_t>(-raw) : static_cast<uint64_t>(raw);
+	std::string digits = std::to_string(mag);
+	if (scale == 0) {
+		return neg ? "-" + digits : digits;
+	}
+	if (digits.size() <= scale) {
+		digits.insert(0, scale - digits.size() + 1, '0');
+	}
+	digits.insert(digits.size() - scale, ".");
+	return neg ? "-" + digits : digits;
+}
+
+#if defined(__SIZEOF_INT128__)
+std::string format_hugeint(duckdb_hugeint h) {
+	__int128 v = (static_cast<__int128>(h.upper) << 64) | h.lower;
+	if (v == 0) return "0";
+	const bool neg = v < 0;
+	if (neg) v = -v;
+	std::string s;
+	while (v > 0) {
+		s.push_back(static_cast<char>('0' + static_cast<int>(v % 10)));
+		v /= 10;
+	}
+	if (neg) s.push_back('-');
+	std::reverse(s.begin(), s.end());
+	return s;
+}
+#endif
+
+bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string& out) {
+	uint64_t* validity = duckdb_vector_get_validity(vector);
+	if (!cell_is_valid(validity, row)) return false;
+	void* data = duckdb_vector_get_data(vector);
+	if (data == nullptr) return false;
+
+	char buf[64];
+	switch (type) {
+	case DUCKDB_TYPE_BOOLEAN:
+		out = static_cast<bool*>(data)[row] ? "true" : "false";
+		return true;
+	case DUCKDB_TYPE_TINYINT:
+		out = std::to_string(static_cast<int8_t*>(data)[row]);
+		return true;
+	case DUCKDB_TYPE_SMALLINT:
+		out = std::to_string(static_cast<int16_t*>(data)[row]);
+		return true;
+	case DUCKDB_TYPE_INTEGER:
+		out = std::to_string(static_cast<int32_t*>(data)[row]);
+		return true;
+	case DUCKDB_TYPE_BIGINT:
+		out = std::to_string(static_cast<int64_t*>(data)[row]);
+		return true;
+	case DUCKDB_TYPE_UTINYINT:
+		out = std::to_string(static_cast<uint8_t*>(data)[row]);
+		return true;
+	case DUCKDB_TYPE_USMALLINT:
+		out = std::to_string(static_cast<uint16_t*>(data)[row]);
+		return true;
+	case DUCKDB_TYPE_UINTEGER:
+		out = std::to_string(static_cast<uint32_t*>(data)[row]);
+		return true;
+	case DUCKDB_TYPE_UBIGINT:
+		out = std::to_string(static_cast<uint64_t*>(data)[row]);
+		return true;
+	case DUCKDB_TYPE_FLOAT:
+		out = format_double(static_cast<float*>(data)[row]);
+		return true;
+	case DUCKDB_TYPE_DOUBLE:
+		out = format_double(static_cast<double*>(data)[row]);
+		return true;
+	case DUCKDB_TYPE_DATE: {
+		const duckdb_date_struct s = duckdb_from_date(static_cast<duckdb_date*>(data)[row]);
+		std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d", s.year, s.month, s.day);
+		out = buf;
+		return true;
+	}
+	case DUCKDB_TYPE_TIME: {
+		const duckdb_time_struct s = duckdb_from_time(static_cast<duckdb_time*>(data)[row]);
+		if (s.micros == 0) {
+			std::snprintf(buf, sizeof(buf), "%02d:%02d:%02d", s.hour, s.min, s.sec);
+		} else {
+			std::snprintf(buf, sizeof(buf), "%02d:%02d:%02d.%06d", s.hour, s.min, s.sec, s.micros);
+		}
+		out = buf;
+		return true;
+	}
+	case DUCKDB_TYPE_TIMESTAMP: {
+		const duckdb_timestamp_struct s =
+			duckdb_from_timestamp(static_cast<duckdb_timestamp*>(data)[row]);
+		if (s.time.micros == 0) {
+			std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d",
+				s.date.year, s.date.month, s.date.day, s.time.hour, s.time.min, s.time.sec);
+		} else {
+			std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d.%06d",
+				s.date.year, s.date.month, s.date.day,
+				s.time.hour, s.time.min, s.time.sec, s.time.micros);
+		}
+		out = buf;
+		return true;
+	}
+	case DUCKDB_TYPE_VARCHAR:
+	case DUCKDB_TYPE_BLOB:
+		assign_string_t(static_cast<duckdb_string_t*>(data)[row], out);
+		return true;
+	case DUCKDB_TYPE_DECIMAL: {
+		duckdb_logical_type lt = duckdb_vector_get_column_type(vector);
+		const uint8_t scale = duckdb_decimal_scale(lt);
+		const duckdb_type intern = duckdb_decimal_internal_type(lt);
+		duckdb_destroy_logical_type(&lt);
+		int64_t raw = 0;
+		switch (intern) {
+		case DUCKDB_TYPE_SMALLINT:
+			raw = static_cast<int16_t*>(data)[row];
+			break;
+		case DUCKDB_TYPE_INTEGER:
+			raw = static_cast<int32_t*>(data)[row];
+			break;
+		case DUCKDB_TYPE_BIGINT:
+			raw = static_cast<int64_t*>(data)[row];
+			break;
+		case DUCKDB_TYPE_HUGEINT:
+#if defined(__SIZEOF_INT128__)
+			{
+				const duckdb_hugeint h = static_cast<duckdb_hugeint*>(data)[row];
+				__int128 v = (static_cast<__int128>(h.upper) << 64) | h.lower;
+				raw = static_cast<int64_t>(v);
+			}
+			break;
+#else
+			out = format_double(duckdb_hugeint_to_double(static_cast<duckdb_hugeint*>(data)[row]));
+			return true;
+#endif
+		default:
+			return false;
+		}
+		out = format_decimal_int(raw, scale);
+		return true;
+	}
+	case DUCKDB_TYPE_INTERVAL: {
+		const duckdb_interval iv = static_cast<duckdb_interval*>(data)[row];
+		if (iv.months == 0 && iv.micros == 0) {
+			out = std::to_string(iv.days) + (iv.days == 1 || iv.days == -1 ? " day" : " days");
+		} else if (iv.days == 0 && iv.micros == 0) {
+			out = std::to_string(iv.months) + (iv.months == 1 || iv.months == -1 ? " month" : " months");
+		} else {
+			std::snprintf(buf, sizeof(buf), "%d months %d days %lld microseconds",
+				iv.months, iv.days, static_cast<long long>(iv.micros));
+			out = buf;
+		}
+		return true;
+	}
+	case DUCKDB_TYPE_HUGEINT:
+#if defined(__SIZEOF_INT128__)
+		out = format_hugeint(static_cast<duckdb_hugeint*>(data)[row]);
+#else
+		out = format_double(duckdb_hugeint_to_double(static_cast<duckdb_hugeint*>(data)[row]));
+#endif
+		return true;
+	case DUCKDB_TYPE_UHUGEINT:
+		out = std::to_string(static_cast<duckdb_uhugeint*>(data)[row].lower);
+		return true;
+	default:
+		return false;
+	}
+}
+
+} // namespace
 
 bool duckdb_append_sqlite3_row(SQLite3_result& out, char** fields,
                                const unsigned long* sizes, std::string& error) {
@@ -40,9 +230,9 @@ SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error)
 
 	// The legacy duckdb_value_* materialisation stores VARCHARs as C strings;
 	// even duckdb_value_string() therefore loses bytes after an embedded NUL in
-	// DuckDB 1.4.5. Read materialised chunks instead, where Vector::GetValue()
-	// retains the real string length. Result metadata is collected above before
-	// entering the chunk API, as required by DuckDB's no-mixed-data-access rule.
+	// DuckDB 1.4.5. Read materialised chunks and C API string_t lengths instead.
+	// Result metadata is collected above before entering the chunk API, as
+	// required by DuckDB's no-mixed-data-access rule.
 	for (idx_t chunk_index = 0; ; chunk_index++) {
 		duckdb_data_chunk chunk = duckdb_result_get_chunk(*res, chunk_index);
 		if (chunk == nullptr) break;
@@ -56,12 +246,7 @@ SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error)
 				fields[c] = nullptr;
 				sizes[c] = 0;
 				if (!duckdb_type_renders_as_text(types[c]) || vectors[c] == nullptr) continue;
-
-				auto* vector = reinterpret_cast<duckdb::Vector*>(vectors[c]);
-				const duckdb::Value value = vector->GetValue(r);
-				if (value.IsNull()) continue;
-
-				rendered[c] = value.ToString();
+				if (!render_cell(types[c], vectors[c], r, rendered[c])) continue;
 				fields[c] = rendered[c].data();
 				sizes[c] = static_cast<unsigned long>(rendered[c].size());
 			}

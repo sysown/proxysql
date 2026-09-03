@@ -35,7 +35,7 @@ int scalar_count(duckdb_connection conn, const char* sql) {
 } // namespace
 
 int main() {
-	plan(44);
+	plan(55);
 
 	ok(classify("SELECT @@version") == DuckDBIntercept::version,
 	   "SELECT @@version is intercepted");
@@ -83,6 +83,28 @@ int main() {
 		   r->rows[0]->fields[0] != nullptr,
 		   "the version intercept builds a one-cell resultset");
 	}
+	{
+		std::unique_ptr<SQLite3_result> r(
+			duckdb_build_intercept_result(DuckDBIntercept::database));
+		ok(r && r->rows_count == 1 && r->rows[0]->fields[0] != nullptr &&
+		   std::string(r->rows[0]->fields[0]) == "memory",
+		   "SELECT DATABASE() defaults to memory");
+	}
+	{
+		std::unique_ptr<SQLite3_result> r(
+			duckdb_build_intercept_result(DuckDBIntercept::database,
+			                              "/var/lib/proxysql/duckdb/x.db"));
+		ok(r && r->rows_count == 1 && r->rows[0]->fields[0] != nullptr &&
+		   std::string(r->rows[0]->fields[0]) == "/var/lib/proxysql/duckdb/x.db",
+		   "SELECT DATABASE() reports a file-backed path");
+	}
+	{
+		std::unique_ptr<SQLite3_result> r(
+			duckdb_build_intercept_result(DuckDBIntercept::database, ":memory:"));
+		ok(r && r->rows_count == 1 && r->rows[0]->fields[0] != nullptr &&
+		   std::string(r->rows[0]->fields[0]) == "memory",
+		   "SELECT DATABASE() maps :memory: to memory");
+	}
 
 	ok(std::strcmp(duckdb_pgsql_sqlstate(DUCKDB_ERROR_PARSER, ""), "42601") == 0,
 	   "DuckDB parser errors map to PostgreSQL syntax_error");
@@ -95,6 +117,23 @@ int main() {
 	   "DuckDB conversion errors map to invalid_character_value_for_cast");
 	ok(std::strcmp(duckdb_pgsql_sqlstate(DUCKDB_ERROR_INVALID, "unknown"), "XX000") == 0,
 	   "unclassified DuckDB errors use PostgreSQL internal_error fallback");
+
+	ok(duckdb_mysql_errno(DUCKDB_ERROR_PARSER, "") == 1064,
+	   "DuckDB parser errors map to MySQL ER_PARSE_ERROR");
+	ok(std::strcmp(duckdb_mysql_sqlstate(DUCKDB_ERROR_PARSER, ""), "42000") == 0,
+	   "DuckDB parser errors map to MySQL SQLSTATE 42000");
+	ok(duckdb_mysql_errno(DUCKDB_ERROR_CONSTRAINT, "") == 1062,
+	   "DuckDB constraint errors map to MySQL ER_DUP_ENTRY");
+	ok(std::strcmp(duckdb_mysql_sqlstate(DUCKDB_ERROR_CONSTRAINT, ""), "23000") == 0,
+	   "DuckDB constraint errors map to MySQL SQLSTATE 23000");
+	ok(duckdb_mysql_errno(DUCKDB_ERROR_OUT_OF_MEMORY, "") == 1037,
+	   "DuckDB OOM maps to MySQL ER_OUTOFMEMORY");
+	ok(duckdb_mysql_errno(DUCKDB_ERROR_INTERRUPT, "") == 1317,
+	   "DuckDB interrupt maps to MySQL ER_QUERY_INTERRUPTED");
+	ok(duckdb_mysql_errno(DUCKDB_ERROR_INVALID, "unknown") == 1105,
+	   "unclassified DuckDB errors use MySQL ER_UNKNOWN_ERROR, not syntax error");
+	ok(std::strcmp(duckdb_mysql_sqlstate(DUCKDB_ERROR_INVALID, "unknown"), "HY000") == 0,
+	   "unclassified DuckDB errors use MySQL SQLSTATE HY000");
 
 	DuckDBSessionState pgsql_state;
 	ok(duckdb_pgsql_message_action(pgsql_state, 'P') == DuckDBPgsqlAction::send_error,
