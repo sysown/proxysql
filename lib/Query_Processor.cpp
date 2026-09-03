@@ -298,36 +298,79 @@ static unsigned long long mem_used_rule(QP_rule_t *qr) {
 struct query_digest_topk_candidate_t {
 	const QP_query_digest_stats* qds {nullptr};
 	uint64_t sort_value {0};
+	/**
+	 * Snapshot of the mutable counters, taken once while `digest_rwlock` is held
+	 * for reading. `update_query_digest()` mutates those atomics concurrently
+	 * under the very same read lock, so ordering must never dereference them:
+	 * a value changing between two comparisons breaks the strict weak ordering
+	 * required by `std::priority_queue` and `std::sort`, which is undefined
+	 * behaviour and can walk past the end of the range. The remaining ordering
+	 * keys (`digest`, `hid`, `username`, `schemaname`, `client_address`) are
+	 * immutable after construction and are read through `qds`.
+	 */
+	unsigned int count_star {0};
+	unsigned long long sum_time {0};
+	unsigned long long min_time {0};
+	unsigned long long max_time {0};
+	unsigned long long rows_affected {0};
+	unsigned long long rows_sent {0};
+	time_t first_seen {0};
+	time_t last_seen {0};
 };
+
+/**
+ * @brief Take a coherent snapshot of a digest entry's mutable counters.
+ *
+ * @param qds Source digest row.
+ * @param cand Candidate to populate; `cand.qds` is set to @p qds.
+ */
+static void query_digest_snapshot_candidate(
+	const QP_query_digest_stats* qds,
+	query_digest_topk_candidate_t& cand
+) {
+	cand.qds = qds;
+	cand.count_star = qds->count_star.load(std::memory_order_relaxed);
+	cand.sum_time = qds->sum_time.load(std::memory_order_relaxed);
+	cand.min_time = qds->min_time.load(std::memory_order_relaxed);
+	cand.max_time = qds->max_time.load(std::memory_order_relaxed);
+	cand.rows_affected = qds->rows_affected.load(std::memory_order_relaxed);
+	cand.rows_sent = qds->rows_sent.load(std::memory_order_relaxed);
+	cand.first_seen = qds->first_seen.load(std::memory_order_relaxed);
+	cand.last_seen = qds->last_seen.load(std::memory_order_relaxed);
+}
 
 /**
  * @brief Compute the primary sort metric for a digest row.
  *
- * @param qds Source digest row.
+ * @param cand Candidate holding the counter snapshot to rank on.
  * @param sort_by Requested primary sort mode.
  * @return Primary sort metric in descending order domain.
  */
 static uint64_t query_digest_sort_metric(
-	const QP_query_digest_stats* qds,
+	const query_digest_topk_candidate_t& cand,
 	query_digest_sort_by_t sort_by
 ) {
 	switch (sort_by) {
 		case query_digest_sort_by_t::avg_time:
-			return qds->count_star ? (qds->sum_time / qds->count_star) : 0;
+			return cand.count_star ? (cand.sum_time / cand.count_star) : 0;
 		case query_digest_sort_by_t::sum_time:
-			return qds->sum_time;
+			return cand.sum_time;
 		case query_digest_sort_by_t::max_time:
-			return qds->max_time;
+			return cand.max_time;
 		case query_digest_sort_by_t::rows_sent:
-			return qds->rows_sent;
+			return cand.rows_sent;
 		case query_digest_sort_by_t::count_star:
 		default:
-			return qds->count_star;
+			return cand.count_star;
 	}
 }
 
 /**
  * @brief Determine whether candidate @p lhs ranks ahead of @p rhs.
+ *
+ * All mutable ordering keys come from `lhs`/`rhs` snapshots, never from the
+ * live `QP_query_digest_stats`, so the ordering stays fixed for the whole
+ * duration of a heap or sort operation even while queries update the digest.
  *
  * Ordering is stable and deterministic:
  * 1) primary selected sort metric (DESC)
@@ -350,11 +393,11 @@ static bool query_digest_candidate_better(
 	if (lhs.sort_value != rhs.sort_value) {
 		return lhs.sort_value > rhs.sort_value;
 	}
-	if (lhs.qds->sum_time != rhs.qds->sum_time) {
-		return lhs.qds->sum_time > rhs.qds->sum_time;
+	if (lhs.sum_time != rhs.sum_time) {
+		return lhs.sum_time > rhs.sum_time;
 	}
-	if (lhs.qds->count_star != rhs.qds->count_star) {
-		return lhs.qds->count_star > rhs.qds->count_star;
+	if (lhs.count_star != rhs.count_star) {
+		return lhs.count_star > rhs.count_star;
 	}
 	if (lhs.qds->digest != rhs.qds->digest) {
 		return lhs.qds->digest < rhs.qds->digest;
@@ -1649,7 +1692,8 @@ query_digest_topk_result_t Query_Processor<QP_DERIVED>::get_query_digests_topk(
 	}
 	const size_t window_size = static_cast<size_t>(window_size_u64);
 
-	const auto matches_filters = [this, &filters](const QP_query_digest_stats* qds) -> bool {
+	const auto matches_filters = [this, &filters](const query_digest_topk_candidate_t& cand) -> bool {
+		const QP_query_digest_stats* qds = cand.qds;
 		if (filters.hostgroup >= 0 && qds->hid != filters.hostgroup) {
 			return false;
 		}
@@ -1674,11 +1718,11 @@ query_digest_topk_result_t Query_Processor<QP_DERIVED>::get_query_digests_topk(
 		if (filters.has_digest && qds->digest != filters.digest) {
 			return false;
 		}
-		if (filters.min_count > 0 && qds->count_star < filters.min_count) {
+		if (filters.min_count > 0 && cand.count_star < filters.min_count) {
 			return false;
 		}
 		if (filters.min_avg_time_us > 0) {
-			const uint64_t avg_time = qds->count_star ? (qds->sum_time / qds->count_star) : 0;
+			const uint64_t avg_time = cand.count_star ? (cand.sum_time / cand.count_star) : 0;
 			if (avg_time < filters.min_avg_time_us) {
 				return false;
 			}
@@ -1708,21 +1752,31 @@ query_digest_topk_result_t Query_Processor<QP_DERIVED>::get_query_digests_topk(
 
 	for (const auto& it : digest_umap) {
 		const QP_query_digest_stats* qds = static_cast<const QP_query_digest_stats*>(it.second);
-		if (!qds || !matches_filters(qds)) {
+		if (!qds) {
+			continue;
+		}
+
+		/**
+		 * Snapshot the counters once, up front: everything downstream (filters,
+		 * totals, ordering and the emitted row) must agree on a single reading,
+		 * and the ordering keys must not move while the heap and the sort run.
+		 */
+		query_digest_topk_candidate_t cand {};
+		query_digest_snapshot_candidate(qds, cand);
+
+		if (!matches_filters(cand)) {
 			continue;
 		}
 
 		result.matched_count++;
-		result.matched_total_queries += qds->count_star;
-		result.matched_total_time_us += qds->sum_time;
+		result.matched_total_queries += cand.count_star;
+		result.matched_total_time_us += cand.sum_time;
 
 		if (window_size == 0) {
 			continue;
 		}
 
-		query_digest_topk_candidate_t cand {};
-		cand.qds = qds;
-		cand.sort_value = query_digest_sort_metric(qds, sort_by);
+		cand.sort_value = query_digest_sort_metric(cand, sort_by);
 
 		if (heap.size() < window_size) {
 			heap.push(cand);
@@ -1753,14 +1807,14 @@ query_digest_topk_result_t Query_Processor<QP_DERIVED>::get_query_digests_topk(
 		row.client_address = qds->client_address ? qds->client_address : "";
 		row.digest = qds->digest;
 		row.digest_text = qds->get_digest_text(&digest_text_umap);
-		row.count_star = qds->count_star;
-		row.first_seen = static_cast<uint64_t>(now - monotonic_now_us / 1000000 + qds->first_seen / 1000000);
-		row.last_seen = static_cast<uint64_t>(now - monotonic_now_us / 1000000 + qds->last_seen / 1000000);
-		row.sum_time = qds->sum_time;
-		row.min_time = qds->min_time;
-		row.max_time = qds->max_time;
-		row.rows_affected = qds->rows_affected;
-		row.rows_sent = qds->rows_sent;
+		row.count_star = cand.count_star;
+		row.first_seen = static_cast<uint64_t>(now - monotonic_now_us / 1000000 + cand.first_seen / 1000000);
+		row.last_seen = static_cast<uint64_t>(now - monotonic_now_us / 1000000 + cand.last_seen / 1000000);
+		row.sum_time = cand.sum_time;
+		row.min_time = cand.min_time;
+		row.max_time = cand.max_time;
+		row.rows_affected = cand.rows_affected;
+		row.rows_sent = cand.rows_sent;
 		result.rows.push_back(std::move(row));
 	}
 
