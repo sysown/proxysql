@@ -5523,8 +5523,25 @@ void PgSQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , DS=%p , poll_timeout=%u\n", mybe->server_myds->sess, mybe->server_myds, thread->mypolls.poll_timeout);
 			}
 		}
+		// Reschedule ourselves. Nothing else will: to_process is cleared for
+		// every session at the top of each iteration, and only an fd event,
+		// wait_until, or pause_until sets it back. A session parked here has
+		// no backend fd (myconn == NULL, so nothing is registered in mypolls)
+		// and an idle client fd, because the client already sent its query and
+		// is waiting for the reply. Without this the session is not retried on
+		// any schedule at all -- it waits for an incidental wake-up, which is
+		// what made the checkout tail unbounded rather than capped by any
+		// multiple of the poll timeout.
+		//
+		// pause_until is also consumed by tune_timeout_for_session_needs_pause()
+		// (Base_Thread.cpp), so the thread's poll timeout shortens to this
+		// deadline on its own -- no separate timeout plumbing needed.
+		pause_until = thread->curtime + pgsql_thread___poll_timeout_on_failure * 1000;
 		return;
 	}
+	// Got one: drop any retry deadline left over from a previous failure, or
+	// the expired value would re-mark this session every iteration forever.
+	pause_until = 0;
 	if (mybe->server_myds->myconn->fd == -1) {
 		// we didn't get a valid connection, we need to create one
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- PgSQL Connection has no FD\n", this);
