@@ -4045,17 +4045,32 @@ void PgSQL_Thread::process_all_sessions() {
 	// Deliberately a single extra pass, not a loop to fixpoint -- bounded work
 	// per iteration, and a session that still cannot be served falls back to
 	// the existing path.
+	// TEMPORARY INSTRUMENTATION -- remove before merge. Counts how many
+	// sessions the rescan actually finds and how many it manages to serve, so
+	// "no difference" can be attributed to the right cause: never firing,
+	// finding no candidates, or finding them and still getting no connection.
+	unsigned int rescan_cand = 0;
+	unsigned int rescan_served = 0;
+	unsigned int rescan_skip_noproc = 0;
+	unsigned int rescan_skip_hasconn = 0;
+	unsigned int rescan_skip_nombe = 0;
+
 	if (partition_pool_nulls > 0) {
 		for (n = 0; n < mysql_sessions->len; n++) {
 			PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(n);
 			// Still wants processing, is not paused, and has a backend that
 			// never got a connection: exactly the failed-checkout state.
-			if (sess->to_process != 1) continue;
+			if (sess->to_process != 1) { rescan_skip_noproc++; continue; }
 			if (sess->pause_until > curtime) continue;
-			if (sess->mybe == NULL || sess->mybe->server_myds == NULL) continue;
-			if (sess->mybe->server_myds->myconn != NULL) continue;
+			if (sess->mybe == NULL || sess->mybe->server_myds == NULL) { rescan_skip_nombe++; continue; }
+			if (sess->mybe->server_myds->myconn != NULL) { rescan_skip_hasconn++; continue; }
 
+			rescan_cand++;
 			rc = sess->handler();
+			if (rc != -1 && sess->killed == false
+			    && sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) {
+				rescan_served++;
+			}
 			if (rc == -1 || sess->killed == true) {
 				char _buf[1024];
 				if (sess->client_myds && sess->killed)
@@ -4067,6 +4082,14 @@ void PgSQL_Thread::process_all_sessions() {
 				delete sess;
 			}
 		}
+	}
+
+	// TEMPORARY INSTRUMENTATION -- one line per second (maintenance tick).
+	if (maintenance_loop) {
+		proxy_info("PGSQL_RESCAN sessions=%u nulls=%u attempts=%u cand=%u served=%u skip[noproc=%u hasconn=%u nombe=%u]\n",
+			mysql_sessions->len, partition_pool_nulls, partition_pool_attempts,
+			rescan_cand, rescan_served,
+			rescan_skip_noproc, rescan_skip_hasconn, rescan_skip_nombe);
 	}
 
 	if (maintenance_loop) {
