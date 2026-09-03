@@ -4026,6 +4026,49 @@ void PgSQL_Thread::process_all_sessions() {
 			}
 		}
 	}
+	// Second pass over the sessions that failed to get a backend connection.
+	//
+	// Connections are released from inside handler() during the scan above, so
+	// a session that gave up at index 50 may be servable by a release that
+	// happened at index 700 -- in this same pass. Without this it waits for
+	// something to set to_process again, and for a session parked on a failed
+	// checkout that is ProcessAllSessions_MaintenanceLoop(), which runs on a
+	// hardcoded 1 second interval. That 1Hz retry is what bounded the observed
+	// tail (p99 ~1.8s, max ~1.9s) while p50 stayed near 1ms.
+	//
+	// Retrying across iterations does not help: nothing changes between polls.
+	// The releases happen during the scan, which is why the retry has to be
+	// here rather than a shorter poll timeout or a session-level deadline.
+	//
+	// Gated on partition_pool_nulls: zero means nobody failed a checkout in
+	// this pass, so there is nothing to retry and this costs one branch.
+	// Deliberately a single extra pass, not a loop to fixpoint -- bounded work
+	// per iteration, and a session that still cannot be served falls back to
+	// the existing path.
+	if (partition_pool_nulls > 0) {
+		for (n = 0; n < mysql_sessions->len; n++) {
+			PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(n);
+			// Still wants processing, is not paused, and has a backend that
+			// never got a connection: exactly the failed-checkout state.
+			if (sess->to_process != 1) continue;
+			if (sess->pause_until > curtime) continue;
+			if (sess->mybe == NULL || sess->mybe->server_myds == NULL) continue;
+			if (sess->mybe->server_myds->myconn != NULL) continue;
+
+			rc = sess->handler();
+			if (rc == -1 || sess->killed == true) {
+				char _buf[1024];
+				if (sess->client_myds && sess->killed)
+					proxy_warning("Closing killed client connection %s:%d\n", sess->client_myds->addr.addr, sess->client_myds->addr.port);
+				snprintf(_buf, sizeof(_buf), "%s:%d:%s()", __FILE__, __LINE__, __func__);
+				GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_CLOSE, sess, NULL, _buf);
+				unregister_session(n);
+				n--;
+				delete sess;
+			}
+		}
+	}
+
 	if (maintenance_loop) {
 		unsigned int total_active_transactions_tmp;
 		total_active_transactions_tmp = __sync_add_and_fetch(&status_variables.active_transactions, 0);
