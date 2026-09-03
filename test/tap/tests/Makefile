@@ -283,7 +283,7 @@ sh-%:
 
  test_com_register_slave_enables_fast_forward-t: binlog_rpl.h
 
-%-t: %-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
+%-t: %-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT) $(POSTGRESQL_STATIC_LIBS)
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 
 galera_1_timeout_count: galera_1_timeout_count.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
@@ -453,6 +453,9 @@ PG_LITE_CLIENT_TESTS := \
 	pgsql-reg_test_5300_threshold_resultset_deadlock-t \
 	pgsql-reg_test_5866_result_format-t \
 	pgsql-auth_method_matrix-t \
+	pgsql-scram_reload_midhandshake-t \
+	pgsql-scram_user_removed_midhandshake-t \
+	pgsql-scram_rotate_midhandshake_backend-t \
 	pgsql-datatype_matrix-t \
 	pgsql-server_side_cursors-t \
 	test_ffto_pgsql_pipeline-t \
