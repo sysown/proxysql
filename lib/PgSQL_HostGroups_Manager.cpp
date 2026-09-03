@@ -2595,7 +2595,7 @@ void PgSQL_HostGroups_Manager::destroy_MyConn_from_pool(PgSQL_Connection *c, boo
 					const PgSQL_Connection_userinfo* ui = c->userinfo;
 
 					std::unique_ptr<PgSQL_Backend_Kill_Args> backend_kill_args = std::make_unique<PgSQL_Backend_Kill_Args>(
-						(PGconn*)c->get_pg_connection(), ui->username, ui->password, ui->dbname, c->parent->address,
+						(PGconn*)c->get_pg_connection(), ui, c->parent->address,
 						c->parent->port, c->parent->myhgc->hid, c->parent->use_ssl,
 						PgSQL_Backend_Kill_Args::TYPE::TERMINATE_CONNECTION, nullptr
 					);
