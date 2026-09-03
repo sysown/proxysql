@@ -36,8 +36,8 @@ static void test_add_time_zero_skips_min() {
 
 static void test_first_last_seen() {
 	QP_query_digest_stats qds("user", "schema", 1, "SELECT ?", 10, "127.0.0.1", 256);
-	qds.add_time(1, 100, 0, 0);
 	qds.add_time(1, 200, 0, 0);
+	qds.add_time(1, 100, 0, 0);
 	ok(qds.first_seen == 100, "add_time: first_seen kept from first sample");
 	ok(qds.last_seen == 200, "add_time: last_seen updated");
 }

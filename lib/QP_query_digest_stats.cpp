@@ -118,12 +118,9 @@ void QP_query_digest_stats::add_time(
 			break;
 		}
 	}
-	// Plain store, matching the pre-atomic behaviour: `n` is the calling thread's
-	// cached `curtime`, so it only ever moves forward here, and a contended CAS on
-	// the hottest digest would cost a round trip per query for nothing. Callers
-	// that fold an older entry into a newer one must use merge(), which takes the
-	// max explicitly.
-	last_seen.store(static_cast<time_t>(n), std::memory_order_relaxed);
+	// `n` is the calling thread's cached `curtime`; concurrent callers can reach
+	// this point out of order, so preserve the newest observation timestamp.
+	atomic_max(last_seen, static_cast<time_t>(n));
 }
 // Merges the counters of 'other' into this entry. Used when reconciling stats
 // collected while a purge operation was running (see purge_query_digests_async()).
