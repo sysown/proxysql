@@ -1577,9 +1577,13 @@ std::pair<SQLite3_result *, int> Query_Processor<QP_DERIVED>::get_query_digests_
 		if (it != digest_umap_aux.end()) {
 			// found
 			QP_query_digest_stats *qds_equal = (QP_query_digest_stats *)it->second;
-			qds_equal->add_time(
-				qds->min_time, qds->last_seen, qds->rows_affected, qds->rows_sent, qds->count_star
-			);
+			// merge(), not add_time(): this folds one accumulated entry into
+			// another, so sum_time/max_time/first_seen/last_seen must combine as
+			// aggregates. The old add_time() call passed `min_time` as the sample
+			// duration, which added min_time to sum_time and compared it against
+			// max_time -- corrupting both whenever a digest was updated while a
+			// stats dump was in flight.
+			qds_equal->merge(qds);
 			delete qds;
 		} else {
 			digest_umap_aux.insert(element);
@@ -1602,9 +1606,13 @@ std::pair<SQLite3_result *, int> Query_Processor<QP_DERIVED>::get_query_digests_
 		if (it != digest_umap.end()) {
 			// found
 			QP_query_digest_stats *qds_equal = (QP_query_digest_stats *)it->second;
-			qds_equal->add_time(
-				qds->min_time, qds->last_seen, qds->rows_affected, qds->rows_sent, qds->count_star
-			);
+			// merge(), not add_time(): this folds one accumulated entry into
+			// another, so sum_time/max_time/first_seen/last_seen must combine as
+			// aggregates. The old add_time() call passed `min_time` as the sample
+			// duration, which added min_time to sum_time and compared it against
+			// max_time -- corrupting both whenever a digest was updated while a
+			// stats dump was in flight.
+			qds_equal->merge(qds);
 			delete qds;
 		} else {
 			digest_umap.insert(element);
