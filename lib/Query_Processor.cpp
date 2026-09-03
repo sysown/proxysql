@@ -692,7 +692,31 @@ Query_Processor<QP_DERIVED>::Query_Processor(int _query_rules_fast_routing_algor
 	global_firewall_whitelist_rules_result___size = 0;
 
 	pthread_rwlock_init(&rwlock, NULL);
+	/**
+	 * `update_query_digest()` takes this lock for reading on every query, so the
+	 * readers effectively never stop arriving. Under glibc's default
+	 * `PTHREAD_RWLOCK_PREFER_READER_NP` an arriving reader does not yield to a
+	 * waiting writer, which can starve the writers indefinitely -- and the
+	 * writers here are the digest purge and the stats-table swap. A starved purge
+	 * means the digest map grows without bound, so ask for writer preference
+	 * where the platform supports it. (`PTHREAD_RWLOCK_PREFER_WRITER_NP` is a
+	 * no-op in glibc; only the NONRECURSIVE variant actually blocks new readers.)
+	 *
+	 * Guarded on `__GLIBC__` rather than on the constant itself: glibc declares
+	 * the lock kinds as an enum, not as macros, so `#if defined(...)` on the
+	 * constant would silently take the fallback branch on Linux as well.
+	 */
+#if defined(__GLIBC__)
+	{
+		pthread_rwlockattr_t digest_rwlockattr;
+		pthread_rwlockattr_init(&digest_rwlockattr);
+		pthread_rwlockattr_setkind_np(&digest_rwlockattr, PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP);
+		pthread_rwlock_init(&digest_rwlock, &digest_rwlockattr);
+		pthread_rwlockattr_destroy(&digest_rwlockattr);
+	}
+#else
 	pthread_rwlock_init(&digest_rwlock, NULL);
+#endif
 	version=0;
 	rules_mem_used=0;
 	
