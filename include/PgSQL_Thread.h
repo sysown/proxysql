@@ -235,6 +235,52 @@ public:
 	int pipefd[2];
 	PgSQL_Session_Interrupt_Queue_t sess_intrpt_queue;
 
+	/*
+	 * Adaptive poll timeout.
+	 *
+	 * A worker that has drained its own sessions blocks in poll() on its own
+	 * file descriptors. When it is waiting for a backend connection, the
+	 * connection that would unblock it is freed by a *different* worker into
+	 * the shared pool, and nothing in this worker's fd set ever fires. It
+	 * therefore sleeps for the whole poll timeout before retrying. Measured:
+	 * max_ms tracked pgsql-poll_timeout (~8s at 2000ms, ~1.3s at 500ms) and
+	 * collapsed to 74ms with threads=1, where no cross-worker handoff exists.
+	 *
+	 * Waking peers is not a fix: under starvation every worker wants a
+	 * connection, a returning connection carries no indication of which
+	 * worker can use it, and a wakeup may just be client traffic.
+	 *
+	 * So only the timeout is shortened, and only when both hold:
+	 *   - a session in this worker just failed to get a connection from the
+	 *     pool (partition_pool_nulls, already counted for the partition gate)
+	 *   - this worker has demonstrated recent throughput
+	 *
+	 * The second condition is what bounds the CPU cost. Throughput proves
+	 * connections are being returned at a high rate, so a short sleep is
+	 * near-certain to find one. With no recent throughput there is no
+	 * evidence any connection is coming, so the full timeout is kept and the
+	 * worker does not spin. A rolling window is used rather than an
+	 * instantaneous rate so that a single quiet iteration does not disengage
+	 * it mid-episode.
+	 */
+	static constexpr unsigned int      APT_BUCKETS      = 10;
+	static constexpr unsigned long long APT_BUCKET_US   = 200000;	// 200ms => 2s window
+	// Queries across the window before shortening is considered justified.
+	// At this rate a connection returns far more often than once per
+	// APT_SHORT_TTW_MS, so the shortened sleep is expected to be productive.
+	static constexpr unsigned long long APT_MIN_QUERIES = 2000;
+	static constexpr int               APT_SHORT_TTW_MS = 1;
+
+	unsigned long long apt_buckets[APT_BUCKETS] = {};
+	unsigned long long apt_window_total = 0;
+	unsigned long long apt_last_queries = 0;
+	unsigned long long apt_bucket_start = 0;
+	unsigned int       apt_idx = 0;
+
+	/// Roll the query-rate window forward to curtime. Called once per loop
+	/// iteration, not per query.
+	void apt_update_window();
+
 	//bool epoll_thread;
 	bool poll_timeout_bool;
 

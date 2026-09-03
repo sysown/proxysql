@@ -3241,6 +3241,27 @@ void PgSQL_Thread::run() {
 
 		pre_poll_time = curtime;
 		int ttw = (mypolls.poll_timeout ? (mypolls.poll_timeout / 1000 < (unsigned int)pgsql_thread___poll_timeout ? mypolls.poll_timeout / 1000 : pgsql_thread___poll_timeout) : pgsql_thread___poll_timeout);
+
+		// Adaptive poll timeout. partition_pool_nulls holds the count from the
+		// process_all_sessions() pass that just ran: update_partition_gate()
+		// consumes the previous tick's value at the top of that function, so
+		// what is left here is this iteration's. A non-zero value means a
+		// session in this worker wanted a backend connection and did not get
+		// one, and the connection that unblocks it may be freed by a peer
+		// worker without ever touching this worker's fds. See the rationale
+		// on APT_* in PgSQL_Thread.h.
+		//
+		// The window check is the CPU guard: without demonstrated throughput
+		// there is no evidence a connection is about to be returned, so the
+		// full timeout is kept rather than spinning.
+		apt_update_window();
+		if (
+			partition_pool_nulls > 0
+			&& apt_window_total >= APT_MIN_QUERIES
+			&& ttw > APT_SHORT_TTW_MS
+		) {
+			ttw = APT_SHORT_TTW_MS;
+		}
 #ifdef IDLE_THREADS
 		if (GloVars.global.idle_threads && idle_maintenance_thread) {
 			memset(events, 0, sizeof(struct epoll_event) * MY_EPOLL_THREAD_MAXEVENTS); // let's make valgrind happy. It also seems that needs to be zeroed anyway
@@ -3850,6 +3871,38 @@ void PgSQL_Thread::ProcessAllSessions_MaintenanceLoop(PgSQL_Session * sess, unsi
 
 		sess->update_expired_conns(expire_conn_checks);
 	}
+}
+
+void PgSQL_Thread::apt_update_window() {
+	const unsigned long long q = status_variables.stvar[st_var_queries];
+	// Cumulative counter; only the delta since the last iteration is new work.
+	const unsigned long long delta = (q >= apt_last_queries) ? (q - apt_last_queries) : 0;
+	apt_last_queries = q;
+
+	if (apt_bucket_start == 0) {
+		apt_bucket_start = curtime;
+	}
+
+	const unsigned long long elapsed = (curtime > apt_bucket_start) ? (curtime - apt_bucket_start) : 0;
+	if (elapsed >= APT_BUCKET_US * APT_BUCKETS) {
+		// Idle longer than the whole window: everything in it is stale, and
+		// advancing bucket by bucket would be a pointless loop.
+		memset(apt_buckets, 0, sizeof(apt_buckets));
+		apt_window_total = 0;
+		apt_idx = 0;
+		apt_bucket_start = curtime;
+	} else {
+		unsigned long long advance = elapsed / APT_BUCKET_US;
+		while (advance--) {
+			apt_idx = (apt_idx + 1) % APT_BUCKETS;
+			apt_window_total -= apt_buckets[apt_idx];
+			apt_buckets[apt_idx] = 0;
+			apt_bucket_start += APT_BUCKET_US;
+		}
+	}
+
+	apt_buckets[apt_idx] += delta;
+	apt_window_total += delta;
 }
 
 void PgSQL_Thread::process_all_sessions() {
