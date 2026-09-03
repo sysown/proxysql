@@ -281,6 +281,16 @@ public:
 	/// iteration, not per query.
 	void apt_update_window();
 
+	/// How long a session that just failed a pool checkout should wait before
+	/// being retried, in microseconds.
+	///
+	/// This is the single knob for the starvation path: the session stores it
+	/// in pause_until, which both re-marks the session when it expires and,
+	/// via tune_timeout_for_session_needs_pause(), shortens the thread's poll
+	/// timeout to the same deadline. Retry interval and poll interval
+	/// therefore agree by construction; they cannot drift apart.
+	unsigned long long pool_retry_interval_us() const;
+
 	//bool epoll_thread;
 	bool poll_timeout_bool;
 
