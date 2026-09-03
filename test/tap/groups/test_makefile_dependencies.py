@@ -16,6 +16,17 @@ MYSQLX_BRIDGE_TARGETS = (
 
 
 class MakefileDependencyTest(unittest.TestCase):
+    @staticmethod
+    def write_dependency_probe(probe_makefile, target, probe):
+        probe_makefile.write_text(
+            "$(POSTGRESQL_STATIC_LIBS):\n"
+            "\t@:\n"
+            f".PHONY: {probe}\n"
+            f"{target}: {probe}\n"
+            f"{probe}:\n"
+            f"\t@printf '%s\\n' 'TASK4_PROBE={probe} OPT=$(OPT)'\n"
+        )
+
     def required_output_line(self, lines, predicate, description, output):
         line = next((line for line in lines if predicate(line)), None)
         self.assertIsNotNone(
@@ -93,12 +104,7 @@ class MakefileDependencyTest(unittest.TestCase):
         ):
             with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
                 probe_makefile = Path(tmp) / "probe.mk"
-                probe_makefile.write_text(
-                    f".PHONY: {probe}\n"
-                    f"{target}: {probe}\n"
-                    f"{probe}:\n"
-                    f"\t@printf '%s\\n' 'TASK4_PROBE={probe} OPT=$(OPT)'\n"
-                )
+                self.write_dependency_probe(probe_makefile, target, probe)
 
                 result = subprocess.run(
                     [
@@ -158,6 +164,54 @@ class MakefileDependencyTest(unittest.TestCase):
                         shared_compile_line,
                         result.stdout,
                     )
+
+    def test_probe_keeps_pattern_rule_with_static_postgresql_prerequisites(self):
+        """The OpenSSL probe must still inspect a pattern target's compile line."""
+        target = "test_static_postgresql_prerequisites-t"
+        probe = "task4_static_postgresql_prerequisite"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp) / "tests"
+            directory.mkdir()
+            pattern_makefile = Path(tmp) / "pattern.mk"
+            probe_makefile = Path(tmp) / "probe.mk"
+            pattern_makefile.write_text(
+                "POSTGRESQL_STATIC_LIBS := libpq.a libpgcommon.a libpgport.a\n"
+                f"{target}: private OPT += -DTEST_STATIC_POSTGRESQL\n"
+                "%-t: %-t.cpp $(POSTGRESQL_STATIC_LIBS)\n"
+                "\t@printf '%s\\n' 'COMPILE $< OPT=$(OPT)'\n"
+            )
+            (directory / f"{target}.cpp").touch()
+            self.write_dependency_probe(probe_makefile, target, probe)
+
+            result = subprocess.run(
+                [
+                    "make",
+                    "--no-print-directory",
+                    "-B",
+                    "-n",
+                    "-C",
+                    str(directory),
+                    "-f",
+                    str(pattern_makefile),
+                    "-f",
+                    str(probe_makefile),
+                    target,
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=30,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.required_output_line(
+                result.stdout.splitlines(),
+                lambda line: f"{target}.cpp" in line,
+                f"target compile line for {target}",
+                result.stdout,
+            )
 
     def test_mysqlx_bridge_targets_share_one_unit_submake(self):
         result = subprocess.run(
