@@ -1,5 +1,6 @@
 #include "mysql_router_admin.h"
 #include "mysql_router_bootstrap.h"
+#include "mysql_router_config.h"
 #include "mysql_router_plugin.h"
 #include "mysql_router_metadata.h"
 
@@ -124,8 +125,9 @@ bool runtime_ready(ProxySQL_PluginRuntimeContext* runtime_context) {
 	try {
 		context.runtime_ready.store(true);
 		if (!context.reconciler || !context.reconcile_backend) {
-			for (uint16_t port : {uint16_t(6446), uint16_t(6447), uint16_t(6450)}) {
-				const ProxySQL_PluginListenerGate gate {"mysql_router", "0.0.0.0", port,
+			const MysqlRouterRuntimeConfig defaults;
+			for (uint16_t port : {defaults.rw_port, defaults.ro_port, defaults.rw_split_port}) {
+				const ProxySQL_PluginListenerGate gate {"mysql_router", defaults.bind_address.c_str(), port,
 					ProxySQL_PluginListenerState::closed, "MySQL Router is not bootstrapped"};
 				if (runtime_context->services->set_listener_gate != nullptr) {
 					(void)runtime_context->services->set_listener_gate(gate);
@@ -173,6 +175,7 @@ bool runtime_ready(ProxySQL_PluginRuntimeContext* runtime_context) {
 bool stop() {
 	MysqlRouterContext& context = mysql_router_context();
 	if (context.reconciler) context.reconciler->stop();
+	close_router_gates_noexcept(context, "MySQL Router plugin is stopping");
 	context.reconciler.reset();
 	context.reconcile_backend.reset();
 	context.runtime_ready.store(false);
@@ -182,6 +185,7 @@ bool stop() {
 	{
 		std::lock_guard<std::mutex> guard(context.status_mutex);
 		context.status.state = "stopped";
+		context.status.gates_ready = false;
 	}
 	return true;
 }

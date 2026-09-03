@@ -31,6 +31,7 @@ public:
 	bool fail_topology {false};
 	bool gate_ready {false};
 	bool fail_gate_open {false};
+	bool close_gates_on_user_publish {false};
 	unsigned topology_publishes {0};
 	unsigned topology_reads {0};
 	unsigned user_publishes {0};
@@ -62,6 +63,7 @@ public:
 	}
 	uint64_t publish_users(const AccountSnapshot&, uint64_t generation) override {
 		++user_publishes;
+		if (close_gates_on_user_publish) gate_ready = false;
 		return generation;
 	}
 	void set_gates(bool ready, std::string_view) override {
@@ -87,7 +89,7 @@ public:
 } // namespace
 
 int main() {
-	plan(30);
+	plan(32);
 
 	Backend backend;
 	MysqlRouterReconciler reconciler(backend, {2000, 30000}, 10, 9);
@@ -246,6 +248,20 @@ int main() {
 	ok(zero_clock_backend.topology_reads == 1 && zero_clock_backend.topology_publishes == 1 &&
 		zero_clock_backend.user_publishes == 1,
 	   "a zero monotonic timestamp remains a completed attempt instead of immediately repeating");
+
+	Backend user_gate_backend;
+	user_gate_backend.close_gates_on_user_publish = true;
+	user_gate_backend.candidates.push_back(topology("user-gate"));
+	MysqlRouterReconciler user_gate(user_gate_backend, {100000, 1}, 0, 0);
+	auto user_gate_first = user_gate.refresh({true, true});
+	ok(user_gate_first.gates_ready && user_gate_backend.gate_ready &&
+		user_gate_backend.user_publishes == 1,
+	   "startup still opens gates after the first user publication");
+	user_gate_backend.now += 1;
+	auto user_gate_refresh = user_gate.refresh({false, false});
+	ok(user_gate_refresh.users_published && !user_gate_refresh.topology_published &&
+		user_gate_refresh.gates_ready && user_gate_backend.gate_ready,
+	   "a user-only refresh cannot leave Router listeners closed");
 
 	return exit_status();
 }

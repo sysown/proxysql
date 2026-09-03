@@ -149,6 +149,14 @@ ReconcileResult MysqlRouterReconciler::refresh(RefreshRequest request) {
 		}
 		backend_.record_refresh("users", status_.user_error.empty(), user_from,
 			status_.user_generation, status_.user_error);
+		try {
+			status_.gates_ready = false;
+			backend_.set_gates(true, {});
+			status_.gates_ready = true;
+		} catch (const std::exception& error) {
+			status_.gates_ready = false;
+			issue("registration", "gate", error.what());
+		}
 	}
 	return status_;
 }

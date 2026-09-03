@@ -670,7 +670,7 @@ private:
 uint64_t PluginBootstrapStore::publish_generation(const DesiredTopology& topology,
 	const EffectiveTopology& effective, const ListenerProfile& listeners, uint64_t generation,
 	const std::vector<ManagedMysqlUser>& users) {
-	if (services_.apply_mysql_config_v2 == nullptr || services_.set_listener_gate == nullptr ||
+	if (services_.apply_mysql_config_v2 == nullptr ||
 		services_.get_mysql_servers_snapshot == nullptr ||
 		services_.get_mysql_group_replication_hostgroups_snapshot == nullptr ||
 		services_.get_admindb == nullptr) {
@@ -742,17 +742,6 @@ uint64_t PluginBootstrapStore::publish_generation(const DesiredTopology& topolog
 
 	CompiledMysqlConfig config = ConfigCompiler::compile_topology(
 		topology, effective, hostgroups, input);
-	for (const std::string& endpoint : config.interfaces) {
-		const size_t colon = endpoint.rfind(':');
-		if (colon == std::string::npos) throw std::runtime_error("compiled listener endpoint is invalid");
-		const std::string address = endpoint.substr(0, colon);
-		const uint16_t port = static_cast<uint16_t>(std::stoul(endpoint.substr(colon + 1)));
-		const ProxySQL_PluginListenerGate gate {"mysql_router", address.c_str(), port,
-			ProxySQL_PluginListenerState::closed, "waiting for initial Router generation"};
-		if (!services_.set_listener_gate(gate)) {
-			throw std::runtime_error("cannot close Router listener gate before publication");
-		}
-	}
 	const ProxySQL_PluginMysqlConfigResult published = services_.apply_mysql_config_v2(config.plan_v2());
 	if (!published.applied || published.generation != publish_generation) {
 		throw std::runtime_error(published.message.empty()

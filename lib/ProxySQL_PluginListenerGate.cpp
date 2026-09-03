@@ -105,22 +105,31 @@ ProxySQL_PluginListenerGateRegistry::inspect_accept(
 	ProxySQL_PluginListenerGateAcceptDecision decision {};
 	auto key = normalize_key(address, port);
 	if (!key) return decision;
-	std::unique_lock<std::shared_mutex> lock(mutex_);
-	auto found = gates_.find(*key);
-	if (found == gates_.end()) {
-		const bool is_ipv6 = key->address.find(':') != std::string::npos;
-		found = gates_.find(key_t { is_ipv6 ? "::" : "0.0.0.0", port });
+	auto find_closed = [&](auto& gates) -> entry_t* {
+		auto found = gates.find(*key);
+		if (found == gates.end()) {
+			const bool is_ipv6 = key->address.find(':') != std::string::npos;
+			found = gates.find(key_t { is_ipv6 ? "::" : "0.0.0.0", port });
+		}
+		if (found == gates.end() ||
+			found->second.snapshot.state != ProxySQL_PluginListenerState::closed) {
+			return nullptr;
+		}
+		return &found->second;
+	};
+	{
+		std::shared_lock<std::shared_mutex> lock(mutex_);
+		if (!find_closed(gates_)) return decision;
 	}
-	if (found == gates_.end() ||
-		found->second.snapshot.state != ProxySQL_PluginListenerState::closed) return decision;
-
-	entry_t& entry = found->second;
+	std::unique_lock<std::shared_mutex> lock(mutex_);
+	entry_t* entry = find_closed(gates_);
+	if (!entry) return decision;
 	decision.reject = true;
-	decision.should_warn = entry.last_warning_monotonic_us == 0 ||
-		now_monotonic_us - entry.last_warning_monotonic_us >= WARNING_INTERVAL_US;
-	if (decision.should_warn) entry.last_warning_monotonic_us = now_monotonic_us;
-	++entry.snapshot.rejected_accepts;
-	decision.gate = entry.snapshot;
+	decision.should_warn = entry->last_warning_monotonic_us == 0 ||
+		now_monotonic_us - entry->last_warning_monotonic_us >= WARNING_INTERVAL_US;
+	if (decision.should_warn) entry->last_warning_monotonic_us = now_monotonic_us;
+	++entry->snapshot.rejected_accepts;
+	decision.gate = entry->snapshot;
 	return decision;
 }
 

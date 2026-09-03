@@ -448,8 +448,7 @@ public:
 		const uint64_t published = publish_mysql_router_topology(
 			services_, *session_, snapshot.desired, snapshot.effective, listeners_, generation);
 		if (!persist_generation(services_, "topology_generation", published)) {
-			record_transition("topology", "generation_persist_failed",
-				"cannot persist the active topology generation", true);
+			throw std::runtime_error("cannot persist the active topology generation");
 		}
 		MysqlRouterContext& context = mysql_router_context();
 		std::lock_guard<std::mutex> guard(context.status_mutex);
@@ -466,8 +465,7 @@ public:
 		const uint64_t published = publish_mysql_router_users(services_, *session_,
 			current_topology_, *current_effective_, listeners_, snapshot, metadata_user_, generation);
 		if (!persist_generation(services_, "user_generation", published)) {
-			record_transition("users", "generation_persist_failed",
-				"cannot persist the active user generation", true);
+			throw std::runtime_error("cannot persist the active user generation");
 		}
 		uint64_t collisions = 0;
 		uint64_t unresolved = 0;

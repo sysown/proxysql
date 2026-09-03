@@ -147,6 +147,7 @@ extern "C" bool proxysql_router_contract_secret_round_trip() {
 #include "ProxySQL_Statistics.hpp"
 #include "proxysql_admin.h"
 #include "proxysql_glovars.hpp"
+#include "proxysql_structs.h"
 #include "sqlite3db.h"
 #include "tap.h"
 #include "test_init.h"
@@ -783,6 +784,8 @@ int main() {
 		"127.0.0.1", static_cast<uint16_t>(fake_port)).has_value(),
 		"stopping the plugin removes its owned listener gate");
 	manager.reset();
+	__sync_fetch_and_add(&glovars.shutdown, 1);
+	admin->shutdown_threads();
 	GloMTH->mysql_threads[0].worker = nullptr;
 	accept_worker.reset();
 	GloMyLogger = nullptr;

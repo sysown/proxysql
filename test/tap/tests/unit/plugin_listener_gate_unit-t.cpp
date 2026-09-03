@@ -18,7 +18,7 @@ ProxySQL_PluginListenerGate gate(const char* owner, const char* address,
 } // namespace
 
 int main() {
-	plan(31);
+	plan(32);
 
 	ProxySQL_PluginListenerGateRegistry registry;
 	char reason[] = "first publication is incomplete";
@@ -108,6 +108,19 @@ int main() {
 	}
 	for (auto& reader : readers) reader.join();
 	ok(readers_ok.load(), "concurrent readers observe complete owned snapshots");
+
+	std::atomic<bool> accepts_ok { true };
+	std::vector<std::thread> acceptors;
+	for (int i = 0; i != 8; ++i) {
+		acceptors.emplace_back([&] {
+			for (int j = 0; j != 1000; ++j) {
+				const auto decision = registry.inspect_accept("127.0.0.1", 6446, 300);
+				if (decision.reject) accepts_ok = false;
+			}
+		});
+	}
+	for (auto& acceptor : acceptors) acceptor.join();
+	ok(accepts_ok.load(), "concurrent ready-gate accepts stay on the handshake path");
 
 	ok(registry.set(gate("router-a", "127.0.0.1", 6450,
 		ProxySQL_PluginListenerState::closed, "not reconciled")),
