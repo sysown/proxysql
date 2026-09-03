@@ -352,14 +352,33 @@ void Base_Thread::ProcessAllSessions_Partition() {
 		last_partition_sort_time = curtime;
 		// Every element in [running_end, idle_begin) satisfied is_B, so
 		// mybe->server_myds is non-null and max_connect_time is non-zero.
-		std::sort(
-			mysql_sessions->pdata + running_end,
-			mysql_sessions->pdata + idle_begin,
-			[](void* a, void* b) {
-				return static_cast<S*>(a)->mybe->server_myds->max_connect_time
-				     < static_cast<S*>(b)->mybe->server_myds->max_connect_time;
-			}
-		);
+		auto cmp = [](void* a, void* b) {
+			return static_cast<S*>(a)->mybe->server_myds->max_connect_time
+			     < static_cast<S*>(b)->mybe->server_myds->max_connect_time;
+		};
+
+		// Only the front of the band can be served this pass -- the pool is
+		// far smaller than the client count, so most of the band is scrap we
+		// were never going to reach anyway. Fully sorting all of it (the
+		// std::sort this replaces) spends O(n log n) to order elements whose
+		// relative order will never be observed before the next sort.
+		//
+		// nth_element partitions the N smallest to the front in O(n) average,
+		// unordered among themselves; sorting just that front slice is
+		// O(N log N). N = 10% of the band: small enough to be cheap even at
+		// full band size, large enough that a session just past the cutoff
+		// this pass is very likely inside it on the next one.
+		void** begin = mysql_sessions->pdata + running_end;
+		void** end   = mysql_sessions->pdata + idle_begin;
+		size_t top_n = b_len / 10;
+		if (top_n < 1) top_n = 1;
+		if (top_n >= b_len) {
+			std::sort(begin, end, cmp);
+		} else {
+			void** nth = begin + top_n;
+			std::nth_element(begin, nth, end, cmp);
+			std::sort(begin, nth, cmp);
+		}
 	}
 	// Fallback when the band was not sorted this pass: promote the
 	// longest-waiting B session so the CONNECTING_SERVER pass serves it first.
