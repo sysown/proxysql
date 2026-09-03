@@ -370,7 +370,7 @@ void Base_Thread::ProcessAllSessions_Partition() {
 		// this pass is very likely inside it on the next one.
 		void** begin = mysql_sessions->pdata + running_end;
 		void** end   = mysql_sessions->pdata + idle_begin;
-		size_t top_n = b_len / 10;
+		size_t top_n = b_len / 5;
 		if (top_n < 1) top_n = 1;
 		if (top_n >= b_len) {
 			std::sort(begin, end, cmp);
