@@ -10,8 +10,24 @@
 #include "scram.h"   // libscram: used to pin the RFC vector and to act as an independent SCRAM verifier
 #include "tap.h"
 
+
+// Walk a StartupMessage's key\0value\0...\0 body and return the value for `key`,
+// or "" when the key is absent. Layout: int32 len, int32 protocol, then pairs.
+static std::string startup_param(const unsigned char* sm, size_t smlen, const char* key) {
+    size_t off = 8;
+    while (off < smlen && sm[off] != 0) {
+        const char* k = (const char*)(sm + off);
+        off += strlen(k) + 1;
+        if (off >= smlen) break;
+        const char* v = (const char*)(sm + off);
+        off += strlen(v) + 1;
+        if (strcmp(k, key) == 0) return std::string(v);
+    }
+    return std::string();
+}
+
 int main(int, char**) {
-    plan(15);
+    plan(21);
 
     // SSLRequest is a fixed 8 bytes: length=8, code=80877103 (0x04d2162f).
     unsigned char ssl[8];
@@ -21,9 +37,45 @@ int main(int, char**) {
 
     // Startup message: int32 length, int32 protocol 196608 (3.0), then key\0value\0... \0.
     unsigned char sm[256]; size_t smlen = 0;
-    pg_build_startup(sm, &smlen, sizeof(sm), "alice", "shop");
+    pg_build_startup(sm, &smlen, sizeof(sm), "alice", "shop", nullptr, nullptr, nullptr);
     // protocol version at offset 4 must be 0x00030000
     ok(sm[4]==0x00 && sm[5]==0x03 && sm[6]==0x00 && sm[7]==0x00, "startup protocol 3.0");
+
+    // The startup message must be able to carry the session settings the libpq path
+    // sends as client_encoding=... and options='-c k=v ...'. Without them a client's
+    // connection options are silently dropped on the native path. application_name is
+    // what identifies the connection in pg_stat_activity and in log_line_prefix '%a'.
+    {
+        // Nothing optional supplied: none of the three keys may appear.
+        ok(startup_param(sm, smlen, "options").empty() &&
+           startup_param(sm, smlen, "client_encoding").empty() &&
+           startup_param(sm, smlen, "application_name").empty(),
+           "startup without options/client_encoding/application_name carries none of them");
+
+        unsigned char sm2[512]; size_t sm2len = 0;
+        const char* opts = "-c DateStyle=ISO -c geqo=off";
+        bool built = pg_build_startup(sm2, &sm2len, sizeof(sm2), "alice", "shop", "UTF8",
+                                      opts, "proxysql");
+        ok(built, "startup builds with client_encoding, options and application_name");
+        ok(startup_param(sm2, sm2len, "options") == opts,
+           "startup carries the options string verbatim (got '%s')",
+           startup_param(sm2, sm2len, "options").c_str());
+        ok(startup_param(sm2, sm2len, "application_name") == "proxysql",
+           "startup carries application_name, so the backend can identify the connection "
+           "in pg_stat_activity (got '%s')",
+           startup_param(sm2, sm2len, "application_name").c_str());
+        ok(startup_param(sm2, sm2len, "client_encoding") == "UTF8" &&
+           startup_param(sm2, sm2len, "user") == "alice" &&
+           startup_param(sm2, sm2len, "database") == "shop",
+           "startup still carries user/database, plus client_encoding");
+
+        // A buffer one byte short of the encoded size must be rejected outright, with no
+        // partial write, now that application_name adds to that size.
+        unsigned char sm3[512]; size_t sm3len = 123;
+        ok(pg_build_startup(sm3, &sm3len, sm2len - 1, "alice", "shop", "UTF8",
+                            opts, "proxysql") == false && sm3len == 0,
+           "startup refuses a buffer one byte too small and reports 0 bytes written");
+    }
 
     // AuthenticationMD5Password response: "md5" + hex(md5(hex(md5(pass+user))+salt)).
     // Known vector: user=postgres, password=postgres, salt={1,2,3,4} (independent python ref).
