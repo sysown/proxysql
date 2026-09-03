@@ -3242,15 +3242,26 @@ void PgSQL_Thread::run() {
 		pre_poll_time = curtime;
 		int ttw = (mypolls.poll_timeout ? (mypolls.poll_timeout / 1000 < (unsigned int)pgsql_thread___poll_timeout ? mypolls.poll_timeout / 1000 : pgsql_thread___poll_timeout) : pgsql_thread___poll_timeout);
 
-		// Keep the query-rate window current; pool_retry_interval_us() reads it.
-		// The poll timeout itself is no longer overridden here: a session that
-		// failed a checkout sets pause_until, and
-		// tune_timeout_for_session_needs_pause() already lowers
-		// mypolls.poll_timeout to that deadline. Shortening ttw here as well
-		// would be a second, disagreeing mechanism -- and the losing one, since
-		// process_all_sessions() will not call handler() until pause_until has
-		// passed however often the thread wakes.
+		// Adaptive poll timeout. partition_pool_nulls holds the count from the
+		// process_all_sessions() pass that just ran: update_partition_gate()
+		// consumes the previous tick's value at the top of that function, so
+		// what is left here is this iteration's. A non-zero value means a
+		// session in this worker wanted a backend connection and did not get
+		// one, and the connection that unblocks it may be freed by a peer
+		// worker without ever touching this worker's fds. See the rationale
+		// on APT_* in PgSQL_Thread.h.
+		//
+		// The window check is the CPU guard: without demonstrated throughput
+		// there is no evidence a connection is about to be returned, so the
+		// full timeout is kept rather than spinning.
 		apt_update_window();
+		if (
+			partition_pool_nulls > 0
+			&& apt_window_total >= APT_MIN_QUERIES
+			&& ttw > APT_SHORT_TTW_MS
+		) {
+			ttw = APT_SHORT_TTW_MS;
+		}
 #ifdef IDLE_THREADS
 		if (GloVars.global.idle_threads && idle_maintenance_thread) {
 			memset(events, 0, sizeof(struct epoll_event) * MY_EPOLL_THREAD_MAXEVENTS); // let's make valgrind happy. It also seems that needs to be zeroed anyway
@@ -3860,20 +3871,6 @@ void PgSQL_Thread::ProcessAllSessions_MaintenanceLoop(PgSQL_Session * sess, unsi
 
 		sess->update_expired_conns(expire_conn_checks);
 	}
-}
-
-unsigned long long PgSQL_Thread::pool_retry_interval_us() const {
-	// Retry fast only when recent throughput proves connections are being
-	// returned frequently: at that rate a 1ms wait is near-certain to find
-	// one, and the cost is a handful of extra wakeups during what are rare
-	// starvation episodes. With no recent throughput there is no evidence any
-	// connection is coming, so fall back to the conservative failure interval
-	// rather than spinning. This is the CPU guard, and it falls out of the
-	// signal itself instead of needing a separate budget.
-	if (apt_window_total >= APT_MIN_QUERIES) {
-		return (unsigned long long)APT_SHORT_TTW_MS * 1000ULL;
-	}
-	return (unsigned long long)pgsql_thread___poll_timeout_on_failure * 1000ULL;
 }
 
 void PgSQL_Thread::apt_update_window() {

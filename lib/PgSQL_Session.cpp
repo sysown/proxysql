@@ -5536,7 +5536,7 @@ void PgSQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		// pause_until is also consumed by tune_timeout_for_session_needs_pause()
 		// (Base_Thread.cpp), so the thread's poll timeout shortens to this
 		// deadline on its own -- no separate timeout plumbing needed.
-		pause_until = thread->curtime + thread->pool_retry_interval_us();
+		pause_until = thread->curtime + pgsql_thread___poll_timeout_on_failure * 1000;
 		return;
 	}
 	// Got one: drop any retry deadline left over from a previous failure, or
