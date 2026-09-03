@@ -3446,11 +3446,37 @@ void PgSQL_Thread::run() {
 				unsigned int nthr = GloPTH->num_threads;
 				if (nthr > 1) {
 					unsigned int w2 = (w + 1) % nthr;
-					unsigned int half = resume_mysql_sessions->len / 2;
-					if (half) {
-						idle_thread_assigns_sessions_to_worker_thread(thr, half);
-					}
-					idle_thread_assigns_sessions_to_worker_thread(GloPTH->pgsql_threads[w2].worker, 0);
+					PgSQL_Thread* thr2 = GloPTH->pgsql_threads[w2].worker;
+
+					// Power of two choices: sample two workers and give the
+					// whole batch to the less loaded one.
+					//
+					// Splitting the batch evenly was tried first and did not
+					// work: the light worker received its share and re-exported
+					// it within a second, because a worker exports all of its
+					// idle sessions every loop iteration and a light worker
+					// iterates far more often. Measured 1598/2 either way.
+					// Sending everything to the lighter worker gives a
+					// restoring force instead of a fair coin -- it keeps
+					// winning until it is no longer the lighter one.
+					//
+					// Dirty reads are deliberate. This is a load hint, not an
+					// invariant; a stale value costs at most one misdirected
+					// batch, and taking locks to read two counters would cost
+					// more than it could ever save.
+					//
+					// resume_mysql_sessions is included in the estimate because
+					// those sessions are already promised to that worker but
+					// not yet absorbed. Without it, several handoffs in quick
+					// succession all see the same low mysql_sessions->len and
+					// pile onto the same worker.
+					unsigned int load1 = thr->mysql_sessions->len
+						+ thr->myexchange.resume_mysql_sessions->len;
+					unsigned int load2 = thr2->mysql_sessions->len
+						+ thr2->myexchange.resume_mysql_sessions->len;
+
+					idle_thread_assigns_sessions_to_worker_thread(
+						(load2 < load1) ? thr2 : thr, 0);
 				} else {
 					idle_thread_assigns_sessions_to_worker_thread(thr, 0);
 				}
