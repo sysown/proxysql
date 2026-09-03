@@ -157,7 +157,9 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 	void worker_thread_assigns_sessions_to_idle_thread(MySQL_Thread *thr);
 	void worker_thread_gets_sessions_from_idle_thread();
 	void idle_thread_gets_sessions_from_worker_thread();
-	void idle_thread_assigns_sessions_to_worker_thread(MySQL_Thread *thr);
+	/// Hand resumed sessions from this idle thread to a worker.
+	/// max_sessions == 0 means "all of them".
+	void idle_thread_assigns_sessions_to_worker_thread(MySQL_Thread *thr, unsigned int max_sessions = 0);
 	void idle_thread_check_if_worker_thread_has_unprocess_resumed_sessions_and_signal_it(MySQL_Thread *thr);
 	void idle_thread_prepares_session_to_send_to_worker_thread(int i);
 	void idle_thread_to_kill_idle_sessions();

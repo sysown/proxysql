@@ -3241,6 +3241,27 @@ void PgSQL_Thread::run() {
 
 		pre_poll_time = curtime;
 		int ttw = (mypolls.poll_timeout ? (mypolls.poll_timeout / 1000 < (unsigned int)pgsql_thread___poll_timeout ? mypolls.poll_timeout / 1000 : pgsql_thread___poll_timeout) : pgsql_thread___poll_timeout);
+
+		// Adaptive poll timeout. partition_pool_nulls holds the count from the
+		// process_all_sessions() pass that just ran: update_partition_gate()
+		// consumes the previous tick's value at the top of that function, so
+		// what is left here is this iteration's. A non-zero value means a
+		// session in this worker wanted a backend connection and did not get
+		// one, and the connection that unblocks it may be freed by a peer
+		// worker without ever touching this worker's fds. See the rationale
+		// on APT_* in PgSQL_Thread.h.
+		//
+		// The window check is the CPU guard: without demonstrated throughput
+		// there is no evidence a connection is about to be returned, so the
+		// full timeout is kept rather than spinning.
+		apt_update_window();
+		if (
+			partition_pool_nulls > 0
+			&& apt_window_total >= APT_MIN_QUERIES
+			&& ttw > APT_SHORT_TTW_MS
+		) {
+			ttw = APT_SHORT_TTW_MS;
+		}
 #ifdef IDLE_THREADS
 		if (GloVars.global.idle_threads && idle_maintenance_thread) {
 			memset(events, 0, sizeof(struct epoll_event) * MY_EPOLL_THREAD_MAXEVENTS); // let's make valgrind happy. It also seems that needs to be zeroed anyway
@@ -3403,7 +3424,62 @@ void PgSQL_Thread::run() {
 			unsigned int w = rand_fast() % (GloPTH->num_threads);
 			PgSQL_Thread* thr = GloPTH->pgsql_threads[w].worker;
 			if (resume_mysql_sessions->len) {
-				idle_thread_assigns_sessions_to_worker_thread(thr);
+				// Split the batch across two consecutive workers instead of
+				// dropping all of it on one. Handing the whole queue to a
+				// single randomly-chosen worker made the distribution
+				// unstable: measured 1598/2 across two workers at 1600
+				// clients, established during the connection ramp and never
+				// corrected, because migration stops once sessions are no
+				// longer idle.
+				//
+				// This is not affinity -- sessions still go to arbitrary
+				// workers by design. It only stops a single draw from
+				// deciding the fate of an entire batch.
+				//
+				// Cost is one extra mutex pair and one extra pipe write per
+				// handoff. At the observed handoff rate that is far below
+				// measurement noise.
+				//
+				// The two locks are taken sequentially, never held together,
+				// so two idle threads picking overlapping pairs in opposite
+				// order cannot deadlock.
+				unsigned int nthr = GloPTH->num_threads;
+				if (nthr > 1) {
+					unsigned int w2 = (w + 1) % nthr;
+					PgSQL_Thread* thr2 = GloPTH->pgsql_threads[w2].worker;
+
+					// Power of two choices: sample two workers and give the
+					// whole batch to the less loaded one.
+					//
+					// Splitting the batch evenly was tried first and did not
+					// work: the light worker received its share and re-exported
+					// it within a second, because a worker exports all of its
+					// idle sessions every loop iteration and a light worker
+					// iterates far more often. Measured 1598/2 either way.
+					// Sending everything to the lighter worker gives a
+					// restoring force instead of a fair coin -- it keeps
+					// winning until it is no longer the lighter one.
+					//
+					// Dirty reads are deliberate. This is a load hint, not an
+					// invariant; a stale value costs at most one misdirected
+					// batch, and taking locks to read two counters would cost
+					// more than it could ever save.
+					//
+					// resume_mysql_sessions is included in the estimate because
+					// those sessions are already promised to that worker but
+					// not yet absorbed. Without it, several handoffs in quick
+					// succession all see the same low mysql_sessions->len and
+					// pile onto the same worker.
+					unsigned int load1 = thr->mysql_sessions->len
+						+ thr->myexchange.resume_mysql_sessions->len;
+					unsigned int load2 = thr2->mysql_sessions->len
+						+ thr2->myexchange.resume_mysql_sessions->len;
+
+					idle_thread_assigns_sessions_to_worker_thread(
+						(load2 < load1) ? thr2 : thr, 0);
+				} else {
+					idle_thread_assigns_sessions_to_worker_thread(thr, 0);
+				}
 			}
 			else {
 				idle_thread_check_if_worker_thread_has_unprocess_resumed_sessions_and_signal_it(thr);
@@ -3505,14 +3581,21 @@ void PgSQL_Thread::idle_thread_check_if_worker_thread_has_unprocess_resumed_sess
 	pthread_mutex_unlock(&thr->myexchange.mutex_resumes);
 }
 
-void PgSQL_Thread::idle_thread_assigns_sessions_to_worker_thread(PgSQL_Thread * thr) {
+void PgSQL_Thread::idle_thread_assigns_sessions_to_worker_thread(PgSQL_Thread * thr, unsigned int max_sessions) {
 	bool send_signal = false;
 	// send_signal variable will control if we need to signal or not
 	// the worker thread
 	pthread_mutex_lock(&thr->myexchange.mutex_resumes);
 	if (shutdown == 0 && thr->shutdown == 0)
 		if (resume_mysql_sessions->len) {
-			while (resume_mysql_sessions->len) {
+			// max_sessions == 0 means "move everything", preserving the
+			// original behaviour; a bound lets one batch be split across
+			// several workers instead of landing entirely on one.
+			unsigned int to_move = resume_mysql_sessions->len;
+			if (max_sessions && max_sessions < to_move) {
+				to_move = max_sessions;
+			}
+			while (to_move--) {
 				PgSQL_Session* mysess = (PgSQL_Session*)resume_mysql_sessions->remove_index_fast(0);
 				thr->myexchange.resume_mysql_sessions->add(mysess);
 			}
@@ -3852,6 +3935,38 @@ void PgSQL_Thread::ProcessAllSessions_MaintenanceLoop(PgSQL_Session * sess, unsi
 	}
 }
 
+void PgSQL_Thread::apt_update_window() {
+	const unsigned long long q = status_variables.stvar[st_var_queries];
+	// Cumulative counter; only the delta since the last iteration is new work.
+	const unsigned long long delta = (q >= apt_last_queries) ? (q - apt_last_queries) : 0;
+	apt_last_queries = q;
+
+	if (apt_bucket_start == 0) {
+		apt_bucket_start = curtime;
+	}
+
+	const unsigned long long elapsed = (curtime > apt_bucket_start) ? (curtime - apt_bucket_start) : 0;
+	if (elapsed >= APT_BUCKET_US * APT_BUCKETS) {
+		// Idle longer than the whole window: everything in it is stale, and
+		// advancing bucket by bucket would be a pointless loop.
+		memset(apt_buckets, 0, sizeof(apt_buckets));
+		apt_window_total = 0;
+		apt_idx = 0;
+		apt_bucket_start = curtime;
+	} else {
+		unsigned long long advance = elapsed / APT_BUCKET_US;
+		while (advance--) {
+			apt_idx = (apt_idx + 1) % APT_BUCKETS;
+			apt_window_total -= apt_buckets[apt_idx];
+			apt_buckets[apt_idx] = 0;
+			apt_bucket_start += APT_BUCKET_US;
+		}
+	}
+
+	apt_buckets[apt_idx] += delta;
+	apt_window_total += delta;
+}
+
 void PgSQL_Thread::process_all_sessions() {
 	unsigned int n;
 	unsigned int total_active_transactions_ = 0;
@@ -3973,6 +4088,72 @@ void PgSQL_Thread::process_all_sessions() {
 			}
 		}
 	}
+	// Second pass over the sessions that failed to get a backend connection.
+	//
+	// Connections are released from inside handler() during the scan above, so
+	// a session that gave up at index 50 may be servable by a release that
+	// happened at index 700 -- in this same pass. Without this it waits for
+	// something to set to_process again, and for a session parked on a failed
+	// checkout that is ProcessAllSessions_MaintenanceLoop(), which runs on a
+	// hardcoded 1 second interval. That 1Hz retry is what bounded the observed
+	// tail (p99 ~1.8s, max ~1.9s) while p50 stayed near 1ms.
+	//
+	// Retrying across iterations does not help: nothing changes between polls.
+	// The releases happen during the scan, which is why the retry has to be
+	// here rather than a shorter poll timeout or a session-level deadline.
+	//
+	// Gated on partition_pool_nulls: zero means nobody failed a checkout in
+	// this pass, so there is nothing to retry and this costs one branch.
+	// Deliberately a single extra pass, not a loop to fixpoint -- bounded work
+	// per iteration, and a session that still cannot be served falls back to
+	// the existing path.
+	// TEMPORARY INSTRUMENTATION -- remove before merge. Counts how many
+	// sessions the rescan actually finds and how many it manages to serve, so
+	// "no difference" can be attributed to the right cause: never firing,
+	// finding no candidates, or finding them and still getting no connection.
+	unsigned int rescan_cand = 0;
+	unsigned int rescan_served = 0;
+	unsigned int rescan_skip_noproc = 0;
+	unsigned int rescan_skip_hasconn = 0;
+	unsigned int rescan_skip_nombe = 0;
+
+	if (partition_pool_nulls > 0) {
+		for (n = 0; n < mysql_sessions->len; n++) {
+			PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(n);
+			// Still wants processing, is not paused, and has a backend that
+			// never got a connection: exactly the failed-checkout state.
+			if (sess->to_process != 1) { rescan_skip_noproc++; continue; }
+			if (sess->pause_until > curtime) continue;
+			if (sess->mybe == NULL || sess->mybe->server_myds == NULL) { rescan_skip_nombe++; continue; }
+			if (sess->mybe->server_myds->myconn != NULL) { rescan_skip_hasconn++; continue; }
+
+			rescan_cand++;
+			rc = sess->handler();
+			if (rc != -1 && sess->killed == false
+			    && sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) {
+				rescan_served++;
+			}
+			if (rc == -1 || sess->killed == true) {
+				char _buf[1024];
+				if (sess->client_myds && sess->killed)
+					proxy_warning("Closing killed client connection %s:%d\n", sess->client_myds->addr.addr, sess->client_myds->addr.port);
+				snprintf(_buf, sizeof(_buf), "%s:%d:%s()", __FILE__, __LINE__, __func__);
+				GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_CLOSE, sess, NULL, _buf);
+				unregister_session(n);
+				n--;
+				delete sess;
+			}
+		}
+	}
+
+	// TEMPORARY INSTRUMENTATION -- one line per second (maintenance tick).
+	if (maintenance_loop) {
+		proxy_info("PGSQL_RESCAN thr=%p sessions=%u nulls=%u attempts=%u cand=%u served=%u skip[noproc=%u hasconn=%u nombe=%u]\n",
+			this, mysql_sessions->len, partition_pool_nulls, partition_pool_attempts,
+			rescan_cand, rescan_served,
+			rescan_skip_noproc, rescan_skip_hasconn, rescan_skip_nombe);
+	}
+
 	if (maintenance_loop) {
 		unsigned int total_active_transactions_tmp;
 		total_active_transactions_tmp = __sync_add_and_fetch(&status_variables.active_transactions, 0);
@@ -5883,10 +6064,18 @@ void PgSQL_Thread::push_MyConn_local(PgSQL_Connection * c) {
 	PgSQL_SrvC* mysrvc = (PgSQL_SrvC*)c->parent;
 	if (mysrvc->status == MYSQL_SERVER_STATUS_ONLINE) {
 		if (c->async_state_machine == ASYNC_IDLE) {
-			unsigned int n = (GloPTH && GloPTH->num_threads > 0) ? GloPTH->num_threads : 1;
-			if ((push_local_counter++ % n) == 0) {
-				cached_connections->add(c);
-				return;
+			// Never cache locally while somebody is waiting for a connection.
+			// return_local_connections() only publishes the cache at the end
+			// of the pass, and a pass walks every session this worker owns --
+			// so the time a cached connection stays invisible to peer workers
+			// grows with client count, precisely when starvation is worst.
+			// The 1-in-N ratio below is fixed and does not scale with that.
+			if (!pool_has_waiters()) {
+				unsigned int n = (GloPTH && GloPTH->num_threads > 0) ? GloPTH->num_threads : 1;
+				if ((push_local_counter++ % n) == 0) {
+					cached_connections->add(c);
+					return;
+				}
 			}
 		}
 	}
