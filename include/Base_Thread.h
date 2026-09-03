@@ -60,6 +60,8 @@ private:
 	unsigned int partition_pool_nulls_prev = 0;
 	unsigned int partition_streak = 0;
 	bool partition_active = false;
+	// curtime of the last B-band sort, for PARTITION_SORT_MIN_INTERVAL_US.
+	unsigned long long last_partition_sort_time = 0;
 
 public:
 	// Gate thresholds: NULL-ratio (NUM/DEN) classifies a tick as "stressed";
@@ -74,14 +76,18 @@ public:
 	static constexpr unsigned int PARTITION_FAIRNESS_MIN_B      = 4;
 	// Sorting the whole B band by wait time used to run on every iteration and
 	// was removed: it cost ~12% throughput at 500 clients / 50-conn pool under
-	// SSL. Run it on roughly one iteration in N instead. The cost amortises to
-	// ~1/N, while ordering stays approximately oldest-first between sorts --
-	// max_connect_time is a fixed offset from when the session began waiting,
-	// so it is monotonic in arrival order and a stale sort is still roughly
-	// right. Chosen randomly rather than on a fixed period so it cannot
-	// phase-lock with a periodic workload and always sample the same point in
-	// the cycle.
-	static constexpr unsigned int PARTITION_SORT_INTERVAL       = 10;
+	// SSL. It is rate limited by TIME rather than by iteration count, because
+	// iteration count is not a stable unit -- loop frequency depends on session
+	// count and load, so a per-N-iterations gate makes a fast worker sort far
+	// more often than a slow one, exactly when it can least afford to. A wall
+	// clock bound caps the cost at a known number of sorts per second whatever
+	// the loop is doing.
+	//
+	// Ordering decays between sorts but degrades gracefully: max_connect_time
+	// is a fixed offset from when a session began waiting, so it is monotonic
+	// in arrival order, and the sessions that matter for the tail are the
+	// long-waiting ones whose relative order is stable.
+	static constexpr unsigned long long PARTITION_SORT_MIN_INTERVAL_US = 50000;	// 50ms
 
 	// Called by sessions inside this worker at the get_MyConn_from_pool()
 	// call site to feed the gate.

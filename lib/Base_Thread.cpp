@@ -347,7 +347,9 @@ void Base_Thread::ProcessAllSessions_Partition() {
 	// approximate FIFO across the whole band. It is rate-limited because doing
 	// it every iteration was measured at ~12% throughput loss.
 	const size_t b_len = (idle_begin > running_end) ? (idle_begin - running_end) : 0;
-	if (b_len > 1 && (rand_fast() % PARTITION_SORT_INTERVAL) == 0) {
+	const bool sort_due = (curtime >= last_partition_sort_time + PARTITION_SORT_MIN_INTERVAL_US);
+	if (b_len > 1 && sort_due) {
+		last_partition_sort_time = curtime;
 		// Every element in [running_end, idle_begin) satisfied is_B, so
 		// mybe->server_myds is non-null and max_connect_time is non-zero.
 		std::sort(
