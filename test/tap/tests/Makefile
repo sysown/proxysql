@@ -359,14 +359,23 @@ $(DUCKDB_AR):
 	$(MAKE) -C $(PROXYSQL_PATH)/deps PROXYSQL40=1 duckdb
 	@test -f $@ || { echo "ERROR: deps duckdb build did not produce $@" >&2; exit 1; }
 
-ifeq ($(PROXYSQL40_DETECTED),0)
-test_duckdb_bench-t:
-	@echo "ERROR: test_duckdb_bench-t is PROXYSQL40-only" >&2; exit 1
-else
+ifeq ($(PROXYSQL40),1)
+USE_DUCKDB_BENCH := 1
+endif
+ifneq ($(PROXYSQL40_DETECTED),0)
+USE_DUCKDB_BENCH := 1
+endif
+
+ifeq ($(USE_DUCKDB_BENCH),1)
 test_duckdb_bench-t: test_duckdb_bench-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT) $(DUCKDB_AR)
 	$(CXX) $< $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
 		$(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) \
-		$(MYLIBS) $(STATIC_LIBS) $(ALLOW_MULTI_DEF) -o $@
+		-ltap $(MARIADB_LDIR)/libmariadbclient.a \
+		$(POSTGRESQL_STATIC_LIBS) $(OPENSSL_STATIC_LIBS) \
+		-lpthread -lm -lz -o $@
+else
+test_duckdb_bench-t:
+	@echo "ERROR: test_duckdb_bench-t is PROXYSQL40-only" >&2; exit 1
 endif
 
 sqlite3-t: sqlite3-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)

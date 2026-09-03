@@ -537,7 +537,6 @@ int main(int argc, char** argv) {
 		   "%s %s errors=0", cells[i].target, cells[i].workload);
 	}
 
-	mysql_library_end();
 	duckdb_close(&db);
 	return exit_status();
 }
