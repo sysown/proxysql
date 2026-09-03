@@ -1000,8 +1000,26 @@ bool genai_start() {
 		return false;
 	}
 
+	// main.mcp_{auth,target}_profiles and main.mcp_query_rules have been
+	// repopulated from disk by Admin's bootstrap before this phase runs
+	// (see __insert_or_replace_maintable_select_disktable, issue #6167),
+	// so installing from admindb here is what makes a SAVE ... TO DISK
+	// survive a restart. Both installs are best-effort: an empty or
+	// unreadable table must not stop the listener from coming up.
+	//
+	// Order matters, and it differs per install:
+	//   * profiles BEFORE the listener -- ProxySQL_MCP_Server's
+	//     construction path initializes the Query_Tool_Handler connection
+	//     pools from the target registry, so the snapshot has to be in
+	//     place first or the pools come up empty.
+	//   * query rules AFTER the listener -- install_query_rules_from_admin
+	//     hands the rows to Discovery_Schema only when a catalog exists,
+	//     and the catalog is owned by the Query_Tool_Handler the listener
+	//     creates. Called earlier the rows would land in query_rules_ but
+	//     never reach the request hot path.
 	(void)mcp_load_target_auth_map_from_admindb(ctx);
 	mcp_start_listener_if_enabled(ctx);
+	(void)mcp_load_query_rules_to_runtime(ctx);
 
 	return true;
 }

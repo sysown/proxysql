@@ -17,6 +17,7 @@
 
 #include "proxysql.h"
 #include "proxysql_glovars.hpp"
+#include "sqlite3db.h"
 #include "prometheus/registry.h"
 
 extern ProxySQL_GlobalVariables GloVars;
@@ -995,6 +996,41 @@ void proxysql_refresh_configured_plugin_runtime_views(const std::string& sql,
 		return;
 	}
 	mgr->refresh_runtime_views_for_query(sql, admindb, configdb, statsdb);
+}
+
+void proxysql_restore_plugin_config_tables_from_disk(SQLite3DB* admindb,
+	const std::vector<ProxySQL_PluginTableDef>& config_tables)
+{
+	if (admindb == nullptr) {
+		return;
+	}
+	for (const auto& def : config_tables) {
+		if (def.table_name == nullptr || *def.table_name == '\0') {
+			continue;
+		}
+		// Every table registered for config_db is also registered for
+		// admin_db with the same definition -- that pairing is what makes it
+		// a persisted table rather than a runtime projection -- so SELECT *
+		// is column-compatible by construction. A plugin that registers a
+		// config_db table with no admin_db twin is a registration bug;
+		// execute() logs the SQLite error and returns false, and startup
+		// continues with that one table unrestored rather than aborting.
+		std::string q = "INSERT OR REPLACE INTO main.";
+		q += def.table_name;
+		q += " SELECT * FROM disk.";
+		q += def.table_name;
+		admindb->execute(q.c_str());
+	}
+}
+
+void proxysql_restore_configured_plugin_config_tables(SQLite3DB* admindb) {
+	std::shared_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
+	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load();
+	if (mgr == nullptr) {
+		return;
+	}
+	proxysql_restore_plugin_config_tables_from_disk(
+		admindb, mgr->tables(ProxySQL_PluginDBKind::config_db));
 }
 #endif /* PROXYSQL40 */
 

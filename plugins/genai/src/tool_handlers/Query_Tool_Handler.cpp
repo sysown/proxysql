@@ -674,7 +674,16 @@ std::string Query_Tool_Handler::format_target_unavailable_error(const std::strin
 	const std::string resolved_target_id = target_id.empty() ? default_target_id : target_id;
 	if (resolved_target_id.empty()) {
 		if (target_registry.empty()) {
-			return "No MCP targets loaded in runtime_mcp_target_profiles";
+			// Issue #6168: the old wording named runtime_mcp_target_profiles,
+			// which routinely contradicts it -- that view projects the raw
+			// target snapshot, while this registry is built from the joined
+			// target_auth_map. Point at the two things that actually explain
+			// an empty registry instead.
+			return "No MCP targets in the runtime registry."
+			       " Rows in mcp_target_profiles reach the query endpoint only via"
+			       " 'LOAD MCP PROFILES TO RUNTIME', and rows that are inactive or"
+			       " whose auth_profile_id does not resolve are excluded from it."
+			       " Check runtime_mcp_target_profiles.effective / .skip_reason";
 		}
 
 		std::ostringstream oss;

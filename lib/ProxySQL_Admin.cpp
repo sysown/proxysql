@@ -5943,6 +5943,28 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
  		admindb->execute("INSERT OR REPLACE INTO main.clickhouse_users SELECT * FROM disk.clickhouse_users");
 	}
 #endif /* PROXYSQLCLICKHOUSE */
+#ifdef PROXYSQL40
+	// Plugin-registered config tables (issue #6167).
+	//
+	// Plugins that register a table under ProxySQL_PluginDBKind::config_db
+	// get the table materialized on disk (Admin_Bootstrap merges their
+	// defs into tables_defs_config), and they get "SAVE <X> TO DISK"
+	// verbs that write into it -- but until now nothing copied those rows
+	// back into main. at startup, because the block above is a hardcoded
+	// list of core tables. The result was silent, partial persistence:
+	// a plugin's variables survived a restart (they live in
+	// global_variables, copied above) while its own tables came back
+	// empty, so e.g. the MCP listener started with zero targets after
+	// SAVE MCP PROFILES TO DISK + restart.
+	//
+	// The copy belongs here rather than in each plugin because the
+	// ordering is what makes it correct: LoadConfiguredPlugins() (phase
+	// A+B) has already registered the schemas, this function runs inside
+	// admin init, and InitConfiguredPlugins() / StartConfiguredPlugins()
+	// run after it -- so a plugin's start() callback observes main.
+	// already populated from disk, with no per-plugin boot hook needed.
+	proxysql_restore_configured_plugin_config_tables(admindb);
+#endif /* PROXYSQL40 */
 	admindb->execute("PRAGMA foreign_keys = ON");
 #if defined(TEST_AURORA) || defined(TEST_GALERA)
 	admindb->execute("DELETE FROM mysql_servers WHERE gtid_port > 0"); // temporary disable add GTID checks

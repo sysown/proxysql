@@ -141,6 +141,36 @@ ProxySQL_PluginCommandResult err_result(const char* msg) {
 	return r;
 }
 
+/// Render the outcome of a profile install for the admin client (issue
+/// #6168).  A bare "MCP profiles loaded" hid the case where every target was
+/// dropped by the auth join, so the reply now always states how many targets
+/// the query endpoint can actually see, and points at the runtime view when
+/// some were excluded.
+std::string format_profile_install_summary(const char* verb) {
+	GenAIPluginContext& ctx = genai_context();
+	std::string msg(verb);
+	if (ctx.mcp == nullptr) {
+		return msg;
+	}
+	const MCP_Profile_Install_Stats stats = ctx.mcp->get_last_profile_install_stats();
+	msg += ": ";
+	msg += std::to_string(stats.auth_profiles_installed);
+	msg += " auth profile(s), ";
+	msg += std::to_string(stats.targets_effective);
+	msg += " of ";
+	msg += std::to_string(stats.targets_read);
+	msg += " target(s) effective";
+	if (stats.targets_skipped() > 0) {
+		msg += " (";
+		msg += std::to_string(stats.targets_skipped_inactive);
+		msg += " inactive, ";
+		msg += std::to_string(stats.targets_skipped_no_auth_profile);
+		msg += " with unresolved auth_profile_id;";
+		msg += " see runtime_mcp_target_profiles.skip_reason and the error log)";
+	}
+	return msg;
+}
+
 bool exec_sql(SQLite3DB* db, const char* sql) {
 	return db != nullptr && sql != nullptr && db->execute(sql);
 }
@@ -380,10 +410,11 @@ ProxySQL_PluginCommandResult load_mcp_profiles_to_runtime(
 	if (!mcp_load_target_auth_map_from_admindb(ctx)) {
 		return err_result("LOAD MCP PROFILES TO RUNTIME: failed reading mcp_*_profiles");
 	}
+	const std::string summary = format_profile_install_summary("MCP profiles loaded to runtime");
 	AdminMutexHandoff handoff(cmd_ctx);
 	handoff.release();
 	mcp_start_listener_if_enabled(ctx);
-	return ok_result("MCP profiles loaded to runtime");
+	return ok_result(summary.c_str());
 }
 
 /**
@@ -451,10 +482,11 @@ ProxySQL_PluginCommandResult load_mcp_profiles_from_disk(
 	if (!mcp_load_target_auth_map_from_admindb(ctx)) {
 		return err_result("LOAD MCP PROFILES FROM DISK: failed to refresh runtime");
 	}
+	const std::string summary = format_profile_install_summary("MCP profiles loaded from disk");
 	AdminMutexHandoff handoff(cmd_ctx);
 	handoff.release();
 	mcp_start_listener_if_enabled(ctx);
-	return ok_result("MCP profiles loaded from disk");
+	return ok_result(summary.c_str());
 }
 
 ProxySQL_PluginCommandResult save_mcp_profiles_to_disk(

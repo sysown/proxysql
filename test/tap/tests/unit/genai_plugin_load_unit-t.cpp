@@ -72,8 +72,16 @@ void setup_admindb_schema(SQLite3DB* db) {
 	            " active INTEGER DEFAULT 1, comment TEXT DEFAULT '')");
 	db->execute("CREATE TABLE IF NOT EXISTS runtime_mcp_auth_profiles AS"
 	            " SELECT * FROM mcp_auth_profiles WHERE 0");
-	db->execute("CREATE TABLE IF NOT EXISTS runtime_mcp_target_profiles AS"
-	            " SELECT * FROM mcp_target_profiles WHERE 0");
+	// The runtime view carries two derived columns the editable table does
+	// not have (issue #6168), so it cannot be cloned from mcp_target_profiles.
+	db->execute("CREATE TABLE IF NOT EXISTS runtime_mcp_target_profiles ("
+	            " target_id TEXT PRIMARY KEY, protocol TEXT, hostgroup_id INTEGER,"
+	            " auth_profile_id TEXT, description TEXT DEFAULT '',"
+	            " max_rows INTEGER DEFAULT 200, timeout_ms INTEGER DEFAULT 2000,"
+	            " allow_explain INTEGER DEFAULT 1, allow_discovery INTEGER DEFAULT 1,"
+	            " active INTEGER DEFAULT 1, comment TEXT DEFAULT '',"
+	            " effective INTEGER NOT NULL DEFAULT 0,"
+	            " skip_reason TEXT NOT NULL DEFAULT '')");
 	db->execute("CREATE TABLE IF NOT EXISTS mcp_query_rules ("
 	            " rule_id INTEGER PRIMARY KEY, active INTEGER NOT NULL DEFAULT 0,"
 	            " username TEXT, target_id TEXT, schemaname TEXT, tool_name TEXT,"
@@ -92,7 +100,7 @@ SQLite3DB* proxysql_plugin_get_configdb() { return g_configdb; }
 SQLite3DB* proxysql_plugin_get_statsdb()  { return g_statsdb; }
 
 int main() {
-	plan(95);
+	plan(104);
 
 	g_admindb  = new SQLite3DB();
 	g_configdb = new SQLite3DB();
@@ -454,6 +462,59 @@ int main() {
 	ok(g_admindb->return_one_int(
 		"SELECT hostgroup_id FROM mcp_target_profiles WHERE target_id='t'") == 1,
 	   "SAVE restored hostgroup_id=1 from in-memory snapshot");
+
+	// Issue #6168: target profiles that do not survive the join against
+	// mcp_auth_profiles are excluded from target_auth_map -- i.e. invisible
+	// to the MCP query endpoint -- while still being projected into
+	// runtime_mcp_target_profiles. Assert the two derived columns explain
+	// which rows were dropped and why, and that the admin verb reports the
+	// drop instead of replying with a bare OK.
+	ok(g_admindb->execute(
+		"INSERT INTO mcp_target_profiles"
+		" (target_id, protocol, hostgroup_id, auth_profile_id, description,"
+		"  max_rows, timeout_ms, allow_explain, allow_discovery, active, comment)"
+		" VALUES('t_dangling','mysql',1,'nope','',200,2000,1,1,1,'')"),
+	   "seed target with unresolved auth_profile_id");
+	ok(g_admindb->execute(
+		"INSERT INTO mcp_target_profiles"
+		" (target_id, protocol, hostgroup_id, auth_profile_id, description,"
+		"  max_rows, timeout_ms, allow_explain, allow_discovery, active, comment)"
+		" VALUES('t_inactive','mysql',1,'a','',200,2000,1,1,0,'')"),
+	   "seed inactive target");
+
+	ProxySQL_PluginCommandResult skip_result;
+	const bool skip_dispatched = mgr.dispatch_admin_command(
+		cmd_ctx, "LOAD MCP PROFILES TO RUNTIME", skip_result);
+	ok(skip_dispatched && skip_result.error_code == 0,
+	   "LOAD MCP PROFILES TO RUNTIME succeeds with skipped rows (rc=%d)",
+	   skip_result.error_code);
+	ok(skip_result.message.find("1 of 3 target(s) effective") != std::string::npos,
+	   "LOAD reply reports effective/read counts (msg=%s)",
+	   skip_result.message.c_str());
+
+	mgr.refresh_runtime_views_for_query(
+		"SELECT * FROM runtime_mcp_target_profiles", g_admindb, nullptr, nullptr);
+
+	ok(g_admindb->return_one_int(
+		"SELECT COUNT(*) FROM runtime_mcp_target_profiles") == 3,
+	   "runtime view still projects every target, effective or not");
+	ok(g_admindb->return_one_int(
+		"SELECT COUNT(*) FROM runtime_mcp_target_profiles WHERE effective=1") == 1,
+	   "exactly one target is effective");
+	ok(g_admindb->return_one_int(
+		"SELECT COUNT(*) FROM runtime_mcp_target_profiles"
+		" WHERE target_id='t' AND effective=1 AND skip_reason=''") == 1,
+	   "usable target: effective=1, no skip_reason");
+	ok(g_admindb->return_one_int(
+		"SELECT COUNT(*) FROM runtime_mcp_target_profiles"
+		" WHERE target_id='t_dangling' AND effective=0"
+		" AND skip_reason='auth_profile_id not found'") == 1,
+	   "dangling auth_profile_id: effective=0 with matching skip_reason");
+	ok(g_admindb->return_one_int(
+		"SELECT COUNT(*) FROM runtime_mcp_target_profiles"
+		" WHERE target_id='t_inactive' AND effective=0"
+		" AND skip_reason='inactive'") == 1,
+	   "inactive target: effective=0 with matching skip_reason");
 
 	ok(mgr.stop_all(),     "stop_all succeeds");
 

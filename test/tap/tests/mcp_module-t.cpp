@@ -17,6 +17,7 @@
 #include <string>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <vector>
 #include <tuple>
@@ -85,6 +86,123 @@ void add_mcp_profile_commands(std::vector<std::string>& queries) {
 	queries.push_back("SAVE MCP PROFILES FROM RUNTIME");
 	queries.push_back("SAVE MCP PROFILES FROM RUN");
 	queries.push_back("SAVE MCP PROFILES TO DISK");
+}
+
+/**
+ * @brief Run a scalar query on the admin interface and return the first
+ *        column of the first row as an int, or -1 on any failure.
+ */
+int admin_query_int(MYSQL* admin, const std::string& query) {
+	if (mysql_query(admin, query.c_str()) != 0) {
+		return -1;
+	}
+	MYSQL_RES* res = mysql_store_result(admin);
+	if (!res) {
+		return -1;
+	}
+	MYSQL_ROW row = mysql_fetch_row(res);
+	const int value = (row && row[0]) ? atoi(row[0]) : -1;
+	mysql_free_result(res);
+	return value;
+}
+
+/**
+ * @brief Exercise the derived `effective` / `skip_reason` columns on
+ *        runtime_mcp_target_profiles (issue #6168).
+ *
+ * A target profile only reaches the MCP query endpoint if it survives the join
+ * against mcp_auth_profiles: rows with active=0, and rows whose
+ * auth_profile_id does not resolve (there is no FK constraint, so the INSERT
+ * is accepted), are dropped from the joined map. They stay visible in
+ * runtime_mcp_target_profiles, which used to make an empty list_targets
+ * impossible to diagnose from the admin interface. These assertions pin the
+ * contract that the runtime view now explains its own rows.
+ *
+ * Seeds are removed and the runtime reloaded on the way out so the rest of the
+ * group sees the profile set it started with.
+ */
+int test_target_profile_effective_columns(MYSQL* admin) {
+	MYSQL_QUERY_T(admin,
+		"DELETE FROM mcp_target_profiles"
+		" WHERE target_id IN ('tap6168_ok','tap6168_dangling','tap6168_inactive')");
+	MYSQL_QUERY_T(admin,
+		"DELETE FROM mcp_auth_profiles WHERE auth_profile_id='tap6168_auth'");
+
+	MYSQL_QUERY_T(admin,
+		"INSERT INTO mcp_auth_profiles"
+		" (auth_profile_id, db_username, db_password, default_schema, use_ssl)"
+		" VALUES('tap6168_auth','u','p','',0)");
+	MYSQL_QUERY_T(admin,
+		"INSERT INTO mcp_target_profiles"
+		" (target_id, protocol, hostgroup_id, auth_profile_id, active)"
+		" VALUES('tap6168_ok','mysql',0,'tap6168_auth',1)");
+	MYSQL_QUERY_T(admin,
+		"INSERT INTO mcp_target_profiles"
+		" (target_id, protocol, hostgroup_id, auth_profile_id, active)"
+		" VALUES('tap6168_dangling','mysql',0,'tap6168_no_such_auth',1)");
+	MYSQL_QUERY_T(admin,
+		"INSERT INTO mcp_target_profiles"
+		" (target_id, protocol, hostgroup_id, auth_profile_id, active)"
+		" VALUES('tap6168_inactive','mysql',0,'tap6168_auth',0)");
+	MYSQL_QUERY_T(admin, "LOAD MCP PROFILES TO RUNTIME");
+
+	ok(admin_query_int(admin,
+		"SELECT COUNT(*) FROM runtime_mcp_target_profiles"
+		" WHERE target_id LIKE 'tap6168_%'") == 3,
+	   "all three seeded targets are projected into runtime_mcp_target_profiles");
+
+	ok(admin_query_int(admin,
+		"SELECT COUNT(*) FROM runtime_mcp_target_profiles"
+		" WHERE target_id='tap6168_ok' AND effective=1 AND skip_reason=''") == 1,
+	   "usable target reports effective=1 with an empty skip_reason");
+
+	ok(admin_query_int(admin,
+		"SELECT COUNT(*) FROM runtime_mcp_target_profiles"
+		" WHERE target_id='tap6168_dangling' AND effective=0"
+		" AND skip_reason='auth_profile_id not found'") == 1,
+	   "target with an unresolved auth_profile_id reports effective=0 and the reason");
+
+	ok(admin_query_int(admin,
+		"SELECT COUNT(*) FROM runtime_mcp_target_profiles"
+		" WHERE target_id='tap6168_inactive' AND effective=0"
+		" AND skip_reason='inactive'") == 1,
+	   "inactive target reports effective=0 and the reason");
+
+	// Flipping active back on must move the row into the effective set without
+	// any other change -- this is the operator's fix path for the second case.
+	MYSQL_QUERY_T(admin,
+		"UPDATE mcp_target_profiles SET active=1 WHERE target_id='tap6168_inactive'");
+	MYSQL_QUERY_T(admin, "LOAD MCP PROFILES TO RUNTIME");
+	ok(admin_query_int(admin,
+		"SELECT COUNT(*) FROM runtime_mcp_target_profiles"
+		" WHERE target_id='tap6168_inactive' AND effective=1 AND skip_reason=''") == 1,
+	   "reactivated target becomes effective after LOAD MCP PROFILES TO RUNTIME");
+
+	// Likewise, creating the missing auth profile resolves the dangling row.
+	MYSQL_QUERY_T(admin,
+		"INSERT INTO mcp_auth_profiles"
+		" (auth_profile_id, db_username, db_password, default_schema, use_ssl)"
+		" VALUES('tap6168_no_such_auth','u','p','',0)");
+	MYSQL_QUERY_T(admin, "LOAD MCP PROFILES TO RUNTIME");
+	ok(admin_query_int(admin,
+		"SELECT COUNT(*) FROM runtime_mcp_target_profiles"
+		" WHERE target_id='tap6168_dangling' AND effective=1 AND skip_reason=''") == 1,
+	   "target becomes effective once its auth profile exists");
+
+	// Restore the group's baseline profile set.
+	MYSQL_QUERY_T(admin,
+		"DELETE FROM mcp_target_profiles"
+		" WHERE target_id IN ('tap6168_ok','tap6168_dangling','tap6168_inactive')");
+	MYSQL_QUERY_T(admin,
+		"DELETE FROM mcp_auth_profiles"
+		" WHERE auth_profile_id IN ('tap6168_auth','tap6168_no_such_auth')");
+	MYSQL_QUERY_T(admin, "LOAD MCP PROFILES TO RUNTIME");
+	ok(admin_query_int(admin,
+		"SELECT COUNT(*) FROM runtime_mcp_target_profiles"
+		" WHERE target_id LIKE 'tap6168_%'") == 0,
+	   "seeded targets removed from the runtime view again");
+
+	return EXIT_SUCCESS;
 }
 
 /**
@@ -400,7 +518,8 @@ int main() {
 	// Persistence tests: 8 tests
 	// CHECKSUM tests: 8 tests (4 commands × 2)
 	int num_load_save_tests = (int)queries.size() * 2; // Each command + result check
-	int total_tests = num_load_save_tests + 8 + 8 + 8;
+	// Part 5 (runtime_mcp_target_profiles.effective / .skip_reason): 7 tests
+	int total_tests = num_load_save_tests + 8 + 8 + 8 + 7;
 
 	plan(total_tests);
 
@@ -460,6 +579,14 @@ int main() {
 	// ============================================================================
 	diag("=== Part 4: Testing CHECKSUM commands ===");
 	test_checksum_commands(admin);
+
+	// ============================================================================
+	// Part 5: Effective / skip_reason columns on runtime_mcp_target_profiles
+	// ============================================================================
+	diag("=== Part 5: Testing runtime_mcp_target_profiles effective/skip_reason ===");
+	if (test_target_profile_effective_columns(admin) != EXIT_SUCCESS) {
+		diag("Part 5 aborted: an admin query failed; see stderr above");
+	}
 
 	// ============================================================================
 	// Cleanup

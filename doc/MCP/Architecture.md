@@ -235,6 +235,10 @@ Credential separation model:
   - `runtime_mcp_target_profiles`
   - `runtime_mcp_auth_profiles`
 - Query execution pools are keyed by `target_id + auth_profile_id`.
+- A target reaches the endpoint only if it survives the join between those two
+  tables. `runtime_mcp_target_profiles.effective` / `.skip_reason` report which
+  rows did not (`inactive`, `auth_profile_id not found`); see
+  [VARIABLES.md](VARIABLES.md#which-target-profiles-are-actually-usable).
 
 Current execution support:
 
