@@ -213,7 +213,10 @@ void restore_mcp_runtime(MYSQL* admin) {
 	if (!admin) {
 		return;
 	}
+	// FROM DISK is disk->memory only (issue #6171); TO RUNTIME is what
+	// actually restores the running listener.
 	run_q(admin, "LOAD MCP VARIABLES FROM DISK");
+	run_q(admin, "LOAD MCP VARIABLES TO RUNTIME");
 }
 
 /**

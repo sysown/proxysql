@@ -267,6 +267,18 @@ At startup Admin copies the on-disk copies back into `main.` before the genai
 plugin's start phase runs, and the plugin installs them into the runtime from
 there. No post-restart `LOAD MCP PROFILES FROM DISK` is required.
 
+`LOAD MCP <X> FROM DISK` (and its `TO MEMORY` alias) moves disk → memory and
+nothing else, so you can stage an on-disk configuration and review or edit it
+in `main.` before committing to it. `LOAD MCP <X> TO RUNTIME` is the only verb
+that applies configuration, and the only one that may start or restart the MCP
+listener:
+
+```sql
+LOAD MCP PROFILES FROM DISK;                 -- stage: disk -> main, runtime untouched
+SELECT * FROM mcp_target_profiles;           -- review / edit
+LOAD MCP PROFILES TO RUNTIME;                -- apply
+```
+
 > **Note:** in releases before this behaviour was added, only `mcp-*` variables
 > came back after a restart (they live in `global_variables`); profiles and
 > query rules came back empty, so the MCP listener started with no targets. On

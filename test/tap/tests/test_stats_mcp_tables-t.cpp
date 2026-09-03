@@ -183,7 +183,9 @@ int main() {
 	ok(counters_after_reset == 0, "stats_mcp_query_tools_counters is empty after _reset (got %d)", counters_after_reset);
 
 	bool cleanup_ok = true;
+	// FROM DISK is disk->memory only (issue #6171); TO RUNTIME applies it.
 	cleanup_ok = (run_q(admin, "LOAD MCP VARIABLES FROM DISK") == 0) && cleanup_ok;
+	cleanup_ok = (run_q(admin, "LOAD MCP VARIABLES TO RUNTIME") == 0) && cleanup_ok;
 	cleanup_ok = (run_q(admin,
 		("DELETE FROM mcp_target_profiles WHERE target_id='" + std::string(k_target_id) + "'").c_str()) == 0)
 		&& cleanup_ok;

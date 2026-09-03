@@ -322,6 +322,7 @@ cleanup:
 		run_q(admin, ("DELETE FROM mcp_auth_profiles WHERE auth_profile_id='" + std::string(k_auth_profile_id) + "'").c_str());
 		run_q(admin, ("DELETE FROM mysql_servers WHERE hostgroup_id=" + std::to_string(k_hostgroup_id)).c_str());
 		run_q(admin, "LOAD MCP VARIABLES FROM DISK");
+		run_q(admin, "LOAD MCP VARIABLES TO RUNTIME");
 		run_q(admin, "LOAD MCP PROFILES TO RUNTIME");
 		run_q(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 		mysql_close(admin);

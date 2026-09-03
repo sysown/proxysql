@@ -95,7 +95,8 @@ dispatcher routes by canonical name + alias.
 | `LOAD MCP VARIABLES FROM DISK` | sync `disk.global_variables` → `main.global_variables` (mcp-* slice), then implicit reload |
 | `LOAD MCP VARIABLES FROM CONFIG` | re-read `mcp` block from `proxysql.cnf` |
 | `SAVE MCP VARIABLES TO MEMORY` / `... TO DISK` | reverse direction |
-| `LOAD MCP PROFILES TO RUNTIME` | atomic install of `main.mcp_auth_profiles` + `main.mcp_target_profiles` into the in-memory snapshot, rebuilds joined `target_auth_map` |
+| `LOAD MCP PROFILES TO RUNTIME` | atomic install of `main.mcp_auth_profiles` + `main.mcp_target_profiles` into the in-memory snapshot, rebuilds joined `target_auth_map`. The only verb that applies profiles, and the only one that may start the listener |
+| `LOAD MCP PROFILES FROM DISK` / `TO MEMORY` | `disk.` → `main.` only; the runtime is untouched until `TO RUNTIME` |
 | `SAVE MCP PROFILES TO MEMORY` | atomic dump of in-memory snapshot back to both editable tables in one transaction |
 | `LOAD MCP QUERY RULES TO RUNTIME` | install `main.mcp_query_rules` snapshot, attach to `Discovery_Schema` if listener up |
 | `SAVE MCP QUERY RULES TO MEMORY` | dump in-memory snapshot back to `main.mcp_query_rules` |

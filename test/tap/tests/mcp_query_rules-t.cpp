@@ -231,6 +231,7 @@ int main(int argc, char** argv) {
 	run_q(admin, "DELETE FROM mcp_query_rules WHERE rule_id >= 1000");
 	run_q(admin, "LOAD MCP QUERY RULES TO RUNTIME");
 	run_q(admin, "LOAD MCP VARIABLES FROM DISK");
+	run_q(admin, "LOAD MCP VARIABLES TO RUNTIME");
 	ok(true, "Cleanup completed");
 
 	mysql_close(admin);

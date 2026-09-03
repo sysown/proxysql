@@ -355,6 +355,7 @@ int main(int argc, char** argv) {
 
 	if (admin) {
 		run_q(admin, "LOAD MCP VARIABLES FROM DISK");
+		run_q(admin, "LOAD MCP VARIABLES TO RUNTIME");
 		mysql_close(admin);
 	}
 
