@@ -3424,6 +3424,28 @@ void PgSQL_Thread::run() {
 			unsigned int w = rand_fast() % (GloPTH->num_threads);
 			PgSQL_Thread* thr = GloPTH->pgsql_threads[w].worker;
 			if (resume_mysql_sessions->len) {
+				// TEMPORARY INSTRUMENTATION -- remove before merge.
+				// Testing whether the idle thread always picks the same worker.
+				// Per-idle-thread tallies, printed for the first 50 handoffs
+				// (covers the ~4s drain) and every 500th after, so the running
+				// distribution is visible without flooding the log.
+				{
+					static thread_local unsigned long long apt_dbg_calls = 0;
+					static thread_local unsigned long long apt_dbg_w[8] = {};
+					static thread_local unsigned long long apt_dbg_sess[8] = {};
+					++apt_dbg_calls;
+					if (w < 8) {
+						++apt_dbg_w[w];
+						apt_dbg_sess[w] += resume_mysql_sessions->len;
+					}
+					if (apt_dbg_calls <= 50 || (apt_dbg_calls % 500) == 0) {
+						proxy_info("PGSQL_IDLE_ASSIGN idle=%p call=%llu w=%u num_threads=%u thr=%p moving=%u | picks w0=%llu w1=%llu | sess w0=%llu w1=%llu\n",
+							this, apt_dbg_calls, w, GloPTH->num_threads, thr,
+							resume_mysql_sessions->len,
+							apt_dbg_w[0], apt_dbg_w[1],
+							apt_dbg_sess[0], apt_dbg_sess[1]);
+					}
+				}
 				idle_thread_assigns_sessions_to_worker_thread(thr);
 			}
 			else {
