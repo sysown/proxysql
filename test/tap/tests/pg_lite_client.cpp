@@ -193,6 +193,7 @@ PgConnection::PgConnection(int timeout_ms) {
 }
 
 PgConnection::~PgConnection() {
+    freeSaslState();
     disconnect();
 }
 
@@ -529,6 +530,181 @@ void PgConnection::doSASLAuth(const std::string& password,
     readMessage(type, buffer);
     if (type == ERROR_RESPONSE) throw PgException("scram: " + extractErrorMessage(buffer));
     if (type == AUTH_TYPE && buffer.size() >= 4 && readAuthType(buffer) == 0) return;
+    throw PgException("scram: no AuthenticationOk after SASLFinal");
+}
+
+// ===== Stepwise SCRAM (mid-handshake reload test, #5865 review ask 2) =====
+// These mirror doSASLAuth() but pause between server-first and client-final so a test can rotate
+// the runtime verifier in the gap. saslBegin() drives phases 1-2; saslFinish() drives phases 3-5.
+
+void PgConnection::freeSaslState() {
+    if (sasl_client_first_) { free(sasl_client_first_); sasl_client_first_ = nullptr; }
+    if (sasl_salt_)         { free(sasl_salt_);         sasl_salt_ = nullptr; }
+    if (sasl_st_)           { free_scram_state(sasl_st_); sasl_st_ = nullptr; }
+    sasl_server_nonce_.clear();
+    sasl_saltlen_ = 0;
+    sasl_iterations_ = 0;
+    sasl_password_.clear();
+}
+
+// Open the socket + send the startup packet, but do NOT read or drive authentication.
+// (Copy of connect()'s socket/startup prologue, minus handleAuthentication()/waitForReady().)
+void PgConnection::rawConnectStartup(const std::string& host, int port,
+                                     const std::string& dbname, const std::string& user) {
+    sock_ = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock_ < 0) throw PgException("Socket creation failed");
+
+    struct addrinfo hints{}, *res;
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    std::string port_str = std::to_string(port);
+    int status = getaddrinfo(host.c_str(), port_str.c_str(), &hints, &res);
+    if (status != 0) {
+        close(sock_); sock_ = -1;
+        throw PgException("Failed to resolve host: " + host + " (" + std::string(gai_strerror(status)) + ")");
+    }
+    if (::connect(sock_, res->ai_addr, res->ai_addrlen) < 0) {
+        freeaddrinfo(res);
+        close(sock_); sock_ = -1;
+        throw PgException("Connection failed to " + host + ":" + std::to_string(port));
+    }
+    freeaddrinfo(res);
+
+    user_ = user;
+    dbname_ = dbname;
+    sendStartupPacket();
+}
+
+// Phase 1-2: read AuthenticationSASL(10), send client-first, read AuthenticationSASLContinue(11).
+// Returns the server-first-message. The parsed server_nonce/salt/iterations are stashed for
+// saslFinish(). Skips any ParameterStatus/etc. is NOT expected here — the server sends the auth
+// challenge immediately after startup.
+std::string PgConnection::saslBegin(const std::string& user, const std::string& password) {
+    freeSaslState();  // reset any prior stepwise state on this connection
+    sasl_password_ = password;
+
+    char type;
+    std::vector<uint8_t> buffer;
+
+    // Read the initial auth request; it must be AuthenticationSASL(10).
+    readMessage(type, buffer);
+    if (type == ERROR_RESPONSE)
+        throw PgException("saslBegin: " + extractErrorMessage(buffer));
+    if (type != AUTH_TYPE || buffer.size() < 4)
+        throw PgException("saslBegin: expected AuthenticationSASL, got message type '" + std::string(1, type) + "'");
+    int32_t authType = readAuthType(buffer);
+    if (authType != 10)
+        throw PgException("saslBegin: expected AuthenticationSASL(10), got authType " + std::to_string(authType));
+    last_auth_type_ = 10;
+
+    sasl_st_ = scram_state_init();
+    // We authenticate as `user`; the startup packet already used the same name.
+    (void)user;
+
+    // 1) SASLInitialResponse ('p'): mechanism name + Int32 length + client-first-message.
+    sasl_client_first_ = build_client_first_message(sasl_st_);
+    if (!sasl_client_first_) {
+        std::string e = scram_error(); freeSaslState();
+        throw PgException(std::string("scram client-first: ") + e);
+    }
+    {
+        std::vector<uint8_t> pkt;
+        writeStringToBuffer(pkt, "SCRAM-SHA-256");
+        int32_t clen = htonl((int32_t)strlen(sasl_client_first_));
+        const uint8_t* cp = reinterpret_cast<const uint8_t*>(&clen);
+        pkt.insert(pkt.end(), cp, cp + 4);
+        pkt.insert(pkt.end(), sasl_client_first_, sasl_client_first_ + strlen(sasl_client_first_));
+        sendMessage('p', pkt);
+    }
+
+    // 2) AuthenticationSASLContinue(11): server-first-message.
+    readMessage(type, buffer);
+    if (type == ERROR_RESPONSE) {
+        std::string e = extractErrorMessage(buffer); freeSaslState();
+        throw PgException("scram: " + e);
+    }
+    if (type != AUTH_TYPE || buffer.size() < 4 || readAuthType(buffer) != 11) {
+        freeSaslState();
+        throw PgException("expected AuthenticationSASLContinue(11)");
+    }
+    std::string server_first(reinterpret_cast<const char*>(buffer.data()) + 4, buffer.size() - 4);
+    // server_nonce comes back pointing INTO server_first, which dies when this function returns --
+    // copy it into the member before that happens. salt is malloc'd by read_server_first_message()
+    // and genuinely handed over, so it keeps its raw pointer.
+    char* server_nonce = nullptr;
+    if (!read_server_first_message(sasl_st_, const_cast<char*>(server_first.c_str()),
+                                   &server_nonce, &sasl_salt_, &sasl_saltlen_, &sasl_iterations_)) {
+        std::string e = scram_error(); freeSaslState();
+        throw PgException(std::string("scram read server-first: ") + e);
+    }
+    sasl_server_nonce_ = server_nonce ? server_nonce : "";
+    return server_first;
+}
+
+// Phase 3-5: build+send client-final (proof from the ORIGINAL password), read SASLFinal(12) +
+// AuthenticationOk(0). Returns 0 on success, SASL_FINISH_REJECTED on a clean ErrorResponse.
+// A server-signature mismatch or unexpected message throws; IO/timeout errors propagate.
+int PgConnection::saslFinish() {
+    if (!sasl_st_) throw PgException("saslFinish: saslBegin() was not called");
+
+    PgCredentials cred;
+    memset(&cred, 0, sizeof(cred));
+    snprintf(cred.name, sizeof(cred.name), "%s", user_.c_str());
+    snprintf(cred.passwd, sizeof(cred.passwd), "%s", sasl_password_.c_str());
+    cred.has_scram_keys = false;
+
+    char type;
+    std::vector<uint8_t> buffer;
+
+    // 3) SASLResponse ('p'): client-final-message.
+    char* client_final = build_client_final_message(sasl_st_, &cred, sasl_server_nonce_.c_str(),
+                                                     sasl_salt_, sasl_saltlen_, sasl_iterations_);
+    if (!client_final) {
+        std::string e = scram_error(); freeSaslState();
+        throw PgException(std::string("scram client-final: ") + e);
+    }
+    {
+        std::vector<uint8_t> pkt(client_final, client_final + strlen(client_final));
+        sendMessage('p', pkt);
+    }
+
+    // 4) AuthenticationSASLFinal(12) OR a clean ErrorResponse (rejected verifier).
+    readMessage(type, buffer);
+    if (type == ERROR_RESPONSE) {
+        last_auth_type_ = -1;
+        last_error_ = extractErrorMessage(buffer);  // clean server rejection of the client-final
+        free(client_final); freeSaslState();
+        return SASL_FINISH_REJECTED;
+    }
+    if (type != AUTH_TYPE || buffer.size() < 4 || readAuthType(buffer) != 12) {
+        free(client_final); freeSaslState();
+        throw PgException("expected AuthenticationSASLFinal(12)");
+    }
+    {
+        std::string server_final(reinterpret_cast<const char*>(buffer.data()) + 4, buffer.size() - 4);
+        char server_sig[256] = {0};
+        if (!read_server_final_message(const_cast<char*>(server_final.c_str()), server_sig) ||
+            !verify_server_signature(sasl_st_, &cred, server_sig)) {
+            free(client_final); freeSaslState();
+            throw PgException("scram server signature verification failed");
+        }
+    }
+    free(client_final);
+
+    // 5) AuthenticationOk(0).
+    readMessage(type, buffer);
+    if (type == ERROR_RESPONSE) {
+        last_auth_type_ = -1;
+        last_error_ = extractErrorMessage(buffer);  // rejected between SASLFinal and AuthenticationOk
+        freeSaslState();
+        return SASL_FINISH_REJECTED;
+    }
+    if (type == AUTH_TYPE && buffer.size() >= 4 && readAuthType(buffer) == 0) {
+        last_auth_type_ = 0;
+        freeSaslState();
+        return 0;
+    }
+    freeSaslState();
     throw PgException("scram: no AuthenticationOk after SASLFinal");
 }
 

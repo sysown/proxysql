@@ -55,6 +55,12 @@ struct ScramState;
 class PgSQL_STMT_Global_info;
 struct PgSQL_Describe_Cache;
 
+// Auth-method selection: map the floor (pgsql-authentication_method;
+// 1=cleartext, 2=md5, 3=scram) + the user's stored secret type (a PasswordType, as int) to the
+// AUTHENTICATION_METHOD to challenge with (as int); *reject=true when the stored secret is too weak
+// for the floor (caller runs the generic mock-fail). Defined in PgSQL_Protocol.cpp.
+int pgsql_reconcile_auth_method(int floor, int stored, bool* reject);
+
 enum class EXECUTION_STATE {
 	FAILED = 0,
 	SUCCESSFUL,

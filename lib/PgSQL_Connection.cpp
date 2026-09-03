@@ -17,6 +17,7 @@
 #include "openssl/x509v3.h" // X509_VERIFY_PARAM_set1_host / set_hostflags (native backend TLS)
 #include "openssl/evp.h"     // EVP_MAX_MD_SIZE for cbind digest buffer (SCRAM-PLUS)
 #include "PgSQL_Backend_Protocol.h"  // pg_tls_server_end_point / pg_scram_build_cbind_input_* / pg_scram_set_cbind (SCRAM-PLUS)
+#include <openssl/crypto.h>   // OPENSSL_cleanse — non-elidable wipe of harvested SCRAM key material
 
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
@@ -50,6 +51,9 @@ PgSQL_Connection_userinfo::PgSQL_Connection_userinfo() {
 	dbname=NULL;
 	fe_username=NULL;
 	hash=0;
+	has_scram_keys=false;
+	memset(scram_client_key, 0, sizeof(scram_client_key));
+	memset(scram_server_key, 0, sizeof(scram_server_key));
 }
 
 PgSQL_Connection_userinfo::~PgSQL_Connection_userinfo() {
@@ -58,6 +62,10 @@ PgSQL_Connection_userinfo::~PgSQL_Connection_userinfo() {
 	if (password) free(password);
 	if (sha1_pass) free(sha1_pass);
 	if (dbname) free(dbname);
+	// Scrub the harvested SCRAM key material (the ClientKey is password-equivalent) on destruction,
+	// with a non-elidable wipe (OPENSSL_cleanse) so the compiler can't optimize the clear away.
+	OPENSSL_cleanse(scram_client_key, sizeof(scram_client_key));
+	OPENSSL_cleanse(scram_server_key, sizeof(scram_server_key));
 }
 
 uint64_t PgSQL_Connection_userinfo::compute_hash() {
@@ -131,6 +139,10 @@ void PgSQL_Connection_userinfo::set(char *user, char *pass, char *db, char *sh1)
 
 void PgSQL_Connection_userinfo::set(PgSQL_Connection_userinfo *ui) {
 	set(ui->username, ui->password, ui->dbname, ui->sha1_pass);
+	// Carry the harvested SCRAM keys frontend->backend (not part of the hash).
+	memcpy(scram_client_key, ui->scram_client_key, sizeof(scram_client_key));
+	memcpy(scram_server_key, ui->scram_server_key, sizeof(scram_server_key));
+	has_scram_keys = ui->has_scram_keys;
 }
 
 bool PgSQL_Connection_userinfo::set_dbname(const char* db) {
@@ -1059,6 +1071,10 @@ handler_again:
 	return async_state_machine;
 }
 
+// libpq/pgcommon base64 (linked via libpgcommon.a) — used to encode the 32-byte SCRAM
+// keys into the conninfo string. Does not NUL-terminate; returns the encoded length.
+extern "C" int pg_b64_encode(const char *src, int len, char *dst, int dstlen);
+
 static void append_conninfo_param(std::ostringstream& conninfo, const char* key, char* val) {
 	if (!val) return;
 	char* escaped_str = escape_string_single_quotes_and_backslashes(val, false);
@@ -1066,6 +1082,95 @@ static void append_conninfo_param(std::ostringstream& conninfo, const char* key,
 	if (escaped_str != val) {
 		free(escaped_str);
 	}
+}
+
+// Appends the credential params for a backend libpq connection, picking the mechanism that matches
+// the stored secret: harvested SCRAM keys (pass-through), an md5 hash, or a plaintext password.
+//
+// EVERY backend connection must build its credentials here — the pooled one (connect_start()) and
+// the auxiliary kill/terminate one alike. libpq applies no prefix detection to 'password': handing
+// it a verifier or an md5 hash makes it run SASLprep+PBKDF2 over that literal text, and the backend
+// rejects the login. 'conn_ctx' names the caller for the diagnostics below.
+//
+// Returns true only when a credential parameter was actually emitted; on false the caller must
+// abandon the connection. A conninfo carrying no credential is not inert — libpq falls back to
+// PGPASSWORD and then ~/.pgpass from the ProxySQL process environment, authenticating the backend
+// as whoever owns the host rather than as the configured user. Refusing to connect prevents that.
+// (password='' is not a fix: libpq still reads ~/.pgpass when the password is empty.)
+//
+// Not static so pgsql_conninfo_credentials_unit-t can pin that postcondition — the failing branches
+// are unreachable end to end, so a unit test is the only way to cover them. Same arrangement as
+// pgsql_reconcile_auth_method() in PgSQL_Protocol.cpp.
+bool pgsql_append_conninfo_credentials(std::ostringstream& conninfo, const char* username,
+	char* password, bool has_scram_keys, const uint8_t* scram_client_key,
+	const uint8_t* scram_server_key, const char* conn_ctx)
+{
+	if (has_scram_keys) {
+		// Hand libpq the harvested ClientKey + the verifier's ServerKey (base64) and send NO
+		// password — the stored secret is a verifier, which libpq would otherwise wrongly run
+		// PBKDF2 over.
+		char ck_b64[64] = { 0 };
+		char sk_b64[64] = { 0 };
+		int n1 = pg_b64_encode((const char*)scram_client_key, PGSQL_SCRAM_KEY_LEN,
+			ck_b64, (int)sizeof(ck_b64) - 1);
+		int n2 = pg_b64_encode((const char*)scram_server_key, PGSQL_SCRAM_KEY_LEN,
+			sk_b64, (int)sizeof(sk_b64) - 1);
+		const bool encoded = (n1 > 0 && n2 > 0);
+		if (encoded) {
+			ck_b64[n1] = '\0';
+			sk_b64[n2] = '\0';
+			append_conninfo_param(conninfo, "scram_client_key", ck_b64);
+			append_conninfo_param(conninfo, "scram_server_key", sk_b64);
+		} else {
+			// Cannot happen at these sizes (32 bytes -> 44 chars into a 63-byte buffer), but
+			// handled so the postcondition holds on every branch: emitting the zero-initialised
+			// buffers would send scram_client_key='', which libpq treats as absent, putting us
+			// back on the fallback above.
+			proxy_error("PgSQL backend %s for user '%s': failed to base64-encode the harvested SCRAM keys (n1=%d, n2=%d); refusing to connect\n",
+				conn_ctx, username ? username : "(null)", n1, n2);
+		}
+		// Scrub the base64 key material from the stack buffers once handed to libpq (non-elidable).
+		// Both paths: the buffers hold password-equivalent material either way.
+		OPENSSL_cleanse(ck_b64, sizeof(ck_b64));
+		OPENSSL_cleanse(sk_b64, sizeof(sk_b64));
+		return encoded;
+	} else if (password && get_password_type(password) == PASSWORD_TYPE_MD5) {
+		// md5-stored user: reuse the stored "md5…" hash directly; no plaintext.
+		append_conninfo_param(conninfo, "md5_secret", password);
+		return true;
+	} else if (password && get_password_type(password) == PASSWORD_TYPE_SCRAM_SHA_256) {
+		// A SCRAM verifier reached a backend connect with no harvested keys (has_scram_keys==false).
+		// Do NOT ship it as a plaintext password — libpq would run PBKDF2 over the verifier text and
+		// fail. Not reachable from a normal frontend SCRAM login (which always harvests the ClientKey);
+		// reaching here means an internal/monitor connection or a logic error.
+		proxy_error("PgSQL backend %s for user '%s': SCRAM verifier stored but no harvested ClientKey; cannot authenticate to backend without a frontend SCRAM login\n",
+			conn_ctx, username ? username : "(null)");
+		return false;
+	} else if (password) {
+		append_conninfo_param(conninfo, "password", password); // password (may legitimately be "")
+		return true;
+	}
+	// No stored secret at all: omitting the parameter would hand the decision to PGPASSWORD / ~/.pgpass.
+	proxy_error("PgSQL backend %s for user '%s': no stored credential; refusing to connect rather than let libpq fall back to PGPASSWORD or ~/.pgpass\n",
+		conn_ctx, username ? username : "(null)");
+	return false;
+}
+
+// escape_string_backslash_spaces() already emits DOUBLE backslashes for a space (and doubles a
+// literal backslash), i.e. it produces a value that survives libpq stripping one escape level out
+// of a single-quoted conninfo value. What it does NOT handle is the apostrophe: an unescaped ' ends
+// the quoted value and everything after it is parsed by libpq as further conninfo KEYWORDS
+// (host=, sslmode=, ...). This adds exactly that missing level and nothing else -- escaping
+// backslashes here as well would double what the helper already doubled and corrupt every value
+// containing a space (observed: DateStyle "ISO, MDY" arriving at the backend as "ISO,\\").
+static std::string pg_conninfo_escape_quotes(const char* v) {
+	std::string out;
+	if (v == nullptr) return out;
+	for (const char* c = v; *c; c++) {
+		if (*c == '\'') out += '\\';
+		out += *c;
+	}
+	return out;
 }
 
 std::string PgSQL_Connection::connect_start_DNS_lookup() {
@@ -1091,7 +1196,15 @@ void PgSQL_Connection::connect_start() {
 
 	std::ostringstream conninfo;
 	append_conninfo_param(conninfo, "user", userinfo->username); // username
-	append_conninfo_param(conninfo, "password", userinfo->password); // password
+	if (pgsql_append_conninfo_credentials(conninfo, userinfo->username, userinfo->password,
+		userinfo->has_scram_keys, userinfo->scram_client_key, userinfo->scram_server_key, "connect") == false) {
+		// Fail closed. Leaving pgsql_conn NULL and async_exit_status at PG_EVENT_NONE routes
+		// handler() to ASYNC_CONNECT_END -> ASYNC_CONNECT_FAILED, the same path a PQconnectStart()
+		// failure below already takes, so the client gets a clean error instead of a wrong login.
+		set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION),
+			"no usable backend credential for this user", false);
+		return;
+	}
 	append_conninfo_param(conninfo, "dbname", userinfo->dbname); // dbname
 	append_conninfo_param(conninfo, "host", parent->address); // backend address
 	// If the DNS cache has resolved this hostname already, also pass
@@ -1153,10 +1266,15 @@ void PgSQL_Connection::connect_start() {
 		assert(client_charset);
 		uint32_t client_charset_hash = pgsql_variables.client_get_hash(myds->sess, PGSQL_CLIENT_ENCODING);
 		assert(client_charset_hash);
-		const char* escaped_str = escape_string_backslash_spaces(client_charset);
-		conninfo << "client_encoding='" << escaped_str << "' ";
-		if (escaped_str != client_charset)
-			free((char*)escaped_str);
+		{
+			// escape_string_backslash_spaces() covers spaces and backslashes for BOTH the
+			// conninfo quoting layer and the backend's options tokeniser (it emits two
+			// backslashes per space). pg_conninfo_escape_quotes() adds the one case it misses:
+			// the apostrophe, which would otherwise close the quoted conninfo value early.
+			const char* wire = escape_string_backslash_spaces(client_charset);
+			conninfo << "client_encoding='" << pg_conninfo_escape_quotes(wire) << "' ";
+			if (wire != client_charset) free((char*)wire);
+		}
 
 		// charset validation is already done 
 		pgsql_variables.server_set_hash_and_value(myds->sess, PGSQL_CLIENT_ENCODING, client_charset, client_charset_hash);
@@ -1165,13 +1283,21 @@ void PgSQL_Connection::connect_start() {
 		// Join the "-c key=value" tokens with a leading separator so the options value has
 		// no trailing space before the closing quote. PgBouncer rejects a startup packet
 		// whose options value ends in whitespace (#5801).
-		conninfo << "options='";
+		// Build the whole options value in its WIRE form first, then apply the conninfo
+		// quoting layer once over the finished string (see the comment above). Assembling it
+		// straight into `conninfo` cannot work: the second layer has to see the complete
+		// value, including untracked_option_parameters, which is also stored wire-escaped.
+		std::string opts;
 		const char* separator = "";
 		// excluding client_encoding, which is already set above
 		for (int idx = 1; idx < PGSQL_NAME_LAST_LOW_WM; idx++) {
 			const char* value = pgsql_variables.client_get_value(myds->sess, idx);
 			const char* escaped_str = escape_string_backslash_spaces(value);
-			conninfo << separator << "-c " << pgsql_tracked_variables[idx].set_variable_name << "=" << escaped_str;
+			opts += separator;
+			opts += "-c ";
+			opts += pgsql_tracked_variables[idx].set_variable_name;
+			opts += "=";
+			opts += escaped_str;
 			separator = " ";
 			if (escaped_str != value)
 				free((char*)escaped_str);
@@ -1184,9 +1310,11 @@ void PgSQL_Connection::connect_start() {
 
 		// if there are untracked parameters, the session should lock on the host group
 		if (myds->sess->untracked_option_parameters.empty() == false) {
-			conninfo << separator << myds->sess->untracked_option_parameters;
+			opts += separator;
+			opts += myds->sess->untracked_option_parameters;
 		}
-		conninfo << "'";
+
+		conninfo << "options='" << pg_conninfo_escape_quotes(opts.c_str()) << "'";
 		
 	}
 
@@ -5141,7 +5269,7 @@ void PgSQL_Connection::init_query_result() {
 	new_result = true;
 }
 
-PgSQL_Backend_Kill_Args::PgSQL_Backend_Kill_Args(PGconn* conn, const char* user, const char* pass, const char* db, const char* host,
+PgSQL_Backend_Kill_Args::PgSQL_Backend_Kill_Args(PGconn* conn, const PgSQL_Connection_userinfo* ui, const char* host,
 	unsigned int p, unsigned int hid, bool ssl, TYPE typ, PgSQL_Thread* thd) {
 
 	if (typ == TYPE::CANCEL_QUERY)
@@ -5149,10 +5277,15 @@ PgSQL_Backend_Kill_Args::PgSQL_Backend_Kill_Args(PGconn* conn, const char* user,
 	else {
 		cancel_conn = nullptr;
 	}
-	username = strdup(user);
-	password = strdup(pass);
+	username = strdup(ui->username);
+	password = strdup(ui->password);
 	hostname = strdup(host);
-	dbname = strdup(db);
+	dbname = strdup(ui->dbname);
+	// Carry the harvested SCRAM keys, so TERMINATE_CONNECTION can authenticate a verifier-stored
+	// user the same way connect_start() does.
+	memcpy(scram_client_key, ui->scram_client_key, sizeof(scram_client_key));
+	memcpy(scram_server_key, ui->scram_server_key, sizeof(scram_server_key));
+	has_scram_keys = ui->has_scram_keys;
 	port = p;
 	hostgroup_id = hid;
 	type = typ;
@@ -5196,6 +5329,10 @@ PgSQL_Backend_Kill_Args::~PgSQL_Backend_Kill_Args() {
 	free(password);
 	free(hostname);
 	free(dbname);
+	// Scrub the copied SCRAM key material (the ClientKey is password-equivalent) with a non-elidable
+	// wipe, as PgSQL_Connection_userinfo does.
+	OPENSSL_cleanse(scram_client_key, sizeof(scram_client_key));
+	OPENSSL_cleanse(scram_server_key, sizeof(scram_server_key));
 	free(ssl_config.sslkey);
 	free(ssl_config.sslcert);
 	free(ssl_config.sslrootcert);
@@ -5354,7 +5491,13 @@ void* PgSQL_backend_kill_thread(void* arg) {
 
 		std::ostringstream conninfo;
 		append_conninfo_param(conninfo, "user", backend_kill_args->username); // username
-		append_conninfo_param(conninfo, "password", backend_kill_args->password); // password
+		if (pgsql_append_conninfo_credentials(conninfo, backend_kill_args->username, backend_kill_args->password,
+			backend_kill_args->has_scram_keys, backend_kill_args->scram_client_key,
+			backend_kill_args->scram_server_key, "kill connection") == false) {
+			// Fail closed. The terminate is best-effort, so skipping it is correct; connecting on
+			// an ambient PGPASSWORD / ~/.pgpass credential is not. The helper logged the reason.
+			goto __exit;
+		}
 		append_conninfo_param(conninfo, "dbname", backend_kill_args->dbname); // dbname
 		append_conninfo_param(conninfo, "host", backend_kill_args->hostname); // backend address
 		// port=0 means hostname is a Unix-domain socket path; libpq rejects

@@ -237,12 +237,75 @@ static void test_pgsql_shun() {
 		"PgSQL HGM: shun_and_killall() returns true");
 }
 
+#ifdef PROXYSQL31
+static SQLite3_row *find_hostgroup_row(SQLite3_result *result, unsigned int hid) {
+	for (SQLite3_row *row : result->rows) {
+		if (static_cast<unsigned int>(strtoul(row->fields[0], nullptr, 10)) == hid) {
+			return row;
+		}
+	}
+	return nullptr;
+}
+
+template <typename HGM>
+static void test_unknown_hostgroup_stats_lookup(HGM *hgm, const char *protocol) {
+	std::unique_ptr<SQLite3_result> before { hgm->SQL3_Hostgroup_Connection_Pool(false) };
+	const int rows_before = before->rows_count;
+	HostgroupPoolStats *stats = hgm->get_hostgroup_pool_stats(999'999);
+	std::unique_ptr<SQLite3_result> after { hgm->SQL3_Hostgroup_Connection_Pool(false) };
+
+	ok(stats == nullptr && after->rows_count == rows_before,
+		"%s HGM: stats lookup does not create an unknown hostgroup", protocol);
+}
+
+template <typename HGM>
+static void test_hostgroup_pool_stats(HGM *hgm, unsigned int hid, const char *protocol) {
+	HostgroupPoolStats *stats = hgm->get_hostgroup_pool_stats(hid);
+	HostgroupPoolWait wait;
+	stats->record_acquisition();
+	wait.observe(stats, 100, false, hid);
+
+	std::unique_ptr<SQLite3_result> live { hgm->SQL3_Hostgroup_Connection_Pool(false) };
+	SQLite3_row *live_row = find_hostgroup_row(live.get(), hid);
+	ok(live_row != nullptr, "%s HGM: live hostgroup pool stats expose the hostgroup", protocol);
+	ok(live_row && strcmp(live_row->fields[1], "1") == 0 &&
+		strcmp(live_row->fields[2], "1") == 0 &&
+		strcmp(live_row->fields[3], "0") == 0 &&
+		strcmp(live_row->fields[4], "1") == 0,
+		"%s HGM: live stats report acquisitions, waits, duration, and waiters", protocol);
+
+	std::unique_ptr<SQLite3_result> reset { hgm->SQL3_Hostgroup_Connection_Pool(true) };
+	SQLite3_row *reset_row = find_hostgroup_row(reset.get(), hid);
+	ok(reset_row && strcmp(reset_row->fields[1], "1") == 0 &&
+		strcmp(reset_row->fields[2], "1") == 0 &&
+		strcmp(reset_row->fields[4], "1") == 0,
+		"%s HGM: reset returns the completed window without clearing waiters", protocol);
+
+	wait.observe(stats, 350, true, hid);
+	live.reset(hgm->SQL3_Hostgroup_Connection_Pool(false));
+	live_row = find_hostgroup_row(live.get(), hid);
+	ok(live_row && strcmp(live_row->fields[1], "1") == 0 &&
+		strcmp(live_row->fields[2], "0") == 0 &&
+		strcmp(live_row->fields[3], "250") == 0 &&
+		strcmp(live_row->fields[4], "0") == 0,
+		"%s HGM: post-reset completions remain in the new window", protocol);
+	const HostgroupPoolStatsSnapshot lifetime = stats->lifetime_snapshot();
+	ok(lifetime.acquisitions_total == 2 && lifetime.waits_total == 1 &&
+		lifetime.wait_time_us_total == 250 && lifetime.waiters == 0,
+		"%s HGM: Admin reset preserves lifetime metrics", protocol);
+}
+#endif
+
 // ============================================================================
 // Main
 // ============================================================================
 
 int main() {
+#ifdef PROXYSQL31
+	plan(29);
+#else
 	plan(17);
+#endif
 
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
@@ -261,6 +324,12 @@ int main() {
 	// PgSQL tests
 	test_pgsql_create_and_remove();      // 3 tests
 	test_pgsql_shun();                   // 1 test
+#ifdef PROXYSQL31
+	test_hostgroup_pool_stats(MyHGM, 10, "MySQL"); // 5 tests
+	test_hostgroup_pool_stats(PgHGM, 100, "PgSQL"); // 5 tests
+	test_unknown_hostgroup_stats_lookup(MyHGM, "MySQL"); // 1 test
+	test_unknown_hostgroup_stats_lookup(PgHGM, "PgSQL"); // 1 test
+#endif
 	// Total: 1+1+3+2+2+1+2+1+3+1 = 17... let me recount
 	// init: 2, create: 3, remove: 2, status: 2, latency: 1,
 	// independence: 2, duplicate: 1, pgsql_create: 3, pgsql_shun: 1
