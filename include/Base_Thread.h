@@ -87,7 +87,7 @@ public:
 	// is a fixed offset from when a session began waiting, so it is monotonic
 	// in arrival order, and the sessions that matter for the tail are the
 	// long-waiting ones whose relative order is stable.
-	static constexpr unsigned long long PARTITION_SORT_MIN_INTERVAL_US = 20000;	// 20ms
+	static constexpr unsigned long long PARTITION_SORT_MIN_INTERVAL_US = 50000;	// 50ms
 
 	// Called by sessions inside this worker at the get_MyConn_from_pool()
 	// call site to feed the gate.
