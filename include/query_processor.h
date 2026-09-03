@@ -1,5 +1,6 @@
 #ifndef PROXYSQL_QUERY_PROCESSOR_H
 #define PROXYSQL_QUERY_PROCESSOR_H
+#include <atomic>
 #include <type_traits>
 #include <set>
 #include "proxysql.h"
@@ -66,14 +67,14 @@ class QP_query_digest_stats {
 	char username_buf[24];
 	char schemaname_buf[24];
 	char client_address_buf[24];
-	time_t first_seen;
-	time_t last_seen;
-	unsigned int count_star;
-	unsigned long long sum_time;
-	unsigned long long min_time;
-	unsigned long long max_time;
-	unsigned long long rows_affected;
-	unsigned long long rows_sent;
+	std::atomic<time_t> first_seen;
+	std::atomic<time_t> last_seen;
+	std::atomic<unsigned int> count_star;
+	std::atomic<unsigned long long> sum_time;
+	std::atomic<unsigned long long> min_time;
+	std::atomic<unsigned long long> max_time;
+	std::atomic<unsigned long long> rows_affected;
+	std::atomic<unsigned long long> rows_sent;
 	int hid;
 	QP_query_digest_stats(const char* _user, const char* _schema, uint64_t _digest, const char* _digest_text,
 		int _hid, const char* _client_addr, int query_digests_max_digest_length);

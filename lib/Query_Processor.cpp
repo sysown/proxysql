@@ -2583,10 +2583,19 @@ void Query_Processor<QP_DERIVED>::update_query_digest(uint64_t digest_total, uin
 	QP_query_digest_stats* qds;
 	std::unordered_map<uint64_t, void*>::iterator it;
 
+	pthread_rwlock_rdlock(&digest_rwlock);
+	it=digest_umap.find(digest_total);
+	if (it != digest_umap.end()) {
+		qds=(QP_query_digest_stats *)it->second;
+		qds->add_time(t,n,rows_affected,rows_sent);
+		pthread_rwlock_unlock(&digest_rwlock);
+		return;
+	}
+	pthread_rwlock_unlock(&digest_rwlock);
+
 	pthread_rwlock_wrlock(&digest_rwlock);
 	it=digest_umap.find(digest_total);
 	if (it != digest_umap.end()) {
-		// found
 		qds=(QP_query_digest_stats *)it->second;
 		qds->add_time(t,n,rows_affected,rows_sent);
 	} else {

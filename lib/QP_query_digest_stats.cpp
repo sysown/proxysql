@@ -59,44 +59,66 @@ QP_query_digest_stats::QP_query_digest_stats(const char* _user, const char* _sch
 	rows_sent = 0;
 	hid = _hid;
 }
+template <typename T>
+static void atomic_min_nonzero(std::atomic<T>& slot, T v) {
+	if (v == 0) {
+		return;
+	}
+	T cur = slot.load(std::memory_order_relaxed);
+	while (cur == 0 || v < cur) {
+		if (slot.compare_exchange_weak(cur, v, std::memory_order_relaxed)) {
+			return;
+		}
+	}
+}
+
+template <typename T>
+static void atomic_max(std::atomic<T>& slot, T v) {
+	T cur = slot.load(std::memory_order_relaxed);
+	while (v > cur) {
+		if (slot.compare_exchange_weak(cur, v, std::memory_order_relaxed)) {
+			return;
+		}
+	}
+}
+
 void QP_query_digest_stats::add_time(
 	unsigned long long t, unsigned long long n, unsigned long long ra, unsigned long long rs,
 	unsigned long long cnt
 ) {
-	count_star += cnt;
-	sum_time+=t;
-	rows_affected+=ra;
-	rows_sent+=rs;
-	if (t < min_time || min_time==0) {
-		if (t) min_time = t;
+	count_star.fetch_add(static_cast<unsigned int>(cnt), std::memory_order_relaxed);
+	sum_time.fetch_add(t, std::memory_order_relaxed);
+	rows_affected.fetch_add(ra, std::memory_order_relaxed);
+	rows_sent.fetch_add(rs, std::memory_order_relaxed);
+	atomic_min_nonzero(min_time, t);
+	atomic_max(max_time, t);
+	time_t first = first_seen.load(std::memory_order_relaxed);
+	while (first == 0) {
+		if (first_seen.compare_exchange_weak(first, static_cast<time_t>(n), std::memory_order_relaxed)) {
+			break;
+		}
 	}
-	if (t > max_time) {
-		max_time = t;
-	}
-	if (first_seen==0) {
-		first_seen=n;
-	}
-	last_seen=n;
+	atomic_max(last_seen, static_cast<time_t>(n));
 }
 // Merges the counters of 'other' into this entry. Used when reconciling stats
 // collected while a purge operation was running (see purge_query_digests_async()).
 void QP_query_digest_stats::merge(const QP_query_digest_stats *other) {
-	count_star += other->count_star;
-	sum_time += other->sum_time;
-	rows_affected += other->rows_affected;
-	rows_sent += other->rows_sent;
-	if (other->min_time && (min_time == 0 || other->min_time < min_time)) {
-		min_time = other->min_time;
+	count_star.fetch_add(other->count_star.load(std::memory_order_relaxed), std::memory_order_relaxed);
+	sum_time.fetch_add(other->sum_time.load(std::memory_order_relaxed), std::memory_order_relaxed);
+	rows_affected.fetch_add(other->rows_affected.load(std::memory_order_relaxed), std::memory_order_relaxed);
+	rows_sent.fetch_add(other->rows_sent.load(std::memory_order_relaxed), std::memory_order_relaxed);
+	atomic_min_nonzero(min_time, other->min_time.load(std::memory_order_relaxed));
+	atomic_max(max_time, other->max_time.load(std::memory_order_relaxed));
+	const time_t other_first = other->first_seen.load(std::memory_order_relaxed);
+	if (other_first) {
+		time_t first = first_seen.load(std::memory_order_relaxed);
+		while (first == 0 || other_first < first) {
+			if (first_seen.compare_exchange_weak(first, other_first, std::memory_order_relaxed)) {
+				break;
+			}
+		}
 	}
-	if (other->max_time > max_time) {
-		max_time = other->max_time;
-	}
-	if (other->first_seen && (first_seen == 0 || other->first_seen < first_seen)) {
-		first_seen = other->first_seen;
-	}
-	if (other->last_seen > last_seen) {
-		last_seen = other->last_seen;
-	}
+	atomic_max(last_seen, other->last_seen.load(std::memory_order_relaxed));
 }
 QP_query_digest_stats::~QP_query_digest_stats() {
 	if (digest_text) {
