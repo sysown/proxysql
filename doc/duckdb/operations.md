@@ -69,6 +69,32 @@ The listener uses a thread per connection. A high connection cap therefore
 also consumes thread stacks and scheduling capacity even when queries are
 idle.
 
+## Local benchmark TAP
+
+`test_duckdb_bench-t` compares native DuckDB (C API in the test binary), the
+plugin MySQL listener (`:6031`), the plugin PostgreSQL listener (`:6034`),
+and ProxySQL SQLite3 Server (`:6030`). It is local-only. CI runs the binary
+as part of `duckdb-e2e-g1` but skips it unless `RUN_DUCKDB_BENCH=1`.
+
+Build the v4.0 debug TAP tests first (`PROXYSQL40=1 make debug` and
+`PROXYSQL40=1 make build_tap_test_debug`). Then:
+
+```bash
+WORKSPACE=$(pwd) INFRA_ID=dev-$USER TAP_GROUP=duckdb-e2e-g1 \
+  TEST_PY_TAP_INCL="test_duckdb_bench-t" \
+  RUN_DUCKDB_BENCH=1 \
+  test/infra/control/run-tests-isolated.bash
+```
+
+Optional knobs: `BENCH_WARMUP` (default 50), `BENCH_ITERS` (default 500),
+`BENCH_ROWS` (default 10000), `BENCH_THREADS` (default 1; applies to connect
+and point only).
+
+The TAP `ok()` lines only mean the cell finished with zero errors. Read the
+`diag()` table and its fairness header: native has no wire or auth, plugin
+results are all-text, and sqlite3 is a different engine. Do not treat laptop
+ops/s as a product claim.
+
 ## Connection-limit behavior
 
 When the reservation count reaches `max_connections`, the listener closes a

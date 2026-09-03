@@ -236,7 +236,7 @@ TESTS_FILTER_DARWIN := test_wexecvp_syscall_failures-t
 TESTS_CPP_FILTER := $(if $(filter Darwin,$(UNAME_S)),$(TESTS_FILTER_DARWIN),)
 
 ifeq ($(PROXYSQL40_DETECTED),0)
-TESTS_CPP := $(filter-out test_mysqlx_% test_duckdb_plugin_load-t $(TESTS_CPP_FILTER),$(patsubst %.cpp,%,$(wildcard *-t.cpp)))
+TESTS_CPP := $(filter-out test_mysqlx_% test_duckdb_plugin_load-t test_duckdb_bench-t $(TESTS_CPP_FILTER),$(patsubst %.cpp,%,$(wildcard *-t.cpp)))
 else
 TESTS_CPP := $(filter-out $(TESTS_CPP_FILTER),$(patsubst %.cpp,%,$(wildcard *-t.cpp)))
 endif
@@ -340,6 +340,34 @@ duckdb-bridge-tests:
 
 $(DUCKDB_BRIDGE_TESTS): duckdb-bridge-tests
 	ln -fs unit/$@ $@
+
+# test_duckdb_bench-t links the DuckDB C API (native baseline) plus the
+# existing TAP mysql/libpq clients. The generic %-t recipe cannot find
+# duckdb.h or the 16-archive DuckDB link set. libduckdb_static.a alone
+# does not satisfy DuckDB's symbols -- copy the DUCKDB_ARS pattern from
+# test/tap/tests/unit/Makefile and plugins/duckdb/Makefile.
+DUCKDB_AR := $(DUCKDB_LDIR)/libduckdb_static.a
+DUCKDB_ARS = $(shell find $(DUCKDB_PATH)/build/release -name '*.a' 2>/dev/null)
+DUCKDB_LINK_GROUP_START :=
+DUCKDB_LINK_GROUP_END :=
+ifneq ($(UNAME_S),Darwin)
+DUCKDB_LINK_GROUP_START := -Wl,--start-group
+DUCKDB_LINK_GROUP_END := -Wl,--end-group
+endif
+
+$(DUCKDB_AR):
+	$(MAKE) -C $(PROXYSQL_PATH)/deps PROXYSQL40=1 duckdb
+	@test -f $@ || { echo "ERROR: deps duckdb build did not produce $@" >&2; exit 1; }
+
+ifeq ($(PROXYSQL40_DETECTED),0)
+test_duckdb_bench-t:
+	@echo "ERROR: test_duckdb_bench-t is PROXYSQL40-only" >&2; exit 1
+else
+test_duckdb_bench-t: test_duckdb_bench-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT) $(DUCKDB_AR)
+	$(CXX) $< $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
+		$(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) \
+		$(MYLIBS) $(STATIC_LIBS) $(ALLOW_MULTI_DEF) -o $@
+endif
 
 sqlite3-t: sqlite3-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 ifneq ($(PROXYSQL40),)
