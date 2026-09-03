@@ -439,6 +439,11 @@ int Query_Tool_Handler::init_connection_pool() {
 		mysql_options(mysql, MYSQL_OPT_READ_TIMEOUT, &timeout);
 		mysql_options(mysql, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 
+		// GHSA-7wh6-2vcc-gcm4: the MCP query path advertises a per-call
+		// read-only contract.  Allowing the server to accept multi-statement
+		// payloads on this connection makes that contract unenforceable from
+		// a substring validator (see validate_readonly_query() below), so we
+		// explicitly do not enable CLIENT_MULTI_STATEMENTS here.
 		if (!mysql_real_connect(
 			mysql,
 			conn.host.c_str(),
@@ -447,7 +452,7 @@ int Query_Tool_Handler::init_connection_pool() {
 			target.default_schema.empty() ? NULL : target.default_schema.c_str(),
 			conn.port,
 			NULL,
-			CLIENT_MULTI_STATEMENTS
+			0
 		)) {
 			proxy_error("Query_Tool_Handler: mysql_real_connect failed for %s:%d: %s\n",
 				conn.host.c_str(), conn.port, mysql_error(mysql));
@@ -1200,15 +1205,85 @@ std::string Query_Tool_Handler::execute_query_with_schema(
 	return j.dump();
 }
 
+bool Query_Tool_Handler::contains_multi_statement(const std::string& query) {
+	// Track a small lexical state so a ';' inside a string literal, an
+	// identifier-quoted name, or a comment does not produce false positives.
+	enum class S { Code, SingleStr, DoubleStr, BacktickIdent, LineComment, BlockComment };
+	S state = S::Code;
+	bool seen_separator = false;
+	const size_t n = query.size();
+	for (size_t i = 0; i < n; ++i) {
+		const char c = query[i];
+		const char next = (i + 1 < n) ? query[i + 1] : '\0';
+		switch (state) {
+			case S::Code:
+				if (c == '\'') { state = S::SingleStr; seen_separator = false; }
+				else if (c == '"') { state = S::DoubleStr; seen_separator = false; }
+				else if (c == '`') { state = S::BacktickIdent; seen_separator = false; }
+				else if (c == '-' && next == '-') { state = S::LineComment; ++i; }
+				else if (c == '/' && next == '*') { state = S::BlockComment; ++i; }
+				else if (c == ';') { seen_separator = true; }
+				else if (seen_separator && !std::isspace(static_cast<unsigned char>(c))) {
+					return true;
+				}
+				break;
+			case S::SingleStr:
+				if (c == '\\' && next != '\0') { ++i; }
+				else if (c == '\'') { state = S::Code; }
+				break;
+			case S::DoubleStr:
+				if (c == '\\' && next != '\0') { ++i; }
+				else if (c == '"') { state = S::Code; }
+				break;
+			case S::BacktickIdent:
+				if (c == '`') { state = S::Code; }
+				break;
+			case S::LineComment:
+				if (c == '\n') { state = S::Code; }
+				break;
+			case S::BlockComment:
+				if (c == '*' && next == '/') { state = S::Code; ++i; }
+				break;
+		}
+	}
+	return false;
+}
+
 bool Query_Tool_Handler::validate_readonly_query(const std::string& query) {
+	// GHSA-7wh6-2vcc-gcm4: reject multi-statement payloads up front.  A
+	// payload like "SELECT 1; RENAME TABLE x TO y" must not pass validation
+	// just because the first keyword is SELECT.
+	if (contains_multi_statement(query)) {
+		return false;
+	}
+
 	std::string upper = query;
 	std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
 
-	// Quick exit: blacklist check for dangerous keywords
-	// This provides fast rejection of obviously dangerous queries
+	// Substring blacklist of keywords that always indicate a side-effecting
+	// statement (or admin operation) regardless of where they appear.  The
+	// pre-fix list missed several MySQL keywords that could slip past the
+	// first-token whitelist; the additional entries cover them.
 	std::vector<std::string> dangerous = {
 		"INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER",
-		"TRUNCATE", "REPLACE", "LOAD", "CALL", "EXECUTE"
+		"TRUNCATE", "REPLACE", "LOAD", "CALL", "EXECUTE",
+		"RENAME", "GRANT", "REVOKE", "FLUSH", "RESET", "LOCK",
+		"UNLOCK", "KILL", "OPTIMIZE", "REPAIR", "HANDLER",
+		"INSTALL", "UNINSTALL", "CHANGE", "PURGE", "SAVEPOINT",
+		"RELEASE", "ROLLBACK", "COMMIT", "BEGIN", "START", "XA",
+		"SHUTDOWN", "INTO OUTFILE", "INTO DUMPFILE",
+		// GHSA-7wh6-2vcc-gcm4: ANALYZE has two side-effecting forms that
+		// the prior literal "EXPLAIN ANALYZE" check below cannot cover:
+		//   * standalone "ANALYZE TABLE x" (MySQL) / "ANALYZE foo" (PG)
+		//     — collects stats, is a write-side-effect on system tables.
+		//   * "EXPLAIN ANALYZE ..." with any obfuscation in between,
+		//     including comments, multiple whitespace, newlines, and the
+		//     PostgreSQL parenthesized option form "EXPLAIN (ANALYZE)" or
+		//     "EXPLAIN (VERBOSE, ANALYZE)" — these execute the wrapped
+		//     statement on PG.
+		// Putting ANALYZE in the substring blacklist catches all of these
+		// regardless of whitespace/comment shape.
+		"ANALYZE"
 	};
 
 	for (const auto& word : dangerous) {
@@ -1217,9 +1292,20 @@ bool Query_Tool_Handler::validate_readonly_query(const std::string& query) {
 		}
 	}
 
-	// Whitelist validation: query must start with an allowed read-only keyword
-	// This ensures the query is of a known-safe type (SELECT, WITH, EXPLAIN, SHOW, DESCRIBE)
-	// Only queries matching these specific patterns are allowed through
+	// `SET` is dangerous (SET GLOBAL/SESSION) but appears legitimately as a
+	// substring inside SELECT (e.g. INTERSECT, RESULTSET).  Reject only when
+	// it appears as a standalone token at the start.
+	if (upper.substr(0, 4) == "SET ") {
+		return false;
+	}
+
+	// `USE` changes the current schema as a side effect and must not be
+	// reachable through a read-only tool.
+	if (upper.substr(0, 4) == "USE ") {
+		return false;
+	}
+
+	// Whitelist validation: query must start with an allowed read-only keyword.
 	if (upper.find("SELECT") == 0) {
 		return true;
 	}
@@ -2717,6 +2803,21 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 				sql = *qpo->new_query;
 			}
 			delete qpo;
+
+			// GHSA-7wh6-2vcc-gcm4: explain_sql was previously prepending
+			// "EXPLAIN " to attacker-controlled SQL with no validation, so
+			// any side-effecting statement could ride through as
+			// "EXPLAIN <stmt>" with a trailing ";<stmt2>" appended.  Apply
+			// the same read-only validation here.
+			sql = strip_leading_comments(sql);
+			if (!validate_readonly_query(sql)) {
+				result = create_error_response("SQL is not read-only");
+				return result;
+			}
+			if (is_dangerous_query(sql)) {
+				result = create_error_response("SQL contains dangerous operations");
+				return result;
+			}
 
 			std::string explain_query = "EXPLAIN " + sql;
 			std::string query_result = schema.empty()

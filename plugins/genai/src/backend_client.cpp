@@ -48,6 +48,13 @@ MySQLDialResult dial_mysql(const std::string& host, int port, const BackendTarge
 		? nullptr
 		: target.default_schema.c_str();
 
+	// GHSA-7wh6-2vcc-gcm4: backend connections used by the genai plugin must
+	// not enable multi-statement support.  The MCP query-tool handlers
+	// validate input as a single statement, and enabling
+	// CLIENT_MULTI_STATEMENTS would let a payload like
+	// "SELECT 1; RENAME TABLE ..." execute the trailing side-effecting
+	// statement even though the substring validator only inspects the first
+	// keyword.
 	MYSQL* connected = mysql_real_connect(
 		mysql,
 		host.c_str(),
@@ -56,7 +63,7 @@ MySQLDialResult dial_mysql(const std::string& host, int port, const BackendTarge
 		schema,
 		static_cast<unsigned int>(port),
 		/*unix_socket*/ nullptr,
-		CLIENT_MULTI_STATEMENTS
+		0
 	);
 	if (connected == nullptr) {
 		std::ostringstream e;

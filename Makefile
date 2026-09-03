@@ -132,7 +132,7 @@ export SOURCE_DATE_EPOCH
 ### rebuild SQLite with -USQLITE_ENABLE_MEMORY_MANAGEMENT in deps/Makefile
 
 O0 := -O0
-O2 := -O2
+O2 := -O2 -fno-omit-frame-pointer
 O1 := -O1
 O3 := -O3 -mtune=native
 

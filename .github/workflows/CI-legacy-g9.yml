@@ -14,6 +14,13 @@ concurrency:
 jobs:
   run:
     if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
+    # `write-all` is required for the callee's `use_oidc: true` Codecov
+    # upload step to mint a GitHub OIDC token. Reusable-workflow
+    # permissions are the intersection of caller + callee, so the
+    # caller has to grant id-token:write (and everything else included
+    # in write-all) for the callee's declaration to take effect. The
+    # callee at ci-<group>.yml@GH-Actions also declares write-all.
+    permissions: write-all
     uses: sysown/proxysql/.github/workflows/ci-legacy-g9.yml@GH-Actions
     secrets: inherit
     with:

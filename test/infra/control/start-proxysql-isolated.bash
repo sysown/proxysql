@@ -151,6 +151,34 @@ if [ "${PROXYSQL_LOAD_GENAI_PLUGIN:-0}" = "1" ]; then
     echo ">>> Mounting genai plugin .so into ProxySQL container"
 fi
 
+# Mount .gcno files into the proxysql container at the compile-time path
+# so gcov's runtime (invoked via the `PROXYSQL GCOV DUMP` admin command
+# from the tester) can resolve the .gcda files it writes.
+#
+# The proxysql binary was compiled inside the build container with the
+# source tree bind-mounted at /opt/proxysql/ (docker-compose.yml line:
+# `- ./:/opt/proxysql/`), so .gcno paths embedded in the binary point to
+# /opt/proxysql/{lib,src}/obj/X.gcno. Without these mounts the runtime
+# .gcda files come out with an empty `current_working_directory` field
+# and fastcov reports `files: []` for every one of them -- the bug that
+# silently zeroed out daemon-side coverage for PR #5818 (only ~5,694
+# lines / 27 files from `tap-legacy-g2` were ever real; everything else
+# was missing).
+#
+# Always-on: harmless when the .gcno files aren't present (e.g.
+# non-coverage builds) -- the conditional below just doesn't add
+# anything to GCOV_MOUNTS.
+GCOV_MOUNTS=""
+if compgen -G "${WORKSPACE}/lib/obj/*.gcno" >/dev/null; then
+    GCOV_MOUNTS="${GCOV_MOUNTS} -v ${WORKSPACE}/lib/obj:/opt/proxysql/lib/obj:ro"
+fi
+if compgen -G "${WORKSPACE}/src/obj/*.gcno" >/dev/null; then
+    GCOV_MOUNTS="${GCOV_MOUNTS} -v ${WORKSPACE}/src/obj:/opt/proxysql/src/obj:ro"
+fi
+if [ -n "${GCOV_MOUNTS}" ]; then
+    echo ">>> Mounting .gcno files into ProxySQL container for gcov runtime resolution"
+fi
+
 # Simulator-backed TAP groups (aurora-sim, galera-sim, ...) export a
 # CLUSTER_SIM_HOST_FILE pointing at a plain "hostname ip" list. Inject each
 # entry as --add-host so ProxySQL's container /etc/hosts resolves the simulated
@@ -177,6 +205,7 @@ docker run -d \
     -v "${COVERAGE_DATA_DIR}:/gcov" \
     ${MYSQLX_PLUGIN_MOUNT} \
     ${GENAI_PLUGIN_MOUNT} \
+    ${GCOV_MOUNTS} \
     -e GCOV_PREFIX="/gcov" \
     -e GCOV_PREFIX_STRIP="3" \
     proxysql-ci-base:latest \

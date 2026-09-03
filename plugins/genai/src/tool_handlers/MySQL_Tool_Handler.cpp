@@ -212,6 +212,12 @@ int MySQL_Tool_Handler::init_connection_pool() {
 		mysql_options(conn.mysql, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 
 		// Connect to MySQL server
+		// GHSA-7wh6-2vcc-gcm4: backend connections used by MCP query tools
+		// must not enable multi-statement support.  validate_readonly_query
+		// inspects the query as a single statement; allowing the server
+		// to execute multi-statement payloads would make a payload like
+		// "SELECT 1; RENAME TABLE x TO y" slip past the substring/regex
+		// validator and run the trailing side-effecting statement.
 		if (!mysql_real_connect(
 			conn.mysql,
 			conn.host.c_str(),
@@ -220,7 +226,7 @@ int MySQL_Tool_Handler::init_connection_pool() {
 			mysql_schema.empty() ? NULL : mysql_schema.c_str(),
 			conn.port,
 			NULL,
-			CLIENT_MULTI_STATEMENTS
+			0
 		)) {
 			proxy_error("MySQL_Tool_Handler: mysql_real_connect failed for %s:%d: %s\n",
 				conn.host.c_str(), conn.port, mysql_error(conn.mysql));
@@ -475,12 +481,26 @@ bool MySQL_Tool_Handler::is_dangerous_query(const std::string& query) {
 	std::string upper = query;
 	std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
 
-	// List of dangerous keywords
+	// GHSA-7wh6-2vcc-gcm4: expanded to match the keyword list in
+	// Query_Tool_Handler::validate_readonly_query.  The pre-fix list
+	// missed several MySQL/PostgreSQL keywords (RENAME, FLUSH, RESET,
+	// LOCK/UNLOCK, KILL, REPAIR, OPTIMIZE, HANDLER, INSTALL/UNINSTALL,
+	// PURGE, BEGIN/START/COMMIT/ROLLBACK, XA, SHUTDOWN, INTO DUMPFILE,
+	// ANALYZE) and the original list could be bypassed by simply using
+	// one of those side-effecting verbs.  ANALYZE is included to catch
+	// EXPLAIN ANALYZE in any obfuscated form ("EXPLAIN/**/ANALYZE",
+	// "EXPLAIN (ANALYZE)", etc.) and the standalone "ANALYZE TABLE" /
+	// PostgreSQL "ANALYZE foo" statements.
 	static const char* dangerous[] = {
 		"DROP", "DELETE", "INSERT", "UPDATE", "TRUNCATE",
 		"ALTER", "CREATE", "GRANT", "REVOKE", "EXECUTE",
-		"SCRIPT", "INTO OUTFILE", "LOAD_FILE", "LOAD DATA",
-		"SLEEP", "BENCHMARK", "WAITFOR", "DELAY"
+		"SCRIPT", "INTO OUTFILE", "INTO DUMPFILE", "LOAD_FILE",
+		"LOAD DATA", "SLEEP", "BENCHMARK", "WAITFOR", "DELAY",
+		"RENAME", "FLUSH", "RESET", "LOCK", "UNLOCK", "KILL",
+		"OPTIMIZE", "REPAIR", "HANDLER", "INSTALL", "UNINSTALL",
+		"CHANGE", "PURGE", "SAVEPOINT", "RELEASE", "ROLLBACK",
+		"COMMIT", "BEGIN", "START", "XA", "SHUTDOWN",
+		"ANALYZE", "CALL", "REPLACE"
 	};
 
 	for (const char* word : dangerous) {
@@ -493,7 +513,59 @@ bool MySQL_Tool_Handler::is_dangerous_query(const std::string& query) {
 	return false;
 }
 
+bool MySQL_Tool_Handler::contains_multi_statement(const std::string& query) {
+	// GHSA-7wh6-2vcc-gcm4: lexer-style scan tolerant of ';' inside
+	// string literals, identifier-quoted names, and comments.  Mirrors
+	// the implementation in Query_Tool_Handler — the two should stay
+	// in sync, since both classes accept SQL from MCP tool callers.
+	enum class S { Code, SingleStr, DoubleStr, BacktickIdent, LineComment, BlockComment };
+	S state = S::Code;
+	bool seen_separator = false;
+	const size_t n = query.size();
+	for (size_t i = 0; i < n; ++i) {
+		const char c = query[i];
+		const char next = (i + 1 < n) ? query[i + 1] : '\0';
+		switch (state) {
+			case S::Code:
+				if (c == '\'') { state = S::SingleStr; seen_separator = false; }
+				else if (c == '"') { state = S::DoubleStr; seen_separator = false; }
+				else if (c == '`') { state = S::BacktickIdent; seen_separator = false; }
+				else if (c == '-' && next == '-') { state = S::LineComment; ++i; }
+				else if (c == '/' && next == '*') { state = S::BlockComment; ++i; }
+				else if (c == ';') { seen_separator = true; }
+				else if (seen_separator && !std::isspace(static_cast<unsigned char>(c))) {
+					return true;
+				}
+				break;
+			case S::SingleStr:
+				if (c == '\\' && next != '\0') { ++i; }
+				else if (c == '\'') { state = S::Code; }
+				break;
+			case S::DoubleStr:
+				if (c == '\\' && next != '\0') { ++i; }
+				else if (c == '"') { state = S::Code; }
+				break;
+			case S::BacktickIdent:
+				if (c == '`') { state = S::Code; }
+				break;
+			case S::LineComment:
+				if (c == '\n') { state = S::Code; }
+				break;
+			case S::BlockComment:
+				if (c == '*' && next == '/') { state = S::Code; ++i; }
+				break;
+		}
+	}
+	return false;
+}
+
 bool MySQL_Tool_Handler::validate_readonly_query(const std::string& query) {
+	// GHSA-7wh6-2vcc-gcm4: reject multi-statement payloads up front,
+	// before any substring/regex inspection looks at the first keyword.
+	if (contains_multi_statement(query)) {
+		return false;
+	}
+
 	std::string upper = query;
 	std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
 
@@ -1171,6 +1243,18 @@ std::string MySQL_Tool_Handler::run_sql_readonly(
 }
 
 std::string MySQL_Tool_Handler::explain_sql(const std::string& sql) {
+	// GHSA-7wh6-2vcc-gcm4: explain_sql was previously prepending
+	// "EXPLAIN " to attacker-controlled SQL with no validation at all,
+	// so any side-effecting statement could ride through as
+	// "EXPLAIN <stmt>" or "EXPLAIN <stmt>;<stmt2>".  Apply the same
+	// read-only validation used by run_sql_readonly before we build
+	// the EXPLAIN query.
+	if (!validate_readonly_query(sql)) {
+		json result;
+		result["error"] = "SQL is not read-only";
+		return result.dump();
+	}
+
 	// Run EXPLAIN on the query
 	std::string query = "EXPLAIN " + sql;
 

@@ -3832,8 +3832,9 @@ void PgSQL_Thread::process_all_sessions() {
 		sess_sort = false;
 	}
 #endif // IDLE_THREADS
-	if (sess_sort && mysql_sessions->len > 3) {
-		ProcessAllSessions_SortingSessions<PgSQL_Session>();
+	const bool partition_wanted = update_partition_gate();
+	if (sess_sort && mysql_sessions->len > 3 && partition_wanted) {
+		ProcessAllSessions_Partition<PgSQL_Session>();
 	}
 	for (n = 0; n < mysql_sessions->len; n++) {
 		PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(n);
@@ -4209,6 +4210,7 @@ PgSQL_Thread::PgSQL_Thread() {
 	pthread_mutex_init(&thread_mutex, NULL);
 	my_idle_conns = NULL;
 	cached_connections = NULL;
+	push_local_counter = 0;
 	mysql_sessions = NULL;
 	mirror_queue_mysql_sessions = NULL;
 	mirror_queue_mysql_sessions_cache = NULL;
@@ -5840,14 +5842,20 @@ PgSQL_Connection* PgSQL_Thread::get_MyConn_local(unsigned int _hid, PgSQL_Sessio
 }
 
 void PgSQL_Thread::push_MyConn_local(PgSQL_Connection * c) {
-	PgSQL_SrvC* mysrvc = NULL;
-	mysrvc = (PgSQL_SrvC*)c->parent;
-	// reset insert_id #1093
-	//c->pgsql->insert_id = 0;
+	// Bounded local cache: cache 1-in-N releases (N = pgsql_threads), push the
+	// rest to the shared HGM pool so peer workers can pick them up.
+	// At N=1 always cache (no sibling to share with).
+	// Rationale: avoids the connection-hoarding behavior that starved sibling
+	// workers at high client count, while preserving most of the lock-amortization
+	// benefit at lower client counts.
+	PgSQL_SrvC* mysrvc = (PgSQL_SrvC*)c->parent;
 	if (mysrvc->status == MYSQL_SERVER_STATUS_ONLINE) {
 		if (c->async_state_machine == ASYNC_IDLE) {
-			cached_connections->add(c);
-			return; // all went well
+			unsigned int n = (GloPTH && GloPTH->num_threads > 0) ? GloPTH->num_threads : 1;
+			if ((push_local_counter++ % n) == 0) {
+				cached_connections->add(c);
+				return;
+			}
 		}
 	}
 	PgHGM->push_MyConn_to_pool(c);

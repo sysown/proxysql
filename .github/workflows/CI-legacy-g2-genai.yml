@@ -14,6 +14,16 @@ concurrency:
 jobs:
   run:
     if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
+    # `write-all` grants every default scope plus id-token:write for
+    # Codecov OIDC upload. After a five-step ratchet of adding scopes
+    # one at a time (contents, checks, packages, actions, id-token)
+    # the cache restore step *still* failed even with actions:write
+    # explicitly listed. Falling back to write-all matches what the
+    # cascading workflow_run runs implicitly have, what the rest of
+    # the TAP group workflows use, and works. Reusable-workflow
+    # permissions intersect caller + callee, so this caller has to
+    # declare write-all for the callee's write-all to propagate.
+    permissions: write-all
     uses: sysown/proxysql/.github/workflows/ci-legacy-g2-genai.yml@GH-Actions
     secrets: inherit
     with:

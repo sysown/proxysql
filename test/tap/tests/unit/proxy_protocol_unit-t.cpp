@@ -59,12 +59,66 @@ static void test_parse_valid_tcp6() {
 }
 
 static void test_parse_unknown() {
-    // UNKNOWN protocol type is recognized but has no addresses/ports,
-    // so sscanf fails to parse 4 fields and returns false.
+    // GHSA-gw94-85m2-x8v2: PP1 UNKNOWN frames signal that the upstream
+    // proxy does not know the client identity. The receiver MUST ignore
+    // any trailing fields. The parser returns false (so the caller does
+    // not override addr.addr) and sets header_was_unknown=true so the
+    // caller can distinguish "spec-compliant skip" from "malformed".
     const char *header = "PROXY UNKNOWN\r\n";
     ProxyProtocolInfo ppi;
     bool result = ppi.parseProxyProtocolHeader(header, strlen(header));
-    ok(result == false, "parseProxyProtocol: UNKNOWN protocol returns false (no fields)");
+    ok(result == false, "parseProxyProtocol: UNKNOWN returns false");
+    ok(ppi.header_was_unknown == true, "parseProxyProtocol: UNKNOWN sets header_was_unknown");
+    ok(ppi.source_address[0] == '\0', "parseProxyProtocol: UNKNOWN leaves source_address empty");
+}
+
+static void test_parse_unknown_spoof_payload() {
+    // GHSA-gw94-85m2-x8v2 PoC payload: peer claims source IP 10.0.0.5
+    // after the UNKNOWN token. The parser MUST ignore the trailing
+    // address fields and NOT write "10.0.0.5" anywhere.
+    const char *header = "PROXY UNKNOWN 10.0.0.5 1.2.3.4 12345 3306\r\n";
+    ProxyProtocolInfo ppi;
+    bool result = ppi.parseProxyProtocolHeader(header, strlen(header));
+    ok(result == false, "parseProxyProtocol: UNKNOWN+spoofed addresses returns false");
+    ok(ppi.header_was_unknown == true, "parseProxyProtocol: UNKNOWN+spoofed sets header_was_unknown");
+    ok(strcmp(ppi.source_address, "10.0.0.5") != 0,
+       "parseProxyProtocol: UNKNOWN+spoofed source_address is NOT '10.0.0.5' (security: forged IP not parsed)");
+    ok(ppi.source_address[0] == '\0',
+       "parseProxyProtocol: UNKNOWN+spoofed source_address is empty");
+}
+
+static void test_parse_unknown_bogus_token() {
+    // The byte after "UNKNOWN" must be ' ' or '\r'. A token like
+    // "UNKNOWNFOO" must be rejected outright (not treated as UNKNOWN).
+    const char *header = "PROXY UNKNOWNFOO 10.0.0.5 1.2.3.4 12345 3306\r\n";
+    ProxyProtocolInfo ppi;
+    bool result = ppi.parseProxyProtocolHeader(header, strlen(header));
+    ok(result == false, "parseProxyProtocol: UNKNOWNFOO returns false");
+    ok(ppi.header_was_unknown == false,
+       "parseProxyProtocol: UNKNOWNFOO does NOT set header_was_unknown");
+}
+
+static void test_parse_tcp4_prefix_match_rejected() {
+    // GHSA-gw94-85m2-x8v2 (secondary): the previous 4-byte memcmp let
+    // "TCP4xyz" through. The protocol token must be followed by ' '.
+    const char *header = "PROXY TCP4xyz 10.0.0.5 1.2.3.4 12345 3306\r\n";
+    ProxyProtocolInfo ppi;
+    bool result = ppi.parseProxyProtocolHeader(header, strlen(header));
+    ok(result == false, "parseProxyProtocol: 'TCP4xyz' bogus protocol token rejected");
+    ok(strcmp(ppi.source_address, "10.0.0.5") != 0,
+       "parseProxyProtocol: 'TCP4xyz' did not write 10.0.0.5 into source_address");
+}
+
+static void test_parse_tcp4_valid_source() {
+    // Sanity check: legitimate TCP4 still parses source_address correctly.
+    const char *header = "PROXY TCP4 192.168.1.1 10.0.0.1 12345 3306\r\n";
+    ProxyProtocolInfo ppi;
+    bool result = ppi.parseProxyProtocolHeader(header, strlen(header));
+    ok(result == true, "parseProxyProtocol: TCP4 returns true");
+    ok(strcmp(ppi.source_address, "192.168.1.1") == 0,
+       "parseProxyProtocol: TCP4 source_address parsed as 192.168.1.1");
+    ok(ppi.header_was_unknown == false,
+       "parseProxyProtocol: TCP4 does NOT set header_was_unknown");
 }
 
 static void test_parse_invalid_prefix() {
@@ -171,25 +225,29 @@ static void test_client_in_no_subnet() {
 }
 
 int main() {
-    plan(22);
+    plan(35);
     test_init_minimal();
 
-    test_parse_valid_tcp4();        // 1
-    test_parse_valid_tcp6();        // 1
-    test_parse_unknown();           // 1
-    test_parse_invalid_prefix();    // 1
-    test_parse_empty();             // 1
-    test_valid_subnet_ipv4();       // 3
-    test_valid_subnet_ipv6();       // 2
-    test_invalid_subnet();          // 2
-    test_valid_subnet_list();       // 2
-    test_ipv4_in_subnet();          // 1
-    test_ipv4_not_in_subnet();      // 1
-    test_ipv4_any_subnet();         // 1
-    test_ipv6_in_subnet();          // 1
-    test_ipv4_host_mask();          // 2
-    test_client_in_any_subnet();    // 1
-    test_client_in_no_subnet();     // 1
+    test_parse_valid_tcp4();                  // 1
+    test_parse_valid_tcp6();                  // 1
+    test_parse_unknown();                     // 3 (GHSA-gw94-85m2-x8v2)
+    test_parse_unknown_spoof_payload();       // 4 (GHSA-gw94-85m2-x8v2)
+    test_parse_unknown_bogus_token();         // 2 (GHSA-gw94-85m2-x8v2)
+    test_parse_tcp4_prefix_match_rejected();  // 2 (GHSA-gw94-85m2-x8v2)
+    test_parse_tcp4_valid_source();           // 3
+    test_parse_invalid_prefix();              // 1
+    test_parse_empty();                       // 1
+    test_valid_subnet_ipv4();                 // 3
+    test_valid_subnet_ipv6();                 // 2
+    test_invalid_subnet();                    // 2
+    test_valid_subnet_list();                 // 2
+    test_ipv4_in_subnet();                    // 1
+    test_ipv4_not_in_subnet();                // 1
+    test_ipv4_any_subnet();                   // 1
+    test_ipv6_in_subnet();                    // 1
+    test_ipv4_host_mask();                    // 2
+    test_client_in_any_subnet();              // 1
+    test_client_in_no_subnet();               // 1
 
     test_cleanup_minimal();
     return exit_status();

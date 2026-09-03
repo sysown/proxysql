@@ -319,27 +319,51 @@ docker run \
                 echo \">>> Collecting code coverage data (exit code was: \${exit_code})...\"
 
                 if [ -d \"/gcov\" ] && [ \"\$(ls -A /gcov 2>/dev/null)\" ]; then
-                    # Copy .gcno files adjacent to each .gcda file.
-                    # .gcda paths have a GCOV_PREFIX_STRIP offset (e.g. proxysql/lib/obj/X.gcda)
-                    # while .gcno files are at \${WORKSPACE}/lib/obj/X.gcno. We strip leading
-                    # components from the .gcda relative path until we find the matching .gcno.
+                    # Match .gcno files to .gcda files by basename and copy
+                    # adjacent so fastcov can find them.
+                    #
+                    # The previous algorithm tried to find a matching .gcno
+                    # by stripping leading path components off the .gcda
+                    # relative path and looking up \${WORKSPACE}/<stripped>.gcno
+                    # -- which only works when the .gcda relative path is a
+                    # path-suffix of the .gcno absolute path. For the
+                    # ProxySQL daemon, GCOV_PREFIX_STRIP=3 eats
+                    # /opt/proxysql/lib/ from /opt/proxysql/lib/obj/X.gcda,
+                    # so the .gcda lands at /gcov/obj/X.gcda. The matching
+                    # .gcno is at \${WORKSPACE}/lib/obj/X.gcno -- not a
+                    # suffix of any strip of obj/X, so the lookup always
+                    # missed and fastcov reported every .gcda as
+                    # \"Missing 'current_working_directory'\" with an empty
+                    # files list, producing a 0-byte .info report.
+                    #
+                    # Basename matching is robust to GCOV_PREFIX_STRIP and
+                    # build CWD. ProxySQL doesn't reuse .cpp basenames
+                    # across directories (verified by inspection of lib/
+                    # and src/), so basename collision is not a concern.
+                    echo \">>> Indexing .gcno files in \${WORKSPACE}...\"
+                    GCNO_INDEX=\$(mktemp)
+                    find \"\${WORKSPACE}\" -name '*.gcno' -type f -printf '%f %p\\n' 2>/dev/null \\
+                        | sed 's/\\.gcno / /' > \"\${GCNO_INDEX}\"
+                    echo \">>> Found \$(wc -l < \"\${GCNO_INDEX}\") .gcno files\"
                     echo \">>> Copying .gcno files adjacent to .gcda files in /gcov...\"
+                    matched=0
+                    unmatched=0
                     cd /gcov && find . -name '*.gcda' -type f | while read gcda; do
                         relpath=\"\${gcda#./}\"
                         base=\"\${relpath%.gcda}\"
-                        remaining=\"\${base}\"
-                        while [ -n \"\${remaining}\" ]; do
-                            if [ -f \"\${WORKSPACE}/\${remaining}.gcno\" ]; then
-                                target=\"/gcov/\${base}.gcno\"
-                                mkdir -p \"\$(dirname \"\${target}\")\"
-                                cp -f \"\${WORKSPACE}/\${remaining}.gcno\" \"\${target}\"
-                                break
-                            fi
-                            next=\"\${remaining#*/}\"
-                            [ \"\${next}\" = \"\${remaining}\" ] && break
-                            remaining=\"\${next}\"
-                        done
+                        bname=\$(basename \"\${base}\")
+                        gcno_src=\$(awk -v k=\"\${bname}\" '\$1==k {print \$2; exit}' \"\${GCNO_INDEX}\")
+                        if [ -n \"\${gcno_src}\" ]; then
+                            target=\"/gcov/\${base}.gcno\"
+                            mkdir -p \"\$(dirname \"\${target}\")\"
+                            cp -f \"\${gcno_src}\" \"\${target}\"
+                            matched=\$((matched + 1))
+                        else
+                            unmatched=\$((unmatched + 1))
+                        fi
                     done
+                    rm -f \"\${GCNO_INDEX}\"
+                    echo \">>> .gcno copy: matched=\${matched} unmatched=\${unmatched}\"
 
                     if [ \"\${MULTI_GROUP}\" = \"1\" ]; then
                         # Multi-group mode: data is ready in /gcov for centralized collection
@@ -358,6 +382,37 @@ docker run \
 
                             if [ -f \"\${coverage_file}\" ]; then
                                 echo \">>> Coverage report generated: \${coverage_file}\"
+
+                                # Normalize SF: source-file paths in the LCOV report
+                                # so Codecov can resolve them against the runner workspace.
+                                # fastcov emits a mix of:
+                                #   SF:/opt/proxysql/include/X.h    (absolute container path
+                                #                                     embedded in .gcno files)
+                                #   SF:lib/Y.cpp                    (relative to fastcov cwd
+                                #                                     = /opt/proxysql)
+                                #   SF:proxysql/src/Z.cpp           (already correct)
+                                # codecov-cli's network_root_folder is the runner's
+                                # /home/runner/work/proxysql/proxysql and the repo content
+                                # lives at <network_root>/proxysql/, so only paths shaped
+                                # as 'SF:proxysql/...' get resolved -- the other two forms
+                                # NB to future editors: this whole script body is the
+                                # argument to an outer bash -c that is wrapped in
+                                # DOUBLE QUOTES. Inside those outer double quotes,
+                                # backticks still trigger command substitution and bare
+                                # double-quote characters terminate the argument early.
+                                # That means comments here must avoid backticks (use
+                                # apostrophes for inline code) and avoid any literal
+                                # double-quote character (use apostrophes, or escape
+                                # as backslash-double-quote like the script body does
+                                # for genuine strings).
+                                # are silently dropped server-side. On the previous green
+                                # run that meant Codecov stored 27 files / 5694 lines out
+                                # of the 84621 lines fastcov actually measured.
+                                sed -i \
+                                    -e 's|^SF:/opt/proxysql/|SF:proxysql/|' \
+                                    -e '/^SF:proxysql\\//!s|^SF:|SF:proxysql/|' \
+                                    \"\${coverage_file}\"
+
                                 if command -v genhtml >/dev/null 2>&1; then
                                     local html_dir=\"\${COVERAGE_REPORT_DIR}/html\"
                                     mkdir -p \"\${html_dir}\"

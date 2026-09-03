@@ -108,8 +108,13 @@ static void __dump_pkt(const char* func, unsigned char* _ptr, unsigned int len) 
 
 static enum pgsql_sslstatus get_sslstatus(SSL* ssl, int n)
 {
+	// See issue #5792.
+	// SSL_get_error() classifies based on the return code + SSL_want() state, not on the
+	// thread-local OpenSSL error queue. For SSL_ERROR_NONE / WANT_READ / WANT_WRITE no error is
+	// pushed onto the queue, so there is nothing to clear. Only the actual error classifications
+	// (ZERO_RETURN / SYSCALL / SSL / default) need the queue drained so the next SSL op on this
+	// thread starts clean.
 	int err = SSL_get_error(ssl, n);
-	ERR_clear_error();
 	switch (err) {
 	case SSL_ERROR_NONE:
 		return PGSQL_SSLSTATUS_OK;
@@ -119,6 +124,9 @@ static enum pgsql_sslstatus get_sslstatus(SSL* ssl, int n)
 	case SSL_ERROR_ZERO_RETURN:
 	case SSL_ERROR_SYSCALL:
 	default:
+		// drain the queue; any consumer that wanted the details should have read them
+		// before returning to this point
+		while (ERR_get_error()) { /* discard */ }
 		return PGSQL_SSLSTATUS_FAIL;
 	}
 }
@@ -530,7 +538,18 @@ int PgSQL_Data_Stream::read_from_net() {
 					c = buff[read_pos++];
 					d = buff[read_pos++];
 					length = (a << 24) | (b << 16) | (c << 8) | d;
-					
+
+					// GHSA-58ww-865x-grpr: bound the declared packet length by the
+					// remaining capacity of queueIN. Without this check an unauthenticated
+					// client can drive a heap out-of-bounds write into the fixed-size
+					// 32KB input queue by sending an oversized first PostgreSQL packet.
+					if (length > (uint32_t)(s - 5)) {
+						proxy_error("Oversized first packet from PgSQL client: length=%u exceeds queue capacity (%d). Closing fd=%d\n",
+							length, s - 5, fd);
+						shut_soft();
+						return -1;
+					}
+
 					r += recv(fd, queue_w_ptr(queueIN) + 5, length, 0);
 				}
 			}
