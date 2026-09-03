@@ -5671,6 +5671,16 @@ void PgSQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 #endif // STRESSTESTPOOL_MEASURE
 	}
 #endif // STRESSTEST_POOL
+#ifdef PROXYSQL31
+	const unsigned int pool_stats_hid = mc ? mc->parent->myhgc->hid : mybe->hostgroup_id;
+	HostgroupPoolStats *pool_stats = mc
+		? &mc->parent->myhgc->pool_stats
+		: hostgroup_pool_wait.active_stats(pool_stats_hid);
+	if (!pool_stats) {
+		pool_stats = PgHGM->get_hostgroup_pool_stats(pool_stats_hid);
+	}
+	hostgroup_pool_wait.observe(pool_stats, thread->curtime, mc != nullptr, pool_stats_hid);
+#endif
 	if (mc) {
 		mybe->server_myds->attach_connection(mc);
 		thread->status_variables.stvar[st_var_ConnPool_get_conn_success]++;
@@ -5998,6 +6008,9 @@ void PgSQL_Session::handle_transaction_state() {
 }
 
 void PgSQL_Session::RequestEnd(PgSQL_Data_Stream* myds, bool called_on_failure) {
+#ifdef PROXYSQL31
+	hostgroup_pool_wait.finish(thread ? thread->curtime : monotonic_time());
+#endif
 
 	// check if multiplexing needs to be disabled
 	const char* query_digest_text = NULL;

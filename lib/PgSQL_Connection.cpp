@@ -1274,15 +1274,18 @@ std::string PgSQL_Connection::connect_start_DNS_lookup() {
 // Raises a wire-form value to the level a libpq conninfo needs. libpq parses the conninfo
 // and strips one level of backslash escaping before the value reaches the wire, so doubling
 // every backslash of the wire form is what makes the backend see that exact wire form.
-// Only backslashes need it: both values are single-quoted in the conninfo, so the spaces
-// separating the "-c key=value" tokens pass through untouched.
+// The spaces separating the "-c key=value" tokens need nothing: both values are single-quoted
+// in the conninfo, so they pass through untouched. The apostrophe does need it, for a different
+// reason: an unescaped ' ends the quoted value, and everything after it is parsed by libpq as
+// further conninfo KEYWORDS (host=, sslmode=, ...). Escaping it here keeps a client-supplied
+// option value a literal instead of a way to redirect the backend connection.
 static std::string pg_conninfo_escape_level(const std::string& wire) {
 	std::string out;
-	// Worst case is every character being a backslash, so reserve once rather than
+	// Worst case is every character needing an escape, so reserve once rather than
 	// regrowing part-way through.
 	out.reserve(wire.size() * 2);
 	for (char c : wire) {
-		if (c == '\\') out += '\\';
+		if (c == '\\' || c == '\'') out += '\\';
 		out += c;
 	}
 	return out;

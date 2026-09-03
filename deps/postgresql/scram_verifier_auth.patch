@@ -193,13 +193,19 @@
  				{
  					libpq_append_conn_error(conn, "could not encrypt password: %s", errstr);
  					free(crypt_pwd);
-@@ -1096,7 +1108,8 @@
+@@ -1096,8 +1108,15 @@
  				password = conn->connhost[conn->whichhost].password;
  				if (password == NULL)
  					password = conn->pgpass;
 -				if (password == NULL || password[0] == '\0')
++				/*
++				 * ProxySQL: this guard is SHARED by `case AUTH_REQ_MD5:` and
++				 * `case AUTH_REQ_PASSWORD:`. Only the MD5 branch can consume
++				 * md5_secret; AUTH_REQ_PASSWORD sends `password` verbatim and
++				 * would strlen(NULL). Gate the exception on areq accordingly.
++				 */
 +				if ((password == NULL || password[0] == '\0') &&
-+					!(conn->md5_secret && conn->md5_secret[0]))
++					!(areq == AUTH_REQ_MD5 && conn->md5_secret && conn->md5_secret[0]))
  				{
  					appendPQExpBufferStr(&conn->errorMessage,
  										 PQnoPasswordSupplied);

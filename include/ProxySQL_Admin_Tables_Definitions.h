@@ -110,6 +110,8 @@
 
 #define ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS "CREATE TABLE mysql_collations (Id INTEGER NOT NULL PRIMARY KEY , Collation VARCHAR NOT NULL , Charset VARCHAR NOT NULL , `Default` VARCHAR NOT NULL)"
 
+#define ADMIN_SQLITE_TABLE_SSL_CIPHERS "CREATE TABLE ssl_ciphers (cipher_name VARCHAR NOT NULL PRIMARY KEY , cipher_description VARCHAR NOT NULL)"
+
 #define ADMIN_SQLITE_TABLE_RESTAPI_ROUTES_V2_0_15 "CREATE TABLE restapi_routes (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , interval_ms INTEGER CHECK (interval_ms>=100 AND interval_ms<=100000000) NOT NULL , method VARCHAR NOT NULL CHECK (UPPER(method) IN ('GET','POST')) , uri VARCHAR NOT NULL , script VARCHAR NOT NULL , comment VARCHAR NOT NULL DEFAULT '')"
 
 #define ADMIN_SQLITE_TABLE_RESTAPI_ROUTES_v2_1_0 "CREATE TABLE restapi_routes (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , timeout_ms INTEGER CHECK (timeout_ms>=100 AND timeout_ms<=100000000) NOT NULL , method VARCHAR NOT NULL CHECK (UPPER(method) IN ('GET','POST')) , uri VARCHAR NOT NULL , script VARCHAR NOT NULL , comment VARCHAR NOT NULL DEFAULT '')"
@@ -167,6 +169,10 @@
 #define STATS_SQLITE_TABLE_MYSQL_CONNECTION_POOL "CREATE TABLE stats_mysql_connection_pool (hostgroup INT , srv_host VARCHAR , srv_port INT , status VARCHAR , ConnUsed INT , ConnFree INT , ConnOK INT , ConnERR INT , MaxConnUsed INT , Queries INT , Queries_GTID_sync INT , Bytes_data_sent INT , Bytes_data_recv INT , Latency_us INT)"
 
 #define STATS_SQLITE_TABLE_MYSQL_CONNECTION_POOL_RESET "CREATE TABLE stats_mysql_connection_pool_reset (hostgroup INT , srv_host VARCHAR , srv_port INT , status VARCHAR , ConnUsed INT , ConnFree INT , ConnOK INT , ConnERR INT , MaxConnUsed INT , Queries INT , Queries_GTID_sync INT , Bytes_data_sent INT , Bytes_data_recv INT , Latency_us INT)"
+#ifdef PROXYSQL31
+inline constexpr char STATS_SQLITE_TABLE_MYSQL_HOSTGROUP_CONNECTION_POOL[] = "CREATE TABLE stats_mysql_hostgroup_connection_pool (hostgroup INT PRIMARY KEY , acquisitions_total INT NOT NULL , waits_total INT NOT NULL , wait_time_us_total INT NOT NULL , waiters INT NOT NULL)";
+inline constexpr char STATS_SQLITE_TABLE_MYSQL_HOSTGROUP_CONNECTION_POOL_RESET[] = "CREATE TABLE stats_mysql_hostgroup_connection_pool_reset (hostgroup INT PRIMARY KEY , acquisitions_total INT NOT NULL , waits_total INT NOT NULL , wait_time_us_total INT NOT NULL , waiters INT NOT NULL)";
+#endif
 
 #define STATS_SQLITE_TABLE_MYSQL_FREE_CONNECTIONS "CREATE TABLE stats_mysql_free_connections (fd INT NOT NULL , hostgroup INT NOT NULL , srv_host VARCHAR NOT NULL , srv_port INT NOT NULL , user VARCHAR NOT NULL , schema VARCHAR , init_connect VARCHAR , time_zone VARCHAR , sql_mode VARCHAR , autocommit VARCHAR , idle_ms INT , statistics VARCHAR , mysql_info VARCHAR)"
 
@@ -350,6 +356,10 @@
 #define STATS_SQLITE_TABLE_PGSQL_GLOBAL "CREATE TABLE stats_pgsql_global (Variable_Name VARCHAR NOT NULL PRIMARY KEY , Variable_Value VARCHAR NOT NULL)"
 #define STATS_SQLITE_TABLE_PGSQL_CONNECTION_POOL "CREATE TABLE stats_pgsql_connection_pool (hostgroup INT , srv_host VARCHAR , srv_port INT , status VARCHAR , ConnUsed INT , ConnFree INT , ConnOK INT , ConnERR INT , MaxConnUsed INT , Queries INT , Bytes_data_sent INT , Bytes_data_recv INT , Latency_us INT)"
 #define STATS_SQLITE_TABLE_PGSQL_CONNECTION_POOL_RESET "CREATE TABLE stats_pgsql_connection_pool_reset (hostgroup INT , srv_host VARCHAR , srv_port INT , status VARCHAR , ConnUsed INT , ConnFree INT , ConnOK INT , ConnERR INT , MaxConnUsed INT , Queries INT , Bytes_data_sent INT , Bytes_data_recv INT , Latency_us INT)"
+#ifdef PROXYSQL31
+inline constexpr char STATS_SQLITE_TABLE_PGSQL_HOSTGROUP_CONNECTION_POOL[] = "CREATE TABLE stats_pgsql_hostgroup_connection_pool (hostgroup INT PRIMARY KEY , acquisitions_total INT NOT NULL , waits_total INT NOT NULL , wait_time_us_total INT NOT NULL , waiters INT NOT NULL)";
+inline constexpr char STATS_SQLITE_TABLE_PGSQL_HOSTGROUP_CONNECTION_POOL_RESET[] = "CREATE TABLE stats_pgsql_hostgroup_connection_pool_reset (hostgroup INT PRIMARY KEY , acquisitions_total INT NOT NULL , waits_total INT NOT NULL , wait_time_us_total INT NOT NULL , waiters INT NOT NULL)";
+#endif
 #define STATS_SQLITE_TABLE_PGSQL_FREE_CONNECTIONS "CREATE TABLE stats_pgsql_free_connections (fd INT NOT NULL , hostgroup INT NOT NULL , srv_host VARCHAR NOT NULL , srv_port INT NOT NULL , user VARCHAR NOT NULL , database VARCHAR , init_connect VARCHAR , time_zone VARCHAR , sql_mode VARCHAR , idle_ms INT , statistics VARCHAR , pgsql_info VARCHAR)"
 #define STATS_SQLITE_TABLE_PGSQL_USERS "CREATE TABLE stats_pgsql_users (username VARCHAR PRIMARY KEY , frontend_connections INT NOT NULL , frontend_max_connections INT NOT NULL)"
 #define STATS_SQLITE_TABLE_PGSQL_PROCESSLIST "CREATE TABLE stats_pgsql_processlist (ThreadID INT NOT NULL , SessionID INTEGER PRIMARY KEY , user VARCHAR , database VARCHAR , cli_host VARCHAR , cli_port INT , hostgroup INT , l_srv_host VARCHAR , l_srv_port INT , srv_host VARCHAR , srv_port INT , backend_pid INT , backend_state VARCHAR , command VARCHAR , time_ms INT NOT NULL , info VARCHAR , status_flags INT , extended_info VARCHAR)"
