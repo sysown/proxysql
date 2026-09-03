@@ -72,6 +72,16 @@ public:
 	// streak are left untouched. Avoids "2/2 NULL = 100% stressed" noise.
 	static constexpr unsigned int PARTITION_GATE_MIN_ATTEMPTS   = 4;
 	static constexpr unsigned int PARTITION_FAIRNESS_MIN_B      = 4;
+	// Sorting the whole B band by wait time used to run on every iteration and
+	// was removed: it cost ~12% throughput at 500 clients / 50-conn pool under
+	// SSL. Run it on roughly one iteration in N instead. The cost amortises to
+	// ~1/N, while ordering stays approximately oldest-first between sorts --
+	// max_connect_time is a fixed offset from when the session began waiting,
+	// so it is monotonic in arrival order and a stale sort is still roughly
+	// right. Chosen randomly rather than on a fixed period so it cannot
+	// phase-lock with a periodic workload and always sample the same point in
+	// the cycle.
+	static constexpr unsigned int PARTITION_SORT_INTERVAL       = 10;
 
 	// Called by sessions inside this worker at the get_MyConn_from_pool()
 	// call site to feed the gate.
