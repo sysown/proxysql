@@ -2662,6 +2662,27 @@ void Query_Processor<QP_DERIVED>::query_parser_update_counters(TypeSession* sess
 	}
 }
 
+/**
+ * @brief Record one query against its digest, creating the entry if needed.
+ *
+ * @par Locking
+ * Two phases. The common case -- a digest that already exists -- only needs the
+ * map to stay stable while the entry is located and updated, so it takes
+ * `digest_rwlock` for *reading*. `QP_query_digest_stats::add_time()` is safe
+ * under a shared lock because the counters it touches are atomic, so several
+ * threads can account against the same digest at once instead of serialising on
+ * an exclusive lock as this function used to.
+ *
+ * Only a digest seen for the first time needs the write lock, to insert into
+ * `digest_umap` (and `digest_text_umap` when digest text normalisation is on).
+ * The map is re-checked after upgrading, because the read lock is dropped
+ * before the write lock is taken and another thread may have inserted the same
+ * digest in between.
+ *
+ * @note The read lock does not make a group of counters mutually consistent;
+ *   see the concurrency contract on QP_query_digest_stats. Readers that need a
+ *   coherent view must snapshot.
+ */
 template <typename QP_DERIVED>
 void Query_Processor<QP_DERIVED>::update_query_digest(uint64_t digest_total, uint64_t digest, char* digest_text, int hid, 
 	TypeConnInfo* ui, unsigned long long t, unsigned long long n, const char* client_addr, unsigned long long rows_affected,

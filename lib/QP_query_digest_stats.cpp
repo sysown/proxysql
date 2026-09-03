@@ -59,6 +59,17 @@ QP_query_digest_stats::QP_query_digest_stats(const char* _user, const char* _sch
 	rows_sent = 0;
 	hid = _hid;
 }
+/**
+ * @brief Lower @p slot to @p v if @p v is a smaller non-zero value.
+ *
+ * Zero is the "never set" sentinel for `min_time` and `first_seen`, so a zero
+ * @p v is ignored and a zero @p slot always loses to a real value. The loop
+ * re-reads @p slot through the failed compare-exchange, so it exits as soon as
+ * another thread has already installed a value at least as small.
+ *
+ * @param slot Counter to lower.
+ * @param v Candidate value.
+ */
 template <typename T>
 static void atomic_min_nonzero(std::atomic<T>& slot, T v) {
 	if (v == 0) {
@@ -72,6 +83,15 @@ static void atomic_min_nonzero(std::atomic<T>& slot, T v) {
 	}
 }
 
+/**
+ * @brief Raise @p slot to @p v if @p v is larger.
+ *
+ * Once the counter has settled this degrades to a single relaxed load, because
+ * the loop is not entered at all when @p v is not an improvement.
+ *
+ * @param slot Counter to raise.
+ * @param v Candidate value.
+ */
 template <typename T>
 static void atomic_max(std::atomic<T>& slot, T v) {
 	T cur = slot.load(std::memory_order_relaxed);
