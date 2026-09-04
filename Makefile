@@ -480,6 +480,17 @@ arm64-tarball: tarball-almalinux9
 arm64-pkglist:
 	@${MAKE} -nk arm64-packages 2>/dev/null | grep -Eo 'binaries/proxysql[^ ]*' | sed 's,^binaries/,,'
 
+riscv64-%: SYS_ARCH := riscv64
+riscv64-packages: riscv64-centos riscv64-debian riscv64-ubuntu riscv64-fedora riscv64-opensuse 
+riscv64-almalinux: almalinux10
+riscv64-centos: centos10
+riscv64-debian: debian13
+riscv64-fedora: fedora42
+riscv64-opensuse: opensuse16
+riscv64-ubuntu: ubuntu24 ubuntu25
+riscv64-pkglist:
+	@${MAKE} -nk riscv64-packages 2>/dev/null | grep -Po '(?<=binaries/)proxysql\S+$$'
+
 almalinux%: build-almalinux% ;
 centos%: build-centos% ;
 debian%: build-debian% ;
