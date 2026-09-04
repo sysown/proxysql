@@ -137,6 +137,13 @@ void ProxySQL_Admin::p_stats___memory_metrics() {
 	// Update the 'memory_metrics' last exec timestamp
 	last_p_memory_metrics_ts = new_ts;
 
+	// MySQL session memory metrics. Get_Memory_Stats() locks each worker while
+	// scanning its sessions, so keep this work within the bounded memory interval.
+	GloMTH->Get_Memory_Stats();
+	GloMTH->get_mysql_backend_buffers_bytes();
+	GloMTH->get_mysql_frontend_buffers_bytes();
+	GloMTH->get_mysql_session_internal_bytes();
+
 	// proxysql_connpool_memory_bytes metric
 	const auto connpool_mem = MyHGM->Get_Memory_Stats();
 	this->metrics.p_gauge_array[p_admin_gauge::connpool_memory_bytes]->Set(connpool_mem);

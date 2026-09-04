@@ -32,12 +32,12 @@ SQLITE3_DIR=$(DEPS_PATH)/sqlite3/sqlite3
 IDIR=$(PROXYSQL_IDIR)
 LDIR=$(PROXYSQL_LDIR)
 IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(DAEMONPATH_IDIR) -I$(SQLITE3_DIR) -I$(EV_IDIR) -I$(SSL_IDIR)
-LDIRS=-L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR)
+LDIRS=-L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_LDIR) -L$(ABSL_LDIR) -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR)
 
 DEBUG=-DDEBUG
 MYCPPFLAGS=-std=c++11 $(IDIRS) $(OPTZ) $(DEBUG) -ggdb
 LDFLAGS+=
-MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -lmariadbclient $(OPENSSL_STATIC_LIBS) -Wl,-Bdynamic -lpthread -lm -lz -lrt $(EXTRALINK)
+MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ $(RE2_STATIC_LIBS) -lmariadbclient $(OPENSSL_STATIC_LIBS) -Wl,-Bdynamic -lpthread -lm -lz -lrt $(EXTRALINK)
 
 ifeq ($(UNAME_S),Linux)
 	MYLIBS+= -ldl

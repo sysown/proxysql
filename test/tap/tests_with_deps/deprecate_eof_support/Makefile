@@ -24,6 +24,7 @@ IDIRS :=	-I$(TAP_IDIR) \
 
 LDIRS :=	-L$(TAP_LDIR) \
 			-L$(RE2_LDIR) \
+			-L$(ABSL_LDIR) \
 			-L$(PROXYSQL_LDIR) \
 			-L$(JEMALLOC_LDIR) \
 			-L$(LIBCONFIG_LDIR) \
@@ -33,7 +34,7 @@ LDIRS :=	-L$(TAP_LDIR) \
 			-L$(EV_LDIR) \
 			-L$(PROMETHEUS_LDIR) \
 			-L$(SQLITE3_LDIR) \
-			-L$(PCRE_LDIR) \
+			-L$(PCRE2_LDIR) \
 			-L$(POSTGRESQL_LDIR) \
 			-L$(SSL_LDIR) 
 
@@ -86,7 +87,7 @@ POSTGRESQL_STATIC_LIBS := $(POSTGRESQL_PATH)/interfaces/libpq/libpq.a \
 
 COMMON_LINK_PREFIX = $(OPT) -Wl,-rpath,$(RE2_LDIR) -Wl,--export-dynamic \
 	-Wl,-Bdynamic -ltap
-COMMON_LINK_SUFFIX = -lcpp_dotenv -lre2 $(POSTGRESQL_STATIC_LIBS) $(CURL_STATIC_LIB) \
+COMMON_LINK_SUFFIX = -lcpp_dotenv $(RE2_STATIC_LIBS) $(POSTGRESQL_STATIC_LIBS) $(CURL_STATIC_LIB) \
 	$(OPENSSL_STATIC_LIBS) -lz -ldl -lpthread -DGITVERSION=\"$(GIT_VERSION)\"
 COMMONARGS = $(COMMON_LINK_PREFIX) $(COMMON_LINK_SUFFIX)
 

@@ -149,6 +149,12 @@ struct bootstrap_info_t {
 	~bootstrap_info_t();
 };
 
+/**
+ * Atomically replaces mysql_users with users returned by the bootstrap query.
+ * MySQL field lengths are preserved when binding values to SQLite.
+ */
+bool import_bootstrap_users(SQLite3DB* db, MYSQL_RES* users, std::string& error);
+
 // ProxySQL_Admin shared variables
 extern int admin__web_verbosity;
 
@@ -468,6 +474,7 @@ class ProxySQL_Admin {
 	ProxySQL_External_Scheduler *scheduler;
 
 	void dump_mysql_collations();
+	void dump_ssl_ciphers();
 	void insert_into_tables_defs(std::vector<table_def_t *> *, const char *table_name, const char *table_def);
 	void drop_tables_defs(std::vector<table_def_t *> *tables_defs);
 	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);

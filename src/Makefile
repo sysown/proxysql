@@ -13,7 +13,7 @@ IDIRS :=	-I$(PROXYSQL_IDIR) \
 			-I$(LIBCONFIG_IDIR) \
 			-I$(LIBDAEMON_IDIR) \
 			-I$(RE2_IDIR) \
-			-I$(PCRE_IDIR) \
+			-I$(PCRE2_IDIR) \
 			-I$(CLICKHOUSE_CPP_IDIR) \
 			-I$(MICROHTTPD_IDIR) \
 			-I$(LIBHTTPSERVER_IDIR) \
@@ -36,7 +36,8 @@ LDIRS :=	-L$(PROXYSQL_LDIR) \
 			-L$(LIBCONFIG_LDIR) \
 			-L$(LIBDAEMON_LDIR) \
 			-L$(RE2_LDIR) \
-			-L$(PCRE_LDIR) \
+			-L$(ABSL_LDIR) \
+			-L$(PCRE2_LDIR) \
 			-L$(MICROHTTPD_LDIR) \
 			-L$(LIBHTTPSERVER_LDIR) \
 			-L$(LIBINJECTION_LDIR) \
@@ -114,9 +115,8 @@ STATICMYLIBS := -Wl,-Bstatic \
 				-lproxysql \
 				-ldaemon \
 				-lconfig++ \
-				-lre2 \
-				-lpcrecpp \
-				-lpcre \
+				$(RE2_STATIC_LIBS) \
+				$(PCRE2_LIBS) \
 				-lmariadbclient \
 				-lhttpserver \
 				-lmicrohttpd \
@@ -142,7 +142,7 @@ CURL_FORCE_LOAD_LIBS := $(call force_load_archives,$(CURL_AR))
 MYLIBS := $(EXECUTABLE_EXPORT_FLAGS) $(STATICMYLIBS) $(CURL_FORCE_LOAD_LIBS) $(OPENSSL_FORCE_LOAD_LIBS) -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt -lprometheus-cpp-pull -lprometheus-cpp-core -luuid $(EXTRALINK)
 
 ifeq ($(UNAME_S),Darwin)
-	MYLIBS := $(EXECUTABLE_EXPORT_FLAGS) -lre2 -lmariadbclient $(CURL_FORCE_LOAD_LIBS) $(OPENSSL_FORCE_LOAD_LIBS) -lpthread -lm -lz -liconv -lgnutls -lprometheus-cpp-pull -lprometheus-cpp-core
+	MYLIBS := $(EXECUTABLE_EXPORT_FLAGS) $(RE2_STATIC_LIBS) -lmariadbclient $(CURL_FORCE_LOAD_LIBS) $(OPENSSL_FORCE_LOAD_LIBS) -lpthread -lm -lz -liconv -lgnutls -lprometheus-cpp-pull -lprometheus-cpp-core
 else
 	CURL_DIR := $(DEPS_PATH)/curl/curl
 	IDIRS += -L$(CURL_DIR)/include
@@ -164,8 +164,7 @@ ifeq ($(UNAME_S),Darwin)
 	LIBPROXYSQLAR += $(JEMALLOC_LDIR)/libjemalloc.a
 	LIBPROXYSQLAR += $(MICROHTTPD_LDIR)/libmicrohttpd.a
 	LIBPROXYSQLAR += $(LIBHTTPSERVER_LDIR)/libhttpserver.a
-	LIBPROXYSQLAR += $(PCRE_LDIR)/libpcre.a
-	LIBPROXYSQLAR += $(PCRE_LDIR)/libpcrecpp.a
+	LIBPROXYSQLAR += $(PCRE2_LDIR)/libpcre2-8.a
 	LIBPROXYSQLAR += $(LIBDAEMON_LDIR)/libdaemon.a
 	LIBPROXYSQLAR += $(LIBCONFIG_LDIR)/libconfig++.a
 	LIBPROXYSQLAR += $(LIBCONFIG_LDIR)/libconfig.a

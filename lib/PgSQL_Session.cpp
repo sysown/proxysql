@@ -1266,8 +1266,8 @@ void PgSQL_Session::handler_again___new_thread_to_cancel_query() {
 
 			const PgSQL_Connection_userinfo* ui = client_myds->myconn->userinfo;
 			std::unique_ptr<PgSQL_Backend_Kill_Args> backend_kill_args = std::make_unique<PgSQL_Backend_Kill_Args>(
-				(PGconn*)myds->myconn->get_pg_connection(), ui->username, ui->password, ui->dbname, myds->myconn->parent->address,
-				myds->myconn->parent->port, myds->myconn->parent->myhgc->hid, myds->myconn->parent->use_ssl, 
+				(PGconn*)myds->myconn->get_pg_connection(), ui, myds->myconn->parent->address,
+				myds->myconn->parent->port, myds->myconn->parent->myhgc->hid, myds->myconn->parent->use_ssl,
 				PgSQL_Backend_Kill_Args::TYPE::CANCEL_QUERY, thread
 			);
 

@@ -20,6 +20,18 @@
 
 #include <cstring>
 
+#ifdef DEBUG
+// Debug-only seam implemented in Query_Processor.cpp. It keeps the adapter and
+// all PCRE2 types private while exercising the real substitution path.
+extern bool pcre2_query_rule_replace_for_test(
+	const char* pattern,
+	const char* subject,
+	const char* legacy_rewrite,
+	bool global,
+	std::string* rewritten
+);
+#endif
+
 /**
  * @brief Create a zeroed QP_rule_t with safe defaults.
  */
@@ -135,6 +147,39 @@ static void test_match_digest_pcre() {
 		"match_digest regex matches with PCRE");
 }
 
+static void test_match_digest_pcre2() {
+	QP_rule_t r = make_rule();
+	r.match_digest = const_cast<char *>("(?<=A{1,2})B");
+	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+		"127.0.0.1", 6033, 0, "AAB", "SELECT 1", nullptr, 1),
+		"PCRE-compatible mode accepts PCRE2 variable-length lookbehind");
+}
+
+static void test_match_digest_pcre2_lookaround_reset_start() {
+	QP_rule_t r = make_rule();
+	r.match_digest = const_cast<char *>("(?=a\\K)a");
+	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+		"127.0.0.1", 6033, 0, "a", "SELECT 1", nullptr, 1),
+		"PCRE-compatible mode accepts legacy \\K inside positive lookahead");
+}
+
+static void test_invalid_pcre2_pattern() {
+	QP_rule_t r = make_rule();
+	r.match_pattern = const_cast<char *>("(");
+	ok(!rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 1),
+		"invalid PCRE2 pattern safely returns no match");
+}
+
+static void test_invalid_negated_pcre2_pattern() {
+	QP_rule_t r = make_rule();
+	r.match_pattern = const_cast<char *>("(");
+	r.negate_match_pattern = true;
+	ok(!rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 1),
+		"invalid PCRE2 pattern does not match a negated rule");
+}
+
 static void test_match_pattern() {
 	QP_rule_t r = make_rule();
 	r.match_pattern = const_cast<char *>("SELECT .* FROM orders");
@@ -151,6 +196,9 @@ static void test_negate_match_pattern() {
 	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 2),
 		"negate_match_pattern inverts result");
+	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+		"127.0.0.1", 6033, 0, nullptr, "SELECT 1", nullptr, 1),
+		"PCRE-compatible negate_match_pattern inverts result");
 }
 
 static void test_caseless_modifier() {
@@ -172,6 +220,54 @@ static void test_rewritten_query() {
 		"SELECT * FROM rewritten_table", 2),
 		"rewritten query used for match_pattern when present");
 }
+
+#ifdef DEBUG
+static void test_pcre2_rewrites() {
+	std::string rewritten;
+
+	bool rc = pcre2_query_rule_replace_for_test(
+		"(x)", "x x", "$1:${name}:$&", false, &rewritten
+	);
+	ok(rc && rewritten == "$1:${name}:$& x",
+		"PCRE rewrite preserves dollar forms as literal text");
+
+	rc = pcre2_query_rule_replace_for_test(
+		"(ab)", "ab ab", "\\0:\\1", false, &rewritten
+	);
+	ok(rc && rewritten == "ab:ab ab",
+		"PCRE rewrite expands legacy whole-match and capture references once");
+
+	rc = pcre2_query_rule_replace_for_test(
+		"(ab)", "ab ab", "\\0:\\1", true, &rewritten
+	);
+	ok(rc && rewritten == "ab:ab ab:ab",
+		"PCRE global rewrite expands legacy captures for every match");
+
+	rc = pcre2_query_rule_replace_for_test(
+		"x", "x x", "\\\\", false, &rewritten
+	);
+	ok(rc && rewritten == "\\ x",
+		"PCRE rewrite emits one legacy literal backslash once");
+
+	rc = pcre2_query_rule_replace_for_test(
+		"x", "x x", "\\\\", true, &rewritten
+	);
+	ok(rc && rewritten == "\\ \\",
+		"PCRE global rewrite emits a legacy literal backslash for every match");
+
+	rc = pcre2_query_rule_replace_for_test(
+		"(a)?(b)", "b b", "X\\1Y", false, &rewritten
+	);
+	ok(rc && rewritten == "XY b",
+		"PCRE rewrite expands an unset optional capture as empty once");
+
+	rc = pcre2_query_rule_replace_for_test(
+		"(a)?(b)", "b b", "X\\1Y", true, &rewritten
+	);
+	ok(rc && rewritten == "XY XY",
+		"PCRE global rewrite expands unset optional captures as empty");
+}
+#endif
 
 // ============================================================================
 // 3. Combined criteria (AND logic)
@@ -207,7 +303,11 @@ static void test_null_rule() {
 // ============================================================================
 
 int main() {
-	plan(23);
+#ifdef DEBUG
+	plan(35);
+#else
+	plan(28);
+#endif
 
 	test_init_minimal();
 
@@ -220,13 +320,24 @@ int main() {
 	test_digest();                  // 2
 	test_match_digest_re2();        // 1
 	test_match_digest_pcre();       // 1
+	test_match_digest_pcre2();      // 1
+	test_match_digest_pcre2_lookaround_reset_start(); // 1
+	test_invalid_pcre2_pattern();   // 1
+	test_invalid_negated_pcre2_pattern(); // 1
 	test_match_pattern();           // 1
-	test_negate_match_pattern();    // 1
+	test_negate_match_pattern();    // 2
 	test_caseless_modifier();       // 1
 	test_rewritten_query();         // 1
+#ifdef DEBUG
+	test_pcre2_rewrites();          // 7
+#endif
 	test_combined_criteria();       // 2
 	test_null_rule();               // 1
-	// Total: 22
+#ifdef DEBUG
+	// Total: 35
+#else
+	// Total: 28
+#endif
 
 	test_cleanup_minimal();
 	return exit_status();
