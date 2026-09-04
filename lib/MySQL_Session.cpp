@@ -712,6 +712,7 @@ MySQL_Session::MySQL_Session() {
 	sending_set_autocommit=false;
 	autocommit_on_hostgroup=-1;
 	killed=false;
+	kill_reason=SESSION_KILL_REASON_NONE;
 	session_type=PROXYSQL_SESSION_MYSQL;
 	//admin=false;
 	connections_handler=false;

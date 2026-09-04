@@ -302,6 +302,7 @@ PgSQL_Session::PgSQL_Session() {
 	autocommit_handled = false;
 	sending_set_autocommit = false;
 	killed = false;
+	kill_reason = SESSION_KILL_REASON_NONE;
 	session_type = PROXYSQL_SESSION_PGSQL;
 	//admin=false;
 	connections_handler = false;
@@ -3127,6 +3128,29 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA() {
 	// is left below as an example of how to perform a more passive maintenance over session connections.
 }
 
+static PGSQL_ERROR_CODES kill_reason_to_sqlstate(SESSION_KILL_REASON reason) {
+	switch (reason) {
+	case SESSION_KILL_REASON_IDLE_IN_TRANSACTION_TIMEOUT:
+		return PGSQL_ERROR_CODES::ERRCODE_IDLE_IN_TRANSACTION_SESSION_TIMEOUT;
+	case SESSION_KILL_REASON_IDLE_SESSION_TIMEOUT:
+		return PGSQL_ERROR_CODES::ERRCODE_IDLE_SESSION_TIMEOUT;
+	default:
+		return PGSQL_ERROR_CODES::ERRCODE_ADMIN_SHUTDOWN;
+	}
+}
+
+// Message text matches PG's own error texts.
+static const char* kill_reason_to_message(SESSION_KILL_REASON reason) {
+	switch (reason) {
+	case SESSION_KILL_REASON_IDLE_IN_TRANSACTION_TIMEOUT:
+		return "terminating connection due to idle-in-transaction timeout";
+	case SESSION_KILL_REASON_IDLE_SESSION_TIMEOUT:
+		return "terminating connection due to idle-session timeout";
+	default:
+		return "terminating connection";
+	}
+}
+
 int PgSQL_Session::handler() {
 #if ENABLE_TIMER
 	Timer timer(thread->Timers.Sessions_Handlers);
@@ -3803,6 +3827,17 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 		writeout();
 
 	if (wrong_pass == true) {
+		client_myds->array2buffer_full();
+		client_myds->write_to_net();
+		handler_ret = -1;
+		return handler_ret;
+	}
+
+	// end things by sending an ErrorResponse packet, if a reason exists to report.
+	if (killed == true && kill_reason != SESSION_KILL_REASON_NONE && client_myds != NULL) {
+		client_myds->setDSS_STATE_QUERY_SENT_NET();
+		client_myds->myprot.generate_error_packet(true, false, kill_reason_to_message(kill_reason),
+			kill_reason_to_sqlstate(kill_reason), true);
 		client_myds->array2buffer_full();
 		client_myds->write_to_net();
 		handler_ret = -1;

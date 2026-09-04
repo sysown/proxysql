@@ -29,6 +29,12 @@ enum SESSION_FORWARD_TYPE : uint8_t {
 	SESSION_FORWARD_TYPE_START_REPLICATION		= 0x08 | SESSION_FORWARD_TYPE_TEMPORARY,
 };
 
+enum SESSION_KILL_REASON : uint8_t {
+	SESSION_KILL_REASON_NONE						= 0x00,
+	SESSION_KILL_REASON_IDLE_IN_TRANSACTION_TIMEOUT	= 0x01, // max_transaction_idle_time
+	SESSION_KILL_REASON_IDLE_SESSION_TIMEOUT		= 0x02, // wait_timeout
+};
+
 template<typename S, typename DS, typename B, typename T>
 class Base_Session {
 	public:
@@ -90,6 +96,7 @@ class Base_Session {
 	bool autocommit_handled;
 	bool sending_set_autocommit;
 	bool killed;
+	SESSION_KILL_REASON kill_reason;
 	bool locked_on_hostgroup_and_all_variables_set;
 	//bool admin;
 	bool max_connections_reached;

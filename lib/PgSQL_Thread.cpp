@@ -3444,6 +3444,9 @@ void PgSQL_Thread::idle_thread_to_kill_idle_sessions() {
 		uint32_t sess_pos = mysess_idx;
 		PgSQL_Session* mysess = (PgSQL_Session*)mysql_sessions->index(sess_pos);
 		if (mysess->idle_since < min_idle || mysess->killed == true) {
+			if (mysess->killed == false) {
+				mysess->kill_reason = SESSION_KILL_REASON_IDLE_SESSION_TIMEOUT;
+			}
 			mysess->killed = true;
 			PgSQL_Data_Stream* tmp_myds = mysess->client_myds;
 			int dsidx = tmp_myds->poll_fds_idx;
@@ -3779,6 +3782,7 @@ void PgSQL_Thread::ProcessAllSessions_MaintenanceLoop(PgSQL_Session * sess, unsi
 			// the session has idle transactions, kill it
 			if (sess_time / 1000 > (unsigned long long)pgsql_thread___max_transaction_idle_time) {
 				sess->killed = true;
+				sess->kill_reason = SESSION_KILL_REASON_IDLE_IN_TRANSACTION_TIMEOUT;
 				if (sess->client_myds) {
 					proxy_warning("Killing client connection %s:%d because of (possible) transaction idle for %llums\n", sess->client_myds->addr.addr, sess->client_myds->addr.port, sess_time / 1000);
 				}
@@ -3788,6 +3792,7 @@ void PgSQL_Thread::ProcessAllSessions_MaintenanceLoop(PgSQL_Session * sess, unsi
 			// the session is idle, kill it
 			if (sess_time / 1000 > (unsigned long long)pgsql_thread___wait_timeout) {
 				sess->killed = true;
+				sess->kill_reason = SESSION_KILL_REASON_IDLE_SESSION_TIMEOUT;
 				if (sess->client_myds) {
 					proxy_warning("Killing client connection %s:%d because inactive for %llums\n", sess->client_myds->addr.addr, sess->client_myds->addr.port, sess_time / 1000);
 				}
@@ -3905,6 +3910,7 @@ void PgSQL_Thread::process_all_sessions() {
 			{
 				if ((sess_time / 1000 > (unsigned long long)pgsql_thread___wait_timeout)) {
 					sess->killed = true;
+					sess->kill_reason = SESSION_KILL_REASON_IDLE_SESSION_TIMEOUT;
 					sess->to_process = 1;
 					proxy_warning("Killing client connection %s:%d because inactive for %llums\n", sess->client_myds->addr.addr, sess->client_myds->addr.port, sess_time / 1000);
 				}
