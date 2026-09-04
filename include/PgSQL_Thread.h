@@ -1079,6 +1079,7 @@ public:
 		bool stats_time_query_processor;
 		bool query_cache_stores_empty_result;
 		bool kill_backend_connection_when_disconnect;
+		bool use_native_backend_protocol;
 		int data_packets_history_size;
 		char* server_version;
 		char* server_encoding;

@@ -168,11 +168,10 @@ ifeq ($(UNAME_S),Linux)
 	STATIC_LIBS += $(COREDUMPER_LDIR)/libcoredumper.a
 endif
 
-ifneq ($(PROXYSQL40),)
-ifneq ($(wildcard $(SQLITE3_LDIR)/vec.o),)
-	STATIC_LIBS += $(SQLITE3_LDIR)/vec.o
-endif
-endif
+# NOTE: vec.o is appended to STATIC_LIBS once, after the PROXYSQL40
+# autodetection block below (search for "vec.o"). It must NOT be added here
+# too — listing the same object twice on the link line produces ~98
+# duplicate-symbol errors and breaks every unit test under PROXYSQL40.
 
 
 # ===========================================================================
@@ -444,7 +443,9 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	query_cache_unit-t query_processor_unit-t digest_stats_unit-t \
 	protocol_unit-t auth_unit-t connection_pool_unit-t \
 	rule_matching_unit-t hostgroups_unit-t monitor_health_unit-t \
+	pgsql_backend_framing-t pgsql_backend_auth-t pgsql_backend_extq-t \
 	pgsql_command_complete_unit-t \
+	pgsql_stmt_meta_cache-t \
 	ffto_protocol_unit-t \
 	server_selection_unit-t \
   hostgroup_routing_unit-t \

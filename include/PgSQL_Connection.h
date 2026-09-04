@@ -4,6 +4,9 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include "PgSQL_Error_Helper.h"
+#include "PgSQL_Backend_Protocol.h"
+#include <map>
+#include <string>
 
 #ifndef PROXYJSON
 #define PROXYJSON
@@ -15,6 +18,7 @@ class PgSQL_Query_Result;
 class PgSQL_STMT_Local;
 //class PgSQL_Describe_Prepared_Info;
 class PgSQL_Bind_Info;
+class PgSQL_Backend_Protocol;
 //#define STATUS_PGSQL_CONNECTION_SEQUENCE			 0x00000001
 #define STATUS_PGSQL_CONNECTION_COMPRESSION          0x00000002
 #define STATUS_PGSQL_CONNECTION_USER_VARIABLE        0x00000004
@@ -492,35 +496,71 @@ public:
 	void ProcessQueryAndSetStatusFlags(const char* query_digest_text, int savepoint_count);
 
 	inline const PGconn* get_pg_connection() const { return pgsql_conn; }
-	inline int get_pg_server_version() { return PQserverVersion(pgsql_conn); }
-	inline int get_pg_protocol_version() { return PQprotocolVersion(pgsql_conn); }
-	inline const char* get_pg_host() { return PQhost(pgsql_conn); }
+	inline int get_pg_server_version() {
+		if (native_mode) {
+			// native_params["server_version"] is e.g. "16.2" or "9.6.1"; libpq encodes
+			// PQserverVersion as major*10000 + minor*100 + rev. Parse best-effort.
+			auto it = native_params.find("server_version");
+			if (it == native_params.end()) return 0;
+			int maj = 0, min = 0, rev = 0;
+			sscanf(it->second.c_str(), "%d.%d.%d", &maj, &min, &rev);
+			return maj * 10000 + min * 100 + rev;
+		}
+		return PQserverVersion(pgsql_conn);
+	}
+	inline int get_pg_protocol_version() { return native_mode ? 3 : PQprotocolVersion(pgsql_conn); }
+	inline const char* get_pg_host() { return native_mode ? native_host.c_str() : PQhost(pgsql_conn); }
 	inline const char* get_pg_hostaddr() { return PQhostaddr(pgsql_conn); }
 	inline const char* get_pg_port() { return PQport(pgsql_conn); }
-	inline const char* get_pg_dbname() { return PQdb(pgsql_conn); }
-	inline const char* get_pg_user() { return PQuser(pgsql_conn); }
+	inline const char* get_pg_dbname() { return native_mode ? (userinfo ? userinfo->dbname : "") : PQdb(pgsql_conn); }
+	inline const char* get_pg_user() { return native_mode ? (userinfo ? userinfo->username : "") : PQuser(pgsql_conn); }
 	inline const char* get_pg_password() { return PQpass(pgsql_conn); }
 	inline const char* get_pg_options() { return PQoptions(pgsql_conn); }
-	inline int get_pg_socket_fd() { return PQsocket(pgsql_conn); }
-	inline int get_pg_backend_pid() { return PQbackendPID(pgsql_conn); }
+	inline int get_pg_socket_fd() { return native_mode ? fd : PQsocket(pgsql_conn); }
+	inline int get_pg_backend_pid() { return native_mode ? native_backend_pid : PQbackendPID(pgsql_conn); }
 	inline int get_pg_connection_needs_password() { return PQconnectionNeedsPassword(pgsql_conn); }
 	inline int get_pg_connection_used_password() { return PQconnectionUsedPassword(pgsql_conn); }
 	inline int get_pg_connection_used_gssapi() { return PQconnectionUsedGSSAPI(pgsql_conn); }
 	inline int get_pg_client_encoding() { return PQclientEncoding(pgsql_conn); }
-	inline int get_pg_ssl_in_use() { return PQsslInUse(pgsql_conn); }
-	inline ConnStatusType get_pg_connection_status() { return PQstatus(pgsql_conn); }
-	inline PGTransactionStatusType get_pg_transaction_status() { return PQtransactionStatus(pgsql_conn); }
-	inline int get_pg_is_nonblocking() { return PQisnonblocking(pgsql_conn); }
+	// Native TLS (1.6b): SSL is in use once the handshake handed the SSL* to myds.
+	// Out-of-line in PgSQL_Connection.cpp because PgSQL_Data_Stream is incomplete here.
+	int get_pg_ssl_in_use();
+	inline ConnStatusType get_pg_connection_status() {
+		if (native_mode) return native_connected ? CONNECTION_OK : CONNECTION_BAD;
+		return PQstatus(pgsql_conn);
+	}
+	inline PGTransactionStatusType get_pg_transaction_status() {
+		if (native_mode) {
+			switch (native_txn_status) {
+				case 'I': return PQTRANS_IDLE;
+				case 'T': return PQTRANS_INTRANS;
+				case 'E': return PQTRANS_INERROR;
+				default:  return PQTRANS_UNKNOWN;
+			}
+		}
+		return PQtransactionStatus(pgsql_conn);
+	}
+	inline int get_pg_is_nonblocking() { return native_mode ? 1 : PQisnonblocking(pgsql_conn); }
 	inline int get_pg_is_threadsafe() { return PQisthreadsafe(); }
-	inline const char* get_pg_error_message() { return PQerrorMessage(pgsql_conn); }
-	inline SSL* get_pg_ssl_object() { return (SSL*)PQsslStruct(pgsql_conn, "OpenSSL"); }
-	inline const char* get_pg_parameter_status(const char* param) { return PQparameterStatus(pgsql_conn, param); }
+	inline const char* get_pg_error_message() {
+		return native_mode ? (error_info.message.empty() ? "" : error_info.message.c_str()) : PQerrorMessage(pgsql_conn);
+	}
+	// Out-of-line in PgSQL_Connection.cpp (PgSQL_Data_Stream incomplete here).
+	SSL* get_pg_ssl_object();
+	inline const char* get_pg_parameter_status(const char* param) {
+		if (native_mode) {
+			if (param == nullptr) return nullptr;
+			auto it = native_params.find(param);
+			return it == native_params.end() ? nullptr : it->second.c_str();
+		}
+		return PQparameterStatus(pgsql_conn, param);
+	}
 	const char* get_pg_server_version_str(char* buff, int buff_size);
 	const char* get_pg_connection_status_str();
 	const char* get_pg_transaction_status_str();
 	unsigned int get_memory_usage() const;
 	char get_transaction_status_char();
-	inline int get_backend_pid() { return (pgsql_conn) ? get_pg_backend_pid() : -1; }
+	inline int get_backend_pid() { return native_mode ? native_backend_pid : ((pgsql_conn) ? get_pg_backend_pid() : -1); }
 	bool is_pipeline_active() { return (PQpipelineStatus(pgsql_conn) != PQ_PIPELINE_OFF); }
 	const char* get_pg_backend_state() const;
 
@@ -630,6 +670,206 @@ public:
 	PgSQL_Conn_Param conn_params;
 	PgSQL_ErrorInfo error_info;
 	PGconn* pgsql_conn;
+	bool native_mode = false;          // true → native wire protocol, false → libpq
+	class PgSQL_Backend_Protocol* bp = NULL;  // owned in native mode only; NULL in libpq mode
+
+	// --- Native backend connect/auth handshake state (Task 1.6a, plaintext only) ---
+	// All of the following members are only meaningful when native_mode == true.
+	enum class PG_Native_Conn_St {
+		TCP_CONNECTING,   // non-blocking connect() in flight, waiting for writable
+		SSL_SEND_REQUEST, // socket connected, SSLRequest (8 bytes) to flush (TLS only)
+		SSL_READ_REPLY,   // waiting for the single-byte 'S'/'N' SSLRequest reply
+		SSL_HANDSHAKE,    // driving the OpenSSL client handshake over the raw fd
+		SEND_STARTUP,     // socket connected, StartupMessage (and pending bytes) to flush
+		AUTH,             // exchanging Authentication* / Password / SASL messages
+		STARTUP_TAIL,     // consuming ParameterStatus/BackendKeyData until ReadyForQuery
+		DONE,             // ReadyForQuery received; connection usable
+		FAILED            // unrecoverable error during the native handshake
+	};
+	PG_Native_Conn_St native_st = PG_Native_Conn_St::TCP_CONNECTING;
+	// When an outbound message is only partially sent, native_st is set to
+	// SEND_STARTUP to flush the remainder; this records the state to resume in
+	// once the buffer drains (AUTH after a password/SASL message, etc.).
+	PG_Native_Conn_St native_st_after_send = PG_Native_Conn_St::AUTH;
+	PgSQL_Backend_Msg_Framer native_framer;          // frames inbound backend bytes
+	PgSQL_Scram_State* native_scram = nullptr;       // owned; freed in destructor / teardown
+	std::string native_outbuf;                       // pending outbound bytes (partial send buffer)
+	bool native_connected = false;                   // true once ReadyForQuery received
+	bool handler_first_call = true;                  // one-shot first-call detector for handler() (both libpq and native paths)
+	std::map<std::string, std::string> native_params; // ParameterStatus name->value
+	std::string native_host;                         // backend host (parent->address, captured at connect)
+	int native_backend_pid = 0;                      // BackendKeyData PID
+	int native_backend_secret = 0;                   // BackendKeyData secret key
+	char native_txn_status = 'I';                    // ReadyForQuery status byte ('I'/'T'/'E')
+
+	// --- Native simple-query / simple-command execution (Task 1.6c / Phase 2 core) ---
+	// Set true once a ReadyForQuery ('Z') has been consumed for the in-flight query,
+	// signalling the result stream is complete. Reset at query_start().
+	bool native_result_complete = false;
+	// Set true once a CopyInResponse ('G') or CopyBothResponse ('W') has been
+	// answered with a CopyFail by the native_fetch_result_cont() safety net
+	// (see there). Reset at query_start() alongside native_result_complete.
+	bool native_copy_intercepted = false;
+
+	// --- Native extended-query (prepared-statement) drive (Task C) ---
+	// Which extended-query wire step the native drive is currently executing. Set by
+	// stmt_prepare_start / stmt_describe_start / stmt_execute_start, consumed by
+	// native_fetch_result_cont() to apply the per-step terminator + ack-filtering
+	// rules. Reset to NONE alongside native_result_complete at each stmt start.
+	// APPEND-ONLY (values are compared by the drain/ack-filter; a mid-list insert
+	// would silently reclassify steps in any translation unit not recompiled). CLOSE_P
+	// (Task P2) drives a real backend Close('P', name) round-trip whose CloseComplete
+	// '3' is forwarded to the client.
+	enum class PG_Native_Stmt_Step { NONE, PARSE, DESCRIBE_S, DESCRIBE_P, EXECUTE, BIND, CLOSE_P };
+	PG_Native_Stmt_Step native_stmt_step = PG_Native_Stmt_Step::NONE;
+	// True when the current ASYNC_STMT_EXECUTE_* dispatch is actually a named-portal
+	// Bind (PGSQL_EXTENDED_QUERY_TYPE_BIND), so stmt_execute_start() emits a Bind-only
+	// frame (no Execute) and the drain forwards the real BindComplete. Set per-dispatch
+	// in async_query(); read once at stmt_execute_start(). Task P1.
+	bool native_bind_only = false;
+	// True when the current ASYNC_STMT_EXECUTE_* dispatch is actually a named-portal
+	// Close (PGSQL_EXTENDED_QUERY_TYPE_CLOSE), so stmt_execute_start() emits a
+	// Close('P', portal)-only frame (no Bind/Execute) and the drain forwards the real
+	// CloseComplete '3'. Set per-dispatch in async_query(); read once at
+	// stmt_execute_start(). Task P2.
+	bool native_close_only = false;
+	// Set by the drain when a native EXECUTE step's terminator was 's' (PortalSuspended
+	// — max_rows cut the result short); cleared when it was 'C'/'I' (the portal ran to
+	// completion). Read once by the session epilogue to mark/clear a NAMED portal's
+	// entry.suspended for resume. Reset at each native stmt start. Task P2.
+	bool native_last_execute_suspended = false;
+	// True when the step was terminated on the wire with Sync (so it completes on the
+	// backend's ReadyForQuery 'Z'); false when terminated with Flush (completes on the
+	// step's own terminator: '1' for PARSE, 'T'|'n' for DESCRIBE, 'C'|'I'|'s' for
+	// EXECUTE — the backend sends no 'Z' until a later Sync).
+	bool native_stmt_sync_terminated = false;
+	// True for an implicit Parse (IMPLICIT_PREPARE detour): the client never issued a
+	// Parse, so the backend's ParseComplete '1' must be suppressed (never forwarded).
+	bool native_suppress_parse_complete = false;
+	// Set true once native_fetch_result_cont() has injected a Sync to recover from an
+	// ErrorResponse mid-frame on a Flush-terminated step. After 'E' the backend is in
+	// the aborted-until-Sync state and emits no 'Z' on its own; the injected Sync
+	// brings it back to ReadyForQuery so the drain can complete and the session's
+	// error path can run. Guards against injecting a second Sync while draining to 'Z'.
+	bool native_stmt_error_resync = false;
+	// True once the injected-Sync recovery proxy_warning has been emitted on this
+	// connection. Deliberately NOT reset in native_stmt_reset_step() — the warning
+	// fires at most once per backend-connection lifetime, so a client habitually
+	// sending Parse-time-invalid SQL (PQexecParams in a loop) cannot flood the
+	// production log at WARNING level (the libpq oracle path logs nothing for the
+	// same event). The recovery itself (native_stmt_error_resync) still runs on
+	// every errored step; only the log line is deduplicated.
+	bool native_stmt_resync_logged = false;
+	// --- Statement-level Describe metadata capture (set-once, native mode) ---
+	// During a DESCRIBE_S step the drain copies the ParameterDescription 't' body and
+	// the RowDescription 'T' / NoData 'n' state here; on step completion (its 'T'|'n'
+	// terminator for a Flush-terminated Describe, or the 'Z' for a Sync-terminated one)
+	// native_publish_describe_cache() publishes them to the global statement's set-once
+	// cache. Backend-origin bytes, byte-identical to the libpq-mode rebuild. Cleared at
+	// each stmt start; a step that errors before 't' leaves param empty → no publish.
+	std::string native_describe_param_payload;
+	std::string native_describe_row_payload;
+	bool native_describe_have_row = false;
+	bool native_describe_no_data = false;
+	// Publish the captured statement-level Describe metadata to the global statement's
+	// set-once cache, iff a complete 't' + ('T'|'n') was captured on this DESCRIBE_S step.
+	void native_publish_describe_cache();
+	// Reset all per-step native stmt drive state. Called at each native stmt start.
+	// (native_stmt_resync_logged is intentionally absent: per-connection, not per-step.)
+	inline void native_stmt_reset_step() {
+		native_result_complete = false;
+		native_copy_intercepted = false;
+		native_stmt_step = PG_Native_Stmt_Step::NONE;
+		native_last_execute_suspended = false;
+		native_stmt_sync_terminated = false;
+		native_suppress_parse_complete = false;
+		native_stmt_error_resync = false;
+		native_describe_param_payload.clear();
+		native_describe_row_payload.clear();
+		native_describe_have_row = false;
+		native_describe_no_data = false;
+		native_framer.reset();
+		native_outbuf.clear();
+	}
+	// Drive the native result fetch: recv backend bytes, frame them, and stream each
+	// raw message into query_result via add_native_backend_message(). Non-blocking:
+	// EAGAIN/incomplete frame → async_exit_status = PG_EVENT_READ and return; a fatal
+	// recv/frame error sets error_info and marks the fetch done. Sets
+	// native_result_complete when ReadyForQuery is reached.
+	void native_fetch_result_cont(short event);
+	// Flush the just-built extended-query step in native_outbuf and set
+	// async_exit_status the way the stmt_*_start callers expect: PG_EVENT_WRITE while
+	// bytes remain buffered (caller waits for POLLOUT), PG_EVENT_NONE once fully sent
+	// (caller proceeds straight to the result fetch). Sets error_info on a fatal send.
+	void native_stmt_send_or_wait();
+	// Finish flushing a partially-sent extended-query step on a POLLOUT re-entry.
+	void native_stmt_flush_cont();
+
+	// --- Native backend TLS (Task 1.6b) ---
+	// native_ssl_requested is set in native_connect_start() when SSL is wanted for
+	// this backend (parent->use_ssl). When true the handshake takes the
+	// SSL_SEND_REQUEST -> SSL_READ_REPLY -> SSL_HANDSHAKE path before SEND_STARTUP,
+	// and all subsequent native I/O is funneled through SSL_read/SSL_write against
+	// myds->ssl (BIO-mem model, pumped to/from `fd` by native_send_or_buffer /
+	// native_recv_into_framer). When false the plaintext 1.6a path is used verbatim.
+	bool native_ssl_requested = false;
+	// SSL verification mode derived from the backend config. Mirrors the libpq
+	// sslmode semantics so native TLS honors the same policy as the libpq path.
+	enum class PG_Native_SSL_Mode {
+		DISABLE,      // no SSL at all (native_ssl_requested == false)
+		REQUIRE,      // encrypt, do NOT verify (matches libpq sslmode=require)
+		VERIFY_CA,    // encrypt + verify chain to CA, no hostname check
+		VERIFY_FULL   // encrypt + verify chain + hostname (X509 host check)
+	};
+	PG_Native_SSL_Mode native_ssl_mode = PG_Native_SSL_Mode::DISABLE;
+	// Pending raw ciphertext awaiting send() to the fd (connect phase only). When
+	// SSL_write/SSL_do_handshake produces bytes into wbio_ssl faster than the socket
+	// drains, the remainder parks here so the next writable event flushes it. Kept
+	// distinct from native_outbuf (which holds *plaintext* protocol bytes).
+	std::string native_ssl_outbuf;
+	// Owned per-connection client SSL_CTX (TLS_client_method()). Freed in
+	// native_teardown() and the destructor. nullptr in plaintext mode.
+	SSL_CTX* native_ssl_ctx = nullptr;
+
+	// Native handshake helpers (implemented in PgSQL_Connection.cpp). They drive the
+	// sub-state machine above and never block: every recv()/send() handles EAGAIN by
+	// setting async_exit_status and returning to the event loop.
+	void native_connect_start();
+	void native_connect_cont(short event);
+	void native_drive_auth(short event);             // AUTH sub-state: Authentication* exchange
+	void native_drive_startup_tail(short event);     // post-auth: ParamStatus/KeyData/ReadyForQuery
+	bool native_flush_outbuf();                      // returns false on fatal send error
+	// Queue an outbound message and try to flush it. If it can't all go out now,
+	// parks in SEND_STARTUP and resumes in `resume_st` once drained. Returns false
+	// on fatal send error (caller should teardown + return).
+	bool native_send_or_buffer(PG_Native_Conn_St resume_st);
+	// Non-blocking recv() into the framer. Returns: 1 = got bytes (or already had
+	// buffered), 0 = EAGAIN (caller should wait for READ), -1 = EOF/fatal.
+	int native_recv_into_framer();
+	void native_teardown();                          // close fd, free scram (capability gap / failure)
+	void native_capability_gap(const char* mechanism); // tear down native, restart via libpq
+	// Parse an ErrorResponse ('E') payload into error_info.
+	void native_fill_error_from_E(const unsigned char* payload, uint32_t len);
+
+	// --- Native backend TLS helpers (Task 1.6b). All non-blocking. ---
+	// Drive the SSL_HANDSHAKE sub-state: pump bytes between the mem BIOs and the raw
+	// fd, calling SSL_do_handshake(). Returns: 1 = handshake complete, 0 = need more
+	// I/O (async_exit_status already set, caller returns), -1 = fatal (error_info set,
+	// teardown done). On success the connection moves on to SEND_STARTUP over TLS.
+	int native_drive_ssl_handshake();
+	// Build/obtain a TLS_client_method() SSL_CTX configured from the backend SSL
+	// params for this server (CA, client cert/key, CRL, min proto version, verify
+	// mode). Returns a per-connection SSL_CTX the caller owns, or nullptr on error.
+	SSL_CTX* native_create_client_ssl_ctx();
+	// Pump any plaintext bytes SSL has buffered in wbio_ssl out to the raw fd.
+	// Returns true on success (all flushed, or EAGAIN with bytes still buffered),
+	// false on a fatal write error. Used by the encrypted native_flush_outbuf path.
+	bool native_ssl_pump_wbio_to_fd(bool& would_block);
+	// Build + queue the StartupMessage and advance toward AUTH. Works for both the
+	// plaintext path and the post-handshake TLS path (native_send_or_buffer routes
+	// through SSL_write when myds->encrypted). On a fatal error it sets error_info
+	// and returns false (caller does the teardown). Returns true otherwise.
+	bool native_send_startup();
 	uint8_t result_type;
 	PGresult* pgsql_result;
 	PSresult  ps_result;
@@ -741,6 +981,15 @@ public:
 	int backend_pid;
 	unsigned int hostgroup_id;
 	TYPE type;
+
+	// Native-mode cancellation. When native_mode is true the backend connection
+	// has no libpq handle (cancel_conn is NULL), so CANCEL_QUERY is served by
+	// opening a fresh blocking TCP connection to hostname:port and sending a raw
+	// 16-byte CancelRequest carrying (backend_pid, native_secret_key). For
+	// TERMINATE_CONNECTION, backend_pid is set to the real backend PID captured
+	// from BackendKeyData so the libpq pg_terminate_backend() path works too.
+	bool native_mode = false;
+	int native_secret_key = 0;
 
 	// SSL options
 	struct SSLConfig {

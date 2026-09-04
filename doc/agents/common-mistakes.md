@@ -280,3 +280,35 @@ git diff --name-only --diff-filter=U
 # Unrelated files changed?
 gh pr diff <PR> | grep "^+++ b/" | grep -v "<expected_files_pattern>"
 ```
+
+---
+
+## 16. TAP-Infra Build/Deploy Hazards (debug-only, bind-mounted binary, shared object dir)
+
+**Symptoms** (each observed live, 2026-07): every TAP test fails at `LOAD DEBUG FROM DISK`; the proxysql binary fails to link with `undefined reference to ...run_tests()`; a mid-run test suite aborts with the admin connection dropping for no visible reason; a test run silently exercises last week's code.
+
+**Root causes — four independent traps that compound:**
+
+1. **The TAP harness requires a DEBUG build.** `admin-debug`, `debug_levels`, and `LOAD DEBUG` are `#ifdef DEBUG`-gated; a release binary fails every test at harness init. Build with `make debug -j$(nproc)` (the lib/src sub-makes do NOT inherit parallelism from plain `make debug`).
+2. **`lib/obj/*.oo` is shared between release and debug flavors.** Switching flavors without `make clean` produces a mixed archive that fails at link (missing DEBUG-only symbols) or worse. One flavor per checkout; `make clean` when switching — and note `make clean` also deletes every TAP test binary (`make build_tap_test_debug` to restore).
+3. **The proxysql container FILE-bind-mounts `$WORKSPACE/src/proxysql`.** Two consequences: (a) after any rebuild you must `docker restart proxysql.<INFRA_ID>` or tests exercise the stale in-memory binary; (b) NEVER rebuild while a test run is live — the linker truncates the mapped inode in place and corrupts the running server's text pages (manifests as inexplicable mid-run connection loss).
+4. **Header-touching rebuilds have no dependency tracking.** After editing a widely-included header (enum/struct changes), stale objects can misbehave at runtime rather than fail to build (e.g. a renumbered enum crashing via a stale lookup table). If symptoms look impossible, `make clean` and rebuild before debugging further.
+
+**Prevention:** one build flavor per checkout (use a separate worktree for the other flavor); rebuild → `docker restart` → then test, never overlapping; treat "impossible" runtime behavior after header edits as a stale-object signal first.
+
+---
+
+## 17. Shared/Misprovisioned Test Infra (INFRA_ID collisions, INFRA type-vs-id, stale containers)
+
+**Symptoms:** tests fail with `Unknown global variable` for a variable your branch definitely has; `FATAL: User not found` on every pgsql connection; backend hostname `pgsql1.<something>` unresolvable; another session's binary appears in your container.
+
+**Root causes:**
+
+1. **`INFRA_ID` is a shared namespace.** The conventional `INFRA_ID=dev-$USER` collides across worktrees/sessions of the same user: `ensure-infras.bash` reuses a running `proxysql.<INFRA_ID>` container even if it is bind-mounted from a *different worktree*. Use a per-effort id (e.g. `dev-$USER-<feature>`).
+2. **`INFRA` is the infra TYPE, not the infra id.** Scripts like `docker-pgsql16-single/bin/docker-proxy-post.bash` build the backend hostname as `pgsql1.${INFRA}` — the resolvable compose alias is `pgsql1.docker-pgsql16-single`. Hand-exporting `INFRA=<your INFRA_ID>` writes an unresolvable hostname into the persisted admin DB, which then survives container recreation.
+3. **`docker start` on an exited proxysql container skips provisioning.** The users/servers config is applied by the post scripts, not baked into the container; recreate via `ensure-infras.bash` / `start-proxysql-isolated.bash`, never bare `docker start`.
+4. Hand-running post scripts needs the full env: `COMPOSE_PROJECT`, `INFRA` (type), `ROOT_PASSWORD=$(echo -n "$INFRA_ID" | sha256sum | head -c 10)`, run from the infra directory (they source `./constants`).
+
+**Detection:** `docker inspect proxysql.<INFRA_ID> --format '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}'` shows whose worktree the binary comes from; `SELECT hostname FROM pgsql_servers` via admin shows a poisoned backend hostname.
+
+**Useful:** `TEST_PY_TAP_INCL=<regex>` runs a subset through `run-tests-isolated.bash` without the full group.

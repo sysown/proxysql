@@ -52,6 +52,9 @@
 class ProxySQL_Admin;
 struct PgCredentials;
 struct ScramState;
+class PgSQL_STMT_Global_info;
+struct PgSQL_Describe_Cache;
+
 // Auth-method selection: map the floor (pgsql-authentication_method;
 // 1=cleartext, 2=md5, 3=scram) + the user's stored secret type (a PasswordType, as int) to the
 // AUTHENTICATION_METHOD to challenge with (as int); *reject=true when the stored secret is too weak
@@ -309,6 +312,15 @@ struct ColumnMetadata {
 #define PGSQL_QUERY_RESULT_EMPTY	0x10
 #define PGSQL_QUERY_RESULT_COPY_OUT	0x20
 #define PGSQL_QUERY_RESULT_NOTICE	0x40
+// Set for a bare per-step acknowledgement that carries no other content:
+// ParseComplete ('1'), NoData ('n'), PortalSuspended ('s'). These terminate a
+// Flush-terminated native stmt-step (mid-frame extended query, e.g. a single
+// PQsendQueryParams round trip) on their own, with no 'T'/'D'/'C'/'Z' message
+// alongside them to otherwise mark the result non-empty. Without this flag,
+// PgSQL_Result_to_PgSQL_wire() sees result_packet_type == PGSQL_QUERY_RESULT_NO_DATA
+// and mistakes a successful bare-ack step for "no result, must be a connection
+// error", tripping its assert.
+#define PGSQL_QUERY_RESULT_ACK	0x80
 
 class PgSQL_Query_Result {
 public:
@@ -454,6 +466,27 @@ public:
 	 */
 	unsigned int add_ready_status(PGTransactionStatusType txn_status);
 
+	/**
+	 * @brief Stream a raw native backend message into the query result.
+	 *
+	 * Native backend protocol path (Task 1.6c / Phase 2). The backend→frontend
+	 * messages 'T'/'D'/'C'/'I'/'E'/'N'/'S'/'Z'/'A' (and COPY) are byte-for-byte
+	 * the same wire messages ProxySQL forwards to the client, so this method
+	 * reconstructs the raw message (type byte + big-endian int32 length + payload)
+	 * and appends it directly to the result buffer — no intermediate PGresult.
+	 *
+	 * It also updates the result flags/counters and the owning connection's
+	 * side-effect state (error_info, native_txn_status, native_params) per the
+	 * message type, mirroring the libpq add_* helpers.
+	 *
+	 * @param type        The backend message type byte.
+	 * @param payload     The message body (everything AFTER the 4-byte length).
+	 * @param payload_len The length of @p payload in bytes.
+	 *
+	 * @return The number of bytes appended to the query result.
+	 */
+	unsigned int add_native_backend_message(char type, const unsigned char* payload, uint32_t payload_len);
+
     /**
      * @brief Adds the start of a COPY OUT response to the packet.
      *
@@ -536,7 +569,8 @@ public:
     * @return The number of bytes added to the query result.
     *
     */
-    unsigned int add_describe_completion(const PGresult* result, uint8_t stmt_type);
+    unsigned int add_describe_completion(const PGresult* result, uint8_t stmt_type,
+        const PgSQL_STMT_Global_info* stmt_info_for_cache = nullptr);
 
 	/**
 	 * @brief Retrieves the query result set and copies it to a PtrSizeArray.
@@ -822,6 +856,14 @@ public:
 	bool generate_bind_completion_packet(bool send, bool ready, char trx_state, PtrSize_t* _ptr = NULL);
 	bool generate_no_data_packet(bool send, PtrSize_t* _ptr = NULL);
 
+	// Serve a statement-level Describe response from the set-once metadata cache,
+	// byte-identical to a backend round-trip: ParameterDescription 't' followed by
+	// RowDescription 'T' (or NoData 'n'), then — when `ready` — a ReadyForQuery 'Z'.
+	// Payloads are the raw wire bodies stored in `cache`; each is re-framed as
+	// type-byte + be32(len+4) + payload. No backend dispatch is involved.
+	bool generate_describe_from_cache(bool send, bool ready, char trx_state,
+		const PgSQL_Describe_Cache* cache, PtrSize_t* _ptr = NULL);
+
 	// temporary overriding generate_pkt_OK to avoid crash. FIXME remove this
 	bool generate_pkt_OK(bool send, void** ptr, unsigned int* len, uint8_t sequence_id, unsigned int affected_rows, 
 		uint64_t last_insert_id, uint16_t status, uint16_t warnings, char* msg, bool eof_identifier = false) {
@@ -1090,8 +1132,8 @@ public:
 	 * @return The number of bytes copied to the `PgSQL_Query_Result` object.
 	 *
 	 */
-	unsigned int copy_describe_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, 
-		const PGresult* result, uint8_t stmt_type);
+	unsigned int copy_describe_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result,
+		const PGresult* result, uint8_t stmt_type, const PgSQL_STMT_Global_info* stmt_info_for_cache = nullptr);
 
 private:
 
