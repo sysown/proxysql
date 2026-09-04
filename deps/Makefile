@@ -447,8 +447,9 @@ pcre2/pcre2/.libs/libpcre2-8.a:
 	cd pcre2/pcre2 && CC=${CC} CXX=${CXX} ${MAKE} libpcre2-8.la
 
 pcre2: pcre2/pcre2/.libs/libpcre2-8.a
-postgresql/postgresql/src/interfaces/libpq/libpq.a: $(OPENSSL_BUILD_STAMP)
-	cd postgresql && rm -rf postgresql-*/ || true
+postgresql/postgresql/src/interfaces/libpq/libpq.a: $(OPENSSL_BUILD_STAMP) \
+		postgresql/postgresql-16.10.tar.gz $(wildcard postgresql/*.patch)
+	cd postgresql && rm -rf postgresql-*/ postgres-*/ || true
 	cd postgresql && tar -zxf postgresql-*.tar.gz
 	cd postgresql/postgresql && patch -p0 < ../get_result_from_pgconn.patch
 	cd postgresql/postgresql && patch -p0 < ../handle_row_data.patch
@@ -456,6 +457,7 @@ postgresql/postgresql/src/interfaces/libpq/libpq.a: $(OPENSSL_BUILD_STAMP)
 	cd postgresql/postgresql && patch -p0 < ../bind_fmt_text.patch
 	cd postgresql/postgresql && patch -p0 < ../pqsendpipelinesync.patch
 	cd postgresql/postgresql && patch -p0 < ../sslkeylogfile.patch
+	cd postgresql/postgresql && patch -p0 < ../scram_verifier_auth.patch
 ifeq ($(UNAME_S),Darwin)
 	cd postgresql/postgresql && LIBS="$(OPENSSL_STATIC_LIBS)" LDFLAGS="-L$$(brew --prefix icu4c)/lib -L$(SSL_LDIR)" CPPFLAGS="-I$$(brew --prefix icu4c)/include" PKG_CONFIG_PATH="$$(brew --prefix icu4c)/lib/pkgconfig:$$PKG_CONFIG_PATH" ./configure --with-ssl=openssl --with-includes="$(SSL_IDIR)" --with-libraries="$(SSL_LDIR)" --without-readline --with-icu
 else
