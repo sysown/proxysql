@@ -1501,7 +1501,7 @@ bool PgSQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int* _rc, co
 
 		NEXT_IMMEDIATE_NEW(st);
 	} else {
-		if (rc == -1) {
+		if (rc == -1 || rc == -2) {
 			// the command failed
 			bool error_present = myconn->is_error_present();
 			PgHGM->p_update_pgsql_error_counter(
@@ -1515,9 +1515,19 @@ bool PgSQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int* _rc, co
 				bool retry_conn = false;
 				// client error, serious
 				detected_broken_connection(__FILE__, __LINE__, __func__, "while setting ", myconn);
-				if ((myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false &&
-					myds->myconn->is_pipeline_active() == false) {
-					retry_conn = true;
+				// rc == -2: the backend answered a simple command with a RESULTSET.
+				// Nothing is wrong with the connection, so retrying only repeats
+				// the same reply. Worse, async_send_simple_command() returns
+				// -2 WITHOUT clearing query_result, so a caller that neither fails
+				// nor retries re-enters, re-detects the same resultset and re-logs:
+				// one client query produced 785k log lines before this was handled.
+				// Terminate the session instead, exactly as
+				// handler_again___status_SETTING_INIT_CONNECT() already does.
+				if (rc != -2) {
+					if ((myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false &&
+						myds->myconn->is_pipeline_active() == false) {
+						retry_conn = true;
+					}
 				}
 				myds->destroy_MySQL_Connection_From_Pool(false);
 				myds->fd = 0;
