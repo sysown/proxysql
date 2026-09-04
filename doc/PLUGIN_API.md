@@ -59,17 +59,19 @@ field and only enabled when the plugin declares ABI version 2 or higher.
    tables it owns, its admin commands, and any admin-side runtime
    views it wants the chassis to project from module state; it MUST
    NOT touch DB handles here.  Plugins that leave `register_schemas`
-   null (or that declare ABI 1) skip this phase entirely and do all
-   their setup in Phase D.
+   null (or that declare ABI 1) skip this phase entirely. Such plugins
+   cannot declare persistent `config_db` tables; plugins that do must use
+   ABI 2+ and `register_schemas`. Other setup remains valid in Phase D.
 3. **Phase C — admin materialization.**  The admin module initializes
    and materializes the SQLite schemas collected during Phase B
    (`merge_plugin_tables` + `CREATE TABLE`).  On DDL failure ProxySQL
    aborts startup.
 4. **Phase D — init.**  The plugin's `init()` callback is called,
    receiving a fully live `ProxySQL_PluginServices` (DB handles now
-   valid).  Plugins that opted out of Phase B register their tables
-   AND commands here; plugins that used Phase B only finish their
-   context setup.
+   valid). Commands, hooks, runtime callbacks, and non-persistent tables may
+   be registered here, but `config_db` table registration is rejected because
+   disk restoration has already run. Plugins that used Phase B finish their
+   context setup here.
 5. **Phase E — start.**  The plugin's `start()` callback is called.
    The plugin should start its threads, open listener sockets, and
    load runtime configuration.  After this returns, ProxySQL is ready
@@ -116,7 +118,7 @@ struct ProxySQL_PluginDescriptor {
 |--------------------|---------------|-----------------------------------------------------------|
 | `name`             | `const char*` | Plugin identifier, used in logging.                        |
 | `abi_version`      | `uint32_t`    | Set from `PROXYSQL_PLUGIN_ABI_VERSION`. Value `1` is the pre-chassis descriptor; `2` adds `register_schemas`; `3` adds `register_runtime_view`; `4` appends `db_kind` to runtime views; `5` appends optional Admin-mutex handoff callbacks to `ProxySQL_PluginCommandContext`. The current PROXYSQL40 core accepts `[1, 5]`. |
-| `init`             | callback      | Phase D — called with live services; register tables and commands here (or finish context setup if `register_schemas` already did it). |
+| `init`             | callback      | Phase D — called with live services; register commands/hooks and finish context setup here. Persistent `config_db` tables must have been declared through `register_schemas` in Phase B. |
 | `start`            | callback      | Phase E — start threads, open sockets, load config.        |
 | `stop`             | callback      | Called on shutdown.  Pairs with `init`, not `start`: if `init` returned true and `start` later failed, `stop` is still called so the plugin can release resources it allocated in `init`. |
 | `status_json`      | callback      | Return a static JSON string describing plugin status.      |
@@ -180,7 +182,9 @@ void register_table(const ProxySQL_PluginTableDef &def);
 ```
 
 Register a SQLite table in one of ProxySQL's databases. Tables are created
-automatically before `start()` is called.
+automatically before `start()` is called. Persistent `config_db` registrations
+are accepted only during Phase B `register_schemas`; calls from `init()` are
+rejected because automatic disk restoration has already run.
 
 ```cpp
 struct ProxySQL_PluginTableDef {

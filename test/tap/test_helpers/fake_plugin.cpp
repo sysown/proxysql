@@ -186,6 +186,16 @@ bool fake_init(ProxySQL_PluginServices *services) {
 		};
 		services->register_table(table);
 	}
+	if (env("REGISTER_CONFIG_TABLE") != nullptr &&
+	    services != nullptr &&
+	    services->register_table != nullptr) {
+		const ProxySQL_PluginTableDef table {
+			ProxySQL_PluginDBKind::config_db,
+			FAKE_PLUGIN_NAME "_late_config_table",
+			"CREATE TABLE " FAKE_PLUGIN_NAME "_late_config_table (id INTEGER)"
+		};
+		services->register_table(table);
+	}
 #ifdef PROXYSQL40
 	if (env("REGISTER_QUERY_HOOK") != nullptr &&
 	    services != nullptr &&

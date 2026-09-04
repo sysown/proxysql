@@ -260,8 +260,9 @@ using proxysql_plugin_register_runtime_view_cb =
 //       - register_query_hook:       RETURNS false (not yet wired).
 //       - snapshots:                 RETURN nullptr (see below).
 //   * init (Phase D): register_*, log_message, get_*db and
-//     get_prometheus_registry are LIVE.  Snapshot getters remain stubs —
-//     see the note below.
+//     get_prometheus_registry are LIVE, except persistent config_db table
+//     registration is rejected because automatic disk restoration has
+//     already run. Snapshot getters remain stubs — see the note below.
 //   * start (Phase E) and beyond: get_*db, log_message,
 //     get_prometheus_registry remain valid; register_* are no-ops (ignored
 //     with a warning — schemas must be declared before start).
@@ -344,10 +345,9 @@ using proxysql_plugin_status_json_cb =
 //   Phase D: init()             -- plugin runs startup logic with full services
 //   Phase E: start()            -- plugin launches its threads / accept loops
 //
-// This callback is optional (may be nullptr).  Plugins that leave it null
-// keep the pre-existing two-phase behavior: Phase B is skipped and the
-// plugin's init() is responsible for both schema registration and startup
-// work (the mysqlx plugin does this today).
+// This callback is optional (may be nullptr) for plugins without persistent
+// config_db tables. Plugins that own such tables must provide it: after Phase C,
+// config_db registration from init() is rejected because Admin cannot restore it.
 using proxysql_plugin_register_schemas_cb =
 	bool (*)(ProxySQL_PluginServices *);
 #endif /* PROXYSQL40 */

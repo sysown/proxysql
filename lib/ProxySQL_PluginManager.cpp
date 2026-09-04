@@ -47,6 +47,7 @@ std::shared_mutex g_active_plugin_manager_mutex {};
 std::mutex g_plugin_lifecycle_mutex {};
 bool g_registry_registration_failed = false;
 std::string g_registry_registration_error {};
+bool g_registry_accepts_config_table_registration = false;
 
 // RAII guard that sets g_registry_target to `mgr` on construction and
 // clears it on destruction.  Also resets the registration-failure sticky
@@ -55,15 +56,17 @@ std::string g_registry_registration_error {};
 // plugin can't leave the registry globals dirty and break the next
 // phase's `assert(g_registry_target == nullptr)`.
 struct ScopedRegistryTarget {
-	explicit ScopedRegistryTarget(ProxySQL_PluginManager* mgr) {
+	explicit ScopedRegistryTarget(ProxySQL_PluginManager* mgr, bool accepts_config_tables) {
 		g_registry_target = mgr;
 		g_registry_registration_failed = false;
 		g_registry_registration_error.clear();
+		g_registry_accepts_config_table_registration = accepts_config_tables;
 	}
 	~ScopedRegistryTarget() {
 		g_registry_target = nullptr;
 		g_registry_registration_failed = false;
 		g_registry_registration_error.clear();
+		g_registry_accepts_config_table_registration = false;
 	}
 	ScopedRegistryTarget(const ScopedRegistryTarget&) = delete;
 	ScopedRegistryTarget& operator=(const ScopedRegistryTarget&) = delete;
@@ -104,7 +107,22 @@ void note_registration_failure(const char* kind, const char* name) {
 
 void register_table_service(const ProxySQL_PluginTableDef& def) {
 	if (g_registry_target == nullptr) {
-		proxy_warning("Plugin table registration attempted outside init phase for %s\n",
+		proxy_warning("Plugin table registration attempted outside schema-registration phase for %s\n",
+			      def.table_name != nullptr ? def.table_name : "(null)");
+		return;
+	}
+	if (def.db_kind == ProxySQL_PluginDBKind::config_db &&
+	    !g_registry_accepts_config_table_registration) {
+		g_registry_registration_failed = true;
+		if (g_registry_registration_error.empty()) {
+			g_registry_registration_error =
+				"config_db table registration is only valid during register_schemas";
+			if (def.table_name != nullptr && *def.table_name != '\0') {
+				g_registry_registration_error += ": ";
+				g_registry_registration_error += def.table_name;
+			}
+		}
+		proxy_warning("Plugin config_db table registration during init rejected for %s; use register_schemas\n",
 			      def.table_name != nullptr ? def.table_name : "(null)");
 		return;
 	}
@@ -450,7 +468,7 @@ bool ProxySQL_PluginManager::invoke_register_schemas_phase(std::string &err) {
 		bool registration_failed;
 		std::string registration_error;
 		{
-			ScopedRegistryTarget target_guard(this);
+			ScopedRegistryTarget target_guard(this, true);
 			phase_b_ok = register_schemas_cb(&services_phase_b_);
 			registration_failed = g_registry_registration_failed;
 			registration_error = g_registry_registration_error;
@@ -530,7 +548,7 @@ bool ProxySQL_PluginManager::init_all(std::string &err) {
 		bool registration_failed;
 		std::string registration_error;
 		{
-			ScopedRegistryTarget target_guard(this);
+			ScopedRegistryTarget target_guard(this, false);
 			init_ok = plugin.descriptor->init(&services_);
 			registration_failed = g_registry_registration_failed;
 			registration_error = g_registry_registration_error;

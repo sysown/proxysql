@@ -70,9 +70,11 @@ bool configure_mcp_for_rules_test(MYSQL* admin, const CommandLine& cl) {
 	run_q(admin, "INSERT INTO mcp_query_rules (rule_id, active, match_pattern, error_msg, apply) "
 	             "VALUES (1004, 1, 'AUTOSTART_BLOCKME', 'Rule 1004: Startup Blocked', 1)");
 
+	// Install the target snapshot while MCP is still disabled so listener
+	// construction can initialize its connection pool from that profile.
+	run_q(admin, "LOAD MCP PROFILES TO RUNTIME");
 	run_q(admin, "SET mcp-enabled=true");
 	run_q(admin, "LOAD MCP VARIABLES TO RUNTIME");
-	run_q(admin, "LOAD MCP PROFILES TO RUNTIME");
 
 	sleep(1);
 	return true;
