@@ -286,39 +286,67 @@ GENAI_PLUGIN_HOST_OWNED_LIBS = $(EXECUTABLE_EXPORT_FLAGS) \
 # Compiler flags
 # ===========================================================================
 
+# Keep direct unit-test builds aligned with the top-level feature hierarchy.
+# This matters when the archive does not exist yet: symbol probing cannot
+# discover features that the recursive lib build has not produced.
+ifeq ($(PROXYSQL40),1)
+	PROXYSQL31 := 1
+endif
+ifeq ($(PROXYSQL31),1)
+	PROXYSQLFFTO := 1
+	PROXYSQLTSDB := 1
+	PROXYSQLED25519 := 1
+endif
+
 # Auto-detect feature flags from libproxysql.a symbols.
 # This ensures unit tests compile with the same flags the library was built with,
 # regardless of whether the environment variables are set during `make`.
-PSQLCH :=
-ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c ClickHouse_Server),0)
-	PROXYSQLCLICKHOUSE := 1
-	PSQLCH := -DPROXYSQLCLICKHOUSE
-endif
+# The archive freshness rule below always requests the default ClickHouse
+# build. Define the same mode before compiling test globals, including when a
+# clean tree has no archive available for symbol probing yet.
+PROXYSQLCLICKHOUSE := 1
+PSQLCH := -DPROXYSQLCLICKHOUSE
 PSQLGA :=
 PSQLFFTO :=
+ifeq ($(PROXYSQLFFTO),1)
+	PSQLFFTO := -DPROXYSQLFFTO
+else
 ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c MySQLFFTO),0)
 	PROXYSQLFFTO := 1
 	PSQLFFTO := -DPROXYSQLFFTO
+endif
 endif
 
 # PROXYSQL40 — detected via a chassis-exclusive symbol that only exists
 # when libproxysql.a was built with -DPROXYSQL40 (the four-phase plugin
 # lifecycle). `invoke_register_schemas_phase` is the canonical probe.
 PSQL40 :=
+ifeq ($(PROXYSQL40),1)
+	PSQL40 := -DPROXYSQL40
+else
 ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c invoke_register_schemas_phase),0)
 	PROXYSQL40 := 1
 	PSQL40 := -DPROXYSQL40
 endif
+endif
 PSQLTSDB :=
+ifeq ($(PROXYSQLTSDB),1)
+	PSQLTSDB := -DPROXYSQLTSDB
+else
 ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c init_tsdb_variables),0)
 	PROXYSQLTSDB := 1
 	PSQLTSDB := -DPROXYSQLTSDB
 endif
+endif
 
 PSQLED25519 :=
+ifeq ($(PROXYSQLED25519),1)
+	PSQLED25519 := -DPROXYSQLED25519
+else
 ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c proxysql_ed25519_verify_signature),0)
 	PROXYSQLED25519 := 1
 	PSQLED25519 := -DPROXYSQLED25519
+endif
 endif
 
 # PROXYSQL31 changes shared class layouts, so detect a symbol emitted only by
