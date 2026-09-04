@@ -49,6 +49,15 @@
 #define MYHGM_PgSQL_SERVERS_SSL_PARAMS "CREATE TABLE pgsql_servers_ssl_params (hostname VARCHAR NOT NULL , port INT CHECK (port >= 0 AND port <= 65535) NOT NULL DEFAULT 5432 , username VARCHAR NOT NULL DEFAULT '' , ssl_ca VARCHAR NOT NULL DEFAULT '' , ssl_cert VARCHAR NOT NULL DEFAULT '' , ssl_key VARCHAR NOT NULL DEFAULT '' , ssl_crl VARCHAR NOT NULL DEFAULT '' , ssl_crlpath VARCHAR NOT NULL DEFAULT '' , ssl_protocol_version_range VARCHAR NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostname, port, username) )"
 #define MYHGM_PgSQL_REPLICATION_HOSTGROUPS "CREATE TABLE pgsql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>=0) , check_type VARCHAR CHECK (LOWER(check_type) IN ('read_only')) NOT NULL DEFAULT 'read_only' , comment VARCHAR NOT NULL DEFAULT '' , UNIQUE (reader_hostgroup))"
 
+// AWS Aurora PostgreSQL hostgroups table definition
+#define MYHGM_PgSQL_AWS_AURORA_HOSTGROUPS "CREATE TABLE pgsql_aws_aurora_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>0) , " \
+										  "active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , aurora_port INT CHECK (aurora_port >= 0 AND aurora_port <= 65535) NOT NULL DEFAULT 5432 , domain_name VARCHAR NOT NULL DEFAULT '' , " \
+										  "max_lag_ms INT NOT NULL CHECK (max_lag_ms>= 10 AND max_lag_ms <= 600000) DEFAULT 600000 , check_interval_ms INT NOT NULL CHECK (check_interval_ms >= 100 AND check_interval_ms <= 600000) DEFAULT 1000 , " \
+										  "check_timeout_ms INT NOT NULL CHECK (check_timeout_ms >= 80 AND check_timeout_ms <= 3000) DEFAULT 800 , " \
+										  "writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , new_reader_weight INT CHECK (new_reader_weight >= 0 AND new_reader_weight <=10000000) NOT NULL DEFAULT 1 , " \
+										  "add_lag_ms INT NOT NULL CHECK (add_lag_ms >= 0 AND add_lag_ms <= 600000) DEFAULT 30 , min_lag_ms INT NOT NULL CHECK (min_lag_ms >= 0 AND min_lag_ms <= 600000) DEFAULT 30 , " \
+										  "lag_num_checks INT NOT NULL CHECK (lag_num_checks >= 1 AND lag_num_checks <= 16) DEFAULT 1 , comment VARCHAR NOT NULL DEFAULT '' , UNIQUE (reader_hostgroup))"
+
 #define PGHGM_GEN_ADMIN_RUNTIME_SERVERS "SELECT hostgroup_id, hostname, port, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM pgsql_servers ORDER BY hostgroup_id, hostname, port"
 
 #define MYHGM_PgSQL_HOSTGROUP_ATTRIBUTES "CREATE TABLE pgsql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers <= 1000000) NOT NULL DEFAULT 1000000 , autocommit INT CHECK (autocommit IN (-1, 0, 1)) NOT NULL DEFAULT -1 , free_connections_pct INT CHECK (free_connections_pct >= 0 AND free_connections_pct <= 100) NOT NULL DEFAULT 10 , init_connect VARCHAR NOT NULL DEFAULT '' , multiplex INT CHECK (multiplex IN (0, 1)) NOT NULL DEFAULT 1 , connection_warming INT CHECK (connection_warming IN (0, 1)) NOT NULL DEFAULT 0 , throttle_connections_per_sec INT CHECK (throttle_connections_per_sec >= 1 AND throttle_connections_per_sec <= 1000000) NOT NULL DEFAULT 1000000 , ignore_session_variables VARCHAR CHECK (JSON_VALID(ignore_session_variables) OR ignore_session_variables = '') NOT NULL DEFAULT '' , hostgroup_settings VARCHAR CHECK (JSON_VALID(hostgroup_settings) OR hostgroup_settings = '') NOT NULL DEFAULT '' , servers_defaults VARCHAR CHECK (JSON_VALID(servers_defaults) OR servers_defaults = '') NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '')"
@@ -395,6 +404,33 @@ struct PgSQL_srv_opts_t {
 	int32_t use_ssl;
 };
 
+/**
+ * @brief AWS Aurora PostgreSQL configuration info
+ * @details Stores configuration for each Aurora PostgreSQL hostgroup pair
+ */
+class PgSQL_AWS_Aurora_Info {
+public:
+	int writer_hostgroup;
+	int reader_hostgroup;
+	int aurora_port;
+	int max_lag_ms;
+	int add_lag_ms;
+	int min_lag_ms;
+	int lag_num_checks;
+	int check_interval_ms;
+	int check_timeout_ms;
+	bool active;
+	bool active_;  // temporary flag for tracking during regeneration
+	int writer_is_also_reader;
+	int new_reader_weight;
+	char *domain_name;
+	char *comment;
+
+	PgSQL_AWS_Aurora_Info(int w, int r, int _port, char *_domain, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c);
+	bool update(int r, int _port, char *_domain, int maxl, int al, int minl, int lnc, int ci, int ct, bool _a, int wiar, int nrw, char *c);
+	~PgSQL_AWS_Aurora_Info();
+};
+
 class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 #if 0
 	SQLite3DB	*admindb;
@@ -566,6 +602,13 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	 *  Issued by 'Cluster' are intercepted by 'ProxySQL_Admin' and return the content of these resultsets.
 	 */
 	SQLite3_result *incoming_replication_hostgroups;
+
+	// AWS Aurora PostgreSQL
+	void generate_pgsql_aws_aurora_hostgroups_table();
+	SQLite3_result *incoming_aws_aurora_hostgroups;
+
+	pthread_mutex_t AWS_Aurora_Info_mutex;
+	std::map<int, PgSQL_AWS_Aurora_Info*> AWS_Aurora_Info_Map;
 
 	void generate_pgsql_hostgroup_attributes_table();
 	void generate_pgsql_servers_ssl_params_table();
@@ -870,6 +913,44 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	void shutdown();
 	void unshun_server_all_hostgroups(const char * address, uint16_t port, time_t t, int max_wait_sec, unsigned int *skip_hid);
 	PgSQL_SrvC* find_server_in_hg(unsigned int _hid, const std::string& addr, int port);
+
+	// AWS Aurora PostgreSQL methods
+	/**
+	 * @brief Applies the outcome of an Aurora PostgreSQL lag check to a server.
+	 * @param _whid The writer hostgroup of the cluster.
+	 * @param _rhid The reader hostgroup of the cluster.
+	 * @param server_id The Aurora server id (hostname is server_id + domain_name).
+	 * @param current_replication_lag_ms The estimated replication lag.
+	 * @param enable False shuns the server for lag, true re-enables it.
+	 * @param is_writer Whether the check reported the server as the writer.
+	 * @param verbose Whether to log shun/re-enable actions.
+	 * @return True if the server is found in the hostgroup expected for its
+	 *   role; false signals the caller that a topology change is required.
+	 */
+	bool aws_aurora_replication_lag_action(int _whid, int _rhid, char *server_id, float current_replication_lag_ms, bool enable, bool is_writer, bool verbose=true);
+	/**
+	 * @brief Places 'server_id' as the writer of the cluster, moving the old
+	 *   writer to the reader hostgroup, auto-discovering the server if needed.
+	 * @param _whid The writer hostgroup of the cluster.
+	 * @param _rhid The reader hostgroup of the cluster.
+	 * @param server_id The Aurora server id of the new writer.
+	 * @param verbose Whether to log the reconfiguration verbosely.
+	 */
+	void update_aws_aurora_set_writer(int _whid, int _rhid, char *server_id, bool verbose=true);
+	/**
+	 * @brief Places 'server_id' as a reader of the cluster, moving it out of
+	 *   the writer hostgroup if present, auto-discovering the server if needed.
+	 * @param _whid The writer hostgroup of the cluster.
+	 * @param _rhid The reader hostgroup of the cluster.
+	 * @param server_id The Aurora server id of the reader.
+	 */
+	void update_aws_aurora_set_reader(int _whid, int _rhid, char *server_id);
+	/**
+	 * @brief Updates the resultset and corresponding checksum used by Monitor for AWS Aurora PostgreSQL.
+	 * @param lock Whether if both 'AWS_Aurora_Info_mutex' and 'PgSQL_Monitor::aws_aurora_mutex' mutexes should
+	 *  be acquired before the update takes place or not.
+	 */
+	void update_aws_aurora_hosts_monitor_resultset(bool lock=false);
 
 private:
 	void update_hostgroup_manager_mappings();

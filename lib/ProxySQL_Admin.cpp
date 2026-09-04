@@ -49,6 +49,7 @@ using json = nlohmann::json;
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
+#include "PgSQL_Monitor.hpp"
 // MCP_Thread.h / ProxySQL_MCP_Server.hpp moved to plugins/genai/include/
 // in Step 4.C.  The MCP listener lifecycle is owned by the genai plugin.
 #include "SQLite3_Server.h"
@@ -154,7 +155,7 @@ static const vector<string> pgsql_servers_tablenames = {
 	"pgsql_replication_hostgroups",
 //	"pgsql_group_replication_hostgroups",
 //	"pgsql_galera_hostgroups",
-//	"pgsql_aws_aurora_hostgroups",
+	"pgsql_aws_aurora_hostgroups",
 	"pgsql_hostgroup_attributes",
 	"pgsql_servers_ssl_params",
 };
@@ -357,6 +358,7 @@ extern MySQL_Logger *GloMyLogger;
 extern PgSQL_Logger* GloPgSQL_Logger;
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
+extern PgSQL_Monitor* GloPgMon;
 extern PgSQL_Threads_Handler* GloPTH;
 
 extern void (*flush_logs_function)();
@@ -942,12 +944,14 @@ incoming_pgsql_servers_t::incoming_pgsql_servers_t() {}
 incoming_pgsql_servers_t::incoming_pgsql_servers_t(
 	SQLite3_result* incoming_pgsql_servers_v2,
 	SQLite3_result* incoming_replication_hostgroups,
+	SQLite3_result* incoming_aurora_hostgroups,
 	SQLite3_result* incoming_hostgroup_attributes,
 	SQLite3_result* incoming_pgsql_servers_ssl_params,
 	SQLite3_result* runtime_pgsql_servers
 ) :
 	incoming_pgsql_servers_v2(incoming_pgsql_servers_v2),
 	incoming_replication_hostgroups(incoming_replication_hostgroups),
+	incoming_aurora_hostgroups(incoming_aurora_hostgroups),
 	incoming_hostgroup_attributes(incoming_hostgroup_attributes),
 	incoming_pgsql_servers_ssl_params(incoming_pgsql_servers_ssl_params),
 	runtime_pgsql_servers(runtime_pgsql_servers)
@@ -1377,6 +1381,9 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool monitor_mysql_server_aws_aurora_log=false;
 	bool monitor_mysql_server_aws_aurora_check_status=false;
 
+	bool monitor_pgsql_server_aws_aurora_log=false;
+	bool monitor_pgsql_server_aws_aurora_check_status=false;
+
 	bool stats_proxysql_servers_checksums = false;
 	bool stats_proxysql_servers_metrics = false;
 	bool stats_proxysql_message_metrics = false;
@@ -1582,6 +1589,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				||
 				strstr(query_no_space, "runtime_pgsql_replication_hostgroups")
 				||
+				strstr(query_no_space, "runtime_pgsql_aws_aurora_hostgroups")
+				||
 				strstr(query_no_space, "runtime_pgsql_hostgroup_attributes")
 				) {
 				runtime_pgsql_servers = true; refresh = true;
@@ -1664,6 +1673,12 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	}
 	if (strstr(query_no_space,"mysql_server_aws_aurora_check_status")) {
 		monitor_mysql_server_aws_aurora_check_status=true; refresh=true;
+	}
+	if (strstr(query_no_space,"pgsql_server_aws_aurora_log")) {
+		monitor_pgsql_server_aws_aurora_log=true; refresh=true;
+	}
+	if (strstr(query_no_space,"pgsql_server_aws_aurora_check_status")) {
+		monitor_pgsql_server_aws_aurora_check_status=true; refresh=true;
 	}
 #ifdef PROXYSQL40
 	// Plugin-registered runtime views: if the query references any chassis-
@@ -1939,6 +1954,16 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		if (monitor_mysql_server_aws_aurora_check_status) {
 			if (GloMyMon) {
 				GloMyMon->populate_monitor_mysql_server_aws_aurora_check_status();
+			}
+		}
+		if (monitor_pgsql_server_aws_aurora_log) {
+			if (GloPgMon) {
+				GloPgMon->populate_monitor_pgsql_server_aws_aurora_log();
+			}
+		}
+		if (monitor_pgsql_server_aws_aurora_check_status) {
+			if (GloPgMon) {
+				GloPgMon->populate_monitor_pgsql_server_aws_aurora_check_status();
 			}
 		}
 		//pthread_mutex_unlock(&admin_mutex);
@@ -8030,6 +8055,55 @@ void ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 	if (resultset) delete resultset;
 	resultset = NULL;
 
+	// dump pgsql_aws_aurora_hostgroups
+
+	if (_runtime) {
+		query = (char*)"DELETE FROM main.runtime_pgsql_aws_aurora_hostgroups";
+	} else {
+		query = (char*)"DELETE FROM main.pgsql_aws_aurora_hostgroups";
+	}
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute(query);
+	resultset = PgHGM->dump_table_pgsql("pgsql_aws_aurora_hostgroups");
+	if (resultset) {
+		int rc;
+		sqlite3_stmt* statement = NULL;
+
+		char* q = NULL;
+		if (_runtime) {
+			q = (char*)"INSERT INTO runtime_pgsql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
+		} else {
+			q = (char*)"INSERT INTO pgsql_aws_aurora_hostgroups(writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
+		}
+
+		rc = admindb->prepare_v2(q, &statement);
+		ASSERT_SQLITE_OK(rc, admindb);
+
+		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+			SQLite3_row* r = *it;
+			rc = (*proxy_sqlite3_bind_int64)(statement, 1, atoi(r->fields[0])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 2, atoi(r->fields[1])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 3, atoi(r->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 4, atoi(r->fields[3])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_text)(statement, 5, r->fields[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 6, atoi(r->fields[5])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 7, atoi(r->fields[6])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 8, atoi(r->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 9, atoi(r->fields[8])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 10, atoi(r->fields[9])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 11, atoi(r->fields[10])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 12, atoi(r->fields[11])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_int64)(statement, 13, atoi(r->fields[12])); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_bind_text)(statement, 14, r->fields[13], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+
+			SAFE_SQLITE3_STEP2(statement);
+			rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);
+			rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, admindb);
+		}
+		(*proxy_sqlite3_finalize)(statement);
+	}
+	if (resultset) delete resultset;
+	resultset = NULL;
 	// dump pgsql_servers_ssl_params
 
 	StrQuery = "DELETE FROM main.";
@@ -8362,10 +8436,12 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	SQLite3_result* resultset = NULL;
 	SQLite3_result* resultset_servers = NULL;
 	SQLite3_result* resultset_replication = NULL;
+	SQLite3_result* resultset_aws_aurora = NULL;
 	SQLite3_result* resultset_hostgroup_attributes = NULL;
 
 	SQLite3_result* runtime_pgsql_servers = incoming_pgsql_servers.runtime_pgsql_servers;
 	SQLite3_result* incoming_replication_hostgroups = incoming_pgsql_servers.incoming_replication_hostgroups;
+	SQLite3_result* incoming_aurora_hostgroups = incoming_pgsql_servers.incoming_aurora_hostgroups;
 	SQLite3_result* incoming_hostgroup_attributes = incoming_pgsql_servers.incoming_hostgroup_attributes;
 	SQLite3_result* incoming_pgsql_servers_v2 = incoming_pgsql_servers.incoming_pgsql_servers_v2;
 
@@ -8427,6 +8503,42 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	//if (resultset) delete resultset;
 	//resultset=NULL;
 
+	// support for AWS Aurora PostgreSQL, table pgsql_aws_aurora_hostgroups
+
+	// look for invalid combinations
+	query = (char*)"SELECT a.* FROM pgsql_aws_aurora_hostgroups a JOIN pgsql_aws_aurora_hostgroups b ON a.writer_hostgroup=b.reader_hostgroup WHERE b.reader_hostgroup";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+		// clear the error so it cannot leak into the next block's check
+		free(error);
+		error = NULL;
+	}
+	else {
+		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+			SQLite3_row* r = *it;
+			proxy_error("Incompatible entry in pgsql_aws_aurora_hostgroups will be ignored : ( %s , %s , %s , %s )\n", r->fields[0], r->fields[1], r->fields[2], r->fields[3]);
+		}
+	}
+	if (resultset) delete resultset;
+	resultset = NULL;
+
+	query = (char*)"SELECT a.* FROM pgsql_aws_aurora_hostgroups a LEFT JOIN pgsql_aws_aurora_hostgroups b ON (a.writer_hostgroup=b.reader_hostgroup) WHERE b.reader_hostgroup IS NULL ORDER BY writer_hostgroup";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	if (incoming_aurora_hostgroups == nullptr) {
+		admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset_aws_aurora);
+	}
+	else {
+		resultset_aws_aurora = incoming_aurora_hostgroups;
+	}
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+	}
+	else {
+		// Pass the resultset to PgHGM
+		PgHGM->save_incoming_pgsql_table(resultset_aws_aurora, "pgsql_aws_aurora_hostgroups");
+	}
 
 	// support for hostgroup attributes, table pgsql_hostgroup_attributes
 	query = (char*)"SELECT * FROM pgsql_hostgroup_attributes ORDER BY hostgroup_id";
@@ -8477,6 +8589,10 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	if (resultset_replication) {
 		delete resultset_replication;
 		resultset_replication = NULL;
+	}
+	if (resultset_aws_aurora) {
+		//delete resultset_aws_aurora; // do not delete, resultset is stored in PgHGM
+		resultset_aws_aurora = NULL;
 	}
 	if (resultset_hostgroup_attributes) {
 		resultset_hostgroup_attributes = NULL;

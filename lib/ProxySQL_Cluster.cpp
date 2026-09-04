@@ -1511,6 +1511,59 @@ void update_pgsql_replication_hostgroups(SQLite3_result* resultset) {
 	}
 }
 
+void update_pgsql_aws_aurora_hostgroups(SQLite3_result* resultset) {
+	GloAdmin->admindb->execute("DELETE FROM pgsql_aws_aurora_hostgroups");
+	if (resultset == nullptr) {
+		return;
+	}
+
+	const char* q =
+		"INSERT INTO pgsql_aws_aurora_hostgroups ("
+			"writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, max_lag_ms,"
+			" check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight,"
+			" add_lag_ms, min_lag_ms, lag_num_checks, comment"
+		") VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
+
+	auto [rc1, statement1_unique] = GloAdmin->admindb->prepare_v2(q);
+	ASSERT_SQLITE_OK(rc1, GloAdmin->admindb);
+	sqlite3_stmt* statement1 = statement1_unique.get();
+	int rc;
+
+	for (auto* row : resultset->rows) {
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 1, atoll(row->fields[0])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 2, atoll(row->fields[1])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 3, atoll(row->fields[2])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 4, atoll(row->fields[3])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 5, row->fields[4] ? row->fields[4] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 6, atoll(row->fields[5])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 7, atoll(row->fields[6])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 8, atoll(row->fields[7])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 9, atoll(row->fields[8])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 10, atoll(row->fields[9])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 11, atoll(row->fields[10])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 12, atoll(row->fields[11])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 13, atoll(row->fields[12])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc = (*proxy_sqlite3_bind_text)(statement1, 14, row->fields[13] ? row->fields[13] : "", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+
+		SAFE_SQLITE3_STEP2(statement1);
+		if (rc == SQLITE_CONSTRAINT) {
+			// tolerate a peer row violating a CHECK constraint (e.g. version
+			// skew): skip the row instead of aborting on the reset below
+			proxy_error(
+				"Cluster: skipping invalid pgsql_aws_aurora_hostgroups row from peer (writer_hostgroup=%s): %s\n",
+				row->fields[0] ? row->fields[0] : "", (*proxy_sqlite3_errmsg)(GloAdmin->admindb->get_db())
+			);
+		} else if (rc != SQLITE_DONE) {
+			proxy_error(
+				"Cluster: error %d writing pgsql_aws_aurora_hostgroups row (writer_hostgroup=%s): %s\n",
+				rc, row->fields[0] ? row->fields[0] : "", (*proxy_sqlite3_errmsg)(GloAdmin->admindb->get_db())
+			);
+		}
+		(*proxy_sqlite3_clear_bindings)(statement1);
+		(*proxy_sqlite3_reset)(statement1);
+	}
+}
+
 void update_pgsql_hostgroup_attributes(SQLite3_result* resultset) {
 	GloAdmin->admindb->execute(SQLQueries::DELETE_PGSQL_HOSTGROUP_ATTRIBUTES);
 	if (resultset == nullptr) {
@@ -1890,6 +1943,7 @@ incoming_pgsql_servers_t convert_pgsql_servers_resultsets(const std::vector<MYSQ
 			get_SQLite3_resulset(results[2]).release(),
 			get_SQLite3_resulset(results[3]).release(),
 			get_SQLite3_resulset(results[4]).release(),
+			get_SQLite3_resulset(results[5]).release(),
 		};
 	}
 }
@@ -3653,6 +3707,16 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 					}
 				},
 				{
+					CLUSTER_QUERY_PGSQL_AWS_AURORA_HOSTGROUPS,
+					p_cluster_counter::metric(-1),
+					p_cluster_counter::metric(-1),
+					{
+						"Cluster: Fetching PostgreSQL AWS Aurora Hostgroups from peer " + string(hostname) + ":" + std::to_string(port) + " completed.",
+						"",
+						"Cluster: Fetching PostgreSQL AWS Aurora Hostgroups from peer " + string(hostname) + ":" + std::to_string(port) + " failed: "
+					}
+				},
+				{
 					CLUSTER_QUERY_PGSQL_HOSTGROUP_ATTRIBUTES,
 					p_cluster_counter::metric(-1),
 					p_cluster_counter::metric(-1),
@@ -3674,7 +3738,7 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 				}
 			};
 
-			std::vector<MYSQL_RES*> results(5, nullptr);
+			std::vector<MYSQL_RES*> results(6, nullptr);
 			bool fetching_error = false;
 			for (size_t i = 0; i < sizeof(queries) / sizeof(fetch_query); i++) {
 				MYSQL_RES* fetch_res = nullptr;
@@ -3701,7 +3765,7 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 
 				MYSQL_RES* fetch_res = nullptr;
 				if (fetch_and_store(conn, runtime_query, &fetch_res) == 0) {
-					results[4] = fetch_res;
+					results[5] = fetch_res;
 				} else {
 					fetching_error = true;
 					fetch_failed = true;
@@ -3711,7 +3775,7 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 			if (fetching_error == false) {
 				const string expected_pgsql_v2_checksum = peer_pgsql_servers_v2_checksum
 					? string(peer_pgsql_servers_v2_checksum) : peer_pgsql_server_v2.value;
-				const uint64_t servers_hash = compute_servers_tables_raw_checksum(results, 4);
+				const uint64_t servers_hash = compute_servers_tables_raw_checksum(results, 5);
 				const string computed_pgsql_v2_checksum = get_checksum_from_hash(servers_hash);
 
 				bool runtime_checksum_matches = true;
@@ -3720,10 +3784,10 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 				string computed_runtime_pgsql_checksum;
 
 				if (fetch_runtime_pgsql_servers == true) {
-					if (results[4] == nullptr || expected_runtime_pgsql_checksum.empty()) {
+					if (results[5] == nullptr || expected_runtime_pgsql_checksum.empty()) {
 						runtime_checksum_matches = false;
 					} else {
-						const uint64_t runtime_hash = mysql_raw_checksum(results[4]);
+						const uint64_t runtime_hash = mysql_raw_checksum(results[5]);
 						computed_runtime_pgsql_checksum = get_checksum_from_hash(runtime_hash);
 						runtime_checksum_matches = (computed_runtime_pgsql_checksum == expected_runtime_pgsql_checksum);
 					}
@@ -3744,6 +3808,7 @@ void ProxySQL_Cluster::pull_pgsql_servers_v2_from_peer(const pgsql_servers_v2_ch
 					GloAdmin->pgsql_servers_wrlock();
 					update_pgsql_servers(incoming_pgsql_servers.incoming_pgsql_servers_v2);
 					update_pgsql_replication_hostgroups(incoming_pgsql_servers.incoming_replication_hostgroups);
+					update_pgsql_aws_aurora_hostgroups(incoming_pgsql_servers.incoming_aurora_hostgroups);
 					update_pgsql_hostgroup_attributes(incoming_pgsql_servers.incoming_hostgroup_attributes);
 					update_pgsql_servers_ssl_params(incoming_pgsql_servers.incoming_pgsql_servers_ssl_params);
 					GloAdmin->load_pgsql_servers_to_runtime(
