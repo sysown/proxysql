@@ -7,7 +7,6 @@
 #include <cstdio>
 #include <string>
 #include <thread>
-#include <unistd.h>
 
 int main() {
 	plan(12);
@@ -44,27 +43,20 @@ int main() {
 	// (cfg above, untouched) so this test fails if the override is ever
 	// dropped, not just if someone explicitly sets the variable wrong.
 	{
-		char tmp_csv[] = "/tmp/proxysql-duckdb-engine-XXXXXX";
-		const int fd = mkstemp(tmp_csv);
-		if (fd == -1) {
-			BAIL_OUT("could not create the external-access CSV fixture");
-		}
-		FILE* f = fdopen(fd, "w");
-		if (f == nullptr) {
-			close(fd);
-			std::remove(tmp_csv);
-			BAIL_OUT("could not create the external-access CSV fixture");
-		}
-		std::fputs("a,b\n1,2\n", f);
-		std::fclose(f);
-
-		const std::string q = std::string("SELECT * FROM read_csv('") + tmp_csv + "')";
 		duckdb_result ext_res;
-		const bool denied = (duckdb_query(conn, q.c_str(), &ext_res) != DuckDBSuccess);
-		ok(denied, "read_csv of a local file is denied with the default configuration "
-		           "(enable_external_access=false)");
+		const bool denied = (duckdb_query(conn,
+			"SELECT * FROM read_csv('/proxysql-duckdb-external-access-probe.csv')",
+			&ext_res) != DuckDBSuccess);
+		const char* ext_error = duckdb_result_error(&ext_res);
+		const bool disabled_by_configuration = denied && ext_error != nullptr &&
+			std::string(ext_error).find("disabled by configuration") != std::string::npos;
+		ok(disabled_by_configuration,
+		   "read_csv of a local file is denied with the default configuration "
+		   "(enable_external_access=false)");
+		if (!disabled_by_configuration) {
+			diag("unexpected read_csv result: %s", ext_error != nullptr ? ext_error : "success");
+		}
 		duckdb_destroy_result(&ext_res);
-		std::remove(tmp_csv);
 	}
 
 	engine.disconnect(&conn);
@@ -90,15 +82,35 @@ int main() {
 			BAIL_OUT("interrupt test needs a live connection");
 		}
 		std::atomic<int> rc{-1};
+		std::atomic<bool> started{false};
+		std::atomic<bool> done{false};
 		std::thread t([&] {
+			started.store(true);
 			duckdb_result r;
 			rc.store(duckdb_query(ic, "SELECT sum(i) FROM range(10000000000) t(i)", &r));
 			duckdb_destroy_result(&r);
+			done.store(true);
 		});
-		for (int i = 0; i < 50 && rc.load() == -1; i++) {
-			std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		const auto start_deadline = std::chrono::steady_clock::now() +
+			std::chrono::seconds(1);
+		while (!started.load() && std::chrono::steady_clock::now() < start_deadline) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}
+		if (!started.load()) {
+			BAIL_OUT("interrupt worker did not start within one second");
+		}
+		// Give duckdb_query() a chance to enter execution after publishing
+		// `started`, then interrupt it and bound the shutdown wait.
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
 		engine.interrupt_all();
+		const auto done_deadline = std::chrono::steady_clock::now() +
+			std::chrono::seconds(5);
+		while (!done.load() && std::chrono::steady_clock::now() < done_deadline) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		if (!done.load()) {
+			BAIL_OUT("interrupt_all did not stop the query within five seconds");
+		}
 		t.join();
 		ok(rc.load() != DuckDBSuccess, "interrupt_all stops an in-flight query");
 		engine.disconnect(&ic);

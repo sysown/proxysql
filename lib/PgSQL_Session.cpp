@@ -2307,11 +2307,16 @@ __implicit_sync:
 								// return its protocol-specific error and transaction state.
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(pkt);
 							} else {
-								// ADMIN/STATS keep the historical silent drop. Emitting a
-								// protocol error here would change v3.0 Admin PG behavior
-								// for builds that never load DuckDB.
+								// ADMIN/STATS do not implement the extended-query protocol.
+								// A silent drop leaves libpq waiting forever for ParseComplete;
+								// reject it immediately with a complete error response instead.
+								client_myds->setDSS_STATE_QUERY_SENT_NET();
+								client_myds->myprot.generate_error_packet(true, true,
+									"PostgreSQL extended-query protocol is not supported on the admin interface",
+									PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true);
 								l_free(pkt.size, pkt.ptr);
-								continue;
+								client_myds->DSS = STATE_SLEEP;
+								return handler_ret;
 							}
 						} else {
 							proxy_error("Not implemented yet. Message type:'0x%02X'\n", c);

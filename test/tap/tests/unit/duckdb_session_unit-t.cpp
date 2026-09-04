@@ -35,7 +35,7 @@ int scalar_count(duckdb_connection conn, const char* sql) {
 } // namespace
 
 int main() {
-	plan(55);
+	plan(60);
 
 	ok(classify("SELECT @@version") == DuckDBIntercept::version,
 	   "SELECT @@version is intercepted");
@@ -122,8 +122,17 @@ int main() {
 	   "DuckDB parser errors map to MySQL ER_PARSE_ERROR");
 	ok(std::strcmp(duckdb_mysql_sqlstate(DUCKDB_ERROR_PARSER, ""), "42000") == 0,
 	   "DuckDB parser errors map to MySQL SQLSTATE 42000");
-	ok(duckdb_mysql_errno(DUCKDB_ERROR_CONSTRAINT, "") == 1062,
-	   "DuckDB constraint errors map to MySQL ER_DUP_ENTRY");
+	ok(duckdb_mysql_errno(DUCKDB_ERROR_CONSTRAINT,
+		"Constraint Error: Duplicate key violates unique constraint") == 1062,
+	   "DuckDB unique constraint errors map to MySQL ER_DUP_ENTRY");
+	ok(duckdb_mysql_errno(DUCKDB_ERROR_CONSTRAINT,
+		"Constraint Error: NOT NULL constraint failed: t.v") == 1048,
+	   "DuckDB NOT NULL errors map to MySQL ER_BAD_NULL_ERROR");
+	ok(duckdb_mysql_errno(DUCKDB_ERROR_CONSTRAINT,
+		"Constraint Error: CHECK constraint failed on table t") == 3819,
+	   "DuckDB CHECK errors map to MySQL ER_CHECK_CONSTRAINT_VIOLATED");
+	ok(duckdb_mysql_errno(DUCKDB_ERROR_CONSTRAINT, "Constraint Error: unknown") == 1105,
+	   "unclassified DuckDB constraints do not masquerade as duplicate keys");
 	ok(std::strcmp(duckdb_mysql_sqlstate(DUCKDB_ERROR_CONSTRAINT, ""), "23000") == 0,
 	   "DuckDB constraint errors map to MySQL SQLSTATE 23000");
 	ok(duckdb_mysql_errno(DUCKDB_ERROR_OUT_OF_MEMORY, "") == 1037,
@@ -182,6 +191,18 @@ int main() {
 		const DuckDBExecOutcome rollback = duckdb_execute_effective(conn, "ROLLBACK");
 		ok(rollback.ok && duckdb_pgsql_transaction_status(conn) == 'I',
 		   "ROLLBACK restores ReadyForQuery state to idle");
+	}
+
+	{
+		const DuckDBExecOutcome begin =
+			duckdb_execute_effective(conn, "BEGIN; -- client comment");
+		ok(begin.ok && duckdb_pgsql_transaction_status(conn) == 'T',
+		   "BEGIN followed by a comment reports in-transaction status");
+
+		const DuckDBExecOutcome rollback =
+			duckdb_execute_effective(conn, "ROLLBACK; /* client comment */");
+		ok(rollback.ok && duckdb_pgsql_transaction_status(conn) == 'I',
+		   "ROLLBACK followed by a comment restores idle transaction status");
 	}
 
 	{

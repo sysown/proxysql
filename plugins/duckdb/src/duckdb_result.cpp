@@ -26,10 +26,7 @@ std::string format_double(double v) {
 	return buf;
 }
 
-std::string format_decimal_int(int64_t raw, uint8_t scale) {
-	const bool neg = raw < 0;
-	uint64_t mag = neg ? static_cast<uint64_t>(-raw) : static_cast<uint64_t>(raw);
-	std::string digits = std::to_string(mag);
+std::string add_decimal_point(std::string digits, bool neg, uint8_t scale) {
 	if (scale == 0) {
 		return neg ? "-" + digits : digits;
 	}
@@ -40,20 +37,44 @@ std::string format_decimal_int(int64_t raw, uint8_t scale) {
 	return neg ? "-" + digits : digits;
 }
 
+std::string format_decimal_int(int64_t raw, uint8_t scale) {
+	const bool neg = raw < 0;
+	// Avoid negating INT64_MIN in its signed type.
+	const uint64_t mag = neg
+		? static_cast<uint64_t>(-(raw + 1)) + 1
+		: static_cast<uint64_t>(raw);
+	return add_decimal_point(std::to_string(mag), neg, scale);
+}
+
 #if defined(__SIZEOF_INT128__)
-std::string format_hugeint(duckdb_hugeint h) {
-	__int128 v = (static_cast<__int128>(h.upper) << 64) | h.lower;
-	if (v == 0) return "0";
-	const bool neg = v < 0;
-	if (neg) v = -v;
+std::string format_uint128(unsigned __int128 value) {
+	if (value == 0) return "0";
 	std::string s;
-	while (v > 0) {
-		s.push_back(static_cast<char>('0' + static_cast<int>(v % 10)));
-		v /= 10;
+	while (value > 0) {
+		s.push_back(static_cast<char>('0' + static_cast<int>(value % 10)));
+		value /= 10;
 	}
-	if (neg) s.push_back('-');
 	std::reverse(s.begin(), s.end());
 	return s;
+}
+
+unsigned __int128 hugeint_bits(duckdb_hugeint h) {
+	return (static_cast<unsigned __int128>(static_cast<uint64_t>(h.upper)) << 64) |
+		static_cast<unsigned __int128>(h.lower);
+}
+
+std::string format_hugeint(duckdb_hugeint h, uint8_t scale = 0) {
+	const bool neg = h.upper < 0;
+	const unsigned __int128 bits = hugeint_bits(h);
+	// Two's-complement magnitude works for the minimum signed HUGEINT too.
+	const unsigned __int128 mag = neg ? (~bits + 1) : bits;
+	return add_decimal_point(format_uint128(mag), neg, scale);
+}
+
+std::string format_uhugeint(duckdb_uhugeint h) {
+	const unsigned __int128 value =
+		(static_cast<unsigned __int128>(h.upper) << 64) | h.lower;
+	return format_uint128(value);
 }
 #endif
 
@@ -99,7 +120,12 @@ bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string&
 		out = format_double(static_cast<double*>(data)[row]);
 		return true;
 	case DUCKDB_TYPE_DATE: {
-		const duckdb_date_struct s = duckdb_from_date(static_cast<duckdb_date*>(data)[row]);
+		const duckdb_date value = static_cast<duckdb_date*>(data)[row];
+		if (!duckdb_is_finite_date(value)) {
+			out = value.days < 0 ? "-infinity" : "infinity";
+			return true;
+		}
+		const duckdb_date_struct s = duckdb_from_date(value);
 		std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d", s.year, s.month, s.day);
 		out = buf;
 		return true;
@@ -115,8 +141,12 @@ bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string&
 		return true;
 	}
 	case DUCKDB_TYPE_TIMESTAMP: {
-		const duckdb_timestamp_struct s =
-			duckdb_from_timestamp(static_cast<duckdb_timestamp*>(data)[row]);
+		const duckdb_timestamp value = static_cast<duckdb_timestamp*>(data)[row];
+		if (!duckdb_is_finite_timestamp(value)) {
+			out = value.micros < 0 ? "-infinity" : "infinity";
+			return true;
+		}
+		const duckdb_timestamp_struct s = duckdb_from_timestamp(value);
 		if (s.time.micros == 0) {
 			std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d",
 				s.date.year, s.date.month, s.date.day, s.time.hour, s.time.min, s.time.sec);
@@ -137,25 +167,20 @@ bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string&
 		const uint8_t scale = duckdb_decimal_scale(lt);
 		const duckdb_type intern = duckdb_decimal_internal_type(lt);
 		duckdb_destroy_logical_type(&lt);
-		int64_t raw = 0;
 		switch (intern) {
 		case DUCKDB_TYPE_SMALLINT:
-			raw = static_cast<int16_t*>(data)[row];
-			break;
+			out = format_decimal_int(static_cast<int16_t*>(data)[row], scale);
+			return true;
 		case DUCKDB_TYPE_INTEGER:
-			raw = static_cast<int32_t*>(data)[row];
-			break;
+			out = format_decimal_int(static_cast<int32_t*>(data)[row], scale);
+			return true;
 		case DUCKDB_TYPE_BIGINT:
-			raw = static_cast<int64_t*>(data)[row];
-			break;
+			out = format_decimal_int(static_cast<int64_t*>(data)[row], scale);
+			return true;
 		case DUCKDB_TYPE_HUGEINT:
 #if defined(__SIZEOF_INT128__)
-			{
-				const duckdb_hugeint h = static_cast<duckdb_hugeint*>(data)[row];
-				__int128 v = (static_cast<__int128>(h.upper) << 64) | h.lower;
-				raw = static_cast<int64_t>(v);
-			}
-			break;
+			out = format_hugeint(static_cast<duckdb_hugeint*>(data)[row], scale);
+			return true;
 #else
 			out = format_double(duckdb_hugeint_to_double(static_cast<duckdb_hugeint*>(data)[row]));
 			return true;
@@ -163,8 +188,6 @@ bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string&
 		default:
 			return false;
 		}
-		out = format_decimal_int(raw, scale);
-		return true;
 	}
 	case DUCKDB_TYPE_INTERVAL: {
 		const duckdb_interval iv = static_cast<duckdb_interval*>(data)[row];
@@ -187,7 +210,11 @@ bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string&
 #endif
 		return true;
 	case DUCKDB_TYPE_UHUGEINT:
-		out = std::to_string(static_cast<duckdb_uhugeint*>(data)[row].lower);
+#if defined(__SIZEOF_INT128__)
+		out = format_uhugeint(static_cast<duckdb_uhugeint*>(data)[row]);
+#else
+		out = format_double(duckdb_uhugeint_to_double(static_cast<duckdb_uhugeint*>(data)[row]));
+#endif
 		return true;
 	default:
 		return false;

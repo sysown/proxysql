@@ -1,6 +1,7 @@
 #include "duckdb_engine.h"
 #include "duckdb_config.h"
 
+#include <new>
 #include <utility>
 
 DuckDBEngine::~DuckDBEngine() {
@@ -92,7 +93,16 @@ bool DuckDBEngine::connect(duckdb_connection* out, std::string& err) {
 		err = "duckdb_connect failed";
 		return false;
 	}
-	live_connections_.push_back(*out);
+	try {
+		live_connections_.push_back(*out);
+	} catch (const std::bad_alloc&) {
+		// Do not hand an untracked connection to the caller: close it while
+		// still holding the engine lock so close()/interrupt_all() cannot race.
+		duckdb_disconnect(out);
+		*out = nullptr;
+		err = "connect: unable to track the DuckDB connection";
+		return false;
+	}
 	open_connections_.fetch_add(1);
 	return true;
 }

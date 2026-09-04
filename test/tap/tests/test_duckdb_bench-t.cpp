@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <memory>
 #include <pthread.h>
 #include <string>
 #include <unistd.h>
@@ -72,6 +73,7 @@ struct CellResult {
 	double p50_us = 0;
 	double p99_us = 0;
 	int errors = 0;
+	int warmup_errors = 0;
 	int n_success = 0;
 	bool have_pct = false;
 	bool ran = false;
@@ -121,6 +123,7 @@ struct Session {
 struct NativeSession : Session {
 	duckdb_database* db = nullptr;
 	duckdb_connection conn = nullptr;
+	~NativeSession() override { close(); }
 
 	bool connect() override {
 		return duckdb_connect(*db, &conn) == DuckDBSuccess && conn != nullptr;
@@ -155,6 +158,7 @@ struct MysqlSession : Session {
 	const char* pass = nullptr;
 	int port = 0;
 	MYSQL* c = nullptr;
+	~MysqlSession() override { close(); }
 
 	bool connect() override {
 		c = mysql_init(nullptr);
@@ -186,6 +190,7 @@ struct MysqlSession : Session {
 struct PgsqlSession : Session {
 	std::string conninfo;
 	PGconn* c = nullptr;
+	~PgsqlSession() override { close(); }
 
 	bool connect() override {
 		c = PQconnectdb(conninfo.c_str());
@@ -220,15 +225,15 @@ struct PgsqlSession : Session {
 	}
 };
 
-Session* make_session(Target t, CommandLine& cl, duckdb_database* db) {
+std::unique_ptr<Session> make_session(Target t, CommandLine& cl, duckdb_database* db) {
 	switch (t) {
 		case Target::native: {
-			auto* s = new NativeSession();
+			auto s = std::make_unique<NativeSession>();
 			s->db = db;
 			return s;
 		}
 		case Target::plugin_mysql: {
-			auto* s = new MysqlSession();
+			auto s = std::make_unique<MysqlSession>();
 			s->host = cl.host;
 			s->user = cl.username;
 			s->pass = cl.password;
@@ -236,7 +241,7 @@ Session* make_session(Target t, CommandLine& cl, duckdb_database* db) {
 			return s;
 		}
 		case Target::sqlite3: {
-			auto* s = new MysqlSession();
+			auto s = std::make_unique<MysqlSession>();
 			s->host = cl.host;
 			s->user = cl.username;
 			s->pass = cl.password;
@@ -244,7 +249,7 @@ Session* make_session(Target t, CommandLine& cl, duckdb_database* db) {
 			return s;
 		}
 		case Target::plugin_pgsql: {
-			auto* s = new PgsqlSession();
+			auto s = std::make_unique<PgsqlSession>();
 			s->conninfo = std::string("host=") + cl.host +
 				" port=" + kDuckdbPgsqlPort +
 				" user=" + cl.username + " password=" + cl.password +
@@ -252,7 +257,7 @@ Session* make_session(Target t, CommandLine& cl, duckdb_database* db) {
 			return s;
 		}
 	}
-	return nullptr;
+	return {};
 }
 
 std::string insert_batch_sql(const std::string& table, int start, int count) {
@@ -299,7 +304,7 @@ struct WorkerArg {
 	int iters;
 	std::vector<double> samples;
 	int errors = 0;
-	int warmup_logged = 0;
+	int warmup_errors = 0;
 };
 
 void* worker(void* varg) {
@@ -308,12 +313,12 @@ void* worker(void* varg) {
 		mysql_thread_init();
 	}
 
-	Session* persistent = nullptr;
+	std::unique_ptr<Session> persistent;
 	if (arg->workload != Workload::connect) {
 		persistent = make_session(arg->target, *arg->cl, arg->db);
 		if (persistent == nullptr || !persistent->connect()) {
 			arg->errors = arg->iters;
-			delete persistent;
+			persistent.reset();
 			if (arg->target == Target::plugin_mysql || arg->target == Target::sqlite3) {
 				mysql_thread_end();
 			}
@@ -323,12 +328,8 @@ void* worker(void* varg) {
 
 	auto one_iter = [&]() -> bool {
 		if (arg->workload == Workload::connect) {
-			Session* s = make_session(arg->target, *arg->cl, arg->db);
+			auto s = make_session(arg->target, *arg->cl, arg->db);
 			const bool ok = s && s->connect();
-			if (s) {
-				s->close();
-				delete s;
-			}
 			return ok;
 		}
 		const char* sql = (arg->workload == Workload::point)
@@ -343,10 +344,7 @@ void* worker(void* varg) {
 	};
 
 	for (int i = 0; i < arg->warmup; i++) {
-		if (!one_iter() && arg->warmup_logged < 3) {
-			diag("%s %s warmup failed", target_name(arg->target), workload_name(arg->workload));
-			arg->warmup_logged++;
-		}
+		if (!one_iter()) arg->warmup_errors++;
 	}
 
 	arg->samples.reserve(arg->iters);
@@ -358,10 +356,7 @@ void* worker(void* varg) {
 		else arg->errors++;
 	}
 
-	if (persistent) {
-		persistent->close();
-		delete persistent;
-	}
+	persistent.reset();
 	if (arg->target == Target::plugin_mysql || arg->target == Target::sqlite3) {
 		mysql_thread_end();
 	}
@@ -383,6 +378,7 @@ CellResult measure(Target t, Workload w, CommandLine& cl, duckdb_database* db,
 
 	timespec wall0, wall1;
 	clock_gettime(CLOCK_MONOTONIC, &wall0);
+	int created = 0;
 	for (int i = 0; i < nthreads; i++) {
 		args[i].target = t;
 		args[i].workload = w;
@@ -392,16 +388,24 @@ CellResult measure(Target t, Workload w, CommandLine& cl, duckdb_database* db,
 		args[i].warmup = cfg.warmup;
 		args[i].iters = cfg.iters;
 		if (pthread_create(&tids[i], nullptr, worker, &args[i]) != 0) {
-			BAIL_OUT("pthread_create failed");
+			args[i].errors = cfg.iters;
+			break;
 		}
+		created++;
 	}
-	for (int i = 0; i < nthreads; i++) pthread_join(tids[i], nullptr);
+	for (int i = 0; i < created; i++) pthread_join(tids[i], nullptr);
+	for (int i = created + 1; i < nthreads; i++) args[i].errors = cfg.iters;
 	clock_gettime(CLOCK_MONOTONIC, &wall1);
 
 	std::vector<double> all;
 	for (int i = 0; i < nthreads; i++) {
 		out.errors += args[i].errors;
+		out.warmup_errors += args[i].warmup_errors;
 		all.insert(all.end(), args[i].samples.begin(), args[i].samples.end());
+	}
+	if (out.warmup_errors > 0) {
+		diag("%s %s warmup failures=%d", out.target, out.workload,
+		     out.warmup_errors);
 	}
 	out.n_success = static_cast<int>(all.size());
 	const double wall_s = (wall1.tv_sec - wall0.tv_sec) +
@@ -449,6 +453,21 @@ void print_table(const CellResult* cells, int n) {
 
 } // namespace
 
+namespace {
+
+struct DuckDBDatabaseGuard {
+	duckdb_database* db;
+	~DuckDBDatabaseGuard() {
+		if (db != nullptr && *db != nullptr) duckdb_close(db);
+	}
+};
+
+struct MySQLLibraryGuard {
+	~MySQLLibraryGuard() { mysql_library_end(); }
+};
+
+} // namespace
+
 int main(int argc, char** argv) {
 	(void)argc;
 	(void)argv;
@@ -484,8 +503,12 @@ int main(int argc, char** argv) {
 	if (duckdb_open(":memory:", &db) != DuckDBSuccess || db == nullptr) {
 		BAIL_OUT("duckdb_open(:memory:) failed");
 	}
+	DuckDBDatabaseGuard db_guard { &db };
 
-	mysql_library_init(0, nullptr, nullptr);
+	if (mysql_library_init(0, nullptr, nullptr) != 0) {
+		BAIL_OUT("mysql_library_init failed");
+	}
+	MySQLLibraryGuard mysql_guard;
 
 	CellResult cells[kPlan];
 	const Workload workloads[3] = { Workload::connect, Workload::point, Workload::agg };
@@ -494,22 +517,20 @@ int main(int argc, char** argv) {
 		const Target t = targets[ti];
 		const int base = ti * 3;
 
-		Session* probe = make_session(t, cl, &db);
+		auto probe = make_session(t, cl, &db);
 		const bool reachable = probe && probe->connect();
 		if (!reachable) {
 			diag("%s setup connect failed", target_name(t));
-			delete probe;
 			fail_remaining(cells, base, 3, 0, target_name(t), "connect failed at setup");
 			continue;
 		}
 
 		bool agg_ok = true;
-		if (!setup_agg(probe, cfg.table[ti], cfg.rows)) {
+		if (!setup_agg(probe.get(), cfg.table[ti], cfg.rows)) {
 			diag("%s aggregation setup SQL failed", target_name(t));
 			agg_ok = false;
 		}
-		probe->close();
-		delete probe;
+		probe.reset();
 
 		if (!agg_ok) {
 			cells[base] = measure(t, Workload::connect, cl, &db, cfg);
@@ -522,12 +543,10 @@ int main(int argc, char** argv) {
 			cells[base + wi] = measure(t, workloads[wi], cl, &db, cfg);
 		}
 
-		Session* drop = make_session(t, cl, &db);
+		auto drop = make_session(t, cl, &db);
 		if (drop && drop->connect()) {
-			teardown_agg(drop, cfg.table[ti]);
-			drop->close();
+			teardown_agg(drop.get(), cfg.table[ti]);
 		}
-		delete drop;
 	}
 
 	print_table(cells, kPlan);
@@ -537,6 +556,5 @@ int main(int argc, char** argv) {
 		   "%s %s errors=0", cells[i].target, cells[i].workload);
 	}
 
-	duckdb_close(&db);
 	return exit_status();
 }

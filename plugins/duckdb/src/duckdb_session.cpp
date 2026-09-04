@@ -52,6 +52,14 @@ bool is_client_compatibility_set(const std::string& q) {
 	return q.rfind("SET NAMES ", 0) == 0 && q.find(';') == std::string::npos;
 }
 
+bool contains_ci(const std::string& value, const char* needle) {
+	std::string lower(value);
+	std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
+		return static_cast<char>(std::tolower(c));
+	});
+	return lower.find(needle) != std::string::npos;
+}
+
 } // namespace
 
 DuckDBIntercept duckdb_classify_query(const char* sql, size_t len) {
@@ -194,7 +202,12 @@ uint16_t duckdb_mysql_errno(duckdb_error_type type, const std::string& message) 
 	case DUCKDB_ERROR_AUTOLOAD:
 		return 1235;
 	case DUCKDB_ERROR_CONSTRAINT:
-		return 1062;
+		if (contains_ci(message, "not null constraint")) return 1048;
+		if (contains_ci(message, "check constraint")) return 3819;
+		if (contains_ci(message, "foreign key constraint")) return 1452;
+		if (contains_ci(message, "duplicate key") ||
+		    contains_ci(message, "unique constraint")) return 1062;
+		return 1105;
 	case DUCKDB_ERROR_CONNECTION:
 	case DUCKDB_ERROR_NETWORK:
 		return 2013;
@@ -265,8 +278,11 @@ namespace {
 
 enum class DuckDBTxnVerb { none, begin, commit, rollback };
 
+std::string trim_trailing_semicolons(const std::string& sql);
+
 DuckDBTxnVerb classify_txn_verb(const std::string& sql) {
-	const std::string q = normalize(sql.c_str(), sql.size());
+	const std::string trimmed = trim_trailing_semicolons(sql);
+	const std::string q = normalize(trimmed.c_str(), trimmed.size());
 	if (q.rfind("ROLLBACK TO", 0) == 0) return DuckDBTxnVerb::none;
 	if (q == "BEGIN" || q.rfind("BEGIN ", 0) == 0 ||
 	    q == "START TRANSACTION" || q.rfind("START TRANSACTION", 0) == 0) {
@@ -432,9 +448,23 @@ std::string trim_trailing_semicolons(const std::string& sql) {
 DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective) {
 	DuckDBExecOutcome outcome;
 	const DuckDBTxnVerb verb = classify_txn_verb(effective);
+	DuckDBSessionState& session_state = duckdb_session_state();
 	auto finish = [&]() {
-		apply_txn_outcome(duckdb_session_state(), verb, outcome.ok);
+		apply_txn_outcome(session_state, verb, outcome.ok);
 		return outcome;
+	};
+	auto run_control = [&](const char* sql) -> bool {
+		duckdb_result control_result;
+		if (duckdb_query(conn, sql, &control_result) == DuckDBSuccess) {
+			duckdb_destroy_result(&control_result);
+			return true;
+		}
+		const char* msg = duckdb_result_error(&control_result);
+		outcome.ok = false;
+		outcome.error = msg != nullptr ? msg : "DuckDB transaction control failed";
+		outcome.error_type = duckdb_result_error_type(&control_result);
+		duckdb_destroy_result(&control_result);
+		return false;
 	};
 
 	duckdb_prepared_statement stmt = nullptr;
@@ -448,6 +478,10 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 		duckdb_destroy_prepare(&stmt);
 		return finish();
 	}
+	const duckdb_statement_type statement_type = duckdb_prepared_statement_type(stmt);
+	const bool mutates_rows = statement_type == DUCKDB_STATEMENT_TYPE_INSERT ||
+		statement_type == DUCKDB_STATEMENT_TYPE_UPDATE ||
+		statement_type == DUCKDB_STATEMENT_TYPE_DELETE;
 
 	// Inspect the prepared statement's output schema -- no execution has
 	// happened yet -- for any column outside the direct-conversion
@@ -504,6 +538,38 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 		}
 	}
 
+	// Result conversion happens after DuckDB has executed the statement. For
+	// mutating statements (notably DML ... RETURNING), keep autocommit work in
+	// an internal transaction until the entire result is safely materialised.
+	// Otherwise an allocation/size failure could report an error after the
+	// mutation had already committed.
+	const bool owns_transaction = mutates_rows && session_state.pgsql_txn_status == 'I';
+	if (owns_transaction && !run_control("BEGIN TRANSACTION")) {
+		duckdb_destroy_prepare(&exec_stmt);
+		return finish();
+	}
+	auto rollback_conversion_failure = [&]() {
+		const bool explicit_transaction = mutates_rows && !owns_transaction &&
+			session_state.pgsql_txn_status == 'T';
+		if (owns_transaction || explicit_transaction) {
+			DuckDBExecOutcome saved = outcome;
+			if (run_control("ROLLBACK")) {
+				outcome = std::move(saved);
+				if (explicit_transaction) {
+					apply_txn_outcome(session_state, DuckDBTxnVerb::rollback, true);
+				}
+			}
+		}
+	};
+	auto commit_owned_transaction = [&]() -> bool {
+		if (!owns_transaction) return true;
+		if (run_control("COMMIT")) return true;
+		DuckDBExecOutcome commit_error = outcome;
+		(void)run_control("ROLLBACK");
+		outcome = std::move(commit_error);
+		return false;
+	};
+
 	duckdb_result res;
 	const duckdb_state exec_state = duckdb_execute_prepared(exec_stmt, &res);
 	duckdb_destroy_prepare(&exec_stmt);
@@ -513,6 +579,11 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 		outcome.error = msg != nullptr ? msg : "DuckDB query failed";
 		outcome.error_type = duckdb_result_error_type(&res);
 		duckdb_destroy_result(&res);
+		if (owns_transaction) {
+			DuckDBExecOutcome execution_error = outcome;
+			(void)run_control("ROLLBACK");
+			outcome = std::move(execution_error);
+		}
 		return finish();
 	}
 
@@ -528,12 +599,14 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 		outcome.has_resultset = false;
 		outcome.affected_rows = 0;
 		duckdb_destroy_result(&res);
+		(void)commit_owned_transaction();
 		return finish();
 	}
 	if (rtype == DUCKDB_RESULT_TYPE_CHANGED_ROWS) {
 		outcome.has_resultset = false;
 		outcome.affected_rows = static_cast<int>(duckdb_rows_changed(&res));
 		duckdb_destroy_result(&res);
+		(void)commit_owned_transaction();
 		return finish();
 	}
 
@@ -550,6 +623,11 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 		outcome.has_resultset = false;
 		outcome.error_type = DUCKDB_ERROR_OUT_OF_RANGE;
 		outcome.error = conversion_error;
+		rollback_conversion_failure();
+	} else if (!commit_owned_transaction()) {
+		delete outcome.result;
+		outcome.result = nullptr;
+		outcome.has_resultset = false;
 	}
 	return finish();
 }

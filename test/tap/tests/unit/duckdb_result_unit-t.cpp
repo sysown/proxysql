@@ -34,7 +34,7 @@ bool field_equals(const SQLite3_result* result, size_t row, size_t column,
 } // namespace
 
 int main() {
-	plan(31);
+	plan(40);
 
 	duckdb_database db = nullptr;
 	duckdb_connection conn = nullptr;
@@ -73,8 +73,58 @@ int main() {
 	}
 
 	{
+		std::unique_ptr<SQLite3_result> min_value(run(conn,
+			"SELECT '-170141183460469231731687303715884105728'::HUGEINT"));
+		ok(field_equals(min_value.get(), 0, 0,
+			"-170141183460469231731687303715884105728"),
+		   "minimum signed HUGEINT renders without overflow");
+
+		std::unique_ptr<SQLite3_result> max_value(run(conn,
+			"SELECT '170141183460469231731687303715884105727'::HUGEINT"));
+		ok(field_equals(max_value.get(), 0, 0,
+			"170141183460469231731687303715884105727"),
+		   "maximum signed HUGEINT renders exactly");
+
+		std::unique_ptr<SQLite3_result> unsigned_max(run(conn,
+			"SELECT '340282366920938463463374607431768211455'::UHUGEINT"));
+		ok(field_equals(unsigned_max.get(), 0, 0,
+			"340282366920938463463374607431768211455"),
+		   "UHUGEINT upper bits are preserved");
+	}
+
+	{
+		std::unique_ptr<SQLite3_result> positive(run(conn,
+			"SELECT '123456789012345678901234567890123456.78'::DECIMAL(38,2)"));
+		ok(field_equals(positive.get(), 0, 0,
+			"123456789012345678901234567890123456.78"),
+		   "wide positive DECIMAL preserves all 128-bit digits");
+
+		std::unique_ptr<SQLite3_result> negative(run(conn,
+			"SELECT '-123456789012345678901234567890123456.78'::DECIMAL(38,2)"));
+		ok(field_equals(negative.get(), 0, 0,
+			"-123456789012345678901234567890123456.78"),
+		   "wide negative DECIMAL preserves all 128-bit digits");
+	}
+
+	{
 		std::unique_ptr<SQLite3_result> r(run(conn, "SELECT TIMESTAMP '2024-01-01 12:00:00' AS ts"));
 		ok(field_equals(r.get(), 0, 0, "2024-01-01 12:00:00"), "timestamp value renders as text");
+	}
+
+	{
+		std::unique_ptr<SQLite3_result> dates(run(conn,
+			"SELECT DATE 'infinity', DATE '-infinity'"));
+		ok(field_equals(dates.get(), 0, 0, "infinity"),
+		   "positive infinite DATE renders as infinity");
+		ok(field_equals(dates.get(), 0, 1, "-infinity"),
+		   "negative infinite DATE renders as -infinity");
+
+		std::unique_ptr<SQLite3_result> timestamps(run(conn,
+			"SELECT TIMESTAMP 'infinity', TIMESTAMP '-infinity'"));
+		ok(field_equals(timestamps.get(), 0, 0, "infinity"),
+		   "positive infinite TIMESTAMP renders as infinity");
+		ok(field_equals(timestamps.get(), 0, 1, "-infinity"),
+		   "negative infinite TIMESTAMP renders as -infinity");
 	}
 
 	{

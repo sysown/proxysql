@@ -371,9 +371,7 @@ ifeq ($(USE_DUCKDB_BENCH),1)
 test_duckdb_bench-t: test_duckdb_bench-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT) $(DUCKDB_AR)
 	$(CXX) $< $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
 		$(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) \
-		-ltap $(MARIADB_LDIR)/libmariadbclient.a \
-		$(POSTGRESQL_STATIC_LIBS) $(OPENSSL_STATIC_LIBS) \
-		-lpthread -lm -lz -o $@
+		$(MARIADB_LDIR)/libmariadbclient.a $(CUSTOMARGS) -lm -o $@
 else
 test_duckdb_bench-t:
 	@echo "ERROR: test_duckdb_bench-t is PROXYSQL40-only" >&2; exit 1
