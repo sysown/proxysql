@@ -208,6 +208,12 @@ ProxySQL_PluginCommandResult load_variables_from_config(
 			return err_result("LOAD GENAI VARIABLES FROM CONFIG: failed reloading runtime components");
 		}
 	} else if (std::strcmp(prefix, "mcp") == 0) {
+		// Read_Global_Variables_from_configfile() updates main.global_variables;
+		// apply that new snapshot before re-evaluating the listener. Otherwise
+		// this command restarts against the handler's previous values.
+		if (!mcp_load_variables_from_admindb(ctx)) {
+			return err_result("LOAD MCP VARIABLES FROM CONFIG: failed applying global_variables");
+		}
 		AdminMutexHandoff handoff(cmd_ctx);
 		handoff.release();
 		mcp_start_listener_if_enabled(ctx);

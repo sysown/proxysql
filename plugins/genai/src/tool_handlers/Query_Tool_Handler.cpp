@@ -680,8 +680,9 @@ std::string Query_Tool_Handler::format_target_unavailable_error(const std::strin
 			// target_auth_map. Point at the two things that actually explain
 			// an empty registry instead.
 			return "No MCP targets in the runtime registry."
-			       " Rows in mcp_target_profiles reach the query endpoint only via"
-			       " 'LOAD MCP PROFILES TO RUNTIME', and rows that are inactive or"
+			       " Persisted profiles are installed automatically at startup; after"
+			       " editing mcp_target_profiles, run 'LOAD MCP PROFILES TO RUNTIME'."
+			       " Rows that are inactive or"
 			       " whose auth_profile_id does not resolve are excluded from it."
 			       " Check runtime_mcp_target_profiles.effective / .skip_reason";
 		}

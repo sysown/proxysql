@@ -126,7 +126,7 @@ SQLite3DB* proxysql_plugin_get_configdb() { return g_configdb; }
 SQLite3DB* proxysql_plugin_get_statsdb()  { return g_statsdb; }
 
 int main() {
-	plan(136);
+	plan(138);
 
 	g_admindb  = new SQLite3DB();
 	g_configdb = new SQLite3DB();
@@ -236,8 +236,25 @@ int main() {
 	ok(mgr.init_all(err),  "init_all succeeds");
 	if (!err.empty()) diag("init error: %s", err.c_str());
 
+	// Startup defaults to mcp-enabled=false, but persisted query rules must
+	// still populate MCP_Threads_Handler. Otherwise SAVE while the listener is
+	// down would overwrite main with an empty handler snapshot.
+	ok(g_admindb->execute(
+		"INSERT INTO mcp_query_rules"
+		" (rule_id, active, match_pattern, error_msg, apply)"
+		" VALUES(6060,1,'PERSIST_WHILE_DISABLED','preserved',1)"),
+	   "seed persisted query rule before disabled-listener startup");
+
 	ok(mgr.start_all(err), "start_all succeeds");
 	if (!err.empty()) diag("start error: %s", err.c_str());
+	ProxySQL_PluginCommandContext disabled_save_ctx { g_admindb, g_configdb, g_statsdb };
+	ProxySQL_PluginCommandResult disabled_save_result;
+	ok(mgr.dispatch_admin_command(
+		disabled_save_ctx, "SAVE MCP QUERY RULES TO MEMORY", disabled_save_result) &&
+	   disabled_save_result.error_code == 0 &&
+	   g_admindb->return_one_int(
+		"SELECT COUNT(*) FROM mcp_query_rules WHERE rule_id=6060") == 1,
+	   "SAVE preserves startup-loaded query rules while MCP listener is disabled");
 
 	ok(g_configdb->return_one_int(
 		"SELECT COUNT(*) FROM global_variables"

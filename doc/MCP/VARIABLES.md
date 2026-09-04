@@ -263,7 +263,7 @@ SAVE MCP QUERY RULES TO DISK    → Memory to Disk
 (restart)                       → Disk to Memory, then Memory to Runtime
 ```
 
-At startup Admin copies the on-disk copies back into `main.` before the genai
+At startup Admin copies the on-disk copies back into `main` before the genai
 plugin's start phase runs, and the plugin installs them into the runtime from
 there. No post-restart `LOAD MCP PROFILES FROM DISK` is required.
 

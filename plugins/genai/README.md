@@ -148,8 +148,8 @@ The chassis copies every plugin-registered `config_db` table from `disk.` into
 `main.` during Admin bootstrap, before the plugin's `start()` callback runs, so
 `SAVE MCP PROFILES TO DISK` / `SAVE MCP QUERY RULES TO DISK` survive a restart
 with no post-restart `LOAD ... FROM DISK` needed. `genai_start()` then installs
-profiles (before the listener starts, so the connection pools see them) and
-query rules (after, so they reach the `Discovery_Schema` catalog).
+profiles before listener construction, then installs query rules into the new
+`Discovery_Schema` before the listener starts accepting requests.
 
 ## 6. Configuration
 

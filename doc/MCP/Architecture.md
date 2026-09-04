@@ -231,13 +231,19 @@ Internally, the server resolves each `target_id` to runtime hostgroup metadata, 
 Credential separation model:
 
 - MCP endpoint authentication (Bearer token) identifies and authorizes the MCP client.
-- Backend database credentials are server-managed in MCP runtime profile tables:
+- Backend database credentials are server-managed in the MCP module's in-memory
+  joined target/auth map. The following Admin tables are read-only projections
+  of the module's current profile snapshots, not the storage used by requests:
   - `runtime_mcp_target_profiles`
   - `runtime_mcp_auth_profiles`
 - Query execution pools are keyed by `target_id + auth_profile_id`.
-- A target reaches the endpoint only if it survives the join between those two
-  tables. `runtime_mcp_target_profiles.effective` / `.skip_reason` report which
-  rows did not (`inactive`, `auth_profile_id not found`); see
+- Edit `main.mcp_auth_profiles` / `main.mcp_target_profiles`, then run
+  `LOAD MCP PROFILES TO RUNTIME` to replace the in-memory map. Direct edits to
+  the `runtime_` projection tables are overwritten and do not affect routing.
+- A target reaches the endpoint only if it survives the join between the two
+  editable profile tables. `runtime_mcp_target_profiles.effective` /
+  `.skip_reason` report which rows did not (`inactive`,
+  `auth_profile_id not found`); see
   [VARIABLES.md](VARIABLES.md#which-target-profiles-are-actually-usable).
 
 Current execution support:

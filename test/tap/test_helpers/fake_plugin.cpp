@@ -128,6 +128,16 @@ bool fake_register_schemas(ProxySQL_PluginServices *services) {
 		};
 		services->register_table(table);
 	}
+	if (env("PHASE_B_REGISTER_CONFIG_ONLY") != nullptr &&
+	    services != nullptr &&
+	    services->register_table != nullptr) {
+		const ProxySQL_PluginTableDef table {
+			ProxySQL_PluginDBKind::config_db,
+			FAKE_PLUGIN_NAME "_orphan_config",
+			"CREATE TABLE " FAKE_PLUGIN_NAME "_orphan_config (id INTEGER)"
+		};
+		services->register_table(table);
+	}
 	fake_log_event("phase_b");
 	return true;
 }

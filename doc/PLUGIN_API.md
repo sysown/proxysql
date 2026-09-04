@@ -198,8 +198,9 @@ struct ProxySQL_PluginTableDef {
 | `config_db` | On-disk    | Persistent configuration (survives restarts)         |
 | `stats_db`  | In-memory  | Statistics/metrics tables                            |
 
-**Convention**: For configuration tables that support the standard
-memory↔runtime↔disk tier model, register the editable table in **both**
+**Requirement**: Every `config_db` table participates in automatic disk-to-memory
+restore and must therefore have a same-name `admin_db` destination. Register
+the editable table in **both**
 `admin_db` and `config_db`. Register a separate `runtime_`-prefixed
 table in `admin_db` only — but treat it as an admin-side **projection**,
 not as a tier the plugin maintains: declare it via `register_table`,

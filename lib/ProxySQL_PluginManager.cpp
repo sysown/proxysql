@@ -6,6 +6,7 @@
 
 #include "ProxySQL_PluginManager.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <cctype>
@@ -475,6 +476,26 @@ bool ProxySQL_PluginManager::invoke_register_schemas_phase(std::string &err) {
 				err += ": " + registration_error;
 			}
 			return false;
+		}
+		// config_db tables are restored automatically into same-name tables
+		// in admin_db. Reject an orphan while the registration is still
+		// transactional, instead of emitting invalid INSERT ... SELECT SQL
+		// later during Admin bootstrap.
+		for (size_t i = snap_tables_config; i < tables_config_.size(); ++i) {
+			const ProxySQL_PluginTableDef& config_def = tables_config_[i];
+			const bool has_admin_twin = std::any_of(
+				tables_admin_.begin(), tables_admin_.end(),
+				[&](const ProxySQL_PluginTableDef& admin_def) {
+					return strcasecmp(admin_def.table_name, config_def.table_name) == 0;
+				});
+			if (!has_admin_twin) {
+				const std::string orphan_name = config_def.table_name;
+				rollback();
+				err = "plugin register_schemas failed: " + plugin_name(plugin.descriptor) +
+				      ": config_db table '" + orphan_name +
+				      "' requires a same-name admin_db table";
+				return false;
+			}
 		}
 		plugin.schemas_registered = true;
 	}
