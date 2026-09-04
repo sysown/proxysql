@@ -587,7 +587,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	child_func[0]=child_mysql;
 	child_func[1]=child_telnet;
 	child_func[2]=child_postgres;
-	main_shutdown=0;
+	__atomic_store_n(&main_shutdown, 0, __ATOMIC_RELEASE);
 	main_poll_nfds=0;
 	main_poll_fds=NULL;
 	main_callback_func=NULL;

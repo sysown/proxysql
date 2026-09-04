@@ -2577,7 +2577,8 @@ void * admin_main_loop(void *arg) {
 		pthread_mutex_lock(&GloVars.global.start_mutex);
 	}
 	__sync_fetch_and_add(&admin_load_main_,1);
-	while (glovars.shutdown==0 && *shutdown==0)
+	while (__atomic_load_n(&glovars.shutdown, __ATOMIC_ACQUIRE) == 0 &&
+		__atomic_load_n(shutdown, __ATOMIC_ACQUIRE) == 0)
 	{
 		//int *client;
 		//int client_t;
@@ -2599,7 +2600,8 @@ void * admin_main_loop(void *arg) {
 			admin_nostart_=false;
 			pthread_mutex_unlock(&GloVars.global.start_mutex);
 		}
-		if (__sync_fetch_and_add(&glovars.shutdown,0) != 0 || *shutdown != 0) {
+		if (__sync_fetch_and_add(&glovars.shutdown,0) != 0 ||
+			__atomic_load_n(shutdown, __ATOMIC_ACQUIRE) != 0) {
 			break;
 		}
 		if ((rc == -1 && errno == EINTR) || rc==0) {
@@ -2622,7 +2624,8 @@ void * admin_main_loop(void *arg) {
 					free(passarg);
 					continue;
 				}
-				if (__sync_fetch_and_add(&glovars.shutdown,0) != 0 || *shutdown != 0) {
+				if (__sync_fetch_and_add(&glovars.shutdown,0) != 0 ||
+					__atomic_load_n(shutdown, __ATOMIC_ACQUIRE) != 0) {
 					::shutdown(passarg->client_t, SHUT_RDWR);
 					close(passarg->client_t);
 					free(passarg->addr);
@@ -3316,6 +3319,7 @@ void ProxySQL_Admin::shutdown_threads() {
 		return;
 	}
 	admin_threads_shutdown = true;
+	__atomic_store_n(&main_shutdown, 1, __ATOMIC_RELEASE);
 
 	if (Admin_HTTP_Server) {
 		if (variables.web_enabled) {

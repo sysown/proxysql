@@ -617,12 +617,17 @@ FlushVariableStats ProxySQL_Admin::flush_mysql_variables___database_to_runtime(S
 		}
 		GloMTH->wrunlock();
 
+		// Snapshot the committed variables while holding only the MySQL threads
+		// lock.  The checksum section below must not reacquire GloMTH while it
+		// owns checksum_mutex: plugin configuration publication takes those locks
+		// in the opposite, canonical order (GloMTH before checksum_mutex).
+		flush_mysql_variables___runtime_to_database(admindb, false, false, false, true, true);
+
 		{
 			// NOTE: 'GloMTH->wrunlock()' should have been called before this point to avoid possible
 			// deadlocks. See issue #3847.
 			pthread_mutex_lock(&GloVars.checksum_mutex);
 			// generate checksum for cluster
-			flush_mysql_variables___runtime_to_database(admindb, false, false, false, true, true);
 			flush_GENERIC_variables__checksum__database_to_runtime("mysql", checksum, epoch);
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
 		}

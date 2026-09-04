@@ -422,6 +422,10 @@ int main() {
 	ProxySQL_Admin* admin = new ProxySQL_Admin();
 	GloAdmin = admin;
 	const bool admin_materialized = main_modules_ready && admin->init(bootstrap_info_t {});
+	// The production materializer starts the Admin maintenance thread.  This
+	// contract test exercises the materialized databases directly afterwards,
+	// so stop that background reader before mutating the runtime globals below.
+	admin->shutdown_threads();
 	SQLite3DB& admindb = *admin->admindb;
 	SQLite3DB& configdb = *admin->configdb;
 	ok(admin_materialized &&
@@ -785,7 +789,6 @@ int main() {
 		"stopping the plugin removes its owned listener gate");
 	manager.reset();
 	__sync_fetch_and_add(&glovars.shutdown, 1);
-	admin->shutdown_threads();
 	GloMTH->mysql_threads[0].worker = nullptr;
 	accept_worker.reset();
 	GloMyLogger = nullptr;
