@@ -62,6 +62,17 @@ bool pg_build_startup(unsigned char* out, size_t* out_len, size_t out_cap,
 // Result is the 35-char "md5..." string plus a terminating NUL (36 bytes total).
 void pg_build_md5(char out[36], const char* user, const char* password, const unsigned char salt[4]);
 
+// Same response, built from a STORED md5 secret instead of a plaintext password.
+// `md5_secret` is the pg_authid.rolpassword form that pgsql_users.password holds for an
+// md5-stored user: "md5" + 32 lowercase hex chars, where the hex IS the inner
+// md5(password+user). Only the outer hash over (inner_hex || salt) is left to compute --
+// running pg_build_md5() over such a secret would hash it a second time and the backend
+// would reject the login.
+// Returns false, leaving `out` untouched, unless the secret is exactly that form: 35
+// chars, "md5" prefix, 32 lowercase hex digits. A partially written response must never
+// reach the wire, so validation happens before the first byte is stored.
+bool pg_build_md5_from_secret(char out[36], const char* md5_secret, const unsigned char salt[4]);
+
 // Computes the tls-server-end-point channel-binding data for a finished TLS
 // session: the digest of the peer cert's DER encoding, using the cert's own
 // signature hash algorithm, upgraded to SHA-256 if it would otherwise be
@@ -119,8 +130,26 @@ const char* pg_scram_client_first(PgSQL_Scram_State* s, bool channel_binding);
 // NUL-terminated; server_first_len bytes are used. The password is treated as a SCRAM
 // plaintext secret (keys derived ad-hoc by libscram). Returns the owned message string,
 // or nullptr on error (nonce mismatch, malformed input, etc; see scram_error()).
+//
+// password may be nullptr ONLY after pg_scram_set_keys() has injected a ClientKey/ServerKey
+// pair; the exchange then runs off those keys and the salt and iteration count in
+// server_first are correctly unused. Without injected keys a nullptr password is an error.
 const char* pg_scram_client_final(PgSQL_Scram_State* s, const char* password,
                                   const char* server_first, size_t server_first_len);
+
+// Installs a harvested ClientKey and the stored verifier's ServerKey (32 bytes each) so
+// the exchange authenticates FROM THE KEYS, skipping SASLprep + PBKDF2 over a password we
+// do not have. This is the backend leg of verifier pass-through: the ClientKey recovered
+// from the client's frontend SCRAM proof, plus the ServerKey read out of the stored
+// verifier, are exactly the two secrets the rest of the handshake needs.
+//
+// BOTH keys are required. With only a ClientKey the proof would still be accepted but
+// pg_scram_verify_server_final() would have nothing genuine to check against, silently
+// dropping the server half of mutual authentication -- so a half-injection is refused and
+// the state is left untouched. Returns false on a NULL state or a NULL key.
+//
+// Call before pg_scram_client_final(), which may then be passed password == nullptr.
+bool pg_scram_set_keys(PgSQL_Scram_State* s, const uint8_t* client_key, const uint8_t* server_key);
 
 // Verifies the server-final message (AuthenticationSASLFinal body). server_final need
 // not be NUL-terminated; len bytes are used. Returns true iff the server signature

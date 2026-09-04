@@ -2534,6 +2534,16 @@ void PgSQL_Connection::native_drive_auth(short /*event*/) {
 
 		case 3: { // AuthenticationCleartextPassword
 			const char* pw = userinfo->password ? userinfo->password : "";
+			// Only a plaintext secret can answer this challenge: the backend wants the password
+			// itself, and a stored md5 hash or SCRAM verifier is a one-way derivation we cannot
+			// invert. libpq fails the same combination on its shared "no password supplied"
+			// guard in pg_fe_sendauth(), so refusing here keeps the two paths identical.
+			if (get_password_type(pw) != PASSWORD_TYPE_PLAINTEXT) {
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_INVALID_PASSWORD),
+					"backend requested a cleartext password but the stored credential is not a plaintext password", false);
+				native_teardown();
+				return;
+			}
 			size_t pwlen = strlen(pw);
 			native_outbuf.clear();
 			pg_append_typed_msg(native_outbuf, 'p', (const unsigned char*)pw, pwlen + 1); // include NUL
@@ -2555,7 +2565,34 @@ void PgSQL_Connection::native_drive_auth(short /*event*/) {
 			char md5buf[36];
 			const char* user = userinfo->username ? userinfo->username : "";
 			const char* pw = userinfo->password ? userinfo->password : "";
-			pg_build_md5(md5buf, user, pw, salt); // "md5"+32hex+NUL (35 chars + NUL)
+			// An md5-stored secret IS hex(md5(password+user)) -- the inner hash this response is
+			// built from. Running pg_build_md5() over it hashes it a SECOND time and the backend
+			// rejects the login -- the md5 divergence from libpq, which reuses the stored hash
+			// via the patched md5_secret conninfo parameter.
+			switch (get_password_type(pw)) {
+			case PASSWORD_TYPE_MD5:
+				// get_password_type() applies the same test (length 35, "md5", 32 lowercase hex),
+				// so this branch is unreachable from here; it is the postcondition that keeps a
+				// half-built response off the wire if the two ever diverge. Covered directly by
+				// pgsql_backend_auth-t rather than end to end.
+				if (!pg_build_md5_from_secret(md5buf, pw, salt)) {
+					set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_INVALID_PASSWORD),
+						"stored md5 credential is malformed; expected \"md5\" followed by 32 lowercase hex digits", false);
+					native_teardown();
+					return;
+				}
+				break;
+			case PASSWORD_TYPE_PLAINTEXT:
+				pg_build_md5(md5buf, user, pw, salt); // "md5"+32hex+NUL (35 chars + NUL)
+				break;
+			default:
+				// A SCRAM verifier cannot answer an md5 challenge at all: the two derivations
+				// share nothing. libpq reaches its no-password guard here and fails likewise.
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_INVALID_PASSWORD),
+					"backend requested md5 authentication but the stored credential is a SCRAM verifier", false);
+				native_teardown();
+				return;
+			}
 			native_outbuf.clear();
 			pg_append_typed_msg(native_outbuf, 'p', (const unsigned char*)md5buf, strlen(md5buf) + 1);
 			if (!native_send_or_buffer(PG_Native_Conn_St::AUTH)) {
@@ -2602,6 +2639,45 @@ void PgSQL_Connection::native_drive_auth(short /*event*/) {
 				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_OUT_OF_MEMORY), "scram state alloc failed", false);
 				native_teardown();
 				return;
+			}
+
+			// Verifier pass-through. A verifier-stored user has no plaintext to
+			// derive from, so the exchange runs off the ClientKey harvested during that user's
+			// FRONTEND SCRAM login plus the verifier's ServerKey -- PgSQL_Protocol.cpp records
+			// both on the userinfo. Installed before client-first so client-final has them.
+			{
+				const char* stored = userinfo->password ? userinfo->password : "";
+				if (userinfo->has_scram_keys) {
+					if (!pg_scram_set_keys(native_scram, userinfo->scram_client_key,
+							userinfo->scram_server_key)) {
+						set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_INVALID_PASSWORD),
+							"could not install the harvested SCRAM keys for the backend handshake", false);
+						native_teardown();
+						return;
+					}
+				} else switch (get_password_type(stored)) {
+				case PASSWORD_TYPE_PLAINTEXT:
+					break;   // libscram derives the keys ad-hoc from the plaintext
+				case PASSWORD_TYPE_SCRAM_SHA_256:
+					// A verifier with no harvested ClientKey: a proof derived from the verifier
+					// TEXT is always rejected. libpq refuses to build the conninfo at all here
+					// (pgsql_append_conninfo_credentials); fail for the same reason.
+					set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_INVALID_PASSWORD),
+						"SCRAM verifier stored but no harvested ClientKey; cannot authenticate to the backend without a frontend SCRAM login", false);
+					native_teardown();
+					return;
+				default:
+					// An md5 secret shares no derivation with SCRAM, so there is nothing to reuse.
+					// A role's FRONTEND auth-method floor and its backend pg_hba method are chosen
+					// independently, so an md5-stored user meeting a scram-sha-256 backend is
+					// reachable -- and without this the md5 hash TEXT would go through PBKDF2 and
+					// fail as an opaque "password authentication failed". libpq stops on its
+					// no-password guard here (only md5_secret was set, never password).
+					set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_INVALID_PASSWORD),
+						"backend requested SCRAM authentication but the stored credential is an md5 hash", false);
+					native_teardown();
+					return;
+				}
 			}
 
 			// If using -PLUS, set the cbind input BEFORE building client-first
@@ -2667,7 +2743,10 @@ void PgSQL_Connection::native_drive_auth(short /*event*/) {
 			// Copy server-first BEFORE building (client_final reads it; no further feed here,
 			// but copying keeps us robust against the dangling-pointer rule).
 			std::string server_first((const char*)rest, rest_len);
-			const char* pw = userinfo->password ? userinfo->password : "";
+			// With keys injected there is no password to send.
+			const char* pw = userinfo->has_scram_keys
+				? nullptr
+				: (userinfo->password ? userinfo->password : "");
 			const char* client_final = pg_scram_client_final(native_scram, pw, server_first.data(), server_first.size());
 			if (client_final == nullptr) {
 				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "SCRAM client-final failed", false);
