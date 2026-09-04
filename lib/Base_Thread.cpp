@@ -424,9 +424,19 @@ void Base_Thread::tune_timeout_for_myds_needs_pause(DS * myds) {
 template<typename T, typename DS>
 void Base_Thread::tune_timeout_for_session_needs_pause(DS * myds) {
 	T* thr = static_cast<T*>(this);
-	if (thr->mypolls.poll_timeout==0 || (myds->sess->pause_until - curtime < thr->mypolls.poll_timeout) ) {
-		thr->mypolls.poll_timeout= myds->sess->pause_until - curtime;
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , poll_timeout=%u , pause_until=%llu , curtime=%llu\n", myds->sess, thr->mypolls.poll_timeout, myds->sess->pause_until, curtime);
+
+	// Only adjust poll_timeout if the pause is still in the future. If pause_until
+	// is stale (already <= curtime), computing (pause_until - curtime) as unsigned
+	// would underflow to ~1.8e19 and corrupt poll_timeout, making poll() fall back
+	// to the default timeout (~2s) and stalling the worker thread. The stale-pause
+	// case is handled by check_timing_out_session (AfterPoll) and the handler-entry
+	// pause checks, so doing nothing here is correct.
+	if (myds->sess->pause_until > curtime) {
+		if (thr->mypolls.poll_timeout == 0 || (myds->sess->pause_until - curtime < thr->mypolls.poll_timeout)) {
+			thr->mypolls.poll_timeout = myds->sess->pause_until - curtime;
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , poll_timeout=%u , pause_until=%llu , curtime=%llu\n", myds->sess, thr->mypolls.poll_timeout,
+				myds->sess->pause_until, curtime);
+		}
 	}
 }
 
