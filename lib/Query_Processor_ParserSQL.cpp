@@ -413,26 +413,39 @@ void parsersql_digest_init_mysql(SQP_par_t* qp, const char* query, int query_len
     qp->first_comment = NULL;
     qp->query_prefix = NULL;
     qp->digest = 0;
+    qp->parsersql_stmt_type = -1;
 
     auto result = tl_mysql_parser.parse(query, query_length);
 
     if (result.status == ParseResult::OK || result.status == ParseResult::PARTIAL) {
-        std::string normalized;
+        // The arena holds 'normalized' until reset() below, so it can be hashed and copied out directly.
+        const char* normalized = NULL;
+        size_t normalized_len = 0;
         if (result.ast) {
             // Tier 1: full AST available — use Emitter in DIGEST mode
             Emitter<Dialect::MySQL> emitter(tl_mysql_parser.arena(), EmitMode::DIGEST);
             emitter.emit(result.ast);
             StringRef ref = emitter.result();
-            normalized.assign(ref.ptr, ref.len);
+            normalized = ref.ptr;
+            normalized_len = ref.len;
         } else {
             // Tier 2: token-level fallback for statements without full AST support
             Digest<Dialect::MySQL> digest(tl_mysql_parser.arena());
             DigestResult dr = digest.compute(query, query_length);
-            normalized.assign(dr.normalized.ptr, dr.normalized.len);
+            normalized = dr.normalized.ptr;
+            normalized_len = dr.normalized.len;
         }
-        qp->digest_text = strdup(normalized.c_str());
         // SpookyHash is preserved for backward compatibility with existing digest stats
-        qp->digest = SpookyHash::Hash64(normalized.c_str(), normalized.size(), 0);
+        qp->digest = SpookyHash::Hash64(normalized, normalized_len, 0);
+        qp->parsersql_stmt_type = static_cast<int>(result.stmt_type);
+        // Reuse qp->buf when it fits, as query_parser_free() expects for the legacy tokenizer.
+        if (normalized_len < QUERY_DIGEST_BUF) {
+            memcpy(qp->buf, normalized, normalized_len);
+            qp->buf[normalized_len] = '\0';
+            qp->digest_text = qp->buf;
+        } else {
+            qp->digest_text = strndup(normalized, normalized_len);
+        }
     }
 
     tl_mysql_parser.reset();
@@ -444,23 +457,34 @@ void parsersql_digest_init_pgsql(SQP_par_t* qp, const char* query, int query_len
     qp->first_comment = NULL;
     qp->query_prefix = NULL;
     qp->digest = 0;
+    qp->parsersql_stmt_type = -1;
 
     auto result = tl_pgsql_parser.parse(query, query_length);
 
     if (result.status == ParseResult::OK || result.status == ParseResult::PARTIAL) {
-        std::string normalized;
+        const char* normalized = NULL;
+        size_t normalized_len = 0;
         if (result.ast) {
             Emitter<Dialect::PostgreSQL> emitter(tl_pgsql_parser.arena(), EmitMode::DIGEST);
             emitter.emit(result.ast);
             StringRef ref = emitter.result();
-            normalized.assign(ref.ptr, ref.len);
+            normalized = ref.ptr;
+            normalized_len = ref.len;
         } else {
             Digest<Dialect::PostgreSQL> digest(tl_pgsql_parser.arena());
             DigestResult dr = digest.compute(query, query_length);
-            normalized.assign(dr.normalized.ptr, dr.normalized.len);
+            normalized = dr.normalized.ptr;
+            normalized_len = dr.normalized.len;
         }
-        qp->digest_text = strdup(normalized.c_str());
-        qp->digest = SpookyHash::Hash64(normalized.c_str(), normalized.size(), 0);
+        qp->digest = SpookyHash::Hash64(normalized, normalized_len, 0);
+        qp->parsersql_stmt_type = static_cast<int>(result.stmt_type);
+        if (normalized_len < QUERY_DIGEST_BUF) {
+            memcpy(qp->buf, normalized, normalized_len);
+            qp->buf[normalized_len] = '\0';
+            qp->digest_text = qp->buf;
+        } else {
+            qp->digest_text = strndup(normalized, normalized_len);
+        }
     }
 
     tl_pgsql_parser.reset();
@@ -563,6 +587,14 @@ enum MYSQL_COM_QUERY_command parsersql_command_type_mysql(const char* query, int
         return stmt_type_to_mysql_command(result.stmt_type);
     }
     return MYSQL_COM_QUERY_UNKNOWN;
+}
+
+enum MYSQL_COM_QUERY_command parsersql_stmt_type_to_mysql_command(int stmt_type) {
+    return stmt_type_to_mysql_command(static_cast<StmtType>(stmt_type));
+}
+
+enum PGSQL_QUERY_command parsersql_stmt_type_to_pgsql_command(int stmt_type) {
+    return stmt_type_to_pgsql_command(static_cast<StmtType>(stmt_type));
 }
 
 enum PGSQL_QUERY_command parsersql_command_type_pgsql(const char* query, int query_length) {
