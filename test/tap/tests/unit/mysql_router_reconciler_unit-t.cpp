@@ -89,7 +89,7 @@ public:
 } // namespace
 
 int main() {
-	plan(32);
+	plan(33);
 
 	Backend backend;
 	MysqlRouterReconciler reconciler(backend, {2000, 30000}, 10, 9);
@@ -262,6 +262,11 @@ int main() {
 	ok(user_gate_refresh.users_published && !user_gate_refresh.topology_published &&
 		user_gate_refresh.gates_ready && user_gate_backend.gate_ready,
 	   "a user-only refresh cannot leave Router listeners closed");
+	user_gate_backend.now += 1;
+	user_gate_backend.fail_gate_open = true;
+	auto user_gate_failure = user_gate.refresh({false, false});
+	ok(!user_gate_failure.gates_ready && !user_gate_failure.user_error.empty(),
+	   "a failed gate reopen makes a user-only reconciliation fail visibly");
 
 	return exit_status();
 }
