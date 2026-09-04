@@ -176,6 +176,7 @@ PgSQL_Connection::PgSQL_Connection(bool is_client_conn) {
 	unknown_transaction_status = false;
 	send_quit = true;
 	reusable = false;
+	healthy = true;
 	multiplex_delayed = false;
 	processing_multi_statement = false;
 	async_state_machine = ASYNC_CONNECT_START;
@@ -456,6 +457,28 @@ handler_again:
 			break;
 		}
 
+		// Issue #6109: the fetch produced nothing to dispatch. fetch_result_cont()
+		// returns from its PQconsumeInput() failure without assigning result_type, so
+		// the dispatch below would act on the previous iteration's value; its other
+		// empty returns set async_exit_status and were handled above. The transport may
+		// also be gone with a result already taken (result_type 1 or 2 and a NULL
+		// pgsql_result), which libpq reports as CONNECTION_BAD.
+		//
+		// End the cycle either way, so async_query() returns -1 and the session
+		// destroys the connection and unplugs the dead fd. Not is_error_present():
+		// that is also true for an ordinary backend ERROR, which must keep flowing
+		// through the PGRES_FATAL_ERROR arm below. pgsql_result == NULL keeps a pending
+		// multi-statement result dispatching first. is_copy_out is cleared because a
+		// backend dying mid-COPY would otherwise reach the end state with it still set.
+		if (result_type == 0 || (pgsql_result == NULL && PQstatus(pgsql_conn) == CONNECTION_BAD)) {
+			is_copy_out = false;
+			if (!is_error_present()) {
+				set_error(PGSQL_ERROR_CODES::ERRCODE_CONNECTION_FAILURE,
+					"backend connection lost mid-result", false);
+			}
+			NEXT_IMMEDIATE(fetch_result_end_st);
+		}
+
 		if (result_type == 1) {
 			std::unique_ptr<PGresult, decltype(&PQclear)> result(get_result(), PQclear);
 
@@ -669,9 +692,32 @@ handler_again:
 		// it indicates a non-error scenario and we skip this check.
 		if (exit_pipeline_mode == false &&
 			(query_result->get_result_packet_type() & (PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_EMPTY | PGSQL_QUERY_RESULT_ERROR)) == 0) {
-			// if we reach here we assume that error_info is already set in previous call
-			if (!is_error_present())
-				assert(0); // we might have missed setting error_info in previous call
+			// Issue #6110: normally error_info was set on a previous call. It is not always: a
+			// backend can answer a query with NO command outcome at all - a bare
+			// ReadyForQuery, without CommandComplete, EmptyQueryResponse or
+			// ErrorResponse. That is the backend violating the protocol, not an
+			// invariant of ours, so report it to the client rather than aborting the
+			// process. Setting error_info here also feeds add_error(NULL) below, which
+			// otherwise asserts for the same reason.
+			//
+			// Two independent consequences follow, one per object:
+			//   - the CONNECTION is unhealthy and not reusable, so it is destroyed
+			//     rather than pooled or reset. A reset cannot cure a server that
+			//     answers incorrectly, and another client must not inherit it.
+			//   - the SESSION is closed, because a reply we cannot interpret leaves
+			//     us unable to vouch for its protocol state.
+			// They are set separately on purpose: neither implies the other.
+			if (!is_error_present()) {
+				proxy_error("Backend %s:%d answered a query with no command outcome (bare ReadyForQuery)\n",
+					parent ? parent->address : "?", parent ? parent->port : 0);
+				set_error(PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION,
+					"backend answered the query with no command outcome", false);
+				reusable = false;
+				healthy = false;
+				if (myds && myds->sess) {
+					myds->sess->set_unhealthy();
+				}
+			}
 
 			query_result->add_error(NULL);
 		}
@@ -1323,17 +1369,28 @@ void PgSQL_Connection::fetch_result_start() {
 	PROXY_TRACE();
 	reset_error();
 	async_exit_status = PG_EVENT_NONE;
+	// result_type and ps_result are per-fetch outputs but have connection lifetime.
+	// Left over from a previous fetch they are indistinguishable from a value this
+	// one produced, so reset them where the cycle starts.
+	result_type = 0;
+	ps_result.id = 0;
+	ps_result.len = 0;
+	ps_result.data = NULL;
 }
 
 void PgSQL_Connection::fetch_result_cont(short event) {
 	PROXY_TRACE();
 	async_exit_status = PG_EVENT_NONE;
 
-	// Avoid fetching a new result if one is already available. 
+	// Avoid fetching a new result if one is already available.
 	// This situation can happen when a multi-statement query has been executed.
-	if (pgsql_result)
+	// result_type must be set: fetch_result_start() zeroed it for this cycle, so
+	// without this the caller would dispatch on 0 instead of the pending result.
+	if (pgsql_result) {
+		result_type = 1;
 		return;
-	
+	}
+
 	if (is_copy_out == false) {
 		switch (PShandleRowData(pgsql_conn, new_result, &ps_result)) {
 		case 0:

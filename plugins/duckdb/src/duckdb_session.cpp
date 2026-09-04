@@ -204,6 +204,7 @@ uint16_t duckdb_mysql_errno(duckdb_error_type type, const std::string& message) 
 	case DUCKDB_ERROR_CONSTRAINT:
 		if (contains_ci(message, "not null constraint")) return 1048;
 		if (contains_ci(message, "check constraint")) return 3819;
+		if (contains_ci(message, "still referenced by a foreign key")) return 1451;
 		if (contains_ci(message, "foreign key constraint")) return 1452;
 		if (contains_ci(message, "duplicate key") ||
 		    contains_ci(message, "unique constraint")) return 1062;

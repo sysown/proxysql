@@ -35,7 +35,7 @@ int scalar_count(duckdb_connection conn, const char* sql) {
 } // namespace
 
 int main() {
-	plan(60);
+	plan(62);
 
 	ok(classify("SELECT @@version") == DuckDBIntercept::version,
 	   "SELECT @@version is intercepted");
@@ -131,6 +131,14 @@ int main() {
 	ok(duckdb_mysql_errno(DUCKDB_ERROR_CONSTRAINT,
 		"Constraint Error: CHECK constraint failed on table t") == 3819,
 	   "DuckDB CHECK errors map to MySQL ER_CHECK_CONSTRAINT_VIOLATED");
+	ok(duckdb_mysql_errno(DUCKDB_ERROR_CONSTRAINT,
+		"Constraint Error: Violates foreign key constraint because key \"id: 1\" "
+		"does not exist in the referenced table") == 1452,
+	   "DuckDB missing-parent errors map to MySQL ER_NO_REFERENCED_ROW_2");
+	ok(duckdb_mysql_errno(DUCKDB_ERROR_CONSTRAINT,
+		"Constraint Error: Violates foreign key constraint because key \"id: 1\" "
+		"is still referenced by a foreign key in a different table") == 1451,
+	   "DuckDB referenced-parent errors map to MySQL ER_ROW_IS_REFERENCED_2");
 	ok(duckdb_mysql_errno(DUCKDB_ERROR_CONSTRAINT, "Constraint Error: unknown") == 1105,
 	   "unclassified DuckDB constraints do not masquerade as duplicate keys");
 	ok(std::strcmp(duckdb_mysql_sqlstate(DUCKDB_ERROR_CONSTRAINT, ""), "23000") == 0,
