@@ -8,6 +8,7 @@ using json = nlohmann::json;
 #include "proxysql_atomic.h"
 
 #include "PgSQL_Authentication.h"
+#include "scram.h"   // get_password_type, PasswordType (load-time credential validation)
 
 #ifndef SPOOKYV2
 #include "SpookyV2.h"
@@ -110,6 +111,14 @@ creds_group_t& PgSQL_Authentication::creds_for(enum cred_username_type usertype)
 }
 
 bool PgSQL_Authentication::add(char * username, char * password, enum cred_username_type usertype, bool use_ssl, int default_hostgroup, bool transaction_persistent, bool fast_forward, int max_connections, char* attributes, char *comment) {
+	// Reject a credential that looks like a SCRAM verifier but does not parse, so a
+	// mistyped verifier is never silently stored as a literal plaintext password. (md5 follows the
+	// PostgreSQL convention: "md5"+32hex is md5, anything else is plaintext — so no md5 rejection here.)
+	if (password && strncmp(password, "SCRAM-SHA-256$", 14) == 0
+	    && get_password_type(password) != PASSWORD_TYPE_SCRAM_SHA_256) {
+		proxy_error("pgsql_users: user '%s' has a malformed SCRAM-SHA-256 verifier; skipping\n", username);
+		return false;
+	}
 	uint64_t hash1, hash2;
 	SpookyHash myhash;
 	myhash.Init(1,2);

@@ -684,7 +684,7 @@ static PartialAstCase parsersql_partial_ast_strict[] = {
 };
 
 void TestPartialAstGate() {
-	for (size_t i = 0; i < arraysize(parsersql_partial_ast_strict); i++) {
+	for (size_t i = 0; i < std::size(parsersql_partial_ast_strict); i++) {
 		const auto& c = parsersql_partial_ast_strict[i];
 		auto m = parsersql_parse_set_pgsql(c.query);
 		bool got_nonempty = !m.empty();
@@ -726,7 +726,7 @@ void TestWalkerToValidatorChain184() {
 }
 
 void TestSearchPathValidator() {
-	for (size_t i = 0; i < arraysize(parsersql_search_path_validator_cases); i++) {
+	for (size_t i = 0; i < std::size(parsersql_search_path_validator_cases); i++) {
 		const auto& c = parsersql_search_path_validator_cases[i];
 		char* xform = nullptr;
 		bool got_ok = inline_validate_search_path(c.value, &xform);
@@ -772,55 +772,55 @@ void TestEmptyOnParseFail(const EmptyOnParseFailCase* cases, int n) {
 
 int main(int argc, char** argv) {
 	unsigned int p = 0;
-	p += arraysize(sql_mode);
-	p += arraysize(time_zone);
-	p += arraysize(session_track_gtids);
-	p += arraysize(character_set_results);
-	p += arraysize(names);
-	p += arraysize(various);
-	p += arraysize(multiple);
-	p += arraysize(Set1_v2);
-	p += arraysize(parsersql_syntax_errors);
-	p += arraysize(parsersql_mysql_filtered_set);
-	p += arraysize(parsersql_mysql_source_span_legacy);
-	p += arraysize(parsersql_mysql_set_testing);
-	p += arraysize(parsersql_pr5088_mysql_set_syntax);
-	p += arraysize(parsersql_pr5088_mysql_dataset_syntax);
-	p += arraysize(parsersql_pr5088_mysql_sql_mode_expr);
-	p += arraysize(parsersql_pr5088_mysql_expr_syntax);
-	p += arraysize(parsersql_pr5088_mysql_raw_rhs_syntax);
-	p += arraysize(parsersql_pgsql_search_path);
-	p += arraysize(parsersql_pgsql_time_zone);
+	p += std::size(sql_mode);
+	p += std::size(time_zone);
+	p += std::size(session_track_gtids);
+	p += std::size(character_set_results);
+	p += std::size(names);
+	p += std::size(various);
+	p += std::size(multiple);
+	p += std::size(Set1_v2);
+	p += std::size(parsersql_syntax_errors);
+	p += std::size(parsersql_mysql_filtered_set);
+	p += std::size(parsersql_mysql_source_span_legacy);
+	p += std::size(parsersql_mysql_set_testing);
+	p += std::size(parsersql_pr5088_mysql_set_syntax);
+	p += std::size(parsersql_pr5088_mysql_dataset_syntax);
+	p += std::size(parsersql_pr5088_mysql_sql_mode_expr);
+	p += std::size(parsersql_pr5088_mysql_expr_syntax);
+	p += std::size(parsersql_pr5088_mysql_raw_rhs_syntax);
+	p += std::size(parsersql_pgsql_search_path);
+	p += std::size(parsersql_pgsql_time_zone);
 	p *= 2;
-	p += arraysize(parsersql_function_call_strict) * 2;
-	p += arraysize(parsersql_pgsql_ident_strict) * 2;
-	p += arraysize(parsersql_parse_fail_strict);
-	p += arraysize(parsersql_search_path_validator_cases) * 2;
+	p += std::size(parsersql_function_call_strict) * 2;
+	p += std::size(parsersql_pgsql_ident_strict) * 2;
+	p += std::size(parsersql_parse_fail_strict);
+	p += std::size(parsersql_search_path_validator_cases) * 2;
 	p += 2;  // TestWalkerToValidatorChain184
-	p += arraysize(parsersql_partial_ast_strict);  // TestPartialAstGate
+	p += std::size(parsersql_partial_ast_strict);  // TestPartialAstGate
 	plan(p);
-	TestParse(sql_mode, arraysize(sql_mode), "sql_mode");
-	TestParse(time_zone, arraysize(time_zone), "time_zone");
-	TestParse(session_track_gtids, arraysize(session_track_gtids), "session_track_gtids");
-	TestParse(character_set_results, arraysize(character_set_results), "character_set_results");
-	TestParse(names, arraysize(names), "names");
-	TestParse(various, arraysize(various), "various");
-	TestParse(multiple, arraysize(multiple), "multiple");
-	TestParse(Set1_v2, arraysize(Set1_v2), "Set1_v2");
-	TestParse(parsersql_syntax_errors, arraysize(parsersql_syntax_errors), "parsersql_syntax_errors");
-	TestParse(parsersql_mysql_filtered_set, arraysize(parsersql_mysql_filtered_set), "mysql_filtered_set");
-	TestParse(parsersql_mysql_source_span_legacy, arraysize(parsersql_mysql_source_span_legacy), "mysql_source_span_legacy");
-	TestParse(parsersql_mysql_set_testing, arraysize(parsersql_mysql_set_testing), "mysql_set_testing");
-	TestParse(parsersql_pr5088_mysql_set_syntax, arraysize(parsersql_pr5088_mysql_set_syntax), "pr5088_mysql_set_syntax");
-	TestParse(parsersql_pr5088_mysql_dataset_syntax, arraysize(parsersql_pr5088_mysql_dataset_syntax), "pr5088_mysql_dataset_syntax");
-	TestParse(parsersql_pr5088_mysql_sql_mode_expr, arraysize(parsersql_pr5088_mysql_sql_mode_expr), "pr5088_mysql_sql_mode_expr");
-	TestParse(parsersql_pr5088_mysql_expr_syntax, arraysize(parsersql_pr5088_mysql_expr_syntax), "pr5088_mysql_expr_syntax");
-	TestParse(parsersql_pr5088_mysql_raw_rhs_syntax, arraysize(parsersql_pr5088_mysql_raw_rhs_syntax), "pr5088_mysql_raw_rhs_syntax");
-	TestParsePgsql(parsersql_pgsql_search_path, arraysize(parsersql_pgsql_search_path), "pgsql_search_path");
-	TestParsePgsql(parsersql_pgsql_time_zone, arraysize(parsersql_pgsql_time_zone), "pgsql_time_zone");
-	TestStrictFunctionCall(parsersql_function_call_strict, arraysize(parsersql_function_call_strict));
-	TestStrictPgsqlIdent(parsersql_pgsql_ident_strict, arraysize(parsersql_pgsql_ident_strict));
-	TestEmptyOnParseFail(parsersql_parse_fail_strict, arraysize(parsersql_parse_fail_strict));
+	TestParse(sql_mode, std::size(sql_mode), "sql_mode");
+	TestParse(time_zone, std::size(time_zone), "time_zone");
+	TestParse(session_track_gtids, std::size(session_track_gtids), "session_track_gtids");
+	TestParse(character_set_results, std::size(character_set_results), "character_set_results");
+	TestParse(names, std::size(names), "names");
+	TestParse(various, std::size(various), "various");
+	TestParse(multiple, std::size(multiple), "multiple");
+	TestParse(Set1_v2, std::size(Set1_v2), "Set1_v2");
+	TestParse(parsersql_syntax_errors, std::size(parsersql_syntax_errors), "parsersql_syntax_errors");
+	TestParse(parsersql_mysql_filtered_set, std::size(parsersql_mysql_filtered_set), "mysql_filtered_set");
+	TestParse(parsersql_mysql_source_span_legacy, std::size(parsersql_mysql_source_span_legacy), "mysql_source_span_legacy");
+	TestParse(parsersql_mysql_set_testing, std::size(parsersql_mysql_set_testing), "mysql_set_testing");
+	TestParse(parsersql_pr5088_mysql_set_syntax, std::size(parsersql_pr5088_mysql_set_syntax), "pr5088_mysql_set_syntax");
+	TestParse(parsersql_pr5088_mysql_dataset_syntax, std::size(parsersql_pr5088_mysql_dataset_syntax), "pr5088_mysql_dataset_syntax");
+	TestParse(parsersql_pr5088_mysql_sql_mode_expr, std::size(parsersql_pr5088_mysql_sql_mode_expr), "pr5088_mysql_sql_mode_expr");
+	TestParse(parsersql_pr5088_mysql_expr_syntax, std::size(parsersql_pr5088_mysql_expr_syntax), "pr5088_mysql_expr_syntax");
+	TestParse(parsersql_pr5088_mysql_raw_rhs_syntax, std::size(parsersql_pr5088_mysql_raw_rhs_syntax), "pr5088_mysql_raw_rhs_syntax");
+	TestParsePgsql(parsersql_pgsql_search_path, std::size(parsersql_pgsql_search_path), "pgsql_search_path");
+	TestParsePgsql(parsersql_pgsql_time_zone, std::size(parsersql_pgsql_time_zone), "pgsql_time_zone");
+	TestStrictFunctionCall(parsersql_function_call_strict, std::size(parsersql_function_call_strict));
+	TestStrictPgsqlIdent(parsersql_pgsql_ident_strict, std::size(parsersql_pgsql_ident_strict));
+	TestEmptyOnParseFail(parsersql_parse_fail_strict, std::size(parsersql_parse_fail_strict));
 	TestSearchPathValidator();
 	TestWalkerToValidatorChain184();
 	TestPartialAstGate();

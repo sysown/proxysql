@@ -224,6 +224,9 @@ public:
 	void fill_client_internal_session(nlohmann::json &j, int idx);
 };
 
+// Length of a SCRAM-SHA-256 ClientKey/ServerKey (== SHA256_DIGEST_LENGTH).
+#define PGSQL_SCRAM_KEY_LEN 32
+
 class PgSQL_Connection_userinfo {
 	private:
 	uint64_t compute_hash();
@@ -237,7 +240,12 @@ class PgSQL_Connection_userinfo {
 	};
 	char *sha1_pass;
 	char *fe_username;
-	// TODO POSGRESQL: add client and server scram keys
+	// ClientKey harvested from the client's frontend login + the stored verifier's ServerKey,
+	// carried to the backend connection. Deliberately NOT part of compute_hash() so connection-pool
+	// reuse semantics are unchanged.
+	uint8_t scram_client_key[PGSQL_SCRAM_KEY_LEN];
+	uint8_t scram_server_key[PGSQL_SCRAM_KEY_LEN];
+	bool has_scram_keys;
 	PgSQL_Connection_userinfo();
 	~PgSQL_Connection_userinfo();
 	void set(char *, char *, char *, char *);
@@ -723,6 +731,13 @@ public:
 	char* dbname;
 	unsigned int port;
 
+	// Copies of the credential material harvested for this user's frontend login. The kill/terminate
+	// connection authenticates to the backend exactly like a pooled one, so it needs the same
+	// pass-through keys: a verifier/md5 secret shipped as a plaintext 'password' is rejected.
+	uint8_t scram_client_key[PGSQL_SCRAM_KEY_LEN];
+	uint8_t scram_server_key[PGSQL_SCRAM_KEY_LEN];
+	bool has_scram_keys;
+
 	int backend_pid;
 	unsigned int hostgroup_id;
 	TYPE type;
@@ -739,7 +754,9 @@ public:
 		char* ssl_max_protocol_version;
 	} ssl_config;
 
-	PgSQL_Backend_Kill_Args(PGconn* conn, const char* user, const char* pass, const char* db, const char* host,
+	// 'ui' supplies the credentials (username/password/dbname AND any harvested SCRAM keys); it is
+	// deep-copied, since the kill runs on a detached thread that outlives the source connection.
+	PgSQL_Backend_Kill_Args(PGconn* conn, const PgSQL_Connection_userinfo* ui, const char* host,
 		unsigned int port, unsigned int hid, bool ssl, TYPE typ, PgSQL_Thread* thd);
 	~PgSQL_Backend_Kill_Args();
 };

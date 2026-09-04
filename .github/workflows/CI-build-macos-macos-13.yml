@@ -85,8 +85,6 @@ jobs:
       BRANCH: ${{ github.ref_name }}
       RELEASE_ID: ${{ needs.init_release.outputs.release_id }}
       PROXYSQL31: "0"
-      PKG_CONFIG_PATH: "/usr/local/opt/openssl@3/lib/pkgconfig"
-      OPENSSL_ROOT_DIR: "/usr/local/opt/openssl@3"
 
     steps:
     - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
@@ -102,7 +100,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        brew install automake bzip2 cmake gpatch gnutls libtool openssl@3 icu4c pkg-config libiconv zlib
+        brew install automake bzip2 cmake gpatch gnutls libtool icu4c pkg-config libiconv zlib
 
     - name: Checkout repository
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -110,6 +108,8 @@ jobs:
         repository: ${{ github.repository }}
         ref: ${{ github.sha }}
         fetch-depth: 0
+        lfs: true
+        persist-credentials: false
 
     - name: Build ProxySQL
       run: |
