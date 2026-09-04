@@ -70,6 +70,8 @@ void fake_log_event(const char *event) {
 // variant) is set.  Toggles via env vars:
 //   _PHASE_B_FAIL         -> return false
 //   _PHASE_B_REGISTER_TABLE -> register a per-plugin admin table (Phase B)
+//   _PHASE_B_REGISTER_MISMATCHED_TWINS -> register same-name admin/config
+//                              tables with incompatible definitions
 //   _PHASE_B_TOUCH_HANDLES  -> try to call DB handle getters; if they come
 //                              back null we log "phase_b_handles_null",
 //                              otherwise "phase_b_handles_live" (the
@@ -137,6 +139,22 @@ bool fake_register_schemas(ProxySQL_PluginServices *services) {
 			"CREATE TABLE " FAKE_PLUGIN_NAME "_orphan_config (id INTEGER)"
 		};
 		services->register_table(table);
+	}
+	if (env("PHASE_B_REGISTER_MISMATCHED_TWINS") != nullptr &&
+	    services != nullptr &&
+	    services->register_table != nullptr) {
+		const ProxySQL_PluginTableDef admin_table {
+			ProxySQL_PluginDBKind::admin_db,
+			FAKE_PLUGIN_NAME "_mismatched_twins",
+			"CREATE TABLE " FAKE_PLUGIN_NAME "_mismatched_twins (id INTEGER)"
+		};
+		const ProxySQL_PluginTableDef config_table {
+			ProxySQL_PluginDBKind::config_db,
+			FAKE_PLUGIN_NAME "_mismatched_twins",
+			"CREATE TABLE " FAKE_PLUGIN_NAME "_mismatched_twins (id INTEGER, extra TEXT)"
+		};
+		services->register_table(admin_table);
+		services->register_table(config_table);
 	}
 	fake_log_event("phase_b");
 	return true;

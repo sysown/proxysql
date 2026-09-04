@@ -346,8 +346,9 @@ using proxysql_plugin_status_json_cb =
 //   Phase E: start()            -- plugin launches its threads / accept loops
 //
 // This callback is optional (may be nullptr) for plugins without persistent
-// config_db tables. Plugins that own such tables must provide it: after Phase C,
-// config_db registration from init() is rejected because Admin cannot restore it.
+// config_db tables. Plugins that own such tables must provide it and register an
+// identical same-name admin_db definition: after Phase C, config_db registration
+// from init() is rejected because Admin cannot restore it.
 using proxysql_plugin_register_schemas_cb =
 	bool (*)(ProxySQL_PluginServices *);
 #endif /* PROXYSQL40 */

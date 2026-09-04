@@ -495,23 +495,31 @@ bool ProxySQL_PluginManager::invoke_register_schemas_phase(std::string &err) {
 			}
 			return false;
 		}
-		// config_db tables are restored automatically into same-name tables
-		// in admin_db. Reject an orphan while the registration is still
-		// transactional, instead of emitting invalid INSERT ... SELECT SQL
-		// later during Admin bootstrap.
+		// config_db tables are restored automatically with SELECT * into
+		// same-name tables in admin_db. Reject an orphan or a mismatched
+		// definition while registration is still transactional, instead of
+		// emitting invalid INSERT ... SELECT SQL during Admin bootstrap.
 		for (size_t i = snap_tables_config; i < tables_config_.size(); ++i) {
 			const ProxySQL_PluginTableDef& config_def = tables_config_[i];
-			const bool has_admin_twin = std::any_of(
+			const auto admin_twin = std::find_if(
 				tables_admin_.begin(), tables_admin_.end(),
 				[&](const ProxySQL_PluginTableDef& admin_def) {
 					return strcasecmp(admin_def.table_name, config_def.table_name) == 0;
 				});
-			if (!has_admin_twin) {
+			if (admin_twin == tables_admin_.end()) {
 				const std::string orphan_name = config_def.table_name;
 				rollback();
 				err = "plugin register_schemas failed: " + plugin_name(plugin.descriptor) +
 				      ": config_db table '" + orphan_name +
 				      "' requires a same-name admin_db table";
+				return false;
+			}
+			if (std::strcmp(admin_twin->table_def, config_def.table_def) != 0) {
+				const std::string mismatched_name = config_def.table_name;
+				rollback();
+				err = "plugin register_schemas failed: " + plugin_name(plugin.descriptor) +
+				      ": config_db table '" + mismatched_name +
+				      "' requires an identical admin_db table definition";
 				return false;
 			}
 		}

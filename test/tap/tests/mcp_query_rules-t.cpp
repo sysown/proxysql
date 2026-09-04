@@ -83,8 +83,14 @@ bool configure_mcp_for_rules_test(MYSQL* admin, const CommandLine& cl) {
 void test_rules_loaded_before_listener_start(MCPClient& mcp) {
 	json args = {{"sql", "SELECT 1 FROM AUTOSTART_BLOCKME"}, {"target_id", k_target_id}};
 	MCPResponse resp = mcp.call_tool("query", "run_sql_readonly", args);
-	ok(resp.is_mcp_error() &&
-	   resp.get_error_message().find("Rule 1004: Startup Blocked") != std::string::npos,
+	const bool blocked = resp.is_mcp_error() &&
+		resp.get_error_message().find("Rule 1004: Startup Blocked") != std::string::npos;
+	if (!blocked) {
+		diag("unexpected startup response: type=%d code=%d message='%s'",
+		     static_cast<int>(resp.get_error_type()), resp.get_error_code(),
+		     resp.get_error_message().c_str());
+	}
+	ok(blocked,
 	   "listener starts with persisted MCP query rules already active");
 }
 

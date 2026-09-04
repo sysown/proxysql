@@ -154,7 +154,9 @@ The Query Tool Handler provides LLM-based tools for MySQL database exploration a
 Query tools use a logical `target_id` routing model with server-managed credentials:
 
 - Use `list_targets` to retrieve discoverable backend targets.
-- Active targets come from `runtime_mcp_target_profiles` joined with `runtime_mcp_auth_profiles`.
+- Active targets come from the module's in-memory joined target/auth map, installed
+  from `main.mcp_target_profiles` and `main.mcp_auth_profiles` by
+  `LOAD MCP PROFILES TO RUNTIME`.
 - The MCP server maps `target_id -> auth_profile_id` and applies backend credentials internally.
 - MCP clients must never send backend credentials in tool arguments.
 - Clients should pass `target_id` to query tools instead of host/protocol details.
@@ -166,7 +168,10 @@ Backend credentials are defined in MCP tables, not in client requests:
 - `mcp_auth_profiles` / `runtime_mcp_auth_profiles`
 - `mcp_target_profiles` / `runtime_mcp_target_profiles`
 
-The in-memory target/auth map is loaded by `MCP_Threads_Handler` from runtime tables and used by the query executor connection pools.
+`MCP_Threads_Handler` installs the editable `main.mcp_auth_profiles` and
+`main.mcp_target_profiles` tables into its in-memory target/auth map, which the
+query executor connection pools use. The `runtime_` tables are read-only
+projections of that module snapshot for inspection.
 
 ### Catalog Configuration
 
