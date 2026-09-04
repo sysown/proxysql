@@ -281,8 +281,56 @@ FlushVariableStats ProxySQL_Admin::flush_admin_variables___database_to_runtime(
 	SQLite3_result *resultset=NULL;
 	if (flush_GENERIC_variables__retrieve__database_to_runtime("admin", error, cols, affected_rows, resultset) == true) {
 		wrlock();
+		const bool old_ssl_enabled = variables.admin_ssl_enabled;
+		const int old_ssl_verify_client = variables.admin_ssl_verify_client;
+		const std::string old_ssl_key = variables.admin_ssl_key;
+		const std::string old_ssl_cert = variables.admin_ssl_cert;
+		const std::string old_ssl_ca = variables.admin_ssl_ca;
+		const std::string old_ssl_capath = variables.admin_ssl_capath;
+		const std::string old_ssl_cipher = variables.admin_ssl_cipher;
+		const std::string old_tls_version = variables.admin_tls_version;
+		const std::string old_ssl_curves = variables.admin_ssl_curves;
+		const std::string old_ssl_crl = variables.admin_ssl_crl;
+		const std::string old_ssl_crlpath = variables.admin_ssl_crlpath;
+
 		FlushVariableStats stats = flush_GENERIC_variables__process__database_to_runtime("admin", db, resultset, lock, replace, {"version"}, {"debug"}, {}, {});
 		//commit(); NOT IMPLEMENTED
+
+		const bool admin_tls_changed =
+			old_ssl_enabled != variables.admin_ssl_enabled
+			|| old_ssl_verify_client != variables.admin_ssl_verify_client
+			|| old_ssl_key != variables.admin_ssl_key
+			|| old_ssl_cert != variables.admin_ssl_cert
+			|| old_ssl_ca != variables.admin_ssl_ca
+			|| old_ssl_capath != variables.admin_ssl_capath
+			|| old_ssl_cipher != variables.admin_ssl_cipher
+			|| old_tls_version != variables.admin_tls_version
+			|| old_ssl_curves != variables.admin_ssl_curves
+			|| old_ssl_crl != variables.admin_ssl_crl
+			|| old_ssl_crlpath != variables.admin_ssl_crlpath;
+
+		if (admin_tls_changed || variables.admin_ssl_enabled != GloVars.is_admin_SSL_enabled()) {
+			std::string tls_error;
+			if (reload_admin_tls_unlocked(tls_error) != 0) {
+				auto restore_string = [](char **target, const std::string& value) {
+					free_null(*target);
+					*target = strdup(value.c_str());
+				};
+				variables.admin_ssl_enabled = old_ssl_enabled;
+				variables.admin_ssl_verify_client = old_ssl_verify_client;
+				restore_string(&variables.admin_ssl_key, old_ssl_key);
+				restore_string(&variables.admin_ssl_cert, old_ssl_cert);
+				restore_string(&variables.admin_ssl_ca, old_ssl_ca);
+				restore_string(&variables.admin_ssl_capath, old_ssl_capath);
+				restore_string(&variables.admin_ssl_cipher, old_ssl_cipher);
+				restore_string(&variables.admin_tls_version, old_tls_version);
+				restore_string(&variables.admin_ssl_curves, old_ssl_curves);
+				restore_string(&variables.admin_ssl_crl, old_ssl_crl);
+				restore_string(&variables.admin_ssl_crlpath, old_ssl_crlpath);
+				stats.error = tls_error;
+				proxy_error("Rejected Admin TLS configuration: %s\n", tls_error.c_str());
+			}
+		}
 
 		// Checksums are always generated - 'admin-checksum_*' deprecated
 

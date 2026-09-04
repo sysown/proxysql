@@ -112,6 +112,9 @@ class ProxySQL_GlobalVariables {
 #endif /* PROXYSQL40 */
 	SSL_CTX *get_SSL_ctx();
 	SSL *get_SSL_new();
+	SSL *get_admin_SSL_new();
+	bool is_admin_SSL_enabled();
+	void set_admin_SSL_ctx(SSL_CTX *ctx, bool enabled);
 	void get_SSL_pem_mem(char **key, char **cert);
 	std::shared_ptr<prometheus::Registry> prometheus_registry { nullptr };
 	struct  {
@@ -141,6 +144,9 @@ class ProxySQL_GlobalVariables {
 		std::mutex ssl_mutex;
 		SSL_CTX *ssl_ctx;	
 		SSL_CTX *tmp_ssl_ctx;
+		std::mutex admin_ssl_mutex;
+		SSL_CTX *admin_ssl_ctx;
+		bool admin_ssl_enabled;
 		// these two buffers are used for the web interface
 		char * ssl_key_pem_mem;
 		char * ssl_cert_pem_mem;

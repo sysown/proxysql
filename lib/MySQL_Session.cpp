@@ -6910,6 +6910,35 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE_
 
 void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *pkt, bool *wrong_pass) {
 	bool is_encrypted = client_myds->encrypted;
+	const bool admin_tls_required =
+		(session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS)
+		&& GloVars.is_admin_SSL_enabled();
+
+	// A plaintext MySQL HandshakeResponse starts with the client capability
+	// flags after the four-byte packet header. Reject it before credentials
+	// are parsed when the dedicated Admin TLS context is active.
+	if (
+		admin_tls_required && is_encrypted == false && client_myds->DSS == STATE_SERVER_HANDSHAKE
+		&& pkt->size >= 8
+	) {
+		const unsigned char *payload = (const unsigned char *)pkt->ptr + 4;
+		const uint32_t capabilities =
+			(uint32_t)payload[0] | ((uint32_t)payload[1] << 8)
+			| ((uint32_t)payload[2] << 16) | ((uint32_t)payload[3] << 24);
+		if ((capabilities & CLIENT_SSL) == 0) {
+			l_free(pkt->size, pkt->ptr);
+			*wrong_pass = true;
+			client_myds->setDSS_STATE_QUERY_SENT_NET();
+			uint8_t packet_id = client_myds->pkt_sid;
+			packet_id++;
+			client_myds->myprot.generate_pkt_ERR(
+				true, NULL, NULL, packet_id, 1045, "28000",
+				"ProxySQL Admin interface requires SSL", true
+			);
+			return;
+		}
+	}
+
 	bool handshake_response_return = client_myds->myprot.process_pkt_handshake_response((unsigned char *)pkt->ptr,pkt->size);
 	bool handshake_err = true;
 
@@ -6929,14 +6958,48 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			client_myds->DSS=STATE_SSL_INIT;
 			client_myds->rbio_ssl = BIO_new(BIO_s_mem());
 			client_myds->wbio_ssl = BIO_new(BIO_s_mem());
-			client_myds->ssl = GloVars.get_SSL_new();
+			const bool admin_session =
+				session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS;
+			client_myds->ssl =
+				admin_session ? GloVars.get_admin_SSL_new() : GloVars.get_SSL_new();
+			if (client_myds->ssl == NULL) {
+				proxy_error(
+					"Unable to create %s TLS connection: SSL_new() failed\n",
+					admin_session ? "MySQL Admin" : "MySQL frontend"
+				);
+				BIO_free(client_myds->rbio_ssl);
+				BIO_free(client_myds->wbio_ssl);
+				client_myds->rbio_ssl = NULL;
+				client_myds->wbio_ssl = NULL;
+				l_free(pkt->size, pkt->ptr);
+				*wrong_pass = true;
+				client_myds->setDSS_STATE_QUERY_SENT_NET();
+				return;
+			}
 			SSL_set_fd(client_myds->ssl, client_myds->fd);
 			SSL_set_accept_state(client_myds->ssl);
 			SSL_set_bio(client_myds->ssl, client_myds->rbio_ssl, client_myds->wbio_ssl);
 			l_free(pkt->size,pkt->ptr);
-			proxysql_keylog_attach_callback(GloVars.get_SSL_ctx());
+			proxysql_keylog_attach_callback(SSL_get_SSL_CTX(client_myds->ssl));
 			return;
 		}
+	}
+
+	if (
+		handshake_response_return == true
+		&& admin_tls_required
+		&& is_encrypted == false
+	) {
+		l_free(pkt->size, pkt->ptr);
+		*wrong_pass = true;
+		client_myds->setDSS_STATE_QUERY_SENT_NET();
+		uint8_t packet_id = client_myds->pkt_sid;
+		packet_id++;
+		client_myds->myprot.generate_pkt_ERR(
+			true, NULL, NULL, packet_id, 1045, "28000",
+			"ProxySQL Admin interface requires SSL", true
+		);
+		return;
 	}
 
 	if (

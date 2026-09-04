@@ -1249,7 +1249,12 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 		// TODO-NOTE: This MUST go away; 'admin-hash_passwords' will be deprecated
 		admindb->execute("UPDATE global_variables SET variable_value='false' WHERE variable_name='admin-hash_passwords'");
 	}
-	flush_admin_variables___database_to_runtime(admindb,true);
+	const FlushVariableStats admin_stats =
+		flush_admin_variables___database_to_runtime(admindb, true);
+	if (!admin_stats.error.empty()) {
+		proxy_error("Unable to load admin variables: %s\n", admin_stats.error.c_str());
+		return false;
+	}
 
 	if (GloVars.global.gr_bootstrap_mode) {
 		flush_admin_variables___runtime_to_database(configdb, false, true, false);

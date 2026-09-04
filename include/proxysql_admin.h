@@ -324,6 +324,7 @@ struct FlushVariableStats {
 	int updated  = 0;
 	int rejected = 0;
 	int unknown  = 0;
+	std::string error;
 };
 
 class ProxySQL_Admin {
@@ -368,6 +369,7 @@ class ProxySQL_Admin {
 
 	void wrlock();
 	void wrunlock();
+	int reload_admin_tls_unlocked(std::string& msg);
 
 	struct {
 		char *admin_credentials;
@@ -378,6 +380,25 @@ class ProxySQL_Admin {
 		char *telnet_admin_ifaces;
 		char *telnet_stats_ifaces;
 		bool admin_read_only;
+		/**
+		 * Require TLS and use the dedicated Admin TLS context for MySQL and
+		 * PostgreSQL Admin interface connections.
+		 */
+		bool admin_ssl_enabled;
+		char *admin_ssl_key;
+		char *admin_ssl_cert;
+		char *admin_ssl_ca;
+		char *admin_ssl_capath;
+		char *admin_ssl_cipher;
+		char *admin_tls_version;
+		char *admin_ssl_curves;
+		/**
+		 * Client certificate verification: 0=DISABLED, 1=OPTIONAL,
+		 * 2=REQUIRED.
+		 */
+		int admin_ssl_verify_client;
+		char *admin_ssl_crl;
+		char *admin_ssl_crlpath;
 //		bool hash_passwords;
 		bool vacuum_stats;
 		char * admin_version;
@@ -658,6 +679,7 @@ class ProxySQL_Admin {
 	void load_restapi_server();
 	bool get_read_only() { return variables.admin_read_only; }
 	bool set_read_only(bool ro) { variables.admin_read_only=ro; return variables.admin_read_only; }
+	int reload_admin_tls(std::string& msg);
 	bool has_variable(const char *name);
 	void init_users(std::unique_ptr<SQLite3_result>&& mysql_users_resultset = nullptr, const std::string& checksum = "", const time_t epoch = 0);
 	void init_mysql_servers();
@@ -763,7 +785,9 @@ class ProxySQL_Admin {
 	void load_scheduler_to_runtime();
 	void save_scheduler_runtime_to_database(bool);
 
-	void load_admin_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0, bool lock = true) { flush_admin_variables___database_to_runtime(admindb, true, checksum, epoch, lock); }
+	FlushVariableStats load_admin_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0, bool lock = true) {
+		return flush_admin_variables___database_to_runtime(admindb, true, checksum, epoch, lock);
+	}
 	void save_admin_variables_from_runtime() { flush_admin_variables___runtime_to_database(admindb, true, true, false); }
 
 #ifdef PROXYSQLTSDB

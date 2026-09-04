@@ -3857,6 +3857,18 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					l_free(pkt->size, pkt->ptr);
 					return;
 				}
+			} else if (
+				(session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS)
+				&& GloVars.is_admin_SSL_enabled() && is_encrypted == false
+			) {
+				l_free(pkt->size, pkt->ptr);
+				*wrong_pass = true;
+				client_myds->setDSS_STATE_QUERY_SENT_NET();
+				client_myds->myprot.generate_error_packet(
+					true, false, "ProxySQL Admin interface requires SSL",
+					PGSQL_ERROR_CODES::ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION, true, true
+				);
+				return;
 			} else if (client_myds->myprot.generate_pkt_initial_handshake(true, NULL, NULL, &thread_session_id, true) == true) {
 				client_myds->auth_received_startup = true;
 				l_free(pkt->size, pkt->ptr);
@@ -3908,13 +3920,46 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			client_myds->DSS = STATE_SSL_INIT;
 			client_myds->rbio_ssl = BIO_new(BIO_s_mem());
 			client_myds->wbio_ssl = BIO_new(BIO_s_mem());
-			client_myds->ssl = GloVars.get_SSL_new();
+			const bool admin_session =
+				session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS;
+			client_myds->ssl =
+				admin_session ? GloVars.get_admin_SSL_new() : GloVars.get_SSL_new();
+			if (client_myds->ssl == NULL) {
+				proxy_error(
+					"Unable to create %s TLS connection: SSL_new() failed\n",
+					admin_session ? "PostgreSQL Admin" : "PostgreSQL frontend"
+				);
+				BIO_free(client_myds->rbio_ssl);
+				BIO_free(client_myds->wbio_ssl);
+				client_myds->rbio_ssl = NULL;
+				client_myds->wbio_ssl = NULL;
+				l_free(pkt->size, pkt->ptr);
+				*wrong_pass = true;
+				client_myds->setDSS_STATE_QUERY_SENT_NET();
+				return;
+			}
 			SSL_set_fd(client_myds->ssl, client_myds->fd);
 			SSL_set_accept_state(client_myds->ssl);
 			SSL_set_bio(client_myds->ssl, client_myds->rbio_ssl, client_myds->wbio_ssl);
 			l_free(pkt->size, pkt->ptr);
-			proxysql_keylog_attach_callback(GloVars.get_SSL_ctx());
+			proxysql_keylog_attach_callback(SSL_get_SSL_CTX(client_myds->ssl));
 			return;
+	}
+
+	if (
+		handshake_response_return == true
+		&& (session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS)
+		&& GloVars.is_admin_SSL_enabled()
+		&& is_encrypted == false
+	) {
+		l_free(pkt->size, pkt->ptr);
+		*wrong_pass = true;
+		client_myds->setDSS_STATE_QUERY_SENT_NET();
+		client_myds->myprot.generate_error_packet(
+			true, false, "ProxySQL Admin interface requires SSL",
+			PGSQL_ERROR_CODES::ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION, true, true
+		);
+		return;
 	}
 
 	if (

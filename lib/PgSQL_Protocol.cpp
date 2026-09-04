@@ -685,7 +685,12 @@ bool PgSQL_Protocol::process_startup_packet(unsigned char* pkt, unsigned int len
 	}
 
 	if (hdr.type == PG_PKT_SSLREQ) {
-		const bool have_ssl = pgsql_thread___have_ssl;
+		const bool admin_tls_enabled =
+			(*myds)->sess != NULL
+			&& ((*myds)->sess->session_type == PROXYSQL_SESSION_ADMIN
+				|| (*myds)->sess->session_type == PROXYSQL_SESSION_STATS)
+			&& GloVars.is_admin_SSL_enabled();
+		const bool have_ssl = pgsql_thread___have_ssl || admin_tls_enabled;
 		char* ssl_supported = (char*)malloc(1);
 		*ssl_supported = have_ssl ? 'S' : 'N';
 		(*myds)->PSarrayOUT->add((void*)ssl_supported, 1);

@@ -413,7 +413,7 @@ MHD_Result http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #include "ProxySQL_Admin_Tables_Definitions.h"
 
-static char * admin_variables_names[]= {
+static const char * admin_variables_names[]= {
 	(char *)"admin_credentials",
 	(char *)"stats_credentials",
 	(char *)"stats_mysql_connections",
@@ -483,6 +483,17 @@ static char * admin_variables_names[]= {
 	(char *)"coredump_generation_interval_ms",
 	(char *)"coredump_generation_threshold",
 	(char *)"ssl_keylog_file",
+	"ssl_enabled",
+	"ssl_key",
+	"ssl_cert",
+	"ssl_ca",
+	"ssl_capath",
+	"ssl_cipher",
+	"tls_version",
+	"ssl_curves",
+	"ssl_verify_client",
+	"ssl_crl",
+	"ssl_crlpath",
 	NULL
 };
 
@@ -3050,6 +3061,17 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.coredump_generation_interval_ms = 30000;
 	variables.coredump_generation_threshold = 10;
 	variables.ssl_keylog_file = strdup("");
+	variables.admin_ssl_enabled = false;
+	variables.admin_ssl_key = strdup("");
+	variables.admin_ssl_cert = strdup("");
+	variables.admin_ssl_ca = strdup("");
+	variables.admin_ssl_capath = strdup("");
+	variables.admin_ssl_cipher = strdup("");
+	variables.admin_tls_version = strdup("TLSv1.2");
+	variables.admin_ssl_curves = strdup("");
+	variables.admin_ssl_verify_client = 0;
+	variables.admin_ssl_crl = strdup("");
+	variables.admin_ssl_crlpath = strdup("");
 	last_p_memory_metrics_ts = 0;
 	// create the scheduler
 	scheduler=new ProxySQL_External_Scheduler();
@@ -3370,6 +3392,15 @@ void ProxySQL_Admin::admin_shutdown() {
 	if (variables.ssl_keylog_file) {
 		free(variables.ssl_keylog_file);
 	}
+	free_null(variables.admin_ssl_key);
+	free_null(variables.admin_ssl_cert);
+	free_null(variables.admin_ssl_ca);
+	free_null(variables.admin_ssl_capath);
+	free_null(variables.admin_ssl_cipher);
+	free_null(variables.admin_tls_version);
+	free_null(variables.admin_ssl_curves);
+	free_null(variables.admin_ssl_crl);
+	free_null(variables.admin_ssl_crlpath);
 };
 
 ProxySQL_Admin::~ProxySQL_Admin() {
@@ -4023,6 +4054,44 @@ char * ProxySQL_Admin::get_variable(char *name) {
 			}
 		}
 		return ssl_keylog_file;
+	}
+	if (!strcasecmp(name, "ssl_enabled")) {
+		return strdup(variables.admin_ssl_enabled ? "true" : "false");
+	}
+	if (!strcasecmp(name, "ssl_key")) {
+		return strdup(variables.admin_ssl_key);
+	}
+	if (!strcasecmp(name, "ssl_cert")) {
+		return strdup(variables.admin_ssl_cert);
+	}
+	if (!strcasecmp(name, "ssl_ca")) {
+		return strdup(variables.admin_ssl_ca);
+	}
+	if (!strcasecmp(name, "ssl_capath")) {
+		return strdup(variables.admin_ssl_capath);
+	}
+	if (!strcasecmp(name, "ssl_cipher")) {
+		return strdup(variables.admin_ssl_cipher);
+	}
+	if (!strcasecmp(name, "tls_version")) {
+		return strdup(variables.admin_tls_version);
+	}
+	if (!strcasecmp(name, "ssl_curves")) {
+		return strdup(variables.admin_ssl_curves);
+	}
+	if (!strcasecmp(name, "ssl_verify_client")) {
+		switch (variables.admin_ssl_verify_client) {
+			case 0: return strdup("DISABLED");
+			case 1: return strdup("OPTIONAL");
+			case 2: return strdup("REQUIRED");
+			default: assert(0);
+		}
+	}
+	if (!strcasecmp(name, "ssl_crl")) {
+		return strdup(variables.admin_ssl_crl);
+	}
+	if (!strcasecmp(name, "ssl_crlpath")) {
+		return strdup(variables.admin_ssl_crlpath);
 	}
 	return NULL;
 }
@@ -5023,6 +5092,64 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 				GloVars.global.ssl_keylog_enabled = true;
 			}
 		}
+		return true;
+	}
+	if (!strcasecmp(name, "ssl_enabled")) {
+		if (!strcasecmp(value, "true") || !strcmp(value, "1")) {
+			variables.admin_ssl_enabled = true;
+			return true;
+		}
+		if (!strcasecmp(value, "false") || !strcmp(value, "0")) {
+			variables.admin_ssl_enabled = false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name, "ssl_verify_client")) {
+		if (!strcasecmp(value, "DISABLED") || !strcmp(value, "0")) {
+			variables.admin_ssl_verify_client = 0;
+			return true;
+		}
+		if (!strcasecmp(value, "OPTIONAL") || !strcmp(value, "1")) {
+			variables.admin_ssl_verify_client = 1;
+			return true;
+		}
+		if (!strcasecmp(value, "REQUIRED") || !strcmp(value, "2")) {
+			variables.admin_ssl_verify_client = 2;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name, "tls_version")) {
+		if (strcasecmp(value, "TLSv1.2") && strcasecmp(value, "TLSv1.3")) {
+			return false;
+		}
+		free_null(variables.admin_tls_version);
+		variables.admin_tls_version = strdup(value);
+		return true;
+	}
+
+	char **admin_ssl_string = NULL;
+	if (!strcasecmp(name, "ssl_key")) {
+		admin_ssl_string = &variables.admin_ssl_key;
+	} else if (!strcasecmp(name, "ssl_cert")) {
+		admin_ssl_string = &variables.admin_ssl_cert;
+	} else if (!strcasecmp(name, "ssl_ca")) {
+		admin_ssl_string = &variables.admin_ssl_ca;
+	} else if (!strcasecmp(name, "ssl_capath")) {
+		admin_ssl_string = &variables.admin_ssl_capath;
+	} else if (!strcasecmp(name, "ssl_cipher")) {
+		admin_ssl_string = &variables.admin_ssl_cipher;
+	} else if (!strcasecmp(name, "ssl_curves")) {
+		admin_ssl_string = &variables.admin_ssl_curves;
+	} else if (!strcasecmp(name, "ssl_crl")) {
+		admin_ssl_string = &variables.admin_ssl_crl;
+	} else if (!strcasecmp(name, "ssl_crlpath")) {
+		admin_ssl_string = &variables.admin_ssl_crlpath;
+	}
+	if (admin_ssl_string) {
+		free_null(*admin_ssl_string);
+		*admin_ssl_string = strdup(strcmp(value, "(null)") ? value : "");
 		return true;
 	}
 	return false;

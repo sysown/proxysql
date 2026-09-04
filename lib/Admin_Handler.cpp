@@ -1159,6 +1159,21 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		return false;
 	}
 
+	if (strcasecmp("PROXYSQL RELOAD ADMIN TLS", query_no_space) == 0) {
+		proxy_info("Received %s command\n", query_no_space);
+		ProxySQL_Admin *SPA = (ProxySQL_Admin *)pa;
+		std::string msg;
+		const int rc = SPA->reload_admin_tls(msg);
+		if (rc == 0) {
+			SPA->send_ok_msg_to_client(sess, msg.empty() ? NULL : msg.c_str(), 0, query_no_space);
+		} else {
+			SPA->send_error_msg_to_client(
+				sess, msg.empty() ? "RELOAD ADMIN TLS failed" : msg.c_str()
+			);
+		}
+		return false;
+	}
+
 	if (strncasecmp("PROXYSQL SET CONFIG FILE ", query_no_space, 25) == 0) {
 		proxy_info("Received %s command\n", query_no_space);
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -2872,9 +2887,17 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 
 		if ( is_admin_command_or_alias(LOAD_ADMIN_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length) ) {
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-			SPA->load_admin_variables_to_runtime();
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded admin variables to RUNTIME\n");
-			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			const FlushVariableStats stats = SPA->load_admin_variables_to_runtime();
+			if (stats.error.empty()) {
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded admin variables to RUNTIME\n");
+				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+			} else {
+				const std::string error =
+					"Admin variables loaded, but Admin TLS was rejected and rolled back: "
+					+ stats.error;
+				proxy_error("%s\n", error.c_str());
+				SPA->send_error_msg_to_client(sess, error.c_str());
+			}
 			return false;
 		}
 

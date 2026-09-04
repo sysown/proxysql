@@ -1357,7 +1357,12 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 		mysql_thread___server_capabilities &= ~CLIENT_COMPRESS;
 		mysql_thread___server_capabilities &= ~CLIENT_ZSTD_COMPRESSION_ALGORITHM;
 	}
-	if (mysql_thread___have_ssl==true || mysql_thread___default_authentication_plugin_int==2) {
+	const bool admin_tls_enabled =
+		(*myds)->sess != NULL
+		&& ((*myds)->sess->session_type == PROXYSQL_SESSION_ADMIN
+			|| (*myds)->sess->session_type == PROXYSQL_SESSION_STATS)
+		&& GloVars.is_admin_SSL_enabled();
+	if (mysql_thread___have_ssl==true || mysql_thread___default_authentication_plugin_int==2 || admin_tls_enabled) {
 		// we enable SSL for client connections for either of these 2 conditions:
 		// - have_ssl is enabled
 		// - default_authentication_plugin=caching_sha2_password
