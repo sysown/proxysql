@@ -328,9 +328,16 @@ enum session_status {
 	SETTING_SESSION_TRACK_VARIABLES,
 	SETTING_SESSION_TRACK_STATE,
 	SETTING_USER_VARIABLES,
-	// Append-only: changing existing values can leave incrementally built
-	// translation units disagreeing on this enum's numeric values.
+	// NOTE: append-only. PROCESSING_STMT_BIND (Task P1) is placed at the END of the
+	// enum on purpose: inserting it mid-list would renumber every following value, and
+	// the build does not track header→object dependencies, so any translation unit not
+	// recompiled would silently disagree on the numeric values (observed: a stale
+	// pgsql_tracked_variables[] holding the old SETTING_VARIABLE value crashed
+	// verify_server_variable with "Wrong status"). Keep new statuses here.
 	PROCESSING_STMT_BIND,
+	// Named-portal Close (Task P2): a real backend Close('P', name) round-trip
+	// (CloseComplete '3' forwarded, registry entry evicted). Append-only, same
+	// rationale as PROCESSING_STMT_BIND above.
 	PROCESSING_STMT_CLOSE,
 	session_status___NONE // special marker
 };

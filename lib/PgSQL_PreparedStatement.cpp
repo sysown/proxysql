@@ -200,6 +200,17 @@ void PgSQL_STMT_Local::client_close_all() {
 	stmt_name_to_global_info.clear();
 }
 
+void PgSQL_STMT_Local::backend_close_all() {
+	// Same server-refcount release as ~PgSQL_STMT_Local()'s backend branch: one
+	// ref_count_server(-1) per backend statement. Also clears global_stmt_to_backend_ids
+	// (the destructor skips it only because the object is about to be freed).
+	for (auto& [_, global_stmt_info] : backend_stmt_to_global_info) {
+		GloPgStmt->ref_count_server(global_stmt_info.get(), -1);
+	}
+	backend_stmt_to_global_info.clear();
+	global_stmt_to_backend_ids.clear();
+}
+
 uint32_t PgSQL_STMT_Local::generate_new_backend_stmt_id() {
 	assert(is_client_ == false);
 	if (free_backend_ids.empty() == false) {

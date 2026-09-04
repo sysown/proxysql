@@ -3897,9 +3897,9 @@ handler_again:
 				// backend still being the reusable connection; if it was torn down the
 				// portals are gone with it and the session either ends (destructor clears
 				// via reset()) or reconnects fresh.
-				if (processing_extended_query && rc == -1 && myconn &&
-					myconn->is_connection_in_reusable_state() &&
-					myconn->native_txn_status == 'I') {
+				if (processing_extended_query && rc == -1 && myds->myconn &&
+					myds->myconn->native_txn_status == 'I' &&
+					myds->myconn->is_connection_in_reusable_state()) {
 					clear_named_portals();
 				}
 			}
@@ -5093,7 +5093,7 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 }
 
 bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_DEALLOCATE_command(const char* dig) {
-	
+
 	std::string nq = string((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
 
 	RE2::GlobalReplace(&nq, "(?U)/\\*.*\\*/", "");
@@ -5104,19 +5104,57 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Parsing DEALLOCATE command = %s\n", nq.c_str());
 
 	const char* dealloc_value = nq.c_str();
-	if (strncasecmp(dealloc_value, "ALL", 3) == 0) {
-		client_myds->myconn->local_stmts->client_close_all();
+	if (strcasecmp(dealloc_value, "ALL") == 0) {
+		// Forward DEALLOCATE ALL to the backend so SQL-level PREPARE statements are
+		// actually freed there -- but only when the connection is pinned to a backend
+		// (locked or multiplex-disabled), so the forward reaches the connection that
+		// holds them. A mirror replay never forwards.
+		PgSQL_Connection* be = (mybe && mybe->server_myds) ? mybe->server_myds->myconn : nullptr;
+		const bool forward = (!mirror && be && (locked_on_hostgroup >= 0 || be->MultiplexDisabled()));
+		// In an aborted transaction the backend rejects DEALLOCATE ALL and every
+		// statement survives, so forward for the real error but keep our tracking
+		// intact -- clearing it here would desync us (client stmts wrongly reported
+		// gone, backend proxysql_ps_* orphaned) from a statement that still exists.
+		const bool aborted = forward && be->get_pg_transaction_status() == PQTRANS_INERROR;
+		if (!aborted) {
+			// Drop client-side tracking (SQL-level PREPARE names are not in this map;
+			// only binary/extended-query prepares are).
+			client_myds->myconn->local_stmts->client_close_all();
+		}
+		if (forward) {
+			// DEALLOCATE ALL also drops the backend's renamed proxysql_ps_* statements,
+			// so release our backend-side tracking (backend_close_all) before forwarding
+			// -- the same release the connection does on teardown -- keeping the server
+			// refcounts and maps consistent.
+			if (!aborted && be->local_stmts) be->local_stmts->backend_close_all();
+			return false;
+		}
 	} else {
 		if (client_myds->myconn->local_stmts->client_close(dealloc_value) == false) {
-			client_myds->DSS = STATE_QUERY_SENT_NET;
-			const std::string& errmsg = "prepared statement \"" + std::string(dealloc_value) + "\" does not exist";
-			client_myds->myprot.generate_error_packet(true, true, errmsg.c_str(), PGSQL_ERROR_CODES::ERRCODE_INVALID_SQL_STATEMENT_NAME, false, true);
-			if (mirror == false) {
-				RequestEnd(NULL, true);
-			} else {
+			if (mirror) {
+				// A mirror replay never forwards DEALLOCATE: same as the ALL
+				// branch above and the tracked-statement path below.
 				client_myds->DSS = STATE_SLEEP;
 				status = WAITING_CLIENT_DATA;
+				return true;
 			}
+			// Untracked name: a SQL-level PREPARE (local_stmts holds only binary
+			// prepares) or a typo. A SQL PREPARE disables multiplexing, so its
+			// backend connection is still attached to this session -- forward the
+			// DEALLOCATE there. But if the connection is neither locked nor
+			// multiplex-disabled, no SQL PREPARE happened here and the statement
+			// cannot exist: answer locally rather than acquiring a backend
+			// connection only to fail (or hitting an unrelated statement left on a
+			// pooled connection).
+			PgSQL_Connection* be = (mybe && mybe->server_myds) ? mybe->server_myds->myconn : nullptr;
+			if (locked_on_hostgroup >= 0 || (be && be->MultiplexDisabled())) {
+				return false;
+			}
+			client_myds->DSS = STATE_QUERY_SENT_NET;
+			const std::string& errmsg = "prepared statement \"" + std::string(dealloc_value) + "\" does not exist";
+			client_myds->myprot.generate_error_packet(true, true, errmsg.c_str(),
+				PGSQL_ERROR_CODES::ERRCODE_INVALID_SQL_STATEMENT_NAME, false, true);
+			RequestEnd(NULL, true);
 			return true;
 		}
 	}
@@ -5737,6 +5775,7 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 		}
 		CurrentQuery.rows_sent = num_rows;
 		bool resultset_completed = query_result->get_resultset(client_myds->PSarrayOUT);
+		// Not known to be reachable. If this fires it is a bug -- please report it.
 		if (status == PROCESSING_QUERY && _conn->processing_multi_statement == false)
 			assert(resultset_completed); // the resultset should always be completed if PgSQL_Result_to_PgSQL_wire is called
 		if (status == PROCESSING_QUERY && transfer_started == false && 

@@ -442,8 +442,9 @@ test_wexecvp_syscall_failures-t: test_wexecvp_syscall_failures-t.cpp $(TAP_LDIR)
 endif
 
 # Every test that links pg_lite_client.cpp shares one link line. pg_lite_client
-# implements PostgreSQL MD5 and SCRAM-SHA-256 client authentication, so it needs
-# -lscram/-lusual; $(ALLOW_MULTI_DEF) resolves the duplicate symbols between
+# implements PostgreSQL MD5 and SCRAM-SHA-256 client authentication (including the
+# stepwise saslBegin/saslFinish pair the mid-handshake reload test drives), so it
+# needs -lscram/-lusual; $(ALLOW_MULTI_DEF) resolves the duplicate symbols between
 # libscram/libusual and the other vendored static libs (test binaries only, and
 # it is empty on Darwin where the linker has no such flag).
 PG_LITE_CLIENT_TESTS := \
@@ -453,17 +454,33 @@ PG_LITE_CLIENT_TESTS := \
 	pgsql-reg_test_5300_threshold_resultset_deadlock-t \
 	pgsql-reg_test_5866_result_format-t \
 	pgsql-auth_method_matrix-t \
+	pgsql-datatype_matrix-t \
+	pgsql-server_side_cursors-t \
 	pgsql-scram_reload_midhandshake-t \
 	pgsql-scram_user_removed_midhandshake-t \
 	pgsql-scram_rotate_midhandshake_backend-t \
-	pgsql-datatype_matrix-t \
 	pgsql-native_portals-t \
-	pgsql-server_side_cursors-t \
 	test_ffto_pgsql_pipeline-t \
 	test_ffto_pgsql_stmt_portal-t
 
 $(PG_LITE_CLIENT_TESTS): %: %.cpp pg_lite_client.cpp pg_lite_client.h $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual $(ALLOW_MULTI_DEF) -o $@
+
+# pgsql_mock_backend.cpp is a scriptable fake PostgreSQL server. It exists to
+# reach backend behaviour a real PostgreSQL never produces -- a server that
+# vanishes mid-result, or replies in an invalid sequence. These rules differ from
+# the generic %-t rule ONLY by compiling pgsql_mock_backend.cpp in alongside the
+# test; the generic rule builds $< alone, so the harness would not be linked.
+# Nothing else is needed: -lpthread for its listener/worker threads already comes
+# from MYLIBS, and unlike the pg_lite_client rules above there is no -lscram or
+# -lusual to create duplicate symbols, so $(ALLOW_MULTI_DEF) does not apply.
+PGSQL_MOCK_BACKEND_TESTS := \
+	pgsql-reg_test_6109_midresult_disconnect-t \
+	pgsql-reg_test_6110_invalid_reply_sequence-t \
+	pgsql-native_hostile_backend-t
+
+$(PGSQL_MOCK_BACKEND_TESTS): %: %.cpp pgsql_mock_backend.cpp pgsql_mock_backend.h $(TAP_LDIR)/libtap$(SHLIB_EXT)
+	$(CXX) $< pgsql_mock_backend.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 
 MYSQLX_PROTO_DIR := $(PROXYSQL_PATH)/plugins/mysqlx/proto
 MYSQLX_PROTO_SRCS := $(wildcard $(MYSQLX_PROTO_DIR)/*.pb.cc)

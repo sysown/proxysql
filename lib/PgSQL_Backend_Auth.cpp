@@ -23,11 +23,24 @@ void pg_build_ssl_request(unsigned char out[8]) {
 }
 
 bool pg_build_startup(unsigned char* out, size_t* out_len, size_t out_cap,
-                      const char* user, const char* database) {
+                      const char* user, const char* database,
+                      const char* client_encoding, const char* options,
+                      const char* application_name) {
+    const bool has_enc  = (client_encoding != nullptr && client_encoding[0] != '\0');
+    const bool has_opts = (options != nullptr && options[0] != '\0');
+    const bool has_app  = (application_name != nullptr && application_name[0] != '\0');
+
     // Compute the required size first so a bound check can reject before any write,
-    // guaranteeing no partial/oversized output is left in the caller buffer.
-    //   length(4) + protocol(4) + "user\0" + user\0 + "database\0" + database\0 + \0
-    size_t need = 8 + 5 + (strlen(user) + 1) + 9 + (strlen(database) + 1) + 1;
+    // guaranteeing no partial/oversized output is left in the caller buffer. Every
+    // parameter costs "key\0" + "value\0"; sizeof() on the key literal already counts
+    // its NUL, so renaming a key can never leave a stale hand-counted length behind.
+    size_t need = 4 + 4                                             // length + protocol
+                + sizeof("user")     + (strlen(user) + 1)
+                + sizeof("database") + (strlen(database) + 1)
+                + 1;                                                // terminating empty key
+    if (has_opts) need += sizeof("options")          + strlen(options) + 1;
+    if (has_app)  need += sizeof("application_name") + strlen(application_name) + 1;
+    if (has_enc)  need += sizeof("client_encoding")  + strlen(client_encoding) + 1;
     if (need > out_cap) {
         *out_len = 0;
         return false;
@@ -35,8 +48,13 @@ bool pg_build_startup(unsigned char* out, size_t* out_len, size_t out_cap,
 
     size_t off = 8;                 // reserve length(4) + protocol(4)
     auto add = [&](const char* s) { size_t l = strlen(s) + 1; memcpy(out + off, s, l); off += l; };
+    // Emitted in the same order libpq uses, so a packet capture lines up parameter for
+    // parameter with one from the libpq path.
     add("user");     add(user);
     add("database"); add(database);
+    if (has_opts) { add("options");          add(options); }
+    if (has_app)  { add("application_name"); add(application_name); }
+    if (has_enc)  { add("client_encoding");  add(client_encoding); }
     out[off++] = 0;                 // terminating empty key
 
     put_be32(out, (uint32_t)off);   // total length (includes the length field itself)
@@ -58,35 +76,57 @@ static void md5_hex(const unsigned char* in, size_t inlen, char out_hex[33]) {
     out_hex[MD5_DIGEST_LENGTH * 2] = '\0';
 }
 
+// Shared outer step of the AuthenticationMD5Password response:
+//   out = "md5" + hex(md5( inner_hex[32] || salt[4] ))
+// inner_hex is NOT NUL-terminated; exactly 32 bytes are read.
+static void md5_response_from_inner(char out[36], const char* inner_hex,
+                                    const unsigned char salt[4]) {
+    unsigned char outer_in[MD5_DIGEST_LENGTH * 2 + 4];
+    memcpy(outer_in, inner_hex, MD5_DIGEST_LENGTH * 2);
+    memcpy(outer_in + MD5_DIGEST_LENGTH * 2, salt, 4);
+
+    char outer_hex[33];
+    md5_hex(outer_in, sizeof(outer_in), outer_hex);
+
+    memcpy(out, "md5", 3);
+    memcpy(out + 3, outer_hex, 33);   // 32 hex chars + NUL -> out[3..35]
+}
+
 void pg_build_md5(char out[36], const char* user, const char* password, const unsigned char salt[4]) {
     // inner = hex(md5(password + user)). Hash the concatenation without an
     // intermediate NUL-terminated copy by passing each part length explicitly.
-    size_t plen = strlen(password);
-    size_t ulen = strlen(user);
-    {
-        unsigned char digest[MD5_DIGEST_LENGTH];
-        MD5_CTX ctx;
-        MD5_Init(&ctx);
-        MD5_Update(&ctx, password, plen);
-        MD5_Update(&ctx, user, ulen);
-        MD5_Final(digest, &ctx);
-        static const char hexd[] = "0123456789abcdef";
-        char inner_hex[33];
-        for (int i = 0; i < MD5_DIGEST_LENGTH; i++) {
-            inner_hex[i * 2]     = hexd[(digest[i] >> 4) & 0xf];
-            inner_hex[i * 2 + 1] = hexd[digest[i] & 0xf];
-        }
-        // outer input = 32 inner hex chars + 4 raw salt bytes (NOT NUL-terminated).
-        unsigned char outer_in[MD5_DIGEST_LENGTH * 2 + 4];
-        memcpy(outer_in, inner_hex, MD5_DIGEST_LENGTH * 2);
-        memcpy(outer_in + MD5_DIGEST_LENGTH * 2, salt, 4);
+    unsigned char digest[MD5_DIGEST_LENGTH];
+    MD5_CTX ctx;
+    MD5_Init(&ctx);
+    MD5_Update(&ctx, password, strlen(password));
+    MD5_Update(&ctx, user, strlen(user));
+    MD5_Final(digest, &ctx);
 
-        char outer_hex[33];
-        md5_hex(outer_in, sizeof(outer_in), outer_hex);
-
-        memcpy(out, "md5", 3);
-        memcpy(out + 3, outer_hex, 33);   // 32 hex chars + NUL -> out[3..35]
+    static const char hexd[] = "0123456789abcdef";
+    char inner_hex[MD5_DIGEST_LENGTH * 2];
+    for (int i = 0; i < MD5_DIGEST_LENGTH; i++) {
+        inner_hex[i * 2]     = hexd[(digest[i] >> 4) & 0xf];
+        inner_hex[i * 2 + 1] = hexd[digest[i] & 0xf];
     }
+    md5_response_from_inner(out, inner_hex, salt);
+}
+
+bool pg_build_md5_from_secret(char out[36], const char* md5_secret, const unsigned char salt[4]) {
+    if (out == nullptr || md5_secret == nullptr || salt == nullptr) return false;
+    // "md5" + exactly 32 LOWERCASE hex digits and nothing else -- the only form PostgreSQL
+    // stores. Validate in full before writing the first byte: a half-built response on a
+    // rejected secret is indistinguishable from a good one at the call site.
+    if (strlen(md5_secret) != 3 + (size_t)MD5_DIGEST_LENGTH * 2) return false;
+    if (memcmp(md5_secret, "md5", 3) != 0) return false;
+    const char* inner_hex = md5_secret + 3;
+    for (int i = 0; i < MD5_DIGEST_LENGTH * 2; i++) {
+        const char c = inner_hex[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+    }
+    // The stored secret IS the inner hash, so only the outer step is left. Hashing it a
+    // second time through pg_build_md5() is what made md5-stored users fail on this path.
+    md5_response_from_inner(out, inner_hex, salt);
+    return true;
 }
 
 // --- SCRAM-SHA-256 client exchange (thin wrappers over libscram) ---
@@ -115,17 +155,25 @@ void pg_scram_free(PgSQL_Scram_State* s) {
     if (s->st) free_scram_state(s->st);   // frees ScramState's owned buffers + the struct
     free(s->client_first);
     free(s->client_final);
+    // creds holds password-equivalent material (a plaintext password, or an injected
+    // ClientKey/ServerKey pair). Scrub it non-elidably before the memory goes back.
+    OPENSSL_cleanse(&s->creds, sizeof(s->creds));
     delete s;
 }
 
 const char* pg_scram_client_first(PgSQL_Scram_State* s, bool channel_binding) {
     if (s == nullptr || s->st == nullptr) return nullptr;
-    // Channel binding ('p'/'y' gs2 flag) is a separate task; this wrapper only does
-    // plain SCRAM-SHA-256 with gs2 flag 'n' ("n,," header).
-    if (channel_binding) return nullptr;
+    // channel_binding=true selects SCRAM-SHA-256-PLUS. The gs2 header libscram
+    // writes is driven by the cbind input the caller installed with
+    // pg_scram_set_cbind(), NOT by this flag, so the two must agree: advertising
+    // -PLUS while no cbind input is set would emit a plain "n,," header against a
+    // -PLUS mechanism name and the server would reject the proof. Refuse that
+    // combination rather than produce a mismatched handshake.
+    if (channel_binding && s->st->client_cbind_input == nullptr) return nullptr;
     scram_reset_error();
-    // libscram emits "n,,n=,r=<nonce>" and stashes client_nonce / client_first_message_bare
-    // ("n=,r=<nonce>") into the ScramState for the later proof computation.
+    // libscram emits "n,,n=,r=<nonce>", or "p=tls-server-end-point,,n=,r=<nonce>"
+    // when a cbind input is set, and stashes client_nonce / client_first_message_bare
+    // into the ScramState for the later proof computation.
     char* msg = build_client_first_message(s->st);
     if (msg == nullptr) return nullptr;
     free(s->client_first);
@@ -135,8 +183,10 @@ const char* pg_scram_client_first(PgSQL_Scram_State* s, bool channel_binding) {
 
 const char* pg_scram_client_final(PgSQL_Scram_State* s, const char* password,
                                   const char* server_first, size_t server_first_len) {
-    if (s == nullptr || s->st == nullptr || password == nullptr || server_first == nullptr)
-        return nullptr;
+    if (s == nullptr || s->st == nullptr || server_first == nullptr) return nullptr;
+    // A password is required UNLESS pg_scram_set_keys() injected a ClientKey/ServerKey pair,
+    // in which case libscram derives nothing from a password and never reads creds.passwd.
+    if (password == nullptr && !s->creds.has_scram_keys) return nullptr;
     scram_reset_error();
 
     // read_server_first_message() mutates its input (read_attr_value writes NULs and
@@ -152,9 +202,13 @@ const char* pg_scram_client_final(PgSQL_Scram_State* s, const char* password,
         return nullptr;
     }
 
-    // The password is the SCRAM plaintext secret; libscram derives keys ad-hoc.
-    // has_scram_keys stays false (value-initialized) so the plaintext path is used.
-    snprintf(s->creds.passwd, sizeof(s->creds.passwd), "%s", password);
+    if (!s->creds.has_scram_keys) {
+        // The password is the SCRAM plaintext secret; libscram derives keys ad-hoc.
+        snprintf(s->creds.passwd, sizeof(s->creds.passwd), "%s", password);
+    }
+    // With keys injected, creds already carries ClientKey/ServerKey and passwd stays empty:
+    // build_client_final_message() uses the ClientKey directly and skips SASLprep + PBKDF2,
+    // so the salt and iteration count the backend just sent are (correctly) unused.
 
     char* msg = build_client_final_message(s->st, &s->creds, server_nonce, salt, saltlen, iterations);
     // server_nonce / salt point into the parsed buffers: server_nonce into the local
@@ -218,6 +272,23 @@ int pg_scram_build_cbind_input_tls_server_end_point(
     memcpy(out, header, header_len);
     if (digest_len > 0) memcpy(out + header_len, digest, digest_len);
     return (int)total;
+}
+
+bool pg_scram_set_keys(PgSQL_Scram_State* s, const uint8_t* client_key, const uint8_t* server_key) {
+    if (s == nullptr || s->st == nullptr) return false;
+    // Both or neither. A ClientKey on its own still produces a proof the backend accepts,
+    // but leaves verify_server_signature() nothing genuine to check against -- the server
+    // half of mutual authentication would be dropped without any visible failure. libscram
+    // gates both keys on one flag, so a half-filled PgCredentials is not representable
+    // there either; refuse the call rather than approximate it.
+    if (client_key == nullptr || server_key == nullptr) return false;
+    memcpy(s->creds.scram_ClientKey, client_key, sizeof(s->creds.scram_ClientKey));
+    memcpy(s->creds.scram_ServerKey, server_key, sizeof(s->creds.scram_ServerKey));
+    s->creds.has_scram_keys = true;
+    // A verifier is not a password: an empty passwd means nothing downstream can fall back
+    // to SASLprep + PBKDF2 over verifier text. Cleansed so an earlier call's cannot linger.
+    OPENSSL_cleanse(s->creds.passwd, sizeof(s->creds.passwd));
+    return true;
 }
 
 void pg_scram_set_cbind(PgSQL_Scram_State* s, const char* cbind_input, int cbind_input_len) {

@@ -6,14 +6,6 @@
 #include "pg_lite_client.h"
 #include <netdb.h>
 #include <fcntl.h>
-#ifdef PG_LITE_CLIENT_SCRAM
-// SCRAM-SHA-256 client support for direct-to-backend connections (pg_hba
-// scram-sha-256). Enabled only by test rules that pass -DPG_LITE_CLIENT_SCRAM
-// and link -lscram -lusual; other tests that share pg_lite_client.cpp compile
-// this file without the flag and never pull the pg_scram_* symbols from
-// libproxysql.a, so their link lines need no scram libraries.
-#include "PgSQL_Backend_Protocol.h"
-#endif
 #include <sstream>
 #include <iomanip>
 #include <stdexcept>
@@ -324,17 +316,6 @@ void PgConnection::handleAuthentication(const std::string& password) {
     char type;
     std::vector<uint8_t> buffer;
 
-#ifdef PG_LITE_CLIENT_SCRAM
-    // The SCRAM state persists across the multi-round SASL handshake (10 -> 11 ->
-    // 12 -> 0). RAII-freed on every exit path (throw or return) so a mid-handshake
-    // failure cannot leak the libscram state.
-    PgSQL_Scram_State* scram = nullptr;
-    struct ScramGuard {
-        PgSQL_Scram_State** s;
-        ~ScramGuard() { if (*s) pg_scram_free(*s); }
-    } scram_guard{&scram};
-#endif
-
     while (true) {
         readMessage(type, buffer);
 
@@ -445,10 +426,23 @@ static std::string extractErrorMessage(const std::vector<uint8_t>& buffer) {
 
 // Completes a SCRAM-SHA-256 SASL exchange as the CLIENT, reusing deps/libscram.
 // mechListMsg is the AuthenticationSASL(10) payload after the 4-byte authType:
-// a sequence of null-terminated mechanism names terminated by an extra null.
-// (We do not parse it; ProxySQL offers SCRAM-SHA-256 and we answer with that.)
+// a sequence of null-terminated mechanism names terminated by an extra null,
+// e.g. "SCRAM-SHA-256\0[SCRAM-SHA-256-PLUS\0]\0".
 void PgConnection::doSASLAuth(const std::string& password,
-                             const std::vector<uint8_t>& /*mechListMsg*/) {
+                             const std::vector<uint8_t>& mechListMsg) {
+    // This client only does plain SCRAM-SHA-256 (no channel binding), matching the "n,,"
+    // gs2 header libscram emits, so refuse up front if the server does not offer it rather
+    // than answering with a mechanism it never advertised.
+    bool has_scram = false;
+    for (size_t i = 4; i < mechListMsg.size() && mechListMsg[i] != 0; ) {
+        const char* mech = reinterpret_cast<const char*>(mechListMsg.data() + i);
+        size_t mlen = strnlen(mech, mechListMsg.size() - i);
+        if (mlen == strlen("SCRAM-SHA-256") && memcmp(mech, "SCRAM-SHA-256", mlen) == 0)
+            has_scram = true;
+        i += mlen + 1;
+    }
+    if (!has_scram) throw PgException("Server did not offer plain SCRAM-SHA-256");
+
     ScramState* st = scram_state_init();
     PgCredentials cred;
     memset(&cred, 0, sizeof(cred));
@@ -488,7 +482,8 @@ void PgConnection::doSASLAuth(const std::string& password,
     }
     std::string server_first(reinterpret_cast<const char*>(buffer.data()) + 4, buffer.size() - 4);
     char* server_nonce = nullptr; char* salt = nullptr; int saltlen = 0; int iterations = 0;
-    if (!read_server_first_message(st, const_cast<char*>(server_first.c_str()),
+    // &s[0], not const_cast(c_str()): read_server_first_message writes NULs into its input.
+    if (!read_server_first_message(st, &server_first[0],
                                    &server_nonce, &salt, &saltlen, &iterations)) {
         free(client_first); free_scram_state(st);
         throw PgException(std::string("scram read server-first: ") + scram_error());
@@ -518,7 +513,8 @@ void PgConnection::doSASLAuth(const std::string& password,
     {
         std::string server_final(reinterpret_cast<const char*>(buffer.data()) + 4, buffer.size() - 4);
         char server_sig[256] = {0};
-        if (!read_server_final_message(const_cast<char*>(server_final.c_str()), server_sig) ||
+        // &s[0], not const_cast(c_str()): read_server_final_message writes NULs into its input.
+        if (!read_server_final_message(&server_final[0], server_sig) ||
             !verify_server_signature(st, &cred, server_sig)) {
             free(client_first); free(client_final); free_scram_state(st);
             throw PgException("scram server signature verification failed");
@@ -628,11 +624,12 @@ std::string PgConnection::saslBegin(const std::string& user, const std::string& 
         throw PgException("expected AuthenticationSASLContinue(11)");
     }
     std::string server_first(reinterpret_cast<const char*>(buffer.data()) + 4, buffer.size() - 4);
-    // server_nonce comes back pointing INTO server_first, which dies when this function returns --
-    // copy it into the member before that happens. salt is malloc'd by read_server_first_message()
-    // and genuinely handed over, so it keeps its raw pointer.
+    // read_server_first_message() mutates its input in place (read_attr_value writes NULs), and
+    // hands back server_nonce as a pointer INTO that buffer -- which is this local, about to die.
+    // Copy the nonce into the member before returning; sasl_salt_ IS malloc'd and stays owned.
+    // &s[0], not const_cast(c_str()): the callee writes NULs into the buffer it is handed.
     char* server_nonce = nullptr;
-    if (!read_server_first_message(sasl_st_, const_cast<char*>(server_first.c_str()),
+    if (!read_server_first_message(sasl_st_, &server_first[0],
                                    &server_nonce, &sasl_salt_, &sasl_saltlen_, &sasl_iterations_)) {
         std::string e = scram_error(); freeSaslState();
         throw PgException(std::string("scram read server-first: ") + e);
@@ -683,7 +680,7 @@ int PgConnection::saslFinish() {
     {
         std::string server_final(reinterpret_cast<const char*>(buffer.data()) + 4, buffer.size() - 4);
         char server_sig[256] = {0};
-        if (!read_server_final_message(const_cast<char*>(server_final.c_str()), server_sig) ||
+        if (!read_server_final_message(&server_final[0], server_sig) ||
             !verify_server_signature(sasl_st_, &cred, server_sig)) {
             free(client_final); freeSaslState();
             throw PgException("scram server signature verification failed");

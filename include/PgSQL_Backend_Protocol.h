@@ -43,19 +43,35 @@ class PgSQL_Backend_Msg_Framer {
 // Writes the fixed 8-byte SSLRequest packet: length=8, code=80877103 (0x04d2162f).
 void pg_build_ssl_request(unsigned char out[8]);
 
-// Encodes a protocol-3.0 StartupMessage into out[0..*out_len).
-// Layout: int32 length (incl. itself), int32 protocol (196608 = 0x00030000),
-// then "user\0<user>\0database\0<database>\0" and a terminating empty key (\0).
-// Bounds: writes nothing past out_cap. If the encoded message would exceed
-// out_cap, sets *out_len = 0 and returns false (no partial/oversized write).
-// Returns true on success with *out_len set to the number of bytes written.
+// Builds the protocol-3.0 StartupMessage that opens a backend connection, carrying the
+// user and database to connect as and, when given, the options, application_name and
+// client_encoding to start the session with. Pass NULL or an empty string to leave any
+// of those three out; options is a "-c name=value ..." string of settings for the
+// backend to apply, and application_name is what the session reports in
+// pg_stat_activity.
+// Writes nothing past out_cap: if the message would not fit it sets *out_len = 0 and
+// returns false, leaving no partial write. On success returns true with *out_len set to
+// the number of bytes written.
 bool pg_build_startup(unsigned char* out, size_t* out_len, size_t out_cap,
-                      const char* user, const char* database);
+                      const char* user, const char* database,
+                      const char* client_encoding, const char* options,
+                      const char* application_name);
 
 // Builds the PostgreSQL AuthenticationMD5Password response into out[36]:
 //   "md5" + hex(md5( hex(md5(password+user)) + salt[4] ))
 // Result is the 35-char "md5..." string plus a terminating NUL (36 bytes total).
 void pg_build_md5(char out[36], const char* user, const char* password, const unsigned char salt[4]);
+
+// Same response, built from a STORED md5 secret instead of a plaintext password.
+// `md5_secret` is the pg_authid.rolpassword form that pgsql_users.password holds for an
+// md5-stored user: "md5" + 32 lowercase hex chars, where the hex IS the inner
+// md5(password+user). Only the outer hash over (inner_hex || salt) is left to compute --
+// running pg_build_md5() over such a secret would hash it a second time and the backend
+// would reject the login.
+// Returns false, leaving `out` untouched, unless the secret is exactly that form: 35
+// chars, "md5" prefix, 32 lowercase hex digits. A partially written response must never
+// reach the wire, so validation happens before the first byte is stored.
+bool pg_build_md5_from_secret(char out[36], const char* md5_secret, const unsigned char salt[4]);
 
 // Computes the tls-server-end-point channel-binding data for a finished TLS
 // session: the digest of the peer cert's DER encoding, using the cert's own
@@ -76,8 +92,8 @@ int pg_scram_build_cbind_input_tls_server_end_point(
 
 // --- SCRAM-SHA-256 client exchange (thin wrappers over vendored libscram) ---
 //
-// Plain SCRAM-SHA-256 only: gs2 channel-binding flag is 'n' (no channel binding).
-// Channel binding (gs2 flag 'p'/'y') is a separate task. The wrapper owns a libscram
+// SCRAM-SHA-256, and SCRAM-SHA-256-PLUS when a cbind input has been installed via
+// pg_scram_set_cbind() before building client-first. The wrapper owns a libscram
 // ScramState plus a cached PgCredentials; it is defined in lib/PgSQL_Backend_Auth.cpp
 // so this header stays free of scram.h. Usage mirrors a SCRAM client driving the
 // PostgreSQL SASL handshake:
@@ -103,7 +119,10 @@ void pg_scram_free(PgSQL_Scram_State* s);
 // gs2 header is "n,," (no channel binding) and the username field is empty ("n="),
 // matching the PostgreSQL convention where the real username travels in the startup
 // packet. Returns the owned message string, or nullptr on error (see scram_error()).
-// channel_binding=true is not supported by this task and returns nullptr.
+// With channel_binding=true the gs2 header is "p=tls-server-end-point,," and the
+// caller MUST have installed a matching cbind input via pg_scram_set_cbind() first;
+// returns nullptr if it has not, rather than emit a header that contradicts the
+// advertised -PLUS mechanism.
 const char* pg_scram_client_first(PgSQL_Scram_State* s, bool channel_binding);
 
 // Consumes the server-first message (AuthenticationSASLContinue body) and the plaintext
@@ -111,8 +130,26 @@ const char* pg_scram_client_first(PgSQL_Scram_State* s, bool channel_binding);
 // NUL-terminated; server_first_len bytes are used. The password is treated as a SCRAM
 // plaintext secret (keys derived ad-hoc by libscram). Returns the owned message string,
 // or nullptr on error (nonce mismatch, malformed input, etc; see scram_error()).
+//
+// password may be nullptr ONLY after pg_scram_set_keys() has injected a ClientKey/ServerKey
+// pair; the exchange then runs off those keys and the salt and iteration count in
+// server_first are correctly unused. Without injected keys a nullptr password is an error.
 const char* pg_scram_client_final(PgSQL_Scram_State* s, const char* password,
                                   const char* server_first, size_t server_first_len);
+
+// Installs a harvested ClientKey and the stored verifier's ServerKey (32 bytes each) so
+// the exchange authenticates FROM THE KEYS, skipping SASLprep + PBKDF2 over a password we
+// do not have. This is the backend leg of verifier pass-through: the ClientKey recovered
+// from the client's frontend SCRAM proof, plus the ServerKey read out of the stored
+// verifier, are exactly the two secrets the rest of the handshake needs.
+//
+// BOTH keys are required. With only a ClientKey the proof would still be accepted but
+// pg_scram_verify_server_final() would have nothing genuine to check against, silently
+// dropping the server half of mutual authentication -- so a half-injection is refused and
+// the state is left untouched. Returns false on a NULL state or a NULL key.
+//
+// Call before pg_scram_client_final(), which may then be passed password == nullptr.
+bool pg_scram_set_keys(PgSQL_Scram_State* s, const uint8_t* client_key, const uint8_t* server_key);
 
 // Verifies the server-final message (AuthenticationSASLFinal body). server_final need
 // not be NUL-terminated; len bytes are used. Returns true iff the server signature

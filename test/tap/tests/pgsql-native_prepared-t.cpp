@@ -67,8 +67,11 @@
 #include <memory>
 #include <fstream>
 #include <regex>
+#include <chrono>
 #include <unistd.h>
 #include <cstring>
+#include <cerrno>
+#include <sys/select.h>
 #include "libpq-fe.h"
 #include "command_line.h"
 #include "tap.h"
@@ -94,7 +97,7 @@ static PGConnPtr open_admin_conn() {
 	return PGConnPtr(PQconnectdb(ss.str().c_str()), &PQfinish);
 }
 
-static PGConnPtr open_client_conn() {
+static PGConnPtr open_client_conn(const std::string& extra_opts = "") {
 	std::stringstream ss;
 	ss << "host=" << cl.pgsql_host
 	   << " port=" << cl.pgsql_port
@@ -102,6 +105,7 @@ static PGConnPtr open_client_conn() {
 	   << " password=" << cl.pgsql_password
 	   << " dbname=" << cl.pgsql_username
 	   << " sslmode=disable";
+	if (!extra_opts.empty()) ss << " " << extra_opts;
 	return PGConnPtr(PQconnectdb(ss.str().c_str()), &PQfinish);
 }
 
@@ -876,12 +880,472 @@ static ExtQCaseRunResult run_describe_cached(PGconn* admin, bool first_native,
 	return {result_match, fell_back, det.str()};
 }
 
+// ===========================================================================
+// DEALLOCATE-forwarding regression (ABSOLUTE, not differential).
+//
+// ProxySQL used to intercept every single-statement DEALLOCATE and resolve the
+// name only against local_stmts -- which tracks extended-query (binary)
+// prepares. A name from a SQL-level PREPARE is never in that map, so ProxySQL
+// answered with a fabricated "prepared statement does not exist" and never
+// forwarded the command, even though the statement was alive on the backend.
+//
+// The differential P0/P7 cases above cannot catch this: the interception lives
+// in the protocol-independent client handler, so libpq-through-ProxySQL and
+// native-through-ProxySQL are affected identically and still match each other.
+// These checks assert the real-PostgreSQL outcome directly. Driven on the
+// native path here; the libpq-path equivalent lives in
+// pgsql-extended_query_protocol_test-t (test_deallocate_sql_prepared_via_simple_query).
+// ===========================================================================
+static const int N_DEALLOC_REG_PER_MODE = 10;
+
+static void run_dealloc_regression(PGconn* admin, bool native,
+                                   const std::vector<ServerRow>& saved) {
+	const char* m = native ? "native" : "libpq";
+	if (!setNativeMode(admin, native) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		for (int i = 0; i < N_DEALLOC_REG_PER_MODE; i++)
+			ok(false, "[%s] dealloc-regression: admin setup failed", m);
+		return;
+	}
+	PGConnPtr c = open_client_conn();
+	if (!c || PQstatus(c.get()) != CONNECTION_OK) {
+		for (int i = 0; i < N_DEALLOC_REG_PER_MODE; i++)
+			ok(false, "[%s] dealloc-regression: client connect failed", m);
+		return;
+	}
+	PGconn* cc = c.get();
+
+	// 0. On a fresh, unpinned connection, a DEALLOCATE of an unknown name is
+	//    answered locally (no SQL PREPARE happened, so it cannot exist) rather
+	//    than acquiring a backend connection just to fail.
+	{ PGresult* r = PQexec(cc, "DEALLOCATE dealloc_reg_unpinned");
+	  ok(PQresultStatus(r) == PGRES_FATAL_ERROR,
+	     "[%s] DEALLOCATE of an unknown name on a fresh connection errors -> %s",
+	     m, PQresStatus(PQresultStatus(r)));
+	  PQclear(r); }
+
+	// 1. A SQL-level PREPARE succeeds (forwarded to the backend as usual).
+	{ PGresult* r = PQexec(cc, "PREPARE dealloc_reg AS SELECT 42");
+	  ok(PQresultStatus(r) == PGRES_COMMAND_OK,
+	     "[%s] SQL PREPARE dealloc_reg -> %s", m, PQresStatus(PQresultStatus(r)));
+	  PQclear(r); }
+
+	// 2. EXECUTE returns the row: the statement is genuinely live on the backend.
+	{ PGresult* r = PQexec(cc, "EXECUTE dealloc_reg");
+	  bool good = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1
+	              && std::string(PQgetvalue(r, 0, 0)) == "42";
+	  ok(good, "[%s] EXECUTE dealloc_reg returns 42", m);
+	  PQclear(r); }
+
+	// 3. THE FIX: DEALLOCATE of a SQL-prepared statement is forwarded and
+	//    succeeds, instead of a fabricated "does not exist" error.
+	{ PGresult* r = PQexec(cc, "DEALLOCATE dealloc_reg");
+	  ok(PQresultStatus(r) == PGRES_COMMAND_OK,
+	     "[%s] DEALLOCATE dealloc_reg succeeds (forwarded, not fabricated) -> %s",
+	     m, PQresStatus(PQresultStatus(r)));
+	  PQclear(r); }
+
+	// 4. It really was deallocated on the backend: a second EXECUTE now fails.
+	{ PGresult* r = PQexec(cc, "EXECUTE dealloc_reg");
+	  ok(PQresultStatus(r) == PGRES_FATAL_ERROR,
+	     "[%s] EXECUTE after DEALLOCATE fails, statement is gone -> %s",
+	     m, PQresStatus(PQresultStatus(r)));
+	  PQclear(r); }
+
+	// 5. A mistyped/unknown name returns the backend's real error (not silent OK).
+	{ PGresult* r = PQexec(cc, "DEALLOCATE dealloc_reg_never_prepared");
+	  ok(PQresultStatus(r) == PGRES_FATAL_ERROR,
+	     "[%s] DEALLOCATE of an unknown name errors -> %s",
+	     m, PQresStatus(PQresultStatus(r)));
+	  PQclear(r); }
+
+	// 6. ...and the session is still usable afterwards: a typo must not wedge it
+	//    or lock the connection onto a hostgroup.
+	{ PGresult* r = PQexec(cc, "SELECT 1");
+	  bool good = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1
+	              && std::string(PQgetvalue(r, 0, 0)) == "1";
+	  ok(good, "[%s] session still usable after a bogus DEALLOCATE", m);
+	  PQclear(r); }
+
+	// 7-9. ALL-prefix guard: a statement whose name starts with "all" must be
+	//      treated as a normal DEALLOCATE (forwarded), not mistaken for
+	//      DEALLOCATE ALL. Without the exact-match fix, DEALLOCATE all_users
+	//      returns the tag "DEALLOCATE ALL" and never frees the statement.
+	{ PGresult* r = PQexec(cc, "PREPARE all_users AS SELECT 7");
+	  ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] PREPARE all_users", m);
+	  PQclear(r); }
+	{ PGresult* r = PQexec(cc, "DEALLOCATE all_users");
+	  const char* tag = PQcmdStatus(r);
+	  ok(PQresultStatus(r) == PGRES_COMMAND_OK && tag && strcmp(tag, "DEALLOCATE") == 0,
+	     "[%s] DEALLOCATE all_users -> tag '%s' (a normal DEALLOCATE, not DEALLOCATE ALL)",
+	     m, tag ? tag : "");
+	  PQclear(r); }
+	{ PGresult* r = PQexec(cc, "EXECUTE all_users");
+	  ok(PQresultStatus(r) == PGRES_FATAL_ERROR,
+	     "[%s] EXECUTE all_users after DEALLOCATE errors, so it was really deallocated -> %s",
+	     m, PQresStatus(PQresultStatus(r)));
+	  PQclear(r); }
+}
+
+// ===========================================================================
+// Cross-protocol DEALLOCATE (the tracked side of the same fix).
+//
+// A statement prepared via the EXTENDED (binary) protocol -- PQprepare -- is
+// tracked by ProxySQL in local_stmts and RENAMED on the backend
+// (proxysql_ps_<id>). A SQL-text DEALLOCATE of its client name must therefore
+// stay handled LOCALLY (client_close finds it) and must NOT be forwarded:
+// forwarding the client name would fail on the backend, which knows it only by
+// the renamed name. This guards that the DEALLOCATE-forwarding fix draws the
+// line at the tracked/untracked boundary, not at "any DEALLOCATE".
+// ===========================================================================
+static const int N_DEALLOC_XPROTO_PER_MODE = 5;
+
+static void run_dealloc_xproto_regression(PGconn* admin, bool native,
+                                          const std::vector<ServerRow>& saved) {
+	const char* m = native ? "native" : "libpq";
+	if (!setNativeMode(admin, native) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		for (int i = 0; i < N_DEALLOC_XPROTO_PER_MODE; i++)
+			ok(false, "[%s] xproto-dealloc: admin setup failed", m);
+		return;
+	}
+	PGConnPtr c = open_client_conn();
+	if (!c || PQstatus(c.get()) != CONNECTION_OK) {
+		for (int i = 0; i < N_DEALLOC_XPROTO_PER_MODE; i++)
+			ok(false, "[%s] xproto-dealloc: client connect failed", m);
+		return;
+	}
+	PGconn* cc = c.get();
+
+	// 1. Named binary prepare (extended protocol): ProxySQL tracks it and renames
+	//    it on the backend.
+	{ PGresult* r = PQprepare(cc, "xp_bp", "SELECT 77", 0, nullptr);
+	  ok(PQresultStatus(r) == PGRES_COMMAND_OK,
+	     "[%s] binary PQprepare xp_bp -> %s", m, PQresStatus(PQresultStatus(r)));
+	  PQclear(r); }
+
+	// 2. Binary execute returns the row.
+	{ PGresult* r = PQexecPrepared(cc, "xp_bp", 0, nullptr, nullptr, nullptr, 0);
+	  bool good = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1
+	              && std::string(PQgetvalue(r, 0, 0)) == "77";
+	  ok(good, "[%s] binary EXECUTE xp_bp returns 77", m);
+	  PQclear(r); }
+
+	// 3. SQL-text DEALLOCATE of the binary name is handled locally and succeeds
+	//    -- it must NOT be forwarded (the backend name differs).
+	{ PGresult* r = PQexec(cc, "DEALLOCATE xp_bp");
+	  ok(PQresultStatus(r) == PGRES_COMMAND_OK,
+	     "[%s] SQL DEALLOCATE of a binary-prepared name succeeds (handled locally) -> %s",
+	     m, PQresStatus(PQresultStatus(r)));
+	  PQclear(r); }
+
+	// 4. It is really gone: re-executing the binary statement now fails.
+	{ PGresult* r = PQexecPrepared(cc, "xp_bp", 0, nullptr, nullptr, nullptr, 0);
+	  ok(PQresultStatus(r) == PGRES_FATAL_ERROR,
+	     "[%s] binary EXECUTE after DEALLOCATE fails, statement is gone -> %s",
+	     m, PQresStatus(PQresultStatus(r)));
+	  PQclear(r); }
+
+	// 5. Session still usable.
+	{ PGresult* r = PQexec(cc, "SELECT 1");
+	  bool good = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1
+	              && std::string(PQgetvalue(r, 0, 0)) == "1";
+	  ok(good, "[%s] session still usable after cross-protocol DEALLOCATE", m);
+	  PQclear(r); }
+}
+
+// ===========================================================================
+// DEALLOCATE ALL matrix.
+//
+// DEALLOCATE ALL now forwards to the pinned backend and releases ProxySQL's
+// backend-side statement bookkeeping (backend_close_all), so SQL-level PREPARE
+// statements are actually freed while binary statements and the shared global
+// statement cache stay consistent. Scenarios:
+//   S1 SQL-only            S2 binary-only         S3 mixed (SQL + binary)
+//   S4 nothing prepared    S5 cross-connection isolation   S6 repeated cycles
+//   S7 aborted-txn (DEALLOCATE ALL rejected -> statements survive, guard keeps tracking)
+// ===========================================================================
+static const int N_DALLALL_MATRIX = 36;
+
+static bool exec_ok(PGconn* c, const char* q) {
+	PGresult* r = PQexec(c, q);
+	bool good = PQresultStatus(r) == PGRES_COMMAND_OK || PQresultStatus(r) == PGRES_TUPLES_OK;
+	PQclear(r);
+	return good;
+}
+static bool val_is(PGresult* r, const char* v) {
+	return PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1
+	       && std::string(PQgetvalue(r, 0, 0)) == v;
+}
+
+static void run_dealloc_all_matrix(PGconn* admin, bool native,
+                                   const std::vector<ServerRow>& saved) {
+	const char* m = native ? "native" : "libpq";
+	auto fail = [&](int n, const char* why) {
+		for (int i = 0; i < n; i++) ok(false, "[%s] dealloc-all matrix: %s", m, why);
+	};
+	if (!setNativeMode(admin, native) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		fail(N_DALLALL_MATRIX, "admin setup failed");
+		return;
+	}
+
+	// ---- S1: SQL-only. Pinned by SQL PREPARE -> DEALLOCATE ALL forwards; the
+	//          statements are actually freed on the backend. ----
+	{
+		PGConnPtr c = open_client_conn(); PGconn* cc = c.get();
+		if (!c || PQstatus(cc) != CONNECTION_OK) { fail(5, "S1 conn failed"); }
+		else {
+			PGresult* r;
+			r = PQexec(cc, "PREPARE s1 AS SELECT 1"); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S1 PREPARE s1", m); PQclear(r);
+			r = PQexec(cc, "PREPARE s2 AS SELECT 2"); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S1 PREPARE s2", m); PQclear(r);
+			(void)exec_ok(cc, "DEALLOCATE ALL");
+			r = PQexec(cc, "EXECUTE s1"); ok(PQresultStatus(r) == PGRES_FATAL_ERROR, "[%s] S1 EXECUTE s1 freed -> %s", m, PQresStatus(PQresultStatus(r))); PQclear(r);
+			r = PQexec(cc, "EXECUTE s2"); ok(PQresultStatus(r) == PGRES_FATAL_ERROR, "[%s] S1 EXECUTE s2 freed -> %s", m, PQresStatus(PQresultStatus(r))); PQclear(r);
+			r = PQexec(cc, "PREPARE s1 AS SELECT 1"); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S1 re-PREPARE s1 (backend cleared) -> %s", m, PQresStatus(PQresultStatus(r))); PQclear(r);
+		}
+	}
+
+	// ---- S2: binary-only. Not pinned -> DEALLOCATE ALL stays local; the client
+	//          name is dropped, but the cached statement is reusable (no desync). ----
+	{
+		PGConnPtr c = open_client_conn(); PGconn* cc = c.get();
+		if (!c || PQstatus(cc) != CONNECTION_OK) { fail(5, "S2 conn failed"); }
+		else {
+			PGresult* r;
+			r = PQprepare(cc, "b1", "SELECT 88", 0, nullptr); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S2 binary prepare b1", m); PQclear(r);
+			r = PQexecPrepared(cc, "b1", 0, nullptr, nullptr, nullptr, 0); ok(val_is(r, "88"), "[%s] S2 EXECUTE b1 = 88", m); PQclear(r);
+			(void)exec_ok(cc, "DEALLOCATE ALL");
+			r = PQexecPrepared(cc, "b1", 0, nullptr, nullptr, nullptr, 0); ok(PQresultStatus(r) == PGRES_FATAL_ERROR, "[%s] S2 EXECUTE b1 after DEALLOCATE ALL fails -> %s", m, PQresStatus(PQresultStatus(r))); PQclear(r);
+			r = PQprepare(cc, "b2", "SELECT 88", 0, nullptr); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S2 re-prepare same-hash b2 (no desync)", m); PQclear(r);
+			r = PQexecPrepared(cc, "b2", 0, nullptr, nullptr, nullptr, 0); ok(val_is(r, "88"), "[%s] S2 EXECUTE b2 = 88", m); PQclear(r);
+		}
+	}
+
+	// ---- S3: mixed. SQL PREPARE pins the connection; a binary prepare then lands
+	//          on it. DEALLOCATE ALL forwards + backend_close_all: the SQL stmt is
+	//          freed and the binary bookkeeping stays consistent (same-hash reuse
+	//          still works). ----
+	{
+		PGConnPtr c = open_client_conn(); PGconn* cc = c.get();
+		if (!c || PQstatus(cc) != CONNECTION_OK) { fail(7, "S3 conn failed"); }
+		else {
+			PGresult* r;
+			r = PQexec(cc, "PREPARE sp AS SELECT 5"); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S3 SQL PREPARE sp", m); PQclear(r);
+			r = PQprepare(cc, "bp", "SELECT 88", 0, nullptr); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S3 binary prepare bp", m); PQclear(r);
+			r = PQexecPrepared(cc, "bp", 0, nullptr, nullptr, nullptr, 0); ok(val_is(r, "88"), "[%s] S3 EXECUTE bp = 88", m); PQclear(r);
+			(void)exec_ok(cc, "DEALLOCATE ALL");
+			r = PQexec(cc, "EXECUTE sp"); ok(PQresultStatus(r) == PGRES_FATAL_ERROR, "[%s] S3 EXECUTE sp freed -> %s", m, PQresStatus(PQresultStatus(r))); PQclear(r);
+			r = PQexec(cc, "PREPARE sp AS SELECT 5"); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S3 re-PREPARE sp (backend cleared) -> %s", m, PQresStatus(PQresultStatus(r))); PQclear(r);
+			r = PQprepare(cc, "bp2", "SELECT 88", 0, nullptr); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S3 re-prepare same-hash bp2 (no desync after backend_close_all)", m); PQclear(r);
+			r = PQexecPrepared(cc, "bp2", 0, nullptr, nullptr, nullptr, 0); ok(val_is(r, "88"), "[%s] S3 EXECUTE bp2 = 88", m); PQclear(r);
+		}
+	}
+
+	// ---- S4: nothing prepared. DEALLOCATE ALL on a fresh connection is harmless
+	//          and the session stays usable. ----
+	{
+		PGConnPtr c = open_client_conn(); PGconn* cc = c.get();
+		if (!c || PQstatus(cc) != CONNECTION_OK) { fail(2, "S4 conn failed"); }
+		else {
+			ok(exec_ok(cc, "DEALLOCATE ALL"), "[%s] S4 DEALLOCATE ALL on fresh connection ok", m);
+			PGresult* r = PQexec(cc, "SELECT 1"); ok(val_is(r, "1"), "[%s] S4 session usable after DEALLOCATE ALL", m); PQclear(r);
+		}
+	}
+
+	// ---- S5: cross-connection isolation. connA holds a binary statement X; connB
+	//          (mixed) does DEALLOCATE ALL, which forwards and releases connB's copy
+	//          of X. connA's X must be untouched -- proof the shared cache/refcounts
+	//          are not corrupted. ----
+	{
+		PGConnPtr ca = open_client_conn(); PGconn* a = ca.get();
+		PGConnPtr cb = open_client_conn(); PGconn* b = cb.get();
+		if (!ca || PQstatus(a) != CONNECTION_OK || !cb || PQstatus(b) != CONNECTION_OK) { fail(5, "S5 conn failed"); }
+		else {
+			PGresult* r;
+			r = PQprepare(a, "X", "SELECT 42", 0, nullptr); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S5 connA prepare X", m); PQclear(r);
+			r = PQexecPrepared(a, "X", 0, nullptr, nullptr, nullptr, 0); ok(val_is(r, "42"), "[%s] S5 connA EXECUTE X = 42", m); PQclear(r);
+			r = PQexec(b, "PREPARE spB AS SELECT 1"); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S5 connB SQL PREPARE spB (pins)", m); PQclear(r);
+			r = PQprepare(b, "X", "SELECT 42", 0, nullptr); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S5 connB prepare X (same hash)", m); PQclear(r);
+			(void)exec_ok(b, "DEALLOCATE ALL"); // connB forwards + backend_close_all
+			r = PQexecPrepared(a, "X", 0, nullptr, nullptr, nullptr, 0); ok(val_is(r, "42"), "[%s] S5 connA EXECUTE X still = 42 (no corruption) -> %s", m, PQresStatus(PQresultStatus(r))); PQclear(r);
+		}
+	}
+
+	// ---- S6: repeated PREPARE + DEALLOCATE ALL cycles. Each cycle must re-prepare
+	//          cleanly (no lingering 42P05), and the refcounts must stay balanced. ----
+	{
+		PGConnPtr c = open_client_conn(); PGconn* cc = c.get();
+		if (!c || PQstatus(cc) != CONNECTION_OK) { fail(4, "S6 conn failed"); }
+		else {
+			for (int i = 1; i <= 3; i++) {
+				PGresult* r = PQexec(cc, "PREPARE cyc AS SELECT 1");
+				ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S6 cycle %d PREPARE cyc -> %s", m, i, PQresStatus(PQresultStatus(r)));
+				PQclear(r);
+				(void)exec_ok(cc, "DEALLOCATE ALL");
+			}
+			PGresult* r = PQexec(cc, "EXECUTE cyc"); ok(PQresultStatus(r) == PGRES_FATAL_ERROR, "[%s] S6 EXECUTE cyc after last DEALLOCATE ALL fails -> %s", m, PQresStatus(PQresultStatus(r))); PQclear(r);
+		}
+	}
+
+	// ---- S7: aborted transaction. DEALLOCATE ALL inside an aborted txn is rejected
+	//          by the backend, so every statement survives. The aborted-txn guard
+	//          must keep our tracking intact (no optimistic client/backend clear) so
+	//          both the SQL PREPARE and the binary prepare are still usable after
+	//          ROLLBACK -- byte-for-byte what real PostgreSQL does. ----
+	{
+		PGConnPtr c = open_client_conn(); PGconn* cc = c.get();
+		if (!c || PQstatus(cc) != CONNECTION_OK) { fail(8, "S7 conn failed"); }
+		else {
+			PGresult* r;
+			r = PQexec(cc, "PREPARE sp AS SELECT 5"); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S7 SQL PREPARE sp (pins)", m); PQclear(r);
+			r = PQprepare(cc, "bp", "SELECT 88", 0, nullptr); ok(PQresultStatus(r) == PGRES_COMMAND_OK, "[%s] S7 binary prepare bp", m); PQclear(r);
+			r = PQexecPrepared(cc, "bp", 0, nullptr, nullptr, nullptr, 0); ok(val_is(r, "88"), "[%s] S7 EXECUTE bp = 88", m); PQclear(r);
+			(void)exec_ok(cc, "BEGIN");
+			r = PQexec(cc, "SELECT 1/0"); ok(PQresultStatus(r) == PGRES_FATAL_ERROR, "[%s] S7 SELECT 1/0 aborts txn -> %s", m, PQresStatus(PQresultStatus(r))); PQclear(r);
+			r = PQexec(cc, "DEALLOCATE ALL"); ok(PQresultStatus(r) == PGRES_FATAL_ERROR, "[%s] S7 DEALLOCATE ALL rejected in aborted txn -> %s", m, PQresStatus(PQresultStatus(r))); PQclear(r);
+			(void)exec_ok(cc, "ROLLBACK");
+			r = PQexec(cc, "EXECUTE sp"); ok(val_is(r, "5"), "[%s] S7 SQL sp survives (guard kept tracking) -> %s", m, PQresStatus(PQresultStatus(r))); PQclear(r);
+			r = PQexecPrepared(cc, "bp", 0, nullptr, nullptr, nullptr, 0); ok(val_is(r, "88"), "[%s] S7 binary bp survives (guard kept tracking) -> %s", m, PQresStatus(PQresultStatus(r))); PQclear(r);
+			r = PQexec(cc, "SELECT 99"); ok(val_is(r, "99"), "[%s] S7 session usable after aborted-txn DEALLOCATE ALL", m); PQclear(r);
+		}
+	}
+
+}
+
+// ===========================================================================
+// Variable-sync reuse regression (native path)
+// ===========================================================================
+// This case guards a hang that used to make a client session wait forever with no
+// error and no timeout. The fix is the end-state pin in ASYNC_QUERY_START in
+// lib/PgSQL_Connection.cpp, and the full write-up is in
+// docs/superpowers/specs/2026-09-01-pgsql-native-varsync-reuse-hang.md.
+//
+// The bug worked like this. When a client used a prepared statement, the backend
+// connection was left marked as ending in ASYNC_STMT_EXECUTE_END. Nothing cleared that
+// mark when the connection went back into the pool, so the next session inherited it.
+// If that next client happened to want a different client_encoding, ProxySQL sent it a
+// "SET client_encoding" to bring the connection into line, and the reply to that SET
+// was dispatched using the stale mark. The code driving the SET only ever accepted
+// ASYNC_QUERY_END, so it decided the SET had not finished and kept waiting.
+//
+// The test therefore does two things in order. It opens a client that asks for LATIN1
+// and runs a prepared statement, which leaves the mark behind, then closes it so the
+// connection returns to the pool. It then opens a second client asking for UTF8, which
+// is what forces ProxySQL to issue the SET on that same pooled connection.
+//
+// Both details matter. If the second client asked for the same encoding as the first,
+// ProxySQL would send no SET at all and the test would prove nothing. And the pool has
+// to be flushed beforehand, otherwise the second client may be handed some other clean
+// connection instead of the one this test just dirtied.
+//
+// Finally, this case brings its own deadline, built on libpq's async API and select(),
+// rather than calling PQexec. The failure being tested for is an unbounded hang, and a
+// plain PQexec would simply stop the whole TAP suite instead of reporting a failure.
+// That is also why it runs before the DEALLOCATE blocks further down, none of which
+// have a deadline of their own.
+static const int N_VARSYNC_REUSE = 4;
+
+// Runs `sql` on `c` under a hard wall-clock deadline.
+// Returns 1 = completed (result in *out, caller PQclears), 0 = deadline expired,
+// -1 = transport/libpq error. Never blocks past `timeout_ms`.
+static int exec_with_deadline(PGconn* c, const char* sql, int timeout_ms, PGresult** out) {
+	*out = nullptr;
+	if (PQsendQuery(c, sql) == 0) {
+		diag("varsync: PQsendQuery failed: %s", PQerrorMessage(c));
+		return -1;
+	}
+	const int sock = PQsocket(c);
+	if (sock < 0) return -1;
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+	while (PQisBusy(c)) {
+		const auto now = std::chrono::steady_clock::now();
+		if (now >= deadline) return 0;
+		const long long left_us =
+			std::chrono::duration_cast<std::chrono::microseconds>(deadline - now).count();
+		fd_set rfds;
+		FD_ZERO(&rfds);
+		FD_SET(sock, &rfds);
+		struct timeval tv;
+		tv.tv_sec = (time_t)(left_us / 1000000);
+		tv.tv_usec = (suseconds_t)(left_us % 1000000);
+		const int rc = select(sock + 1, &rfds, nullptr, nullptr, &tv);
+		if (rc < 0) {
+			if (errno == EINTR) continue;
+			diag("varsync: select() failed: %s", strerror(errno));
+			return -1;
+		}
+		if (rc == 0) return 0; // deadline
+		if (PQconsumeInput(c) == 0) {
+			diag("varsync: PQconsumeInput failed: %s", PQerrorMessage(c));
+			return -1;
+		}
+	}
+	*out = PQgetResult(c);
+	// Drain any trailing results, but only while libpq guarantees PQgetResult
+	// will not block -- never trade one hang for another.
+	while (!PQisBusy(c)) {
+		PGresult* extra = PQgetResult(c);
+		if (extra == nullptr) break;
+		PQclear(extra);
+	}
+	return 1;
+}
+
+static void run_varsync_reuse_regression(PGconn* admin, const std::vector<ServerRow>& saved) {
+	auto fail = [&](int n, const char* why) {
+		for (int i = 0; i < n; i++) ok(false, "[native] varsync-reuse: %s", why);
+	};
+	if (!setNativeMode(admin, true) || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		fail(N_VARSYNC_REUSE, "admin setup failed");
+		return;
+	}
+
+	// --- seed: an extended-query cycle leaves ASYNC_STMT_EXECUTE_END pinned on
+	//     the backend connection, which then goes back to the pool. ---
+	{
+		PGConnPtr seed = open_client_conn("options='-c client_encoding=LATIN1'");
+		if (!seed || PQstatus(seed.get()) != CONNECTION_OK) {
+			fail(N_VARSYNC_REUSE, "seed conn failed");
+			return;
+		}
+		PGconn* sc = seed.get();
+		PGresult* r = PQprepare(sc, "vsb", "SELECT 88", 0, nullptr);
+		bool prepared = PQresultStatus(r) == PGRES_COMMAND_OK;
+		PQclear(r);
+		r = PQexecPrepared(sc, "vsb", 0, nullptr, nullptr, nullptr, 0);
+		ok(prepared && val_is(r, "88"),
+		   "[native] varsync-reuse: seed binary prepare+execute = 88 (pins stmt end state on the pooled conn)");
+		PQclear(r);
+	} // PQfinish -> the dirty connection returns to the pool
+
+	// --- reuse: a different client_encoding forces the variable-sync SET that
+	//     used to wedge in SETTING_VARIABLE forever. ---
+	PGConnPtr reuse = open_client_conn("options='-c client_encoding=UTF8'");
+	ok(reuse && PQstatus(reuse.get()) == CONNECTION_OK,
+	   "[native] varsync-reuse: reusing client (client_encoding=UTF8) connected");
+	if (!reuse || PQstatus(reuse.get()) != CONNECTION_OK) {
+		fail(2, "reuse conn failed");
+		return;
+	}
+
+	PGresult* res = nullptr;
+	const int rc = exec_with_deadline(reuse.get(), "SELECT 1", 10000, &res);
+	ok(rc == 1,
+	   "[native] varsync-reuse: SELECT 1 on the reused conn completed within 10s (rc=%d; 0 = the SETTING_VARIABLE hang)",
+	   rc);
+	ok(rc == 1 && val_is(res, "1"),
+	   "[native] varsync-reuse: SELECT 1 returned 1");
+	if (res) PQclear(res);
+}
+
 int main(int /*argc*/, char** /*argv*/) {
 	auto sql_cases = build_sql_cases();
 	auto extq_cases = build_extq_cases();
 	const int n_extra_cases = 6; // EXT_MULTI_CYCLE, EXT_REUSE, EXT_GLOBAL_DEDUP, EXT_PARSE_ERR_MIDFRAME, 2x EXT_DESCRIBE_CACHED
 	int n_cases = (int)(sql_cases.size() + extq_cases.size()) + n_extra_cases;
-	plan(n_cases + 1);
+	const int n_dealloc_reg = N_DEALLOC_REG_PER_MODE;      // SQL DEALLOCATE forwarding, native path
+	const int n_dealloc_xproto = N_DEALLOC_XPROTO_PER_MODE; // binary-prepare + SQL DEALLOCATE, native path
+	const int n_dealloc_all = N_DALLALL_MATRIX;           // DEALLOCATE ALL matrix, native path
+	const int n_varsync = N_VARSYNC_REUSE;                // variable-sync reuse hang, native path
+	plan(n_cases + 1 + n_varsync + n_dealloc_reg + n_dealloc_xproto + n_dealloc_all);
 	if (cl.getEnv()) return exit_status();
 
 	std::string log_path = get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log";
@@ -986,5 +1450,22 @@ int main(int /*argc*/, char** /*argv*/) {
 	}
 
 	cov.emit_tap();
+
+	// Runs first among the absolute-check blocks: it is the only one with its own
+	// deadline, so a regression here reports a clean failure instead of letting the
+	// deadline-less DEALLOCATE cases wedge the whole run.
+	diag("=== Variable-sync reuse regression (native path; 10s deadline) ===");
+	run_varsync_reuse_regression(admin.get(), saved);
+
+	diag("=== DEALLOCATE-forwarding regression (native path; absolute checks) ===");
+	run_dealloc_regression(admin.get(), /*native=*/true, saved);
+
+	diag("=== Cross-protocol DEALLOCATE: binary prepare + SQL DEALLOCATE (native path) ===");
+	run_dealloc_xproto_regression(admin.get(), /*native=*/true, saved);
+
+	diag("=== DEALLOCATE ALL matrix (native path) ===");
+	run_dealloc_all_matrix(admin.get(), /*native=*/true, saved);
+	setNativeMode(admin.get(), false); // leave the proxy in the default mode
+
 	return exit_status();
 }
