@@ -63,9 +63,11 @@
  * what would actually defeat it.
  */
 #include <cstdlib>
+#include <ctime>
 #include <memory>
 #include <sstream>
 #include <string>
+#include <sys/select.h>
 #include <unistd.h>
 #include <vector>
 
@@ -171,6 +173,63 @@ static bool queryThroughProxy(std::string& err, const char* query = "SELECT 1") 
     }
     PGresult* r = PQexec(c.get(), query);
     const ExecStatusType st = PQresultStatus(r);
+    const bool good = (st == PGRES_TUPLES_OK || st == PGRES_COMMAND_OK);
+    if (!good) err = PQerrorMessage(c.get());
+    PQclear(r);
+    return good;
+}
+
+// Same idea as queryThroughProxy(), but it GIVES UP after `timeout_ms` instead
+// of blocking forever. Every other case here can use a blocking PQexec because
+// the proxy always answers something; F5 (R23) is the one case where the
+// session wedges and never answers at all, and a blocking call there would hang
+// the whole run instead of failing one assertion.
+//
+// `setup` is run first with an ordinary blocking PQexec: it is a tracked SET,
+// which ProxySQL answers itself without touching a backend.
+static bool queryThroughProxyBounded(std::string& err, const char* setup, const char* query,
+                                     int timeout_ms, bool& timed_out) {
+    timed_out = false;
+    auto c = openConn(cl.pgsql_host, cl.pgsql_port, MOCK_USER, MOCK_PASS, "postgres");
+    if (!c || PQstatus(c.get()) != CONNECTION_OK) {
+        err = c ? PQerrorMessage(c.get()) : "null conn";
+        return false;
+    }
+    if (setup && *setup) {
+        PGresult* r = PQexec(c.get(), setup);
+        if (PQresultStatus(r) != PGRES_COMMAND_OK && PQresultStatus(r) != PGRES_TUPLES_OK) {
+            err = std::string("setup failed: ") + PQerrorMessage(c.get());
+            PQclear(r);
+            return false;
+        }
+        PQclear(r);
+    }
+    if (!PQsendQuery(c.get(), query)) { err = PQerrorMessage(c.get()); return false; }
+
+    const int fd = PQsocket(c.get());
+    struct timespec t0;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    for (;;) {
+        if (!PQconsumeInput(c.get())) { err = PQerrorMessage(c.get()); break; }
+        if (!PQisBusy(c.get())) break;
+        if (fd < 0) { err = "no socket"; break; }   // FD_SET(-1) is undefined behaviour
+        fd_set rf;
+        FD_ZERO(&rf);
+        FD_SET(fd, &rf);
+        struct timeval tv = { 0, 200000 };
+        select(fd + 1, &rf, nullptr, nullptr, &tv);
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        const long ms = (now.tv_sec - t0.tv_sec) * 1000 + (now.tv_nsec - t0.tv_nsec) / 1000000;
+        if (ms >= timeout_ms) {
+            timed_out = true;
+            err = "ProxySQL never answered";
+            return false;
+        }
+    }
+    // Not busy: the first result is already buffered, so this cannot block.
+    PGresult* r = PQgetResult(c.get());
+    const ExecStatusType st = r ? PQresultStatus(r) : PGRES_FATAL_ERROR;
     const bool good = (st == PGRES_TUPLES_OK || st == PGRES_COMMAND_OK);
     if (!good) err = PQerrorMessage(c.get());
     PQclear(r);
@@ -379,8 +438,9 @@ static void harness_selftest() {
 int main(int, char**) {
     // 6 harness self-test cases (the mock, judged by libpq)
     // + 18 auth cases (A1-A18; A8 and A17 are positive controls)
-    // + 21 result cases (R1-R22, minus R17) + 1 final pool-cleanliness assertion.
-    plan(46);
+    // + 21 result cases (R1-R22, minus R17) + 1 final pool-cleanliness assertion
+    // + R23 (F5), which runs LAST -- see the comment on it.
+    plan(47);
 
     if (cl.getEnv()) return exit_status();
 
@@ -879,6 +939,85 @@ int main(int, char**) {
         ok(leftover == 0,
            "no backend connections stranded in the mock hostgroup after all hostile cases (found %d)",
            leftover);
+    }
+
+    // ======================================================================
+    //  R23 -- F5: a RESULTSET answering ProxySQL's OWN housekeeping statement
+    // ======================================================================
+    //
+    // WHY THIS RUNS LAST, AFTER the pool-cleanliness assertion above.
+    // On unfixed code this case does not merely fail: it wedges a worker thread
+    // in a tight loop that keeps logging after the client has gone (measured at
+    // 17.2M lines / 2.5 GB in under three minutes) and never releases the
+    // backend connection. Any case scheduled after it would be judged against a
+    // proxy in that state. It is the last thing this file does for that reason.
+    //
+    // THE DEFECT. async_send_simple_command() is what ProxySQL uses to configure
+    // a backend connection -- here, replaying a session variable the client set.
+    // If the reply carries a resultset it returns -2 WITHOUT
+    // clearing query_result (lib/PgSQL_Connection.cpp, the `return -2` after the
+    // PGSQL_QUERY_RESULT_TUPLE check). Its caller
+    // handler_again___status_SETTING_GENERIC_VARIABLE() branches on rc == 0 and
+    // rc == -1 only, so -2 lands in `else { // rc==1 , nothing to do for now }`:
+    // the session neither fails nor progresses, re-enters, re-detects the same
+    // uncleared resultset, and logs again. The sibling caller
+    // handler_again___status_SETTING_INIT_CONNECT() handles -1 and -2 together
+    // and refuses to retry on -2 -- one caller learned this, the other did not.
+    //
+    // THE FIXTURE. `SET bytea_output TO 'escape'` is intercepted by ProxySQL and
+    // never reaches a backend; it only records that the connection ProxySQL
+    // picks next must be told about it. `SELECT 1` then opens a backend
+    // connection, and ProxySQL sends its own `SET bytea_output TO 'escape'`
+    // before the query -- which is the statement the mock answers with a
+    // one-row resultset (step_expect_query(true) stops on it instead of
+    // acknowledging it).
+    //
+    // WHAT IS ASSERTED. Only that the client gets an ANSWER. An error is a fine
+    // outcome -- the backend did something ProxySQL cannot make sense of. What
+    // must not happen is silence, which is what the loop produces.
+    {
+        resetMockPool(admin, g_mock_ip, g_mock_port);
+        mock.set_script({ step_expect_startup(), step_send(acceptedHandshake()),
+                          step_expect_query(/*stop_at_housekeeping*/ true),
+                          step_send(pgmb_simple_result("c", "1", 1)),
+                          step_sleep(3000) });
+        mock.reset_stats();
+
+        std::string err;
+        bool timed_out = false;
+        const bool served = queryThroughProxyBounded(
+            err, "SET bytea_output TO 'escape'", "SELECT 1", 10000, timed_out);
+        const std::string first_line = err.substr(0, err.find('\n'));
+
+        const std::string broke = checkInvariants(admin, adminOwner);
+        int drain_ms = 0;
+        const int stranded = mockPoolConns(admin, &drain_ms);
+
+        // queries_observed() MUST be 0. The canned resultset is meant for the
+        // proxy's own SET, which step_expect_query(true) stops on; the client's
+        // SELECT never reaches the mock because the session is torn down during
+        // the replay. If ProxySQL ever stops replaying the variable (a change to
+        // ignore_vars or to the tracked-variable machinery), the first Q the mock
+        // sees is the client's SELECT instead, the canned result answers THAT --
+        // which is perfectly legal -- and the case would pass while testing
+        // nothing. Asserting it turns that silent false pass into a failure.
+        const int client_queries_at_mock = mock.queries_observed();
+
+        ok(!timed_out && broke.empty() && stranded == 0 && client_queries_at_mock == 0,
+           "R23 F5: a resultset answering ProxySQL's own housekeeping SET must not wedge the "
+           "session (client %s: %s; mock conns=%d; client queries at mock=%d; pool leftover=%d; "
+           "drain=%dms)%s%s",
+           timed_out ? "GOT NOTHING (F5 loop)" : (served ? "served" : "errored"),
+           first_line.empty() ? "-" : first_line.c_str(),
+           mock.connections_accepted(), client_queries_at_mock, stranded, drain_ms,
+           broke.empty() ? "" : " -- BROKE: ", broke.c_str());
+        if (client_queries_at_mock != 0)
+            diag("R23: the client's own query reached the mock -- the variable replay did not "
+                 "happen, so the canned resultset answered the WRONG statement and this case "
+                 "proved nothing. Check ignore_vars / tracked-variable handling for bytea_output.");
+        if (timed_out)
+            diag("R23: ProxySQL is very likely still looping and logging RIGHT NOW -- "
+                 "check the size of proxysql.log and restart the proxy before trusting later runs");
     }
 
     mock.stop();

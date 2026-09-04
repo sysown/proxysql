@@ -149,13 +149,23 @@ struct Step {
     // SCRAM_SERVER_FIRST only. When true the server nonce does NOT extend the
     // client nonce, violating RFC 5802. A correct client must abort.
     bool bad_nonce = false;
+
+    // EXPECT_QUERY only. Housekeeping statements ProxySQL issues on its own
+    // behalf (session-variable replay, DISCARD, transaction control) are
+    // normally acknowledged and skipped so the canned reply lands on the
+    // client's query. When this is set the step STOPS on the housekeeping
+    // statement instead and leaves it unanswered, so the NEXT step replies to
+    // it. That is the only way to script a response to a statement ProxySQL
+    // sent itself -- which is what F5 needs: a RESULTSET where ProxySQL
+    // expects nothing but a command acknowledgement.
+    bool stop_at_housekeeping = false;
 };
 
 // Convenience constructors.
 Step step_send(const std::string& data, size_t chunk_bytes = 0, int chunk_delay_us = 0);
 Step step_expect_startup();
 Step step_expect_message();
-Step step_expect_query();
+Step step_expect_query(bool stop_at_housekeeping = false);
 Step step_close();
 Step step_sleep(int ms);
 Step step_scram_server_first(bool bad_nonce = false);

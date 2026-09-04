@@ -210,7 +210,8 @@ Step step_send(const std::string& data, size_t chunk_bytes, int chunk_delay_us) 
 }
 Step step_expect_startup() { Step s; s.kind = Step::EXPECT_STARTUP; return s; }
 Step step_expect_message() { Step s; s.kind = Step::EXPECT_MESSAGE; return s; }
-Step step_expect_query()   { Step s; s.kind = Step::EXPECT_QUERY; return s; }
+Step step_expect_query(bool stop_at_housekeeping)
+                           { Step s; s.kind = Step::EXPECT_QUERY; s.stop_at_housekeeping = stop_at_housekeeping; return s; }
 Step step_close()          { Step s; s.kind = Step::CLOSE; return s; }
 Step step_sleep(int ms)    { Step s; s.kind = Step::SLEEP_MS; s.ms = ms; return s; }
 Step step_scram_server_first(bool bad_nonce) {
@@ -529,6 +530,7 @@ void PgSQL_Mock_Backend::handle_conn(int fd, std::vector<Step> script) {
                         queries_observed_.fetch_add(1);
                         break;
                     }
+                    if (s.stop_at_housekeeping) break;   // leave it for the next step to answer
                     const std::string ack =
                         pgmb_command_complete("SET") + pgmb_ready_for_query('I');
                     if (!write_all(fd, ack.data(), ack.size())) { fail("housekeeping ack failed"); goto done; }
