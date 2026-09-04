@@ -126,7 +126,7 @@ SQLite3DB* proxysql_plugin_get_configdb() { return g_configdb; }
 SQLite3DB* proxysql_plugin_get_statsdb()  { return g_statsdb; }
 
 int main() {
-	plan(129);
+	plan(136);
 
 	g_admindb  = new SQLite3DB();
 	g_configdb = new SQLite3DB();
@@ -581,11 +581,23 @@ int main() {
 			" VALUES('d_target','mysql',1,'d_auth','',200,2000,1,1,1,'')"),
 		   "seeded a distinct configuration on disk");
 
+		// Serialized dispatch contributes one R/A pair. The old callback added
+		// a second pair before mcp_start_listener_if_enabled(), so this also
+		// detects a staging command regaining that listener-start path.
+		AdminMutexHandoffProbe profile_disk_handoff;
+		ProxySQL_PluginCommandContext profile_disk_ctx {
+			g_admindb, g_configdb, g_statsdb,
+			&profile_disk_handoff,
+			&record_admin_mutex_release,
+			&record_admin_mutex_acquire
+		};
 		ProxySQL_PluginCommandResult from_disk_result;
-		ok(mgr.dispatch_admin_command(cmd_ctx, "LOAD MCP PROFILES FROM DISK", from_disk_result) &&
+		ok(mgr.dispatch_admin_command(profile_disk_ctx, "LOAD MCP PROFILES FROM DISK", from_disk_result) &&
 		       from_disk_result.error_code == 0,
 		   "LOAD MCP PROFILES FROM DISK dispatches (rc=%d, msg=%s)",
 		   from_disk_result.error_code, from_disk_result.message.c_str());
+		ok(profile_disk_handoff.events == std::vector<char>({'R', 'A'}),
+		   "FROM DISK performs only the serialized-command Admin handoff");
 
 		// main. is replaced by the disk contents ...
 		ok(g_admindb->return_one_int(
@@ -621,10 +633,19 @@ int main() {
 		// dangerous.
 		ok(g_admindb->execute("DELETE FROM disk.mcp_target_profiles WHERE target_id='d_target'"),
 		   "removed the target from disk");
+		AdminMutexHandoffProbe profile_memory_handoff;
+		ProxySQL_PluginCommandContext profile_memory_ctx {
+			g_admindb, g_configdb, g_statsdb,
+			&profile_memory_handoff,
+			&record_admin_mutex_release,
+			&record_admin_mutex_acquire
+		};
 		ProxySQL_PluginCommandResult to_mem_result;
-		ok(mgr.dispatch_admin_command(cmd_ctx, "LOAD MCP PROFILES TO MEMORY", to_mem_result) &&
+		ok(mgr.dispatch_admin_command(profile_memory_ctx, "LOAD MCP PROFILES TO MEMORY", to_mem_result) &&
 		       to_mem_result.error_code == 0,
 		   "LOAD MCP PROFILES TO MEMORY dispatches (rc=%d)", to_mem_result.error_code);
+		ok(profile_memory_handoff.events == std::vector<char>({'R', 'A'}),
+		   "TO MEMORY performs only the serialized-command Admin handoff");
 		ok(g_admindb->return_one_int(
 			"SELECT COUNT(*) FROM mcp_target_profiles WHERE target_id='d_target'") == 0,
 		   "TO MEMORY updated main. from disk");
@@ -659,11 +680,20 @@ int main() {
 			" WHERE variable_name='mcp-timeout_ms' AND variable_value='54321'");
 		ok(runtime_had == 0, "runtime does not have the disk value yet (got %d)", runtime_had);
 
+		AdminMutexHandoffProbe variables_disk_handoff;
+		ProxySQL_PluginCommandContext variables_disk_ctx {
+			g_admindb, g_configdb, g_statsdb,
+			&variables_disk_handoff,
+			&record_admin_mutex_release,
+			&record_admin_mutex_acquire
+		};
 		ProxySQL_PluginCommandResult var_disk_result;
-		ok(mgr.dispatch_admin_command(cmd_ctx, "LOAD MCP VARIABLES FROM DISK", var_disk_result) &&
+		ok(mgr.dispatch_admin_command(variables_disk_ctx, "LOAD MCP VARIABLES FROM DISK", var_disk_result) &&
 		       var_disk_result.error_code == 0,
 		   "LOAD MCP VARIABLES FROM DISK dispatches (rc=%d, msg=%s)",
 		   var_disk_result.error_code, var_disk_result.message.c_str());
+		ok(variables_disk_handoff.events == std::vector<char>({'R', 'A'}),
+		   "variables FROM DISK does not enter the listener-start handoff");
 		ok(g_admindb->return_one_int(
 			"SELECT COUNT(*) FROM main.global_variables"
 			" WHERE variable_name='mcp-timeout_ms' AND variable_value='54321'") == 1,
@@ -685,6 +715,28 @@ int main() {
 
 	{
 		diag(">>> LOAD MCP QUERY RULES FROM DISK stages into main without touching runtime");
+
+		ok(g_admindb->execute(
+			"DELETE FROM mcp_query_rules") &&
+		   g_admindb->execute(
+			"INSERT INTO mcp_query_rules"
+			" (rule_id, active, username, target_id, schemaname, tool_name,"
+			"  match_pattern, negate_match_pattern, re_modifiers, flagIN, flagOUT,"
+			"  replace_pattern, timeout_ms, error_msg, OK_msg, log, apply, comment)"
+			" VALUES(3131,1,'','','','run_sql_readonly','^SELECT 1$',0,'',0,NULL,"
+			"        '',NULL,'','',NULL,1,'')"),
+		   "seeded the pre-existing live query rule in main");
+		ProxySQL_PluginCommandResult rules_initial_apply_result;
+		ok(mgr.dispatch_admin_command(
+			cmd_ctx, "LOAD MCP QUERY RULES TO RUNTIME", rules_initial_apply_result) &&
+		       rules_initial_apply_result.error_code == 0,
+		   "installed the pre-existing query rule before staging (rc=%d)",
+		   rules_initial_apply_result.error_code);
+		mgr.refresh_runtime_views_for_query(
+			"SELECT * FROM runtime_mcp_query_rules", g_admindb, nullptr, nullptr);
+		ok(g_admindb->return_one_int(
+			"SELECT COUNT(*) FROM runtime_mcp_query_rules WHERE rule_id=3131") == 1,
+		   "runtime begins with the pre-existing query rule");
 
 		ok(g_admindb->execute(
 			"INSERT INTO disk.mcp_query_rules"
@@ -709,6 +761,9 @@ int main() {
 		ok(g_admindb->return_one_int(
 			"SELECT COUNT(*) FROM runtime_mcp_query_rules WHERE rule_id=4242") == 0,
 		   "the staged rule is NOT live before LOAD MCP QUERY RULES TO RUNTIME");
+		ok(g_admindb->return_one_int(
+			"SELECT COUNT(*) FROM runtime_mcp_query_rules WHERE rule_id=3131") == 1,
+		   "FROM DISK preserved the pre-existing live query rule");
 
 		ProxySQL_PluginCommandResult rules_apply_result;
 		ok(mgr.dispatch_admin_command(cmd_ctx, "LOAD MCP QUERY RULES TO RUNTIME", rules_apply_result) &&
@@ -717,8 +772,10 @@ int main() {
 		mgr.refresh_runtime_views_for_query(
 			"SELECT * FROM runtime_mcp_query_rules", g_admindb, nullptr, nullptr);
 		ok(g_admindb->return_one_int(
-			"SELECT COUNT(*) FROM runtime_mcp_query_rules WHERE rule_id=4242") == 1,
-		   "the staged rule goes live only after TO RUNTIME");
+			"SELECT COUNT(*) FROM runtime_mcp_query_rules WHERE rule_id=4242") == 1 &&
+		   g_admindb->return_one_int(
+			"SELECT COUNT(*) FROM runtime_mcp_query_rules WHERE rule_id=3131") == 0,
+		   "TO RUNTIME replaces the old rule with the staged rule");
 	}
 
 	ok(mgr.stop_all(),     "stop_all succeeds");

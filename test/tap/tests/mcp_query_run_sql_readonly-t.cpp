@@ -223,8 +223,11 @@ cleanup:
 		mysql_close(mysql);
 	}
 	if (admin) {
-		run_q(admin, "LOAD MCP VARIABLES FROM DISK");
-		run_q(admin, "LOAD MCP VARIABLES TO RUNTIME");
+		if (run_q(admin, "LOAD MCP VARIABLES FROM DISK") != 0) {
+			diag("Failed to restore MCP variables from disk: %s", mysql_error(admin));
+		} else if (run_q(admin, "LOAD MCP VARIABLES TO RUNTIME") != 0) {
+			diag("Failed to apply restored MCP variables: %s", mysql_error(admin));
+		}
 		run_q(admin, ("DELETE FROM mcp_target_profiles WHERE target_id='" + std::string(k_target_id) + "'").c_str());
 		run_q(admin, ("DELETE FROM mcp_auth_profiles WHERE auth_profile_id='" + std::string(k_auth_profile_id) + "'").c_str());
 		run_q(admin, ("DELETE FROM mysql_servers WHERE hostgroup_id=" + std::to_string(k_hostgroup_id)).c_str());

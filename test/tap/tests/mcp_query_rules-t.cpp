@@ -230,9 +230,14 @@ int main(int argc, char** argv) {
 	diag("Final cleanup");
 	run_q(admin, "DELETE FROM mcp_query_rules WHERE rule_id >= 1000");
 	run_q(admin, "LOAD MCP QUERY RULES TO RUNTIME");
-	run_q(admin, "LOAD MCP VARIABLES FROM DISK");
-	run_q(admin, "LOAD MCP VARIABLES TO RUNTIME");
-	ok(true, "Cleanup completed");
+	bool variables_restored = run_q(admin, "LOAD MCP VARIABLES FROM DISK") == 0;
+	if (!variables_restored) {
+		diag("Failed to restore MCP variables from disk: %s", mysql_error(admin));
+	} else if (run_q(admin, "LOAD MCP VARIABLES TO RUNTIME") != 0) {
+		diag("Failed to apply restored MCP variables: %s", mysql_error(admin));
+		variables_restored = false;
+	}
+	ok(variables_restored, "Cleanup completed");
 
 	mysql_close(admin);
 	return exit_status();

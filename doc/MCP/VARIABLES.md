@@ -269,9 +269,10 @@ there. No post-restart `LOAD MCP PROFILES FROM DISK` is required.
 
 `LOAD MCP <X> FROM DISK` (and its `TO MEMORY` alias) moves disk → memory and
 nothing else, so you can stage an on-disk configuration and review or edit it
-in `main.` before committing to it. `LOAD MCP <X> TO RUNTIME` is the only verb
-that applies configuration, and the only one that may start or restart the MCP
-listener:
+in `main.` before committing to it. Within this disk/memory/runtime workflow,
+`LOAD MCP <X> TO RUNTIME` is the step that applies configuration and may start
+or restart the MCP listener (`LOAD MCP VARIABLES FROM CONFIG` is a separate
+config-file workflow that also applies variables and reevaluates the listener):
 
 ```sql
 LOAD MCP PROFILES FROM DISK;                 -- stage: disk -> main, runtime untouched
