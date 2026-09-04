@@ -26,8 +26,67 @@ static std::string startup_param(const unsigned char* sm, size_t smlen, const ch
     return std::string();
 }
 
+
+// RFC 7677 Section 3 SCRAM-SHA-256 vector (password "pencil", salt W22ZaJ0SNY7soEsUEjb6gQ==,
+// i=4096), written as PostgreSQL stores it in pg_authid.rolpassword -- which is byte for byte
+// what pgsql_users.password holds for a verifier-stored user. Using a published vector means
+// the harvested-key assertions below have an external expected value rather than agreeing
+// with whatever this code happens to compute.
+static const char* const RFC7677_VERIFIER =
+    "SCRAM-SHA-256$4096:W22ZaJ0SNY7soEsUEjb6gQ=="
+    "$WG5d8oPm3OtcPnkdi4Uo7BkeZkBFzpcXkuLmtbsT4qY=:wfPLwcE6nTWhTAmQ7tl2KeoiWGPlZqQxSrmfPwDl2dU=";
+
+// ClientKey = HMAC(SaltedPassword,"Client Key") and ServerKey = HMAC(SaltedPassword,"Server Key")
+// for that same vector. StoredKey = SHA256(ClientKey) is the value encoded in the verifier above.
+static const uint8_t RFC7677_CLIENT_KEY[32] = {
+    0xa6, 0x0f, 0xc9, 0x23, 0xd6, 0x7e, 0x86, 0x44,
+    0xa9, 0x2d, 0x16, 0xb9, 0x6e, 0xda, 0x5e, 0xf4,
+    0x65, 0x6b, 0x0c, 0x72, 0x5c, 0x48, 0x43, 0x74,
+    0xbe, 0x25, 0x53, 0x55, 0x76, 0x99, 0x6e, 0x8b,
+};
+static const uint8_t RFC7677_SERVER_KEY[32] = {
+    0xc1, 0xf3, 0xcb, 0xc1, 0xc1, 0x3a, 0x9d, 0x35,
+    0xa1, 0x4c, 0x09, 0x90, 0xee, 0xd9, 0x76, 0x29,
+    0xea, 0x22, 0x58, 0x63, 0xe5, 0x66, 0xa4, 0x31,
+    0x4a, 0xb9, 0x9f, 0x3f, 0x00, 0xe5, 0xd9, 0xd5,
+};
+
+// Drives the libscram SERVER side of one exchange: consumes a wrapper-produced client-first
+// and returns the server-first message built from `stored_secret`. The returned string is
+// owned by `srv` (build_server_first_message stores it as server_first_message and
+// free_scram_state releases it) -- the caller must NOT free it. read_client_first_message
+// mutates its input and hands back buffers the ScramState takes ownership of, so it gets a
+// private copy.
+static char* server_first_for(ScramState* srv, const char* client_first, const char* stored_secret) {
+    std::string copy(client_first);
+    char cbind_flag = 0;
+    char* cfmb = nullptr;
+    char* cnonce = nullptr;
+    if (!read_client_first_message(&copy[0], &cbind_flag, &cfmb, &cnonce)) return nullptr;
+    srv->cbind_flag = cbind_flag;
+    srv->client_first_message_bare = cfmb;   // ownership transferred to srv
+    srv->client_nonce = cnonce;
+    return build_server_first_message(srv, "", stored_secret);
+}
+
+// Server-side verification of a wrapper-produced client-final. Mirrors
+// PgSQL_Protocol::scram_handle_client_final: read_client_final_message needs a pristine
+// raw_input for the without-proof reconstruction AND a separate mutable buffer it fills
+// with NULs, so the two copies must be distinct.
+static bool server_accepts(ScramState* srv, const char* client_final) {
+    std::string raw(client_final);
+    std::string buf(client_final);
+    const char* nonce = nullptr;
+    char* proof = nullptr;
+    bool accepted = false;
+    if (read_client_final_message(srv, (const uint8_t*)raw.c_str(), &buf[0], &nonce, &proof))
+        accepted = verify_final_nonce(srv, nonce) && verify_client_proof(srv, proof);
+    free(proof);
+    return accepted;
+}
+
 int main(int, char**) {
-    plan(21);
+    plan(29);
 
     // SSLRequest is a fixed 8 bytes: length=8, code=80877103 (0x04d2162f).
     unsigned char ssl[8];
@@ -564,6 +623,191 @@ int main(int, char**) {
             && memcmp(out + 24, digest, 64) == 0;
         ok(ok_c15, "pg_scram_build_cbind_input_tls_server_end_point composes 24-byte header + 64-byte digest (got len=%d)",
            len);
+    }
+
+    // ==================================================================
+    // Credential pass-through on the BACKEND leg.
+    //
+    // pgsql_users.password may hold a plaintext, an md5 secret, or a SCRAM verifier.
+    // The first is the only one the primitives above can hash directly; for the other
+    // two the stored value IS already a derived secret and must be reused, never
+    // re-derived. Everything below pins that reuse, because getting it subtly wrong
+    // produces a handshake that is well-formed and simply always rejected.
+    // ------------------------------------------------------------------
+
+    // (22) md5 pass-through against the SAME reference vector pinned in (3).
+    // The stored secret is the inner hash: "md5" + hex(md5(password+user)). For
+    // user=postgres / password=postgres that inner hash is 3175bce1d3201d16594cebf9d7eb3f9d
+    // (md5 of the literal "postgrespostgres", computed independently of this code), so only
+    // the outer hash over (inner_hex || salt) is left to do and the response must come out
+    // byte-identical to the plaintext-derived one.
+    {
+        char out[36];
+        memset(out, 0xAA, sizeof(out));
+        const bool built = pg_build_md5_from_secret(out, "md53175bce1d3201d16594cebf9d7eb3f9d", salt);
+        ok(built && strcmp(out, "md568be9ed08db75f318087ab337aaea044") == 0,
+           "pg_build_md5_from_secret reproduces the plaintext-derived reference vector (built=%d, got: %s)",
+           (int)built, built ? out : "(not built)");
+    }
+
+    // (23) Equivalence at a second, unrelated salt, compared against pg_build_md5() itself.
+    // (22) alone could pass on a single coincidence; this pins the general property that
+    // for any salt the two entry points agree whenever the secret is that user's inner hash.
+    {
+        unsigned char salt2[4] = {0xde, 0xad, 0xbe, 0xef};
+        char from_plain[36];
+        char from_secret[36];
+        pg_build_md5(from_plain, "postgres", "postgres", salt2);
+        const bool built = pg_build_md5_from_secret(from_secret, "md53175bce1d3201d16594cebf9d7eb3f9d", salt2);
+        ok(built && strcmp(from_plain, from_secret) == 0,
+           "pg_build_md5_from_secret == pg_build_md5 for the same credential at a second salt (plain=%s, secret=%s)",
+           from_plain, built ? from_secret : "(not built)");
+    }
+
+    // (24) Malformed secrets are refused BEFORE anything is written. A partially built
+    // response must never reach the wire, and a secret that is not exactly "md5" + 32
+    // lowercase hex is not this user's inner hash -- PostgreSQL stores nothing else.
+    {
+        static const char* const bad[] = {
+            nullptr,
+            "",
+            "md5",                                    // prefix only
+            "md53175bce1d3201d16594cebf9d7eb3f9",     // 31 hex digits: one short
+            "md53175bce1d3201d16594cebf9d7eb3f9dd",   // 33 hex digits: one long
+            "MD53175bce1d3201d16594cebf9d7eb3f9d",    // prefix in the wrong case
+            "md53175BCE1D3201D16594CEBF9D7EB3F9D",    // hex in the wrong case
+            "md53175bce1d3201d16594cebf9d7eb3f9z",    // 'z' is not a hex digit
+            "3175bce1d3201d16594cebf9d7eb3f9dabc",    // right length, no md5 prefix
+            "SCRAM-SHA-256$4096:c2FsdA==$c3Q=:c2s=",  // a verifier, not an md5 secret
+            "plaintext-password",
+        };
+        bool all_rejected = true;
+        bool out_untouched = true;
+        for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+            char out[36];
+            memset(out, 0x5A, sizeof(out));
+            if (pg_build_md5_from_secret(out, bad[i], salt)) {
+                all_rejected = false;
+                diag("  pg_build_md5_from_secret wrongly accepted: %s", bad[i] ? bad[i] : "(null)");
+            }
+            for (size_t j = 0; j < sizeof(out); j++) {
+                if ((unsigned char)out[j] != 0x5A) { out_untouched = false; break; }
+            }
+        }
+        ok(all_rejected && out_untouched,
+           "pg_build_md5_from_secret rejects every malformed secret and leaves the output untouched (rejected=%d, untouched=%d)",
+           (int)all_rejected, (int)out_untouched);
+    }
+
+    // (25) SCRAM verifier pass-through, end to end, in the exact shape production uses.
+    //
+    // Leg A is the FRONTEND login: the client presents the plaintext, ProxySQL answers from
+    // the stored verifier, and the ClientKey the client used is recovered from its proof
+    // (PgSQL_Protocol.cpp harvests scram_state->ClientKey at exactly this point). Leg B is
+    // the BACKEND login under test: a fresh exchange against the same verifier, driven with
+    // NO password at all -- only the harvested ClientKey and the verifier's ServerKey.
+    //
+    // The verifier is the RFC 7677 Section 3 vector (password "pencil", salt
+    // W22ZaJ0SNY7soEsUEjb6gQ==, i=4096) in pg_authid.rolpassword form, so the harvested keys
+    // have published expected values and leg A cannot pass by agreeing with itself.
+    {
+        ScramState* fe = scram_state_init();
+        PgSQL_Scram_State* fe_client = pg_scram_new();
+        const char* fe_cf = pg_scram_client_first(fe_client, /*channel_binding=*/false);
+        char* fe_sf = fe_cf ? server_first_for(fe, fe_cf, RFC7677_VERIFIER) : nullptr;
+        const char* fe_final = fe_sf
+            ? pg_scram_client_final(fe_client, "pencil", fe_sf, strlen(fe_sf)) : nullptr;
+        const bool fe_ok = fe_final && server_accepts(fe, fe_final);
+
+        const bool harvested_ck = fe_ok && memcmp(fe->ClientKey, RFC7677_CLIENT_KEY, 32) == 0;
+        const bool verifier_sk  = fe_ok && memcmp(fe->ServerKey, RFC7677_SERVER_KEY, 32) == 0;
+        ok(harvested_ck && verifier_sk,
+           "frontend SCRAM login against the RFC 7677 verifier yields the published ClientKey and ServerKey (login=%d, ck=%d, sk=%d)",
+           (int)fe_ok, (int)harvested_ck, (int)verifier_sk);
+
+        // ---- leg B: the backend handshake, authenticating from the keys alone ----
+        ScramState* be = scram_state_init();
+        PgSQL_Scram_State* be_client = pg_scram_new();
+        const bool keys_set = pg_scram_set_keys(be_client, fe->ClientKey, fe->ServerKey);
+        const char* be_cf = pg_scram_client_first(be_client, /*channel_binding=*/false);
+        char* be_sf = be_cf ? server_first_for(be, be_cf, RFC7677_VERIFIER) : nullptr;
+        // password == nullptr: the whole point. Nothing in this leg knows "pencil".
+        const char* be_final = be_sf
+            ? pg_scram_client_final(be_client, nullptr, be_sf, strlen(be_sf)) : nullptr;
+        const bool be_accepted = be_final && server_accepts(be, be_final);
+
+        // (26) The injected ClientKey produces a proof the server accepts.
+        ok(keys_set && be_accepted,
+           "backend SCRAM leg authenticates from the injected ClientKey with NO password (keys_set=%d, accepted=%d)",
+           (int)keys_set, (int)be_accepted);
+
+        // (27) Mutual authentication still happens: the client verifies the server's
+        // signature from the injected ServerKey, not from a SaltedPassword it never computed.
+        char* be_server_final = be_accepted ? build_server_final_message(be) : nullptr;
+        const bool mutual = be_server_final
+            && pg_scram_verify_server_final(be_client, be_server_final, strlen(be_server_final));
+        ok(mutual, "backend SCRAM leg verifies the server signature from the injected ServerKey");
+
+        free(be_server_final);
+        pg_scram_free(be_client);
+        free_scram_state(be);
+        pg_scram_free(fe_client);
+        free_scram_state(fe);
+    }
+
+    // (28) Mutual authentication is not silently skipped. With the correct ClientKey but a
+    // corrupted ServerKey the proof is still accepted -- the server has no way to tell --
+    // yet the client MUST reject the server's signature. A pass-through that ignored the
+    // injected ServerKey, or fell back to a SaltedPassword it never computed, would let a
+    // backend impersonation through here.
+    {
+        uint8_t bad_sk[32];
+        memcpy(bad_sk, RFC7677_SERVER_KEY, sizeof(bad_sk));
+        bad_sk[0] ^= 0xff;
+
+        ScramState* srv = scram_state_init();
+        PgSQL_Scram_State* cli = pg_scram_new();
+        const bool keys_set = pg_scram_set_keys(cli, RFC7677_CLIENT_KEY, bad_sk);
+        const char* cf = pg_scram_client_first(cli, /*channel_binding=*/false);
+        char* sf = cf ? server_first_for(srv, cf, RFC7677_VERIFIER) : nullptr;
+        const char* fin = sf ? pg_scram_client_final(cli, nullptr, sf, strlen(sf)) : nullptr;
+        const bool proof_accepted = fin && server_accepts(srv, fin);
+        char* server_final = proof_accepted ? build_server_final_message(srv) : nullptr;
+        const bool verified = server_final
+            && pg_scram_verify_server_final(cli, server_final, strlen(server_final));
+
+        ok(keys_set && proof_accepted && !verified,
+           "a wrong injected ServerKey still builds an accepted proof but FAILS server-signature verification (keys_set=%d, proof=%d, verified=%d)",
+           (int)keys_set, (int)proof_accepted, (int)verified);
+
+        free(server_final);
+        pg_scram_free(cli);
+        free_scram_state(srv);
+    }
+
+    // (29) A half-injection is refused outright. Accepting a ClientKey without a ServerKey
+    // would authenticate us to the backend while leaving nothing to check the backend with,
+    // which is exactly the silent downgrade (28) guards against -- so it is rejected at the
+    // door instead, and the state stays password-driven (proved by client-final still
+    // refusing a NULL password afterwards).
+    {
+        PgSQL_Scram_State* cli = pg_scram_new();
+        const bool r_no_sk   = pg_scram_set_keys(cli, RFC7677_CLIENT_KEY, nullptr);
+        const bool r_no_ck   = pg_scram_set_keys(cli, nullptr, RFC7677_SERVER_KEY);
+        const bool r_no_both = pg_scram_set_keys(cli, nullptr, nullptr);
+        const bool r_no_state = pg_scram_set_keys(nullptr, RFC7677_CLIENT_KEY, RFC7677_SERVER_KEY);
+
+        ScramState* srv = scram_state_init();
+        const char* cf = pg_scram_client_first(cli, /*channel_binding=*/false);
+        char* sf = cf ? server_first_for(srv, cf, RFC7677_VERIFIER) : nullptr;
+        const char* fin = sf ? pg_scram_client_final(cli, nullptr, sf, strlen(sf)) : nullptr;
+
+        ok(!r_no_sk && !r_no_ck && !r_no_both && !r_no_state && fin == nullptr,
+           "half-injected SCRAM keys are refused and leave the state password-driven (no_sk=%d, no_ck=%d, no_both=%d, no_state=%d, final=%s)",
+           (int)r_no_sk, (int)r_no_ck, (int)r_no_both, (int)r_no_state, fin ? "built" : "null");
+
+        free_scram_state(srv);
+        pg_scram_free(cli);
     }
 
     return exit_status();

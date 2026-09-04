@@ -33,27 +33,25 @@
  * `scram_server_key` / `md5_secret` (lib/PgSQL_Connection.cpp:1101-1123, gated on
  * `userinfo->has_scram_keys`).
  *
- * The NATIVE path has no equivalent. It reads `userinfo->password` and treats it
- * as a plaintext password, unconditionally, at all three call sites
- * (lib/PgSQL_Connection.cpp:2293 cleartext, :2314 md5, :2427 SCRAM). Nothing in
- * the native connect path so much as consults `has_scram_keys`. So for a
- * verifier-stored user the literal verifier STRING is fed through PBKDF2 as if it
- * were the password, and for an md5-stored user pg_build_md5() hashes the stored
- * hash a second time. Both produce a wrong credential and the backend rejects the
- * login.
+ * The NATIVE path used to have no equivalent: it read `userinfo->password` and
+ * treated it as a plaintext password unconditionally at all three call sites, so a
+ * verifier STRING went through PBKDF2 as if it were the password and an md5-stored
+ * hash was hashed a second time. Both produced a wrong credential and the backend
+ * rejected the login. Native now mirrors the libpq policy in
+ * native_drive_auth(): a stored md5 secret is reused as the inner hash
+ * (pg_build_md5_from_secret), and a verifier-stored user's backend SASL exchange
+ * runs off the ClientKey harvested during that user's FRONTEND login plus the
+ * verifier's ServerKey (pg_scram_set_keys), skipping SASLprep + PBKDF2 entirely.
  *
- * That is the point of this file. Cells `scram-verifier` and `md5-hash` are
- * declared expect_ok=false and the suite is GREEN while the gap exists -- but the
- * libpq leg is run alongside every cell and reported, so the divergence is
- * visible in the output rather than merely asserted. The failure mode is worth
- * spelling out: because native never calls native_capability_gap() for this case,
- * there is no graceful fallback to libpq the way there is for GSSAPI/SSPI
- * (:1544). The user gets an opaque authentication failure instead.
+ * That is the point of this file. Cells `scram-verifier` and `md5-hash` are the
+ * pass-through regression: they assert it works, AND that the connection which
+ * served them reported native_mode=true, so a silent fallback to libpq cannot make
+ * them pass. `cleartext-vs-md5hash` is the complement -- a credential that genuinely
+ * cannot answer the method the backend demands must fail cleanly on BOTH paths
+ * rather than send a hash where a password belongs.
  *
- * If either cell starts PASSING, the pass-through has been implemented and the
- * expectation must be flipped. If either starts failing DIFFERENTLY -- e.g. the
- * connection begins succeeding via a silent libpq fallback -- the native_mode
- * assertion below catches it.
+ * The libpq leg is run alongside every cell and reported, so any native-vs-libpq
+ * divergence is visible in the output rather than merely asserted.
  *
  * PROVING THE NATIVE PATH WAS ACTUALLY USED
  * ------------------------------------------
@@ -186,6 +184,17 @@ struct Cell {
     const char* floor;      // pgsql-authentication_method for this cell
     bool        expect_ok;  // is the NATIVE path expected to serve a query?
     const char* rationale;
+    // Substring the NATIVE failure must contain, for expect_ok=false cells whose green
+    // depends on failing for one specific reason. Without it a cell that fails because the
+    // infra role is missing, or the database does not exist, is indistinguishable from a
+    // cell that fails because the credential genuinely cannot answer the method -- the pass
+    // would prove nothing. nullptr = any failure is acceptable evidence.
+    const char* expect_err_substr = nullptr;
+    // Database to connect to. Defaults to the role, which is how the infra provisions
+    // every per-method role -- except the ones created solely to exercise a pg_hba method,
+    // which own no database. Those name an existing one here so a cell's outcome is decided
+    // by authentication and never by a missing database.
+    const char* db = nullptr;
 };
 
 static const Cell BASE[] = {
@@ -206,13 +215,30 @@ static const Cell BASE[] = {
       "pg_hba reject: the backend sends ErrorResponse where an Authentication message belongs; "
       "native must surface it as a clean client error and not crash or hang" },
 
-    { "scram-verifier", "authscram", "authscram", Secret::VERIFIER, "3", false,
-      "KNOWN GAP: native has no scram_client_key/scram_server_key pass-through, so the verifier "
-      "STRING is run through PBKDF2 as if it were the password. libpq serves this cell" },
+    { "scram-verifier", "authscram", "authscram", Secret::VERIFIER, "3", true,
+      "verifier pass-through: with no plaintext to derive from, the backend SASL exchange runs "
+      "off the ClientKey harvested during the frontend login plus the verifier's ServerKey "
+      "(pg_scram_set_keys). Previously the verifier STRING went through PBKDF2 instead" },
 
-    { "md5-hash", "md5user", "md5user", Secret::MD5HASH, "2", false,
-      "KNOWN GAP: native has no md5_secret pass-through, so pg_build_md5() hashes the stored "
-      "hash a second time. libpq serves this cell" },
+    { "md5-hash", "md5user", "md5user", Secret::MD5HASH, "2", true,
+      "md5 pass-through: the stored hash IS the inner md5(password+user), so only the outer "
+      "hash over (inner||salt) is computed (pg_build_md5_from_secret). Previously "
+      "pg_build_md5() hashed the stored hash a second time" },
+
+    { "cleartext-vs-md5hash", "cleartextuser", "cleartextuser", Secret::MD5HASH, "2", false,
+      "an md5 hash cannot answer AuthenticationCleartextPassword -- the backend wants the "
+      "password itself and a hash is not invertible. Must fail cleanly on BOTH paths: sending "
+      "the hash verbatim would authenticate as whatever that literal text hashes to, and on the "
+      "libpq path this exact combination once reached strlen(NULL) and killed the process",
+      "not a plaintext password", "postgres" },
+
+    { "scram-vs-md5hash", "authscram", "authscram", Secret::MD5HASH, "2", false,
+      "the other half of the same rule, on the third call site: an md5 hash shares no "
+      "derivation with SCRAM, so there is nothing to reuse. Reachable because a role's "
+      "FRONTEND auth-method floor and its backend pg_hba method are chosen independently -- "
+      "here the floor is md5 while pg_hba's catch-all demands scram-sha-256. Native must say "
+      "so rather than run PBKDF2 over the hash TEXT and report an opaque auth failure",
+      "stored credential is an md5 hash" },
 };
 static const size_t NBASE = sizeof(BASE) / sizeof(BASE[0]);
 
@@ -261,7 +287,7 @@ static const char* PID_QUERY   = "SELECT pid FROM pg_stat_activity WHERE pid = p
 static Probe probeThroughProxy(const Cell& c, bool frontend_tls) {
     Probe p;
     PGConnPtr conn = openConn(cl.pgsql_host, cl.pgsql_port, c.role, c.password,
-                              c.role, frontend_tls ? "require" : "disable");
+                              c.db ? c.db : c.role, frontend_tls ? "require" : "disable");
     if (!conn || PQstatus(conn.get()) != CONNECTION_OK) {
         p.err = oneLine(conn ? PQerrorMessage(conn.get()) : "null connection");
         return p;
@@ -379,6 +405,8 @@ int main(int, char**) {
         planned += 1;                                       // outcome vs expectation
         if (r.cell->expect_ok) planned += 2;                // native_mode + same-connection reuse
         else                   planned += 1;                // no connection stranded in the pool
+        if (!r.cell->expect_ok && r.cell->expect_err_substr)
+            planned += 1;                                   // failed for the RIGHT reason
         if (r.cell->expect_ok && r.use_ssl) planned += 1;   // backend really encrypted
     }
     plan(planned);
@@ -434,8 +462,15 @@ int main(int, char**) {
     };
 
     auto restore = [&]() {
-        execAdmin(admin, "DELETE FROM pgsql_users WHERE username IN "
-                         "('authtrust','authpw','authreject','authscram','md5user')");
+        // Derived from BASE, not hand-listed: a hand-listed set silently stops cleaning up
+        // as soon as a cell is added, leaving that cell's row active for the rest of the group.
+        {
+            std::stringstream d;
+            d << "DELETE FROM pgsql_users WHERE username IN (";
+            for (size_t i = 0; i < NBASE; i++) d << (i ? "," : "") << "'" << BASE[i].role << "'";
+            d << ")";
+            execAdmin(admin, d.str());
+        }
         for (const SavedUser& u : saved_users) {
             std::stringstream q;
             q << "INSERT INTO pgsql_users"
@@ -521,11 +556,30 @@ int main(int, char**) {
     // by libpq (never hardcoded), exactly as pgsql-verifier_auth-t does.
     auto writeUser = [&](const Cell& c) -> bool {
         std::string secret = c.password;
-        if (c.secret != Secret::PLAINTEXT) {
-            const char* algo = (c.secret == Secret::VERIFIER) ? "scram-sha-256" : "md5";
-            char* enc = PQencryptPasswordConn(admin, c.password, c.role, algo);
+        if (c.secret == Secret::VERIFIER) {
+            // A SCRAM verifier carries a RANDOM SALT, so generating one here would produce a
+            // verifier that does not match the backend's pg_authid.rolpassword and the backend
+            // leg could never succeed no matter how pass-through is implemented (that mismatch
+            // is what pgsql-verifier_passthrough-t asserts as its negative case). Pass-through
+            // requires the two to be byte-identical, so read the backend's own row.
+            PGConnPtr be = directBackendConn();
+            if (!be || PQstatus(be.get()) != CONNECTION_OK) {
+                diag("cannot read rolpassword for '%s': no direct backend connection", c.role);
+                return false;
+            }
+            secret = scalar(be.get(),
+                std::string("SELECT rolpassword FROM pg_authid WHERE rolname='") + c.role + "'");
+            if (secret.rfind("SCRAM-SHA-256$", 0) != 0) {
+                diag("backend role '%s' has no SCRAM verifier (rolpassword='%s')",
+                     c.role, secret.c_str());
+                return false;
+            }
+        } else if (c.secret == Secret::MD5HASH) {
+            // md5 has no salt: "md5"+hex(md5(password+role)) is deterministic, so the value
+            // generated here is byte-identical to the backend's stored hash.
+            char* enc = PQencryptPasswordConn(admin, c.password, c.role, "md5");
             if (enc == nullptr) {
-                diag("PQencryptPasswordConn(%s,%s) failed: %s", c.role, algo, PQerrorMessage(admin));
+                diag("PQencryptPasswordConn(%s,md5) failed: %s", c.role, PQerrorMessage(admin));
                 return false;
             }
             secret = enc;
@@ -637,6 +691,15 @@ int main(int, char**) {
         }
 
         if (!c.expect_ok) {
+            // Failing is not enough: it has to fail for the reason the cell is about. A
+            // missing infra role or database fails too, and would turn this cell green while
+            // exercising nothing.
+            if (c.expect_err_substr) {
+                ok(!nat_served && nat.err.find(c.expect_err_substr) != std::string::npos,
+                   "%s: native failed for the expected reason (looking for '%s' in: %s)",
+                   label.c_str(), c.expect_err_substr,
+                   nat.err.empty() ? "(no error text)" : nat.err.c_str());
+            }
             // The backend auth failed by design. A connection that never
             // authenticated must be destroyed, not returned to the pool -- a
             // stranded one is both a leak and, before that fix, the object that
