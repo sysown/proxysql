@@ -264,8 +264,18 @@ ProxySQL_PluginCommandResult save_mcp_variables_to_memory(
 /**
  * `LOAD MCP VARIABLES FROM DISK` / `TO MEMORY`.
  *
- * Copies `mcp-*` variables from disk.global_variables into main and
- * then refreshes the running MCP listener from the in-memory copy.
+ * Copies `mcp-*` variables from disk.global_variables into main.  That is
+ * ALL it does: per the admin verb contract that core and the mysqlx plugin
+ * both obey, FROM DISK / TO MEMORY moves disk -> memory and nothing else.
+ * Applying the staged values to the running module -- and starting or
+ * restarting the listener -- is exclusively
+ * `LOAD MCP VARIABLES TO RUNTIME`.
+ *
+ * Until issue #6171 this callback also ran the runtime install and called
+ * mcp_start_listener_if_enabled(), which meant `LOAD MCP VARIABLES TO
+ * MEMORY` -- the one verb whose entire purpose is "stage this without
+ * applying it" -- could reopen the MCP port on a node where the listener
+ * had been deliberately stopped.
  */
 ProxySQL_PluginCommandResult load_mcp_variables_from_disk(
 	const ProxySQL_PluginCommandContext& cmd_ctx,
@@ -281,14 +291,9 @@ ProxySQL_PluginCommandResult load_mcp_variables_from_disk(
 		rollback_tx(db);
 		return err_result("LOAD MCP VARIABLES FROM DISK: failed to copy variables");
 	}
-	GenAIPluginContext& ctx = genai_context();
-	if (!mcp_load_variables_from_admindb(ctx)) {
-		return err_result("LOAD MCP VARIABLES FROM DISK: failed to refresh runtime");
-	}
-	AdminMutexHandoff handoff(cmd_ctx);
-	handoff.release();
-	mcp_start_listener_if_enabled(ctx);
-	return ok_result("MCP variables loaded from disk");
+	return ok_result(
+		"MCP variables loaded from disk to memory."
+		" Run 'LOAD MCP VARIABLES TO RUNTIME' to apply them");
 }
 
 /**
@@ -478,15 +483,13 @@ ProxySQL_PluginCommandResult load_mcp_profiles_from_disk(
 		rollback_tx(db);
 		return err_result("LOAD MCP PROFILES FROM DISK: failed to copy tables");
 	}
-	GenAIPluginContext& ctx = genai_context();
-	if (!mcp_load_target_auth_map_from_admindb(ctx)) {
-		return err_result("LOAD MCP PROFILES FROM DISK: failed to refresh runtime");
-	}
-	const std::string summary = format_profile_install_summary("MCP profiles loaded from disk");
-	AdminMutexHandoff handoff(cmd_ctx);
-	handoff.release();
-	mcp_start_listener_if_enabled(ctx);
-	return ok_result(summary.c_str());
+	// disk -> main only. See the note on load_mcp_variables_from_disk and
+	// issue #6171: applying the staged profiles to the runtime is
+	// `LOAD MCP PROFILES TO RUNTIME`, which is also the only verb allowed
+	// to start the listener.
+	return ok_result(
+		"MCP profiles loaded from disk to memory."
+		" Run 'LOAD MCP PROFILES TO RUNTIME' to apply them");
 }
 
 ProxySQL_PluginCommandResult save_mcp_profiles_to_disk(
@@ -522,11 +525,10 @@ ProxySQL_PluginCommandResult load_mcp_query_rules_from_disk(
 		rollback_tx(db);
 		return err_result("LOAD MCP QUERY RULES FROM DISK: failed to copy tables");
 	}
-	GenAIPluginContext& ctx = genai_context();
-	if (!mcp_load_query_rules_to_runtime(ctx)) {
-		return err_result("LOAD MCP QUERY RULES FROM DISK: failed to refresh runtime");
-	}
-	return ok_result("MCP query rules loaded from disk");
+	// disk -> main only; see issue #6171.
+	return ok_result(
+		"MCP query rules loaded from disk to memory."
+		" Run 'LOAD MCP QUERY RULES TO RUNTIME' to apply them");
 }
 
 ProxySQL_PluginCommandResult save_mcp_query_rules_to_disk(
