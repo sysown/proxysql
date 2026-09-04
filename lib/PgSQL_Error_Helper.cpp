@@ -368,6 +368,7 @@ void PgSQL_Error_Helper::fill_extended_error_info(PgSQL_ErrorInfo& err_info, con
 
 	if (ext_fields & PGSQL_ERROR_FIELD_TEXT) {
 		val = PQresultErrorField(result, PG_DIAG_SEVERITY_NONLOCALIZED);
+		if (val == nullptr) val = PQresultErrorField(result, PG_DIAG_SEVERITY);
 		err_info.ext_info->text = identify_error_severity(val ? val : "");
 	}
 
@@ -448,7 +449,8 @@ void PgSQL_Error_Helper::fill_error_info(PgSQL_ErrorInfo& err_info, const PGresu
 	}
 	const char* sqlstate = PQresultErrorField(result, PG_DIAG_SQLSTATE);
 	const char* message = PQresultErrorField(result, PG_DIAG_MESSAGE_PRIMARY);
-	const char* severity = PQresultErrorField(result, PG_DIAG_SEVERITY);
+	const char* severity = PQresultErrorField(result, PG_DIAG_SEVERITY_NONLOCALIZED);
+	if (severity == nullptr) severity = PQresultErrorField(result, PG_DIAG_SEVERITY);
 	fill_error_info(err_info, sqlstate ? sqlstate : "00000", message ? message : "", severity ? severity : "");
 	fill_extended_error_info(err_info, result, ext_fields);
 }
