@@ -36,7 +36,7 @@ struct TestState {
 	vector<Endpoint> fallback_endpoints { fallback.get_endpoints() };
 };
 
-int setup(CommandLine& cl, MYSQL*& admin, RDS_BGD_Simulator& sim) {
+int setup(CommandLine& cl, MYSQL*& admin, BGD_Simulator& sim) {
 	if (cl.getEnv()) {
 		diag("Error: failed to load TAP environment");
 		return EXIT_FAILURE;
@@ -58,7 +58,7 @@ int setup(CommandLine& cl, MYSQL*& admin, RDS_BGD_Simulator& sim) {
 	return EXIT_SUCCESS;
 }
 
-int cleanup(MYSQL* admin, RDS_BGD_Simulator& sim) {
+int cleanup(MYSQL* admin, BGD_Simulator& sim) {
 	int admin_rc = bgd_admin_cleanup(admin);
 	if (admin_rc != EXIT_SUCCESS) {
 		diag("Error: failed to clean ProxySQL BGD test state");
@@ -76,8 +76,8 @@ int cleanup(MYSQL* admin, RDS_BGD_Simulator& sim) {
 	return EXIT_SUCCESS;
 }
 
-vector<RDS_BGD_Topology_Row> topology_with_reader_pairs(RDS_BGD_Cluster& cluster, string status, size_t pairs) {
-	vector<RDS_BGD_Topology_Row> rows = cluster.get_topology(status);
+vector<BGD_Topology_Row> topology_with_reader_pairs(RDS_BGD_Cluster& cluster, string status, size_t pairs) {
+	vector<BGD_Topology_Row> rows = cluster.get_topology(status);
 	for (size_t i = 0; i < pairs; ++i) {
 		rows.push_back({
 			cluster.blue_readers[i].hostname,
@@ -97,7 +97,7 @@ vector<RDS_BGD_Topology_Row> topology_with_reader_pairs(RDS_BGD_Cluster& cluster
 	return rows;
 }
 
-int configure_read_only_values(RDS_BGD_Simulator& sim, RDS_BGD_Cluster& cluster) {
+int configure_read_only_values(BGD_Simulator& sim, RDS_BGD_Cluster& cluster) {
 	if (bgd_set_host_read_only_0(sim, cluster.blue_writer) != EXIT_SUCCESS) {
 		return EXIT_FAILURE;
 	}
@@ -118,7 +118,7 @@ int configure_read_only_values(RDS_BGD_Simulator& sim, RDS_BGD_Cluster& cluster)
 }
 
 int configure_bgd(
-	MYSQL* admin, RDS_BGD_Simulator& sim, RDS_BGD_Cluster& cluster, BGD_Hostgroups& hg, size_t green_reader_count)
+	MYSQL* admin, BGD_Simulator& sim, RDS_BGD_Cluster& cluster, BGD_Hostgroups& hg, size_t green_reader_count)
 {
 	int read_only_rc = configure_read_only_values(sim, cluster);
 	if (read_only_rc != EXIT_SUCCESS) {
@@ -144,9 +144,9 @@ int configure_bgd(
 }
 
 int publish_post_processing(
-	RDS_BGD_Simulator& sim, vector<Endpoint> endpoints, RDS_BGD_Cluster& cluster, size_t pairs)
+	BGD_Simulator& sim, vector<Endpoint> endpoints, RDS_BGD_Cluster& cluster, size_t pairs)
 {
-	vector<RDS_BGD_Topology_Row> topology =
+	vector<BGD_Topology_Row> topology =
 		topology_with_reader_pairs(cluster, "SWITCHOVER_IN_POST_PROCESSING", pairs);
 
 	int rc = sim.topology_update(endpoints, topology);
@@ -229,7 +229,7 @@ rc_t<string> connect_and_echo(CommandLine& cl) {
  * - Route a client through hostgroup 1281 and verify that it reaches the
  *   mapped green reader instead of the unmapped blue reader.
  */
-int test_matched_unmatched_readers(CommandLine& cl, MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_matched_unmatched_readers(CommandLine& cl, MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	RDS_BGD_Cluster& cluster = state.matched;
 	BGD_Hostgroups& hg = state.matched_hg;
 
@@ -303,7 +303,7 @@ int test_matched_unmatched_readers(CommandLine& cl, MYSQL* admin, RDS_BGD_Simula
  * - Publish SWITCHOVER_IN_POST_PROCESSING topology without reader pairs.
  * - Verify that the blue writer is not added to reader hostgroup 1291.
  */
-int test_offline_blue_servers(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_offline_blue_servers(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	RDS_BGD_Cluster& cluster = state.fallback;
 	BGD_Hostgroups& hg = state.fallback_hg;
 
@@ -350,7 +350,7 @@ int test_offline_blue_servers(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& s
  * - Connect through hostgroup 1291 and verify routing reaches the green writer
  *   IP pinned for the blue writer hostname.
  */
-int test_writer_reader_fallback(CommandLine& cl, MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_writer_reader_fallback(CommandLine& cl, MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	RDS_BGD_Cluster& cluster = state.fallback;
 	BGD_Hostgroups& hg = state.fallback_hg;
 
@@ -394,7 +394,7 @@ int main() {
 
 	CommandLine cl {};
 	MYSQL* admin = nullptr;
-	RDS_BGD_Simulator sim {};
+	BGD_Simulator sim {};
 
 	if (setup(cl, admin, sim) != EXIT_SUCCESS) {
 		return exit_status();

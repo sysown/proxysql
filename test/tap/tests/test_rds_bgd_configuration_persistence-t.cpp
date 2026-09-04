@@ -42,7 +42,7 @@ struct TestState {
 	vector<Endpoint> admin_owned_endpoints { admin_owned.get_endpoints() };
 };
 
-int setup(CommandLine& cl, MYSQL*& admin, RDS_BGD_Simulator& sim) {
+int setup(CommandLine& cl, MYSQL*& admin, BGD_Simulator& sim) {
 	if (cl.getEnv()) {
 		diag("Error: failed to load TAP environment");
 		return EXIT_FAILURE;
@@ -64,7 +64,7 @@ int setup(CommandLine& cl, MYSQL*& admin, RDS_BGD_Simulator& sim) {
 	return EXIT_SUCCESS;
 }
 
-int cleanup(MYSQL* admin, RDS_BGD_Simulator& sim) {
+int cleanup(MYSQL* admin, BGD_Simulator& sim) {
 	int admin_rc = bgd_admin_cleanup(admin);
 	if (admin_rc != EXIT_SUCCESS) {
 		diag("Error: failed to clean ProxySQL BGD test state");
@@ -227,7 +227,7 @@ rc_t<vector<mysql_res_row>> green_server_snapshot(MYSQL* admin, const string& ta
  * - Disable automatic discovery and load explicit hostgroups 890-893.
  * - Verify explicit values replace the automatic row and persist.
  */
-int test_automatic_to_explicit(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_automatic_to_explicit(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	RDS_BGD_Cluster& cluster = state.conversion;
 	BGD_Hostgroups& hg = state.conversion_hg;
 
@@ -237,7 +237,7 @@ int test_automatic_to_explicit(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& 
 		return EXIT_FAILURE;
 	}
 
-	vector<RDS_BGD_Topology_Row> topology = bgd_topology_with_readers(cluster, "AVAILABLE");
+	vector<BGD_Topology_Row> topology = bgd_topology_with_readers(cluster, "AVAILABLE");
 	int topology_rc = sim.topology_update(state.conversion_endpoints, topology);
 	if (topology_rc != EXIT_SUCCESS) {
 		diag("Error: failed to publish AVAILABLE topology for wHG 890");
@@ -372,7 +372,7 @@ int test_persistent_row_validation(MYSQL* admin, TestState& state) {
  * - Execute SAVE MYSQL SERVERS FROM RUNTIME.
  * - Verify SAVE restores wHG 920 and skips auto-generated wHG 930.
  */
-int test_save_from_runtime(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_save_from_runtime(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	RDS_BGD_Cluster& explicit_cluster = state.explicit_save;
 	RDS_BGD_Cluster& automatic_cluster = state.automatic_save;
 	BGD_Hostgroups& explicit_hg = state.explicit_save_hg;
@@ -390,14 +390,14 @@ int test_save_from_runtime(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& stat
 		return EXIT_FAILURE;
 	}
 
-	vector<RDS_BGD_Topology_Row> explicit_topology = bgd_topology_with_readers(explicit_cluster, "AVAILABLE");
+	vector<BGD_Topology_Row> explicit_topology = bgd_topology_with_readers(explicit_cluster, "AVAILABLE");
 	int explicit_topology_rc = sim.topology_update(state.explicit_save_endpoints, explicit_topology);
 	if (explicit_topology_rc != EXIT_SUCCESS) {
 		diag("Error: failed to publish AVAILABLE topology for wHG 920");
 		return EXIT_FAILURE;
 	}
 
-	vector<RDS_BGD_Topology_Row> automatic_topology = bgd_topology_with_readers(automatic_cluster, "AVAILABLE");
+	vector<BGD_Topology_Row> automatic_topology = bgd_topology_with_readers(automatic_cluster, "AVAILABLE");
 	int automatic_topology_rc = sim.topology_update(state.automatic_save_endpoints, automatic_topology);
 	if (automatic_topology_rc != EXIT_SUCCESS) {
 		diag("Error: failed to publish AVAILABLE topology for wHG 930");
@@ -491,7 +491,7 @@ int test_save_from_runtime(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& stat
  * - Enable automatic discovery and publish AVAILABLE topology.
  * - Verify the BGD row and green-server status remain unchanged.
  */
-int test_admin_server_status_preserved(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_admin_server_status_preserved(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	RDS_BGD_Cluster& cluster = state.admin_owned;
 	BGD_Hostgroups& hg = state.admin_owned_hg;
 
@@ -571,7 +571,7 @@ int test_admin_server_status_preserved(MYSQL* admin, RDS_BGD_Simulator& sim, Tes
 		return EXIT_FAILURE;
 	}
 
-	vector<RDS_BGD_Topology_Row> topology = bgd_topology_with_readers(cluster, "AVAILABLE");
+	vector<BGD_Topology_Row> topology = bgd_topology_with_readers(cluster, "AVAILABLE");
 	int topology_rc = sim.topology_update(state.admin_owned_endpoints, topology);
 	if (topology_rc != EXIT_SUCCESS) {
 		diag("Error: failed to publish AVAILABLE topology beside administrator-owned wHG 1310");
@@ -579,7 +579,7 @@ int test_admin_server_status_preserved(MYSQL* admin, RDS_BGD_Simulator& sim, Tes
 	}
 
 	auto [probe_rc, probe] =
-		sim.wait_for_probe_log(seq, cluster.blue_writer.endpoint(), RDS_BGD_Probe_Kind::metadata, kProbeTimeoutMs, 0);
+		sim.wait_for_probe_log(seq, cluster.blue_writer.endpoint(), BGD_Probe_Kind::metadata, kProbeTimeoutMs, 0);
 	if (probe_rc != EXIT_SUCCESS) {
 		diag("Error: automatic discovery did not probe beside administrator-owned wHG 1310");
 		return EXIT_FAILURE;
@@ -609,7 +609,7 @@ int main() {
 
 	CommandLine cl {};
 	MYSQL* admin = nullptr;
-	RDS_BGD_Simulator sim {};
+	BGD_Simulator sim {};
 
 	if (setup(cl, admin, sim) != EXIT_SUCCESS) {
 		return exit_status();

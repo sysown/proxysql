@@ -480,6 +480,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	gtid_server_data_unit-t \
 	admin_bootstrap_users_unit-t \
 	admin_disk_upgrade_unit-t \
+	aurora_bgd_config_unit-t \
 	glovars_unit-t \
 	pgsql_servers_ssl_params_unit-t \
 	connection_unhealthy_unit-t \

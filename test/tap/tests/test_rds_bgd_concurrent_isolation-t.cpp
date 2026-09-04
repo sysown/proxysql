@@ -36,7 +36,7 @@ struct TestState {
 	BGD_Hostgroups cluster_3_hg { 1430, 1431, 1432, 1433 };
 };
 
-int setup(CommandLine& cl, MYSQL*& admin, RDS_BGD_Simulator& sim) {
+int setup(CommandLine& cl, MYSQL*& admin, BGD_Simulator& sim) {
 	if (cl.getEnv()) {
 		diag("Error: failed to load TAP environment");
 		return EXIT_FAILURE;
@@ -58,7 +58,7 @@ int setup(CommandLine& cl, MYSQL*& admin, RDS_BGD_Simulator& sim) {
 	return EXIT_SUCCESS;
 }
 
-int cleanup(MYSQL* admin, RDS_BGD_Simulator& sim) {
+int cleanup(MYSQL* admin, BGD_Simulator& sim) {
 	int admin_rc = bgd_admin_cleanup(admin);
 	if (admin_rc != EXIT_SUCCESS) {
 		diag("Error: failed to clean ProxySQL BGD test state");
@@ -76,8 +76,8 @@ int cleanup(MYSQL* admin, RDS_BGD_Simulator& sim) {
 	return EXIT_SUCCESS;
 }
 
-vector<RDS_BGD_Topology_Row> topology_with_reader_pair(RDS_BGD_Cluster& cluster, string status) {
-	vector<RDS_BGD_Topology_Row> rows = cluster.get_topology(status);
+vector<BGD_Topology_Row> topology_with_reader_pair(RDS_BGD_Cluster& cluster, string status) {
+	vector<BGD_Topology_Row> rows = cluster.get_topology(status);
 	rows.push_back({
 		cluster.blue_readers[0].hostname,
 		cluster.blue_readers[0].hostname,
@@ -95,7 +95,7 @@ vector<RDS_BGD_Topology_Row> topology_with_reader_pair(RDS_BGD_Cluster& cluster,
 	return rows;
 }
 
-int configure_read_only_values(RDS_BGD_Simulator& sim, RDS_BGD_Cluster& cluster) {
+int configure_read_only_values(BGD_Simulator& sim, RDS_BGD_Cluster& cluster) {
 	if (bgd_set_host_read_only_0(sim, cluster.blue_writer) != EXIT_SUCCESS) {
 		return EXIT_FAILURE;
 	}
@@ -116,13 +116,13 @@ int configure_read_only_values(RDS_BGD_Simulator& sim, RDS_BGD_Cluster& cluster)
 }
 
 int configure_available(
-	MYSQL* admin, RDS_BGD_Simulator& sim, RDS_BGD_Cluster& cluster, BGD_Hostgroups& hg, int green_use_ssl)
+	MYSQL* admin, BGD_Simulator& sim, RDS_BGD_Cluster& cluster, BGD_Hostgroups& hg, int green_use_ssl)
 {
 	if (configure_read_only_values(sim, cluster) != EXIT_SUCCESS) {
 		return EXIT_FAILURE;
 	}
 
-	vector<RDS_BGD_Topology_Row> topology = topology_with_reader_pair(cluster, "AVAILABLE");
+	vector<BGD_Topology_Row> topology = topology_with_reader_pair(cluster, "AVAILABLE");
 	if (sim.topology_update(cluster.get_endpoints(), topology) != EXIT_SUCCESS) {
 		return EXIT_FAILURE;
 	}
@@ -215,7 +215,7 @@ int replace_cluster_1_green_membership(MYSQL* admin, TestState& state) {
  * - Use plaintext green metadata for clusters 1 and 3 and TLS for cluster 2.
  * - Verify that each BGD row reaches AVAILABLE through its own green writer.
  */
-int test_three_workers_available(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_three_workers_available(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	auto [seq_rc, seq] = sim.probe_log_last_sequence();
 	if (seq_rc != EXIT_SUCCESS) {
 		diag("Error: failed to read the probe sequence before starting three BGD workers");
@@ -241,7 +241,7 @@ int test_three_workers_available(MYSQL* admin, RDS_BGD_Simulator& sim, TestState
 	}
 
 	auto [cluster_1_probe_rc, cluster_1_probe] = sim.wait_for_probe_log(
-		seq, state.cluster_1.green_writer.endpoint(), RDS_BGD_Probe_Kind::metadata, kProbeTimeoutMs, 0
+		seq, state.cluster_1.green_writer.endpoint(), BGD_Probe_Kind::metadata, kProbeTimeoutMs, 0
 	);
 	if (cluster_1_probe_rc != EXIT_SUCCESS) {
 		diag("Error: BGD wHG 1410 did not probe its plaintext green writer");
@@ -250,7 +250,7 @@ int test_three_workers_available(MYSQL* admin, RDS_BGD_Simulator& sim, TestState
 	ok(true, "BGD wHG 1410 reports AVAILABLE from its own plaintext green writer");
 
 	auto [cluster_2_probe_rc, cluster_2_probe] = sim.wait_for_probe_log(
-		seq, state.cluster_2.green_writer.endpoint(), RDS_BGD_Probe_Kind::metadata, kProbeTimeoutMs, 1
+		seq, state.cluster_2.green_writer.endpoint(), BGD_Probe_Kind::metadata, kProbeTimeoutMs, 1
 	);
 	if (cluster_2_probe_rc != EXIT_SUCCESS) {
 		diag("Error: BGD wHG 1420 did not probe its TLS green writer");
@@ -259,7 +259,7 @@ int test_three_workers_available(MYSQL* admin, RDS_BGD_Simulator& sim, TestState
 	ok(true, "BGD wHG 1420 reports AVAILABLE from its own TLS green writer");
 
 	auto [cluster_3_probe_rc, cluster_3_probe] = sim.wait_for_probe_log(
-		seq, state.cluster_3.green_writer.endpoint(), RDS_BGD_Probe_Kind::metadata, kProbeTimeoutMs, 0
+		seq, state.cluster_3.green_writer.endpoint(), BGD_Probe_Kind::metadata, kProbeTimeoutMs, 0
 	);
 	if (cluster_3_probe_rc != EXIT_SUCCESS) {
 		diag("Error: BGD wHG 1430 did not probe its plaintext green writer");
@@ -278,8 +278,8 @@ int test_three_workers_available(MYSQL* admin, RDS_BGD_Simulator& sim, TestState
  * - After each change, verify that the other two statuses and blue-writer
  *   placements remain unchanged.
  */
-int test_independent_phase_changes(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
-	vector<RDS_BGD_Topology_Row> cluster_1_topology =
+int test_independent_phase_changes(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
+	vector<BGD_Topology_Row> cluster_1_topology =
 		topology_with_reader_pair(state.cluster_1, "SWITCHOVER_IN_PROGRESS");
 	if (sim.topology_update(state.cluster_1.get_endpoints(), cluster_1_topology) != EXIT_SUCCESS) {
 		diag("Error: failed to publish SWITCHOVER_IN_PROGRESS for BGD wHG 1410");
@@ -308,7 +308,7 @@ int test_independent_phase_changes(MYSQL* admin, RDS_BGD_Simulator& sim, TestSta
 	ok(cluster_2_available && cluster_3_available,
 		"advancing wHG 1410 leaves wHG 1420 and wHG 1430 in AVAILABLE with unchanged blue placement");
 
-	vector<RDS_BGD_Topology_Row> cluster_2_topology =
+	vector<BGD_Topology_Row> cluster_2_topology =
 		topology_with_reader_pair(state.cluster_2, "SWITCHOVER_IN_POST_PROCESSING");
 	if (sim.topology_update(state.cluster_2.get_endpoints(), cluster_2_topology) != EXIT_SUCCESS) {
 		diag("Error: failed to publish SWITCHOVER_IN_POST_PROCESSING for BGD wHG 1420");
@@ -338,7 +338,7 @@ int test_independent_phase_changes(MYSQL* admin, RDS_BGD_Simulator& sim, TestSta
 	ok(cluster_1_in_progress && cluster_3_still_available,
 		"advancing wHG 1420 preserves wHG 1410 progress and wHG 1430 availability");
 
-	vector<RDS_BGD_Topology_Row> cluster_3_topology =
+	vector<BGD_Topology_Row> cluster_3_topology =
 		topology_with_reader_pair(state.cluster_3, "SWITCHOVER_INITIATED");
 	if (sim.topology_update(state.cluster_3.get_endpoints(), cluster_3_topology) != EXIT_SUCCESS) {
 		diag("Error: failed to publish SWITCHOVER_INITIATED for BGD wHG 1430");
@@ -380,7 +380,7 @@ int test_independent_phase_changes(MYSQL* admin, RDS_BGD_Simulator& sim, TestSta
  * - Verify that cluster 1 stops probing its removed target while clusters 2
  *   and 3 keep their status, placement, metadata target, and TLS value.
  */
-int test_independent_config_refresh(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_independent_config_refresh(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	if (configure_read_only_values(sim, state.cluster_1_b) != EXIT_SUCCESS) {
 		diag("Error: failed to configure simulated read_only values for cluster 1 deployment B");
 		return EXIT_FAILURE;
@@ -398,7 +398,7 @@ int test_independent_config_refresh(MYSQL* admin, RDS_BGD_Simulator& sim, TestSt
 		return EXIT_FAILURE;
 	}
 
-	vector<RDS_BGD_Topology_Row> topology =
+	vector<BGD_Topology_Row> topology =
 		topology_with_reader_pair(state.cluster_1_b, "SWITCHOVER_IN_PROGRESS");
 	if (sim.topology_update(state.cluster_1_b.get_endpoints(), topology) != EXIT_SUCCESS) {
 		diag("Error: failed to publish deployment B topology for BGD wHG 1410");
@@ -406,7 +406,7 @@ int test_independent_config_refresh(MYSQL* admin, RDS_BGD_Simulator& sim, TestSt
 	}
 
 	auto [cluster_1_probe_rc, cluster_1_probe] = sim.wait_for_probe_log(
-		seq, state.cluster_1_b.green_writer.endpoint(), RDS_BGD_Probe_Kind::metadata, kProbeTimeoutMs, 1
+		seq, state.cluster_1_b.green_writer.endpoint(), BGD_Probe_Kind::metadata, kProbeTimeoutMs, 1
 	);
 	if (cluster_1_probe_rc != EXIT_SUCCESS) {
 		diag("Error: refreshed BGD wHG 1410 did not probe its TLS deployment B green writer");
@@ -423,7 +423,7 @@ int test_independent_config_refresh(MYSQL* admin, RDS_BGD_Simulator& sim, TestSt
 
 	auto [cluster_2_probe_rc, cluster_2_probe] = sim.wait_for_probe_log(
 		cluster_1_probe.sequence_id, state.cluster_2.green_writer.endpoint(),
-		RDS_BGD_Probe_Kind::metadata, kProbeTimeoutMs, 1
+		BGD_Probe_Kind::metadata, kProbeTimeoutMs, 1
 	);
 	if (cluster_2_probe_rc != EXIT_SUCCESS) {
 		diag("Error: BGD wHG 1420 did not continue probing its TLS green writer");
@@ -432,7 +432,7 @@ int test_independent_config_refresh(MYSQL* admin, RDS_BGD_Simulator& sim, TestSt
 
 	auto [cluster_3_probe_rc, cluster_3_probe] = sim.wait_for_probe_log(
 		cluster_1_probe.sequence_id, state.cluster_3.green_writer.endpoint(),
-		RDS_BGD_Probe_Kind::metadata, kProbeTimeoutMs, 0
+		BGD_Probe_Kind::metadata, kProbeTimeoutMs, 0
 	);
 	if (cluster_3_probe_rc != EXIT_SUCCESS) {
 		diag("Error: BGD wHG 1430 did not continue probing its plaintext green writer");
@@ -457,7 +457,7 @@ int main() {
 
 	CommandLine cl {};
 	MYSQL* admin = nullptr;
-	RDS_BGD_Simulator sim {};
+	BGD_Simulator sim {};
 
 	if (setup(cl, admin, sim) != EXIT_SUCCESS) {
 		return exit_status();

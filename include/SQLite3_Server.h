@@ -51,13 +51,13 @@ class SQLite3_Server {
 	std::unordered_map<std::string, group_rep_status> grouprep_map;
 	std::vector<table_def_t *> *tables_defs_grouprep;
 #endif // TEST_GROUPREP
-#if defined(TEST_READONLY) || defined(TEST_RDS_BGD)
+#if defined(TEST_AURORA) || defined(TEST_READONLY) || defined(TEST_RDS_BGD)
 	std::vector<table_def_t *> *tables_defs_readonly;
 	std::unordered_map<std::string, bool> readonly_map;
-#endif // TEST_READONLY || TEST_RDS_BGD
-#ifdef TEST_RDS_BGD
-	std::vector<table_def_t *> *tables_defs_rds_bgd;
-#endif // TEST_RDS_BGD
+#endif // TEST_AURORA || TEST_READONLY || TEST_RDS_BGD
+#if defined(TEST_AURORA) || defined(TEST_RDS_BGD)
+	std::vector<table_def_t *> *tables_defs_aws_bgd;
+#endif // TEST_AURORA || TEST_RDS_BGD
 #ifdef TEST_REPLICATIONLAG
 	std::unordered_map<std::string, std::unique_ptr<int>> replicationlag_map;
 	std::vector<table_def_t*>* tables_defs_replicationlag;
@@ -70,20 +70,9 @@ class SQLite3_Server {
 	public:
 	SQLite3DB *sessdb;
 #ifdef TEST_AURORA
-	unsigned int cur_aurora_writer[3];
-	unsigned int num_aurora_servers[3];
-	unsigned int max_num_aurora_servers;
-	pthread_mutex_t aurora_mutex;
-	/**
-	 * @brief Handles queries to table 'REPLICA_HOST_STATUS'.
-	 * @details This function needs to be called with lock on mutex aurora_mutex already acquired.
-	 * @param sess The session which request is to be handled.
-	 */
-	void populate_aws_aurora_table(MySQL_Session *sess, uint32_t whg);
 	void init_aurora_ifaces_string(std::string& s);
 #endif // TEST_AURORA
 #ifdef TEST_GALERA
-	//unsigned int cur_aurora_writer[3];
 	unsigned int num_galera_servers[3];
 	unsigned int max_num_galera_servers;
 	pthread_mutex_t galera_mutex;
@@ -97,14 +86,14 @@ class SQLite3_Server {
 	void init_grouprep_ifaces_string(std::string& s);
 	group_rep_status grouprep_test_value(const std::string& srv_addr);
 #endif // TEST_GROUPREP
-#if defined(TEST_READONLY) || defined(TEST_RDS_BGD)
+#if defined(TEST_AURORA) || defined(TEST_READONLY) || defined(TEST_RDS_BGD)
 	pthread_mutex_t test_readonly_mutex;
 	void load_readonly_table(MySQL_Session *sess);
 	int readonly_test_value(char *p);
 	int readonly_map_size() {
 		return readonly_map.size();
 	}
-#endif // TEST_READONLY || TEST_RDS_BGD
+#endif // TEST_AURORA || TEST_READONLY || TEST_RDS_BGD
 #ifdef TEST_REPLICATIONLAG
 	pthread_mutex_t test_replicationlag_mutex;
 	void load_replicationlag_table(MySQL_Session* sess);
