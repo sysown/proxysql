@@ -3754,6 +3754,20 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_ser
 						// no action required, therefore we set readonly_flag to 0
 						proxy_info("read_only_action_v2() detected RO=0 on server %s:%d for the first time after commit(), but no need to reconfigure\n", hostname.c_str(), port);
 						host_server_mapping->set_readonly_flag(0);
+
+						// When mysql-monitor_writer_is_also_reader=0, a writer
+						// must not live in reader_hg --- even if every
+						// reader_node matches a writer_node by
+						// writer_hostgroup_id. The act=true branch below
+						// handles this; without the same cleanup here, a LOAD
+						// that statically lands the server in both hostgroups
+						// leaves the reader-hg entry in MyHostGroups
+						// permanently and the monitor never reconciles it.
+						if (mysql_thread___monitor_writer_is_also_reader == false && reader_map.empty() == false) {
+							proxy_info("read_only_action_v2(): clearing reader-hg entries for writer '%s:%d' (mysql-monitor_writer_is_also_reader=0)\n", hostname.c_str(), port);
+							host_server_mapping->clear(HostGroup_Server_Mapping::Type::READER);
+							update_mysql_servers_table = true;
+						}
 					}
 				} else {
 					// the server was already detected as RO=0
