@@ -27,6 +27,11 @@ tar --no-same-owner -zxf \
 	-C "${tmp_dir}"
 source_dir="${tmp_dir}/mariadb-connector-c-3.3.8-src"
 apply_connector_patch plugin_auth_CMakeLists.txt.patch
+if [[ $(uname -s) == Darwin ]]; then
+	# Match the production connector patch sequence on Apple SDKs.
+	apply_connector_patch zutil.c.patch
+	apply_connector_patch zutil.h.patch
+fi
 
 if ! cmake -S "${source_dir}" -B "${source_dir}" -Wno-dev \
 		-DCMAKE_BUILD_TYPE=RelWithDebInfo \

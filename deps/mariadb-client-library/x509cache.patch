@@ -150,7 +150,7 @@ index 916024a8..79564a10 100644
    /* add cipher */
    if ((mysql->options.ssl_cipher &&
          mysql->options.ssl_cipher[0] != 0))
-@@ -340,10 +429,28 @@
+@@ -340,13 +429,31 @@
    /* ca_file and ca_path */
 -  if (!SSL_CTX_load_verify_locations(ctx,
 +  if (local_x509store != NULL && mysql->options.ssl_ca != NULL && mysql->options.ssl_capath == NULL) {
@@ -188,6 +188,9 @@ index 916024a8..79564a10 100644
 -    if (SSL_CTX_set_default_verify_paths(ctx) == 0)
 -      goto error;
 -  }
+ 
+   if (mysql->options.extension &&
+      (mysql->options.extension->ssl_crl || mysql->options.extension->ssl_crlpath))
 diff --git libmariadb/secure/proxysql_default_ca.h libmariadb/secure/proxysql_default_ca.h
 new file mode 100644
 index 00000000..4cb3bb94

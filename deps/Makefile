@@ -471,12 +471,9 @@ postgresql: postgresql/postgresql/src/interfaces/libpq/libpq.a
 libusual/libusual/.libs/libusual.a: $(OPENSSL_BUILD_STAMP)
 	cd libusual && rm -rf libusual-*/ || true
 	cd libusual && tar -zxf libusual-*.tar.gz
+	cd libusual/libusual && patch -p1 < ../tls_free_namespace.patch
 	cd libusual/libusual && ./autogen.sh
-ifeq ($(UNAME_S),Darwin)
-	cd libusual/libusual && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="$(OPENSSL_STATIC_LIBS)" ./configure --with-openssl="$(SSL_PATH)" --disable-shared
-else
-	cd libusual/libusual && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="$(OPENSSL_STATIC_LIBS)" ./configure --with-openssl="$(SSL_PATH)" --disable-shared
-endif
+	cd libusual/libusual && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="-L$(SSL_LDIR)" ./configure --with-openssl="$(SSL_PATH)" --disable-shared
 	cd libusual/libusual && CC=${CC} CXX=${CXX} ${MAKE}
 
 libusual: libusual/libusual/.libs/libusual.a
