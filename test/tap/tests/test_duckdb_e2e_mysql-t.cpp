@@ -5,6 +5,7 @@
 
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -37,7 +38,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(16);
+	plan(17);
 
 	MYSQL* c = connect_duckdb(cl, cl.username, cl.password);
 	ok(c != NULL, "connect to the DuckDB MySQL port with mysql_users credentials");
@@ -98,6 +99,22 @@ int main(int argc, char** argv) {
 	ok(mysql_query(c, "SELECT 1") == 0, "connection still works after repeated errors");
 
 	mysql_close(c);
+
+	// Oracle MySQL 8 negotiates CLIENT_DEPRECATE_EOF, unlike the bundled
+	// MariaDB Connector/C used above. Exercise the real client so result-set
+	// terminator framing is covered, not merely query success.
+	const std::string port = std::to_string(DUCKDB_MYSQL_PORT);
+	const std::string user = std::string("-u") + cl.username;
+	const std::string password = std::string("-p") + cl.password;
+	const std::vector<const char*> mysql8_args = {
+		"mysql", "--protocol=TCP", "-h", cl.host, "-P", port.c_str(),
+		user.c_str(), password.c_str(), "--batch", "--skip-column-names",
+		"--execute=SELECT 42 AS answer"
+	};
+	std::string mysql8_output;
+	const int mysql8_rc = execvp("mysql", mysql8_args, mysql8_output);
+	ok(mysql8_rc == 0 && mysql8_output == "42\n",
+	   "MySQL 8 CLIENT_DEPRECATE_EOF client receives result rows");
 
 	// Authentication must actually be enforced.
 	MYSQL* bad = connect_duckdb(cl, cl.username, "definitely-not-the-password");

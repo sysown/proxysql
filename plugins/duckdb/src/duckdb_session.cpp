@@ -644,7 +644,10 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 
 void duckdb_send_result(MySQL_Session* sess, SQLite3_result* r, char* err,
                         int affected, const char* /*sql*/) {
-	sess->SQLite3_to_MySQL(r, err, affected, &sess->client_myds->myprot);
+	const bool deprecate_eof_active =
+		sess->client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+	sess->SQLite3_to_MySQL(r, err, affected, &sess->client_myds->myprot,
+		false, deprecate_eof_active);
 }
 
 void duckdb_send_result(PgSQL_Session* sess, SQLite3_result* r, char* err,
