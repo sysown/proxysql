@@ -1854,12 +1854,15 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 
 		if (admin) {
 			if (dump_global_variables) {
+				// MySQL runtime rows have their own serializer. Refresh them before
+				// checksum_mutex so this path cannot invert the publication order
+				// (GloMTH before checksum_mutex).
+				flush_mysql_variables___runtime_to_database(admindb, false, false, false, true);
 				pthread_mutex_lock(&GloVars.checksum_mutex);
 				// Each core variable flusher below replaces its own namespace.
 				// Preserve rows published by plugins under namespaces core does
 				// not own (for example mcp-*).
 				flush_admin_variables___runtime_to_database(admindb, false, false, false, true);
-				flush_mysql_variables___runtime_to_database(admindb, false, false, false, true);
 #ifdef PROXYSQLTSDB
 				flush_tsdb_variables___runtime_to_database(admindb, false, false, false, true);
 #endif

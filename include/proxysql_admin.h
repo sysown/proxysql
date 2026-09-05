@@ -549,6 +549,7 @@ class ProxySQL_Admin {
 
 	void flush_GENERIC_variables__checksum__database_to_runtime(const std::string& modname, const std::string& checksum, const time_t epoch);
 	bool flush_GENERIC_variables__retrieve__database_to_runtime(const std::string& modname, char* &error, int& cols, int& affected_rows, SQLite3_result* &resultset);
+	void flush_mysql_variables___runtime_to_database_unlocked(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime);
 	/**
 	 * @brief Apply generic variables from a result set and report per-row statistics.
 	 * @param accepted_variables Optional output containing only names successfully applied by this generic pass.
