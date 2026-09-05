@@ -92,10 +92,11 @@ dispatcher routes by canonical name + alias.
 | Command | Effect |
 |---|---|
 | `LOAD MCP VARIABLES TO RUNTIME` | push `mcp-*` from `main.global_variables` into `MCP_Threads_Handler` |
-| `LOAD MCP VARIABLES FROM DISK` | sync `disk.global_variables` → `main.global_variables` (mcp-* slice), then implicit reload |
-| `LOAD MCP VARIABLES FROM CONFIG` | re-read `mcp` block from `proxysql.cnf` |
+| `LOAD MCP VARIABLES FROM DISK` / `TO MEMORY` | sync `disk.global_variables` → `main.global_variables` (mcp-* slice); runtime remains unchanged until `TO RUNTIME` |
+| `LOAD MCP VARIABLES FROM CONFIG` | re-read the `mcp` block from `proxysql.cnf`, apply it, and reevaluate the listener |
 | `SAVE MCP VARIABLES TO MEMORY` / `... TO DISK` | reverse direction |
-| `LOAD MCP PROFILES TO RUNTIME` | atomic install of `main.mcp_auth_profiles` + `main.mcp_target_profiles` into the in-memory snapshot, rebuilds joined `target_auth_map` |
+| `LOAD MCP PROFILES TO RUNTIME` | atomic install of `main.mcp_auth_profiles` + `main.mcp_target_profiles` into the in-memory snapshot, rebuilds joined `target_auth_map`; within the profile-command family, this is the only verb that applies profiles or may start the listener |
+| `LOAD MCP PROFILES FROM DISK` / `TO MEMORY` | `disk.` → `main.` only; the runtime is untouched until `TO RUNTIME` |
 | `SAVE MCP PROFILES TO MEMORY` | atomic dump of in-memory snapshot back to both editable tables in one transaction |
 | `LOAD MCP QUERY RULES TO RUNTIME` | install `main.mcp_query_rules` snapshot, attach to `Discovery_Schema` if listener up |
 | `SAVE MCP QUERY RULES TO MEMORY` | dump in-memory snapshot back to `main.mcp_query_rules` |
@@ -109,6 +110,46 @@ views** of module state. The plugin's
 commands install snapshots into the module without touching
 `runtime_<X>`, and a SELECT against `runtime_mcp_<X>` triggers a
 fresh projection from the snapshot before returning rows.
+
+### Effective vs. projected targets
+
+`runtime_mcp_target_profiles` projects the **raw** target snapshot, while the
+query endpoint consumes the **joined** `target_auth_map`. A target profile is
+excluded from that map -- and therefore from `list_targets` and every query
+tool -- when it is `active=0`, or when its `auth_profile_id` has no row in
+`mcp_auth_profiles` (there is no FK constraint, so the INSERT is accepted).
+
+So that the two surfaces cannot silently disagree, the runtime view carries two
+derived, read-only columns:
+
+| Column | Meaning |
+|---|---|
+| `effective` | `1` if the row is in `target_auth_map` and reachable by the query endpoint; `0` if it was excluded |
+| `skip_reason` | empty when `effective=1`; otherwise `inactive` or `auth_profile_id not found` |
+
+Every excluded row is also logged at install time, and `LOAD MCP PROFILES TO
+RUNTIME` reports the counts in its reply:
+
+```
+admin> LOAD MCP PROFILES TO RUNTIME;
+MCP profiles loaded to runtime: 1 auth profile(s), 1 of 3 target(s) effective
+(1 inactive, 1 with unresolved auth_profile_id; see
+runtime_mcp_target_profiles.skip_reason and the error log)
+```
+
+`effective=1` does **not** mean the target is executable -- backend
+reachability is resolved per request. `Query_Tool_Handler::format_target_
+unavailable_error` diagnoses that second class of failure (empty
+`db_username`, no ONLINE backend in the hostgroup).
+
+### Startup persistence
+
+The chassis copies every plugin-registered `config_db` table from `disk.` into
+`main.` during Admin bootstrap, before the plugin's `start()` callback runs, so
+`SAVE MCP PROFILES TO DISK` / `SAVE MCP QUERY RULES TO DISK` survive a restart
+with no post-restart `LOAD ... FROM DISK` needed. `genai_start()` then installs
+profiles before listener construction, then installs query rules into the new
+`Discovery_Schema` before the listener starts accepting requests.
 
 ## 6. Configuration
 
@@ -125,7 +166,7 @@ Tables owned by the plugin (registered in Phase B):
 | admin | `mcp_auth_profiles` | editable backend auth profiles |
 | admin | `mcp_target_profiles` | editable MCP target → hostgroup mapping |
 | admin | `runtime_mcp_query_rules` / `runtime_mcp_auth_profiles` / `runtime_mcp_target_profiles` | chassis-projected views (no persistent rows; refreshed per SELECT from module snapshot) |
-| config | persistent copies of the three editable tables above | for `LOAD ... FROM DISK` |
+| config | persistent copies of the three editable tables above | for `LOAD ... FROM DISK`, and restored into `main.` automatically at startup |
 | stats | `stats_mcp_query_digest` / `stats_mcp_query_digest_reset` | MCP tool call digest statistics (periodic + reset variants) |
 | stats | `stats_mcp_query_tools_counters` / `stats_mcp_query_tools_counters_reset` | per-endpoint tool invocation counters |
 | stats | `stats_mcp_query_rules` | rule hit counts |

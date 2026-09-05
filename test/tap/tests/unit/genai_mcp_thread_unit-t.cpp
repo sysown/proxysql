@@ -25,8 +25,10 @@
 #ifdef PROXYSQL40
 
 #include "MCP_Thread.h"
+#include "Discovery_Schema.h"
 
 #include <cstring>
+#include <memory>
 #include <string>
 #include <set>
 #include <vector>
@@ -455,6 +457,39 @@ static void test_wrlock_wrunlock(MCP_Threads_Handler& h) {
 	ok(true, "wrlock/wrunlock round-trip without deadlock");
 }
 
+/**
+ * @brief Replacing the runtime query-rule snapshot with an empty result must
+ *        clear rules that were previously active.
+ */
+static void test_empty_query_rules_clear_runtime() {
+	Discovery_Schema catalog(":memory:");
+	auto rules = std::make_unique<SQLite3_result>(18);
+	const char* blocking_rule[] = {
+		"7001", "1", nullptr, nullptr, nullptr, "run_sql_readonly",
+		"BLOCKME", "0", "CASELESS", "0", nullptr, nullptr, nullptr,
+		"blocked by rule 7001", nullptr, nullptr, "1", "unit test"
+	};
+	rules->add_row(blocking_rule);
+	catalog.load_mcp_query_rules(rules.release());
+
+	std::unique_ptr<MCP_Query_Processor_Output> before_clear(
+		catalog.evaluate_mcp_query_rules(
+			"run_sql_readonly", "", "", "", nlohmann::json::object(),
+			"SELECT 1 FROM BLOCKME"));
+	ok(before_clear->error_msg != nullptr &&
+	   std::string(before_clear->error_msg) == "blocked by rule 7001",
+	   "loaded MCP query rule is active before an empty reload");
+
+	auto empty_rules = std::make_unique<SQLite3_result>(18);
+	catalog.load_mcp_query_rules(empty_rules.release());
+	std::unique_ptr<MCP_Query_Processor_Output> after_clear(
+		catalog.evaluate_mcp_query_rules(
+			"run_sql_readonly", "", "", "", nlohmann::json::object(),
+			"SELECT 1 FROM BLOCKME"));
+	ok(after_clear->error_msg == nullptr,
+	   "empty MCP query-rule reload clears the previously active rule");
+}
+
 /* ================================================================== */
 /*  Test count                                                         */
 /* ================================================================== */
@@ -477,9 +512,11 @@ static void test_wrlock_wrunlock(MCP_Threads_Handler& h) {
  * Load target auth null: 1
  * wrlock/wrunlock:       1
  * -------------------------------------------------
- * Total:                 203
+ * Empty query rules:      2
+ * -------------------------------------------------
+ * Total:                 205
  */
-static const int TOTAL_TESTS = 203;
+static const int TOTAL_TESTS = 205;
 
 int main() {
 	plan(TOTAL_TESTS);
@@ -503,6 +540,7 @@ int main() {
 	test_target_auth_empty(handler);
 	test_load_target_auth_null(handler);
 	test_wrlock_wrunlock(handler);
+	test_empty_query_rules_clear_runtime();
 
 	test_cleanup_minimal();
 	return exit_status();

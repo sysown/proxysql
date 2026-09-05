@@ -59,8 +59,10 @@ public:
 	 * @brief Start the HTTP/HTTPS server
 	 *
 	 * Starts the webserver in a dedicated thread.
+	 *
+	 * @return true if the server thread was created, false otherwise
 	 */
-	void start();
+	bool start();
 
 	/**
 	 * @brief Stop the HTTP/HTTPS server

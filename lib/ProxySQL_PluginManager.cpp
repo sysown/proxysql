@@ -6,6 +6,7 @@
 
 #include "ProxySQL_PluginManager.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <cctype>
@@ -17,6 +18,7 @@
 
 #include "proxysql.h"
 #include "proxysql_glovars.hpp"
+#include "sqlite3db.h"
 #include "prometheus/registry.h"
 
 extern ProxySQL_GlobalVariables GloVars;
@@ -45,6 +47,7 @@ std::shared_mutex g_active_plugin_manager_mutex {};
 std::mutex g_plugin_lifecycle_mutex {};
 bool g_registry_registration_failed = false;
 std::string g_registry_registration_error {};
+bool g_registry_accepts_config_table_registration = false;
 
 // RAII guard that sets g_registry_target to `mgr` on construction and
 // clears it on destruction.  Also resets the registration-failure sticky
@@ -53,15 +56,17 @@ std::string g_registry_registration_error {};
 // plugin can't leave the registry globals dirty and break the next
 // phase's `assert(g_registry_target == nullptr)`.
 struct ScopedRegistryTarget {
-	explicit ScopedRegistryTarget(ProxySQL_PluginManager* mgr) {
+	explicit ScopedRegistryTarget(ProxySQL_PluginManager* mgr, bool accepts_config_tables) {
 		g_registry_target = mgr;
 		g_registry_registration_failed = false;
 		g_registry_registration_error.clear();
+		g_registry_accepts_config_table_registration = accepts_config_tables;
 	}
 	~ScopedRegistryTarget() {
 		g_registry_target = nullptr;
 		g_registry_registration_failed = false;
 		g_registry_registration_error.clear();
+		g_registry_accepts_config_table_registration = false;
 	}
 	ScopedRegistryTarget(const ScopedRegistryTarget&) = delete;
 	ScopedRegistryTarget& operator=(const ScopedRegistryTarget&) = delete;
@@ -86,6 +91,39 @@ std::string plugin_name(const ProxySQL_PluginDescriptor *descriptor) {
 	return descriptor->name;
 }
 
+enum class ConfigTableTwinError {
+	none,
+	missing_admin_table,
+	mismatched_definition,
+};
+
+struct ConfigTableTwinValidation {
+	ConfigTableTwinError error { ConfigTableTwinError::none };
+	std::string table_name {};
+};
+
+ConfigTableTwinValidation validate_config_table_twins(
+	const std::vector<ProxySQL_PluginTableDef>& admin_tables,
+	const std::vector<ProxySQL_PluginTableDef>& config_tables,
+	size_t first_new_config_table
+) {
+	for (size_t i = first_new_config_table; i < config_tables.size(); ++i) {
+		const ProxySQL_PluginTableDef& config_def = config_tables[i];
+		const auto admin_twin = std::find_if(
+			admin_tables.begin(), admin_tables.end(),
+			[&](const ProxySQL_PluginTableDef& admin_def) {
+				return strcasecmp(admin_def.table_name, config_def.table_name) == 0;
+			});
+		if (admin_twin == admin_tables.end()) {
+			return {ConfigTableTwinError::missing_admin_table, config_def.table_name};
+		}
+		if (std::strcmp(admin_twin->table_def, config_def.table_def) != 0) {
+			return {ConfigTableTwinError::mismatched_definition, config_def.table_name};
+		}
+	}
+	return {};
+}
+
 void note_registration_failure(const char* kind, const char* name) {
 	g_registry_registration_failed = true;
 	if (!g_registry_registration_error.empty()) {
@@ -102,7 +140,22 @@ void note_registration_failure(const char* kind, const char* name) {
 
 void register_table_service(const ProxySQL_PluginTableDef& def) {
 	if (g_registry_target == nullptr) {
-		proxy_warning("Plugin table registration attempted outside init phase for %s\n",
+		proxy_warning("Plugin table registration attempted outside schema-registration phase for %s\n",
+			      def.table_name != nullptr ? def.table_name : "(null)");
+		return;
+	}
+	if (def.db_kind == ProxySQL_PluginDBKind::config_db &&
+	    !g_registry_accepts_config_table_registration) {
+		g_registry_registration_failed = true;
+		if (g_registry_registration_error.empty()) {
+			g_registry_registration_error =
+				"config_db table registration is only valid during register_schemas";
+			if (def.table_name != nullptr && *def.table_name != '\0') {
+				g_registry_registration_error += ": ";
+				g_registry_registration_error += def.table_name;
+			}
+		}
+		proxy_warning("Plugin config_db table registration during init rejected for %s; use register_schemas\n",
 			      def.table_name != nullptr ? def.table_name : "(null)");
 		return;
 	}
@@ -448,7 +501,7 @@ bool ProxySQL_PluginManager::invoke_register_schemas_phase(std::string &err) {
 		bool registration_failed;
 		std::string registration_error;
 		{
-			ScopedRegistryTarget target_guard(this);
+			ScopedRegistryTarget target_guard(this, true);
 			phase_b_ok = register_schemas_cb(&services_phase_b_);
 			registration_failed = g_registry_registration_failed;
 			registration_error = g_registry_registration_error;
@@ -473,6 +526,21 @@ bool ProxySQL_PluginManager::invoke_register_schemas_phase(std::string &err) {
 			if (!registration_error.empty()) {
 				err += ": " + registration_error;
 			}
+			return false;
+		}
+		// config_db tables are restored automatically with SELECT * into
+		// same-name tables in admin_db. Reject an orphan or a mismatched
+		// definition while registration is still transactional, instead of
+		// emitting invalid INSERT ... SELECT SQL during Admin bootstrap.
+		const ConfigTableTwinValidation twin_validation = validate_config_table_twins(
+			tables_admin_, tables_config_, snap_tables_config);
+		if (twin_validation.error != ConfigTableTwinError::none) {
+			rollback();
+			err = "plugin register_schemas failed: " + plugin_name(plugin.descriptor) +
+			      ": config_db table '" + twin_validation.table_name + "' requires ";
+			err += twin_validation.error == ConfigTableTwinError::missing_admin_table
+				? "a same-name admin_db table"
+				: "an identical admin_db table definition";
 			return false;
 		}
 		plugin.schemas_registered = true;
@@ -508,7 +576,7 @@ bool ProxySQL_PluginManager::init_all(std::string &err) {
 		bool registration_failed;
 		std::string registration_error;
 		{
-			ScopedRegistryTarget target_guard(this);
+			ScopedRegistryTarget target_guard(this, false);
 			init_ok = plugin.descriptor->init(&services_);
 			registration_failed = g_registry_registration_failed;
 			registration_error = g_registry_registration_error;
@@ -995,6 +1063,41 @@ void proxysql_refresh_configured_plugin_runtime_views(const std::string& sql,
 		return;
 	}
 	mgr->refresh_runtime_views_for_query(sql, admindb, configdb, statsdb);
+}
+
+void proxysql_restore_plugin_config_tables_from_disk(SQLite3DB* admindb,
+	const std::vector<ProxySQL_PluginTableDef>& config_tables)
+{
+	if (admindb == nullptr) {
+		return;
+	}
+	for (const auto& def : config_tables) {
+		if (def.table_name == nullptr || *def.table_name == '\0') {
+			continue;
+		}
+		// Every table registered for config_db is also registered for
+		// admin_db with the same definition -- that pairing is what makes it
+		// a persisted table rather than a runtime projection -- so SELECT *
+		// is column-compatible by construction. A plugin that registers a
+		// config_db table with no admin_db twin is a registration bug;
+		// execute() logs the SQLite error and returns false, and startup
+		// continues with that one table unrestored rather than aborting.
+		std::string q = "INSERT OR REPLACE INTO main.";
+		q += def.table_name;
+		q += " SELECT * FROM disk.";
+		q += def.table_name;
+		admindb->execute(q.c_str());
+	}
+}
+
+void proxysql_restore_configured_plugin_config_tables(SQLite3DB* admindb) {
+	std::shared_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
+	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load();
+	if (mgr == nullptr) {
+		return;
+	}
+	proxysql_restore_plugin_config_tables_from_disk(
+		admindb, mgr->tables(ProxySQL_PluginDBKind::config_db));
 }
 #endif /* PROXYSQL40 */
 

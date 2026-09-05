@@ -227,6 +227,50 @@ static void test_phase_b_partial_failure_rolls_back() {
 	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
 }
 
+// A config_db table participates in automatic disk-to-memory restore. It must
+// therefore have a same-name admin_db destination; reject an orphan at schema
+// registration time instead of issuing invalid SQL later during startup.
+static void test_phase_b_orphan_config_table_is_rejected() {
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_REGISTER_CONFIG_ONLY", "1", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
+	std::string err;
+	ok(!proxysql_load_configured_plugins(mgr, paths, err),
+	   "load rejects a config_db table without an admin_db twin");
+	ok(err.find("fake_plugin_orphan_config") != std::string::npos &&
+	   err.find("admin_db") != std::string::npos,
+	   "orphan config-table error identifies the table and missing admin_db twin (err='%s')",
+	   err.c_str());
+
+	unsetenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_REGISTER_CONFIG_ONLY");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
+}
+
+// Same-name tables are not sufficient: automatic SELECT * restoration also
+// requires identical column layouts. Reject incompatible twins before Admin
+// materializes either schema.
+static void test_phase_b_mismatched_config_table_is_rejected() {
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_REGISTER_MISMATCHED_TWINS", "1", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
+	std::string err;
+	ok(!proxysql_load_configured_plugins(mgr, paths, err),
+	   "load rejects same-name admin/config tables with incompatible definitions");
+	ok(err.find("fake_plugin_mismatched_twins") != std::string::npos &&
+	   err.find("identical") != std::string::npos,
+	   "mismatched-twin error identifies the table and definition contract (err='%s')",
+	   err.c_str());
+
+	unsetenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_REGISTER_MISMATCHED_TWINS");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
+}
+
 // Case 5: init() succeeds but start() fails.  stop() MUST still be
 // called for teardown symmetry — anything init() allocated would otherwise
 // leak.  This is the "init pairs with stop" contract.
@@ -279,7 +323,7 @@ static void test_bogus_abi_version_rejected() {
 }
 
 int main() {
-	plan(26);
+	plan(30);
 
 	make_log_path();
 
@@ -288,6 +332,8 @@ int main() {
 	test_phase_b_db_handles_are_null();
 	test_phase_b_failure_aborts_init();
 	test_phase_b_partial_failure_rolls_back();
+	test_phase_b_orphan_config_table_is_rejected();
+	test_phase_b_mismatched_config_table_is_rejected();
 	test_stop_runs_when_start_fails();
 	test_bogus_abi_version_rejected();
 
