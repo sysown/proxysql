@@ -288,10 +288,10 @@ ProxySQL_MCP_Server::~ProxySQL_MCP_Server() {
 	}
 }
 
-void ProxySQL_MCP_Server::start() {
+bool ProxySQL_MCP_Server::start() {
 	if (!ws) {
 		proxy_error("Cannot start MCP server: webserver not initialized\n");
-		return;
+		return false;
 	}
 
 	const char* mode = handler->variables.mcp_use_ssl ? "HTTPS" : "HTTP";
@@ -300,10 +300,11 @@ void ProxySQL_MCP_Server::start() {
 	// Start the server in a dedicated thread
 	if (pthread_create(&thread_id, NULL, mcp_server_thread, ws.get()) != 0) {
 		proxy_error("Failed to create MCP server thread: %s\n", strerror(errno));
-		return;
+		return false;
 	}
 
 	proxy_info("MCP %s server started successfully\n", mode);
+	return true;
 }
 
 void ProxySQL_MCP_Server::stop() {

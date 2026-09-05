@@ -54,8 +54,8 @@ struct MCP_Profile_Install_Stats {
 // Stable skip_reason values, also used verbatim in the runtime_mcp_target_
 // profiles.skip_reason column. Keep them short and machine-greppable: TAP
 // tests and operators match on them.
-#define MCP_SKIP_REASON_INACTIVE          "inactive"
-#define MCP_SKIP_REASON_NO_AUTH_PROFILE   "auth_profile_id not found"
+constexpr const char MCP_SKIP_REASON_INACTIVE[] = "inactive";
+constexpr const char MCP_SKIP_REASON_NO_AUTH_PROFILE[] = "auth_profile_id not found";
 
 /**
  * @brief MCP Threads Handler class for managing MCP module configuration

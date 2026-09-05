@@ -244,7 +244,8 @@ any_db, nullptr, nullptr);
 		diag(">>> plugin config_db tables are restored from disk into main");
 
 		SQLite3DB db;
-		db.open((char *)":memory:",
+		char in_memory_db[] = ":memory:";
+		db.open(in_memory_db,
 		        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 		ok(db.execute("ATTACH DATABASE ':memory:' AS disk"),
 		   "attached an in-memory `disk` database");

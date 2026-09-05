@@ -234,23 +234,33 @@ int main(int argc, char** argv) {
     mysql_free_result(result);
 
 #ifdef PROXYSQL40
-    // LOAD MCP VARIABLES FROM CONFIG must both stage the parsed value in main
-    // and apply it to the handler/runtime snapshot in the same command.
-    MYSQL_QUERY_T(admin, "SET mcp-timeout_ms=54321");
-    MYSQL_QUERY_T(admin, "LOAD MCP VARIABLES TO RUNTIME");
-    MYSQL_QUERY_T(admin, "LOAD MCP VARIABLES FROM CONFIG");
+    // PROXYSQL40 means the chassis supports plugins; it does not mean the
+    // GenAI plugin is loaded. Its MCP admin table is materialized in Phase B,
+    // alongside registration of the MCP commands exercised below.
+    const bool mcp_plugin_loaded = admin_query_int(admin,
+        "SELECT COUNT(*) FROM sqlite_master"
+        " WHERE type='table' AND name='mcp_query_rules'") == 1;
+    if (!mcp_plugin_loaded) {
+        skip(2, "GenAI plugin is not loaded");
+    } else {
+        // LOAD MCP VARIABLES FROM CONFIG must both stage the parsed value in main
+        // and apply it to the handler/runtime snapshot in the same command.
+        MYSQL_QUERY_T(admin, "SET mcp-timeout_ms=54321");
+        MYSQL_QUERY_T(admin, "LOAD MCP VARIABLES TO RUNTIME");
+        MYSQL_QUERY_T(admin, "LOAD MCP VARIABLES FROM CONFIG");
 
-    ok(admin_query_int(admin,
-        "SELECT COUNT(*) FROM global_variables"
-        " WHERE variable_name='mcp-timeout_ms' AND variable_value='12345'") == 1,
-       "LOAD MCP VARIABLES FROM CONFIG updates main.global_variables");
-    ok(admin_query_int(admin,
-        "SELECT COUNT(*) FROM runtime_global_variables"
-        " WHERE variable_name='mcp-timeout_ms' AND variable_value='12345'") == 1,
-       "LOAD MCP VARIABLES FROM CONFIG applies the parsed value to runtime");
+        ok(admin_query_int(admin,
+            "SELECT COUNT(*) FROM global_variables"
+            " WHERE variable_name='mcp-timeout_ms' AND variable_value='12345'") == 1,
+           "LOAD MCP VARIABLES FROM CONFIG updates main.global_variables");
+        ok(admin_query_int(admin,
+            "SELECT COUNT(*) FROM runtime_global_variables"
+            " WHERE variable_name='mcp-timeout_ms' AND variable_value='12345'") == 1,
+           "LOAD MCP VARIABLES FROM CONFIG applies the parsed value to runtime");
 
-    MYSQL_QUERY_T(admin, "LOAD MCP VARIABLES FROM DISK");
-    MYSQL_QUERY_T(admin, "LOAD MCP VARIABLES TO RUNTIME");
+        MYSQL_QUERY_T(admin, "LOAD MCP VARIABLES FROM DISK");
+        MYSQL_QUERY_T(admin, "LOAD MCP VARIABLES TO RUNTIME");
+    }
 #endif
 
     unlink(config_file.c_str());

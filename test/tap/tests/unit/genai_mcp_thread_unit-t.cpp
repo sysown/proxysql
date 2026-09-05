@@ -463,14 +463,14 @@ static void test_wrlock_wrunlock(MCP_Threads_Handler& h) {
  */
 static void test_empty_query_rules_clear_runtime() {
 	Discovery_Schema catalog(":memory:");
-	auto* rules = new SQLite3_result(18);
+	auto rules = std::make_unique<SQLite3_result>(18);
 	const char* blocking_rule[] = {
 		"7001", "1", nullptr, nullptr, nullptr, "run_sql_readonly",
 		"BLOCKME", "0", "CASELESS", "0", nullptr, nullptr, nullptr,
 		"blocked by rule 7001", nullptr, nullptr, "1", "unit test"
 	};
 	rules->add_row(blocking_rule);
-	catalog.load_mcp_query_rules(rules);
+	catalog.load_mcp_query_rules(rules.release());
 
 	std::unique_ptr<MCP_Query_Processor_Output> before_clear(
 		catalog.evaluate_mcp_query_rules(
@@ -480,7 +480,8 @@ static void test_empty_query_rules_clear_runtime() {
 	   std::string(before_clear->error_msg) == "blocked by rule 7001",
 	   "loaded MCP query rule is active before an empty reload");
 
-	catalog.load_mcp_query_rules(new SQLite3_result(18));
+	auto empty_rules = std::make_unique<SQLite3_result>(18);
+	catalog.load_mcp_query_rules(empty_rules.release());
 	std::unique_ptr<MCP_Query_Processor_Output> after_clear(
 		catalog.evaluate_mcp_query_rules(
 			"run_sql_readonly", "", "", "", nlohmann::json::object(),

@@ -91,6 +91,39 @@ std::string plugin_name(const ProxySQL_PluginDescriptor *descriptor) {
 	return descriptor->name;
 }
 
+enum class ConfigTableTwinError {
+	none,
+	missing_admin_table,
+	mismatched_definition,
+};
+
+struct ConfigTableTwinValidation {
+	ConfigTableTwinError error { ConfigTableTwinError::none };
+	std::string table_name {};
+};
+
+ConfigTableTwinValidation validate_config_table_twins(
+	const std::vector<ProxySQL_PluginTableDef>& admin_tables,
+	const std::vector<ProxySQL_PluginTableDef>& config_tables,
+	size_t first_new_config_table
+) {
+	for (size_t i = first_new_config_table; i < config_tables.size(); ++i) {
+		const ProxySQL_PluginTableDef& config_def = config_tables[i];
+		const auto admin_twin = std::find_if(
+			admin_tables.begin(), admin_tables.end(),
+			[&](const ProxySQL_PluginTableDef& admin_def) {
+				return strcasecmp(admin_def.table_name, config_def.table_name) == 0;
+			});
+		if (admin_twin == admin_tables.end()) {
+			return {ConfigTableTwinError::missing_admin_table, config_def.table_name};
+		}
+		if (std::strcmp(admin_twin->table_def, config_def.table_def) != 0) {
+			return {ConfigTableTwinError::mismatched_definition, config_def.table_name};
+		}
+	}
+	return {};
+}
+
 void note_registration_failure(const char* kind, const char* name) {
 	g_registry_registration_failed = true;
 	if (!g_registry_registration_error.empty()) {
@@ -499,29 +532,16 @@ bool ProxySQL_PluginManager::invoke_register_schemas_phase(std::string &err) {
 		// same-name tables in admin_db. Reject an orphan or a mismatched
 		// definition while registration is still transactional, instead of
 		// emitting invalid INSERT ... SELECT SQL during Admin bootstrap.
-		for (size_t i = snap_tables_config; i < tables_config_.size(); ++i) {
-			const ProxySQL_PluginTableDef& config_def = tables_config_[i];
-			const auto admin_twin = std::find_if(
-				tables_admin_.begin(), tables_admin_.end(),
-				[&](const ProxySQL_PluginTableDef& admin_def) {
-					return strcasecmp(admin_def.table_name, config_def.table_name) == 0;
-				});
-			if (admin_twin == tables_admin_.end()) {
-				const std::string orphan_name = config_def.table_name;
-				rollback();
-				err = "plugin register_schemas failed: " + plugin_name(plugin.descriptor) +
-				      ": config_db table '" + orphan_name +
-				      "' requires a same-name admin_db table";
-				return false;
-			}
-			if (std::strcmp(admin_twin->table_def, config_def.table_def) != 0) {
-				const std::string mismatched_name = config_def.table_name;
-				rollback();
-				err = "plugin register_schemas failed: " + plugin_name(plugin.descriptor) +
-				      ": config_db table '" + mismatched_name +
-				      "' requires an identical admin_db table definition";
-				return false;
-			}
+		const ConfigTableTwinValidation twin_validation = validate_config_table_twins(
+			tables_admin_, tables_config_, snap_tables_config);
+		if (twin_validation.error != ConfigTableTwinError::none) {
+			rollback();
+			err = "plugin register_schemas failed: " + plugin_name(plugin.descriptor) +
+			      ": config_db table '" + twin_validation.table_name + "' requires ";
+			err += twin_validation.error == ConfigTableTwinError::missing_admin_table
+				? "a same-name admin_db table"
+				: "an identical admin_db table definition";
+			return false;
 		}
 		plugin.schemas_registered = true;
 	}

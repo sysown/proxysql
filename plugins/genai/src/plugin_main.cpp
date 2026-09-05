@@ -947,23 +947,30 @@ void mcp_start_listener_if_enabled(GenAIPluginContext& ctx) {
 		return;
 	}
 
-	ctx.mcp->mcp_server = new ProxySQL_MCP_Server(port, ctx.mcp);
-	if (ctx.mcp->mcp_server != nullptr) {
-		// The constructor creates Query_Tool_Handler and its Discovery_Schema.
-		// Populate that catalog before start() exposes the HTTP listener. This
-		// path is also used when mcp-enabled changes from false to true later.
-		if (!mcp_load_query_rules_to_runtime(ctx)) {
-			delete ctx.mcp->mcp_server;
-			ctx.mcp->mcp_server = nullptr;
-			genai_log(6, "genai plugin: failed to load MCP query rules; listener not started\n");
-			return;
-		}
-		ctx.mcp->mcp_server->start();
-		genai_log(6, "genai plugin: MCP listener started on port %d (ssl=%s)\n",
-		        port, use_ssl ? "true" : "false");
-	} else {
-		genai_log(6, "genai plugin: failed to allocate ProxySQL_MCP_Server\n");
+	auto server = std::make_unique<ProxySQL_MCP_Server>(port, ctx.mcp);
+	ctx.mcp->mcp_server = server.get();
+	// The constructor creates Query_Tool_Handler and its Discovery_Schema.
+	// Populate that catalog before start() exposes the HTTP listener. This
+	// path is also used when mcp-enabled changes from false to true later.
+	bool rules_loaded = false;
+	try {
+		rules_loaded = mcp_load_query_rules_to_runtime(ctx);
+	} catch (...) {
+		ctx.mcp->mcp_server = nullptr;
+		throw;
 	}
+	ctx.mcp->mcp_server = nullptr;
+	if (!rules_loaded) {
+		genai_log(6, "genai plugin: failed to load MCP query rules; listener not started\n");
+		return;
+	}
+	if (!server->start()) {
+		genai_log(6, "genai plugin: failed to start MCP listener on port %d\n", port);
+		return;
+	}
+	ctx.mcp->mcp_server = server.release();
+	genai_log(6, "genai plugin: MCP listener started on port %d (ssl=%s)\n",
+	        port, use_ssl ? "true" : "false");
 }
 
 /**
