@@ -286,39 +286,67 @@ GENAI_PLUGIN_HOST_OWNED_LIBS = $(EXECUTABLE_EXPORT_FLAGS) \
 # Compiler flags
 # ===========================================================================
 
+# Keep direct unit-test builds aligned with the top-level feature hierarchy.
+# This matters when the archive does not exist yet: symbol probing cannot
+# discover features that the recursive lib build has not produced.
+ifeq ($(PROXYSQL40),1)
+	PROXYSQL31 := 1
+endif
+ifeq ($(PROXYSQL31),1)
+	PROXYSQLFFTO := 1
+	PROXYSQLTSDB := 1
+	PROXYSQLED25519 := 1
+endif
+
 # Auto-detect feature flags from libproxysql.a symbols.
 # This ensures unit tests compile with the same flags the library was built with,
 # regardless of whether the environment variables are set during `make`.
-PSQLCH :=
-ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c ClickHouse_Server),0)
-	PROXYSQLCLICKHOUSE := 1
-	PSQLCH := -DPROXYSQLCLICKHOUSE
-endif
+# The archive freshness rule below always requests the default ClickHouse
+# build. Define the same mode before compiling test globals, including when a
+# clean tree has no archive available for symbol probing yet.
+PROXYSQLCLICKHOUSE := 1
+PSQLCH := -DPROXYSQLCLICKHOUSE
 PSQLGA :=
 PSQLFFTO :=
+ifeq ($(PROXYSQLFFTO),1)
+	PSQLFFTO := -DPROXYSQLFFTO
+else
 ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c MySQLFFTO),0)
 	PROXYSQLFFTO := 1
 	PSQLFFTO := -DPROXYSQLFFTO
+endif
 endif
 
 # PROXYSQL40 — detected via a chassis-exclusive symbol that only exists
 # when libproxysql.a was built with -DPROXYSQL40 (the four-phase plugin
 # lifecycle). `invoke_register_schemas_phase` is the canonical probe.
 PSQL40 :=
+ifeq ($(PROXYSQL40),1)
+	PSQL40 := -DPROXYSQL40
+else
 ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c invoke_register_schemas_phase),0)
 	PROXYSQL40 := 1
 	PSQL40 := -DPROXYSQL40
 endif
+endif
 PSQLTSDB :=
+ifeq ($(PROXYSQLTSDB),1)
+	PSQLTSDB := -DPROXYSQLTSDB
+else
 ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c init_tsdb_variables),0)
 	PROXYSQLTSDB := 1
 	PSQLTSDB := -DPROXYSQLTSDB
 endif
+endif
 
 PSQLED25519 :=
+ifeq ($(PROXYSQLED25519),1)
+	PSQLED25519 := -DPROXYSQLED25519
+else
 ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c proxysql_ed25519_verify_signature),0)
 	PROXYSQLED25519 := 1
 	PSQLED25519 := -DPROXYSQLED25519
+endif
 endif
 
 # PROXYSQL31 changes shared class layouts, so detect a symbol emitted only by
@@ -377,7 +405,10 @@ endif
 TEST_HELPERS_DIR := $(PROXYSQL_PATH)/test/tap/test_helpers
 FAKE_PLUGIN_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin.so
 FAKE_PLUGIN2_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin2.so
+ROUTER_CONTRACT_FAKE_SO := $(TEST_HELPERS_DIR)/proxysql_router_contract_fake.so
+PROXYSQL_BINARY := $(PROXYSQL_PATH)/src/proxysql
 MYSQLX_PLUGIN_SO := $(PROXYSQL_PATH)/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
+MYSQL_ROUTER_PLUGIN_SO := $(PROXYSQL_PATH)/plugins/mysql_router/proxysql_mysql_router.so
 MYSQLX_PLUGIN_OPTZ := -O0 -ggdb $(filter -DDEBUG,$(OPT))
 ODIR := obj
 PROXYSQL_TEST_HEADERS := $(wildcard $(PROXYSQL_PATH)/include/*.h) $(wildcard $(PROXYSQL_PATH)/include/*.hpp)
@@ -412,12 +443,25 @@ mysqlx_plugin_build:
 		PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) \
 		PROXYSQLTSDB=$(PROXYSQLTSDB)
 
+.PHONY: mysql_router_plugin_build
+mysql_router_plugin_build:
+	$(MAKE) -C $(PROXYSQL_PATH)/plugins/mysql_router all \
+		CC=$(CC) CXX=$(CXX) OPTZ="$(MYSQLX_PLUGIN_OPTZ)" \
+		WGCOV="$(WGCOV)" WASAN="$(WASAN)" \
+		PROXYSQL40=$(PROXYSQL40) \
+		PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) \
+		PROXYSQLTSDB=$(PROXYSQLTSDB)
+
 # Same source compiled with different macros to produce a second plugin .so
 # with a distinct plugin name and env-var prefix.  Used by multi-plugin tests.
 $(FAKE_PLUGIN2_SO): $(TEST_HELPERS_DIR)/fake_plugin.cpp $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h | $(TEST_HELPERS_DIR)
 	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(IDIRS) -ldl \
 		-DFAKE_PLUGIN_NAME=\"fake_plugin2\" \
 		-DFAKE_PLUGIN_ENV_PREFIX=\"PROXYSQL_FAKE_PLUGIN2_\"
+
+$(ROUTER_CONTRACT_FAKE_SO): plugin_router_chassis_contract_unit-t.cpp $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h | $(TEST_HELPERS_DIR)
+	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(IDIRS) \
+		-DPROXYSQL_ROUTER_CONTRACT_FAKE
 
 # Keep on-demand unit-test library rebuilds aligned with the default top-level
 # feature set so incremental rebuilds do not mix incompatible objects.
@@ -433,6 +477,13 @@ $(LIBPROXYSQLAR): FORCE
 		PROXYSQLED25519=$(PROXYSQLED25519) \
 		PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) \
 		$(LIB_OPTZ_ARG) CC=$(CC) CXX=$(CXX)
+
+$(PROXYSQL_BINARY): $(LIBPROXYSQLAR)
+	$(MAKE) -C $(PROXYSQL_PATH)/src proxysql \
+		PROXYSQL40=$(PROXYSQL40) PROXYSQLCLICKHOUSE=$(PROXYSQLCLICKHOUSE) \
+		PROXYSQL31=$(PROXYSQL31) \
+		PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) \
+		PROXYSQLED25519=$(PROXYSQLED25519) CC=$(CC) CXX=$(CXX)
 
 
 # ===========================================================================
@@ -521,11 +572,27 @@ UNIT_TESTS += \
 	plugin_config_unit-t \
 	plugin_dispatch_unit-t \
 	plugin_manager_unit-t \
+	plugin_secrets_unit-t \
 	plugin_registry_unit-t \
 	plugin_query_hook_unit-t \
 	plugin_prometheus_unit-t \
 	plugin_lifecycle_unit-t \
+	plugin_cli_unit-t \
 	plugin_runtime_views_unit-t \
+	plugin_listener_gate_unit-t \
+	plugin_mysql_config_unit-t \
+	plugin_router_chassis_contract_unit-t \
+	mysql_router_plugin_load_unit-t \
+	mysql_router_admin_schema_unit-t \
+	mysql_router_bootstrap_options_unit-t \
+	mysql_router_metadata_v2_2_unit-t \
+	mysql_router_gr_health_unit-t \
+	mysql_router_registration_unit-t \
+	mysql_router_bootstrap_unit-t \
+	mysql_router_hostgroup_allocator_unit-t \
+	mysql_router_config_compiler_unit-t \
+	mysql_router_user_sync_unit-t \
+	mysql_router_reconciler_unit-t \
 	test_mysqlx_plugin_load-t \
 	test_mysqlx_admin_tables-t \
 	mysqlx_config_store_unit-t \
@@ -621,6 +688,11 @@ plugin_manager_unit-t: plugin_manager_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
+plugin_secrets_unit-t: plugin_secrets_unit-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		$(IDIRS) -I$(PROXYSQL_PATH)/lib $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
 plugin_config_unit-t: plugin_config_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
@@ -639,6 +711,109 @@ plugin_runtime_views_unit-t: plugin_runtime_views_unit-t.cpp $(ODIR)/tap.o $(ODI
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+plugin_listener_gate_unit-t: plugin_listener_gate_unit-t.cpp $(PROXYSQL_PATH)/lib/ProxySQL_PluginListenerGate.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+	$(CXX) $< $(PROXYSQL_PATH)/lib/ProxySQL_PluginListenerGate.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@
+
+plugin_mysql_config_unit-t: plugin_mysql_config_unit-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		$(IDIRS) -I$(PROXYSQL_PATH)/lib $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@
+
+plugin_router_chassis_contract_unit-t: plugin_router_chassis_contract_unit-t.cpp $(ROUTER_CONTRACT_FAKE_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-DPROXYSQL_ROUTER_CONTRACT_FAKE_PATH=\"$(ROUTER_CONTRACT_FAKE_SO)\" \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@
+
+mysql_router_plugin_load_unit-t: mysql_router_plugin_load_unit-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) mysql_router_plugin_build
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-DPROXYSQL_MYSQL_ROUTER_PLUGIN_PATH=\"$(MYSQL_ROUTER_PLUGIN_SO)\" \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@
+
+mysql_router_admin_schema_unit-t: mysql_router_admin_schema_unit-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) mysql_router_plugin_build
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-DPROXYSQL_MYSQL_ROUTER_PLUGIN_PATH=\"$(MYSQL_ROUTER_PLUGIN_SO)\" \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@
+
+mysql_router_bootstrap_options_unit-t: mysql_router_bootstrap_options_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysql_router/src/bootstrap_options.cpp $(PROXYSQL_PATH)/plugins/mysql_router/src/config_store.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysql_router/src/bootstrap_options.cpp \
+		$(PROXYSQL_PATH)/plugins/mysql_router/src/config_store.cpp \
+		$(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-I$(PROXYSQL_PATH)/plugins/mysql_router/include \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@
+
+MYSQL_ROUTER_METADATA_SRCS := \
+	$(PROXYSQL_PATH)/plugins/mysql_router/src/metadata_client.cpp \
+	$(PROXYSQL_PATH)/plugins/mysql_router/src/metadata_v2_2.cpp \
+	$(PROXYSQL_PATH)/plugins/mysql_router/src/gr_health.cpp
+
+mysql_router_metadata_v2_2_unit-t: mysql_router_metadata_v2_2_unit-t.cpp $(MYSQL_ROUTER_METADATA_SRCS) $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(MYSQL_ROUTER_METADATA_SRCS) $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(PROXYSQL_PATH)/plugins/mysql_router/include $(IDIRS) $(OPT) -lpthread -o $@
+
+mysql_router_gr_health_unit-t: mysql_router_gr_health_unit-t.cpp $(MYSQL_ROUTER_METADATA_SRCS) $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(MYSQL_ROUTER_METADATA_SRCS) $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(PROXYSQL_PATH)/plugins/mysql_router/include $(IDIRS) $(OPT) -lpthread -o $@
+
+mysql_router_registration_unit-t: mysql_router_registration_unit-t.cpp \
+		$(PROXYSQL_PATH)/plugins/mysql_router/src/router_registration.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysql_router/src/router_registration.cpp \
+		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(PROXYSQL_PATH)/plugins/mysql_router/include $(IDIRS) $(OPT) -lpthread -o $@
+
+mysql_router_bootstrap_unit-t: mysql_router_bootstrap_unit-t.cpp \
+		$(PROXYSQL_PATH)/plugins/mysql_router/src/bootstrap.cpp \
+		$(PROXYSQL_PATH)/plugins/mysql_router/src/config_compiler.cpp \
+		$(PROXYSQL_PATH)/plugins/mysql_router/src/gr_health.cpp \
+		$(PROXYSQL_PATH)/plugins/mysql_router/src/hostgroup_allocator.cpp \
+		$(PROXYSQL_PATH)/plugins/mysql_router/src/user_sync.cpp \
+		$(PROXYSQL_PATH)/plugins/mysql_router/src/router_registration.cpp \
+		$(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysql_router/src/bootstrap.cpp \
+		$(PROXYSQL_PATH)/plugins/mysql_router/src/config_compiler.cpp \
+		$(PROXYSQL_PATH)/plugins/mysql_router/src/gr_health.cpp \
+		$(PROXYSQL_PATH)/plugins/mysql_router/src/hostgroup_allocator.cpp \
+		$(PROXYSQL_PATH)/plugins/mysql_router/src/user_sync.cpp \
+		$(PROXYSQL_PATH)/plugins/mysql_router/src/router_registration.cpp \
+		$(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-DMYSQL_ROUTER_CONNECTOR_C -I$(PROXYSQL_PATH)/plugins/mysql_router/include \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lcrypto -lpthread -o $@
+
+mysql_router_hostgroup_allocator_unit-t: mysql_router_hostgroup_allocator_unit-t.cpp \
+		$(PROXYSQL_PATH)/plugins/mysql_router/src/hostgroup_allocator.cpp \
+		$(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysql_router/src/hostgroup_allocator.cpp \
+		$(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-I$(PROXYSQL_PATH)/plugins/mysql_router/include $(IDIRS) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@
+
+mysql_router_config_compiler_unit-t: mysql_router_config_compiler_unit-t.cpp \
+		$(PROXYSQL_PATH)/plugins/mysql_router/src/config_compiler.cpp \
+		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysql_router/src/config_compiler.cpp \
+		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(PROXYSQL_PATH)/plugins/mysql_router/include $(IDIRS) $(OPT) -lpthread -o $@
+
+mysql_router_user_sync_unit-t: mysql_router_user_sync_unit-t.cpp \
+		$(PROXYSQL_PATH)/plugins/mysql_router/src/user_sync.cpp \
+		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysql_router/src/user_sync.cpp \
+		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(PROXYSQL_PATH)/plugins/mysql_router/include $(IDIRS) $(OPT) -lcrypto -lpthread -o $@
+
+mysql_router_reconciler_unit-t: mysql_router_reconciler_unit-t.cpp \
+		$(PROXYSQL_PATH)/plugins/mysql_router/src/reconciler.cpp \
+		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysql_router/src/reconciler.cpp \
+		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(PROXYSQL_PATH)/plugins/mysql_router/include $(IDIRS) $(OPT) -lpthread -o $@
 
 test_mysqlx_plugin_load-t: ../test_mysqlx_plugin_load-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) mysqlx_plugin_build
 	$(CXX) ../test_mysqlx_plugin_load-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
@@ -818,9 +993,17 @@ plugin_prometheus_unit-t: plugin_prometheus_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
-plugin_lifecycle_unit-t: plugin_lifecycle_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+plugin_lifecycle_unit-t: plugin_lifecycle_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
+		-DPROXYSQL_FAKE_PLUGIN2_PATH=\"$(FAKE_PLUGIN2_SO)\" \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+plugin_cli_unit-t: plugin_cli_unit-t.cpp $(FAKE_PLUGIN_SO) $(PROXYSQL_BINARY) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
+		-DPROXYSQL_BINARY_PATH=\"$(PROXYSQL_BINARY)\" \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
@@ -916,4 +1099,4 @@ vendored_openssl_version_unit-t: private OPT += -DPROXYSQL_VENDORED_OPENSSL_VERS
 .SILENT: clean
 clean:
 	rm -rf $(ODIR)
-	rm -f *-t $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO)
+	rm -f *-t $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(ROUTER_CONTRACT_FAKE_SO)

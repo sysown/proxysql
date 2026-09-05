@@ -38,6 +38,9 @@ The function's return value is a pointer to a static `ProxySQL_PluginDescriptor`
 | `stop` | function pointer | NULL allowed | shutdown |
 | `status_json` | function pointer | NULL allowed | when `SHOW PLUGIN STATUS` is implemented (not yet) |
 | `register_schemas` | function pointer | NULL allowed | Phase B, **only when `abi_version >= 2`** |
+| `register_cli_options` | function pointer | NULL allowed | discovery, **only when `abi_version >= 6`** |
+| `early_action` | function pointer | NULL allowed | after Admin materialization, **only when `abi_version >= 6`** |
+| `runtime_ready` | function pointer | NULL allowed | immediately before listener validation, **only when `abi_version >= 8`** |
 
 **Rules:**
 
@@ -59,8 +62,8 @@ The chassis (`lib/ProxySQL_PluginManager.cpp:324–383`) enforces:
 ### Current ABI version
 
 ```c
-#define PROXYSQL_PLUGIN_ABI_VERSION       5
-#define PROXYSQL_PLUGIN_ABI_VERSION_MAX   5
+#define PROXYSQL_PLUGIN_ABI_VERSION       9
+#define PROXYSQL_PLUGIN_ABI_VERSION_MAX   9
 ```
 
 ABI evolution so far:
@@ -73,6 +76,18 @@ ABI evolution so far:
   consumer may release the mutex during that wait and reacquire it before
   returning. ABI-4 plugins see the unchanged `{admindb, configdb, statsdb}`
   prefix and continue to load without using the new callbacks.
+- **ABI 5 → ABI 6:** appends descriptor callbacks for CLI registration and a
+  one-shot early action. The early action receives the definitive parsed option
+  context after Admin is live.
+- **ABI 6 → ABI 7:** appends encrypted put/get/erase secret callbacks to the
+  services table. Phase B exposes rejecting stubs; later phases use the
+  core-owned encrypted config store.
+- **ABI 7 → ABI 8:** appends `runtime_ready` to the descriptor and listener-gate
+  plus scoped MySQL configuration services to the services table. The ABI-8
+  MySQL rule row, base plan, and `apply_mysql_config` callback are frozen.
+- **ABI 8 → ABI 9:** appends `apply_mysql_config_v2` to the services table. Its
+  V2 plan wraps the unchanged ABI-8 plan and carries query-rule attributes in a
+  separate rule-ID-indexed array.
 
 Future ABI versions append fields. The chassis bumps `PROXYSQL_PLUGIN_ABI_VERSION_MAX` and gates each new field's read on `abi_version >= N`.
 
@@ -98,6 +113,10 @@ The services struct is the **same shape** in every phase, but some function poin
 | `register_query_hook` | **returns false (warn)** | live | n/a | n/a |
 | `get_prometheus_registry` | live | live | live | live |
 | `register_runtime_view` (ABI 3+) | live | live | n/a | n/a |
+| encrypted secret callbacks (ABI 7+) | rejecting stubs | live | live | live |
+| `set_listener_gate` (ABI 8+) | rejecting stub | live | live | live |
+| `apply_mysql_config` (ABI 8+) | rejecting stub | live | live | live |
+| `apply_mysql_config_v2` (ABI 9+) | rejecting stub | live | live | live |
 
 Reasons:
 
@@ -111,6 +130,27 @@ Reasons:
 The services struct is **tail-extensible**. The chassis fills the struct in declaration order and the plugin reads what it knows about. A plugin compiled against ABI 2 still loads on the current chassis: its compiled-against `ProxySQL_PluginServices` ends at `register_command_alias` and the chassis simply doesn't dereference the trailing `register_runtime_view` for that plugin. Same rule applies for any future ABI-N additions.
 
 The reverse — a future plugin trying to call a field that doesn't exist on the current chassis — would crash. The chassis prevents this by rejecting plugins whose `abi_version > PROXYSQL_PLUGIN_ABI_VERSION_MAX`.
+
+### ABI-9 scoped MySQL publication
+
+`ProxySQL_PluginMysqlConfigPlanV2` embeds a complete, byte-for-byte unchanged
+`ProxySQL_PluginMysqlConfigPlan` and adds an array of
+`ProxySQL_PluginMysqlRuleAttributesRow { rule_id, attributes }`. Every rule ID
+must identify exactly one rule in the base plan. Duplicate or unknown IDs, null
+values, and attributes that are not valid JSON objects are rejected before any
+publication lock is acquired.
+
+The plan and every pointed-to string are borrowed only for the synchronous
+callback. Core deep-copies and validates them before locking. Successful
+publication applies the base rows and attributes as one generation to Admin
+memory, config disk, and live MySQL runtime. Any staging, commit, or runtime
+failure restores the previous complete runtime and storage state. Operator
+objects outside the caller's ownership ledger are preserved.
+
+ABI-8 plugins continue to call `apply_mysql_config`; their rule attributes are
+empty and their compiled row stride is unchanged. An ABI-9 plugin that requires
+attributes must check `apply_mysql_config_v2` and fail closed when it is absent;
+it must not silently fall back to V1.
 
 ---
 
@@ -257,7 +297,7 @@ static bool my_stop(const ProxySQL_PluginServices* services) {
 
 static const ProxySQL_PluginDescriptor descriptor = {
     "my_plugin",                          // name
-    PROXYSQL_PLUGIN_ABI_VERSION,          // abi_version (= 5)
+    PROXYSQL_PLUGIN_ABI_VERSION,          // abi_version (= 9)
     my_init,                              // init   (Phase D)
     my_start,                             // start  (Phase E)
     my_stop,                              // stop

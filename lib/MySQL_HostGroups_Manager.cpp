@@ -1321,7 +1321,8 @@ bool MySQL_HostGroups_Manager::commit(
 	const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers,
 	const peer_mysql_servers_v2_t& peer_mysql_servers_v2,
 	bool only_commit_runtime_mysql_servers,
-	bool update_version
+	bool update_version,
+	bool acquire_lock
 ) {
 	// if only_commit_runtime_mysql_servers is true, mysql_servers_v2 resultset will not be entertained and will cause memory leak.
 	if (only_commit_runtime_mysql_servers) {
@@ -1331,7 +1332,7 @@ bool MySQL_HostGroups_Manager::commit(
 	}
 
 	unsigned long long curtime1=monotonic_time();
-	wrlock();
+	if (acquire_lock) wrlock();
 	// purge table
 	purge_mysql_servers_table();
 	// if any server has gtid_port enabled, use_gtid is set to true
@@ -1641,6 +1642,7 @@ bool MySQL_HostGroups_Manager::commit(
 	read_only_set2.erase(read_only_set2.begin(), read_only_set2.end());
 
 	this->status.p_counter_array[p_hg_counter::servers_table_version]->Increment();
+	pthread_mutex_lock(&status.servers_table_version_lock);
 	pthread_cond_broadcast(&status.servers_table_version_cond);
 	pthread_mutex_unlock(&status.servers_table_version_lock);
 
@@ -1650,7 +1652,7 @@ bool MySQL_HostGroups_Manager::commit(
 	// Refresh BGD monitoring after all runtime server changes are applied.
 	update_aws_rds_bgd_hosts_monitor_resultset();
 
-	wrunlock();
+	if (acquire_lock) wrunlock();
 	unsigned long long curtime2=monotonic_time();
 	curtime1 = curtime1/1000;
 	curtime2 = curtime2/1000;

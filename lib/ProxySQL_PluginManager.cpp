@@ -5,6 +5,8 @@
 #ifdef PROXYSQL40
 
 #include "ProxySQL_PluginManager.h"
+#include "ProxySQL_PluginSecrets.h"
+#include "ProxySQL_PluginListenerGate.h"
 
 #include <atomic>
 #include <cassert>
@@ -15,6 +17,8 @@
 #include <shared_mutex>
 #include <strings.h>
 
+#include <openssl/crypto.h>
+
 #include "proxysql.h"
 #include "proxysql_glovars.hpp"
 #include "prometheus/registry.h"
@@ -24,10 +28,26 @@ extern ProxySQL_GlobalVariables GloVars;
 SQLite3DB* proxysql_plugin_get_admindb();
 SQLite3DB* proxysql_plugin_get_configdb();
 SQLite3DB* proxysql_plugin_get_statsdb();
+SQLite3_result* proxysql_plugin_get_mysql_users_snapshot();
+SQLite3_result* proxysql_plugin_get_mysql_servers_snapshot();
+SQLite3_result* proxysql_plugin_get_mysql_group_replication_hostgroups_snapshot();
+ProxySQL_PluginMysqlConfigResult proxysql_plugin_apply_mysql_config(
+	const ProxySQL_PluginMysqlConfigPlan&);
+ProxySQL_PluginMysqlConfigResult proxysql_plugin_apply_mysql_config_v2(
+	const ProxySQL_PluginMysqlConfigPlanV2&);
 
 namespace {
 
 std::atomic<ProxySQL_PluginManager*> g_active_plugin_manager { nullptr };
+// The manager must be published before init() so plugins can register through
+// the service table, but readers must not observe command/query-hook state
+// while init_all()/start_all() are still mutating it.  Release this gate only
+// after every configured plugin has started successfully.
+std::atomic<bool> g_active_plugin_manager_ready { false };
+#ifdef PROXYSQL40
+std::atomic<bool> g_active_mysql_query_hook { false };
+std::atomic<bool> g_active_pgsql_query_hook { false };
+#endif
 ProxySQL_PluginManager* g_registry_target = nullptr;
 // Guards swaps of g_active_plugin_manager. Readers (dispatch_admin_command,
 // dispatch_query_hook, resolve_alias_to_canonical) take a shared lock, so
@@ -49,7 +69,7 @@ std::string g_registry_registration_error {};
 // RAII guard that sets g_registry_target to `mgr` on construction and
 // clears it on destruction.  Also resets the registration-failure sticky
 // bits. Used to bracket each plugin callback invocation during Phase B
-// (register_schemas) and Phase D (init) so an exception thrown from the
+// (register_schemas) and Phase E (init) so an exception thrown from the
 // plugin can't leave the registry globals dirty and break the next
 // phase's `assert(g_registry_target == nullptr)`.
 struct ScopedRegistryTarget {
@@ -233,6 +253,62 @@ void log_message_service(int level, const char* message) {
 	}
 }
 
+ProxySQL_PluginSecretResult secret_not_available(const char*, const char*, const uint8_t*, size_t) {
+	return ProxySQL_PluginSecretResult::not_available;
+}
+
+ProxySQL_PluginSecretResult secret_get_not_available(const char*, const char*, std::vector<uint8_t>& plaintext) {
+	if (!plaintext.empty()) {
+		OPENSSL_cleanse(plaintext.data(), plaintext.size());
+		plaintext.clear();
+	}
+	return ProxySQL_PluginSecretResult::not_available;
+}
+
+ProxySQL_PluginSecretResult secret_erase_not_available(const char*, const char*) {
+	return ProxySQL_PluginSecretResult::not_available;
+}
+
+ProxySQL_PluginSecretResult put_secret_service(const char* owner, const char* name,
+	const uint8_t* bytes, size_t length) {
+	SQLite3DB* db = proxysql_plugin_get_configdb();
+	if (db == nullptr || GloVars.datadir == nullptr || GloVars.datadir[0] == '\0') return ProxySQL_PluginSecretResult::not_available;
+	ProxySQL_PluginSecrets store(db, GloVars.datadir);
+	return store.put(owner, name, bytes, length);
+}
+
+ProxySQL_PluginSecretResult get_secret_service(const char* owner, const char* name, std::vector<uint8_t>& plaintext) {
+	SQLite3DB* db = proxysql_plugin_get_configdb();
+	if (db == nullptr || GloVars.datadir == nullptr || GloVars.datadir[0] == '\0') return secret_get_not_available(owner, name, plaintext);
+	ProxySQL_PluginSecrets store(db, GloVars.datadir);
+	return store.get(owner, name, plaintext);
+}
+
+ProxySQL_PluginSecretResult erase_secret_service(const char* owner, const char* name) {
+	SQLite3DB* db = proxysql_plugin_get_configdb();
+	if (db == nullptr || GloVars.datadir == nullptr || GloVars.datadir[0] == '\0') return ProxySQL_PluginSecretResult::not_available;
+	ProxySQL_PluginSecrets store(db, GloVars.datadir);
+	return store.erase(owner, name);
+}
+
+bool set_listener_gate_service(const ProxySQL_PluginListenerGate& gate) {
+	return proxysql_plugin_set_listener_gate(gate);
+}
+
+bool set_listener_gate_not_available(const ProxySQL_PluginListenerGate&) {
+	return false;
+}
+
+ProxySQL_PluginMysqlConfigResult apply_mysql_config_not_available(
+	const ProxySQL_PluginMysqlConfigPlan&) {
+	return { false, 0, "MySQL configuration publication is not available", {} };
+}
+
+ProxySQL_PluginMysqlConfigResult apply_mysql_config_v2_not_available(
+	const ProxySQL_PluginMysqlConfigPlanV2&) {
+	return { false, 0, "MySQL configuration publication is not available", {} };
+}
+
 bool sql_equals_ci(const std::string& lhs, const std::string& rhs) {
 	return strcasecmp(lhs.c_str(), rhs.c_str()) == 0;
 }
@@ -290,9 +366,10 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	std::memset(&services_, 0, sizeof(services_));
 	services_.register_table = &register_table_service;
 	services_.register_command = &register_command_service;
-	services_.get_mysql_users_snapshot = &snapshot_stub;
-	services_.get_mysql_servers_snapshot = &snapshot_stub;
-	services_.get_mysql_group_replication_hostgroups_snapshot = &snapshot_stub;
+	services_.get_mysql_users_snapshot = &proxysql_plugin_get_mysql_users_snapshot;
+	services_.get_mysql_servers_snapshot = &proxysql_plugin_get_mysql_servers_snapshot;
+	services_.get_mysql_group_replication_hostgroups_snapshot =
+		&proxysql_plugin_get_mysql_group_replication_hostgroups_snapshot;
 	services_.get_admindb = &get_admindb_service;
 	services_.get_configdb = &get_configdb_service;
 	services_.get_statsdb = &get_statsdb_service;
@@ -302,6 +379,12 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_.get_prometheus_registry = &get_prometheus_registry_service;
 	services_.register_command_alias = &register_command_alias_service;
 	services_.register_runtime_view = &register_runtime_view_service;
+	services_.put_secret = &put_secret_service;
+	services_.get_secret = &get_secret_service;
+	services_.erase_secret = &erase_secret_service;
+	services_.set_listener_gate = &set_listener_gate_service;
+	services_.apply_mysql_config = &proxysql_plugin_apply_mysql_config;
+	services_.apply_mysql_config_v2 = &proxysql_plugin_apply_mysql_config_v2;
 
 	// Phase-B (register_schemas) services: same layout as init(), but DB
 	// handle getters and the query-hook registrar are stubbed -- see the
@@ -327,6 +410,12 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	// refresh callback won't fire until Admin handles a SELECT, by which
 	// point admin module bootstrap has long since completed.
 	services_phase_b_.register_runtime_view = &register_runtime_view_service;
+	services_phase_b_.put_secret = &secret_not_available;
+	services_phase_b_.get_secret = &secret_get_not_available;
+	services_phase_b_.erase_secret = &secret_erase_not_available;
+	services_phase_b_.set_listener_gate = &set_listener_gate_not_available;
+	services_phase_b_.apply_mysql_config = &apply_mysql_config_not_available;
+	services_phase_b_.apply_mysql_config_v2 = &apply_mysql_config_v2_not_available;
 #endif /* PROXYSQL40 */
 }
 
@@ -381,6 +470,14 @@ bool ProxySQL_PluginManager::load(const std::string &path, std::string &err) {
 		dlclose(handle);
 		return false;
 	}
+	for (const auto& existing : plugins_) {
+		if (existing.descriptor != nullptr && existing.descriptor->name != nullptr &&
+			std::strcmp(existing.descriptor->name, descriptor->name) == 0) {
+			err = "duplicate plugin descriptor name: " + std::string(descriptor->name);
+			dlclose(handle);
+			return false;
+		}
+	}
 
 	// Reject plugins built for a newer ABI than this core understands: the
 	// plugin's descriptor struct would have more fields than ours, and
@@ -403,9 +500,55 @@ bool ProxySQL_PluginManager::load(const std::string &path, std::string &err) {
 	return true;
 }
 
+bool ProxySQL_PluginManager::register_cli_options(ez::ezOptionParser& parser, std::string& err) {
+	err.clear();
+	ProxySQL_PluginCLIOptionRegistry registry(parser);
+	ProxySQL_PluginCLIRegistry callback_registry = registry.callback_registry();
+	for (const auto& plugin : plugins_) {
+		// ABI 6 appends register_cli_options after register_schemas. Reading
+		// the field from an ABI 1-5 descriptor would cross that plugin's
+		// compiled struct boundary, so the version check is part of the ABI.
+		if (plugin.descriptor == nullptr || plugin.descriptor->abi_version < 6u) continue;
+		const proxysql_plugin_register_cli_options_cb callback =
+			plugin.descriptor->register_cli_options;
+		if (callback == nullptr) continue;
+		if (!callback(&callback_registry)) {
+			err = "plugin CLI option registration failed: " + plugin_name(plugin.descriptor);
+			return false;
+		}
+	}
+	return true;
+}
+
+ProxySQL_PluginEarlyActionResult ProxySQL_PluginManager::run_early_actions(
+	const ProxySQL_PluginEarlyActionContext& context, std::string& err) {
+	err.clear();
+	for (const auto& plugin : plugins_) {
+		// ABI 6 appends both register_cli_options and early_action. Never read
+		// either field from an ABI 1-5 descriptor.
+		if (plugin.descriptor == nullptr || plugin.descriptor->abi_version < 6u) continue;
+		const proxysql_plugin_early_action_cb callback = plugin.descriptor->early_action;
+		if (callback == nullptr) continue;
+
+		ProxySQL_PluginEarlyActionContext plugin_context = context;
+		plugin_context.services = &services_;
+		try {
+			const auto result = callback(plugin_context);
+			if (result == ProxySQL_PluginEarlyActionResult::exit_success ||
+				result == ProxySQL_PluginEarlyActionResult::exit_failure) {
+				return result;
+			}
+		} catch (...) {
+			err = "plugin early action threw an exception: " + plugin_name(plugin.descriptor);
+			return ProxySQL_PluginEarlyActionResult::exit_failure;
+		}
+	}
+	return ProxySQL_PluginEarlyActionResult::not_requested;
+}
+
 #ifdef PROXYSQL40
 bool ProxySQL_PluginManager::invoke_register_schemas_phase(std::string &err) {
-	// Phase B of the four-phase lifecycle.  Called after all plugins have
+	// Phase B of the six-phase lifecycle.  Called after all plugins have
 	// been dlopen'd but before admin module bootstrap, so plugins can
 	// declare schema for merge_plugin_tables to materialize.
 	//
@@ -566,6 +709,37 @@ bool ProxySQL_PluginManager::start_all(std::string &err) {
 	return true;
 }
 
+bool ProxySQL_PluginManager::runtime_ready_all(
+	ProxySQL_PluginRuntimeContext& context, std::string& err) {
+	err.clear();
+	bool all_ready = true;
+	for (auto& plugin : plugins_) {
+		if (!plugin.started || plugin.stopped || plugin.descriptor == nullptr ||
+			plugin.descriptor->abi_version < 8u || plugin.descriptor->runtime_ready == nullptr) {
+			continue;
+		}
+		bool ready = false;
+		try {
+			ProxySQL_PluginRuntimeContext callback_context {
+				&services_, context.startup_monotonic_us
+			};
+			ready = plugin.descriptor->runtime_ready(&callback_context);
+		} catch (...) {
+			ready = false;
+		}
+		if (!ready) {
+			all_ready = false;
+			proxysql_plugin_listener_gate_registry().force_close_owner(
+				plugin.descriptor->name);
+			if (!err.empty()) err += "; ";
+			err += "plugin runtime readiness failed: " + plugin_name(plugin.descriptor);
+			proxy_warning("Plugin runtime readiness degraded: %s\n",
+				plugin_name(plugin.descriptor).c_str());
+		}
+	}
+	return all_ready;
+}
+
 bool ProxySQL_PluginManager::stop_all() {
 	bool ok = true;
 
@@ -587,6 +761,9 @@ bool ProxySQL_PluginManager::stop_all() {
 				proxy_warning("Plugin stop failed: %s\n", plugin_name(it->descriptor).c_str());
 				ok = false;
 			}
+		}
+		if (it->descriptor != nullptr) {
+			proxysql_plugin_listener_gate_registry().remove_owner(it->descriptor->name);
 		}
 		// Mark stopped even on failure — never retry stop() on the same plugin.
 		// The destructor's stop_all() call must be idempotent across failure paths.
@@ -930,25 +1107,34 @@ bool proxysql_dispatch_configured_plugin_admin_command(
 	const std::string& sql,
 	ProxySQL_PluginCommandResult& result
 ) {
+	if (!g_active_plugin_manager_ready.load(std::memory_order_acquire)) {
+		return false;
+	}
 	// Reader: shared lock so concurrent admin sessions can dispatch
 	// plugin commands in parallel. The unique-lock writers (publish /
 	// unpublish in load_/stop_configured_plugins) still serialize swaps.
 	std::shared_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
-	if (g_active_plugin_manager.load() == nullptr) {
+	if (!g_active_plugin_manager_ready.load(std::memory_order_acquire)) {
 		return false;
 	}
-
-	return g_active_plugin_manager.load()->dispatch_admin_command(ctx, sql, result);
+	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load(std::memory_order_acquire);
+	return mgr != nullptr && mgr->dispatch_admin_command(ctx, sql, result);
 }
 
 #ifdef PROXYSQL40
 std::string proxysql_resolve_configured_plugin_admin_alias(const std::string& sql) {
+	if (!g_active_plugin_manager_ready.load(std::memory_order_acquire)) {
+		return {};
+	}
 	// Return-by-value (not const char*) intentional: the alias table lives
 	// in the manager, and the caller typically releases the lock before
 	// dispatching. A borrowed c_str() would dangle if the manager is swapped
 	// out on reload between resolve and dispatch. Copy out under the lock.
 	std::shared_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
-	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load();
+	if (!g_active_plugin_manager_ready.load(std::memory_order_acquire)) {
+		return {};
+	}
+	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load(std::memory_order_acquire);
 	if (mgr == nullptr) {
 		return {};
 	}
@@ -960,12 +1146,18 @@ bool proxysql_dispatch_configured_plugin_query_hook(
 	const ProxySQL_PluginQueryHookPayload& payload,
 	ProxySQL_PluginQueryHookResult& result
 ) {
+	if (!g_active_plugin_manager_ready.load(std::memory_order_acquire)) {
+		return false;
+	}
 	// Reader: shared lock so query-hook dispatch on the data-plane hot
 	// path scales across MySQL_Thread / PgSQL_Thread workers instead of
 	// serializing on a single std::mutex. This is the change that lets a
 	// plugin wire a query hook without collapsing per-worker parallelism.
 	std::shared_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
-	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load();
+	if (!g_active_plugin_manager_ready.load(std::memory_order_acquire)) {
+		return false;
+	}
+	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load(std::memory_order_acquire);
 	if (mgr == nullptr) {
 		return false;
 	}
@@ -973,24 +1165,29 @@ bool proxysql_dispatch_configured_plugin_query_hook(
 }
 
 bool proxysql_has_configured_plugin_query_hook(ProxySQL_PluginProtocol proto) {
-	// Hot path: lock-free.  Reads the atomic pointer; if non-null, calls
-	// has_query_hook() which only reads two pointer-sized fields.  A
-	// concurrent unload can null the pointer between this check and a
-	// subsequent dispatch call -- the dispatch helper handles that case
-	// by re-checking under the lock.  Callers must tolerate spurious
-	// "yes" returns.
-	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load(std::memory_order_acquire);
-	if (mgr == nullptr) {
+	if (!g_active_plugin_manager_ready.load(std::memory_order_acquire)) {
 		return false;
 	}
-	return mgr->has_query_hook(proto);
+	switch (proto) {
+		case ProxySQL_PluginProtocol::mysql:
+			return g_active_mysql_query_hook.load(std::memory_order_acquire);
+		case ProxySQL_PluginProtocol::pgsql:
+			return g_active_pgsql_query_hook.load(std::memory_order_acquire);
+	}
+	return false;
 }
 
 void proxysql_refresh_configured_plugin_runtime_views(const std::string& sql,
 	SQLite3DB* admindb, SQLite3DB* configdb, SQLite3DB* statsdb)
 {
+	if (!g_active_plugin_manager_ready.load(std::memory_order_acquire)) {
+		return;
+	}
 	std::shared_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
-	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load();
+	if (!g_active_plugin_manager_ready.load(std::memory_order_acquire)) {
+		return;
+	}
+	ProxySQL_PluginManager* mgr = g_active_plugin_manager.load(std::memory_order_acquire);
 	if (mgr == nullptr) {
 		return;
 	}
@@ -998,22 +1195,20 @@ void proxysql_refresh_configured_plugin_runtime_views(const std::string& sql,
 }
 #endif /* PROXYSQL40 */
 
-bool proxysql_load_configured_plugins(
+bool proxysql_discover_configured_plugins(
 	std::unique_ptr<ProxySQL_PluginManager>& manager,
 	const std::vector<std::string>& plugin_modules,
 	std::string& err
 ) {
-	// Phase A + Phase B of the four-phase lifecycle. Executed BEFORE
-	// ProxySQL_Main_init_Admin_module so that plugin-declared schemas are
-	// available when Admin::init() merges them into tables_defs_* and
-	// runs the DDL via check_and_build_standard_tables.
-	//
-	// On return, `manager` is populated and installed as the active
-	// manager — Admin::init() reads it via proxysql_get_plugin_manager()
-	// to find the tables to merge. Phase D (init) runs later, via
-	// proxysql_init_configured_plugins, once admin is up.
+	// Phase A only: dlopen and descriptor validation. The manager is not
+	// published until every requested module has loaded successfully.
 	std::lock_guard<std::mutex> lifecycle_lock(g_plugin_lifecycle_mutex);
 	err.clear();
+	g_active_plugin_manager_ready.store(false, std::memory_order_release);
+#ifdef PROXYSQL40
+	g_active_mysql_query_hook.store(false, std::memory_order_release);
+	g_active_pgsql_query_hook.store(false, std::memory_order_release);
+#endif
 	{
 		std::unique_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
 		g_active_plugin_manager.store(nullptr, std::memory_order_release);
@@ -1032,33 +1227,9 @@ bool proxysql_load_configured_plugins(
 		}
 	}
 
-	// Phase B: register_schemas runs here. Plugins declare their
-	// admin-schema tables into the manager's pending-tables list.
-	// ProxySQL_Admin::init() (called next, via
-	// ProxySQL_Main_init_Admin_module in src/main.cpp) drains that list
-	// by merging into tables_defs_{admin,config,stats} and then running
-	// the DDL via check_and_build_standard_tables — same code path as
-	// the core tables. Plugins that left register_schemas null are
-	// no-ops here.
-	if (!next_manager->invoke_register_schemas_phase(err)) {
-		return false;
-	}
-
-	// Install as active manager BEFORE admin init, so that
-	// proxysql_get_plugin_manager() — used by ProxySQL_Admin::init() to
-	// merge plugin-declared schemas into tables_defs_* — can find the
-	// registered tables.
-	//
-	// INVARIANT (publish-before-Phase-D): after this point Phase D
-	// (init_all via proxysql_init_configured_plugins) WILL still write
-	// to commands_ / mysql_query_hook_ / pgsql_query_hook_ on the
-	// published manager.  This is only safe because Phase D runs during
-	// single-threaded startup — before ProxySQL_Main_init_phase3___
-	// start_all spawns the threads that take the lock-free read path
-	// (proxysql_has_configured_plugin_query_hook, Admin_Handler alias
-	// resolution).  Any reordering that moves listener startup before
-	// proxysql_init_configured_plugins() returns will race plain writes
-	// against plain reads.
+	// Publish only after every module has been validated. The manager remains
+	// reader-disabled until start_all() succeeds, so init callbacks may safely
+	// register commands and query hooks even when core workers already run.
 	{
 		std::unique_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
 		manager = std::move(next_manager);
@@ -1067,31 +1238,66 @@ bool proxysql_load_configured_plugins(
 	return true;
 }
 
+bool proxysql_register_configured_plugin_cli(
+	ProxySQL_PluginManager* manager, ez::ezOptionParser& parser, std::string& err) {
+	err.clear();
+	return manager == nullptr || manager->register_cli_options(parser, err);
+}
+
+bool proxysql_register_configured_plugin_schemas(
+	ProxySQL_PluginManager* manager, std::string& err) {
+	err.clear();
+	return manager == nullptr || manager->invoke_register_schemas_phase(err);
+}
+
+ProxySQL_PluginEarlyActionResult proxysql_run_configured_plugin_early_actions(
+	ProxySQL_PluginManager* manager, const ProxySQL_PluginEarlyActionContext& context,
+	std::string& err) {
+	err.clear();
+	if (manager == nullptr) return ProxySQL_PluginEarlyActionResult::not_requested;
+	return manager->run_early_actions(context, err);
+}
+
+bool proxysql_load_configured_plugins(
+	std::unique_ptr<ProxySQL_PluginManager>& manager,
+	const std::vector<std::string>& plugin_modules,
+	std::string& err
+) {
+	if (!proxysql_discover_configured_plugins(manager, plugin_modules, err)) return false;
+	if (proxysql_register_configured_plugin_schemas(manager.get(), err)) return true;
+	const std::string registration_error = err;
+	std::string cleanup_error;
+	(void)proxysql_stop_configured_plugins(manager, cleanup_error);
+	err = registration_error;
+	return false;
+}
+
 #ifdef PROXYSQL40
 bool proxysql_init_configured_plugins(
 	ProxySQL_PluginManager* manager,
 	std::string& err
 ) {
-	// Phase D of the four-phase lifecycle. Runs after
+	// Phase E of the six-phase lifecycle. Runs after
 	// ProxySQL_Main_init_Admin_module has materialized plugin-owned
 	// tables, so each plugin's init() sees live DB handles against a
 	// schema that already contains its own tables.
 	//
-	// ORDERING INVARIANT: caller MUST invoke this BEFORE any thread
-	// that takes the lock-free read path on the manager
-	// (MySQL_Thread / PgSQL_Thread dispatch_query_hook, Admin_Handler
-	// alias resolution) comes up.  See src/main.cpp:
-	//   ProxySQL_Main_init_phase2___not_started  — runs Phase D
-	//   ProxySQL_Main_init_phase3___start_all    — spawns workers
-	// Phase 3 must run strictly after Phase 2 returns.
+	// Reader state remains disabled for the whole transition. This permits
+	// early actions that require live workers without exposing the manager's
+	// command/query-hook fields while init_all() mutates them.
 	//
 	// FAILURE MODE: if this function returns false, the caller in
-	// src/main.cpp calls exit(EXIT_FAILURE) — Phase D failure is a
+	// src/main.cpp calls exit(EXIT_FAILURE) — Phase E failure is a
 	// fatal startup error.  The published manager is left in place;
 	// plugins that succeeded init() will have stop_all() called during
 	// process teardown (see stop_all's "initialized -> stop()"
 	// contract).  Runtime reload of plugin_modules is NOT supported by
 	// this code path: it is callable from the startup codepath only.
+	std::lock_guard<std::mutex> lifecycle_lock(g_plugin_lifecycle_mutex);
+	std::unique_lock<std::shared_mutex> active_lock(g_active_plugin_manager_mutex);
+	g_active_plugin_manager_ready.store(false, std::memory_order_release);
+	g_active_mysql_query_hook.store(false, std::memory_order_release);
+	g_active_pgsql_query_hook.store(false, std::memory_order_release);
 	err.clear();
 	if (manager == nullptr) {
 		return true;
@@ -1105,12 +1311,39 @@ bool proxysql_start_configured_plugins(
 	std::string& err
 ) {
 	std::lock_guard<std::mutex> lifecycle_lock(g_plugin_lifecycle_mutex);
+	std::unique_lock<std::shared_mutex> active_lock(g_active_plugin_manager_mutex);
+	g_active_plugin_manager_ready.store(false, std::memory_order_release);
+#ifdef PROXYSQL40
+	g_active_mysql_query_hook.store(false, std::memory_order_release);
+	g_active_pgsql_query_hook.store(false, std::memory_order_release);
+#endif
 	err.clear();
 	if (manager == nullptr) {
 		return true;
 	}
 
-	return manager->start_all(err);
+	if (!manager->start_all(err)) {
+		return false;
+	}
+#ifdef PROXYSQL40
+	g_active_mysql_query_hook.store(
+		manager->has_query_hook(ProxySQL_PluginProtocol::mysql), std::memory_order_release);
+	g_active_pgsql_query_hook.store(
+		manager->has_query_hook(ProxySQL_PluginProtocol::pgsql), std::memory_order_release);
+#endif
+	g_active_plugin_manager_ready.store(true, std::memory_order_release);
+	return true;
+}
+
+bool proxysql_runtime_ready_configured_plugins(
+	ProxySQL_PluginManager* manager,
+	ProxySQL_PluginRuntimeContext& context,
+	std::string& err
+) {
+	std::lock_guard<std::mutex> lifecycle_lock(g_plugin_lifecycle_mutex);
+	err.clear();
+	if (manager == nullptr) return true;
+	return manager->runtime_ready_all(context, err);
 }
 
 bool proxysql_stop_configured_plugins(
@@ -1119,6 +1352,11 @@ bool proxysql_stop_configured_plugins(
 ) {
 	std::lock_guard<std::mutex> lifecycle_lock(g_plugin_lifecycle_mutex);
 	err.clear();
+	g_active_plugin_manager_ready.store(false, std::memory_order_release);
+#ifdef PROXYSQL40
+	g_active_mysql_query_hook.store(false, std::memory_order_release);
+	g_active_pgsql_query_hook.store(false, std::memory_order_release);
+#endif
 	{
 		std::unique_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
 		g_active_plugin_manager.store(nullptr, std::memory_order_release);

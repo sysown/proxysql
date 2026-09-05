@@ -1,0 +1,20 @@
+services:
+  dbdeployer1:
+    image: proxysql/ci-infra:mysql-router-ic
+    container_name: ${COMPOSE_PROJECT}-dbdeployer1-1
+    hostname: dbdeployer1.${INFRA}
+    environment:
+      ROOT_PASSWORD: ${ROOT_PASSWORD}
+      INFRA: ${INFRA}
+    volumes:
+      - ${WORKSPACE}:${WORKSPACE}:ro
+    networks:
+      backend:
+        aliases:
+          - dbdeployer1.${INFRA}
+          - dbdeployer1.infra-mysql-router-ic
+
+networks:
+  backend:
+    name: "${INFRA_ID}_backend"
+    external: true

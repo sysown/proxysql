@@ -62,6 +62,8 @@ template void Base_HostGroups_Manager<PgSQL_HGC>::wrunlock();
 
 template SQLite3_result * Base_HostGroups_Manager<MyHGC>::execute_query(char*, char**);
 template SQLite3_result * Base_HostGroups_Manager<PgSQL_HGC>::execute_query(char*, char**);
+template SQLite3_result * Base_HostGroups_Manager<MyHGC>::execute_query_under_lock(const char*, char**);
+template SQLite3_result * Base_HostGroups_Manager<PgSQL_HGC>::execute_query_under_lock(const char*, char**);
 
 
 template <typename HGC>
@@ -113,6 +115,15 @@ SQLite3_result * Base_HostGroups_Manager<HGC>::execute_query(char *query, char *
 	wrlock();
 	mydb->execute_statement(query, error , &cols , &affected_rows , &resultset);
 	wrunlock();
+	return resultset;
+}
+
+template <typename HGC>
+SQLite3_result * Base_HostGroups_Manager<HGC>::execute_query_under_lock(const char *query, char **error) {
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result *resultset = nullptr;
+	mydb->execute_statement(query, error, &cols, &affected_rows, &resultset);
 	return resultset;
 }
 
@@ -233,4 +244,3 @@ SQLite3_result * Base_HostGroups_Manager<HGC>::SQL3_Hostgroup_Connection_Pool(bo
 	return result.release();
 }
 #endif
-

@@ -23,9 +23,29 @@
 
 #include "proxysql.h"
 #include "proxysql_utils.h"
+#include "ezOptionParser.hpp"
 
 #include <cstring>
 #include <string>
+
+static std::string rendered_usage(ez::ezOptionParser* options) {
+	std::string usage;
+	options->getUsage(usage);
+	return usage;
+}
+
+static void test_option_registration_tier() {
+	const std::string usage = rendered_usage(GloVars.opt);
+#ifdef PROXYSQL40
+	ok(usage.find("--bootstrap") == std::string::npos,
+		"ProxySQL 4.0 core does not register legacy bootstrap options");
+	ok(usage.find("--account-create") == std::string::npos,
+		"ProxySQL 4.0 core does not register legacy account options");
+#else
+	ok(usage.find("--bootstrap") != std::string::npos,
+		"ProxySQL 3.x retains legacy bootstrap options");
+#endif
+}
 
 // ============================================================
 // Constructor default values
@@ -47,6 +67,7 @@ static void test_constructor_defaults() {
 		"Constructor: global.sqlite3_server is false");
 	ok(GloVars.global.data_packets_history_size == 0,
 		"Constructor: global.data_packets_history_size is 0");
+#ifndef PROXYSQL40
 	ok(GloVars.global.gr_bootstrap_mode == 0,
 		"Constructor: global.gr_bootstrap_mode is 0");
 	ok(GloVars.global.gr_bootstrap_conf_base_port == 0,
@@ -55,6 +76,7 @@ static void test_constructor_defaults() {
 		"Constructor: global.gr_bootstrap_conf_use_sockets is false");
 	ok(GloVars.global.gr_bootstrap_conf_skip_tcp == false,
 		"Constructor: global.gr_bootstrap_conf_skip_tcp is false");
+#endif /* !PROXYSQL40 */
 	ok(GloVars.global.ssl_keylog_enabled == false,
 		"Constructor: global.ssl_keylog_enabled is false");
 	ok(GloVars.global.tls_load_count == 0,
@@ -280,9 +302,11 @@ static void test_parse_combined() {
 	bool orig_version_check = GloVars.global.version_check;
 	bool orig_sqlite3 = GloVars.global.sqlite3_server;
 	char *orig_datadir = GloVars.__cmd_proxysql_datadir;
+#ifndef PROXYSQL40
 	char *orig_uri = GloVars.global.gr_bootstrap_uri;
 	int orig_mode = GloVars.global.gr_bootstrap_mode;
 	uint64_t orig_port = GloVars.global.gr_bootstrap_conf_base_port;
+#endif /* !PROXYSQL40 */
 
 	const char *argv[] = {
 		"proxysql",
@@ -291,8 +315,10 @@ static void test_parse_combined() {
 		"--no-version-check",
 		"--sqlite3-server",
 		"-D", "/tmp/unit_test_datadir",
+#ifndef PROXYSQL40
 		"--bootstrap", "mysql://user:pass@host:3306",
 		"--conf-base-port", "6033",
+#endif /* !PROXYSQL40 */
 	};
 	int argc = sizeof(argv) / sizeof(argv[0]);
 
@@ -315,6 +341,7 @@ static void test_parse_combined() {
 	} else {
 		ok(false, "parse: -D value is correct (was null)");
 	}
+#ifndef PROXYSQL40
 	ok(GloVars.global.gr_bootstrap_mode == 1,
 		"parse: --bootstrap sets gr_bootstrap_mode to 1");
 	ok(GloVars.global.gr_bootstrap_uri != nullptr,
@@ -327,6 +354,7 @@ static void test_parse_combined() {
 	}
 	ok(GloVars.global.gr_bootstrap_conf_base_port == 6033,
 		"parse: --conf-base-port sets gr_bootstrap_conf_base_port");
+#endif /* !PROXYSQL40 */
 
 	// Restore
 	GloVars.__cmd_proxysql_initial = orig_initial;
@@ -337,12 +365,14 @@ static void test_parse_combined() {
 		free(GloVars.__cmd_proxysql_datadir);
 		GloVars.__cmd_proxysql_datadir = orig_datadir;
 	}
+#ifndef PROXYSQL40
 	if (GloVars.global.gr_bootstrap_uri != orig_uri) {
 		free(GloVars.global.gr_bootstrap_uri);
 		GloVars.global.gr_bootstrap_uri = orig_uri;
 	}
 	GloVars.global.gr_bootstrap_mode = orig_mode;
 	GloVars.global.gr_bootstrap_conf_base_port = orig_port;
+#endif /* !PROXYSQL40 */
 }
 
 /**
@@ -437,9 +467,14 @@ static void test_replace_checksum_zeros() {
 }
 
 int main() {
-	plan(79);
+#ifdef PROXYSQL40
+	plan(73);
+#else
+	plan(80);
+#endif
 
 	test_init_minimal();
+	test_option_registration_tier();
 
 	// Constructor defaults (24 tests)
 	test_constructor_defaults();

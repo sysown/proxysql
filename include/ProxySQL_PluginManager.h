@@ -8,6 +8,7 @@
 #ifdef PROXYSQL40
 
 #include "ProxySQL_Plugin.h"
+#include "ProxySQL_PluginCLI.h"
 
 #include <cstddef>
 #include <deque>
@@ -24,8 +25,11 @@ public:
 	ProxySQL_PluginManager &operator=(const ProxySQL_PluginManager &) = delete;
 
 	bool load(const std::string &path, std::string &err);
+	bool register_cli_options(ez::ezOptionParser& parser, std::string& err);
+	ProxySQL_PluginEarlyActionResult run_early_actions(
+		const ProxySQL_PluginEarlyActionContext& context, std::string& err);
 #ifdef PROXYSQL40
-	// Phase B of the four-phase plugin lifecycle: after all plugins have
+	// Phase B of the six-phase plugin lifecycle: after all plugins have
 	// been dlopen'd but BEFORE admin module bootstrap.  Invokes each
 	// plugin's optional register_schemas callback with a services struct
 	// that has register_table live but DB-handle getters stubbed to
@@ -35,6 +39,7 @@ public:
 #endif /* PROXYSQL40 */
 	bool init_all(std::string &err);
 	bool start_all(std::string &err);
+	bool runtime_ready_all(ProxySQL_PluginRuntimeContext& context, std::string& err);
 	bool stop_all();
 	const std::vector<ProxySQL_PluginTableDef>& tables(ProxySQL_PluginDBKind kind) const;
 	bool dispatch_admin_command(const ProxySQL_PluginCommandContext& ctx, const std::string& sql, ProxySQL_PluginCommandResult& result) const;
@@ -178,20 +183,34 @@ std::string proxysql_resolve_configured_plugin_admin_alias(const std::string& sq
 // the correct one based on each view's registered db_kind.
 void proxysql_refresh_configured_plugin_runtime_views(const std::string& sql,
 	SQLite3DB* admindb, SQLite3DB* configdb, SQLite3DB* statsdb);
-// Phase A + B of the four-phase lifecycle: dlopen() each module, read its
-// descriptor, then call register_schemas() on plugins that opted in. On
-// success, `manager` is populated AND installed as the active manager so
-// that ProxySQL_Admin::init() can see the declared tables and merge them
-// into tables_defs_{admin,config,stats} for the existing
-// check_and_build_standard_tables DDL pass. Phase D (init) must be
-// invoked separately — after admin module bootstrap — via
-// proxysql_init_configured_plugins.
+// Phase A only: dlopen each module and validate its descriptor. On success,
+// `manager` is populated and installed as the active manager. Callers must
+// then register CLI options, invoke the schema-registration phase before
+// Admin materialization, and run early actions before init/start.
+bool proxysql_discover_configured_plugins(
+	std::unique_ptr<ProxySQL_PluginManager>& manager,
+	const std::vector<std::string>& plugin_modules,
+	std::string& err
+);
+bool proxysql_register_configured_plugin_cli(
+	ProxySQL_PluginManager* manager, ez::ezOptionParser& parser,
+	std::string& err
+);
+bool proxysql_register_configured_plugin_schemas(
+	ProxySQL_PluginManager* manager, std::string& err
+);
+ProxySQL_PluginEarlyActionResult proxysql_run_configured_plugin_early_actions(
+	ProxySQL_PluginManager* manager,
+	const ProxySQL_PluginEarlyActionContext& context, std::string& err
+);
+// Compatibility composition for existing callers/tests. New startup uses the
+// explicit discovery, CLI, and schema phases above.
 bool proxysql_load_configured_plugins(
 	std::unique_ptr<ProxySQL_PluginManager>& manager,
 	const std::vector<std::string>& plugin_modules,
 	std::string& err
 );
-// Phase D: call each plugin's init() with full services (live DB handles).
+// Phase E: call each plugin's init() with full services (live DB handles).
 // Must run after ProxySQL_Main_init_Admin_module so init() sees live
 // admindb/configdb/statsdb with plugin-owned tables already materialized.
 bool proxysql_init_configured_plugins(
@@ -200,6 +219,13 @@ bool proxysql_init_configured_plugins(
 );
 bool proxysql_start_configured_plugins(
 	ProxySQL_PluginManager* manager,
+	std::string& err
+);
+// Runtime readiness failures degrade only their plugin; caller continues to
+// listener startup so Admin and unrelated listeners remain reachable.
+bool proxysql_runtime_ready_configured_plugins(
+	ProxySQL_PluginManager* manager,
+	ProxySQL_PluginRuntimeContext& context,
 	std::string& err
 );
 bool proxysql_stop_configured_plugins(
