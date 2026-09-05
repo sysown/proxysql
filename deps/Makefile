@@ -84,6 +84,7 @@ endif
 
 ifeq ($(PROXYSQL40),1)
 	targets += protobuf
+	targets += duckdb
 endif
 
 ifeq ($(PROXYSQLCLICKHOUSE),1)
@@ -264,6 +265,30 @@ clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:
 	cd clickhouse-cpp/clickhouse-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 
 clickhouse-cpp: clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a
+
+
+duckdb/duckdb/build/release/src/libduckdb_static.a:
+	cd duckdb && ./verify-source.bash
+	cd duckdb && rm -rf duckdb-*/ duckdb || true
+	cd duckdb && tar -zxf duckdb-*.tar.gz && mv duckdb-*/ duckdb
+	# DUCKDB_EXPLICIT_VERSION: deps/duckdb/duckdb/ is a bare extraction (no
+	# .git of its own) sitting inside the ProxySQL working tree, so CMake's
+	# `git describe` walks up and picks up *ProxySQL's* tags/commit instead
+	# of failing, silently making duckdb_library_version() report ProxySQL's
+	# version (e.g. "v3.0.11-dev802") instead of DuckDB's. Force it to the
+	# pinned version explicitly. On a version bump, update this alongside
+	# duckdb-<version>.tar.gz and required_root in verify-source.bash.
+	cd duckdb/duckdb && cmake -S . -B build/release \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DBUILD_UNITTESTS=OFF \
+		-DBUILD_SHELL=OFF \
+		-DENABLE_SANITIZER=OFF \
+		-DBUILD_EXTENSIONS="" \
+		-DDUCKDB_EXPLICIT_VERSION=v1.4.5
+	cd duckdb/duckdb && CC=${CC} CXX=${CXX} cmake --build build/release -j$(shell nproc 2>/dev/null || echo 4)
+	@test -f $@ || { echo "ERROR: duckdb build did not produce $@" >&2; exit 1; }
+
+duckdb: duckdb/duckdb/build/release/src/libduckdb_static.a
 
 
 libdaemon/libdaemon/libdaemon/.libs/libdaemon.a:
@@ -522,6 +547,7 @@ cleanall:
 	cd pcre2 && rm -rf pcre2-*/ pcre2 || true
 	cd sqlite3 && rm -rf sqlite-amalgamation-*/ || true
 	cd clickhouse-cpp/ && rm -rf clickhouse-cpp-*/ || true
+	cd duckdb && rm -rf duckdb-*/ duckdb || true
 	cd lz4 && rm -rf lz4-*/ || true
 	cd libmicrohttpd && rm -rf libmicrohttpd-*/ || true
 	cd curl && rm -rf curl-*/ || true
