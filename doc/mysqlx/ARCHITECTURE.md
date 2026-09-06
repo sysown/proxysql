@@ -91,7 +91,7 @@ Traditional MySQL connections use the classic wire protocol (port 3306). MySQL 8
 |---|---|
 | **Header** | `plugins/mysqlx/include/mysqlx_thread.h` |
 | **Source** | `plugins/mysqlx/src/mysqlx_thread.cpp` |
-| **Responsibility** | Core event loop. Each thread runs an independent `poll()` loop, accepting new connections (listeners are built into the poll set), processing session state machines, and managing a per-thread connection cache. Multiple threads run in parallel (configurable via `mysqlx_thread_pool_size`, default 4, max 64). |
+| **Responsibility** | Core event loop. Each thread runs an independent `poll()` loop, accepting new connections (listeners are built into the poll set), processing session state machines, and managing a per-thread connection cache. Multiple threads run in parallel (configurable via `mysqlx-thread_pool_size`, default 4, max 64). |
 | **Key methods** | `init(thread_index)` — create signal pipe, initialize poll set. `start()` / `stop()` — thread lifecycle. `run()` — main poll loop: `poll()` → `process_ready_fds()` → `process_all_sessions()`. `add_listener(addr, port)` — add a listener socket to the poll set as `XDS_LISTENER`. `get_connection_from_cache(hostgroup, user, schema)` — per-thread pool lookup. `return_connection_to_cache(conn)` — return a reusable connection. |
 | **Thread safety** | Each `Mysqlx_Thread` is independent — no shared state between threads. The per-thread connection cache uses a `std::mutex` for safety. Signal pipe for wakeup on shutdown. |
 
@@ -143,8 +143,8 @@ Traditional MySQL connections use the classic wire protocol (port 3306). MySQL 8
 |---|---|
 | **Header** | `plugins/mysqlx/include/mysqlx_config_store.h` |
 | **Source** | `plugins/mysqlx/src/mysqlx_config_store.cpp` |
-| **Responsibility** | Authoritative in-memory store of mysqlx configuration. **This is the canonical state** — the editable `mysqlx_*` admin tables are persistent input, the `runtime_mysqlx_*` tables are admin-side projections of this store (see §10.2). Maintains: identities (user → hostgroup + credentials), routes (name → listener bind + destination hostgroup), endpoint overrides (per-host X-Protocol port), per-hostgroup endpoint lists rebuilt from `runtime_mysql_servers`, topology generation tracking, TLS configuration, and connection pool settings. |
-| **Key methods** | Per-entity install (LOAD path): `install_users_from_admin(db, err)`, `install_routes_from_admin(db, err)`, `install_endpoints_from_admin(db, err)`, `install_variables_from_admin(db, err)` — each SELECTs the editable `mysqlx_<X>` table (plus, for users, `runtime_mysql_users` for canonical identity, and for endpoints, `runtime_mysql_servers` for the hostgroup → host topology), builds a fresh local map, and atomically swaps it under the exclusive lock. Per-entity save (SAVE path): `save_users_to_admin_table(db)`, `save_routes_to_admin_table(db)`, `save_endpoints_to_admin_table(db)`, `save_variables_to_admin_table(db)` — dump current store state into the editable `mysqlx_<X>` table (UPDATE active=0, then REPLACE INTO with active=1). Per-entity projection (runtime-view refresh): `project_users_to_runtime_view(db)` etc. — `DELETE FROM runtime_mysqlx_<X>; INSERT ... <store dump>`. Lookups: `resolve_identity(username)`, `pick_endpoint(route_name)`, `route_exists(route_name)`. |
+| **Responsibility** | Authoritative in-memory store of mysqlx configuration. **This is the canonical runtime state** — editable entity tables provide users, routes, and endpoints; `global_variables` provides the `mysqlx-*` settings; runtime entity tables and `runtime_global_variables` expose active state. Maintains: identities, routes, endpoint overrides, resolved hostgroup endpoints, topology generation, TLS configuration, and connection pool settings. |
+| **Key methods** | Entity install/save methods use the editable `mysqlx_*` tables. `install_variables_from_global(db, err)` validates the complete `mysqlx-*` namespace in `global_variables` and publishes it to `runtime_global_variables`; `save_variables_to_global(db)` writes active settings back without disturbing other namespaces. Entity runtime views are populated by `project_*_to_runtime_view`. |
 | **Thread safety** | `std::shared_mutex` — shared (reader) lock for lookups and projections, exclusive (writer) lock for the install/save paths. |
 
 ### 3.7 mysqlx_stats
@@ -162,8 +162,8 @@ Traditional MySQL connections use the classic wire protocol (port 3306). MySQL 8
 |---|---|
 | **Header** | `plugins/mysqlx/include/mysqlx_admin_schema.h` |
 | **Source** | `plugins/mysqlx/src/mysqlx_admin_schema.cpp` |
-| **Responsibility** | Admin table DDL definitions, variable definitions, LOAD/SAVE command handlers, and runtime-view refresh callbacks. Defines the schema for the editable tables (`mysqlx_users`, `mysqlx_routes`, `mysqlx_backend_endpoints`, `mysqlx_variables`) and the projected views (`runtime_mysqlx_*`). LOAD/SAVE callbacks interact with `MysqlxConfigStore` directly (via `install_*_from_admin` / `save_*_to_admin_table`) — they do NOT do SQLite-to-SQLite copies between editable and runtime tables. The four `refresh_<X>_runtime_view` free functions are registered with the chassis via `services.register_runtime_view()` during schema registration; they fire when admin executes a `SELECT` against a `runtime_mysqlx_*` table and call `MysqlxConfigStore::project_<X>_to_runtime_view`. |
-| **New v2 variables** | `mysqlx_thread_pool_size` (default 4), `mysqlx_connect_timeout` (default 10000ms), `mysqlx_tls_mode` (default DISABLED), `mysqlx_tls_cert`, `mysqlx_tls_key`, `mysqlx_tls_ca`, `mysqlx_tls_backend_mode` (default DISABLED), `mysqlx_max_cached_connections_per_thread` (default 100). |
+| **Responsibility** | Admin DDL for the three editable entity tables and their runtime projections, LOAD/SAVE command handlers, runtime-view refresh callbacks, namespace-scoped disk persistence for variables, and the legacy `disk.mysqlx_variables` warning. No MySQLX-specific variable table is registered. |
+| **Variables** | `mysqlx-thread_pool_size` (default 4), `mysqlx-connect_timeout` (default 10000ms), `mysqlx-tls_mode` (default DISABLED), `mysqlx-tls_backend_mode` (default `as_client`), `mysqlx-max_cached_connections_per_thread` (default 100). |
 
 ## 4. Thread Pool Architecture
 
@@ -441,7 +441,7 @@ A cached connection is returned only if ALL match:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `mysqlx_max_cached_connections_per_thread` | 100 | Max cached connections per thread |
+| `mysqlx-max_cached_connections_per_thread` | 100 | Max cached connections per thread |
 
 ## 8. Frame Forwarding — Protocol-Aware Dispatch
 
@@ -563,9 +563,9 @@ Client         Mysqlx_Thread      MysqlxSession     ConfigStore      MysqlxConne
 
 The mysqlx plugin follows the canonical Admin/module separation of duties used by core's `mysql_users` / `GloMyAuth` / `runtime_mysql_users` triplet (see `lib/ProxySQL_Admin.cpp::save_mysql_users_runtime_to_database`):
 
-* **Admin** owns the editable tables (`mysqlx_users`, `mysqlx_routes`, `mysqlx_backend_endpoints`, `mysqlx_variables`) and the chassis dispatch glue.
+* **Admin** owns the editable entity tables (`mysqlx_users`, `mysqlx_routes`, `mysqlx_backend_endpoints`), standard global-variable tables, and the chassis dispatch glue.
 * **`MysqlxConfigStore`** owns the authoritative runtime state in process memory.
-* **`runtime_mysqlx_*`** are *not* persistent storage. They are admin-side **views** of the store, rebuilt on demand by a refresh callback that the plugin registered via `services.register_runtime_view()`.
+* **`runtime_mysqlx_*`** entity tables are *not* persistent storage. They are admin-side views rebuilt on demand. Active variables are published in `runtime_global_variables`.
 
 #### 10.2.1 LOAD path — editable table → module
 
@@ -655,11 +655,11 @@ Main Thread
   ├── ProxySQL_PluginManager::init_all()    (register tables/commands)
   ├── ProxySQL_PluginManager::start_all()   (start thread pool)
   │     └── mysqlx_start()
-  │           ├── sync_disk_to_memory()              (disk → editable mysqlx_* tables)
+  │           ├── sync_disk_to_memory()              (disk → three editable entity tables)
   │           ├── config_store->install_users_from_admin()       (mysqlx_users → store)
   │           ├── config_store->install_routes_from_admin()      (mysqlx_routes → store)
   │           ├── config_store->install_endpoints_from_admin()   (mysqlx_backend_endpoints → store)
-  │           ├── config_store->install_variables_from_admin()   (mysqlx_variables → store)
+  │           ├── config_store->install_variables_from_global()  (global_variables mysqlx-* → store/runtime_global_variables)
   │           └── Create N Mysqlx_Thread instances
   │                 ├── Mysqlx_Thread #0 (poll loop, listeners, sessions, conn cache)
   │                 ├── Mysqlx_Thread #1 (poll loop, listeners, sessions, conn cache)

@@ -32,7 +32,7 @@
 // session state machine.
 //
 // Inputs:
-//   * mode -- mysqlx_tls_backend_mode runtime variable, parsed by
+//   * mode -- mysqlx-tls_backend_mode runtime variable, parsed by
 //     MysqlxConfigStore. Drives the four documented modes.
 //   * endpoint_use_ssl_override -- mysqlx_backend_endpoints.use_ssl=1
 //     for the resolved endpoint (target_use_ssl_ at the call site).
@@ -2288,7 +2288,7 @@ void MysqlxSession::handler_connecting_server() {
 
 		// Backend TLS posture is resolved once at the top of
 		// handler_connecting_server() (search for "desired_backend_tls"
-		// above) using mysqlx_tls_backend_mode + per-endpoint
+		// above) using mysqlx-tls_backend_mode + per-endpoint
 		// use_ssl override + frontend TLS state. Replicate the decision
 		// here onto the freshly-allocated MysqlxConnection.
 		//

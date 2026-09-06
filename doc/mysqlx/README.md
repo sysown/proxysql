@@ -56,39 +56,38 @@ The plugin is loaded after the Admin module initializes. The sequence is:
 3. The Admin module initializes (creates SQLite databases).
 4. The plugin manager calls `dlopen()` on each plugin path.
 5. The plugin's `init()` function registers tables and commands.
-6. The plugin's `start()` function syncs disk → memory for the editable `mysqlx_*` admin tables, then drives the four `MysqlxConfigStore::install_*_from_admin` calls (each SELECTing the editable table plus the relevant cross-module `runtime_mysql_*` projection), creates the thread pool, and starts listeners.
+6. The plugin's `start()` function syncs disk → memory for the editable MySQLX entity tables, loads the `mysqlx-*` namespace from `global_variables`, creates the thread pool, and starts listeners.
 
 ## 3. Admin Variables (v2)
 
-### 3.1. `mysqlx_variables` Table
+### 3.1. `mysqlx-*` Global Variables
 
-Global configuration variables for the mysqlx plugin.
-
-Only the five variables below are wired through `MysqlxConfigStore`'s
-install/save round-trip. Operator-defined rows with any other
-`variable_name` are accepted by the table's CHECK constraints and may be
-inserted, but are silently ignored on `LOAD MYSQLX VARIABLES TO RUNTIME`
-and *deleted* by the next `SAVE MYSQLX VARIABLES TO MEMORY` (the SAVE
-path replaces the entire table with the canonical scalars from the
-store). Reserved-but-not-wired TLS variables: `mysqlx_tls_cert`,
-`mysqlx_tls_key`, `mysqlx_tls_ca` — see issue tracker.
+MySQLX configuration lives in the standard `global_variables` and
+`runtime_global_variables` tables. The plugin owns the `mysqlx-*` namespace;
+unknown names in that namespace are rejected by `LOAD MYSQLX VARIABLES TO
+RUNTIME`. The five defaults are inserted into `global_variables` when the
+plugin starts if they are absent.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `mysqlx_thread_pool_size` | `4` | Number of event loop threads. Range: 1–64. Each thread runs an independent `poll()` loop handling thousands of concurrent sessions. |
-| `mysqlx_connect_timeout` | `10000` | Backend connection timeout in milliseconds. Applied to non-blocking `connect()` + backend authentication. |
-| `mysqlx_tls_mode` | `DISABLED` | Frontend TLS mode: `DISABLED`, `PREFERRED`, or `REQUIRED`. See [TLS Modes](#81-tls-modes). |
-| `mysqlx_tls_backend_mode` | `as_client` | Backend (proxy→backend) TLS mode: `disabled`, `preferred`, `required`, or `as_client`. See [Backend TLS Modes](#82-backend-tls-modes). |
-| `mysqlx_max_cached_connections_per_thread` | `100` | Maximum number of idle backend connections cached per thread. Connections are matched by hostgroup, user, schema, *and* backend TLS state. |
+| `mysqlx-thread_pool_size` | `4` | Number of event loop threads. Range: 1–64. Each thread runs an independent `poll()` loop handling thousands of concurrent sessions. |
+| `mysqlx-connect_timeout` | `10000` | Backend connection timeout in milliseconds. Applied to non-blocking `connect()` + backend authentication. |
+| `mysqlx-tls_mode` | `DISABLED` | Frontend TLS mode: `DISABLED`, `PREFERRED`, or `REQUIRED`. See [TLS Modes](#81-tls-modes). |
+| `mysqlx-tls_backend_mode` | `as_client` | Backend (proxy→backend) TLS mode: `disabled`, `preferred`, `required`, or `as_client`. See [Backend TLS Modes](#82-backend-tls-modes). |
+| `mysqlx-max_cached_connections_per_thread` | `100` | Maximum number of idle backend connections cached per thread. Connections are matched by hostgroup, user, schema, *and* backend TLS state. |
 
 ```sql
 -- View current variables
-SELECT * FROM mysqlx_variables;
+SELECT * FROM global_variables WHERE variable_name LIKE 'mysqlx-%';
 
 -- Update a variable
-UPDATE mysqlx_variables SET variable_value='8' WHERE variable_name='mysqlx_thread_pool_size';
+UPDATE global_variables SET variable_value='8' WHERE variable_name='mysqlx-thread_pool_size';
 LOAD MYSQLX VARIABLES TO RUNTIME;
 ```
+
+The obsolete `disk.mysqlx_variables` table is ignored. When detected at
+startup, ProxySQL logs a deprecation warning and suggests removing it manually
+with `DROP TABLE IF EXISTS disk.mysqlx_variables;`; ProxySQL never drops it.
 
 ## 4. Admin Tables
 
@@ -136,7 +135,7 @@ Define X Protocol listener routes.
 | active | INT CHECK (0,1) | `1` | Whether this route is active |
 | attributes | VARCHAR | `''` | JSON attributes for future extensions |
 | comment | VARCHAR | `''` | Route comment |
-| tls_mode | VARCHAR | `'inherit'` | Per-route TLS posture: `inherit` (use `mysqlx_tls_mode`), `disabled`, `preferred`, `required`, or `passthrough`. See [§8.1](#81-frontend-tls-modes-client--proxy) and [§8.4](#84-end-to-end-tls-passthrough-per-route). |
+| tls_mode | VARCHAR | `'inherit'` | Per-route TLS posture: `inherit` (use `mysqlx-tls_mode`), `disabled`, `preferred`, `required`, or `passthrough`. See [§8.1](#81-frontend-tls-modes-client--proxy) and [§8.4](#84-end-to-end-tls-passthrough-per-route). |
 
 ### 4.4. `runtime_mysqlx_routes` (Runtime View)
 
@@ -159,11 +158,14 @@ Maps backend servers to their X Protocol ports.
 
 A read-only view of the per-host X-Protocol port overrides held by `MysqlxConfigStore`, projected on demand. Same mechanism as [`runtime_mysqlx_users`](#42-runtime_mysqlx_users-runtime-view): refilled by a chassis-registered refresh callback before any `SELECT`, never written by LOAD, never read by SAVE.
 
-### 4.7. `runtime_mysqlx_variables` (Runtime View)
+### 4.7. MySQLX Runtime Variables
 
-A read-only view of the five mysqlx tunables held by `MysqlxConfigStore` (`mysqlx_thread_pool_size`, `mysqlx_connect_timeout`, `mysqlx_tls_mode`, `mysqlx_tls_backend_mode`, `mysqlx_max_cached_connections_per_thread`). Same mechanism as [`runtime_mysqlx_users`](#42-runtime_mysqlx_users-runtime-view): refilled by a chassis-registered refresh callback before any `SELECT`, never written by LOAD, never read by SAVE.
-
-`LOAD MYSQLX VARIABLES TO RUNTIME` reads `mysqlx_variables` directly into the store; `SAVE MYSQLX VARIABLES FROM RUNTIME TO MEMORY` writes the store's four scalars back into `mysqlx_variables` (replacing the entire table). Operator-added rows in `mysqlx_variables` whose `variable_name` is not one of the four canonical names are not retained on SAVE — only the four known tunables round-trip.
+The active values are the `mysqlx-*` rows in `runtime_global_variables`.
+`LOAD MYSQLX VARIABLES TO RUNTIME` validates all five names and values from
+`global_variables`, applies them atomically, and publishes the normalized
+runtime snapshot. `SAVE MYSQLX VARIABLES FROM RUNTIME TO MEMORY` writes the
+five active values back to the same namespace in `global_variables` without
+touching any other module's rows.
 
 ### 4.8. `stats_mysqlx_routes` (Statistics Table)
 
@@ -336,7 +338,7 @@ Unknown message types receive `ER_X_BAD_MESSAGE` error.
 
 ### 8.1. Frontend TLS Modes (client → proxy)
 
-Driven by `mysqlx_tls_mode` (uppercase values for backwards compatibility
+Driven by `mysqlx-tls_mode` (uppercase values for backwards compatibility
 with the legacy mysql-side mode names).
 
 | Mode | Description |
@@ -347,14 +349,14 @@ with the legacy mysql-side mode names).
 
 #### Per-route override: `mysqlx_routes.tls_mode`
 
-The deployment-wide `mysqlx_tls_mode` can be overridden at the route
+The deployment-wide `mysqlx-tls_mode` can be overridden at the route
 level via the `tls_mode` column on `mysqlx_routes`. Default is
-`inherit`, which defers to `mysqlx_tls_mode` and matches the previous
+`inherit`, which defers to `mysqlx-tls_mode` and matches the previous
 deployment-wide-only behaviour exactly.
 
 | Per-route value | Description |
 |-----------------|-------------|
-| `inherit` | Use the deployment-wide `mysqlx_tls_mode`. Default. |
+| `inherit` | Use the deployment-wide `mysqlx-tls_mode`. Default. |
 | `disabled` | This route never advertises TLS, regardless of the global mode. |
 | `preferred` | This route advertises TLS; client decides whether to upgrade. |
 | `required` | This route advertises TLS; reject the session if the client does not upgrade. |
@@ -367,7 +369,7 @@ multiplexing.
 
 ### 8.2. Backend TLS Modes (proxy → backend)
 
-Driven by `mysqlx_tls_backend_mode` (lowercase values, matching MySQL
+Driven by `mysqlx-tls_backend_mode` (lowercase values, matching MySQL
 Router 8.0's `client_ssl_mode` / `server_ssl_mode` taxonomy). Default is
 `as_client`, which matches the legacy implicit behaviour where backend
 TLS was tied to the frontend leg's TLS state.
@@ -390,10 +392,10 @@ sensitive backend must always be encrypted under a deployment-wide
 
 Pre-mode-aware ProxySQL implicitly behaved like Router's AsClient mode:
 the backend leg was encrypted iff the client leg was. Setting
-`mysqlx_tls_backend_mode='as_client'` (the new default) preserves that
+`mysqlx-tls_backend_mode='as_client'` (the default) preserves that
 behaviour exactly. Operators wanting Router-`Required` semantics should
-set `mysqlx_tls_backend_mode='required'`; Router-`PassthroughEncrypt` /
-`Disabled` map to `mysqlx_tls_backend_mode='disabled'`.
+set `mysqlx-tls_backend_mode='required'`; Router-`PassthroughEncrypt` /
+`Disabled` map to `mysqlx-tls_backend_mode='disabled'`.
 
 #### Connection pool partitioning
 
@@ -410,19 +412,19 @@ would silently corrupt the wire protocol.
 
 ```sql
 -- Frontend TLS:
-UPDATE mysqlx_variables SET variable_value='PREFERRED' WHERE variable_name='mysqlx_tls_mode';
+UPDATE global_variables SET variable_value='PREFERRED' WHERE variable_name='mysqlx-tls_mode';
 
 -- Backend TLS (asymmetric example: client-required, backend-best-effort):
-UPDATE mysqlx_variables SET variable_value='REQUIRED'   WHERE variable_name='mysqlx_tls_mode';
-UPDATE mysqlx_variables SET variable_value='preferred'  WHERE variable_name='mysqlx_tls_backend_mode';
+UPDATE global_variables SET variable_value='REQUIRED'   WHERE variable_name='mysqlx-tls_mode';
+UPDATE global_variables SET variable_value='preferred'  WHERE variable_name='mysqlx-tls_backend_mode';
 
 LOAD MYSQLX VARIABLES TO RUNTIME;
 ```
 
-Note: certificate / key paths are not configurable via `mysqlx_variables`
+Note: certificate / key paths are not configurable via MySQLX global variables
 yet — the only TLS-related variables currently wired through the
-`MysqlxConfigStore` install/save round-trip are `mysqlx_tls_mode` and
-`mysqlx_tls_backend_mode`.
+`MysqlxConfigStore` install/save round-trip are `mysqlx-tls_mode` and
+`mysqlx-tls_backend_mode`.
 
 ### 8.4. End-to-end TLS Passthrough (per-route)
 
@@ -494,7 +496,7 @@ A connection is eligible for reuse only if:
 
 ```sql
 -- Set max cached connections per thread (default: 100)
-UPDATE mysqlx_variables SET variable_value='200' WHERE variable_name='mysqlx_max_cached_connections_per_thread';
+UPDATE global_variables SET variable_value='200' WHERE variable_name='mysqlx-max_cached_connections_per_thread';
 LOAD MYSQLX VARIABLES TO RUNTIME;
 ```
 
@@ -549,8 +551,8 @@ INSERT INTO mysqlx_users (username, allowed_auth_methods)
 LOAD MYSQLX USERS TO RUNTIME;
 
 -- Step 6: (Optional) Configure thread pool size.
-UPDATE mysqlx_variables SET variable_value='8'
-    WHERE variable_name='mysqlx_thread_pool_size';
+UPDATE global_variables SET variable_value='8'
+    WHERE variable_name='mysqlx-thread_pool_size';
 LOAD MYSQLX VARIABLES TO RUNTIME;
 ```
 

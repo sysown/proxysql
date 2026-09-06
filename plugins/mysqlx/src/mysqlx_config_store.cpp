@@ -2,6 +2,8 @@
 
 #include "sqlite3db.h"
 
+#include <cerrno>
+#include <climits>
 #include <cstdlib>
 #include <memory>
 #include <strings.h>
@@ -202,58 +204,88 @@ void load_backend_servers(
 	}
 }
 
-// load_variables walks `mysqlx_variables` rows and writes the
-// recognised tunables back through reference parameters. The
-// backend-TLS-mode field is captured as a raw string + a parsed enum +
-// a "did the operator set it" flag so that:
-//
-//   * an unrecognised value can be reported back as a useful error
-//     instead of silently coerced to the default,
-//   * an absent row leaves the existing `backend_tls_mode_` cached on
-//     the store untouched (rather than resetting to as_client on every
-//     LOAD), matching how the other variables behave.
-//
-// `parse_err` is populated with the first malformed row encountered;
-// the caller is responsible for surfacing it back to the operator and
-// aborting the install if it is non-empty.
-void load_variables(
+bool parse_int_variable(const std::string& name, const char* value, int min_value,
+	int max_value, int& result, std::string& err) {
+	errno = 0;
+	char* end = nullptr;
+	const long parsed = std::strtol(value, &end, 10);
+	if (errno != 0 || end == value || *end != '\0' || parsed < min_value || parsed > max_value) {
+		err = "invalid ";
+		err += name;
+		err += " value '";
+		err += value;
+		err += "'";
+		return false;
+	}
+	result = static_cast<int>(parsed);
+	return true;
+}
+
+bool load_variables(
 	SQLite3_result& rows,
 	int& thread_pool_size,
 	int& connect_timeout,
 	std::string& tls_mode,
 	int& max_cached_connections,
 	MysqlxBackendTlsMode& backend_tls_mode,
-	bool& backend_tls_mode_set,
-	std::string& parse_err
+	std::string& err
 ) {
+	bool saw_pool_size = false;
+	bool saw_connect_timeout = false;
+	bool saw_tls_mode = false;
+	bool saw_max_cached = false;
+	bool saw_backend_tls_mode = false;
+
 	for (auto* row : rows.rows) {
 		if (row == nullptr || row->fields[0] == nullptr) {
-			continue;
+			err = "mysqlx variable row has no name";
+			return false;
 		}
 		const std::string name = row->fields[0];
 		const char* value = row->fields[1] ? row->fields[1] : "";
-		if (name == "mysqlx_thread_pool_size") {
-			thread_pool_size = std::atoi(value);
-		} else if (name == "mysqlx_connect_timeout") {
-			connect_timeout = std::atoi(value);
-		} else if (name == "mysqlx_tls_mode") {
-			tls_mode = value;
-		} else if (name == "mysqlx_max_cached_connections_per_thread") {
-			max_cached_connections = std::atoi(value);
-		} else if (name == "mysqlx_tls_backend_mode") {
+		if (name == "mysqlx-thread_pool_size") {
+			if (!parse_int_variable(name, value, 1, 64, thread_pool_size, err)) return false;
+			saw_pool_size = true;
+		} else if (name == "mysqlx-connect_timeout") {
+			if (!parse_int_variable(name, value, 1, INT_MAX, connect_timeout, err)) return false;
+			saw_connect_timeout = true;
+		} else if (name == "mysqlx-tls_mode") {
+			if (strcasecmp(value, "DISABLED") == 0) tls_mode = "DISABLED";
+			else if (strcasecmp(value, "PREFERRED") == 0) tls_mode = "PREFERRED";
+			else if (strcasecmp(value, "REQUIRED") == 0) tls_mode = "REQUIRED";
+			else {
+				err = "invalid mysqlx-tls_mode '";
+				err += value;
+				err += "' (expected one of: DISABLED, PREFERRED, REQUIRED)";
+				return false;
+			}
+			saw_tls_mode = true;
+		} else if (name == "mysqlx-max_cached_connections_per_thread") {
+			if (!parse_int_variable(name, value, 0, INT_MAX, max_cached_connections, err)) return false;
+			saw_max_cached = true;
+		} else if (name == "mysqlx-tls_backend_mode") {
 			auto parsed = mysqlx_backend_tls_mode_from_string(value);
 			if (!parsed) {
-				if (parse_err.empty()) {
-					parse_err = "invalid mysqlx_tls_backend_mode '";
-					parse_err += value;
-					parse_err += "' (expected one of: disabled, preferred, required, as_client)";
-				}
-				continue;
+				err = "invalid mysqlx-tls_backend_mode '";
+				err += value;
+				err += "' (expected one of: disabled, preferred, required, as_client)";
+				return false;
 			}
 			backend_tls_mode = *parsed;
-			backend_tls_mode_set = true;
+			saw_backend_tls_mode = true;
+		} else {
+			err = "unknown MySQLX variable '";
+			err += name;
+			err += "'";
+			return false;
 		}
 	}
+	if (!saw_pool_size || !saw_connect_timeout || !saw_tls_mode ||
+	    !saw_max_cached || !saw_backend_tls_mode) {
+		err = "incomplete mysqlx-* variable set in global_variables";
+		return false;
+	}
+	return true;
 }
 
 // SQLite text quoting for ad-hoc statement composition. The plugin
@@ -271,6 +303,49 @@ std::string sqlite_quote(const std::string& s) {
 	}
 	out.push_back('\'');
 	return out;
+}
+
+bool put_global_variable(SQLite3DB& db, const char* table, const char* name,
+	const std::string& value, bool ignore_existing = false) {
+	std::string sql = ignore_existing ? "INSERT OR IGNORE INTO " : "REPLACE INTO ";
+	sql += table;
+	sql += " (variable_name, variable_value) VALUES (";
+	sql += sqlite_quote(name);
+	sql += ", ";
+	sql += sqlite_quote(value);
+	sql += ")";
+	return db.execute(sql.c_str());
+}
+
+bool seed_mysqlx_variable_defaults(SQLite3DB& db) {
+	if (!db.execute("BEGIN")) return false;
+	if (!put_global_variable(db, "main.global_variables", "mysqlx-thread_pool_size", "4", true) ||
+	    !put_global_variable(db, "main.global_variables", "mysqlx-connect_timeout", "10000", true) ||
+	    !put_global_variable(db, "main.global_variables", "mysqlx-tls_mode", "DISABLED", true) ||
+	    !put_global_variable(db, "main.global_variables", "mysqlx-tls_backend_mode", "as_client", true) ||
+	    !put_global_variable(db, "main.global_variables", "mysqlx-max_cached_connections_per_thread", "100", true) ||
+	    !db.execute("COMMIT")) {
+		db.execute("ROLLBACK");
+		return false;
+	}
+	return true;
+}
+
+bool publish_mysqlx_runtime_variables(SQLite3DB& db, int thread_pool_size,
+	int connect_timeout, const std::string& tls_mode, int max_cached_connections,
+	MysqlxBackendTlsMode backend_tls_mode) {
+	if (!db.execute("BEGIN")) return false;
+	if (!db.execute("DELETE FROM main.runtime_global_variables WHERE variable_name LIKE 'mysqlx-%'") ||
+	    !put_global_variable(db, "main.runtime_global_variables", "mysqlx-thread_pool_size", std::to_string(thread_pool_size)) ||
+	    !put_global_variable(db, "main.runtime_global_variables", "mysqlx-connect_timeout", std::to_string(connect_timeout)) ||
+	    !put_global_variable(db, "main.runtime_global_variables", "mysqlx-tls_mode", tls_mode) ||
+	    !put_global_variable(db, "main.runtime_global_variables", "mysqlx-tls_backend_mode", mysqlx_backend_tls_mode_to_string(backend_tls_mode)) ||
+	    !put_global_variable(db, "main.runtime_global_variables", "mysqlx-max_cached_connections_per_thread", std::to_string(max_cached_connections)) ||
+	    !db.execute("COMMIT")) {
+		db.execute("ROLLBACK");
+		return false;
+	}
+	return true;
 }
 
 const char* backend_auth_mode_to_string(MysqlxBackendAuthMode m) {
@@ -518,32 +593,37 @@ bool MysqlxConfigStore::install_all_from_admin(SQLite3DB& db, std::string& err) 
 	return install_users_from_admin(db, err)
 	    && install_routes_from_admin(db, err)
 	    && install_endpoints_from_admin(db, err)
-	    && install_variables_from_admin(db, err);
+	    && install_variables_from_global(db, err);
 }
 
-bool MysqlxConfigStore::install_variables_from_admin(SQLite3DB& db, std::string& err) {
-	int new_pool_size = thread_pool_size_;
-	int new_connect_timeout = connect_timeout_;
-	std::string new_tls_mode = tls_mode_;
-	int new_max_cached = max_cached_connections_;
-	// Seed with the currently-installed value so an absent
-	// mysqlx_tls_backend_mode row leaves the cached mode untouched.
-	MysqlxBackendTlsMode new_backend_tls_mode = backend_tls_mode_;
-	bool backend_tls_mode_set = false;
-	std::string parse_err;
+bool MysqlxConfigStore::install_variables_from_global(SQLite3DB& db, std::string& err) {
+	int new_pool_size = 4;
+	int new_connect_timeout = 10000;
+	std::string new_tls_mode = "DISABLED";
+	int new_max_cached = 100;
+	MysqlxBackendTlsMode new_backend_tls_mode = MysqlxBackendTlsMode::as_client;
 	std::unique_ptr<SQLite3_result> result {};
 
+	if (!seed_mysqlx_variable_defaults(db)) {
+		err = "failed to seed mysqlx-* defaults in global_variables";
+		return false;
+	}
 	if (!fetch_result(
 		    db,
-		    "SELECT variable_name, variable_value FROM mysqlx_variables",
+		    "SELECT variable_name, variable_value FROM main.global_variables "
+		    "WHERE variable_name LIKE 'mysqlx-%'",
 		    result,
 		    err)) {
 		return false;
 	}
-	load_variables(*result, new_pool_size, new_connect_timeout, new_tls_mode, new_max_cached,
-	               new_backend_tls_mode, backend_tls_mode_set, parse_err);
-	if (!parse_err.empty()) {
-		err = std::move(parse_err);
+	if (!load_variables(*result, new_pool_size, new_connect_timeout, new_tls_mode,
+	                    new_max_cached, new_backend_tls_mode, err)) {
+		return false;
+	}
+	if (!publish_mysqlx_runtime_variables(db, new_pool_size, new_connect_timeout,
+	                                     new_tls_mode, new_max_cached,
+	                                     new_backend_tls_mode)) {
+		err = "failed to publish mysqlx-* variables to runtime_global_variables";
 		return false;
 	}
 
@@ -552,9 +632,7 @@ bool MysqlxConfigStore::install_variables_from_admin(SQLite3DB& db, std::string&
 	connect_timeout_ = new_connect_timeout;
 	tls_mode_ = std::move(new_tls_mode);
 	max_cached_connections_ = new_max_cached;
-	if (backend_tls_mode_set) {
-		backend_tls_mode_ = new_backend_tls_mode;
-	}
+	backend_tls_mode_ = new_backend_tls_mode;
 	return true;
 }
 
@@ -656,31 +734,22 @@ bool MysqlxConfigStore::save_endpoints_to_admin_table(SQLite3DB& db) const {
 	return db.execute("COMMIT");
 }
 
-bool MysqlxConfigStore::save_variables_to_admin_table(SQLite3DB& db) const {
+bool MysqlxConfigStore::save_variables_to_global(SQLite3DB& db) const {
 	std::shared_lock<std::shared_mutex> lock(mutex_);
 	if (!db.execute("BEGIN")) return false;
-	if (!db.execute("DELETE FROM mysqlx_variables")) {
-		db.execute("ROLLBACK");
-		return false;
-	}
-	auto put = [&](const char* name, const std::string& value) -> bool {
-		std::string sql = "INSERT INTO mysqlx_variables (variable_name, variable_value) VALUES (";
-		sql += sqlite_quote(name) + ", " + sqlite_quote(value) + ")";
-		return db.execute(sql.c_str());
-	};
-	if (!put("mysqlx_thread_pool_size", std::to_string(thread_pool_size_))) {
+	if (!put_global_variable(db, "main.global_variables", "mysqlx-thread_pool_size", std::to_string(thread_pool_size_))) {
 		db.execute("ROLLBACK"); return false;
 	}
-	if (!put("mysqlx_connect_timeout", std::to_string(connect_timeout_))) {
+	if (!put_global_variable(db, "main.global_variables", "mysqlx-connect_timeout", std::to_string(connect_timeout_))) {
 		db.execute("ROLLBACK"); return false;
 	}
-	if (!put("mysqlx_tls_mode", tls_mode_)) {
+	if (!put_global_variable(db, "main.global_variables", "mysqlx-tls_mode", tls_mode_)) {
 		db.execute("ROLLBACK"); return false;
 	}
-	if (!put("mysqlx_max_cached_connections_per_thread", std::to_string(max_cached_connections_))) {
+	if (!put_global_variable(db, "main.global_variables", "mysqlx-max_cached_connections_per_thread", std::to_string(max_cached_connections_))) {
 		db.execute("ROLLBACK"); return false;
 	}
-	if (!put("mysqlx_tls_backend_mode", mysqlx_backend_tls_mode_to_string(backend_tls_mode_))) {
+	if (!put_global_variable(db, "main.global_variables", "mysqlx-tls_backend_mode", mysqlx_backend_tls_mode_to_string(backend_tls_mode_))) {
 		db.execute("ROLLBACK"); return false;
 	}
 	return db.execute("COMMIT");
@@ -761,27 +830,6 @@ void MysqlxConfigStore::project_endpoints_to_runtime_view(SQLite3DB& db) const {
 		if (!db.execute(sql.c_str())) {
 			db.execute("ROLLBACK"); return;
 		}
-	}
-	db.execute("COMMIT");
-}
-
-void MysqlxConfigStore::project_variables_to_runtime_view(SQLite3DB& db) const {
-	std::shared_lock<std::shared_mutex> lock(mutex_);
-	if (!db.execute("BEGIN")) return;
-	if (!db.execute("DELETE FROM runtime_mysqlx_variables")) {
-		db.execute("ROLLBACK"); return;
-	}
-	auto put = [&](const char* name, const std::string& value) -> bool {
-		std::string sql = "INSERT INTO runtime_mysqlx_variables (variable_name, variable_value) VALUES (";
-		sql += sqlite_quote(name) + ", " + sqlite_quote(value) + ")";
-		return db.execute(sql.c_str());
-	};
-	if (!put("mysqlx_thread_pool_size", std::to_string(thread_pool_size_)) ||
-	    !put("mysqlx_connect_timeout", std::to_string(connect_timeout_)) ||
-	    !put("mysqlx_tls_mode", tls_mode_) ||
-	    !put("mysqlx_max_cached_connections_per_thread", std::to_string(max_cached_connections_)) ||
-	    !put("mysqlx_tls_backend_mode", mysqlx_backend_tls_mode_to_string(backend_tls_mode_))) {
-		db.execute("ROLLBACK"); return;
 	}
 	db.execute("COMMIT");
 }
