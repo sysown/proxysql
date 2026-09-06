@@ -15,7 +15,7 @@
 - The regular producer builds every in-tree plugin and every TAP/unit binary exactly once with `PROXYSQL40=1`.
 - The handoff is complete and generic; no producer or consumer may retain/delete/enumerate test binaries by plugin filename family.
 - Consumers select only `tap_group` and infrastructure; they do not compile ProxySQL.
-- Keep ASAN/gcov, TSAN, clang, package, third-party-language, and OS-specific build profiles separate.
+- Keep ASAN, TSAN, clang, package, third-party-language, and OS-specific build profiles separate.
 - Reusable workflow changes target `GH-Actions`; callers and `groups.json` changes target `v3.0`.
 - Every commit has a detailed body explaining behavior, compatibility, and verification.
 
@@ -55,7 +55,7 @@ Expected: non-zero before the complete handoff is added to `ubuntu24-tap-genai-g
 
 - [ ] **Step 3: Implement only the generic builder contract**
 
-Add this full producer alongside the three existing regular matrix legs:
+Extend the existing regular producer with complete-handoff packing:
 
 ```yaml
 - dist: 'ubuntu24'
@@ -259,7 +259,7 @@ git commit -m "ci(mysqlx): run unit coverage through mysqlx-g1" \
 
 ```bash
 for workflow in .github/workflows/CI-*.yml; do
-  grep -Eq 'ubuntu22-tap|ubuntu22-tap-mysqlx|ubuntu24-tap-genai-gcov' "$workflow" && exit 1 || true
+  grep -Eq '(ubuntu22-tap|ubuntu22-tap-mysqlx|ubuntu24-tap-genai-gcov)($|[^-])' "$workflow" && exit 1 || true
 done
 ```
 
