@@ -19,7 +19,11 @@ run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branc
 #
 #   The test phase runs the resulting *-t binaries through
 #   `test/infra/control/run-tests-isolated.bash` driving TAP_GROUP
-#   `mysqlx-tsan-g1`. The harness is the same one used locally.
+#   `mysqlx-tsan-g1` first, then the full `unit-tests-g1` group.
+#   The second phase is free: `make ubuntu24-tap` already built every
+#   UNIT_TESTS binary, and both groups are standalone (SKIP_PROXYSQL=1,
+#   same TSAN_OPTIONS) — so the ~50 min TSAN build is amortized over
+#   all 113 unit tests instead of just the 26 mysqlx/plugin ones.
 #
 # Why this PR doesn't restore the CI-builds cache:
 #
@@ -66,7 +70,7 @@ jobs:
     # 'cache write denied: token has no writable scopes'.
     permissions: write-all
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     steps:
 
@@ -121,7 +125,7 @@ jobs:
       run: |
         make ubuntu24-tap
 
-    - name: Run mysqlx-tsan-g1 TAP group inside Docker
+    - name: Run mysqlx-tsan-g1 + unit-tests-g1 TAP groups inside Docker
       # Run the TSAN-instrumented unit tests INSIDE the same Docker
       # image used for the build — same source mount at /opt/proxysql,
       # same toolchain, same libstdc++/libgcc that the binaries linked
@@ -156,6 +160,20 @@ jobs:
       # run-tests-isolated.bash, so it just iterates groups.json and
       # execs each *-t binary in turn — no nested docker, no Python
       # tester. TSAN_OPTIONS comes from mysqlx-tsan-g1/env.sh.
+      #
+      # Two phases, one container invocation:
+      #   1. TAP_GROUP=mysqlx-tsan-g1 — the 26 TSAN-targeted mysqlx +
+      #      plugin-chassis binaries (env.sh supplies SKIP_PROXYSQL=1
+      #      and TSAN_OPTIONS).
+      #   2. TAP_GROUP=unit-tests-g1 — all 113 unit tests, which
+      #      include the 26 above plus the ~87 already-built core /
+      #      duckdb / genai / mcp binaries the build phase produced
+      #      for free. unit-tests-g1 has no env.sh, so SKIP_PROXYSQL=1
+      #      and the same TSAN_OPTIONS are exported inline; every
+      #      *-t binary is standalone and needs no daemon or backend.
+      #      TSAN_OPTIONS keeps halt_on_error=0, so tests never
+      #      TSAN-validated before report races without failing the
+      #      binary — worst case is noisy stderr, not a red build.
       env:
         TAP_GROUP: mysqlx-tsan-g1
         INFRA_ID: ci-unit-tests-tsan
@@ -179,7 +197,8 @@ jobs:
           -lc 'apt-get update -qq \
                && apt-get install -y --no-install-recommends python3-packaging libprotobuf-dev \
                && cd /opt/proxysql \
-               && test/infra/control/run-tests-isolated.bash'
+               && TAP_GROUP=mysqlx-tsan-g1 test/infra/control/run-tests-isolated.bash \
+               && SKIP_PROXYSQL=1 TSAN_OPTIONS="halt_on_error=0:abort_on_error=0:second_deadlock_stack=1:history_size=7" TAP_GROUP=unit-tests-g1 test/infra/control/run-tests-isolated.bash'
 
     - name: Fix artifact permissions
       if: ${{ failure() && !cancelled() }}
