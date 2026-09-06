@@ -13,7 +13,7 @@ if docker ps --format '{{.Names}}' | grep -qx "${BACKEND_CONTAINER}"; then
 			break
 		fi
 	done
-	if [ -z "${TEARDOWN_PORT}" ]; then
+	if [[ -z "${TEARDOWN_PORT}" ]]; then
 		echo "WARNING: no reachable InnoDB Cluster member for metadata cleanup" >&2
 		exit 0
 	fi

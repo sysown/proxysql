@@ -99,7 +99,7 @@ int main() {
 	std::atomic<bool> readers_ok { true };
 	std::vector<std::thread> readers;
 	for (int i = 0; i != 8; ++i) {
-		readers.emplace_back([&] {
+		readers.emplace_back([&registry, &readers_ok] {
 			for (int j = 0; j != 1000; ++j) {
 				auto snapshot = registry.lookup("127.0.0.1", 6446);
 				if (!snapshot || snapshot->owner != "router-a") readers_ok = false;
@@ -112,7 +112,7 @@ int main() {
 	std::atomic<bool> accepts_ok { true };
 	std::vector<std::thread> acceptors;
 	for (int i = 0; i != 8; ++i) {
-		acceptors.emplace_back([&] {
+		acceptors.emplace_back([&registry, &accepts_ok] {
 			for (int j = 0; j != 1000; ++j) {
 				const auto decision = registry.inspect_accept("127.0.0.1", 6446, 300);
 				if (decision.reject) accepts_ok = false;

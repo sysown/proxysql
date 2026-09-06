@@ -37,7 +37,7 @@ std::unique_ptr<SQLite3_result> query(SQLite3DB& db, const std::string& sql) {
 	std::unique_ptr<SQLite3_result> result(db.execute_statement(sql.c_str(), &error));
 	if (error != nullptr) {
 		std::string message(error);
-		free(error);
+		sqlite3_free(error);
 		throw std::runtime_error(message);
 	}
 	if (!result) throw std::runtime_error("Router local query returned no result");
@@ -502,7 +502,7 @@ public:
 
 	bool topology_drifted(const ReconcileTopologySnapshot& snapshot) override {
 		std::multiset<std::string> expected;
-		auto add = [&](std::string_view role, std::string_view uuid) {
+		auto add = [this, &snapshot, &expected](std::string_view role, std::string_view uuid) {
 			auto instance = std::find_if(snapshot.desired.instances.begin(), snapshot.desired.instances.end(),
 				[&](const DesiredInstance& value) { return value.server_uuid == uuid; });
 			if (instance == snapshot.desired.instances.end()) {

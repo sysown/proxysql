@@ -13,7 +13,7 @@ std::unique_ptr<SQLite3_result> query(SQLite3DB& db, const std::string& sql) {
 	std::unique_ptr<SQLite3_result> result(db.execute_statement(sql.c_str(), &raw_error));
 	if (raw_error != nullptr) {
 		std::string error(raw_error);
-		free(raw_error);
+		sqlite3_free(raw_error);
 		throw std::runtime_error(error);
 	}
 	if (!result) throw std::runtime_error("hostgroup allocation query failed");

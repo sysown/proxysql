@@ -11,10 +11,10 @@ ROOT_PASSWORD=${ROOT_PASSWORD:-$(printf '%s' "${INFRA_ID}" | sha256sum | head -c
 RESULT_DIR="${WORKSPACE}/ci_infra_logs/${INFRA_ID}/mysql-router"
 PROXY_DATA_DIR="${WORKSPACE}/ci_infra_logs/${INFRA_ID}/proxysql"
 PLUGIN="${WORKSPACE}/plugins/mysql_router/proxysql_mysql_router.so"
-if [ ! -s "${PLUGIN}" ]; then
+if [[ ! -s "${PLUGIN}" ]]; then
     PLUGIN="${WORKSPACE}/test/tap/tap/_runtime_libs/proxysql_mysql_router.so"
 fi
-if [ ! -s "${PLUGIN}" ]; then
+if [[ ! -s "${PLUGIN}" ]]; then
     echo "ERROR: real proxysql_mysql_router.so is absent from the build handoff" >&2
     exit 1
 fi
@@ -25,10 +25,10 @@ PASSFILE=""
 cleanup_setup() {
     local rc=$?
     trap - EXIT
-    if [ -n "${PASSFILE}" ]; then
+    if [[ -n "${PASSFILE}" ]]; then
         rm -f "${PASSFILE}"
     fi
-    if [ "${rc}" -ne 0 ] && [ "${SETUP_COMPLETE}" -eq 0 ]; then
+    if [[ "${rc}" -ne 0 && "${SETUP_COMPLETE}" -eq 0 ]]; then
         docker start "${PROXY_CONTAINER}" >/dev/null 2>&1 || true
         INFRA_ID="${INFRA_ID}" WORKSPACE="${WORKSPACE}" ROOT_PASSWORD="${ROOT_PASSWORD}" \
             "${WORKSPACE}/test/tap/groups/mysql-router-ic-g1/pre-cleanup.bash" || true
@@ -54,7 +54,7 @@ run_mysqlsh "${WORKSPACE}/test/tap/tests/mysql_router/innodb_cluster_setup.js" \
     | tee "${SETUP_OUTPUT}"
 grep '^MYSQL_ROUTER_FIXTURE=' "${SETUP_OUTPUT}" | tail -1 \
     | sed 's/^MYSQL_ROUTER_FIXTURE=//' > "${RESULT_DIR}/fixture.json"
-test -s "${RESULT_DIR}/fixture.json"
+[[ -s "${RESULT_DIR}/fixture.json" ]]
 
 docker exec -i "${PROXY_CONTAINER}" mysql -uadmin -padmin -h127.0.0.1 -P6032 <<SQL
 INSERT INTO mysql_servers(hostgroup_id,hostname,port,status,comment)
@@ -104,12 +104,12 @@ docker run --rm \
 BOOTSTRAP_RC=$?
 set -e
 rm -f "${PASSFILE}"
-if [ "${BOOTSTRAP_RC}" -ne 0 ]; then
-	if grep -Fq "${ROOT_PASSWORD}" "${BOOTSTRAP_LOG}" "${PROXY_DATA_DIR}/bootstrap.cmdline"; then
-		echo "ERROR: bootstrap credential appeared in captured bootstrap output" >&2
-		exit 1
-	fi
-	cat "${BOOTSTRAP_LOG}" >&2
+if [[ "${BOOTSTRAP_RC}" -ne 0 ]]; then
+    if grep -Fq "${ROOT_PASSWORD}" "${BOOTSTRAP_LOG}" "${PROXY_DATA_DIR}/bootstrap.cmdline"; then
+        echo "ERROR: bootstrap credential appeared in captured bootstrap output" >&2
+        exit 1
+    fi
+    cat "${BOOTSTRAP_LOG}" >&2
     exit "${BOOTSTRAP_RC}"
 fi
 if grep -Fq "${ROOT_PASSWORD}" "${BOOTSTRAP_LOG}" "${PROXY_DATA_DIR}/bootstrap.cmdline"; then
@@ -123,7 +123,7 @@ for attempt in $(seq 1 60); do
         -NBe 'SELECT 1' >/dev/null 2>&1; then
         break
     fi
-    if [ "${attempt}" = 60 ]; then
+    if [[ "${attempt}" = 60 ]]; then
         docker logs "${PROXY_CONTAINER}" >&2 || true
         exit 1
     fi
@@ -135,7 +135,7 @@ for port in 6446 6447 6450; do
         if docker exec "${PROXY_CONTAINER}" bash -c "exec 3<>/dev/tcp/127.0.0.1/${port}" 2>/dev/null; then
             break
         fi
-        if [ "${attempt}" = 60 ]; then
+        if [[ "${attempt}" = 60 ]]; then
             docker logs "${PROXY_CONTAINER}" >&2 || true
             echo "ERROR: Router endpoint ${port} did not open" >&2
             exit 1
@@ -155,7 +155,7 @@ run_mysqlsh "${WORKSPACE}/test/tap/tests/mysql_router/assert_shell_contract.js" 
     | tee "${SHELL_OUTPUT}"
 grep '^MYSQL_ROUTER_SHELL_CONTRACT=' "${SHELL_OUTPUT}" | tail -1 \
     | sed 's/^MYSQL_ROUTER_SHELL_CONTRACT=//' > "${RESULT_DIR}/shell-contract.json"
-test -s "${RESULT_DIR}/shell-contract.json"
+[[ -s "${RESULT_DIR}/shell-contract.json" ]]
 
 docker exec "${PROXY_CONTAINER}" mysql -uadmin -padmin -h127.0.0.1 -P6032 \
     -e 'MYSQL ROUTER RECONCILE' >/dev/null

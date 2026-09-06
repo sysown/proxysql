@@ -368,7 +368,7 @@ std::unique_ptr<SQLite3_result> local_query(SQLite3DB& db, const std::string& sq
 	std::unique_ptr<SQLite3_result> result(db.execute_statement(sql.c_str(), &error));
 	if (error != nullptr) {
 		std::string message(error);
-		free(error);
+		sqlite3_free(error);
 		throw std::runtime_error(message);
 	}
 	if (!result) throw std::runtime_error("local Router configuration query failed");
@@ -533,7 +533,9 @@ public:
 		char* error = nullptr;
 		std::unique_ptr<SQLite3_result> result(db_->execute_statement(sql.c_str(), &error));
 		if (error != nullptr) {
-			std::string message(error); free(error); throw std::runtime_error(message);
+			std::string message(error);
+			sqlite3_free(error);
+			throw std::runtime_error(message);
 		}
 		if (!result || result->rows.empty()) return std::nullopt;
 		if (result->rows.size() != 1) throw std::runtime_error("duplicate bootstrap journal rows");
@@ -555,7 +557,9 @@ public:
 			"topology_generation,user_generation "
 			"FROM mysql_router_instance WHERE singleton_id=1", &error));
 		if (error != nullptr) {
-			std::string message(error); free(error); throw std::runtime_error(message);
+			std::string message(error);
+			sqlite3_free(error);
+			throw std::runtime_error(message);
 		}
 		if (!result || result->rows.empty()) return std::nullopt;
 		if (result->rows.size() != 1) throw std::runtime_error("duplicate local Router identities");
