@@ -29,7 +29,6 @@ private:
 	std::unique_ptr<httpserver::webserver> ws;
 	int port;
 	bool use_ssl;  // SSL mode the server was started with
-	pthread_t thread_id;
 
 	// Endpoint resources
 	std::vector<std::pair<std::string, std::unique_ptr<httpserver::http_resource>>> _endpoints;
@@ -58,16 +57,16 @@ public:
 	/**
 	 * @brief Start the HTTP/HTTPS server
 	 *
-	 * Starts the webserver in a dedicated thread.
+	 * Starts the webserver using libmicrohttpd's internal polling thread.
 	 *
-	 * @return true if the server thread was created, false otherwise
+	 * @return true if the listener is running, false otherwise
 	 */
 	bool start();
 
 	/**
 	 * @brief Stop the HTTP/HTTPS server
 	 *
-	 * Stops the webserver and waits for the thread to complete.
+	 * Stops the webserver and its internal polling thread.
 	 */
 	void stop();
 
