@@ -388,9 +388,30 @@ bool ProxySQL_PluginManager::load(const std::string &path, std::string &err) {
 	// definition.  The reverse direction (older ABI plugin, newer core) is
 	// safe via the tail-append pattern -- fields the plugin didn't define
 	// are never dereferenced (see handling of register_schemas below).
-	if (descriptor->abi_version < 1u ||
-	    descriptor->abi_version > PROXYSQL_PLUGIN_ABI_VERSION_MAX) {
+	//
+	// abi_version carries the ABI 1..5 layout-version number in its low
+	// bits and PROXYSQL_PLUGIN_ABI_DEBUG_BIT as a separate, independent
+	// tag (see the long comment on PROXYSQL_PLUGIN_ABI_DEBUG_BIT in
+	// ProxySQL_Plugin.h for the dump_pkt/DSS-offset-shift mechanism this
+	// guards against). The two are checked separately: the layout number
+	// is range-checked for forward compatibility exactly as before; the
+	// DEBUG tag must match this core's EXACTLY, because a mismatch there
+	// is a real ODR-style struct-layout skew, not a "plugin used an older
+	// but still-understood ABI" situation.
+	const unsigned int layout_version = descriptor->abi_version & ~PROXYSQL_PLUGIN_ABI_DEBUG_BIT;
+	const unsigned int debug_tag = descriptor->abi_version & PROXYSQL_PLUGIN_ABI_DEBUG_BIT;
+	if (layout_version < 1u || layout_version > PROXYSQL_PLUGIN_ABI_VERSION_MAX) {
 		err = "unsupported plugin ABI version";
+		dlclose(handle);
+		return false;
+	}
+	if (debug_tag != (PROXYSQL_PLUGIN_ABI_VERSION & PROXYSQL_PLUGIN_ABI_DEBUG_BIT)) {
+		err = std::string("plugin '") + descriptor->name + "' was built with a different "
+			"-DDEBUG setting than this ProxySQL core (DEBUG-only fields in core headers "
+			"such as MySQL_Protocol::dump_pkt shift MySQL_Data_Stream/PgSQL_Session member "
+			"offsets between debug and release builds; loading this plugin would silently "
+			"corrupt memory instead of crashing predictably). Rebuild the plugin with the "
+			"same DEBUG setting as this core.";
 		dlclose(handle);
 		return false;
 	}
@@ -424,8 +445,21 @@ bool ProxySQL_PluginManager::invoke_register_schemas_phase(std::string &err) {
 		// from a v1 plugin's static descriptor would be an out-of-bounds
 		// read -- v1 plugins allocate only the first 6 fields.  Treat v1
 		// plugins as if they opted out of Phase B.
+		//
+		// abi_version must be masked before this comparison: it carries
+		// PROXYSQL_PLUGIN_ABI_DEBUG_BIT in a high bit orthogonal to the
+		// ABI 1..5 layout-version number (see the contract comment next
+		// to PROXYSQL_PLUGIN_ABI_DEBUG_BIT in ProxySQL_Plugin.h). A
+		// DEBUG-tagged ABI-1 descriptor has abi_version == 0x40000001,
+		// which satisfies a raw ">= 2u" and would wrongly dereference
+		// register_schemas on a struct that doesn't have that field --
+		// exactly the out-of-bounds read this comment says is prevented.
 		proxysql_plugin_register_schemas_cb register_schemas_cb = nullptr;
-		if (plugin.descriptor != nullptr && plugin.descriptor->abi_version >= 2u) {
+		const unsigned int schema_layout_version =
+			(plugin.descriptor != nullptr)
+				? (plugin.descriptor->abi_version & ~PROXYSQL_PLUGIN_ABI_DEBUG_BIT)
+				: 0u;
+		if (plugin.descriptor != nullptr && schema_layout_version >= 2u) {
 			register_schemas_cb = plugin.descriptor->register_schemas;
 		}
 		if (register_schemas_cb == nullptr) {
