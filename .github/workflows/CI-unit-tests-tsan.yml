@@ -19,7 +19,13 @@ run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branc
 #
 #   The test phase runs the resulting *-t binaries through
 #   `test/infra/control/run-tests-isolated.bash` driving TAP_GROUP
-#   `mysqlx-tsan-g1` first, then the rest of `unit-tests-g1`.
+#   `mysqlx-tsan-g1` first (the 26 TSAN-targeted mysqlx/plugin
+#   binaries; TSan reports remain fatal via the default exitcode),
+#   then `unit-tests-g1` excluding that overlap. The second phase is
+#   free: `make ubuntu24-tap` already built every UNIT_TESTS binary,
+#   and both groups are standalone (SKIP_PROXYSQL=1) — so the ~50 min
+#   TSAN build is amortized over all 113 unit tests instead of just
+#   the 26 mysqlx/plugin ones.
 #
 # Why this PR doesn't restore the CI-builds cache:
 #
@@ -80,14 +86,22 @@ jobs:
           if [ "${ELIGIBLE:-}" = "true" ]; then
             POOL="${POOL_SIZE:-6}"
             demand=0; err=0
-            ids=$( { gh api --paginate "repos/${REPO}/actions/runs?status=in_progress&per_page=100" --jq '.workflow_runs[].id';
-                     gh api --paginate "repos/${REPO}/actions/runs?status=queued&per_page=100" --jq '.workflow_runs[].id'; } 2>e1 ) || err=1
+            : > e1
+            in_progress_ids=$(gh api --paginate "repos/${REPO}/actions/runs?status=in_progress&per_page=100" --jq '.workflow_runs[].id' 2>e1) || err=1
+            queued_ids=$(gh api --paginate "repos/${REPO}/actions/runs?status=queued&per_page=100" --jq '.workflow_runs[].id' 2>>e1) || err=1
             if [ "$err" = "0" ]; then
-              for rid in ${ids:-}; do
+              ids="${in_progress_ids:-}"$'\n'"${queued_ids:-}"
+              for rid in ${ids}; do
+                [ -n "$rid" ] || continue
                 [ "$demand" -ge "$POOL" ] && break
-                n=$(gh api "repos/${REPO}/actions/runs/${rid}/jobs" --jq '[.jobs[]|select((.status=="in_progress" and ((.runner_name//"")|startswith("ci-vm"))) or (.status=="queued" and (([.labels[]]|index("proxysql-ci")) != null)))]|length' 2>/dev/null) || n=0
+                if ! n=$(gh api --paginate --slurp "repos/${REPO}/actions/runs/${rid}/jobs?per_page=100" 2>>e1 | jq '[.[].jobs[]|select((.status=="in_progress" and ((.runner_name//"")|startswith("ci-vm"))) or (.status=="queued" and (([.labels[]]|index("proxysql-ci")) != null)))]|length'); then
+                  err=1
+                  break
+                fi
                 demand=$(( demand + ${n:-0} ))
               done
+            fi
+            if [ "$err" = "0" ]; then
               free=$(( POOL - demand ))
               echo ">>> self-hosted pool: demand=${demand}/${POOL} free=${free} (occupied+queued)"
               if [ "${free}" -ge 1 ]; then
@@ -97,7 +111,7 @@ jobs:
               fi
             else
               echo ">>> WARNING: could not read runs:"; sed 's/^/    /' e1
-              choice='["self-hosted","proxysql-ci"]'; echo ">>> failing SAFE to self-hosted (offload unchanged)"
+              choice='"ubuntu-24.04"'; echo ">>> demand query failed -> spill to GitHub-hosted"
             fi
           else
             echo ">>> not eligible for self-hosted -> GitHub-hosted"
@@ -200,19 +214,21 @@ jobs:
       # consist only of lowercase alphanumeric characters, hyphens,
       # and underscores").
       #
-       # SKIP_PROXYSQL=1 short-circuits the daemon + backend checks in
-       # run-tests-isolated.bash, so it just iterates groups.json and
-       # execs each *-t binary in turn — no nested docker, no Python
-       # tester. TSAN_OPTIONS comes from mysqlx-tsan-g1/env.sh.
-       #
-       # Two phases, one container invocation. Both always run; the
-       # combined status fails if either phase fails.
-       #   1. TAP_GROUP=mysqlx-tsan-g1 — the TSAN-targeted mysqlx +
-       #      plugin-chassis binaries (env.sh supplies SKIP_PROXYSQL=1
-       #      and TSAN_OPTIONS). TSan reports still fail the binary
-       #      (default exitcode 66).
-       #   2. TAP_GROUP=unit-tests-g1 — the remaining already-built
-       #      unit binaries. TEST_PY_TAP_EXCL drops the phase-1
+      # SKIP_PROXYSQL=1 short-circuits the daemon + backend checks in
+      # run-tests-isolated.bash, so it just iterates groups.json and
+      # execs each *-t binary in turn — no nested docker, no Python
+      # tester. TSAN_OPTIONS comes from mysqlx-tsan-g1/env.sh.
+      #
+      # Two phases, one container invocation. Both always run; the
+      # combined status fails if either phase fails.
+      #   1. TAP_GROUP=mysqlx-tsan-g1 — the 26 TSAN-targeted mysqlx +
+      #      plugin-chassis binaries (env.sh supplies SKIP_PROXYSQL=1
+      #      and TSAN_OPTIONS). TSan reports still fail the binary
+      #      (default exitcode 66).
+      #   2. TAP_GROUP=unit-tests-g1 — the remaining already-built
+      #      core / duckdb / genai / mcp binaries. unit-tests-g1 has
+      #      no env.sh, so SKIP_PROXYSQL=1 and TSAN_OPTIONS are
+      #      exported inline. TEST_PY_TAP_EXCL drops the phase-1
        #      overlap. halt_on_error=0:exitcode=0 keeps never-TSAN-
        #      validated tests from red-ing the build on a race
        #      report (TAP assertion failures still fail).

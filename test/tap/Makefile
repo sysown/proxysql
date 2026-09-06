@@ -75,7 +75,6 @@ unit_tests: tap test_deps
 
 
 .PHONY: ai_genai_unit_tests stage_ai_genai_unit_tests
-.NOTPARALLEL: ai_genai_unit_tests
 ai_genai_unit_tests: tap test_deps
 	cd tests/unit && CC=${CC} CXX=${CXX} ${MAKE} ai_genai_unit_tests
 	$(MAKE) stage_ai_genai_unit_tests
