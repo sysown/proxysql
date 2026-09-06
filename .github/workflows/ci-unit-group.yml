@@ -96,7 +96,9 @@ jobs:
               && docker pull proxysql/packaging:build-ubuntu24-v4.0.0; then
               exit 0
             fi
-            sleep "$((attempt * 10))"
+            if [ "${attempt}" -lt 5 ]; then
+              sleep "$((attempt * 10))"
+            fi
           done
           echo "ERROR: failed to pull Ubuntu 24 build image after 5 attempts" >&2
           exit 1
