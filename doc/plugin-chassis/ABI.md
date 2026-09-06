@@ -59,8 +59,8 @@ The chassis (`lib/ProxySQL_PluginManager.cpp:324–383`) enforces:
 ### Current ABI version
 
 ```c
-#define PROXYSQL_PLUGIN_ABI_VERSION       4
-#define PROXYSQL_PLUGIN_ABI_VERSION_MAX   4
+#define PROXYSQL_PLUGIN_ABI_VERSION       5
+#define PROXYSQL_PLUGIN_ABI_VERSION_MAX   5
 ```
 
 ABI evolution so far:
@@ -68,6 +68,11 @@ ABI evolution so far:
 - **ABI 1 → ABI 2:** appends `register_schemas` to the descriptor (four-phase lifecycle). ABI-1 plugins skip Phase B entirely.
 - **ABI 2 → ABI 3:** descriptor layout is **unchanged**. The single addition is a `register_runtime_view` callback at the **tail of `ProxySQL_PluginServices`** (see §3 below). ABI-2 plugins keep loading on an ABI-3 core: their compiled-against `ProxySQL_PluginServices` simply ends one field earlier, and core never dereferences the trailing field for them. The accept range remains `[1, PROXYSQL_PLUGIN_ABI_VERSION_MAX]`.
 - **ABI 3 → ABI 4:** `ProxySQL_PluginDescriptor` and `ProxySQL_PluginServices` layouts are **unchanged**. The change is in `ProxySQL_PluginRuntimeView`, which gains a `db_kind` field (`ProxySQL_PluginDBKind`) **appended at the tail** of the struct. The chassis now dispatches the correct DB handle (admindb/configdb/statsdb) to the refresh callback based on `db_kind`. ABI-3 plugins that initialize `ProxySQL_PluginRuntimeView` with `{table_name, refresh, opaque}` (3-field aggregate init) automatically get `db_kind = admin_db` (value 0) via zero-initialization of the trailing field — matching the pre-ABI-4 behaviour without any detection code.
+- **ABI 4 → ABI 5:** `ProxySQL_PluginCommandContext` appends three optional
+  Admin global-mutex handoff fields. A command that can wait for another Admin
+  consumer may release the mutex during that wait and reacquire it before
+  returning. ABI-4 plugins see the unchanged `{admindb, configdb, statsdb}`
+  prefix and continue to load without using the new callbacks.
 
 Future ABI versions append fields. The chassis bumps `PROXYSQL_PLUGIN_ABI_VERSION_MAX` and gates each new field's read on `abi_version >= N`.
 
@@ -103,7 +108,7 @@ Reasons:
 
 ### Field stability
 
-The services struct is **tail-extensible**. The chassis fills the struct in declaration order and the plugin reads what it knows about. A plugin compiled against ABI 2 still loads on the current ABI-3 chassis: its compiled-against `ProxySQL_PluginServices` ends at `register_command_alias` and the chassis simply doesn't dereference the trailing `register_runtime_view` for that plugin. Same rule applies for any future ABI-N additions.
+The services struct is **tail-extensible**. The chassis fills the struct in declaration order and the plugin reads what it knows about. A plugin compiled against ABI 2 still loads on the current chassis: its compiled-against `ProxySQL_PluginServices` ends at `register_command_alias` and the chassis simply doesn't dereference the trailing `register_runtime_view` for that plugin. Same rule applies for any future ABI-N additions.
 
 The reverse — a future plugin trying to call a field that doesn't exist on the current chassis — would crash. The chassis prevents this by rejecting plugins whose `abi_version > PROXYSQL_PLUGIN_ABI_VERSION_MAX`.
 
@@ -196,7 +201,7 @@ The chassis follows these rules for ABI evolution:
 2. **Append, never insert.** New fields go at the end of the relevant struct.
 3. **Gate every new field's read.** When the chassis dereferences a field that's only valid for `abi_version >= N`, the read must be inside `if (descriptor->abi_version >= Nu)`.
 4. **Plugins set their own `abi_version` to whatever their compile-time header had.** This is the contract for "what fields I have". The chassis's `PROXYSQL_PLUGIN_ABI_VERSION_MAX` is the contract for "what fields I know how to read".
-5. **A future ABI 3 must not change the layout of fields that exist at ABI 2.** Otherwise an ABI-2 plugin stops being loadable.
+5. **A future ABI N must not change the layout of fields that exist at ABI N-1.** Otherwise an older plugin stops being loadable.
 
 The current public API surface (`ProxySQL_PluginDescriptor` + `ProxySQL_PluginServices` + the query-hook payload/result/action types) is **not yet versioned individually**. A future change might (e.g.) add a `ProxySQL_PluginServices_v3` for the second wave of services. The chassis is structured so this addition is a tail-append on the descriptor (`new_services` field) rather than a new struct.
 
@@ -252,7 +257,7 @@ static bool my_stop(const ProxySQL_PluginServices* services) {
 
 static const ProxySQL_PluginDescriptor descriptor = {
     "my_plugin",                          // name
-    PROXYSQL_PLUGIN_ABI_VERSION,          // abi_version (= 4)
+    PROXYSQL_PLUGIN_ABI_VERSION,          // abi_version (= 5)
     my_init,                              // init   (Phase D)
     my_start,                             // start  (Phase E)
     my_stop,                              // stop

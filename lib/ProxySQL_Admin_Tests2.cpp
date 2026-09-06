@@ -8,6 +8,7 @@
 #include <vector>       // std::vector
 #include <unordered_set>
 #include <cstring>
+#include "gen_utils.h"
 
 #include "MySQL_Query_Processor.h"
 #include "PgSQL_Query_Processor.h"
@@ -37,7 +38,7 @@ static void init_rand_del() {
 		static const char alphanum[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 		rand_del[0] = '-';
 		for (int i = 1; i < 4; i++) {
-			rand_del[i] = alphanum[rand() % (sizeof(alphanum) - 1)];
+			rand_del[i] = alphanum[rand_fast() % (sizeof(alphanum) - 1)];
 		}
 		rand_del[4] = '-';
 		rand_del[5] = 0;

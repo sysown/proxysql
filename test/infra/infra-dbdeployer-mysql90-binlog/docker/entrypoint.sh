@@ -139,6 +139,8 @@ done
 
 # Start proxysql_binlog_reader processes (one per MySQL node)
 # Each reader connects to its MySQL node and listens on a GTID port
+# These isolated sandboxes use generated self-signed certificates, so keep TLS
+# required while intentionally disabling certificate verification for CI only.
 echo "Starting binlog readers..."
 mkdir -p /var/log/mysqlbinlog
 
@@ -154,6 +156,8 @@ for i in 0 1 2; do
         -p binlog \
         -P ${MYSQL_PORT} \
         -l ${READER_PORT} \
+        --ssl-mode=REQUIRED \
+        --ssl-verify-server-cert=0 \
         -f >> /var/log/mysqlbinlog/reader_${MYSQL_PORT}.log 2>&1 &
 done
 

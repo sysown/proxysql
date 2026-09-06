@@ -1266,8 +1266,8 @@ void PgSQL_Session::handler_again___new_thread_to_cancel_query() {
 
 			const PgSQL_Connection_userinfo* ui = client_myds->myconn->userinfo;
 			std::unique_ptr<PgSQL_Backend_Kill_Args> backend_kill_args = std::make_unique<PgSQL_Backend_Kill_Args>(
-				(PGconn*)myds->myconn->get_pg_connection(), ui->username, ui->password, ui->dbname, myds->myconn->parent->address,
-				myds->myconn->parent->port, myds->myconn->parent->myhgc->hid, myds->myconn->parent->use_ssl, 
+				(PGconn*)myds->myconn->get_pg_connection(), ui, myds->myconn->parent->address,
+				myds->myconn->parent->port, myds->myconn->parent->myhgc->hid, myds->myconn->parent->use_ssl,
 				PgSQL_Backend_Kill_Args::TYPE::CANCEL_QUERY, thread
 			);
 
@@ -2276,7 +2276,21 @@ __implicit_sync:
 				}
 				c = *((unsigned char*)pkt.ptr);
 				if (client_myds != NULL) {
-					if (session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
+					// PROXYSQL_SESSION_SQLITE is included here alongside ADMIN/STATS
+					// because plugin session handlers that serve the PgSQL protocol
+					// (e.g. the duckdb plugin's DuckDBListener) use this session type
+					// for their own client-facing sessions -- there is no backend
+					// connection to route a query to, only the plugin's own
+					// handler_function. handler___status_WAITING_CLIENT_DATA___
+					// STATE_SLEEP___MYSQL_COM_QUERY___not_mysql() (below) already has
+					// an explicit `case PROXYSQL_SESSION_SQLITE:` arm that dispatches
+					// to GloSQLite3Server/the session's handler_function; without this
+					// session type in this gate, that arm was unreachable dead code --
+					// a 'Q' packet on such a session fell through untouched, leaking
+					// pkt.ptr and leaving the client waiting forever for a response
+					// that was never generated.
+					if (session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS ||
+						session_type == PROXYSQL_SESSION_SQLITE) {
 						c = *((unsigned char*)pkt.ptr);
 						if (c == 'Q') {
 							handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(pkt);
@@ -2286,9 +2300,24 @@ __implicit_sync:
 							l_free(pkt.size, pkt.ptr);
 							handler_ret = -1;
 							return handler_ret;
-						} else if (c == 'P' || c == 'B' || c == 'C' || c == 'D' || c == 'E') {
-							l_free(pkt.size, pkt.ptr);
-							continue;
+						} else if (c == 'P' || c == 'B' || c == 'C' || c == 'D' || c == 'E' ||
+						           ((c == 'H' || c == 'S') && session_type == PROXYSQL_SESSION_SQLITE)) {
+							if (session_type == PROXYSQL_SESSION_SQLITE) {
+								// Plugin-backed sessions get the message so the plugin can
+								// return its protocol-specific error and transaction state.
+								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(pkt);
+							} else {
+								// ADMIN/STATS do not implement the extended-query protocol.
+								// A silent drop leaves libpq waiting forever for ParseComplete;
+								// reject it immediately with a complete error response instead.
+								client_myds->setDSS_STATE_QUERY_SENT_NET();
+								client_myds->myprot.generate_error_packet(true, true,
+									"PostgreSQL extended-query protocol is not supported on the admin interface",
+									PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true);
+								l_free(pkt.size, pkt.ptr);
+								client_myds->DSS = STATE_SLEEP;
+								return handler_ret;
+							}
 						} else {
 							proxy_error("Not implemented yet. Message type:'0x%02X'\n", c);
 							client_myds->setDSS_STATE_QUERY_SENT_NET();
@@ -3862,7 +3891,10 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				l_free(pkt->size, pkt->ptr);
 				return;
 			} else {
-				assert(0); // this should never happen
+				*wrong_pass = true;
+				client_myds->setDSS_STATE_QUERY_SENT_NET();
+				l_free(pkt->size, pkt->ptr);
+				return;
 			}
 		} else {
 			*wrong_pass = true; //to forcefully close the connection. Is there a better way to do it?
@@ -4069,11 +4101,15 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					(strcmp(client_addr, (char*)"::1") == 0)
 					) {
 					// we are good!
-					client_myds->myprot.welcome_client();
-					handshake_err = false;
-					GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_OK, this, NULL);
-					status = WAITING_CLIENT_DATA;
-					client_myds->DSS = STATE_CLIENT_AUTH_OK;
+					if (client_myds->myprot.welcome_client()) {
+						handshake_err = false;
+						GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_OK, this, NULL);
+						status = WAITING_CLIENT_DATA;
+						client_myds->DSS = STATE_CLIENT_AUTH_OK;
+					} else {
+						*wrong_pass = true;
+						client_myds->setDSS_STATE_QUERY_SENT_NET();
+					}
 				}
 				else {
 					char* a = (char*)"User '%s' can only connect locally";
@@ -4106,10 +4142,14 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					//client_myds->myprot.generate_pkt_OK(true,NULL,NULL, (is_encrypted ? 3 : 2), 0,0,0,0,NULL,false);
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8, "Session=%p , DS=%p . STATE_CLIENT_AUTH_OK\n", this, client_myds);
 					GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_OK, this, NULL);
-					client_myds->myprot.welcome_client();
-					handshake_err = false;
-					status = WAITING_CLIENT_DATA;
-					client_myds->DSS = STATE_CLIENT_AUTH_OK;
+					if (client_myds->myprot.welcome_client()) {
+						handshake_err = false;
+						status = WAITING_CLIENT_DATA;
+						client_myds->DSS = STATE_CLIENT_AUTH_OK;
+					} else {
+						*wrong_pass = true;
+						client_myds->setDSS_STATE_QUERY_SENT_NET();
+					}
 				}
 			}
 		}
@@ -5460,6 +5500,16 @@ void PgSQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 #endif // STRESSTESTPOOL_MEASURE
 	}
 #endif // STRESSTEST_POOL
+#ifdef PROXYSQL31
+	const unsigned int pool_stats_hid = mc ? mc->parent->myhgc->hid : mybe->hostgroup_id;
+	HostgroupPoolStats *pool_stats = mc
+		? &mc->parent->myhgc->pool_stats
+		: hostgroup_pool_wait.active_stats(pool_stats_hid);
+	if (!pool_stats) {
+		pool_stats = PgHGM->get_hostgroup_pool_stats(pool_stats_hid);
+	}
+	hostgroup_pool_wait.observe(pool_stats, thread->curtime, mc != nullptr, pool_stats_hid);
+#endif
 	if (mc) {
 		mybe->server_myds->attach_connection(mc);
 		thread->status_variables.stvar[st_var_ConnPool_get_conn_success]++;
@@ -5786,6 +5836,9 @@ void PgSQL_Session::handle_transaction_state() {
 }
 
 void PgSQL_Session::RequestEnd(PgSQL_Data_Stream* myds, bool called_on_failure) {
+#ifdef PROXYSQL31
+	hostgroup_pool_wait.finish(thread ? thread->curtime : monotonic_time());
+#endif
 
 	// check if multiplexing needs to be disabled
 	const char* query_digest_text = NULL;
@@ -7527,10 +7580,11 @@ char* PgSQL_Session::get_current_query(int max_length) {
 
 	if (query_len > 0) {
 		res = (char *) malloc(query_len + 1);
-		if (trunc_query) {
-			// for truncated queries, add three dots at the end
-			memcpy(res, query_ptr, query_len - 3);
-			memcpy(res + (query_len - 3), "...", 3);
+		if (trunc_query && query_len >= 4) {
+			// for truncated queries, add three dots at the end when they fit
+			size_t cp_len = static_cast<size_t>(query_len) - 3;
+			memcpy(res, query_ptr, cp_len);
+			memcpy(res + cp_len, "...", 3);
 		} else {
 			memcpy(res, query_ptr, query_len);
 		}

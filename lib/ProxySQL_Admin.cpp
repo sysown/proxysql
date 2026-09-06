@@ -1235,6 +1235,9 @@ void ProxySQL_Admin::flush_mysql_stats() {
 	stats___mysql_errors(true);
 	// Reset MySQL connection pool statistics
 	stats___mysql_connection_pool(true);
+#ifdef PROXYSQL31
+	stats___mysql_hostgroup_connection_pool(true);
+#endif
 	// Reset MySQL client host cache
 	stats___mysql_client_host_cache(true);
 
@@ -1252,6 +1255,9 @@ void ProxySQL_Admin::flush_pgsql_stats() {
 	stats___pgsql_errors(true);
 	// Reset PostgreSQL connection pool statistics
 	stats___pgsql_connection_pool(true);
+#ifdef PROXYSQL31
+	stats___pgsql_hostgroup_connection_pool(true);
+#endif
 	// Reset PostgreSQL client host cache
 	stats___pgsql_client_host_cache(true);
 
@@ -1298,6 +1304,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_pgsql_free_connections=false;
 	bool stats_mysql_connection_pool=false;
 	bool stats_mysql_connection_pool_reset=false;
+#ifdef PROXYSQL31
+	bool stats_mysql_hostgroup_connection_pool=false;
+	bool stats_mysql_hostgroup_connection_pool_reset=false;
+#endif
 	bool stats_mysql_query_digest=false;
 	bool stats_pgsql_query_digest = false;
 	bool stats_mysql_query_digest_reset=false;
@@ -1344,6 +1354,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_pgsql_global = false;
 	bool stats_pgsql_connection_pool = false;
 	bool stats_pgsql_connection_pool_reset = false;
+#ifdef PROXYSQL31
+	bool stats_pgsql_hostgroup_connection_pool = false;
+	bool stats_pgsql_hostgroup_connection_pool_reset = false;
+#endif
 
 #ifdef PROXYSQLTSDB
 	bool stats_tsdb = false;
@@ -1466,6 +1480,13 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		if (strstr(query_no_space,"stats_mysql_connection_pool"))
 			{ stats_mysql_connection_pool=true; refresh=true; }
 	}
+#ifdef PROXYSQL31
+	if (strstr(query_no_space,"stats_mysql_hostgroup_connection_pool_reset")) {
+		stats_mysql_hostgroup_connection_pool_reset=true; refresh=true;
+	} else if (strstr(query_no_space,"stats_mysql_hostgroup_connection_pool")) {
+		stats_mysql_hostgroup_connection_pool=true; refresh=true;
+	}
+#endif
 	if (strstr(query_no_space, "stats_pgsql_connection_pool_reset")) {
 		stats_pgsql_connection_pool_reset = true; refresh = true;
 	} else {
@@ -1473,6 +1494,13 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			stats_pgsql_connection_pool = true; refresh = true;
 		}
 	}
+#ifdef PROXYSQL31
+	if (strstr(query_no_space,"stats_pgsql_hostgroup_connection_pool_reset")) {
+		stats_pgsql_hostgroup_connection_pool_reset=true; refresh=true;
+	} else if (strstr(query_no_space,"stats_pgsql_hostgroup_connection_pool")) {
+		stats_pgsql_hostgroup_connection_pool=true; refresh=true;
+	}
+#endif
 	if (strstr(query_no_space,"stats_mysql_free_connections"))
 		{ stats_mysql_free_connections=true; refresh=true; }
 	if (strstr(query_no_space, "stats_pgsql_free_connections")) 
@@ -1699,12 +1727,26 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			if (stats_mysql_connection_pool)
 				stats___mysql_connection_pool(false);
 		}
+#ifdef PROXYSQL31
+		if (stats_mysql_hostgroup_connection_pool_reset) {
+			stats___mysql_hostgroup_connection_pool(true);
+		} else if (stats_mysql_hostgroup_connection_pool) {
+			stats___mysql_hostgroup_connection_pool(false);
+		}
+#endif
 		if (stats_pgsql_connection_pool_reset) {
 			stats___pgsql_connection_pool(true);
 		} else {
 			if (stats_pgsql_connection_pool)
 				stats___pgsql_connection_pool(false);
 		}
+#ifdef PROXYSQL31
+		if (stats_pgsql_hostgroup_connection_pool_reset) {
+			stats___pgsql_hostgroup_connection_pool(true);
+		} else if (stats_pgsql_hostgroup_connection_pool) {
+			stats___pgsql_hostgroup_connection_pool(false);
+		}
+#endif
 		if (stats_mysql_free_connections)
 			stats___mysql_free_connections();
 		if (stats_pgsql_free_connections)
@@ -1788,7 +1830,9 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		if (admin) {
 			if (dump_global_variables) {
 				pthread_mutex_lock(&GloVars.checksum_mutex);
-				admindb->execute("DELETE FROM runtime_global_variables");	// extra
+				// Each core variable flusher below replaces its own namespace.
+				// Preserve rows published by plugins under namespaces core does
+				// not own (for example mcp-*).
 				flush_admin_variables___runtime_to_database(admindb, false, false, false, true);
 				flush_mysql_variables___runtime_to_database(admindb, false, false, false, true);
 #ifdef PROXYSQLTSDB
@@ -2143,6 +2187,12 @@ void ProxySQL_Admin::vacuum_stats(bool is_admin) {
 		"stats_mysql_connection_pool_reset",
 		"stats_pgsql_connection_pool",
 		"stats_pgsql_connection_pool_reset",
+#ifdef PROXYSQL31
+		"stats_mysql_hostgroup_connection_pool",
+		"stats_mysql_hostgroup_connection_pool_reset",
+		"stats_pgsql_hostgroup_connection_pool",
+		"stats_pgsql_hostgroup_connection_pool_reset",
+#endif
 		"stats_mysql_prepared_statements_info",
 		"stats_pgsql_prepared_statements_info",
 		"stats_mysql_processlist",
@@ -2261,7 +2311,9 @@ void *child_mysql(void *arg) {
 	if (__sync_fetch_and_add(&glovars.shutdown,0) != 0) {
 		goto __exit_child_mysql;
 	}
-	sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, false);
+	if (sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, false) == false) {
+		goto __exit_child_mysql;
+	}
 
 	while (__sync_fetch_and_add(&glovars.shutdown,0)==0) {
 		if (myds->available_data_out()) {
@@ -3356,6 +3408,31 @@ void ProxySQL_Admin::dump_mysql_collations() {
 	// the table is not required to be present on disk. Removing it due to #1055
 //	admindb->execute("DELETE FROM disk.mysql_collations");
 //	admindb->execute("INSERT INTO disk.mysql_collations SELECT * FROM main.mysql_collations");
+}
+
+void ProxySQL_Admin::dump_ssl_ciphers() {
+	char buf[1024];
+	char desc[128] = { 0 };
+	const char *query = "INSERT OR REPLACE INTO ssl_ciphers VALUES (\"%s\", \"%s\")";
+	admindb->execute("DELETE FROM ssl_ciphers");
+	if (GloVars.global.ssl_ctx == NULL) {
+		return;
+	}
+	STACK_OF(SSL_CIPHER) *ciphers = SSL_CTX_get_ciphers(GloVars.global.ssl_ctx);
+	if (ciphers == NULL) {
+		return;
+	}
+	int num = sk_SSL_CIPHER_num(ciphers);
+	for (int i = 0; i < num; i++) {
+		const SSL_CIPHER *cipher = sk_SSL_CIPHER_value(ciphers, i);
+		SSL_CIPHER_description(cipher, desc, sizeof(desc));
+		char *fst_newline = strchr(desc, '\n');
+		if (fst_newline) {
+			*fst_newline = '\0';
+		}
+		snprintf(buf, sizeof(buf), query, SSL_CIPHER_get_name(cipher), desc);
+		admindb->execute(buf);
+	}
 }
 
 void ProxySQL_Admin::check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs) {
@@ -5944,6 +6021,28 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
  		admindb->execute("INSERT OR REPLACE INTO main.clickhouse_users SELECT * FROM disk.clickhouse_users");
 	}
 #endif /* PROXYSQLCLICKHOUSE */
+#ifdef PROXYSQL40
+	// Plugin-registered config tables (issue #6167).
+	//
+	// Plugins that register a table under ProxySQL_PluginDBKind::config_db
+	// get the table materialized on disk (Admin_Bootstrap merges their
+	// defs into tables_defs_config), and they get "SAVE <X> TO DISK"
+	// verbs that write into it -- but until now nothing copied those rows
+	// back into main. at startup, because the block above is a hardcoded
+	// list of core tables. The result was silent, partial persistence:
+	// a plugin's variables survived a restart (they live in
+	// global_variables, copied above) while its own tables came back
+	// empty, so e.g. the MCP listener started with zero targets after
+	// SAVE MCP PROFILES TO DISK + restart.
+	//
+	// The copy belongs here rather than in each plugin because the
+	// ordering is what makes it correct: LoadConfiguredPlugins() (phase
+	// A+B) has already registered the schemas, this function runs inside
+	// admin init, and InitConfiguredPlugins() / StartConfiguredPlugins()
+	// run after it -- so a plugin's start() callback observes main.
+	// already populated from disk, with no per-plugin boot hook needed.
+	proxysql_restore_configured_plugin_config_tables(admindb);
+#endif /* PROXYSQL40 */
 	admindb->execute("PRAGMA foreign_keys = ON");
 #if defined(TEST_AURORA) || defined(TEST_GALERA)
 	admindb->execute("DELETE FROM mysql_servers WHERE gtid_port > 0"); // temporary disable add GTID checks
@@ -6422,7 +6521,20 @@ void ProxySQL_Admin::send_error_msg_to_client(S* sess, const char *msg, uint16_t
 #ifdef PROXYSQL40
 template <typename S>
 bool ProxySQL_Admin::dispatch_plugin_admin_command(S* sess, const char* sql) {
-	ProxySQL_PluginCommandContext ctx { admindb, configdb, statsdb };
+	ProxySQL_PluginCommandContext ctx {
+		admindb,
+		configdb,
+		statsdb,
+		this,
+		[](void* opaque) {
+			auto* admin = static_cast<ProxySQL_Admin*>(opaque);
+			pthread_mutex_unlock(&admin->sql_query_global_mutex);
+		},
+		[](void* opaque) {
+			auto* admin = static_cast<ProxySQL_Admin*>(opaque);
+			pthread_mutex_lock(&admin->sql_query_global_mutex);
+		}
+	};
 	ProxySQL_PluginCommandResult result { 0, 0, "" };
 	if (!proxysql_dispatch_configured_plugin_admin_command(ctx, sql, result)) {
 		return false;

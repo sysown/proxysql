@@ -365,22 +365,15 @@ public:
                 return response;
             }
             
-            char *error = NULL;
-            int cols, rows;
-            SQLite3_result *res = NULL;
-            GloProxyStats->statsdb_disk->execute_statement("SELECT DISTINCT metric_name FROM tsdb_metrics", &error, &cols, &rows, &res);
-            
-            if (error) {
-                j_resp = json {{"error", error}};
-                free(error);
+            SQLite3_result *res = GloProxyStats->list_tsdb_metric_names();
+            if (!res) {
+                j_resp = json {{"error", "Unable to list TSDB metrics"}};
             } else {
                 std::vector<string> metrics;
-                if (res) {
-                    for (int i = 0; i < res->rows_count; i++) {
-                        metrics.push_back(res->rows[i]->fields[0]);
-                    }
-                    delete res;
+                for (int i = 0; i < res->rows_count; i++) {
+                    metrics.push_back(res->rows[i]->fields[0]);
                 }
+                delete res;
                 j_resp = metrics;
             }
         } else if (req_path == "/api/tsdb/query") {

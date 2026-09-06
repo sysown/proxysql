@@ -33,6 +33,11 @@
 #include "MySQL_Ed25519.h"
 #endif
 
+// Sends a COM_QUIT packet on a backend connection without using the blocking
+// mysql_close() . Supports both clear text and TLS connections.
+// See the implementation in mysql_connection.cpp for the details.
+void proxy_mysql_send_com_quit(MYSQL *mysql);
+
 class Variable {
 public:
 	char *value = (char*)"";

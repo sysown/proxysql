@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "proxysql": {
+      "type": "http",
+      "url": "http://proxysql:6071/mcp/query",
+      "headers": {
+        "Authorization": "Bearer tap-mcp-token"
+      }
+    }
+  }
+}

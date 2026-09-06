@@ -407,6 +407,13 @@ public:
 	int init() override;
 
 	/**
+	 * Refresh borrowed runtime resources and the configuration snapshot after
+	 * LOAD GENAI VARIABLES.  The caller must hold the plugin runtime dependency
+	 * mutex exclusively.
+	 */
+	void refresh_runtime_dependencies(AI_Features_Manager* ai_mgr);
+
+	/**
 	 * @brief Close and cleanup
 	 *
 	 * Cleans up resources and closes database connections. Called automatically

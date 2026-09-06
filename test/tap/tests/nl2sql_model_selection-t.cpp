@@ -57,7 +57,7 @@ enum ModelProvider {
 string get_nl2sql_variable(const char* name) {
 	char query[256];
 	snprintf(query, sizeof(query),
-			 "SELECT variable_value FROM runtime_global_variables WHERE variable_name='genai-llm_%s'",
+			 "SELECT variable_value FROM global_variables WHERE variable_name='genai-llm_%s'",
 			 name);
 
 	diag("Admin: %s", query);
@@ -95,10 +95,8 @@ bool set_nl2sql_variable(const char* name, const char* value) {
 	const char* load_query = "LOAD GENAI VARIABLES TO RUNTIME";
 	diag("Admin: %s", load_query);
 	if (mysql_query(g_admin, load_query)) {
-		// Fallback to generic LOAD if specific one fails
-		load_query = "LOAD MYSQL VARIABLES TO RUNTIME";
-		diag("Admin: %s", load_query);
-		mysql_query(g_admin, load_query);
+		diag("Failed to load GenAI variables: %s", mysql_error(g_admin));
+		return false;
 	}
 
 	return true;
@@ -304,40 +302,59 @@ void test_config_variable_integration() {
 
 	// Save original values
 	string orig_provider = get_nl2sql_variable("provider");
+	string orig_model = get_nl2sql_variable("provider_model");
+	string orig_timeout = get_nl2sql_variable("timeout_ms");
 
 	// Test 1: Set provider to OpenAI
 	ok(set_nl2sql_variable("provider", "openai"),
 	   "Set model_provider to openai");
 	string current = get_nl2sql_variable("provider");
-	ok(current == "openai" || current.empty(),
+	ok(current == "openai",
 	   "Variable genai-llm_provider reflects new value 'openai'");
 
 	// Test 2: Set provider to Anthropic
 	ok(set_nl2sql_variable("provider", "anthropic"),
 	   "Set model_provider to anthropic");
 	current = get_nl2sql_variable("provider");
-	ok(current == "anthropic" || current.empty(),
+	ok(current == "anthropic",
 	   "Variable genai-llm_provider reflects new value 'anthropic'");
 
 	// Test 3: Set provider to Ollama
 	ok(set_nl2sql_variable("provider", "ollama"),
 	   "Set model_provider to ollama");
 	current = get_nl2sql_variable("provider");
-	ok(current == "ollama" || current.empty(),
+	ok(current == "ollama",
 	   "Variable genai-llm_provider reflects new value 'ollama'");
 
 	// Test 4: Set Ollama model variant
 	ok(set_nl2sql_variable("provider_model", "llama3.3"),
 	   "Set ollama_model to llama3.3");
+	ok(get_nl2sql_variable("provider_model") == "llama3.3",
+	   "Variable genai-llm_provider_model reflects new value 'llama3.3'");
 
 	// Test 5: Set timeout
 	ok(set_nl2sql_variable("timeout_ms", "60000"),
 	   "Set timeout_ms to 60000");
+	ok(get_nl2sql_variable("timeout_ms") == "60000",
+	   "Variable genai-llm_timeout_ms reflects new value '60000'");
 
-	// Restore original
-	if (!orig_provider.empty()) {
+	// Restore every variable changed by this test so later shard members see
+	// the same configuration this test inherited.
+	// Keep these as independent statements: cleanup must still attempt model
+	// and timeout if an earlier provider restore fails.
+	const bool provider_restored = !orig_provider.empty() &&
 		set_nl2sql_variable("provider", orig_provider.c_str());
-	}
+	const bool model_restored = !orig_model.empty() &&
+		set_nl2sql_variable("provider_model", orig_model.c_str());
+	const bool timeout_restored = !orig_timeout.empty() &&
+		set_nl2sql_variable("timeout_ms", orig_timeout.c_str());
+	const bool restored = provider_restored && model_restored && timeout_restored;
+	ok(restored,
+	   "Restore original provider, model, and timeout after integration checks");
+	ok(get_nl2sql_variable("provider") == orig_provider &&
+	   get_nl2sql_variable("provider_model") == orig_model &&
+	   get_nl2sql_variable("timeout_ms") == orig_timeout,
+	   "Restored NL2SQL variables match the inherited values");
 }
 
 // ============================================================================
@@ -372,8 +389,8 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	// Plan tests: 4 categories with 5 tests each + 1 category with 8 tests = 28 tests
-	plan(28);
+	// Plan tests: 4 categories with 5 tests each + 1 category with 12 tests = 32 tests
+	plan(32);
 
 	// Run test categories
 	test_latency_based_selection();

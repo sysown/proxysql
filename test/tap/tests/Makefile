@@ -29,6 +29,7 @@ IDIRS :=	-I$(TAP_IDIR) \
 
 LDIRS :=	-L$(TAP_LDIR) \
 			-L$(RE2_LDIR) \
+			-L$(ABSL_LDIR) \
 			-L$(PROXYSQL_LDIR) \
 			-L$(JEMALLOC_LDIR) \
 			-L$(LIBCONFIG_LDIR) \
@@ -39,7 +40,7 @@ LDIRS :=	-L$(TAP_LDIR) \
 			-L$(CURL_LDIR) -L$(EV_LDIR) \
 			-L$(PROMETHEUS_LDIR) \
 			-L$(DOTENV_DYN_LDIR) \
-			-L$(PCRE_LDIR) \
+			-L$(PCRE2_LDIR) \
 			-L$(LIBINJECTION_LDIR) \
 			-L$(POSTGRESQL_LDIR) \
 			-L$(LIBSCRAM_LDIR) \
@@ -85,21 +86,26 @@ OBJ := $(PROXYSQL_PATH)/src/obj/proxysql_global.o $(PROXYSQL_PATH)/src/obj/main.
 
 #SOURCES := ../tap/utils.cpp
 
+CURL_STATIC_LIB := $(CURL_LDIR)/libcurl.a
+POSTGRESQL_STATIC_LIBS := $(POSTGRESQL_PATH)/interfaces/libpq/libpq.a \
+	$(POSTGRESQL_PATH)/common/libpgcommon.a \
+	$(POSTGRESQL_PATH)/port/libpgport.a
+
 ifeq ($(UNAME_S),Darwin)
-MYLIBS_DYNAMIC_PART := -lgnutls -lcpp_dotenv -lcurl -lssl -lcrypto -luuid
-MYLIBS_STATIC_PART := -lconfig -lproxysql -lsqlparser -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core
-MYLIBS_PG_PART := -lpq -lpgcommon -lpgport
+MYLIBS_DYNAMIC_PART := -lgnutls -lcpp_dotenv
+MYLIBS_STATIC_PART := -lconfig -lproxysql -lsqlparser -ldaemon -lconfig++ $(RE2_STATIC_LIBS) $(PCRE2_LIBS) -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core
 MYLIBS_LAST_PART := -lpthread -lm -lz -lzstd -liconv -ldl $(EXTRALINK)
-MYLIBS := -ltap $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) $(MYLIBS_PG_PART) $(MYLIBS_LAST_PART)
+MYLIBS := -ltap $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) \
+	$(POSTGRESQL_STATIC_LIBS) $(CURL_STATIC_LIB) $(OPENSSL_STATIC_LIBS) \
+	$(MYLIBS_LAST_PART)
 else
-MYLIBS_DYNAMIC_PART := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -lcpp_dotenv -lcurl -lssl -lcrypto -luuid
-MYLIBS_STATIC_PART := -Wl,-Bstatic -lconfig -lproxysql -lsqlparser -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core
-MYLIBS_PG_PART := -Wl,-Bstatic -lpq -lpgcommon -lpgport
+MYLIBS_DYNAMIC_PART := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -lcpp_dotenv -luuid
+MYLIBS_STATIC_PART := -Wl,-Bstatic -lconfig -lproxysql -lsqlparser -ldaemon -lconfig++ $(RE2_STATIC_LIBS) $(PCRE2_LIBS) -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core
 MYLIBS_LAST_PART := -Wl,-Bdynamic -lpthread -lm -lz -lzstd -lrt -ldl $(EXTRALINK)
-MYLIBS := -Wl,-Bdynamic -ltap $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) $(MYLIBS_PG_PART) $(MYLIBS_LAST_PART)
+MYLIBS := -Wl,-Bdynamic -ltap $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) \
+	$(POSTGRESQL_STATIC_LIBS) $(CURL_STATIC_LIB) $(OPENSSL_STATIC_LIBS) \
+	$(MYLIBS_LAST_PART)
 endif
-#MYLIBS_PG := $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) $(MYLIBS_PG_PART) $(MYLIBS_LAST_PART)
-#MYLIBS := -Wl,--export-dynamic -Wl,-Bdynamic -lssl -lcrypto -lgnutls -ltap -lcpp_dotenv -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core -luuid -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl $(EXTRALINK)
 
 MYLIBSJEMALLOC :=
 ifneq ($(NOJEMALLOC),1)
@@ -141,8 +147,10 @@ ifeq ($(PROXYSQL40),1)
 endif
 
 OPT := $(STDCPP) -O2 -ggdb $(PSQL40) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
+# Compress ELF debug sections in test binaries. Apple clang accepts -gz but
+# does not compress DWARF stored in Mach-O objects, so Darwin omits it.
 ifneq ($(UNAME_S),Darwin)
-OPT += -Wl,--no-as-needed
+OPT += -Wl,--no-as-needed -gz
 endif
 OPT += -Wl,-rpath,$(TAP_LDIR) -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl,-rpath,$(RE2_LDIR)
 
@@ -153,11 +161,14 @@ OPT += -Wl,-rpath,$(TAP_LDIR) -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl
 default: all
 
 CUSTOMARGS := -I$(TAP_IDIR) -I$(CURL_IDIR) -I$(SQLITE3_IDIR) -I$(PROXYSQL_IDIR) -I$(JSON_IDIR) -I$(RE2_IDIR) -I$(SSL_IDIR)
-CUSTOMARGS += -L$(TAP_LDIR) -L$(CURL_LDIR) -L$(RE2_LDIR) -L$(SSL_LDIR) -L$(POSTGRESQL_LDIR)
+CUSTOMARGS += -L$(TAP_LDIR) -L$(CURL_LDIR) -L$(RE2_LDIR) -L$(ABSL_LDIR) -L$(SSL_LDIR) -L$(POSTGRESQL_LDIR)
 ifeq ($(UNAME_S),Darwin)
-CUSTOMARGS += -ltap -lcpp_dotenv -lcurl -lssl -lcrypto -lre2 -lpthread -lz -lzstd -ldl -lpq $(LWGCOV)
+CUSTOMARGS += -ltap -lcpp_dotenv $(RE2_STATIC_LIBS) $(POSTGRESQL_STATIC_LIBS) \
+	$(CURL_STATIC_LIB) $(OPENSSL_STATIC_LIBS) -lpthread -lz -lzstd -ldl $(LWGCOV)
 else
-CUSTOMARGS += -Wl,-Bdynamic -ltap -lcpp_dotenv -lcurl -lssl -lcrypto -lre2 -lpthread -lz -lzstd -ldl -lpq $(LWGCOV)
+CUSTOMARGS += -Wl,--export-dynamic -Wl,-Bdynamic -ltap -lcpp_dotenv $(RE2_STATIC_LIBS) \
+	$(POSTGRESQL_STATIC_LIBS) $(CURL_STATIC_LIB) $(OPENSSL_STATIC_LIBS) \
+	-lpthread -lz -lzstd -ldl $(LWGCOV)
 endif
 
 .PHONY: all
@@ -170,11 +181,13 @@ tests_no_infra: admin_set_credentials_logging-t listener_conflicts_validation-t
 
 DEBUG_OPT := $(STDCPP) -O0 -DDEBUG -ggdb $(PSQL40) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
 ifneq ($(UNAME_S),Darwin)
-DEBUG_OPT += -Wl,--no-as-needed
+DEBUG_OPT += -Wl,--no-as-needed -gz
 endif
 DEBUG_OPT += -Wl,-rpath,$(TAP_LDIR) -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl,-rpath,$(RE2_LDIR)
 debug: OPT := $(DEBUG_OPT)
 debug: tests
+
+test_cacert_load_and_verify_duration-t: private OPT += -DPROXYSQL_VENDORED_OPENSSL_VERSION=\"$(OPENSSL_VERSION)\"
 
 tests: CUSTOMARGS += $(OPT)
 tests: tests-cpp \
@@ -226,7 +239,7 @@ TESTS_FILTER_DARWIN := test_wexecvp_syscall_failures-t
 TESTS_CPP_FILTER := $(if $(filter Darwin,$(UNAME_S)),$(TESTS_FILTER_DARWIN),)
 
 ifeq ($(PROXYSQL40_DETECTED),0)
-TESTS_CPP := $(filter-out test_mysqlx_% $(TESTS_CPP_FILTER),$(patsubst %.cpp,%,$(wildcard *-t.cpp)))
+TESTS_CPP := $(filter-out test_mysqlx_% test_duckdb_plugin_load-t test_duckdb_bench-t $(TESTS_CPP_FILTER),$(patsubst %.cpp,%,$(wildcard *-t.cpp)))
 else
 TESTS_CPP := $(filter-out $(TESTS_CPP_FILTER),$(patsubst %.cpp,%,$(wildcard *-t.cpp)))
 endif
@@ -272,14 +285,14 @@ sh-%:
 
  test_com_register_slave_enables_fast_forward-t: binlog_rpl.h
 
-%-t: %-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
+%-t: %-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT) $(POSTGRESQL_STATIC_LIBS)
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 
 galera_1_timeout_count: galera_1_timeout_count.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
-	$(CXX) -DTEST_GALERA $< ../../../src/SQLite3_Server.cpp ../../../lib/ProxySQL_Admin.cpp -I$(CLICKHOUSE_CPP_IDIR) -I$(COREDUMPER_IDIR) $(IDIRS) $(LDIRS) -L$(CLICKHOUSE_CPP_LDIR) -L$(LZ4_LDIR) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(CLICKHOUSE_CPP_PATH)/contrib/zstd/zstd/libzstdstatic.a $(LZ4_LDIR)/liblz4.a -lscram -lusual $(ALLOW_MULTI_DEF) -o $@
+	$(CXX) -DTEST_GALERA $< ../../../src/SQLite3_Server.cpp ../../../lib/ProxySQL_Admin.cpp -I$(COREDUMPER_IDIR) $(IDIRS) $(LDIRS) -L$(CLICKHOUSE_CPP_LDIR) -L$(LZ4_LDIR) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(CLICKHOUSE_CPP_PATH)/contrib/zstd/zstd/libzstdstatic.a $(LZ4_LDIR)/liblz4.a -lscram -lusual $(ALLOW_MULTI_DEF) -o $@
 
 galera_2_timeout_no_count: galera_2_timeout_no_count.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
-	$(CXX) -DTEST_GALERA $< ../../../src/SQLite3_Server.cpp ../../../lib/ProxySQL_Admin.cpp -I$(CLICKHOUSE_CPP_IDIR) -I$(COREDUMPER_IDIR) $(IDIRS) $(LDIRS) -L$(CLICKHOUSE_CPP_LDIR) -L$(LZ4_LDIR) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(CLICKHOUSE_CPP_PATH)/contrib/zstd/zstd/libzstdstatic.a $(LZ4_LDIR)/liblz4.a -lscram -lusual $(ALLOW_MULTI_DEF) -o $@
+	$(CXX) -DTEST_GALERA $< ../../../src/SQLite3_Server.cpp ../../../lib/ProxySQL_Admin.cpp -I$(COREDUMPER_IDIR) $(IDIRS) $(LDIRS) -L$(CLICKHOUSE_CPP_LDIR) -L$(LZ4_LDIR) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib.a $(CLICKHOUSE_CPP_PATH)/contrib/zstd/zstd/libzstdstatic.a $(LZ4_LDIR)/liblz4.a -lscram -lusual $(ALLOW_MULTI_DEF) -o $@
 
 generate_set_session_csv: generate_set_session_csv.cpp
 	$(CXX) $< $(OPT) -o $@
@@ -293,19 +306,78 @@ test_tokenizer-t: test_tokenizer-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 test_mysql_query_digests_stages-t: test_mysql_query_digests_stages-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
 
-.PHONY: test_mysqlx_plugin_load-t
-test_mysqlx_plugin_load-t:
-	$(MAKE) -C unit test_mysqlx_plugin_load-t
-	ln -fs unit/test_mysqlx_plugin_load-t $@
+MYSQLX_BRIDGE_TESTS := test_mysqlx_plugin_load-t test_mysqlx_admin_tables-t
 
-.PHONY: test_mysqlx_admin_tables-t
-test_mysqlx_admin_tables-t:
-	$(MAKE) -C unit test_mysqlx_admin_tables-t
-	ln -fs unit/test_mysqlx_admin_tables-t $@
+# Build both bridge tests in one unit submake. Separate recursive makes do not
+# share a dependency graph and can otherwise rebuild common objects such as
+# unit/obj/test_init.o concurrently.
+.PHONY: mysqlx-bridge-tests $(MYSQLX_BRIDGE_TESTS)
+mysqlx-bridge-tests:
+	$(MAKE) -C unit $(MYSQLX_BRIDGE_TESTS)
+
+$(MYSQLX_BRIDGE_TESTS): mysqlx-bridge-tests
+	ln -fs unit/$@ $@
 
 # test_mysqlx_listener_smoke-t was retired with the dormant MysqlxWorker
 # path in 98aee7db2. Listener-lifecycle coverage now lives in
 # mysqlx_thread_unit-t and mysqlx_robustness_unit-t under unit/.
+
+# test_duckdb_plugin_load-t.cpp (like the mysqlx bridge tests above) links
+# ProxySQL_PluginManager, which transitively needs symbols (GloVars, MyHGM,
+# mysql_thread___* variables, ...) that are normally only pulled into a link
+# via --whole-archive. unit/Makefile's own rule for this target already
+# builds it that way (via $(WHOLE_LIBPROXYSQL)) and depends on
+# duckdb_plugin_build to make sure the plugin .so exists first; this
+# top-level directory's generic `%-t: %-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)`
+# pattern rule does neither, so without this explicit (higher-precedence)
+# rule `make tests` falls through to the generic one and fails to link with
+# "undefined reference to `GloVars'" / `MyHGM` / `mysql_thread___ffto_max_
+# buffer_size` etc. -- the classic symptom of a static archive linked
+# without --whole-archive missing globals nothing else in the link
+# references. Mirrors the $(MYSQLX_BRIDGE_TESTS) rule above exactly.
+DUCKDB_BRIDGE_TESTS := test_duckdb_plugin_load-t
+
+.PHONY: duckdb-bridge-tests $(DUCKDB_BRIDGE_TESTS)
+duckdb-bridge-tests:
+	$(MAKE) -C unit $(DUCKDB_BRIDGE_TESTS)
+
+$(DUCKDB_BRIDGE_TESTS): duckdb-bridge-tests
+	ln -fs unit/$@ $@
+
+# test_duckdb_bench-t links the DuckDB C API (native baseline) plus the
+# existing TAP mysql/libpq clients. The generic %-t recipe cannot find
+# duckdb.h or the 16-archive DuckDB link set. libduckdb_static.a alone
+# does not satisfy DuckDB's symbols -- copy the DUCKDB_ARS pattern from
+# test/tap/tests/unit/Makefile and plugins/duckdb/Makefile.
+DUCKDB_AR := $(DUCKDB_LDIR)/libduckdb_static.a
+DUCKDB_ARS = $(shell find $(DUCKDB_PATH)/build/release -name '*.a' 2>/dev/null)
+DUCKDB_LINK_GROUP_START :=
+DUCKDB_LINK_GROUP_END :=
+ifneq ($(UNAME_S),Darwin)
+DUCKDB_LINK_GROUP_START := -Wl,--start-group
+DUCKDB_LINK_GROUP_END := -Wl,--end-group
+endif
+
+$(DUCKDB_AR):
+	$(MAKE) -C $(PROXYSQL_PATH)/deps PROXYSQL40=1 duckdb
+	@test -f $@ || { echo "ERROR: deps duckdb build did not produce $@" >&2; exit 1; }
+
+ifeq ($(PROXYSQL40),1)
+USE_DUCKDB_BENCH := 1
+endif
+ifneq ($(PROXYSQL40_DETECTED),0)
+USE_DUCKDB_BENCH := 1
+endif
+
+ifeq ($(USE_DUCKDB_BENCH),1)
+test_duckdb_bench-t: test_duckdb_bench-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT) $(DUCKDB_AR)
+	$(CXX) $< $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
+		$(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) \
+		$(MARIADB_LDIR)/libmariadbclient.a $(CUSTOMARGS) -lm -o $@
+else
+test_duckdb_bench-t:
+	@echo "ERROR: test_duckdb_bench-t is PROXYSQL40-only" >&2; exit 1
+endif
 
 sqlite3-t: sqlite3-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 ifneq ($(PROXYSQL40),)
@@ -329,11 +401,11 @@ test_admin_prometheus_metrics_dump-t: test_admin_prometheus_metrics_dump-t.cpp $
 create_connection_annotation: test_connection_annotation-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) -DTEST_AURORA $< $(IDIRS) $(LDIRS) $(OPT) $(OBJ) $(MYLIBS) $(STATIC_LIBS) -o $@
 
-setparser_test: setparser_test.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT) $(RE2_PATH)/util/test.cc $(PROXYSQL_LDIR)/MySQL_Set_Stmt_Parser.cpp $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR)
+setparser_test: setparser_test.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT) $(PROXYSQL_LDIR)/MySQL_Set_Stmt_Parser.cpp $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR)
 ifneq ($(PROXYSQL40),)
-	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(RE2_PATH)/util/test.cc $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(SQLITE3_LDIR)/vec.o -o $@
+	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(SQLITE3_LDIR)/vec.o -o $@
 else
-	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(RE2_PATH)/util/test.cc $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
+	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
 endif
 
 setparser_test2-t: setparser_test2
@@ -440,6 +512,9 @@ PG_LITE_CLIENT_TESTS := \
 	pgsql-reg_test_5300_threshold_resultset_deadlock-t \
 	pgsql-reg_test_5866_result_format-t \
 	pgsql-auth_method_matrix-t \
+	pgsql-scram_reload_midhandshake-t \
+	pgsql-scram_user_removed_midhandshake-t \
+	pgsql-scram_rotate_midhandshake_backend-t \
 	pgsql-datatype_matrix-t \
 	pgsql-server_side_cursors-t \
 	test_ffto_pgsql_pipeline-t \
@@ -447,6 +522,21 @@ PG_LITE_CLIENT_TESTS := \
 
 $(PG_LITE_CLIENT_TESTS): %: %.cpp pg_lite_client.cpp pg_lite_client.h $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual $(ALLOW_MULTI_DEF) -o $@
+
+# pgsql_mock_backend.cpp is a scriptable fake PostgreSQL server. It exists to
+# reach backend behaviour a real PostgreSQL never produces -- a server that
+# vanishes mid-result, or replies in an invalid sequence. These rules differ from
+# the generic %-t rule ONLY by compiling pgsql_mock_backend.cpp in alongside the
+# test; the generic rule builds $< alone, so the harness would not be linked.
+# Nothing else is needed: -lpthread for its listener/worker threads already comes
+# from MYLIBS, and unlike the pg_lite_client rules above there is no -lscram or
+# -lusual to create duplicate symbols, so $(ALLOW_MULTI_DEF) does not apply.
+PGSQL_MOCK_BACKEND_TESTS := \
+	pgsql-reg_test_6109_midresult_disconnect-t \
+	pgsql-reg_test_6110_invalid_reply_sequence-t
+
+$(PGSQL_MOCK_BACKEND_TESTS): %: %.cpp pgsql_mock_backend.cpp pgsql_mock_backend.h $(TAP_LDIR)/libtap$(SHLIB_EXT)
+	$(CXX) $< pgsql_mock_backend.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 
 MYSQLX_PROTO_DIR := $(PROXYSQL_PATH)/plugins/mysqlx/proto
 MYSQLX_PROTO_SRCS := $(wildcard $(MYSQLX_PROTO_DIR)/*.pb.cc)
@@ -465,12 +555,16 @@ $(ODIR)/mysqlx_proto_%.pb.o: $(MYSQLX_PROTO_DIR)/%.pb.cc $(PROTOBUF_LIB) | $(ODI
 test_mysqlx_e2e_handshake-t: test_mysqlx_e2e_handshake-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
-		$(IDIRS) $(LDIRS) $(OPT) $(PROTOBUF_LIB) -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
+		$(IDIRS) $(LDIRS) $(OPT) $(PROTOBUF_LIB) -ltap -lcpp_dotenv -lmariadbclient \
+		$(POSTGRESQL_STATIC_LIBS) $(CURL_STATIC_LIB) $(OPENSSL_STATIC_LIBS) \
+		-lpthread -lz -ldl -o $@
 
 test_mysqlx_e2e_routing-t: test_mysqlx_e2e_routing-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
-		$(IDIRS) $(LDIRS) $(OPT) $(PROTOBUF_LIB) -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
+		$(IDIRS) $(LDIRS) $(OPT) $(PROTOBUF_LIB) -ltap -lcpp_dotenv -lmariadbclient \
+		$(POSTGRESQL_STATIC_LIBS) $(CURL_STATIC_LIB) $(OPENSSL_STATIC_LIBS) \
+		-lpthread -lz -ldl -o $@
 
 # Behavioural validation TAP test for issue #5678 part (b): the X-Protocol
 # clients are driven directly via the protocol helpers (same set used by
@@ -480,7 +574,9 @@ test_mysqlx_e2e_routing-t: test_mysqlx_e2e_routing-t.cpp $(PROXYSQL_PATH)/plugin
 test_mysqlx_route_drop_inflight-t: test_mysqlx_route_drop_inflight-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
-		$(IDIRS) $(LDIRS) $(OPT) $(PROTOBUF_LIB) -lssl -lcrypto -ltap -lcpp_dotenv -lcurl -lmariadbclient -lpthread -lz -ldl -o $@
+		$(IDIRS) $(LDIRS) $(OPT) $(PROTOBUF_LIB) -ltap -lcpp_dotenv -lmariadbclient \
+		$(POSTGRESQL_STATIC_LIBS) $(CURL_STATIC_LIB) $(OPENSSL_STATIC_LIBS) \
+		-lpthread -lz -ldl -o $@
 
 # The historical inflight stub binary was deleted in the same PR that
 # removed skip_all() from the framework. The stub had never been more

@@ -451,8 +451,23 @@ static void test_register_table_invalid_kind_in_init_aborts() {
 	unsetenv("PROXYSQL_FAKE_PLUGIN_REGISTER_INVALID_TABLE");
 }
 
+static void test_register_config_table_in_init_aborts() {
+	setenv("PROXYSQL_FAKE_PLUGIN_REGISTER_CONFIG_TABLE", "1", 1);
+	ProxySQL_PluginManager mgr;
+	std::string err;
+	ok(mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err),
+	   "plugin loads before late config-table registration test");
+	ok(!mgr.init_all(err),
+	   "init_all rejects config_db table registration after Admin materialization");
+	ok(err.find("register_schemas") != std::string::npos &&
+	   err.find("fake_plugin_late_config_table") != std::string::npos,
+	   "late table error directs plugin to register_schemas and names the table (err='%s')",
+	   err.c_str());
+	unsetenv("PROXYSQL_FAKE_PLUGIN_REGISTER_CONFIG_TABLE");
+}
+
 int main() {
-	plan(96);
+	plan(99);
 	make_log_path();
 
 	test_loader_round_trip();
@@ -473,6 +488,7 @@ int main() {
 	test_multi_plugin_start_failure_stops_started();
 	test_register_command_failure_in_init_aborts();
 	test_register_table_invalid_kind_in_init_aborts();
+	test_register_config_table_in_init_aborts();
 
 	cleanup_log();
 	return exit_status();

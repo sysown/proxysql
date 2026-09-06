@@ -37,7 +37,7 @@ struct DebugLogEntry {
 	std::string file;
 	int line = 0;
 	std::string funct;
-	int module = 0;
+	enum debug_module module = PROXY_DEBUG_UNKNOWN;
 	std::string modname;
 	int verbosity = 0;
 	std::string message;

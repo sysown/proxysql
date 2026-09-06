@@ -305,20 +305,22 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 				case clickhouse::Type::Code::Date:
 					{
 						std::time_t t=block[i]->As<ColumnDate>()->At(r);
-						struct tm *tm = localtime(&t);
+						struct tm tm;
 						char date[20];
 						memset(date,0,sizeof(date));
-						strftime(date, sizeof(date), "%Y-%m-%d", tm);
+						localtime_r(&t, &tm);
+						strftime(date, sizeof(date), "%Y-%m-%d", &tm);
 						s=date;
 					}
 					break;
 				case clickhouse::Type::Code::DateTime:
 					{
 						std::time_t t=block[i]->As<ColumnDateTime>()->At(r);
-						struct tm *tm = localtime(&t);
+						struct tm tm;
 						char date[20];
 						memset(date,0,sizeof(date));
-						strftime(date, sizeof(date), "%Y-%m-%d %H:%M:%S", tm);
+						localtime_r(&t, &tm);
+						strftime(date, sizeof(date), "%Y-%m-%d %H:%M:%S", &tm);
 						s=date;
 					}
 					break;
@@ -369,20 +371,22 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 								case clickhouse::Type::Code::Date:
 									{
 										std::time_t t=block[i]->As<ColumnDate>()->At(r);
-										struct tm *tm = localtime(&t);
+										struct tm tm;
 										char date[20];
 										memset(date,0,sizeof(date));
-										strftime(date, sizeof(date), "%Y-%m-%d", tm);
+										localtime_r(&t, &tm);
+										strftime(date, sizeof(date), "%Y-%m-%d", &tm);
 										s=date;
 									}
 									break;
 								case clickhouse::Type::Code::DateTime:
 									{
 										std::time_t t=block[i]->As<ColumnDateTime>()->At(r);
-										struct tm *tm = localtime(&t);
+										struct tm tm;
 										char date[20];
 										memset(date,0,sizeof(date));
-										strftime(date, sizeof(date), "%Y-%m-%d %H:%M:%S", tm);
+										localtime_r(&t, &tm);
+										strftime(date, sizeof(date), "%Y-%m-%d %H:%M:%S", &tm);
 										s=date;
 									}
 									break;
@@ -1468,7 +1472,9 @@ static void *child_mysql(void *arg) {
 	fds[0].revents=0;
 	fds[0].events=POLLIN|POLLOUT;
 	free(arg);
-	sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, true);
+	if (sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, true) == false) {
+		goto __exit_child_mysql;
+	}
 
 	while (__sync_fetch_and_add(&glovars.shutdown,0)==0) {
 		if (myds->available_data_out()) {

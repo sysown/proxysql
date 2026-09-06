@@ -432,6 +432,9 @@ char* GenAI_Threads_Handler::get_variable(char* name) {
 		snprintf(buf, sizeof(buf), "%d", variables.genai_llm_cache_similarity_threshold);
 		return strdup(buf);
 	}
+	if (!strcmp(name, "llm_cache_enabled")) {
+		return strdup(variables.genai_llm_cache_enabled ? "true" : "false");
+	}
 	if (!strcmp(name, "llm_timeout_ms")) {
 		char buf[64];
 		snprintf(buf, sizeof(buf), "%d", variables.genai_llm_timeout_ms);
@@ -616,6 +619,10 @@ bool GenAI_Threads_Handler::set_variable(char* name, const char* value) {
 			return false;
 		}
 		variables.genai_llm_cache_similarity_threshold = val;
+		return true;
+	}
+	if (!strcmp(name, "llm_cache_enabled")) {
+		variables.genai_llm_cache_enabled = (strcmp(value, "true") == 0);
 		return true;
 	}
 	if (!strcmp(name, "llm_timeout_ms")) {

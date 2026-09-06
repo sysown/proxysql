@@ -1,9 +1,5 @@
-# NOTE: v2.3 is required for MySQL 8.4 (v2.1 uses SHOW MASTER STATUS which is removed in 8.4)
-# Build it from https://github.com/sysown/proxysql_mysqlbinlog (tag 2.3+):
-#   cd /tmp/proxysql_mysqlbinlog && make build-debian12
-#   cp binaries/proxysql-mysqlbinlog_*.deb test/infra/docker-mysql84-binlogreader/
-#   bash test/infra/docker-mysql84-binlogreader/build.sh
-FROM proxysql/ci-infra:proxysql-mysqlbinlog-v2.3 AS binlog-reader
+# v2.4.0 supports caching_sha2_password and TLS connections required by MySQL 8.4+.
+FROM ghcr.io/sysown/proxysql-mysqlbinlog:2.4.0-ubuntu22 AS binlog-reader
 
 FROM ubuntu:22.04
 
@@ -44,7 +40,7 @@ RUN mkdir -p /root/opt/mysql \
 RUN dbdeployer defaults update reserved-ports '0'
 
 # Copy proxysql_binlog_reader from the binlog reader image
-COPY --from=binlog-reader /usr/bin/proxysql_binlog_reader /usr/local/bin/proxysql_binlog_reader
+COPY --from=binlog-reader /bin/proxysql_binlog_reader /usr/local/bin/proxysql_binlog_reader
 
 # Make MySQL client available in PATH for docker exec health checks
 ENV PATH="/root/opt/mysql/8.4.8/bin:${PATH}"

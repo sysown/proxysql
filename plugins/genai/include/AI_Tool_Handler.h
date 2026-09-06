@@ -73,6 +73,9 @@ public:
 	 */
 	int init() override;
 
+	/** Rebind the borrowed bridge after a GenAI runtime reload. */
+	void set_llm_bridge(LLM_Bridge* llm) { llm_bridge = llm; }
+
 	/**
 	 * @brief Close and cleanup
 	 */

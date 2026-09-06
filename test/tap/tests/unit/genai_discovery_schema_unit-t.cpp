@@ -518,7 +518,6 @@ static void test_log_llm_search() {
 
 static void test_log_rag_search_fts() {
 	Discovery_Schema* ds = create_test_schema();
-	ds->init();  // Already called in create_test_schema
 
 	Discovery_Schema* ds2 = create_test_schema();
 	int rc = ds2->log_rag_search_fts("billing tables", 5, "{\"type\":\"table\"}");
