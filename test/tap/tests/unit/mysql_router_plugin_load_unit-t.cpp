@@ -37,8 +37,11 @@ int main() {
 	ok(descriptor != nullptr, "the descriptor entry point returns a descriptor");
 	ok(descriptor && descriptor->name && std::string(descriptor->name) == "mysql_router",
 	   "the plugin identifier is mysql_router");
-	ok(descriptor && descriptor->abi_version == 9,
-	   "the real Router plugin targets chassis ABI 9");
+	ok(descriptor &&
+	   (descriptor->abi_version & ~PROXYSQL_PLUGIN_ABI_DEBUG_BIT) == 9u &&
+	   (descriptor->abi_version & PROXYSQL_PLUGIN_ABI_DEBUG_BIT) ==
+		   (PROXYSQL_PLUGIN_ABI_VERSION & PROXYSQL_PLUGIN_ABI_DEBUG_BIT),
+	   "the real Router plugin targets chassis ABI layout 9 with the matching DEBUG tag");
 	ok(descriptor && descriptor->register_schemas && descriptor->register_cli_options &&
 	   descriptor->early_action && descriptor->runtime_ready,
 	   "the ABI-9 schema, CLI, action, and runtime-ready callbacks are present");

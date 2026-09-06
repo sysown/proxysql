@@ -11,6 +11,11 @@ namespace {
 ProxySQL_PluginServices* g_services = nullptr;
 std::string g_events;
 bool g_secret_round_trip = false;
+#ifdef DEBUG
+constexpr uint32_t kRouterContractAbiDebugBit = PROXYSQL_PLUGIN_ABI_DEBUG_BIT;
+#else
+constexpr uint32_t kRouterContractAbiDebugBit = 0u;
+#endif
 
 void record(const char* event) {
 	if (!g_events.empty()) g_events += ',';
@@ -99,7 +104,7 @@ const char* status_json() {
 
 const ProxySQL_PluginDescriptor descriptor {
 	"router_contract_fake",
-	8,
+	8u | kRouterContractAbiDebugBit,
 	&init,
 	&start,
 	&stop,

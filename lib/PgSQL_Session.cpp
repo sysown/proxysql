@@ -2276,7 +2276,21 @@ __implicit_sync:
 				}
 				c = *((unsigned char*)pkt.ptr);
 				if (client_myds != NULL) {
-					if (session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
+					// PROXYSQL_SESSION_SQLITE is included here alongside ADMIN/STATS
+					// because plugin session handlers that serve the PgSQL protocol
+					// (e.g. the duckdb plugin's DuckDBListener) use this session type
+					// for their own client-facing sessions -- there is no backend
+					// connection to route a query to, only the plugin's own
+					// handler_function. handler___status_WAITING_CLIENT_DATA___
+					// STATE_SLEEP___MYSQL_COM_QUERY___not_mysql() (below) already has
+					// an explicit `case PROXYSQL_SESSION_SQLITE:` arm that dispatches
+					// to GloSQLite3Server/the session's handler_function; without this
+					// session type in this gate, that arm was unreachable dead code --
+					// a 'Q' packet on such a session fell through untouched, leaking
+					// pkt.ptr and leaving the client waiting forever for a response
+					// that was never generated.
+					if (session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS ||
+						session_type == PROXYSQL_SESSION_SQLITE) {
 						c = *((unsigned char*)pkt.ptr);
 						if (c == 'Q') {
 							handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(pkt);
@@ -2286,9 +2300,24 @@ __implicit_sync:
 							l_free(pkt.size, pkt.ptr);
 							handler_ret = -1;
 							return handler_ret;
-						} else if (c == 'P' || c == 'B' || c == 'C' || c == 'D' || c == 'E') {
-							l_free(pkt.size, pkt.ptr);
-							continue;
+						} else if (c == 'P' || c == 'B' || c == 'C' || c == 'D' || c == 'E' ||
+						           ((c == 'H' || c == 'S') && session_type == PROXYSQL_SESSION_SQLITE)) {
+							if (session_type == PROXYSQL_SESSION_SQLITE) {
+								// Plugin-backed sessions get the message so the plugin can
+								// return its protocol-specific error and transaction state.
+								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(pkt);
+							} else {
+								// ADMIN/STATS do not implement the extended-query protocol.
+								// A silent drop leaves libpq waiting forever for ParseComplete;
+								// reject it immediately with a complete error response instead.
+								client_myds->setDSS_STATE_QUERY_SENT_NET();
+								client_myds->myprot.generate_error_packet(true, true,
+									"PostgreSQL extended-query protocol is not supported on the admin interface",
+									PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true);
+								l_free(pkt.size, pkt.ptr);
+								client_myds->DSS = STATE_SLEEP;
+								return handler_ret;
+							}
 						} else {
 							proxy_error("Not implemented yet. Message type:'0x%02X'\n", c);
 							client_myds->setDSS_STATE_QUERY_SENT_NET();

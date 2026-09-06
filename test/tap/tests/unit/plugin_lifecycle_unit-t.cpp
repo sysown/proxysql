@@ -33,6 +33,9 @@
 #ifndef PROXYSQL_FAKE_PLUGIN2_PATH
 #error "PROXYSQL_FAKE_PLUGIN2_PATH must be defined"
 #endif
+#ifndef PROXYSQL_FAKE_PLUGIN_DEBUG_MISMATCH_PATH
+#error "PROXYSQL_FAKE_PLUGIN_DEBUG_MISMATCH_PATH must be defined"
+#endif
 
 namespace {
 
@@ -645,10 +648,25 @@ static void test_bogus_abi_version_rejected() {
 	unsetenv("PROXYSQL_FAKE_PLUGIN_FORCE_BOGUS_ABI");
 }
 
-int main() {
-	plan(72);
+static void test_debug_abi_mismatch_rejected() {
+	clear_log();
 
-	ok(PROXYSQL_PLUGIN_ABI_VERSION <= PROXYSQL_PLUGIN_ABI_VERSION_MAX,
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_DEBUG_MISMATCH_PATH };
+	std::string err;
+	ok(!proxysql_load_configured_plugins(mgr, paths, err),
+	   "load fails when plugin and core DEBUG ABI tags differ");
+	ok(err.find("DEBUG") != std::string::npos,
+	   "error message identifies the DEBUG ABI mismatch (err='%s')", err.c_str());
+	ok(read_log().find("fake_plugin:init") == std::string::npos,
+	   "init was NOT called on a plugin rejected by the DEBUG ABI check");
+}
+
+int main() {
+	plan(75);
+
+	ok((PROXYSQL_PLUGIN_ABI_VERSION & ~PROXYSQL_PLUGIN_ABI_DEBUG_BIT) <=
+		PROXYSQL_PLUGIN_ABI_VERSION_MAX,
 		"the loader accepts the current additive ABI");
 
 	make_log_path();
@@ -672,6 +690,7 @@ int main() {
 	test_runtime_ready_exception_closes_ready_gates();
 	test_runtime_ready_callbacks_receive_isolated_contexts();
 	test_bogus_abi_version_rejected();
+	test_debug_abi_mismatch_rejected();
 
 	cleanup_log();
 	return exit_status();

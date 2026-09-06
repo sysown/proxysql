@@ -306,6 +306,27 @@ const char *fake_status_json() {
 	return "{\"name\":\"" FAKE_PLUGIN_NAME "\",\"state\":\"running\"}";
 }
 
+// abi_version literals below hardcode the ABI *layout* number (see
+// ProxySQL_Plugin.h) to pin down exactly which descriptor shape each fake
+// plugin represents, independent of PROXYSQL_PLUGIN_ABI_VERSION's current
+// value. They still must carry PROXYSQL_PLUGIN_ABI_DEBUG_BIT whenever this
+// .so is itself built with -DDEBUG, or the loader's DEBUG-tag check (see
+// ProxySQL_Plugin.h / ProxySQL_PluginManager.cpp) would refuse to load them
+// whenever the core/test binary under test is a debug build -- these fake
+// descriptors exist to test the layout-version compatibility path, not the
+// DEBUG-tag path.
+#if defined(PROXYSQL_FAKE_PLUGIN_FORCE_DEBUG_MISMATCH)
+#ifdef DEBUG
+constexpr uint32_t kFakeAbiDebugBit = 0u;
+#else
+constexpr uint32_t kFakeAbiDebugBit = PROXYSQL_PLUGIN_ABI_DEBUG_BIT;
+#endif
+#elif defined(DEBUG)
+constexpr uint32_t kFakeAbiDebugBit = PROXYSQL_PLUGIN_ABI_DEBUG_BIT;
+#else
+constexpr uint32_t kFakeAbiDebugBit = 0u;
+#endif
+
 // Pre-Step-2.2 descriptor layout (six fields).  Used when the plugin is
 // NOT opting into Phase B -- register_schemas is implicitly null because
 // the field is absent.  Leaves us testing that plugins built against the
@@ -314,7 +335,7 @@ const char *fake_status_json() {
 // represents the "legacy plugin" shape the v4 loader has to accept.
 const ProxySQL_PluginDescriptor fake_descriptor = {
 	FAKE_PLUGIN_NAME,
-	1,
+	1u | kFakeAbiDebugBit,
 	&fake_init,
 	&fake_start,
 	&fake_stop,
@@ -327,7 +348,7 @@ const ProxySQL_PluginDescriptor fake_descriptor = {
 // abi_version 2 tells the loader this descriptor has the seventh field.
 const ProxySQL_PluginDescriptor fake_descriptor_with_phase_b = {
 	FAKE_PLUGIN_NAME,
-	2,
+	2u | kFakeAbiDebugBit,
 	&fake_init,
 	&fake_start,
 	&fake_stop,
@@ -339,7 +360,7 @@ const ProxySQL_PluginDescriptor fake_descriptor_with_phase_b = {
 // descriptor tail field, so the manager must read it only for ABI >= 6.
 const ProxySQL_PluginDescriptor fake_descriptor_with_cli = {
 	FAKE_PLUGIN_NAME,
-	6,
+	6u | kFakeAbiDebugBit,
 	&fake_init,
 	&fake_start,
 	&fake_stop,
@@ -351,7 +372,7 @@ const ProxySQL_PluginDescriptor fake_descriptor_with_cli = {
 
 const ProxySQL_PluginDescriptor fake_descriptor_with_early_action = {
 	FAKE_PLUGIN_NAME,
-	6,
+	6u | kFakeAbiDebugBit,
 	&fake_init,
 	&fake_start,
 	&fake_stop,
@@ -363,7 +384,7 @@ const ProxySQL_PluginDescriptor fake_descriptor_with_early_action = {
 
 const ProxySQL_PluginDescriptor fake_descriptor_with_runtime_ready = {
 	FAKE_PLUGIN_NAME,
-	8,
+	8u | kFakeAbiDebugBit,
 	&fake_init,
 	&fake_start,
 	&fake_stop,
@@ -389,7 +410,7 @@ struct fake_descriptor_v5_layout {
 };
 const fake_descriptor_v5_layout fake_descriptor_abi5 = {
 	FAKE_PLUGIN_NAME,
-	5,
+	5u | kFakeAbiDebugBit,
 	&fake_init,
 	&fake_start,
 	&fake_stop,
@@ -413,7 +434,7 @@ struct fake_descriptor_v7_layout {
 };
 const fake_descriptor_v7_layout fake_descriptor_abi7 = {
 	FAKE_PLUGIN_NAME,
-	7,
+	7u | kFakeAbiDebugBit,
 	&fake_init,
 	&fake_start,
 	&fake_stop,
