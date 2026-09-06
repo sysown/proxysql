@@ -315,7 +315,7 @@ jemalloc/jemalloc/lib/libjemalloc.a:
 jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
 
 
-mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: $(OPENSSL_BUILD_STAMP)
+mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: $(OPENSSL_BUILD_STAMP) mariadb-client-library/x509cache.patch
 	cd mariadb-client-library && rm -rf mariadb-connector-c-*/ || true
 	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.3.8-src.tar.gz
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../plugin_auth_CMakeLists.txt.patch
@@ -493,15 +493,12 @@ endif
 postgresql: postgresql/postgresql/src/interfaces/libpq/libpq.a
 
 
-libusual/libusual/.libs/libusual.a: $(OPENSSL_BUILD_STAMP)
+libusual/libusual/.libs/libusual.a: $(OPENSSL_BUILD_STAMP) libusual/tls_free_namespace.patch
 	cd libusual && rm -rf libusual-*/ || true
 	cd libusual && tar -zxf libusual-*.tar.gz
+	cd libusual/libusual && patch -p1 < ../tls_free_namespace.patch
 	cd libusual/libusual && ./autogen.sh
-ifeq ($(UNAME_S),Darwin)
-	cd libusual/libusual && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="$(OPENSSL_STATIC_LIBS)" ./configure --with-openssl="$(SSL_PATH)" --disable-shared
-else
-	cd libusual/libusual && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="$(OPENSSL_STATIC_LIBS)" ./configure --with-openssl="$(SSL_PATH)" --disable-shared
-endif
+	cd libusual/libusual && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="-L$(SSL_LDIR)" ./configure --with-openssl="$(SSL_PATH)" --disable-shared
 	cd libusual/libusual && CC=${CC} CXX=${CXX} ${MAKE}
 
 libusual: libusual/libusual/.libs/libusual.a

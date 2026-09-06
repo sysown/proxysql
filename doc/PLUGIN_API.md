@@ -57,7 +57,10 @@ the plugin declares ABI version 2 or higher.
    are non-null stubs that return `nullptr`.  The plugin declares the
    tables it owns, its admin commands, and any admin-side runtime
    views it wants the chassis to project from module state; it MUST
-   NOT touch DB handles here.
+   NOT touch DB handles here.  Plugins that leave `register_schemas`
+   null (or that declare ABI 1) skip this phase entirely. Such plugins
+   cannot declare persistent `config_db` tables; plugins that do must use
+   ABI 2+ and `register_schemas`. Other setup remains valid in Phase E.
 3. **Phase C — admin materialization.**  The admin module initializes
    and materializes the SQLite schemas collected during Phase B
    (`merge_plugin_tables` + `CREATE TABLE`).  On DDL failure ProxySQL
@@ -66,8 +69,10 @@ the plugin declares ABI version 2 or higher.
    `early_action` once. It may continue normal startup or request a successful
    or failed process exit (for example after bootstrap).
 5. **Phase E — init.**  The plugin's `init()` callback receives fully live
-   services. Plugins that omitted Phase B may register their schema and
-   commands here; plugins that used Phase B finish their context setup.
+   services. Commands, hooks, runtime callbacks, and non-persistent tables may
+   be registered here, but `config_db` table registration is rejected because
+   disk restoration has already run. Plugins that used Phase B finish their
+   context setup here.
 6. **Phase F — start.**  The plugin's `start()` callback starts plugin-owned
    workers and other active resources. After core runtime dependencies exist,
    ABI-8 plugins also receive `runtime_ready()` immediately before listener
@@ -117,7 +122,7 @@ struct ProxySQL_PluginDescriptor {
 |--------------------|---------------|-----------------------------------------------------------|
 | `name`             | `const char*` | Plugin identifier, used in logging.                        |
 | `abi_version`      | `uint32_t`    | Set from `PROXYSQL_PLUGIN_ABI_VERSION`. The current PROXYSQL40 core accepts layout versions `[1, 9]` after masking the build-mode tag, and requires the plugin's DEBUG tag to match the core. See the ABI reference for the per-version matrix. |
-| `init`             | callback      | Phase E — called with live services; register tables and commands here (or finish context setup if `register_schemas` already did it). |
+| `init`             | callback      | Phase E — called with live services; register commands, hooks, and non-persistent tables here. Persistent `config_db` tables must have been declared through `register_schemas` in Phase B. |
 | `start`            | callback      | Phase F — start threads, open sockets, load config.        |
 | `stop`             | callback      | Called on shutdown.  Pairs with `init`, not `start`: if `init` returned true and `start` later failed, `stop` is still called so the plugin can release resources it allocated in `init`. |
 | `status_json`      | callback      | Return a static JSON string describing plugin status.      |
@@ -224,7 +229,9 @@ void register_table(const ProxySQL_PluginTableDef &def);
 ```
 
 Register a SQLite table in one of ProxySQL's databases. Tables are created
-automatically before `start()` is called.
+automatically before `start()` is called. Persistent `config_db` registrations
+are accepted only during Phase B `register_schemas`; calls from `init()` are
+rejected because automatic disk restoration has already run.
 
 ```cpp
 struct ProxySQL_PluginTableDef {
@@ -242,8 +249,9 @@ struct ProxySQL_PluginTableDef {
 | `config_db` | On-disk    | Persistent configuration (survives restarts)         |
 | `stats_db`  | In-memory  | Statistics/metrics tables                            |
 
-**Convention**: For configuration tables that support the standard
-memory↔runtime↔disk tier model, register the editable table in **both**
+**Requirement**: Every `config_db` table participates in automatic disk-to-memory
+restore via `SELECT *` and must therefore have a same-name `admin_db` destination
+with an identical table definition. Register the editable table in **both**
 `admin_db` and `config_db`. Register a separate `runtime_`-prefixed
 table in `admin_db` only — but treat it as an admin-side **projection**,
 not as a tier the plugin maintains: declare it via `register_table`,
@@ -351,7 +359,7 @@ already registered (by this or another plugin) or if `refresh` is
 `nullptr`.
 
 `register_runtime_view` is live both during `register_schemas` (Phase B)
-and `init` (Phase D). Plugins typically register views alongside the
+and `init` (Phase E). Plugins typically register views alongside the
 editable tables they project. See the separation-of-duties contract
 under [Admin Integration Patterns](#admin-integration-patterns) below
 for why this exists.

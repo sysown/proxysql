@@ -183,6 +183,12 @@ std::string proxysql_resolve_configured_plugin_admin_alias(const std::string& sq
 // the correct one based on each view's registered db_kind.
 void proxysql_refresh_configured_plugin_runtime_views(const std::string& sql,
 	SQLite3DB* admindb, SQLite3DB* configdb, SQLite3DB* statsdb);
+// Admin-side helper: restore every plugin-registered config_db table from
+// `disk.` into `main.` after schema materialization and before plugin init.
+void proxysql_restore_configured_plugin_config_tables(SQLite3DB* admindb);
+void proxysql_restore_plugin_config_tables_from_disk(SQLite3DB* admindb,
+	const std::vector<ProxySQL_PluginTableDef>& config_tables);
+
 // Phase A only: dlopen each module and validate its descriptor. On success,
 // `manager` is populated and installed as the active manager. Callers must
 // then register CLI options, invoke the schema-registration phase before

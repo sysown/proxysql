@@ -36,12 +36,21 @@ bool register_cli_options(ProxySQL_PluginCLIRegistry* registry) {
 
 bool register_schemas(ProxySQL_PluginServices* services) {
 	if (services == nullptr || services->register_table == nullptr) return false;
-	const ProxySQL_PluginTableDef table {
-		ProxySQL_PluginDBKind::config_db,
-		"router_contract_fake_state",
-		"CREATE TABLE router_contract_fake_state (name TEXT PRIMARY KEY, value TEXT NOT NULL)"
+	constexpr const char* table_name = "router_contract_fake_state";
+	constexpr const char* table_def =
+		"CREATE TABLE router_contract_fake_state (name TEXT PRIMARY KEY, value TEXT NOT NULL)";
+	const ProxySQL_PluginTableDef admin_table {
+		ProxySQL_PluginDBKind::admin_db,
+		table_name,
+		table_def
 	};
-	services->register_table(table);
+	const ProxySQL_PluginTableDef config_table {
+		ProxySQL_PluginDBKind::config_db,
+		table_name,
+		table_def
+	};
+	services->register_table(admin_table);
+	services->register_table(config_table);
 	record("register_schemas");
 	return true;
 }
@@ -406,8 +415,10 @@ int main() {
 	parser.get("--fake-plugin-action")->getString(action);
 	ok(action == "bootstrap", "the definitive parser owns the fake action value");
 	ok(proxysql_register_configured_plugin_schemas(manager.get(), error) &&
+		manager->tables(ProxySQL_PluginDBKind::admin_db).size() == 1 &&
 		manager->tables(ProxySQL_PluginDBKind::config_db).size() == 1,
-		"schema registration records the fake config table (err='%s')", error.c_str());
+		"schema registration records matching fake admin and config tables (err='%s')",
+		error.c_str());
 	ok(std::string(fake.events()) == "register_cli,register_schemas",
 		"discovery callbacks run in CLI then schema order");
 
