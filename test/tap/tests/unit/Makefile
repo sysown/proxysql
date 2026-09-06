@@ -217,7 +217,7 @@ LIBPROXYSQLAR_FULL := $(LIBPROXYSQLAR) \
 	$(POSTGRESQL_PATH)/port/libpgport.a
 
 MYLIBS := $(OPENSSL_FORCE_LOAD_LIBS) -lpthread -lm -lz \
-		  -liconv -lgnutls -lprometheus-cpp-pull -lprometheus-cpp-core -luuid \
+		  -liconv -lgnutls -lprometheus-cpp-pull -lprometheus-cpp-core \
 		  -lzstd $(LWGCOV)
 else
 # Linux/FreeBSD: Use -Bstatic/-Bdynamic for controlled linking.

@@ -92,7 +92,7 @@ POSTGRESQL_STATIC_LIBS := $(POSTGRESQL_PATH)/interfaces/libpq/libpq.a \
 	$(POSTGRESQL_PATH)/port/libpgport.a
 
 ifeq ($(UNAME_S),Darwin)
-MYLIBS_DYNAMIC_PART := -lgnutls -lcpp_dotenv -luuid
+MYLIBS_DYNAMIC_PART := -lgnutls -lcpp_dotenv
 MYLIBS_STATIC_PART := -lconfig -lproxysql -lsqlparser -ldaemon -lconfig++ $(RE2_STATIC_LIBS) $(PCRE2_LIBS) -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core
 MYLIBS_LAST_PART := -lpthread -lm -lz -lzstd -liconv -ldl $(EXTRALINK)
 MYLIBS := -ltap $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) \
