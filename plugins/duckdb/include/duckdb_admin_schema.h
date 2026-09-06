@@ -8,34 +8,37 @@
 class SQLite3DB;
 class DuckDBConfigStore;
 
-extern const char kDuckDBVariablesTableDef[];
-extern const char kRuntimeDuckDBVariablesTableDef[];
-
-// Phase B entry point: registers tables, the runtime view, and the
-// LOAD/SAVE commands. Must not touch DB handles — they are null here.
+// Phase B entry point: registers commands and a refresh callback for the
+// existing runtime_global_variables table. No DuckDB scalar table is created.
 bool duckdb_register_admin_schema(ProxySQL_PluginServices& services);
 
-// LOAD DUCKDB VARIABLES TO RUNTIME: read the editable admin table and
-// install every recognised row into the module. Unknown or invalid rows
-// are skipped and appended to `err`; the call still returns true so one
-// bad row cannot block the whole load.
+// One-time upgrade migration for the pre-prefix DuckDB scalar tables.
+bool duckdb_migrate_legacy_variable_tables(SQLite3DB& admindb, std::string& err);
+
+// Startup path: migrate legacy tables, seed missing duckdb-* defaults in
+// main.global_variables, and atomically install the sparse Main candidate.
+bool duckdb_prepare_variables_for_startup(SQLite3DB& admindb,
+                                         DuckDBConfigStore& store,
+                                         std::string& err);
+
+// Read duckdb-* rows from main.global_variables, overlay them on `store`, and
+// replace `store` only if every row and cross-field constraint is valid.
 bool duckdb_install_variables_from_admin(SQLite3DB& admindb,
                                         DuckDBConfigStore& store,
                                         std::string& err);
 
-// SAVE DUCKDB VARIABLES: dump the module into the editable admin table.
+// SAVE FROM RUNTIME: replace the duckdb-* Main slice with effective state.
 bool duckdb_save_variables_to_admin(SQLite3DB& admindb,
                                    const DuckDBConfigStore& store,
                                    std::string& err);
 
-// register_runtime_view refresh callback. `opaque` is a DuckDBConfigStore*.
-// The chassis callback returns void, so projection failures are reported via
-// ProxySQL_PluginServices::log_message when that service is available.
+// Publish the actual engine/listener snapshot to the duckdb-* Runtime slice.
+bool duckdb_publish_runtime_variables(SQLite3DB& admindb, std::string& err);
+
+// register_runtime_view callback for the standard runtime_global_variables.
 void duckdb_refresh_runtime_variables(SQLite3DB* db, void* opaque);
 
-// Startup disk -> memory refresh of the editable table, matching what
-// proxysql_admin does for mysql_users et al. Pure admin-tier persistence:
-// no module involvement, no runtime view.
+// Scoped disk -> Main copy used by LOAD DUCKDB VARIABLES FROM DISK.
 bool duckdb_sync_variables_disk_to_memory(SQLite3DB& admindb, std::string& err);
 
 #endif // DUCKDB_ADMIN_SCHEMA_H

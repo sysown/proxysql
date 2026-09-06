@@ -1,4 +1,5 @@
 #include "duckdb_session.h"
+#include "duckdb_engine.h"
 #include "duckdb_result.h"
 #include "sqlite3db.h"
 
@@ -12,7 +13,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <climits>
 #include <cstring>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 
@@ -61,6 +64,84 @@ bool contains_ci(const std::string& value, const char* needle) {
 }
 
 } // namespace
+
+bool duckdb_execute_managed_set(const std::string& sql, DuckDBEngine& engine,
+	                            bool& handled, std::string& err) {
+	handled = false;
+	err.clear();
+	auto trim = [](std::string value) {
+		while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) value.erase(value.begin());
+		while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) value.pop_back();
+		return value;
+	};
+	auto lower = [](std::string value) {
+		std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+			return static_cast<char>(std::tolower(c));
+		});
+		return value;
+	};
+	std::string statement = trim(sql);
+	if (!statement.empty() && statement.back() == ';') statement = trim(statement.substr(0, statement.size() - 1));
+	std::string lowered = lower(statement);
+	if (lowered.rfind("set ", 0) != 0) return true;
+	statement = trim(statement.substr(4));
+	lowered = lower(statement);
+	if (lowered.rfind("global ", 0) == 0) statement = trim(statement.substr(7));
+
+	size_t separator = statement.find('=');
+	size_t separator_width = 1;
+	if (separator == std::string::npos) {
+		const std::string body_lower = lower(statement);
+		separator = body_lower.find(" to ");
+		separator_width = 4;
+	}
+	if (separator == std::string::npos) return true;
+	const std::string name = lower(trim(statement.substr(0, separator)));
+	if (name != "memory_limit" && name != "threads" &&
+	    name != "enable_external_access" && name != "access_mode") return true;
+	handled = true;
+	std::string value = trim(statement.substr(separator + separator_width));
+	if (value.size() >= 2 && ((value.front() == '\'' && value.back() == '\'') ||
+	                        (value.front() == '"' && value.back() == '"'))) {
+		const char quote = value.front();
+		value = value.substr(1, value.size() - 2);
+		if (quote == '\'') {
+			for (size_t pos = 0; (pos = value.find("''", pos)) != std::string::npos;) {
+				value.replace(pos, 2, "'");
+				++pos;
+			}
+		}
+	}
+	if (name == "access_mode") {
+		err = "duckdb-access_mode cannot be changed while the database is open; "
+		      "configure duckdb-read_only and reopen the DuckDB plugin";
+		return false;
+	}
+
+	DuckDBLiveSettings desired;
+	if (name == "memory_limit") {
+		desired.memory_limit = value;
+	} else if (name == "threads") {
+		try {
+			size_t used = 0;
+			const long parsed = std::stol(value, &used);
+			if (used != value.size() || parsed < 1 || parsed > INT_MAX) throw std::out_of_range("threads");
+			desired.threads = static_cast<int>(parsed);
+		} catch (...) {
+			err = "invalid duckdb-threads value: expected an integer greater than zero";
+			return false;
+		}
+	} else {
+		const std::string boolean = lower(value);
+		if (boolean == "true" || boolean == "1" || boolean == "on") desired.enable_external_access = true;
+		else if (boolean == "false" || boolean == "0" || boolean == "off") desired.enable_external_access = false;
+		else {
+			err = "invalid duckdb-enable_external_access value: expected a boolean";
+			return false;
+		}
+	}
+	return engine.apply_live_settings(desired, err);
+}
 
 DuckDBIntercept duckdb_classify_query(const char* sql, size_t len) {
 	if (sql == nullptr || len == 0) return DuckDBIntercept::none;
@@ -807,6 +888,26 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 		else
 			duckdb_send_pgsql_error(sess, "08003", "No DuckDB connection for this session");
 		return;
+	}
+
+	// Managed global settings are deliberately executed through the engine's
+	// dedicated control connection, never inside an application's session or
+	// transaction. Unmanaged SET statements stay on the normal DuckDB path.
+	if (st.engine != nullptr) {
+		bool handled = false;
+		std::string managed_error;
+		if (!duckdb_execute_managed_set(effective, *st.engine,
+		                                handled, managed_error)) {
+			if constexpr (std::is_same_v<S, MySQL_Session>)
+				duckdb_send_mysql_error(sess, 1238, "HY000", managed_error.c_str());
+			else
+				duckdb_send_pgsql_error(sess, "55000", managed_error.c_str());
+			return;
+		}
+		if (handled) {
+			duckdb_send_result(sess, nullptr, nullptr, 0, sql.c_str());
+			return;
+		}
 	}
 
 	// All DDL/DML/QUERY_RESULT dispatch (C2) and the unrenderable-column

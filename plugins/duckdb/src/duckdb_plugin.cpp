@@ -36,13 +36,6 @@ std::string json_escape(const std::string& value) {
 	return escaped;
 }
 
-void log_warn(const std::string& msg) {
-	DuckDBPluginContext& ctx = duckdb_context();
-	if (ctx.services != nullptr && ctx.services->log_message != nullptr) {
-		ctx.services->log_message(2 /* warn */, msg.c_str());
-	}
-}
-
 void log_error(const std::string& msg) {
 	DuckDBPluginContext& ctx = duckdb_context();
 	if (ctx.services != nullptr && ctx.services->log_message != nullptr) {
@@ -68,12 +61,11 @@ bool duckdb_start() {
 
 	if (ctx.services != nullptr && ctx.services->get_admindb != nullptr) {
 		if (SQLite3DB* admindb = ctx.services->get_admindb()) {
-			// disk -> memory, then memory -> module, the canonical order.
 			std::string err;
-			if (!duckdb_sync_variables_disk_to_memory(*admindb, err)) log_warn(err);
-			err.clear();
-			if (!duckdb_install_variables_from_admin(*admindb, *ctx.config_store, err) || !err.empty())
-				log_warn(err);
+			if (!duckdb_prepare_variables_for_startup(*admindb, *ctx.config_store, err)) {
+				log_error("duckdb: startup configuration failed: " + err);
+				return false;
+			}
 		}
 	}
 
@@ -95,6 +87,19 @@ bool duckdb_start() {
 	}
 
 	ctx.started = true;
+	if (ctx.services != nullptr && ctx.services->get_admindb != nullptr) {
+		if (SQLite3DB* admindb = ctx.services->get_admindb()) {
+			if (!duckdb_publish_runtime_variables(*admindb, err)) {
+				log_error("duckdb: initial runtime variable publication failed: " + err);
+				ctx.listener->stop();
+				ctx.listener.reset();
+				ctx.engine->close();
+				ctx.engine.reset();
+				ctx.started = false;
+				return false;
+			}
+		}
+	}
 	return true;
 }
 
@@ -133,7 +138,7 @@ const char* duckdb_status_json() {
 		return status.c_str();
 	}
 	status = "{\"name\":\"duckdb\",\"state\":\"running\",\"database_path\":\"" +
-		json_escape(ctx.config_store->database_path()) + "\",\"open_connections\":" +
+		json_escape(ctx.engine->database_path()) + "\",\"open_connections\":" +
 		std::to_string(ctx.engine->open_connections()) + "}";
 	return status.c_str();
 }

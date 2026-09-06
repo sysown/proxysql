@@ -1,6 +1,8 @@
 #include "duckdb_config.h"
 
+#include <algorithm>
 #include <cerrno>
+#include <cctype>
 #include <climits>
 #include <cstdlib>
 #include <sstream>
@@ -27,7 +29,7 @@ const bool        kDefaultReadOnly       = false;
 // (writes to the main database), not filesystem/external-state access.
 // So this plugin overrides DuckDB's default to `false` here (deny by
 // default) and only grants the capability when an operator opts in via
-// `duckdb_variables.enable_external_access`. See the Security section of
+// `duckdb-enable_external_access` in global_variables. See the Security section of
 // plugins/duckdb/README.md.
 const bool        kDefaultEnableExternalAccess = false;
 const char* const kDefaultMysqlIfaces    = "0.0.0.0:6031";
@@ -51,8 +53,11 @@ bool parse_int(const std::string& s, long& out) {
 }
 
 bool parse_bool(const std::string& s, bool& out) {
-	if (s == "true" || s == "1" || s == "on")   { out = true;  return true; }
-	if (s == "false" || s == "0" || s == "off") { out = false; return true; }
+	std::string normalized = s;
+	std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+	               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+	if (normalized == "true" || normalized == "1" || normalized == "on")   { out = true;  return true; }
+	if (normalized == "false" || normalized == "0" || normalized == "off") { out = false; return true; }
 	return false;
 }
 
@@ -102,6 +107,17 @@ std::vector<DuckDBIface> parse_ifaces_or_default(const std::string& spec,
 	return out;
 }
 
+std::string format_ifaces(const std::vector<DuckDBIface>& ifaces) {
+	std::string out;
+	for (const auto& iface : ifaces) {
+		if (!out.empty()) out.push_back(';');
+		if (iface.addr.find(':') != std::string::npos) out += "[" + iface.addr + "]";
+		else out += iface.addr;
+		out += ":" + std::to_string(iface.port);
+	}
+	return out;
+}
+
 } // namespace
 
 bool duckdb_parse_ifaces(const std::string& spec,
@@ -147,6 +163,7 @@ std::string DuckDBConfigStore::get_locked(const std::string& name) const {
 
 bool DuckDBConfigStore::set(const std::string& name, const std::string& value, std::string& err) {
 	std::lock_guard<std::mutex> lock(mutex_);
+	err.clear();
 
 	if (values_.find(name) == values_.end()) {
 		err = "unknown duckdb variable '" + name + "'";
@@ -179,13 +196,47 @@ bool DuckDBConfigStore::set(const std::string& name, const std::string& value, s
 	}
 	// database_path and memory_limit are accepted as-is.
 
-	values_[name] = value;
+	if (name == "read_only" || name == "enable_external_access") {
+		bool normalized = false;
+		parse_bool(value, normalized);
+		values_[name] = normalized ? "true" : "false";
+	} else if (name == "database_path" && value.empty()) {
+		values_[name] = kDefaultDatabasePath;
+	} else if (name == "mysql_ifaces" || name == "pgsql_ifaces") {
+		std::vector<DuckDBIface> ifaces;
+		std::string ignored;
+		duckdb_parse_ifaces(value, ifaces, ignored);
+		values_[name] = format_ifaces(ifaces);
+	} else {
+		values_[name] = value;
+	}
 	return true;
 }
 
 std::string DuckDBConfigStore::get(const std::string& name) const {
 	std::lock_guard<std::mutex> lock(mutex_);
 	return get_locked(name);
+}
+
+std::map<std::string, std::string> DuckDBConfigStore::values() const {
+	std::lock_guard<std::mutex> lock(mutex_);
+	return values_;
+}
+
+bool DuckDBConfigStore::replace_values(
+	const std::map<std::string, std::string>& values, std::string& err) {
+	DuckDBConfigStore candidate;
+	for (const auto& item : values) {
+		if (!candidate.set(item.first, item.second, err)) return false;
+	}
+	if (!candidate.validate(err)) return false;
+	const std::map<std::string, std::string> replacement = candidate.values();
+	{
+		std::lock_guard<std::mutex> lock(mutex_);
+		values_ = replacement;
+	}
+	err.clear();
+	return true;
 }
 
 std::vector<std::string> DuckDBConfigStore::variable_names() const {
