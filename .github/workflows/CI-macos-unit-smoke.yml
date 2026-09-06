@@ -37,7 +37,7 @@ jobs:
           persist-credentials: false
 
       - name: Install dependencies
-        run: brew install automake bzip2 cmake gpatch gnutls libtool icu4c pkg-config libiconv zlib
+        run: brew install automake bzip2 cmake gpatch gnutls libevent libtool icu4c pkg-config libiconv zlib
 
       - name: Select GNU patch
         run: echo "$(brew --prefix gpatch)/libexec/gnubin" >> "$GITHUB_PATH"
