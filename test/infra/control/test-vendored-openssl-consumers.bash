@@ -8,6 +8,7 @@ ssl_archive="${openssl_root}/libssl.a"
 crypto_archive="${openssl_root}/libcrypto.a"
 test_mariadb_archive="${repo_root}/test/deps/mariadb-connector-c/mariadb-connector-c/libmariadb/libmariadbclient.a"
 created_stubs=()
+true_path=$(command -v true)
 
 cleanup() {
 	local path
@@ -49,7 +50,7 @@ dry_run() {
 	local output
 
 	if ! output=$(make -C "${make_dir}" --no-print-directory \
-		-B -n "${target}" MAKE=true UNAME_S="${platform}" 2>&1); then
+		-B -n "${target}" MAKE="${true_path}" UNAME_S="${platform}" 2>&1); then
 		printf '%s\n' "${output}" >&2
 		fail "dry run failed for ${make_dir##*/}:${target} on ${platform}"
 	fi
