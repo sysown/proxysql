@@ -372,7 +372,7 @@ jobs:
             curl --fail --location --proto '=https' --tlsv1.2 \
               https://raw.githubusercontent.com/ProxySQL/dbdeployer/0982f16ad02a20df13caf02838d2722a1e304e4f/scripts/dbdeployer-install.sh \
               -o "${installer}"
-            echo '04ef082fb20dc3e5ad9b164dd96374e6c01034d068ccc891684fabc1be52f6b5  '"${installer}"' | sha256sum --check --status
+            printf '%s  %s\n' '04ef082fb20dc3e5ad9b164dd96374e6c01034d068ccc891684fabc1be52f6b5' "${installer}" | sha256sum --check --status
             bash "${installer}"
             if [ -f dbdeployer ] && ! command -v dbdeployer >/dev/null 2>&1; then
               sudo install -m 0755 dbdeployer /usr/local/bin/dbdeployer
