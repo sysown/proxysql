@@ -59,7 +59,7 @@ bool MysqlRouterConfigStore::load(SQLite3DB& db, std::string& error) {
 		&sqlite_error));
 	if (sqlite_error != nullptr) {
 		error = sqlite_error;
-		free(sqlite_error);
+		sqlite3_free(sqlite_error);
 		return false;
 	}
 	if (!result) {

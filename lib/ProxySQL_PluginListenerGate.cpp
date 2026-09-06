@@ -105,7 +105,7 @@ ProxySQL_PluginListenerGateRegistry::inspect_accept(
 	ProxySQL_PluginListenerGateAcceptDecision decision {};
 	auto key = normalize_key(address, port);
 	if (!key) return decision;
-	auto find_closed = [&](auto& gates) -> entry_t* {
+	auto find_closed = [&key, port](auto& gates) -> entry_t* {
 		auto found = gates.find(*key);
 		if (found == gates.end()) {
 			const bool is_ipv6 = key->address.find(':') != std::string::npos;
