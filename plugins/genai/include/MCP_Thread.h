@@ -28,6 +28,36 @@ class SQLite3_result;
 class SQLite3DB;
 
 /**
+ * @brief Outcome of a profile install (issue #6168).
+ *
+ * `LOAD MCP PROFILES TO RUNTIME` and the startup install read every row of
+ * main.mcp_target_profiles, but only the rows that survive the join against
+ * main.mcp_auth_profiles enter target_auth_map -- the map the MCP query
+ * endpoint actually consumes. Rows dropped by that join used to disappear
+ * without a trace: the command still replied OK, nothing was logged, and the
+ * row stayed visible in runtime_mcp_target_profiles. These counters let the
+ * admin verb report the drop, and each dropped row is additionally logged with
+ * its target_id and reason.
+ */
+struct MCP_Profile_Install_Stats {
+	int auth_profiles_installed = 0;
+	int targets_read = 0;
+	int targets_effective = 0;
+	int targets_skipped_inactive = 0;
+	int targets_skipped_no_auth_profile = 0;
+
+	int targets_skipped() const {
+		return targets_skipped_inactive + targets_skipped_no_auth_profile;
+	}
+};
+
+// Stable skip_reason values, also used verbatim in the runtime_mcp_target_
+// profiles.skip_reason column. Keep them short and machine-greppable: TAP
+// tests and operators match on them.
+constexpr const char MCP_SKIP_REASON_INACTIVE[] = "inactive";
+constexpr const char MCP_SKIP_REASON_NO_AUTH_PROFILE[] = "auth_profile_id not found";
+
+/**
  * @brief MCP Threads Handler class for managing MCP module configuration
  *
  * This class handles the MCP (Model Context Protocol) module's configuration
@@ -392,19 +422,38 @@ public:
 	std::vector<MCP_Target_Profile_Row> get_target_profiles_snapshot();
 	std::vector<MCP_Query_Rule_Row> get_query_rules_snapshot();
 
+	// Result of the most recent rebuild_target_auth_map_locked(). Read it
+	// right after an install to report what the install actually did; the
+	// admin command path is serialized, so no other install can interleave
+	// between the two calls there.
+	MCP_Profile_Install_Stats get_last_profile_install_stats();
+
 	std::vector<std::pair<std::string, std::string>> collect_status_variables();
 
 private:
 	std::map<std::string, MCP_Target_Auth_Context> target_auth_map;
 
 	// In-memory module-owned snapshots of the editable admin tables.
-	// All four collections (target_auth_map, auth_profiles_,
-	// target_profiles_, query_rules_) are guarded by `rwlock`.
+	// These, target_auth_map above, and the two rebuild by-products below
+	// (target_skip_reasons_, last_profile_install_stats_) are all guarded
+	// by `rwlock`.
 	std::vector<MCP_Auth_Profile_Row> auth_profiles_;
 	std::vector<MCP_Target_Profile_Row> target_profiles_;
 	std::vector<MCP_Query_Rule_Row> query_rules_;
 
-	// Rebuild target_auth_map from auth_profiles_ + target_profiles_.
+	// target_id -> why the row was excluded from target_auth_map, for the
+	// rows that were. Filled by rebuild_target_auth_map_locked() in the same
+	// pass that builds the map, so runtime_mcp_target_profiles.skip_reason
+	// reports the very decision the query endpoint made rather than a second,
+	// independently-derived opinion that could drift from it.
+	std::map<std::string, std::string> target_skip_reasons_;
+
+	// Counters from the most recent rebuild. Guarded by `rwlock` like the
+	// collections above.
+	MCP_Profile_Install_Stats last_profile_install_stats_ {};
+
+	// Rebuild target_auth_map from auth_profiles_ + target_profiles_, and
+	// with it target_skip_reasons_ and last_profile_install_stats_.
 	// Caller MUST hold a write lock on `rwlock`.
 	void rebuild_target_auth_map_locked();
 };

@@ -479,6 +479,17 @@ inline constexpr char STATS_SQLITE_TABLE_PGSQL_HOSTGROUP_CONNECTION_POOL_RESET[]
   "  comment VARCHAR DEFAULT ''" \
   ")"
 
+// `effective` and `skip_reason` are derived, read-only columns (issue #6168).
+// The rows of this view are projected from the module's raw target-profile
+// snapshot, but the MCP query endpoint consumes the *joined* target_auth_map,
+// which excludes inactive rows and rows whose auth_profile_id does not
+// resolve. Without these two columns the two surfaces disagree with no way to
+// tell why: the target is listed here while list_targets returns nothing.
+// effective=1 means the row is in the joined map and usable by the endpoint;
+// effective=0 means it was excluded, and skip_reason says which rule dropped
+// it. Note that effective=1 does NOT imply the target is *executable* --
+// backend reachability is resolved per request; see
+// Query_Tool_Handler::format_target_unavailable_error for that diagnosis.
 #define ADMIN_SQLITE_TABLE_RUNTIME_MCP_TARGET_PROFILES "CREATE TABLE runtime_mcp_target_profiles (" \
   "  target_id VARCHAR PRIMARY KEY NOT NULL ," \
   "  protocol VARCHAR NOT NULL CHECK (protocol IN ('mysql','pgsql')) ," \
@@ -490,7 +501,9 @@ inline constexpr char STATS_SQLITE_TABLE_PGSQL_HOSTGROUP_CONNECTION_POOL_RESET[]
   "  allow_explain INT CHECK (allow_explain IN (0,1)) NOT NULL DEFAULT 1 ," \
   "  allow_discovery INT CHECK (allow_discovery IN (0,1)) NOT NULL DEFAULT 1 ," \
   "  active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 ," \
-  "  comment VARCHAR DEFAULT ''" \
+  "  comment VARCHAR DEFAULT '' ," \
+  "  effective INT CHECK (effective IN (0,1)) NOT NULL DEFAULT 0 ," \
+  "  skip_reason VARCHAR NOT NULL DEFAULT ''" \
   ")"
 
 //#define STATS_SQLITE_TABLE_MEMORY_METRICS "CREATE TABLE stats_memory_metrics (Variable_Name VARCHAR NOT NULL PRIMARY KEY , Variable_Value VARCHAR NOT NULL)"
