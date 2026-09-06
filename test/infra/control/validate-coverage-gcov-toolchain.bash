@@ -37,3 +37,4 @@ awk '
 ' "${lint_runner}"
 
 "${root}/test/infra/control/test-final-gcov-dump.bash"
+"${root}/test/infra/control/test-gcov-atomic-profile-update.bash"
