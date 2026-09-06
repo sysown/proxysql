@@ -48,18 +48,20 @@ MysqlxPluginContext& mysqlx_context() {
 	return ctx;
 }
 
-static void create_all_tables(SQLite3DB& db) {
+static bool create_tables_by_kind(SQLite3DB& db, ProxySQL_PluginDBKind kind) {
 	for (const auto& t : registered_tables) {
-		if (t.db_kind == ProxySQL_PluginDBKind::admin_db ||
-		    t.db_kind == ProxySQL_PluginDBKind::config_db) {
-			db.execute(t.table_def);
+		if (t.db_kind == kind) {
+			if (!db.execute(t.table_def)) {
+				return false;
+			}
 		}
 	}
+	return true;
 }
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(32);
+	plan(34);
 	diag("=== mysqlx_admin_disk_commands_unit-t starting ===");
 
 	test_init_minimal();
@@ -73,11 +75,21 @@ int main() {
 
 	SQLite3DB admindb;
 	admindb.open(const_cast<char*>("file:mem_admindb?mode=memory&cache=shared"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI);  // NOSONAR
-	create_all_tables(admindb);
+	// Mirror production (Admin_Bootstrap.cpp merge_plugin_tables +
+	// check_and_build_standard_tables): admin_db defs materialize in
+	// admindb, config_db defs in configdb, each exactly once. The
+	// plugin intentionally registers the same table name+def in both
+	// namespaces (register_table_pair) so the disk tier persists the
+	// memory tier; executing both namespaces into one handle (as the
+	// old create_all_tables did) double-creates 4 tables and logs
+	// benign "already exists" SQLITE errors that mask real failures.
+	ok(create_tables_by_kind(admindb, ProxySQL_PluginDBKind::admin_db),
+	   "admin fixture tables created in admindb");
 
 	SQLite3DB configdb;
 	configdb.open(const_cast<char*>("file:mem_configdb?mode=memory&cache=shared"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI);  // NOSONAR
-	create_all_tables(configdb);
+	ok(create_tables_by_kind(configdb, ProxySQL_PluginDBKind::config_db),
+	   "config fixture tables created in configdb");
 
 	admindb.execute("ATTACH DATABASE 'file:mem_configdb?mode=memory&cache=shared' AS disk");
 
