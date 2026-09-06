@@ -56,13 +56,15 @@ MysqlxPluginContext& mysqlx_context() {
 	return ctx;
 }
 
-static void create_all_tables(SQLite3DB& db) {
+static bool create_tables_by_kind(SQLite3DB& db, ProxySQL_PluginDBKind kind) {
 	for (const auto& t : registered_tables) {
-		if (t.db_kind == ProxySQL_PluginDBKind::admin_db ||
-		    t.db_kind == ProxySQL_PluginDBKind::config_db) {
-			db.execute(t.table_def);
+		if (t.db_kind == kind) {
+			if (!db.execute(t.table_def)) {
+				return false;
+			}
 		}
 	}
+	return true;
 }
 
 int main() {
@@ -82,12 +84,14 @@ int main() {
 
 	SQLite3DB admindb;
 	admindb.open(const_cast<char*>("file:mem_admindb?mode=memory&cache=shared"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI);  // NOSONAR
-	create_all_tables(admindb);
+	ok(create_tables_by_kind(admindb, ProxySQL_PluginDBKind::admin_db),
+	   "admin fixture tables created in admindb");
 	admindb.execute(ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
 
 	SQLite3DB configdb;
 	configdb.open(const_cast<char*>("file:mem_configdb?mode=memory&cache=shared"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI);  // NOSONAR
-	create_all_tables(configdb);
+	ok(create_tables_by_kind(configdb, ProxySQL_PluginDBKind::config_db),
+	   "config fixture tables created in configdb");
 	configdb.execute(ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
 
 	admindb.execute("ATTACH DATABASE 'file:mem_configdb?mode=memory&cache=shared' AS disk");

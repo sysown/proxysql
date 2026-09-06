@@ -164,6 +164,12 @@ for platform in Linux Darwin FreeBSD; do
 	[[ -n "${libusual_configure}" ]] || fail "missing libusual configure command"
 	assert_not_contains "${libusual_configure}" 'libssl.a' "libusual configure/${platform}"
 	assert_not_contains "${libusual_configure}" 'libcrypto.a' "libusual configure/${platform}"
+	if [[ "${platform}" == Linux ]]; then
+		assert_contains "${libusual_configure}" 'LIBS=-ldl -lpthread' "libusual configure/${platform}"
+	else
+		assert_not_contains "${libusual_configure}" 'LIBS=-ldl' "libusual configure/${platform}"
+		assert_not_contains "${libusual_configure}" 'LIBS=-lpthread' "libusual configure/${platform}"
+	fi
 	assert_no_system_openssl "${libusual_output}" "libusual/${platform}"
 
 	libscram_output=$(dry_run "${repo_root}/deps" libscram "${platform}")
