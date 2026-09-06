@@ -83,10 +83,6 @@ bool parse_one_iface(const std::string& entry, DuckDBIface& out, std::string& er
 			return false;
 		}
 		addr = entry.substr(0, colon);
-		if (addr.empty()) {
-			err = "invalid iface '" + entry + "'; address must not be empty";
-			return false;
-		}
 		port_str = entry.substr(colon + 1);
 	}
 	long port = 0;

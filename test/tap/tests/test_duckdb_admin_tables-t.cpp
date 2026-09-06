@@ -3,6 +3,8 @@
 
 #include <cstdlib>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "mysql.h"
 #include "command_line.h"
@@ -52,11 +54,20 @@ int main() {
 	if (admin == nullptr) BAIL_OUT("cannot continue without Admin");
 
 	// Persistence is under test below (SAVE TO DISK + UPDATE disk), so per
-	// test/tap/README.md the original on-disk value must be restored before
-	// exit; otherwise the tester restores the modified config into the next
-	// test from disk. An empty value means Disk holds no duckdb-threads row.
-	const std::string disk_threads_before = cell(admin,
-		"SELECT variable_value FROM disk.global_variables WHERE variable_name='duckdb-threads'");
+	// test/tap/README.md the original on-disk duckdb-* slice must be restored
+	// before exit; otherwise the tester restores the modified config into
+	// the next test from disk.
+	std::vector<std::pair<std::string, std::string>> disk_duckdb_before;
+	if (mysql_query(admin, "SELECT variable_name, variable_value FROM disk.global_variables "
+	                       "WHERE variable_name LIKE 'duckdb-%'") == 0) {
+		if (MYSQL_RES* result = mysql_store_result(admin)) {
+			MYSQL_ROW row = nullptr;
+			while ((row = mysql_fetch_row(result)) != nullptr && row[0] != nullptr) {
+				disk_duckdb_before.emplace_back(row[0], row[1] != nullptr ? row[1] : "");
+			}
+			mysql_free_result(result);
+		}
+	}
 
 	ok(cell(admin,
 		"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN "
@@ -161,13 +172,24 @@ int main() {
 	               "WHERE variable_name='duckdb-threads'") == "3",
 	   "LOAD FROM DISK follows standard Disk-to-Main separation without applying Runtime");
 
-	// Restore the on-disk baseline captured at startup: the TAP tester
-	// restores configuration from disk between tests.
-	ok(disk_threads_before.empty()
-	   ? execute(admin, "DELETE FROM disk.global_variables WHERE variable_name LIKE 'duckdb-%'")
-	   : execute(admin, "UPDATE disk.global_variables SET variable_value='" + disk_threads_before +
-	                     "' WHERE variable_name='duckdb-threads'"),
-	   "on-disk duckdb-threads baseline is restored before exit");
+	auto sql_quote = [](const std::string& value) {
+		std::string quoted;
+		quoted.reserve(value.size() + 2);
+		quoted.push_back('\'');
+		for (char c : value) {
+			if (c == '\'') quoted.push_back('\'');
+			quoted.push_back(c);
+		}
+		quoted.push_back('\'');
+		return quoted;
+	};
+	bool restored = execute(admin, "DELETE FROM disk.global_variables WHERE variable_name LIKE 'duckdb-%'");
+	for (const auto& row : disk_duckdb_before) {
+		restored = restored && execute(admin,
+			"INSERT INTO disk.global_variables (variable_name, variable_value) VALUES (" +
+			sql_quote(row.first) + "," + sql_quote(row.second) + ")");
+	}
+	ok(restored, "on-disk duckdb-* baseline is restored before exit");
 
 	mysql_close(second);
 	mysql_close(first);

@@ -105,16 +105,42 @@ bool duckdb_execute_managed_set(const std::string& sql, DuckDBEngine& engine,
 		}
 		return std::string::npos;
 	};
+	auto strip_sql_comments = [&](const std::string& s) {
+		std::string out;
+		char quote = '\0';
+		for (size_t i = 0; i < s.size(); ++i) {
+			if (quote != '\0') {
+				out.push_back(s[i]);
+				if (s[i] == quote) {
+					if (quote == '\'' && i + 1 < s.size() && s[i + 1] == '\'') {
+						out.push_back(s[++i]);
+						continue;
+					}
+					quote = '\0';
+				}
+				continue;
+			}
+			if (s[i] == '\'' || s[i] == '"') {
+				quote = s[i];
+				out.push_back(s[i]);
+				continue;
+			}
+			if (s[i] == '-' && i + 1 < s.size() && s[i + 1] == '-') break;
+			if (s[i] == '/' && i + 1 < s.size() && s[i + 1] == '*') {
+				i += 2;
+				while (i + 1 < s.size() && !(s[i] == '*' && s[i + 1] == '/')) ++i;
+				if (i + 1 < s.size()) ++i;
+				continue;
+			}
+			out.push_back(s[i]);
+		}
+		return trim(out);
+	};
 	std::string statement = trim(sql);
 	if (!statement.empty() && statement.back() == ';') statement = trim(statement.substr(0, statement.size() - 1));
-	// Only the single-SET grammar is managed here. Anything carrying an
-	// extra statement (`SET threads=5; SELECT ...`) or a comment
-	// (`SET threads=5 -- tune`) stays on the normal DuckDB path, where the
-	// engine parses it correctly, instead of failing value conversion on
-	// the trailing text.
-	if (statement.find(';') != std::string::npos ||
-	    statement.find("--") != std::string::npos ||
-	    statement.find("/*") != std::string::npos) {
+	statement = strip_sql_comments(statement);
+	// Extra statements stay on the ordinary DuckDB path.
+	if (statement.find(';') != std::string::npos) {
 		return true;
 	}
 	if (!match_keyword(statement, "set", statement)) return true;

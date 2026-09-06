@@ -37,7 +37,7 @@ int scalar_count(duckdb_connection conn, const char* sql) {
 } // namespace
 
 int main() {
-	plan(68);
+	plan(71);
 
 	ok(classify("SELECT @@version") == DuckDBIntercept::version,
 	   "SELECT @@version is intercepted");
@@ -371,8 +371,14 @@ int main() {
 	   "an unmanaged session SET remains on the ordinary client path");
 	ok(duckdb_execute_managed_set("SET threads=5", managed_engine, handled, managed_err) && handled,
 	   "a direct managed threads SET is routed through engine control");
-	ok(scalar_count(managed_conn, "SELECT current_setting('threads')::INTEGER") == 5,
-	   "the routed threads SET is visible on an existing client connection");
+	ok(duckdb_execute_managed_set("SET threads=4 -- tune analytics", managed_engine, handled, managed_err) && handled,
+	   "a managed SET with a trailing SQL comment is still routed through engine control");
+	ok(scalar_count(managed_conn, "SELECT current_setting('threads')::INTEGER") == 4,
+	   "the commented managed SET is visible on an existing client connection");
+	ok(duckdb_execute_managed_set("SET threads=5; SELECT 1", managed_engine, handled, managed_err) && !handled,
+	   "an extra statement after SET stays on the ordinary client path");
+	ok(scalar_count(managed_conn, "SELECT current_setting('threads')::INTEGER") == 4,
+	   "an extra statement after SET does not change engine-global threads");
 	ok(duckdb_execute_managed_set("SET GLOBAL memory_limit='256MB';", managed_engine,
 	                              handled, managed_err) && handled,
 	   "a quoted direct memory SET is routed through engine control");
