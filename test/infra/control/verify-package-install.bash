@@ -82,7 +82,6 @@ declare -A IMAGE_MAP=(
     [fedora42]="fedora:42"
     [fedora43]="fedora:43"
     [fedora44]="fedora:44"
-    [opensuse15]="opensuse/leap:15.6"
     [opensuse16]="opensuse/leap:16.0"
 )
 IMAGE="${IMAGE_MAP[$DISTRO]:-}"
