@@ -24,11 +24,10 @@ jobs:
   # /opt/proxysql/test/tap/tap (the build container's path), so they MUST
   # execute inside the same image mounted at /opt/proxysql -- otherwise
   # libtap.so and the bundled libcpp_dotenv.so cannot be located at
-  # runtime. Trying to run them directly on the ubuntu-22.04 runner with
-  # an LD_LIBRARY_PATH override also misses libprotobuf.so.32 (the build
-  # image ships protobuf 5.x; ubuntu-22.04 packages only protobuf 3.x).
+  # runtime. The artifact is built in the Ubuntu 24 image, so its unit/e2e
+  # jobs use that same runtime image rather than relying on runner libraries.
   unit-tests:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     permissions: write-all
     steps:
@@ -156,7 +155,7 @@ jobs:
             echo ">>> GHCR login+pull attempt ${attempt}/${max_attempts}"
             if echo "$GHCR_TOKEN" | docker login ghcr.io \
                 -u "$GHCR_USER" --password-stdin \
-                && docker pull proxysql/packaging:build-ubuntu22-v4.0.0; then
+                && docker pull proxysql/packaging:build-ubuntu24-v4.0.0; then
               echo ">>> pull OK on attempt ${attempt}"
               exit 0
             fi
@@ -183,7 +182,7 @@ jobs:
             -v "$(pwd)/proxysql:/opt/proxysql" \
             -w /opt/proxysql/test/tap/tests/unit \
             -e LD_LIBRARY_PATH=/opt/proxysql/test/tap/tap/_runtime_libs \
-            proxysql/packaging:build-ubuntu22-v4.0.0 \
+            proxysql/packaging:build-ubuntu24-v4.0.0 \
             bash -c '
               set -e
               fails=""
@@ -228,7 +227,7 @@ jobs:
   # reach 127.0.0.1:$mysqlx_port. mysqlx-e2e/env.sh documents this
   # arrangement.
   e2e-tests:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     needs: unit-tests
     permissions: write-all
@@ -338,7 +337,7 @@ jobs:
       - name: Install MySQL 8.4 runtime libs
         # dbdeployer ships pre-built mysqld binaries that DT_NEEDED
         # libaio1/libnuma1 (server) and libncurses5/libtinfo5 (client).
-        # ubuntu-22.04 runner image includes most but not all of these
+        # ubuntu-24.04 runner image includes most but not all of these
         # by default; install explicitly so we never silently depend on
         # whatever the runner happens to ship.
         run: |
@@ -436,7 +435,7 @@ jobs:
             attempt=$((attempt + 1))
             if echo "$GHCR_TOKEN" | docker login ghcr.io \
                 -u "$GHCR_USER" --password-stdin \
-                && docker pull proxysql/packaging:build-ubuntu22-v4.0.0; then
+                && docker pull proxysql/packaging:build-ubuntu24-v4.0.0; then
               exit 0
             fi
             sleep $((attempt * 10))
@@ -458,7 +457,7 @@ jobs:
             -e "MYSQLX_E2E_PORT=${MYSQLX_E2E_PORT}" \
             -e LD_LIBRARY_PATH=/opt/proxysql/test/tap/tap/_runtime_libs \
             -w /opt/proxysql/test/tap/tests \
-            proxysql/packaging:build-ubuntu22-v4.0.0 \
+            proxysql/packaging:build-ubuntu24-v4.0.0 \
             bash -c '
               set -e
               DISCOVERED="${MYSQLX_E2E_PORT:?missing}"
@@ -502,7 +501,7 @@ jobs:
   # ProxySQL container per PROXYSQL_LOAD_MYSQLX_PLUGIN=1 in
   # mysqlx-soak/env.sh.
   soak-tests:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     needs: unit-tests
     strategy:
