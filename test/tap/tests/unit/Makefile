@@ -168,13 +168,6 @@ ifeq ($(UNAME_S),Linux)
 	STATIC_LIBS += $(COREDUMPER_LDIR)/libcoredumper.a
 endif
 
-ifneq ($(PROXYSQL40),)
-ifneq ($(wildcard $(SQLITE3_LDIR)/vec.o),)
-	STATIC_LIBS += $(SQLITE3_LDIR)/vec.o
-endif
-endif
-
-
 # ===========================================================================
 # Linker flags — platform-specific
 # ===========================================================================
@@ -211,7 +204,7 @@ LIBPROXYSQLAR_FULL := $(LIBPROXYSQLAR) \
 	$(LIBSCRAM_LDIR)/libscram.a \
 	$(LIBUSUAL_LDIR)/libusual.a \
 	$(MARIADB_LDIR)/libmariadbclient.a \
-	$(RE2_STATIC_LIB) $(RE2_ABSL_LIBS) \
+	$(RE2_STATIC_LIBS) \
 	$(POSTGRESQL_PATH)/interfaces/libpq/libpq.a \
 	$(POSTGRESQL_PATH)/common/libpgcommon.a \
 	$(POSTGRESQL_PATH)/port/libpgport.a

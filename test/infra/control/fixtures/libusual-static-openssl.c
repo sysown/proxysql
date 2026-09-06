@@ -1,5 +1,10 @@
+#ifdef LIBUSUAL_FIRST
+#include <usual/tls/tls.h>
+#include <openssl/ssl.h>
+#else
 #include <openssl/ssl.h>
 #include <usual/tls/tls.h>
+#endif
 
 int main(void) {
     SSL_CTX *openssl = SSL_CTX_new(TLS_client_method());
