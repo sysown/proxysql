@@ -150,16 +150,27 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends \
             libaio1t64 libnuma1 libncurses6 libtinfo6
 
+      - name: Verify dbdeployer install guard
+        run: proxysql/test/infra/control/test-ci-mysqlx-dbdeployer-install.bash
+
       - name: Install dbdeployer
-        # Same install flow the OLD bare-runner CI-mysqlx used (the only
-        # thing about the old workflow that wasn't broken). The script
-        # leaves the binary in cwd when run as non-root, so move it
-        # into PATH ourselves before the version check.
+        # GitHub runner images may already provide dbdeployer. Its upstream
+        # installer exits non-zero in that case, so install only when PATH
+        # does not already resolve a usable binary. The installer leaves the
+        # binary in cwd when run as non-root, hence the explicit PATH move.
         run: |
-          curl -s https://raw.githubusercontent.com/ProxySQL/dbdeployer/master/scripts/dbdeployer-install.sh | bash
-          if [ -f dbdeployer ] && ! command -v dbdeployer >/dev/null 2>&1; then
-            sudo install -m 0755 dbdeployer /usr/local/bin/dbdeployer
-            rm -f dbdeployer
+          if ! command -v dbdeployer >/dev/null 2>&1; then
+            installer="$(mktemp)"
+            trap 'rm -f "${installer}"' EXIT
+            curl --fail --location --proto '=https' --tlsv1.2 \
+              https://raw.githubusercontent.com/ProxySQL/dbdeployer/0982f16ad02a20df13caf02838d2722a1e304e4f/scripts/dbdeployer-install.sh \
+              -o "${installer}"
+            printf '%s  %s\n' '04ef082fb20dc3e5ad9b164dd96374e6c01034d068ccc891684fabc1be52f6b5' "${installer}" | sha256sum --check --status
+            bash "${installer}"
+            if [ -f dbdeployer ] && ! command -v dbdeployer >/dev/null 2>&1; then
+              sudo install -m 0755 dbdeployer /usr/local/bin/dbdeployer
+              rm -f dbdeployer
+            fi
           fi
           dbdeployer --version
 
