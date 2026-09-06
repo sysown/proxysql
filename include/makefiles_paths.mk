@@ -47,7 +47,13 @@ RE2_IDIR := $(RE2_PATH) -I$(ABSL_IDIR)
 RE2_LDIR := $(RE2_PATH)/obj
 RE2_STATIC_LIB := $(RE2_LDIR)/libre2.a
 RE2_ABSL_LIBS = $(shell if test -d "$(ABSL_PKG_CONFIG_PATH)"; then PKG_CONFIG_PATH= PKG_CONFIG_LIBDIR=$(ABSL_PKG_CONFIG_PATH) pkg-config --static --libs absl_absl_check absl_absl_log absl_base absl_core_headers absl_fixed_array absl_flags absl_flat_hash_map absl_flat_hash_set absl_hash absl_inlined_vector absl_optional absl_span absl_str_format absl_strings absl_synchronization; fi)
-RE2_STATIC_LIBS = $(RE2_STATIC_LIB) $(RE2_ABSL_LIBS)
+# Abseil's timezone implementation uses CoreFoundation on Apple platforms;
+# its static pkg-config metadata does not include that framework dependency.
+RE2_PLATFORM_LIBS :=
+ifeq ($(UNAME_S),Darwin)
+RE2_PLATFORM_LIBS := -framework CoreFoundation
+endif
+RE2_STATIC_LIBS = $(RE2_STATIC_LIB) $(RE2_ABSL_LIBS) $(RE2_PLATFORM_LIBS)
 
 PCRE2_PATH := $(DEPS_PATH)/pcre2/pcre2
 PCRE2_IDIR := $(PCRE2_PATH)/src
@@ -72,6 +78,10 @@ ZSTD_LDIR := $(ZSTD_PATH)/lib
 CLICKHOUSE_CPP_PATH := $(DEPS_PATH)/clickhouse-cpp/clickhouse-cpp
 CLICKHOUSE_CPP_IDIR := $(CLICKHOUSE_CPP_PATH) -I$(CLICKHOUSE_CPP_PATH)/contrib/absl
 CLICKHOUSE_CPP_LDIR := $(CLICKHOUSE_CPP_PATH)/clickhouse
+
+DUCKDB_PATH := $(DEPS_PATH)/duckdb/duckdb
+DUCKDB_IDIR := $(DUCKDB_PATH)/src/include
+DUCKDB_LDIR := $(DUCKDB_PATH)/build/release/src
 
 LIBINJECTION_PATH := $(DEPS_PATH)/libinjection/libinjection
 LIBINJECTION_IDIR := $(LIBINJECTION_PATH)/src

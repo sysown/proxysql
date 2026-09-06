@@ -45,6 +45,12 @@ run_check "Check package install verifier" \
 	test/infra/control/test-verify-package-install.bash
 run_check "Check system OpenSSL audit regressions" \
 	test/infra/control/test-no-system-openssl-links-regressions.bash
+run_check "Check RE2 platform and unit linker flags" \
+	test/infra/control/test-re2-platform-link.bash
+run_check "Check libusual incremental patch dependency" \
+	test/infra/control/test-libusual-incremental.bash
+run_check "Check vendored OpenSSL consumer flags" \
+	test/infra/control/test-vendored-openssl-consumers.bash
 run_check "Check group infra/workflow coverage (warn-only)" \
 	python3 test/tap/groups/lint_group_coverage.py
 

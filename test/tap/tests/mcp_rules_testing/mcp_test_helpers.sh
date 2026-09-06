@@ -236,8 +236,12 @@ get_rule_hits() {
 }
 
 restore_mcp_group_baseline() {
+    # LOAD ... FROM DISK is disk->memory only (issue #6171), so each one needs
+    # its TO RUNTIME counterpart to actually restore the running module.
     exec_admin_silent \
-        "LOAD MCP VARIABLES FROM DISK; LOAD MCP PROFILES FROM DISK; LOAD MCP QUERY RULES FROM DISK;" \
+        "LOAD MCP VARIABLES FROM DISK; LOAD MCP VARIABLES TO RUNTIME;
+         LOAD MCP PROFILES FROM DISK; LOAD MCP PROFILES TO RUNTIME;
+         LOAD MCP QUERY RULES FROM DISK; LOAD MCP QUERY RULES TO RUNTIME;" \
         >/dev/null
 }
 

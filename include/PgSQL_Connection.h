@@ -886,6 +886,7 @@ public:
 
 	bool send_quit;
 	bool reusable;
+	bool healthy; // false: destroy the connection, never reset it; not restored by reset()
 	bool processing_multi_statement;
 	bool multiplex_delayed;
 	bool is_client_connection; // true if this is a client connection, false if it is a server connection

@@ -1257,7 +1257,11 @@ void PgSQL_Data_Stream::destroy_queues() {
 void PgSQL_Data_Stream::destroy_MySQL_Connection_From_Pool(bool sq) {
 	PgSQL_Connection* mc = myconn;
 	PgSQL_SrvC* mysrvc = mc->parent;
+	// This arm ends in PgSQL_Connection::reset(), which clears 'reusable' and pools the
+	// connection. An unhealthy one must not take it: the transport is fine and
+	// PQtransactionStatus() reports idle, so no other condition here can reject it.
 	if (sq && mysrvc->status == MYSQL_SERVER_STATUS_ONLINE &&
+		mc->healthy == true &&
 		mc->async_state_machine == ASYNC_IDLE &&
 		mc->is_connection_in_reusable_state() == true) {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Trying to reset PgSQL_Connection %p, server %s:%d\n", mc, mysrvc->address, mysrvc->port);
@@ -1280,7 +1284,9 @@ bool PgSQL_Data_Stream::data_in_rbio() {
 
 void PgSQL_Data_Stream::reset_connection() {
 	if (myconn) {
-		if (pgsql_thread___multiplexing && (DSS == STATE_MARIADB_GENERIC || DSS == STATE_READY) && myconn->reusable == true &&
+		// 'healthy' mirrors the same guard on the MySQL side (MySQL_Data_Stream::reset_connection)
+		if (pgsql_thread___multiplexing && (DSS == STATE_MARIADB_GENERIC || DSS == STATE_READY) &&
+			myconn->healthy == true && myconn->reusable == true &&
 			myconn->IsActiveTransaction() == false && myconn->MultiplexDisabled() == false && myconn->async_state_machine == ASYNC_IDLE &&
 			myconn->is_pipeline_active() == false) {
 			myconn->last_time_used = sess->thread->curtime;

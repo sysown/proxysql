@@ -70,6 +70,8 @@ void fake_log_event(const char *event) {
 // variant) is set.  Toggles via env vars:
 //   _PHASE_B_FAIL         -> return false
 //   _PHASE_B_REGISTER_TABLE -> register a per-plugin admin table (Phase B)
+//   _PHASE_B_REGISTER_MISMATCHED_TWINS -> register same-name admin/config
+//                              tables with incompatible definitions
 //   _PHASE_B_TOUCH_HANDLES  -> try to call DB handle getters; if they come
 //                              back null we log "phase_b_handles_null",
 //                              otherwise "phase_b_handles_live" (the
@@ -128,6 +130,32 @@ bool fake_register_schemas(ProxySQL_PluginServices *services) {
 		};
 		services->register_table(table);
 	}
+	if (env("PHASE_B_REGISTER_CONFIG_ONLY") != nullptr &&
+	    services != nullptr &&
+	    services->register_table != nullptr) {
+		const ProxySQL_PluginTableDef table {
+			ProxySQL_PluginDBKind::config_db,
+			FAKE_PLUGIN_NAME "_orphan_config",
+			"CREATE TABLE " FAKE_PLUGIN_NAME "_orphan_config (id INTEGER)"
+		};
+		services->register_table(table);
+	}
+	if (env("PHASE_B_REGISTER_MISMATCHED_TWINS") != nullptr &&
+	    services != nullptr &&
+	    services->register_table != nullptr) {
+		const ProxySQL_PluginTableDef admin_table {
+			ProxySQL_PluginDBKind::admin_db,
+			FAKE_PLUGIN_NAME "_mismatched_twins",
+			"CREATE TABLE " FAKE_PLUGIN_NAME "_mismatched_twins (id INTEGER)"
+		};
+		const ProxySQL_PluginTableDef config_table {
+			ProxySQL_PluginDBKind::config_db,
+			FAKE_PLUGIN_NAME "_mismatched_twins",
+			"CREATE TABLE " FAKE_PLUGIN_NAME "_mismatched_twins (id INTEGER, extra TEXT)"
+		};
+		services->register_table(admin_table);
+		services->register_table(config_table);
+	}
 	fake_log_event("phase_b");
 	return true;
 }
@@ -173,6 +201,16 @@ bool fake_init(ProxySQL_PluginServices *services) {
 			ProxySQL_PluginDBKind::admin_db,
 			FAKE_PLUGIN_NAME "_table",
 			"CREATE TABLE " FAKE_PLUGIN_NAME "_table (id INTEGER)"
+		};
+		services->register_table(table);
+	}
+	if (env("REGISTER_CONFIG_TABLE") != nullptr &&
+	    services != nullptr &&
+	    services->register_table != nullptr) {
+		const ProxySQL_PluginTableDef table {
+			ProxySQL_PluginDBKind::config_db,
+			FAKE_PLUGIN_NAME "_late_config_table",
+			"CREATE TABLE " FAKE_PLUGIN_NAME "_late_config_table (id INTEGER)"
 		};
 		services->register_table(table);
 	}
@@ -223,6 +261,27 @@ const char *fake_status_json() {
 	return "{\"name\":\"" FAKE_PLUGIN_NAME "\",\"state\":\"running\"}";
 }
 
+// abi_version literals below hardcode the ABI *layout* number (see
+// ProxySQL_Plugin.h) to pin down exactly which descriptor shape each fake
+// plugin represents, independent of PROXYSQL_PLUGIN_ABI_VERSION's current
+// value. They still must carry PROXYSQL_PLUGIN_ABI_DEBUG_BIT whenever this
+// .so is itself built with -DDEBUG, or the loader's DEBUG-tag check (see
+// ProxySQL_Plugin.h / ProxySQL_PluginManager.cpp) would refuse to load them
+// whenever the core/test binary under test is a debug build -- these fake
+// descriptors exist to test the layout-version compatibility path, not the
+// DEBUG-tag path.
+#if defined(PROXYSQL_FAKE_PLUGIN_FORCE_DEBUG_MISMATCH)
+#ifdef DEBUG
+constexpr uint32_t kFakeAbiDebugBit = 0u;
+#else
+constexpr uint32_t kFakeAbiDebugBit = PROXYSQL_PLUGIN_ABI_DEBUG_BIT;
+#endif
+#elif defined(DEBUG)
+constexpr uint32_t kFakeAbiDebugBit = PROXYSQL_PLUGIN_ABI_DEBUG_BIT;
+#else
+constexpr uint32_t kFakeAbiDebugBit = 0u;
+#endif
+
 // Pre-Step-2.2 descriptor layout (six fields).  Used when the plugin is
 // NOT opting into Phase B -- register_schemas is implicitly null because
 // the field is absent.  Leaves us testing that plugins built against the
@@ -231,7 +290,7 @@ const char *fake_status_json() {
 // represents the "legacy plugin" shape the v4 loader has to accept.
 const ProxySQL_PluginDescriptor fake_descriptor = {
 	FAKE_PLUGIN_NAME,
-	1,
+	1u | kFakeAbiDebugBit,
 	&fake_init,
 	&fake_start,
 	&fake_stop,
@@ -244,7 +303,7 @@ const ProxySQL_PluginDescriptor fake_descriptor = {
 // abi_version 2 tells the loader this descriptor has the seventh field.
 const ProxySQL_PluginDescriptor fake_descriptor_with_phase_b = {
 	FAKE_PLUGIN_NAME,
-	2,
+	2u | kFakeAbiDebugBit,
 	&fake_init,
 	&fake_start,
 	&fake_stop,
