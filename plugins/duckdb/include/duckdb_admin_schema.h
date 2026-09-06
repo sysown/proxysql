@@ -27,11 +27,6 @@ bool duckdb_install_variables_from_admin(SQLite3DB& admindb,
                                         DuckDBConfigStore& store,
                                         std::string& err);
 
-// SAVE FROM RUNTIME: replace the duckdb-* Main slice with effective state.
-bool duckdb_save_variables_to_admin(SQLite3DB& admindb,
-                                   const DuckDBConfigStore& store,
-                                   std::string& err);
-
 // Publish the actual engine/listener snapshot to the duckdb-* Runtime slice.
 bool duckdb_publish_runtime_variables(SQLite3DB& admindb, std::string& err);
 

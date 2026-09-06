@@ -93,8 +93,8 @@ int main() {
 
 	// --- enable_external_access set/get ---------------------------------
 	err.clear();
-	ok(cfg.set("enable_external_access", "true", err) && cfg.enable_external_access() == true,
-	   "enable_external_access round-trips to true");
+	ok(cfg.set("enable_external_access", "1", err) && cfg.enable_external_access() == true,
+	   "enable_external_access alias '1' round-trips to true");
 	ok(cfg.get("enable_external_access") == "true",
 	   "boolean aliases are stored in canonical form");
 

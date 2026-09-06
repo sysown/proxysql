@@ -45,11 +45,18 @@ MYSQL* connect_duckdb(const CommandLine& cl) {
 int main() {
 	CommandLine cl;
 	if (cl.getEnv()) return -1;
-	plan(21);
+	plan(22);
 
 	admin = init_mysql_conn(cl.admin_host, cl.admin_port, cl.admin_username, cl.admin_password);
 	ok(admin != nullptr, "Admin connection established");
 	if (admin == nullptr) BAIL_OUT("cannot continue without Admin");
+
+	// Persistence is under test below (SAVE TO DISK + UPDATE disk), so per
+	// test/tap/README.md the original on-disk value must be restored before
+	// exit; otherwise the tester restores the modified config into the next
+	// test from disk. An empty value means Disk holds no duckdb-threads row.
+	const std::string disk_threads_before = cell(admin,
+		"SELECT variable_value FROM disk.global_variables WHERE variable_name='duckdb-threads'");
 
 	ok(cell(admin,
 		"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN "
@@ -153,6 +160,14 @@ int main() {
 	   cell(admin, "SELECT variable_value FROM runtime_global_variables "
 	               "WHERE variable_name='duckdb-threads'") == "3",
 	   "LOAD FROM DISK follows standard Disk-to-Main separation without applying Runtime");
+
+	// Restore the on-disk baseline captured at startup: the TAP tester
+	// restores configuration from disk between tests.
+	ok(disk_threads_before.empty()
+	   ? execute(admin, "DELETE FROM disk.global_variables WHERE variable_name LIKE 'duckdb-%'")
+	   : execute(admin, "UPDATE disk.global_variables SET variable_value='" + disk_threads_before +
+	                     "' WHERE variable_name='duckdb-threads'"),
+	   "on-disk duckdb-threads baseline is restored before exit");
 
 	mysql_close(second);
 	mysql_close(first);

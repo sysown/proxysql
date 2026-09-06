@@ -123,6 +123,7 @@ SAVE DUCKDB VARIABLES TO DISK;
 `duckdb-database_path` is an engine-open setting. `LOAD` rejects the live
 transition and leaves it pending in Main; Runtime continues reporting the
 database actually open.
+
 Create the parent directory with permissions for the ProxySQL service account,
 then restart ProxySQL. After restart, the plugin opens the configured file.
 

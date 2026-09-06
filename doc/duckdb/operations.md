@@ -35,9 +35,11 @@ WHERE variable_name LIKE 'duckdb-%' ORDER BY variable_name;
 SAVE DUCKDB VARIABLES TO DISK;
 ```
 
-`memory_limit`, `threads`, and `max_connections` apply live. Disabling external
-access also applies live. Listener addresses, database path, read-only mode,
-and enabling external access wait for the next plugin/database open.
+`duckdb-memory_limit`, `duckdb-threads`, and `duckdb-max_connections` apply live.
+Disabling `duckdb-enable_external_access` also applies live. Listener addresses
+(`duckdb-mysql_ifaces`, `duckdb-pgsql_ifaces`), `duckdb-database_path`,
+`duckdb-read_only`, and enabling `duckdb-enable_external_access` wait for the
+next plugin/database open.
 
 ## Health checks
 
@@ -130,8 +132,8 @@ at the configured path with correct ownership, then start and verify it.
 
 ## Restart changes
 
-Before restarting for `database_path`, `read_only`, enabling external access,
-or listener changes:
+Before restarting for `duckdb-database_path`, `duckdb-read_only`, enabling
+`duckdb-enable_external_access`, or listener changes:
 
 1. save the intended editable configuration to disk;
 2. record the current runtime view;

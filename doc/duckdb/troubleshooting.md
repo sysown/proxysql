@@ -153,9 +153,10 @@ Fresh installations seed compiled `duckdb-*` defaults into Main.
 ## External file access is denied
 
 That is the secure default. Before enabling it, read the
-[Security guide](security.md). If it is deliberately enabled, LOAD and save the
-setting, save it, reopen the database, and verify filesystem permissions. LOAD
-returns an error until that lifecycle action occurs.
+ [Security guide](security.md). If it is deliberately enabled, save the pending Main
+ value with `SAVE DUCKDB VARIABLES TO DISK`, reopen the database, and verify
+ filesystem permissions. `LOAD` rejects enabling external access while the
+ database remains open.
 
 ## A query consumes excessive resources
 

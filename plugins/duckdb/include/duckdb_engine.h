@@ -68,7 +68,6 @@ public:
 	void release_connection();
 
 	void set_max_connections(size_t n);
-	size_t max_connections() const { return max_connections_.load(); }
 
 private:
 	mutable std::mutex mutex_;

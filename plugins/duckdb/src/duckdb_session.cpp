@@ -80,27 +80,65 @@ bool duckdb_execute_managed_set(const std::string& sql, DuckDBEngine& engine,
 		});
 		return value;
 	};
+	// Match a leading SQL keyword followed by at least one whitespace
+	// character (space, tab, ...), case-insensitively. Literal single-space
+	// prefix checks would miss valid statements such as `SET\tthreads=5`.
+	auto match_keyword = [](const std::string& s, const char* keyword, std::string& rest) {
+		const size_t n = std::strlen(keyword);
+		if (s.size() <= n) return false;
+		for (size_t i = 0; i < n; ++i) {
+			if (std::tolower(static_cast<unsigned char>(s[i])) != keyword[i]) return false;
+		}
+		if (!std::isspace(static_cast<unsigned char>(s[n]))) return false;
+		rest = s.substr(n + 1);
+		return true;
+	};
+	// Find a standalone TO keyword bounded by whitespace on both sides,
+	// case-insensitively. Returns npos when absent.
+	auto find_to_keyword = [](const std::string& s) {
+		for (size_t i = 0; i + 2 < s.size(); ++i) {
+			if (std::tolower(static_cast<unsigned char>(s[i])) != 't' ||
+			    std::tolower(static_cast<unsigned char>(s[i + 1])) != 'o') continue;
+			const bool before_ok = i > 0 && std::isspace(static_cast<unsigned char>(s[i - 1]));
+			const bool after_ok = i + 2 < s.size() && std::isspace(static_cast<unsigned char>(s[i + 2]));
+			if (before_ok && after_ok) return i;
+		}
+		return std::string::npos;
+	};
 	std::string statement = trim(sql);
 	if (!statement.empty() && statement.back() == ';') statement = trim(statement.substr(0, statement.size() - 1));
-	std::string lowered = lower(statement);
-	if (lowered.rfind("set ", 0) != 0) return true;
-	statement = trim(statement.substr(4));
-	lowered = lower(statement);
-	if (lowered.rfind("global ", 0) == 0) statement = trim(statement.substr(7));
+	// Only the single-SET grammar is managed here. Anything carrying an
+	// extra statement (`SET threads=5; SELECT ...`) or a comment
+	// (`SET threads=5 -- tune`) stays on the normal DuckDB path, where the
+	// engine parses it correctly, instead of failing value conversion on
+	// the trailing text.
+	if (statement.find(';') != std::string::npos ||
+	    statement.find("--") != std::string::npos ||
+	    statement.find("/*") != std::string::npos) {
+		return true;
+	}
+	if (!match_keyword(statement, "set", statement)) return true;
+	statement = trim(statement);
+	{
+		std::string rest;
+		if (match_keyword(statement, "global", rest)) statement = trim(rest);
+	}
 
 	size_t separator = statement.find('=');
-	size_t separator_width = 1;
+	bool is_to_separator = false;
 	if (separator == std::string::npos) {
-		const std::string body_lower = lower(statement);
-		separator = body_lower.find(" to ");
-		separator_width = 4;
+		separator = find_to_keyword(statement);
+		is_to_separator = (separator != std::string::npos);
 	}
 	if (separator == std::string::npos) return true;
 	const std::string name = lower(trim(statement.substr(0, separator)));
 	if (name != "memory_limit" && name != "threads" &&
 	    name != "enable_external_access" && name != "access_mode") return true;
 	handled = true;
-	std::string value = trim(statement.substr(separator + separator_width));
+	// A TO separator points at the 't'; skip the two keyword characters
+	// and let trim() absorb any surrounding whitespace run.
+	std::string value = is_to_separator ? trim(statement.substr(separator + 2))
+	                                    : trim(statement.substr(separator + 1));
 	if (value.size() >= 2 && ((value.front() == '\'' && value.back() == '\'') ||
 	                        (value.front() == '"' && value.back() == '"'))) {
 		const char quote = value.front();

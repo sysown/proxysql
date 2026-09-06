@@ -136,7 +136,8 @@ visible to existing and new connections and agree with the runtime table.
 - `SAVE DUCKDB VARIABLES TO DISK` copies only `duckdb-*` Main rows to Disk.
   `SAVE DUCKDB VARIABLES FROM MEMORY TO DISK` is an alias.
 - `LOAD DUCKDB VARIABLES FROM DISK` copies only `duckdb-*` Disk rows to Main,
-  then uses the normal LOAD contract. `LOAD DUCKDB VARIABLES TO MEMORY` is an
+  then leaves the copied values pending in Main; run `LOAD DUCKDB VARIABLES TO
+  RUNTIME` separately to apply them. `LOAD DUCKDB VARIABLES TO MEMORY` is an
   alias. A rejected live transition remains in Main and does not falsify
   Runtime.
 - Normal process startup restores `disk.global_variables` to Main before the

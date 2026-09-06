@@ -256,12 +256,6 @@ bool duckdb_install_variables_from_admin(SQLite3DB& admindb,
 	return store.replace_values(candidate.values(), err);
 }
 
-bool duckdb_save_variables_to_admin(SQLite3DB& admindb,
-	                                const DuckDBConfigStore& store,
-	                                std::string& err) {
-	return replace_prefix(admindb, "main.global_variables", qualified_values(store), err);
-}
-
 bool duckdb_migrate_legacy_variable_tables(SQLite3DB& admindb, std::string& err) {
 	const bool has_disk = schema_attached(admindb, "disk");
 	const bool main_legacy = table_exists(admindb, "main", "duckdb_variables");
@@ -283,12 +277,28 @@ bool duckdb_migrate_legacy_variable_tables(SQLite3DB& admindb, std::string& err)
 		err = message;
 		return false;
 	};
+	// Unknown legacy names are excluded from the import below; log them
+	// before the table is dropped so operator configuration is never
+	// discarded silently. Logging failures are non-fatal to the migration.
+	auto log_unknown_legacy_names = [&](const char* table) {
+		std::unique_ptr<SQLite3_result> unknown;
+		std::string query_err;
+		const std::string list = std::string("SELECT DISTINCT variable_name FROM ") + table +
+			" WHERE variable_name NOT IN " + std::string(known);
+		if (!query_rows(admindb, list.c_str(), unknown, query_err) || !unknown) return;
+		for (auto* row : unknown->rows) {
+			if (row == nullptr || row->fields[0] == nullptr) continue;
+			log_message(4, std::string("duckdb: ignoring unsupported variable '") + row->fields[0] +
+			               "' in legacy table " + table + "; it was not migrated");
+		}
+	};
 	if (main_legacy) {
 		const std::string copy =
 			"INSERT OR IGNORE INTO main.global_variables(variable_name,variable_value) "
 			"SELECT 'duckdb-'||variable_name,variable_value FROM main.duckdb_variables "
 			"WHERE variable_name IN " + std::string(known);
 		if (!admindb.execute(copy.c_str())) return fail("failed importing main.duckdb_variables");
+		log_unknown_legacy_names("main.duckdb_variables");
 		if (!admindb.execute("DROP TABLE main.duckdb_variables")) return fail("failed dropping main.duckdb_variables");
 	}
 	if (runtime_legacy && !admindb.execute("DROP TABLE main.runtime_duckdb_variables")) {
@@ -313,6 +323,7 @@ bool duckdb_migrate_legacy_variable_tables(SQLite3DB& admindb, std::string& err)
 			"SELECT 'duckdb-'||variable_name,variable_value FROM disk.duckdb_variables "
 			"WHERE variable_name IN " + std::string(known);
 		if (!admindb.execute(copy.c_str())) return fail("failed importing disk.duckdb_variables");
+		log_unknown_legacy_names("disk.duckdb_variables");
 		if (!admindb.execute("DROP TABLE disk.duckdb_variables")) return fail("failed dropping disk.duckdb_variables");
 	}
 	if (!admindb.execute("COMMIT")) return fail("failed committing legacy DuckDB variable migration");
