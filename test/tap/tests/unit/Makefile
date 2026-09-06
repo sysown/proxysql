@@ -621,7 +621,6 @@ all: $(UNIT_TESTS)
 unit_tests: all
 
 .PHONY: ai_genai_unit_tests
-.NOTPARALLEL: ai_genai_unit_tests
 ai_genai_unit_tests: $(AI_GENAI_UNIT_TESTS)
 
 .PHONY: debug
