@@ -29,6 +29,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          # Keep this bounded: fetching every branch fails on macOS because the
+          # repository has refs whose names differ only by letter case.
+          fetch-depth: 1000
+          fetch-tags: true
           lfs: true
           persist-credentials: false
 
