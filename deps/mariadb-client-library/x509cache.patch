@@ -2,35 +2,21 @@ diff --git libmariadb/mariadb_lib.c libmariadb/mariadb_lib.c
 index 916024a8..79564a10 100644
 --- libmariadb/mariadb_lib.c
 +++ libmariadb/mariadb_lib.c
-@@ -133,6 +133,11 @@ my_context_install_suspend_resume_hook(struct mysql_async_context *b,
+@@ -133,6 +133,9 @@ my_context_install_suspend_resume_hook(struct mysql_async_context *b,
  uint mysql_port=0;
  my_string mysql_unix_port=0;
  
 +#include <openssl/ssl.h>
-+extern __thread SSL_CTX * thread_ctx;
-+extern __thread char **local_x509_files;
-+extern __thread char **local_x509_sha1s;
++extern void proxysql_ssl_ca_cache_clear(void);
 +
  #define CONNECT_TIMEOUT 0
  
  struct st_mariadb_methods MARIADB_DEFAULT_METHODS;
-@@ -4650,6 +4655,19 @@ my_bool STDCALL mysql_thread_init(void)
+@@ -4650,6 +4655,7 @@ my_bool STDCALL mysql_thread_init(void)
  
  void STDCALL mysql_thread_end(void)
  {
-+  if (local_x509_files != NULL) {
-+    int i;
-+    for (i=0; local_x509_files[i] != NULL ; i++) {
-+      free(local_x509_files[i]);
-+      free(local_x509_sha1s[i]);
-+    }
-+    free(local_x509_files);
-+    free(local_x509_sha1s);
-+  }
-+  if (thread_ctx != NULL) {
-+    SSL_CTX_free(thread_ctx);
-+    thread_ctx = NULL;
-+  }
++  proxysql_ssl_ca_cache_clear();
  }
  
  int STDCALL mysql_set_server_option(MYSQL *mysql,
@@ -51,92 +37,11 @@ index 916024a8..79564a10 100644
  #if defined(_WIN32) && !defined(_OPENSSL_Applink) && defined(HAVE_OPENSSL_APPLINK_C)
  #include <openssl/applink.c>
  #endif
-@@ -70,6 +76,89 @@
+@@ -70,6 +76,8 @@
  extern my_bool ma_tls_initialized;
  extern unsigned int mariadb_deinitialize_ssl;
  
-+__thread SSL_CTX * thread_ctx = NULL;
-+__thread void * local_x509store = NULL;
-+__thread char **local_x509_files = NULL;
-+__thread char **local_x509_sha1s = NULL;
-+
-+static int proxysql_SSL_CTX_local_x509store_add_file(SSL_CTX *ctx, const char *CAfile, int add_in_store) {
-+  int found=0, i=0, fd=-1;
-+  ssize_t bytesRead = 0;
-+  struct stat statbuf;
-+  unsigned char temp[SHA_DIGEST_LENGTH];
-+  char file_sha1[SHA_DIGEST_LENGTH*2+2];
-+  memset(file_sha1,0,SHA_DIGEST_LENGTH*2+2);
-+
-+  fd = open(CAfile, O_RDONLY);
-+  if (fd == -1) return 0;
-+
-+  if(fstat(fd, &statbuf) == 0) {
-+    // Allocate a buffer to read the file
-+    unsigned char *fb = (unsigned char *)malloc(statbuf.st_size);
-+    if (fb == NULL) {
-+      close(fd);
-+      return 0;
-+    }
-+    // Read the file into the buffer
-+    bytesRead = pread(fd, fb, statbuf.st_size, 0);
-+    if (bytesRead != statbuf.st_size) {
-+      free(fb);
-+      close(fd);
-+      return 0;
-+    }
-+    SHA1(fb, statbuf.st_size, temp);
-+    int i=0;
-+    for (i=0; i < SHA_DIGEST_LENGTH; i++) {
-+      sprintf((char*)&(file_sha1[i*2]), "%02x", temp[i]);
-+    }
-+    free(fb);
-+    close(fd);
-+  } else {
-+    close(fd);
-+    return 0;
-+  }
-+
-+  if (local_x509_files == NULL) {
-+    local_x509_files = (char **)malloc(sizeof(char *)*1);
-+    local_x509_sha1s = (char **)malloc(sizeof(char *)*1);
-+    local_x509_files[0] = NULL;
-+    local_x509_sha1s[0] = NULL;
-+  }
-+
-+  while (found == 0 && local_x509_files[i] != NULL) {
-+    if (strcmp(CAfile, local_x509_files[i]) == 0) {
-+      found = 1;
-+    } else {
-+      i++;
-+    }
-+  }
-+  if (found == 1) {
-+    if (strncmp(local_x509_sha1s[i],file_sha1,SHA_DIGEST_LENGTH*2)==0) {
-+      return 1; // all good
-+    } else {
-+      int rc = 1;
-+      free(local_x509_sha1s[i]);
-+      local_x509_sha1s[i] = strdup(file_sha1);
-+      rc = SSL_CTX_load_verify_file(ctx, CAfile);
-+      return rc;
-+    }
-+  } else {
-+    local_x509_files = (char **)realloc(local_x509_files,sizeof(char *)*(i+2));
-+    local_x509_sha1s = (char **)realloc(local_x509_sha1s,sizeof(char *)*(i+2));
-+    local_x509_files[i+1] = NULL;
-+    local_x509_sha1s[i+1] = NULL;	
-+    local_x509_files[i] = strdup(CAfile);
-+    local_x509_sha1s[i] = strdup(file_sha1);
-+    if (add_in_store == 1) {
-+      int rc = 1;
-+      rc = SSL_CTX_load_verify_file(ctx, CAfile);
-+      return rc;
-+    }
-+    return 1;
-+  }
-+  return 1;
-+}
++#include "proxysql_ca_cache.h"
 +
  #define MAX_SSL_ERR_LEN 100
  char tls_library_version[TLS_VERSION_LENGTH];
@@ -150,33 +55,19 @@ index 916024a8..79564a10 100644
    /* add cipher */
    if ((mysql->options.ssl_cipher &&
          mysql->options.ssl_cipher[0] != 0))
-@@ -340,10 +429,28 @@
+@@ -340,13 +429,17 @@
    /* ca_file and ca_path */
 -  if (!SSL_CTX_load_verify_locations(ctx,
-+  if (local_x509store != NULL && mysql->options.ssl_ca != NULL && mysql->options.ssl_capath == NULL) {
-+    SSL_CTX_set1_cert_store(ctx, local_x509store);
-+    ssl_rc = proxysql_SSL_CTX_local_x509store_add_file(ctx, mysql->options.ssl_ca, 1);
++  /* CRL options mutate a store; never attach a shared cached store there.
++   * Directory and default trust remain connection-local as well. */
++  if (mysql->options.ssl_ca != NULL && mysql->options.ssl_capath == NULL &&
++      !(mysql->options.extension &&
++        (mysql->options.extension->ssl_crl || mysql->options.extension->ssl_crlpath))) {
++    ssl_rc = proxysql_ssl_load_cached_ca(ctx, mysql->options.ssl_ca);
 +  } else {
 +    ssl_rc = proxysql_ssl_load_verify_locations(
-+        ctx,
-+        mysql->options.ssl_ca,
-+        mysql->options.ssl_capath,
++        ctx, mysql->options.ssl_ca, mysql->options.ssl_capath,
 +        proxysql_default_ca_files);
-+    if (ssl_rc == 1 &&
-+        (mysql->options.ssl_ca != NULL || mysql->options.ssl_capath != NULL)) {
-+      if (local_x509store == NULL && SSL_CTX_get_cert_store(ctx) != NULL) {
-+        local_x509store = SSL_CTX_get_cert_store(ctx);
-+        thread_ctx = SSL_CTX_new(TLS_client_method());
-+        if (thread_ctx == NULL) {
-+          local_x509store = NULL;
-+          goto error;
-+        }
-+        SSL_CTX_set1_cert_store(thread_ctx, local_x509store);
-+        if (mysql->options.ssl_ca != NULL) {
-+          proxysql_SSL_CTX_local_x509store_add_file(ctx,mysql->options.ssl_ca, 0);
-+        }
-+      }
-+    }
 +  }
 +  if (ssl_rc == 0)
 +    goto error;
@@ -188,6 +79,9 @@ index 916024a8..79564a10 100644
 -    if (SSL_CTX_set_default_verify_paths(ctx) == 0)
 -      goto error;
 -  }
+ 
+   if (mysql->options.extension &&
+      (mysql->options.extension->ssl_crl || mysql->options.extension->ssl_crlpath))
 diff --git libmariadb/secure/proxysql_default_ca.h libmariadb/secure/proxysql_default_ca.h
 new file mode 100644
 index 00000000..4cb3bb94
@@ -247,6 +141,119 @@ index 00000000..4cb3bb94
 +  }
 +
 +  return SSL_CTX_set_default_verify_paths(context);
++}
++
++#endif
+diff --git libmariadb/secure/proxysql_ca_cache.h libmariadb/secure/proxysql_ca_cache.h
+new file mode 100644
+--- /dev/null
++++ libmariadb/secure/proxysql_ca_cache.h
+@@ -0,0 +1,108 @@
++#ifndef PROXYSQL_CA_CACHE_H
++#define PROXYSQL_CA_CACHE_H
++
++#include <openssl/buffer.h>
++#include <openssl/pem.h>
++
++/* One immutable CA-file snapshot per thread. Holding a context owns the store;
++ * each SSL connection takes its own reference and survives cache replacement. */
++static __thread SSL_CTX *proxysql_ca_context;
++static __thread char *proxysql_ca_file;
++static __thread unsigned char proxysql_ca_digest[EVP_MAX_MD_SIZE];
++static __thread unsigned int proxysql_ca_digest_len;
++
++void proxysql_ssl_ca_cache_clear(void)
++{
++  SSL_CTX_free(proxysql_ca_context);
++  proxysql_ca_context= NULL;
++  free(proxysql_ca_file);
++  proxysql_ca_file= NULL;
++  proxysql_ca_digest_len= 0;
++}
++
++static int proxysql_ssl_load_cached_ca(SSL_CTX *ctx, const char *path)
++{
++  FILE *file= NULL;
++  BIO *snapshot= NULL;
++  BUF_MEM *contents= NULL;
++  STACK_OF(X509_INFO) *certificates= NULL;
++  SSL_CTX *replacement= NULL;
++  char *filename= NULL;
++  unsigned char digest[EVP_MAX_MD_SIZE];
++  unsigned int digest_len= 0;
++  char buffer[8192];
++  size_t count;
++  int i, loaded= 0, result= 0;
++
++  file= fopen(path, "rb");
++  snapshot= BIO_new(BIO_s_mem());
++  if (file == NULL || snapshot == NULL)
++    goto done;
++  while ((count= fread(buffer, 1, sizeof(buffer), file)) != 0) {
++    if (BIO_write(snapshot, buffer, (int)count) != (int)count)
++      goto done;
++  }
++  if (ferror(file))
++    goto done;
++  BIO_get_mem_ptr(snapshot, &contents);
++  if (contents == NULL || contents->length == 0 ||
++      EVP_Digest(contents->data, contents->length, digest, &digest_len,
++                 EVP_sha256(), NULL) != 1)
++    goto done;
++
++  if (proxysql_ca_context != NULL && proxysql_ca_file != NULL &&
++      strcmp(path, proxysql_ca_file) == 0 &&
++      digest_len == proxysql_ca_digest_len &&
++      memcmp(digest, proxysql_ca_digest, digest_len) == 0) {
++    SSL_CTX_set1_cert_store(ctx, SSL_CTX_get_cert_store(proxysql_ca_context));
++    result= 1;
++    goto done;
++  }
++
++  /* Parse the very bytes we hashed, not a second read of a changing file.
++   * Never publish metadata or mutate the old store until all loading succeeds. */
++  certificates= PEM_X509_INFO_read_bio(snapshot, NULL, NULL, NULL);
++  replacement= SSL_CTX_new(TLS_client_method());
++  filename= strdup(path);
++  if (certificates == NULL || replacement == NULL || filename == NULL)
++    goto done;
++  for (i= 0; i < sk_X509_INFO_num(certificates); ++i) {
++    X509_INFO *info= sk_X509_INFO_value(certificates, i);
++    X509_STORE *store= SSL_CTX_get_cert_store(replacement);
++    if (info->x509 != NULL) {
++      if (X509_STORE_add_cert(store, info->x509) != 1)
++        goto done;
++      ++loaded;
++    }
++    if (info->crl != NULL) {
++      if (X509_STORE_add_crl(store, info->crl) != 1)
++        goto done;
++      ++loaded;
++    }
++  }
++  if (loaded == 0)
++    goto done;
++
++  proxysql_ssl_ca_cache_clear();
++  proxysql_ca_context= replacement;
++  replacement= NULL;
++  proxysql_ca_file= filename;
++  filename= NULL;
++  memcpy(proxysql_ca_digest, digest, digest_len);
++  proxysql_ca_digest_len= digest_len;
++  SSL_CTX_set1_cert_store(ctx, SSL_CTX_get_cert_store(proxysql_ca_context));
++  result= 1;
++
++done:
++  if (file != NULL)
++    fclose(file);
++  BIO_free(snapshot);
++  sk_X509_INFO_pop_free(certificates, X509_INFO_free);
++  SSL_CTX_free(replacement);
++  free(filename);
++  if (!result)
++    proxysql_ssl_ca_cache_clear();
++  return result;
 +}
 +
 +#endif
