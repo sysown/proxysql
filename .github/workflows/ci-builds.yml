@@ -141,6 +141,13 @@ jobs:
           # CI-* test workflow consumes the CI-builds caches.
           - dist: 'ubuntu22'
             type: '-tap-mysqlx'
+
+          # Additive full regular producer. It enables the v4.0 chassis and
+          # retains every TAP/unit binary plus every in-tree plugin in one
+          # handoff. Consumers select TAP groups; this matrix leg must never
+          # learn plugin-specific filename patterns.
+          - dist: 'ubuntu24'
+            type: '-tap-full'
           # ubuntu22 is needed for ASAN TAP testing
           # disabled to save cache space
           #- dist: 'ubuntu22'
@@ -374,6 +381,12 @@ jobs:
           # at this matrix entry. CI-mysqlx never runs genai_*_unit-t.
           sed -i "/command/i \      - SKIP_GENAI_UNIT_TESTS=1" docker-compose.yml
         fi
+        if [[ "${{ matrix.type }}" =~ "-full" ]]; then
+          # The full regular handoff uses the chassis tier so the core and all
+          # in-tree plugins share one build. Deliberately do not inject
+          # SKIP_GENAI_UNIT_TESTS: this leg retains every test binary.
+          sed -i "/command/i \      - PROXYSQL40=1" docker-compose.yml
+        fi
         if [[ "${{ matrix.type }}" =~ "-gcov" ]]; then
           sed -i "/command/i \      - WITHGCOV=1" docker-compose.yml
         fi
@@ -437,8 +450,8 @@ jobs:
             echo "       This typically means the TAP build did not run or failed."
             exit 1
           fi
-          if [[ "${{ matrix.type }}" =~ "-mysqlx" ]] && [ "${UNIT_COUNT}" -lt 1 ]; then
-            echo "ERROR: no unit test binaries found at test/tap/tests/unit/*-t for the mysqlx cache"
+          if [[ "${{ matrix.type }}" =~ "-full" ]] && [ "${UNIT_COUNT}" -lt 1 ]; then
+            echo "ERROR: no unit test binaries found for the complete regular handoff"
             exit 1
           fi
 
@@ -459,7 +472,9 @@ jobs:
           # this cache, so preserve those and delete only the rest. Spot-
           # checks (readelf) confirm the kept binaries do not dyn-link to
           # test/deps -- the test/deps deletion below still applies.
-          if [[ "${{ matrix.type }}" =~ "-mysqlx" ]]; then
+          if [[ "${{ matrix.type }}" =~ "-full" ]]; then
+            echo ">>> Retaining all ${UNIT_COUNT} unit test binaries for the complete regular handoff"
+          elif [[ "${{ matrix.type }}" =~ "-mysqlx" ]]; then
             sudo find test/tap/tests/unit -type f -name '*-t' \
               ! -name 'mysqlx_*_unit-t' ! -name 'plugin_*_unit-t' -delete
             KEPT=$(find test/tap/tests/unit -type f -name '*-t' 2>/dev/null | wc -l)
@@ -639,7 +654,7 @@ jobs:
 
     - name: Pack bin cache with zstd-15
       id: cache-pack-bin
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && !contains(matrix.type,'-full') }}
       # `actions/cache@v4` compresses with zstd level ~3; we pre-compress
       # with zstd -15 to fit more under the 10 GB repo quota. Level 15
       # captures most of the size win (~80% of what --ultra -22 gives
@@ -657,7 +672,7 @@ jobs:
 
     - name: Cache save bin
       id: cache-save-bin
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && !contains(matrix.type,'-full') }}
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         key: ${{ env.BLDCACHE }}_bin
@@ -666,7 +681,7 @@ jobs:
 
     - name: Cache save src
       id: cache-save-src
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') && !contains(matrix.type,'-full') }}
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         key: ${{ env.BLDCACHE }}_src
@@ -706,7 +721,7 @@ jobs:
 
     - name: Pack test cache with zstd-15
       id: cache-pack-test
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') && !contains(matrix.type,'-full') }}
       # `actions/cache@v4` compresses with zstd level ~3; we pre-compress
       # with zstd -15 to fit more under the 10 GB repo quota. See the
       # bin-cache pack step above for the rationale on dropping from
@@ -722,7 +737,7 @@ jobs:
 
     - name: Cache save test
       id: cache-save-test
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') && !contains(matrix.type,'-full') }}
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         key: ${{ env.BLDCACHE }}_test
@@ -731,7 +746,7 @@ jobs:
 
     - name: Cache save matrix
       id: cache-save-matrix
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') && !contains(matrix.type,'-full') }}
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         key: ${{ env.BLDCACHE }}_matrix
@@ -805,6 +820,33 @@ jobs:
         # Only ubuntu22-tap generates tap-matrix*; ignore on variants without it.
         if-no-files-found: ignore
         path: cache_matrix.tar.zst
+
+    - name: Pack complete regular handoff (zstd-15)
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-full') }}
+      run: |
+        set -euo pipefail
+        command -v zstd >/dev/null || sudo apt-get install -y zstd
+        cd proxysql/
+        shopt -s nullglob
+        gcno=(lib/obj/*.gcno)
+        matrix_files=(tap-matrix*)
+        plugin_files=(plugins/*/*.so)
+        if [ "${#plugin_files[@]}" -lt 1 ]; then
+          echo "ERROR: no plugin shared libraries were built for the complete handoff" >&2
+          exit 1
+        fi
+        tar -cf - src/ test/ "${gcno[@]}" "${matrix_files[@]}" "${plugin_files[@]}" \
+          | zstd -15 -T0 -o ../full-handoff.tar.zst
+
+    - name: Upload complete regular handoff
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-full') }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: ci-builds-handoff-${{ env.SHA }}-ubuntu24-tap-full
+        retention-days: 1
+        compression-level: 0
+        if-no-files-found: error
+        path: full-handoff.tar.zst
 
     - name: Upload handoff (bin)
       # Only the debian12-dbg build feeds the 3p suites, and they consume bin
