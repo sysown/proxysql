@@ -92,7 +92,7 @@ POSTGRESQL_STATIC_LIBS := $(POSTGRESQL_PATH)/interfaces/libpq/libpq.a \
 	$(POSTGRESQL_PATH)/port/libpgport.a
 
 ifeq ($(UNAME_S),Darwin)
-MYLIBS_DYNAMIC_PART := -lgnutls -lcpp_dotenv -luuid
+MYLIBS_DYNAMIC_PART := -lgnutls -lcpp_dotenv
 MYLIBS_STATIC_PART := -lconfig -lproxysql -lsqlparser -ldaemon -lconfig++ $(RE2_STATIC_LIBS) $(PCRE2_LIBS) -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core
 MYLIBS_LAST_PART := -lpthread -lm -lz -lzstd -liconv -ldl $(EXTRALINK)
 MYLIBS := -ltap $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) \
@@ -147,8 +147,10 @@ ifeq ($(PROXYSQL40),1)
 endif
 
 OPT := $(STDCPP) -O2 -ggdb $(PSQL40) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
+# Compress ELF debug sections in test binaries. Apple clang accepts -gz but
+# does not compress DWARF stored in Mach-O objects, so Darwin omits it.
 ifneq ($(UNAME_S),Darwin)
-OPT += -Wl,--no-as-needed
+OPT += -Wl,--no-as-needed -gz
 endif
 OPT += -Wl,-rpath,$(TAP_LDIR) -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl,-rpath,$(RE2_LDIR)
 
@@ -179,7 +181,7 @@ tests_no_infra: admin_set_credentials_logging-t listener_conflicts_validation-t
 
 DEBUG_OPT := $(STDCPP) -O0 -DDEBUG -ggdb $(PSQL40) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
 ifneq ($(UNAME_S),Darwin)
-DEBUG_OPT += -Wl,--no-as-needed
+DEBUG_OPT += -Wl,--no-as-needed -gz
 endif
 DEBUG_OPT += -Wl,-rpath,$(TAP_LDIR) -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl,-rpath,$(RE2_LDIR)
 debug: OPT := $(DEBUG_OPT)
