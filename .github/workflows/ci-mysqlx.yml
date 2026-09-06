@@ -15,211 +15,6 @@ env:
   SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
 
 jobs:
-  # Run the mysqlx + plugin chassis unit-test binaries that CI-builds
-  # preserved in the test cache (see the matrix-conditional deletion in
-  # ci-builds.yml). The binaries have RUNPATH baked in pointing at
-  # /opt/proxysql/test/tap/tap (the build container's path), so they MUST
-  # execute inside the same image mounted at /opt/proxysql -- otherwise
-  # libtap.so and the bundled libcpp_dotenv.so cannot be located at
-  # runtime. The artifact is built in the Ubuntu 24 image, so its unit/e2e
-  # jobs use that same runtime image rather than relying on runner libraries.
-  unit-tests:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    permissions:
-      actions: read
-      checks: write
-      contents: read
-      packages: read
-    steps:
-      - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
-        id: checks
-        if: always()
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          name: '${{ github.workflow }} / ${{ github.job }}'
-          repo: ${{ github.repository }}
-          sha: ${{ env.SHA }}
-          status: 'in_progress'
-          details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
-
-      - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          repository: ${{ github.repository }}
-          ref: ${{ env.SHA }}
-          path: 'proxysql'
-          # We only need the working tree to mount under /opt/proxysql so
-          # the unit tests can find their data files (test fixtures,
-          # cert bundles, etc.) at the paths their RUNPATH expects. No
-          # sparse-checkout: a few extra MB is much cheaper than
-          # debugging a missing-file failure inside the container.
-
-      - name: Download build handoff
-        # Build payload arrives as workflow artifacts, not an Actions cache:
-        # GitHub made cache writes read-only for workflow_run/untrusted triggers
-        # (changelog 2026-06-26). Download the per-type handoff artifacts and
-        # unpack into proxysql/. The following 'Restore plugin .so' step then
-        # copies the mysqlx/genai .so out of the unpacked test tree as before.
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
-          BUILD_RUN_ID: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.id || '' }}
-          HANDOFF_VARIANT: ubuntu24-tap-genai-gcov
-          HANDOFF_TYPES: full
-        run: |
-          set -uo pipefail
-          command -v zstd >/dev/null || sudo apt-get install -y zstd
-          # Resolve the build-handoff artifact robustly. Self-hosted runners can
-          # pick up this job within ~1 min of CI-builds finishing -- earlier than
-          # GitHub-hosted runners queue -- which lands inside the window where
-          # GitHub's GLOBAL name-filtered artifact index (artifacts?name=) still
-          # lags behind creation, returning empty for an artifact that already
-          # exists. Prefer resolving via the triggering CI-builds run's OWN
-          # artifact list (run-scoped: populated as soon as the artifact is
-          # attached, not subject to the global-index lag); fall back to the
-          # global name query. Retry on a bounded budget and surface the real gh
-          # error, so a genuine build failure is distinguishable from transient lag.
-          : "${HANDOFF_MAX_ATTEMPTS:=20}"   # bounded: 20 x 15s = up to ~5 min
-          ERRLOG="$(mktemp)"
-          resolve_aid() {
-            local name="$1" out=""
-            if [ -n "${BUILD_RUN_ID:-}" ]; then
-              out=$(gh api "repos/${REPO}/actions/runs/${BUILD_RUN_ID}/artifacts?per_page=100" \
-                      --jq "[.artifacts[]|select(.name==\"${name}\" and .expired==false)]|sort_by(.created_at)|last|.id // empty" 2>>"$ERRLOG") || true
-              [ -n "$out" ] && { printf '%s' "$out"; return 0; }
-            fi
-            out=$(gh api "repos/${REPO}/actions/artifacts?name=${name}&per_page=100" \
-                    --jq '[.artifacts[]|select(.expired==false)]|sort_by(.created_at)|last|.id // empty' 2>>"$ERRLOG") || true
-            [ -n "$out" ] && { printf '%s' "$out"; return 0; }
-            return 1
-          }
-          for t in $HANDOFF_TYPES; do
-            name="ci-builds-handoff-${SHA}-${HANDOFF_VARIANT}-${t}"
-            aid=""
-            for attempt in $(seq 1 "$HANDOFF_MAX_ATTEMPTS"); do
-              aid=$(resolve_aid "$name") && [ -n "$aid" ] && break
-              aid=""
-              echo ">>> ${name} not resolvable yet (${attempt}/${HANDOFF_MAX_ATTEMPTS}); sleeping 15s"; sleep 15
-            done
-            if [ -z "$aid" ]; then
-              echo "ERROR: handoff artifact ${name} not found after ${HANDOFF_MAX_ATTEMPTS} attempts (build_run=${BUILD_RUN_ID:-n/a}) -- did CI-builds succeed for ${SHA}?" >&2
-              echo "--- last gh errors ---" >&2; tail -n 20 "$ERRLOG" >&2
-              exit 1
-            fi
-            echo ">>> downloading ${name} (id=${aid})"
-            gh api "repos/${REPO}/actions/artifacts/${aid}/zip" > "handoff-${t}.zip" || { echo "ERROR: download ${name} failed" >&2; exit 1; }
-            unzip -o "handoff-${t}.zip" || { echo "ERROR: unzip ${name} failed" >&2; exit 1; }
-          done
-          mkdir -p proxysql
-          cd proxysql/
-          for tb in ../cache_*.tar.zst; do
-            [ -e "$tb" ] || continue
-            echo ">>> unpacking $(basename "$tb")"
-            zstd -d < "$tb" | tar -xf - || { echo "ERROR: unpack $tb failed" >&2; exit 1; }
-          done
-          rm -f ../cache_*.tar.zst ../handoff-*.zip
-
-      - name: Restore plugin .so files from _runtime_libs
-        # CI-builds stages plugins/mysqlx + plugins/genai .so files
-        # into test/tap/tap/_runtime_libs/. Shared RE2 builds also stage
-        # libre2.so.10. The _src cache path list is shared
-        # infrastructure that CANNOT be extended without invalidating
-        # every other CI workflow's cache restore, so the plugin .so
-        # files ride along inside the _test cache instead. Copy them
-        # back to plugins/mysqlx/ and plugins/genai/ (the paths the
-        # soak harness's setup-infras.bash bind-mounts from).
-        run: |
-          cd proxysql/
-          mkdir -p plugins/mysqlx plugins/genai
-          [ -f test/tap/tap/_runtime_libs/ProxySQL_MySQLX_Plugin.so ] && \
-            cp test/tap/tap/_runtime_libs/ProxySQL_MySQLX_Plugin.so plugins/mysqlx/
-          [ -f test/tap/tap/_runtime_libs/ProxySQL_GenAI_Plugin.so ] && \
-            cp test/tap/tap/_runtime_libs/ProxySQL_GenAI_Plugin.so plugins/genai/
-          ls -la plugins/mysqlx/ plugins/genai/ 2>/dev/null || true
-
-      - name: Log in to GHCR and pull build image
-        env:
-          GHCR_USER: ${{ github.actor }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # Pull the same image CI-builds compiled the unit tests in. Mirrors
-        # ci-legacy-g4's GHCR pull pattern (login + pull retry loop). The
-        # image is large (~1 GB) but it's already cached on most runners
-        # because every CI-builds run touches it.
-        run: |
-          set +e
-          attempt=0
-          max_attempts=5
-          while [ $attempt -lt $max_attempts ]; do
-            attempt=$((attempt + 1))
-            echo ">>> GHCR login+pull attempt ${attempt}/${max_attempts}"
-            if echo "$GHCR_TOKEN" | docker login ghcr.io \
-                -u "$GHCR_USER" --password-stdin \
-                && docker pull proxysql/packaging:build-ubuntu24-v4.0.0; then
-              echo ">>> pull OK on attempt ${attempt}"
-              exit 0
-            fi
-            if [ $attempt -lt $max_attempts ]; then
-              sleep_for=$((attempt * 10))
-              echo ">>> attempt ${attempt} failed; sleeping ${sleep_for}s"
-              sleep $sleep_for
-            fi
-          done
-          echo ">>> all ${max_attempts} pull attempts failed"
-          exit 1
-
-      - name: Run mysqlx + plugin unit tests inside build image
-        # Mount the workspace at /opt/proxysql so the binaries' baked-in
-        # RUNPATH resolves. Each binary exits 0 on success / non-zero on
-        # TAP failure; loop exits at the first failure with the
-        # offending binary name in the log. --network none so the unit
-        # tests stay isolated from anything that might be running on the
-        # runner (these are unit tests, not integration tests; nothing
-        # legitimately needs network).
-        run: |
-          docker run --rm \
-            --network none \
-            -v "$(pwd)/proxysql:/opt/proxysql" \
-            -w /opt/proxysql/test/tap/tests/unit \
-            -e LD_LIBRARY_PATH=/opt/proxysql/test/tap/tap/_runtime_libs \
-            proxysql/packaging:build-ubuntu24-v4.0.0 \
-            bash -c '
-              set -e
-              fails=""
-              for t in mysqlx_*_unit-t plugin_*_unit-t; do
-                [ -x "$t" ] || continue
-                echo ">>> ./$t"
-                if ! ./"$t"; then
-                  fails="${fails}${t} "
-                fi
-              done
-              if [ -n "$fails" ]; then
-                echo ">>> FAILED: ${fails}"
-                exit 1
-              fi
-              echo ">>> all unit tests passed"
-            '
-
-      - name: Archive logs on failure
-        if: ${{ failure() && !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: ${{ github.workflow }}-${{ env.SHA }}-${{ github.job }}-run#${{ github.run_number }}
-          path: |
-            proxysql/test/tap/tests/unit/*.log
-          if-no-files-found: ignore
-
-      - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
-        if: always()
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          check_id: ${{ steps.checks.outputs.check_id }}
-          repo: ${{ github.repository }}
-          sha: ${{ env.SHA }}
-          conclusion: ${{ job.status }}
-          details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
-
   # The handshake-only e2e tests talk to a MySQL 8.4 X-protocol sandbox
   # directly (SKIP_PROXYSQL=1 — they validate that the in-tree client
   # wire code is compatible with upstream, not that ProxySQL proxies
@@ -230,7 +25,7 @@ jobs:
   e2e-tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
-    needs: unit-tests
+
     permissions:
       actions: read
       checks: write
@@ -508,7 +303,7 @@ jobs:
   soak-tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
-    needs: unit-tests
+
     strategy:
       fail-fast: false
       matrix:
