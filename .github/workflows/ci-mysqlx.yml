@@ -13,15 +13,9 @@ env:
   # and check_run posts use this so the entire pipeline operates on one
   # SHA consistently.
   SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
-  # CI-builds writes this matrix's caches as <SHA>_ubuntu22-tap-mysqlx_*.
-  # The full chassis tier (PROXYSQL40=1 and the cascaded PROXYSQL31/
-  # PROXYSQLFFTO/PROXYSQLTSDB) is built inside the proxysql/packaging:
-  # build-ubuntu22-v4.0.0 image; this file just restores artefacts and
-  # runs tests. Pre-rewrite, CI-mysqlx was the only test workflow that
-  # compiled proxysql on the bare GitHub runner, which made every failure
-  # mode an infra symptom (OOM, disk-full, missing gnutls, mysql.h
-  # roulette) — see the audit trail on PR #5852.
-  BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu22-tap-mysqlx
+  # CI-builds writes one complete regular Ubuntu 24 handoff per SHA. This
+  # workflow restores it and runs MysqlX tests; it never rebuilds ProxySQL.
+  BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu24-tap-full_full
 
 jobs:
   # Run the mysqlx + plugin chassis unit-test binaries that CI-builds
@@ -72,8 +66,8 @@ jobs:
           REPO: ${{ github.repository }}
           SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
           BUILD_RUN_ID: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.id || '' }}
-          HANDOFF_VARIANT: ubuntu22-tap-mysqlx
-          HANDOFF_TYPES: src test
+          HANDOFF_VARIANT: ubuntu24-tap-full
+          HANDOFF_TYPES: full
         run: |
           set -uo pipefail
           command -v zstd >/dev/null || sudo apt-get install -y zstd
@@ -268,8 +262,8 @@ jobs:
           REPO: ${{ github.repository }}
           SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
           BUILD_RUN_ID: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.id || '' }}
-          HANDOFF_VARIANT: ubuntu22-tap-mysqlx
-          HANDOFF_TYPES: src test
+          HANDOFF_VARIANT: ubuntu24-tap-full
+          HANDOFF_TYPES: full
         run: |
           set -uo pipefail
           command -v zstd >/dev/null || sudo apt-get install -y zstd
@@ -553,8 +547,8 @@ jobs:
           REPO: ${{ github.repository }}
           SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
           BUILD_RUN_ID: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.id || '' }}
-          HANDOFF_VARIANT: ubuntu22-tap-mysqlx
-          HANDOFF_TYPES: src test
+          HANDOFF_VARIANT: ubuntu24-tap-full
+          HANDOFF_TYPES: full
         run: |
           set -uo pipefail
           command -v zstd >/dev/null || sudo apt-get install -y zstd

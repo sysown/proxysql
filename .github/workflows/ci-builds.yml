@@ -115,32 +115,9 @@ jobs:
       matrix:
         include:
 
-          # debian12 is needed for 3p testing
-          - dist: 'debian12'
-            type: '-dbg'
-#          - dist: 'opensuse15'
-#            type: '-clang'
-
-          # ubuntu22 is needed for TAP testing
-          - dist: 'ubuntu22'
-            type: '-tap'
-
           # ubuntu24 GenAI build with code coverage
           - dist: 'ubuntu24'
             type: '-tap-genai-gcov'
-
-          # ubuntu22 chassis build for the mysqlx plugin. Injects
-          # PROXYSQL40=1 into docker-compose (see the Build step). The
-          # chassis cascade in Makefile sets PROXYSQL31 / PROXYSQLFFTO /
-          # PROXYSQLTSDB automatically, and entrypoint.bash descends into
-          # plugins/mysqlx so the .so lands at
-          # proxysql/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so. CI-mysqlx's
-          # callee on this branch (ci-mysqlx.yml) restores this matrix's
-          # _src and _test caches and runs the tests without compiling
-          # anything on the bare runner -- mirroring how every other
-          # CI-* test workflow consumes the CI-builds caches.
-          - dist: 'ubuntu22'
-            type: '-tap-mysqlx'
 
           # Additive full regular producer. It enables the v4.0 chassis and
           # retains every TAP/unit binary plus every in-tree plugin in one
@@ -195,7 +172,7 @@ jobs:
     # matrix legs serially, so the stale writer can belong to a different
     # distribution than the new leg. The previous project-name-filtered cleanup
     # never matched, because the Makefile names each project
-    # <BLD_NAME>-<GITVERSION> (e.g. ubuntu22-tap-3.0.11-502-gd8bdd5a), not the
+    # <BLD_NAME>-<GITVERSION> (e.g. ubuntu24-tap-full-3.0.11-502-gd8bdd5a), not the
     # bare distribution name. Nuke ALL docker state on the runner instead: every
     # container, every volume, every network. Nothing dockerized may survive
     # into the next job.
@@ -428,8 +405,8 @@ jobs:
           # Cache size control: prune artifacts the _test cache doesn't
           # need before it gets saved. Without this pruning, the _test
           # cache grows to ~4 GB compressed (~16 GB uncompressed), and
-          # two concurrent cascades (each saving one ubuntu22-tap cache
-          # and one ubuntu24-tap-genai-gcov cache) exceed GitHub's 10 GB
+          # two concurrent cascades (each saving a regular and a gcov cache)
+          # exceed GitHub's 10 GB
           # per-repo cache quota. LRU eviction then deletes caches
           # between when CI-builds saves them and when downstream test
           # workflows try to restore them, causing "Cache restore test"
@@ -772,7 +749,7 @@ jobs:
     # computes), NOT the workflow_run default-branch SHA, so names line up
     # without any run-id correlation.
     - name: Pack src + matrix for handoff (zstd-15)
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') && !contains(matrix.type,'-full') }}
       run: |
         command -v zstd >/dev/null || sudo apt-get install -y zstd
         cd proxysql/
@@ -783,14 +760,14 @@ jobs:
         gcno=(lib/obj/*.gcno)
         tar -cf - src/ "${gcno[@]}" | zstd -15 -T0 -o ../cache_src.tar.zst
         # _matrix payload (tap-matrix* json) -- only the taptests* groups consume
-        # it, and only ubuntu22-tap generates it; skip when absent.
+        # it; skip it when absent.
         mtx=(tap-matrix*)
         if [ ${#mtx[@]} -gt 0 ]; then
           tar -cf - "${mtx[@]}" | zstd -15 -T0 -o ../cache_matrix.tar.zst
         fi
 
     - name: Upload handoff (src)
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') && !contains(matrix.type,'-full') }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ci-builds-handoff-${{ env.SHA }}-${{ matrix.dist }}${{ matrix.type }}-src
@@ -800,7 +777,7 @@ jobs:
         path: cache_src.tar.zst
 
     - name: Upload handoff (test)
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') && !contains(matrix.type,'-full') }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ci-builds-handoff-${{ env.SHA }}-${{ matrix.dist }}${{ matrix.type }}-test
@@ -811,13 +788,13 @@ jobs:
         path: cache_test.tar.zst
 
     - name: Upload handoff (matrix)
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') && !contains(matrix.type,'-full') }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ci-builds-handoff-${{ env.SHA }}-${{ matrix.dist }}${{ matrix.type }}-matrix
         retention-days: 1
         compression-level: 0
-        # Only ubuntu22-tap generates tap-matrix*; ignore on variants without it.
+        # Only variants that generate tap-matrix* upload this payload.
         if-no-files-found: ignore
         path: cache_matrix.tar.zst
 
@@ -836,30 +813,18 @@ jobs:
           exit 1
         fi
         tar -cf - src/ test/ "${gcno[@]}" "${matrix_files[@]}" "${plugin_files[@]}" \
-          | zstd -15 -T0 -o ../full-handoff.tar.zst
+          | zstd -15 -T0 -o ../cache_full.tar.zst
 
     - name: Upload complete regular handoff
       if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-full') }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
-        name: ci-builds-handoff-${{ env.SHA }}-ubuntu24-tap-full
+        name: ci-builds-handoff-${{ env.SHA }}-ubuntu24-tap-full-full
         retention-days: 1
         compression-level: 0
         if-no-files-found: error
-        path: full-handoff.tar.zst
+        path: cache_full.tar.zst
 
-    - name: Upload handoff (bin)
-      # Only the debian12-dbg build feeds the 3p suites, and they consume bin
-      # only. bin is large (.git/ + binaries/), so don't ship it for -tap.
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-dbg') }}
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-      with:
-        name: ci-builds-handoff-${{ env.SHA }}-${{ matrix.dist }}${{ matrix.type }}-bin
-        retention-days: 1
-        compression-level: 0
-        if-no-files-found: error
-        # cache_bin.tar.zst is produced by the "Pack bin cache" step above.
-        path: cache_bin.tar.zst
 
     # Nuke ALL docker state before leaving the runner clean for its next job.
     # This prevents a failed or cancelled build from continuing to write

@@ -17,13 +17,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        testdist: [ 'ubuntu22-tap' ]
+        testdist: [ 'ubuntu24-tap-full' ]
 #        infradb: [ 'mysql57', 'mysql80', 'mysql81', 'mysql82', 'mariadb10', 'mariadb11' ]
         infradb: [ 'mysql57' ]
     env:
       TESTDIST: ${{ matrix.testdist }}
       INFRADB:  ${{ matrix.infradb }}
-      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.testdist }}_src
+      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.testdist }}_full
       MATRIX: '(${{ matrix.infradb }})'
 
     steps:
@@ -68,7 +68,7 @@ jobs:
         SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
         BUILD_RUN_ID: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.id || '' }}
         HANDOFF_VARIANT: ${{ matrix.testdist }}
-        HANDOFF_TYPES: src
+        HANDOFF_TYPES: full
       run: |
         set -uo pipefail
         command -v zstd >/dev/null || sudo apt-get install -y zstd
