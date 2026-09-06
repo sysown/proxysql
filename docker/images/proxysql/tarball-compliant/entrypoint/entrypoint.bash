@@ -37,11 +37,22 @@ ${MAKE} ${MAKEOPT} ${EXTRA} ${build_target}
 
 echo "==> Staging Tarball Files"
 mkdir -p "pkgroot/${DIR_NAME}/bin"
+mkdir -p "pkgroot/${DIR_NAME}/lib"
 mkdir -p "pkgroot/${DIR_NAME}/etc/logrotate.d"
 mkdir -p "pkgroot/${DIR_NAME}/share/proxysql/tools"
 mkdir -p "pkgroot/${DIR_NAME}/systemd/system"
 
-cp src/proxysql "pkgroot/${DIR_NAME}/bin/"
+cp src/proxysql "pkgroot/${DIR_NAME}/bin/proxysql.bin"
+cat > "pkgroot/${DIR_NAME}/bin/proxysql" <<'EOF'
+#!/bin/sh
+set -eu
+
+BIN_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export LD_LIBRARY_PATH="${BIN_DIR}/../lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+exec "${BIN_DIR}/proxysql.bin" "$@"
+EOF
+chmod 0755 "pkgroot/${DIR_NAME}/bin/proxysql"
+
 cp etc/proxysql.cnf "pkgroot/${DIR_NAME}/etc/"
 cp etc/logrotate.d/proxysql "pkgroot/${DIR_NAME}/etc/logrotate.d/"
 cp tools/proxysql_galera_checker.sh tools/proxysql_galera_writer.pl "pkgroot/${DIR_NAME}/share/proxysql/tools/"

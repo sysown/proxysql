@@ -175,16 +175,25 @@ class MySQL_Event {
 		query_ptr=read_string(f,query_len);
 		char buffer[26];
 		char buffer2[10];
+		struct tm tm_info_buf;
 		struct tm* tm_info;
 		time_t timer;
 		timer=start_time/1000/1000;
-    tm_info = localtime(&timer);
-    strftime(buffer, 26, "%Y-%m-%d %H:%M:%S", tm_info);
+		tm_info = localtime_r(&timer, &tm_info_buf);
+		if (tm_info != NULL) {
+			strftime(buffer, 26, "%Y-%m-%d %H:%M:%S", tm_info);
+		} else {
+			buffer[0] = '\0';
+		}
 		snprintf(buffer2, sizeof(buffer2), "%06u", (unsigned)(start_time%1000000));
 		cout << " starttime=\"" << buffer << "." << buffer2 << "\"";
 		timer=end_time/1000/1000;
-    tm_info = localtime(&timer);
-    strftime(buffer, 26, "%Y-%m-%d %H:%M:%S", tm_info);
+		tm_info = localtime_r(&timer, &tm_info_buf);
+		if (tm_info != NULL) {
+			strftime(buffer, 26, "%Y-%m-%d %H:%M:%S", tm_info);
+		} else {
+			buffer[0] = '\0';
+		}
 		snprintf(buffer2, sizeof(buffer2), "%06u", (unsigned)(end_time%1000000));
 		cout << " endtime=\"" << buffer << "." << buffer2 << "\"";
 		cout << " duration=" << (end_time-start_time) << "us";

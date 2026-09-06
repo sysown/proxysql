@@ -74,15 +74,23 @@ Apply to every push:
 
 ---
 
-## 5. Merged Instead of Rebased
+## 5. Incorporated Upstream Without Checking the Result
 
-**Symptom:** PR diff includes dozens of unrelated files because the agent ran `git merge <upstream>` into its branch.
+**Symptom:** A merge or rebase drops feature changes, loses upstream changes, or
+leaves the PR conflicted.
 
-**Root cause:** Agent's default strategy for incorporating upstream changes is merge. This creates a merge commit that brings all upstream changes into the PR diff.
+**Root cause:** The agent treats the Git operation itself as conflict resolution
+and does not review the semantic result. Both merging and rebasing can produce
+incorrect resolutions even when Git reports success.
 
-**Prevention:** Explicit instruction: "Use `git rebase`, NOT `git merge`."
+**Prevention:** Merge and rebase are both acceptable. Follow the PR owner's
+preference, inspect every conflict, preserve the intended changes from both
+sides, and verify the final diff and mergeability. Prefer merge on a published
+branch when avoiding history rewrites is useful; use rebase when linear history
+is explicitly desired.
 
-**Detection:** `git log --merges <branch> --not <base>` — any merge commits indicate merging.
+**Detection:** Check `git diff <base>...HEAD`, `git diff --diff-filter=U`, and the
+PR mergeability state. A merge commit alone is not a defect.
 
 ---
 
@@ -266,8 +274,8 @@ gh pr diff <PR> | grep "^+static.*calculate_\|^+static.*evaluate_\|^+static.*sho
 # Manual TAP stubs?
 gh pr diff <PR> | grep "^+.*noise_failures\|^+.*stop_noise_tools"
 
-# Merge commits?
-gh pr view <PR> --json commits --jq '.commits[].messageHeadline' | grep -i merge
+# Unexpected unresolved conflicts?
+git diff --name-only --diff-filter=U
 
 # Unrelated files changed?
 gh pr diff <PR> | grep "^+++ b/" | grep -v "<expected_files_pattern>"

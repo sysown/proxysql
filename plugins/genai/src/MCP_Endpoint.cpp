@@ -7,6 +7,7 @@ using json = nlohmann::json;
 #define PROXYJSON
 
 #include "MCP_Endpoint.h"
+#include "genai_plugin.h"
 #include "MCP_Thread.h"
 #include "MySQL_Tool_Handler.h"
 #include "MCP_Tool_Handler.h"
@@ -15,8 +16,16 @@ using json = nlohmann::json;
 
 using namespace httpserver;
 
-MCP_JSONRPC_Resource::MCP_JSONRPC_Resource(MCP_Threads_Handler* h, MCP_Tool_Handler* th, const std::string& name)
-	: handler(h), tool_handler(th), endpoint_name(name)
+MCP_JSONRPC_Resource::MCP_JSONRPC_Resource(
+	MCP_Threads_Handler* h,
+	MCP_Tool_Handler* th,
+	const std::string& name,
+	GenAIRWLock* dependencies_mutex
+)
+	: handler(h),
+	  tool_handler(th),
+	  endpoint_name(name),
+	  runtime_dependencies_mutex(dependencies_mutex)
 {
 	proxy_debug(PROXY_DEBUG_GENERIC, 3, "Created MCP JSON-RPC resource for endpoint '%s'\n", name.c_str());
 }
@@ -506,6 +515,15 @@ json MCP_JSONRPC_Resource::handle_tools_call(const json& req_json) {
 	proxy_info("MCP TOOL CALL: endpoint='%s' tool='%s'\n", endpoint_name.c_str(), tool_name.c_str());
 	proxy_debug(PROXY_DEBUG_GENERIC, 2, "MCP tool call: %s with args: %s\n", tool_name.c_str(), arguments.dump().c_str());
 
+	// AI/RAG handlers borrow the vector DB, LLM bridge, and GenAI worker
+	// manager.  LOAD GENAI VARIABLES replaces those resources in place.  Hold
+	// the shared side only across the handler call so the reload can wait for
+	// current users and rebind the persistent handler before admitting the
+	// next request.
+	std::shared_lock<GenAIRWLock> runtime_guard;
+	if (runtime_dependencies_mutex != nullptr) {
+		runtime_guard = std::shared_lock<GenAIRWLock>(*runtime_dependencies_mutex);
+	}
 	json response = tool_handler->execute_tool(tool_name, arguments);
 
 	// Check if this is a ProxySQL tool response with success/result wrapper

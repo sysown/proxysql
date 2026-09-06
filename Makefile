@@ -278,6 +278,7 @@ build_lib_legacy: build_deps_legacy
 build_src_legacy: build_lib_legacy
 	cd src && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O2} -ggdb" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
+	$(if $(filter 1,$(PROXYSQL40)),cd plugins/duckdb && OPTZ="${O2} -ggdb" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] duckdb plugin (PROXYSQL40 not set)")
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/genai && OPTZ="${O2} -ggdb" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] genai plugin (PROXYSQL40 not set)")
 
 .PHONY: build_deps_debug_legacy
@@ -292,6 +293,7 @@ build_lib_debug_legacy: build_deps_debug_legacy
 build_src_debug_legacy: build_lib_debug_legacy
 	cd src && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
+	$(if $(filter 1,$(PROXYSQL40)),cd plugins/duckdb && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] duckdb plugin (PROXYSQL40 not set)")
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/genai && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] genai plugin (PROXYSQL40 not set)")
 #--
 
@@ -425,12 +427,14 @@ build_lib_debug_default: build_deps_debug_default
 build_src_default: build_lib_default
 	cd src && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) PROXYSQLED25519=$(PROXYSQLED25519) CC=${CC} CXX=${CXX} ${MAKE}
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O2} -ggdb" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
+	$(if $(filter 1,$(PROXYSQL40)),cd plugins/duckdb && OPTZ="${O2} -ggdb" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] duckdb plugin (PROXYSQL40 not set)")
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/genai && OPTZ="${O2} -ggdb" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] genai plugin (PROXYSQL40 not set)")
 
 .PHONY: build_src_debug_default
 build_src_debug_default: build_lib_debug_default
 	cd src && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) PROXYSQLED25519=$(PROXYSQLED25519) CC=${CC} CXX=${CXX} ${MAKE}
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
+	$(if $(filter 1,$(PROXYSQL40)),cd plugins/duckdb && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] duckdb plugin (PROXYSQL40 not set)")
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/genai && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] genai plugin (PROXYSQL40 not set)")
 
 
@@ -462,7 +466,7 @@ amd64-almalinux: almalinux8 almalinux8-clang almalinux8-dbg almalinux9 almalinux
 amd64-centos: centos9 centos9-clang centos9-dbg centos10 centos10-clang centos10-dbg
 amd64-debian: debian12 debian12-clang debian12-dbg debian13 debian13-clang debian13-dbg
 amd64-fedora: fedora42 fedora42-clang fedora42-dbg fedora43 fedora43-clang fedora43-dbg fedora44 fedora44-clang fedora44-dbg
-amd64-opensuse: opensuse15 opensuse15-clang opensuse15-dbg opensuse16 opensuse16-clang opensuse16-dbg
+amd64-opensuse: opensuse16 opensuse16-clang opensuse16-dbg
 amd64-ubuntu: ubuntu22 ubuntu22-clang ubuntu22-dbg ubuntu24 ubuntu24-clang ubuntu24-dbg
 amd64-tarball: tarball-almalinux9
 amd64-pkglist:
@@ -474,7 +478,7 @@ arm64-almalinux: almalinux8 almalinux9 almalinux10
 arm64-centos: centos9 centos10
 arm64-debian: debian12 debian13
 arm64-fedora: fedora42 fedora43 fedora44
-arm64-opensuse: opensuse15 opensuse16
+arm64-opensuse: opensuse16
 arm64-ubuntu: ubuntu22 ubuntu24
 arm64-tarball: tarball-almalinux9
 arm64-pkglist:
@@ -502,6 +506,7 @@ build-%: PKG_FILE=$(if $(filter tarball,$(shell echo ${BLD_NAME} | grep -o 'tarb
 build-%:
 	@echo 'building $@'
 	@IMG_NAME=$(PKG_NAME) IMG_TYPE=$(subst -,_,$(PKG_TYPE)) IMG_COMP=$(subst -,_,$(PKG_COMP)) BLD_NAME=$(BLD_NAME) $(MAKE) $(PKG_FILE)
+	$(if $(filter 1,$(WITHASAN) $(WITHTSAN)),@:,$(if $(and $(filter true,$(GITHUB_ACTIONS)),$(filter-out tar.gz,$(PKG_KIND))),@test/infra/control/verify-package-install.bash "$(PKG_FILE)",@:))
 
 # Scope the compose project per build variant, not just per commit. On shared
 # self-hosted CI runners several matrix variants of the same commit build
@@ -536,6 +541,7 @@ clean:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 	cd plugins/mysqlx && ${MAKE} clean
+	cd plugins/duckdb && ${MAKE} clean
 	cd plugins/genai && ${MAKE} clean
 	cd test/tap && ${MAKE} clean
 	rm -f pkgroot || true
@@ -546,6 +552,7 @@ cleandeps:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 	cd plugins/mysqlx && ${MAKE} clean
+	cd plugins/duckdb && ${MAKE} clean
 	cd plugins/genai && ${MAKE} clean
 
 .PHONY: cleandev
@@ -553,6 +560,7 @@ cleandev:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 	cd plugins/mysqlx && ${MAKE} clean
+	cd plugins/duckdb && ${MAKE} clean
 	cd plugins/genai && ${MAKE} clean
 
 .PHONY: cleantest
@@ -566,6 +574,7 @@ cleanall:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 	cd plugins/mysqlx && ${MAKE} clean
+	cd plugins/duckdb && ${MAKE} clean
 	cd plugins/genai && ${MAKE} clean
 	cd test/tap && ${MAKE} clean
 	cd test/deps && ${MAKE} cleanall
@@ -578,6 +587,7 @@ cleanbuild:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 	cd plugins/mysqlx && ${MAKE} clean
+	cd plugins/duckdb && ${MAKE} clean
 	cd plugins/genai && ${MAKE} clean
 	rm -rf pkgroot || true
 
@@ -596,6 +606,10 @@ install: src/proxysql
 	if [ -f plugins/genai/ProxySQL_GenAI_Plugin.so ]; then \
 		install -d /usr/lib/proxysql/plugins ; \
 		install -m 0755 plugins/genai/ProxySQL_GenAI_Plugin.so /usr/lib/proxysql/plugins/ ; \
+	fi
+	if [ -f plugins/duckdb/ProxySQL_DuckDB_Plugin.so ]; then \
+		install -d /usr/lib/proxysql/plugins ; \
+		install -m 0755 plugins/duckdb/ProxySQL_DuckDB_Plugin.so /usr/lib/proxysql/plugins/ ; \
 	fi
 ifeq ($(findstring proxysql,$(USERCHECK)),)
 	@echo "Creating proxysql user and group"
@@ -637,6 +651,7 @@ uninstall:
 	if [ -f /usr/bin/proxysql ]; then rm /usr/bin/proxysql ; fi
 	if [ -f /usr/lib/proxysql/plugins/ProxySQL_MySQLX_Plugin.so ]; then rm /usr/lib/proxysql/plugins/ProxySQL_MySQLX_Plugin.so ; fi
 	if [ -f /usr/lib/proxysql/plugins/ProxySQL_GenAI_Plugin.so ]; then rm /usr/lib/proxysql/plugins/ProxySQL_GenAI_Plugin.so ; fi
+	if [ -f /usr/lib/proxysql/plugins/ProxySQL_DuckDB_Plugin.so ]; then rm /usr/lib/proxysql/plugins/ProxySQL_DuckDB_Plugin.so ; fi
 	if [ -d /usr/lib/proxysql/plugins ]; then rmdir /usr/lib/proxysql/plugins 2>/dev/null || true ; fi
 	if [ -d /usr/lib/proxysql ]; then rmdir /usr/lib/proxysql 2>/dev/null || true ; fi
 	if [ -d /var/lib/proxysql ]; then rmdir /var/lib/proxysql 2>/dev/null || true ; fi

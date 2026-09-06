@@ -37,6 +37,7 @@ extern GenAI_Threads_Handler* GloGATH;
 
 ProxySQL_PluginQueryHookResult genai_query_hook(const ProxySQL_PluginQueryHookPayload& payload) {
 	GenAIPluginContext& ctx = genai_context();
+	std::shared_lock<GenAIRWLock> runtime_guard(ctx.runtime_dependencies_mutex);
 
 	// Detector not yet up (init failed, or hook fired between stop and
 	// final unload): always allow.  The lock-free

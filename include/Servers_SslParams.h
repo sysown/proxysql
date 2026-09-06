@@ -32,9 +32,12 @@ class Servers_SslParams {
 		char * ca, char * cert, char * key, char * capath,
 		char * crl, char * crlpath, char * cipher, char * tls,
 		char * c)
-		: hostname(_h), port(_p), username(_u), ssl_ca(ca), ssl_cert(cert),
-		  ssl_key(key), ssl_capath(capath), ssl_crl(crl), ssl_crlpath(crlpath),
-		  ssl_cipher(cipher), tls_version(tls), comment(c), MapKey("") {}
+		: hostname(_h ? _h : ""), port(_p), username(_u ? _u : ""),
+		  ssl_ca(ca ? ca : ""), ssl_cert(cert ? cert : ""),
+		  ssl_key(key ? key : ""), ssl_capath(capath ? capath : ""),
+		  ssl_crl(crl ? crl : ""), ssl_crlpath(crlpath ? crlpath : ""),
+		  ssl_cipher(cipher ? cipher : ""), tls_version(tls ? tls : ""),
+		  comment(c ? c : ""), MapKey("") {}
 	Servers_SslParams(string _h, int _p, string _u)
 		: Servers_SslParams(_h, _p, _u, "", "", "", "", "", "", "", "", "") {}
 	virtual ~Servers_SslParams() = default;

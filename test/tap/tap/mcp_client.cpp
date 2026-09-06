@@ -374,10 +374,11 @@ MCPResponse MCPClient::call_tool(
 // ============================================================================
 
 bool MCPClient::check_server() {
+    const unsigned int ping_id = request_id_++;
     json ping_request = {
         {"jsonrpc", "2.0"},
         {"method", "ping"},
-        {"id", request_id_++}
+        {"id", ping_id}
     };
 
     std::string url = build_url("config");
@@ -386,6 +387,10 @@ bool MCPClient::check_server() {
 
     struct curl_slist* headers = nullptr;
     headers = curl_slist_append(headers, "Content-Type: application/json");
+    if (!auth_token_.empty()) {
+        const std::string auth_header = "Authorization: Bearer " + auth_token_;
+        headers = curl_slist_append(headers, auth_header.c_str());
+    }
 
     curl_easy_setopt(curl_, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl_, CURLOPT_POST, 1L);
@@ -394,6 +399,8 @@ bool MCPClient::check_server() {
     curl_easy_setopt(curl_, CURLOPT_WRITEDATA, &response_body);
 
     CURLcode res = curl_easy_perform(curl_);
+    long http_code = 0;
+    curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &http_code);
 
     curl_slist_free_all(headers);
 
@@ -402,6 +409,27 @@ bool MCPClient::check_server() {
         return false;
     }
 
-    // Check for valid response (contains "result")
-    return response_body.find("\"result\"") != std::string::npos;
+    if (http_code != 200) {
+        last_error_ = "HTTP error: " + std::to_string(http_code);
+        return false;
+    }
+
+    json response;
+    try {
+        response = json::parse(response_body);
+    } catch (const json::parse_error& e) {
+        last_error_ = "JSON parse error: " + std::string(e.what());
+        return false;
+    }
+
+    if (!response.is_object() ||
+        !response.contains("jsonrpc") || response["jsonrpc"] != "2.0" ||
+        !response.contains("id") || response["id"] != ping_id ||
+        !response.contains("result")) {
+        last_error_ = "Invalid JSON-RPC readiness response";
+        return false;
+    }
+
+    last_error_.clear();
+    return true;
 }

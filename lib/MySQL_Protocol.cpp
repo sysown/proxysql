@@ -1263,27 +1263,47 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
 
 bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsigned int *len, uint32_t *_thread_id, bool deprecate_eof_active) {
 	int use_plugin_id = mysql_thread___default_authentication_plugin_int;
+	const char* server_version = mysql_thread___server_version;
+#ifdef PROXYSQL31
+	if ((*myds) != nullptr && !(*myds)->frontend_server_version().empty()) {
+		server_version = (*myds)->frontend_server_version().c_str();
+	}
+#endif
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Generating handshake pkt\n");
 	assert(use_plugin_id == 0 || use_plugin_id == 2 ); // mysql_native_password or caching_sha2_password
+	constexpr size_t max_packet_payload_length = 0xFFFFFF;
+	const size_t server_version_length = strlen(server_version);
+	const size_t auth_plugin_length = strlen(plugins[use_plugin_id]);
+	const size_t payload_length_without_strings =
+		sizeof(protocol_version)
+		+ 1  // server_version terminator
+		+ sizeof(uint32_t)  // thread_id
+		+ 8  // scramble1
+		+ 1  // 0x00
+		+ sizeof(mysql_thread___server_capabilities) / 2
+		+ sizeof(uint8_t)  // charset in handshake is 1 byte
+		+ sizeof(server_status)
+		+ 3  // upper capabilities and auth-plugin-data length
+		+ 10  // filler
+		+ 12  // scramble2
+		+ 1  // 0x00
+		+ 1;  // auth plugin terminator
+	const size_t available_for_strings =
+		max_packet_payload_length - payload_length_without_strings;
+	if (auth_plugin_length > available_for_strings ||
+		server_version_length > available_for_strings - auth_plugin_length) {
+		proxy_error(
+			"Cannot generate initial handshake: server version length %zu exceeds "
+			"the MySQL packet payload limit\n",
+			server_version_length
+		);
+		return false;
+	}
+	const size_t payload_length = payload_length_without_strings
+		+ server_version_length + auth_plugin_length;
   mysql_hdr myhdr;
   myhdr.pkt_id=0;
-  myhdr.pkt_length=sizeof(protocol_version)
-    + (strlen(mysql_thread___server_version)+1)
-    + sizeof(uint32_t)  // thread_id
-    + 8  // scramble1
-    + 1  // 0x00
-    //+ sizeof(glovars.server_capabilities)
-    //+ sizeof(glovars.server_language)
-    //+ sizeof(glovars.server_status)
-    + sizeof(mysql_thread___server_capabilities)/2
-    + sizeof(uint8_t) // charset in handshake is 1 byte
-    + sizeof(server_status)
-    + 3 // unknown stuff
-    + 10 // filler
-    + 12 // scramble2
-    + 1  // 0x00
-//    + (strlen("mysql_native_password")+1);
-    + (strlen(plugins[use_plugin_id])+1);
+	myhdr.pkt_length = static_cast<unsigned int>(payload_length);
 	sent_auth_plugin_id = (enum proxysql_auth_plugins)use_plugin_id;
 
   unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
@@ -1298,21 +1318,27 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	}
 	*_thread_id=thread_id;
 
-  rand_struct rand_st;
-  //randominit(&rand_st,rand(),rand());
-  rand_st.max_value= 0x3FFFFFFFL;
-  rand_st.max_value_dbl=0x3FFFFFFFL;
-  rand_st.seed1=rand()%rand_st.max_value;
-  rand_st.seed2=rand()%rand_st.max_value;
+	unsigned char scramble[20];
+	if (RAND_bytes(scramble, sizeof(scramble)) != 1) {
+		proxy_error("RAND_bytes() failed generating initial handshake scramble for thread %u\n", thread_id);
+		free(_ptr);
+		return false;
+	}
+	for (unsigned int i = 0; i < sizeof(scramble); i++) {
+		unsigned char c = scramble[i];
+		if (c > 127) {
+			c -= 128;
+		}
+		if (c == 0) {
+			c = 'a';
+		}
+		(*myds)->myconn->scramble_buff[i] = c;
+	}
+	(*myds)->myconn->scramble_buff[sizeof(scramble)] = '\0';
 
   memcpy(_ptr+l, &protocol_version, sizeof(protocol_version)); l+=sizeof(protocol_version);
-  memcpy(_ptr+l, mysql_thread___server_version, strlen(mysql_thread___server_version)); l+=strlen(mysql_thread___server_version)+1;
+	memcpy(_ptr+l, server_version, server_version_length); l+=server_version_length+1;
   memcpy(_ptr+l, &thread_id, sizeof(uint32_t)); l+=sizeof(uint32_t);
-//#ifdef MARIADB_BASE_VERSION
-//  proxy_create_random_string(myds->myconn->myconn.scramble_buff+0,8,(struct my_rnd_struct *)&rand_st);
-//#else
-  proxy_create_random_string((*myds)->myconn->scramble_buff+0,8,(struct rand_struct *)&rand_st);
-//#endif
 
   int i;
 
@@ -1395,12 +1421,6 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 
   for (i=0;i<10; i++) { _ptr[l]=0x00; l++; } //filler
   //create_random_string(mypkt->data+l,12,(struct my_rnd_struct *)&rand_st); l+=12;
-//#ifdef MARIADB_BASE_VERSION
-//  proxy_create_random_string(myds->myconn->myconn.scramble_buff+8,12,(struct my_rnd_struct *)&rand_st);
-//#else
-  proxy_create_random_string((*myds)->myconn->scramble_buff+8,12,(struct rand_struct *)&rand_st);
-//#endif
-  //create_random_string(scramble_buf+8,12,&rand_st);
 
 //  for (i=8;i<20;i++) {
 //    if ((*myds)->myconn->scramble_buff[i]==0) {
@@ -1411,7 +1431,7 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   memcpy(_ptr+l, (*myds)->myconn->scramble_buff+8, 12); l+=12;
   l+=1; //0x00
   //memcpy(_ptr+l,"mysql_native_password",strlen("mysql_native_password"));
-  memcpy(_ptr+l,plugins[use_plugin_id],strlen(plugins[use_plugin_id]));
+	memcpy(_ptr+l, plugins[use_plugin_id], auth_plugin_length);
 
 	if (send==true) {
 		(*myds)->PSarrayOUT->add((void *)_ptr,size);

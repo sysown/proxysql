@@ -1,6 +1,7 @@
 #include "openssl/rand.h"
 #include "proxysql.h"
 #include "cpp.h"
+#include "gen_utils.h"
 
 #ifdef DEBUG
 void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) {
@@ -60,7 +61,7 @@ void proxy_create_random_string(char *_to, uint length, struct rand_struct *rand
 	if (rc==1) {
 		// For code coverage (to test the following code and other function)
 		// in DEBUG mode we pretend that RAND_bytes() fails 1% of the time
-		if(rand()%100==0) {
+		if(fastrand()%100==0) {
 			rc=0;
 		}
 	}

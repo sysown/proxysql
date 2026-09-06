@@ -52,6 +52,11 @@
 class ProxySQL_Admin;
 struct PgCredentials;
 struct ScramState;
+// Auth-method selection: map the floor (pgsql-authentication_method;
+// 1=cleartext, 2=md5, 3=scram) + the user's stored secret type (a PasswordType, as int) to the
+// AUTHENTICATION_METHOD to challenge with (as int); *reject=true when the stored secret is too weak
+// for the floor (caller runs the generic mock-fail). Defined in PgSQL_Protocol.cpp.
+int pgsql_reconcile_auth_method(int floor, int stored, bool* reject);
 
 enum class EXECUTION_STATE {
 	FAILED = 0,
@@ -751,9 +756,11 @@ public:
 	 * messages and a ready-for-query message.
 	 *
 	 * @note This function updates the output buffer with the welcome message
-	 *       data. It also sets the session state to `STATE_CLIENT_AUTH_OK`.
+	 *       data. The caller updates the session state after a successful return.
+	 * @return true when the complete message was queued, false if generating the
+	 *         cancel key failed.
 	 */
-	void welcome_client();
+	bool welcome_client();
 
 	/**
 	 * @brief Generates an error packet for the PostgreSQL protocol.
@@ -1086,8 +1093,6 @@ public:
 	unsigned int copy_describe_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, 
 		const PGresult* result, uint8_t stmt_type);
 
-private:
-
 	/**
 	 * @brief Extracts the header information from a PostgreSQL packet.
 	 *
@@ -1104,8 +1109,18 @@ private:
 	 *
 	 * @note This function performs basic validation on the packet length and
 	 *       header fields to ensure that the packet is valid.
+	 *
+	 * Public (not private, unlike most of this class's parsing helpers):
+	 * any plugin session handler that serves the PG protocol -- core's own
+	 * admin_session_handler, and plugins/duckdb's duckdb_session_handler --
+	 * needs this to extract the SQL text from a simple-query packet before
+	 * core's dispatch has populated anything richer (e.g. CurrentQuery) to
+	 * read it from instead. It is a stateless parse helper guarding no
+	 * class invariant, so exposing it costs no encapsulation.
 	 */
 	bool get_header(unsigned char* pkt, unsigned int len, pgsql_hdr* hdr);
+
+private:
 
 	/**
 	 * @brief Loads the connection parameters from a PostgreSQL startup packet.

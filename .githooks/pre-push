@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if ! repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+	echo "pre-push lint: unable to determine the Git worktree root" >&2
+	exit 1
+fi
+
+runner="${repo_root}/test/infra/control/run-ci-lint.bash"
+if [[ ! -x "${runner}" ]]; then
+	echo "pre-push lint: missing executable runner: ${runner}" >&2
+	exit 1
+fi
+
+echo ">>> Running repository CI lint suite before push"
+cd "${repo_root}"
+exec "${runner}"

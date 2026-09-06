@@ -334,13 +334,13 @@ static inline bool validate_module_listener_conflicts(
 ) {
 	std::vector<parsed_listener> parsed_listeners {};
 
-	for (const module_listener_config& module : modules) {
-		if (module.listeners == nullptr || *module.listeners == '\0' || strcmp(module.listeners, "(null)") == 0) {
+	for (const module_listener_config& listener_module : modules) {
+		if (listener_module.listeners == nullptr || *listener_module.listeners == '\0' || strcmp(listener_module.listeners, "(null)") == 0) {
 			continue;
 		}
-		std::vector<std::string> listeners = split_listener_list(module.listeners);
+		std::vector<std::string> listeners = split_listener_list(listener_module.listeners);
 		for (const std::string& listener : listeners) {
-			parsed_listener parsed = parse_listener(module.module_name, listener);
+			parsed_listener parsed = parse_listener(listener_module.module_name, listener);
 			if (parsed.valid) {
 				parsed_listeners.push_back(parsed);
 			}

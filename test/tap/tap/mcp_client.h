@@ -311,7 +311,8 @@ public:
     /**
      * @brief Check if MCP server is accessible
      *
-     * Sends a ping request to /mcp/config endpoint.
+     * Sends a ping request to /mcp/config with the configured bearer token and
+     * requires HTTP 200 plus a matching JSON-RPC result response.
      *
      * @return true if server responds successfully
      */

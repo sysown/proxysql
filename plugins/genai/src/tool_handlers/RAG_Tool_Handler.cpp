@@ -349,17 +349,9 @@ RAG_Tool_Handler::RAG_Tool_Handler(AI_Features_Manager* ai_mgr, const std::strin
 	  response_max_bytes(5000000),
 	  timeout_ms(2000)
 {
-	// Initialize configuration from GenAI_Thread if available
-	if (ai_manager && GloGATH) {
-		k_max = GloGATH->variables.genai_rag_k_max;
-		candidates_max = GloGATH->variables.genai_rag_candidates_max;
-		query_max_bytes = GloGATH->variables.genai_rag_query_max_bytes;
-		response_max_bytes = GloGATH->variables.genai_rag_response_max_bytes;
-		timeout_ms = GloGATH->variables.genai_rag_timeout_ms;
-	}
-
 	// Initialize counters mutex
 	pthread_mutex_init(&counters_lock, NULL);
+	refresh_runtime_dependencies(ai_mgr);
 
 	proxy_debug(PROXY_DEBUG_GENAI, 3, "RAG_Tool_Handler created\n");
 }
@@ -394,9 +386,7 @@ RAG_Tool_Handler::~RAG_Tool_Handler() {
  * @see ai_manager
  */
 int RAG_Tool_Handler::init() {
-	if (ai_manager) {
-		vector_db = ai_manager->get_vector_db();
-	}
+	refresh_runtime_dependencies(ai_manager);
 
 	if (!vector_db) {
 		proxy_error("RAG_Tool_Handler: Vector database not available\n");
@@ -418,6 +408,19 @@ int RAG_Tool_Handler::init() {
 
 	proxy_info("RAG_Tool_Handler initialized\n");
 	return 0;
+}
+
+void RAG_Tool_Handler::refresh_runtime_dependencies(AI_Features_Manager* ai_mgr) {
+	ai_manager = ai_mgr;
+	vector_db = ai_manager ? ai_manager->get_vector_db() : NULL;
+
+	if (GloGATH) {
+		k_max = GloGATH->variables.genai_rag_k_max;
+		candidates_max = GloGATH->variables.genai_rag_candidates_max;
+		query_max_bytes = GloGATH->variables.genai_rag_query_max_bytes;
+		response_max_bytes = GloGATH->variables.genai_rag_response_max_bytes;
+		timeout_ms = GloGATH->variables.genai_rag_timeout_ms;
+	}
 }
 
 /**
@@ -1641,6 +1644,9 @@ json RAG_Tool_Handler::get_tool_description(const std::string& tool_name) {
  */
 json RAG_Tool_Handler::execute_tool(const std::string& tool_name, const json& arguments) {
 	proxy_debug(PROXY_DEBUG_GENAI, 3, "RAG_Tool_Handler: execute_tool(%s)\n", tool_name.c_str());
+	if (!vector_db) {
+		return create_error_response("Vector database not available");
+	}
 
 	// Record start time for timing stats
 	auto start_time = std::chrono::high_resolution_clock::now();

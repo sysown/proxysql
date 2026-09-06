@@ -163,31 +163,61 @@ int main(int argc, char** argv) {
 
     ok(setUseSSL(admin, 0), "Set pgsql_server -> use_ssl = 0");
 
-    long initial_ssl2 = getMonitorValue(admin, "PgSQL_Monitor_ssl_connections_OK");
-    long initial_non2 = getMonitorValue(admin, "PgSQL_Monitor_non_ssl_connections_OK");
+    long transition_ssl = getMonitorValue(admin, "PgSQL_Monitor_ssl_connections_OK");
+    long transition_non = getMonitorValue(admin, "PgSQL_Monitor_non_ssl_connections_OK");
 
-    diag("Initial SSL OK (phase2): %ld", initial_ssl2);
-    diag("Initial NON-SSL OK (phase2): %ld", initial_non2);
+    diag("Initial SSL OK (phase2 transition): %ld", transition_ssl);
+    diag("Initial NON-SSL OK (phase2 transition): %ld", transition_non);
 
-    // Poll for the NON-SSL counter to increase, up to 3x the connect interval.
-    // After switching use_ssl from 1 to 0, the monitor needs to complete a
-    // full cycle with the new config before the NON-SSL counter increases.
+    // LOAD does not cancel a monitor operation already using the old config.
+    // First observe the new non-SSL mode and let any in-flight SSL operation
+    // drain. Two full intervals without another SSL increment establish the
+    // baseline for the strict phase-2 observation window below.
+    int stable_ssl_intervals = 0;
+    bool transition_settled = false;
+    for (int attempt = 0; attempt < 8; attempt++) {
+        usleep(connect_interval_ms * 1000);
+
+        long current_ssl = getMonitorValue(admin, "PgSQL_Monitor_ssl_connections_OK");
+        long current_non = getMonitorValue(admin, "PgSQL_Monitor_non_ssl_connections_OK");
+
+        if (current_ssl == transition_ssl) {
+            stable_ssl_intervals++;
+        } else {
+            stable_ssl_intervals = 0;
+        }
+
+        transition_ssl = current_ssl;
+        transition_non = current_non;
+        if (transition_non > after_non && stable_ssl_intervals >= 2) {
+            transition_settled = true;
+            break;
+        }
+    }
+
+    long initial_ssl2 = transition_ssl;
+    long initial_non2 = transition_non;
+
+    diag("Settled SSL OK (phase2): %ld", initial_ssl2);
+    diag("Settled NON-SSL OK (phase2): %ld", initial_non2);
+    diag("Phase2 transition settled: %s", transition_settled ? "yes" : "no");
+
     long after_ssl2 = initial_ssl2;
     long after_non2 = initial_non2;
     for (int attempt = 0; attempt < 6; attempt++) {
         usleep(connect_interval_ms * 1000);
+        after_ssl2 = getMonitorValue(admin, "PgSQL_Monitor_ssl_connections_OK");
         after_non2 = getMonitorValue(admin, "PgSQL_Monitor_non_ssl_connections_OK");
         if (after_non2 > initial_non2) break;
     }
-    after_ssl2 = getMonitorValue(admin, "PgSQL_Monitor_ssl_connections_OK");
 
     diag("After NON-SSL mode -> SSL OK: %ld", after_ssl2);
     diag("After NON-SSL mode -> NON-SSL OK: %ld", after_non2);
 
-    ok(after_non2 > initial_non2,
+    ok(transition_settled && after_non2 > initial_non2,
         "NON-SSL monitoring increased when use_ssl=0");
 
-    ok(after_ssl2 == initial_ssl2,
+    ok(transition_settled && after_ssl2 == initial_ssl2,
         "SSL monitoring unchanged when use_ssl=0");
 
     diag("SSL + NON-SSL monitoring test completed successfully");

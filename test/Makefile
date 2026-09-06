@@ -13,7 +13,7 @@ IDIRS :=	-I$(PROXYSQL_IDIR) \
 			-I$(LIBCONFIG_IDIR) \
 			-I$(RE2_IDIR) \
 			-I$(SQLITE3_IDIR) \
-			-I$(PCRE_IDIR) \
+			-I$(PCRE2_IDIR) \
 			-I$(SYS_LOC_IDIR) \
 			-I$(CLICKHOUSE_CPP_IDIR) \
 			-I$(MICROHTTPD_IDIR) \

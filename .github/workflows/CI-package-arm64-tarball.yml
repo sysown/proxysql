@@ -114,11 +114,17 @@ jobs:
         repository: ${{ github.repository }}
         ref: ${{ github.sha }}
         fetch-depth: 0
+        lfs: true
         persist-credentials: false
 
     - name: Build package (${{ matrix.tier }})
       run: |
         make ${{ env.MAKE_TARGET }} ${{ matrix.flags }}
+
+    - name: Test tarball runtime
+      env:
+        TARBALL_TEST_IMAGES: almalinux:9 debian:12 ubuntu:22.04
+      run: tools/test-tarball-runtime.sh
 
     - name: Upload to release
       env:
