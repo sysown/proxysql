@@ -150,8 +150,23 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends \
             libaio1t64 libnuma1 libncurses6 libtinfo6
 
+      - name: Checkout GH-Actions dbdeployer guard
+        # The control test and ci-mysqlx.yml live on GH-Actions. The job
+        # checks out the source SHA into proxysql/, which does not carry
+        # either file (v3.0 only has the uppercase CI-mysqlx.yml caller).
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ${{ github.repository }}
+          ref: GH-Actions
+          path: gh-actions
+          persist-credentials: false
+          sparse-checkout: |
+            .github/workflows/ci-mysqlx.yml
+            test/infra/control/test-ci-mysqlx-dbdeployer-install.bash
+          sparse-checkout-cone-mode: false
+
       - name: Verify dbdeployer install guard
-        run: proxysql/test/infra/control/test-ci-mysqlx-dbdeployer-install.bash
+        run: gh-actions/test/infra/control/test-ci-mysqlx-dbdeployer-install.bash
 
       - name: Install dbdeployer
         # GitHub runner images may already provide dbdeployer. Its upstream
