@@ -1,0 +1,168 @@
+name: CI unit group
+
+on:
+  workflow_call:
+    inputs:
+      trigger:
+        type: string
+      tap_group:
+        type: string
+        required: true
+
+env:
+  SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+      packages: read
+    steps:
+      - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
+        id: check
+        if: always()
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          name: '${{ github.workflow }} / ${{ github.job }} (${{ inputs.tap_group }})'
+          repo: ${{ github.repository }}
+          sha: ${{ env.SHA }}
+          status: in_progress
+          details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ env.SHA }}
+          path: proxysql
+          persist-credentials: false
+
+      - name: Download complete regular handoff
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          BUILD_RUN_ID: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.id || '' }}
+        run: |
+          set -euo pipefail
+          command -v zstd >/dev/null || sudo apt-get install -y zstd
+          artifact_name="ci-builds-handoff-${SHA}-ubuntu24-tap-genai-gcov-full"
+          : "${HANDOFF_MAX_ATTEMPTS:=20}"
+          error_log="$(mktemp)"
+          resolve_artifact_id() {
+            local artifact_id=""
+            if [ -n "${BUILD_RUN_ID}" ]; then
+              artifact_id="$(gh api "repos/${REPO}/actions/runs/${BUILD_RUN_ID}/artifacts?per_page=100" \
+                --jq ".artifacts[] | select(.name == \"${artifact_name}\" and .expired == false) | .id" \
+                2>>"${error_log}" | tail -n1 || true)"
+            fi
+            if [ -z "${artifact_id}" ]; then
+              artifact_id="$(gh api "repos/${REPO}/actions/artifacts?name=${artifact_name}&per_page=100" \
+                --jq '[.artifacts[] | select(.expired == false)] | sort_by(.created_at) | last | .id // empty' \
+                2>>"${error_log}" || true)"
+            fi
+            printf '%s' "${artifact_id}"
+          }
+          artifact_id=""
+          for attempt in $(seq 1 "${HANDOFF_MAX_ATTEMPTS}"); do
+            artifact_id="$(resolve_artifact_id)"
+            [ -n "${artifact_id}" ] && break
+            echo ">>> ${artifact_name} is not available (${attempt}/${HANDOFF_MAX_ATTEMPTS}); retrying in 15s"
+            sleep 15
+          done
+          if [ -z "${artifact_id}" ]; then
+            echo "ERROR: complete regular handoff ${artifact_name} was not found" >&2
+            tail -n 20 "${error_log}" >&2 || true
+            exit 1
+          fi
+          gh api "repos/${REPO}/actions/artifacts/${artifact_id}/zip" > full-handoff.zip
+          unzip -o full-handoff.zip
+          zstd -d < cache_full.tar.zst | tar -xf - -C proxysql
+          rm -f full-handoff.zip cache_full.tar.zst
+          test -x proxysql/src/proxysql
+
+      - name: Pull Ubuntu 24 build image
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            echo ">>> GHCR login+pull attempt ${attempt}/5"
+            if echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USER}" --password-stdin \
+              && docker pull proxysql/packaging:build-ubuntu24-v4.0.0; then
+              exit 0
+            fi
+            if [ "${attempt}" -lt 5 ]; then
+              sleep "$((attempt * 10))"
+            fi
+          done
+          echo "ERROR: failed to pull Ubuntu 24 build image after 5 attempts" >&2
+          exit 1
+
+      - name: Run selected unit group
+        env:
+          TAP_GROUP: ${{ inputs.tap_group }}
+        run: |
+          set -euo pipefail
+          docker run --rm --network none \
+            -e TAP_GROUP \
+            -v "${PWD}/proxysql:/opt/proxysql" \
+            -w /opt/proxysql \
+            -e LD_LIBRARY_PATH=/opt/proxysql/test/tap/tap:/opt/proxysql/test/tap/tap/_runtime_libs \
+            proxysql/packaging:build-ubuntu24-v4.0.0 \
+            bash -ceu '
+              python3 - <<"PY" > /tmp/unit-tests
+              import json
+              import os
+              import pathlib
+              import sys
+
+              group = os.environ["TAP_GROUP"]
+              with open("test/tap/groups/groups.json", encoding="utf-8") as source:
+                  groups = json.load(source)
+              selected = sorted(name for name, tags in groups.items() if group in tags)
+              if not selected:
+                  raise SystemExit(f"ERROR: no tests are registered for {group}")
+              unit_dir = pathlib.Path("test/tap/tests/unit")
+              for name in selected:
+                  path = unit_dir / name
+                  if not path.is_file() or not os.access(path, os.X_OK):
+                      raise SystemExit(
+                          f"ERROR: {group} selects non-unit or missing executable: {name}"
+                      )
+                  print(path)
+              PY
+              failed=""
+              while IFS= read -r test_binary; do
+                echo ">>> ${test_binary}"
+                if ! "${test_binary}"; then
+                  failed="${failed} ${test_binary}"
+                fi
+              done < /tmp/unit-tests
+              if [ -n "${failed}" ]; then
+                echo ">>> FAILED:${failed}" >&2
+                exit 1
+              fi
+            '
+
+      - name: Archive unit-test logs on failure
+        if: ${{ failure() && !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ github.workflow }}-${{ env.SHA }}-${{ inputs.tap_group }}-logs-run#${{ github.run_number }}
+          path: proxysql/test/tap/tests/unit/*.log
+          if-no-files-found: ignore
+
+      - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
+        if: always()
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          check_id: ${{ steps.check.outputs.check_id }}
+          repo: ${{ github.repository }}
+          sha: ${{ env.SHA }}
+          conclusion: ${{ job.status }}
+          details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'

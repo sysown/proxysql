@@ -12,10 +12,13 @@ env:
 
 jobs:
   tests:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
+    permissions:
+      actions: read
+      checks: write
+      contents: read
     env:
-      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu22-tap_src
       MATRIX: '(unit-tests-g1)'
 
     steps:
@@ -54,8 +57,8 @@ jobs:
         REPO: ${{ github.repository }}
         SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
         BUILD_RUN_ID: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.id || '' }}
-        HANDOFF_VARIANT: ubuntu22-tap
-        HANDOFF_TYPES: src test
+        HANDOFF_VARIANT: ubuntu24-tap-genai-gcov
+        HANDOFF_TYPES: full
       run: |
         set -uo pipefail
         command -v zstd >/dev/null || sudo apt-get install -y zstd

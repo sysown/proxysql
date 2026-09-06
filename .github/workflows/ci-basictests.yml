@@ -91,7 +91,6 @@ jobs:
     env:
       TESTDIST: ${{ matrix.testdist }}
       INFRADB:  ${{ matrix.infradb }}
-      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.testdist }}_src
       MATRIX: '(${{ matrix.infradb }})'
 
     steps:
@@ -135,7 +134,7 @@ jobs:
         SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
         BUILD_RUN_ID: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.id || '' }}
         HANDOFF_VARIANT: ${{ matrix.testdist }}
-        HANDOFF_TYPES: src test
+        HANDOFF_TYPES: full
       run: |
         set -uo pipefail
         command -v zstd >/dev/null || sudo apt-get install -y zstd

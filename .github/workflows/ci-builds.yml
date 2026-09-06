@@ -115,32 +115,11 @@ jobs:
       matrix:
         include:
 
-          # debian12 is needed for 3p testing
-          - dist: 'debian12'
-            type: '-dbg'
-#          - dist: 'opensuse15'
-#            type: '-clang'
-
-          # ubuntu22 is needed for TAP testing
-          - dist: 'ubuntu22'
-            type: '-tap'
-
-          # ubuntu24 GenAI build with code coverage
+          # The sole regular producer. It builds the complete chassis with
+          # coverage metadata and retains every TAP/unit binary for every
+          # downstream group.
           - dist: 'ubuntu24'
             type: '-tap-genai-gcov'
-
-          # ubuntu22 chassis build for the mysqlx plugin. Injects
-          # PROXYSQL40=1 into docker-compose (see the Build step). The
-          # chassis cascade in Makefile sets PROXYSQL31 / PROXYSQLFFTO /
-          # PROXYSQLTSDB automatically, and entrypoint.bash descends into
-          # plugins/mysqlx so the .so lands at
-          # proxysql/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so. CI-mysqlx's
-          # callee on this branch (ci-mysqlx.yml) restores this matrix's
-          # _src and _test caches and runs the tests without compiling
-          # anything on the bare runner -- mirroring how every other
-          # CI-* test workflow consumes the CI-builds caches.
-          - dist: 'ubuntu22'
-            type: '-tap-mysqlx'
           # ubuntu22 is needed for ASAN TAP testing
           # disabled to save cache space
           #- dist: 'ubuntu22'
@@ -153,7 +132,6 @@ jobs:
 #            type: '-clang-tap-asan'
     env:
       TAP_BUILD_MODE: ${{ needs.resolve-tap-mode.outputs.mode }}
-      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.dist }}${{ matrix.type }}${{ needs.resolve-tap-mode.outputs.mode == 'asan' && '_asan' || '' }}
       MATRIX: '(${{ matrix.dist }},${{ matrix.type }},${{ needs.resolve-tap-mode.outputs.mode }})'
 
     steps:
@@ -170,17 +148,6 @@ jobs:
 #        action_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
         details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
     
-    - name: Cache check
-      id: cache-check
-      if: ${{ inputs.trusted && success() }}
-      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-      with:
-        key: ${{ env.BLDCACHE }}_bin
-        enableCrossOsArchive: true
-        lookup-only: true
-        path: |
-          proxysql/binaries/
-
     # Self-hosted runners reuse the working directory between jobs. A cancelled
     # dockerized build can leave its Compose stack running against the
     # bind-mounted checkout (./:/opt/proxysql), where it continues to create
@@ -188,12 +155,12 @@ jobs:
     # matrix legs serially, so the stale writer can belong to a different
     # distribution than the new leg. The previous project-name-filtered cleanup
     # never matched, because the Makefile names each project
-    # <BLD_NAME>-<GITVERSION> (e.g. ubuntu22-tap-3.0.11-502-gd8bdd5a), not the
+    # <BLD_NAME>-<GITVERSION> (e.g. ubuntu24-tap-genai-gcov-3.0.11-502-gd8bdd5a), not the
     # bare distribution name. Nuke ALL docker state on the runner instead: every
     # container, every volume, every network. Nothing dockerized may survive
     # into the next job.
     - name: Nuke all docker state (self-hosted)
-      if: ${{ inputs.trusted && runner.environment == 'self-hosted' && steps.cache-check.outputs.cache-hit != 'true' }}
+      if: ${{ inputs.trusted && runner.environment == 'self-hosted' }}
       run: |
         set -euo pipefail
         echo ">>> removing all docker containers"
@@ -214,7 +181,7 @@ jobs:
     # user first so checkout can clean. GitHub-hosted runners use an ephemeral
     # workspace and do not need this privileged operation.
     - name: Reclaim workspace ownership (self-hosted contamination guard)
-      if: ${{ inputs.trusted && runner.environment == 'self-hosted' && steps.cache-check.outputs.cache-hit != 'true' }}
+      if: ${{ inputs.trusted && runner.environment == 'self-hosted' }}
       run: |
         set -euo pipefail
         runner_uid="$(id -u)"
@@ -236,7 +203,7 @@ jobs:
     # build container starts. Keep this guard on the self-hosted pool:
     # GitHub-hosted images already provide git-lfs, while ci-vm-1 does not.
     - name: Install Git LFS when absent (self-hosted)
-      if: ${{ inputs.trusted && runner.environment == 'self-hosted' && steps.cache-check.outputs.cache-hit != 'true' }}
+      if: ${{ inputs.trusted && runner.environment == 'self-hosted' }}
       run: |
         set -euo pipefail
         if command -v git-lfs >/dev/null 2>&1; then
@@ -248,7 +215,7 @@ jobs:
         git-lfs --version
 
     - name: Checkout repository
-      if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
+      if: ${{ success() }}
       env:
         # The self-hosted workspaces are persistent. Hydrating after the
         # target commit is checked out avoids git-lfs scanning the previous
@@ -298,7 +265,7 @@ jobs:
     # missing verifier expands to no loop iterations rather than a literal
     # non-executable pattern that would fail under `set -e`.
     - name: Hydrate vendored source archives
-      if: ${{ inputs.trusted && steps.cache-check.outputs.cache-hit != 'true' }}
+      if: ${{ inputs.trusted && success() }}
       working-directory: proxysql
       run: |
         set -euo pipefail
@@ -311,23 +278,12 @@ jobs:
           "$v"
         done
 
-#    - name: Patch TAP-tests
-#      if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
-#      run: |
-#         apply patches
-#        for PATCH in $(cd jenkins-build-scripts/test-scripts/patches && find . -type f); do
-#          if [[ $PATCH =~ \.patch ]]; then
-#            patch --verbose proxysql/${PATCH%.patch} jenkins-build-scripts/test-scripts/patches/${PATCH} || true
-#          elif [[ ! -f jenkins-build-scripts/test-scripts/patches/${PATCH#./}.patch ]]; then
-#            cp -v jenkins-build-scripts/test-scripts/patches/${PATCH#./} proxysql/${PATCH#./} || true
-#          fi
-#        done
 #        ls -l proxysql/test/tap
 
     - name: Build
       timeout-minutes: 90
       id: build
-      if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
+      if: ${{ inputs.trusted && success() }}
       run: |
         cd proxysql/
         echo "TAP build mode: ${TAP_BUILD_MODE}"
@@ -350,29 +306,6 @@ jobs:
           # was exercising a Stable core, with FFTO/TSDB/genai/pass-through
           # #ifdef'd out. Use PROXYSQL40=1 so the core matches the tier.
           sed -i "/command/i \      - PROXYSQL40=1" docker-compose.yml
-          # Skip the ~14 genai_*_unit-t binaries. With PROXYSQL40=1 the unit
-          # Makefile's `ifeq ($(PROXYSQL40),1)` block would otherwise add them
-          # to UNIT_TESTS; they statically link 30+ plugins/genai/.cpp at
-          # -O0 -ggdb (~160 MB each, ~2 GB total, larger still under gcov) and
-          # blow the runner's free disk. This build feeds TAP integration
-          # groups, not unit-test groups (which build separately).
-          sed -i "/command/i \      - SKIP_GENAI_UNIT_TESTS=1" docker-compose.yml
-        fi
-        if [[ "${{ matrix.type }}" =~ "-mysqlx" ]]; then
-          # Chassis tier flag for plugins/mysqlx build. _build.environment
-          # in docker-compose.yml already lists PROXYSQL40 as a pass-through
-          # var, and entrypoint.bash routes on it (install libprotobuf-dev,
-          # add PROXYSQL40=1 to make EXTRA, build plugins/mysqlx + plugins/
-          # genai). Setting PROXYSQL40=1 alone is enough -- Makefile cascades
-          # it into PROXYSQL31/PROXYSQLFFTO/PROXYSQLTSDB automatically.
-          sed -i "/command/i \      - PROXYSQL40=1" docker-compose.yml
-          # Skip the ~14 genai_*_unit-t binaries. With PROXYSQL40=1 the
-          # unit Makefile's `ifeq ($(PROXYSQL40),1)` block would otherwise
-          # add them to UNIT_TESTS, and they statically link 30+
-          # plugins/genai/.cpp at -O0 -ggdb (~160 MB each, ~2 GB total).
-          # That blew the runner's ~14 GB free disk on the first attempt
-          # at this matrix entry. CI-mysqlx never runs genai_*_unit-t.
-          sed -i "/command/i \      - SKIP_GENAI_UNIT_TESTS=1" docker-compose.yml
         fi
         if [[ "${{ matrix.type }}" =~ "-gcov" ]]; then
           sed -i "/command/i \      - WITHGCOV=1" docker-compose.yml
@@ -415,8 +348,8 @@ jobs:
           # Cache size control: prune artifacts the _test cache doesn't
           # need before it gets saved. Without this pruning, the _test
           # cache grows to ~4 GB compressed (~16 GB uncompressed), and
-          # two concurrent cascades (each saving one ubuntu22-tap cache
-          # and one ubuntu24-tap-genai-gcov cache) exceed GitHub's 10 GB
+          # two concurrent cascades (each saving a regular and a gcov cache)
+          # exceed GitHub's 10 GB
           # per-repo cache quota. LRU eviction then deletes caches
           # between when CI-builds saves them and when downstream test
           # workflows try to restore them, causing "Cache restore test"
@@ -437,8 +370,8 @@ jobs:
             echo "       This typically means the TAP build did not run or failed."
             exit 1
           fi
-          if [[ "${{ matrix.type }}" =~ "-mysqlx" ]] && [ "${UNIT_COUNT}" -lt 1 ]; then
-            echo "ERROR: no unit test binaries found at test/tap/tests/unit/*-t for the mysqlx cache"
+          if [[ "${{ matrix.type }}" =~ "-gcov" ]] && [ "${UNIT_COUNT}" -lt 1 ]; then
+            echo "ERROR: no unit test binaries found for the complete regular handoff"
             exit 1
           fi
 
@@ -459,7 +392,9 @@ jobs:
           # this cache, so preserve those and delete only the rest. Spot-
           # checks (readelf) confirm the kept binaries do not dyn-link to
           # test/deps -- the test/deps deletion below still applies.
-          if [[ "${{ matrix.type }}" =~ "-mysqlx" ]]; then
+          if [[ "${{ matrix.type }}" =~ "-gcov" ]]; then
+            echo ">>> Retaining all ${UNIT_COUNT} unit test binaries for the complete regular handoff"
+          elif [[ "${{ matrix.type }}" =~ "-mysqlx" ]]; then
             sudo find test/tap/tests/unit -type f -name '*-t' \
               ! -name 'mysqlx_*_unit-t' ! -name 'plugin_*_unit-t' -delete
             KEPT=$(find test/tap/tests/unit -type f -name '*-t' 2>/dev/null | wc -l)
@@ -562,14 +497,14 @@ jobs:
 
     - name: Check build
       id: check_build
-      if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
+      if: ${{ inputs.trusted && success() }}
       run: |
         for LOG in proxysql/ci_build_log/build*.log ; do
           grep 'exited with code 0' ${LOG} || exit 1
         done
 
     - name: Stage MySQLX runtime libraries in test handoff
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-mysqlx') }}
+      if: ${{ inputs.trusted && success() && contains(matrix.type,'-genai') }}
       run: |
         set -euo pipefail
         cd proxysql/
@@ -622,7 +557,7 @@ jobs:
         ls -la "${runtime_dir}/"
 
     - name: Stage GenAI plugin in test handoff
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-genai') }}
+      if: ${{ inputs.trusted && success() && contains(matrix.type,'-genai') }}
       run: |
         set -euo pipefail
         cd proxysql/
@@ -637,187 +572,33 @@ jobs:
         test -s "${plugin_dest}"
         ls -la "$(dirname "${plugin_dest}")"
 
-    - name: Pack bin cache with zstd-15
-      id: cache-pack-bin
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' }}
-      # `actions/cache@v4` compresses with zstd level ~3; we pre-compress
-      # with zstd -15 to fit more under the 10 GB repo quota. Level 15
-      # captures most of the size win (~80% of what --ultra -22 gives
-      # over default -3) at roughly 1/10 the time on this codebase --
-      # `--ultra -22` measured 14-16 min just on the test cache step per
-      # ubuntu build job (vs ~17 min for the build itself), pushing
-      # CI-builds wall clock to ~38 min and gating every downstream TAP
-      # workflow on it. Re-compression by actions/cache on the already-
-      # compressed .tar.zst is a near-no-op. Symbols are preserved
-      # bit-for-bit.
+    - name: Pack complete regular handoff (zstd-15)
+      if: ${{ inputs.trusted && success() && contains(matrix.type,'-gcov') }}
       run: |
-        command -v zstd >/dev/null || sudo apt-get install -y zstd
-        cd proxysql/
-        tar -cf - .git/ binaries/ | zstd -15 -T0 -o ../cache_bin.tar.zst
-
-    - name: Cache save bin
-      id: cache-save-bin
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' }}
-      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-      with:
-        key: ${{ env.BLDCACHE }}_bin
-        enableCrossOsArchive: true
-        path: cache_bin.tar.zst
-
-    - name: Cache save src
-      id: cache-save-src
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
-      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-      with:
-        key: ${{ env.BLDCACHE }}_src
-        enableCrossOsArchive: true
-        # For -gcov variants, include lib/obj/*.gcno so the test
-        # workflow's coverage collector can match .gcda (runtime data
-        # written by the proxysql daemon under /gcov) to .gcno
-        # (compile-time data). Without this, fastcov sees .gcda files
-        # with no associated source-file mapping
-        # (`Missing 'current_working_directory'`, `files: []`) and
-        # produces a 0-byte .info report -- the bug that hid coverage
-        # for as long as COVERAGE=1 has existed in run-tests-isolated.bash.
-        # src/obj/*.gcno is already captured by `proxysql/src/`. The
-        # extra entry is a no-op for non-gcov builds (lib/obj/*.gcno
-        # won't exist) and adds only a few MB to the gcov cache.
-        #
-        # The plugins/mysqlx and plugins/genai .so paths are no-ops on
-        # builds without PROXYSQL40=1 (the files don't exist). For the
-        # -tap-mysqlx matrix variant they're the whole point: CI-mysqlx
-        # restores this cache and bind-mounts the .so into the ProxySQL
-        # container at /usr/lib/proxysql/ProxySQL_MySQLX_Plugin.so.
-        #
-        # IMPORTANT: this path list determines the actions/cache "version"
-        # hash. Every downstream test workflow's `Cache restore src`
-        # step on GH-Actions (ci-legacy-g1.yml, ci-mysql84-g3.yml,
-        # every ci-mariadb10-galera-*.yml, etc.) uses exactly the two
-        # paths below. DO NOT add or remove entries here without updating
-        # every downstream callee in lockstep -- adding entries here
-        # changed the cache version hash and broke ~40 downstream
-        # workflows with "Failed to restore cache entry" even though
-        # the cache existed. Plugin .so artefacts and other matrix-
-        # specific extras must ride along inside the test/ tree (where
-        # the _test cache catches them) rather than be added here.
-        path: |
-          proxysql/src/
-          proxysql/lib/obj/*.gcno
-
-    - name: Pack test cache with zstd-15
-      id: cache-pack-test
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
-      # `actions/cache@v4` compresses with zstd level ~3; we pre-compress
-      # with zstd -15 to fit more under the 10 GB repo quota. See the
-      # bin-cache pack step above for the rationale on dropping from
-      # `--ultra -22` to -15: this step alone was taking 14-16 min per
-      # ubuntu build job at --ultra -22, doubling CI-builds wall clock
-      # and blocking every downstream TAP workflow on it. Re-compression
-      # by actions/cache on the already-compressed .tar.zst is a near-
-      # no-op. Symbols are preserved bit-for-bit.
-      run: |
-        command -v zstd >/dev/null || sudo apt-get install -y zstd
-        cd proxysql/
-        tar -cf - test/ | zstd -15 -T0 -o ../cache_test.tar.zst
-
-    - name: Cache save test
-      id: cache-save-test
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
-      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-      with:
-        key: ${{ env.BLDCACHE }}_test
-        enableCrossOsArchive: true
-        path: cache_test.tar.zst
-
-    - name: Cache save matrix
-      id: cache-save-matrix
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
-      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-      with:
-        key: ${{ env.BLDCACHE }}_matrix
-        enableCrossOsArchive: true
-        path: |
-          proxysql/tap-matrix*
-
-    # === Build → test handoff via workflow artifacts ===
-    # GitHub made Actions cache WRITES read-only for untrusted / workflow_run
-    # triggers operating in default-branch context (changelog 2026-06-26): the
-    # `Cache save *` steps above get "cache write denied: token has no writable
-    # scopes" on PR/workflow_run runs even with permissions: write-all, so every
-    # downstream test workflow fails at `fail-on-cache-miss`. Workflow ARTIFACTS
-    # are not subject to that policy, so we publish the same payloads the caches
-    # carried as per-type artifacts named `ci-builds-handoff-<sha>-<variant>-<t>`
-    # (t = src|test|matrix|bin). Each test workflow downloads only the types it
-    # used to restore -- a faithful 1:1 replacement of its cache keys. The
-    # `Cache save *` steps above are now dead weight (they warn-and-noop on PRs);
-    # kept for one release to preserve the fast path on trusted `push` builds,
-    # and slated for removal once every consumer is on artifacts.
-    #
-    # env.SHA is the real head SHA (identical to the value each consumer
-    # computes), NOT the workflow_run default-branch SHA, so names line up
-    # without any run-id correlation.
-    - name: Pack src + matrix for handoff (zstd-15)
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
-      run: |
+        set -euo pipefail
         command -v zstd >/dev/null || sudo apt-get install -y zstd
         cd proxysql/
         shopt -s nullglob
-        # _src payload: src/ (proxysql binary + src gcno) plus the lib gcno the
-        # gcov coverage collector matches against .gcda (gcov build only; the
-        # nullglob array is empty and harmless on non-gcov -tap variants).
         gcno=(lib/obj/*.gcno)
-        tar -cf - src/ "${gcno[@]}" | zstd -15 -T0 -o ../cache_src.tar.zst
-        # _matrix payload (tap-matrix* json) -- only the taptests* groups consume
-        # it, and only ubuntu22-tap generates it; skip when absent.
-        mtx=(tap-matrix*)
-        if [ ${#mtx[@]} -gt 0 ]; then
-          tar -cf - "${mtx[@]}" | zstd -15 -T0 -o ../cache_matrix.tar.zst
+        matrix_files=(tap-matrix*)
+        plugin_files=(plugins/*/*.so)
+        if [ "${#plugin_files[@]}" -lt 1 ]; then
+          echo "ERROR: no plugin shared libraries were built for the complete handoff" >&2
+          exit 1
         fi
+        tar -cf - src/ test/ "${gcno[@]}" "${matrix_files[@]}" "${plugin_files[@]}" \
+          | zstd -15 -T0 -o ../cache_full.tar.zst
 
-    - name: Upload handoff (src)
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
+    - name: Upload complete regular handoff
+      if: ${{ inputs.trusted && success() && contains(matrix.type,'-gcov') }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
-        name: ci-builds-handoff-${{ env.SHA }}-${{ matrix.dist }}${{ matrix.type }}-src
+        name: ci-builds-handoff-${{ env.SHA }}-ubuntu24-tap-genai-gcov-full
         retention-days: 1
         compression-level: 0
         if-no-files-found: error
-        path: cache_src.tar.zst
+        path: cache_full.tar.zst
 
-    - name: Upload handoff (test)
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-      with:
-        name: ci-builds-handoff-${{ env.SHA }}-${{ matrix.dist }}${{ matrix.type }}-test
-        retention-days: 1
-        compression-level: 0
-        if-no-files-found: error
-        # cache_test.tar.zst is produced by the "Pack test cache" step above.
-        path: cache_test.tar.zst
-
-    - name: Upload handoff (matrix)
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-      with:
-        name: ci-builds-handoff-${{ env.SHA }}-${{ matrix.dist }}${{ matrix.type }}-matrix
-        retention-days: 1
-        compression-level: 0
-        # Only ubuntu22-tap generates tap-matrix*; ignore on variants without it.
-        if-no-files-found: ignore
-        path: cache_matrix.tar.zst
-
-    - name: Upload handoff (bin)
-      # Only the debian12-dbg build feeds the 3p suites, and they consume bin
-      # only. bin is large (.git/ + binaries/), so don't ship it for -tap.
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-dbg') }}
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-      with:
-        name: ci-builds-handoff-${{ env.SHA }}-${{ matrix.dist }}${{ matrix.type }}-bin
-        retention-days: 1
-        compression-level: 0
-        if-no-files-found: error
-        # cache_bin.tar.zst is produced by the "Pack bin cache" step above.
-        path: cache_bin.tar.zst
 
     # Nuke ALL docker state before leaving the runner clean for its next job.
     # This prevents a failed or cancelled build from continuing to write

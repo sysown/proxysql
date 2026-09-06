@@ -56,7 +56,7 @@ jobs:
         SHA: ${{ env.SHA }}
         BUILD_RUN_ID: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.id || '' }}
         HANDOFF_VARIANT: ubuntu24-tap-genai-gcov
-        HANDOFF_TYPES: src test
+        HANDOFF_TYPES: full
       run: |
         set -euo pipefail
         command -v zstd >/dev/null || sudo apt-get install -y zstd
