@@ -13,9 +13,6 @@ env:
   # and check_run posts use this so the entire pipeline operates on one
   # SHA consistently.
   SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
-  # CI-builds writes one complete regular Ubuntu 24 handoff per SHA. This
-  # workflow restores it and runs MysqlX tests; it never rebuilds ProxySQL.
-  BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu24-tap-genai-gcov_full
 
 jobs:
   # Run the mysqlx + plugin chassis unit-test binaries that CI-builds
@@ -29,7 +26,11 @@ jobs:
   unit-tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
-    permissions: write-all
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+      packages: read
     steps:
       - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
         id: checks
@@ -230,7 +231,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     needs: unit-tests
-    permissions: write-all
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+      packages: read
     steps:
       - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
         id: checks
@@ -508,7 +513,11 @@ jobs:
       fail-fast: false
       matrix:
         connector_version: ['9.7.0', '26.7.0']
-    permissions: write-all
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+      packages: read
     steps:
       - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
         id: checks

@@ -90,8 +90,16 @@ jobs:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USER}" --password-stdin
-          docker pull proxysql/packaging:build-ubuntu24-v4.0.0
+          for attempt in 1 2 3 4 5; do
+            echo ">>> GHCR login+pull attempt ${attempt}/5"
+            if echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USER}" --password-stdin \
+              && docker pull proxysql/packaging:build-ubuntu24-v4.0.0; then
+              exit 0
+            fi
+            sleep "$((attempt * 10))"
+          done
+          echo "ERROR: failed to pull Ubuntu 24 build image after 5 attempts" >&2
+          exit 1
 
       - name: Run selected unit group
         env:

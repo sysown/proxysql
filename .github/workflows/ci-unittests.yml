@@ -14,8 +14,11 @@ jobs:
   tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    permissions:
+      actions: read
+      checks: write
+      contents: read
     env:
-      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu24-tap-genai-gcov_full
       MATRIX: '(unit-tests-g1)'
 
     steps:

@@ -91,7 +91,6 @@ jobs:
     env:
       TESTDIST: ${{ matrix.testdist }}
       INFRADB:  ${{ matrix.infradb }}
-      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.testdist }}_src
       MATRIX: '(${{ matrix.infradb }})'
 
     steps:

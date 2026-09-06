@@ -14,6 +14,10 @@ jobs:
   tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    permissions:
+      actions: read
+      checks: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -23,7 +27,6 @@ jobs:
     env:
       TESTDIST: ${{ matrix.testdist }}
       INFRADB:  ${{ matrix.infradb }}
-      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_${{ matrix.testdist }}_full
       MATRIX: '(${{ matrix.infradb }})'
 
     steps:
