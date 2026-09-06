@@ -23,6 +23,8 @@ run_check "Lint groups.json format" \
 	python3 test/tap/groups/lint_groups_json.py
 run_check "Check AI TAP shard split" \
 	python3 test/tap/groups/test_ai_group_shards.py
+run_check "Check MySQLX unit group registration" \
+	python3 test/tap/groups/test_mysqlx_group_registration.py
 run_check "Check TAP Makefile dependency graph" \
 	python3 test/tap/groups/test_makefile_dependencies.py
 run_check "Check binlog reader infrastructure contract" \
