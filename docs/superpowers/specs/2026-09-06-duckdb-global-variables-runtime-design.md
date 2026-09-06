@@ -1,6 +1,6 @@
 # DuckDB Global Variables and Effective Runtime Design
 
-Date: 2026-09-06  
+Date: 2026-09-06
 Base revision: `v3.0` at `80941ae5e2cb29963c8bb14c46a7a441ae4f08d2`
 
 ## Scope
