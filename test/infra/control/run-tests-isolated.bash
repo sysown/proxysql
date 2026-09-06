@@ -208,9 +208,10 @@ if [ "${SKIP_PROXYSQL}" = "1" ]; then
 
     # Extract test names belonging to this group, filtering by @proxysql_min_version
     TEST_NAMES=$(python3 -c "
-import json, sys
+import json, sys, os, re
 from packaging import version
 proxysql_ver = '${PROXYSQL_VERSION}'
+excl = os.environ.get('TEST_PY_TAP_EXCL', '')
 with open('${GROUPS_JSON}') as f:
     groups = json.load(f)
 for test_name, test_groups in sorted(groups.items()):
@@ -225,6 +226,8 @@ for test_name, test_groups in sorted(groups.items()):
                         print(f'SKIP ({test_name}): requires ProxySQL >= {min_ver}, have {proxysql_ver}', file=sys.stderr)
                         skip = True
                     break
+        if not skip and excl and re.search(excl, test_name):
+            continue
         if not skip:
             print(test_name)
 ")

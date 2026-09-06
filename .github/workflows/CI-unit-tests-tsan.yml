@@ -19,7 +19,7 @@ run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branc
 #
 #   The test phase runs the resulting *-t binaries through
 #   `test/infra/control/run-tests-isolated.bash` driving TAP_GROUP
-#   `mysqlx-tsan-g1`. The harness is the same one used locally.
+#   `mysqlx-tsan-g1` first, then the rest of `unit-tests-g1`.
 #
 # Why this PR doesn't restore the CI-builds cache:
 #
@@ -58,15 +58,63 @@ env:
   SHA: ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
 
 jobs:
+  pick-runner:
+    if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      actions: read
+    outputs:
+      runson: ${{ steps.pick.outputs.runson }}
+    steps:
+      - name: Pick runner pool
+        id: pick
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          POOL_SIZE: ${{ vars.SELFHOSTED_POOL_SIZE || '6' }}
+          ELIGIBLE: ${{ (github.actor == 'renecannao' || (github.event.workflow_run && github.event.workflow_run.actor.login == 'renecannao')) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) }}
+        run: |
+          set -uo pipefail
+          choice='"ubuntu-24.04"'
+          if [ "${ELIGIBLE:-}" = "true" ]; then
+            POOL="${POOL_SIZE:-6}"
+            demand=0; err=0
+            ids=$( { gh api --paginate "repos/${REPO}/actions/runs?status=in_progress&per_page=100" --jq '.workflow_runs[].id';
+                     gh api --paginate "repos/${REPO}/actions/runs?status=queued&per_page=100" --jq '.workflow_runs[].id'; } 2>e1 ) || err=1
+            if [ "$err" = "0" ]; then
+              for rid in ${ids:-}; do
+                [ "$demand" -ge "$POOL" ] && break
+                n=$(gh api "repos/${REPO}/actions/runs/${rid}/jobs" --jq '[.jobs[]|select((.status=="in_progress" and ((.runner_name//"")|startswith("ci-vm"))) or (.status=="queued" and (([.labels[]]|index("proxysql-ci")) != null)))]|length' 2>/dev/null) || n=0
+                demand=$(( demand + ${n:-0} ))
+              done
+              free=$(( POOL - demand ))
+              echo ">>> self-hosted pool: demand=${demand}/${POOL} free=${free} (occupied+queued)"
+              if [ "${free}" -ge 1 ]; then
+                choice='["self-hosted","proxysql-ci"]'; echo ">>> capacity available -> self-hosted"
+              else
+                choice='"ubuntu-24.04"'; echo ">>> pool at/over capacity -> spill to GitHub-hosted"
+              fi
+            else
+              echo ">>> WARNING: could not read runs:"; sed 's/^/    /' e1
+              choice='["self-hosted","proxysql-ci"]'; echo ">>> failing SAFE to self-hosted (offload unchanged)"
+            fi
+          else
+            echo ">>> not eligible for self-hosted -> GitHub-hosted"
+          fi
+          echo "runson=${choice}" >> "$GITHUB_OUTPUT"
+          echo ">>> decision: runson=${choice}"
+
   unit-tests-tsan:
+    needs: pick-runner
     if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
     # `write-all` is required so the workflow_run event's GITHUB_TOKEN has
     # the cache-writable scope (GitHub started enforcing this for workflow_run
     # in early July 2026). Without it actions/cache/save@v4 fails with
     # 'cache write denied: token has no writable scopes'.
     permissions: write-all
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    runs-on: ${{ fromJson(needs.pick-runner.outputs.runson) }}
+    timeout-minutes: 120
 
     steps:
 
@@ -121,7 +169,7 @@ jobs:
       run: |
         make ubuntu24-tap
 
-    - name: Run mysqlx-tsan-g1 TAP group inside Docker
+    - name: Run mysqlx-tsan-g1 + unit-tests-g1 TAP groups inside Docker
       # Run the TSAN-instrumented unit tests INSIDE the same Docker
       # image used for the build — same source mount at /opt/proxysql,
       # same toolchain, same libstdc++/libgcc that the binaries linked
@@ -152,10 +200,22 @@ jobs:
       # consist only of lowercase alphanumeric characters, hyphens,
       # and underscores").
       #
-      # SKIP_PROXYSQL=1 short-circuits the daemon + backend checks in
-      # run-tests-isolated.bash, so it just iterates groups.json and
-      # execs each *-t binary in turn — no nested docker, no Python
-      # tester. TSAN_OPTIONS comes from mysqlx-tsan-g1/env.sh.
+       # SKIP_PROXYSQL=1 short-circuits the daemon + backend checks in
+       # run-tests-isolated.bash, so it just iterates groups.json and
+       # execs each *-t binary in turn — no nested docker, no Python
+       # tester. TSAN_OPTIONS comes from mysqlx-tsan-g1/env.sh.
+       #
+       # Two phases, one container invocation. Both always run; the
+       # combined status fails if either phase fails.
+       #   1. TAP_GROUP=mysqlx-tsan-g1 — the TSAN-targeted mysqlx +
+       #      plugin-chassis binaries (env.sh supplies SKIP_PROXYSQL=1
+       #      and TSAN_OPTIONS). TSan reports still fail the binary
+       #      (default exitcode 66).
+       #   2. TAP_GROUP=unit-tests-g1 — the remaining already-built
+       #      unit binaries. TEST_PY_TAP_EXCL drops the phase-1
+       #      overlap. halt_on_error=0:exitcode=0 keeps never-TSAN-
+       #      validated tests from red-ing the build on a race
+       #      report (TAP assertion failures still fail).
       env:
         TAP_GROUP: mysqlx-tsan-g1
         INFRA_ID: ci-unit-tests-tsan
@@ -176,10 +236,13 @@ jobs:
           -e TAP_GROUP="${TAP_GROUP}" \
           --entrypoint bash \
           ubuntu24_dbg_build \
-          -lc 'apt-get update -qq \
-               && apt-get install -y --no-install-recommends python3-packaging libprotobuf-dev \
-               && cd /opt/proxysql \
-               && test/infra/control/run-tests-isolated.bash'
+           -lc 'apt-get update -qq \
+                && apt-get install -y --no-install-recommends python3-packaging libprotobuf-dev \
+                && cd /opt/proxysql \
+                && { TAP_GROUP=mysqlx-tsan-g1 test/infra/control/run-tests-isolated.bash; mysqlx_status=$?
+                     tsan_excl=$(python3 -c "import json; g=json.load(open('\''test/tap/groups/groups.json'\'')); print('\''|'\''.join(n for n,m in g.items() if '\''mysqlx-tsan-g1'\'' in m))")
+                     SKIP_PROXYSQL=1 TSAN_OPTIONS="halt_on_error=0:abort_on_error=0:exitcode=0:second_deadlock_stack=1:history_size=7" TAP_GROUP=unit-tests-g1 TEST_PY_TAP_EXCL="${tsan_excl}" test/infra/control/run-tests-isolated.bash; unit_status=$?
+                     test "${mysqlx_status}" -eq 0 && test "${unit_status}" -eq 0; }'
 
     - name: Fix artifact permissions
       if: ${{ failure() && !cancelled() }}
