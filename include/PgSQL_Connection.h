@@ -830,6 +830,11 @@ public:
 	// recv/frame error sets error_info and marks the fetch done. Sets
 	// native_result_complete when ReadyForQuery is reached.
 	void native_fetch_result_cont(short event);
+	// Finish sending a reset command and consume its reply up to ReadyForQuery.
+	// The reply is discarded; a connection being reset has no client to send it to.
+	void native_reset_session_cont();
+	// Record a ParameterStatus message into native_params.
+	void native_track_parameter_status(const unsigned char* payload, uint32_t len);
 	// Flush the just-built extended-query step in native_outbuf and set
 	// async_exit_status the way the stmt_*_start callers expect: PG_EVENT_WRITE while
 	// bytes remain buffered (caller waits for POLLOUT), PG_EVENT_NONE once fully sent

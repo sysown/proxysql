@@ -2795,6 +2795,23 @@ void PgSQL_Connection::native_drive_auth(short /*event*/) {
 	}
 }
 
+// Record a ParameterStatus ('S'): two NUL-separated strings, name then value. The
+// backend sends one whenever a reported setting changes, and DISCARD ALL changes
+// every one of them back to its default. Dropping these would leave native_params
+// describing settings the connection no longer has.
+void PgSQL_Connection::native_track_parameter_status(const unsigned char* payload, uint32_t len) {
+	if (payload == nullptr || len == 0) return;
+	uint32_t i = 0;
+	const char* name = (const char*)payload;
+	while (i < len && payload[i] != 0) i++;
+	if (i >= len) return; // malformed; ignore
+	std::string nm(name, (const char*)(payload + i));
+	i++; // skip the NUL between the two strings
+	const char* val = (const char*)(payload + i);
+	while (i < len && payload[i] != 0) i++;
+	native_params[nm] = std::string(val, (const char*)(payload + i));
+}
+
 void PgSQL_Connection::native_drive_startup_tail(short /*event*/) {
 	// Consume ParameterStatus(S)/BackendKeyData(K)/NoticeResponse(N) until
 	// ReadyForQuery(Z). This may be called immediately after AuthenticationOk
@@ -2819,23 +2836,9 @@ void PgSQL_Connection::native_drive_startup_tail(short /*event*/) {
 		}
 		// FRAME_OK. Copy any payload we retain before a subsequent recv()/feed().
 		switch (msg.type) {
-		case 'S': { // ParameterStatus: two C-strings name, value
-			const unsigned char* p = msg.payload;
-			uint32_t len = msg.payload_len;
-			uint32_t i = 0;
-			const char* name = (const char*)p;
-			while (i < len && p[i] != 0) i++;
-			if (i >= len) break; // malformed; ignore
-			std::string nm(name, (const char*)(p + i));
-			i++; // skip NUL
-			const char* val = (const char*)(p + i);
-			uint32_t vstart = i;
-			while (i < len && p[i] != 0) i++;
-			std::string vl(val, (const char*)(p + i));
-			(void)vstart;
-			native_params[nm] = vl;
+		case 'S': // ParameterStatus
+			native_track_parameter_status(msg.payload, msg.payload_len);
 			break;
-		}
 		case 'K': { // BackendKeyData: int32 pid, int32 secret
 			if (msg.payload_len >= 8) {
 				native_backend_pid = (int)pg_read_be32(msg.payload);
@@ -3648,15 +3651,11 @@ int PgSQL_Connection::async_query(short event, const char* stmt, unsigned long l
 int PgSQL_Connection::async_reset_session(short event) {
 	PROXY_TRACE();
 	PROXY_TRACE2();
-	// In native_mode pgsql_conn is permanently NULL (the native state machine
-	// owns the socket and is reset on a different code path). The libpq-only
-	// invariant asserted below does not hold for native connections; bail out
-	// early with a successful reset rather than crashing the process.
-	if (native_mode) {
-		async_state_machine = ASYNC_RESET_SESSION_SUCCESSFUL;
-		return 0;
-	}
-	assert(pgsql_conn);
+	// A native connection has no pgsql_conn and never will; only the libpq branches
+	// below dereference it. Everything else in this function -- the timeout, the error
+	// mapping, returning the connection to ASYNC_IDLE once the backend has acknowledged
+	// the reset -- serves both kinds of connection.
+	assert(native_mode || pgsql_conn);
 
 	server_status = parent->status; // we copy it here to avoid race condition. The caller will see this
 	if (IsServerOffline())
@@ -4552,6 +4551,26 @@ void PgSQL_Connection::stmt_execute_cont(short event) {
 
 void PgSQL_Connection::reset_session_start() {
 	PROXY_TRACE();
+	if (native_mode) {
+		// Two commands, and the order is forced: the backend refuses DISCARD ALL while
+		// a transaction is open, so an open one is rolled back first and DISCARD ALL
+		// goes out on the next pass.
+		reset_session_in_pipeline = false; // nothing here ever runs in pipeline mode
+		reset_session_in_txn = IsKnownActiveTransaction();
+		const char* cmd = (reset_session_in_txn == false ? "DISCARD ALL" : "ROLLBACK");
+		set_query(cmd, strlen(cmd));
+		query_start();
+		if (async_exit_status == PG_EVENT_NONE && is_error_present() == false) {
+			// Reached only when the whole command actually went out: query_start() asks
+			// for writability instead if any of it is still buffered, and leaves an error
+			// set if the send failed outright. Nothing is left to send, so what we wait
+			// for is the reply. Say so, or the cycle finishes here without ever entering
+			// ASYNC_RESET_SESSION_CONT -- taking the reset timeout, which lives in that
+			// state, with it.
+			async_exit_status = PG_EVENT_READ;
+		}
+		return;
+	}
 	assert(pgsql_conn);
 	reset_error();
 	async_exit_status = PG_EVENT_NONE;
@@ -4575,8 +4594,69 @@ void PgSQL_Connection::reset_session_start() {
 	flush();
 }
 
+// Finish sending a reset command and read its reply, which is thrown away: a
+// connection being reset has no client waiting for it. Reading stops at
+// ReadyForQuery. Two things in the reply are kept -- the transaction status, which
+// decides whether a second command is still owed, and an error, because a reset that
+// failed must not be reported as done or a dirty connection goes back in the pool.
+void PgSQL_Connection::native_reset_session_cont() {
+	async_exit_status = PG_EVENT_NONE;
+
+	// A command that did not fit in one write has to be finished before its reply
+	// can arrive.
+	if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {
+		if (!native_flush_outbuf()) {
+			native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send failed during reset");
+			return;
+		}
+		if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {
+			async_exit_status = PG_EVENT_WRITE;
+			return;
+		}
+	}
+
+	for (;;) {
+		PgSQL_Backend_Msg msg;
+		PgSQL_Frame_Result fr = native_framer.next(msg);
+		if (fr == FRAME_NEED_MORE) {
+			int r = native_recv_into_framer();
+			if (r == 0) { // EAGAIN
+				async_exit_status = PG_EVENT_READ;
+				return;
+			}
+			if (r < 0) {
+				native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "backend closed during reset");
+				return;
+			}
+			continue;
+		}
+		if (fr == FRAME_ERROR) {
+			native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_PROTOCOL_VIOLATION), "malformed backend message during reset");
+			return;
+		}
+		switch (msg.type) {
+		case 'E': // the backend refused the command; ReadyForQuery still follows it
+			native_fill_error_from_E(msg.payload, msg.payload_len);
+			break;
+		case 'S': // ParameterStatus: DISCARD ALL reverts reported settings and says so
+			native_track_parameter_status(msg.payload, msg.payload_len);
+			break;
+		case 'Z': // ReadyForQuery: the reply is complete
+			if (msg.payload_len >= 1) native_txn_status = (char)msg.payload[0];
+			return;
+		default:
+			// CommandComplete and NoticeResponse: nothing to keep.
+			break;
+		}
+	}
+}
+
 void PgSQL_Connection::reset_session_cont(short event) {
 	PROXY_TRACE();
+	if (native_mode) {
+		native_reset_session_cont();
+		return;
+	}
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6, "event=%d\n", event);
 	async_exit_status = PG_EVENT_NONE;
 	if (event & POLLOUT) {
