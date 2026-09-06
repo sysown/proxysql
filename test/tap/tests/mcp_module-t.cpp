@@ -126,7 +126,8 @@ int test_target_profile_effective_columns(MYSQL* admin) {
 		"DELETE FROM mcp_target_profiles"
 		" WHERE target_id IN ('tap6168_ok','tap6168_dangling','tap6168_inactive')");
 	MYSQL_QUERY_T(admin,
-		"DELETE FROM mcp_auth_profiles WHERE auth_profile_id='tap6168_auth'");
+		"DELETE FROM mcp_auth_profiles"
+		" WHERE auth_profile_id IN ('tap6168_auth','tap6168_no_such_auth')");
 
 	MYSQL_QUERY_T(admin,
 		"INSERT INTO mcp_auth_profiles"
