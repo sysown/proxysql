@@ -116,6 +116,12 @@ jobs:
         export PATH="/usr/local/bin:$PATH"
         PROXYSQL31=1 make -j$(sysctl -n hw.ncpu)
 
+    - name: Verify libusual and vendored OpenSSL coexistence
+      run: test/infra/control/test-libusual-static-openssl.bash
+
+    - name: Verify MariaDB CA isolation and cache lifetime
+      run: test/infra/control/test-mariadb-default-trust-store.bash
+
     - name: Package binary
       run: |
         set -euo pipefail
