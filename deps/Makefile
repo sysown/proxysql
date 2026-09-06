@@ -493,12 +493,17 @@ endif
 postgresql: postgresql/postgresql/src/interfaces/libpq/libpq.a
 
 
+LIBUSUAL_LIBS :=
+ifeq ($(UNAME_S),Linux)
+LIBUSUAL_LIBS := LIBS="-ldl -lpthread"
+endif
+
 libusual/libusual/.libs/libusual.a: $(OPENSSL_BUILD_STAMP) libusual/tls_free_namespace.patch
 	cd libusual && rm -rf libusual-*/ || true
 	cd libusual && tar -zxf libusual-*.tar.gz
 	cd libusual/libusual && patch -p1 < ../tls_free_namespace.patch
 	cd libusual/libusual && ./autogen.sh
-	cd libusual/libusual && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="-L$(SSL_LDIR)" ./configure --with-openssl="$(SSL_PATH)" --disable-shared
+	cd libusual/libusual && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="-L$(SSL_LDIR)" $(LIBUSUAL_LIBS) ./configure --with-openssl="$(SSL_PATH)" --disable-shared
 	cd libusual/libusual && CC=${CC} CXX=${CXX} ${MAKE}
 
 libusual: libusual/libusual/.libs/libusual.a
