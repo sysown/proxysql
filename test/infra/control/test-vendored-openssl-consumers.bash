@@ -168,6 +168,7 @@ for platform in Linux Darwin FreeBSD; do
 		assert_contains "${libusual_configure}" 'LIBS=-ldl -lpthread' "libusual configure/${platform}"
 	else
 		assert_not_contains "${libusual_configure}" 'LIBS=-ldl' "libusual configure/${platform}"
+		assert_not_contains "${libusual_configure}" 'LIBS=-lpthread' "libusual configure/${platform}"
 	fi
 	assert_no_system_openssl "${libusual_output}" "libusual/${platform}"
 
