@@ -168,13 +168,6 @@ ifeq ($(UNAME_S),Linux)
 	STATIC_LIBS += $(COREDUMPER_LDIR)/libcoredumper.a
 endif
 
-ifneq ($(PROXYSQL40),)
-ifneq ($(wildcard $(SQLITE3_LDIR)/vec.o),)
-	STATIC_LIBS += $(SQLITE3_LDIR)/vec.o
-endif
-endif
-
-
 # ===========================================================================
 # Linker flags — platform-specific
 # ===========================================================================

@@ -178,6 +178,27 @@ std::string proxysql_resolve_configured_plugin_admin_alias(const std::string& sq
 // the correct one based on each view's registered db_kind.
 void proxysql_refresh_configured_plugin_runtime_views(const std::string& sql,
 	SQLite3DB* admindb, SQLite3DB* configdb, SQLite3DB* statsdb);
+
+// Admin-side helper: restore every plugin-registered config_db table from
+// `disk.` into `main.` (issue #6167).
+//
+// Core config tables are copied by a hardcoded list in
+// ProxySQL_Admin::__insert_or_replace_maintable_select_disktable(); plugin
+// tables are not in that list, so without this their rows were written to
+// disk by "SAVE <X> TO DISK" and then never read back at startup. The result
+// was partial persistence -- a plugin's variables came back (they live in
+// global_variables) while its own tables came back empty.
+//
+// Runs during admin init, i.e. after the schemas are registered and created
+// and before the plugins' init()/start() callbacks, so a plugin that installs
+// runtime state from main.<X> in start() observes the restored rows.
+//
+// `..._configured_...` resolves the active plugin manager and is the form
+// Admin calls; the two-argument form takes the table list directly and holds
+// no globals, so it is directly testable.
+void proxysql_restore_configured_plugin_config_tables(SQLite3DB* admindb);
+void proxysql_restore_plugin_config_tables_from_disk(SQLite3DB* admindb,
+	const std::vector<ProxySQL_PluginTableDef>& config_tables);
 // Phase A + B of the four-phase lifecycle: dlopen() each module, read its
 // descriptor, then call register_schemas() on plugins that opted in. On
 // success, `manager` is populated AND installed as the active manager so

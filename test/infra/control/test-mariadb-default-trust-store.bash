@@ -27,10 +27,15 @@ tar --no-same-owner -zxf \
 	-C "${tmp_dir}"
 source_dir="${tmp_dir}/mariadb-connector-c-3.3.8-src"
 apply_connector_patch plugin_auth_CMakeLists.txt.patch
+if [[ $(uname -s) == Darwin ]]; then
+	# Match the production connector patch sequence on Apple SDKs.
+	apply_connector_patch zutil.c.patch
+	apply_connector_patch zutil.h.patch
+fi
 
 if ! cmake -S "${source_dir}" -B "${source_dir}" -Wno-dev \
 		-DCMAKE_BUILD_TYPE=RelWithDebInfo \
-		-DCMAKE_C_FLAGS=-Wno-error=declaration-after-statement \
+		-DCMAKE_C_FLAGS="-Wno-error=declaration-after-statement ${CA_CACHE_SANITIZER_FLAGS:-}" \
 		-DOPENSSL_ROOT_DIR="${openssl_root}" \
 		-DOPENSSL_INCLUDE_DIR="${openssl_root}/include" \
 		-DOPENSSL_SSL_LIBRARY="${openssl_root}/libssl.a" \
@@ -115,6 +120,7 @@ ${CC:-cc} -std=c99 -Wall -Wextra -Werror -pedantic \
 
 if [[ $(uname -s) == Linux ]]; then
 	${CC:-cc} -std=gnu99 -Wall -Wextra -Werror \
+		${CA_CACHE_SANITIZER_FLAGS:-} \
 		-DHAVE_OPENSSL -DHAVE_TLS -DLIBMARIADB -DTHREAD \
 		-I"${source_dir}/include" \
 		-I"${source_dir}/libmariadb" \
@@ -126,3 +132,21 @@ if [[ $(uname -s) == Linux ]]; then
 		-o "${tmp_dir}/mariadb-thread-ctx-allocation"
 	"${tmp_dir}/mariadb-thread-ctx-allocation" "${fixture_dir}/one.pem"
 fi
+
+${CC:-cc} -std=gnu99 -Wall -Wextra -Werror \
+	${CA_CACHE_SANITIZER_FLAGS:-} \
+	-DHAVE_OPENSSL -DHAVE_TLS -DLIBMARIADB -DTHREAD \
+	-I"${source_dir}/include" -I"${source_dir}/libmariadb" \
+	-I"${openssl_root}/include" \
+	"${script_dir}/fixtures/mariadb-ca-cache.c" \
+	"${source_dir}/libmariadb/libmariadbclient.a" \
+	"${openssl_root}/libssl.a" "${openssl_root}/libcrypto.a" \
+	-pthread -ldl -lz -o "${tmp_dir}/mariadb-ca-cache"
+cache_status=0
+for mode in isolation capath rotation retry new-retry lifecycle hit crl; do
+	"${tmp_dir}/mariadb-ca-cache" "$mode" \
+		"${fixture_dir}/one.pem" "${fixture_dir}/two.pem" \
+		"${fixture_dir}/corrupt.pem" "${fixture_dir}/mutable.pem" \
+		"${fixture_dir}/explicit-capath" || cache_status=1
+done
+exit "$cache_status"

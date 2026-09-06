@@ -118,7 +118,7 @@ class MakefileDependencyTest(unittest.TestCase):
                         "Makefile",
                         "-f",
                         str(probe_makefile),
-                        "MAKE=/bin/true",
+                        "MAKE=true",
                         target,
                     ],
                     cwd=ROOT,

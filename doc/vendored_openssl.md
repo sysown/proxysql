@@ -150,6 +150,8 @@ test/infra/control/test-no-system-openssl-links.bash
 test/infra/control/test-no-system-openssl-links-regressions.bash
 test/infra/control/test-openssl-package-contract.bash
 test/infra/control/validate-openssl-lfs-workflows.bash
+test/infra/control/test-re2-platform-link.bash
+test/infra/control/test-libusual-incremental.bash
 ```
 
 Then perform clean Stable 3.0, Innovative 3.1, and Chassis 4.0 builds. Check the
@@ -161,6 +163,23 @@ test/infra/control/check-openssl-linkage.bash \
   plugins/mysqlx/ProxySQL_MySQLX_Plugin.so \
   plugins/genai/ProxySQL_GenAI_Plugin.so
 src/proxysql --version
+test/infra/control/test-libusual-static-openssl.bash
+test/infra/control/test-mariadb-default-trust-store.bash
+```
+
+The libusual coexistence check needs the built libusual and vendored OpenSSL
+archives. It compiles and runs both public-header include orders, checking that
+the APIs coexist in the same executable. It is a post-build check, not a
+dependency-free lint check.
+
+The MariaDB check builds the patched connector in a temporary directory and
+tests CA isolation, file rotation, failed-load retries, cache hits, CRL-option
+isolation, and repeated thread cleanup. To additionally instrument the connector
+and cache fixture with AddressSanitizer:
+
+```bash
+CA_CACHE_SANITIZER_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
+  test/infra/control/test-mariadb-default-trust-store.bash
 ```
 
 The executable must report the new embedded OpenSSL version and must not depend

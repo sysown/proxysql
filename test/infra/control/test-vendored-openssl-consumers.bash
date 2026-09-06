@@ -12,7 +12,7 @@ true_path=$(command -v true)
 
 cleanup() {
 	local path
-	for path in "${created_stubs[@]}"; do
+	for path in ${created_stubs[@]+"${created_stubs[@]}"}; do
 		rmdir "${path}" 2>/dev/null || true
 	done
 }
@@ -157,14 +157,13 @@ for platform in Linux Darwin FreeBSD; do
 
 	libusual_output=$(dry_run "${repo_root}/deps" libusual "${platform}")
 	assert_vendored_first "${libusual_output}" './configure' "libusual/${platform}"
-	if [[ "${platform}" == Darwin ]]; then
-		assert_contains "${libusual_output}" '--with-openssl=yes' "libusual/${platform}"
-		assert_contains "${libusual_output}" "LDFLAGS=-L${openssl_root}" "libusual/${platform}"
-		assert_contains "${libusual_output}" 'libusual.la' "libusual/${platform}"
-	else
-		assert_contains "${libusual_output}" "--with-openssl=${openssl_root}" "libusual/${platform}"
-		assert_contains "${libusual_output}" "LDFLAGS=${ssl_archive} ${crypto_archive}" "libusual/${platform}"
-	fi
+	assert_contains "${libusual_output}" "--with-openssl=${openssl_root}" "libusual/${platform}"
+	assert_contains "${libusual_output}" "LDFLAGS=-L${openssl_root}" "libusual/${platform}"
+	# libtool must not absorb nested static archives into libusual.a on Apple.
+	libusual_configure=$(printf '%s\n' "${libusual_output}" | awk '/cd libusual\/libusual && .*\.\/configure/')
+	[[ -n "${libusual_configure}" ]] || fail "missing libusual configure command"
+	assert_not_contains "${libusual_configure}" 'libssl.a' "libusual configure/${platform}"
+	assert_not_contains "${libusual_configure}" 'libcrypto.a' "libusual configure/${platform}"
 	assert_no_system_openssl "${libusual_output}" "libusual/${platform}"
 
 	libscram_output=$(dry_run "${repo_root}/deps" libscram "${platform}")
