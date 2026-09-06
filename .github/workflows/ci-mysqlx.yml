@@ -357,6 +357,9 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends \
             libaio1 libnuma1 libncurses5 libtinfo5
 
+      - name: Verify dbdeployer install guard
+        run: proxysql/test/infra/control/test-ci-mysqlx-dbdeployer-install.bash
+
       - name: Install dbdeployer
         # GitHub runner images may already provide dbdeployer. Its upstream
         # installer exits non-zero in that case, so install only when PATH
