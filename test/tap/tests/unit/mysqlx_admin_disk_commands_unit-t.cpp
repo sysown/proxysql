@@ -16,6 +16,7 @@ namespace {
 std::vector<ProxySQL_PluginTableDef> registered_tables;
 std::vector<std::pair<std::string, proxysql_plugin_admin_command_cb>> registered_commands;
 std::vector<std::string> log_messages;
+std::vector<int> log_levels;
 
 void mock_register_table(const ProxySQL_PluginTableDef& def) {
 	registered_tables.push_back(def);
@@ -25,7 +26,8 @@ void mock_register_command(const char* sql, proxysql_plugin_admin_command_cb cb)
 	registered_commands.push_back({sql, cb});
 }
 
-void mock_log_message(int, const char* message) {
+void mock_log_message(int level, const char* message) {
+	log_levels.push_back(level);
 	log_messages.emplace_back(message != nullptr ? message : "");
 }
 
@@ -91,10 +93,10 @@ int main() {
 	admindb.execute("ATTACH DATABASE 'file:mem_configdb?mode=memory&cache=shared' AS disk");
 	admindb.execute("CREATE TABLE disk.mysqlx_variables (variable_name VARCHAR PRIMARY KEY, variable_value VARCHAR)");
 	mysqlx_warn_deprecated_disk_variables(admindb, services);
-	ok(log_messages.size() == 1 &&
+	ok(log_messages.size() == 1 && log_levels.size() == 1 && log_levels[0] == 4 &&
 	   log_messages[0].find("deprecated and ignored") != std::string::npos &&
 	   log_messages[0].find("DROP TABLE IF EXISTS disk.mysqlx_variables") != std::string::npos,
-	   "legacy disk.mysqlx_variables produces a manual-removal warning");
+	   "legacy disk.mysqlx_variables produces a warning-level manual-removal notice");
 	ok(admindb.return_one_int(
 	     "SELECT COUNT(*) FROM disk.sqlite_master WHERE type='table' AND name='mysqlx_variables'") == 1,
 	   "legacy disk.mysqlx_variables is not dropped automatically");

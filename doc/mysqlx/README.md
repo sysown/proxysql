@@ -72,8 +72,8 @@ plugin starts if they are absent.
 |----------|---------|-------------|
 | `mysqlx-thread_pool_size` | `4` | Number of event loop threads. Range: 1–64. Each thread runs an independent `poll()` loop handling thousands of concurrent sessions. |
 | `mysqlx-connect_timeout` | `10000` | Backend connection timeout in milliseconds. Applied to non-blocking `connect()` + backend authentication. |
-| `mysqlx-tls_mode` | `DISABLED` | Frontend TLS mode: `DISABLED`, `PREFERRED`, or `REQUIRED`. See [TLS Modes](#81-tls-modes). |
-| `mysqlx-tls_backend_mode` | `as_client` | Backend (proxy→backend) TLS mode: `disabled`, `preferred`, `required`, or `as_client`. See [Backend TLS Modes](#82-backend-tls-modes). |
+| `mysqlx-tls_mode` | `DISABLED` | Frontend TLS mode: `DISABLED`, `PREFERRED`, or `REQUIRED`. See [TLS Modes](#81-frontend-tls-modes-client--proxy). |
+| `mysqlx-tls_backend_mode` | `as_client` | Backend (proxy→backend) TLS mode: `disabled`, `preferred`, `required`, or `as_client`. See [Backend TLS Modes](#82-backend-tls-modes-proxy--backend). |
 | `mysqlx-max_cached_connections_per_thread` | `100` | Maximum number of idle backend connections cached per thread. Connections are matched by hostgroup, user, schema, *and* backend TLS state. |
 
 ```sql
@@ -566,7 +566,7 @@ mysqlsh root@127.0.0.1:33060 --sql
 
 | Limitation | Detail |
 |------------|--------|
-| TLS requires OpenSSL | TLS uses OpenSSL Memory BIO pattern. Certificates must be configured via `mysqlx_tls_*` variables. |
+| TLS requires OpenSSL | TLS uses the OpenSSL Memory BIO pattern. |
 | No query rules or policy engine | All traffic is routed based on route configuration only. |
 | No cluster sync | MYSQLX tables are not replicated between ProxySQL nodes. |
 | No Group Replication notifications | Not supported. |

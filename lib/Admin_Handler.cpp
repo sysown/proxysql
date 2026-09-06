@@ -1323,9 +1323,10 @@ bool is_valid_global_variable(const char *var_name) {
 	// The owning plugin's `LOAD {MCP,GENAI,MYSQLX} VARIABLES TO RUNTIME` is what
 	// actually validates each name at push-into-runtime time.
 	//
-	// Trade-off: a typo (e.g. `SET mcp-prot=9090`) writes the row
-	// silently and goes ignored at runtime.  Acceptable until a
-	// chassis-side `register_variable_namespace` ABI exists.
+	// Trade-off: a typo (e.g. `SET mcp-prot=9090`) reaches the owning
+	// namespace. The plugin then rejects or ignores it according to its
+	// LOAD contract. Acceptable until a chassis-side
+	// `register_variable_namespace` ABI exists.
 	//
 	// Step 7 removed the surrounding `#ifdef PROXYSQLGENAI` — these
 	// loose prefix checks are unconditional now: SET only succeeds

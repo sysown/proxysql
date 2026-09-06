@@ -1638,6 +1638,11 @@ void MysqlxSession::handler_session_closing() {
 // transitions are encoded by which intermediate fields are populated
 // (backend_conn_ presence, connecting state, pending bytes).
 void MysqlxSession::handler_passthrough_backend_connecting() {
+	const MysqlxConfigStore* config_store =
+		thread_ptr_ ? thread_ptr_->get_config_store() : nullptr;
+	const uint64_t connect_timeout =
+		config_store ? config_store->get_connect_timeout() : 10000;
+
 	// Step 1: ensure backend_conn_ exists with a TCP connect in
 	// flight. We pull from the cache only when the cache key would
 	// match — a passthrough connection is single-use anyway, so for
@@ -1647,7 +1652,7 @@ void MysqlxSession::handler_passthrough_backend_connecting() {
 	if (!backend_conn_) {
 		backend_conn_ = new MysqlxConnection();
 		backend_conn_->set_hostgroup(target_hostgroup_);
-		backend_conn_->set_connect_timeout(10000);
+		backend_conn_->set_connect_timeout(connect_timeout);
 		// Mark non-reusable up front: passthrough connections never
 		// re-enter the pool (the proxy did not see plaintext past
 		// CapabilitiesSet, so it has no idea what session state
@@ -2240,7 +2245,8 @@ void MysqlxSession::handler_connecting_server() {
 		backend_conn_->set_hostgroup(target_hostgroup_);
 		backend_conn_->set_user(username_.c_str());
 		backend_conn_->set_schema(schema_.c_str());
-		backend_conn_->set_connect_timeout(10000);
+		backend_conn_->set_connect_timeout(
+			cs_for_tls ? cs_for_tls->get_connect_timeout() : 10000);
 
 		int rc = backend_conn_->start_connect(target_address_.c_str(), target_port_);
 		if (rc == -1) {

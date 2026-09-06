@@ -461,7 +461,7 @@ void mysqlx_warn_deprecated_disk_variables(SQLite3DB& db, ProxySQL_PluginService
 		    "WHERE type='table' AND name='mysqlx_variables'") > 0 &&
 	    services.log_message != nullptr) {
 		services.log_message(
-			3,
+			4,
 			"mysqlx: disk.mysqlx_variables is deprecated and ignored; MySQLX variables "
 			"now use mysqlx-* rows in disk.global_variables. After migrating any values, "
 			"manually run: DROP TABLE IF EXISTS disk.mysqlx_variables;");

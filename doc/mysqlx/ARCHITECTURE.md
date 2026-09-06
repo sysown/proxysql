@@ -144,7 +144,7 @@ Traditional MySQL connections use the classic wire protocol (port 3306). MySQL 8
 | **Header** | `plugins/mysqlx/include/mysqlx_config_store.h` |
 | **Source** | `plugins/mysqlx/src/mysqlx_config_store.cpp` |
 | **Responsibility** | Authoritative in-memory store of mysqlx configuration. **This is the canonical runtime state** — editable entity tables provide users, routes, and endpoints; `global_variables` provides the `mysqlx-*` settings; runtime entity tables and `runtime_global_variables` expose active state. Maintains: identities, routes, endpoint overrides, resolved hostgroup endpoints, topology generation, TLS configuration, and connection pool settings. |
-| **Key methods** | Entity install/save methods use the editable `mysqlx_*` tables. `install_variables_from_global(db, err)` validates the complete `mysqlx-*` namespace in `global_variables` and publishes it to `runtime_global_variables`; `save_variables_to_global(db)` writes active settings back without disturbing other namespaces. Entity runtime views are populated by `project_*_to_runtime_view`. |
+| **Key methods** | Entity install/save methods use the editable `mysqlx_*` tables. `install_variables_from_global(db, err)` validates the `mysqlx-*` rows in `global_variables`, fills absent known settings with defaults, and publishes them to `runtime_global_variables`; `save_variables_to_global(db)` writes active settings back without disturbing other namespaces. Entity runtime views are populated by `project_*_to_runtime_view`. |
 | **Thread safety** | `std::shared_mutex` — shared (reader) lock for lookups and projections, exclusive (writer) lock for the install/save paths. |
 
 ### 3.7 mysqlx_stats
@@ -590,7 +590,13 @@ Admin Client       Admin Handler   PluginManager   mysqlx_admin_schema          
      │←── OK ──────────│←──────────────│←────────────────│←──────────────────────────│
 ```
 
-Same shape for `LOAD MYSQLX ROUTES`, `LOAD MYSQLX BACKEND ENDPOINTS`, and `LOAD MYSQLX VARIABLES TO RUNTIME` — each calls its own `install_<X>_from_admin`. None of them touch `runtime_mysqlx_<X>`.
+`LOAD MYSQLX ROUTES` and `LOAD MYSQLX BACKEND ENDPOINTS` follow the same
+entity-table shape and call their respective `install_<X>_from_admin` methods.
+`LOAD MYSQLX VARIABLES TO RUNTIME` instead calls
+`install_variables_from_global()`, which reads `mysqlx-*` rows from
+`global_variables` and publishes the accepted values to
+`runtime_global_variables`. None of these commands writes a
+`runtime_mysqlx_<X>` entity table.
 
 #### 10.2.2 Runtime-view refresh — module → projected view (on SELECT)
 
@@ -671,7 +677,7 @@ Main Thread
 
 ### Thread Lifecycle
 
-1. **Startup (Main Thread)**: The main thread calls `PluginManager::load()` which dlopens the plugin shared library. Then `init_all()` invokes the plugin's `init()` callback, which registers admin tables, commands, and the four runtime-view refresh callbacks via `services.register_runtime_view()`. Then `start_all()` invokes `mysqlx_start()`, which (1) syncs the on-disk admin tables into the in-memory editable tables, (2) drives the four `install_<X>_from_admin` calls to populate `MysqlxConfigStore` from those editable tables (plus `runtime_mysql_users` for canonical identity), (3) creates N `Mysqlx_Thread` instances, (4) adds listeners based on configured routes, and (5) starts all threads.
+1. **Startup (Main Thread)**: The main thread calls `PluginManager::load()` which dlopens the plugin shared library. Then `init_all()` invokes the plugin's `init()` callback, which registers admin tables, commands, and runtime-view refresh callbacks via `services.register_runtime_view()`. Then `start_all()` invokes `mysqlx_start()`, which (1) syncs the three on-disk entity tables into the in-memory editable tables, (2) runs the three entity `install_<X>_from_admin` methods plus `install_variables_from_global()` to populate `MysqlxConfigStore` (using `runtime_mysql_users` for canonical identity and `global_variables` for `mysqlx-*` settings), (3) creates N `Mysqlx_Thread` instances, (4) adds listeners based on configured routes, and (5) starts all threads.
 
 2. **Mysqlx_Thread**: Each thread runs an independent `poll()` loop. Listener sockets are baked into the poll set (no separate accept thread). When `POLLIN` fires on a listener fd, the thread calls `accept()`, creates a `MysqlxSession`, and adds the client data stream to the poll set. Sessions are processed cooperatively — each session's `handler()` returns immediately when waiting for I/O.
 

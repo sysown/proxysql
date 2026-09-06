@@ -56,7 +56,7 @@ std::unique_ptr<SQLite3DB> create_test_db() {
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(34);
+	plan(35);
 	diag("=== mysqlx_config_store_unit-t starting ===");
 
 	MysqlxResolvedIdentity identity {};
@@ -170,12 +170,17 @@ int main() {
 	   store.get_backend_tls_mode() == MysqlxBackendTlsMode::required,
 	   "store parses explicit mysqlx-tls_backend_mode='required' from global_variables");
 
-	// Invalid value: install must fail with a non-empty err describing the bad value.
-	ok(db->execute("UPDATE global_variables SET variable_value='garbage' "
+	// Invalid value: install must fail without committing defaults for any
+	// concurrently missing settings.
+	ok(db->execute("DELETE FROM global_variables WHERE variable_name='mysqlx-connect_timeout'") &&
+	   db->execute("UPDATE global_variables SET variable_value='garbage' "
 	               "WHERE variable_name='mysqlx-tls_backend_mode'") &&
 	   !store.install_variables_from_global(*db, err) &&
 	   err.find("garbage") != std::string::npos,
 	   "store rejects invalid mysqlx-tls_backend_mode with descriptive error");
+	ok(db->return_one_int(
+	     "SELECT COUNT(*) FROM global_variables WHERE variable_name='mysqlx-connect_timeout'") == 0,
+	   "rejected install does not commit a missing variable default");
 	ok(store.get_backend_tls_mode() == MysqlxBackendTlsMode::required,
 	   "store retains last-good backend tls mode after rejected install");
 
