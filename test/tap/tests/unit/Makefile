@@ -82,6 +82,7 @@ endif
 
 LDIRS :=	-L$(TAP_LDIR) \
 			-L$(RE2_LDIR) \
+			-L$(ABSL_LDIR) \
 			-L$(PROXYSQL_LDIR) \
 			-L$(JEMALLOC_LDIR) \
 			-L$(LIBCONFIG_LDIR) \
@@ -92,7 +93,7 @@ LDIRS :=	-L$(TAP_LDIR) \
 			-L$(CURL_LDIR) -L$(EV_LDIR) \
 			-L$(PROMETHEUS_LDIR) \
 			-L$(DOTENV_DYN_LDIR) \
-			-L$(PCRE_LDIR) \
+			-L$(PCRE2_LDIR) \
 			-L$(LIBINJECTION_LDIR) \
 			-L$(POSTGRESQL_LDIR) \
 			-L$(LIBSCRAM_LDIR) \
@@ -199,8 +200,7 @@ LIBPROXYSQLAR_FULL := $(LIBPROXYSQLAR) \
 	$(JEMALLOC_LDIR)/libjemalloc.a \
 	$(MICROHTTPD_LDIR)/libmicrohttpd.a \
 	$(LIBHTTPSERVER_LDIR)/libhttpserver.a \
-	$(PCRE_LDIR)/libpcre.a \
-	$(PCRE_LDIR)/libpcrecpp.a \
+	$(PCRE2_LDIR)/libpcre2-8.a \
 	$(LIBDAEMON_LDIR)/libdaemon.a \
 	$(LIBCONFIG_LDIR)/libconfig++.a \
 	$(LIBCONFIG_LDIR)/libconfig.a \
@@ -211,7 +211,7 @@ LIBPROXYSQLAR_FULL := $(LIBPROXYSQLAR) \
 	$(LIBSCRAM_LDIR)/libscram.a \
 	$(LIBUSUAL_LDIR)/libusual.a \
 	$(MARIADB_LDIR)/libmariadbclient.a \
-	$(RE2_LDIR)/libre2.a \
+	$(RE2_STATIC_LIBS) \
 	$(POSTGRESQL_PATH)/interfaces/libpq/libpq.a \
 	$(POSTGRESQL_PATH)/common/libpgcommon.a \
 	$(POSTGRESQL_PATH)/port/libpgport.a
@@ -229,10 +229,8 @@ LIBPROXYSQLAR_FULL := $(LIBPROXYSQLAR)
 # pull every .oo in twice, producing ODR violations under ASAN
 # (`detect_odr_violation=1` aborts at startup; ld is silenced by
 # `--allow-multiple-definition`).
-# -lre2 is dynamic on purpose: libre2.so is already loaded via the $(TAP_LDIR)
-# rpath, so linking it statically too put a second copy of re2 in every binary.
-MYLIBS := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -luuid -lre2 \
-		  -Wl,-Bstatic -lconfig -lsqlparser -ldaemon -lconfig++ -lpcrecpp -lpcre \
+MYLIBS := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -luuid \
+		  -Wl,-Bstatic -lconfig -lsqlparser -ldaemon -lconfig++ $(RE2_STATIC_LIBS) $(PCRE2_LIBS) \
 		  -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev \
 		  -lprometheus-cpp-pull -lprometheus-cpp-core \
 		  $(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a \
@@ -247,10 +245,10 @@ endif
 # files (genai_plugin_load_unit-t, plugin_*_unit-t, ...) export every
 # libproxysql symbol the plugin might reference.
 #
-# On Linux/FreeBSD it wraps the file path in `-Wl,--whole-archive`; on
-# macOS it's just the file path because LIBPROXYSQLAR_FULL there already
-# enumerates every dep .a explicitly and Apple's ld does not support
-# `--whole-archive` (it uses `-force_load` instead).
+# Linux/FreeBSD unit tests use the staged shared library to avoid embedding the
+# complete core archive in every binary. macOS keeps the archive path because
+# Apple's linker has no -Bstatic/-Bdynamic equivalent and the shared-library
+# optimization is intentionally excluded there.
 ifeq ($(UNAME_S),Darwin)
 WHOLE_LIBPROXYSQL := $(LIBPROXYSQLAR_FULL)
 else
@@ -323,14 +321,17 @@ ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c proxysql_ed25519_verify
 	PSQLED25519 := -DPROXYSQLED25519
 endif
 
-# PROXYSQL31 is the parent tier flag for FFTO + TSDB; the codebase has no
-# #ifdef PROXYSQL31 blocks of its own, so autodetect it as "at least one
-# of FFTO or TSDB is enabled".  This matches the top-level Makefile's
-# cascade (PROXYSQL31=1 => PROXYSQLFFTO=1 && PROXYSQLTSDB=1).
+# PROXYSQL31 changes shared class layouts, so detect a symbol emitted only by
+# the PROXYSQL31-gated hostgroup statistics implementation. Do not infer it
+# from child feature flags: FFTO or TSDB can be enabled independently.
 PSQL31 :=
-ifneq ($(PROXYSQLFFTO)$(PROXYSQLTSDB),)
+ifeq ($(PROXYSQL31),1)
+	PSQL31 := -DPROXYSQL31
+else
+ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c SQL3_Hostgroup_Connection_Pool),0)
 	PROXYSQL31 := 1
 	PSQL31 := -DPROXYSQL31
+endif
 endif
 
 ifneq ($(PROXYSQL40),)
@@ -359,10 +360,8 @@ endif
 # misused (most importantly identity-forgery setters), while tests that include
 # the plugin headers and link against the plugin sources still see the helpers
 # they need.
-
-# -gz compresses the .debug_* sections (~80% of every test binary); gdb reads
-# them transparently. Linux only: -gz is an ELF feature with no Mach-O
-# equivalent.
+# Compress ELF debug sections in Linux/FreeBSD test binaries. Apple clang
+# accepts -gz but does not compress DWARF stored in Mach-O objects.
 OPT := $(STDCPP) -O0 -ggdb $(PSQLCH) $(PSQLGA) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLED25519) $(PSQLDEBUG) \
 	   -DGITVERSION=\"$(GIT_VERSION)\" -DMYSQLX_TEST_BUILD $(NOJEM) $(WGCOV) $(WASAN) \
 	   -Wl,--no-as-needed -gz -Wl,-rpath,$(TAP_LDIR)
@@ -380,8 +379,11 @@ endif
 TEST_HELPERS_DIR := $(PROXYSQL_PATH)/test/tap/test_helpers
 FAKE_PLUGIN_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin.so
 FAKE_PLUGIN2_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin2.so
+FAKE_PLUGIN_DEBUG_MISMATCH_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin_debug_mismatch.so
 MYSQLX_PLUGIN_SO := $(PROXYSQL_PATH)/plugins/mysqlx/ProxySQL_MySQLX_Plugin.so
 MYSQLX_PLUGIN_OPTZ := -O0 -ggdb $(filter -DDEBUG,$(OPT))
+DUCKDB_PLUGIN_SO := $(PROXYSQL_PATH)/plugins/duckdb/ProxySQL_DuckDB_Plugin.so
+DUCKDB_PLUGIN_OPTZ := -O0 -ggdb $(filter -DDEBUG,$(OPT))
 ODIR := obj
 PROXYSQL_TEST_HEADERS := $(wildcard $(PROXYSQL_PATH)/include/*.h) $(wildcard $(PROXYSQL_PATH)/include/*.hpp)
 
@@ -403,8 +405,22 @@ $(ODIR)/test_globals.o: $(TEST_HELPERS_DIR)/test_globals.cpp $(PROXYSQL_TEST_HEA
 $(ODIR)/test_init.o: $(TEST_HELPERS_DIR)/test_init.cpp $(PROXYSQL_TEST_HEADERS) | $(ODIR)
 	$(CXX) -c -o $@ $< $(OPT) $(IDIRS) -Wall
 
+# Must carry $(PSQLDEBUG) alongside $(PSQL40): the loader now refuses to
+# dlopen a plugin whose -DDEBUG setting disagrees with the core's (see
+# ProxySQL_Plugin.h / PROXYSQL_PLUGIN_ABI_DEBUG_BIT) because DEBUG-only
+# fields in core headers shift MySQL_Data_Stream/PgSQL_Session member
+# offsets. fake_plugin.cpp's abi_version literals already fold in that bit
+# via kFakeAbiDebugBit when -DDEBUG is defined here, so this .so must be
+# compiled with the same DEBUG setting as $(LIBPROXYSQLAR)/the test binary
+# or the loader will reject it.
 $(FAKE_PLUGIN_SO): $(TEST_HELPERS_DIR)/fake_plugin.cpp $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h | $(TEST_HELPERS_DIR)
-	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(IDIRS) -ldl
+	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(PSQLDEBUG) $(IDIRS) -ldl
+
+# Deliberately advertises the opposite DEBUG ABI tag while retaining the
+# current build's layout, so the loader rejection path can be tested safely.
+$(FAKE_PLUGIN_DEBUG_MISMATCH_SO): $(TEST_HELPERS_DIR)/fake_plugin.cpp $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h | $(TEST_HELPERS_DIR)
+	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(PSQLDEBUG) $(IDIRS) -ldl \
+		-DPROXYSQL_FAKE_PLUGIN_FORCE_DEBUG_MISMATCH
 
 .PHONY: mysqlx_plugin_build
 mysqlx_plugin_build:
@@ -415,10 +431,20 @@ mysqlx_plugin_build:
 		PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) \
 		PROXYSQLTSDB=$(PROXYSQLTSDB)
 
+.PHONY: duckdb_plugin_build
+duckdb_plugin_build:
+	$(MAKE) -C $(PROXYSQL_PATH)/plugins/duckdb all \
+		CC=$(CC) CXX=$(CXX) OPTZ="$(DUCKDB_PLUGIN_OPTZ)" \
+		WGCOV="$(WGCOV)" WASAN="$(WASAN)" \
+		PROXYSQL40=$(PROXYSQL40) \
+		PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) \
+		PROXYSQLTSDB=$(PROXYSQLTSDB)
+
 # Same source compiled with different macros to produce a second plugin .so
 # with a distinct plugin name and env-var prefix.  Used by multi-plugin tests.
+# Same $(PSQLDEBUG) requirement as $(FAKE_PLUGIN_SO) above.
 $(FAKE_PLUGIN2_SO): $(TEST_HELPERS_DIR)/fake_plugin.cpp $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h | $(TEST_HELPERS_DIR)
-	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(IDIRS) -ldl \
+	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(PSQLDEBUG) $(IDIRS) -ldl \
 		-DFAKE_PLUGIN_NAME=\"fake_plugin2\" \
 		-DFAKE_PLUGIN_ENV_PREFIX=\"PROXYSQL_FAKE_PLUGIN2_\"
 
@@ -429,20 +455,11 @@ $(FAKE_PLUGIN2_SO): $(TEST_HELPERS_DIR)/fake_plugin.cpp $(PROXYSQL_PATH)/include
 .PHONY: FORCE
 FORCE:
 
-# Linux/FreeBSD only: ld64 has no -Bstatic/-Bdynamic, so macOS keeps the static
-# link. Empty on Darwin, so it drops out of the prerequisite lists below.
+# Linux/FreeBSD only. Build the shared core directly in the test artifact tree,
+# which is preserved by the CI test cache and is already on each unit binary's
+# rpath. Darwin leaves this variable empty and continues to link the archives.
 STAGED_LIBPROXYSQLSO :=
 ifneq ($(UNAME_S),Darwin)
-# Built directly into $(TAP_LDIR), which is already on every unit test's rpath,
-# so no rpath change is needed. It must be a real file inside test/ and not a
-# link into lib/: CI ships build output to the test jobs as a `_test` cache of
-# proxysql/test/ only, so anything pointing outside that tree arrives dangling
-# and every test linking it dies at startup.
-#
-# Depends on the archive, so it can never be staler than it. $(WASAN)/$(WGCOV)
-# must be passed: the archive is instrumented and the .so needs that runtime.
-# Linked under a temp name and renamed so a concurrent linker cannot open a
-# half-written library.
 STAGED_LIBPROXYSQLSO := $(TAP_LDIR)/libproxysql.so
 
 $(STAGED_LIBPROXYSQLSO): $(LIBPROXYSQLAR)
@@ -467,7 +484,7 @@ $(LIBPROXYSQLAR): FORCE
 
 UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	cacert_load_and_verify_duration_parser_unit-t \
-	query_cache_unit-t query_processor_unit-t \
+	query_cache_unit-t query_processor_unit-t digest_stats_unit-t \
 	protocol_unit-t auth_unit-t connection_pool_unit-t \
 	rule_matching_unit-t hostgroups_unit-t monitor_health_unit-t \
 	pgsql_command_complete_unit-t \
@@ -504,6 +521,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	gtid_trxid_interval_unit-t \
 	gtid_set_unit-t \
 	gtid_server_data_unit-t \
+	admin_bootstrap_users_unit-t \
 	admin_disk_upgrade_unit-t \
 	glovars_unit-t \
 	pgsql_servers_ssl_params_unit-t \
@@ -517,11 +535,14 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	pgsql_response_framer_unit-t \
 	pgsql_response_framer_traffic_unit-t \
 	ffto_state_machine_unit-t \
+	pgsql_reconcile_unit-t \
+	pgsql_conninfo_credentials_unit-t \
+	re2_vendor_unit-t \
 	restapi_server_unit-t \
 	mcp_client_unit-t
 
 ifeq ($(PROXYSQL31),1)
-UNIT_TESTS += caching_sha2_rsa_unit-t
+UNIT_TESTS += caching_sha2_rsa_unit-t hostgroup_pool_stats_unit-t mysql_server_version_by_interface_unit-t
 endif
 
 ifeq ($(PROXYSQLED25519),1)
@@ -549,6 +570,13 @@ UNIT_TESTS += \
 	plugin_lifecycle_unit-t \
 	plugin_runtime_views_unit-t \
 	test_mysqlx_plugin_load-t \
+	test_duckdb_plugin_load-t \
+	duckdb_config_unit-t \
+	duckdb_engine_unit-t \
+	duckdb_result_unit-t \
+	duckdb_admin_schema_unit-t \
+	duckdb_session_unit-t \
+	duckdb_listener_unit-t \
 	test_mysqlx_admin_tables-t \
 	mysqlx_config_store_unit-t \
 	mysqlx_config_store_concurrent_unit-t \
@@ -622,9 +650,19 @@ ezoption_parser_unit-t: ezoption_parser_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noi
 		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include \
 		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
 
+hostgroup_pool_stats_unit-t: hostgroup_pool_stats_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include \
+		$(STDCPP) -O0 -ggdb -DPROXYSQL31 $(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
+
 mcp_client_unit-t: mcp_client_unit-t.cpp $(TAP_PATH)/mcp_client.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
 	$(CXX) $< $(TAP_PATH)/mcp_client.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
 		$(IDIRS) $(LDIRS) $(OPT) $(MCP_CLIENT_LIBS) -o $@
+
+re2_vendor_unit-t: re2_vendor_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) -I$(ABSL_IDIR) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) \
+		$(ALLOW_MULTI_DEF) -o $@
 
 plugin_manager_unit-t: plugin_manager_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
@@ -657,6 +695,84 @@ test_mysqlx_plugin_load-t: ../test_mysqlx_plugin_load-t.cpp $(ODIR)/tap.o $(ODIR
 		-DPROXYSQL_MYSQLX_PLUGIN_PATH=\"$(MYSQLX_PLUGIN_SO)\" \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+test_duckdb_plugin_load-t: ../test_duckdb_plugin_load-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) duckdb_plugin_build $(STAGED_LIBPROXYSQLSO)
+	$(CXX) ../test_duckdb_plugin_load-t.cpp $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+		-DPROXYSQL_DUCKDB_PLUGIN_PATH='"$(DUCKDB_PLUGIN_SO)"' \
+		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
+
+duckdb_config_unit-t: duckdb_config_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
+
+# libduckdb_static.a alone does not satisfy DuckDB's symbols -- see the long
+# comment in plugins/duckdb/Makefile. It's kept as the prerequisite that
+# forces the deps/duckdb build; DUCKDB_ARS enumerates the full 16-archive
+# set actually needed on the link line. Recursively-expanded (=), not
+# simply-expanded (:=), so `find` runs at recipe time, after $(DUCKDB_AR)
+# has forced the deps build to complete.
+DUCKDB_AR := $(DUCKDB_LDIR)/libduckdb_static.a
+DUCKDB_ARS = $(shell find $(DUCKDB_PATH)/build/release -name '*.a' 2>/dev/null)
+
+$(DUCKDB_AR):
+	$(MAKE) -C $(PROXYSQL_PATH)/deps PROXYSQL40=1 duckdb
+	@test -f $@ || { echo "ERROR: deps duckdb build did not produce $@" >&2; exit 1; }
+
+DUCKDB_LINK_GROUP_START :=
+DUCKDB_LINK_GROUP_END :=
+ifneq ($(UNAME_S),Darwin)
+DUCKDB_LINK_GROUP_START := -Wl,--start-group
+DUCKDB_LINK_GROUP_END := -Wl,--end-group
+endif
+
+duckdb_engine_unit-t: duckdb_engine_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(DUCKDB_AR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(TEST_HELPERS_OBJ) $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
+		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
+		$(WHOLE_LIBPROXYSQL) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
+
+duckdb_result_unit-t: duckdb_result_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(DUCKDB_AR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(TEST_HELPERS_OBJ) $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
+		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
+		$(WHOLE_LIBPROXYSQL) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
+
+# duckdb_session.cpp pulls in MySQL_Session.h / PgSQL_Session.h / *_Protocol.h
+# for the templated handler, but this test exercises only the two pure
+# functions (duckdb_classify_query, duckdb_build_intercept_result) -- the
+# socket-bound handler is covered end-to-end in later tasks. duckdb_result.cpp
+# is linked in because duckdb_session.cpp calls duckdb_result_to_sqlite3()
+# and duckdb_result_has_unrenderable_column().
+duckdb_session_unit-t: duckdb_session_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(DUCKDB_AR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(TEST_HELPERS_OBJ) $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
+		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
+		$(WHOLE_LIBPROXYSQL) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
+
+# The listener pulls in the session handler (duckdb_session.cpp, which in
+# turn needs duckdb_result.cpp -- see the duckdb_session_unit-t comment
+# above) and the engine (duckdb_engine.cpp), plus duckdb_config.cpp and
+# duckdb_plugin.cpp for DuckDBConfigStore/DuckDBPluginContext.
+# duckdb_admin_schema.cpp is also required: since Task 8, duckdb_start()
+# (in duckdb_plugin.cpp) calls duckdb_sync_variables_disk_to_memory() and
+# duckdb_install_variables_from_admin(), both defined there. Same full
+# 16-archive DUCKDB_ARS link group as duckdb_session_unit-t.
+duckdb_listener_unit-t: duckdb_listener_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_listener.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_plugin.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_admin_schema.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(DUCKDB_AR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_listener.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_plugin.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_admin_schema.cpp $(TEST_HELPERS_OBJ) $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
+		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
+		$(WHOLE_LIBPROXYSQL) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
+
+# duckdb_plugin.cpp is linked in for duckdb_context() (the process-wide
+# DuckDBPluginContext accessor); duckdb_admin_schema.cpp calls it to reach
+# the DuckDBConfigStore singleton. Since Task 8, duckdb_plugin.cpp also
+# includes duckdb_engine.h/duckdb_listener.h to complete the types held by
+# DuckDBPluginContext's unique_ptr members, which pulls in duckdb.h and
+# the DuckDBEngine/DuckDBListener destructor symbols transitively -- hence
+# the same DUCKDB_IDIR/DUCKDB_ARS additions duckdb_listener_unit-t needs,
+# even though this test never calls duckdb_start()/duckdb_stop() itself.
+duckdb_admin_schema_unit-t: duckdb_admin_schema_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_admin_schema.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_plugin.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_listener.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(DUCKDB_AR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_admin_schema.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_plugin.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_listener.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(TEST_HELPERS_OBJ) $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
+		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
+		$(WHOLE_LIBPROXYSQL) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 
 mysqlx_config_store_unit-t: mysqlx_config_store_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
@@ -830,9 +946,10 @@ plugin_prometheus_unit-t: plugin_prometheus_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
-plugin_lifecycle_unit-t: plugin_lifecycle_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+plugin_lifecycle_unit-t: plugin_lifecycle_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN_DEBUG_MISMATCH_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
+		-DPROXYSQL_FAKE_PLUGIN_DEBUG_MISMATCH_PATH=\"$(FAKE_PLUGIN_DEBUG_MISMATCH_SO)\" \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
@@ -908,22 +1025,18 @@ ifeq ($(UNAME_S),Linux)
 # Let the RSA unit test observe the exact flock attempt without a production hook.
 caching_sha2_rsa_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=flock
 
-# Tests using -Wl,--wrap must link statically: --wrap only rewrites references
-# resolved in THIS link, so it cannot reach inside libproxysql.so and the
-# wrapper is silently never called. Enforced by the check below.
+# --wrap only rewrites references resolved by this link. Keep these tests on
+# libproxysql.a so their wrappers can reach core-library calls.
 STATIC_LIBPROXYSQL_TESTS := caching_sha2_rsa_unit-t
 $(STATIC_LIBPROXYSQL_TESTS): WHOLE_LIBPROXYSQL := \
 	-Wl,--whole-archive $(LIBPROXYSQLAR_FULL) -Wl,--no-whole-archive
 
-# Fail the build if a --wrap target is missing from the list above.
 WRAP_USING_TESTS := $(sort $(shell grep -oE '^[A-Za-z_0-9]+-t:[^\#]*-Wl,--wrap' $(firstword $(MAKEFILE_LIST)) | cut -d: -f1))
 UNGUARDED_WRAP_TESTS := $(filter-out $(STATIC_LIBPROXYSQL_TESTS),$(WRAP_USING_TESTS))
 ifneq ($(UNGUARDED_WRAP_TESTS),)
 $(error These tests use -Wl,--wrap but are not in STATIC_LIBPROXYSQL_TESTS: \
-$(UNGUARDED_WRAP_TESTS). --wrap is a link-time rewrite and cannot reach \
-references inside libproxysql.so, so the wrapper would never fire and the \
-test would silently report a wrong result. Add them to \
-STATIC_LIBPROXYSQL_TESTS in $(firstword $(MAKEFILE_LIST)))
+$(UNGUARDED_WRAP_TESTS). Add them to STATIC_LIBPROXYSQL_TESTS so their wrappers \
+can reach references in libproxysql.a)
 endif
 endif
 
@@ -946,8 +1059,7 @@ vendored_openssl_version_unit-t: private OPT += -DPROXYSQL_VENDORED_OPENSSL_VERS
 .SILENT: clean
 clean:
 	rm -rf $(ODIR)
-	rm -f *-t $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO)
-	rm -f $(STAGED_LIBPROXYSQLSO) $(STAGED_LIBPROXYSQLSO).tmp
-	# Leftover from when the .so was built in lib/ and symlinked into place;
-	# a stale copy there could shadow the archive for -Bdynamic links.
+	rm -f *-t $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(FAKE_PLUGIN_DEBUG_MISMATCH_SO)
+	rm -f $(STAGED_LIBPROXYSQLSO) $(addsuffix .tmp,$(STAGED_LIBPROXYSQLSO))
+	# Remove stale output from the older lib/-plus-symlink implementation.
 	rm -f $(PROXYSQL_LDIR)/libproxysql.so

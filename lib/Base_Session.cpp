@@ -74,6 +74,9 @@ Base_Session<S,DS,B,T>::Base_Session() {
 
 template<typename S, typename DS, typename B, typename T>
 Base_Session<S,DS,B,T>::~Base_Session() {
+#ifdef PROXYSQL31
+	hostgroup_pool_wait.finish(monotonic_time());
+#endif
 };
 
 template<typename S, typename DS, typename B, typename T>

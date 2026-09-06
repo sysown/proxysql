@@ -3,6 +3,14 @@ set -euo pipefail
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 audit_script=${OPENSSL_AUDIT_SCRIPT:-${script_dir}/test-no-system-openssl-links.bash}
+
+# Git hooks in linked worktrees export GIT_DIR for the caller repository.
+# Clear every repository-local Git variable before creating fixture repositories,
+# otherwise `git -C "${fixture}"` can commit to the branch being pushed.
+while IFS= read -r git_local_env; do
+	unset "${git_local_env}"
+done < <(git rev-parse --local-env-vars)
+
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "${tmp_dir}"' EXIT
 

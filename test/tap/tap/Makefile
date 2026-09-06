@@ -42,7 +42,7 @@ default: all
 
 .PHONY: all debug
 all: libtap_mariadb.a libtap_mysql57.a libtap_mysql8.a \
-	libtap.a libtap$(SHLIB_EXT) libcpp_dotenv$(SHLIB_EXT) libre2$(SHLIB_EXT)
+	libtap.a libtap$(SHLIB_EXT) libcpp_dotenv$(SHLIB_EXT)
 
 DEBUG_OPT := $(STDCPP) -O0 -DDEBUG -ggdb $(WASAN)
 ifneq ($(UNAME_S),Darwin)
@@ -98,15 +98,15 @@ libtap_mysql8.a: tap.o command_line.o utils_mysql8.o noise_utils_mysql8.o mcp_cl
 libtap.a: libtap_mariadb.a
 	cp libtap_mariadb.a libtap.a
 
-libtap$(SHLIB_EXT): libtap_mariadb.a cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv$(SHLIB_EXT) libre2$(SHLIB_EXT)
+libtap$(SHLIB_EXT): libtap_mariadb.a cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv$(SHLIB_EXT) $(RE2_STATIC_LIB)
 ifeq ($(UNAME_S),Darwin)
 	$(CXX) -dynamiclib -o libtap$(SHLIB_EXT) -force_load libtap_mariadb.a \
-		$(CURL_LDIR)/libcurl.a -L$(RE2_LDIR)/so -lre2 \
-		-Wl,-undefined,dynamic_lookup -Wl,-rpath,$(RE2_LDIR)/so $(LWGCOV)
+		$(CURL_LDIR)/libcurl.a -L$(ABSL_LDIR) $(RE2_STATIC_LIB) $(RE2_ABSL_LIBS) \
+		-Wl,-undefined,dynamic_lookup $(LWGCOV)
 else
 	$(CXX) -shared -o libtap$(SHLIB_EXT) -Wl,--whole-archive libtap_mariadb.a \
 		-Wl,--no-whole-archive $(CURL_LDIR)/libcurl.a \
-		-L$(RE2_LDIR)/so -lre2 -Wl,-rpath,$(RE2_LDIR)/so $(LWGCOV)
+		-L$(ABSL_LDIR) $(RE2_STATIC_LIB) $(RE2_ABSL_LIBS) $(LWGCOV)
 endif
 
 
@@ -114,9 +114,6 @@ endif
 
 libcpp_dotenv$(SHLIB_EXT): cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv$(SHLIB_EXT)
 	find cpp-dotenv/dynamic/cpp-dotenv/ \( -name '*.so' -o -name '*.dylib' \) -exec cp -a {} . \;
-
-libre2$(SHLIB_EXT): $(DEPS_PATH)/re2/re2/obj/so/libre2$(SHLIB_EXT)
-	cp -a $(DEPS_PATH)/re2/re2/obj/so/libre2$(SHLIB_EXT)* .
 
 cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a:
 	cd cpp-dotenv/static && rm -rf cpp-dotenv-*/ || true

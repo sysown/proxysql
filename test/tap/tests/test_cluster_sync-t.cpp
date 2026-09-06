@@ -1214,7 +1214,7 @@ int main(int, char**) {
 
 	plan(
 		// Sync tests by values
-		16 +
+		17 +
 		// Module checkums tests; enabled and disabled checksums
 		check_modules_checksums_sync__tests +
 		(cl.use_noise ? 3 : 0)
@@ -2422,6 +2422,27 @@ int main(int, char**) {
 
 	// Check 'mysql_variables' synchronization
 	{
+		bool has_server_version_by_interface = false;
+		MYSQL_QUERY__(proxy_admin,
+			"SELECT COUNT(*) FROM global_variables "
+			"WHERE variable_name='mysql-server_version_by_interface'");
+		MYSQL_RES* feature_res = mysql_store_result(proxy_admin);
+		MYSQL_ROW feature_row = mysql_fetch_row(feature_res);
+		has_server_version_by_interface = feature_row != nullptr && atoi(feature_row[0]) == 1;
+		mysql_free_result(feature_res);
+
+		std::string replica_interfaces_before {};
+		if (has_server_version_by_interface) {
+			MYSQL_QUERY__(r_proxy_admin,
+				"SELECT variable_value FROM global_variables WHERE variable_name='mysql-interfaces'");
+			MYSQL_RES* interfaces_res = mysql_store_result(r_proxy_admin);
+			MYSQL_ROW interfaces_row = mysql_fetch_row(interfaces_res);
+			if (interfaces_row != nullptr && interfaces_row[0] != nullptr) {
+				replica_interfaces_before = interfaces_row[0];
+			}
+			mysql_free_result(interfaces_res);
+		}
+
 		std::string print_master_mysql_variables = "";
 		string_format(t_debug_query, print_master_mysql_variables, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_global_variables WHERE variable_name LIKE 'mysql-%'");
 		std::string print_replica_mysql_variables = "";
@@ -2543,6 +2564,12 @@ int main(int, char**) {
 			std::make_tuple("mysql-max_connections"                                        , "2048"                       ),
 			// std::make_tuple("mysql-server_capabilities"                                 , "569866"                     ),
 		};
+		if (has_server_version_by_interface) {
+			update_mysql_variables_values.emplace_back(
+				"mysql-server_version_by_interface",
+				"{\"127.0.0.1:6033\":\"8.1.0-cluster-sync\",\"/tmp/proxysql.sock\":\"5.7.44-cluster-sync\"}"
+			);
+		}
 		std::vector<std::string> update_mysql_variables_queries {};
 
 		for (auto const& values : update_mysql_variables_values) {
@@ -2617,7 +2644,29 @@ int main(int, char**) {
 
 		std::cout << "REPLICA TABLE AFTER SYNC:" << std::endl;
 		system(print_replica_mysql_variables.c_str());
+
+		bool replica_interfaces_unchanged = true;
+		if (has_server_version_by_interface) {
+			MYSQL_QUERY__(r_proxy_admin,
+				"SELECT variable_value FROM global_variables WHERE variable_name='mysql-interfaces'");
+			MYSQL_RES* interfaces_res = mysql_store_result(r_proxy_admin);
+			MYSQL_ROW interfaces_row = mysql_fetch_row(interfaces_res);
+			const std::string replica_interfaces_after =
+				interfaces_row != nullptr && interfaces_row[0] != nullptr ? interfaces_row[0] : "";
+			mysql_free_result(interfaces_res);
+			replica_interfaces_unchanged = replica_interfaces_after == replica_interfaces_before;
+			if (!replica_interfaces_unchanged) {
+				diag(
+					"mysql-interfaces changed while syncing mysql-server_version_by_interface: before='%s', after='%s'",
+					replica_interfaces_before.c_str(), replica_interfaces_after.c_str()
+				);
+			}
+		}
 		ok(not_synced_query == false, "'mysql_variables' from global_variables should be synced.");
+		ok(
+			!has_server_version_by_interface || replica_interfaces_unchanged,
+			"mysql-server_version_by_interface sync preserves the replica's independent mysql-interfaces value."
+		);
 
 		MYSQL_QUERY__(proxy_admin, "INSERT OR REPLACE INTO global_variables SELECT * FROM global_variables_sync_test_2687 WHERE variable_name LIKE 'mysql-%'");
 		MYSQL_QUERY__(proxy_admin, "DROP TABLE global_variables_sync_test_2687");

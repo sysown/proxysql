@@ -4,9 +4,28 @@ PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; don
 
 include $(PROXYSQL_PATH)/include/makefiles_vars.mk
 
+DEPS_PATH := $(PROXYSQL_PATH)/deps
+NPROCS ?= 1
+ifeq ($(UNAME_S),Linux)
+	NPROCS := $(shell nproc)
+endif
+ifneq (,$(findstring $(UNAME_S),Darwin FreeBSD))
+	NPROCS := $(shell sysctl -n hw.ncpu)
+endif
+
+ABSL_VERSION := 20260107.0
+ABSL_PATH := $(DEPS_PATH)/abseil/abseil-cpp-$(ABSL_VERSION)
+ABSL_INSTALL := $(ABSL_PATH)/install
+ABSL_STAMP := $(ABSL_INSTALL)/lib/pkgconfig/absl_base.pc
+
 
 # to compile libmariadb_client with support for valgrind enabled, run:
 # export USEVALGRIND=1
+
+RE2_VALGRIND :=
+ifeq ($(USEVALGRIND),1)
+	RE2_VALGRIND := -DRE2_ON_VALGRIND
+endif
 
 ifeq ($(PROXYDEBUG),1)
 	MYCFLAGS := -O0
@@ -41,9 +60,10 @@ targets :=	libssl \
 			libdaemon \
 			jemalloc \
 			mariadb_client \
+			abseil \
 			re2 \
 			sqlite3 \
-			pcre \
+			pcre2 \
 			lz4 \
 			zstd \
 			cityhash \
@@ -64,6 +84,7 @@ endif
 
 ifeq ($(PROXYSQL40),1)
 	targets += protobuf
+	targets += duckdb
 endif
 
 ifeq ($(PROXYSQLCLICKHOUSE),1)
@@ -134,7 +155,7 @@ ifeq ($(UNAME_S),FreeBSD)
 	sed -i -e 's/\/bin\/bash/\/usr\/local\/bin\/bash/' libhttpserver/libhttpserver/bootstrap
 endif
 	cd libhttpserver/libhttpserver && ./bootstrap && mkdir build
-	cd libhttpserver/libhttpserver/build && LDFLAGS=-L$(shell pwd)/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/ CPPFLAGS=-I$(shell pwd)/libmicrohttpd/libmicrohttpd/src/include ../configure --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html --enable-fastopen=false --disable-examples
+	cd libhttpserver/libhttpserver/build && LDFLAGS=-L$(shell pwd)/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/ CPPFLAGS="-I$(shell pwd)/libmicrohttpd/libmicrohttpd/src/include -I$(ABSL_INSTALL)/include" ../configure --disable-shared --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html --enable-fastopen=false --disable-examples
 	cd libhttpserver/libhttpserver/build && CC=${CC} CXX=${CXX} ${MAKE}
 
 libhttpserver: libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a
@@ -244,6 +265,30 @@ clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:
 	cd clickhouse-cpp/clickhouse-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 
 clickhouse-cpp: clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a
+
+
+duckdb/duckdb/build/release/src/libduckdb_static.a:
+	cd duckdb && ./verify-source.bash
+	cd duckdb && rm -rf duckdb-*/ duckdb || true
+	cd duckdb && tar -zxf duckdb-*.tar.gz && mv duckdb-*/ duckdb
+	# DUCKDB_EXPLICIT_VERSION: deps/duckdb/duckdb/ is a bare extraction (no
+	# .git of its own) sitting inside the ProxySQL working tree, so CMake's
+	# `git describe` walks up and picks up *ProxySQL's* tags/commit instead
+	# of failing, silently making duckdb_library_version() report ProxySQL's
+	# version (e.g. "v3.0.11-dev802") instead of DuckDB's. Force it to the
+	# pinned version explicitly. On a version bump, update this alongside
+	# duckdb-<version>.tar.gz and required_root in verify-source.bash.
+	cd duckdb/duckdb && cmake -S . -B build/release \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DBUILD_UNITTESTS=OFF \
+		-DBUILD_SHELL=OFF \
+		-DENABLE_SANITIZER=OFF \
+		-DBUILD_EXTENSIONS="" \
+		-DDUCKDB_EXPLICIT_VERSION=v1.4.5
+	cd duckdb/duckdb && CC=${CC} CXX=${CXX} cmake --build build/release -j$(shell nproc 2>/dev/null || echo 4)
+	@test -f $@ || { echo "ERROR: duckdb build did not produce $@" >&2; exit 1; }
+
+duckdb: duckdb/duckdb/build/release/src/libduckdb_static.a
 
 
 libdaemon/libdaemon/libdaemon/.libs/libdaemon.a:
@@ -385,34 +430,51 @@ prometheus-cpp/prometheus-cpp/lib/libprometheus-cpp-core.a:
 prometheus-cpp: prometheus-cpp/prometheus-cpp/lib/libprometheus-cpp-core.a
 
 
-re2/re2/obj/libre2.a:
+$(ABSL_STAMP):
+	cd abseil && rm -rf abseil-cpp-*/ || true
+	cd abseil && tar -zxf abseil-cpp-$(ABSL_VERSION).tar.gz
+	cmake -S $(ABSL_PATH) -B $(ABSL_PATH)/build \
+		-DCMAKE_C_COMPILER="$(CC)" -DCMAKE_CXX_COMPILER="$(CXX)" \
+		-DCMAKE_CXX_STANDARD=17 -DCMAKE_CXX_STANDARD_REQUIRED=ON \
+		-DCMAKE_CXX_FLAGS="$(STDCPP) $(WASAN)" \
+		-DCMAKE_EXE_LINKER_FLAGS="$(WASAN)" \
+		-DCMAKE_SHARED_LINKER_FLAGS="$(WASAN)" \
+		-DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+		-DABSL_BUILD_TESTING=OFF -DABSL_ENABLE_INSTALL=ON \
+		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+		-DCMAKE_INSTALL_LIBDIR=lib \
+		-DCMAKE_INSTALL_PREFIX=$(ABSL_INSTALL)
+	cmake --build $(ABSL_PATH)/build --parallel $(NPROCS)
+	cmake --install $(ABSL_PATH)/build
+
+abseil: $(ABSL_STAMP)
+
+
+re2/re2/obj/libre2.a: $(ABSL_STAMP)
 	cd re2 && rm -rf re2-*/ || true
-	cd re2 && tar -zxf re2-*.tar.gz
+	cd re2 && tar -zxf re2-2025-11-05.tar.gz
 #	cd re2/re2 && sed -i -e 's/-O3 -g /-O3 -fPIC /' Makefile
 #	cd re2/re2 && patch util/mutex.h < ../mutex.h.patch
 	cd re2/re2 && patch re2/onepass.cc < ../onepass.cc-multiplication-overflow.patch
-ifeq ($(UNAME_S),Darwin)
-	cd re2/re2 && sed -i '' -e 's/-O3 -g/-O3 -g -${STDCPP} -fPIC -DMEMORY_SANITIZER -DRE2_ON_VALGRIND /' Makefile
-#	cd re2/re2 && sed -i '' -e 's/RE2_CXXFLAGS?=-std=c++11 /RE2_CXXFLAGS?=-std=c++11 -fPIC /' Makefile
-else
-	cd re2/re2 && sed -i -e 's/-O3 -g/-O3 -g ${STDCPP} -fPIC -DMEMORY_SANITIZER -DRE2_ON_VALGRIND /' Makefile
-#	cd re2/re2 && sed -i -e 's/RE2_CXXFLAGS?=-std=c++11 /RE2_CXXFLAGS?=-std=c++11 -fPIC /' Makefile
-endif
-	cd re2/re2 && CC=${CC} CXX=${CXX} ${MAKE}
+	cd re2/re2 && PKG_CONFIG_PATH="" PKG_CONFIG_LIBDIR="$(ABSL_INSTALL)/lib/pkgconfig" \
+		CC=${CC} CXX=${CXX} CXXFLAGS="-O3 -g $(STDCPP) -fPIC $(WASAN) $(RE2_VALGRIND)" ${MAKE} static
 
 re2: re2/re2/obj/libre2.a
 
 
-pcre/pcre/.libs/libpcre.a:
-	cd pcre && rm -rf pcre-*/ || true
-	cd pcre && tar -zxf pcre-*.tar.gz
-	cd pcre/pcre && patch pcretest.c < ../pcretest.c-multiplication-overflow.patch
-	cd pcre/pcre && ./configure
-	cd pcre/pcre && CC=${CC} CXX=${CXX} ${MAKE}
+pcre2/pcre2/.libs/libpcre2-8.a:
+	cd pcre2 && rm -rf pcre2-*/ || true
+	cd pcre2 && tar -zxf pcre2-10.47.tar.gz
+	cd pcre2 && mv pcre2-10.47 pcre2
+	cd pcre2/pcre2 && ./configure --disable-shared --enable-static \
+		--enable-pcre2-8 --disable-pcre2-16 --disable-pcre2-32 \
+		--disable-jit --disable-pcre2test-libreadline
+	cd pcre2/pcre2 && CC=${CC} CXX=${CXX} ${MAKE} libpcre2-8.la
 
-pcre: pcre/pcre/.libs/libpcre.a
-postgresql/postgresql/src/interfaces/libpq/libpq.a: $(OPENSSL_BUILD_STAMP)
-	cd postgresql && rm -rf postgresql-*/ || true
+pcre2: pcre2/pcre2/.libs/libpcre2-8.a
+postgresql/postgresql/src/interfaces/libpq/libpq.a: $(OPENSSL_BUILD_STAMP) \
+		postgresql/postgresql-16.10.tar.gz $(wildcard postgresql/*.patch)
+	cd postgresql && rm -rf postgresql-*/ postgres-*/ || true
 	cd postgresql && tar -zxf postgresql-*.tar.gz
 	cd postgresql/postgresql && patch -p0 < ../get_result_from_pgconn.patch
 	cd postgresql/postgresql && patch -p0 < ../handle_row_data.patch
@@ -420,6 +482,7 @@ postgresql/postgresql/src/interfaces/libpq/libpq.a: $(OPENSSL_BUILD_STAMP)
 	cd postgresql/postgresql && patch -p0 < ../bind_fmt_text.patch
 	cd postgresql/postgresql && patch -p0 < ../pqsendpipelinesync.patch
 	cd postgresql/postgresql && patch -p0 < ../sslkeylogfile.patch
+	cd postgresql/postgresql && patch -p0 < ../scram_verifier_auth.patch
 ifeq ($(UNAME_S),Darwin)
 	cd postgresql/postgresql && LIBS="$(OPENSSL_STATIC_LIBS)" LDFLAGS="-L$$(brew --prefix icu4c)/lib -L$(SSL_LDIR)" CPPFLAGS="-I$$(brew --prefix icu4c)/include" PKG_CONFIG_PATH="$$(brew --prefix icu4c)/lib/pkgconfig:$$PKG_CONFIG_PATH" ./configure --with-ssl=openssl --with-includes="$(SSL_IDIR)" --with-libraries="$(SSL_LDIR)" --without-readline --with-icu
 else
@@ -435,11 +498,20 @@ libusual/libusual/.libs/libusual.a: $(OPENSSL_BUILD_STAMP)
 	cd libusual && tar -zxf libusual-*.tar.gz
 	cd libusual/libusual && ./autogen.sh
 ifeq ($(UNAME_S),Darwin)
-	cd libusual/libusual && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="$(OPENSSL_STATIC_LIBS)" ./configure --with-openssl="$(SSL_PATH)" --disable-shared
+	# libusual otherwise appends /lib to the prefix, but the vendored OpenSSL
+	# build keeps its archives at the prefix root.
+	cd libusual/libusual && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="-L$(SSL_LDIR)" ./configure --with-openssl=yes --disable-shared
 else
 	cd libusual/libusual && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="$(OPENSSL_STATIC_LIBS)" ./configure --with-openssl="$(SSL_PATH)" --disable-shared
 endif
+
+ifeq ($(UNAME_S),Darwin)
+	# OpenSSL 3.5 exports tls_free, which collides with libusual's symbol only
+	# while linking its optional test/compile program. ProxySQL needs the archive.
+	cd libusual/libusual && CC=${CC} CXX=${CXX} ${MAKE} libusual.la
+else
 	cd libusual/libusual && CC=${CC} CXX=${CXX} ${MAKE}
+endif
 
 libusual: libusual/libusual/.libs/libusual.a
 
@@ -473,6 +545,7 @@ cleanpart:
 
 cleanall:
 	cd libssl && rm -rf openssl-$(OPENSSL_VERSION) || true
+	cd abseil && rm -rf abseil-cpp-*/ || true
 	cd libinjection && rm -rf libinjection-*/ || true
 	cd libhttpserver && rm -rf libhttpserver-*/ || true
 	cd libdaemon && rm -rf libdaemon-*/ || true
@@ -480,9 +553,10 @@ cleanall:
 	cd mariadb-client-library && rm -rf mariadb-connector-c-*/ || true
 	cd libconfig && rm -rf libconfig-*/ || true
 	cd re2 && rm -rf re2-*/ || true
-	cd pcre && rm -rf pcre-*/ || true
+	cd pcre2 && rm -rf pcre2-*/ pcre2 || true
 	cd sqlite3 && rm -rf sqlite-amalgamation-*/ || true
 	cd clickhouse-cpp/ && rm -rf clickhouse-cpp-*/ || true
+	cd duckdb && rm -rf duckdb-*/ duckdb || true
 	cd lz4 && rm -rf lz4-*/ || true
 	cd libmicrohttpd && rm -rf libmicrohttpd-*/ || true
 	cd curl && rm -rf curl-*/ || true

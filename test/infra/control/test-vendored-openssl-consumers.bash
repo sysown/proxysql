@@ -8,6 +8,7 @@ ssl_archive="${openssl_root}/libssl.a"
 crypto_archive="${openssl_root}/libcrypto.a"
 test_mariadb_archive="${repo_root}/test/deps/mariadb-connector-c/mariadb-connector-c/libmariadb/libmariadbclient.a"
 created_stubs=()
+true_path=$(command -v true)
 
 cleanup() {
 	local path
@@ -49,7 +50,7 @@ dry_run() {
 	local output
 
 	if ! output=$(make -C "${make_dir}" --no-print-directory \
-		-B -n "${target}" MAKE=/bin/true UNAME_S="${platform}" 2>&1); then
+		-B -n "${target}" MAKE="${true_path}" UNAME_S="${platform}" 2>&1); then
 		printf '%s\n' "${output}" >&2
 		fail "dry run failed for ${make_dir##*/}:${target} on ${platform}"
 	fi
@@ -156,8 +157,14 @@ for platform in Linux Darwin FreeBSD; do
 
 	libusual_output=$(dry_run "${repo_root}/deps" libusual "${platform}")
 	assert_vendored_first "${libusual_output}" './configure' "libusual/${platform}"
-	assert_contains "${libusual_output}" "--with-openssl=${openssl_root}" "libusual/${platform}"
-	assert_contains "${libusual_output}" "LDFLAGS=${ssl_archive} ${crypto_archive}" "libusual/${platform}"
+	if [[ "${platform}" == Darwin ]]; then
+		assert_contains "${libusual_output}" '--with-openssl=yes' "libusual/${platform}"
+		assert_contains "${libusual_output}" "LDFLAGS=-L${openssl_root}" "libusual/${platform}"
+		assert_contains "${libusual_output}" 'libusual.la' "libusual/${platform}"
+	else
+		assert_contains "${libusual_output}" "--with-openssl=${openssl_root}" "libusual/${platform}"
+		assert_contains "${libusual_output}" "LDFLAGS=${ssl_archive} ${crypto_archive}" "libusual/${platform}"
+	fi
 	assert_no_system_openssl "${libusual_output}" "libusual/${platform}"
 
 	libscram_output=$(dry_run "${repo_root}/deps" libscram "${platform}")

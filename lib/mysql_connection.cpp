@@ -9,6 +9,7 @@ using json = nlohmann::json;
 #include <fcntl.h>
 #include <sstream>
 #include <openssl/crypto.h>
+#include <openssl/err.h>
 
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
@@ -3138,25 +3139,80 @@ void MySQL_Connection::optimize() {
 	}
 }
 
+// proxy_mysql_send_com_quit() writes a COM_QUIT packet directly on the socket
+// of a backend connection, bypassing mysql_close() because the latter is
+// blocking.
+//
+// Backends increment Aborted_clients and log a warning like
+//   Aborted connection NNN to db: ... (Got an error reading communication packets)
+// for every connection closed without a COM_QUIT , so the packet is sent on a
+// best effort basis: if it cannot be written the connection is closed anyway.
+//
+// See issue #2800 : on a TLS connection the packet must go through the SSL
+// layer. Writing it in clear text on the socket corrupts the TLS stream and
+// makes the backend drop the connection abruptly, which is what PR #5096 was
+// working around by not sending anything at all when use_ssl was set.
+//
+// FIXME: compression is still unsupported, see below.
+void proxy_mysql_send_com_quit(MYSQL *mysql) {
+	if (mysql->net.pvio == NULL)
+		return;
+	// a COM_QUIT written uncompressed on a compressed stream is as invalid as
+	// one written in clear text on a TLS stream. Until the compressed framing
+	// is implemented we rather skip it than corrupt the stream: the backend
+	// will log the aborted connection, but nothing worse than that
+	if (mysql->net.compress)
+		return;
+
+	char buff[5];
+	mysql_hdr myhdr;
+	myhdr.pkt_id=0;
+	myhdr.pkt_length=1;
+	memcpy(buff, &myhdr, sizeof(mysql_hdr));
+	buff[4]=0x01;
+
+	if (mysql->options.use_ssl) {
+		// check the definition of P_MARIADB_TLS
+		P_MARIADB_TLS * matls = (P_MARIADB_TLS *)mysql->net.pvio->ctls;
+		if (matls != NULL && matls->ssl != NULL) {
+			// SIGPIPE is ignored process wide , see ProxySQL_GloVars.cpp .
+			// The socket is non-blocking, thus SSL_write() can fail with
+			// SSL_ERROR_WANT_WRITE : we do not retry, a COM_QUIT that wasn't
+			// sent leaves us exactly where we were before this was implemented
+			if (SSL_write((SSL *)matls->ssl, buff, sizeof(buff)) <= 0) {
+				// do not leave errors behind in the thread's SSL error queue,
+				// they would pollute the next operation performed by this
+				// thread . See also #4556
+				ERR_clear_error();
+			}
+			return;
+		}
+		// if mysql->options.use_ssl == 1 but matls == NULL it means that
+		// ProxySQL tried to use SSL to connect to the backend but the backend
+		// didn't support SSL: the socket carries clear text, fall through
+	}
+
+	int fd=mysql->net.fd;
+#ifdef __APPLE__
+	int arg_on=1;
+	setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, (char *) &arg_on, sizeof(int));
+	send(fd, buff, sizeof(buff), 0);
+#else
+	send(fd, buff, sizeof(buff), MSG_NOSIGNAL);
+#endif
+}
+
 // close_mysql() is a replacement for mysql_close()
 // if avoids that a QUIT command stops forever
-// FIXME: currently doesn't support encryption and compression
 void MySQL_Connection::close_mysql() {
-	if ((send_quit) && (mysql->net.pvio) && ret_mysql && !mysql->options.use_ssl) {
-		char buff[5];
-		mysql_hdr myhdr;
-		myhdr.pkt_id=0;
-		myhdr.pkt_length=1;
-		memcpy(buff, &myhdr, sizeof(mysql_hdr));
-		buff[4]=0x01;
-		int fd=mysql->net.fd;
-#ifdef __APPLE__
-		int arg_on=1;
-		setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, (char *) &arg_on, sizeof(int));
-		send(fd, buff, 5, 0);
-#else
-		send(fd, buff, 5, MSG_NOSIGNAL);
-#endif
+	// note: in a 'fast_forward' session send_quit is set to false as soon as the
+	// backend connection is established , see MySQL_Session.cpp . That matters
+	// here because such a connection has its SSL object hijacked by the
+	// MySQL_Data_Stream , that replaces its BIOs with memory BIOs : writing on
+	// it would never reach the socket. The check on myds->encrypted is a
+	// defensive double check for that same condition
+	if ((send_quit) && ret_mysql && (myds == NULL || myds->encrypted == false)) {
+		proxy_mysql_send_com_quit(mysql);
 	}
 //	int rc=0;
 	mysql_close_no_command(mysql);

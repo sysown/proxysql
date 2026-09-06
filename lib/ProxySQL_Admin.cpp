@@ -1230,6 +1230,9 @@ void ProxySQL_Admin::flush_mysql_stats() {
 	stats___mysql_errors(true);
 	// Reset MySQL connection pool statistics
 	stats___mysql_connection_pool(true);
+#ifdef PROXYSQL31
+	stats___mysql_hostgroup_connection_pool(true);
+#endif
 	// Reset MySQL client host cache
 	stats___mysql_client_host_cache(true);
 
@@ -1247,6 +1250,9 @@ void ProxySQL_Admin::flush_pgsql_stats() {
 	stats___pgsql_errors(true);
 	// Reset PostgreSQL connection pool statistics
 	stats___pgsql_connection_pool(true);
+#ifdef PROXYSQL31
+	stats___pgsql_hostgroup_connection_pool(true);
+#endif
 	// Reset PostgreSQL client host cache
 	stats___pgsql_client_host_cache(true);
 
@@ -1293,6 +1299,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_pgsql_free_connections=false;
 	bool stats_mysql_connection_pool=false;
 	bool stats_mysql_connection_pool_reset=false;
+#ifdef PROXYSQL31
+	bool stats_mysql_hostgroup_connection_pool=false;
+	bool stats_mysql_hostgroup_connection_pool_reset=false;
+#endif
 	bool stats_mysql_query_digest=false;
 	bool stats_pgsql_query_digest = false;
 	bool stats_mysql_query_digest_reset=false;
@@ -1339,6 +1349,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_pgsql_global = false;
 	bool stats_pgsql_connection_pool = false;
 	bool stats_pgsql_connection_pool_reset = false;
+#ifdef PROXYSQL31
+	bool stats_pgsql_hostgroup_connection_pool = false;
+	bool stats_pgsql_hostgroup_connection_pool_reset = false;
+#endif
 
 #ifdef PROXYSQLTSDB
 	bool stats_tsdb = false;
@@ -1461,6 +1475,13 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		if (strstr(query_no_space,"stats_mysql_connection_pool"))
 			{ stats_mysql_connection_pool=true; refresh=true; }
 	}
+#ifdef PROXYSQL31
+	if (strstr(query_no_space,"stats_mysql_hostgroup_connection_pool_reset")) {
+		stats_mysql_hostgroup_connection_pool_reset=true; refresh=true;
+	} else if (strstr(query_no_space,"stats_mysql_hostgroup_connection_pool")) {
+		stats_mysql_hostgroup_connection_pool=true; refresh=true;
+	}
+#endif
 	if (strstr(query_no_space, "stats_pgsql_connection_pool_reset")) {
 		stats_pgsql_connection_pool_reset = true; refresh = true;
 	} else {
@@ -1468,6 +1489,13 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			stats_pgsql_connection_pool = true; refresh = true;
 		}
 	}
+#ifdef PROXYSQL31
+	if (strstr(query_no_space,"stats_pgsql_hostgroup_connection_pool_reset")) {
+		stats_pgsql_hostgroup_connection_pool_reset=true; refresh=true;
+	} else if (strstr(query_no_space,"stats_pgsql_hostgroup_connection_pool")) {
+		stats_pgsql_hostgroup_connection_pool=true; refresh=true;
+	}
+#endif
 	if (strstr(query_no_space,"stats_mysql_free_connections"))
 		{ stats_mysql_free_connections=true; refresh=true; }
 	if (strstr(query_no_space, "stats_pgsql_free_connections")) 
@@ -1697,12 +1725,26 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			if (stats_mysql_connection_pool)
 				stats___mysql_connection_pool(false);
 		}
+#ifdef PROXYSQL31
+		if (stats_mysql_hostgroup_connection_pool_reset) {
+			stats___mysql_hostgroup_connection_pool(true);
+		} else if (stats_mysql_hostgroup_connection_pool) {
+			stats___mysql_hostgroup_connection_pool(false);
+		}
+#endif
 		if (stats_pgsql_connection_pool_reset) {
 			stats___pgsql_connection_pool(true);
 		} else {
 			if (stats_pgsql_connection_pool)
 				stats___pgsql_connection_pool(false);
 		}
+#ifdef PROXYSQL31
+		if (stats_pgsql_hostgroup_connection_pool_reset) {
+			stats___pgsql_hostgroup_connection_pool(true);
+		} else if (stats_pgsql_hostgroup_connection_pool) {
+			stats___pgsql_hostgroup_connection_pool(false);
+		}
+#endif
 		if (stats_mysql_free_connections)
 			stats___mysql_free_connections();
 		if (stats_pgsql_free_connections)
@@ -2144,6 +2186,12 @@ void ProxySQL_Admin::vacuum_stats(bool is_admin) {
 		"stats_mysql_connection_pool_reset",
 		"stats_pgsql_connection_pool",
 		"stats_pgsql_connection_pool_reset",
+#ifdef PROXYSQL31
+		"stats_mysql_hostgroup_connection_pool",
+		"stats_mysql_hostgroup_connection_pool_reset",
+		"stats_pgsql_hostgroup_connection_pool",
+		"stats_pgsql_hostgroup_connection_pool_reset",
+#endif
 		"stats_mysql_prepared_statements_info",
 		"stats_pgsql_prepared_statements_info",
 		"stats_mysql_processlist",
@@ -3352,6 +3400,31 @@ void ProxySQL_Admin::dump_mysql_collations() {
 	// the table is not required to be present on disk. Removing it due to #1055
 //	admindb->execute("DELETE FROM disk.mysql_collations");
 //	admindb->execute("INSERT INTO disk.mysql_collations SELECT * FROM main.mysql_collations");
+}
+
+void ProxySQL_Admin::dump_ssl_ciphers() {
+	char buf[1024];
+	char desc[128] = { 0 };
+	const char *query = "INSERT OR REPLACE INTO ssl_ciphers VALUES (\"%s\", \"%s\")";
+	admindb->execute("DELETE FROM ssl_ciphers");
+	if (GloVars.global.ssl_ctx == NULL) {
+		return;
+	}
+	STACK_OF(SSL_CIPHER) *ciphers = SSL_CTX_get_ciphers(GloVars.global.ssl_ctx);
+	if (ciphers == NULL) {
+		return;
+	}
+	int num = sk_SSL_CIPHER_num(ciphers);
+	for (int i = 0; i < num; i++) {
+		const SSL_CIPHER *cipher = sk_SSL_CIPHER_value(ciphers, i);
+		SSL_CIPHER_description(cipher, desc, sizeof(desc));
+		char *fst_newline = strchr(desc, '\n');
+		if (fst_newline) {
+			*fst_newline = '\0';
+		}
+		snprintf(buf, sizeof(buf), query, SSL_CIPHER_get_name(cipher), desc);
+		admindb->execute(buf);
+	}
 }
 
 void ProxySQL_Admin::check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs) {
