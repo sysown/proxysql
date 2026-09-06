@@ -4,7 +4,7 @@
 
 **Goal:** Replace the overlapping regular TAP builders with one Ubuntu 24 full-plugin build and one complete handoff consumed by group-based CI workflows.
 
-**Architecture:** `GH-Actions` first gains an additive `ubuntu24-tap-full` producer and generic full-handoff consumer while legacy variants remain available. `v3.0` then registers `mysqlx-g1` and converts thin callers. A final `GH-Actions` cleanup removes old regular variants only after real consumer runs prove the full handoff works. Sanitizer and platform-specific profiles are out of scope.
+**Architecture:** `GH-Actions` uses its existing `ubuntu24-tap-genai-gcov` producer as the single regular build and publishes one complete handoff. `v3.0` registers `mysqlx-g1` and adds its thin caller; the existing MysqlX E2E and soak paths remain infrastructure-specific. Sanitizer and platform-specific profiles are out of scope.
 
 **Tech Stack:** GitHub reusable workflows, zstd workflow artifacts, Bash, Python group linting, TAP isolated infrastructure.
 
@@ -30,7 +30,7 @@
 
 **Interfaces:**
 - Consumes: `ci-builds.yml` matrix and artifact upload naming.
-- Produces: a CI lint that proves one `ubuntu24-tap-full` producer publishes one complete handoff and has no plugin-specific test pruning.
+- Produces: a CI lint that proves the sole `ubuntu24-tap-genai-gcov` producer publishes one complete handoff and has no plugin-specific test pruning.
 
 - [ ] **Step 1: Write the failing contract test**
 
@@ -41,8 +41,8 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 workflow="${root}/.github/workflows/ci-builds.yml"
 
 grep -Fq "dist: 'ubuntu24'" "${workflow}"
-grep -Fq "type: '-tap-full'" "${workflow}"
-grep -Fq 'ci-builds-handoff-${{ env.SHA }}-ubuntu24-tap-full' "${workflow}"
+grep -Fq "type: '-tap-genai-gcov'" "${workflow}"
+grep -Fq 'ci-builds-handoff-${{ env.SHA }}-ubuntu24-tap-genai-gcov-full' "${workflow}"
 ! grep -Fq "! -name 'mysqlx_*_unit-t'" "${workflow}"
 ! grep -Fq 'SKIP_GENAI_UNIT_TESTS=1' "${workflow}"
 ```
@@ -51,7 +51,7 @@ grep -Fq 'ci-builds-handoff-${{ env.SHA }}-ubuntu24-tap-full' "${workflow}"
 
 Run: `test/infra/control/test-ci-builds-full-handoff.bash`
 
-Expected: non-zero because `ubuntu24-tap-full` and its complete handoff do not exist yet.
+Expected: non-zero before the complete handoff is added to `ubuntu24-tap-genai-gcov`.
 
 - [ ] **Step 3: Implement only the generic builder contract**
 
@@ -59,7 +59,7 @@ Add this full producer alongside the three existing regular matrix legs:
 
 ```yaml
 - dist: 'ubuntu24'
-  type: '-tap-full'
+  type: '-tap-genai-gcov'
 ```
 
 Make the new build command set `PROXYSQL40=1` without
@@ -73,7 +73,7 @@ test "${UNIT_COUNT}" -gt 0
 
 Pack `src/`, `test/`, required plugin/runtime files, and optional coverage metadata
 into one `full-handoff.tar.zst`; upload it as
-`ci-builds-handoff-${SHA}-ubuntu24-tap-full`.
+`ci-builds-handoff-${SHA}-ubuntu24-tap-genai-gcov-full`.
 
 - [ ] **Step 4: Wire the check into CI lint and verify GREEN**
 
@@ -107,14 +107,14 @@ git commit -m "ci(builds): add complete regular test handoff" \
 - Create: `.github/workflows/ci-unit-group.yml`
 
 **Interfaces:**
-- Consumes: `trigger`, `tap_group`, and `ci-builds-handoff-${SHA}-ubuntu24-tap-full`.
+- Consumes: `trigger`, `tap_group`, and `ci-builds-handoff-${SHA}-ubuntu24-tap-genai-gcov-full`.
 - Produces: a reusable workflow that downloads and verifies the complete handoff, derives unit binaries exclusively from `groups.json`, and executes them in the Ubuntu 24 build image required by their ABI/runtime dependencies.
 
 - [ ] **Step 1: Write the failing workflow-contract test**
 
 ```bash
 grep -Fq 'tap_group:' .github/workflows/ci-unit-group.yml
-grep -Fq 'ci-builds-handoff-${SHA}-ubuntu24-tap-full' .github/workflows/ci-unit-group.yml
+grep -Fq 'ci-builds-handoff-${SHA}-ubuntu24-tap-genai-gcov-full' .github/workflows/ci-unit-group.yml
 grep -Fq 'groups.json' .github/workflows/ci-unit-group.yml
 ! grep -Eq 'mysqlx_\*|plugin_\*|genai_\*' .github/workflows/ci-unit-group.yml
 ```
@@ -135,7 +135,7 @@ trigger: { type: string }
 tap_group: { type: string, required: true }
 ```
 
-Resolve only `ci-builds-handoff-${SHA}-ubuntu24-tap-full`, download it through
+Resolve only `ci-builds-handoff-${SHA}-ubuntu24-tap-genai-gcov-full`, download it through
 the triggering CI-builds run artifact list with the existing bounded retry
 pattern, and unpack it into `proxysql/`. Parse `groups.json` for `tap_group`,
 require every selected test to be an executable under `test/tap/tests/unit/`,
@@ -187,9 +187,14 @@ git commit -m "ci: add generic full-handoff unit consumer" \
 ```python
 def test_mysqlx_and_plugin_units_have_mysqlx_g1():
     groups = json.load(open(GROUPS))
+    expected = {
+        source.stem
+        for source in (GROUPS.parents[1] / "tests" / "unit").glob("*_unit-t.cpp")
+        if source.name.startswith(("mysqlx_", "plugin_"))
+    }
     selected = {name for name, tags in groups.items() if "mysqlx-g1" in tags}
-    assert "mysqlx_connection_unit-t" in selected
-    assert "plugin_manager_unit-t" in selected
+    assert expected <= groups.keys()
+    assert expected <= selected
     assert "test_mysqlx_e2e_handshake-t" not in selected
 ```
 
@@ -253,7 +258,7 @@ git commit -m "ci(mysqlx): run unit coverage through mysqlx-g1" \
 - [ ] **Step 1: Extend the contract test to fail on legacy enabled consumers**
 
 ```bash
-for workflow in .github/workflows/ci-*.yml; do
+for workflow in .github/workflows/CI-*.yml; do
   grep -Eq 'ubuntu22-tap|ubuntu22-tap-mysqlx|ubuntu24-tap-genai-gcov' "$workflow" && exit 1 || true
 done
 ```
@@ -270,7 +275,7 @@ Expected: failure naming current legacy consumers.
 - [ ] **Step 3: Switch consumers**
 
 Change each regular reusable consumer to resolve only
-`ubuntu24-tap-full`. Replace repeated artifact-resolution code with the generic
+`ubuntu24-tap-genai-gcov-full`. Replace repeated artifact-resolution code with the generic
 consumer where test behavior is standard; retain coverage upload and special
 infrastructure steps only where required. Do not add test-family filenames to
 the build or consumer workflow.
@@ -315,9 +320,20 @@ git commit -m "ci: consume one regular full build handoff" \
 - [ ] **Step 1: Make retirement contract assertions fail first**
 
 ```bash
-! grep -Fq "dist: 'ubuntu22'" .github/workflows/ci-builds.yml
-! grep -Fq "type: '-tap-mysqlx'" .github/workflows/ci-builds.yml
-! grep -Fq "dist: 'debian12'" .github/workflows/ci-builds.yml
+python3 - <<'PY'
+import yaml
+
+workflow = yaml.safe_load(open('.github/workflows/ci-builds.yml'))
+profiles = {
+    (entry['dist'], entry['type'])
+    for entry in workflow['jobs']['builds']['strategy']['matrix']['include']
+}
+assert not profiles & {
+    ('ubuntu22', '-tap'),
+    ('ubuntu22', '-tap-mysqlx'),
+    ('debian12', '-dbg'),
+}
+PY
 ```
 
 - [ ] **Step 2: Run the assertions and verify RED**
@@ -365,5 +381,5 @@ git commit -m "ci(builds): retire duplicate regular TAP builders" \
 - **No placeholders:** every task names files, commands, expected RED/GREEN
   conditions, and commit scope.
 - **Interface consistency:** the producer artifact is consistently named
-  `ci-builds-handoff-${SHA}-ubuntu24-tap-full`; consumers consistently require
-  `trigger`, `tap_group`, and `infra_id`.
+  `ci-builds-handoff-${SHA}-ubuntu24-tap-genai-gcov-full`; consumers consistently require
+  `trigger` and `tap_group`.

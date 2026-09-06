@@ -29,7 +29,7 @@ served by the Ubuntu 24 full build.
 ### One regular producer and one complete artifact
 
 The `GH-Actions` reusable `ci-builds.yml` will retain one regular TAP producer,
-named `ubuntu24-tap-full`. It builds with the complete chassis tier enabled,
+named `ubuntu24-tap-genai-gcov`. It builds with the complete chassis tier enabled,
 builds every supported plugin, and retains every executable TAP and unit test.
 It publishes one versioned handoff artifact for a head SHA rather than
 per-plugin or per-test-class payloads.
@@ -71,8 +71,9 @@ plugins follow the same group-registration model.
 
 ### Profiles that remain separate
 
-The unified artifact replaces only the regular Linux TAP build. ASAN/gcov,
-TSAN, clang, package, third-party-language, and OS-specific compatibility
+The unified artifact replaces the regular Linux TAP build and carries the
+existing gcov instrumentation used by its consumers. ASAN, TSAN, clang,
+package, third-party-language, and OS-specific compatibility
 profiles remain separate because their compiler flags, toolchains, runtime
 libraries, or test purpose are not interchangeable.
 
@@ -81,7 +82,8 @@ libraries, or test purpose are not interchangeable.
 The reusable workflows live on `GH-Actions` and callers/groups live on
 `v3.0`, so the migration uses three compatible phases:
 
-1. **Additive `GH-Actions` support.** Add `ubuntu24-tap-full`, complete-handoff
+1. **`GH-Actions` support.** Use the existing `ubuntu24-tap-genai-gcov` producer,
+   complete-handoff
    packing, and the generic group consumer while retaining all legacy producer
    and consumer paths.
 2. **Switch `v3.0`.** Register `mysqlx-g1`, add its thin caller, and redirect
