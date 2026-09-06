@@ -115,16 +115,11 @@ jobs:
       matrix:
         include:
 
-          # ubuntu24 GenAI build with code coverage
+          # The sole regular producer. It builds the complete chassis with
+          # coverage metadata and retains every TAP/unit binary for every
+          # downstream group.
           - dist: 'ubuntu24'
             type: '-tap-genai-gcov'
-
-          # Additive full regular producer. It enables the v4.0 chassis and
-          # retains every TAP/unit binary plus every in-tree plugin in one
-          # handoff. Consumers select TAP groups; this matrix leg must never
-          # learn plugin-specific filename patterns.
-          - dist: 'ubuntu24'
-            type: '-tap-full'
           # ubuntu22 is needed for ASAN TAP testing
           # disabled to save cache space
           #- dist: 'ubuntu22'
@@ -172,7 +167,7 @@ jobs:
     # matrix legs serially, so the stale writer can belong to a different
     # distribution than the new leg. The previous project-name-filtered cleanup
     # never matched, because the Makefile names each project
-    # <BLD_NAME>-<GITVERSION> (e.g. ubuntu24-tap-full-3.0.11-502-gd8bdd5a), not the
+    # <BLD_NAME>-<GITVERSION> (e.g. ubuntu24-tap-genai-gcov-3.0.11-502-gd8bdd5a), not the
     # bare distribution name. Nuke ALL docker state on the runner instead: every
     # container, every volume, every network. Nothing dockerized may survive
     # into the next job.
@@ -334,35 +329,6 @@ jobs:
           # was exercising a Stable core, with FFTO/TSDB/genai/pass-through
           # #ifdef'd out. Use PROXYSQL40=1 so the core matches the tier.
           sed -i "/command/i \      - PROXYSQL40=1" docker-compose.yml
-          # Skip the ~14 genai_*_unit-t binaries. With PROXYSQL40=1 the unit
-          # Makefile's `ifeq ($(PROXYSQL40),1)` block would otherwise add them
-          # to UNIT_TESTS; they statically link 30+ plugins/genai/.cpp at
-          # -O0 -ggdb (~160 MB each, ~2 GB total, larger still under gcov) and
-          # blow the runner's free disk. This build feeds TAP integration
-          # groups, not unit-test groups (which build separately).
-          sed -i "/command/i \      - SKIP_GENAI_UNIT_TESTS=1" docker-compose.yml
-        fi
-        if [[ "${{ matrix.type }}" =~ "-mysqlx" ]]; then
-          # Chassis tier flag for plugins/mysqlx build. _build.environment
-          # in docker-compose.yml already lists PROXYSQL40 as a pass-through
-          # var, and entrypoint.bash routes on it (install libprotobuf-dev,
-          # add PROXYSQL40=1 to make EXTRA, build plugins/mysqlx + plugins/
-          # genai). Setting PROXYSQL40=1 alone is enough -- Makefile cascades
-          # it into PROXYSQL31/PROXYSQLFFTO/PROXYSQLTSDB automatically.
-          sed -i "/command/i \      - PROXYSQL40=1" docker-compose.yml
-          # Skip the ~14 genai_*_unit-t binaries. With PROXYSQL40=1 the
-          # unit Makefile's `ifeq ($(PROXYSQL40),1)` block would otherwise
-          # add them to UNIT_TESTS, and they statically link 30+
-          # plugins/genai/.cpp at -O0 -ggdb (~160 MB each, ~2 GB total).
-          # That blew the runner's ~14 GB free disk on the first attempt
-          # at this matrix entry. CI-mysqlx never runs genai_*_unit-t.
-          sed -i "/command/i \      - SKIP_GENAI_UNIT_TESTS=1" docker-compose.yml
-        fi
-        if [[ "${{ matrix.type }}" =~ "-full" ]]; then
-          # The full regular handoff uses the chassis tier so the core and all
-          # in-tree plugins share one build. Deliberately do not inject
-          # SKIP_GENAI_UNIT_TESTS: this leg retains every test binary.
-          sed -i "/command/i \      - PROXYSQL40=1" docker-compose.yml
         fi
         if [[ "${{ matrix.type }}" =~ "-gcov" ]]; then
           sed -i "/command/i \      - WITHGCOV=1" docker-compose.yml
@@ -427,7 +393,7 @@ jobs:
             echo "       This typically means the TAP build did not run or failed."
             exit 1
           fi
-          if [[ "${{ matrix.type }}" =~ "-full" ]] && [ "${UNIT_COUNT}" -lt 1 ]; then
+          if [[ "${{ matrix.type }}" =~ "-gcov" ]] && [ "${UNIT_COUNT}" -lt 1 ]; then
             echo "ERROR: no unit test binaries found for the complete regular handoff"
             exit 1
           fi
@@ -449,7 +415,7 @@ jobs:
           # this cache, so preserve those and delete only the rest. Spot-
           # checks (readelf) confirm the kept binaries do not dyn-link to
           # test/deps -- the test/deps deletion below still applies.
-          if [[ "${{ matrix.type }}" =~ "-full" ]]; then
+          if [[ "${{ matrix.type }}" =~ "-gcov" ]]; then
             echo ">>> Retaining all ${UNIT_COUNT} unit test binaries for the complete regular handoff"
           elif [[ "${{ matrix.type }}" =~ "-mysqlx" ]]; then
             sudo find test/tap/tests/unit -type f -name '*-t' \
@@ -631,7 +597,7 @@ jobs:
 
     - name: Pack bin cache with zstd-15
       id: cache-pack-bin
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && !contains(matrix.type,'-full') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && !contains(matrix.type,'-gcov') }}
       # `actions/cache@v4` compresses with zstd level ~3; we pre-compress
       # with zstd -15 to fit more under the 10 GB repo quota. Level 15
       # captures most of the size win (~80% of what --ultra -22 gives
@@ -649,7 +615,7 @@ jobs:
 
     - name: Cache save bin
       id: cache-save-bin
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && !contains(matrix.type,'-full') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && !contains(matrix.type,'-gcov') }}
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         key: ${{ env.BLDCACHE }}_bin
@@ -658,7 +624,7 @@ jobs:
 
     - name: Cache save src
       id: cache-save-src
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') && !contains(matrix.type,'-full') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') && !contains(matrix.type,'-gcov') }}
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         key: ${{ env.BLDCACHE }}_src
@@ -698,7 +664,7 @@ jobs:
 
     - name: Pack test cache with zstd-15
       id: cache-pack-test
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') && !contains(matrix.type,'-full') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') && !contains(matrix.type,'-gcov') }}
       # `actions/cache@v4` compresses with zstd level ~3; we pre-compress
       # with zstd -15 to fit more under the 10 GB repo quota. See the
       # bin-cache pack step above for the rationale on dropping from
@@ -714,7 +680,7 @@ jobs:
 
     - name: Cache save test
       id: cache-save-test
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') && !contains(matrix.type,'-full') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') && !contains(matrix.type,'-gcov') }}
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         key: ${{ env.BLDCACHE }}_test
@@ -723,7 +689,7 @@ jobs:
 
     - name: Cache save matrix
       id: cache-save-matrix
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') && !contains(matrix.type,'-full') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') && !contains(matrix.type,'-gcov') }}
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
       with:
         key: ${{ env.BLDCACHE }}_matrix
@@ -749,7 +715,7 @@ jobs:
     # computes), NOT the workflow_run default-branch SHA, so names line up
     # without any run-id correlation.
     - name: Pack src + matrix for handoff (zstd-15)
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') && !contains(matrix.type,'-full') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') && !contains(matrix.type,'-gcov') }}
       run: |
         command -v zstd >/dev/null || sudo apt-get install -y zstd
         cd proxysql/
@@ -767,7 +733,7 @@ jobs:
         fi
 
     - name: Upload handoff (src)
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') && !contains(matrix.type,'-full') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') && !contains(matrix.type,'-gcov') }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ci-builds-handoff-${{ env.SHA }}-${{ matrix.dist }}${{ matrix.type }}-src
@@ -777,7 +743,7 @@ jobs:
         path: cache_src.tar.zst
 
     - name: Upload handoff (test)
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') && !contains(matrix.type,'-full') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') && !contains(matrix.type,'-gcov') }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ci-builds-handoff-${{ env.SHA }}-${{ matrix.dist }}${{ matrix.type }}-test
@@ -788,7 +754,7 @@ jobs:
         path: cache_test.tar.zst
 
     - name: Upload handoff (matrix)
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') && !contains(matrix.type,'-full') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') && !contains(matrix.type,'-gcov') }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ci-builds-handoff-${{ env.SHA }}-${{ matrix.dist }}${{ matrix.type }}-matrix
@@ -799,7 +765,7 @@ jobs:
         path: cache_matrix.tar.zst
 
     - name: Pack complete regular handoff (zstd-15)
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-full') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-gcov') }}
       run: |
         set -euo pipefail
         command -v zstd >/dev/null || sudo apt-get install -y zstd
@@ -816,10 +782,10 @@ jobs:
           | zstd -15 -T0 -o ../cache_full.tar.zst
 
     - name: Upload complete regular handoff
-      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-full') }}
+      if: ${{ inputs.trusted && success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-gcov') }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
-        name: ci-builds-handoff-${{ env.SHA }}-ubuntu24-tap-full-full
+        name: ci-builds-handoff-${{ env.SHA }}-ubuntu24-tap-genai-gcov-full
         retention-days: 1
         compression-level: 0
         if-no-files-found: error

@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 120
     env:
-      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu24-tap-full_full
+      BLDCACHE: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}_ubuntu24-tap-genai-gcov_full
       MATRIX: '(unit-tests-g1)'
 
     steps:
@@ -54,7 +54,7 @@ jobs:
         REPO: ${{ github.repository }}
         SHA: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.head_sha || github.sha }}
         BUILD_RUN_ID: ${{ inputs.trigger && fromJson(inputs.trigger).event.workflow_run.id || '' }}
-        HANDOFF_VARIANT: ubuntu24-tap-full
+        HANDOFF_VARIANT: ubuntu24-tap-genai-gcov
         HANDOFF_TYPES: full
       run: |
         set -uo pipefail

@@ -49,7 +49,7 @@ jobs:
         run: |
           set -euo pipefail
           command -v zstd >/dev/null || sudo apt-get install -y zstd
-          artifact_name="ci-builds-handoff-${SHA}-ubuntu24-tap-full-full"
+          artifact_name="ci-builds-handoff-${SHA}-ubuntu24-tap-genai-gcov-full"
           : "${HANDOFF_MAX_ATTEMPTS:=20}"
           error_log="$(mktemp)"
           resolve_artifact_id() {
