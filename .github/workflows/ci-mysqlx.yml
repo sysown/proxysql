@@ -23,7 +23,11 @@ jobs:
   # reach 127.0.0.1:$mysqlx_port. mysqlx-e2e/env.sh documents this
   # arrangement.
   e2e-tests:
-    runs-on: ubuntu-24.04
+    # The dbdeployer MySQL 8.4 minimal archive is linked against the
+    # legacy libaio.so.1, libncurses.so.5, and libtinfo.so.5 SONAMEs.
+    # Keep the host-side sandbox on Jammy; the test binaries themselves
+    # still run in the Ubuntu 24 build container below.
+    runs-on: ubuntu-22.04
     timeout-minutes: 120
 
     permissions:
@@ -136,8 +140,8 @@ jobs:
 
       - name: Install MySQL 8.4 runtime libs
         # dbdeployer ships pre-built mysqld binaries that DT_NEEDED
-        # libaio1t64/libnuma1 (server) and libncurses6/libtinfo6 (client).
-        # ubuntu-24.04 runner image includes most but not all of these
+        # libaio1/libnuma1 (server) and libncurses5/libtinfo5 (client).
+        # ubuntu-22.04 runner image includes most but not all of these
         # by default; install explicitly so we never silently depend on
         # whatever the runner happens to ship.
         run: |
@@ -148,7 +152,7 @@ jobs:
           # currently-published version.
           sudo apt-get update -y
           sudo apt-get install -y -qq --no-install-recommends \
-            libaio1t64 libnuma1 libncurses6 libtinfo6
+            libaio1 libnuma1 libncurses5 libtinfo5
 
       - name: Checkout GH-Actions dbdeployer guard
         # The control test and ci-mysqlx.yml live on GH-Actions. The job

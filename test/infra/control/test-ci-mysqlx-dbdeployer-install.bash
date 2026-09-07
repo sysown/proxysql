@@ -4,6 +4,25 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 workflow="${root}/.github/workflows/ci-mysqlx.yml"
 
+e2e_job="$(awk '
+  /^  e2e-tests:$/ { capture = 1 }
+  capture { print }
+  capture && /^  [[:alnum:]_-]+:$/ && $0 !~ /^  e2e-tests:$/ { exit }
+' "${workflow}")"
+
+printf '%s\n' "${e2e_job}" | grep -Fq 'runs-on: ubuntu-22.04' || {
+	echo 'MySQL dbdeployer sandbox must run on ubuntu-22.04' >&2
+	exit 1
+}
+printf '%s\n' "${e2e_job}" | grep -Fq 'libaio1 libnuma1 libncurses5 libtinfo5' || {
+	echo 'MySQL dbdeployer sandbox must install its legacy runtime libraries' >&2
+	exit 1
+}
+if printf '%s\n' "${e2e_job}" | grep -Fq -- '--skip-library-check'; then
+	echo 'dbdeployer library validation must remain enabled' >&2
+	exit 1
+fi
+
 step="$(awk '
   /^      - name: Install dbdeployer$/ { capture = 1 }
   capture { print }
