@@ -392,6 +392,18 @@ ifeq ($(UNAME_S),Darwin)
 		   -DGITVERSION=\"$(GIT_VERSION)\" -DMYSQLX_TEST_BUILD $(NOJEM) $(WGCOV) $(WASAN)
 endif
 
+# OOM guard for parallel unit builds: each %-t recipe compiles a large TU
+# and links a ~170MB debug binary in a single g++ invocation. Under -j8 the
+# concurrent link peak OOMs shared runners (CI-builds docker container exits
+# code 2 with no error). Cut per-job memory with minimal debug info (-g1
+# keeps function names and line numbers, which is all TSAN/ASAN reports and
+# crash backtraces need) plus memory-savvy GNU ld options (ld64 on macOS
+# rejects them, hence the Linux guard; they trade link time for memory).
+OPT := $(subst -ggdb,-g1,$(OPT))
+ifeq ($(UNAME_S),Linux)
+OPT += -Wl,--no-keep-memory -Wl,--reduce-memory-overheads
+endif
+
 
 # ===========================================================================
 # Test helper objects
