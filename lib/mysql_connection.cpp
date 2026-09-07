@@ -1019,6 +1019,10 @@ char * MySQL_Connection::connect_start_DNS_lookup() {
 		host_ip = connected_host_details.ip;
 	}
 	else {
+		// NOTE: DNS cache miss — hostname is passed directly to
+		// mysql_real_connect which resolves via the MariaDB client library
+		// using AF_UNSPEC. The mysql-resolution_family setting does NOT
+		// apply here; it only governs the DNS cache resolver thread.
 		host_ip = parent->address;
 	}
 	return host_ip;
