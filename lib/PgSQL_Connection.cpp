@@ -241,7 +241,7 @@ PgSQL_Connection::~PgSQL_Connection() {
 	// so the block above is skipped: mirror its connected-counter decrement and
 	// free the native socket + SCRAM state here.
 	if (native_mode) {
-		if (native_connected) {
+		if (counted_in_connections_connected) {
 			__sync_fetch_and_sub(&PgHGM->status.server_connections_connected, 1);
 		}
 		if (native_scram) {
@@ -455,6 +455,7 @@ handler_again:
 			}
 		}
 		__sync_fetch_and_add(&PgHGM->status.server_connections_connected, 1);
+		counted_in_connections_connected = true;
 		__sync_fetch_and_add(&parent->connect_OK, 1);
 		// Seed the PgSQL DNS cache from the just-established connection so
 		// the next connect for this hostname can skip getaddrinfo even if
@@ -1170,8 +1171,14 @@ handler_again:
 		break;
 
 	default:
-		// not implemented yet
-		assert(0); 
+		// The connection is in a state nothing here knows how to handle. Log which
+		// state it was, so the abort below is not a bare assert with no clue, then stop.
+		proxy_error("Unhandled state %d in PgSQL_Connection::handler() for backend %s:%d (native_mode=%d, fd=%d). Aborting.\n",
+			(int)async_state_machine,
+			(parent && parent->address) ? parent->address : "(unknown)",
+			parent ? parent->port : -1,
+			native_mode ? 1 : 0, fd);
+		assert(0);
 	}
 	return async_state_machine;
 }
@@ -1689,14 +1696,8 @@ bool PgSQL_Connection::native_flush_outbuf() {
 //     where the next message begins, so nothing can ever be read from it safely
 //     again, even though the socket is still technically open.
 //
-// Without the teardown the object still looks HEALTHY to
-// is_connection_in_reusable_state(): `fd` is >= 0, and `native_connected` is still
-// true because that flag is only cleared when a NEW connect starts
-// (native_connect_start()) and never on breakage -- it means "completed a
-// handshake once", not "is alive now". Both halves of that gate's
-// `fd == -1 || native_connected == false` test therefore answer "reusable", and
-// destroy_MySQL_Connection_From_Pool() re-pools a connection whose peer is gone or
-// whose stream is out of sync. The next session to draw it inherits the mess.
+// Closing the socket here is what marks the connection as unusable, so it gets
+// thrown away instead of going back into the pool.
 //
 // The auth and startup phases already do this -- their "backend closed during
 // auth" / "during startup" exits call native_teardown() -- the result phase simply
@@ -1715,6 +1716,14 @@ void PgSQL_Connection::native_teardown() {
 		::close(fd);
 		fd = -1;
 	}
+	// Drop this connection from the count of connected backends. The check makes
+	// sure we only subtract if we added in the first place, so a teardown followed
+	// by the destructor still subtracts exactly once.
+	if (counted_in_connections_connected) {
+		__sync_fetch_and_sub(&PgHGM->status.server_connections_connected, 1);
+		counted_in_connections_connected = false;
+	}
+	native_connected = false;
 	native_framer.reset();
 	native_outbuf.clear();
 	native_ssl_outbuf.clear();
@@ -2854,7 +2863,7 @@ void PgSQL_Connection::native_drive_startup_tail(short /*event*/) {
 			native_teardown();
 			return;
 		case 'Z': { // ReadyForQuery: 1 status byte
-			if (msg.payload_len >= 1) native_txn_status = (char)msg.payload[0];
+			if (msg.payload_len >= 1) set_ready_for_query_status((char)msg.payload[0]);
 			native_connected = true;
 			native_st = PG_Native_Conn_St::DONE;
 			async_exit_status = PG_EVENT_NONE; // connect/auth phase COMPLETE
@@ -3450,15 +3459,21 @@ int PgSQL_Connection::async_connect(short event) {
 	return 1;
 }
 
-bool PgSQL_Connection::is_connected() const {
+bool PgSQL_Connection::backend_is_live() const {
 	if (native_mode) {
-		// Native handshake completed (ReadyForQuery received) => usable in the pool.
-		return native_connected;
+		// Usable means the socket is still open and login finished. Do not use
+		// native_st here: it moves back to a sending state whenever a large query
+		// cannot be written in one go, which would make a healthy connection look
+		// dead.
+		return fd >= 0 && native_connected;
 	}
-	if (pgsql_conn == nullptr || PQstatus(pgsql_conn) != CONNECTION_OK) {
-		return false;
-	}
-	return true;
+	// The same check libpq makes internally, so this never rejects a connection
+	// libpq would have accepted.
+	return pgsql_conn != nullptr && PQstatus(pgsql_conn) == CONNECTION_OK;
+}
+
+bool PgSQL_Connection::is_connected() const {
+	return backend_is_live();
 }
 
 void PgSQL_Connection::compute_unknown_transaction_status() {
@@ -3785,10 +3800,12 @@ int PgSQL_Connection::async_ping(short event) {
 }
 
 bool PgSQL_Connection::IsKnownActiveTransaction() {
+	// Callers use this to decide whether a failed statement can safely be run
+	// again on a different connection. A connection that died in the middle of a
+	// transaction must still say it has one, otherwise the statement would be
+	// re-run on its own, outside that transaction. Do not add a liveness check
+	// here -- the answer has to survive the connection dying.
 	if (native_mode) {
-		// Native state machine tracks txn status in `native_txn_status` ('I'/'T'/'E'),
-		// the same byte the backend emits in ReadyForQuery. pgsql_conn is null for
-		// native connections, so the libpq path below does not apply.
 		return native_txn_status == 'T' || native_txn_status == 'E';
 	}
 	if (!pgsql_conn) return false;
@@ -3843,37 +3860,15 @@ void PgSQL_Connection::set_is_client() {
 }
 
 bool PgSQL_Connection::is_connection_in_reusable_state() const {
-	// In native mode pgsql_conn is NULL, so PQtransactionStatus() would return
-	// PQTRANS_UNKNOWN and wrongly classify a normal query error (backend sent
-	// ErrorResponse then ReadyForQuery — connection still idle and reusable) as a
-	// broken connection. Derive the transaction status from the last ReadyForQuery
-	// byte tracked natively.
-	PGTransactionStatusType txn_status;
-	if (native_mode) {
-		// A connection whose socket is already gone, or that never completed its
-		// handshake, can never be reused -- whatever native_txn_status still says.
-		//
-		// native_teardown() closes the fd and sets it to -1 on every failure path
-		// but does not touch native_txn_status, so a connection that died during
-		// authentication still reports its initial 'I' here. That mapped to
-		// PQTRANS_IDLE and made this function answer "reusable", so
-		// destroy_MySQL_Connection_From_Pool() took its reset-and-re-pool branch
-		// instead of destroying. The dead object (fd == -1) went back into the
-		// pool, and the next session to pick it up aborted the whole process on
-		// the `default: assert(0)` in PgSQL_Connection::handler().
-		if (fd == -1 || native_connected == false) {
-			return false;
-		}
-		switch (native_txn_status) {
-			case 'I': txn_status = PQTRANS_IDLE; break;
-			case 'T': txn_status = PQTRANS_INTRANS; break;
-			case 'E': txn_status = PQTRANS_INERROR; break;
-			default:  txn_status = PQTRANS_UNKNOWN; break;
-		}
-	} else {
-		txn_status = PQtransactionStatus(pgsql_conn);
+	// Native only, and it has to answer before the check below: a connection that
+	// never finished connecting is unusable but has no error recorded against it.
+	// libpq falls through on purpose, so a dead libpq connection with no error
+	// still trips that check the way it always did.
+	if (native_mode && !backend_is_live()) {
+		return false;
 	}
-	bool conn_usable = !(txn_status == PQTRANS_UNKNOWN || txn_status == PQTRANS_ACTIVE);
+	const PGTransactionStatusType txn_status = get_pg_transaction_status();
+	const bool conn_usable = !(txn_status == PQTRANS_UNKNOWN || txn_status == PQTRANS_ACTIVE);
 	assert(!(conn_usable == false && is_error_present() == false));
 	return conn_usable;
 }
@@ -4642,7 +4637,7 @@ void PgSQL_Connection::native_reset_session_cont() {
 			native_track_parameter_status(msg.payload, msg.payload_len);
 			break;
 		case 'Z': // ReadyForQuery: the reply is complete
-			if (msg.payload_len >= 1) native_txn_status = (char)msg.payload[0];
+			if (msg.payload_len >= 1) set_ready_for_query_status((char)msg.payload[0]);
 			return;
 		default:
 			// CommandComplete and NoticeResponse: nothing to keep.

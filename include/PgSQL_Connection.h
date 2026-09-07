@@ -555,11 +555,16 @@ public:
 	// Native TLS (1.6b): SSL is in use once the handshake handed the SSL* to myds.
 	// Out-of-line in PgSQL_Connection.cpp because PgSQL_Data_Stream is incomplete here.
 	int get_pg_ssl_in_use();
-	inline ConnStatusType get_pg_connection_status() {
-		if (native_mode) return native_connected ? CONNECTION_OK : CONNECTION_BAD;
+	inline ConnStatusType get_pg_connection_status() const {
+		// Only the native side needs the check. libpq already reports a connection
+		// that is still being set up, and those must not be reported as bad.
+		if (native_mode) return backend_is_live() ? CONNECTION_OK : CONNECTION_BAD;
 		return PQstatus(pgsql_conn);
 	}
-	inline PGTransactionStatusType get_pg_transaction_status() {
+	inline PGTransactionStatusType get_pg_transaction_status() const {
+		// Says whether the connection can be reused. Use
+		// last_ready_for_query_status() if you want what the backend actually said.
+		if (!backend_is_live()) return PQTRANS_UNKNOWN;
 		if (native_mode) {
 			switch (native_txn_status) {
 				case 'I': return PQTRANS_IDLE;
@@ -570,6 +575,11 @@ public:
 		}
 		return PQtransactionStatus(pgsql_conn);
 	}
+	// The transaction letter the backend sent with its last reply. It says nothing
+	// about whether the connection is still usable -- callers that need that ask
+	// get_pg_transaction_status() instead.
+	inline char last_ready_for_query_status() const { return native_txn_status; }
+	inline void set_ready_for_query_status(char st) { native_txn_status = st; }
 	inline int get_pg_is_nonblocking() { return native_mode ? 1 : PQisnonblocking(pgsql_conn); }
 	inline int get_pg_is_threadsafe() { return PQisthreadsafe(); }
 	inline const char* get_pg_error_message() {
@@ -721,10 +731,13 @@ public:
 	// SEND_STARTUP to flush the remainder; this records the state to resume in
 	// once the buffer drains (AUTH after a password/SASL message, etc.).
 	PG_Native_Conn_St native_st_after_send = PG_Native_Conn_St::AUTH;
+	// True once login has finished and the connection can carry queries. Set when
+	// the backend sends its first ready-for-query, cleared when we start a new
+	// connect or tear the connection down.
+	bool native_connected = false;
 	PgSQL_Backend_Msg_Framer native_framer;          // frames inbound backend bytes
 	PgSQL_Scram_State* native_scram = nullptr;       // owned; freed in destructor / teardown
 	std::string native_outbuf;                       // pending outbound bytes (partial send buffer)
-	bool native_connected = false;                   // true once ReadyForQuery received
 	bool handler_first_call = true;                  // one-shot first-call detector for handler() (both libpq and native paths)
 	std::map<std::string, std::string> native_params; // ParameterStatus name->value
 	std::string native_host;                         // backend host (parent->address, captured at connect)
@@ -733,7 +746,6 @@ public:
 	std::string native_port;                         // backend port as a decimal string, matching PQport()'s shape
 	int native_backend_pid = 0;                      // BackendKeyData PID
 	int native_backend_secret = 0;                   // BackendKeyData secret key
-	char native_txn_status = 'I';                    // ReadyForQuery status byte ('I'/'T'/'E')
 
 	// --- Native simple-query / simple-command execution (Task 1.6c / Phase 2 core) ---
 	// Set true once a ReadyForQuery ('Z') has been consumed for the in-flight query,
@@ -962,6 +974,21 @@ public:
 	bool unknown_transaction_status;
 
 private:
+	// The one place that decides whether this connection can still be used. Every
+	// answer about the connection's health is built on it.
+	bool backend_is_live() const;
+
+	// True once this connection has been added to the global count of connected
+	// backends. The two native subtractions (teardown and destructor) check it, so
+	// a connection that was never added is never subtracted and the count cannot
+	// wrap. The libpq branch of the destructor still keys off is_connected().
+	bool counted_in_connections_connected = false;
+
+	// Kept private on purpose. It is stale whenever the connection is broken, so
+	// read it through one of the two accessors, which say which question you are
+	// asking.
+	char native_txn_status = 'I';                    // ReadyForQuery status byte ('I'/'T'/'E')
+
 	// Set end state for the fetch result to indicate that it originates from a simple query or statement execution.
 	ASYNC_ST fetch_result_end_st = ASYNC_QUERY_END;
 	inline void set_fetch_result_end_state(ASYNC_ST st) {

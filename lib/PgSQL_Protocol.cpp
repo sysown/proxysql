@@ -2982,7 +2982,7 @@ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const uns
 		break;
 	case 'Z': // ReadyForQuery: final message; records txn status and finalizes buffer.
 		if (conn && payload_len >= 1) {
-			conn->native_txn_status = (char)payload[0];
+			conn->set_ready_for_query_status((char)payload[0]);
 		}
 		result_packet_type |= PGSQL_QUERY_RESULT_READY;
 		// Mirror add_ready_status(): flush the in-line buffer into PSarrayOUT so the

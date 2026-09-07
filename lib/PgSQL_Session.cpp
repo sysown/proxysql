@@ -3762,7 +3762,7 @@ handler_again:
 				// registry (clear_portals_at_boundary), so sticky_backend_connection below
 				// is computed exactly as before (as if the clear had already happened);
 				// only the destructive free is moved past the logging read.
-				bool clear_portals_at_boundary = (!has_pending_messages && myconn->native_txn_status == 'I');
+				bool clear_portals_at_boundary = (!has_pending_messages && myconn->last_ready_for_query_status() == 'I');
 				// Pin the backend while named portals are open (same intent as the
 				// active-transaction sticky pin) so a later Execute/Describe/Close of a
 				// named portal routes to the connection that holds it. Kept SEPARATE from
@@ -3908,7 +3908,7 @@ handler_again:
 				// portals are gone with it and the session either ends (destructor clears
 				// via reset()) or reconnects fresh.
 				if (processing_extended_query && rc == -1 && myds->myconn &&
-					myds->myconn->native_txn_status == 'I' &&
+					myds->myconn->last_ready_for_query_status() == 'I' &&
 					myds->myconn->is_connection_in_reusable_state()) {
 					clear_named_portals();
 				}
