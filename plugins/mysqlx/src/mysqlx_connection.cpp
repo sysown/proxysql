@@ -393,7 +393,7 @@ int MysqlxConnection::step_auth_capabilities_set_sent() {
 	}
 	const uint8_t msg_type = (*frame)[4];
 
-	// `preferred` mode contract (mysqlx_tls_backend_mode=preferred):
+	// `preferred` mode contract (mysqlx-tls_backend_mode=preferred):
 	// the backend may reject CapabilitiesSet(tls=true) with a
 	// Mysqlx::Error when it has no TLS configured. Under preferred,
 	// the proxy is allowed to silently downgrade to plaintext and

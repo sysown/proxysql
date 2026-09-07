@@ -1315,17 +1315,18 @@ bool is_valid_global_variable(const char *var_name) {
 	} else if (name.size() > 11 && name.compare(0, 11, "clickhouse-") == 0 && GloClickHouseServer && GloClickHouseServer->has_variable(var_name + 11)) {
 		return true;
 	#endif /* PROXYSQLCLICKHOUSE */
-	// `mcp-*` and `genai-*` variables live in the genai plugin
+	// `mcp-*`, `genai-*`, and `mysqlx-*` variables live in plugins
 	// (carve-out Steps 4.C and 5).  Core no longer holds an
-	// authoritative list, so we accept any `mcp-<name>` /
-	// `genai-<name>` token as a valid global_variables key here so
+	// authoritative list, so we accept their namespaced tokens as valid
+	// global_variables keys here so
 	// the SET / UPDATE admin path can reach `main.global_variables`.
-	// The plugin's `LOAD {MCP,GENAI} VARIABLES TO RUNTIME` is what
+	// The owning plugin's `LOAD {MCP,GENAI,MYSQLX} VARIABLES TO RUNTIME` is what
 	// actually validates each name at push-into-runtime time.
 	//
-	// Trade-off: a typo (e.g. `SET mcp-prot=9090`) writes the row
-	// silently and goes ignored at runtime.  Acceptable until a
-	// chassis-side `register_variable_namespace` ABI exists.
+	// Trade-off: a typo (e.g. `SET mcp-prot=9090`) reaches the owning
+	// namespace. The plugin then rejects or ignores it according to its
+	// LOAD contract. Acceptable until a chassis-side
+	// `register_variable_namespace` ABI exists.
 	//
 	// Step 7 removed the surrounding `#ifdef PROXYSQLGENAI` — these
 	// loose prefix checks are unconditional now: SET only succeeds
@@ -1333,6 +1334,8 @@ bool is_valid_global_variable(const char *var_name) {
 	} else if (name.size() > 4 && name.compare(0, 4, "mcp-") == 0) {
 		return true;
 	} else if (name.size() > 6 && name.compare(0, 6, "genai-") == 0) {
+		return true;
+	} else if (name.size() > 7 && name.compare(0, 7, "mysqlx-") == 0) {
 		return true;
 	} else {
 		return false;
