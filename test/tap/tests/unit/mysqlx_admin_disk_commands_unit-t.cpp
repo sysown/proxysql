@@ -69,7 +69,7 @@ static bool create_tables_by_kind(SQLite3DB& db, ProxySQL_PluginDBKind kind) {
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(34);
+	plan(36);
 	diag("=== mysqlx_admin_disk_commands_unit-t starting ===");
 
 	test_init_minimal();
