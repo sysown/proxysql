@@ -135,11 +135,12 @@ jobs:
           ls -la plugins/mysqlx/ plugins/genai/ 2>/dev/null || true
 
       - name: Install MySQL 8.4 runtime libs
-        # dbdeployer ships pre-built mysqld binaries that DT_NEEDED
-        # libaio1t64/libnuma1 (server) and libncurses6/libtinfo6 (client).
-        # ubuntu-24.04 runner image includes most but not all of these
-        # by default; install explicitly so we never silently depend on
-        # whatever the runner happens to ship.
+        # The glibc 2.28 MySQL archive uses Noble's ncurses/tinfo 6 ABI.
+        # Oracle's generic mysqld still requests libaio.so.1 while Noble's
+        # time64 package exposes the same x86_64 ABI as libaio.so.1t64
+        # (MySQL bug #119954). Provide that name in a job-private directory
+        # so dbdeployer's library validation and the sandbox see it without
+        # modifying the runner's system library directories.
         run: |
           # The runner image ships a pre-baked apt index that pins point-
           # releases which get superseded and pulled from the mirror, so a
@@ -149,6 +150,12 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y -qq --no-install-recommends \
             libaio1t64 libnuma1 libncurses6 libtinfo6
+          MYSQLX_COMPAT_LIB_DIR="${RUNNER_TEMP}/mysqlx-compat-libs"
+          mkdir -p "${MYSQLX_COMPAT_LIB_DIR}"
+          LIBAIO_T64=$(ldconfig -p | awk '$1 == "libaio.so.1t64" { print $NF; exit }')
+          test -n "${LIBAIO_T64}"
+          ln -s "${LIBAIO_T64}" "${MYSQLX_COMPAT_LIB_DIR}/libaio.so.1"
+          echo "LD_LIBRARY_PATH=${MYSQLX_COMPAT_LIB_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" >> "${GITHUB_ENV}"
 
       - name: Checkout GH-Actions dbdeployer guard
         # The control test and ci-mysqlx.yml live on GH-Actions. The job
@@ -190,10 +197,23 @@ jobs:
           dbdeployer --version
 
       - name: Download and unpack MySQL 8.4
+        # dbdeployer 2.1's download catalog only records the glibc 2.17
+        # x86_64 archive. Keep dbdeployer's catalog-driven 8.4 version
+        # selection, but request the matching official glibc 2.28 minimal
+        # archive by URL so its clients use libncurses.so.6/libtinfo.so.6.
         run: |
           mkdir -p "$HOME/opt/mysql"
-          dbdeployer downloads get-by-version 8.4 --newest --minimal
-          TARBALL=$(ls -t mysql-8.4.*.tar.xz 2>/dev/null | head -1)
+          CATALOG_URL=$(dbdeployer downloads get-by-version 8.4 --newest --minimal --dry-run \
+            | awk '/^would download:/ { print $3; exit }')
+          test -n "${CATALOG_URL}"
+          MYSQL_URL=${CATALOG_URL/linux-glibc2.17-x86_64-minimal.tar.xz/linux-glibc2.28-x86_64-minimal.tar.xz}
+          case "${MYSQL_URL}" in
+            https://dev.mysql.com/get/Downloads/MySQL-8.4/mysql-8.4.*-linux-glibc2.28-x86_64-minimal.tar.xz) ;;
+            *) echo "ERROR: unexpected MySQL download URL: ${MYSQL_URL}" >&2; exit 1 ;;
+          esac
+          dbdeployer downloads get "${MYSQL_URL}" --retries-on-failure 3
+          TARBALL=$(ls -t mysql-8.4.*-linux-glibc2.28-x86_64-minimal.tar.xz 2>/dev/null | head -1)
+          test -n "${TARBALL}"
           dbdeployer unpack "$TARBALL"
 
       - name: Deploy MySQL 8.4 sandbox
