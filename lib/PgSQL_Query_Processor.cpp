@@ -669,6 +669,10 @@ enum PGSQL_QUERY_command PgSQL_Query_Processor::query_parser_command_type(SQP_pa
 	enum PGSQL_QUERY_command ret = PGSQL_QUERY_UNKNOWN;
 
 	if (pgsql_thread___query_processor_parser == 1) {
+		if (qp->parsersql_stmt_type >= 0) {
+			// already classified during the digest parse
+			return parsersql_stmt_type_to_pgsql_command(qp->parsersql_stmt_type);
+		}
 		if (text) {
 			return parsersql_command_type_pgsql(text, strlen(text)); // NOSONAR
 		}

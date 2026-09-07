@@ -107,6 +107,25 @@ enum MYSQL_COM_QUERY_command parsersql_command_type_mysql(const char* query, int
 enum PGSQL_QUERY_command parsersql_command_type_pgsql(const char* query, int query_length);
 
 /**
+ * @brief Maps a ParserSQL StmtType to a `MYSQL_COM_QUERY_command`.
+ *
+ * @param stmt_type  A `StmtType` value (see sql_parser/common.h), as an int.
+ * @return           The corresponding command type.
+ */
+enum MYSQL_COM_QUERY_command parsersql_stmt_type_to_mysql_command(int stmt_type);
+
+/**
+ * @brief Maps a ParserSQL StmtType to a `PGSQL_QUERY_command`.
+ *
+ * Identical to parsersql_stmt_type_to_mysql_command() but targets the
+ * PostgreSQL command enum.
+ *
+ * @param stmt_type  A `StmtType` value (see sql_parser/common.h), as an int.
+ * @return           The corresponding command type.
+ */
+enum PGSQL_QUERY_command parsersql_stmt_type_to_pgsql_command(int stmt_type);
+
+/**
  * @brief Parses a MySQL SET statement into variable-value pairs.
  *
  * Walks the AST produced by the MySQL ParserSQL parser and extracts each

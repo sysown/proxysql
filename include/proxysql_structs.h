@@ -899,6 +899,7 @@ struct __SQP_query_parser_t {
 	char *digest_text;
 	char *first_comment;
 	char *query_prefix;
+	int parsersql_stmt_type;
 };
 
 struct _PtrSize_t {
