@@ -907,11 +907,11 @@ duckdb_result_unit-t: duckdb_result_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/s
 # duckdb_session.cpp pulls in MySQL_Session.h / PgSQL_Session.h / *_Protocol.h
 # for the templated handler, but this test exercises only the two pure
 # functions (duckdb_classify_query, duckdb_build_intercept_result) -- the
-# socket-bound handler is covered end-to-end in later tasks. duckdb_result.cpp
-# is linked in because duckdb_session.cpp calls duckdb_result_to_sqlite3()
-# and duckdb_result_has_unrenderable_column().
-duckdb_session_unit-t: duckdb_session_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(DUCKDB_AR) $(STAGED_LIBPROXYSQLSO)
-	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(TEST_HELPERS_OBJ) $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
+# socket-bound handler is covered end-to-end in later tasks. The result,
+# engine, and configuration sources provide the session handler's result
+# conversion and managed-SET dependencies.
+duckdb_session_unit-t: duckdb_session_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(DUCKDB_AR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(TEST_HELPERS_OBJ) $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
 		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
 		$(WHOLE_LIBPROXYSQL) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 

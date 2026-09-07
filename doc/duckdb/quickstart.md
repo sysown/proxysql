@@ -112,16 +112,18 @@ configuration table:
 ```sql
 SAVE DUCKDB VARIABLES TO MEMORY;
 
-UPDATE duckdb_variables
+UPDATE global_variables
 SET variable_value='/var/lib/proxysql/duckdb/analytics.db'
-WHERE variable_name='database_path';
+WHERE variable_name='duckdb-database_path';
 
 LOAD DUCKDB VARIABLES TO RUNTIME;
 SAVE DUCKDB VARIABLES TO DISK;
 ```
 
-`database_path` is an engine-open setting. `LOAD` records the new runtime
-configuration, but the already-open engine continues using the old database.
+`duckdb-database_path` is an engine-open setting. `LOAD` rejects the live
+transition and leaves it pending in Main; Runtime continues reporting the
+database actually open.
+
 Create the parent directory with permissions for the ProxySQL service account,
 then restart ProxySQL. After restart, the plugin opens the configured file.
 
@@ -130,13 +132,13 @@ then restart ProxySQL. After restart, the plugin opens the configured file.
 Through ProxySQL Admin:
 
 ```sql
-SELECT * FROM runtime_duckdb_variables ORDER BY variable_name;
+SELECT * FROM runtime_global_variables
+WHERE variable_name LIKE 'duckdb-%' ORDER BY variable_name;
 ```
 
-The runtime table is generated from the plugin's current configuration store.
-It is not the same as the state of every already-open engine or listener
-resource; the [configuration reference](configuration-reference.md) identifies
-which variables apply immediately and which require a restart.
+The runtime rows are regenerated from effective engine and listener state.
+The [configuration reference](configuration-reference.md) identifies which
+variables apply immediately and which wait for the next plugin open.
 
 ## Next steps
 

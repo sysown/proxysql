@@ -93,7 +93,7 @@ configuration to disk, and restart. See the
 [five-minute tutorial](quickstart.md#6-make-the-database-persistent).
 
 Do not grant broader filesystem permissions merely to make DuckDB open a path.
-Use a dedicated directory and keep `enable_external_access=false` unless its
+Use a dedicated directory and keep `duckdb-enable_external_access=false` unless its
 security consequences are explicitly accepted.
 
 ## Endpoint users
@@ -115,7 +115,7 @@ After restarting ProxySQL:
 1. Check the ProxySQL log for plugin load, engine-open, or listener-bind errors.
 2. Confirm the configured ports are listening.
 3. Connect using `mysql` on 6031 or `psql` on 6034.
-4. Query `runtime_duckdb_variables` through ProxySQL Admin.
+4. Query the `duckdb-*` rows in `runtime_global_variables` through ProxySQL Admin.
 5. Run `SELECT 42` through each protocol you intend to support.
 
 If startup fails, see [Troubleshooting](troubleshooting.md).

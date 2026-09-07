@@ -10,6 +10,7 @@
 class SQLite3_result;
 class MySQL_Session;
 class PgSQL_Session;
+class DuckDBEngine;
 // Forward-declared exactly as proxysql_structs.h itself declares it
 // (tag `_PtrSize_t`, aliased to `PtrSize_t`) so this is a *compatible*
 // redeclaration once a translation unit later includes proxysql.h for
@@ -48,6 +49,7 @@ SQLite3_result* duckdb_build_intercept_result(DuckDBIntercept kind,
 // thread_local storage is exactly session-scoped here.
 struct DuckDBSessionState {
 	duckdb_connection conn { nullptr };
+	DuckDBEngine* engine { nullptr };
 	bool pgsql_extended_error { false };
 	char pgsql_txn_status { 'I' };
 	std::string database_name { "memory" };
@@ -114,6 +116,12 @@ struct DuckDBExecOutcome {
 // *parse* as `SELECT COLUMNS(*)::VARCHAR FROM (<stmt>)`, so the decision
 // falls back to the original statement before anything runs).
 DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective);
+
+// Routes managed engine-global SET statements through DuckDBEngine's internal
+// control connection. Returns false only for a handled statement that failed;
+// unhandled session SET statements return true with `handled=false`.
+bool duckdb_execute_managed_set(const std::string& sql, DuckDBEngine& engine,
+                               bool& handled, std::string& err);
 
 // Registered as sess->handler_function. `pa` is core's hardcoded global
 // (GloSQLite3Server) and is deliberately ignored: the plugin reaches its
