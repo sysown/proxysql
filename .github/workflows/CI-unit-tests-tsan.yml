@@ -64,14 +64,70 @@ env:
   SHA: ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}
 
 jobs:
+  pick-runner:
+    if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      actions: read
+    outputs:
+      runson: ${{ steps.pick.outputs.runson }}
+    steps:
+      - name: Pick runner pool
+        id: pick
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          POOL_SIZE: ${{ vars.SELFHOSTED_POOL_SIZE || '6' }}
+          ELIGIBLE: ${{ (github.actor == 'renecannao' || (github.event.workflow_run && github.event.workflow_run.actor.login == 'renecannao')) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) }}
+        run: |
+          set -uo pipefail
+          choice='"ubuntu-24.04"'
+          if [ "${ELIGIBLE:-}" = "true" ]; then
+            POOL="${POOL_SIZE:-6}"
+            demand=0; err=0
+            : > e1
+            in_progress_ids=$(gh api --paginate "repos/${REPO}/actions/runs?status=in_progress&per_page=100" --jq '.workflow_runs[].id' 2>e1) || err=1
+            queued_ids=$(gh api --paginate "repos/${REPO}/actions/runs?status=queued&per_page=100" --jq '.workflow_runs[].id' 2>>e1) || err=1
+            if [ "$err" = "0" ]; then
+              ids="${in_progress_ids:-}"$'\n'"${queued_ids:-}"
+              for rid in ${ids}; do
+                [ -n "$rid" ] || continue
+                [ "$demand" -ge "$POOL" ] && break
+                if ! n=$(gh api --paginate --slurp "repos/${REPO}/actions/runs/${rid}/jobs?per_page=100" 2>>e1 | jq '[.[].jobs[]|select((.status=="in_progress" and ((.runner_name//"")|startswith("ci-vm"))) or (.status=="queued" and (([.labels[]]|index("proxysql-ci")) != null)))]|length'); then
+                  err=1
+                  break
+                fi
+                demand=$(( demand + ${n:-0} ))
+              done
+            fi
+            if [ "$err" = "0" ]; then
+              free=$(( POOL - demand ))
+              echo ">>> self-hosted pool: demand=${demand}/${POOL} free=${free} (occupied+queued)"
+              if [ "${free}" -ge 1 ]; then
+                choice='["self-hosted","proxysql-ci"]'; echo ">>> capacity available -> self-hosted"
+              else
+                choice='"ubuntu-24.04"'; echo ">>> pool at/over capacity -> spill to GitHub-hosted"
+              fi
+            else
+              echo ">>> WARNING: could not read runs:"; sed 's/^/    /' e1
+              choice='"ubuntu-24.04"'; echo ">>> demand query failed -> spill to GitHub-hosted"
+            fi
+          else
+            echo ">>> not eligible for self-hosted -> GitHub-hosted"
+          fi
+          echo "runson=${choice}" >> "$GITHUB_OUTPUT"
+          echo ">>> decision: runson=${choice}"
+
   unit-tests-tsan:
+    needs: pick-runner
     if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
     # `write-all` is required so the workflow_run event's GITHUB_TOKEN has
     # the cache-writable scope (GitHub started enforcing this for workflow_run
     # in early July 2026). Without it actions/cache/save@v4 fails with
     # 'cache write denied: token has no writable scopes'.
     permissions: write-all
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJson(needs.pick-runner.outputs.runson) }}
     timeout-minutes: 120
 
     steps:
@@ -161,18 +217,18 @@ jobs:
       # SKIP_PROXYSQL=1 short-circuits the daemon + backend checks in
       # run-tests-isolated.bash, so it just iterates groups.json and
       # execs each *-t binary in turn — no nested docker, no Python
-       # tester. TSAN_OPTIONS comes from mysqlx-tsan-g1/env.sh.
-       #
-       # Two phases, one container invocation. Both always run; the
-       # combined status fails if either phase fails.
-       #   1. TAP_GROUP=mysqlx-tsan-g1 — the 26 TSAN-targeted mysqlx +
-       #      plugin-chassis binaries (env.sh supplies SKIP_PROXYSQL=1
-       #      and TSAN_OPTIONS). TSan reports still fail the binary
-       #      (default exitcode 66).
-       #   2. TAP_GROUP=unit-tests-g1 — the remaining already-built
-       #      core / duckdb / genai / mcp binaries. unit-tests-g1 has
-       #      no env.sh, so SKIP_PROXYSQL=1 and TSAN_OPTIONS are
-       #      exported inline. TEST_PY_TAP_EXCL drops the phase-1
+      # tester. TSAN_OPTIONS comes from mysqlx-tsan-g1/env.sh.
+      #
+      # Two phases, one container invocation. Both always run; the
+      # combined status fails if either phase fails.
+      #   1. TAP_GROUP=mysqlx-tsan-g1 — the 26 TSAN-targeted mysqlx +
+      #      plugin-chassis binaries (env.sh supplies SKIP_PROXYSQL=1
+      #      and TSAN_OPTIONS). TSan reports still fail the binary
+      #      (default exitcode 66).
+      #   2. TAP_GROUP=unit-tests-g1 — the remaining already-built
+      #      core / duckdb / genai / mcp binaries. unit-tests-g1 has
+      #      no env.sh, so SKIP_PROXYSQL=1 and TSAN_OPTIONS are
+      #      exported inline. TEST_PY_TAP_EXCL drops the phase-1
        #      overlap. halt_on_error=0:exitcode=0 keeps never-TSAN-
        #      validated tests from red-ing the build on a race
        #      report (TAP assertion failures still fail).
