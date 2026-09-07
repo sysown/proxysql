@@ -3657,6 +3657,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 
 			st=previous_status.top();
 			previous_status.pop();
+			pause_until = 0;
 			NEXT_IMMEDIATE_NEW(st);
 		}
 		assert(st==status);
@@ -3683,7 +3684,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 				st=previous_status.top();
 				previous_status.pop();
 				myds->wait_until=0;
-
+				pause_until = 0;
 				if (handle_session_track_capabilities() == false) {
 					previous_status.push(st);
 					pause_until = thread->curtime + mysql_thread___connect_retries_delay * 1000;

@@ -1637,6 +1637,7 @@ bool PgSQL_Session::handler_again___status_CONNECTING_SERVER(int* _rc) {
 		if (mybe->server_myds->myconn->async_state_machine == ASYNC_IDLE) {
 			st = previous_status.top();
 			previous_status.pop();
+			pause_until = 0;
 			NEXT_IMMEDIATE_NEW(st);
 		}
 		assert(st == status);
@@ -1674,6 +1675,7 @@ bool PgSQL_Session::handler_again___status_CONNECTING_SERVER(int* _rc) {
 			st = previous_status.top();
 			previous_status.pop();
 			myds->wait_until = 0;
+			pause_until = 0;
 			if (session_fast_forward) {
 				// we have a successful connection and session_fast_forward enabled
 				// set DSS=STATE_SLEEP or it will believe it have to use MARIADB client library
