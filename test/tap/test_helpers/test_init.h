@@ -128,4 +128,17 @@ int test_init_hostgroups();
  */
 void test_cleanup_hostgroups();
 
+/**
+ * @brief Initialize the MySQL monitor without starting its worker threads.
+ *
+ * @pre test_init_minimal() must have been called.
+ * @return 0 on success, non-zero on failure.
+ */
+int test_init_monitor();
+
+/**
+ * @brief Clean up resources allocated by test_init_monitor().
+ */
+void test_cleanup_monitor();
+
 #endif /* TEST_INIT_H */

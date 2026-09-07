@@ -28,7 +28,7 @@ struct TestState {
 	uint64_t probe_sequence { 0 };
 };
 
-int setup(CommandLine& cl, MYSQL*& admin, RDS_BGD_Simulator& sim) {
+int setup(CommandLine& cl, MYSQL*& admin, BGD_Simulator& sim) {
 	if (cl.getEnv()) {
 		diag("Error: failed to load TAP environment");
 		return EXIT_FAILURE;
@@ -50,7 +50,7 @@ int setup(CommandLine& cl, MYSQL*& admin, RDS_BGD_Simulator& sim) {
 	return EXIT_SUCCESS;
 }
 
-int cleanup(MYSQL* admin, RDS_BGD_Simulator& sim) {
+int cleanup(MYSQL* admin, BGD_Simulator& sim) {
 	int admin_rc = bgd_admin_cleanup(admin);
 	if (admin_rc != EXIT_SUCCESS) {
 		diag("Error: failed to clean ProxySQL BGD test state");
@@ -109,7 +109,7 @@ int configure_explicit_bgd(MYSQL* admin, TestState& state) {
  * - Record the probe sequence before publishing topology.
  * - Publish AVAILABLE topology to the blue and green writer endpoints.
  */
-int publish_available_topology(RDS_BGD_Simulator& sim, TestState& state) {
+int publish_available_topology(BGD_Simulator& sim, TestState& state) {
 	int writer_rc = bgd_set_writer_read_only_0(sim, state.cluster);
 	if (writer_rc != EXIT_SUCCESS) {
 		diag("Error: failed to set read_only=0 for the simulated writers");
@@ -123,7 +123,7 @@ int publish_available_topology(RDS_BGD_Simulator& sim, TestState& state) {
 	}
 	state.probe_sequence = seq;
 
-	vector<RDS_BGD_Topology_Row> topology = state.cluster.get_topology("AVAILABLE");
+	vector<BGD_Topology_Row> topology = state.cluster.get_topology("AVAILABLE");
 	int topology_rc = sim.topology_update(state.topology_endpoints, topology);
 	if (topology_rc != EXIT_SUCCESS) {
 		diag("Error: failed to publish AVAILABLE topology");
@@ -164,10 +164,10 @@ int configure_bgd_available(MYSQL* admin, TestState& state) {
  * - Wait for a metadata probe after the topology publication sequence.
  * - Require the probe on the green writer IP without TLS.
  */
-int test_plaintext_green_writer_probe(RDS_BGD_Simulator& sim, TestState& state) {
+int test_plaintext_green_writer_probe(BGD_Simulator& sim, TestState& state) {
 	auto [probe_rc, probe] = sim.wait_for_probe_log(
 		state.probe_sequence, state.cluster.green_writer.endpoint(),
-		RDS_BGD_Probe_Kind::metadata, kProbeTimeoutMs, 0
+		BGD_Probe_Kind::metadata, kProbeTimeoutMs, 0
 	);
 	if (probe_rc != EXIT_SUCCESS) {
 		diag("Error: green writer did not receive a plaintext metadata probe");
@@ -183,7 +183,7 @@ int main() {
 
 	CommandLine cl {};
 	MYSQL* admin = nullptr;
-	RDS_BGD_Simulator sim {};
+	BGD_Simulator sim {};
 
 	if (setup(cl, admin, sim) != EXIT_SUCCESS) {
 		return exit_status();

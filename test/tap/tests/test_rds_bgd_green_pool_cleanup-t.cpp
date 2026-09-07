@@ -52,7 +52,7 @@ struct TestState {
 	}
 };
 
-int setup(CommandLine& cl, MYSQL*& admin, RDS_BGD_Simulator& sim) {
+int setup(CommandLine& cl, MYSQL*& admin, BGD_Simulator& sim) {
 	if (cl.getEnv()) {
 		diag("Error: failed to load TAP environment");
 		return EXIT_FAILURE;
@@ -74,7 +74,7 @@ int setup(CommandLine& cl, MYSQL*& admin, RDS_BGD_Simulator& sim) {
 	return EXIT_SUCCESS;
 }
 
-int cleanup(MYSQL* admin, RDS_BGD_Simulator& sim) {
+int cleanup(MYSQL* admin, BGD_Simulator& sim) {
 	int admin_rc = bgd_admin_cleanup(admin);
 	if (admin_rc != EXIT_SUCCESS) {
 		diag("Error: failed to clean ProxySQL BGD test state");
@@ -92,8 +92,8 @@ int cleanup(MYSQL* admin, RDS_BGD_Simulator& sim) {
 	return EXIT_SUCCESS;
 }
 
-vector<RDS_BGD_Topology_Row> topology_with_readers(RDS_BGD_Cluster& cluster, string status) {
-	vector<RDS_BGD_Topology_Row> rows = cluster.get_topology(status);
+vector<BGD_Topology_Row> topology_with_readers(RDS_BGD_Cluster& cluster, string status) {
+	vector<BGD_Topology_Row> rows = cluster.get_topology(status);
 	for (RDS_BGD_Host& host : cluster.blue_readers) {
 		rows.push_back({
 			host.hostname,
@@ -115,8 +115,8 @@ vector<RDS_BGD_Topology_Row> topology_with_readers(RDS_BGD_Cluster& cluster, str
 	return rows;
 }
 
-vector<RDS_BGD_Topology_Row> target_only_completed(RDS_BGD_Cluster& cluster) {
-	vector<RDS_BGD_Topology_Row> rows {{
+vector<BGD_Topology_Row> target_only_completed(RDS_BGD_Cluster& cluster) {
+	vector<BGD_Topology_Row> rows {{
 		cluster.green_writer.hostname,
 		cluster.green_writer.hostname,
 		cluster.green_writer.port,
@@ -126,7 +126,7 @@ vector<RDS_BGD_Topology_Row> target_only_completed(RDS_BGD_Cluster& cluster) {
 	return rows;
 }
 
-int configure_read_only_values(RDS_BGD_Simulator& sim, RDS_BGD_Cluster& cluster) {
+int configure_read_only_values(BGD_Simulator& sim, RDS_BGD_Cluster& cluster) {
 	if (bgd_set_host_read_only_0(sim, cluster.blue_writer) != EXIT_SUCCESS) {
 		return EXIT_FAILURE;
 	}
@@ -250,7 +250,7 @@ bool all_pools_nonzero(vector<int64_t>& pools) {
 	return true;
 }
 
-int configure_status_matrix(CommandLine& cl, MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int configure_status_matrix(CommandLine& cl, MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	RDS_BGD_Cluster& cluster = state.cluster;
 	BGD_Hostgroups& hg = state.hostgroups;
 
@@ -336,8 +336,8 @@ int configure_status_matrix(CommandLine& cl, MYSQL* admin, RDS_BGD_Simulator& si
 	return EXIT_SUCCESS;
 }
 
-int publish_topology(RDS_BGD_Simulator& sim, TestState& state, string status) {
-	vector<RDS_BGD_Topology_Row> topology = topology_with_readers(state.cluster, status);
+int publish_topology(BGD_Simulator& sim, TestState& state, string status) {
+	vector<BGD_Topology_Row> topology = topology_with_readers(state.cluster, status);
 
 	int rc = sim.topology_update(state.topology_endpoints, topology);
 	return rc;
@@ -362,7 +362,7 @@ bool snapshots_match(MYSQL* admin, TestState& state) {
  * - Publish AVAILABLE, SWITCHOVER_IN_PROGRESS, then AVAILABLE.
  * - Verify rollback preserves every green pool and exact configured row.
  */
-int test_rollback_preserves_green_pools(CommandLine& cl, MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_rollback_preserves_green_pools(CommandLine& cl, MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	int config_rc = configure_status_matrix(cl, admin, sim, state);
 	if (config_rc != EXIT_SUCCESS) {
 		return EXIT_FAILURE;
@@ -432,7 +432,7 @@ int test_rollback_preserves_green_pools(CommandLine& cl, MYSQL* admin, RDS_BGD_S
  * - Require every green pool to remain nonzero immediately before cleanup.
  * - Delete topology rows and verify that ONLINE and SHUNNED pools drain.
  */
-int test_successful_cleanup_drains_non_offline(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_successful_cleanup_drains_non_offline(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	int post_rc = publish_topology(sim, state, "SWITCHOVER_IN_POST_PROCESSING");
 	if (post_rc != EXIT_SUCCESS) {
 		diag("Error: failed to publish SWITCHOVER_IN_POST_PROCESSING topology for wHG 1300");
@@ -446,7 +446,7 @@ int test_successful_cleanup_drains_non_offline(MYSQL* admin, RDS_BGD_Simulator& 
 		return EXIT_FAILURE;
 	}
 
-	vector<RDS_BGD_Topology_Row> completed = target_only_completed(state.cluster);
+	vector<BGD_Topology_Row> completed = target_only_completed(state.cluster);
 	int completed_rc = sim.topology_update(state.topology_endpoints, completed);
 	if (completed_rc != EXIT_SUCCESS) {
 		diag("Error: failed to publish target-only SWITCHOVER_COMPLETED topology for wHG 1300");
@@ -517,7 +517,7 @@ int main() {
 
 	CommandLine cl {};
 	MYSQL* admin = nullptr;
-	RDS_BGD_Simulator sim {};
+	BGD_Simulator sim {};
 
 	if (setup(cl, admin, sim) != EXIT_SUCCESS) {
 		return exit_status();

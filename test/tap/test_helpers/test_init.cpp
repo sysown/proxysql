@@ -20,6 +20,7 @@
 #include "PgSQL_Query_Cache.h"
 #include "MySQL_Query_Processor.h"
 #include "PgSQL_Query_Processor.h"
+#include "MySQL_Monitor.hpp"
 
 #include "test_globals.h"
 #include "test_init.h"
@@ -32,6 +33,7 @@ extern MySQL_Query_Cache *GloMyQC;
 extern PgSQL_Query_Cache *GloPgQC;
 extern MySQL_Query_Processor *GloMyQPro;
 extern PgSQL_Query_Processor *GloPgQPro;
+extern MySQL_Monitor *GloMyMon;
 
 // GloMTH is declared extern in proxysql_utils.h.
 // GloPTH has no extern declaration in any header, so we add one here.
@@ -203,5 +205,23 @@ void test_cleanup_hostgroups() {
 	if (PgHGM != nullptr) {
 		delete PgHGM;
 		PgHGM = nullptr;
+	}
+}
+
+// ============================================================================
+// MySQL Monitor
+// ============================================================================
+
+int test_init_monitor() {
+	if (GloMyMon == nullptr) {
+		GloMyMon = new MySQL_Monitor();
+	}
+	return 0;
+}
+
+void test_cleanup_monitor() {
+	if (GloMyMon != nullptr) {
+		delete GloMyMon;
+		GloMyMon = nullptr;
 	}
 }

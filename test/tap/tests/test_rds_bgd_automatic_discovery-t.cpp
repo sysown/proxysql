@@ -36,7 +36,7 @@ struct TestState {
 	uint64_t absent_available_sequence { 0 };
 };
 
-int setup(CommandLine& cl, MYSQL*& admin, RDS_BGD_Simulator& sim) {
+int setup(CommandLine& cl, MYSQL*& admin, BGD_Simulator& sim) {
 	if (cl.getEnv()) {
 		diag("Error: failed to load TAP environment");
 		return EXIT_FAILURE;
@@ -58,7 +58,7 @@ int setup(CommandLine& cl, MYSQL*& admin, RDS_BGD_Simulator& sim) {
 	return EXIT_SUCCESS;
 }
 
-int cleanup(MYSQL* admin, RDS_BGD_Simulator& sim) {
+int cleanup(MYSQL* admin, BGD_Simulator& sim) {
 	int admin_rc = bgd_admin_cleanup(admin);
 	if (admin_rc != EXIT_SUCCESS) {
 		diag("Error: failed to clean ProxySQL BGD test state");
@@ -141,7 +141,7 @@ bool runtime_bgd_row_count_matches(MYSQL* admin, int writer_hostgroup, int expec
  * - Verify one auto-generated runtime row with NULL green hostgroups.
  * - Verify automatic discovery does not create a persistent BGD row.
  */
-int test_topology_before_writer(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_topology_before_writer(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	RDS_BGD_Cluster& cluster = state.topology_first;
 	BGD_Hostgroups& hg = state.topology_first_hg;
 
@@ -151,7 +151,7 @@ int test_topology_before_writer(MYSQL* admin, RDS_BGD_Simulator& sim, TestState&
 		return EXIT_FAILURE;
 	}
 
-	vector<RDS_BGD_Topology_Row> topology = bgd_topology_with_readers(cluster, "AVAILABLE");
+	vector<BGD_Topology_Row> topology = bgd_topology_with_readers(cluster, "AVAILABLE");
 	int topology_rc = sim.topology_update(state.topology_first_endpoints, topology);
 	if (topology_rc != EXIT_SUCCESS) {
 		diag("Error: failed to publish topology-first AVAILABLE topology");
@@ -189,7 +189,7 @@ int test_topology_before_writer(MYSQL* admin, RDS_BGD_Simulator& sim, TestState&
  * - Verify no runtime or persistent BGD row is created.
  * - Publish AVAILABLE topology and verify automatic row creation.
  */
-int test_topology_absent_then_available(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_topology_absent_then_available(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	RDS_BGD_Cluster& cluster = state.absent_first;
 	BGD_Hostgroups& hg = state.absent_first_hg;
 
@@ -220,7 +220,7 @@ int test_topology_absent_then_available(MYSQL* admin, RDS_BGD_Simulator& sim, Te
 	}
 
 	auto [absent_probe_rc, absent_probe] =
-		sim.wait_for_probe_log(seq, cluster.blue_writer.endpoint(), RDS_BGD_Probe_Kind::metadata, kProbeTimeoutMs, 0);
+		sim.wait_for_probe_log(seq, cluster.blue_writer.endpoint(), BGD_Probe_Kind::metadata, kProbeTimeoutMs, 0);
 	if (absent_probe_rc != EXIT_SUCCESS) {
 		diag("Error: automatic discovery did not issue the absent-table metadata probe");
 		return EXIT_FAILURE;
@@ -236,7 +236,7 @@ int test_topology_absent_then_available(MYSQL* admin, RDS_BGD_Simulator& sim, Te
 		return EXIT_FAILURE;
 	}
 
-	vector<RDS_BGD_Topology_Row> topology = bgd_topology_with_readers(cluster, "AVAILABLE");
+	vector<BGD_Topology_Row> topology = bgd_topology_with_readers(cluster, "AVAILABLE");
 	int topology_rc = sim.topology_update(state.absent_first_endpoints, topology);
 	if (topology_rc != EXIT_SUCCESS) {
 		diag("Error: failed to publish AVAILABLE topology for wHG 820");
@@ -250,7 +250,7 @@ int test_topology_absent_then_available(MYSQL* admin, RDS_BGD_Simulator& sim, Te
 	}
 
 	auto [green_probe_rc, green_probe] =
-		sim.wait_for_probe_log(available_seq, cluster.green_writer.endpoint(), RDS_BGD_Probe_Kind::metadata, kProbeTimeoutMs, 0);
+		sim.wait_for_probe_log(available_seq, cluster.green_writer.endpoint(), BGD_Probe_Kind::metadata, kProbeTimeoutMs, 0);
 	if (green_probe_rc != EXIT_SUCCESS) {
 		diag("Error: wHG 820 did not probe the AVAILABLE green writer");
 		return EXIT_FAILURE;
@@ -269,12 +269,12 @@ int test_topology_absent_then_available(MYSQL* admin, RDS_BGD_Simulator& sim, Te
  * - Verify runtime contains one auto-generated BGD row.
  * - Verify the automatic row remains absent from persistent configuration.
  */
-int test_repeated_discovery(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_repeated_discovery(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	RDS_BGD_Cluster& cluster = state.absent_first;
 	BGD_Hostgroups& hg = state.absent_first_hg;
 
 	auto [probe_rc, probe] = sim.wait_for_probe_log(
-		state.absent_available_sequence, cluster.green_writer.endpoint(), RDS_BGD_Probe_Kind::metadata, kProbeTimeoutMs, 0);
+		state.absent_available_sequence, cluster.green_writer.endpoint(), BGD_Probe_Kind::metadata, kProbeTimeoutMs, 0);
 	if (probe_rc != EXIT_SUCCESS) {
 		diag("Error: automatic wHG 820 did not continue green-writer metadata polling");
 		return EXIT_FAILURE;
@@ -291,7 +291,7 @@ int main() {
 
 	CommandLine cl {};
 	MYSQL* admin = nullptr;
-	RDS_BGD_Simulator sim {};
+	BGD_Simulator sim {};
 
 	if (setup(cl, admin, sim) != EXIT_SUCCESS) {
 		return exit_status();

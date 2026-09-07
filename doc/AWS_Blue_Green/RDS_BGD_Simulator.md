@@ -78,7 +78,7 @@ Create the following tables in `SQLite3_Server::init()` and store them in the
 existing persistent `GloVars.sqlite3serverdb` database:
 
 ```sql
-CREATE TABLE RDS_BGD_CONTROL (
+CREATE TABLE AWS_BGD_CONTROL (
     backend_ip TEXT NOT NULL,
     backend_port INTEGER NOT NULL,
     topology_present INTEGER NOT NULL DEFAULT 0 CHECK (topology_present IN (0,1)),
@@ -87,7 +87,7 @@ CREATE TABLE RDS_BGD_CONTROL (
     PRIMARY KEY (backend_ip, backend_port)
 );
 
-CREATE TABLE RDS_BGD_TOPOLOGY (
+CREATE TABLE AWS_BGD_TOPOLOGY (
     backend_ip TEXT NOT NULL,
     backend_port INTEGER NOT NULL,
     row_order INTEGER NOT NULL,
@@ -99,7 +99,7 @@ CREATE TABLE RDS_BGD_TOPOLOGY (
     PRIMARY KEY (backend_ip, backend_port, row_order)
 );
 
-CREATE TABLE RDS_BGD_PROBE_LOG (
+CREATE TABLE AWS_BGD_PROBE_LOG (
     sequence_id INTEGER PRIMARY KEY AUTOINCREMENT,
     backend_ip TEXT NOT NULL,
     backend_port INTEGER NOT NULL,
@@ -141,7 +141,7 @@ The TAP helper publishes control and topology changes atomically. Monitor probes
 read committed simulator state without holding a cross-query snapshot. The
 supported states are:
 
-| `RDS_BGD_CONTROL` state | Topology rows | Meaning |
+| `AWS_BGD_CONTROL` state | Topology rows | Meaning |
 |---|---|---|
 | No backend row | None | Backend is unconfigured; topology is absent. |
 | `topology_present=1`, `error_code=0` | One or more | Return the configured topology. |
@@ -180,7 +180,7 @@ configured simulator errors may use `HY000` unless a test requires a specific
 mapping.
 
 Every handled topology-table check or metadata query appends one row to
-`RDS_BGD_PROBE_LOG`, including empty and error responses. `sequence_id`
+`AWS_BGD_PROBE_LOG`, including empty and error responses. `sequence_id`
 preserves order, `probe_kind` identifies the query, `backend_ip, backend_port`
 identify the destination, and `encrypted` records the accepted stream's TLS
 state.
@@ -205,7 +205,7 @@ returns one `read_only` column. Table writes refresh the cache, and a missing
 entry returns the safe default `read_only=1`.
 
 BGD topology tasks send the production topology queries unchanged. Read-only
-handling does not consult `RDS_BGD_CONTROL` or write `RDS_BGD_PROBE_LOG`.
+handling does not consult `AWS_BGD_CONTROL` or write `AWS_BGD_PROBE_LOG`.
 
 ## TAP Helper API
 
@@ -246,7 +246,7 @@ API; the helper closes it when destroyed. `read_only_update()` changes the
 ### Topology and Host Types
 
 ```cpp
-struct RDS_BGD_Topology_Row {
+struct BGD_Topology_Row {
 	std::string id;
 	std::string endpoint;
 	int port;
@@ -264,7 +264,7 @@ struct RDS_BGD_Host {
 };
 ```
 
-`RDS_BGD_Topology_Row` represents one `mysql.rds_topology` row using
+`BGD_Topology_Row` represents one `mysql.rds_topology` row using
 C++11-compatible field types. `RDS_BGD_Host` keeps the ProxySQL-facing
 hostname and simulator-facing IP together.
 
@@ -282,7 +282,7 @@ public:
 	std::vector<Endpoint> get_blue_endpoints();
 	std::vector<Endpoint> get_green_endpoints();
 	std::vector<Endpoint> get_endpoints();
-	std::vector<RDS_BGD_Topology_Row> get_topology(std::string status);
+	std::vector<BGD_Topology_Row> get_topology(std::string status);
 };
 ```
 
@@ -300,7 +300,7 @@ reader mapping.
 ```cpp
 int topology_update(
 	std::vector<Endpoint> backends,
-	std::vector<RDS_BGD_Topology_Row> rows);
+	std::vector<BGD_Topology_Row> rows);
 
 int topology_delete(std::vector<Endpoint> backends);
 
@@ -330,26 +330,26 @@ not inherit simulator state from an earlier binary.
 ### Probe-Log Operations
 
 ```cpp
-enum class RDS_BGD_Probe_Kind {
+enum class BGD_Probe_Kind {
 	table_check,
 	metadata,
 };
 
-struct RDS_BGD_Probe_Log {
+struct BGD_Probe_Log {
 	uint64_t sequence_id;
 	Endpoint backend;
-	RDS_BGD_Probe_Kind probe_kind;
+	BGD_Probe_Kind probe_kind;
 	bool encrypted;
 };
 
 rc_t<uint64_t> probe_log_last_sequence();
 
-rc_t<std::vector<RDS_BGD_Probe_Log>> probe_log_since(uint64_t sequence_id);
+rc_t<std::vector<BGD_Probe_Log>> probe_log_since(uint64_t sequence_id);
 
-rc_t<RDS_BGD_Probe_Log> wait_for_probe_log(
+rc_t<BGD_Probe_Log> wait_for_probe_log(
 	uint64_t sequence_id,
 	Endpoint backend,
-	RDS_BGD_Probe_Kind probe_kind,
+	BGD_Probe_Kind probe_kind,
 	uint32_t timeout_ms,
 	int encrypted = -1);
 ```
@@ -366,7 +366,7 @@ int main() {
 
 	CommandLine cl {};
 	MYSQL* admin = nullptr;
-	RDS_BGD_Simulator simulator {};
+	BGD_Simulator simulator {};
 
 	if (setup(cl, admin, simulator) != EXIT_SUCCESS)
 		return exit_status();

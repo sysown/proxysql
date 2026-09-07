@@ -42,12 +42,12 @@ struct TestState {
 };
 
 struct ProbeChain {
-	RDS_BGD_Probe_Log table;
-	RDS_BGD_Probe_Log blue;
-	RDS_BGD_Probe_Log green;
+	BGD_Probe_Log table;
+	BGD_Probe_Log blue;
+	BGD_Probe_Log green;
 };
 
-int setup(CommandLine& cl, MYSQL*& admin, RDS_BGD_Simulator& sim) {
+int setup(CommandLine& cl, MYSQL*& admin, BGD_Simulator& sim) {
 	if (cl.getEnv()) {
 		diag("Error: failed to load TAP environment");
 		return EXIT_FAILURE;
@@ -69,7 +69,7 @@ int setup(CommandLine& cl, MYSQL*& admin, RDS_BGD_Simulator& sim) {
 	return EXIT_SUCCESS;
 }
 
-int cleanup(MYSQL* admin, RDS_BGD_Simulator& sim) {
+int cleanup(MYSQL* admin, BGD_Simulator& sim) {
 	vector<string> attribute_queries {
 		"DELETE FROM mysql_hostgroup_attributes",
 		"LOAD MYSQL SERVERS TO RUNTIME",
@@ -96,23 +96,23 @@ int cleanup(MYSQL* admin, RDS_BGD_Simulator& sim) {
 	return EXIT_SUCCESS;
 }
 
-int wait_for_probe_chain(RDS_BGD_Simulator& sim, uint64_t sequence, RDS_BGD_Cluster& cluster,
+int wait_for_probe_chain(BGD_Simulator& sim, uint64_t sequence, RDS_BGD_Cluster& cluster,
 	int blue_use_ssl, int green_use_ssl, ProbeChain& chain)
 {
 	auto [table_rc, table] =
-		sim.wait_for_probe_log(sequence, cluster.blue_writer.endpoint(), RDS_BGD_Probe_Kind::table_check, kProbeTimeoutMs, blue_use_ssl);
+		sim.wait_for_probe_log(sequence, cluster.blue_writer.endpoint(), BGD_Probe_Kind::table_check, kProbeTimeoutMs, blue_use_ssl);
 	if (table_rc != EXIT_SUCCESS) {
 		return EXIT_FAILURE;
 	}
 
 	auto [blue_rc, blue] =
-		sim.wait_for_probe_log(table.sequence_id, cluster.blue_writer.endpoint(), RDS_BGD_Probe_Kind::metadata, kProbeTimeoutMs, blue_use_ssl);
+		sim.wait_for_probe_log(table.sequence_id, cluster.blue_writer.endpoint(), BGD_Probe_Kind::metadata, kProbeTimeoutMs, blue_use_ssl);
 	if (blue_rc != EXIT_SUCCESS) {
 		return EXIT_FAILURE;
 	}
 
 	auto [green_rc, green] =
-		sim.wait_for_probe_log(blue.sequence_id, cluster.green_writer.endpoint(), RDS_BGD_Probe_Kind::metadata, kProbeTimeoutMs, green_use_ssl);
+		sim.wait_for_probe_log(blue.sequence_id, cluster.green_writer.endpoint(), BGD_Probe_Kind::metadata, kProbeTimeoutMs, green_use_ssl);
 	if (green_rc != EXIT_SUCCESS) {
 		return EXIT_FAILURE;
 	}
@@ -125,9 +125,9 @@ bool probe_chain_ordered(ProbeChain& chain) {
 	bool ordered =
 		chain.table.sequence_id < chain.blue.sequence_id &&
 		chain.blue.sequence_id < chain.green.sequence_id &&
-		chain.table.probe_kind == RDS_BGD_Probe_Kind::table_check &&
-		chain.blue.probe_kind == RDS_BGD_Probe_Kind::metadata &&
-		chain.green.probe_kind == RDS_BGD_Probe_Kind::metadata;
+		chain.table.probe_kind == BGD_Probe_Kind::table_check &&
+		chain.blue.probe_kind == BGD_Probe_Kind::metadata &&
+		chain.green.probe_kind == BGD_Probe_Kind::metadata;
 	return ordered;
 }
 
@@ -154,7 +154,7 @@ bool runtime_server_tls_matches(MYSQL* admin, int hostgroup, RDS_BGD_Host& host,
  * - Verify table-check and blue metadata use the writer with TLS.
  * - Verify the mapped green writer metadata probe also uses TLS.
  */
-int test_automatic_writer_tls(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_automatic_writer_tls(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	RDS_BGD_Cluster& cluster = state.automatic;
 	BGD_Hostgroups& hg = state.automatic_hg;
 
@@ -198,7 +198,7 @@ int test_automatic_writer_tls(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& s
 		return EXIT_FAILURE;
 	}
 
-	vector<RDS_BGD_Topology_Row> topology = cluster.get_topology("AVAILABLE");
+	vector<BGD_Topology_Row> topology = cluster.get_topology("AVAILABLE");
 	int topology_rc = sim.topology_update(state.automatic_endpoints, topology);
 	if (topology_rc != EXIT_SUCCESS) {
 		diag("Error: failed to publish automatic AVAILABLE topology");
@@ -237,7 +237,7 @@ int test_automatic_writer_tls(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& s
  * - Publish AVAILABLE topology for the exact deployment.
  * - Verify the exact TARGET and TLS value are used in probe order.
  */
-int test_explicit_target_tls(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_explicit_target_tls(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	RDS_BGD_Cluster& cluster = state.explicit_target;
 	RDS_BGD_Cluster& distractor = state.distractor;
 	BGD_Hostgroups& hg = state.explicit_target_hg;
@@ -285,7 +285,7 @@ int test_explicit_target_tls(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& st
 	vector<Endpoint> topology_endpoints = state.explicit_target_endpoints;
 	vector<Endpoint> distractor_endpoints = distractor.get_endpoints();
 	topology_endpoints.insert(topology_endpoints.end(), distractor_endpoints.begin(), distractor_endpoints.end());
-	vector<RDS_BGD_Topology_Row> topology = cluster.get_topology("AVAILABLE");
+	vector<BGD_Topology_Row> topology = cluster.get_topology("AVAILABLE");
 	int topology_rc = sim.topology_update(topology_endpoints, topology);
 	if (topology_rc != EXIT_SUCCESS) {
 		diag("Error: failed to publish explicit AVAILABLE topology");
@@ -331,7 +331,7 @@ int test_explicit_target_tls(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& st
  * - Publish AVAILABLE topology.
  * - Verify the created TARGET runtime row and metadata probe use TLS.
  */
-int test_created_target_tls(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_created_target_tls(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	RDS_BGD_Cluster& cluster = state.created_target;
 	BGD_Hostgroups& hg = state.created_target_hg;
 
@@ -380,7 +380,7 @@ int test_created_target_tls(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& sta
 		return EXIT_FAILURE;
 	}
 
-	vector<RDS_BGD_Topology_Row> topology = cluster.get_topology("AVAILABLE");
+	vector<BGD_Topology_Row> topology = cluster.get_topology("AVAILABLE");
 	int topology_rc = sim.topology_update(state.created_target_endpoints, topology);
 	if (topology_rc != EXIT_SUCCESS) {
 		diag("Error: failed to publish created-TARGET AVAILABLE topology");
@@ -423,7 +423,7 @@ int main() {
 
 	CommandLine cl {};
 	MYSQL* admin = nullptr;
-	RDS_BGD_Simulator sim {};
+	BGD_Simulator sim {};
 
 	if (setup(cl, admin, sim) != EXIT_SUCCESS) {
 		return exit_status();

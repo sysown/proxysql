@@ -6022,43 +6022,1206 @@ bool AWS_Aurora_monitor_node::add_entry(AWS_Aurora_status_entry *ase) {
 }
 
 
-typedef struct _host_def_t {
-	char *host;
-	int port;
-	int use_ssl;
-} host_def_t;
+/**
+ * @brief Map an Aurora BGD status to its runtime string.
+ *
+ * @param status Status to convert.
+ * @return Stable status string stored in the runtime Aurora hostgroup table.
+ */
+const char* aws_aurora_bgd_status_str(AWS_Aurora_BGD_Status status) {
+	switch (status) {
+		case AWS_Aurora_BGD_Status::NONE:
+			return "NONE";
+		case AWS_Aurora_BGD_Status::AVAILABLE:
+			return BGD_STATUS_AVAILABLE;
+		case AWS_Aurora_BGD_Status::SWITCHOVER_INITIATED:
+			return BGD_STATUS_INITIATED;
+		case AWS_Aurora_BGD_Status::SWITCHOVER_IN_PROGRESS:
+			return BGD_STATUS_IN_PROGRESS;
+		case AWS_Aurora_BGD_Status::SWITCHOVER_IN_POST_PROCESSING:
+			return BGD_STATUS_POST_PROC;
+		case AWS_Aurora_BGD_Status::SWITCHOVER_COMPLETED:
+			return BGD_STATUS_COMPLETED;
+	}
+	return "NONE";
+}
 
-static void shuffle_hosts(host_def_t *array, size_t n) {
-	char tmp[sizeof(host_def_t)];
-	char *arr = (char *)array;
-	size_t stride = sizeof(host_def_t) * sizeof(char);
+namespace {
 
-	if (n > 1) {
-		size_t i;
-		for (i = 0; i < n - 1 ; ++i) {
-			size_t rnd = (size_t) fastrand();
-			size_t j = i + rnd / (0x7FFF / (n - i) + 1);
-			memcpy(tmp, arr + j * stride, sizeof(host_def_t));
-			memcpy(arr + j * stride, arr + i * stride, sizeof(host_def_t));
-			memcpy(arr + i * stride, tmp, sizeof(host_def_t));
+/**
+ * @brief Result and connection state returned by one Aurora BGD probe.
+ */
+struct AWS_Aurora_BGD_Query_Result {
+	unique_ptr<MySQL_Monitor_State_Data> mmsd;  ///< Probe connection, timing, and result owner.
+	int rc = 1;                                ///< Query status returned by the asynchronous monitor helper.
+	unsigned int mysql_error = 0;              ///< MySQL error captured before the connection is released.
+};
+
+/**
+ * @brief Validated deployment state parsed from `mysql.rds_topology`.
+ */
+struct AWS_Aurora_BGD_Topology_Observation {
+	bool valid = false;  ///< True when all topology rows form an accepted snapshot.
+	bool completed = false;  ///< True for the lone TARGET row completion shape.
+	AWS_Aurora_BGD_Status status = AWS_Aurora_BGD_Status::NONE;  ///< Validated target status.
+	AWS_Aurora_BGD_Fingerprint fingerprint;  ///< Stable identity of the target row.
+};
+
+/**
+ * @brief Build a member hostname from an Aurora server identifier and domain.
+ *
+ * @param server_id Aurora server identifier.
+ * @param domain_name Configured Aurora domain, with or without a leading dot.
+ * @return Fully qualified member hostname, or server_id when no domain is configured.
+ */
+static std::string aws_aurora_bgd_member_hostname(
+	const std::string& server_id, const std::string& domain_name
+) {
+	if (domain_name.empty()) {
+		return server_id;
+	}
+	return domain_name.front() == '.'
+		? server_id + domain_name
+		: server_id + "." + domain_name;
+}
+
+/**
+ * @brief Remove the configured Aurora domain from a member hostname.
+ *
+ * @param hostname Fully qualified configured member hostname.
+ * @param domain_name Configured Aurora domain, with or without a leading dot.
+ * @return Aurora server identifier, or an empty string when the domain does not match.
+ */
+static std::string aws_aurora_bgd_server_id_from_hostname(
+	const std::string& hostname, const std::string& domain_name
+) {
+	if (domain_name.empty()) {
+		return hostname;
+	}
+	const std::string suffix = domain_name.front() == '.'
+		? domain_name : "." + domain_name;
+	if (hostname.size() <= suffix.size()
+		|| strcasecmp(hostname.c_str() + hostname.size() - suffix.size(), suffix.c_str()) != 0) {
+		return {};
+	}
+	return hostname.substr(0, hostname.size() - suffix.size());
+}
+
+/**
+ * @brief Parse one AWS topology status without accepting unknown values.
+ *
+ * @param raw_status Status text returned by `mysql.rds_topology`.
+ * @param status Receives the corresponding Aurora BGD status on success.
+ * @return true when raw_status belongs to the supported AWS vocabulary.
+ */
+static bool aws_aurora_bgd_status_from_raw(
+	const std::string& raw_status, AWS_Aurora_BGD_Status& status
+) {
+	if (strcasecmp(raw_status.c_str(), BGD_STATUS_AVAILABLE) == 0) {
+		status = AWS_Aurora_BGD_Status::AVAILABLE;
+	} else if (strcasecmp(raw_status.c_str(), BGD_STATUS_INITIATED) == 0) {
+		status = AWS_Aurora_BGD_Status::SWITCHOVER_INITIATED;
+	} else if (strcasecmp(raw_status.c_str(), BGD_STATUS_IN_PROGRESS) == 0) {
+		status = AWS_Aurora_BGD_Status::SWITCHOVER_IN_PROGRESS;
+	} else if (strcasecmp(raw_status.c_str(), BGD_STATUS_POST_PROC) == 0) {
+		status = AWS_Aurora_BGD_Status::SWITCHOVER_IN_POST_PROCESSING;
+	} else if (strcasecmp(raw_status.c_str(), BGD_STATUS_COMPLETED) == 0) {
+		status = AWS_Aurora_BGD_Status::SWITCHOVER_COMPLETED;
+	} else {
+		return false;
+	}
+	return true;
+}
+
+/**
+ * @brief Check that an Aurora topology row contains every identity and state field.
+ *
+ * @param node Parsed topology row to inspect.
+ * @return true when the row has an id, endpoint, port, role, and status.
+ */
+static bool aws_aurora_bgd_required_topology_fields(const AWS_RDS_Topology_Node& node) {
+	return !node.id.empty() && !node.endpoint.empty() && node.port > 0
+		&& !node.role.empty() && !node.status.empty();
+}
+
+/**
+ * @brief Validate an Aurora blue/green topology snapshot.
+ *
+ * @details Active phases require exactly one SOURCE and one TARGET row with
+ *   matching statuses. Completion requires exactly one TARGET row. Any
+ *   duplicate, incomplete, unknown, or inconsistent row rejects the snapshot.
+ *
+ * @param topology Parsed `mysql.rds_topology` result.
+ * @return Validated observation; valid remains false when the snapshot is rejected.
+ */
+static AWS_Aurora_BGD_Topology_Observation aws_aurora_bgd_validate_topology(
+	const AWS_RDS_Topology_Result& topology
+) {
+	AWS_Aurora_BGD_Topology_Observation observation;
+	if (!topology.blue_green || topology.nodes.empty()) {
+		return observation;
+	}
+
+	const AWS_RDS_Topology_Node* source = nullptr;
+	const AWS_RDS_Topology_Node* target = nullptr;
+	for (const AWS_RDS_Topology_Node& node : topology.nodes) {
+		if (!aws_aurora_bgd_required_topology_fields(node)) {
+			return observation;
 		}
+		if (strcasecmp(node.role.c_str(), BGD_ROLE_SOURCE) == 0) {
+			if (source != nullptr) {
+				return observation;
+			}
+			source = &node;
+		} else if (strcasecmp(node.role.c_str(), BGD_ROLE_TARGET) == 0) {
+			if (target != nullptr) {
+				return observation;
+			}
+			target = &node;
+		} else {
+			return observation;
+		}
+	}
+
+	if (target == nullptr || !aws_aurora_bgd_status_from_raw(target->status, observation.status)) {
+		return observation;
+	}
+
+	if (observation.status == AWS_Aurora_BGD_Status::SWITCHOVER_COMPLETED) {
+		if (topology.nodes.size() != 1 || source != nullptr) {
+			return AWS_Aurora_BGD_Topology_Observation {};
+		}
+		observation.completed = true;
+	} else {
+		if (topology.nodes.size() != 2 || source == nullptr
+			|| strcasecmp(source->status.c_str(), target->status.c_str()) != 0) {
+			return AWS_Aurora_BGD_Topology_Observation {};
+		}
+	}
+
+	observation.fingerprint = {
+		target->id,
+		target->endpoint,
+		target->port,
+	};
+	observation.valid = !observation.fingerprint.empty();
+	return observation;
+}
+
+/**
+ * @brief Execute one Aurora BGD query against a selected probe host.
+ *
+ * @details Reuses a monitor connection when possible, applies the Aurora
+ *   timeout, and returns or destroys the connection according to the query
+ *   outcome.
+ *
+ * @param host Backend endpoint and SSL setting to use.
+ * @param writer_hg Writer hostgroup used for monitor accounting.
+ * @param timeout_ms Query timeout in milliseconds.
+ * @param task_type Monitor task classification.
+ * @param query SQL text to execute.
+ * @param worker_stop Per-worker shutdown signal.
+ * @return Query result retaining the monitor state and captured MySQL error.
+ */
+static AWS_Aurora_BGD_Query_Result aws_aurora_bgd_query(
+	const AWS_RDS_BGD_Probe_Host& host,
+	unsigned int writer_hg,
+	unsigned int timeout_ms,
+	MySQL_Monitor_State_Data_Task_Type task_type,
+	const char* query,
+	std::atomic_bool& worker_stop
+) {
+	AWS_Aurora_BGD_Query_Result out;
+	if (worker_stop.load()) {
+		out.rc = 2;
+		return out;
+	}
+	out.mmsd.reset(new MySQL_Monitor_State_Data(
+		task_type, const_cast<char*>(host.hostname.c_str()), host.port, host.use_ssl, writer_hg));
+	MySQL_Monitor_State_Data* mmsd = out.mmsd.get();
+	mmsd->writer_hostgroup = writer_hg;
+	mmsd->aws_aurora_check_timeout_ms = timeout_ms;
+	mmsd->mysql = GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port, mmsd);
+
+	bool new_connection = false;
+	if (mmsd->mysql == nullptr) {
+		new_connection = true;
+		if (!mmsd->create_new_connection()) {
+			out.mysql_error = mmsd->mysql ? mysql_errno(mmsd->mysql) : 0;
+			return out;
+		}
+		GloMyMon->My_Conn_Pool->conn_register(mmsd);
+	}
+
+	out.rc = GloMyMon->aws_rds_bgd_async_query(mmsd, query, worker_stop);
+	out.mysql_error = mmsd->mysql ? mysql_errno(mmsd->mysql) : 0;
+
+	if (out.rc != 0) {
+		GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
+	} else if (new_connection) {
+		if (mmsd->set_wait_timeout()) {
+			GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
+		} else {
+			GloMyMon->My_Conn_Pool->destroy_mysql_connection(mmsd);
+		}
+	} else {
+		GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname, mmsd);
+	}
+
+	return out;
+}
+
+/**
+ * @brief Query eligible Aurora endpoints until one produces an accepted result.
+ *
+ * @details Candidate order starts at a random offset. Unpingable endpoints are
+ *   skipped and counted; a missing topology table may be treated as a terminal
+ *   observation when requested by the caller.
+ *
+ * @param hosts Candidate endpoints.
+ * @param writer_hg Writer hostgroup used for monitor accounting.
+ * @param timeout_ms Query timeout in milliseconds.
+ * @param task_type Monitor task classification.
+ * @param query SQL text to execute.
+ * @param worker_stop Per-worker shutdown signal.
+ * @param selected Optional destination for the endpoint that produced the result.
+ * @param stop_on_missing_table Whether MySQL error 1146 stops candidate traversal.
+ * @return Last query result, or the first accepted result.
+ */
+static AWS_Aurora_BGD_Query_Result aws_aurora_bgd_query_candidates(
+	const std::vector<AWS_RDS_BGD_Probe_Host>& hosts,
+	unsigned int writer_hg,
+	unsigned int timeout_ms,
+	MySQL_Monitor_State_Data_Task_Type task_type,
+	const char* query,
+	std::atomic_bool& worker_stop,
+	AWS_RDS_BGD_Probe_Host* selected,
+	bool stop_on_missing_table
+) {
+	AWS_Aurora_BGD_Query_Result last_result;
+	if (hosts.empty() || worker_stop.load()) {
+		return last_result;
+	}
+
+	const size_t first = static_cast<size_t>(rand_fast()) % hosts.size();
+	for (size_t offset = 0; offset < hosts.size() && !worker_stop.load(); ++offset) {
+		const AWS_RDS_BGD_Probe_Host& host = hosts[(first + offset) % hosts.size()];
+		if (!GloMyMon->server_responds_to_ping(
+			const_cast<char*>(host.hostname.c_str()), host.port)) {
+			MyHGM->p_update_mysql_error_counter(
+				p_mysql_error_type::proxysql, writer_hg,
+				const_cast<char*>(host.hostname.c_str()), host.port,
+				ER_PROXYSQL_AWS_NO_PINGABLE_SRV
+			);
+			continue;
+		}
+
+		last_result = aws_aurora_bgd_query(
+			host, writer_hg, timeout_ms, task_type, query, worker_stop);
+		if (last_result.rc == 0
+			|| (stop_on_missing_table && last_result.mysql_error == 1146)) {
+			if (selected != nullptr) {
+				*selected = host;
+			}
+			return last_result;
+		}
+	}
+
+	return last_result;
+}
+
+/**
+ * @brief Publish a changed Aurora BGD state to the runtime hostgroup row.
+ *
+ * @param st Worker-owned state whose status is updated.
+ * @param status Validated status to publish.
+ */
+static void aws_aurora_bgd_set_status(
+	AWS_Aurora_BGD_State& st, AWS_Aurora_BGD_Status status
+) {
+	if (st.status == status) {
+		return;
+	}
+	proxy_info(
+		"AWS Aurora BGD [wHG=%u rHG=%u]: switchover status '%s' -> '%s'\n",
+		st.writer_hg, st.reader_hg,
+		aws_aurora_bgd_status_str(st.status), aws_aurora_bgd_status_str(status));
+	st.status = status;
+	MyHGM->update_aws_aurora_bgd_status(st.writer_hg, aws_aurora_bgd_status_str(status));
+}
+
+/**
+ * @brief Compare production membership snapshots independent of row order.
+ *
+ * @param lhs First membership snapshot.
+ * @param rhs Second membership snapshot.
+ * @return true when both snapshots contain the same identities, roles, and endpoints.
+ */
+static bool aws_aurora_bgd_same_production_snapshot(
+	const std::vector<AWS_Aurora_BGD_Member>& lhs,
+	const std::vector<AWS_Aurora_BGD_Member>& rhs
+) {
+	if (lhs.size() != rhs.size()) {
+		return false;
+	}
+	for (const AWS_Aurora_BGD_Member& member : lhs) {
+		auto found = std::find_if(rhs.begin(), rhs.end(), [&](const AWS_Aurora_BGD_Member& candidate) {
+			return candidate.normalized_server_id == member.normalized_server_id
+				&& candidate.is_writer == member.is_writer
+				&& candidate.hostname == member.hostname
+				&& candidate.port == member.port
+				&& candidate.use_ssl == member.use_ssl;
+		});
+		if (found == rhs.end()) {
+			return false;
+		}
+	}
+	return true;
+}
+
+/**
+ * @brief Rebuild production membership from configured probe hosts and hostgroups.
+ *
+ * @details Used when discovery starts before an ordinary Aurora observation is
+ *   available. The snapshot is accepted only when every configured member has
+ *   a unique server identifier and exactly one member belongs to the writer
+ *   hostgroup.
+ *
+ * @param st Worker-owned state receiving the rebuilt snapshot.
+ * @return true when a complete production snapshot was built.
+ */
+static bool aws_aurora_bgd_rebuild_production_snapshot(AWS_Aurora_BGD_State& st) {
+	std::unordered_set<std::string> writer_endpoints;
+	MyHGM->wrlock();
+	MyHGC* writer_hgc = MyHGM->MyHGC_find(st.writer_hg);
+	if (writer_hgc != nullptr && writer_hgc->mysrvs != nullptr) {
+		for (unsigned int i = 0; i < writer_hgc->mysrvs->cnt(); ++i) {
+			MySrvC* server = writer_hgc->mysrvs->idx(i);
+			if (server->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD
+				|| server->get_status() == MYSQL_SERVER_STATUS_OFFLINE_SOFT) {
+				continue;
+			}
+			writer_endpoints.insert(
+				std::string(server->address) + "\n" + std::to_string(server->port));
+		}
+	}
+	MyHGM->wrunlock();
+
+	std::vector<AWS_Aurora_BGD_Member> snapshot;
+	std::unordered_set<std::string> member_ids;
+	unsigned int writers = 0;
+	for (const AWS_RDS_BGD_Probe_Host& host : st.production_probe_hosts) {
+		AWS_Aurora_BGD_Member member;
+		member.server_id = aws_aurora_bgd_server_id_from_hostname(
+			host.hostname, st.domain_name);
+		member.normalized_server_id = member.server_id;
+		if (member.server_id.empty()
+			|| !member_ids.insert(member.normalized_server_id).second) {
+			return false;
+		}
+		member.hostname = host.hostname;
+		member.production_hostname = host.hostname;
+		member.port = host.port;
+		member.use_ssl = host.use_ssl;
+		member.is_writer = writer_endpoints.count(
+			host.hostname + "\n" + std::to_string(host.port)) != 0;
+		member.session_id = member.is_writer ? "MASTER_SESSION_ID" : "";
+		writers += member.is_writer ? 1 : 0;
+		snapshot.push_back(std::move(member));
+	}
+	if (writers != 1 || snapshot.empty()) {
+		return false;
+	}
+
+	if (!aws_aurora_bgd_same_production_snapshot(st.production_members, snapshot)) {
+		st.target_snapshot_complete = false;
+	}
+	st.production_members = std::move(snapshot);
+	proxy_info(
+		"AWS Aurora BGD [wHG=%u rHG=%u]: rebuilt production membership with %zu configured members\n",
+		st.writer_hg, st.reader_hg, st.production_members.size());
+	return true;
+}
+
+/**
+ * @brief Build a complete target membership snapshot from REPLICA_HOST_STATUS.
+ *
+ * @details Matches each current target member to one production member,
+ *   validates writer and reader session identities, resolves target addresses,
+ *   and preserves already-applied traffic actions only while their mapping is
+ *   unchanged.
+ *
+ * @param st Worker-owned state containing production membership and deployment identity.
+ * @param result Target REPLICA_HOST_STATUS result.
+ * @param snapshot Receives the complete target snapshot on success.
+ * @return true when every production member has one valid target counterpart.
+ */
+static bool aws_aurora_bgd_parse_target_membership(
+	AWS_Aurora_BGD_State& st, MYSQL_RES* result,
+	std::vector<AWS_Aurora_BGD_Member>& snapshot
+) {
+	if (result == nullptr || st.production_members.empty()) {
+		return false;
+	}
+
+	const unsigned int num_fields = mysql_num_fields(result);
+	MYSQL_FIELD* fields = mysql_fetch_fields(result);
+	int server_id_idx = -1;
+	int session_id_idx = -1;
+	int is_current_idx = -1;
+	for (unsigned int i = 0; i < num_fields; ++i) {
+		if (fields[i].name == nullptr) {
+			continue;
+		}
+		if (strcasecmp(fields[i].name, "SERVER_ID") == 0) {
+			server_id_idx = static_cast<int>(i);
+		} else if (strcasecmp(fields[i].name, "SESSION_ID") == 0) {
+			session_id_idx = static_cast<int>(i);
+		} else if (strcasecmp(fields[i].name, "IS_CURRENT") == 0) {
+			is_current_idx = static_cast<int>(i);
+		}
+	}
+	if (server_id_idx < 0 || session_id_idx < 0 || is_current_idx < 0) {
+		return false;
+	}
+
+	std::unordered_map<std::string, const AWS_Aurora_BGD_Member*> production_by_id;
+	for (const AWS_Aurora_BGD_Member& member : st.production_members) {
+		if (!production_by_id.emplace(member.normalized_server_id, &member).second) {
+			return false;
+		}
+	}
+
+	std::unordered_map<std::string, std::string> previous_reader_session_by_id;
+	std::unordered_map<std::string, std::string> previous_reader_id_by_session;
+	std::unordered_map<std::string, std::string> previous_ip_by_id;
+	std::unordered_map<std::string, bool> previous_action_by_id;
+	for (const AWS_Aurora_BGD_Member& member : st.target_members) {
+		previous_ip_by_id[member.normalized_server_id] = member.target_ip;
+		previous_action_by_id[member.normalized_server_id] = member.traffic_pin_applied;
+		if (!member.is_writer) {
+			previous_reader_session_by_id[member.normalized_server_id] = member.session_id;
+			previous_reader_id_by_session[member.session_id] = member.normalized_server_id;
+		}
+	}
+
+	std::unordered_set<std::string> target_ids;
+	std::unordered_set<std::string> reader_sessions;
+	unsigned int writers = 0;
+	MYSQL_ROW row;
+	while ((row = mysql_fetch_row(result))) {
+		if (row[is_current_idx] == nullptr) {
+			continue;
+		}
+		const bool is_current = atoi(row[is_current_idx]) != 0
+			|| strcasecmp(row[is_current_idx], "true") == 0;
+		if (!is_current) {
+			continue;
+		}
+		if (row[server_id_idx] == nullptr || row[server_id_idx][0] == '\0'
+			|| row[session_id_idx] == nullptr || row[session_id_idx][0] == '\0') {
+			return false;
+		}
+
+		AWS_Aurora_BGD_Member member;
+		member.server_id = row[server_id_idx];
+		member.normalized_server_id = member.server_id;
+		member.session_id = row[session_id_idx];
+		member.is_writer = strcasecmp(member.session_id.c_str(), "MASTER_SESSION_ID") == 0;
+		auto production = production_by_id.find(member.normalized_server_id);
+		if (production == production_by_id.end()) {
+			const size_t green_pos = member.server_id.rfind("-green-");
+			if (green_pos != std::string::npos
+				&& green_pos + strlen("-green-") < member.server_id.size()) {
+				member.normalized_server_id = member.server_id.substr(0, green_pos);
+				production = production_by_id.find(member.normalized_server_id);
+			}
+		}
+		if (member.normalized_server_id.empty()
+			|| !target_ids.insert(member.normalized_server_id).second) {
+			return false;
+		}
+		if (production == production_by_id.end()
+			|| production->second->is_writer != member.is_writer) {
+			return false;
+		}
+		member.production_hostname = production->second->hostname;
+		member.hostname = aws_aurora_bgd_member_hostname(member.server_id, st.domain_name);
+		member.port = st.fingerprint.target_port;
+		member.use_ssl = st.target_use_ssl;
+
+		if (member.is_writer) {
+			writers++;
+		} else {
+			if (!reader_sessions.insert(member.session_id).second) {
+				return false;
+			}
+			auto old_session = previous_reader_session_by_id.find(member.normalized_server_id);
+			if (old_session != previous_reader_session_by_id.end()
+				&& old_session->second != member.session_id) {
+				return false;
+			}
+			auto old_id = previous_reader_id_by_session.find(member.session_id);
+			if (old_id != previous_reader_id_by_session.end()
+				&& old_id->second != member.normalized_server_id) {
+				return false;
+			}
+		}
+
+		size_t ip_count = 0;
+		std::string resolved_ip = MySQL_Monitor::dns_lookup(member.hostname, false, &ip_count);
+		if (resolved_ip.empty()) {
+			const int ai_family = mysql_resolution_family_to_ai_family(mysql_thread___resolution_family);
+			std::vector<std::string> ips = dns_resolve(member.hostname, ai_family);
+			if (!ips.empty()) {
+				resolved_ip = ips.front();
+			}
+		}
+		if (resolved_ip.empty()) {
+			return false;
+		}
+		auto previous_action = previous_action_by_id.find(member.normalized_server_id);
+		auto previous_ip = previous_ip_by_id.find(member.normalized_server_id);
+		const bool preserve_pre_rename_ip = member.server_id == production->second->server_id;
+		member.target_ip = previous_ip != previous_ip_by_id.end()
+			&& !previous_ip->second.empty()
+			&& preserve_pre_rename_ip
+			? previous_ip->second : resolved_ip;
+		member.traffic_pin_applied = previous_action != previous_action_by_id.end()
+			&& previous_action->second
+			&& previous_ip != previous_ip_by_id.end()
+			&& previous_ip->second == member.target_ip;
+		snapshot.push_back(std::move(member));
+	}
+
+	return writers == 1 && snapshot.size() == st.production_members.size();
+}
+
+/**
+ * @brief Select target endpoints eligible for topology probes.
+ *
+ * @param st Worker-owned state containing target membership or deployment identity.
+ * @return Target member endpoints when complete, otherwise the target cluster endpoint.
+ */
+static std::vector<AWS_RDS_BGD_Probe_Host> aws_aurora_bgd_target_probe_hosts(
+	const AWS_Aurora_BGD_State& st
+) {
+	std::vector<AWS_RDS_BGD_Probe_Host> hosts;
+	if (st.has_complete_target_snapshot()) {
+		hosts.reserve(st.target_members.size());
+		for (const AWS_Aurora_BGD_Member& member : st.target_members) {
+			hosts.push_back({member.hostname, member.port, member.use_ssl});
+		}
+	} else if (!st.fingerprint.empty()) {
+		hosts.push_back({
+			st.fingerprint.target_endpoint,
+			st.fingerprint.target_port,
+			st.target_use_ssl,
+		});
+	}
+	return hosts;
+}
+
+/**
+ * @brief Select endpoints eligible for target membership probes.
+ *
+ * @details Includes the target cluster endpoint in addition to retained member
+ *   endpoints so membership discovery remains possible across endpoint changes.
+ *
+ * @param st Worker-owned state containing target membership and deployment identity.
+ * @return Deduplicated candidate endpoints for REPLICA_HOST_STATUS.
+ */
+static std::vector<AWS_RDS_BGD_Probe_Host> aws_aurora_bgd_membership_probe_hosts(
+	const AWS_Aurora_BGD_State& st
+) {
+	std::vector<AWS_RDS_BGD_Probe_Host> hosts = aws_aurora_bgd_target_probe_hosts(st);
+	if (!st.fingerprint.empty()) {
+		auto endpoint = std::find_if(hosts.begin(), hosts.end(), [&](const AWS_RDS_BGD_Probe_Host& host) {
+			return host.hostname == st.fingerprint.target_endpoint
+				&& host.port == st.fingerprint.target_port;
+		});
+		if (endpoint == hosts.end()) {
+			hosts.push_back({
+				st.fingerprint.target_endpoint,
+				st.fingerprint.target_port,
+				st.target_use_ssl,
+			});
+		}
+	}
+	return hosts;
+}
+
+} // namespace
+
+/**
+ * @brief Refresh the Aurora BGD worker's last complete production snapshot.
+ *
+ * @details Invalid or incomplete observations retain the previous snapshot.
+ *   A changed production snapshot invalidates any retained target snapshot.
+ *
+ * @param st Worker-owned Aurora BGD state to update.
+ * @param result Successful ordinary Aurora membership observation.
+ */
+void MySQL_Monitor::aws_aurora_bgd_refresh_production_snapshot(
+	AWS_Aurora_BGD_State& st, const AWS_Aurora_status_entry& result
+) {
+	if (st.production_snapshot_frozen || result.error != nullptr
+		|| result.host_statuses == nullptr || result.host_statuses->empty()) {
+		return;
+	}
+
+	std::vector<AWS_Aurora_BGD_Member> snapshot;
+	std::unordered_set<std::string> member_ids;
+	unsigned int writers = 0;
+	for (const AWS_Aurora_replica_host_status_entry* row : *result.host_statuses) {
+		if (row == nullptr || row->server_id == nullptr || row->server_id[0] == '\0'
+			|| row->session_id == nullptr) {
+			return;
+		}
+		AWS_Aurora_BGD_Member member;
+		member.server_id = row->server_id;
+		member.normalized_server_id = member.server_id;
+		member.session_id = row->session_id;
+		member.hostname = aws_aurora_bgd_member_hostname(member.server_id, st.domain_name);
+		member.production_hostname = member.hostname;
+		member.port = st.production_probe_hosts.empty() ? 0 : st.production_probe_hosts.front().port;
+		member.use_ssl = st.production_probe_hosts.empty() ? 0 : st.production_probe_hosts.front().use_ssl;
+		member.is_writer = strcasecmp(member.session_id.c_str(), "MASTER_SESSION_ID") == 0;
+		if (member.normalized_server_id.empty() || !member_ids.insert(member.normalized_server_id).second) {
+			return;
+		}
+		writers += member.is_writer ? 1 : 0;
+		snapshot.push_back(std::move(member));
+	}
+	if (writers != 1) {
+		return;
+	}
+
+	if (!aws_aurora_bgd_same_production_snapshot(st.production_members, snapshot)) {
+		st.target_snapshot_complete = false;
+	}
+	st.production_members = std::move(snapshot);
+}
+
+/**
+ * @brief Apply the routing actions for an accepted active Aurora BGD state.
+ *
+ * @details INITIATED only suspends production probing. IN_PROGRESS demotes
+ *   the snapshotted writer on entry. POST_PROCESSING applies each complete
+ *   member mapping once and restores canonical writer placement.
+ *
+ * @param st Worker-owned state whose routing effects are applied.
+ * @param status_changed Whether the current status was entered in this cycle.
+ */
+void MySQL_Monitor::aws_aurora_bgd_apply_active_actions(
+	AWS_Aurora_BGD_State& st, bool status_changed
+) {
+	if (st.status < AWS_Aurora_BGD_Status::SWITCHOVER_INITIATED
+		|| st.status > AWS_Aurora_BGD_Status::SWITCHOVER_IN_POST_PROCESSING) {
+		return;
+	}
+	if (st.production_members.empty()) {
+		proxy_error(
+			"AWS Aurora BGD [wHG=%u rHG=%u]: cannot enter active handling without production membership\n",
+			st.writer_hg, st.reader_hg);
+		return;
+	}
+
+	st.production_snapshot_frozen = true;
+	st.production_probe_suspended = true;
+
+	if (st.status == AWS_Aurora_BGD_Status::SWITCHOVER_IN_PROGRESS
+		&& status_changed) {
+		auto writer = std::find_if(
+			st.production_members.begin(), st.production_members.end(),
+			[](const AWS_Aurora_BGD_Member& member) { return member.is_writer; });
+		if (writer == st.production_members.end()) {
+			proxy_error(
+				"AWS Aurora BGD [wHG=%u rHG=%u]: cannot demote writer without a complete production snapshot\n",
+				st.writer_hg, st.reader_hg);
+			return;
+		}
+		MyHGM->update_aws_aurora_set_reader(
+			st.writer_hg, st.reader_hg, const_cast<char*>(writer->server_id.c_str()));
+		return;
+	}
+
+	if (st.status != AWS_Aurora_BGD_Status::SWITCHOVER_IN_POST_PROCESSING
+		|| !st.has_complete_target_snapshot()) {
+		return;
+	}
+
+	bool applied_member_action = false;
+	bool writer_pin_applied = false;
+	for (AWS_Aurora_BGD_Member& member : st.target_members) {
+		if (!member.traffic_pin_applied) {
+			dns_cache->pin(member.production_hostname, member.target_ip);
+			MyHGM->wrlock();
+			MyHGM->drain_server_connections(member.production_hostname.c_str(), member.port);
+			MyHGM->wrunlock();
+			My_Conn_Pool->purge_connections(member.production_hostname.c_str(), member.port);
+			member.traffic_pin_applied = true;
+			applied_member_action = true;
+
+			proxy_info(
+				"AWS Aurora BGD [wHG=%u rHG=%u]: repointed production '%s' to target IP %s\n",
+				st.writer_hg, st.reader_hg, member.production_hostname.c_str(),
+				member.target_ip.c_str());
+		}
+		writer_pin_applied |= member.is_writer && member.traffic_pin_applied;
+	}
+
+	if (!writer_pin_applied || (!status_changed && !applied_member_action)) {
+		return;
+	}
+
+	auto writer = std::find_if(
+		st.production_members.begin(), st.production_members.end(),
+		[](const AWS_Aurora_BGD_Member& member) { return member.is_writer; });
+	if (writer != st.production_members.end()) {
+		MyHGM->update_aws_aurora_set_writer(
+			st.writer_hg, st.reader_hg, const_cast<char*>(writer->server_id.c_str()), true,
+			st.domain_name.c_str(), writer->port, st.writer_is_also_reader,
+			st.new_reader_weight);
 	}
 }
 
+/**
+ * @brief Run immediate effect-driven cleanup for TARGET completion.
+ *
+ * @details Reconciles writer placement, removes mapped traffic pins, drains
+ *   eligible configured green pools, resumes production probing, and enters
+ *   the completed latch while retaining the deployment fingerprint.
+ *
+ * @param st Worker-owned state to clean up and latch.
+ * @param completed_fingerprint Identity reported by the completed target row.
+ */
+void MySQL_Monitor::aws_aurora_bgd_apply_completion(
+	AWS_Aurora_BGD_State& st,
+	const AWS_Aurora_BGD_Fingerprint& completed_fingerprint
+) {
+	if (st.status == AWS_Aurora_BGD_Status::SWITCHOVER_COMPLETED
+		&& st.fingerprint == completed_fingerprint) {
+		return;
+	}
+
+	auto writer = std::find_if(
+		st.production_members.begin(), st.production_members.end(),
+		[](const AWS_Aurora_BGD_Member& member) { return member.is_writer; });
+	if (writer != st.production_members.end()) {
+		MyHGM->update_aws_aurora_set_writer(
+			st.writer_hg, st.reader_hg, const_cast<char*>(writer->server_id.c_str()), true,
+			st.domain_name.c_str(), writer->port, st.writer_is_also_reader,
+			st.new_reader_weight);
+	}
+
+	for (const AWS_Aurora_BGD_Member& member : st.target_members) {
+		dns_cache->remove(member.production_hostname);
+		My_Conn_Pool->purge_connections(member.production_hostname.c_str(), member.port);
+	}
+
+	struct green_server_t {
+		int hostgroup;
+		std::string hostname;
+		int port;
+	};
+	std::vector<green_server_t> green_servers;
+	MyHGM->wrlock();
+	for (int hostgroup : {st.green_writer_hg, st.green_reader_hg}) {
+		if (hostgroup < 0) {
+			continue;
+		}
+		MyHGC* hgc = MyHGM->MyHGC_find(hostgroup);
+		if (hgc == nullptr || hgc->mysrvs == nullptr) {
+			continue;
+		}
+		for (unsigned int i = 0; i < hgc->mysrvs->cnt(); ++i) {
+			MySrvC* server = hgc->mysrvs->idx(i);
+			if (server->get_status() == MYSQL_SERVER_STATUS_OFFLINE_SOFT
+				|| server->get_status() == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+				continue;
+			}
+			green_servers.push_back({hostgroup, server->address, server->port});
+			MyHGM->drain_server_connections(server->address, server->port);
+		}
+	}
+	MyHGM->wrunlock();
+
+	for (const green_server_t& server : green_servers) {
+		dns_cache->remove(server.hostname);
+		My_Conn_Pool->purge_connections(server.hostname.c_str(), server.port);
+		proxy_info(
+			"AWS Aurora BGD [wHG=%u rHG=%u]: connections drained from green HG %d server '%s:%d'\n",
+			st.writer_hg, st.reader_hg, server.hostgroup,
+			server.hostname.c_str(), server.port);
+	}
+
+	st.fingerprint = completed_fingerprint;
+	st.production_snapshot_frozen = false;
+	st.production_probe_suspended = false;
+	st.target_snapshot_complete = false;
+	st.target_members.clear();
+	aws_aurora_bgd_set_status(st, AWS_Aurora_BGD_Status::SWITCHOVER_COMPLETED);
+
+	proxy_info(
+		"AWS Aurora BGD [wHG=%u rHG=%u]: switchover cleanup complete; completion latched\n",
+		st.writer_hg, st.reader_hg);
+}
+
+/**
+ * @brief Reverse applied pre-completion effects and enter a safe earlier state.
+ *
+ * @details Removes only applied traffic pins, drains affected production
+ *   pools, restores canonical writer placement, resumes ordinary probing,
+ *   and optionally clears the deployment identity.
+ *
+ * @param st Worker-owned state whose applied effects are reversed.
+ * @param next_status Validated status to enter after cleanup.
+ * @param clear_deployment Whether to discard the retained deployment identity.
+ */
+void MySQL_Monitor::aws_aurora_bgd_apply_rollback(
+	AWS_Aurora_BGD_State& st, AWS_Aurora_BGD_Status next_status,
+	bool clear_deployment
+) {
+	for (AWS_Aurora_BGD_Member& member : st.target_members) {
+		if (!member.traffic_pin_applied) {
+			continue;
+		}
+		dns_cache->remove(member.production_hostname);
+		MyHGM->wrlock();
+		MyHGM->drain_server_connections(member.production_hostname.c_str(), member.port);
+		MyHGM->wrunlock();
+		My_Conn_Pool->purge_connections(member.production_hostname.c_str(), member.port);
+		member.traffic_pin_applied = false;
+	}
+
+	auto writer = std::find_if(
+		st.production_members.begin(), st.production_members.end(),
+		[](const AWS_Aurora_BGD_Member& member) { return member.is_writer; });
+	if (writer != st.production_members.end()) {
+		MyHGM->update_aws_aurora_set_writer(
+			st.writer_hg, st.reader_hg, const_cast<char*>(writer->server_id.c_str()), true,
+			st.domain_name.c_str(), writer->port, st.writer_is_also_reader,
+			st.new_reader_weight);
+	}
+
+	st.production_snapshot_frozen = false;
+	st.production_probe_suspended = false;
+	st.target_snapshot_complete = false;
+	st.target_members.clear();
+	if (clear_deployment) {
+		st.fingerprint = AWS_Aurora_BGD_Fingerprint {};
+	}
+
+	aws_aurora_bgd_set_status(st, next_status);
+	if (next_status >= AWS_Aurora_BGD_Status::SWITCHOVER_INITIATED
+		&& next_status <= AWS_Aurora_BGD_Status::SWITCHOVER_IN_POST_PROCESSING) {
+		aws_aurora_bgd_apply_active_actions(st, true);
+	}
+
+	proxy_info(
+		"AWS Aurora BGD [wHG=%u rHG=%u]: rollback cleanup complete; status '%s'\n",
+		st.writer_hg, st.reader_hg, aws_aurora_bgd_status_str(st.status));
+}
+
+/**
+ * @brief Release the completed latch after a successful topology drain.
+ *
+ * @param st Worker-owned state holding the completed deployment identity.
+ */
+void MySQL_Monitor::aws_aurora_bgd_release_completed_latch(AWS_Aurora_BGD_State& st) {
+	if (st.status != AWS_Aurora_BGD_Status::SWITCHOVER_COMPLETED) {
+		return;
+	}
+
+	st.fingerprint = AWS_Aurora_BGD_Fingerprint {};
+	st.target_members.clear();
+	st.target_snapshot_complete = false;
+	aws_aurora_bgd_set_status(st, AWS_Aurora_BGD_Status::NONE);
+
+	proxy_info(
+		"AWS Aurora BGD [wHG=%u rHG=%u]: topology drained; completion latch released\n",
+		st.writer_hg, st.reader_hg);
+}
+
+/**
+ * @brief Run the topology and target-membership probes owned by an Aurora worker.
+ *
+ * @details Discovery is serialized with the ordinary Aurora probe. This method
+ *   validates topology before publishing status and replaces target membership
+ *   only with a complete, unambiguous, fully resolved snapshot.
+ *
+ * @param st Worker-owned state advanced by the discovery cycle.
+ * @param worker_stop Per-worker shutdown signal checked around remote work.
+ */
+void MySQL_Monitor::aws_aurora_bgd_run_discovery_cycle(
+	AWS_Aurora_BGD_State& st, std::atomic_bool& worker_stop
+) {
+	if (worker_stop.load()) {
+		return;
+	}
+	const bool configured_green_hgs = st.green_writer_hg >= 0 && st.green_reader_hg >= 0;
+	const bool discovery_admitted = configured_green_hgs
+		|| st.status != AWS_Aurora_BGD_Status::NONE
+		|| mysql_thread___aws_blue_green_deployment_auto_discovery != 0;
+	if (!discovery_admitted) {
+		return;
+	}
+
+	std::vector<AWS_RDS_BGD_Probe_Host> topology_hosts = st.has_complete_target_snapshot()
+		? aws_aurora_bgd_target_probe_hosts(st)
+		: st.production_probe_hosts;
+	AWS_RDS_BGD_Probe_Host topology_host;
+
+	if (st.topology_state == TOPOLOGY_TABLE_CHECK) {
+		AWS_Aurora_BGD_Query_Result query = aws_aurora_bgd_query_candidates(
+			topology_hosts, st.writer_hg, st.check_timeout_ms,
+			MON_AWS_RDS_BGD, QUERY_AWS_RDS_TOPOLOGY_TABLE_CHECK, worker_stop,
+			&topology_host, false);
+		if (worker_stop.load()) {
+			return;
+		}
+		if (query.rc == 0 && query.mmsd->result) {
+			if (mysql_num_rows(query.mmsd->result) > 0) {
+				st.topology_state = TOPOLOGY_METADATA_FETCH;
+			} else if (st.status != AWS_Aurora_BGD_Status::NONE
+				&& st.status != AWS_Aurora_BGD_Status::SWITCHOVER_COMPLETED) {
+				aws_aurora_bgd_apply_rollback(
+					st, AWS_Aurora_BGD_Status::NONE, true);
+			} else {
+				aws_aurora_bgd_release_completed_latch(st);
+			}
+		}
+	} else {
+		AWS_Aurora_BGD_Query_Result query = aws_aurora_bgd_query_candidates(
+			topology_hosts, st.writer_hg, st.check_timeout_ms,
+			MON_AWS_RDS_BGD, QUERY_AWS_RDS_TOPOLOGY_DISCOVERY, worker_stop,
+			&topology_host, true);
+		if (worker_stop.load()) {
+			return;
+		}
+		if (query.rc != 0) {
+			if (query.mysql_error == 1146) {
+				st.topology_state = TOPOLOGY_TABLE_CHECK;
+			}
+		} else if (query.mmsd->result) {
+			if (mysql_num_rows(query.mmsd->result) == 0) {
+				if (st.status != AWS_Aurora_BGD_Status::NONE
+					&& st.status != AWS_Aurora_BGD_Status::SWITCHOVER_COMPLETED) {
+					aws_aurora_bgd_apply_rollback(
+						st, AWS_Aurora_BGD_Status::NONE, true);
+				} else {
+					aws_aurora_bgd_release_completed_latch(st);
+				}
+			} else {
+				AWS_RDS_Topology_Result topology = parse_aws_rds_topology(query.mmsd->result);
+				AWS_Aurora_BGD_Topology_Observation observation =
+					aws_aurora_bgd_validate_topology(topology);
+				if (observation.valid
+					&& st.status == AWS_Aurora_BGD_Status::SWITCHOVER_COMPLETED) {
+					if (st.fingerprint == observation.fingerprint) {
+						return;
+					}
+					st.fingerprint = AWS_Aurora_BGD_Fingerprint {};
+					st.target_members.clear();
+					st.target_snapshot_complete = false;
+					aws_aurora_bgd_set_status(st, AWS_Aurora_BGD_Status::NONE);
+					proxy_info(
+						"AWS Aurora BGD [wHG=%u rHG=%u]: new deployment fingerprint rearmed discovery\n",
+						st.writer_hg, st.reader_hg);
+				}
+				if (observation.valid && observation.completed) {
+					const bool same_active_deployment = st.fingerprint.empty()
+						|| st.fingerprint == observation.fingerprint;
+					if (same_active_deployment) {
+						aws_aurora_bgd_apply_completion(st, observation.fingerprint);
+					}
+				} else if (observation.valid) {
+					if (st.production_members.empty()
+						&& !aws_aurora_bgd_rebuild_production_snapshot(st)) {
+						proxy_error(
+							"AWS Aurora BGD [wHG=%u rHG=%u]: retaining current state until production membership is available\n",
+							st.writer_hg, st.reader_hg);
+						return;
+					}
+					const bool same_deployment = st.fingerprint.empty()
+						|| st.fingerprint == observation.fingerprint;
+					const bool rollback_transition =
+						static_cast<int>(observation.status) < static_cast<int>(st.status);
+					if (same_deployment && rollback_transition) {
+						aws_aurora_bgd_apply_rollback(
+							st, observation.status, false);
+					} else if (same_deployment) {
+						const bool status_changed = st.status != observation.status;
+						st.fingerprint = observation.fingerprint;
+						st.target_use_ssl = topology_host.use_ssl;
+						aws_aurora_bgd_set_status(st, observation.status);
+						aws_aurora_bgd_apply_active_actions(st, status_changed);
+					}
+				}
+			}
+		}
+	}
+
+	if (st.status == AWS_Aurora_BGD_Status::NONE
+		|| st.status == AWS_Aurora_BGD_Status::SWITCHOVER_COMPLETED
+		|| st.fingerprint.empty() || worker_stop.load()) {
+		return;
+	}
+
+	std::vector<AWS_RDS_BGD_Probe_Host> membership_hosts =
+		aws_aurora_bgd_membership_probe_hosts(st);
+	AWS_Aurora_BGD_Query_Result membership = aws_aurora_bgd_query_candidates(
+		membership_hosts, st.writer_hg, st.check_timeout_ms,
+		MON_AWS_AURORA, QUERY_AWS_AURORA_BGD_REPLICA_HOST_STATUS, worker_stop,
+		nullptr, false);
+	if (membership.rc != 0) {
+		return;
+	}
+
+	std::vector<AWS_Aurora_BGD_Member> snapshot;
+	if (aws_aurora_bgd_parse_target_membership(st, membership.mmsd->result, snapshot)) {
+		st.target_members = std::move(snapshot);
+		st.target_snapshot_complete = true;
+		proxy_debug(PROXY_DEBUG_MONITOR, 7,
+			"AWS Aurora BGD [wHG=%u rHG=%u]: retained complete target membership with %zu members\n",
+			st.writer_hg, st.reader_hg, st.target_members.size());
+		aws_aurora_bgd_apply_active_actions(st, false);
+	}
+}
+
+/**
+ * @brief Load the configuration rows for one Aurora worker.
+ *
+ * @param writer_hg Writer hostgroup owned by the worker.
+ * @param current_checksum Per-hostgroup checksum published by the coordinator.
+ * @param candidate Receives a complete configuration snapshot on success.
+ *
+ * @return true when the rows still match the coordinator-provided checksum.
+ */
+bool MySQL_Monitor::aws_aurora_bgd_load_worker_config(
+	int writer_hg, uint64_t current_checksum, AWS_Aurora_BGD_State& candidate
+) {
+	SQLite3_result cluster_result(AWS_AURORA_HOSTS_COLUMNS);
+	pthread_mutex_lock(&aws_aurora_mutex);
+	if (AWS_Aurora_Hosts_resultset) {
+		for (SQLite3_row* row : AWS_Aurora_Hosts_resultset->rows) {
+			if (atoi(row->fields[AWS_AURORA_WRITER_HOSTGROUP]) == writer_hg) {
+				cluster_result.add_row(row);
+			}
+		}
+	}
+	pthread_mutex_unlock(&aws_aurora_mutex);
+
+	if (cluster_result.rows.empty() || cluster_result.raw_checksum() != current_checksum) {
+		return false;
+	}
+
+	candidate.writer_hg = writer_hg;
+	bool first_row = true;
+	for (SQLite3_row* row : cluster_result.rows) {
+		if (first_row) {
+			candidate.reader_hg = atoi(row->fields[AWS_AURORA_READER_HOSTGROUP]);
+			candidate.green_writer_hg = row->fields[AWS_AURORA_GREEN_WRITER_HOSTGROUP]
+				? atoi(row->fields[AWS_AURORA_GREEN_WRITER_HOSTGROUP]) : -1;
+			candidate.green_reader_hg = row->fields[AWS_AURORA_GREEN_READER_HOSTGROUP]
+				? atoi(row->fields[AWS_AURORA_GREEN_READER_HOSTGROUP]) : -1;
+			candidate.max_lag_ms = atoi(row->fields[AWS_AURORA_MAX_LAG_MS]);
+			candidate.check_interval_ms = atoi(row->fields[AWS_AURORA_CHECK_INTERVAL_MS]);
+			candidate.check_timeout_ms = atoi(row->fields[AWS_AURORA_CHECK_TIMEOUT_MS]);
+			candidate.add_lag_ms = atoi(row->fields[AWS_AURORA_ADD_LAG_MS]);
+			candidate.min_lag_ms = atoi(row->fields[AWS_AURORA_MIN_LAG_MS]);
+			candidate.lag_num_checks = atoi(row->fields[AWS_AURORA_LAG_NUM_CHECKS]);
+			candidate.autopurge_missing_checks =
+				atoi(row->fields[AWS_AURORA_AUTOPURGE_MISSING_CHECKS]);
+			candidate.domain_name = row->fields[AWS_AURORA_DOMAIN_NAME]
+				? row->fields[AWS_AURORA_DOMAIN_NAME] : "";
+			candidate.writer_is_also_reader =
+				atoi(row->fields[AWS_AURORA_WRITER_IS_ALSO_READER]);
+			candidate.new_reader_weight = atoi(row->fields[AWS_AURORA_NEW_READER_WEIGHT]);
+			first_row = false;
+		}
+
+		candidate.production_probe_hosts.push_back(AWS_RDS_BGD_Probe_Host {
+			row->fields[AWS_AURORA_HOSTNAME],
+			atoi(row->fields[AWS_AURORA_PORT]),
+			atoi(row->fields[AWS_AURORA_USE_SSL]),
+		});
+	}
+
+	if (candidate.production_probe_hosts.empty()) {
+		return false;
+	}
+	candidate.target_use_ssl = candidate.production_probe_hosts.front().use_ssl;
+	return true;
+}
+
+/**
+ * @brief Refresh only configuration-derived fields of a running Aurora worker.
+ *
+ * @details Preserves deployment identity, membership, and applied-action
+ *   state while replacing the current configuration and forcing an immediate
+ *   worker iteration.
+ *
+ * @param st Worker-owned Aurora BGD state to refresh.
+ * @param current_checksum Per-hostgroup checksum published by the coordinator.
+ * @param next_loop_at Next scheduled worker iteration; reset to zero on success.
+ *
+ * @return true when a matching configuration snapshot was applied.
+ */
+bool MySQL_Monitor::aws_aurora_bgd_refresh_worker_config(
+	AWS_Aurora_BGD_State& st, uint64_t current_checksum,
+	unsigned long long& next_loop_at
+) {
+	AWS_Aurora_BGD_State candidate;
+	if (!aws_aurora_bgd_load_worker_config(st.writer_hg, current_checksum, candidate)) {
+		return false;
+	}
+
+	st.reader_hg = candidate.reader_hg;
+	st.green_writer_hg = candidate.green_writer_hg;
+	st.green_reader_hg = candidate.green_reader_hg;
+	st.max_lag_ms = candidate.max_lag_ms;
+	st.check_interval_ms = candidate.check_interval_ms;
+	st.check_timeout_ms = candidate.check_timeout_ms;
+	st.add_lag_ms = candidate.add_lag_ms;
+	st.min_lag_ms = candidate.min_lag_ms;
+	st.lag_num_checks = candidate.lag_num_checks;
+	st.autopurge_missing_checks = candidate.autopurge_missing_checks;
+	st.writer_is_also_reader = candidate.writer_is_also_reader;
+	st.new_reader_weight = candidate.new_reader_weight;
+	st.domain_name = candidate.domain_name;
+	st.production_probe_hosts = std::move(candidate.production_probe_hosts);
+	if (st.status == AWS_Aurora_BGD_Status::NONE && !st.target_snapshot_complete) {
+		st.target_use_ssl = candidate.target_use_ssl;
+	}
+
+	next_loop_at = 0;
+	proxy_info(
+		"AWS Aurora BGD [wHG=%u rHG=%u]: applied checksum %llu with in-place refresh at %s\n",
+		st.writer_hg, st.reader_hg, (unsigned long long)current_checksum,
+		aws_aurora_bgd_status_str(st.status));
+	return true;
+}
+
+/**
+ * @brief Run ordinary Aurora monitoring and BGD discovery for one writer hostgroup.
+ *
+ * @details The worker refreshes configuration in place, retains production
+ *   membership from successful Aurora observations, and serializes BGD probes
+ *   with the ordinary Aurora check loop. Applied BGD effects are rolled back
+ *   before the worker exits.
+ *
+ * @param arg Pointer to the coordinator-owned AWS_Aurora_BGD_Worker.
+ * @return nullptr after shutdown or removal of the worker configuration.
+ */
 void * monitor_AWS_Aurora_thread_HG(void *arg) {
-	unsigned int wHG = *(unsigned int *)arg;
-	unsigned int rHG = 0;
-	unsigned int num_hosts = 0;
+	AWS_Aurora_BGD_Worker* worker = static_cast<AWS_Aurora_BGD_Worker*>(arg);
+	unsigned int wHG = worker->writer_hg;
 	unsigned int cur_host_idx = 0;
-	unsigned int max_lag_ms = 0;
-	unsigned int check_interval_ms = 0;
-	unsigned int check_timeout_ms = 0;
-	unsigned int add_lag_ms = 0;
-	unsigned int min_lag_ms = 0;
-	unsigned int lag_num_checks = 1;
-	unsigned int autopurge_missing_checks = 0;
-	std::string domain_name;
 	std::map<std::string, int> autopurge_counter;
+	AWS_Aurora_BGD_State bgd_state;
+	bgd_state.writer_hg = wHG;
 	set_thread_name("MonitorAuroraHG", GloVars.set_thread_name);
 	proxy_info("Started Monitor thread for AWS Aurora writer HG %u\n", wHG);
 
@@ -6070,8 +7233,6 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
 	mysql_thr->refresh_variables();
 
-	uint64_t initial_raw_checksum = 0;
-
 	// this is a static array of the latest reads
 	unsigned int ase_idx = 0;
 	AWS_Aurora_status_entry *lasts_ase[N_L_ASE];
@@ -6079,60 +7240,13 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 		lasts_ase[i] = NULL;
 	}
 
-	// initial data load
-	pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
-	initial_raw_checksum = GloMyMon->AWS_Aurora_Hosts_resultset_checksum;
-	// count the number of hosts
-	for (std::vector<SQLite3_row *>::iterator it = GloMyMon->AWS_Aurora_Hosts_resultset->rows.begin() ; it != GloMyMon->AWS_Aurora_Hosts_resultset->rows.end(); ++it) {
-		SQLite3_row *r=*it;
-		if (atoi(r->fields[0]) == (int)wHG) {
-			num_hosts++;
-			if (max_lag_ms == 0) {
-				max_lag_ms = atoi(r->fields[5]);
-			}
-			if (check_interval_ms == 0) {
-				check_interval_ms = atoi(r->fields[6]);
-			}
-			if (check_timeout_ms == 0) {
-				check_timeout_ms = atoi(r->fields[7]);
-			}
-			if (rHG == 0) {
-				rHG = atoi(r->fields[1]);
-			}
-			add_lag_ms = atoi(r->fields[8]);
-			min_lag_ms = atoi(r->fields[9]);
-			lag_num_checks = atoi(r->fields[10]);
-			autopurge_missing_checks = atoi(r->fields[11]);
-			if (domain_name.empty() && r->fields[12]) {
-				domain_name = r->fields[12];
-			}
-		}
-	}
-	host_def_t *hpa = (host_def_t *)malloc(sizeof(host_def_t)*num_hosts);
-	for (std::vector<SQLite3_row *>::iterator it = GloMyMon->AWS_Aurora_Hosts_resultset->rows.begin() ; it != GloMyMon->AWS_Aurora_Hosts_resultset->rows.end(); ++it) {
-		SQLite3_row *r=*it;
-		if (atoi(r->fields[0]) == (int)wHG) {
-			hpa[cur_host_idx].host = strdup(r->fields[2]);
-			hpa[cur_host_idx].port = atoi(r->fields[3]);
-			hpa[cur_host_idx].use_ssl = atoi(r->fields[4]);
-			cur_host_idx++;
-		}
-	}
-	// NOTE: 'cur_host_idx' should never be higher than 'num_hosts' otherwise later an invalid memory access
-	// can table place later when accessing 'hpa[cur_host_idx]'.
-	if (cur_host_idx >= num_hosts) {
-		cur_host_idx = num_hosts - 1;
-	}
-	pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
-
-	bool exit_now = false;
 	unsigned long long t1 = 0;
 	//unsigned long long t2 = 0;
 	unsigned long long next_loop_at = 0;
 
 	bool crc = false;
 
-	uint64_t current_raw_checksum = 0;
+	uint64_t last_checksum = 0;
 	size_t rnd;
 	bool found_pingable_host = false;
 	bool rc_ping = false;
@@ -6141,7 +7255,8 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 	t1 = monotonic_time();
 	unsigned long long start_time=t1;
 
-	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true && exit_now==false) {
+	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true
+		&& worker->worker_stop.load()==false) {
 
 		
 		unsigned int glover;
@@ -6163,14 +7278,17 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 			next_loop_at=0;
 		}
 
-		pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
-		current_raw_checksum = GloMyMon->AWS_Aurora_Hosts_resultset_checksum;
-		pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
-
-		if (current_raw_checksum != initial_raw_checksum) {
-			// the content of AWS_Aurora_Hosts_resultset has changed. Exit
-			exit_now=true;
-			break;
+		uint64_t current_checksum = worker->current_checksum.load();
+		if (current_checksum != last_checksum) {
+			if (!GloMyMon->aws_aurora_bgd_refresh_worker_config(
+				bgd_state, current_checksum, next_loop_at)) {
+				usleep(50000);
+				continue;
+			}
+			last_checksum = current_checksum;
+			if (cur_host_idx >= bgd_state.production_probe_hosts.size()) {
+				cur_host_idx = 0;
+			}
 		}
 		//fprintf(stderr,"%u : %llu %llu\n", wHG, t1, next_loop_at);
 		if (t1 < next_loop_at) {
@@ -6183,39 +7301,43 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 			//proxy_info("Looping Monitor thread for AWS Aurora writer HG %u\n", wHG);
 			continue;
 		}
+		if (bgd_state.production_probe_suspended) {
+			if (mmsd) {
+				delete mmsd;
+				mmsd = NULL;
+			}
+			GloMyMon->aws_aurora_bgd_run_discovery_cycle(
+				bgd_state, worker->worker_stop);
+			const unsigned int interval_ms = bgd_state.production_probe_suspended
+				? 100 : bgd_state.check_interval_ms;
+			next_loop_at = t1 + static_cast<unsigned long long>(interval_ms) * 1000;
+			continue;
+		}
 		//proxy_info("Running check AWS Aurora writer HG %u\n", wHG);
 		found_pingable_host = false;
 
-		rc_ping = false;
-		// pick a random host
-		rnd = (size_t) rand_fast();
-		rnd %= num_hosts;
-		rc_ping = GloMyMon->server_responds_to_ping(hpa[rnd].host, hpa[rnd].port);
-		//proxy_info("Looping Monitor thread for AWS Aurora writer HG %u\n", wHG);
+		const size_t num_hosts = bgd_state.production_probe_hosts.size();
+		if (num_hosts != 0) {
+			rnd = static_cast<size_t>(rand_fast()) % num_hosts;
+			for (size_t offset = 0; !found_pingable_host && offset < num_hosts; ++offset) {
+				const size_t host_idx = (rnd + offset) % num_hosts;
+				const AWS_RDS_BGD_Probe_Host& host =
+					bgd_state.production_probe_hosts[host_idx];
+				rc_ping = GloMyMon->server_responds_to_ping(
+					const_cast<char*>(host.hostname.c_str()), host.port);
 #ifdef TEST_AURORA_RANDOM
-		if (rand_fast() % 100 < 30) {
-			// we randomly fail 30% of the requests
-			rc_ping = false;
-		}
+				if (offset == 0 && rand_fast() % 100 < 30) {
+					rc_ping = false;
+				}
 #endif // TEST_AURORA_RANDOM
-		if (rc_ping) {
-			found_pingable_host = true;
-			cur_host_idx = rnd;
-		} else {
-			MyHGM->p_update_mysql_error_counter(
-				p_mysql_error_type::proxysql, wHG, hpa[rnd].host, hpa[rnd].port, ER_PROXYSQL_AWS_NO_PINGABLE_SRV
-			);
-			// the randomly picked host didn't work work
-			shuffle_hosts(hpa,num_hosts);
-			for (unsigned int i=0; (found_pingable_host == false && i<num_hosts ) ; i++) {
-				rc_ping = GloMyMon->server_responds_to_ping(hpa[i].host, hpa[i].port);
 				if (rc_ping) {
 					found_pingable_host = true;
-					cur_host_idx = i;
+					cur_host_idx = host_idx;
 				} else {
 					MyHGM->p_update_mysql_error_counter(
-						p_mysql_error_type::proxysql, wHG, hpa[i].host, hpa[i].port, ER_PROXYSQL_AWS_NO_PINGABLE_SRV
-					);
+						p_mysql_error_type::proxysql, wHG,
+						const_cast<char*>(host.hostname.c_str()), host.port,
+						ER_PROXYSQL_AWS_NO_PINGABLE_SRV);
 				}
 			}
 		}
@@ -6229,22 +7351,31 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 
 		if (found_pingable_host == false) {
 			proxy_error("No node is pingable for AWS Aurora cluster with writer HG %u\n", wHG);
-			next_loop_at = t1 + check_interval_ms * 1000;
+			GloMyMon->aws_aurora_bgd_run_discovery_cycle(
+				bgd_state, worker->worker_stop);
+			const unsigned int interval_ms = bgd_state.production_probe_suspended
+				? 100 : bgd_state.check_interval_ms;
+			next_loop_at = t1 + static_cast<unsigned long long>(interval_ms) * 1000;
 			continue;
 		}
 #ifdef TEST_AURORA
 		if (rand_fast() % 1000 == 0) { // suppress 99.9% of the output, too verbose
-			proxy_info("Running check for AWS Aurora writer HG %u on %s:%d\n", wHG , hpa[cur_host_idx].host, hpa[cur_host_idx].port);
+			const AWS_RDS_BGD_Probe_Host& host = bgd_state.production_probe_hosts[cur_host_idx];
+			proxy_info("Running check for AWS Aurora writer HG %u on %s:%d\n", wHG,
+				host.hostname.c_str(), host.port);
 		}
 #endif // TEST_AURORA
 		if (mmsd) {
 			delete mmsd;
 			mmsd = NULL;
 		}
-		//mmsd = NULL;
-		mmsd = new MySQL_Monitor_State_Data(MON_AWS_AURORA, hpa[cur_host_idx].host, hpa[cur_host_idx].port, hpa[cur_host_idx].use_ssl);
+		const AWS_RDS_BGD_Probe_Host& probe_host =
+			bgd_state.production_probe_hosts[cur_host_idx];
+		mmsd = new MySQL_Monitor_State_Data(
+			MON_AWS_AURORA, const_cast<char*>(probe_host.hostname.c_str()),
+			probe_host.port, probe_host.use_ssl);
 		mmsd->writer_hostgroup = wHG;
-		mmsd->aws_aurora_check_timeout_ms = check_timeout_ms;
+		mmsd->aws_aurora_check_timeout_ms = bgd_state.check_timeout_ms;
 		mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port, mmsd);
 		//unsigned long long start_time=mysql_thr->curtime;
 		start_time=t1;
@@ -6278,12 +7409,6 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 
 	mmsd->t1=monotonic_time();
 	mmsd->interr=0; // reset the value
-#ifdef TEST_AURORA
-	{
-		string query { TEST_AURORA_MONITOR_BASE_QUERY + std::to_string(wHG) };
-		mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, query.c_str());
-	}
-#else
 	// for reference we list the old queries.
 	// original implementation:
 	// mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, "SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP, IF(SESSION_ID = 'MASTER_SESSION_ID', 0, REPLICA_LAG_IN_MILLISECONDS) AS REPLICA_LAG_IN_MILLISECONDS, CPU FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS WHERE (REPLICA_LAG_IN_MILLISECONDS > 0 AND REPLICA_LAG_IN_MILLISECONDS <= 600000) OR SESSION_ID = 'MASTER_SESSION_ID' ORDER BY SERVER_ID");
@@ -6294,27 +7419,8 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 	// with:
 	//   "REPLICA_LAG_IN_MILLISECONDS >= 0"
 	// mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, "SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP, IF(SESSION_ID = 'MASTER_SESSION_ID', 0, REPLICA_LAG_IN_MILLISECONDS) AS REPLICA_LAG_IN_MILLISECONDS, CPU FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS WHERE (REPLICA_LAG_IN_MILLISECONDS >= 0 AND REPLICA_LAG_IN_MILLISECONDS <= 600000) OR SESSION_ID = 'MASTER_SESSION_ID' ORDER BY SERVER_ID");
-	{
-		const char * query =
-			"SELECT SERVER_ID,"
-			"IF("
-				"SESSION_ID = 'MASTER_SESSION_ID' AND "
-				"SERVER_ID <> (SELECT SERVER_ID FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS WHERE SESSION_ID = 'MASTER_SESSION_ID' ORDER BY LAST_UPDATE_TIMESTAMP DESC LIMIT 1), "
-				"'probably_former_MASTER_SESSION_ID', SESSION_ID"
-			") SESSION_ID, " // it seems that during a failover, the old writer can keep MASTER_SESSION_ID because not updated
-			"LAST_UPDATE_TIMESTAMP, "
-			"IF(SESSION_ID = 'MASTER_SESSION_ID', 0, REPLICA_LAG_IN_MILLISECONDS) AS REPLICA_LAG_IN_MILLISECONDS, "
-			"CPU "
-			"FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS WHERE"
-			" ( "
-			"(REPLICA_LAG_IN_MILLISECONDS >= 0 AND REPLICA_LAG_IN_MILLISECONDS <= 600000)" // lag between 0 and 10 minutes
-			" OR SESSION_ID = 'MASTER_SESSION_ID'" // or server with MASTER_SESSION_ID
-			" ) "
-			"AND LAST_UPDATE_TIMESTAMP > NOW() - INTERVAL 180 SECOND" // ignore decommissioned or renamed nodes, see https://github.com/sysown/proxysql/issues/3484
-			" ORDER BY SERVER_ID";
-		mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, query);
-	}
-#endif // TEST_AURORA
+	mmsd->async_exit_status = mysql_query_start(
+		&mmsd->interr, mmsd->mysql, QUERY_AWS_AURORA_REPLICA_HOST_STATUS);
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 #ifdef DEBUG
@@ -6328,7 +7434,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_AWS_HEALTH_CHECK_TIMEOUT);
 			goto __exit_monitor_aws_aurora_HG_thread;
 		}
-		if (GloMyMon->shutdown==true) {
+		if (GloMyMon->shutdown==true || worker->worker_stop.load()) {
 			goto __fast_exit_monitor_aws_aurora_HG_thread;	// exit immediately
 		}
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
@@ -6349,7 +7455,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_AWS_HEALTH_CHECK_TIMEOUT);
 			goto __exit_monitor_aws_aurora_HG_thread;
 		}
-		if (GloMyMon->shutdown==true) {
+		if (GloMyMon->shutdown==true || worker->worker_stop.load()) {
 			goto __fast_exit_monitor_aws_aurora_HG_thread;	// exit immediately
 		}
 		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
@@ -6363,7 +7469,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 
 __exit_monitor_aws_aurora_HG_thread:
 		mmsd->t2=monotonic_time();
-		next_loop_at = t1 + (check_interval_ms * 1000);
+		next_loop_at = t1 + (bgd_state.check_interval_ms * 1000);
 		if (mmsd->t2 > t1) {
 			next_loop_at -= (mmsd->t2 - t1);
 		}
@@ -6401,18 +7507,26 @@ __exit_monitor_aws_aurora_HG_thread:
 				mysql_free_result(mmsd->result);
 				mmsd->result=NULL;
 			}
+			GloMyMon->aws_aurora_bgd_refresh_production_snapshot(bgd_state, *ase);
 
 			if (lasts_ase[ase_idx]) {
 				AWS_Aurora_status_entry * l_ase = lasts_ase[ase_idx];
 				delete l_ase;
 			}
 			lasts_ase[ase_idx] = ase_l;
-			GloMyMon->evaluate_aws_aurora_results(wHG, rHG, &lasts_ase[0], ase_idx, max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks);
+			GloMyMon->evaluate_aws_aurora_results(
+				wHG, bgd_state.reader_hg, &lasts_ase[0], ase_idx,
+				bgd_state.max_lag_ms, bgd_state.add_lag_ms,
+				bgd_state.min_lag_ms, bgd_state.lag_num_checks);
 
 			// Auto-purge servers that disappear from REPLICA_HOST_STATUS
 			// Only process if autopurge is enabled and query was successful with results
-			if (autopurge_missing_checks > 0 && mmsd->interr == 0 && ase->host_statuses->size() > 0) {
-				GloMyMon->aws_aurora_autopurge_servers(wHG, rHG, ase, autopurge_missing_checks, autopurge_counter, domain_name);
+			if (bgd_state.autopurge_missing_checks > 0 && mmsd->interr == 0
+				&& ase->host_statuses->size() > 0) {
+				GloMyMon->aws_aurora_autopurge_servers(
+					wHG, bgd_state.reader_hg, ase,
+					bgd_state.autopurge_missing_checks, autopurge_counter,
+					bgd_state.domain_name);
 			}
 
 			for (auto h : *(ase_l->host_statuses)) {
@@ -6490,20 +7604,24 @@ __fast_exit_monitor_aws_aurora_HG_thread:
 			}
 		}
 	}
+		if (GloMyMon->shutdown == false && worker->worker_stop.load() == false) {
+			GloMyMon->aws_aurora_bgd_run_discovery_cycle(
+				bgd_state, worker->worker_stop);
+			const unsigned int interval_ms = bgd_state.production_probe_suspended
+				? 100 : bgd_state.check_interval_ms;
+			next_loop_at = t1 + static_cast<unsigned long long>(interval_ms) * 1000;
+		}
 	}
 __exit_monitor_AWS_Aurora_thread_HG_now:
+	if (bgd_state.status != AWS_Aurora_BGD_Status::NONE) {
+		GloMyMon->aws_aurora_bgd_apply_rollback(
+			bgd_state, AWS_Aurora_BGD_Status::NONE, true);
+	}
 	if (mmsd) {
 		delete (mmsd);
 		mmsd = NULL;
-	for (unsigned int i=0; i<N_L_ASE; i++) {
-		if (lasts_ase[i]) {
-			delete lasts_ase[i];
-			lasts_ase[i] = NULL;
-		}
-	}
 	}
 
-	free(hpa);
 	if (mysql_thr) {
 		delete mysql_thr;
 		mysql_thr=NULL;
@@ -6512,6 +7630,7 @@ __exit_monitor_AWS_Aurora_thread_HG_now:
 		if (lasts_ase[i]) {
 			AWS_Aurora_status_entry * ase = lasts_ase[i];
 			delete ase;
+			lasts_ase[i] = NULL;
 		}
 	}
 	proxy_info("Stopping Monitor thread for AWS Aurora writer HG %u\n", wHG);
@@ -6519,10 +7638,18 @@ __exit_monitor_AWS_Aurora_thread_HG_now:
 }
 
 
+/**
+ * @brief Coordinate per-hostgroup Aurora monitor workers.
+ *
+ * @details Rebuilds the shared Aurora configuration snapshot when its
+ *   checksum changes, starts one worker for each configured writer
+ *   hostgroup, refreshes running workers, and joins workers removed from
+ *   the active configuration during shutdown or reload.
+ *
+ * @return nullptr when monitoring stops.
+ */
 void * MySQL_Monitor::monitor_aws_aurora() {
-	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
-	// Wait for GloMTH to be initialized
-	if (!wait_for_glo_mth()) return NULL;	// quick exit during shutdown/restart
+	if (!wait_for_glo_mth()) return NULL;
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
@@ -6530,20 +7657,11 @@ void * MySQL_Monitor::monitor_aws_aurora() {
 	mysql_thr->refresh_variables();
 
 	uint64_t last_raw_checksum = 0;
-
-	// ADD here an unordered map , Writer HG => next time at
-	// when empty, a new map is populated
-	// when next_loop_at = 0 , the tables is emptied so to be populated again
-
-	unsigned int *hgs_array = NULL;
-	pthread_t *pthreads_array = NULL;
-	unsigned int hgs_num = 0;
+	std::unordered_map<int, std::unique_ptr<AWS_Aurora_BGD_Worker>> workers;
 
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
-
 		unsigned int glover;
-
-		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+		if (!GloMTH) break;
 
 		// if variables has changed, triggers new checks
 		glover=GloMTH->get_global_version();
@@ -6552,66 +7670,96 @@ void * MySQL_Monitor::monitor_aws_aurora() {
 			mysql_thr->refresh_variables();
 		}
 
-		// if list of servers or HG or options has changed, triggers new checks
+		uint64_t new_raw_checksum = 0;
+		std::unordered_map<int, uint64_t> cluster_checksums;
 		pthread_mutex_lock(&aws_aurora_mutex);
-		uint64_t new_raw_checksum = AWS_Aurora_Hosts_resultset->raw_checksum();
+		if (AWS_Aurora_Hosts_resultset) {
+			new_raw_checksum = AWS_Aurora_Hosts_resultset->raw_checksum();
+			if (new_raw_checksum != last_raw_checksum) {
+				std::unordered_map<int, std::unique_ptr<SQLite3_result>> cluster_results;
+				for (SQLite3_row* row : AWS_Aurora_Hosts_resultset->rows) {
+					const int writer_hg = atoi(row->fields[AWS_AURORA_WRITER_HOSTGROUP]);
+					auto cluster_it = cluster_results.find(writer_hg);
+					if (cluster_it == cluster_results.end()) {
+						cluster_it = cluster_results.emplace(
+							writer_hg, std::unique_ptr<SQLite3_result>(
+								new SQLite3_result(AWS_AURORA_HOSTS_COLUMNS))).first;
+					}
+					cluster_it->second->add_row(row);
+				}
+				for (const auto& [writer_hg, result] : cluster_results) {
+					cluster_checksums[writer_hg] = result->raw_checksum();
+				}
+			}
+		}
 		pthread_mutex_unlock(&aws_aurora_mutex);
+
 		if (new_raw_checksum != last_raw_checksum) {
 			proxy_info("Detected new/changed definition for AWS Aurora monitoring\n");
 			last_raw_checksum = new_raw_checksum;
-			if (pthreads_array) {
-				// wait all threads to terminate
-				for (unsigned int i=0; i < hgs_num; i++) {
-					pthread_join(pthreads_array[i], NULL);
-					proxy_info("Stopped Monitor thread for AWS Aurora writer HG %u\n", hgs_array[i]);
+			std::vector<int> stopped_workers;
+
+			for (auto& [writer_hg, worker] : workers) {
+				auto cluster_it = cluster_checksums.find(writer_hg);
+				if (cluster_it == cluster_checksums.end()) {
+					worker->worker_stop.store(true);
+					stopped_workers.push_back(writer_hg);
+					proxy_info(
+						"AWS Aurora BGD [wHG=%d]: stopping worker; owning row is inactive, removed, or has no monitored server\n",
+						writer_hg);
+					continue;
 				}
-				free(pthreads_array);
-				free(hgs_array);
-				pthreads_array = NULL;
-				hgs_array = NULL;
+
+				uint64_t old_checksum = worker->current_checksum.load();
+				if (old_checksum != cluster_it->second) {
+					worker->current_checksum.store(cluster_it->second);
+					proxy_info(
+						"AWS Aurora BGD [wHG=%d]: signaling config refresh, checksum %llu -> %llu\n",
+						writer_hg, (unsigned long long)old_checksum,
+						(unsigned long long)cluster_it->second);
+				}
 			}
-			hgs_num = 0;
-			pthread_mutex_lock(&aws_aurora_mutex);
-			// scan all the writer HGs
-			unsigned int num_rows = AWS_Aurora_Hosts_resultset->rows_count;
-			if (num_rows) {
-				unsigned int *tmp_hgs_array = (unsigned int *)malloc(sizeof(unsigned int)*num_rows);
-				for (std::vector<SQLite3_row *>::iterator it = AWS_Aurora_Hosts_resultset->rows.begin() ; it != AWS_Aurora_Hosts_resultset->rows.end(); ++it) {
-					SQLite3_row *r=*it;
-					int wHG = atoi(r->fields[0]);
-					bool found = false;
-					// very simple search. Far from optimal, but assuming very few HGs it is fast enough
-					for (unsigned int i=0; i < hgs_num; i++) {
-						if (tmp_hgs_array[i] == (unsigned int)wHG) {
-							found = true;
-						}
-					}
-					if (found == false) {
-						// new wHG found
-						tmp_hgs_array[hgs_num]=wHG;
-						hgs_num++;
-					}
+
+			for (const auto& [writer_hg, checksum] : cluster_checksums) {
+				if (workers.find(writer_hg) != workers.end()) {
+					continue;
 				}
-				proxy_info("Activating Monitoring of %u AWS Aurora clusters\n", hgs_num);
-				hgs_array = (unsigned int *)malloc(sizeof(unsigned int)*hgs_num);
-				pthreads_array = (pthread_t *)malloc(sizeof(pthread_t)*hgs_num);
-				for (unsigned int i=0; i < hgs_num; i++) {
-					hgs_array[i] = tmp_hgs_array[i];
-					proxy_info("Starting Monitor thread for AWS Aurora writer HG %u\n", hgs_array[i]);
-					if (pthread_create(&pthreads_array[i], NULL, monitor_AWS_Aurora_thread_HG, &hgs_array[i]) != 0) {
-						// LCOV_EXCL_START
-						proxy_error("Thread creation\n");
-						assert(0);
-						// LCOV_EXCL_STOP
-					}
+				std::unique_ptr<AWS_Aurora_BGD_Worker> worker(new AWS_Aurora_BGD_Worker);
+				worker->writer_hg = writer_hg;
+				worker->current_checksum.store(checksum);
+				AWS_Aurora_BGD_Worker* worker_arg = worker.get();
+				workers.emplace(writer_hg, std::move(worker));
+				proxy_info("Starting Monitor thread for AWS Aurora writer HG %d\n", writer_hg);
+				if (pthread_create(
+					&worker_arg->thread, NULL, monitor_AWS_Aurora_thread_HG, worker_arg) != 0) {
+					// LCOV_EXCL_START
+					proxy_error("Thread creation\n");
+					assert(0);
+					// LCOV_EXCL_STOP
 				}
-				free(tmp_hgs_array);
 			}
-			pthread_mutex_unlock(&aws_aurora_mutex);
+
+			for (int writer_hg : stopped_workers) {
+				auto worker_it = workers.find(writer_hg);
+				if (worker_it == workers.end()) {
+					continue;
+				}
+				pthread_join(worker_it->second->thread, NULL);
+				proxy_info("Stopped Monitor thread for AWS Aurora writer HG %d\n", writer_hg);
+				workers.erase(worker_it);
+			}
 		}
 
 		usleep(10000);
 	}
+	for (auto& [writer_hg, worker] : workers) {
+		worker->worker_stop.store(true);
+	}
+	for (auto& [writer_hg, worker] : workers) {
+		pthread_join(worker->thread, NULL);
+		proxy_info("Stopped Monitor thread for AWS Aurora writer HG %d\n", writer_hg);
+	}
+	workers.clear();
 	if (mysql_thr) {
 		delete mysql_thr;
 		mysql_thr=NULL;

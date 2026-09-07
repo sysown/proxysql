@@ -70,7 +70,7 @@
 #define CLUSTER_QUERY_PGSQL_SERVERS_SSL_PARAMS "PROXY_SELECT hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_crl, ssl_crlpath, ssl_protocol_version_range, comment FROM runtime_pgsql_servers_ssl_params ORDER BY hostname, port, username"
 
 /* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_aws_aurora_hostgroups'. See top comment for details. */
-#define CLUSTER_QUERY_MYSQL_AWS_AURORA "PROXY_SELECT writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, autopurge_missing_checks, comment FROM runtime_mysql_aws_aurora_hostgroups ORDER BY writer_hostgroup"
+#define CLUSTER_QUERY_MYSQL_AWS_AURORA "PROXY_SELECT writer_hostgroup, reader_hostgroup, green_writer_hostgroup, green_reader_hostgroup, active, aurora_port, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, autopurge_missing_checks, comment FROM runtime_mysql_aws_aurora_hostgroups ORDER BY writer_hostgroup"
 
 /* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_aws_rds_bgd_hostgroups'. See top comment for details. */
 #define CLUSTER_QUERY_MYSQL_AWS_RDS_BGD "PROXY_SELECT writer_hostgroup, reader_hostgroup, green_writer_hostgroup, green_reader_hostgroup, active, writer_is_also_reader, check_interval_ms, check_timeout_ms, comment, auto_generated, status FROM runtime_mysql_aws_rds_bgd_hostgroups WHERE auto_generated=0 ORDER BY writer_hostgroup"

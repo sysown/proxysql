@@ -33,7 +33,7 @@ struct TestState {
 	vector<Endpoint> servers_first_endpoints { servers_first.get_endpoints() };
 };
 
-int setup(CommandLine& cl, MYSQL*& admin, RDS_BGD_Simulator& sim) {
+int setup(CommandLine& cl, MYSQL*& admin, BGD_Simulator& sim) {
 	if (cl.getEnv()) {
 		diag("Error: failed to load TAP environment");
 		return EXIT_FAILURE;
@@ -55,7 +55,7 @@ int setup(CommandLine& cl, MYSQL*& admin, RDS_BGD_Simulator& sim) {
 	return EXIT_SUCCESS;
 }
 
-int cleanup(MYSQL* admin, RDS_BGD_Simulator& sim) {
+int cleanup(MYSQL* admin, BGD_Simulator& sim) {
 	int admin_rc = bgd_admin_cleanup(admin);
 	if (admin_rc != EXIT_SUCCESS) {
 		diag("Error: failed to clean ProxySQL BGD test state");
@@ -167,7 +167,7 @@ bool runtime_membership_matches(MYSQL* admin, RDS_BGD_Cluster& cluster, BGD_Host
  * - Verify no table-check probe starts.
  * - Load all servers and verify AVAILABLE with explicit runtime membership.
  */
-int test_bgd_row_before_servers(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_bgd_row_before_servers(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	RDS_BGD_Cluster& cluster = state.row_first;
 	BGD_Hostgroups& hg = state.row_first_hg;
 
@@ -177,7 +177,7 @@ int test_bgd_row_before_servers(MYSQL* admin, RDS_BGD_Simulator& sim, TestState&
 		return EXIT_FAILURE;
 	}
 
-	vector<RDS_BGD_Topology_Row> topology = bgd_topology_with_readers(cluster, "AVAILABLE");
+	vector<BGD_Topology_Row> topology = bgd_topology_with_readers(cluster, "AVAILABLE");
 	int topology_rc = sim.topology_update(state.row_first_endpoints, topology);
 	if (topology_rc != EXIT_SUCCESS) {
 		diag("Error: failed to publish AVAILABLE topology for hostgroups 840-843");
@@ -224,7 +224,7 @@ int test_bgd_row_before_servers(MYSQL* admin, RDS_BGD_Simulator& sim, TestState&
 	}
 
 	auto [probe_rc, probe] =
-		sim.wait_for_probe_log(seq, cluster.blue_writer.endpoint(), RDS_BGD_Probe_Kind::table_check, kProbeTimeoutMs, 0);
+		sim.wait_for_probe_log(seq, cluster.blue_writer.endpoint(), BGD_Probe_Kind::table_check, kProbeTimeoutMs, 0);
 	if (probe_rc != EXIT_SUCCESS) {
 		diag("Error: loading the blue writer did not start the wHG 840 table check");
 		return EXIT_FAILURE;
@@ -249,7 +249,7 @@ int test_bgd_row_before_servers(MYSQL* admin, RDS_BGD_Simulator& sim, TestState&
  * - Verify no table-check probe starts.
  * - Load the explicit row and verify AVAILABLE with explicit membership.
  */
-int test_servers_before_bgd_row(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_servers_before_bgd_row(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	RDS_BGD_Cluster& cluster = state.servers_first;
 	BGD_Hostgroups& hg = state.servers_first_hg;
 
@@ -259,7 +259,7 @@ int test_servers_before_bgd_row(MYSQL* admin, RDS_BGD_Simulator& sim, TestState&
 		return EXIT_FAILURE;
 	}
 
-	vector<RDS_BGD_Topology_Row> topology = bgd_topology_with_readers(cluster, "AVAILABLE");
+	vector<BGD_Topology_Row> topology = bgd_topology_with_readers(cluster, "AVAILABLE");
 	int topology_rc = sim.topology_update(state.servers_first_endpoints, topology);
 	if (topology_rc != EXIT_SUCCESS) {
 		diag("Error: failed to publish AVAILABLE topology for hostgroups 850-853");
@@ -306,7 +306,7 @@ int test_servers_before_bgd_row(MYSQL* admin, RDS_BGD_Simulator& sim, TestState&
 	}
 
 	auto [probe_rc, probe] =
-		sim.wait_for_probe_log(seq, cluster.blue_writer.endpoint(), RDS_BGD_Probe_Kind::table_check, kProbeTimeoutMs, 0);
+		sim.wait_for_probe_log(seq, cluster.blue_writer.endpoint(), BGD_Probe_Kind::table_check, kProbeTimeoutMs, 0);
 	if (probe_rc != EXIT_SUCCESS) {
 		diag("Error: loading wHG 850 did not start the blue table check");
 		return EXIT_FAILURE;
@@ -328,7 +328,7 @@ int main() {
 
 	CommandLine cl {};
 	MYSQL* admin = nullptr;
-	RDS_BGD_Simulator sim {};
+	BGD_Simulator sim {};
 
 	if (setup(cl, admin, sim) != EXIT_SUCCESS) {
 		return exit_status();

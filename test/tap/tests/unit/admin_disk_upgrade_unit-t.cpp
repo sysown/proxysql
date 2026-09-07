@@ -113,6 +113,16 @@ static bool table_matches_current(SQLite3DB *db, const char *tbl, const char *de
 	return db->check_table_structure(tbl, def) == 1;
 }
 
+static bool create_table_in_schema(SQLite3DB* db, const char* schema, const char* definition) {
+	std::string query = definition;
+	const std::string prefix = "CREATE TABLE ";
+	if (query.compare(0, prefix.size(), prefix) != 0) {
+		return false;
+	}
+	query.insert(prefix.size(), std::string(schema) + ".");
+	return db->execute(query.c_str());
+}
+
 // ============================================================================
 // disk_upgrade_scheduler() tests
 // ============================================================================
@@ -382,6 +392,37 @@ static void test_mysql_servers_no_upgrade_needed() {
 	ok(count == 1, "mysql_servers: data unchanged when no upgrade needed (got %d)", count);
 }
 
+static void test_aurora_hostgroups_upgrade_from_v2_0_10() {
+	TestDiskUpgrade t;
+	SQLite3DB *db = t.db();
+
+	db->execute(ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS_V2_0_10);
+	db->execute(
+		"INSERT INTO mysql_aws_aurora_hostgroups ("
+			"writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,"
+			"check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,"
+			"add_lag_ms,min_lag_ms,lag_num_checks,autopurge_missing_checks,comment"
+		") VALUES (10,20,1,3307,'.cluster.example',125,1500,900,1,7,40,20,3,9,'existing Aurora row')"
+	);
+
+	t.upgrade_mysql_servers();
+
+	ok(table_matches_current(db, "mysql_aws_aurora_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS),
+		"mysql_aws_aurora_hostgroups: v2.0.10 upgrade produces current schema");
+	ok(query_int(db, "SELECT COUNT(*) FROM mysql_aws_aurora_hostgroups") == 1,
+		"mysql_aws_aurora_hostgroups: v2.0.10 upgrade preserves the row");
+	ok(query_int(db, "SELECT green_writer_hostgroup IS NULL FROM mysql_aws_aurora_hostgroups WHERE writer_hostgroup=10") == 1,
+		"mysql_aws_aurora_hostgroups: migrated green writer is NULL");
+	ok(query_int(db, "SELECT green_reader_hostgroup IS NULL FROM mysql_aws_aurora_hostgroups WHERE writer_hostgroup=10") == 1,
+		"mysql_aws_aurora_hostgroups: migrated green reader is NULL");
+	ok(query_string(db, "SELECT domain_name FROM mysql_aws_aurora_hostgroups WHERE writer_hostgroup=10") == ".cluster.example",
+		"mysql_aws_aurora_hostgroups: migration preserves configured values");
+	ok(query_int(db, "SELECT autopurge_missing_checks FROM mysql_aws_aurora_hostgroups WHERE writer_hostgroup=10") == 9,
+		"mysql_aws_aurora_hostgroups: migration preserves autopurge_missing_checks");
+	ok(query_int(db, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='mysql_aws_aurora_hostgroups_v2010'") == 1,
+		"mysql_aws_aurora_hostgroups: v2.0.10 table is retained as v2010");
+}
+
 // ============================================================================
 // disk_upgrade_pgsql_replication_hostgroups() tests
 // ============================================================================
@@ -544,12 +585,68 @@ static void test_mysql_servers_upgrade_multiple_rows_with_fixes() {
 	ok(w2 == 500, "mysql_servers: normal weight preserved (got %d)", w2);
 }
 
+static void test_aurora_hostgroups_disk_roundtrip_uses_configured_projection() {
+	SQLite3DB db;
+	char memory_database[] = ":memory:";
+	db.open(memory_database, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	const bool schema_ready = db.execute(ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS) &&
+		db.execute("ATTACH DATABASE ':memory:' AS disk") &&
+		create_table_in_schema(&db, "disk", ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS) &&
+		db.execute(
+			"ALTER TABLE disk.mysql_aws_aurora_hostgroups ADD COLUMN "
+			"bgd_status TEXT NOT NULL DEFAULT 'DISK_LOCAL'");
+	ok(schema_ready, "Aurora disk round trip uses the current schemas in main and disk");
+
+	const bool rows_inserted = db.execute(
+		"INSERT INTO mysql_aws_aurora_hostgroups ("
+		"writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,domain_name,comment"
+		") VALUES "
+		"(600,601,602,603,'.disk.example','disk round trip'),"
+		"(610,611,NULL,NULL,'.disk-null.example',NULL)"
+	);
+	ok(rows_inserted && copy_mysql_aws_aurora_hostgroups_to_disk(&db),
+		"Aurora disk SAVE copies the configured projection");
+	ok(query_string(&db,
+		"SELECT green_writer_hostgroup || ',' || green_reader_hostgroup "
+		"FROM disk.mysql_aws_aurora_hostgroups WHERE writer_hostgroup=600") == "602,603",
+		"Aurora disk SAVE preserves both configured green hostgroups");
+	ok(query_int(&db,
+		"SELECT COUNT(*) FROM disk.mysql_aws_aurora_hostgroups "
+		"WHERE writer_hostgroup=610 AND green_writer_hostgroup IS NULL AND green_reader_hostgroup IS NULL") == 1,
+		"Aurora disk SAVE preserves paired NULL green hostgroups");
+	ok(query_int(&db,
+		"SELECT COUNT(*) FROM disk.mysql_aws_aurora_hostgroups "
+		"WHERE writer_hostgroup=610 AND comment IS NULL") == 1,
+		"Aurora disk SAVE preserves a NULL comment");
+	ok(query_int(&db,
+		"SELECT COUNT(*) FROM disk.mysql_aws_aurora_hostgroups "
+		"WHERE bgd_status='DISK_LOCAL'") == 2,
+		"Aurora disk SAVE leaves node-local bgd_status at its destination default");
+
+	ok(db.execute("DELETE FROM main.mysql_aws_aurora_hostgroups"),
+		"Aurora disk LOAD test clears the configured source table");
+	ok(copy_mysql_aws_aurora_hostgroups_from_disk(&db),
+		"Aurora disk LOAD copies the configured projection");
+	ok(query_string(&db,
+		"SELECT green_writer_hostgroup || ',' || green_reader_hostgroup "
+		"FROM main.mysql_aws_aurora_hostgroups WHERE writer_hostgroup=600") == "602,603",
+		"Aurora disk LOAD restores both configured green hostgroups");
+	ok(query_int(&db,
+		"SELECT COUNT(*) FROM main.mysql_aws_aurora_hostgroups "
+		"WHERE writer_hostgroup=610 AND green_writer_hostgroup IS NULL AND green_reader_hostgroup IS NULL") == 1,
+		"Aurora disk LOAD restores paired NULL green hostgroups");
+	ok(query_int(&db,
+		"SELECT COUNT(*) FROM main.mysql_aws_aurora_hostgroups "
+		"WHERE writer_hostgroup=610 AND comment IS NULL") == 1,
+		"Aurora disk LOAD restores a NULL comment");
+}
+
 // ============================================================================
 // main
 // ============================================================================
 
 int main() {
-	plan(60);
+	plan(78);
 	test_init_minimal();
 
 	// scheduler tests
@@ -571,6 +668,7 @@ int main() {
 	// mysql_servers tests
 	test_mysql_servers_upgrade_from_v1_1_0();
 	test_mysql_servers_no_upgrade_needed();
+	test_aurora_hostgroups_upgrade_from_v2_0_10();
 
 	// pgsql_replication_hostgroups tests
 	test_pgsql_repl_hg_upgrade_from_v3_0_1();
@@ -583,6 +681,7 @@ int main() {
 	// Multi-row tests
 	test_scheduler_upgrade_preserves_multiple_rows();
 	test_mysql_servers_upgrade_multiple_rows_with_fixes();
+	test_aurora_hostgroups_disk_roundtrip_uses_configured_projection();
 
 	test_cleanup_minimal();
 	return exit_status();

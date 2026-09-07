@@ -39,7 +39,7 @@ struct TestState {
 	vector<Endpoint> topology_endpoints { cluster.get_endpoints() };
 };
 
-int setup(CommandLine& cl, MYSQL*& admin, RDS_BGD_Simulator& sim) {
+int setup(CommandLine& cl, MYSQL*& admin, BGD_Simulator& sim) {
 	if (cl.getEnv()) {
 		diag("Error: failed to load TAP environment");
 		return EXIT_FAILURE;
@@ -61,7 +61,7 @@ int setup(CommandLine& cl, MYSQL*& admin, RDS_BGD_Simulator& sim) {
 	return EXIT_SUCCESS;
 }
 
-int cleanup(MYSQL* admin, RDS_BGD_Simulator& sim) {
+int cleanup(MYSQL* admin, BGD_Simulator& sim) {
 	int admin_rc = bgd_admin_cleanup(admin);
 	if (admin_rc != EXIT_SUCCESS) {
 		diag("Error: failed to clean ProxySQL BGD test state");
@@ -79,11 +79,11 @@ int cleanup(MYSQL* admin, RDS_BGD_Simulator& sim) {
 	return EXIT_SUCCESS;
 }
 
-vector<RDS_BGD_Topology_Row> topology_with_reader_as_writer(RDS_BGD_Cluster& cluster) {
+vector<BGD_Topology_Row> topology_with_reader_as_writer(RDS_BGD_Cluster& cluster) {
 	RDS_BGD_Host& blue_writer = cluster.blue_readers[0];
 	RDS_BGD_Host& green_writer = cluster.green_readers[0];
 
-	vector<RDS_BGD_Topology_Row> rows {
+	vector<BGD_Topology_Row> rows {
 		{ blue_writer.hostname, blue_writer.hostname, blue_writer.port,
 			"BLUE_GREEN_DEPLOYMENT_SOURCE", "SWITCHOVER_IN_PROGRESS" },
 		{ green_writer.hostname, green_writer.hostname, green_writer.port,
@@ -103,7 +103,7 @@ vector<RDS_BGD_Topology_Row> topology_with_reader_as_writer(RDS_BGD_Cluster& clu
  * - Verify writer placement in hostgroup 1384.
  * - Verify metadata probes use TLS from green hostgroups 1385 and 1386.
  */
-int test_hostgroup_refresh(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_hostgroup_refresh(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	RDS_BGD_Cluster& cluster = state.cluster;
 	BGD_Hostgroups& hg = state.hostgroups;
 	BGD_Hostgroups& refreshed_hg = state.refreshed_hostgroups;
@@ -116,7 +116,7 @@ int test_hostgroup_refresh(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& stat
 	}
 
 	// Publish SWITCHOVER_IN_PROGRESS topology.
-	vector<RDS_BGD_Topology_Row> topology = bgd_topology_with_readers(cluster, "SWITCHOVER_IN_PROGRESS");
+	vector<BGD_Topology_Row> topology = bgd_topology_with_readers(cluster, "SWITCHOVER_IN_PROGRESS");
 	int topology_rc = sim.topology_update(state.topology_endpoints, topology);
 	if (topology_rc != EXIT_SUCCESS) {
 		diag("Error: failed to publish SWITCHOVER_IN_PROGRESS topology");
@@ -207,7 +207,7 @@ int test_hostgroup_refresh(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& stat
 
 	// Require TLS from the green writer row in refreshed green writer hostgroup 1385.
 	auto [probe_rc, probe] = sim.wait_for_probe_log(
-		seq, cluster.green_writer.endpoint(), RDS_BGD_Probe_Kind::metadata, kProbeTimeoutMs, 1
+		seq, cluster.green_writer.endpoint(), BGD_Probe_Kind::metadata, kProbeTimeoutMs, 1
 	);
 	if (probe_rc != EXIT_SUCCESS) {
 		diag("Error: metadata probe did not use TLS from green writer hostgroup 1385");
@@ -230,7 +230,7 @@ int test_hostgroup_refresh(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& stat
  * - Verify that the newly mapped writer moves to hostgroup 1384.
  * - Verify that metadata probing uses TLS from the new green writer target.
  */
-int test_mapped_writer_refresh(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_mapped_writer_refresh(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	RDS_BGD_Cluster& cluster = state.cluster;
 	BGD_Hostgroups& hg = state.refreshed_hostgroups;
 	RDS_BGD_Host& previous_writer = cluster.blue_writer;
@@ -238,7 +238,7 @@ int test_mapped_writer_refresh(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& 
 	RDS_BGD_Host& mapped_target = cluster.green_readers[0];
 
 	// Publish topology that maps the first blue reader to the first green reader.
-	vector<RDS_BGD_Topology_Row> topology = topology_with_reader_as_writer(cluster);
+	vector<BGD_Topology_Row> topology = topology_with_reader_as_writer(cluster);
 	int topology_rc = sim.topology_update(state.topology_endpoints, topology);
 	if (topology_rc != EXIT_SUCCESS) {
 		diag("Error: failed to publish SWITCHOVER_IN_PROGRESS topology for the new mapped writer");
@@ -282,7 +282,7 @@ int test_mapped_writer_refresh(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& 
 	}
 
 	auto [probe_rc, probe] = sim.wait_for_probe_log(
-		seq, mapped_target.endpoint(), RDS_BGD_Probe_Kind::metadata, kProbeTimeoutMs, 1
+		seq, mapped_target.endpoint(), BGD_Probe_Kind::metadata, kProbeTimeoutMs, 1
 	);
 	if (probe_rc != EXIT_SUCCESS) {
 		diag("Error: metadata probing did not use TLS from green writer hostgroup 1385");
@@ -328,7 +328,7 @@ int main() {
 
 	CommandLine cl {};
 	MYSQL* admin = nullptr;
-	RDS_BGD_Simulator sim {};
+	BGD_Simulator sim {};
 
 	if (setup(cl, admin, sim) != EXIT_SUCCESS) {
 		return exit_status();

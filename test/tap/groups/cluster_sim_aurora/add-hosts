@@ -2,7 +2,7 @@
 # Format: "<hostname> <ip>" per line; '#' comments allowed.
 # These are injected into the ProxySQL container's /etc/hosts via Docker
 # --add-host by test/infra/control/start-proxysql-isolated.bash when
-# CLUSTER_SIM_HOST_FILE points at this file (see test/tap/groups/aurora-sim/env.sh).
+# CLUSTER_SIM_HOST_FILE points at this file (see test/tap/groups/cluster_sim_aurora/env.sh).
 
 # Cluster 1
 host.1.11.aws-test.com  127.0.1.11
@@ -28,6 +28,11 @@ host.2.18.cluster2.aws.test  127.0.2.18
 host.2.19.cluster2.aws.test  127.0.2.19
 host.2.20.cluster2.aws.test  127.0.2.20
 
+# Cluster 2 members reused with the first test domain.
+host.2.11.aws-test.com  127.0.2.11
+host.2.12.aws-test.com  127.0.2.12
+host.2.13.aws-test.com  127.0.2.13
+
 # Cluster 3
 host.3.11.aws.3.test.com  127.0.3.11
 host.3.12.aws.3.test.com  127.0.3.12
@@ -39,3 +44,41 @@ host.3.17.aws.3.test.com  127.0.3.17
 host.3.18.aws.3.test.com  127.0.3.18
 host.3.19.aws.3.test.com  127.0.3.19
 host.3.20.aws.3.test.com  127.0.3.20
+
+# Aurora blue/green deployment A: production members and target resources.
+aurora-a-writer.a1.us-east-1.rds.amazonaws.com  127.0.11.11
+aurora-a-reader-1.a1.us-east-1.rds.amazonaws.com  127.0.11.12
+aurora-a-reader-2.a1.us-east-1.rds.amazonaws.com  127.0.11.13
+aurora-a-green.cluster-a1.us-east-1.rds.amazonaws.com  127.0.11.20
+aurora-a-green-writer.a1.us-east-1.rds.amazonaws.com  127.0.11.21
+aurora-a-green-reader-1.a1.us-east-1.rds.amazonaws.com  127.0.11.22
+aurora-a-green-reader-2.a1.us-east-1.rds.amazonaws.com  127.0.11.23
+aurora-a-writer-green-k7m2.a1.us-east-1.rds.amazonaws.com  127.0.11.21
+aurora-a-reader-1-green-p4q8.a1.us-east-1.rds.amazonaws.com  127.0.11.22
+aurora-a-reader-2-green-v9n3.a1.us-east-1.rds.amazonaws.com  127.0.11.23
+aurora-a-writer-green-r2.a1.us-east-1.rds.amazonaws.com  127.0.11.31
+aurora-a-reader-1-green-r2.a1.us-east-1.rds.amazonaws.com  127.0.11.32
+aurora-a-reader-2-green-r2.a1.us-east-1.rds.amazonaws.com  127.0.11.33
+
+# Canonical names observed after target-member rename retain target addresses.
+aurora-a-canonical-writer.a1.us-east-1.rds.amazonaws.com  127.0.11.21
+aurora-a-canonical-reader-1.a1.us-east-1.rds.amazonaws.com  127.0.11.22
+aurora-a-canonical-reader-2.a1.us-east-1.rds.amazonaws.com  127.0.11.23
+
+# Aurora blue/green deployment B supports repeated and concurrent scenarios.
+aurora-b-writer.b1.us-east-1.rds.amazonaws.com  127.0.12.11
+aurora-b-reader-1.b1.us-east-1.rds.amazonaws.com  127.0.12.12
+aurora-b-green.cluster-b1.us-east-1.rds.amazonaws.com  127.0.12.20
+aurora-b-green-writer.b1.us-east-1.rds.amazonaws.com  127.0.12.21
+aurora-b-green-reader-1.b1.us-east-1.rds.amazonaws.com  127.0.12.22
+aurora-b-writer-green-h2s6.b1.us-east-1.rds.amazonaws.com  127.0.12.21
+aurora-b-reader-1-green-r8t4.b1.us-east-1.rds.amazonaws.com  127.0.12.22
+aurora-b-canonical-writer.b1.us-east-1.rds.amazonaws.com  127.0.12.21
+aurora-b-canonical-reader-1.b1.us-east-1.rds.amazonaws.com  127.0.12.22
+
+# Aurora blue/green deployment C supports three-cluster isolation scenarios.
+aurora-c-writer.c1.us-east-1.rds.amazonaws.com  127.0.13.11
+aurora-c-green-writer.c1.us-east-1.rds.amazonaws.com  127.0.13.11
+aurora-c-green.cluster-c1.us-east-1.rds.amazonaws.com  127.0.13.20
+aurora-c-writer-green-m5n9.c1.us-east-1.rds.amazonaws.com  127.0.13.21
+aurora-c-green-writer-green-m5n9.c1.us-east-1.rds.amazonaws.com  127.0.13.21

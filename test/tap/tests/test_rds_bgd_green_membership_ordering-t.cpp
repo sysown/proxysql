@@ -36,7 +36,7 @@ struct TestState {
 	vector<Endpoint> after_worker_start_endpoints { after_worker_start.get_endpoints() };
 };
 
-int setup(CommandLine& cl, MYSQL*& admin, RDS_BGD_Simulator& sim) {
+int setup(CommandLine& cl, MYSQL*& admin, BGD_Simulator& sim) {
 	if (cl.getEnv()) {
 		diag("Error: failed to load TAP environment");
 		return EXIT_FAILURE;
@@ -58,7 +58,7 @@ int setup(CommandLine& cl, MYSQL*& admin, RDS_BGD_Simulator& sim) {
 	return EXIT_SUCCESS;
 }
 
-int cleanup(MYSQL* admin, RDS_BGD_Simulator& sim) {
+int cleanup(MYSQL* admin, BGD_Simulator& sim) {
 	int admin_rc = bgd_admin_cleanup(admin);
 	if (admin_rc != EXIT_SUCCESS) {
 		diag("Error: failed to clean ProxySQL BGD test state");
@@ -175,7 +175,7 @@ bool runtime_green_membership_matches(MYSQL* admin, RDS_BGD_Cluster& cluster, BG
  * - Publish AVAILABLE topology after all membership exists.
  * - Verify runtime hostgroups 862 and 863 contain the configured green set.
  */
-int test_green_before_available(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_green_before_available(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	RDS_BGD_Cluster& cluster = state.before_available;
 	BGD_Hostgroups& hg = state.before_available_hg;
 
@@ -209,7 +209,7 @@ int test_green_before_available(MYSQL* admin, RDS_BGD_Simulator& sim, TestState&
 		return EXIT_FAILURE;
 	}
 
-	vector<RDS_BGD_Topology_Row> topology = bgd_topology_with_readers(cluster, "AVAILABLE");
+	vector<BGD_Topology_Row> topology = bgd_topology_with_readers(cluster, "AVAILABLE");
 	int topology_rc = sim.topology_update(state.before_available_endpoints, topology);
 	if (topology_rc != EXIT_SUCCESS) {
 		diag("Error: failed to publish AVAILABLE topology for wHG 860");
@@ -235,7 +235,7 @@ int test_green_before_available(MYSQL* admin, RDS_BGD_Simulator& sim, TestState&
  * - Verify runtime_mysql_servers contains the complete green membership after
  *   the worker observes the configuration change.
  */
-int test_green_after_discovery(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_green_after_discovery(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	RDS_BGD_Cluster& cluster = state.after_discovery;
 	BGD_Hostgroups& hg = state.after_discovery_hg;
 
@@ -245,7 +245,7 @@ int test_green_after_discovery(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& 
 		return EXIT_FAILURE;
 	}
 
-	vector<RDS_BGD_Topology_Row> topology = bgd_topology_with_readers(cluster, "AVAILABLE");
+	vector<BGD_Topology_Row> topology = bgd_topology_with_readers(cluster, "AVAILABLE");
 	int topology_rc = sim.topology_update(state.after_discovery_endpoints, topology);
 	if (topology_rc != EXIT_SUCCESS) {
 		diag("Error: failed to publish AVAILABLE topology for wHG 870");
@@ -289,7 +289,7 @@ int test_green_after_discovery(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& 
 	}
 
 	auto [probe_rc, probe] =
-		sim.wait_for_probe_log(seq, cluster.green_writer.endpoint(), RDS_BGD_Probe_Kind::metadata, kProbeTimeoutMs, 0);
+		sim.wait_for_probe_log(seq, cluster.green_writer.endpoint(), BGD_Probe_Kind::metadata, kProbeTimeoutMs, 0);
 	if (probe_rc != EXIT_SUCCESS) {
 		diag("Error: wHG 870 did not probe the green writer after membership load");
 		return EXIT_FAILURE;
@@ -307,7 +307,7 @@ int test_green_after_discovery(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& 
  * - Load green membership into hostgroups 882 and 883.
  * - Publish AVAILABLE and verify complete runtime green membership.
  */
-int test_green_after_worker_start(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_green_after_worker_start(MYSQL* admin, BGD_Simulator& sim, TestState& state) {
 	RDS_BGD_Cluster& cluster = state.after_worker_start;
 	BGD_Hostgroups& hg = state.after_worker_start_hg;
 
@@ -348,7 +348,7 @@ int test_green_after_worker_start(MYSQL* admin, RDS_BGD_Simulator& sim, TestStat
 	}
 
 	auto [start_rc, start_probe] =
-		sim.wait_for_probe_log(seq, cluster.blue_writer.endpoint(), RDS_BGD_Probe_Kind::table_check, kProbeTimeoutMs, 0);
+		sim.wait_for_probe_log(seq, cluster.blue_writer.endpoint(), BGD_Probe_Kind::table_check, kProbeTimeoutMs, 0);
 	if (start_rc != EXIT_SUCCESS) {
 		diag("Error: wHG 880 did not start the blue table-check probe");
 		return EXIT_FAILURE;
@@ -360,7 +360,7 @@ int test_green_after_worker_start(MYSQL* admin, RDS_BGD_Simulator& sim, TestStat
 		return EXIT_FAILURE;
 	}
 
-	vector<RDS_BGD_Topology_Row> topology = bgd_topology_with_readers(cluster, "AVAILABLE");
+	vector<BGD_Topology_Row> topology = bgd_topology_with_readers(cluster, "AVAILABLE");
 	int topology_rc = sim.topology_update(state.after_worker_start_endpoints, topology);
 	if (topology_rc != EXIT_SUCCESS) {
 		diag("Error: failed to publish AVAILABLE topology for wHG 880");
@@ -383,7 +383,7 @@ int main() {
 
 	CommandLine cl {};
 	MYSQL* admin = nullptr;
-	RDS_BGD_Simulator sim {};
+	BGD_Simulator sim {};
 
 	if (setup(cl, admin, sim) != EXIT_SUCCESS) {
 		return exit_status();

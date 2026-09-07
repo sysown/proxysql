@@ -206,7 +206,7 @@ void* DNSResolverWorker::run() {
 }
 
 bool DNS_Cache::is_ip_valid(const std::string& hostname, const std::string& ip) const {
-	if (!enabled || hostname.empty() || ip.empty()) {
+	if (hostname.empty() || ip.empty()) {
 		return false;
 	}
 
@@ -221,7 +221,7 @@ bool DNS_Cache::is_ip_valid(const std::string& hostname, const std::string& ip) 
 								&& (itr->second.pinned_until == 0 || now <= itr->second.pinned_until);
 		if (pin_active) {
 			valid = ip == itr->second.pinned_ip;
-		} else {
+		} else if (enabled) {
 			valid = std::find(itr->second.ips.begin(), itr->second.ips.end(), ip) != itr->second.ips.end();
 		}
 	}
@@ -244,16 +244,6 @@ bool DNS_Cache::add(const std::string& hostname, std::vector<std::string>&& ips)
 
 	auto& ip_addr = records[hostname];
 	ip_addr.ips = std::move(ips);
-
-	// Check if IP pinning is no longer necessary.
-	if (!ip_addr.pinned_ip.empty() &&
-		std::find(ip_addr.ips.begin(), ip_addr.ips.end(), ip_addr.pinned_ip) != ip_addr.ips.end()) {
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
-			"Unpinning DNS cache record because resolved IP matches pinned IP. (Hostname:[%s] IP:[%s])\n",
-			hostname.c_str(), ip_addr.pinned_ip.c_str());
-		ip_addr.pinned_ip.clear();
-		ip_addr.pinned_until = 0;
-	}
 
 	__sync_fetch_and_and(&ip_addr.counter, 0);
 
@@ -280,16 +270,6 @@ bool DNS_Cache::add_if_not_exist(const std::string& hostname, std::vector<std::s
 			hostname.c_str(), debug_iplisttostring(ips).c_str());
 		auto& ip_addr = records[hostname];
 		ip_addr.ips = std::move(ips);
-
-		// Check if IP pinning is no longer necessary.
-		if (!ip_addr.pinned_ip.empty() &&
-			std::find(ip_addr.ips.begin(), ip_addr.ips.end(), ip_addr.pinned_ip) != ip_addr.ips.end()) {
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
-				"Unpinning DNS cache record because resolved IP matches pinned IP. (Hostname:[%s] IP:[%s])\n",
-				hostname.c_str(), ip_addr.pinned_ip.c_str());
-			ip_addr.pinned_ip.clear();
-			ip_addr.pinned_until = 0;
-		}
 
 		__sync_fetch_and_and(&ip_addr.counter, 0);
 		inserted = true;
@@ -327,12 +307,6 @@ DNS_Cache::lookup_result_t DNS_Cache::get_next_ip(const IP_ADDR& ip_addr) const 
 }
 
 std::string DNS_Cache::lookup(const std::string& hostname, size_t* ip_count) {
-	if (!enabled) {
-		if (ip_count)
-			*ip_count = 0;
-		return "";
-	}
-
 	std::string ip;
 	bool clear_expired_pin = false;
 
@@ -356,10 +330,12 @@ std::string DNS_Cache::lookup(const std::string& hostname, size_t* ip_count) {
 			ip = result.pinned_ip;
 			if (ip_count)
 				*ip_count = 1;
-		} else {
+		} else if (enabled) {
 			ip = result.resolved_ip;
 			if (ip_count)
 				*ip_count = result.ip_count;
+		} else if (ip_count) {
+			*ip_count = 0;
 		}
 
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
@@ -408,7 +384,7 @@ void DNS_Cache::pin(const std::string& hostname, const std::string& ip) {
 * @param ttl_ms   Pin lifetime in milliseconds; 0 means no expiry.
 */
 void DNS_Cache::pin(const std::string& hostname, const std::string& ip, unsigned long long ttl_ms) {
-	if (!enabled || hostname.empty() || ip.empty()) return;
+	if (hostname.empty() || ip.empty()) return;
 
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
 		"Pinning DNS cache record. (Hostname:[%s] IP:[%s])\n",
@@ -484,17 +460,32 @@ void DNS_Cache::remove(const std::string& hostname) {
 	assert(rc == 0);
 }
 
+/**
+ * @brief Clear ordinary DNS resolutions while retaining explicit pins.
+ *
+ * @details Unpinned records are removed. Pinned records keep their fixed
+ *   address while their ordinary resolution list and rotation counter are reset.
+ */
 void DNS_Cache::clear() {
 	size_t records_removed = 0;
 	int rc = pthread_rwlock_wrlock(&rwlock_);
 	assert(rc == 0);
-	records_removed = records.size();
-	records.clear();
+	for (auto itr = records.begin(); itr != records.end(); ) {
+		if (itr->second.pinned_ip.empty()) {
+			itr = records.erase(itr);
+			++records_removed;
+		} else {
+			itr->second.ips.clear();
+			itr->second.counter = 0;
+			++itr;
+		}
+	}
 	rc = pthread_rwlock_unlock(&rwlock_);
 	assert(rc == 0);
 	if (records_removed && counter_record_updated_)
 		counter_record_updated_->fetch_add(records_removed, std::memory_order_relaxed);
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "DNS cache was cleared.\n");
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5,
+		"DNS cache resolved records were cleared; explicit pins were preserved.\n");
 }
 
 bool DNS_Cache::empty() const {

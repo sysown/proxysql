@@ -90,8 +90,8 @@ struct BGD_Hostgroups {
 	int green_reader;
 };
 
-inline vector<RDS_BGD_Topology_Row> bgd_topology_with_readers(RDS_BGD_Cluster& cluster, string status) {
-	vector<RDS_BGD_Topology_Row> rows = cluster.get_topology(status);
+inline vector<BGD_Topology_Row> bgd_topology_with_readers(RDS_BGD_Cluster& cluster, string status) {
+	vector<BGD_Topology_Row> rows = cluster.get_topology(status);
 	for (RDS_BGD_Host& host : cluster.blue_readers) {
 		rows.push_back({ host.hostname, host.hostname, host.port, "BLUE_GREEN_DEPLOYMENT_SOURCE", status });
 	}
@@ -101,7 +101,7 @@ inline vector<RDS_BGD_Topology_Row> bgd_topology_with_readers(RDS_BGD_Cluster& c
 	return rows;
 }
 
-inline int bgd_set_writer_read_only_0(RDS_BGD_Simulator& sim, RDS_BGD_Cluster& cluster) {
+inline int bgd_set_writer_read_only_0(BGD_Simulator& sim, RDS_BGD_Cluster& cluster) {
 	if (sim.read_only_update(cluster.blue_writer.host_endpoint(), false) != EXIT_SUCCESS) {
 		diag("Error: failed to set read_only=0 for the simulated blue writer");
 		return EXIT_FAILURE;
@@ -114,12 +114,12 @@ inline int bgd_set_writer_read_only_0(RDS_BGD_Simulator& sim, RDS_BGD_Cluster& c
 	return EXIT_SUCCESS;
 }
 
-inline int bgd_set_host_read_only_0(RDS_BGD_Simulator& sim, RDS_BGD_Host& host) {
+inline int bgd_set_host_read_only_0(BGD_Simulator& sim, RDS_BGD_Host& host) {
 	int rc = sim.read_only_update(host.host_endpoint(), false);
 	return rc;
 }
 
-inline int bgd_set_host_read_only_1(RDS_BGD_Simulator& sim, RDS_BGD_Host& host) {
+inline int bgd_set_host_read_only_1(BGD_Simulator& sim, RDS_BGD_Host& host) {
 	int rc = sim.read_only_update(host.host_endpoint(), true);
 	return rc;
 }
@@ -310,7 +310,7 @@ inline rc_t<string> bgd_backend_ip_echo(MYSQL* proxy) {
 }
 
 inline rc_t<uint64_t> bgd_probe_count_since(
-	RDS_BGD_Simulator& sim, uint64_t sequence, Endpoint backend, RDS_BGD_Probe_Kind kind)
+	BGD_Simulator& sim, uint64_t sequence, Endpoint backend, BGD_Probe_Kind kind)
 {
 	auto [rc, logs] = sim.probe_log_since(sequence);
 	if (rc != EXIT_SUCCESS) {
@@ -319,7 +319,7 @@ inline rc_t<uint64_t> bgd_probe_count_since(
 	}
 
 	uint64_t count = 0;
-	for (const RDS_BGD_Probe_Log& log : logs) {
+	for (const BGD_Probe_Log& log : logs) {
 		bool backend_matches =
 			log.backend.host == backend.host &&
 			log.backend.port == backend.port;
@@ -417,19 +417,19 @@ inline int bgd_wait_for_server_placement(
 	return rc;
 }
 
-inline rc_t<RDS_BGD_Probe_Log> bgd_wait_for_probe_from_backends(
-	RDS_BGD_Simulator& sim, uint64_t sequence, vector<Endpoint> backends,
-	RDS_BGD_Probe_Kind kind, uint32_t timeout_ms, int encrypted = -1)
+inline rc_t<BGD_Probe_Log> bgd_wait_for_probe_from_backends(
+	BGD_Simulator& sim, uint64_t sequence, vector<Endpoint> backends,
+	BGD_Probe_Kind kind, uint32_t timeout_ms, int encrypted = -1)
 {
 	uint64_t deadline = monotonic_time() + static_cast<uint64_t>(timeout_ms) * 1000;
 	do {
 		auto [rc, logs] = sim.probe_log_since(sequence);
 		if (rc != EXIT_SUCCESS) {
-			rc_t<RDS_BGD_Probe_Log> result { EXIT_FAILURE, {} };
+			rc_t<BGD_Probe_Log> result { EXIT_FAILURE, {} };
 			return result;
 		}
 
-		for (const RDS_BGD_Probe_Log& log : logs) {
+		for (const BGD_Probe_Log& log : logs) {
 			for (const Endpoint& backend : backends) {
 				bool backend_matches =
 					log.backend.host == backend.host &&
@@ -439,7 +439,7 @@ inline rc_t<RDS_BGD_Probe_Log> bgd_wait_for_probe_from_backends(
 					encrypted < 0 ||
 					log.encrypted == (encrypted != 0);
 				if (backend_matches && kind_matches && encryption_matches) {
-					rc_t<RDS_BGD_Probe_Log> result { EXIT_SUCCESS, log };
+					rc_t<BGD_Probe_Log> result { EXIT_SUCCESS, log };
 					return result;
 				}
 			}
@@ -448,7 +448,7 @@ inline rc_t<RDS_BGD_Probe_Log> bgd_wait_for_probe_from_backends(
 		usleep(50000);
 	} while (monotonic_time() < deadline);
 
-	rc_t<RDS_BGD_Probe_Log> result { ETIMEDOUT, {} };
+	rc_t<BGD_Probe_Log> result { ETIMEDOUT, {} };
 	return result;
 }
 
@@ -459,10 +459,10 @@ inline rc_t<RDS_BGD_Probe_Log> bgd_wait_for_probe_from_backends(
  * after the given sequence.
  */
 inline int bgd_expect_no_table_check(
-	RDS_BGD_Simulator& sim, uint64_t sequence, vector<Endpoint> backends, uint32_t timeout_ms)
+	BGD_Simulator& sim, uint64_t sequence, vector<Endpoint> backends, uint32_t timeout_ms)
 {
 	auto [probe_rc, probe] = bgd_wait_for_probe_from_backends(
-		sim, sequence, backends, RDS_BGD_Probe_Kind::table_check, timeout_ms
+		sim, sequence, backends, BGD_Probe_Kind::table_check, timeout_ms
 	);
 
 	if (probe_rc == ETIMEDOUT) {
@@ -478,12 +478,12 @@ inline int bgd_expect_no_table_check(
  * endpoint after the given sequence.
  */
 inline int bgd_expect_no_metadata_probe(
-	RDS_BGD_Simulator& sim, uint64_t sequence, Endpoint backend, uint32_t timeout_ms)
+	BGD_Simulator& sim, uint64_t sequence, Endpoint backend, uint32_t timeout_ms)
 {
 	vector<Endpoint> backends { backend };
 
 	auto [probe_rc, probe] = bgd_wait_for_probe_from_backends(
-		sim, sequence, backends, RDS_BGD_Probe_Kind::metadata, timeout_ms
+		sim, sequence, backends, BGD_Probe_Kind::metadata, timeout_ms
 	);
 
 	if (probe_rc == ETIMEDOUT) {
@@ -499,10 +499,10 @@ inline int bgd_expect_no_metadata_probe(
  * endpoint after the given sequence.
  */
 inline int bgd_expect_no_metadata_probe_from_backends(
-	RDS_BGD_Simulator& sim, uint64_t sequence, vector<Endpoint> backends, uint32_t timeout_ms)
+	BGD_Simulator& sim, uint64_t sequence, vector<Endpoint> backends, uint32_t timeout_ms)
 {
 	auto [probe_rc, probe] = bgd_wait_for_probe_from_backends(
-		sim, sequence, backends, RDS_BGD_Probe_Kind::metadata, timeout_ms
+		sim, sequence, backends, BGD_Probe_Kind::metadata, timeout_ms
 	);
 
 	if (probe_rc == ETIMEDOUT) {

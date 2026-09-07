@@ -1,10 +1,15 @@
 #include "aurora_utils.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <ctime>
+#include <fstream>
 #include <iostream>
+#include <map>
 #include <stdio.h>
 #include <sstream>
 #include <tuple>
+#include <unordered_map>
 
 // NOTE: Only needed during testing
 #include <functional>
@@ -354,87 +359,272 @@ std::pair<int, string> prepare_mysql_aurora_hostgroups(
 	return { EXIT_SUCCESS, "" };
 }
 
-const char t_aurora_server_state_insert[] {
-	"INSERT OR REPLACE INTO REPLICA_HOST_STATUS("
-		" SERVER_ID,"
-		" DOMAIN_NAME,"
-		" SESSION_ID,"
-		" CPU,"
-		" LAST_UPDATE_TIMESTAMP,"
-		" REPLICA_LAG_IN_MILLISECONDS"
-	") VALUES ("
-		"'%s', '%s', '%s', %d, '%s', %d"
-	")"
-};
+namespace {
 
+string aurora_sql_quote(const string& value) {
+	string quoted { "'" };
+	for (char c : value) {
+		quoted += c;
+		if (c == '\'') {
+			quoted += '\'';
+		}
+	}
+	quoted += '\'';
+	return quoted;
+}
+
+string aurora_utc_timestamp() {
+	time_t now = time(nullptr);
+	struct tm utc_time {};
+	gmtime_r(&now, &utc_time);
+	char timestamp[20] {};
+	strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", &utc_time);
+	return timestamp;
+}
+
+std::pair<int, uint64_t> aurora_scalar_uint64(MYSQL* connection, const string& query) {
+	if (mysql_query(connection, query.c_str()) != 0) {
+		return { EXIT_FAILURE, 0 };
+	}
+	MYSQL_RES* result = mysql_store_result(connection);
+	if (result == nullptr) {
+		return { EXIT_FAILURE, 0 };
+	}
+	MYSQL_ROW row = mysql_fetch_row(result);
+	const bool valid = row != nullptr && row[0] != nullptr;
+	const uint64_t value = valid ? strtoull(row[0], nullptr, 10) : 0;
+	mysql_free_result(result);
+	return { valid ? EXIT_SUCCESS : EXIT_FAILURE, value };
+}
+
+std::pair<int, string> load_aurora_backend_addresses(
+	std::unordered_map<string, string>& addresses)
+{
+	const char* host_file_path = getenv("CLUSTER_SIM_HOST_FILE");
+	if (host_file_path == nullptr || *host_file_path == '\0') {
+		return { EXIT_FAILURE, "CLUSTER_SIM_HOST_FILE is not configured" };
+	}
+
+	std::ifstream host_file { host_file_path };
+	if (!host_file.is_open()) {
+		return {
+			EXIT_FAILURE,
+			"Unable to open CLUSTER_SIM_HOST_FILE '" + string { host_file_path } + "'"
+		};
+	}
+
+	string line {};
+	uint64_t line_number = 0;
+	while (std::getline(host_file, line)) {
+		++line_number;
+		std::istringstream fields { line };
+		string hostname {};
+		string ip {};
+		if (!(fields >> hostname) || hostname.front() == '#') {
+			continue;
+		}
+		if (!(fields >> ip)) {
+			return {
+				EXIT_FAILURE,
+				"Missing IP in CLUSTER_SIM_HOST_FILE at line " + std::to_string(line_number)
+			};
+		}
+
+		auto existing = addresses.find(hostname);
+		if (existing != addresses.end() && existing->second != ip) {
+			return {
+				EXIT_FAILURE,
+				"Conflicting CLUSTER_SIM_HOST_FILE mappings for '" + hostname + "'"
+			};
+		}
+		addresses[hostname] = ip;
+	}
+
+	return { EXIT_SUCCESS, "" };
+}
+
+}  // namespace
+
+/**
+ * @brief Publish ordinary Aurora state through backend-address replica sets.
+ *
+ * @details DOMAIN_NAME identifies the set, and CLUSTER_SIM_HOST_FILE resolves
+ *   every SERVER_ID + DOMAIN_NAME member hostname to its simulated backend
+ *   address. Publication is transactional. Snapshot replacement waits until
+ *   every retained set has received an ordinary Aurora probe.
+ *
+ * @param proxysql_sqlite Connection to the simulator SQLite interface.
+ * @param servers Aurora members grouped by DOMAIN_NAME.
+ * @param mode State replacement policy for rows and backend controls.
+ * @return Pair containing EXIT_SUCCESS and an empty message, or EXIT_FAILURE
+ *   and a diagnostic message.
+ */
 std::pair<int, string> prepare_aurora_cluster_state(
 	MYSQL* proxysql_sqlite,
 	const vector<aurora_server_state_t>& servers,
-	uint32_t cleanup
+	aurora_publication_mode mode
 ) {
-	int query_error = 0;
-
-	if (cleanup) {
-		string srv_ids {};
-		string domain_names {};
-
-		for (const auto& server : servers) {
-			srv_ids += "'" + std::get<AURORA_SERVER_STATE::SERVER_ID>(server) + "'";
-			domain_names += "'" + std::get<AURORA_SERVER_STATE::DOMAIN_NAME>(server) + "'";
-
-			if (&server != &servers.back()) {
-				srv_ids += ",";
-				domain_names += ",";
-			}
-		}
-
-		string cleanup_query {};
-
-		if (cleanup == 1) {
-			cleanup_query = "DELETE FROM REPLICA_HOST_STATUS WHERE SERVER_ID NOT IN (" +
-				srv_ids + ") OR DOMAIN_NAME NOT IN (" + domain_names + ")";
-		} else {
-			cleanup_query = "DELETE FROM REPLICA_HOST_STATUS";
-		}
-
-		query_error = mysql_query(proxysql_sqlite, cleanup_query.c_str());
-		if (query_error) {
-			return create_query_error(proxysql_sqlite, cleanup_query, __FILE__, __LINE__);
-		}
+	std::unordered_map<string, string> backend_addresses {};
+	auto [host_file_rc, host_file_error] =
+		load_aurora_backend_addresses(backend_addresses);
+	if (host_file_rc != EXIT_SUCCESS) {
+		return { EXIT_FAILURE, host_file_error };
 	}
 
-	usleep(1000 * 1000);
+	std::map<string, vector<aurora_server_state_t>> replica_sets {};
+	for (const aurora_server_state_t& server : servers) {
+		replica_sets[std::get<AURORA_SERVER_STATE::DOMAIN_NAME>(server)].push_back(server);
+	}
 
-	// NOTE: We adquire a 'write lock' so there are no dirty reads on ProxySQL side
-	// while we write the new values.
-	query_error = mysql_query(proxysql_sqlite, "BEGIN IMMEDIATE");
+	int query_error = mysql_query(proxysql_sqlite, "BEGIN IMMEDIATE");
 	if (query_error) {
 		return create_query_error(proxysql_sqlite, "BEGIN IMMEDIATE", __FILE__, __LINE__);
 	}
 
-	for (const auto& server : servers) {
-		string server_insert_query {};
+	const auto execute_or_rollback = [proxysql_sqlite](const string& query) {
+		if (mysql_query(proxysql_sqlite, query.c_str()) == 0) {
+			return std::pair<int, string> { EXIT_SUCCESS, "" };
+		}
+		auto error = create_query_error(proxysql_sqlite, query, __FILE__, __LINE__);
+		(void)mysql_query(proxysql_sqlite, "ROLLBACK");
+		return error;
+	};
 
-		string_format(
-			t_aurora_server_state_insert,
-			server_insert_query,
-			std::get<AURORA_SERVER_STATE::SERVER_ID>(server).c_str(),
-			std::get<AURORA_SERVER_STATE::DOMAIN_NAME>(server).c_str(),
-			std::get<AURORA_SERVER_STATE::SESSION_ID>(server).c_str(),
-			0,
-			"",
-			std::get<AURORA_SERVER_STATE::REPLICA_LAG_IN_MILLISECONDS>(server)
-		);
+	string replica_set_list {};
+	for (const auto& replica_set : replica_sets) {
+		if (!replica_set_list.empty()) replica_set_list += ",";
+		replica_set_list += aurora_sql_quote(replica_set.first);
+	}
 
-		query_error = mysql_query(proxysql_sqlite, server_insert_query.c_str());
-		if (query_error) {
-			return create_query_error(proxysql_sqlite, server_insert_query, __FILE__, __LINE__);
+	uint64_t probe_checkpoint = 0;
+	if (mode == aurora_publication_mode::replace_snapshot_retaining_backends) {
+		auto [checkpoint_rc, checkpoint] = aurora_scalar_uint64(
+			proxysql_sqlite,
+			"SELECT COALESCE(MAX(sequence_id),0) FROM AWS_AURORA_REPLICA_PROBE_LOG");
+		if (checkpoint_rc != EXIT_SUCCESS) {
+			(void)mysql_query(proxysql_sqlite, "ROLLBACK");
+			return { EXIT_FAILURE, "Unable to read the Aurora replica probe checkpoint" };
+		}
+		probe_checkpoint = checkpoint;
+	}
+
+	if (mode == aurora_publication_mode::reset_scenario) {
+		auto [control_rc, control_error] =
+			execute_or_rollback("DELETE FROM AWS_AURORA_REPLICA_CONTROL");
+		if (control_rc != EXIT_SUCCESS) return { control_rc, control_error };
+		auto [rows_rc, rows_error] = execute_or_rollback("DELETE FROM REPLICA_HOST_STATUS");
+		if (rows_rc != EXIT_SUCCESS) return { rows_rc, rows_error };
+	} else if (mode == aurora_publication_mode::replace_snapshot_retaining_backends) {
+		const string delete_controls {
+			replica_set_list.empty()
+				? "DELETE FROM AWS_AURORA_REPLICA_CONTROL"
+				: "DELETE FROM AWS_AURORA_REPLICA_CONTROL WHERE replica_set_id NOT IN (" +
+					replica_set_list + ")"
+		};
+		auto [control_rc, control_error] = execute_or_rollback(delete_controls);
+		if (control_rc != EXIT_SUCCESS) return { control_rc, control_error };
+		if (!replica_set_list.empty()) {
+			auto [reset_rc, reset_error] = execute_or_rollback(
+				"UPDATE AWS_AURORA_REPLICA_CONTROL SET replica_table_present=1,"
+				"error_code=0,error_msg='' WHERE replica_set_id IN (" +
+				replica_set_list + ")");
+			if (reset_rc != EXIT_SUCCESS) return { reset_rc, reset_error };
+		}
+		auto [rows_rc, rows_error] = execute_or_rollback("DELETE FROM REPLICA_HOST_STATUS");
+		if (rows_rc != EXIT_SUCCESS) return { rows_rc, rows_error };
+	} else {
+		for (const auto& replica_set : replica_sets) {
+			const string set_literal { aurora_sql_quote(replica_set.first) };
+			auto [control_rc, control_error] = execute_or_rollback(
+				"DELETE FROM AWS_AURORA_REPLICA_CONTROL WHERE replica_set_id=" + set_literal);
+			if (control_rc != EXIT_SUCCESS) return { control_rc, control_error };
+			auto [rows_rc, rows_error] = execute_or_rollback(
+				"DELETE FROM REPLICA_HOST_STATUS WHERE REPLICA_SET_ID=" + set_literal);
+			if (rows_rc != EXIT_SUCCESS) return { rows_rc, rows_error };
+		}
+	}
+
+	const string timestamp { aurora_utc_timestamp() };
+	for (const auto& replica_set : replica_sets) {
+		const string& replica_set_id = replica_set.first;
+		std::map<std::pair<string, int>, bool> mapped_backends {};
+		for (const aurora_server_state_t& server : replica_set.second) {
+			const string& server_id = std::get<AURORA_SERVER_STATE::SERVER_ID>(server);
+			string session_id = std::get<AURORA_SERVER_STATE::SESSION_ID>(server);
+			if (session_id.empty()) {
+				session_id = "TESTID-" + server_id + replica_set_id + "-R";
+			}
+			const string hostname { server_id + replica_set_id };
+			auto address = backend_addresses.find(hostname);
+			if (address == backend_addresses.end()) {
+				(void)mysql_query(proxysql_sqlite, "ROLLBACK");
+				return {
+					EXIT_FAILURE,
+					"Missing CLUSTER_SIM_HOST_FILE mapping for Aurora member '" +
+						hostname + "'"
+				};
+			}
+
+			const string row_query {
+				"INSERT INTO REPLICA_HOST_STATUS"
+				"(REPLICA_SET_ID,SERVER_ID,SESSION_ID,CPU,LAST_UPDATE_TIMESTAMP,"
+					"REPLICA_LAG_IN_MILLISECONDS,IS_CURRENT) VALUES (" +
+				aurora_sql_quote(replica_set_id) + "," + aurora_sql_quote(server_id) +
+				"," + aurora_sql_quote(session_id) + ",0," +
+				aurora_sql_quote(timestamp) + "," +
+				std::to_string(std::get<AURORA_SERVER_STATE::REPLICA_LAG_IN_MILLISECONDS>(server)) +
+				",1)"
+			};
+			auto [row_rc, row_error] = execute_or_rollback(row_query);
+			if (row_rc != EXIT_SUCCESS) return { row_rc, row_error };
+
+			mapped_backends[{ address->second, 3306 }] = true;
+		}
+
+		for (const auto& backend : mapped_backends) {
+			const string control_query {
+				"INSERT OR REPLACE INTO AWS_AURORA_REPLICA_CONTROL"
+				"(backend_ip,backend_port,replica_set_id,replica_table_present,error_code,error_msg) "
+				"VALUES (" + aurora_sql_quote(backend.first.first) + "," +
+				std::to_string(backend.first.second) + "," + aurora_sql_quote(replica_set_id) +
+				",1,0,'')"
+			};
+			auto [control_rc, control_error] = execute_or_rollback(control_query);
+			if (control_rc != EXIT_SUCCESS) return { control_rc, control_error };
 		}
 	}
 
 	query_error = mysql_query(proxysql_sqlite, "COMMIT");
 	if (query_error) {
+		(void)mysql_query(proxysql_sqlite, "ROLLBACK");
 		return create_query_error(proxysql_sqlite, "COMMIT", __FILE__, __LINE__);
+	}
+
+	if (mode == aurora_publication_mode::replace_snapshot_retaining_backends &&
+		!replica_sets.empty()) {
+		const uint64_t deadline = monotonic_time() + 10000000;
+		const string observed_sets_query {
+			"SELECT COUNT(DISTINCT replica_set_id) FROM AWS_AURORA_REPLICA_PROBE_LOG "
+			"WHERE sequence_id>" + std::to_string(probe_checkpoint) +
+			" AND probe_kind='ordinary' AND replica_set_id IN (" +
+			replica_set_list + ")"
+		};
+		do {
+			auto [observed_rc, observed_sets] =
+				aurora_scalar_uint64(proxysql_sqlite, observed_sets_query);
+			if (observed_rc != EXIT_SUCCESS) {
+				return { EXIT_FAILURE, "Unable to read the Aurora replica probe log" };
+			}
+			if (observed_sets == replica_sets.size()) {
+				return { EXIT_SUCCESS, "" };
+			}
+			usleep(50000);
+		} while (monotonic_time() < deadline);
+
+		return {
+			EXIT_FAILURE,
+			"Timed out waiting for every Aurora replica set to be probed"
+		};
 	}
 
 	return { EXIT_SUCCESS, "" };
@@ -542,70 +732,6 @@ cluster_state_changes aurora_servers_state_diff(
 				const auto server_state_diff =
 					aurora_state_members_diff(server_state_p, server_state_n);
 				result.insert({ n_server_state_id, server_state_diff });
-			}
-		}
-	}
-
-	return result;
-}
-
-aurora_server_state_t aurora_update_state(
-	const aurora_server_state_t& st1,
-	const aurora_server_state_t& st2
-) {
-	aurora_server_state_t result {};
-
-	// SERVER_ID and DOMAIN_NAME **can't** be changed, because the are part of the server 'id'. Only the other
-	// fields are allowed to change, otherwise, the verification step should have failed.
-
-	const string st1_session_id { std::get<AURORA_SERVER_STATE::SESSION_ID>(st1) };
-	const string st2_session_id { std::get<AURORA_SERVER_STATE::SESSION_ID>(st2) };
-
-	int32_t st1_read_only { std::get<AURORA_SERVER_STATE::REPLICA_LAG_IN_MILLISECONDS>(st1) };
-	int32_t st2_read_only { std::get<AURORA_SERVER_STATE::REPLICA_LAG_IN_MILLISECONDS>(st2) };
-
-	// Since empty 'SESSION_IDs' have no meaning, we ignore them for updated states
-	if (st2_session_id != "" && st1_session_id != st2_session_id) {
-		std::get<2>(result) = st2_session_id;
-	}
-
-	if (st2_read_only != -1 && st1_read_only != st2_read_only) {
-		std::get<3>(result) = st2_read_only;
-	}
-
-	return result;
-}
-
-vector<aurora_server_state_t> aurora_update_cluster_state(
-	const vector<aurora_server_state_t>& servers_state_p,
-	const vector<aurora_server_state_t>& servers_state_n
-) {
-	vector<aurora_server_state_t> result {};
-
-	vector<aurora_server_state_t> s_servers_state_p { sort_aurora_server_state(servers_state_p) };
-	vector<aurora_server_state_t> s_servers_state_n { sort_aurora_server_state(servers_state_n) };
-
-	// find the differences
-	for (const auto& server_state_n : s_servers_state_n) {
-		for (const auto& server_state_p : s_servers_state_p) {
-			const string n_server_state_id {
-				std::get<AURORA_SERVER_STATE::SERVER_ID>(server_state_n) + ":" +
-				std::get<AURORA_SERVER_STATE::DOMAIN_NAME>(server_state_n)
-			};
-			const string p_server_state_id {
-				std::get<AURORA_SERVER_STATE::SERVER_ID>(server_state_p) + ":" +
-				std::get<AURORA_SERVER_STATE::DOMAIN_NAME>(server_state_p)
-			};
-
-			bool diff_server_status =
-				( n_server_state_id == p_server_state_id ) &&
-				( server_state_n != server_state_p );
-
-			if (diff_server_status) {
-				const aurora_server_state_t server_state_update {
-					aurora_update_state(server_state_p, server_state_n)
-				};
-				result.push_back(server_state_update);
 			}
 		}
 	}

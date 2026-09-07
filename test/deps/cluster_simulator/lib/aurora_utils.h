@@ -50,6 +50,15 @@ enum class aurora_state_id {
 	new_state = 1
 };
 
+/**
+ * @brief Select how a simulator publication replaces Aurora replica state.
+ */
+enum class aurora_publication_mode {
+	replace_sets,  ///< Replace only the replica sets present in the new state.
+	replace_snapshot_retaining_backends,  ///< Replace all rows while retaining matching backend controls.
+	reset_scenario  ///< Remove all Aurora rows and controls before publishing the new state.
+};
+
 std::pair<int,std::string> extract_aurora_servers_state(
 	const aurora_state_id& state_id,
 	const json& aurora_test_def,
@@ -61,10 +70,24 @@ std::pair<int, std::string> prepare_mysql_aurora_hostgroups(
 	const std::vector<aurora_hostgroup_config_t>& hostgroups_configs
 );
 
+/**
+ * @brief Publish ordinary Aurora state through backend-address replica sets.
+ *
+ * @details DOMAIN_NAME identifies the set, and CLUSTER_SIM_HOST_FILE resolves
+ *   every SERVER_ID + DOMAIN_NAME member hostname to its simulated backend
+ *   address. Publication is transactional. Snapshot replacement waits until
+ *   every retained set has received an ordinary Aurora probe.
+ *
+ * @param proxysql_sqlite Connection to the simulator SQLite interface.
+ * @param servers Aurora members grouped by DOMAIN_NAME.
+ * @param mode State replacement policy for rows and backend controls.
+ * @return Pair containing EXIT_SUCCESS and an empty message, or EXIT_FAILURE
+ *   and a diagnostic message.
+ */
 std::pair<int, std::string> prepare_aurora_cluster_state(
 	MYSQL* proxysql_sqlite,
 	const std::vector<aurora_server_state_t>& servers,
-	uint32_t cleanup = 0
+	aurora_publication_mode mode = aurora_publication_mode::replace_sets
 );
 
 /**
@@ -88,10 +111,4 @@ cluster_state_changes aurora_servers_state_diff(
 	const std::vector<aurora_server_state_t>& servers_state_n
 );
 
-std::vector<aurora_server_state_t> aurora_update_cluster_state(
-	const std::vector<aurora_server_state_t>& servers_state_p,
-	const std::vector<aurora_server_state_t>& servers_state_n
-);
-
 #endif
-

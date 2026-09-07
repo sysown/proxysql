@@ -271,6 +271,11 @@ handle_stage() {
     install -D -m 0755 \
         "${REPO_ROOT}/test/deps/cluster_simulator/cluster_simulator" \
         "${STAGE_TEMP_DIR}/test/deps/cluster_simulator/cluster_simulator"
+    install -d "${STAGE_TEMP_DIR}/test/deps/cluster_simulator/obj"
+    cp -a "${REPO_ROOT}"/test/deps/cluster_simulator/*.gcno \
+        "${STAGE_TEMP_DIR}/test/deps/cluster_simulator/"
+    cp -a "${REPO_ROOT}"/test/deps/cluster_simulator/obj/*.gcno \
+        "${STAGE_TEMP_DIR}/test/deps/cluster_simulator/obj/"
     install -d "${STAGE_TEMP_DIR}/test/tap"
     cp -a "${REPO_ROOT}/test/tap/tap" "${STAGE_TEMP_DIR}/test/tap/"
 

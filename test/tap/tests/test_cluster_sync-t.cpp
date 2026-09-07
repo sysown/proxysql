@@ -6,7 +6,7 @@
  *   - 'mysql_galera_hostgroups' with and without NULL comments.
  *   - 'mysql_group_replication_hostgroups' with and without NULL comments.
  *   - 'proxysql_servers' with new values and empty (exercising bug from '#3847').
- *   - 'mysql_aws_aurora_hostgroups' with and without NULL comments.
+ *   - 'mysql_aws_aurora_hostgroups' with configured and NULL green hostgroups/comments.
  *   - 'mysql_variables'.
  *   - 'admin_variables'.
  *
@@ -217,6 +217,25 @@ int setup_config_file(const CommandLine& cl) {
 const std::string t_debug_query = "mysql -u%s -p%s -h %s -P%d -C -e \"%s\"";
 
 using mysql_server_tuple = tuple<int,string,int,int,string,int,int,int,int,int,int,string>;
+
+struct aurora_hostgroups_row_t {
+	int writer_hostgroup;
+	int reader_hostgroup;
+	const char* green_writer_hostgroup;
+	const char* green_reader_hostgroup;
+	int active;
+	int aurora_port;
+	const char* domain_name;
+	int max_lag_ms;
+	int check_interval_ms;
+	int check_timeout_ms;
+	int writer_is_also_reader;
+	int new_reader_weight;
+	int add_lag_ms;
+	int min_lag_ms;
+	int lag_num_checks;
+	const char* comment;
+};
 
 
 int check_mysql_servers_sync(
@@ -1213,8 +1232,9 @@ int main(int, char**) {
 		ena_mod_checks * 2 * (sync_pls - 1);
 
 	plan(
-		// Sync tests by values
-		17 +
+		// Sync tests by values: Aurora consolidation (-1) plus
+		// mysql-server_version_by_interface coverage (+1).
+		16 +
 		// Module checkums tests; enabled and disabled checksums
 		check_modules_checksums_sync__tests +
 		(cl.use_noise ? 3 : 0)
@@ -2168,7 +2188,7 @@ int main(int, char**) {
 
 	sleep(2);
 
-	// Check 'mysql_aws_aurora_hostgroups' synchronization with NULL comments
+	// Check 'mysql_aws_aurora_hostgroups' synchronization for configured and NULL values
 	{
 		std::string print_master_aws_aurora_hostgroups = "";
 		string_format(t_debug_query, print_master_aws_aurora_hostgroups, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_mysql_aws_aurora_hostgroups");
@@ -2178,141 +2198,13 @@ int main(int, char**) {
 		// Configure 'mysql_aws_aurora_hostgroups' and check sync
 		const char* t_insert_mysql_aws_aurora_hostgroups =
 			"INSERT INTO mysql_aws_aurora_hostgroups ( "
-			"writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, max_lag_ms, check_interval_ms, "
-			"check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks) "
-			"VALUES (%d, %d, %d, %d, '%s', %d, %d, %d, %d, %d, %d, %d, %d)";
-		std::vector<std::tuple<int,int,int,int,const char*,int,int,int,int,int,int,int,int>> insert_aws_aurora_values {
-			std::make_tuple(1002, 1006, 1, 3308, ".test_domain2", 10002, 2002, 2002, 0, 3, 50, 100, 1),
-			std::make_tuple(1003, 1007, 1, 3309, ".test_domain3", 10003, 2003, 2003, 0, 4, 50, 100, 1),
-			std::make_tuple(1000, 1004, 1, 3306, ".test_domain0", 10000, 2000, 2000, 0, 1, 50, 100, 1),
-			std::make_tuple(1001, 1005, 1, 3307, ".test_domain1", 10001, 2001, 2001, 0, 2, 50, 100, 1),
-		};
-		std::vector<std::string> insert_mysql_aws_aurora_hostgroup_queries {};
-
-		for (auto const& values : insert_aws_aurora_values) {
-			std::string insert_aws_aurora_hostgroup_query = "";
-			string_format(
-				t_insert_mysql_aws_aurora_hostgroups,
-				insert_aws_aurora_hostgroup_query,
-				std::get<0>(values),
-				std::get<1>(values),
-				std::get<2>(values),
-				std::get<3>(values),
-				std::get<4>(values),
-				std::get<5>(values),
-				std::get<6>(values),
-				std::get<7>(values),
-				std::get<8>(values),
-				std::get<9>(values),
-				std::get<10>(values),
-				std::get<11>(values),
-				std::get<12>(values)
-			);
-			insert_mysql_aws_aurora_hostgroup_queries.push_back(insert_aws_aurora_hostgroup_query);
-		}
-
-		const char* t_select_aws_aurora_inserted_entries =
-			"SELECT COUNT(*) FROM mysql_aws_aurora_hostgroups WHERE "
-			"writer_hostgroup=%d AND reader_hostgroup=%d AND active=%d AND aurora_port=%d AND domain_name='%s' "
-			"AND max_lag_ms=%d AND check_interval_ms=%d AND check_timeout_ms=%d AND writer_is_also_reader=%d "
-			"AND new_reader_weight=%d AND add_lag_ms=%d AND min_lag_ms=%d AND lag_num_checks=%d AND comment IS NULL";
-		std::vector<std::string> select_mysql_aws_aurora_hostgroup_queries {};
-
-		for (auto const& values : insert_aws_aurora_values) {
-			std::string select_aws_aurora_hostgroup_query = "";
-			string_format(
-				t_select_aws_aurora_inserted_entries,
-				select_aws_aurora_hostgroup_query,
-				std::get<0>(values),
-				std::get<1>(values),
-				std::get<2>(values),
-				std::get<3>(values),
-				std::get<4>(values),
-				std::get<5>(values),
-				std::get<6>(values),
-				std::get<7>(values),
-				std::get<8>(values),
-				std::get<9>(values),
-				std::get<10>(values),
-				std::get<11>(values),
-				std::get<12>(values)
-			);
-			select_mysql_aws_aurora_hostgroup_queries.push_back(select_aws_aurora_hostgroup_query);
-		}
-
-		// SETUP CONFIG
-
-		// Backup current table
-		MYSQL_QUERY__(proxy_admin, "CREATE TABLE mysql_aws_aurora_hostgroups_sync_test_2687 AS SELECT * FROM mysql_aws_aurora_hostgroups");
-		MYSQL_QUERY__(proxy_admin, "DELETE FROM mysql_aws_aurora_hostgroups");
-
-		// Insert the new aws_aurora hostgroups values
-		for (const auto& query : insert_mysql_aws_aurora_hostgroup_queries) {
-			MYSQL_QUERY__(proxy_admin, query.c_str());
-		}
-		MYSQL_QUERY__(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
-		std::cout << "MASTER TABLE BEFORE SYNC:" << std::endl;
-		system(print_master_aws_aurora_hostgroups.c_str());
-
-		// SYNCH CHECK
-
-		uint waited = 0;
-		bool not_synced_query = false;
-		while (waited < SYNC_TIMEOUT) {
-			not_synced_query = false;
-			// Check that all the entries have been synced
-			for (const auto& query : select_mysql_aws_aurora_hostgroup_queries) {
-				MYSQL_QUERY__(r_proxy_admin, query.c_str());
-				MYSQL_RES* aws_aurora_res = mysql_store_result(r_proxy_admin);
-				MYSQL_ROW row = mysql_fetch_row(aws_aurora_res);
-				int row_value = atoi(row[0]);
-				mysql_free_result(aws_aurora_res);
-
-				if (row_value == 0) {
-					not_synced_query = true;
-					break;
-				}
-			}
-
-			if (not_synced_query) {
-				waited += 1;
-				sleep(1);
-			} else {
-				break;
-			}
-		}
-
-		std::cout << "REPLICA TABLE AFTER SYNC:" << std::endl;
-		system(print_replica_aws_aurora_hostgroups.c_str());
-		ok(not_synced_query == false, "'mysql_aws_aurora_hostgroups' with NULL comments should be synced.");
-
-		// TEARDOWN CONFIG
-		MYSQL_QUERY__(proxy_admin, "DELETE FROM mysql_aws_aurora_hostgroups");
-		MYSQL_QUERY__(proxy_admin, "INSERT INTO mysql_aws_aurora_hostgroups SELECT * FROM mysql_aws_aurora_hostgroups_sync_test_2687");
-		MYSQL_QUERY__(proxy_admin, "DROP TABLE mysql_aws_aurora_hostgroups_sync_test_2687");
-		MYSQL_QUERY__(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
-	}
-
-	sleep(2);
-
-	// Check 'mysql_aws_aurora_hostgroups' synchronization
-	{
-		std::string print_master_aws_aurora_hostgroups = "";
-		string_format(t_debug_query, print_master_aws_aurora_hostgroups, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_mysql_aws_aurora_hostgroups");
-		std::string print_replica_aws_aurora_hostgroups = "";
-		string_format(t_debug_query, print_replica_aws_aurora_hostgroups, cl.admin_username, cl.admin_password, R_HOST, R_PORT, "SELECT * FROM runtime_mysql_aws_aurora_hostgroups");
-
-		// Configure 'mysql_aws_aurora_hostgroups' and check sync
-		const char* t_insert_mysql_aws_aurora_hostgroups =
-			"INSERT INTO mysql_aws_aurora_hostgroups ( "
-			"writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, max_lag_ms, check_interval_ms, "
+			"writer_hostgroup, reader_hostgroup, green_writer_hostgroup, green_reader_hostgroup, "
+			"active, aurora_port, domain_name, max_lag_ms, check_interval_ms, "
 			"check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment) "
-			"VALUES (%d, %d, %d, %d, '%s', %d, %d, %d, %d, %d, %d, %d, %d, '%s')";
-		std::vector<std::tuple<int,int,int,int,const char*,int,int,int,int,int,int,int,int,const char*>> insert_aws_aurora_values {
-			std::make_tuple(1003, 1007, 1, 3309, ".test_domain3", 10003, 2003, 2003, 0, 4, 50, 100, 1, "reader_writer_test_aws_aurora_hostgroup"),
-			std::make_tuple(1001, 1005, 1, 3307, ".test_domain1", 10001, 2001, 2001, 0, 2, 50, 100, 1, "reader_writer_test_aws_aurora_hostgroup"),
-			std::make_tuple(1002, 1006, 1, 3308, ".test_domain2", 10002, 2002, 2002, 0, 3, 50, 100, 1, "reader_writer_test_aws_aurora_hostgroup"),
-			std::make_tuple(1000, 1004, 1, 3306, ".test_domain0", 10000, 2000, 2000, 0, 1, 50, 100, 1, "reader_writer_test_aws_aurora_hostgroup"),
+			"VALUES (%d, %d, %s, %s, %d, %d, '%s', %d, %d, %d, %d, %d, %d, %d, %d, %s)";
+		std::vector<aurora_hostgroups_row_t> insert_aws_aurora_values {
+			{ 1000, 1004, "1010", "1014", 1, 3306, ".test_domain0", 10000, 2000, 2000, 0, 1, 50, 100, 1, "'reader_writer_test_aws_aurora_hostgroup'" },
+			{ 1002, 1006, "NULL", "NULL", 1, 3308, ".test_domain2", 10002, 2002, 2002, 0, 3, 50, 100, 1, "NULL" },
 		};
 		std::vector<std::string> insert_mysql_aws_aurora_hostgroup_queries {};
 
@@ -2321,29 +2213,32 @@ int main(int, char**) {
 			string_format(
 				t_insert_mysql_aws_aurora_hostgroups,
 				insert_aws_aurora_hostgroup_query,
-				std::get<0>(values),
-				std::get<1>(values),
-				std::get<2>(values),
-				std::get<3>(values),
-				std::get<4>(values),
-				std::get<5>(values),
-				std::get<6>(values),
-				std::get<7>(values),
-				std::get<8>(values),
-				std::get<9>(values),
-				std::get<10>(values),
-				std::get<11>(values),
-				std::get<12>(values),
-				std::get<13>(values)
+				values.writer_hostgroup,
+				values.reader_hostgroup,
+				values.green_writer_hostgroup,
+				values.green_reader_hostgroup,
+				values.active,
+				values.aurora_port,
+				values.domain_name,
+				values.max_lag_ms,
+				values.check_interval_ms,
+				values.check_timeout_ms,
+				values.writer_is_also_reader,
+				values.new_reader_weight,
+				values.add_lag_ms,
+				values.min_lag_ms,
+				values.lag_num_checks,
+				values.comment
 			);
 			insert_mysql_aws_aurora_hostgroup_queries.push_back(insert_aws_aurora_hostgroup_query);
 		}
 
 		const char* t_select_aws_aurora_inserted_entries =
 			"SELECT COUNT(*) FROM mysql_aws_aurora_hostgroups WHERE "
-			"writer_hostgroup=%d AND reader_hostgroup=%d AND active=%d AND aurora_port=%d AND domain_name='%s' "
+			"writer_hostgroup=%d AND reader_hostgroup=%d AND green_writer_hostgroup IS %s AND green_reader_hostgroup IS %s "
+			"AND active=%d AND aurora_port=%d AND domain_name='%s' "
 			"AND max_lag_ms=%d AND check_interval_ms=%d AND check_timeout_ms=%d AND writer_is_also_reader=%d "
-			"AND new_reader_weight=%d AND add_lag_ms=%d AND min_lag_ms=%d AND lag_num_checks=%d AND comment='%s'";
+			"AND new_reader_weight=%d AND add_lag_ms=%d AND min_lag_ms=%d AND lag_num_checks=%d AND comment IS %s";
 		std::vector<std::string> select_mysql_aws_aurora_hostgroup_queries {};
 
 		for (auto const& values : insert_aws_aurora_values) {
@@ -2351,25 +2246,28 @@ int main(int, char**) {
 			string_format(
 				t_select_aws_aurora_inserted_entries,
 				select_aws_aurora_hostgroup_query,
-				std::get<0>(values),
-				std::get<1>(values),
-				std::get<2>(values),
-				std::get<3>(values),
-				std::get<4>(values),
-				std::get<5>(values),
-				std::get<6>(values),
-				std::get<7>(values),
-				std::get<8>(values),
-				std::get<9>(values),
-				std::get<10>(values),
-				std::get<11>(values),
-				std::get<12>(values),
-				std::get<13>(values)
+				values.writer_hostgroup,
+				values.reader_hostgroup,
+				values.green_writer_hostgroup,
+				values.green_reader_hostgroup,
+				values.active,
+				values.aurora_port,
+				values.domain_name,
+				values.max_lag_ms,
+				values.check_interval_ms,
+				values.check_timeout_ms,
+				values.writer_is_also_reader,
+				values.new_reader_weight,
+				values.add_lag_ms,
+				values.min_lag_ms,
+				values.lag_num_checks,
+				values.comment
 			);
 			select_mysql_aws_aurora_hostgroup_queries.push_back(select_aws_aurora_hostgroup_query);
 		}
 
 		// Backup current table
+		MYSQL_QUERY__(proxy_admin, "DROP TABLE IF EXISTS mysql_aws_aurora_hostgroups_sync_test_2687");
 		MYSQL_QUERY__(proxy_admin, "CREATE TABLE mysql_aws_aurora_hostgroups_sync_test_2687 AS SELECT * FROM mysql_aws_aurora_hostgroups");
 		MYSQL_QUERY__(proxy_admin, "DELETE FROM mysql_aws_aurora_hostgroups");
 
@@ -2381,35 +2279,14 @@ int main(int, char**) {
 		std::cout << "MASTER TABLE BEFORE SYNC:" << std::endl;
 		system(print_master_aws_aurora_hostgroups.c_str());
 
-		uint waited = 0;
-		bool not_synced_query = false;
-		while (waited < SYNC_TIMEOUT) {
-			not_synced_query = false;
-			// Check that all the entries have been synced
-			for (const auto& query : select_mysql_aws_aurora_hostgroup_queries) {
-				MYSQL_QUERY__(r_proxy_admin, query.c_str());
-				MYSQL_RES* aws_aurora_res = mysql_store_result(r_proxy_admin);
-				MYSQL_ROW row = mysql_fetch_row(aws_aurora_res);
-				int row_value = atoi(row[0]);
-				mysql_free_result(aws_aurora_res);
-
-				if (row_value == 0) {
-					not_synced_query = true;
-					break;
-				}
-			}
-
-			if (not_synced_query) {
-				waited += 1;
-				sleep(1);
-			} else {
-				break;
-			}
-		}
+		const int wait_res = proc_wait_checks(
+			wait_for_conds(r_proxy_admin, select_mysql_aws_aurora_hostgroup_queries, SYNC_TIMEOUT)
+		);
 
 		std::cout << "REPLICA TABLE AFTER SYNC:" << std::endl;
 		system(print_replica_aws_aurora_hostgroups.c_str());
-		ok(not_synced_query == false, "'mysql_aws_aurora_hostgroups' should be synced.");
+		ok(wait_res == EXIT_SUCCESS,
+			"'mysql_aws_aurora_hostgroups' should sync configured and NULL values: '%d'", wait_res);
 
 		// TEARDOWN CONFIG
 		MYSQL_QUERY__(proxy_admin, "DELETE FROM mysql_aws_aurora_hostgroups");
