@@ -7103,36 +7103,6 @@ int PgSQL_Session::handle_post_sync_describe_message(PgSQL_Describe_Message* des
 	extended_query_info.stmt_type = stmt_type;
 	CurrentQuery.start_time = thread->curtime;
 
-	// ----------------------------------------------------------------------
-	// Statement-level Describe metadata cache (set-once) — serve on hit.
-	// If the global statement already carries its ParameterDescription +
-	// RowDescription/NoData (populated by the first statement-level Describe in
-	// EITHER backend mode: native raw bytes or libpq rebuild), synthesize the
-	// response to the client directly, byte-identical to a backend round-trip,
-	// and complete the cycle WITHOUT any backend dispatch — mirroring the
-	// cache-hit ParseComplete synthesis. Portal Describes ('P') always round-trip
-	// (they depend on the bound result formats), so they never consult the cache.
-	if (stmt_type == 'S') {
-		const PgSQL_Describe_Cache* dc = stmt_info->get_describe_cache();
-		if (dc) {
-			// Evidence mechanism for the cache hit (the PgSQL status-variable enum is
-			// currently a stub, so a visible counter is not yet wireable — see report).
-			// Debug-level ONLY: this is the common path by design (every repeat
-			// Describe of a cached statement lands here), so an always-on line would
-			// be per-query log flood. Tests scrape it by raising admin-debug_output
-			// to include stderr (3) with debug_mysql_com verbosity >= 5.
-			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5,
-				"Session=%p client_myds=%p. PgSQL statement-level Describe served from metadata cache (stmt_id=%llu)\n",
-				this, client_myds, (unsigned long long)stmt_info->statement_id);
-			client_myds->setDSS_STATE_QUERY_SENT_NET();
-			char txn_state = NumActiveTransactions() > 0 ? 'T' : 'I';
-			bool send_ready_packet = is_extended_query_ready_for_query();
-			client_myds->myprot.generate_describe_from_cache(true, send_ready_packet, txn_state, dc);
-			RequestEnd(NULL, false);
-			return 0;
-		}
-	}
-
 	timespec begint;
 	timespec endt;
 	if (thread->variables.stats_time_query_processor) {
@@ -7185,6 +7155,31 @@ int PgSQL_Session::handle_post_sync_describe_message(PgSQL_Describe_Message* des
 		}
 	}
 	
+	// A repeat statement-level Describe is answered from the cached metadata with no
+	// backend round-trip. This sits after the query rules on purpose: the Describe
+	// must still count a rule hit, pin the pipeline's hostgroup and obey hostgroup
+	// locks exactly as an uncached one does. Portal Describes never use the cache.
+	if (stmt_type == 'S') {
+		const PgSQL_Describe_Cache* dc = stmt_info->get_describe_cache();
+		if (dc) {
+			// Evidence mechanism for the cache hit (the PgSQL status-variable enum is
+			// currently a stub, so a visible counter is not yet wireable — see report).
+			// Debug-level ONLY: this is the common path by design (every repeat
+			// Describe of a cached statement lands here), so an always-on line would
+			// be per-query log flood. Tests scrape it by raising admin-debug_output
+			// to include stderr (3) with debug_mysql_com verbosity >= 5.
+			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5,
+				"Session=%p client_myds=%p. PgSQL statement-level Describe served from metadata cache (stmt_id=%llu)\n",
+				this, client_myds, (unsigned long long)stmt_info->statement_id);
+			client_myds->setDSS_STATE_QUERY_SENT_NET();
+			char txn_state = NumActiveTransactions() > 0 ? 'T' : 'I';
+			bool send_ready_packet = is_extended_query_ready_for_query();
+			client_myds->myprot.generate_describe_from_cache(true, send_ready_packet, txn_state, dc);
+			RequestEnd(NULL, false);
+			return 0;
+		}
+	}
+
 	if (extended_query_frame.empty() == true) {
 		extended_query_info.flags |= PGSQL_EXTENDED_QUERY_FLAG_SYNC;
 	}
