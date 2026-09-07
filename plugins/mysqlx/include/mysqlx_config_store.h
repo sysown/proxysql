@@ -67,7 +67,7 @@ const char* mysqlx_backend_tls_mode_to_string(MysqlxBackendTlsMode m);
 // neighbouring routes on the default proxy-terminated path.
 //
 //   * inherit     -- defer to the global frontend TLS variable
-//                    (`mysqlx_tls_mode`). Default for every existing
+//                    (`mysqlx-tls_mode`). Default for every existing
 //                    deployment so no behaviour changes after upgrade.
 //   * disabled    -- route does not advertise TLS regardless of the
 //                    global setting. Operator opt-out for a single
@@ -173,14 +173,15 @@ public:
 	bool install_users_from_admin(SQLite3DB& db, std::string& err);
 	bool install_routes_from_admin(SQLite3DB& db, std::string& err);
 	bool install_endpoints_from_admin(SQLite3DB& db, std::string& err);
-	bool install_variables_from_admin(SQLite3DB& db, std::string& err);
+	bool install_variables_from_global(SQLite3DB& db, std::string& err);
 
-	// Convenience: invoke all four install_*_from_admin in sequence
+	// Convenience: invoke the three entity installers and the global-variable
+	// installer in sequence
 	// against the same db. Stops on the first failure (subsequent
 	// entities are NOT installed). Used by unit tests that exercise
 	// the full LOAD pipeline against a single in-memory SQLite fixture
-	// containing both the editable mysqlx_* tables and the cross-module
-	// runtime_mysql_users / runtime_mysql_servers. Production code
+	// containing the editable mysqlx_* tables, global variable tables, and the
+	// cross-module runtime_mysql_users / runtime_mysql_servers. Production code
 	// calls the per-entity methods directly so each LOAD command only
 	// reloads its own slice of state.
 	bool install_all_from_admin(SQLite3DB& db, std::string& err);
@@ -193,7 +194,7 @@ public:
 	bool save_users_to_admin_table(SQLite3DB& db) const;
 	bool save_routes_to_admin_table(SQLite3DB& db) const;
 	bool save_endpoints_to_admin_table(SQLite3DB& db) const;
-	bool save_variables_to_admin_table(SQLite3DB& db) const;
+	bool save_variables_to_global(SQLite3DB& db) const;
 
 	// Per-entity runtime-view projection: refill the runtime_mysqlx_*
 	// table from current in-memory state. Called by the chassis
@@ -203,7 +204,6 @@ public:
 	void project_users_to_runtime_view(SQLite3DB& db) const;
 	void project_routes_to_runtime_view(SQLite3DB& db) const;
 	void project_endpoints_to_runtime_view(SQLite3DB& db) const;
-	void project_variables_to_runtime_view(SQLite3DB& db) const;
 
 	std::optional<MysqlxResolvedIdentity> resolve_identity(const std::string& username) const;
 	MysqlxBackendEndpoint pick_endpoint(const std::string& route_name) const;
@@ -240,9 +240,9 @@ public:
 	int get_connect_timeout() const;
 	std::string get_tls_mode() const;
 	int get_max_cached_connections() const;
-	// Returns the parsed mysqlx_tls_backend_mode currently in effect.
+	// Returns the parsed mysqlx-tls_backend_mode currently in effect.
 	// Defaults to MysqlxBackendTlsMode::as_client (the legacy implicit
-	// behaviour) until install_variables_from_admin parses a different
+	// behaviour) until install_variables_from_global parses a different
 	// value.
 	MysqlxBackendTlsMode get_backend_tls_mode() const;
 

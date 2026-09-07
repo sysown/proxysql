@@ -26,7 +26,7 @@ using MysqlxIdentityLookup =
 	std::function<std::optional<MysqlxResolvedIdentity>(const std::string& username)>;
 
 // Resolved per-session backend TLS decision for a given combination of
-// runtime mode (mysqlx_tls_backend_mode), per-endpoint operator override
+// runtime mode (mysqlx-tls_backend_mode), per-endpoint operator override
 // (mysqlx_backend_endpoints.use_ssl), and frontend TLS state
 // (client_ds_.is_encrypted()). Held by handler_connecting_server() across
 // the cache lookup and the fresh-connection setup so both sides see the

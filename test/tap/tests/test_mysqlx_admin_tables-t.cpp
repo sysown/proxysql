@@ -157,7 +157,7 @@ SQLite3DB* proxysql_plugin_get_statsdb() {
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(45);
+	plan(47);
 	diag("=== test_mysqlx_admin_tables-t starting ===");
 
 	ok(test_init_minimal() == 0, "minimal test globals initialize");
@@ -214,6 +214,10 @@ int main() {
 	ok(runtime_mysqlx_routes != nullptr, "runtime_mysqlx_routes is registered in admin_db");
 	ok(mysqlx_backend_endpoints != nullptr, "mysqlx_backend_endpoints is registered in admin_db");
 	ok(runtime_mysqlx_backend_endpoints != nullptr, "runtime_mysqlx_backend_endpoints is registered in admin_db");
+	ok(find_table(admin_tables, "mysqlx_variables") == nullptr,
+	   "deprecated mysqlx_variables is not registered in admin_db");
+	ok(find_table(admin_tables, "runtime_mysqlx_variables") == nullptr,
+	   "deprecated runtime_mysqlx_variables is not registered in admin_db");
 
 	if (runtime_mysqlx_users == nullptr ||
 	    runtime_mysqlx_routes == nullptr ||
