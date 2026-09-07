@@ -31,19 +31,19 @@ The verifier also reports checksum or corrupt-archive failures.
 
 ### File or directory permission error
 
-Check `database_path`, parent-directory existence, ownership, service sandbox
+Check `duckdb-database_path`, parent-directory existence, ownership, service sandbox
 rules, and read/write permissions for the ProxySQL operating-system account.
 
 ### Read-only in-memory configuration
 
-`read_only=true` cannot use `:memory:` or an empty effective path. Configure an
+`duckdb-read_only=true` cannot use `:memory:` or an empty effective path. Configure an
 existing file-backed database or disable read-only mode.
 
 ### Invalid memory limit or engine setting
 
-Inspect the startup log for `duckdb_set_config` failures. `memory_limit` is
-accepted as a string by the Admin store but validated by DuckDB when the engine
-opens.
+Inspect the startup log for `duckdb_set_config` failures. During LOAD,
+`duckdb-memory_limit` is validated by DuckDB before any candidate change is
+applied.
 
 ## Listener does not start
 
@@ -55,7 +55,7 @@ process is using the port. Remember:
 - 6033: normal ProxySQL MySQL listener
 - 6034: default DuckDB PostgreSQL protocol
 
-After changing `mysql_ifaces` or `pgsql_ifaces`, save the values to disk and
+After changing `duckdb-mysql_ifaces` or `duckdb-pgsql_ifaces`, save the values to disk and
 restart. LOAD alone does not rebind sockets.
 
 ## Authentication fails
@@ -71,7 +71,7 @@ unless a corresponding entry exists in both tables.
 
 ## Connection resets immediately
 
-Check `max_connections` and the number of active plugin sessions. At the cap,
+Check `duckdb-max_connections` and the number of active plugin sessions. At the cap,
 the listener closes newly accepted sockets before protocol setup, so the client
 may show EOF or reset rather than a descriptive server error.
 
@@ -130,15 +130,15 @@ INSERT INTO t VALUES (...) RETURNING special_column::VARCHAR;
 First compare:
 
 ```sql
-SELECT * FROM duckdb_variables ORDER BY variable_name;
-SELECT * FROM runtime_duckdb_variables ORDER BY variable_name;
+SELECT * FROM global_variables
+WHERE variable_name LIKE 'duckdb-%' ORDER BY variable_name;
+SELECT * FROM runtime_global_variables
+WHERE variable_name LIKE 'duckdb-%' ORDER BY variable_name;
 ```
 
-If they differ, run LOAD. If they match but the engine or listener behavior is
-unchanged, check the apply matrix in the
-[Configuration reference](configuration-reference.md). Only
-`max_connections` currently applies to its live resource immediately; most
-settings require restart.
+If they differ, run LOAD and inspect any returned error. Lifecycle-dependent
+edits intentionally remain different until the next plugin open. Runtime is
+effective state, not a copy of pending Main values.
 
 ## Configuration disappears after restart
 
@@ -148,21 +148,20 @@ settings require restart.
 SAVE DUCKDB VARIABLES TO DISK;
 ```
 
-On a truly fresh install the editable table is empty until defaults are
-materialized with `SAVE DUCKDB VARIABLES TO MEMORY` or disk rows exist.
+Fresh installations seed compiled `duckdb-*` defaults into Main.
 
 ## External file access is denied
 
 That is the secure default. Before enabling it, read the
-[Security guide](security.md). If it is deliberately enabled, LOAD and save the
-setting, restart the engine, and verify filesystem permissions. A runtime row
-showing `true` does not mean an already-open engine adopted it.
+ [Security guide](security.md). If it is deliberately enabled, save the pending Main
+ value with `SAVE DUCKDB VARIABLES TO DISK`, reopen the database, and verify
+ filesystem permissions. `LOAD` rejects enabling external access while the
+ database remains open.
 
 ## A query consumes excessive resources
 
 There is no query timeout in the initial plugin. Restrict endpoint access,
-lower `memory_limit`, choose a conservative `threads` value, and reduce
-`max_connections`. Restart is required for the memory and startup thread
-defaults. If a live query must be stopped and the client cannot cancel it,
+lower `duckdb-memory_limit`, choose a conservative `duckdb-threads` value, and
+reduce `duckdb-max_connections`; all three apply live. If a live query must be stopped and the client cannot cancel it,
 controlled process recovery may be required; assess the impact on normal
 ProxySQL traffic before acting.

@@ -1,4 +1,5 @@
 #include "duckdb_session.h"
+#include "duckdb_engine.h"
 #include "duckdb_result.h"
 #include "sqlite3db.h"
 
@@ -12,7 +13,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <climits>
 #include <cstring>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 
@@ -61,6 +64,148 @@ bool contains_ci(const std::string& value, const char* needle) {
 }
 
 } // namespace
+
+bool duckdb_execute_managed_set(const std::string& sql, DuckDBEngine& engine,
+	                            bool& handled, std::string& err) {
+	handled = false;
+	err.clear();
+	auto trim = [](std::string value) {
+		while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) value.erase(value.begin());
+		while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) value.pop_back();
+		return value;
+	};
+	auto lower = [](std::string value) {
+		std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+			return static_cast<char>(std::tolower(c));
+		});
+		return value;
+	};
+	// Match a leading SQL keyword followed by at least one whitespace
+	// character (space, tab, ...), case-insensitively. Literal single-space
+	// prefix checks would miss valid statements such as `SET\tthreads=5`.
+	auto match_keyword = [](const std::string& s, const char* keyword, std::string& rest) {
+		const size_t n = std::strlen(keyword);
+		if (s.size() <= n) return false;
+		for (size_t i = 0; i < n; ++i) {
+			if (std::tolower(static_cast<unsigned char>(s[i])) != keyword[i]) return false;
+		}
+		if (!std::isspace(static_cast<unsigned char>(s[n]))) return false;
+		rest = s.substr(n + 1);
+		return true;
+	};
+	// Find a standalone TO keyword bounded by whitespace on both sides,
+	// case-insensitively. Returns npos when absent.
+	auto find_to_keyword = [](const std::string& s) {
+		for (size_t i = 0; i + 2 < s.size(); ++i) {
+			if (std::tolower(static_cast<unsigned char>(s[i])) != 't' ||
+			    std::tolower(static_cast<unsigned char>(s[i + 1])) != 'o') continue;
+			const bool before_ok = i > 0 && std::isspace(static_cast<unsigned char>(s[i - 1]));
+			const bool after_ok = i + 2 < s.size() && std::isspace(static_cast<unsigned char>(s[i + 2]));
+			if (before_ok && after_ok) return i;
+		}
+		return std::string::npos;
+	};
+	auto strip_sql_comments = [&](const std::string& s) {
+		std::string out;
+		char quote = '\0';
+		for (size_t i = 0; i < s.size(); ++i) {
+			if (quote != '\0') {
+				out.push_back(s[i]);
+				if (s[i] == quote) {
+					if (quote == '\'' && i + 1 < s.size() && s[i + 1] == '\'') {
+						out.push_back(s[++i]);
+						continue;
+					}
+					quote = '\0';
+				}
+				continue;
+			}
+			if (s[i] == '\'' || s[i] == '"') {
+				quote = s[i];
+				out.push_back(s[i]);
+				continue;
+			}
+			if (s[i] == '-' && i + 1 < s.size() && s[i + 1] == '-') break;
+			if (s[i] == '/' && i + 1 < s.size() && s[i + 1] == '*') {
+				i += 2;
+				while (i + 1 < s.size() && !(s[i] == '*' && s[i + 1] == '/')) ++i;
+				if (i + 1 < s.size()) ++i;
+				continue;
+			}
+			out.push_back(s[i]);
+		}
+		return trim(out);
+	};
+	std::string statement = trim(sql);
+	if (!statement.empty() && statement.back() == ';') statement = trim(statement.substr(0, statement.size() - 1));
+	statement = strip_sql_comments(statement);
+	// Extra statements stay on the ordinary DuckDB path.
+	if (statement.find(';') != std::string::npos) {
+		return true;
+	}
+	if (!match_keyword(statement, "set", statement)) return true;
+	statement = trim(statement);
+	{
+		std::string rest;
+		if (match_keyword(statement, "global", rest)) statement = trim(rest);
+	}
+
+	size_t separator = statement.find('=');
+	bool is_to_separator = false;
+	if (separator == std::string::npos) {
+		separator = find_to_keyword(statement);
+		is_to_separator = (separator != std::string::npos);
+	}
+	if (separator == std::string::npos) return true;
+	const std::string name = lower(trim(statement.substr(0, separator)));
+	if (name != "memory_limit" && name != "threads" &&
+	    name != "enable_external_access" && name != "access_mode") return true;
+	handled = true;
+	// A TO separator points at the 't'; skip the two keyword characters
+	// and let trim() absorb any surrounding whitespace run.
+	std::string value = is_to_separator ? trim(statement.substr(separator + 2))
+	                                    : trim(statement.substr(separator + 1));
+	if (value.size() >= 2 && ((value.front() == '\'' && value.back() == '\'') ||
+	                        (value.front() == '"' && value.back() == '"'))) {
+		const char quote = value.front();
+		value = value.substr(1, value.size() - 2);
+		if (quote == '\'') {
+			for (size_t pos = 0; (pos = value.find("''", pos)) != std::string::npos;) {
+				value.replace(pos, 2, "'");
+				++pos;
+			}
+		}
+	}
+	if (name == "access_mode") {
+		err = "duckdb-access_mode cannot be changed while the database is open; "
+		      "configure duckdb-read_only and reopen the DuckDB plugin";
+		return false;
+	}
+
+	DuckDBLiveSettings desired;
+	if (name == "memory_limit") {
+		desired.memory_limit = value;
+	} else if (name == "threads") {
+		try {
+			size_t used = 0;
+			const long parsed = std::stol(value, &used);
+			if (used != value.size() || parsed < 1 || parsed > INT_MAX) throw std::out_of_range("threads");
+			desired.threads = static_cast<int>(parsed);
+		} catch (...) {
+			err = "invalid duckdb-threads value: expected an integer greater than zero";
+			return false;
+		}
+	} else {
+		const std::string boolean = lower(value);
+		if (boolean == "true" || boolean == "1" || boolean == "on") desired.enable_external_access = true;
+		else if (boolean == "false" || boolean == "0" || boolean == "off") desired.enable_external_access = false;
+		else {
+			err = "invalid duckdb-enable_external_access value: expected a boolean";
+			return false;
+		}
+	}
+	return engine.apply_live_settings(desired, err);
+}
 
 DuckDBIntercept duckdb_classify_query(const char* sql, size_t len) {
 	if (sql == nullptr || len == 0) return DuckDBIntercept::none;
@@ -807,6 +952,26 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 		else
 			duckdb_send_pgsql_error(sess, "08003", "No DuckDB connection for this session");
 		return;
+	}
+
+	// Managed global settings are deliberately executed through the engine's
+	// dedicated control connection, never inside an application's session or
+	// transaction. Unmanaged SET statements stay on the normal DuckDB path.
+	if (st.engine != nullptr) {
+		bool handled = false;
+		std::string managed_error;
+		if (!duckdb_execute_managed_set(effective, *st.engine,
+		                                handled, managed_error)) {
+			if constexpr (std::is_same_v<S, MySQL_Session>)
+				duckdb_send_mysql_error(sess, 1238, "HY000", managed_error.c_str());
+			else
+				duckdb_send_pgsql_error(sess, "55000", managed_error.c_str());
+			return;
+		}
+		if (handled) {
+			duckdb_send_result(sess, nullptr, nullptr, 0, sql.c_str());
+			return;
+		}
 	}
 
 	// All DDL/DML/QUERY_RESULT dispatch (C2) and the unrenderable-column

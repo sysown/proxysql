@@ -1,135 +1,113 @@
 # DuckDB Admin Reference
 
-Run all commands in this page through the ProxySQL Admin interface, normally
-MySQL protocol on port 6032. Do not send them to the DuckDB plugin listeners.
+Run these commands through ProxySQL Admin, normally MySQL protocol on port
+6032. Do not send them to the DuckDB listeners.
 
-## `duckdb_variables`
+## Standard variable tables
 
-Editable configuration table in the Admin database:
+DuckDB scalar configuration follows the same namespace convention as other
+ProxySQL modules. It has no dedicated scalar-variable tables.
 
 ```sql
-CREATE TABLE duckdb_variables (
-    variable_name VARCHAR NOT NULL PRIMARY KEY,
-    variable_value VARCHAR NOT NULL DEFAULT ''
-);
+-- Editable intended configuration (Main)
+SELECT variable_name, variable_value FROM global_variables
+WHERE variable_name LIKE 'duckdb-%' ORDER BY variable_name;
+
+-- Effective running configuration (Runtime)
+SELECT variable_name, variable_value FROM runtime_global_variables
+WHERE variable_name LIKE 'duckdb-%' ORDER BY variable_name;
+
+-- Restart-persistent intended configuration (Disk)
+SELECT variable_name, variable_value FROM disk.global_variables
+WHERE variable_name LIKE 'duckdb-%' ORDER BY variable_name;
 ```
 
-On a first-ever start, this table can be empty even though the plugin is
-running with compiled defaults. Populate it from the runtime configuration:
+Fresh installations seed all eight `duckdb-*` defaults into Main. Runtime is
+refreshed from the actual engine and listener configuration whenever it is
+queried. Do not update Runtime directly.
+
+On the first startup after upgrading, recognized values from the former
+dedicated DuckDB tables are imported only where a `duckdb-*` value is absent;
+disk-only legacy values are also made available to that first startup. The
+obsolete Main, Runtime, and Disk tables are then removed transactionally.
 
 ```sql
-SAVE DUCKDB VARIABLES TO MEMORY;
-```
-
-Edit rows with ordinary SQL and then LOAD them:
-
-```sql
-UPDATE duckdb_variables
-SET variable_value='4'
-WHERE variable_name='threads';
-
+UPDATE global_variables SET variable_value='4'
+WHERE variable_name='duckdb-threads';
 LOAD DUCKDB VARIABLES TO RUNTIME;
 ```
-
-Editing the table alone does not affect the module.
-
-## `runtime_duckdb_variables`
-
-Read-only projection of the plugin's in-memory configuration store:
-
-```sql
-SELECT *
-FROM runtime_duckdb_variables
-ORDER BY variable_name;
-```
-
-The chassis refreshes this projection on demand. It shows what the module has
-accepted, not necessarily what an already-open engine or bound listener has
-adopted. Consult the apply behavior in the
-[Configuration reference](configuration-reference.md).
-
-Do not update this table directly.
-
-## `disk.duckdb_variables`
-
-Persistent copy stored in ProxySQL's on-disk configuration database. It is
-populated by `SAVE DUCKDB VARIABLES TO DISK`.
-
-At plugin startup, the plugin copies `disk.duckdb_variables` into the editable
-Admin table and then installs those rows into the module. Thus a previously
-saved configuration reappears after restart, while a fresh installation with
-no disk rows starts with compiled defaults and an empty editable table.
 
 ## Commands
 
-### `LOAD DUCKDB VARIABLES TO RUNTIME`
-
-Alias:
-
 ```sql
-LOAD DUCKDB VARIABLES FROM MEMORY;
-```
-
-Reads all rows from `duckdb_variables` and attempts to install them into the
-module. Unknown or invalid rows are skipped and reported without rolling back
-valid rows. The command updates the live `max_connections` cap; other settings
-may require restart.
-
-### `SAVE DUCKDB VARIABLES TO MEMORY`
-
-Alias:
-
-```sql
-SAVE DUCKDB VARIABLES FROM RUNTIME TO MEMORY;
-```
-
-Replaces the editable `duckdb_variables` table with the module's complete
-current configuration. It is a full replacement, not a merge.
-
-This is the easiest way to materialize compiled defaults on a fresh install.
-
-### `SAVE DUCKDB VARIABLES TO DISK`
-
-Copies `main.duckdb_variables` to `disk.duckdb_variables`. It does not LOAD the
-editable values into the module first.
-
-A safe edit sequence is therefore:
-
-```sql
-UPDATE duckdb_variables
-SET variable_value='200'
-WHERE variable_name='max_connections';
-
+-- Main to Runtime
 LOAD DUCKDB VARIABLES TO RUNTIME;
+LOAD DUCKDB VARIABLES FROM MEMORY; -- alias
+
+-- Runtime to Main
+SAVE DUCKDB VARIABLES TO MEMORY;
+SAVE DUCKDB VARIABLES TO MEM; -- alias
+SAVE DUCKDB VARIABLES FROM RUNTIME; -- alias
+SAVE DUCKDB VARIABLES FROM RUNTIME TO MEMORY; -- legacy alias
+
+-- Main to Disk
 SAVE DUCKDB VARIABLES TO DISK;
+SAVE DUCKDB VARIABLES FROM MEMORY; -- alias
+SAVE DUCKDB VARIABLES FROM MEMORY TO DISK; -- legacy alias
+
+-- Disk to Main only
+LOAD DUCKDB VARIABLES FROM DISK;
+LOAD DUCKDB VARIABLES TO MEMORY; -- alias
 ```
 
-## Inspecting differences
+All copies replace only rows matching `duckdb-%`; other module namespaces are
+untouched. LOAD overlays a legitimate sparse Main slice on effective state,
+validates the complete candidate, and rejects unknown variables, invalid
+values, and unsupported live transitions. Main is not silently repaired on
+failure.
 
-Before LOAD, compare the editable and runtime values:
+## Immediate and lifecycle-dependent settings
+
+These apply live:
+
+- `duckdb-memory_limit`
+- `duckdb-threads`
+- `duckdb-max_connections`
+- `duckdb-enable_external_access` only from `true` to `false`
+
+These require the corresponding database/listener lifecycle to reopen:
+
+- `duckdb-database_path`
+- `duckdb-read_only`
+- `duckdb-mysql_ifaces`
+- `duckdb-pgsql_ifaces`
+- `duckdb-enable_external_access` from `false` to `true`
+
+The current interface has no independent DuckDB reload command, so a process
+restart normally reaches the next open. ProxySQL never restarts itself,
+terminates sessions, reopens an in-memory database, or discards data for LOAD.
+
+## Pending differences
 
 ```sql
-SELECT m.variable_name,
-       m.variable_value AS editable_value,
+SELECT m.variable_name, m.variable_value AS main_value,
        r.variable_value AS runtime_value
-FROM duckdb_variables AS m
-LEFT JOIN runtime_duckdb_variables AS r
-  ON r.variable_name = m.variable_name
+FROM global_variables AS m
+LEFT JOIN runtime_global_variables AS r USING (variable_name)
+WHERE m.variable_name LIKE 'duckdb-%'
 ORDER BY m.variable_name;
 ```
 
-After SAVE to disk, inspect persistence:
+Runtime memory units are DuckDB's canonical readback; DuckDB 1.4.5 reports an
+input of `512MB` as `488.2 MiB`.
 
-```sql
-SELECT * FROM disk.duckdb_variables ORDER BY variable_name;
-```
+## Failure contract
 
-## Failure semantics
+LOAD validates before mutation and has no warning-style partial success.
+Reversible engine changes are restored if a later reversible step fails.
+Disabling external access is irreversible while open and is applied last.
 
-Table-replacement operations are transactional. A failed replacement rolls
-back instead of leaving a table deleted and partially refilled. Runtime-view
-refresh failures are written through the plugin logger.
-
-LOAD can report success with a warning-style message when some rows were
-skipped. Read the command result and confirm `runtime_duckdb_variables` rather
-than assuming every edited row was accepted.
+The operation is not advertised as atomic across Admin SQLite and DuckDB. If
+an error occurs after a setting changed, the error identifies that fact. The
+next Runtime query reconstructs effective state from the engine rather than
+repeating cached intent.

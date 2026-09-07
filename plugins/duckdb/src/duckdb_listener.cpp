@@ -438,6 +438,7 @@ void DuckDBListener::run_session(int client_fd) {
 	DuckDBSessionState& st = duckdb_session_state();
 	std::string cerr;
 	if (!engine_->connect(&st.conn, cerr)) { close(client_fd); return; }
+	st.engine = engine_;
 	st.pgsql_txn_status = 'I';
 	st.database_name = engine_->database_path();
 	if (st.database_name.empty() || st.database_name == ":memory:") {
@@ -502,6 +503,7 @@ void DuckDBListener::run_session(int client_fd) {
 		if (myds->myprot.generate_pkt_initial_handshake(true, NULL, NULL,
 				&sess->thread_session_id, true) == false) {
 			engine_->disconnect(&st.conn);
+			st.engine = nullptr;
 			thr->gen_args = nullptr;
 			delete thr;
 			return;
@@ -550,6 +552,7 @@ void DuckDBListener::run_session(int client_fd) {
 	}
 
 	engine_->disconnect(&st.conn);
+	st.engine = nullptr;
 	thr->gen_args = nullptr;
 	delete thr;
 }

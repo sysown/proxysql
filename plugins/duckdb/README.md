@@ -53,8 +53,8 @@ encodes the DEBUG build tag and rejects a mismatched plugin/core pair.
 | `include/duckdb_session.h` | Query classification, execution, and protocol responses |
 | `include/duckdb_result.h` | DuckDB-to-ProxySQL result conversion contract |
 | `src/duckdb_plugin.cpp` | Chassis descriptor and lifecycle callbacks |
-| `src/duckdb_admin_schema.cpp` | Admin tables, runtime view, and LOAD/SAVE commands |
-| `src/duckdb_engine.cpp` | DuckDB open/close and connection cap |
+| `src/duckdb_admin_schema.cpp` | `duckdb-*` global-variable lifecycle and LOAD/SAVE commands |
+| `src/duckdb_engine.cpp` | DuckDB open/close, live settings, and connection cap |
 | `src/duckdb_listener.cpp` | Socket accept and per-connection thread loop |
 | `src/duckdb_session.cpp` | SQL execution and wire-protocol adaptation |
 | `src/duckdb_result.cpp` | Length-aware text result conversion |
