@@ -248,12 +248,12 @@ else
 WHOLE_LIBPROXYSQL := -Wl,-Bdynamic -lproxysql
 endif
 
-# ProxySQL_PluginSecrets_test.h deliberately marks its fault-injection hooks
-# hidden so plugins cannot resolve them from the staged core shared library.
-# Link this one test against the static core instead.  Mixing the owning object
-# with the staged shared core would put two sanitizer-instrumented copies of its
-# globals in one process and can trigger ASAN ODR violations.
-PLUGIN_SECRETS_LIBPROXYSQL := $(LIBPROXYSQLAR_FULL)
+# Core fault-injection hooks are deliberately hidden so plugins cannot resolve
+# them from the staged core shared library.  Link tests that use these hooks
+# against the static core instead.  Mixing an owning object with the staged
+# shared core would put two sanitizer-instrumented copies of its globals in one
+# process and can trigger ASAN ODR violations.
+HIDDEN_HOOKS_LIBPROXYSQL := $(LIBPROXYSQLAR_FULL)
 
 ifneq ($(NOJEMALLOC),1)
 ifeq ($(UNAME_S),Linux)
@@ -751,7 +751,7 @@ plugin_manager_unit-t: plugin_manager_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN
 
 plugin_secrets_unit-t: plugin_secrets_unit-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
-		$(IDIRS) -I$(PROXYSQL_PATH)/lib $(LDIRS) $(OPT) $(PLUGIN_SECRETS_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(IDIRS) -I$(PROXYSQL_PATH)/lib $(LDIRS) $(OPT) $(HIDDEN_HOOKS_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
 plugin_config_unit-t: plugin_config_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
@@ -778,9 +778,9 @@ plugin_listener_gate_unit-t: plugin_listener_gate_unit-t.cpp $(PROXYSQL_PATH)/li
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@
 
-plugin_mysql_config_unit-t: plugin_mysql_config_unit-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+plugin_mysql_config_unit-t: plugin_mysql_config_unit-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
-		$(IDIRS) -I$(PROXYSQL_PATH)/lib $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(IDIRS) -I$(PROXYSQL_PATH)/lib $(LDIRS) $(OPT) $(HIDDEN_HOOKS_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@
 
 plugin_router_chassis_contract_unit-t: plugin_router_chassis_contract_unit-t.cpp $(ROUTER_CONTRACT_FAKE_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
