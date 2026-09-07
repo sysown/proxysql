@@ -80,6 +80,8 @@ tar xzf proxysql-<version>-linux-amd64.tar.gz
 The archive contains `bin/proxysql`, a sample `etc/proxysql.cnf`, the `systemd/`
 units, and helper tools. The v4.0 build additionally ships the runtime plugins
 under `lib/proxysql/` (`ProxySQL_MySQLX_Plugin.so`, `ProxySQL_GenAI_Plugin.so`).
+See [AWS locality-aware backend selection](doc/aws-locality-awareness.md) for
+the optional external-provider contract and MySQL configuration controls.
 
 Building ProxySQL from source requires Git LFS so the pinned OpenSSL source is
 hydrated before dependency builds start:

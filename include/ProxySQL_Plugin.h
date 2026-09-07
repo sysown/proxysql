@@ -8,11 +8,14 @@
 // abi_version values it doesn't understand.
 #ifdef PROXYSQL40
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
 class SQLite3DB;
 class SQLite3_result;
+class AwsIamTokenSource;
+class AwsMetadataProvider;
 namespace prometheus { class Registry; }
 
 // Descriptor ABI version the plugin was compiled for.  Plugins set
@@ -40,6 +43,14 @@ namespace prometheus { class Registry; }
 //          handoff callbacks. Plugins use them only around work that can wait
 //          for another Admin consumer; older plugins continue to use the
 //          unchanged three DB-handle prefix.
+//          ProxySQL_PluginServices also gains AWS IAM provider installation and
+//          sizing callbacks. They are live only during normal plugin init.
+//   ABI 6: ProxySQL_PluginServices gains the general AWS metadata-provider
+//          installation callback used by locality discovery.
+//   ABI 7: ProxySQL_PluginServices gains the MySQL-owned AWS-locality stats
+//          projection callback used by the AWS plugin's runtime view.
+//   ABI 8: ProxySQL_PluginServices gains an IAM-provider uninstall callback
+//          so a plugin can roll back a partially successful init.
 //
 // DEBUG-tier tagging (do not remove -- see the certainty breakdown below):
 //
@@ -58,8 +69,8 @@ namespace prometheus { class Registry; }
 // A plugin built without -DDEBUG, loaded into a core built with
 // -DDEBUG (or vice versa), silently disagrees with the core about these
 // offsets while still reporting a numerically "compatible" abi_version
-// under the plain ABI 1..5 scheme above (e.g. a release plugin's
-// abi_version=5 is <= a debug core's max=5, so the ordinary
+// under the plain ABI 1..8 scheme above (e.g. a release plugin's
+// abi_version=5 is <= a debug core's max=8, so the ordinary
 // forward-compatibility range check does not catch it).
 //
 // What is PROVEN (measured, both ways, against MySQL_Data_Stream.h):
@@ -101,23 +112,23 @@ namespace prometheus { class Registry; }
 //
 // PROXYSQL_PLUGIN_ABI_DEBUG_BIT reserves a high bit that is either set
 // (this build has -DDEBUG) or clear (it doesn't) in `abi_version`, kept
-// in a numeric space (bit 30) the plain layout-version numbers (1..5,
+// in a numeric space (bit 30) the plain layout-version numbers (1..8,
 // and unlikely to reach 2^30 for a long time) never touch, so a
 // DEBUG-tagged and a non-DEBUG-tagged abi_version can never compare as
 // "compatible" via ordinary integer range comparison -- the loader
 // checks this bit for an EXACT match, as a step separate from (and in
-// addition to) the ABI 1..5 forward-compatibility range check below.
+// addition to) the ABI 1..8 forward-compatibility range check below.
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_DEBUG_BIT = 0x40000000u;
 
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 5u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 5u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 8u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 8u;
 
 #ifdef DEBUG
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION | PROXYSQL_PLUGIN_ABI_DEBUG_BIT;
 #else
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION;
 #endif
-// Layout-only ceiling used for the ABI 1..5 range check. Callers must mask
+// Layout-only ceiling used for the ABI 1..8 range check. Callers must mask
 // off PROXYSQL_PLUGIN_ABI_DEBUG_BIT before comparing a raw abi_version
 // against this constant -- see lib/ProxySQL_PluginManager.cpp.
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX;
@@ -323,6 +334,24 @@ struct ProxySQL_PluginRuntimeView {
 
 using proxysql_plugin_register_runtime_view_cb =
 	bool (*)(const ProxySQL_PluginRuntimeView &);
+
+// ABI-5 extension for optional external IAM database-authentication providers.
+// The source is owned by core after successful installation; `module_handle`
+// is a retained dlopen() reference released only after all session leases drain.
+using proxysql_plugin_install_aws_iam_token_source_cb =
+	bool (*)(AwsIamTokenSource *, void (*)(AwsIamTokenSource *), void *module_handle);
+
+using proxysql_plugin_uninstall_aws_iam_token_source_cb =
+	bool (*)(AwsIamTokenSource *expected_source);
+
+using proxysql_plugin_get_aws_iam_limits_cb =
+	void (*)(size_t *max_total_waiters, size_t *max_waiters_per_key);
+
+using proxysql_plugin_install_aws_metadata_provider_cb =
+	bool (*)(AwsMetadataProvider *, void (*)(AwsMetadataProvider *), void *module_handle);
+
+using proxysql_plugin_refresh_mysql_aws_locality_stats_cb =
+	void (*)(SQLite3DB *);
 #endif /* PROXYSQL40 */
 
 // Services provided to plugins across the four-phase lifecycle.
@@ -387,6 +416,16 @@ struct ProxySQL_PluginServices {
 	// at the same point they register their tables, so the callback
 	// is wired in both phases.
 	proxysql_plugin_register_runtime_view_cb register_runtime_view;
+	// ABI-5 extension. Both are null outside plugin init().
+	proxysql_plugin_install_aws_iam_token_source_cb install_aws_iam_token_source;
+	proxysql_plugin_get_aws_iam_limits_cb get_aws_iam_limits;
+	// ABI-6 extension. Null outside normal plugin init().
+	proxysql_plugin_install_aws_metadata_provider_cb install_aws_metadata_provider;
+	// ABI-7 extension. Live in Phase B and normal init; it performs no I/O.
+	proxysql_plugin_refresh_mysql_aws_locality_stats_cb refresh_mysql_aws_locality_stats;
+	// ABI-8 extension. Live only during normal plugin init and intended for
+	// rollback of the same plugin's partially installed IAM provider.
+	proxysql_plugin_uninstall_aws_iam_token_source_cb uninstall_aws_iam_token_source;
 #endif /* PROXYSQL40 */
 };
 

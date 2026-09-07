@@ -615,7 +615,18 @@ FlushVariableStats ProxySQL_Admin::flush_mysql_variables___database_to_runtime(S
 				ASSERT_SQLITE_OK(rc, db);
 			}
 		}
+#ifdef PROXYSQL40
+		const bool aws_locality_awareness_enabled =
+			GloMTH->get_variable_int("aws_locality_awareness") != 0;
+#endif
 		GloMTH->wrunlock();
+
+#ifdef PROXYSQL40
+		if (MyHGM != nullptr) {
+			MyHGM->set_aws_locality_awareness_enabled(
+				aws_locality_awareness_enabled);
+		}
+#endif
 
 		{
 			// NOTE: 'GloMTH->wrunlock()' should have been called before this point to avoid possible

@@ -22,6 +22,9 @@ class MetricsCollector;
 #ifdef PROXYSQL31
 #include "HostgroupPoolStats.h"
 #endif
+#ifdef PROXYSQL40
+#include "Aws_Locality_Types.h"
+#endif
 
 
 #include <atomic>
@@ -103,6 +106,10 @@ class BaseHGC {	// MySQL Host Group Container
 		char * init_connect;
 		char * comment;
 		char * ignore_session_variables_text; // this is the original version (text format) of ignore_session_variables
+		char * aws_iam_region;
+#ifdef PROXYSQL40
+		AwsLocalityPolicy aws_locality_policy;
+#endif
 		uint32_t max_num_online_servers;
 		uint32_t throttle_connections_per_sec;
 		int32_t monitor_slave_lag_when_null;

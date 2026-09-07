@@ -1,8 +1,8 @@
 name: CI-unit-tests-tsan
 run-name: '${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }}'
 
-# Builds the mysqlx + plugin-chassis unit tests with WITHTSAN=1 and
-# runs them under ThreadSanitizer to catch race conditions. Closes
+# Builds the mysqlx, plugin-chassis, and provider-neutral IAM concurrency tests
+# with WITHTSAN=1 and runs them under ThreadSanitizer to catch race conditions. Closes
 # Phase 2 of issue #5675.
 #
 # Architecture (vs. the earlier closed PR #5720):
