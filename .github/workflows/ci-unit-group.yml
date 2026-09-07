@@ -108,34 +108,37 @@ jobs:
           TAP_GROUP: ${{ inputs.tap_group }}
         run: |
           set -euo pipefail
+          unit_list="${RUNNER_TEMP}/unit-tests-${TAP_GROUP}"
+          trap 'rm -f "${unit_list}"' EXIT
+          python3 - <<'PY' > "${unit_list}"
+          import json
+          import os
+          import pathlib
+
+          group = os.environ["TAP_GROUP"]
+          repo_root = pathlib.Path("proxysql")
+          with (repo_root / "test/tap/groups/groups.json").open(encoding="utf-8") as source:
+              groups = json.load(source)
+          selected = sorted(name for name, tags in groups.items() if group in tags)
+          if not selected:
+              raise SystemExit(f"ERROR: no tests are registered for {group}")
+          unit_dir = repo_root / "test/tap/tests/unit"
+          for name in selected:
+              path = unit_dir / name
+              if not path.is_file() or not os.access(path, os.X_OK):
+                  raise SystemExit(
+                      f"ERROR: {group} selects non-unit or missing executable: {name}"
+                  )
+              print(path.relative_to(repo_root))
+          PY
           docker run --rm --network none \
             -e TAP_GROUP \
             -v "${PWD}/proxysql:/opt/proxysql" \
+            -v "${unit_list}:/tmp/unit-tests:ro" \
             -w /opt/proxysql \
             -e LD_LIBRARY_PATH=/opt/proxysql/test/tap/tap:/opt/proxysql/test/tap/tap/_runtime_libs \
             proxysql/packaging:build-ubuntu24-v4.0.0 \
             bash -ceu '
-              python3 - <<"PY" > /tmp/unit-tests
-              import json
-              import os
-              import pathlib
-              import sys
-
-              group = os.environ["TAP_GROUP"]
-              with open("test/tap/groups/groups.json", encoding="utf-8") as source:
-                  groups = json.load(source)
-              selected = sorted(name for name, tags in groups.items() if group in tags)
-              if not selected:
-                  raise SystemExit(f"ERROR: no tests are registered for {group}")
-              unit_dir = pathlib.Path("test/tap/tests/unit")
-              for name in selected:
-                  path = unit_dir / name
-                  if not path.is_file() or not os.access(path, os.X_OK):
-                      raise SystemExit(
-                          f"ERROR: {group} selects non-unit or missing executable: {name}"
-                      )
-                  print(path)
-              PY
               failed=""
               while IFS= read -r test_binary; do
                 echo ">>> ${test_binary}"
