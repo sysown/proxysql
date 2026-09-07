@@ -248,6 +248,16 @@ else
 WHOLE_LIBPROXYSQL := -Wl,-Bdynamic -lproxysql
 endif
 
+# ProxySQL_PluginSecrets_test.h deliberately marks its fault-injection hooks
+# hidden so plugins cannot resolve them from the staged core shared library.
+# Non-Darwin unit tests otherwise link that shared library, so provide the one
+# core object that owns those hooks directly to plugin_secrets_unit-t.  Darwin
+# already links the complete static archive and must not add the object twice.
+PLUGIN_SECRETS_TEST_IMPL :=
+ifneq ($(UNAME_S),Darwin)
+PLUGIN_SECRETS_TEST_IMPL := $(PROXYSQL_LDIR)/obj/ProxySQL_PluginSecrets.oo
+endif
+
 ifneq ($(NOJEMALLOC),1)
 ifeq ($(UNAME_S),Linux)
 	MYLIBS += -Wl,-Bstatic -ljemalloc -Wl,-Bdynamic
@@ -742,9 +752,9 @@ plugin_manager_unit-t: plugin_manager_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
-plugin_secrets_unit-t: plugin_secrets_unit-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+plugin_secrets_unit-t: plugin_secrets_unit-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO) $(PLUGIN_SECRETS_TEST_IMPL)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
-		$(IDIRS) -I$(PROXYSQL_PATH)/lib $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(IDIRS) -I$(PROXYSQL_PATH)/lib $(LDIRS) $(OPT) $(PLUGIN_SECRETS_TEST_IMPL) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
 plugin_config_unit-t: plugin_config_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
