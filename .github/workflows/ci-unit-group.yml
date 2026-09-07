@@ -108,7 +108,7 @@ jobs:
           TAP_GROUP: ${{ inputs.tap_group }}
         run: |
           set -euo pipefail
-          unit_list="${RUNNER_TEMP}/unit-tests-${TAP_GROUP}"
+          unit_list="$(mktemp "${RUNNER_TEMP}/unit-tests.XXXXXX")"
           trap 'rm -f "${unit_list}"' EXIT
           python3 - <<'PY' > "${unit_list}"
           import json
@@ -116,15 +116,21 @@ jobs:
           import pathlib
 
           group = os.environ["TAP_GROUP"]
-          repo_root = pathlib.Path("proxysql")
+          repo_root = pathlib.Path("proxysql").resolve(strict=True)
           with (repo_root / "test/tap/groups/groups.json").open(encoding="utf-8") as source:
               groups = json.load(source)
           selected = sorted(name for name, tags in groups.items() if group in tags)
           if not selected:
               raise SystemExit(f"ERROR: no tests are registered for {group}")
-          unit_dir = repo_root / "test/tap/tests/unit"
+          unit_dir = (repo_root / "test/tap/tests/unit").resolve(strict=True)
           for name in selected:
-              path = unit_dir / name
+              try:
+                  path = (unit_dir / name).resolve(strict=True)
+                  path.relative_to(unit_dir)
+              except (OSError, RuntimeError, ValueError):
+                  raise SystemExit(
+                      f"ERROR: {group} selects non-unit or missing executable: {name}"
+                  )
               if not path.is_file() or not os.access(path, os.X_OK):
                   raise SystemExit(
                       f"ERROR: {group} selects non-unit or missing executable: {name}"
