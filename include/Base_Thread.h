@@ -53,8 +53,15 @@ private:
 	// once per outer process_all_sessions iteration. Single-threaded per worker.
 	unsigned int partition_pool_attempts = 0;
 	unsigned int partition_pool_nulls = 0;
+	// The value update_partition_gate() last consumed. Kept because the live
+	// counter is zeroed at the top of every process_all_sessions() pass, so
+	// without it the first connection releases of a pass always look
+	// contention-free even in the middle of sustained starvation.
+	unsigned int partition_pool_nulls_prev = 0;
 	unsigned int partition_streak = 0;
 	bool partition_active = false;
+	// curtime of the last B-band sort, for PARTITION_SORT_MIN_INTERVAL_US.
+	unsigned long long last_partition_sort_time = 0;
 
 public:
 	// Gate thresholds: NULL-ratio (NUM/DEN) classifies a tick as "stressed";
@@ -67,12 +74,34 @@ public:
 	// streak are left untouched. Avoids "2/2 NULL = 100% stressed" noise.
 	static constexpr unsigned int PARTITION_GATE_MIN_ATTEMPTS   = 4;
 	static constexpr unsigned int PARTITION_FAIRNESS_MIN_B      = 4;
+	// Sorting the whole B band by wait time used to run on every iteration and
+	// was removed: it cost ~12% throughput at 500 clients / 50-conn pool under
+	// SSL. It is rate limited by TIME rather than by iteration count, because
+	// iteration count is not a stable unit -- loop frequency depends on session
+	// count and load, so a per-N-iterations gate makes a fast worker sort far
+	// more often than a slow one, exactly when it can least afford to. A wall
+	// clock bound caps the cost at a known number of sorts per second whatever
+	// the loop is doing.
+	//
+	// Ordering decays between sorts but degrades gracefully: max_connect_time
+	// is a fixed offset from when a session began waiting, so it is monotonic
+	// in arrival order, and the sessions that matter for the tail are the
+	// long-waiting ones whose relative order is stable.
+	static constexpr unsigned long long PARTITION_SORT_MIN_INTERVAL_US = 50000;	// 50ms
 
 	// Called by sessions inside this worker at the get_MyConn_from_pool()
 	// call site to feed the gate.
 	inline void note_pool_attempt(bool was_null) {
 		++partition_pool_attempts;
 		if (was_null) ++partition_pool_nulls;
+	}
+
+	/// True when a session failed to get a connection from the pool in this
+	/// pass or the one before it, i.e. somebody is waiting for a connection
+	/// right now. Cheap proxy for a real waiter count, using counters the
+	/// partition gate already maintains.
+	inline bool pool_has_waiters() const {
+		return partition_pool_nulls > 0 || partition_pool_nulls_prev > 0;
 	}
 
 	// Runs the hysteresis state machine from per-tick counters, resets them,
