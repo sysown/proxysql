@@ -841,7 +841,9 @@ public:
 	// EAGAIN/incomplete frame → async_exit_status = PG_EVENT_READ and return; a fatal
 	// recv/frame error sets error_info and marks the fetch done. Sets
 	// native_result_complete when ReadyForQuery is reached.
-	void native_fetch_result_cont(short event);
+	// Adds up the bytes it hands to query_result in *processed_bytes, so the
+	// caller can apply the same fetch-pause rule the libpq loop uses.
+	void native_fetch_result_cont(short event, uint64_t* processed_bytes = nullptr);
 	// Finish sending a reset command and consume its reply up to ReadyForQuery.
 	// The reply is discarded; a connection being reset has no client to send it to.
 	void native_reset_session_cont();
@@ -959,6 +961,10 @@ public:
 	// SSL_set_bio() transfers both BIOs to the SSL, so SSL_free() releases all
 	// three -- done only in native_teardown() and ~PgSQL_Connection(), never on a
 	// pool return. myds->ssl stays NULL in native mode.
+	// Set when a result fetch stopped early because it had already moved enough
+	// bytes for this event. The next entry drains what is still framed instead
+	// of asking the socket for more, which may never come.
+	bool native_fetch_paused = false;
 	SSL* native_ssl  = nullptr;
 	BIO* native_rbio = nullptr;
 	BIO* native_wbio = nullptr;
@@ -1000,6 +1006,10 @@ private:
 	// Handles the COPY OUT response from the server.
 	// Returns true if it consumes all buffer data, or false if the threshold for result size is reached
 	bool handle_copy_out(const PGresult* result, uint64_t* processed_bytes);
+	// True when this event has moved enough bytes that the result fetch should
+	// pause and let the client catch up. Shared by the libpq and native result
+	// loops so both honour pgsql-threshold_resultset_size the same way.
+	bool suspend_resultset_fetch(uint64_t processed_bytes) const;
 	static void notice_handler_cb(void* arg, const PGresult* result);
 	static void unhandled_notice_cb(void* arg, const PGresult* result);
 	void init_query_result();

@@ -206,6 +206,40 @@ public:
 	static void copy_buffer_to_resultset(PtrSizeArray* resultset, unsigned char* ptr, uint64_t size, 
 		char current_transaction_state);
 
+	// Take over the backend's TLS session so fast_forward can relay encrypted
+	// bytes through this data stream.
+	//
+	// The native path already has an SSL with two memory BIOs attached, and the
+	// connection keeps reading and writing through those same pointers. Handing
+	// it a fresh pair here would make OpenSSL free the ones it still uses, and
+	// the next query on that connection would touch freed memory. libpq keeps
+	// its BIOs to itself, so that path still needs a pair of its own.
+	void adopt_backend_tls() {
+		if (myconn == NULL || ssl != NULL) return;
+		if (myconn->is_connected() == false || myconn->get_pg_ssl_in_use() == 0) return;
+		SSL* ssl_obj = myconn->get_pg_ssl_object();
+		if (ssl_obj == NULL) {
+			// ProxySQL tried to use SSL to connect to the backend but the
+			// backend didn't support SSL
+			return;
+		}
+		encrypted = true;
+		ssl = ssl_obj;
+		if (myconn->native_mode) {
+			// The BIOs are created with the SSL and cleared with it, so a native
+			// connection reporting SSL in use always has them. Assert instead of
+			// tolerating a null: carrying on without them would send plaintext
+			// into an encrypted socket, which fails far away from here.
+			assert(myconn->native_rbio != NULL && myconn->native_wbio != NULL);
+			rbio_ssl = myconn->native_rbio;
+			wbio_ssl = myconn->native_wbio;
+		} else {
+			rbio_ssl = BIO_new(BIO_s_mem());
+			wbio_ssl = BIO_new(BIO_s_mem());
+			SSL_set_bio(ssl, rbio_ssl, wbio_ssl);
+		}
+	}
+
 	// safe way to attach a PgSQL Connection
 	void attach_connection(PgSQL_Connection* mc) {
 		statuses.pgconnpoll_get++;
@@ -218,25 +252,12 @@ public:
 		//
 		// we have a similar code in MySQL_Connection
 		// in case of ASYNC_CONNECT_SUCCESSFUL
+		//
+		// For futher details:
+		// - without ssl: we use the file descriptor from pgsql connection
+		// - with ssl: we use the SSL structure from pgsql connection
 		if (sess != NULL && sess->session_fast_forward) {
-			// if frontend and backend connection use SSL we will set
-			// encrypted = true and we will start using the SSL structure
-			// directly from PGconn SSL structure.
-			//
-			// For futher details:
-			// - without ssl: we use the file descriptor from pgsql connection
-			// - with ssl: we use the SSL structure from pgsql connection
-			if (myconn->is_connected() && myconn->get_pg_ssl_in_use()) {
-				if (ssl == NULL) {
-					encrypted = true;
-					SSL* ssl_obj = myconn->get_pg_ssl_object();
-					if (ssl_obj == NULL) assert(0); // Should not be null
-					ssl = ssl_obj;
-					rbio_ssl = BIO_new(BIO_s_mem());
-					wbio_ssl = BIO_new(BIO_s_mem());
-					SSL_set_bio(ssl, rbio_ssl, wbio_ssl);
-				}
-			}
+			adopt_backend_tls();
 		}
 	}
 

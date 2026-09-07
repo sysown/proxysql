@@ -265,7 +265,8 @@ PgSQL_Connection::~PgSQL_Connection() {
 		}
 		// native_ssl_ctx is normally freed at SSL_new() time (the SSL holds a ref) or
 		// in native_teardown(); free here as a safety net if a connection is destroyed
-		// before either ran. The SSL* itself lives on myds and is freed by ~PgSQL_Data_Stream().
+		// before either ran. The SSL and its BIOs belong to this connection, not to
+		// myds: a fast_forward data stream only borrows them (adopt_backend_tls()).
 		if (native_ssl_ctx) {
 			SSL_CTX_free(native_ssl_ctx);
 			native_ssl_ctx = nullptr;
@@ -440,18 +441,7 @@ handler_again:
 			}
 			if (myds && myds->sess && myds->sess->session_fast_forward) {
 				assert(myds->ssl == NULL);
-				SSL* ssl_obj = get_pg_ssl_object();
-				if (ssl_obj != NULL) {
-					myds->encrypted = true;
-					myds->ssl = ssl_obj;
-					myds->rbio_ssl = BIO_new(BIO_s_mem());
-					myds->wbio_ssl = BIO_new(BIO_s_mem());
-					SSL_set_bio(myds->ssl, myds->rbio_ssl, myds->wbio_ssl);
-				}
-				else {
-					// it means that ProxySQL tried to use SSL to connect to the backend
-					// but the backend didn't support SSL				
-				}
+				myds->adopt_backend_tls();
 			}
 		}
 		__sync_fetch_and_add(&PgHGM->status.server_connections_connected, 1);
@@ -578,7 +568,7 @@ handler_again:
 		// handles the native path and must NOT fall through to any libpq
 		// PGresult dispatch below.
 		if (native_mode) {
-			native_fetch_result_cont(event);
+			native_fetch_result_cont(event, &processed_bytes);
 			if (async_exit_status) {
 				// Need more bytes from the socket → wait for READ.
 				next_event(ASYNC_USE_RESULT_CONT);
@@ -589,6 +579,13 @@ handler_again:
 				// error: hand off to the end state (ASYNC_QUERY_END for queries,
 				// or the configured fetch_result_end_st).
 				NEXT_IMMEDIATE(fetch_result_end_st);
+			}
+			// Enough bytes moved in this event: pause and let the client drain,
+			// exactly as the libpq loop below does, so pgsql-threshold_resultset_size
+			// behaves the same on both paths.
+			if (suspend_resultset_fetch(processed_bytes)) {
+				next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause
+				break;
 			}
 			// Neither complete nor error nor waiting: loop to drain/recv more.
 			NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT);
@@ -782,17 +779,7 @@ handler_again:
 					update_bytes_recv(bytes_recv);
 					processed_bytes += bytes_recv;	// issue #527 : this variable will store the amount of bytes processed during this event
 					
-					bool suspend_resultset_fetch = (processed_bytes > overflow_safe_multiply<8,unsigned int>(pgsql_thread___threshold_resultset_size));
-					 
-					if (suspend_resultset_fetch == true && myds->sess && myds->sess->qpo && myds->sess->qpo->cache_ttl > 0) {
-						suspend_resultset_fetch = (processed_bytes > ((uint64_t)pgsql_thread___query_cache_size_MB) * 1024ULL * 1024ULL);
-					}
-					
-					if (
-						suspend_resultset_fetch
-						||
-						(pgsql_thread___throttle_ratio_server_to_client && pgsql_thread___throttle_max_bytes_per_second_to_client && (processed_bytes > (unsigned long long)pgsql_thread___throttle_max_bytes_per_second_to_client / 10 * (unsigned long long)pgsql_thread___throttle_ratio_server_to_client))
-						) {
+					if (suspend_resultset_fetch(processed_bytes)) {
 						next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause
 						break;
 					} else {
@@ -810,17 +797,7 @@ handler_again:
 				update_bytes_recv(bytes_recv);
 				processed_bytes += bytes_recv;	// issue #527 : this variable will store the amount of bytes processed during this event
 
-				bool suspend_resultset_fetch = (processed_bytes > overflow_safe_multiply<8,unsigned int>(pgsql_thread___threshold_resultset_size));
-
-				if (suspend_resultset_fetch == true && myds->sess && myds->sess->qpo && myds->sess->qpo->cache_ttl > 0) {
-					suspend_resultset_fetch = (processed_bytes > ((uint64_t)pgsql_thread___query_cache_size_MB) * 1024ULL * 1024ULL);
-				}
-
-				if (
-					suspend_resultset_fetch
-					||
-					(pgsql_thread___throttle_ratio_server_to_client && pgsql_thread___throttle_max_bytes_per_second_to_client && (processed_bytes > (unsigned long long)pgsql_thread___throttle_max_bytes_per_second_to_client / 10 * (unsigned long long)pgsql_thread___throttle_ratio_server_to_client))
-					) {
+				if (suspend_resultset_fetch(processed_bytes)) {
 					next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause
 					break;
 				} else {
@@ -3122,7 +3099,11 @@ void PgSQL_Connection::native_publish_describe_cache() {
 	eqi->stmt_info->publish_describe_cache(cand);
 }
 
-void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
+void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* processed_bytes) {
+	// Every byte handed to query_result counts towards this event's total, which
+	// the caller compares against pgsql-threshold_resultset_size to decide when
+	// to pause the fetch.
+	auto count_bytes = [&](unsigned int n) { if (processed_bytes) *processed_bytes += n; };
 	// Native result fetch (Task 1.6c / Phase 2). Pull backend bytes into the
 	// framer, then drain every complete message into query_result as raw
 	// client-wire bytes. Non-blocking throughout.
@@ -3153,15 +3134,21 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 		}
 	}
 
-	int r = native_recv_into_framer();
-	if (r < 0) {
-		native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "backend closed during result fetch");
-		return;
-	}
-	if (r == 0) {
-		// EAGAIN: no bytes available yet → wait for the socket to become readable.
-		async_exit_status = PG_EVENT_READ;
-		return;
+	if (native_fetch_paused) {
+		// Resuming a fetch that stopped on the byte threshold: the messages are
+		// already framed, and the backend may have nothing left to send.
+		native_fetch_paused = false;
+	} else {
+		int r = native_recv_into_framer();
+		if (r < 0) {
+			native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "backend closed during result fetch");
+			return;
+		}
+		if (r == 0) {
+			// EAGAIN: no bytes available yet → wait for the socket to become readable.
+			async_exit_status = PG_EVENT_READ;
+			return;
+		}
 	}
 
 	// Drain all complete messages. msg.payload points INTO the framer buffer and
@@ -3169,6 +3156,12 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 	// buffer) before looping, and we never feed() again inside this loop, so the
 	// dangling-pointer rule is respected.
 	for (;;) {
+		// Enough bytes for this event: stop before taking another message and let
+		// the client drain, the same rule the libpq fetch loop applies per row.
+		if (processed_bytes && suspend_resultset_fetch(*processed_bytes)) {
+			native_fetch_paused = true;
+			return;
+		}
 		PgSQL_Backend_Msg msg;
 		PgSQL_Frame_Result fr = native_framer.next(msg);
 		if (fr == FRAME_OK) {
@@ -3219,7 +3212,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 				// waits for its 'Z' below.
 				if (t == '2') {
 					if (native_stmt_step == PG_Native_Stmt_Step::BIND) {
-						query_result->add_native_backend_message(t, msg.payload, msg.payload_len);
+						count_bytes(query_result->add_native_backend_message(t, msg.payload, msg.payload_len));
 						if (!native_stmt_sync_terminated) {
 							native_result_complete = true;
 							return;
@@ -3237,7 +3230,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 				// unexpected in native extq (unnamed Close is synthesized) - forward it
 				// defensively rather than drop it.
 				if (t == '3') {
-					query_result->add_native_backend_message(t, msg.payload, msg.payload_len);
+					count_bytes(query_result->add_native_backend_message(t, msg.payload, msg.payload_len));
 					if (native_stmt_step == PG_Native_Stmt_Step::CLOSE_P &&
 						!native_stmt_sync_terminated) {
 						native_result_complete = true;
@@ -3252,7 +3245,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 				// for its 'Z'.
 				if (t == '1') {
 					if (!native_suppress_parse_complete) {
-						query_result->add_native_backend_message(t, msg.payload, msg.payload_len);
+						count_bytes(query_result->add_native_backend_message(t, msg.payload, msg.payload_len));
 					}
 					if (native_stmt_step == PG_Native_Stmt_Step::PARSE && !native_stmt_sync_terminated) {
 						native_result_complete = true;
@@ -3264,7 +3257,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 				// ErrorResponse: forward it (its side effect fills error_info, so the
 				// session sees rc -1), then get the backend back to ReadyForQuery.
 				if (t == 'E') {
-					query_result->add_native_backend_message(t, msg.payload, msg.payload_len);
+					count_bytes(query_result->add_native_backend_message(t, msg.payload, msg.payload_len));
 					if (native_stmt_sync_terminated) {
 						// A Sync already reached the backend, so it WILL emit 'Z' after
 						// the error; keep draining until we consume it.
@@ -3311,7 +3304,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 				// ReadyForQuery: completes any Sync-terminated step (and the injected-
 				// Sync error recovery above).
 				if (t == 'Z') {
-					query_result->add_native_backend_message(t, msg.payload, msg.payload_len);
+					count_bytes(query_result->add_native_backend_message(t, msg.payload, msg.payload_len));
 					// A Sync-terminated statement-level Describe streamed its 't'+'T'|'n'
 					// through the generic case below and completes here — publish the
 					// captured metadata now (no-op if nothing valid was captured).
@@ -3325,7 +3318,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 				// Everything else (ParameterDescription 't', RowDescription 'T', NoData
 				// 'n', DataRow 'D', CommandComplete 'C', EmptyQueryResponse 'I',
 				// ParameterStatus 'S', NoticeResponse 'N', etc.) streams through.
-				query_result->add_native_backend_message(t, msg.payload, msg.payload_len);
+				count_bytes(query_result->add_native_backend_message(t, msg.payload, msg.payload_len));
 
 				// Statement-level Describe metadata capture (set-once cache): copy the
 				// backend's raw 't' body and 'T'/'n' state as they stream past, for
@@ -3383,7 +3376,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/) {
 				continue;
 			}
 
-			query_result->add_native_backend_message(msg.type, msg.payload, msg.payload_len);
+			count_bytes(query_result->add_native_backend_message(msg.type, msg.payload, msg.payload_len));
 			if (msg.type == 'Z') {
 				// ReadyForQuery: the result stream for this query is complete.
 				native_result_complete = true;
@@ -4749,6 +4742,18 @@ char PgSQL_Connection::get_transaction_status_char() {
 		txn_status = 'U';
 	}
 	return txn_status;
+}
+
+bool PgSQL_Connection::suspend_resultset_fetch(uint64_t processed_bytes) const {
+	bool suspend = (processed_bytes > overflow_safe_multiply<8,unsigned int>(pgsql_thread___threshold_resultset_size));
+	// A cacheable query is allowed to buffer up to the whole query cache instead,
+	// otherwise it would be paused before it could ever be stored.
+	if (suspend == true && myds->sess && myds->sess->qpo && myds->sess->qpo->cache_ttl > 0) {
+		suspend = (processed_bytes > ((uint64_t)pgsql_thread___query_cache_size_MB) * 1024ULL * 1024ULL);
+	}
+	if (suspend == true) return true;
+	return (pgsql_thread___throttle_ratio_server_to_client && pgsql_thread___throttle_max_bytes_per_second_to_client
+		&& (processed_bytes > (unsigned long long)pgsql_thread___throttle_max_bytes_per_second_to_client / 10 * (unsigned long long)pgsql_thread___throttle_ratio_server_to_client));
 }
 
 void PgSQL_Connection::update_bytes_recv(uint64_t bytes_recv) {
