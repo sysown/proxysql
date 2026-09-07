@@ -464,6 +464,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	gen_utils_unit-t \
 	proxy_protocol_unit-t \
 	pgsql_txn_state_unit-t \
+	pgsql_conn_liveness_unit-t \
 	sqlite3db_unit-t \
 	pgsql_error_helper_unit-t \
 	pgsql_native_params_unit-t \
