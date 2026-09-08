@@ -163,6 +163,28 @@ extern MySQL_Authentication* GloMyAuth;
 extern PgSQL_Authentication *GloPgAuth;
 extern PgSQL_Query_Processor* GloPgQPro;
 
+// Runs "SELECT GLOBAL_UUID()" on an already-connected peer connection and, on
+// success, stores the result via Update_Node_UUID(). Shared by the
+// post-handshake fetch and the per-poll retry (both query the same statement
+// on the same connection and apply the same result validation).
+// Returns true when a UUID was fetched and stored.
+static bool cluster_fetch_peer_uuid(MYSQL *conn, char *hostname, uint16_t port) {
+	bool stored = false;
+	int rc_uuid = mysql_query(conn, (char *)"SELECT GLOBAL_UUID()");
+	if (rc_uuid == 0) {
+		MYSQL_RES *uuid_res = mysql_store_result(conn);
+		if (uuid_res) {
+			MYSQL_ROW urow = mysql_fetch_row(uuid_res);
+			if (urow && urow[0] && strnlen(urow[0], 64) > 0) {
+				GloProxyCluster->Update_Node_UUID(hostname, port, urow[0]);
+				stored = true;
+			}
+			mysql_free_result(uuid_res);
+		}
+	}
+	return stored;
+}
+
 void * ProxySQL_Cluster_Monitor_thread(void *args) {
 	pthread_attr_t thread_attr;
 	size_t tmp_stack_size=0;
@@ -187,6 +209,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 	int query_error_counter = 0;
 	char *query_error = NULL;
 	int cluster_check_status_frequency_count = 0;
+	bool uuid_known = false; // set once GLOBAL_UUID() is successfully learned; avoids re-querying every poll iteration
 	MYSQL *conn = mysql_init(NULL);
 
 	if (conn==NULL) {
@@ -242,6 +265,11 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 								proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Sending CLUSTER_NODE_UUID %s to peer %s:%d\n", GloVars.uuid, node->hostname, node->port);
 								proxy_info("Cluster: sending CLUSTER_NODE_UUID %s to peer %s:%d\n", GloVars.uuid, node->hostname, node->port);
 								rc_query = mysql_query(conn, q.c_str());
+								if (rc_query == 0) {
+									if (cluster_fetch_peer_uuid(conn, node->hostname, node->port)) {
+										uuid_known = true;
+									}
+								}
 							} else {
 								proxy_warning("Cluster: different ProxySQL version with peer %s:%d . Remote: %s . Self: %s\n", node->hostname, node->port, row[0], PROXYSQL_VERSION_);
 							}
@@ -259,6 +287,11 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 						}
 						rc_query = 1;
 					}
+				} else {
+					// connect succeeded but the initial "SELECT @@version" failed:
+					// count it as a check failure for this cycle, same as a
+					// GLOBAL_CHECKSUM() failure further below.
+					GloProxyCluster->Update_Node_Failure(node->hostname, node->port);
 				}
 				while ( glovars.shutdown == 0 && rc_query == 0 && rc_bool == true) {
 					unsigned long long start_time=monotonic_time();
@@ -274,6 +307,16 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 						mysql_free_result(result);
 						// FIXME: update metrics are not updated for now. We only check checksum
 						//rc_bool = GloProxyCluster->Update_Node_Metrics(node->hostname, node->port, result, elapsed_time_us);
+
+						if (!uuid_known) {
+							// The initial UUID fetch (right after the version handshake) can
+							// fail transiently even though clustering is otherwise healthy.
+							// Retry it on every successful poll iteration until it succeeds,
+							// without re-querying once the UUID is known.
+							if (cluster_fetch_peer_uuid(conn, node->hostname, node->port)) {
+								uuid_known = true;
+							}
+						}
 
 						if (update_checksum) {
 							unsigned long long before_query_time=monotonic_time();
@@ -339,6 +382,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 							);
 						}
 						if (++query_error_counter == QUERY_ERROR_RATE) query_error_counter = 0;
+						GloProxyCluster->Update_Node_Failure(node->hostname, node->port);
 					}
 					unsigned long long end_time=monotonic_time();
 					if (rc_query == 0) {
@@ -361,6 +405,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 				}
 			} else {
 				proxy_warning("Cluster: unable to connect to peer %s:%d . Error: %s\n", node->hostname, node->port, mysql_error(conn));
+				GloProxyCluster->Update_Node_Failure(node->hostname, node->port);
 				node->resolve_hostname();
 				mysql_close(conn);
 				conn = mysql_init(NULL);
@@ -414,6 +459,11 @@ ProxySQL_Node_Entry::ProxySQL_Node_Entry(char* _hostname, uint16_t _port, uint64
 	global_checksum = 0;
 	ip_addr = NULL;
 	hostname = NULL;
+	uuid = NULL;
+	last_success_at_us = 0;
+	global_version = 0;
+	checks_ok = 0;
+	checks_err = 0;
 	if (_hostname) {
 		hostname = strdup(_hostname);
 	}
@@ -452,6 +502,10 @@ ProxySQL_Node_Entry::~ProxySQL_Node_Entry() {
 	if (ip_addr) {
 		free(ip_addr);
 		ip_addr = NULL;
+	}
+	if (uuid) {
+		free(uuid);
+		uuid = NULL;
 	}
 	for (int i = 0; i < PROXYSQL_NODE_METRICS_LEN ; i++) {
 		delete metrics[i];
@@ -495,6 +549,16 @@ uint64_t ProxySQL_Node_Entry::get_weight() {
 
 void ProxySQL_Node_Entry::set_weight(uint64_t w) {
 	weight = w;
+}
+
+void ProxySQL_Node_Entry::set_uuid(const char* u) {
+	if (uuid) {
+		free(uuid);
+		uuid = NULL;
+	}
+	if (u) {
+		uuid = strdup(u);
+	}
 }
 
 void ProxySQL_Node_Entry::set_comment(char *s) {
@@ -3937,6 +4001,12 @@ cluster_nodes_metrics_map = std::make_tuple(
 			"Number of frontend client connections currently open on the Cluster node.",
 			metric_tags {}
 		),
+		std::make_tuple (
+			p_cluster_nodes_dyn_gauge::proxysql_servers_alive,
+			"proxysql_servers_alive",
+			"1 when the peer answered the cluster liveness poll within admin-cluster_leader_node_timeout_ms, 0 otherwise.",
+			metric_tags {}
+		),
 	}
 );
 
@@ -4064,9 +4134,12 @@ bool ProxySQL_Cluster_Nodes::Update_Global_Checksum(char * _h, uint16_t _p, MYSQ
 			} else {
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Global checksum for peer %s:%d is different from fetched one. Local checksum:[0x%lX] Fetched checksum:[0x%llX]\n", node->get_hostname(), node->get_port(), node->global_checksum, v);
 				node->global_checksum = v;
+				node->global_version++;
 			}
 		}
 		//pthread_mutex_unlock(&GloVars.checksum_mutex);
+		node->last_success_at_us = monotonic_time();
+		node->checks_ok++;
 	}
 	pthread_mutex_unlock(&mutex);
 	return ret;
@@ -4150,6 +4223,26 @@ bool ProxySQL_Cluster_Nodes::Update_Node_Metrics(char * _h, uint16_t _p, MYSQL_R
 	}
 	pthread_mutex_unlock(&mutex);
 	return ret;
+}
+
+void ProxySQL_Cluster_Nodes::Update_Node_UUID(char * _hostname, uint16_t _port, const char * _uuid) {
+	uint64_t hash_ = generate_hash(_hostname, _port);
+	pthread_mutex_lock(&mutex);
+	auto ite = umap_proxy_nodes.find(hash_);
+	if (ite != umap_proxy_nodes.end()) {
+		ite->second->set_uuid(_uuid);
+	}
+	pthread_mutex_unlock(&mutex);
+}
+
+void ProxySQL_Cluster_Nodes::Update_Node_Failure(char * _hostname, uint16_t _port) {
+	uint64_t hash_ = generate_hash(_hostname, _port);
+	pthread_mutex_lock(&mutex);
+	auto ite = umap_proxy_nodes.find(hash_);
+	if (ite != umap_proxy_nodes.end()) {
+		ite->second->checks_err++;
+	}
+	pthread_mutex_unlock(&mutex);
 }
 
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_query_rules(char **host, uint16_t *port, char** ip_address) {
@@ -4633,6 +4726,93 @@ SQLite3_result * ProxySQL_Cluster_Nodes::stats_proxysql_servers_metrics() {
 	return result;
 }
 
+SQLite3_result * ProxySQL_Cluster_Nodes::stats_proxysql_servers_status(const std::string& leader_uuid, unsigned long long alive_timeout_us) {
+	const int colnum=10;
+	SQLite3_result *result=new SQLite3_result(colnum);
+	result->add_column_definition(SQLITE_TEXT,"hostname");
+	result->add_column_definition(SQLITE_TEXT,"port");
+	result->add_column_definition(SQLITE_TEXT,"weight");
+	result->add_column_definition(SQLITE_TEXT,"master");
+	result->add_column_definition(SQLITE_TEXT,"global_version");
+	result->add_column_definition(SQLITE_TEXT,"check_age_us");
+	result->add_column_definition(SQLITE_TEXT,"ping_time_us");
+	result->add_column_definition(SQLITE_TEXT,"checks_OK");
+	result->add_column_definition(SQLITE_TEXT,"checks_ERR");
+	result->add_column_definition(SQLITE_TEXT,"uuid");
+	(void)alive_timeout_us; // liveness is derivable from check_age_us; kept for future use
+
+	char buf[64];
+	int k;
+	pthread_mutex_lock(&mutex);
+	unsigned long long now = monotonic_time();
+	for( std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); ) {
+		ProxySQL_Node_Entry * node = it->second;
+		char **pta=(char **)malloc(sizeof(char *)*colnum);
+		pta[0]=strdup(node->get_hostname());
+		snprintf(buf, sizeof(buf), "%d", node->get_port());
+		pta[1]=strdup(buf);
+		snprintf(buf, sizeof(buf), "%lu", node->get_weight());
+		pta[2]=strdup(buf);
+		const char *nuuid = node->get_uuid();
+		bool is_master = (nuuid != NULL && leader_uuid.empty() == false && leader_uuid == nuuid);
+		pta[3]=strdup(is_master ? "YES" : "NO");
+		snprintf(buf, sizeof(buf), "%lu", (unsigned long)node->get_global_version());
+		pta[4]=strdup(buf);
+		unsigned long long last = node->get_last_success_at_us();
+		if (last == 0) {
+			pta[5]=strdup("-1");
+		} else {
+			snprintf(buf, sizeof(buf), "%llu", now - last);
+			pta[5]=strdup(buf);
+		}
+		ProxySQL_Node_Metrics *curr = node->get_metrics_curr();
+		snprintf(buf, sizeof(buf), "%llu", curr->response_time_us);
+		pta[6]=strdup(buf);
+		snprintf(buf, sizeof(buf), "%lu", (unsigned long)node->get_checks_ok());
+		pta[7]=strdup(buf);
+		snprintf(buf, sizeof(buf), "%lu", (unsigned long)node->get_checks_err());
+		pta[8]=strdup(buf);
+		pta[9]=strdup(nuuid ? nuuid : "");
+
+		result->add_row(pta);
+		for (k=0; k<colnum; k++) {
+			if (pta[k])
+				free(pta[k]);
+		}
+		free(pta);
+		it++;
+	}
+	pthread_mutex_unlock(&mutex);
+	return result;
+}
+
+SQLite3_result * ProxySQL_Cluster::get_stats_proxysql_servers_status() {
+	std::string l_host; int l_port = 0; std::string l_uuid;
+	get_leader_info(l_host, l_port, l_uuid);
+	unsigned long long timeout_us = (unsigned long long)__sync_fetch_and_add(&cluster_leader_node_timeout_ms, 0) * 1000ULL;
+	return nodes.stats_proxysql_servers_status(l_uuid, timeout_us);
+}
+
+std::vector<Cluster_Leader_Candidate> ProxySQL_Cluster_Nodes::get_leader_candidates(unsigned long long alive_timeout_us) {
+	std::vector<Cluster_Leader_Candidate> candidates;
+	unsigned long long now = monotonic_time();
+	pthread_mutex_lock(&mutex);
+	for (auto it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end(); it++) {
+		ProxySQL_Node_Entry * node = it->second;
+		Cluster_Leader_Candidate c;
+		c.uuid = (node->get_uuid() ? node->get_uuid() : "");
+		c.hostname = node->get_hostname();
+		c.port = node->get_port();
+		c.weight = node->get_weight();
+		bool is_self = (GloVars.uuid && node->get_uuid() && strcmp(node->get_uuid(), GloVars.uuid) == 0);
+		unsigned long long last = node->get_last_success_at_us();
+		c.alive = is_self || (last != 0 && (now - last) < alive_timeout_us);
+		candidates.push_back(c);
+	}
+	pthread_mutex_unlock(&mutex);
+	return candidates;
+}
+
 SQLite3_result * ProxySQL_Cluster_Nodes::dump_table_proxysql_servers() {
 	const int colnum=4;
 	SQLite3_result *result=new SQLite3_result(colnum);
@@ -4687,6 +4867,9 @@ void ProxySQL_Cluster_Nodes::update_prometheus_nodes_metrics() {
 
 	vector<string> cur_node_metrics {};
 	vector<string> cur_node_checksums {};
+
+	const unsigned long long alive_timeout_us =
+		(unsigned long long)__sync_fetch_and_add(&GloProxyCluster->cluster_leader_node_timeout_ms, 0) * 1000ULL;
 
 	// Update metrics for both 'servers_checksums' and 'servers_metrics'
 	for (const auto& node_entry : umap_proxy_nodes) {
@@ -4747,11 +4930,14 @@ void ProxySQL_Cluster_Nodes::update_prometheus_nodes_metrics() {
 		const double last_check_ms = (curtime - read_time_us) / 1000.0;
 		const double response_time_ms = node_metrics->response_time_us / 1000.0;
 		const double conns_connected = node_metrics->Client_Connections_connected;
+		const unsigned long long last_ok = node_entry.second->get_last_success_at_us();
+		const double node_alive = (last_ok != 0 && (curtime - last_ok) < alive_timeout_us) ? 1.0 : 0.0;
 
 		vector<tuple<map<string,prometheus::Gauge*>&, dyn_gauge::metric, double>> metric_gauges {
 			std::make_tuple(std::ref(this->metrics.p_proxysql_servers_metrics_last_check_ms), dyn_gauge::proxysql_servers_metrics_last_check_ms, last_check_ms),
 			std::make_tuple(std::ref(this->metrics.p_proxysql_servers_metrics_response_time_ms), dyn_gauge::proxysql_servers_metrics_response_time_ms, response_time_ms),
 			std::make_tuple(std::ref(this->metrics.p_proxysql_servers_metrics_client_conns_connected), dyn_gauge::proxysql_servers_metrics_client_conns_connected, conns_connected),
+			std::make_tuple(std::ref(this->metrics.p_proxysql_servers_alive), dyn_gauge::proxysql_servers_alive, node_alive),
 		};
 
 		for (const auto& metric_gauge : metric_gauges) {
@@ -4796,6 +4982,7 @@ void ProxySQL_Cluster_Nodes::update_prometheus_nodes_metrics() {
 		{ metrics.p_proxysql_servers_metrics_response_time_ms, dyn_gauge::proxysql_servers_metrics_response_time_ms },
 		{ metrics.p_proxysql_servers_metrics_last_check_ms, dyn_gauge::proxysql_servers_metrics_last_check_ms },
 		{ metrics.p_proxysql_servers_metrics_client_conns_connected, dyn_gauge::proxysql_servers_metrics_client_conns_connected },
+		{ metrics.p_proxysql_servers_alive, dyn_gauge::proxysql_servers_alive },
 
 		{ metrics.p_proxysql_servers_checksums_epoch, dyn_gauge::proxysql_servers_checksums_epoch },
 		{ metrics.p_proxysql_servers_checksums_updated_at, dyn_gauge::proxysql_servers_checksums_updated_at },
@@ -5488,8 +5675,21 @@ cluster_metrics_map = std::make_tuple(
 				{ "reason", "version_one" }
 			}
 		),
+		std::make_tuple (
+			p_cluster_counter::cluster_leader_changes,
+			"proxysql_cluster_leader_changes_total",
+			"Number of times this node observed an effective cluster leader change.",
+			metric_tags {}
+		),
 	},
-	cluster_gauge_vector {}
+	cluster_gauge_vector {
+		std::make_tuple (
+			p_cluster_gauge::cluster_leader_status,
+			"proxysql_cluster_leader_status",
+			"1 when this node is the elected cluster leader, 0 otherwise.",
+			metric_tags {}
+		),
+	}
 );
 
 ProxySQL_Cluster::ProxySQL_Cluster() : proxysql_servers_to_monitor(NULL) {
@@ -5505,6 +5705,13 @@ ProxySQL_Cluster::ProxySQL_Cluster() : proxysql_servers_to_monitor(NULL) {
 	cluster_username = strdup((char *)"");
 	cluster_password = strdup((char *)"");
 	cluster_check_interval_ms = 1000;
+	cluster_leader_election = 0;
+	cluster_leader_node_timeout_ms = 3000;
+	cluster_leader_grace_ms = 3000;
+	leader_hostname = NULL;
+	leader_port = 0;
+	leader_next_check_at = 0;
+	pthread_mutex_init(&leader_mutex, NULL);
 	cluster_check_status_frequency = 10;
 	cluster_mysql_query_rules_diffs_before_sync = 3;
 	cluster_mysql_servers_diffs_before_sync = 3;
@@ -5539,11 +5746,79 @@ ProxySQL_Cluster::~ProxySQL_Cluster() {
 		free(admin_mysql_ifaces);
 		admin_mysql_ifaces = NULL;
 	}
+	if (leader_hostname) {
+		free(leader_hostname);
+		leader_hostname = NULL;
+	}
 }
 
 void ProxySQL_Cluster::p_update_metrics() {
 	this->nodes.update_prometheus_nodes_metrics();
+	metrics.p_gauge_array[p_cluster_gauge::cluster_leader_status]->Set(is_leader() ? 1 : 0);
 };
+
+void ProxySQL_Cluster::leader_election_tick(unsigned long long curtime_us) {
+	if (curtime_us < leader_next_check_at) return;
+	leader_next_check_at = curtime_us + 500000; // evaluate at most every 500ms
+	int enabled = __sync_fetch_and_add(&cluster_leader_election, 0);
+	cluster_creds_t creds = get_credentials();
+	bool clustering_active = (creds.user.empty() == false);
+	bool am_leader_or_standalone = true;
+	if (enabled == 0 || clustering_active == false) {
+		pthread_mutex_lock(&leader_mutex);
+		leader_state.reset();
+		if (leader_hostname) { free(leader_hostname); leader_hostname = NULL; }
+		leader_port = 0;
+		pthread_mutex_unlock(&leader_mutex);
+	} else {
+		unsigned long long timeout_us = (unsigned long long)__sync_fetch_and_add(&cluster_leader_node_timeout_ms, 0) * 1000ULL;
+		unsigned long long grace_ms = (unsigned long long)__sync_fetch_and_add(&cluster_leader_grace_ms, 0);
+		std::vector<Cluster_Leader_Candidate> candidates = nodes.get_leader_candidates(timeout_us);
+		if (candidates.empty()) {
+			// proxysql_servers is empty: standalone behavior
+			pthread_mutex_lock(&leader_mutex);
+			leader_state.reset();
+			if (leader_hostname) { free(leader_hostname); leader_hostname = NULL; }
+			leader_port = 0;
+			pthread_mutex_unlock(&leader_mutex);
+		} else {
+			int idx = cluster_elect_leader(candidates);
+			std::string computed = (idx >= 0 ? candidates[idx].uuid : "");
+			pthread_mutex_lock(&leader_mutex);
+			bool changed = leader_state.update(computed, curtime_us / 1000, grace_ms);
+			if (changed) {
+				if (leader_hostname) { free(leader_hostname); leader_hostname = NULL; }
+				leader_port = 0;
+				if (idx >= 0 && leader_state.current_leader_uuid == candidates[idx].uuid) {
+					leader_hostname = strdup(candidates[idx].hostname.c_str());
+					leader_port = candidates[idx].port;
+				}
+				proxy_info("Cluster leader changed: new leader is %s (%s:%d)\n",
+					(leader_state.current_leader_uuid.empty() ? "NONE" : leader_state.current_leader_uuid.c_str()),
+					(leader_hostname ? leader_hostname : ""), leader_port);
+				metrics.p_counter_array[p_cluster_counter::cluster_leader_changes]->Increment();
+			}
+			am_leader_or_standalone = (GloVars.uuid && leader_state.current_leader_uuid == GloVars.uuid);
+			pthread_mutex_unlock(&leader_mutex);
+		}
+	}
+	GloAdmin->set_cluster_follower(enabled != 0 && clustering_active && am_leader_or_standalone == false);
+}
+
+bool ProxySQL_Cluster::is_leader() {
+	pthread_mutex_lock(&leader_mutex);
+	bool r = (GloVars.uuid && leader_state.current_leader_uuid.empty() == false && leader_state.current_leader_uuid == GloVars.uuid);
+	pthread_mutex_unlock(&leader_mutex);
+	return r;
+}
+
+void ProxySQL_Cluster::get_leader_info(std::string& hostname, int& port, std::string& uuid) {
+	pthread_mutex_lock(&leader_mutex);
+	hostname = (leader_hostname ? leader_hostname : "");
+	port = leader_port;
+	uuid = leader_state.current_leader_uuid;
+	pthread_mutex_unlock(&leader_mutex);
+}
 
 // this function returns credentials to the caller, used by monitoring threads
 cluster_creds_t ProxySQL_Cluster::get_credentials() {

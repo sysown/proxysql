@@ -2175,6 +2175,11 @@ void MySQL_Logger::insertMysqlEventsIntoDb(SQLite3DB * db, const std::string& ta
 
 	char digest_hex_str[20]; // 2+sizeof(unsigned long long)*2+2
 
+	// Serializes concurrent users of this SQLite3DB instance (e.g., admin main loop's
+	// periodic eventslog flush vs DUMP EVENTSLOG admin command). TSDB writer threads
+	// use a separate SQLite3DB connection to the same file, serialized at the SQLite
+	// file level.
+	db->wrlock();
 	db->execute("BEGIN");
 
 	int row_idx=0;
@@ -2240,6 +2245,7 @@ void MySQL_Logger::insertMysqlEventsIntoDb(SQLite3DB * db, const std::string& ta
 		row_idx++;
 	}
 	db->execute("COMMIT");
+	db->wrunlock();
 }
 
 

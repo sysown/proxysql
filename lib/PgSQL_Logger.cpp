@@ -1558,6 +1558,11 @@ void PgSQL_Logger::insertPgSQLEventsIntoDb(SQLite3DB* db, const std::string& tab
 	};
 
 	char digest_hex_str[20];
+	// Serializes concurrent users of this SQLite3DB instance (e.g., admin main loop's
+	// periodic eventslog flush vs DUMP EVENTSLOG admin command). TSDB writer threads
+	// use a separate SQLite3DB connection to the same file, serialized at the SQLite
+	// file level.
+	db->wrlock();
 	db->execute("BEGIN");
 
 	int row_idx = 0;
@@ -1603,6 +1608,7 @@ void PgSQL_Logger::insertPgSQLEventsIntoDb(SQLite3DB* db, const std::string& tab
 	}
 
 	db->execute("COMMIT");
+	db->wrunlock();
 }
 
 int PgSQL_Logger::processEvents(SQLite3DB* statsdb, SQLite3DB* statsdb_disk) {
