@@ -167,6 +167,18 @@ if [ "${PROXYSQL_LOAD_GENAI_PLUGIN:-0}" = "1" ]; then
     echo ">>> Mounting genai plugin .so into ProxySQL container"
 fi
 
+MYSQL_ROUTER_PLUGIN_SRC="${WORKSPACE}/plugins/mysql_router/proxysql_mysql_router.so"
+MYSQL_ROUTER_PLUGIN_MOUNT=""
+if [ "${PROXYSQL_LOAD_MYSQL_ROUTER_PLUGIN:-0}" = "1" ]; then
+    if [ ! -f "${MYSQL_ROUTER_PLUGIN_SRC}" ]; then
+        echo "ERROR: PROXYSQL_LOAD_MYSQL_ROUTER_PLUGIN=1 but plugin .so missing at ${MYSQL_ROUTER_PLUGIN_SRC}" >&2
+        echo "       Build it first: make -C plugins/mysql_router PROXYSQL40=1" >&2
+        exit 1
+    fi
+    MYSQL_ROUTER_PLUGIN_MOUNT="-v ${MYSQL_ROUTER_PLUGIN_SRC}:/usr/lib/proxysql/plugins/proxysql_mysql_router.so:ro"
+    echo ">>> Mounting mysql_router plugin .so into ProxySQL container"
+fi
+
 # Same pattern for the duckdb plugin (an embedded-DuckDB SQL engine
 # reachable over the MySQL and PgSQL wire protocols; needs no backend
 # database of its own). Groups that need it (e.g. duckdb-e2e-g1) set
@@ -263,6 +275,7 @@ docker run -d \
     -v "${COVERAGE_DATA_DIR}:/gcov" \
     ${MYSQLX_PLUGIN_MOUNT} \
     ${GENAI_PLUGIN_MOUNT} \
+    ${MYSQL_ROUTER_PLUGIN_MOUNT} \
     ${DUCKDB_PLUGIN_MOUNT} \
     ${GCOV_MOUNTS} \
     ${PGSQL_SOCKET_MOUNT} \

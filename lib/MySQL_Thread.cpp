@@ -19,6 +19,7 @@ using json = nlohmann::json;
 #include "proxysql.h"
 #include "cpp.h"
 #include "MySQL_Thread.h"
+#include "MySQL_Thread_test.h"
 #include <dirent.h>
 #include <libgen.h>
 #include "re2/re2.h"
@@ -225,6 +226,31 @@ __thread unsigned int __thread_MySQL_Thread_Variables_version;
 
 volatile static unsigned int __global_MySQL_Thread_Variables_version;
 
+#ifdef PROXYSQL40
+namespace {
+mysql_thread_test::listener_add_hook_t interface_listener_add_hook = nullptr;
+mysql_thread_test::commit_reject_hook_t interface_commit_reject_hook = nullptr;
+void* interface_test_hook_opaque = nullptr;
+}
+
+namespace mysql_thread_test {
+
+scoped_interface_hooks::scoped_interface_hooks(listener_add_hook_t listener_hook,
+	commit_reject_hook_t commit_hook, void* opaque) {
+	interface_test_hook_opaque = opaque;
+	interface_listener_add_hook = listener_hook;
+	interface_commit_reject_hook = commit_hook;
+}
+
+scoped_interface_hooks::~scoped_interface_hooks() {
+	interface_listener_add_hook = nullptr;
+	interface_commit_reject_hook = nullptr;
+	interface_test_hook_opaque = nullptr;
+}
+
+} // namespace mysql_thread_test
+#endif
+
 
 MySQL_Listeners_Manager::MySQL_Listeners_Manager() {
 	ifaces=new PtrArray();
@@ -346,6 +372,18 @@ int MySQL_Listeners_Manager::find_idx(const char *address, int port) {
 		}
 	}
 	return -1;
+}
+
+std::vector<std::string> MySQL_Listeners_Manager::registered_interfaces() {
+	std::vector<std::string> result;
+	result.reserve(ifaces->len);
+	for (unsigned int i = 0; i < ifaces->len; ++i) {
+		iface_info* info = static_cast<iface_info*>(ifaces->index(i));
+		if (std::find(result.begin(), result.end(), info->iface) == result.end()) {
+			result.emplace_back(info->iface);
+		}
+	}
+	return result;
 }
 
 int MySQL_Listeners_Manager::get_fd(unsigned int idx) {
@@ -1659,6 +1697,105 @@ int MySQL_Threads_Handler::listener_del(const char *iface) {
 	}
 	return 0;
 }
+
+#ifdef PROXYSQL40
+bool MySQL_Threads_Handler::apply_interfaces_under_lock(const char* value, std::string& error) {
+	if (value == nullptr) {
+		error = "mysql-interfaces cannot be null";
+		return false;
+	}
+	auto parse = [](const std::string& source) {
+		std::vector<std::string> values;
+		size_t start = 0;
+		while (start <= source.size()) {
+			const size_t end = source.find(';', start);
+			size_t first = start;
+			size_t last = end == std::string::npos ? source.size() : end;
+			while (first < last && std::isspace(static_cast<unsigned char>(source[first]))) ++first;
+			while (last > first && std::isspace(static_cast<unsigned char>(source[last - 1]))) --last;
+			if (last > first) values.emplace_back(source.substr(first, last - first));
+			if (end == std::string::npos) break;
+			start = end + 1;
+		}
+		return values;
+	};
+	auto contains = [](const std::vector<std::string>& values, const std::string& candidate) {
+		return std::find(values.begin(), values.end(), candidate) != values.end();
+	};
+	auto joined = [](const std::vector<std::string>& values) {
+		std::string result;
+		for (const std::string& item : values) {
+			if (!result.empty()) result += ';';
+			result += item;
+		}
+		return result;
+	};
+	auto replace_variable = [&](const std::vector<std::string>& actual) {
+		free(variables.interfaces);
+		variables.interfaces = strdup(joined(actual).c_str());
+	};
+	auto add_listener = [&](const std::string& iface) {
+		if (interface_listener_add_hook != nullptr &&
+			interface_listener_add_hook(interface_test_hook_opaque, iface.c_str())) return false;
+		return listener_add(iface.c_str()) >= 0;
+	};
+	auto same_set = [](std::vector<std::string> lhs, std::vector<std::string> rhs) {
+		std::sort(lhs.begin(), lhs.end());
+		std::sort(rhs.begin(), rhs.end());
+		return lhs == rhs;
+	};
+	auto restore_registry = [&](const std::vector<std::string>& desired, std::string& restore_error) {
+		std::vector<std::string> actual = MLM->registered_interfaces();
+		for (const std::string& iface : desired) {
+			if (contains(actual, iface)) continue;
+			if (!add_listener(iface)) {
+				if (!restore_error.empty()) restore_error += "; ";
+				restore_error += "cannot restore MySQL listener " + iface;
+			} else {
+				actual.push_back(iface);
+			}
+		}
+		actual = MLM->registered_interfaces();
+		for (const std::string& iface : actual) {
+			if (!contains(desired, iface)) listener_del(iface.c_str());
+		}
+		actual = MLM->registered_interfaces();
+		replace_variable(actual);
+		return same_set(actual, desired);
+	};
+
+	const std::vector<std::string> original_actual = MLM->registered_interfaces();
+	const std::vector<std::string> new_values = parse(value);
+	std::vector<std::string> added;
+	for (const std::string& iface : new_values) {
+		if (contains(original_actual, iface)) continue;
+		if (!add_listener(iface)) {
+			for (auto it = added.rbegin(); it != added.rend(); ++it) listener_del(it->c_str());
+			replace_variable(MLM->registered_interfaces());
+			error = "cannot add MySQL listener " + iface;
+			return false;
+		}
+		added.push_back(iface);
+	}
+	for (const std::string& iface : original_actual) {
+		if (contains(new_values, iface)) continue;
+		listener_del(iface.c_str());
+	}
+	replace_variable(new_values);
+	const auto committed = commit();
+	const bool injected_rejection = interface_commit_reject_hook != nullptr &&
+		interface_commit_reject_hook(interface_test_hook_opaque);
+	if (committed.rejected_variables.empty() && !injected_rejection) return true;
+
+	std::string restore_error;
+	const bool restored = restore_registry(original_actual, restore_error);
+	if (!restore_error.empty()) error = restore_error;
+	if (!error.empty()) error += "; ";
+	error += "MySQL threads rejected staged interfaces";
+	if (!restored) error += "; listener registry remains partially restored";
+	return false;
+}
+#endif
 
 void MySQL_Threads_Handler::wrlock() {
 	pthread_rwlock_wrlock(&rwlock);
@@ -5366,6 +5503,23 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 	}
 	c=accept(myds->fd, addr, &addrlen);
 	if (c>-1) { // accept() succeeded
+		iface_info *ifi=NULL;
+#ifdef PROXYSQL40
+		ifi=GloMTH->MLM_find_iface_from_fd(myds->fd);
+		if (ifi != nullptr) {
+			const auto gate = proxysql_plugin_listener_gate_close_if_closed(
+				ifi->address, static_cast<uint16_t>(ifi->port), c, monotonic_time());
+			if (gate) {
+				if (gate->should_warn) {
+					proxy_warning("Plugin listener %s:%u is not ready: %s\n",
+						ifi->address, ifi->port, gate->gate.reason.c_str());
+				}
+				mypolls.fds[n].revents=0;
+				free(addr);
+				return;
+			}
+		}
+#endif /* PROXYSQL40 */
 		if (mysql_thread___client_host_cache_size) {
 			MySQL_Client_Host_Cache_Entry client_host_entry =
 				GloMTH->find_client_host_cache(addr);
@@ -5417,7 +5571,6 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 				break;
 		}
 
-		iface_info *ifi=NULL;
 		ifi=GloMTH->MLM_find_iface_from_fd(myds->fd); // here we try to get the info about the proxy bind address
 		if (ifi) {
 			sess->client_myds->proxy_addr.addr=strdup(ifi->address);

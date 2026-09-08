@@ -169,6 +169,7 @@ class Base_HostGroups_Manager {
 	HGC * MyHGC_find(unsigned int);
 	HGC * MyHGC_lookup(unsigned int);
 	SQLite3_result * execute_query(char *query, char **error);
+	SQLite3_result * execute_query_under_lock(const char *query, char **error);
 #ifdef PROXYSQL31
 	HostgroupPoolStats * get_hostgroup_pool_stats(unsigned int hid);
 	SQLite3_result * SQL3_Hostgroup_Connection_Pool(bool reset);

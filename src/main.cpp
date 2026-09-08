@@ -43,6 +43,7 @@ using json = nlohmann::json;
 #include "Web_Interface.hpp"
 #ifdef PROXYSQL40
 #include "ProxySQL_PluginManager.h"
+#include "ProxySQL_PluginCLI.h"
 #endif /* PROXYSQL40 */
 #include "proxysql_utils.h"
 #include "PgSQL_Monitor.hpp"
@@ -89,7 +90,6 @@ extern "C" MySQL_LDAP_Authentication * create_MySQL_LDAP_Authentication_func() {
 using std::map;
 using std::string;
 using std::vector;
-
 
 void sleep_iter(unsigned int iter) {
 	static thread_local std::mt19937 jitter_rng(std::random_device{}());
@@ -746,7 +746,25 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 	GloVars.errorlog = NULL;
 	GloVars.pid = NULL;
 #ifdef PROXYSQL40
-	GloVars.plugin_modules.clear();
+	const ProxySQL_PluginDiscovery found = proxysql_prescan_plugins(
+		argc, argv, GloVars.config_file, PROXYSQL_DEFAULT_PLUGIN_DIR);
+	if (!found.error.empty()) {
+		proxy_error("Plugin pre-scan failed: %s\n", found.error.c_str());
+		exit(EXIT_FAILURE);
+	}
+	GloVars.no_plugins = found.disabled;
+	GloVars.plugin_modules = found.module_paths;
+	if (!found.disabled) {
+		std::string plugin_error {};
+		if (!proxysql_discover_configured_plugins(GloPluginManager, found.module_paths, plugin_error)) {
+			proxy_error("Plugin discovery failed: %s\n", plugin_error.c_str());
+			exit(EXIT_FAILURE);
+		}
+		if (!proxysql_register_configured_plugin_cli(GloPluginManager.get(), *GloVars.opt, plugin_error)) {
+			proxy_error("Plugin CLI option registration failed: %s\n", plugin_error.c_str());
+			exit(EXIT_FAILURE);
+		}
+	}
 #endif /* PROXYSQL40 */
 	GloVars.parse(argc,argv);
 	GloVars.process_opts_pre();
@@ -852,9 +870,7 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 				GloVars.ldap_auth_plugin=strdup(ldap_auth_plugin.c_str());
 			}
 		}
-#ifdef PROXYSQL40
-		proxysql_load_plugin_modules_from_config(root, GloVars.plugin_modules);
-#endif /* PROXYSQL40 */
+	#ifndef PROXYSQL40
 		const map<string, char**> varnames_globals_map {
 			{ "mysql-ssl_p2s_ca", &GloVars.global.gr_bootstrap_ssl_ca },
 			{ "mysql-ssl_p2s_capath", &GloVars.global.gr_bootstrap_ssl_capath },
@@ -879,6 +895,7 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 				}
 			}
 		}
+	#endif /* !PROXYSQL40 */
 	} else {
 		proxy_warning("Unable to open config file %s\n", GloVars.config_file); // issue #705
 		if (GloVars.__cmd_proxysql_config_file) {
@@ -1512,16 +1529,16 @@ static void LoadPlugins() {
 // Used to disable a misbehaving plugin without editing the config or
 // rolling back the proxysql package. See doc/plugin-chassis/REVIEW_GUIDE.md
 // for the rationale.
-static void LoadConfiguredPlugins() {
+static void RegisterConfiguredPluginSchemas() {
 	if (GloVars.no_plugins) {
 		proxy_info("Plugin chassis disabled by --no-plugins / PROXYSQL_NO_PLUGINS=1; "
-		           "skipping load of %zu configured plugin(s)\n",
+		           "skipping schema registration for %zu configured plugin(s)\n",
 		           GloVars.plugin_modules.size());
 		return;
 	}
 	std::string plugin_error {};
-	if (!proxysql_load_configured_plugins(GloPluginManager, GloVars.plugin_modules, plugin_error)) {
-		proxy_error("Plugin load/register_schemas failed: %s\n", plugin_error.c_str());
+	if (!proxysql_register_configured_plugin_schemas(GloPluginManager.get(), plugin_error)) {
+		proxy_error("Plugin schema registration failed: %s\n", plugin_error.c_str());
 		exit(EXIT_FAILURE);
 	}
 }
@@ -1535,12 +1552,36 @@ static void InitConfiguredPlugins() {
 	}
 }
 
+static ProxySQL_PluginEarlyActionResult RunConfiguredPluginEarlyActions() {
+	if (GloVars.no_plugins) return ProxySQL_PluginEarlyActionResult::not_requested;
+	ProxySQL_PluginParsedOptionContext parsed_options(*GloVars.opt);
+	const auto context = parsed_options.early_action_context(GloVars.config_file, GloVars.datadir);
+	std::string plugin_error {};
+	const auto result = proxysql_run_configured_plugin_early_actions(
+		GloPluginManager.get(), context, plugin_error);
+	if (result == ProxySQL_PluginEarlyActionResult::exit_failure) {
+		proxy_error("Plugin early action failed: %s\n", plugin_error.c_str());
+	}
+	return result;
+}
+
 static void StartConfiguredPlugins() {
 	if (GloVars.no_plugins) return;
 	std::string plugin_error {};
 	if (!proxysql_start_configured_plugins(GloPluginManager.get(), plugin_error)) {
 		proxy_error("Plugin start failed: %s\n", plugin_error.c_str());
 		exit(EXIT_FAILURE);
+	}
+}
+
+static void RunConfiguredPluginsRuntimeReady() {
+	if (GloVars.no_plugins) return;
+	ProxySQL_PluginRuntimeContext context { nullptr, monotonic_time() };
+	std::string plugin_error {};
+	if (!proxysql_runtime_ready_configured_plugins(
+		GloPluginManager.get(), context, plugin_error)) {
+		proxy_warning("Plugin runtime readiness degraded: %s; continuing listener startup\n",
+			plugin_error.c_str());
 	}
 }
 
@@ -1586,13 +1627,12 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	//              tables_defs_{admin,config,stats} and runs the DDL via
 	//              check_and_build_standard_tables, all on the same
 	//              first-boot/reload code path as the core tables.
-	//   Phase D:   init() with full services (live DB handles pointing at
-	//              a schema that already contains the plugin's own tables).
-	//   Phase E:   start() launches the plugin's threads / accept loops.
-	LoadConfiguredPlugins();
+	//   Phase D-F are deferred to phase 3, after Auth, HGM, QPro, and MTH
+	//   are initialized. This makes the documented full snapshot/publication
+	//   services genuinely live for early actions such as Router bootstrap,
+	//   while still running plugins before listener validation and startup.
+	RegisterConfiguredPluginSchemas();
 	ProxySQL_Main_init_Admin_module(boostrap_info);
-	InitConfiguredPlugins();
-	StartConfiguredPlugins();
 #else  /* !PROXYSQL40 */
 	// v3.0/v3.1 builds: no plugin loader.  Plain admin init only.
 	ProxySQL_Main_init_Admin_module(boostrap_info);
@@ -1710,6 +1750,21 @@ bool ProxySQL_Main_init_phase3___start_all() {
 	load_ = 0;
 	__sync_fetch_and_add(&GloMTH->status_variables.threads_initialized, 1);
 	__sync_fetch_and_add(&GloPTH->status_variables.threads_initialized, 1);
+#ifdef PROXYSQL40
+	// Router bootstrap publishes interfaces through the live worker listener
+	// path, so workers must run before early actions. The plugin manager remains
+	// reader-disabled until init/start complete; workers cannot observe the
+	// command/query-hook state while those callbacks mutate it.
+	const auto early_action_result = RunConfiguredPluginEarlyActions();
+	if (early_action_result == ProxySQL_PluginEarlyActionResult::exit_success) exit(EXIT_SUCCESS);
+	if (early_action_result == ProxySQL_PluginEarlyActionResult::exit_failure) exit(EXIT_FAILURE);
+	InitConfiguredPlugins();
+	StartConfiguredPlugins();
+
+	// Runtime-ready callbacks run only now: HGM, Auth, QPro, and MTH all
+	// exist, but no listener has yet been validated or started.
+	RunConfiguredPluginsRuntimeReady();
+#endif /* PROXYSQL40 */
 	{
 		char* admin_mysql_ifaces = GloAdmin->get_variable((char*)"mysql_ifaces");
 		char* admin_pgsql_ifaces = GloAdmin->get_variable((char*)"pgsql_ifaces");
@@ -2112,6 +2167,7 @@ namespace {
  *  + Optionally match a supplied (/).
  *  + Ensure match termination in HierPart group, forcing conditional subgroups matching.
  */
+#ifndef PROXYSQL40
 const char CONN_URI_REGEX[] {
 	"^(:?(?P<Scheme>[a-z][a-z0-9\\+\\-\\.]*):\\/\\/)?"
 	"(?P<HierPart>"
@@ -2442,6 +2498,7 @@ pair<int32_t,acct_creds_t> create_bootstrap_account(MYSQL* mysql, const string& 
 
 	return { myerr, { user, pass } };
 }
+#endif /* !PROXYSQL40 */
 
 
 /**
@@ -2855,6 +2912,7 @@ int main(int argc, const char * argv[]) {
 	}
 
 	bootstrap_info_t bootstrap_info {};
+#ifndef PROXYSQL40
 	// Try to connect to MySQL for performing the bootstrapping process:
 	//   - If data isn't found we perform the bootstrap process.
 	//   - If non-empty datadir is present, reconfiguration should be performed.
@@ -3134,6 +3192,7 @@ int main(int argc, const char * argv[]) {
 
 		mysql_close(mysql);
 	}
+#endif /* !PROXYSQL40 */
 
 	{
 		cpu_timer t;

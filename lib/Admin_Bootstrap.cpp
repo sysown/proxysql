@@ -40,6 +40,8 @@ using json = nlohmann::json;
 #include "MySQL_PreparedStatement.h"
 #ifdef PROXYSQL40
 #include "ProxySQL_PluginManager.h"
+#include "ProxySQL_PluginConfig.h"
+#include "ProxySQL_PluginSecrets.h"
 #endif /* PROXYSQL40 */
 #include "ProxySQL_Cluster.hpp"
 #include "ProxySQL_Statistics.hpp"
@@ -214,6 +216,7 @@ extern int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg);
 
 extern void * (*child_func[3]) (void *arg);
 
+#ifndef PROXYSQL40
 bootstrap_info_t::~bootstrap_info_t() {
 	if (servers != nullptr) {
 		mysql_free_result(servers);
@@ -222,6 +225,7 @@ bootstrap_info_t::~bootstrap_info_t() {
 		mysql_free_result(users);
 	}
 }
+#endif /* !PROXYSQL40 */
 
 #include "Admin_ifaces.h"
 extern admin_main_loop_listeners S_amll;
@@ -232,6 +236,7 @@ static void flush_logs_handler() {
 
 extern void * admin_main_loop(void *arg);
 
+#ifndef PROXYSQL40
 struct boot_srv_info_t {
 	string member_id;
 	string member_host;
@@ -555,6 +560,7 @@ int check_if_user_config(SQLite3DB* admindb, const char* query) {
  *   executions.
  */
 #define ADMIN_SQLITE_TABLE_BOOTSTRAP_VARIABLES "CREATE TABLE IF NOT EXISTS bootstrap_variables (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
+#endif /* !PROXYSQL40 */
 
 
 extern void *child_mysql(void *arg);
@@ -581,7 +587,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	child_func[0]=child_mysql;
 	child_func[1]=child_telnet;
 	child_func[2]=child_postgres;
-	main_shutdown=0;
+	__atomic_store_n(&main_shutdown, 0, __ATOMIC_RELEASE);
 	main_poll_nfds=0;
 	main_poll_fds=NULL;
 	main_callback_func=NULL;
@@ -823,6 +829,12 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_query_rules", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_query_rules_fast_routing", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QUERY_RULES_FAST_ROUTING);
 	insert_into_tables_defs(tables_defs_admin,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
+#ifdef PROXYSQL40
+	insert_into_tables_defs(tables_defs_admin, "proxysql_plugin_owned_objects",
+		PROXYSQL_PLUGIN_OWNED_OBJECTS_DDL);
+	insert_into_tables_defs(tables_defs_admin, "proxysql_plugin_config_generations",
+		PROXYSQL_PLUGIN_CONFIG_GENERATIONS_DDL);
+#endif
 	insert_into_tables_defs(tables_defs_admin,"runtime_global_variables", ADMIN_SQLITE_RUNTIME_GLOBAL_VARIABLES);
 	insert_into_tables_defs(tables_defs_admin,"mysql_collations", ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS);
 	insert_into_tables_defs(tables_defs_admin,"ssl_ciphers", ADMIN_SQLITE_TABLE_SSL_CIPHERS);
@@ -905,6 +917,12 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_config,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_config,"mysql_query_rules_fast_routing", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_FAST_ROUTING);
 	insert_into_tables_defs(tables_defs_config,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
+#ifdef PROXYSQL40
+	insert_into_tables_defs(tables_defs_config, "proxysql_plugin_owned_objects",
+		PROXYSQL_PLUGIN_OWNED_OBJECTS_DDL);
+	insert_into_tables_defs(tables_defs_config, "proxysql_plugin_config_generations",
+		PROXYSQL_PLUGIN_CONFIG_GENERATIONS_DDL);
+#endif
 	insert_into_tables_defs(tables_defs_config,"global_settings", ADMIN_SQLITE_TABLE_GLOBAL_SETTINGS);
 	// the table is not required to be present on disk. Removing it due to #1055
 	insert_into_tables_defs(tables_defs_config,"mysql_collations", ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS);
@@ -913,6 +931,13 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_config,"mysql_firewall_whitelist_rules", ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_RULES);
 	insert_into_tables_defs(tables_defs_config,"mysql_firewall_whitelist_sqli_fingerprints", ADMIN_SQLITE_TABLE_MYSQL_FIREWALL_WHITELIST_SQLI_FINGERPRINTS);
 	insert_into_tables_defs(tables_defs_config, "restapi_routes", ADMIN_SQLITE_TABLE_RESTAPI_ROUTES);
+#ifdef PROXYSQL40
+	// Core-owned encrypted plugin secrets must exist before Phase D exposes
+	// live secret services.  This uses the same configdb definition path as
+	// every other persistent Admin table, not a plugin-provided schema.
+	insert_into_tables_defs(tables_defs_config, "proxysql_plugin_secrets",
+		proxysql_plugin_secrets_table_definition());
+#endif /* PROXYSQL40 */
 #ifdef DEBUG
 	insert_into_tables_defs(tables_defs_config,"debug_levels", ADMIN_SQLITE_TABLE_DEBUG_LEVELS);
 	insert_into_tables_defs(tables_defs_config,"debug_filters", ADMIN_SQLITE_TABLE_DEBUG_FILTERS);
@@ -1041,11 +1066,20 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	// upgrade pgsql_replication_hostgroups if needed (upgrade from previous version)
 	disk_upgrade_pgsql_replication_hostgroups();
 
-	check_and_build_standard_tables(admindb, tables_defs_admin);
-	check_and_build_standard_tables(configdb, tables_defs_config);
-	check_and_build_standard_tables(statsdb, tables_defs_stats);
+	if (!check_and_build_standard_tables(admindb, tables_defs_admin) ||
+		!check_and_build_standard_tables(configdb, tables_defs_config) ||
+		!check_and_build_standard_tables(statsdb, tables_defs_stats)) {
+		proxy_error("Failed to materialize Admin database schemas\n");
+		return false;
+	}
 
 	__attach_db(admindb, configdb, (char *)"disk");
+#ifdef PROXYSQL40
+	if (!restore_plugin_config_runtime_state()) {
+		proxy_error("Failed to restore persistent plugin ownership state\n");
+		return false;
+	}
+#endif
 	__attach_db(admindb, statsdb, (char *)"stats");
 	__attach_db(admindb, monitordb, (char *)"monitor");
 	__attach_db(statsdb, monitordb, (char *)"monitor");
@@ -1152,6 +1186,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 		proxy_info("NOTE: Changes to %s will be ignored while the config DB exists. For more information, refer: https://proxysql.com/documentation/configuring-proxysql\n", GloVars.config_file);
 	}
 
+	#ifndef PROXYSQL40
 	/**
 	 * @brief Inserts a default 'mysql_group_replication_hostgroup'.
 	 * @details Uses the following defaults:
@@ -1249,8 +1284,10 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 		// TODO-NOTE: This MUST go away; 'admin-hash_passwords' will be deprecated
 		admindb->execute("UPDATE global_variables SET variable_value='false' WHERE variable_name='admin-hash_passwords'");
 	}
+	#endif /* !PROXYSQL40 */
 	flush_admin_variables___database_to_runtime(admindb,true);
 
+	#ifndef PROXYSQL40
 	if (GloVars.global.gr_bootstrap_mode) {
 		flush_admin_variables___runtime_to_database(configdb, false, true, false);
 	}
@@ -1344,10 +1381,13 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 			configdb->execute(insert_bootstrap_pass.c_str());
 		}
 	}
+	#endif /* !PROXYSQL40 */
 	flush_mysql_variables___database_to_runtime(admindb,true);
+	#ifndef PROXYSQL40
 	if (GloVars.global.gr_bootstrap_mode) {
 		flush_mysql_variables___runtime_to_database(configdb, false, true, false);
 	}
+	#endif /* !PROXYSQL40 */
 	flush_pgsql_variables___database_to_runtime(admindb, true);
 #ifdef PROXYSQLCLICKHOUSE
 	flush_clickhouse_variables___database_to_runtime(admindb,true);
