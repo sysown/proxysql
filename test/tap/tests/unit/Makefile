@@ -600,6 +600,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	ffto_state_machine_unit-t \
 	pgsql_reconcile_unit-t \
 	pgsql_conninfo_credentials_unit-t \
+	pgsql_backend_tls_handover_unit-t \
 	re2_vendor_unit-t \
 	restapi_server_unit-t \
 	mcp_client_unit-t
@@ -736,6 +737,11 @@ hostgroup_pool_stats_unit-t: hostgroup_pool_stats_unit-t.cpp $(ODIR)/tap.o $(ODI
 mcp_client_unit-t: mcp_client_unit-t.cpp $(TAP_PATH)/mcp_client.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
 	$(CXX) $< $(TAP_PATH)/mcp_client.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
 		$(IDIRS) $(LDIRS) $(OPT) $(MCP_CLIENT_LIBS) -o $@
+
+pgsql_backend_tls_handover_unit-t: pgsql_backend_tls_handover_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) -I$(ABSL_IDIR) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) \
+		$(ALLOW_MULTI_DEF) -o $@
 
 re2_vendor_unit-t: re2_vendor_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
 	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) -I$(ABSL_IDIR) $(LDIRS) $(OPT) \
