@@ -6516,22 +6516,9 @@ bool PgSQL_Session::switch_normal_to_fast_forward_mode(PtrSize_t& pkt, std::stri
 	PgSQL_Connection* myconn = myds->myconn;
 	assert(myconn != NULL);
 
-	// if backend connection uses SSL we will set
-	// encrypted = true and we will start using the SSL structure
-	// directly from PGconn SSL structure.
-	if (myconn->is_connected() && myconn->get_pg_ssl_in_use()) {
-		SSL* ssl_obj = myconn->get_pg_ssl_object();
-		if (ssl_obj != NULL) {
-			myds->encrypted = true;
-			myds->ssl = ssl_obj;
-			myds->rbio_ssl = BIO_new(BIO_s_mem());
-			myds->wbio_ssl = BIO_new(BIO_s_mem());
-			SSL_set_bio(myds->ssl, myds->rbio_ssl, myds->wbio_ssl);
-		} else {
-			// it means that ProxySQL tried to use SSL to connect to the backend
-			// but the backend didn't support SSL		
-		}
-	}
+	// A COPY relays raw bytes, so this stream needs the backend's TLS.
+	// switch_fast_forward_to_normal_mode() gives it back.
+	myds->adopt_backend_tls();
 	set_status(FAST_FORWARD); // we can set status to FAST_FORWARD
 
 	mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
@@ -6561,10 +6548,9 @@ void PgSQL_Session::switch_fast_forward_to_normal_mode() {
 		session_fast_forward = SESSION_FORWARD_TYPE_NONE;
 		PgSQL_Data_Stream* myds = mybe->server_myds;
 		PgSQL_Connection* myconn = myds->myconn;
-		if (myds->encrypted == true) {
-			myds->encrypted = false;
-			myds->ssl = NULL;
-		}
+		// Give the borrowed TLS back before the session uses the connection again or
+		// it is pooled, or the next query on it never reaches the backend.
+		myds->release_backend_tls();
 		RequestEnd(myds, false);
 		finishQuery(myds, myconn, false);
 	} else {

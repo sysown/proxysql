@@ -269,6 +269,7 @@ PgSQL_Data_Stream::PgSQL_Data_Stream() {
 	ssl = NULL;
 	rbio_ssl = NULL;
 	wbio_ssl = NULL;
+	backend_tls_adopted = false;
 	ssl_write_len = 0;
 	ssl_write_buf = NULL;
 	net_failure = false;
@@ -1175,6 +1176,98 @@ int PgSQL_Data_Stream::array2buffer_full() {
 	int r = 0;
 	while ((r = array2buffer())) rc += r;
 	return rc;
+}
+
+// Borrow the backend's TLS so this stream can relay raw bytes during fast
+// forward. Its transport is displaced by memory buffers because this side does
+// its own recv() and send(). release_backend_tls() puts it back.
+void PgSQL_Data_Stream::adopt_backend_tls() {
+	if (myconn == NULL || ssl != NULL) return;
+	if (myconn->is_connected() == false || myconn->get_pg_ssl_in_use() == 0) return;
+	if (myconn->saved_backend_rbio != NULL || myconn->saved_backend_wbio != NULL) {
+		// A previous borrower never gave it back. Overwriting would lose it, so
+		// refuse and make sure the connection is destroyed rather than pooled.
+		proxy_error("Backend TLS transport was never released by a previous relay. Not reusing this connection. Session=%p, DataStream=%p\n", (void*)sess, (void*)this);
+		myconn->healthy = false;
+		myconn->reusable = false;
+		return;
+	}
+	SSL* ssl_obj = myconn->get_pg_ssl_object();
+	if (ssl_obj == NULL) {
+		// Relaying without an SSL object would put plaintext on an encrypted
+		// socket, so refuse and drop the connection.
+		proxy_error("Backend reports TLS in use but exposes no SSL object. Not relaying. Session=%p, DataStream=%p\n", (void*)sess, (void*)this);
+		myconn->healthy = false;
+		myconn->reusable = false;
+		return;
+	}
+	encrypted = true;
+	ssl = ssl_obj;
+	backend_tls_adopted = true;
+	// libpq's BIO carries the PGconn as app data and cannot be rebuilt from out
+	// here, so hold a reference: SSL_set_bio() frees whatever it replaces.
+	myconn->saved_backend_rbio = SSL_get_rbio(ssl);
+	myconn->saved_backend_wbio = SSL_get_wbio(ssl);
+	if (myconn->saved_backend_rbio) BIO_up_ref(myconn->saved_backend_rbio);
+	if (myconn->saved_backend_wbio && myconn->saved_backend_wbio != myconn->saved_backend_rbio) {
+		BIO_up_ref(myconn->saved_backend_wbio);
+	}
+	rbio_ssl = BIO_new(BIO_s_mem());
+	wbio_ssl = BIO_new(BIO_s_mem());
+	SSL_set_bio(ssl, rbio_ssl, wbio_ssl);
+}
+
+// Undo adopt_backend_tls(), while the connection is still attached. Without it
+// libpq keeps writing into our buffers and the next query never reaches the
+// backend, in this session or in whichever one gets the connection next.
+void PgSQL_Data_Stream::release_backend_tls() {
+	if (backend_tls_adopted == false) return; // nothing was borrowed here
+	if (myconn == NULL || ssl == NULL || myconn->saved_backend_rbio == NULL) {
+		// Cannot hand it back. Clear our side anyway: leaving 'encrypted' set would
+		// make ~PgSQL_Data_Stream() SSL_free() the connection's own SSL, which libpq
+		// frees again at PQfinish(). The connection keeps the saved reference, and
+		// is destroyed rather than pooled.
+		proxy_error("Cannot restore the backend TLS transport. Session=%p, DataStream=%p\n", (void*)sess, (void*)this);
+		if (myconn) { myconn->healthy = false; myconn->reusable = false; }
+		rbio_ssl = NULL;
+		wbio_ssl = NULL;
+		ssl = NULL;
+		encrypted = false;
+		backend_tls_adopted = false;
+		return;
+	}
+	// Buffered ciphertext that never reaches its peer leaves the TLS stream out
+	// of step, so report it and destroy the connection instead of pooling it.
+	const int unread = (rbio_ssl ? BIO_pending(rbio_ssl) : 0);
+	const int unsent = (wbio_ssl ? BIO_pending(wbio_ssl) : 0);
+	const unsigned long stranded = (unsigned long)(unsent > 0 ? unsent : 0) + (unsigned long)ssl_write_len;
+	if (unread > 0 || stranded) {
+		const PgSQL_SrvC* srv = myconn->parent;
+		proxy_warning("Dropping %d unread and %lu unsent bytes of backend TLS data leaving fast forward mode; not reusing this connection. hostgroup=%d backend=%s:%d Session=%p\n",
+			(unread > 0 ? unread : 0), stranded,
+			((srv && srv->myhgc) ? (int)srv->myhgc->hid : -1),
+			((srv && srv->address) ? srv->address : "?"),
+			(srv ? srv->port : 0), (void*)sess);
+		myconn->healthy = false;
+		myconn->reusable = false;
+	}
+	// Frees the memory pair and takes back the reference held since adopt.
+	SSL_set_bio(ssl, myconn->saved_backend_rbio,
+		(myconn->saved_backend_wbio ? myconn->saved_backend_wbio : myconn->saved_backend_rbio));
+	myconn->saved_backend_rbio = NULL;
+	myconn->saved_backend_wbio = NULL;
+	// Ciphertext a partial write left behind belongs to the connection we are
+	// giving up; it must not leak into whatever this stream is used for next.
+	if (ssl_write_buf) {
+		free(ssl_write_buf);
+		ssl_write_buf = NULL;
+	}
+	ssl_write_len = 0;
+	rbio_ssl = NULL;
+	wbio_ssl = NULL;
+	ssl = NULL;
+	encrypted = false;
+	backend_tls_adopted = false;
 }
 
 int PgSQL_Data_Stream::assign_fd_from_pgsql_conn() {

@@ -125,6 +125,9 @@ public:
 	SSL* ssl;
 	BIO* rbio_ssl;
 	BIO* wbio_ssl;
+	// True when the ssl and BIO fields were borrowed from the connection, not
+	// created here. A client stream owns its own TLS and must never be cleared.
+	bool backend_tls_adopted;
 	char* ssl_write_buf;
 	size_t ssl_write_len;
 	struct sockaddr* client_addr;
@@ -206,6 +209,10 @@ public:
 	static void copy_buffer_to_resultset(PtrSizeArray* resultset, unsigned char* ptr, uint64_t size, 
 		char current_transaction_state);
 
+	// Borrow the backend's TLS for a fast forward relay, and hand it back.
+	void adopt_backend_tls();
+	void release_backend_tls();
+
 	// safe way to attach a PgSQL Connection
 	void attach_connection(PgSQL_Connection* mc) {
 		statuses.pgconnpoll_get++;
@@ -219,24 +226,7 @@ public:
 		// we have a similar code in MySQL_Connection
 		// in case of ASYNC_CONNECT_SUCCESSFUL
 		if (sess != NULL && sess->session_fast_forward) {
-			// if frontend and backend connection use SSL we will set
-			// encrypted = true and we will start using the SSL structure
-			// directly from PGconn SSL structure.
-			//
-			// For futher details:
-			// - without ssl: we use the file descriptor from pgsql connection
-			// - with ssl: we use the SSL structure from pgsql connection
-			if (myconn->is_connected() && myconn->get_pg_ssl_in_use()) {
-				if (ssl == NULL) {
-					encrypted = true;
-					SSL* ssl_obj = myconn->get_pg_ssl_object();
-					if (ssl_obj == NULL) assert(0); // Should not be null
-					ssl = ssl_obj;
-					rbio_ssl = BIO_new(BIO_s_mem());
-					wbio_ssl = BIO_new(BIO_s_mem());
-					SSL_set_bio(ssl, rbio_ssl, wbio_ssl);
-				}
-			}
+			adopt_backend_tls();
 		}
 	}
 
@@ -245,17 +235,11 @@ public:
 		assert(myconn);
 		myconn->statuses.pgconnpoll_put++;
 		statuses.pgconnpoll_put++;
+		// Give the TLS back while we still hold the connection, fast forward flag or
+		// not: a COPY clears that flag before the connection is pooled.
+		release_backend_tls();
 		myconn->myds = NULL;
 		myconn = NULL;
-		if (encrypted == true) {
-			if (sess != NULL && sess->session_fast_forward) {
-				// it seems we are a connection with SSL on a fast_forward session.
-				// See attach_connection() for more details .
-				// We now disable SSL metadata from the Data Stream
-				encrypted = false;
-				ssl = NULL;
-			}
-		}
 	}
 
 	void return_MySQL_Connection_To_Pool();

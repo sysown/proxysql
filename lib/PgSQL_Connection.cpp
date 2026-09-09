@@ -217,6 +217,16 @@ PgSQL_Connection::~PgSQL_Connection() {
 		delete local_stmts;
 		local_stmts = NULL;
 	}
+	// Still held here means a relay went away without releasing it. Drop it so it
+	// cannot outlive the connection.
+	if (saved_backend_wbio && saved_backend_wbio != saved_backend_rbio) {
+		BIO_free_all(saved_backend_wbio);
+	}
+	if (saved_backend_rbio) {
+		BIO_free_all(saved_backend_rbio);
+	}
+	saved_backend_rbio = NULL;
+	saved_backend_wbio = NULL;
 	if (pgsql_conn) {
 		if (is_connected())  
 			__sync_fetch_and_sub(&PgHGM->status.server_connections_connected, 1);
@@ -365,18 +375,7 @@ handler_again:
 		if (get_pg_ssl_in_use()) {
 			if (myds && myds->sess && myds->sess->session_fast_forward) {
 				assert(myds->ssl == NULL);
-				SSL* ssl_obj = get_pg_ssl_object();
-				if (ssl_obj != NULL) {
-					myds->encrypted = true;
-					myds->ssl = ssl_obj;
-					myds->rbio_ssl = BIO_new(BIO_s_mem());
-					myds->wbio_ssl = BIO_new(BIO_s_mem());
-					SSL_set_bio(myds->ssl, myds->rbio_ssl, myds->wbio_ssl);
-				}
-				else {
-					// it means that ProxySQL tried to use SSL to connect to the backend
-					// but the backend didn't support SSL				
-				}
+				myds->adopt_backend_tls();
 			}
 		}
 		__sync_fetch_and_add(&PgHGM->status.server_connections_connected, 1);
