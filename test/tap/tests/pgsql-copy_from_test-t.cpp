@@ -977,6 +977,19 @@ static const int TLS_BACKEND_TESTS = 7;
 
 struct TlsSrvRow { std::string hostname, port, max_connections, comment; };
 
+// Admin takes no bound parameters, so quote by doubling. A hostname or comment
+// holding an apostrophe would otherwise build a broken INSERT and leave
+// hostgroup 0 empty after the DELETE.
+static std::string tlsQuote(const std::string& v) {
+    std::string out("'");
+    for (char c : v) {
+        if (c == '\'') out += '\'';
+        out += c;
+    }
+    out += '\'';
+    return out;
+}
+
 static std::string tlsQueryOneValue(PGconn* c, const std::string& q) {
     PGresult* res = PQexec(c, q.c_str());
     std::string out;
@@ -1032,15 +1045,18 @@ static std::vector<TlsSrvRow> tlsReadServers(PGconn* admin) {
 }
 
 // Deleting the servers drops the pool, so the next query opens a fresh
-// connection under the use_ssl setting we want.
+// connection under the use_ssl setting we want. Updating the row in place does
+// not: the pooled connection survives and every assertion below would run over
+// plaintext. Only the columns this test needs are carried across; the harness
+// reloads the whole config from disk before every test, so the rest cannot leak.
 static bool tlsReloadServers(PGconn* admin, const std::vector<TlsSrvRow>& rows, int use_ssl) {
     if (rows.empty()) return false;
     std::vector<std::string> q { "DELETE FROM pgsql_servers WHERE hostgroup_id=0", "LOAD PGSQL SERVERS TO RUNTIME" };
     for (const auto& r : rows) {
         q.push_back("INSERT INTO pgsql_servers (hostgroup_id,hostname,port,max_connections,use_ssl,comment)"
-            " VALUES (0,'" + r.hostname + "'," + r.port + ","
+            " VALUES (0," + tlsQuote(r.hostname) + "," + r.port + ","
             + (r.max_connections.empty() ? std::string("1000") : r.max_connections) + ","
-            + std::to_string(use_ssl) + ",'" + r.comment + "')");
+            + std::to_string(use_ssl) + "," + tlsQuote(r.comment) + ")");
     }
     q.push_back("LOAD PGSQL SERVERS TO RUNTIME");
     if (!executeQueries(admin, q)) return false;
@@ -1176,7 +1192,11 @@ void testCopyOverTlsBackend() {
         PGConnPtr conn = createNewConnection(ConnType::BACKEND, false);
         if (conn) executeQueries(conn.get(), { "DROP TABLE IF EXISTS " + tbl });
     }
-    tlsReloadServers(admin.get(), saved, 0);
+    // Only to leave the pool usable for anything after this; the harness reloads
+    // the config from disk before the next test, so exact fidelity is not needed.
+    if (!tlsReloadServers(admin.get(), saved, 0)) {
+        diag("WARNING: could not restore the original pgsql_servers rows for hostgroup 0");
+    }
     diag(">>>> Done <<<<");
 }
 

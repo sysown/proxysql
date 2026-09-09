@@ -6491,6 +6491,17 @@ bool PgSQL_Session::switch_normal_to_fast_forward_mode(PtrSize_t& pkt, std::stri
 		return false;
 	}
 
+	// A COPY relays raw bytes, so this stream needs the backend's TLS.
+	// switch_fast_forward_to_normal_mode() gives it back. Borrow it before any
+	// state is committed, so a refusal leaves the session in normal mode instead
+	// of relaying plaintext on an encrypted socket.
+	assert(mybe->server_myds->myconn != NULL);
+	if (mybe->server_myds->adopt_backend_tls() == false) {
+		proxy_error("Cannot switch to fast forward mode: the backend TLS transport could not be borrowed. Command: %.*s\n",
+			(int)command.size(), command.data());
+		return false;
+	}
+
 	// we use a switch to write the command in the info message
 	std::string client_info;
 	// we add the client details in the info message
@@ -6512,13 +6523,6 @@ bool PgSQL_Session::switch_normal_to_fast_forward_mode(PtrSize_t& pkt, std::stri
 	mybe->server_myds->DSS = STATE_READY;
 	// myds needs to have encrypted value set correctly
 		
-	PgSQL_Data_Stream* myds = mybe->server_myds;
-	PgSQL_Connection* myconn = myds->myconn;
-	assert(myconn != NULL);
-
-	// A COPY relays raw bytes, so this stream needs the backend's TLS.
-	// switch_fast_forward_to_normal_mode() gives it back.
-	myds->adopt_backend_tls();
 	set_status(FAST_FORWARD); // we can set status to FAST_FORWARD
 
 	mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);

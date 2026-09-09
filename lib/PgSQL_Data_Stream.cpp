@@ -1181,16 +1181,17 @@ int PgSQL_Data_Stream::array2buffer_full() {
 // Borrow the backend's TLS so this stream can relay raw bytes during fast
 // forward. Its transport is displaced by memory buffers because this side does
 // its own recv() and send(). release_backend_tls() puts it back.
-void PgSQL_Data_Stream::adopt_backend_tls() {
-	if (myconn == NULL || ssl != NULL) return;
-	if (myconn->is_connected() == false || myconn->get_pg_ssl_in_use() == 0) return;
+bool PgSQL_Data_Stream::adopt_backend_tls() {
+	// Nothing to borrow is not a failure: a plaintext backend relays as it is.
+	if (myconn == NULL || ssl != NULL) return true;
+	if (myconn->is_connected() == false || myconn->get_pg_ssl_in_use() == 0) return true;
 	if (myconn->saved_backend_rbio != NULL || myconn->saved_backend_wbio != NULL) {
 		// A previous borrower never gave it back. Overwriting would lose it, so
 		// refuse and make sure the connection is destroyed rather than pooled.
 		proxy_error("Backend TLS transport was never released by a previous relay. Not reusing this connection. Session=%p, DataStream=%p\n", (void*)sess, (void*)this);
 		myconn->healthy = false;
 		myconn->reusable = false;
-		return;
+		return false;
 	}
 	SSL* ssl_obj = myconn->get_pg_ssl_object();
 	if (ssl_obj == NULL) {
@@ -1199,7 +1200,7 @@ void PgSQL_Data_Stream::adopt_backend_tls() {
 		proxy_error("Backend reports TLS in use but exposes no SSL object. Not relaying. Session=%p, DataStream=%p\n", (void*)sess, (void*)this);
 		myconn->healthy = false;
 		myconn->reusable = false;
-		return;
+		return false;
 	}
 	encrypted = true;
 	ssl = ssl_obj;
@@ -1214,7 +1215,29 @@ void PgSQL_Data_Stream::adopt_backend_tls() {
 	}
 	rbio_ssl = BIO_new(BIO_s_mem());
 	wbio_ssl = BIO_new(BIO_s_mem());
+	if (rbio_ssl == NULL || wbio_ssl == NULL) {
+		// Installing a half-built pair would leave the relay without a transport.
+		// Give the saved references back and refuse, so nothing is left displaced.
+		proxy_error("Cannot allocate the memory BIOs for a fast forward relay. Session=%p, DataStream=%p\n", (void*)sess, (void*)this);
+		if (rbio_ssl) BIO_free(rbio_ssl);
+		if (wbio_ssl) BIO_free(wbio_ssl);
+		rbio_ssl = NULL;
+		wbio_ssl = NULL;
+		if (myconn->saved_backend_wbio && myconn->saved_backend_wbio != myconn->saved_backend_rbio) {
+			BIO_free(myconn->saved_backend_wbio);
+		}
+		if (myconn->saved_backend_rbio) BIO_free(myconn->saved_backend_rbio);
+		myconn->saved_backend_rbio = NULL;
+		myconn->saved_backend_wbio = NULL;
+		ssl = NULL;
+		encrypted = false;
+		backend_tls_adopted = false;
+		myconn->healthy = false;
+		myconn->reusable = false;
+		return false;
+	}
 	SSL_set_bio(ssl, rbio_ssl, wbio_ssl);
+	return true;
 }
 
 // Undo adopt_backend_tls(), while the connection is still attached. Without it

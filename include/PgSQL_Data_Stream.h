@@ -210,7 +210,10 @@ public:
 		char current_transaction_state);
 
 	// Borrow the backend's TLS for a fast forward relay, and hand it back.
-	void adopt_backend_tls();
+	// adopt returns false only when the backend is encrypted but its TLS could
+	// not be borrowed. Relaying then would put plaintext on an encrypted socket,
+	// so every caller must give up instead of carrying on.
+	bool adopt_backend_tls();
 	void release_backend_tls();
 
 	// safe way to attach a PgSQL Connection
@@ -226,7 +229,9 @@ public:
 		// we have a similar code in MySQL_Connection
 		// in case of ASYNC_CONNECT_SUCCESSFUL
 		if (sess != NULL && sess->session_fast_forward) {
-			adopt_backend_tls();
+			// Relaying without the backend's TLS would put plaintext on an encrypted
+			// socket. Close the session instead; the connection is already flagged.
+			if (adopt_backend_tls() == false) sess->set_unhealthy();
 		}
 	}
 
