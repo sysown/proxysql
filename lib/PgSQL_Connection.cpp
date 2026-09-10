@@ -230,6 +230,18 @@ PgSQL_Connection::~PgSQL_Connection() {
 		delete local_stmts;
 		local_stmts = NULL;
 	}
+	// Still held here means a relay went away without releasing it. Drop it so it
+	// cannot outlive the connection.
+	// BIO_free, not BIO_free_all: this is the reference adopt_backend_tls() took
+	// with BIO_up_ref, and the chain behind it belongs to libpq.
+	if (saved_backend_wbio && saved_backend_wbio != saved_backend_rbio) {
+		BIO_free(saved_backend_wbio);
+	}
+	if (saved_backend_rbio) {
+		BIO_free(saved_backend_rbio);
+	}
+	saved_backend_rbio = NULL;
+	saved_backend_wbio = NULL;
 	if (pgsql_conn) {
 		if (is_connected())
 			__sync_fetch_and_sub(&PgHGM->status.server_connections_connected, 1);
@@ -441,7 +453,13 @@ handler_again:
 			}
 			if (myds && myds->sess && myds->sess->session_fast_forward) {
 				assert(myds->ssl == NULL);
-				myds->adopt_backend_tls();
+				if (myds->adopt_backend_tls() == false) {
+					// This connection would relay in the clear, so fail the connect
+					// rather than hand it to the session. The gauge is incremented
+					// first because the destructor decrements it for any live PGconn.
+					__sync_fetch_and_add(&PgHGM->status.server_connections_connected, 1);
+					NEXT_IMMEDIATE(ASYNC_CONNECT_FAILED);
+				}
 			}
 		}
 		__sync_fetch_and_add(&PgHGM->status.server_connections_connected, 1);

@@ -150,6 +150,7 @@ class ProxySQL_GlobalVariables {
 		bool clickhouse_server;
 #endif /* PROXYSQLCLICKHOUSE */
 
+	#ifndef PROXYSQL40
 		int gr_bootstrap_mode;
 		char* gr_bootstrap_uri;
 		char* gr_bootstrap_account;
@@ -168,6 +169,7 @@ class ProxySQL_GlobalVariables {
 		char* gr_bootstrap_ssl_crlpath;
 		char* gr_bootstrap_ssl_key;
 		char* gr_bootstrap_ssl_mode;
+	#endif /* !PROXYSQL40 */
 		pthread_mutex_t ext_glomth_mutex;
 		pthread_mutex_t ext_glopth_mutex;
 		bool ssl_keylog_enabled;

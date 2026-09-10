@@ -125,6 +125,9 @@ public:
 	SSL* ssl;
 	BIO* rbio_ssl;
 	BIO* wbio_ssl;
+	// True when the ssl and BIO fields were borrowed from the connection, not
+	// created here. A client stream owns its own TLS and must never be cleared.
+	bool backend_tls_adopted;
 	char* ssl_write_buf;
 	size_t ssl_write_len;
 	struct sockaddr* client_addr;
@@ -206,39 +209,12 @@ public:
 	static void copy_buffer_to_resultset(PtrSizeArray* resultset, unsigned char* ptr, uint64_t size, 
 		char current_transaction_state);
 
-	// Take over the backend's TLS session so fast_forward can relay encrypted
-	// bytes through this data stream.
-	//
-	// The native path already has an SSL with two memory BIOs attached, and the
-	// connection keeps reading and writing through those same pointers. Handing
-	// it a fresh pair here would make OpenSSL free the ones it still uses, and
-	// the next query on that connection would touch freed memory. libpq keeps
-	// its BIOs to itself, so that path still needs a pair of its own.
-	void adopt_backend_tls() {
-		if (myconn == NULL || ssl != NULL) return;
-		if (myconn->is_connected() == false || myconn->get_pg_ssl_in_use() == 0) return;
-		SSL* ssl_obj = myconn->get_pg_ssl_object();
-		if (ssl_obj == NULL) {
-			// ProxySQL tried to use SSL to connect to the backend but the
-			// backend didn't support SSL
-			return;
-		}
-		encrypted = true;
-		ssl = ssl_obj;
-		if (myconn->native_mode) {
-			// The BIOs are created with the SSL and cleared with it, so a native
-			// connection reporting SSL in use always has them. Assert instead of
-			// tolerating a null: carrying on without them would send plaintext
-			// into an encrypted socket, which fails far away from here.
-			assert(myconn->native_rbio != NULL && myconn->native_wbio != NULL);
-			rbio_ssl = myconn->native_rbio;
-			wbio_ssl = myconn->native_wbio;
-		} else {
-			rbio_ssl = BIO_new(BIO_s_mem());
-			wbio_ssl = BIO_new(BIO_s_mem());
-			SSL_set_bio(ssl, rbio_ssl, wbio_ssl);
-		}
-	}
+	// Borrow the backend's TLS for a fast forward relay, and hand it back.
+	// adopt returns false only when the backend is encrypted but its TLS could
+	// not be borrowed. Relaying then would put plaintext on an encrypted socket,
+	// so every caller must give up instead of carrying on.
+	bool adopt_backend_tls();
+	void release_backend_tls();
 
 	// safe way to attach a PgSQL Connection
 	void attach_connection(PgSQL_Connection* mc) {
@@ -257,7 +233,9 @@ public:
 		// - without ssl: we use the file descriptor from pgsql connection
 		// - with ssl: we use the SSL structure from pgsql connection
 		if (sess != NULL && sess->session_fast_forward) {
-			adopt_backend_tls();
+			// Relaying without the backend's TLS would put plaintext on an encrypted
+			// socket. Close the session instead; the connection is already flagged.
+			if (adopt_backend_tls() == false) sess->set_unhealthy();
 		}
 	}
 
@@ -266,17 +244,11 @@ public:
 		assert(myconn);
 		myconn->statuses.pgconnpoll_put++;
 		statuses.pgconnpoll_put++;
+		// Give the TLS back while we still hold the connection, fast forward flag or
+		// not: a COPY clears that flag before the connection is pooled.
+		release_backend_tls();
 		myconn->myds = NULL;
 		myconn = NULL;
-		if (encrypted == true) {
-			if (sess != NULL && sess->session_fast_forward) {
-				// it seems we are a connection with SSL on a fast_forward session.
-				// See attach_connection() for more details .
-				// We now disable SSL metadata from the Data Stream
-				encrypted = false;
-				ssl = NULL;
-			}
-		}
 	}
 
 	void return_MySQL_Connection_To_Pool();

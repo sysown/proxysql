@@ -942,6 +942,11 @@ public:
 
 	bool send_quit;
 	bool reusable;
+	// libpq's own transport, held while a fast forward relay has displaced it with
+	// memory buffers. Belongs to the connection, not to the stream that borrowed it.
+	BIO* saved_backend_rbio = nullptr;
+	BIO* saved_backend_wbio = nullptr;
+
 	bool healthy; // false: destroy the connection, never reset it; not restored by reset()
 	bool processing_multi_statement;
 	bool multiplex_delayed;

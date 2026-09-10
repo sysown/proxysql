@@ -521,7 +521,7 @@ MysqlxConnection* Mysqlx_Thread::get_connection_from_cache(
 	for (auto it = conn_cache_.rbegin(); it != conn_cache_.rend(); ++it) {
 		auto* conn = *it;
 		// (hostgroup, user, schema, tls_active) is the cache key. The
-		// tls_active dimension was added with mysqlx_tls_backend_mode
+		// tls_active dimension was added with mysqlx-tls_backend_mode
 		// (issue #5693): an AsClient/required encrypted backend must
 		// not be handed to a plaintext-frontend session, and a
 		// plaintext-pooled backend must not be handed to a TLS
