@@ -298,36 +298,79 @@ static unsigned long long mem_used_rule(QP_rule_t *qr) {
 struct query_digest_topk_candidate_t {
 	const QP_query_digest_stats* qds {nullptr};
 	uint64_t sort_value {0};
+	/**
+	 * Snapshot of the mutable counters, taken once while `digest_rwlock` is held
+	 * for reading. `update_query_digest()` mutates those atomics concurrently
+	 * under the very same read lock, so ordering must never dereference them:
+	 * a value changing between two comparisons breaks the strict weak ordering
+	 * required by `std::priority_queue` and `std::sort`, which is undefined
+	 * behaviour and can walk past the end of the range. The remaining ordering
+	 * keys (`digest`, `hid`, `username`, `schemaname`, `client_address`) are
+	 * immutable after construction and are read through `qds`.
+	 */
+	unsigned int count_star {0};
+	unsigned long long sum_time {0};
+	unsigned long long min_time {0};
+	unsigned long long max_time {0};
+	unsigned long long rows_affected {0};
+	unsigned long long rows_sent {0};
+	time_t first_seen {0};
+	time_t last_seen {0};
 };
+
+/**
+ * @brief Take a coherent snapshot of a digest entry's mutable counters.
+ *
+ * @param qds Source digest row.
+ * @param cand Candidate to populate; `cand.qds` is set to @p qds.
+ */
+static void query_digest_snapshot_candidate(
+	const QP_query_digest_stats* qds,
+	query_digest_topk_candidate_t& cand
+) {
+	cand.qds = qds;
+	cand.count_star = qds->count_star.load(std::memory_order_relaxed);
+	cand.sum_time = qds->sum_time.load(std::memory_order_relaxed);
+	cand.min_time = qds->min_time.load(std::memory_order_relaxed);
+	cand.max_time = qds->max_time.load(std::memory_order_relaxed);
+	cand.rows_affected = qds->rows_affected.load(std::memory_order_relaxed);
+	cand.rows_sent = qds->rows_sent.load(std::memory_order_relaxed);
+	cand.first_seen = qds->first_seen.load(std::memory_order_relaxed);
+	cand.last_seen = qds->last_seen.load(std::memory_order_relaxed);
+}
 
 /**
  * @brief Compute the primary sort metric for a digest row.
  *
- * @param qds Source digest row.
+ * @param cand Candidate holding the counter snapshot to rank on.
  * @param sort_by Requested primary sort mode.
  * @return Primary sort metric in descending order domain.
  */
 static uint64_t query_digest_sort_metric(
-	const QP_query_digest_stats* qds,
+	const query_digest_topk_candidate_t& cand,
 	query_digest_sort_by_t sort_by
 ) {
 	switch (sort_by) {
 		case query_digest_sort_by_t::avg_time:
-			return qds->count_star ? (qds->sum_time / qds->count_star) : 0;
+			return cand.count_star ? (cand.sum_time / cand.count_star) : 0;
 		case query_digest_sort_by_t::sum_time:
-			return qds->sum_time;
+			return cand.sum_time;
 		case query_digest_sort_by_t::max_time:
-			return qds->max_time;
+			return cand.max_time;
 		case query_digest_sort_by_t::rows_sent:
-			return qds->rows_sent;
+			return cand.rows_sent;
 		case query_digest_sort_by_t::count_star:
 		default:
-			return qds->count_star;
+			return cand.count_star;
 	}
 }
 
 /**
  * @brief Determine whether candidate @p lhs ranks ahead of @p rhs.
+ *
+ * All mutable ordering keys come from `lhs`/`rhs` snapshots, never from the
+ * live `QP_query_digest_stats`, so the ordering stays fixed for the whole
+ * duration of a heap or sort operation even while queries update the digest.
  *
  * Ordering is stable and deterministic:
  * 1) primary selected sort metric (DESC)
@@ -350,11 +393,11 @@ static bool query_digest_candidate_better(
 	if (lhs.sort_value != rhs.sort_value) {
 		return lhs.sort_value > rhs.sort_value;
 	}
-	if (lhs.qds->sum_time != rhs.qds->sum_time) {
-		return lhs.qds->sum_time > rhs.qds->sum_time;
+	if (lhs.sum_time != rhs.sum_time) {
+		return lhs.sum_time > rhs.sum_time;
 	}
-	if (lhs.qds->count_star != rhs.qds->count_star) {
-		return lhs.qds->count_star > rhs.qds->count_star;
+	if (lhs.count_star != rhs.count_star) {
+		return lhs.count_star > rhs.count_star;
 	}
 	if (lhs.qds->digest != rhs.qds->digest) {
 		return lhs.qds->digest < rhs.qds->digest;
@@ -649,7 +692,31 @@ Query_Processor<QP_DERIVED>::Query_Processor(int _query_rules_fast_routing_algor
 	global_firewall_whitelist_rules_result___size = 0;
 
 	pthread_rwlock_init(&rwlock, NULL);
+	/**
+	 * `update_query_digest()` takes this lock for reading on every query, so the
+	 * readers effectively never stop arriving. Under glibc's default
+	 * `PTHREAD_RWLOCK_PREFER_READER_NP` an arriving reader does not yield to a
+	 * waiting writer, which can starve the writers indefinitely -- and the
+	 * writers here are the digest purge and the stats-table swap. A starved purge
+	 * means the digest map grows without bound, so ask for writer preference
+	 * where the platform supports it. (`PTHREAD_RWLOCK_PREFER_WRITER_NP` is a
+	 * no-op in glibc; only the NONRECURSIVE variant actually blocks new readers.)
+	 *
+	 * Guarded on `__GLIBC__` rather than on the constant itself: glibc declares
+	 * the lock kinds as an enum, not as macros, so `#if defined(...)` on the
+	 * constant would silently take the fallback branch on Linux as well.
+	 */
+#if defined(__GLIBC__)
+	{
+		pthread_rwlockattr_t digest_rwlockattr;
+		pthread_rwlockattr_init(&digest_rwlockattr);
+		pthread_rwlockattr_setkind_np(&digest_rwlockattr, PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP);
+		pthread_rwlock_init(&digest_rwlock, &digest_rwlockattr);
+		pthread_rwlockattr_destroy(&digest_rwlockattr);
+	}
+#else
 	pthread_rwlock_init(&digest_rwlock, NULL);
+#endif
 	version=0;
 	rules_mem_used=0;
 	
@@ -1510,9 +1577,13 @@ std::pair<SQLite3_result *, int> Query_Processor<QP_DERIVED>::get_query_digests_
 		if (it != digest_umap_aux.end()) {
 			// found
 			QP_query_digest_stats *qds_equal = (QP_query_digest_stats *)it->second;
-			qds_equal->add_time(
-				qds->min_time, qds->last_seen, qds->rows_affected, qds->rows_sent, qds->count_star
-			);
+			// merge(), not add_time(): this folds one accumulated entry into
+			// another, so sum_time/max_time/first_seen/last_seen must combine as
+			// aggregates. The old add_time() call passed `min_time` as the sample
+			// duration, which added min_time to sum_time and compared it against
+			// max_time -- corrupting both whenever a digest was updated while a
+			// stats dump was in flight.
+			qds_equal->merge(qds);
 			delete qds;
 		} else {
 			digest_umap_aux.insert(element);
@@ -1535,9 +1606,13 @@ std::pair<SQLite3_result *, int> Query_Processor<QP_DERIVED>::get_query_digests_
 		if (it != digest_umap.end()) {
 			// found
 			QP_query_digest_stats *qds_equal = (QP_query_digest_stats *)it->second;
-			qds_equal->add_time(
-				qds->min_time, qds->last_seen, qds->rows_affected, qds->rows_sent, qds->count_star
-			);
+			// merge(), not add_time(): this folds one accumulated entry into
+			// another, so sum_time/max_time/first_seen/last_seen must combine as
+			// aggregates. The old add_time() call passed `min_time` as the sample
+			// duration, which added min_time to sum_time and compared it against
+			// max_time -- corrupting both whenever a digest was updated while a
+			// stats dump was in flight.
+			qds_equal->merge(qds);
 			delete qds;
 		} else {
 			digest_umap.insert(element);
@@ -1649,7 +1724,8 @@ query_digest_topk_result_t Query_Processor<QP_DERIVED>::get_query_digests_topk(
 	}
 	const size_t window_size = static_cast<size_t>(window_size_u64);
 
-	const auto matches_filters = [this, &filters](const QP_query_digest_stats* qds) -> bool {
+	const auto matches_filters = [this, &filters](const query_digest_topk_candidate_t& cand) -> bool {
+		const QP_query_digest_stats* qds = cand.qds;
 		if (filters.hostgroup >= 0 && qds->hid != filters.hostgroup) {
 			return false;
 		}
@@ -1674,11 +1750,11 @@ query_digest_topk_result_t Query_Processor<QP_DERIVED>::get_query_digests_topk(
 		if (filters.has_digest && qds->digest != filters.digest) {
 			return false;
 		}
-		if (filters.min_count > 0 && qds->count_star < filters.min_count) {
+		if (filters.min_count > 0 && cand.count_star < filters.min_count) {
 			return false;
 		}
 		if (filters.min_avg_time_us > 0) {
-			const uint64_t avg_time = qds->count_star ? (qds->sum_time / qds->count_star) : 0;
+			const uint64_t avg_time = cand.count_star ? (cand.sum_time / cand.count_star) : 0;
 			if (avg_time < filters.min_avg_time_us) {
 				return false;
 			}
@@ -1708,21 +1784,31 @@ query_digest_topk_result_t Query_Processor<QP_DERIVED>::get_query_digests_topk(
 
 	for (const auto& it : digest_umap) {
 		const QP_query_digest_stats* qds = static_cast<const QP_query_digest_stats*>(it.second);
-		if (!qds || !matches_filters(qds)) {
+		if (!qds) {
+			continue;
+		}
+
+		/**
+		 * Snapshot the counters once, up front: everything downstream (filters,
+		 * totals, ordering and the emitted row) must agree on a single reading,
+		 * and the ordering keys must not move while the heap and the sort run.
+		 */
+		query_digest_topk_candidate_t cand {};
+		query_digest_snapshot_candidate(qds, cand);
+
+		if (!matches_filters(cand)) {
 			continue;
 		}
 
 		result.matched_count++;
-		result.matched_total_queries += qds->count_star;
-		result.matched_total_time_us += qds->sum_time;
+		result.matched_total_queries += cand.count_star;
+		result.matched_total_time_us += cand.sum_time;
 
 		if (window_size == 0) {
 			continue;
 		}
 
-		query_digest_topk_candidate_t cand {};
-		cand.qds = qds;
-		cand.sort_value = query_digest_sort_metric(qds, sort_by);
+		cand.sort_value = query_digest_sort_metric(cand, sort_by);
 
 		if (heap.size() < window_size) {
 			heap.push(cand);
@@ -1753,14 +1839,14 @@ query_digest_topk_result_t Query_Processor<QP_DERIVED>::get_query_digests_topk(
 		row.client_address = qds->client_address ? qds->client_address : "";
 		row.digest = qds->digest;
 		row.digest_text = qds->get_digest_text(&digest_text_umap);
-		row.count_star = qds->count_star;
-		row.first_seen = static_cast<uint64_t>(now - monotonic_now_us / 1000000 + qds->first_seen / 1000000);
-		row.last_seen = static_cast<uint64_t>(now - monotonic_now_us / 1000000 + qds->last_seen / 1000000);
-		row.sum_time = qds->sum_time;
-		row.min_time = qds->min_time;
-		row.max_time = qds->max_time;
-		row.rows_affected = qds->rows_affected;
-		row.rows_sent = qds->rows_sent;
+		row.count_star = cand.count_star;
+		row.first_seen = static_cast<uint64_t>(now - monotonic_now_us / 1000000 + cand.first_seen / 1000000);
+		row.last_seen = static_cast<uint64_t>(now - monotonic_now_us / 1000000 + cand.last_seen / 1000000);
+		row.sum_time = cand.sum_time;
+		row.min_time = cand.min_time;
+		row.max_time = cand.max_time;
+		row.rows_affected = cand.rows_affected;
+		row.rows_sent = cand.rows_sent;
 		result.rows.push_back(std::move(row));
 	}
 
@@ -2576,6 +2662,27 @@ void Query_Processor<QP_DERIVED>::query_parser_update_counters(TypeSession* sess
 	}
 }
 
+/**
+ * @brief Record one query against its digest, creating the entry if needed.
+ *
+ * @par Locking
+ * Two phases. The common case -- a digest that already exists -- only needs the
+ * map to stay stable while the entry is located and updated, so it takes
+ * `digest_rwlock` for *reading*. `QP_query_digest_stats::add_time()` is safe
+ * under a shared lock because the counters it touches are atomic, so several
+ * threads can account against the same digest at once instead of serialising on
+ * an exclusive lock as this function used to.
+ *
+ * Only a digest seen for the first time needs the write lock, to insert into
+ * `digest_umap` (and `digest_text_umap` when digest text normalisation is on).
+ * The map is re-checked after upgrading, because the read lock is dropped
+ * before the write lock is taken and another thread may have inserted the same
+ * digest in between.
+ *
+ * @note The read lock does not make a group of counters mutually consistent;
+ *   see the concurrency contract on QP_query_digest_stats. Readers that need a
+ *   coherent view must snapshot.
+ */
 template <typename QP_DERIVED>
 void Query_Processor<QP_DERIVED>::update_query_digest(uint64_t digest_total, uint64_t digest, char* digest_text, int hid, 
 	TypeConnInfo* ui, unsigned long long t, unsigned long long n, const char* client_addr, unsigned long long rows_affected,
@@ -2583,10 +2690,19 @@ void Query_Processor<QP_DERIVED>::update_query_digest(uint64_t digest_total, uin
 	QP_query_digest_stats* qds;
 	std::unordered_map<uint64_t, void*>::iterator it;
 
+	pthread_rwlock_rdlock(&digest_rwlock);
+	it=digest_umap.find(digest_total);
+	if (it != digest_umap.end()) {
+		qds=(QP_query_digest_stats *)it->second;
+		qds->add_time(t,n,rows_affected,rows_sent);
+		pthread_rwlock_unlock(&digest_rwlock);
+		return;
+	}
+	pthread_rwlock_unlock(&digest_rwlock);
+
 	pthread_rwlock_wrlock(&digest_rwlock);
 	it=digest_umap.find(digest_total);
 	if (it != digest_umap.end()) {
-		// found
 		qds=(QP_query_digest_stats *)it->second;
 		qds->add_time(t,n,rows_affected,rows_sent);
 	} else {

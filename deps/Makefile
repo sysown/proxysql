@@ -84,6 +84,7 @@ endif
 
 ifeq ($(PROXYSQL40),1)
 	targets += protobuf
+	targets += duckdb
 endif
 
 ifeq ($(PROXYSQLCLICKHOUSE),1)
@@ -185,9 +186,9 @@ curl/curl/lib/.libs/libcurl.a: $(OPENSSL_BUILD_STAMP) Makefile
 	cd curl/curl && autoreconf -fi
 ifeq ($(UNAME_S),Darwin)
 	cd curl/curl && sed -i '' 's/as_fn_error \$$? "one or more libs available at link-time are not available run-time/echo "Skipped check: one or more libs available at link-time are not available run-time/' configure
-	cd curl/curl && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="-L$(SSL_LDIR)" LIBS="$(OPENSSL_STATIC_LIBS)" ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-openssl=$(SSL_PATH) --disable-symbol-hiding --disable-shared --enable-static
+	cd curl/curl && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="-L$(SSL_LDIR)" LIBS="$(OPENSSL_STATIC_LIBS)" ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-openssl=$(SSL_PATH) --disable-symbol-hiding --disable-shared --enable-static
 else
-	cd curl/curl && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="-L$(SSL_LDIR)" LIBS="$(OPENSSL_STATIC_LIBS)" ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-openssl=$(SSL_PATH) --disable-symbol-hiding --disable-shared --enable-static
+	cd curl/curl && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="-L$(SSL_LDIR)" LIBS="$(OPENSSL_STATIC_LIBS)" ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-openssl=$(SSL_PATH) --disable-symbol-hiding --disable-shared --enable-static
 endif
 	cd curl/curl && CFLAGS=-fPIC CC=${CC} CXX=${CXX} ${MAKE} \
 		BLANK_AT_MAKETIME= \
@@ -266,6 +267,30 @@ clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:
 clickhouse-cpp: clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a
 
 
+duckdb/duckdb/build/release/src/libduckdb_static.a:
+	cd duckdb && ./verify-source.bash
+	cd duckdb && rm -rf duckdb-*/ duckdb || true
+	cd duckdb && tar -zxf duckdb-*.tar.gz && mv duckdb-*/ duckdb
+	# DUCKDB_EXPLICIT_VERSION: deps/duckdb/duckdb/ is a bare extraction (no
+	# .git of its own) sitting inside the ProxySQL working tree, so CMake's
+	# `git describe` walks up and picks up *ProxySQL's* tags/commit instead
+	# of failing, silently making duckdb_library_version() report ProxySQL's
+	# version (e.g. "v3.0.11-dev802") instead of DuckDB's. Force it to the
+	# pinned version explicitly. On a version bump, update this alongside
+	# duckdb-<version>.tar.gz and required_root in verify-source.bash.
+	cd duckdb/duckdb && cmake -S . -B build/release \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DBUILD_UNITTESTS=OFF \
+		-DBUILD_SHELL=OFF \
+		-DENABLE_SANITIZER=OFF \
+		-DBUILD_EXTENSIONS="" \
+		-DDUCKDB_EXPLICIT_VERSION=v1.4.5
+	cd duckdb/duckdb && CC=${CC} CXX=${CXX} cmake --build build/release -j$(shell nproc 2>/dev/null || echo 4)
+	@test -f $@ || { echo "ERROR: duckdb build did not produce $@" >&2; exit 1; }
+
+duckdb: duckdb/duckdb/build/release/src/libduckdb_static.a
+
+
 libdaemon/libdaemon/libdaemon/.libs/libdaemon.a:
 	cd libdaemon && rm -rf libdaemon-*/ || true
 	cd libdaemon && tar -zxf libdaemon-0.14.tar.gz
@@ -290,7 +315,7 @@ jemalloc/jemalloc/lib/libjemalloc.a:
 jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
 
 
-mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: $(OPENSSL_BUILD_STAMP)
+mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: $(OPENSSL_BUILD_STAMP) mariadb-client-library/x509cache.patch
 	cd mariadb-client-library && rm -rf mariadb-connector-c-*/ || true
 	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.3.8-src.tar.gz
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../plugin_auth_CMakeLists.txt.patch
@@ -468,15 +493,17 @@ endif
 postgresql: postgresql/postgresql/src/interfaces/libpq/libpq.a
 
 
-libusual/libusual/.libs/libusual.a: $(OPENSSL_BUILD_STAMP)
+LIBUSUAL_LIBS :=
+ifeq ($(UNAME_S),Linux)
+LIBUSUAL_LIBS := LIBS="-ldl -lpthread"
+endif
+
+libusual/libusual/.libs/libusual.a: $(OPENSSL_BUILD_STAMP) libusual/tls_free_namespace.patch
 	cd libusual && rm -rf libusual-*/ || true
 	cd libusual && tar -zxf libusual-*.tar.gz
+	cd libusual/libusual && patch -p1 < ../tls_free_namespace.patch
 	cd libusual/libusual && ./autogen.sh
-ifeq ($(UNAME_S),Darwin)
-	cd libusual/libusual && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="$(OPENSSL_STATIC_LIBS)" ./configure --with-openssl="$(SSL_PATH)" --disable-shared
-else
-	cd libusual/libusual && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="$(OPENSSL_STATIC_LIBS)" ./configure --with-openssl="$(SSL_PATH)" --disable-shared
-endif
+	cd libusual/libusual && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="-L$(SSL_LDIR)" $(LIBUSUAL_LIBS) ./configure --with-openssl="$(SSL_PATH)" --disable-shared
 	cd libusual/libusual && CC=${CC} CXX=${CXX} ${MAKE}
 
 libusual: libusual/libusual/.libs/libusual.a
@@ -522,6 +549,7 @@ cleanall:
 	cd pcre2 && rm -rf pcre2-*/ pcre2 || true
 	cd sqlite3 && rm -rf sqlite-amalgamation-*/ || true
 	cd clickhouse-cpp/ && rm -rf clickhouse-cpp-*/ || true
+	cd duckdb && rm -rf duckdb-*/ duckdb || true
 	cd lz4 && rm -rf lz4-*/ || true
 	cd libmicrohttpd && rm -rf libmicrohttpd-*/ || true
 	cd curl && rm -rf curl-*/ || true

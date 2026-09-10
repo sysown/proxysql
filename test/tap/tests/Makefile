@@ -92,7 +92,7 @@ POSTGRESQL_STATIC_LIBS := $(POSTGRESQL_PATH)/interfaces/libpq/libpq.a \
 	$(POSTGRESQL_PATH)/port/libpgport.a
 
 ifeq ($(UNAME_S),Darwin)
-MYLIBS_DYNAMIC_PART := -lgnutls -lcpp_dotenv -luuid
+MYLIBS_DYNAMIC_PART := -lgnutls -lcpp_dotenv
 MYLIBS_STATIC_PART := -lconfig -lproxysql -lsqlparser -ldaemon -lconfig++ $(RE2_STATIC_LIBS) $(PCRE2_LIBS) -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core
 MYLIBS_LAST_PART := -lpthread -lm -lz -lzstd -liconv -ldl $(EXTRALINK)
 MYLIBS := -ltap $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) \
@@ -147,8 +147,10 @@ ifeq ($(PROXYSQL40),1)
 endif
 
 OPT := $(STDCPP) -O2 -ggdb $(PSQL40) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
+# Compress ELF debug sections in test binaries. Apple clang accepts -gz but
+# does not compress DWARF stored in Mach-O objects, so Darwin omits it.
 ifneq ($(UNAME_S),Darwin)
-OPT += -Wl,--no-as-needed
+OPT += -Wl,--no-as-needed -gz
 endif
 OPT += -Wl,-rpath,$(TAP_LDIR) -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl,-rpath,$(RE2_LDIR)
 
@@ -179,7 +181,7 @@ tests_no_infra: admin_set_credentials_logging-t listener_conflicts_validation-t
 
 DEBUG_OPT := $(STDCPP) -O0 -DDEBUG -ggdb $(PSQL40) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
 ifneq ($(UNAME_S),Darwin)
-DEBUG_OPT += -Wl,--no-as-needed
+DEBUG_OPT += -Wl,--no-as-needed -gz
 endif
 DEBUG_OPT += -Wl,-rpath,$(TAP_LDIR) -Wl,-rpath,$(POSTGRESQL_PATH)/interfaces/libpq -Wl,-rpath,$(RE2_LDIR)
 debug: OPT := $(DEBUG_OPT)
@@ -237,7 +239,7 @@ TESTS_FILTER_DARWIN := test_wexecvp_syscall_failures-t
 TESTS_CPP_FILTER := $(if $(filter Darwin,$(UNAME_S)),$(TESTS_FILTER_DARWIN),)
 
 ifeq ($(PROXYSQL40_DETECTED),0)
-TESTS_CPP := $(filter-out test_mysqlx_% $(TESTS_CPP_FILTER),$(patsubst %.cpp,%,$(wildcard *-t.cpp)))
+TESTS_CPP := $(filter-out test_mysqlx_% test_duckdb_plugin_load-t test_duckdb_bench-t $(TESTS_CPP_FILTER),$(patsubst %.cpp,%,$(wildcard *-t.cpp)))
 else
 TESTS_CPP := $(filter-out $(TESTS_CPP_FILTER),$(patsubst %.cpp,%,$(wildcard *-t.cpp)))
 endif
@@ -319,6 +321,63 @@ $(MYSQLX_BRIDGE_TESTS): mysqlx-bridge-tests
 # test_mysqlx_listener_smoke-t was retired with the dormant MysqlxWorker
 # path in 98aee7db2. Listener-lifecycle coverage now lives in
 # mysqlx_thread_unit-t and mysqlx_robustness_unit-t under unit/.
+
+# test_duckdb_plugin_load-t.cpp (like the mysqlx bridge tests above) links
+# ProxySQL_PluginManager, which transitively needs symbols (GloVars, MyHGM,
+# mysql_thread___* variables, ...) that are normally only pulled into a link
+# via --whole-archive. unit/Makefile's own rule for this target already
+# builds it that way (via $(WHOLE_LIBPROXYSQL)) and depends on
+# duckdb_plugin_build to make sure the plugin .so exists first; this
+# top-level directory's generic `%-t: %-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)`
+# pattern rule does neither, so without this explicit (higher-precedence)
+# rule `make tests` falls through to the generic one and fails to link with
+# "undefined reference to `GloVars'" / `MyHGM` / `mysql_thread___ffto_max_
+# buffer_size` etc. -- the classic symptom of a static archive linked
+# without --whole-archive missing globals nothing else in the link
+# references. Mirrors the $(MYSQLX_BRIDGE_TESTS) rule above exactly.
+DUCKDB_BRIDGE_TESTS := test_duckdb_plugin_load-t
+
+.PHONY: duckdb-bridge-tests $(DUCKDB_BRIDGE_TESTS)
+duckdb-bridge-tests:
+	$(MAKE) -C unit $(DUCKDB_BRIDGE_TESTS)
+
+$(DUCKDB_BRIDGE_TESTS): duckdb-bridge-tests
+	ln -fs unit/$@ $@
+
+# test_duckdb_bench-t links the DuckDB C API (native baseline) plus the
+# existing TAP mysql/libpq clients. The generic %-t recipe cannot find
+# duckdb.h or the 16-archive DuckDB link set. libduckdb_static.a alone
+# does not satisfy DuckDB's symbols -- copy the DUCKDB_ARS pattern from
+# test/tap/tests/unit/Makefile and plugins/duckdb/Makefile.
+DUCKDB_AR := $(DUCKDB_LDIR)/libduckdb_static.a
+DUCKDB_ARS = $(shell find $(DUCKDB_PATH)/build/release -name '*.a' 2>/dev/null)
+DUCKDB_LINK_GROUP_START :=
+DUCKDB_LINK_GROUP_END :=
+ifneq ($(UNAME_S),Darwin)
+DUCKDB_LINK_GROUP_START := -Wl,--start-group
+DUCKDB_LINK_GROUP_END := -Wl,--end-group
+endif
+
+$(DUCKDB_AR):
+	$(MAKE) -C $(PROXYSQL_PATH)/deps PROXYSQL40=1 duckdb
+	@test -f $@ || { echo "ERROR: deps duckdb build did not produce $@" >&2; exit 1; }
+
+ifeq ($(PROXYSQL40),1)
+USE_DUCKDB_BENCH := 1
+endif
+ifneq ($(PROXYSQL40_DETECTED),0)
+USE_DUCKDB_BENCH := 1
+endif
+
+ifeq ($(USE_DUCKDB_BENCH),1)
+test_duckdb_bench-t: test_duckdb_bench-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT) $(DUCKDB_AR)
+	$(CXX) $< $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
+		$(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) \
+		$(MARIADB_LDIR)/libmariadbclient.a $(CUSTOMARGS) -lm -o $@
+else
+test_duckdb_bench-t:
+	@echo "ERROR: test_duckdb_bench-t is PROXYSQL40-only" >&2; exit 1
+endif
 
 sqlite3-t: sqlite3-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 ifneq ($(PROXYSQL40),)
@@ -464,6 +523,21 @@ PG_LITE_CLIENT_TESTS := \
 
 $(PG_LITE_CLIENT_TESTS): %: %.cpp pg_lite_client.cpp pg_lite_client.h $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< pg_lite_client.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual $(ALLOW_MULTI_DEF) -o $@
+
+# pgsql_mock_backend.cpp is a scriptable fake PostgreSQL server. It exists to
+# reach backend behaviour a real PostgreSQL never produces -- a server that
+# vanishes mid-result, or replies in an invalid sequence. These rules differ from
+# the generic %-t rule ONLY by compiling pgsql_mock_backend.cpp in alongside the
+# test; the generic rule builds $< alone, so the harness would not be linked.
+# Nothing else is needed: -lpthread for its listener/worker threads already comes
+# from MYLIBS, and unlike the pg_lite_client rules above there is no -lscram or
+# -lusual to create duplicate symbols, so $(ALLOW_MULTI_DEF) does not apply.
+PGSQL_MOCK_BACKEND_TESTS := \
+	pgsql-reg_test_6109_midresult_disconnect-t \
+	pgsql-reg_test_6110_invalid_reply_sequence-t
+
+$(PGSQL_MOCK_BACKEND_TESTS): %: %.cpp pgsql_mock_backend.cpp pgsql_mock_backend.h $(TAP_LDIR)/libtap$(SHLIB_EXT)
+	$(CXX) $< pgsql_mock_backend.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 
 MYSQLX_PROTO_DIR := $(PROXYSQL_PATH)/plugins/mysqlx/proto
 MYSQLX_PROTO_SRCS := $(wildcard $(MYSQLX_PROTO_DIR)/*.pb.cc)

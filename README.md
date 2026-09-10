@@ -78,8 +78,12 @@ sha256sum -c proxysql-<version>-linux-amd64.tar.gz.sha256
 tar xzf proxysql-<version>-linux-amd64.tar.gz
 ```
 The archive contains `bin/proxysql`, a sample `etc/proxysql.cnf`, the `systemd/`
-units, and helper tools. The v4.0 build additionally ships the runtime plugins
-under `lib/proxysql/` (`ProxySQL_MySQLX_Plugin.so`, `ProxySQL_GenAI_Plugin.so`).
+units, and helper tools. The v4.0 build additionally includes runtime plugins
+for MySQL X, GenAI, and the real
+[MySQL Router compatibility foundation](doc/mysql-router-plugin.md). The
+Router plugin is distinct from the MySQL X protocol plugin and is not yet
+included in release packages; source builds install
+`proxysql_mysql_router.so` under `/usr/lib/proxysql/plugins/`.
 
 Building ProxySQL from source requires Git LFS so the pinned OpenSSL source is
 hydrated before dependency builds start:

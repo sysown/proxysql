@@ -5,6 +5,7 @@
  */
 
 #include "mysqlx_protocol.h"
+#include "ProxySQL_PluginListenerGate.h"
 #include "tap.h"
 
 #include <signal.h>
@@ -17,7 +18,7 @@
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(20);
+	plan(23);
 	diag("=== mysqlx_protocol_socket_unit-t starting ===");
 	signal(SIGPIPE, SIG_IGN);
 
@@ -367,6 +368,50 @@ int main() {
 		bool match = ok_read && payload.size() == ff_payload.size() &&
 		             memcmp(payload.data(), ff_payload.data(), ff_payload.size()) == 0;
 		ok(match, "all-0xFF payload preserved in roundtrip");
+		close(fds[0]);
+		close(fds[1]);
+	}
+
+	// Tests 21-23: listener readiness decisions happen before protocol setup.
+	// A closed gate must close the accepted socket without producing any
+	// handshake; ready and unrelated listeners leave the socket untouched.
+	{
+		const ProxySQL_PluginListenerGate closed {
+			"socket-test", "127.0.0.1", 6450,
+			ProxySQL_PluginListenerState::closed, "initial reconcile pending"
+		};
+		proxysql_plugin_set_listener_gate(closed);
+		int fds[2];
+		socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+		const auto decision = proxysql_plugin_listener_gate_close_if_closed(
+			"127.0.0.1", 6450, fds[0], 1);
+		char byte = '\0';
+		ok(decision && decision->reject && recv(fds[1], &byte, 1, 0) == 0,
+			"closed listener gate closes accepted socket before a handshake");
+		close(fds[1]);
+
+		const ProxySQL_PluginListenerGate ready {
+			"socket-test", "127.0.0.1", 6451,
+			ProxySQL_PluginListenerState::ready, "reconciled"
+		};
+		proxysql_plugin_set_listener_gate(ready);
+		socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+		const auto ready_decision = proxysql_plugin_listener_gate_close_if_closed(
+			"127.0.0.1", 6451, fds[0], 2);
+		const char ready_byte = 'R';
+		write(fds[0], &ready_byte, 1);
+		ok(!ready_decision && recv(fds[1], &byte, 1, 0) == 1 && byte == ready_byte,
+			"ready listener gate leaves the normal handshake socket path unchanged");
+		close(fds[0]);
+		close(fds[1]);
+
+		socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+		const auto unrelated_decision = proxysql_plugin_listener_gate_close_if_closed(
+			"127.0.0.1", 6452, fds[0], 3);
+		const char unrelated_byte = 'U';
+		write(fds[0], &unrelated_byte, 1);
+		ok(!unrelated_decision && recv(fds[1], &byte, 1, 0) == 1 && byte == unrelated_byte,
+			"unrelated listener leaves the normal handshake socket path unchanged");
 		close(fds[0]);
 		close(fds[1]);
 	}

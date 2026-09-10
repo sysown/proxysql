@@ -183,7 +183,19 @@ int main() {
 	ok(counters_after_reset == 0, "stats_mcp_query_tools_counters is empty after _reset (got %d)", counters_after_reset);
 
 	bool cleanup_ok = true;
-	cleanup_ok = (run_q(admin, "LOAD MCP VARIABLES FROM DISK") == 0) && cleanup_ok;
+	// FROM DISK is disk->memory only (issue #6171); TO RUNTIME applies it.
+	const bool variables_restored = run_q(admin, "LOAD MCP VARIABLES FROM DISK") == 0;
+	if (!variables_restored) {
+		diag("Failed to restore MCP variables from disk: %s", mysql_error(admin));
+	}
+	cleanup_ok = variables_restored && cleanup_ok;
+	if (variables_restored) {
+		const bool variables_applied = run_q(admin, "LOAD MCP VARIABLES TO RUNTIME") == 0;
+		if (!variables_applied) {
+			diag("Failed to apply restored MCP variables: %s", mysql_error(admin));
+		}
+		cleanup_ok = variables_applied && cleanup_ok;
+	}
 	cleanup_ok = (run_q(admin,
 		("DELETE FROM mcp_target_profiles WHERE target_id='" + std::string(k_target_id) + "'").c_str()) == 0)
 		&& cleanup_ok;

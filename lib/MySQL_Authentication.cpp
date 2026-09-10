@@ -8,7 +8,9 @@
 #include "proxysql_atomic.h"
 
 #include "MySQL_Authentication.hpp"
+#include "MySQL_Authentication_test.h"
 
+#include <atomic>
 #include <openssl/crypto.h>
 
 #ifndef SPOOKYV2
@@ -21,6 +23,9 @@
 #endif
 
 namespace {
+
+std::atomic<mysql_authentication_test::atomic_replace_hook_t> atomic_replace_hook {nullptr};
+std::atomic<void*> atomic_replace_hook_opaque {nullptr};
 
 #ifdef PROXYSQL31
 void validate_require_x509_attribute(
@@ -49,6 +54,20 @@ void cleanse_and_free_password(char*& password) {
 }
 
 } // namespace
+
+namespace mysql_authentication_test {
+
+scoped_atomic_replace_hook::scoped_atomic_replace_hook(atomic_replace_hook_t hook, void* opaque) {
+	atomic_replace_hook_opaque.store(opaque, std::memory_order_relaxed);
+	atomic_replace_hook.store(hook, std::memory_order_release);
+}
+
+scoped_atomic_replace_hook::~scoped_atomic_replace_hook() {
+	atomic_replace_hook.store(nullptr, std::memory_order_release);
+	atomic_replace_hook_opaque.store(nullptr, std::memory_order_relaxed);
+}
+
+} // namespace mysql_authentication_test
 
 void free_account_details(account_details_t& ad) {
 	cleanse_and_free_password(ad.password);
@@ -304,6 +323,7 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 		new_ad=true;
 		ad->sha1_pass=NULL;
 		ad->num_connections_used=0;
+		ad->num_connections_used_addl_pass=0;
 		ad->clear_text_password[0] = NULL;
 		ad->clear_text_password[1] = NULL;
 		// FIXME: if the password is a clear text password, automatically generate sha1_pass and clear_text_password
@@ -860,6 +880,83 @@ uint64_t MySQL_Authentication::get_runtime_checksum() {
 	uint64_t hashF = _get_runtime_checksum(USERNAME_FRONTEND);
 	return hashB+hashF;
 }
+
+#ifdef PROXYSQL40
+bool MySQL_Authentication::replace_mysql_users_atomically(
+	const SQLite3_result& users, std::string& error
+) {
+	if (users.columns != 13) {
+		error = "mysql users runtime input must have the canonical 13 columns";
+		return false;
+	}
+
+	// Build both replacement groups before taking either lock used by lookup().
+	MySQL_Authentication replacement;
+	for (SQLite3_row* row : users.rows) {
+		if (row == nullptr || row->fields == nullptr || row->fields[0] == nullptr ||
+			row->fields[2] == nullptr || row->fields[3] == nullptr || row->fields[5] == nullptr ||
+			row->fields[6] == nullptr || row->fields[7] == nullptr || row->fields[8] == nullptr ||
+			row->fields[9] == nullptr || row->fields[10] == nullptr) {
+			error = "mysql users runtime input contains an invalid row";
+			return false;
+		}
+		char* password = row->fields[1] == nullptr ? const_cast<char*>("") : row->fields[1];
+		for (enum cred_username_type type : {USERNAME_BACKEND, USERNAME_FRONTEND}) {
+			const int enabled_column = type == USERNAME_BACKEND ? 8 : 9;
+			if (strcmp(row->fields[enabled_column], "1") != 0) continue;
+			replacement.add(row->fields[0], password, type,
+				strcmp(row->fields[2], "1") == 0, atoi(row->fields[3]),
+				row->fields[4] == nullptr ? const_cast<char*>("") : row->fields[4],
+				strcmp(row->fields[5], "1") == 0, strcmp(row->fields[6], "1") == 0,
+				strcmp(row->fields[7], "1") == 0, atoi(row->fields[10]),
+				row->fields[11] == nullptr ? const_cast<char*>("") : row->fields[11],
+				row->fields[12] == nullptr ? const_cast<char*>("") : row->fields[12]);
+		}
+	}
+
+	auto transfer_runtime_state = [](creds_group_t& old_group, creds_group_t& new_group) {
+		for (auto& entry : new_group.bt_map) {
+			auto old = old_group.bt_map.find(entry.first);
+			if (old == old_group.bt_map.end() ||
+				strcmp(old->second->username, entry.second->username) != 0) continue;
+			account_details_t* old_account = old->second;
+			account_details_t* new_account = entry.second;
+			new_account->num_connections_used = old_account->num_connections_used;
+			new_account->num_connections_used_addl_pass = old_account->num_connections_used_addl_pass;
+			if (strcmp(old_account->password, new_account->password) == 0) {
+				new_account->sha1_pass = old_account->sha1_pass;
+				old_account->sha1_pass = nullptr;
+				for (int i = 0; i < 2; ++i) {
+					new_account->clear_text_password[i] = old_account->clear_text_password[i];
+					old_account->clear_text_password[i] = nullptr;
+				}
+			}
+		}
+	};
+
+	// Fixed order matches dump_all_users()/memory_usage(): frontend, then backend.
+	pthread_rwlock_wrlock(&creds_frontends.lock);
+	pthread_rwlock_wrlock(&creds_backends.lock);
+	struct CredentialGroupUnlockGuard {
+		creds_group_t& frontends;
+		creds_group_t& backends;
+		~CredentialGroupUnlockGuard() {
+			pthread_rwlock_unlock(&backends.lock);
+			pthread_rwlock_unlock(&frontends.lock);
+		}
+	} unlock_guard {creds_frontends, creds_backends};
+	if (auto hook = atomic_replace_hook.load(std::memory_order_acquire)) {
+		hook(atomic_replace_hook_opaque.load(std::memory_order_relaxed));
+	}
+	transfer_runtime_state(creds_frontends, replacement.creds_frontends);
+	transfer_runtime_state(creds_backends, replacement.creds_backends);
+	creds_frontends.bt_map.swap(replacement.creds_frontends.bt_map);
+	creds_backends.bt_map.swap(replacement.creds_backends.bt_map);
+	std::swap(creds_frontends.cred_array, replacement.creds_frontends.cred_array);
+	std::swap(creds_backends.cred_array, replacement.creds_backends.cred_array);
+	return true;
+}
+#endif
 
 static pair<umap_auth, umap_auth> extract_accounts_details(MYSQL_RES* resultset, unique_ptr<SQLite3_result>& all_users) {
 	if (resultset == nullptr) { return { umap_auth {}, umap_auth {} }; }
