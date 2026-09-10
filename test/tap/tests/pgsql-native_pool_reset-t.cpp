@@ -8,12 +8,20 @@
  * connection is inside a transaction, DISCARD ALL otherwise -- DISCARD ALL is
  * rejected by the backend inside a transaction block, so the order matters.
  *
- * One scenario per command. Each runs twice, once with the libpq backend and
- * once with the native one, and the two runs must agree; libpq is the oracle.
+ * Each scenario runs twice, once with the libpq backend and once with the native
+ * one, and the two runs must agree; libpq is the oracle.
  *   S1 (DISCARD ALL): client A sets bytea_output, disappears, client B must
  *      read back the default.
  *   S2 (ROLLBACK): client A opens a transaction, disappears, client B must not
  *      find itself inside one.
+ *   S3 (ROLLBACK, failed transaction): A's statement errors first, so the connection
+ *      goes back marked 'E' rather than 'T' -- a separate route, since a failed
+ *      transaction still counts as reusable. B must be outside the transaction AND
+ *      able to run a statement at all.
+ *
+ * A last check counts instead of comparing: a reset that does nothing still leaves
+ * each connection looking clean, because the broken one is thrown away. Only the
+ * number of connections opened per client gives that away.
  *
  * Both assertions are worthless unless B actually inherited A's connection, so
  * every case proves it by backend pid and retries when it does not. The pid
@@ -201,6 +209,7 @@ static bool selectMode(PGconn* admin, bool native) {
 // Result of one scenario run.
 struct Outcome {
     bool ran = false;           // did B actually inherit A's backend connection?
+    bool usable = false;        // did B's first statement on it succeed?
     std::string observed;       // what B read back
     std::string a_pid, b_pid;
 };
@@ -272,13 +281,20 @@ static Outcome runVariableLeakScenario(int max_attempts) {
 
 /**
  * Scenario 2 — a connection returned while a transaction is still open.
+ * Scenario 3 — the same, but the transaction has already failed.
  *
  * A connection handed back with a transaction still open is rolled back before
  * anyone else gets it, so client B must never find itself inside one. Read as B's
  * transaction status: 'I' (idle) is clean, 'T' (in a transaction block) means A's
- * transaction survived into B's session.
+ * transaction survived into B's session, 'E' means it survived and is broken.
+ *
+ * abort_txn picks which of the two. It matters because a failed transaction takes
+ * a different route: ProxySQL still counts the connection reusable, so it goes to
+ * the reset path rather than being destroyed. A reset that reports success without
+ * sending anything then pools a connection PostgreSQL will refuse every statement
+ * on, and the next client gets it.
  */
-static Outcome runOpenTransactionScenario(int max_attempts) {
+static Outcome runOpenTransactionScenario(int max_attempts, bool abort_txn) {
     Outcome out;
     for (int attempt = 0; attempt < max_attempts; attempt++) {
         std::string a_pid;
@@ -297,9 +313,19 @@ static Outcome runOpenTransactionScenario(int max_attempts) {
             const bool began = (PQresultStatus(r) == PGRES_COMMAND_OK);
             PQclear(r);
             if (!began) { usleep(200000); continue; }
-            // Do real work inside the transaction so it is genuinely open.
-            PQclear(PQexec(A.get(), "CREATE TEMP TABLE IF NOT EXISTS pool_reset_probe(x int)"));
-            PQclear(PQexec(A.get(), "INSERT INTO pool_reset_probe VALUES (1)"));
+            if (abort_txn) {
+                // Fail on purpose: the backend moves to 'E' and refuses everything
+                // until the transaction ends. Division by zero needs no fixture.
+                PGresult* bad = PQexec(A.get(), "SELECT 1/0");
+                const bool did_fail = (PQresultStatus(bad) == PGRES_FATAL_ERROR);
+                PQclear(bad);
+                if (!did_fail) { usleep(200000); continue; }
+                if (PQtransactionStatus(A.get()) != PQTRANS_INERROR) { usleep(200000); continue; }
+            } else {
+                // Do real work inside the transaction so it is genuinely open.
+                PQclear(PQexec(A.get(), "CREATE TEMP TABLE IF NOT EXISTS pool_reset_probe(x int)"));
+                PQclear(PQexec(A.get(), "INSERT INTO pool_reset_probe VALUES (1)"));
+            }
         }   // A vanishes mid-transaction
 
         usleep(400000);
@@ -310,9 +336,12 @@ static Outcome runOpenTransactionScenario(int max_attempts) {
             const std::string b_pid = backendPid(B.get());
             if (b_pid.empty() || b_pid != a_pid) { usleep(300000); continue; }
             // PQtransactionStatus reflects the last ReadyForQuery the client saw.
-            PQclear(PQexec(B.get(), "SELECT 1"));
+            PGresult* first = PQexec(B.get(), "SELECT 1");
+            const bool first_ok = (PQresultStatus(first) == PGRES_TUPLES_OK);
+            PQclear(first);
             const PGTransactionStatusType ts = PQtransactionStatus(B.get());
             out.ran = true;
+            out.usable = first_ok;
             out.observed = (ts == PQTRANS_IDLE) ? "I"
                          : (ts == PQTRANS_INTRANS) ? "T"
                          : (ts == PQTRANS_INERROR) ? "E" : "?";
@@ -324,11 +353,41 @@ static Outcome runOpenTransactionScenario(int max_attempts) {
     return out;
 }
 
+// ConnOK for the hostgroup: backend connections ProxySQL has opened since it
+// started. It only ever goes up, so the interesting number is the difference
+// across a workload, not the value.
+static int connOK(PGconn* admin, int hg) {
+    std::stringstream q;
+    q << "SELECT ConnOK FROM stats_pgsql_connection_pool WHERE hostgroup=" << hg;
+    const std::string v = scalar(admin, q.str());
+    return v.empty() ? -1 : atoi(v.c_str());
+}
+
+// A reset that only claims to have run hands every client a connection stuck in
+// the aborted transaction; its first statement is refused and the connection is
+// thrown away, so the cost tracks the client count instead of staying flat.
+// Measured here: 1-2 connections with the reset working, 16 without.
+static int abandonBudget(PGconn* admin, int sessions) {
+    const int before = connOK(admin, BACKEND_HG);
+    if (before < 0) return -1;
+    for (int i = 0; i < sessions; i++) {
+        auto A = createClientConn();
+        if (!A || PQstatus(A.get()) != CONNECTION_OK) continue;
+        PQclear(PQexec(A.get(), "BEGIN"));
+        PQclear(PQexec(A.get(), "SELECT 1/0"));
+        // A disconnects here, still inside the failed transaction.
+    }
+    usleep(500000);   // let the last connection finish going back to the pool
+    const int after = connOK(admin, BACKEND_HG);
+    return (after < 0) ? -1 : (after - before);
+}
+
 int main(int, char**) {
     // Per scenario: libpq oracle ran, native ran, native used a fresh backend
-    // connection, native matches oracle. x2 scenarios = 8, plus one summary
-    // assertion naming the leak explicitly.
-    plan(9);
+    // connection, native matches oracle. x3 scenarios = 12, plus one summary
+    // assertion naming the leak explicitly, plus S3's usability and connection
+    // budget checks.
+    plan(15);
 
     if (cl.getEnv()) return exit_status();
 
@@ -398,12 +457,12 @@ int main(int, char**) {
 
     // ================= Scenario 2: open transaction ==========================
     if (!selectMode(admin, false)) { restore(); BAIL_OUT("cannot select libpq mode"); }
-    const Outcome libpq_txn = runOpenTransactionScenario(ATTEMPTS);
+    const Outcome libpq_txn = runOpenTransactionScenario(ATTEMPTS, false);
     ok(libpq_txn.ran, "S2 oracle: libpq run reused backend pid %s for both clients",
        libpq_txn.a_pid.c_str());
 
     if (!selectMode(admin, true)) { restore(); BAIL_OUT("cannot select native mode"); }
-    const Outcome native_txn = runOpenTransactionScenario(ATTEMPTS);
+    const Outcome native_txn = runOpenTransactionScenario(ATTEMPTS, false);
     ok(native_txn.ran, "S2 native: run reused backend pid %s for both clients",
        native_txn.a_pid.c_str());
 
@@ -418,6 +477,33 @@ int main(int, char**) {
        "(a mismatch means ROLLBACK never reached the backend)",
        libpq_txn.observed.c_str(), native_txn.observed.c_str());
 
+    // ================= Scenario 3: aborted transaction =======================
+    if (!selectMode(admin, false)) { restore(); BAIL_OUT("cannot select libpq mode"); }
+    const Outcome libpq_abort = runOpenTransactionScenario(ATTEMPTS, true);
+    ok(libpq_abort.ran, "S3 oracle: libpq run reused backend pid %s for both clients",
+       libpq_abort.a_pid.c_str());
+
+    if (!selectMode(admin, true)) { restore(); BAIL_OUT("cannot select native mode"); }
+    const Outcome native_abort = runOpenTransactionScenario(ATTEMPTS, true);
+    ok(native_abort.ran, "S3 native: run reused backend pid %s for both clients",
+       native_abort.a_pid.c_str());
+
+    ok(native_abort.ran && libpq_abort.ran && native_abort.a_pid != libpq_abort.a_pid,
+       "S3 native run is on a different backend connection than the libpq run "
+       "(libpq pid %s, native pid %s); equal pids mean the pool was not flushed "
+       "and the native run measured a libpq connection",
+       libpq_abort.a_pid.c_str(), native_abort.a_pid.c_str());
+
+    ok(libpq_abort.ran && native_abort.ran && libpq_abort.observed == native_abort.observed,
+       "S3 transaction status inherited after an ABORTED transaction: libpq='%s' "
+       "native='%s' (a mismatch means the failed transaction was never rolled back)",
+       libpq_abort.observed.c_str(), native_abort.observed.c_str());
+
+    ok(native_abort.ran && native_abort.usable,
+       "S3 native: the next client can actually use the connection it was given%s",
+       (native_abort.ran && !native_abort.usable)
+           ? " -- ITS FIRST STATEMENT WAS REFUSED, the aborted transaction came with it" : "");
+
     // ---- explicit statement of the leak ------------------------------------
     // Separate from the differential so a reader sees the concrete claim, not
     // just "two strings differ". The oracle establishes what clean looks like.
@@ -427,6 +513,24 @@ int main(int, char**) {
            "client B must not observe client A's session state: expected '%s', native gave '%s'%s",
            DEFAULT_VALUE, native_var.observed.c_str(),
            leaked ? " -- SESSION STATE CROSSED BETWEEN CLIENTS" : "");
+    }
+
+
+    // ---- what the reset costs when it does not happen -----------------------
+    // The differential above proves one connection is clean. This proves the pool
+    // as a whole is: a reset that silently does nothing still leaves each single
+    // connection looking fine after ProxySQL throws it away, and only the count of
+    // connections opened gives that away.
+    {
+        if (!selectMode(admin, true)) { restore(); BAIL_OUT("cannot select native mode"); }
+        const int SESSIONS = 30;
+        const int BUDGET = 10;   // clean runs cost 1-2; a dead reset costs one per session
+        const int used = abandonBudget(admin, SESSIONS);
+        ok(used >= 0 && used <= BUDGET,
+           "%d clients abandoning a failed transaction opened %d backend connections "
+           "(budget %d); one per client means every reuse handed over a broken "
+           "connection and it was thrown away",
+           SESSIONS, used, BUDGET);
     }
 
     restore();

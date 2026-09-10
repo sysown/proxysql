@@ -438,9 +438,10 @@ static void harness_selftest() {
 int main(int, char**) {
     // 6 harness self-test cases (the mock, judged by libpq)
     // + 18 auth cases (A1-A18; A8 and A17 are positive controls)
-    // + 21 result cases (R1-R22, minus R17) + 1 final pool-cleanliness assertion
+    // + 21 result cases (R1-R22, minus R17) + R18's recorded-row-count check
+    // + 1 final pool-cleanliness assertion
     // + R23 (F5), which runs LAST -- see the comment on it.
-    plan(47);
+    plan(48);
 
     if (cl.getEnv()) return exit_status();
 
@@ -886,13 +887,35 @@ int main(int, char**) {
           step_send(std::string("Z") + pgmb_be32(5) + "X"),
           step_sleep(300) });
 
-    // R18: CommandComplete whose tag has no NUL terminator. The tag is parsed
-    // for the affected-rows count (PgSQL_Protocol.cpp ~2893).
+    // R18: an unterminated CommandComplete tag. The trailing ParseComplete is
+    // there because its label '1' is a digit: a parse that runs off the end of the
+    // tag swallows it and reports 91 rows for a tag that says 9. The proxy survives
+    // either way and ASAN cannot see it, so the row count is the only verdict.
+    static const char* R18_QUERY = "SELECT 1 AS r18_probe";
     runCase(admin, adminOwner, mock, "R18 CommandComplete tag without a NUL terminator",
         { step_expect_startup(), step_send(acceptedHandshake()), step_expect_query(),
           step_send(std::string("C") + pgmb_be32(4 + 8) + "INSERT 9" +
+                    std::string("1") + pgmb_be32(4) +   // ParseComplete: label is a digit
                     pgmb_ready_for_query('I')),
-          step_sleep(300) });
+          step_sleep(300) },
+        R18_QUERY);
+    {
+        // The alias survives digest normalisation, which isolates this row. Reading
+        // count_star first stops a probe that never reached the digest from passing
+        // as a row count of zero.
+        const std::string seen = adminScalar(admin,
+            "SELECT IFNULL(SUM(count_star),0) FROM stats_pgsql_query_digest "
+            "WHERE digest_text LIKE '%r18_probe%'");
+        const std::string rows = adminScalar(admin,
+            "SELECT IFNULL(SUM(sum_rows_affected),0) FROM stats_pgsql_query_digest "
+            "WHERE digest_text LIKE '%r18_probe%'");
+        ok(seen != "0" && seen != "" && rows == "0",
+           "R18 affected rows recorded from an unterminated tag: %s (query seen %s times); "
+           "expected 0 -- any value means the tag was parsed past the end of the message, "
+           "and 91 is the trailing ParseComplete label read as a digit",
+           rows.empty() ? "(no row)" : rows.c_str(),
+           seen.empty() ? "(no row)" : seen.c_str());
+    }
 
     // R19: a CommandComplete tag whose trailing number is far wider than 64
     // bits, exercising the strtoull path that produces affected_rows.
