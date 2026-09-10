@@ -328,6 +328,10 @@ enum session_status {
 	SETTING_SESSION_TRACK_VARIABLES,
 	SETTING_SESSION_TRACK_STATE,
 	SETTING_USER_VARIABLES,
+	// Append-only: changing existing values can leave incrementally built
+	// translation units disagreeing on this enum's numeric values.
+	PROCESSING_STMT_BIND,
+	PROCESSING_STMT_CLOSE,
 	session_status___NONE // special marker
 };
 
@@ -1177,6 +1181,7 @@ __thread int pgsql_thread___default_max_latency_ms;
 __thread int pgsql_thread___unshun_algorithm;
 __thread int pgsql_thread___free_connections_pct;
 __thread bool pgsql_thread___kill_backend_connection_when_disconnect;
+__thread bool pgsql_thread___use_native_backend_protocol;
 __thread int pgsql_thread___max_allowed_packet;
 
 /* variables used for SSL , from proxy to server (p2s) */
@@ -1536,6 +1541,7 @@ extern __thread int pgsql_thread___default_max_latency_ms;
 extern __thread int pgsql_thread___unshun_algorithm;
 extern __thread int pgsql_thread___free_connections_pct;
 extern __thread bool pgsql_thread___kill_backend_connection_when_disconnect;
+extern __thread bool pgsql_thread___use_native_backend_protocol;
 extern __thread int pgsql_thread___max_allowed_packet;
 
 extern __thread char* pgsql_thread___ssl_p2s_ca;

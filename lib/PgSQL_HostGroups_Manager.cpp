@@ -2599,6 +2599,14 @@ void PgSQL_HostGroups_Manager::destroy_MyConn_from_pool(PgSQL_Connection *c, boo
 						c->parent->port, c->parent->myhgc->hid, c->parent->use_ssl,
 						PgSQL_Backend_Kill_Args::TYPE::TERMINATE_CONNECTION, nullptr
 					);
+					// For native connections PQbackendPID(NULL)==0 in the ctor; use
+					// the real backend PID captured from BackendKeyData so the libpq
+					// pg_terminate_backend() path targets the correct backend.
+					if (c->native_mode) {
+						backend_kill_args->native_mode = true;
+						backend_kill_args->backend_pid = c->native_backend_pid;
+						backend_kill_args->native_secret_key = c->native_backend_secret;
+					}
 
 					pthread_attr_t attr;
 					pthread_attr_init(&attr);
@@ -3092,22 +3100,36 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Free_Connections() {
 					char buff[32];
 					snprintf(buff, sizeof(buff), "%p", static_cast<const void*>(conn->get_pg_connection()));
 					j["address"] = buff;
-					j["host"] = conn->get_pg_host();
-					j["host_addr"] = conn->get_pg_hostaddr();
-					j["port"] = conn->get_pg_port();
-					j["user"] = conn->get_pg_user();
-					j["database"] = conn->get_pg_dbname();
-					j["backend_pid"] = conn->get_pg_backend_pid();
-					j["using_ssl"] = conn->get_pg_ssl_in_use() ? "YES" : "NO";
-					j["error_msg"] = conn->get_pg_error_message();
-					j["options"] = conn->get_pg_options();
-					j["fd"] = conn->get_pg_socket_fd();
-					j["protocol_version"] = conn->get_pg_protocol_version();
-					j["server_version"] = conn->get_pg_server_version_str(buff, sizeof(buff));
-					j["transaction_status"] = conn->get_pg_transaction_status_str();
-					j["connection_status"] = conn->get_pg_connection_status_str();
-					j["client_encoding"] = conn->get_pg_client_encoding();
-					j["is_nonblocking"] = conn->get_pg_is_nonblocking() ? "YES" : "NO";
+					// Native connections have pgsql_conn==NULL; the libpq
+					// accessors (get_pg_user, get_pg_host, ...) call PQxxx
+					// on the null pointer and crash the stats thread. Emit a
+					// minimal "native" record instead of crashing.
+					if (conn->pgsql_conn == NULL) {
+						j["native_mode"] = true;
+						j["host"] = conn->parent ? conn->parent->address : "";
+						j["port"] = conn->parent ? conn->parent->port : 0;
+						j["user"] = (conn->userinfo && conn->userinfo->username) ? conn->userinfo->username : "";
+						j["database"] = (conn->userinfo && conn->userinfo->dbname) ? conn->userinfo->dbname : "";
+						j["transaction_status"] = string(1, conn->native_txn_status);
+					} else {
+						j["native_mode"] = false;
+						j["host"] = conn->get_pg_host();
+						j["host_addr"] = conn->get_pg_hostaddr();
+						j["port"] = conn->get_pg_port();
+						j["user"] = conn->get_pg_user();
+						j["database"] = conn->get_pg_dbname();
+						j["backend_pid"] = conn->get_pg_backend_pid();
+						j["using_ssl"] = conn->get_pg_ssl_in_use() ? "YES" : "NO";
+						j["error_msg"] = conn->get_pg_error_message();
+						j["options"] = conn->get_pg_options();
+						j["fd"] = conn->get_pg_socket_fd();
+						j["protocol_version"] = conn->get_pg_protocol_version();
+						j["server_version"] = conn->get_pg_server_version_str(buff, sizeof(buff));
+						j["transaction_status"] = conn->get_pg_transaction_status_str();
+						j["connection_status"] = conn->get_pg_connection_status_str();
+						j["client_encoding"] = conn->get_pg_client_encoding();
+						j["is_nonblocking"] = conn->get_pg_is_nonblocking() ? "YES" : "NO";
+					}
 					const string s = j.dump();
 					pta[11] = strdup(s.c_str());
 				}

@@ -4,6 +4,9 @@
  */
 
 #include <unistd.h>
+#include <poll.h>
+#include <ctime>
+#include <vector>
 #include <arpa/inet.h>
 #include <string>
 #include <string_view>
@@ -964,6 +967,291 @@ std::vector<std::pair<std::string, void (*)(PGconn*, PGconn*, std::fstream& f_pr
 	{ "COPY ... FROM STDIN Permanent Fast Forward", testSTDIN_PERMANENT_FAST_FORWARD }
 };
 
+/**
+ * COPY over a TLS-encrypted BACKEND connection. Everything above encrypts the
+ * CLIENT leg only. Fast forward borrows the backend's TLS and must hand it back;
+ * when it did not, the next query never reached the backend -- in this session,
+ * or in whichever one later took the connection from the pool.
+ */
+static const int TLS_BACKEND_TESTS = 11;
+
+struct TlsSrvRow { std::string hostname, port, max_connections, comment; };
+
+// Admin takes no bound parameters, so quote by doubling. A hostname or comment
+// holding an apostrophe would otherwise build a broken INSERT and leave
+// hostgroup 0 empty after the DELETE.
+static std::string tlsQuote(const std::string& v) {
+    std::string out("'");
+    for (char c : v) {
+        if (c == '\'') out += '\'';
+        out += c;
+    }
+    out += '\'';
+    return out;
+}
+
+static std::string tlsQueryOneValue(PGconn* c, const std::string& q) {
+    PGresult* res = PQexec(c, q.c_str());
+    std::string out;
+    if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0 && !PQgetisnull(res, 0, 0))
+        out = PQgetvalue(res, 0, 0);
+    PQclear(res);
+    return out;
+}
+
+// Gives up after timeout_s. The defect under test strands the query, so a plain
+// PQexec would block until the harness kills the whole test.
+static std::string tlsQueryWithin(PGconn* c, const std::string& q, int timeout_s) {
+    if (PQsendQuery(c, q.c_str()) != 1) {
+        diag("PQsendQuery failed: %s", PQerrorMessage(c));
+        return "";
+    }
+    const time_t deadline = time(NULL) + timeout_s;
+    while (PQisBusy(c)) {
+        if (time(NULL) >= deadline) {
+            diag("no reply to '%s' within %d seconds -- the backend connection is wedged", q.c_str(), timeout_s);
+            return "";
+        }
+        struct pollfd pfd = { PQsocket(c), POLLIN, 0 };
+        if (poll(&pfd, 1, 500) > 0 && PQconsumeInput(c) != 1) {
+            diag("PQconsumeInput failed: %s", PQerrorMessage(c));
+            return "";
+        }
+    }
+    std::string out;
+    bool got = false;
+    PGresult* res;
+    while ((res = PQgetResult(c)) != nullptr) {
+        if (!got && PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) > 0 && !PQgetisnull(res, 0, 0)) {
+            out = PQgetvalue(res, 0, 0);
+            got = true;
+        }
+        PQclear(res);
+    }
+    return out;
+}
+
+static std::vector<TlsSrvRow> tlsReadServers(PGconn* admin) {
+    std::vector<TlsSrvRow> rows;
+    PGresult* res = PQexec(admin,
+        "SELECT hostname, port, max_connections, COALESCE(comment,'') FROM pgsql_servers WHERE hostgroup_id=0");
+    if (PQresultStatus(res) == PGRES_TUPLES_OK) {
+        for (int i = 0; i < PQntuples(res); i++)
+            rows.push_back(TlsSrvRow { PQgetvalue(res,i,0), PQgetvalue(res,i,1),
+                                       PQgetvalue(res,i,2), PQgetvalue(res,i,3) });
+    }
+    PQclear(res);
+    return rows;
+}
+
+// Deleting the servers drops the pool, so the next query opens a fresh
+// connection under the use_ssl setting we want. Updating the row in place does
+// not: the pooled connection survives and every assertion below would run over
+// plaintext. Only the columns this test needs are carried across; the harness
+// reloads the whole config from disk before every test, so the rest cannot leak.
+static bool tlsReloadServers(PGconn* admin, const std::vector<TlsSrvRow>& rows, int use_ssl) {
+    if (rows.empty()) return false;
+    std::vector<std::string> q { "DELETE FROM pgsql_servers WHERE hostgroup_id=0", "LOAD PGSQL SERVERS TO RUNTIME" };
+    for (const auto& r : rows) {
+        q.push_back("INSERT INTO pgsql_servers (hostgroup_id,hostname,port,max_connections,use_ssl,comment)"
+            " VALUES (0," + tlsQuote(r.hostname) + "," + r.port + ","
+            + (r.max_connections.empty() ? std::string("1000") : r.max_connections) + ","
+            + std::to_string(use_ssl) + "," + tlsQuote(r.comment) + ")");
+    }
+    q.push_back("LOAD PGSQL SERVERS TO RUNTIME");
+    if (!executeQueries(admin, q)) return false;
+    usleep(300000);
+    return true;
+}
+
+// Asks the backend whether this session's connection is encrypted.
+// pg_backend_pid() is intercepted, so match on the text of this very query.
+static bool tlsBackendLegIsEncrypted(PGconn* client) {
+    return tlsQueryOneValue(client,
+        "SELECT s.ssl FROM pg_stat_ssl s JOIN pg_stat_activity a ON s.pid = a.pid"
+        " WHERE a.state = 'active' AND a.query LIKE '%copytls_self_marker%' LIMIT 1") == "t";
+}
+
+// A plaintext connection can still be handed out briefly after the reload, and
+// then every assertion below passes while testing nothing.
+static bool tlsWaitForEncryptedBackend() {
+    for (int attempt = 0; attempt < 20; attempt++) {
+        PGConnPtr probe = createNewConnection(ConnType::BACKEND, false);
+        if (probe && tlsBackendLegIsEncrypted(probe.get())) return true;
+        usleep(500000);
+    }
+    diag("no encrypted backend connection appeared after the reload");
+    return false;
+}
+
+static bool tlsCopyIn(PGconn* c, const std::string& table, const std::string& payload) {
+    PGresult* res = PQexec(c, ("COPY " + table + " FROM STDIN").c_str());
+    if (PQresultStatus(res) != PGRES_COPY_IN) {
+        diag("COPY IN did not start: %s", PQerrorMessage(c));
+        PQclear(res);
+        return false;
+    }
+    PQclear(res);
+    if (PQputCopyData(c, payload.data(), (int)payload.size()) != 1) return false;
+    if (PQputCopyEnd(c, nullptr) != 1) return false;
+    res = PQgetResult(c);
+    bool ok_ = (res != nullptr && PQresultStatus(res) == PGRES_COMMAND_OK);
+    if (!ok_) diag("COPY IN did not complete: %s", PQerrorMessage(c));
+    PQclear(res);
+    while ((res = PQgetResult(c)) != nullptr) PQclear(res);
+    return ok_;
+}
+
+static std::string tlsCopyOut(PGconn* c, const std::string& sql, bool* ok_) {
+    std::string out;
+    *ok_ = false;
+    PGresult* res = PQexec(c, sql.c_str());
+    if (PQresultStatus(res) != PGRES_COPY_OUT) {
+        diag("COPY OUT did not start: %s", PQerrorMessage(c));
+        PQclear(res);
+        return out;
+    }
+    PQclear(res);
+    char* buf = nullptr;
+    int n;
+    while ((n = PQgetCopyData(c, &buf, 0)) > 0) { out.append(buf, n); PQfreemem(buf); buf = nullptr; }
+    if (n == -2) { diag("COPY OUT failed mid-stream: %s", PQerrorMessage(c)); return out; }
+    res = PQgetResult(c);
+    *ok_ = (res != nullptr && PQresultStatus(res) == PGRES_COMMAND_OK);
+    PQclear(res);
+    while ((res = PQgetResult(c)) != nullptr) PQclear(res);
+    return out;
+}
+
+void testCopyOverTlsBackend() {
+    diag(">>>> Running COPY over a TLS-encrypted backend connection <<<<");
+    const std::string tbl = "pgsql_copy_tls_" + std::to_string(getpid());
+    const char* payload = "1\tone\n2\ttwo\n3\tthree\n";
+    const char* copy_out_sql = "COPY (SELECT g, 'row'||g FROM generate_series(1,5) g) TO STDOUT";
+
+    PGConnPtr admin = createNewConnection(ConnType::ADMIN, false);
+    if (!admin) { BAIL_OUT("Error: failed to connect to admin in file %s, line %d\n", __FILE__, __LINE__); return; }
+
+    // The permanent fast forward case above leaves fast_forward=1 and relies on the
+    // next pass to clear it. A forwarded session never switches back to normal
+    // mode, which is the transition under test, so clear it here.
+    if (!executeQueries(admin.get(), { "UPDATE pgsql_users SET fast_forward=0", "LOAD PGSQL USERS TO RUNTIME" }))
+        return;
+
+    const std::vector<TlsSrvRow> saved = tlsReadServers(admin.get());
+    if (saved.empty()) { BAIL_OUT("no servers in hostgroup 0 to work with"); return; }
+
+    ok(tlsReloadServers(admin.get(), saved, 1), "backend servers set to use_ssl=1 and pool flushed");
+    const bool tls_ready = tlsWaitForEncryptedBackend();
+
+    std::string out;
+    bool copy_out_ok = false, copy_in_ok = false, tls = false, still_usable = false;
+    {
+        PGConnPtr conn = createNewConnection(ConnType::BACKEND, false);
+        if (!conn) { BAIL_OUT("client connection failed"); return; }
+        executeQueries(conn.get(), { "DROP TABLE IF EXISTS " + tbl, "CREATE TABLE " + tbl + " (id int, name text)" });
+        tls = tls_ready && tlsBackendLegIsEncrypted(conn.get());
+        out = tlsCopyOut(conn.get(), copy_out_sql, &copy_out_ok);
+        copy_in_ok = tlsCopyIn(conn.get(), tbl, payload);
+        // When the TLS was not handed back, this query went into a buffer nobody
+        // drained and the session waited for a reply forever.
+        still_usable = (tlsQueryWithin(conn.get(), "SELECT 42", 20) == "42");
+    }
+
+    // The bulk-load shape: connect, COPY, disconnect. Nothing there notices a
+    // broken connection; the next unrelated session gets it from the pool.
+    bool loader_pool_ok = false;
+    {
+        PGConnPtr loader = createNewConnection(ConnType::BACKEND, false);
+        if (loader) tlsCopyIn(loader.get(), tbl, payload);
+    }
+    {
+        PGConnPtr conn = createNewConnection(ConnType::BACKEND, false);
+        if (conn) loader_pool_ok = (tlsQueryWithin(conn.get(), "SELECT 7", 20) == "7");
+    }
+
+    ok(tls, "the COPY really ran over an encrypted backend connection");
+    ok(copy_out_ok && !out.empty(), "COPY TO STDOUT completed (%zu bytes)", out.size());
+    ok(copy_in_ok, "COPY FROM STDIN completed");
+    ok(still_usable, "the session still works after a COPY over a TLS backend connection");
+    ok(loader_pool_ok, "a later session works on the connection a COPY-and-disconnect left pooled");
+
+    // A second COPY on the same session exercises adopt -> release -> adopt.
+    bool second_copy_ok = false;
+    {
+        PGConnPtr conn = createNewConnection(ConnType::BACKEND, false);
+        if (conn) {
+            bool a = tlsCopyIn(conn.get(), tbl, payload);
+            bool b = tlsCopyIn(conn.get(), tbl, payload);
+            second_copy_ok = a && b && (tlsQueryWithin(conn.get(), "SELECT 5", 20) == "5");
+        }
+    }
+    ok(second_copy_ok, "two COPYs on one session, then a query, all succeed");
+
+    // A payload big enough to need many SSL_write cycles through the memory BIOs.
+    // A partial write leaves ciphertext buffered, which is the state release has to
+    // notice rather than hand the connection back to the pool holding it.
+    bool bulk_ok = false;
+    {
+        std::string big;
+        big.reserve(600 * 1024);
+        for (int i = 0; big.size() < 512 * 1024; i++)
+            big += std::to_string(i) + "\tpadding-so-the-row-is-not-tiny-" + std::to_string(i) + "\n";
+        PGConnPtr conn = createNewConnection(ConnType::BACKEND, false);
+        if (conn) {
+            bool a = tlsCopyIn(conn.get(), tbl, big);
+            bulk_ok = a && (tlsQueryWithin(conn.get(), "SELECT 9", 20) == "9");
+        }
+    }
+    ok(bulk_ok, "a half-megabyte COPY over TLS completes and leaves the session usable");
+
+    // Both legs encrypted at once: the client leg has its own TLS, and the relay
+    // must not confuse it with the backend's.
+    bool both_legs_ok = false;
+    {
+        PGConnPtr conn = createNewConnection(ConnType::BACKEND, true);
+        if (conn) {
+            bool a = tlsCopyIn(conn.get(), tbl, payload);
+            both_legs_ok = a && (tlsQueryWithin(conn.get(), "SELECT 11", 20) == "11");
+        }
+    }
+    ok(both_legs_ok, "COPY works with the client leg encrypted as well as the backend");
+
+    // Permanent fast forward reaches the other two places the backend TLS is
+    // borrowed: attach_connection() when a pooled connection joins a session that
+    // is already forwarding, and the connect path when a new one is opened for it.
+    // The COPY cases above only ever exercise the switch into fast forward.
+    bool perm_ff_ok = false, perm_ff_pool_ok = false;
+    if (executeQueries(admin.get(), { "UPDATE pgsql_users SET fast_forward=1", "LOAD PGSQL USERS TO RUNTIME" })) {
+        // Drop the pool so the first session has to open a connection while the
+        // session is already in fast forward.
+        tlsReloadServers(admin.get(), saved, 1);
+        {
+            PGConnPtr conn = createNewConnection(ConnType::BACKEND, false);
+            if (conn) perm_ff_ok = (tlsQueryWithin(conn.get(), "SELECT 13", 20) == "13");
+        }
+        // Now one that takes the pooled connection instead of opening its own.
+        {
+            PGConnPtr conn = createNewConnection(ConnType::BACKEND, false);
+            if (conn) perm_ff_pool_ok = (tlsQueryWithin(conn.get(), "SELECT 17", 20) == "17");
+        }
+        executeQueries(admin.get(), { "UPDATE pgsql_users SET fast_forward=0", "LOAD PGSQL USERS TO RUNTIME" });
+    }
+    ok(perm_ff_ok, "a forwarded session works on a TLS backend connection it opened itself");
+    ok(perm_ff_pool_ok, "a forwarded session works on a TLS backend connection taken from the pool");
+
+    {
+        PGConnPtr conn = createNewConnection(ConnType::BACKEND, false);
+        if (conn) executeQueries(conn.get(), { "DROP TABLE IF EXISTS " + tbl });
+    }
+    // Only to leave the pool usable for anything after this; the harness reloads
+    // the config from disk before the next test, so exact fidelity is not needed.
+    if (!tlsReloadServers(admin.get(), saved, 0)) {
+        diag("WARNING: could not restore the original pgsql_servers rows for hostgroup 0");
+    }
+    diag(">>>> Done <<<<");
+}
+
 void execute_tests(bool with_ssl, bool diff_conn, bool query_digests = true) {
 
     PGConnPtr admin_conn_1 = createNewConnection(ConnType::ADMIN, with_ssl);
@@ -1042,9 +1330,9 @@ int main(int argc, char** argv) {
 	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
 
 	if (cl.use_noise) {
-		plan(59 * 4 + 3);
+		plan(59 * 4 + 3 + TLS_BACKEND_TESTS);
 	} else {
-		plan(59 * 4);
+		plan(59 * 4 + TLS_BACKEND_TESTS);
 	}
 
     // query_digests ON: strncasecmp fast-reject path active
@@ -1053,6 +1341,9 @@ int main(int argc, char** argv) {
     // query_digests OFF: falls back to full RE2 match
     execute_tests(true, false, false);
     execute_tests(false, false, false);
+
+    // Runs once and last: it changes pgsql_servers.use_ssl and restores it.
+    testCopyOverTlsBackend();
 
     return exit_status();
 }

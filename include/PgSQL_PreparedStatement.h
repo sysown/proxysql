@@ -4,7 +4,38 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#include <atomic>
+#include <string>
+
 static constexpr uint16_t PGSQL_MAX_THREADS = 255;
+
+// PgSQL_Describe_Cache — set-once cache of a statement-level Describe response.
+//
+// A statement-level Describe (extended-query 'D' with kind 'S') always yields a
+// ParameterDescription ('t') followed by either a RowDescription ('T') or a
+// NoData ('n'). Those metadata bytes are a pure function of the prepared
+// statement text + parameter types, so — modulo DDL staleness (an accepted,
+// documented trade-off, same class as MySQL stmt-metadata caching) — they can be
+// captured once and replayed for every subsequent statement-level Describe of the
+// same global statement, in BOTH backend modes (libpq and native).
+//
+// The stored payloads are RAW WIRE BODIES: everything AFTER the 4-byte length
+// field, exactly as they appear on the wire. Serving reconstructs the full
+// message as `type-byte + be32(len+4) + payload`, so the served bytes are
+// byte-identical to a real backend round-trip. The native capture stores the
+// backend's own bytes; the libpq capture stores ProxySQL's rebuilt bytes; the two
+// are byte-identical today (that equivalence is exactly what the green
+// native-vs-libpq differential proves), so either populating path yields a cache
+// that serves correctly to a client on the other path.
+struct PgSQL_Describe_Cache {
+	// Body of the ParameterDescription 't' message: uint16 param-count + N*uint32 OIDs.
+	std::string param_desc_payload;
+	// Body of the RowDescription 'T' message: uint16 field-count + per-column fields.
+	// Empty (and unused) when no_data is true.
+	std::string row_desc_payload;
+	// True when the statement returns no result columns → serve 'n' NoData instead of 'T'.
+	bool no_data = false;
+};
 
 // class PgSQL_STMT_Global_info represents information about a PgSQL Prepared Statement
 // it is an internal representation of prepared statement
@@ -31,8 +62,30 @@ public:
 	~PgSQL_STMT_Global_info();
 	void calculate_mem_usage();
 
+	// --- Statement-level Describe metadata cache (set-once) ---------------------
+	// Instances live behind std::shared_ptr<const PgSQL_STMT_Global_info>, so the
+	// cache slot is a `mutable std::atomic<>` published through const: the cache is
+	// logically part of the immutable statement identity, filled lazily on first
+	// Describe. Publish is lock-free set-once via compare-exchange from null; a
+	// racing loser deletes its own candidate. Freed in the destructor.
+
+	// Publish `candidate` as the describe cache iff the slot is still empty.
+	// Takes ownership of `candidate` unconditionally: on success it becomes the
+	// stored cache; on failure (another thread already published) it is deleted.
+	// Returns true iff this call won the race and installed the cache.
+	bool publish_describe_cache(const PgSQL_Describe_Cache* candidate) const noexcept;
+
+	// Return the published describe cache, or nullptr if none has been set yet.
+	inline const PgSQL_Describe_Cache* get_describe_cache() const noexcept {
+		return describe_cache.load(std::memory_order_acquire);
+	}
+
 private:
 	void compute_hash();
+
+	// Set-once slot for the statement-level Describe metadata. nullptr until the
+	// first successful statement-level Describe (either backend mode) publishes it.
+	mutable std::atomic<const PgSQL_Describe_Cache*> describe_cache{nullptr};
 };
 
 // class PgSQL_STMT_Local represents prepared statements local to a session/connection
@@ -68,6 +121,14 @@ public:
 	 * associated PgSQL_STMT_Global_info pointer, or nullptr if not present.
 	 */
 	const PgSQL_STMT_Global_info* find_stmt_info_from_stmt_name(const std::string& client_stmt_name) const;
+
+	/**
+	 * Like find_stmt_info_from_stmt_name, but returns a shared_ptr so the caller can
+	 * keep the global statement alive beyond the client mapping's lifetime (used by
+	 * the named-portal registry, whose entries outlive the extended-query frame).
+	 * Returns nullptr shared_ptr if not present.
+	 */
+	std::shared_ptr<const PgSQL_STMT_Global_info> find_shared_stmt_info_from_stmt_name(const std::string& client_stmt_name) const;
 
 	/**
 	 * Close a client-side prepared statement mapping by its name.

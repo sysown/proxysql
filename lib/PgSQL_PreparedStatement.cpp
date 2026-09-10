@@ -98,6 +98,21 @@ PgSQL_STMT_Global_info::~PgSQL_STMT_Global_info() {
 	if (digest_text)
 		free(digest_text);
 	parse_param_types.clear(); // clear the parameter types vector
+	// Free the set-once Describe metadata cache (if any was ever published).
+	delete describe_cache.load(std::memory_order_acquire);
+}
+
+bool PgSQL_STMT_Global_info::publish_describe_cache(const PgSQL_Describe_Cache* candidate) const noexcept {
+	const PgSQL_Describe_Cache* expected = nullptr;
+	// Set-once: install only while the slot is still empty. On success the slot now
+	// owns `candidate`. On failure another publish already won, so free our copy —
+	// the caller must not touch `candidate` after this returns either way.
+	if (describe_cache.compare_exchange_strong(expected, candidate,
+			std::memory_order_acq_rel, std::memory_order_acquire)) {
+		return true;
+	}
+	delete candidate;
+	return false;
 }
 
 void PgSQL_STMT_Global_info::calculate_mem_usage() {
@@ -159,6 +174,13 @@ const PgSQL_STMT_Global_info* PgSQL_STMT_Local::find_stmt_info_from_stmt_name(co
 		ret = s->second.get();
 	}
 	return ret;
+}
+
+std::shared_ptr<const PgSQL_STMT_Global_info> PgSQL_STMT_Local::find_shared_stmt_info_from_stmt_name(const std::string& client_stmt_name) const {
+	if (auto s = stmt_name_to_global_info.find(client_stmt_name); s != stmt_name_to_global_info.end()) {
+		return s->second;
+	}
+	return nullptr;
 }
 
 bool PgSQL_STMT_Local::client_close(const std::string& client_stmt_name) {

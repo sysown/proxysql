@@ -264,6 +264,8 @@ inline bool verify_server_variable(PgSQL_Session* session, int idx, uint32_t cli
 			case PROCESSING_STMT_PREPARE:
 			case PROCESSING_STMT_DESCRIBE:
 			case PROCESSING_STMT_EXECUTE:
+			case PROCESSING_STMT_BIND:
+			case PROCESSING_STMT_CLOSE:
 				session->previous_status.push(session->status);
 				break;
 			default:

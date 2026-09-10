@@ -6,6 +6,9 @@
 #include <functional>
 #include <vector>
 #include <variant>
+#include <map>
+#include <memory>
+#include <string>
 #include "proxysql.h"
 #include "Base_Session.h"
 #include "cpp.h"
@@ -127,6 +130,11 @@ enum PgSQL_Extended_Query_Flags : uint8_t {
 	PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL	= 0x01,
 	PGSQL_EXTENDED_QUERY_FLAG_SYNC				= 0x02,
 	PGSQL_EXTENDED_QUERY_FLAG_IMPLICIT_PREPARE  = 0x04,
+	// Named-portal Execute/resume (Task P2): the portal is ALREADY bound on the
+	// backend (a prior named Bind registered it), so the native Execute drive emits
+	// ONLY Execute(portal, max_rows) (+ a folded Describe('P', portal) iff requested),
+	// NOT a fresh Bind. Native-mode + named-portal only.
+	PGSQL_EXTENDED_QUERY_FLAG_PORTAL_ALREADY_BOUND = 0x08,
 };
 
 enum ExtendedQueryPhase : uint8_t {
@@ -153,9 +161,28 @@ struct PgSQL_Extended_Query_Info {
 	const PgSQL_STMT_Global_info* stmt_info;
 	uint64_t stmt_global_id;
 	uint32_t stmt_backend_id;
+	// Row limit for an Execute. Honored on the wire ONLY for NAMED portals
+	// (PGSQL_EXTENDED_QUERY_FLAG_PORTAL_ALREADY_BOUND); the unnamed portal always
+	// emits max_rows 0 (invariant 2 — inherited libpq-parity behavior). Task P2.
+	uint32_t max_rows;
 	uint8_t stmt_type;
 	uint8_t flags;
 	Parse_Param_Types parse_param_types;
+};
+
+// Named-portal registry entry (native-mode only). A named Bind is dispatched to
+// the backend immediately (unlike the single unnamed slot which is deferred),
+// and its real BindComplete is forwarded to the client. The entry owns the raw
+// Bind message bytes so a later Execute/Describe can re-read the bound params,
+// and holds a shared reference to the global statement so it survives the
+// extended-query frame that created it (portals outlive frames inside a txn).
+// Registered/cleared in lib/PgSQL_Session.cpp. See docs/superpowers/specs/
+// 2026-07-07-pgsql-native-extq-stmt-pipeline-design.md §4.
+struct PgSQL_Portal_Entry {
+	std::unique_ptr<const PgSQL_Bind_Message> bind_msg;  // owns raw bytes (param re-readers work)
+	std::shared_ptr<const PgSQL_STMT_Global_info> stmt_info;
+	bool bound_on_backend = false;   // real backend Bind completed
+	bool suspended = false;          // last Execute ended with PortalSuspended
 };
 
 class PgSQL_Query_Info {
@@ -227,6 +254,30 @@ private:
 	uint8_t extended_query_phase { EXTQ_PHASE_IDLE };
 	std::queue<PktType> extended_query_frame;
 	std::unique_ptr<const PgSQL_Bind_Message> bind_waiting_for_execute;
+
+	// --- Named-portal registry (native-mode only, Task P1) ---
+	// portal name -> bound entry. Populated on a successful named-Bind BindComplete;
+	// cleared when a completed cycle's ReadyForQuery carried txn-state 'I' (backend
+	// destroyed all portals at txn end / implicit-txn Sync), and in reset()/destructor.
+	std::map<std::string, PgSQL_Portal_Entry> named_portals;
+	// In-flight named Bind: holds the released Bind message + resolved global stmt
+	// while PROCESSING_STMT_BIND dispatches to the backend. Committed into
+	// named_portals only on a successful BindComplete (rc0), so a Bind that the
+	// backend rejects (e.g. 42P03 duplicate portal) leaves any existing entry intact.
+	struct {
+		std::string portal_name;
+		std::unique_ptr<const PgSQL_Bind_Message> bind_msg;
+		std::shared_ptr<const PgSQL_STMT_Global_info> stmt_info;
+		bool active = false;
+	} pending_named_bind;
+	// Portal name of an in-flight named Close('P') round-trip (PROCESSING_STMT_CLOSE):
+	// set before dispatch, consumed by the rc0 epilogue to evict the registry entry
+	// once the backend's CloseComplete '3' is forwarded. Task P2.
+	std::string closing_portal_name;
+	// Discard all named portals (backend already destroyed them at txn end).
+	void clear_named_portals();
+	// Move the in-flight named Bind into named_portals, marked bound_on_backend.
+	void commit_pending_named_bind();
 
 	//int handler_ret;
 	void handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t*, bool*);
