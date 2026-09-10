@@ -973,7 +973,7 @@ std::vector<std::pair<std::string, void (*)(PGconn*, PGconn*, std::fstream& f_pr
  * when it did not, the next query never reached the backend -- in this session,
  * or in whichever one later took the connection from the pool.
  */
-static const int TLS_BACKEND_TESTS = 7;
+static const int TLS_BACKEND_TESTS = 11;
 
 struct TlsSrvRow { std::string hostname, port, max_connections, comment; };
 
@@ -1187,6 +1187,58 @@ void testCopyOverTlsBackend() {
         }
     }
     ok(second_copy_ok, "two COPYs on one session, then a query, all succeed");
+
+    // A payload big enough to need many SSL_write cycles through the memory BIOs.
+    // A partial write leaves ciphertext buffered, which is the state release has to
+    // notice rather than hand the connection back to the pool holding it.
+    bool bulk_ok = false;
+    {
+        std::string big;
+        big.reserve(600 * 1024);
+        for (int i = 0; big.size() < 512 * 1024; i++)
+            big += std::to_string(i) + "\tpadding-so-the-row-is-not-tiny-" + std::to_string(i) + "\n";
+        PGConnPtr conn = createNewConnection(ConnType::BACKEND, false);
+        if (conn) {
+            bool a = tlsCopyIn(conn.get(), tbl, big);
+            bulk_ok = a && (tlsQueryWithin(conn.get(), "SELECT 9", 20) == "9");
+        }
+    }
+    ok(bulk_ok, "a half-megabyte COPY over TLS completes and leaves the session usable");
+
+    // Both legs encrypted at once: the client leg has its own TLS, and the relay
+    // must not confuse it with the backend's.
+    bool both_legs_ok = false;
+    {
+        PGConnPtr conn = createNewConnection(ConnType::BACKEND, true);
+        if (conn) {
+            bool a = tlsCopyIn(conn.get(), tbl, payload);
+            both_legs_ok = a && (tlsQueryWithin(conn.get(), "SELECT 11", 20) == "11");
+        }
+    }
+    ok(both_legs_ok, "COPY works with the client leg encrypted as well as the backend");
+
+    // Permanent fast forward reaches the other two places the backend TLS is
+    // borrowed: attach_connection() when a pooled connection joins a session that
+    // is already forwarding, and the connect path when a new one is opened for it.
+    // The COPY cases above only ever exercise the switch into fast forward.
+    bool perm_ff_ok = false, perm_ff_pool_ok = false;
+    if (executeQueries(admin.get(), { "UPDATE pgsql_users SET fast_forward=1", "LOAD PGSQL USERS TO RUNTIME" })) {
+        // Drop the pool so the first session has to open a connection while the
+        // session is already in fast forward.
+        tlsReloadServers(admin.get(), saved, 1);
+        {
+            PGConnPtr conn = createNewConnection(ConnType::BACKEND, false);
+            if (conn) perm_ff_ok = (tlsQueryWithin(conn.get(), "SELECT 13", 20) == "13");
+        }
+        // Now one that takes the pooled connection instead of opening its own.
+        {
+            PGConnPtr conn = createNewConnection(ConnType::BACKEND, false);
+            if (conn) perm_ff_pool_ok = (tlsQueryWithin(conn.get(), "SELECT 17", 20) == "17");
+        }
+        executeQueries(admin.get(), { "UPDATE pgsql_users SET fast_forward=0", "LOAD PGSQL USERS TO RUNTIME" });
+    }
+    ok(perm_ff_ok, "a forwarded session works on a TLS backend connection it opened itself");
+    ok(perm_ff_pool_ok, "a forwarded session works on a TLS backend connection taken from the pool");
 
     {
         PGConnPtr conn = createNewConnection(ConnType::BACKEND, false);
