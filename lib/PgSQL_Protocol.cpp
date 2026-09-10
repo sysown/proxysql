@@ -2928,6 +2928,9 @@ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const uns
 			// Find tag length up to the NUL terminator (defensive: bound by payload_len).
 			uint32_t taglen = 0;
 			while (taglen < payload_len && payload[taglen] != '\0') taglen++;
+			// Unterminated tag: nothing would stop strtoull below reading past the
+			// end of the message. -1 leaves the row count unrecorded.
+			if (taglen == payload_len) break;
 			if (taglen > 0) {
 				// Scan back over the trailing run of digits.
 				uint32_t end = taglen;
