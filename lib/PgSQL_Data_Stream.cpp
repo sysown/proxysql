@@ -1255,7 +1255,18 @@ bool PgSQL_Data_Stream::adopt_backend_tls() {
 // libpq keeps writing into our buffers and the next query never reaches the
 // backend, in this session or in whichever one gets the connection next.
 void PgSQL_Data_Stream::release_backend_tls() {
-	if (backend_tls_adopted == false) return; // nothing was borrowed here
+	if (backend_tls_adopted == false) {
+		if (myconn != NULL && myconn->native_mode && ssl != NULL) {
+			// A native borrow shares the connection's own BIOs, so there is nothing to
+			// hand back. The stream still has to stop claiming the TLS: leaving these
+			// set makes the next query on this session take the encrypted path for a
+			// transport the connection is driving itself. The BIO pointers stay as the
+			// connection owns them.
+			encrypted = false;
+			ssl = NULL;
+		}
+		return; // nothing was borrowed here
+	}
 	if (myconn == NULL || ssl == NULL || myconn->saved_backend_rbio == NULL) {
 		// Cannot hand it back. Clear our side anyway: leaving 'encrypted' set would
 		// make ~PgSQL_Data_Stream() SSL_free() the connection's own SSL, which libpq

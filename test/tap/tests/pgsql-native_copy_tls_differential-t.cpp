@@ -1,5 +1,5 @@
 /**
- * @file pgsql-copy_backend_tls-t.cpp
+ * @file pgsql-native_copy_tls_differential-t.cpp
  * @brief COPY through a TLS-encrypted backend connection, on both backend paths.
  *
  * COPY makes the session switch to fast forward, which takes the backend TLS
@@ -175,7 +175,7 @@ static const char* COPY_OUT_SQL =
 static const char* COPY_IN_PAYLOAD = "1\tone\n2\ttwo\n3\tthree\n";
 
 int main(int argc, char** argv) {
-	plan(10);
+	plan(15);
 
 	if (cl.getEnv())
 		return exit_status();
@@ -235,7 +235,72 @@ int main(int argc, char** argv) {
 	ok(native_copy_out_ok && !native_out.empty(), "native: COPY TO STDOUT completed (%zu bytes)", native_out.size());
 	ok(native_out == libpq_out, "native COPY TO STDOUT bytes match libpq");
 	ok(native_copy_in_ok, "native: COPY FROM STDIN completed");
-	ok(still_usable, "the session still works after a COPY over a TLS backend connection");
+	ok(still_usable, "native: the session still works after a COPY over a TLS backend connection");
+
+	// The bulk-load shape: connect, COPY, disconnect. Nothing there notices a
+	// broken connection; the next unrelated session is the one that gets it.
+	bool native_loader_pool_ok = false;
+	{
+		auto loader = open_client_conn();
+		if (PQstatus(loader.get()) == CONNECTION_OK) copyIn(loader.get(), TBL, COPY_IN_PAYLOAD);
+	}
+	{
+		auto client = open_client_conn();
+		if (PQstatus(client.get()) == CONNECTION_OK)
+			native_loader_pool_ok = (queryOneValue(client.get(), "SELECT 7") == "7");
+	}
+	ok(native_loader_pool_ok, "native: a later session works on the connection a COPY-and-disconnect left pooled");
+
+	// adopt -> release -> adopt on one connection.
+	bool native_second_copy_ok = false;
+	{
+		auto client = open_client_conn();
+		if (PQstatus(client.get()) == CONNECTION_OK) {
+			bool a = copyIn(client.get(), TBL, COPY_IN_PAYLOAD);
+			bool b = copyIn(client.get(), TBL, COPY_IN_PAYLOAD);
+			native_second_copy_ok = a && b && (queryOneValue(client.get(), "SELECT 5") == "5");
+		}
+	}
+	ok(native_second_copy_ok, "native: two COPYs on one session, then a query, all succeed");
+
+	// Large enough to need many write cycles, so a partial write leaves buffered
+	// ciphertext rather than completing in one go.
+	bool native_bulk_ok = false;
+	{
+		std::string big;
+		big.reserve(600 * 1024);
+		for (int i = 0; big.size() < 512 * 1024; i++)
+			big += std::to_string(i) + "\tpadding-so-the-row-is-not-tiny-" + std::to_string(i) + "\n";
+		auto client = open_client_conn();
+		if (PQstatus(client.get()) == CONNECTION_OK) {
+			bool a = copyIn(client.get(), TBL, big);
+			native_bulk_ok = a && (queryOneValue(client.get(), "SELECT 9") == "9");
+		}
+	}
+	ok(native_bulk_ok, "native: a half-megabyte COPY over TLS completes and leaves the session usable");
+
+	// Permanent fast forward reaches the other two places the backend TLS is
+	// borrowed: attach_connection() for a pooled connection joining a session that
+	// is already forwarding, and the connect path when one is opened for it.
+	bool native_ff_own = false, native_ff_pooled = false;
+	if (execSQL(admin.get(), "UPDATE pgsql_users SET fast_forward=1")
+		&& execSQL(admin.get(), "LOAD PGSQL USERS TO RUNTIME")) {
+		reloadServers(admin.get(), saved, 1);   // drop the pool: the first session must connect
+		{
+			auto client = open_client_conn();
+			if (PQstatus(client.get()) == CONNECTION_OK)
+				native_ff_own = (queryOneValue(client.get(), "SELECT 13") == "13");
+		}
+		{
+			auto client = open_client_conn();
+			if (PQstatus(client.get()) == CONNECTION_OK)
+				native_ff_pooled = (queryOneValue(client.get(), "SELECT 17") == "17");
+		}
+		execSQL(admin.get(), "UPDATE pgsql_users SET fast_forward=0");
+		execSQL(admin.get(), "LOAD PGSQL USERS TO RUNTIME");
+	}
+	ok(native_ff_own, "native: a forwarded session works on a TLS backend connection it opened itself");
+	ok(native_ff_pooled, "native: a forwarded session works on a TLS backend connection taken from the pool");
 
 	// ---------------- restore ----------------
 	{
