@@ -2784,15 +2784,8 @@ int PgSQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(PgS
 		// Retry the query if retries are allowed and conditions permit
 		if (myds->query_retries_on_failure > 0) {
 			myds->query_retries_on_failure--;
-			if ((myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false &&
-				myds->myconn->is_pipeline_active() == false) {
-				if (myds->myconn->query_result && myds->myconn->query_result->is_transfer_started()) {
-					// transfer to frontend has started, we cannot retry
-				} else {
-					retry_conn = true;
-					proxy_warning("Retrying query.\n");
-				}
-			}
+			retry_conn = query_retry_allowed(myds);
+			if (retry_conn) proxy_warning("Retrying query.\n");
 		}
 		if (transaction_state_manager) {
 			transaction_state_manager->reset_state();
@@ -2922,6 +2915,45 @@ bool PgSQL_Session::handler_minus1_PoisonTransaction(PgSQL_Data_Stream* myds) {
 	return true;
 }
 
+// Whether the statement whose backend connection just failed may be run again on a
+// fresh one. Shared by every path that offers a retry so they cannot drift apart.
+//
+// Must be called before transaction_state_manager->reset_state(): that reset is what
+// would make is_in_transaction() below report false for a session that is in one.
+bool PgSQL_Session::query_retry_allowed(PgSQL_Data_Stream* myds) {
+	PgSQL_Connection* myconn = (myds ? myds->myconn : NULL);
+	if (myconn == NULL || myconn->reusable == false ||
+		myconn->MultiplexDisabled() || myconn->is_pipeline_active()) {
+		return false;
+	}
+	// While the connection is alive the driver knows whether a transaction is open.
+	// Once it is dead libpq has forgotten: it reports "unknown", and believing that
+	// means refusing every retry, while ignoring it means replaying statements out
+	// of the transaction they belonged to. So ask what survives the connection --
+	// the native protocol's status byte and our own BEGIN/COMMIT tracking.
+	//
+	// That tracking is skipped entirely while the session is pinned to a hostgroup
+	// (handle_transaction_state() only runs when locked_on_hostgroup is -1), so a
+	// BEGIN issued after the lock is never recorded. Treat pinned as "cannot say"
+	// rather than "no transaction", or a pinned session would be replayed into.
+	const bool in_txn = myconn->is_connected()
+		? myconn->IsActiveTransaction()
+		: (myconn->IsKnownActiveTransaction() || is_in_transaction() || locked_on_hostgroup != -1);
+	if (in_txn) return false;
+	// Part of the answer already reached the client; running the statement again
+	// would send it the rest of a different execution.
+	if (myconn->query_result && myconn->query_result->is_transfer_started()) {
+		return false;
+	}
+	// Statements earlier in the batch already ran and their results already went to
+	// the client. Re-sending the batch runs them a second time.
+	if (myconn->processing_multi_statement == true) {
+		proxy_warning("Disabling query retry because we were in middle of processing results\n");
+		return false;
+	}
+	return true;
+}
+
 // this function used to be inline.
 // now it returns:
 // true: NEXT_IMMEDIATE(CONNECTING_SERVER) needs to be called
@@ -2935,21 +2967,8 @@ bool PgSQL_Session::handler_minus1_ClientLibraryError(PgSQL_Data_Stream* myds) {
 	detected_broken_connection(__FILE__, __LINE__, __func__, "running query", myconn, true);
 	if (myds->query_retries_on_failure > 0) {
 		myds->query_retries_on_failure--;
-		if ((myconn->reusable == true) && myconn->IsActiveTransaction() == false && myconn->MultiplexDisabled() == false &&
-			myconn->is_pipeline_active() == false) {
-			if (myconn->query_result && myconn->query_result->is_transfer_started()) {
-				// transfer to frontend has started, we cannot retry
-			} else {
-				// This should never occur.
-				if (myconn->processing_multi_statement == true) {
-					// we are in the process of retriving results from a multi-statement query
-					proxy_warning("Disabling query retry because we were in middle of processing results\n");
-				} else {
-					retry_conn = true;
-					proxy_warning("Retrying query.\n");
-				}
-			}
-		}
+		retry_conn = query_retry_allowed(myds);
+		if (retry_conn) proxy_warning("Retrying query.\n");
 	}
 	// If we're in an explicit transaction and retry was refused (per the
 	// unknown_transaction_status guard), try to poison the client session
@@ -3014,11 +3033,8 @@ bool PgSQL_Session::handler_minus1_HandleErrorCodes(PgSQL_Data_Stream* myds, int
 		myconn->parent->connect_error(9999);
 		if (myds->query_retries_on_failure > 0) {
 			myds->query_retries_on_failure--;
-			if ((myconn->reusable == true) && myconn->IsActiveTransaction() == false && myconn->MultiplexDisabled() == false &&
-				myconn->is_pipeline_active() == false) {
-				retry_conn = true;
-				proxy_warning("Retrying query.\n");
-			}
+			retry_conn = query_retry_allowed(myds);
+			if (retry_conn) proxy_warning("Retrying query.\n");
 		}
 		// The 57P01/57P02/57P03 family is how a backend signals it is about to
 		// go away (pg_terminate_backend, graceful shutdown, crash shutdown).

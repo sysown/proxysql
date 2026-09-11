@@ -437,6 +437,9 @@ private:
 	// these functions have code that used to be inline, and split into functions for readibility
 	int handler_ProcessingQueryError_CheckBackendConnectionStatus(PgSQL_Data_Stream* myds);
 	void SetQueryTimeout();
+	// Whether the statement whose backend connection just failed may be run again on
+	// a fresh one. Shared by every path that offers a retry so they cannot drift.
+	bool query_retry_allowed(PgSQL_Data_Stream* myds);
 	bool handler_minus1_ClientLibraryError(PgSQL_Data_Stream* myds);
 	// Synthesize ErrorResponse(25P02) + NoticeResponse(backend text, no 57P01) +
 	// ReadyForQuery('E') to the client, destroy the backend pool connection, set
