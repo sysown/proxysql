@@ -37,6 +37,11 @@
  *   libpq. Native never had the defect; this phase is here because the change made
  *   it stricter, and because nothing else asserts the path at all.
  *
+ * Phases 1 and 3 each end with the connected-backends gauge: it subtracted a
+ * connection only if it was still healthy when destroyed, so killed ones stayed
+ * counted for the life of the process. Phase 3 covers the native path, which
+ * subtracts from a different place and had no coverage at all.
+ *
  * Not covered, deliberately: with pgsql-query_digests off ProxySQL's own
  * BEGIN/COMMIT tracking records nothing, so a dead libpq connection has no source
  * able to say a transaction was open. That gap is documented rather than fixed --
@@ -196,6 +201,26 @@ static int proxiedSessionsWithin(PGconn* backend, int want, int seconds) {
     }
 }
 
+// ProxySQL's count of backend connections that are up. A gauge, so once every
+// connection this test made is gone it has to read what it read before.
+static long connectedGauge(PGconn* admin) {
+    const std::string n = scalar(admin,
+        "SELECT Variable_Value FROM stats_pgsql_global WHERE Variable_Name='Server_Connections_connected'");
+    return n.empty() ? -1 : atol(n.c_str());
+}
+
+// A destroyed connection subtracts itself a moment after it leaves the pool, so read
+// until the number settles rather than once.
+static long connectedGaugeWithin(PGconn* admin, long want, int seconds) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
+    long last = -1;
+    while (true) {
+        last = connectedGauge(admin);
+        if (last == want || std::chrono::steady_clock::now() >= deadline) return last;
+        usleep(100000);
+    }
+}
+
 static int poolFree(PGconn* admin, int hg) {
     const std::string n = scalar(admin, "SELECT ConnFree FROM stats_pgsql_connection_pool WHERE hostgroup=" + std::to_string(hg));
     return n.empty() ? -1 : atoi(n.c_str());
@@ -294,7 +319,7 @@ static std::string goingAway(char txn_state) {
 }
 
 int main(int, char**) {
-    plan(21);
+    plan(23);
     if (cl.getEnv()) return exit_status();
 
     auto admin = openAdmin();
@@ -313,6 +338,7 @@ int main(int, char**) {
     killProxiedBackends(backend.get());
     const bool flushed = flushPool(admin.get());
     ok(flushed, "hostgroup 0 starts with no pooled connection (ConnFree=%d)", poolFree(admin.get(), 0));
+    const long gauge_baseline = connectedGauge(admin.get());
 
     // ---- the connection that will be killed while ProxySQL holds it ----
     {
@@ -415,6 +441,21 @@ int main(int, char**) {
         if (cleanup && PQstatus(cleanup.get()) == CONNECTION_OK)
             execOk(cleanup.get(), "DROP TABLE IF EXISTS " + std::string(TBL));
     }
+
+    // ---- the count of connected backends has to come back down ----
+    // Once the killed backends are reaped and the pool is empty the gauge has to read
+    // what it read at the start. It used to subtract only from connections still
+    // healthy when destroyed, which a killed one never is. This flush doubles as
+    // phase 1's cleanup; phases 2 and 3 set up their own.
+    killProxiedBackends(backend.get());
+    const bool reflushed = flushPool(admin.get());
+    const long gauge_end = connectedGaugeWithin(admin.get(), gauge_baseline, 10);
+    // gauge_baseline >= 0 is not decoration: both reads return -1 if the admin query
+    // fails, and -1 == -1 would pass this without ever having read the counter.
+    ok(reflushed && gauge_baseline >= 0 && gauge_end == gauge_baseline,
+       "Server_Connections_connected returns to its starting value after killed backends are reaped"
+       " (start=%ld, now=%ld, pool emptied=%s)",
+       gauge_baseline, gauge_end, reflushed ? "yes" : "no");
 
     // ======================================================================
     //  Phase 2 -- the backend announces a shutdown while still usable
@@ -544,6 +585,7 @@ int main(int, char**) {
         BAIL_OUT("cannot enable the native backend protocol");
     killProxiedBackends(backend.get());
     flushPool(admin.get());
+    const long native_gauge_baseline = connectedGauge(admin.get());
     const std::string native_flag = scalar(admin.get(),
         "SELECT variable_value FROM runtime_global_variables WHERE variable_name='pgsql-use_native_backend_protocol'");
     const int native_pool = poolFreeWithin(admin.get(), 0, 0, 10);
@@ -611,5 +653,17 @@ int main(int, char**) {
         if (cleanup && PQstatus(cleanup.get()) == CONNECTION_OK)
             execOk(cleanup.get(), "DROP TABLE IF EXISTS " + std::string(TBL));
     }
+
+    // ---- the same check, on the native path ----
+    // Native subtracts from the gauge in native_teardown() rather than in the
+    // destructor, and nothing asserted that until here. Same shape as phase 1.
+    killProxiedBackends(backend.get());
+    const bool native_reflushed = flushPool(admin.get());
+    const long native_gauge_end = connectedGaugeWithin(admin.get(), native_gauge_baseline, 10);
+    ok(native_reflushed && native_gauge_baseline >= 0 && native_gauge_end == native_gauge_baseline,
+       "native: Server_Connections_connected returns to its starting value after killed backends are reaped"
+       " (start=%ld, now=%ld, pool emptied=%s)",
+       native_gauge_baseline, native_gauge_end, native_reflushed ? "yes" : "no");
+
     return exit_status();
 }
