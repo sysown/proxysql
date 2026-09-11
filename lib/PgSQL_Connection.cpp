@@ -2436,13 +2436,20 @@ int PgSQL_Connection::native_recv_into_framer() {
 
 	// Plaintext path (1.6a).
 	unsigned char tmp[16384];
+	// Cap one pass so a backend that keeps the socket full cannot push a whole
+	// result set into the framer buffer, which doubles, never shrinks, and lives
+	// as long as the pooled connection does.
+	const size_t burst_max = 16 * sizeof(tmp);
+	size_t fed = 0;
 	bool got = false;
 	for (;;) {
 		ssize_t n = ::recv(fd, tmp, sizeof(tmp), 0);
 		if (n > 0) {
 			native_framer.feed(tmp, (size_t)n);
 			got = true;
+			fed += (size_t)n;
 			if ((size_t)n < sizeof(tmp)) break; // likely drained the socket buffer
+			if (fed >= burst_max) break;        // let the caller frame these; poll() reports the rest
 			continue;
 		}
 		if (n == 0) {
