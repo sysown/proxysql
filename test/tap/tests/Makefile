@@ -536,6 +536,7 @@ $(PG_LITE_CLIENT_TESTS): %: %.cpp pg_lite_client.cpp pg_lite_client.h $(TAP_LDIR
 PGSQL_MOCK_BACKEND_TESTS := \
 	pgsql-reg_test_6109_midresult_disconnect-t \
 	pgsql-reg_test_6110_invalid_reply_sequence-t \
+	pgsql-backend_death_query_retry-t \
 	pgsql-native_hostile_backend-t
 
 $(PGSQL_MOCK_BACKEND_TESTS): %: %.cpp pgsql_mock_backend.cpp pgsql_mock_backend.h $(TAP_LDIR)/libtap$(SHLIB_EXT)
