@@ -990,9 +990,8 @@ private:
 	bool backend_is_live() const;
 
 	// True once this connection has been added to the global count of connected
-	// backends. The two native subtractions (teardown and destructor) check it, so
-	// a connection that was never added is never subtracted and the count cannot
-	// wrap. The libpq branch of the destructor still keys off is_connected().
+	// backends. Both subtractions check it, so a connection that was never added is
+	// never subtracted and the count cannot wrap.
 	bool counted_in_connections_connected = false;
 
 	// Kept private on purpose. It is stale whenever the connection is broken, so

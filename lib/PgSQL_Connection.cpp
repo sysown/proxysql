@@ -242,20 +242,21 @@ PgSQL_Connection::~PgSQL_Connection() {
 	}
 	saved_backend_rbio = NULL;
 	saved_backend_wbio = NULL;
+	// Subtract once for every connection that was added, libpq and native alike. The
+	// flag says whether this one was ever counted; asking is_connected() instead never
+	// subtracted a backend that had died, so the count only climbed. Clearing it keeps
+	// anyone from subtracting the same connection twice.
+	if (counted_in_connections_connected) {
+		__sync_fetch_and_sub(&PgHGM->status.server_connections_connected, 1);
+		counted_in_connections_connected = false;
+	}
 	if (pgsql_conn) {
-		if (is_connected())
-			__sync_fetch_and_sub(&PgHGM->status.server_connections_connected, 1);
 		async_free_result();
 		PQfinish(pgsql_conn);
 		pgsql_conn = NULL;
 	}
-	// Native (non-libpq) connection cleanup. In native mode pgsql_conn stays NULL,
-	// so the block above is skipped: mirror its connected-counter decrement and
-	// free the native socket + SCRAM state here.
+	// Native (non-libpq) connection cleanup: free the native socket + SCRAM state.
 	if (native_mode) {
-		if (counted_in_connections_connected) {
-			__sync_fetch_and_sub(&PgHGM->status.server_connections_connected, 1);
-		}
 		if (native_scram) {
 			pg_scram_free(native_scram);
 			native_scram = nullptr;
@@ -455,9 +456,9 @@ handler_again:
 				assert(myds->ssl == NULL);
 				if (myds->adopt_backend_tls() == false) {
 					// This connection would relay in the clear, so fail the connect
-					// rather than hand it to the session. The gauge is incremented
-					// first because the destructor decrements it for any live PGconn.
-					__sync_fetch_and_add(&PgHGM->status.server_connections_connected, 1);
+					// rather than hand it to the session. It never reaches the count
+					// below, which is right because a failed connect is always deleted
+					// and never pooled.
 					NEXT_IMMEDIATE(ASYNC_CONNECT_FAILED);
 				}
 			}
