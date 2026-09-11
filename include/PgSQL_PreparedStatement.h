@@ -151,6 +151,16 @@ public:
 	void client_close_all();
 
 	/**
+	 * Close all backend-side prepared statement mappings (is_client_ == false).
+	 *
+	 * Decrements the server refcount for each associated global statement and
+	 * clears the backend maps. Mirrors the backend branch of ~PgSQL_STMT_Local(),
+	 * for use when the backend's prepared statements are known to be gone (e.g.
+	 * after forwarding DEALLOCATE ALL) but the connection object lives on.
+	 */
+	void backend_close_all();
+
+	/**
 	 * Generate a new backend statement ID.
 	 * 
 	 * @return A backend statement id.

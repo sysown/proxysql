@@ -3,11 +3,20 @@
  * @brief Differential test: ProxySQL's native PostgreSQL backend protocol vs. the libpq path.
  *
  * ============================================================================
- *  STATUS: WRITTEN BUT UNRUN (Task 1.8)
- *  This test was authored while Docker was unavailable, so it has been
- *  COMPILE-VERIFIED ONLY. It has NEVER been executed against a live backend.
- *  See "FIRST-RUN CHECKLIST" at the bottom of this header before trusting a
- *  green run.
+ *  STATUS: RUN AND GREEN -- 8/8 on 2026-09-03 against docker-pgsql16-single,
+ *  binary 4.0.12-351-gc909215_DEBUG, group legacy-g1.
+ *
+ *  Read that number carefully: only 2 of the 8 assertions execute anything.
+ *  The other 6 are SKIPs for scenarios this infra cannot reach (see INFRA /
+ *  SCENARIO COVERAGE below). The live coverage is exactly one scenario,
+ *  scram-sha-256 without TLS.
+ *
+ *  pgsql-native_auth_matrix-t now covers every auth method (trust, cleartext,
+ *  md5, SCRAM, SCRAM-PLUS) against a real backend, over plaintext AND TLS, and
+ *  runs a libpq leg beside every cell. It therefore supersedes this file's
+ *  differential intent almost entirely. Keep this test only for its distinct
+ *  assertion -- the proxysql.log scrape proving no silent libpq fallback -- or
+ *  retire it and move that scrape into the matrix.
  * ============================================================================
  *
  * PURPOSE
@@ -98,15 +107,18 @@
  *      CREATE USER so the stored verifier is md5, not scram).
  *   3. Register an md5 pgsql_user in ProxySQL and flip MD5_SCENARIO_ENABLED below.
  *
- * FIRST-RUN CHECKLIST (do these the first time Docker is up):
- *   [ ] Confirm the scram-sha-256 differential passes (results identical).
- *   [ ] Confirm NO fallback warning appears in proxysql.log during the native
- *       run — i.e. the "used native path" assertion genuinely passes, not just
- *       because the log file path was wrong. Temporarily flipping the native
- *       query path off should make this assertion FAIL; if it never fails, the
- *       log-scrape is not wired correctly.
- *   [ ] Confirm REGULAR_INFRA_DATADIR/proxysql.log is the live server log for
- *       this infra (it is for the isolated runner; see env-isolated.bash).
+ * FIRST-RUN CHECKLIST — status after the 2026-09-03 run:
+ *   [x] The scram-sha-256 differential passes; native and libpq results identical.
+ *   [x] REGULAR_INFRA_DATADIR/proxysql.log resolves to the live server log. The
+ *       test BAILs when the log cannot be opened and it did not bail, so the
+ *       path is right for the isolated runner (see env-isolated.bash).
+ *   [ ] STILL OUTSTANDING — the negative control was never run. Nobody has
+ *       confirmed that the "used native path" assertion can actually FAIL. Until
+ *       someone forces a libpq fallback (e.g. point the cell at a GSSAPI-only
+ *       backend, or temporarily make native_capability_gap() fire) and watches
+ *       this assertion go red, a green result only proves the scrape found no
+ *       warning — not that it would have caught one. Treat assertion 2 as
+ *       unproven until then.
  */
 
 #include <string>

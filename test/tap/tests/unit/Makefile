@@ -577,8 +577,11 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	gen_utils_unit-t \
 	proxy_protocol_unit-t \
 	pgsql_txn_state_unit-t \
+	pgsql_conn_liveness_unit-t \
 	sqlite3db_unit-t \
 	pgsql_error_helper_unit-t \
+	pgsql_native_params_unit-t \
+	pgsql_native_read_burst_unit-t \
 	charset_find_unit-t \
 	config_validation_unit-t \
 	config_write_unit-t \
@@ -605,8 +608,8 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	mysql_resultset_framer_traffic_unit-t \
 	pgsql_response_framer_unit-t \
 	pgsql_response_framer_traffic_unit-t \
-	ffto_state_machine_unit-t \
 	pgsql_reconcile_unit-t \
+	ffto_state_machine_unit-t \
 	pgsql_conninfo_credentials_unit-t \
 	re2_vendor_unit-t \
 	restapi_server_unit-t \

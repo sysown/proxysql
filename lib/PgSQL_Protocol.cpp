@@ -1112,7 +1112,11 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 
 			PgCredentials stored_user_info{ '\0' };
 			snprintf(stored_user_info.name, sizeof(stored_user_info.name), "%.*s", (int)(sizeof(stored_user_info.name) - 1), user);
-			if (password) snprintf(stored_user_info.passwd, sizeof(stored_user_info.passwd), "%.*s", (int)(sizeof(stored_user_info.passwd) - 1), password);
+			// `password` is NULL on the anti-enumeration path (unknown frontend user -> mock=true):
+			// the `if (password || mock)` guard above lets NULL reach here, and "%.*s" with a NULL
+			// argument is UB. stored_user_info was value-initialised, so passwd stays "" for the mock.
+			if (password)
+				snprintf(stored_user_info.passwd, sizeof(stored_user_info.passwd), "%.*s", (int)(sizeof(stored_user_info.passwd) - 1), password);
 			stored_user_info.mock_auth = mock; // unknown/too-weak -> mock SCRAM (deterministic fake salt), fails like a wrong password
 
 			if (!(*myds)->scram_state->server_nonce) {
@@ -1414,7 +1418,6 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 				// parameter provided is not part of the tracked variables. Will lock on hostgroup on next query.
 				const char* val_cstr = param_val.c_str();
 				proxy_warning("Unrecognized connection parameter. Please report this as a bug for future enhancements:%s:%s\n", param_key.c_str(), val_cstr);
-				const char* escaped_str = escape_string_backslash_spaces(val_cstr);
 				std::string& untracked = sess->untracked_option_parameters;
 				// Append the "[ ]-c <key>=<value>" token in place, avoiding the
 				// temporary strings a "-c " + key + "=" + value concatenation creates.
@@ -1423,9 +1426,11 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 				untracked += "-c ";
 				untracked += param_key;
 				untracked += '=';
-				untracked += escaped_str;
-				if (escaped_str != val_cstr)
-					free((char*)escaped_str);
+				// Escaped for the StartupMessage wire form. The libpq path raises this to
+				// its own level when it builds the conninfo; storing the conninfo form here
+				// instead would reach the native path over-escaped, and the backend would
+				// reject it with `invalid value for parameter "<key>": "<truncated>\"`.
+				pg_append_escaped_option_value(untracked, val_cstr);
 			}
 		}
 
@@ -2923,6 +2928,9 @@ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const uns
 			// Find tag length up to the NUL terminator (defensive: bound by payload_len).
 			uint32_t taglen = 0;
 			while (taglen < payload_len && payload[taglen] != '\0') taglen++;
+			// Unterminated tag: nothing would stop strtoull below reading past the
+			// end of the message. -1 leaves the row count unrecorded.
+			if (taglen == payload_len) break;
 			if (taglen > 0) {
 				// Scan back over the trailing run of digits.
 				uint32_t end = taglen;
@@ -2977,7 +2985,7 @@ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const uns
 		break;
 	case 'Z': // ReadyForQuery: final message; records txn status and finalizes buffer.
 		if (conn && payload_len >= 1) {
-			conn->native_txn_status = (char)payload[0];
+			conn->set_ready_for_query_status((char)payload[0]);
 		}
 		result_packet_type |= PGSQL_QUERY_RESULT_READY;
 		// Mirror add_ready_status(): flush the in-line buffer into PSarrayOUT so the

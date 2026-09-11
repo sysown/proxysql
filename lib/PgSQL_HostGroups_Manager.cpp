@@ -3110,7 +3110,9 @@ SQLite3_result * PgSQL_HostGroups_Manager::SQL3_Free_Connections() {
 						j["port"] = conn->parent ? conn->parent->port : 0;
 						j["user"] = (conn->userinfo && conn->userinfo->username) ? conn->userinfo->username : "";
 						j["database"] = (conn->userinfo && conn->userinfo->dbname) ? conn->userinfo->dbname : "";
-						j["transaction_status"] = string(1, conn->native_txn_status);
+						j["backend_pid"] = conn->get_pg_backend_pid();
+						j["using_ssl"] = conn->get_pg_ssl_in_use() ? "YES" : "NO";
+						j["transaction_status"] = string(1, conn->last_ready_for_query_status());
 					} else {
 						j["native_mode"] = false;
 						j["host"] = conn->get_pg_host();

@@ -228,6 +228,10 @@ public:
 		//
 		// we have a similar code in MySQL_Connection
 		// in case of ASYNC_CONNECT_SUCCESSFUL
+		//
+		// For futher details:
+		// - without ssl: we use the file descriptor from pgsql connection
+		// - with ssl: we use the SSL structure from pgsql connection
 		if (sess != NULL && sess->session_fast_forward) {
 			// Relaying without the backend's TLS would put plaintext on an encrypted
 			// socket. Close the session instead; the connection is already flagged.

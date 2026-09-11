@@ -264,6 +264,21 @@ public:
 
 	PG_ASYNC_ST handler(short event);
 	void connect_start();
+	// Builds the session settings a backend StartupMessage must carry: the
+	// client_encoding value and the "-c name=value ..." options string (tracked
+	// variables followed by the client's own untracked options). Also records what is
+	// being sent via server_set_hash_and_value(), so requires_RESETTING_CONNECTION()
+	// does not afterwards see a false mismatch and resync settings already applied.
+	// Returns false when there is no client session to read settings from, leaving
+	// both outputs untouched.
+	// Escaping differs by transport. Conninfo goes through libpq's parser, which strips
+	// one level of backslashes before the value reaches the wire; the native path writes
+	// the wire bytes directly, so it must emit exactly what the backend's pg_split_opts()
+	// expects (one level less).
+	enum class StartupParamEscape { Conninfo, Wire };
+	bool build_and_record_startup_session_params(std::string& client_encoding_out,
+	                                             std::string& options_out,
+	                                             StartupParamEscape escape_mode);
 	void connect_cont(short event);
 	// Consults PgSQL_Monitor::dns_lookup; returns the cached IP on a hit,
 	// empty std::string on a miss.  Used by connect_start() to set
@@ -498,38 +513,58 @@ public:
 	inline const PGconn* get_pg_connection() const { return pgsql_conn; }
 	inline int get_pg_server_version() {
 		if (native_mode) {
-			// native_params["server_version"] is e.g. "16.2" or "9.6.1"; libpq encodes
-			// PQserverVersion as major*10000 + minor*100 + rev. Parse best-effort.
 			auto it = native_params.find("server_version");
 			if (it == native_params.end()) return 0;
-			int maj = 0, min = 0, rev = 0;
-			sscanf(it->second.c_str(), "%d.%d.%d", &maj, &min, &rev);
-			return maj * 10000 + min * 100 + rev;
+			// PostgreSQL changed the numeric version encoding at 10: major*10000 + minor
+			// from 10 onwards, major*10000 + minor*100 + revision before it.
+			int vmaj = 0, vmin = 0, vrev = 0;
+			const int cnt = sscanf(it->second.c_str(), "%d.%d.%d", &vmaj, &vmin, &vrev);
+			// The backend controls this string; the multiplies below overflow int for
+			// absurd values, so anything implausible is reported as unknown.
+			if (vmaj < 0 || vmaj > 9999 || vmin < 0 || vmin > 9999 || vrev < 0 || vrev > 9999) return 0;
+			if (cnt == 3) return (100 * vmaj + vmin) * 100 + vrev;
+			if (cnt == 2) return (vmaj >= 10) ? (100 * 100 * vmaj + vmin) : ((100 * vmaj + vmin) * 100);
+			if (cnt == 1) return 100 * 100 * vmaj;
+			return 0;
 		}
 		return PQserverVersion(pgsql_conn);
 	}
 	inline int get_pg_protocol_version() { return native_mode ? 3 : PQprotocolVersion(pgsql_conn); }
 	inline const char* get_pg_host() { return native_mode ? native_host.c_str() : PQhost(pgsql_conn); }
-	inline const char* get_pg_hostaddr() { return PQhostaddr(pgsql_conn); }
-	inline const char* get_pg_port() { return PQport(pgsql_conn); }
+	inline const char* get_pg_hostaddr() { return native_mode ? native_hostaddr.c_str() : PQhostaddr(pgsql_conn); }
+	inline const char* get_pg_port() { return native_mode ? native_port.c_str() : PQport(pgsql_conn); }
 	inline const char* get_pg_dbname() { return native_mode ? (userinfo ? userinfo->dbname : "") : PQdb(pgsql_conn); }
 	inline const char* get_pg_user() { return native_mode ? (userinfo ? userinfo->username : "") : PQuser(pgsql_conn); }
-	inline const char* get_pg_password() { return PQpass(pgsql_conn); }
-	inline const char* get_pg_options() { return PQoptions(pgsql_conn); }
+	inline const char* get_pg_password() { return native_mode ? (userinfo && userinfo->password ? userinfo->password : "") : PQpass(pgsql_conn); }
+	inline const char* get_pg_options() { return native_mode ? native_options.c_str() : PQoptions(pgsql_conn); }
 	inline int get_pg_socket_fd() { return native_mode ? fd : PQsocket(pgsql_conn); }
 	inline int get_pg_backend_pid() { return native_mode ? native_backend_pid : PQbackendPID(pgsql_conn); }
 	inline int get_pg_connection_needs_password() { return PQconnectionNeedsPassword(pgsql_conn); }
 	inline int get_pg_connection_used_password() { return PQconnectionUsedPassword(pgsql_conn); }
 	inline int get_pg_connection_used_gssapi() { return PQconnectionUsedGSSAPI(pgsql_conn); }
-	inline int get_pg_client_encoding() { return PQclientEncoding(pgsql_conn); }
+	inline int get_pg_client_encoding() {
+		if (native_mode) {
+			constexpr int SQL_ASCII = 0;   // PG_SQL_ASCII; mb/pg_wchar.h is not included here
+			auto it = native_params.find("client_encoding");
+			if (it == native_params.end()) return SQL_ASCII;
+			const int enc = char_to_encoding(it->second.c_str());
+			return (enc < 0) ? SQL_ASCII : enc;
+		}
+		return PQclientEncoding(pgsql_conn);
+	}
 	// Native TLS (1.6b): SSL is in use once the handshake handed the SSL* to myds.
 	// Out-of-line in PgSQL_Connection.cpp because PgSQL_Data_Stream is incomplete here.
 	int get_pg_ssl_in_use();
-	inline ConnStatusType get_pg_connection_status() {
-		if (native_mode) return native_connected ? CONNECTION_OK : CONNECTION_BAD;
+	inline ConnStatusType get_pg_connection_status() const {
+		// Only the native side needs the check. libpq already reports a connection
+		// that is still being set up, and those must not be reported as bad.
+		if (native_mode) return backend_is_live() ? CONNECTION_OK : CONNECTION_BAD;
 		return PQstatus(pgsql_conn);
 	}
-	inline PGTransactionStatusType get_pg_transaction_status() {
+	inline PGTransactionStatusType get_pg_transaction_status() const {
+		// Says whether the connection can be reused. Use
+		// last_ready_for_query_status() if you want what the backend actually said.
+		if (!backend_is_live()) return PQTRANS_UNKNOWN;
 		if (native_mode) {
 			switch (native_txn_status) {
 				case 'I': return PQTRANS_IDLE;
@@ -540,6 +575,11 @@ public:
 		}
 		return PQtransactionStatus(pgsql_conn);
 	}
+	// The transaction letter the backend sent with its last reply. It says nothing
+	// about whether the connection is still usable -- callers that need that ask
+	// get_pg_transaction_status() instead.
+	inline char last_ready_for_query_status() const { return native_txn_status; }
+	inline void set_ready_for_query_status(char st) { native_txn_status = st; }
 	inline int get_pg_is_nonblocking() { return native_mode ? 1 : PQisnonblocking(pgsql_conn); }
 	inline int get_pg_is_threadsafe() { return PQisthreadsafe(); }
 	inline const char* get_pg_error_message() {
@@ -691,16 +731,21 @@ public:
 	// SEND_STARTUP to flush the remainder; this records the state to resume in
 	// once the buffer drains (AUTH after a password/SASL message, etc.).
 	PG_Native_Conn_St native_st_after_send = PG_Native_Conn_St::AUTH;
+	// True once login has finished and the connection can carry queries. Set when
+	// the backend sends its first ready-for-query, cleared when we start a new
+	// connect or tear the connection down.
+	bool native_connected = false;
 	PgSQL_Backend_Msg_Framer native_framer;          // frames inbound backend bytes
 	PgSQL_Scram_State* native_scram = nullptr;       // owned; freed in destructor / teardown
 	std::string native_outbuf;                       // pending outbound bytes (partial send buffer)
-	bool native_connected = false;                   // true once ReadyForQuery received
 	bool handler_first_call = true;                  // one-shot first-call detector for handler() (both libpq and native paths)
 	std::map<std::string, std::string> native_params; // ParameterStatus name->value
 	std::string native_host;                         // backend host (parent->address, captured at connect)
+	std::string native_options;                      // the `options` value sent in the StartupMessage
+	std::string native_hostaddr;                     // resolved numeric IP, or "" — mirrors when the libpq path passes hostaddr=
+	std::string native_port;                         // backend port as a decimal string, matching PQport()'s shape
 	int native_backend_pid = 0;                      // BackendKeyData PID
 	int native_backend_secret = 0;                   // BackendKeyData secret key
-	char native_txn_status = 'I';                    // ReadyForQuery status byte ('I'/'T'/'E')
 
 	// --- Native simple-query / simple-command execution (Task 1.6c / Phase 2 core) ---
 	// Set true once a ReadyForQuery ('Z') has been consumed for the in-flight query,
@@ -796,7 +841,14 @@ public:
 	// EAGAIN/incomplete frame → async_exit_status = PG_EVENT_READ and return; a fatal
 	// recv/frame error sets error_info and marks the fetch done. Sets
 	// native_result_complete when ReadyForQuery is reached.
-	void native_fetch_result_cont(short event);
+	// Adds up the bytes it hands to query_result in *processed_bytes, so the
+	// caller can apply the same fetch-pause rule the libpq loop uses.
+	void native_fetch_result_cont(short event, uint64_t* processed_bytes = nullptr);
+	// Finish sending a reset command and consume its reply up to ReadyForQuery.
+	// The reply is discarded; a connection being reset has no client to send it to.
+	void native_reset_session_cont();
+	// Record a ParameterStatus message into native_params.
+	void native_track_parameter_status(const unsigned char* payload, uint32_t len);
 	// Flush the just-built extended-query step in native_outbuf and set
 	// async_exit_status the way the stmt_*_start callers expect: PG_EVENT_WRITE while
 	// bytes remain buffered (caller waits for POLLOUT), PG_EVENT_NONE once fully sent
@@ -848,6 +900,10 @@ public:
 	int native_recv_into_framer();
 	void native_teardown();                          // close fd, free scram (capability gap / failure)
 	void native_capability_gap(const char* mechanism); // tear down native, restart via libpq
+	// Fatal error during the RESULT phase: records the error AND tears the socket
+	// down, so the connection is classified non-reusable instead of being pooled.
+	// See the definition in PgSQL_Connection.cpp for why the teardown is required.
+	void native_result_fatal(const char* code, const char* message);
 	// Parse an ErrorResponse ('E') payload into error_info.
 	void native_fill_error_from_E(const unsigned char* payload, uint32_t len);
 
@@ -902,6 +958,21 @@ public:
 	PgSQL_SrvC *parent;
 	PgSQL_Connection_userinfo* userinfo;
 	PgSQL_Data_Stream* myds;
+
+	// Native backend TLS. Owned by the connection so it shares the lifetime of
+	// `fd`, which the native path also owns; the data stream is per-session and
+	// would take the TLS session with it when the connection is pooled.
+	//
+	// SSL_set_bio() transfers both BIOs to the SSL, so SSL_free() releases all
+	// three -- done only in native_teardown() and ~PgSQL_Connection(), never on a
+	// pool return. myds->ssl stays NULL in native mode.
+	// Set when a result fetch stopped early because it had already moved enough
+	// bytes for this event. The next entry drains what is still framed instead
+	// of asking the socket for more, which may never come.
+	bool native_fetch_paused = false;
+	SSL* native_ssl  = nullptr;
+	BIO* native_rbio = nullptr;
+	BIO* native_wbio = nullptr;
 	//unsigned int warning_count;
 	int fd;
 	/**
@@ -914,6 +985,20 @@ public:
 	bool unknown_transaction_status;
 
 private:
+	// The one place that decides whether this connection can still be used. Every
+	// answer about the connection's health is built on it.
+	bool backend_is_live() const;
+
+	// True once this connection has been added to the global count of connected
+	// backends. Both subtractions check it, so a connection that was never added is
+	// never subtracted and the count cannot wrap.
+	bool counted_in_connections_connected = false;
+
+	// Kept private on purpose. It is stale whenever the connection is broken, so
+	// read it through one of the two accessors, which say which question you are
+	// asking.
+	char native_txn_status = 'I';                    // ReadyForQuery status byte ('I'/'T'/'E')
+
 	// Set end state for the fetch result to indicate that it originates from a simple query or statement execution.
 	ASYNC_ST fetch_result_end_st = ASYNC_QUERY_END;
 	inline void set_fetch_result_end_state(ASYNC_ST st) {
@@ -925,6 +1010,10 @@ private:
 	// Handles the COPY OUT response from the server.
 	// Returns true if it consumes all buffer data, or false if the threshold for result size is reached
 	bool handle_copy_out(const PGresult* result, uint64_t* processed_bytes);
+	// True when this event has moved enough bytes that the result fetch should
+	// pause and let the client catch up. Shared by the libpq and native result
+	// loops so both honour pgsql-threshold_resultset_size the same way.
+	bool suspend_resultset_fetch(uint64_t processed_bytes) const;
 	static void notice_handler_cb(void* arg, const PGresult* result);
 	static void unhandled_notice_cb(void* arg, const PGresult* result);
 	void init_query_result();
