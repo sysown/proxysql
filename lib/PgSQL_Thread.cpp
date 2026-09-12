@@ -3089,10 +3089,72 @@ void PgSQL_Thread::poll_listener_del(int sock) {
 	}
 }
 
+void PgSQL_Thread::drop_from_poll(PgSQL_Data_Stream *ds) {
+	if (!ds) return;
+	unsigned guard = mypolls.len + 1;
+	while (guard--) {
+		bool found = false;
+		for (unsigned int i = 0; i < mypolls.len; i++) {
+			if (mypolls.myds[i] == ds) {
+				mypolls.remove_index_fast(i);
+				found = true;
+				break;
+			}
+		}
+		if (!found) break;
+	}
+	ds->poll_fds_idx = -1;
+	ds->mypolls = NULL;
+}
+
 void PgSQL_Thread::unregister_session(int idx) {
 	if (mysql_sessions == NULL) return;
-	proxy_debug(PROXY_DEBUG_NET, 1, "Thread=%p, Session=%p -- Unregistered session\n", this, mysql_sessions->index(idx));
+	PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(idx);
+	leave_waiter(sess, false);
+	drop_from_poll(sess->client_myds);
+	if (sess->mybe) drop_from_poll(sess->mybe->server_myds);
+	proxy_debug(PROXY_DEBUG_NET, 1, "Thread=%p, Session=%p -- Unregistered session\n", this, sess);
 	mysql_sessions->remove_index_fast(idx);
+}
+
+void PgSQL_Thread::enter_waiter(PgSQL_Session *sess, unsigned hid) {
+	if (sess->waiter_node.session) return;
+	sess->waiter_node.session = sess;
+	sess->waiter_node.hid = hid;
+	if (sess->client_myds && sess->client_myds->poll_fds_idx >= 0)
+		drop_from_poll(sess->client_myds);
+	if (sess->mybe) drop_from_poll(sess->mybe->server_myds);
+	waiter_lists.push_back(sess->waiter_node);
+}
+
+void PgSQL_Thread::poll_waiter_clients() {
+	std::vector<pollfd> fds;
+	std::vector<PgSQL_Session*> sesss;
+	waiter_lists.for_each_hid([&](unsigned, PgSQL_Waiter_Node *head) {
+		unsigned guard = 0;
+		for (auto *n = head; n && guard < 100000; n = n->next, ++guard) {
+			auto *sess = static_cast<PgSQL_Session*>(n->session);
+			if (sess->client_myds && sess->client_myds->fd >= 0) {
+				fds.push_back(pollfd{sess->client_myds->fd, POLLIN, 0});
+				sesss.push_back(sess);
+			}
+		}
+	});
+	if (fds.empty()) return;
+	poll(fds.data(), fds.size(), 0);
+	for (size_t i = 0; i < fds.size(); i++) {
+		if (fds[i].revents & (POLLHUP | POLLERR | POLLNVAL))
+			sesss[i]->healthy = 0;
+	}
+}
+
+void PgSQL_Thread::leave_waiter(PgSQL_Session *sess, bool restore_client) {
+	if (!sess->waiter_node.session) return;
+	waiter_lists.unlink(sess->waiter_node);
+	sess->waiter_node = PgSQL_Waiter_Node{};
+	if (restore_client && sess->client_myds && sess->client_myds->fd >= 0 && sess->client_myds->poll_fds_idx < 0) {
+		mypolls.add(POLLIN | POLLOUT, sess->client_myds->fd, sess->client_myds, curtime);
+	}
 }
 
 
@@ -3262,6 +3324,8 @@ void PgSQL_Thread::run() {
 		) {
 			ttw = APT_SHORT_TTW_MS;
 		}
+		if (!waiter_lists.empty() && ttw > 1)
+			ttw = 1;
 #ifdef IDLE_THREADS
 		if (GloVars.global.idle_threads && idle_maintenance_thread) {
 			memset(events, 0, sizeof(struct epoll_event) * MY_EPOLL_THREAD_MAXEVENTS); // let's make valgrind happy. It also seems that needs to be zeroed anyway
@@ -3293,6 +3357,18 @@ void PgSQL_Thread::run() {
 	 * Purpose: Enables efficient I/O multiplexing across all PostgreSQL connections
 	 */
 	// poll is called with a timeout of mypolls.poll_timeout if set , or pgsql_thread___poll_timeout
+			const bool b_rearm = (curtime >= last_b_rearm_us + 50000);
+			if (b_rearm) {
+				last_b_rearm_us = curtime;
+				waiter_lists.for_each_hid([&](unsigned, PgSQL_Waiter_Node *head) {
+					unsigned guard = 0;
+					for (auto *n = head; n && guard < 100000; n = n->next, ++guard) {
+						auto *sess = static_cast<PgSQL_Session*>(n->session);
+						if (sess->client_myds && sess->client_myds->fd >= 0 && sess->client_myds->poll_fds_idx < 0)
+							mypolls.add(POLLIN, sess->client_myds->fd, sess->client_myds, curtime);
+					}
+				});
+			}
 			rc = poll(mypolls.fds, mypolls.len, ttw);
 			proxy_debug(PROXY_DEBUG_NET, 5, "%s\n", "Returning poll");
 #ifdef IDLE_THREADS
@@ -3416,6 +3492,15 @@ void PgSQL_Thread::run() {
 #endif // IDLE_THREADS
 
 		ProcessAllMyDS_AfterPoll<PgSQL_Thread>();
+		if (last_b_rearm_us == pre_poll_time) {
+			waiter_lists.for_each_hid([&](unsigned, PgSQL_Waiter_Node *head) {
+				unsigned guard = 0;
+				for (auto *n = head; n && guard < 100000; n = n->next, ++guard) {
+					auto *sess = static_cast<PgSQL_Session*>(n->session);
+					drop_from_poll(sess->client_myds);
+				}
+			});
+		}
 
 #ifdef IDLE_THREADS
 		__run_skip_2 :
@@ -4055,9 +4140,15 @@ void PgSQL_Thread::process_all_sessions() {
 			n--;
 			delete sess;
 		}
+		else if (sess->waiter_node.session) {
+			continue;
+		}
 		else {
 			if (sess->to_process == 1) {
 				if (sess->pause_until <= curtime) {
+					if (!(sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn)) {
+						continue;
+					}
 					rc = sess->handler();
 					//total_active_transactions_+=sess->active_transactions;
 					if (rc == -1 || sess->killed == true) {
@@ -4088,51 +4179,66 @@ void PgSQL_Thread::process_all_sessions() {
 			}
 		}
 	}
-	// Second pass over the sessions that failed to get a backend connection.
-	//
-	// Connections are released from inside handler() during the scan above, so
-	// a session that gave up at index 50 may be servable by a release that
-	// happened at index 700 -- in this same pass. Without this it waits for
-	// something to set to_process again, and for a session parked on a failed
-	// checkout that is ProcessAllSessions_MaintenanceLoop(), which runs on a
-	// hardcoded 1 second interval. That 1Hz retry is what bounded the observed
-	// tail (p99 ~1.8s, max ~1.9s) while p50 stayed near 1ms.
-	//
-	// Retrying across iterations does not help: nothing changes between polls.
-	// The releases happen during the scan, which is why the retry has to be
-	// here rather than a shorter poll timeout or a session-level deadline.
-	//
-	// Gated on partition_pool_nulls: zero means nobody failed a checkout in
-	// this pass, so there is nothing to retry and this costs one branch.
-	// Deliberately a single extra pass, not a loop to fixpoint -- bounded work
-	// per iteration, and a session that still cannot be served falls back to
-	// the existing path.
 	// TEMPORARY INSTRUMENTATION -- remove before merge. Counts how many
-	// sessions the rescan actually finds and how many it manages to serve, so
-	// "no difference" can be attributed to the right cause: never firing,
-	// finding no candidates, or finding them and still getting no connection.
+	// waiter-list sessions the rescan actually finds and how many it manages
+	// to serve, so "no difference" can be attributed to the right cause:
+	// never firing, finding no candidates, or finding them and still getting
+	// no connection. vanilla_breaks is per-HG early exits on a vanilla miss.
 	unsigned int rescan_cand = 0;
 	unsigned int rescan_served = 0;
-	unsigned int rescan_skip_noproc = 0;
-	unsigned int rescan_skip_hasconn = 0;
-	unsigned int rescan_skip_nombe = 0;
+	unsigned int rescan_vanilla_breaks = 0;
 
-	if (partition_pool_nulls > 0) {
-		for (n = 0; n < mysql_sessions->len; n++) {
-			PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(n);
-			// Still wants processing, is not paused, and has a backend that
-			// never got a connection: exactly the failed-checkout state.
-			if (sess->to_process != 1) { rescan_skip_noproc++; continue; }
-			if (sess->pause_until > curtime) continue;
-			if (sess->mybe == NULL || sess->mybe->server_myds == NULL) { rescan_skip_nombe++; continue; }
-			if (sess->mybe->server_myds->myconn != NULL) { rescan_skip_hasconn++; continue; }
-
-			rescan_cand++;
-			rc = sess->handler();
-			if (rc != -1 && sess->killed == false
-			    && sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) {
-				rescan_served++;
+	if (!waiter_lists.empty()) {
+		waiter_lists.for_each_hid([&](unsigned hid, PgSQL_Waiter_Node *head) {
+			(void)hid;
+			unsigned walk_guard = 0;
+			for (PgSQL_Waiter_Node *n = head; n && walk_guard < 100000; ++walk_guard) {
+				PgSQL_Waiter_Node *next = n->next;
+				auto *sess = static_cast<PgSQL_Session*>(n->session);
+				if (sess->pause_until > curtime) {
+					n = next;
+					continue;
+				}
+				rescan_cand++;
+				sess->to_process = 1;
+				rc = sess->handler();
+				const bool got = sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn;
+				if (got) {
+					leave_waiter(sess);
+					PgSQL_Data_Stream *bds = sess->mybe->server_myds;
+					if (bds && bds->fd >= 0 && bds->poll_fds_idx < 0)
+						mypolls.add(POLLIN | POLLOUT, bds->fd, bds, curtime);
+					rescan_served++;
+				} else if (vanilla_pool_checkout(sess->last_pool_ff, sess->last_pool_gtid ? "" : nullptr, sess->last_pool_max_lag_ms)) {
+					rescan_vanilla_breaks++;
+					break;
+				}
+				if (rc == -1 || sess->killed == true) {
+					char _buf[1024];
+					if (sess->client_myds && sess->killed)
+						proxy_warning("Closing killed client connection %s:%d\n", sess->client_myds->addr.addr, sess->client_myds->addr.port);
+					snprintf(_buf, sizeof(_buf), "%s:%d:%s()", __FILE__, __LINE__, __func__);
+					GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_CLOSE, sess, NULL, _buf);
+					unsigned int i;
+					for (i = 0; i < mysql_sessions->len; i++) {
+						if (mysql_sessions->index(i) == sess) {
+							unregister_session(i);
+							break;
+						}
+					}
+					delete sess;
+				}
+				n = next;
 			}
+		});
+	}
+
+	for (n = 0; n < mysql_sessions->len; n++) {
+		PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(n);
+		if (sess->waiter_node.session) continue;
+		if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) continue;
+		if (sess->to_process == 1 && sess->pause_until <= curtime) {
+			rc = sess->handler();
 			if (rc == -1 || sess->killed == true) {
 				char _buf[1024];
 				if (sess->client_myds && sess->killed)
@@ -4148,10 +4254,9 @@ void PgSQL_Thread::process_all_sessions() {
 
 	// TEMPORARY INSTRUMENTATION -- one line per second (maintenance tick).
 	if (maintenance_loop) {
-		proxy_info("PGSQL_RESCAN thr=%p sessions=%u nulls=%u attempts=%u cand=%u served=%u skip[noproc=%u hasconn=%u nombe=%u]\n",
+		proxy_info("PGSQL_RESCAN thr=%p sessions=%u nulls=%u attempts=%u cand=%u served=%u vanilla_breaks=%u\n",
 			this, mysql_sessions->len, partition_pool_nulls, partition_pool_attempts,
-			rescan_cand, rescan_served,
-			rescan_skip_noproc, rescan_skip_hasconn, rescan_skip_nombe);
+			rescan_cand, rescan_served, rescan_vanilla_breaks);
 	}
 
 	if (maintenance_loop) {
@@ -6055,13 +6160,13 @@ PgSQL_Connection* PgSQL_Thread::get_MyConn_local(unsigned int _hid, PgSQL_Sessio
 }
 
 void PgSQL_Thread::push_MyConn_local(PgSQL_Connection * c) {
+	PgSQL_SrvC* mysrvc = (PgSQL_SrvC*)c->parent;
 	// Bounded local cache: cache 1-in-N releases (N = pgsql_threads), push the
 	// rest to the shared HGM pool so peer workers can pick them up.
 	// At N=1 always cache (no sibling to share with).
 	// Rationale: avoids the connection-hoarding behavior that starved sibling
 	// workers at high client count, while preserving most of the lock-amortization
 	// benefit at lower client counts.
-	PgSQL_SrvC* mysrvc = (PgSQL_SrvC*)c->parent;
 	if (mysrvc->status == MYSQL_SERVER_STATUS_ONLINE) {
 		if (c->async_state_machine == ASYNC_IDLE) {
 			// Never cache locally while somebody is waiting for a connection.

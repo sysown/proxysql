@@ -411,7 +411,9 @@ void Base_Thread::ProcessAllMyDS_AfterPoll() {
 
 		auto * myds = thr->mypolls.myds[n];
 		if (myds==NULL) {
-			read_one_byte_from_pipe<T>(n);
+			if (thr->mypolls.fds[n].fd == thr->pipefd[0]) {
+				read_one_byte_from_pipe<T>(n);
+			}
 			continue;
 		}
 		if (thr->mypolls.fds[n].revents==0) {
@@ -488,13 +490,13 @@ void Base_Thread::configure_pollout(DS * myds, unsigned int n) {
 	if (myds->myds_type==MYDS_FRONTEND && myds->DSS==STATE_SLEEP && myds->sess && myds->sess->status==WAITING_CLIENT_DATA) {
 		myds->set_pollout();
 	} else {
-		if (myds->DSS > STATE_MARIADB_BEGIN && myds->DSS < STATE_MARIADB_END) {
+		if (myds->DSS > STATE_MARIADB_BEGIN && myds->DSS < STATE_MARIADB_END && myds->myconn) {
 			thr->mypolls.fds[n].events = POLLIN;
 			if constexpr (std::is_same_v<T, PgSQL_Thread>) {
-				if (thr->mypolls.myds[n]->myconn->async_exit_status & PG_EVENT_WRITE)
+				if (myds->myconn->async_exit_status & PG_EVENT_WRITE)
 					thr->mypolls.fds[n].events |= POLLOUT;
 			} else if constexpr (std::is_same_v<T, MySQL_Thread>) {
-				if (thr->mypolls.myds[n]->myconn->async_exit_status & MYSQL_WAIT_WRITE)
+				if (myds->myconn->async_exit_status & MYSQL_WAIT_WRITE)
 					thr->mypolls.fds[n].events |= POLLOUT;
 			}
 		} else {
