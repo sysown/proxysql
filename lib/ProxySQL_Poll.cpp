@@ -241,14 +241,14 @@ void ProxySQL_Poll<T>::update_fd_at_index(unsigned int idx, int _fd) {
  */
 template<class T>
 void ProxySQL_Poll<T>::remove_index_fast(unsigned int i) {
-	if ((int)i==-1) return;
-	myds[i]->poll_fds_idx=-1; // this prevents further delete
+	if ((int)i==-1 || i >= len) return;
+	if (myds[i]) myds[i]->poll_fds_idx=-1;
 	if (i != (len-1)) {
 		myds[i]=myds[len-1];
 		fds[i].fd=fds[len-1].fd;
 		fds[i].events=fds[len-1].events;
 		fds[i].revents=fds[len-1].revents;
-		myds[i]->poll_fds_idx=i;  // fix a serious bug
+		if (myds[i]) myds[i]->poll_fds_idx=i;
 		last_recv[i]=last_recv[len-1];
 		last_sent[i]=last_sent[len-1];
 	}

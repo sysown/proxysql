@@ -18,6 +18,7 @@
 #include "prometheus_helpers.h"
 
 #include "PgSQL_Set_Stmt_Parser.h"
+#include "PgSQL_Waiter_List.h"
 
 enum class AUTHENTICATION_METHOD {
 	NO_PASSWORD,
@@ -220,6 +221,8 @@ public:
 	void* gen_args;	// this is a generic pointer to create any sort of structure
 
 	ProxySQL_Poll<PgSQL_Data_Stream> mypolls;
+	PgSQL_Waiter_Lists waiter_lists;
+	unsigned long long last_b_rearm_us = 0;
 	pthread_t thread_id;
 	unsigned long long pre_poll_time;
 	unsigned long long last_maintenance_time;
@@ -461,6 +464,9 @@ public:
 	 *
 	 */
 	void unregister_session(int);
+	void enter_waiter(PgSQL_Session *sess, unsigned hid);
+	void leave_waiter(PgSQL_Session *sess, bool restore_client = true);
+	void drop_from_poll(PgSQL_Data_Stream *ds);
 
 	/**
 	 * @brief Returns a pointer to the `pollfd` structure for a specific data stream.

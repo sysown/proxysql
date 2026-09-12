@@ -12,6 +12,7 @@
 #include "PgSQL_Error_Helper.h"
 #include "PgSQL_Variables.h"
 #include "PgSQL_Variables_Validator.h"
+#include "PgSQL_Waiter_List.h"
 
 class PgSQL_Query_Result;
 class PgSQL_ExplicitTxnStateMgr;
@@ -489,6 +490,10 @@ public:
 	//   anything else (including ROLLBACK TO SAVEPOINT and RELEASE SAVEPOINT)
 	//     -> reply ERROR 25P02 + ReadyForQuery('E'), stay poisoned.
 	bool tx_poisoned{ false };
+	PgSQL_Waiter_Node waiter_node;
+	bool last_pool_ff{ false };
+	bool last_pool_gtid{ false };
+	int last_pool_max_lag_ms{ -1 };
 
 #ifdef DEBUG
 	PgSQL_Connection* dbg_extended_query_backend_conn = nullptr;
