@@ -10,6 +10,7 @@
 #include "PgSQL_Data_Stream.h"
 
 #include "openssl/x509v3.h"
+#include "openssl/crypto.h"   // OPENSSL_cleanse - a wipe the compiler is not allowed to drop
 
 #define RESULTSET_BUFLEN_DS_16K 16000
 #define RESULTSET_BUFLEN_DS_1M 1000*1024
@@ -397,6 +398,15 @@ PgSQL_Data_Stream::~PgSQL_Data_Stream() {
 	}
 
 	free_scram_state(scram_state);
+	clear_pending_auth_secret();
+}
+
+void PgSQL_Data_Stream::clear_pending_auth_secret() {
+	if (pending_auth_secret) {
+		OPENSSL_cleanse(pending_auth_secret, strlen(pending_auth_secret));
+		free(pending_auth_secret);
+		pending_auth_secret = NULL;
+	}
 }
 
 // this function initializes a PgSQL_Data_Stream 
