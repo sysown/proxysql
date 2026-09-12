@@ -4134,39 +4134,17 @@ void PgSQL_Thread::process_all_sessions() {
 	unsigned int rescan_served = 0;
 	unsigned int rescan_vanilla_breaks = 0;
 
-	if (partition_pool_nulls > 0 || !waiter_lists.empty()) {
+	if (!waiter_lists.empty()) {
 		waiter_lists.for_each_hid([&](unsigned hid, PgSQL_Waiter_Node *head) {
 			(void)hid;
 			for (PgSQL_Waiter_Node *n = head; n; ) {
 				PgSQL_Waiter_Node *next = n->next;
 				auto *sess = static_cast<PgSQL_Session*>(n->session);
 				rescan_cand++;
-				sess->to_process = 1;
-				rc = sess->handler();
 				const bool got_conn = sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn;
-				if (rc != -1 && sess->killed == false && got_conn) {
+				if (got_conn) {
 					leave_waiter(sess);
 					rescan_served++;
-				}
-				if (rc == -1 || sess->killed == true) {
-					char _buf[1024];
-					if (sess->client_myds && sess->killed)
-						proxy_warning("Closing killed client connection %s:%d\n", sess->client_myds->addr.addr, sess->client_myds->addr.port);
-					snprintf(_buf, sizeof(_buf), "%s:%d:%s()", __FILE__, __LINE__, __func__);
-					GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_CLOSE, sess, NULL, _buf);
-					unsigned int i;
-					for (i = 0; i < mysql_sessions->len; i++) {
-						if (mysql_sessions->index(i) == sess) {
-							unregister_session(i);
-							break;
-						}
-					}
-					delete sess;
-				} else if (!got_conn) {
-					if (vanilla_pool_checkout(sess->last_pool_ff, sess->last_pool_gtid ? "" : nullptr, sess->last_pool_max_lag_ms)) {
-						rescan_vanilla_breaks++;
-						break;
-					}
 				}
 				n = next;
 			}
