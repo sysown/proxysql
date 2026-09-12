@@ -3119,8 +3119,29 @@ void PgSQL_Thread::enter_waiter(PgSQL_Session *sess, unsigned hid) {
 	if (sess->waiter_node.session) return;
 	sess->waiter_node.session = sess;
 	sess->waiter_node.hid = hid;
+	drop_from_poll(sess->client_myds);
 	if (sess->mybe) drop_from_poll(sess->mybe->server_myds);
 	waiter_lists.push_back(sess->waiter_node);
+}
+
+void PgSQL_Thread::poll_waiter_clients() {
+	std::vector<pollfd> fds;
+	std::vector<PgSQL_Session*> sesss;
+	waiter_lists.for_each_hid([&](unsigned, PgSQL_Waiter_Node *head) {
+		for (auto *n = head; n; n = n->next) {
+			auto *sess = static_cast<PgSQL_Session*>(n->session);
+			if (sess->client_myds && sess->client_myds->fd >= 0) {
+				fds.push_back(pollfd{sess->client_myds->fd, POLLIN, 0});
+				sesss.push_back(sess);
+			}
+		}
+	});
+	if (fds.empty()) return;
+	poll(fds.data(), fds.size(), 0);
+	for (size_t i = 0; i < fds.size(); i++) {
+		if (fds[i].revents & (POLLHUP | POLLERR | POLLNVAL))
+			sesss[i]->healthy = 0;
+	}
 }
 
 void PgSQL_Thread::leave_waiter(PgSQL_Session *sess, bool restore_client) {
@@ -3331,6 +3352,7 @@ void PgSQL_Thread::run() {
 	 */
 	// poll is called with a timeout of mypolls.poll_timeout if set , or pgsql_thread___poll_timeout
 			rc = poll(mypolls.fds, mypolls.len, ttw);
+			poll_waiter_clients();
 			proxy_debug(PROXY_DEBUG_NET, 5, "%s\n", "Returning poll");
 #ifdef IDLE_THREADS
 		}
@@ -4095,6 +4117,9 @@ void PgSQL_Thread::process_all_sessions() {
 		else {
 			if (sess->to_process == 1) {
 				if (sess->pause_until <= curtime) {
+					if (sess->waiter_node.session && !(sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn)) {
+						continue;
+					}
 					rc = sess->handler();
 					//total_active_transactions_+=sess->active_transactions;
 					if (rc == -1 || sess->killed == true) {
@@ -4136,15 +4161,47 @@ void PgSQL_Thread::process_all_sessions() {
 
 	if (!waiter_lists.empty()) {
 		waiter_lists.for_each_hid([&](unsigned hid, PgSQL_Waiter_Node *head) {
-			(void)hid;
 			for (PgSQL_Waiter_Node *n = head; n; ) {
 				PgSQL_Waiter_Node *next = n->next;
 				auto *sess = static_cast<PgSQL_Session*>(n->session);
 				rescan_cand++;
-				const bool got_conn = sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn;
-				if (got_conn) {
-					leave_waiter(sess);
-					rescan_served++;
+				if (!sess->mybe || !sess->mybe->server_myds) {
+					n = next;
+					continue;
+				}
+				if (sess->mybe->server_myds->myconn == NULL) {
+					PgSQL_Connection *mc = get_MyConn_local(hid, sess, NULL, 0, sess->last_pool_max_lag_ms);
+					if (mc == NULL)
+						mc = PgHGM->get_MyConn_from_pool(hid, sess, sess->last_pool_ff, NULL, 0, sess->last_pool_max_lag_ms);
+					if (mc)
+						sess->mybe->server_myds->attach_connection(mc);
+				}
+				if (sess->mybe->server_myds->myconn == NULL) {
+					rescan_vanilla_breaks++;
+					break;
+				}
+				leave_waiter(sess);
+				if (sess->mybe->server_myds->fd > 0 && sess->mybe->server_myds->poll_fds_idx < 0) {
+					sess->mybe->server_myds->assign_fd_from_pgsql_conn();
+					mypolls.add(POLLIN | POLLOUT, sess->mybe->server_myds->fd, sess->mybe->server_myds, curtime);
+				}
+				sess->to_process = 1;
+				rc = sess->handler();
+				rescan_served++;
+				if (rc == -1 || sess->killed == true) {
+					char _buf[1024];
+					if (sess->client_myds && sess->killed)
+						proxy_warning("Closing killed client connection %s:%d\n", sess->client_myds->addr.addr, sess->client_myds->addr.port);
+					snprintf(_buf, sizeof(_buf), "%s:%d:%s()", __FILE__, __LINE__, __func__);
+					GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_CLOSE, sess, NULL, _buf);
+					unsigned int i;
+					for (i = 0; i < mysql_sessions->len; i++) {
+						if (mysql_sessions->index(i) == sess) {
+							unregister_session(i);
+							break;
+						}
+					}
+					delete sess;
 				}
 				n = next;
 			}
@@ -6059,13 +6116,22 @@ PgSQL_Connection* PgSQL_Thread::get_MyConn_local(unsigned int _hid, PgSQL_Sessio
 }
 
 void PgSQL_Thread::push_MyConn_local(PgSQL_Connection * c) {
+	PgSQL_SrvC* mysrvc = (PgSQL_SrvC*)c->parent;
+	if (mysrvc && mysrvc->myhgc) {
+		if (PgSQL_Waiter_Node *h = waiter_lists.head(mysrvc->myhgc->hid)) {
+			auto *sess = static_cast<PgSQL_Session*>(h->session);
+			if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn == NULL) {
+				sess->mybe->server_myds->attach_connection(c);
+				return;
+			}
+		}
+	}
 	// Bounded local cache: cache 1-in-N releases (N = pgsql_threads), push the
 	// rest to the shared HGM pool so peer workers can pick them up.
 	// At N=1 always cache (no sibling to share with).
 	// Rationale: avoids the connection-hoarding behavior that starved sibling
 	// workers at high client count, while preserving most of the lock-amortization
 	// benefit at lower client counts.
-	PgSQL_SrvC* mysrvc = (PgSQL_SrvC*)c->parent;
 	if (mysrvc->status == MYSQL_SERVER_STATUS_ONLINE) {
 		if (c->async_state_machine == ASYNC_IDLE) {
 			// Never cache locally while somebody is waiting for a connection.
