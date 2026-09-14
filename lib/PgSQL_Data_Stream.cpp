@@ -1252,11 +1252,12 @@ bool PgSQL_Data_Stream::adopt_backend_tls() {
 }
 
 // Bytes the relay never delivered leave the TLS stream out of step, so the connection is
-// destroyed rather than pooled: nothing else will ever send them. Unread bytes count only
-// while the transport is adopted; on a native borrow they are the connection's next reply.
+// destroyed rather than pooled: nothing else will ever send them. Only the stream's own
+// partial write counts on a native borrow -- there the BIOs belong to the connection, whose
+// next read and next flush still deliver whatever is left sitting in them.
 void PgSQL_Data_Stream::refuse_reuse_on_stranded_tls() {
 	const int unread = (backend_tls_adopted && rbio_ssl) ? BIO_pending(rbio_ssl) : 0;
-	const int unsent = (wbio_ssl ? BIO_pending(wbio_ssl) : 0);
+	const int unsent = (backend_tls_adopted && wbio_ssl) ? BIO_pending(wbio_ssl) : 0;
 	const unsigned long stranded = (unsigned long)(unsent > 0 ? unsent : 0) + (unsigned long)ssl_write_len;
 	if (unread <= 0 && stranded == 0) return;
 	const PgSQL_SrvC* srv = myconn->parent;
