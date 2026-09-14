@@ -945,13 +945,30 @@ int main(int, char**) {
                     pgmb_simple_result("c", "1", 1)),
           step_sleep(300) });
 
-    // R22: the backend answers a query with nothing but ReadyForQuery — no
-    // RowDescription, no CommandComplete. The result is "complete" by the
-    // drain's rule ('Z' seen) yet carries no command outcome.
-    runCase(admin, adminOwner, mock, "R22 bare ReadyForQuery as the whole result",
-        { step_expect_startup(), step_send(acceptedHandshake()), step_expect_query(),
-          step_send(pgmb_ready_for_query('I')),
-          step_sleep(300) });
+    // R22: the backend answers a query with nothing but ReadyForQuery -- no
+    // RowDescription, no CommandComplete, no ErrorResponse. The drain calls the result
+    // complete because it saw 'Z', yet nothing in it says what happened, so the session
+    // would report success and the connection would go back in the pool.
+    //
+    // Surviving is not the verdict here: the client has to be TOLD. The error also has
+    // to reach it BEFORE the ReadyForQuery, because a client that has been told the
+    // cycle is over discards whatever follows -- so an error emitted after the 'Z'
+    // leaves it with no error at all. Matching the text is what separates the two.
+    {
+        resetMockPool(admin, g_mock_ip, g_mock_port);
+        mock.set_script({ step_expect_startup(), step_send(acceptedHandshake()), step_expect_query(),
+                          step_send(pgmb_ready_for_query('I')),
+                          step_sleep(300) });
+        mock.reset_stats();
+        std::string err;
+        const bool served = queryThroughProxy(err);
+        const bool told = err.find("no command outcome") != std::string::npos;
+        ok(!served && told,
+           "R22 bare ReadyForQuery: the client is told why (served=%s, error=%s)",
+           served ? "YES (BAD)" : "no",
+           err.empty() ? "(none -- an error emitted after the ReadyForQuery is discarded)"
+                       : err.substr(0, err.find('\n')).c_str());
+    }
 
     // ---- final pool cleanliness -------------------------------------------
     // Every hostile connection above should have been torn down. Anything still
