@@ -5254,9 +5254,6 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 			}
 
 			if (startup_mismatch) {
-				// Discard pending pipeline messages 
-				reset_extended_query_frame();
-
 				// Only do expensive parsing if we're going to block the command
 				std::string nq = std::string(dig);
 				RE2::GlobalReplace(&nq, "(?U)/\\*.*\\*/", "");
@@ -5264,12 +5261,12 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 				RE2::GlobalReplace(&nq, "[^\\w]*", "");
 
 				bool is_reset_all = (strncasecmp(nq.c_str(), "ALL", 3) == 0);
-				client_myds->DSS = STATE_QUERY_SENT_NET;
-				bool send_ready_packet = is_extended_query_ready_for_query();
 
+				// Read the backend's parameters BEFORE discarding the frame. Discarding it drops a
+				// backend the batch left unfinished, and the names below are read off that very
+				// connection -- gathering them afterwards dereferences one that is already gone.
+				std::string mismatch_details;
 				if (is_reset_all) {
-					// Collect all mismatched variable names for error message
-					std::string mismatch_details;
 					for (int idx = 0; idx < PGSQL_NAME_LAST_LOW_WM; idx++) {
 						auto [client_value, client_hash] = client_myds->myconn->get_startup_parameter_and_hash((enum pgsql_variable_name)idx);
 						auto [backend_value, backend_hash] = mybe->server_myds->myconn->get_startup_parameter_and_hash((enum pgsql_variable_name)idx);
@@ -5277,6 +5274,15 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 							mismatch_details += std::string(pgsql_tracked_variables[idx].set_variable_name) + " ";
 						}
 					}
+				}
+
+				// Discard pending pipeline messages 
+				reset_extended_query_frame();
+
+				client_myds->DSS = STATE_QUERY_SENT_NET;
+				bool send_ready_packet = is_extended_query_ready_for_query();
+
+				if (is_reset_all) {
 					proxy_error("RESET ALL is not allowed when hostgroup is locked and startup parameter values differ between client and backend. "
 						"Mismatched variables: %s. Use SET to explicitly set the desired values.\n", mismatch_details.c_str());
 					client_myds->myprot.generate_error_packet(true, send_ready_packet,
