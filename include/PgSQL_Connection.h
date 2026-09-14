@@ -587,6 +587,7 @@ public:
 	// the whole proxy, on a byte the backend chose.
 	inline void set_ready_for_query_status(char st) {
 		native_txn_status = st;
+		native_unsynced_work = false;   // the backend concluded the batch
 		if (st != 'I' && st != 'T' && st != 'E') {
 			set_error(PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION,
 				"invalid ReadyForQuery transaction status from backend", false);
@@ -623,7 +624,13 @@ public:
 	unsigned int get_memory_usage() const;
 	char get_transaction_status_char();
 	inline int get_backend_pid() { return native_mode ? native_backend_pid : ((pgsql_conn) ? get_pg_backend_pid() : -1); }
-	bool is_pipeline_active() { return (PQpipelineStatus(pgsql_conn) != PQ_PIPELINE_OFF); }
+	// Whether the backend has not finished with this connection; callers use it to decide if the
+	// connection is safe to pool, reuse or retry on. Native has no libpq to ask and pgsql_conn is
+	// always NULL there, so without this branch every one of those guards was dead.
+	bool is_pipeline_active() {
+		if (native_mode) return native_unsynced_work;
+		return (PQpipelineStatus(pgsql_conn) != PQ_PIPELINE_OFF);
+	}
 	const char* get_pg_backend_state() const;
 
 	static int char_to_encoding(const char* name) {
@@ -764,6 +771,11 @@ public:
 	// Set by the two TLS helpers and cleared at the top of each, so it always describes the most
 	// recent TLS call rather than a stale one.
 	short native_ssl_block_dir = 0;
+	// True while the backend still owes us a ReadyForQuery: we have sent extended-query messages it
+	// has not concluded. Until that arrives the backend holds an implicit transaction and the locks
+	// the statements took, so the connection must not be handed to anyone else. Cleared only by an
+	// actual ReadyForQuery, because that is the only thing that ends the batch.
+	bool native_unsynced_work = false;
 	PgSQL_Scram_State* native_scram = nullptr;       // owned; freed in destructor / teardown
 	// How far the backend SCRAM exchange has got. The message type alone does not say whether a
 	// step is legal: a backend can repeat one, or skip one. Each step below feeds state that

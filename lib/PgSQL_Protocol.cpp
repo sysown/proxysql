@@ -1,6 +1,7 @@
 
 #include <openssl/evp.h>
 #include <openssl/rand.h>
+#include <openssl/crypto.h>
 #include <limits>
 #include <locale>
 #include "proxysql.h"
@@ -940,18 +941,22 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 	EXECUTION_STATE ret = EXECUTION_STATE::FAILED;
 	bool mock = false; // assigned after the credential lookup below; declared here, before the
 	                   // function's gotos, so a `goto __exit` can't cross its initialization.
+	bool pinned = false; // set when this packet reuses the secret the login started on; same reason
+	                     // as `mock` for being declared up here.
 
 	pgsql_hdr hdr{};
+	// These three aborts leave the login dead, so they go through the exit label rather than
+	// returning: that is where a secret kept for a still-pending login gets wiped.
 	if (!get_header(pkt, len, &hdr)) {
-		return EXECUTION_STATE::FAILED;
+		goto __exit_process_pkt_handshake_response;
 	}
 
 	if (hdr.data.size == 0) {
-		return EXECUTION_STATE::FAILED;
+		goto __exit_process_pkt_handshake_response;
 	}
 
 	if (hdr.type != (*myds)->auth_next_pkt_type) {
-		return EXECUTION_STATE::FAILED;
+		goto __exit_process_pkt_handshake_response;
 	}
 
 	user = (char*)(*myds)->myconn->conn_params.get_value(PG_USER);
@@ -967,6 +972,17 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 	// behaviour is unchanged. See #5987.
 	password = GloPgAuth->lookup((char*)user, cred_scope_for_session((*myds)->sess->session_type), &_ret_use_ssl, &default_hostgroup, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass, &attributes);
 
+	/* Put back the secret this login started on: the client's answer was computed against it, and
+	 * everything below reads `password`. A user deleted mid-login makes this lookup come back empty,
+	 * which skips the restore and leaves the rejection further down to refuse the login. */
+	pinned = (password != NULL && (*myds)->pending_auth_secret != NULL);
+	if (pinned) {
+		OPENSSL_cleanse(password, strlen(password));
+		free(password);
+		password = (*myds)->pending_auth_secret;
+		(*myds)->pending_auth_secret = NULL;
+	}
+
 	if (password) {
 #ifdef DEBUG
 		char* tmp_pass = strdup(password);
@@ -977,18 +993,31 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , password='%s'\n", (*myds)->sess, (*myds), user, tmp_pass);
 		free(tmp_pass);
 #endif // debug
-		(*myds)->sess->default_hostgroup = default_hostgroup;
-		//(*myds)->sess->default_schema = default_schema; // just the pointer is passed
-		if ((*myds)->sess->user_attributes) free((*myds)->sess->user_attributes);
-		(*myds)->sess->user_attributes = attributes; // just the pointer is passed
-		//(*myds)->sess->schema_locked = schema_locked;
-		(*myds)->sess->transaction_persistent = transaction_persistent;
-		(*myds)->sess->session_fast_forward = SESSION_FORWARD_TYPE_NONE; // default
-		if ((*myds)->sess->session_type == PROXYSQL_SESSION_PGSQL) {
-			(*myds)->sess->session_fast_forward = fast_forward ? SESSION_FORWARD_TYPE_PERMANENT : SESSION_FORWARD_TYPE_NONE;
+		if (pinned) {
+			/* The first packet of this login already applied hostgroup, attributes and the rest from
+			 * the same row the secret above came from. Taking the fresh ones now would build the
+			 * session out of two different reloads -- old credential, new routing -- and send the
+			 * pre-rotation password to the post-rotation server pool.
+			 *
+			 * Note that `pinned` decides two things at once: reuse the earlier secret, and skip
+			 * these fields because an earlier packet already set them. Holding a secret from before
+			 * the first password packet would need those two separated, or the fields would never
+			 * be set at all. */
+			free(attributes);
+		} else {
+			(*myds)->sess->default_hostgroup = default_hostgroup;
+			//(*myds)->sess->default_schema = default_schema; // just the pointer is passed
+			if ((*myds)->sess->user_attributes) free((*myds)->sess->user_attributes);
+			(*myds)->sess->user_attributes = attributes; // just the pointer is passed
+			//(*myds)->sess->schema_locked = schema_locked;
+			(*myds)->sess->transaction_persistent = transaction_persistent;
+			(*myds)->sess->session_fast_forward = SESSION_FORWARD_TYPE_NONE; // default
+			if ((*myds)->sess->session_type == PROXYSQL_SESSION_PGSQL) {
+				(*myds)->sess->session_fast_forward = fast_forward ? SESSION_FORWARD_TYPE_PERMANENT : SESSION_FORWARD_TYPE_NONE;
+			}
+			(*myds)->sess->user_max_connections = max_connections;
+			(*myds)->sess->use_ssl = _ret_use_ssl;
 		}
-		(*myds)->sess->user_max_connections = max_connections;
-		(*myds)->sess->use_ssl = _ret_use_ssl;
 	} else {
 
 		if (
@@ -1241,6 +1270,10 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 		if (userinfo->password) free(userinfo->password);
 
 		userinfo->username = strdup((const char*)user);
+		// This is the credential the session hands to every backend connection it opens. For a
+		// login that spanned a reload it is deliberately the secret the login was verified against,
+		// not the newer one: a client that proved knowledge of the old password must not be given a
+		// session that works with the new one.
 		userinfo->password = strdup((const char*)password);
 
 		std::vector<std::pair<std::string, std::string>> parameters;
@@ -1449,14 +1482,31 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 		// we always duplicate username and password, or crashes happen
 		if (!userinfo->username) // if set already, ignore
 			userinfo->username = strdup((const char*)user);
-		if (using_password)
+		if (using_password) {
+			// A SCRAM login reaches this twice -- once per packet -- so the first allocation has to
+			// go before the second one overwrites the pointer.
+			if (userinfo->password) free(userinfo->password);
 			userinfo->password = strdup((const char*)"");
+		}
 	}
 	userinfo->set(NULL, NULL, NULL, NULL); // just to call compute_hash()
 
 __exit_process_pkt_handshake_response:
+	/* PENDING means another packet is coming and it will look the credential up again: keep this
+	 * copy rather than free it, so the rest of the login runs on the same secret. Every other
+	 * outcome ends the login, so whatever was kept is wiped here -- otherwise a client that stalls
+	 * after the first packet, or sends a bad one, leaves a stored secret on the heap until it times
+	 * out. The mock exchange is excluded simply because it cannot succeed whatever the next packet
+	 * says, so there is nothing worth keeping. Not for safety: a real login holds a copy for the
+	 * same window, and scram_state holds key material derived from the same secret either way. */
+	(*myds)->clear_pending_auth_secret();
+	if (ret == EXECUTION_STATE::PENDING && mock == false) {
+		(*myds)->pending_auth_secret = password;
+		password = NULL;
+	}
 	free(pass);
 	if (password) {
+		OPENSSL_cleanse(password, strlen(password));
 		free(password);
 		password = NULL;
 	}

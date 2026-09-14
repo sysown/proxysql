@@ -146,6 +146,14 @@ public:
 	bool auth_received_startup = false;
 	unsigned char tmp_login_salt[4];
 	ScramState* scram_state;
+	// The stored secret of a login still in progress. SCRAM takes two packets and the credential is
+	// looked up again on the second, so a reload in between would otherwise change it mid-login.
+	// It covers that gap only. The earlier lookup that picks the authentication method is not held,
+	// so a reload before the first password packet still breaks the login -- it fails, which is safe.
+	char* pending_auth_secret = nullptr;
+	// Wipes and releases that secret. Called on every outcome that ends the login, and again from
+	// the destructor, so a rejected or stalled client leaves no stored password on the heap.
+	void clear_pending_auth_secret();
 
 	unsigned int connect_tries;
 	int query_retries_on_failure;

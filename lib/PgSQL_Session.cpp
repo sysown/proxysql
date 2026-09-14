@@ -3939,8 +3939,9 @@ handler_again:
 				// query has failed
 				if (processing_extended_query && // we are processing extended query message
 					rc != 1) { // rc == 1 means query is still running, we don't reset the extended_query_frame
-					// we discard all pending messages
-					reset_extended_query_frame();
+					// we discard all pending messages. The BACKEND produced this error, so it knows its
+					// batch is poisoned and finishing it rolls back -- the connection is worth keeping.
+					reset_extended_query_frame(true);
 					// status remains unchanged
 				}
 				// --- Named-portal lifetime on the ERROR epilogue (Task P2) ---
@@ -5253,9 +5254,6 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 			}
 
 			if (startup_mismatch) {
-				// Discard pending pipeline messages 
-				reset_extended_query_frame();
-
 				// Only do expensive parsing if we're going to block the command
 				std::string nq = std::string(dig);
 				RE2::GlobalReplace(&nq, "(?U)/\\*.*\\*/", "");
@@ -5263,12 +5261,12 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 				RE2::GlobalReplace(&nq, "[^\\w]*", "");
 
 				bool is_reset_all = (strncasecmp(nq.c_str(), "ALL", 3) == 0);
-				client_myds->DSS = STATE_QUERY_SENT_NET;
-				bool send_ready_packet = is_extended_query_ready_for_query();
 
+				// Read the backend's parameters BEFORE discarding the frame. Discarding it drops a
+				// backend the batch left unfinished, and the names below are read off that very
+				// connection -- gathering them afterwards dereferences one that is already gone.
+				std::string mismatch_details;
 				if (is_reset_all) {
-					// Collect all mismatched variable names for error message
-					std::string mismatch_details;
 					for (int idx = 0; idx < PGSQL_NAME_LAST_LOW_WM; idx++) {
 						auto [client_value, client_hash] = client_myds->myconn->get_startup_parameter_and_hash((enum pgsql_variable_name)idx);
 						auto [backend_value, backend_hash] = mybe->server_myds->myconn->get_startup_parameter_and_hash((enum pgsql_variable_name)idx);
@@ -5276,6 +5274,15 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 							mismatch_details += std::string(pgsql_tracked_variables[idx].set_variable_name) + " ";
 						}
 					}
+				}
+
+				// Discard pending pipeline messages 
+				reset_extended_query_frame();
+
+				client_myds->DSS = STATE_QUERY_SENT_NET;
+				bool send_ready_packet = is_extended_query_ready_for_query();
+
+				if (is_reset_all) {
 					proxy_error("RESET ALL is not allowed when hostgroup is locked and startup parameter values differ between client and backend. "
 						"Mismatched variables: %s. Use SET to explicitly set the desired values.\n", mismatch_details.c_str());
 					client_myds->myprot.generate_error_packet(true, send_ready_packet,
@@ -6485,6 +6492,12 @@ bool PgSQL_Session::handle_literal_kill_query(PtrSize_t* pkt, PgSQL_Connection* 
 }
 
 void PgSQL_Session::finishQuery(PgSQL_Data_Stream* myds, PgSQL_Connection* myconn, bool sticky_backend_connection) {
+	// The backend connection can already be gone. A frame refused while the backend was mid-batch
+	// discards it on the spot, and one caller runs straight into here afterwards. There is nothing
+	// left to finish, and every line below dereferences it.
+	if (myds->myconn == nullptr) {
+		return;
+	}
 	myds->myconn->reduce_auto_increment_delay_token();
 	if (locked_on_hostgroup >= 0) {
 		if (qpo->multiplex == -1) {
@@ -7754,7 +7767,17 @@ int PgSQL_Session::handle_post_sync_execute_message(PgSQL_Execute_Message* execu
 	return 1;
 }
 
-void PgSQL_Session::reset_extended_query_frame() {
+void PgSQL_Session::reset_extended_query_frame(bool backend_saw_error) {
+	// Throwing the frame away throws away the client's Sync with it, leaving the backend holding an
+	// unfinished batch. Unless the backend is the one that failed it, it never saw an error and still
+	// believes the batch succeeded -- and telling it the batch is over COMMITS work the client was
+	// told had failed. Dropping the connection is what makes PostgreSQL roll that back.
+	if (backend_saw_error == false && mybe && mybe->server_myds && mybe->server_myds->myconn &&
+		mybe->server_myds->myconn->is_pipeline_active() == true) {
+		proxy_warning("extq: frame refused locally with the backend mid-batch; "
+			"discarding the backend connection so its work is rolled back\n");
+		mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
+	}
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Session=%p client_myds=%p. Discarding all '%lu' messages in extended query frame\n",
 		this, client_myds, extended_query_frame.size());
 	// Reset the extended query frame and bind to execute

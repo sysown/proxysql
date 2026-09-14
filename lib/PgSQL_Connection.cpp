@@ -1685,6 +1685,7 @@ void PgSQL_Connection::native_teardown() {
 		pg_scram_free(native_scram);
 		native_scram = nullptr;
 	}
+	native_unsynced_work = false;
 	if (fd >= 0) {
 		::close(fd);
 		fd = -1;
@@ -3095,6 +3096,9 @@ void PgSQL_Connection::native_stmt_send_or_wait() {
 		async_exit_status = PG_EVENT_NONE;
 		return;
 	}
+	// From here until a ReadyForQuery comes back, the backend is mid-batch. Recorded on the way out
+	// rather than at each of the six call sites so no future step can forget to.
+	native_unsynced_work = true;
 	if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {
 		async_exit_status = PG_EVENT_WRITE;
 	} else {
@@ -3902,6 +3906,11 @@ bool PgSQL_Connection::is_connection_in_reusable_state() const {
 	// libpq falls through on purpose, so a dead libpq connection with no error
 	// still trips that check the way it always did.
 	if (native_mode && !backend_is_live()) {
+		return false;
+	}
+	// The backend still owes this connection a ReadyForQuery, so it is mid-batch and holding an
+	// implicit transaction. Its last status byte predates the batch and would say otherwise.
+	if (native_mode && native_unsynced_work) {
 		return false;
 	}
 	const PGTransactionStatusType txn_status = get_pg_transaction_status();
