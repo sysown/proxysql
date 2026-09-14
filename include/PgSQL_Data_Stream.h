@@ -215,6 +215,7 @@ public:
 	// so every caller must give up instead of carrying on.
 	bool adopt_backend_tls();
 	void release_backend_tls();
+	void refuse_reuse_on_stranded_tls();
 
 	// safe way to attach a PgSQL Connection
 	void attach_connection(PgSQL_Connection* mc) {
