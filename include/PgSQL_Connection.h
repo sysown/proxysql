@@ -579,7 +579,20 @@ public:
 	// about whether the connection is still usable -- callers that need that ask
 	// get_pg_transaction_status() instead.
 	inline char last_ready_for_query_status() const { return native_txn_status; }
-	inline void set_ready_for_query_status(char st) { native_txn_status = st; }
+	// PostgreSQL reports only 'I', 'T' or 'E' here. Anything else means the peer is not speaking
+	// the protocol: the status is kept as sent, so the connection reads as unusable and is never
+	// handed to another session, and the error gives that refusal a reason -- without one the
+	// reuse check sees a connection that is unusable with nothing recorded against it and aborts
+	// the whole proxy, on a byte the backend chose.
+	inline void set_ready_for_query_status(char st) {
+		native_txn_status = st;
+		if (st != 'I' && st != 'T' && st != 'E') {
+			set_error(PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION,
+				"invalid ReadyForQuery transaction status from backend", false);
+			reusable = false;
+			healthy = false;
+		}
+	}
 	inline int get_pg_is_nonblocking() { return native_mode ? 1 : PQisnonblocking(pgsql_conn); }
 	inline int get_pg_is_threadsafe() { return PQisthreadsafe(); }
 	inline const char* get_pg_error_message() {
