@@ -1,7 +1,8 @@
 /**
  * @file pgsql_native_read_burst_unit-t.cpp
- * @brief One pass of the native plaintext read must stop after a bounded amount
- *        and leave the rest on the socket.
+ * @brief What one pass of the native plaintext read has to get right: stop after
+ *        a bounded amount, and do not throw away what it read because the peer
+ *        closed in the same pass.
  *
  * PgSQL_Connection::native_recv_into_framer() used to read until the socket ran
  * dry. Against a backend that keeps it full that pulls an entire result set into
@@ -59,13 +60,14 @@ static void append_msg(std::string& s, char type, size_t payload_len, char fill)
 // Drain every complete message the framer is holding. Returns the bytes they
 // account for and appends each one's first payload byte, which is how the test
 // checks nothing was dropped or reordered.
-static size_t drain(PgSQL_Connection* c, std::string* marks, bool* intact) {
+static size_t drain(PgSQL_Connection* c, std::string* marks, bool* intact,
+                    size_t expect_payload = PAYLOAD) {
 	size_t bytes = 0;
 	for (;;) {
 		PgSQL_Backend_Msg m;
 		const PgSQL_Frame_Result r = c->native_framer.next(m);
 		if (r != FRAME_OK) break;
-		if (m.type != 'D' || m.payload_len != PAYLOAD) *intact = false;
+		if (m.type != 'D' || m.payload_len != expect_payload) *intact = false;
 		if (marks) marks->push_back(m.payload_len ? (char)m.payload[0] : '?');
 		bytes += 5 + m.payload_len;
 	}
@@ -73,7 +75,7 @@ static size_t drain(PgSQL_Connection* c, std::string* marks, bool* intact) {
 }
 
 int main(int, char**) {
-	plan(5);
+	plan(9);
 
 	int sv[2];
 	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) BAIL_OUT("socketpair failed");
@@ -150,5 +152,80 @@ int main(int, char**) {
 	delete conn;
 	close(sv[0]);
 	close(sv[1]);
+
+	// ----------------------------------------------------------------------
+	//  A reply that ends exactly on a buffer boundary, with the close behind it
+	// ----------------------------------------------------------------------
+	// The loop stops early on a SHORT read, taking a partial buffer as "the socket
+	// is dry". So it only ever meets the close when the previous read filled the
+	// buffer to the brim: it goes round once more and gets 0. That EOF used to
+	// return failure outright, and everything the pass had already framed went with
+	// it -- a result the backend had finished sending reached the client as a
+	// connection error instead.
+	//
+	// Over TCP the alignment cannot be arranged, which is why the end-to-end case in
+	// pgsql-native_hostile_backend-t says of itself that it cannot prove this one:
+	// the proxy wakes on the first readable segment, about 1448 bytes over a Docker
+	// bridge, so the final read is short and the loop never asks again. Over a
+	// socketpair it is exact.
+	{
+		const size_t READBUF = 16384;            // tmp[] in native_recv_into_framer()
+		const size_t P = 507;                    // 5 + 507 = 512, and 512 divides 16384
+		const size_t MSGS = READBUF / (5 + P);   // exactly one read's worth
+
+		int sv2[2];
+		if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv2) != 0) BAIL_OUT("socketpair failed");
+		fcntl(sv2[0], F_SETFL, fcntl(sv2[0], F_GETFL, 0) | O_NONBLOCK);
+
+		std::string exact;
+		for (size_t i = 0; i < MSGS; i++) append_msg(exact, 'D', P, (char)('a' + (i % 26)));
+
+		size_t w = 0;
+		while (w < exact.size()) {
+			const ssize_t n = ::send(sv2[1], exact.data() + w, exact.size() - w, 0);
+			if (n <= 0) break;
+			w += (size_t)n;
+		}
+		::shutdown(sv2[1], SHUT_WR);             // the close, right behind the last byte
+		ok(w == READBUF && exact.size() == READBUF,
+		   "queued exactly one %zu-byte read (%zu bytes in %zu messages), then closed",
+		   READBUF, w, MSGS);
+
+		PgSQL_Connection* c2 = new PgSQL_Connection(false);
+		c2->fd = sv2[0];
+		c2->native_mode = true;
+
+		const int r = c2->native_recv_into_framer();
+		bool intact2 = true;
+		std::string marks2;
+		const size_t kept = drain(c2, &marks2, &intact2, P);
+
+		// THE VERDICT. The bytes are in the framer either way -- the first read fed
+		// them before the second one saw the close. What changes is the answer, and
+		// on -1 the caller destroys the connection and reports a connection error for
+		// a query the backend answered in full.
+		ok(r == 1,
+		   "a reply ending on a buffer boundary with the close behind it is kept, not "
+		   "discarded (returned %d%s)",
+		   r, r == 1 ? "" : "  <-- EOF reported while a complete reply was already framed");
+
+		bool order2 = (marks2.size() == MSGS);
+		for (size_t i = 0; order2 && i < marks2.size(); i++)
+			if (marks2[i] != (char)('a' + (i % 26))) order2 = false;
+		ok(kept == READBUF && order2 && intact2,
+		   "all %zu messages came out whole and in order (%zu of %zu bytes)",
+		   marks2.size(), kept, READBUF);
+
+		// And the close is still reported, once there is nothing left to hand back --
+		// otherwise keeping the data would trade a lost result for a stuck session.
+		ok(c2->native_recv_into_framer() < 0,
+		   "the next pass reports the close, so the connection still ends");
+
+		c2->fd = -1;
+		delete c2;
+		close(sv2[0]);
+		close(sv2[1]);
+	}
+
 	return exit_status();
 }
