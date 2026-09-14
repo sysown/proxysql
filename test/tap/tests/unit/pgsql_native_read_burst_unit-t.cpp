@@ -98,9 +98,17 @@ int main(int, char**) {
 		written += (size_t)n;
 	}
 	const size_t whole_msgs_written = written / MSG_BYTES;
-	ok(written > 2 * BURST && whole_msgs_written > 0,
-	   "prefilled the socket with %zu bytes (%zu whole messages), more than the %zu-byte burst",
-	   written, whole_msgs_written, BURST);
+	// SO_SNDBUF above is a request, not a guarantee: the kernel clamps it to net.core.wmem_max, so
+	// how much of the 2 MiB lands varies by host. All this test needs is more than one burst left in
+	// the socket after the first pass -- that is what proves the loop handed off instead of draining.
+	// Demanding twice the burst tied it to a kernel setting unrelated to the code under test.
+	const size_t need = BURST + MSG_BYTES;
+	ok(written > need && whole_msgs_written > 0,
+	   "prefilled the socket with %zu bytes (%zu whole messages), more than the %zu-byte burst%s",
+	   written, whole_msgs_written, BURST,
+	   (written > need) ? ""
+	                    : "  <-- this host's socket buffer (net.core.wmem_max) is too small to hold "
+	                      "a burst plus a message; there is nothing here to test the bound against");
 
 	PgSQL_Connection* conn = new PgSQL_Connection(false);
 	conn->fd = sv[0];
