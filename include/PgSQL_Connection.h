@@ -593,6 +593,14 @@ public:
 			healthy = false;
 		}
 	}
+	// Whether this connection wants POLLOUT. The poll loop always arms POLLIN, so this is the only
+	// bit it has to decide. When TLS is blocked on a direction of its own, that wins: arming
+	// writable for a read the socket already satisfies spins the worker thread, and arming only
+	// readable when SSL owes the peer a record waits for bytes that will never come.
+	inline bool needs_pollout() const {
+		if (native_mode && native_ssl_block_dir) return native_ssl_block_dir == PG_EVENT_WRITE;
+		return (async_exit_status & PG_EVENT_WRITE) != 0;
+	}
 	inline int get_pg_is_nonblocking() { return native_mode ? 1 : PQisnonblocking(pgsql_conn); }
 	inline int get_pg_is_threadsafe() { return PQisthreadsafe(); }
 	inline const char* get_pg_error_message() {
@@ -749,6 +757,12 @@ public:
 	// connect or tear the connection down.
 	bool native_connected = false;
 	PgSQL_Backend_Msg_Framer native_framer;          // frames inbound backend bytes
+	// Which direction OpenSSL is blocked on, when that is not the direction the protocol wants:
+	// SSL_write can need to READ before it will accept more plaintext (a TLS 1.3 KeyUpdate or a
+	// renegotiation arrives mid-stream), and SSL_read can need to WRITE. 0 means no such need.
+	// Set by the two TLS helpers and cleared at the top of each, so it always describes the most
+	// recent TLS call rather than a stale one.
+	short native_ssl_block_dir = 0;
 	PgSQL_Scram_State* native_scram = nullptr;       // owned; freed in destructor / teardown
 	std::string native_outbuf;                       // pending outbound bytes (partial send buffer)
 	bool handler_first_call = true;                  // one-shot first-call detector for handler() (both libpq and native paths)

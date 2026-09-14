@@ -439,7 +439,7 @@ void Base_Thread::configure_pollout(DS * myds, unsigned int n) {
 		if (myds->DSS > STATE_MARIADB_BEGIN && myds->DSS < STATE_MARIADB_END) {
 			thr->mypolls.fds[n].events = POLLIN;
 			if constexpr (std::is_same_v<T, PgSQL_Thread>) {
-				if (thr->mypolls.myds[n]->myconn->async_exit_status & PG_EVENT_WRITE)
+				if (thr->mypolls.myds[n]->myconn->needs_pollout())
 					thr->mypolls.fds[n].events |= POLLOUT;
 			} else if constexpr (std::is_same_v<T, MySQL_Thread>) {
 				if (thr->mypolls.myds[n]->myconn->async_exit_status & MYSQL_WAIT_WRITE)

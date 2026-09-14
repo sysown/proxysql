@@ -1626,6 +1626,7 @@ bool PgSQL_Connection::native_ssl_pump_wbio_to_fd(bool& would_block) {
 }
 
 bool PgSQL_Connection::native_flush_outbuf() {
+	native_ssl_block_dir = 0;
 	// Encrypted path: native_outbuf holds *plaintext* protocol bytes. Feed them to
 	// SSL_write, which produces ciphertext into wbio_ssl, then drain wbio to the fd.
 	if (native_ssl != nullptr) {
@@ -1650,6 +1651,9 @@ bool PgSQL_Connection::native_flush_outbuf() {
 			if (err == SSL_ERROR_WANT_WRITE || err == SSL_ERROR_WANT_READ) {
 				// SSL needs to do I/O before it can accept more plaintext. Drain
 				// whatever ciphertext it produced and wait for the socket.
+				// WANT_READ means the socket being writable is not what we are waiting for --
+				// it already is, so asking to be woken on that alone spins the thread.
+				native_ssl_block_dir = (err == SSL_ERROR_WANT_READ) ? PG_EVENT_READ : PG_EVENT_WRITE;
 				bool wb = false;
 				if (!native_ssl_pump_wbio_to_fd(wb)) return false;
 				return true; // not fatal; resume on next event
@@ -2371,6 +2375,7 @@ bool PgSQL_Connection::native_send_or_buffer(PG_Native_Conn_St resume_st) {
 }
 
 int PgSQL_Connection::native_recv_into_framer() {
+	native_ssl_block_dir = 0;
 	// Encrypted path: read ciphertext from fd into rbio, then SSL_read plaintext
 	// protocol bytes out and feed them to the framer. Mirrors the BIO-mem decrypt
 	// loop of PgSQL_Data_Stream::read_from_net(), but drives the raw fd directly.
@@ -2420,6 +2425,15 @@ int PgSQL_Connection::native_recv_into_framer() {
 			}
 			int err = SSL_get_error(native_ssl, r);
 			if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+				if (err == SSL_ERROR_WANT_WRITE) {
+					// SSL owes the peer a record (a KeyUpdate response, a renegotiation step)
+					// before it will decrypt anything more. Send it, and wait on writable:
+					// the backend is holding its own reply until it arrives, so waiting to be
+					// read would wait forever.
+					native_ssl_block_dir = PG_EVENT_WRITE;
+					bool wb = false;
+					if (!native_ssl_pump_wbio_to_fd(wb)) return -1;
+				}
 				break; // need more ciphertext from the socket; wait for next event
 			}
 			if (err == SSL_ERROR_ZERO_RETURN) {
