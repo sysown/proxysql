@@ -2386,10 +2386,13 @@ int PgSQL_Connection::native_recv_into_framer() {
 		// recv() per call is sufficient: SSL_read below decrypts everything buffered,
 		// and the caller re-enters on the next READ event for more.
 		ssize_t n = ::recv(fd, cipher, sizeof(cipher), 0);
+		bool peer_closed = false;
 		if (n == 0) {
-			return -1; // peer closed
-		}
-		if (n < 0) {
+			// The peer closed, but the record layer may still hold plaintext we already
+			// received. Reporting the close now would throw away a reply that is complete,
+			// and the client would see a connection error instead of its result.
+			peer_closed = true;
+		} else if (n < 0) {
 			if (errno == EAGAIN || errno == EWOULDBLOCK) {
 				// Nothing new from the socket. There may still be buffered plaintext
 				// inside the SSL record layer; fall through to drain it.
@@ -2446,6 +2449,7 @@ int PgSQL_Connection::native_recv_into_framer() {
 			while (ERR_get_error()) { /* drain */ }
 			return -1;
 		}
+		if (peer_closed) return got ? 1 : -1;
 		return got ? 1 : 0;
 	}
 
@@ -2468,7 +2472,9 @@ int PgSQL_Connection::native_recv_into_framer() {
 			continue;
 		}
 		if (n == 0) {
-			return -1; // peer closed
+			// Keep what this pass already framed. A result whose tail lands in the same read
+			// as the close is complete; discarding it turns it into a connection error.
+			return got ? 1 : -1;
 		}
 		// n < 0
 		if (errno == EAGAIN || errno == EWOULDBLOCK) break;
