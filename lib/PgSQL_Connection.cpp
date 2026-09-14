@@ -5650,11 +5650,6 @@ void PgSQL_Connection::copy_pgsql_variables_to_startup_parameters(bool copy_only
 }
 
 void PgSQL_Connection::copy_startup_parameters_to_pgsql_variables(bool copy_only_critical_param) {
-	// In native_mode the libpq-allocated startup_parameters / hash arrays are
-	// not populated (native state machine keeps the ParameterStatus values
-	// directly in native_params). The libpq-only invariant asserted below
-	// does not hold; skip the copy.
-	if (native_mode) return;
 
 	//memcpy(var_hash, startup_parameters_hash, sizeof(uint32_t) * PGSQL_NAME_LAST_LOW_WM);
 	for (int i = 0; i < PGSQL_NAME_LAST_LOW_WM; i++) {
