@@ -350,7 +350,7 @@ private:
 	int handle_post_sync_execute_message(PgSQL_Execute_Message* execute_msg);
 	void handle_post_sync_error(PGSQL_ERROR_CODES errcode, const char* errmsg, bool fatal);
 	void handle_post_sync_locked_on_hostgroup_error(const char* query, int query_len);
-	void reset_extended_query_frame();
+	void reset_extended_query_frame(bool backend_saw_error = false);
 
 
 	//void return_proxysql_internal(PtrSize_t*);

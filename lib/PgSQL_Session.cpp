@@ -3939,8 +3939,9 @@ handler_again:
 				// query has failed
 				if (processing_extended_query && // we are processing extended query message
 					rc != 1) { // rc == 1 means query is still running, we don't reset the extended_query_frame
-					// we discard all pending messages
-					reset_extended_query_frame();
+					// we discard all pending messages. The BACKEND produced this error, so it knows its
+					// batch is poisoned and finishing it rolls back -- the connection is worth keeping.
+					reset_extended_query_frame(true);
 					// status remains unchanged
 				}
 				// --- Named-portal lifetime on the ERROR epilogue (Task P2) ---
@@ -6485,6 +6486,12 @@ bool PgSQL_Session::handle_literal_kill_query(PtrSize_t* pkt, PgSQL_Connection* 
 }
 
 void PgSQL_Session::finishQuery(PgSQL_Data_Stream* myds, PgSQL_Connection* myconn, bool sticky_backend_connection) {
+	// The backend connection can already be gone. A frame refused while the backend was mid-batch
+	// discards it on the spot, and one caller runs straight into here afterwards. There is nothing
+	// left to finish, and every line below dereferences it.
+	if (myds->myconn == nullptr) {
+		return;
+	}
 	myds->myconn->reduce_auto_increment_delay_token();
 	if (locked_on_hostgroup >= 0) {
 		if (qpo->multiplex == -1) {
@@ -7754,7 +7761,17 @@ int PgSQL_Session::handle_post_sync_execute_message(PgSQL_Execute_Message* execu
 	return 1;
 }
 
-void PgSQL_Session::reset_extended_query_frame() {
+void PgSQL_Session::reset_extended_query_frame(bool backend_saw_error) {
+	// Throwing the frame away throws away the client's Sync with it, leaving the backend holding an
+	// unfinished batch. Unless the backend is the one that failed it, it never saw an error and still
+	// believes the batch succeeded -- and telling it the batch is over COMMITS work the client was
+	// told had failed. Dropping the connection is what makes PostgreSQL roll that back.
+	if (backend_saw_error == false && mybe && mybe->server_myds && mybe->server_myds->myconn &&
+		mybe->server_myds->myconn->is_pipeline_active() == true) {
+		proxy_warning("extq: frame refused locally with the backend mid-batch; "
+			"discarding the backend connection so its work is rolled back\n");
+		mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
+	}
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Session=%p client_myds=%p. Discarding all '%lu' messages in extended query frame\n",
 		this, client_myds, extended_query_frame.size());
 	// Reset the extended query frame and bind to execute

@@ -579,7 +579,10 @@ public:
 	// about whether the connection is still usable -- callers that need that ask
 	// get_pg_transaction_status() instead.
 	inline char last_ready_for_query_status() const { return native_txn_status; }
-	inline void set_ready_for_query_status(char st) { native_txn_status = st; }
+	inline void set_ready_for_query_status(char st) {
+		native_txn_status = st;
+		native_unsynced_work = false;   // the backend concluded the batch
+	}
 	inline int get_pg_is_nonblocking() { return native_mode ? 1 : PQisnonblocking(pgsql_conn); }
 	inline int get_pg_is_threadsafe() { return PQisthreadsafe(); }
 	inline const char* get_pg_error_message() {
@@ -601,7 +604,13 @@ public:
 	unsigned int get_memory_usage() const;
 	char get_transaction_status_char();
 	inline int get_backend_pid() { return native_mode ? native_backend_pid : ((pgsql_conn) ? get_pg_backend_pid() : -1); }
-	bool is_pipeline_active() { return (PQpipelineStatus(pgsql_conn) != PQ_PIPELINE_OFF); }
+	// Whether the backend has not finished with this connection; callers use it to decide if the
+	// connection is safe to pool, reuse or retry on. Native has no libpq to ask and pgsql_conn is
+	// always NULL there, so without this branch every one of those guards was dead.
+	bool is_pipeline_active() {
+		if (native_mode) return native_unsynced_work;
+		return (PQpipelineStatus(pgsql_conn) != PQ_PIPELINE_OFF);
+	}
 	const char* get_pg_backend_state() const;
 
 	static int char_to_encoding(const char* name) {
@@ -736,6 +745,11 @@ public:
 	// connect or tear the connection down.
 	bool native_connected = false;
 	PgSQL_Backend_Msg_Framer native_framer;          // frames inbound backend bytes
+	// True while the backend still owes us a ReadyForQuery: we have sent extended-query messages it
+	// has not concluded. Until that arrives the backend holds an implicit transaction and the locks
+	// the statements took, so the connection must not be handed to anyone else. Cleared only by an
+	// actual ReadyForQuery, because that is the only thing that ends the batch.
+	bool native_unsynced_work = false;
 	PgSQL_Scram_State* native_scram = nullptr;       // owned; freed in destructor / teardown
 	std::string native_outbuf;                       // pending outbound bytes (partial send buffer)
 	bool handler_first_call = true;                  // one-shot first-call detector for handler() (both libpq and native paths)
