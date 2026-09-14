@@ -764,6 +764,18 @@ public:
 	// recent TLS call rather than a stale one.
 	short native_ssl_block_dir = 0;
 	PgSQL_Scram_State* native_scram = nullptr;       // owned; freed in destructor / teardown
+	// How far the backend SCRAM exchange has got. The message type alone does not say whether a
+	// step is legal: a backend can repeat one, or skip one. Each step below feeds state that
+	// libscram expects to be touched once and in order, so every SASL case checks this first, and
+	// AuthenticationOk is refused while an exchange is still unverified -- otherwise a backend
+	// ends the handshake early and never proves it knows the password.
+	enum class PG_Native_Scram_Step : uint8_t {
+		NONE,              // no exchange started
+		CLIENT_FIRST_SENT, // SASLInitialResponse sent, waiting for server-first
+		CLIENT_FINAL_SENT, // SASLResponse sent, waiting for server-final
+		SERVER_VERIFIED    // server signature checked; AuthenticationOk may now be accepted
+	};
+	PG_Native_Scram_Step native_scram_step = PG_Native_Scram_Step::NONE;
 	std::string native_outbuf;                       // pending outbound bytes (partial send buffer)
 	bool handler_first_call = true;                  // one-shot first-call detector for handler() (both libpq and native paths)
 	std::map<std::string, std::string> native_params; // ParameterStatus name->value

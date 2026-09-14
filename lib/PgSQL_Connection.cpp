@@ -2559,6 +2559,15 @@ void PgSQL_Connection::native_drive_auth(short /*event*/) {
 
 		switch (auth_type) {
 		case 0: // AuthenticationOk
+			// SCRAM proves both sides. A backend that answers our client-final with a plain
+			// AuthenticationOk has skipped its half, so it never showed it knows the password --
+			// accepting it would hand the session to whoever is on the other end of the socket.
+			if (native_scram != nullptr && native_scram_step != PG_Native_Scram_Step::SERVER_VERIFIED) {
+				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_PROTOCOL_VIOLATION),
+					"backend completed authentication without finishing the SCRAM exchange", false);
+				native_teardown();
+				return;
+			}
 			native_st = PG_Native_Conn_St::STARTUP_TAIL;
 			// Fall through to consuming any already-buffered tail messages.
 			native_drive_startup_tail(0);
@@ -2762,12 +2771,18 @@ void PgSQL_Connection::native_drive_auth(short /*event*/) {
 			if (!native_send_or_buffer(PG_Native_Conn_St::AUTH)) {
 				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(SASLInitialResponse) failed", false);
 				native_teardown();
+				return;
 			}
+			native_scram_step = PG_Native_Scram_Step::CLIENT_FIRST_SENT;
 			return;
 		}
 
 		case 11: { // AuthenticationSASLContinue: server-first message
-			if (native_scram == nullptr) {
+			// Exactly one is expected, and only after client-first. A second one would run the
+			// proof calculation over state libscram has already consumed, which trips an assert
+			// inside it and takes the process down; it would also emit a fresh proof over a salt
+			// the backend chose, which is an offline-crackable artifact it can ask for repeatedly.
+			if (native_scram == nullptr || native_scram_step != PG_Native_Scram_Step::CLIENT_FIRST_SENT) {
 				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_PROTOCOL_VIOLATION), "unexpected SASLContinue", false);
 				native_teardown();
 				return;
@@ -2790,12 +2805,17 @@ void PgSQL_Connection::native_drive_auth(short /*event*/) {
 			if (!native_send_or_buffer(PG_Native_Conn_St::AUTH)) {
 				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send(SASLResponse) failed", false);
 				native_teardown();
+				return;
 			}
+			native_scram_step = PG_Native_Scram_Step::CLIENT_FINAL_SENT;
 			return;
 		}
 
 		case 12: { // AuthenticationSASLFinal: server-final message
-			if (native_scram == nullptr) {
+			// Only after our client-final. Arriving earlier means the messages libscram compares
+			// the signature against were never built, and it reads them as strings -- a backend
+			// that skips straight to this message would crash the proxy.
+			if (native_scram == nullptr || native_scram_step != PG_Native_Scram_Step::CLIENT_FINAL_SENT) {
 				set_error(PGSQL_GET_ERROR_CODE_STR(ERRCODE_PROTOCOL_VIOLATION), "unexpected SASLFinal", false);
 				native_teardown();
 				return;
@@ -2806,6 +2826,7 @@ void PgSQL_Connection::native_drive_auth(short /*event*/) {
 				native_teardown();
 				return;
 			}
+			native_scram_step = PG_Native_Scram_Step::SERVER_VERIFIED;
 			// Server verified; an AuthenticationOk ('R',0) normally follows. Keep
 			// looping to consume it (it may already be framed).
 			break;
