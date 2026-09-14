@@ -873,6 +873,9 @@ void MySQL_Session::reset() {
  * @brief Destructor for the MySQL session.
  */
 MySQL_Session::~MySQL_Session() {
+	if (thread) {
+		thread->leave_waiter(this);
+	}
 	reset();
  // we moved this out to allow CHANGE_USER
 
@@ -9023,8 +9026,14 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 
 		if (mc==NULL) {
 			if (trxid) {
+				last_pool_ff = (session_fast_forward || qpo->create_new_conn);
+				last_pool_gtid = true;
+				last_pool_max_lag_ms = -1;
 				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), uuid, trxid, -1);
 			} else {
+				last_pool_ff = (session_fast_forward || qpo->create_new_conn);
+				last_pool_gtid = false;
+				last_pool_max_lag_ms = (int)qpo->max_lag_ms;
 				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), NULL, 0, (int)qpo->max_lag_ms);
 			}
 			thread->note_pool_attempt(mc == NULL);
@@ -9063,8 +9072,11 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		if (mc) {
 			mybe->server_myds->attach_connection(mc);
 			thread->status_variables.stvar[st_var_ConnPool_get_conn_success]++;
+			pause_until = 0;
+			thread->leave_waiter(this);
 		} else {
 			thread->status_variables.stvar[st_var_ConnPool_get_conn_failure]++;
+			thread->enter_waiter(this, mybe->hostgroup_id);
 		}
 		if (qpo->max_lag_ms >= 0) {
 			if (qpo->max_lag_ms <= 360000) { // this is a relative time , we convert it to absolute

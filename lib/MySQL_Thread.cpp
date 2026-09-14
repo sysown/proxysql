@@ -3991,9 +3991,50 @@ void MySQL_Thread::poll_listener_del(int sock) {
 	}
 }
 
+void MySQL_Thread::drop_from_poll(MySQL_Data_Stream *ds) {
+	if (!ds) return;
+	unsigned guard = mypolls.len + 1;
+	while (guard--) {
+		bool found = false;
+		for (unsigned int i = 0; i < mypolls.len; i++) {
+			if (mypolls.myds[i] == ds) {
+				mypolls.remove_index_fast(i);
+				found = true;
+				break;
+			}
+		}
+		if (!found) break;
+	}
+	ds->poll_fds_idx = -1;
+	ds->mypolls = NULL;
+}
+
+void MySQL_Thread::enter_waiter(MySQL_Session *sess, unsigned hid) {
+	if (sess->waiter_node.session) return;
+	sess->waiter_node.session = sess;
+	sess->waiter_node.hid = hid;
+	if (sess->client_myds && sess->client_myds->poll_fds_idx >= 0)
+		drop_from_poll(sess->client_myds);
+	if (sess->mybe) drop_from_poll(sess->mybe->server_myds);
+	waiter_lists.push_back(sess->waiter_node);
+}
+
+void MySQL_Thread::leave_waiter(MySQL_Session *sess, bool restore_client) {
+	if (!sess->waiter_node.session) return;
+	waiter_lists.unlink(sess->waiter_node);
+	sess->waiter_node = PgSQL_Waiter_Node{};
+	if (restore_client && sess->client_myds && sess->client_myds->fd >= 0 && sess->client_myds->poll_fds_idx < 0) {
+		mypolls.add(POLLIN | POLLOUT, sess->client_myds->fd, sess->client_myds, curtime);
+	}
+}
+
 void MySQL_Thread::unregister_session(int idx) {
 	if (mysql_sessions==NULL) return;
-	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Unregistered session\n", this, mysql_sessions->index(idx));
+	MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(idx);
+	leave_waiter(sess, false);
+	drop_from_poll(sess->client_myds);
+	if (sess->mybe) drop_from_poll(sess->mybe->server_myds);
+	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Unregistered session\n", this, sess);
 	mysql_sessions->remove_index_fast(idx);
 }
 
@@ -4150,6 +4191,8 @@ int MySQL_Thread::run_ComputePollTimeout() {
 
 	pre_poll_time=curtime;
 	int ttw = ( mypolls.poll_timeout ? ( mypolls.poll_timeout/1000 < (unsigned int) mysql_thread___poll_timeout ? mypolls.poll_timeout/1000 : mysql_thread___poll_timeout ) : mysql_thread___poll_timeout );
+	if (!waiter_lists.empty() && ttw > 1)
+		ttw = 1;
 	return ttw;
 }
 
@@ -4273,6 +4316,18 @@ __run_skip_1:
 	 * Called during: Main event loop iteration
 	 * Purpose: Enables efficient I/O multiplexing across all connections
 	 */
+		const bool b_rearm = (curtime >= last_b_rearm_us + 50000);
+		if (b_rearm) {
+			last_b_rearm_us = curtime;
+			waiter_lists.for_each_hid([&](unsigned, PgSQL_Waiter_Node *head) {
+				unsigned guard = 0;
+				for (auto *n = head; n && guard < 100000; n = n->next, ++guard) {
+					auto *sess = static_cast<MySQL_Session*>(n->session);
+					if (sess->client_myds && sess->client_myds->fd >= 0 && sess->client_myds->poll_fds_idx < 0)
+						mypolls.add(POLLIN, sess->client_myds->fd, sess->client_myds, curtime);
+				}
+			});
+		}
 		rc=poll(mypolls.fds,mypolls.len, ttw);
 		proxy_debug(PROXY_DEBUG_NET,5,"%s\n", "Returning poll");
 #ifdef IDLE_THREADS
@@ -4405,6 +4460,15 @@ __run_skip_1:
 		} else {
 #endif // IDLE_THREADS
 			ProcessAllMyDS_AfterPoll<MySQL_Thread>();
+			if (last_b_rearm_us == pre_poll_time) {
+				waiter_lists.for_each_hid([&](unsigned, PgSQL_Waiter_Node *head) {
+					unsigned guard = 0;
+					for (auto *n = head; n && guard < 100000; n = n->next, ++guard) {
+						auto *sess = static_cast<MySQL_Session*>(n->session);
+						drop_from_poll(sess->client_myds);
+					}
+				});
+			}
 			// iterate through all sessions and process the session logic
 			process_all_sessions();
 			return_local_connections();
@@ -5132,9 +5196,14 @@ void MySQL_Thread::process_all_sessions() {
 		}
 		if (unlikely(sess->healthy==0)) {
 			ProcessAllSessions_Healthy0(sess, n);
+		} else if (sess->waiter_node.session) {
+			continue;
 		} else {
 			if (sess->to_process==1) {
 				if (sess->pause_until <= curtime) {
+					if (!(sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn)) {
+						continue;
+					}
 					rc=sess->handler();
 
 					if (rc==-1 || sess->killed==true) {
@@ -5161,6 +5230,65 @@ void MySQL_Thread::process_all_sessions() {
 					n--;
 					delete sess;
 				}
+			}
+		}
+	}
+	if (!waiter_lists.empty()) {
+		waiter_lists.for_each_hid([&](unsigned hid, PgSQL_Waiter_Node *head) {
+			(void)hid;
+			unsigned walk_guard = 0;
+			for (PgSQL_Waiter_Node *n = head; n && walk_guard < 100000; ++walk_guard) {
+				PgSQL_Waiter_Node *next = n->next;
+				auto *sess = static_cast<MySQL_Session*>(n->session);
+				if (sess->pause_until > curtime) {
+					n = next;
+					continue;
+				}
+				sess->to_process = 1;
+				rc = sess->handler();
+				const bool got = sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn;
+				if (got) {
+					leave_waiter(sess);
+					MySQL_Data_Stream *bds = sess->mybe->server_myds;
+					if (bds && bds->fd >= 0 && bds->poll_fds_idx < 0)
+						mypolls.add(POLLIN | POLLOUT, bds->fd, bds, curtime);
+				} else if (vanilla_pool_checkout(sess->last_pool_ff, sess->last_pool_gtid ? "" : nullptr, sess->last_pool_max_lag_ms)) {
+					break;
+				}
+				if (rc == -1 || sess->killed == true) {
+					char _buf[1024];
+					if (sess->client_myds && sess->killed)
+						proxy_warning("Closing killed client connection %s:%d\n",sess->client_myds->addr.addr,sess->client_myds->addr.port);
+					snprintf(_buf, sizeof(_buf), "%s:%d:%s()", __FILE__, __LINE__, __func__);
+					GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, _buf);
+					unsigned int i;
+					for (i = 0; i < mysql_sessions->len; i++) {
+						if (mysql_sessions->index(i) == sess) {
+							unregister_session(i);
+							break;
+						}
+					}
+					delete sess;
+				}
+				n = next;
+			}
+		});
+	}
+	for (n=0; n<mysql_sessions->len; n++) {
+		MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
+		if (sess->waiter_node.session) continue;
+		if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) continue;
+		if (sess->to_process==1 && sess->pause_until <= curtime) {
+			rc=sess->handler();
+			if (rc==-1 || sess->killed==true) {
+				char _buf[1024];
+				if (sess->client_myds && sess->killed)
+					proxy_warning("Closing killed client connection %s:%d\n",sess->client_myds->addr.addr,sess->client_myds->addr.port);
+				snprintf(_buf, sizeof(_buf), "%s:%d:%s()", __FILE__, __LINE__, __func__);
+				GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, _buf);
+				unregister_session(n);
+				n--;
+				delete sess;
 			}
 		}
 	}
