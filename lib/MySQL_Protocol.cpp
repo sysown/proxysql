@@ -4299,7 +4299,8 @@ void * MySQL_Protocol::Query_String_to_packet(uint8_t sid, std::string *s, unsig
 // returns stmt_meta, or a new one
 // See https://dev.mysql.com/doc/internals/en/com-stmt-execute.html for reference
 stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
-	PtrSize_t& pkt, MySQL_STMT_Global_info *stmt_info, stmt_execute_metadata_t **stmt_meta
+	PtrSize_t& pkt, MySQL_STMT_Global_info *stmt_info, stmt_execute_metadata_t **stmt_meta,
+	const unsigned char *effective_types
 ) {
 	stmt_execute_metadata_t *ret=NULL; //return NULL in case of failure
 	if (pkt.size < 14) {
@@ -4316,9 +4317,7 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 	} else { // this is the first time that this PS is executed
 		ret= new stmt_execute_metadata_t();
 	}
-	if (*stmt_meta==NULL) {
-		memcpy(&ret->stmt_id,p,4); // stmt-id
-	}
+	memcpy(&ret->stmt_id,p,4); // Client handle can differ from the last execution.
 	p+=4; // stmt-id
 	memcpy(&ret->flags,p,1); p+=1; // flags
 	p+=4; // iteration-count
@@ -4376,7 +4375,7 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 				// Otherwise we will assume a value to be 'NULL' when the
 				// binding type could have actually been changed from the
 				// previous 'MYSQL_TYPE_NULL'. For more context see #3603.
-				if (binds[i].buffer_type == MYSQL_TYPE_NULL)
+				if ((effective_types ? effective_types[2*i] : binds[i].buffer_type) == MYSQL_TYPE_NULL)
 					is_null = 1;
 			}
 			is_nulls[i]=is_null;
@@ -4384,7 +4383,6 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 			// set length, defaults to 0
 			// for parameters with not fixed length, that will be assigned later
 			// we moved this initialization here due to #3585
-			binds[i].is_unsigned=0;
 			lengths[i]=0;
 			binds[i].length=&lengths[i];
 			// NOTE: We nullify buffers here to reflect that memory wasn't
@@ -4393,13 +4391,13 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 		}
 		free(null_bitmap); // we are done with it
 
-		if (new_params_bound_flag) {
+		if (new_params_bound_flag || effective_types) {
 			// the client is rebinding the parameters
 			// the client is sending again the type of each parameter
 			for (i=0;i<num_params;i++) {
 				// set buffer_type and is_unsigned
 				uint16_t buffer_type=0;
-				memcpy(&buffer_type,p,2);
+				memcpy(&buffer_type, effective_types ? effective_types + 2*i : (unsigned char *)p, 2);
 				binds[i].is_unsigned=0;
 				if (buffer_type >= 32768) { // is_unsigned bit
 					buffer_type-=32768;
@@ -4412,7 +4410,7 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 					is_nulls[i]= 1;
 				}
 
-				p+=2;
+				if (new_params_bound_flag) p+=2;
 
 			}
 		}

@@ -100,6 +100,14 @@ bool StmtLongDataHandler::add(uint32_t _stmt_id, uint16_t _param_id,
 	return false;  // a new entry was created
 }
 
+bool StmtLongDataHandler::has_data(uint32_t stmt_id) const {
+	for (unsigned int i = 0; i < long_datas->len; ++i) {
+		if (((stmt_long_data_t *)long_datas->index(i))->stmt_id == stmt_id)
+			return true; // Includes zero-length LongData.
+	}
+	return false;
+}
+
 unsigned int StmtLongDataHandler::reset(uint32_t _stmt_id) {
 	unsigned int cnt = 0;
 	int i;
@@ -817,6 +825,7 @@ bool MySQL_STMTs_local_v14::client_close(uint32_t client_statement_id) {
 	if (s != client_stmt_to_global_ids.end()) {  // found
 		uint64_t global_stmt_id = s->second;
 		erase_client_min_gtid(client_statement_id);
+		client_stmt_to_param_types.erase(client_statement_id);
 		client_stmt_to_global_ids.erase(s);
 		GloMyStmt->ref_count_client(global_stmt_id, -1);
 		//auto s2 = global_stmt_to_client_ids.find(global_stmt_id);

@@ -91,6 +91,9 @@ class Query_Info {
 	uint64_t stmt_global_id;
 	uint64_t stmt_client_id;
 	MySQL_STMT_Global_info *stmt_info;
+	// Binary result-cache key, valid only for the current eligible execution.
+	uint64_t stmt_cache_key[4] {};
+	bool stmt_cache_valid = false;
 
 	int QueryLength;
 	enum MYSQL_COM_QUERY_command MyComQueryCmd;
@@ -362,6 +365,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void SetQueryTimeout();
 	bool handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st, MySQL_Data_Stream *myds, bool& prepared_stmt_with_no_params);
 	void handler_rc0_PROCESSING_STMT_EXECUTE(MySQL_Data_Stream *myds);
+	void cleanup_stmt_execute();
 	bool handler_minus1_ClientLibraryError(MySQL_Data_Stream *myds, int myerr, char **errmsg);
 	void handler_minus1_LogErrorDuringQuery(MySQL_Connection *myconn, int myerr, char *errmsg);
 	bool handler_minus1_HandleErrorCodes(MySQL_Data_Stream *myds, int myerr, char **errmsg, int& handler_ret);
