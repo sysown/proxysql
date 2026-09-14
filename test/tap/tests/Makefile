@@ -519,6 +519,7 @@ PG_LITE_CLIENT_TESTS := \
 	pgsql-scram_user_removed_midhandshake-t \
 	pgsql-scram_rotate_midhandshake_backend-t \
 	pgsql-native_portals-t \
+	pgsql-native_extq_orphaned_sync-t \
 	test_ffto_pgsql_pipeline-t \
 	test_ffto_pgsql_stmt_portal-t
 
