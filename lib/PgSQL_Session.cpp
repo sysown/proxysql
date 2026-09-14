@@ -4297,6 +4297,7 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 						client_myds->DSS = STATE_CLIENT_AUTH_OK;
 					} else {
 						*wrong_pass = true;
+						GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_ERR, this, NULL);
 						client_myds->setDSS_STATE_QUERY_SENT_NET();
 					}
 				}
@@ -4330,13 +4331,14 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					// we are good!
 					//client_myds->myprot.generate_pkt_OK(true,NULL,NULL, (is_encrypted ? 3 : 2), 0,0,0,0,NULL,false);
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8, "Session=%p , DS=%p . STATE_CLIENT_AUTH_OK\n", this, client_myds);
-					GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_OK, this, NULL);
 					if (client_myds->myprot.welcome_client()) {
 						handshake_err = false;
+						GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_OK, this, NULL);
 						status = WAITING_CLIENT_DATA;
 						client_myds->DSS = STATE_CLIENT_AUTH_OK;
 					} else {
 						*wrong_pass = true;
+						GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_ERR, this, NULL);
 						client_myds->setDSS_STATE_QUERY_SENT_NET();
 					}
 				}
