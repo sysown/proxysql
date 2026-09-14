@@ -832,36 +832,9 @@ handler_again:
 		// if we arrive here via async_perform_resync, the connection is in "Ready for Query" state,  
 		// but query_result will be empty. In this case, we check exit_pipeline_mode; if it is true,  
 		// it indicates a non-error scenario and we skip this check.
-		if (exit_pipeline_mode == false &&
-			(query_result->get_result_packet_type() & (PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_EMPTY | PGSQL_QUERY_RESULT_ERROR)) == 0) {
-			// Issue #6110: normally error_info was set on a previous call. It is not always: a
-			// backend can answer a query with NO command outcome at all - a bare
-			// ReadyForQuery, without CommandComplete, EmptyQueryResponse or
-			// ErrorResponse. That is the backend violating the protocol, not an
-			// invariant of ours, so report it to the client rather than aborting the
-			// process. Setting error_info here also feeds add_error(NULL) below, which
-			// otherwise asserts for the same reason.
-			//
-			// Two independent consequences follow, one per object:
-			//   - the CONNECTION is unhealthy and not reusable, so it is destroyed
-			//     rather than pooled or reset. A reset cannot cure a server that
-			//     answers incorrectly, and another client must not inherit it.
-			//   - the SESSION is closed, because a reply we cannot interpret leaves
-			//     us unable to vouch for its protocol state.
-			// They are set separately on purpose: neither implies the other.
-			if (!is_error_present()) {
-				proxy_error("Backend %s:%d answered a query with no command outcome (bare ReadyForQuery)\n",
-					parent ? parent->address : "?", parent ? parent->port : 0);
-				set_error(PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION,
-					"backend answered the query with no command outcome", false);
-				reusable = false;
-				healthy = false;
-				if (myds && myds->sess) {
-					myds->sess->set_unhealthy();
-				}
-			}
-
-			query_result->add_error(NULL);
+		// exit_pipeline_mode means an async_perform_resync left the result empty on purpose.
+		if (exit_pipeline_mode == false) {
+			reject_result_without_outcome();
 		}
 
 		if (fetch_result_end_st != ASYNC_QUERY_END) {
@@ -3443,6 +3416,10 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 				continue;
 			}
 
+			// The same refusal, before the ReadyForQuery joins the result.
+			if (msg.type == 'Z') {
+				reject_result_without_outcome();
+			}
 			count_bytes(query_result->add_native_backend_message(msg.type, msg.payload, msg.payload_len));
 			if (msg.type == 'Z') {
 				// ReadyForQuery: the result stream for this query is complete.
@@ -3931,6 +3908,31 @@ bool PgSQL_Connection::is_connection_in_reusable_state() const {
 	const bool conn_usable = !(txn_status == PQTRANS_UNKNOWN || txn_status == PQTRANS_ACTIVE);
 	assert(!(conn_usable == false && is_error_present() == false));
 	return conn_usable;
+}
+
+// A reply that says nothing -- a bare ReadyForQuery, with no CommandComplete, EmptyQueryResponse
+// or ErrorResponse (issue #6110). Tell the client and destroy the connection; a reset cannot cure
+// a server that answers incorrectly. Call this BEFORE the ReadyForQuery is added: a client told
+// the cycle is over discards whatever follows, so an error appended there is never seen.
+void PgSQL_Connection::reject_result_without_outcome() {
+	if ((query_result->get_result_packet_type() &
+	     (PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_EMPTY | PGSQL_QUERY_RESULT_ERROR)) != 0) {
+		return;
+	}
+	if (!is_error_present()) {
+		proxy_error("Backend %s:%d answered a query with no command outcome (bare ReadyForQuery)\n",
+			parent ? parent->address : "?", parent ? parent->port : 0);
+		set_error(PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION,
+			"backend answered the query with no command outcome", false);
+		reusable = false;
+		healthy = false;
+		if (myds && myds->sess) {
+			myds->sess->set_unhealthy();
+		}
+	}
+	// Flush any rows still in the inline buffer, so the error lands behind them, not in front.
+	query_result->buffer_to_PSarrayOut();
+	query_result->add_error(NULL);
 }
 
 PGresult* PgSQL_Connection::get_result() {
