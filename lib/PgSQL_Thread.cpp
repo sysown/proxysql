@@ -3091,17 +3091,16 @@ void PgSQL_Thread::poll_listener_del(int sock) {
 
 void PgSQL_Thread::drop_from_poll(PgSQL_Data_Stream *ds) {
 	if (!ds) return;
-	unsigned guard = mypolls.len + 1;
-	while (guard--) {
-		bool found = false;
-		for (unsigned int i = 0; i < mypolls.len; i++) {
-			if (mypolls.myds[i] == ds) {
-				mypolls.remove_index_fast(i);
-				found = true;
-				break;
-			}
+	const int idx = ds->poll_fds_idx;
+	if (idx >= 0 && static_cast<unsigned>(idx) < mypolls.len && mypolls.myds[idx] == ds) {
+		mypolls.remove_index_fast(idx);
+	} else if (idx >= 0 || ds->mypolls == &mypolls) {
+		// Preserve defensive cleanup for inconsistent registration metadata.
+		// Normal admission/rearm/teardown uses the maintained index above.
+		for (unsigned i = 0; i < mypolls.len;) {
+			if (mypolls.myds[i] == ds) mypolls.remove_index_fast(i);
+			else ++i;
 		}
-		if (!found) break;
 	}
 	ds->poll_fds_idx = -1;
 	ds->mypolls = NULL;
@@ -3125,27 +3124,6 @@ void PgSQL_Thread::enter_waiter(PgSQL_Session *sess, unsigned hid) {
 		drop_from_poll(sess->client_myds);
 	if (sess->mybe) drop_from_poll(sess->mybe->server_myds);
 	waiter_lists.push_back(sess->waiter_node);
-}
-
-void PgSQL_Thread::poll_waiter_clients() {
-	std::vector<pollfd> fds;
-	std::vector<PgSQL_Session*> sesss;
-	waiter_lists.for_each_hid([&](unsigned, PgSQL_Waiter_Node *head) {
-		unsigned guard = 0;
-		for (auto *n = head; n && guard < 100000; n = n->next, ++guard) {
-			auto *sess = static_cast<PgSQL_Session*>(n->session);
-			if (sess->client_myds && sess->client_myds->fd >= 0) {
-				fds.push_back(pollfd{sess->client_myds->fd, POLLIN, 0});
-				sesss.push_back(sess);
-			}
-		}
-	});
-	if (fds.empty()) return;
-	poll(fds.data(), fds.size(), 0);
-	for (size_t i = 0; i < fds.size(); i++) {
-		if (fds[i].revents & (POLLHUP | POLLERR | POLLNVAL))
-			sesss[i]->healthy = 0;
-	}
 }
 
 void PgSQL_Thread::leave_waiter(PgSQL_Session *sess, bool restore_client) {
@@ -3202,6 +3180,40 @@ void PgSQL_Thread::run___cleanup_mirror_queue() {
 			delete newsess;
 		}
 	}
+}
+
+int PgSQL_Thread::run_ComputePollTimeout() {
+	int ttw = (mypolls.poll_timeout ? (mypolls.poll_timeout / 1000 < (unsigned int)pgsql_thread___poll_timeout ? mypolls.poll_timeout / 1000 : pgsql_thread___poll_timeout) : pgsql_thread___poll_timeout);
+
+	// Adaptive poll timeout. partition_pool_nulls holds the count from the
+	// process_all_sessions() pass that just ran: update_partition_gate()
+	// consumes the previous tick's value at the top of that function, so
+	// what is left here is this iteration's. A non-zero value means a
+	// session in this worker wanted a backend connection and did not get
+	// one, and the connection that unblocks it may be freed by a peer
+	// worker without ever touching this worker's fds. See the rationale
+	// on APT_* in PgSQL_Thread.h.
+	//
+	// The window check is the CPU guard: without demonstrated throughput
+	// there is no evidence a connection is about to be returned, so the
+	// full timeout is kept rather than spinning.
+	apt_update_window();
+	if (
+		(partition_pool_nulls > 0 || !waiter_lists.empty())
+		&& apt_window_total >= APT_MIN_QUERIES
+		&& ttw > APT_SHORT_TTW_MS
+	) {
+		ttw = APT_SHORT_TTW_MS;
+	}
+
+	if (!waiter_lists.empty()) {
+		// Off-poll streams cannot republish their timeout after an unrelated
+		// wake. Preserve the configured retry interval and the client rearm.
+		const auto elapsed = curtime >= last_b_rearm_us ? curtime - last_b_rearm_us : 0;
+		const int rearm_ms = elapsed < 50000 ? (50000 - elapsed + 999) / 1000 : 50;
+		ttw = std::min(ttw, std::min(std::max(1, pgsql_thread___poll_timeout_on_failure), rearm_ms));
+	}
+	return ttw;
 }
 
 // main loop
@@ -3302,30 +3314,7 @@ void PgSQL_Thread::run() {
 		GloPgSQL_Logger->flush();
 
 		pre_poll_time = curtime;
-		int ttw = (mypolls.poll_timeout ? (mypolls.poll_timeout / 1000 < (unsigned int)pgsql_thread___poll_timeout ? mypolls.poll_timeout / 1000 : pgsql_thread___poll_timeout) : pgsql_thread___poll_timeout);
-
-		// Adaptive poll timeout. partition_pool_nulls holds the count from the
-		// process_all_sessions() pass that just ran: update_partition_gate()
-		// consumes the previous tick's value at the top of that function, so
-		// what is left here is this iteration's. A non-zero value means a
-		// session in this worker wanted a backend connection and did not get
-		// one, and the connection that unblocks it may be freed by a peer
-		// worker without ever touching this worker's fds. See the rationale
-		// on APT_* in PgSQL_Thread.h.
-		//
-		// The window check is the CPU guard: without demonstrated throughput
-		// there is no evidence a connection is about to be returned, so the
-		// full timeout is kept rather than spinning.
-		apt_update_window();
-		if (
-			partition_pool_nulls > 0
-			&& apt_window_total >= APT_MIN_QUERIES
-			&& ttw > APT_SHORT_TTW_MS
-		) {
-			ttw = APT_SHORT_TTW_MS;
-		}
-		if (!waiter_lists.empty() && ttw > 1)
-			ttw = 1;
+		int ttw = run_ComputePollTimeout();
 #ifdef IDLE_THREADS
 		if (GloVars.global.idle_threads && idle_maintenance_thread) {
 			memset(events, 0, sizeof(struct epoll_event) * MY_EPOLL_THREAD_MAXEVENTS); // let's make valgrind happy. It also seems that needs to be zeroed anyway
@@ -4098,7 +4087,16 @@ void PgSQL_Thread::process_all_sessions() {
 			n--;
 			delete sess;
 		}
-		else if (sess->waiter_node.session) {
+		else if (sess->waiter_node.session && sess->killed) {
+			// Cleanup must not depend on reaching this node in the checkout scan:
+			// an earlier vanilla miss can stop that scan for the hostgroup.
+			char location[1024];
+			snprintf(location, sizeof(location), "%s:%d:%s()", __FILE__, __LINE__, __func__);
+			GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_CLOSE, sess, NULL, location);
+			unregister_session(n);
+			--n;
+			delete sess;
+		} else if (sess->waiter_node.session) {
 			continue;
 		}
 		else {
@@ -4144,21 +4142,12 @@ void PgSQL_Thread::process_all_sessions() {
 			for (PgSQL_Waiter_Node *n = head; n && walk_guard < 100000; ++walk_guard) {
 				PgSQL_Waiter_Node *next = n->next;
 				auto *sess = static_cast<PgSQL_Session*>(n->session);
-				if (sess->pause_until > curtime) {
+				if (sess->pause_until > curtime && !sess->killed) {
 					n = next;
 					continue;
 				}
 				sess->to_process = 1;
 				rc = sess->handler();
-				const bool got = sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn;
-				if (got) {
-					leave_waiter(sess);
-					PgSQL_Data_Stream *bds = sess->mybe->server_myds;
-					if (bds && bds->fd >= 0 && bds->poll_fds_idx < 0)
-						mypolls.add(POLLIN | POLLOUT, bds->fd, bds, curtime);
-				} else if (vanilla_pool_checkout(sess->last_pool_ff, sess->last_pool_gtid ? "" : nullptr, sess->last_pool_max_lag_ms)) {
-					break;
-				}
 				if (rc == -1 || sess->killed == true) {
 					char _buf[1024];
 					if (sess->client_myds && sess->killed)
@@ -4173,6 +4162,21 @@ void PgSQL_Thread::process_all_sessions() {
 						}
 					}
 					delete sess;
+					n = next;
+					continue;
+				}
+				const bool got = sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn;
+				if (got) {
+					leave_waiter(sess);
+					PgSQL_Data_Stream *bds = sess->mybe->server_myds;
+					if (bds && bds->fd >= 0 && bds->poll_fds_idx < 0)
+						mypolls.add(POLLIN | POLLOUT, bds->fd, bds, curtime);
+				} else if (sess->status != CONNECTING_SERVER) {
+					// A checkout timeout can finish the request without a connection.
+					// Restore the client so its error response and next query can flow.
+					leave_waiter(sess);
+				} else if (vanilla_pool_checkout(sess->last_pool_ff, sess->last_pool_gtid ? "" : nullptr, sess->last_pool_max_lag_ms)) {
+					break;
 				}
 				n = next;
 			}
@@ -6108,13 +6112,13 @@ void PgSQL_Thread::push_MyConn_local(PgSQL_Connection * c) {
 	// benefit at lower client counts.
 	if (mysrvc->status == MYSQL_SERVER_STATUS_ONLINE) {
 		if (c->async_state_machine == ASYNC_IDLE) {
-			// Never cache locally while somebody is waiting for a connection.
+			// Never cache locally while this worker has connection waiters.
 			// return_local_connections() only publishes the cache at the end
 			// of the pass, and a pass walks every session this worker owns --
 			// so the time a cached connection stays invisible to peer workers
 			// grows with client count, precisely when starvation is worst.
 			// The 1-in-N ratio below is fixed and does not scale with that.
-			if (!pool_has_waiters()) {
+			if (!pool_has_waiters() && waiter_lists.empty()) {
 				unsigned int n = (GloPTH && GloPTH->num_threads > 0) ? GloPTH->num_threads : 1;
 				if ((push_local_counter++ % n) == 0) {
 					cached_connections->add(c);

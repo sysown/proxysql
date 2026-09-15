@@ -89,14 +89,10 @@ static std::vector<std::pair<std::string, std::string>> admin_rows2(MYSQL* a, co
 }
 
 static void restore_maxconn(MYSQL* admin, const std::vector<std::pair<std::string, std::string>>& orig) {
-	if (orig.empty()) {
-		admin_exec(admin, "UPDATE mysql_servers SET max_connections=50");
-	} else {
-		for (const auto& row : orig) {
-			std::string q = "UPDATE mysql_servers SET max_connections=" + row.second +
-			                " WHERE hostgroup_id=" + row.first;
-			admin_exec(admin, q.c_str());
-		}
+	for (const auto& row : orig) {
+		std::string q = "UPDATE mysql_servers SET max_connections=" + row.second +
+		                " WHERE " + row.first;
+		if (!admin_exec(admin, q.c_str())) BAIL_OUT("failed to restore backend connection limits");
 	}
 	admin_exec(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 }
@@ -106,14 +102,20 @@ int main(int argc, char** argv) {
 	plan(11);
 
 	MYSQL* admin = admin_connect();
-	if (!ok(admin != nullptr, "admin connected")) {
+	ok(admin != nullptr, "admin connected");
+	if (admin == nullptr) {
 		return exit_status();
 	}
 
 	auto orig_maxconn = admin_rows2(admin,
-		"SELECT hostgroup_id, max_connections FROM mysql_servers ORDER BY hostgroup_id");
+		"SELECT 'hostgroup_id=' || hostgroup_id || ' AND hostname=' || quote(hostname) || ' AND port=' || port, "
+		"max_connections FROM mysql_servers ORDER BY hostgroup_id, hostname, port");
 	std::string orig_maxfe = admin_scalar(admin,
 		"SELECT variable_value FROM global_variables WHERE variable_name='mysql-max_connections'");
+	if (orig_maxconn.empty() || orig_maxfe.empty()) {
+		mysql_close(admin);
+		BAIL_OUT("cannot snapshot connection limits before changing test configuration");
+	}
 	admin_exec(admin, "SET mysql-max_connections=20000");
 	admin_exec(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 	admin_exec(admin, "UPDATE mysql_servers SET max_connections=20");
@@ -127,7 +129,7 @@ int main(int argc, char** argv) {
 		std::vector<int> per(nthreads, 0);
 		std::atomic<bool> hammer{true};
 		std::atomic<int> admin_fail{0};
-		std::thread admin_thr([&] {
+		std::thread admin_thr([&admin_fail, &hammer] {
 			MYSQL* a2 = admin_connect();
 			if (!a2) {
 				admin_fail++;
@@ -142,7 +144,7 @@ int main(int argc, char** argv) {
 		std::vector<std::thread> ts;
 		ts.reserve(nthreads);
 		for (int i = 0; i < nthreads; i++) {
-			ts.emplace_back([&, i] {
+			ts.emplace_back([&errs, &oks, &per, i] {
 				MYSQL* c = mk();
 				if (!c) {
 					errs++;
@@ -181,7 +183,7 @@ int main(int argc, char** argv) {
 		std::vector<std::thread> ts;
 		ts.reserve(nthreads);
 		for (int i = 0; i < nthreads; i++) {
-			ts.emplace_back([&, i] {
+			ts.emplace_back([deadline, &errs, &reconnects, &oks, &inflight_aborts, i] {
 				unsigned rng = 1103515245u * (unsigned)i + 12345u;
 				while (std::chrono::steady_clock::now() < deadline) {
 					MYSQL* c = mk();
@@ -223,7 +225,7 @@ int main(int argc, char** argv) {
 		std::atomic<int> waiter_err{0};
 		std::vector<std::thread> holders;
 		for (int i = 0; i < 20; i++) {
-			holders.emplace_back([&] {
+			holders.emplace_back([&holder_ok] {
 				MYSQL* c = mk();
 				if (!c) return;
 				if (mysql_query(c, "SELECT SLEEP(1.2)") == 0) {
@@ -238,7 +240,7 @@ int main(int argc, char** argv) {
 		std::vector<std::thread> waiters;
 		for (int i = 0; i < 40; i++) {
 			const bool abort = i < 20;
-			waiters.emplace_back([&, abort] {
+			waiters.emplace_back([&waiter_err, &waiter_ok, abort] {
 				MYSQL* c = mk();
 				if (!c) {
 					waiter_err++;

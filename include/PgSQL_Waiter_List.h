@@ -5,10 +5,13 @@
 #include <map>
 #include <vector>
 
+class PgSQL_Waiter_Lists;
+
 struct PgSQL_Waiter_Node {
 	PgSQL_Waiter_Node *prev = nullptr, *next = nullptr;
 	unsigned hid = 0;
 	void *session = nullptr;
+	const PgSQL_Waiter_Lists *owner = nullptr;
 };
 
 class PgSQL_Waiter_Lists {
@@ -17,7 +20,8 @@ class PgSQL_Waiter_Lists {
 public:
 	void push_back(PgSQL_Waiter_Node& n) {
 		List& L = by_hid[n.hid];
-		assert(n.prev == nullptr && n.next == nullptr && L.head != &n);
+		assert(n.owner == nullptr && n.prev == nullptr && n.next == nullptr && L.head != &n);
+		n.owner = this;
 		n.prev = L.tail;
 		n.next = nullptr;
 		if (L.tail) {
@@ -29,18 +33,12 @@ public:
 	}
 
 	void unlink(PgSQL_Waiter_Node& n) {
+		if (n.owner != this) return;
 		auto it = by_hid.find(n.hid);
 		if (it == by_hid.end()) {
 			return;
 		}
 		List& L = it->second;
-		PgSQL_Waiter_Node *p = L.head;
-		while (p && p != &n) {
-			p = p->next;
-		}
-		if (p != &n) {
-			return;
-		}
 		if (n.prev) {
 			n.prev->next = n.next;
 		} else {
@@ -53,6 +51,7 @@ public:
 		}
 		n.prev = nullptr;
 		n.next = nullptr;
+		n.owner = nullptr;
 		if (L.head == nullptr) {
 			by_hid.erase(it);
 		}

@@ -125,7 +125,8 @@ void test_protocol(const char *protocol) {
 
 int main() {
 #ifndef IDLE_THREADS
-	BAIL_OUT("idle thread support is required");
+	plan(1);
+	skip(1, "idle thread support is unavailable on this platform");
 #else
 	plan(20);
 	if (test_init_minimal() != 0 || test_init_query_processor() != 0 || test_init_hostgroups() != 0)

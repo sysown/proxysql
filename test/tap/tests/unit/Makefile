@@ -605,10 +605,8 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	mcp_client_unit-t \
 	pgsql_waiter_list_unit-t
 
-# Auxiliary idle threads are disabled on macOS and FreeBSD.
-ifeq ($(UNAME_S),Linux)
-UNIT_TESTS += worker_load_unit-t
-endif
+# Keep group entries discoverable everywhere; unsupported platforms emit TAP skips.
+UNIT_TESTS += worker_load_unit-t worker_waiter_unit-t
 
 ifeq ($(PROXYSQL31),1)
 UNIT_TESTS += caching_sha2_rsa_unit-t hostgroup_pool_stats_unit-t mysql_server_version_by_interface_unit-t
@@ -1232,7 +1230,9 @@ caching_sha2_rsa_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=flock
 
 # --wrap only rewrites references resolved by this link. Keep these tests on
 # libproxysql.a so their wrappers can reach core-library calls.
-STATIC_LIBPROXYSQL_TESTS := caching_sha2_rsa_unit-t
+worker_waiter_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN13MySQL_Session7handlerEv -Wl,--wrap=_ZN13PgSQL_Session7handlerEv
+
+STATIC_LIBPROXYSQL_TESTS := caching_sha2_rsa_unit-t worker_waiter_unit-t
 $(STATIC_LIBPROXYSQL_TESTS): WHOLE_LIBPROXYSQL := \
 	-Wl,--whole-archive $(LIBPROXYSQLAR_FULL) -Wl,--no-whole-archive
 

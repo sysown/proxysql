@@ -284,6 +284,7 @@ public:
 	/// Roll the query-rate window forward to curtime. Called once per loop
 	/// iteration, not per query.
 	void apt_update_window();
+	int run_ComputePollTimeout();
 
 	//bool epoll_thread;
 	bool poll_timeout_bool;
@@ -465,7 +466,6 @@ public:
 	void enter_waiter(PgSQL_Session *sess, unsigned hid);
 	void leave_waiter(PgSQL_Session *sess, bool restore_client = true);
 	void drop_from_poll(PgSQL_Data_Stream *ds);
-	void poll_waiter_clients();
 
 	/**
 	 * @brief Returns a pointer to the `pollfd` structure for a specific data stream.

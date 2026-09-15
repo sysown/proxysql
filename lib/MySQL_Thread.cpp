@@ -3993,17 +3993,16 @@ void MySQL_Thread::poll_listener_del(int sock) {
 
 void MySQL_Thread::drop_from_poll(MySQL_Data_Stream *ds) {
 	if (!ds) return;
-	unsigned guard = mypolls.len + 1;
-	while (guard--) {
-		bool found = false;
-		for (unsigned int i = 0; i < mypolls.len; i++) {
-			if (mypolls.myds[i] == ds) {
-				mypolls.remove_index_fast(i);
-				found = true;
-				break;
-			}
+	const int idx = ds->poll_fds_idx;
+	if (idx >= 0 && static_cast<unsigned>(idx) < mypolls.len && mypolls.myds[idx] == ds) {
+		mypolls.remove_index_fast(idx);
+	} else if (idx >= 0 || ds->mypolls == &mypolls) {
+		// Preserve defensive cleanup for inconsistent registration metadata.
+		// Normal admission/rearm/teardown uses the maintained index above.
+		for (unsigned i = 0; i < mypolls.len;) {
+			if (mypolls.myds[i] == ds) mypolls.remove_index_fast(i);
+			else ++i;
 		}
-		if (!found) break;
 	}
 	ds->poll_fds_idx = -1;
 	ds->mypolls = NULL;
@@ -4191,8 +4190,13 @@ int MySQL_Thread::run_ComputePollTimeout() {
 
 	pre_poll_time=curtime;
 	int ttw = ( mypolls.poll_timeout ? ( mypolls.poll_timeout/1000 < (unsigned int) mysql_thread___poll_timeout ? mypolls.poll_timeout/1000 : mysql_thread___poll_timeout ) : mysql_thread___poll_timeout );
-	if (!waiter_lists.empty() && ttw > 1)
-		ttw = 1;
+	if (!waiter_lists.empty()) {
+		// Off-poll streams cannot republish their timeout after an unrelated
+		// wake. Preserve the configured retry interval and the client rearm.
+		const auto elapsed = curtime >= last_b_rearm_us ? curtime - last_b_rearm_us : 0;
+		const int rearm_ms = elapsed < 50000 ? (50000 - elapsed + 999) / 1000 : 50;
+		ttw = std::min(ttw, std::min(std::max(1, mysql_thread___poll_timeout_on_failure), rearm_ms));
+	}
 	return ttw;
 }
 
@@ -5172,6 +5176,15 @@ void MySQL_Thread::process_all_sessions() {
 		}
 		if (unlikely(sess->healthy==0)) {
 			ProcessAllSessions_Healthy0(sess, n);
+		} else if (sess->waiter_node.session && sess->killed) {
+			// Cleanup must not depend on reaching this node in the checkout scan:
+			// an earlier vanilla miss can stop that scan for the hostgroup.
+			char location[1024];
+			snprintf(location, sizeof(location), "%s:%d:%s()", __FILE__, __LINE__, __func__);
+			GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, location);
+			unregister_session(n);
+			--n;
+			delete sess;
 		} else if (sess->waiter_node.session) {
 			continue;
 		} else {
@@ -5216,21 +5229,12 @@ void MySQL_Thread::process_all_sessions() {
 			for (PgSQL_Waiter_Node *n = head; n && walk_guard < 100000; ++walk_guard) {
 				PgSQL_Waiter_Node *next = n->next;
 				auto *sess = static_cast<MySQL_Session*>(n->session);
-				if (sess->pause_until > curtime) {
+				if (sess->pause_until > curtime && !sess->killed) {
 					n = next;
 					continue;
 				}
 				sess->to_process = 1;
 				rc = sess->handler();
-				const bool got = sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn;
-				if (got) {
-					leave_waiter(sess);
-					MySQL_Data_Stream *bds = sess->mybe->server_myds;
-					if (bds && bds->fd >= 0 && bds->poll_fds_idx < 0)
-						mypolls.add(POLLIN | POLLOUT, bds->fd, bds, curtime);
-				} else if (vanilla_pool_checkout(sess->last_pool_ff, sess->last_pool_gtid ? "" : nullptr, sess->last_pool_max_lag_ms)) {
-					break;
-				}
 				if (rc == -1 || sess->killed == true) {
 					char _buf[1024];
 					if (sess->client_myds && sess->killed)
@@ -5245,6 +5249,21 @@ void MySQL_Thread::process_all_sessions() {
 						}
 					}
 					delete sess;
+					n = next;
+					continue;
+				}
+				const bool got = sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn;
+				if (got) {
+					leave_waiter(sess);
+					MySQL_Data_Stream *bds = sess->mybe->server_myds;
+					if (bds && bds->fd >= 0 && bds->poll_fds_idx < 0)
+						mypolls.add(POLLIN | POLLOUT, bds->fd, bds, curtime);
+				} else if (sess->status != CONNECTING_SERVER) {
+					// A checkout timeout can finish the request without a connection.
+					// Restore the client so its error response and next query can flow.
+					leave_waiter(sess);
+				} else if (vanilla_pool_checkout(sess->last_pool_ff, sess->last_pool_gtid ? "" : nullptr, sess->last_pool_max_lag_ms)) {
+					break;
 				}
 				n = next;
 			}
@@ -7244,9 +7263,7 @@ void MySQL_Thread::push_MyConn_local(MySQL_Connection *c) {
 
 	// Bounded local cache: cache 1-in-N releases (N = mysql_threads), push the
 	// rest to the shared HGM pool so peer workers can pick them up.
-	// At N=1 always cache (no sibling to share with).
-	// MySQL keeps this fixed fraction when pool waiters exist; the waiter-
-	// dependent cache bypass currently applies only to PgSQL.
+	// At N=1 cache unless local sessions are waiting for a connection.
 	// Rationale: avoids the connection-hoarding behavior that starved sibling
 	// workers at high client count, while preserving most of the lock-amortization
 	// benefit at lower client counts.
@@ -7254,7 +7271,7 @@ void MySQL_Thread::push_MyConn_local(MySQL_Connection *c) {
 	// reset insert_id #1093
 	c->mysql->insert_id = 0;
 	if (mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE) {
-		if (c->async_state_machine==ASYNC_IDLE) {
+		if (c->async_state_machine==ASYNC_IDLE && waiter_lists.empty()) {
 			unsigned int n = (GloMTH && GloMTH->num_threads > 0) ? GloMTH->num_threads : 1;
 			if ((push_local_counter++ % n) == 0) {
 				cached_connections->add(c);
