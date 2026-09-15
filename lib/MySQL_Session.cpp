@@ -9379,6 +9379,9 @@ unsigned long long MySQL_Session::IdleTime() {
 	if (client_myds==0) return 0;
 	if (status!=WAITING_CLIENT_DATA && status!=CONNECTING_CLIENT) return 0;
 	int idx=client_myds->poll_fds_idx;
+	// An off-poll frontend has no poll-based idle timestamp.
+	if (idx < 0 || static_cast<unsigned int>(idx) >= thread->mypolls.len ||
+		thread->mypolls.myds[idx] != client_myds) return 0;
 	unsigned long long last_sent=thread->mypolls.last_sent[idx];
 	unsigned long long last_recv=thread->mypolls.last_recv[idx];
 	unsigned long long last_time=(last_sent > last_recv ? last_sent : last_recv);

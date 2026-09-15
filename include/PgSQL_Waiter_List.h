@@ -39,6 +39,9 @@ public:
 			return;
 		}
 		List& L = it->second;
+		// A copied node has the same owner, but is not linked at this address.
+		if ((n.prev ? n.prev->next != &n : L.head != &n) ||
+			(n.next ? n.next->prev != &n : L.tail != &n)) return;
 		if (n.prev) {
 			n.prev->next = n.next;
 		} else {

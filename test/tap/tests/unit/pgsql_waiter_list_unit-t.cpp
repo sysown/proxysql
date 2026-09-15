@@ -3,7 +3,7 @@
 #include "PgSQL_Waiter_List.h"
 
 int main() {
-	plan(36);
+	plan(39);
 
 	PgSQL_Waiter_Lists lists;
 	PgSQL_Waiter_Node a;
@@ -135,6 +135,18 @@ int main() {
 	ok(o2.next == &ln && ln.prev == &o2, "former owner cannot unlink a transferred node");
 	L2.unlink(ln);
 	ok(o2.next == nullptr && ln.prev == nullptr && ln.next == nullptr, "new owner can unlink the transferred node");
+
+	for (int i = 0; i < 3; ++i) {
+		PgSQL_Waiter_Lists originals;
+		PgSQL_Waiter_Node original_nodes[3];
+		for (auto& node : original_nodes) originals.push_back(node);
+		auto copy = original_nodes[i];
+		originals.unlink(copy);
+		ok(originals.head(0) == &original_nodes[0] &&
+			original_nodes[0].next == &original_nodes[1] && original_nodes[1].prev == &original_nodes[0] &&
+			original_nodes[1].next == &original_nodes[2] && original_nodes[2].prev == &original_nodes[1],
+			"unlink of copied node %d preserves the actual list", i);
+	}
 
 	PgSQL_Waiter_Lists empty_lists;
 	ok(empty_lists.empty(), "new lists empty()");

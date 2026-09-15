@@ -5595,9 +5595,13 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist(processlist_config_t arg
 				}
 				if (sess->mirror == false) {
 					int idx = sess->client_myds->poll_fds_idx;
-					unsigned long long last_sent = sess->thread->mypolls.last_sent[idx];
-					unsigned long long last_recv = sess->thread->mypolls.last_recv[idx];
-					unsigned long long last_time = (last_sent > last_recv ? last_sent : last_recv);
+					// Pool waiters can be outside poll; their session age remains available.
+					unsigned long long last_time = sess->start_time;
+					auto& polls = sess->thread->mypolls;
+					if (idx >= 0 && static_cast<unsigned int>(idx) < polls.len &&
+						polls.myds[idx] == sess->client_myds) {
+						last_time = std::max(polls.last_sent[idx], polls.last_recv[idx]);
+					}
 					if (last_time > sess->thread->curtime) {
 						last_time = sess->thread->curtime;
 					}

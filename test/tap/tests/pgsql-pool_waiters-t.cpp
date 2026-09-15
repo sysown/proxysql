@@ -1,5 +1,6 @@
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <memory>
 #include <poll.h>
 #include <sstream>
@@ -36,29 +37,30 @@ static bool select1(PGconn* c) {
 	return ok;
 }
 
-static bool wait_select1(PGconn* c, int timeout_ms) {
+static bool wait_query(PGconn* c, const char* query, int timeout_ms,
+                       ExecStatusType expected = PGRES_TUPLES_OK) {
 	if (!c || PQstatus(c) != CONNECTION_OK) return false;
-	if (!PQsendQuery(c, "SELECT 1")) return false;
-	auto start = std::chrono::steady_clock::now();
-	while (PQisBusy(c)) {
-		auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-			std::chrono::steady_clock::now() - start).count();
-		if (elapsed > timeout_ms) return false;
-		pollfd fd{PQsocket(c), POLLIN, 0};
-		poll(&fd, 1, 50);
-		if (!PQconsumeInput(c)) return false;
-	}
-	bool ok = false;
+	if (!PQsendQuery(c, query)) return false;
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+	bool matched = false;
+	bool failed = false;
 	for (;;) {
+		if (std::chrono::steady_clock::now() >= deadline || !PQconsumeInput(c)) return false;
+		if (PQisBusy(c)) {
+			pollfd fd{PQsocket(c), POLLIN, 0};
+			poll(&fd, 1, 50);
+			continue;
+		}
 		PGresult* r = PQgetResult(c);
-		if (!r) break;
-		if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) > 0
-			&& std::string(PQgetvalue(r, 0, 0)) == "1") {
-			ok = true;
+		if (!r) return matched && !failed;
+		if (PQresultStatus(r) == expected && (expected == PGRES_COMMAND_OK ||
+			(PQntuples(r) == 1 && std::string(PQgetvalue(r, 0, 0)) == "1"))) {
+			matched = true;
+		} else {
+			failed = true;
 		}
 		PQclear(r);
 	}
-	return ok;
 }
 
 static MYSQL* admin_connect() {
@@ -78,6 +80,10 @@ static bool admin_exec(MYSQL* a, const char* q) {
 		return false;
 	}
 	MYSQL_RES* r = mysql_store_result(a);
+	if (!r && mysql_field_count(a) != 0) {
+		diag("admin result failed: '%s' : %s", q, mysql_error(a));
+		return false;
+	}
 	if (r) mysql_free_result(r);
 	return true;
 }
@@ -114,18 +120,58 @@ static std::vector<std::pair<std::string, std::string>> admin_rows2(MYSQL* a, co
 	return out;
 }
 
-static void restore_maxconn(MYSQL* admin, const std::vector<std::pair<std::string, std::string>>& orig) {
+static std::string sql_quote(const char* value) {
+	std::string out = "'";
+	for (const char* p = value; *p; ++p) {
+		out += *p;
+		if (*p == '\'') out += '\'';
+	}
+	return out + "'";
+}
+
+template <typename Predicate>
+static bool wait_until(Predicate predicate, int timeout_ms = 5000) {
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+	do {
+		if (predicate()) return true;
+		usleep(10 * 1000);
+	} while (std::chrono::steady_clock::now() < deadline);
+	return false;
+}
+
+static bool wait_scalar(MYSQL* admin, const std::string& query, const std::string& expected) {
+	std::string value;
+	const bool matched = wait_until([&] {
+		value = admin_scalar(admin, query.c_str());
+		return value.empty() || value == expected;
+	});
+	if (!matched || value != expected) {
+		diag("predicate failed: %s (expected=%s actual=%s)",
+			query.c_str(), expected.c_str(), value.c_str());
+		return false;
+	}
+	return true;
+}
+
+static bool restore_config(MYSQL* admin,
+                          const std::vector<std::pair<std::string, std::string>>& orig,
+                          const std::string& orig_maxfe) {
+	bool restored = true;
 	for (const auto& row : orig) {
 		std::string q = "UPDATE pgsql_servers SET max_connections=" + row.second +
 		                " WHERE " + row.first;
-		if (!admin_exec(admin, q.c_str())) BAIL_OUT("failed to restore backend connection limits");
+		// Execute every restoration step, including both LOADs, after any error.
+		if (!admin_exec(admin, q.c_str())) restored = false;
 	}
-	admin_exec(admin, "LOAD PGSQL SERVERS TO RUNTIME");
+	if (!admin_exec(admin, "LOAD PGSQL SERVERS TO RUNTIME")) restored = false;
+	if (!admin_exec(admin, ("SET pgsql-max_connections=" + orig_maxfe).c_str())) restored = false;
+	if (!admin_exec(admin, "LOAD PGSQL VARIABLES TO RUNTIME")) restored = false;
+	return restored;
 }
 
 int main(int argc, char** argv) {
 	if (cl.getEnv()) return exit_status();
-	plan(11);
+	plan(15);
 
 	MYSQL* admin = admin_connect();
 	ok(admin != nullptr, "admin connected");
@@ -138,14 +184,32 @@ int main(int argc, char** argv) {
 		"max_connections FROM pgsql_servers ORDER BY hostgroup_id, hostname, port");
 	std::string orig_maxfe = admin_scalar(admin,
 		"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-max_connections'");
-	if (orig_maxconn.empty() || orig_maxfe.empty()) {
+	const std::string hostgroup = admin_scalar(admin,
+		("SELECT default_hostgroup FROM runtime_pgsql_users WHERE username=" +
+		 sql_quote(cl.pgsql_username) + " AND frontend=1 AND active=1 LIMIT 1").c_str());
+	if (orig_maxconn.empty() || orig_maxfe.empty() || hostgroup.empty()) {
 		mysql_close(admin);
 		BAIL_OUT("cannot snapshot connection limits before changing test configuration");
 	}
-	admin_exec(admin, "SET pgsql-max_connections=20000");
-	admin_exec(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
-	admin_exec(admin, "UPDATE pgsql_servers SET max_connections=20");
-	admin_exec(admin, "LOAD PGSQL SERVERS TO RUNTIME");
+	const bool configured = admin_exec(admin, "SET pgsql-max_connections=20000") &&
+		admin_exec(admin, "LOAD PGSQL VARIABLES TO RUNTIME") &&
+		admin_exec(admin, "UPDATE pgsql_servers SET max_connections=20") &&
+		admin_exec(admin, "LOAD PGSQL SERVERS TO RUNTIME");
+	if (!configured) {
+		const bool restored = restore_config(admin, orig_maxconn, orig_maxfe);
+		mysql_close(admin);
+		BAIL_OUT("test configuration failed; restoration %s", restored ? "succeeded" : "failed");
+	}
+	const std::string capacity = admin_scalar(admin,
+		("SELECT COALESCE(SUM(max_connections),0) FROM runtime_pgsql_servers WHERE hostgroup_id=" +
+		 hostgroup + " AND status='ONLINE'").c_str());
+	const int holder_count = std::atoi(capacity.c_str());
+	if (holder_count <= 0 || holder_count > 400) {
+		const bool restored = restore_config(admin, orig_maxconn, orig_maxfe);
+		mysql_close(admin);
+		BAIL_OUT("expected 1..400 backend slots in test hostgroup; restoration %s",
+			restored ? "succeeded" : "failed");
+	}
 
 	{
 		const int nthreads = 400;
@@ -245,42 +309,74 @@ int main(int argc, char** argv) {
 	}
 
 	{
+		std::atomic<int> holder_ready{0};
 		std::atomic<int> holder_ok{0};
 		std::atomic<int> waiter_ok{0};
 		std::atomic<int> waiter_err{0};
+		std::atomic<int> aborted{0};
+		std::atomic<bool> release_holders{false};
+		std::atomic<bool> abort_waiters{false};
+		// Route all participants to the same pool, independent of SELECT routing rules.
+		const std::string route = "/* hostgroup=" + hostgroup + " */ ";
+		const std::string begin = route + "BEGIN";
+		const std::string query = route + "SELECT 1";
+		const std::string pool_query =
+			"SELECT COALESCE(SUM(ConnUsed),0) FROM stats_pgsql_connection_pool WHERE hostgroup=" + hostgroup;
+		// With every backend held, Connect sessions are waiting for a pool connection.
+		const std::string waiters_query =
+			"SELECT COUNT(*) FROM stats_pgsql_processlist WHERE hostgroup=" + hostgroup +
+			" AND user=" + sql_quote(cl.pgsql_username) + " AND command='Connect'";
+		const bool initially_drained = wait_scalar(admin, waiters_query, "0");
 		std::vector<std::thread> holders;
-		for (int i = 0; i < 20; i++) {
-			holders.emplace_back([&holder_ok] {
+		for (int i = 0; i < holder_count; i++) {
+			holders.emplace_back([&] {
 				PGConnPtr c = mk();
 				if (!c || PQstatus(c.get()) != CONNECTION_OK) return;
-				PGresult* r = PQexec(c.get(), "SELECT pg_sleep(1.2)");
-				if (PQresultStatus(r) == PGRES_TUPLES_OK) holder_ok++;
-				PQclear(r);
+				if (wait_query(c.get(), begin.c_str(), 5000, PGRES_COMMAND_OK) &&
+					wait_query(c.get(), query.c_str(), 5000)) {
+					holder_ready++;
+					// An open transaction pins the backend until the coordinator releases it.
+					const bool released = wait_until([&] { return release_holders.load(); }, 30000);
+					if (wait_query(c.get(), "ROLLBACK", 5000, PGRES_COMMAND_OK) && released) holder_ok++;
+				}
 			});
 		}
-		usleep(400 * 1000);
+		const bool ready = wait_until([&] { return holder_ready.load() == holder_count; });
+		const bool saturated = initially_drained && ready && wait_scalar(admin, pool_query, capacity);
+		ok(saturated, "%d transaction holders saturated hostgroup %s (ready=%d)",
+			holder_count, hostgroup.c_str(), holder_ready.load());
 		std::vector<std::thread> waiters;
-		for (int i = 0; i < 40; i++) {
+		if (saturated) for (int i = 0; i < 40; i++) {
 			const bool abort = i < 20;
-			waiters.emplace_back([&waiter_err, &waiter_ok, abort] {
+			waiters.emplace_back([&, abort] {
 				PGConnPtr c = mk();
 				if (!c || PQstatus(c.get()) != CONNECTION_OK) {
 					waiter_err++;
 					return;
 				}
 				if (abort) {
-					(void)PQsendQuery(c.get(), "SELECT 1");
-					(void)PQflush(c.get());
-					usleep(400 * 1000);
+					if (!PQsendQuery(c.get(), query.c_str()) || PQflush(c.get()) != 0) waiter_err++;
+					if (!wait_until([&] { return abort_waiters.load(); }, 15000)) waiter_err++;
+					c.reset();
+					aborted++;
 					return;
 				}
-				if (wait_select1(c.get(), 15000)) waiter_ok++;
+				if (wait_query(c.get(), query.c_str(), 15000)) waiter_ok++;
 				else waiter_err++;
 			});
 		}
-		for (auto& t : waiters) t.join();
+		const bool queued = saturated && wait_scalar(admin, waiters_query, "40");
+		ok(queued, "all 40 waiters were queued before aborting any frontend");
+		abort_waiters.store(true);
+		const bool closed = saturated && wait_until([&] { return aborted.load() == 20; });
+		const bool survivors_queued = queued && closed && wait_scalar(admin, waiters_query, "20");
+		ok(survivors_queued, "20 survivors remained queued after 20 frontends aborted");
+		// Always release and join clients, including when a synchronization assertion fails.
+		release_holders.store(true);
 		for (auto& t : holders) t.join();
-		ok(holder_ok.load() == 20, "20 pg_sleep holders filled the pool (ok=%d)", holder_ok.load());
+		for (auto& t : waiters) t.join();
+		ok(holder_ok.load() == holder_count, "%d holders released their transactions (ok=%d)",
+			holder_count, holder_ok.load());
 		ok(waiter_ok.load() == 20 && waiter_err.load() == 0,
 			"20 surviving waiters completed after 20 aborted (ok=%d err=%d)",
 			waiter_ok.load(), waiter_err.load());
@@ -295,8 +391,7 @@ int main(int argc, char** argv) {
 	}
 
 	bool drained = false;
-	std::string q = std::string("SELECT COUNT(*) FROM stats_pgsql_processlist WHERE user='")
-		+ cl.pgsql_username + "'";
+	std::string q = "SELECT COUNT(*) FROM stats_pgsql_processlist WHERE user=" + sql_quote(cl.pgsql_username);
 	for (int i = 0; i < 100; i++) {
 		std::string n = admin_scalar(admin, q.c_str());
 		if (n == "0") {
@@ -307,11 +402,7 @@ int main(int argc, char** argv) {
 	}
 	ok(drained, "frontend processlist drained after clients closed");
 
-	restore_maxconn(admin, orig_maxconn);
-	if (!orig_maxfe.empty()) {
-		admin_exec(admin, (std::string("SET pgsql-max_connections=") + orig_maxfe).c_str());
-		admin_exec(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
-	}
+	ok(restore_config(admin, orig_maxconn, orig_maxfe), "all original connection limits restored");
 	mysql_close(admin);
 	return exit_status();
 }

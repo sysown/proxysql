@@ -8,6 +8,7 @@
  */
 #include <any>
 #include <sstream>
+#include <type_traits>
 #include <sys/socket.h>
 #include <unistd.h>
 #include "test_globals.h"
@@ -167,11 +168,67 @@ void test_protocol(const char *name) {
 	close(peer);
 }
 
+// A real processlist request must tolerate clients deliberately removed from
+// poll, and preserve the timestamp behavior of clients still registered there.
+template<class Worker, class Session, class Stream, class Connection, class Manager, class Slot>
+void test_processlist(const char *name, Manager *manager, Slot *&slots, unsigned time_column) {
+	Worker worker;
+	if (!worker.init()) BAIL_OUT("worker init failed");
+	worker.curtime = 1000000;
+	Slot slot {};
+	slot.worker = &worker;
+	auto *saved_slots = slots;
+	auto saved_threads = manager->num_threads;
+	slots = &slot;
+	manager->num_threads = 1;
+	int peer;
+	auto *sess = new_waiter<Worker, Session, Stream>(worker, peer);
+	if constexpr (std::is_same<Connection, PgSQL_Connection>::value)
+		sess->client_myds->myconn = new Connection(true);
+	else
+		sess->client_myds->myconn = new Connection();
+	sess->client_myds->client_addr = static_cast<sockaddr*>(calloc(1, sizeof(sockaddr)));
+	sess->client_myds->client_addr->sa_family = AF_UNIX;
+	sess->start_time = 100000;
+	processlist_config_t config {};
+	auto check_time = [&](const char *expected, const char *context) {
+		auto *rows = manager->SQL3_Processlist(config);
+		ok(rows && rows->rows_count == 1 && rows->rows[0]->fields[time_column] &&
+			strcmp(rows->rows[0]->fields[time_column], expected) == 0,
+			"%s: %s (expected %s ms, got %s)", name, context, expected,
+			rows && rows->rows_count == 1 ? rows->rows[0]->fields[time_column] : "missing");
+		delete rows;
+	};
+	check_time("900", "off-poll waiter processlist uses session age");
+	sess->client_myds->poll_fds_idx = worker.mypolls.len;
+	check_time("900", "out-of-range poll index falls back to session age");
+	sess->client_myds->poll_fds_idx = 0; // worker notification pipe, not this client
+	check_time("900", "index belonging to another stream cannot supply client timestamps");
+	sess->client_myds->poll_fds_idx = -1;
+	sess->start_time = 2000000;
+	check_time("0", "future session timestamp is clamped");
+	sess->start_time = 100000;
+	sess->status = WAITING_CLIENT_DATA;
+	ok(sess->IdleTime() == 0, "%s: an unregistered frontend has no poll-based idle age", name);
+	worker.leave_waiter(sess);
+	int idx = sess->client_myds->poll_fds_idx;
+	worker.mypolls.last_sent[idx] = 700000;
+	worker.mypolls.last_recv[idx] = 800000;
+	check_time("200", "registered frontend retains last I/O age");
+	ok(sess->IdleTime() == 200000, "%s: registered idle age is preserved", name);
+	worker.unregister_session(0);
+	delete sess;
+	close(peer);
+	slots = saved_slots;
+	manager->num_threads = saved_threads;
+}
+
 static void test_mysql_timeout() {
 	MySQL_Thread worker;
 	if (!worker.init()) BAIL_OUT("worker init failed");
 	mysql_thread___wait_timeout = 10000;
 	mysql_thread___poll_timeout = 2000;
+	mysql_thread___poll_timeout_on_failure = 10;
 	worker.mypolls.poll_timeout = 10000; // configured 10 ms retry, in microseconds
 	PgSQL_Waiter_Node node;
 	worker.waiter_lists.push_back(node);
@@ -188,6 +245,7 @@ static void test_pgsql_timeout() {
 	PgSQL_Thread worker;
 	if (!worker.init()) BAIL_OUT("worker init failed");
 	pgsql_thread___poll_timeout = 2000;
+	pgsql_thread___poll_timeout_on_failure = 10;
 	worker.curtime = 1000000;
 	worker.mypolls.poll_timeout = 10000;
 	PgSQL_Waiter_Node node;
@@ -229,18 +287,20 @@ static void test_pgsql_cache() {
 	worker.waiter_lists.push_back(node);
 	worker.push_MyConn_local(conn);
 	ok(server->ConnectionsUsed->conns_length() == 0 && server->ConnectionsFree->conns_length() == 1,
-		"PgSQL: queued waiter bypasses the local cache after failure counters expire");
+		"PgSQL: queued waiter bypasses the local cache with zero failure counters");
 	worker.waiter_lists.unlink(node);
 	worker.return_local_connections();
 }
 
 int main() {
-	plan(51);
+	plan(65);
 	if (test_init_minimal() || test_init_query_processor() || test_init_hostgroups()) BAIL_OUT("init failed");
 	GloMyLogger = new MySQL_Logger();
 	GloPgSQL_Logger = new PgSQL_Logger();
 	test_protocol<MySQL_Thread, MySQL_Session, MySQL_Data_Stream>("MySQL");
 	test_protocol<PgSQL_Thread, PgSQL_Session, PgSQL_Data_Stream>("PgSQL");
+	test_processlist<MySQL_Thread, MySQL_Session, MySQL_Data_Stream, MySQL_Connection>("MySQL", GloMTH, GloMTH->mysql_threads, 12);
+	test_processlist<PgSQL_Thread, PgSQL_Session, PgSQL_Data_Stream, PgSQL_Connection>("PgSQL", GloPTH, GloPTH->pgsql_threads, 14);
 	test_mysql_timeout();
 	test_pgsql_timeout();
 	test_pgsql_cache();
