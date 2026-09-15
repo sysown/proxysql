@@ -23,7 +23,9 @@
 #include "prometheus_helpers.h"
 
 #include "MySQL_Set_Stmt_Parser.h"
+#ifdef PROXYSQL31
 #include "PgSQL_Waiter_List.h"
+#endif // PROXYSQL31
 
 #ifdef PROXYSQL40
 #include "ProxySQL_PluginListenerGate.h"
@@ -197,8 +199,10 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 	void *gen_args;	// this is a generic pointer to create any sort of structure
 
 	ProxySQL_Poll<MySQL_Data_Stream> mypolls;
+#ifdef PROXYSQL31
 	PgSQL_Waiter_Lists waiter_lists;
 	unsigned long long last_b_rearm_us = 0;
+#endif // PROXYSQL31
 	pthread_t thread_id;
 //	unsigned long long curtime;
 	unsigned long long pre_poll_time;
@@ -256,9 +260,11 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
   void poll_listener_del(int sock);
   //void register_session(MySQL_Session *, bool up_start=true);
   void unregister_session(int);
+#ifdef PROXYSQL31
   void enter_waiter(MySQL_Session *sess, unsigned hid);
   void leave_waiter(MySQL_Session *sess, bool restore_client = true);
   void drop_from_poll(MySQL_Data_Stream *ds);
+#endif // PROXYSQL31
   struct pollfd * get_pollfd(unsigned int i);
   bool process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n);
 	//void ProcessAllSessions_SortingSessions();

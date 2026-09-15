@@ -873,9 +873,11 @@ void MySQL_Session::reset() {
  * @brief Destructor for the MySQL session.
  */
 MySQL_Session::~MySQL_Session() {
+#ifdef PROXYSQL31
 	if (thread) {
 		thread->leave_waiter(this);
 	}
+#endif // PROXYSQL31
 	reset();
  // we moved this out to allow CHANGE_USER
 
@@ -9026,14 +9028,18 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 
 		if (mc==NULL) {
 			if (trxid) {
+#ifdef PROXYSQL31
 				last_pool_ff = (session_fast_forward || qpo->create_new_conn);
 				last_pool_gtid = true;
 				last_pool_max_lag_ms = -1;
+#endif // PROXYSQL31
 				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), uuid, trxid, -1);
 			} else {
+#ifdef PROXYSQL31
 				last_pool_ff = (session_fast_forward || qpo->create_new_conn);
 				last_pool_gtid = false;
 				last_pool_max_lag_ms = (int)qpo->max_lag_ms;
+#endif // PROXYSQL31
 				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), NULL, 0, (int)qpo->max_lag_ms);
 			}
 			thread->note_pool_attempt(mc == NULL);
@@ -9072,11 +9078,15 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		if (mc) {
 			mybe->server_myds->attach_connection(mc);
 			thread->status_variables.stvar[st_var_ConnPool_get_conn_success]++;
+#ifdef PROXYSQL31
 			pause_until = 0;
 			thread->leave_waiter(this);
+#endif // PROXYSQL31
 		} else {
 			thread->status_variables.stvar[st_var_ConnPool_get_conn_failure]++;
+#ifdef PROXYSQL31
 			thread->enter_waiter(this, mybe->hostgroup_id);
+#endif // PROXYSQL31
 		}
 		if (qpo->max_lag_ms >= 0) {
 			if (qpo->max_lag_ms <= 360000) { // this is a relative time , we convert it to absolute

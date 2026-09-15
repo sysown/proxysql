@@ -53,15 +53,24 @@ Session *new_waiter(Worker& worker, int& peer) {
 	sess->client_myds->myds_type = MYDS_FRONTEND;
 	sess->client_myds->fd = fds[0];
 	sess->client_myds->addr.addr = strdup("unit-client");
+#ifdef PROXYSQL31
 	sess->last_pool_ff = false;
 	sess->last_pool_gtid = false;
 	sess->last_pool_max_lag_ms = -1;
+#endif
 	worker.mysql_sessions->add(sess);
 	worker.mypolls.add(POLLIN, fds[0], sess->client_myds, worker.curtime);
+#ifdef PROXYSQL31
 	worker.enter_waiter(sess, 1);
+#else
+	// Exercise invalid-index inspection independently of B-band availability.
+	worker.mypolls.remove_index_fast(sess->client_myds->poll_fds_idx);
+	sess->client_myds->mypolls = nullptr;
+#endif
 	return sess;
 }
 
+#ifdef PROXYSQL31
 template<class Worker, class Session, class Stream>
 void test_protocol(const char *name) {
 	Worker worker;
@@ -168,6 +177,8 @@ void test_protocol(const char *name) {
 	close(peer);
 }
 
+#endif // PROXYSQL31
+
 // A real processlist request must tolerate clients deliberately removed from
 // poll, and preserve the timestamp behavior of clients still registered there.
 template<class Worker, class Session, class Stream, class Connection, class Manager, class Slot>
@@ -210,7 +221,11 @@ void test_processlist(const char *name, Manager *manager, Slot *&slots, unsigned
 	sess->start_time = 100000;
 	sess->status = WAITING_CLIENT_DATA;
 	ok(sess->IdleTime() == 0, "%s: an unregistered frontend has no poll-based idle age", name);
+#ifdef PROXYSQL31
 	worker.leave_waiter(sess);
+#else
+	worker.mypolls.add(POLLIN, sess->client_myds->fd, sess->client_myds, worker.curtime);
+#endif
 	int idx = sess->client_myds->poll_fds_idx;
 	worker.mypolls.last_sent[idx] = 700000;
 	worker.mypolls.last_recv[idx] = 800000;
@@ -223,6 +238,7 @@ void test_processlist(const char *name, Manager *manager, Slot *&slots, unsigned
 	manager->num_threads = saved_threads;
 }
 
+#ifdef PROXYSQL31
 static void test_mysql_timeout() {
 	MySQL_Thread worker;
 	if (!worker.init()) BAIL_OUT("worker init failed");
@@ -292,18 +308,81 @@ static void test_pgsql_cache() {
 	worker.return_local_connections();
 }
 
+#else
+// The release boundary is a compile-time contract: stable classes must not
+// carry the experimental queue or adaptive timeout state.
+template<class T, class = void> struct has_waiter_node : std::false_type {};
+template<class T> struct has_waiter_node<T, std::void_t<decltype(std::declval<T>().waiter_node)>> : std::true_type {};
+template<class T, class = void> struct has_waiter_lists : std::false_type {};
+template<class T> struct has_waiter_lists<T, std::void_t<decltype(std::declval<T>().waiter_lists)>> : std::true_type {};
+template<class T, class = void> struct has_adaptive_timeout : std::false_type {};
+template<class T> struct has_adaptive_timeout<T, std::void_t<decltype(std::declval<T>().apt_window_total)>> : std::true_type {};
+
+static void test_stable_tier() {
+	ok(!has_waiter_node<MySQL_Session>::value && !has_waiter_node<PgSQL_Session>::value,
+		"3.0 sessions contain no experimental waiter nodes");
+	ok(!has_waiter_lists<MySQL_Thread>::value && !has_waiter_lists<PgSQL_Thread>::value,
+		"3.0 workers contain no experimental waiter queues");
+	ok(!has_adaptive_timeout<PgSQL_Thread>::value, "3.0 has no adaptive PostgreSQL timeout state");
+	{
+		MySQL_Thread worker;
+		if (!worker.init()) BAIL_OUT("worker init failed");
+		mysql_thread___wait_timeout = 10000;
+		mysql_thread___poll_timeout = 2000;
+		mysql_thread___poll_timeout_on_failure = 10;
+		worker.mypolls.poll_timeout = 0;
+		worker.note_pool_attempt(true);
+		ok(worker.run_ComputePollTimeout() == 2000, "3.0 retains its configured MySQL poll timeout after a failed checkout");
+	}
+	{
+		PgSQL_Thread worker;
+		if (!worker.init()) BAIL_OUT("worker init failed");
+		GloPTH->num_threads = 1;
+		PgSQL_srv_info_t info {"stable-cache-unit", 5432, "unit"};
+		PgSQL_srv_opts_t opts {1, 100, 0};
+		PgHGM->wrlock();
+		int rc = PgHGM->create_new_server_in_hg(105, info, opts);
+		auto *hg = PgHGM->MyHGC_find(105);
+		PgHGM->wrunlock();
+		if (rc || !hg || hg->mysrvs->cnt() != 1) BAIL_OUT("server init failed");
+		auto *server = hg->mysrvs->idx(0);
+		auto *conn = new PgSQL_Connection(false);
+		conn->parent = server;
+		conn->async_state_machine = ASYNC_IDLE;
+		conn->reusable = true;
+		conn->largest_query_length = 0;
+		server->ConnectionsUsed->add(conn);
+		worker.note_pool_attempt(true);
+		worker.push_MyConn_local(conn);
+		ok(server->ConnectionsUsed->conns_length() == 1 && server->ConnectionsFree->conns_length() == 0,
+			"3.0 retains PostgreSQL local caching after a failed checkout");
+		worker.return_local_connections();
+	}
+}
+#endif // PROXYSQL31
+
 int main() {
+#ifdef PROXYSQL31
 	plan(65);
+#else
+	plan(19);
+#endif
 	if (test_init_minimal() || test_init_query_processor() || test_init_hostgroups()) BAIL_OUT("init failed");
 	GloMyLogger = new MySQL_Logger();
 	GloPgSQL_Logger = new PgSQL_Logger();
+#ifdef PROXYSQL31
 	test_protocol<MySQL_Thread, MySQL_Session, MySQL_Data_Stream>("MySQL");
 	test_protocol<PgSQL_Thread, PgSQL_Session, PgSQL_Data_Stream>("PgSQL");
+#endif
 	test_processlist<MySQL_Thread, MySQL_Session, MySQL_Data_Stream, MySQL_Connection>("MySQL", GloMTH, GloMTH->mysql_threads, 12);
 	test_processlist<PgSQL_Thread, PgSQL_Session, PgSQL_Data_Stream, PgSQL_Connection>("PgSQL", GloPTH, GloPTH->pgsql_threads, 14);
+#ifdef PROXYSQL31
 	test_mysql_timeout();
 	test_pgsql_timeout();
 	test_pgsql_cache();
+#else
+	test_stable_tier();
+#endif
 	delete GloPgSQL_Logger; GloPgSQL_Logger = nullptr;
 	delete GloMyLogger; GloMyLogger = nullptr;
 	test_cleanup_hostgroups();

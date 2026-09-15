@@ -1000,12 +1000,18 @@ int MySQL_Data_Stream::write_to_net() {
 	//VALGRIND_ENABLE_ERROR_REPORTING;
 	if (bytes_io < 0) {
 		if (encrypted==false)	{
+#ifdef PROXYSQL31
 			if (poll_fds_idx < 0 || !mypolls) {
 				if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)
 					shut_soft();
 			} else if (mypolls->fds[poll_fds_idx].revents & POLLOUT) {
 				shut_soft();
 			}
+#else
+			if (poll_fds_idx < 0 || !mypolls || (mypolls->fds[poll_fds_idx].revents & POLLOUT)) {
+				shut_soft();
+			}
+#endif
 		} else {
 			int ssl_ret=SSL_get_error(ssl, bytes_io);
 			if (ssl_ret!=SSL_ERROR_WANT_READ && ssl_ret!=SSL_ERROR_WANT_WRITE) shut_soft();
@@ -1196,8 +1202,14 @@ int MySQL_Data_Stream::write_to_net_poll() {
 	}
 	if (call_write_to_net) {
 		if (sess->session_type == PROXYSQL_SESSION_MYSQL) {
+#ifndef PROXYSQL31
+			if (poll_fds_idx > -1) {
+#endif
 			if (net_failure==false)
 				rc += write_to_net();
+#ifndef PROXYSQL31
+			}
+#endif
 		} else {
 			rc += write_to_net();
 		}

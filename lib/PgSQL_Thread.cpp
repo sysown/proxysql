@@ -3089,6 +3089,7 @@ void PgSQL_Thread::poll_listener_del(int sock) {
 	}
 }
 
+#ifdef PROXYSQL31
 void PgSQL_Thread::drop_from_poll(PgSQL_Data_Stream *ds) {
 	if (!ds) return;
 	const int idx = ds->poll_fds_idx;
@@ -3106,15 +3107,21 @@ void PgSQL_Thread::drop_from_poll(PgSQL_Data_Stream *ds) {
 	ds->mypolls = NULL;
 }
 
+#endif // PROXYSQL31
 void PgSQL_Thread::unregister_session(int idx) {
 	if (mysql_sessions == NULL) return;
+#ifdef PROXYSQL31
 	PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(idx);
 	leave_waiter(sess, false);
 	drop_from_poll(sess->client_myds);
 	if (sess->mybe) drop_from_poll(sess->mybe->server_myds);
 	proxy_debug(PROXY_DEBUG_NET, 1, "Thread=%p, Session=%p -- Unregistered session\n", this, sess);
+#else
+	proxy_debug(PROXY_DEBUG_NET, 1, "Thread=%p, Session=%p -- Unregistered session\n", this, mysql_sessions->index(idx));
+#endif // PROXYSQL31
 	mysql_sessions->remove_index_fast(idx);
 }
+#ifdef PROXYSQL31
 
 void PgSQL_Thread::enter_waiter(PgSQL_Session *sess, unsigned hid) {
 	if (sess->waiter_node.session) return;
@@ -3134,6 +3141,7 @@ void PgSQL_Thread::leave_waiter(PgSQL_Session *sess, bool restore_client) {
 		mypolls.add(POLLIN | POLLOUT, sess->client_myds->fd, sess->client_myds, curtime);
 	}
 }
+#endif // PROXYSQL31
 
 
 // this function was inline in PgSQL_Thread::run()
@@ -3181,6 +3189,7 @@ void PgSQL_Thread::run___cleanup_mirror_queue() {
 		}
 	}
 }
+#ifdef PROXYSQL31
 
 int PgSQL_Thread::run_ComputePollTimeout() {
 	int ttw = (mypolls.poll_timeout ? (mypolls.poll_timeout / 1000 < (unsigned int)pgsql_thread___poll_timeout ? mypolls.poll_timeout / 1000 : pgsql_thread___poll_timeout) : pgsql_thread___poll_timeout);
@@ -3215,6 +3224,7 @@ int PgSQL_Thread::run_ComputePollTimeout() {
 	}
 	return ttw;
 }
+#endif // PROXYSQL31
 
 // main loop
 void PgSQL_Thread::run() {
@@ -3314,7 +3324,11 @@ void PgSQL_Thread::run() {
 		GloPgSQL_Logger->flush();
 
 		pre_poll_time = curtime;
+#ifdef PROXYSQL31
 		int ttw = run_ComputePollTimeout();
+#else
+		int ttw = (mypolls.poll_timeout ? (mypolls.poll_timeout / 1000 < (unsigned int)pgsql_thread___poll_timeout ? mypolls.poll_timeout / 1000 : pgsql_thread___poll_timeout) : pgsql_thread___poll_timeout);
+#endif // PROXYSQL31
 #ifdef IDLE_THREADS
 		if (GloVars.global.idle_threads && idle_maintenance_thread) {
 			memset(events, 0, sizeof(struct epoll_event) * MY_EPOLL_THREAD_MAXEVENTS); // let's make valgrind happy. It also seems that needs to be zeroed anyway
@@ -3346,6 +3360,7 @@ void PgSQL_Thread::run() {
 	 * Purpose: Enables efficient I/O multiplexing across all PostgreSQL connections
 	 */
 	// poll is called with a timeout of mypolls.poll_timeout if set , or pgsql_thread___poll_timeout
+#ifdef PROXYSQL31
 			const bool b_rearm = (curtime >= last_b_rearm_us + 50000);
 			if (b_rearm) {
 				last_b_rearm_us = curtime;
@@ -3358,6 +3373,7 @@ void PgSQL_Thread::run() {
 					}
 				});
 			}
+#endif // PROXYSQL31
 			rc = poll(mypolls.fds, mypolls.len, ttw);
 			proxy_debug(PROXY_DEBUG_NET, 5, "%s\n", "Returning poll");
 #ifdef IDLE_THREADS
@@ -3481,6 +3497,7 @@ void PgSQL_Thread::run() {
 #endif // IDLE_THREADS
 
 		ProcessAllMyDS_AfterPoll<PgSQL_Thread>();
+#ifdef PROXYSQL31
 		if (last_b_rearm_us == pre_poll_time) {
 			waiter_lists.for_each_hid([&](unsigned, PgSQL_Waiter_Node *head) {
 				unsigned guard = 0;
@@ -3490,6 +3507,7 @@ void PgSQL_Thread::run() {
 				}
 			});
 		}
+#endif // PROXYSQL31
 
 #ifdef IDLE_THREADS
 		__run_skip_2 :
@@ -3498,6 +3516,7 @@ void PgSQL_Thread::run() {
 			unsigned int w = rand_fast() % (GloPTH->num_threads);
 			PgSQL_Thread* thr = GloPTH->pgsql_threads[w].worker;
 			if (resume_mysql_sessions->len) {
+#ifdef PROXYSQL31
 				// Compare a random worker and its neighbor, assigning the whole
 				// batch to the lighter one. Include pending resumptions so later
 				// handoffs account for work already promised to that worker.
@@ -3513,6 +3532,9 @@ void PgSQL_Thread::run() {
 				} else {
 					idle_thread_assigns_sessions_to_worker_thread(thr);
 				}
+#else
+				idle_thread_assigns_sessions_to_worker_thread(thr);
+#endif // PROXYSQL31
 			}
 			else {
 				idle_thread_check_if_worker_thread_has_unprocess_resumed_sessions_and_signal_it(thr);
@@ -3621,12 +3643,16 @@ void PgSQL_Thread::idle_thread_assigns_sessions_to_worker_thread(PgSQL_Thread * 
 	pthread_mutex_lock(&thr->myexchange.mutex_resumes);
 	if (shutdown == 0 && thr->shutdown == 0)
 		if (resume_mysql_sessions->len) {
+#ifdef PROXYSQL31
 			const unsigned int transferred = resume_mysql_sessions->len;
+#endif // PROXYSQL31
 			while (resume_mysql_sessions->len) {
 				PgSQL_Session* mysess = (PgSQL_Session*)resume_mysql_sessions->remove_index_fast(0);
 				thr->myexchange.resume_mysql_sessions->add(mysess);
 			}
+#ifdef PROXYSQL31
 			thr->worker_load.fetch_add(transferred, std::memory_order_relaxed);
+#endif // PROXYSQL31
 			send_signal = true; // signal only if there are sessions to resume
 		}
 	pthread_mutex_unlock(&thr->myexchange.mutex_resumes);
@@ -3675,10 +3701,12 @@ void PgSQL_Thread::worker_thread_gets_sessions_from_idle_thread() {
 			mypolls.add(POLLIN, myds->fd, myds, monotonic_time());
 		}
 	}
+#ifdef PROXYSQL31
 	// Refresh even after an empty drain: active sessions may have closed or
 	// moved idle. Keep this under the queue lock so pending additions cannot
 	// be overwritten, and draining does not briefly reduce the load hint.
 	worker_load.store(mysql_sessions->len, std::memory_order_relaxed);
+#endif // PROXYSQL31
 	pthread_mutex_unlock(&myexchange.mutex_resumes);
 }
 #endif // IDLE_THREADS
@@ -3967,6 +3995,7 @@ void PgSQL_Thread::ProcessAllSessions_MaintenanceLoop(PgSQL_Session * sess, unsi
 	}
 }
 
+#ifdef PROXYSQL31
 void PgSQL_Thread::apt_update_window() {
 	const unsigned long long q = status_variables.stvar[st_var_queries];
 	// Cumulative counter; only the delta since the last iteration is new work.
@@ -3999,6 +4028,7 @@ void PgSQL_Thread::apt_update_window() {
 	apt_window_total += delta;
 }
 
+#endif // PROXYSQL31
 void PgSQL_Thread::process_all_sessions() {
 	unsigned int n;
 	unsigned int total_active_transactions_ = 0;
@@ -4087,6 +4117,7 @@ void PgSQL_Thread::process_all_sessions() {
 			n--;
 			delete sess;
 		}
+#ifdef PROXYSQL31
 		else if (sess->waiter_node.session && sess->killed) {
 			// Cleanup must not depend on reaching this node in the checkout scan:
 			// an earlier vanilla miss can stop that scan for the hostgroup.
@@ -4099,12 +4130,15 @@ void PgSQL_Thread::process_all_sessions() {
 		} else if (sess->waiter_node.session) {
 			continue;
 		}
+#endif // PROXYSQL31
 		else {
 			if (sess->to_process == 1) {
 				if (sess->pause_until <= curtime) {
+#ifdef PROXYSQL31
 					if (!(sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn)) {
 						continue;
 					}
+#endif // PROXYSQL31
 					rc = sess->handler();
 					//total_active_transactions_+=sess->active_transactions;
 					if (rc == -1 || sess->killed == true) {
@@ -4135,6 +4169,7 @@ void PgSQL_Thread::process_all_sessions() {
 			}
 		}
 	}
+#ifdef PROXYSQL31
 	if (!waiter_lists.empty()) {
 		waiter_lists.for_each_hid([&](unsigned hid, PgSQL_Waiter_Node *head) {
 			(void)hid;
@@ -4202,6 +4237,7 @@ void PgSQL_Thread::process_all_sessions() {
 		}
 	}
 
+#endif // PROXYSQL31
 	if (maintenance_loop) {
 		unsigned int total_active_transactions_tmp;
 		total_active_transactions_tmp = __sync_add_and_fetch(&status_variables.active_transactions, 0);
@@ -6107,15 +6143,16 @@ PgSQL_Connection* PgSQL_Thread::get_MyConn_local(unsigned int _hid, PgSQL_Sessio
 }
 
 void PgSQL_Thread::push_MyConn_local(PgSQL_Connection * c) {
-	PgSQL_SrvC* mysrvc = (PgSQL_SrvC*)c->parent;
 	// Bounded local cache: cache 1-in-N releases (N = pgsql_threads), push the
 	// rest to the shared HGM pool so peer workers can pick them up.
 	// At N=1 always cache (no sibling to share with).
 	// Rationale: avoids the connection-hoarding behavior that starved sibling
 	// workers at high client count, while preserving most of the lock-amortization
 	// benefit at lower client counts.
+	PgSQL_SrvC* mysrvc = (PgSQL_SrvC*)c->parent;
 	if (mysrvc->status == MYSQL_SERVER_STATUS_ONLINE) {
 		if (c->async_state_machine == ASYNC_IDLE) {
+#ifdef PROXYSQL31
 			// Never cache locally while this worker has connection waiters.
 			// return_local_connections() only publishes the cache at the end
 			// of the pass, and a pass walks every session this worker owns --
@@ -6129,6 +6166,13 @@ void PgSQL_Thread::push_MyConn_local(PgSQL_Connection * c) {
 					return;
 				}
 			}
+#else
+			unsigned int n = (GloPTH && GloPTH->num_threads > 0) ? GloPTH->num_threads : 1;
+			if ((push_local_counter++ % n) == 0) {
+				cached_connections->add(c);
+				return;
+			}
+#endif // PROXYSQL31
 		}
 	}
 	PgHGM->push_MyConn_to_pool(c);

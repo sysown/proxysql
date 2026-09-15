@@ -24,7 +24,7 @@
 extern MySQL_Logger *GloMyLogger;
 extern PgSQL_Logger *GloPgSQL_Logger;
 
-#ifdef IDLE_THREADS
+#if defined(IDLE_THREADS) && defined(PROXYSQL31)
 
 template<class Session, class Stream>
 Session *new_session() {
@@ -124,7 +124,10 @@ void test_protocol(const char *protocol) {
 #endif
 
 int main() {
-#ifndef IDLE_THREADS
+#ifndef PROXYSQL31
+	plan(1);
+	skip(1, "worker load estimates require ProxySQL 3.1 or newer");
+#elif !defined(IDLE_THREADS)
 	plan(1);
 	skip(1, "idle thread support is unavailable on this platform");
 #else

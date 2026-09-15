@@ -53,15 +53,19 @@ private:
 	// once per outer process_all_sessions iteration. Single-threaded per worker.
 	unsigned int partition_pool_attempts = 0;
 	unsigned int partition_pool_nulls = 0;
+#ifdef PROXYSQL31
 	// The value update_partition_gate() last consumed. Kept because the live
 	// counter is zeroed at the top of every process_all_sessions() pass, so
 	// without it the first connection releases of a pass always look
 	// contention-free even in the middle of sustained starvation.
 	unsigned int partition_pool_nulls_prev = 0;
+#endif // PROXYSQL31
 	unsigned int partition_streak = 0;
 	bool partition_active = false;
+#ifdef PROXYSQL31
 	// curtime of the last B-band sort, for PARTITION_SORT_MIN_INTERVAL_US.
 	unsigned long long last_partition_sort_time = 0;
+#endif // PROXYSQL31
 
 public:
 	// Gate thresholds: NULL-ratio (NUM/DEN) classifies a tick as "stressed";
@@ -74,6 +78,7 @@ public:
 	// streak are left untouched. Avoids "2/2 NULL = 100% stressed" noise.
 	static constexpr unsigned int PARTITION_GATE_MIN_ATTEMPTS   = 4;
 	static constexpr unsigned int PARTITION_FAIRNESS_MIN_B      = 4;
+#ifdef PROXYSQL31
 	// Sorting the whole B band by wait time used to run on every iteration and
 	// was removed: it cost ~12% throughput at 500 clients / 50-conn pool under
 	// SSL. It is rate limited by TIME rather than by iteration count, because
@@ -88,6 +93,7 @@ public:
 	// in arrival order, and the sessions that matter for the tail are the
 	// long-waiting ones whose relative order is stable.
 	static constexpr unsigned long long PARTITION_SORT_MIN_INTERVAL_US = 50000;	// 50ms
+#endif // PROXYSQL31
 
 	// Called by sessions inside this worker at the get_MyConn_from_pool()
 	// call site to feed the gate.
@@ -96,6 +102,7 @@ public:
 		if (was_null) ++partition_pool_nulls;
 	}
 
+#ifdef PROXYSQL31
 	/// True when a session failed to get a connection from the pool in this
 	/// pass or the one before it, i.e. somebody is waiting for a connection
 	/// right now. Cheap proxy for a real waiter count, using counters the
@@ -103,6 +110,7 @@ public:
 	inline bool pool_has_waiters() const {
 		return partition_pool_nulls > 0 || partition_pool_nulls_prev > 0;
 	}
+#endif // PROXYSQL31
 
 	// Runs the hysteresis state machine from per-tick counters, resets them,
 	// and returns whether the partition pass should run. MUST be called every
@@ -115,12 +123,12 @@ public:
 	bool epoll_thread;
 	int shutdown;
 	PtrArray *mysql_sessions;
-#ifdef IDLE_THREADS
+#if defined(PROXYSQL31) && defined(IDLE_THREADS)
 	// Active sessions at the last worker loop, plus queued resumptions.
 	// Writers hold myexchange.mutex_resumes so a worker snapshot cannot
 	// overwrite a concurrent handoff. Readers use only this atomic hint.
 	std::atomic<unsigned int> worker_load {0};
-#endif // IDLE_THREADS
+#endif // PROXYSQL31 && IDLE_THREADS
 	Session_Regex **match_regexes;
 	Base_Thread();
 	~Base_Thread();

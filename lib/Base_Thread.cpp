@@ -42,7 +42,9 @@ bool Base_Thread::update_partition_gate() {
 	const uint64_t nulls    = partition_pool_nulls;
 	partition_pool_attempts = 0;
 	partition_pool_nulls    = 0;
+#ifdef PROXYSQL31
 	partition_pool_nulls_prev = (unsigned int)nulls;
+#endif
 
 	// Low-volume ticks carry no signal; leave gate and streak unchanged.
 	if (attempts < PARTITION_GATE_MIN_ATTEMPTS) {
@@ -331,6 +333,7 @@ void Base_Thread::ProcessAllSessions_Partition() {
 		}
 	}
 
+#ifdef PROXYSQL31
 	// Order the B band oldest-first, occasionally.
 	//
 	// max_connect_time is stamped as curtime + connect_timeout_server_max when
@@ -383,7 +386,9 @@ void Base_Thread::ProcessAllSessions_Partition() {
 	// Fallback when the band was not sorted this pass: promote the
 	// longest-waiting B session so the CONNECTING_SERVER pass serves it first.
 	// Gated by a minimum B-band size to avoid churn on tiny bands.
-	else if (idle_begin > running_end + PARTITION_FAIRNESS_MIN_B
+	else
+#endif // PROXYSQL31
+	if (idle_begin > running_end + PARTITION_FAIRNESS_MIN_B
 	    && oldest_idx != SIZE_MAX && oldest_idx != running_end) {
 		void* p = mysql_sessions->pdata[running_end];
 		mysql_sessions->pdata[running_end] = mysql_sessions->pdata[oldest_idx];

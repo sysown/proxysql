@@ -18,7 +18,9 @@
 #include "prometheus_helpers.h"
 
 #include "PgSQL_Set_Stmt_Parser.h"
+#ifdef PROXYSQL31
 #include "PgSQL_Waiter_List.h"
+#endif // PROXYSQL31
 
 enum class AUTHENTICATION_METHOD {
 	NO_PASSWORD,
@@ -219,8 +221,10 @@ public:
 	void* gen_args;	// this is a generic pointer to create any sort of structure
 
 	ProxySQL_Poll<PgSQL_Data_Stream> mypolls;
+#ifdef PROXYSQL31
 	PgSQL_Waiter_Lists waiter_lists;
 	unsigned long long last_b_rearm_us = 0;
+#endif // PROXYSQL31
 	pthread_t thread_id;
 	unsigned long long pre_poll_time;
 	unsigned long long last_maintenance_time;
@@ -238,6 +242,7 @@ public:
 
 	int pipefd[2];
 	PgSQL_Session_Interrupt_Queue_t sess_intrpt_queue;
+#ifdef PROXYSQL31
 
 	/*
 	 * Adaptive poll timeout.
@@ -285,6 +290,7 @@ public:
 	/// iteration, not per query.
 	void apt_update_window();
 	int run_ComputePollTimeout();
+#endif // PROXYSQL31
 
 	//bool epoll_thread;
 	bool poll_timeout_bool;
@@ -463,9 +469,11 @@ public:
 	 *
 	 */
 	void unregister_session(int);
+#ifdef PROXYSQL31
 	void enter_waiter(PgSQL_Session *sess, unsigned hid);
 	void leave_waiter(PgSQL_Session *sess, bool restore_client = true);
 	void drop_from_poll(PgSQL_Data_Stream *ds);
+#endif // PROXYSQL31
 
 	/**
 	 * @brief Returns a pointer to the `pollfd` structure for a specific data stream.

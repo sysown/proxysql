@@ -16,7 +16,9 @@
 #include "MySQL_Variables.h"
 #include "MySQL_User_Variables.h"
 #include "Base_Session.h"
+#ifdef PROXYSQL31
 #include "PgSQL_Waiter_List.h"
+#endif // PROXYSQL31
 
 #ifndef PROXYJSON
 #define PROXYJSON
@@ -436,10 +438,12 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	bool user_variable_tracking_latched { false };
 	bool user_variable_backend_authoritative { false };
 
+#ifdef PROXYSQL31
 	PgSQL_Waiter_Node waiter_node;
 	bool last_pool_ff{ false };
 	bool last_pool_gtid{ false };
 	int last_pool_max_lag_ms{ -1 };
+#endif // PROXYSQL31
 	Query_Info CurrentQuery;
 	PtrSize_t mirrorPkt;
 	PtrSize_t pkt;

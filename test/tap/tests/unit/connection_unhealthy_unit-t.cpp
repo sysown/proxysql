@@ -111,6 +111,7 @@ static void test_healthy_local_pool(MySQL_Thread &worker) {
 static void test_waiter_local_pool(MySQL_Thread &worker) {
 	MySrvC *server = create_server(105, "waiting-local");
 	MySQL_Connection *connection = create_used_connection(server, true);
+#ifdef PROXYSQL31
 	// A paused waiter stays queued even after the failed-attempt counters expire.
 	MySQL_Session session;
 	session.connections_handler = true;
@@ -119,6 +120,12 @@ static void test_waiter_local_pool(MySQL_Thread &worker) {
 	check_pool_state(server, 0, 1, "queued waiter bypasses the local cache with no recent failed attempts");
 	worker.return_local_connections();
 	worker.leave_waiter(&session, false);
+#else
+	worker.note_pool_attempt(true);
+	worker.push_MyConn_local(connection);
+	check_pool_state(server, 1, 0, "3.0 retains MySQL local caching after a failed checkout");
+	worker.return_local_connections();
+#endif
 }
 
 int main() {
