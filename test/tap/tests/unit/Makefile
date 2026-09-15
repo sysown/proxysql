@@ -605,6 +605,11 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	mcp_client_unit-t \
 	pgsql_waiter_list_unit-t
 
+# Auxiliary idle threads are disabled on macOS and FreeBSD.
+ifeq ($(UNAME_S),Linux)
+UNIT_TESTS += worker_load_unit-t
+endif
+
 ifeq ($(PROXYSQL31),1)
 UNIT_TESTS += caching_sha2_rsa_unit-t hostgroup_pool_stats_unit-t mysql_server_version_by_interface_unit-t
 endif

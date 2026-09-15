@@ -365,7 +365,7 @@ void Base_Thread::ProcessAllSessions_Partition() {
 		//
 		// nth_element partitions the N smallest to the front in O(n) average,
 		// unordered among themselves; sorting just that front slice is
-		// O(N log N). N = 10% of the band: small enough to be cheap even at
+		// O(N log N). N = 20% of the band: small enough to be cheap even at
 		// full band size, large enough that a session just past the cutoff
 		// this pass is very likely inside it on the next one.
 		void** begin = mysql_sessions->pdata + running_end;

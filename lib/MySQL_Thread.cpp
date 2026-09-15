@@ -4415,44 +4415,20 @@ __run_skip_1:
 			unsigned int w=rand_fast()%(GloMTH->num_threads);
 			MySQL_Thread *thr=GloMTH->mysql_threads[w].worker;
 			if (resume_mysql_sessions->len) {
-				// Power of two choices: sample two workers and give the whole
-				// batch to the less loaded one.
-				//
-				// Picking a single worker at random and moving the entire
-				// resume queue there is unstable. Measured on the PgSQL path
-				// under an equivalent workload: 1598 sessions on one worker
-				// and 2 on the other, at 1600 clients. The split is
-				// established while connections ramp up and is never
-				// corrected, because once sessions stop going idle the
-				// migration that would rebalance them stops too.
-				//
-				// A fair coin cannot fix it, and splitting the batch evenly
-				// between two workers was tried and did not either: a worker
-				// exports all of its idle sessions every loop iteration, and a
-				// light worker's loop is fast because poll() and session
-				// processing are both O(sessions), so it re-exports new
-				// arrivals almost immediately. Directing the whole batch at
-				// the lighter worker gives a restoring force rather than
-				// merely matching that bleed. This produced an exact 800/800
-				// split where every other approach produced 1598/2.
-				//
-				// Dirty reads are deliberate: a load hint, not an invariant.
-				// A stale value costs at most one misdirected batch, and
-				// locking to read two counters would cost more than it saves.
-				// resume_mysql_sessions is included because those sessions are
-				// already promised to that worker but not yet absorbed.
+				// Compare a random worker and its neighbor, assigning the whole
+				// batch to the lighter one. Include pending resumptions so later
+				// handoffs account for work already promised to that worker.
+				// The atomic hint can lag active-session changes until the next
+				// worker loop; it never reads another thread's PtrArray directly.
 				unsigned int nthr = GloMTH->num_threads;
 				if (nthr > 1) {
 					unsigned int w2 = (w + 1) % nthr;
 					MySQL_Thread *thr2 = GloMTH->mysql_threads[w2].worker;
-					unsigned int load1 = thr->mysql_sessions->len
-						+ thr->myexchange.resume_mysql_sessions->len;
-					unsigned int load2 = thr2->mysql_sessions->len
-						+ thr2->myexchange.resume_mysql_sessions->len;
-					idle_thread_assigns_sessions_to_worker_thread(
-						(load2 < load1) ? thr2 : thr, 0);
+					unsigned int load1 = thr->worker_load.load(std::memory_order_relaxed);
+					unsigned int load2 = thr2->worker_load.load(std::memory_order_relaxed);
+					idle_thread_assigns_sessions_to_worker_thread((load2 < load1) ? thr2 : thr);
 				} else {
-					idle_thread_assigns_sessions_to_worker_thread(thr, 0);
+					idle_thread_assigns_sessions_to_worker_thread(thr);
 				}
 			} else {
 				idle_thread_check_if_worker_thread_has_unprocess_resumed_sessions_and_signal_it(thr);
@@ -4600,23 +4576,19 @@ void MySQL_Thread::idle_thread_check_if_worker_thread_has_unprocess_resumed_sess
  * 
  * @param thr The worker thread to which idle sessions will be assigned.
  */
-void MySQL_Thread::idle_thread_assigns_sessions_to_worker_thread(MySQL_Thread *thr, unsigned int max_sessions) {
+void MySQL_Thread::idle_thread_assigns_sessions_to_worker_thread(MySQL_Thread *thr) {
 	bool send_signal = false;
 	// send_signal variable will control if we need to signal or not
 	// the worker thread
 	pthread_mutex_lock(&thr->myexchange.mutex_resumes);
 	if (shutdown==0 && thr->shutdown==0)
 	if (resume_mysql_sessions->len) {
-		// max_sessions == 0 means "move everything", preserving the original
-		// behaviour for any caller that does not care.
-		unsigned int to_move = resume_mysql_sessions->len;
-		if (max_sessions && max_sessions < to_move) {
-			to_move = max_sessions;
-		}
-		while (to_move--) {
+		const unsigned int transferred = resume_mysql_sessions->len;
+		while (resume_mysql_sessions->len) {
 			MySQL_Session *mysess=(MySQL_Session *)resume_mysql_sessions->remove_index_fast(0);
 			thr->myexchange.resume_mysql_sessions->add(mysess);
 		}
+		thr->worker_load.fetch_add(transferred, std::memory_order_relaxed);
 		send_signal=true; // signal only if there are sessions to resume
 	}
 	pthread_mutex_unlock(&thr->myexchange.mutex_resumes);
@@ -4707,6 +4679,10 @@ void MySQL_Thread::worker_thread_gets_sessions_from_idle_thread() {
 			mypolls.add(POLLIN, myds->fd, myds, monotonic_time());
 		}
 	}
+	// Refresh even after an empty drain: active sessions may have closed or
+	// moved idle. Keep this under the queue lock so pending additions cannot
+	// be overwritten, and draining does not briefly reduce the load hint.
+	worker_load.store(mysql_sessions->len, std::memory_order_relaxed);
 	pthread_mutex_unlock(&myexchange.mutex_resumes);
 }
 #endif // IDLE_THREADS
@@ -7269,6 +7245,8 @@ void MySQL_Thread::push_MyConn_local(MySQL_Connection *c) {
 	// Bounded local cache: cache 1-in-N releases (N = mysql_threads), push the
 	// rest to the shared HGM pool so peer workers can pick them up.
 	// At N=1 always cache (no sibling to share with).
+	// MySQL keeps this fixed fraction when pool waiters exist; the waiter-
+	// dependent cache bypass currently applies only to PgSQL.
 	// Rationale: avoids the connection-hoarding behavior that starved sibling
 	// workers at high client count, while preserving most of the lock-amortization
 	// benefit at lower client counts.

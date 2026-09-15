@@ -115,6 +115,12 @@ public:
 	bool epoll_thread;
 	int shutdown;
 	PtrArray *mysql_sessions;
+#ifdef IDLE_THREADS
+	// Active sessions at the last worker loop, plus queued resumptions.
+	// Writers hold myexchange.mutex_resumes so a worker snapshot cannot
+	// overwrite a concurrent handoff. Readers use only this atomic hint.
+	std::atomic<unsigned int> worker_load {0};
+#endif // IDLE_THREADS
 	Session_Regex **match_regexes;
 	Base_Thread();
 	~Base_Thread();

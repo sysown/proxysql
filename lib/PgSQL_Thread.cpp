@@ -3509,61 +3509,20 @@ void PgSQL_Thread::run() {
 			unsigned int w = rand_fast() % (GloPTH->num_threads);
 			PgSQL_Thread* thr = GloPTH->pgsql_threads[w].worker;
 			if (resume_mysql_sessions->len) {
-				// Split the batch across two consecutive workers instead of
-				// dropping all of it on one. Handing the whole queue to a
-				// single randomly-chosen worker made the distribution
-				// unstable: measured 1598/2 across two workers at 1600
-				// clients, established during the connection ramp and never
-				// corrected, because migration stops once sessions are no
-				// longer idle.
-				//
-				// This is not affinity -- sessions still go to arbitrary
-				// workers by design. It only stops a single draw from
-				// deciding the fate of an entire batch.
-				//
-				// Cost is one extra mutex pair and one extra pipe write per
-				// handoff. At the observed handoff rate that is far below
-				// measurement noise.
-				//
-				// The two locks are taken sequentially, never held together,
-				// so two idle threads picking overlapping pairs in opposite
-				// order cannot deadlock.
+				// Compare a random worker and its neighbor, assigning the whole
+				// batch to the lighter one. Include pending resumptions so later
+				// handoffs account for work already promised to that worker.
+				// The atomic hint can lag active-session changes until the next
+				// worker loop; it never reads another thread's PtrArray directly.
 				unsigned int nthr = GloPTH->num_threads;
 				if (nthr > 1) {
 					unsigned int w2 = (w + 1) % nthr;
-					PgSQL_Thread* thr2 = GloPTH->pgsql_threads[w2].worker;
-
-					// Power of two choices: sample two workers and give the
-					// whole batch to the less loaded one.
-					//
-					// Splitting the batch evenly was tried first and did not
-					// work: the light worker received its share and re-exported
-					// it within a second, because a worker exports all of its
-					// idle sessions every loop iteration and a light worker
-					// iterates far more often. Measured 1598/2 either way.
-					// Sending everything to the lighter worker gives a
-					// restoring force instead of a fair coin -- it keeps
-					// winning until it is no longer the lighter one.
-					//
-					// Dirty reads are deliberate. This is a load hint, not an
-					// invariant; a stale value costs at most one misdirected
-					// batch, and taking locks to read two counters would cost
-					// more than it could ever save.
-					//
-					// resume_mysql_sessions is included in the estimate because
-					// those sessions are already promised to that worker but
-					// not yet absorbed. Without it, several handoffs in quick
-					// succession all see the same low mysql_sessions->len and
-					// pile onto the same worker.
-					unsigned int load1 = thr->mysql_sessions->len
-						+ thr->myexchange.resume_mysql_sessions->len;
-					unsigned int load2 = thr2->mysql_sessions->len
-						+ thr2->myexchange.resume_mysql_sessions->len;
-
-					idle_thread_assigns_sessions_to_worker_thread(
-						(load2 < load1) ? thr2 : thr, 0);
+					PgSQL_Thread *thr2 = GloPTH->pgsql_threads[w2].worker;
+					unsigned int load1 = thr->worker_load.load(std::memory_order_relaxed);
+					unsigned int load2 = thr2->worker_load.load(std::memory_order_relaxed);
+					idle_thread_assigns_sessions_to_worker_thread((load2 < load1) ? thr2 : thr);
 				} else {
-					idle_thread_assigns_sessions_to_worker_thread(thr, 0);
+					idle_thread_assigns_sessions_to_worker_thread(thr);
 				}
 			}
 			else {
@@ -3666,24 +3625,19 @@ void PgSQL_Thread::idle_thread_check_if_worker_thread_has_unprocess_resumed_sess
 	pthread_mutex_unlock(&thr->myexchange.mutex_resumes);
 }
 
-void PgSQL_Thread::idle_thread_assigns_sessions_to_worker_thread(PgSQL_Thread * thr, unsigned int max_sessions) {
+void PgSQL_Thread::idle_thread_assigns_sessions_to_worker_thread(PgSQL_Thread * thr) {
 	bool send_signal = false;
 	// send_signal variable will control if we need to signal or not
 	// the worker thread
 	pthread_mutex_lock(&thr->myexchange.mutex_resumes);
 	if (shutdown == 0 && thr->shutdown == 0)
 		if (resume_mysql_sessions->len) {
-			// max_sessions == 0 means "move everything", preserving the
-			// original behaviour; a bound lets one batch be split across
-			// several workers instead of landing entirely on one.
-			unsigned int to_move = resume_mysql_sessions->len;
-			if (max_sessions && max_sessions < to_move) {
-				to_move = max_sessions;
-			}
-			while (to_move--) {
+			const unsigned int transferred = resume_mysql_sessions->len;
+			while (resume_mysql_sessions->len) {
 				PgSQL_Session* mysess = (PgSQL_Session*)resume_mysql_sessions->remove_index_fast(0);
 				thr->myexchange.resume_mysql_sessions->add(mysess);
 			}
+			thr->worker_load.fetch_add(transferred, std::memory_order_relaxed);
 			send_signal = true; // signal only if there are sessions to resume
 		}
 	pthread_mutex_unlock(&thr->myexchange.mutex_resumes);
@@ -3732,6 +3686,10 @@ void PgSQL_Thread::worker_thread_gets_sessions_from_idle_thread() {
 			mypolls.add(POLLIN, myds->fd, myds, monotonic_time());
 		}
 	}
+	// Refresh even after an empty drain: active sessions may have closed or
+	// moved idle. Keep this under the queue lock so pending additions cannot
+	// be overwritten, and draining does not briefly reduce the load hint.
+	worker_load.store(mysql_sessions->len, std::memory_order_relaxed);
 	pthread_mutex_unlock(&myexchange.mutex_resumes);
 }
 #endif // IDLE_THREADS
@@ -4179,15 +4137,6 @@ void PgSQL_Thread::process_all_sessions() {
 			}
 		}
 	}
-	// TEMPORARY INSTRUMENTATION -- remove before merge. Counts how many
-	// waiter-list sessions the rescan actually finds and how many it manages
-	// to serve, so "no difference" can be attributed to the right cause:
-	// never firing, finding no candidates, or finding them and still getting
-	// no connection. vanilla_breaks is per-HG early exits on a vanilla miss.
-	unsigned int rescan_cand = 0;
-	unsigned int rescan_served = 0;
-	unsigned int rescan_vanilla_breaks = 0;
-
 	if (!waiter_lists.empty()) {
 		waiter_lists.for_each_hid([&](unsigned hid, PgSQL_Waiter_Node *head) {
 			(void)hid;
@@ -4199,7 +4148,6 @@ void PgSQL_Thread::process_all_sessions() {
 					n = next;
 					continue;
 				}
-				rescan_cand++;
 				sess->to_process = 1;
 				rc = sess->handler();
 				const bool got = sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn;
@@ -4208,9 +4156,7 @@ void PgSQL_Thread::process_all_sessions() {
 					PgSQL_Data_Stream *bds = sess->mybe->server_myds;
 					if (bds && bds->fd >= 0 && bds->poll_fds_idx < 0)
 						mypolls.add(POLLIN | POLLOUT, bds->fd, bds, curtime);
-					rescan_served++;
 				} else if (vanilla_pool_checkout(sess->last_pool_ff, sess->last_pool_gtid ? "" : nullptr, sess->last_pool_max_lag_ms)) {
-					rescan_vanilla_breaks++;
 					break;
 				}
 				if (rc == -1 || sess->killed == true) {
@@ -4250,13 +4196,6 @@ void PgSQL_Thread::process_all_sessions() {
 				delete sess;
 			}
 		}
-	}
-
-	// TEMPORARY INSTRUMENTATION -- one line per second (maintenance tick).
-	if (maintenance_loop) {
-		proxy_info("PGSQL_RESCAN thr=%p sessions=%u nulls=%u attempts=%u cand=%u served=%u vanilla_breaks=%u\n",
-			this, mysql_sessions->len, partition_pool_nulls, partition_pool_attempts,
-			rescan_cand, rescan_served, rescan_vanilla_breaks);
 	}
 
 	if (maintenance_loop) {
