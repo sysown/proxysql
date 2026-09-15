@@ -81,3 +81,4 @@ WHERE username = 'target_service_user';
 Test application pool connectivity. HikariCP / Spring Boot connection handshakes will now succeed immediately.
 
 Signed-off-by: Oluwaseun Oladele <seunoladele25@gmail.com>
+
