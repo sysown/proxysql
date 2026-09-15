@@ -547,7 +547,7 @@ $(PROXYSQL_BINARY): $(LIBPROXYSQLAR)
 
 UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	cacert_load_and_verify_duration_parser_unit-t \
-	query_cache_unit-t query_processor_unit-t digest_stats_unit-t \
+	query_cache_unit-t pgsql_query_cache_allocation_unit-t query_processor_unit-t digest_stats_unit-t \
 	protocol_unit-t auth_unit-t connection_pool_unit-t \
 	rule_matching_unit-t hostgroups_unit-t monitor_health_unit-t \
 	pgsql_command_complete_unit-t \
@@ -1246,6 +1246,9 @@ endif
 endif
 
 vendored_openssl_version_unit-t: private OPT += -DPROXYSQL_VENDORED_OPENSSL_VERSION=\"$(OPENSSL_VERSION)\"
+
+# This test includes the cache source to inject allocator failure locally.
+pgsql_query_cache_allocation_unit-t: $(PROXYSQL_PATH)/lib/PgSQL_Query_Cache.cpp
 
 # Pattern rule: all unit tests use the same compile + link flags.
 # Each test binary is built from its .cpp source, linked against
