@@ -136,9 +136,68 @@ int main() {
 		BAIL_OUT("Reserved test rule_id %d already exists", rule_id);
 	}
 	query(admin, "INSERT INTO mysql_query_rules(rule_id,active,match_pattern,cache_ttl,cache_empty_result,apply) "
-		"VALUES(971003,1,'^SELECT /[*] ps_cache_proto [*]/',1000,1,1)");
+		"VALUES(971003,1,'^SELECT /[*] ps_cache_proto [*]/',60000,1,1)");
 	query(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 	MYSQL* mysql = connect(cl);
+	// These locking clauses evade the legacy end-of-string heuristic. Neither
+	// the first execution nor a repeat may be admitted to the prepared cache.
+	for (const std::string& suffix : {
+		std::string(" FOR UPDATE;"),
+		std::string(" FOR UPDATE /*") + std::string(160, 'x') + "*/",
+		std::string(" FOR\nUPDATE;"),
+		std::string(" FOR/**/UPDATE;"),
+		std::string(" LOCK IN SHARE MODE;"),
+		std::string(" /*!50000 FOR UPDATE */")}) {
+		const std::string sql = "SELECT /* ps_cache_proto */ 23" + suffix;
+		MYSQL_STMT* locking = prepare(mysql, sql.c_str());
+		const long long h = hits(admin), s = inserts(admin);
+		const long long b = scalar(admin, "SELECT Variable_Value FROM stats_mysql_global WHERE Variable_Name='Com_backend_stmt_execute'");
+		execute(locking, "23", "locking SELECT first execution");
+		execute(locking, "23", "locking SELECT repeat");
+		ok(hits(admin) == h && inserts(admin) == s, "Locking clause bypasses cache: %s", suffix.c_str());
+		ok(scalar(admin, "SELECT Variable_Value FROM stats_mysql_global WHERE Variable_Name='Com_backend_stmt_execute'") == b + 2,
+			"Both locking SELECT executions reach the backend");
+		mysql_stmt_close(locking);
+	}
+	// A normal parameterized read can depend on tracked state without naming
+	// a session variable. FROM_UNIXTIME must not reuse another time zone's row.
+	MYSQL* tz1 = connect(cl);
+	MYSQL* tz2 = connect(cl);
+	query(tz1, "SET time_zone='+00:00'");
+	query(tz2, "SET time_zone='+01:00'");
+	// MySQL and MariaDB expose different fractional-second metadata for a
+	// parameterized FROM_UNIXTIME; use a fixed format to test time zones only.
+	const char* timezone_sql = "SELECT /* ps_cache_proto */ DATE_FORMAT(FROM_UNIXTIME(?), '%Y-%m-%d %H:%i:%s')";
+	MYSQL_STMT* utc = prepare(tz1, timezone_sql);
+	MYSQL_STMT* east = prepare(tz2, timezone_sql);
+	int epoch = 0;
+	bind(utc, MYSQL_TYPE_LONG, &epoch);
+	bind(east, MYSQL_TYPE_LONG, &epoch);
+	cached_repeat(admin, utc, "1970-01-01 00:00:00", "UTC partition");
+	cached_repeat(admin, east, "1970-01-01 01:00:00", "Different-session time zone partition");
+	query(tz1, "SET time_zone='+02:00'");
+	cached_repeat(admin, utc, "1970-01-01 02:00:00", "Changed time zone on existing statement");
+	query(tz2, "SET time_zone='+02:00'");
+	long long shared_hits = hits(admin);
+	execute(east, "1970-01-01 02:00:00", "Equivalent tracked state shares entries");
+	ok(hits(admin) == shared_hits + 1, "Equivalent tracked state shares the warmed entry");
+	// SQL modes also change ordinary expression semantics at execution time.
+	query(tz1, "SET sql_mode=''");
+	MYSQL_STMT* mode = prepare(tz1, "SELECT /* ps_cache_proto */ CAST(? AS UNSIGNED)-1");
+	int one = 1; bind(mode, MYSQL_TYPE_LONG, &one);
+	cached_repeat(admin, mode, "0", "Default subtraction mode");
+	query(tz1, "SET sql_mode='NO_UNSIGNED_SUBTRACTION'");
+	long long mode_hits = hits(admin);
+	execute(mode, "0", "Changed sql_mode must miss even when row bytes coincide");
+	ok(hits(admin) == mode_hits, "sql_mode partitions prepared cache identity");
+	// Result encoding must not leak across sessions either.
+	query(tz1, "SET character_set_results=utf8mb4");
+	MYSQL_STMT* encoding = prepare(tz1, "SELECT /* ps_cache_proto */ CONVERT(0xC3A9 USING utf8mb4)");
+	cached_repeat(admin, encoding, std::string("\xC3\xA9", 2), "UTF-8 result encoding");
+	query(tz1, "SET character_set_results=latin1");
+	cached_repeat(admin, encoding, std::string("\xE9", 1), "Changed result encoding");
+	for (MYSQL_STMT* s : {utc, east, mode, encoding}) mysql_stmt_close(s);
+	mysql_close(tz1); mysql_close(tz2);
 	MYSQL_STMT* stmt = prepare(mysql, "SELECT /* ps_cache_proto */ CAST(? AS CHAR)");
 	int integer = 1065353216; // Same wire bytes as float 1.0.
 	bind(stmt, MYSQL_TYPE_LONG, &integer);
@@ -322,10 +381,17 @@ int main() {
 	mysql_stmt_close(raw_stmt);
 	mysql_close(raw);
 
+	query(admin, "UPDATE mysql_query_rules SET cache_ttl=100 WHERE rule_id=971003");
+	query(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
+	MYSQL_STMT* expiry = prepare(mysql, "SELECT /* ps_cache_proto */ 971003");
+	execute(expiry, "971003", "Warm fresh entry for TTL expiration");
 	before_hits = hits(admin);
-	usleep(1200000);
-	execute(zero, "17", "TTL expiration");
+	usleep(300000);
+	execute(expiry, "971003", "TTL expiration");
 	ok(hits(admin) == before_hits, "expired binary result is a miss");
+	mysql_stmt_close(expiry);
+	query(admin, "UPDATE mysql_query_rules SET cache_ttl=60000 WHERE rule_id=971003");
+	query(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
 	query(mysql, "BEGIN");
 	before_hits = hits(admin);

@@ -4450,7 +4450,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (qpo->cache_ttl > 0 && execute_bytes[9] == 0 && iterations == 1
 			&& !SLDH->has_data(client_stmt_id) && autocommit && NumActiveTransactions() == 0
 			&& locked_on_hostgroup < 0 && !qpo->min_gtid && qpo->max_lag_ms < 0 && qpo->gtid_from_hostgroup < 0
-			&& stmt_info->is_select_NOT_for_update) {
+			&& stmt_info->is_select_NOT_for_update && !stmt_info->has_cache_locking_tokens) {
 			// The global statement hash includes exact SQL, username and schema.
 			// Skip packet header, command and client-local statement ID. All other
 			// execute bytes participate unchanged, plus the effective type block.
@@ -4458,7 +4458,18 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			hash.Init(stmt_info->hash, pkt.size);
 			hash.Update(execute_bytes + 9, pkt.size - 9);
 			if (effective_types) hash.Update(effective_types, size_t(stmt_info->num_params) * 2);
-			CurrentQuery.stmt_cache_key[0] = 0x5053434143484500ULL; // Binary cache domain, not SQL.
+			// Parameter interpretation and result bytes also depend on tracked
+			// session settings. Hash values, not their 32-bit comparison hashes.
+			// Only the low-index variables have configured defaults; dynamic
+			// variables above that boundary remain unset until explicitly tracked.
+			for (unsigned int i = 0; i < SQL_NAME_LAST_HIGH_WM; ++i) {
+				const char* value = client_myds->myconn->variables[i].value;
+				if (!value && i < SQL_NAME_LAST_LOW_WM) value = mysql_thread___default_variables[i];
+				const size_t length = value ? strlen(value) + 1 : 0;
+				hash.Update(&length, sizeof(length));
+				if (length) hash.Update(value, length);
+			}
+			CurrentQuery.stmt_cache_key[0] = 0x5053434143484501ULL; // Binary cache domain/version, not SQL.
 			CurrentQuery.stmt_cache_key[1] = current_hostgroup;
 			hash.Final(&CurrentQuery.stmt_cache_key[2], &CurrentQuery.stmt_cache_key[3]);
 			CurrentQuery.stmt_cache_valid = true;

@@ -19,6 +19,25 @@ extern MySQL_STMT_Manager_v14 *GloMyStmt;
 
 const int PS_GLOBAL_STATUS_FIELD_NUM = 9;
 
+static bool has_cache_locking_tokens(const char* query, size_t length) {
+	// Do not depend on a truncated digest or the routing heuristic's suffix
+	// check. Scan the entire SQL once, including executable comments. Quoted
+	// or commented FOR/LOCK tokens can cause safe false misses; interpreting
+	// their quoting would depend on SQL mode and server version.
+	auto word_byte = [](unsigned char c) {
+		return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+	};
+	for (size_t i = 0; i < length;) {
+		if (!word_byte(query[i])) { ++i; continue; }
+		const size_t start = i;
+		while (i < length && word_byte(query[i])) ++i;
+		const size_t size = i - start;
+		if ((size == 3 && strncasecmp(query + start, "FOR", 3) == 0) ||
+			(size == 4 && strncasecmp(query + start, "LOCK", 4) == 0)) return true;
+	}
+	return false;
+}
+
 static uint64_t stmt_compute_hash(char *user,
                                   char *schema, char *query,
                                   unsigned int query_length) {
@@ -175,6 +194,7 @@ MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint64_t id,
 	}
 
 	is_select_NOT_for_update = false;
+	has_cache_locking_tokens = ::has_cache_locking_tokens(q, ql);
 	{  // see bug #899 . Most of the code is borrowed from
 	   // Query_Info::is_select_NOT_for_update()
 		if (ql >= 7) {

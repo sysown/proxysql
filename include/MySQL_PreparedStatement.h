@@ -68,6 +68,8 @@ class MySQL_STMT_Global_info {
 //		int delay;
 //	} properties;
 	bool is_select_NOT_for_update;
+	// Conservative full-SQL guard for result caching, separate from routing.
+	bool has_cache_locking_tokens;
 	MYSQL_BIND **params; // seems unused (?)
 	MySQL_STMT_Global_info(uint64_t id, char *u, char *s, char *q, unsigned int ql, char *fc, MYSQL_STMT *stmt, uint64_t _h);
 	void update_metadata(MYSQL_STMT *stmt);

@@ -9,6 +9,11 @@ bool PgSQL_Query_Cache::set(uint64_t user_hash, const unsigned char* kp, uint32_
 	uint64_t rows_sent, uint64_t affected_rows) {
 
 	PgSQL_QC_entry_t* entry = (PgSQL_QC_entry_t*)malloc(sizeof(PgSQL_QC_entry_t)); 
+	if (entry == nullptr) {
+		// set() takes ownership of the value even when admission fails.
+		free(vp);
+		return false;
+	}
 	entry->rows_sent = rows_sent;
 	entry->affected_rows = affected_rows;
 	return Query_Cache::set(entry, user_hash, kp, kl, vp, vl, create_ms, curtime_ms, expire_ms);

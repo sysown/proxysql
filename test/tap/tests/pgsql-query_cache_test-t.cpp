@@ -955,8 +955,7 @@ void execute_query_cache_notice_test(PGconn* admin_conn, PGconn* conn) {
 }
 
 void execute_prepared_test(PGconn* admin_conn, PGconn* conn) {
-    // 1) Enable query-cache-for-SELECT rules (same as basic test) so the system *would* cache
-    //    simple queries -- but extended query protocol should bypass cache.
+    // 1) Enable caching for SELECTs in both simple and supported extended flows.
     if (!executeQueries(admin_conn, {
         "DELETE FROM pgsql_query_rules",
         "INSERT INTO pgsql_query_rules (rule_id,active,match_digest,cache_ttl) VALUES (2,1,'^SELECT',4000)",
