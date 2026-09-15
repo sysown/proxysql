@@ -2048,7 +2048,13 @@ map<string, double> parse_prometheus_metrics(const string& s) {
 	for (const string ln : lines) {
 		if (ln.empty() == false && ln[0] != '#') {
 			pair<string, string> p_line_val { split_line_by_last(ln, ' ') };
-			metrics_map.insert({p_line_val.first, stod(p_line_val.second)});
+			// Strip labels from metric name (e.g., "metric{label=\"value\"}" -> "metric")
+			string metric_name = p_line_val.first;
+			size_t brace_pos = metric_name.find('{');
+			if (brace_pos != string::npos) {
+				metric_name = metric_name.substr(0, brace_pos);
+			}
+			metrics_map.insert({metric_name, stod(p_line_val.second)});
 		}
 	}
 
