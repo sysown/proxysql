@@ -1,7 +1,9 @@
 # MySQL prepared-statement result cache prototype
 
 This prototype extends the existing MySQL query cache to native
-`COM_STMT_EXECUTE`. PostgreSQL is unchanged. Enable caching with an ordinary
+`COM_STMT_EXECUTE`. The companion PostgreSQL implementation is described in
+[PostgreSQL extended-protocol query cache](pgsql-extended-query-cache-prototype.md).
+Enable caching with an ordinary
 `mysql_query_rules.cache_ttl` rule matching the prepared SQL; no new variable or
 cache backend is introduced.
 
