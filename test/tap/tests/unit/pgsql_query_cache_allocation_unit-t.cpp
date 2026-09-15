@@ -4,6 +4,7 @@
  * Allocator interception is confined to the included production source.
  */
 #include "tap.h"
+#include "test_globals.h"
 #include "test_init.h"
 #include "proxysql.h"
 #include "cpp.h"

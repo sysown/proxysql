@@ -68,7 +68,7 @@ struct Reply {
 	std::vector<uint16_t> formats;
 	char state = 0;
 };
-Reply exchange(PGconn* c, const Bytes& bytes) {
+Reply send_extended_messages_and_read_reply(PGconn* c, const Bytes& bytes) {
 	size_t off = 0;
 	while (off < bytes.size()) { ssize_t n = send(PQsocket(c), bytes.data()+off, bytes.size()-off, MSG_NOSIGNAL);
 		if (n <= 0) BAIL_OUT("Socket write failed"); off += n; }
@@ -98,7 +98,7 @@ Bytes parse(const std::string& name, const std::string& sql, uint32_t oid = 25) 
 	Bytes b = str(name) + str(sql); u16(b, 1); u32(b, oid); return msg('P', b);
 }
 void prepare(PGconn* c, const std::string& name, const std::string& sql, uint32_t oid = 25) {
-	Reply r = exchange(c, parse(name, sql, oid) + msg('S'));
+	Reply r = send_extended_messages_and_read_reply(c, parse(name, sql, oid) + msg('S'));
 	if (r.types != "1Z") BAIL_OUT("Prepare response: %s", r.types.c_str());
 }
 Bytes execution(const std::string& name, const Bytes& value, bool describe = true,
@@ -118,9 +118,9 @@ void row(const Reply& r, const Bytes& value, bool describe = true, bool is_null 
 }
 void cached(PGconn* a, PGconn* c, const Bytes& request, const Bytes& value,
 	bool describe = true, bool is_null = false, int format = 0) {
-	row(exchange(c, request + msg('S')), value, describe, is_null, format);
+	row(send_extended_messages_and_read_reply(c, request + msg('S')), value, describe, is_null, format);
 	long long h = hits(a), b = backend_queries(a);
-	row(exchange(c, request + msg('S')), value, describe, is_null, format);
+	row(send_extended_messages_and_read_reply(c, request + msg('S')), value, describe, is_null, format);
 	ok(hits(a) == h + 1, "Repeated execution hits cache");
 	ok(backend_queries(a) == b, "Hit executes no backend query");
 }
@@ -136,13 +136,13 @@ int main() {
 	PGconn* c = connect();
 	const char* sql = "SELECT /*ext_cache*/ $1::text";
 	prepare(c, "first", sql);
-	row(exchange(c, execution("first", "hello") + msg('S')), "hello");
+	row(send_extended_messages_and_read_reply(c, execution("first", "hello") + msg('S')), "hello");
 	long long before = hits(admin);
-	row(exchange(c, execution("first", "hello") + msg('S')), "hello");
+	row(send_extended_messages_and_read_reply(c, execution("first", "hello") + msg('S')), "hello");
 	ok(hits(admin) == before + 1, "Repeated extended execution hits the cache");
 	PGconn* other = connect(); prepare(other, "different_name", sql);
 	before = hits(admin);
-	row(exchange(other, execution("different_name", "hello") + msg('S')), "hello");
+	row(send_extended_messages_and_read_reply(other, execution("different_name", "hello") + msg('S')), "hello");
 	ok(hits(admin) == before + 1, "Cache entry shared across connections and statement names");
 	ok(metric(admin, "Query_Cache_count_SET") > 0, "Extended execution populated the cache");
 	// Removing response-shape discrimination would replay an unsolicited T.
@@ -165,24 +165,24 @@ int main() {
 	cached(admin, c, execution("bigtype", "42"), "bigint");
 	// Explicitly set session values must partition cached output.
 	prepare(c, "date", "SELECT /*ext_cache*/ $1::date", 1082);
-	Reply r = exchange(c, msg('Q', str("SET DateStyle='ISO, MDY'")));
+	Reply r = send_extended_messages_and_read_reply(c, msg('Q', str("SET DateStyle='ISO, MDY'")));
 	ok(r.types == "SCZ" || r.types == "CZ", "Set DateStyle");
 	cached(admin, c, execution("date", "2024-03-04"), "2024-03-04");
-	exchange(c, msg('Q', str("SET DateStyle='SQL, DMY'")));
+	send_extended_messages_and_read_reply(c, msg('Q', str("SET DateStyle='SQL, DMY'")));
 	cached(admin, c, execution("date", "2024-03-04"), "04/03/2024");
 	prepare(c, "schema", "SELECT /*ext_cache*/ current_schema()::text || $1");
-	exchange(c, msg('Q', str("SET search_path=public")));
+	send_extended_messages_and_read_reply(c, msg('Q', str("SET search_path=public")));
 	cached(admin, c, execution("schema", "!"), "public!");
-	exchange(c, msg('Q', str("SET search_path=pg_catalog")));
+	send_extended_messages_and_read_reply(c, msg('Q', str("SET search_path=pg_catalog")));
 	cached(admin, c, execution("schema", "!"), "pg_catalog!");
 	// Fresh connection shares already-warmed original entries.
 	before = hits(admin);
-	row(exchange(other, execution("different_name", "hello") + msg('S')), "hello");
+	row(send_extended_messages_and_read_reply(other, execution("different_name", "hello") + msg('S')), "hello");
 	ok(hits(admin) == before + 1, "Other session retains its original cache partition");
 	// Database identity must also partition identical SQL/Bind bytes.
 	PGconn* another_db = connect(false, "template1"); prepare(another_db, "first", sql);
 	before = hits(admin);
-	row(exchange(another_db, execution("first", "hello") + msg('S')), "hello");
+	row(send_extended_messages_and_read_reply(another_db, execution("first", "hello") + msg('S')), "hello");
 	ok(hits(admin) == before, "A different database cannot consume the warmed entry");
 	cached(admin, another_db, execution("first", "hello"), "hello");
 	PQfinish(another_db);
@@ -206,28 +206,28 @@ int main() {
 	before = hits(admin);
 	// Cursor-limited and multi-execute frames must not consume warmed entries.
 	before = hits(admin);
-	r = exchange(other, execution("different_name", "hello", true, 0, 0, false, 1) + msg('S'));
+	r = send_extended_messages_and_read_reply(other, execution("different_name", "hello", true, 0, 0, false, 1) + msg('S'));
 	ok(hits(admin) == before, "Nonzero Execute row limit bypasses cache");
-	r = exchange(other, execution("different_name", "hello") + execution("different_name", "hello") + msg('S'));
+	r = send_extended_messages_and_read_reply(other, execution("different_name", "hello") + execution("different_name", "hello") + msg('S'));
 	ok(r.types == "2TDC2TDCZ" && r.rows.size() == 2, "Multi-execute cycle preserves complete response sequence");
 	ok(hits(admin) == before, "All executions in multi-execute cycle bypass cache");
-	r = exchange(other, parse("bundled", sql) + execution("bundled", "hello") + msg('S'));
+	r = send_extended_messages_and_read_reply(other, parse("bundled", sql) + execution("bundled", "hello") + msg('S'));
 	ok(r.types == "12TDCZ", "Bundled Parse/Bind/Execute remains valid");
 	ok(hits(admin) == before, "Bundled Parse bypasses cache");
 	// An explicit transaction must neither use nor populate cache entries.
-	exchange(other, msg('Q', str("BEGIN")));
-	r = exchange(other, execution("different_name", "hello") + msg('S'));
+	send_extended_messages_and_read_reply(other, msg('Q', str("BEGIN")));
+	r = send_extended_messages_and_read_reply(other, execution("different_name", "hello") + msg('S'));
 	ok(r.types == "2TDCZ" && r.state == 'T', "Transactional execution returns transaction state");
 	ok(hits(admin) == before, "Transaction bypasses warmed entry");
-	exchange(other, msg('Q', str("ROLLBACK")));
+	send_extended_messages_and_read_reply(other, msg('Q', str("ROLLBACK")));
 	// A backend error cannot become a cached result; Sync must recover.
 	long long sets = metric(admin, "Query_Cache_count_SET");
-	r = exchange(c, execution("integer", "not-an-integer") + msg('S'));
+	r = send_extended_messages_and_read_reply(c, execution("integer", "not-an-integer") + msg('S'));
 	ok(r.types.find('E') != Bytes::npos && r.state == 'I', "Invalid parameter reports error and recovers at Sync");
 	ok(metric(admin, "Query_Cache_count_SET") == sets, "Error does not populate cache");
 	cached(admin, c, execution("integer", "42"), "42");
 	// Closing/replacing names must not make old cached SQL visible.
-	r = exchange(other, msg('C', "S" + str("different_name")) + msg('S'));
+	r = send_extended_messages_and_read_reply(other, msg('C', "S" + str("different_name")) + msg('S'));
 	ok(r.types == "3Z", "Close statement has exactly one CloseComplete");
 	prepare(other, "different_name", "SELECT /*ext_cache*/ upper($1::text)");
 	cached(admin, other, execution("different_name", "hello"), "HELLO");
@@ -241,44 +241,44 @@ int main() {
 	command(admin, "UPDATE pgsql_query_rules SET cache_empty_result=0 WHERE rule_id=971004");
 	command(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
 	sets = metric(admin, "Query_Cache_count_SET");
-	r = exchange(c, execution("empty", "empty") + msg('S'));
+	r = send_extended_messages_and_read_reply(c, execution("empty", "empty") + msg('S'));
 	ok(r.types == "2TCZ" && r.rows.empty(), "Empty result has metadata but no rows");
 	ok(metric(admin, "Query_Cache_count_SET") == sets, "cache_empty_result=0 prevents insertion");
 	command(admin, "UPDATE pgsql_query_rules SET cache_empty_result=1 WHERE rule_id=971004");
 	command(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
 	for (bool describe : {true, false}) {
-		exchange(c, execution("empty", "empty", describe) + msg('S'));
+		send_extended_messages_and_read_reply(c, execution("empty", "empty", describe) + msg('S'));
 		before = hits(admin);
-		r = exchange(c, execution("empty", "empty", describe) + msg('S'));
+		r = send_extended_messages_and_read_reply(c, execution("empty", "empty", describe) + msg('S'));
 		ok(r.types == (describe ? "2TCZ" : "2CZ") && r.rows.empty(), "Cached empty result preserves response shape");
 		ok(hits(admin) == before + 1, "cache_empty_result=1 caches empty execution with/without Describe");
 	}
 	// Simple and extended entries for identical zero-parameter SQL cannot mix.
 	const std::string zero_sql = "SELECT /*ext_cache*/ 'zero'::text";
 	Bytes zero_parse = str("zero") + str(zero_sql); u16(zero_parse, 0);
-	r = exchange(c, msg('P', zero_parse) + msg('S'));
+	r = send_extended_messages_and_read_reply(c, msg('P', zero_parse) + msg('S'));
 	ok(r.types == "1Z", "Prepare zero-parameter statement");
 	Bytes zero_bind = str("") + str("zero"); u16(zero_bind, 0); u16(zero_bind, 0); u16(zero_bind, 0);
 	Bytes zero_execute = str(""); u32(zero_execute, 0);
 	Bytes zero_request = msg('B', zero_bind) + msg('D', "P" + str("")) + msg('E', zero_execute);
 	cached(admin, c, zero_request, "zero");
 	before = hits(admin);
-	r = exchange(c, msg('Q', str(zero_sql)));
+	r = send_extended_messages_and_read_reply(c, msg('Q', str(zero_sql)));
 	ok(r.types == "TDCZ" && r.rows == std::vector<Bytes>{"zero"}, "Simple query gets its own response shape");
 	ok(hits(admin) == before, "Simple query does not consume extended entry");
-	r = exchange(c, msg('Q', str(zero_sql)));
+	r = send_extended_messages_and_read_reply(c, msg('Q', str(zero_sql)));
 	ok(r.types == "TDCZ" && hits(admin) == before + 1, "Existing simple query cache still hits");
 	// Pinned state must bypass entries warmed by an ordinary session.
 	PGconn* pinned = connect(); prepare(pinned, "pinned", sql);
-	exchange(pinned, msg('Q', str("SET ext_cache.flag='private'")));
+	send_extended_messages_and_read_reply(pinned, msg('Q', str("SET ext_cache.flag='private'")));
 	before = hits(admin); sets = metric(admin, "Query_Cache_count_SET");
-	row(exchange(pinned, execution("pinned", "hello") + msg('S')), "hello");
+	row(send_extended_messages_and_read_reply(pinned, execution("pinned", "hello") + msg('S')), "hello");
 	ok(hits(admin) == before && metric(admin, "Query_Cache_count_SET") == sets, "Untracked SET bypasses lookup and insertion");
 	PQfinish(pinned);
 	pinned = connect(); prepare(pinned, "pinned", sql);
-	exchange(pinned, msg('Q', str("CREATE TEMP TABLE ext_cache_temp(v text)")));
+	send_extended_messages_and_read_reply(pinned, msg('Q', str("CREATE TEMP TABLE ext_cache_temp(v text)")));
 	before = hits(admin); sets = metric(admin, "Query_Cache_count_SET");
-	row(exchange(pinned, execution("pinned", "hello") + msg('S')), "hello");
+	row(send_extended_messages_and_read_reply(pinned, execution("pinned", "hello") + msg('S')), "hello");
 	ok(hits(admin) == before && metric(admin, "Query_Cache_count_SET") == sets, "Temporary-table session bypasses lookup and insertion");
 	PQfinish(pinned);
 	// A SELECT may introduce session state on its first execution. It must
@@ -286,34 +286,34 @@ int main() {
 	pinned = connect();
 	prepare(pinned, "into", "SELECT /*ext_cache*/ $1::text AS v INTO TEMP TABLE ext_cache_select_into");
 	sets = metric(admin, "Query_Cache_count_SET");
-	r = exchange(pinned, execution("into", "value", false) + msg('S'));
+	r = send_extended_messages_and_read_reply(pinned, execution("into", "value", false) + msg('S'));
 	ok(r.types == "2CZ", "SELECT INTO returns command completion, not a rowset");
 	ok(metric(admin, "Query_Cache_count_SET") == sets, "Command-only SELECT INTO is not admitted without Describe");
-	exchange(pinned, msg('Q', str("DROP TABLE IF EXISTS pg_temp.ext_cache_select_into")));
+	send_extended_messages_and_read_reply(pinned, msg('Q', str("DROP TABLE IF EXISTS pg_temp.ext_cache_select_into")));
 	PQfinish(pinned);
 	pinned = connect();
 	prepare(pinned, "lock", "SELECT /*ext_cache*/ pg_advisory_lock($1)", 20);
 	sets = metric(admin, "Query_Cache_count_SET");
-	r = exchange(pinned, execution("lock", "9710041667") + msg('S'));
+	r = send_extended_messages_and_read_reply(pinned, execution("lock", "9710041667") + msg('S'));
 	ok(r.types == "2TDCZ", "Advisory-lock SELECT executes normally");
 	ok(metric(admin, "Query_Cache_count_SET") == sets, "SELECT introducing session state is not admitted");
-	exchange(pinned, msg('Q', str("SELECT pg_advisory_unlock_all()")));
+	send_extended_messages_and_read_reply(pinned, msg('Q', str("SELECT pg_advisory_unlock_all()")));
 	PQfinish(pinned);
 	// Rule disable and expiration retain their existing meaning.
 	command(admin, "UPDATE pgsql_query_rules SET active=0 WHERE rule_id=971004");
 	command(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
 	before = hits(admin); long long b = backend_queries(admin);
-	exchange(c, execution("integer", "42") + msg('S'));
+	send_extended_messages_and_read_reply(c, execution("integer", "42") + msg('S'));
 	diag("Disabled rule: hit delta=%lld, backend query delta=%lld", hits(admin)-before, backend_queries(admin)-b);
 	// A miss can additionally prepare the statement on a different pooled
 	// backend, so require backend work, not exactly one pool query.
 	ok(hits(admin) == before && backend_queries(admin) > b, "Disabled cache rule bypasses warmed entry");
 	command(admin, "UPDATE pgsql_query_rules SET active=1,cache_ttl=50 WHERE rule_id=971004");
 	command(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
-	exchange(c, execution("integer", "43") + msg('S'));
+	send_extended_messages_and_read_reply(c, execution("integer", "43") + msg('S'));
 	before = hits(admin); b = backend_queries(admin);
 	usleep(150000);
-	row(exchange(c, execution("integer", "43") + msg('S')), "43");
+	row(send_extended_messages_and_read_reply(c, execution("integer", "43") + msg('S')), "43");
 	ok(hits(admin) == before && backend_queries(admin) > b, "Expired extended entry executes on backend");
 	// Force an extended result to be transferred in pieces. A cached suffix
 	// would silently lose rows on the next execution.
@@ -329,7 +329,7 @@ int main() {
 	prepare(c, "stream", "SELECT /*ext_cache*/ repeat($1::text,64) FROM generate_series(1,40000)");
 	before = hits(admin); sets = metric(admin, "Query_Cache_count_SET");
 	for (int i = 0; i < 2; ++i) {
-		r = exchange(c, execution("stream", "x") + msg('S'));
+		r = send_extended_messages_and_read_reply(c, execution("stream", "x") + msg('S'));
 		ok(r.types == "2T" + Bytes(40000, 'D') + "CZ" && r.rows.size() == 40000 &&
 			std::all_of(r.rows.begin(), r.rows.end(), [](const Bytes& v) { return v == Bytes(64, 'x'); }),
 			"Streamed execution delivers all 40000 rows");

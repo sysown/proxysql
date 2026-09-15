@@ -15,7 +15,34 @@
 #include "command_line.h"
 
 namespace {
-constexpr int rule_id = 971003;
+MYSQL* rules_admin = nullptr;
+
+// Restore runtime first, then any pending in-memory configuration separately.
+// BAIL_OUT calls exit(), so use atexit rather than relying on stack unwinding.
+void restore_query_rules() {
+	if (!rules_admin) return;
+	for (const char* sql : {
+		"DELETE FROM mysql_query_rules",
+		"INSERT INTO mysql_query_rules SELECT * FROM ps_cache_proto_runtime_rules",
+		"DELETE FROM mysql_query_rules_fast_routing",
+		"INSERT INTO mysql_query_rules_fast_routing SELECT * FROM ps_cache_proto_runtime_fast_rules",
+		"LOAD MYSQL QUERY RULES TO RUNTIME",
+		"DELETE FROM mysql_query_rules",
+		"INSERT INTO mysql_query_rules SELECT * FROM ps_cache_proto_memory_rules",
+		"DELETE FROM mysql_query_rules_fast_routing",
+		"INSERT INTO mysql_query_rules_fast_routing SELECT * FROM ps_cache_proto_memory_fast_rules",
+		"DROP TABLE ps_cache_proto_runtime_rules",
+		"DROP TABLE ps_cache_proto_memory_rules",
+		"DROP TABLE ps_cache_proto_runtime_fast_rules",
+		"DROP TABLE ps_cache_proto_memory_fast_rules"}) {
+		if (mysql_query(rules_admin, sql)) {
+			fprintf(stderr, "Cannot restore query rules: %s: %s\n", sql, mysql_error(rules_admin));
+			// Do not report a successful test or recursively invoke atexit.
+			std::_Exit(EXIT_FAILURE);
+		}
+	}
+	rules_admin = nullptr;
+}
 
 void query(MYSQL* mysql, const std::string& sql) {
 	if (mysql_query(mysql, sql.c_str())) {
@@ -132,9 +159,20 @@ int main() {
 	if (cl.getEnv()) return EXIT_FAILURE;
 	plan(NO_PLAN);
 	MYSQL* admin = connect(cl, true);
-	if (scalar(admin, "SELECT count(*) FROM mysql_query_rules WHERE rule_id=971003")) {
-		BAIL_OUT("Reserved test rule_id %d already exists", rule_id);
-	}
+	// Materialize the current runtime snapshot before copying its SQLite table.
+	scalar(admin, "SELECT count(*) FROM runtime_mysql_query_rules");
+	scalar(admin, "SELECT count(*) FROM runtime_mysql_query_rules_fast_routing");
+	query(admin, "CREATE TEMPORARY TABLE ps_cache_proto_memory_rules AS SELECT * FROM mysql_query_rules");
+	query(admin, "CREATE TEMPORARY TABLE ps_cache_proto_runtime_rules AS SELECT * FROM runtime_mysql_query_rules");
+	query(admin, "CREATE TEMPORARY TABLE ps_cache_proto_memory_fast_rules AS SELECT * FROM mysql_query_rules_fast_routing");
+	query(admin, "CREATE TEMPORARY TABLE ps_cache_proto_runtime_fast_rules AS SELECT * FROM runtime_mysql_query_rules_fast_routing");
+	if (std::atexit(restore_query_rules) != 0) BAIL_OUT("Cannot register query-rule cleanup");
+	rules_admin = admin;
+	// CI installs lower-numbered SELECT routing rules with apply=1. Remove
+	// them while testing so our cache/error rule is actually evaluated.
+	// Only memory/runtime are modified; never persist this fixture to disk.
+	query(admin, "DELETE FROM mysql_query_rules");
+	query(admin, "DELETE FROM mysql_query_rules_fast_routing");
 	query(admin, "INSERT INTO mysql_query_rules(rule_id,active,match_pattern,cache_ttl,cache_empty_result,apply) "
 		"VALUES(971003,1,'^SELECT /[*] ps_cache_proto [*]/',60000,1,1)");
 	query(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
@@ -411,8 +449,7 @@ int main() {
 	execute(stmt, "2026-09-13 12:34:56", "types survive closing another client handle");
 	for (MYSQL_STMT* s : {stmt, many, zero, literal, empty, warning, error}) mysql_stmt_close(s);
 	mysql_close(mysql);
-	query(admin, "DELETE FROM mysql_query_rules WHERE rule_id=971003");
-	query(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
+	restore_query_rules();
 	mysql_close(admin);
 	return exit_status();
 }
