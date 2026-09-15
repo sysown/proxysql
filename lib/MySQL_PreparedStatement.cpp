@@ -19,6 +19,7 @@ extern MySQL_STMT_Manager_v14 *GloMyStmt;
 
 const int PS_GLOBAL_STATUS_FIELD_NUM = 9;
 
+#ifdef PROXYSQL31
 static bool has_cache_locking_tokens(const char* query, size_t length) {
 	// Do not depend on a truncated digest or the routing heuristic's suffix
 	// check. Scan the entire SQL once, including executable comments. Quoted
@@ -37,6 +38,7 @@ static bool has_cache_locking_tokens(const char* query, size_t length) {
 	}
 	return false;
 }
+#endif
 
 static uint64_t stmt_compute_hash(char *user,
                                   char *schema, char *query,
@@ -119,6 +121,7 @@ bool StmtLongDataHandler::add(uint32_t _stmt_id, uint16_t _param_id,
 	return false;  // a new entry was created
 }
 
+#ifdef PROXYSQL31
 bool StmtLongDataHandler::has_data(uint32_t stmt_id) const {
 	for (unsigned int i = 0; i < long_datas->len; ++i) {
 		if (((stmt_long_data_t *)long_datas->index(i))->stmt_id == stmt_id)
@@ -126,6 +129,7 @@ bool StmtLongDataHandler::has_data(uint32_t stmt_id) const {
 	}
 	return false;
 }
+#endif
 
 unsigned int StmtLongDataHandler::reset(uint32_t _stmt_id) {
 	unsigned int cnt = 0;
@@ -194,7 +198,9 @@ MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint64_t id,
 	}
 
 	is_select_NOT_for_update = false;
+#ifdef PROXYSQL31
 	has_cache_locking_tokens = ::has_cache_locking_tokens(q, ql);
+#endif
 	{  // see bug #899 . Most of the code is borrowed from
 	   // Query_Info::is_select_NOT_for_update()
 		if (ql >= 7) {

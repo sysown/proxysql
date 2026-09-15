@@ -7,6 +7,21 @@ Enable caching with an ordinary
 `mysql_query_rules.cache_ttl` rule matching the prepared SQL; no new variable or
 cache backend is introduced.
 
+## Build availability
+
+Prepared-statement result caching is compiled only with `PROXYSQL31=1`
+(Innovative tier), including `PROXYSQL40=1` builds, which imply that flag.
+Stable builds without `PROXYSQL31` execute prepared statements normally but
+never look up or insert their results in the query cache. MySQL text-protocol
+caching is unchanged on every tier. Parameter-type tracking and malformed
+execute validation remain active on every tier as protocol correctness fixes.
+
+Clean core build artifacts when switching tiers, and pass the tier flag on
+every build invocation, for example `PROXYSQL31=1 make -j4` after cleaning.
+The TAP test reads the server's `admin-version`: it checks cache bypass and
+backend execution on Stable builds, and runs the full prepared-cache suite on
+Innovative and Plugin Chassis builds. Both paths verify text-query cache hits.
+
 ## Scope and key
 
 Eligible requests are SELECTs recognized by the existing nonlocking-SELECT

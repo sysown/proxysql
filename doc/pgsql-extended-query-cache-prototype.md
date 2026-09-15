@@ -5,6 +5,21 @@ uses the existing PostgreSQL query cache, memory budget, query rules, TTL,
 soft-refresh mechanism and empty-result policy. Simple-query cache entries
 remain separate. No new runtime variable or cache table is required.
 
+## Build availability
+
+Extended-query result caching is compiled only with `PROXYSQL31=1`
+(Innovative tier), including `PROXYSQL40=1` builds, which imply that flag.
+Without `PROXYSQL31`, extended queries follow the normal backend execution
+path without cache lookups or insertions. PostgreSQL simple-query caching is
+unchanged on every tier. Cache-only frame tracking and per-query cache state
+are also excluded from Stable builds.
+
+Clean core build artifacts when switching tiers, and pass the tier flag on
+every build invocation, for example `PROXYSQL31=1 make -j4` after cleaning.
+The TAP test reads the server's `admin-version`: it checks extended-query
+cache bypass on Stable builds and runs the full extended-cache suite on
+Innovative and Plugin Chassis builds. Both paths verify simple-query cache hits.
+
 ## Supported exchange
 
 Prepare the statement in a separate, completed cycle, then execute:
@@ -114,8 +129,9 @@ LD_LIBRARY_PATH="$PWD/test/tap/tap" test/tap/tests/pgsql-extended_query_cache-t
 ```
 
 The existing `pgsql-query_cache_test-t` now expects separately prepared
-execution to populate/hit the extended cache while simple execution uses its
-own entry. Existing protocol and Bind-format regression tests also apply.
+execution to populate/hit the extended cache on `PROXYSQL31` builds, and to
+bypass it on Stable builds. Simple execution uses its own entry on every tier.
+Existing protocol and Bind-format regression tests also apply.
 
 This is a functional prototype, not a performance claim. Benchmark separately
 with identical warmup/measurement protocols and measured cache-hit counters.

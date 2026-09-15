@@ -91,9 +91,11 @@ class Query_Info {
 	uint64_t stmt_global_id;
 	uint64_t stmt_client_id;
 	MySQL_STMT_Global_info *stmt_info;
+#ifdef PROXYSQL31
 	// Binary result-cache key, valid only for the current eligible execution.
 	uint64_t stmt_cache_key[4] {};
 	bool stmt_cache_valid = false;
+#endif
 
 	int QueryLength;
 	enum MYSQL_COM_QUERY_command MyComQueryCmd;

@@ -219,7 +219,9 @@ void PgSQL_Query_Info::end() {
 }
 
 void PgSQL_Query_Info::reset_extended_query_info() {
+#ifdef PROXYSQL31
 	stmt_cache_valid = false;
+#endif
 	extended_query_info.bind_msg = nullptr;
 	extended_query_info.stmt_client_name = nullptr;
 	extended_query_info.stmt_client_portal_name = nullptr;
@@ -2637,9 +2639,11 @@ __implicit_sync:
 							pkt = { 0, nullptr };
 							bind_waiting_for_execute.reset(nullptr);
 							extended_query_exec_qp = true;
+#ifdef PROXYSQL31
 							extended_cache_frame_eligible = extended_cache_frame_stage == 3 &&
 								extended_query_phase == EXTQ_PHASE_EXECUTING_SYNC_CLIENT;
 							extended_cache_frame_stage = 0;
+#endif
 
 						__run_sync_again:
 							int rc = handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_SYNC();
@@ -5607,6 +5611,7 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 			 CurrentQuery.have_affected_rows = true;
 		}
 		CurrentQuery.rows_sent = num_rows;
+#ifdef PROXYSQL31
 		const unsigned int result_begin = client_myds->PSarrayOUT->len;
 		const auto packet_type = query_result->get_result_packet_type();
 		const unsigned int num_fields = query_result->get_num_fields();
@@ -5615,7 +5620,9 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 		const auto extended_packet_type = PGSQL_QUERY_RESULT_COMMAND | PGSQL_QUERY_RESULT_READY |
 			((CurrentQuery.extended_query_info.flags & PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL) ?
 				PGSQL_QUERY_RESULT_TUPLE : 0);
+#endif
 		bool resultset_completed = query_result->get_resultset(client_myds->PSarrayOUT);
+#ifdef PROXYSQL31
 		if (status == PROCESSING_STMT_EXECUTE && CurrentQuery.stmt_cache_valid &&
 			resultset_completed && !_conn->is_error_present()) {
 			// RequestEnd normally classifies new session state after result
@@ -5652,6 +5659,7 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 					thread->curtime / 1000 + qpo->cache_ttl, num_rows, _affected_rows);
 			}
 		}
+#endif // PROXYSQL31
 		if (status == PROCESSING_QUERY && _conn->processing_multi_statement == false)
 			assert(resultset_completed); // the resultset should always be completed if PgSQL_Result_to_PgSQL_wire is called
 		if (status == PROCESSING_QUERY && transfer_started == false && 
@@ -7188,6 +7196,7 @@ int PgSQL_Session::handle_post_sync_bind_message(PgSQL_Bind_Message* bind_msg) {
 	return 0;
 }
 
+#ifdef PROXYSQL31
 bool PgSQL_Session::try_extended_query_cache(PgSQL_Execute_Message* execute_msg) {
 	CurrentQuery.stmt_cache_valid = false;
 	const auto* stmt = CurrentQuery.extended_query_info.stmt_info;
@@ -7253,6 +7262,7 @@ bool PgSQL_Session::try_extended_query_cache(PgSQL_Execute_Message* execute_msg)
 	extended_query_phase = EXTQ_PHASE_IDLE;
 	return true;
 }
+#endif // PROXYSQL31
 
 int PgSQL_Session::handle_post_sync_execute_message(PgSQL_Execute_Message* execute_msg) {
 	PROXY_TRACE();
@@ -7388,7 +7398,9 @@ int PgSQL_Session::handle_post_sync_execute_message(PgSQL_Execute_Message* execu
 		extended_query_info.flags |= PGSQL_EXTENDED_QUERY_FLAG_SYNC;
 	}
 
+#ifdef PROXYSQL31
 	if (try_extended_query_cache(execute_msg)) return 0;
+#endif
 
 	mybe = find_or_create_backend(current_hostgroup);
 
@@ -7416,8 +7428,10 @@ int PgSQL_Session::handle_post_sync_execute_message(PgSQL_Execute_Message* execu
 }
 
 void PgSQL_Session::reset_extended_query_frame() {
+#ifdef PROXYSQL31
 	extended_cache_frame_stage = 0;
 	extended_cache_frame_eligible = false;
+#endif
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Session=%p client_myds=%p. Discarding all '%lu' messages in extended query frame\n",
 		this, client_myds, extended_query_frame.size());
 	// Reset the extended query frame and bind to execute
@@ -7529,7 +7543,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_P
 		writeout();
 		return false;
 	}
+#ifdef PROXYSQL31
 	extended_cache_frame_stage = 255;
+#endif
 	extended_query_frame.push(std::move(parse_msg)); // we will process it later, after sync packet
 	return true;
 }
@@ -7555,7 +7571,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_D
 		writeout();
 		return false;
 	}
+#ifdef PROXYSQL31
 	extended_cache_frame_stage = extended_cache_frame_stage == 1 && describe_msg->data().stmt_type == 'P' ? 2 : 255;
+#endif
 	extended_query_frame.push(std::move(describe_msg)); // we will process it later, after sync packet
 	return true;
 }
@@ -7580,7 +7598,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_C
 		writeout();
 		return false;
 	}
+#ifdef PROXYSQL31
 	extended_cache_frame_stage = 255;
+#endif
 	extended_query_frame.push(std::move(close_msg)); // we will process it later, after sync packet
 	return true;
 }
@@ -7605,7 +7625,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_B
 		writeout();
 		return false;
 	}
+#ifdef PROXYSQL31
 	extended_cache_frame_stage = extended_cache_frame_stage == 0 ? 1 : 255;
+#endif
 	extended_query_frame.push(std::move(bind_msg)); // we will process it later, after sync packet
 	return true;
 
@@ -7631,7 +7653,9 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_E
 		writeout();
 		return false;
 	}
+#ifdef PROXYSQL31
 	extended_cache_frame_stage = (extended_cache_frame_stage == 1 || extended_cache_frame_stage == 2) ? 3 : 255;
+#endif
 	extended_query_frame.push(std::move(execute_msg)); // we will process it later, after sync packet
 	return true;
 

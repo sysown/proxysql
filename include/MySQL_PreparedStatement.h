@@ -68,8 +68,10 @@ class MySQL_STMT_Global_info {
 //		int delay;
 //	} properties;
 	bool is_select_NOT_for_update;
+#ifdef PROXYSQL31
 	// Conservative full-SQL guard for result caching, separate from routing.
 	bool has_cache_locking_tokens;
+#endif
 	MYSQL_BIND **params; // seems unused (?)
 	MySQL_STMT_Global_info(uint64_t id, char *u, char *s, char *q, unsigned int ql, char *fc, MYSQL_STMT *stmt, uint64_t _h);
 	void update_metadata(MYSQL_STMT *stmt);
@@ -130,7 +132,9 @@ class StmtLongDataHandler {
 	StmtLongDataHandler();
 	~StmtLongDataHandler();
 	unsigned int reset(uint32_t _stmt_id);
+#ifdef PROXYSQL31
 	bool has_data(uint32_t stmt_id) const;
+#endif
 	bool add(uint32_t _stmt_id, uint16_t _param_id, void *_data, unsigned long _size);
 	void *get(uint32_t _stmt_id, uint16_t _param_id, unsigned long **_size, my_bool **_is_null);
 };

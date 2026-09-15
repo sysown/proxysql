@@ -500,7 +500,9 @@ void Query_Info::begin(unsigned char *_p, int len, bool mysql_header) {
  * Updates query counters and performs clean-up.
  */
 void Query_Info::end() {
+#ifdef PROXYSQL31
 	stmt_cache_valid = false;
+#endif
 	query_parser_update_counters();
 	query_parser_free();
 	if ((end_time-start_time) > (unsigned int)mysql_thread___long_query_time*1000) {
@@ -4272,7 +4274,9 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 //
 // all break were replaced with a return
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_EXECUTE(PtrSize_t& pkt) {
+#ifdef PROXYSQL31
 	CurrentQuery.stmt_cache_valid = false;
+#endif
 	CurrentQuery.stmt_meta = nullptr;
 	if (pkt.size < 14) {
 		l_free(pkt.size, pkt.ptr);
@@ -4442,6 +4446,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				}
 			}
 		}
+#ifdef PROXYSQL31
 		// Initial prototype: ordinary executions only; no cursor, LongData,
 		// transaction, locked session or causal-read requirement. Keep the
 		// existing query-rule TTL, soft refresh and admission policies.
@@ -4497,6 +4502,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				return;
 			}
 		}
+#endif // PROXYSQL31
 		if (!decode_binds()) return;
 		mybe=find_or_create_backend(current_hostgroup);
 		status=PROCESSING_STMT_EXECUTE;
@@ -9245,11 +9251,14 @@ void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Conn
 	if (MyRS) {
 		assert(MyRS->result);
 		MyRS->init_with_stmt(myconn);
+#ifdef PROXYSQL31
 		bool transfer_started = MyRS->transfer_started;
 		unsigned int result_start = client_myds->PSarrayOUT->len;
+#endif
 		bool resultset_completed=MyRS->get_resultset(client_myds->PSarrayOUT);
 		CurrentQuery.rows_sent = MyRS->num_rows;
 		assert(resultset_completed); // the resultset should always be completed if MySQL_Result_to_MySQL_wire is called
+#ifdef PROXYSQL31
 		// Error handling can clear CurrentQuery.mysql_stmt while retaining MyRS.
 		if (CurrentQuery.stmt_cache_valid && stmt && !transfer_started && resultset_completed
 			&& MyRS->resultset_size <= UINT32_MAX && qpo && qpo->cache_ttl > 0
@@ -9271,6 +9280,7 @@ void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Conn
 				client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF, MyRS->num_rows);
 			client_myds->resultset_length = 0;
 		}
+#endif // PROXYSQL31
 	} else {
 		MYSQL *mysql=stmt->mysql;
 		// no result set
