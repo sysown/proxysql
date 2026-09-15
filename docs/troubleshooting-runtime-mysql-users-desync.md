@@ -17,7 +17,7 @@ ProxySQL operates as an authenticating reverse proxy:
 
 1. Frontend Authentication: Incoming client handshakes on port 6033 are authenticated at the ProxySQL memory layer using runtime_mysql_users before any query is routed or multiplexed to backend hostgroups.
 2. Hash Table Divergence: Partial configuration reloads or updating rows directly in mysql_users without an explicit purge can leave stale or duplicate password hashes inside ProxySQL's in-memory authentication hash tables.
-3. Simply running LOAD MYSQL USERS TO RUNTIME; without first clearing stale user entries can retain conflicted in-memory references.
++3. Simply running LOAD MYSQL USERS TO RUNTIME, without first clearing stale user entries can retain conflicted in-memory references.
 
 
 ## Production-Safe Recovery Flow
@@ -78,7 +78,7 @@ WHERE username = 'target_service_user';
 ```
 
 
-Test application pool connectivity. HikariCP / Spring Boot connection handshakes will now succeed immediately.
+Test application pool connectivity. HikariCP / Spring Boot connection handshakes should succeed when the network, TLS, pool configuration, credentials, and backend are healthy. If the handshake fails, check those dependencies.
 
 Signed-off-by: Oluwaseun Oladele <seunoladele25@gmail.com>
 
