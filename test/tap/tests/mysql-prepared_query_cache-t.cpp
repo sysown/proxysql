@@ -5,6 +5,7 @@
  * query rule. No backend tables are needed.
  */
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <unistd.h>
@@ -66,6 +67,18 @@ long long hits(MYSQL* admin) {
 
 long long inserts(MYSQL* admin) {
 	return scalar(admin, "SELECT Variable_Value FROM stats_mysql_global WHERE Variable_Name='Query_Cache_count_SET'");
+}
+
+bool prepared_cache_enabled(MYSQL* admin) {
+	query(admin, "SELECT variable_value FROM global_variables WHERE variable_name='admin-version'");
+	MYSQL_RES* res = mysql_store_result(admin);
+	MYSQL_ROW row = res ? mysql_fetch_row(res) : nullptr;
+	int major = 0, minor = 0;
+	if (!row || !row[0] || sscanf(row[0], "%d.%d", &major, &minor) != 2)
+		BAIL_OUT("Cannot determine ProxySQL build tier from admin-version");
+	diag("Testing prepared-cache build gate on ProxySQL %s", row[0]);
+	mysql_free_result(res);
+	return major > 3 || (major == 3 && minor >= 1);
 }
 
 MYSQL* connect(const CommandLine& cl, bool admin = false, bool deprecate_eof = true) {
@@ -152,6 +165,46 @@ void malformed_execute(MYSQL* mysql, MYSQL_STMT* stmt, std::vector<unsigned char
 	if (recv(mysql->net.fd, response.data(), size, MSG_WAITALL) != ssize_t(size)) BAIL_OUT("Raw execute response read failed");
 	ok(response[0] == 0xff && (response[1] | (unsigned(response[2]) << 8)) == 1210, "%s: malformed execute rejected", label);
 }
+
+// These are protocol correctness fixes, not PROXYSQL31 cache features.
+void check_execute_protocol(const CommandLine& cl, MYSQL* admin, MYSQL* mysql) {
+	int integer = 1065353216; // Same wire bytes as float 1.0.
+	float floating = 1.0f;
+	// No cache rule matches this SQL: retained types must work on the backend.
+	const char* sql = "SELECT /* ps_type_proto */ CAST(? AS CHAR)";
+	MYSQL_STMT* first = prepare(mysql, sql);
+	MYSQL_STMT* second = prepare(mysql, sql);
+	bind(first, MYSQL_TYPE_FLOAT, &floating);
+	execute(first, "1", "FLOAT parameter on every tier");
+	bind(second, MYSQL_TYPE_LONG, &integer);
+	execute(second, "1065353216", "Second handle has independent LONG type");
+	execute(first, "1", "First handle retains FLOAT with omitted types");
+	unsigned int unsigned_value = 0xffffffffU;
+	bind(first, MYSQL_TYPE_LONG, &unsigned_value, nullptr, nullptr, true);
+	execute(first, "4294967295", "Unsigned parameter on every tier");
+	execute(second, "1065353216", "Other handle retains signed LONG");
+	execute(first, "4294967295", "First handle retains unsigned LONG with omitted types");
+	mysql_stmt_close(first);
+	mysql_stmt_close(second);
+
+	MYSQL* raw = connect(cl);
+	timeval read_timeout {5, 0};
+	setsockopt(raw->net.fd, SOL_SOCKET, SO_RCVTIMEO, &read_timeout, sizeof(read_timeout));
+	MYSQL_STMT* raw_stmt = prepare(raw, "SELECT /* ps_cache_proto */ CAST(? AS CHAR)");
+	const long long before_hits = hits(admin), before_inserts = inserts(admin);
+	malformed_execute(raw, raw_stmt, std::vector<unsigned char>(20, 0), "missing retained types");
+	std::vector<unsigned char> truncated(17, 0);
+	truncated[15] = 1; truncated[16] = MYSQL_TYPE_LONG;
+	malformed_execute(raw, raw_stmt, truncated, "truncated explicit types");
+	std::vector<unsigned char> bad_value(19, 0);
+	bad_value[15] = 1; bad_value[16] = MYSQL_TYPE_STRING; bad_value[18] = 100;
+	malformed_execute(raw, raw_stmt, bad_value, "invalid value length on backend miss");
+	ok(hits(admin) == before_hits && inserts(admin) == before_inserts, "malformed requests do not hit or populate cache");
+	bind(raw_stmt, MYSQL_TYPE_LONG, &integer);
+	execute(raw_stmt, "1065353216", "valid execute after malformed packets");
+	mysql_stmt_close(raw_stmt);
+	mysql_close(raw);
+}
 }
 
 int main() {
@@ -177,6 +230,35 @@ int main() {
 		"VALUES(971003,1,'^SELECT /[*] ps_cache_proto [*]/',60000,1,1)");
 	query(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 	MYSQL* mysql = connect(cl);
+	const bool cache_enabled = prepared_cache_enabled(admin);
+	query(admin, "PROXYSQL FLUSH QUERY CACHE");
+	const char* text_sql = "SELECT /* ps_cache_proto */ 7319";
+	ok(scalar(mysql, text_sql) == 7319, "Text query returns its value on every tier");
+	const long long text_hits = hits(admin);
+	ok(scalar(mysql, text_sql) == 7319, "Repeated text query returns its value");
+	ok(hits(admin) == text_hits + 1, "Text-protocol caching remains enabled on every tier");
+	check_execute_protocol(cl, admin, mysql);
+	query(admin, "PROXYSQL FLUSH QUERY CACHE");
+	if (!cache_enabled) {
+		MYSQL_STMT* uncached = prepare(mysql, "SELECT /* ps_cache_proto */ ?");
+		int value = 7319;
+		bind(uncached, MYSQL_TYPE_LONG, &value);
+		const long long h = hits(admin), s = inserts(admin);
+		const long long gets = scalar(admin, "SELECT Variable_Value FROM stats_mysql_global WHERE Variable_Name='Query_Cache_count_GET'");
+		const long long b = scalar(admin, "SELECT Variable_Value FROM stats_mysql_global WHERE Variable_Name='Com_backend_stmt_execute'");
+		for (int i = 0; i < 3; ++i) execute(uncached, "7319", "Stable-tier prepared execution");
+		ok(scalar(admin, "SELECT Variable_Value FROM stats_mysql_global WHERE Variable_Name='Query_Cache_count_GET'") == gets,
+			"Without PROXYSQL31, prepared executions do not look up the cache");
+		ok(hits(admin) == h, "Without PROXYSQL31, prepared executions do not hit the cache");
+		ok(inserts(admin) == s, "Without PROXYSQL31, prepared executions do not populate the cache");
+		ok(scalar(admin, "SELECT Variable_Value FROM stats_mysql_global WHERE Variable_Name='Com_backend_stmt_execute'") == b + 3,
+			"Without PROXYSQL31, all prepared executions reach the backend");
+		mysql_stmt_close(uncached);
+		mysql_close(mysql);
+		restore_query_rules();
+		mysql_close(admin);
+		return exit_status();
+	}
 	// These locking clauses evade the legacy end-of-string heuristic. Neither
 	// the first execution nor a repeat may be admitted to the prepared cache.
 	for (const std::string& suffix : {
@@ -400,24 +482,6 @@ int main() {
 		mysql_stmt_free_result(error);
 	}
 	ok(hits(admin) == before_hits && inserts(admin) == before_inserts, "errors are not cached");
-
-	MYSQL* raw = connect(cl);
-	timeval read_timeout {5, 0};
-	setsockopt(raw->net.fd, SOL_SOCKET, SO_RCVTIMEO, &read_timeout, sizeof(read_timeout));
-	MYSQL_STMT* raw_stmt = prepare(raw, "SELECT /* ps_cache_proto */ CAST(? AS CHAR)");
-	before_hits = hits(admin); before_inserts = inserts(admin);
-	malformed_execute(raw, raw_stmt, std::vector<unsigned char>(20, 0), "missing retained types");
-	std::vector<unsigned char> truncated(17, 0);
-	truncated[15] = 1; truncated[16] = MYSQL_TYPE_LONG;
-	malformed_execute(raw, raw_stmt, truncated, "truncated explicit types");
-	std::vector<unsigned char> bad_value(19, 0);
-	bad_value[15] = 1; bad_value[16] = MYSQL_TYPE_STRING; bad_value[18] = 100;
-	malformed_execute(raw, raw_stmt, bad_value, "invalid value length on backend miss");
-	ok(hits(admin) == before_hits && inserts(admin) == before_inserts, "malformed requests do not hit or populate cache");
-	bind(raw_stmt, MYSQL_TYPE_LONG, &integer);
-	execute(raw_stmt, "1065353216", "valid execute after malformed packets");
-	mysql_stmt_close(raw_stmt);
-	mysql_close(raw);
 
 	query(admin, "UPDATE mysql_query_rules SET cache_ttl=100 WHERE rule_id=971003");
 	query(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");

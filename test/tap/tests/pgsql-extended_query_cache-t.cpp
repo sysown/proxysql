@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -52,6 +53,15 @@ long long metric(PGconn* admin, const char* name) {
 	long long v = strtoll(PQgetvalue(r, 0, 0), nullptr, 10); PQclear(r); return v;
 }
 long long hits(PGconn* a) { return metric(a, "Query_Cache_count_GET_OK"); }
+bool prepared_cache_enabled(PGconn* admin) {
+	PGresult* r = query(admin, "SELECT variable_value FROM global_variables WHERE variable_name='admin-version'");
+	int major = 0, minor = 0;
+	if (PQntuples(r) != 1 || sscanf(PQgetvalue(r, 0, 0), "%d.%d", &major, &minor) != 2)
+		BAIL_OUT("Cannot determine ProxySQL build tier from admin-version");
+	diag("Testing prepared-cache build gate on ProxySQL %s", PQgetvalue(r, 0, 0));
+	PQclear(r);
+	return major > 3 || (major == 3 && minor >= 1);
+}
 long long backend_queries(PGconn* a) {
 	PGresult* r = query(a, "SELECT COALESCE(SUM(Queries),0) FROM stats_pgsql_connection_pool");
 	long long v = strtoll(PQgetvalue(r, 0, 0), nullptr, 10); PQclear(r); return v;
@@ -134,8 +144,34 @@ int main() {
 	command(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
 	command(admin, "PROXYSQL FLUSH PGSQL QUERY CACHE");
 	PGconn* c = connect();
+	const bool cache_enabled = prepared_cache_enabled(admin);
+	const Bytes simple = msg('Q', str("SELECT /*ext_cache*/ 7319"));
+	auto check_simple = [&]() {
+		const Reply r = send_extended_messages_and_read_reply(c, simple);
+		ok(r.types == "TDCZ" && r.state == 'I' && r.rows == std::vector<Bytes>{"7319"},
+			"Simple query returns its value and correct framing on every tier");
+	};
+	check_simple();
+	const long long simple_hits = hits(admin);
+	check_simple();
+	ok(hits(admin) == simple_hits + 1, "Simple-query caching remains enabled on every tier");
 	const char* sql = "SELECT /*ext_cache*/ $1::text";
 	prepare(c, "first", sql);
+	if (!cache_enabled) {
+		const long long h = hits(admin), s = metric(admin, "Query_Cache_count_SET"), b = backend_queries(admin);
+		const long long gets = metric(admin, "Query_Cache_count_GET");
+		for (int i = 0; i < 3; ++i)
+			row(send_extended_messages_and_read_reply(c, execution("first", "hello") + msg('S')), "hello");
+		ok(metric(admin, "Query_Cache_count_GET") == gets, "Without PROXYSQL31, extended executions do not look up the cache");
+		ok(hits(admin) == h, "Without PROXYSQL31, extended executions do not hit the cache");
+		ok(metric(admin, "Query_Cache_count_SET") == s, "Without PROXYSQL31, extended executions do not populate the cache");
+		ok(backend_queries(admin) == b + 3, "Without PROXYSQL31, all extended executions reach the backend");
+		PQfinish(c);
+		command(admin, "DELETE FROM pgsql_query_rules WHERE rule_id=971004");
+		command(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
+		PQfinish(admin);
+		return exit_status();
+	}
 	row(send_extended_messages_and_read_reply(c, execution("first", "hello") + msg('S')), "hello");
 	long long before = hits(admin);
 	row(send_extended_messages_and_read_reply(c, execution("first", "hello") + msg('S')), "hello");
