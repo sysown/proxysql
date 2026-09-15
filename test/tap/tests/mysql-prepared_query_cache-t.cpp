@@ -440,7 +440,8 @@ int main() {
 	MYSQL_STMT* literal = prepare(mysql, "SELECT /* ps_cache_proto */ 18");
 	cached_repeat(admin, literal, "18", "embedded SQL literal preserved");
 
-	MYSQL_STMT* empty = prepare(mysql, "SELECT /* ps_cache_proto */ 19 WHERE 0");
+	// MySQL 5.7 requires FROM DUAL for a tableless SELECT with WHERE.
+	MYSQL_STMT* empty = prepare(mysql, "SELECT /* ps_cache_proto */ 19 FROM DUAL WHERE 0");
 	cached_repeat(admin, empty, "", "empty result", false, true);
 	query(admin, "UPDATE mysql_query_rules SET cache_empty_result=0 WHERE rule_id=971003");
 	query(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
