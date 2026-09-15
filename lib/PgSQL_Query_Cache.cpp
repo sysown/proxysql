@@ -5,9 +5,12 @@
 extern PgSQL_Threads_Handler* GloPTH;
 
 bool PgSQL_Query_Cache::set(uint64_t user_hash, const unsigned char* kp, uint32_t kl, unsigned char* vp, 
-	uint32_t vl, uint64_t create_ms, uint64_t curtime_ms, uint64_t expire_ms) {
+	uint32_t vl, uint64_t create_ms, uint64_t curtime_ms, uint64_t expire_ms,
+	uint64_t rows_sent, uint64_t affected_rows) {
 
 	PgSQL_QC_entry_t* entry = (PgSQL_QC_entry_t*)malloc(sizeof(PgSQL_QC_entry_t)); 
+	entry->rows_sent = rows_sent;
+	entry->affected_rows = affected_rows;
 	return Query_Cache::set(entry, user_hash, kp, kl, vp, vl, create_ms, curtime_ms, expire_ms);
 }
 

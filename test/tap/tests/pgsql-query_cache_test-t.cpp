@@ -970,7 +970,8 @@ void execute_prepared_test(PGconn* admin_conn, PGconn* conn) {
     // Collect baseline metrics
     metrics.before = getQueryCacheMetrics(admin_conn);
 
-    // 2) Prepare and execute (extended query) - should NOT create a cache entry
+    // 2) Separate preparation followed by Bind/Describe/Execute/Sync populates
+    // the extended-protocol cache, independently of the simple-query cache.
     if (!prepareAndExec(conn, "ps_select_1", "SELECT 1")) {
         // attempt cleanup before returning
         executeQueries(admin_conn, { "DELETE FROM pgsql_query_rules", "LOAD PGSQL QUERY RULES TO RUNTIME" });
@@ -981,20 +982,20 @@ void execute_prepared_test(PGconn* admin_conn, PGconn* conn) {
     metrics.after = getQueryCacheMetrics(admin_conn);
     printQueryCacheMetrics();
 
-    // Expectation: extended/prepared queries are not cached -> no changes in cache metrics
-    checkMetricDelta<>("Query_Cache_Memory_bytes", 0, std::equal_to<int>());
-    checkMetricDelta<>("Query_Cache_count_GET", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_Memory_bytes", 0, std::greater<int>());
+    checkMetricDelta<>("Query_Cache_count_GET", 1, std::equal_to<int>());
     checkMetricDelta<>("Query_Cache_count_GET_OK", 0, std::equal_to<int>());
-    checkMetricDelta<>("Query_Cache_count_SET", 0, std::equal_to<int>());
-    checkMetricDelta<>("Query_Cache_bytes_IN", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_count_SET", 1, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_bytes_IN", 0, std::greater<int>());
     checkMetricDelta<>("Query_Cache_bytes_OUT", 0, std::equal_to<int>());
     checkMetricDelta<>("Query_Cache_Purged", 0, std::equal_to<int>());
-    checkMetricDelta<>("Query_Cache_Entries", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_Entries", 1, std::equal_to<int>());
 
     metrics.swap();
 
     executeQueries(conn, { "DEALLOCATE ps_select_1" });
-    // 3) Execute prepared statement again (same extended protocol). Still should not touch cache.
+    // 3) Re-prepare and execute identical SQL: client statement lifecycle
+    // does not change the result key, so this execution should hit.
     if (!prepareAndExec(conn, "ps_select_1", "SELECT 1")) {
         // cleanup below
     }
@@ -1003,11 +1004,11 @@ void execute_prepared_test(PGconn* admin_conn, PGconn* conn) {
     printQueryCacheMetrics();
 
     checkMetricDelta<>("Query_Cache_Memory_bytes", 0, std::equal_to<int>());
-    checkMetricDelta<>("Query_Cache_count_GET", 0, std::equal_to<int>());
-    checkMetricDelta<>("Query_Cache_count_GET_OK", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_count_GET", 1, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_count_GET_OK", 1, std::equal_to<int>());
     checkMetricDelta<>("Query_Cache_count_SET", 0, std::equal_to<int>());
     checkMetricDelta<>("Query_Cache_bytes_IN", 0, std::equal_to<int>());
-    checkMetricDelta<>("Query_Cache_bytes_OUT", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_bytes_OUT", 0, std::greater<int>());
     checkMetricDelta<>("Query_Cache_Purged", 0, std::equal_to<int>());
     checkMetricDelta<>("Query_Cache_Entries", 0, std::equal_to<int>());
 

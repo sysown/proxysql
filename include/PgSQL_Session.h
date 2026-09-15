@@ -167,6 +167,8 @@ public:
 	uint64_t waiting_since;
 
 	PgSQL_Extended_Query_Info extended_query_info;
+	uint64_t stmt_cache_key[4] {};
+	bool stmt_cache_valid { false };
 	PgSQL_Session* sess;
 	unsigned char* QueryPointer;
 	SQP_par_t QueryParserArgs;
@@ -224,6 +226,10 @@ private:
 		std::unique_ptr<PgSQL_Close_Message>, std::unique_ptr<PgSQL_Bind_Message>, std::unique_ptr<PgSQL_Execute_Message>>;
 
 	bool extended_query_exec_qp { false };
+	// Candidate frame: Bind, optional Describe(portal), Execute, client Sync.
+	uint8_t extended_cache_frame_stage { 0 };
+	bool extended_cache_frame_eligible { false };
+	bool try_extended_query_cache(PgSQL_Execute_Message* execute_msg);
 	uint8_t extended_query_phase { EXTQ_PHASE_IDLE };
 	std::queue<PktType> extended_query_frame;
 	std::unique_ptr<const PgSQL_Bind_Message> bind_waiting_for_execute;
