@@ -646,12 +646,6 @@ void MySQL_Connection::update_warning_count_from_statement() {
 	}
 }
 
-bool MySQL_Connection::is_expired(unsigned long long timeout) {
-// FIXME: here the check should be a sanity check
-// FIXME: for now this is just a temporary (and stupid) check
-	return false;
-}
-
 void MySQL_Connection::set_status(bool set, uint32_t status_flag) {
 	if (set) {
 		this->status_flags |= status_flag;
@@ -3302,7 +3296,6 @@ void MySQL_Connection::reset() {
 	warning_count=0;
 	delete local_stmts;
 	local_stmts=new MySQL_STMTs_local_v14(false);
-	creation_time = monotonic_time();
 
 	for (auto i = 0; i < SQL_NAME_LAST_HIGH_WM; i++) {
 		var_hash[i] = 0;
@@ -3337,6 +3330,14 @@ void MySQL_Connection::reset() {
 	}
 	options.session_track_variables_sent = false;
 	options.session_track_state_sent = false;
+}
+
+bool MySQL_Connection::is_expired(unsigned long long now) const {
+	const unsigned long long max_age_ms = mysql_thread___connection_max_age_ms;
+	if (max_age_ms == 0) {
+		return false;
+	}
+	return now > creation_time + max_age_ms * 1000ULL;
 }
 
 bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {

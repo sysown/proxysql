@@ -2616,7 +2616,9 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 
 	bool to_del=true; // the default, legacy behavior
 	MySrvC *mysrvc=(MySrvC *)c->parent;
-	if (c->healthy && mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE && c->send_quit && queue.size() < __sync_fetch_and_add(&GloMTH->variables.connpoll_reset_queue_length, 0)) {
+	if (c->healthy && mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE && c->send_quit &&
+		c->is_expired(monotonic_time()) == false &&
+		queue.size() < __sync_fetch_and_add(&GloMTH->variables.connpoll_reset_queue_length, 0)) {
 		if (c->async_state_machine==ASYNC_IDLE) {
 			// overall, the backend seems healthy and so it is the connection. Try to reset it
 			int myerr=mysql_errno(c->mysql);
@@ -3028,9 +3030,7 @@ void MySQL_HostGroups_Manager::drop_all_idle_connections() {
 				int i=0;
 				for (i=0; i<(int)mscl->conns_length() ; i++) {
 					MySQL_Connection *mc=mscl->index(i);
-					unsigned long long intv = mysql_thread___connection_max_age_ms;
-					intv *= 1000;
-					if (curtime > mc->creation_time + intv) {
+					if (mc->is_expired(curtime)) {
 						mc=mscl->remove(i);
 						delete mc;
 						i--;

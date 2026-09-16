@@ -2790,7 +2790,6 @@ void PgSQL_Connection::reset() {
 	// reconfigure STATUS_PGSQL_CONNECTION_COMPRESSION
 	set_status(old_compress, STATUS_PGSQL_CONNECTION_COMPRESSION);
 	reusable = true;
-	creation_time = monotonic_time();
 	delete local_stmts;
 	local_stmts = new PgSQL_STMT_Local(false);
 
@@ -2821,6 +2820,14 @@ void PgSQL_Connection::reset() {
 	if (pgsql_conn)
 		assert(PQpipelineStatus(pgsql_conn) == PQ_PIPELINE_OFF);
 #endif
+}
+
+bool PgSQL_Connection::is_expired(unsigned long long now) const {
+	const unsigned long long max_age_ms = pgsql_thread___connection_max_age_ms;
+	if (max_age_ms == 0) {
+		return false;
+	}
+	return now > creation_time + max_age_ms * 1000ULL;
 }
 
 void PgSQL_Connection::set_status(bool set, uint32_t status_flag) {

@@ -1348,19 +1348,16 @@ void PgSQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 			sess->last_HG_affected_rows = -1;
 		}
 	}
-	unsigned long long intv = pgsql_thread___connection_max_age_ms;
-	intv *= 1000;
-	if (
-		(((intv) && (mc->last_time_used > mc->creation_time + intv)) ||
-		(mc->local_stmts->get_num_backend_stmts() > (unsigned int)GloPTH->variables.max_stmts_per_connection))
-		&&
-		// NOTE: If the current session if in 'PINGING_SERVER' status, there is
-		// no need to reset the session. The destruction and creation of a new
-		// session in case this session has exceeded the time specified by
-		// 'connection_max_age_ms' will be deferred to the next time the session
-		// is used outside 'PINGING_SERVER' operation. For more context see #3502.
-		sess->status != PINGING_SERVER
-		) {
+	const bool too_many_stmts = mc->local_stmts->get_num_backend_stmts() > (unsigned int)GloPTH->variables.max_stmts_per_connection;
+	const bool expired = mc->is_expired(mc->last_time_used);
+	// NOTE: If the current session if in 'PINGING_SERVER' status, there is
+	// no need to reset the session. The destruction and creation of a new
+	// session in case this session has exceeded the time specified by
+	// 'connection_max_age_ms' will be deferred to the next time the session
+	// is used outside 'PINGING_SERVER' operation. For more context see #3502.
+	if (sess->status != PINGING_SERVER && expired) {
+		destroy_MySQL_Connection_From_Pool(true);
+	} else if (sess->status != PINGING_SERVER && too_many_stmts) {
 		sess->create_new_session_and_reset_connection(this);
 	} else {
 		detach_connection();
@@ -1392,6 +1389,7 @@ void PgSQL_Data_Stream::destroy_MySQL_Connection_From_Pool(bool sq) {
 	// PQtransactionStatus() reports idle, so no other condition here can reject it.
 	if (sq && mysrvc->status == MYSQL_SERVER_STATUS_ONLINE &&
 		mc->healthy == true &&
+		mc->is_expired(sess->thread->curtime) == false &&
 		mc->async_state_machine == ASYNC_IDLE &&
 		mc->is_connection_in_reusable_state() == true) {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Trying to reset PgSQL_Connection %p, server %s:%d\n", mc, mysrvc->address, mysrvc->port);

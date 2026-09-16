@@ -89,7 +89,6 @@ class MySQL_Connection {
 	private:
 	void update_warning_count_from_connection();
 	void update_warning_count_from_statement();
-	bool is_expired(unsigned long long timeout);
 	unsigned long long inserted_into_pool;
 	void connect_start_SetAttributes();
 	void connect_start_SetCharset();
@@ -298,6 +297,7 @@ class MySQL_Connection {
 	void set_is_client(); // used for local_stmts
 
 	void reset();
+	bool is_expired(unsigned long long now) const;
 
 	bool get_gtid(char *buff, uint64_t *trx_id);
 	/**
