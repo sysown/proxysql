@@ -384,6 +384,7 @@ void PgSQL_Session::reset() {
 		transaction_state_manager->reset_state();
 	}
 	extended_query_phase = EXTQ_PHASE_IDLE;
+	extq_backend_used = false;
 	// Drop any named portals + in-flight named Bind (Task P1): a session reset is
 	// well past the scope of any open portal.
 	clear_named_portals();
@@ -2399,6 +2400,7 @@ __implicit_sync:
 						case 'Q':
 						{
 							extended_query_phase = EXTQ_PHASE_IDLE;
+							extq_backend_used = false;
 							__sync_add_and_fetch(&thread->status_variables.stvar[st_var_queries], 1);
 							if (session_type == PROXYSQL_SESSION_PGSQL) {
 								bool rc_break = false;
@@ -3291,6 +3293,7 @@ handler_again:
 			// we are done with extended query sync
 			bind_waiting_for_execute.reset(nullptr);
 			extended_query_phase = EXTQ_PHASE_IDLE;
+			extq_backend_used = false;
 
 			if (PgSQL_Backend* _mybe = find_backend(current_hostgroup)) {
 				if (PgSQL_Data_Stream* myds = _mybe->server_myds) {
@@ -3840,6 +3843,7 @@ handler_again:
 						NEXT_IMMEDIATE(PROCESSING_EXTENDED_QUERY_SYNC);
 					}
 					extended_query_phase = EXTQ_PHASE_IDLE;
+					extq_backend_used = false;
 				}
 			} else {
 				if (rc == -1) {
@@ -5116,17 +5120,84 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Parsing DISCARD command = %s\n", nq.c_str());
 	bool handled = false;
 	const char* discard_value = nq.c_str();
+	// Reported GUCs this command puts back, for the ParameterStatus messages owed to the
+	// client. Collected before reset(), which is what actually reverts them.
+	std::vector<std::pair<std::string, std::string>> param_status = {};
+	// Recorded before the DISCARD ALL branch below: reset() clears extended_query_phase,
+	// and a client that asked to Describe the portal is still owed its NoData reply.
+	const bool owes_no_data = (extended_query_phase != EXTQ_PHASE_IDLE) &&
+		(CurrentQuery.extended_query_info.flags & PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL) != 0;
 	if (strncasecmp(discard_value, "ALL", 3) == 0) {
-		if (extended_query_phase != EXTQ_PHASE_IDLE) {
+		// PostgreSQL refuses DISCARD ALL inside a transaction block, and a batch of
+		// pipelined statements is one even without an explicit BEGIN. Handling it here
+		// instead would tear down the backend mid-batch, rolling back work the client
+		// has already been told succeeded.
+		const bool explicit_txn = is_in_transaction();
+		const bool in_txn_block = explicit_txn || extq_backend_used;
+		// Anything still queued behind this command in the same unsynced batch would be
+		// processed against the session state reset()/init() below is about to replace.
+		const bool more_queued = (extended_query_phase != EXTQ_PHASE_IDLE) &&
+			!is_extended_query_ready_for_query();
+		if (in_txn_block || more_queued) {
+			// Throws the frame away, and with it the backend connection when the backend
+			// is mid-batch: it never saw this error and concluding the batch would commit
+			// the work the client is about to be told failed.
 			reset_extended_query_frame();
-			proxy_error("DISCARD ALL is not supported in Extended Query protocol mode. Use Simple Query mode to run this command\n");
 			client_myds->DSS = STATE_QUERY_SENT_NET;
-			bool send_ready_packet = is_extended_query_ready_for_query();
-			client_myds->myprot.generate_error_packet(true, send_ready_packet,
-				"DISCARD ALL is not supported in pipeline mode",
-				PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true);
+			// The Describe folded into this Execute is answered before the Execute
+			// fails, exactly as PostgreSQL answers it: the Describe itself succeeded.
+			if (owes_no_data) {
+				client_myds->myprot.generate_no_data_packet(true);
+			}
+			if (in_txn_block) {
+				// Drop the backend so the transaction the client is being told failed
+				// cannot still be committed by a later COMMIT: PostgreSQL turns COMMIT
+				// into a rollback once a transaction is aborted, and the only way to get
+				// that here is to have nothing left to commit.
+				if (mybe && mybe->server_myds && mybe->server_myds->myconn) {
+					mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
+				}
+				// PostgreSQL words these two differently at the same SQLSTATE.
+				const char* errmsg = explicit_txn
+					? "DISCARD ALL cannot run inside a transaction block"
+					: "DISCARD ALL cannot be executed within a pipeline";
+				proxy_error("%s\n", errmsg);
+				// An explicit transaction is left aborted, so the client knows it still
+				// owes a ROLLBACK; the block a pipelined batch opens ends with the batch,
+				// leaving the client idle. generate_error_packet() always reports idle.
+				PG_pkt pgpkt{};
+				pgpkt.set_multi_pkt_mode(true);
+				pgpkt.write_generic('E', "cscscscsc",
+					'S', "ERROR", 'V', "ERROR",
+					'C', PgSQL_Error_Helper::get_error_code(PGSQL_ERROR_CODES::ERRCODE_ACTIVE_SQL_TRANSACTION),
+					'M', errmsg,
+					0);
+				pgpkt.write_ReadyForQuery(explicit_txn ? 'E' : 'I');
+				pgpkt.set_multi_pkt_mode(false);
+				auto buff = pgpkt.detach();
+				client_myds->PSarrayOUT->add((void*)buff.first, buff.second);
+				thread->status_variables.stvar[st_var_generated_pkt_err]++;
+			} else {
+				proxy_error("DISCARD ALL is not supported when pipelined with further statements before Sync. Send it as the only statement before Sync, or use Simple Query mode\n");
+				client_myds->myprot.generate_error_packet(true, is_extended_query_ready_for_query(),
+					"DISCARD ALL is not supported in pipeline mode",
+					PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true);
+			}
 			RequestEnd(NULL, true);
 			return true; // Handled (with error)
+		}
+
+		// reset() puts every tracked variable back to the value the client started the
+		// connection with. A client only learns a reported GUC changed from a
+		// ParameterStatus message, so the ones about to move are collected here, while
+		// their current values still exist.
+		for (int idx = 0; idx < PGSQL_NAME_LAST_LOW_WM; idx++) {
+			if (!IS_PGTRACKED_VAR_OPTION_SET_PARAM_STATUS(pgsql_tracked_variables[idx])) continue;
+			auto [startup_value, startup_hash] =
+				client_myds->myconn->get_startup_parameter_and_hash((enum pgsql_variable_name)idx);
+			if (startup_value && pgsql_variables.client_get_hash(this, idx) != startup_hash) {
+				param_status.emplace_back(pgsql_tracked_variables[idx].set_variable_name, startup_value);
+			}
 		}
 
 		// Backup the current relevant session values
@@ -5148,14 +5219,13 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 
 	if (handled) {
 		client_myds->DSS = STATE_QUERY_SENT_NET;
-		if (extended_query_phase != EXTQ_PHASE_IDLE &&
-			(CurrentQuery.extended_query_info.flags & PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL) != 0) {
+		if (owes_no_data) {
 			client_myds->myprot.generate_no_data_packet(true);
 		}
 		bool send_ready_packet = is_extended_query_ready_for_query();
 		unsigned int nTrx = NumActiveTransactions();
 		const char txn_state = (nTrx ? 'T' : 'I');
-		client_myds->myprot.generate_ok_packet(true, send_ready_packet, NULL, 0, dig, txn_state, NULL, {});
+		client_myds->myprot.generate_ok_packet(true, send_ready_packet, NULL, 0, dig, txn_state, NULL, param_status);
 
 		if (mirror == false) {
 			RequestEnd(NULL, false);
@@ -7782,6 +7852,7 @@ void PgSQL_Session::reset_extended_query_frame(bool backend_saw_error) {
 	}
 	bind_waiting_for_execute.reset(nullptr);
 	extended_query_phase = EXTQ_PHASE_IDLE;
+	extq_backend_used = false;
 	// NOTE: named_portals are deliberately NOT cleared here — portals outlive an
 	// extended-query frame within a transaction. They are dropped only at txn end
 	// (native_txn_status=='I' after a completed cycle) and in reset()/destructor.
@@ -7835,6 +7906,7 @@ int  PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_S
 		client_myds->DSS = STATE_SLEEP;
 		status = WAITING_CLIENT_DATA;
 		extended_query_phase = EXTQ_PHASE_IDLE;
+		extq_backend_used = false;
 		return 0;
 	}
 
@@ -7874,7 +7946,13 @@ int PgSQL_Session::handler___status_PROCESSING_EXTENDED_QUERY_SYNC() {
 		else if constexpr (std::is_same_v<T, std::unique_ptr<PgSQL_Execute_Message>>) {
 			extended_query_phase = (extended_query_phase & ~EXTQ_PHASE_PROCESSING_MASK)
 				| EXTQ_PHASE_PROCESSING_EXECUTE;
-			return handle_post_sync_execute_message(msg_ptr.get());
+			const int r = handle_post_sync_execute_message(msg_ptr.get());
+			// PostgreSQL opens the batch's implicit transaction block when a statement
+			// actually runs. A Parse or Bind that reached the backend does not open it
+			// -- libpq mode prepares eagerly, so counting those refuses a lone
+			// DISCARD ALL that PostgreSQL accepts.
+			if (r == 1) extq_backend_used = true;
+			return r;
 		}
 		else {
 			proxy_error("Unknown extended query message\n");

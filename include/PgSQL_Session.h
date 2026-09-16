@@ -251,6 +251,11 @@ private:
 		std::unique_ptr<PgSQL_Close_Message>, std::unique_ptr<PgSQL_Bind_Message>, std::unique_ptr<PgSQL_Execute_Message>>;
 
 	bool extended_query_exec_qp { false };
+	// Whether a statement in the current unsynced batch has already run on the backend,
+	// which is when PostgreSQL opens the batch's implicit transaction block. Cleared
+	// everywhere extended_query_phase goes back to IDLE: miss one and the next batch's
+	// lone DISCARD ALL is refused for work an already-finished batch did.
+	bool extq_backend_used { false };
 	uint8_t extended_query_phase { EXTQ_PHASE_IDLE };
 	std::queue<PktType> extended_query_frame;
 	std::unique_ptr<const PgSQL_Bind_Message> bind_waiting_for_execute;
