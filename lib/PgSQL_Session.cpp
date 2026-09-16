@@ -4744,7 +4744,6 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 		PgSQL_Set_Stmt_Parser parser(nq);
 		std::map<std::string, std::vector<std::string>> set = {};
 		std::vector<std::pair<std::string, std::string>> param_status = {};
-		bool send_param_status = false;
 
 		if (pgsql_thread___set_parser_algorithm == 3
 			|| pgsql_thread___query_processor_parser == 1) {
@@ -4770,6 +4769,10 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 		bool failed_to_parse_var = set.empty();
 		for (auto it = std::begin(set); it != std::end(set); ++it) {
 			std::string var = it->first;
+			// Declared per iteration on purpose. PostgreSQL announces only some of these
+			// settings, so a statement carrying two would otherwise let the first one's
+			// answer decide the second and announce a setting that is never reported.
+			bool send_param_status = false;
 			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET variable %s\n", var.c_str());
 			if (it->second.size() < 1) {
 				// error not enough arguments
@@ -4816,6 +4819,10 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 					}
 				}
 				if (idx != PGSQL_NAME_LAST_HIGH_WM) {
+					// Report the variable under the name PostgreSQL uses, not the lowercased
+					// spelling the client typed. Clients match these names byte for byte, so a
+					// "datestyle" message leaves their cached "DateStyle" untouched and stale.
+					var = pgsql_tracked_variables[idx].set_variable_name;
 
 					if (IS_PGTRACKED_VAR_OPTION_SET_NO_STRIP_VALUE(pgsql_tracked_variables[idx]) == 0) {
 						PgSQL_Set_Stmt_Parser::unquote_if_quoted(value1);
@@ -4943,14 +4950,23 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 		}
 
 		client_myds->DSS = STATE_QUERY_SENT_NET;
-		
+
 		if (extended_query_phase != EXTQ_PHASE_IDLE) {
-			// no need to send parameter status in pipeline mode
-			param_status.clear(); 
+			// The SET still goes to the backend (return false, below), but PostgreSQL will not
+			// report the GUC itself: ProxySQL already applied this value on that connection
+			// (variable sync, whose reply is discarded, or -c name=value at startup), so nothing
+			// changes there and the backend stays silent. Send the ParameterStatus ourselves or
+			// the client never learns -- e.g. pgjdbc reads standard_conforming_strings from 'S'
+			// alone and mis-parses every literal after this. It lands ahead of the backend's
+			// CommandComplete rather than at PostgreSQL's usual spot just before ReadyForQuery;
+			// ParameterStatus is legal at any message boundary and no client orders on it.
+			if (param_status.empty() == false) {
+				client_myds->myprot.generate_ok_packet(true, false, NULL, 0, NULL, 'I', NULL, param_status);
+			}
 
 			return false;
 		}
-		
+
 		bool send_ready_packet = is_extended_query_ready_for_query();
 		unsigned int nTrx = NumActiveTransactions();
 		const char txn_state = (nTrx ? 'T' : 'I');
@@ -5067,7 +5083,10 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_
 	client_myds->DSS = STATE_QUERY_SENT_NET;
 
 	if (extended_query_phase != EXTQ_PHASE_IDLE) {
-		param_status.clear();
+		// Same suppression as the SET path above, and the same fix: send it ourselves.
+		if (param_status.empty() == false) {
+			client_myds->myprot.generate_ok_packet(true, false, NULL, 0, NULL, 'I', NULL, param_status);
+		}
 		return false;
 	}
 	bool send_ready_packet = is_extended_query_ready_for_query();
