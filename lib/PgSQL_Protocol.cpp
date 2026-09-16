@@ -1965,42 +1965,6 @@ bool PgSQL_Protocol::generate_no_data_packet(bool send, PtrSize_t* _ptr) {
 	return true;
 }
 
-bool PgSQL_Protocol::generate_describe_from_cache(bool send, bool ready, char trx_state,
-	const PgSQL_Describe_Cache* cache, PtrSize_t* _ptr) {
-	// to avoid memory leak
-	assert(send == true || _ptr);
-	assert(cache);
-
-	// Re-frame each stored raw body as a full wire message: type + be32(len+4) +
-	// payload. write_generic('t'/'T', "b", body, len) writes exactly that (finish_packet
-	// fills the be32 length = body_len + 4). This reproduces, byte-for-byte, the
-	// statement-level Describe response a backend round-trip would deliver:
-	//   ParameterDescription 't', then RowDescription 'T' (or NoData 'n'),
-	//   then — when `ready` — ReadyForQuery 'Z'.
-	PG_pkt pgpkt(64);
-	pgpkt.set_multi_pkt_mode(true);
-	pgpkt.write_generic('t', "b", (const uint8_t*)cache->param_desc_payload.data(),
-		(int)cache->param_desc_payload.size());
-	if (cache->no_data) {
-		pgpkt.write_generic('n', "");
-	} else {
-		pgpkt.write_generic('T', "b", (const uint8_t*)cache->row_desc_payload.data(),
-			(int)cache->row_desc_payload.size());
-	}
-	if (ready == true) {
-		pgpkt.write_generic('Z', "c", trx_state);
-	}
-
-	auto buff = pgpkt.detach();
-	if (send == true) {
-		(*myds)->PSarrayOUT->add((void*)buff.first, buff.second);
-	} else {
-		_ptr->ptr = buff.first;
-		_ptr->size = buff.second;
-	}
-	return true;
-}
-
 bool PgSQL_Protocol::generate_parse_completion_packet(bool send, bool ready, char trx_state, PtrSize_t* _ptr) {
 	// to avoid memory leak
 	assert(send == true || _ptr);
@@ -2631,7 +2595,7 @@ unsigned int PgSQL_Protocol::copy_parse_completion_to_PgSQL_Query_Result(bool se
 }
 
 unsigned int PgSQL_Protocol::copy_describe_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result,
-	const PGresult* result, uint8_t stmt_type, const PgSQL_STMT_Global_info* stmt_info_for_cache) {
+	const PGresult* result, uint8_t stmt_type) {
 	assert(pg_query_result);
 	assert(result);
 
@@ -2720,31 +2684,6 @@ unsigned int PgSQL_Protocol::copy_describe_completion_to_PgSQL_Query_Result(bool
 	} else {
 		pgpkt.put_char('n');
 		pgpkt.put_uint32(4); // size of the packet, including the type byte
-	}
-
-	// --- Statement-level Describe metadata capture (set-once) ------------------
-	// For a statement-level Describe ('S'), copy the just-built ParameterDescription
-	// and RowDescription/NoData bodies into a cache candidate and publish it on the
-	// global statement (first writer wins; losers are freed by publish). The bodies
-	// are sliced verbatim from the buffer we just wrote, so what a later cache hit
-	// serves is byte-identical to what this round-trip delivers to the client.
-	// Portal Describes ('P') are never cached (they depend on bound result formats).
-	// Guarded on get_describe_cache() to avoid pointless allocations once populated.
-	if (stmt_type == 'S' && stmt_info_for_cache != nullptr &&
-		stmt_info_for_cache->get_describe_cache() == nullptr) {
-		auto* cand = new PgSQL_Describe_Cache();
-		// 't' packet occupies [0, param_desc_size); its body starts after the 1-byte
-		// type + 4-byte length header.
-		cand->param_desc_payload.assign((const char*)(_ptr + 5), param_desc_size - 5);
-		if (column_count > 0) {
-			// 'T' packet follows at offset param_desc_size; body starts 5 bytes in.
-			cand->row_desc_payload.assign((const char*)(_ptr + param_desc_size + 5),
-				total_size - param_desc_size - 5);
-			cand->no_data = false;
-		} else {
-			cand->no_data = true;
-		}
-		stmt_info_for_cache->publish_describe_cache(cand);
 	}
 
 	if (send == true) {
@@ -3143,10 +3082,8 @@ unsigned int PgSQL_Query_Result::add_parse_completion() {
 	return bytes;
 }
 
-unsigned int PgSQL_Query_Result::add_describe_completion(const PGresult* result, uint8_t stmt_type,
-	const PgSQL_STMT_Global_info* stmt_info_for_cache) {
-	const unsigned int bytes = proto->copy_describe_completion_to_PgSQL_Query_Result(false, this, result, stmt_type,
-		stmt_info_for_cache);
+unsigned int PgSQL_Query_Result::add_describe_completion(const PGresult* result, uint8_t stmt_type) {
+	const unsigned int bytes = proto->copy_describe_completion_to_PgSQL_Query_Result(false, this, result, stmt_type);
 	result_packet_type |= PGSQL_QUERY_RESULT_COMMAND;
 	return bytes;
 }
