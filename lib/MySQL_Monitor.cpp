@@ -34,6 +34,7 @@ using json = nlohmann::json;
 #include "wqueue.h"
 
 #include <fcntl.h>
+#include <openssl/err.h>
 
 #ifdef DEBUG
 #define DEB "_DEBUG"
@@ -6490,6 +6491,12 @@ __fast_exit_monitor_aws_aurora_HG_thread:
 			}
 		}
 	}
+	// This thread is long-lived and does not use the async state-machine
+	// handlers that call MYSQL_OPENSSL_ERROR_CLEAR. A failed SSL operation
+	// would otherwise leave OpenSSL's thread-local error queue dirty and
+	// poison every later Aurora check on this thread. Do not require a live
+	// MYSQL*: create_new_connection() can fail with mysql already NULL.
+	ERR_clear_error();
 	}
 __exit_monitor_AWS_Aurora_thread_HG_now:
 	if (mmsd) {
