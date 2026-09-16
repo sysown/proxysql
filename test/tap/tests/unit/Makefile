@@ -553,7 +553,7 @@ $(PROXYSQL_BINARY): $(LIBPROXYSQLAR)
 
 UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	cacert_load_and_verify_duration_parser_unit-t \
-	query_cache_unit-t query_processor_unit-t digest_stats_unit-t \
+	query_cache_unit-t pgsql_query_cache_allocation_unit-t query_processor_unit-t digest_stats_unit-t \
 	protocol_unit-t auth_unit-t connection_pool_unit-t \
 	rule_matching_unit-t hostgroups_unit-t monitor_health_unit-t \
 	pgsql_backend_framing-t pgsql_backend_auth-t pgsql_backend_extq-t \
@@ -615,7 +615,11 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	pgsql_conninfo_credentials_unit-t \
 	re2_vendor_unit-t \
 	restapi_server_unit-t \
-	mcp_client_unit-t
+	mcp_client_unit-t \
+	pgsql_waiter_list_unit-t
+
+# Keep group entries discoverable everywhere; unsupported platforms emit TAP skips.
+UNIT_TESTS += worker_load_unit-t worker_waiter_unit-t
 
 ifeq ($(PROXYSQL31),1)
 UNIT_TESTS += caching_sha2_rsa_unit-t hostgroup_pool_stats_unit-t mysql_server_version_by_interface_unit-t
@@ -745,6 +749,11 @@ hostgroup_pool_stats_unit-t: hostgroup_pool_stats_unit-t.cpp $(ODIR)/tap.o $(ODI
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
 		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include \
 		$(STDCPP) -O0 -ggdb -DPROXYSQL31 $(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
+
+pgsql_waiter_list_unit-t: pgsql_waiter_list_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include \
+		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
 
 mcp_client_unit-t: mcp_client_unit-t.cpp $(TAP_PATH)/mcp_client.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
 	$(CXX) $< $(TAP_PATH)/mcp_client.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
@@ -1234,7 +1243,9 @@ caching_sha2_rsa_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=flock
 
 # --wrap only rewrites references resolved by this link. Keep these tests on
 # libproxysql.a so their wrappers can reach core-library calls.
-STATIC_LIBPROXYSQL_TESTS := caching_sha2_rsa_unit-t
+worker_waiter_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN13MySQL_Session7handlerEv -Wl,--wrap=_ZN13PgSQL_Session7handlerEv
+
+STATIC_LIBPROXYSQL_TESTS := caching_sha2_rsa_unit-t worker_waiter_unit-t
 $(STATIC_LIBPROXYSQL_TESTS): WHOLE_LIBPROXYSQL := \
 	-Wl,--whole-archive $(LIBPROXYSQLAR_FULL) -Wl,--no-whole-archive
 
@@ -1248,6 +1259,9 @@ endif
 endif
 
 vendored_openssl_version_unit-t: private OPT += -DPROXYSQL_VENDORED_OPENSSL_VERSION=\"$(OPENSSL_VERSION)\"
+
+# This test includes the cache source to inject allocator failure locally.
+pgsql_query_cache_allocation_unit-t: $(PROXYSQL_PATH)/lib/PgSQL_Query_Cache.cpp
 
 # Pattern rule: all unit tests use the same compile + link flags.
 # Each test binary is built from its .cpp source, linked against

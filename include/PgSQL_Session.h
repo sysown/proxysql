@@ -15,6 +15,9 @@
 #include "PgSQL_Error_Helper.h"
 #include "PgSQL_Variables.h"
 #include "PgSQL_Variables_Validator.h"
+#ifdef PROXYSQL31
+#include "PgSQL_Waiter_List.h"
+#endif // PROXYSQL31
 
 class PgSQL_Query_Result;
 class PgSQL_ExplicitTxnStateMgr;
@@ -194,6 +197,10 @@ public:
 	uint64_t waiting_since;
 
 	PgSQL_Extended_Query_Info extended_query_info;
+#ifdef PROXYSQL31
+	uint64_t stmt_cache_key[4] {};
+	bool stmt_cache_valid { false };
+#endif
 	PgSQL_Session* sess;
 	unsigned char* QueryPointer;
 	SQP_par_t QueryParserArgs;
@@ -256,6 +263,12 @@ private:
 	// everywhere extended_query_phase goes back to IDLE: miss one and the next batch's
 	// lone DISCARD ALL is refused for work an already-finished batch did.
 	bool extq_backend_used { false };
+#ifdef PROXYSQL31
+	// Candidate frame: Bind, optional Describe(portal), Execute, client Sync.
+	uint8_t extended_cache_frame_stage { 0 };
+	bool extended_cache_frame_eligible { false };
+	bool try_extended_query_cache(PgSQL_Execute_Message* execute_msg);
+#endif
 	uint8_t extended_query_phase { EXTQ_PHASE_IDLE };
 	std::queue<PktType> extended_query_frame;
 	std::unique_ptr<const PgSQL_Bind_Message> bind_waiting_for_execute;
@@ -548,6 +561,12 @@ public:
 	//   anything else (including ROLLBACK TO SAVEPOINT and RELEASE SAVEPOINT)
 	//     -> reply ERROR 25P02 + ReadyForQuery('E'), stay poisoned.
 	bool tx_poisoned{ false };
+#ifdef PROXYSQL31
+	PgSQL_Waiter_Node waiter_node;
+	bool last_pool_ff{ false };
+	bool last_pool_gtid{ false };
+	int last_pool_max_lag_ms{ -1 };
+#endif // PROXYSQL31
 
 #ifdef DEBUG
 	PgSQL_Connection* dbg_extended_query_backend_conn = nullptr;
